@@ -16,27 +16,39 @@
  * 笔迹仍是唯一事实源——原图 + 笔迹在本地保留,再编辑时重放,重存时重新烧录。
  *
  * 源文件寿命:标注/转发的源图统一复制进本 hook 私有的 annotation-src 缓存目录
- * (聊天图的磁盘缓存受 LRU 管辖,直接引用会在再编辑窗口内被清理);附件移除 /
- * 发送清空时 best-effort 删除。
+ * (聊天图的磁盘缓存受 LRU 管辖,直接引用会在再编辑窗口内被清理)。生成文件的
+ * 回收跟随上传生命周期:上传成功后挂到附件名下,随附件移除 / 发送清空 / 被替换
+ * 删除;上传失败时失败卡仍在托盘、可重试,文件原样保留;只有任务被确定放弃
+ * (失败卡 / 在途卡被移除、整体丢弃、退屏、交接给发件箱)才删除。
  */
 import { useCallback, useMemo, useRef } from 'react';
 import { useTranslation } from 'react-i18next';
-import { Alert } from 'react-native';
+import { Alert, Platform } from 'react-native';
 import * as FileSystem from 'expo-file-system/legacy';
+import { summarizeAnnotationRegions } from '@cindy/maker-shared/image-annotation';
 import { useAnnotationBurnIn } from '@/session/AnnotationBurnInWebView';
 import {
   annotationBurnedFileName,
   imageMimeForUriFallback,
+  isAnnotationBurnSourceResultUsable,
   isDirectSendableImageMime,
+  planAnnotationBurnSource,
   sniffImageMimeFromBase64,
+  type AnnotationBurnSourcePlan,
   type AnnotationStroke,
 } from '@/session/imageAnnotationModel';
-import { MOBILE_MAX_ATTACHMENTS, MOBILE_MAX_ATTACHMENT_BYTES } from '@/session/attachments';
+import { MOBILE_MAX_ATTACHMENTS } from '@/session/attachments';
 import type { ImageLightboxAnnotationConfig } from '@/session/ImageLightbox';
 import type {
   MobileLocalAttachmentUploadCandidate,
 } from '@/session/mobileLocalAttachmentUpload';
 import type { RemoteSerializedAttachment } from '@/session/types';
+
+/**
+ * 标注烧录要把整张图 base64 读进 JS 内存,这是防 OOM 的上限,与附件本身的发送上限无关
+ *(附件与桌面一致只受传输通道限制)。
+ */
+const ANNOTATION_SOURCE_MAX_BYTES = 30 * 1024 * 1024;
 
 /** 标注附件的再编辑真相(attachmentId → 矢量笔迹 + 原图)。 */
 interface AnnotationEditMeta {
@@ -44,6 +56,8 @@ interface AnnotationEditMeta {
   /** 未烧录原图(annotation-src 私有副本,不受磁盘缓存 LRU 影响)。 */
   sourceUri: string;
   sourceMimeType: string;
+  /** sourceUri 本身已是带笔迹的烧录图(见 candidate.annotation.baseAnnotated)。 */
+  baseAnnotated?: boolean;
 }
 
 export interface UseComposerImageAnnotationsOptions {
@@ -62,6 +76,17 @@ export interface UseComposerImageAnnotationsOptions {
    * 不占新槽位,不检查。
    */
   getRemainingAttachmentSlots: () => number;
+  /**
+   * 按 id 读取托盘里的已上传附件(同步真源)。再编辑时据此判断替换目标是否仍在
+   * 托盘、以及底图本身是否已是标注烧录图(再编辑真相丢失时保住 annotated 标)。
+   */
+  getAttachment?: (attachmentId: string) => RemoteSerializedAttachment | undefined;
+}
+
+/** lightbox 已解码的源图尺寸(可选提示,仅用于烧录前预缩决策)。 */
+export interface AnnotationSourceSizeHint {
+  naturalWidth?: number;
+  naturalHeight?: number;
 }
 
 export interface UseComposerImageAnnotationsResult {
@@ -86,6 +111,7 @@ export interface UseComposerImageAnnotationsResult {
     displayUri: string,
     strokes: AnnotationStroke[],
     mimeType?: string,
+    sizeHint?: AnnotationSourceSizeHint,
   ) => Promise<void>;
   /** 附件被移除时清理再编辑真相与源图副本。 */
   forgetAttachment: (attachmentId: string) => void;
@@ -97,13 +123,55 @@ export interface UseComposerImageAnnotationsResult {
 const ANNOTATION_SRC_DIR = 'annotation-src';
 /** 烧录产物落盘目录。 */
 const ANNOTATION_BURNED_DIR = 'annotation-burned';
+
+/** 入队后尚未落定的上传登记(candidate.uri → 本次生成的文件)。 */
+interface PendingUploadRegistration {
+  files: string[];
+  /** 再编辑替换的目标附件:登记存在期间该附件不可再次编辑(防双重替换)。 */
+  replacesAttachmentId?: string;
+}
+
 /**
- * 上传入队后等多久没被 decorateUploadedAttachment "认领"就视为放弃(上传失败 /
- * 被取消,onFailed 回调链路不传 candidate,拿不到精确的失败信号,review P2)。
- * 远超正常上传耗时(乐观管线并发上限 2,单张图不会跑这么久),避免误删还在
- * 传的文件。
+ * 烧录前的源图预处理(expo-image-manipulator,已是本 App 既有原生依赖):
+ * 按 plan 转码 / 预缩并落盘。动态 import 保证 node 单测可导入本模块。
  */
-const PENDING_UPLOAD_SWEEP_MS = 3 * 60 * 1000;
+async function runAnnotationBurnSourcePlan(
+  uri: string,
+  plan: AnnotationBurnSourcePlan,
+): Promise<{ uri: string; width: number; height: number }> {
+  const { ImageManipulator, SaveFormat } = await import('expo-image-manipulator');
+  const context = ImageManipulator.manipulate(uri);
+  if (plan.resize) context.resize(plan.resize);
+  const rendered = await context.renderAsync();
+  try {
+    const saved = await rendered.saveAsync({
+      compress: plan.compress,
+      format: plan.format === 'jpeg' ? SaveFormat.JPEG : SaveFormat.PNG,
+    });
+    return { uri: saved.uri, width: saved.width, height: saved.height };
+  } finally {
+    // render 结果持有原生纹理,显式释放(与 mobileImagePreprocess 同模式)。
+    rendered.release();
+    context.release();
+  }
+}
+
+function positiveHintDimension(value: number | undefined): number | undefined {
+  return typeof value === 'number' && Number.isFinite(value) && value > 0 ? Math.round(value) : undefined;
+}
+
+/**
+ * 给模型的标注区域(与桌面同一归纳算法)。底图本身已是烧录图(再编辑真相丢失)时,
+ * 旧红线的位置不可知,只描述新笔迹会让说明与图上红线不符——此时不带区域,
+ * 退回固定说明。
+ */
+export function annotationRegionsForUpload(
+  annotation: { strokes: readonly AnnotationStroke[]; baseAnnotated?: boolean } | undefined,
+): Pick<RemoteSerializedAttachment, 'annotationRegions'> {
+  if (!annotation || annotation.baseAnnotated) return {};
+  const regions = summarizeAnnotationRegions(annotation.strokes);
+  return regions.length > 0 ? { annotationRegions: regions } : {};
+}
 
 function extForMime(mimeType: string): string {
   const lower = mimeType.toLowerCase();
@@ -122,7 +190,7 @@ export function useComposerImageAnnotations(
   options: UseComposerImageAnnotationsOptions,
 ): UseComposerImageAnnotationsResult {
   const { t } = useTranslation();
-  const { burnIn, host } = useAnnotationBurnIn();
+  const { burnIn, acquireWarm, host } = useAnnotationBurnIn();
   const metaRef = useRef<Map<string, AnnotationEditMeta>>(new Map());
   /**
    * attachmentId → 本 hook 为该附件生成的缓存文件(烧录图 / 源图副本)。
@@ -130,6 +198,12 @@ export function useComposerImageAnnotations(
    * (review P2);再编辑替换的新旧附件会共享源副本,删除前做引用检查。
    */
   const generatedFilesRef = useRef<Map<string, string[]>>(new Map());
+  /**
+   * candidate.uri → 已入队、尚未上传成功的生成文件登记。上传成功时迁到
+   * attachment.id 名下;失败时原样保留(失败卡可重试,重试读的就是这些文件);
+   * 只有上传控制器确认任务被放弃(onAbandoned)才删除。
+   */
+  const pendingUploadsRef = useRef<Map<string, PendingUploadRegistration>>(new Map());
   // 回调经 ref 转发:config 对象保持稳定引用,lightbox 打开期间不重建。
   const optionsRef = useRef(options);
   optionsRef.current = options;
@@ -154,7 +228,10 @@ export function useComposerImageAnnotations(
     [srcDir, burnedDir],
   );
 
-  /** 删除不再被任何登记(或 extraKeep)引用的生成文件(best-effort)。 */
+  /**
+   * 删除不再被任何登记(附件名下 / 在途上传 / extraKeep)引用的生成文件
+   * (best-effort)。在途上传(含失败待重试)仍引用的文件绝不删除。
+   */
   const deleteUnreferencedFiles = useCallback((
     files: readonly string[],
     extraKeep: readonly string[] = [],
@@ -169,7 +246,75 @@ export function useComposerImageAnnotations(
           }
         }
       }
+      if (!referenced) {
+        for (const registration of pendingUploadsRef.current.values()) {
+          if (registration.files.includes(file)) {
+            referenced = true;
+            break;
+          }
+        }
+      }
       if (!referenced) void FileSystem.deleteAsync(file, { idempotent: true }).catch(() => undefined);
+    }
+  }, []);
+
+  /** 该附件是否有尚未落定的再编辑替换(上传中或失败待重试)。 */
+  const hasPendingReplacement = useCallback((attachmentId: string) => {
+    for (const registration of pendingUploadsRef.current.values()) {
+      if (registration.replacesAttachmentId === attachmentId) return true;
+    }
+    return false;
+  }, []);
+
+  /**
+   * 烧录源准备:Android WebView 解不了的格式先转码、已知超大图先按上传口径预缩
+   * (见 planAnnotationBurnSource)。manipulator 失败、产物与提示尺寸对不上或
+   * 体积超过源图上限(烧录要全量 base64 进 JS 内存)时回退原图(即既有路径)。
+   * tempUri = 仅供本次烧录的中间产物,烧完即删。
+   */
+  const prepareBurnSource = useCallback(async (
+    source: { fileUri: string; mimeType: string },
+    sizeHint: AnnotationSourceSizeHint | undefined,
+  ): Promise<{
+    fileUri: string;
+    mimeType: string;
+    strokeSpace?: { width: number; height: number };
+    tempUri?: string;
+  }> => {
+    const original = { fileUri: source.fileUri, mimeType: source.mimeType };
+    const hint = {
+      width: positiveHintDimension(sizeHint?.naturalWidth),
+      height: positiveHintDimension(sizeHint?.naturalHeight),
+    };
+    const plan = planAnnotationBurnSource({
+      mimeType: source.mimeType,
+      platformOS: Platform.OS,
+      naturalWidth: hint.width,
+      naturalHeight: hint.height,
+    });
+    if (!plan) return original;
+    try {
+      const result = await runAnnotationBurnSourcePlan(source.fileUri, plan);
+      const info = await FileSystem.getInfoAsync(result.uri).catch(() => null);
+      const resultSize = info?.exists && typeof info.size === 'number' && Number.isFinite(info.size)
+        ? info.size
+        : 0;
+      if (
+        !isAnnotationBurnSourceResultUsable(plan, result, hint)
+        || !(resultSize > 0)
+        || resultSize > ANNOTATION_SOURCE_MAX_BYTES
+      ) {
+        void FileSystem.deleteAsync(result.uri, { idempotent: true }).catch(() => undefined);
+        return original;
+      }
+      return {
+        fileUri: result.uri,
+        mimeType: plan.format === 'jpeg' ? 'image/jpeg' : 'image/png',
+        ...(plan.strokeSpace ? { strokeSpace: plan.strokeSpace } : {}),
+        tempUri: result.uri,
+      };
+    } catch {
+      return original;
     }
   }, []);
 
@@ -190,8 +335,8 @@ export function useComposerImageAnnotations(
     const size = info.exists && typeof info.size === 'number' && Number.isFinite(info.size)
       ? info.size
       : 0;
-    if (size > MOBILE_MAX_ATTACHMENT_BYTES) {
-      throw new Error(t('composer.upload.imageTooLargeSend', { size: Math.round(MOBILE_MAX_ATTACHMENT_BYTES / 1024 / 1024) }));
+    if (size > ANNOTATION_SOURCE_MAX_BYTES) {
+      throw new Error(t('composer.upload.imageTooLargeSend', { size: Math.round(ANNOTATION_SOURCE_MAX_BYTES / 1024 / 1024) }));
     }
     const head = await FileSystem.readAsStringAsync(fileUri, {
       encoding: FileSystem.EncodingType.Base64,
@@ -253,27 +398,70 @@ export function useComposerImageAnnotations(
     strokes: AnnotationStroke[],
     mimeTypeHint: string | undefined,
     replaceAttachmentId: string | null,
+    sizeHint?: AnnotationSourceSizeHint,
   ): Promise<void> => {
     const opts = optionsRef.current;
+    /** 本次提交新生成、尚未交给上传管线的文件:提交失败时回收。 */
+    const createdFiles: string[] = [];
+    let handedToUpload = false;
     try {
-      if (!replaceAttachmentId && opts.getRemainingAttachmentSlots() <= 0) {
+      let replaceId = replaceAttachmentId;
+      if (replaceId && hasPendingReplacement(replaceId)) {
+        // 同一附件已有未落定的替换(上传中 / 失败待重试):再替换一次会让两份
+        // 新图都留在托盘(第二次替换找不到旧附件可删)并越过附件上限。
+        throw new Error(t('composer.attachments.replacementPending'));
+      }
+      const replacedAttachment = replaceId && opts.getAttachment ? opts.getAttachment(replaceId) : undefined;
+      if (replaceId && opts.getAttachment && !replacedAttachment) {
+        // 替换目标已不在托盘:按新增处理(占新槽位,受上限约束)。
+        replaceId = null;
+      }
+      if (!replaceId && opts.getRemainingAttachmentSlots() <= 0) {
         throw new Error(t('composer.upload.maxAttachments', { count: MOBILE_MAX_ATTACHMENTS }));
       }
-      const replacedMeta = replaceAttachmentId ? metaRef.current.get(replaceAttachmentId) : undefined;
+      const replacedMeta = replaceId ? metaRef.current.get(replaceId) : undefined;
+      // 再编辑真相丢失(恢复草稿 / 排队编辑载入等)时底图本身就是带红线的烧录图:
+      // 即使本次没有新笔迹,产物仍是标注图,annotated 标不能丢(之后再次编辑同样)。
+      const baseIsAnnotatedBurn = !!replaceId && (replacedMeta
+        ? replacedMeta.baseAnnotated === true
+        : replacedAttachment?.annotated === true);
+      const sourceInputUri = replacedMeta?.sourceUri ?? displayUri;
       const source = await materializeSource(
-        replacedMeta?.sourceUri ?? displayUri,
+        sourceInputUri,
         replacedMeta?.sourceMimeType ?? mimeTypeHint,
       );
+      if (source.fileUri !== sourceInputUri) createdFiles.push(source.fileUri);
+      const annotation = strokes.length > 0 || baseIsAnnotatedBurn
+        ? {
+          strokes: strokes.map((s) => ({ points: [...s.points] })),
+          sourceUri: source.fileUri,
+          sourceMimeType: source.mimeType,
+          ...(baseIsAnnotatedBurn ? { baseAnnotated: true } : {}),
+        }
+        : undefined;
       let candidate: MobileLocalAttachmentUploadCandidate;
       // 非直传白名单(bmp / heic 等能显示但管线不收的格式):即使无笔迹也走
       // 烧录通道——空笔迹烧录 = 光栅化为 PNG,对齐桌面「字节可达 + 发送时
       // 光栅化」模型(PR #792),否则这类图转发会被上传层类型白名单拒收。
       const mustRasterize = !isDirectSendableImageMime(source.mimeType);
       if (strokes.length > 0 || mustRasterize) {
-        const base64 = await FileSystem.readAsStringAsync(source.fileUri, {
-          encoding: FileSystem.EncodingType.Base64,
-        });
-        const burned = await burnIn({ base64, mimeType: source.mimeType, strokes });
+        const burnSource = await prepareBurnSource(source, sizeHint);
+        let burned;
+        try {
+          const base64 = await FileSystem.readAsStringAsync(burnSource.fileUri, {
+            encoding: FileSystem.EncodingType.Base64,
+          });
+          burned = await burnIn({
+            base64,
+            mimeType: burnSource.mimeType,
+            strokes,
+            ...(burnSource.strokeSpace ? { strokeSpace: burnSource.strokeSpace } : {}),
+          });
+        } finally {
+          if (burnSource.tempUri) {
+            void FileSystem.deleteAsync(burnSource.tempUri, { idempotent: true }).catch(() => undefined);
+          }
+        }
         await ensureDir(burnedDir);
         const name = strokes.length > 0
           ? annotationBurnedFileName(burned.mimeType, nextFileTag())
@@ -282,6 +470,7 @@ export function useComposerImageAnnotations(
         await FileSystem.writeAsStringAsync(burnedUri, burned.base64, {
           encoding: FileSystem.EncodingType.Base64,
         });
+        createdFiles.push(burnedUri);
         const burnedInfo = await FileSystem.getInfoAsync(burnedUri).catch(() => null);
         candidate = {
           kind: 'image',
@@ -294,15 +483,7 @@ export function useComposerImageAnnotations(
           height: burned.height > 0 ? burned.height : undefined,
           mimeType: burned.mimeType,
           // 纯光栅化(无笔迹)不带标注元数据:托盘不显示画笔角标、不打 annotated 标。
-          ...(strokes.length > 0
-            ? {
-              annotation: {
-                strokes: strokes.map((s) => ({ points: [...s.points] })),
-                sourceUri: source.fileUri,
-                sourceMimeType: source.mimeType,
-              },
-            }
-            : {}),
+          ...(annotation ? { annotation } : {}),
         };
       } else {
         const ext = extForMime(source.mimeType);
@@ -311,28 +492,31 @@ export function useComposerImageAnnotations(
           uri: source.fileUri,
           name: `image-${nextFileTag()}.${ext}`,
           // 直传源无解码尺寸,至少带上真实字节数让 preprocess 的重编码判断生效。
+          // (lightbox 尺寸提示只用于烧录预缩,不改变直传转发的分辨率。)
           size: source.size,
           mimeType: source.mimeType,
+          ...(annotation ? { annotation } : {}),
         };
       }
-      if (replaceAttachmentId) candidate.replacesAttachmentId = replaceAttachmentId;
-      // 入队前先按 candidate.uri(强唯一)登记本次生成的文件(review P2):
-      // 上传成功后 decorateUploadedAttachment 会把这份登记迁到 attachment.id
-      // 下;上传失败 / 被取消时没有 attachment.id 可挂,onFailed 回调链路也不
-      // 传 candidate,拿不到这里的登记——用超时兜底清理,给上传留足够窗口后
-      // 若始终没被 claimed 视为已放弃,删除对应文件。
-      const ownedFiles = [candidate.uri, candidate.annotation?.sourceUri]
-        .filter((uri): uri is string => !!uri && isHookGeneratedFile(uri));
-      if (ownedFiles.length > 0) {
-        generatedFilesRef.current.set(candidate.uri, ownedFiles);
-        setTimeout(() => {
-          const stillPending = generatedFilesRef.current.get(candidate.uri);
-          if (stillPending === ownedFiles) {
-            generatedFilesRef.current.delete(candidate.uri);
-            deleteUnreferencedFiles(ownedFiles);
-          }
-        }, PENDING_UPLOAD_SWEEP_MS);
-      }
+      if (replaceId) candidate.replacesAttachmentId = replaceId;
+      // 入队前先按 candidate.uri(强唯一)登记本次生成的文件:上传成功后
+      // decorateUploadedAttachment 把登记迁到 attachment.id 下;上传失败时失败卡
+      // 仍可重试,登记与文件原样保留;任务被确定放弃时由上传控制器回调
+      // onAbandoned 删除(替换场景与旧附件共享的源副本经引用检查保留)。
+      const ownedFiles = [...new Set([candidate.uri, candidate.annotation?.sourceUri]
+        .filter((uri): uri is string => !!uri && isHookGeneratedFile(uri)))];
+      const registration: PendingUploadRegistration = {
+        files: ownedFiles,
+        ...(replaceId ? { replacesAttachmentId: replaceId } : {}),
+      };
+      const registrationKey = candidate.uri;
+      pendingUploadsRef.current.set(registrationKey, registration);
+      candidate.onAbandoned = () => {
+        if (pendingUploadsRef.current.get(registrationKey) !== registration) return;
+        pendingUploadsRef.current.delete(registrationKey);
+        deleteUnreferencedFiles(registration.files);
+      };
+      handedToUpload = true;
       opts.enqueueUploads([candidate], { token: opts.getAccessToken() });
       // 旧附件此刻不动:替换在上传成功回调(decorateUploadedAttachment)里执行,
       // 失败时旧附件与其再编辑真相原样保留,用户可重试。
@@ -341,19 +525,32 @@ export function useComposerImageAnnotations(
       // lightbox 停留在标注模式,用户可重试或放弃。
       Alert.alert(t('composer.attachments.annotationSaveFailed'), err instanceof Error && err.message ? err.message : t('composer.attachments.tryAgain'));
       throw err;
+    } finally {
+      // 未交给上传管线就失败:本次新建的副本 / 烧录图无人引用,立即回收
+      // (与既有附件共享的源副本经引用检查保留)。
+      if (!handedToUpload && createdFiles.length > 0) deleteUnreferencedFiles(createdFiles);
     }
-  }, [materializeSource, burnIn, burnedDir, nextFileTag, isHookGeneratedFile, deleteUnreferencedFiles, t]);
+  }, [
+    materializeSource,
+    prepareBurnSource,
+    burnIn,
+    burnedDir,
+    nextFileTag,
+    isHookGeneratedFile,
+    deleteUnreferencedFiles,
+    hasPendingReplacement,
+    t,
+  ]);
 
   const decorateUploadedAttachment = useCallback((
     attachment: RemoteSerializedAttachment,
     candidate: MobileLocalAttachmentUploadCandidate,
   ): RemoteSerializedAttachment => {
-    // 接手 submitAnnotation 入队前按 candidate.uri 登记的生成文件(review P2 的
-    // 超时兜底注册);这里是正常路径——上传成功了,把临时登记迁到 attachment.id
-    // 下,不再依赖超时清理。查不到临时登记(理论不会发生,兜底)才重新计算。
-    const pending = generatedFilesRef.current.get(candidate.uri);
-    generatedFilesRef.current.delete(candidate.uri);
-    const ownedFiles = pending ?? [candidate.uri, candidate.annotation?.sourceUri]
+    // 接手 submitAnnotation 入队前按 candidate.uri 登记的生成文件:上传成功了,
+    // 把在途登记迁到 attachment.id 下。查不到登记(非本 hook 的上传)才重新计算。
+    const pending = pendingUploadsRef.current.get(candidate.uri);
+    pendingUploadsRef.current.delete(candidate.uri);
+    const ownedFiles = pending?.files ?? [candidate.uri, candidate.annotation?.sourceUri]
       .filter((uri): uri is string => !!uri && isHookGeneratedFile(uri));
     if (candidate.replacesAttachmentId) {
       // 再编辑替换:新图上传成功,此刻才移除旧附件(见 candidate 字段注释)。
@@ -374,24 +571,32 @@ export function useComposerImageAnnotations(
       strokes: candidate.annotation.strokes,
       sourceUri: candidate.annotation.sourceUri,
       sourceMimeType: candidate.annotation.sourceMimeType,
+      ...(candidate.annotation.baseAnnotated ? { baseAnnotated: true } : {}),
     });
-    return { ...attachment, annotated: true };
+    return { ...attachment, annotated: true, ...annotationRegionsForUpload(candidate.annotation) };
   }, [isHookGeneratedFile, deleteUnreferencedFiles]);
 
   const chatAnnotation = useMemo<ImageLightboxAnnotationConfig>(() => ({
     submitLabel: t('composer.attachments.sendToChat'),
     // 一级直发按钮(对齐桌面):不画笔迹也能把历史图转发进 composer 托盘。
     allowDirectSubmit: true,
+    prewarm: acquireWarm,
     onSubmit: (_image, displayUri, strokes, context) =>
-      submitAnnotation(displayUri, strokes, context.mimeType, null),
-  }), [submitAnnotation, t]);
+      submitAnnotation(displayUri, strokes, context.mimeType, null, context),
+  }), [submitAnnotation, acquireWarm, t]);
 
   const trayAnnotation = useMemo<ImageLightboxAnnotationConfig>(() => ({
     submitLabel: t('composer.attachments.save'),
     initialStrokesFor: (image) => metaRef.current.get(image.key)?.strokes,
+    // 替换上传未落定(上传中 / 失败待重试)的附件不可再编辑,防双重替换;
+    // 画笔置灰,点按说明原因。
+    annotationBlockedReason: (image) => (
+      hasPendingReplacement(image.key) ? t('composer.attachments.replacementPending') : undefined
+    ),
+    prewarm: acquireWarm,
     onSubmit: (image, displayUri, strokes, context) =>
-      submitAnnotation(displayUri, strokes, context.mimeType, image.key),
-  }), [submitAnnotation, t]);
+      submitAnnotation(displayUri, strokes, context.mimeType, image.key, context),
+  }), [submitAnnotation, hasPendingReplacement, acquireWarm, t]);
 
   /**
    * 信箱消费入口:其它路由(文件浏览器 lightbox 画笔)投递的标注提交,由
@@ -399,8 +604,8 @@ export function useComposerImageAnnotations(
    * 烧录 / 上传 / annotated 链路。
    */
   const submitExternalAnnotation = useCallback(
-    (displayUri: string, strokes: AnnotationStroke[], mimeType?: string) =>
-      submitAnnotation(displayUri, strokes, mimeType, null),
+    (displayUri: string, strokes: AnnotationStroke[], mimeType?: string, sizeHint?: AnnotationSourceSizeHint) =>
+      submitAnnotation(displayUri, strokes, mimeType, null, sizeHint),
     [submitAnnotation],
   );
 
@@ -419,6 +624,8 @@ export function useComposerImageAnnotations(
   }, [deleteUnreferencedFiles]);
 
   const forgetAllAttachments = useCallback(() => {
+    // 只清附件名下的文件;在途上传(含失败待重试)的文件由上传生命周期回收
+    // (放弃时 onAbandoned),这里删会让仍在跑 / 可重试的任务读不到源文件。
     const allFiles = [...generatedFilesRef.current.values()].flat();
     generatedFilesRef.current.clear();
     metaRef.current.clear();

@@ -1,3 +1,13 @@
+import type { WorkingPhase } from './workingStatus.js';
+
+export function getSessionListActivityAt<Value>(session: {
+  lastActivityAt?: Value | null;
+  userSendAt?: Value | null;
+  updatedAt: Value;
+}): Value {
+  return session.lastActivityAt ?? session.userSendAt ?? session.updatedAt;
+}
+
 /**
  * Canonical session control-plane status projection.
  *
@@ -55,6 +65,8 @@ export interface SessionActivitySnapshot {
    * Optional on the wire so older device-link snapshots remain readable.
    */
   currentTurnActive?: boolean;
+  /** Public generation category; never assistant prose, tool arguments or reasoning. */
+  workingPhase?: WorkingPhase;
   recordStatus?: SessionRecordStatus;
   startedAtMs: number | null;
   lastActivityAtMs: number | null;

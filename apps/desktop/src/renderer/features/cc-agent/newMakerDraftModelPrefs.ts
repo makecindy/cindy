@@ -55,11 +55,13 @@ export function resolveNewMakerDraftEffort(args: {
   presetEffort?: Effort;
   efforts: readonly Effort[];
   defaultEffort: Effort | null;
-}): Effort {
-  const { currentEffort, presetEffort, efforts, defaultEffort } = args;
-  // 目录尚未就绪(档位表为空)= **还不知道**,不是「不支持」:保留草稿原值,避免首帧跳变。
-  // 这也是唯一一条允许放行未经校验档位的路径。
-  if (efforts.length === 0) return currentEffort;
+  /** true = [] 只是未声明能力的占位；false/缺省 = 目录明确没有档位。 */
+  effortsUnknown?: boolean;
+}): Effort | null {
+  const { currentEffort, presetEffort, efforts, defaultEffort, effortsUnknown = false } = args;
+  // 目录尚未就绪(调用方没有模型条目)时保留草稿原值,避免首帧跳变；已知模型的空表
+  // 则表示它不接受 reasoning effort，必须让提交层省略该字段，不能把旧档位带进准入校验。
+  if (efforts.length === 0) return effortsUnknown ? currentEffort : null;
   // 优先级:全局预设 > 草稿当前值。两者都必须过档位表这一关(旧实现在没有预设时直接
   // 交出 currentEffort,种子 'medium' 就是这样漏到 DeepSeek 这类 high/max-only 模型上的)。
   const preferred = presetEffort ?? currentEffort;

@@ -1,4 +1,4 @@
-#if os(iOS)
+#if os(iOS) || os(macOS)
 import CryptoKit
 import Foundation
 import LocalAuthentication
@@ -59,7 +59,11 @@ final class CredentialVault: Sendable {
     let data = try JSONEncoder().encode(value)
     var attributes = query
     attributes[kSecValueData] = data
+    #if os(macOS)
+    attributes[kSecAttrAccess] = try loginAccess()
+    #else
     attributes[kSecAttrAccessible] = kSecAttrAccessibleWhenUnlockedThisDeviceOnly
+    #endif
     let status = SecItemAdd(attributes as CFDictionary, nil)
     if status == errSecDuplicateItem {
       guard SecItemUpdate(query as CFDictionary, [kSecValueData: data] as CFDictionary) == errSecSuccess else { throw CredentialError.unavailable }
@@ -67,14 +71,26 @@ final class CredentialVault: Sendable {
   }
 
   private func settingsItem(_ key: String) -> [CFString: Any] {
-    [kSecClass: kSecClassGenericPassword, kSecAttrService: service + ".settings",
-      kSecAttrAccount: key, kSecAttrSynchronizable: false, kSecUseDataProtectionKeychain: true]
+    query(service: service + ".settings", account: key)
   }
 
   func store(_ secret: Data, binding: CredentialBinding, requireBiometric: Bool = true) throws {
+    #if os(macOS)
+    guard !secret.isEmpty, secret.count <= 4096 else { throw CredentialError.unavailable }
+    let data = try MacCredentialSecret.seal(secret, binding: binding, biometric: requireBiometric)
+    let query = try item(binding)
+    var attributes = query
+    attributes[kSecAttrAccess] = try loginAccess()
+    attributes[kSecValueData] = data
+    let result = SecItemAdd(attributes as CFDictionary, nil)
+    if result == errSecDuplicateItem {
+      guard SecItemUpdate(query as CFDictionary, [kSecValueData: data] as CFDictionary) == errSecSuccess else { throw CredentialError.unavailable }
+    } else if result != errSecSuccess { throw CredentialError.unavailable }
+    #else
+    let accessibility = kSecAttrAccessibleWhenPasscodeSetThisDeviceOnly
     guard !secret.isEmpty, secret.count <= 4096,
       let access = SecAccessControlCreateWithFlags(nil,
-        kSecAttrAccessibleWhenPasscodeSetThisDeviceOnly, requireBiometric ? .biometryCurrentSet : [], nil) else {
+        accessibility, requireBiometric ? .biometryCurrentSet : [], nil) else {
       throw CredentialError.unavailable
     }
     let query = try item(binding)
@@ -90,18 +106,21 @@ final class CredentialVault: Sendable {
         throw CredentialError.unavailable
       }
     } else if result != errSecSuccess { throw CredentialError.unavailable }
+    #endif
   }
 
   func read(binding: CredentialBinding, reason: String, context: LAContext) throws -> Data {
     var query = try item(binding)
     query[kSecReturnData] = true
     query[kSecMatchLimit] = kSecMatchLimitOne
+    #if !os(macOS)
     query[kSecUseAuthenticationContext] = context
+    #endif
     context.localizedReason = reason
     // No separate evaluatePolicy bool: authorization protects the actual read.
     var result: CFTypeRef?
     let status = SecItemCopyMatching(query as CFDictionary, &result)
-    guard status == errSecSuccess, let data = result as? Data, !data.isEmpty, data.count <= 4096 else {
+    guard status == errSecSuccess, let data = result as? Data, !data.isEmpty, data.count <= 16384 else {
       switch status {
       case errSecUserCanceled: throw CredentialError.cancelled
       case errSecItemNotFound: throw CredentialError.savedPasswordMissing
@@ -110,7 +129,12 @@ final class CredentialVault: Sendable {
       default: throw CredentialError.savedReadFailed
       }
     }
+    #if os(macOS)
+    return try MacCredentialSecret.open(data, binding: binding, context: context)
+    #else
+    guard data.count <= 4096 else { throw CredentialError.savedReadFailed }
     return data
+    #endif
   }
 
   func forget(binding: CredentialBinding) throws {
@@ -123,7 +147,9 @@ final class CredentialVault: Sendable {
     query[kSecMatchLimit] = kSecMatchLimitOne
     let context = LAContext(); context.interactionNotAllowed = true
     defer { context.invalidate() }
+    #if !os(macOS)
     query[kSecUseAuthenticationContext] = context
+    #endif
     let result = SecItemCopyMatching(query as CFDictionary, nil)
     if result == errSecItemNotFound { return false }
     // This is only a native presentation hint. Actual retrieval still uses
@@ -133,9 +159,25 @@ final class CredentialVault: Sendable {
   }
 
   private func item(_ binding: CredentialBinding) throws -> [CFString: Any] {
-    [kSecClass: kSecClassGenericPassword, kSecAttrService: service,
-      kSecAttrAccount: try binding.storageKey, kSecAttrSynchronizable: false,
-      kSecUseDataProtectionKeychain: true]
+    query(service: service, account: try binding.storageKey)
   }
+  private func query(service: String, account: String) -> [CFString: Any] {
+    var value: [CFString: Any] = [kSecClass: kSecClassGenericPassword,
+      kSecAttrService: service, kSecAttrAccount: account, kSecAttrSynchronizable: false]
+    #if !os(macOS)
+    value[kSecUseDataProtectionKeychain] = true
+    #endif
+    return value
+  }
+  #if os(macOS)
+  private func loginAccess() throws -> SecAccess {
+    var trusted: SecTrustedApplication?
+    var access: SecAccess?
+    guard SecTrustedApplicationCreateFromPath(nil, &trusted) == errSecSuccess, let trusted,
+      SecAccessCreate("Cindy remote desktop credentials" as CFString, [trusted] as CFArray, &access) == errSecSuccess,
+      let access else { throw CredentialError.unavailable }
+    return access
+  }
+  #endif
 }
 #endif

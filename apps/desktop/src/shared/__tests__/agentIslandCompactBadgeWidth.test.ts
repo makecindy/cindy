@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import {
+  type AgentIslandCompactBadgeCounts,
   AGENT_ISLAND_CARRIER_COMPACT_INSET,
   AGENT_ISLAND_COMPACT_HARDWARE_ACTIVE_EXTRA_WIDTH,
   AGENT_ISLAND_COMPACT_HARDWARE_BADGE_RESERVED_INSET,
@@ -8,6 +9,7 @@ import {
   AGENT_ISLAND_COMPACT_HARDWARE_IDLE_EXTRA_WIDTH,
   AGENT_ISLAND_COMPACT_IDLE_WIDTH,
   AGENT_ISLAND_MAX_RESIZABLE_WIDTH,
+  getAgentIslandCompactBadgeSegments,
   getAgentIslandCompactBadgeWidth,
   getAgentIslandDefaultContentWidth,
   snapAgentIslandCompactHardwareContentWidth,
@@ -27,21 +29,21 @@ import {
  */
 const NATIVE_COMPACT_BADGE_WIDTH: Array<{
   label: string;
-  pillSnapshot: { activeSessionCount: number; sessionCount: number };
+  pillSnapshot: AgentIslandCompactBadgeCounts;
   /** Swift `PillBadge.intrinsicWidth(compact: true)` 应算出的值,必须与 TS 完全一致。 */
   layoutWidth: number;
   /** SwiftUI 实绘宽度,标称宽度必须 >= 它,否则仍会被裁。 */
   renderedWidth: number;
 }> = [
-  { label: '单会话', pillSnapshot: { activeSessionCount: 0, sessionCount: 1 }, layoutWidth: 22, renderedWidth: 22 },
-  { label: '12 个任务', pillSnapshot: { activeSessionCount: 0, sessionCount: 12 }, layoutWidth: 22, renderedWidth: 22 },
-  { label: '1/2', pillSnapshot: { activeSessionCount: 1, sessionCount: 2 }, layoutWidth: 30, renderedWidth: 30 },
-  { label: '9/9', pillSnapshot: { activeSessionCount: 9, sessionCount: 9 }, layoutWidth: 30, renderedWidth: 30 },
-  { label: '1/12', pillSnapshot: { activeSessionCount: 1, sessionCount: 12 }, layoutWidth: 37, renderedWidth: 33 },
-  { label: '11/12', pillSnapshot: { activeSessionCount: 11, sessionCount: 12 }, layoutWidth: 44, renderedWidth: 39 },
-  { label: '10/100', pillSnapshot: { activeSessionCount: 10, sessionCount: 100 }, layoutWidth: 51, renderedWidth: 45 },
-  { label: '99/99', pillSnapshot: { activeSessionCount: 99, sessionCount: 99 }, layoutWidth: 44, renderedWidth: 39 },
-  { label: '123/456', pillSnapshot: { activeSessionCount: 123, sessionCount: 456 }, layoutWidth: 58, renderedWidth: 51 },
+  { label: '单会话', pillSnapshot: { attentionCount: 0, runningSessionCount: 0, sessionCount: 1 }, layoutWidth: 22, renderedWidth: 22 },
+  { label: '12 个任务', pillSnapshot: { attentionCount: 0, runningSessionCount: 0, sessionCount: 12 }, layoutWidth: 22, renderedWidth: 22 },
+  { label: '1·2', pillSnapshot: { attentionCount: 1, runningSessionCount: 2, sessionCount: 3 }, layoutWidth: 30, renderedWidth: 30 },
+  { label: '9·9', pillSnapshot: { attentionCount: 9, runningSessionCount: 9, sessionCount: 18 }, layoutWidth: 30, renderedWidth: 30 },
+  { label: '1·12', pillSnapshot: { attentionCount: 1, runningSessionCount: 12, sessionCount: 13 }, layoutWidth: 37, renderedWidth: 33 },
+  { label: '11·12', pillSnapshot: { attentionCount: 11, runningSessionCount: 12, sessionCount: 23 }, layoutWidth: 44, renderedWidth: 39 },
+  { label: '10·100', pillSnapshot: { attentionCount: 10, runningSessionCount: 100, sessionCount: 110 }, layoutWidth: 51, renderedWidth: 45 },
+  { label: '99·99', pillSnapshot: { attentionCount: 99, runningSessionCount: 99, sessionCount: 198 }, layoutWidth: 44, renderedWidth: 39 },
+  { label: '123·456', pillSnapshot: { attentionCount: 123, runningSessionCount: 456, sessionCount: 579 }, layoutWidth: 58, renderedWidth: 51 },
 ];
 
 const NOTCH_WIDTHS = [180, 200, 210, 215];
@@ -55,6 +57,18 @@ function sideWidth(contentWidth: number, notchWidth: number): number {
 function trailingInset(side: number): number {
   return Math.max(7, (Math.min(side, 40) - 22) / 2);
 }
+
+describe('getAgentIslandCompactBadgeSegments', () => {
+  it('只有运行中时显示一个数;有需要关注的任务时变成「关注 · 运行中」', () => {
+    const segments = (attentionCount: number, runningSessionCount: number, sessionCount: number) =>
+      getAgentIslandCompactBadgeSegments({ attentionCount, runningSessionCount, sessionCount });
+    expect(segments(0, 10, 10)).toEqual(['10']);
+    expect(segments(2, 8, 10)).toEqual(['2', '·', '8']);
+    expect(segments(3, 0, 3)).toEqual(['3']);
+    // 只剩已读完成等既不运行也不需关注的任务时,退回任务总数。
+    expect(segments(0, 0, 2)).toEqual(['2']);
+  });
+});
 
 describe('getAgentIslandCompactBadgeWidth', () => {
   it('与 Swift PillBadge.intrinsicWidth 逐值一致(两侧公式必须同步)', () => {
@@ -73,18 +87,18 @@ describe('getAgentIslandCompactBadgeWidth', () => {
   });
 
   it('单个计数在 22pt 最小宽度内不变宽,超出后同样按位数增长', () => {
-    expect(getAgentIslandCompactBadgeWidth({ activeSessionCount: 0, sessionCount: 1 })).toBe(22);
-    expect(getAgentIslandCompactBadgeWidth({ activeSessionCount: 0, sessionCount: 12 })).toBe(22);
+    expect(getAgentIslandCompactBadgeWidth({ attentionCount: 0, runningSessionCount: 0, sessionCount: 1 })).toBe(22);
+    expect(getAgentIslandCompactBadgeWidth({ attentionCount: 0, runningSessionCount: 0, sessionCount: 12 })).toBe(22);
     // 位数够多时单个计数也会超过最小宽度 —— 公式对两种形态都是按 segment 长度算的。
-    expect(getAgentIslandCompactBadgeWidth({ activeSessionCount: 0, sessionCount: 1234 }))
+    expect(getAgentIslandCompactBadgeWidth({ attentionCount: 0, runningSessionCount: 0, sessionCount: 1234 }))
       .toBeGreaterThan(22);
-    const oneDigit = getAgentIslandCompactBadgeWidth({ activeSessionCount: 1, sessionCount: 2 });
-    const twoDigits = getAgentIslandCompactBadgeWidth({ activeSessionCount: 11, sessionCount: 12 });
+    const oneDigit = getAgentIslandCompactBadgeWidth({ attentionCount: 1, runningSessionCount: 2, sessionCount: 3 });
+    const twoDigits = getAgentIslandCompactBadgeWidth({ attentionCount: 11, runningSessionCount: 12, sessionCount: 23 });
     expect(twoDigits).toBeGreaterThan(oneDigit);
   });
 
   it('sessionCount 为 0 时按 1 处理,不产出小于最小宽度的值', () => {
-    expect(getAgentIslandCompactBadgeWidth({ activeSessionCount: 0, sessionCount: 0 })).toBe(22);
+    expect(getAgentIslandCompactBadgeWidth({ attentionCount: 0, runningSessionCount: 0, sessionCount: 0 })).toBe(22);
   });
 });
 
@@ -122,13 +136,13 @@ describe('getAgentIslandDefaultContentWidth: 刻痕机为计数徽标预留宽�
         expanded: false,
         hasSession: true,
         screenMetrics: { hasNotch: true, notchWidth },
-        pillSnapshot: { activeSessionCount: 0, sessionCount: 1 },
+        pillSnapshot: { attentionCount: 0, runningSessionCount: 0, sessionCount: 1 },
       })).toBe(legacyActive);
       expect(getAgentIslandDefaultContentWidth({
         expanded: false,
         hasSession: false,
         screenMetrics: { hasNotch: true, notchWidth },
-        pillSnapshot: { activeSessionCount: 11, sessionCount: 12 },
+        pillSnapshot: { attentionCount: 11, runningSessionCount: 12, sessionCount: 23 },
       })).toBe(legacyIdle);
     }
   });
@@ -148,7 +162,7 @@ describe('getAgentIslandDefaultContentWidth: 刻痕机为计数徽标预留宽�
 
   it('预留量等于 (徽标宽 + inset 上界) * 2', () => {
     const notchWidth = 200;
-    const pillSnapshot = { activeSessionCount: 11, sessionCount: 12 };
+    const pillSnapshot = { attentionCount: 11, runningSessionCount: 12, sessionCount: 23 };
     const badgeWidth = getAgentIslandCompactBadgeWidth(pillSnapshot);
     expect(getAgentIslandDefaultContentWidth({
       expanded: false,
@@ -161,7 +175,7 @@ describe('getAgentIslandDefaultContentWidth: 刻痕机为计数徽标预留宽�
   });
 
   it('非刻痕机与 expanded 形态不受影响', () => {
-    const pillSnapshot = { activeSessionCount: 11, sessionCount: 12 };
+    const pillSnapshot = { attentionCount: 11, runningSessionCount: 12, sessionCount: 23 };
     const simulated = getAgentIslandDefaultContentWidth({
       expanded: false,
       hasSession: true,
@@ -267,7 +281,7 @@ describe('TS carrier 宽度 → native 宽度链路', () => {
 describe('snapAgentIslandCompactHardwareContentWidth', () => {
   it('吸附点跟随预留后的默认宽度', () => {
     const notchWidth = 200;
-    const pillSnapshot = { activeSessionCount: 11, sessionCount: 12 };
+    const pillSnapshot = { attentionCount: 11, runningSessionCount: 12, sessionCount: 23 };
     const screenMetrics = { hasNotch: true, notchWidth };
     const basicWidth = getAgentIslandDefaultContentWidth({
       expanded: false,
@@ -294,7 +308,7 @@ describe('snapAgentIslandCompactHardwareContentWidth', () => {
       maxWidth: 920,
       hasSession: true,
       screenMetrics: { hasNotch: true, notchWidth },
-      pillSnapshot: { activeSessionCount: 11, sessionCount: 12 },
+      pillSnapshot: { attentionCount: 11, runningSessionCount: 12, sessionCount: 23 },
     })).toBe(notchWidth);
   });
 
@@ -305,9 +319,9 @@ describe('snapAgentIslandCompactHardwareContentWidth', () => {
     const persistedBasicWidth = notchWidth + AGENT_ISLAND_COMPACT_HARDWARE_ACTIVE_EXTRA_WIDTH;
     const screenMetrics = { hasNotch: true, notchWidth };
     for (const pillSnapshot of [
-      { activeSessionCount: 10, sessionCount: 100 },
-      { activeSessionCount: 11, sessionCount: 12 },
-      { activeSessionCount: 123, sessionCount: 456 },
+      { attentionCount: 10, runningSessionCount: 100, sessionCount: 110 },
+      { attentionCount: 11, runningSessionCount: 12, sessionCount: 23 },
+      { attentionCount: 123, runningSessionCount: 456, sessionCount: 579 },
     ]) {
       const widened = getAgentIslandDefaultContentWidth({
         expanded: false,
@@ -323,7 +337,7 @@ describe('snapAgentIslandCompactHardwareContentWidth', () => {
         screenMetrics,
         pillSnapshot,
       });
-      expect(resolved, `${pillSnapshot.activeSessionCount}/${pillSnapshot.sessionCount} 塌缩到了 ${resolved}`)
+      expect(resolved, `${pillSnapshot.attentionCount}·${pillSnapshot.runningSessionCount} 塌缩到了 ${resolved}`)
         .not.toBe(notchWidth);
       expect(resolved).toBe(widened);
     }
@@ -332,7 +346,7 @@ describe('snapAgentIslandCompactHardwareContentWidth', () => {
   it('hidden 阈值与旧实现一致:略窄于旧 basic 仍吸附到 basic,更窄才隐藏', () => {
     const notchWidth = 200;
     const screenMetrics = { hasNotch: true, notchWidth };
-    const pillSnapshot = { activeSessionCount: 11, sessionCount: 12 };
+    const pillSnapshot = { attentionCount: 11, runningSessionCount: 12, sessionCount: 23 };
     const widened = getAgentIslandDefaultContentWidth({
       expanded: false,
       hasSession: true,
@@ -364,7 +378,7 @@ describe('snapAgentIslandCompactHardwareContentWidth', () => {
     const notchWidth = 200;
     const screenMetrics = { hasNotch: true, notchWidth };
     const persisted = notchWidth + AGENT_ISLAND_COMPACT_HARDWARE_ACTIVE_EXTRA_WIDTH;
-    const resolveFor = (pillSnapshot: { activeSessionCount: number; sessionCount: number }) =>
+    const resolveFor = (pillSnapshot: AgentIslandCompactBadgeCounts) =>
       snapAgentIslandCompactHardwareContentWidth({
         desiredWidth: persisted,
         clampedWidth: persisted,
@@ -374,8 +388,8 @@ describe('snapAgentIslandCompactHardwareContentWidth', () => {
         pillSnapshot,
       });
 
-    const wide = resolveFor({ activeSessionCount: 11, sessionCount: 12 });
-    const narrow = resolveFor({ activeSessionCount: 0, sessionCount: 1 });
+    const wide = resolveFor({ attentionCount: 11, runningSessionCount: 12, sessionCount: 23 });
+    const narrow = resolveFor({ attentionCount: 0, runningSessionCount: 0, sessionCount: 1 });
     expect(wide).toBeGreaterThan(persisted);
     // 计数回落后必须收缩回旧的 basic 宽度,不能停在为宽徽标撑开的宽度上。
     expect(narrow).toBe(persisted);
@@ -389,8 +403,8 @@ describe('snapAgentIslandCompactHardwareContentWidth', () => {
     const screenMetrics = { hasNotch: true, notchWidth };
     const baseBasic = notchWidth + AGENT_ISLAND_COMPACT_HARDWARE_ACTIVE_EXTRA_WIDTH;
     for (const pillSnapshot of [
-      { activeSessionCount: 11, sessionCount: 12 },
-      { activeSessionCount: 123, sessionCount: 456 },
+      { attentionCount: 11, runningSessionCount: 12, sessionCount: 23 },
+      { attentionCount: 123, runningSessionCount: 456, sessionCount: 579 },
     ]) {
       const widened = getAgentIslandDefaultContentWidth({
         expanded: false,

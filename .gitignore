@@ -40,6 +40,7 @@ apps/desktop/resources/cc-manager/
 apps/desktop/resources/pi-manager/
 apps/desktop/resources/anthropic-compat-proxy/
 apps/desktop/resources/remote-file-service/
+apps/desktop/resources/device-link-relay/
 # Windows 打包时由 prePackage 现场 cargo build 生成并覆盖(forge.config.ts
 # buildCindyUpdater);源码在 apps/desktop/cindy-updater/,不入仓避免 4.5MB
 # 二进制持续消耗 Git LFS 流量。
@@ -166,12 +167,6 @@ config/endpoint.dev.json
 # 发布机本地地区 / 签名配置；仓库只保留对应的 .example 文件。
 apps/mobile/scripts/self-host-regions.json
 apps/desktop/scripts/release-regions.json
-# iOS Simulator WDA archives and native sidecars are generated locally.
-apps/desktop/resources/ios-simulator/*.tar.gz
-apps/desktop/resources/ios-simulator/*.tmp
-apps/desktop/resources/ios-simulator/native/arm64/
-apps/desktop/resources/ios-simulator/native/x86_64/
-apps/desktop/resources/ios-simulator/helper/
 # 客户端日志上报目标(SLS project / logstore / 区域)。真值唯一事实源在
 # cindy-build-scripts 仓根,打包机由 sync-desktop-release-kit.sh 拷回;
 # 仓内只保留 config/log-upload.json.example。缺失时 cn/global 打包会硬失败,
@@ -198,3 +193,10 @@ github-result-*.json
 
 # 内置插件种子已废弃(改走 plugin-store 安装);历史克隆含私有插件与凭证,永不入仓。
 apps/desktop/resources/builtin-ghosts/
+
+# Cindy Headless local plans and gateway configuration
+.cindy-headless/
+.cindy-headless.json
+
+# 本地验收截图与设计稿等任务产物(只在本地保存,不入仓)。
+artifacts/

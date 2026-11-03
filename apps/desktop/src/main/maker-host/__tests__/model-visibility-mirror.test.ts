@@ -174,6 +174,20 @@ describe('initialized model visibility policy', () => {
 
 
 describe('model visibility synchronization readiness', () => {
+  it('invalidates a ready snapshot when legacy migration becomes pending and recovers after synchronization', async () => {
+    const invalidate = vi.fn();
+    setModelVisibilityMirror({});
+    expect(getModelVisibilityOverride('pi', 'xd', 'recommended')).toBeUndefined();
+    expect(syncModelVisibilityMirror({}, invalidate, { pending: true })).toBe(true);
+    expect(() => getModelVisibilityMirrorSnapshot()).toThrow('MODEL_VISIBILITY_NOT_READY');
+    expect(syncModelVisibilityMirror({}, invalidate, { pending: true })).toBe(false);
+    expect(invalidate).toHaveBeenCalledOnce();
+    const waiting = waitForModelVisibilityMirror();
+    setModelVisibilityMirror({ 'pi:xd:recommended': false });
+    await waiting;
+    expect(getModelVisibilityOverride('pi', 'xd', 'recommended')).toBe(false);
+  });
+
   it('waits for a complete snapshot, retaining explicit on/off instead of inventing an empty list', async () => {
     const done = vi.fn();
     const waiting = waitForModelVisibilityMirror().then(done);

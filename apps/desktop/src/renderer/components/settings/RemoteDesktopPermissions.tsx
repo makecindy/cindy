@@ -1,3 +1,4 @@
+import { Button } from '@/components/ui/button';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import {
@@ -99,16 +100,20 @@ export function RemoteDesktopPermissions() {
           </div>
         );
       })}
-      <button
+      <Button
+        variant="secondary"
+        size="sm"
+        compact
+        tone="quiet"
         type="button"
-        className="self-start rounded-full px-2 py-1 text-11 text-[var(--settings-section-title)] hover:bg-[var(--surface-chip)]"
+        className="self-start"
         onClick={() => {
           setError(null);
           void refresh();
         }}
       >
         {t('remoteDesktop.recheckPermissions')}
-      </button>
+      </Button>
       {error && (
         <p role="alert" className="text-12 text-[var(--settings-section-desc)]">
           {t(

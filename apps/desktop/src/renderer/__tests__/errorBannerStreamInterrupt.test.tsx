@@ -189,7 +189,7 @@ describe('ErrorBanner — LiteLLM 外壳拆封', () => {
       }),
     );
 
-    expect(screen.getByText('Upstream rejected the request!')).toBeTruthy();
+    expect(screen.getByText('chat.errorBanner.replyFailed')).toBeTruthy();
     expect(screen.queryByText(XAI_REJECTED_RAW)).toBeNull();
     fireEvent.click(screen.getByText('chat.errorBanner.networkShowRaw'));
     expect(screen.getByText(XAI_REJECTED_RAW)).toBeTruthy();

@@ -46,6 +46,13 @@ export interface MessageDeleteHandlerDeps {
     clientId: string,
   ): Promise<MessageDeletionTarget | null>;
   listMessagesForContext(sessionId: string): Promise<ContextSourceMessage[]>;
+  /**
+   * 伙伴工作记忆账本渲染段(botWorkingMemory);删除消息后的重建交接同样带上,
+   * 但由待删消息产生的条目必须先排除,否则被删轮次的承诺 / 纠正会借交接回到新上下文。
+   */
+  readWorkingMemoryNote?(sessionId: string, opts: { excludeMessageIds: ReadonlySet<string> }): Promise<string | null>;
+  /** 删除提交后持久清掉由这些消息产生的账本条目;失败不影响删除。 */
+  pruneWorkingMemory?(sessionId: string, deletedMessageIds: ReadonlySet<string>): Promise<void>;
   getLiveSession(sessionId: string): { isTurnRunning(): boolean } | null | undefined;
   hasBackgroundActivity(sessionId: string): boolean;
   closeSession(sessionId: string): Promise<void>;
@@ -138,6 +145,7 @@ export async function performMessageDeletion(
       toLabel: label,
       sessionId,
       reason: 'message-deletion',
+      workingMemory: (await deps.readWorkingMemoryNote?.(sessionId, { excludeMessageIds: deletedClientIds })) ?? null,
     });
 
     const committed = await deps.commitDeletion(
@@ -147,6 +155,8 @@ export async function performMessageDeletion(
       target.subagentTurnWindow,
     );
     deps.setPendingHandoff(sessionId, handoff, handoffGeneration);
+    // 持久账本在删除提交后再清:提交失败时账本不动,交接文本已经排除过这些条目。
+    await deps.pruneWorkingMemory?.(sessionId, new Set(committed.deletedClientIds));
     await deps.onCommitted(committed, clientId);
     deps.log.info('message delete committed; native context will rebuild on next send', {
       sessionId,

@@ -1,4 +1,5 @@
-import { Modal, Pressable, StyleSheet } from 'react-native';
+import { Modal, StyleSheet, View } from 'react-native';
+import { ModalContentArea } from '@/platform/ModalContentArea';
 import { useTranslation } from 'react-i18next';
 import { Text, TextInput } from '@/components/AppText';
 import { MainWindowActionGroup } from '@/components/MobilePrimitives';
@@ -35,19 +36,22 @@ export function RenameDeviceModal({
   const canSave = draft.trim().length > 0 && !saving;
   return (
     <Modal
+      supportedOrientations={['portrait', 'portrait-upside-down', 'landscape-left', 'landscape-right']}
       animationType="fade"
       transparent
       visible={visible}
-      onRequestClose={onCancel}
+      // 带取消按钮的对话框:点背景不关闭;保存中连 Android 返回键也不关闭。
+      onRequestClose={() => {
+        if (!saving) onCancel();
+      }}
     >
-      <Pressable
+      <View
         style={styles.renameDeviceBackdrop}
-        onPress={onCancel}
         testID="home.renameDevice.backdrop"
       >
-        <Pressable
+        <ModalContentArea>
+        <View
           style={styles.renameDeviceCard}
-          onPress={() => undefined}
           testID="home.renameDevice.modal"
         >
           <Text style={styles.renameDeviceTitle}>
@@ -62,7 +66,7 @@ export function RenameDeviceModal({
               if (canSave) onConfirm();
             }}
             placeholder={t('devices.list.renameDevice.placeholder')}
-            placeholderTextColor={colors.textTertiary}
+            placeholderTextColor={colors.textPlaceholder}
             returnKeyType="done"
             selectTextOnFocus
             style={styles.renameDeviceInput}
@@ -83,9 +87,7 @@ export function RenameDeviceModal({
                   : t('devices.list.renameDevice.saveA11y'),
                 busy: saving,
                 disabled: !canSave,
-                label: saving
-                  ? t('devices.common.saving')
-                  : t('devices.common.save'),
+                label: t('devices.common.save'),
                 onPress: onConfirm,
                 testID: 'home.renameDevice.save',
                 tone: 'primary',
@@ -100,15 +102,17 @@ export function RenameDeviceModal({
             }}
             testID="home.renameDevice.actions"
           />
-        </Pressable>
-      </Pressable>
+        </View>
+        </ModalContentArea>
+      </View>
     </Modal>
   );
 }
 
 const makeStyles = (colors: ThemeColors) =>
   StyleSheet.create({
-    error: { color: colors.destructive, fontSize: typeScale.body },
+    // 报错说明:13/18 errorText(黑白系),红色只留给状态点与破坏性按钮。
+    error: { color: colors.errorText, fontSize: typeScale.footnote, fontWeight: fontWeight.regular, lineHeight: lineHeight.caption },
     renameDeviceBackdrop: {
       alignItems: 'center',
       backgroundColor: colors.overlay,
@@ -129,18 +133,19 @@ const makeStyles = (colors: ThemeColors) =>
     renameDeviceTitle: {
       color: colors.textPrimary,
       fontSize: typeScale.title,
-      fontWeight: fontWeight.medium,
-      lineHeight: lineHeight.subtitle,
+      fontWeight: fontWeight.semibold,
+      lineHeight: lineHeight.title,
     },
+    // 单行输入统一胶囊形(与登录、设置的单行输入一致)。
     renameDeviceInput: {
       backgroundColor: colors.surface,
       borderColor: colors.border,
-      borderRadius: radius.container,
+      borderRadius: radius.pill,
       borderWidth: StyleSheet.hairlineWidth,
       color: colors.textPrimary,
       fontSize: typeScale.body,
       minHeight: 48,
-      paddingHorizontal: spacing.md,
+      paddingHorizontal: spacing.lg,
       paddingVertical: spacing.sm,
     },
   });

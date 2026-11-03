@@ -3,13 +3,13 @@ import {
   DeviceLinkError,
   DL_HISTORY_MESSAGES_CHANNEL,
   DL_SESSION_REFERENCE_CAPABILITY_CHANNEL,
+  sharedTaskHostPeer,
 } from '@cindy/device-link';
 import { i18n } from '@/i18n';
 import type { RemoteInvoke } from '@/device-link/mobileMakerTransport';
 import {
   estimateMobileReferenceTokens,
   extractMobileSessionReferences,
-  formatMobileSessionReferenceMetadata,
   MAX_MOBILE_REFERENCE_MESSAGES,
   MobileSessionReferenceError,
   canFallbackToStoredMobileSessionReferenceSnapshot,
@@ -49,6 +49,20 @@ function asInvoke(
   implementation: (deviceId: string, channel: string, args: unknown[]) => Promise<unknown>,
 ): RemoteInvoke {
   return (deviceId, channel, args = []) => implementation(deviceId, channel, args) as Promise<never>;
+}
+
+function hasIsolatedSurrogate(text: string): boolean {
+  for (let index = 0; index < text.length; index += 1) {
+    const code = text.charCodeAt(index);
+    if (code >= 0xd800 && code <= 0xdbff) {
+      const next = text.charCodeAt(index + 1);
+      if (!(next >= 0xdc00 && next <= 0xdfff)) return true;
+      index += 1;
+    } else if (code >= 0xdc00 && code <= 0xdfff) {
+      return true;
+    }
+  }
+  return false;
 }
 
 describe('mobile session-reference links', () => {
@@ -141,17 +155,24 @@ describe('mobile session-reference links', () => {
     )).toEqual([{ sessionId: 'source', deviceId: 'source-device' }]);
   });
 
-  it('prefers the device frozen into the link over store lookup and hints', () => {
-    // 桌面端深链冻结的 `?device=` 优先;store 查不到时也不丢远程判定。
+  it('refreshes a restored draft device from the store and retains frozen devices for unlisted tasks', () => {
     expect(extractMobileSessionReferences(
       'cindy://session/source?device=dev-frozen',
       () => 'dev-live',
       [{ sessionId: 'source', deviceId: 'dev-hint' }],
-    )).toEqual([{ sessionId: 'source', deviceId: 'dev-frozen' }]);
+    )).toEqual([{ sessionId: 'source', deviceId: 'dev-live' }]);
     expect(extractMobileSessionReferences(
       'cindy://session/source?message=anchor&device=dev-frozen',
       () => undefined,
     )).toEqual([{ sessionId: 'source', messageClientId: 'anchor', deviceId: 'dev-frozen' }]);
+  });
+
+  it('uses the local shared-task route when a portable link identifies its physical host', () => {
+    const peer = sharedTaskHostPeer('shared-task', 'host-device');
+    expect(extractMobileSessionReferences(
+      'cindy://session/source?message=anchor&device=host-device',
+      () => peer,
+    )).toEqual([{ sessionId: 'source', messageClientId: 'anchor', deviceId: peer }]);
   });
 
   it('clears stale refs and trusted snapshots when an edit removes the link', async () => {
@@ -173,16 +194,6 @@ describe('mobile session-reference links', () => {
 
     expect(prepared).toEqual({ text: 'plain text after editing' });
     expect(invoke).not.toHaveBeenCalled();
-  });
-
-  it('formats the persisted range summary without referenced message bodies', () => {
-    expect(formatMobileSessionReferenceMetadata({
-      sessionId: 'source',
-      messageClientId: 'anchor',
-      range: 'around-anchor',
-      messageCount: 4,
-      truncated: true,
-    })).toBe('链接附近 · 4 条 · 已截断');
   });
 
   it('falls back to raw link text when the target does not support references', async () => {
@@ -538,6 +549,124 @@ describe('resolveMobileSessionReferences', () => {
     ]);
   });
 
+  it('omits an anchor the composer already delivered verbatim in the message text', async () => {
+    const invoke = asInvoke(async (_deviceId, channel, args) => {
+      if (channel === 'local-db:sessions:get') return { id: args[0] };
+      if (channel === 'local-db:messages:around-client-id') {
+        return [message('s1', '5', 'anchor', '报告全文', 'assistant', 5_000)];
+      }
+      if (channel === DL_HISTORY_MESSAGES_CHANNEL) {
+        const request = args[0] as { order: string };
+        return request.order === 'desc'
+          ? { items: [message('s1', '4', 'c4', '更早的一条', 'user', 4_000)], hasMore: false }
+          : { items: [], hasMore: false };
+      }
+      throw new Error(`unexpected channel ${channel}`);
+    });
+
+    const [context] = await resolveMobileSessionReferences(
+      [{ sessionId: 's1', messageClientId: 'anchor', deviceId: 'dev-b' }],
+      invoke,
+      { inlineMessageKeys: new Set(['s1\u0000anchor']) },
+    );
+
+    // The quoted body already reached the model inside the user message, so the
+    // payload must not deliver it a second time (and must not trim it).
+    expect(context.messages.map((item) => item.content)).toEqual(['更早的一条']);
+    expect(context.messageClientId).toBe('anchor');
+    expect(context.range).toBe('around-anchor');
+  });
+
+  it('keeps the anchor whole when the serialized payload has to shrink', async () => {
+    // The anchor is the longest message and carries quotes, so the escaped
+    // JSON costs far more than the raw text: the final payload fit has to shed
+    // content, and it must not shed the anchor the user pointed at.
+    const anchorBody = '结'.repeat(2_000) + '"'.repeat(8_000);
+    const neighborBody = '邻'.repeat(2_900);
+    const invoke = asInvoke(async (_deviceId, channel, args) => {
+      if (channel === 'local-db:sessions:get') return { id: args[0] };
+      if (channel === 'local-db:messages:around-client-id') {
+        return [message('s1', '5', 'anchor', anchorBody, 'assistant', 5_000)];
+      }
+      if (channel === DL_HISTORY_MESSAGES_CHANNEL) {
+        const request = args[0] as { order: string };
+        return request.order === 'desc'
+          ? { items: [], hasMore: false }
+          : { items: [message('s1', '6', 'c6', neighborBody, 'user', 6_000)], hasMore: false };
+      }
+      throw new Error(`unexpected channel ${channel}`);
+    });
+
+    const [context] = await resolveMobileSessionReferences(
+      [{ sessionId: 's1', messageClientId: 'anchor', deviceId: 'dev-b' }],
+      invoke,
+    );
+
+    expect(context.messages[0]?.content).toBe(anchorBody);
+    expect(context.messages[1]?.content.startsWith('…')).toBe(true);
+    expect(estimateMobileReferenceTokens(serializeMobileSessionReferencePayload([context])))
+      .toBeLessThanOrEqual(8_000 - 128);
+  });
+
+  it('trims the anchor instead of throwing when only a single-character neighbor remains', async () => {
+    // The escaped anchor alone exceeds the final payload budget, and the only
+    // neighbor cannot shed content: the fit must fall back to the anchor
+    // instead of dropping the whole quote.
+    const invoke = asInvoke(async (_deviceId, channel, args) => {
+      if (channel === 'local-db:sessions:get') return { id: args[0] };
+      if (channel === 'local-db:messages:around-client-id') {
+        return [message('s1', '5', 'anchor', '"'.repeat(30_000), 'assistant', 5_000)];
+      }
+      if (channel === DL_HISTORY_MESSAGES_CHANNEL) {
+        const request = args[0] as { order: string };
+        return request.order === 'desc'
+          ? { items: [], hasMore: false }
+          : { items: [message('s1', '6', 'c6', 'x', 'user', 6_000)], hasMore: false };
+      }
+      throw new Error(`unexpected channel ${channel}`);
+    });
+
+    const [context] = await resolveMobileSessionReferences(
+      [{ sessionId: 's1', messageClientId: 'anchor', deviceId: 'dev-b' }],
+      invoke,
+    );
+
+    expect(context.truncated).toBe(true);
+    expect(context.messages[0]?.content.startsWith('…')).toBe(true);
+    expect(context.messages[1]?.content).toBe('x');
+    expect(estimateMobileReferenceTokens(serializeMobileSessionReferencePayload([context])))
+      .toBeLessThanOrEqual(8_000 - 128);
+  });
+
+  it('trims the anchor after a two-character neighbor can no longer shrink', async () => {
+    // The neighbor sheds down to one character and then stalls the loop; the
+    // anchor fallback must still bring the payload under budget.
+    const invoke = asInvoke(async (_deviceId, channel, args) => {
+      if (channel === 'local-db:sessions:get') return { id: args[0] };
+      if (channel === 'local-db:messages:around-client-id') {
+        return [message('s1', '5', 'anchor', '"'.repeat(30_000), 'assistant', 5_000)];
+      }
+      if (channel === DL_HISTORY_MESSAGES_CHANNEL) {
+        const request = args[0] as { order: string };
+        return request.order === 'desc'
+          ? { items: [], hasMore: false }
+          : { items: [message('s1', '6', 'c6', 'ab', 'user', 6_000)], hasMore: false };
+      }
+      throw new Error(`unexpected channel ${channel}`);
+    });
+
+    const [context] = await resolveMobileSessionReferences(
+      [{ sessionId: 's1', messageClientId: 'anchor', deviceId: 'dev-b' }],
+      invoke,
+    );
+
+    expect(context.truncated).toBe(true);
+    expect(context.messages[0]?.content.startsWith('…')).toBe(true);
+    expect(context.messages[1]?.content.length).toBeLessThanOrEqual(1);
+    expect(estimateMobileReferenceTokens(serializeMobileSessionReferencePayload([context])))
+      .toBeLessThanOrEqual(8_000 - 128);
+  });
+
   it('marks an anchored neighbor as truncated when it is partially kept', async () => {
     const invoke = asInvoke(async (_deviceId, channel, args) => {
       if (channel === 'local-db:sessions:get') return { id: args[0] };
@@ -558,6 +687,35 @@ describe('resolveMobileSessionReferences', () => {
     expect(context.truncated).toBe(true);
     const partialNeighbor = context.messages.find((item) => item.role === 'assistant');
     expect(partialNeighbor?.content.length).toBeLessThan(20_000);
+  });
+
+  it.each([
+    { layout: 'emoji before quote', payloadBody: '😀"' },
+    { layout: 'quote before emoji', payloadBody: '"😀' },
+  ])('keeps emoji whole when the serialized payload cut trims $layout content', async ({ payloadBody }) => {
+    const invoke = asInvoke(async (_deviceId, channel, args) => {
+      if (channel === 'local-db:sessions:get') return { id: args[0] };
+      const request = args[0] as { sessionId: string };
+      const content = request.sessionId === 's-tail'
+        ? '😀'.repeat(5_000)
+        : payloadBody.repeat(3_000);
+      return {
+        items: [message(request.sessionId, '1', 'c1', content)],
+        hasMore: false,
+      };
+    });
+
+    const contexts = await resolveMobileSessionReferences([
+      { sessionId: 's-tail', deviceId: 'dev-a' },
+      { sessionId: 's-payload', deviceId: 'dev-a' },
+    ], invoke);
+
+    const contents = contexts.flatMap((context) =>
+      context.messages.map((item) => item.content));
+    expect(contents.map(hasIsolatedSurrogate)).toEqual([false, false]);
+    expect(contents.every((content) => content.startsWith('…'))).toBe(true);
+    expect(estimateMobileReferenceTokens(serializeMobileSessionReferencePayload(contexts)))
+      .toBeLessThanOrEqual(8_000 - 128);
   });
 
   it('routes each reference to its own authorized source and shares the 20-message limit', async () => {

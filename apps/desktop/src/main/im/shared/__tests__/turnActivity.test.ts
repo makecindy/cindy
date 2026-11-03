@@ -2,6 +2,8 @@
 import { describe, expect, it } from 'vitest';
 
 import {
+  applyStatusTokenRate,
+  clearRunningIndicators,
   createTurnActivity,
   formatThinkingStep,
   formatToolStep,
@@ -11,6 +13,7 @@ import {
   pushToolStep,
   renderActivity,
   setActivityNotice,
+  setActivityTokenRate,
   setInteractionNotice,
 } from '../turnActivity';
 
@@ -145,6 +148,7 @@ describe('rolling window and replay de-duplication', () => {
       'notice',
       'recentSteps',
       'startedAt',
+      'tokenRate',
       'totalSteps',
       'writing',
     ]);
@@ -172,6 +176,48 @@ describe('renderActivity', () => {
     // A later tool becomes current even though earlier progress text exists.
     pushToolStep(activity, 'Bash', { command: 'pnpm test' }, 'test-1');
     expect(renderActivity(activity, 91_000)).toContain('> ▸ 运行测试');
+  });
+
+  it('appends the rounded tok/s to the header only when a reading exists', () => {
+    const activity = createTurnActivity(0);
+    pushToolStep(activity, 'Read', { file_path: '/x/relay.ts' }, 'read-1');
+    expect(renderActivity(activity, 5_000).split('\n')[0]).toBe('⚙️ 工作中 · 1 项 · 5s');
+
+    expect(setActivityTokenRate(activity, 116.4)).toBe(true);
+    expect(setActivityTokenRate(activity, 116.2)).toBe(false);
+    expect(renderActivity(activity, 5_000).split('\n')[0]).toBe(
+      '⚙️ 工作中 · 1 项 · 5s · 116 tok/s',
+    );
+
+    for (const missing of [null, 0, -3, Number.NaN, Number.POSITIVE_INFINITY]) {
+      setActivityTokenRate(activity, 50);
+      expect(setActivityTokenRate(activity, missing)).toBe(true);
+      expect(renderActivity(activity, 5_000)).not.toContain('tok/s');
+    }
+  });
+
+  it('reads tok/s from status data and clears running indicators at closure', () => {
+    const activity = createTurnActivity(0);
+    pushToolStep(activity, 'Read', { file_path: '/x/relay.ts' }, 'read-1');
+    const speed = { rate: 54.6, average: 50, tokens: 200, elapsedMs: 4_000, streaming: true };
+
+    expect(applyStatusTokenRate(activity, { tokenSpeed: speed })).toBe(true);
+    expect(activity.tokenRate).toBe(55);
+    // 占位帧 / 0 读数 / 非对象: 保留上一个值。
+    expect(applyStatusTokenRate(activity, {})).toBe(false);
+    expect(applyStatusTokenRate(activity, { tokenSpeed: { ...speed, rate: 0 } })).toBe(false);
+    expect(applyStatusTokenRate(activity, null)).toBe(false);
+    expect(activity.tokenRate).toBe(55);
+    // 不可靠读数: 隐藏。
+    expect(applyStatusTokenRate(activity, { generationReliable: false, tokenSpeed: speed })).toBe(true);
+    expect(activity.tokenRate).toBeNull();
+
+    applyStatusTokenRate(activity, { tokenSpeed: speed });
+    setActivityNotice(activity, '模型服务繁忙，正在自动重试（1/4）…');
+    clearRunningIndicators(activity);
+    expect(activity.notice).toBeNull();
+    expect(activity.tokenRate).toBeNull();
+    expect(activity.totalSteps).toBe(1);
   });
 
   it('emits no chrome for a text-only quick answer', () => {

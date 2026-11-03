@@ -1,0 +1,37 @@
+/* Approved Switch study: subtle deformation, no shadow or overshoot. */
+.cindy-switch {
+  transition-duration: var(--motion-instant);
+}
+
+/* Transparent 24px target; the visible track stays 36 × 20. */
+.cindy-switch::after {
+  content: '';
+  position: absolute;
+  inset: -4px -2px;
+  border-radius: inherit;
+}
+
+.cindy-switch-thumb {
+  width: var(--switch-thumb-width);
+  height: var(--switch-thumb-height);
+  transform: translateX(var(--switch-drag-x, 0px));
+  transition:
+    transform var(--motion-fast) var(--motion-ease-out),
+    width var(--motion-fast) var(--motion-ease-out),
+    height var(--motion-fast) var(--motion-ease-out);
+}
+
+.cindy-switch-thumb[data-state='checked'] {
+  transform: translateX(var(--switch-drag-x, calc(2rem - var(--switch-thumb-width))));
+}
+
+.cindy-switch-thumb[data-dragging] {
+  transition: none;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .cindy-switch,
+  .cindy-switch-thumb {
+    transition: none;
+  }
+}

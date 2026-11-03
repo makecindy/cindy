@@ -227,6 +227,35 @@ export async function latestMessageText(
   return (await latestMessage(sessionId, role)).text;
 }
 
+/** 跳过空正文记录(如只带 agentMeta 的目标达成分隔条)时最多往回看的行数。 */
+const NON_EMPTY_SCAN_LIMIT = 20;
+
+/** 最近一条正文非空的消息文本;窗口内都为空时返回空串。 */
+export async function latestNonEmptyMessageText(
+  sessionId: string,
+  role: 'user' | 'assistant',
+): Promise<string> {
+  const db = getDbClient().drizzle;
+  const clearedAt = await sessionClearedAt(sessionId);
+  const conds = [
+    eq(messages.sessionId, sessionId),
+    eq(messages.role, role),
+    isNull(messages.rewindAt),
+  ];
+  if (clearedAt != null) conds.push(gt(messages.createdAt, clearedAt));
+  const rows = await db
+    .select({ content: messages.content })
+    .from(messages)
+    .where(and(...conds))
+    .orderBy(desc(messages.createdAt), desc(messageRowid))
+    .limit(NON_EMPTY_SCAN_LIMIT);
+  for (const row of rows) {
+    const text = extractText(row.content, role);
+    if (text.trim()) return text;
+  }
+  return '';
+}
+
 /**
  * 最近 `limit` 条有效的 user / assistant 素材,时间正序。`limit` 现在按真实
  * conversation turn 收口后的有效消息计数,不是原始 DB 行数；一个 turn 中的

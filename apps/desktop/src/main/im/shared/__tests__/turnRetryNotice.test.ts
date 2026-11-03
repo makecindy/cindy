@@ -7,8 +7,10 @@
 import { describe, expect, it } from 'vitest';
 
 import {
+  isQuotaExhaustionFailure,
   overloadFailureNotice,
   overloadRetryNotice,
+  QUOTA_FAILURE_NOTICE_PREFIX,
   terminalErrorText,
   turnRetryNotice,
 } from '../turnRetryNotice';
@@ -241,12 +243,25 @@ describe('terminalErrorText', () => {
     });
     expect(notice).toContain('自动审批暂时无法给出判断');
     // 必须说清操作的去向 —— 现在是转交用户确认,不再是静默拒绝。
-    expect(notice).toContain('转由你来确认');
-    // 必须给出用户能做的事,否则等于只说"又失败了"。
-    expect(notice).toContain('默认权限');
+    expect(notice).toContain('由你确认');
+    // 少打断只指向完全访问。默认权限在三条 Harness 上都不等于少确认。
+    expect(notice).toContain('完全访问');
+    expect(notice).toContain('风险更高');
+    expect(notice).not.toContain('默认权限');
     // 不得把 [CODE] 前缀或英文原文推给渠道用户。
     expect(notice).not.toContain('AUTO_REVIEW_UNAVAILABLE');
     expect(notice).not.toContain('Auto-review could not');
+  });
+
+  it('个人微信不建议切到完全访问', () => {
+    const notice = turnRetryNotice({
+      message: '[AUTO_REVIEW_UNAVAILABLE] Auto-review could not reach a decision',
+      isTerminal: false,
+    }, { channel: 'wechat' });
+    expect(notice).toContain('个人微信不能使用「完全访问」');
+    expect(notice).toContain('直接确认');
+    expect(notice).not.toContain('想少被打断');
+    expect(notice).not.toContain('默认权限');
   });
 
   it('确认卡没送到 → 渠道侧说明这次不是用户拒绝', () => {
@@ -275,5 +290,86 @@ describe('terminalErrorText', () => {
     // 值存在就照常取值(含非字符串)。
     expect(terminalErrorText({ message: 0 })).toBe('0');
     expect(terminalErrorText({ message: 'boom' })).toBe('boom');
+  });
+});
+
+describe('额度类终态错误', () => {
+  const SPEND_CAP =
+    'You hit your spend cap set by the owner of your workspace. Ask them to raise it to keep using Codex.';
+  const PERSONAL = { surface: 'personal', supportsModelCommand: true } as const;
+
+  it('花费上限: 定位 bot、任务、模型和供应商，只给当前任务的恢复动作', () => {
+    const text = terminalErrorText({ message: SPEND_CAP }, { ...PERSONAL, providerLabel: 'OpenAI',
+      botLabel: 'Telegram 个人 bot · 测试助手', modelLabel: 'GPT-6 Astra', taskLabel: '我的任务（12345678）' });
+    expect(text.startsWith(QUOTA_FAILURE_NOTICE_PREFIX)).toBe(true);
+    expect(text).toContain('「OpenAI」已达到工作区所有者设置的花费上限');
+    expect(text).toContain('Telegram 个人 bot · 测试助手');
+    expect(text).toContain('GPT-6 Astra');
+    expect(text).toContain('我的任务（12345678）');
+    expect(text).toContain('联系工作区管理员');
+    expect(text).toContain('/model');
+    expect(text).not.toContain('设置 →');
+    expect(text).not.toContain(SPEND_CAP);
+  });
+
+  it('个人 /model 改当前任务，官方指向 Cindy 当前任务，不指向目录默认', () => {
+    const personal = terminalErrorText({ message: SPEND_CAP }, PERSONAL);
+    expect(personal).toContain('个人 bot');
+    expect(personal).toContain('/model');
+    expect(personal).not.toContain('新对话配置');
+    expect(personal).not.toContain('工作目录');
+    const official = terminalErrorText({ message: SPEND_CAP }, { surface: 'official' });
+    expect(official).toContain('官方 bot');
+    expect(official).toContain('在 Cindy 里打开这个任务');
+    expect(official).not.toContain('/model');
+    expect(official).not.toContain('/new');
+  });
+
+  it.each([false, undefined])('个人渠道未支持 /model (%s) 时只指向 Cindy 当前任务', (supportsModelCommand) => {
+    const text = terminalErrorText({ message: SPEND_CAP }, { surface: 'personal', supportsModelCommand });
+    expect(text).toContain('在 Cindy 里打开这个任务');
+    expect(text).toContain('更换供应商或模型');
+    expect(text).toContain('回到这里重发这条消息');
+    expect(text).not.toContain('/model');
+    expect(text).not.toContain('新对话配置');
+    expect(text).not.toContain('Telegram');
+  });
+
+  it.each([
+    { message: SPEND_CAP },
+    { message: 'Payment Required', errorStatus: 402 },
+    { message: 'billing', sdkError: 'billing_error' },
+    { message: 'limit', codexErrorInfo: 'usageLimitExceeded' },
+  ])('非 IM 调用方未传入口时保持原文，不混入 bot 指引: $message', (data) => {
+    expect(terminalErrorText(data)).toBe(data.message);
+  });
+
+  it('拿不到供应商名时退回「当前供应商」', () => {
+    expect(terminalErrorText({ message: SPEND_CAP }, PERSONAL)).toContain('当前供应商已达到工作区所有者设置的花费上限');
+  });
+
+  it('认上游的结构化信号: 402 / billing_error / provider_quota_limit / usageLimitExceeded', () => {
+    expect(isQuotaExhaustionFailure({ message: 'Payment Required', errorStatus: 402 })).toBe(true);
+    expect(isQuotaExhaustionFailure({ message: 'billing', sdkError: 'billing_error' })).toBe(true);
+    expect(isQuotaExhaustionFailure({ message: 'x', reason: 'provider_quota_limit' })).toBe(true);
+    expect(terminalErrorText({ message: 'limit', codexErrorInfo: 'usageLimitExceeded' }, PERSONAL)).toContain(
+      '账号用量已达上限',
+    );
+    expect(terminalErrorText({ message: 'insufficient_quota' }, PERSONAL)).toContain('账号余额或配额不足');
+  });
+
+  it('普通限流 / 其它错误不算额度耗尽, 沿用原有映射', () => {
+    expect(isQuotaExhaustionFailure({ message: 'rate limit exceeded', errorStatus: 429 })).toBe(false);
+    expect(isQuotaExhaustionFailure({ message: 'process exited with code 1' })).toBe(false);
+    expect(isQuotaExhaustionFailure(null)).toBe(false);
+    expect(terminalErrorText({ message: 'process exited with code 1' }, { ...PERSONAL, providerLabel: 'OpenAI' })).toBe(
+      'process exited with code 1',
+    );
+  });
+
+  it('不外发上游原文，显示标签中的敏感信息仍脱敏', () => {
+    const text = terminalErrorText({ message: 'insufficient_quota for key sk-abcdefghijklmnop' },
+      { ...PERSONAL, taskLabel: 'key sk-abcdefghijklmnop' });
+    expect(text).not.toContain('sk-abcdefghijklmnop');
   });
 });

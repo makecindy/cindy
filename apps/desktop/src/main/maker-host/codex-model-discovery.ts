@@ -36,14 +36,7 @@ interface CodexModelRaw {
   priority?: unknown;
   /** [{id:'priority', name:'Fast', ...}] —— 含 priority 即支持 Fast(bridge 映射 service_tier)。 */
   service_tiers?: unknown;
-}
-
-/** service_tiers 里是否声明了 priority(=Fast)档。 */
-function hasPriorityTier(tiers: unknown): boolean {
-  return (
-    Array.isArray(tiers) &&
-    tiers.some((t) => t && typeof t === 'object' && (t as { id?: unknown }).id === 'priority')
-  );
+  additional_speed_tiers?: unknown;
 }
 
 /**
@@ -52,13 +45,6 @@ function hasPriorityTier(tiers: unknown): boolean {
  * 自报的 supported_reasoning_levels 决定,过滤后只保留该模型真正声明的子集。
  */
 const CODEX_EFFORTS = new Set(['low', 'medium', 'high', 'xhigh', 'max', 'ultra']);
-
-/**
- * 默认收起的 slug(旧产品目录 defaultEnabled:false 的延续):清单动态化后注册表不带
- * 可见性梯度(list/hide 之外),legacy 模型的「默认隐藏」是客户端展示策略,不能因
- * 静态段退役而静默漂移成全部可见。用户仍可在设置里手动开启(override 语义不变)。
- */
-const DEFAULT_HIDDEN_SLUGS: ReadonlySet<string> = new Set(['gpt-5.4-mini']);
 
 /** Cindy 内部路由专用的 Codex 模型 ID，不应出现在任何用户可见模型目录。 */
 const INTERNAL_CODEX_MODEL_IDS: ReadonlySet<string> = new Set(['codex-auto-review']);
@@ -76,36 +62,11 @@ function str(v: unknown): string | null {
 }
 
 /**
- * 把上游 priority 映射到静态目录已占用的排序锚点。锚点来自当前官方 cache 顺序：
- * Sol(1)→17、Terra(2)→18、Luna(3)→19、5.5(7)→20、5.4(16)→21、Mini(23)→22。
- * 区间线性插值让未来模型真实落在相邻静态模型之间，而不是一律塞到 GPT-5.5 后面。
- */
-function sortOrderForPriority(priority: number): number {
-  const anchors = [
-    [1, 17],
-    [2, 18],
-    [3, 19],
-    [7, 20],
-    [16, 21],
-    [23, 22],
-  ] as const;
-  if (priority <= anchors[0][0]) return anchors[0][1] + (priority - anchors[0][0]) / 1000;
-  for (let i = 1; i < anchors.length; i += 1) {
-    const [rightPriority, rightOrder] = anchors[i];
-    if (priority > rightPriority) continue;
-    const [leftPriority, leftOrder] = anchors[i - 1];
-    const ratio = (priority - leftPriority) / (rightPriority - leftPriority);
-    return leftOrder + (rightOrder - leftOrder) * ratio;
-  }
-  const [lastPriority, lastOrder] = anchors[anchors.length - 1];
-  return lastOrder + (priority - lastPriority) / 1000;
-}
-
-/**
  * codex models_cache 原始 JSON → 规范化的 Codex CatalogModel[]。纯函数。
  *
  * 只收 visibility:'list' && supported_in_api:true 且不在内部 ID 集合的模型；缺 slug 则跳过。
- * sortOrder 由 codex 的 priority 派生到 gpt 分组的一个子带内(纯展示,不影响路由 / 去重)。
+ * sortOrder 直接取 codex 的 priority(官方 picker 顺序);active-catalog 以它作为账号顺序
+ * 重排 root,不再映射到 Registry 的排序锚点。
  */
 export function mapCodexModelsToCatalog(raw: unknown): CatalogModel[] {
   const models =
@@ -148,6 +109,12 @@ export function mapCodexModelsToCatalog(raw: unknown): CatalogModel[] {
         : undefined;
     const priority =
       typeof m.priority === 'number' && Number.isFinite(m.priority) ? m.priority : 50;
+    const speedTiers = [
+      ...(Array.isArray(m.service_tiers) ? m.service_tiers.map(tier => tier?.id) : []),
+      ...(Array.isArray(m.additional_speed_tiers) ? m.additional_speed_tiers : []),
+    ];
+    const supportsFastMode = Array.isArray(m.service_tiers) || Array.isArray(m.additional_speed_tiers)
+      ? speedTiers.some(tier => tier === 'priority' || tier === 'fast') : undefined;
 
     const model: CatalogModel = {
       id: slug,
@@ -159,14 +126,11 @@ export function mapCodexModelsToCatalog(raw: unknown): CatalogModel[] {
           inputModalities !== undefined ? inputModalities.includes('image') : undefined,
         efforts: Array.isArray(m.supported_reasoning_levels) ? efforts : undefined,
         defaultEffort: m.default_reasoning_level,
-        supportsFastMode: Array.isArray(m.service_tiers)
-          ? hasPriorityTier(m.service_tiers)
-          : undefined,
+        supportsFastMode,
       }),
       name: displayName,
       group: 'gpt',
-      // 以静态模型的已知 priority/order 为锚点插值；active-catalog 对新增项做稳定排序。
-      sortOrder: sortOrderForPriority(priority),
+      sortOrder: priority,
       description: str(m.description) ?? undefined,
       contextWindow,
       ...(contextWindowMax !== undefined ? { contextWindowMax } : {}),
@@ -177,11 +141,12 @@ export function mapCodexModelsToCatalog(raw: unknown): CatalogModel[] {
       efforts: efforts as CatalogModel['efforts'],
       defaultEffort,
       status: 'active',
-      // 新发现的模型默认可见(用户抱怨过看不到模型);legacy 模型沿用旧目录的默认隐藏策略。
-      defaultEnabled: !DEFAULT_HIDDEN_SLUGS.has(slug),
+      // 新发现的模型默认可见；哪些不默认显示只由模型目录的 defaultEnabled 决定。
+      defaultEnabled: true,
     };
     if (efforts.includes('xhigh')) model.effortDisplayNames = { xhigh: 'Extra High' };
-    if (Array.isArray(m.service_tiers)) model.supportsFastMode = hasPriorityTier(m.service_tiers);
+    if (supportsFastMode !== undefined) model.supportsFastMode = supportsFastMode;
+    model.supportsUltrafastMode = speedTiers.includes('ultrafast');
     out.push(model);
   }
   return out;
@@ -242,8 +207,8 @@ export function mapCodexAppServerModelsToCatalog(
       }),
       name: str(raw.displayName) ?? slug,
       group: 'gpt',
-      // app-server 已按官方 picker 顺序返回；给每项稳定的小数锚点保住该顺序。
-      sortOrder: 17 + index / 1000,
+      // app-server 已按官方 picker 顺序返回；按返回位置记账户顺序。
+      sortOrder: index,
       ...(str(raw.description) ? { description: raw.description } : {}),
       // 刻意**不**设 contextWindowVerified: live 协议不给 context_window, 这 272k 是
       // 统一兜底而非该模型的真实上限。标了它就会被拿去收敛运行期上报的窗口, 把真实
@@ -252,10 +217,11 @@ export function mapCodexAppServerModelsToCatalog(
       efforts: efforts as CatalogModel['efforts'],
       defaultEffort,
       status: 'active',
-      defaultEnabled: !DEFAULT_HIDDEN_SLUGS.has(slug),
+      defaultEnabled: true,
       ...(Array.isArray(raw.serviceTiers) || Array.isArray(raw.additionalSpeedTiers)
         ? { supportsFastMode }
         : {}),
+      supportsUltrafastMode: tiers.includes('ultrafast'),
     };
     if (efforts.includes('xhigh')) model.effortDisplayNames = { xhigh: 'Extra High' };
     out.push(model);

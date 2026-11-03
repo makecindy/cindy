@@ -87,16 +87,18 @@ describe('prefers-reduced-motion 覆盖面(globals.css)', () => {
 });
 
 describe('RunningStatusBar cadenced shimmer 的运行期 reduced-motion 切换', () => {
-  it('动画被摘时清空 playing/pending，并把 reducedMotion 纳入 effect 依赖', () => {
+  it('动画被摘时清空 playing/pending，并把 reducedMotion 和 reconnecting 纳入 effect 依赖', () => {
     expect(sessionViewSource).toContain(
       "import { useReducedMotion } from '@/hooks/useReducedMotion'",
     );
     expect(sessionViewSource).toContain('const reducedMotion = useReducedMotion();');
-    expect(sessionViewSource).toContain('if (!visible || suppressContent || reducedMotion) {');
+    expect(sessionViewSource).toContain(
+      'if (!visible || suppressContent || reducedMotion || reconnecting) {',
+    );
     expect(sessionViewSource).toContain('shimmerPlayingRef.current = false;');
     expect(sessionViewSource).toContain('shimmerPendingRef.current = false;');
     expect(sessionViewSource).toMatch(
-      /\},\s*\[\s*visible,\s*suppressContent,\s*reducedMotion,\s*status,\s*tokenUsage,\s*outputTokens,\s*generationDurationMs,?\s*\]\);/,
+      /\},\s*\[\s*visible,\s*suppressContent,\s*reducedMotion,\s*reconnecting,\s*status,\s*tokenUsage,\s*outputTokens,\s*generationDurationMs,?\s*\]\);/,
     );
   });
 });

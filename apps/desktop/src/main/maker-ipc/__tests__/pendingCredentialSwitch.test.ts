@@ -34,11 +34,14 @@ interface HarnessSession {
 
 function createHarness(
   sessions: HarnessSession[],
-  opts?: { retryDelayMs?: number; resolveRoute?: PendingCredentialSwitchDeps['resolveRoute'] },
+  opts?: { retryDelayMs?: number; resolveRoute?: PendingCredentialSwitchDeps['resolveRoute'];
+    applyPiPending?: PendingCredentialSwitchDeps['applyPiPending'];
+    isPiOwnerCurrent?: PendingCredentialSwitchDeps['isPiOwnerCurrent'] },
 ) {
   const closeSession = vi.fn(async (_sessionId: string) => {});
   const broadcastApplied = vi.fn<NonNullable<PendingCredentialSwitchDeps['broadcastApplied']>>();
   const onApplied = vi.fn<NonNullable<PendingCredentialSwitchDeps['onApplied']>>();
+  const broadcastFailed = vi.fn<NonNullable<PendingCredentialSwitchDeps['broadcastFailed']>>();
   const persistRoute = vi.fn<NonNullable<PendingCredentialSwitchDeps['persistRoute']>>(
     async () => {},
   );
@@ -48,15 +51,132 @@ function createHarness(
       closeSession,
     },
     broadcastApplied,
+    broadcastFailed,
     onApplied,
+    ...(opts?.applyPiPending ? { applyPiPending: opts.applyPiPending } : {}),
+    ...(opts?.isPiOwnerCurrent ? { isPiOwnerCurrent: opts.isPiOwnerCurrent } : {}),
     persistRoute,
     ...(opts?.resolveRoute ? { resolveRoute: opts.resolveRoute } : {}),
     ...(opts?.retryDelayMs !== undefined ? { retryDelayMs: opts.retryDelayMs } : {}),
   });
-  return { service, closeSession, broadcastApplied, onApplied, persistRoute, sessions };
+  return { service, closeSession, broadcastApplied, broadcastFailed, onApplied, persistRoute, sessions };
 }
 
 describe('PendingCredentialSwitchService', () => {
+  it('applies a busy Pi selection through the model-window transaction before waking the queue', async () => {
+    const sessionId = rememberSession('pi-pending-hot-switch');
+    setSessionProvider(sessionId, 'old-source');
+    let running = true;
+    const events: string[] = [];
+    const applyPiPending = vi.fn<NonNullable<PendingCredentialSwitchDeps['applyPiPending']>>(async (_id, target, resolved) => {
+      events.push('apply');
+      expect(target.selectionSource).toBe('agent');
+      expect(resolved).toEqual({ model: 'next-model', providerId: 'new-source' });
+      return 'applied';
+    });
+    const h = createHarness([{ id: sessionId, agentKind: 'pi', isTurnRunning: () => running }], { applyPiPending });
+    h.service.register(sessionId, { model: 'next-model', providerId: 'new-source', selectionSource: 'agent' });
+    await h.service.onTurnSettled(sessionId);
+    expect(applyPiPending).not.toHaveBeenCalled();
+    running = false;
+    h.onApplied.mockImplementation(() => { events.push('wake'); });
+    h.broadcastApplied.mockImplementation(() => { events.push('broadcast'); });
+    await h.service.onTurnSettled(sessionId);
+    expect(events).toEqual(['apply', 'wake', 'broadcast']);
+    expect(h.closeSession).not.toHaveBeenCalled();
+    expect(h.service.has(sessionId)).toBe(false);
+    expect(getSessionProvider(sessionId)).toBe('old-source');
+  });
+
+  it('rolls back a failed Pi selection once and reports the failure', async () => {
+    const sessionId = rememberSession('pi-pending-rollback');
+    setSessionProvider(sessionId, 'old-source');
+    const applyPiPending = vi.fn<NonNullable<PendingCredentialSwitchDeps['applyPiPending']>>(async () => {
+      throw new Error('native model refresh unsupported');
+    });
+    const h = createHarness([{ id: sessionId, agentKind: 'pi', isTurnRunning: () => false }], { applyPiPending });
+    h.service.register(sessionId, { model: 'new-model', providerId: 'new-source',
+      previousRoute: { model: 'old-model', providerId: 'old-source' } });
+    await h.service.onTurnSettled(sessionId);
+    expect(h.persistRoute).toHaveBeenCalledExactlyOnceWith(sessionId,
+      { model: 'old-model', providerId: 'old-source' });
+    expect(h.service.has(sessionId)).toBe(false);
+    expect(h.broadcastFailed).toHaveBeenCalledExactlyOnceWith({
+      sessionId, reason: 'apply-failed',
+    });
+    expect(h.broadcastApplied).not.toHaveBeenCalled();
+    expect(h.closeSession).not.toHaveBeenCalled();
+    await h.service.onTurnSettled(sessionId);
+    expect(applyPiPending).toHaveBeenCalledTimes(1);
+  });
+
+  it('runs a cold Pi pending choice through the same window-aware host callback after its runtime exits', async () => {
+    const sessionId = rememberSession('pi-pending-cold');
+    const applyPiPending = vi.fn<NonNullable<PendingCredentialSwitchDeps['applyPiPending']>>(async () => 'applied');
+    const h = createHarness([], { applyPiPending });
+    h.service.register(sessionId, { agentKind: 'pi', model: 'small-model', providerId: 'new-source',
+      previousRoute: { model: 'large-model', providerId: 'old-source' } });
+    h.service.onSessionClosed(sessionId);
+    await vi.waitFor(() => expect(applyPiPending).toHaveBeenCalledExactlyOnceWith(
+      sessionId, expect.objectContaining({ model: 'small-model' }),
+      { model: 'small-model', providerId: 'new-source' }, expect.any(Function),
+    ));
+    expect(h.closeSession).not.toHaveBeenCalled();
+    expect(h.broadcastApplied).toHaveBeenCalledTimes(1);
+    expect(h.service.has(sessionId)).toBe(false);
+  });
+
+  it('leaves a newer Pi choice intact while the earlier native apply completes', async () => {
+    const sessionId = rememberSession('pi-pending-latest-wins');
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => { release = resolve; });
+    const h = createHarness([{ id: sessionId, agentKind: 'pi', isTurnRunning: () => false }], {
+      applyPiPending: async () => { await gate; return 'applied'; },
+    });
+    h.service.register(sessionId, { model: 'first', providerId: 'one' });
+    const applying = h.service.onTurnSettled(sessionId);
+    h.service.register(sessionId, { model: 'second', providerId: 'two' });
+    release();
+    await applying;
+    expect(h.service.get(sessionId)?.model).toBe('second');
+    expect(h.onApplied).not.toHaveBeenCalled();
+    expect(h.broadcastApplied).not.toHaveBeenCalled();
+  });
+
+  it('does not write or broadcast a stale Pi choice after the account changes', async () => {
+    const sessionId = rememberSession('pi-pending-owner-change');
+    let ownerCurrent = true;
+    const h = createHarness([{ id: sessionId, agentKind: 'pi', isTurnRunning: () => false }], {
+      isPiOwnerCurrent: () => ownerCurrent,
+      applyPiPending: async () => {
+        ownerCurrent = false;
+        throw new Error('old account');
+      },
+    });
+    h.service.register(sessionId, { model: 'new-model', providerId: 'new-source', ownerEpoch: 'old-owner',
+      previousRoute: { model: 'old-model', providerId: 'old-source' } });
+    await h.service.onTurnSettled(sessionId);
+    expect(h.persistRoute).not.toHaveBeenCalled();
+    expect(h.broadcastFailed).not.toHaveBeenCalled();
+    expect(h.onApplied).not.toHaveBeenCalled();
+    expect(h.service.has(sessionId)).toBe(false);
+  });
+
+  it('reports failed Pi rollback without claiming the previous route was restored or retrying', async () => {
+    const sessionId = rememberSession('pi-pending-rollback-failure');
+    const h = createHarness([{ id: sessionId, agentKind: 'pi', isTurnRunning: () => false }], {
+      applyPiPending: async () => { throw new Error('native switch failed'); },
+    });
+    h.persistRoute.mockRejectedValueOnce(new Error('disk unavailable'));
+    h.service.register(sessionId, { model: 'new-model', providerId: 'new-source',
+      previousRoute: { model: 'old-model', providerId: 'old-source' } });
+    await h.service.onTurnSettled(sessionId);
+    expect(h.service.has(sessionId)).toBe(true);
+    expect(h.onApplied).not.toHaveBeenCalled();
+    expect(h.broadcastFailed).toHaveBeenCalledWith({ sessionId, reason: 'rollback-failed' });
+    await h.service.onTurnSettled(sessionId);
+    expect(h.persistRoute).toHaveBeenCalledTimes(1);
+  });
   it.each(['claude-code', 'codex', 'pi'] as const)('retains a failed remote %s context reload until it succeeds', async (agentKind) => {
     const sessionId = rememberSession(`remote-context-${agentKind}`);
     const h = createHarness([{ id: sessionId, agentKind, remoteHostId: 'remote-test', isTurnRunning: () => false }]);
@@ -105,7 +225,7 @@ describe('PendingCredentialSwitchService', () => {
     await h.service.onTurnSettled(sessionId);
 
     expect(h.service.has(sessionId)).toBe(false);
-    expect(h.closeSession).toHaveBeenCalledWith(sessionId);
+    expect(h.closeSession).toHaveBeenCalledWith(sessionId, 'runtime-refresh');
     expect(getSessionProvider(sessionId)).toBe('xd');
     expect(h.broadcastApplied).toHaveBeenCalledWith({
       sessionId,

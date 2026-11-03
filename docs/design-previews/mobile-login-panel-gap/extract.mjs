@@ -76,11 +76,11 @@ function variant(mod, label) {
   return { label, ...rows };
 }
 
-/** figma 新稿配套的功能区落位(figma-component-spec.md §12 表 wave6 逐值记录)。 */
+/** figma 新稿配套的功能区落位(DESIGN.md §16.2 移动端 stage 几何表;原 figma-component-spec.md §12 wave6 逐值记录已移除,追史见 70b32d7578)。 */
 const FIGMA_LOGIN_Y = { short: 622, long: 827 };
 
 /**
- * 稿内两个明确意图(figma-component-spec §12 表 wave6):主容器 680x882
+ * 稿内两个明确意图(DESIGN.md §16.2 移动端 stage 几何表):主容器 680x882
  * (字标 180 + Log_in 620 @y200 + 服务条款 40 @y842) → 短屏 @(35,422) 底 1304 底距 30、
  * Log_in y=622;长屏 @(35,627) 底 1509 底距 115、Log_in y=827。
  * 手机端剥离跳过登录栏后组高 620→560,内容底 = loginY + contentBelowLoginY()

@@ -113,7 +113,16 @@ export function buildMacOSUpdateScript(params: MacUpdateScriptParams): string {
     '    exit 1',
     'fi',
     '',
-    `NEW_APP=$(find "${extractDir}" -name "*.app" -maxdepth 1 | head -1)`,
+    // macOS ships BSD find, which has no GNU -maxdepth option. A shell glob
+    // keeps the search top-level, works with spaces in bundle paths, and is
+    // available in the Bash used to run this detached script.
+    'NEW_APP=""',
+    `for candidate in "${extractDir}"/*.app; do`,
+    '    if [ -d "$candidate" ]; then',
+    '        NEW_APP="$candidate"',
+    '        break',
+    '    fi',
+    'done',
     'if [ -z "$NEW_APP" ]; then',
     `    echo "[$(date)] FATAL: no .app found in ${extractDir} — zip layout unexpected" >> "${logPath}"`,
     `    rm -f "${lockFilePath}"`,

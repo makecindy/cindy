@@ -1,0 +1,13 @@
+{
+  "site": "play.google.com",
+  "auth": "公开信息，无需登录。",
+  "recipes": [
+    "google-play-search"
+  ],
+  "notes": "公开搜索结果；listingText 保留实际可见字段，缺失的评分/开发者不推测。地区由 country 指定。结果固定最多 20 条。 管理中心（play.google.com/console）需登录开发者账号：Google 账号以 /console/u/<序号>/ 区分，默认 u/0 若未注册开发者会进入「创建开发者账号」页，换序号或用页面右上角账号切换，不要猜；同一 Google 账号下可有多个开发者账号，页面上有「切换开发者账号」。应用列表在 /console/u/<n>/developers/<开发者ID>/app-list，应用页形如 …/app/<应用ID>/…：发布概览为 publishing，提交活动在发布概览内的「提交活动」。已有打开的管理中心页面时优先复用，它通常已在正确账号。该站禁止页面脚本（CSP），读取用 snapshot / extract。",
+  "source": "Cindy",
+  "verifiedAt": "2026-10-28",
+  "aliases": [
+    "google-play"
+  ]
+}

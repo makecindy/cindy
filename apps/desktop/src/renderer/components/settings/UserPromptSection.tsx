@@ -1,3 +1,4 @@
+import { Button } from '@/components/ui/button';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 
@@ -71,7 +72,7 @@ export function UserPromptSection() {
             'bg-[var(--settings-input-bg)]',
             'border border-[var(--settings-input-border)]',
             'text-13 leading-[1.6] text-[var(--settings-input-text)]',
-            'placeholder:font-normal placeholder:text-[var(--settings-input-placeholder)] placeholder:opacity-45',
+            'placeholder:font-normal placeholder:text-[var(--settings-input-placeholder)]',
             'outline-none focus:border-[var(--settings-input-border-focus)]',
             'transition-colors',
           )}
@@ -93,22 +94,16 @@ export function UserPromptSection() {
             {overLimit ? t('settings.personalization.overLimit') : ''}
           </p>
 
-          <button
+          <Button
+            variant="cta"
+            size="md"
+            compact
             type="button"
             onClick={handleSave}
             disabled={!canSave}
-            className={cn(
-              'flex h-8 items-center justify-center gap-1.5 rounded-full px-[18px]',
-              'bg-[var(--settings-btn-primary-bg)]',
-              'border border-[var(--settings-btn-primary-border)]',
-              'text-13 font-medium text-[var(--settings-btn-primary-text)]',
-              'hover:bg-[var(--settings-btn-primary-hover-bg)]',
-              'transition-colors',
-              !canSave && 'cursor-not-allowed opacity-40',
-            )}
           >
             {t('settings.personalization.save')}
-          </button>
+          </Button>
         </div>
       </div>
     </div>

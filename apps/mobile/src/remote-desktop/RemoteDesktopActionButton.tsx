@@ -8,12 +8,18 @@ export type RemoteDesktopActionButtonProps = Pick<
   | "disabled"
   | "testID"
   | "accessibilityLabel"
+  | "accessibilityHint"
   | "accessibilityState"
   | "accessibilityRole"
-> & { onPress(): void };
+> & { onPress(): void; variant?: "plain" | "glass"; systemImage?: string };
 
 export function RemoteDesktopActionButton(
   props: RemoteDesktopActionButtonProps,
 ) {
-  return <Pressable {...props} />;
+  const {
+    variant: _variant,
+    systemImage: _systemImage,
+    ...pressableProps
+  } = props;
+  return <Pressable {...pressableProps} />;
 }

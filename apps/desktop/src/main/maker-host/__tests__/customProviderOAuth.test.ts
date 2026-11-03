@@ -175,14 +175,15 @@ describe('mergeDiscoveredModelsIntoConfig（发现资料刷新并保留用户字
       { id: 'm2', name: 'M2' },
       { id: '', name: 'bad' },
     ]);
+    // 新发现的 m2 排在已有 m1 之前。
     expect(merged?.runtimes['claude-code']?.models).toEqual([
+      { id: 'm2', name: 'M2', discoveredMetadata: { name: 'M2' } },
       {
         id: 'm1',
         name: 'M1',
         nameExplicit: true,
         discoveredMetadata: { name: 'OVERRIDE-IGNORED' },
       },
-      { id: 'm2', name: 'M2', discoveredMetadata: { name: 'M2' } },
     ]);
     // 原配置不被就地修改（纯函数）。
     expect(BASE.runtimes['claude-code']?.models).toEqual([{ id: 'm1', name: 'M1' }]);
@@ -201,9 +202,9 @@ describe('mergeDiscoveredModelsIntoConfig（发现资料刷新并保留用户字
       { id: 'bogus', name: 'Bogus', contextWindow: 0 },
     ]);
     expect(merged?.runtimes['claude-code']?.models).toEqual([
-      { id: 'm1', name: 'M1' },
       { id: 'big', name: 'Big', discoveredMetadata: { name: 'Big', contextWindow: 1_000_000 } },
       { id: 'bogus', name: 'Bogus', discoveredMetadata: { name: 'Bogus' } },
+      { id: 'm1', name: 'M1' },
     ]);
   });
 });

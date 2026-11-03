@@ -27,6 +27,7 @@
  */
 
 import { createHmac, randomBytes } from 'node:crypto';
+import { BOT_DENIED_TOOLS_VENDOR_KEY } from '../../shared/botSystemSkills.js';
 
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import {
@@ -62,6 +63,8 @@ import { pluginIdForKnownProviderName } from '../maker-host/plugins/builtin-plug
 // 从 mcp-integrations 反向 import 会成环。
 import { createPluginRegistry } from '../maker-host/plugins/index.js';
 import { isAllowedRemoteMcpUrl, isDesktopLoopbackMcpUrl } from './piMcpTransport.js';
+import { RUNTIME_MCP_NAMES_KEY } from '../maker-host/agentCapabilityCatalog.js';
+import { hasImChannelVendorOptions } from '../../shared/botImConnection.js';
 
 interface StartedPiBridge {
   bridge: CodexHttpBridge | null;
@@ -162,6 +165,8 @@ export async function getPiExtraSpawnConfig(
   logger: MakerLogger,
   sessionCtx?: PiExtraSpawnConfigContext,
 ): Promise<PiExtraSpawnConfig | null> {
+  const vendorOptions = sessionCtx ? (sessionCtx.vendorOptions ??= {}) : {};
+  vendorOptions[RUNTIME_MCP_NAMES_KEY] = [];
   const started = await ensureBridge(providers, logger);
   if (!started) return null;
   // JS 同步段内完成“确认未退役 + 加 lease”，invalidate 不会插进中间。
@@ -188,8 +193,18 @@ export async function getPiExtraSpawnConfig(
   // orca_worker_bridge),避免禁用后 pi 仍能建队/发消息(R5 配置审计 H-7)。
   // 只按名字剥协同 server —— cindy_memory / ghost / 外部 HTTP MCP 与 collab
   // 无关,照常注入(CC 的 selectRemoteInjectableServerNames 同语义)。
+  // issue #4734: 全局「协同模式」开关只约束**后续新建** Team / Worker(设置页文案:
+  // 关闭后仅影响后续新建的任务, 不会中止当前 Worker)。已经属于 active Team 的
+  // Lead / Worker(start_team / create_worker 写入 vendorOptions.orcaRole)在每一轮
+  // 重建 Pi MCP 描述时必须保留协同 server —— 否则 Worker 下一轮直接失去
+  // orca_worker_bridge, send_to_lead 报 UNKNOWN_SERVER 而文本回复仍被界面桥接,
+  // 失效不易察觉。只有显式结束 Team(orcaRole 被清)才移除。项目级 / 冻结伙伴的
+  // 显式停用列表仍优先: 那是明确的策略, 不是"以后不再协同"的全局开关。
+  const orcaRole = (sessionCtx?.vendorOptions as Record<string, unknown> | undefined)?.orcaRole;
+  const activeTeamMember = orcaRole === 'lead' || orcaRole === 'worker';
   const collabEnabled =
-    createPluginRegistry().isEnabled('collab') && !disabledPluginIds.includes('collab');
+    (createPluginRegistry().isEnabled('collab') || activeTeamMember)
+    && !disabledPluginIds.includes('collab');
   const capabilityGated = (servers: NonNullable<PiExtraSpawnConfig['mcpBridge']>['servers']) =>
     servers.filter((server) => {
       if (server.name === 'cindy_memory' && sessionCtx?.memoryEnabled !== true) return false;
@@ -197,6 +212,12 @@ export async function getPiExtraSpawnConfig(
       if (
         server.name === CINDY_MAKE_MCP_SERVER_NAME
         && !isCindyMakeVendorOptions(sessionCtx?.vendorOptions)
+      ) return false;
+      // Telegram Bot API 直通只给带 Telegram 渠道标记的会话(专线 chat / 伙伴绑了 Telegram);
+      // 共享 bridge 上它常注册, 可见性在这里按会话收。
+      if (
+        server.name === 'cindy_telegram_bot'
+        && !hasImChannelVendorOptions(sessionCtx?.vendorOptions, 'telegram')
       ) return false;
       if (!isBotMcpServerAllowed(sessionCtx?.botMcpPolicy, server.name)) return false;
       if (!collabEnabled && REMOTE_COLLAB_SERVER_NAMES.has(server.name)) return false;
@@ -218,16 +239,13 @@ export async function getPiExtraSpawnConfig(
       // It has no plugin id on purpose — empty ghost_list, not a missing server.
       // Frozen Bot allowlists therefore must not treat it as an unknown host provider.
       if (server.name === 'cindy') return true;
-      // A frozen Bot runtime may use explicitly configured custom MCPs, but it
-      // must not inherit miscellaneous host providers merely because the shared
-      // Pi bridge knows about them. Unknown providers absent from the Bot's
-      // custom catalog are therefore hidden from discovery and execution.
+      // Use the exact frozen capability snapshot for every provider, including
+      // shared host providers without an optional toolset id.
       if (allowedPluginIds) {
         const policy = sessionCtx?.botMcpPolicy;
         const entry = policy?.catalog.find((item) => item.name === server.name);
-        if (!entry || entry.source !== 'custom' || entry.available === false) return false;
-        // `inherit` is a legacy storage value for Bots, not ambient access.
-        // External MCPs are always exact grants at the execution boundary.
+        if (!entry || entry.available === false) return false;
+        // Inheritance was resolved at session preparation, keeping this turn stable.
         return policy?.configured.includes(server.name) === true;
       }
       return true;
@@ -235,16 +253,24 @@ export async function getPiExtraSpawnConfig(
 
   // The legacy flag enables companion facades; the bridge separately checks
   // whether memory is mounted. Helper capabilities must survive memory being off.
-  const withBotMemoryFacade = (
+  const buildSessionBridge = (
     servers: NonNullable<PiExtraSpawnConfig['mcpBridge']>['servers'],
-  ): NonNullable<PiExtraSpawnConfig['mcpBridge']> => ({
-    token: bridge?.token ?? '',
-    servers,
-    ...((sessionCtx?.botMcpPolicy || sessionCtx?.memoryScopeKey?.startsWith('bot:'))
-      && servers.some((server) => server.name === 'cindy_memory' || server.name === 'cindy_helper')
-      ? { botMemoryFacade: true }
-      : {}),
-  });
+  ): NonNullable<PiExtraSpawnConfig['mcpBridge']> => {
+    // The catalog and live bridge context share this runtime's actual descriptor,
+    // after toolset, MCP, session and transport filtering. Do not rederive policy.
+    vendorOptions[RUNTIME_MCP_NAMES_KEY] = servers.map((server) => server.name);
+    return {
+      token: bridge?.token ?? '',
+      servers,
+      ...((sessionCtx?.botMcpPolicy || sessionCtx?.memoryScopeKey?.startsWith('bot:'))
+        && servers.some((server) => server.name === 'cindy_memory' || server.name === 'cindy_helper')
+        ? { botMemoryFacade: true }
+        : {}),
+      ...(Array.isArray(vendorOptions[BOT_DENIED_TOOLS_VENDOR_KEY])
+        ? { deniedTools: (vendorOptions[BOT_DENIED_TOOLS_VENDOR_KEY] as unknown[]).filter((name): name is string => typeof name === 'string') }
+        : {}),
+    };
+  };
 
   // 匿名会话:不注册身份、URL 不带 query。工具 handler 拿不到 ctx 时回落业务
   // 错误码(如 LEAD_NOT_SUPPORTED)—— 与改动前一致,不打 401。
@@ -255,7 +281,7 @@ export async function getPiExtraSpawnConfig(
     ]);
     return {
       mcpBridge: {
-        ...withBotMemoryFacade(servers),
+        ...buildSessionBridge(servers),
       },
       mcpEnv: selectMcpEnvForServers(servers, mcpEnv),
       disposeSessionCtx: disposeLease,
@@ -268,7 +294,7 @@ export async function getPiExtraSpawnConfig(
     const servers = capabilityGated(cloneRemoteServers(remoteServers));
     return {
       mcpBridge: {
-        ...withBotMemoryFacade(servers),
+        ...buildSessionBridge(servers),
         token: '',
       },
       mcpEnv: selectMcpEnvForServers(servers, mcpEnv),
@@ -283,13 +309,12 @@ export async function getPiExtraSpawnConfig(
   // PiAgent 传入的是该 session 专属的可变副本。这里必须保留同一引用：start_team
   // 成功后 MakerSession.setVendorOptions 会原地写入 Lead 身份，既有 HTTP MCP handler
   // 要在下一次 create_worker 调用时立即看到。复制对象会把 bridge 永久冻结在启动态。
-  const vendorOptions = sessionCtx?.vendorOptions ?? {};
   vendorOptions[CODEX_DISABLED_BUILTIN_PLUGIN_IDS_KEY] = disabledPluginIds;
   if (allowedPluginIds) {
     vendorOptions[CODEX_ALLOWED_BUILTIN_PLUGIN_IDS_KEY] = allowedPluginIds;
   }
   const liziCtx: LiziMcpSessionContext = {
-    agentKind: 'pi',
+    agentKind: sessionCtx?.agentKind ?? 'pi',
     sessionId,
     ...(sessionCtx?.sessionInstanceId ? { sessionInstanceId: sessionCtx.sessionInstanceId } : {}),
     workingDir: sessionCtx?.workingDir ?? '',
@@ -339,7 +364,7 @@ export async function getPiExtraSpawnConfig(
     ]);
     return {
       mcpBridge: {
-        ...withBotMemoryFacade(servers),
+        ...buildSessionBridge(servers),
         token: sessionToken,
       },
       mcpEnv: selectMcpEnvForServers(servers, mcpEnv),
@@ -630,7 +655,7 @@ async function doStart(
     if (!toClaudeSdkConfig) continue;
 
     const createServer = (): McpServer => {
-      const cfg = toClaudeSdkConfig(ctx) as { type?: string; instance?: unknown } | null;
+      const cfg = toClaudeSdkConfig.call(provider, ctx) as { type?: string; instance?: unknown } | null;
       if (cfg?.type !== 'sdk' || !cfg.instance) {
         throw new Error(`provider ${provider.name} did not return an SDK McpServer instance`);
       }

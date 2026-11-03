@@ -33,6 +33,7 @@ export interface RemoteResourceProvider {
 }
 
 export type RemoteResourceRegistryErrorCode =
+  | 'INVALID_PARAMS'
   | 'ALREADY_EXISTS'
   | 'NOT_FOUND'
   | 'UNSUPPORTED_CAPABILITY'

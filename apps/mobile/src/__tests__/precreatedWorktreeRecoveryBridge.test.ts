@@ -1,3 +1,4 @@
+// guard: credentials-and-local-storage.md: root-owned recovery callbacks must fence both account identity and generation; otherwise stale callbacks mutate another account recovery ledger.
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { describe, expect, it } from 'vitest';

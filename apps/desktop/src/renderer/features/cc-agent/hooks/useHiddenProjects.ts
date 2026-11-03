@@ -4,6 +4,7 @@ import {
   getDataOwnerGeneration,
   isDataOwnerPushStampCurrent,
 } from '@/contexts/dataOwnerGeneration';
+import { useAuth } from '@/contexts/AuthContext';
 import type { DataOwnerPushStamp } from '../../../../shared/dataOwnerPush';
 import type { SidebarSettingsSnapshot } from '../../../../shared/sidebarSettings';
 import { normalizeProjectKey } from '../lib/projectGrouping';
@@ -19,6 +20,7 @@ function normalizeHiddenProjectKeys(rawKeys: readonly string[]): Set<string> {
 
 export interface UseHiddenProjectsReturn {
   hiddenProjectKeys: ReadonlySet<string>;
+  /** Initial snapshot for the current same-account generation. */
   initialSnapshot: SidebarSettingsSnapshot;
   /** Resolves true only when the latest main-process snapshot changed. */
   setProjectHidden: (projectKey: string, hidden: boolean) => Promise<boolean>;
@@ -29,10 +31,23 @@ export interface UseHiddenProjectsReturn {
  * every renderer window in sync with the main-process preference store.
  */
 export function useHiddenProjects(): UseHiddenProjectsReturn {
-  const [initialSnapshot] = useState<SidebarSettingsSnapshot>(() => {
+  const { dataOwnerGeneration } = useAuth();
+  const [mountedOwner] = useState(getDataOwnerGeneration);
+  // Same-account repairs keep this tree mounted but advance Main's write fence.
+  // Rehydrate the snapshot and its consumers (including pinned order) for that
+  // generation. A real account switch must never rebind this old tree to B.
+  const initialSnapshot = useMemo<SidebarSettingsSnapshot>(() => {
+    const currentOwner = getDataOwnerGeneration();
+    const owner =
+      currentOwner.dataOwnerId === mountedOwner.dataOwnerId ? currentOwner : mountedOwner;
     const snapshot = window.electronAPI.sidebarSettings.loadSnapshot();
-    if (isDataOwnerPushStampCurrent(snapshot)) return snapshot;
-    const owner = getDataOwnerGeneration();
+    if (
+      snapshot.dataOwnerId === mountedOwner.dataOwnerId &&
+      snapshot.ownerGeneration === dataOwnerGeneration &&
+      isDataOwnerPushStampCurrent(snapshot)
+    ) {
+      return snapshot;
+    }
     return {
       dataOwnerId: owner.dataOwnerId,
       ownerGeneration: owner.generation,
@@ -41,7 +56,7 @@ export function useHiddenProjects(): UseHiddenProjectsReturn {
       hiddenProjectKeys: [],
       hiddenMainViewGhostIds: [],
     };
-  });
+  }, [mountedOwner, dataOwnerGeneration]);
   const [hiddenProjectKeys, setHiddenProjectKeys] = useState<Set<string>>(() =>
     normalizeHiddenProjectKeys(initialSnapshot.hiddenProjectKeys),
   );

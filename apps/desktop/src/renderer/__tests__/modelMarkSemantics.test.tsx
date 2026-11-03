@@ -8,6 +8,7 @@ import { ClaudeMark } from '@/components/icons/ClaudeMark';
 import { CodexMark } from '@/components/icons/CodexMark';
 import { OpenAIMark } from '@/components/icons/OpenAIMark';
 import { ProviderLogoMark } from '@/components/icons/ProviderLogoMark';
+import { XDIncMark } from '@/components/icons/XDIncMark';
 import { ModelIconMark, ProviderMark } from '@/components/new-chat/ModelSelector';
 
 function firstPath(ui: React.ReactNode): string | null {
@@ -15,6 +16,19 @@ function firstPath(ui: React.ReactNode): string | null {
 }
 
 describe('model mark semantics', () => {
+  // User decision: use the existing themeable XD glyph only for host XD membership.
+  // Unit: regression input is the same provider ID with personal vs XD presentation.
+  it('preserves the original XD glyph and theme color while other identities use Cindy', () => {
+    const xdPath = firstPath(<XDIncMark />);
+    expect(firstPath(<ProviderMark providerId="xd" logoKind="xd" />)).toBe(xdPath);
+    expect(firstPath(<ModelIconMark providerId="xd" logoKind="xd" />)).toBe(xdPath);
+    expect(firstPath(<ProviderMark providerId="xd" />)).not.toBe(xdPath);
+    expect(firstPath(<ModelIconMark providerId="xd" logoKind="xd" icon="claude" />)).toBe(firstPath(<AnthropicMark />));
+    const view = render(<ProviderMark providerId="xd" logoKind="xd" colorClass="text-white" />);
+    expect(view.container.querySelector('svg')?.classList.contains('text-white')).toBe(true);
+    expect([...view.container.querySelectorAll('path')].every(p => p.getAttribute('fill') === 'currentColor')).toBe(true);
+    expect(view.container.querySelector('img')).toBeNull();
+  });
   it('keeps the model-vendor marks monochrome and preserves the size/className API', () => {
     const anthropic = render(<AnthropicMark size={18} className="brand-mark" />);
     const anthropicSvg = anthropic.container.querySelector('svg');

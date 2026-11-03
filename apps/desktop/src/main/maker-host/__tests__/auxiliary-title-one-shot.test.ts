@@ -35,6 +35,7 @@ vi.mock('../../utility-model/resolveAuxiliaryModelChain.js', () => ({
 import {
   generateTitleWithAuxiliaryModel,
   generateTitleWithAuxiliaryModelResult,
+  requestAuxiliaryText,
 } from '../auxiliary-title-one-shot.js';
 
 const REQUEST = {
@@ -79,6 +80,20 @@ beforeEach(() => {
 });
 
 describe('auxiliary task-title routing', () => {
+  it.each([
+    ['研究Deepseek Harness对比Cindy', '研究Deepseek Harness对比Cindy'],
+    ['😀'.repeat(40), '😀'.repeat(40)],
+    ['😀'.repeat(41), '😀'.repeat(40)],
+    ['字'.repeat(41), '字'.repeat(40)],
+  ])('保留正常标题并按 40 个 Unicode 字符截断: %s', async (text, expected) => {
+    h.requestText.mockResolvedValue({ ok: true, text });
+    await expect(generateTitleWithAuxiliaryModel(REQUEST, {}, runtimeDeps())).resolves.toBe(expected);
+    // AI regenerate consumes the result API; both routes retain historical truncation.
+    await expect(generateTitleWithAuxiliaryModelResult(REQUEST, {}, runtimeDeps())).resolves.toEqual({
+      status: 'ok', title: expected,
+    });
+  });
+
   it('uses the shared utility chain in automatic mode', async () => {
     await expect(generateTitleWithAuxiliaryModel(REQUEST, {}, runtimeDeps())).resolves.toBe(
       '通用任务命名',
@@ -87,6 +102,7 @@ describe('auxiliary task-title routing', () => {
     expect(h.requestText).toHaveBeenCalledWith(
       REQUEST.prompt,
       expect.objectContaining({
+        maxTokens: 160,
         disableReasoning: true,
         reasoningEffort: 'minimal',
         responseInstructions: expect.stringContaining('Output only the short conversation title'),
@@ -108,10 +124,25 @@ describe('auxiliary task-title routing', () => {
       'codex',
       CODEX_REQUEST.prompt,
       expect.objectContaining({
-        maxTokens: 32,
+        maxTokens: 160,
         responseInstructions: expect.stringContaining('Output only the short conversation title'),
       }),
     );
+  });
+
+  it('lets a latency-bound caller skip the session-agent fallback, while the default keeps it', async () => {
+    h.requestText.mockResolvedValue({ ok: false, reason: 'all_candidates_failed', attempts: [] });
+    const request = {
+      agentKind: 'codex' as const, prompt: 'p', maxTokens: 400, timeoutMs: 4000, responseInstructions: 'r',
+    };
+
+    await expect(requestAuxiliaryText({ ...request, sessionAgentFallback: false }, runtimeDeps())).resolves.toEqual({
+      ok: false, reason: 'all_candidates_failed',
+    });
+    expect(h.oneShot).not.toHaveBeenCalled();
+
+    await expect(requestAuxiliaryText(request, runtimeDeps())).resolves.toEqual({ ok: true, text: '会话 Agent 命名' });
+    expect(h.oneShot).toHaveBeenCalledOnce();
   });
 
   it('rechecks the disabled route while the session-agent fallback is starting', async () => {

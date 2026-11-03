@@ -20,6 +20,10 @@ import {
   type HookWorkspacePrefs,
 } from '../../shared/hookControlIpc.js';
 import { ownerScopedImUserDataPath } from '../im/ownerScopedStorage.js';
+import { createLogger } from '../logger.js';
+import { clearWorkspaceProviderSourcesForRemoteModelChanges } from './workspaceProviderSourceStore.js';
+
+const log = createLogger('hook-control');
 
 export type HookPrefsChannel = 'slack' | 'telegram' | 'x';
 
@@ -519,7 +523,20 @@ export function applyIncomingServerWorkspacePrefs(
     throw new Error('too many workspace prefs entries');
   }
   writeStore(fp, { ...store, entries });
-  return prunedChannel.map(toHookPrefs);
+  const next = prunedChannel.map(toHookPrefs);
+  // 主动推送与重连镜像都经这里落 server 快照: 快照改掉的目录模型, 其配对来源
+  // 随之作废(issue #5912)。偏好已落盘, 来源清理失败只记日志, 不让调用方当作
+  // 快照失败重试 —— 重试时模型已无变化, 清理也不会再触发。
+  try {
+    if (clearWorkspaceProviderSourcesForRemoteModelChanges(channel, local.map(toHookPrefs), next)) {
+      log.info(`workspace provider source cleared after remote model change (${channel})`);
+    }
+  } catch (err) {
+    log.warn(
+      `workspace provider source cleanup (${channel}) failed: ${err instanceof Error ? err.message : String(err)}`,
+    );
+  }
+  return next;
 }
 
 export interface WorkspacePrefsMirrorCandidate {

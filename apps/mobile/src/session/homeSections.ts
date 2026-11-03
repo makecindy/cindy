@@ -1,4 +1,5 @@
 import { i18n } from '@/i18n';
+import { compareSessionListStrings } from '@cindy/maker-shared/session-list';
 import type { MobileHomePresentation, MobileHomeProjectGroup } from './mobileHome';
 import {
   activityMsFromIso,
@@ -14,10 +15,11 @@ import {
 } from './homeProjectOrder';
 import type { RemoteSessionListItem } from './sessionList';
 
-/** 首页列表的一行:项目分组头、对话分组头,或一条会话(置顶 / 普通 / 项目内)。 */
+/** 首页列表的一行:目录分组头,或一条任务(置顶 / 普通 / 项目内)。 */
 export type HomeRow =
   | { key: string; kind: 'project'; project: MobileHomeProjectGroup }
   | { key: string; kind: 'dialogue'; project: MobileHomeProjectGroup }
+  | { key: string; kind: 'cindy-make'; project: MobileHomeProjectGroup }
   | {
       key: string;
       kind: 'session';
@@ -35,6 +37,8 @@ export const HOME_MAIN_SECTION_KEY = 'main';
 
 export interface HomeSectionOptions {
   groupDialogue?: boolean;
+  /** The compact task-switching drawer only renders flat session rows. */
+  groupCindyMake?: boolean;
   sortBy?: HomeListSortBy;
   projectOrder?: HomeProjectOrder;
   manualProjectOrder?: readonly string[];
@@ -49,7 +53,7 @@ export interface HomeSectionOptions {
  * - 置顶单独成区;`pinnedCollapsed` 时清空 data 但**保留分区**(SectionList 对空 data 仍渲染
  *   表头,所以折叠时表头照常显示,只折叠下属会话)。
  * - 分组模式保留项目 folder 行,与普通对话(或对话组)按活动时间 / 优先级倒序混排。
- * - 非分组模式把项目下属会话展平;对话组开启时对话仍收成一个 folder。
+ * - 非分组模式把项目下属会话展平;Cindy Make 保留专用目录,对话组遵循自己的开关。
  */
 export function buildHomeSections(
   home: MobileHomePresentation,
@@ -100,8 +104,8 @@ export function homeRowBefore(
   return undefined;
 }
 
-export function isFolderHomeRow(row: HomeRow | undefined): row is Extract<HomeRow, { kind: 'project' | 'dialogue' }> {
-  return !!row && (row.kind === 'project' || row.kind === 'dialogue');
+export function isFolderHomeRow(row: HomeRow | undefined): row is Extract<HomeRow, { kind: 'project' | 'dialogue' | 'cindy-make' }> {
+  return !!row && (row.kind === 'project' || row.kind === 'dialogue' || row.kind === 'cindy-make');
 }
 
 /**
@@ -152,7 +156,7 @@ export function buildProjectHomeRows(
 ): HomeRow[] {
   return home.projects.map((project) => ({
     key: project.key,
-    kind: 'project' as const,
+    kind: project.kind === 'cindy-make' ? 'cindy-make' as const : 'project' as const,
     project: withSortedProjectSessions(project, options),
   }));
 }
@@ -203,15 +207,18 @@ export function buildMixedHomeRows(
   options: HomeSectionOptions = {},
 ): HomeRow[] {
   const dialogueTitle = options.dialogueTitle ?? i18n.t('devices.list.menu.dialogueFolder');
-  const rows: HomeRow[] = home.projects.flatMap((project) =>
-    sortSessionItems(project.sessions, options).map((item) => ({
+  const rows: HomeRow[] = home.projects.flatMap((project): HomeRow[] => {
+    if (project.kind === 'cindy-make' && options.groupCindyMake !== false) {
+      return [{ key: project.key, kind: 'cindy-make', project: withSortedProjectSessions(project, options) }];
+    }
+    return sortSessionItems(project.sessions, options).map((item) => ({
       item,
       key: `project:${project.key}:${item.automationGroup?.key ?? item.session.id}`,
       kind: 'session' as const,
       source: 'project' as const,
       sourceLabel: project.title,
-    })),
-  );
+    }));
+  });
   if (options.groupDialogue) {
     const folder = buildDialogueGroupRow(home, { ...options, dialogueTitle });
     if (folder) rows.push(folder);
@@ -256,8 +263,12 @@ function sortSessionItems(
   if (options.sortBy === 'priority') {
     return items.slice().sort((a, b) => compareSessionItemsByPriority(a, b, ctx));
   }
+  if (options.sortBy === 'created') {
+    return items.slice().sort((a, b) =>
+      sessionCreatedMs(b) - sessionCreatedMs(a) || compareSessionListStrings(a.session.id, b.session.id));
+  }
   return items.slice().sort((a, b) =>
-    b.lastActivityAt.localeCompare(a.lastActivityAt) || a.session.id.localeCompare(b.session.id));
+    compareSessionListStrings(b.lastActivityAt, a.lastActivityAt) || compareSessionListStrings(a.session.id, b.session.id));
 }
 
 function sortHomeRows(rows: HomeRow[], options: HomeSectionOptions): HomeRow[] {
@@ -272,7 +283,7 @@ function sortHomeRows(rows: HomeRow[], options: HomeSectionOptions): HomeRow[] {
     projects.sort((a, b) =>
       (rank.get(a.project.key) ?? Number.MAX_SAFE_INTEGER)
       - (rank.get(b.project.key) ?? Number.MAX_SAFE_INTEGER)
-      || a.key.localeCompare(b.key));
+      || compareSessionListStrings(a.key, b.key));
     return [...projects, ...sortHomeRowsByTaskSort(rest, options)];
   }
   return sortHomeRowsByTaskSort(rows, options);
@@ -284,9 +295,33 @@ function sortHomeRowsByTaskSort(rows: HomeRow[], options: HomeSectionOptions): H
     return rows.slice().sort((a, b) =>
       homeRowPriorityRank(a, ctx) - homeRowPriorityRank(b, ctx)
       || homeRowPriorityRecencyMs(b, ctx) - homeRowPriorityRecencyMs(a, ctx)
-      || a.key.localeCompare(b.key));
+      || compareSessionListStrings(a.key, b.key));
+  }
+  if (options.sortBy === 'created') {
+    return rows.slice().sort((a, b) =>
+      homeRowCreatedMs(b) - homeRowCreatedMs(a) || compareSessionListStrings(a.key, b.key));
   }
   return rows.slice().sort(compareHomeRowsByActivityDesc);
+}
+
+/** 创建时间排序:目录行取组内最新创建的任务,与桌面 sortProjectsForSidebar 同口径。 */
+function homeRowCreatedMs(row: HomeRow): number {
+  let max = 0;
+  for (const item of homeRowSessionItems(row)) {
+    const ms = sessionCreatedMs(item);
+    if (ms > max) max = ms;
+  }
+  return max;
+}
+
+/** 自动化组行代表多次运行,取组内最新创建的一次(组代表可能是较旧的未读 / 待处理运行)。 */
+function sessionCreatedMs(item: RemoteSessionListItem): number {
+  let max = activityMsFromIso(item.session.createdAt);
+  for (const run of item.automationGroup?.items ?? []) {
+    const ms = activityMsFromIso(run.session.createdAt);
+    if (ms > max) max = ms;
+  }
+  return max;
 }
 
 function compareSessionItemsByPriority(
@@ -297,11 +332,11 @@ function compareSessionItemsByPriority(
   return sessionPriorityRank(a.session.id, ctx) - sessionPriorityRank(b.session.id, ctx)
     || sessionPriorityRecencyMs(b.session.id, activityMsFromIso(b.lastActivityAt), ctx)
       - sessionPriorityRecencyMs(a.session.id, activityMsFromIso(a.lastActivityAt), ctx)
-    || a.session.id.localeCompare(b.session.id);
+    || compareSessionListStrings(a.session.id, b.session.id);
 }
 
 function compareHomeRowsByActivityDesc(a: HomeRow, b: HomeRow): number {
-  return homeRowActivity(b).localeCompare(homeRowActivity(a)) || a.key.localeCompare(b.key);
+  return compareSessionListStrings(homeRowActivity(b), homeRowActivity(a)) || compareSessionListStrings(a.key, b.key);
 }
 
 function homeRowActivity(row: HomeRow): string {

@@ -68,7 +68,7 @@ function deriveActive(p: ChatInputDerivedProps): ChatInputDerived {
 }
 
 // ---------------------------------------------------------------------------
-// handler 契约镜像（ChatInput.tsx 的三个 handleXxxChange,2026-07-17 本地化后形态)
+// handler 契约镜像（ChatInput.tsx 的 model / effort handler,2026-07-17 本地化后形态)
 // ---------------------------------------------------------------------------
 interface HandlerDeps {
   sessionId?: string;
@@ -76,11 +76,8 @@ interface HandlerDeps {
   sessionUpdate: (id: string, patch: Record<string, unknown>) => Promise<void>;
   ipcSetEffort?: (id: string, eff: Effort) => Promise<void>;
   ipcSetModel?: (id: string, model: string) => Promise<void>;
-  ipcUpdatePerm?: (id: string, mode: PermissionMode) => Promise<void>;
-  currentPermissionMode?: PermissionMode;
   onModelDidChange?: (id: string) => void;
   onEffortDidChange?: (eff: Effort, sourceSessionId?: string) => void;
-  onPermissionModeDidChange?: (mode: PermissionMode) => void;
 }
 
 async function handleEffortChange(deps: HandlerDeps, newEffort: Effort): Promise<void> {
@@ -96,26 +93,6 @@ async function handleEffortChange(deps: HandlerDeps, newEffort: Effort): Promise
     deps.onEffortDidChange?.(newEffort);
   } catch (err) {
     // swallow — UI stays unchanged because parent never receives signal
-    void err;
-  }
-}
-
-async function handlePermissionModeChange(
-  deps: HandlerDeps,
-  newMode: PermissionMode,
-): Promise<void> {
-  try {
-    if (deps.sessionId) {
-      await deps.ipcUpdatePerm?.(deps.sessionId, newMode);
-      try {
-        await deps.sessionUpdate(deps.sessionId, { permissionMode: newMode });
-      } catch (error) {
-        await deps.ipcUpdatePerm?.(deps.sessionId, deps.currentPermissionMode ?? 'ask');
-        throw error;
-      }
-    }
-    deps.onPermissionModeDidChange?.(newMode);
-  } catch (err) {
     void err;
   }
 }
@@ -244,68 +221,6 @@ describe('handleEffortChange: 上抛 onEffortDidChange 给父组件同步 SSoT',
     const onEffortDidChange = vi.fn();
     void handleEffortChange({ sessionUpdate: vi.fn(), onEffortDidChange }, 'max');
     expect(onEffortDidChange).toHaveBeenCalledWith('max');
-  });
-});
-
-describe('handlePermissionModeChange: 上抛 onPermissionModeDidChange', () => {
-  it('成功路径：上抛新 mode', async () => {
-    const sessionUpdate = vi.fn().mockResolvedValue(undefined);
-    const ipcUpdatePerm = vi.fn().mockResolvedValue(undefined);
-    const onPermissionModeDidChange = vi.fn();
-    await handlePermissionModeChange(
-      { sessionId: 'sess-1', sessionUpdate, ipcUpdatePerm, onPermissionModeDidChange },
-      'bypassPermissions',
-    );
-    expect(sessionUpdate).toHaveBeenCalledWith('sess-1', { permissionMode: 'bypassPermissions' });
-    expect(ipcUpdatePerm).toHaveBeenCalledWith('sess-1', 'bypassPermissions');
-    expect(ipcUpdatePerm.mock.invocationCallOrder[0]).toBeLessThan(
-      sessionUpdate.mock.invocationCallOrder[0],
-    );
-    expect(onPermissionModeDidChange).toHaveBeenCalledWith('bypassPermissions');
-  });
-
-  it('失败路径：sessionUpdate 抛错 → onPermissionModeDidChange 不调用', async () => {
-    const onPermissionModeDidChange = vi.fn();
-    const ipcUpdatePerm = vi.fn().mockResolvedValue(undefined);
-    await handlePermissionModeChange(
-      {
-        sessionId: 'sess-1',
-        sessionUpdate: vi.fn().mockRejectedValue(new Error('boom')),
-        ipcUpdatePerm,
-        currentPermissionMode: 'ask',
-        onPermissionModeDidChange,
-      },
-      'bypassPermissions',
-    );
-    expect(ipcUpdatePerm.mock.calls).toEqual([
-      ['sess-1', 'bypassPermissions'],
-      ['sess-1', 'ask'],
-    ]);
-    expect(onPermissionModeDidChange).not.toHaveBeenCalled();
-  });
-
-  it('permissionMode 都能上抛（确认对称化覆盖完整）', async () => {
-    const modes: PermissionMode[] = [
-      'ask',
-      'auto',
-      'default',
-      'acceptEdits',
-      'bypassPermissions',
-      'plan',
-    ];
-    for (const mode of modes) {
-      const onPermissionModeDidChange = vi.fn();
-      await handlePermissionModeChange(
-        {
-          sessionId: 'sess-x',
-          sessionUpdate: vi.fn().mockResolvedValue(undefined),
-          ipcUpdatePerm: vi.fn().mockResolvedValue(undefined),
-          onPermissionModeDidChange,
-        },
-        mode,
-      );
-      expect(onPermissionModeDidChange).toHaveBeenCalledWith(mode);
-    }
   });
 });
 

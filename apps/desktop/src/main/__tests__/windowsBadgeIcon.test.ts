@@ -10,6 +10,15 @@ vi.mock('electron', () => ({ nativeImage: { createEmpty: () => icon } }));
 import { createWindowsBadgeIcon, renderWindowsBadgePng } from '../windowsBadgeIcon';
 
 describe('Windows numeric taskbar badge', () => {
+  it.each([1, 1.25, 1.5, 1.75, 2, 2.5, 3, 4, 8])(
+    'renders exact physical dimensions at %s scale for the native Shell bridge',
+    (scale) => {
+      const png = renderWindowsBadgePng(1, scale);
+      expect(png.readUInt32BE(16)).toBe(Math.round(16 * scale));
+      expect(png.readUInt32BE(20)).toBe(Math.round(16 * scale));
+    },
+  );
+
   it('provides PNGs at common Windows display scales and clears at zero', () => {
     expect(createWindowsBadgeIcon(3)).toBe(icon);
     expect(addRepresentation.mock.calls.map(([rep]) => rep.scaleFactor)).toEqual([

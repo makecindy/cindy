@@ -1,5 +1,7 @@
 import { RoutineEventAdmission, addRoutineReceipt, compactRoutineReceipts, receiptIsLive } from './routine-event-admission.js';
 import {
+  BUILTIN_ROUTINE_ERROR,
+  LEGACY_TODO_CHECK_BUILTIN,
   matchesRoutineEvent,
   nextRoutineTriggerAt,
   parseRoutineEvent,
@@ -7,6 +9,7 @@ import {
 } from "./routines.js";
 import type {
   Routine,
+  RoutineBuiltin,
   RoutineEvent,
   RoutineInput,
   RoutineSource,
@@ -20,12 +23,15 @@ export interface RoutineRun {
   triggerIds: string[];
   events: Array<{ sourceId: string; event: RoutineEvent }>;
   status:
-    "queued" | "running" | "success" | "failed" | "interrupted" | "cancelled";
+    "queued" | "running" | "success" | "failed" | "interrupted" | "cancelled" | "skipped";
   createdAt: number;
   finishedAt?: number;
   error?: string;
   scheduleRunId?: string;
+  sessionId?: string;
   resultText?: string;
+  /** Execution remains successful when only delivery fails; never rerun work to resend it. */
+  delivery?: { status: 'delivered' | 'failed' | 'suppressed'; error?: string };
 }
 
 /** One account-owned snapshot; the host commits each transition atomically. */
@@ -39,8 +45,56 @@ export interface RoutineState {
   pausedBotIds?: string[];
 }
 
+
+/** Move event subscriptions off a plugin instance onto its archive key. */
+export function rewriteRoutinePluginSource(
+  state: RoutineState,
+  fromPart: string,
+  toPart: string,
+): RoutineState {
+  const fromId = `plugin:${fromPart}`;
+  const toId = `plugin:${toPart}`;
+  if (fromId === toId) return state;
+  let changed = false;
+  const routines = state.routines.map((routine) => {
+    let routineChanged = false;
+    const triggers = routine.triggers.map((trigger) => {
+      if (trigger.kind !== "event" || trigger.sourceId !== fromId) return trigger;
+      routineChanged = true;
+      changed = true;
+      return { ...trigger, sourceId: toId };
+    });
+    return routineChanged ? { ...routine, triggers } : routine;
+  });
+  const receipts: Record<string, number> = {};
+  for (const [key, timestamp] of Object.entries(state.receipts)) {
+    let nextKey = key;
+    try {
+      const parts: unknown = JSON.parse(key);
+      if (
+        Array.isArray(parts) && parts.length === 2 &&
+        parts[0] === fromId && typeof parts[1] === "string"
+      ) {
+        nextKey = JSON.stringify([toId, parts[1]]);
+        changed = true;
+      }
+    } catch {
+      // Malformed receipt keys stay untouched.
+    }
+    const previous = receipts[nextKey];
+    receipts[nextKey] = previous === undefined ? timestamp : Math.max(previous, timestamp);
+  }
+  if (!changed) return state;
+  return { ...state, routines, receipts };
+}
+
 export interface RoutineEngineDeps {
   load(): Promise<RoutineState | null>;
+  /**
+   * Replacement name/prompt for a legacy built-in daily todo check, applied once while it is migrated on
+   * load and before queued runs resume, so the revision and any pending batch stay valid.
+   */
+  legacyTodoCheckContent?(routine: Routine): Partial<Pick<RoutineInput, "name" | "prompt">> | null;
   save(state: RoutineState): Promise<void>;
   execute(
     routine: Routine,
@@ -50,14 +104,27 @@ export interface RoutineEngineDeps {
     canDispatch: () => boolean,
   ): Promise<{
     scheduleRunId?: string;
+    sessionId?: string;
     error?: string;
     resultText?: string;
+    delivery?: RoutineRun['delivery'];
     deferred?: boolean;
+    skipped?: boolean;
+    /** Host-owned execution cap reached; persist disabling with this run's result. */
+    disableRoutine?: boolean;
   }>;
   id(): string;
   now(): number;
   changed(): void;
   onError(error: unknown): void;
+}
+
+/** Only one-shot triggers, all of them consumed, and no run queued or running: nothing can fire it again. */
+function oneShotsConsumed(state: RoutineState, routine: Routine): boolean {
+  return routine.triggers.length > 0
+    && routine.triggers.every(trigger => trigger.kind === "once")
+    && !Object.keys(state.next).some(key => key.startsWith(`${routine.id}:`))
+    && !state.runs.some(run => run.routineId === routine.id && (run.status === "queued" || run.status === "running"));
 }
 
 /** Serial durable admission with one execution lane per routine; unrelated Bots stay independent. */
@@ -97,7 +164,16 @@ export class RoutineEngine {
       ) {
         throw new Error("Unsupported routine storage");
       }
-      for (const routine of saved.routines) parseRoutineInput(routine);
+      saved.routines = saved.routines.map(routine => {
+        const loaded: Routine = { ...routine, ...parseRoutineInput(routine) };
+        // The startup save below persists the migration; later loads see an ordinary routine.
+        if ((routine.builtin as string | undefined) === LEGACY_TODO_CHECK_BUILTIN) {
+          delete loaded.builtin;
+          delete loaded.builtinVersion;
+          Object.assign(loaded, this.deps.legacyTodoCheckContent?.(loaded) ?? {});
+        }
+        return loaded;
+      });
       this.state = saved;
     }
     this.state.receipts = compactRoutineReceipts(this.state.receipts, this.deps.now());
@@ -119,6 +195,20 @@ export class RoutineEngine {
         run.status = "interrupted";
         run.finishedAt = this.deps.now();
       }
+    }
+    // Repair one-shots that already fired before completion disabled them: they stay enabled but
+    // nothing can fire them again. Needs a delivered success as the latest run so an unfired or
+    // never-run one-shot (for example one resumed after its time passed) and a one-shot whose
+    // last attempt failed are left alone, as are suspended Bots.
+    for (const routine of this.state.routines) {
+      if (!routine.enabled || routine.builtin || this.blockedBots.has(routine.botId)) continue;
+      if (!oneShotsConsumed(this.state, routine)) continue;
+      // The latest attempt decides: an older success must not hide a later failed or interrupted run.
+      const latest = this.state.runs.findLast(run => run.routineId === routine.id);
+      if (latest?.status !== "success" || latest.delivery?.status === "failed") continue;
+      routine.enabled = false;
+      routine.revision += 1;
+      routine.updatedAt = this.deps.now();
     }
     await this.deps.save(this.state);
     this.stopped = false;
@@ -193,8 +283,55 @@ export class RoutineEngine {
     this.notifyChanged();
   }
 
-  async put(botId: string, raw: RoutineInput, id?: string): Promise<Routine> {
-    const input = parseRoutineInput(raw);
+  /** Archived plugins must not keep receiving events published for the replacement. */
+  async relocatePluginSource(fromPart: string, toPart: string): Promise<void> {
+    if (fromPart === toPart) return;
+    const fromId = `plugin:${fromPart}`;
+    await this.change((state) => {
+      const next = rewriteRoutinePluginSource(state, fromPart, toPart);
+      if (next === state) return;
+      state.routines = next.routines;
+      state.receipts = next.receipts;
+    });
+    if (this.sources.delete(fromId)) this.notifyChanged();
+  }
+
+  async put(botId: string, raw: RoutineInput, id?: string, expectedRevision?: number): Promise<Routine> {
+    return this.writeRoutine(botId, raw, { id, expectedRevision });
+  }
+
+  /** A lost remote acknowledgement can be retried, including after a host restart. */
+  async createOnce(botId: string, raw: RoutineInput, creationId: string): Promise<Routine> {
+    if (!/^[a-zA-Z0-9_-]{16,128}$/.test(creationId)) throw new Error("Invalid routine creation ID");
+    return this.writeRoutine(botId, raw, { creationId });
+  }
+
+  /**
+   * 宿主内置规则的幂等落地：不存在就建；指令/触发条件与宿主模板不同就改成模板；
+   * 保留用户的暂停选择（enabled）。暂停中的伙伴不建，恢复后由宿主再调一次。
+   * 这是唯一能写内置规则内容的入口；普通 put 只能切换 enabled，remove 一律拒绝。
+   */
+  async ensureBuiltin(
+    botId: string,
+    builtin: RoutineBuiltin,
+    raw: RoutineInput,
+    id: string,
+    builtinVersion?: number,
+  ): Promise<Routine | null> {
+    if (!/^[a-zA-Z0-9_-]{16,128}$/.test(id)) throw new Error("Invalid routine creation ID");
+    if (this.blockedBots.has(botId)) return null;
+    // enabled 在写队列里按最新记录保留（见 writeRoutine），排在前面的暂停不会被旧值覆盖。
+    return this.writeRoutine(
+      botId,
+      raw,
+      { id, builtin, ...(builtinVersion !== undefined ? { builtinVersion } : {}) },
+    );
+  }
+
+  private async writeRoutine(botId: string, raw: RoutineInput, options: { id?: string; expectedRevision?: number; creationId?: string; builtin?: RoutineBuiltin; builtinVersion?: number }): Promise<Routine> {
+    const { expectedRevision, creationId } = options;
+    const id = options.id ?? creationId;
+    const parsed = parseRoutineInput(raw);
     return this.change((state) => {
       if (this.blockedBots.has(botId)) throw new Error("The teammate is paused");
       if (id && this.removing.has(id)) throw new Error("Routine is being removed");
@@ -203,9 +340,35 @@ export class RoutineEngine {
             (routine) => routine.id === id && routine.botId === botId,
           )
         : undefined;
-      if (id && !existing) throw new Error("Routine not found");
+      // Omitted optional fields from older clients preserve saved choices.
+      const input = parseRoutineInput({
+        ...existing,
+        ...parsed,
+        // Legacy saved definitions may omit this field and must stay quiet.
+        // A newly created, unclassified reminder must retain delivery.
+        ...(!existing && parsed.silentWhenIdle === undefined ? { silentWhenIdle: false } : {}),
+        // Host realign of a built-in rule keeps the owner's latest pause choice.
+        ...(options.builtin && existing ? {
+          enabled: existing.enabled,
+          modelOverride: existing.modelOverride,
+          sessionMode: existing.sessionMode,
+          delivery: existing.delivery,
+        } : {}),
+      });
+      if (id && !existing && !creationId && !options.builtin) throw new Error("Routine not found");
+      if ((creationId || options.builtin) && state.routines.some(row => row.id === id && row.botId !== botId)) throw new Error("Routine creation ID already used");
+      // Host-owned instructions and triggers stay fixed; callers may pause or choose the execution model.
+      if (existing?.builtin && !options.builtin &&
+        JSON.stringify(parseRoutineInput({ ...existing, enabled: input.enabled,
+          ...(existing.builtin !== 'nightly-learning' ? { modelOverride: input.modelOverride } : {}),
+          sessionMode: input.sessionMode })) !== JSON.stringify(input))
+        throw new Error(`${BUILTIN_ROUTINE_ERROR}: built-in instructions and triggers cannot be edited`);
+      const builtin = options.builtin ?? existing?.builtin;
+      const builtinVersion = options.builtinVersion ?? existing?.builtinVersion;
+      if (creationId && existing && JSON.stringify(parseRoutineInput(existing)) !== JSON.stringify(input)) throw new Error("Routine already created; refresh before editing");
+      if (expectedRevision !== undefined && existing?.revision !== expectedRevision) throw new Error("Routine changed; refresh before saving");
       if (
-        existing &&
+        existing && existing.builtin === builtin && existing.builtinVersion === builtinVersion &&
         JSON.stringify(parseRoutineInput(existing)) === JSON.stringify(input)
       )
         return structuredClone(existing);
@@ -213,7 +376,9 @@ export class RoutineEngine {
       const now = this.deps.now();
       const routine: Routine = {
         ...input,
-        id: existing?.id ?? this.deps.id(),
+        ...(builtin ? { builtin } : {}),
+        ...(builtin && builtinVersion !== undefined ? { builtinVersion } : {}),
+        id: existing?.id ?? creationId ?? id ?? this.deps.id(),
         botId,
         revision: (existing?.revision ?? 0) + 1,
         createdAt: existing?.createdAt ?? now,
@@ -232,6 +397,8 @@ export class RoutineEngine {
         const unchanged =
           existing?.enabled === routine.enabled &&
           JSON.stringify(oldTrigger) === JSON.stringify(trigger);
+        if (!unchanged && trigger.kind === 'once' && trigger.at <= now)
+          throw new Error('One-shot time has passed; choose a future time');
         const next = unchanged
           ? (previousNext[`${routine.id}:${trigger.id}`] ??
             nextRoutineTriggerAt(trigger, now))
@@ -248,16 +415,20 @@ export class RoutineEngine {
   }
 
   /** Quiesce execution before host cleanup; failed cleanup leaves a disabled, retryable rule. */
-  async remove(botId: string, id: string, cleanup?: () => Promise<void>): Promise<void> {
-    if (!this.state.routines.some((routine) => routine.id === id && routine.botId === botId))
-      throw new Error("Routine not found");
+  async remove(botId: string, id: string, cleanup?: () => Promise<void>, expectedRevision?: number): Promise<void> {
+    const target = this.state.routines.find((routine) => routine.id === id && routine.botId === botId);
+    if (!target) throw new Error("Routine not found");
+    // Deleting the teammate (removeBot) still clears it; a single built-in rule can only be paused.
+    if (target.builtin) throw new Error(`${BUILTIN_ROUTINE_ERROR}: built-in routines cannot be deleted; pause it instead`);
     if (this.removing.has(id)) throw new Error("Routine is being removed");
+    if (expectedRevision !== undefined && this.state.routines.find(row => row.id === id && row.botId === botId)?.revision !== expectedRevision) throw new Error("Routine changed; refresh before deleting");
     this.removing.add(id);
-    this.active.get(id)?.abort();
+    if (expectedRevision === undefined) this.active.get(id)?.abort();
     try {
       await this.change((state) => {
         const routine = state.routines.find((row) => row.id === id && row.botId === botId);
         if (!routine) throw new Error("Routine not found");
+        if (expectedRevision !== undefined && routine.revision !== expectedRevision) throw new Error("Routine changed; refresh before deleting");
         routine.enabled = false;
         routine.revision += 1;
         routine.updatedAt = this.deps.now();
@@ -265,6 +436,7 @@ export class RoutineEngine {
         for (const key of Object.keys(state.next))
           if (key.startsWith(`${id}:`)) delete state.next[key];
       });
+      if (expectedRevision !== undefined) this.active.get(id)?.abort();
       // An aborted executor may still be finishing an asynchronous backing write.
       await this.activeTasks.get(id);
       await cleanup?.();
@@ -374,13 +546,14 @@ export class RoutineEngine {
     }
   }
 
-  async runNow(botId: string, id: string): Promise<void> {
+  async runNow(botId: string, id: string, expectedRevision?: number): Promise<void> {
     await this.change((state) => {
       if (this.blockedBots.has(botId)) throw new Error("The teammate is paused");
       const routine = state.routines.find(
         (row) => row.id === id && row.botId === botId,
       );
       if (!routine) throw new Error("Routine not found");
+      if (expectedRevision !== undefined && routine.revision !== expectedRevision) throw new Error("Routine changed; refresh before running");
       if (this.removing.has(id)) throw new Error("Routine is being removed");
       this.enqueue(state, routine, ["manual"]);
     });
@@ -402,6 +575,7 @@ export class RoutineEngine {
           this.enqueue(state, routine, [trigger.id]);
           const next = nextRoutineTriggerAt(trigger, now);
           if (next !== undefined) state.next[key] = next;
+          else delete state.next[key];
         }
       }
     });
@@ -535,12 +709,7 @@ export class RoutineEngine {
       return { routine: structuredClone(routine), run: structuredClone(run) };
     });
     if (!claimed || this.stopped) return;
-    let result: {
-      scheduleRunId?: string;
-      error?: string;
-      resultText?: string;
-      deferred?: boolean;
-    } = {};
+    let result: Awaited<ReturnType<RoutineEngineDeps['execute']>> = {};
     try {
       result = await this.deps.execute(
         claimed.routine,
@@ -579,14 +748,33 @@ export class RoutineEngine {
       }
       const completed = { ...result };
       delete completed.deferred;
+      delete completed.skipped;
+      delete completed.disableRoutine;
       Object.assign(run, completed, {
         status: aborted
           ? "cancelled"
           : result.error
             ? "failed"
-            : "success",
+            : result.skipped ? "skipped" : "success",
         finishedAt,
       });
+      // A one-shot routine is finished only when nothing is left to fire (see oneShotsConsumed)
+      // and this run succeeded without a failed delivery.
+      const routine = state.routines.find(row => row.id === run.routineId && row.revision === claimed.routine.revision);
+      const oneShotFinished = run.status === "success"
+        && result.delivery?.status !== "failed"
+        && !!routine && oneShotsConsumed(state, routine);
+      const disable = result.disableRoutine || oneShotFinished;
+      if (disable && !aborted && !result.error) {
+        // A late result must not overwrite a newer user edit or cancel itself.
+        if (routine) {
+          routine.enabled = false;
+          routine.revision += 1;
+          routine.updatedAt = finishedAt;
+          for (const key of Object.keys(state.next)) if (key.startsWith(`${routine.id}:`)) delete state.next[key];
+          this.cancelQueued(state, routine.id);
+        }
+      }
     };
     this.pendingSettlements.set(id, { routineId: claimed.routine.id, apply: settle });
     await this.change(settle);

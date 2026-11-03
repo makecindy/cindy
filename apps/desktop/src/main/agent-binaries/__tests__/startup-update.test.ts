@@ -44,6 +44,21 @@ describe('one-time startup binary update marker', () => {
     expect(fs.existsSync(markerPath)).toBe(false);
   });
 
+  it('keeps a harness-scoped marker limited to the confirmed harness', () => {
+    writeStartupBinaryUpdateMarker(userDataDir, '2.0.0', ['codex']);
+    expect(consumeStartupBinaryUpdateMarker(userDataDir, '2.0.0')).toEqual(['codex']);
+    expect(fs.existsSync(markerPath)).toBe(false);
+  });
+
+  it.each(['{"version":"2.0.0","kinds":[]}', '{"version":"2.0.0","kinds":"codex"}', '{"version":"2.0.0","kinds":["gemini"]}'])(
+    'does not widen an unreadable scoped marker %s into a full refresh',
+    (contents) => {
+      fs.writeFileSync(markerPath, contents);
+      expect(consumeStartupBinaryUpdateMarker(userDataDir, '2.0.0')).toBe(false);
+      expect(fs.existsSync(markerPath)).toBe(false);
+    },
+  );
+
   it('cleans up a cancelled apply and tolerates repeated cleanup', () => {
     const cancel = writeStartupBinaryUpdateMarker(userDataDir, '2.0.0');
     expect(cancel).toBeTypeOf('function');

@@ -15,7 +15,8 @@
 
 import { useEffect, useRef, useState } from 'react';
 
-import type { AttachedFile, FileCategory } from '@/lib/fileTypes';
+import { FileTypeTile } from '@/components/ui/file-type-tile';
+import type { AttachedFile } from '@/lib/fileTypes';
 import { createLogger } from '@/lib/logger';
 
 const log = createLogger('AttachmentTypeThumb');
@@ -150,120 +151,6 @@ async function looksLikeIconBitmap(dataUrl: string): Promise<boolean> {
   }
 }
 
-// ── 自绘文件图标 ──────────────────────────────────────────────────────────
-//
-// 类型色是内容语义色(和「这份文件是什么」绑定),不随主题翻转,属于
-// docs/design-rules/DESIGN.md §10 的 theme-invariant 例外;纸张本体仍走语义
-// token,所以 Light / Dark 下纸面与卡片的关系保持一致。
-
-type IconKind = 'pdf' | 'doc' | 'sheet' | 'slide' | 'code' | 'text' | 'image' | 'plain';
-
-/**
- * 角标色:走 themes/colors.ts 注册的 file-badge-* token(§10 theme-invariant
- * 例外族),不在组件里写死 hex —— 否则自定义主题改不动它。取值都按白字 ≥4.5:1
- * 选过,前景恒用 --file-badge-fg。
- */
-const KIND_ACCENT: Record<IconKind, string | null> = {
-  pdf: 'var(--file-badge-pdf)',
-  doc: 'var(--file-badge-doc)',
-  sheet: 'var(--file-badge-sheet)',
-  slide: 'var(--file-badge-slide)',
-  code: 'var(--file-badge-code)',
-  text: null,
-  image: null,
-  plain: null,
-};
-
-/** 角标里的短标签(≤4 字符);没有角标色的类型不画角标。 */
-const KIND_LABEL: Record<IconKind, string | null> = {
-  pdf: 'PDF',
-  doc: 'DOC',
-  sheet: 'XLS',
-  slide: 'PPT',
-  code: '<>',
-  text: null,
-  image: null,
-  plain: null,
-};
-
-const SHEET_EXTS = new Set(['.xls', '.xlsx', '.csv', '.tsv', '.numbers']);
-const SLIDE_EXTS = new Set(['.ppt', '.pptx', '.key']);
-const DOC_EXTS = new Set(['.doc', '.docx', '.rtf', '.odt', '.pages']);
-const CODE_EXTS = new Set([
-  '.ts', '.tsx', '.js', '.jsx', '.mjs', '.cjs', '.py', '.go', '.rs', '.java',
-  '.c', '.cc', '.cpp', '.h', '.hpp', '.cs', '.rb', '.php', '.swift', '.kt',
-  '.sh', '.bash', '.zsh', '.sql', '.json', '.yaml', '.yml', '.toml', '.xml',
-  '.css', '.scss', '.html', '.vue', '.svelte', '.lua',
-]);
-
-/** 按扩展名 + category 定图标类型;拿不准回落中性纸张。 */
-export function pickIconKind(ext: string, category: FileCategory): IconKind {
-  const e = ext.toLowerCase();
-  if (e === '.pdf' || category === 'pdf') return 'pdf';
-  if (SHEET_EXTS.has(e)) return 'sheet';
-  if (SLIDE_EXTS.has(e)) return 'slide';
-  if (DOC_EXTS.has(e)) return 'doc';
-  if (CODE_EXTS.has(e)) return 'code';
-  if (category === 'image') return 'image';
-  if (category === 'text') return 'text';
-  return 'plain';
-}
-
-/**
- * 自绘文件图标:一张带折角的纸,右下角压一枚类型色角标。
- * 纸面 / 描边走 token,只有角标带类型色。
- */
-function FileGlyph({ kind }: { kind: IconKind }) {
-  const accent = KIND_ACCENT[kind];
-  const label = KIND_LABEL[kind];
-  // viewBox 32 渲染成 32px(1:1),角标文字 10 个单位即屏幕 10px —— DESIGN.md §3
-  // 的下限(Micro Label 10–13px)。此前 26px 渲染 + 7.5 单位只有约 6px,越界了。
-  return (
-    <svg width="32" height="32" viewBox="0 0 32 32" fill="none" aria-hidden focusable="false">
-      {/* 纸张本体 + 折角 */}
-      <path
-        d="M6.5 2.5h11.2L25.5 10.3V27a1.5 1.5 0 0 1-1.5 1.5H6.5A1.5 1.5 0 0 1 5 27V4a1.5 1.5 0 0 1 1.5-1.5Z"
-        fill="var(--surface-elevated)"
-        stroke="var(--text-placeholder)"
-        strokeWidth="1.4"
-        strokeLinejoin="round"
-      />
-      <path
-        d="M17.5 2.6V9a1.5 1.5 0 0 0 1.5 1.5h6.2"
-        stroke="var(--text-placeholder)"
-        strokeWidth="1.4"
-        strokeLinejoin="round"
-      />
-      {/* 正文示意线:没有角标的中性类型靠它表达「这是文档」 */}
-      <path
-        d="M9 14h13M9 17.5h13M9 21h7.5"
-        stroke="var(--text-placeholder)"
-        strokeWidth="1.4"
-        strokeLinecap="round"
-        opacity={accent ? 0.35 : 0.9}
-      />
-      {/* 类型角标:容纳 10px 标签,所以铺到底边整条 */}
-      {accent && label ? (
-        <>
-          <rect x="3" y="18.5" width="26" height="13.5" rx="3" fill={accent} />
-          {/* 字重 500 封顶:DESIGN.md §3「Weight restraint — 只有 400 与 500,No bold」。 */}
-          <text
-            x="16"
-            y="28.6"
-            textAnchor="middle"
-            fontSize="10"
-            fontWeight="500"
-            letterSpacing="0.3"
-            fill="var(--file-badge-fg)"
-          >
-            {label}
-          </text>
-        </>
-      ) : null}
-    </svg>
-  );
-}
-
 // ── 组件 ─────────────────────────────────────────────────────────────────
 
 export function AttachmentTypeThumb({
@@ -344,10 +231,8 @@ export function AttachmentTypeThumb({
   }, [filePath, revalidateTick]);
 
   if (thumb) {
-    // 图标型(dmg / zip 这类系统只给类型图标的):按原样居中显示,不裁切也不描边
-    // —— 图标四周本来就是透明的,套一圈边框等于在图标外面画个空方框。
-    // 内容型(PDF 首页、视频首帧这类铺满画面的):裁切填满,并给一圈 Board,
-    // 否则白纸压在同样浅的底上会糊成一片(Dark 下同样区分纸白与卡片)。
+    // 透明边缘只能提示排版方式，不能可靠区分系统图标与留白的文档预览。
+    // 保留已取得的缩略图，避免为了统一图标而误藏真实内容。
     return (
       <img
         src={thumb.url}
@@ -357,19 +242,18 @@ export function AttachmentTypeThumb({
         style={{
           width: '100%',
           height: '100%',
-          // 写成内联而不是 Tailwind 类:这几个值要跟 isIcon 一起切,内联最直白。
           objectFit: thumb.isIcon ? 'contain' : 'cover',
           objectPosition: 'top center',
           // 用 1px Board 描边而不是 inset 阴影:DESIGN.md §6 只允许 token 化的浮层
           // 阴影,in-page 元素一律靠边框区分。outline + 负 offset 画在元素内沿,
           // 不占布局也不撑大缩略区。
           outline: thumb.isIcon ? undefined : '1px solid var(--border-default)',
-          outlineOffset: thumb.isIcon ? undefined : '-1px',
+          outlineOffset: '-1px',
         }}
         draggable={false}
       />
     );
   }
 
-  return <FileGlyph kind={pickIconKind(file.ext, file.category)} />;
+  return <FileTypeTile name={file.name} mimeType={file.mimeType} />;
 }

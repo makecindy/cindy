@@ -1,0 +1,162 @@
+{
+  "cindy-window": {
+    "delivery": "cdn",
+    "sha256": "10d72d8ab0f39a5ceec6f8746396c36bb6d7dd345ac18af209069678a90d010d",
+    "bytes": 6091872,
+    "width": 2304,
+    "height": 1440,
+    "fps": 24,
+    "duration": 12.041666666666666,
+    "image": {
+      "sha256": "bfbb37f4a710e110d39596943bc5d68dfaf88d6989c1bc4e5adfbb2e48612d00",
+      "bytes": 1101332
+    }
+  },
+  "cindy-studio": {
+    "delivery": "cdn",
+    "sha256": "b33f9b527584ae8c8b085536a0823a346e4879fa845e62e5ac41ae1b7b0097b1",
+    "bytes": 3606656,
+    "width": 2304,
+    "height": 1440,
+    "fps": 24,
+    "duration": 12.041666666666666,
+    "image": {
+      "sha256": "7d2af2acb2df6b7fcbb40030299b3518c8de81e138f638b95ca563521f374319",
+      "bytes": 1649522
+    }
+  },
+  "cindy-dream": {
+    "delivery": "cdn",
+    "sha256": "de9e0dc2235310bdbee30f1bf951d94ce8299b18ba674463df407b76bb162def",
+    "bytes": 6312719,
+    "width": 2304,
+    "height": 1440,
+    "fps": 24,
+    "duration": 12.041666666666666,
+    "image": {
+      "sha256": "2a2043b9207c7dfaaed5951b567eba1eb24aeb192c3eb78a3c0ee9a46a732361",
+      "bytes": 1790734
+    }
+  },
+  "cindy-whisper": {
+    "delivery": "cdn",
+    "sha256": "5a292e50cac2dbf08099440913984750e32df56c43e5ada1535da5958aabbe3d",
+    "bytes": 18353638,
+    "width": 1920,
+    "height": 1080,
+    "fps": 24,
+    "duration": 10.042,
+    "image": {
+      "sha256": "20c6046e462d514b7fc7d4d5b30351c510f395915bb91fdbd23d8e3cd61ba24d",
+      "bytes": 570506
+    }
+  },
+  "cindy-neon": {
+    "delivery": "cdn",
+    "sha256": "bd4cad0dc270ad2e8f243b4f2e8975bf9bfc44dc124200d2a27fa46f0a3d6a46",
+    "bytes": 14085969,
+    "width": 1920,
+    "height": 1080,
+    "fps": 24,
+    "duration": 10.042,
+    "image": {
+      "sha256": "e8a38fc4e291e7f3930d1cafd6d0cf73c141be150ffac783754ec83fd28e2069",
+      "bytes": 192046
+    }
+  },
+  "cindy-prism": {
+    "delivery": "cdn",
+    "sha256": "1a7f7f9dae1ecbb7b60e3e7968f6ae7847d2eb65b009437ce36ffc0e14e6bf01",
+    "bytes": 22641879,
+    "width": 1920,
+    "height": 1080,
+    "fps": 24,
+    "duration": 10.042,
+    "image": {
+      "sha256": "84c73fc02a1232e7178ad22a6034c003f5d657c79f3db2199ae25a1a3b1c5d83",
+      "bytes": 369734
+    }
+  },
+  "cindy-night-glance": {
+    "delivery": "cdn",
+    "sha256": "e56374d60a824e01e29dbaaa8da543634dae0ef3be6df57ad7ee7e45293ff5ff",
+    "bytes": 14780511,
+    "width": 1920,
+    "height": 1080,
+    "fps": 24,
+    "duration": 10.042,
+    "image": {
+      "sha256": "091d6d0ad4c64c6d658cce219f35fe72021e3af849512d2cb8c50bdeeb37315d",
+      "bytes": 799156
+    }
+  },
+  "cindy-scarlet-stroll": {
+    "delivery": "cdn",
+    "sha256": "2e4f78d07aa987f06e5da2fa0497f81cc1ca86c5f6a037dfd0f533dbcf6d7200",
+    "bytes": 16397997,
+    "width": 1920,
+    "height": 1080,
+    "fps": 24,
+    "duration": 10.042,
+    "image": {
+      "sha256": "4cecd5b6ebefdc298c881eb17f56445565eea45ebb189dac8b8dc1ed01bb5c7c",
+      "bytes": 677244
+    }
+  },
+  "night-launch": {
+    "delivery": "cdn",
+    "image": {
+      "sha256": "81b6f3807eea9cb989b8873c6daea2345d2fcfb7b6ad03dfdc0f9d73bdeef82f",
+      "bytes": 406080
+    }
+  },
+  "silent-orbits": {
+    "delivery": "cdn",
+    "image": {
+      "sha256": "21a4135ae41e7f75f7e4829dce467041bab8c733cdbf588cb76b7605adcc1e75",
+      "bytes": 710060
+    }
+  },
+  "dune-dawn": {
+    "delivery": "cdn",
+    "image": {
+      "sha256": "070c9dc925c3a71eb8623db363a3c60d625dae5067446c99c7a179deacecdeee",
+      "bytes": 282116
+    }
+  },
+  "planet-dawn": {
+    "delivery": "cdn",
+    "image": {
+      "sha256": "5c0034d6e9e0d341b737568600d70cb8511dfe45aca232b5ad5676d93310a76b",
+      "bytes": 404226
+    }
+  },
+  "indigo-folds": {
+    "delivery": "cdn",
+    "image": {
+      "sha256": "21cb022d1a492809e1c3e2de99e0f4ec697174846c00d3d2a39c04e1643ae2f9",
+      "bytes": 323432
+    }
+  },
+  "dune-sphere": {
+    "delivery": "cdn",
+    "image": {
+      "sha256": "5ebc0912b68fd41d4908fc0364841d8a468a401498d3adc7ea2ebd90e0a38eb6",
+      "bytes": 381164
+    }
+  },
+  "ocean-clouds": {
+    "delivery": "cdn",
+    "image": {
+      "sha256": "d7852f5046786e9d7f7bf7b28cf5f7bd4c92731a21a2bc8513591c71c09ebc94",
+      "bytes": 261362
+    }
+  },
+  "rose-quartz": {
+    "delivery": "cdn",
+    "image": {
+      "sha256": "c627ee2ae28c87f19d19cedf4c89002c1a69864d5982e1173fa730eebe41346a",
+      "bytes": 622300
+    }
+  }
+}

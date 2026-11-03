@@ -28,7 +28,12 @@ function mockController(shouldBridge: (model: string) => boolean = () => true): 
   mockedController.mockReturnValue({ shouldBridge, describeImage: vi.fn() } as never);
 }
 
-function depsWithProvider(provider: { id: string; routingAuth: string }): VisionChannelDeps {
+function depsWithProvider(provider: {
+  id: string;
+  routingAuth: string;
+  upstream?: string;
+  catalogPresetId?: string;
+}): VisionChannelDeps {
   return {
     getProviderById: (providerId: string) =>
       providerId === provider.id
@@ -41,11 +46,21 @@ function depsWithProvider(provider: { id: string; routingAuth: string }): Vision
             routing: {
               'claude-code': {
                 wireProtocol: 'openai-chat',
-                upstream: 'https://api.example.com/v1',
+                upstream: provider.upstream ?? 'https://api.example.com/v1',
                 authStrategy: provider.routingAuth,
               },
             },
-            models: { 'claude-code': [{ id: 'vision-x', name: 'Vision X' }] },
+            models: {
+              'claude-code': [
+                {
+                  id: 'vision-x',
+                  name: 'Vision X',
+                  ...(provider.catalogPresetId
+                    ? { catalogPresetId: provider.catalogPresetId }
+                    : {}),
+                },
+              ],
+            },
           } as never)
         : null,
     readCustomProviderKey: () => 'sk-test',
@@ -72,12 +87,12 @@ beforeEach(() => {
 describe('buildPiVisionBridgeEnv', () => {
   it('returns null when disabled', () => {
     mockedSettings.mockReturnValue(settings({ enabled: false }));
-    expect(buildPiVisionBridgeEnv(depsWithProvider({ id: 'user-x', routingAuth: 'api-key-header' }), 'deepseek-v4')).toBeNull();
+    expect(buildPiVisionBridgeEnv(depsWithProvider({ id: 'user-x', routingAuth: 'api-key-header' }), 'deepseek-v4', 'session-1')).toBeNull();
   });
 
   it('returns null when no primary backend', () => {
     mockedSettings.mockReturnValue(settings({ primary: null }));
-    expect(buildPiVisionBridgeEnv(depsWithProvider({ id: 'user-x', routingAuth: 'api-key-header' }), 'deepseek-v4')).toBeNull();
+    expect(buildPiVisionBridgeEnv(depsWithProvider({ id: 'user-x', routingAuth: 'api-key-header' }), 'deepseek-v4', 'session-1')).toBeNull();
   });
 
   it('returns null when current model is not a vision-bridge target (shouldBridge false)', () => {
@@ -86,16 +101,16 @@ describe('buildPiVisionBridgeEnv', () => {
     // 不注入 env、pi 不注册 vision 工具（零干扰——不因别的模型配置而改变本模型工具面）。
     mockController((model) => model !== 'claude-sonnet');
     const d = depsWithProvider({ id: 'user-x', routingAuth: 'api-key-header' });
-    expect(buildPiVisionBridgeEnv(d, 'claude-sonnet')).toBeNull();
+    expect(buildPiVisionBridgeEnv(d, 'claude-sonnet', 'session-1')).toBeNull();
     // 命中模型 → 正常注入。
-    expect(buildPiVisionBridgeEnv(d, 'deepseek-v4')).not.toBeNull();
+    expect(buildPiVisionBridgeEnv(d, 'deepseek-v4', 'session-1')).not.toBeNull();
   });
 
   it('returns null when primary backend cannot be resolved (unsupported auth)', () => {
     mockedSettings.mockReturnValue(settings());
     // provider 用 OAuth 策略 → resolveVisionBackendEndpoint 抛错 → primary null → 整体 null。
     const d = depsWithProvider({ id: 'user-x', routingAuth: 'provider-oauth-header' });
-    expect(buildPiVisionBridgeEnv(d, 'deepseek-v4')).toBeNull();
+    expect(buildPiVisionBridgeEnv(d, 'deepseek-v4', 'session-1')).toBeNull();
   });
 
   it('serializes primary + fallback backend spec into env', () => {
@@ -107,7 +122,7 @@ describe('buildPiVisionBridgeEnv', () => {
     );
     const d = depsWithProvider({ id: 'user-x', routingAuth: 'api-key-header' });
     // fallback provider user-y 不在 deps 里 → resolve null，主后端仍可用。
-    const env = buildPiVisionBridgeEnv(d, 'deepseek-v4');
+    const env = buildPiVisionBridgeEnv(d, 'deepseek-v4', 'session-1');
     expect(env).not.toBeNull();
     expect(env![PI_VISION_BRIDGE_ENV]).toBeTruthy();
     const parsed = JSON.parse(env![PI_VISION_BRIDGE_ENV]);
@@ -132,10 +147,35 @@ describe('buildPiVisionBridgeEnv', () => {
       }),
     );
     const d = depsWithProvider({ id: 'user-x', routingAuth: 'api-key-header' });
-    const env = buildPiVisionBridgeEnv(d, 'deepseek-v4');
+    const env = buildPiVisionBridgeEnv(d, 'deepseek-v4', 'session-1');
     expect(env).not.toBeNull();
     const parsed = JSON.parse(env![PI_VISION_BRIDGE_ENV]);
     expect(parsed.fallback).not.toBeNull();
     expect(parsed.fallback.model).toBe('vision-y');
+  });
+
+  it('derives a stable OpenCode Go session header so the spawn env survives reconnects', () => {
+    mockedSettings.mockReturnValue(settings({ primary: { providerId: 'opencode-go', modelId: 'vision-x' } }));
+    const d = depsWithProvider({ id: 'opencode-go', routingAuth: 'api-key-header' });
+    const first = JSON.parse(buildPiVisionBridgeEnv(d, 'deepseek-v4', 'session-1')![PI_VISION_BRIDGE_ENV]);
+    const second = JSON.parse(buildPiVisionBridgeEnv(d, 'deepseek-v4', 'session-1')![PI_VISION_BRIDGE_ENV]);
+    const other = JSON.parse(buildPiVisionBridgeEnv(d, 'deepseek-v4', 'session-2')![PI_VISION_BRIDGE_ENV]);
+    expect(first.primary.headers['x-opencode-session']).toMatch(/^[0-9a-f]{32}$/);
+    expect(second.primary.headers['x-opencode-session']).toBe(first.primary.headers['x-opencode-session']);
+    expect(other.primary.headers['x-opencode-session']).not.toBe(first.primary.headers['x-opencode-session']);
+  });
+
+  it('recognizes a preset-created provider after its id and endpoint changed', () => {
+    mockedSettings.mockReturnValue(settings({ primary: { providerId: 'go-mirror', modelId: 'vision-x' } }));
+    const d = depsWithProvider({
+      id: 'go-mirror',
+      routingAuth: 'api-key-header',
+      upstream: 'https://mirror.example/v1',
+      catalogPresetId: 'opencode-go',
+    });
+    const parsed = JSON.parse(
+      buildPiVisionBridgeEnv(d, 'deepseek-v4', 'session-1')![PI_VISION_BRIDGE_ENV],
+    );
+    expect(parsed.primary.headers['x-opencode-session']).toMatch(/^[0-9a-f]{32}$/);
   });
 });

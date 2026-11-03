@@ -1,9 +1,14 @@
 // @vitest-environment jsdom
 
-import { cleanup, fireEvent, render, screen, within } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, within } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { MemoryRouter } from 'react-router-dom';
 import i18n from '@/i18n';
 import HookTaskCard from '@/components/chat/HookTaskCard';
+import { UserMessage } from '@/components/chat/UserMessage';
+import { ConfirmDialogProvider } from '@/components/ui/confirm-dialog-provider';
+import { Tooltip } from '@/components/ui/tooltip';
+import { SHARE_SOURCE_ATTR, stripMessageSources } from '@/lib/shareConversationImage';
 import {
   resolveHookGroupContext,
   resolveUserDisplayText,
@@ -11,6 +16,17 @@ import {
 
 // Keep the real Collapse component; reduced motion makes mounting deterministic.
 vi.mock('@/hooks/useReducedMotion', () => ({ useReducedMotion: () => true }));
+
+// Only replace the host preview request; the message, action bar and edit box stay real.
+vi.mock('@/lib/sessionService', async (importOriginal) => ({
+  ...await importOriginal<typeof import('@/lib/sessionService')>(),
+  rewindPreview: vi.fn(async () => ({ canRewind: true, filesChanged: [] })),
+}));
+// No preview is opened here; keep their renderer/3D dependency trees out of this fixture.
+vi.mock('@/components/chat/ImageLightbox', () => ({ ImageLightbox: () => null }));
+vi.mock('@/components/chat/ModelLightbox', () => ({ ModelLightbox: () => null }));
+vi.mock('@/components/chat/TextLightbox', () => ({ TextLightbox: () => null }));
+vi.mock('@/components/chat/ToolPayloadLightbox', () => ({ ToolPayloadLightbox: () => null }));
 
 beforeEach(async () => {
   await i18n.changeLanguage('zh-CN');
@@ -302,4 +318,78 @@ describe('HookTaskCard attached context', () => {
       expect(screen.getByRole('region', { name: background })).toBeTruthy();
     },
   );
+
+  it('marks the channel header as a source so share images keep only the message body', () => {
+    const { container } = render(<HookTaskCard im="slack" userText="帮我看下这个报错" />);
+    const header = container.querySelector(`[${SHARE_SOURCE_ATTR}]`);
+    expect(header?.textContent).toBe('Cindy · 来自 Slack');
+    const clone = container.cloneNode(true) as HTMLElement;
+    stripMessageSources(clone);
+    expect(clone.textContent).not.toContain('来自 Slack');
+    expect(clone.textContent).toContain('帮我看下这个报错');
+  });
+
+  // Value: real UserMessage -> visible edit control -> real prefilled textarea.
+  // Regression: bf25dbaf6b (#4367) restored actions and the editing branch for clean IM.
+  // Existing card/edit-box tests mount those children separately and miss this transition.
+  // Minimal unit input: the last, non-first user-text IM message in an idle task.
+  // Standalone file: 6.69s Vitest / 7.64s command wall, including real message/editor imports.
+  it('opens the real inline editor from a clean IM message action', async () => {
+    render(
+      <MemoryRouter>
+        <ConfirmDialogProvider>
+          <Tooltip.Provider>
+            <UserMessage
+              content="Please check the error"
+              workingDir=""
+              sessionId="clean-im-edit-session"
+              messageClientId="clean-im-edit-message"
+              isFirstUserMessage={false}
+              isLastUserMessage
+              sessionRunning={false}
+              hookSource={{ im: 'slack', contentFormat: 'user-text', userText: 'Please check the error' }}
+            />
+          </Tooltip.Provider>
+        </ConfirmDialogProvider>
+      </MemoryRouter>,
+    );
+    expect(screen.getByText('Cindy · 来自 Slack')).toBeTruthy();
+    expect(screen.queryByRole('textbox')).toBeNull();
+    fireEvent.mouseEnter(screen.getByText('Please check the error').closest('[data-user-msg-id]')!);
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: i18n.t('chat.messageActionBar.edit') }));
+    });
+    expect((screen.getByRole('textbox') as HTMLTextAreaElement).value).toBe('Please check the error');
+    expect(screen.getByRole('button', { name: i18n.t('chat.userMessage.editCancel') })).toBeTruthy();
+  });
+});
+
+describe('teammate DM attachment-only bubbles in share images', () => {
+  // Value: real UserMessage -> production stripMessageSources, the share-image path.
+  // Regression: #6624 moved teammate DM attachments into the bubble, which was still
+  // marked as a removable source label when it had no text, so sharing dropped the attachment.
+  // Coverage gap: the existing share test only covers IM source headers, not DM attachments.
+  // Minimal unit input: a teammate DM user message with one image or one file and no text.
+  // Standalone file: 3.00s Vitest, including the existing HookTaskCard cases.
+  it.each([
+    ['image', { images: [{ base64: 'iVBORw0KGgo=', mimeType: 'image/png', originalName: 'shot.png' }] }],
+    ['file', { files: [{ name: 'report.pdf', path: '/fixture/report.pdf' }] }],
+  ])('keeps an %s-only message when the share image strips source labels', async (_kind, attachments) => {
+    let container!: HTMLElement;
+    await act(async () => {
+      ({ container } = render(
+        <MemoryRouter>
+          <ConfirmDialogProvider>
+            <Tooltip.Provider>
+              <UserMessage content="" workingDir="" simplifiedBotConversation {...attachments} />
+            </Tooltip.Provider>
+          </ConfirmDialogProvider>
+        </MemoryRouter>,
+      ));
+    });
+    const clone = container.cloneNode(true) as HTMLElement;
+    stripMessageSources(clone);
+    if ('images' in attachments) expect(clone.querySelector('img[alt="shot.png"]')).toBeTruthy();
+    else expect(clone.textContent).toContain('report.pdf');
+  });
 });

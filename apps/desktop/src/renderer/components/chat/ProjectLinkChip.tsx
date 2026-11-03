@@ -16,11 +16,13 @@
 import { useMemo } from 'react';
 import { FolderOpen } from 'lucide-react';
 import { useLocation, useNavigate } from 'react-router-dom';
+import { useTranslation } from 'react-i18next';
 
 import { parseProjectDeepLinkHref, projectDisplayName } from '@/lib/deepLink';
 import { useSessionNavigationMode } from '@/features/cc-agent/embeddedSessionNavigation';
 import { requestProjectFocus } from '@/state/pendingProjectFocus';
 import { InlineReferenceChip } from './InlineReferenceChip';
+import { useLinkContextMenu } from './useLinkContextMenu';
 
 export interface ProjectLinkChipProps {
   href: string;
@@ -29,32 +31,14 @@ export interface ProjectLinkChipProps {
 }
 
 export function ProjectLinkChip({ href, label }: ProjectLinkChipProps) {
+  const { t } = useTranslation();
   const navigate = useNavigate();
   const location = useLocation();
   const navigationMode = useSessionNavigationMode();
   const target = useMemo(() => parseProjectDeepLinkHref(href), [href]);
 
-  // 深链形状不合法(理论上被 tokenizer / 渲染分支挡住,防御性兜底)→ 纯文本。
-  if (!target) return <span>{label ?? href}</span>;
-
-  const display = label?.trim() || projectDisplayName(target.workingDir);
-
-  // embedded 会话面板(Orca worker 等)不拥有宿主路由:navigate('/cc-agent')
-  // 会把宿主页面整个切走、把用户拽出嵌入上下文——与 SessionLinkChip 同口径,
-  // 渲染为不可点的静态 chip(review P2)。
-  if (navigationMode === 'sidebar-embedded') {
-    return (
-      <InlineReferenceChip
-        label={display}
-        icon={<FolderOpen aria-hidden />}
-        tooltip={display}
-        ariaLabel={display}
-        className="relative top-[-1px] -my-[1px] max-w-[min(240px,55vw)] cursor-default align-middle"
-      />
-    );
-  }
-
   const handleClick = () => {
+    if (!target || navigationMode === 'sidebar-embedded') return;
     // 与 MainLayout.handleDeepLinkPayload 的 project 分支同语义:发一次性
     // focus 信号,消费方(CCAgentSidebarUpper → ExpandedView)不在挂载态时
     // 信号沉淀,先 navigate 回 /cc-agent 促其 mount。
@@ -63,15 +47,33 @@ export function ProjectLinkChip({ href, label }: ProjectLinkChipProps) {
     const inExpandedView = path.startsWith('/cc-agent') && !path.startsWith('/cc-agent/files/');
     if (!inExpandedView) navigate('/cc-agent');
   };
+  const linkMenu = useLinkContextMenu(
+    href,
+    navigationMode === 'sidebar-embedded'
+      ? []
+      : [
+          {
+            label: t('chat.markdownRenderer.locateProject'),
+            icon: <FolderOpen className="mr-2 h-4 w-4" />,
+            run: handleClick,
+          },
+        ],
+  );
+  if (!target) return <span>{label ?? href}</span>;
+  const display = label?.trim() || projectDisplayName(target.workingDir);
 
   return (
-    <InlineReferenceChip
-      label={display}
-      icon={<FolderOpen aria-hidden />}
-      tooltip={display}
-      ariaLabel={display}
-      onClick={handleClick}
-      className="relative top-[-1px] -my-[1px] max-w-[min(240px,55vw)] align-middle"
-    />
+    <>
+      <InlineReferenceChip
+        label={display}
+        icon={<FolderOpen aria-hidden />}
+        tooltip={display}
+        ariaLabel={display}
+        onClick={navigationMode === 'sidebar-embedded' ? undefined : handleClick}
+        onContextMenu={linkMenu.onContextMenu}
+        className="relative top-[-1px] -my-[1px] max-w-[min(240px,55vw)] align-middle"
+      />
+      {linkMenu.menu}
+    </>
   );
 }

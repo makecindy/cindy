@@ -52,6 +52,22 @@ describe('ImageChannelRegistry', () => {
     expect(registry.isProviderEditReady('unknown')).toBe(false);
   });
 
+  it('unregister releases only the selected provider and allows a new channel for that ID', () => {
+    const registry = new ImageChannelRegistry();
+    const xd = channel(true);
+    registry.register('xd', xd);
+    registry.register('dynamic', channel(true));
+    registry.unregister('dynamic');
+    registry.unregister('dynamic');
+    expect(registry.isProviderReady('dynamic')).toBe(false);
+    expect(registry.isProviderEditReady('dynamic')).toBe(false);
+    expect(() => registry.resolve('dynamic')).toThrow(/没有可用的执行通道/);
+    expect(registry.resolve('xd')).toBe(xd);
+    const replacement = channel(true);
+    registry.register('dynamic', replacement);
+    expect(registry.resolve('dynamic')).toBe(replacement);
+  });
+
   it('supportsEdit: false 的通道 resolve 后仍携带该标记,供派发层拒改图请求', () => {
     const registry = new ImageChannelRegistry();
     const generateOnly: ImageChannel = { ...channel(true), supportsEdit: false };

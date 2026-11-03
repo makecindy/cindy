@@ -4,7 +4,12 @@ import { REMOTE_DESKTOP_NETWORK as net } from "@cindy/device-link";
 import { DESKTOP_RTC_SCRIPT } from "../viewerRtc";
 
 // Executes the exact static script embedded in WKWebView, with only RTC/DOM replaced.
-function viewer(trickle = true, autoConfig = true, frameCallback = true) {
+function viewer(
+  trickle = true,
+  autoConfig = true,
+  frameCallback = true,
+  network: object = net,
+) {
   let api: any;
   const messages: any[] = [];
   const peers: any[] = [];
@@ -64,7 +69,7 @@ function viewer(trickle = true, autoConfig = true, frameCallback = true) {
   const retained = vi.fn();
   const release = vi.fn();
   const context = vm.createContext({
-    net,
+    net: network,
     iceServers: [],
     window: { RTCPeerConnection: Peer },
     RTCPeerConnection: Peer,
@@ -217,6 +222,25 @@ it("does not replenish retry budget from a brief connection", async () => {
   h.api.stop();
 });
 
+it("waits for local consent without consuming network retries and cancels on exit", async () => {
+  const h = viewer();
+  await h.api.start();
+  for (let i = 0; i < 12; i++) {
+    h.api.fail("capture-pending");
+    await vi.advanceTimersByTimeAsync(net.retryMs.at(-1)!);
+  }
+  expect(h.peers).toHaveLength(13);
+  await h.answer();
+  for (const delay of net.retryMs) {
+    h.change("failed");
+    await vi.advanceTimersByTimeAsync(delay);
+  }
+  expect(h.peers).toHaveLength(16);
+  h.api.fail("capture-pending");
+  h.api.stop();
+  expect(vi.getTimerCount()).toBe(0);
+});
+
 it("accepts a cold-host answer after readiness, Windows probe, sources and offer", async () => {
   const h = viewer();
   await h.api.start();
@@ -330,13 +354,17 @@ it("reloads credentials on recovery and supplies the backup as well as the prima
   h.api.stop();
 });
 
-it("bounds native config wait, ignores late/duplicate config, and preserves another viewer", async () => {
+it("bounds bridged config wait, ignores late/duplicate config, and preserves another viewer", async () => {
   const a = viewer(true, false),
     b = viewer();
   await a.api.start();
   await b.api.start();
   const pending = a.latest("iceConfig");
-  await vi.advanceTimersByTimeAsync(3500);
+  await vi.advanceTimersByTimeAsync(
+    net.iceConfigMs + net.iceConfigBridgeMs - 1,
+  );
+  expect(a.peers).toHaveLength(0);
+  await vi.advanceTimersByTimeAsync(1);
   expect(a.peers).toHaveLength(1);
   await a.api.config({
     ...pending,
@@ -349,6 +377,31 @@ it("bounds native config wait, ignores late/duplicate config, and preserves anot
   b.api.stop();
   expect(vi.getTimerCount()).toBe(0);
 });
+
+it.each([true, false])(
+  "keeps slow TURN configuration when budget fields are present=%s",
+  async (current) => {
+    const { iceConfigMs, iceConfigBridgeMs, ...legacyNet } = net;
+    const h = viewer(true, false, true, current ? net : legacyNet);
+    await h.api.start();
+    const pending = h.latest("iceConfig");
+    await vi.advanceTimersByTimeAsync(5_000);
+    expect(h.peers).toHaveLength(0);
+    const servers = [
+      {
+        urls: ["turn:slow.example.test:3478"],
+        username: "short-lived",
+        credential: "test",
+      },
+    ];
+    await h.api.config({ ...pending, iceServers: servers });
+    expect(h.peers[0].configuration.iceServers).toEqual(servers);
+    await vi.advanceTimersByTimeAsync(iceConfigMs + iceConfigBridgeMs);
+    expect(h.peers).toHaveLength(1);
+    h.api.stop();
+    expect(vi.getTimerCount()).toBe(0);
+  },
+);
 
 it("never starts media after exit while credentials are pending", async () => {
   const h = viewer(true, false);

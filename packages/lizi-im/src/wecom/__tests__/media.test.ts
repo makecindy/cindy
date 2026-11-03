@@ -2,15 +2,16 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import {
   mimeTypeForFilename,
-  persistWecomDownload,
   readWecomOutboundFile,
   resolveAllowedWecomOutboundFile,
   safeWecomFilename,
+  stageWecomDownload,
 } from "../media.js";
+import type { IMHostFileStaging } from "../../types.js";
 
 const tempDirs: string[] = [];
 
@@ -39,35 +40,81 @@ describe("WeCom media helpers", () => {
     expect(safeWecomFilename("COM10.log")).toBe("COM10.log");
   });
 
-  it("persists a downloaded file below the channel directory", async () => {
-    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "cindy-wecom-"));
-    tempDirs.push(dir);
-    const stored = await persistWecomDownload({
-      mediaDir: dir,
+  it("stages a downloaded file through host.files with a sanitized name", async () => {
+    const staging = await makeStaging();
+    const stored = await stageWecomDownload({
+      files: staging.files,
       buffer: Buffer.from("hello"),
       filename: "../notes.txt",
     });
-    expect(path.dirname(stored.absPath)).toBe(dir);
+    expect(staging.files.stage).toHaveBeenCalledTimes(1);
+    expect(staging.files.stage).toHaveBeenCalledWith({
+      integration: "wecom",
+      buffer: Buffer.from("hello"),
+      fileName: "notes.txt",
+    });
+    expect(path.dirname(stored.absPath)).toBe(staging.dir);
     expect(await fs.readFile(stored.absPath, "utf8")).toBe("hello");
     expect(stored.originalName).toBe("notes.txt");
     expect(stored.mimeType).toBe("text/plain");
+
+    await stored.discard();
+    expect(await fs.readdir(staging.dir)).toEqual([]);
   });
 
-  it("removes a staged download when ownership changes during the write", async () => {
-    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "cindy-wecom-"));
-    tempDirs.push(dir);
+  it("applies the fallback extension when the platform gives no filename", async () => {
+    const staging = await makeStaging();
+    const stored = await stageWecomDownload({
+      files: staging.files,
+      buffer: Buffer.from([1, 2, 3]),
+      fallbackExtension: ".jpg",
+    });
+    expect(stored.originalName).toBe("attachment.jpg");
+    expect(stored.mimeType).toBe("image/jpeg");
+  });
+
+  it("rejects empty downloads without staging", async () => {
+    const staging = await makeStaging();
+    await expect(
+      stageWecomDownload({
+        files: staging.files,
+        buffer: Buffer.alloc(0),
+        filename: "empty.txt",
+      }),
+    ).rejects.toThrow("WECOM_MEDIA_EMPTY");
+    expect(staging.files.stage).not.toHaveBeenCalled();
+  });
+
+  it("does not stage when ownership is already stale", async () => {
+    const staging = await makeStaging();
+    await expect(
+      stageWecomDownload({
+        files: staging.files,
+        buffer: Buffer.from("stale"),
+        filename: "stale.txt",
+        shouldKeep: () => false,
+      }),
+    ).rejects.toThrow("WECOM_MEDIA_STALE");
+    expect(staging.files.stage).not.toHaveBeenCalled();
+  });
+
+  it("discards a staged download when ownership changes during staging", async () => {
+    const staging = await makeStaging();
     let checks = 0;
 
     await expect(
-      persistWecomDownload({
-        mediaDir: dir,
+      stageWecomDownload({
+        files: staging.files,
         buffer: Buffer.from("stale"),
         filename: "stale.txt",
         shouldKeep: () => (checks += 1) === 1,
       }),
     ).rejects.toThrow("WECOM_MEDIA_STALE");
 
-    expect(await fs.readdir(dir)).toEqual([]);
+    expect(staging.files.stage).toHaveBeenCalledTimes(1);
+    expect(staging.discards).toHaveLength(1);
+    expect(staging.discards[0]).toHaveBeenCalledTimes(1);
+    expect(await fs.readdir(staging.dir)).toEqual([]);
   });
 
   it("selects outbound media types from safe metadata", async () => {
@@ -117,3 +164,21 @@ describe("WeCom media helpers", () => {
     ).resolves.toBeNull();
   });
 });
+
+/** Fake host staging that writes into a temp dir so discard can be observed on disk. */
+async function makeStaging() {
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), "cindy-wecom-staging-"));
+  tempDirs.push(dir);
+  const discards: Array<ReturnType<typeof vi.fn>> = [];
+  const stage = vi.fn<IMHostFileStaging["stage"]>(async ({ buffer, fileName }) => {
+    const absPath = path.join(dir, fileName);
+    await fs.writeFile(absPath, buffer);
+    const discard = vi.fn(async () => {
+      await fs.rm(absPath, { force: true });
+    });
+    discards.push(discard);
+    return { absPath, discard };
+  });
+  const files: IMHostFileStaging & { stage: typeof stage } = { stage };
+  return { dir, files, discards };
+}

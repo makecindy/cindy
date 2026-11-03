@@ -27,6 +27,8 @@ export interface LibrarySqlServiceDeps {
   workerScriptPath(): string;
   /** better-sqlite3 模块绝对路径(生产 = resolveBetterSqliteModuleEntry)。 */
   betterSqliteModulePath(): string;
+  /** Separate Electron native binding selected by Main (Node/package default when absent). */
+  betterSqliteNativeBinding?(): string | undefined;
   /** 进程内执行体(单测注入;缺省时拉真 worker)。 */
   createCore?: (DatabaseCtor: SqliteDatabaseConstructor) => ReturnType<typeof createLibraryDbCore>;
   /** 进程内构造器(仅当 createCore 提供时使用;测试直连 require 结果)。 */
@@ -62,7 +64,10 @@ export class LibrarySqlService {
     if (this.core) throw new Error('in-process mode has no worker');
     if (!this.worker) {
       const worker = new Worker(this.deps.workerScriptPath(), {
-        workerData: { betterSqliteModulePath: this.deps.betterSqliteModulePath() },
+        workerData: {
+          betterSqliteModulePath: this.deps.betterSqliteModulePath(),
+          betterSqliteNativeBinding: this.deps.betterSqliteNativeBinding?.(),
+        },
       });
       this.worker = worker;
       worker.on('message', (reply: WorkerReply) => {

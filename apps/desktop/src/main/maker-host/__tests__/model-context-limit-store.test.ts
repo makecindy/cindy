@@ -2,7 +2,8 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 
-import { afterAll, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { BUNDLED_CATALOG } from '@cindy/model-providers';
 
 const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'cindy-model-context-limit-'));
 let ownerId = 'test-owner';
@@ -12,7 +13,7 @@ vi.mock('electron', () => ({
 }));
 
 // Budget reconciliation does not exercise native account credential IO.
-vi.mock('../subscription-account-auth.js', () => ({ readClaudeAccountOAuth: () => null }));
+vi.mock('../subscription-account-auth.js', () => ({ subscriptionAccountKind: () => null }));
 
 vi.mock('../logger-adapter.js', () => ({
   desktopMakerLogger: {
@@ -35,6 +36,10 @@ import {
   writeModelContextLimit,
   writeModelContextLimits,
   writeModelContextLimitsWithRefresh,
+  readModelCompactionPct,
+  stageProviderModelCompactionClear,
+  resolveModelCompactionPct,
+  writeModelCompactionWithRefresh,
 } from '../model-context-limit-store';
 
 import { clearSessionProvider } from '../session-provider-store.js';
@@ -47,11 +52,89 @@ function writeRawPrefs(value: unknown): void {
 }
 
 describe('model context limit store', () => {
+  // Unit: one model edit must reach every engine, including a later-enabled bridge alias;
+  // the old test only checked an explicit batch of per-harness writes.
+  it('shares one supplier/model policy across harnesses and resets to 90 without reviving old globals', async () => {
+    const targets = [{ providerId: 'openai', modelId: 'gpt' }];
+    const routes = [
+      ['codex', 'gpt'], ['pi', 'gpt'], ['claude-code', 'chatgpt/gpt'],
+    ] as const;
+    fs.writeFileSync(path.join(path.dirname(PREFS), 'compaction-settings.json'), JSON.stringify({ claudeCodeAutoCompactPct: 75 }));
+    fs.writeFileSync(path.join(path.dirname(PREFS), 'pi-compaction-settings.json'), JSON.stringify({ piAutoCompactPct: 85 }));
+    writeRawPrefs({ limits: { 'codex:openai:gpt': 272_000 } });
+    for (const [agent, model] of routes)
+      expect(resolveModelCompactionPct(BUNDLED_CATALOG, agent, 'openai', model)).toBe(90);
+    expect(readModelCompactionPct('openai', 'gpt')).toBeNull();
+    await writeModelCompactionWithRefresh(targets, 80, async () => {}, async () => {});
+    __testing.invalidate();
+    for (const [agent, model] of routes)
+      expect(resolveModelCompactionPct(BUNDLED_CATALOG, agent, 'openai', model)).toBe(80);
+    expect(JSON.parse(fs.readFileSync(PREFS, 'utf8')).compactionPcts).toEqual({ '["openai","gpt"]': 80 });
+    expect(readModelCompactionPct('xd', 'gpt')).toBeNull();
+    expect(readModelCompactionPct('openai', 'other')).toBeNull();
+    await expect(writeModelCompactionWithRefresh(targets, 60, async () => { throw new Error('refresh failed'); }, async () => {})).rejects.toThrow('refresh failed');
+    expect(readModelCompactionPct('openai', 'gpt')).toBe(80);
+    await writeModelCompactionWithRefresh(targets, null, async () => {}, async () => {});
+    for (const [agent, model] of routes)
+      expect(resolveModelCompactionPct(BUNDLED_CATALOG, agent, 'openai', model)).toBe(90);
+    expect(readModelCompactionPct('openai', 'gpt')).toBeNull();
+    expect(readModelContextLimit('codex', 'openai', 'gpt')).toBe(272_000);
+  });
   beforeEach(() => {
     ownerId = 'test-owner';
     fs.mkdirSync(path.dirname(PREFS), { recursive: true });
     if (fs.existsSync(PREFS)) fs.unlinkSync(PREFS);
     __testing.invalidate();
+  });
+
+  // PR #7460 deletion P1, unit: existing write/reset tests did not cover removing
+  // every model of one connection, including off-catalog models and rollback.
+  // Windows CI #7300: successive atomic writes can share an mtime. Keep real
+  // disk writes but fix their timestamps to expose stale deletion/rollback caches.
+  it('clears only the exact provider compaction policies and restores after deletion failure', async () => {
+    const rename = fs.renameSync;
+    const timestamp = new Date('2026-01-01T00:00:00Z');
+    vi.spyOn(fs, 'renameSync').mockImplementation((source, target) => {
+      rename(source, target);
+      if (target === PREFS) fs.utimesSync(target, timestamp, timestamp);
+    });
+    const providerId = 'custom:quote"connection';
+    const target = { providerId, modelId: 'gpt' };
+    const retired = { providerId, modelId: 'retired' };
+    const other = { providerId: `${providerId}:other`, modelId: 'gpt' };
+    const save = (targets: typeof target[], pct: number) =>
+      writeModelCompactionWithRefresh(targets, pct, async () => {}, async () => {});
+    await save([target, retired], 65);
+    await save([other], 80);
+    writeModelContextLimit('codex', providerId, 'gpt', 272_000);
+    const restore = stageProviderModelCompactionClear(providerId);
+    expect(readModelCompactionPct(providerId, 'gpt')).toBeNull();
+    expect(readModelCompactionPct(providerId, 'retired')).toBeNull();
+    expect(readModelCompactionPct(other.providerId, 'gpt')).toBe(80);
+    expect(readModelContextLimit('codex', providerId, 'gpt')).toBe(272_000);
+    expect(stageProviderModelCompactionClear(providerId)()).toBe(true);
+    await save([other], 70);
+    expect(readModelCompactionPct(other.providerId, 'gpt')).toBe(70);
+    expect(readModelCompactionPct(providerId, 'gpt')).toBeNull();
+    expect(restore()).toBe(true);
+    expect(readModelCompactionPct(providerId, 'gpt')).toBe(65);
+    expect(readModelCompactionPct(providerId, 'retired')).toBe(65);
+    expect(readModelCompactionPct(other.providerId, 'gpt')).toBe(70);
+  });
+
+  it('pins deletion rollback to the original owner and preserves newer compaction edits', async () => {
+    const targets = ['gpt', 'retired'].map(modelId => ({ providerId: 'custom:p', modelId }));
+    const save = (pct: number) => writeModelCompactionWithRefresh(targets, pct, async () => {}, async () => {});
+    await save(65);
+    const restore = stageProviderModelCompactionClear('custom:p');
+    await writeModelCompactionWithRefresh([targets[0]!], 80, async () => {}, async () => {});
+    ownerId = 'deletion-other-owner';
+    await save(70);
+    expect(restore()).toBe(true);
+    expect(readModelCompactionPct('custom:p', 'retired')).toBe(70);
+    ownerId = 'test-owner';
+    expect(readModelCompactionPct('custom:p', 'gpt')).toBe(80);
+    expect(readModelCompactionPct('custom:p', 'retired')).toBe(65);
   });
 
   it.each([1_000_000, null])('rolls back failed refresh for limit %s, including mixed/absent aliases', async (limit) => {
@@ -233,6 +316,8 @@ describe('model context limit store', () => {
     expect(fs.existsSync(PREFS)).toBe(false);
   });
 });
+
+afterEach(() => vi.restoreAllMocks());
 
 afterAll(() => fs.rmSync(tempRoot, { recursive: true, force: true }));
 

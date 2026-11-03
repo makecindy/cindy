@@ -17,6 +17,35 @@ final class MacUnlockProfileTests: XCTestCase {
   func testSelectsOnlyKnownSecureProfile() throws {
     XCTAssertEqual(try MacUnlockProfile.select(valid), .init(field: 3, submit: 4, label: 2))
   }
+  func testSelectsUniqueSurfaceAcrossDisplaysRegardlessOfOrder() throws {
+    let empty = [node(nil, "AXWindow", "login")]
+    XCTAssertEqual(try MacUnlockProfile.selectWindow([valid]), 0)
+    XCTAssertEqual(try MacUnlockProfile.selectWindow([empty, valid]), 1)
+    XCTAssertEqual(try MacUnlockProfile.selectWindow([valid, empty]), 0)
+    let collapsed = [node(nil, "AXWindow", "login"), node(0, "AXStaticText", "FocusedUser", matches: true)]
+    XCTAssertEqual(try MacUnlockProfile.selectWindow([empty, collapsed]), 1)
+    // A button need not exist yet; selection must survive its later appearance.
+    XCTAssertEqual(try MacUnlockProfile.selectWindow([empty, Array(valid.dropLast())]), 1)
+  }
+  func testRejectsAmbiguousOrUnavailableDisplaySurfaces() {
+    let empty = [node(nil, "AXWindow", "login")]
+    let collapsed = [node(nil, "AXWindow", "login"), node(0, "AXStaticText", "FocusedUser", matches: true)]
+    for windows in [[], [empty], [empty, empty], [valid, valid], [collapsed, collapsed], [valid, collapsed]] {
+      XCTAssertThrowsError(try MacUnlockProfile.selectWindow(windows))
+    }
+  }
+  func testOtherWindowsCannotHideUnsafeFlows() {
+    var otherAccount = valid
+    otherAccount[2] = node(1, "AXStaticText", "FocusedUser", matches: false)
+    let unsafe = [otherAccount, [node(nil, "AXWindow", "keychain")],
+      [node(nil, "AXWindow", "login", subrole: "AXDialog")],
+      [node(nil, "AXWindow", "login"), node(0, "AXTextField", "unknown")],
+      [node(nil, "AXWindow", "login"), node(0, "AXList")]]
+    for sibling in unsafe {
+      XCTAssertThrowsError(try MacUnlockProfile.selectWindow([valid, sibling]))
+      XCTAssertThrowsError(try MacUnlockProfile.selectWindow([sibling, valid]))
+    }
+  }
   func testFlatLayoutDoesNotRequireSubmitBeforeWriting() throws {
     let field = [node(nil, "AXWindow", "login"),
       node(0, "AXStaticText", "FocusedUser", matches: true),

@@ -13,7 +13,7 @@
  * 不要把视觉组件混在这里 —— Toast.tsx / ToastContainer.tsx 另外放。
  */
 
-export type ToastVariant = 'info' | 'success' | 'warning' | 'error';
+export type ToastVariant = 'loading' | 'info' | 'success' | 'warning' | 'error';
 
 /**
  * 提示来源(第三方供文案时的身份头,由宿主画在正文前;当前消费方:意识
@@ -252,6 +252,10 @@ function createItem(variant: ToastVariant, message: string, options?: ToastOptio
 }
 
 export const toast = {
+  /** Neutral progress; the caller dismisses it when the operation settles. */
+  loading(message: string, options?: ToastOptions): string {
+    return createItem('loading', message, { duration: 0, ...options });
+  },
   info(message: string, options?: ToastOptions): string {
     return createItem('info', message, options);
   },

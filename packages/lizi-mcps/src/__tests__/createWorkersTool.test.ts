@@ -55,6 +55,24 @@ function hardLimitFailure(hardLimit: number) {
 }
 
 describe('create_workers tool', () => {
+  // PR2 unit: batch results must retain each actual cwd and optional checkout independently.
+  it('keeps mixed worktree and existing-directory requests and spawn results distinct', async () => {
+    const createWorker = vi.fn<CreateWorkerDeps['createWorker']>()
+      .mockResolvedValueOnce({...created(1, 5), workingDir: '/tree/apps/web', worktree: {path: '/tree', branch: 'cindy/new'}})
+      .mockResolvedValueOnce({...created(2, 5), workingDir: '/existing'});
+    const result = parse(await setup(createWorker).call('create_workers', {workers: [
+      {...worker(1), working_dir: '/repo/apps/web', new_worktree: {source_branch: 'release'}},
+      {...worker(2), working_dir: '/existing'},
+    ]}));
+    expect(createWorker).toHaveBeenNthCalledWith(1, expect.objectContaining({workingDir: '/repo/apps/web', worktree: {sourceBranch: 'release'}}));
+    expect(createWorker.mock.calls[1]?.[0]).not.toHaveProperty('worktree');
+    expect(result.results).toMatchObject([
+      {working_dir: '/tree/apps/web', worktree: {path: '/tree', branch: 'cindy/new'}},
+      {working_dir: '/existing'},
+    ]);
+    expect(result.results[1]).not.toHaveProperty('worktree');
+  });
+
   it('preserves each worker directory independently in a batch', async () => {
     const createWorker = vi.fn<CreateWorkerDeps['createWorker']>()
       .mockResolvedValueOnce(created(1, 5)).mockResolvedValueOnce(created(2, 5));
@@ -127,7 +145,9 @@ describe('create_workers tool', () => {
     }));
   });
 
-  it('stops a hard=3 batch after the first limit failure and summarizes all nine requests', async () => {
+  // PR #7933 unit: the existing explicit-agent batch covered hard-limit stopping,
+  // but omitted-agent requests must retain the same stop, skipped results and capacity report.
+  it.each([false, true])('stops a hard=3 batch and summarizes all nine requests (omit agent: %s)', async (omitAgent) => {
     let call = 0;
     const createWorker = vi.fn<CreateWorkerDeps['createWorker']>(async () => {
       call += 1;
@@ -136,7 +156,11 @@ describe('create_workers tool', () => {
     const registry = setup(createWorker);
 
     const result = parse(await registry.call('create_workers', {
-      workers: Array.from({ length: 9 }, (_, index) => worker(index + 1)),
+      workers: Array.from({ length: 9 }, (_, index) => {
+        const spec = worker(index + 1);
+        if (omitAgent) delete spec.agent;
+        return spec;
+      }),
     }));
 
     expect(result).toMatchObject({
@@ -271,4 +295,19 @@ describe('create_workers tool', () => {
     ]);
     expect(createWorker).toHaveBeenCalledTimes(1);
   });
+});
+
+// Unit/public batch handler: an unusable saved route must fail only its item, not the batch.
+it('keeps processing after an omitted-agent default fails and returns the next actual route', async () => {
+  const createWorker = vi.fn<CreateWorkerDeps['createWorker']>()
+    .mockResolvedValueOnce({ ok: false, errorCode: 'INVALID_PARAMS', message: 'Saved route unavailable; specify agent and retry' })
+    .mockResolvedValueOnce({ ...created(2, 5), resolved: { agent: 'pi', model: 'test-model', providerId: 'provider',
+      agentDeviceId: null, effort: 'high', fastMode: false }, defaults: { source: 'original-policy', fallbackReason: 'saved provider disconnected' } });
+  const result = parse(await setup(createWorker).call('create_workers', { workers: [
+    { role: 'developer', label: 'one' }, { role: 'developer', label: 'two', agent: 'pi' },
+  ] }));
+  expect(result).toMatchObject({ success_count: 1, failure_count: 1, skipped_count: 0, results: [
+    { status: 'failed', error_code: 'INVALID_PARAMS' }, { status: 'created', agent: 'pi', model: 'test-model',
+      provider_id: 'provider', agent_device_id: 'local', defaults: { source: 'original-policy', fallback_reason: 'saved provider disconnected' } },
+  ] });
 });

@@ -25,8 +25,10 @@ import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
 
 import { jsonObjectArg } from './json-object-arg.js';
+import { withAccountDataAccess } from './account-data-access.js';
+import { fitInlineImages } from './shared/inlineImages.js';
 import { PathBoundaryError, resolvePathInsideRoot } from './shared/assertInsidePath.js';
-import type { SlackHookMcpDeps, SlackToolBridgeLike } from './types.js';
+import type { CompressInlineImageFn, SlackHookMcpDeps, SlackToolBridgeLike } from './types.js';
 
 import descStatus from './prompts/cindy_slack/tools/slack_status.md?raw';
 import descListTools from './prompts/cindy_slack/tools/slack_list_tools.md?raw';
@@ -38,7 +40,9 @@ const RESULT_MAX_CHARS = 50_000;
 /** 工具结果形状(MCP content block; 索引签名对齐 SDK CallToolResult)。 */
 interface SlackToolResult {
   [key: string]: unknown;
-  content: Array<{ type: 'text'; text: string }>;
+  content: Array<
+    { type: 'text'; text: string } | { type: 'image'; data: string; mimeType: string }
+  >;
   isError?: true;
 }
 
@@ -95,7 +99,76 @@ async function deliver(
   data: unknown,
   outFile: string | undefined,
   workingDir: string | undefined,
+  assertCurrent: () => Promise<void>,
+  compressInlineImage?: CompressInlineImageFn,
 ): Promise<SlackToolResult> {
+  // MCP images must reach the model as image blocks, not base64 JSON spilled to a file.
+  if (
+    outFile === undefined &&
+    data &&
+    typeof data === 'object' &&
+    'content' in data &&
+    Array.isArray(data.content)
+  ) {
+    const imageBlocks = data.content.filter((block: { type?: string } | null) => block?.type === 'image');
+    const validImages = imageBlocks.filter(
+      (block: unknown): block is { type: 'image'; data: string; mimeType: string } => {
+        if (!block || typeof block !== 'object') return false;
+        const image = block as Record<string, unknown>;
+        return (
+          image.type === 'image' &&
+          typeof image.data === 'string' &&
+          image.data.length > 0 &&
+          image.data.length <= 7 * 1024 * 1024 &&
+          /^[A-Za-z0-9+/]*={0,2}$/.test(image.data) &&
+          typeof image.mimeType === 'string' &&
+          /^image\/(png|jpeg|gif|webp)$/.test(image.mimeType)
+        );
+      },
+    );
+    const fitted = await fitInlineImages(validImages.slice(0, 4), compressInlineImage);
+    await assertCurrent();
+    const omittedImages = {
+      invalid: imageBlocks.length - validImages.length,
+      countLimit: Math.max(0, validImages.length - 4),
+      inlineBudget: fitted.omitted,
+    };
+    const imageReport = {
+      imageCount: fitted.images.length,
+      unavailable: imageBlocks.length - fitted.images.length,
+      omittedImages,
+    };
+    if (fitted.images.length) {
+      await assertCurrent();
+      const metadata = {
+        ...data,
+        ...imageReport,
+        content: data.content.filter((block: { type?: string }) => block?.type !== 'image'),
+      };
+      const summary = await deliver(metadata, undefined, workingDir, assertCurrent);
+      await assertCurrent();
+      return {
+        ...summary,
+        content: [
+          ...summary.content,
+          // Keep omissions visible even if the text metadata spills to a file.
+          ...(imageReport.unavailable
+            ? [{ type: 'text' as const, text: JSON.stringify(imageReport) }]
+            : []),
+          ...fitted.images.map(image => ({ type: 'image' as const, ...image })),
+        ],
+      };
+    }
+    if (imageBlocks.length) {
+      await assertCurrent();
+      return jsonResult({
+        ok: false,
+        errorCode: 'IMAGE_UNAVAILABLE',
+        message: 'Slack 图片格式不支持或超过下载/内联大小限制。',
+        ...imageReport,
+      }, true);
+    }
+  }
   const text = JSON.stringify(data ?? null);
   if (outFile === undefined && text.length <= RESULT_MAX_CHARS) {
     return jsonResult({ ok: true, data });
@@ -106,6 +179,8 @@ async function deliver(
       const fileName = outFile ?? `slack-result-${Date.now().toString(36)}.json`;
       const abs = await resolvePathInsideRoot(workingDir, fileName);
       await fs.mkdir(path.dirname(abs), { recursive: true });
+      try { await assertCurrent(); }
+      catch { return errorResult('CAPABILITY_NOT_AVAILABLE', 'Account data is unavailable for this task.'); }
       await fs.writeFile(abs, text, 'utf-8');
       return jsonResult({
         ok: true,
@@ -143,7 +218,7 @@ export function createSlackMcpGatewayServer(deps: SlackHookMcpDeps): McpServer {
   const TEAM_ID_DESC =
     '可选: 以哪个 Slack workspace 的绑定身份执行(bindings 列表见 slack_status)。设备绑定了多个 workspace 时必须传, 否则 server 拒绝猜测(AMBIGUOUS_TEAM); 只绑一个时可省略';
 
-  server.tool('slack_status', descStatus.trim(), {}, async () => {
+  server.tool('slack_status', descStatus.trim(), {}, async () => withAccountDataAccess(deps.withAccountDataAccess, deps.getSessionContext?.().sessionId, async () => {
     const bridge = requireBridge(deps);
     if ('err' in bridge) return bridge.err;
     const local = bridge.availability();
@@ -167,7 +242,7 @@ export function createSlackMcpGatewayServer(deps: SlackHookMcpDeps): McpServer {
     const r = await bridge.callTool('status');
     if (!r.ok) return errorResult(r.error.code, r.error.message);
     return jsonResult({ ok: true, connected: true, ...(r.result as object) });
-  });
+  }));
 
   server.tool(
     'slack_list_tools',
@@ -179,13 +254,14 @@ export function createSlackMcpGatewayServer(deps: SlackHookMcpDeps): McpServer {
         .optional()
         .describe('可选: 把完整清单 JSON 写进会话工作目录的该相对路径, 只返回文件路径'),
     },
-    async ({ team_id, out_file }) => {
+    async ({ team_id, out_file }) => withAccountDataAccess(deps.withAccountDataAccess, deps.getSessionContext?.().sessionId, async assertCurrent => {
       const bridge = requireBridge(deps);
       if ('err' in bridge) return bridge.err;
       const r = await bridge.callTool('listTools', undefined, team_id ?? null);
+      await assertCurrent();
       if (!r.ok) return errorResult(r.error.code, r.error.message);
-      return deliver(r.result, out_file, deps.workingDir);
-    },
+      return deliver(r.result, out_file, deps.workingDir, assertCurrent, deps.compressInlineImage);
+    }),
   );
 
   server.tool(
@@ -193,7 +269,7 @@ export function createSlackMcpGatewayServer(deps: SlackHookMcpDeps): McpServer {
     descCallTool.trim(),
     {
       name: z.string().min(1).describe('工具名(slack_list_tools 可查)'),
-      arguments: jsonObjectArg('工具参数(按该工具的 inputSchema 传 JSON 对象; 无参可省略)').optional(),
+      arguments: jsonObjectArg('工具参数(按该工具的 inputSchema 传 JSON 对象; 无参可省略)'),
       team_id: z.string().optional().describe(TEAM_ID_DESC),
       out_file: z
         .string()
@@ -202,20 +278,15 @@ export function createSlackMcpGatewayServer(deps: SlackHookMcpDeps): McpServer {
           '可选: 把完整结果 JSON 写进会话工作目录的该相对路径(如 tmp/slack-result.json), 只返回文件路径 —— 结果大、要交给脚本处理时用。结果超 50KB 时即使不传也会自动落盘返回路径',
         ),
     },
-    async ({ name, arguments: toolArgs, team_id, out_file }) => {
+    async ({ name, arguments: toolArgs, team_id, out_file }) => withAccountDataAccess(deps.withAccountDataAccess, deps.getSessionContext?.().sessionId, async assertCurrent => {
       const bridge = requireBridge(deps);
       if ('err' in bridge) return bridge.err;
-      const r = await bridge.callTool(
-        'callTool',
-        {
-          name,
-          ...(toolArgs !== undefined ? { arguments: toolArgs } : {}),
-        },
-        team_id ?? null,
-      );
+      const r = await bridge.callTool('callTool', { name, ...(toolArgs !== undefined ? { arguments: toolArgs } : {}) }, team_id ?? null);
+      // Recheck before returning private bytes or spilling them to the workdir.
+      await assertCurrent();
       if (!r.ok) return errorResult(r.error.code, r.error.message);
-      return deliver(r.result, out_file, deps.workingDir);
-    },
+      return deliver(r.result, out_file, deps.workingDir, assertCurrent, deps.compressInlineImage);
+    }),
   );
 
   return server;

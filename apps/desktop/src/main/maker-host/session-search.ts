@@ -18,6 +18,8 @@
 
 import type { SessionSearchOptions, SessionSearchHit, SessionSearchFn } from '@cindy/mcps';
 
+import { getDeviceId } from '../authManager.js';
+import { buildSessionDeepLink } from '../deepLink.js';
 import { getDbClient } from '../localDb/client/current.js';
 import {
   buildMessagesFtsMatch,
@@ -34,7 +36,17 @@ const DEFAULT_LIMIT = 10;
 export const searchSessionsFn: SessionSearchFn = async (
   query: string,
   opts: SessionSearchOptions = {},
-): Promise<SessionSearchHit[]> => {
+): Promise<SessionSearchHit[]> => searchSessionsWithBotScope(query, opts, { botAccountWide: false });
+
+/**
+ * `botAccountWide`：宿主已判定这是伙伴主任务里主人本人（或主人事先安排）的一轮，可以搜全部任务。
+ * 其余伙伴调用只搜这个伙伴自己的会话与它开的后台任务。
+ */
+export async function searchSessionsWithBotScope(
+  query: string,
+  opts: SessionSearchOptions,
+  scopeOptions: { botAccountWide: boolean },
+): Promise<SessionSearchHit[]> {
   if (!query || query.trim().length === 0) return [];
   const limit = Math.max(1, Math.min(opts.limit ?? DEFAULT_LIMIT, 50));
   const escapedQuery = buildMessagesFtsMatch(query, 'AND');
@@ -72,16 +84,21 @@ export const searchSessionsFn: SessionSearchFn = async (
     sql += ` AND m.session_id = ?`;
     params.push(opts.sessionId);
   }
-  if (callerScope.kind === 'bot') {
+  if (callerScope.kind === 'bot' && !scopeOptions.botAccountWide) {
     // Bot ownership is resolved from the current runtime Session. The model can
     // optionally narrow within that set, but cannot widen it by supplying an
-    // arbitrary sessionId.
+    // arbitrary sessionId. Background tasks the Bot started are its own work too.
     sql += ` AND m.session_id IN (
       SELECT scoped.session_id
         FROM bot_session_links scoped
        WHERE scoped.bot_id = ?
+      UNION
+      SELECT delegated.child_session_id
+        FROM bot_delegations delegated
+       WHERE delegated.requesting_bot_id = ?
+         AND delegated.child_session_id IS NOT NULL
     )`;
-    params.push(callerScope.botId);
+    params.push(callerScope.botId, callerScope.botId);
   }
   if (opts.role) {
     sql += ` AND m.role = ?`;
@@ -99,9 +116,11 @@ export const searchSessionsFn: SessionSearchFn = async (
       content: string;
       score: number;
     }>(sql, params);
+    const deviceId = getDeviceId();
     return rows.map((r) => ({
       messageId: r.messageId,
       sessionId: r.sessionId,
+      sessionUrl: buildSessionDeepLink(r.sessionId, { deviceId }),
       role: r.role,
       ts: r.ts,
       snippet: buildSnippetFromContent(r.content, queryTokens),
@@ -113,4 +132,4 @@ export const searchSessionsFn: SessionSearchFn = async (
     log.warn('session_search: query failed', { error: msg });
     throw e;
   }
-};
+}

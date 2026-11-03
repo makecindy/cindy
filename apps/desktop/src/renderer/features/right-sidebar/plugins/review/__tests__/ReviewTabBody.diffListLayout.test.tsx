@@ -15,7 +15,7 @@
 // 本回归关心的契约;真实组件在 loaded 分支用 rAF 触发同一个回调。
 
 import { createElement, useEffect } from 'react';
-import { act, render } from '@testing-library/react';
+import { act, cleanup, render } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type { FileDiff, Hunk } from '@/lib/gitReview.types';
@@ -155,6 +155,7 @@ let originalOffsetHeight: PropertyDescriptor | undefined;
 let originalGetBoundingClientRect: typeof Element.prototype.getBoundingClientRect;
 
 beforeEach(() => {
+  vi.useFakeTimers();
   Object.assign(CARD_HEIGHTS, BASE_CARD_HEIGHTS);
   pendingObservations = [];
   observedTargets.clear();
@@ -188,11 +189,21 @@ beforeEach(() => {
   };
 });
 
-afterEach(() => {
-  if (originalOffsetHeight) {
-    Object.defineProperty(HTMLElement.prototype, 'offsetHeight', originalOffsetHeight);
+afterEach(async () => {
+  cleanup();
+  // virtual-core 的 scroll-end debounce 在卸载后仍可能待执行；
+  // 在 jsdom 还存活时清空回调，避免它逃到测试环境销毁之后。
+  try {
+    await act(async () => {
+      await vi.runOnlyPendingTimersAsync();
+    });
+  } finally {
+    vi.useRealTimers();
+    if (originalOffsetHeight) {
+      Object.defineProperty(HTMLElement.prototype, 'offsetHeight', originalOffsetHeight);
+    }
+    Element.prototype.getBoundingClientRect = originalGetBoundingClientRect;
   }
-  Element.prototype.getBoundingClientRect = originalGetBoundingClientRect;
 });
 
 function rowStarts(container: HTMLElement): number[] {
@@ -241,7 +252,7 @@ function renderDiffList() {
 
 async function flushAsyncWork() {
   await act(async () => {
-    await new Promise((resolve) => setTimeout(resolve, 60));
+    await vi.advanceTimersByTimeAsync(60);
   });
 }
 

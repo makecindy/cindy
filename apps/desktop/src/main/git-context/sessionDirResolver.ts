@@ -1,3 +1,4 @@
+import type { WorkerProjectInfo } from '../../shared/orca-worker-project';
 /**
  * sessionDirResolver — 推断「一个对话当前实际在哪个 git 工作目录干活」。
  *
@@ -10,7 +11,7 @@
  * 信号(按 agent):
  *   - Codex exec:每条命令 content.input.cwd = agent 当前 shell 目录,直接可信
  *     (实测:agent `cd` 进 worktree 后,后续每条命令的 cwd 都跟着变)。
- *   - Claude Code:Bash 不带 cwd;改用 Edit/Write/MultiEdit/NotebookEdit 的
+ *   - Claude Code:Bash 的字面量开头 cd 或 Edit/Write/MultiEdit/NotebookEdit 的
  *     input.file_path 绝对路径,取其所在目录(Read 不算——读文件 ≠ 在此工作)。
  *
  * 取「最近一条产出候选目录的 tool-use」(= 对话此刻在哪),用 readGitHead 校验:
@@ -69,10 +70,28 @@ export interface SessionGitDirResult {
 }
 
 /**
+ * A shell command's literal leading `cd <abs> &&` directory. Variables,
+ * substitutions, relative paths and later directory switches are not signals.
+ */
+export function extractLeadingCdDir(
+  command: string,
+  pathPlatform: NodeJS.Platform = process.platform,
+): string | null {
+  const match = /^\s*cd\s+(?:--\s+)?(?:'([^'\n]+)'|"([^"\n]+)"|([^\s;&|]+))\s*&&/.exec(command);
+  const dir = match?.[1] ?? match?.[2] ?? match?.[3];
+  const remaining = match ? command.slice(match[0].length) : '';
+  const hasLaterDirectorySwitch = /(?:^|[\s;&|()'"])(?:cd|pushd|popd)(?=[\s;&|()'"]|$)/.test(remaining);
+  if (dir && !hasLaterDirectorySwitch && !/[\x00-\x1f$`\\*?{}]/.test(dir) && path.isAbsolute(dir)) {
+    return posixDriveToWin32(dir, pathPlatform);
+  }
+  return null;
+}
+
+/**
  * 从一条 tool-use 消息 content(已是 JSON 文本)解析候选工作目录:
  *   - input.cwd 是绝对路径(Codex exec)→ 直接用;
  *   - toolName ∈ 编辑类 且 input.file_path 是绝对路径 → 取 path.dirname;
- *   - 其它(Read / 普通 Bash / 脏 JSON / 相对路径)→ null。
+ *   - 其它(Read / 无字面量 cd 的 Bash / 脏 JSON / 相对路径)→ null。
  * 纯函数,不碰 IO。
  */
 export function extractDirCandidate(
@@ -101,6 +120,16 @@ export function extractDirCandidate(
     if (typeof cwd === 'string' && cwd.trim() !== '' && path.isAbsolute(cwd)) {
       return posixDriveToWin32(cwd, pathPlatform);
     }
+  }
+
+  // Claude's Bash tool does not report cwd. A literal leading `cd ... &&`
+  // identifies where this command ran; ordinary Bash/Read remain non-signals.
+  // Do not evaluate variables, substitutions or relative paths. If another
+  // directory switch appears later, the leading directory is not a reliable
+  // signal; leave the actual directory to other telemetry or explicit selection.
+  if (toolName === 'Bash' && typeof (input as { command?: unknown }).command === 'string') {
+    const dir = extractLeadingCdDir((input as { command: string }).command, pathPlatform);
+    if (dir) return dir;
   }
 
   // cc 编辑类:先归一 POSIX 盘符路径(Windows 上 cc 常发 `/e/...`)再取 dirname。
@@ -149,6 +178,134 @@ export function collectUniqueTelemetryDirs(
     dirs.push(resolved);
   }
   return dirs;
+}
+
+/** A directory a task worked in, and whether it edited files there. */
+export interface TouchedDir {
+  dir: string;
+  /** A file-edit tool targeted this directory; command cwd alone only proves reading. */
+  edited: boolean;
+  /** Earliest tool-use time seen for this directory, when the row carried one. */
+  firstSeenAt: number | null;
+}
+
+const PI_EDIT_TOOL_NAMES = new Set(['edit', 'write']);
+
+/**
+ * Every directory a task worked in, newest first: command cwd / leading `cd`
+ * (Codex `exec`, Claude `Bash`, Pi `bash`), and file-edit targets (Claude
+ * Edit/Write, Codex `file_change`, Pi `edit`/`write`). Review uses this to find
+ * all repositories a deliverable spans; unlike the sidebar resolver it keeps
+ * older directories, and it records whether the task edited there, because a
+ * checkout the task only read must not be reviewed as its work.
+ */
+export function collectTouchedDirs(
+  rows: ReadonlyArray<{ content: string; createdAt?: number }>,
+  pathPlatform: NodeJS.Platform = process.platform,
+): TouchedDir[] {
+  const byDir = new Map<string, TouchedDir>();
+  const add = (candidate: string | null, edited: boolean, createdAt: number | undefined) => {
+    if (!candidate) return;
+    let resolved: string;
+    try {
+      resolved = path.resolve(candidate);
+    } catch {
+      return;
+    }
+    const at = typeof createdAt === 'number' && Number.isFinite(createdAt) ? createdAt : null;
+    const existing = byDir.get(resolved);
+    if (!existing) {
+      byDir.set(resolved, { dir: resolved, edited, firstSeenAt: at });
+      return;
+    }
+    existing.edited ||= edited;
+    if (at !== null && (existing.firstSeenAt === null || at < existing.firstSeenAt)) {
+      existing.firstSeenAt = at;
+    }
+  };
+  for (const row of rows) {
+    const touch = extractTouch(row.content, pathPlatform);
+    add(touch.commandDir, false, row.createdAt);
+    for (const filePath of touch.editedFiles) add(path.dirname(filePath), true, row.createdAt);
+  }
+  return [...byDir.values()];
+}
+
+function extractTouch(
+  content: string,
+  pathPlatform: NodeJS.Platform,
+): { commandDir: string | null; editedFiles: string[] } {
+  let obj: unknown;
+  try {
+    obj = JSON.parse(content);
+  } catch {
+    return { commandDir: null, editedFiles: [] };
+  }
+  if (!obj || typeof obj !== 'object') return { commandDir: null, editedFiles: [] };
+  const toolName = (obj as { toolName?: unknown }).toolName;
+  const input = (obj as { input?: unknown }).input as Record<string, unknown> | null | undefined;
+  if (typeof toolName !== 'string' || !input || typeof input !== 'object') {
+    return { commandDir: null, editedFiles: [] };
+  }
+  const absolute = (value: unknown): string | null =>
+    typeof value === 'string' && path.isAbsolute(value) ? posixDriveToWin32(value, pathPlatform) : null;
+
+  if (EDIT_TOOL_NAMES.has(toolName)) {
+    const filePath = absolute(input.file_path);
+    return { commandDir: null, editedFiles: filePath ? [filePath] : [] };
+  }
+  if (PI_EDIT_TOOL_NAMES.has(toolName)) {
+    // Pi stores edit/write targets in `path`; relative paths stay in the task directory.
+    const filePath = absolute(input.path);
+    return { commandDir: null, editedFiles: filePath ? [filePath] : [] };
+  }
+  if (toolName === 'file_change') {
+    const changes = Array.isArray(input.changes) ? input.changes : [];
+    return {
+      commandDir: null,
+      editedFiles: changes.flatMap((change) => {
+        const filePath = absolute((change as { path?: unknown } | null)?.path);
+        return filePath ? [filePath] : [];
+      }),
+    };
+  }
+  // Pi's lowercase `bash` has the same command shape as Claude's `Bash`.
+  if (toolName === 'bash') {
+    return {
+      commandDir: typeof input.command === 'string' ? extractLeadingCdDir(input.command, pathPlatform) : null,
+      editedFiles: [],
+    };
+  }
+  return { commandDir: extractDirCandidate(content, pathPlatform), editedFiles: [] };
+}
+
+async function queryTouchedDirTelemetryRows(
+  sessionId: string,
+): Promise<Array<{ content: string; createdAt: number }>> {
+  const rows: Array<{ content: string; createdAt: number }> = [];
+  let before: { createdAt: number; rowid: number } | undefined;
+  while (rows.length < MAX_LINKED_WORKTREE_SCAN) {
+    const page = await queryRecentToolUseContentRows(sessionId, { limit: SCAN_LIMIT, before });
+    if (page.length === 0) break;
+    for (const row of page) rows.push({ content: row.content, createdAt: row.createdAt });
+    const last = page[page.length - 1];
+    before = { createdAt: last.createdAt, rowid: last.rowid };
+    if (page.length < SCAN_LIMIT) break;
+  }
+  return rows;
+}
+
+/** Live wrapper for {@link collectTouchedDirs}. Never throws: no telemetry is an empty list. */
+export async function listSessionTouchedDirsLive(sessionId: string): Promise<TouchedDir[]> {
+  try {
+    return collectTouchedDirs(await queryTouchedDirTelemetryRows(sessionId));
+  } catch (err) {
+    log.warn('query touched dirs failed (no telemetry)', {
+      sessionId,
+      err: err instanceof Error ? err.message : String(err),
+    });
+    return [];
+  }
 }
 
 /**
@@ -365,4 +522,72 @@ export async function findLiveLinkedWorktreeLive(
     });
     return null;
   }
+}
+
+/** Canonical identities for inheritance; directory preserves the caller's spelling. */
+export interface WorkerProjectProbe extends WorkerProjectInfo {
+  commonDir: string | null;
+  checkoutRoot: string | null;
+  realDirectory: string | null;
+}
+
+/** PR2 can reuse this same-repository gate without changing MCP defaults in PR1. */
+export async function resolveWorkerInheritedDirectory(
+  lead: { id: string; workingDir: string | null; worktreePath?: string | null },
+  deps: {
+    infer: typeof resolveSessionGitDirLive;
+    probe: (dir: string) => Promise<WorkerProjectProbe>;
+  },
+): Promise<WorkerProjectProbe> {
+  const recorded = await deps.probe(lead.workingDir ?? '');
+  let inferred: SessionGitDirResult;
+  try {
+    inferred = await deps.infer({
+      sessionId: lead.id,
+      fallbackWorkingDir: lead.workingDir,
+      fallbackWorktreePath: lead.worktreePath ?? null,
+    });
+  } catch {
+    return recorded;
+  }
+  if (
+    inferred.source !== 'telemetry' ||
+    !inferred.workdir ||
+    inferred.workdir === recorded.directory ||
+    !recorded.commonDir ||
+    !recorded.checkoutRoot
+  )
+    return recorded;
+  const samePath = (a: string, b: string) =>
+    process.platform === 'win32' ? a.toLowerCase() === b.toLowerCase() : a === b;
+  const candidate = await deps.probe(inferred.workdir);
+  if (
+    !candidate.exists ||
+    !candidate.commonDir ||
+    !candidate.checkoutRoot ||
+    !samePath(candidate.commonDir, recorded.commonDir) ||
+    samePath(candidate.checkoutRoot, recorded.checkoutRoot)
+  )
+    return recorded;
+
+  // Editing src/file.ts is evidence for its checkout, not a request to start in src.
+  const checkout = { ...candidate, directory: candidate.checkoutRoot, realDirectory: candidate.checkoutRoot };
+  if (!recorded.realDirectory) return checkout;
+  const relative = path.relative(recorded.checkoutRoot, recorded.realDirectory);
+  if (
+    !relative ||
+    relative === '..' ||
+    relative.startsWith(`..${path.sep}`) ||
+    path.isAbsolute(relative)
+  )
+    return checkout;
+  const corresponding = await deps.probe(path.join(candidate.checkoutRoot, relative));
+  // Keep a monorepo subproject when present, without crossing into a nested repository.
+  return corresponding.exists &&
+    corresponding.checkoutRoot &&
+    corresponding.commonDir &&
+    samePath(corresponding.checkoutRoot, candidate.checkoutRoot) &&
+    samePath(corresponding.commonDir, candidate.commonDir)
+    ? corresponding
+    : checkout;
 }

@@ -38,8 +38,10 @@ describe('direct Session.send guard', () => {
       import { assertSendDispatched, toSessionDispatchOutcome } from '@cindy/maker-core';
 
       declare const session: Session;
+      type SessionAlias = Session;
+      const alias: SessionAlias = session;
       declare const webContents: { send(channel: string, payload?: unknown): void };
-      declare const socket: { send(data: string): void };
+      declare const socket: { send(data: string): void; sendHostTurnContinuation(data: string): void };
       declare function observeFireAndForgetSendOutcome(
         promise: ReturnType<Session['send']>,
         meta: { owner: string; entrypoint: string; action: string; context: string },
@@ -47,6 +49,14 @@ describe('direct Session.send guard', () => {
 
       async function nakedAwait() {
         await session.send({ type: 'user', content: 'hello' });
+      }
+
+      async function aliasedSessionSend() {
+        await alias.send({ type: 'user', content: 'hello' });
+      }
+
+      async function ignoredHostContinuation() {
+        await alias.sendHostTurnContinuation({ type: 'user', content: 'continue' });
       }
 
       async function awaitedNotConsumed() {
@@ -75,6 +85,11 @@ describe('direct Session.send guard', () => {
         assertSendDispatched(result, 'fixture/assert');
       }
 
+      async function allowedHostContinuation() {
+        const result = await alias.sendHostTurnContinuation({ type: 'user', content: 'continue' });
+        assertSendDispatched(result, 'fixture/continuation');
+      }
+
       async function allowedConvert() {
         const result = await session.send({ type: 'user', content: 'hello' });
         return toSessionDispatchOutcome(result, 'fixture/convert');
@@ -92,6 +107,7 @@ describe('direct Session.send guard', () => {
       function ignoredNonMakerSends() {
         webContents.send('maker:event', {});
         socket.send('hello');
+        socket.sendHostTurnContinuation('hello');
       }
     `;
 
@@ -101,7 +117,9 @@ describe('direct Session.send guard', () => {
     const violations = findDirectSendViolations(program);
 
     expect(violations.map((violation) => violation.functionName).sort()).toEqual([
+      'aliasedSessionSend',
       'awaitedNotConsumed',
+      'ignoredHostContinuation',
       'nakedAwait',
       'promiseAllIgnored',
       'returnedDirectly',
@@ -357,6 +375,7 @@ function createProgramWithSources(
           id: string;
           agentKind: AgentKind;
           send(message: unknown, options?: unknown): Promise<SessionSendResult>;
+          sendHostTurnContinuation(message: unknown, options?: unknown): Promise<SessionSendResult>;
         }
 
         export interface Maker {
@@ -388,6 +407,11 @@ function createProgramWithSources(
   const options: ts.CompilerOptions = {
     noEmit: true,
     skipLibCheck: true,
+    // Only ES globals (not auto-discovered @types or DOM) participate in the
+    // fixture-backed receiver types. Keep Promise/Map inference without loading
+    // unrelated ambient packages for every runtime file in this guard.
+    types: [],
+    lib: ['lib.es2022.d.ts'],
     // 这个 guard 只扫描直接忽略 Session.send outcome 的语法形态。
     // strict=false + noResolve=true 是为了把全量并发下的 TS Program 限在
     // 最小虚拟文件图；如果后续扩展到依赖严格空值传播的判断，必须先补
@@ -399,6 +423,9 @@ function createProgramWithSources(
     noResolve: true,
   };
   const defaultHost = ts.createCompilerHost(options, true);
+  // This guard needs receiver type information, not JSDoc diagnostics. Let
+  // TypeScript skip comment ASTs while preserving type info and every root.
+  defaultHost.jsDocParsingMode = ts.JSDocParsingMode.ParseForTypeInfo;
   const originalFileExists = defaultHost.fileExists.bind(defaultHost);
   const originalReadFile = defaultHost.readFile.bind(defaultHost);
   const originalGetSourceFile = defaultHost.getSourceFile.bind(defaultHost);

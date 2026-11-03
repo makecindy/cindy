@@ -5,11 +5,15 @@
  * 只能经 env 传递。本模块在 host 侧解析视觉桥配置（主/fallback 后端 → 三协议端点 +
  * model + key + wireProtocol），序列化成单个 JSON env（`CINDY_PI_VISION_BRIDGE`），
  * PiAgent 把它注入 spawnEnv 并纳入 piSecretEnvNames 剥离面（防获批 bash 读到 API key）。
+ * OpenCode Go 后端还会补一个 `x-opencode-session`：头值按 sessionId + 后端身份确定性
+ * 派生 —— spawn env 必须同 session 重建逐字节稳定（pi-harness §4.10），随机值会让
+ * 远端 daemon envHash 变化而 kill + 全新建。
  *
  * 对齐 docs/vision-bridge-design.md 层 C + 五、视觉通道。
  */
 import { readVisionBridgeSettings } from './vision-bridge-settings-store.js';
 import { getVisionBridgeController } from './vision-bridge-controller.js';
+import { withOpenCodeGoSessionHeader } from '../maker-host/opencode-go-session.js';
 import {
   resolveVisionBackendEndpoint,
   VisionBackendError,
@@ -42,6 +46,7 @@ function resolveSpec(
   providerId: string,
   modelId: string,
   deps: VisionChannelDeps,
+  sessionId: string | undefined,
 ): PiVisionBackendSpec | null {
   try {
     const ep = resolveVisionBackendEndpoint(providerId, modelId, deps);
@@ -50,7 +55,13 @@ function resolveSpec(
       requestPath: ep.requestPath,
       model: ep.model,
       authorization: ep.authorization,
-      headers: ep.headers,
+      headers:
+        withOpenCodeGoSessionHeader(ep.headers, {
+          providerId,
+          catalogPresetId: ep.catalogPresetId,
+          upstream: ep.upstream,
+          sessionId,
+        }) ?? {},
       wireProtocol: ep.wireProtocol,
     };
   } catch (err) {
@@ -68,6 +79,7 @@ function resolveSpec(
 export function buildPiVisionBridgeEnv(
   deps: VisionChannelDeps,
   model: string,
+  sessionId?: string,
 ): Record<string, string> | null {
   const settings = readVisionBridgeSettings();
   if (!settings.enabled) return null;
@@ -75,10 +87,10 @@ export function buildPiVisionBridgeEnv(
   // 按 session model 判定（与层 B / 层 A 同源 shouldBridge）：未命中目标模型
   // 不注入 env、不注册 vision 工具（codex P1 零干扰要求）。
   if (!getVisionBridgeController()?.shouldBridge(model)) return null;
-  const primary = resolveSpec(settings.primary.providerId, settings.primary.modelId, deps);
+  const primary = resolveSpec(settings.primary.providerId, settings.primary.modelId, deps, sessionId);
   if (!primary) return null;
   const fallback = settings.fallback
-    ? resolveSpec(settings.fallback.providerId, settings.fallback.modelId, deps)
+    ? resolveSpec(settings.fallback.providerId, settings.fallback.modelId, deps, sessionId)
     : null;
   const payload: PiVisionBridgeEnvPayload = {
     enabled: true,

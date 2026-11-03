@@ -1,12 +1,33 @@
 {
   "id": "coingecko-search",
-  "match": ["coingecko.com"],
-  "description": "用 CoinGecko 公开搜索 API 按关键词搜币/交易所/分类，返回 JSON。读接口而非扒 DOM。",
-  "inputs": { "query": { "required": true } },
-  "steps": [
-    { "action": "navigate", "url": "https://api.coingecko.com/api/v3/search?query={{query|url}}" },
-    { "action": "wait", "loadState": "load" },
-    { "action": "extract", "as": "json", "extract": { "fields": { "body": "body" } } }
+  "match": [
+    "coingecko.com"
   ],
-  "output": "{{json}}"
+  "description": "用 CoinGecko 公开搜索 API 按关键词搜币/交易所/分类，返回 JSON。读接口而非扒 DOM。",
+  "inputs": {
+    "query": {
+      "required": true
+    }
+  },
+  "steps": [
+    {
+      "action": "navigate",
+      "url": "https://api.coingecko.com/api/v3/search?query={{query|url}}"
+    },
+    {
+      "action": "wait",
+      "loadState": "load"
+    },
+    {
+      "action": "extract",
+      "as": "json",
+      "extract": {
+        "fields": {
+          "body": "body"
+        }
+      }
+    }
+  ],
+  "output": "{{json}}",
+  "access": "read"
 }

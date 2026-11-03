@@ -7,6 +7,18 @@
     "orientation": "default",
     "icon": "./assets/icon.png",
     "userInterfaceStyle": "automatic",
+    "locales": {
+      "en": "./locales/en.json",
+      "zh-Hans": "./locales/zh-Hans.json",
+      "zh-Hant": "./locales/zh-Hant.json",
+      "ja": "./locales/ja.json",
+      "ko": "./locales/ko.json",
+      "es": "./locales/es.json",
+      "fr": "./locales/fr.json",
+      "de": "./locales/de.json",
+      "pt-PT": "./locales/pt-PT.json",
+      "pt-BR": "./locales/pt-BR.json"
+    },
     "runtimeVersion": {
       "policy": "fingerprint"
     },
@@ -61,14 +73,21 @@
       "./plugins/with-third-party-notices",
       "./plugins/with-google-signin-modular-headers",
       "./plugins/with-wechat-opensdk-modulemap",
+      "./plugins/with-async-storage-db-size",
       [
         "expo-build-properties",
         {
+          "android": {
+            "enableMinifyInReleaseBuilds": true,
+            "enableShrinkResourcesInReleaseBuilds": true
+          },
           "ios": {
-            "buildReactNativeFromSource": true
+            "buildReactNativeFromSource": true,
+            "enableSceneSupport": true
           }
         }
       ],
+      "./plugins/with-android-release-optimization",
       [
         "expo-splash-screen",
         {
@@ -90,14 +109,21 @@
       "expo-router",
       "expo-apple-authentication",
       "expo-notifications",
+      "./plugins/with-communication-notifications",
+      "./plugins/with-usage-widgets",
       "expo-secure-store",
       "expo-web-browser",
+      "./plugins/with-incoming-share-files",
       [
         "expo-sharing",
         {
           "ios": {
             "enabled": true,
             "activationRule": {
+              "supportsText": true,
+              "supportsWebUrlWithMaxCount": 20,
+              "supportsWebPageWithMaxCount": 20,
+              "supportsMovieWithMaxCount": 20,
               "supportsFileWithMaxCount": 20,
               "supportsImageWithMaxCount": 20
             }
@@ -132,7 +158,6 @@
           }
         }
       ],
-      "./plugins/with-incoming-share-files",
       "./plugins/with-remote-desktop-presentation",
       "./plugins/with-foreground-only-audio",
       [

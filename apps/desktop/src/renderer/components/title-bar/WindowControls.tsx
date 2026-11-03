@@ -8,7 +8,6 @@ import { Spinner } from '@/components/ui/spinner';
 import { ConfirmDialog } from '@/components/ui/confirm-dialog';
 import { isSecondaryWindow } from '@/lib/secondaryWindow';
 import { isSidebarWindow } from '@/lib/sidebarWindow';
-import { isGhostPanelWindow } from '@/lib/ghostPanelWindow';
 import { isResourceUsageWindow } from '@/lib/resourceUsageWindow';
 import type {
   LinuxCloseBehavior,
@@ -62,7 +61,6 @@ export function WindowControls({
       (window.electronAPI.platform !== 'win32' && window.electronAPI.platform !== 'linux') ||
       isSecondaryWindow() ||
       isSidebarWindow() ||
-      isGhostPanelWindow() ||
       isResourceUsageWindow()
     )
       return;
@@ -183,7 +181,6 @@ export function WindowControls({
     if (
       isSecondaryWindow() ||
       isSidebarWindow() ||
-      isGhostPanelWindow() ||
       isResourceUsageWindow()
     ) {
       window.electronAPI.windowClose();
@@ -275,9 +272,11 @@ export function WindowControls({
       <ConfirmDialog
         open={showCloseBehaviorDialog}
         onOpenChange={(next) => {
-          // 首次关闭必须明确选择；ESC / 点击遮罩不应静默写入默认值或关窗。
-          if (next) setShowCloseBehaviorDialog(true);
+          // Dismissal cancels this close request without saving a choice or closing the window.
+          if (savingCloseBehaviorRef.current && !next) return;
+          setShowCloseBehaviorDialog(next);
         }}
+        showCloseButton
         title={t('settings.windowBehavior.closePrompt.title')}
         description={t('settings.windowBehavior.closePrompt.message')}
         content={

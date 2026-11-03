@@ -1,0 +1,12 @@
+{
+  "findings": [
+    {
+      "area": "cache",
+      "rule": "stale-owner",
+      "path": "src/cache.py",
+      "rootCause": "owner changes before commit",
+      "evidence": "synthetic://race-steps"
+    }
+  ],
+  "previouslySeen": []
+}

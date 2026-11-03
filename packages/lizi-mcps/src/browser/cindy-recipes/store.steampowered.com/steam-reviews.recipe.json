@@ -1,0 +1,35 @@
+{
+  "id": "steam-reviews",
+  "match": [
+    "store.steampowered.com"
+  ],
+  "description": "读取 Steam 玩家评价、推荐与游玩时长，并返回评价统计和翻页 cursor。",
+  "access": "read",
+  "inputs": {
+    "appId": {
+      "required": true,
+      "description": "Steam 数字应用 ID，例如 620"
+    },
+    "language": {
+      "required": true,
+      "description": "评价语言，例如 schinese、english 或 all"
+    }
+  },
+  "steps": [
+    {
+      "action": "navigate",
+      "url": "https://store.steampowered.com/appreviews/{{appId|url}}?json=1&filter=recent&language={{language|url}}&num_per_page=20&purchase_type=all"
+    },
+    {
+      "action": "wait",
+      "loadState": "load"
+    },
+    {
+      "action": "evaluate",
+      "as": "result",
+      "fn": "() => {\n const data = JSON.parse(document.body.innerText);\n if (data.success !== 1 || !Array.isArray(data.reviews)) throw new Error('Steam 未返回有效评价，检查应用 ID 或当前页面');\n return {summary: data.query_summary, cursor: data.cursor, reviews: data.reviews.map(r => ({id: r.recommendationid, text: r.review, language: r.language, recommended: r.voted_up, playtimeMinutes: r.author?.playtime_forever, createdAt: r.timestamp_created, updatedAt: r.timestamp_updated, helpfulVotes: r.votes_up, steamPurchase: r.steam_purchase, receivedForFree: r.received_for_free}))};\n}",
+      "timeoutMs": 30000
+    }
+  ],
+  "output": "{{result}}"
+}

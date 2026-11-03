@@ -3,7 +3,7 @@ import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { promisify } from 'node:util';
-import { afterEach, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 
 import { detectCwd } from '../worktree/WorktreeManager';
 
@@ -15,12 +15,15 @@ afterEach(async () => {
   if (fixture) await fs.rm(fixture, { recursive: true, force: true });
 });
 
-it('preserves real Git snapshots for attached, detached, unborn, missing and nested directories', async () => {
+beforeEach(() => {
   for (const key of Object.keys(process.env)) {
     if (key.startsWith('GIT_')) vi.stubEnv(key, undefined);
   }
   vi.stubEnv('GIT_CONFIG_GLOBAL', process.platform === 'win32' ? 'NUL' : os.devNull);
   vi.stubEnv('GIT_CONFIG_NOSYSTEM', '1');
+});
+
+it('preserves real Git snapshots for attached, detached, unborn, missing and nested directories', async () => {
   fixture = await fs.mkdtemp(path.join(os.tmpdir(), 'cindy-detect-cwd-'));
   const repo = path.join(fixture, 'repo');
   await fs.mkdir(repo);
@@ -83,3 +86,41 @@ it('preserves real Git snapshots for attached, detached, unborn, missing and nes
     expect(newlineSnapshot.repoRoot).toBe(await fs.realpath(newlinePath));
   }
 }, 30_000);
+
+// #6409: existing snapshots never crossed a directory symlink. Exercise detectCwd
+// with A/link -> B/workspace/project, where Git can mix absolute git-dir and
+// physical-cwd-relative common-dir. Real Git belongs in the git-integration tier.
+it.for(['unborn', 'committed'] as const)(
+  'does not label a symlink into a %s ordinary repository as a linked worktree',
+  async (state, context) => {
+    fixture = await fs.mkdtemp(path.join(os.tmpdir(), 'cindy-detect-cwd-symlink-'));
+    const repoA = path.join(fixture, 'A');
+    const repoB = path.join(fixture, 'B');
+    const nested = path.join(repoB, 'workspace', 'project');
+    await fs.mkdir(repoA);
+    await fs.mkdir(nested, { recursive: true });
+    const git = (...args: string[]) => exec('git', args, { cwd: repoB, windowsHide: true });
+    await git('-C', repoA, 'init', '--initial-branch=main');
+    await git('init', '--initial-branch=main');
+    if (state === 'committed') {
+      await git('-c', 'user.name=Test', '-c', 'user.email=test@example.invalid',
+        'commit', '--allow-empty', '-m', 'fixture');
+    }
+    const link = path.join(repoA, 'link');
+    try {
+      await fs.symlink(nested, link, 'dir');
+    } catch (error) {
+      if (['EPERM', 'EACCES', 'ENOSYS'].includes((error as NodeJS.ErrnoException).code ?? '')) {
+        context.skip();
+        return;
+      }
+      throw error;
+    }
+    expect(await detectCwd(link)).toMatchObject({
+      isGitRepo: true,
+      isInsideWorktree: false,
+      gitInstalled: true,
+      repoRoot: await fs.realpath(repoB),
+    });
+  },
+);

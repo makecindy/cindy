@@ -3,6 +3,7 @@ import { z } from 'zod';
 import type { XdtHelperToolRegistry } from '../lizi_xdtHelperToolRegistry.js';
 import type { ControlResult } from '../types.js';
 import { errorPayload, okPayload } from './_payload.js';
+import { stringArrayParam } from './_array-param.js';
 import type { QueuedMessageControlErrorCode } from './update_queued_message.js';
 import type { WorkerQueuedMessageEntry } from './get_worker_queue_status.js';
 
@@ -44,10 +45,10 @@ export function registerMergeQueuedMessagesTool(
         .string()
         .min(1)
         .describe('目标 worker 的 worker_id 或 session_id 任一'),
-      queued_message_ids: z
-        .array(z.string().min(1))
-        .min(2)
-        .describe('按当前队列顺序排列的至少两个连续消息 id,不得重复'),
+      queued_message_ids: stringArrayParam(z.array(z.string().min(1)).min(2))
+        .describe(
+          '按当前队列顺序排列的至少两个连续消息 id,不得重复; 必须是扁平字符串数组, 如 ["id_a", "id_b"]',
+        ),
       message: z.string().min(1).describe('合并后的完整消息正文'),
     },
     handler: async ({ worker_id, queued_message_ids, message }) => {

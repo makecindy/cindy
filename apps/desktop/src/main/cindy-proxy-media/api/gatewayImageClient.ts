@@ -26,6 +26,8 @@ export class GatewayImageError extends Error {
 
 export interface CreateGatewayImageClientOptions {
   getApiKey(): CindyProxyMediaMaybePromise<string | null>;
+  /** Host-owned connection headers; used by standalone custom Images connections. */
+  getRequestHeaders?(): CindyProxyMediaMaybePromise<Record<string, string>>;
   proxy: CindyProxyMediaProxyConfig;
   fetchImplementation?: typeof fetch;
   logger?: LiziMcpLogger;
@@ -51,6 +53,8 @@ export interface CreateGatewayImageClientOptions {
   allowSizeQuality?: boolean;
   /** 未配置凭证时的人话报错(各来源引导不同:xd 是登录飞书,BYO key 是去设置填 key)。 */
   missingKeyMessage?: string;
+  /** Bound the complete JSON body before buffering/parsing (including error responses). */
+  maxResponseBytes?: number;
 }
 
 function gatewayErrorCode(body: unknown): string | null {
@@ -83,8 +87,9 @@ async function parseResponse(
   res: Response,
   model: string,
   brandLabel: string,
+  maxResponseBytes?: number,
 ): Promise<GatewayImageResponse> {
-  const text = await res.text();
+  const text = await readResponseText(res, model, brandLabel, maxResponseBytes);
   let parsed: unknown;
   try {
     parsed = JSON.parse(text);
@@ -127,6 +132,36 @@ async function parseResponse(
     );
   }
   return body;
+}
+
+/** Custom endpoints cannot grow the main-process buffer without a byte budget. */
+async function readResponseText(res: Response, model: string, brandLabel: string, maxBytes?: number): Promise<string> {
+  if (maxBytes === undefined) return res.text();
+  const tooLarge = () => new GatewayImageError(requestErrorMessage({
+    status: res.status, model, brandLabel, message: `response exceeds ${maxBytes} byte limit`,
+  }), res.status);
+  const declared = res.headers.get('content-length');
+  if (declared !== null && Number(declared) > maxBytes) {
+    await res.body?.cancel().catch(() => {});
+    throw tooLarge();
+  }
+  if (!res.body) return '';
+  const reader = res.body.getReader();
+  const chunks: Uint8Array[] = [];
+  let bytes = 0;
+  try {
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      bytes += value.byteLength;
+      if (bytes > maxBytes) throw tooLarge();
+      chunks.push(value);
+    }
+    return Buffer.concat(chunks, bytes).toString('utf8');
+  } finally {
+    await reader.cancel().catch(() => {});
+    reader.releaseLock();
+  }
 }
 
 function mimeFromFilename(filename: string): string {
@@ -204,6 +239,11 @@ export function createGatewayImageClient(opts: CreateGatewayImageClientOptions):
     return key;
   }
 
+  async function requestHeaders(): Promise<Record<string, string>> {
+    if (opts.getRequestHeaders) return { ...await opts.getRequestHeaders() };
+    return { Authorization: `Bearer ${await requireApiKey()}` };
+  }
+
   function assertSizeQualityAllowed(params: { size?: string; quality?: string }): void {
     if (allowSizeQuality) return;
     if (params.size !== undefined || params.quality !== undefined) {
@@ -219,7 +259,7 @@ export function createGatewayImageClient(opts: CreateGatewayImageClientOptions):
     signal?: AbortSignal,
   ): Promise<GatewayImageResponse> {
     assertSizeQualityAllowed(params);
-    const apiKey = await requireApiKey();
+    const headers = await requestHeaders();
     const body: Record<string, unknown> = {
       model: params.model,
       prompt: params.prompt,
@@ -237,7 +277,7 @@ export function createGatewayImageClient(opts: CreateGatewayImageClientOptions):
       {
         method: 'POST',
         headers: {
-          Authorization: `Bearer ${apiKey}`,
+          ...headers,
           'Content-Type': 'application/json',
         },
         body: JSON.stringify(body),
@@ -246,7 +286,7 @@ export function createGatewayImageClient(opts: CreateGatewayImageClientOptions):
       params.model,
       body,
     );
-    return parseResponse(res, params.model, brandLabel);
+    return parseResponse(res, params.model, brandLabel, opts.maxResponseBytes);
   }
 
   async function editImage(
@@ -257,7 +297,7 @@ export function createGatewayImageClient(opts: CreateGatewayImageClientOptions):
       throw new GatewayImageError(`${brandLabel} 图像通道不支持改图,请换支持改图的模型`, 400);
     }
     assertSizeQualityAllowed(params);
-    const apiKey = await requireApiKey();
+    const headers = await requestHeaders();
     if (params.imagePaths.length === 0) {
       throw new GatewayImageError('image_edit requires at least 1 image', 400);
     }
@@ -285,9 +325,7 @@ export function createGatewayImageClient(opts: CreateGatewayImageClientOptions):
       editUrl,
       {
         method: 'POST',
-        headers: {
-          Authorization: `Bearer ${apiKey}`,
-        },
+        headers,
         body: form as unknown as BodyInit,
         signal,
       },
@@ -301,7 +339,7 @@ export function createGatewayImageClient(opts: CreateGatewayImageClientOptions):
         images: imageParams,
       },
     );
-    return parseResponse(res, params.model, brandLabel);
+    return parseResponse(res, params.model, brandLabel, opts.maxResponseBytes);
   }
 
   return { generateImage, editImage };

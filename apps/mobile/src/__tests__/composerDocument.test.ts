@@ -23,6 +23,7 @@ import {
   sessionLinkComposerNode,
   slashCommandTextNode,
   textComposerDocument,
+  todoReferenceComposerNode,
 } from '@/session/composerDocument';
 
 describe('mobile composer document', () => {
@@ -288,6 +289,22 @@ describe('mobile composer document', () => {
       agentReferences: serialized.agentReferences,
     });
     expect(serializeComposerDocument(restored)).toEqual(serialized);
+  });
+
+  // 近况里点一条待办：与桌面同一 wire（[标题](cindy://bot-todo/…)）与结构化 todo 引用，伙伴才知道是哪一条。
+  it('sends a quoted todo as the same structured reference as Desktop and restores it for editing', () => {
+    const node = todoReferenceComposerNode({ botId: 'bot-1', todoId: 't 1', title: 'Reply [Lizi]' });
+    const serialized = serializeComposerDocument({ version: 1, nodes: [node, { type: 'text', text: ' 改到周五' }] });
+    expect(serialized.text).toBe(`[Reply \\[Lizi\\]](${node.href}) 改到周五`);
+    expect(serialized.agentReferences).toEqual([expect.objectContaining({
+      kind: 'todo', botId: 'bot-1', todoId: 't 1', title: 'Reply [Lizi]', start: 0,
+    })]);
+    const restored = composerDocumentFromSerializedMessage(serialized.text, { agentReferences: serialized.agentReferences });
+    expect(restored.nodes[0]).toMatchObject({ type: 'mention', kind: 'todo', label: 'Reply [Lizi]' });
+    expect(serializeComposerDocument(restored)).toEqual(serialized);
+    // A stored draft keeps the chip; a forged link is not accepted as a todo.
+    expect(parseStoredComposerDocument({ version: 1, nodes: [node] })?.nodes[0]).toMatchObject({ kind: 'todo' });
+    expect(parseStoredComposerDocument({ version: 1, nodes: [{ ...node, href: 'https://example.com' }] })?.nodes).toEqual([]);
   });
 
   it('keeps unsupported Desktop Plugin references as exact editable wire text', () => {

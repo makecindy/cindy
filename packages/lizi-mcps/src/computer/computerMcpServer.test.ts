@@ -3,11 +3,17 @@ import fsSync from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import { setSessionPathAuthorizer } from '../session-path-auth.js';
+import * as sessionPathAuth from '../session-path-auth.js';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
 import { createComputerMcpServer } from './server.js';
 import type { ComputerMcpDeps } from '../types.js';
+
+afterEach(() => {
+  setSessionPathAuthorizer(undefined);
+});
 
 const canLinkFile = (() => {
   const root = fsSync.mkdtempSync(path.join(os.tmpdir(), 'computer-file-link-probe-'));
@@ -69,6 +75,20 @@ async function makeHarness(
 }
 
 describe('createComputerMcpServer', () => {
+  // Audit regression: discovery returned every schema even when only one was
+  // needed. Exercise the real MCP list entry with no driver/process side effects.
+  it('returns only requested schemas for focused discovery', async () => {
+    const deps: ComputerMcpDeps = { getStatus: vi.fn(), callTool: vi.fn() };
+    const h = await makeHarness(deps);
+    try {
+      const payload = textPayload(await h.client.callTool({ name: 'list_tools', arguments: { names: ['click'] } })) as {
+        tools: Array<{ name: string; inputSchema: { properties: Record<string, unknown> } }>;
+      };
+      expect(payload.tools.map((tool) => tool.name)).toEqual(['click']);
+      expect(payload.tools[0]?.inputSchema.properties).toHaveProperty('observe');
+      expect(deps.callTool).not.toHaveBeenCalled();
+    } finally { await h.cleanup(); }
+  });
   it('advertises a first-call goal and keeps host session routing independent of it', async () => {
     const deps: ComputerMcpDeps = { getStatus: vi.fn(), callTool: vi.fn(async () => ({ windows: [] })) };
     const h = await makeHarness(deps, { sessionId: 'stable-task' });
@@ -951,10 +971,403 @@ describe('createComputerMcpServer', () => {
     expect(payload.ok).toBe(false);
     expect(payload.errorCode).toBe('PATH_NOT_ALLOWED');
     expect(payload.data.message).toContain('省略 screenshot_out_file');
-    expect(payload.data.message).toContain('workingDir 内');
+    expect(payload.data.message).toContain('工作目录');
     expect(deps.callTool).not.toHaveBeenCalled();
     await h.cleanup();
     await fs.rm(root, { recursive: true, force: true });
+  });
+
+  it('dispatches an outside screenshot path after host authorization', async () => {
+    const deps: ComputerMcpDeps = {
+      getStatus: vi.fn(),
+      callTool: vi.fn(async () => ({ ok: true })),
+    };
+    const root = await makeWorkingDir();
+    const outside = path.join(await fs.realpath(path.resolve(root, '..')), 'granted.png');
+    setSessionPathAuthorizer(async (request) => {
+      expect(request.path).toBe(outside);
+      expect(request.toolName).toBe('cindy-computer:get_window_state');
+      return { allowed: true };
+    });
+    const h = await makeHarness(deps, {
+      getSessionContext: () => ({
+        agentKind: 'claude-code',
+        workingDir: root,
+        sessionId: 'screenshot-granted',
+      }),
+    });
+
+    const payload = textPayload(await h.client.callTool({
+      name: 'call_tool',
+      arguments: {
+        name: 'get_window_state',
+        args: {
+          pid: 123,
+          window_id: 7,
+          capture_mode: 'vision',
+          screenshot_out_file: outside,
+        },
+      },
+    })) as { ok: boolean };
+
+    expect(payload.ok).toBe(true);
+    expect(deps.callTool).toHaveBeenCalledWith(
+      'get_window_state',
+      expect.objectContaining({ screenshot_out_file: outside }),
+      expect.anything(),
+    );
+    await h.cleanup();
+    await fs.rm(root, { recursive: true, force: true });
+  });
+
+  it('does not dispatch an authorized screenshot after the live grant expires', async () => {
+    const deps: ComputerMcpDeps = {
+      getStatus: vi.fn(),
+      callTool: vi.fn(async () => ({ ok: true })),
+    };
+    const root = await makeWorkingDir();
+    const outside = path.join(await fs.realpath(path.resolve(root, '..')), 'stale.png');
+    let remaining = 1;
+    setSessionPathAuthorizer(async () => ({
+      allowed: true,
+      isCurrent: () => remaining-- > 0,
+    }));
+    const h = await makeHarness(deps, {
+      getSessionContext: () => ({
+        agentKind: 'claude-code',
+        workingDir: root,
+        sessionId: 'screenshot-stale',
+      }),
+    });
+    const payload = textPayload(await h.client.callTool({
+      name: 'call_tool',
+      arguments: {
+        name: 'get_window_state',
+        args: {
+          pid: 123,
+          window_id: 7,
+          capture_mode: 'vision',
+          screenshot_out_file: outside,
+        },
+      },
+    })) as { ok: boolean; errorCode?: string };
+
+    expect(payload.ok).toBe(false);
+    expect(payload.errorCode).toBe('PATH_NOT_ALLOWED');
+    expect(deps.callTool).not.toHaveBeenCalled();
+    await h.cleanup();
+    await fs.rm(root, { recursive: true, force: true });
+  });
+
+  it('does not dispatch after the live grant expires during path rebind', async () => {
+    const deps: ComputerMcpDeps = {
+      getStatus: vi.fn(),
+      callTool: vi.fn(async () => ({ ok: true })),
+    };
+    const root = await makeWorkingDir();
+    const outside = path.join(await fs.realpath(path.resolve(root, '..')), 'rebind-stale.png');
+    let current = true;
+    setSessionPathAuthorizer(async () => ({
+      allowed: true,
+      isCurrent: () => current,
+    }));
+    const originalBound = sessionPathAuth.authorizedSessionPathStillBound;
+    const bindSpy = vi.spyOn(sessionPathAuth, 'authorizedSessionPathStillBound').mockImplementation(
+      async (workingDir, authorized) => {
+        current = false;
+        return originalBound(workingDir, authorized);
+      },
+    );
+    const h = await makeHarness(deps, {
+      getSessionContext: () => ({
+        agentKind: 'claude-code',
+        workingDir: root,
+        sessionId: 'screenshot-rebind-stale',
+      }),
+    });
+    const payload = textPayload(await h.client.callTool({
+      name: 'call_tool',
+      arguments: {
+        name: 'get_window_state',
+        args: {
+          pid: 123,
+          window_id: 7,
+          capture_mode: 'vision',
+          screenshot_out_file: outside,
+        },
+      },
+    })) as { ok: boolean; errorCode?: string };
+
+    expect(payload.ok).toBe(false);
+    expect(payload.errorCode).toBe('PATH_NOT_ALLOWED');
+    expect(deps.callTool).not.toHaveBeenCalled();
+    bindSpy.mockRestore();
+    await h.cleanup();
+    await fs.rm(root, { recursive: true, force: true });
+  });
+
+  it('does not dispatch an authorized screenshot after the parent is swapped to a symlink', async () => {
+    const deps: ComputerMcpDeps = {
+      getStatus: vi.fn(),
+      callTool: vi.fn(async () => ({ ok: true })),
+    };
+    const root = await makeWorkingDir();
+    const grantedParent = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), 'computer-shot-grant-')));
+    const evilParent = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), 'computer-shot-evil-')));
+    const granted = path.join(grantedParent, 'out.png');
+    await fs.writeFile(path.join(evilParent, 'out.png'), 'evil');
+    setSessionPathAuthorizer(async () => {
+      await fs.rm(grantedParent, { recursive: true, force: true });
+      await fs.symlink(
+        evilParent,
+        grantedParent,
+        process.platform === 'win32' ? 'junction' : 'dir',
+      );
+      return { allowed: true };
+    });
+    const h = await makeHarness(deps, {
+      getSessionContext: () => ({
+        agentKind: 'claude-code',
+        workingDir: root,
+        sessionId: 'screenshot-swapped',
+      }),
+    });
+
+    const payload = textPayload(await h.client.callTool({
+      name: 'call_tool',
+      arguments: {
+        name: 'get_window_state',
+        args: {
+          pid: 123,
+          window_id: 7,
+          capture_mode: 'vision',
+          screenshot_out_file: granted,
+        },
+      },
+    })) as { ok: boolean; errorCode?: string };
+
+    expect(payload.ok).toBe(false);
+    expect(payload.errorCode).toBe('PATH_NOT_ALLOWED');
+    expect(deps.callTool).not.toHaveBeenCalled();
+    await h.cleanup();
+    await fs.rm(root, { recursive: true, force: true });
+    await fs.rm(evilParent, { recursive: true, force: true });
+    await fs.rm(grantedParent, { recursive: true, force: true });
+  });
+
+  it('authorizes a workdir symlink screenshot path as the real target', async () => {
+    const deps: ComputerMcpDeps = {
+      getStatus: vi.fn(),
+      callTool: vi.fn(async () => ({ ok: true })),
+    };
+    const root = await makeWorkingDir();
+    const outsideDir = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), 'computer-link-')));
+    await fs.symlink(
+      outsideDir,
+      path.join(root, 'link'),
+      process.platform === 'win32' ? 'junction' : 'dir',
+    );
+    const canonical = path.join(outsideDir, 'granted.png');
+    setSessionPathAuthorizer(async (request) => {
+      expect(request.path).toBe(canonical);
+      return { allowed: true };
+    });
+    const h = await makeHarness(deps, {
+      getSessionContext: () => ({
+        agentKind: 'claude-code',
+        workingDir: root,
+        sessionId: 'screenshot-link-granted',
+      }),
+    });
+
+    const payload = textPayload(await h.client.callTool({
+      name: 'call_tool',
+      arguments: {
+        name: 'get_window_state',
+        args: {
+          pid: 123,
+          window_id: 7,
+          capture_mode: 'vision',
+          screenshot_out_file: path.join(root, 'link', 'granted.png'),
+        },
+      },
+    })) as { ok: boolean };
+
+    expect(payload.ok).toBe(true);
+    expect(deps.callTool).toHaveBeenCalledWith(
+      'get_window_state',
+      expect.objectContaining({ screenshot_out_file: canonical }),
+      expect.anything(),
+    );
+    await h.cleanup();
+    await fs.rm(root, { recursive: true, force: true });
+    await fs.rm(outsideDir, { recursive: true, force: true });
+  });
+
+  it('replays an outside trajectory after host authorization', async () => {
+    const deps: ComputerMcpDeps = {
+      getStatus: vi.fn(),
+      callTool: vi.fn(async () => ({ ok: true })),
+    };
+    const root = await makeWorkingDir();
+    const outside = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), 'computer-replay-out-')));
+    const directory = await writeTrajectory(outside, [
+      { tool: 'click', arguments: { pid: 123, window_id: 7, x: 10, y: 20 } },
+    ]);
+    setSessionPathAuthorizer(async (request) => {
+      expect(request.path).toBe(directory);
+      expect(request.operation).toBe('read');
+      expect(request.toolName).toBe('cindy-computer:replay_trajectory');
+      return { allowed: true };
+    });
+    const h = await makeHarness(deps, {
+      getSessionContext: () => ({ agentKind: 'claude-code', workingDir: root }),
+    });
+
+    const payload = textPayload(await h.client.callTool({
+      name: 'call_tool',
+      arguments: {
+        name: 'replay_trajectory',
+        args: { dir: directory, delay_ms: 0, stop_on_error: false },
+      },
+    })) as { ok: boolean; data: { attempted: number; succeeded: number } };
+
+    expect(payload).toMatchObject({ ok: true, data: { attempted: 1, succeeded: 1 } });
+    expect(deps.callTool).toHaveBeenCalledWith(
+      'click',
+      { pid: 123, window_id: 7, x: 10, y: 20 },
+      expect.anything(),
+    );
+    await h.cleanup();
+    await fs.rm(root, { recursive: true, force: true });
+    await fs.rm(outside, { recursive: true, force: true });
+  });
+
+  it('authorizes a recorded outside screenshot path once before replay dispatch', async () => {
+    const deps: ComputerMcpDeps = {
+      getStatus: vi.fn(),
+      callTool: vi.fn(async () => ({ ok: true })),
+    };
+    const root = await makeWorkingDir();
+    const outside = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), 'computer-replay-shot-')));
+    const screenshot = path.join(outside, 'frame.png');
+    const directory = await writeTrajectory(root, [
+      {
+        tool: 'get_window_state',
+        arguments: {
+          pid: 123,
+          window_id: 7,
+          capture_mode: 'vision',
+          screenshot_out_file: screenshot,
+        },
+      },
+    ]);
+    const authorizer = vi.fn(async (request: { path: string; toolName?: string }) => {
+      expect(request.path).toBe(screenshot);
+      expect(request.toolName).toBe('cindy-computer:get_window_state');
+      return { allowed: true as const, isCurrent: () => true };
+    });
+    setSessionPathAuthorizer(authorizer);
+    const h = await makeHarness(deps, {
+      getSessionContext: () => ({ agentKind: 'claude-code', workingDir: root }),
+    });
+
+    const payload = textPayload(await h.client.callTool({
+      name: 'call_tool',
+      arguments: {
+        name: 'replay_trajectory',
+        args: { dir: directory, delay_ms: 0, stop_on_error: false },
+      },
+    })) as { ok: boolean; data: { attempted: number; succeeded: number } };
+
+    expect(payload).toMatchObject({ ok: true, data: { attempted: 1, succeeded: 1 } });
+    expect(authorizer).toHaveBeenCalledOnce();
+    expect(deps.callTool).toHaveBeenCalledWith(
+      'get_window_state',
+      expect.objectContaining({ screenshot_out_file: screenshot }),
+      expect.anything(),
+    );
+    await h.cleanup();
+    await fs.rm(root, { recursive: true, force: true });
+    await fs.rm(outside, { recursive: true, force: true });
+  });
+
+  it('does not replay an outside trajectory after the live grant expires', async () => {
+    const deps: ComputerMcpDeps = {
+      getStatus: vi.fn(),
+      callTool: vi.fn(async () => ({ ok: true })),
+    };
+    const root = await makeWorkingDir();
+    const outside = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), 'computer-replay-stale-')));
+    const directory = await writeTrajectory(outside, [
+      { tool: 'click', arguments: { pid: 123, window_id: 7, x: 10, y: 20 } },
+    ]);
+    let remaining = 1;
+    setSessionPathAuthorizer(async () => ({
+      allowed: true,
+      isCurrent: () => remaining-- > 0,
+    }));
+    const h = await makeHarness(deps, {
+      getSessionContext: () => ({ agentKind: 'claude-code', workingDir: root }),
+    });
+
+    const payload = textPayload(await h.client.callTool({
+      name: 'call_tool',
+      arguments: {
+        name: 'replay_trajectory',
+        args: { dir: directory, delay_ms: 0, stop_on_error: false },
+      },
+    })) as { ok: boolean; errorCode?: string };
+
+    expect(payload.ok).toBe(false);
+    expect(payload.errorCode).toBe('PATH_NOT_ALLOWED');
+    expect(deps.callTool).not.toHaveBeenCalled();
+    await h.cleanup();
+    await fs.rm(root, { recursive: true, force: true });
+    await fs.rm(outside, { recursive: true, force: true });
+  });
+
+  it('does not follow a granted replay directory after it is replaced by a symlink', async () => {
+    const deps: ComputerMcpDeps = {
+      getStatus: vi.fn(),
+      callTool: vi.fn(async () => ({ ok: true })),
+    };
+    const root = await makeWorkingDir();
+    const grantedParent = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), 'computer-replay-grant-')));
+    const evilParent = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), 'computer-replay-evil-')));
+    const grantedDir = await writeTrajectory(grantedParent, [
+      { tool: 'click', arguments: { pid: 1, window_id: 1, x: 1, y: 1 } },
+    ]);
+    await writeTrajectory(evilParent, [
+      { tool: 'click', arguments: { pid: 999, window_id: 999, x: 9, y: 9 } },
+    ]);
+    setSessionPathAuthorizer(async () => {
+      await fs.rm(grantedDir, { recursive: true, force: true });
+      await fs.symlink(
+        path.join(evilParent, 'rec'),
+        grantedDir,
+        process.platform === 'win32' ? 'junction' : 'dir',
+      );
+      return { allowed: true };
+    });
+    const h = await makeHarness(deps, {
+      getSessionContext: () => ({ agentKind: 'claude-code', workingDir: root }),
+    });
+
+    const payload = textPayload(await h.client.callTool({
+      name: 'call_tool',
+      arguments: {
+        name: 'replay_trajectory',
+        args: { dir: grantedDir, delay_ms: 0, stop_on_error: false },
+      },
+    })) as { ok: boolean };
+
+    expect(payload.ok).toBe(false);
+    expect(deps.callTool).not.toHaveBeenCalled();
+    await h.cleanup();
+    await fs.rm(root, { recursive: true, force: true });
+    await fs.rm(grantedParent, { recursive: true, force: true });
+    await fs.rm(evilParent, { recursive: true, force: true });
   });
 
   it('suggests omitting screenshot_out_file when the session has no workingDir', async () => {
@@ -1502,5 +1915,150 @@ describe('createComputerMcpServer', () => {
     expect((result as { isError?: boolean }).isError).toBe(true);
     expect(deps.callTool).not.toHaveBeenCalled();
     await h.cleanup();
+  });
+});
+
+/**
+ * 2026-10-31 audit (CU-014/017/018): session-level shortcuts, unexplained
+ * observation failures and discovery-flooded errors. Each case drives the
+ * public call_tool entry; gap: none of these outcomes existed before.
+ */
+describe('createComputerMcpServer desktop guards', () => {
+  it('refuses lock / log-out / sleep chords before the driver sees them', async () => {
+    const deps: ComputerMcpDeps = { getStatus: vi.fn(), callTool: vi.fn(async () => ({ ok: true })) };
+    const h = await makeHarness(deps, { sessionId: 'hotkey-guard' });
+    try {
+      for (const keys of [['ctrl', 'cmd', 'q'], ['Command', 'Shift', 'Q'], ['win', 'l'],
+        // review: restart / shut down chords reached the driver
+        ['ctrl', 'cmd', 'power'], ['ctrl', 'alt', 'cmd', 'power'], ['control', 'option', 'command', 'eject'], ['ctrl', 'power'],
+        // review: one canonical form (repeats, "a+b" entries, stray spaces, case)
+        ['ctrl', 'ctrl', 'cmd', 'q'], ['ctrl+cmd', 'q'], [' Ctrl ', 'CMD', 'Q'], ['cmd', 'q', 'ctrl', 'q']]) {
+        const blocked = textPayload(await h.client.callTool({ name: 'call_tool', arguments: {
+          name: 'hotkey', args: { pid: 1, window_id: 2, keys },
+        } })) as { ok: boolean; errorCode?: string };
+        expect(blocked).toMatchObject({ ok: false, errorCode: 'HOTKEY_BLOCKED' });
+      }
+      const pressed = textPayload(await h.client.callTool({ name: 'call_tool', arguments: {
+        name: 'press_key', args: { pid: 1, window_id: 2, key: 'q', modifiers: ['control', 'command'] },
+      } })) as { ok: boolean; errorCode?: string };
+      expect(pressed).toMatchObject({ ok: false, errorCode: 'HOTKEY_BLOCKED' });
+      expect(deps.callTool).not.toHaveBeenCalledWith('hotkey', expect.anything(), expect.anything());
+      expect(deps.callTool).not.toHaveBeenCalledWith('press_key', expect.anything(), expect.anything());
+
+      // an ordinary chord that shares keys with a blocked one stays allowed
+      await h.client.callTool({ name: 'call_tool', arguments: { name: 'hotkey', args: { pid: 1, window_id: 2, keys: ['ctrl', 'q'] } } });
+      expect(deps.callTool).toHaveBeenCalledWith('hotkey', expect.objectContaining({ keys: ['ctrl', 'q'] }), expect.anything());
+      await h.client.callTool({ name: 'call_tool', arguments: { name: 'hotkey', args: { pid: 1, window_id: 2, keys: ['cmd', 'c'] } } });
+      expect(deps.callTool).toHaveBeenCalledWith('hotkey', expect.objectContaining({ keys: ['cmd', 'c'] }), expect.anything());
+    } finally { await h.cleanup(); }
+  });
+
+  it('names a locked screen as the reason an observation produced nothing', async () => {
+    const deps: ComputerMcpDeps = {
+      getStatus: vi.fn(),
+      callTool: vi.fn(async () => ({ ok: false, error: 'capture failed' })),
+      describeDesktop: vi.fn(async () => ({ screen_locked: true })),
+    };
+    const h = await makeHarness(deps, { sessionId: 'locked' });
+    try {
+      const observed = textPayload(await h.client.callTool({ name: 'call_tool', arguments: {
+        name: 'get_window_state', args: { pid: 100, window_id: 1 },
+      } })) as { errorCode?: string; reason?: string; hint?: string };
+      expect(observed).toMatchObject({ errorCode: 'CUA_UNAVAILABLE', reason: 'screen_locked' });
+      expect(observed.hint).toContain('unlock');
+    } finally { await h.cleanup(); }
+  });
+
+  it('distinguishes a vanished window from one that is only off screen, with compact discovery', async () => {
+    const windows = [
+      { pid: 65985, window_id: 5304, app_name: 'Electron', title: 'Cindy', is_on_screen: false,
+        process: { pid: 65985, command: '/very/long/command/line --with --flags' },
+        identity: { kind: 'electron-dev', confidence: 0.75, labels: ['electron'], hints: ['use set_value'] } },
+    ];
+    const failure = { degraded: true, degraded_reason: 'ax_window_unresolved', elements: [], tree_markdown: '',
+      screenshot_frame_valid: false, screenshot_error: { code: 'px_capture_unavailable' } };
+    const callTool = vi.fn(async (name: string) => name === 'list_windows' ? { windows } : failure);
+    const h = await makeHarness({ getStatus: vi.fn(), callTool, describeDesktop: async () => ({ screen_locked: false }) }, { sessionId: 'gone' });
+    try {
+      const offScreen = textPayload(await h.client.callTool({ name: 'call_tool', arguments: {
+        name: 'get_window_state', args: { pid: 65985, window_id: 5304 },
+      } })) as { reason?: string; recovery?: { discovery?: { data?: { windows?: unknown[] } } } };
+      expect(offScreen.reason).toBe('window_not_on_screen');
+      expect(offScreen.recovery?.discovery?.data?.windows).toEqual([
+        { pid: 65985, window_id: 5304, app_name: 'Electron', title: 'Cindy', is_on_screen: false,
+          identity: { kind: 'electron-dev', hints: ['use set_value'] } },
+      ]);
+
+      const gone = textPayload(await h.client.callTool({ name: 'call_tool', arguments: {
+        name: 'get_window_state', args: { pid: 65985, window_id: 5300 },
+      } })) as { reason?: string };
+      expect(gone.reason).toBe('window_gone');
+    } finally { await h.cleanup(); }
+  });
+
+  it('tells the model the single-entry rule and the Electron / simulator routes', async () => {
+    const h = await makeHarness({ getStatus: vi.fn(), callTool: vi.fn() });
+    try {
+      const payload = textPayload(await h.client.callTool({ name: 'list_tools', arguments: {} })) as {
+        workflow: string; tools: Array<{ name: string; description: string }>;
+      };
+      expect(payload.workflow).not.toContain('If using the native CLI instead');
+      expect(payload.workflow).toContain('not alternatives');
+      expect(payload.workflow).toContain('set_value');
+      expect(payload.workflow).toContain('xcrun simctl');
+      expect(payload.tools.find((tool) => tool.name === 'type_text')?.description).toContain('set_value');
+    } finally { await h.cleanup(); }
+  });
+});
+
+describe('unavailable observations get window state without an identity error', () => {
+  // Review (#8227 round 14): a minimized or other-Space window still has an AX tree, so the
+  // failed capture carries no window_id_not_found; window_not_on_screen must still be reachable.
+  const captureFailed = { degraded: true, elements: [], tree_markdown: '', screenshot_frame_valid: false,
+    screenshot_error: { code: 'px_capture_unavailable' } };
+
+  it('names window_not_on_screen for a capture failure of a window that exists off screen', async () => {
+    const callTool = vi.fn(async (name: string) => name === 'list_windows'
+      ? { windows: [{ pid: 7, window_id: 9, app_name: 'Electron', is_on_screen: false, process: { command: 'x --secret' } }] }
+      : captureFailed);
+    const h = await makeHarness({ getStatus: vi.fn(), callTool, describeDesktop: async () => ({ screen_locked: false }) }, { sessionId: 'offscreen' });
+    try {
+      const result = textPayload(await h.client.callTool({ name: 'call_tool', arguments: {
+        name: 'get_window_state', args: { pid: 7, window_id: 9, include_screenshot: true },
+      } })) as { reason?: string };
+      expect(result.reason).toBe('window_not_on_screen');
+      expect(JSON.stringify(result)).not.toContain('--secret');
+    } finally { await h.cleanup(); }
+  });
+
+  it('skips the extra window discovery when the screen is locked', async () => {
+    const callTool = vi.fn(async (_name: string) => captureFailed);
+    const h = await makeHarness({ getStatus: vi.fn(), callTool, describeDesktop: async () => ({ screen_locked: true }) }, { sessionId: 'locked-skip' });
+    try {
+      const result = textPayload(await h.client.callTool({ name: 'call_tool', arguments: {
+        name: 'get_window_state', args: { pid: 7, window_id: 9, include_screenshot: true },
+      } })) as { reason?: string };
+      expect(result.reason).toBe('screen_locked');
+      expect(callTool.mock.calls.map(([name]) => name)).toEqual(['get_window_state']);
+    } finally { await h.cleanup(); }
+  });
+});
+
+describe('thrown window identity failures carry the same reason', () => {
+  // 2026-10-31 dev-build run: a dead window_id made the driver throw
+  // window_id_not_found, which skipped the CUA_UNAVAILABLE classification.
+  it('names window_gone for a thrown window_id_not_found with discovery', async () => {
+    const callTool = vi.fn(async (name: string) => {
+      if (name === 'list_windows') return { windows: [{ pid: 7, window_id: 99, is_on_screen: true }] };
+      throw Object.assign(new Error('window_id 1 is not a live window'), { code: 'window_id_not_found' });
+    });
+    const h = await makeHarness({ getStatus: vi.fn(), callTool, describeDesktop: async () => ({ screen_locked: false }) }, { sessionId: 'thrown' });
+    try {
+      const result = textPayload(await h.client.callTool({ name: 'call_tool', arguments: {
+        name: 'get_window_state', args: { pid: 7, window_id: 1, include_screenshot: false },
+      } })) as { errorCode?: string; reason?: string; data?: { hint?: string } };
+      expect(result).toMatchObject({ errorCode: 'window_id_not_found', reason: 'window_gone' });
+      expect(result.data?.hint).toContain('no longer exists');
+    } finally { await h.cleanup(); }
   });
 });

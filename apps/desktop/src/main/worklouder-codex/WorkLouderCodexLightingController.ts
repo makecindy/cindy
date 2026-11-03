@@ -36,7 +36,6 @@ import {
   createWorkLouderCodexLightingFrame,
   createWorkLouderCodexWindowRevealFrame,
   muteWorkLouderCodexKeyZone,
-  foldOrcaWorkerActivityOntoLeads,
   isWorkLouderCodexLightingFrameOff,
   type WorkLouderCodexHidEvent,
   type WorkLouderCodexJoystickEvent,
@@ -95,16 +94,16 @@ export interface WorkLouderCodexLightingSink {
 }
 
 type TaskCatalogLoader = () => Promise<WorkLouderCodexTaskCatalog | readonly string[]>;
-type WorkerSessionLoader = (
-  leadSessionIds: readonly string[],
-) => Promise<Readonly<Record<string, readonly string[]>>>;
 
 /** Keeps task LEDs, physical controls, and the settings projection on one state machine. */
 export class WorkLouderCodexLightingController {
   private lastFrameKey = '';
   private slotSessionIds: string[] = [];
+  /**
+   * Agent Island activity. Orca Workers never appear here; a Lead whose team is
+   * still working stays `running` because Agent Island defers its completion.
+   */
   private latestActivity: readonly WorkLouderCodexSessionActivity[] = [];
-  private workersByLead: Readonly<Record<string, readonly string[]>> = {};
   private taskCatalog: WorkLouderCodexTaskCatalog = { sidebar: [], lastSent: [], options: [] };
   private agentSlots: WorkLouderCodexAgentSlotState[] = emptyAgentSlots();
   private slotRefreshVersion = 0;
@@ -149,7 +148,6 @@ export class WorkLouderCodexLightingController {
       undefined,
     private readonly dispatchPreviewInput: (input: WorkLouderCodexPreviewInput) => void = () =>
       undefined,
-    private readonly loadWorkerSessions: WorkerSessionLoader = async () => ({}),
   ) {}
 
   start(): void {
@@ -259,8 +257,6 @@ export class WorkLouderCodexLightingController {
         const catalog = normalizeTaskCatalog(await this.loadTaskCatalog());
         if (!this.taskSlotsEnabled || refreshVersion !== this.slotRefreshVersion) return;
         this.taskCatalog = catalog;
-        await this.refreshWorkerSessions(refreshVersion);
-        if (!this.taskSlotsEnabled || refreshVersion !== this.slotRefreshVersion) return;
         this.publishAgentSlots();
         this.updateLightingFrame(true);
         this.emitState();
@@ -299,8 +295,6 @@ export class WorkLouderCodexLightingController {
     }
     this.taskSlotsEnabled = true;
     this.inputActionsEnabled = true;
-    await this.refreshWorkerSessions(refreshVersion);
-    if (refreshVersion !== this.slotRefreshVersion) return;
     this.publishAgentSlots();
     this.updateLightingFrame(true);
     this.emitState();
@@ -319,7 +313,6 @@ export class WorkLouderCodexLightingController {
     this.taskCatalog = { sidebar: [], lastSent: [], options: [] };
     this.agentSlots = emptyAgentSlots();
     this.slotSessionIds = [];
-    this.workersByLead = {};
     this.pendingAgentKeyTap = null;
     this.joystickNeedsCenter = this.joystickDirection !== null;
     this.joystickDirection = null;
@@ -754,7 +747,7 @@ export class WorkLouderCodexLightingController {
     const recentRank = new Map(
       this.taskCatalog.options.map((task, index) => [task.id, index] as const),
     );
-    const prioritized = this.lightingActivity()
+    const prioritized = this.latestActivity
       .filter((activity) => optionById.has(activity.sessionId))
       .toSorted((left, right) => {
         const scoreDiff = activityPriority(right) - activityPriority(left);
@@ -773,21 +766,10 @@ export class WorkLouderCodexLightingController {
     return WORKLOUDER_CODEX_AGENT_SLOT_COUNT;
   }
 
-  private lightingActivity(): WorkLouderCodexSessionActivity[] {
-    return foldOrcaWorkerActivityOntoLeads(this.latestActivity, this.workersByLead);
-  }
-
-  private async refreshWorkerSessions(refreshVersion: number): Promise<void> {
-    const leadIds = catalogLeadSessionIds(this.taskCatalog);
-    const workersByLead = await this.loadWorkerSessions(leadIds);
-    if (refreshVersion !== this.slotRefreshVersion) return;
-    this.workersByLead = workersByLead;
-  }
-
   private updateLightingFrame(wakeOnBaseFrameChange = false): WorkLouderCodexLightingFrame {
     const threadCount = this.lightingThreadCount();
     const projected = createWorkLouderCodexLightingFrame(
-      this.lightingActivity(),
+      this.latestActivity,
       this.slotSessionIds,
       threadCount,
     );
@@ -1009,16 +991,6 @@ function emptyAgentSlots(): WorkLouderCodexAgentSlotState[] {
     title: null,
     action: null,
   }));
-}
-
-function catalogLeadSessionIds(catalog: WorkLouderCodexTaskCatalog): string[] {
-  return [
-    ...new Set(
-      [...catalog.options, ...catalog.sidebar, ...catalog.lastSent]
-        .map((task) => task.id)
-        .filter(Boolean),
-    ),
-  ];
 }
 
 function normalizeTaskCatalog(

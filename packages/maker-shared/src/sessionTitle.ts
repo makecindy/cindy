@@ -21,6 +21,9 @@
  */
 export const DEFAULT_DRAFT_SESSION_TITLE = 'New Maker';
 
+/** AI 标题与自动占位的统一上限，按 Unicode code point 计数。 */
+export const AUTO_TITLE_MAX_CHARS = 40;
+
 /**
  * 自动标题的统一归一化:折叠空白 → trim → 截断 40 字。先 trim 再截断,避免前导
  * 大量空白吃满长度后得到空标题。
@@ -28,7 +31,15 @@ export const DEFAULT_DRAFT_SESSION_TITLE = 'New Maker';
  * 落库出口、占位覆写方与 renderer 的乐观预览都用它算出同一个串。
  */
 export function normalizeAutoTitle(text: string): string {
-  return text.replace(/\s+/g, ' ').trim().slice(0, 40).trimEnd();
+  const normalized = text.replace(/\s+/g, ' ').trim();
+  let title = '';
+  let count = 0;
+  // User messages can be very large; collect only the title's code points.
+  for (const char of normalized) {
+    title += char;
+    if (++count === AUTO_TITLE_MAX_CHARS) break;
+  }
+  return title.trimEnd();
 }
 
 /**

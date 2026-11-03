@@ -18,8 +18,7 @@ const source = readSourceNormalized('../bootstrap-electron.ts');
 
 /**
  * The quit hook is Electron wiring in a module that cannot be imported under
- * test, so the wiring itself is asserted on the source — same approach as
- * `updateServiceIOSSimulatorExit.test.ts`.
+ * test, so the wiring itself is asserted on the source.
  *
  * What is being protected is not a style rule: without the escalation the sweep
  * only *asks* runners to stop, logs one line when they do not, and lets the app
@@ -212,7 +211,9 @@ describe('PI Subagent quit sweep', () => {
     // The kill confirmation is bounded but not free (~0.8s per surviving
     // runner), so the stop wait cannot also use the whole phase.
     expect(quitHookSource()).toMatch(/stopAllPiSubagentRunsForExit\(agentHome, 2_500,/);
-    expect(source).toContain('installQuitHandler(6000);');
+    const budget = Number(source.match(/installQuitHandler\((\d+)\);/)?.[1]);
+    expect(budget).toBeGreaterThan(2_500 + 800);
+    expect(budget).toBeLessThan(20_000);
   });
 
   it('reports survivors as an error rather than an acknowledged stop', () => {

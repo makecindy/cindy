@@ -1,3 +1,4 @@
+// guard: DESIGN.md contrast/readability and #1427: system-native selection highlighting must not be overwritten by an opaque per-view color; static native-renderer contract.
 import { readFile } from 'node:fs/promises';
 import { resolve } from 'node:path';
 import { describe, expect, it } from 'vitest';
@@ -16,8 +17,8 @@ import { describe, expect, it } from 'vitest';
  * 是另一语义,不受本守卫约束。
  */
 describe('mobile message text selection highlight', () => {
-  it('never overrides the platform selection highlight in the message renderer', async () => {
-    const source = await readFile(resolve(process.cwd(), 'src/session/MessageRenderer.tsx'), 'utf8');
+  it.each(['MessageRenderer.tsx', 'MarkdownSelectableText.tsx'])('never overrides the platform selection highlight in %s', async (file) => {
+    const source = await readFile(resolve(process.cwd(), 'src/session', file), 'utf8');
 
     expect(source).not.toMatch(/selectionColor=/);
   });

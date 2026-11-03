@@ -105,6 +105,10 @@ class InMemoryStorage implements ScheduleStorage {
       (r) => r.status === 'running' && (scheduleId === undefined || r.scheduleId === scheduleId),
     );
   }
+  async hasUnfinishedRuns(scheduleId: string): Promise<boolean> {
+    return [...this.runs.values()].some((r) => r.scheduleId === scheduleId &&
+      (r.status === 'running' || r.status === 'interrupted'));
+  }
   // 与真实现相同的 CAS 语义:active 且 nextFireAt 精确匹配才认领(置空),否则 null。
   async claimDueFire(id: string, expectedNextFireAt: number): Promise<Schedule | null> {
     const ex = this.schedules.get(id);
@@ -221,15 +225,38 @@ describe('cindy_scheduler MCP server (in-process smoke)', () => {
     h = await makeHarness();
   });
 
+  // Integration: schema parsing used to strip the Agent location. Follow the real
+  // MCP dispatcher through create/update and verify the saved route and null clear.
+  it('persists shared model selections and clears their location through MCP', async () => {
+    try {
+      const route = { modelAgentKind: 'codex', modelAgentDeviceId: 'shared:owner',
+        model: 'shared-model', providerId: 'remote-provider', fastMode: 'ultrafast' };
+      const result = await h.client.callTool({ name: 'call_tool', arguments: {
+        name: 'schedule_create', args: { ...baseCreate, ...route },
+      } });
+      expect(result.isError).not.toBe(true);
+      const [created] = await h.storage.list();
+      expect(created).toMatchObject(route);
+      const updated = await h.client.callTool({ name: 'call_tool', arguments: {
+        name: 'schedule_update', args: { id: created.id, modelAgentDeviceId: null },
+      } });
+      expect(updated.isError).not.toBe(true);
+      expect(await h.storage.get(created.id)).toMatchObject({ ...route, modelAgentDeviceId: undefined });
+    } finally { await h.cleanup(); }
+  });
+
   it('list_tools without category returns the scheduler category', async () => {
     const result = await h.client.callTool({ name: 'list_tools', arguments: {} });
     const first = (result.content as Array<{ type: string; text: string }>)[0];
     const payload = JSON.parse(first.text) as {
       ok: boolean;
-      categories: { name: string; tool_count: number }[];
+      categories: { name: string; tool_count: number; description: string }[];
     };
     expect(payload.ok).toBe(true);
-    expect(payload.categories).toEqual([{ name: 'scheduler', tool_count: 11 }]);
+    // 类目概览要在第一步就写明用途与作用范围(本机 / 可跨电脑)。
+    expect(payload.categories).toEqual([
+      { name: 'scheduler', tool_count: 11, description: expect.stringMatching(/各自的电脑.*schedule_create.*只在本机/) },
+    ]);
     await h.cleanup();
   });
 
@@ -279,6 +306,37 @@ describe('cindy_scheduler MCP server (in-process smoke)', () => {
       expect(result.isError).toBe(true);
     }
     await h.cleanup();
+  });
+
+  it('asks the host before each call and does not run a denied one', async () => {
+    await h.cleanup();
+    const storage = new InMemoryStorage();
+    const scheduler = new Scheduler({
+      storage, runner: noopRunner, clock: new FakeClock(), generateId: makeIdGen(), tickIntervalMs: 60_000_000,
+    });
+    const authorizeCall = vi.fn(async ({ tool }: { tool: string }) => (tool === 'schedule_create'
+      ? { ok: false as const, errorCode: 'OWNER_TURN_REQUIRED', message: 'owner only' }
+      : { ok: true as const }));
+    const server = createSchedulerMcpServer({ getScheduler: () => scheduler, authorizeCall });
+    const [clientTx, serverTx] = InMemoryTransport.createLinkedPair();
+    const client = new Client({ name: 'scheduler-gate', version: '0.0.0' });
+    await Promise.all([server.connect(serverTx), client.connect(clientTx)]);
+    try {
+      const denied = await client.callTool({
+        name: 'call_tool',
+        arguments: { name: 'schedule_create', args: baseCreate as unknown as Record<string, unknown> },
+      });
+      const deniedPayload = JSON.parse((denied.content as Array<{ text: string }>)[0]!.text) as Record<string, unknown>;
+      expect(deniedPayload).toMatchObject({ ok: false, errorCode: 'OWNER_TURN_REQUIRED' });
+      expect(await scheduler.list()).toHaveLength(0);
+      expect(authorizeCall).toHaveBeenCalledWith(expect.objectContaining({ server: 'cindy_scheduler', tool: 'schedule_create' }));
+
+      const listed = await client.callTool({ name: 'call_tool', arguments: { name: 'schedule_list', args: {} } });
+      expect(parseToolResult(listed as { content: unknown[]; isError?: boolean }).envelope).toMatchObject({ ok: true });
+    } finally {
+      await client.close();
+      await server.close();
+    }
   });
 
   it('call_tool(schedule_create) creates a schedule and call_tool(schedule_list) returns it (same payload as scheduler.list)', async () => {
@@ -566,7 +624,8 @@ describe('cindy_scheduler MCP server (in-process smoke)', () => {
       arguments: { name: 'schedule_get', args: { id: 'does-not-exist' } },
     });
     const env = parseToolResult(result as { content: unknown[]; isError?: boolean }).envelope;
-    expect(env).toEqual({ ok: true, data: null });
+    // 本机读取自带范围：data:null 只说明本机没有。
+    expect(env).toEqual({ ok: true, data: null, scope: 'local' });
     await h.cleanup();
   });
 
@@ -574,6 +633,18 @@ describe('cindy_scheduler MCP server (in-process smoke)', () => {
     const result = await h.client.callTool({
       name: 'call_tool',
       arguments: { name: 'schedule_run_now', args: { id: 'does-not-exist' } },
+    });
+    const env = parseToolResult(result as { content: unknown[]; isError?: boolean }).envelope;
+    expect(env).toMatchObject({ ok: false, code: 'NOT_FOUND' });
+    if (env.ok) throw new Error('unreachable');
+    expect(env.message).toMatch(/not found/i);
+    await h.cleanup();
+  });
+
+  it('call_tool(schedule_delete, non-existent id) returns NOT_FOUND', async () => {
+    const result = await h.client.callTool({
+      name: 'call_tool',
+      arguments: { name: 'schedule_delete', args: { id: 'does-not-exist' } },
     });
     const env = parseToolResult(result as { content: unknown[]; isError?: boolean }).envelope;
     expect(env).toMatchObject({ ok: false, code: 'NOT_FOUND' });
@@ -630,11 +701,10 @@ describe('cindy_scheduler MCP server (in-process smoke)', () => {
     await h.cleanup();
   });
 
-  it('call_tool(schedule_create, script + bound-session/worktree combos) returns INVALID_PARAMS', async () => {
+  it('call_tool(schedule_create, script + persistent-session/worktree combos) returns INVALID_PARAMS', async () => {
     for (const extra of [
       { persistentSession: true },
       { useWorktree: true },
-      { bindToCurrentSession: true },
     ]) {
       const result = await h.client.callTool({
         name: 'call_tool',
@@ -714,10 +784,8 @@ describe('cindy_scheduler MCP server (in-process smoke)', () => {
     await h.cleanup();
   });
 
-  it('call_tool(schedule_update, targetSessionId=null) unbinds so a bound schedule can switch to script mode (codex review 966)', async () => {
-    // 已绑定会话的任务:schema 只收 string 或缺省时,JSON 调用方拼不出"解绑"的
-    // 合法 patch(缺省 = 不修改),也就永远切不成 script 模式——null 必须被翻译
-    // 成 key 在但值 undefined 的引擎语义(同 preRunHook 约定)。
+  it('call_tool(schedule_update, targetSessionId=null) preserves a binding when switching to script, and explicitly unbinds with null', async () => {
+    // Omitted target preserves the lifecycle owner; explicit null clears it.
     const created = await h.client.callTool({
       name: 'call_tool',
       arguments: {
@@ -730,7 +798,7 @@ describe('cindy_scheduler MCP server (in-process smoke)', () => {
     expect((createdEnv.data as Schedule).targetSessionId).toBe('sess-bound-1');
     const id = (createdEnv.data as Schedule).id;
 
-    // 不解绑直接切 script → 引擎合并态校验拦下(绑定与 script 互斥)
+    // 切到 script 保留生命周期绑定；只有显式 null 才解绑。
     const stillBound = await h.client.callTool({
       name: 'call_tool',
       arguments: {
@@ -743,7 +811,7 @@ describe('cindy_scheduler MCP server (in-process smoke)', () => {
       },
     });
     const stillBoundEnv = parseToolResult(stillBound as { content: unknown[]; isError?: boolean }).envelope;
-    expect(stillBoundEnv).toMatchObject({ ok: false, code: 'INVALID_PARAMS' });
+    expect(stillBoundEnv).toMatchObject({ ok: true, data: { executionMode: 'script', targetSessionId: 'sess-bound-1' } });
 
     // targetSessionId: null 解绑 + 切 script,一个 patch 完成
     const unboundToScript = await h.client.callTool({
@@ -1064,6 +1132,16 @@ describe('schedule_create — bindToCurrentSession', () => {
     expect(env.ok).toBe(false);
     expect(env.code).toBe('INVALID_PARAMS');
     expect(created.input).toBeUndefined();
+  });
+
+  it('script binding uses caller identity and retains its own working directory', async () => {
+    const { created, registry } = setup('sess-current');
+    const env = await callCreate(registry, { executionMode: 'script',
+      scriptConfig: { command: 'node watcher.mjs', capabilities: ['sessions.dispatch'] },
+      workingDir: '/watcher', bindToCurrentSession: true, targetSessionId: 'stale',
+    });
+    expect(env.ok).toBe(true);
+    expect(created.input).toMatchObject({ targetSessionId: 'sess-current', workingDir: '/watcher' });
   });
 
   it('不设 bindToCurrentSession → 沿用 agent 传的 targetSessionId(向后兼容)', async () => {
@@ -1511,6 +1589,7 @@ describe('schedule_set_pre_run_hook — 统一安装通道', () => {
     withService?: boolean;
     scheduleRow?: Record<string, unknown> | null;
     resolveSessionWorkDir?: (sessionId: string) => Promise<string | undefined>;
+    isSessionAgentOnOtherDevice?: (sessionId: string) => Promise<boolean>;
   }) {
     const installCalls: InstallCall[] = [];
     const updates: Array<{ id: string; patch: Record<string, unknown> }> = [];
@@ -1529,6 +1608,9 @@ describe('schedule_set_pre_run_hook — 统一安装通道', () => {
         ? {}
         : {
             hookScript: {
+              ...(opts.isSessionAgentOnOtherDevice
+                ? { isSessionAgentOnOtherDevice: opts.isSessionAgentOnOtherDevice }
+                : {}),
               ...(opts.resolveSessionWorkDir
                 ? { resolveSessionWorkDir: opts.resolveSessionWorkDir }
                 : {}),
@@ -1617,6 +1699,38 @@ describe('schedule_set_pre_run_hook — 统一安装通道', () => {
     const data = env.data as Record<string, unknown>;
     expect(data.attached).toBe(true);
     expect((data.test as Record<string, unknown>).decision).toBe('skip');
+  });
+
+  // PR #6832: the real tool must select the local utility route for remote bound
+  // tasks. Existing tests only inherited cwd, without remote-only model/provider.
+  // Minimal input: targetSessionId + remote provider, no schedule.agentDeviceId.
+  // Tier: unit; fake installer captures its public route and attachment result.
+  // Windows standalone: 0.85s for the file's 70 tests.
+  it.each([true, false])('uses the bound task location for hook generation (remote=%s)', async (remote) => {
+    const { registry, installCalls, updates } = setup({
+      scheduleRow: { id: 'sch-1', targetSessionId: 'bound', providerId: 'selected-provider',
+        agentKind: 'claude-code', model: 'selected-model' },
+      isSessionAgentOnOtherDevice: async () => remote,
+    });
+    const env = await callTool(registry, { scheduleId: 'sch-1', description: 'Check for pending work' });
+    expect(env.ok).toBe(true);
+    expect(installCalls[0]).toMatchObject({
+      providerId: remote ? undefined : 'selected-provider',
+      agentKind: remote ? undefined : 'claude-code',
+      model: remote ? undefined : 'selected-model',
+    });
+    expect(updates).toHaveLength(1);
+  });
+
+  it('bound script hooks are installed in script cwd rather than owner cwd', async () => {
+    const { registry, installCalls } = setup({
+      scheduleRow: { id: 'sch-1', name: 'watcher', executionMode: 'script',
+        workingDir: '/watcher', targetSessionId: 'owner' },
+      resolveSessionWorkDir: async () => '/owner',
+    });
+    const env = await callTool(registry, { scheduleId: 'sch-1', script: 'process.exit(2)' });
+    expect(env.ok).toBe(true);
+    expect(installCalls[0]).toMatchObject({ workingDir: '/watcher' });
   });
 
   it('绑定会话任务 → 优先用 resolveSessionWorkDir 解析的会话目录落盘(schedule.workingDir 过期不用)', async () => {

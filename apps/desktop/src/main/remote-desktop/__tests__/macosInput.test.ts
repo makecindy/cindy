@@ -6,8 +6,10 @@ import { promisify } from 'node:util';
 import { expect, it } from 'vitest';
 
 const exec = promisify(execFile);
-const callerPath = path.resolve(import.meta.dirname,
-  '../../../../../../packages/remote-credentials-native/Sources/DesktopNativeCaller/DesktopNativeCaller.swift');
+const callerPath = path.resolve(
+  import.meta.dirname,
+  '../../../../../../packages/remote-credentials-native/Sources/DesktopNativeCaller/DesktopNativeCaller.swift',
+);
 
 it.skipIf(process.platform !== 'darwin')(
   'preserves native system shortcut flags without posting input',
@@ -22,7 +24,11 @@ it.skipIf(process.platform !== 'darwin')(
       await writeFile(main, `${await readFile(callerPath, 'utf8')}\n${source}\n${tests}`);
       await exec('swiftc', ['-D', 'DESKTOP_INPUT_TEST', main, '-o', binary], { timeout: 120_000 });
       const { stdout } = await exec(binary, [], { timeout: 5000 });
-      expect(stdout.trim()).toBe('native keyboard flags passed');
+      expect(stdout.trim().split('\n')).toEqual([
+        'native keyboard flags passed',
+        'native window confinement passed',
+        'native qr detection passed',
+      ]);
     } finally {
       await rm(directory, { recursive: true, force: true });
     }
@@ -46,6 +52,7 @@ it.skipIf(process.platform !== 'darwin')(
       for (const args of [
         [],
         ['--check'],
+        ['--privacy-input'],
         ['--lock-screen'],
         ['--request-permission'],
         ['--clipboard-version'],
@@ -68,11 +75,10 @@ it.skipIf(process.platform !== 'darwin')(
 
       // Exercise the real audit-token/SecCode APIs with a harmless probe. It
       // contains only authentication, never AX reads, input or permission UI.
-      const prefix = (await readFile(callerPath, 'utf8'))
-        .replace(
-          '"DESKTOP_INPUT_DEVELOPMENT_EXECUTABLE"',
-          JSON.stringify(Buffer.from(process.execPath).toString('base64')),
-        );
+      const prefix = (await readFile(callerPath, 'utf8')).replace(
+        '"DESKTOP_INPUT_DEVELOPMENT_EXECUTABLE"',
+        JSON.stringify(Buffer.from(process.execPath).toString('base64')),
+      );
       const main = path.join(directory, 'main.swift');
       const probe = path.join(directory, 'probe');
       await writeFile(

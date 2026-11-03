@@ -9,6 +9,7 @@ const mocks = vi.hoisted(() => ({
   ensureMakeTask: vi.fn<typeof import('@/lib/cindyMakeDoctorStream').ensureMakeTask>(),
   startMakeDoctorInStream:
     vi.fn<typeof import('@/lib/cindyMakeDoctorStream').startMakeDoctorInStream>(),
+  preflight: vi.fn(),
   getDraft: vi.fn(),
   getFastModeForModel: vi.fn(),
   navigate: vi.fn(),
@@ -20,18 +21,16 @@ vi.mock('@/lib/cindyMakeDoctorStream', () => ({
   ensureMakeTask: mocks.ensureMakeTask,
   startMakeDoctorInStream: mocks.startMakeDoctorInStream,
 }));
+vi.mock('../CindyMakePreflightDialog', () => ({
+  CindyMakePreflightDialog: (props: unknown) => {
+    mocks.preflight(props);
+    return <div data-testid="preflight" />;
+  },
+}));
 vi.mock('@/state/newMakerDraft', () => ({
   getDraft: mocks.getDraft,
   getFastModeForModel: mocks.getFastModeForModel,
 }));
-
-function deferred<T>() {
-  let resolve!: (value: T) => void;
-  const promise = new Promise<T>((done) => {
-    resolve = done;
-  });
-  return { promise, resolve };
-}
 
 function openDialog() {
   const onOpenChange = vi.fn();
@@ -117,13 +116,11 @@ describe('Cindy Make creation from Settings', () => {
       fireEvent.change(view.input, { target: { value: request } });
       fireEvent.click(view.submit);
 
-      await waitFor(() => expect(mocks.navigate).toHaveBeenCalledWith('/cc-agent/make-task'));
-      expect(mocks.ensureMakeTask).toHaveBeenCalledExactlyOnceWith({
-        sessionId: undefined,
-        title: 'settings.cindyMake.create.title',
-        isCurrent: expect.any(Function),
+      await waitFor(() => expect(screen.getByTestId('preflight')).toBeTruthy());
+      expect(mocks.preflight).toHaveBeenCalledWith({
+        request,
+        onOpenChange: view.onOpenChange,
         createOptions: {
-          workspaceKind: 'dialogue',
           agentKind: vendor,
           model: 'selected-model',
           effort: 'high',
@@ -133,70 +130,35 @@ describe('Cindy Make creation from Settings', () => {
           planModeEnabled: true,
         },
       });
-      expect(mocks.startMakeDoctorInStream).toHaveBeenCalledExactlyOnceWith('make-task', {
-        command: 'cindy-make',
-        request,
-      });
-      expect(view.onOpenChange).toHaveBeenCalledWith(false);
+      expect(mocks.ensureMakeTask).not.toHaveBeenCalled();
+      expect(mocks.startMakeDoctorInStream).not.toHaveBeenCalled();
+      expect(mocks.navigate).not.toHaveBeenCalled();
+      expect(view.onOpenChange).not.toHaveBeenCalled();
       expect(JSON.stringify(draft)).toBe(originalDraft);
     },
   );
 
-  it('coalesces repeated submissions while creating the task', async () => {
-    const pending = deferred<string | null>();
-    mocks.ensureMakeTask.mockReturnValue(pending.promise);
+  it('coalesces repeated submissions before opening preflight', async () => {
     const view = openDialog();
     fireEvent.change(view.input, { target: { value: 'Add a filter' } });
     fireEvent.click(view.submit);
     fireEvent.submit(view.input.closest('form')!);
     fireEvent.keyDown(view.input, { key: 'Enter', metaKey: true });
-    await waitFor(() => expect(mocks.ensureMakeTask).toHaveBeenCalledTimes(1));
-    expect(view.submit.disabled).toBe(true);
-    expect(view.input.disabled).toBe(true);
-    await act(async () => pending.resolve('make-task'));
-    expect(mocks.startMakeDoctorInStream).toHaveBeenCalledTimes(1);
-    expect(mocks.navigate).toHaveBeenCalledTimes(1);
+    await waitFor(() => expect(screen.getByTestId('preflight')).toBeTruthy());
+    expect(mocks.getDraft).toHaveBeenCalledTimes(1);
   });
 
-  it('keeps the requirements after a creation failure and permits retry', async () => {
-    mocks.ensureMakeTask.mockRejectedValueOnce(new Error('creation failed'));
+  it('retains requirements if loading preferences fails and allows retry', async () => {
+    mocks.getDraft.mockImplementationOnce(() => {
+      throw new Error('unavailable');
+    });
     const view = openDialog();
     fireEvent.change(view.input, { target: { value: 'Add a filter' } });
     fireEvent.click(view.submit);
     await waitFor(() => expect(screen.getByRole('alert')).toBeTruthy());
     expect(view.input.value).toBe('Add a filter');
-    expect(view.submit.disabled).toBe(false);
-    expect(mocks.startMakeDoctorInStream).not.toHaveBeenCalled();
-    expect(mocks.navigate).not.toHaveBeenCalled();
     fireEvent.click(view.submit);
-    await waitFor(() => expect(mocks.navigate).toHaveBeenCalledTimes(1));
-    expect(mocks.ensureMakeTask).toHaveBeenCalledTimes(2);
-  });
-
-  it('reuses the created task if starting the workflow fails', async () => {
-    mocks.startMakeDoctorInStream.mockReturnValueOnce(null);
-    const view = openDialog();
-    fireEvent.change(view.input, { target: { value: 'Add a filter' } });
-    fireEvent.click(view.submit);
-    await waitFor(() => expect(screen.getByRole('alert')).toBeTruthy());
-    fireEvent.click(view.submit);
-    await waitFor(() => expect(mocks.navigate).toHaveBeenCalledTimes(1));
-    expect(mocks.ensureMakeTask.mock.calls[1][0].sessionId).toBe('make-task');
-  });
-
-  it('does not start or navigate under a different account after task creation', async () => {
-    const pending = deferred<string | null>();
-    mocks.ensureMakeTask.mockReturnValue(pending.promise);
-    const view = openDialog();
-    fireEvent.change(view.input, { target: { value: 'Add a filter' } });
-    fireEvent.click(view.submit);
-    await waitFor(() => expect(mocks.ensureMakeTask).toHaveBeenCalledTimes(1));
-    setDataOwnerGeneration('owner-b', 2);
-    expect(mocks.ensureMakeTask.mock.calls[0][0].isCurrent()).toBe(false);
-    await act(async () => pending.resolve('old-owner-task'));
-    expect(mocks.startMakeDoctorInStream).not.toHaveBeenCalled();
-    expect(mocks.navigate).not.toHaveBeenCalled();
-    expect(view.onOpenChange).toHaveBeenCalledWith(false);
+    await waitFor(() => expect(screen.getByTestId('preflight')).toBeTruthy());
   });
 
   it('dismisses a stale form rather than submitting the previous account’s request', async () => {
@@ -209,22 +171,14 @@ describe('Cindy Make creation from Settings', () => {
     expect(view.onOpenChange).toHaveBeenCalledWith(false);
   });
 
-  it('keeps accepted work independent of Settings unmount without late navigation', async () => {
-    const pending = deferred<string | null>();
-    mocks.ensureMakeTask.mockReturnValue(pending.promise);
+  it('does not open preflight if Settings unmounts while loading preferences', async () => {
     const view = openDialog();
     fireEvent.change(view.input, { target: { value: 'Add a filter' } });
     fireEvent.click(view.submit);
-    await waitFor(() => expect(mocks.ensureMakeTask).toHaveBeenCalledTimes(1));
     view.unmount();
-    expect(mocks.ensureMakeTask.mock.calls[0][0].isCurrent()).toBe(true);
-    await act(async () => pending.resolve('make-task'));
-    expect(mocks.startMakeDoctorInStream).toHaveBeenCalledExactlyOnceWith('make-task', {
-      command: 'cindy-make',
-      request: 'Add a filter',
-    });
-    expect(mocks.navigate).not.toHaveBeenCalled();
-    expect(view.onOpenChange).not.toHaveBeenCalled();
+    await act(async () => {});
+    expect(mocks.preflight).not.toHaveBeenCalled();
+    expect(mocks.ensureMakeTask).not.toHaveBeenCalled();
   });
 
   it('supports Ctrl+Enter but never submits while composing text', async () => {
@@ -235,6 +189,6 @@ describe('Cindy Make creation from Settings', () => {
     });
     expect(mocks.ensureMakeTask).not.toHaveBeenCalled();
     fireEvent.keyDown(view.input, { key: 'Enter', ctrlKey: true });
-    await waitFor(() => expect(mocks.navigate).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(screen.getByTestId('preflight')).toBeTruthy());
   });
 });

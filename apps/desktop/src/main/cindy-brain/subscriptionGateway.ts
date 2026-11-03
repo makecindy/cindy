@@ -30,7 +30,14 @@ import {
   GHOST_HOOK_REWRITE_MAX_CHARS,
   GHOST_HOOK_TIMEOUT_MS,
   GHOST_SUB_QUEUE_MAX,
+  GHOST_CONTROL_POINTS,
+  ghostControlPointActive,
   type GhostActivityEventName,
+  type GhostControlPointData,
+  type GhostControlPointFailureAction,
+  type GhostControlPointId,
+  type GhostControlPointResult,
+  type GhostModelRoute,
   type GhostDidEventData,
   type GhostDidEventName,
   type GhostEventActivityData,
@@ -46,13 +53,28 @@ import {
 import { isGhostOwnerScopeUsable, type GhostOwnerScope } from './ghostOwnerScope.js';
 import { getDbClient } from '../localDb/client/current.js';
 import * as localDbSchema from '../localDb/schema.js';
+import { findInstalledGhostByInstanceId, installedGhostStoragePart } from '../../shared/pluginIdentity.js';
+
+/** 插件回传的模型路由：只取已知字段并限长，是否可用由宿主按用户已连接的模型另行校验。 */
+function parseModelRoute(value: unknown): GhostModelRoute | undefined {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return undefined;
+  const r = value as Record<string, unknown>;
+  const text = (v: unknown) => (typeof v === 'string' && v.trim() && v.length <= 256 ? v.trim() : undefined);
+  const agentKind = r.agentKind === 'cc' || r.agentKind === 'codex' || r.agentKind === 'pi' ? r.agentKind : undefined;
+  const model = text(r.model);
+  const providerId = text(r.providerId);
+  if (!agentKind || !model || !providerId) return undefined;
+  const effort = text(r.effort);
+  return { agentKind, model, providerId, ...(effort ? { effort } : {}) };
+}
 
 /** block 理由展示上限(超长截断,防意识用理由塞小作文)。 */
 const BLOCK_REASON_MAX_CHARS = 200;
 
 /** 单意识裁决(askOne 归一化产物;null = 本轮失败已计熔断)。 */
 type HookVerdict = {
-  action: 'allow' | 'block' | 'rewrite' | 'render';
+  action: 'allow' | 'block' | 'rewrite' | 'render' | 'skip' | 'route';
+  route?: GhostModelRoute;
   reason?: string;
   text?: string;
   html?: string;
@@ -168,6 +190,9 @@ interface SubEntry {
   waking: boolean;
   /** 钩子连续失败数(超时/投递失败;成功裁决清零)。 */
   hookFails: number;
+  /** 控制节点连续失败数与熔断，与消息钩子分开计：自动化节点出错不该停掉消息钩子。 */
+  pointFails: number;
+  pointFused: boolean;
   /** 熔断:钩子降级为不再询问(旁听不受影响)。意识重启不自动复位,
    *  重新启停(disable/enable 清 entry)或重启应用后恢复。 */
   hookFused: boolean;
@@ -211,6 +236,8 @@ export class GhostSubscriptionGateway {
         waking: false,
         hookFails: 0,
         hookFused: false,
+        pointFails: 0,
+        pointFused: false,
         ownerScope: undefined,
       };
       this.entries.set(ghostId, e);
@@ -224,7 +251,7 @@ export class GhostSubscriptionGateway {
     name: GhostDidEventName,
     data: GhostDidEventData,
   ): void {
-    const ghostId = ghost.manifest.id;
+    const ghostId = installedGhostStoragePart(ghost);
     const e = this.entry(ghostId);
     const ownerScope = this.captureOwnerScope();
     if (!this.ownerScopeUsable(ownerScope)) {
@@ -292,28 +319,34 @@ export class GhostSubscriptionGateway {
   private kickWake(ghost: InstalledGhost, e: SubEntry, ownerScope: unknown): void {
     if (e.waking) return;
     if (!this.ownerScopeUsable(ownerScope)) {
-      this.invalidateOwner(ghost.manifest.id, e);
+      this.invalidateOwner(installedGhostStoragePart(ghost), e);
       return;
     }
     e.waking = true;
     void this.deps
       .wake(ghost)
       .then(() => {
+        if (this.entries.get(installedGhostStoragePart(ghost)) !== e) return;
         if (!this.ownerScopeUsable(ownerScope)) {
-          this.invalidateOwner(ghost.manifest.id, e);
+          this.invalidateOwner(installedGhostStoragePart(ghost), e);
           return;
         }
-        this.flush(ghost.manifest.id, e, ownerScope);
+        this.flush(installedGhostStoragePart(ghost), e, ownerScope);
       })
       .catch((err) => {
         // 唤醒失败缓冲保留(封顶丢最旧),下一条事件再试。
         this.deps.log?.warn('ghost subscribe wake failed', {
-          ghostId: ghost.manifest.id,
+          ghostId: installedGhostStoragePart(ghost),
           error: err instanceof Error ? err.message : String(err),
         });
       })
       .finally(() => {
         e.waking = false;
+        // Events queued between flush's callback and this microtask must not wait
+        // for another event to wake them up (the queued event may be terminal).
+        const ghostId = installedGhostStoragePart(ghost);
+        if (this.entries.get(ghostId) === e && this.ownerScopeUsable(ownerScope)
+          && e.buffer.length > 0 && this.deps.isRunning(ghostId)) this.flush(ghostId, e, ownerScope);
       });
   }
 
@@ -376,7 +409,7 @@ export class GhostSubscriptionGateway {
     for (const ghost of this.deps.listGhosts()) {
       if (!ghost.enabled) continue;
       if (!ghost.manifest.subscribe?.hooks?.includes('will-user-message')) continue;
-      const ghostId = ghost.manifest.id;
+      const ghostId = installedGhostStoragePart(ghost);
       const e = this.entry(ghostId);
       if (e.hookFused) continue;
       context ??= this.resolveMessageHookContext(input.sessionId, GHOST_HOOK_TIMEOUT_MS / 2);
@@ -405,7 +438,7 @@ export class GhostSubscriptionGateway {
     if (rewritten && lastRewriteGhost) {
       return {
         action: 'rewrite',
-        ghostId: lastRewriteGhost.manifest.id,
+        ghostId: installedGhostStoragePart(lastRewriteGhost),
         ghostName: lastRewriteGhost.manifest.name,
         text: currentText,
       };
@@ -440,7 +473,7 @@ export class GhostSubscriptionGateway {
     for (const ghost of this.deps.listGhosts()) {
       if (!ghost.enabled) continue;
       if (!ghost.manifest.subscribe?.hooks?.includes('will-assistant-message')) continue;
-      const ghostId = ghost.manifest.id;
+      const ghostId = installedGhostStoragePart(ghost);
       const e = this.entry(ghostId);
       if (e.hookFused) continue;
       context ??= this.resolveMessageHookContext(
@@ -475,7 +508,7 @@ export class GhostSubscriptionGateway {
     if (renderGhost) {
       return {
         action: 'render',
-        ghostId: renderGhost.manifest.id,
+        ghostId: installedGhostStoragePart(renderGhost),
         ghostName: renderGhost.manifest.name,
         html: renderHtml,
         height: renderHeight,
@@ -485,12 +518,124 @@ export class GhostSubscriptionGateway {
     if (lastRewriteGhost) {
       return {
         action: 'rewrite',
-        ghostId: lastRewriteGhost.manifest.id,
+        ghostId: installedGhostStoragePart(lastRewriteGhost),
         ghostName: lastRewriteGhost.manifest.name,
         text: currentText,
       };
     }
     return { action: 'allow' };
+  }
+
+  /**
+   * 控制节点询问(will-schedule-run / will-routine-run …)。只问该任务选定的那个插件
+   * (任务里的 preRunPlugin);插件只能收紧：allow 只是"不反对"。插件没装、已停用、
+   * 没声明或用户没批准该节点，以及超时、崩溃、已熔断，都按任务的 onFailure 处理，
+   * 插件不能自报。本方法异常不外抛，调用方据结果决定是否继续。
+   */
+  async screenControlPoint(
+    point: GhostControlPointId,
+    data: GhostControlPointData,
+    target: { pluginId: string; onFailure: GhostControlPointFailureAction },
+  ): Promise<GhostControlPointResult> {
+    const ownerScope = this.captureOwnerScope();
+    if (!this.ownerScopeUsable(ownerScope)) return { action: 'allow' };
+    const spec = GHOST_CONTROL_POINTS[point];
+    const ghost = findInstalledGhostByInstanceId(this.deps.listGhosts(), target.pluginId);
+    const failed = (ghostId: string, ghostName: string, why: string): GhostControlPointResult => {
+      this.deps.log?.warn('control point unanswered', { ghostId, point, onFailure: target.onFailure, why });
+      if (target.onFailure === 'allow') return { action: 'allow' };
+      return { action: target.onFailure, ghostId, ghostName, reason: '', failure: true };
+    };
+    if (!ghost || !ghostControlPointActive(ghost, point)) {
+      return failed(target.pluginId, ghost?.manifest.name ?? target.pluginId, ghost ? 'inactive' : 'missing');
+    }
+    const ghostId = installedGhostStoragePart(ghost);
+    const e = this.entry(ghostId);
+    const verdict = e.pointFused ? null : await this.askControlPoint(ghost, e, point, data, spec.timeoutMs, ownerScope);
+    if (!this.ownerScopeUsable(ownerScope)) return { action: 'allow' };
+    if (verdict === null) return failed(ghostId, ghost.manifest.name, e.pointFused ? 'fused' : 'unanswered');
+    if (verdict.action === 'route' && verdict.route && (spec.actions as readonly string[]).includes('route')) {
+      this.deps.log?.info('control point routed', { ghostId, point, agentKind: verdict.route.agentKind, model: verdict.route.model });
+      return {
+        action: 'route',
+        ghostId,
+        ghostName: ghost.manifest.name,
+        route: verdict.route,
+        reason: (verdict.reason ?? '').slice(0, BLOCK_REASON_MAX_CHARS),
+      };
+    }
+    if ((verdict.action === 'skip' || verdict.action === 'block') &&
+        (spec.actions as readonly string[]).includes(verdict.action)) {
+      this.deps.log?.info('control point stopped', { ghostId, point, action: verdict.action });
+      return {
+        action: verdict.action,
+        ghostId,
+        ghostName: ghost.manifest.name,
+        reason: (verdict.reason ?? '').slice(0, BLOCK_REASON_MAX_CHARS),
+        failure: false,
+      };
+    }
+    // allow、格式不对的 route 与本节点不支持的动作都只算不反对。
+    return { action: 'allow' };
+  }
+
+  private async askControlPoint(
+    ghost: InstalledGhost,
+    e: SubEntry,
+    point: GhostControlPointId,
+    data: GhostControlPointData,
+    timeoutMs: number,
+    ownerScope: unknown,
+  ): Promise<HookVerdict | null> {
+    const ghostId = installedGhostStoragePart(ghost);
+    const hookId = this.deps.newHookId?.() ?? randomUUID();
+    const deadline = this.deps.now() + timeoutMs;
+    let resolveVerdict!: (v: HookVerdict | null) => void;
+    const verdictPromise = new Promise<HookVerdict | null>((resolve) => {
+      resolveVerdict = resolve;
+    });
+    this.pendingHooks.set(hookId, { ghostId, resolve: resolveVerdict });
+    const timer = setTimeout(() => {
+      if (this.pendingHooks.delete(hookId)) resolveVerdict(null);
+    }, timeoutMs);
+    timer.unref?.();
+    let deliverFailure: string | null = null;
+    void (async () => {
+      // 自动化节点不要求常驻：不在跑就按需拉起，唤醒耗时计入同一时限。
+      if (!this.deps.isRunning(ghostId)) {
+        const wokeBeforeDeadline = await Promise.race([
+          this.deps.wake(ghost).then(() => true),
+          verdictPromise.then(() => false),
+        ]);
+        if (!wokeBeforeDeadline) return;
+      }
+      if (!this.ownerScopeUsable(ownerScope)) {
+        this.invalidateOwner(ghostId, e);
+        return;
+      }
+      if (!this.pendingHooks.has(hookId)) return;
+      this.deps.sendToGhost(ghostId, { type: 'event', name: point, hookId, ts: this.deps.now(), deadline, data });
+    })().catch((err) => {
+      if (this.pendingHooks.delete(hookId)) {
+        deliverFailure = `deliver: ${err instanceof Error ? err.message : String(err)}`;
+        resolveVerdict(null);
+      }
+    });
+    const verdict = await verdictPromise;
+    clearTimeout(timer);
+    if (verdict === null) {
+      if (!this.ownerScopeUsable(ownerScope)) return null;
+      e.pointFails += 1;
+      this.deps.log?.warn('ghost control point failed', { ghostId, point, why: deliverFailure ?? 'timeout', fails: e.pointFails });
+      if (e.pointFails >= GHOST_HOOK_FUSE_THRESHOLD && !e.pointFused) {
+        e.pointFused = true;
+        // 不复用消息钩子的"已降级为只旁听"通知：节点熔断后仍按用户的出错处理执行。
+        this.deps.log?.warn('ghost control points fused; failures follow user policy', { ghostId });
+      }
+      return null;
+    }
+    e.pointFails = 0;
+    return verdict;
   }
 
   /** 问一个意识:唤醒(如需)+ 投递 + 等裁决,整体套一只超时闸。
@@ -504,7 +649,7 @@ export class GhostSubscriptionGateway {
     ownerStamp?: unknown,
     ownerScope?: unknown,
   ): Promise<HookVerdict | null> {
-    const ghostId = ghost.manifest.id;
+    const ghostId = installedGhostStoragePart(ghost);
     const hookId = this.deps.newHookId?.() ?? randomUUID();
     // 超时按钩子分:入口(user-message)必须快(挡发送);出口(assistant-message)
     // 是后台后置钩,容许长处理(见 GHOST_ASSISTANT_HOOK_TIMEOUT_MS)。
@@ -602,14 +747,14 @@ export class GhostSubscriptionGateway {
   ): void {
     e.hookFails += 1;
     this.deps.log?.warn('ghost hook failed (fail-open)', {
-      ghostId: ghost.manifest.id,
+      ghostId: installedGhostStoragePart(ghost),
       why,
       fails: e.hookFails,
     });
     if (e.hookFails >= GHOST_HOOK_FUSE_THRESHOLD && !e.hookFused) {
       e.hookFused = true;
       this.deps.log?.warn('ghost hook fused: degraded to observe-only', {
-        ghostId: ghost.manifest.id,
+        ghostId: installedGhostStoragePart(ghost),
       });
       this.deps.onHookFused?.(ghost, ownerStamp);
     }
@@ -621,7 +766,8 @@ export class GhostSubscriptionGateway {
     if (typeof payload !== 'object' || payload === null) return;
     const p = payload as Record<string, unknown>;
     if (p.type !== 'event-verdict' || typeof p.hookId !== 'string') return;
-    if (p.action !== 'allow' && p.action !== 'block' && p.action !== 'rewrite' && p.action !== 'render') return;
+    if (p.action !== 'allow' && p.action !== 'block' && p.action !== 'rewrite' && p.action !== 'render' && p.action !== 'skip' && p.action !== 'route') return;
+    const route = p.action === 'route' ? parseModelRoute(p.route) : undefined;
     const pending = this.pendingHooks.get(p.hookId);
     if (!pending || pending.ghostId !== ghostId) return;
     this.pendingHooks.delete(p.hookId);
@@ -631,11 +777,19 @@ export class GhostSubscriptionGateway {
       ...(typeof p.text === 'string' ? { text: p.text } : {}),
       ...(typeof p.html === 'string' ? { html: p.html } : {}),
       ...(typeof p.height === 'number' ? { height: p.height } : {}),
+      ...(route ? { route } : {}),
     });
   }
 
   /** 意识停用/抽离时清态(缓冲、熔断、seq 全部归零;待决钩子按超时自然收口)。 */
   dropGhost(ghostId: string): void {
+    const entry = this.entries.get(ghostId);
+    if (entry) entry.buffer.length = 0;
+    for (const [hookId, pending] of this.pendingHooks) {
+      if (pending.ghostId !== ghostId) continue;
+      this.pendingHooks.delete(hookId);
+      pending.resolve(null);
+    }
     this.entries.delete(ghostId);
   }
 }

@@ -137,12 +137,13 @@ describe('getDefaultModelForVendor', () => {
     expect(md.getDefaultModelForVendor('codex').id).toBe(md.coldStartModelIdForVendor('codex'));
   });
 
-  it('cc 冷启动占位的 id 与展示名必须是 bundled 目录里排序第一的可见模型', async () => {
+  it('cc 冷启动占位的 id 与展示名必须是 bundled 目录里排序第一的可见 Claude 型号', async () => {
     // 占位不是「另一份产品默认」，只是目录还没到位时的同值影子。两者漂移就会出现首帧一个
     // 模型、清单到位后换成另一个的跳变。
     //
-    // 只锁 cc：anthropic 的动态发现清单会被 registry 用目录 sortOrder 覆盖，
-    // 所以 registry 就是 cc tab 排序的权威。codex 侧不能这么锁，理由见下一条。
+    // 占位沿用 Claude 型号口径；Gateway Auto 是路由别名，不能成为订阅占位。
+    // 按公共型号身份限定参照，不因网关别名排到最前就改变冷启动默认。
+    // codex 侧不能锁相同排序，理由见下一条。
     //
     // 展示名一起锁住：renderer 刻意不 import BUNDLED_CATALOG（会把整份目录 JSON 打进
     // bundle，为一个瞬态 label 不值得），所以 label 只能写在代码里 —— 那就由这条断言保证
@@ -151,7 +152,8 @@ describe('getDefaultModelForVendor', () => {
     const { BUNDLED_CATALOG } = await import('@cindy/model-providers');
     const md = await import('@/lib/modelDefinitions');
     const first = Object.entries(bundledMeta(BUNDLED_CATALOG))
-      .filter(([, v]) => v.agents?.includes('claude-code') && v.defaultEnabled !== false)
+      .filter(([, v]) => v.modelRef?.startsWith('anthropic/') &&
+        v.agents?.includes('claude-code') && v.defaultEnabled !== false)
       .sort(
         ([, a], [, b]) =>
           (a.sortOrder ?? Number.MAX_SAFE_INTEGER) - (b.sortOrder ?? Number.MAX_SAFE_INTEGER),
@@ -320,6 +322,7 @@ describe('newSessionDefault（专用默认种子标记）', () => {
 });
 
 interface BundledMetaEntry {
+  modelRef?: string;
   agents?: readonly string[];
   group?: string;
   name?: string;
@@ -333,6 +336,7 @@ function bundledMeta(catalog: { modelRegistry?: ModelRegistry }): Record<string,
     for (const route of entry.routes) {
       if (route.providerId !== 'xd') continue;
       models[route.modelId] = {
+        modelRef: entry.modelRef,
         agents: route.agents,
         group: entry.group,
         name: entry.name,

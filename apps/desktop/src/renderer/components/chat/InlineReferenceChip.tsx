@@ -19,6 +19,7 @@ import type { KeyboardEventHandler, MouseEventHandler, ReactNode, Ref } from 're
 
 import { Tip } from '@/components/ui/tooltip';
 import { cn } from '@/lib/utils';
+import { activateInlineLinkFromKeyboard } from './linkInteraction';
 
 export interface InlineReferenceChipProps {
   label: string;
@@ -28,6 +29,8 @@ export interface InlineReferenceChipProps {
   tooltipContentClassName?: string;
   selected?: boolean;
   onClick?: MouseEventHandler<HTMLSpanElement>;
+  onMouseDown?: MouseEventHandler<HTMLSpanElement>;
+  onAuxClick?: MouseEventHandler<HTMLSpanElement>;
   onContextMenu?: MouseEventHandler<HTMLSpanElement>;
   chipRef?: Ref<HTMLSpanElement>;
   ariaLabel?: string;
@@ -52,6 +55,8 @@ export function InlineReferenceChip({
   tooltipContentClassName,
   selected = false,
   onClick,
+  onMouseDown,
+  onAuxClick,
   onContextMenu,
   chipRef,
   ariaLabel,
@@ -60,17 +65,15 @@ export function InlineReferenceChip({
   splitPaneRouteAction = false,
   textSelectable = true,
 }: InlineReferenceChipProps) {
-  const interactive = Boolean(onClick || onContextMenu);
+  const interactive = Boolean(onClick);
+  const focusable = interactive || Boolean(onContextMenu);
   const sharedClassName = cn(
     'inline-flex min-w-0 max-w-full items-center',
     !textSelectable && 'select-none',
     'gap-1.5 rounded-full border px-2 py-0.5 text-12 font-normal leading-5',
     'bg-[var(--surface-chip)] text-[var(--text-primary)]',
-    // 下划线跟着 `interactive` 一起给:DESIGN.md §14.5 要求「下划线 ⇔ 可点」双向成立,
-    // 而本组件同时服务可点的会话 / 项目深链 chip 与不可点的静态 chip(sidebar-embedded
-    // 等不注入 onClick / onContextMenu 的调用点)。判据只有 `interactive` 这一处,
-    // cursor 与下划线同源,不可能一边有一边没有(PR #1144 review 实捉:改前这些 chip
-    // 有 onClick 却无下划线,是「可点但无下划线」的反例)。
+    // DESIGN.md §14.5：按钮语义、指针与下划线只表示实际点击动作。
+    // 仅有上下文菜单的引用仍可聚焦以使用菜单键，但不宣称可点击。
     interactive && 'cursor-pointer underline underline-offset-2 transition-colors hover:bg-[var(--surface-hover)]',
     className,
   );
@@ -93,20 +96,20 @@ export function InlineReferenceChip({
   // `<span role="button">` 换掉原生 `<button>` 后要自己补键盘激活:走 native
   // click(),让 onClick 收到一个正常的合成鼠标事件,调用方无需区分入口。
   const handleKeyDown: KeyboardEventHandler<HTMLSpanElement> = (e) => {
-    if (!onClick) return;
-    if (e.key !== 'Enter' && e.key !== ' ') return;
-    e.preventDefault();
-    e.currentTarget.click();
+    if (!onClick && e.key !== 'ContextMenu' && !(e.shiftKey && e.key === 'F10')) return;
+    activateInlineLinkFromKeyboard(e);
   };
   const trigger = (
     <span
       ref={chipRef}
       role={interactive ? 'button' : undefined}
-      tabIndex={interactive ? 0 : undefined}
+      tabIndex={focusable ? 0 : undefined}
       aria-label={ariaLabel}
       onClick={onClick}
+      onMouseDown={onMouseDown}
+      onAuxClick={onAuxClick}
       onContextMenu={onContextMenu}
-      onKeyDown={interactive ? handleKeyDown : undefined}
+      onKeyDown={focusable ? handleKeyDown : undefined}
       className={sharedClassName}
       style={style}
       data-inline-reference-chip=""

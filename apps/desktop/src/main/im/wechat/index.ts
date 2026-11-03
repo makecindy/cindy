@@ -1,17 +1,20 @@
 import type { ImOrchestratorConfig } from '../shared/types';
 import { createImOrchestrator } from '../shared/orchestrator';
-import { resetSessionToDefaults } from '../shared/sessionRepo';
+import { resetImSessionToChannelDefaults } from '../shared/channelDefaultRouteSync';
 import { buildWechatAdapter } from './adapter';
 import type { WechatIM } from './WechatIM';
+import { readWechatChannelSettings } from './channelSettings';
 
 export function wireWechatOrchestrator(wechatIm: WechatIM, config: ImOrchestratorConfig): void {
-  const orchestrator = createImOrchestrator(buildWechatAdapter(wechatIm, config));
+  const orchestrator = createImOrchestrator(buildWechatAdapter(wechatIm, config), {
+    companionBotId: () => readWechatChannelSettings().companionBotId ?? null,
+  });
   wechatIm.attachTurnRuntime({
     runner: orchestrator.turnRunner,
     repo: orchestrator.repo,
     config,
     resetSessionToDefaults: (sessionId, nextConfig, prepared) =>
-      resetSessionToDefaults(sessionId, nextConfig, prepared, 'wechat'),
+      resetImSessionToChannelDefaults(sessionId, nextConfig, prepared, 'wechat'),
   });
 }
 

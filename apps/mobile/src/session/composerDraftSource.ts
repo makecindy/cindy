@@ -14,16 +14,34 @@ export interface ComposerDraftSnapshot {
 export function createComposerDraftSource(document: ComposerDocument) {
   let snapshot: ComposerDraftSnapshot = { document, draft: composerDocumentProjectedText(document) };
   const listeners = new Set<() => void>();
+  let frame: number | null = null;
   return {
     getSnapshot: () => snapshot,
     subscribe: (listener: () => void) => {
       listeners.add(listener);
-      return () => { listeners.delete(listener); };
+      return () => {
+        listeners.delete(listener);
+        if (listeners.size === 0 && frame !== null) {
+          cancelAnimationFrame(frame);
+          frame = null;
+        }
+      };
     },
     setDocument: (next: ComposerDocument) => {
       if (snapshot.document === next) return;
       snapshot = { document: next, draft: composerDocumentProjectedText(next) };
-      for (const listener of listeners) listener();
+      // Keep send/persistence snapshots synchronous, but publish at most once
+      // per frame. Android's direct WebView emitter can deliver a burst of edits
+      // before React finishes committing its external-store subscribers.
+      if (frame !== null || listeners.size === 0) return;
+      frame = requestAnimationFrame(() => {
+        frame = null;
+        // React may replace subscriptions during notification. New listeners
+        // read the current snapshot on mount, not through this same iteration.
+        for (const listener of [...listeners]) {
+          if (listeners.has(listener)) listener();
+        }
+      });
     },
   };
 }

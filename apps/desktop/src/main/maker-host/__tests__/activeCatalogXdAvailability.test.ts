@@ -328,7 +328,7 @@ describe('XD 网关权威模型清单重建', () => {
     ['deepseek/deepseek-v4-flash-vision-exp', 'high'],
     ['tencent/hy4-preview', 'high'],
   ] as const)(
-    '常用模型 %s 的三个 Harness 保留 Gateway 明示的默认、窗口和能力',
+    '常用模型 %s 的三个 Harness 继承公共默认，保留 Gateway 窗口和能力',
     (id, oldDefault) => {
       setActiveCatalog(BUNDLED_CATALOG);
       setXdGatewayModels([
@@ -344,7 +344,8 @@ describe('XD 网关权威模型清单重建', () => {
       ]);
       for (const agent of ['claude-code', 'codex', 'pi'] as const) {
         expect(xdModels(agent)[0]).toMatchObject({
-          defaultEffort: agent === 'pi' ? 'max' : oldDefault,
+          defaultEffort: 'medium',
+          efforts: ['minimal', 'low', 'medium', 'high', 'xhigh', 'max'],
           contextWindow: 987654,
         });
       }
@@ -354,7 +355,7 @@ describe('XD 网关权威模型清单重建', () => {
   it('新的 Server Registry 可更新默认；实际不支持的档位只适配，不增加能力', () => {
     const catalog = structuredClone(BUNDLED_CATALOG);
     const entry = catalog.modelRegistry!.models.find((m) => m.id === 'xd/z-ai-glm-5.3-flash')!;
-    entry.defaultEffort = 'high';
+    entry.routes[0].defaults = { ...entry.routes[0].defaults, defaultEffort: 'high' };
     setActiveCatalog(catalog);
     setXdGatewayModels([
       {
@@ -560,7 +561,7 @@ describe('XD 网关权威模型清单重建', () => {
     });
   });
 
-  it('服务端决定成员和能力，供应商显式默认优先于 Registry', () => {
+  it('服务端决定成员和能力，Registry 默认优先于供应商推荐', () => {
     setActiveCatalog(BUNDLED_CATALOG);
     setXdGatewayModels([
       {
@@ -584,7 +585,7 @@ describe('XD 网关权威模型清单重建', () => {
         contextWindow: 272_000,
         contextWindowMax: 372_000,
         efforts: ['low', 'medium', 'high', 'xhigh'],
-        defaultEffort: 'high',
+        defaultEffort: 'medium',
       });
     }
     expect('codexCompatibilityWireProtocol' in xdModels('codex')[0]).toBe(false);
@@ -796,6 +797,57 @@ describe('XD 网关权威模型清单重建', () => {
     expect(cc.find((m) => m.id === 'missing-output')?.cost).toBeUndefined();
   });
 
+  it('Muse Wonder 网关条目按 Registry 补齐三引擎资料，网关提供的接口三引擎都默认显示', () => {
+    setActiveCatalog(BUNDLED_CATALOG);
+    setXdGatewayModels([
+      { id: 'meta/muse-wonder-1.0', agents: ['claude-code', 'codex', 'pi'] },
+    ]);
+    const efforts = ['minimal', 'low', 'medium', 'high', 'xhigh', 'max'];
+    for (const agent of ['claude-code', 'codex', 'pi'] as const) {
+      const model = xdModels(agent).find((m) => m.id === 'meta/muse-wonder-1.0');
+      expect(model, agent).toMatchObject({
+        name: 'Muse Wonder',
+        nativeApi: 'openai-responses',
+        contextWindow: 1_048_576,
+        supportsImageInput: true,
+        efforts,
+        defaultEffort: 'medium',
+      });
+      // Cindy AI 自己提供 Messages / Responses 接口，不是本地兼容转换；目录未标 defaultEnabled:false 即默认显示。
+      expect(model?.defaultEnabled).not.toBe(false);
+    }
+    expect(resolveXdPiGatewayApi('meta/muse-wonder-1.0')).toBe('openai-responses');
+  });
+
+  // Regression: the temporary Argon Responses exception mislabeled Google's native API.
+  // A conflicting Gateway hint must not replace Cindy's verified Gemini protocol (unit tier).
+  it.each(['google/gemini-4-argon', 'gemini-4-argon'])(
+    'Gemini 4 Argon %s keeps Google native Pi routing despite a Responses Gateway hint',
+    (id) => {
+      setActiveCatalog(BUNDLED_CATALOG);
+      setXdGatewayModels([{
+        id,
+        agents: ['claude-code', 'codex', 'pi'],
+        perAgent: { pi: { wireProtocol: 'openai-responses' } },
+      }]);
+      for (const agent of ['claude-code', 'codex', 'pi'] as const) {
+        const model = xdModels(agent).find((m) => m.id === id);
+        expect(model, agent).toMatchObject({
+          name: 'Gemini 4 Argon',
+          group: 'google',
+          nativeApi: 'google-generative-ai',
+          contextWindow: 1_048_576,
+          supportsImageInput: true,
+          efforts: ['low', 'medium', 'high'],
+          defaultEffort: 'medium',
+        });
+        // Pi keeps Gemini's native API; the Gateway serves the other harnesses' own APIs.
+        expect(model?.defaultEnabled).not.toBe(false);
+      }
+      expect(resolveXdPiGatewayApi(id)).toBe('google-generative-ai');
+    },
+  );
+
   it('efforts 缺失时不合成档位，也不猜默认档', () => {
     setActiveCatalog(BUNDLED_CATALOG);
     setXdGatewayModels([
@@ -861,10 +913,8 @@ describe('Anthropic 权威模型清单注入', () => {
     setAnthropicDiscoveredModels([opus]);
     expect(anthropicModels().map((m) => m.id)).toEqual(['claude-opus-4-8']);
     expect(anthropicModels()[0]).toMatchObject({ name: 'Opus 4.8', supportsFastMode: true });
-    expect(anthropicModels('codex')[0]).toMatchObject({
-      name: 'Opus 4.8',
-      supportsFastMode: false,
-    });
+    // Claude 订阅只供 Claude Code,不再投影 Codex bridge。
+    expect(anthropicModels('codex')).toEqual([]);
     setAnthropicDiscoveredModels([]);
     expect(anthropicModels()).toEqual([]);
     expect(anthropicModels('codex')).toEqual([]);
@@ -880,7 +930,7 @@ describe('Anthropic 权威模型清单注入', () => {
 });
 
 describe('gateway cross-harness defaults', () => {
-  it('projects reviewed Gateway defaults through native harness policy and live capability changes', () => {
+  it('preserves Gateway model defaults across capability changes for every served engine', () => {
     setActiveCatalog(BUNDLED_CATALOG);
     const candidates = [
       ['deepseek/deepseek-v4-pro', ['text']],
@@ -899,16 +949,14 @@ describe('gateway cross-harness defaults', () => {
       perAgent: { pi: { wireProtocol: 'openai-responses' as const } },
     }));
     setXdGatewayModels(live.map((model) => ({ ...model, agents: [...model.agents] })));
-    const enabled = () =>
-      xdModels('pi')
+    const enabled = (agent: 'claude-code' | 'codex' | 'pi' = 'pi') =>
+      xdModels(agent)
         .filter((model) => model.defaultEnabled !== false)
         .map((model) => model.id);
-    expect(enabled().sort()).toEqual([
-      'deepseek/deepseek-v4-flash-vision-exp',
-      'tencent/hy4-preview',
-    ]);
+    expect(enabled().sort()).toEqual(candidates.map(([id]) => id).sort());
+    // Cindy AI serves Messages and Responses itself, so these engines follow the Gateway default too.
     for (const agent of ['claude-code', 'codex'] as const) {
-      expect(xdModels(agent).every((model) => model.defaultEnabled === false)).toBe(true);
+      expect(enabled(agent).sort()).toEqual(candidates.map(([id]) => id).sort());
     }
     expect(xdModels('pi').every((model) => model.piApi === 'openai-completions')).toBe(true);
     setXdGatewayModels(
@@ -918,7 +966,12 @@ describe('gateway cross-harness defaults', () => {
         modalities: { input: ['text'], output: ['text'] },
       })),
     );
-    expect(enabled().sort()).toEqual(['deepseek/deepseek-v4-pro', 'tencent/hy4-preview']);
+    expect(enabled().sort()).toEqual(candidates.map(([id]) => id).sort());
+    setXdGatewayModels(live.map((model, index) => ({
+      ...model, agents: [...model.agents], defaultEnabled: index !== 0,
+    })));
+    expect(enabled().sort()).toEqual(candidates.slice(1).map(([id]) => id).sort());
+    expect(enabled('codex').sort()).toEqual(candidates.slice(1).map(([id]) => id).sort());
   });
 
   it.each([1, 2, 3] as const)(
@@ -936,6 +989,7 @@ describe('gateway cross-harness defaults', () => {
         ['z-ai/glm-5.3-flash', 'openai-completions'],
         ['tencent/hy4-preview', 'openai-completions'],
         ['meta/muse-spark-1.3', 'openai-responses'],
+        ['meta/muse-wonder-1.0', 'openai-responses'],
         ['x-ai-grok/grok-4.6', 'openai-responses'],
         ['minimax/MiniMax-M3', 'anthropic-messages'],
         ['anthropic-claude/claude-fable-5-1', 'anthropic-messages'],
@@ -952,24 +1006,22 @@ describe('gateway cross-harness defaults', () => {
         })),
       );
       for (const [id, api] of examples) {
-        const everyday = !['deepseek/deepseek-v4-flash-vision-exp', 'tencent/hy4-preview'].includes(
-          id,
-        );
         const pi = xdModels('pi').find((m) => m.id === id)!;
         expect(pi).toMatchObject({
           nativeApi: api,
           piApi: api,
-          defaultEnabled: everyday,
+          defaultEnabled: true,
           contextWindow: 123_456,
         });
         expect(resolveXdPiGatewayApi(id)).toBe(api);
+        // Native APIs stay local knowledge; the Gateway's own engine APIs are not local conversion.
         expect(xdModels('claude-code').find((m) => m.id === id)).toMatchObject({
           nativeApi: api,
-          defaultEnabled: everyday && api === 'anthropic-messages',
+          defaultEnabled: true,
         });
         expect(xdModels('codex').find((m) => m.id === id)).toMatchObject({
           nativeApi: api,
-          defaultEnabled: everyday && api === 'openai-responses',
+          defaultEnabled: true,
         });
       }
       setXdGatewayModels([]);
@@ -977,7 +1029,7 @@ describe('gateway cross-harness defaults', () => {
     },
   );
 
-  it('uses canonical APIs for defaults and accepts a later server correction without editing Pi metadata', () => {
+  it('uses canonical APIs for Pi and accepts a later server correction without editing Pi metadata', () => {
     const id = 'google/gemini-future';
     setActiveCatalog(BUNDLED_CATALOG);
     setXdGatewayModels([
@@ -992,9 +1044,9 @@ describe('gateway cross-harness defaults', () => {
     ]);
     expect(xdModels('claude-code')[0]).toMatchObject({
       nativeApi: 'google-generative-ai',
-      defaultEnabled: false,
+      defaultEnabled: true,
     });
-    expect(xdModels('codex')[0].defaultEnabled).toBe(false);
+    expect(xdModels('codex')[0].defaultEnabled).toBe(true);
     expect(xdModels('pi')[0]).toMatchObject({
       piApi: 'google-generative-ai',
       defaultEnabled: true,
@@ -1012,7 +1064,7 @@ describe('gateway cross-harness defaults', () => {
       nativeApi: 'openai-responses',
       defaultEnabled: true,
     });
-    expect(xdModels('claude-code')[0].defaultEnabled).toBe(false);
+    expect(xdModels('claude-code')[0].defaultEnabled).toBe(true);
     expect(xdModels('pi')[0].piApi).toBe('openai-responses');
     // Explicitly unverified native metadata does not disable a declared execution route.
     next.modelRegistry!.models.at(-1)!.nativeApi = null;
@@ -1054,7 +1106,7 @@ describe('gateway cross-harness defaults', () => {
     expect(xdModels('codex')).toHaveLength(2);
   });
 
-  it('applies per-agent policy to the selected models while keeping old generations opt-in', () => {
+  it('applies per-agent policy without hiding older discovered generations', () => {
     setActiveCatalog(BUNDLED_CATALOG);
     const entries = ['codex/gpt-6', 'claude-opus-5', 'anthropic-claude/claude-opus-4-8'].map(
       (id) => ({
@@ -1066,17 +1118,17 @@ describe('gateway cross-harness defaults', () => {
       }),
     );
     setXdGatewayModels(entries.map((e) => ({ ...e, agents: [...e.agents] })));
-    expect(xdModels('claude-code').map((m) => m.defaultEnabled)).toEqual([false, true, false]);
-    expect(xdModels('codex').map((m) => m.defaultEnabled)).toEqual([true, false, false]);
-    expect(xdModels('pi').map((m) => m.defaultEnabled)).toEqual([true, true, false]);
+    for (const agent of ['claude-code', 'codex', 'pi'] as const) {
+      expect(xdModels(agent).map((m) => m.defaultEnabled)).toEqual([true, true, true]);
+    }
     setXdGatewayModels(
       entries.map((e) => ({
         ...e,
         agents: [...e.agents],
-        perAgent: { 'claude-code': { defaultEnabled: true }, codex: { defaultEnabled: true } },
+        perAgent: { 'claude-code': { defaultEnabled: false } },
       })),
     );
-    expect(xdModels('claude-code').map((m) => m.defaultEnabled)).toEqual([true, true, false]);
-    expect(xdModels('codex').map((m) => m.defaultEnabled)).toEqual([true, true, false]);
+    expect(xdModels('claude-code').map((m) => m.defaultEnabled)).toEqual([false, false, false]);
+    expect(xdModels('codex').map((m) => m.defaultEnabled)).toEqual([true, true, true]);
   });
 });

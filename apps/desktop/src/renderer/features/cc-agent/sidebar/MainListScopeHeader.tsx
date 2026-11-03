@@ -27,8 +27,6 @@ const HEADER_HOVER_ACTION_CLASS = cn(
   'group-has-[[data-state=open]]/sidebar-header:pointer-events-auto group-has-[[data-state=open]]/sidebar-header:opacity-100',
 );
 
-const HEADER_ACTIONS_CLASS = cn('flex items-center gap-0.5 -mt-px', HEADER_HOVER_ACTION_CLASS);
-
 export function MainListScopeHeader({
   filter,
   allKnownProjects,
@@ -54,33 +52,38 @@ export function MainListScopeHeader({
         <MachineSwitcherMenu onOpenDisplaySettings={() => setDisplaySettingsOpen(true)} />
       </div>
       <div className="flex items-center gap-0.5 -mt-px">
-        <div className={HEADER_ACTIONS_CLASS}>
+        <div className="flex items-center gap-0.5 -mt-px">
           {fold ? (
-            <Tip text={fold.label} side="bottom">
-              <button
-                type="button"
-                onClick={fold.onClick}
-                disabled={fold.disabled}
-                aria-label={fold.label}
-                className={cn(
-                  'flex h-7 w-7 items-center justify-center rounded-md',
-                  'text-[var(--sidebar-list-muted)]',
-                  'transition-colors hover:text-[var(--sidebar-nav-text)]',
-                  'disabled:opacity-40 disabled:cursor-not-allowed disabled:hover:bg-transparent',
-                )}
-              >
-                <fold.Icon size={14} strokeWidth={2} />
-              </button>
-            </Tip>
+            <div className={HEADER_HOVER_ACTION_CLASS}>
+              <Tip text={fold.label} side="bottom">
+                <button
+                  type="button"
+                  onClick={fold.onClick}
+                  disabled={fold.disabled}
+                  aria-label={fold.label}
+                  className={cn(
+                    'flex h-7 w-7 items-center justify-center rounded-md',
+                    'text-[var(--sidebar-list-muted)]',
+                    'transition-colors hover:text-[var(--sidebar-nav-text)]',
+                    'disabled:opacity-40 disabled:cursor-not-allowed disabled:hover:bg-transparent',
+                  )}
+                >
+                  <fold.Icon size={14} strokeWidth={2} />
+                </button>
+              </Tip>
+            </div>
           ) : null}
-          <SidebarFilterPopover
-            filter={filter}
-            allKnownProjects={allKnownProjects}
-            dialogueCount={dialogueCount}
-            hasRemoteDevices={hasRemoteDevices}
-            open={displaySettingsOpen}
-            onOpenChange={setDisplaySettingsOpen}
-          />
+          {/* 在看已归档任务时设置按钮常驻(带点),否则跟随段头 hover 出现。 */}
+          <div className={filter.status === 'archived' ? undefined : HEADER_HOVER_ACTION_CLASS}>
+            <SidebarFilterPopover
+              filter={filter}
+              allKnownProjects={allKnownProjects}
+              dialogueCount={dialogueCount}
+              hasRemoteDevices={hasRemoteDevices}
+              open={displaySettingsOpen}
+              onOpenChange={setDisplaySettingsOpen}
+            />
+          </div>
         </div>
       </div>
     </div>

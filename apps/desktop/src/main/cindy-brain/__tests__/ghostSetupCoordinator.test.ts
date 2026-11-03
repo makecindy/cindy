@@ -12,6 +12,7 @@ import { GhostMutationCoordinator } from '../ghostMutationCoordinator';
 import {
   GhostSetupCoordinator,
   type GhostSetupActionResult,
+  type GhostSetupInlineActionInput,
   type GhostSetupTargetValidation,
 } from '../ghostSetupCoordinator';
 import {
@@ -194,7 +195,14 @@ function requiredNavigation(revision = 0): GhostSetupAssessment {
   };
 }
 
-function harness(initial: GhostSetupAssessment) {
+function harness(
+  initial: GhostSetupAssessment,
+  extras?: {
+    resolveStoreId?: (ghostId: string) => string;
+    getTargetToken?: (ghostId: string) => string | null;
+    cancelledMessage?: () => string;
+  },
+) {
   const changeBus = new GhostSetupChangeBus();
   const broadcast = vi.fn();
   const bridge = new GhostSetupInteractionBridge({ broadcast });
@@ -208,7 +216,7 @@ function harness(initial: GhostSetupAssessment) {
       responseTarget?: GhostSetupInteractionResponseTarget;
     }): Promise<GhostSetupActionResult> => ({ ok: true }),
   );
-  const executeInlineAction = vi.fn(async (): Promise<GhostSetupActionResult> => ({ ok: true }));
+  const executeInlineAction = vi.fn(async (_args: GhostSetupInlineActionInput): Promise<GhostSetupActionResult> => ({ ok: true }));
   let requestNumber = 0;
   const coordinator = new GhostSetupCoordinator({
     changeBus,
@@ -225,6 +233,9 @@ function harness(initial: GhostSetupAssessment) {
     createRequestId: () => `request-${++requestNumber}`,
     timeoutMs: 5_000,
     terminalGraceMs: 0,
+    ...(extras?.resolveStoreId ? { resolveStoreId: extras.resolveStoreId } : {}),
+    ...(extras?.getTargetToken ? { getTargetToken: extras.getTargetToken } : {}),
+    ...(extras?.cancelledMessage ? { cancelledMessage: extras.cancelledMessage } : {}),
   });
   return {
     bridge,
@@ -243,6 +254,120 @@ function harness(initial: GhostSetupAssessment) {
 }
 
 describe('GhostSetupCoordinator', () => {
+  it('refuses the old inline card after a same-key installation replacement without a lifecycle event', async () => {
+    let token = 'original';
+    const h = harness(requiredInline(), { getTargetToken: () => token });
+    const abort = new AbortController();
+    const waiting = h.coordinator.ensureReady({ sessionId: 'task', ghostId: 'api', signal: abort.signal });
+    try {
+      await vi.waitFor(() => expect(h.bridge.pendingSnapshots()).toHaveLength(1));
+      const card = h.bridge.pendingSnapshots()[0].request;
+      token = 'replacement';
+      expect(h.bridge.submitInline(card.requestId, {
+        actionId: 'inline_form:opaque', expectedRevision: card.revision, value: 'synthetic-secret',
+      })).toBe(false);
+      expect(h.executeInlineAction).not.toHaveBeenCalled();
+      expect(h.bridge.pendingSnapshots()).toHaveLength(0);
+    } finally { abort.abort(); await waiting; }
+  });
+
+  it('rechecks the original install binding at the final inline commit', async () => {
+    let token = 'original';
+    const h = harness(requiredInline(), { getTargetToken: () => token });
+    const abort = new AbortController();
+    const waiting = h.coordinator.ensureReady({ sessionId: 'task', ghostId: 'api', signal: abort.signal });
+    let rejected = false;
+    h.executeInlineAction.mockImplementationOnce(async ({ commit }) => {
+      token = 'replacement';
+      try { commit!.assertCurrent('api', 'inline_form:opaque', 'secret:api_key'); }
+      catch { rejected = true; }
+      return { ok: false, errorCode: 'ACTION_STALE' };
+    });
+    try {
+      await vi.waitFor(() => expect(h.bridge.pendingSnapshots()).toHaveLength(1));
+      const card = h.bridge.pendingSnapshots()[0].request;
+      expect(h.bridge.submitInline(card.requestId, {
+        actionId: 'inline_form:opaque', expectedRevision: card.revision, value: 'synthetic-secret',
+      })).toBe(true);
+      await vi.waitFor(() => expect(h.executeInlineAction).toHaveBeenCalledOnce());
+      expect(rejected).toBe(true);
+    } finally { abort.abort(); await waiting; }
+  });
+  it('completes local reconfiguration only after opening settings and a committed write to that connection', async () => {
+    const action = { id: 'manage_connection:connection:service', kind: 'manage_connection' as const };
+    const assessment: GhostSetupAssessment = { state: 'ready', revision: 1, groups: [{ id: 'connection', mode: 'any_of',
+      items: [{ ref: 'connection:service', kind: 'connection', label: 'Service', state: 'satisfied', actions: [action] }] }] };
+    const h = harness(assessment);
+    h.executeAction.mockResolvedValue({ ok: true, waitingExternal: true });
+    const waiting = h.coordinator.ensureReady({ sessionId: 'task', ghostId: 'gmail', reauthorize: true });
+    await vi.waitFor(() => expect(h.bridge.pendingSnapshots()).toHaveLength(1));
+    const card = h.bridge.pendingSnapshots()[0].request;
+    expect(h.bridge.resolve(card.requestId, { kind: 'plugin_setup', action: 'run_action', actionId: action.id, expectedRevision: card.revision })).toBe(true);
+    await vi.waitFor(() => expect(h.bridge.pendingSnapshots()[0].request.steps[0].phase).toBe('waiting_external'));
+    h.changeBus.wake('gmail', { source: 'connection', ref: 'service' });
+    h.changeBus.emit('gmail', { source: 'connection', ref: 'different' });
+    await vi.waitFor(() => expect(h.bridge.pendingSnapshots()[0].request.steps[0].phase).toBe('waiting_external'));
+    h.changeBus.emit('gmail', { source: 'connection', ref: 'service' });
+    await expect(waiting).resolves.toMatchObject({ ok: true });
+  });
+  it('does not treat another connection write or a forged Renderer receipt as completing reconfiguration', async () => {
+    const action = { id: 'manage_connection:connection:service', kind: 'manage_connection' as const };
+    const assessment: GhostSetupAssessment = { state: 'ready', revision: 1, groups: [{ id: 'connection', mode: 'any_of',
+      items: [{ ref: 'connection:service', kind: 'connection', label: 'Service', state: 'satisfied', actions: [action] }] }] };
+    const h = harness(assessment), abort = new AbortController();
+    const waiting = h.coordinator.ensureReady({ sessionId: 'task', ghostId: 'gmail', reauthorize: true, signal: abort.signal });
+    await vi.waitFor(() => expect(h.bridge.pendingSnapshots()).toHaveLength(1));
+    const original = h.bridge.pendingSnapshots()[0].request;
+    h.changeBus.emit('gmail', { source: 'connection', ref: 'service' });
+    await vi.waitFor(() => expect(h.bridge.pendingSnapshots()[0].request.revision).toBeGreaterThan(original.revision));
+    const card = h.bridge.pendingSnapshots()[0].request;
+    expect(h.bridge.resolve(card.requestId, { kind: 'plugin_setup', action: 'connection_committed', actionId: action.id, expectedRevision: card.revision })).toBe(false);
+    expect(h.bridge.connectionCommitted(card.requestId, action.id, original.revision)).toBe(false);
+    expect(h.bridge.connectionCommitted(card.requestId, 'manage_connection:connection:other', card.revision)).toBe(false);
+    expect(h.bridge.pendingSnapshots()).toHaveLength(1);
+    abort.abort();
+    await expect(waiting).resolves.toMatchObject({ ok: false, errorCode: 'SETUP_CANCELLED' });
+    expect(h.bridge.connectionCommitted(card.requestId, action.id, card.revision)).toBe(false);
+  });
+  it('cancels a connection waiter and rejects a replay of its card', async () => {
+    const h = harness(required());
+    const controller = new AbortController();
+    const waiting = h.coordinator.ensureReady({ sessionId: 'task', ghostId: 'gmail', signal: controller.signal });
+    await vi.waitFor(() => expect(h.bridge.pendingSnapshots()).toHaveLength(1));
+    const card = h.bridge.pendingSnapshots()[0].request;
+    controller.abort();
+    await expect(waiting).resolves.toMatchObject({ ok: false, errorCode: 'SETUP_CANCELLED' });
+    expect(h.bridge.pendingSnapshots()).toHaveLength(0);
+    expect(h.bridge.resolve(card.requestId, {
+      kind: 'plugin_setup', action: 'run_action', expectedRevision: card.revision,
+      actionId: 'oauth_connect:secret:google',
+    })).toBe(false);
+    expect(h.executeAction).not.toHaveBeenCalled();
+  });
+
+  it('does not open a card after its MCP request was already cancelled', async () => {
+    const h = harness(required(), { cancelledMessage: () => 'localized cancel' });
+    const controller = new AbortController(); controller.abort();
+    await expect(h.coordinator.ensureReady({ sessionId: 'task', ghostId: 'gmail', signal: controller.signal }))
+      .resolves.toEqual({ ok: false, errorCode: 'SETUP_CANCELLED', message: 'localized cancel' });
+    expect(h.bridge.pendingSnapshots()).toHaveLength(0);
+  });
+
+  it('explicit reconnect waits for its actual OAuth action, not an unrelated settings event', async () => {
+    const configured = ready();
+    configured.groups[0].items[0].actions = required().groups[0].items[0].actions;
+    const h = harness(configured);
+    const waiting = h.coordinator.ensureReady({ sessionId: 'task', ghostId: 'gmail', reauthorize: true });
+    await vi.waitFor(() => expect(h.bridge.pendingSnapshots()).toHaveLength(1));
+    h.changeBus.emit('gmail', { source: 'secret' });
+    await vi.waitFor(() => expect(h.bridge.pendingSnapshots()[0].request.steps[0].phase).toBe('pending'));
+    const card = h.bridge.pendingSnapshots()[0].request;
+    await h.bridge.resolve(card.requestId, { kind: 'plugin_setup', action: 'run_action',
+      expectedRevision: card.revision, actionId: 'oauth_connect:secret:google' });
+    await expect(waiting).resolves.toMatchObject({ ok: true });
+    expect(h.executeAction).toHaveBeenCalledTimes(1);
+  });
+
   it('ready path does not create an interaction', async () => {
     const h = harness(ready());
     await expect(
@@ -304,7 +429,7 @@ describe('GhostSetupCoordinator', () => {
     await expect(waiting).resolves.toEqual({
       ok: false,
       errorCode: 'SETUP_CANCELLED',
-      message: '用户取消了插件设置，本次调用未执行。',
+      message: 'Plugin setup was cancelled; this call was not run.',
     });
     expect(h.executeAction).not.toHaveBeenCalled();
   });
@@ -374,6 +499,24 @@ describe('GhostSetupCoordinator', () => {
       expectedRevision: snapshot.revision,
     });
     await waiting;
+  });
+
+  it('wakes setup waiters from namespaced store ids emitted by plugin settings', async () => {
+    const h = harness(required(), {
+      resolveStoreId: (ghostId) => (ghostId === 'gmail' ? '_ns__xd__gmail' : ghostId),
+    });
+    const waiting = h.coordinator.ensureReady({
+      sessionId: 'session-1',
+      ghostId: 'gmail',
+      tool: 'search',
+    });
+    await vi.waitFor(() => expect(h.bridge.pendingSnapshots()).toHaveLength(1));
+    h.setAssessment(ready(4));
+    h.changeBus.emit('_ns__xd__gmail', { source: 'oauth', ref: 'google' });
+    await expect(waiting).resolves.toMatchObject({
+      ok: true,
+      assessment: { state: 'ready', revision: 4 },
+    });
   });
 
   it('submits inline Secret per request, re-assesses on change, and never snapshots the value', async () => {
@@ -783,8 +926,10 @@ describe('GhostSetupCoordinator', () => {
     await waiting;
   });
 
+  // #7581:取消文案曾在 Coordinator 里写死中文，英文界面下用户看到中文。文案由宿主按界面
+  // 语言注入(register.ts 的 t('newChat.pluginSetup.cancelled'))，卡片取消必须用注入的文案。
   it('cancel settles the waiting call without executing an action', async () => {
-    const h = harness(required());
+    const h = harness(required(), { cancelledMessage: () => 'localized cancel' });
     const waiting = h.coordinator.ensureReady({
       sessionId: 'session-1',
       ghostId: 'gmail',
@@ -799,7 +944,7 @@ describe('GhostSetupCoordinator', () => {
     await expect(waiting).resolves.toEqual({
       ok: false,
       errorCode: 'SETUP_CANCELLED',
-      message: '用户取消了插件设置，本次调用未执行。',
+      message: 'localized cancel',
     });
     expect(h.executeAction).not.toHaveBeenCalled();
   });

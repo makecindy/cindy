@@ -1,0 +1,17 @@
+# Teammate Todo component acceptance
+
+These are the implemented desktop `TodoPanel` and mobile `CompanionTodoRow`, rendered with isolated simulated records. They are **component fixtures**, not screenshots of the running Cindy application or a physical iPhone. They import production controls, CSS/theme registry and mobile theme/typography; no prototype markup is substituted.
+
+- Desktop: 360px right panel, light/dark, 2× screenshots: [light](desktop-light.png), [dark](desktop-dark.png).
+- Mobile: 393px viewport, React Native Web rendering of the native row, light/dark: [light](mobile-light.png), [dark](mobile-dark.png).
+- Actual desktop panel interactions: [completed evidence](desktop-completion-evidence.png), [failed save retaining input](desktop-save-error.png), [concurrent edit conflict](desktop-concurrent-edit.png).
+
+32 automated layout cases cover desktop 360/320px and mobile 393/320px, each theme and 4/8/36/100 records. DOM checks assert shared action/menu boundaries, matching rail centers, title/date left edge, no horizontal overflow and mobile targets ≥44px. The desktop fixture also exercises full-set search beyond the first 25 records, projectless creation, details/Escape, completion evidence, folded completed readback, failed-save input retention, concurrent edit conflict without overwriting another client, changing only the date of an exact deadline, restoring a deleted completed record, and paginating/searching 100 completed records. Keyboard focus and 125% zoom were checked. All fixture traffic is restricted to localhost; no real Todo store or external action is used.
+
+Host tests use temporary homes and real atomic file writes/locks. They cover owner/canonical caller fences, source scope, concurrent revision conflicts, optional field/reference preservation, suppression across sources, successful/failed event cursors, received versus accepted dispatch, repeat clicks and uncertain/stale receipts. Remote get/invoke tests read and update the same isolated store. MCP schemas and existing task/partner prompt paths are checked; mobile typography and remote-resource regressions pass.
+
+Limits: physical iOS/Android, live Cindy GUI, existing user-profile upgrade and live-model prompt adherence/cache/latency were not exercised. No native configuration/dependency or runtime-fingerprint input changed. Full desktop/mobile package typechecks hit the local heap limit (desktop also at 8GB); a read-only upstream baseline reproduces the 4GB failure. Changed production files pass targeted checks using their package tsconfigs; the shared package full check passes. The MCP full check reports unrelated pre-existing test diagnostics; changed MCP files pass. CI remains the full-package verification authority.
+
+Todo storage is separate from project/task state; ordinary task components are retained. Source connections, scanning and reminders are not installed by these APIs. Available authorized events/routines may submit incremental evidence; without a wake event the guide cannot run. Completed records retain evidence, and source deadlines survive user overrides and deferral.
+
+Legacy PR/issue/idea writes are reconciled on every read, including after the new store has been saved. Their stable IDs, source links, user date overrides and ignore decisions survive; a description-only legacy update cannot undo a user reopen. Ordinary task judgments stay in their original components. The remote text fallback is capped independently of the paginated structured records.

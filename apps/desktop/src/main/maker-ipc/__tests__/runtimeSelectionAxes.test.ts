@@ -17,7 +17,10 @@ describe('isSupportedRuntimeEffort', () => {
 });
 
 describe('resolveRetainedRuntimeEffort', () => {
-  it('clears stale live effort for a fixed-effort target', () => {
+  it('keeps the observed live effort even when the target is judged fixed-effort', () => {
+    // The retained process still runs at its live level, so the projection
+    // must describe that state; a catalog-derived fixed-effort guess must not
+    // overwrite it with a sticky null.
     expect(
       resolveRetainedRuntimeEffort({
         targetModelHasFixedEffort: true,
@@ -25,11 +28,22 @@ describe('resolveRetainedRuntimeEffort', () => {
         liveEffort: 'ultra',
         previousEffort: 'high',
       }),
-    ).toBeNull();
+    ).toBe('ultra');
+  });
+
+  it('clears effort for an explicit fixed-effort carrier and for a fixed target without live effort', () => {
     expect(
       resolveRetainedRuntimeEffort({
         targetModelHasFixedEffort: true,
         requestedEffort: null,
+        liveEffort: null,
+        previousEffort: 'high',
+      }),
+    ).toBeNull();
+    expect(
+      resolveRetainedRuntimeEffort({
+        targetModelHasFixedEffort: true,
+        requestedEffort: undefined,
         liveEffort: null,
         previousEffort: 'high',
       }),
@@ -81,11 +95,11 @@ describe('applyRuntimeSelectionAxesWithRecovery', () => {
     expect(order).toEqual(['effort', 'fast', 'commit']);
   });
 
-  it('applies only the explicitly requested Fast axis', async () => {
+  it.each(['codex', 'pi'] as const)('applies only the explicitly requested Fast axis for %s', async agentKind => {
     const setEffort = vi.fn(async () => {});
     const setFastMode = vi.fn(async () => {});
     await applyRuntimeSelectionAxesWithRecovery({
-      session: { agentKind: 'codex', setEffort, setFastMode },
+      session: { agentKind, setEffort, setFastMode },
       effort: 'high',
       fastMode: true,
       applyEffort: false,

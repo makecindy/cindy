@@ -62,6 +62,30 @@
 import { useEffect, useMemo, useRef, type AriaRole, type ReactNode } from 'react';
 import Sortable, { type SortableEvent } from 'sortablejs';
 
+/**
+ * 外部接管:别的手势控制器(页签拖到别的组 / 聊天区边缘)在拖动中途要接走指针时,
+ * 让当前的 Sortable 拖动按"被动取消"收尾(复位 DOM、不提交重排)。
+ * 与窗口失焦兜底同一条清理路径。
+ *
+ * 不能只看 `Sortable.active`:fallback 模式下按下后超过 fallbackTolerance 先进入
+ * "等待开拖"(`awaitingDragStarted`,active 要到下一个宏任务才置位),快速一甩就会在
+ * 这个窗口里被接管 —— 这时 `Sortable.dragged` 已经是被按住的元素,pointercancel
+ * 同样已经注册到 _onDrop,照样能让它干净收尾并取消排队中的开拖。漏掉这一档的后果是
+ * 两套拖拽同时活着:Sortable 稍后开拖给 body 挂上 grabbing 光标并接管指针,
+ * 本次手势结束后光标卡在抓取态、再也拖不动(2026-10-20 Dash 实测)。
+ */
+let externalAbortRequested = false;
+export function cancelActiveSortable(): void {
+  if (!Sortable.active && !Sortable.dragged) return;
+  externalAbortRequested = true;
+  try {
+    document.dispatchEvent(new Event('pointercancel'));
+  } catch {
+    document.dispatchEvent(new MouseEvent('mouseup', { bubbles: true, cancelable: true }));
+  }
+  externalAbortRequested = false;
+}
+
 export interface SortableListProps<T> {
   /** 列表项数据（按当前希望渲染的顺序传入）。 */
   items: readonly T[];
@@ -190,7 +214,7 @@ export function SortableList<T>({
         document.body.classList.remove(SORTING_BODY_CLASS);
         onDragActiveChangeRef.current?.(false);
 
-        const aborted = abortNextEndRef.current;
+        const aborted = abortNextEndRef.current || externalAbortRequested;
         abortNextEndRef.current = false;
         const dropDisposition = nativeDropDispositionRef.current;
         nativeDropDispositionRef.current = null;

@@ -40,6 +40,7 @@ export interface NotifySlotDeps {
   getGhost(id: string): InstalledGhost | null;
   /** 把提示推给全部宿主窗口(renderer 走统一 Toast 体系渲染)。 */
   broadcast(payload: GhostNotifyPush): void;
+  deliverMobile?(pageId: string, payload: GhostNotifyPush): boolean;
   now?(): number;
   log?: {
     info: (msg: string, meta?: Record<string, unknown>) => void;
@@ -69,7 +70,8 @@ export class GhostNotifySlot {
 
   /** 处理一条 notify(ghost-pipe:send 的 invoke 返回值即本结果)。 */
   handleNotify(ghostId: string, payload: unknown): GhostPipeNotifyResult {
-    const p = payload as { text?: unknown; tone?: unknown };
+    const p = payload as { text?: unknown; tone?: unknown; mobilePageId?: unknown };
+    if (p?.mobilePageId !== undefined && (typeof p.mobilePageId !== 'string' || !/^[a-f0-9-]{36}$/.test(p.mobilePageId))) return { ok: false, message: 'Invalid mobile page context' };
 
     const ghost = this.deps.getGhost(ghostId);
     if (!ghost || !ghost.enabled) {
@@ -107,15 +109,17 @@ export class GhostNotifySlot {
         message: `提示过于频繁(同一意识最小间隔 ${GHOST_NOTIFY_MIN_INTERVAL_MS / 1000} 秒),本条已丢弃`,
       };
     }
-    this.lastSentAt.set(ghostId, now);
-
-    this.deps.broadcast({
+    const notice: GhostNotifyPush = {
       ghostId,
       name: ghost.manifest.name,
       ...(ghost.iconDataUrl ? { iconDataUrl: ghost.iconDataUrl } : {}),
       text,
       tone,
-    });
+    };
+    if (typeof p.mobilePageId === 'string') {
+      if (!this.deps.deliverMobile?.(p.mobilePageId, notice)) return { ok: false, message: 'Mobile page is no longer available' };
+    } else this.deps.broadcast(notice);
+    this.lastSentAt.set(ghostId, now);
     this.deps.log?.info('ghost notify shown', { ghostId, tone, chars: text.length });
     return { ok: true };
   }

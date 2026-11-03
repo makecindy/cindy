@@ -4,7 +4,14 @@ import { runSourceGit } from './sourceGit.js';
 
 export type SourceRevisions = Pick<
   MakeSourceStatus,
-  'baseCommit' | 'currentBranch' | 'mainCommit' | 'mainRemoteCommit' | 'mainBehind' | 'mainAhead'
+  | 'baseCommit'
+  | 'currentBranch'
+  | 'mainCommit'
+  | 'mainRemoteCommit'
+  | 'mainBehind'
+  | 'mainAhead'
+  | 'personalBehind'
+  | 'personalAhead'
 >;
 
 export function isSourceBranchName(value: unknown): value is string {
@@ -38,9 +45,20 @@ export async function readSourceRevisions(
     const output = await query(args);
     return output && /^[0-9a-f]{7,64}$/i.test(output) ? output : undefined;
   };
-  const baseCommit = upstreamCommit
-    ? await readCommit(['merge-base', personalCommit, upstreamCommit])
-    : undefined;
+  const recordedUpstream = await readCommit([
+    'rev-parse',
+    '--verify',
+    'refs/cindy-make/personal-upstream^{commit}',
+  ]);
+  // The recorded base must be the personal tip's ancestor: an interrupted move can
+  // leave "old tip + new base", and no later step may trust that wrong base.
+  const recordedIsBase =
+    recordedUpstream !== undefined &&
+    personalCommit !== '' &&
+    (await readCommit(['merge-base', recordedUpstream, personalCommit])) === recordedUpstream;
+  const baseCommit =
+    (recordedIsBase ? recordedUpstream : undefined) ??
+    (upstreamCommit ? await readCommit(['merge-base', personalCommit, upstreamCommit]) : undefined);
   const mainCommit = await readCommit(['rev-parse', '--verify', 'refs/heads/main^{commit}']);
   const mainRemoteCommit = await readCommit([
     'rev-parse',
@@ -62,6 +80,21 @@ export async function readSourceRevisions(
       if (Number.isSafeInteger(ahead) && Number.isSafeInteger(behind)) {
         revisions.mainAhead = ahead;
         revisions.mainBehind = behind;
+      }
+    }
+  }
+  if (mainCommit && personalCommit) {
+    const counts = await query([
+      'rev-list',
+      '--left-right',
+      '--count',
+      `${personalCommit}...${mainCommit}`,
+    ]);
+    if (counts && /^\d+\s+\d+$/.test(counts)) {
+      const [personalAhead, personalBehind] = counts.split(/\s+/).map(Number);
+      if (Number.isSafeInteger(personalAhead) && Number.isSafeInteger(personalBehind)) {
+        revisions.personalAhead = personalAhead;
+        revisions.personalBehind = personalBehind;
       }
     }
   }

@@ -22,12 +22,15 @@
  * `verifyPiSubagentRunnerIdentity` in `pi-subagent-runs.ts`.
  */
 
+import { createPiCacheInputTracker } from './cache-input.js';
+
 export const CINDY_SUBAGENT_RUNNER_FILENAME = 'cindy-subagent-runner.cjs';
 
 export const CINDY_SUBAGENT_RUNNER_SOURCE = String.raw`'use strict';
 
 const { spawn, spawnSync } = require('node:child_process');
-const { createHmac, randomUUID } = require('node:crypto');
+const { createHash, createHmac, randomUUID } = require('node:crypto');
+const createPiCacheInputTracker = ${createPiCacheInputTracker.toString()};
 const fs = require('node:fs');
 const path = require('node:path');
 
@@ -37,6 +40,12 @@ const runnerScriptPath = typeof process.argv[1] === 'string' ? process.argv[1] :
 const CONTROL_VERSION = 1;
 const MAX_TRANSCRIPT_BYTES = 50 * 1024 * 1024;
 const MAX_RESULT_BYTES = 256 * 1024;
+// Spawn command line budget, same values the Host enforces for its own Pi
+// launch (PI_WINDOWS_SPAWN_ARGV_BUDGET / PI_POSIX_SPAWN_ARGV_BUDGET). The
+// child's profile prompt is a hardcoded short string today; this only exists so
+// a future custom profile fails as a readable status instead of an opaque
+// spawn error.
+const SPAWN_ARGV_BUDGET = process.platform === 'win32' ? 30000 : 128000;
 const CONTROL_POLL_MS = 200;
 const STATUS_FLUSH_MS = 50;
 const HEARTBEAT_MS = 2000;
@@ -276,9 +285,16 @@ function main() {
       usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cost: 0 },
       usageSegments: [],
       output: '',
+      resultReady: false,
       outputTruncated: false,
       error: undefined,
-      pendingApproval: undefined,
+      // Approval requests this child is still waiting on, oldest first. The
+      // status projection publishes only the head (the Host protocol stays one
+      // request at a time), but every entry here must be answered: a newer
+      // request must never displace an earlier unanswered one. That overwrite
+      // is exactly how a child used to wait forever on its first parallel tool
+      // call while the Host only ever saw the second.
+      pendingApprovals: [],
       pendingControls: [],
       stopRequested: false,
       startedAt: undefined,
@@ -362,15 +378,18 @@ function main() {
           toolUses: task.toolUses,
           usage: task.usage,
           usageSegments: task.usageSegments,
-          // message_end is already a complete generation result even if Pi
-          // keeps the RPC process alive for follow-up. Publish it immediately
-          // so the host can hide late Steer before writing a doomed control.
+          // Intermediate commentary is useful progress, not a final result.
+          // Publish its readiness separately so controls never infer it from text.
           output: task.output || (
             task.status === 'running' || task.status === 'queued' ? undefined : ''
           ),
+          resultReady: task.resultReady,
           outputTruncated: task.outputTruncated || undefined,
           error: task.error,
-          pendingApproval: task.pendingApproval,
+          // Only the oldest unanswered request is published so the status
+          // schema and every consumer stay unchanged; the runner holds the rest
+          // of the queue and promotes the next entry as answers arrive.
+          pendingApproval: task.pendingApprovals.length > 0 ? task.pendingApprovals[0] : undefined,
           startedAt: task.startedAt,
           endedAt: task.endedAt,
         };
@@ -395,8 +414,8 @@ function main() {
 
   // The terminal status is the opposite case and must not reuse the path above:
   // scheduleStatus() refuses to re-arm once terminal, so a swallowed failure
-  // there is a permanent loss, and status.json is the only record the product
-  // reads back (nothing consumes result.json today) — the run would keep reading
+  // there is a permanent loss: product views still read status.json (only
+  // account-boundary recovery can use result.json), so the run keeps reading
   // as running until it aged into a stale diagnostic. Retry on a wider budget
   // instead; the runner is on its way out, so blocking here costs nothing.
   function flushTerminalStatus() {
@@ -418,9 +437,11 @@ function main() {
     }
   }
 
-  // result.json is a best-effort *attachment*, not the terminal record: nothing
-  // in the product reads it back, while status.json is what the Host converges
-  // on. So its write must never decide the run's outcome — letting it throw once
+  // result.json is a best-effort attachment; status.json remains the primary
+  // record. Account-boundary recovery can validate this independent terminal
+  // receipt if status is unreadable AND the OS confirms no runner/child remains.
+  // A signal attempt alone is not exit evidence. Its write must never decide the outcome:
+  // letting it throw once
   // turned a completed run into a published failure (the throw from the success
   // path landed in the failure handler, which rewrote state and republished),
   // and letting it throw from the failure path skipped the terminal status
@@ -552,7 +573,15 @@ function main() {
       let accepted = false;
       for (const task of selected) {
         if (state.stopRequested || task.stopRequested) continue;
-        if (!task.pendingApproval || task.pendingApproval.id !== control.approvalId) continue;
+        // Match by id anywhere in the queue, not only at the head: a second
+        // writer (another Desktop instance sharing userData, or a status read
+        // that raced the previous answer) may answer a request that is still
+        // pending but no longer first. An id that is not pending at all stays
+        // refused, so a replayed control cannot deliver twice.
+        const pendingIndex = task.pendingApprovals.findIndex(function (pending) {
+          return pending.id === control.approvalId;
+        });
+        if (pendingIndex < 0) continue;
         const delivered = send(task, {
           type: 'extension_ui_response',
           id: control.approvalId,
@@ -562,7 +591,7 @@ function main() {
         });
         if (delivered) {
           accepted = true;
-          task.pendingApproval = undefined;
+          task.pendingApprovals.splice(pendingIndex, 1);
         }
       }
       scheduleStatus();
@@ -578,10 +607,9 @@ function main() {
       let accepted = false;
       for (const task of selected) {
         if (state.stopRequested || task.stopRequested) continue;
-        // A message_end is the immutable result of that completed generation.
-        // Sending steer after it exists makes Pi emit a short acknowledgement
-        // that can replace the real result. Continue via follow_up instead.
-        if (control.action === 'steer' && typeof task.output === 'string' && task.output.trim()) {
+        // Only a final assistant response closes the steering window. A text
+        // preamble followed by tools is still an active, steerable generation.
+        if (control.action === 'steer' && task.resultReady) {
           continue;
         }
         const command = {
@@ -753,10 +781,16 @@ function main() {
       ];
       if (task.model) args.push('--model', task.model);
       if (task.thinking) args.push('--thinking', task.thinking);
+      // 受邀者(另一个账号)的托管会话：不发现本机用户的技能与会话目录之外的说明文件。
+      if (config.guestIsolation === true) args.push('--no-skills', '--no-context-files');
       const childEnv = Object.assign({}, process.env, {
         CINDY_PI_PERMISSION_FILE: config.permissionFile,
         PI_CODING_AGENT_DIR: config.childConfigHome,
       });
+      const childRg = path.join(config.childConfigHome, 'bin', process.platform === 'win32' ? 'rg.exe' : 'rg');
+      try {
+        if (fs.statSync(childRg).isFile()) childEnv.CINDY_PI_MANAGED_RG_PATH = childRg;
+      } catch (_) { /* parent may not have staged ripgrep */ }
       let routeProxySessionToken = '';
       try {
         routeProxySessionToken = deriveRouteProxySessionToken(task);
@@ -784,6 +818,8 @@ function main() {
       // into the durable run are blocked, and bash receives an env with the key
       // removed by SECRET_ENV_NAMES.
       childEnv.CINDY_PI_SUBAGENT_RUN_DIR = config.runDir;
+      // Independent child turns do not share the parent welcome policy channel.
+      delete childEnv.CINDY_PI_TURN_TOOL_POLICY;
       delete childEnv.CINDY_PI_MCP_BRIDGE;
       for (const key of Object.keys(childEnv)) {
         if (key.startsWith('CINDY_PI_REMOTE_MCP_SECRET_')) delete childEnv[key];
@@ -799,6 +835,24 @@ function main() {
       const childArgs = Array.isArray(config.binaryPrefixArgs)
         ? config.binaryPrefixArgs.concat(args)
         : args;
+      // 两种口径不一样，不能统一：Windows CreateProcess 的命令行上限是 32767 个
+      // UTF-16 字符（按 UTF-8 字节算会把中文路径放大三倍、误拒）；POSIX 的
+      // ARG_MAX 按字节算（用字符数会漏检中文长提示词）。
+      const argvUnits = childArgs.reduce((total, arg) => {
+        const value = String(arg);
+        return total
+          + (process.platform === 'win32' ? value.length : Buffer.byteLength(value, 'utf8'))
+          + 3;
+      }, 0);
+      if (argvUnits > SPAWN_ARGV_BUDGET) {
+        task.status = 'failed';
+        task.error = 'Subagent command line exceeds the platform spawn budget ('
+          + argvUnits + ' > ' + SPAWN_ARGV_BUDGET + ').';
+        task.endedAt = Date.now();
+        scheduleStatus();
+        resolve();
+        return;
+      }
       const child = spawn(config.binary, childArgs, {
         cwd: task.cwd,
         env: childEnv,
@@ -818,6 +872,7 @@ function main() {
       let settled = false;
       let agentSettled = false;
       let terminalError = '';
+      const cacheInputTracker = createPiCacheInputTracker(text => createHash('sha256').update(text).digest('hex'));
 
       function settle(code, signal, spawnError) {
         if (settled) return;
@@ -827,7 +882,7 @@ function main() {
         task.child = undefined;
         task.stdin = undefined;
         task.inputClosed = true;
-        task.pendingApproval = undefined;
+        task.pendingApprovals = [];
         task.endedAt = Date.now();
         if (state.stopRequested || task.stopRequested) {
           task.status = 'stopped';
@@ -861,15 +916,38 @@ function main() {
           safeAppendTranscript(state, { type: 'cindy.subagent.stdout', at: Date.now(), childId: task.childId, line: line });
           return;
         }
+        cacheInputTracker.observe(event);
+        if (event.type === 'extension_ui_request' && event.method === 'input' && event.title === 'cindy:cache-input') {
+          let request = {};
+          try { request = JSON.parse(typeof event.placeholder === 'string' ? event.placeholder : '{}'); } catch (_) {}
+          const receipt = !task.stopRequested && !state.stopRequested ? cacheInputTracker.read(request && request.key) : undefined;
+          send(task, { type: 'extension_ui_response', id: event.id, value: JSON.stringify(receipt || {}) });
+          return;
+        }
         safeAppendTranscript(state, { type: 'cindy.subagent.child_event', at: Date.now(), childId: task.childId, event: event });
         if (event.type === 'extension_ui_request') {
-          task.pendingApproval = {
+          const pending = {
             id: typeof event.id === 'string' ? event.id : 'approval-' + randomUUID(),
             method: typeof event.method === 'string' ? event.method : 'confirm',
             title: typeof event.title === 'string' ? event.title.slice(0, 500) : undefined,
             message: typeof event.message === 'string' ? event.message.slice(0, 32000) : undefined,
             placeholder: typeof event.placeholder === 'string' ? event.placeholder.slice(0, 32000) : undefined,
           };
+          // Parallel tool calls raise their approvals in the same turn, so a
+          // single replacement slot silently orphaned every request but the
+          // last. Queue them instead; the child is blocked on all of them.
+          // A repeated id is a restatement of one request, so refresh its
+          // payload rather than queueing a second response for it.
+          const existing = task.pendingApprovals.findIndex(function (entry) {
+            return entry.id === pending.id;
+          });
+          if (existing >= 0) task.pendingApprovals[existing] = pending;
+          else task.pendingApprovals.push(pending);
+          scheduleStatus();
+          return;
+        }
+        if (event.type === 'agent_start') {
+          task.resultReady = false;
           scheduleStatus();
           return;
         }
@@ -880,6 +958,10 @@ function main() {
         }
         if (event.type === 'message_end' && event.message && event.message.role === 'assistant') {
           const text = textOf(event.message);
+          task.resultReady = event.message.stopReason !== 'toolUse'
+            && !(Array.isArray(event.message.content) && event.message.content.some(function (block) {
+              return block && block.type === 'toolCall';
+            }));
           if (event.message.stopReason === 'error') {
             terminalError = typeof event.message.errorMessage === 'string' && event.message.errorMessage.trim()
               ? event.message.errorMessage.trim().slice(0, 4000)
@@ -914,6 +996,10 @@ function main() {
         }
         if (event.type === 'auto_retry_start') {
           terminalError = '';
+          // A failed attempt is not the generation's final answer. Pi keeps
+          // stdin open during retry backoff so corrections must stay eligible.
+          task.resultReady = false;
+          scheduleStatus();
           return;
         }
         if (event.type === 'agent_end') {
@@ -1120,7 +1206,7 @@ function main() {
       task.child = undefined;
       task.stdin = undefined;
       task.inputClosed = true;
-      task.pendingApproval = undefined;
+      task.pendingApprovals = [];
       if (task.status === 'running' || task.status === 'queued') {
         task.status = state.stopRequested || task.stopRequested ? 'stopped' : 'failed';
         task.error = task.error || reason;
@@ -1144,6 +1230,7 @@ function main() {
           agent: task.agent,
           status: task.status,
           output: task.output,
+          resultReady: task.resultReady,
           outputTruncated: task.outputTruncated || undefined,
           error: task.error,
           usage: task.usage,

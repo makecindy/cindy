@@ -2,6 +2,8 @@ import fs from 'node:fs';
 import path from 'node:path';
 
 import { describe, expect, it } from 'vitest';
+import { isValidGhostId } from '../../../shared/ghost.js';
+import { isPluginInstanceKey } from '../../../shared/pluginIdentity.js';
 
 /**
  * 源码契约测试:所有会改写插件世界(装/卸/更/启停/导出/恢复内置)或发放
@@ -41,6 +43,13 @@ function handlerBlock(source: string, channel: string): string {
 describe('高权限 ghost IPC 的来源闸(源码契约)', () => {
   const source = fs.readFileSync(path.join(__dirname, '..', 'index.ts'), 'utf8');
 
+  it('keeps task permission retry behind the trusted Host sender gate', () => {
+    const block = handlerBlock(source, 'ghosts:request-task-approval');
+    expect(block.indexOf('assertTrustedAppRendererEvent(event)')).toBeLessThan(block.indexOf('requestPluginTaskApproval'));
+    expect(block).toContain('requireGhostAvailableForActiveSession(id)');
+    expect(block).toContain("purpose: 'task-capability'");
+  });
+
   for (const channel of TRUSTED_SENDER_CHANNELS) {
     it(`${channel} 断言 assertTrustedAppRendererEvent 且不吞 sender`, () => {
       const block = handlerBlock(source, channel);
@@ -77,4 +86,12 @@ describe('高权限 ghost IPC 的来源闸(源码契约)', () => {
     expect(update).toContain('replaceGhostRecommendations(id,');
     expect(update).not.toMatch(/payload\.(?:id|ghostId)/);
   });
+  it('accepts an organization instance key when acknowledging a retirement', () => {
+    const block = handlerBlock(source, 'ghosts:acknowledge-retirement');
+    expect(block).toContain('isPluginInstanceKey(id)');
+    expect(block).not.toContain('isValidGhostId(id)');
+    expect(isPluginInstanceKey('_ns__acme__x')).toBe(true);
+    expect(isValidGhostId('_ns__acme__x')).toBe(false);
+  });
+
 });

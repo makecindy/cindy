@@ -17,12 +17,29 @@ export interface DownloadOptions {
   sha256: string;
   /** Optional. When provided, Content-Length must match for fresh downloads. */
   expectedSize?: number;
+  /** Reject before writing beyond this limit (also enforced for cache/resume). */
+  maxBytes?: number;
+  /** Defaults to follow. A predicate is checked before every redirect request. */
+  redirect?: 'follow' | 'error';
+  isUrlAllowed?: (url: string) => boolean;
+  /**
+   * Optional single-hop request implementation. Defaults to Electron net (system proxy).
+   * Callers fetching untrusted URLs inject a guarded fetch (SSRF / DNS pinning). It must
+   * not follow redirects: the transport validates every hop with `isUrlAllowed` first.
+   */
+  request?: DownloadRequest;
+  /** Defaults to true. False discards partial data after failure/cancellation. */
+  resume?: boolean;
+  /** Defaults to replace. Exclusive publication never overwrites an existing file. */
+  existingTarget?: 'replace' | 'error';
   /** Raw progress events (no clamping / no smoothing — caller-side concern). */
   onProgress?: (e: ProgressEvent) => void;
   /** Fired before each backoff sleep. Use for logging/telemetry. */
   onRetry?: (e: RetryEvent) => void;
   /** Fired once per attempt that resumes from a non-zero offset. */
   onResume?: (e: ResumeEvent) => void;
+  /** Fired once all bytes of an attempt have arrived, before SHA-256 verification. */
+  onVerifying?: () => void;
   /** Caller can abort the in-flight download (queued, executing, or backing off). */
   signal?: AbortSignal;
   /** Logger; falls back to console when omitted. */
@@ -32,6 +49,12 @@ export interface DownloadOptions {
   /** Override timeout strategy. */
   timeout?: Partial<TimeoutConfig>;
 }
+
+/** One request without redirect following; `release` frees per-request resources. */
+export type DownloadRequest = (
+  url: string,
+  init: RequestInit,
+) => Promise<{ response: Response; release?: () => Promise<void> }>;
 
 export interface DownloadResult {
   /** Final file path (== targetPath when resolve fires). */
@@ -80,6 +103,10 @@ export type DownloadErrorCode =
   | 'HTTP_4XX'
   | 'HTTP_5XX'
   | 'CHECKSUM'
+  | 'SIZE'
+  | 'TIMEOUT'
+  | 'URL_POLICY'
+  | 'EXISTS'
   | 'DISK'
   | 'ABORTED'
   | 'INVALID_ARG';
@@ -89,12 +116,7 @@ export class DownloadError extends Error {
   public readonly cause?: Error;
   public readonly httpStatus?: number;
 
-  constructor(
-    code: DownloadErrorCode,
-    message: string,
-    cause?: Error,
-    httpStatus?: number,
-  ) {
+  constructor(code: DownloadErrorCode, message: string, cause?: Error, httpStatus?: number) {
     super(message);
     this.name = 'DownloadError';
     this.code = code;
@@ -119,6 +141,8 @@ export interface TimeoutConfig {
   connectMs: number;
   /** Default 30000 — max gap between data chunks before treating as dead. */
   idleMs: number;
+  /** Optional active budget, including retry waits but excluding queue time. */
+  totalMs?: number;
 }
 
 export interface Logger {

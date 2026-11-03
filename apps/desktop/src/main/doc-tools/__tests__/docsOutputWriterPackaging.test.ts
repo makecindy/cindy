@@ -15,5 +15,12 @@ describe('docs output writer packaging', () => {
     expect(forge).toContain("entry: 'src/main/doc-tools/docsOutputWriterUtilityProcess.ts'");
     expect(controller).toContain("path.join(__dirname, 'docsOutputWriterUtilityProcess.js')");
     expect(controller).toContain('cwd: rootDir');
+    expect(controller).toContain('authorizedOutsideWorkdir');
+    expect(controller).toContain('assertDocsOutputGrantCurrent');
+    expect(controller).toContain('await fs.mkdir(lexicalParent, { recursive: true })');
+    expect(controller).toContain('grantedParent.isSymbolicLink()');
+    expect(controller.indexOf('assertDocsOutputGrantCurrent(input)')).toBeLessThan(
+      controller.lastIndexOf("child.postMessage({ type: 'write', request })"),
+    );
   });
 });

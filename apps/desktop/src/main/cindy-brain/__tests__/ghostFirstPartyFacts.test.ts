@@ -1,7 +1,7 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import type { PluginMarketInstallationRecord } from '../../plugin-market/ledger.js';
 import { createOrganizationPrefixStore } from '../../plugin-market/organizationPrefixStore.js';
@@ -24,11 +24,13 @@ const PERSONAL: GhostFirstPartyFactsIdentity = {
 const ORG_A: GhostFirstPartyFactsIdentity = {
   membershipKind: 'org',
   orgId: 'org-a',
+  orgSlug: 'slug-a',
 };
 
 const ORG_B: GhostFirstPartyFactsIdentity = {
   membershipKind: 'org',
   orgId: 'org-b',
+  orgSlug: 'slug-b',
 };
 
 const MARKET_ROW: PluginMarketInstallationRecord = {
@@ -58,7 +60,10 @@ function loader(overrides: Partial<LoadGhostFirstPartyFactsLoaderOptions> = {}) 
   return loadGhostFirstPartyFactsLoader({
     readInstalledBuiltin: () => false,
     readMarketInstallation: () => null,
-    readApprovedPackageSha256: () => null,
+    readApprovedPackageSha256: (ghostId) => ['xd-feishu', 'xd-atlassian'].includes(ghostId) ? 'a'.repeat(64) : null,
+    readTrustedSource: (ghostId) => ['xd-feishu', 'xd-atlassian'].includes(ghostId) ? {
+      kind: 'builtin-official', ghostId, namespace: null, packageSha256: 'a'.repeat(64),
+    } : null,
     lookupOrganizationPrefix: () => ({ kind: 'absent' }),
     readInstallOrigin: () => 'manual',
     ...overrides,
@@ -66,6 +71,16 @@ function loader(overrides: Partial<LoadGhostFirstPartyFactsLoaderOptions> = {}) 
 }
 
 describe('loadGhostFirstPartyFactsLoader', () => {
+  it('reads a new root receipt without inheriting the same-name legacy organization receipt', () => {
+    const reads: string[] = [];
+    const loaded = loader({
+      readInstallNamespace: (id) => { reads.push(id); return id === 'xd-feishu' ? 'xd' : null; },
+      lookupOrganizationPrefix: () => ({ kind: 'known', pluginPrefix: 'xd' }),
+    }).load('_root__xd-feishu', 'runtime', ORG_A);
+    expect(reads).toEqual(['_ns/_root/xd-feishu']);
+    expect(loaded).toMatchObject({ kind: 'ready', facts: { namespace: null } });
+    if (loaded.kind === 'ready') expect(resolveGhostFirstPartyPrivilege(loaded.facts).brokerEligible).toBe(false);
+  });
   it('gives builtin official plugins broker on a personal identity with no prefix cache', () => {
     const factsLoader = loader({
       readInstalledBuiltin: (ghostId) => ghostId === 'xd-feishu' || ghostId === 'xd-atlassian',
@@ -80,10 +95,13 @@ describe('loadGhostFirstPartyFactsLoader', () => {
       if (loaded.kind !== 'ready') continue;
       expect(loaded.facts).toEqual({
         ghostId,
+        namespace: null,
         builtin: true,
         marketRecord: null,
         currentOrganization: null,
         installOrigin: 'manual',
+        trustedSource: { kind: 'builtin-official', ghostId, namespace: null, packageSha256: 'a'.repeat(64) },
+        approvedPackageSha256: 'a'.repeat(64),
       });
       expect(resolveGhostFirstPartyPrivilege(loaded.facts)).toEqual({
         brokerEligible: true,
@@ -91,6 +109,37 @@ describe('loadGhostFirstPartyFactsLoader', () => {
         basis: 'builtin-official',
       });
     }
+  });
+
+  it.each(['_ns__acme__acme-tool', '_ns/acme/acme-tool'])('loads logical facts using physical instance id %s', (instanceId) => {
+    const seen = {
+      builtin: vi.fn(() => false),
+      origin: vi.fn<LoadGhostFirstPartyFactsLoaderOptions['readInstallOrigin']>(() => 'manual'),
+      approved: vi.fn(() => 'a'.repeat(64)),
+      market: vi.fn(() => MARKET_ROW),
+    };
+    const factsLoader = loader({
+      readInstalledBuiltin: seen.builtin,
+      readInstallOrigin: seen.origin,
+      readApprovedPackageSha256: seen.approved,
+      readMarketInstallation: seen.market,
+      lookupOrganizationPrefix: () => ({ kind: 'known', pluginPrefix: 'acme' }),
+    });
+
+    // The instance namespace is acme. A present orgSlug must match it.
+    const loaded = factsLoader.load(instanceId, 'runtime', { ...ORG_A, orgSlug: 'acme' });
+    expect(loaded.kind).toBe('ready');
+    if (loaded.kind !== 'ready') throw new Error('expected ready facts');
+    expect(loaded.facts.ghostId).toBe('acme-tool');
+    expect(seen.builtin.mock.calls).toEqual([[instanceId]]);
+    expect(seen.origin.mock.calls).toEqual([['_ns/acme/acme-tool']]);
+    expect(seen.approved.mock.calls).toEqual([['_ns/acme/acme-tool']]);
+    expect(seen.market.mock.calls).toEqual([[instanceId]]);
+    expect(resolveGhostFirstPartyPrivilege(loaded.facts)).toEqual({
+      brokerEligible: true,
+      hostPrimitiveEligible: false,
+      basis: 'market-organization-current',
+    });
   });
 
   it('re-evaluates the current organization prefix after an org switch and keeps the previous key', () => {
@@ -162,6 +211,7 @@ describe('loadGhostFirstPartyFactsLoader', () => {
       kind: 'ready',
       facts: {
         ghostId: 'local-tool',
+        namespace: null,
         builtin: false,
         marketRecord: null,
         currentOrganization: null,
@@ -214,7 +264,7 @@ describe('loadGhostFirstPartyFactsLoader', () => {
       facts: {
         marketRecord: null,
         installOrigin: 'agent-forge',
-        currentOrganization: { organizationId: 'org-a', pluginPrefix: 'acme' },
+        currentOrganization: { organizationId: 'org-a', pluginPrefix: 'acme', orgSlug: 'slug-a' },
       },
     });
   });
@@ -244,9 +294,10 @@ describe('loadGhostFirstPartyFactsLoader', () => {
       kind: 'ready',
       facts: {
         ghostId: 'acme-tool',
+        namespace: null,
         builtin: false,
         marketRecord: null,
-        currentOrganization: { organizationId: 'org-a', pluginPrefix: 'acme' },
+        currentOrganization: { organizationId: 'org-a', pluginPrefix: 'acme', orgSlug: 'slug-a' },
         installOrigin: 'manual',
       },
     });
@@ -263,6 +314,7 @@ describe('loadGhostFirstPartyFactsLoader', () => {
       kind: 'ready',
       facts: {
         ghostId: 'acme-tool',
+        namespace: null,
         builtin: false,
         marketRecord: {
           scope: 'organization',
@@ -272,7 +324,7 @@ describe('loadGhostFirstPartyFactsLoader', () => {
           sha256: MARKET_ROW.sha256,
           approvedPackageSha256: MARKET_ROW.sha256,
         },
-        currentOrganization: { organizationId: 'org-a', pluginPrefix: null },
+        currentOrganization: { organizationId: 'org-a', pluginPrefix: null, orgSlug: 'slug-a' },
         installOrigin: 'manual',
       },
     });
@@ -296,7 +348,7 @@ describe('loadGhostFirstPartyFactsLoader', () => {
           sha256: 'a'.repeat(64),
           approvedPackageSha256: 'b'.repeat(64),
         },
-        currentOrganization: { organizationId: 'org-a', pluginPrefix: 'acme' },
+        currentOrganization: { organizationId: 'org-a', pluginPrefix: 'acme', orgSlug: 'slug-a' },
       },
     });
     expect(MARKET_ROW.manifestDigest).toBe('c'.repeat(64));
@@ -304,6 +356,70 @@ describe('loadGhostFirstPartyFactsLoader', () => {
     // This assertion kills an implementation that drops package SHA and falls
     // back to the unchanged manifestDigest for Broker authorization.
     expect(resolveGhostFirstPartyPrivilege(loaded.facts).brokerEligible).toBe(false);
+  });
+
+  it('reads install namespace from a storage-part ghost id', () => {
+    const loaded = loader({
+      lookupOrganizationPrefix: () => ({ kind: 'known', pluginPrefix: null }),
+    }).load('_ns__slug-a__helper', 'runtime', ORG_A);
+    expect(loaded).toMatchObject({
+      kind: 'ready',
+      facts: { ghostId: 'helper', namespace: 'slug-a' },
+    });
+  });
+
+  it('reads trusted receipt namespace for an in-place physical id', () => {
+    const factsLoader = loader({
+      lookupOrganizationPrefix: () => ({ kind: 'known', pluginPrefix: null }),
+      readInstallOrigin: () => 'agent-forge',
+      readInstallNamespace: (id) => (id === 'acme-tool' ? 'slug-a' : undefined),
+    });
+    const loaded = factsLoader.load('acme-tool', 'runtime', ORG_A);
+    expect(loaded).toMatchObject({
+      kind: 'ready',
+      facts: { ghostId: 'acme-tool', namespace: 'slug-a', installOrigin: 'agent-forge' },
+    });
+    if (loaded.kind === 'ready') {
+      expect(authorizeGhostTokenBroker('acme-tool', loaded)).toBe(true);
+    }
+  });
+
+  it('distinguishes a censused legacy Forge from a new missing-namespace install', () => {
+    const factsLoader = loader({
+      lookupOrganizationPrefix: () => ({ kind: 'known', pluginPrefix: 'acme' }),
+      readInstallOrigin: () => 'agent-forge',
+      isPendingLegacyForge: (id) => id === 'acme-old',
+    });
+    const legacy = factsLoader.load('acme-old', 'runtime', ORG_A);
+    expect(legacy).toMatchObject({ kind: 'ready', facts: { legacyPendingForge: true } });
+    if (legacy.kind === 'ready') expect(authorizeGhostTokenBroker('acme-old', legacy)).toBe(true);
+    const fresh = factsLoader.load('acme-new', 'install', ORG_A, { installOrigin: 'agent-forge' });
+    if (fresh.kind === 'ready') expect(authorizeGhostTokenBroker('acme-new', fresh)).toBe(false);
+  });
+
+  it.each([
+    ['missing', 'helper', {}, null, 'denied-foreign-org'],
+    ['organization', 'helper', { namespace: 'slug-a' }, 'slug-a', 'forge-current-org'],
+    ['explicit root', '_ns__slug-a__helper', { namespace: null }, null, 'denied-foreign-org'],
+  ] as const)('lets %s install-time namespace override win over the ghost id', (_label, instanceId, override, namespace, basis) => {
+    const factsLoader = loader({
+      lookupOrganizationPrefix: () => ({ kind: 'known', pluginPrefix: null }),
+    });
+    const loaded = factsLoader.load(instanceId, 'install', ORG_A, {
+      installOrigin: 'agent-forge',
+      ...override,
+    });
+    expect(loaded).toMatchObject({
+      kind: 'ready',
+      facts: { ghostId: 'helper', namespace, installOrigin: 'agent-forge' },
+    });
+    if (loaded.kind !== 'ready') throw new Error('expected ready facts');
+    expect(authorizeGhostTokenBroker('helper', loaded)).toBe(namespace !== null);
+    expect(resolveGhostFirstPartyPrivilege(loaded.facts)).toEqual({
+      brokerEligible: namespace !== null,
+      hostPrimitiveEligible: false,
+      basis,
+    });
   });
 
   it('binds pending organization-market authorization to the inspected package bytes', () => {
@@ -318,12 +434,13 @@ describe('loadGhostFirstPartyFactsLoader', () => {
       kind: 'ready' as const,
       facts: {
         ghostId: 'acme-tool',
+        namespace: 'slug-a',
         builtin: false,
         marketRecord: bindPendingMarketRecordToInspectedPackage(
           pending,
           inspectedPackageSha256,
         ),
-        currentOrganization: { organizationId: 'org-a', pluginPrefix: 'acme' },
+        currentOrganization: { organizationId: 'org-a', pluginPrefix: 'acme', orgSlug: 'slug-a' },
         installOrigin: 'manual' as const,
       },
     });

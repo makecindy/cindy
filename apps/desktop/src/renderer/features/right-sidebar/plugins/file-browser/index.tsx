@@ -86,6 +86,7 @@ const plugin: TabKindPlugin<FileBrowserState> = {
   menu: {
     kind: 'file-browser',
     labelKey: 'rightSidebar.tabs.kinds.fileBrowser',
+    descriptionKey: 'rightSidebar.tabs.descriptions.fileBrowser',
     icon: FolderTree,
     order: 10,
     enabled: true,

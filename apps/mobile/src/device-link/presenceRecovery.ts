@@ -109,6 +109,8 @@ export interface PresenceWipeTimerDeps {
   setTimer(callback: () => void, delayMs: number): ReturnType<typeof setTimeout>;
   clearTimer(timer: ReturnType<typeof setTimeout>): void;
   wipe(deviceId: string): void;
+  /** Deferred consumers must claim immediately before wiping, keeping recovery protection alive. */
+  deferWipe?(deviceId: string, claim: () => boolean): void;
   isConfirmationInFlight?(deviceId: string): boolean;
 }
 
@@ -204,10 +206,22 @@ function schedulePresenceWipeAt(
         );
         return;
       }
-      timers.delete(deviceId);
-      if (shouldWipeUnavailableDeviceMirror(availabilityByDevice, deviceId)) {
-        deps.wipe(deviceId);
-      }
+      const claim = (): boolean => {
+        if (timers.get(deviceId) !== entry) return false;
+        if (deps.isConfirmationInFlight?.(deviceId)) {
+          schedulePresenceWipeAt(
+            timers, availabilityByDevice, deviceId, firstScheduledAt,
+            deps.now() + PRESENCE_WIPE_CONFIRMATION_POLL_MS, deps,
+          );
+          return false;
+        }
+        timers.delete(deviceId);
+        return shouldWipeUnavailableDeviceMirror(availabilityByDevice, deviceId);
+      };
+      // Retain the entry until execution, so reconnect can still extend its
+      // deadline and clear/replacement can invalidate the queued claim.
+      if (deps.deferWipe) deps.deferWipe(deviceId, claim);
+      else if (claim()) deps.wipe(deviceId);
     }, delayMs),
   };
   timers.set(deviceId, entry);
@@ -300,16 +314,19 @@ export function reconcileAvailabilityAfterInboundFrame(
 export function resetPresenceAvailabilityForConnection(
   availabilityByDevice: Map<string, boolean>,
   pendingRecoveryDeviceIds: Set<string>,
+  belongsToConnection: (deviceId: string) => boolean = () => true,
 ): string[] {
   // presence-changed 是只发给「当时在线控制端」的增量广播,新连接没有全量重放。
   // 每个连接代际都必须丢弃旧 verdict,否则后台期间漏掉的恢复事件会让 stale false
   // 永久挡住该设备的 rehydrate。上一代明确 unavailable 的设备另存为 pending
   // recovery:当前连接按 unknown 乐观尝试,而它稍后首个 available 快照仍能形成恢复边。
   const unavailableDeviceIds = [...availabilityByDevice.entries()]
-    .filter(([, available]) => !available)
+    .filter(([deviceId, available]) => belongsToConnection(deviceId) && !available)
     .map(([deviceId]) => deviceId);
   for (const deviceId of unavailableDeviceIds) pendingRecoveryDeviceIds.add(deviceId);
-  availabilityByDevice.clear();
+  for (const deviceId of availabilityByDevice.keys()) {
+    if (belongsToConnection(deviceId)) availabilityByDevice.delete(deviceId);
+  }
   return unavailableDeviceIds;
 }
 

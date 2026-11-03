@@ -24,7 +24,7 @@ type LegacyMigrationPhase = 'confirm' | 'running' | 'done' | 'failed' | null;
  * (左对齐 600 宽)、CTA 540×80 r40 文字 24、spinner 24 右置。App 内沿用
  * PR3 对 680 卡族的 0.72 落码系数 → 490×360 r26 / 23 / 19·29 / 389×58 r29·17。
  * 页面底不再用半透明遮罩压登录页,直接铺登录链路同族画布底
- * (`--login-bg-base`,亮 #EDEDED / 暗随 #525 token 二态接管;迁移设计帧
+ * (`--login-bg-base`,亮 #F2F2ED / 暗 #181818 二态,与 CINDY 皮肤页底同色;迁移设计帧
  * 567:684/759/776 画布即登录族);卡片颜色全部走
  * `--login-callback-*` component token(colors.ts 品牌豁免族),几何为设计稿
  * 冻结值走内联常量。仅 cn 构建触发(main 侧既有逻辑,本组件不感知区域)。

@@ -34,6 +34,24 @@ describe('sessionCreateToRow providerId', () => {
   });
 });
 
+describe('sessionCreateToRow effort', () => {
+  const now = 1_700_000_000_000;
+
+  it('keeps the explicit empty effort for a remote session instead of applying high', () => {
+    expect(
+      sessionCreateToRow(
+        'remote-no-effort',
+        { workingDir: '/remote/repo', remoteHostId: 'remote-mac', effort: '' },
+        now,
+      ).effort,
+    ).toBe('');
+  });
+
+  it('still uses the historical high default when the effort field is omitted', () => {
+    expect(sessionCreateToRow('legacy', { workingDir: '/repo' }, now).effort).toBe('high');
+  });
+});
+
 describe('sessionCreateToRow source', () => {
   const now = 1_700_000_000_000;
 
@@ -49,5 +67,15 @@ describe('sessionCreateToRow source', () => {
 
   it('未传 source 仍保持 desktop 兼容默认值', () => {
     expect(sessionCreateToRow('desktop-session', { workingDir: '/repo' }, now).source).toBe('desktop');
+  });
+
+  it('Cindy Make 创建标题直接落库，不回到默认未命名标题', () => {
+    expect(
+      sessionCreateToRow(
+        'cindy-make-session',
+        { workingDir: '/repo', source: 'cindy-make', title: '[Cindy-Make] 修复构建' },
+        now,
+      ).title,
+    ).toBe('[Cindy-Make] 修复构建');
   });
 });

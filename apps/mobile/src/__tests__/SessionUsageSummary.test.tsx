@@ -95,6 +95,19 @@ const usage: ReturnType<typeof useSessionMenuUsage> = {
   refresh: () => {},
 };
 describe("task menu usage summary", () => {
+  // Renderer: same model on two channels remains two facts; all extra models
+  // appear under one fee category without splitting the collapsed task total.
+  it('shows model and channel rows in the shared detail view', () => {
+    const costs = [{ model: 'same-model', category: 'conversation' as const, billingSource: 'subscription' as const,
+      money: usage.estimate! }, { model: 'same-model', category: 'additional' as const, billingSource: 'cindy-ai' as const,
+      money: { amount: 2, currency: 'USD' as const, approximate: false, kind: 'actual-cost' as const } }];
+    act(() => root.render(<SessionUsageSummary session={session}
+      usage={{ ...usage, costBreakdown: costs }} contextUsage={null} detail />));
+    expect(host.textContent?.match(/same-model/g)).toHaveLength(2);
+    expect(host.textContent).toContain('附加费用');
+    expect(host.textContent).toContain('订阅');
+    expect(host.textContent).toContain('Cindy AI');
+  });
   it.each(["light", "dark"])(
     "shows quota, value and context in the first-level entry with %s tokens",
     (mode) => {
@@ -118,7 +131,7 @@ describe("task menu usage summary", () => {
       expect(onPress).toHaveBeenCalledOnce();
     },
   );
-  it("labels legacy quota as account-only without attributing its plan to the task", () => {
+  it("omits the legacy quota disclaimer without attributing its plan to the task", () => {
     act(() =>
       root.render(
         <SessionUsageSummary
@@ -132,12 +145,24 @@ describe("task menu usage summary", () => {
         />,
       ),
     );
-    expect(host.textContent).toContain("gpt-5 · openai");
-    expect(host.textContent).toContain(
+    expect(host.textContent).toContain("gpt-5");
+    expect(host.textContent).not.toContain("openai");
+    expect(host.textContent).not.toContain(
       "ChatGPT 账号配额，未确认本任务使用此套餐",
     );
+    expect(host.textContent).not.toContain("pro");
     expect(host.textContent).toContain("本任务用量");
     expect(host.textContent).not.toContain("本任务价值");
+    act(() => root.render(
+      <SessionUsageSummary
+        session={{ ...session, providerId: 'openai-05c14cbf' }}
+        providerName="OpenAI"
+        usage={usage}
+        contextUsage={null}
+      />,
+    ));
+    expect(host.textContent).toContain('gpt-5 · OpenAI');
+    expect(host.textContent).not.toContain('openai-05c14cbf');
   });
   it("shows a mixed task breakdown without presenting estimated value as a charge", () => {
     act(() =>

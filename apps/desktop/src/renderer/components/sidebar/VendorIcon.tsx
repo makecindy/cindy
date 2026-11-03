@@ -11,13 +11,28 @@
  *   - idle (默认)   : Stone 灰 #737373 / dark #a3a3a3
  *   - running=true  : Thinking Orange(--warning-accent,全主题同值)+ session-breathing 呼吸;选中态同样橙(用户拍板 2026-07-20)
  *
+ * Agent 在另一台电脑运行(remote):右上角加模型选择器同款的单波纹 + 点,波纹随图标
+ * 取色与呼吸;glyph 大小与位置不变(2026-10-07 用户裁决，替代标题后的芯片图标)。
+ *
  */
 
 import { cn } from '@/lib/utils';
 import { ClaudeMark } from '@/components/icons/ClaudeMark';
 import { CodexMark } from '@/components/icons/CodexMark';
+import { RemoteSignalOverlay } from '@/components/icons/RemoteSourceMark';
 
 export type VendorIconKind = 'cc' | 'codex' | 'pi';
+
+/**
+ * 各 glyph 笔画右上角在自身方框里的位置(0–1，已留出与波纹点的间隙)。
+ * 像素脸头部占 viewBox x 0–21 / y 5–20;花形放大 1.1 后右上沿在 (19.1, 4.9);
+ * π 字形偏小且居中。
+ */
+const REMOTE_SIGNAL_ANCHOR: Record<VendorIconKind, { x: number; y: number }> = {
+  cc: { x: 0.95, y: 0.13 },
+  codex: { x: 0.9, y: 0.1 },
+  pi: { x: 0.83, y: 0.36 },
+};
 
 /**
  * agentKind → VendorIcon vendor 的唯一映射。所有渲染 agent 身份图标的调用点
@@ -37,6 +52,10 @@ interface VendorIconProps {
   /** 覆盖默认取色(如选中态传 active 前景 —— 用户规则 2026-07-20:选中态上
    *  所有前景元素与文字同色);running 呼吸动画不受影响。 */
   colorClassName?: string;
+  /** true → Agent 在另一台电脑运行:右上角外侧叠信号波纹(不占布局，向右上溢出)。 */
+  remote?: boolean;
+  /** 悬停说明(如 Agent 在哪台电脑上运行)。 */
+  title?: string;
 }
 
 export function VendorIcon({
@@ -45,9 +64,13 @@ export function VendorIcon({
   running = false,
   className,
   colorClassName,
+  remote = false,
+  title,
 }: VendorIconProps) {
+  const anchor = REMOTE_SIGNAL_ANCHOR[vendor];
   const wrapperClassName = cn(
     'inline-flex shrink-0',
+    remote && 'relative',
     running && 'session-status-breathing',
     // running 呼吸一律 Thinking Orange(--warning-accent,07-17 定稿 running 状态色);
     // 用户拍板 2026-07-20:选中态也保持橙,优先级高于 colorClassName 反相前景。
@@ -56,7 +79,7 @@ export function VendorIcon({
   );
 
   return (
-    <span className={wrapperClassName}>
+    <span className={wrapperClassName} title={title}>
       {vendor === 'codex' ? (
         <CodexMark size={size} />
       ) : vendor === 'pi' ? (
@@ -70,6 +93,7 @@ export function VendorIcon({
       ) : (
         <ClaudeMark size={size} />
       )}
+      {remote && <RemoteSignalOverlay markSize={size} anchorX={anchor.x} anchorY={anchor.y} />}
     </span>
   );
 }

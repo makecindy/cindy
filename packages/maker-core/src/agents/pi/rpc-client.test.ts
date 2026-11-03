@@ -1,5 +1,5 @@
 import { EventEmitter } from 'node:events';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const mocks = vi.hoisted(() => ({ spawn: vi.fn() }));
 
@@ -16,13 +16,13 @@ function makeChild(pid = 4321) {
     pid: number;
     stdout: EventEmitter;
     stderr: EventEmitter;
-    stdin: { write: ReturnType<typeof vi.fn> };
+    stdin: EventEmitter & { write: ReturnType<typeof vi.fn> };
     kill: ReturnType<typeof vi.fn>;
   };
   child.pid = pid;
   child.stdout = makeStream();
   child.stderr = makeStream();
-  child.stdin = { write: vi.fn() };
+  child.stdin = Object.assign(new EventEmitter(), { write: vi.fn() });
   child.kill = vi.fn();
   return child;
 }
@@ -58,6 +58,8 @@ beforeEach(() => {
   mocks.spawn.mockReset();
 });
 
+afterEach(() => { vi.useRealTimers(); });
+
 describe('PiRpcProcess frame diagnostics (#3696)', () => {
   function createProcessWithMocks() {
     const child = makeChild();
@@ -80,11 +82,13 @@ describe('PiRpcProcess frame diagnostics (#3696)', () => {
       logger,
     });
     const onEvent = vi.fn();
-    const proc = new PiRpcProcess({ transport, logger, onEvent, onExit: vi.fn() });
+    const onExit = vi.fn();
+    const onDisconnect = vi.fn();
+    const proc = new PiRpcProcess({ transport, logger, onEvent, onExit, onDisconnect });
     const feed = (frame: Record<string, unknown>): void => {
       child.stdout.emit('data', Buffer.from(`${JSON.stringify(frame)}\n`));
     };
-    return { proc, logger, onEvent, feed };
+    return { proc, logger, onEvent, feed, child, onExit, onDisconnect };
   }
 
   it('logs message_end frame metadata (block types + char counts) without message content', () => {
@@ -167,6 +171,30 @@ describe('PiRpcProcess frame diagnostics (#3696)', () => {
     });
   });
 
+  it('rejects pending RPC and flushes metadata at EOF without claiming executor exit', async () => {
+    vi.useFakeTimers();
+    const { proc, logger, feed, child, onExit, onDisconnect } = createProcessWithMocks();
+    feed({ type: 'agent_start' });
+    feed({ type: 'tool_execution_start', args: { command: 'PRIVATE_BUILD_COMMAND' } });
+    const request = proc.request({ type: 'get_state' });
+    const rejected = expect(request).rejects.toThrow('executor exit unconfirmed');
+    child.stdout.emit('end');
+    await vi.advanceTimersByTimeAsync(250);
+    await rejected;
+    expect(proc.isClosed).toBe(true);
+    expect(onDisconnect).toHaveBeenCalledWith('stdout-ended');
+    expect(onExit).not.toHaveBeenCalled();
+    await expect(proc.request({ type: 'prompt' })).rejects.toThrow('RPC disconnected');
+    expect(logger.info).toHaveBeenCalledWith('pi rpc turn frame histogram (no agent_settled)', {
+      frames: { agent_start: 1, tool_execution_start: 1 },
+    });
+    expect(JSON.stringify(logger.info.mock.calls)).not.toContain('PRIVATE_BUILD_COMMAND');
+    logger.info.mockClear();
+    child.emit('close', 23, null);
+    expect(onExit).toHaveBeenCalledOnce();
+    expect(logger.info).not.toHaveBeenCalled();
+  });
+
   it('logs a per-turn frame histogram at agent_settled and resets counts', () => {
     const { logger, feed } = createProcessWithMocks();
     feed({ type: 'agent_start' });
@@ -216,5 +244,126 @@ describe('PiRpcProcess process observer', () => {
         throw new Error('observer failed');
       }),
     ).not.toThrow();
+  });
+});
+
+describe('PiRpcProcess startup failure diagnostics (#4625)', () => {
+  it('preserves extension failure and native recovery hint when startup exits', async () => {
+    const child = makeChild();
+    mocks.spawn.mockReturnValue(child);
+    const proc = createProcess();
+    const rejected = expect(proc.request({ type: 'get_state' })).rejects.toThrow(
+      'Failed to load extension "placeholder"\nHint: Start without extensions using "pi -ne".',
+    );
+    child.stderr.emit('data', Buffer.from('Error: Failed to load extension "placeholder"\n'));
+    child.stderr.emit('data', Buffer.from('Hint: Start without extensions using "pi -ne".\n'));
+    child.emit('close', 1, null);
+    await rejected;
+    await expect(proc.request({ type: 'get_state' })).rejects.toThrow('Failed to load extension');
+  });
+
+  it('retains startup diagnostics if exit precedes the first request', async () => {
+    const child = makeChild();
+    mocks.spawn.mockReturnValue(child);
+    const proc = createProcess();
+    child.stderr.emit('data', Buffer.from('Cannot find module placeholder\n'));
+    child.emit('close', 1, null);
+    await expect(proc.request({ type: 'get_state' })).rejects.toThrow(
+      'pi process exited (code=1, signal=null)\nPi startup stderr:\nCannot find module placeholder',
+    );
+  });
+
+  it('redacts complete stderr lines before bounding the diagnostic tail', async () => {
+    const child = makeChild();
+    mocks.spawn.mockReturnValue(child);
+    const proc = createProcess();
+    const error = proc.request({ type: 'get_state' }).catch((err: Error) => err);
+    child.stderr.emit('data', Buffer.from('obsolete warning\n'));
+    child.stderr.emit('data', Buffer.from(`sessionToken=${'a'.repeat(4000)}\n`));
+    child.stderr.emit('data', Buffer.from(`${'x'.repeat(4000)}\n`));
+    // Split a synthetic credential across byte chunks, not logical stderr lines.
+    child.stderr.emit('data', Buffer.from('Error: Failed to load extension; api_key=sk-ant-'));
+    child.stderr.emit('data', Buffer.from('FAKEONLY0123456789\n'));
+    child.emit('close', 1, null);
+    const result = await error as Error;
+    expect(result.message).toContain('Failed to load extension');
+    expect(result.message).toContain('[REDACTED]');
+    expect(result.message).not.toContain('FAKEONLY');
+    expect(result.message).not.toContain('aaaa');
+    expect(result.message).not.toContain('obsolete warning');
+    expect(result.message.length).toBeLessThan(2200);
+  });
+
+  it('does not attach old startup warnings or running stderr after a valid RPC response', async () => {
+    const child = makeChild();
+    mocks.spawn.mockReturnValue(child);
+    const proc = createProcess();
+    child.stderr.emit('data', Buffer.from('startup warning\n'));
+    const ready = proc.request({ type: 'get_state' });
+    child.stdout.emit('data', Buffer.from(JSON.stringify({
+      type: 'response', id: 'c1', command: 'get_state', success: true, data: {},
+    }) + '\n'));
+    await ready;
+    const rejected = expect(proc.request({ type: 'get_state' })).rejects.toThrow(
+      /^pi process exited \(code=1, signal=null\)$/,
+    );
+    child.stderr.emit('data', Buffer.from('running warning with unrelated content\n'));
+    child.emit('close', 1, null);
+    await rejected;
+  });
+
+  it('redacts raw transport diagnostics including headers and quoted secrets', async () => {
+    let stderr!: (line: string) => void;
+    let exit!: (info: { code: number | null; signal: NodeJS.Signals | null; reason: string }) => void;
+    const logger = { trace: vi.fn(), debug: vi.fn(), info: vi.fn(), warn: vi.fn(),
+      error: vi.fn(), fatal: vi.fn(), child: vi.fn() };
+    const proc = new PiRpcProcess({
+      transport: {
+        pid: undefined, isClosed: () => false, close: async () => {},
+        writeLine: async () => {}, onLine: () => () => {},
+        onStderr: (handler) => { stderr = handler; return () => {}; },
+        onClose: (handler) => { exit = handler; return () => {}; },
+      }, logger, onEvent: vi.fn(), onExit: vi.fn(),
+    });
+    const error = proc.request({ type: 'get_state' }).catch((err: Error) => err);
+    stderr('Error: Failed to load extension placeholder');
+    stderr('Cannot find module "/Users/fake user/private-project/node_modules/placeholder"');
+    stderr(String.raw`from 'C:\Users\fake user\private-project\pi.exe'`);
+    stderr('from /Users/fake user/private-project/pi.exe');
+    stderr('/Users/alice/acme,secret/[private](one)/node_modules/bad.js: no such file');
+    stderr(String.raw`C:\Users\alice\acme,secret\[private](one)\bad.js: permission denied`);
+    stderr('/config.json: no such file');
+    stderr('    at internalLoader (/private/build/internal.ts:123:4)');
+    stderr('Authorization: Basic FAKEBASE64VALUE');
+    stderr('password="fake spaced password"');
+    stderr('sessionToken=FAKECUSTOMOPAQUEVALUE');
+    exit({ code: 1, signal: null, reason: 'unused raw transport reason' });
+    const result = await error as Error;
+    expect(result.message).toContain('Failed to load extension placeholder');
+    expect(result.message).toContain('[REDACTED]');
+    expect(result.message).not.toContain('FAKE');
+    expect(result.message).not.toContain('fake spaced password');
+    expect(result.message).toContain('<path:placeholder>');
+    expect(result.message).toContain('<path:pi.exe>');
+    expect(result.message).not.toContain('fake user');
+    expect(result.message).not.toContain('private-project');
+    expect(result.message).not.toContain('internalLoader');
+    expect(result.message).not.toContain('acme');
+    expect(result.message).not.toContain('secret/');
+    expect(result.message).not.toContain('[private]');
+    expect(result.message).toContain('<path:bad.js>: no such file');
+    expect(result.message).toContain('<path:bad.js>: permission denied');
+    expect(result.message).toContain('<path:config.json>: no such file');
+  });
+
+  it('keeps the generic fallback for a fresh process with no stderr', async () => {
+    const child = makeChild();
+    mocks.spawn.mockReturnValue(child);
+    const proc = createProcess();
+    const rejected = expect(proc.request({ type: 'get_state' })).rejects.toThrow(
+      /^pi process exited \(code=1, signal=null\)$/,
+    );
+    child.emit('close', 1, null);
+    await rejected;
   });
 });

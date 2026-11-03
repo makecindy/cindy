@@ -1,3 +1,4 @@
+import { readFileSync } from 'node:fs';
 import { describe, expect, it, vi } from 'vitest';
 import {
   DEVICE_LINK_MEDIA_FETCH_CHANNEL,
@@ -50,6 +51,7 @@ describe('device-link shared contract', () => {
     expect(MOBILE_REMOTE_INVOKE_CHANNELS).toContain('maker:apply-new-maker-worktree-branch-pref');
     expect(MOBILE_REMOTE_INVOKE_CHANNELS).toContain('worktree:list-branches');
     expect(MOBILE_REMOTE_INVOKE_CHANNELS).toContain('worktree:discard-precreated');
+    expect(MOBILE_REMOTE_INVOKE_CHANNELS).toContain('worktree:cancel-precreated');
     expect(MOBILE_REMOTE_INVOKE_CHANNELS).not.toContain(DEVICE_LINK_VOICE_CREDENTIAL_SYNC_CHANNEL);
     expect(MOBILE_REMOTE_INVOKE_CHANNELS).toContain(DEVICE_LINK_VOICE_DICTIONARY_LEARNING_CHANNEL);
     expect(MOBILE_REMOTE_INVOKE_CHANNELS).toContain('text-file:read-preview');
@@ -122,11 +124,23 @@ describe('device-link shared contract', () => {
   it('maps connection issue kinds to actionable copy', () => {
     expect(connectionIssueTitle('auth-failed')).toBe('登录已失效');
     expect(connectionIssueHint('auth-failed')).toContain('重新登录');
+    expect(connectionIssueTitle('device-removed')).toBe('设备已移除');
+    expect(connectionIssueHint('device-removed')).toBe('请退出后重新登录，以重新加入设备列表。');
     expect(connectionIssueTitle('replaced')).toContain('顶替');
     expect(connectionIssueHint('too-many-connections')).toContain('断开其它设备');
     expect(connectionIssueHint('version-mismatch')).toContain('升级到最新版本');
     expect(connectionIssueTitle('unstable')).toContain('反复断开');
     expect(connectionIssueHint('unstable')).toContain('本机');
+  });
+
+  it('keeps connection issue kinds aligned with the device-link source contract', () => {
+    const issueKinds = (path: string) => {
+      const source = readFileSync(new URL(path, import.meta.url), 'utf8');
+      const union = source.match(/export type DeviceLinkConnectionIssueKind\s*=([^;]+);/);
+      expect(union).not.toBeNull();
+      return [...union![1].matchAll(/'([^']+)'/g)].map((match) => match[1]).sort();
+    };
+    expect(issueKinds('../deviceLinkContract.ts')).toEqual(issueKinds('../../../device-link/src/client.ts'));
   });
 
   it('preserves structured remote error codes and access revoked classification', () => {
@@ -160,6 +174,7 @@ describe('device-link shared contract', () => {
     expect(isTransientRemoteError(Object.assign(new Error('buffer is full'), { code: 'BACKPRESSURE' }))).toBe(true);
     expect(isTransientRemoteError(Object.assign(new Error('target offline'), { code: 'DEVICE_OFFLINE' }))).toBe(true);
     expect(isTransientRemoteError('[DEVICE_LINK_TIMEOUT] no result')).toBe(true);
+    expect(isTransientRemoteError('[DEVICE_LINK_BUSY] queue full')).toBe(true);
     // HTTP 层弱网错误(超时 / 离线 / RN 原生 fetch 原文)同属瞬时,必须可重试
     expect(isTransientRemoteError(Object.assign(new Error('请求超时，请稍后重试'), { code: 'REQUEST_TIMEOUT' }))).toBe(true);
     expect(isTransientRemoteError(Object.assign(new Error('网络连接不可用'), { code: 'NETWORK_UNAVAILABLE' }))).toBe(true);

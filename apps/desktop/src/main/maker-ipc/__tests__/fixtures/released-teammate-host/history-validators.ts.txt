@@ -1,0 +1,16 @@
+function clampAroundRadius(raw: unknown): number {
+  const n = typeof raw === 'number' ? raw : Number(raw);
+  if (!Number.isFinite(n) || n < 0) return 60;
+  return Math.min(Math.max(Math.floor(n), 0), 200);
+}
+
+function requireReferenceContentCharLimit(raw: unknown): number | null {
+  if (raw === undefined || raw === null) return null;
+  if (typeof raw !== 'number' || !Number.isInteger(raw) || raw < 1 || raw > 8_000) {
+    throwIpcError(
+      'INVALID_PARAMS',
+      'contentCharLimit must be an integer between 1 and 8000 or null',
+    );
+  }
+  return raw;
+}

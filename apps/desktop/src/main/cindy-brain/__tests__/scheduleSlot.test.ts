@@ -22,6 +22,8 @@ function scheduleGhost(
     schedule?: boolean;
     enabled?: boolean;
     background?: boolean;
+    namespace?: string | null;
+    namespaceState?: 'confirmed' | 'unconfirmed' | 'pending';
   } = {},
 ): InstalledGhost {
   const agentNeeds = {
@@ -41,6 +43,8 @@ function scheduleGhost(
     dir: '/fake/sched-ghost',
     enabled: options.enabled ?? true,
     iconDataUrl: 'data:image/png;base64,AAAA',
+    ...(options.namespaceState !== undefined ? { namespaceState: options.namespaceState } : {}),
+    ...(options.namespace !== undefined ? { namespace: options.namespace } : {}),
   } as InstalledGhost;
 }
 
@@ -147,7 +151,9 @@ describe('GhostScheduleSlot 载荷校验', () => {
     });
     expect(res).toEqual({ ok: true });
     expect(pushes[0].name).toHaveLength(GHOST_SCHEDULE_DRAFT_NAME_MAX_CHARS);
-    expect(pushes[0].prompt).toHaveLength(GHOST_SCHEDULE_DRAFT_PROMPT_MAX_CHARS);
+    // 用户原文截到上限；寻址说明接在后面，不能被截掉。
+    const address = '\n\n调用这个插件时只传 ghost_id「sched-ghost」，不要传 namespace。';
+    expect(pushes[0].prompt).toBe('p'.repeat(GHOST_SCHEDULE_DRAFT_PROMPT_MAX_CHARS) + address);
   });
 });
 
@@ -201,6 +207,36 @@ describe('GhostScheduleSlot 骚扰钳制', () => {
 });
 
 describe('GhostScheduleSlot 推送内容', () => {
+  it('企业实例的预填提示带上 namespace', () => {
+    const { slot, pushes } = makeSlot({
+      getGhost: () => scheduleGhost({ namespace: 'acme', namespaceState: 'confirmed' }),
+    });
+    expect(slot.handleRequest('sched-ghost', validReq)).toEqual({ ok: true });
+    expect(pushes[0]).toMatchObject({
+      ghostId: 'sched-ghost',
+      namespace: 'acme',
+    });
+    expect(pushes[0].prompt).toContain('namespace 传「acme」');
+  });
+
+  it('待迁移实例不在草稿上写 namespace', () => {
+    const { slot, pushes } = makeSlot({
+      getGhost: () => scheduleGhost({ namespaceState: 'pending' }),
+    });
+    expect(slot.handleRequest('sched-ghost', validReq)).toEqual({ ok: true });
+    expect(pushes[0].namespace).toBeUndefined();
+    expect(pushes[0].prompt).toContain('不要传 namespace');
+  });
+
+  it('已确认 root 显式带上 namespace null', () => {
+    const { slot, pushes } = makeSlot({
+      getGhost: () => scheduleGhost({ namespace: null, namespaceState: 'confirmed' }),
+    });
+    expect(slot.handleRequest('sched-ghost', validReq)).toEqual({ ok: true });
+    expect(pushes[0].namespace).toBeNull();
+    expect(pushes[0].prompt).toContain('namespace 传 null');
+  });
+
   it('身份由主机按已装清单填,沙箱伪装不了', () => {
     const { slot, pushes } = makeSlot();
     slot.handleRequest('sched-ghost', {
@@ -315,10 +351,10 @@ describe('GhostScheduleSlot 硬约束:只能开面板,不能建任务', () => {
  * 否则取 candidates[0]。这里用判据函数复现那条规则,验证**无论窗口列表顺序如何**,
  * 回落都只会落到真正的主窗口 —— 副窗被判据挡在 candidates 之外,所以它排第几都不影响。
  */
-describe('选窗回落:插件面板聚焦时只能落到主窗口', () => {
+describe('选窗回落:右侧栏弹出窗口聚焦时只能落到主窗口', () => {
   const MAIN = 'file:///app/index.html#/cc-agent';
   const SECONDARY = 'file:///app/index.html?secondaryWindow=1&bootSession=s1#/cc-agent';
-  const PANEL = 'file:///app/index.html?ghostPanelWindow=codex-reset-planner#/ghost-panel-window';
+  const PANEL = 'file:///app/index.html?sidebarWindow=1&sidebarTabWindow=1#/sidebar-window';
 
   /** 复刻 index.ts 装配处的选窗规则(那里拿的是 BrowserWindow,这里用 URL 代表窗口)。 */
   const pick = (all: string[], focused: string | null): string | undefined => {
@@ -331,7 +367,7 @@ describe('选窗回落:插件面板聚焦时只能落到主窗口', () => {
     ['副窗在前', [SECONDARY, MAIN, PANEL]],
     ['面板窗在前', [PANEL, SECONDARY, MAIN]],
     ['副窗夹在中间', [PANEL, SECONDARY, MAIN, SECONDARY]],
-  ])('%s:focused=插件面板窗 → 回落到主窗口而不是副窗', (_label, all) => {
+  ])('%s:focused=弹出窗 → 回落到主窗口而不是副窗', (_label, all) => {
     expect(pick(all, PANEL)).toBe(MAIN);
   });
 
@@ -363,8 +399,7 @@ describe('isMainShellWindowUrl（投给哪个窗口的判据）', () => {
 
   it.each([
     // 这两类窗口与 MainLayout 平级,没有草稿订阅、也去不了自动化页。
-    ['插件面板独立窗(query)', 'file:///app/index.html?ghostPanelWindow=sign#/ghost-panel-window'],
-    ['插件面板独立窗(仅 hash)', 'file:///app/index.html#/ghost-panel-window'],
+    ['右侧栏页签弹出窗(query)', 'file:///app/index.html?sidebarWindow=1&sidebarTabWindow=1#/sidebar-window'],
     ['右侧栏独立窗(query)', 'file:///app/index.html?sidebarWindow=1#/sidebar-window'],
     ['右侧栏独立窗(仅 hash)', 'file:///app/index.html#/sidebar-window'],
     // utility 窗:统一带 ?view=<名字>,一律接不住草稿(review 第三轮)。
@@ -388,10 +423,12 @@ describe('isMainShellWindowUrl（投给哪个窗口的判据）', () => {
 
   /**
    * 这条是本能力的主使用路径:编写手册 §4.11.2 第 1 步就是「用户在你的插件面板上
-   * 点一下」,而面板可以被拉成独立窗口。那一刻 focused 是面板窗——若判据把它当成
-   * 可投窗口,草稿就投给了一个接不住它的窗口,用户点了什么都不会发生。
+   * 点一下」,而面板(右侧栏插件视图页签)可以被弹成独立窗口。那一刻 focused 是弹出窗——
+   * 若判据把它当成可投窗口,草稿就投给了一个接不住它的窗口,用户点了什么都不会发生。
    */
-  it('插件面板独立窗绝不能被当作可投窗口(本能力的主使用路径)', () => {
-    expect(isMainShellWindowUrl('file:///app/index.html?ghostPanelWindow=codex-reset-planner#/ghost-panel-window')).toBe(false);
+  it('右侧栏页签弹出窗绝不能被当作可投窗口(本能力的主使用路径)', () => {
+    expect(
+      isMainShellWindowUrl('file:///app/index.html?sidebarWindow=1&sidebarTabWindow=1#/sidebar-window'),
+    ).toBe(false);
   });
 });

@@ -32,6 +32,7 @@ const plugin: TabKindPlugin<SubagentsState> = {
   menu: {
     kind: 'subagents',
     labelKey: 'rightSidebar.tabs.kinds.subagents',
+    descriptionKey: 'rightSidebar.tabs.descriptions.subagents',
     icon: Bot,
     order: 16,
     enabled: true,

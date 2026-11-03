@@ -3,11 +3,13 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Check, ChevronDown } from 'lucide-react';
-import * as Select from '@radix-ui/react-select';
+import { SelectParts as Select } from '@/components/ui/select';
 
 import { OneshotModelPinPicker } from '@/cindy-brain/OneshotModelPinPicker';
 import { useAuth } from '@/contexts/AuthContext';
+import { useProviders } from '@/hooks/useProviders';
 import { createLogger } from '@/lib/logger';
+import { providerDisplayName } from '@/lib/providerDisplayName';
 import { toast } from '@/lib/toast';
 import { cn } from '@/lib/utils';
 import { isModelEnabled, useModelVisibilityVersion } from '@/state/modelVisibilityPrefs';
@@ -26,6 +28,9 @@ type AuxiliaryModelMode = 'automatic' | 'custom';
 export function AuxiliaryModelSection() {
   const { t } = useTranslation();
   const { mode: authMode } = useAuth();
+  const { providers } = useProviders();
+  const cindyAiProvider = providers.find((provider) => provider.id === 'xd');
+  const cindyAiName = cindyAiProvider ? providerDisplayName(cindyAiProvider, t) : null;
   const [settings, setSettings] = useState<AuxiliaryModelSettingsState | null>(null);
   const [pending, setPending] = useState(false);
   const [drafting, setDrafting] = useState(false);
@@ -75,6 +80,13 @@ export function AuxiliaryModelSection() {
     () =>
       (settings?.options ?? []).map((option) => ({
         ...option,
+        // Names follow the existing live catalog, independently of saved choices
+        // or an in-flight save whose options may still carry the old locale.
+        ...(option.providerId === 'xd' && cindyAiName ? {
+          group: cindyAiName,
+          logoKind: cindyAiProvider?.logoKind,
+          label: `${option.agentSuffix} · ${option.modelName} · ${cindyAiName}`,
+        } : {}),
         available:
           option.available !== false &&
           isModelEnabled(option.agentKind, option.providerId, {
@@ -82,7 +94,7 @@ export function AuxiliaryModelSection() {
             defaultEnabled: option.defaultEnabled,
           }),
       })),
-    [modelVisibilityVersion, settings?.options],
+    [cindyAiName, cindyAiProvider?.logoKind, modelVisibilityVersion, settings?.options],
   );
 
   if (!settings) return null;
@@ -183,7 +195,7 @@ export function AuxiliaryModelSection() {
                 className={cn(
                   'flex h-9 w-[220px] max-w-full min-w-0 shrink items-center justify-between gap-3 rounded-full border px-3.5 text-13 outline-none transition-colors',
                   'border-[var(--settings-input-border)] bg-[var(--settings-input-bg)] text-[var(--settings-input-text)]',
-                  'hover:bg-[var(--settings-menu-bg-hover)] focus:ring-2 focus:ring-[var(--focus-ring-soft)]',
+                  'hover:bg-[var(--settings-menu-bg-hover)] focus-visible:ring-2 focus-visible:ring-[var(--focus-ring-soft)]',
                   'disabled:cursor-not-allowed disabled:opacity-55',
                 )}
               >
@@ -205,7 +217,7 @@ export function AuxiliaryModelSection() {
                   align="start"
                   sideOffset={6}
                   className={cn(
-                    'z-[10010] w-[var(--radix-select-trigger-width)] min-w-[220px] overflow-hidden rounded-xl p-2',
+                    'z-[10010] w-[var(--radix-select-trigger-width)] overflow-hidden rounded-xl p-2',
                     'border border-[var(--settings-input-border)] bg-[var(--settings-theme-card-bg)]',
                   )}
                 >
@@ -216,8 +228,8 @@ export function AuxiliaryModelSection() {
                         value={option}
                         className={cn(
                           'flex h-9 w-full cursor-pointer select-none items-center justify-between gap-3 rounded-[8px] px-3 text-left text-13 outline-none transition-colors',
-                          'text-[var(--settings-input-text)] data-[highlighted]:bg-[var(--settings-menu-bg-hover)]',
-                          'data-[state=checked]:bg-[var(--settings-menu-bg-selected)] data-[state=checked]:font-medium data-[state=checked]:text-[var(--settings-menu-text-selected)]',
+                          'text-[var(--settings-input-text)]',
+                          'data-[state=checked]:font-medium data-[state=checked]:text-[var(--settings-menu-text-selected)]',
                         )}
                       >
                         <Select.ItemText className="min-w-0 flex-1 whitespace-nowrap">
@@ -274,8 +286,6 @@ export function AuxiliaryModelSection() {
                           surfacing Harness or a thinking-depth control. */}
                       <OneshotModelPinPicker
                         value={pin ?? undefined}
-                        defaultLabel=""
-                        declaredLabel={null}
                         options={slotOptions}
                         onChange={(next) => applySlot(index, next)}
                         ariaLabel={t(`settings.auxiliaryModels.${slotKey}.ariaLabel`)}

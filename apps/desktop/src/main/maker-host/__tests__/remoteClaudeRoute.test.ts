@@ -1,11 +1,9 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 // remote-claude-route 只做纯路由 → cc env 翻译,带副作用的依赖全部 mock(其中
-// auth-adapters 触 electron,必须 mock 掉)。claude-gateway-config 与
-// claude-oauth-spawn-env 是纯函数,保留真实实现。
+// auth-adapters 触 electron,必须 mock 掉)。Claude 订阅凭证只在本机 CLI 的登录里,
+// 远端会话既不读取也不下发它。
 const readClaudeApiKey = vi.fn<() => string | null>(() => null);
-const getClaudeAiOAuthForSpawn = vi.fn<() => unknown>(() => null);
-const hasClaudeAiOAuth = vi.fn<() => boolean>(() => false);
 const getActiveCatalog = vi.fn<() => { providers: unknown[] }>(() => ({ providers: [] }));
 const resolveProviderRouteDecision = vi.fn<(...args: unknown[]) => Promise<unknown>>();
 const gatewayDefaultRouteDecision = vi.fn<(...args: unknown[]) => unknown>();
@@ -17,10 +15,6 @@ vi.mock('../model-discovery/xai.js', () => ({
 }));
 
 vi.mock('../auth-adapters.js', () => ({ readClaudeApiKey: () => readClaudeApiKey() }));
-vi.mock('../claude-oauth-refresh.js', () => ({
-  getClaudeAiOAuthForSpawn: () => getClaudeAiOAuthForSpawn(),
-}));
-vi.mock('../claude-credentials-store.js', () => ({ hasClaudeAiOAuth: () => hasClaudeAiOAuth() }));
 vi.mock('../active-catalog.js', () => ({ getActiveCatalog: () => getActiveCatalog() }));
 vi.mock('../provider-route.js', () => ({
   resolveProviderRouteDecision: (...args: unknown[]) => resolveProviderRouteDecision(...args),
@@ -41,8 +35,6 @@ function parseCustomHeaders(serialized: string | undefined): Record<string, stri
 
 beforeEach(() => {
   readClaudeApiKey.mockReset().mockReturnValue(null);
-  getClaudeAiOAuthForSpawn.mockReset().mockReturnValue(null);
-  hasClaudeAiOAuth.mockReset().mockReturnValue(false);
   getActiveCatalog.mockReset().mockReturnValue({ providers: [] });
   resolveProviderRouteDecision.mockReset().mockResolvedValue(null);
   gatewayDefaultRouteDecision.mockReset().mockReturnValue(null);
@@ -50,57 +42,14 @@ beforeEach(() => {
 });
 
 describe('resolveRemoteClaudeRoute — 默认路由(未显式选供应商)', () => {
-  it('连了订阅、没网关 key + Anthropic 原生模型 → 订阅直连(隐式上游 + OAuth token)', async () => {
-    hasClaudeAiOAuth.mockReturnValue(true);
-    getClaudeAiOAuthForSpawn.mockReturnValue({
-      accessToken: 'tok-sub',
-      scopes: ['user:inference'],
-      subscriptionType: 'max',
-      rateLimitTier: 'tier-1',
-    });
-    const route = await resolveRemoteClaudeRoute({ providerId: null, model: 'claude-opus-5' });
-    expect(route).not.toBeNull();
-    expect(route!.endpoint).toBe('https://api.anthropic.com');
-    expect(route!.env.CLAUDE_CODE_OAUTH_TOKEN).toBe('tok-sub');
-    expect(route!.env.CLAUDE_CODE_OAUTH_SCOPES).toBe('user:inference');
-    expect(route!.env.CLAUDE_CODE_SUBSCRIPTION_TYPE).toBe('max');
-    expect(route!.env.CLAUDE_CODE_RATE_LIMIT_TIER).toBe('tier-1');
-    // 订阅直连不塞 api key / bearer 门,凭证走 OAuth token
-    expect(route!.env.ANTHROPIC_API_KEY).toBeUndefined();
-    expect(route!.env.ANTHROPIC_AUTH_TOKEN).toBeUndefined();
-  });
-
-  it('未连订阅 → null(回落网关远端路径)', async () => {
-    hasClaudeAiOAuth.mockReturnValue(false);
-    expect(await resolveRemoteClaudeRoute({ providerId: null, model: 'claude-opus-5' })).toBeNull();
-  });
-
-  it('连了订阅但非 Anthropic 模型 → null(网关)', async () => {
-    hasClaudeAiOAuth.mockReturnValue(true);
-    getClaudeAiOAuthForSpawn.mockReturnValue({ accessToken: 'tok' });
-    expect(
-      await resolveRemoteClaudeRoute({ providerId: null, model: 'deepseek/deepseek-v4-flash' }),
-    ).toBeNull();
-  });
-
-  it('连了订阅 + 有网关 key + Anthropic 模型 → null(镜像本地默认:全量换网关 key,不升级成直连)', async () => {
-    hasClaudeAiOAuth.mockReturnValue(true);
-    getClaudeAiOAuthForSpawn.mockReturnValue({ accessToken: 'tok-sub' });
-    readClaudeApiKey.mockReturnValue('gw-key');
-    gatewayDefaultRouteDecision.mockReturnValue({ headerOverride: { 'x-api-key': 'gw-key' } });
-    expect(
-      await resolveRemoteClaudeRoute({ providerId: null, model: 'claude-opus-5' }),
-    ).toBeNull();
-    expect(gatewayDefaultRouteDecision).toHaveBeenCalledWith('claude-code', 'gw-key');
-  });
-
-  it('连了订阅、有网关 key 但网关不可用(decision null)→ Anthropic 模型仍订阅直连', async () => {
-    hasClaudeAiOAuth.mockReturnValue(true);
-    getClaudeAiOAuthForSpawn.mockReturnValue({ accessToken: 'tok-sub' });
-    readClaudeApiKey.mockReturnValue('gw-key');
-    gatewayDefaultRouteDecision.mockReturnValue(null);
-    const route = await resolveRemoteClaudeRoute({ providerId: null, model: 'claude-opus-5' });
-    expect(route!.env.CLAUDE_CODE_OAUTH_TOKEN).toBe('tok-sub');
+  it.each([
+    ['claude-opus-5', null],
+    ['claude-opus-5', 'gw-key'],
+    ['deepseek/deepseek-v4-flash', null],
+  ] as const)('%s (gateway key %s) → null:远端恒走网关,不回落到 Claude 订阅', async (model, key) => {
+    readClaudeApiKey.mockReturnValue(key);
+    expect(await resolveRemoteClaudeRoute({ providerId: null, model })).toBeNull();
+    expect(resolveProviderRouteDecision).not.toHaveBeenCalled();
   });
 });
 
@@ -110,17 +59,15 @@ describe('resolveRemoteClaudeRoute — 显式供应商', () => {
     expect(resolveProviderRouteDecision).not.toHaveBeenCalled();
   });
 
-  it('显式 anthropic → native OAuth 订阅直连(不走 oauth-passthrough route)', async () => {
-    resolveProviderRouteDecision.mockResolvedValue({
-      providerId: 'anthropic',
-      routing: { upstream: 'https://api.anthropic.com', authStrategy: 'oauth-passthrough' },
-      decision: { upstreamOverride: 'https://api.anthropic.com' },
-    });
-    hasClaudeAiOAuth.mockReturnValue(true);
-    getClaudeAiOAuthForSpawn.mockReturnValue({ accessToken: 'tok-sub' });
-    const route = await resolveRemoteClaudeRoute({ providerId: 'anthropic', model: 'claude-opus-5' });
-    expect(route!.endpoint).toBe('https://api.anthropic.com');
-    expect(route!.env.CLAUDE_CODE_OAUTH_TOKEN).toBe('tok-sub');
+  it('显式 Claude 订阅(内置 anthropic / 独立 Claude 账号)→ REMOTE_NATIVE_OAUTH_UNAVAILABLE,不下发凭证', async () => {
+    getActiveCatalog.mockReturnValue({ providers: [
+      { id: 'claude-work', auth: { method: 'oauth', native: 'claude' } },
+    ] });
+    for (const providerId of ['anthropic', 'claude-work']) {
+      await expect(
+        resolveRemoteClaudeRoute({ providerId, model: 'claude-opus-5' }),
+      ).rejects.toThrow(/REMOTE_NATIVE_OAUTH_UNAVAILABLE/);
+    }
     expect(resolveProviderRouteDecision).not.toHaveBeenCalled();
   });
 
@@ -289,13 +236,5 @@ describe('resolveRemoteClaudeRoute — 远端无法表达的能力 → 明确报
     await expect(resolveRemoteClaudeRoute({ providerId: 'ghost', model: 'm' })).rejects.toThrow(
       /REMOTE_PROVIDER_UNSUPPORTED/,
     );
-  });
-
-  it('订阅未连接但走到订阅直连路径 → REMOTE_NATIVE_OAUTH_UNAVAILABLE', async () => {
-    getClaudeAiOAuthForSpawn.mockReturnValue(null);
-    resolveProviderRouteDecision.mockResolvedValue(null);
-    await expect(
-      resolveRemoteClaudeRoute({ providerId: 'anthropic', model: 'claude-opus-5' }),
-    ).rejects.toThrow(/REMOTE_NATIVE_OAUTH_UNAVAILABLE/);
   });
 });

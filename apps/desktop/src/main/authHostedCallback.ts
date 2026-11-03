@@ -130,9 +130,8 @@ export interface HostedCallbackPollingDeps {
 /**
  * 轮询直到拿到结论、被取消或超时。
  *
- * 取消与超时都收敛成 `USER_CANCELLED`:这与 loopback 路径的超时处理一致
- * (authManager 的 BROWSER_AUTH_TIMEOUT_MS 分支),且该码在 renderer 被特意映射成
- * "不展示错误"——用户把浏览器晾在一边不算失败。
+ * Explicit cancellation stays silent; an expired wait must explain why the
+ * authorization screen stopped waiting, consistently with the loopback path.
  */
 export async function runHostedCallbackPolling(
   deps: HostedCallbackPollingDeps,
@@ -145,7 +144,7 @@ export async function runHostedCallbackPolling(
   for (;;) {
     if (deps.signal.aborted) return { error: 'USER_CANCELLED' };
     if (deps.now() - startedAt >= deps.timeoutMs) {
-      return { error: 'USER_CANCELLED' };
+      return { error: 'REQUEST_TIMEOUT' };
     }
 
     try {

@@ -1,40 +1,53 @@
 import { createAudioPlayer } from 'expo-audio';
 
-type MobileVoiceCue = {
+export type MobileVoiceCue = {
   fromFrequency: number;
   toFrequency: number;
   rampAt: number;
   duration: number;
   volume: number;
+  bodyVolume: number;
+  decayAt: number;
+  attack: number;
   delay?: number;
-  attack?: number;
 };
 
 const SAMPLE_RATE = 44_100;
 const SILENCE_TAIL_SECONDS = 0.025;
+// Fallback release if the player never reports completion (cue is ~0.3 s).
+const CUE_RELEASE_TIMEOUT_MS = 3_000;
+// Web Audio exponential ramps cannot start from 0; desktop starts and ends here.
+const SILENT_GAIN = 0.0001;
 
-const END_CUE = buildCueDataUri([
+// Same note and envelope as desktop apps/desktop/src/renderer/voice-input/startCue.ts:
+// a soft attack, a round body, then a short bell-like decay.
+export const MOBILE_VOICE_INTERACTION_NOTE: MobileVoiceCue = {
+  fromFrequency: 880,
+  toFrequency: 987.77,
+  rampAt: 0.032,
+  duration: 0.11,
+  volume: 0.18,
+  bodyVolume: 0.065,
+  decayAt: 0.04,
+  attack: 0.008,
+};
+
+// Desktop's end cue: repeat the note, then answer a minor third lower.
+const LOWER_PITCH_RATIO = 2 ** (-3 / 12);
+export const MOBILE_VOICE_END_CUES: readonly MobileVoiceCue[] = [
+  MOBILE_VOICE_INTERACTION_NOTE,
   {
-    fromFrequency: 520,
-    toFrequency: 660,
-    rampAt: 0.045,
-    duration: 0.11,
-    volume: 0.095,
-    attack: 0.006,
+    ...MOBILE_VOICE_INTERACTION_NOTE,
+    fromFrequency: MOBILE_VOICE_INTERACTION_NOTE.fromFrequency * LOWER_PITCH_RATIO,
+    toFrequency: MOBILE_VOICE_INTERACTION_NOTE.toFrequency * LOWER_PITCH_RATIO,
+    delay: 0.14,
   },
-  {
-    fromFrequency: 720,
-    toFrequency: 920,
-    rampAt: 0.045,
-    duration: 0.11,
-    volume: 0.095,
-    delay: 0.16,
-    attack: 0.006,
-  },
-]);
+];
+
+const END_CUE = buildCueDataUri(MOBILE_VOICE_END_CUES);
 
 /**
- * Plays the optional end-of-dictation sine-glide feedback, mirroring desktop.
+ * Plays the optional end-of-dictation feedback, matching desktop's end cue.
  *
  * NOTE: there is intentionally NO start cue on mobile. Playing a cue through
  * expo-audio (`createAudioPlayer().play()`) re-activates the shared iOS
@@ -53,9 +66,34 @@ export function playMobileVoiceInputEndCue(): void {
   playCue(END_CUE);
 }
 
+// Players stay referenced until playback ends. expo-audio tears the native
+// player down when its JS object is garbage-collected; an unreferenced player
+// could be collected mid-cue during the UI updates that follow stop, cutting
+// the sound off after its first note.
+const playingCues = new Set<{ release(): void }>();
+
 function playCue(uri: string): void {
   try {
     const player = createAudioPlayer(uri);
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    let subscription: { remove(): void } | undefined;
+    const entry = {
+      release() {
+        if (!playingCues.delete(entry)) return;
+        if (timer) clearTimeout(timer);
+        subscription?.remove();
+        try {
+          player.release();
+        } catch {
+          // Already released.
+        }
+      },
+    };
+    playingCues.add(entry);
+    subscription = player.addListener('playbackStatusUpdate', (status) => {
+      if (status.didJustFinish) entry.release();
+    });
+    timer = setTimeout(() => entry.release(), CUE_RELEASE_TIMEOUT_MS);
     player.play();
   } catch {
     // Optional feedback only.
@@ -63,7 +101,8 @@ function playCue(uri: string): void {
 }
 
 function buildCueDataUri(cues: readonly MobileVoiceCue[]): string {
-  const duration = cues.reduce((max, cue) => Math.max(max, (cue.delay ?? 0) + cue.duration), 0) + SILENCE_TAIL_SECONDS;
+  const duration = cues.reduce((max, cue) => Math.max(max, (cue.delay ?? 0) + cue.duration), 0)
+    + SILENCE_TAIL_SECONDS;
   const sampleCount = Math.max(1, Math.ceil(duration * SAMPLE_RATE));
   const samples = new Int16Array(sampleCount);
   for (const cue of cues) {
@@ -72,19 +111,25 @@ function buildCueDataUri(cues: readonly MobileVoiceCue[]): string {
   return `data:audio/wav;base64,${encodeBase64(buildWav(samples))}`;
 }
 
+/** Gain at `t` seconds into a cue, reproducing desktop's exponential ramps. */
+export function mobileVoiceCueGain(cue: MobileVoiceCue, t: number): number {
+  const ramp = (from: number, to: number, start: number, end: number): number =>
+    from * ((to / from) ** Math.min(1, Math.max(0, (t - start) / (end - start))));
+  if (t < cue.attack) return ramp(SILENT_GAIN, cue.volume, 0, cue.attack);
+  if (t < cue.decayAt) return ramp(cue.volume, cue.bodyVolume, cue.attack, cue.decayAt);
+  return ramp(cue.bodyVolume, SILENT_GAIN, cue.decayAt, cue.duration);
+}
+
 function mixCue(samples: Int16Array, cue: MobileVoiceCue): void {
   const startSample = Math.max(0, Math.floor((cue.delay ?? 0) * SAMPLE_RATE));
   const durationSamples = Math.max(1, Math.floor(cue.duration * SAMPLE_RATE));
   const rampSamples = Math.max(1, Math.floor(cue.rampAt * SAMPLE_RATE));
-  const attackSamples = Math.max(1, Math.floor((cue.attack ?? 0.01) * SAMPLE_RATE));
   let phase = 0;
 
   for (let i = 0; i < durationSamples && startSample + i < samples.length; i += 1) {
     const frequencyProgress = Math.min(1, i / rampSamples);
     const frequency = cue.fromFrequency * ((cue.toFrequency / cue.fromFrequency) ** frequencyProgress);
-    const attack = Math.min(1, (i + 1) / attackSamples);
-    const release = Math.max(0, 1 - i / durationSamples);
-    const envelope = Math.min(attack, release) * cue.volume;
+    const envelope = mobileVoiceCueGain(cue, i / SAMPLE_RATE);
     phase += (2 * Math.PI * frequency) / SAMPLE_RATE;
     const next = samples[startSample + i] + Math.round(Math.sin(phase) * envelope * 32767);
     samples[startSample + i] = Math.max(-32768, Math.min(32767, next));

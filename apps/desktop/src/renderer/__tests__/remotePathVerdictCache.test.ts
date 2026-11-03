@@ -55,6 +55,18 @@ afterEach(() => {
 });
 
 describe('unknown 的生命周期(不变量 A)', () => {
+  it('does not reuse plain existence or another turn window as command-generation evidence', async () => {
+    const stat = stubChatStat(async () => ({ verdict: 'file' }));
+    await verify();
+    const window = { startMs: 100, endMs: 200 };
+    await verifyRemotePathCached(ORIGIN, WORKDIR, ABS, window);
+    await verifyRemotePathCached(ORIGIN, WORKDIR, ABS, window);
+    await verifyRemotePathCached(ORIGIN, WORKDIR, ABS, { startMs: 100, endMs: 300 });
+    expect(stat).toHaveBeenCalledTimes(3);
+    expect(stat).toHaveBeenNthCalledWith(2, {
+      origin: ORIGIN, workdir: WORKDIR, absPath: ABS, modifiedWindow: window,
+    });
+  });
   it('IPC 异常 → unknown,且**不进 peek**(peek 有值 ⇔ 有确定结论)', async () => {
     stubChatStat(() => Promise.reject(new Error('link down')));
     await expect(verify()).resolves.toBe('unknown');

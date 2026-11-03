@@ -6,6 +6,12 @@ import {
 } from '../../shared/localModelRuntime.js';
 import { getCustomProvider } from '../maker-host/custom-provider-store.js';
 import { startOfficialOllamaApp } from './ollamaRuntime.js';
+import { MANAGED_LLAMACPP_PROVIDER_ID } from '../../shared/llamaCpp.js';
+import { assertManagedLlamaCppProvider } from './managedLlamaCppProvider.js';
+import { getManagedLlamaCppService } from './llamaCppService.js';
+
+/** A cold Ollama start can take well over 15s; a send waits instead of failing early. */
+export const OLLAMA_SESSION_START_TIMEOUT_MS = 120_000;
 
 function cindyUserDataDir(explicit?: string): string | undefined {
   if (explicit) return explicit;
@@ -20,8 +26,21 @@ export async function ensureManagedOllamaReadyForSession(opts: {
   providerId?: string | null;
   remoteHostId?: string | null;
   userDataDir?: string;
+  /** Existing turns only restore a stopped service; they do not apply pending presets. */
+  onlyIfStopped?: boolean;
 }): Promise<void> {
   if (opts.remoteHostId) return;
+  if (opts.providerId === MANAGED_LLAMACPP_PROVIDER_ID) {
+    await assertManagedLlamaCppProvider();
+    const root = cindyUserDataDir(opts.userDataDir);
+    if (!root) {
+      throw new Error('[LOCAL_LLAMACPP_NOT_READY] Reconnect llama.cpp in Settings → Model Providers.');
+    }
+    const service = getManagedLlamaCppService(root);
+    if (opts.onlyIfStopped && (await service.snapshot()).running) return;
+    await service.start();
+    return;
+  }
   if (opts.providerId !== MANAGED_OLLAMA_PROVIDER_ID) return;
   const existing = await getCustomProvider(MANAGED_OLLAMA_PROVIDER_ID);
   if (
@@ -40,6 +59,7 @@ export async function ensureManagedOllamaReadyForSession(opts: {
     platform: process.platform,
     fetchImpl: (url, init) => fetch(url, init),
     userDataDir: cindyUserDataDir(opts.userDataDir),
+    startTimeoutMs: OLLAMA_SESSION_START_TIMEOUT_MS,
   });
   if (ready.kind !== 'ready') {
     throw new Error(

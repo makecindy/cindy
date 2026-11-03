@@ -1,3 +1,9 @@
+import { formatCompactionDuration, formatSessionDuration, formatShellDuration } from '@/lib/sessionDurationFormat';
+import { IMPORT_SOURCE_NAMES, ImportSourceMark } from '@/components/icons/ImportSourceMark';
+import { isImportSourceId } from '../../../shared/sessionImport';
+import { InputHandoffRecordRow, readInputHandoffRecordData } from '@/features/input-handoff/InputHandoffRecordRow';
+import { Button } from '@/components/ui/button';
+import { BotSessionTaskResultCard } from '@/features/bots/BotSessionTaskResultCard';
 /**
  * SystemCard
  * ---------------------------------------------------------------------------
@@ -7,13 +13,16 @@
 
 import { BotAuthorizationCardView } from '@/features/bots/BotAuthorizationCard';
 import { useState, type ReactNode } from 'react';
+import type { PluginModelRouteNote } from '@/lib/ccAgent.types';
 import {
   ArrowLeftRight,
   ArrowRight,
   Check,
   ChevronDown,
   ChevronRight,
+  Info,
   Layers,
+  Plug,
   RefreshCw,
   Target,
   X,
@@ -21,6 +30,11 @@ import {
 import { useTranslation } from 'react-i18next';
 import { useNavigate } from 'react-router-dom';
 
+import {
+  hasInterruptionContext,
+  readAutoResumeInfo,
+  type AutoResumeCardInfo,
+} from '@/lib/autoResumePresentation';
 import { cn } from '@/lib/utils';
 import { Collapse } from '@/components/ui/collapse';
 import { Spinner } from '@/components/ui/spinner';
@@ -36,6 +50,8 @@ import {
   BotSessionTaskMessageTrace,
 } from '@/features/bots/BotCollaborationCard';
 import { BotDirectMessageCard } from '@/features/bots/BotDirectMessageCard';
+import { VoiceCallCard, VoiceCallTaskEntry } from '@/features/bots/voice/VoiceCallTranscript';
+import { readVoiceCallRecord } from '@/../shared/voiceConversation';
 import {
   ACTIVITY_ROW_CHEVRON_SLOT_CLASS,
   ACTIVITY_ROW_COLOR_TRANSITION_CLASS,
@@ -43,10 +59,16 @@ import {
   ACTIVITY_ROW_RADIUS_CLASS,
 } from './activityRowChrome';
 import { MarkdownRenderer } from './MarkdownRenderer';
-import { CindyMakeDoctorCard } from './CindyMakeDoctorCard';
+import { builtInSkillDescriptionKey } from '@/features/skillhub/lib/builtInSkillPresentation';
+import { getSessionDeviceId } from '@/features/device-link/remoteProjectsStore';
 
 interface SystemCardProps {
   cardType:
+    | 'plugin-model-route'
+    | 'voice-call'
+    | 'voice-call-task'
+    | 'mcp-app'
+    | 'input-handoff'
     | 'cindy-make-doctor'
     | 'cindy-make'
     | 'help'
@@ -66,9 +88,11 @@ interface SystemCardProps {
     | 'agent-switch'
     | 'bot-session-task-message'
     | 'bot-session-task'
+    | 'bot-session-task-result'
     | 'bot-direct-message'
     | 'bot-authorization'
-    | 'context-rebuild';
+    | 'context-rebuild'
+    | 'session-import';
   data?: Record<string, unknown>;
   /**
    * 这条自愈记录此刻是否真的在飞（会话有在跑的 turn，且它就是那个 turn 的发起者）。
@@ -104,32 +128,50 @@ const codeClass = cn(
 );
 
 function HelpCard({ data }: { data?: Record<string, unknown> }) {
+  const { t } = useTranslation();
   const commands =
-    (data?.commands as Array<{ name: string; description?: string; source: string }>) ?? [];
+    (data?.commands as Array<{
+      name: string;
+      description?: string;
+      source: string;
+      builtIn?: boolean;
+    }>) ?? [];
   const desktopCmds = commands.filter((c) => c.source === 'desktop');
   const agentBuiltinCmds = commands.filter((c) => c.source === 'agent-builtin');
   const projectCmds = commands.filter((c) => c.source === 'user' || c.source === 'skill');
 
   const renderCommandRows = (
-    items: Array<{ name: string; description?: string; source: string }>,
+    items: Array<{
+      name: string;
+      description?: string;
+      source: string;
+      builtIn?: boolean;
+    }>,
   ) => (
     <div className="flex flex-col gap-[2px]">
-      {items.map((c) => (
-        <div key={c.name} className={rowClass}>
-          <span className={codeClass}>/{c.name}</span>
-          <span className={descClass}>{c.description ?? ''}</span>
-        </div>
-      ))}
+      {items.map((c) => {
+        const descriptionKey = builtInSkillDescriptionKey(c);
+        return (
+          <div key={c.name} className={rowClass}>
+            <span className={codeClass}>/{c.name}</span>
+            <span className={descClass}>
+              {descriptionKey ? t(descriptionKey) : c.description ?? ''}
+            </span>
+          </div>
+        );
+      })}
     </div>
   );
 
   return (
     <div className={cardClass}>
-      <div className={titleClass}>Available Commands</div>
+      <div className={titleClass}>{t('chat.systemCard.help.title')}</div>
       {desktopCmds.length > 0 && renderCommandRows(desktopCmds)}
       {agentBuiltinCmds.length > 0 && (
         <>
-          <div className={cn(titleClass, desktopCmds.length > 0 && 'mt-3')}>Built-in Commands</div>
+          <div className={cn(titleClass, desktopCmds.length > 0 && 'mt-3')}>
+            {t('chat.systemCard.help.builtInCommands')}
+          </div>
           {renderCommandRows(agentBuiltinCmds)}
         </>
       )}
@@ -141,26 +183,27 @@ function HelpCard({ data }: { data?: Record<string, unknown> }) {
               (desktopCmds.length > 0 || agentBuiltinCmds.length > 0) && 'mt-3',
             )}
           >
-            Project Commands
+            {t('chat.systemCard.help.projectCommands')}
           </div>
           {renderCommandRows(projectCmds)}
         </>
       )}
-      {commands.length === 0 && <div className={labelClass}>No commands available.</div>}
+      {commands.length === 0 && <div className={labelClass}>{t('chat.systemCard.help.empty')}</div>}
     </div>
   );
 }
 
 function CostCard({ data }: { data?: Record<string, unknown> }) {
+  const { t } = useTranslation();
   const tokenUsage = (data?.tokenUsage as number) ?? 0;
   const tokenText = tokenUsage >= 1000 ? `${(tokenUsage / 1000).toFixed(1)}k` : String(tokenUsage);
 
   return (
     <div className={cardClass}>
-      <div className={titleClass}>Session Cost</div>
+      <div className={titleClass}>{t('chat.systemCard.cost.title')}</div>
       <div className="flex flex-col gap-[2px]">
         <div className={rowClass}>
-          <span className={labelClass}>Tokens used (this turn)</span>
+          <span className={labelClass}>{t('chat.systemCard.cost.tokensUsed')}</span>
           <span className={valueClass}>{tokenText}</span>
         </div>
       </div>
@@ -670,45 +713,49 @@ function fmtContextTokens(n: number): string {
 }
 
 function PwdCard({ data }: { data?: Record<string, unknown> }) {
-  const workingDir = (data?.workingDir as string) ?? '(not set)';
+  const { t } = useTranslation();
+  const workingDir = (data?.workingDir as string) ?? t('chat.systemCard.pwd.notSet');
 
   return (
     <div className={cardClass}>
-      <div className={titleClass}>Working Directory</div>
+      <div className={titleClass}>{t('chat.systemCard.pwd.title')}</div>
       <span className={cn(codeClass, 'text-14')}>{workingDir}</span>
     </div>
   );
 }
 
 function StatusCard({ data }: { data?: Record<string, unknown> }) {
+  const { t } = useTranslation();
   const model = (data?.model as string) ?? '';
   const effort = (data?.effort as string) ?? '';
   const permissionMode = (data?.permissionMode as string) ?? '';
-  const workingDir = (data?.workingDir as string) ?? '(not set)';
+  const workingDir = (data?.workingDir as string) ?? t('chat.systemCard.pwd.notSet');
   const isRunning = (data?.isRunning as boolean) ?? false;
 
   return (
     <div className={cardClass}>
-      <div className={titleClass}>Session Status</div>
+      <div className={titleClass}>{t('chat.systemCard.status.title')}</div>
       <div className="flex flex-col gap-[2px]">
         <div className={rowClass}>
-          <span className={labelClass}>Agent</span>
-          <span className={valueClass}>{isRunning ? 'Running' : 'Idle'}</span>
+          <span className={labelClass}>{t('chat.systemCard.status.agent')}</span>
+          <span className={valueClass}>
+            {isRunning ? t('chat.systemCard.status.running') : t('chat.systemCard.status.idle')}
+          </span>
         </div>
         <div className={rowClass}>
-          <span className={labelClass}>Model</span>
+          <span className={labelClass}>{t('chat.systemCard.status.model')}</span>
           <span className={valueClass}>{model}</span>
         </div>
         <div className={rowClass}>
-          <span className={labelClass}>Effort</span>
+          <span className={labelClass}>{t('chat.systemCard.status.effort')}</span>
           <span className={valueClass}>{effort}</span>
         </div>
         <div className={rowClass}>
-          <span className={labelClass}>Permission mode</span>
+          <span className={labelClass}>{t('chat.systemCard.status.permissionMode')}</span>
           <span className={valueClass}>{permissionMode}</span>
         </div>
         <div className={rowClass}>
-          <span className={labelClass}>Working directory</span>
+          <span className={labelClass}>{t('chat.systemCard.pwd.title')}</span>
           <span className={valueClass}>{workingDir}</span>
         </div>
       </div>
@@ -737,7 +784,9 @@ function CompactBoundaryCard({ data }: { data?: Record<string, unknown> }) {
   // post_tokens / duration_ms fields.
   const stats: string[] = [];
   if (saved > 0) stats.push(t('chat.systemCard.compact.savedTokens', { tokens: fmtTokens(saved) }));
-  if (durationMs > 0) stats.push(`${(durationMs / 1000).toFixed(1)}s`);
+  if (durationMs > 0) {
+    stats.push(formatCompactionDuration(durationMs, t));
+  }
   const triggerLabel =
     trigger === 'manual' ? t('chat.systemCard.compact.manual') : t('chat.systemCard.compact.auto');
 
@@ -768,14 +817,6 @@ function CompactBoundaryCard({ data }: { data?: Record<string, unknown> }) {
  * 它不是要读的信息面板,而是会话里的一条达成标记("目标已达成 · N 轮 · 耗时 X")。
  * 由 mapServerMessages 从持久化的 agentMeta.goalCompletion 派生(重开会话仍在)。
  */
-function fmtGoalDuration(ms: number): string {
-  const totalSec = Math.max(0, Math.round(ms / 1000));
-  if (totalSec < 60) return `${totalSec}s`;
-  const min = Math.floor(totalSec / 60);
-  const sec = totalSec % 60;
-  return sec > 0 ? `${min}m ${sec}s` : `${min}m`;
-}
-
 function GoalCompleteCard({ data }: { data?: Record<string, unknown> }) {
   const { t } = useTranslation();
   const turnsUsed = typeof data?.turnsUsed === 'number' ? data.turnsUsed : 0;
@@ -783,7 +824,7 @@ function GoalCompleteCard({ data }: { data?: Record<string, unknown> }) {
   const reason = typeof data?.reason === 'string' ? data.reason : '';
   const label = t('goal.complete.record', {
     turns: turnsUsed,
-    duration: fmtGoalDuration(elapsedMs),
+    duration: formatSessionDuration(elapsedMs, t, { minimumSeconds: 0 }),
   });
 
   return (
@@ -799,6 +840,36 @@ function GoalCompleteCard({ data }: { data?: Record<string, unknown> }) {
         <span>{label}</span>
       </div>
       <div className="h-px flex-1 bg-[var(--msg-tool-card-border)]" />
+    </div>
+  );
+}
+
+/**
+ * 新任务「让插件选」的结果：第一条消息下方一行，左对齐、次级小字(设计稿 2026-10-31 r1)。
+ * routed 说插件为这个任务选了什么；kept 说明插件没给可用结果、沿用了原来的模型。
+ */
+function PluginModelRouteCard({ data }: { data?: Partial<PluginModelRouteNote> }) {
+  const { t } = useTranslation();
+  if (!data?.pluginName || !data.modelName) return null;
+  const model = data.effort
+    ? `${data.modelName} · ${t(`effortLevels.${data.effort}`, { defaultValue: data.effort })}`
+    : data.modelName;
+  const strong = (text: string) => <span className="font-medium text-[var(--text-secondary)]">{text}</span>;
+  return (
+    <div className="flex items-start gap-2 py-0.5 text-12 leading-[1.5] text-[var(--text-tertiary)]">
+      {data.outcome === 'routed' ? <Plug size={13} className="mt-[3px] shrink-0" aria-hidden /> : <Info size={13} className="mt-[3px] shrink-0" aria-hidden />}
+      <span className="min-w-0">
+        {data.outcome === 'routed' ? (
+          <>
+            {strong(data.pluginName)} {t('chat.pluginModelRoute.routed')} {strong(model)}
+            {data.reason ? ` · ${data.reason}` : ''}
+          </>
+        ) : (
+          <>
+            {t(`chat.pluginModelRoute.kept.${data.why ?? 'no-opinion'}`, { plugin: data.pluginName })} {strong(model)}
+          </>
+        )}
+      </span>
     </div>
   );
 }
@@ -831,53 +902,6 @@ function GoalResumedCard({ data }: { data?: { kind?: string } }) {
       <div className="h-px flex-1 bg-[var(--msg-tool-card-border)]" />
     </div>
   );
-}
-
-/**
- * silent-stop 自动续跑分隔条:上游空响应静默收尾后,main 守卫自动补发了隐藏的
- * 「继续」。用户不看到用户气泡,只看到这条轻分隔线标记"上一段与下一段之间发生过
- * 一次自动接续"(否则模型"一句话断成两段凭空接着说"会让人怀疑消息丢了)。
- * 复用 CompactBoundaryCard / GoalResumedCard 的分隔条视觉语言。
- */
-/** 活动行需要的展示信息(从 systemCardData 松散读取,缺字段一律降级而不是崩)。 */
-interface AutoResumeCardInfo {
-  error?: string;
-  attempt?: number;
-  maxAttempts?: number;
-  sessionTotal?: number;
-  /** 结果:由 main 在产出 / 再次被打断时回填;缺省 = 还在等结果。 */
-  outcome?: 'succeeded' | 'failed';
-}
-
-/**
- * 这条自动续跑记录属于「中断重连」还是 silent-stop 的「空回复后续跑」。
- *
- * 判据是有没有任何中断上下文（原因 / 次数 / 累计 / 结果）。**必须区分**：silent-stop 那条
- * 路径也走 `auto-resume` 卡，但它不是重连——把三态重连行套上去，历史里那条「已自动继续」
- * 会变成语义错误的「重新连接」（copilot review）。
- */
-function hasInterruptionContext(info: AutoResumeCardInfo): boolean {
-  return (
-    info.error !== undefined ||
-    info.attempt !== undefined ||
-    info.maxAttempts !== undefined ||
-    info.sessionTotal !== undefined ||
-    info.outcome !== undefined
-  );
-}
-
-function readAutoResumeInfo(data?: Record<string, unknown>): AutoResumeCardInfo {
-  const num = (v: unknown) =>
-    typeof v === 'number' && Number.isFinite(v) && v > 0 ? v : undefined;
-  return {
-    ...(typeof data?.error === 'string' && data.error.length > 0 ? { error: data.error } : {}),
-    ...(num(data?.attempt) !== undefined ? { attempt: num(data?.attempt) } : {}),
-    ...(num(data?.maxAttempts) !== undefined ? { maxAttempts: num(data?.maxAttempts) } : {}),
-    ...(num(data?.sessionTotal) !== undefined ? { sessionTotal: num(data?.sessionTotal) } : {}),
-    ...(data?.outcome === 'succeeded' || data?.outcome === 'failed'
-      ? { outcome: data.outcome }
-      : {}),
-  };
 }
 
 /**
@@ -962,7 +986,11 @@ function AutoResumeActionRow({
 }) {
   const { t } = useTranslation();
   const [expanded, setExpanded] = useState(false);
-  const hasProgress = info.attempt !== undefined && info.maxAttempts !== undefined;
+  // 用量上限重置后的自动继续不是重连：不展示「第几次重试 / 累计重连」。
+  const usageLimitReset = info.usageLimitReset === true;
+  const hasProgress =
+    !usageLimitReset && info.attempt !== undefined && info.maxAttempts !== undefined;
+  const showSessionTotal = !usageLimitReset && info.sessionTotal !== undefined;
   // **转圈的判据是"此刻真的有 turn 在跑",不是"是不是 ephemeral 行"。**
   //
   // 一次中断的进行中状态跨两种载体:退避那 3–20 秒是 ephemeral 行(state='live'),续跑
@@ -977,7 +1005,22 @@ function AutoResumeActionRow({
   //   - 已回填          → ✓ / ✗ 定格,`inFlight` 不参与(终态优先)
   const live = state === 'live' || (inFlight === true && info.outcome === undefined);
   const outcome = live ? undefined : info.outcome;
-  const label = live
+  const label = info.groupSwitchPending
+    ? t('chat.systemCard.autoResumePending.groupSwitch')
+    : info.agentSwitch
+    ? t(`chat.systemCard.autoResume.agentSwitch.${info.agentSwitch.cause}`, {
+        from: info.agentSwitch.from,
+        to: info.agentSwitch.to,
+      })
+    : info.agentReconnect
+    ? info.agentReconnect.computer
+      ? t('chat.systemCard.autoResume.agentReconnect.named', { computer: info.agentReconnect.computer })
+      : t('chat.systemCard.autoResume.agentReconnect.unnamed')
+    : info.groupSwitch
+    ? t('chat.systemCard.autoResume.groupSwitch')
+    : usageLimitReset
+    ? t('chat.systemCard.autoResume.labelUsageReset')
+    : live
     ? hasProgress
       ? t('chat.systemCard.autoResumePending.labelWithProgress', {
           attempt: info.attempt,
@@ -989,8 +1032,10 @@ function AutoResumeActionRow({
       : outcome === 'failed'
         ? t('chat.systemCard.autoResume.labelFailed')
         : t('chat.systemCard.autoResume.labelNeutral');
-  const summary = summarizeInterruption(info.error);
-  const canExpand = Boolean(info.error) || hasProgress || info.sessionTotal !== undefined;
+  // 供应商组正在换电脑时错误先不呈现：行内不带原始错误(它只用来认出终态 event 的回声)。
+  const shownError = info.groupSwitchPending ? undefined : info.error;
+  const summary = summarizeInterruption(shownError);
+  const canExpand = Boolean(shownError) || hasProgress || showSessionTotal;
   return (
     <div className="flex flex-col">
       <button
@@ -1060,7 +1105,7 @@ function AutoResumeActionRow({
         >
           {info.error && (
             <>
-              <div className="text-12 opacity-70">
+              <div className="text-12 text-[var(--text-secondary)]">
                 {t('chat.systemCard.autoResume.detail.reason')}
               </div>
               <pre className="m-0 mt-[2px] whitespace-pre-wrap break-words font-mono text-[length:calc(var(--app-code-font-size)_-_1px)] leading-[calc(var(--app-code-font-size)_+_4px)]">
@@ -1068,7 +1113,7 @@ function AutoResumeActionRow({
               </pre>
             </>
           )}
-          {(hasProgress || info.sessionTotal !== undefined) && (
+          {(hasProgress || showSessionTotal) && (
             <div className={cn('flex flex-wrap gap-x-4 gap-y-[2px] text-12', info.error && 'mt-2')}>
               {hasProgress && (
                 <span>
@@ -1078,7 +1123,7 @@ function AutoResumeActionRow({
                   })}
                 </span>
               )}
-              {info.sessionTotal !== undefined && (
+              {showSessionTotal && (
                 <span>
                   {t('chat.systemCard.autoResume.detail.sessionTotal', {
                     count: info.sessionTotal,
@@ -1116,7 +1161,39 @@ function isEnglishSourceHandoff(handoff: string): boolean {
  * 的上下文摘要全文)——默认不打扰,想看时可核查我们替用户做了什么交接。
  * 全灰度(docs/design-rules/cindy-design-system.md §4),无 chromatic 色;展开面板复用 msg-tool 系 token。
  */
-function AgentSwitchCard({ data }: { data?: Record<string, unknown> }) {
+/**
+ * 远程 Agent 换电脑的分隔条文案:只有边界行带 toAgentDeviceId 时才是换电脑。null = 任务所在电脑 ——
+ * 在本机打开的任务就是「本机」;远程控制另一台电脑上的任务时那台不是本机,用切换时快照的名字。
+ * 用户确认为了先用那台的配额换过去的(switchReason: 'quota-rebalance')在后面写明原因。
+ */
+function agentRelocationLabel(
+  data: Record<string, unknown> | undefined,
+  sessionId: string | undefined,
+  t: ReturnType<typeof useTranslation>['t'],
+): string | null {
+  const place = agentRelocationPlace(data, sessionId, t);
+  if (place === null || data?.switchReason !== 'quota-rebalance') return place;
+  return `${place} · ${t('chat.systemCard.agentSwitch.quotaRebalance')}`;
+}
+
+function agentRelocationPlace(
+  data: Record<string, unknown> | undefined,
+  sessionId: string | undefined,
+  t: ReturnType<typeof useTranslation>['t'],
+): string | null {
+  if (!data || !('toAgentDeviceId' in data)) return null;
+  const name =
+    typeof data.toAgentDeviceName === 'string' && data.toAgentDeviceName ? data.toAgentDeviceName : null;
+  if (data.toAgentDeviceId === null && (!sessionId || !getSessionDeviceId(sessionId))) {
+    return t('chat.systemCard.agentSwitch.relocatedHere');
+  }
+  if (name) return t('chat.systemCard.agentSwitch.relocatedTo', { device: name });
+  return data.toAgentDeviceId === null
+    ? t('chat.systemCard.agentSwitch.relocatedTaskComputer')
+    : t('chat.systemCard.agentSwitch.relocatedElsewhere');
+}
+
+function AgentSwitchCard({ data, sessionId }: { data?: Record<string, unknown>; sessionId?: string }) {
   const { t } = useTranslation();
   const [expanded, setExpanded] = useState(false);
   const engineLabel = (kind: unknown): string =>
@@ -1125,7 +1202,10 @@ function AgentSwitchCard({ data }: { data?: Record<string, unknown> }) {
   const toLabel = engineLabel(data?.toAgentKind);
   const toModel = typeof data?.toModel === 'string' ? data.toModel : '';
   const handoff = typeof data?.handoff === 'string' ? data.handoff : '';
-  const label = t('chat.systemCard.agentSwitch.label', { from: fromLabel, to: toLabel });
+  const modelOnly = data?.modelOnly === true;
+  const label = modelOnly ? `${data?.fromModel ?? ''} → ${toModel}` :
+    agentRelocationLabel(data, sessionId, t) ??
+    t('chat.systemCard.agentSwitch.label', { from: fromLabel, to: toLabel });
 
   return (
     <div className="w-full select-none py-2" role="separator" aria-label={label}>
@@ -1145,8 +1225,8 @@ function AgentSwitchCard({ data }: { data?: Record<string, unknown> }) {
           title={handoff ? t('chat.systemCard.agentSwitch.toggleHint') : undefined}
         >
           <ArrowLeftRight size={12} className="shrink-0" />
-          <span>{label}</span>
-          {toModel && (
+          <span className="min-w-0 truncate" title={label}>{label}</span>
+          {toModel && !modelOnly && (
             <>
               <span className="opacity-50">·</span>
               <span title={toModel} className="min-w-0 truncate font-mono">
@@ -1154,10 +1234,10 @@ function AgentSwitchCard({ data }: { data?: Record<string, unknown> }) {
               </span>
             </>
           )}
-          {Boolean(data?.resumed) && (
+          {(Boolean(data?.resumed) || data?.nativeHistory === 'fallback') && (
             <>
               <span className="opacity-50">·</span>
-              <span>{t('chat.systemCard.agentSwitch.resumedBadge')}</span>
+              <span className="shrink-0 whitespace-nowrap">{t(data?.nativeHistory === 'fallback' ? 'chat.systemCard.agentSwitch.fallbackBadge' : 'chat.systemCard.agentSwitch.resumedBadge')}</span>
             </>
           )}
           {handoff && (
@@ -1203,13 +1283,17 @@ function ContextRebuildCard({ data }: { data?: Record<string, unknown> }) {
       ? 'timeout'
       : data?.reason === 'codex-history-strip'
         ? 'strip'
-        : 'overflow';
+        : data?.reason === 'idle-gap'
+          ? 'idle'
+          : 'overflow';
   const label = t(
     reason === 'timeout'
       ? 'chat.systemCard.contextRebuild.labelTimeout'
       : reason === 'strip'
         ? 'chat.systemCard.contextRebuild.labelStrip'
-        : 'chat.systemCard.contextRebuild.labelOverflow',
+        : reason === 'idle'
+          ? 'chat.systemCard.contextRebuild.labelIdleGap'
+          : 'chat.systemCard.contextRebuild.labelOverflow',
   );
 
   return (
@@ -1263,61 +1347,45 @@ function ContextRebuildCard({ data }: { data?: Record<string, unknown> }) {
   );
 }
 
-/**
- * 个人版制作任务的完成卡片:Agent 调用 cindy_make.report_complete、本轮回复结束后由
- * Main 落库。整块步骤卡片,与 /cindy-make 弹窗的三步卡同形态;第二阶段的核对、测试与
- * 打包会作为后续步骤长在这张卡上,当前只有「修改源码」一步。内容全部是代码核实的事实
- * (改动文件数、基准 commit、完成时间),不含模型自述。
- */
-function CindyMakeCompleteCard({ data }: { data?: Record<string, unknown> }) {
-  const { t, i18n } = useTranslation();
-  const changedFiles = typeof data?.changedFiles === 'number' ? data.changedFiles : undefined;
-  const commit =
-    typeof data?.commit === 'string' && data.commit ? data.commit.slice(0, 12) : undefined;
-  const reportedAt = typeof data?.reportedAt === 'number' ? data.reportedAt : undefined;
-  const time =
-    reportedAt !== undefined
-      ? new Intl.DateTimeFormat(i18n?.resolvedLanguage ?? i18n?.language, {
-          dateStyle: 'medium',
-          timeStyle: 'short',
-        }).format(reportedAt)
-      : undefined;
-  const branch = typeof data?.branch === 'string' && data.branch ? data.branch : undefined;
-  const meta = [
-    changedFiles !== undefined
-      ? t('cindyMake.complete.changedFiles', { count: changedFiles })
-      : null,
-    branch ? t('cindyMake.complete.branch', { branch }) : null,
-    commit ? t('cindyMake.complete.commit', { commit }) : null,
-    time ?? null,
-  ].filter((part): part is string => typeof part === 'string' && part.length > 0);
+const IMPORT_HARNESS_LABEL: Record<string, string> = { cc: 'Claude Code', codex: 'Codex', pi: 'Pi' };
 
+/** 任务导入的时间线标记：开头说明来源与原文件夹，结尾一条分隔说明之后由谁接着做。 */
+function SessionImportCard({ data }: { data?: Record<string, unknown> }) {
+  const { t, i18n } = useTranslation();
+  const source = typeof data?.source === 'string' && isImportSourceId(data.source) ? data.source : null;
+  const sourceLabel = source ? IMPORT_SOURCE_NAMES[source] : typeof data?.sourceLabel === 'string' ? data.sourceLabel : '';
+  if (data?.phase === 'end') {
+    const harness = typeof data.harness === 'string' ? IMPORT_HARNESS_LABEL[data.harness] : undefined;
+    const label = data.mode === 'handoff' && harness
+      ? t('settings.sessionImport.marker.endHandoff', { source: sourceLabel, harness })
+      : t('settings.sessionImport.marker.end', { source: sourceLabel });
+    return (
+      <div className="flex w-full select-none items-center gap-3 py-2 text-12 leading-[1.33] text-[var(--text-tertiary)]" role="separator" aria-label={label}>
+        <div className="h-px flex-1 bg-[var(--msg-tool-card-border)]" />
+        <span className="max-w-[78%] text-center">{label}</span>
+        <div className="h-px flex-1 bg-[var(--msg-tool-card-border)]" />
+      </div>
+    );
+  }
+  const importedAt = typeof data?.importedAt === 'number' ? data.importedAt : 0;
+  const date = importedAt > 0
+    ? new Intl.DateTimeFormat(i18n.language, { month: 'short', day: 'numeric' }).format(new Date(importedAt))
+    : '';
+  const folder = typeof data?.originalCwd === 'string' && data.originalCwd ? data.originalCwd : null;
   return (
-    <section
-      className="w-full rounded-xl border border-[var(--border-default)] bg-[var(--surface-elevated)] text-14 text-[var(--text-primary)]"
-      aria-label={t('cindyMake.complete.title')}
-    >
-      <div className="flex items-start gap-3 px-4 py-4">
-        <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-[var(--surface-chip)]">
-          <Check size={18} className="text-[var(--status-success)]" aria-hidden />
-        </div>
-        <div className="min-w-0 flex-1">
-          <p className="text-16 font-medium">{t('cindyMake.complete.title')}</p>
-          <p className="mt-0.5 text-13 text-[var(--text-secondary)]">
-            {t('cindyMake.complete.description')}
-          </p>
-        </div>
-      </div>
-      <div className="border-t border-[var(--border-default)] px-4 py-3">
-        <p className="flex items-center gap-2 font-medium">
-          <Check size={14} className="shrink-0 text-[var(--status-success)]" aria-hidden />
-          <span>{t('cindyMake.complete.stepCode')}</span>
-        </p>
-        {meta.length > 0 && (
-          <p className="mt-1 pl-6 text-12 text-[var(--text-secondary)]">{meta.join(' · ')}</p>
-        )}
-      </div>
-    </section>
+    <div className="flex w-full select-none flex-col items-center gap-1 py-2 text-center">
+      <span className="inline-flex items-center gap-2 text-13 font-medium leading-[1.38] text-[var(--text-secondary)]">
+        {source && <ImportSourceMark source={source} size={16} />}
+        {date
+          ? t('settings.sessionImport.marker.from', { source: sourceLabel, date })
+          : sourceLabel}
+      </span>
+      {folder && (
+        <span className="max-w-full truncate text-12 leading-[1.33] text-[var(--text-tertiary)] select-text" title={folder}>
+          {t('settings.sessionImport.marker.folder', { path: folder })}
+        </span>
+      )}
+    </div>
   );
 }
 
@@ -1340,6 +1408,13 @@ function ReviewCard({ data, workingDir }: { data?: Record<string, unknown>; work
   const reviewerSessionId =
     typeof data?.reviewerSessionId === 'string' ? data.reviewerSessionId : '';
   const result = typeof data?.result === 'string' ? data.result : '';
+  const workspace = data?.workspace && typeof data.workspace === 'object'
+    ? data.workspace as Record<string, unknown> : null;
+  const reviewedDir = typeof workspace?.workingDir === 'string' ? workspace.workingDir : workingDir;
+  const reviewedBase = typeof workspace?.baseRef === 'string' ? workspace.baseRef : '';
+  const additionalDirs = Array.isArray(workspace?.additionalWorkingDirs)
+    ? workspace.additionalWorkingDirs.filter((dir): dir is string => typeof dir === 'string' && !!dir)
+    : [];
   const error = typeof data?.error === 'string' ? data.error : '';
   const failureCode =
     readReviewFailureCode(data?.failureCode) ?? reviewFailureCodeFromLegacyError(error);
@@ -1367,16 +1442,38 @@ function ReviewCard({ data, workingDir }: { data?: Record<string, unknown>; work
         )}
         <span className="min-w-0 flex-1 font-medium">{t(`chat.systemCard.review.${status}`)}</span>
         {reviewerSessionId && (
-          <button
+          <Button
+            variant="secondary"
+            size="xs"
+            compact
+            tone="quiet"
             type="button"
-            onClick={() => navigate(`/cc-agent/${reviewerSessionId}`)}
-            className="flex shrink-0 items-center gap-1 rounded px-2 py-0.5 text-xs text-muted-foreground hover:bg-muted/50"
+            onClick={() =>
+              navigate(`/cc-agent/${reviewerSessionId}`, {
+                state: {
+                  from: 'review-source',
+                  sourceSessionId:
+                    typeof data?.sourceSessionId === 'string' ? data.sourceSessionId : undefined,
+                },
+              })
+            }
           >
             {t('chat.systemCard.review.openTask')}
             <ArrowRight size={12} />
-          </button>
+          </Button>
         )}
       </div>
+      {workspace && reviewedDir && (
+        <p className="mt-1 break-all pl-[23px] text-xs text-muted-foreground">
+          {t('chat.systemCard.review.directory')}{reviewedDir}
+          {reviewedBase && <> · {t('chat.systemCard.review.baseline')}{reviewedBase}</>}
+        </p>
+      )}
+      {workspace && additionalDirs.length > 0 && (
+        <p className="mt-0.5 break-all pl-[23px] text-xs text-muted-foreground">
+          {t('chat.systemCard.review.additionalDirectories')}{additionalDirs.join(', ')}
+        </p>
+      )}
       {status === 'running' && (
         <p className="mt-1 pl-[23px] text-xs text-muted-foreground">
           {t('chat.systemCard.review.readOnlyHint')}
@@ -1392,12 +1489,13 @@ function ReviewCard({ data, workingDir }: { data?: Record<string, unknown>; work
           {failureMessage}
         </p>
       )}
-      {(status === 'completed' || status === 'stale') && result && (
+      {result && status !== 'running' && (
         <div className="mt-3 border-t border-border pt-3">
+          {status === 'failed' && <p className="mb-2 text-xs text-muted-foreground">{t('chat.systemCard.review.unverifiedResult')}</p>}
           <MarkdownRenderer
             content={result}
-            workingDir={workingDir ?? ''}
-            allowPrivilegedLinks={status !== 'stale'}
+            workingDir={reviewedDir ?? ''}
+            allowPrivilegedLinks={status === 'completed'}
           />
         </div>
       )}
@@ -1412,10 +1510,12 @@ export function SystemCard({
   workingDir,
   autoResumeInFlight,
 }: SystemCardProps) {
+  if (
+    cardType === 'cindy-make-doctor' ||
+    cardType === 'cindy-make' ||
+    cardType === 'cindy-make-complete'
+  ) return null;
   switch (cardType) {
-    case 'cindy-make-doctor':
-    case 'cindy-make':
-      return <CindyMakeDoctorCard data={data} sessionId={sessionId} />;
     case 'help':
       return <HelpCard data={data} />;
     case 'cost':
@@ -1434,8 +1534,8 @@ export function SystemCard({
       return <GoalCompleteCard data={data} />;
     case 'goal-resumed':
       return <GoalResumedCard data={data as { kind?: string } | undefined} />;
-    case 'cindy-make-complete':
-      return <CindyMakeCompleteCard data={data} />;
+    case 'plugin-model-route':
+      return <PluginModelRouteCard data={data as Partial<PluginModelRouteNote> | undefined} />;
     case 'auto-resume': {
       // 同一个卡类型承载两套自愈:带中断上下文的是本份的「重连」记录,没有的是 silent-stop
       // 的「已自动继续」分隔条 —— 后者保持原形态原文案,不被重连三态改写(copilot review)。
@@ -1449,21 +1549,35 @@ export function SystemCard({
     case 'auto-resume-pending':
       return <AutoResumeActionRow state="live" info={readAutoResumeInfo(data)} />;
     case 'agent-switch':
-      return <AgentSwitchCard data={data} />;
+      return <AgentSwitchCard data={data} sessionId={sessionId} />;
     case 'context-rebuild':
       return <ContextRebuildCard data={data} />;
+    case 'session-import':
+      return <SessionImportCard data={data} />;
     case 'learn':
       return <LearnStatusCard data={data} contextSessionId={sessionId} />;
     case 'review':
       return <ReviewCard data={data} workingDir={workingDir} />;
+    case 'voice-call': {
+      const record = readVoiceCallRecord(data?.record);
+      return record ? <VoiceCallCard record={record} /> : null;
+    }
+    case 'voice-call-task':
+      return typeof data?.text === 'string' ? <VoiceCallTaskEntry text={data.text} /> : null;
     case 'bot-session-task-message':
       return <BotSessionTaskMessageTrace data={data} />;
+    case 'bot-session-task-result':
+      return <BotSessionTaskResultCard data={data} sessionId={sessionId} />;
     case 'bot-session-task':
       return <BotSessionTaskCard data={data} sessionId={sessionId} />;
     case 'bot-authorization':
       return <BotAuthorizationCardView data={data} sessionId={sessionId} />;
     case 'bot-direct-message':
       return <BotDirectMessageCard data={data} sessionId={sessionId} />;
+    case 'input-handoff': {
+      const record = readInputHandoffRecordData(data);
+      return record ? <InputHandoffRecordRow record={record} at={typeof data?.at === 'string' ? data.at : undefined} /> : null;
+    }
     default:
       return null;
   }
@@ -1478,6 +1592,7 @@ export function SystemCard({
 // apps/desktop/src/main/commands/builtins.ts:CmdExecutionResult。
 
 function CmdCard({ data }: { data?: Record<string, unknown> }) {
+  const { t } = useTranslation();
   const cmdLine = (data?.cmdLine as string) ?? '';
   const cwd = (data?.cwd as string) ?? '';
   const exitCode = (data?.exitCode as number) ?? -1;
@@ -1525,7 +1640,9 @@ function CmdCard({ data }: { data?: Record<string, unknown> }) {
       <div className="flex items-center gap-2">
         <span className={cn(titleClass, 'mb-0')}>$ Shell</span>
         {statusChip}
-        <span className={cn(labelClass, 'text-12 ml-auto')}>{elapsedMs}ms</span>
+        <span className={cn(labelClass, 'text-12 ml-auto')}>
+          {formatShellDuration(elapsedMs, t)}
+        </span>
       </div>
 
       <pre className={cmdLineClass}>{cmdLine || '<empty>'}</pre>

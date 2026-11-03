@@ -24,7 +24,6 @@ import {
 type ConversationShareSourceMessage = Pick<
   NormalizedRemoteMessage,
   | 'attachments'
-  | 'automationOrigin'
   | 'body'
   | 'kind'
   | 'pastedTextRanges'
@@ -37,7 +36,6 @@ export function projectConversationShareMessage(
   clientId: string,
   message: ConversationShareSourceMessage,
   options: {
-    automationOriginLabel?: string;
     maxVisibleLines?: number;
     visualLineCapacity?: number;
   } = {},
@@ -46,14 +44,10 @@ export function projectConversationShareMessage(
 
   const attachments = projectAttachments(message.attachments ?? []);
   const attachmentFields = attachments.length > 0 ? { attachments } : {};
-  const automationOriginFields = options.automationOriginLabel
-    ? { automationOriginLabel: options.automationOriginLabel }
-    : {};
   const secondaryBody = message.secondaryBody || undefined;
   if (message.kind === 'assistant') {
     return {
       ...attachmentFields,
-      ...automationOriginFields,
       body: message.quotesEncoded
         ? stripChatQuoteMarkerLines(message.body)
         : message.body,
@@ -82,7 +76,6 @@ export function projectConversationShareMessage(
 
   return {
     ...attachmentFields,
-    ...automationOriginFields,
     body: sentInlineTokensDisplayText(visibleTokens),
     ...(bodyParts ? { bodyParts } : {}),
     clientId,

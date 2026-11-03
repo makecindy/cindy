@@ -1,11 +1,15 @@
+import { formatForwardedRequest } from '../../../shared/forwardedRequest.js';
 import { describe, expect, it, vi } from 'vitest';
 import type { SessionActivitySnapshot } from '@cindy/maker-shared/session-activity';
 
 import type { AgentInputQueuedMessage } from '../../../shared/agentInputQueue.js';
+import { admitTaskAction } from '../taskActionAuthorization.js';
 import {
+  authorizeSessionQueueReorder,
   createSessionControlService,
   rebuildSessionQueueItem,
   sessionQueueOriginForDispatcher,
+  type SessionSteerTurnIdentity,
 } from '../sessionControlService.js';
 
 function deferred<T>() {
@@ -139,10 +143,14 @@ function setup(opts?: {
         chatMessage: { clientId: queuedMessageId, role: 'user' as const, content: message },
       }),
     ),
-    steerQueuedMessage: vi.fn(async () => opts?.steerAccepted ?? true),
+    steerQueuedMessage: vi.fn(async (
+      _sessionId: string, _item: AgentInputQueuedMessage, _turn: SessionSteerTurnIdentity,
+    ) => opts?.steerAccepted ?? true),
     getQueueSnapshot: vi.fn(async () => ({ pendingQueue: [queueItem], consumingClientIds: [] })),
     replaceQueuedMessage: vi.fn(() => true),
     removeQueuedMessage: vi.fn(() => true),
+    steerStoredQueuedMessage: vi.fn(async () => ({ kind: 'steered' as const })),
+    moveQueuedMessage: vi.fn(() => 0),
     createId: vi.fn(() => 'steer-1'),
   };
   return { deps, live, service: createSessionControlService(deps) };
@@ -170,6 +178,36 @@ describe('session control domain service', () => {
     ).toBe(explicit);
   });
 
+  it('snapshots the dispatcher title for the receiver source label', () => {
+    expect(
+      sessionQueueOriginForDispatcher({
+        dispatcherSessionId: 'caller',
+        dispatcherSessionTitle: '  Release checklist  ',
+        message: 'follow-up',
+      }),
+    ).toEqual({
+      kind: 'session',
+      senderSessionId: 'caller',
+      displayText: 'follow-up',
+      senderSessionTitle: 'Release checklist',
+    });
+    expect(
+      sessionQueueOriginForDispatcher({
+        dispatcherSessionId: 'caller',
+        dispatcherSessionTitle: '   ',
+        message: 'follow-up',
+      }),
+    ).not.toHaveProperty('senderSessionTitle');
+    expect(
+      sessionQueueOriginForDispatcher({
+        dispatcherSessionId: 'bot-task',
+        dispatcherSessionTitle: 'Weekly feedback',
+        dispatcherBot: { id: 'bot-1', name: 'Cindy' },
+        message: 'follow-up',
+      }),
+    ).toMatchObject({ senderBotId: 'bot-1', senderBotName: 'Cindy' });
+  });
+
   it('shares queue lifecycle while enforcing sender ownership and preserving identity', async () => {
     const { deps, service } = setup();
     await expect(
@@ -188,6 +226,7 @@ describe('session control domain service', () => {
         text: 'after',
         origin: expect.objectContaining({ displayText: 'after' }),
       }),
+      expect.objectContaining({clientId:'queued-1',text:'before'}),
     );
 
     const foreign = setup({
@@ -201,6 +240,32 @@ describe('session control domain service', () => {
       }),
     ).resolves.toMatchObject({ ok: false, errorCode: 'NOT_AUTHORIZED' });
     expect(foreign.deps.removeQueuedMessage).not.toHaveBeenCalled();
+  });
+
+  it('steers and moves own-sent rows or machine rows in the caller\'s own queue only', async () => {
+    const { deps, service } = setup();
+    const base = { callerSessionId: 'caller', targetSessionId: 'target', queuedMessageId: 'queued-1' };
+    await expect(service.steerQueuedMessage(base))
+      .resolves.toEqual({ ok: true, queuedMessageId: 'queued-1', delivery: 'steered' });
+    expect(deps.steerStoredQueuedMessage).toHaveBeenCalledWith('target', 'queued-1');
+    await expect(service.moveQueuedMessage({ ...base, position: 0 }))
+      .resolves.toEqual({ ok: true, queuedMessageId: 'queued-1', position: 0 });
+    await expect(service.moveQueuedMessage({ ...base, position: -1 }))
+      .resolves.toMatchObject({ ok: false, errorCode: 'INVALID_ARGS' });
+
+    const own = (origin: AgentInputQueuedMessage['origin'], extra: Partial<AgentInputQueuedMessage> = {}) =>
+      authorizeSessionQueueReorder({ ...item(origin), ...extra }, 'target', 'target').ok;
+    expect(own({ kind: 'orca', senderLabel: 'reviewer', displayText: 'r' })).toBe(true);
+    expect(own({ kind: 'session', senderSessionId: 'other', displayText: 'r' })).toBe(true);
+    expect(own(undefined)).toBe(false);
+    expect(own({ kind: 'session', senderSessionId: 'other', senderBotId: 'bot-1', displayText: 'r' })).toBe(false);
+    expect(own({ kind: 'session', senderSessionId: 'other', displayText: 'r' }, {
+      sourcePlugin: { pluginId: 'plugin-1', name: 'Plugin' },
+    } as Partial<AgentInputQueuedMessage>)).toBe(false);
+    // Someone else's queue: only rows this session sent itself.
+    expect(authorizeSessionQueueReorder(
+      item({ kind: 'session', senderSessionId: 'other', displayText: 'r' }), 'caller', 'target',
+    ).ok).toBe(false);
   });
 
   it.each([
@@ -238,9 +303,37 @@ describe('session control domain service', () => {
           chatMessage: expect.objectContaining({ content: replacement }),
           origin: expect.objectContaining({ displayText: replacement }),
         }),
+        queued,
       );
     },
   );
+
+  it('keeps the host attachment envelope when the sender edits its own attachment item', () => {
+    const queued = item({ kind: 'session', senderSessionId: 'caller', displayText: 'before' });
+    queued.files = [{ name: 'notes.txt', path: '/repo/notes.txt', category: 'file' } as never];
+    queued.persistedContent = JSON.stringify({
+      text: 'before',
+      images: [],
+      files: [{ name: 'notes.txt', path: '/repo/notes.txt' }],
+    });
+
+    const updated = rebuildSessionQueueItem(queued, 'replacement');
+
+    expect(JSON.parse(updated.persistedContent)).toMatchObject({
+      text: 'replacement',
+      files: [{ name: 'notes.txt', path: '/repo/notes.txt' }],
+    });
+    expect(updated.origin).toMatchObject({ kind: 'session', displayText: 'replacement' });
+  });
+
+  it('edits only the supplement and preserves an existing delegated continuation receipt', () => {
+    const queued = item({ kind: 'session', senderSessionId: 'caller', displayText: 'before' });
+    const request = { userText: '  只检查\n不要发布  ', sessionId: 'owner', clientId: 'human' };
+    queued.autoReviewUserText = { kind: 'delegated-continuation', request };
+    const updated = rebuildSessionQueueItem(queued, '用户原话：可以发布');
+    expect(updated.persistedContent).toBe(formatForwardedRequest(request, '用户原话：可以发布'));
+    expect(updated.autoReviewUserText).toEqual(queued.autoReviewUserText);
+  });
 
   it('keeps renderer composer envelopes intact when rebuilding a non-session queue item', () => {
     const queued = item();
@@ -279,7 +372,7 @@ describe('session control domain service', () => {
     expect(deps.steerQueuedMessage).toHaveBeenCalledWith(
       'target',
       expect.objectContaining({ clientId: 'steer-1' }),
-      { session: live, turnGeneration: 3 },
+      { session: live, turnGeneration: 3, beforeMutation: expect.any(Function) },
     );
 
     await expect(
@@ -307,6 +400,48 @@ describe('session control domain service', () => {
       }),
     ).resolves.toMatchObject({ ok: false, errorCode: 'NO_ACTIVE_TURN' });
   });
+
+  // #6399: admission alone did not cover revocation during asynchronous steering.
+  // Unit: real action scope + service; existing turn-race tests did not revoke authority.
+  // Minimum: revoke at one awaited boundary, then verify no provider acceptance.
+  it.each(['external-input', 'message-build', 'final-dispatch', 'host-check'] as const)(
+    'rejects task action revocation at the %s steer boundary',
+    async (boundary) => {
+      const { deps, service } = setup();
+      let current = true;
+      const accepted: string[] = [];
+      const decision = await admitTaskAction(
+        { server: 'cindy_helper', sessionId: 'caller', tool: 'steer_session', args: {} },
+        {
+          key: 'input', ownerInput: true, delegated: false,
+          assertCurrent: async () => {
+            if (!current) throw new Error('TASK_ACTION_AUTHORIZATION_EXPIRED');
+          },
+        },
+      );
+      if (!decision.ok || !decision.run) throw new Error('missing action scope');
+      if (boundary === 'external-input') {
+        deps.assertExternalInputAllowed.mockImplementationOnce(async () => { current = false; });
+      }
+      if (boundary === 'message-build') {
+        deps.createQueuedMessage.mockImplementationOnce(async () => {
+          current = false;
+          return item();
+        });
+      }
+      deps.steerQueuedMessage.mockImplementationOnce(async (_id, _item, turn) => {
+        if (boundary === 'final-dispatch') current = false;
+        await turn.beforeMutation?.();
+        accepted.push('sent');
+        return true;
+      });
+      await expect(decision.run(() => service.steerSession({
+        callerSessionId: 'caller', targetSessionId: 'target', message: 'urgent',
+        ...(boundary === 'host-check' ? { beforeMutation: async () => { current = false; } } : {}),
+      }))).rejects.toThrow('TASK_ACTION_AUTHORIZATION_EXPIRED');
+      expect(accepted).toEqual([]);
+    },
+  );
 
   it('passes a stable host steer ID to the coordinator without allocating a replacement', async () => {
     const { deps, service } = setup();
@@ -420,6 +555,7 @@ describe('session control domain service', () => {
       }),
     ).resolves.toMatchObject({ ok: true, status: 'applied', generation: 1 });
     expect(deps.setSessionRuntime).toHaveBeenCalledWith({
+      beforeMutation: expect.any(Function),
       targetSessionId: 'target',
       expectedGeneration: 4,
       patch: { model: 'next', effort: 'high', fastMode: true },

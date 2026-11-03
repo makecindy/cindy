@@ -190,12 +190,15 @@ export class SkillhubMarketService {
     return { success: true as const, info };
   }
 
-  async getPublishedFiles({ name, version, catalogScope }: { name: string; version?: string; catalogScope?: SkillhubCatalogScope }) {
-    const qs = version ? `?version=${encodeURIComponent(version)}` : '';
+  async getPublishedFiles({ name, version, catalogScope, includeHashes }: { name: string; version?: string; catalogScope?: SkillhubCatalogScope; includeHashes?: boolean }) {
+    const search = new URLSearchParams();
+    if (version) search.set('version', version);
+    if (includeHashes) search.set('includeHashes', '1');
+    const qs = search.size ? `?${search}` : '';
     const result = await this.fetch<{
       slug: string;
       version: string;
-      files: Array<{ path: string; size: number; language: string; truncated: boolean }>;
+      files: Array<{ path: string; size: number; language: string; truncated: boolean; sha256?: string }>;
     }>(withSkillhubCatalogScope(`/api/skills-hub/skills/${encodeURIComponent(name)}/files${qs}`, catalogScope));
     return { success: true as const, ...result };
   }

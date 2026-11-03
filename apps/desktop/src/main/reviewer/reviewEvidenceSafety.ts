@@ -229,3 +229,20 @@ export function reviewChangeSetContentPaths(
       unenumerable || seen.size + redactedChangeEntryCount(changeSet) < changeSet.fileCount,
   };
 }
+
+/** Turn capture is a fallback, not a prerequisite for reviewing current code.
+ * Never bind an incomplete historical record as if it were a full baseline.
+ * Fresh Git evidence / explicit artifacts have their own identity checks.
+ */
+export function usableReviewChangeSet(
+  changeSet: TurnChangeSetDetail | null,
+  workingDir: string,
+  current: { hasGitBaseline: boolean; hasExplicitArtifacts: boolean },
+): TurnChangeSetDetail | null {
+  if (
+    changeSet &&
+    (current.hasGitBaseline || current.hasExplicitArtifacts) &&
+    reviewChangeSetContentPaths(changeSet, workingDir).truncated
+  ) return null;
+  return changeSet;
+}

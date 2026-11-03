@@ -901,13 +901,13 @@ function effortBudget(effort: string | undefined): number | null {
   }
 }
 
-function normalizedEffort(effort: string | undefined): string | null {
+function normalizedEffort(effort: string | undefined, model: string): string | null {
   switch ((effort ?? '').trim().toLowerCase()) {
     case 'minimal':
     case 'low': return 'low';
     case 'medium': return 'medium';
     case 'high': return 'high';
-    case 'xhigh':
+    case 'xhigh': return isOpus55(model) ? 'xhigh' : 'max';
     case 'max':
     case 'ultra': return 'max';
     default: return null;
@@ -916,7 +916,7 @@ function normalizedEffort(effort: string | undefined): string | null {
 
 function supportsAdaptiveThinkingByModel(model: string): boolean {
   const normalized = model.trim().toLowerCase().replace(/[._]/g, '-');
-  return ['fable-5', 'mythos-5', 'mythos-preview', 'sonnet-5']
+  return thinkingCannotBeDisabled(model) || ['fable-5', 'mythos-5', 'mythos-preview', 'sonnet-5']
     .some((needle) => normalized.includes(needle))
     || /claude-opus-4-(?:7|8)(?:-|$)/.test(normalized)
     || /claude-sonnet-5(?:-|$)/.test(normalized);
@@ -924,13 +924,18 @@ function supportsAdaptiveThinkingByModel(model: string): boolean {
 
 function adaptiveThinkingByDefault(model: string): boolean {
   const normalized = model.trim().toLowerCase().replace(/[._]/g, '-');
-  return ['fable-5', 'mythos-5', 'mythos-preview', 'sonnet-5']
+  return thinkingCannotBeDisabled(model) || ['fable-5', 'mythos-5', 'mythos-preview', 'sonnet-5']
     .some((needle) => normalized.includes(needle));
 }
 
 function thinkingCannotBeDisabled(model: string): boolean {
   const normalized = model.trim().toLowerCase().replace(/[._]/g, '-');
-  return normalized.includes('fable-5') || normalized.includes('mythos-5');
+  return normalized.includes('fable-5') || normalized.includes('mythos-5')
+    || isOpus55(model);
+}
+
+function isOpus55(model: string): boolean {
+  return /claude-opus-5-5(?:-|$)/.test(model.trim().toLowerCase().replace(/[._]/g, '-'));
 }
 
 function mapToolChoice(value: unknown, context: ToolContext, oauth: boolean): unknown {
@@ -1109,6 +1114,22 @@ export interface TranslatedResponsesRequest {
   toolContext: ToolContext;
 }
 
+function isEmptyAssistantMessageWithSupportedMetadata(item: JsonObject): boolean {
+  if (item.role !== 'assistant' || item.content !== null) return false;
+  if (item.type !== undefined && item.type !== 'message') return false;
+  if (['id', 'status', 'phase'].some((fieldName) => (
+    item[fieldName] !== undefined && typeof item[fieldName] !== 'string'
+  ))) return false;
+  return Object.keys(item).every((fieldName) => (
+    fieldName === 'type'
+    || fieldName === 'id'
+    || fieldName === 'role'
+    || fieldName === 'content'
+    || fieldName === 'status'
+    || fieldName === 'phase'
+  ));
+}
+
 export function translateResponsesRequest(
   raw: ResponsesRequest,
   options: TranslateResponsesRequestOptions = {},
@@ -1262,6 +1283,7 @@ export function translateResponsesRequest(
         continue;
       }
       if (role !== 'user' && role !== 'assistant') throw new UnsupportedResponsesFeatureError(`input role '${role}'`);
+      if (isEmptyAssistantMessageWithSupportedMetadata(rawItem)) continue;
       const parts = inputContentToAnthropic(rawItem.content, role);
       if (role === 'assistant') {
         assistant ??= { role: 'assistant', content: [] };
@@ -1324,7 +1346,7 @@ export function translateResponsesRequest(
       anth.thinking = { type: 'disabled' };
     } else if (adaptive) {
       anth.thinking = { type: 'adaptive' };
-      const normalized = normalizedEffort(effort);
+      const normalized = normalizedEffort(effort, model);
       if (normalized) anth.output_config = { effort: normalized };
       if (numberValue(raw.max_output_tokens) === undefined) {
         anth.max_tokens = Math.max(anth.max_tokens, (budget ?? 8192) + OUTPUT_HEADROOM);

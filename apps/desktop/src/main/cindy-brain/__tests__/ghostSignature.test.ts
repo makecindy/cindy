@@ -16,6 +16,7 @@ import {
   signGhostPackage,
   verifyGhostZipSignatures,
   type GhostSignatureDocument,
+  type GhostTrustRegistry,
 } from '../ghostSignature';
 
 const MANIFEST: GhostManifest = {
@@ -123,6 +124,36 @@ describe('ghostSignature · 发布者签名', () => {
         publisherVerified: true,
         publisherName: 'Verified TapTap Publisher',
       },
+    });
+  });
+
+  // Unit: unchanged package bytes must not retain revoked publisher trust through
+  // inspect's parse cache. Existing signature tests only verified fresh ZIPs.
+  it('refreshes inspection trust when the publisher registry changes', async () => {
+    const { privateKey } = crypto.generateKeyPairSync('ed25519');
+    const signed = await signGhostPackage(await unsignedPackage(), {
+      publisherName: 'Publisher',
+      privateKey,
+    });
+    const doc = await readSignature(signed);
+    const file = path.join(workDir, 'registry-change.cindy');
+    await fs.promises.writeFile(file, signed);
+    const trustRegistry: GhostTrustRegistry = {
+      publishers: {
+        [doc.publisher.keyId]: { name: 'Trusted publisher', publicKey: doc.publisher.publicKey },
+      },
+    };
+    const manager = new GhostManager({
+      getRootDir: () => path.join(workDir, 'ghosts'),
+      trustRegistry,
+    });
+
+    expect(await manager.inspect(file)).toMatchObject({
+      trust: { level: 'verified-publisher', publisherVerified: true },
+    });
+    delete trustRegistry.publishers![doc.publisher.keyId];
+    expect(await manager.inspect(file)).toMatchObject({
+      trust: { level: 'unverified', publisherVerified: false },
     });
   });
 

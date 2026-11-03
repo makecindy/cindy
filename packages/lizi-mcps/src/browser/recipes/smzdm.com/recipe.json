@@ -1,26 +1,24 @@
 {
   "id": "smzdm-search",
-  "match": ["smzdm.com", "search.smzdm.com"],
-  "description": "在什么值得买搜索好价/商品(返回标题/价格/商城/评论数/链接)。无干净 JSON 接口,直接 navigate 到搜索结果页再从 DOM 抓取;建议用持久浏览器(带登录态结果更全、更少风控)。",
-  "inputs": { "query": { "required": true } },
-  "steps": [
-    { "action": "navigate", "url": "https://search.smzdm.com/?c=home&s={{query|url}}&v=b" },
-    { "action": "wait", "loadState": "load" },
-    {
-      "action": "extract",
-      "as": "items",
-      "extract": {
-        "from": "li.feed-row-wide",
-        "multiple": true,
-        "limit": 20,
-        "fields": {
-          "title": { "selector": "h5.feed-block-title a", "attr": "title" },
-          "price": ".z-highlight",
-          "mall": ".z-feed-foot-r .feed-block-extras span",
-          "url": { "selector": "h5.feed-block-title a", "type": "href" }
-        }
-      }
-    }
+  "match": [
+    "smzdm.com",
+    "search.smzdm.com"
   ],
-  "output": "{{items}}"
+  "description": "什么值得买搜索好价",
+  "access": "read",
+  "adapter": "smzdm/search",
+  "inputs": {
+    "query": {
+      "required": true,
+      "type": "str",
+      "description": "Search keyword"
+    },
+    "limit": {
+      "required": false,
+      "type": "int",
+      "default": 20,
+      "description": "Number of results"
+    }
+  },
+  "steps": []
 }

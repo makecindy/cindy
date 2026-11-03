@@ -1,17 +1,23 @@
 import { useCallback, useEffect, useState } from 'react';
 
 import {
+  getGitSafetyMode,
   getGitSafetyAutoSnapshotEnabled,
-  setGitSafetyAutoSnapshotEnabled,
+  persistLegacyGitSafetyOptOut,
+  setGitSafetyMode,
   subscribeGitSafetyAutoSnapshotEnabled,
+  subscribeGitSafetyMode,
 } from '@/lib/gitSafetySettingsStore';
+import type { GitSafetyMode } from '@/lib/gitSafetySettingsStore';
 
 interface DeviceLinkShape {
   invoke: (deviceId: string, channel: string, args: unknown[]) => Promise<unknown>;
 }
 
 type GitSafetyWire = {
+  mode?: GitSafetyMode;
   autoSnapshotEnabled: boolean;
+  autoInitProjectGit: boolean;
   isCustomized: boolean;
   defaultAutoSnapshotEnabled: boolean;
 };
@@ -27,20 +33,28 @@ function isGitSafetyWire(value: unknown): value is GitSafetyWire {
   return Boolean(
     value &&
       typeof value === 'object' &&
-      typeof (value as GitSafetyWire).autoSnapshotEnabled === 'boolean',
+      (typeof (value as GitSafetyWire).mode === 'string' ||
+        typeof (value as GitSafetyWire).autoSnapshotEnabled === 'boolean'),
   );
 }
 
-const remoteCache = new Map<string, boolean>();
-const remoteInflight = new Map<string, Promise<boolean>>();
+function modeFromWire(value: GitSafetyWire): GitSafetyMode {
+  if (value.mode === 'off' || value.mode === 'existing-git' || value.mode === 'all-projects') {
+    return value.mode;
+  }
+  return value.autoSnapshotEnabled ? 'all-projects' : 'off';
+}
+
+const remoteCache = new Map<string, GitSafetyMode>();
+const remoteInflight = new Map<string, Promise<GitSafetyMode>>();
 const remoteDeviceGen = new Map<string, number>();
 
 async function fetchRemoteGitSafetyAutoSnapshotEnabled(
   deviceId: string,
   opts: { force?: boolean } = {},
-): Promise<boolean> {
+): Promise<GitSafetyMode> {
   const cached = remoteCache.get(deviceId);
-  if (!opts.force && typeof cached === 'boolean') return cached;
+  if (!opts.force && cached) return cached;
   const ip = remoteInflight.get(deviceId);
   if (ip) return ip;
 
@@ -50,13 +64,13 @@ async function fetchRemoteGitSafetyAutoSnapshotEnabled(
   const dl = getDeviceLink();
   if (!dl) throw new Error('device-link IPC not available');
   const p = dl.invoke(deviceId, 'maker:git-safety:get', [])
-    .then((settings) => (isGitSafetyWire(settings) ? settings.autoSnapshotEnabled : false))
-    .then((enabled) => {
+    .then((settings) => (isGitSafetyWire(settings) ? modeFromWire(settings) : 'off'))
+    .then((mode) => {
       if (isCurrent()) {
-        remoteCache.set(deviceId, enabled);
+        remoteCache.set(deviceId, mode);
         remoteInflight.delete(deviceId);
       }
-      return enabled;
+      return mode;
     })
     .catch((e) => {
       if (isCurrent()) remoteInflight.delete(deviceId);
@@ -67,33 +81,58 @@ async function fetchRemoteGitSafetyAutoSnapshotEnabled(
 }
 
 export function useGitSafetySettings(): {
+  mode: GitSafetyMode;
   autoSnapshotEnabled: boolean;
   isCustomized: boolean;
+  setMode: (next: GitSafetyMode) => Promise<void>;
   setAutoSnapshotEnabled: (next: boolean) => Promise<void>;
   reset: () => Promise<void>;
 } {
+  const [mode, setModeState] = useState<GitSafetyMode>(getGitSafetyMode);
   const [autoSnapshotEnabled, setEnabledState] = useState<boolean>(getGitSafetyAutoSnapshotEnabled);
   const [isCustomized, setIsCustomized] = useState(false);
 
   const refresh = useCallback(async (isCancelled: () => boolean = () => false) => {
+    try {
+      if (await persistLegacyGitSafetyOptOut()) {
+        if (isCancelled()) return;
+        setModeState('off');
+        setEnabledState(false);
+        setIsCustomized(true);
+        return;
+      }
+    } catch {
+      return;
+    }
     const settings = await window.electronAPI.maker.gitSafetyGet();
     if (isCancelled()) return;
-    setGitSafetyAutoSnapshotEnabled(settings.autoSnapshotEnabled);
-    setEnabledState(settings.autoSnapshotEnabled);
+    const nextMode = modeFromWire(settings);
+    setGitSafetyMode(nextMode);
+    setModeState(nextMode);
+    setEnabledState(nextMode !== 'off');
     setIsCustomized(settings.isCustomized);
   }, []);
 
-  const setAutoSnapshotEnabled = useCallback(async (next: boolean) => {
+  const setMode = useCallback(async (next: GitSafetyMode) => {
     const settings = await window.electronAPI.maker.gitSafetySet(next);
-    setGitSafetyAutoSnapshotEnabled(settings.autoSnapshotEnabled);
-    setEnabledState(settings.autoSnapshotEnabled);
+    const nextMode = modeFromWire(settings);
+    setGitSafetyMode(nextMode);
+    setModeState(nextMode);
+    setEnabledState(nextMode !== 'off');
     setIsCustomized(settings.isCustomized);
   }, []);
+
+  const setAutoSnapshotEnabled = useCallback(
+    (next: boolean) => setMode(next ? 'all-projects' : 'off'),
+    [setMode],
+  );
 
   const reset = useCallback(async () => {
     const settings = await window.electronAPI.maker.gitSafetyReset();
-    setGitSafetyAutoSnapshotEnabled(settings.autoSnapshotEnabled);
-    setEnabledState(settings.autoSnapshotEnabled);
+    const nextMode = modeFromWire(settings);
+    setGitSafetyMode(nextMode);
+    setModeState(nextMode);
+    setEnabledState(nextMode !== 'off');
     setIsCustomized(settings.isCustomized);
   }, []);
 
@@ -103,13 +142,23 @@ export function useGitSafetySettings(): {
     const unsubscribe = subscribeGitSafetyAutoSnapshotEnabled((next) => {
       if (!cancelled) setEnabledState(next);
     });
+    const unsubscribeMode = subscribeGitSafetyMode((next, source) => {
+      if (!cancelled) {
+        setModeState(next);
+        setEnabledState(next !== 'off');
+        // The mode mirror cannot carry isCustomized. Refresh main's complete
+        // wire state so Settings windows also converge on override/reset changes.
+        if (source === 'storage') void refresh(() => cancelled).catch(() => undefined);
+      }
+    });
     return () => {
       cancelled = true;
       unsubscribe();
+      unsubscribeMode();
     };
   }, [refresh]);
 
-  return { autoSnapshotEnabled, isCustomized, setAutoSnapshotEnabled, reset };
+  return { mode, autoSnapshotEnabled, isCustomized, setMode, setAutoSnapshotEnabled, reset };
 }
 
 export function useGitSafetyAutoSnapshotEnabled(): boolean {
@@ -130,7 +179,7 @@ export function useGitSafetyAutoSnapshotEnabled(): boolean {
 export function useGitSafetyAutoSnapshotEnabledForDevice(deviceId?: string): boolean {
   const localEnabled = useGitSafetyAutoSnapshotEnabled();
   const [remoteEnabled, setRemoteEnabled] = useState<boolean>(
-    deviceId ? remoteCache.get(deviceId) ?? false : false,
+    deviceId ? (remoteCache.get(deviceId) ?? 'off') !== 'off' : false,
   );
 
   useEffect(() => {
@@ -140,15 +189,15 @@ export function useGitSafetyAutoSnapshotEnabledForDevice(deviceId?: string): boo
     }
     let cancelled = false;
     const cached = remoteCache.get(deviceId);
-    if (typeof cached === 'boolean') {
-      setRemoteEnabled(cached);
+    if (cached) {
+      setRemoteEnabled(cached !== 'off');
     } else {
       setRemoteEnabled(false);
     }
     const refreshRemote = () => {
       fetchRemoteGitSafetyAutoSnapshotEnabled(deviceId, { force: true })
         .then((enabled) => {
-          if (!cancelled) setRemoteEnabled(enabled);
+          if (!cancelled) setRemoteEnabled(enabled !== 'off');
         })
         .catch(() => {
           if (!cancelled) setRemoteEnabled(false);

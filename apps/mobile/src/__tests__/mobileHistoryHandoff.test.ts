@@ -1,5 +1,5 @@
-import { describe, expect, it } from 'vitest';
-import { HistoryViewController, HistoryViewHandoff, projectHistoryView } from '@cindy/maker-shared/message-window';
+import { describe, expect, it, vi } from 'vitest';
+import { HistoryViewController, HistoryViewHandoff, projectHistoryView, nextHistoryCacheReceipt } from '@cindy/maker-shared/message-window';
 import { buildMobileHistoryRenderItems } from '../session/mobileHistoryRender';
 import type { RemoteMessage } from '../session/types';
 
@@ -13,6 +13,193 @@ const row = (id: string, streaming = false): RemoteMessage => ({
 const createHandoff = () => new HistoryViewHandoff<RemoteMessage>((row) => row.agentMeta?.isStreaming === true);
 
 describe('mobile history handoff', () => {
+  // A later authoritative read can omit a removed row entirely. Its list receipt
+  // must retire even if a separate raw-store deletion push has not arrived yet.
+  it.each([false, true])('retires a received body after a newer empty page, including reentry (streamed=%s)', async (streamed) => {
+    const readReceipt = nextHistoryCacheReceipt();
+    let received = { ...row('answer', streamed), cacheReceipt: nextHistoryCacheReceipt() };
+    let hasMore = true;
+    const view = new HistoryViewController<RemoteMessage>({
+      refreshOnResume: false,
+      page: async () => ({ version: 1,
+        items: hasMore ? projectHistoryView([{ ...row('user'), createdAt: '2026-09-08T00:00:03Z' }], false) : [],
+        hasMore, nextCursor: hasMore ? 'older' : null }),
+      details: async () => ({ version: 1, messages: [], hasMore: false, nextCursor: null }), expanded: async () => undefined,
+    });
+    view.setActive(false);
+    await view.restoreCachedView(async () => ({ ...view.getSnapshot(), ready: true, readReceipt }));
+    const handoff = createHandoff();
+    const render = () => {
+      const snapshot = view.getSnapshot();
+      const state = handoff.reconcile(snapshot, [received]);
+      return { state, items: buildMobileHistoryRenderItems({ view, snapshot, messages: state.messages,
+        staleTail: state.tail, pendingHandoff: state.pending, streaming: true, sessionId: 's' }) };
+    };
+    expect(render().state.tail.has('answer')).toBe(true);
+    // The raw store finalizes before the authoritative empty read, while its
+    // deletion push lags. Both pending and tail must yield to that read.
+    received = { ...received, agentMeta: null };
+    view.setActive(true);
+    await view.refresh();
+    // A latest-page window cannot prove an absent older row was deleted.
+    expect(render().items.filter(item => item.type === 'message')
+      .some(item => item.message.body === 'visible answer')).toBe(true);
+    hasMore = false;
+    await view.refresh();
+    for (const active of [true, false, true]) {
+      view.setActive(active);
+      const result = render();
+      expect(result.state.tail.size).toBe(0);
+      expect(result.state.pending.size).toBe(0);
+      expect(result.items.filter(item => item.type === 'message')).toEqual([]);
+    }
+    view.setActive(false);
+  });
+
+  // Unit, review #6401: empty reads cannot retire a finalized streaming body
+  // received after the read began, or one without comparable receipt evidence.
+  // Existing empty-page coverage only exercised a receipt older than the read.
+  it.each(['newer', 'unmarked'] as const)('preserves pending content without superseding receipt evidence (%s)', async (receipt) => {
+    const view = new HistoryViewController<RemoteMessage>({
+      refreshOnResume: false,
+      page: async () => ({ version: 1, items: [], hasMore: false, nextCursor: null }),
+      details: async () => ({ version: 1, messages: [], hasMore: false, nextCursor: null }), expanded: async () => undefined,
+    });
+    view.setActive(false);
+    await view.restoreCachedView(async () => ({ ...view.getSnapshot(), ready: true, readReceipt: nextHistoryCacheReceipt() }));
+    const handoff = createHandoff();
+    let received: RemoteMessage = { ...row('answer', true), cacheReceipt: nextHistoryCacheReceipt() };
+    const render = () => {
+      const snapshot = view.getSnapshot();
+      const state = handoff.reconcile(snapshot, [received]);
+      return buildMobileHistoryRenderItems({ view, snapshot, messages: state.messages,
+        pendingHandoff: state.pending, staleTail: state.tail, streaming: false, sessionId: 's' })
+        .filter(item => item.type === 'message').map(item => item.message.body);
+    };
+    expect(render()).toEqual(['visible answer']);
+    view.setActive(true);
+    const reading = view.refresh();
+    received = { ...row('answer'), cacheReceipt: receipt === 'newer' ? nextHistoryCacheReceipt() : undefined };
+    await reading;
+    expect(render()).toEqual(['visible answer']);
+    view.setActive(false);
+    expect(render()).toEqual(['visible answer']);
+  });
+
+  // #6293 orders received bodies by local receipt, not Host timestamps. The
+  // renderer must honor that decision too when a late row predates the page tail.
+  it.each([true, false])('keeps a received earlier-timestamp answer through cached/fresh history (stale=%s)', async (stale) => {
+    const later = { ...row('user'), createdAt: '2026-09-08T00:00:03Z' };
+    const readReceipt = nextHistoryCacheReceipt();
+    const received = { ...row('answer'), cacheReceipt: nextHistoryCacheReceipt() };
+    const view = new HistoryViewController<RemoteMessage>({
+      page: async () => ({ version: 1, items: projectHistoryView([received, later], false), hasMore: false, nextCursor: null }),
+      details: async () => ({ version: 1, messages: [], hasMore: false, nextCursor: null }), expanded: async () => undefined,
+    });
+    view.setActive(false);
+    await view.restoreCachedView(async () => ({ items: projectHistoryView([later], false), details: new Map(),
+      expanded: new Set(), nextCursor: null, hasMore: false, loading: false, ready: true, error: null, readReceipt }));
+    const handoff = createHandoff();
+    const render = () => {
+      const snapshot = { ...view.getSnapshot(), stale };
+      const state = handoff.reconcile(snapshot, [received]);
+      return buildMobileHistoryRenderItems({ view, snapshot, messages: state.messages, staleTail: state.tail,
+        pendingHandoff: state.pending, streaming: false, sessionId: 's' })
+        .filter(item => item.type === 'message').map(item => item.message.source.clientId);
+    };
+    expect(render()).toEqual(['answer', 'user']);
+    view.setActive(true);
+    await view.refresh();
+    expect(render()).toEqual(['answer', 'user']);
+    expect(handoff.reconcile(view.getSnapshot(), [received]).tail.size).toBe(0);
+    view.setActive(false);
+  });
+
+  // Regression: an updated list body has the same ID/time as the cached page. The
+  // old tail-only rule hid it. Unit: real handoff + renderer, no network or timers.
+  it('shows a newer received body in place until a page read after that push takes over', async () => {
+    const old = { ...row('answer'), content: 'old answer' };
+    const received = { ...old, content: 'updated answer', cacheReceipt: { run: 'cached', order: 2 } };
+    const view = new HistoryViewController<RemoteMessage>({
+      page: async () => ({ version: 1, items: projectHistoryView([old], false), hasMore: false, nextCursor: null }),
+      details: async () => ({ version: 1, messages: [], hasMore: false, nextCursor: null }),
+      expanded: async () => undefined,
+    });
+    view.setActive(false);
+    await view.restoreCachedView(async () => ({ items: projectHistoryView([old], false),
+      details: new Map(), expanded: new Set(), nextCursor: null, hasMore: false,
+      loading: false, ready: true, error: null, readReceipt: { run: 'cached', order: 1 } }));
+    const handoff = createHandoff();
+    const render = (snapshot = view.getSnapshot(), currentHandoff = handoff) => {
+      const state = currentHandoff.reconcile(snapshot, [received]);
+      return buildMobileHistoryRenderItems({ view, snapshot, messages: state.messages,
+        pendingHandoff: state.pending, staleTail: state.tail, streaming: false, sessionId: 's',
+      }).filter(item => item.type === 'message').map(item => item.message.body);
+    };
+    expect(render()).toEqual(['updated answer']);
+    // An in-flight page captured before the push must not roll it back either.
+    expect(render({ ...view.getSnapshot(), stale: false })).toEqual(['updated answer']);
+    // A new receipt can also arrive while the very first page is in flight.
+    expect(render({ ...view.getSnapshot(), items: [], stale: false }, createHandoff())).toEqual(['updated answer']);
+    // A newer authoritative read is allowed to replace it, even with shorter text.
+    expect(render({ ...view.getSnapshot(), stale: false, readReceipt: { run: 'cached', order: 3 } })).toEqual(['old answer']);
+    expect(handoff.reconcile(view.getSnapshot(), []).tail.size).toBe(0);
+  });
+
+  // A clock correction must not make an old receipt beat every future Host read,
+  // including receipts restored from a previous app run.
+  it.each([false, true])('retires old receipts after a clock rollback (previous run=%s)', async (previousRun) => {
+    const clock = vi.spyOn(Date, 'now').mockReturnValue(50_000);
+    const cachedRead = previousRun ? { run: 'previous-run', order: 1 } : nextHistoryCacheReceipt();
+    const receipt = previousRun ? { run: 'previous-run', order: 999_999 } : nextHistoryCacheReceipt();
+    const old = { ...row('answer'), content: 'cached body', cacheReceipt: receipt };
+    const view = new HistoryViewController<RemoteMessage>({
+      page: async () => ({ version: 1, items: projectHistoryView([{ ...row('answer'), content: 'host body' }], false), hasMore: false, nextCursor: null }),
+      details: async () => ({ version: 1, messages: [], hasMore: false, nextCursor: null }), expanded: async () => undefined,
+    });
+    const handoff = createHandoff();
+    const render = () => {
+      const snapshot = view.getSnapshot();
+      const state = handoff.reconcile(snapshot, [old]);
+      return buildMobileHistoryRenderItems({ view, snapshot, messages: state.messages, staleTail: state.tail,
+        pendingHandoff: state.pending, streaming: false, sessionId: 's' }).filter(item => item.type === 'message').map(item => item.message.body);
+    };
+    try {
+      view.setActive(false);
+      await view.restoreCachedView(async () => ({ items: projectHistoryView([{ ...row('answer'), content: 'older body' }], false),
+        details: new Map(), expanded: new Set(), nextCursor: null, hasMore: false, loading: false, ready: true, error: null, readReceipt: cachedRead }));
+      expect(render()).toEqual(['cached body']);
+      clock.mockReturnValue(100);
+      view.setActive(true);
+      await view.refresh();
+      expect(render()).toEqual(['host body']);
+      view.setActive(false);
+      expect(render()).toEqual(['host body']); // Leaving the page must not revive the retired receipt.
+    } finally { view.setActive(false); clock.mockRestore(); }
+  });
+
+  // Unit: separately saved raw (run A) and authoritative page (run B), restored
+  // offline in run C. Only an actual C push may supersede B; A cannot be ordered after B.
+  it.each([false, true])('does not guess the order of two old runs (current push=%s)', async (currentPush) => {
+    const raw = { ...row('answer'), content: 'raw body',
+      cacheReceipt: currentPush ? nextHistoryCacheReceipt() : { run: 'run-A', order: 999_999 } };
+    const view = new HistoryViewController<RemoteMessage>({
+      page: async () => { throw new Error('offline'); },
+      details: async () => ({ version: 1, messages: [], hasMore: false, nextCursor: null }), expanded: async () => undefined,
+    });
+    view.setNetworkAvailable(false);
+    await view.restoreCachedView(async () => ({ items: projectHistoryView([{ ...row('answer'), content: 'authoritative B' }], false),
+      details: new Map(), expanded: new Set(), nextCursor: null, hasMore: false,
+      loading: false, ready: true, error: null, readReceipt: { run: 'run-B', order: 1 } }));
+    const snapshot = view.getSnapshot();
+    const state = createHandoff().reconcile(snapshot, [raw]);
+    expect(buildMobileHistoryRenderItems({ view, snapshot, messages: state.messages, staleTail: state.tail,
+      pendingHandoff: state.pending, streaming: false, sessionId: 's' })
+      .filter(item => item.type === 'message').map(item => item.message.body))
+      .toEqual([currentPush ? 'raw body' : 'authoritative B']);
+    view.setActive(false);
+  });
+
   it('keeps the live tail below completed text when recovery history has not caught up to that tail', async () => {
     const first = { ...row('A'), content: 'first paragraph' };
     let live = { ...row('B', true), content: 'second paragraph', createdAt: first.createdAt };
@@ -180,6 +367,78 @@ describe('mobile history handoff', () => {
     await view.refresh();
     expect(handoff.reconcile(view.getSnapshot(), [row('answer')]).pending.size).toBe(0);
     expect(createHandoff().reconcile(view.getSnapshot(), [row('answer')]).pending.size).toBe(0);
+    view.setActive(false);
+  });
+
+  it('shows rows received after a stale cached snapshot until the fresh page covers them', async () => {
+    const at = (id: string, role: RemoteMessage['role'], second: number, content = id): RemoteMessage => ({
+      id, clientId: id, sessionId: 's', role, content, toolUseId: null,
+      createdAt: `2026-09-08T00:00:${String(second).padStart(2, '0')}Z`, agentMeta: null,
+    });
+    const cached = [at('q1', 'user', 0), at('a1', 'assistant', 1)];
+    const later = [at('q2', 'user', 5, 'asked on the computer'), at('a2', 'assistant', 6, 'prefetched reply')];
+    const local = at('mobile-system-pwd', 'system', 7);
+    let release!: () => void;
+    const view = new HistoryViewController<RemoteMessage>({
+      page: () => new Promise((resolve) => {
+        release = () => resolve({ version: 1, items: projectHistoryView([...cached, ...later], false), hasMore: false, nextCursor: null });
+      }),
+      details: async () => ({ version: 1, messages: [], hasMore: false, nextCursor: null }),
+      expanded: async () => undefined,
+    });
+    view.setActive(false);
+    await view.restoreCachedView(async () => ({
+      items: projectHistoryView(cached, false), details: new Map(), expanded: new Set(),
+      nextCursor: null, hasMore: false, loading: false, ready: true, error: null,
+    }));
+    const handoff = createHandoff();
+    const render = () => {
+      const state = handoff.reconcile(view.getSnapshot(), [...cached, ...later, local]);
+      return buildMobileHistoryRenderItems({ view, snapshot: view.getSnapshot(), messages: state.messages,
+        pendingHandoff: state.pending, staleTail: state.tail, streaming: false, sessionId: 's',
+      }).filter(item => item.type === 'message').map(item => item.message.source.clientId);
+    };
+    expect(view.getSnapshot().stale).toBe(true);
+    expect(render()).toEqual(['q1', 'a1', 'q2', 'a2']);
+    view.setActive(true);
+    expect(render()).toEqual(['q1', 'a1', 'q2', 'a2']);
+    release();
+    await view.refresh();
+    expect(view.getSnapshot().stale).toBe(false);
+    expect(handoff.reconcile(view.getSnapshot(), [...cached, ...later]).tail.size).toBe(0);
+    expect(render()).toEqual(['q1', 'a1', 'q2', 'a2']);
+    view.setActive(false);
+    expect(view.getSnapshot().stale).toBe(true);
+  });
+
+  it('keeps a shown tail row when a page read before it arrived replaces the stale snapshot', async () => {
+    const at = (id: string, second: number): RemoteMessage => ({
+      id, clientId: id, sessionId: 's', role: 'assistant', content: id, toolUseId: null,
+      createdAt: `2026-09-08T00:00:0${second}Z`, agentMeta: null,
+    });
+    let pageRows = [at('a1', 1)];
+    const view = new HistoryViewController<RemoteMessage>({
+      page: async () => ({ version: 1, items: projectHistoryView(pageRows, false), hasMore: false, nextCursor: null }),
+      details: async () => ({ version: 1, messages: [], hasMore: false, nextCursor: null }),
+      expanded: async () => undefined,
+    });
+    view.setActive(false);
+    await view.restoreCachedView(async () => ({ items: projectHistoryView([at('a1', 1)], false), details: new Map(),
+      expanded: new Set(), nextCursor: null, hasMore: false, loading: false, ready: true, error: null }));
+    const handoff = createHandoff();
+    const reply = at('reply', 5);
+    expect(handoff.reconcile(view.getSnapshot(), [at('a1', 1), reply]).tail).toEqual(new Set(['reply']));
+    // The Host read its latest page before the reply was saved.
+    view.setActive(true);
+    await view.refresh();
+    expect(view.getSnapshot().stale).toBe(false);
+    const fresh = handoff.reconcile(view.getSnapshot(), [at('a1', 1), reply]);
+    expect(fresh.messages.map((row) => row.clientId)).toEqual(['a1', 'reply']);
+    // Covered by history: leaves the tail. Removed from the raw store: not revived.
+    pageRows = [at('a1', 1), reply];
+    await view.refresh(false, true);
+    expect(handoff.reconcile(view.getSnapshot(), [at('a1', 1), reply]).tail.size).toBe(0);
+    expect(handoff.reconcile(view.getSnapshot(), [at('a1', 1)]).messages.map((row) => row.clientId)).toEqual(['a1', 'reply']);
     view.setActive(false);
   });
 });

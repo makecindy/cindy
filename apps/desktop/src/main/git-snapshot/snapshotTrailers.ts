@@ -38,6 +38,8 @@ export interface SnapshotMeta {
   kind: SnapshotKind;
   /** 绑定的对话消息锚点(message clientId), 可空。 */
   anchor?: string;
+  /** Durable dispatch attempt; retries of the same message have distinct ids. */
+  attemptId?: string;
   /** 一次 rollback / undo 的稳定 id。 */
   rollbackId?: string;
   /** rollback 入口: commit hash 或 message clientId。 */
@@ -70,6 +72,7 @@ export interface ParsedSnapshot extends SnapshotMeta {
 const KEY_SESSION = 'Session';
 const KEY_KIND = 'Kind';
 const KEY_ANCHOR = 'Anchor';
+const KEY_ATTEMPT = 'Attempt';
 const KEY_ROLLBACK_ID = 'RollbackId';
 const KEY_ROLLBACK_TARGET = 'RollbackTarget';
 const KEY_REVERTS = 'Reverts';
@@ -115,6 +118,7 @@ function buildTrailerBlock(prefix: string, meta: SnapshotMeta): string {
   if (meta.anchor) {
     trailers.push(`${prefix}-${KEY_ANCHOR}: ${meta.anchor}`);
   }
+  if (meta.attemptId) trailers.push(`${prefix}-${KEY_ATTEMPT}: ${meta.attemptId}`);
   if (meta.rollbackId) {
     trailers.push(`${prefix}-${KEY_ROLLBACK_ID}: ${meta.rollbackId}`);
   }
@@ -160,6 +164,7 @@ interface CollectedTrailerFields {
   sessionId?: string;
   kind?: string;
   anchor?: string;
+  attemptId?: string;
   rollbackId?: string;
   rollbackTarget?: string;
   reverts?: string[];
@@ -174,6 +179,7 @@ function assignTrailerField(fields: CollectedTrailerFields, key: string, value: 
   if (key === KEY_SESSION) fields.sessionId = value;
   else if (key === KEY_KIND) fields.kind = value;
   else if (key === KEY_ANCHOR) fields.anchor = value;
+  else if (key === KEY_ATTEMPT) fields.attemptId = value;
   else if (key === KEY_ROLLBACK_ID) fields.rollbackId = value;
   else if (key === KEY_ROLLBACK_TARGET) fields.rollbackTarget = value;
   else if (key === KEY_REVERTS) {
@@ -198,6 +204,7 @@ function toParsedSnapshot(
     sessionId,
     kind: kind as SnapshotKind,
     ...(fields.anchor ? { anchor: fields.anchor } : {}),
+    ...(fields.attemptId ? { attemptId: fields.attemptId } : {}),
     ...(fields.rollbackId ? { rollbackId: fields.rollbackId } : {}),
     ...(fields.rollbackTarget ? { rollbackTarget: fields.rollbackTarget } : {}),
     ...(fields.reverts?.length ? { reverts: fields.reverts } : {}),

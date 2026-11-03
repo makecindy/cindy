@@ -2,7 +2,8 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { projectScheduleEvent } from '@cindy/maker-shared/schedule-events';
 import type { MobileMakerTransport } from '@/device-link/mobileMakerTransport';
 import { markSessionScheduleRunsRead, unreadRunIdFromProjection } from '@/session/scheduleRunRead';
-import { invalidateScheduleIndexForDevice, invalidateScheduleIndexesAfterLinkRecovery, loadSessionScheduleIndex, loadSessionScheduleIndexThrottled, loadSharedSessionScheduleIndex, resetScheduleIndexThrottleForTesting } from '@/session/scheduleIndex';
+import { remoteScheduleEventStore } from '@/scheduler/remoteScheduleEvents';
+import { getScheduleIndexInvalidationVersion, invalidateScheduleIndexForDevice, invalidateScheduleIndexesAfterLinkRecovery, loadSessionScheduleIndex, loadSessionScheduleIndexThrottled, loadSharedSessionScheduleIndex, resetScheduleIndexThrottleForTesting } from '@/session/scheduleIndex';
 
 function makerWith(
   runs: readonly Record<string, unknown>[],
@@ -24,6 +25,25 @@ function transientError(message = 'target timed out'): Error & { code: string } 
 
 describe('markSessionScheduleRunsRead', () => {
   beforeEach(resetScheduleIndexThrottleForTesting);
+  it('applies the read locally so Home reconciles badges even when the host sends no broadcast', async () => {
+    // Already read elsewhere: the host's markRunRead is a no-op and broadcasts nothing.
+    remoteScheduleEventStore.clearDevice('dev-echo');
+    const maker = makerWith(
+      [{ id: 'run-1', scheduleId: 'sched-1', sessionId: 'session-1', status: 'success', firedAt: 1 }],
+      async () => undefined,
+    );
+    const before = remoteScheduleEventStore.getSnapshot('dev-echo').sessionIndexVersion;
+    await expect(markSessionScheduleRunsRead(maker, 'session-1', 'dev-echo')).resolves.toEqual(['run-1']);
+    const after = remoteScheduleEventStore.getSnapshot('dev-echo');
+    expect(after.sessionIndexVersion).toBe(before + 1);
+    expect(after.lastProjection?.runPatch.status).toBe('read');
+    expect(getScheduleIndexInvalidationVersion('dev-echo')).toBeGreaterThan(0);
+
+    // Nothing to mark: no local event.
+    await expect(markSessionScheduleRunsRead(makerWith([], async () => undefined), 'session-2', 'dev-echo')).resolves.toEqual([]);
+    expect(remoteScheduleEventStore.getSnapshot('dev-echo').sessionIndexVersion).toBe(before + 1);
+    remoteScheduleEventStore.clearDevice('dev-echo');
+  });
   it('finds runs completed while disconnected even when the old success cache is still fresh', async () => {
     const mark = vi.fn(async () => undefined);
     const listRuns = vi.fn().mockResolvedValueOnce([]).mockResolvedValue([

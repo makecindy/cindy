@@ -37,6 +37,21 @@ describe('serialized IM connection lifecycle', () => {
     expect(lifecycle.isStarted()).toBe(false);
   });
 
+  it('still closes the transport after pre-stop cleanup fails', async () => {
+    const failure = new Error('cleanup failed');
+    const events: string[] = [];
+    const lifecycle = createSerializedConnectionLifecycle({
+      startConnection: async () => undefined,
+      beforeStopConnection: async () => { events.push('cleanup'); throw failure; },
+      stopConnection: async () => { events.push('stop'); },
+      onStartError: vi.fn(),
+    });
+    lifecycle.start();
+    await expect(lifecycle.stop('logout')).rejects.toBe(failure);
+    expect(events).toEqual(['cleanup', 'stop']);
+    expect(lifecycle.isStarted()).toBe(false);
+  });
+
   it('is idempotent within one login and reconnects after logout', async () => {
     const startConnection = vi.fn(async () => undefined);
     const stopConnection = vi.fn(async () => undefined);

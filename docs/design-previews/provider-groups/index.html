@@ -1,0 +1,1101 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<meta name="color-scheme" content="light dark" />
+<title>供应商组 · 交互设计稿</title>
+<style>
+  /* 自包含设计稿：数值取自 Cindy 设计 token（DESIGN.md §2 / §4 / §10），品牌图标为占位。 */
+  :root {
+    color-scheme: light;
+    --surface: #f8f8f6;
+    --card: #ffffff;
+    --border: #d7d7d4;
+    --text: #262626;
+    --secondary: #737373;
+    --tertiary: #a3a3a3;
+    --chip: #e5e5e5;
+    --hover: #f2f2ef;
+    --primary-hover: #d7d7d6;
+    --cta-bg: #000000;
+    --cta-fg: #ffffff;
+    --cta-hover: #262626;
+    --switch-on: #505153;
+    --knob: #ffffff;
+    --green: #2aae5b;
+    --danger: #ef4444;
+    --focus: rgba(65, 124, 221, 0.5);
+    --scrim: rgba(0, 0, 0, 0.5);
+    --shadow-menu: 0 8px 24px rgba(0, 0, 0, 0.12), 0 2px 6px rgba(0, 0, 0, 0.06);
+    --bar: #ebebe8;
+  }
+  body.dark {
+    color-scheme: dark;
+    --surface: #1f1f1e;
+    --card: #2c2c2a;
+    --border: #3c3c3a;
+    --text: #d4d4d4;
+    --secondary: #a3a3a3;
+    --tertiary: #737373;
+    --chip: #3c3c3a;
+    --hover: #353533;
+    --primary-hover: #4a4a48;
+    --cta-bg: #ffffff;
+    --cta-fg: #000000;
+    --cta-hover: #e5e5e5;
+    --switch-on: #bdbdb8;
+    --knob: #2c2c2a;
+    --green: #55c886;
+    --danger: #ef4444;
+    --scrim: rgba(0, 0, 0, 0.7);
+    --shadow-menu: 0 8px 24px rgba(0, 0, 0, 0.45), 0 2px 6px rgba(0, 0, 0, 0.3);
+    --bar: #353533;
+  }
+  * { box-sizing: border-box; }
+  [hidden] { display: none !important; }
+  body {
+    margin: 0;
+    background: var(--surface);
+    color: var(--text);
+    font: 13px/1.5 Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", "Microsoft YaHei", sans-serif;
+    -webkit-font-smoothing: antialiased;
+  }
+  button, input { font: inherit; color: inherit; }
+  button { cursor: pointer; }
+  button:focus-visible, input:focus-visible, [tabindex]:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
+  svg { display: block; flex-shrink: 0; }
+
+  /* ---------- 评审工具条（设计稿外壳，不属于产品界面） ---------- */
+  .reviewbar {
+    position: sticky; top: 0; z-index: 50;
+    display: flex; align-items: center; gap: 12px; flex-wrap: wrap;
+    padding: 10px 24px; background: var(--surface); border-bottom: 1px solid var(--border);
+    font-size: 12px;
+  }
+  .reviewbar strong { font-weight: 500; font-size: 13px; margin-right: 8px; }
+  .reviewbar .spacer { flex: 1; }
+  .seg { display: inline-flex; gap: 2px; padding: 3px; border: 1px solid var(--border); border-radius: 9999px; background: var(--card); flex-wrap: wrap; }
+  .seg button { border: 0; background: transparent; border-radius: 9999px; padding: 4px 12px; min-height: 28px; color: var(--secondary); font-size: 12px; }
+  .seg button[aria-pressed="true"] { background: var(--chip); color: var(--text); font-weight: 500; }
+  .variantbar { display: flex; align-items: center; gap: 10px; padding: 10px 24px 0; font-size: 12px; color: var(--secondary); min-height: 46px; }
+  .note { max-width: 1120px; margin: 4px auto 0; padding: 0 24px; color: var(--secondary); font-size: 12px; }
+
+  /* ---------- 通用控件 ---------- */
+  .btn {
+    display: inline-flex; align-items: center; justify-content: center; gap: 6px;
+    height: 32px; padding: 0 24px; border-radius: 9999px; border: 1px solid transparent;
+    font-size: 13px; font-weight: 500; white-space: nowrap; background: transparent;
+  }
+  .btn.sm { height: 28px; padding: 0 12px; }
+  .btn.primary { background: var(--chip); border-color: var(--chip); }
+  .btn.primary:hover { background: var(--primary-hover); border-color: var(--primary-hover); }
+  .btn.secondary { background: var(--card); border-color: var(--border); }
+  .btn.secondary:hover { background: var(--hover); }
+  .btn.cta { background: var(--cta-bg); color: var(--cta-fg); }
+  .btn.cta:hover { background: var(--cta-hover); }
+  .btn.quiet { color: var(--secondary); }
+  .btn.quiet:hover { background: var(--hover); color: var(--text); }
+  .btn.danger-text { color: var(--secondary); }
+  .btn.danger-text:hover { background: var(--hover); color: var(--danger); }
+  .btn.danger { background: var(--danger); color: #fff; }
+  .btn[disabled] { opacity: .6; cursor: default; pointer-events: none; }
+  .icon-btn {
+    position: relative; width: 28px; height: 28px; display: inline-flex; align-items: center; justify-content: center;
+    border: 0; border-radius: 9999px; background: transparent; color: var(--secondary);
+  }
+  .icon-btn:hover { background: var(--hover); color: var(--text); }
+  .icon-btn[aria-disabled="true"] { opacity: .45; cursor: default; }
+  .icon-btn[aria-disabled="true"]:hover { background: transparent; color: var(--secondary); }
+  .icon-btn .dot { position: absolute; top: 4px; right: 4px; width: 7px; height: 7px; border-radius: 50%; background: var(--text); border: 1.5px solid var(--card); }
+  .switch { width: 36px; height: 20px; border-radius: 9999px; background: var(--chip); border: 0; padding: 2px; display: inline-flex; flex-shrink: 0; }
+  .switch::after { content: ""; width: 16px; height: 16px; border-radius: 50%; background: var(--knob); transition: transform 150ms; }
+  body:not(.dark) .switch::after { background: #fff; }
+  .switch[aria-checked="true"] { background: var(--switch-on); }
+  .switch[aria-checked="true"]::after { transform: translateX(16px); }
+  .switch[disabled] { opacity: .45; cursor: default; }
+  .tipwrap { position: relative; display: inline-flex; }
+  .tip {
+    position: absolute; bottom: calc(100% + 6px); right: 0; z-index: 20;
+    width: max-content; max-width: 240px; padding: 6px 10px; border-radius: 8px;
+    background: var(--cta-bg); color: var(--cta-fg); font-size: 12px; line-height: 1.4;
+    opacity: 0; pointer-events: none; transition: opacity 120ms;
+  }
+  .tipwrap:hover .tip, .tipwrap:focus-within .tip { opacity: 1; }
+  .avatar { width: 32px; height: 32px; border-radius: 50%; display: inline-flex; align-items: center; justify-content: center; background: var(--chip); font-weight: 500; flex-shrink: 0; }
+  .avatar.lg { width: 40px; height: 40px; font-size: 15px; }
+  .tag { display: inline-flex; align-items: center; height: 20px; padding: 0 8px; border-radius: 9999px; background: var(--chip); color: var(--secondary); font-size: 11px; white-space: nowrap; }
+  .muted { color: var(--secondary); }
+  .faint { color: var(--tertiary); }
+  .mark { width: 28px; height: 28px; border-radius: 8px; border: 1px solid var(--border); display: inline-flex; align-items: center; justify-content: center; font-weight: 600; font-size: 13px; flex-shrink: 0; background: var(--card); }
+
+  /* ---------- 舞台 ---------- */
+  .stage { max-width: 1120px; margin: 12px auto 40px; padding: 0 24px; }
+  .window { position: relative; background: var(--surface); border: 1px solid var(--border); border-radius: 12px; overflow: hidden; min-height: 640px; }
+  .page { padding: 24px 28px; }
+  .page h1 { margin: 0; font-size: 16px; font-weight: 500; }
+  .page .lead { margin: 4px 0 16px; color: var(--secondary); }
+
+  /* 设置页：供应商 */
+  .panel { display: flex; background: var(--card); border: 1px solid var(--border); border-radius: 12px; overflow: hidden; min-height: 540px; }
+  .rail { width: 224px; border-right: 1px solid var(--border); padding: 12px 8px; flex-shrink: 0; }
+  .railcap { font-size: 12px; color: var(--secondary); padding: 6px 12px 10px; }
+  .prov { display: flex; align-items: center; gap: 10px; padding: 10px 12px; border-radius: 8px; }
+  .prov.active { background: var(--hover); }
+  .prov .name { flex: 1; font-weight: 500; }
+  .prov .count { font-size: 12px; color: var(--secondary); }
+  .prov .ok { width: 6px; height: 6px; border-radius: 50%; background: var(--green); }
+  .detail { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+  .identity { display: flex; align-items: center; gap: 12px; padding: 16px 20px; border-bottom: 1px solid var(--border); }
+  .identity .mark { width: 36px; height: 36px; border-radius: 12px; }
+  .identity .t { font-size: 15px; font-weight: 500; }
+  .quota { padding: 16px 20px; }
+  .quota .big { font-size: 22px; font-weight: 500; margin: 2px 0; }
+  .remote-row { display: flex; align-items: flex-start; gap: 12px; padding: 12px 20px; border-top: 1px solid var(--border); border-bottom: 1px solid var(--border); }
+  .remote-row .copy { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+  .remote-row .label { font-weight: 500; }
+  .remote-row .desc { font-size: 12px; color: var(--tertiary); line-height: 1.45; }
+  .remote-row .desc a { color: var(--text); text-decoration: underline; text-underline-offset: 2px; cursor: pointer; }
+  .remote-row .ctrls { display: flex; align-items: center; gap: 8px; padding-top: 1px; }
+  .highlight { box-shadow: inset 0 0 0 2px var(--text); border-radius: 8px; }
+  .models { padding: 12px 20px; }
+  .modelrow { display: flex; align-items: center; gap: 12px; padding: 9px 0; }
+  .modelrow .n { flex: 1; font-size: 14px; }
+  .bar { height: 10px; border-radius: 4px; background: var(--bar); }
+
+  /* 管理页 */
+  .back { display: inline-flex; align-items: center; gap: 4px; color: var(--secondary); border: 0; background: none; padding: 0; margin-bottom: 10px; font-size: 13px; }
+  .back:hover { color: var(--text); }
+  .mhead { display: flex; align-items: flex-start; gap: 16px; }
+  .mhead .grow { flex: 1; min-width: 0; }
+  .section { margin-top: 20px; }
+  .section-title { display: flex; align-items: center; gap: 8px; margin: 0 0 8px; font-size: 13px; font-weight: 500; }
+  .section-title .count { color: var(--tertiary); font-weight: 400; }
+  .section-title .grow { flex: 1; }
+  .card { background: var(--card); border: 1px solid var(--border); border-radius: 12px; }
+  .row { display: flex; align-items: center; gap: 12px; padding: 12px 16px; }
+  .row + .row, .person + .person { border-top: 1px solid var(--border); }
+  .row .who { flex: 1; min-width: 0; }
+  .row .line1 { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; font-weight: 500; }
+  .row .line2 { font-size: 12px; color: var(--secondary); margin-top: 1px; }
+  .row .actions { display: flex; gap: 6px; align-items: center; }
+  .person .row { cursor: default; }
+  .person .usage { text-align: right; font-size: 12px; color: var(--secondary); white-space: nowrap; }
+  .person .usage b { display: block; font-weight: 500; color: var(--text); font-size: 13px; }
+  .chev { transition: transform 150ms; color: var(--secondary); }
+  .person[data-open="true"] .chev { transform: rotate(90deg); }
+  .expand { border: 0; background: none; padding: 4px; border-radius: 9999px; }
+  .expand:hover { background: var(--hover); }
+  .status { display: inline-flex; align-items: center; gap: 5px; font-size: 12px; color: var(--secondary); font-weight: 400; }
+  .status .d { width: 6px; height: 6px; border-radius: 50%; background: var(--green); }
+  .person[data-state="paused"] .status .d { background: var(--tertiary); }
+  /* 暂停分享：头像与名字变淡，用量照常(用量是这段时间真实发生的)。 */
+  .person[data-state="paused"] > .row > .avatar, .person[data-state="paused"] .who { opacity: .7; }
+  /* 明细与头像左缘对齐：16 + 展开按钮 20 + 间距 12 = 48px。 */
+  .breakdown { margin: 0 12px 14px 48px; padding: 12px; border: 1px solid var(--border); border-radius: 8px; background: var(--surface); }
+  .breakdown table { width: 100%; border-collapse: collapse; font-size: 12px; }
+  .breakdown th { text-align: left; font-weight: 500; color: var(--secondary); padding: 6px 0; border-bottom: 1px solid var(--border); }
+  .breakdown td { padding: 7px 0; border-bottom: 1px solid var(--border); }
+  .breakdown tr:last-child td { border-bottom: 0; }
+  .breakdown .num { text-align: right; font-variant-numeric: tabular-nums; }
+  .est { color: var(--tertiary); }
+  .empty { padding: 28px 16px; text-align: center; color: var(--secondary); }
+  .linkcode { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 12px; }
+
+  /* 应用窗口占位（受邀者 / 分享者收到弹窗时的背景） */
+  .appshell { display: flex; min-height: 640px; }
+  .appside { width: 232px; border-right: 1px solid var(--border); padding: 16px 12px; display: flex; flex-direction: column; gap: 10px; }
+  .appside .bar { height: 12px; }
+  .appmain { flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 16px; }
+  .composer { width: min(560px, 80%); height: 96px; border: 1px solid var(--border); border-radius: 16px; background: var(--card); }
+
+  /* 弹窗 */
+  .scrim { position: absolute; inset: 0; background: var(--scrim); backdrop-filter: blur(4px); display: flex; align-items: center; justify-content: center; padding: 16px; z-index: 10; }
+  .modal { width: min(460px, 100%); background: var(--card); border: 1px solid var(--border); border-radius: 12px; box-shadow: var(--shadow-menu); padding: 16px; }
+  .modal.narrow { width: min(400px, 100%); }
+  .modal h2 { margin: 0; font-size: 15px; font-weight: 500; }
+  .modal .desc { margin: 6px 0 0; color: var(--secondary); }
+  .modal .footer { display: flex; flex-direction: row-reverse; gap: 8px; margin-top: 16px; }
+  .idcard { display: flex; align-items: center; gap: 12px; margin-top: 14px; padding: 12px; border: 1px solid var(--border); border-radius: 12px; }
+  .idcard .nm { display: flex; align-items: center; gap: 8px; font-weight: 500; font-size: 14px; }
+  .idcard .sub { font-size: 12px; color: var(--secondary); margin-top: 1px; }
+  .facts { list-style: none; margin: 14px 0 0; padding: 0; display: flex; flex-direction: column; gap: 10px; }
+  .facts li { display: flex; gap: 10px; color: var(--text); line-height: 1.45; }
+  .facts li svg { color: var(--secondary); margin-top: 2px; }
+  .facts li span small { display: block; color: var(--secondary); font-size: 12px; }
+  .linkfield { display: flex; align-items: center; gap: 8px; margin-top: 14px; padding: 6px 6px 6px 12px; border: 1px solid var(--border); border-radius: 9999px; background: var(--surface); }
+  .linkfield input { flex: 1; min-width: 0; border: 0; background: transparent; outline: none; color: var(--secondary); font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 12px; }
+  .meta { margin-top: 10px; font-size: 12px; color: var(--secondary); display: flex; gap: 6px; flex-wrap: wrap; }
+  .callout { margin-top: 14px; padding: 10px 12px; border-radius: 8px; background: var(--surface); color: var(--secondary); font-size: 12px; line-height: 1.5; }
+  .state-center { text-align: center; padding: 8px 4px 0; }
+  .pairing { display: inline-flex; align-items: baseline; gap: 10px; margin: 2px 0 4px; padding: 8px 16px; border: 1px solid var(--border); border-radius: 12px; background: var(--surface); }
+  .pairing-label { font-size: 12px; color: var(--secondary); }
+  .pairing-code { font-size: 24px; font-weight: 500; letter-spacing: 6px; font-variant-numeric: tabular-nums; line-height: 1.2; }
+  .pairing-row { display: flex; align-items: center; gap: 14px; margin-top: 12px; }
+  .pairing-row .pairing { margin: 0; flex-shrink: 0; }
+  .pairing-hint { margin: 0; font-size: 12px; color: var(--secondary); line-height: 1.5; }
+  .pairing-inline { color: var(--text); font-weight: 500; letter-spacing: 1px; font-variant-numeric: tabular-nums; }
+  .state-center .ico { width: 40px; height: 40px; margin: 6px auto 12px; border-radius: 50%; background: var(--chip); display: flex; align-items: center; justify-content: center; }
+  .spinner { width: 16px; height: 16px; border: 2px solid var(--chip); border-top-color: var(--secondary); border-radius: 50%; animation: spin 900ms linear infinite; }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  @media (prefers-reduced-motion: reduce) { .spinner { animation: none; } .switch::after { transition: none; } }
+
+  /* 模型选择器 */
+  .pickerwrap { padding: 28px; display: flex; justify-content: center; }
+  .picker { width: 620px; max-width: 100%; background: var(--card); border: 1px solid var(--border); border-radius: 12px; box-shadow: var(--shadow-menu); overflow: hidden; }
+  .psearch { display: flex; align-items: center; gap: 10px; padding: 12px 14px; border-bottom: 1px solid var(--border); color: var(--secondary); font-size: 15px; }
+  .pbody { display: flex; min-height: 420px; }
+  .prail { width: 60px; border-right: 1px solid var(--border); padding: 10px 0; display: flex; flex-direction: column; align-items: center; gap: 6px; }
+  .prail .sep { width: 28px; height: 1px; background: var(--border); margin: 4px 0; }
+  .ritem { position: relative; width: 44px; height: 44px; border-radius: 10px; border: 0; background: transparent; display: flex; align-items: center; justify-content: center; color: var(--secondary); font-weight: 600; }
+  .ritem:hover { background: var(--hover); }
+  .ritem[aria-pressed="true"] { background: var(--cta-bg); color: var(--cta-fg); }
+  .ritem .sig { position: absolute; top: 7px; right: 6px; }
+  .plist { flex: 1; padding: 8px 10px; min-width: 0; }
+  .ghead { padding: 10px 10px 6px; font-size: 12px; color: var(--secondary); }
+  .ghead .from { color: var(--secondary); }
+  .mitem { display: flex; gap: 10px; padding: 8px 10px; border-radius: 8px; }
+  .mitem:hover { background: var(--hover); }
+  .mitem .mi { width: 18px; color: var(--secondary); font-weight: 600; font-size: 12px; padding-top: 2px; }
+  .mitem .mn { font-size: 15px; }
+  .mitem .md { font-size: 12px; color: var(--secondary); }
+  .mitem .eff { margin-left: auto; font-size: 12px; color: var(--secondary); white-space: nowrap; padding-top: 3px; }
+  .plist.paused .mitem { opacity: .45; pointer-events: none; }
+  .notice { display: flex; gap: 10px; align-items: flex-start; margin: 4px 10px 8px; padding: 10px 12px; border-radius: 8px; background: var(--surface); font-size: 12px; color: var(--secondary); }
+  .notice b { color: var(--text); font-weight: 500; display: block; font-size: 13px; }
+
+  /* Toast */
+  .toast { position: absolute; left: 50%; bottom: 20px; transform: translateX(-50%); z-index: 30; display: flex; align-items: center; gap: 8px; padding: 8px 14px; border-radius: 9999px; background: var(--card); border: 1px solid var(--border); box-shadow: var(--shadow-menu); font-size: 13px; }
+  .toast svg { color: var(--green); }
+
+  @media (max-width: 760px) {
+    .rail { display: none; }
+    .appside { display: none; }
+  }
+
+  /* ---------- 供应商组新增 ---------- */
+  .group-row { display: flex; align-items: center; gap: 12px; padding: 12px 20px; border-bottom: 1px solid var(--border); }
+  .group-row .copy { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+  .group-row .label { font-weight: 500; }
+  .group-row .desc { font-size: 12px; color: var(--tertiary); line-height: 1.45; }
+  .group-row .summary { color: var(--secondary); font-size: 13px; white-space: nowrap; }
+  .member .src { font-size: 12px; color: var(--secondary); font-weight: 400; }
+  /* 上限是设置、运行数是状态：上限只出现在这个下拉里，运行数只出现在状态行。 */
+  .member .sel {
+    display: inline-flex; align-items: center; gap: 8px; height: 36px; padding: 0 12px; white-space: nowrap;
+    border: 1px solid var(--border); border-radius: 9999px; font-size: 13px; color: var(--text);
+  }
+  .member .run { font-variant-numeric: tabular-nums; }
+  .member .avatar { color: var(--secondary); }
+  /* 本机不能移出组，用等宽占位保持右侧成列。 */
+  .member .ph { width: 28px; flex-shrink: 0; }
+  .member[data-state="off"] .who { opacity: .6; }
+  .status .d.gray { background: var(--tertiary); }
+  .strategy { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; padding: 12px 16px; border-top: 1px solid var(--border); font-size: 12px; color: var(--secondary); }
+  .strategy .grow { flex: 1; }
+  .usage-head { flex-wrap: wrap; }
+  .tabs { display: inline-flex; gap: 2px; padding: 3px; border: 1px solid var(--border); border-radius: 9999px; margin-top: 12px; }
+  .tabs button { border: 0; background: transparent; border-radius: 9999px; padding: 4px 14px; min-height: 28px; color: var(--secondary); font-size: 13px; }
+  .tabs button[aria-pressed="true"] { background: var(--chip); color: var(--text); font-weight: 500; }
+  .checklist { margin-top: 12px; border: 1px solid var(--border); border-radius: 12px; }
+  .check { display: flex; align-items: center; gap: 12px; padding: 10px 12px; cursor: pointer; }
+  .check + .check { border-top: 1px solid var(--border); }
+  .check .box { width: 16px; height: 16px; border-radius: 4px; border: 1px solid var(--border); background: var(--card); display: inline-flex; align-items: center; justify-content: center; flex-shrink: 0; }
+  .check[data-checked="true"] .box { background: var(--cta-bg); border-color: var(--cta-bg); color: var(--cta-fg); }
+  .check[aria-disabled="true"] { opacity: .55; cursor: default; }
+  .check .t { flex: 1; min-width: 0; }
+  .check .t small { display: block; color: var(--secondary); font-size: 12px; }
+  .callout.warn { color: var(--text); }
+  .callout b { font-weight: 500; }
+  .taskhead { display: flex; align-items: center; gap: 10px; padding: 10px 16px; border-bottom: 1px solid var(--border); }
+  .taskhead .t { font-weight: 500; flex: 1; }
+  .taskhead .where { font-size: 12px; color: var(--secondary); display: inline-flex; align-items: center; gap: 6px; }
+  .chat { padding: 16px 20px; display: flex; flex-direction: column; gap: 12px; min-height: 180px; }
+  .bubble { align-self: flex-end; max-width: 70%; padding: 8px 12px; border-radius: 12px; background: var(--chip); }
+  .answer { max-width: 80%; line-height: 1.6; }
+  .banner { display: flex; gap: 10px; align-items: flex-start; margin: 0 20px 16px; padding: 12px 14px; border: 1px solid var(--border); border-radius: 12px; background: var(--card); }
+  .banner .copy { flex: 1; }
+  .banner b { font-weight: 500; display: block; }
+  .banner small { color: var(--secondary); font-size: 12px; }
+  .banner .actions { display: flex; gap: 6px; flex-wrap: wrap; justify-content: flex-end; }
+  .activity { display: flex; align-items: center; gap: 8px; font-size: 12px; color: var(--secondary); }
+  .activity::before, .activity::after { content: ''; flex: 1; height: 1px; background: var(--border); }
+  .reasons { margin: 6px 0 0; padding: 0; list-style: none; font-size: 12px; color: var(--secondary); display: grid; gap: 2px; }
+  .reasons b { display: inline; color: var(--text); font-weight: 500; }
+  .banner small a { color: var(--text); text-underline-offset: 2px; }
+  .split { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; padding: 20px; }
+  .split > div { min-width: 0; }
+  .caption { font-size: 12px; color: var(--secondary); margin: 0 0 8px; }
+  .framecard { background: var(--card); border: 1px solid var(--border); border-radius: 12px; overflow: hidden; }
+  .framecard .plist { padding: 8px 10px; }
+  @media (max-width: 860px) { .split { grid-template-columns: 1fr; } }
+
+  /* ---------- 远程与分享页：用量与分享合并(2026-10-16) ---------- */
+  .sdesc { margin: -2px 0 12px; font-size: 12px; line-height: 1.5; color: var(--secondary); }
+  .summary { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 8px; margin-bottom: 12px; }
+  .summary div { display: flex; flex-direction: column; gap: 2px; padding: 8px 12px; border-radius: 8px; background: var(--chip); }
+  .summary b { font-size: 16px; font-weight: 500; font-variant-numeric: tabular-nums; }
+  .summary span { font-size: 12px; color: var(--secondary); }
+  /* 窄窗口整行换行，用量与 ··· 不藏起来(与客户端一致)。 */
+  .person > .row { flex-wrap: wrap; }
+  .person > .row:hover { background: var(--hover); }
+  /* 名字旁的「你 / 分享的人」是普通的次要文字，不是标签胶囊(与客户端一致)。 */
+  .row .line1 .tag { height: auto; padding: 0; border-radius: 0; background: none; font-size: 12px; font-weight: 400; color: var(--secondary); white-space: normal; }
+  .person .usage { min-width: 108px; }
+  .person .usage .bar, .breakdown .bar { display: block; height: 4px; border-radius: 9999px; background: var(--bar); overflow: hidden; }
+  .person .usage .bar { width: 64px; margin: 6px 0 0 auto; }
+  .person .usage .bar i, .breakdown .bar i { display: block; height: 100%; border-radius: 9999px; background: var(--secondary); }
+  /* 有分享的人时每行都留 ··· 一列：你自己那一行放等宽占位，右侧用量才能对齐成列。 */
+  .person .ph { width: 28px; height: 28px; flex-shrink: 0; }
+  .reshares { display: flex; flex-direction: column; gap: 6px; padding: 0 16px 12px 92px; }
+  .reshares .t { font-size: 12px; color: var(--tertiary); }
+  .reshares .item { display: flex; align-items: center; gap: 8px; }
+  .reshares .item .nm { flex: 1; min-width: 0; }
+  .reshares .item small { margin-left: 8px; font-size: 12px; color: var(--secondary); }
+  .reshares .item[data-state="rejected"] .avatar, .reshares .item[data-state="rejected"] .nm { opacity: .7; }
+  .avatar.sm { width: 28px; height: 28px; font-size: 12px; }
+  .btn.secondary.danger-tone { color: var(--danger); }
+  .breakdown tbody + tbody { border-top: 1px solid var(--border); }
+  .breakdown td { border-bottom: 0; padding: 4px 0; }
+  .breakdown tr.computer td { padding-top: 10px; font-weight: 500; }
+  .breakdown tr.model td { color: var(--secondary); }
+  .breakdown tr.model td:first-child { padding-left: 22px; }
+  .breakdown tbody.unused tr.computer td { color: var(--tertiary); font-weight: 400; }
+  .breakdown .cname { display: flex; align-items: center; gap: 8px; }
+  .breakdown .cname small { font-size: 12px; font-weight: 400; color: var(--secondary); }
+  .breakdown .pct { margin-left: auto; padding-left: 8px; display: inline-flex; align-items: center; gap: 6px; font-weight: 400; color: var(--secondary); }
+  .breakdown .pct .bar { width: 48px; }
+  .breakdown .est { margin: 8px 0 0; font-size: 12px; }
+  .pair { font-weight: 500; letter-spacing: .06em; font-variant-numeric: tabular-nums; color: var(--text); }
+  .menu { position: absolute; z-index: 20; min-width: 160px; padding: 4px; border-radius: 12px; background: var(--card); border: 1px solid var(--border); box-shadow: var(--shadow-menu); }
+  .menu button { display: flex; width: 100%; align-items: center; gap: 10px; padding: 6px 8px; border: 0; border-radius: 8px; background: none; color: var(--text); font-size: 14px; text-align: left; }
+  .menu button:hover, .menu button:focus-visible { background: var(--hover); outline: none; }
+  .menu button.danger { color: var(--danger); }
+  /* 组内电脑：点名称展开这台的配额；分享来的电脑展开后逐人列出主人是否同意(转分享)。 */
+  .member-wrap + .member-wrap { border-top: 1px solid var(--border); }
+  .namebtn { display: block; padding: 0; border: 0; background: none; color: inherit; font: inherit; text-align: left; }
+  .namebtn .line1 svg { color: var(--secondary); transition: transform 150ms; }
+  .namebtn[aria-expanded="true"] .line1 svg { transform: rotate(90deg); }
+  .mdetail { display: flex; flex-direction: column; gap: 6px; padding: 0 16px 12px 60px; font-size: 12px; color: var(--secondary); }
+  .mdetail p { margin: 0; }
+  .mdetail .rs-title { font-weight: 500; }
+  .mdetail .guest { display: flex; align-items: center; gap: 8px; font-size: 13px; color: var(--text); }
+  .mdetail .guest .nm { flex: 1; }
+  .mdetail .guest[data-state="pending"] .avatar, .mdetail .guest[data-state="pending"] .nm { opacity: .7; }
+  @media (prefers-reduced-motion: reduce) { .namebtn .line1 svg, .chev { transition: none; } }
+  @media (max-width: 760px) { .summary { grid-template-columns: repeat(2, minmax(0, 1fr)); } .reshares, .mdetail { padding-left: 16px; } .breakdown { margin-left: 16px; } }
+</style>
+</head>
+<body>
+<header class="reviewbar">
+  <strong>供应商组 · 交互设计稿</strong>
+  <div class="seg" role="group" aria-label="场景">
+    <button type="button" data-scene="settings" aria-pressed="true">1 供应商详情</button>
+    <button type="button" data-scene="page" aria-pressed="false">2 远程与分享页</button>
+    <button type="button" data-scene="add" aria-pressed="false">3 添加电脑</button>
+    <button type="button" data-scene="others" aria-pressed="false">4 任务与其他电脑</button>
+    <button type="button" data-scene="apply" aria-pressed="false">5 受邀者申请</button>
+  </div>
+  <span class="spacer"></span>
+  <div class="seg" role="group" aria-label="主题">
+    <button type="button" data-theme="light" aria-pressed="true">浅色</button>
+    <button type="button" data-theme="dark" aria-pressed="false">深色</button>
+  </div>
+</header>
+<div class="variantbar" id="variantbar"></div>
+<p class="note" id="scene-note"></p>
+
+<main class="stage">
+  <div class="window" id="window">
+
+    <!-- ===== 1 供应商详情 ===== -->
+    <section class="page" data-page="settings">
+      <h1>模型供应商</h1>
+      <p class="lead">选择模型时的来源。每个来源提供它支持的模型与计费方式，可按任务分别切换。</p>
+      <div class="panel">
+        <aside class="rail" aria-label="供应商">
+          <div class="railcap">拖动排序</div>
+          <div class="prov"><span class="mark">C</span><span class="name">Cindy AI</span><span class="count">70 个模型</span><span class="ok"></span></div>
+          <div class="prov active"><span class="mark">A</span><span class="name">Anthropic</span><span class="count">4 个模型</span><span class="ok"></span></div>
+          <div class="prov"><span class="mark">O</span><span class="name">OpenAI</span><span class="count">16 个模型</span><span class="ok"></span></div>
+        </aside>
+        <div class="detail">
+          <div class="identity">
+            <span class="mark">A</span>
+            <div style="flex:1"><div class="t">Anthropic</div><div class="muted">Claude Max 订阅 · 本机 Claude Code 登录</div></div>
+            <span class="muted">✓ 已连接</span>
+          </div>
+          <div class="remote-row">
+            <div class="copy">
+              <span class="label">允许被远程调用</span>
+              <span class="desc">开启后，你的其他电脑和你分享的人可以用这个供应商的模型。</span>
+            </div>
+            <div class="ctrls">
+              <span class="tipwrap">
+                <button type="button" class="icon-btn" data-goto="page" aria-label="远程与分享">
+                  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M22 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>
+                </button>
+                <span class="tip" role="tooltip">远程与分享</span>
+              </span>
+              <button type="button" class="switch" role="switch" aria-checked="true" aria-label="允许被远程调用"></button>
+            </div>
+          </div>
+          <div class="group-row highlight" id="group-row">
+            <div class="copy">
+              <span class="label">供应商组</span>
+              <span class="desc" id="group-desc"></span>
+            </div>
+            <span class="summary" id="group-summary"></span>
+            <button type="button" class="btn secondary sm" data-goto="page" id="group-btn"></button>
+          </div>
+          <div class="models">
+            <div class="muted" style="font-size:12px; margin-bottom:4px">ANTHROPIC 4</div>
+            <div class="modelrow"><span class="n">Claude Opus 5.5</span><span class="switch" aria-checked="true"></span></div>
+            <div class="modelrow"><span class="n">Claude Fable 5.1</span><span class="switch" aria-checked="true"></span></div>
+            <div class="modelrow"><span class="n">Claude Sonnet 5</span><span class="switch" aria-checked="true"></span></div>
+            <div class="modelrow"><span class="n">Claude Haiku 4.5</span><span class="switch" aria-checked="true"></span></div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ===== 2 远程与分享页 ===== -->
+    <section class="page" data-page="page" hidden>
+      <button type="button" class="back" data-goto="settings">
+        <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M10 3 5 8l5 5"/></svg>
+        模型供应商
+      </button>
+      <!-- 标题已经说明这页是什么；这台电脑的名字由组内本机那一行承载。生成分享链接放在标题右侧，分享前要知道的在申请弹窗的同意说明里。 -->
+      <div class="mhead" style="align-items:center">
+        <span class="mark" style="width:36px;height:36px;border-radius:12px">A</span>
+        <div class="grow">
+          <h1>Anthropic · 远程与分享</h1>
+        </div>
+        <button type="button" class="btn cta sm">生成分享链接</button>
+      </div>
+
+      <!-- 待处理紧跟标题：新的分享申请，以及别人想经他自己的供应商组转用你的供应商(转分享，逐人同意)。 -->
+      <div class="section" id="pending-wrap">
+        <h3 class="section-title">待处理</h3>
+        <div class="card" id="pending"></div>
+      </div>
+
+      <div class="section">
+        <h3 class="section-title">供应商组 <span class="count" id="member-count"></span><span class="grow"></span>
+          <button type="button" class="btn primary sm" data-open-dialog="add" data-add-tab="mine">添加电脑</button>
+        </h3>
+        <div class="card">
+          <div id="members"></div>
+          <div class="strategy">
+            <span>组策略</span>
+            <span class="seg" role="group" aria-label="组策略">
+              <button type="button" data-strategy="least" aria-pressed="true">最少占用</button>
+              <button type="button" data-strategy="round" aria-pressed="false">轮询</button>
+              <button type="button" data-strategy="order" aria-pressed="false">按顺序</button>
+              <button type="button" data-strategy="weight" aria-pressed="false">按权重</button>
+            </span>
+            <span class="grow"></span>
+            <span id="strategy-desc"></span>
+          </div>
+        </div>
+        <p class="est" style="margin:8px 0 0;font-size:12px">这台电脑上的任务，Agent 在被选中的电脑上运行</p>
+      </div>
+
+      <div class="section">
+        <h3 class="section-title usage-head">用量<span class="grow"></span>
+          <span class="seg" role="group" aria-label="用量时间段">
+            <button type="button" data-range="7d" aria-pressed="false">近 7 天</button>
+            <button type="button" data-range="month" aria-pressed="true">本月</button>
+            <button type="button" data-range="all" aria-pressed="false">全部</button>
+          </span>
+        </h3>
+        <p class="sdesc">按人统计 Anthropic 的用量，展开后按组内每台电脑分开。你自己的用量从这次更新后开始记录。</p>
+        <div class="summary" id="usage-summary"></div>
+        <!-- 2026-10-16：分享的人不在「分享」里另列一份——状态、加入时间、关闭与删除都在这个人的用量这一行。 -->
+        <div class="card" id="usage"></div>
+      </div>
+    </section>
+
+    <!-- ===== 4 任务与其他电脑 ===== -->
+    <section data-page="others" hidden>
+      <div class="split">
+        <div>
+          <p class="caption">这台电脑上的任务：头部写明实际运行的电脑</p>
+          <div class="framecard">
+            <div class="taskhead">
+              <span class="t">整理本周发布说明</span>
+              <span class="where">
+                <svg width="12" height="12" viewBox="0 0 10 10" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" aria-hidden="true"><circle cx="2" cy="8" r="1" fill="currentColor" stroke="none"/><path d="M2 4.5A3.5 3.5 0 0 1 5.5 8"/></svg>
+                <span id="where-text">在 Magi's Mac Mini 上运行 · 由供应商组分配</span>
+              </span>
+            </div>
+            <div class="chat">
+              <div class="bubble">把这周合进 main 的改动整理成发布说明</div>
+              <div class="answer" id="answer">好的，我先看一下这周的提交记录…</div>
+              <div class="activity" id="switched" hidden>Magi's Mac Mini 撞到用量上限，已换到 Lizi's MacBook Pro 继续</div>
+              <div class="answer" id="answer2" hidden>接着整理：剩下 5 个合并请求里，有 2 个是界面改动…</div>
+            </div>
+            <div class="banner" id="allfail" hidden>
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" aria-hidden="true" style="margin-top:2px;color:var(--secondary)"><circle cx="12" cy="12" r="9"/><path d="M12 8v5M12 16h.01"/></svg>
+              <div class="copy"><b>供应商组里的电脑都试过了，暂时都不可用</b>
+                <ul class="reasons">
+                  <li><b>Magi's Mac Mini</b> · 撞到用量上限，约 15:20 恢复</li>
+                  <li><b>Lizi's MacBook Pro</b> · 撞到用量上限，约 16:05 恢复</li>
+                  <li><b>本机</b> · 撞到用量上限，约 17:00 恢复</li>
+                  <li><b>Studio-PC</b> · 供应商登录已失效</li>
+                  <li><b>Office-iMac</b> · 不在线</li>
+                </ul>
+                <small>将于 15:20 在 Magi's Mac Mini 上自动继续 · <a href="#" onclick="return false">取消</a></small>
+              </div>
+              <div class="actions"><button type="button" class="btn secondary sm">换成其他模型</button></div>
+            </div>
+          </div>
+        </div>
+        <div>
+          <p class="caption">同账号的其他电脑：模型列表里的远程供应商</p>
+          <div class="framecard">
+            <div class="psearch">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg>
+              搜索模型…
+            </div>
+            <div class="plist">
+              <div class="ghead">Anthropic · Home Mac Studio · 供应商组</div>
+              <div class="mitem"><span class="mi">A</span><div><div class="mn">Opus 5.5</div><div class="md">适合复杂分析、编程与细致写作。</div></div></div>
+              <div class="mitem"><span class="mi">A</span><div><div class="mn">Sonnet 5</div><div class="md">适合日常问答、写作与编程。</div></div></div>
+              <div class="mitem"><span class="mi">A</span><div><div class="mn">Haiku 4.5</div><div class="md">适合简短问答、摘要与短文写作。</div></div></div>
+            </div>
+          </div>
+          <p class="caption" style="margin-top:12px">分享的人看到的标题不变：「Anthropic · Home Mac Studio · 来自 Lizi 的分享」。</p>
+        </div>
+      </div>
+    </section>
+
+    <!-- ===== 应用窗口占位（弹窗背景） ===== -->
+    <section data-page="app" hidden>
+      <div class="appshell">
+        <aside class="appside" aria-hidden="true">
+          <div class="bar" style="width:60%"></div><div class="bar" style="width:85%"></div><div class="bar" style="width:70%"></div>
+          <div class="bar" style="width:50%;margin-top:14px"></div><div class="bar" style="width:80%"></div><div class="bar" style="width:65%"></div>
+        </aside>
+        <div class="appmain">
+          <div class="muted" style="font-size:18px" aria-hidden="true">有什么要做的？</div>
+          <div class="composer" aria-hidden="true"></div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ===== 弹窗层 ===== -->
+    <div class="scrim" id="scrim" hidden>
+      <div class="modal" data-dialog="add" role="dialog" aria-modal="true" aria-labelledby="add-title" hidden>
+        <h2 id="add-title">把电脑加入 Anthropic 的供应商组</h2>
+        <div class="tabs" role="group" aria-label="来源" id="add-tabs">
+          <button type="button" data-add-tab="mine" aria-pressed="true">已经能用的</button>
+          <button type="button" data-add-tab="link" aria-pressed="false">分享链接</button>
+        </div>
+
+        <div data-add-state="mine">
+          <p class="desc">这台电脑已经能用的 Anthropic：你的其他电脑和别人分享给你的，与模型列表里的远程供应商一致。勾选即可加入，不需要再申请。</p>
+          <div class="checklist" id="mine-list"></div>
+          <div class="footer">
+            <button type="button" class="btn cta" data-add-done="mine">加入组</button>
+            <button type="button" class="btn secondary" data-close-dialog>取消</button>
+          </div>
+        </div>
+
+        <div data-add-state="link" hidden>
+          <p class="desc">粘贴其他账号的电脑生成的 Anthropic 分享链接。对方同意后，那台电脑加入这个组。</p>
+          <div class="linkfield"><input type="text" value="https://device-link.cindy.com.cn/provider-share/join#D6gVcDkmM7JQNp…" aria-label="分享链接" readonly /></div>
+          <div class="idcard">
+            <span class="avatar lg" id="preview-avatar">M</span>
+            <div><div class="nm" id="preview-name">Magi</div><div class="sub" id="preview-sub">Anthropic · Magi's Mac Mini</div></div>
+          </div>
+          <div class="callout" id="link-callout"></div>
+          <div class="footer">
+            <button type="button" class="btn cta" id="send-request" data-add-go="wait">发送申请</button>
+            <button type="button" class="btn secondary" data-close-dialog>取消</button>
+          </div>
+        </div>
+
+        <div data-add-state="wait" hidden>
+          <div class="state-center">
+            <div class="ico"><span class="spinner" aria-hidden="true"></span></div>
+            <h2>正在等待 Magi 同意…</h2>
+            <div class="pairing" aria-label="配对码 6 0 8 3"><span class="pairing-label">配对码</span><span class="pairing-code">6083</span></div>
+            <p class="desc">Magi 同意后，Magi's Mac Mini 会出现在组里。申请 24 小时内未处理会自动失效。</p>
+          </div>
+          <div class="footer">
+            <button type="button" class="btn secondary" data-close-dialog>后台等待</button>
+            <button type="button" class="btn quiet" data-close-dialog>撤回申请</button>
+          </div>
+        </div>
+      </div>
+
+      <div class="modal" data-dialog="apply" role="dialog" aria-modal="true" aria-labelledby="apply-title" hidden>
+        <h2 id="apply-title">Lizi 想把 Anthropic 分享给你</h2>
+        <div class="idcard">
+          <span class="avatar lg">L</span>
+          <div><div class="nm">Lizi</div><div class="sub">Anthropic · Home Mac Studio</div></div>
+        </div>
+        <ul class="facts">
+          <li><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="4" width="18" height="12" rx="2"/><path d="M8 20h8M12 16v4"/></svg>
+            <span>Agent 在 Lizi 的电脑或 Lizi 安排的其他电脑上运行<small>用量计入实际运行那台电脑的 Anthropic，Lizi 能看到你的用量</small></span></li>
+          <li><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg>
+            <span>你的项目文件和命令仍在你自己的电脑上执行<small>由你的任务权限把关</small></span></li>
+          <li><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7S2 12 2 12z"/><circle cx="12" cy="12" r="3"/></svg>
+            <span>对话内容和 Agent 读取的文件内容会经过 Lizi 的电脑，并保存在实际运行任务的那台电脑上<small>Lizi 和需要同意你使用的其他电脑主人只会看到你的昵称和头像</small></span></li>
+          <li><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>
+            <span>发送申请后，需要 Lizi 同意才会生效<small>Lizi 可以随时关闭或删除这个分享</small></span></li>
+        </ul>
+        <div class="footer">
+          <button type="button" class="btn cta" data-close-dialog>发送申请</button>
+          <button type="button" class="btn secondary" data-close-dialog>取消</button>
+        </div>
+      </div>
+
+      <div class="modal narrow" data-dialog="remove" role="alertdialog" aria-modal="true" aria-labelledby="remove-title" hidden>
+        <h2 id="remove-title"></h2>
+        <p class="desc" id="remove-desc"></p>
+        <div class="footer">
+          <button type="button" class="btn danger" id="remove-confirm">删除分享</button>
+          <button type="button" class="btn secondary" data-close-dialog>取消</button>
+        </div>
+      </div>
+    </div>
+
+    <div class="menu" id="menu" role="menu" hidden></div>
+
+    <div class="toast" id="toast" role="status" hidden>
+      <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m3 8 3 3 7-7"/></svg>
+      <span id="toast-text"></span>
+    </div>
+  </div>
+</main>
+
+<script>
+  const $ = (s, r = document) => r.querySelector(s);
+  const $$ = (s, r = document) => [...r.querySelectorAll(s)];
+
+  /* ---------- 模拟数据 ---------- */
+  let hasGroup = true;
+  /*
+   * 组内电脑。分享来的电脑只用分享者的昵称称呼(「Magi 的电脑」)，不写对方的电脑名。
+   * reshare：这台的主人是否同意你分享出去的人经组用它(转分享，provider-sharing §4.3)；没同意的人，任务不会分到这台。
+   */
+  const members = [
+    /* state 为 on 时状态词由运行数决定(空闲 / N 个任务运行中)，不再单独写「可用」。 */
+    { id: 'self', name: '本机', sub: 'Home Mac Studio', state: 'on', running: 1, limit: 4, quota: '5 小时：已用 38%，16:20 重置 · 每周：已用 52%，周一重置' },
+    { id: 'mbp', name: "Lizi's MacBook Pro", sub: '我的其他电脑', state: 'on', running: 0, limit: 4, quota: '5 小时：已用 12%，17:05 重置 · 每周：已用 31%，周三重置' },
+    { id: 'magi', name: 'Magi 的电脑', sub: '来自 Magi 的分享', owner: 'Magi', state: 'on', running: 2, limit: 4,
+      guests: [['王', '王一', 'approved'], ['K', 'Kai Chen', 'pending'], ['M', 'Mia', 'approved']] },
+    { id: 'ryo', name: 'Ryo 的电脑', sub: '来自 Ryo 的分享', owner: 'Ryo', state: 'cool', running: 0, limit: 4, status: '冷却中 · 撞到用量上限，约 15:20 恢复',
+      guests: [['王', '王一', 'approved'], ['K', 'Kai Chen', 'approved'], ['M', 'Mia', 'approved']] },
+    { id: 'imac', name: 'Office-iMac', sub: '我的其他电脑', state: 'off', running: 0, limit: 2, status: '不在线' },
+  ];
+  const strategyDesc = {
+    least: '给最闲的那台',
+    round: '依次轮流',
+    order: '排前面的优先',
+    weight: '按权重比例',
+  };
+  /*
+   * 「用量」按人：你自己在第一行，然后是分享的人。每人在每台组内电脑上的用量：[模型, 消息, 输入, 输出, 估算金额]，
+   * 以本月为基准，近 7 天 / 全部按比例缩放。member：分享的人这一行同时管分享本身(2026-10-16)。
+   * reshares：这个人把你的供应商放进他自己的组、又分享给了别人，你处理过的那几位(已同意可撤回，未同意可改为同意)。
+   */
+  let people = [
+    { key: 'self', name: 'Lizi', tag: '你', avatar: 'L', last: '14 分钟前', usage: {
+      self: [['Claude Opus 5.5', 52, 880000, 120000, 21.4], ['Claude Sonnet 5', 30, 300000, 52000, 2.6]],
+      mbp: [['Claude Opus 5.5', 41, 620000, 90000, 15.2]],
+      magi: [['Claude Sonnet 5', 12, 160000, 22000, 1.4]] } },
+    { key: 'wang', name: '王一', tag: '分享的人', avatar: '王', last: '刚刚',
+      member: { status: 'active', running: 1, joined: '9月28日' }, usage: {
+      self: [['Claude Sonnet 5', 40, 450000, 61000, 3.8]],
+      magi: [['Claude Sonnet 5', 24, 260000, 40000, 2.1], ['Claude Haiku 4.5', 12, 88000, 15000, 0.2]] } },
+    { key: 'kai', name: 'Kai Chen', tag: '分享的人', avatar: 'K', last: '3 天前',
+      member: { status: 'active', running: 0, joined: '10月2日', reshares: [
+        { id: 'carol', avatar: 'C', name: 'Carol', state: 'approved' },
+        { id: 'erin', avatar: 'E', name: 'Erin', state: 'rejected' },
+      ] }, usage: { ryo: [['Claude Haiku 4.5', 22, 150000, 31000, 0.4]] } },
+    { key: 'mia', name: 'Mia', tag: '分享的人', avatar: 'M', last: null,
+      member: { status: 'paused', running: 0, joined: '10月8日' }, usage: {} },
+  ];
+  let pending = [
+    { id: 'dana', kind: 'apply', avatar: 'D', name: 'Dana', code: '4827', time: '2 分钟前' },
+    { id: 'frank', kind: 'reshare', avatar: 'F', name: 'Frank', owner: 'Kai Chen', time: '5 分钟前' },
+  ];
+  const rangeScale = { '7d': 0.3, month: 1, all: 2.6 };
+  let range = 'month', strategy = 'least', shareVariant = 'shared';
+  const open = new Set();
+  const openMembers = new Set();
+
+  const fmtTok = (n) => n >= 1e6 ? (n / 1e6).toFixed(2) + 'M' : n > 0 ? Math.round(n / 1000) + 'K' : '0';
+  const fmtUsd = (n) => '$' + n.toFixed(2);
+  const check = '<svg width="11" height="11" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m3 8 3 3 7-7"/></svg>';
+  /* 组内电脑用设备图标；人像头像留给「用量」与「分享」里真实的人。 */
+  const monitor = '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="2" y="3" width="20" height="14" rx="2"/><path d="M8 21h8m-4-4v4"/></svg>';
+  const dots = '<svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><circle cx="5" cy="12" r="1.6"/><circle cx="12" cy="12" r="1.6"/><circle cx="19" cy="12" r="1.6"/></svg>';
+  const chevR = '<svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m6 3 5 5-5 5"/></svg>';
+  const pauseIco = '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="10"/><path d="M10 15V9m4 6V9"/></svg>';
+  const playIco = '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="10"/><path d="m10 8 6 4-6 4z"/></svg>';
+  const trashIco = '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 6h18M8 6V4h8v2m-9 0 1 14h8l1-14"/></svg>';
+  const chevron = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m6 9 6 6 6-6"/></svg>';
+
+  const sharing = () => shareVariant === 'shared';
+
+  /* 转分享：这台的主人对你分享出去的人逐人同意的情况，一句话接在状态后面，不另占一行。 */
+  function reshareSummary(m) {
+    const waiting = m.guests.filter((g) => g.at(2) === 'pending').length;
+    const rejected = m.guests.filter((g) => g.at(2) === 'rejected').length;
+    if (waiting) return `${waiting} 位分享的人等待 ${m.owner} 同意`;
+    if (rejected) return `${m.owner} 未同意 ${rejected} 位分享的人`;
+    return '分享的人可以用';
+  }
+
+  function renderMembers() {
+    $('#member-count').textContent = members.length + ' 台';
+    $('#members').innerHTML = members.map((m) => {
+      const dot = m.state === 'on' ? '<span class="d"></span>' : '<span class="d gray"></span>';
+      // 状态词本身报负载：每行永远看得出这台现在跑了几个，不靠「>0 才显示」去推断。
+      const run = `<span class="run">${m.running} 个任务运行中</span>`;
+      const load = m.state === 'on'
+        ? (m.running > 0 ? run : '空闲')
+        : `${m.status}${m.running > 0 ? ` · ${run}` : ''}`;
+      // 只在这个供应商分享给了别人时才说转分享(没有分享的人就无所谓同不同意)。
+      const reshare = m.guests && sharing() ? ` · <span>${reshareSummary(m)}</span>` : '';
+      // 参与分配对所有来源都是同一个开关(同一个 paused 布尔值)，不按来源分叉成「开关 / 暂停分配按钮」。
+      // 「移出组」罕用且不可逆，收进行内 ··· 菜单；本机不能移出，留等宽占位。
+      const more = m.id === 'self'
+        ? '<span class="ph" aria-hidden="true"></span>'
+        : `<button type="button" class="icon-btn" aria-label="${m.name} 的更多操作">${dots}</button>`;
+      const isOpen = openMembers.has(m.id);
+      const guests = m.guests && sharing() ? `
+          <p class="rs-title">分享的人能否用这台电脑</p>
+          <p>需要 ${m.owner} 逐人同意。没同意的人，任务不会分到这台电脑。</p>
+          ${m.guests.map(([a, n, st]) => `<div class="guest" data-state="${st}"><span class="avatar sm">${a}</span><span class="nm">${n}</span><span class="status"><span class="d${st === 'approved' ? '' : ' gray'}"></span>${{ approved: '已同意', pending: '等待同意', rejected: '未同意' }[st]}</span></div>`).join('')}` : '';
+      const detail = !isOpen ? '' : `
+        <div class="mdetail" id="mdetail-${m.id}">
+          <p>${m.guests ? '别人分享的电脑不显示配额' : m.state === 'off' ? '不在线，读不到配额' : m.quota}</p>${guests}
+        </div>`;
+      return `
+      <div class="member-wrap">
+        <div class="row member" data-state="${m.state}">
+          <span class="avatar" aria-hidden="true">${monitor}</span>
+          <div class="who">
+            <button type="button" class="namebtn" data-member-toggle="${m.id}" aria-expanded="${isOpen}" aria-controls="mdetail-${m.id}">
+              <span class="line1">${m.name} <span class="src">${m.sub}</span>${chevR}</span>
+            </button>
+            <div class="line2"><span class="status">${dot}${load}</span>${reshare}</div>
+          </div>
+          <div class="actions">
+            <span class="sel">上限 ${m.limit}${chevron}</span>
+            <button type="button" class="switch" role="switch" aria-checked="${m.state !== 'off'}" aria-label="给 ${m.name} 分配任务"></button>
+            ${more}
+          </div>
+        </div>${detail}
+      </div>`;
+    }).join('');
+    $('#strategy-desc').textContent = strategyDesc[strategy];
+  }
+
+  const sumModels = (models) => models.reduce((a, r) => ({ turns: a.turns + r[1], input: a.input + r[2], output: a.output + r[3], usd: a.usd + r[4] }), { turns: 0, input: 0, output: 0, usd: 0 });
+  const scaled = (models) => models.map((r) => [r[0], ...[r[1], r[2], r[3]].map((v) => Math.round(v * rangeScale[range])), r[4] * rangeScale[range]]);
+
+  function renderUsage() {
+    const list = sharing() ? people : people.filter((p) => !p.member);
+    const rows = list.map((p) => {
+      const byComputer = members.map((m) => [m, scaled(p.usage[m.id] || [])]);
+      const all = byComputer.flatMap(([, models]) => models);
+      const t = sumModels(all);
+      return { p, byComputer, tokens: t.input + t.output, usd: t.usd, models: all };
+    });
+    const total = rows.reduce((sum, r) => sum + r.tokens, 0);
+    const usd = rows.reduce((sum, r) => sum + r.usd, 0);
+    const usedParties = rows.filter((r) => r.tokens > 0).length;
+    const modelCount = new Set(rows.flatMap((r) => r.models.map((m) => m[0]))).size;
+    $('#usage-summary').innerHTML = [[fmtTok(total), '总用量'], [fmtUsd(usd), '估算金额'], [usedParties, '使用方'], [modelCount, '模型']]
+      .map(([v, l]) => `<div><b>${v}</b><span>${l}</span></div>`).join('');
+    // 有分享的人时每行都留 ··· 一列，右侧用量才能对齐成列；只有你自己时不留。
+    const actionColumn = rows.some((r) => r.p.member);
+    $('#usage').innerHTML = rows.map(({ p, byComputer, tokens, usd: amount }) => {
+      const isOpen = open.has(p.key);
+      const m = p.member;
+      const usedOn = byComputer.filter(([, models]) => models.length).length;
+      const last = p.last ? `最近使用：${p.last}` : '还未使用';
+      const status = !m ? '' : `<span class="status"><span class="d${m.status === 'paused' ? ' gray' : ''}"></span>${
+        m.status === 'paused' ? '已暂停' : m.running > 0 ? `正常 · ${m.running} 个任务运行中` : '正常'}</span>`;
+      const share = tokens && total ? Math.max(3, Math.round((tokens / total) * 100)) : 0;
+      const more = !actionColumn ? ''
+        : m ? `<button type="button" class="icon-btn" data-menu="${p.key}" aria-haspopup="menu" aria-label="${p.name} 的更多操作">${dots}</button>`
+          : '<span class="ph" aria-hidden="true"></span>';
+      const reshares = !(m && m.reshares && m.reshares.length) ? '' : `
+        <div class="reshares">
+          <span class="t">经 ${p.name} 的供应商组使用</span>
+          ${m.reshares.map((r) => `<div class="item" data-state="${r.state}">
+            <span class="avatar sm">${r.avatar}</span>
+            <span class="nm">${r.name}<small>${r.state === 'approved' ? '已同意' : '未同意'}</small></span>
+            <button type="button" class="btn secondary sm${r.state === 'approved' ? ' danger-tone' : ''}" data-reshare="${p.key}:${r.id}"
+              aria-label="${r.state === 'approved' ? `撤回对 ${r.name} 的同意` : `同意 ${r.name} 使用`}">${r.state === 'approved' ? '撤回同意' : '同意'}</button>
+          </div>`).join('')}
+        </div>`;
+      const breakdown = !isOpen ? '' : `
+        <div class="breakdown" id="breakdown-${p.key}"><table>
+          <thead><tr><th>电脑 / 模型</th><th class="num">消息</th><th class="num">输入</th><th class="num">输出</th><th class="num">估算金额</th></tr></thead>
+          ${byComputer.map(([c, models]) => {
+            const t = sumModels(models);
+            const used = models.length > 0;
+            const pct = used && tokens ? Math.round(((t.input + t.output) / tokens) * 100) : null;
+            return `<tbody class="${used ? '' : 'unused'}">
+              <tr class="computer"><td><span class="cname">${c.name}<small>${c.sub}</small>${pct === null ? '' : `<span class="pct"><span class="bar"><i style="width:${Math.max(pct, 2)}%"></i></span>${pct}%</span>`}</span></td>
+                <td class="num">${used ? t.turns : '—'}</td><td class="num">${used ? fmtTok(t.input) : '—'}</td><td class="num">${used ? fmtTok(t.output) : '—'}</td><td class="num">${used ? fmtUsd(t.usd) : '—'}</td></tr>
+              ${models.map((r) => `<tr class="model"><td>${r[0]}</td><td class="num">${r[1]}</td><td class="num">${fmtTok(r[2])}</td><td class="num">${fmtTok(r[3])}</td><td class="num">${fmtUsd(r[4])}</td></tr>`).join('')}
+            </tbody>`;
+          }).join('')}
+        </table><p class="est">金额按本地单价估算，不代表供应商实际账单。</p></div>`;
+      return `
+      <div class="person" data-open="${isOpen}" data-state="${m && m.status === 'paused' ? 'paused' : ''}">
+        <div class="row">
+          <button type="button" class="expand" data-toggle="${p.key}" aria-expanded="${isOpen}" aria-controls="breakdown-${p.key}" aria-label="${isOpen ? '收起' : '展开'} ${p.name} 的用量明细">
+            <svg class="chev" width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m6 3 5 5-5 5"/></svg>
+          </button>
+          <span class="avatar">${p.avatar}</span>
+          <div class="who">
+            <div class="line1">${p.name} <span class="tag">${p.tag}</span>${status}</div>
+            <div class="line2">${m ? `${m.joined}加入 · ` : ''}${last}${usedOn > 0 ? ` · 用了 ${usedOn} 台电脑` : ''}</div>
+          </div>
+          <div class="usage"><b>${fmtTok(tokens)} tokens</b>${amount ? '约 ' + fmtUsd(amount) : ''}${share ? `<span class="bar"><i style="width:${share}%"></i></span>` : ''}</div>
+          ${more}
+        </div>${reshares}${breakdown}
+      </div>`;
+    }).join('');
+  }
+
+  function renderPending() {
+    const list = sharing() ? pending : [];
+    $('#pending-wrap').hidden = list.length === 0;
+    $('#pending').innerHTML = list.map((r) => `
+      <div class="row">
+        <span class="avatar">${r.avatar}</span>
+        <div class="who">
+          <div class="line1">${r.name} <span class="tag">${r.kind === 'apply' ? '申请使用' : `想经 ${r.owner} 的供应商组使用`}</span></div>
+          <div class="line2">${r.kind === 'apply'
+            ? `配对码 <span class="pair">${r.code}</span> · ${r.time}申请 · 24 小时内未处理将自动失效`
+            : `${r.time}请求 · 同意后，${r.name} 的任务可以在这台电脑上运行，用量算在 ${r.owner} 名下`}</div>
+        </div>
+        <div class="actions">
+          <button type="button" class="btn secondary sm" data-pending="${r.id}:reject">拒绝</button>
+          <button type="button" class="btn primary sm" data-pending="${r.id}:approve">同意</button>
+        </div>
+      </div>`).join('');
+  }
+
+  /* ---------- 分享的人一行的 ··· 菜单 ---------- */
+  let menuFor = null, removing = null;
+  function closeMenu() { $('#menu').hidden = true; menuFor = null; }
+  function openMenu(btn) {
+    const p = people.find((x) => x.key === btn.dataset.menu);
+    menuFor = p.key;
+    const menu = $('#menu');
+    const paused = p.member.status === 'paused';
+    menu.innerHTML = `<button type="button" role="menuitem" data-menu-act="pause">${paused ? playIco : pauseIco}${paused ? '恢复分享' : '关闭分享'}</button>`
+      + `<button type="button" role="menuitem" class="danger" data-menu-act="remove">${trashIco}删除</button>`;
+    menu.hidden = false;
+    const w = $('#window').getBoundingClientRect(), b = btn.getBoundingClientRect();
+    menu.style.top = (b.bottom - w.top + 4) + 'px';
+    menu.style.left = (b.right - w.left - menu.offsetWidth) + 'px';
+    menu.querySelector('button').focus();
+  }
+  function menuAct(act) {
+    const p = people.find((x) => x.key === menuFor);
+    closeMenu();
+    if (!p) return;
+    if (act === 'pause') {
+      const paused = p.member.status === 'paused';
+      p.member.status = paused ? 'active' : 'paused';
+      renderUsage();
+      toast(paused ? `已恢复对 ${p.name} 的分享` : `已关闭对 ${p.name} 的分享，可随时恢复`);
+      return;
+    }
+    removing = p.key;
+    $('#remove-title').textContent = `删除对 ${p.name} 的分享？`;
+    $('#remove-desc').textContent = `${p.name} 将立即无法使用 Anthropic，正在运行的任务会停止。之后要再分享，需要重新生成链接。用量记录会保留。`;
+    openDialog('remove');
+  }
+
+  function renderSettings() {
+    $('#group-desc').textContent = hasGroup
+      ? '本机任务、你的其他电脑和你分享的人使用 Anthropic 时，按组策略选一台组内电脑运行 Agent。'
+      : '把其他电脑上的 Anthropic 加进来，使用时自动选一台可用的电脑运行，并在它们之间分配。';
+    $('#group-summary').textContent = hasGroup ? '5 台电脑 · 最少占用' : '未设置';
+    $('#group-btn').textContent = hasGroup ? '管理' : '设置';
+  }
+
+  /* ---------- 添加电脑 ---------- */
+  const mine = [
+    { name: "Lizi's MacBook Pro", note: '我的其他电脑 · 已在组里', state: 'in' },
+    { name: 'Magi 的电脑', note: '来自 Magi 的分享 · 已在组里', state: 'in' },
+    { name: 'Office Mac mini', note: '我的其他电脑 · 在线', state: 'pick' },
+    { name: 'Ann 的电脑', note: '来自 Ann 的分享 · 在线', state: 'pick' },
+    { name: 'Home-NUC', note: '我的其他电脑 · 不在线', state: 'disabled' },
+  ];
+  const picked = new Set(['Office Mac mini']);
+  function renderMine() {
+    $('#mine-list').innerHTML = mine.map((c) => {
+      const checked = c.state === 'in' || picked.has(c.name);
+      return `<div class="check" role="checkbox" tabindex="0" data-pick="${c.name}" data-checked="${checked}" aria-checked="${checked}" aria-disabled="${c.state !== 'pick'}">
+        <span class="box">${checked ? check : ''}</span>
+        <span class="t">${c.name}<small>${c.note}</small></span></div>`;
+    }).join('');
+  }
+  const okCallout = '这台电脑会以你的账号申请使用 Magi 分享的 Anthropic，Magi 会看到你的昵称和头像。经这个组分到 Magi 电脑上的任务，用量计入 Magi 的 Anthropic；Magi 只看到合计，看不到最终是谁在用。';
+  let addVariant = 'mine';
+  function showAdd(state) {
+    addVariant = state;
+    const tab = state === 'mine' ? 'mine' : 'link';
+    $$('#add-tabs [data-add-tab]').forEach((b) => b.setAttribute('aria-pressed', String(b.dataset.addTab === tab)));
+    $$('[data-add-state]').forEach((s) => { s.hidden = s.dataset.addState !== (state === 'wait' ? 'wait' : tab); });
+    $('#add-tabs').hidden = state === 'wait';
+    const callout = $('#link-callout'), send = $('#send-request');
+    callout.classList.remove('warn');
+    send.disabled = false;
+    $('#preview-avatar').textContent = 'M'; $('#preview-name').textContent = 'Magi';
+    $('#preview-sub').textContent = "Anthropic · Magi's Mac Mini";
+    callout.textContent = okCallout;
+    if (state === 'mismatch') {
+      $('#preview-avatar').textContent = 'K'; $('#preview-name').textContent = 'Kai Chen';
+      $('#preview-sub').textContent = "OpenAI · Kai's iMac";
+      callout.classList.add('warn');
+      callout.innerHTML = '<b>这个链接分享的是 OpenAI，不是 Anthropic</b>，不能加入 Anthropic 的供应商组。可以到 OpenAI 的「远程与分享」里添加。';
+      send.disabled = true;
+    }
+    if (state === 'self') {
+      $('#preview-avatar').textContent = 'L'; $('#preview-name').textContent = 'Lizi';
+      $('#preview-sub').textContent = "Anthropic · Lizi's MacBook Pro";
+      callout.classList.add('warn');
+      callout.innerHTML = '<b>这是你自己账号的电脑</b>，不需要分享链接，在「已经能用的」里直接勾选。';
+      send.disabled = true;
+    }
+    syncVariants();
+  }
+
+  /* ---------- 弹窗与 Toast ---------- */
+  let toastTimer;
+  function toast(text) {
+    $('#toast-text').textContent = text; $('#toast').hidden = false;
+    clearTimeout(toastTimer); toastTimer = setTimeout(() => { $('#toast').hidden = true; }, 2600);
+  }
+  function openDialog(name) {
+    $('#scrim').hidden = false;
+    $$('[data-dialog]').forEach((d) => { d.hidden = d.dataset.dialog !== name; });
+    const d = $(`[data-dialog="${name}"]`);
+    const focusTarget = d.querySelector('[data-close-dialog]') || d.querySelector('button');
+    setTimeout(() => focusTarget && focusTarget.focus(), 0);
+  }
+  function closeDialog() { $('#scrim').hidden = true; $$('[data-dialog]').forEach((d) => { d.hidden = true; }); }
+  document.addEventListener('keydown', (e) => {
+    if (e.key !== 'Escape') return;
+    if (!$('#menu').hidden) { const key = menuFor; closeMenu(); const b = key && $(`[data-menu="${key}"]`); if (b) b.focus(); return; }
+    if (!$('#scrim').hidden) closeDialog();
+  });
+  /* 点击遮罩不关闭弹窗（DESIGN.md §4 Dialog：只通过自身按钮或 Esc 关闭）。 */
+  document.addEventListener('click', (e) => {
+    const t = e.target.closest('button, [data-pick]');
+    if (!$('#menu').hidden && !e.target.closest('#menu') && !(t && t.dataset.menu)) closeMenu();
+    if (!t) return;
+    if (t.dataset.menu) { menuFor === t.dataset.menu ? closeMenu() : openMenu(t); return; }
+    if (t.dataset.menuAct) { menuAct(t.dataset.menuAct); return; }
+    if (t.id === 'remove-confirm') {
+      const p = people.find((x) => x.key === removing);
+      closeDialog();
+      if (p) { people = people.filter((x) => x !== p); renderUsage(); toast(`已删除对 ${p.name} 的分享`); }
+      return;
+    }
+    if (t.dataset.memberToggle) { const id = t.dataset.memberToggle; openMembers.has(id) ? openMembers.delete(id) : openMembers.add(id); renderMembers(); return; }
+    if (t.dataset.reshare) {
+      const [pk, rid] = t.dataset.reshare.split(':');
+      const owner = people.find((x) => x.key === pk);
+      const r = owner.member.reshares.find((x) => x.id === rid);
+      r.state = r.state === 'approved' ? 'rejected' : 'approved';
+      renderUsage();
+      toast(r.state === 'approved' ? `已同意 ${r.name} 经 ${owner.name} 的供应商组使用 Anthropic` : `已撤回对 ${r.name} 的同意，正在运行的任务已停止`);
+      return;
+    }
+    if (t.dataset.pending) {
+      const [id, decision] = t.dataset.pending.split(':');
+      const r = pending.find((x) => x.id === id);
+      pending = pending.filter((x) => x !== r);
+      if (decision === 'approve' && r.kind === 'apply') {
+        // 同意后这个人出现在上方「用量」里，和其他分享的人同一种行。
+        people.push({ key: r.id, name: r.name, tag: '分享的人', avatar: r.avatar, last: null, member: { status: 'active', running: 0, joined: '今天' }, usage: {} });
+      }
+      if (decision === 'approve' && r.kind === 'reshare') {
+        people.find((x) => x.name === r.owner).member.reshares.push({ id: r.id, avatar: r.avatar, name: r.name, state: 'approved' });
+      }
+      renderUsage(); renderPending();
+      toast(decision === 'approve'
+        ? (r.kind === 'apply' ? `已同意分享 Anthropic 给 ${r.name}` : `已同意 ${r.name} 经 ${r.owner} 的供应商组使用 Anthropic`)
+        : `已拒绝 ${r.name} 的${r.kind === 'apply' ? '申请' : '请求'}`);
+      return;
+    }
+    if (t.matches('[data-close-dialog]')) closeDialog();
+    if (t.dataset.openDialog) { openDialog(t.dataset.openDialog); if (t.dataset.addTab) showAdd(t.dataset.addTab); }
+    else if (t.dataset.addTab) showAdd(t.dataset.addTab);
+    if (t.dataset.goto) setScene(t.dataset.goto);
+    if (t.dataset.toggle) { open.has(t.dataset.toggle) ? open.delete(t.dataset.toggle) : open.add(t.dataset.toggle); renderUsage(); }
+    if (t.dataset.range) { range = t.dataset.range; $$('[data-range]').forEach((b) => b.setAttribute('aria-pressed', String(b === t))); renderUsage(); }
+    if (t.dataset.strategy) { strategy = t.dataset.strategy; $$('[data-strategy]').forEach((b) => b.setAttribute('aria-pressed', String(b === t))); renderMembers(); }
+    if (t.dataset.pick && t.getAttribute('aria-disabled') !== 'true') { picked.has(t.dataset.pick) ? picked.delete(t.dataset.pick) : picked.add(t.dataset.pick); renderMine(); }
+    if (t.dataset.addGo) showAdd(t.dataset.addGo);
+    if (t.dataset.addDone) { closeDialog(); toast('已把 Office Mac mini 加入 Anthropic 的供应商组'); }
+  });
+
+  /* ---------- 场景与变体 ---------- */
+  let scene = 'settings', othersVariant = 'normal';
+  const notes = {
+    settings: '供应商详情在「允许被远程调用」下方增加「供应商组」一行。供应商组不依赖远程调用：只给本机用时也可以建组。两处按钮都进入同一个「远程与分享」页。',
+    page: '「远程与分享」页：标题右侧生成分享链接，待处理申请紧跟标题；下面是供应商组与和设置页一致的用量。用量按人列出，你自己在第一行，筛选支持使用方、组内电脑、时间范围和某一天，另有每日柱图、热力图、按电脑和按模型。分享的人状态、加入时间、关闭与删除并在这个人的用量那一行(收进行尾 ···)。审批弹窗说明 Agent 的运行位置与用量归属；有组时写「由供应商组选一台电脑运行 Agent」。',
+    add: '添加电脑与模型列表里的远程供应商同一个来源：你的其他电脑和别人分享给你的放在一个列表里直接勾选；还不能用的别人的电脑，粘贴分享链接走申请与配对码。链接的供应商不一致（订阅账号按品牌、自定义供应商按名称判断）或属于自己账号时不发送申请。',
+    others: '任务正常时固定在第一次分到的电脑上，头部写明在哪台运行。那台撞到用量上限、登录失效或离线时，自动交接到组里下一台继续这一轮，消息流显示一行活动记录；每台最多试一次，全部失败才报错并逐台列出原因，有撞上限的就等最早恢复的那台自动继续。同账号其他电脑的模型列表标题写「供应商组」。',
+    apply: '受邀者申请弹窗不论有没有组都写「Agent 在 Lizi 的电脑或 Lizi 安排的其他电脑上运行」，内容保存在实际运行的那台电脑上。之后建组、加减电脑都不再打扰受邀者，受邀者那边也不显示组内电脑的名称。',
+  };
+  const variants = {
+    page: { label: '分享', get: () => shareVariant, set: (v) => { shareVariant = v; closeMenu(); renderMembers(); renderUsage(); renderPending(); }, opts: [['shared', '已分享给 3 人'], ['none', '还没分享']] },
+    settings: { label: '供应商组', get: () => (hasGroup ? 'on' : 'off'), set: (v) => { hasGroup = v === 'on'; renderSettings(); }, opts: [['off', '未设置'], ['on', '已设置']] },
+    add: { label: '弹窗状态', get: () => addVariant, set: (v) => { openDialog('add'); showAdd(v); }, opts: [['mine', '已经能用的'], ['link', '分享链接'], ['wait', '等待同意'], ['mismatch', '供应商不一致'], ['self', '自己账号的链接']] },
+    others: { label: '运行状态', get: () => othersVariant, set: (v) => {
+      othersVariant = v;
+      $('#switched').hidden = v !== 'switched'; $('#answer2').hidden = v !== 'switched'; $('#allfail').hidden = v !== 'allfail';
+      $('#answer').textContent = v === 'normal' ? '好的，我先看一下这周的提交记录…' : '已整理出前 3 个合并请求的要点…';
+      $('#where-text').textContent = v === 'switched' ? "在 Lizi's MacBook Pro 上运行 · 由供应商组分配" : "在 Magi's Mac Mini 上运行 · 由供应商组分配";
+    }, opts: [['normal', '正常运行'], ['switched', '自动换电脑'], ['allfail', '全部不可用']] },
+  };
+  function syncVariants() {
+    const bar = $('#variantbar'); const v = variants[scene];
+    if (!v) { bar.innerHTML = ''; return; }
+    bar.innerHTML = `<span>${v.label}</span><span class="seg" role="group" aria-label="${v.label}">${v.opts.map(([k, l]) => `<button type="button" data-variant="${k}" aria-pressed="${v.get() === k}">${l}</button>`).join('')}</span>`;
+    $$('[data-variant]', bar).forEach((b) => b.addEventListener('click', () => { v.set(b.dataset.variant); syncVariants(); }));
+  }
+  function setScene(next) {
+    scene = next;
+    $$('.reviewbar [data-scene]').forEach((b) => b.setAttribute('aria-pressed', String(b.dataset.scene === next)));
+    const page = { settings: 'settings', page: 'page', add: 'page', others: 'others', apply: 'app' }[next];
+    $$('[data-page]').forEach((p) => { p.hidden = p.dataset.page !== page; });
+    closeDialog();
+    closeMenu();
+    if (next === 'add') variants.add.set(addVariant);
+    if (next === 'apply') openDialog('apply');
+    $('#scene-note').textContent = notes[next];
+    syncVariants();
+  }
+  $$('.reviewbar [data-scene]').forEach((b) => b.addEventListener('click', () => setScene(b.dataset.scene)));
+
+  function setTheme(t) {
+    document.body.classList.toggle('dark', t === 'dark');
+    $$('[data-theme]').forEach((b) => b.setAttribute('aria-pressed', String(b.dataset.theme === t)));
+  }
+  $$('[data-theme]').forEach((b) => b.addEventListener('click', () => setTheme(b.dataset.theme)));
+  setTheme(window.matchMedia && matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light');
+
+  renderSettings(); renderMembers(); renderUsage(); renderPending(); renderMine(); setScene('settings');
+</script>
+</body>
+</html>

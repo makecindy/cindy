@@ -64,6 +64,27 @@ describe('remote resource request parsing', () => {
       .toBeNull();
   });
 
+  it('accepts namespaced physical resource keys without relaxing other identifier bounds', () => {
+    const ref = { collectionId: 'plugins', kind: 'plugin', id: '_ns__' + 'a'.repeat(128) + '__' + 'p'.repeat(32) };
+    expect(parseRemoteResourceGetRequest({ client, ref })?.ref).toEqual(ref);
+    expect(parseRemoteActionInvokeRequest({ client, collectionId: 'plugins', resourceRef: ref,
+      actionId: 'enable', input: {} })?.resourceRef).toEqual(ref);
+    expect(parseRemoteResourceGetRequest({ client, ref: { ...ref, id: 'x'.repeat(257) } })).toBeNull();
+    expect(parseRemoteResourceGetRequest({ client, ref: { ...ref, collectionId: 'x'.repeat(161) } })).toBeNull();
+  });
+
+  it('passes a bounded optional search query through resource reads', () => {
+    const ref = { collectionId: 'teammates', kind: 'bot', id: 'settings:bot-1/memory' };
+    expect(parseRemoteResourceGetRequest({ client, ref, query: '咖啡' })).toEqual({
+      client: { protocolVersion: 1, primitives: ['markdown', 'action'], locale: 'zh-CN' }, ref, query: '咖啡',
+    });
+    // Old controllers never send it; an empty query is the same as no filter.
+    expect(parseRemoteResourceGetRequest({ client, ref })).not.toHaveProperty('query');
+    expect(parseRemoteResourceGetRequest({ client, ref, query: '' })).not.toHaveProperty('query');
+    expect(parseRemoteResourceGetRequest({ client, ref, query: 42 })).toBeNull();
+    expect(parseRemoteResourceGetRequest({ client, ref, query: 'x'.repeat(1_001) })).toBeNull();
+  });
+
   it('validates generic invalidation payload scope', () => {
     expect(parseRemoteResourceChangedPayload({
       collectionId: 'teammates',

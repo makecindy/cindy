@@ -35,6 +35,7 @@ export function buildDesktopRestartSteps(argv, root = rootDir) {
   return [
     ...(preserveRunning ? [] : [{
       label: 'stop existing desktop dev processes',
+      progress: 'stopping',
       command: process.execPath,
       // 用户参数(尤其 --isolated)必须跟进 kill 阶段:userData 冲突门要在
       // 杀任何进程之前就按目标沙箱判定,不能等到最终启动阶段才发现冲突。
@@ -42,16 +43,19 @@ export function buildDesktopRestartSteps(argv, root = rootDir) {
     }]),
     {
       label: 'verify desktop dependencies',
+      progress: 'dependencies',
       command: process.execPath,
       args: [path.join(root, 'scripts', 'ensure-deps.mjs')],
     },
     {
       label: 'verify desktop runtime assets',
+      progress: 'assets',
       command: process.execPath,
       args: [path.join(root, 'scripts', 'ensure-dev-runtime-assets.mjs')],
     },
     {
       label: 'start desktop and wait for readiness',
+      progress: 'launching',
       command: process.execPath,
       args: [restartScript, ...modeArgs, ...forwarded, '--wait-ready'],
     },
@@ -93,12 +97,20 @@ function runStep(step) {
   assertDesktopRestartStepSucceeded(step, result);
 }
 
-export function runDesktopRestart(argv, root = rootDir, stepRunner = runStep) {
+export function runDesktopRestart(
+  argv,
+  root = rootDir,
+  stepRunner = runStep,
+  reportStep = (step) => process.stdout.write('DESKTOP_DEV_STEP=' + step + '\n'),
+) {
   const normalizedArgv = normalizeDesktopRestartArgv(argv);
   const conflict = desktopRestartArgvConflictMessage(normalizedArgv);
   if (conflict) throw new Error(conflict);
   assertSharedDevMigrationPolicy(root, normalizedArgv);
-  for (const step of buildDesktopRestartSteps(normalizedArgv, root)) stepRunner(step);
+  for (const step of buildDesktopRestartSteps(normalizedArgv, root)) {
+    reportStep(step.progress);
+    stepRunner(step);
+  }
 }
 
 function main() {

@@ -13,6 +13,8 @@
  * 品牌名不翻译(规则 18):'Haiku 4.5' / 'Opus 4.8' / 'GPT-5.5' 跨语言一致。
  */
 
+import { stripCodexGatewayWirePrefix } from '@cindy/model-providers';
+
 /** 首字母大写(仅处理 ASCII 单词,够用)。 */
 function cap(s: string): string {
   return s.length === 0 ? s : s[0].toUpperCase() + s.slice(1).toLowerCase();
@@ -55,8 +57,8 @@ export function formatModelShortLabel(modelId: string | undefined | null): strin
   id = id.replace(/\[1m\]$/i, '');
   // 2) 去尾部 dated 后缀(如 -20251001)
   id = id.replace(/-\d{8}$/, '');
-  // 3) 去已知 vendor/route 前缀(Bedrock/Vertex route、折扣版 codex/ 前缀)
-  id = id.replace(/^us\.anthropic\./i, '').replace(/^anthropic\./i, '').replace(/^codex\//i, '');
+  // 3) 去已知 vendor/route 前缀(Bedrock/Vertex route、折扣版 openai-codex/ 与 codex/ 前缀)
+  id = stripCodexGatewayWirePrefix(id.replace(/^us\.anthropic\./i, '').replace(/^anthropic\./i, ''));
 
   // 4) Claude <family>-<major>(-<minor>)? → 'Family major.minor' / 'Family major'
   //    家族用通用词字符匹配,覆盖 opus/sonnet/haiku/fable 及未来新族(如 nova);

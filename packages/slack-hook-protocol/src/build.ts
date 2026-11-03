@@ -57,6 +57,11 @@ import {
   type HookToolResponseMessage,
   type HookTurnEndMessage,
   type HookTurnDeliveryMessage,
+  type HookXMediaAbortMessage,
+  type HookXMediaAppendMessage,
+  type HookXMediaFinalizeMessage,
+  type HookXMediaInitMessage,
+  type HookXMediaResultMessage,
   type HookTurnProgressMessage,
   type HookTurnReopenMessage,
   type HookWelcomeMessage,
@@ -88,11 +93,18 @@ import {
   type ToolResponsePayload,
   type TurnEndPayload,
   type TurnDeliveryPayload,
+  type XMediaAbortPayload,
+  type XMediaAppendPayload,
+  type XMediaFinalizePayload,
+  type XMediaInitPayload,
+  type XMediaResultPayload,
   type TurnProgressPayload,
   type MessageOpPayload,
   type MessageOpResultPayload,
   type HookMessageOpMessage,
   type HookMessageOpResultMessage,
+  type HookProviderCommandsSetMessage,
+  type ProviderCommandsSetPayload,
   type TurnReopenPayload,
   type WelcomePayload,
 } from './types';
@@ -151,6 +163,26 @@ export function makeTurnEnd(payload: TurnEndPayload): HookTurnEndMessage {
 
 export function makeTurnDelivery(payload: TurnDeliveryPayload): HookTurnDeliveryMessage {
   return envelope('turn.delivery', payload);
+}
+
+export function makeXMediaInit(payload: XMediaInitPayload): HookXMediaInitMessage {
+  return envelope('x.media.init', payload);
+}
+
+export function makeXMediaAppend(payload: XMediaAppendPayload): HookXMediaAppendMessage {
+  return envelope('x.media.append', payload);
+}
+
+export function makeXMediaFinalize(payload: XMediaFinalizePayload): HookXMediaFinalizeMessage {
+  return envelope('x.media.finalize', payload);
+}
+
+export function makeXMediaAbort(payload: XMediaAbortPayload): HookXMediaAbortMessage {
+  return envelope('x.media.abort', payload);
+}
+
+export function makeXMediaResult(payload: XMediaResultPayload): HookXMediaResultMessage {
+  return envelope('x.media.result', payload);
 }
 
 export function makeTurnProgress(payload: TurnProgressPayload): HookTurnProgressMessage {
@@ -312,6 +344,13 @@ export function makeProviderBehaviorSet(
   payload: ProviderBehaviorSetPayload,
 ): HookProviderBehaviorSetMessage {
   return envelope('provider.behavior.set', payload);
+}
+
+/** provider.commands.set: 官方 Telegram 命令菜单以 desktop 注册表为准(见 types.ts)。 */
+export function makeProviderCommandsSet(
+  payload: ProviderCommandsSetPayload,
+): HookProviderCommandsSetMessage {
+  return envelope('provider.commands.set', payload);
 }
 
 export function makeProviderBehaviorState(

@@ -51,7 +51,7 @@ export interface FileBrowserNameMatch {
   relPath: string;
 }
 
-const IMAGE_THUMB_EXT = new Set(['png', 'jpg', 'jpeg', 'gif', 'webp', 'bmp', 'ico', 'heic', 'heif', 'avif']);
+const IMAGE_THUMB_EXT = new Set(['png', 'jpg', 'jpeg', 'gif', 'webp', 'bmp', 'ico', 'heic', 'heif', 'avif', 'svg']);
 
 /** 防御性归一化 remote-op listDir 的返回(跨版本被控端可能缺字段)。 */
 export function normalizeRemoteOpDirEntries(value: unknown): FileBrowserRemoteOpEntry[] {

@@ -21,6 +21,7 @@ describe('normalizeVisionModelId', () => {
 
   it('strips codex/ prefix', () => {
     expect(normalizeVisionModelId('codex/gpt-5.5')).toBe('gpt-5.5');
+    expect(normalizeVisionModelId('openai-codex/gpt-6.1-sol')).toBe('gpt-6.1-sol');
   });
 });
 

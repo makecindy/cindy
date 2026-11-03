@@ -18,7 +18,7 @@ import { toast } from '@/lib/toast';
 import { createLogger } from '@/lib/logger';
 import { extractIpcError } from '@/utils/ipcError';
 import { remoteProjectsStore } from '@/features/device-link/remoteProjectsStore';
-import { renameDeviceLinkDevice } from '@/features/device-link/useDeviceLinkDeviceList';
+import { renameDeviceLinkDevice, removeDeviceLinkDevice } from '@/features/device-link/useDeviceLinkDeviceList';
 
 const log = createLogger('useDeviceLinkSettings');
 
@@ -80,6 +80,7 @@ export function useDeviceLinkSettings(active = true): DeviceLinkSettings {
   const [listError, setListError] = useState<string | null>(null);
   const [refreshing, setRefreshing] = useState(false);
   const mounted = useRef(true);
+  const refreshGeneration = useRef(0);
   const disabledControlDeviceIdsRef = useRef<string[]>([]);
   // getState() 与 ownership push 可能乱序返回;事件版本推进后,旧快照不得覆盖新事实。
   const ownershipEventVersion = useRef(0);
@@ -100,15 +101,16 @@ export function useDeviceLinkSettings(active = true): DeviceLinkSettings {
   const refresh = useCallback(
     async (showSpinner = false) => {
       if (!active) return;
+      const generation = ++refreshGeneration.current;
       if (showSpinner) setRefreshing(true);
       try {
         const { devices: list } = await window.electronAPI.deviceLink.listDevices();
-        if (!mounted.current) return;
+        if (!mounted.current || generation !== refreshGeneration.current) return;
         setDevices(list);
         setListError(null);
       } catch (err) {
         log.warn('listDevices failed', err);
-        if (!mounted.current) return;
+        if (!mounted.current || generation !== refreshGeneration.current) return;
         const ipcErr = extractIpcError(err);
         setListError(
           ipcErr?.code === 'DEVICE_LINK_UNAVAILABLE'
@@ -227,7 +229,15 @@ export function useDeviceLinkSettings(active = true): DeviceLinkSettings {
   const remove = useCallback(
     async (deviceId: string): Promise<boolean> => {
       try {
-        await window.electronAPI.deviceLink.deleteDevice(deviceId);
+        const result = await window.electronAPI.deviceLink.deleteDevice(deviceId);
+        if (!result.deleted || result.deviceId !== deviceId) {
+          toast.error(t('settings.devices.toast.deleteFailed'));
+          return false;
+        }
+        refreshGeneration.current += 1;
+        setDevices((current) => current?.filter((device) => device.deviceId !== deviceId) ?? current);
+        remoteProjectsStore.removeDevice(deviceId);
+        removeDeviceLinkDevice(deviceId);
         void refresh();
         toast.success(t('settings.devices.toast.deleted'));
         return true;

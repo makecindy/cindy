@@ -1,10 +1,14 @@
-import { promises as fs } from 'node:fs';
+import { promises as nativeFs } from 'node:fs';
+import { operationFileSystem } from '../utils/operationFileSystem';
+import { operationCheckpoint, operationYield } from '../utils/operationBudget';
 import path from 'node:path';
 
 import { detectSensitivePath } from '../security/sensitivePath';
-import { gitExec, GitExecError } from '../worktree/gitExec';
+import { GitExecError } from '../worktree/gitExec';
+import { isolatedGitExec } from './isolatedGitExec';
 
 const DEFAULT_MAX_FILE_BYTES = 10 * 1024 * 1024;
+const fs = operationFileSystem(nativeFs);
 const DEFAULT_MAX_CONTENT_SCAN_BYTES = DEFAULT_MAX_FILE_BYTES;
 
 /** Reason a dirty file is excluded from an automatic snapshot commit. */
@@ -41,6 +45,29 @@ export interface SnapshotIncludedFile {
 export interface SnapshotFileFilterOptions {
   maxFileBytes: number;
   maxContentScanBytes: number;
+  /** Whole-capture limits. Exceeding one aborts the plan, never truncates it. */
+  maxFiles?: number;
+  maxTotalBytes?: number;
+  /** Monotonic deadline shared with Git status and staging. */
+  deadlineAtMs?: number;
+}
+
+export class SnapshotCaptureBudgetExceededError extends Error {
+  constructor(readonly reason: 'file-count' | 'total-bytes' | 'deadline') {
+    super(`Automatic snapshot capture budget exceeded: ${reason}`);
+    this.name = 'SnapshotCaptureBudgetExceededError';
+  }
+}
+
+export function checkSnapshotCaptureDeadline(deadlineAtMs?: number): void {
+  if (deadlineAtMs !== undefined && performance.now() >= deadlineAtMs) {
+    throw new SnapshotCaptureBudgetExceededError('deadline');
+  }
+}
+
+interface FilePlanScan {
+  gitMarkers: Map<string, boolean>;
+  totalBytes: number;
 }
 
 /** A parsed `git status --porcelain=v1 -z` entry. */
@@ -66,6 +93,7 @@ export interface SnapshotFilePlan {
 
 function withDefaults(opts?: Partial<SnapshotFileFilterOptions>): SnapshotFileFilterOptions {
   return {
+    ...opts,
     maxFileBytes: opts?.maxFileBytes ?? DEFAULT_MAX_FILE_BYTES,
     maxContentScanBytes: opts?.maxContentScanBytes ?? DEFAULT_MAX_CONTENT_SCAN_BYTES,
   };
@@ -132,6 +160,7 @@ export function parseStatusPorcelainZ(output: string): SnapshotStatusEntry[] {
   const parts = output.split('\0').filter((part) => part.length > 0);
   const entries: SnapshotStatusEntry[] = [];
   for (let i = 0; i < parts.length; i += 1) {
+    if (i % 256 === 0) operationCheckpoint();
     const part = parts[i];
     if (part.length < 4) continue;
 
@@ -155,11 +184,13 @@ export function parseStatusPorcelainZ(output: string): SnapshotStatusEntry[] {
 
 async function readStatusEntries(
   repoPath: string,
+  deadlineAtMs?: number,
 ): Promise<{ entries: SnapshotStatusEntry[]; truncated: boolean }> {
   try {
-    const { stdout } = await gitExec(
+    const { stdout } = await isolatedGitExec(
       ['status', '--porcelain=v1', '-z', '--untracked-files=all'],
       repoPath,
+      { deadlineAtMs },
     );
     return { entries: parseStatusPorcelainZ(stdout), truncated: false };
   } catch (err) {
@@ -173,14 +204,20 @@ function isGitStatusOutputTooLargeError(err: unknown): boolean {
   return err.cause?.code === 'ERR_CHILD_PROCESS_STDIO_MAXBUFFER' || /maxBuffer/i.test(err.message);
 }
 
-async function hasGitMarker(dir: string): Promise<boolean> {
-  return fs.lstat(path.join(dir, '.git')).then(
+async function hasGitMarker(dir: string, cache: Map<string, boolean>): Promise<boolean> {
+  const cached = cache.get(dir);
+  if (cached !== undefined) return cached;
+  const exists = await fs.lstat(path.join(dir, '.git')).then(
     () => true,
     () => false,
   );
+  cache.set(dir, exists);
+  return exists;
 }
 
-async function isInsideNestedGitRepo(repoPath: string, gitPath: string): Promise<boolean> {
+async function isInsideNestedGitRepo(
+  repoPath: string, gitPath: string, scan: FilePlanScan, opts: SnapshotFileFilterOptions,
+): Promise<boolean> {
   const abs = resolveSnapshotGitPath(repoPath, gitPath);
   if (!abs) return false;
 
@@ -194,9 +231,10 @@ async function isInsideNestedGitRepo(repoPath: string, gitPath: string): Promise
   const repoRoot = path.resolve(repoPath);
   let cur = stat?.isDirectory() ? abs : path.dirname(abs);
   while (path.resolve(cur) !== repoRoot) {
+    checkSnapshotCaptureDeadline(opts.deadlineAtMs);
     const rel = path.relative(repoRoot, cur);
     if (rel.startsWith('..') || path.isAbsolute(rel)) return false;
-    if (await hasGitMarker(cur)) return true;
+    if (await hasGitMarker(cur, scan.gitMarkers)) return true;
 
     const parent = path.dirname(cur);
     if (parent === cur) return false;
@@ -209,6 +247,7 @@ async function scanWorktreeFileSize(
   repoPath: string,
   gitPath: string,
   opts: SnapshotFileFilterOptions,
+  scan: FilePlanScan,
 ): Promise<SnapshotSkippedFile | null> {
   const abs = resolveSnapshotGitPath(repoPath, gitPath);
   if (!abs) {
@@ -228,6 +267,10 @@ async function scanWorktreeFileSize(
   if (stat.size > opts.maxFileBytes) {
     return { path: gitPath, reason: 'large-file', sizeBytes: stat.size };
   }
+  scan.totalBytes += stat.size;
+  if (scan.totalBytes > (opts.maxTotalBytes ?? Infinity)) {
+    throw new SnapshotCaptureBudgetExceededError('total-bytes');
+  }
   return null;
 }
 
@@ -235,6 +278,7 @@ async function classifyEntry(
   repoPath: string,
   entry: SnapshotStatusEntry,
   opts: SnapshotFileFilterOptions,
+  scan: FilePlanScan,
 ): Promise<SnapshotSkippedFile | null> {
   if (hasConflictStatus(entry.code)) return { path: entry.path, reason: 'conflict' };
 
@@ -256,12 +300,12 @@ async function classifyEntry(
   }
 
   for (const gitPath of rawPathsFor(entry)) {
-    if (await isInsideNestedGitRepo(repoPath, gitPath)) {
+    if (await isInsideNestedGitRepo(repoPath, gitPath, scan, opts)) {
       return { path: entry.path, reason: 'nested-git-repo' };
     }
   }
 
-  return scanWorktreeFileSize(repoPath, entry.path, opts);
+  return scanWorktreeFileSize(repoPath, entry.path, opts, scan);
 }
 
 /** Builds a safe/unsafe file plan from already parsed status entries. */
@@ -271,13 +315,23 @@ export async function buildSnapshotFilePlanFromEntries(
   opts?: Partial<SnapshotFileFilterOptions>,
 ): Promise<SnapshotFilePlan> {
   const options = withDefaults(opts);
+  checkSnapshotCaptureDeadline(options.deadlineAtMs);
+  if (entries.length > (options.maxFiles ?? Infinity)) {
+    throw new SnapshotCaptureBudgetExceededError('file-count');
+  }
+  // Only this scan owns the cache: a newly created nested repository must be
+  // detected on the next snapshot, including after a failed capture.
+  const scan: FilePlanScan = { gitMarkers: new Map(), totalBytes: 0 };
   const includedFiles: SnapshotIncludedFile[] = [];
   const skippedFiles: SnapshotSkippedFile[] = [];
 
+  let scanIndex = 0;
   for (const entry of entries) {
+    await operationYield(scanIndex++);
+    checkSnapshotCaptureDeadline(options.deadlineAtMs);
     const pathsForPathspec = pathspecPathsFor(entry);
     const oldPath = entry.oldPath && entry.code[0] === 'R' ? { oldPath: entry.oldPath } : {};
-    const skip = await classifyEntry(repoPath, entry, options);
+    const skip = await classifyEntry(repoPath, entry, options, scan);
     if (skip) {
       skippedFiles.push({ ...skip, ...oldPath, pathsForPathspec });
       continue;
@@ -286,6 +340,7 @@ export async function buildSnapshotFilePlanFromEntries(
     includedFiles.push({ path: entry.path, ...oldPath, pathsForPathspec });
   }
 
+  checkSnapshotCaptureDeadline(options.deadlineAtMs);
   return { includedFiles, skippedFiles };
 }
 
@@ -294,7 +349,8 @@ export async function buildSnapshotFilePlan(
   repoPath: string,
   opts?: Partial<SnapshotFileFilterOptions>,
 ): Promise<SnapshotFilePlan> {
-  const { entries, truncated } = await readStatusEntries(repoPath);
+  checkSnapshotCaptureDeadline(opts?.deadlineAtMs);
+  const { entries, truncated } = await readStatusEntries(repoPath, opts?.deadlineAtMs);
   const plan = await buildSnapshotFilePlanFromEntries(repoPath, entries, opts);
   return truncated ? { ...plan, statusTruncated: true } : plan;
 }

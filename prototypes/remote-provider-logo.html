@@ -1,0 +1,209 @@
+<!doctype html>
+<html lang="zh-CN" data-theme="light">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="color-scheme" content="light dark">
+<title>远程供应商 Logo · Cindy 样式稿</title>
+<style>
+  /* Standalone design study. Palette values are populated from Cindy's token source. */
+  :root {
+    --surface: #f8f8f6; --card: #ffffff;
+    --border: #d7d7d4; --text: #262626;
+    --secondary: #737373; --muted: #a3a3a3;
+    --hover: #f8f8f6; --focus: #417cdd;
+    --inverse-bg: #000000; --inverse-fg: #ffffff;
+    --mark-size: 16px; color-scheme: light;
+  }
+  html[data-theme=dark] {
+    --surface: #1f1f1e; --card: #2c2c2a;
+    --border: #3c3c3a; --text: #d4d4d4;
+    --secondary: #a3a3a3; --muted: #737373;
+    --hover: #3c3c3a; --focus: #417cdd;
+    --inverse-bg: #ffffff; --inverse-fg: #000000;
+    color-scheme: dark;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--surface); color: var(--text); font-family: Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", "Microsoft YaHei", sans-serif; font-size: 14px; line-height: 1.55; -webkit-font-smoothing: antialiased; }
+  button { font: inherit; color: inherit; cursor: pointer; -webkit-tap-highlight-color: transparent; touch-action: manipulation; }
+  button:focus-visible { outline: 2px solid var(--focus); outline-offset: 3px; }
+  button, .chrome { user-select: none; }
+  svg { display: block; flex-shrink: 0; }
+  [hidden] { display: none !important; }
+  main { width: min(100% - 40px, 760px); margin: 40px auto 30px; }
+  .masthead { display: flex; align-items: center; justify-content: space-between; gap: 16px; }
+  h1 { margin: 0; font-size: 16px; font-weight: 500; line-height: 1.5; }
+  .eyebrow { margin: 0 0 4px; color: var(--secondary); font-size: 11px; line-height: 1.45; }
+  .intro { margin: 12px 0 24px; color: var(--secondary); font-size: 13px; line-height: 1.65; }
+  .toggle { display: inline-flex; flex-shrink: 0; padding: 3px; border: 1px solid var(--border); border-radius: 9999px; background: var(--card); }
+  .toggle button { min-height: 44px; min-width: 48px; padding: 0 10px; border: 0; border-radius: 9999px; background: transparent; color: var(--secondary); font-size: 12px; line-height: 1.4; }
+  .toggle button[aria-pressed=true] { background: var(--inverse-bg); color: var(--inverse-fg); }
+  .grid { display: grid; grid-template-columns: 1.2fr 1fr; align-items: start; gap: 16px; }
+  .card { padding: 22px; border: 1px solid var(--border); border-radius: 12px; background: var(--card); }
+  .card h2 { margin: 0; font-size: 14px; font-weight: 500; line-height: 1.55; }
+  .hint { margin: 5px 0 18px; color: var(--secondary); font-size: 12px; line-height: 1.65; }
+  .comparison { display: grid; gap: 10px; }
+  .comparison-row { display: flex; align-items: center; gap: 12px; min-height: 44px; }
+  .comparison-label { width: 32px; flex-shrink: 0; color: var(--secondary); font-size: 12px; line-height: 1.4; }
+  .selector-hit { display: inline-flex; align-items: center; min-height: 44px; padding: 0; border: 0; border-radius: 9999px; background: transparent; }
+  .selector { display: inline-flex; align-items: center; gap: 7px; height: 32px; padding: 0 12px; border: 1px solid var(--border); border-radius: 9999px; background: var(--card); color: var(--text); white-space: nowrap; font-size: 12px; line-height: 1.4; }
+  .selector-hit:hover .selector, .selector-hit[aria-expanded=true] .selector { background: var(--hover); }
+  .selector .chevron { width: 11px; height: 11px; margin-left: 2px; color: var(--secondary); }
+  .mark { display: inline-flex; align-items: center; justify-content: center; width: var(--mark-size); height: var(--mark-size); flex-shrink: 0; color: var(--text); }
+  .mark svg { width: 100%; height: 100%; }
+  .source-menu { margin-top: 13px; padding: 6px; border: 1px solid var(--border); border-radius: 12px; background: var(--card); }
+  .menu-title { padding: 8px 10px; color: var(--secondary); font-size: 11px; line-height: 1.5; }
+  .source-row { display: flex; align-items: center; gap: 10px; width: 100%; min-height: 58px; padding: 10px; border: 0; border-radius: 8px; background: transparent; text-align: left; }
+  .source-row:hover, .source-row[aria-checked=true] { background: var(--hover); }
+  .source-row .mark { width: 20px; height: 20px; }
+  .source-copy { flex: 1; min-width: 0; }
+  .source-name { display: block; font-size: 13px; font-weight: 400; line-height: 1.55; }
+  .source-place { display: block; margin-top: 2px; color: var(--secondary); font-size: 11px; font-weight: 400; line-height: 1.45; }
+  .source-row[aria-checked=true] .source-name { font-weight: 500; }
+  .check { width: 14px; height: 14px; opacity: 0; }
+  .source-row[aria-checked=true] .check { opacity: 1; }
+  .source-note { margin: 12px 3px 0; color: var(--secondary); font-size: 11px; line-height: 1.65; }
+  .detail-icons { display: grid; grid-template-columns: 1fr 1fr; margin: 28px 0 22px; }
+  .detail-icon { display: grid; justify-items: center; gap: 16px; }
+  .detail-icon + .detail-icon { border-left: 1px solid var(--border); }
+  .detail-icon .mark { width: 64px; height: 64px; }
+  .detail-label { color: var(--secondary); font-size: 12px; line-height: 1.4; }
+  .detail-caption { margin: 0; color: var(--secondary); font-size: 12px; line-height: 1.65; }
+  .controls { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 8px 16px; margin: 18px 0 0; }
+  .controls-label { color: var(--secondary); font-size: 12px; line-height: 1.5; }
+  .small-toggle button { min-width: 44px; min-height: 44px; padding: 0 8px; font-size: 11px; }
+  .brands { display: flex; align-items: center; gap: 10px; margin-top: 20px; }
+  .brand-button { min-height: 44px; padding: 0 14px; border: 1px solid var(--border); border-radius: 9999px; background: var(--card); color: var(--secondary); font-size: 12px; line-height: 1.5; }
+  .brand-button[aria-pressed=true] { border-color: var(--text); color: var(--text); }
+  .footer { margin-top: 20px; color: var(--secondary); font-size: 11px; line-height: 1.65; }
+  .footer p { margin: 0 0 6px; }
+  @media (max-width: 620px) { main { margin-top: 22px; } .grid { grid-template-columns: 1fr; gap: 14px; } .card { padding: 20px; } .detail-icons { margin: 22px 0 18px; } .detail-icon .mark { width: 56px; height: 56px; } .intro { margin-bottom: 20px; } }
+  @media (max-width: 350px) { main { width: calc(100% - 28px); } .card { padding: 16px; } .masthead { gap: 8px; } .toggle button { min-width: 44px; padding: 0 8px; } }
+</style>
+</head>
+<body>
+<main>
+  <header class="masthead">
+    <div><p class="eyebrow">Cindy · 样式稿 01</p><h1>远程供应商 Logo</h1></div>
+    <div class="toggle chrome" role="group" aria-label="预览主题">
+      <button type="button" data-theme-button="light" aria-pressed="true">浅色</button>
+      <button type="button" data-theme-button="dark" aria-pressed="false">深色</button>
+    </div>
+  </header>
+  <p class="intro">品牌主体保留，右上角嵌入一个连接角标。<br>选中后仍然只占一个 Logo 位置。</p>
+  <div class="grid">
+    <section class="card" aria-labelledby="selected-title">
+      <h2 id="selected-title">选中后的样子</h2>
+      <p class="hint">点击选择框，可以查看或切换供应商来源。</p>
+      <div class="comparison">
+        <div class="comparison-row">
+          <span class="comparison-label">本机</span>
+          <button type="button" class="selector-hit" id="local-trigger" aria-label="查看本机供应商" aria-controls="source-menu" aria-expanded="false">
+            <span class="selector"><span class="mark" data-icon="local" aria-hidden="true"></span><span data-model-name>Opus 5.5</span><svg class="chevron" viewBox="0 0 16 16" aria-hidden="true"><path d="m4 6 4 4 4-4" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg></span>
+          </button>
+        </div>
+        <div class="comparison-row">
+          <span class="comparison-label" id="selection-label">远程</span>
+          <button type="button" class="selector-hit" id="remote-trigger" aria-label="Claude 订阅，工作室 Mac，Opus 5.5" aria-controls="source-menu" aria-expanded="true" title="Claude 订阅 · 工作室 Mac">
+            <span class="selector"><span class="mark" id="selected-mark" data-icon="remote" aria-hidden="true"></span><span data-model-name>Opus 5.5</span><svg class="chevron" viewBox="0 0 16 16" aria-hidden="true"><path d="m4 6 4 4 4-4" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg></span>
+          </button>
+        </div>
+      </div>
+      <div class="source-menu" id="source-menu" role="radiogroup" aria-label="供应商来源">
+        <div class="menu-title">供应商来源</div>
+        <button type="button" class="source-row" data-source="local" role="radio" aria-checked="false">
+          <span class="mark" data-icon="local" aria-hidden="true"></span>
+          <span class="source-copy"><span class="source-name" data-provider-name>Claude 订阅</span><span class="source-place">本机</span></span>
+          <svg class="check" viewBox="0 0 16 16" aria-hidden="true"><path d="m3 8 3 3 7-7" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>
+        </button>
+        <button type="button" class="source-row" data-source="remote" role="radio" aria-checked="true">
+          <span class="mark" data-icon="remote" aria-hidden="true"></span>
+          <span class="source-copy"><span class="source-name" data-provider-name>Claude 订阅</span><span class="source-place">工作室 Mac</span></span>
+          <svg class="check" viewBox="0 0 16 16" aria-hidden="true"><path d="m3 8 3 3 7-7" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>
+        </button>
+      </div>
+      <p class="source-note" id="source-note" aria-live="polite">当前来源：Claude 订阅 · 工作室 Mac</p>
+    </section>
+    <section class="card" aria-labelledby="detail-title">
+      <h2 id="detail-title">放大看图标</h2>
+      <div class="detail-icons">
+        <div class="detail-icon"><span class="mark" data-icon="local" aria-hidden="true"></span><span class="detail-label">普通</span></div>
+        <div class="detail-icon"><span class="mark" data-icon="remote" aria-hidden="true"></span><span class="detail-label">远程</span></div>
+      </div>
+      <p class="detail-caption">角标与品牌图形组合成一个图标。<br>同一处理用于不同供应商。</p>
+      <div class="brands chrome" role="group" aria-label="供应商预览">
+        <button type="button" class="brand-button" data-brand="anthropic" aria-pressed="true">Claude</button>
+        <button type="button" class="brand-button" data-brand="openai" aria-pressed="false">OpenAI</button>
+      </div>
+    </section>
+  </div>
+  <div class="controls chrome">
+    <span class="controls-label">选择框内的图标尺寸</span>
+    <div class="toggle small-toggle" role="group" aria-label="图标尺寸">
+      <button type="button" data-size="14" aria-pressed="false">14 px</button>
+      <button type="button" data-size="16" aria-pressed="true">16 px</button>
+      <button type="button" data-size="20" aria-pressed="false">20 px</button>
+    </div>
+  </div>
+  <footer class="footer"><p>电脑名在展开后显示，选中框保留 Logo 和模型名。</p><p>这是交互样式稿，不会修改实际供应商或连接任何电脑。</p></footer>
+</main>
+<script>
+  const brandPaths = {"anthropic": "M13.827 3.52h3.603L24 20h-3.603l-6.57-16.48zm-7.258 0h3.767L16.906 20h-3.674l-1.343-3.461H5.017l-1.344 3.461H0L6.57 3.52zm4.132 9.876L8.453 7.247 6.205 13.396z", "openai": "M22.282 9.821a5.985 5.985 0 0 0-.516-4.91 6.046 6.046 0 0 0-6.51-2.9A6.065 6.065 0 0 0 4.981 4.18a5.985 5.985 0 0 0-3.998 2.9 6.046 6.046 0 0 0 .743 7.097 5.98 5.98 0 0 0 .51 4.911 6.051 6.051 0 0 0 6.515 2.9A5.985 5.985 0 0 0 13.26 24a6.056 6.056 0 0 0 5.772-4.206 5.99 5.99 0 0 0 3.997-2.9 6.056 6.056 0 0 0-.747-7.073zM13.26 22.43a4.476 4.476 0 0 1-2.876-1.04l.142-.08 4.778-2.758a.795.795 0 0 0 .393-.681v-6.737l2.02 1.168a.071.071 0 0 1 .038.052v5.583a4.504 4.504 0 0 1-4.495 4.494zM3.6 18.304a4.47 4.47 0 0 1-.535-3.014l.142.085 4.783 2.759a.771.771 0 0 0 .78 0l5.843-3.369v2.332a.08.08 0 0 1-.033.062L9.74 19.95a4.5 4.5 0 0 1-6.14-1.646zM2.34 7.896a4.485 4.485 0 0 1 2.366-1.973V11.6a.766.766 0 0 0 .388.676l5.815 3.355-2.02 1.168a.076.076 0 0 1-.071 0l-4.83-2.786A4.504 4.504 0 0 1 2.34 7.872zm16.597 3.855l-5.833-3.387L15.119 7.2a.076.076 0 0 1 .071 0l4.83 2.787a4.49 4.49 0 0 1-.676 8.105v-5.678a.79.79 0 0 0-.407-.674zm2.01-3.026l-.142-.085-4.774-2.782a.776.776 0 0 0-.785 0L9.409 9.23V6.897a.066.066 0 0 1 .028-.061l4.83-2.787a4.5 4.5 0 0 1 6.68 4.66zm-12.64 4.135l-2.02-1.164a.08.08 0 0 1-.038-.057V6.075a4.5 4.5 0 0 1 7.375-3.453l-.142.08L8.704 5.46a.795.795 0 0 0-.393.681zm1.097-2.365l2.602-1.5 2.607 1.5v2.999l-2.607 1.5-2.602-1.5z"};
+  const brands = { anthropic: { model: 'Opus 5.5', provider: 'Claude 订阅' }, openai: { model: 'GPT-5.4', provider: 'OpenAI API' } };
+  let brand = 'anthropic';
+  let selectedSource = 'remote';
+  let menuOpen = true;
+  let menuAnchor = 'remote';
+  function iconSvg(remote) {
+    const path = '<path d="' + brandPaths[brand] + '" fill="currentColor"/>';
+    if (!remote) return '<svg viewBox="0 0 28 28" aria-hidden="true"><svg x="2" y="2" width="24" height="24" viewBox="0 0 24 24">' + path + '</svg></svg>';
+    return '<svg viewBox="0 0 28 28" aria-hidden="true"><svg x="0.8" y="5" width="23" height="23" viewBox="0 0 24 24">' + path + '</svg><path d="M19.5 8.5 26.5 1.5M20 1.5h6.5V8" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"/></svg>';
+  }
+  function render() {
+    document.querySelectorAll('[data-icon]').forEach(el => { el.innerHTML = iconSvg(el.dataset.icon === 'remote'); });
+    const name = brands[brand];
+    document.querySelectorAll('[data-model-name]').forEach(el => { el.textContent = name.model; });
+    document.querySelectorAll('[data-provider-name]').forEach(el => { el.textContent = name.provider; });
+    document.querySelectorAll('[data-brand]').forEach(el => { el.setAttribute('aria-pressed', String(el.dataset.brand === brand)); });
+    document.querySelectorAll('[data-source]').forEach(el => { el.setAttribute('aria-checked', String(el.dataset.source === selectedSource)); });
+    const place = selectedSource === 'remote' ? '工作室 Mac' : '本机';
+    const trigger = document.querySelector('#remote-trigger');
+    trigger.title = name.provider + ' · ' + place;
+    trigger.setAttribute('aria-label', name.provider + '，' + place + '，' + name.model);
+    trigger.setAttribute('aria-expanded', String(menuOpen && menuAnchor === 'remote'));
+    document.querySelector('#local-trigger').setAttribute('aria-expanded', String(menuOpen && menuAnchor === 'local'));
+    document.querySelector('#selection-label').textContent = selectedSource === 'remote' ? '远程' : '本机';
+    const mark = document.querySelector('#selected-mark');
+    mark.dataset.icon = selectedSource;
+    mark.innerHTML = iconSvg(selectedSource === 'remote');
+    document.querySelector('#source-note').textContent = '当前来源：' + name.provider + ' · ' + place;
+    document.querySelector('#source-menu').hidden = !menuOpen;
+  }
+  document.querySelectorAll('[data-theme-button]').forEach(button => {
+    button.addEventListener('click', () => {
+      document.documentElement.dataset.theme = button.dataset.themeButton;
+      document.querySelectorAll('[data-theme-button]').forEach(el => el.setAttribute('aria-pressed', String(el === button)));
+    });
+  });
+  document.querySelectorAll('[data-brand]').forEach(button => { button.addEventListener('click', () => { brand = button.dataset.brand; render(); }); });
+  document.querySelectorAll('[data-size]').forEach(button => { button.addEventListener('click', () => {
+    document.documentElement.style.setProperty('--mark-size', button.dataset.size + 'px');
+    document.querySelectorAll('[data-size]').forEach(el => el.setAttribute('aria-pressed', String(el === button)));
+  }); });
+  document.querySelectorAll('[data-source]').forEach(button => { button.addEventListener('click', () => { selectedSource = button.dataset.source; menuOpen = false; render(); document.querySelector('#remote-trigger').focus({ preventScroll: true }); }); });
+  document.querySelector('#remote-trigger').addEventListener('click', () => { menuOpen = menuAnchor === 'remote' ? !menuOpen : true; menuAnchor = 'remote'; render(); });
+  document.querySelector('#local-trigger').addEventListener('click', () => { selectedSource = 'local'; menuOpen = true; menuAnchor = 'local'; render(); });
+  document.querySelectorAll('[data-source]').forEach((button, index) => {
+    button.addEventListener('keydown', event => {
+      if (!['ArrowDown', 'ArrowUp', 'ArrowRight', 'ArrowLeft', 'Home', 'End'].includes(event.key)) return;
+      event.preventDefault();
+      const rows = [...document.querySelectorAll('[data-source]')];
+      const next = event.key === 'Home' ? 0 : event.key === 'End' ? rows.length - 1 : (index + (['ArrowDown', 'ArrowRight'].includes(event.key) ? 1 : -1) + rows.length) % rows.length;
+      selectedSource = rows[next].dataset.source; render(); rows[next].focus({ preventScroll: true });
+    });
+  });
+  document.addEventListener('keydown', event => { if (event.key === 'Escape' && menuOpen) { menuOpen = false; render(); document.querySelector('#remote-trigger').focus({ preventScroll: true }); } });
+  render();
+</script>
+</body>
+</html>

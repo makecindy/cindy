@@ -12,11 +12,14 @@ import {
 } from '@cindy/maker-shared/work-activity-projection';
 
 import type { ChatMessage } from '@/lib/makerChatStore';
+import { createMessageProjectionCache } from '@/components/chat/messageProjectionCache';
 
 export type { ExplorationActivity, ExplorationActivityKind, ProjectedThinkingActivity };
 export type ProjectedToolActivity = SharedProjectedToolActivity<ChatMessage>;
 export type ProjectedWorkActivity = SharedProjectedWorkActivity<ChatMessage>;
 export type WorkActivityProjection = SharedWorkActivityProjection<ChatMessage>;
+
+const projectSnapshot = createMessageProjectionCache<ChatMessage, WorkActivityProjection>();
 
 export function projectRecentWorkActivities(
   childItems: readonly ProjectableWorkChild<ChatMessage>[],
@@ -29,6 +32,30 @@ export function projectRecentWorkActivities(
 export function projectWorkActivities(
   childItems: readonly ProjectableWorkChild<ChatMessage>[],
   isStreaming: boolean,
+  preserveRepeatedReads = false,
 ): WorkActivityProjection {
-  return projectSharedWorkActivities(childItems, isStreaming);
+  // Group wrappers and result Maps are reconstructed on mount. Their immutable
+  // source messages and the exact values consumed by the projector are stable.
+  // Never retain rendered-child closures in the cross-mount cache.
+  const dependencies: unknown[] = [isStreaming, preserveRepeatedReads];
+  let first: ChatMessage | undefined;
+  for (const child of childItems) {
+    dependencies.push(child.kind, child.key);
+    if (child.kind === 'tools') {
+      for (const message of child.toolCalls ?? []) {
+        first ??= message;
+        dependencies.push(
+          message,
+          child.resultMap?.has(message.clientId),
+          child.resultMap?.get(message.clientId),
+          child.settledIds?.has(message.clientId),
+        );
+      }
+    } else if (child.kind === 'thinking' && child.message) {
+      first ??= child.message;
+      dependencies.push(child.message);
+    }
+  }
+  const compute = () => projectSharedWorkActivities(childItems, isStreaming, preserveRepeatedReads);
+  return first ? projectSnapshot(first, dependencies, compute) : compute();
 }

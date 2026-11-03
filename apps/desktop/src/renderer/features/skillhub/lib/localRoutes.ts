@@ -35,7 +35,8 @@ export function buildLocalSkillPathRoute(path: string, context: { scope?: string
   const scope = context.scope === 'user' ? 'global' : context.scope === 'repo' ? 'project' : context.scope;
   if (scope === 'global' || scope === 'project') search.set('scope', scope);
   if (scope === 'project' && context.workingDir) search.set('workingDir', context.workingDir);
-  return `/skillhub/local/by-path?${search.toString()}`;
+  search.set('view', 'local');
+  return `/skillhub/detail?${search.toString()}`;
 }
 
 function skillDirectoryPath(path: string): string {
@@ -45,16 +46,12 @@ function skillDirectoryPath(path: string): string {
   return windows ? normalized.toLowerCase() : normalized;
 }
 
-/** Builds a local detail URL while preserving the legacy pathname contract. */
+/** New local links use the shared detail route while retaining source identity. */
 export function buildLocalSkillRoute(entry: LocalSkillRouteEntry): string {
-  const name = encodeURIComponent(entry.name);
-  const pathname =
-    entry.scope === 'global'
-      ? `/skillhub/local/${entry.kind}/global/${name}`
-      : `/skillhub/local/${entry.kind}/project/${entry.projectHash}/${name}`;
-  const search = new URLSearchParams({ engine: entry.engine });
+  const search = new URLSearchParams({ view: 'local', kind: entry.kind, scope: entry.scope, name: entry.name, engine: entry.engine });
+  if (entry.scope === 'project' && entry.projectHash) search.set('project', entry.projectHash);
   if (entry.sourceKey) search.set('source', entry.sourceKey);
-  return `${pathname}?${search.toString()}`;
+  return `/skillhub/detail?${search.toString()}`;
 }
 
 /** Resolves both source-aware links and legacy links that predate source keys. */

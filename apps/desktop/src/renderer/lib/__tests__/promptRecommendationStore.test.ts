@@ -74,6 +74,71 @@ afterEach(() => {
 });
 
 describe('promptRecommendationStore', () => {
+  it.each([400, 600, 5_000])('最终 done 晚于 status:false %dms 时仍能生成推荐', (delay) => {
+    h.statusBySession.set('session-a', ELIGIBLE);
+    h.startedAtBySession.set('session-a', 100);
+    __testing.applyRunningSnapshot(new Map([['session-a', { isRunning: true }]]));
+    __testing.applyRunningSnapshot(new Map());
+    __testing.noteTurnEnded('session-a', 200);
+    vi.advanceTimersByTime(delay);
+
+    const early = __testing.getSessionSnapshot('session-a');
+    if (early) {
+      const seq = beginPromptRecommendationPrediction('session-a', early.revision)!;
+      // Main 的 dispatch boundary 尚未释放，本次没有调用模型。
+      resolvePromptRecommendationPrediction('session-a', early.revision, seq, null);
+    }
+    __testing.noteTurnEnded('session-a', 200 + delay);
+    vi.advanceTimersByTime(500);
+    expect(__testing.getSessionSnapshot('session-a')?.revision).toBe(200 + delay);
+  });
+
+  it('更新的完成通知立即作废旧预测，不让旧 Promise 抢先消费最终完成', () => {
+    h.statusBySession.set('session-a', ELIGIBLE);
+    complete('session-a', 200);
+    const seq = beginPromptRecommendationPrediction('session-a', 200)!;
+    __testing.noteTurnEnded('session-a', 800);
+    resolvePromptRecommendationPrediction('session-a', 200, seq, '旧结果');
+    expect(__testing.getSessionSnapshot('session-a')?.prompt).not.toBe('旧结果');
+    vi.advanceTimersByTime(500);
+    expect(__testing.getSessionSnapshot('session-a')?.revision).toBe(800);
+  });
+
+  it.each(['accepted', 'dismissed'])('%s 后迟到的结束 patch 不会重新生成推荐', (outcome) => {
+    h.statusBySession.set('session-a', ELIGIBLE);
+    complete('session-a', 200);
+    const seq = beginPromptRecommendationPrediction('session-a', 200)!;
+    if (outcome === 'accepted') {
+      resolvePromptRecommendationPrediction('session-a', 200, seq, '继续测试');
+    }
+    dismissPromptRecommendation('session-a', 200);
+    __testing.noteTurnEnded('session-a', 800);
+    vi.advanceTimersByTime(500);
+    expect(__testing.getSessionSnapshot('session-a')).toBeUndefined();
+  });
+
+  it('等待最终 done 时即使没有 entry，显式发送也取消这份等待', () => {
+    h.statusBySession.set('session-a', ELIGIBLE);
+    complete('session-a', 200);
+    const seq = beginPromptRecommendationPrediction('session-a', 200)!;
+    resolvePromptRecommendationPrediction('session-a', 200, seq, null);
+    dismissPromptRecommendation('session-a');
+    __testing.noteTurnEnded('session-a', 800);
+    vi.advanceTimersByTime(500);
+    expect(__testing.getSessionSnapshot('session-a')).toBeUndefined();
+  });
+
+  it('新 running 后输入框的同步失效不会误删新轮完成资格', () => {
+    h.statusBySession.set('session-a', ELIGIBLE);
+    h.startedAtBySession.set('session-a', 100);
+    __testing.applyRunningSnapshot(new Map([['session-a', { isRunning: true }]]));
+    dismissPromptRecommendation('session-a');
+    __testing.noteTurnEnded('session-a', 200);
+    __testing.applyRunningSnapshot(new Map());
+    vi.advanceTimersByTime(500);
+    expect(__testing.getSessionSnapshot('session-a')?.revision).toBe(200);
+  });
+
   it('不会为本次运行期间未观察到 running 的历史 session 创建候选', () => {
     h.statusBySession.set('old-session', ELIGIBLE);
 

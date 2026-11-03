@@ -5,6 +5,7 @@ import {
   capturePiRuntimeCapabilityManifest,
   identifyManagedPiPackageCommandNames,
   parsePiRuntimeCommands,
+  preparePinnedPiSkillInvocation,
   snapshotManagedPiPackageSkills,
 } from '../runtime-capabilities.js';
 
@@ -39,6 +40,58 @@ describe('Pi runtime capability parsing', () => {
       ok: true,
       commands: [extension, prompt],
     });
+  });
+
+  it.each(['/learn release flow', '/skill:learn release flow'])(
+    'pins %s to the sole same-path Pi runtime winner',
+    (input) => {
+      const skillFile = path.resolve('system-skills', 'v10', 'learn', 'SKILL.md');
+      const manifest = {
+        capturedAt: '2026-09-19T00:00:00.000Z',
+        generation: 1,
+        status: 'loaded' as const,
+        source: 'pi:get_commands' as const,
+        commands: [{
+          name: 'skill:learn',
+          source: 'skill',
+          sourceInfo: { path: skillFile, baseDir: path.dirname(skillFile) },
+        }],
+      };
+
+      expect(preparePinnedPiSkillInvocation(
+        input,
+        { name: 'learn', path: skillFile },
+        manifest,
+      )).toBe('/skill:learn release flow');
+    },
+  );
+
+  it('rejects a colliding or ambiguous Pi runtime winner', () => {
+    const pinnedPath = path.resolve('system-skills', 'v10', 'learn', 'SKILL.md');
+    const customPath = path.resolve('project', '.agents', 'skills', 'learn', 'SKILL.md');
+    const command = (skillFile: string) => ({
+      name: 'skill:learn',
+      source: 'skill',
+      sourceInfo: { path: skillFile, baseDir: path.dirname(skillFile) },
+    });
+    const manifest = {
+      capturedAt: '2026-09-19T00:00:00.000Z',
+      generation: 1,
+      status: 'loaded' as const,
+      source: 'pi:get_commands' as const,
+      commands: [command(pinnedPath), command(customPath)],
+    };
+
+    expect(() => preparePinnedPiSkillInvocation(
+      '/learn release flow',
+      { name: 'learn', path: pinnedPath },
+      manifest,
+    )).toThrow('does not match the Pi runtime winner');
+    expect(() => preparePinnedPiSkillInvocation(
+      '/learn release flow',
+      { name: 'learn', path: pinnedPath },
+      { ...manifest, commands: [command(customPath)] },
+    )).toThrow('does not match the Pi runtime winner');
   });
 
   it('marks commands only when Pi provenance is inside an enabled managed package root', () => {

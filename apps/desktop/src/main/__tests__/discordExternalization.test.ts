@@ -22,14 +22,11 @@ describe('discord.js main-process packaging', () => {
 
   it('preserves Discord dependency versions instead of flattening the runtime closure', () => {
     const forgeConfig = readFileSync(resolve(DESKTOP_ROOT, 'forge.config.ts'), 'utf8');
-    const nativeDepsBlock = forgeConfig.match(
-      /const NATIVE_RUNTIME_DEPS = \[[\s\S]*?\];/,
-    )?.[0];
+    const nativeDepsBlock = forgeConfig.match(/const NATIVE_RUNTIME_DEPS = \[[\s\S]*?\];/)?.[0];
 
     expect(nativeDepsBlock).toBeTruthy();
     expect(nativeDepsBlock).not.toContain('...DISCORD_RUNTIME_DEPS');
     expect(forgeConfig).toContain('copyDiscordRuntimeDeps(destModules)');
-    expect(forgeConfig).toContain("const childDestModules = path.join(dst, 'node_modules')");
-    expect(forgeConfig).toContain('copyDependencyTree(childDep, childDestModules, [src], seen)');
+    expect(forgeConfig).toContain('copyRuntimeTrees(deps, destModules, resolvePackageDir)');
   });
 });

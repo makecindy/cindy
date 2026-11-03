@@ -14,9 +14,8 @@
  * 把 `html` 安全截断到不超过 `maxChars`(含尾部省略号与补闭合标签)。
  * `html.length <= maxChars` 时原样返回。
  */
-export function capRenderedText(html: string, maxChars: number): string {
-  if (html.length <= maxChars) return html;
-  let cut = html.slice(0, maxChars - 1);
+function renderCandidate(html: string, cutLength: number): { cut: string; closers: string } {
+  let cut = html.slice(0, cutLength);
   const lastOpen = cut.lastIndexOf('<');
   if (lastOpen > cut.lastIndexOf('>')) cut = cut.slice(0, lastOpen);
   const lastAmp = cut.lastIndexOf('&');
@@ -39,5 +38,19 @@ export function capRenderedText(html: string, maxChars: number): string {
     .reverse()
     .map((name) => `</${name}>`)
     .join('');
-  return `${cut}…${closers}`;
+  return { cut, closers };
+}
+
+export function capRenderedText(html: string, maxChars: number): string {
+  if (html.length <= maxChars) return html;
+  let cutLength = maxChars - 1;
+  while (cutLength > 0) {
+    const { cut, closers } = renderCandidate(html, cutLength);
+    const rendered = `${cut}…${closers}`;
+    if (rendered.length <= maxChars) return rendered;
+    // 截点和当前标签栈的闭合后缀共用同一长度预算；缩短后需重新计算标签栈。
+    // 逐字符回退并重新计算标签栈，直到完整结果不超过上限。
+    cutLength -= 1;
+  }
+  return '…';
 }

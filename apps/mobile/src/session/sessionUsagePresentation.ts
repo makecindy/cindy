@@ -6,6 +6,27 @@ import {
   type RemoteMoney,
 } from "./remoteMoney";
 import type { RemoteSession } from "./types";
+import { quotaCountdown } from "./mobileModelRowPresentation";
+import { quotaLevelFromRemaining, type QuotaLevel } from "@cindy/maker-shared/quota-level";
+
+/**
+ * Time left until a quota resets, used as the window label like the desktop status
+ * chip ("7 hours": one unit, rounded up). Null once the reset time has passed.
+ * A known windowMinutes caps it so a just-reset weekly window never reads "8 days".
+ */
+export function formatQuotaResetCountdown(
+  resetsAt: number,
+  now: number,
+  t: TFunction,
+  windowMinutes?: number | null,
+): string | null {
+  return quotaCountdown(
+    resetsAt,
+    now,
+    (unit) => t(`models.unified.timeUnit.${unit}`),
+    windowMinutes,
+  );
+}
 
 export function formatSessionUsageMoney(money: RemoteMoney): string {
   const symbol = remoteMoneySymbol(money.currency);
@@ -58,7 +79,8 @@ export interface AccountUsageRow {
   label: string;
   value: string;
   detail?: string;
-  warning?: boolean;
+  /** Shared quota rule (`@cindy/maker-shared/quota-level`): yellow at 30% left, red at 10%. */
+  level?: QuotaLevel;
 }
 
 export function accountUsageRows(
@@ -70,14 +92,27 @@ export function accountUsageRows(
   if (!account) return [];
   const rows: AccountUsageRow[] = [];
   for (const window of account.windows) {
+    // The countdown replaces the window name; without one (unknown or elapsed
+    // reset) the row falls back to naming the window.
+    const countdown =
+      window.resetsAt === null
+        ? null
+        : formatQuotaResetCountdown(
+            window.resetsAt,
+            now,
+            t,
+            // xAI resetsAt may fall back to a non-weekly period end; only its label is weekly.
+            account.source === "xai" ? null : window.minutes,
+          );
     const label =
-      window.minutes === 10080
+      countdown ??
+      (window.minutes === 10080
         ? t("session.menu.usage.week")
         : window.minutes && window.minutes % 60 === 0
           ? t("session.menu.usage.hours", { count: window.minutes / 60 })
           : window.minutes
             ? t("session.menu.usage.minutes", { count: window.minutes })
-            : t("session.menu.usage.quota");
+            : t("session.menu.usage.quota"));
     const expired = window.resetsAt !== null && window.resetsAt * 1000 <= now;
     rows.push({
       label: window.modelLabel ? `${window.modelLabel} · ${label}` : label,
@@ -86,19 +121,34 @@ export function accountUsageRows(
         : t("session.menu.usage.remaining", {
             percent: Math.round(window.remainingPercent),
           }),
-      warning: !expired && window.remainingPercent <= 10,
-      ...(window.resetsAt !== null
-        ? {
-            detail: t("session.menu.usage.resets", {
-              time: new Date(window.resetsAt * 1000).toLocaleString(locale, {
-                month: "short",
-                day: "numeric",
-                hour: "2-digit",
-                minute: "2-digit",
-              }),
+      level: expired ? "normal" : quotaLevelFromRemaining(window.remainingPercent),
+    });
+  }
+  const credits = account.credits;
+  if (credits) {
+    const parts = [
+      credits.balance === null
+        ? null
+        : t("session.menu.usage.creditsRemaining", {
+            credits: credits.balance.toLocaleString(locale, {
+              minimumFractionDigits: 2,
+              maximumFractionDigits: 2,
             }),
-          }
-        : {}),
+          }),
+      credits.status === null
+        ? null
+        : t(
+            {
+              unlimited: "session.menu.usage.creditsUnlimited",
+              depleted: "session.menu.usage.creditsDepleted",
+              available: "session.menu.usage.creditsAvailable",
+            }[credits.status],
+          ),
+    ].filter((part): part is string => part !== null);
+    rows.push({
+      label: t("session.menu.usage.credits"),
+      value: parts.join(" · "),
+      level: credits.status === "depleted" ? "crit" : "normal",
     });
   }
   for (const amount of account.amounts) {
@@ -111,10 +161,12 @@ export function accountUsageRows(
     rows.push({
       label: t(`session.menu.usage.${amount.id}`),
       value: `${formatSessionUsageMoney(money)}${amount.limit === undefined ? "" : ` / ${formatSessionUsageMoney({ ...money, amount: amount.limit })}`}`,
-      warning:
+      level:
         amount.id === "balance"
-          ? amount.amount <= 0
-          : amount.limit !== undefined && amount.amount >= amount.limit,
+          ? amount.amount <= 0 ? "crit" : "normal"
+          : amount.limit !== undefined && amount.limit > 0
+            ? quotaLevelFromRemaining(((amount.limit - amount.amount) / amount.limit) * 100)
+            : "normal",
     });
   }
   return rows;

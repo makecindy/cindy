@@ -27,30 +27,31 @@ export interface MobileKeyboardState {
  * iOS 的输入卡片、消息区域和避让容器共用这份坐标与动画，不再让 KAV
  * 另行监听 show/hide 并覆盖动画。Android 保留 KAV 的 did 事件避让。
  */
-export function useMobileKeyboardState(): MobileKeyboardState {
+export function useMobileKeyboardState(enabled = true): MobileKeyboardState {
   const viewport = useWindowDimensions();
-  const [state, setState] = useState(() => {
-    // Web 的 Keyboard shim 没有原生几何快照 API，沿用零占位初值。
-    if (Platform.OS === 'web') return { shown: false, frame: null };
-    const frame = Keyboard.metrics() ?? null;
-    return {
-      shown: Keyboard.isVisible(),
-      // 已开键盘时导航进来，也先排除 cross-fade 的 screenY=0 特例。
-      frame: Platform.OS === 'ios' && frame?.screenY === 0 ? null : frame,
-    };
-  });
+  const [state, setState] = useState(() => readKeyboardSnapshot(enabled));
   const snapshot = useRef(state);
   const transition = useRef<MobileKeyboardState['transition']['current']>(null);
 
   useLayoutEffect(() => {
+    transition.current = null;
+    if (!enabled) return;
+    // A hidden consumer missed native events. Reconcile before paint without
+    // replaying an animation, including reopening while the keyboard is up.
+    const current = readKeyboardSnapshot(true);
+    if (snapshot.current.shown !== current.shown || !sameKeyboardFrame(snapshot.current.frame, current.frame)) {
+      setState(current);
+    }
+    snapshot.current = current;
     let disposed = false;
-    let shown = snapshot.current.shown;
+    let shown = current.shown;
     let latestEvent: KeyboardEvent | null = null;
     const publish = (event: KeyboardEvent, frame: KeyboardMetrics | null) => {
       // cross-fade 查询晚于 hide / 下一次 frame 返回时，不得恢复旧键盘占位。
       if (disposed || latestEvent !== event) return;
       const previous = snapshot.current;
       if (previous.shown === shown && sameKeyboardFrame(previous.frame, frame)) return;
+      mobileDebugLog('debug', 'keyboard', 'frame received', { shown, durationMs: event.duration, easing: event.easing, frame: event.endCoordinates });
       const next = { shown, frame };
       snapshot.current = next;
       transition.current = { event, startedAt: Date.now() };
@@ -65,7 +66,6 @@ export function useMobileKeyboardState(): MobileKeyboardState {
       setState(next);
     };
     const update = (event: KeyboardEvent) => {
-      mobileDebugLog('debug', 'keyboard', 'frame received', { shown, durationMs: event.duration, easing: event.easing, frame: event.endCoordinates });
       latestEvent = event;
       if (Platform.OS === 'ios' && shown && event.endCoordinates.screenY === 0) {
         // 保留 RN KAV 的系统交叉淡化兼容：此时 screenY=0 不是全屏遮挡。
@@ -115,9 +115,9 @@ export function useMobileKeyboardState(): MobileKeyboardState {
       disposed = true;
       for (const subscription of subscriptions) subscription.remove();
     };
-  }, []);
+  }, [enabled]);
 
-  const frame = state.shown ? state.frame : null;
+  const frame = enabled && state.shown ? state.frame : null;
   const height = !frame ? 0 : Platform.OS === 'ios'
     ? isDockedKeyboard({ x: frame.screenX, y: frame.screenY, ...frame }, viewport.width)
       && frame.screenY + frame.height >= viewport.height
@@ -125,6 +125,17 @@ export function useMobileKeyboardState(): MobileKeyboardState {
       : 0
     : Math.max(0, frame.height);
   return { height, visible: height > 0, transition };
+}
+
+function readKeyboardSnapshot(enabled: boolean) {
+  // Web's Keyboard shim has no native snapshot APIs.
+  if (!enabled || Platform.OS === 'web') return { shown: false, frame: null };
+  const frame = Keyboard.metrics() ?? null;
+  return {
+    shown: Keyboard.isVisible(),
+    // Avoid a full-screen inset while the cross-fade preference is queried.
+    frame: Platform.OS === 'ios' && frame?.screenY === 0 ? null : frame,
+  };
 }
 
 function sameKeyboardFrame(a: KeyboardMetrics | null, b: KeyboardMetrics | null): boolean {

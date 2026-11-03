@@ -10,6 +10,8 @@ import {
   buildSnapshotFilePlanFromEntries,
   parseStatusPorcelainZ,
 } from '../git-snapshot/snapshotFileFilter';
+import { ensureManagedWorktreeExcluded } from '../worktree/managedWorktreeExclude';
+import { OperationBudget } from '../utils/operationBudget';
 
 function git(cwd: string, args: readonly string[]): Promise<void> {
   return new Promise((resolve, reject) => {
@@ -67,6 +69,7 @@ describe('buildSnapshotFilePlan', () => {
   });
 
   afterEach(async () => {
+    vi.restoreAllMocks();
     vi.unstubAllEnvs();
     await fs.rm(testRoot, { recursive: true, force: true });
   });
@@ -79,6 +82,45 @@ describe('buildSnapshotFilePlan', () => {
     expect(plan.includedFiles).toEqual([
       { path: 'src/app.ts', pathsForPathspec: [literal('src/app.ts')] },
     ]);
+  });
+
+  // #6901: the file-count gate must run before per-path IO, and the directory
+  // cache must not hide a nested .git created between two captures. Real fs
+  // fixtures belong in the integration tier; existing tests only scan once.
+  it('rejects an oversized status plan before inspecting its paths', async () => {
+    const lstat = vi.spyOn(fs, 'lstat');
+    await expect(buildSnapshotFilePlanFromEntries(repoPath, [
+      { code: '??', path: 'a.txt' }, { code: '??', path: 'b.txt' },
+    ], { maxFiles: 1 })).rejects.toMatchObject({ reason: 'file-count' });
+    expect(lstat).not.toHaveBeenCalled();
+  });
+
+  it('rechecks nested repository markers on the next scan', async () => {
+    await writeRepoFile(repoPath, 'nested/a.txt', 'aa');
+    await writeRepoFile(repoPath, 'nested/b.txt', 'bb');
+    const entries = ['nested/a.txt', 'nested/b.txt'].map((path) => ({ code: '??', path }));
+    const first = await buildSnapshotFilePlanFromEntries(repoPath, entries);
+    expect(first.includedFiles).toHaveLength(2);
+    await fs.mkdir(path.join(repoPath, 'nested/.git'));
+    const second = await buildSnapshotFilePlanFromEntries(repoPath, entries);
+    expect(second.includedFiles).toEqual([]);
+    expect(second.skippedFiles.map((file) => file.reason)).toEqual(['nested-git-repo', 'nested-git-repo']);
+  });
+
+  it('does not execute repository-local fsmonitor when reading git status', async () => {
+    const marker = path.join(testRoot, 'fsmonitor-ran');
+    const script = path.join(testRoot, 'fsmonitor.js');
+    await fs.writeFile(
+      script,
+      `require('fs').writeFileSync(${JSON.stringify(marker)}, 'ran');\nprocess.exit(0);\n`,
+    );
+    await git(repoPath, ['config', 'core.fsmonitor', `node ${JSON.stringify(script)}`]);
+    await writeRepoFile(repoPath, 'src/app.ts', 'export const value = 1;\n');
+
+    const plan = await buildSnapshotFilePlan(repoPath);
+
+    expect(plan.includedFiles.map((file) => file.path)).toEqual(['src/app.ts']);
+    await expect(fs.access(marker)).rejects.toMatchObject({ code: 'ENOENT' });
   });
 
   it('skips sensitive paths while allowing env templates', async () => {
@@ -250,6 +292,99 @@ describe('buildSnapshotFilePlan', () => {
         pathsForPathspec: [literal('vendor/tool/')],
       }),
     );
+  });
+
+  // #7259, git-integration tier: cancel while native filesystem metadata is
+  // pending. Existing scans only covered completed lstat calls.
+  it('stops a stalled file scan and ignores the late filesystem result', async () => {
+    await writeRepoFile(repoPath, 'slow.txt', 'slow');
+    const budget = new OperationBudget(10_000);
+    const nativeLstat = fs.lstat.bind(fs);
+    let entered!: () => void;
+    const started = new Promise<void>((resolve) => { entered = resolve; });
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => { release = resolve; });
+    const spy = vi.spyOn(fs, 'lstat').mockImplementation(async (...args) => {
+      if (String(args[0]) === path.join(repoPath, 'slow.txt')) {
+        entered();
+        await gate;
+      }
+      return nativeLstat(...args);
+    });
+    try {
+      const scanning = budget.run(() => buildSnapshotFilePlanFromEntries(repoPath, [
+        { code: '??', path: 'slow.txt' }, { code: '??', path: 'later.txt' },
+      ]));
+      await started;
+      budget.cancel(new Error('stopped scan'));
+      await expect(scanning).rejects.toThrow('stopped scan');
+      release();
+      expect(spy.mock.calls.some(([file]) => String(file) === path.join(repoPath, 'later.txt'))).toBe(false);
+    } finally {
+      release();
+      spy.mockRestore();
+    }
+  });
+
+  // #7259: prove the exclusion changes real Git enumeration, including gitfile layouts.
+  // Creation's mocked Git tests cannot verify root anchoring or tracked-file preservation.
+  // Minimal input: managed noise, a tracked file and a nested same-name directory.
+  // Windows 2026-10-26: this file alone took 4.07s wall clock (Vitest 2.33s).
+  it('excludes managed untracked files through a gitfile without hiding tracked or ordinary project files', async () => {
+    const gitDir = path.join(testRoot, 'separate git');
+    await git(repoPath, ['init', '--separate-git-dir', gitDir]);
+    const exclude = path.join(gitDir, 'info', 'exclude');
+    await fs.writeFile(exclude, '# local rule\ncache/\n');
+    await writeRepoFile(repoPath, '.cindy-worktrees/tracked.txt', 'before');
+    await git(repoPath, ['add', '.cindy-worktrees/tracked.txt']);
+    await writeRepoFile(repoPath, '.cindy-worktrees/tracked.txt', 'after');
+    await writeRepoFile(repoPath, '.cindy-worktrees/managed/noise.txt', 'noise');
+    await writeRepoFile(repoPath, '.xdt-worktrees/legacy/noise.txt', 'noise');
+    await writeRepoFile(repoPath, 'src/.cindy-worktrees/user.txt', 'keep');
+    await writeRepoFile(repoPath, 'ordinary/user.txt', 'keep');
+    await writeRepoFile(repoPath, 'cache/cache.txt', 'noise');
+
+    // Non-managed paths must not cause any local rule changes.
+    await ensureManagedWorktreeExcluded(repoPath, path.join(repoPath, 'ordinary', 'example'));
+    expect(await fs.readFile(exclude, 'utf8')).toBe('# local rule\ncache/\n');
+    await Promise.all([
+      ensureManagedWorktreeExcluded(repoPath, path.join(repoPath, '.cindy-worktrees', 'managed')),
+      ensureManagedWorktreeExcluded(repoPath, path.join(repoPath, '.xdt-worktrees', 'legacy')),
+    ]);
+    const plan = await buildSnapshotFilePlan(repoPath);
+    expect(plan.skippedFiles).toEqual([]);
+    expect(plan.includedFiles.map((file) => file.path).sort()).toEqual([
+      '.cindy-worktrees/tracked.txt', 'ordinary/user.txt', 'src/.cindy-worktrees/user.txt',
+    ]);
+    expect(await fs.readFile(exclude, 'utf8')).toContain('# local rule\ncache/\n');
+    await expect(fs.access(path.join(repoPath, '.gitignore'))).rejects.toMatchObject({ code: 'ENOENT' });
+  });
+
+  // #7259 / #6901: sibling files used to repeat ancestor .git I/O. Existing
+  // nested-repo tests do not cover scan-local reuse or invalidation between scans.
+  // Two sibling files and a later .git marker are the minimal input (git-integration tier).
+  it.each(['directory', 'file'])('reuses ancestor checks only within one scan, then detects a new .git %s', async (kind) => {
+    await writeRepoFile(repoPath, 'src/deep/a.ts', 'a');
+    await writeRepoFile(repoPath, 'src/deep/b.ts', 'b');
+    const entries = ['src/deep/a.ts', 'src/deep/b.ts'].map((file) => ({ code: '??', path: file }));
+    const marker = path.join(repoPath, 'src', '.git');
+    const lstat = vi.spyOn(fs, 'lstat');
+    try {
+      const first = await buildSnapshotFilePlanFromEntries(repoPath, entries);
+      expect(first.includedFiles.map((file) => file.path)).toEqual(entries.map((file) => file.path));
+      expect(lstat.mock.calls.filter(([file]) => file === marker)).toHaveLength(1);
+
+      if (kind === 'directory') await fs.mkdir(marker);
+      else await fs.writeFile(marker, 'gitdir: elsewhere\n');
+      const second = await buildSnapshotFilePlanFromEntries(repoPath, entries);
+      expect(second.includedFiles).toEqual([]);
+      expect(second.skippedFiles.map((file) => [file.path, file.reason])).toEqual(
+        entries.map((file) => [file.path, 'nested-git-repo']),
+      );
+      expect(lstat.mock.calls.filter(([file]) => file === marker)).toHaveLength(2);
+    } finally {
+      lstat.mockRestore();
+    }
   });
 
   it('checks rename oldPath for nested git repositories', async () => {

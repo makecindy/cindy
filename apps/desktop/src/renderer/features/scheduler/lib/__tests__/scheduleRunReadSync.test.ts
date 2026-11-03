@@ -122,7 +122,9 @@ describe('scheduleRunReadSync', () => {
 
 it('routes remote reads and the no-op refresh to the owning device only', async () => {
   const { markRunRead } = stubScheduleApi({});
-  const invoke = vi.fn().mockResolvedValue({ runs: [] });
+  const invoke = vi.fn(async (_device: string, channel: string) =>
+    channel === 'maker:schedule:list' ? [] : { runs: [] },
+  );
   Object.assign(window.electronAPI, { deviceLink: { invoke } });
   const listener = vi.fn();
   const off = subscribeScheduleRunReadSync(listener);
@@ -132,6 +134,7 @@ it('routes remote reads and the no-op refresh to the owning device only', async 
     expect(invoke.mock.calls).toEqual([
       ['remote-device', 'maker:schedule:mark-run-read', ['remote-run']],
       ['remote-device', 'maker:schedule:list-sidebar-index-runs', []],
+      ['remote-device', 'maker:schedule:list', [null, { sessionBindings: true }]],
     ]);
     expect(listener).not.toHaveBeenCalled();
   } finally { off(); }

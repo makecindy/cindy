@@ -152,6 +152,23 @@ describe('commitEditAndResend', () => {
     });
   });
 
+  it('conversation-only preview binds rewindCommit to skip file restore', async () => {
+    const { deps } = makeDeps();
+    await commitEditAndResend(
+      {
+        sessionId: SESSION_ID,
+        clientId: CLIENT_ID,
+        text: 'edited text',
+        fallbackWorkingDir: '/repo',
+        allowFileRestore: false,
+      },
+      deps,
+    );
+    expect(deps.rewindCommit).toHaveBeenCalledWith(SESSION_ID, CLIENT_ID, {
+      allowFileRestore: false,
+    });
+  });
+
   it('原消息 quotesEncoded 时重发透传标志(opts 第 9 参);未带时不注入', async () => {
     const { deps } = makeDeps();
     await commitEditAndResend(

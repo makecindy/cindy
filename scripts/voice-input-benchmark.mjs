@@ -983,14 +983,10 @@ async function runVolcengineSaucAsrIteration(spec, audio, opts, apiKey, iteratio
   // The initial full client request is auto-assigned sequence 1 by
   // Volcengine SAUC, so audio-only requests begin at 2.
   let sequence = 1;
-  let pendingFinalAudioChunk;
   const sendAudioChunk = (chunk) => {
     if (fatalError) return;
-    if (pendingFinalAudioChunk) {
-      sequence += 1;
-      ws.send(encodeVolcengineBenchmarkAudioOnlyRequest(pendingFinalAudioChunk, sequence));
-    }
-    pendingFinalAudioChunk = chunk;
+    sequence += 1;
+    ws.send(encodeVolcengineBenchmarkAudioOnlyRequest(chunk, sequence));
   };
   marks.audioStart = performance.now();
   await streamPcmAudio(pcm, spec.pcmSampleRate, opts.chunkMs, sendAudioChunk, true);
@@ -1000,11 +996,6 @@ async function runVolcengineSaucAsrIteration(spec, audio, opts, apiKey, iteratio
   if (fatalError) throw fatalError;
   marks.tailSilenceFinished = performance.now();
   finalRequested = true;
-  if (pendingFinalAudioChunk) {
-    sequence += 1;
-    ws.send(encodeVolcengineBenchmarkAudioOnlyRequest(pendingFinalAudioChunk, sequence));
-  }
-  pendingFinalAudioChunk = undefined;
   // Match production VolcengineSaucAsrProvider: the last real audio chunk is
   // sent normally, then a short silence packet carries the negative final
   // sequence so the final marker does not cut off the spoken tail.

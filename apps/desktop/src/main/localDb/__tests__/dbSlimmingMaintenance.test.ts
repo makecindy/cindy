@@ -366,7 +366,7 @@ describe('runDbSlimmingMaintenance', () => {
         list_message_count: null,
         context_tokens: 100,
         context_window: 200,
-        cleared_at: null,
+        cleared_at: 2_000,
         summary: 'summary',
         codex_plan_json: '{}',
         codex_history_has_product_prompt: 1,
@@ -392,7 +392,44 @@ describe('runDbSlimmingMaintenance', () => {
     }
   });
 
-  it('cleans only tasks older than the selected cutoff and keeps every recent status intact', async () => {
+  it('stamps cleared_at on archived tasks whose history was purged (#3709)', async () => {
+    createCleanupFixture();
+
+    await runDbSlimmingMaintenance({
+      userDataDir: tmpDir,
+      dbFilePath,
+      request: request({ beforeBytes: estimateDbFilesBytes(dbFilePath) }),
+      now: () => 3_000,
+      log,
+    });
+
+    const db = createBetterSqliteDatabase(dbFilePath, { fileMustExist: true });
+    try {
+      // The archived task fell inside the scan window and had its messages purged, so it
+      // must carry cleared_at (and stay archived) for the renderer to show the
+      // "history cleared" placeholder instead of a blank pane.
+      expect(
+        db.prepare("SELECT status, cleared_at FROM sessions WHERE id = 'archived-boundary'").get(),
+      ).toEqual({ status: 'archived', cleared_at: 2_000 });
+      expect(
+        db
+          .prepare("SELECT count(*) AS count FROM messages WHERE session_id = 'archived-boundary'")
+          .get(),
+      ).toEqual({ count: 0 });
+      // Archived tasks outside the window, or without messages, are not stamped.
+      expect(
+        db.prepare("SELECT cleared_at FROM sessions WHERE id = 'archived-new'").get(),
+      ).toEqual({ cleared_at: null });
+      // Active tasks are only touched when includeActiveTasks is set.
+      expect(db.prepare("SELECT cleared_at FROM sessions WHERE id = 'active-old'").get()).toEqual({
+        cleared_at: 50,
+      });
+    } finally {
+      db.close();
+    }
+  });
+
+  it('removes cleaned active tasks from lists and keeps every recent status intact', async () => {
     createCleanupFixture();
     const cleanedTurnChangeSetDir = path.join(tmpDir, 'turn-change-sets', 'active-old');
     const retainedTurnChangeSetDir = path.join(
@@ -481,7 +518,7 @@ describe('runDbSlimmingMaintenance', () => {
             FROM sessions WHERE id = 'active-old'
         `).get(),
       ).toEqual({
-        status: 'active',
+        status: 'deleted',
         updated_at: 2_000,
         sdk_session_id: null,
         list_preview: null,
@@ -491,6 +528,12 @@ describe('runDbSlimmingMaintenance', () => {
         codex_plan_json: null,
         summary: null,
       });
+      expect(
+        db.prepare("SELECT id FROM sessions WHERE status = 'active' ORDER BY id").all(),
+      ).toEqual([{ id: 'active-recent' }, { id: 'active-updated-after-scan' }]);
+      expect(
+        db.prepare("SELECT id FROM sessions WHERE status != 'deleted' AND id = 'active-old'").all(),
+      ).toEqual([]);
       expect(
         db.prepare(`
           SELECT updated_at, sdk_session_id, list_preview, list_preview_role,
@@ -565,6 +608,116 @@ describe('runDbSlimmingMaintenance', () => {
     }
   });
 
+  it.each(
+    [null, 0, 1].flatMap((existingCloseTerminal) =>
+      [false, true].map((rollback) => ({ existingCloseTerminal, rollback })),
+    ),
+  )(
+    'closes sharing and queued input atomically while preserving Bot timelines (existingCloseTerminal=$existingCloseTerminal, rollback=$rollback)',
+    async ({ existingCloseTerminal, rollback }) => {
+      createCleanupFixture();
+      const setup = createBetterSqliteDatabase(dbFilePath, { fileMustExist: true });
+      try {
+        setup.exec(`
+          ALTER TABLE sessions ADD COLUMN source TEXT;
+          UPDATE sessions SET source = 'bot' WHERE id = 'active-old';
+          CREATE TABLE shared_task_events (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            shared_task_id TEXT NOT NULL,
+            session_id TEXT NOT NULL,
+            revision INTEGER NOT NULL,
+            kind TEXT NOT NULL,
+            terminal INTEGER NOT NULL,
+            snapshot TEXT,
+            recorded_at INTEGER NOT NULL,
+            UNIQUE (shared_task_id, kind, revision)
+          );
+        `);
+        for (const id of ['active-old', 'active-recent', 'active-updated-after-scan']) {
+          setup
+            .prepare(
+              `
+            INSERT INTO shared_task_events
+              (shared_task_id, session_id, revision, kind, terminal, recorded_at)
+            VALUES (?, ?, 1, 'authority', 0, 100)
+          `,
+            )
+            .run(`shared-${id}`, id);
+          if (existingCloseTerminal !== null) {
+            setup
+              .prepare(
+                `INSERT INTO shared_task_events
+                  (shared_task_id, session_id, revision, kind, terminal, recorded_at)
+                 VALUES (?, ?, 0, 'local-close', ?, 100)`,
+              )
+              .run(`shared-${id}`, id, existingCloseTerminal);
+          }
+          setup.prepare('INSERT INTO agent_input_queue_snapshots VALUES (?, ?)').run(id, '[]');
+        }
+      } finally {
+        setup.close();
+      }
+
+      const outcome = await runDbSlimmingMaintenance({
+        userDataDir: tmpDir,
+        dbFilePath,
+        request: request({ includeActiveTasks: true }),
+        now: () => 3_000,
+        log,
+        beforeReplacement: rollback
+          ? async () => {
+              throw new Error('replacement cancelled');
+            }
+          : undefined,
+      });
+      expect(outcome.result.status).toBe(rollback ? 'failed' : 'completed');
+      const db = createBetterSqliteDatabase(dbFilePath, { fileMustExist: true });
+      try {
+        expect(
+          db.prepare("SELECT id, status FROM sessions WHERE id LIKE 'active-%' ORDER BY id").all(),
+        ).toEqual([
+          { id: 'active-old', status: 'active' },
+          { id: 'active-recent', status: 'active' },
+          { id: 'active-updated-after-scan', status: rollback ? 'active' : 'deleted' },
+        ]);
+        expect(
+          db
+            .prepare(
+              "SELECT session_id, terminal, recorded_at FROM shared_task_events WHERE kind = 'local-close' ORDER BY session_id",
+            )
+            .all(),
+        ).toEqual(
+          existingCloseTerminal === null
+            ? rollback
+              ? []
+              : [{ session_id: 'active-updated-after-scan', terminal: 1, recorded_at: 2_000 }]
+            : [
+                { session_id: 'active-old', terminal: existingCloseTerminal, recorded_at: 100 },
+                { session_id: 'active-recent', terminal: existingCloseTerminal, recorded_at: 100 },
+                {
+                  session_id: 'active-updated-after-scan',
+                  terminal: rollback ? existingCloseTerminal : 1,
+                  recorded_at: 100,
+                },
+              ],
+        );
+        expect(
+          db
+            .prepare(
+              "SELECT session_id FROM agent_input_queue_snapshots WHERE session_id LIKE 'active-%' ORDER BY session_id",
+            )
+            .all(),
+        ).toEqual([
+          { session_id: 'active-old' },
+          { session_id: 'active-recent' },
+          ...(rollback ? [{ session_id: 'active-updated-after-scan' }] : []),
+        ]);
+      } finally {
+        db.close();
+      }
+    },
+  );
+
   it('keeps the untouched original as the latest default-directory slimming backup', async () => {
     createCleanupFixture();
     const beforeBytes = estimateDbFilesBytes(dbFilePath);
@@ -572,7 +725,7 @@ describe('runDbSlimmingMaintenance', () => {
     const outcome = await runDbSlimmingMaintenance({
       userDataDir: tmpDir,
       dbFilePath,
-      request: request({ beforeBytes, backupEnabled: true }),
+      request: request({ beforeBytes, backupEnabled: true, includeActiveTasks: true }),
       now: () => 3_000,
       log,
     });
@@ -589,6 +742,9 @@ describe('runDbSlimmingMaintenance', () => {
     });
     try {
       expect(backup.prepare('SELECT count(*) AS count FROM messages').get()).toEqual({ count: 8 });
+      expect(backup.prepare("SELECT status FROM sessions WHERE id = 'active-old'").get()).toEqual({
+        status: 'active',
+      });
     } finally {
       backup.close();
     }

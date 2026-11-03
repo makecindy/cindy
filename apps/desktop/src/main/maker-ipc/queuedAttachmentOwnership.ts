@@ -8,11 +8,26 @@ export type QueuedAttachmentOwnershipOptions = {
    * failure may run it.
    */
   cleanupAfterDurable?: QueuedAttachmentCleanup;
+  /**
+   * The local materialisation split per attachment: its host-managed refs
+   * (managed URL and absolute path) and the cleanup releasing only it. When
+   * given, these replace `cleanup`, so a queue edit can keep the attachments
+   * the replacement still carries and release only the ones it dropped.
+   */
+  parts?: ReadonlyArray<{ refs: readonly string[]; cleanup: QueuedAttachmentCleanup }>;
 };
 
+type OwnedAttachment = { refs: ReadonlySet<string>; cleanup: QueuedAttachmentCleanup };
+
 type QueuedAttachmentOwnership = {
-  cleanup: QueuedAttachmentCleanup;
+  parts: OwnedAttachment[];
   cleanupAfterDurable?: QueuedAttachmentCleanup;
+  /**
+   * Set once the coordinator accepted this materialisation. A preparation that
+   * is still awaiting acceptance belongs to its own handler, which activates or
+   * discards it; a superseded-owner discard must leave it alone.
+   */
+  accepted: boolean;
   durableBoundaryReached: boolean;
   persistenceInFlight: boolean;
   discardRequested: boolean;
@@ -53,7 +68,12 @@ export class QueuedAttachmentOwnershipRegistry {
     cleanup: QueuedAttachmentCleanup | undefined,
     options?: QueuedAttachmentOwnershipOptions,
   ): string | null {
-    if (!cleanup && !options?.cleanupAfterDurable) return null;
+    const parts: OwnedAttachment[] = options?.parts?.length
+      ? options.parts.map((part) => ({ refs: new Set(part.refs), cleanup: part.cleanup }))
+      : cleanup
+        ? [{ refs: new Set(), cleanup }]
+        : [];
+    if (parts.length === 0 && !options?.cleanupAfterDurable) return null;
     let byClient = this.ownership.get(sessionId);
     if (!byClient) {
       byClient = new Map();
@@ -66,8 +86,9 @@ export class QueuedAttachmentOwnershipRegistry {
     }
     const ownerId = `${clientId}:${++this.nextOwnerId}`;
     clientOwnership.owners.set(ownerId, {
-      cleanup: cleanup ?? (() => {}),
+      parts,
       ...(options?.cleanupAfterDurable ? { cleanupAfterDurable: options.cleanupAfterDurable } : {}),
+      accepted: false,
       durableBoundaryReached: false,
       persistenceInFlight: false,
       discardRequested: false,
@@ -83,7 +104,9 @@ export class QueuedAttachmentOwnershipRegistry {
    */
   activateCurrentOwner(sessionId: string, clientId: string, ownerId: string): string | null {
     const clientOwnership = this.ownership.get(sessionId)?.get(clientId);
-    if (!clientOwnership?.owners.has(ownerId)) return null;
+    const owner = clientOwnership?.owners.get(ownerId);
+    if (!clientOwnership || !owner) return null;
+    owner.accepted = true;
     const previousOwnerId = clientOwnership.currentOwnerId;
     clientOwnership.currentOwnerId = ownerId;
     return previousOwnerId;
@@ -94,6 +117,68 @@ export class QueuedAttachmentOwnershipRegistry {
     if (!clientOwnership) return;
     clientOwnership.currentOwnerId =
       ownerId && clientOwnership.owners.has(ownerId) ? ownerId : null;
+  }
+
+  /**
+   * Queue edit: move every attachment the replacement still references into
+   * one surviving owner, so the caller's later superseded-owner discard
+   * releases only the attachments the edit dropped. The survivor is
+   * `keepOwnerId` (the edit's own materialisation) or, when the edit created
+   * none, the first owner with a referenced attachment. Dropped attachments of
+   * a partly kept owner stay behind in a superseded owner. Returns the survivor
+   * id, which the caller activates and excludes from its discard.
+   */
+  retainReferencedOwners(
+    sessionId: string,
+    clientId: string,
+    keepOwnerId: string | null,
+    isReferenced: (ref: string) => boolean,
+  ): string | null {
+    const clientOwnership = this.ownership.get(sessionId)?.get(clientId);
+    if (!clientOwnership) return null;
+    let survivorId = keepOwnerId && clientOwnership.owners.has(keepOwnerId) ? keepOwnerId : null;
+    for (const [ownerId, owner] of [...clientOwnership.owners]) {
+      // Another edit's preparation that is not accepted yet is not ours to move.
+      if (ownerId === survivorId || !owner.accepted) continue;
+      const kept = owner.parts.filter((part) => [...part.refs].some(isReferenced));
+      if (kept.length === 0) continue;
+      const dropped = owner.parts.filter((part) => !kept.includes(part));
+      if (!survivorId) {
+        survivorId = ownerId;
+        owner.parts = kept;
+      } else {
+        const survivor = clientOwnership.owners.get(survivorId)!;
+        survivor.parts.push(...kept);
+        const pendingRemote = owner.durableBoundaryReached ? undefined : owner.cleanupAfterDurable;
+        if (pendingRemote) {
+          const survivorRemote = survivor.cleanupAfterDurable;
+          survivor.cleanupAfterDurable = survivorRemote
+            ? async () => {
+                await survivorRemote();
+                await pendingRemote();
+              }
+            : pendingRemote;
+          // The moved remote source has not been released yet; the caller's
+          // next durable mark must run it.
+          survivor.durableBoundaryReached = false;
+        }
+        survivor.persistenceInFlight ||= owner.persistenceInFlight;
+        survivor.discardRequested ||= owner.discardRequested;
+        clientOwnership.owners.delete(ownerId);
+        if (clientOwnership.currentOwnerId === ownerId) clientOwnership.currentOwnerId = survivorId;
+      }
+      if (dropped.length > 0) {
+        // The remote source travels with the kept attachments; only local copies remain here.
+        clientOwnership.owners.set(`${clientId}:${++this.nextOwnerId}`, {
+          parts: dropped,
+          accepted: true,
+          durableBoundaryReached: true,
+          persistenceInFlight: owner.persistenceInFlight,
+          discardRequested: owner.discardRequested,
+        });
+      }
+    }
+    return survivorId;
   }
 
   getCurrentOwnerId(sessionId: string, clientId: string): string | null {
@@ -145,7 +230,7 @@ export class QueuedAttachmentOwnershipRegistry {
         continue;
       }
       clientOwnership.owners.delete(ownerId);
-      cleanups.push(owner.cleanup);
+      cleanups.push(...localCleanups(owner));
       if (owner.cleanupAfterDurable && !owner.durableBoundaryReached) {
         cleanups.push(owner.cleanupAfterDurable);
       }
@@ -218,7 +303,7 @@ export class QueuedAttachmentOwnershipRegistry {
           cleanups.push(owner.cleanupAfterDurable);
         }
       } else {
-        cleanups.push(owner.cleanup);
+        cleanups.push(...localCleanups(owner));
         if (owner.cleanupAfterDurable && !owner.durableBoundaryReached) {
           cleanups.push(owner.cleanupAfterDurable);
         }
@@ -232,6 +317,22 @@ export class QueuedAttachmentOwnershipRegistry {
 
   discardClient(sessionId: string, clientId: string, keepOwnerId?: string): Promise<void> {
     return this.discardWhere(sessionId, clientId, (ownerId) => ownerId !== keepOwnerId);
+  }
+
+  /**
+   * Discard every accepted owner except the coordinator's current one,
+   * resolved when this runs rather than when the discard was scheduled.
+   * Preparations not yet accepted stay with the handler that registered them.
+   */
+  discardSuperseded(sessionId: string, clientId: string): Promise<void> {
+    const clientOwnership = this.ownership.get(sessionId)?.get(clientId);
+    const currentOwnerId = clientOwnership?.currentOwnerId ?? null;
+    return this.discardWhere(
+      sessionId,
+      clientId,
+      (ownerId) =>
+        ownerId !== currentOwnerId && clientOwnership?.owners.get(ownerId)?.accepted === true,
+    );
   }
 
   discardSpecific(sessionId: string, clientId: string, ownerId: string): Promise<void> {
@@ -283,7 +384,7 @@ export class QueuedAttachmentOwnershipRegistry {
       }
       clientOwnership.owners.delete(ownerId);
       if (clientOwnership.currentOwnerId === ownerId) clientOwnership.currentOwnerId = null;
-      cleanups.push(owner.cleanup);
+      cleanups.push(...localCleanups(owner));
       if (owner.cleanupAfterDurable && !owner.durableBoundaryReached) {
         cleanups.push(owner.cleanupAfterDurable);
       }
@@ -314,4 +415,8 @@ export class QueuedAttachmentOwnershipRegistry {
       }),
     );
   }
+}
+
+function localCleanups(owner: QueuedAttachmentOwnership): QueuedAttachmentCleanup[] {
+  return owner.parts.map((part) => part.cleanup);
 }

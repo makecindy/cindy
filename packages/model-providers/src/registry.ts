@@ -18,6 +18,7 @@ import {
   isModelSelectableForNewRoute,
 } from './classification.js';
 import type { ProviderLogoKind } from './providerBranding.js';
+import { isCindyAutoModelId, isCindyDistributedProvider } from './provider-identity.js';
 import {
   isModelDisabled,
   isProviderDisabled,
@@ -94,6 +95,12 @@ export type ModelDiscoveryFailureState = Partial<
 
 /** 供应商 + 连接状态。 */
 export interface ProviderView extends Provider {
+  /** Host-owned subscription speed policy; absence means an unrelated provider or older host. */
+  subscriptionFastPolicy?: { allowFast: boolean; groupAllowsFast: boolean };
+  /** 本机是否允许同账号另一台电脑调用该供应商；缺省等同关闭。 */
+  remoteInvocationEnabled?: boolean;
+  /** Exact model IDs offered to remote Agents. Absent preserves the legacy unrestricted scope. */
+  remoteModelIds?: string[];
   /** Definition remains available for adding a removed local connection again. */
   removed?: boolean;
   subscriptionAccount?: { source: 'local' | 'oauth' | 'unknown'; identity?: string; reconnectRequired?: boolean };
@@ -316,8 +323,9 @@ export function nativeDefaultSourceId(rail: ProviderView[], agent: AgentKind | n
  * 来源选择必须先收窄到「已连接且确实提供当前模型」的集合，再应用显式选择 / 原生默认：
  * 否则当 XD key 被清除、但 OpenAI 仍连接时，Claude 会话会把 OpenAI 当成 agent 级兜底，
  * 拼出「OpenAI 图标 + Opus」这种不可能路由。显式来源失效时返回 null，不替换账号；
- * 当前模型没有任何已连接且可用于新路由的来源时返回 null。retired tombstone 与本地
- * disabled 都不参与本函数；运行中会话的真实来源展示必须改用 actualSourceIdForModel。
+ * 唯一例外是 Auto（见 relocatedAutoSourceId）。当前模型没有任何已连接且可用于新路由的
+ * 来源时返回 null。retired tombstone 与本地 disabled 都不参与本函数；运行中会话的真实
+ * 来源展示必须改用 actualSourceIdForModel。
  */
 export function effectiveSourceIdForModel(
   views: ProviderView[],
@@ -332,8 +340,48 @@ export function effectiveSourceIdForModel(
       isModelSelectableForNewRoute(model, { userProvider: provider.source === 'user' })
     );
   });
-  if (providerId) return sources.some((provider) => provider.id === providerId) ? providerId : null;
+  if (providerId) {
+    return sources.some((provider) => provider.id === providerId)
+      ? providerId
+      : relocatedAutoSourceId(views, providerId, modelId, agent, sources);
+  }
   return nativeDefaultSourceId(sources, agent);
+}
+
+/**
+ * Auto（isCindyAutoModelId）只按模型 ID 认：服务端可以把同一个 Auto 在 Cindy AI 与
+ * 企业号池供应商之间挪动（平台模型 ↔ 号池模型）。记住的来源是这两类之一、且已不再提供
+ * 该 Auto 时，改用当前提供它的那一家（同样限于这两类），不判失效。记住的来源仍列着该
+ * 模型（只是断连 / 停用）或是用户自己接的供应商时不改道，仍按显式来源失效处理。
+ */
+function relocatedAutoSourceId(
+  views: readonly ProviderView[],
+  providerId: string,
+  modelId: string,
+  agent: AgentKind,
+  sources: ProviderView[],
+): string | null {
+  if (!isCindyAutoModelId(modelId)) return null;
+  const remembered = views.find((provider) => provider.id === providerId);
+  if (!remembered || !isCindyDistributedProvider(remembered)) return null;
+  if (providerOffersModel(remembered, modelId, agent)) return null;
+  return nativeDefaultSourceId(sources.filter(isCindyDistributedProvider), agent);
+}
+
+/**
+ * 已保存或运行中的路由（任务、伙伴模型链、IM 默认）：服务端把其中的 Auto 挪到另一家
+ * Cindy 来源后，现在该走的来源；没挪动或不适用时返回 null。只在使用时解析，不改写保存的值。
+ * Pi 的 providerId=null 就是 Cindy AI 网关；其它引擎的 null 不一定落在 Cindy AI，不推断。
+ */
+export function movedCindyAutoSourceId(
+  views: readonly ProviderView[],
+  route: { agent: AgentKind; model: string; providerId: string | null },
+): string | null {
+  if (!isCindyAutoModelId(route.model)) return null;
+  const remembered = route.providerId ?? (route.agent === 'pi' ? 'xd' : null);
+  if (!remembered) return null;
+  const effective = effectiveSourceIdForModel([...views], remembered, route.model, route.agent);
+  return effective && effective !== remembered ? effective : null;
 }
 
 /**

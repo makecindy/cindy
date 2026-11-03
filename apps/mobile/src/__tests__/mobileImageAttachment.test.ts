@@ -1,6 +1,5 @@
 import { beforeAll, describe, expect, it, vi } from 'vitest';
 import { i18n } from '@/i18n';
-import { MOBILE_MAX_ATTACHMENT_BYTES } from '@/session/attachments';
 import {
   assertMobileImageSize,
   buildMobileImageAttachmentCandidate,
@@ -54,7 +53,8 @@ describe('mobileImageAttachment', () => {
   it('rejects missing uri and invalid sizes with user-facing errors', () => {
     expect(() => buildMobileImageAttachmentCandidate({ uri: '' }, 0)).toThrow('没有读取到可上传的图片');
     expect(() => assertMobileImageSize(0)).toThrow('图片为空');
-    expect(() => assertMobileImageSize(MOBILE_MAX_ATTACHMENT_BYTES + 1)).toThrow('图片超过');
+    // 与桌面一致不设图片体积上限;OSS 保底上限由上传层按是否能直连判断。
+    expect(() => assertMobileImageSize(3 * 1024 ** 3)).not.toThrow();
   });
 });
 

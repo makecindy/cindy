@@ -7,7 +7,6 @@ import {
   isAgentIslandVisibleSessionOwnedByWorkdirBrowseRoute,
   isAgentIslandVisibleSessionOwnedByBotRoute,
   resolveAgentIslandVisibleSessionsFromPath,
-  resolveAgentIslandVisibleSessionFromRouteTarget,
   resolveAgentIslandVisibleSessionIdForWorkdirBrowseRail,
   resolveAgentIslandVisibleSessionIdFromPath,
 } from '@/lib/agentIslandVisibleSessionRoute';
@@ -41,6 +40,8 @@ describe('bot and split route visibility', () => {
   it.each([
     ['/bots/bot-a/session/chat-a', true],
     ['/bots/bot-a/history/history-a', true],
+    ['/bots/remote/device-a/bot-a/session/chat-a', true],
+    ['/bots/remote/device-a/bot-a', true],
     ['/bots/bot-a', false],
     ['/bots', false],
     ['/bots/roster', false],
@@ -93,19 +94,6 @@ describe('resolveAgentIslandVisibleSessionIdFromPath', () => {
     expect(resolveAgentIslandVisibleSessionIdFromPath('/cc-agent/orca/new')).toBeNull();
   });
 
-  it('preserves Orca worker targets when acknowledging a complete route target', () => {
-    expect(
-      resolveAgentIslandVisibleSessionFromRouteTarget(
-        '/cc-agent/lead-a?worker=worker-b&source=notification',
-      ),
-    ).toEqual(['lead-a', 'worker-b']);
-    expect(resolveAgentIslandVisibleSessionFromRouteTarget('/cc-agent/lead-a')).toBe('lead-a');
-    expect(resolveAgentIslandVisibleSessionFromRouteTarget('/cc-agent/lead-a?worker=new')).toBe(
-      'lead-a',
-    );
-    expect(resolveAgentIslandVisibleSessionFromRouteTarget('/settings?worker=worker-b')).toBeNull();
-  });
-
   it('lets the workdir browse route own visible-session reports for doc-mode rails', () => {
     expect(isAgentIslandVisibleSessionOwnedByWorkdirBrowseRoute('/cc-agent/files/session-a')).toBe(true);
     expect(isAgentIslandVisibleSessionOwnedByWorkdirBrowseRoute('/cc-agent/files')).toBe(false);
@@ -150,16 +138,9 @@ describe('resolveAgentIslandVisibleSessionIdFromPath', () => {
     expect(workdirBrowseRouteSource).toContain('if (!isAgentIslandSupported()) return;');
     expect(workdirBrowseRouteSource).toContain('window.electronAPI.agentIsland?.setVisibleSession?.(agentIslandVisibleSessionId)');
     expect(orcaWorkerPanelSource).toContain('window.electronAPI.agentIsland?.setVisibleSession?.(visibleSessionIds)');
-    expect(orcaWorkerPanelSource).toContain('viewVisible && workerSessionId && workerSessionId !== leadSessionId');
-  });
-
-  it('acknowledges notification focus navigation to collapse Agent Island after jumping', () => {
-    expect(mainLayoutSource).toContain(
-      'const visibleSession = resolveAgentIslandVisibleSessionFromRouteTarget(target);',
+    expect(orcaWorkerPanelSource).toContain(
+      'workerConversationVisible && workerSessionId && workerSessionId !== leadSessionId',
     );
-    expect(mainLayoutSource).toContain(`if (isAgentIslandSupported()) {
-          void window.electronAPI.agentIsland?.setVisibleSession?.(visibleSession);
-        }`);
   });
 
   it('routes plugin setup navigation through the owning session view', () => {

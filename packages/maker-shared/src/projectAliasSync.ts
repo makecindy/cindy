@@ -1,5 +1,6 @@
-import { collapseWorktreeDirForGrouping } from './worktreePaths.js';
+import { collapseWorktreeDirForGrouping, sessionProjectDirectory } from './worktreePaths.js';
 import {
+  normalizeProjectOrderPath,
   parseSyncedProjectOrderOwnerStamp,
   type SyncedProjectOrderOwnerStamp,
 } from './projectOrderSync.js';
@@ -15,9 +16,12 @@ export interface HostProjectAliasesSnapshot {
 }
 
 export type ProjectAliasesByDevice = ReadonlyMap<string, HostProjectAliasesSnapshot>;
+/** Supports the host snapshots and main's already-shipped local-name projection. */
+export type ProjectAliasDisplayIndex = ProjectAliasesByDevice | ReadonlyMap<string, string>;
 
 export interface ProjectAliasSessionLike {
   workingDir: string | null;
+  projectDir?: string | null;
   remoteHostId?: string | null;
   /** Physical source, never canonicalDeviceId (which is only a display identity). */
   deviceLinkDeviceId?: string | null;
@@ -96,7 +100,7 @@ function aliasIndex(snapshot: HostProjectAliasesSnapshot): ReadonlyMap<string, s
 /** Existing mixed-identity groups keep their path title, rather than borrowing one member's alias. */
 export function resolveProjectAliasForSessions(
   sessions: readonly ProjectAliasSessionLike[],
-  snapshots: ProjectAliasesByDevice | undefined,
+  snapshots: ProjectAliasDisplayIndex | undefined,
   defaultDeviceId?: string,
 ): string | null {
   if (!snapshots || sessions.length === 0) return null;
@@ -104,13 +108,24 @@ export function resolveProjectAliasForSessions(
   let alias: string | null = null;
   for (const session of sessions) {
     const deviceId = session.deviceLinkDeviceId || defaultDeviceId;
-    if (!deviceId || !session.workingDir) return null;
+    const projectDir = sessionProjectDirectory(session);
+    if (!deviceId || !projectDir) return null;
     const snapshot = snapshots.get(deviceId);
-    if (!snapshot) return null;
+    if (!snapshot || typeof snapshot === 'string') {
+      // The legacy projection carries only local aliases, never SSH identity.
+      if (session.remoteHostId) return null;
+      const key = `device:${encodeURIComponent(deviceId)}:${normalizeProjectOrderPath(projectDir)}`;
+      const value = snapshots.get(key);
+      const current = JSON.stringify([deviceId, key]);
+      if (identity !== undefined && identity !== current) return null;
+      identity = current;
+      alias = typeof value === 'string' ? value : null;
+      continue;
+    }
     const key = projectAliasComparisonKey(
       session.remoteHostId
-        ? `remote:${encodeURIComponent(session.remoteHostId)}:${session.workingDir}`
-        : `local:${session.workingDir}`,
+        ? `remote:${encodeURIComponent(session.remoteHostId)}:${projectDir}`
+        : `local:${projectDir}`,
       snapshot.platform,
     );
     if (!key) return null;

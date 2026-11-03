@@ -1,6 +1,9 @@
 import { beforeEach, describe, expect, it } from 'vitest';
 
 import {
+  getNewTaskDraftSelection,
+  setWorkerCreationPrefsCache,
+  getWorkerCreationSelection,
   getSelectedNewMakerRoute,
   getRemoteNewMakerDefaults,
   getRemoteNewMakerDefaultsByVendor,
@@ -10,6 +13,7 @@ import {
   syncNewMakerDraftCache,
   getNewMakerModelTuning,
   setProviderModelMemoryCache,
+  setThinkingEnabledInMemory,
   type NewMakerDraftSnapshot,
 } from '../newMakerDefaultsCache.js';
 
@@ -134,6 +138,78 @@ describe('getRemoteNewMakerDefaults (device-link 远程草稿镜像)', () => {
     expect(getThinkingEnabledFromMemory('pi', null, 'qwen3.8:27b-mxfp8')).toBeUndefined();
   });
 
+  it('writes a single thinking switch into the mirror without dropping other entries', () => {
+    setProviderModelMemoryCache({
+      'pi:cindy-local-ollama': {
+        effortByModel: { 'qwen3.8:27b-mxfp8': 'high' },
+        fastByModel: { 'qwen3.8:27b-mxfp8': true },
+        thinkingByModel: { 'qwen3.8:27b-mxfp8': false },
+      },
+      'codex:openai': { effortByModel: {}, fastByModel: {} },
+    });
+
+    // 跨引擎切换提交后主进程局部写入：普通 send 的 lazy-create 只读该镜像。
+    setThinkingEnabledInMemory('pi', 'cindy-local-ollama', 'qwen3.8:27b-mxfp8', true);
+
+    expect(getThinkingEnabledFromMemory('pi', 'cindy-local-ollama', 'qwen3.8:27b-mxfp8')).toBe(true);
+    expect(getThinkingEnabledFromMemory('codex', 'openai', 'gpt-5')).toBeUndefined();
+
+    // renderer 随后追上该选择（快照带上同一个值）：钉子撤销，不再是压住后续改动。
+    setProviderModelMemoryCache({
+      'pi:cindy-local-ollama': {
+        effortByModel: { 'qwen3.8:27b-mxfp8': 'high' },
+        fastByModel: { 'qwen3.8:27b-mxfp8': true },
+        thinkingByModel: { 'qwen3.8:27b-mxfp8': true },
+      },
+    });
+    expect(getThinkingEnabledFromMemory('pi', 'cindy-local-ollama', 'qwen3.8:27b-mxfp8')).toBe(true);
+  });
+
+  it('keeps a committed thinking switch across a stale full-snapshot push until the renderer catches up', () => {
+    setProviderModelMemoryCache({
+      'pi:cindy-local-ollama': {
+        effortByModel: {},
+        fastByModel: {},
+        thinkingByModel: { 'qwen3.8:27b-mxfp8': true },
+      },
+    });
+    // 跨引擎提交写入 off，而 renderer 的全量快照可能仍基于尚未学习到该选择的状态。
+    setThinkingEnabledInMemory('pi', 'cindy-local-ollama', 'qwen3.8:27b-mxfp8', false);
+
+    // 迟到的旧快照不得抹掉刚提交的选择。
+    setProviderModelMemoryCache({
+      'pi:cindy-local-ollama': {
+        effortByModel: {},
+        fastByModel: {},
+        thinkingByModel: { 'qwen3.8:27b-mxfp8': true },
+      },
+    });
+    expect(getThinkingEnabledFromMemory('pi', 'cindy-local-ollama', 'qwen3.8:27b-mxfp8')).toBe(false);
+
+    // 快照连该模型的键都还没带上，也不能抹掉。
+    setProviderModelMemoryCache({
+      'pi:cindy-local-ollama': { effortByModel: {}, fastByModel: {} },
+    });
+    expect(getThinkingEnabledFromMemory('pi', 'cindy-local-ollama', 'qwen3.8:27b-mxfp8')).toBe(false);
+
+    // renderer 追上该选择后撤钉：之后 renderer 的新改动重新生效。
+    setProviderModelMemoryCache({
+      'pi:cindy-local-ollama': {
+        effortByModel: {},
+        fastByModel: {},
+        thinkingByModel: { 'qwen3.8:27b-mxfp8': false },
+      },
+    });
+    setProviderModelMemoryCache({
+      'pi:cindy-local-ollama': {
+        effortByModel: {},
+        fastByModel: {},
+        thinkingByModel: { 'qwen3.8:27b-mxfp8': true },
+      },
+    });
+    expect(getThinkingEnabledFromMemory('pi', 'cindy-local-ollama', 'qwen3.8:27b-mxfp8')).toBe(true);
+  });
+
   it('providerModelMemory 镜像就绪时随返回(device-link 草稿列表行的真实读源)', () => {
     setProviderModelMemoryCache({
       'claude-code:anthropic': { effortByModel: { 'claude-opus-4-8': 'low' }, fastByModel: { 'claude-opus-4-8': true } },
@@ -170,6 +246,19 @@ it('does not reuse the selected default route across owners or older snapshots',
   expect(getSelectedNewMakerRoute('owner-a')).toBeUndefined();
 });
 
+it('scopes the headless new-task draft selection to the owner that pushed it', () => {
+  setNewMakerDraftCache({
+    lastByVendor: { cc: { model: 'claude-opus-5-5', providerId: 'anthropic' } },
+    modelChosenByVendor: { cc: true },
+    effortByModel: {},
+    fastModeByModel: {},
+  }, 'owner-a');
+  expect(getNewTaskDraftSelection('owner-a', 'claude-code')).toEqual({
+    model: 'claude-opus-5-5', providerId: 'anthropic', chosenByUser: true,
+  });
+  // 切账号后新 renderer 还没推快照的窗口:不拿上一个账号的偏好。
+  expect(getNewTaskDraftSelection('owner-b', 'claude-code')).toBeNull();
+});
 
 describe('owner-fenced new task and Bot default mirror', () => {
   const owner = { dataOwnerId: 'B', ownerGeneration: 3 };
@@ -195,7 +284,7 @@ describe('owner-fenced new task and Bot default mirror', () => {
   });
 });
 
-it('reads remembered tuning only from the matching owner snapshot, with source/engine and legacy fallbacks', () => {
+it('reads remembered tuning only from the matching owner snapshot, with preset-first and source fallbacks', () => {
   const payload = { ownerStamp: { dataOwnerId: 'A', ownerGeneration: 4 }, lastByVendor: {},
     effortByModel: { target: 'medium', old: 'low' }, fastModeByModel: { target: true, old: true },
     providerModelMemory: {
@@ -204,11 +293,25 @@ it('reads remembered tuning only from the matching owner snapshot, with source/e
       'pi:provider': { effortByModel: { target: 'minimal' }, fastByModel: {} },
     } };
   expect(syncNewMakerDraftCache(payload, payload.ownerStamp, 'A:4', false)).toBe(true);
-  expect(getNewMakerModelTuning('A:4', 'codex', 'provider', 'target')).toEqual({ effort: 'low', fastMode: false });
+  // 权威 `${agent}:*` 优先:同一个模型换个来源(provider → other)仍然是同一档,
+  // 不会被 provider 槽的旧副本拽回旧档位(那就是「推理强度自己变低」在 main 侧的形态)。
+  expect(getNewMakerModelTuning('A:4', 'codex', 'provider', 'target')).toEqual({ effort: 'high', fastMode: true });
   expect(getNewMakerModelTuning('A:4', 'codex', 'other', 'target')).toEqual({ effort: 'high', fastMode: true });
+  // 该 agent 没有 `*` 槽 → 回落 provider 槽;fast 该槽没记过 → 再回落 newMakerDraft 根表。
   expect(getNewMakerModelTuning('A:4', 'pi', 'provider', 'target').effort).toBe('minimal');
   expect(getNewMakerModelTuning('A:4', 'codex', 'provider', 'old')).toEqual({ effort: 'low', fastMode: true });
   expect(getNewMakerModelTuning('B:4', 'codex', 'provider', 'target')).toEqual({});
   expect(syncNewMakerDraftCache(payload, { dataOwnerId: 'B', ownerGeneration: 4 }, 'B:4', false)).toBe(false);
   expect(getNewMakerModelTuning('B:4', 'codex', 'provider', 'target')).toEqual({});
+});
+
+// Unit: route mirrors must not cross owner boundaries or disappear on permission-only writes.
+it('retains a submitted worker route across permission updates and fences old owners', () => {
+  const ownerStamp = { dataOwnerId: 'worker-owner', ownerGeneration: 4 };
+  const selection = { agent: 'pi' as const, model: 'test', providerId: 'provider', agentDeviceId: null, effort: 'high', fast: false };
+  setWorkerCreationPrefsCache({ workerPermissionMode: 'auto', ownerStamp, selection });
+  setWorkerCreationPrefsCache({ workerPermissionMode: 'bypassPermissions' });
+  expect(getWorkerCreationSelection(ownerStamp)).toEqual(selection);
+  expect(getWorkerCreationSelection({ ...ownerStamp, ownerGeneration: 5 })).toBeNull();
+  expect(getWorkerCreationSelection({ ...ownerStamp, dataOwnerId: 'other' })).toBeNull();
 });

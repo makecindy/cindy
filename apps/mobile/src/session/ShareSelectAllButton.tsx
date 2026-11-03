@@ -4,7 +4,7 @@ import { useTranslation } from "react-i18next";
 import { Text } from "@/components/AppText";
 import { ShareCheckboxMark } from "@/session/ShareMessageCheckbox";
 import { shareSelectionStore, useShareSelectionRevision } from "@/session/shareSelectionStore";
-import { useThemedStyles, type ThemeColors } from "@/theme";
+import { lineHeight, useThemedStyles, type ThemeColors } from "@/theme";
 import { fontWeight, spacing, typeScale } from "@/theme/tokens";
 
 export function ShareSelectAllButton({
@@ -88,6 +88,7 @@ const makeStyles = (colors: ThemeColors) =>
     selectAllLabel: {
       color: colors.textPrimary,
       fontSize: typeScale.body,
+      lineHeight: lineHeight.body,
       fontWeight: fontWeight.medium,
     },
     selectAllMarkGutter: {

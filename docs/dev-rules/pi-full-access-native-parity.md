@@ -20,15 +20,15 @@ Cindy Pi 的 **Full access（`bypassPermissions`）必须与同版本原生 Pi �
 - 不拦已装 Pi 扩展的工具调用（完全访问下）
 - 不改 context-mode 自己的命令沙箱 PATH
 - 不改 MCP 网关、斜杠转义、项目 `--no-approve`
-- 不放开 Extra Dirs 结构化写入
-- 不放开对 Cindy 运行目录（`models.json` / 权限档）的模型写入
+- 不把 Ask / Auto 的 Extra Dirs 写改成静默硬拦
+- 不把 Cindy 运行目录（`models.json` / 权限档）的模型写入改成静默硬拦或 Full Access 自动放行
 
 ## 允许保留的机械隔离
 
 仅这两条，且不得拿它们扩大阻断面：
 
-1. 模型不得写 agent home（Cindy 控制面）
-2. Extra Dirs 的结构化写工具保持只读
+1. 模型写 agent home（Cindy 控制面）必须强制用户确认，不得静默拒绝或 Full Access 自动放行
+2. Extra Dirs 的结构化写跟随会话权限：Full Access 放行，Auto 审阅，Ask 确认
 
 需要真隔离时用 Ask / Auto，或等 OS 沙箱；不要在 Full access 上堆正则。
 

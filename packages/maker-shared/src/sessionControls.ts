@@ -14,7 +14,7 @@ export interface SessionControlsSessionLike {
   contextTokens?: number;
   contextWindow?: number;
   effort?: string;
-  fastMode: boolean;
+  fastMode: boolean | 'ultrafast';
   model: string;
   permissionMode: string;
   status: 'active' | 'archived' | 'deleted' | string;
@@ -95,7 +95,8 @@ export function summarizeContextUsage(value: unknown, localizer?: PresentationLo
     ?? record.maxContextTokens
     ?? record.contextWindow,
   );
-  const percent = readNumber(record.percent ?? record.percentage ?? record.contextPercent);
+  const percent = readNumber(record.percent);
+  const percentage = readNumber(record.percentage ?? record.contextPercent);
   const costUsd = readNumber(record.costUsd ?? record.totalCostUsd);
   const parts: string[] = [];
   if (contextTokens !== null) {
@@ -105,6 +106,8 @@ export function summarizeContextUsage(value: unknown, localizer?: PresentationLo
   }
   if (percent !== null) {
     parts.push(`${Math.round(percent > 1 ? percent : percent * 100)}%`);
+  } else if (percentage !== null) {
+    parts.push(`${Math.round(percentage)}%`);
   } else if (contextTokens !== null && maxContextTokens !== null && maxContextTokens > 0) {
     parts.push(`${Math.round((contextTokens / maxContextTokens) * 100)}%`);
   }
@@ -131,6 +134,12 @@ export function summarizeAccountRateLimits(
   value: unknown,
   nowMs: number,
   localizer?: PresentationLocalizer,
+  /**
+   * Label a window by its reset (e.g. a countdown) instead of its duration; null keeps
+   * the duration label. Without it, rows name the window and append the reset time.
+   * windowMinutes lets a countdown cap at the window length.
+   */
+  resetLabel?: (resetsAt: number, windowMinutes: number | null) => string | null,
 ): {
   rows: Array<{ label: string; value: string }>;
 } | null {
@@ -159,14 +168,24 @@ export function summarizeAccountRateLimits(
         percent: formatRateLimitPercent(used),
       }),
     ];
-    const resetText = formatRateLimitResetAt(readNumber(window.resetsAt), nowMs, localizer);
-    if (resetText) {
-      parts.push(presentationText(localizer, 'session.presentation.controls.rateLimit.resetsAt', `${resetText} 重置`, {
-        time: resetText,
-      }));
+    const resetsAt = readNumber(window.resetsAt);
+    // Countdown mode never presents a window whose reset has passed: its percentage
+    // belongs to the previous period until a new snapshot arrives.
+    if (resetLabel && resetsAt !== null && resetsAt > 0 && resetsAt * 1000 <= nowMs) continue;
+    const countdownLabel =
+      resetLabel && resetsAt !== null && resetsAt > 0
+        ? resetLabel(resetsAt, readNumber(window.windowMinutes))
+        : null;
+    if (!resetLabel) {
+      const resetText = formatRateLimitResetAt(resetsAt, nowMs, localizer);
+      if (resetText) {
+        parts.push(presentationText(localizer, 'session.presentation.controls.rateLimit.resetsAt', `${resetText} 重置`, {
+          time: resetText,
+        }));
+      }
     }
     rows.push({
-      label: rateLimitWindowLabel(readNumber(window.windowMinutes), localizer),
+      label: countdownLabel ?? rateLimitWindowLabel(readNumber(window.windowMinutes), localizer),
       value: parts.join(' · '),
     });
   }
@@ -257,8 +276,7 @@ export function summarizeCodexRateLimitReset(
     earliestExpiryAt,
     availableCount,
     shouldPrompt,
-    canReset: shouldPrompt
-      && availableCount > 0
+    canReset: availableCount > 0
       // Offer TTL belongs to the issuing Desktop clock. Mobile only checks presence;
       // consume returns a typed precondition error when Desktop has actually expired it.
       && Boolean(value.resetOffer),
@@ -507,11 +525,28 @@ function lastPathPart(path: string): string {
   return parts[parts.length - 1] ?? path;
 }
 
+/**
+ * 从小到大:进位后仍不满 1000 才停在该档,与 usageFormat 的 token 口径同一个规则
+ * —— 999_999 读作 1M,不是 1000k;同一轮两端必须给出同一个量级。
+ */
+const COMPACT_UNITS: ReadonlyArray<{ divisor: number; suffix: string }> = [
+  { divisor: 1000, suffix: 'k' },
+  { divisor: 1_000_000, suffix: 'M' },
+  { divisor: 1_000_000_000, suffix: 'B' },
+];
+
+const COMPACT_CARRY_TENTHS = 10_000;
+
 function formatCompactNumber(value: number): string {
   const rounded = Math.round(value);
-  if (rounded >= 1_000_000) return `${formatOneDecimal(rounded, 1_000_000)}M`;
-  if (rounded >= 1000) return `${formatOneDecimal(rounded, 1000)}k`;
-  return String(rounded);
+  if (rounded < COMPACT_UNITS[0].divisor) return String(rounded);
+  for (const { divisor, suffix } of COMPACT_UNITS) {
+    if (Math.round((rounded * 10) / divisor) < COMPACT_CARRY_TENTHS) {
+      return `${formatOneDecimal(rounded, divisor)}${suffix}`;
+    }
+  }
+  const largest = COMPACT_UNITS[COMPACT_UNITS.length - 1];
+  return `${formatOneDecimal(rounded, largest.divisor)}${largest.suffix}`;
 }
 
 function formatOneDecimal(value: number, divisor: number): string {

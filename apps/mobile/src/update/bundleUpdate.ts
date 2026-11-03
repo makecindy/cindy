@@ -48,7 +48,8 @@ export interface EvaluateBundleUpdateInput {
 const NO_UPDATE: BundleUpdateEvaluation = { needsUpdate: false, forced: false, target: null };
 
 /**
- * 整包更新只属于自建分发渠道。
+ * 官网整包记录只属于自建安装渠道。Google Play 安装由 Play 管理原生包更新；
+ * 两种 Android 产物共用自建 OTA 配置，不能只用 isSelfHosted 区分。
  * Review 构建与 TestFlight 构建都不能展示外部安装入口；
  * TestFlight 的 JS OTA 由独立通道继续处理。
  */
@@ -56,12 +57,14 @@ export function shouldCheckBundleUpdate({
   isSelfHosted,
   isReviewMode,
   isTestFlightBuild,
+  isGooglePlayInstallation,
 }: {
   isSelfHosted: boolean;
   isReviewMode: boolean;
   isTestFlightBuild: boolean;
+  isGooglePlayInstallation: boolean;
 }): boolean {
-  return isSelfHosted && !isReviewMode && !isTestFlightBuild;
+  return isSelfHosted && !isReviewMode && !isTestFlightBuild && !isGooglePlayInstallation;
 }
 
 export function isSupportedBundleVersion(version: string): boolean {

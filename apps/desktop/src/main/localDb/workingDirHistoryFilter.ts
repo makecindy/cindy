@@ -1,7 +1,7 @@
 import path from 'node:path';
 
 import { getDbClient } from './client/current.js';
-import { dialogueWorkspaceRootDir } from './dialogueWorkspace.js';
+import { dialogueWorkspaceRoots } from './dialogueWorkspace.js';
 import { normalizeWorkingDirForStorage } from '../../shared/workingDir.js';
 
 export function normalizeHistoryWorkingDir(raw: string | null | undefined): string | null {
@@ -20,7 +20,10 @@ export function escapeLikePattern(value: string): string {
  * workingDir 出现(managed cwd 固定是 <root>/<day>/<sessionId>)。
  */
 export function managedDialogueRootLikePatterns(): string[] {
-  const rawRoot = dialogueWorkspaceRootDir();
+  return [...new Set(dialogueWorkspaceRoots().flatMap(managedRootLikePatterns))];
+}
+
+function managedRootLikePatterns(rawRoot: string): string[] {
   const patterns = new Set<string>([`${escapeLikePattern(rawRoot)}${path.sep}%`]);
   const normRoot = normalizeWorkingDirForStorage(rawRoot);
   if (normRoot) patterns.add(`${escapeLikePattern(normRoot)}/%`);
@@ -36,9 +39,10 @@ function isUnderManagedDialogueRoot(normalizedDir: string): boolean {
   // 强制 / 形态再比:win32 的 path.join 对无盘符 root(测试 mock 的 POSIX
   // userData)产出反斜杠拼写,归一化的 Windows 判定认不出——与
   // managedDialogueRootLikePatterns 的兜底同一口径。
-  const normRoot = (normalizeWorkingDirForStorage(dialogueWorkspaceRootDir()) ?? '').replace(/\\/g, '/');
-  if (!normRoot) return false;
-  return normalizedDir === normRoot || normalizedDir.startsWith(`${normRoot}/`);
+  return dialogueWorkspaceRoots().some((root) => {
+    const normRoot = (normalizeWorkingDirForStorage(root) ?? '').replace(/\\/g, '/');
+    return !!normRoot && (normalizedDir === normRoot || normalizedDir.startsWith(`${normRoot}/`));
+  });
 }
 
 /**

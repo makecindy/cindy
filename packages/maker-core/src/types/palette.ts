@@ -44,8 +44,13 @@ export type CommandKind = 'desktop' | 'agent-builtin' | 'agent-skill';
 /** A desktop-side command. Execution is performed in the main process. */
 export interface DesktopCommandMeta {
   kind: 'desktop';
+  /** Inserted text and identity key. */
   name: string;
   description: string;
+  /** Display text when it differs from the inserted `name` (e.g. a hidden `/slug` qualifier). */
+  label?: string;
+  /** Trailing tag in the row, e.g. a plugin's source. */
+  meta?: string;
 }
 
 /** A command baked into the agent (e.g. /compact for Claude Code). */
@@ -60,6 +65,8 @@ export interface AgentSkillCommand {
   kind: 'agent-skill';
   name: string;
   description?: string;
+  /** Main-attested Cindy bundle identity; never inferred from user-authored metadata. */
+  builtIn?: boolean;
   /** Whether the skill came from a user-global or project-local directory. */
   source: SlashCommandSource;
   path?: string;
@@ -86,6 +93,12 @@ export interface ListAgentSkillsOptions {
   forceReload?: boolean;
   /** Host-owned Pi boundary; renderer input must never set this directly. */
   includeManagedPiPackages?: boolean;
+}
+
+/** Host-only runtime discovery inputs used for security decisions about the live task. */
+export interface ListRuntimeSkillsOptions extends ListAgentSkillsOptions {
+  /** Exact config directory passed to the local runtime process, when it differs from its default. */
+  runtimeConfigDir?: string;
 }
 
 export interface ListAgentSkillsResult {

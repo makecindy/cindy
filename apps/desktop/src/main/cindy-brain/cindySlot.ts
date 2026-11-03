@@ -41,6 +41,7 @@
  */
 
 import { createHash, randomUUID } from 'node:crypto';
+import { acquireGhostDepositLock } from './ghostDepositQuota.js';
 
 import {
   GHOST_CINDY_DEPOSIT_BURST,
@@ -82,10 +83,7 @@ import type { CindyProxySearchService } from '../mcp-integrations/cindyProxySear
 import { probeImageSize } from './imageProbe.js';
 import { isLibraryBlobRelPath, isLibrarySidecarRelPath } from './librarySlot.js';
 import { assertLibraryEditImageSource } from './imageChannelRegistry.js';
-import {
-  decodeCatalogPin,
-  type OneshotRoute,
-} from '../utility-model/textOneshotPinOptions.js';
+import type { OneshotRoute } from '../utility-model/textOneshotPinOptions.js';
 import type { AgentKind } from '@cindy/model-providers';
 
 /**
@@ -136,12 +134,6 @@ export interface CindyVideoCapabilities {
 /** 某个图像型号的 provider 实际编辑能力，用于通用 1–4 图契约的二次校验。 */
 export interface CindyImageCapabilities {
   maxEditImages?: number;
-}
-
-export interface CindyMediaOverrideSelection {
-  modelId: string;
-  providerId: string;
-  label?: string;
 }
 
 export interface CindySlotDeps {
@@ -211,19 +203,13 @@ export interface CindySlotDeps {
    */
   resolveOwnedMedia(ghostId: string, hash: string, ownerScopeKey: string): Promise<string | null>;
   /**
-   * 意识专属后端覆盖(解析表第②层,用户在意识详情页钉的);无覆盖返回
-   * null。capability 为能力键(image.generate / video.edit …);返回值仍过
-   * 白名单校验(型号可能已随主机演进下架)。
+   * 用户在插件详情「模型与任务」里显式选的模型(与插件新建任务共用同一份
+   * 配置,见 pluginTaskPrefsStore);null = 未选 = 跟随默认。只作用于快问快答;
+   * 图像/视频/向量没有逐插件覆盖,始终走目录默认与插件请求里的档位/型号。
    */
-  getOverride(ghostId: string, capability: string): string | null;
-  /**
-   * Provider-aware 媒体覆盖。新版 Host 偏好按 providerId + modelId 保存；存在时
-   * 必须贯穿能力校验与最终派发，不能降回裸 modelId 后走 first-wins。
-   */
-  getMediaOverride?(
+  getOneshotModelSelection?(
     ghostId: string,
-    capability: string,
-  ): CindyMediaOverrideSelection | null;
+  ): { providerId?: string; agentKind: AgentKind; model: string } | null;
   /**
    * 当前图像能力配置——真身是 providers.json 运行时目录(与会话模型列表
    * 同一获取来源),每单现读跟随热更。models = 白名单与显示名;defaults =
@@ -318,8 +304,8 @@ export interface CindySlotDeps {
     maxTokens?: number;
     timeoutMs: number;
     /**
-     * 本次快问快答的路由(用户钉档或身份卡声明偏好解析出的终态,见
-     * utility-model/textOneshotPinOptions);缺省 = 跟随系统默认轻量链。
+     * 本次快问快答的路由(用户在详情页选的模型或身份卡声明偏好解析出的终态,
+     * 见 utility-model/textOneshotPinOptions);缺省 = 跟随系统辅助模型链。
      */
     route?: OneshotRoute;
   }): Promise<
@@ -852,7 +838,6 @@ export class GhostCindySlot {
       };
     }
     const defaults = cfg.defaults;
-    const whitelist = new Set(cfg.models.map((m) => m.id));
     let model = defaults.standard;
     let providerId: string | undefined;
     let providerModelLabel: string | undefined;
@@ -861,23 +846,6 @@ export class GhostCindySlot {
         return { ok: false, message: `未知档位(可用:${GHOST_MODEL_TIERS.join(' / ')})` };
       }
       model = defaults[p.tier as GhostModelTier];
-    }
-    const capability = `${info.category}.${info.action}`;
-    const mediaOverride = this.deps.getMediaOverride?.(ghostId, capability) ?? null;
-    if (mediaOverride) {
-      model = mediaOverride.modelId;
-      providerId = mediaOverride.providerId;
-      providerModelLabel = mediaOverride.label;
-    } else {
-      const override = this.deps.getOverride(ghostId, capability);
-      if (override !== null) {
-        if (whitelist.has(override)) {
-          model = override;
-        } else {
-          // 钉的型号已随白名单演进下架:落回上面的档位/默认,不让老配置卡死能力。
-          this.deps.log?.warn('ghost cindy override no longer whitelisted, ignored', { ghostId, override });
-        }
-      }
     }
     if (p.model !== undefined) {
       if (typeof p.model !== 'string') {
@@ -921,7 +889,7 @@ export class GhostCindySlot {
 
     // 画面参数按**解析出的型号**二次校验:协议层值域是所有 provider 的
     // 交集,单个型号支持的时长/帧率差异很大(seedance 2.0 是 4/6/8/10 秒,
-    // seedance 2.5 是 4–30 秒且没有 1080p,happyhorse 只有 5 秒)。不支持即
+    // seedance 2.5 是 4–30 秒,happyhorse 只有 5 秒)。不支持即
     // 明拒并列出该型号的可用值,不做最近似降级——静默改成别的档位会让意识
     // 以为自己的参数生效了。
     if (info.category === 'video' && presentVideoKeys.length > 0) {
@@ -1531,8 +1499,8 @@ export class GhostCindySlot {
   /**
    * oneshot_text:快问快答(2026-07-31 开闸)。轻量任务模型链直答一次,
    * 文字随本次 invoke 递回;不产媒体、不进任何会话。选型不自由:只接受
-   * 用户钉档或身份卡声明的偏好(2026-08-05 起,解析权在主机),都没有才走
-   * 系统默认链。失败面全部结构化(errorCode 稳定契约,见 shared 类型注释)。
+   * 用户在详情页选的模型或身份卡声明的偏好(解析权在主机),都没有才走
+   * 系统辅助模型链。失败面全部结构化(errorCode 稳定契约,见 shared 类型注释)。
    * 在途并发闸与媒体代办共用同一计数与用户上限——它们花的都是用户的额度。
    */
   private async handleOneshotText(
@@ -1617,27 +1585,14 @@ export class GhostCindySlot {
       const prompt = expectJson
         ? `${p.prompt}\n\n(只输出 JSON 本体,不要任何解释、前后缀或代码围栏)`
         : p.prompt;
-      // 选型优先级:用户在详情页的钉档 > 身份卡声明的偏好模型 > 系统默认链。
-      // 钉档两形态:轻量档位键(随系统链演进的逻辑档位)与目录钉(cat: 编码的
-      // 供应商×agent×模型);声明解析不到(目录没有/已停用/不可路由)按未声明处理。
-      const override = this.deps.getOverride(ghostId, 'text.oneshot') ?? undefined;
+      // 选型优先级:用户在详情页选的模型 > 身份卡声明的偏好模型 > 系统辅助模型链。
+      // 用户选的是一组完整的 供应商×agent×模型,钉死不回落(失败如实返回,不悄悄
+      // 换链路烧钱);声明解析不到(目录没有/已停用/不可路由)按未声明处理。
+      // 每单现读,不缓存:系统辅助模型改动后,跟随默认的插件下一单即跟随。
+      const selected = this.deps.getOneshotModelSelection?.(ghostId) ?? null;
       let route: OneshotRoute | undefined;
-      if (override !== undefined) {
-        const catalogPin = decodeCatalogPin(override);
-        if (catalogPin) {
-          route = { kind: 'catalog', ...catalogPin };
-        } else if (override.startsWith('cat:')) {
-          // 带目录钉前缀但解码失败(存储损坏/未来格式):目录钉的语义是「钉死
-          // 不回落」,静默落到系统默认链会悄悄烧错链路的钱——按无可选通道
-          // 收单,引导用户到详情页重新钉档。
-          return {
-            ok: false,
-            message: '快问快答的钉档值无法解析(可能已损坏或来自新版本),请到插件详情页重新钉档',
-            errorCode: 'NO_CANDIDATE',
-          };
-        } else {
-          route = { kind: 'utility-profile', profileId: override };
-        }
+      if (selected) {
+        route = { kind: 'catalog', ...selected };
       } else {
         const declaredModel = ghost.manifest.cindy?.oneshotModel;
         const resolved = declaredModel ? this.deps.resolveOneshotModel?.(declaredModel) : null;
@@ -1881,8 +1836,6 @@ export class GhostCindySlot {
       }
       model = cfg.defaults[p.tier as GhostModelTier];
     }
-    const override = this.deps.getOverride(ghostId, 'embed.text');
-    if (override && whitelist.has(override)) model = override;
     if (p.model !== undefined) {
       if (typeof p.model !== 'string' || !whitelist.has(p.model)) {
         return {
@@ -2120,69 +2073,79 @@ export class GhostCindySlot {
       };
     }
 
-    // 配额:保守预判(已用 + 本次最坏情况)。内容去重命中时本次其实不占额,
-    // 但入库前算不出是否命中——因此临界处可能误拒一次"其实免费"的重复寄存,
-    // 代价是配额永远是硬上限、绝不超发。释放口是 release_media。
-    let used: number;
+    const ownerScopeKey = this.deps.getOwnerScopeKey();
+    const release = await acquireGhostDepositLock(ghostId);
     try {
-      used = await readUsage(ghostId);
-    } catch (err) {
-      const message = err instanceof Error ? err.message : String(err);
-      this.deps.log?.warn('ghost cindy-request deposit_media quota read failed', {
+      // The newly introduced queue must not carry a request into another account.
+      if (this.deps.isOwnerBoundaryPending() || this.deps.getOwnerScopeKey() !== ownerScopeKey) {
+        return { ok: false, message: '媒体任务期间账号已切换,本次结果已丢弃' };
+      }
+      const deniedAfterWait = this.gateMediaCapability(ghostId);
+      if (deniedAfterWait) return deniedAfterWait;
+      // 配额:保守预判(已用 + 本次最坏情况)。内容去重命中时本次其实不占额,
+      // 但入库前算不出是否命中——因此临界处可能误拒一次"其实免费"的重复寄存,
+      // 代价是配额永远是硬上限、绝不超发。释放口是 release_media。
+      let used: number;
+      try {
+        used = await readUsage(ghostId);
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        this.deps.log?.warn('ghost cindy-request deposit_media quota read failed', {
+          ghostId,
+          callId,
+          error: message,
+        });
+        return { ok: false, message: `寄存失败:配额查询出错(${message})` };
+      }
+      if (used + buffer.byteLength > GHOST_CINDY_DEPOSIT_QUOTA_BYTES) {
+        return {
+          ok: false,
+          message:
+            `寄存配额已满(本插件上限 ${GHOST_CINDY_DEPOSIT_QUOTA_BYTES} 字节,已用 ${used})。` +
+            '请对不再需要的寄存物调用 release_media 释放后重试,并如实告知用户。',
+        };
+      }
+
+      let saved: { url: string; hash: string; ext: string; bytes: number; deduplicated: boolean };
+      try {
+        saved = await deposit({ ghostId, buffer, mimeType, ...(label ? { label } : {}) });
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        this.deps.log?.warn('ghost cindy-request deposit_media failed', {
+          ghostId,
+          callId,
+          error: message,
+        });
+        return { ok: false, message: `寄存失败:${message}` };
+      }
+
+      // 落仓后重读一次真实占用:deduplicated 只说明"字节此前已在总仓",不代表
+      // 本意识此前已有这条寄存引用(可能是别的意识存过),不能据它推算。
+      let usedAfter = used + saved.bytes;
+      try {
+        usedAfter = await readUsage(ghostId);
+      } catch {
+        // 回读失败不影响本次成功;返回的是估算值,仅供作者提示用户。
+      }
+      this.deps.log?.info('ghost cindy-request deposit_media done', {
         ghostId,
         callId,
-        error: message,
+        hash: saved.hash,
+        mime: mimeType,
+        bytes: saved.bytes,
+        ...(saved.deduplicated ? { deduplicated: true } : {}),
       });
-      return { ok: false, message: `寄存失败:配额查询出错(${message})` };
-    }
-    if (used + buffer.byteLength > GHOST_CINDY_DEPOSIT_QUOTA_BYTES) {
       return {
-        ok: false,
-        message:
-          `寄存配额已满(本插件上限 ${GHOST_CINDY_DEPOSIT_QUOTA_BYTES} 字节,已用 ${used})。` +
-          '请对不再需要的寄存物调用 release_media 释放后重试,并如实告知用户。',
+        ok: true,
+        url: saved.url,
+        hash: saved.hash,
+        ext: saved.ext,
+        bytes: saved.bytes,
+        deduplicated: saved.deduplicated,
+        quotaUsedBytes: usedAfter,
+        quotaLimitBytes: GHOST_CINDY_DEPOSIT_QUOTA_BYTES,
       };
-    }
-
-    let saved: { url: string; hash: string; ext: string; bytes: number; deduplicated: boolean };
-    try {
-      saved = await deposit({ ghostId, buffer, mimeType, ...(label ? { label } : {}) });
-    } catch (err) {
-      const message = err instanceof Error ? err.message : String(err);
-      this.deps.log?.warn('ghost cindy-request deposit_media failed', {
-        ghostId,
-        callId,
-        error: message,
-      });
-      return { ok: false, message: `寄存失败:${message}` };
-    }
-
-    // 落仓后重读一次真实占用:deduplicated 只说明"字节此前已在总仓",不代表
-    // 本意识此前已有这条寄存引用(可能是别的意识存过),不能据它推算。
-    let usedAfter = used + saved.bytes;
-    try {
-      usedAfter = await readUsage(ghostId);
-    } catch {
-      // 回读失败不影响本次成功;返回的是估算值,仅供作者提示用户。
-    }
-    this.deps.log?.info('ghost cindy-request deposit_media done', {
-      ghostId,
-      callId,
-      hash: saved.hash,
-      mime: mimeType,
-      bytes: saved.bytes,
-      ...(saved.deduplicated ? { deduplicated: true } : {}),
-    });
-    return {
-      ok: true,
-      url: saved.url,
-      hash: saved.hash,
-      ext: saved.ext,
-      bytes: saved.bytes,
-      deduplicated: saved.deduplicated,
-      quotaUsedBytes: usedAfter,
-      quotaLimitBytes: GHOST_CINDY_DEPOSIT_QUOTA_BYTES,
-    };
+    } finally { release(); }
   }
 
   /**

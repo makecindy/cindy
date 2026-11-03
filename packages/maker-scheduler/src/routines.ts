@@ -1,3 +1,5 @@
+import type { AgentKind, PreRunHookConfig, PreRunPluginConfig, Schedule } from "./types.js";
+import { normalizePreRunPlugin } from "./types.js";
 import { nextRun } from "./engine/cron.js";
 
 /** Sources describe events, independently of the connector transporting them. */
@@ -21,7 +23,8 @@ export interface RoutineEvent {
 
 export type RoutineTrigger =
   | { id: string; kind: "cron"; expression: string; timezone: string }
-  | { id: string; kind: "interval"; intervalMs: number }
+  | { id: string; kind: "interval"; intervalMs: number; anchorMs?: number }
+  | { id: string; kind: "once"; at: number }
   | {
       id: string;
       kind: "event";
@@ -34,6 +37,45 @@ export type RoutineTrigger =
       }>;
     };
 
+/** Host-owned rules: per-teammate follow-up and nightly learning. */
+export type RoutineBuiltin = "follow-up" | "nightly-learning";
+
+/**
+ * Earlier releases stored the daily todo check as a host-owned rule. It is now an ordinary,
+ * editable routine; loading drops the flag and keeps the rule, its choices and history.
+ */
+export const LEGACY_TODO_CHECK_BUILTIN = "todo-check";
+
+/** Stable error prefix for attempts to delete or rewrite a host-owned routine. */
+export const BUILTIN_ROUTINE_ERROR = "BUILTIN_ROUTINE";
+
+/** A routine's explicit choice; null/absence follows its companion's choice. */
+export interface RoutineModel {
+  agentKind: AgentKind;
+  agentDeviceId?: string | null;
+  model: string;
+  providerId?: string | null;
+  effort?: Schedule['effort'];
+  fastMode?: Schedule['fastMode'];
+}
+
+/** How a routine carries context from one trigger to the next. */
+export type RoutineSessionMode = "persistent" | "fresh";
+
+/** Delivery is separate from execution: no second model call unless explicitly selected. */
+export type RoutineDelivery =
+  | { kind: 'companion'; mode: 'direct' | 'process' }
+  | { kind: 'im'; targetId: string }
+  | { kind: 'none' };
+
+/** Host-resolved destinations; IDs are opaque and contain no credentials. */
+export interface RoutineDeliveryTarget {
+  id: string;
+  channel: string;
+  name: string;
+  recipient: string;
+}
+
 /** A single standing instruction, with OR-combined time and event triggers. */
 export interface Routine {
   /** Derived by the engine, never accepted as configuration. */
@@ -44,6 +86,29 @@ export interface Routine {
   prompt: string;
   enabled: boolean;
   triggers: RoutineTrigger[];
+  /** Omitted on legacy rules: preserve their existing silent behavior; new omissions persist false. */
+  silentWhenIdle?: boolean;
+  /** null explicitly removes the check; omission preserves it on older clients. */
+  preRunHook?: PreRunHookConfig | null;
+  /** Plugin pre-run check; null removes it, omission preserves it on older clients. */
+  preRunPlugin?: PreRunPluginConfig | null;
+  /** Omission preserves saved settings when an older client edits a rule. */
+  modelOverride?: RoutineModel | null;
+  /** Omission keeps the legacy persistent routine lane. */
+  sessionMode?: RoutineSessionMode;
+  /** Omission preserves saved choices; ordinary routines default to their initiating companion. */
+  delivery?: RoutineDelivery;
+  /**
+   * 宿主内置规则（每个伙伴一条的「跟进」与「夜间学习」）。由宿主模板生成，不接受用户/模型
+   * 改写指令与触发条件、不能删除；可暂停（enabled），普通 Agent 规则可单独选模型。可选字段：旧数据与旧客户端缺省即普通规则，
+   * state 版本不变。
+   */
+  builtin?: RoutineBuiltin;
+  /**
+   * 内置规则的宿主模板版本（可选，只由 ensureBuiltin 写）。版本变化时 ensure 一定重写规则；
+   * 旧数据缺省视为与任何显式版本不同，下次 ensure 补写。
+   */
+  builtinVersion?: number;
   revision: number;
   createdAt: number;
   updatedAt: number;
@@ -51,7 +116,8 @@ export interface Routine {
 
 export type RoutineInput = Pick<
   Routine,
-  "name" | "prompt" | "enabled" | "triggers"
+  "name" | "prompt" | "enabled" | "triggers" | "silentWhenIdle" | "preRunHook" | "preRunPlugin" | "modelOverride"
+  | "sessionMode" | "delivery"
 >;
 
 function record(value: unknown): Record<string, unknown> {
@@ -74,10 +140,10 @@ export function parseRoutineInput(value: unknown): RoutineInput {
     throw new Error("enabled must be boolean");
   if (
     !Array.isArray(input.triggers) ||
-    input.triggers.length < 1 ||
+    (input.enabled && input.triggers.length < 1) ||
     input.triggers.length > 32
   ) {
-    throw new Error("A routine requires between 1 and 32 triggers");
+    throw new Error("An enabled routine requires between 1 and 32 triggers; disabled drafts allow none");
   }
   const triggers = input.triggers.map((raw): RoutineTrigger => {
     const trigger = record(raw);
@@ -95,7 +161,15 @@ export function parseRoutineInput(value: unknown): RoutineInput {
       ) {
         throw new Error("Interval must be an integer of at least one minute");
       }
-      return { id, kind: "interval", intervalMs: Number(trigger.intervalMs) };
+      if (trigger.anchorMs !== undefined && (!Number.isSafeInteger(trigger.anchorMs) || Number(trigger.anchorMs) < 0))
+        throw new Error("Invalid interval anchor");
+      return { id, kind: "interval", intervalMs: Number(trigger.intervalMs),
+        ...(trigger.anchorMs === undefined ? {} : { anchorMs: Number(trigger.anchorMs) }) };
+    }
+    if (trigger.kind === "once") {
+      if (!Number.isSafeInteger(trigger.at) || Number(trigger.at) < 0)
+        throw new Error("Invalid one-time trigger");
+      return { id, kind: "once", at: Number(trigger.at) };
     }
     if (
       trigger.kind !== "event" ||
@@ -129,7 +203,56 @@ export function parseRoutineInput(value: unknown): RoutineInput {
   if (new Set(triggers.map((trigger) => trigger.id)).size !== triggers.length) {
     throw new Error("Trigger IDs must be unique");
   }
+  if (input.silentWhenIdle !== undefined && typeof input.silentWhenIdle !== "boolean")
+    throw new Error("silentWhenIdle must be boolean");
+  let preRunHook: PreRunHookConfig | null | undefined;
+  if (input.preRunHook === null) preRunHook = null;
+  else if (input.preRunHook !== undefined) {
+    const hook = record(input.preRunHook);
+    if (hook.timeoutMs !== undefined && (!Number.isSafeInteger(hook.timeoutMs) || Number(hook.timeoutMs) <= 0))
+      throw new Error("Invalid pre-run check timeout");
+    preRunHook = { command: string(hook.command, 32_000),
+      ...(hook.timeoutMs === undefined ? {} : { timeoutMs: Number(hook.timeoutMs) }) };
+  }
+  const preRunPlugin = normalizePreRunPlugin(input.preRunPlugin);
+  let modelOverride: RoutineModel | null | undefined;
+  if (input.modelOverride === null) modelOverride = null;
+  else if (input.modelOverride !== undefined) {
+    const model = record(input.modelOverride);
+    if (!['claude-code', 'codex', 'pi'].includes(String(model.agentKind))) throw new Error('Invalid routine agent');
+    if (model.effort !== undefined && !['', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max', 'ultra'].includes(String(model.effort))) throw new Error('Invalid routine effort');
+    if (model.fastMode !== undefined && typeof model.fastMode !== 'boolean' && model.fastMode !== 'ultrafast') throw new Error('Invalid routine fast mode');
+    modelOverride = {
+      agentKind: model.agentKind as AgentKind,
+      model: string(model.model, 512),
+      ...(model.agentDeviceId === undefined ? {} : { agentDeviceId: model.agentDeviceId === null || model.agentDeviceId === 'local' ? null : string(model.agentDeviceId, 512) }),
+      ...(model.providerId === undefined ? {} : { providerId: model.providerId === null ? null : string(model.providerId, 512) }),
+      ...(model.effort === undefined ? {} : { effort: model.effort as RoutineModel['effort'] }),
+      ...(model.fastMode === undefined ? {} : { fastMode: model.fastMode as RoutineModel['fastMode'] }),
+    };
+  }
+  let sessionMode: RoutineSessionMode | undefined;
+  if (input.sessionMode !== undefined) {
+    if (input.sessionMode !== "persistent" && input.sessionMode !== "fresh")
+      throw new Error("Invalid routine session mode");
+    sessionMode = input.sessionMode;
+  }
+  let delivery: RoutineDelivery | undefined;
+  if (input.delivery !== undefined) {
+    const value = record(input.delivery);
+    if (value.kind === 'none') delivery = { kind: 'none' };
+    else if (value.kind === 'companion' && (value.mode === 'direct' || value.mode === 'process'))
+      delivery = { kind: 'companion', mode: value.mode };
+    else if (value.kind === 'im') delivery = { kind: 'im', targetId: string(value.targetId, 4096) };
+    else throw new Error('Invalid routine delivery');
+  }
   return {
+    ...(delivery === undefined ? {} : { delivery }),
+    ...(modelOverride === undefined ? {} : { modelOverride }),
+    ...(input.silentWhenIdle === undefined ? {} : { silentWhenIdle: input.silentWhenIdle as boolean }),
+    ...(preRunHook === undefined ? {} : { preRunHook }),
+    ...(preRunPlugin === undefined ? {} : { preRunPlugin }),
+    ...(sessionMode === undefined ? {} : { sessionMode }),
     name: string(input.name, 200),
     prompt: string(input.prompt, 100_000),
     enabled: input.enabled,
@@ -232,7 +355,10 @@ export function nextRoutineTriggerAt(
   from: number,
 ): number | undefined {
   if (trigger.kind === "event") return undefined;
+  if (trigger.kind === "once") return trigger.at > from ? trigger.at : undefined;
   return trigger.kind === "interval"
-    ? from + trigger.intervalMs
+    ? trigger.anchorMs === undefined ? from + trigger.intervalMs
+      : trigger.anchorMs > from ? trigger.anchorMs
+        : trigger.anchorMs + (Math.floor((from - trigger.anchorMs) / trigger.intervalMs) + 1) * trigger.intervalMs
     : nextRun(trigger.expression, from, trigger.timezone);
 }

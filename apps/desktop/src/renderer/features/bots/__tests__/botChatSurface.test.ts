@@ -4,7 +4,7 @@
  * 这三处判定都长在超大组件里(CCAgentSessionView 5k 行 / MessageStream 5.8k 行 /
  * ChatInput 8k 行),在 jsdom 里整棵挂起来既慢又脆。真正要锁死的是**判定条件本身**:
  * 头像与收控件只能对 Bot 会话生效,普通任务的渲染必须一字不改。所以这里锁源码契约,
- * 纯逻辑部分(占位符选词、欢迎语幂等)另有真实单测。
+ * 归属与状态稳定性由 botSessionPresentation / botChatPresentation 的行为测试覆盖。
  */
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
@@ -14,16 +14,15 @@ const read = (relativePath: string): string =>
   readFileSync(resolve(__dirname, '..', '..', '..', relativePath), 'utf8').replace(/\r\n/g, '\n');
 
 const sessionView = read('features/cc-agent/CCAgentSessionView.tsx');
+const sessionHeader = read('features/cc-agent/SessionContentHeader.tsx');
 const messageStream = read('components/chat/MessageStream.tsx');
 const messageActionBar = read('components/chat/MessageActionBar.tsx');
 const chatInput = read('components/new-chat/ChatInput.tsx');
 const botSettings = read('features/bots/BotsHomeView.tsx');
 
 describe('Bot 对话的判定条件', () => {
-  it('「这是跟伙伴的对话」需要路由身份与 session.source 同时成立', () => {
-    // URL 只是导航投影。少了 source 这一半,任何 /bots/... 链接都能把普通任务
-    // 伪装成伙伴对话。
-    expect(sessionView).toContain("botIdentity && session?.source === 'bot' ? botIdentity : null");
+  it('is mounted next to the ordinary task title', () => {
+    expect(sessionHeader).toContain('{!isEditing && <BotTaskOwnerChip session={session} />}');
   });
 
   it('气泡头像只在 Bot 对话下传给消息流', () => {
@@ -39,10 +38,11 @@ describe('Bot 对话的判定条件', () => {
   });
 
   it('伙伴对话换掉任务顶栏,而不是在它旁边再加一个', () => {
-    expect(sessionView).toContain(
-      '<BotSessionContentHeaderRegistration bot={botChatIdentity} />',
-    );
+    expect(sessionView).toMatch(/botChatIdentity\s*\?\s*\(\s*<BotSessionContentHeaderRegistration bot=\{botChatIdentity\}/);
     expect(sessionView).toContain('<SessionContentHeaderRegistration');
+    const botHeader = sessionView.match(/<BotSessionContentHeaderRegistration\b[\s\S]*?\/>/)?.[0];
+    expect(botHeader).toBeTruthy();
+    expect(botHeader).not.toMatch(/\bonVoice(?:Active)?\s*=/);
   });
 });
 
@@ -55,15 +55,24 @@ describe('消息流的头像挂载', () => {
 
   it('只有 assistant 分支挂头像', () => {
     expect(messageStream).toContain('return withAssistantAvatar(\n        assistantAvatar,');
-    // Assistant text shows the avatar; the single task anchor reserves the same
-    // space invisibly. User messages and internal tool/work cards still bypass it.
-    expect(messageStream.match(/withAssistantAvatar\(/g)?.length).toBe(3);
-    expect(messageStream).toContain("simplifiedBotConversation && message.systemCardType === 'bot-session-task'");
-    expect(messageStream).toContain('<span aria-hidden="true" className="invisible">{assistantAvatar}</span>');
+    // Assistant text shows the avatar; task and teammate-message cards plus the
+    // work fold reserve the same space invisibly. User messages bypass it.
+    expect(messageStream.match(/withAssistantAvatar\(/g)?.length).toBe(4);
+    expect(messageStream).toMatch(/simplifiedBotConversation\s*&&\s*\(message\.systemCardType === 'bot-session-task'\s*\|\|\s*message\.systemCardType === 'bot-session-task-result'\s*\|\|\s*message\.systemCardType === 'bot-session-task-message'\s*\|\|\s*message\.systemCardType === 'bot-direct-message'\)\s*\? withAssistantAvatar\(/);
+    expect(messageStream).toMatch(/<span aria-hidden="true" className="invisible">\s*\{assistantAvatar\}\s*<\/span>/);
+    expect(messageStream).toContain('{replyColumnSpacer ? withAssistantAvatar(replyColumnSpacer, block) : block}');
   });
 });
 
 describe('伙伴输入框只保留对话动作', () => {
+  it('语音对话入口接入输入框，并传递可用与通话状态', () => {
+    expect(sessionView).toContain('onStartVoiceConversation={voiceModeAvailable ? startVoiceMode : undefined}');
+    expect(sessionView).toContain('voiceConversationDisabled={voiceModeBlocked || voiceCall.open}');
+    expect(sessionView).toContain('voiceConversationActive={voiceModeOpen}');
+    const voiceGate = sessionView.match(/const voiceModeBlocked = Boolean\([\s\S]*?\);/)?.[0];
+    expect(voiceGate).toContain('pendingInputHandoff');
+  });
+
   it('伙伴保留标准权限 chip，仅隐藏模型选择器', () => {
     expect(chatInput.match(/!hideRuntimeControls \? \(/g)?.length).toBe(1);
     expect(chatInput.indexOf('<PermissionSelector')).toBeLessThan(chatInput.indexOf('!hideRuntimeControls ? ('));
@@ -72,7 +81,7 @@ describe('伙伴输入框只保留对话动作', () => {
   });
 
   it('伙伴仍可使用权限快捷键，锁定任务不能切换', () => {
-    expect(chatInput).toContain('settingsLocked ? [] : (activeAgentCapabilities?.permissionModes ?? [])');
+    expect(chatInput).toContain('settingsLocked || sharedGuest ? [] : (activeAgentCapabilities?.permissionModes ?? [])');
     expect(chatInput).not.toContain('settingsLocked || hideRuntimeControls');
   });
 
@@ -93,21 +102,20 @@ describe('伙伴设置包含独立能力选择入口', () => {
   });
 });
 
-describe('伙伴消息流收起内部工作过程', () => {
-  it('只对伙伴过滤工作卡，正文流式出现后让单一思考状态退场', () => {
+describe('伙伴消息流复用工作组件并保留独立过程分组', () => {
+  it('伙伴过程使用伙伴分组入口，输入框上方仍保留普通状态栏', () => {
     expect(sessionView).toContain('simplifiedBotConversation={Boolean(botChatIdentity)}');
-    expect(messageStream).toContain('simplifyBotRenderItems(grouped, isSessionStreaming)');
-    expect(messageStream).toContain("item.message.role === 'assistant'");
-    expect(messageStream).toContain('item.message.content.trim().length > 0');
+    expect(messageStream).toContain('botProcessItems(grouped, isSessionStreaming)');
+    // Text/tool grouping is covered by botConversationPresentation behavioral tests.
+    expect(messageStream).toContain("from '@/features/bots/botConversationPresentation'");
+    expect(messageStream).toContain('compact={false}');
+    expect(messageStream).not.toContain('compact={simplifiedBotConversation}');
+    expect(messageStream).toContain('replyColumnSpacer={botReplyColumnSpacer}');
     expect(messageStream).not.toContain('data-testid="bot-thinking-indicator"');
-    expect(sessionView).toContain('data-testid="bot-thinking-indicator"');
-    expect(sessionView).toContain("t('ccAgent.agentStatus.thinking')");
-    expect(sessionView).toContain('botChatIdentity ? (');
-    expect(sessionView).toContain(
-      'Boolean(botChatIdentity) && hasBotAssistantOutputInCurrentTurn(messages)',
-    );
-    expect(sessionView).toContain('composerRuntimeVisible && !botAssistantOutputStarted');
-    expect(sessionView).toContain('botThinkingVisible ? (');
+    expect(sessionView).not.toContain('<BotWorkingStatus');
+    expect(sessionView).toContain('<RunningStatusBar');
+    expect(sessionView).toContain('visible={composerRuntimeVisible');
+    expect(sessionView).not.toContain('botAssistantOutputStarted');
   });
 
   it('时间戳只挂在伙伴消息分组上', () => {
@@ -125,7 +133,7 @@ describe('伙伴消息流收起内部工作过程', () => {
 
   it('伙伴消息操作栏常显，外显回复，并隐藏费用与 Fork', () => {
     expect(messageStream).toContain('simplifiedBotConversation={simplifiedBotConversation}');
-    expect(messageActionBar).toContain('const replyBtn = simplifiedBotConversation');
+    expect(messageActionBar).toContain('const replyBtn = (inlineReplyAction || (simplifiedBotConversation && onAddToChat))');
     expect(messageActionBar).toContain('const forkBtn = !simplifiedBotConversation');
     expect(messageActionBar).toContain('simplifiedBotConversation ? null : costText || tokensText');
     expect(messageActionBar).toContain('simplifiedBotConversation || visible || menuOpen');

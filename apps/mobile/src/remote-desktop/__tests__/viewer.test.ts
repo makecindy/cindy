@@ -14,24 +14,35 @@ const desktopTransform = vm.runInNewContext(
   fx: number,
   fy: number,
   fillHeight?: boolean,
-) => { x: number; y: number; width: number; height: number; scale: number };
+) => {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+  scale: number;
+  maxZoom: number;
+};
 
-function viewer() {
+function viewer(rtc = false, frameCallback = true, nativeMedia = false) {
   const messages: Array<{
     type: string;
     epoch: string;
     sequence: number;
-    events?: Array<{ kind: string; code?: string }>;
+    events?: Array<{ kind: string; code?: string; text?: string; down?: boolean }>;
   }> = [];
   const listeners: Record<string, (event: unknown) => void> = {};
   const documentListeners: Record<string, (event: unknown) => void> = {};
   const windowListeners: Record<string, (event: unknown) => void> = {};
+  let activeElement: object | null = null;
   const elements = Object.fromEntries(
     [
       "stage",
       "keyboard-input",
       "image",
       "video",
+      "bg",
+      "bg-canvas",
+      "network-status",
       "cursor",
       "cursor-image",
       "mouse-buttons",
@@ -45,15 +56,21 @@ function viewer() {
     ].map((id) => [
       id,
       {
+        id,
         clientWidth: 400,
         clientHeight: 600,
         style: {} as Record<string, string>,
         addEventListener: (name: string, handler: (e: unknown) => void) => {
           listeners[`${id}:${name}`] = handler;
         },
+        textContent: "",
         value: "",
-        focus() {},
-        blur() {},
+        focus() {
+          activeElement = this;
+        },
+        blur() {
+          if (activeElement === this) activeElement = null;
+        },
         setSelectionRange() {},
         setAttribute() {},
         setPointerCapture() {},
@@ -62,19 +79,91 @@ function viewer() {
       },
     ]),
   );
+  const bgDraws: unknown[][] = [];
+  const bgContext = {
+    setTransform() {},
+    clearRect: vi.fn(),
+    drawImage: (...args: unknown[]) => {
+      bgDraws.push(args);
+    },
+  };
+  (
+    elements as unknown as Record<
+      string,
+      {
+        getContext?: () => unknown;
+        naturalWidth?: number;
+        naturalHeight?: number;
+      }
+    >
+  )["bg-canvas"].getContext = () => bgContext;
+  (
+    elements as unknown as Record<
+      string,
+      {
+        getContext?: () => unknown;
+        naturalWidth?: number;
+        naturalHeight?: number;
+      }
+    >
+  )["image"].naturalWidth = 1920;
+  (
+    elements as unknown as Record<
+      string,
+      {
+        getContext?: () => unknown;
+        naturalWidth?: number;
+        naturalHeight?: number;
+      }
+    >
+  )["image"].naturalHeight = 1080;
+  Object.assign(elements.image, { complete: true });
   const intervals: Array<() => void> = [];
-  const frames = new Map<number, () => void>();
+  const frames = new Map<number, (time: number) => void>();
+  const videoFrames = new Map<number, () => void>();
   let id = 0;
+  const video = Object.assign(elements.video, {
+    videoWidth: 1920,
+    videoHeight: 1080,
+    readyState: 2,
+    onplaying: null as null | (() => void),
+    requestVideoFrameCallback: frameCallback
+      ? (fn: () => void) => {
+          videoFrames.set(++id, fn);
+          return id;
+        }
+      : undefined,
+    cancelVideoFrameCallback: (key: number) => videoFrames.delete(key),
+  });
+  const dataChannel = { readyState: 'open', bufferedAmount: 0, send: vi.fn(), close() {} };
+  class Peer {
+    connectionState = 'connected';
+    localDescription = { sdp: "offer" };
+    createDataChannel() {
+      return dataChannel;
+    }
+    addTransceiver() {}
+    async createOffer() {
+      return { sdp: "offer" };
+    }
+    async setLocalDescription() {}
+    close() {}
+  }
   let now = 0;
-  const source = remoteDesktopViewerHtml("#fff", "#111").match(
+  let orientation: number | undefined;
+  const source = remoteDesktopViewerHtml("#fff", "#111", nativeMedia).match(
     /<script>([\s\S]*)<\/script>/,
   )![1];
   vm.runInNewContext(source, {
+    RTCPeerConnection: Peer,
     Date: { now: () => now },
     performance: { now: () => now },
     matchMedia: () => ({ matches: false }),
     document: {
       getElementById: (key: string) => elements[key],
+      get activeElement() {
+        return activeElement;
+      },
       addEventListener: (key: string, fn: (e: unknown) => void) => {
         documentListeners[key] = fn;
       },
@@ -82,6 +171,10 @@ function viewer() {
       documentElement: { style: { setProperty() {} } },
     },
     window: {
+      RTCPeerConnection: rtc ? Peer : undefined,
+      get orientation() {
+        return orientation;
+      },
       ReactNativeWebView: {
         postMessage: (text: string) => messages.push(JSON.parse(text)),
       },
@@ -96,15 +189,32 @@ function viewer() {
     clearInterval() {},
     setTimeout: () => 1,
     clearTimeout() {},
-    requestAnimationFrame: (fn: () => void) => {
+    requestAnimationFrame: (fn: (time: number) => void) => {
       frames.set(++id, fn);
       return id;
     },
     cancelAnimationFrame: (key: number) => frames.delete(key),
   });
   return {
+    dataChannel,
     messages,
     elements,
+    bgDraws,
+    bgClear: bgContext.clearRect,
+    videoFrames,
+    playVideo: () => {
+      const config = messages.findLast((m) => m.type === "iceConfig");
+      windowListeners.message({
+        data: JSON.stringify({ ...config, iceServers: [] }),
+      });
+      video.onplaying!();
+    },
+    videoFrame: () => {
+      const pending = [...videoFrames.values()];
+      videoFrames.clear();
+      pending.forEach((fn) => fn());
+    },
+    timeupdate: () => listeners["video:timeupdate"]({}),
     send: (message: object) =>
       windowListeners.message({ data: JSON.stringify(message) }),
     flush: () => intervals.forEach((fn) => fn()),
@@ -112,7 +222,7 @@ function viewer() {
       now += elapsed;
       const pending = [...frames.values()];
       frames.clear();
-      pending.forEach((fn) => fn());
+      pending.forEach((fn) => fn(now));
     },
     pointer: (type: string, pointerId: number, x: number, y: number) =>
       listeners[`stage:${type}`]({
@@ -142,44 +252,365 @@ function viewer() {
           }),
         });
     },
+    rotate: (angle: number) => {
+      orientation = angle;
+      windowListeners.orientationchange({});
+    },
     blur: () => windowListeners.blur({}),
-    key: (type: string, code: string) =>
-      documentListeners[type]({ code, preventDefault() {} }),
+    key: (type: string, code: string, key?: string) =>
+      documentListeners[type]({ code, key, preventDefault() {} }),
+    keyboardInput: (type: string, event: object = {}) =>
+      listeners[`keyboard-input:${type}`]({ preventDefault() {}, ...event }),
   };
 }
 
-describe("remote desktop viewport", () => {
-  it("measures the usable picture and fits updated geometry above the toolbar", () => {
-    const v = viewer();
+describe("display change with a kept stream", () => {
+  it("only re-lays out the desktop without reconnecting media", () => {
+    const v = viewer(true);
     v.send({ type: "init", epoch: "one", width: 1920, height: 1080 });
-    v.send({ type: "mouseButtons", bottomInset: 100 });
-    v.send({ type: "measureViewport" });
-    expect(v.messages.find((m) => m.type === "viewportSize")).toMatchObject({
-      width: 400,
-      height: 500,
-    });
-    v.send({ type: "videoSettings", width: 800, height: 1000, audio: false });
+    const negotiations = () =>
+      v.messages.filter((m) => m.type === "iceConfig").length;
+    const before = negotiations();
+    expect(before).toBe(1);
+    v.send({ type: "mouseButtons", topInset: 0, bottomInset: 100 });
+    v.send({ type: "displayGeometry", width: 800, height: 1000 });
     expect(v.elements.video.style).toMatchObject({
       width: "400px",
       height: "500px",
-      left: "0px",
-      top: "0px",
     });
-    v.send({ type: "control", enabled: true });
-    v.send({ type: "mode", mode: "touch" });
-    v.pointer("pointerdown", 1, 200, 250);
-    v.pointer("pointerup", 1, 200, 250);
+    expect(negotiations()).toBe(before);
+    // Invalid geometry is ignored rather than distorting the layout.
+    v.send({ type: "displayGeometry", width: 100, height: 1000 });
+    expect(v.elements.video.style).toMatchObject({ width: "400px" });
+  });
+
+  it("moves the native video frame to the new geometry", () => {
+    const v = viewer(true, true, true);
+    v.send({ type: "init", epoch: "native", width: 1920, height: 1080 });
+    const viewport = () =>
+      v.messages.findLast((m) => m.type === "nativeViewport") as unknown as {
+        width: number;
+        height: number;
+      };
+    const wide = viewport();
+    v.send({ type: "displayGeometry", width: 900, height: 1600 });
+    const tall = viewport();
+    expect(tall.width / tall.height).toBeCloseTo(900 / 1600, 2);
+    expect(wide.width / wide.height).toBeCloseTo(1920 / 1080, 2);
+  });
+});
+
+describe("native media overlay", () => {
+  it("leaves RTC negotiation to native and shares the exact input geometry", () => {
+    const v = viewer(true, true, true);
+    v.send({ type: "init", epoch: "native", width: 1920, height: 1080 });
+    expect(v.messages.some((m) => m.type === "iceConfig")).toBe(false);
+    const viewport = v.messages.findLast(
+      (m) => m.type === "nativeViewport",
+    ) as unknown as { x: number; y: number; width: number; height: number };
+    expect(v.elements.image.style.left).toBe(viewport.x + "px");
+    expect(v.elements.image.style.top).toBe(viewport.y + "px");
+    expect(v.elements.image.style.width).toBe(viewport.width + "px");
+    expect(v.elements.image.style.height).toBe(viewport.height + "px");
+    v.send({ type: "videoSettings", audio: true });
+    expect(v.messages.some((m) => m.type === "iceConfig")).toBe(false);
+  });
+
+  it("shares backdrop fit policy across native video and orientation changes", () => {
+    const v = viewer(false, true, true);
+    v.send({ type: "init", epoch: "native", width: 1920, height: 1080 });
+    const viewport = () =>
+      v.messages.findLast((m) => m.type === "nativeViewport");
+    expect(viewport()).toMatchObject({ fillHeight: false });
+    v.send({ type: "nativeVideo", epoch: "native", active: true });
+    v.send({ type: "viewport", fillHeight: true });
+    expect(viewport()).toMatchObject({ fillHeight: false });
+    v.send({ type: "fit" });
+    expect(viewport()).toMatchObject({ fillHeight: false });
+    expect(v.elements.bg.style.display).toBe("none");
+    v.send({ type: "viewport", fillHeight: false });
+    expect(viewport()).toMatchObject({ fillHeight: false });
+  });
+
+  it("keeps browser pixels out of native video and restores JPEG after stop/reconnect", () => {
+    const v = viewer(false, true, true);
+    v.send({ type: "init", epoch: "first", width: 1920, height: 1080 });
+    v.send({ type: "nativeVideo", epoch: "first", active: true });
+    v.send({ type: "fit" });
+    v.frame();
+    expect(v.elements.image.style.visibility).toBe("hidden");
+    expect(v.elements.bg.style.display).toBe("none");
+    v.send({ type: "stop" });
+    expect(v.elements.image.style.visibility).toBe("");
+    v.send({ type: "init", epoch: "next", width: 1920, height: 1080 });
+    v.send({ type: "nativeVideo", epoch: "first", active: true });
+    expect(v.elements.image.style.visibility).toBe("");
+    v.send({ type: "nativeVideo", epoch: "next", active: true });
+    v.send({ type: "nativeVideo", epoch: "next", active: false });
+    expect(v.elements.image.style.visibility).toBe("");
+  });
+});
+
+describe("remote desktop viewport", () => {
+  // Unit: Duo folded-pad jitter (2026-10-23). Existing nativeTouchpad coverage
+  // sends no host cursor feedback. Interleave delayed native cursor packets with
+  // a held lower-screen gesture, including its first cursor packet and a pause.
+  it.each(['touch', 'pointer'])('keeps folded-pad motion local across delayed host feedback in %s mode', (mode) => {
+    const v = viewer(false, true, true);
+    v.elements.stage.clientWidth = 800;
+    v.elements.stage.clientHeight = 400;
+    v.send({ type: 'init', epoch: 'fold', width: 1600, height: 800 });
+    v.send({ type: 'mode', mode });
+    v.send({ type: 'control', enabled: true });
+    v.send({ type: 'mouseButtons', native: true, enabled: true });
+    const hostCursor = (x: number) => v.send({ type: 'nativeCursor', epoch: 'fold', cursor: {
+      x, y: 0.5, visible: true, width: 16, height: 16, hotX: 0, hotY: 0, png: 'iVBORw0KGgo=',
+    } });
+    const moves = () => v.messages.flatMap(m => m.events ?? []).filter(e => e.kind === 'move');
+    v.send({ type: 'nativeTouchpad', phase: 'start' });
+    v.send({ type: 'nativeTouchpad', dx: 80, dy: 0 });
+    v.flush(); v.ack();
+    hostCursor(0.2);
+    v.send({ type: 'nativeTouchpad', dx: 80, dy: 0 });
+    v.flush(); v.ack();
+    expect(moves().at(-1)).toMatchObject({ x: 0.7, y: 0.5 });
+    // A resting finger still owns the gesture beyond the 200ms echo grace.
+    v.frame(1000); hostCursor(0.3);
+    v.send({ type: 'nativeTouchpad', dx: 80, dy: 0 });
+    v.flush(); v.ack();
+    expect(moves().at(-1)).toMatchObject({ x: expect.closeTo(0.8), y: 0.5 });
+    // Lifting after a long pause gets a fresh echo grace, not the last move's.
+    v.frame(1000);
+    v.send({ type: 'nativeTouchpad', phase: 'end' });
+    v.frame(199);
+    hostCursor(0.3);
+    expect(parseFloat(v.elements.cursor.style.left)).toBeCloseTo(640);
+    v.frame(2); hostCursor(0.4);
+    v.send({ type: 'nativeTouchpad', phase: 'start' });
+    v.send({ type: 'nativeTouchpad', dx: 80, dy: 0 });
+    v.flush(); v.ack();
+    expect(moves().at(-1)).toMatchObject({ x: 0.5, y: 0.5 });
+    v.send({ type: 'releaseInput' }); v.ack();
+    v.frame(201); hostCursor(0.2);
+    v.send({ type: 'nativeTouchpad', dx: 80, dy: 0 });
+    v.flush();
+    expect(moves().at(-1)).toMatchObject({ x: expect.closeTo(0.3), y: 0.5 });
+  });
+  // Unit: PR #6902 edge drift. Existing motion tests stay in the viewport center;
+  // a second contact at the desktop edge must apply only its relative delta.
+  it.each(['touch', 'pointer'])('keeps repeated folded-pad strokes at the desktop edge in %s mode', (mode) => {
+    const v = viewer(false, true, true);
+    v.elements.stage.clientWidth = 800;
+    v.elements.stage.clientHeight = 400;
+    v.send({ type: 'init', epoch: 'fold', width: 1600, height: 800 });
+    v.send({ type: 'mode', mode });
+    v.send({ type: 'control', enabled: true });
+    v.send({ type: 'mouseButtons', native: true, enabled: true });
+    const move = (dx: number) => {
+      v.send({ type: 'nativeTouchpad', phase: 'start' });
+      v.send({ type: 'nativeTouchpad', dx, dy: 0 });
+      v.flush(); v.ack();
+      v.send({ type: 'nativeTouchpad', phase: 'end' });
+      return v.messages.flatMap(m => m.events ?? []).filter(e => e.kind === 'move').at(-1);
+    };
+    expect(move(-400)).toMatchObject({ x: 0, y: 0.5 });
+    expect(move(-1)).toMatchObject({ x: 0, y: 0.5 });
+    expect(move(800)).toMatchObject({ x: 1, y: 0.5 });
+    expect(move(1)).toMatchObject({ x: 1, y: 0.5 });
+  });
+  it('maps lower-pane relative motion against the upper video viewport and rejects invalid input', () => {
+    const v = viewer();
+    v.elements.stage.clientWidth = 800;
+    v.elements.stage.clientHeight = 400;
+    v.send({ type: 'init', epoch: 'fold', width: 1600, height: 800 });
+    v.send({ type: 'control', enabled: true });
+    v.send({ type: 'mouseButtons', native: true, enabled: true, topInset: 0, bottomInset: 0 });
+    v.send({ type: 'nativeTouchpad', dx: 80, dy: 40 });
+    v.flush();
+    expect(v.messages.flatMap(m => m.events ?? [])).toContainEqual({ kind: 'move', x: 0.6, y: 0.6 });
+    v.ack();
+    const count = v.messages.flatMap(m => m.events ?? []).length;
+    v.send({ type: 'nativeTouchpad', dx: Number.NaN, dy: 20 });
+    v.flush();
+    expect(v.messages.flatMap(m => m.events ?? [])).toHaveLength(count);
+    v.send({ type: 'control', enabled: false });
+    const afterRelease = v.messages.flatMap(m => m.events ?? []).length;
+    v.send({ type: 'nativeTouchpad', dx: 80, dy: 40 });
+    v.flush();
+    expect(v.messages.flatMap(m => m.events ?? [])).toHaveLength(afterRelease);
+  });
+  it('allows touchpad taps with hidden buttons and does not release an active drag', () => {
+    const v = viewer();
+    v.send({ type: 'control', enabled: true });
+    v.send({ type: 'mouseButtons', native: true, enabled: false });
+    v.send({ type: 'nativeTouchpad', tap: true });
+    v.flush();
+    expect(v.messages.flatMap(m => m.events ?? [])).toEqual([
+      { kind: 'button', button: 0, down: true, x: 0.5, y: 0.5 },
+      { kind: 'button', button: 0, down: false, x: 0.5, y: 0.5 },
+    ]);
+    v.ack();
+    v.send({ type: 'mouseButtons', native: true, enabled: true });
+    v.send({ type: 'nativeMouse', control: 'left', event: 'pointerdown', id: 0, y: 100 });
+    v.ack();
+    const beforeTap = v.messages.flatMap(m => m.events ?? []).length;
+    v.send({ type: 'nativeTouchpad', tap: true });
+    v.flush();
+    expect(v.messages.flatMap(m => m.events ?? [])).toHaveLength(beforeTap);
+  });
+  it('drops expired queued clicks after a slow acknowledgement and requires fresh control intent', () => {
+    const v = viewer();
+    v.send({ type: 'control', enabled: true });
+    v.send({ type: 'events', events: [{ kind: 'text', text: 'first' }] });
+    const abandoned = v.messages.filter((m) => m.type === 'input').at(-1)!;
+    v.send({ type: 'events', events: [{ kind: 'text', text: 'stale' }] });
+    v.frame(2_001);
+    v.flush();
+    expect(v.messages.filter((m) => m.type === 'inputOverflow')).toHaveLength(1);
+    v.flush();
+    v.send({ type: 'events', events: [{ kind: 'text', text: 'ignored' }] });
+    expect(v.messages.flatMap((m) => m.events ?? [])).toEqual([{ kind: 'text', text: 'first' }]);
+    v.send({ type: 'control', enabled: true });
+    v.send({ type: 'events', events: [{ kind: 'text', text: 'fresh' }] });
+    expect(v.messages.flatMap((m) => m.events ?? [])).toEqual([
+      { kind: 'text', text: 'first' }, { kind: 'text', text: 'fresh' },
+    ]);
+    v.send({ type: 'events', events: [{ kind: 'text', text: 'next' }] });
+    v.send({ type: 'ack', epoch: abandoned.epoch, sequence: abandoned.sequence });
+    v.flush();
+    expect(v.messages.filter((m) => m.type === 'input')).toHaveLength(2);
     v.ack();
     v.flush();
-    expect(
-      v.messages
-        .flatMap((m) => m.events ?? [])
-        .filter((e) => e.kind === "button"),
-    ).toEqual([
-      { kind: "button", button: 0, down: true, x: 0.5, y: 0.5 },
-      { kind: "button", button: 0, down: false, x: 0.5, y: 0.5 },
-    ]);
+    expect(v.messages.filter((m) => m.type === 'input')).toHaveLength(3);
   });
+  it('does not overtake congested data-channel input through the relay', () => {
+    const v = viewer(true);
+    v.send({ type: 'init', epoch: 'one', width: 1920, height: 1080 });
+    v.playVideo();
+    v.send({ type: 'control', enabled: true });
+    v.dataChannel.bufferedAmount = 16384;
+    v.send({ type: 'events', events: [{ kind: 'text', text: 'queued' }] });
+    expect(v.dataChannel.send).not.toHaveBeenCalled();
+    expect(v.messages.filter((m) => m.type === 'input')).toHaveLength(0);
+    v.dataChannel.bufferedAmount = 0;
+    v.flush();
+    expect(v.dataChannel.send).toHaveBeenCalledOnce();
+    expect(JSON.parse(v.dataChannel.send.mock.calls[0][0]).events).toEqual([{ kind: 'text', text: 'queued' }]);
+    v.dataChannel.bufferedAmount = 16384;
+    v.send({ type: 'events', events: [{ kind: 'text', text: 'expired' }] });
+    v.frame(2001);
+    v.flush();
+    v.dataChannel.bufferedAmount = 0;
+    v.flush();
+    expect(v.dataChannel.send).toHaveBeenCalledOnce();
+    expect(v.messages.filter((m) => m.type === 'inputOverflow')).toHaveLength(1);
+  });
+  it("carries control requests over the live data channel and relays the reply", () => {
+    const v = viewer(true);
+    v.send({ type: "init", epoch: "one", width: 1920, height: 1080 });
+    v.playVideo();
+    const request = { op: "hostMute", lease: "one", enabled: true };
+    v.send({ type: "channelRequest", id: "r1", request });
+    expect(JSON.parse(v.dataChannel.send.mock.calls.at(-1)![0])).toEqual({
+      type: "request",
+      id: "r1",
+      request,
+    });
+    expect(
+      v.messages.findLast((m) => m.type === "channelRequestState"),
+    ).toMatchObject({
+      id: "r1",
+      sent: true,
+      epoch: "one",
+    });
+    (v.dataChannel as any).onmessage({
+      data: JSON.stringify({
+        type: "reply",
+        id: "r1",
+        ok: true,
+        result: { ok: true },
+      }),
+    });
+    expect(v.messages.findLast((m) => m.type === "channelReply")).toMatchObject(
+      {
+        id: "r1",
+        ok: true,
+        result: { ok: true },
+        epoch: "one",
+      },
+    );
+    // A congested channel does not take it: the parent uses the relay instead.
+    v.dataChannel.bufferedAmount = 16384;
+    const sends = v.dataChannel.send.mock.calls.length;
+    v.send({ type: "channelRequest", id: "r2", request });
+    expect(v.dataChannel.send.mock.calls).toHaveLength(sends);
+    expect(
+      v.messages.findLast((m) => m.type === "channelRequestState"),
+    ).toMatchObject({
+      id: "r2",
+      sent: false,
+    });
+  });
+  it('does not replay a batch through the relay if a data-channel send throws', () => {
+    const v = viewer(true);
+    v.send({ type: 'init', epoch: 'one', width: 1920, height: 1080 });
+    v.playVideo();
+    v.send({ type: 'control', enabled: true });
+    v.dataChannel.bufferedAmount = 16384;
+    v.send({ type: 'events', events: Array.from({ length: 32 }, () => ({ kind: 'text', text: 'old' })) });
+    v.dataChannel.send.mockImplementationOnce(() => { throw new Error('channel closed'); });
+    v.dataChannel.bufferedAmount = 0;
+    v.flush();
+    v.flush();
+    expect(v.dataChannel.send).toHaveBeenCalledOnce();
+    expect(v.messages.filter((m) => m.type === 'input')).toHaveLength(0);
+    expect(v.messages.filter((m) => m.type === 'inputOverflow')).toHaveLength(1);
+  });
+  it.each([0, 59])(
+    "fits between the top safe area (%s) and toolbar with correct touch coordinates",
+    (topInset) => {
+      const v = viewer();
+      v.send({ type: "init", epoch: "one", width: 1920, height: 1080 });
+      v.send({ type: "mouseButtons", topInset, bottomInset: 100 });
+      expect(
+        v.messages.filter((m) => m.type === "viewportChanged").at(-1),
+      ).toMatchObject({
+        width: 400,
+        height: 500 - topInset,
+      });
+      v.send({ type: "measureViewport" });
+      expect(v.messages.find((m) => m.type === "viewportSize")).toMatchObject({
+        width: 400,
+        height: 500 - topInset,
+      });
+      v.send({
+        type: "videoSettings",
+        width: 800,
+        height: (500 - topInset) * 2,
+        audio: false,
+      });
+      expect(v.elements.video.style).toMatchObject({
+        width: "400px",
+        height: `${500 - topInset}px`,
+        left: "0px",
+        top: `${topInset}px`,
+      });
+      v.send({ type: "control", enabled: true });
+      v.send({ type: "mode", mode: "touch" });
+      v.pointer("pointerdown", 1, 200, (500 + topInset) / 2);
+      v.pointer("pointerup", 1, 200, (500 + topInset) / 2);
+      v.ack();
+      v.flush();
+      expect(
+        v.messages
+          .flatMap((m) => m.events ?? [])
+          .filter((e) => e.kind === "button"),
+      ).toEqual([
+        { kind: "button", button: 0, down: true, x: 0.5, y: 0.5 },
+        { kind: "button", button: 0, down: false, x: 0.5, y: 0.5 },
+      ]);
+    },
+  );
   it.each([
     ["left", 0],
     ["right", 2],
@@ -244,6 +675,28 @@ describe("remote desktop viewport", () => {
     v.flush();
     expect(v.messages).toHaveLength(count);
     expect(v.elements["mouse-buttons"].style.display).toBe("none");
+  });
+  it("shares held-button and wheel input with native glass controls", () => {
+    const v = viewer();
+    v.send({ type: "control", enabled: true });
+    v.send({ type: "mouseButtons", enabled: true, native: true });
+    const input = (control: string, event: string, y = 100) =>
+      v.send({ type: "nativeMouse", control, event, id: 0, y });
+    expect(v.elements["mouse-buttons"].style.display).toBe("none");
+    input("left", "pointerdown");
+    v.ack();
+    input("left", "pointercancel");
+    v.ack();
+    input("wheel", "pointerdown");
+    input("wheel", "pointermove", 80);
+    v.flush();
+    v.ack();
+    input("wheel", "pointercancel");
+    expect(v.messages.flatMap((m) => m.events ?? [])).toEqual([
+      { kind: "button", button: 0, down: true, x: 0.5, y: 0.5 },
+      { kind: "button", button: 0, down: false, x: 0.5, y: 0.5 },
+      { kind: "scroll", dx: 0, dy: -24 },
+    ]);
   });
   it("scrolls by dragging the wheel and cancels without an extra step", () => {
     const v = viewer();
@@ -320,10 +773,25 @@ describe("remote desktop viewport", () => {
       { kind: "scroll", dx: 0, dy: -30 },
     ]);
   });
-  it("fills landscape height for wide desktops and restores portrait fitting", () => {
-    const v = viewer();
-    v.elements.stage.clientWidth = 678;
-    v.elements.stage.clientHeight = 402;
+  it('fits the folded desktop above the touchpad without shrinking the background stage', () => {
+    const v = viewer(false, true, true);
+    v.elements.stage.clientWidth = 900;
+    v.elements.stage.clientHeight = 1400;
+    v.send({ type: 'init', epoch: 'fold', width: 1920, height: 1080 });
+    v.send({ type: 'mouseButtons', fitToInsets: true, topInset: 80, bottomInset: 720 });
+    expect(v.messages.findLast(m => m.type === 'nativeViewport')).toMatchObject({
+      x: 0, y: 126.875, width: 900, height: 506.25,
+    });
+    expect(v.elements.stage.clientHeight).toBe(1400);
+    v.send({ type: 'mouseButtons', fitToInsets: false, topInset: 0, bottomInset: 0 });
+    expect(v.messages.findLast(m => m.type === 'nativeViewport')).toMatchObject({
+      x: 0, y: 446.875, width: 900, height: 506.25,
+    });
+  });
+  it.each([[678, 402], [1366, 1024]])("fits the complete desktop in landscape %sx%s and after rotation", (vw, vh) => {
+    const v = viewer(false, true, true);
+    v.elements.stage.clientWidth = vw;
+    v.elements.stage.clientHeight = vh;
     v.send({
       type: "init",
       epoch: "landscape",
@@ -332,12 +800,16 @@ describe("remote desktop viewport", () => {
       fillHeight: true,
     });
     for (const element of [v.elements.image, v.elements.video]) {
-      expect(element.style.height).toBe("402px");
-      expect(element.style.top).toBe("0px");
-      expect(parseFloat(element.style.width)).toBeGreaterThan(678);
+      expect(parseFloat(element.style.width)).toBe(vw);
+      expect(parseFloat(element.style.height)).toBeCloseTo(vw * 1080 / 2560);
+      expect(parseFloat(element.style.left)).toBe(0);
+      expect(parseFloat(element.style.top)).toBeCloseTo((vh - vw * 1080 / 2560) / 2);
     }
+    expect(v.messages.findLast(m => m.type === "nativeViewport")).toMatchObject({
+      fillHeight: false, width: vw, height: vw * 1080 / 2560,
+    });
     v.send({ type: "fit" });
-    expect(v.elements.image.style.top).toBe("0px");
+    expect(parseFloat(v.elements.image.style.top)).toBeGreaterThan(0);
     v.elements.stage.clientWidth = 400;
     v.elements.stage.clientHeight = 700;
     v.send({ type: "viewport", fillHeight: false });
@@ -398,7 +870,7 @@ describe("remote desktop viewport", () => {
       for (let i = 0; i < 30; i++) v.frame();
       const width = v.elements.image.style.width;
       expect(parseFloat(v.elements.image.style.height)).toBeCloseTo(
-        400 * scale,
+        (800 - 50 - 80) * 1080 / 1920 * scale,
       );
       // Removing the toolbar before the keyboard has a measured height must not shift the image.
       const originalLeft = v.elements.image.style.left;
@@ -432,7 +904,7 @@ describe("remote desktop viewport", () => {
         for (let i = 0; i < 30; i++) v.frame();
         const image = v.elements.image.style;
         expect(image.width).toBe(width);
-        expect(parseFloat(image.height)).toBeCloseTo(400 * scale);
+        expect(parseFloat(image.height)).toBeCloseTo((800 - 50 - 80) * 1080 / 1920 * scale);
         expect(
           parseFloat(image.left) + cursorX * parseFloat(image.width),
         ).toBeCloseTo(expectedCursorX);
@@ -470,6 +942,12 @@ describe("remote desktop viewport", () => {
       rightInset: 80,
     });
     const before = { ...v.elements.image.style };
+    const expectUnchanged = () => {
+      for (const key of ["left", "top", "width", "height"]) {
+        expect(parseFloat(v.elements.image.style[key])).toBeCloseTo(parseFloat(before[key]));
+      }
+      expect(v.elements.image.style.visibility).toBe(before.visibility);
+    };
     for (let i = 0; i < 2; i++) {
       v.send({
         type: "mouseButtons",
@@ -485,10 +963,10 @@ describe("remote desktop viewport", () => {
         leftInset: 50,
         rightInset: 80,
       });
-      expect(v.elements.image.style).toEqual(before);
+      expectUnchanged();
       v.blur();
       for (let j = 0; j < 30; j++) v.frame();
-      expect(v.elements.image.style).toEqual(before);
+      expectUnchanged();
     }
   });
   it("initializes when the native engine cannot serialize function source", () => {
@@ -516,6 +994,20 @@ describe("remote desktop viewport", () => {
       expect(rect.x + rect.width).toBeLessThanOrEqual(w);
       expect(rect.y + rect.height).toBeLessThanOrEqual(h);
     }
+  });
+  it("caps pinch zoom at two viewer points per desktop point", () => {
+    for (const [w, h] of [
+      [393, 760],
+      [852, 340],
+    ]) {
+      const rect = desktopTransform(w, h, 1512, 982, 100, 0.5, 0.5);
+      expect(rect.scale).toBeCloseTo(2);
+      expect(rect.width).toBeCloseTo(1512 * 2);
+    }
+    // A display already shown larger than 2x at fit cannot zoom further.
+    const small = desktopTransform(1366, 1024, 400, 320, 5, 0.5, 0.5);
+    expect(small.maxZoom).toBe(1);
+    expect(small.scale).toBeCloseTo(3.2);
   });
   it("preserves the focus at the viewport center across rotation and keyboard resize", () => {
     for (const [w, h] of [
@@ -558,6 +1050,67 @@ describe("remote desktop viewport", () => {
     expect(v.messages.at(-1)?.epoch).toBe("second");
     expect(v.messages.at(-1)?.events?.[0].code).toBe("KeyA");
   });
+  it("sends iOS keyboard characters and deletion only once", () => {
+    const v = viewer();
+    v.send({ type: "init", epoch: "typing", width: 1920, height: 1080 });
+    v.send({ type: "control", enabled: true });
+    v.send({ type: "keyboard", enabled: true });
+
+    v.key("keydown", "KeyA", "a");
+    v.elements["keyboard-input"].value = "\u200ba";
+    v.keyboardInput("input");
+    v.key("keyup", "KeyA", "a");
+    expect(v.messages.flatMap((m) => m.events ?? [])).toEqual([
+      { kind: "text", text: "a" },
+    ]);
+
+    v.ack();
+    v.key("keydown", "Backspace", "Backspace");
+    v.keyboardInput("beforeinput", { inputType: "deleteContentBackward" });
+    v.key("keyup", "Backspace", "Backspace");
+    expect(v.messages.flatMap((m) => m.events ?? [])).toEqual([
+      { kind: "text", text: "a" },
+      { kind: "key", code: "Backspace", down: true },
+      { kind: "key", code: "Backspace", down: false },
+    ]);
+
+    v.ack();
+    v.key("keydown", "Enter", "Enter");
+    v.keyboardInput("beforeinput", { inputType: "insertLineBreak" });
+    v.key("keyup", "Enter", "Enter");
+    expect(
+      v.messages.flatMap((m) => m.events ?? []).filter((e) => e.code === "Enter"),
+    ).toEqual([
+      { kind: "key", code: "Enter", down: true },
+      { kind: "key", code: "Enter", down: false },
+    ]);
+  });
+  it("forwards hardware keys after the mobile keyboard input loses focus", () => {
+    const v = viewer();
+    v.send({ type: "init", epoch: "typing", width: 1920, height: 1080 });
+    v.send({ type: "control", enabled: true });
+    v.send({ type: "keyboard", enabled: true });
+    v.elements["keyboard-input"].blur();
+
+    for (const [code, key] of [
+      ["KeyA", "a"],
+      ["Backspace", "Backspace"],
+      ["Enter", "Enter"],
+    ]) {
+      v.key("keydown", code, key);
+      v.key("keyup", code, key);
+      v.flush();
+      v.ack();
+    }
+    expect(v.messages.flatMap((m) => m.events ?? [])).toEqual([
+      { kind: "key", code: "KeyA", down: true },
+      { kind: "key", code: "KeyA", down: false },
+      { kind: "key", code: "Backspace", down: true },
+      { kind: "key", code: "Backspace", down: false },
+      { kind: "key", code: "Enter", down: true },
+      { kind: "key", code: "Enter", down: false },
+    ]);
+  });
   it.each([false, true])(
     "recognizes a small pinch with control=%s",
     (control) => {
@@ -574,6 +1127,35 @@ describe("remote desktop viewport", () => {
       expect(v.messages.flatMap((m) => m.events ?? [])).toEqual([]);
     },
   );
+  it("stops a real pinch at 2x and resumes from the new limit after a viewport change", () => {
+    const v = viewer();
+    const width = () => parseFloat(v.elements.image.style.width);
+    v.pointer("pointerdown", 1, 190, 200);
+    v.pointer("pointerdown", 2, 210, 200);
+    v.pointer("pointermove", 1, 150, 200);
+    v.pointer("pointermove", 2, 250, 200);
+    v.frame();
+    v.frame(40);
+    v.pointer("pointermove", 1, 0, 200);
+    v.pointer("pointermove", 2, 400, 200);
+    v.frame();
+    // 400px fit of a 1920px desktop; spreading 20x stops at 2 points per pixel.
+    expect(width()).toBeCloseTo(1920 * 2);
+    v.pointer("pointerup", 1, 0, 200);
+    v.pointer("pointerup", 2, 400, 200);
+    // A wider viewport lowers the zoom limit; the picture stays at 2x.
+    v.elements.stage.clientWidth = 800;
+    v.send({ type: "viewport", fillHeight: false });
+    expect(width()).toBeCloseTo(1920 * 2);
+    // Pinching in responds immediately instead of first unwinding the old zoom.
+    v.pointer("pointerdown", 1, 300, 200);
+    v.pointer("pointerdown", 2, 500, 200);
+    v.pointer("pointermove", 1, 310, 200);
+    v.pointer("pointermove", 2, 490, 200);
+    v.frame();
+    v.frame(40);
+    expect(width()).toBeCloseTo(1920 * 2 * 0.9);
+  });
   it("allows one finger to lead a pinch instead of locking into scroll", () => {
     const v = viewer();
     v.send({ type: "control", enabled: true });
@@ -627,6 +1209,95 @@ describe("remote desktop viewport", () => {
       true,
     );
   });
+  it("aims a touch-mode two-finger scroll at the fingers before scrolling", () => {
+    const v = viewer();
+    v.send({ type: "control", enabled: true });
+    v.send({ type: "mode", mode: "touch" });
+    v.flush();
+    v.ack();
+    v.pointer("pointerdown", 1, 100, 250);
+    v.pointer("pointerdown", 2, 200, 250);
+    v.pointer("pointermove", 1, 100, 230);
+    v.pointer("pointermove", 2, 200, 230);
+    v.frame();
+    v.flush();
+    const [move, scroll] = v.messages
+      .flatMap((m) => m.events ?? [])
+      .filter((e) => e.kind !== "release");
+    // A 1920x1080 desktop fits 400x225 inside the 600px-tall stage.
+    expect(move).toEqual({
+      kind: "move",
+      x: expect.closeTo(0.375),
+      y: expect.closeTo((230 - 187.5) / 225),
+    });
+    expect(scroll).toEqual({ kind: "scroll", dx: 0, dy: 20 });
+  });
+  it("aims a touch-mode scroll that starts in the letterbox once it reaches the desktop", () => {
+    const v = viewer();
+    v.send({ type: "control", enabled: true });
+    v.send({ type: "mode", mode: "touch" });
+    v.flush();
+    v.ack();
+    // The desktop picture spans y 187.5..412.5; start above it.
+    v.pointer("pointerdown", 1, 100, 150);
+    v.pointer("pointerdown", 2, 200, 150);
+    v.pointer("pointermove", 1, 100, 170);
+    v.pointer("pointermove", 2, 200, 170);
+    v.frame();
+    v.flush();
+    expect(v.messages.flatMap((m) => m.events ?? [])).toEqual([
+      { kind: "release" },
+    ]);
+    v.pointer("pointermove", 1, 100, 200);
+    v.pointer("pointermove", 2, 200, 200);
+    v.frame();
+    v.flush();
+    const events = v.messages
+      .flatMap((m) => m.events ?? [])
+      .filter((e) => e.kind !== "release");
+    expect(events).toEqual([
+      {
+        kind: "move",
+        x: expect.closeTo(0.375),
+        y: expect.closeTo((200 - 187.5) / 225),
+      },
+      { kind: "scroll", dx: 0, dy: -30 },
+    ]);
+  });
+  it("keeps the pointer-mode cursor where it is for two-finger scrolls", () => {
+    const v = viewer();
+    v.send({ type: "control", enabled: true });
+    v.pointer("pointerdown", 1, 100, 250);
+    v.pointer("pointerdown", 2, 200, 250);
+    v.pointer("pointermove", 1, 100, 230);
+    v.pointer("pointermove", 2, 200, 230);
+    v.frame();
+    v.flush();
+    expect(v.messages.flatMap((m) => m.events ?? [])).toEqual([
+      { kind: "scroll", dx: 0, dy: 20 },
+    ]);
+  });
+  it("carries sub-pixel two-finger scroll distance instead of dropping it", () => {
+    const v = viewer();
+    v.send({ type: "control", enabled: true });
+    v.pointer("pointerdown", 1, 100, 250);
+    v.pointer("pointerdown", 2, 200, 250);
+    v.pointer("pointermove", 1, 100, 240);
+    v.pointer("pointermove", 2, 200, 240);
+    v.frame();
+    for (let i = 1; i <= 6; i++) {
+      v.pointer("pointermove", 1, 100, 240 - i * 0.5);
+      v.pointer("pointermove", 2, 200, 240 - i * 0.5);
+      v.frame();
+    }
+    v.flush();
+    const dys = v.messages
+      .flatMap((m) => m.events ?? [])
+      .filter((e) => e.kind === "scroll")
+      .map((e) => (e as unknown as { dy: number }).dy);
+    expect(dys.every(Number.isInteger)).toBe(true);
+    expect(dys.reduce((sum, dy) => sum + dy, 0)).toBe(13);
+  });
   it("applies the last pinch position before lifting a finger without clicking", () => {
     const v = viewer();
     v.send({ type: "control", enabled: true });
@@ -661,5 +1332,396 @@ describe("remote desktop viewport", () => {
     expect(
       v.messages.at(-1)?.events?.every((event) => event.kind === "scroll"),
     ).toBe(true);
+  });
+  it("lets a light zoom rest well past the desktop edge to clear overlaid chrome", () => {
+    const v = viewer();
+    v.pointer("pointerdown", 1, 100, 300);
+    v.pointer("pointerdown", 2, 300, 300);
+    v.pointer("pointermove", 1, 50, 300);
+    v.pointer("pointermove", 2, 350, 300);
+    v.frame();
+    v.frame(40);
+    v.pointer("pointerup", 1, 50, 300);
+    v.pointer("pointerup", 2, 350, 300);
+    for (let i = 0; i < 30; i++) v.frame();
+    expect(parseFloat(v.elements.image.style.width)).toBeCloseTo(600);
+    v.pointer("pointerdown", 1, 200, 300);
+    v.pointer("pointermove", 1, 1200, 1300);
+    v.pointer("pointerup", 1, 1200, 1300);
+    for (let i = 0; i < 30; i++) v.frame();
+    // 1.5x already allows the full reach: 40% of the 400pt width, and the
+    // 240pt cap beyond the vertically centered 337.5pt-high picture.
+    expect(parseFloat(v.elements.image.style.left)).toBeCloseTo(160);
+    expect(parseFloat(v.elements.image.style.top)).toBeCloseTo(131.25 + 240);
+  });
+});
+
+it("reports both landscape directions even when viewport dimensions stay identical", () => {
+  const v = viewer();
+  v.elements.stage.clientWidth = 874;
+  v.elements.stage.clientHeight = 402;
+  for (const angle of [90, -90, 90]) {
+    v.rotate(angle);
+    expect(v.messages.at(-1)).toMatchObject({ type: "orientation", angle });
+  }
+});
+
+describe("portrait keyboard positioning", () => {
+  it.each([48, 96, 128])(
+    "centers below %s points of top controls and restores after closing",
+    (topInset) => {
+      const v = viewer();
+      v.send({ type: "init", epoch: "keyboard", width: 1920, height: 1080 });
+      v.frame();
+      const originalTop = parseFloat(v.elements.image.style.top);
+      const originalWidth = v.elements.image.style.width;
+      v.send({ type: "mouseButtons", portraitKeyboardTopInset: topInset });
+      for (let i = 0; i < 30; i++) v.frame(20);
+      expect(parseFloat(v.elements.image.style.top)).toBeCloseTo(
+        originalTop + topInset / 2,
+      );
+      expect(v.elements.image.style.width).toBe(originalWidth);
+      v.send({ type: "mouseButtons", portraitKeyboardTopInset: 0 });
+      for (let i = 0; i < 30; i++) v.frame(20);
+      expect(parseFloat(v.elements.image.style.top)).toBeCloseTo(originalTop);
+    },
+  );
+  it("limits the offset to available space below the desktop", () => {
+    const v = viewer();
+    v.elements.stage.clientHeight = 240;
+    v.send({ type: "init", epoch: "keyboard", width: 1920, height: 1080 });
+    v.send({ type: "mouseButtons", portraitKeyboardTopInset: 96 });
+    for (let i = 0; i < 30; i++) v.frame(20);
+    expect(
+      parseFloat(v.elements.image.style.top) +
+        parseFloat(v.elements.image.style.height),
+    ).toBeCloseTo(240);
+  });
+});
+
+describe("remote desktop network status layer", () => {
+  it("updates plain text and theme styling and clears when dismissed", () => {
+    const v = viewer();
+    v.send({
+      type: "networkStatus",
+      text: "Direct\n11 KB/s · 1 ms",
+      top: 60,
+      right: 8,
+      fontSize: 12,
+      color: "#737373",
+    });
+    const status = v.elements["network-status"];
+    expect(status.textContent).toBe("Direct\n11 KB/s · 1 ms");
+    expect(status.style).toMatchObject({
+      display: "block",
+      top: "60px",
+      right: "8px",
+      fontSize: "12px",
+      color: "#737373",
+    });
+    v.send({ type: "networkStatus", text: "<img src=x>", color: "#a3a3a3" });
+    expect(status.textContent).toBe("<img src=x>");
+    expect(status.style.color).toBe("#a3a3a3");
+    v.send({ type: "networkStatus", text: "" });
+    expect(status.style.display).toBe("none");
+  });
+
+  it("places transparent status above the backdrop but below the desktop", () => {
+    const html = remoteDesktopViewerHtml("#fff", "#111");
+    const rule = html.match(/#network-status\{([^}]+)\}/)![1];
+    expect(rule).toContain("z-index:1");
+    expect(rule).toContain("pointer-events:none");
+    expect(rule).not.toContain("background");
+    expect(html).toContain("#image{z-index:2}");
+    expect(html).toContain('id="network-status"');
+  });
+
+  it("cuts the native video picture out of the status it would otherwise cover", () => {
+    const v = viewer(false, true, true);
+    const status = v.elements["network-status"];
+    let layoutReads = 0;
+    Object.defineProperties(status, {
+      offsetLeft: { get: () => (layoutReads++, 250) },
+      offsetTop: { get: () => (layoutReads++, 60) },
+    });
+    v.send({ type: "init", epoch: "native", width: 1920, height: 1080 });
+    v.send({ type: "networkStatus", text: "Direct\n1 KB/s", top: 60 });
+    expect(status.style.clipPath ?? "").toBe("");
+    v.send({ type: "nativeVideo", epoch: "native", active: true });
+    const hole = () => {
+      const r = v.messages.findLast(
+        (m) => m.type === "nativeViewport",
+      ) as unknown as { x: number; y: number; width: number; height: number };
+      const [l, t] = [r.x - 250, r.y - 60];
+      const [rt, b] = [l + r.width, t + r.height];
+      return `${l}px ${t}px,${rt}px ${t}px,${rt}px ${b}px,${l}px ${b}px,${l}px ${t}px)`;
+    };
+    expect(status.style.clipPath).toMatch(
+      /^polygon\(evenodd,0 0,100% 0,100% 100%,0 100%,0 0,/,
+    );
+    expect(status.style.clipPath.endsWith(hole())).toBe(true);
+    const width = v.elements.image.style.width;
+    const readsBeforePinch = layoutReads;
+    v.send({ type: "control", enabled: true });
+    v.pointer("pointerdown", 1, 100, 200);
+    v.pointer("pointerdown", 2, 300, 200);
+    v.pointer("pointermove", 1, 40, 200);
+    v.pointer("pointermove", 2, 360, 200);
+    v.frame();
+    v.frame(40);
+    expect(v.elements.image.style.width).not.toBe(width);
+    expect(status.style.clipPath.endsWith(hole())).toBe(true);
+    expect(layoutReads).toBe(readsBeforePinch);
+    v.send({ type: "nativeVideo", epoch: "native", active: false });
+    expect(status.style.clipPath).toBe("");
+  });
+});
+
+describe("remote desktop three-segment backdrop", () => {
+  it.each([true, false])(
+    "only repaints live video on media progress (frame callbacks: %s)",
+    (callback) => {
+      const v = viewer(true, callback);
+      v.send({
+        type: "init",
+        epoch: "bg",
+        width: 1920,
+        height: 1080,
+        trickleIce: true,
+      });
+      v.playVideo();
+      v.videoFrame();
+      v.frame();
+      v.frame();
+      v.frame();
+      v.bgDraws.length = 0;
+      for (let i = 0; i < 120; i++) v.frame();
+      expect(v.bgDraws).toHaveLength(0);
+      if (callback) v.videoFrame();
+      else {
+        v.timeupdate();
+        v.frame();
+      }
+      expect(v.bgDraws).toHaveLength(3);
+      expect(v.bgDraws[0][0]).toBe(v.elements.video);
+      const stale = [...v.videoFrames.values()][0];
+      v.send({ type: "stop" });
+      v.frame();
+      v.bgDraws.length = 0;
+      stale?.();
+      v.timeupdate();
+      v.frame();
+      expect(v.videoFrames.size).toBe(0);
+      expect(v.bgDraws).toHaveLength(0);
+    },
+  );
+
+  it("cancels hidden background callbacks and resumes after the stage changes", () => {
+    const v = viewer(true);
+    v.send({
+      type: "init",
+      epoch: "bg",
+      width: 1920,
+      height: 1080,
+      trickleIce: true,
+    });
+    v.playVideo();
+    v.videoFrame();
+    v.frame();
+    v.frame();
+    v.frame();
+    expect(v.videoFrames.size).toBe(1);
+    const stale = [...v.videoFrames.values()][0];
+    v.elements.stage.clientWidth = 1920;
+    v.elements.stage.clientHeight = 1080;
+    v.send({ type: "viewport", fillHeight: false });
+    v.bgDraws.length = 0;
+    stale();
+    v.frame();
+    expect(v.bgDraws).toHaveLength(0);
+    expect(v.videoFrames.size).toBe(0);
+    v.elements.stage.clientWidth = 400;
+    v.send({ type: "viewport", fillHeight: false });
+    v.frame();
+    expect(v.bgDraws).toHaveLength(3);
+    expect(v.videoFrames.size).toBe(1);
+    v.send({ type: "stop" });
+  });
+  function landscapeViewer() {
+    const v = viewer();
+    v.elements.stage.clientWidth = 874;
+    v.elements.stage.clientHeight = 402;
+    v.send({ type: "init", epoch: "bg", width: 1920, height: 1080 });
+    v.frame();
+    return v;
+  }
+  type Draw = [
+    unknown,
+    number,
+    number,
+    number,
+    number,
+    number,
+    number,
+    number,
+    number,
+  ];
+  const drawsOf = (v: ReturnType<typeof viewer>) => v.bgDraws as Draw[];
+  const expectDest = (
+    draw: Draw,
+    x: number,
+    y: number,
+    w: number,
+    h: number,
+  ) => {
+    expect(draw[5]).toBeCloseTo(x, 6);
+    expect(draw[6]).toBeCloseTo(y, 6);
+    expect(draw[7]).toBeCloseTo(w, 6);
+    expect(draw[8]).toBeCloseTo(h, 6);
+  };
+  const expectSrc = (
+    draw: Draw,
+    x: number,
+    y: number,
+    w: number,
+    h: number,
+  ) => {
+    expect(draw[1]).toBeCloseTo(x, 6);
+    expect(draw[2]).toBeCloseTo(y, 6);
+    expect(draw[3]).toBeCloseTo(w, 6);
+    expect(draw[4]).toBeCloseTo(h, 6);
+  };
+  const px = (id: string, prop: string, v: ReturnType<typeof viewer>) =>
+    parseFloat(v.elements[id].style[prop]);
+
+  it("fills side bars with stretched edges around an undistorted center", () => {
+    const v = landscapeViewer();
+    expect(v.elements.bg.style.display).toBe("block");
+    const scale = 402 / 1080;
+    const fitWidth = 1920 * scale;
+    const centerW = fitWidth * 0.9;
+    const side = 874 / 2 - centerW / 2;
+    expect(px("image", "width", v)).toBeCloseTo(fitWidth, 2);
+    expect(px("image", "left", v)).toBeCloseTo((874 - fitWidth) / 2, 2);
+    expect(drawsOf(v)).toHaveLength(3);
+    expectDest(drawsOf(v)[0], 0, 0, side, 402);
+    expectSrc(drawsOf(v)[0], 0, 0, 96, 1080);
+    expectDest(drawsOf(v)[1], side, 0, centerW, 402);
+    expectSrc(drawsOf(v)[1], 96, 0, 1728, 1080);
+    expectDest(drawsOf(v)[2], side + centerW, 0, side, 402);
+    expectSrc(drawsOf(v)[2], 1824, 0, 96, 1080);
+    expect(side + centerW + side).toBeCloseTo(874, 2);
+  });
+
+  it("fills both safe areas and the toolbar while the picture respects side insets", () => {
+    const v = landscapeViewer();
+    v.bgDraws.length = 0;
+    v.send({ type: "viewport", fillHeight: true });
+    v.send({
+      type: "mouseButtons",
+      enabled: true,
+      leftInset: 56,
+      rightInset: 68,
+    });
+    v.frame();
+    const fitWidth = 1920 * (402 / 1080);
+    const vw = 874 - 56 - 68;
+    const centerW = fitWidth * 0.9;
+    const side = 874 / 2 - centerW / 2;
+    expect(px("image", "left", v)).toBeCloseTo(56 + (vw - fitWidth) / 2, 2);
+    expect(drawsOf(v)).toHaveLength(3);
+    expectDest(drawsOf(v)[0], 0, 0, side, 402);
+    expectDest(drawsOf(v)[1], side, 0, centerW, 402);
+    expect(drawsOf(v)[2][5]).toBeCloseTo(side + centerW, 6);
+    expect(drawsOf(v)[2][8]).toBeCloseTo(402, 6);
+    expect(side + centerW + side).toBeCloseTo(874, 2);
+  });
+
+  it("stretches top and bottom bars around an undistorted center in portrait", () => {
+    const v = viewer();
+    v.send({ type: "init", epoch: "bg", width: 1920, height: 1080 });
+    v.frame();
+    expect(v.elements.bg.style.display).toBe("block");
+    const scale = 400 / 1920;
+    const fitHeight = 1080 * scale;
+    const centerH = fitHeight * 0.9;
+    const side = 600 / 2 - centerH / 2;
+    expect(px("image", "height", v)).toBeCloseTo(fitHeight, 2);
+    expect(px("image", "top", v)).toBeCloseTo((600 - fitHeight) / 2, 2);
+    expect(drawsOf(v)).toHaveLength(3);
+    expectDest(drawsOf(v)[0], 0, 0, 400, side);
+    expectSrc(drawsOf(v)[0], 0, 0, 1920, 54);
+    expectDest(drawsOf(v)[1], 0, side, 400, centerH);
+    expectSrc(drawsOf(v)[1], 0, 54, 1920, 972);
+    expectDest(drawsOf(v)[2], 0, side + centerH, 400, side);
+    expectSrc(drawsOf(v)[2], 0, 1026, 1920, 54);
+    expect(side + centerH + side).toBeCloseTo(600, 2);
+  });
+
+  it("hides the backdrop when the fitted picture covers the whole stage", () => {
+    const v = landscapeViewer();
+    v.bgDraws.length = 0;
+    v.send({ type: "init", epoch: "bg-wide", width: 1748, height: 804 });
+    v.send({ type: "viewport", fillHeight: true });
+    v.frame();
+    expect(v.elements.bg.style.display).toBe("none");
+    expect(drawsOf(v)).toHaveLength(0);
+  });
+
+  it("draws JPEG fallback frames into the backdrop canvas", () => {
+    const v = landscapeViewer();
+    v.bgDraws.length = 0;
+    v.send({ type: "frame", jpeg: "QUJD" });
+    (v.elements.image as unknown as { onload?: () => void }).onload?.();
+    v.frame();
+    expect(v.messages.at(-1)?.type).toBe("framePresented");
+    expect(drawsOf(v)).toHaveLength(3);
+    for (const draw of drawsOf(v)) expect(draw[0]).toBe(v.elements.image);
+  });
+
+  it.each([
+    { complete: false, naturalWidth: 0, naturalHeight: 0 },
+    { complete: false, naturalWidth: 1920, naturalHeight: 1080 },
+    { complete: true, naturalWidth: 0, naturalHeight: 0 },
+  ])(
+    "preserves the previous backdrop until a JPEG is drawable: %j",
+    (pending) => {
+      const v = landscapeViewer();
+      expect(drawsOf(v)).toHaveLength(3);
+      v.bgDraws.length = 0;
+      v.bgClear.mockClear();
+      // Receiving a frame schedules a cursor-driven repaint before JPEG load.
+      v.send({ type: "frame", jpeg: "QUJD" });
+      const image = Object.assign(v.elements.image, pending);
+      v.frame();
+      expect(v.bgClear).not.toHaveBeenCalled();
+      expect(drawsOf(v)).toHaveLength(0);
+
+      Object.assign(image, {
+        complete: true,
+        naturalWidth: 1920,
+        naturalHeight: 1080,
+      });
+      (image as unknown as { onload: () => void }).onload();
+      v.frame();
+      expect(v.bgClear).toHaveBeenCalledTimes(1);
+      expect(drawsOf(v)).toHaveLength(3);
+      for (const draw of drawsOf(v)) expect(draw[0]).toBe(image);
+    },
+  );
+
+  it("fills side bars for a portrait desktop on a landscape stage", () => {
+    const v = viewer();
+    v.elements.stage.clientWidth = 800;
+    v.elements.stage.clientHeight = 400;
+    v.send({ type: "init", epoch: "bg", width: 1080, height: 1920 });
+    v.frame();
+    const fitWidth = 1080 * (400 / 1920);
+    const centerW = fitWidth * 0.9;
+    const side = 800 / 2 - centerW / 2;
+    expect(v.elements.bg.style.display).toBe("block");
+    expect(drawsOf(v)).toHaveLength(3);
+    expectDest(drawsOf(v)[1], side, 0, centerW, 400);
+    expect(side + centerW + side).toBeCloseTo(800, 2);
   });
 });

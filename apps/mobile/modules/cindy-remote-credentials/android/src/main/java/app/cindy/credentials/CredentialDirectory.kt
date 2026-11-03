@@ -34,11 +34,17 @@ internal class CredentialInstallation(context: Context) {
       val temporary = File.createTempFile("installation-", ".tmp", root)
       try {
         FileOutputStream(temporary).use { it.write(uuid().toByteArray()); it.fd.sync() }
-        try { Os.link(temporary.path, marker.path) }
-        catch (error: ErrnoException) { if (error.errno != OsConstants.EEXIST) throw error }
-      } finally { temporary.delete() }
+        publishMarkerAtomically(
+          publishHardLink = { Os.link(temporary.path, marker.path) },
+          publishExclusive = { publishExclusiveMarker(temporary, marker) },
+          errnoOf = { (it as? ErrnoException)?.errno },
+        )
+      } catch (error: CredentialFailure) { throw error }
+        catch (_: Exception) { throw CredentialFailure("CREDENTIAL_UNAVAILABLE") }
+      finally { temporary.delete() }
     }
-    val attributes = Os.lstat(marker.path)
+    val attributes = try { Os.lstat(marker.path) }
+      catch (_: ErrnoException) { throw CredentialFailure("CREDENTIAL_UNAVAILABLE") }
     requireCredential(OsConstants.S_ISREG(attributes.st_mode) && attributes.st_uid == android.os.Process.myUid() &&
       attributes.st_size == 36L, "CREDENTIAL_INVALID_IDENTITY")
     id = marker.readText(); requireCredential(validId(id), "CREDENTIAL_INVALID_IDENTITY")
@@ -55,6 +61,31 @@ internal class CredentialInstallation(context: Context) {
     }
     return KeyPair(store.getCertificate(alias).publicKey, store.getKey(alias, null) as PrivateKey)
   }
+}
+
+/** Appear the already-complete temp as `marker` or adopt a winner. Never create an empty dest. */
+private fun publishExclusiveMarker(temporary: File, marker: File) {
+  val lock = File(requireNotNull(marker.parentFile), ".installation.publish")
+  if (!acquireExclusivePublishLock(lock, marker)) {
+    if (marker.exists()) return
+    throw CredentialFailure("CREDENTIAL_UNAVAILABLE")
+  }
+  try {
+    if (marker.exists()) return
+    Os.rename(temporary.path, marker.path)
+  } catch (error: ErrnoException) {
+    if (error.errno == OsConstants.EEXIST || marker.exists()) return
+    throw error
+  } finally {
+    lock.delete()
+  }
+}
+
+private fun acquireExclusivePublishLock(lock: File, marker: File): Boolean {
+  if (lock.mkdir()) return true
+  if (marker.exists()) return false
+  if (System.currentTimeMillis() - lock.lastModified() < 10_000L || !lock.delete()) return false
+  return lock.mkdir()
 }
 
 internal class CredentialDirectory(private val realm: String, private val member: String) {

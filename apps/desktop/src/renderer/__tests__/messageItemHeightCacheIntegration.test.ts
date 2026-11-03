@@ -3,10 +3,10 @@ import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import ts from 'typescript';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { rememberedItemIntrinsicSize } from '../components/chat/messageViewportCompensation';
+import { findRenderItemElement, rememberedItemIntrinsicSize } from '../components/chat/messageViewportCompensation';
 
 // Run the production capture callback and restore layout effect, including their
-// DOM/index matching. A missing card must never borrow its neighbour's height.
+// stable-key DOM matching. A missing card must never borrow its neighbour's height.
 const source = ts.createSourceFile('MessageStream.tsx', readFileSync(
   resolve(__dirname, '../components/chat/MessageStream.tsx'), 'utf8',
 ), ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
@@ -33,6 +33,7 @@ function setup(keys: string[], mountedKeys: string[], cached = { before: 100, ca
   const elements = new Map<string, HTMLElement>();
   for (const [index, key] of mountedKeys.entries()) {
     const row = items.appendChild(document.createElement('div'));
+    row.dataset.renderItemKey = key;
     row.style.cssText = 'padding-top: 7px; padding-bottom: 9px; border-top: 1px solid; border-bottom: 3px solid';
     row.style.containIntrinsicBlockSize = 'auto 999px';
     row.getBoundingClientRect = () => ({ height: 120 + index * 200 }) as DOMRect;
@@ -49,6 +50,9 @@ function setup(keys: string[], mountedKeys: string[], cached = { before: 100, ca
     visibleRenderItems: keys.map((key) => ({ key })),
     visibleRenderItemsRef: { current: keys.map((key) => ({ key })) },
     rememberedItemIntrinsicSize,
+    findRenderItemElement,
+    restoreLoadRef: { current: 'settled' },
+    restoreClientIdForItem: () => undefined,
     refreshViewportAnchor: () => ({ viewportTopKey: 'after', offset: 12 }),
     saveSessionScroll: save,
     sessionId: 'height-cache-fixture',
@@ -84,13 +88,18 @@ describe('message item height cache DOM alignment', () => {
     view.capture(true);
     expect(view.save).toHaveBeenCalledOnce();
     expect(view.save.mock.calls[0][1]).toMatchObject({ viewportTopKey: 'after', offset: 12 });
-    expect(view.save.mock.calls[0][1].itemHeights).toBeUndefined();
+    const byKey = view.save.mock.calls[0][1].itemHeights.byKey;
+    expect(byKey).not.toHaveProperty(missing);
+    expect(byKey).toEqual(Object.fromEntries(
+      ['before', 'card', 'after'].filter(key => key !== missing).map((key, index) => [key, 100 + index * 200]),
+    ));
   });
 
-  it('clears estimates instead of applying the absent card height to the next row', () => {
+  it('restores each present key without borrowing an absent card height', () => {
     const view = setup(['before', 'card', 'after'], ['before', 'after']);
     view.restore();
-    for (const row of view.elements.values()) expect(row.style.containIntrinsicBlockSize).toBe('');
+    expect(view.elements.get('before')!.style.containIntrinsicBlockSize).toBe('auto 100px');
+    expect(view.elements.get('after')!.style.containIntrinsicBlockSize).toBe('auto 600px');
   });
 
   it('captures content-box heights and restores matching rows', () => {

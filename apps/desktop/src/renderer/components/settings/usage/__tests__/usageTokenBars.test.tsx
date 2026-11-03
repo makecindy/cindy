@@ -37,7 +37,7 @@ describe('UsageTokenBars registered geometry and interaction', () => {
     const view = render(<UsageTokenBars {...props} />);
     const highlightedDays = () =>
       [...view.container.querySelectorAll<HTMLButtonElement>('[data-highlighted="true"]')].map(
-        (button) => button.title.slice(0, 10),
+        (button) => button.dataset.day,
       );
     expect(highlightedDays()).toEqual([]);
     view.rerender(<UsageTokenBars {...props} highlightRecentWeek />);

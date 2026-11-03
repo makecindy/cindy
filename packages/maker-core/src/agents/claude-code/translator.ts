@@ -1,3 +1,4 @@
+import { collectNativeToolMedia, type NativeToolMedia } from '@cindy/maker-shared/tool-process-media';
 /**
  * Claude Code SDKMessage → maker-core 语义 AgentEvent 翻译器。
  *
@@ -39,7 +40,6 @@ import type { UsageTracker } from '../shared/usage-tracker.js';
 import { isModelAccessDenied } from './model-access-error.js';
 import { attachLiveGeneration, sampleGenerationDuration } from '../shared/live-generation-snapshot.js';
 import {
-  beginClaudeGeneration,
   beginClaudeGenerationAtRequestStart,
   finalizeClaudeGeneration,
   markClaudeGenerationUnreliable,
@@ -66,13 +66,14 @@ export interface TurnState {
   /** 本 turn 是否已收到 compact_boundary；收到后 result usage 不应覆盖 compact 后 context。 */
   sawCompactBoundary: boolean;
   /**
-   * 本 turn 是否已向 UI 推过 text event(assistant text block 或流式 text_delta)。
+   * 本 turn 主代理是否已向 UI 推过 text event(assistant text block 或流式 text_delta)。
    * handleResult 里 result.result 兜底补推的判据:整轮一个 text 都没推过时才补,
    * 避免与已推正文重复。空串不置位(见两处置位点)。
    */
   hasEmittedText: boolean;
   /**
-   * 本 turn 已推给 UI 的全部 text(assistant block + 流式 delta,按到达顺序拼接)。
+   * 本 turn 主代理已推给 UI 的 text(assistant block + 流式 delta,按到达顺序拼接)。
+   * 子代理事件仍照常推送，但不能参与主代理 result 的补发或 silent-stop 判定。
    * turn-end 时与 result.result 做前缀比对,只补 UI 缺失的尾部(末尾截断兜底),绝不重复推。
    * 这是修复 e7ea882b 盲区(末尾截断)的依据:hasEmittedText 是 per-turn 布尔,无法区分
    * "整轮全空"和"前面推过、最后一段被截断";uiEmittedText 让兜底能精确算出缺哪一段。
@@ -117,7 +118,7 @@ export interface TurnState {
   /** interrupt 置位时的 generation 快照(见 generation 注释)。 */
   interruptGeneration: number;
   /**
-   * 最近一条 assistant API 消息是否带「实质内容」(非空 text 或任何非 thinking 块;
+   * 最近一条主代理 assistant API 消息是否带「实质内容」(非空 text 或任何非 thinking 块;
    * thinking / redacted_thinking 不算)。逐条 assistant 消息覆盖写,turn end
    * 时留下的即"最后一条 assistant 消息"的判定,是 silent-stop 观测的核心依据:
    * 上游偶发用一条空内容消息收尾整个 turn(空 thinking + end_turn,或 SSE 流被
@@ -175,7 +176,7 @@ export interface RuntimeState {
   /** 明确属于 local_bash / local_workflow 的 task_id；稀疏后续帧继续排除。 */
   excludedSubagentTaskIds: Set<string>;
   /**
-   * 上一次 SDK assistant 消息提取出来的 agentMeta (uuid / sdkSessionId / model / ...).
+   * 上一次主 agent SDK assistant 消息的 agentMeta (uuid / sdkSessionId / model / ...).
    * 主 agent 的 stream_event 累积时用它补齐 transcript 锚点；subagent stream
    * 则必须按 parent_tool_use_id 隔离，不能共享这份会话级状态。
    * 老链路 agentManager.ts:2214 (session.lastAssistantMeta) 同款。
@@ -196,6 +197,13 @@ export interface RuntimeState {
   streamRequestIdByParent: Map<string, string>;
   /** Per-parent active provider request used to merge message_start + message_delta usage. */
   activeUsageSegmentByParent: Map<string, string>;
+  /**
+   * 主流当前 provider 请求：main message_start 打开；main message_stop、下一次
+   * main message_start 或 result 收口。Claude Code 每个 content block 结束就先
+   * yield 完整 assistant，携带 output usage 的 message_delta 在整条回复生成完才到，
+   * 所以「本请求 streamed output 是否完整」只能在请求边界判定，不能在 assistant 到达时判定。
+   */
+  mainOpenRequest: { requestId?: string; sawAssistant: boolean } | null;
   /** Price variant frozen for the active request of each parent stream. */
   activeUsagePriceVariantByParent: Map<string, 'standard' | 'priority'>;
   /** Price variant captured for the next request before its message_start arrives. */
@@ -204,6 +212,13 @@ export interface RuntimeState {
   toolResultBatchSeq: number;
   usageSegmentSeq: number;
   generation: ClaudeGenerationState;
+  /**
+   * 被拒额度窗口(`rateLimitType`)→ 重置时刻(unix ms)。每条 `rate_limit_event`
+   * 只描述一个窗口,只有同一窗口再报非 rejected 才移除,别的窗口的 allowed 不影响。
+   * 会话级而非 turn 级:CLI 已知被拒后会本地短路后续请求,那些 turn 直接报限额
+   * 错误、不再重发事件,仍要能带上同一个重置时刻。
+   */
+  rateLimitRejectedResetAtMs: Map<string, number>;
 }
 
 export function newRuntimeState(): RuntimeState {
@@ -223,11 +238,13 @@ export function newRuntimeState(): RuntimeState {
     streamStopTokenByKey: new Map(),
     streamRequestIdByParent: new Map(),
     activeUsageSegmentByParent: new Map(),
+    mainOpenRequest: null,
     activeUsagePriceVariantByParent: new Map(),
     pendingUsagePriceVariantByParent: new Map(),
     toolResultBatchSeq: 0,
     usageSegmentSeq: 0,
     generation: newClaudeGenerationState(),
+    rateLimitRejectedResetAtMs: new Map(),
   };
 }
 
@@ -253,6 +270,33 @@ function mainActiveSegmentHasOutput(ctx: TranslateContext): boolean {
     if (segment.id === segmentId) return segment.outputTokens > 0;
   }
   return false;
+}
+
+/**
+ * 在主流请求边界收口：本请求已产出 assistant 却没有 streamed output usage 时，
+ * 父级分子残缺，子代理在场的 live tok/s 必须 fail closed。随后摘掉当前 usage 段，
+ * 下一请求不得沿用本请求的 streamed output。
+ */
+function settleMainRequest(ctx: TranslateContext): void {
+  const open = ctx.rt.mainOpenRequest;
+  if (!open) return;
+  if (open.sawAssistant && !mainActiveSegmentHasOutput(ctx)) {
+    noteClaudeParentStreamedOutputIncomplete(ctx.rt.generation);
+  }
+  ctx.rt.activeUsageSegmentByParent.delete(CLAUDE_MAIN_USAGE_PARENT);
+  ctx.rt.mainOpenRequest = null;
+}
+
+/** 主流完整 assistant 只登记到所属请求；它早于该请求的 message_delta，不能在此判完整性。 */
+function observeMainAssistant(ctx: TranslateContext, requestId: string | undefined): void {
+  const open = ctx.rt.mainOpenRequest;
+  if (open && (!requestId || !open.requestId || open.requestId === requestId)) {
+    open.sawAssistant = true;
+    return;
+  }
+  // 没见过 message_start 的请求：不会再有可归属的 message_delta，分子必然残缺。
+  settleMainRequest(ctx);
+  noteClaudeParentStreamedOutputIncomplete(ctx.rt.generation);
 }
 
 function applySubagentLiveReliability(ctx: TranslateContext): void {
@@ -299,11 +343,13 @@ function ccLiveStatus(
   return {
     status,
     ...attachLiveGeneration(ctx.tracker.snapshot(), {
+      tokenSpeed: ctx.rt.generation.tokenSpeed.snapshot(),
       outputTokens: mainTurnOutputTokens(ctx.tracker),
       durationMs: ctx.rt.generation.outputDurationMs,
       openStartedAt: ctx.rt.generation.startedAt,
       reliable: ctx.rt.generation.reliable,
     }),
+    requestUsage: ctx.tracker.getRequestMetering(),
     isRunning,
   };
 }
@@ -436,6 +482,7 @@ export function extractAssistantMeta(rawMsg: unknown): Record<string, unknown> {
 const TERMINAL_OUTPUT_TOOL_NAMES = new Set(['Bash', 'PowerShell']);
 
 interface ToolResultPair {
+  processMedia: NativeToolMedia[];
   toolUseId: string;
   fullText: string;
   isError: boolean;
@@ -448,7 +495,7 @@ function normalizeToolResultFullText(
   const toolName = rt.toolUseIdToName.get(pair.toolUseId);
   if (!toolName || !TERMINAL_OUTPUT_TOOL_NAMES.has(toolName)) return pair;
   return {
-    toolUseId: pair.toolUseId,
+    ...pair,
     fullText: stripTerminalControlSequences(pair.fullText),
     isError: pair.isError,
   };
@@ -465,7 +512,7 @@ function extractToolResultFullText(
     const pair = readToolResultFullText(block);
     if (pair) {
       const normalized = normalizeToolResultFullText(pair, rt);
-      if (normalized.fullText.length > 0) out.push(normalized);
+      if (normalized.fullText.length > 0 || normalized.processMedia.length > 0) out.push(normalized);
     }
   }
   return out;
@@ -490,7 +537,7 @@ function readToolResultFullText(blockRaw: unknown): ToolResultPair | null {
     }
     fullText = parts.join('\n');
   }
-  return { toolUseId: b.tool_use_id, fullText, isError: b.is_error === true };
+  return { toolUseId: b.tool_use_id, fullText, isError: b.is_error === true, processMedia: collectNativeToolMedia(inner) };
 }
 
 /**
@@ -658,12 +705,14 @@ interface TranslateContext {
   /**
    * upstream-response-idle watchdog / loop guard: assistant / stream_event 含 tool_use 时回调。
    * parentToolUseId 用于隔离并发 subagent；缺省表示顶层 agent。
+   * inputStreaming 表示参数尚在流入，不能据此认定工具已执行并暂停上游计时。
    */
   onToolUseStart?: (
     toolUseId: string,
     toolName?: unknown,
     input?: unknown,
     parentToolUseId?: string,
+    inputStreaming?: boolean,
   ) => void;
   /**
    * upstream-response-idle watchdog: user 含 tool_result 时出队, 配对 onToolUseStart。
@@ -764,8 +813,9 @@ export function translateSdkMessage(
       for (const pair of fullPairs) {
         queue.push({
           type: 'tool_result_full',
-          data: { toolUseId: pair.toolUseId, fullText: pair.fullText },
+          data: { toolUseId: pair.toolUseId, fullText: pair.fullText, ...(pair.processMedia.length ? { processMedia: pair.processMedia } : {}) },
           source: 'claude-code',
+          ...(parentToolUseId ? { agentMeta: { parentUuid: parentToolUseId } } : {}),
         });
       }
       const subagentResult = extractSubagentToolResult(msg);
@@ -896,6 +946,26 @@ export function translateSdkMessage(
       return;
     }
 
+    case 'rate_limit_event': {
+      // 订阅额度快照另由 index.ts 旁路转给 host;这里只记被拒窗口的重置时刻,
+      // 供限额错误带给下游(目标模式据此到点自动续跑)。
+      const info = (rawMsg as {
+        rate_limit_info?: { status?: unknown; resetsAt?: unknown; rateLimitType?: unknown };
+      }).rate_limit_info;
+      if (typeof info?.status !== 'string') return;
+      const windowKey = typeof info.rateLimitType === 'string' ? info.rateLimitType : '';
+      const resetsAt = typeof info.resetsAt === 'number' && info.resetsAt > 0 ? info.resetsAt : null;
+      if (info.status === 'rejected' && resetsAt != null) {
+        // resetsAt 是 epoch 秒;误给毫秒时不再放大。
+        const resetAtMs = resetsAt > 1e12 ? resetsAt : resetsAt * 1000;
+        ctx.rt.rateLimitRejectedResetAtMs.set(windowKey, resetAtMs);
+        ctx.log.info('SDK ▷ rate limit rejected', { rateLimitType: windowKey, resetAtMs });
+      } else if (info.status !== 'rejected') {
+        ctx.rt.rateLimitRejectedResetAtMs.delete(windowKey);
+      }
+      return;
+    }
+
     case 'control_response': {
       // SDK 对每个 control request (setModel / applyFlagSettings / setPermissionMode / interrupt 等)
       // 都会回一条 control_response。这里只打日志做可见性 —— 排查"我点了切模型怎么没反应"很有用。
@@ -1003,6 +1073,8 @@ function handleSystem(
     return;
   }
   if (msg.subtype === 'api_retry') {
+    // The backoff wait is not generation time; the retried request's first block resumes.
+    ctx.rt.generation.tokenSpeed.pause();
     // SDKAPIRetryMessage 明确表示本次 API 失败仍在自动重试，不是 turn 终态。
     // 除日志外也暂存最后一次 retry 的错误详情，覆盖 SDK 没有额外发送
     // assistant.error envelope、最终 ResultMessage 又没有 result 文本的路径。
@@ -1332,6 +1404,13 @@ function assistantBlockHasSubstance(block: Record<string, unknown>): boolean {
   return true;
 }
 
+/** Both envelope and streaming text use the root-only result fallback ledger. */
+function recordRootEmittedText(ctx: TranslateContext, text: string, parentToolUseId?: string): void {
+  if (parentToolUseId || text.length === 0) return;
+  ctx.turn.hasEmittedText = true;
+  ctx.turn.uiEmittedText += text;
+}
+
 function handleAssistant(
   msg: {
     message?: { content?: Array<Record<string, unknown>> };
@@ -1396,11 +1475,12 @@ function handleAssistant(
   // 后续另一次失败误用旧 envelope 的错误详情。错误 envelope 也不能成为
   // lastAssistantMeta，避免恢复后的 fallback text 错绑到错误消息的 transcript 锚点。
   ctx.turn.pendingApiError = null;
-  ctx.rt.lastAssistantMeta = assistantMeta;
-
   const parentToolUseId = typeof msg.parent_tool_use_id === 'string' && msg.parent_tool_use_id
     ? msg.parent_tool_use_id
     : undefined;
+  // Child envelopes interleave with the root stream; they are never its
+  // transcript fallback (including when the next root wrapper omits parent).
+  if (!parentToolUseId) ctx.rt.lastAssistantMeta = assistantMeta;
   const parentStreamKey = parentToolUseId ?? CLAUDE_MAIN_USAGE_PARENT;
   const assistantRequestId = typeof assistantMeta.requestId === 'string'
     ? assistantMeta.requestId
@@ -1415,15 +1495,7 @@ function handleAssistant(
   // 而父级 Agent 工具区间已从分母排除。记 sawSubagent，live tok/s 只用父级
   // streamed output，不再把整轮计时打成不可靠。
   if (parentToolUseId) observeClaudeSubagentStream(ctx, parentToolUseId);
-  else {
-    // Active __main__ segment is this request only. Keep it while checking
-    // completeness, then detach so the next open interval cannot inherit
-    // the previous request's streamed output.
-    if (!mainActiveSegmentHasOutput(ctx)) {
-      noteClaudeParentStreamedOutputIncomplete(ctx.rt.generation);
-    }
-    ctx.rt.activeUsageSegmentByParent.delete(CLAUDE_MAIN_USAGE_PARENT);
-  }
+  else observeMainAssistant(ctx, assistantRequestId);
   // 完整 child assistant 是实际执行模型的正式观测来源。SDK 不保证 child 的
   // partial message_start 一定向外暴露，所以不能只靠 handleStreamEvent 填模型；
   // 同时保持 main 新增的 loop guard 按 parent scope 读取同一张 stream model 表。
@@ -1474,7 +1546,9 @@ function handleAssistant(
   // silent-stop 观测素材: 本条消息是否带实质内容(非空 text / 非 thinking 块)。
   // 未知块 fail-safe 为有内容，避免 SDK 新 block 被误续跑。
   // 逐条覆盖写, turn end 时留下的就是最后一条 assistant 消息的判定(见 TurnState 字段注释)。
-  ctx.turn.lastAssistantMsgHadSubstance = content.some(assistantBlockHasSubstance);
+  if (!parentToolUseId) {
+    ctx.turn.lastAssistantMsgHadSubstance = content.some(assistantBlockHasSubstance);
+  }
   for (const blockRaw of content) {
     const block = blockRaw as { type?: string; text?: string; name?: string; id?: string; input?: unknown; thinking?: string; signature?: string };
     if (block.type === 'text' && typeof block.text === 'string') {
@@ -1485,10 +1559,9 @@ function handleAssistant(
         }
       }
       const visibleText = stripInternalWebCitations(block.text);
-      ctx.turn.text += visibleText;
+      if (!parentToolUseId) ctx.turn.text += visibleText;
       if (visibleText.length > 0) {
-        ctx.turn.hasEmittedText = true;
-        ctx.turn.uiEmittedText += visibleText;
+        recordRootEmittedText(ctx, visibleText, parentToolUseId);
         queue.push({
           type: 'text',
           data: { text: visibleText, isFinal: true },
@@ -1600,6 +1673,44 @@ function observeClaudeSubagentStream(
 
 // ── stream_event 子分支(content_block_delta / message_delta / message_start) ──
 
+/** Main-thread live tok/s, mirroring pi-token-speed's message_update handlers. */
+function observeClaudeTokenSpeed(
+  event: {
+    type?: string;
+    index?: number;
+    delta?: Record<string, unknown>;
+    content_block?: { type?: string; name?: string };
+  },
+  queue: EventQueue,
+  ctx: TranslateContext,
+): void {
+  const speed = ctx.rt.generation.tokenSpeed;
+  const tools = ctx.rt.generation.tokenSpeedToolByIndex;
+  const index = typeof event.index === 'number' ? event.index : 0;
+  switch (event.type) {
+    case 'message_start':
+      tools.clear();
+      return;
+    case 'content_block_start':
+      if (event.content_block?.type === 'tool_use') tools.set(index, event.content_block.name ?? '');
+      speed.start();
+      return;
+    case 'content_block_delta': {
+      const delta = event.delta;
+      const text = delta?.type === 'input_json_delta'
+        ? (tools.has(index) ? delta.partial_json : undefined)
+        : delta?.text ?? delta?.thinking;
+      if (typeof text === 'string' && speed.recordDelta(text)) {
+        queue.push({ type: 'status', data: ccLiveStatus(ctx, 'Generating...', true), source: 'claude-code' });
+      }
+      return;
+    }
+    case 'content_block_stop':
+      if (tools.has(index)) speed.pause();
+      return;
+  }
+}
+
 function handleStreamEvent(
   msg: {
     event?: Record<string, unknown>;
@@ -1622,7 +1733,9 @@ function handleStreamEvent(
     ? msg.parent_tool_use_id
     : undefined;
 
-  // 冗余 add: 防 SDK 顺序契约变化 (stream_event 先于 assistant message yield), Set 幂等。
+  if (!parentToolUseId) observeClaudeTokenSpeed(event, queue, ctx);
+
+  // 流式开头先登记工具身份；完整 assistant 消息才表示参数已交付。
   if (event.type === 'content_block_start') {
     const cb = event.content_block;
     if (cb && cb.type === 'text') {
@@ -1632,12 +1745,13 @@ function handleStreamEvent(
     if (cb && cb.type === 'tool_use') {
       const toolUseId = rememberClaudeToolUseId(ctx, cb.id, cb.name);
       if (toolUseId) {
-        // watchdog / loop-guard 仍要立刻拿到 tool id。生成计时要等
-        // message_delta 或完整 assistant tool_use: content_block_start
+        // loop-guard 仍要立刻拿到 tool id；上游 watchdog 等完整 assistant
+        // tool_use 或 canUseTool 才停表。生成计时要等 message_delta 或完整
+        // assistant tool_use: content_block_start
         // 早于参数 input_json_delta,这里停表会把参数生成时间从分母抠掉,
         // 而后续 message_delta 仍把这些 token 加进 outputTokens。
         if (!parentToolUseId) ctx.rt.mainRequestToolUseIds.add(toolUseId);
-        ctx.onToolUseStart?.(toolUseId, cb.name, cb.input, parentToolUseId);
+        ctx.onToolUseStart?.(toolUseId, cb.name, cb.input, parentToolUseId, true);
       }
     }
   }
@@ -1690,8 +1804,7 @@ function handleStreamEvent(
       const visibleDelta = holdStandaloneStopTokenDelta(buffer, delta.text);
       ctx.rt.streamStopTokenByKey.set(streamKey, buffer);
       if (visibleDelta && visibleDelta.length > 0) {
-        ctx.turn.hasEmittedText = true;
-        ctx.turn.uiEmittedText += visibleDelta;
+        recordRootEmittedText(ctx, visibleDelta, parentToolUseId);
         queue.push({
           type: 'text',
           data: { text: visibleDelta, isFinal: false },
@@ -1796,6 +1909,11 @@ function handleStreamEvent(
     return;
   }
 
+  if (event.type === 'message_stop') {
+    if (!parentToolUseId) settleMainRequest(ctx);
+    return;
+  }
+
   if (event.type === 'message_start') {
     // 新 API call 开始, 清掉残留 thinking buffer。
     // message_start 内 message.model 是这一 API call 真实用的模型,
@@ -1805,8 +1923,16 @@ function handleStreamEvent(
       model: event.message?.model ?? ctx.getModel(),
     });
     ctx.turn.apiCalls += 1;
+    // 上一请求缺 message_stop(中断、重试)时，在新请求开段前补收口。
+    if (!parentToolUseId) settleMainRequest(ctx);
     const segmentId = `claude:${++ctx.rt.usageSegmentSeq}:${parentStreamKey}`;
     ctx.rt.activeUsageSegmentByParent.set(parentStreamKey, segmentId);
+    if (!parentToolUseId) {
+      ctx.rt.mainOpenRequest = {
+        ...(typeof eventRequestId === 'string' && eventRequestId ? { requestId: eventRequestId } : {}),
+        sawAssistant: false,
+      };
+    }
     const priceVariant =
       ctx.rt.pendingUsagePriceVariantByParent.get(parentStreamKey) ??
       ctx.turn.nextRequestPriceVariant ??
@@ -2110,6 +2236,7 @@ function handleResult(
 
   // turn end usage 锁定: Claude Code result.usage 是 session aggregate,
   // 这里先转成 turn delta; tracker.endTurn 内部覆盖 currentTurn 然后返回 snapshot 再 reset。
+  settleMainRequest(ctx);
   finalizeClaudeGeneration(ctx.rt.generation);
   const liveTurnOutput = liveParentOutputTokens(
     ctx,
@@ -2117,6 +2244,9 @@ function handleResult(
     resultUsage != null && segmentTotals.outputTokens === resultUsage.outputTokens,
   );
   const liveGeneration = ctx.rt.generation;
+  // Snap to this turn's streamed main-thread usage: the result aggregate can be
+  // a session total turned into a wrong delta, and a bad snap is worse than the estimate.
+  liveGeneration.tokenSpeed.stop(mainTurnOutputTokens(ctx.tracker));
   const endSnapshot = ctx.tracker.endTurn(
     resultUsage
       ? {
@@ -2224,15 +2354,15 @@ function handleResult(
       source: 'claude-code',
     });
   }
-  // silent-stop 判定: turn 内干过活(有 tool 调用),或整轮没有任何用户可见正文,且最后
-  // 一条 assistant 消息没有实质内容(典型: 只有 thinking 块),result 也没兜出可补的
-  // 文本 —— 上游把 turn 静默收了尾,用户侧表现为"干着干着停了、看起来像正常结束"。已知
+  // silent-stop 判定: 整轮没有任何用户可见正文,且最后一条 assistant 消息没有实质内容
+  // (典型: 只有 thinking 块),result 也没兜出可补的文本 —— 上游把 turn 静默收了尾,
+  // 用户侧表现为"干着干着停了、看起来像正常结束"。末尾不可见 reasoning 不能推翻前面
+  // 已交付的正文；否则工具调用后的正常回答会被误判并触发额外自动执行 (#8240)。已知
   // 上游形态: 模型偶发 thinking-only 空响应(anthropics/claude-code#50597,
   // stop_reason=end_turn)与 SSE 流被静默中断后 SDK 按正常结束处理(#38905, 此形态
   // stop_reason 常缺失)。与 isEmptyResponseTurn(整轮 0 产出 + usage 全 0)互斥:
-  // 零 tool 但零可见正文也必须命中:第一次自动补发「继续」后,上游可能再次只返回
-  // thinking；旧的 toolUses > 0 守卫会把第二次当正常完成。已有可见正文的零 tool turn
-  // 则不扩张判定。沿用 turn 收尾同款排除项: is_error(另有 error 收尾)、
+  // 零 tool 且零可见正文也要命中:第一次自动补发「继续」后,上游可能再次只返回
+  // thinking。沿用 turn 收尾同款排除项: is_error(另有 error 收尾)、
   // interruptRequested(用户停止/watchdog)、sawCompactBoundary(compact 轮合法空)。
   // 命中后事件流仍走正常 Done/done 收尾(记账/收口零变更), 只在 done.data 附加
   // silentStop 标记交给 host 的自动续跑守卫决策; WARN 日志保留作 dev 排查。
@@ -2241,7 +2371,7 @@ function handleResult(
     !ctx.turn.interruptRequested &&
     !ctx.turn.sawCompactBoundary &&
     !isEmptyResponseTurn &&
-    (ctx.turn.toolUses > 0 || ctx.turn.uiEmittedText.length === 0) &&
+    ctx.turn.uiEmittedText.length === 0 &&
     !ctx.turn.lastAssistantMsgHadSubstance &&
     fallbackTail.length === 0;
   if (isSilentStopTurn) {
@@ -2315,6 +2445,17 @@ function handleResult(
     const errDetail = redactSensitiveText(rawResult);
     const errorStatus = resultSignals.errorStatus ?? pendingApiError?.errorStatus;
     const usageLimit = pendingApiError?.usageLimit === true || resultSignals.usageLimit;
+    // 多个窗口同时被拒时取最晚的重置,早醒只会再撞一次限额。已过点也照带:
+    // 下游按零延迟立即续跑,丢掉反而只能等手动恢复。但过点的只用一次——到点后
+    // 仍被本地短路拒绝时不会有新事件,反复带同一个过期时刻会让下游无限立即重试。
+    const rejectedResets = [...ctx.rt.rateLimitRejectedResetAtMs.values()];
+    const usageReset = rejectedResets.length > 0
+      ? { usageResetAt: Math.max(...rejectedResets) }
+      : {};
+    const nowMs = Date.now();
+    for (const [windowKey, resetAtMs] of ctx.rt.rateLimitRejectedResetAtMs) {
+      if (resetAtMs <= nowMs) ctx.rt.rateLimitRejectedResetAtMs.delete(windowKey);
+    }
     const errorMessage = pendingApiError?.agentMeta
       ? pendingApiError.message
       : errDetail || pendingApiError?.message;
@@ -2350,6 +2491,7 @@ function handleResult(
             ...classifiedReason,
             ...(errorStatus !== undefined ? { errorStatus } : {}),
             ...(usageLimit ? { usageLimit: true } : {}),
+            ...usageReset,
             ...(pendingApiError.retryAttempt !== undefined
               ? { retryAttempt: pendingApiError.retryAttempt }
               : {}),
@@ -2365,13 +2507,19 @@ function handleResult(
             ...classifiedReason,
             ...(errorStatus !== undefined ? { errorStatus } : {}),
             ...(usageLimit ? { usageLimit: true } : {}),
+            ...usageReset,
             ...modelAccessError,
           }
         // reason 是稳定 key, renderer 按它走 i18n(规则 18); message 仅作非
         // renderer 消费方(IM/orca)的兜底文案。
         : { message: '任务执行失败（模型未返回错误详情）。', isTerminal: true, reason: 'turn-failed' },
       source: 'claude-code',
-      ...(pendingApiError?.agentMeta ? { agentMeta: pendingApiError.agentMeta } : {}),
+      // ResultMessage terminates the whole query. A child API envelope can
+      // explain its failure, but must not turn this terminal event into a child
+      // event or attach the child's transcript anchor to the root error.
+      ...(pendingApiError?.agentMeta && !pendingApiError.agentMeta.parentUuid
+        ? { agentMeta: pendingApiError.agentMeta }
+        : {}),
     });
   }
   // turn end status: isRunning=false + status='Done'; 数值全部走 endSnapshot
@@ -2380,6 +2528,7 @@ function handleResult(
     data: {
       status: 'Done',
       ...attachLiveGeneration(endSnapshot, {
+        tokenSpeed: liveGeneration.tokenSpeed.snapshot(),
         outputTokens: liveTurnOutput,
         durationMs: liveGeneration.outputDurationMs,
         openStartedAt: null,
@@ -2403,6 +2552,7 @@ function handleResult(
       : msg;
   const resultWithUsageSegments = {
     ...safeResult,
+    requestUsage: ctx.tracker.getRequestMetering(),
     usageSegments: turnUsageSegments,
     usageSegmentsComplete,
     modelUsageCumulativeStartsAtZero: ctx.modelUsageCumulativeStartsAtZero?.() === true,

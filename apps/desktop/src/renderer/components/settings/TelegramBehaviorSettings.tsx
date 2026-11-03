@@ -1,3 +1,4 @@
+import { Button } from '@/components/ui/button';
 /**
  * Telegram 个人 bot「回应与引用」设置节(设计 v3 §五点四/五点五)。
  *
@@ -8,7 +9,7 @@
 import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 
-import { contactsService } from '@/lib/contactsService';
+import { SegmentedControl } from '@/components/ui/segmented-control';
 import { cn } from '@/lib/utils';
 import type {
   TelegramHookBehavior,
@@ -69,28 +70,19 @@ function SegmentedRow<T extends string>(props: {
       >
         {props.label}
       </div>
-      <div className="flex gap-1.5">
-        {props.options.map((option) => {
-          const active = option === props.value;
-          return (
-            <button
-              key={option}
-              type="button"
-              onClick={() => props.onChange(option)}
-              aria-pressed={active}
-              className={cn(
-                'h-[30px] flex-1 rounded-full border text-12 font-medium transition-colors',
-                active
-                  ? 'border-[var(--settings-input-border-focus)] bg-[var(--settings-badge-bg)] text-[var(--settings-section-title)]'
-                  : 'border-[var(--settings-btn-secondary-border)] bg-[var(--settings-btn-secondary-bg)] text-[var(--settings-btn-secondary-text)]',
-              )}
-            >
-              {props.optionLabel(option)}
-            </button>
-          );
-        })}
-      </div>
-      <div className="text-11 leading-[1.5] text-[var(--settings-section-desc)] opacity-80">
+      <SegmentedControl
+        aria-label={props.label}
+        value={props.value}
+        onValueChange={props.onChange}
+        fullWidth
+        height={36}
+        optionHeight={30}
+        options={props.options.map((option) => ({
+          value: option,
+          label: props.optionLabel(option),
+        }))}
+      />
+      <div className="text-11 leading-[1.5] text-[var(--text-secondary)]">
         {props.hint}
       </div>
     </div>
@@ -101,13 +93,9 @@ function SettingsRequestError(props: { message: string; retryLabel: string; onRe
   return (
     <div className="flex items-center justify-between gap-3 text-11 text-[var(--settings-section-desc)]">
       <span>{props.message}</span>
-      <button
-        type="button"
-        onClick={props.onRetry}
-        className="h-[26px] shrink-0 rounded-full border border-[var(--settings-btn-secondary-border)] bg-[var(--settings-btn-secondary-bg)] px-3 font-medium text-[var(--settings-btn-secondary-text)] transition-colors"
-      >
+      <Button variant="secondary" size="sm" compact type="button" onClick={props.onRetry}>
         {props.retryLabel}
-      </button>
+      </Button>
     </div>
   );
 }
@@ -411,85 +399,21 @@ export function TelegramPersonaSettings() {
         style={{ userSelect: 'text', WebkitUserSelect: 'text' }}
       />
       <div className="flex items-center gap-2">
-        <button
+        <Button
+          variant="secondary"
+          size="md"
+          compact
+          loading={syncState === 'syncing'}
           type="button"
           onClick={() => void syncProfile()}
           disabled={syncState === 'syncing' || !persona.botName.trim()}
-          className={cn(
-            'h-[32px] rounded-full px-4 text-12 font-medium transition-colors',
-            'border border-[var(--settings-btn-secondary-border)] bg-[var(--settings-btn-secondary-bg)]',
-            'text-[var(--settings-btn-secondary-text)]',
-            (syncState === 'syncing' || !persona.botName.trim()) && 'cursor-not-allowed opacity-40',
-          )}
         >
           {t(`settings.telegramBot.persona.sync.${syncState}`)}
-        </button>
-        <span className="text-11 text-[var(--settings-section-desc)] opacity-80">
+        </Button>
+        <span className="text-11 text-[var(--text-secondary)]">
           {t('settings.telegramBot.persona.syncHint')}
         </span>
       </div>
-    </div>
-  );
-}
-
-/**
- * 智能通讯录接线状态引导(Chris 2026-07-30: 通讯录关着时自动记人静默失效,
- * 没有任何引导 — 在群聊节明示状态, 关着给一键开启)。
- */
-function ContactsAutoRegisterHint({ root }: { root: string }) {
-  const { t } = useTranslation();
-  const [enabled, setEnabled] = useState<boolean | null>(null);
-  const [busy, setBusy] = useState(false);
-
-  useEffect(() => {
-    let cancelled = false;
-    void contactsService
-      .settingsGet()
-      .then((s) => {
-        if (!cancelled) setEnabled(s.enabled);
-      })
-      .catch(() => {
-        /* 通讯录服务不可用时不渲染引导 */
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, []);
-
-  if (enabled === null) return null;
-  if (enabled) {
-    return (
-      <div className="text-11 leading-[1.5] text-[var(--settings-section-desc)] opacity-80">
-        {t(`${root}.groups.contactsOn`)}
-      </div>
-    );
-  }
-  return (
-    <div className="flex items-center gap-2">
-      <span className="text-11 leading-[1.5] text-[var(--settings-section-desc)]">
-        {t(`${root}.groups.contactsOff`)}
-      </span>
-      <button
-        type="button"
-        disabled={busy}
-        onClick={() => {
-          setBusy(true);
-          void contactsService
-            .settingsSet(true)
-            .then(() => setEnabled(true))
-            .catch(() => {
-              /* 失败保持关闭态, 用户可去通讯录设置页重试 */
-            })
-            .finally(() => setBusy(false));
-        }}
-        className={cn(
-          'h-[26px] shrink-0 rounded-full border px-3 text-11 font-medium transition-colors',
-          'border-[var(--settings-input-border-focus)] bg-[var(--settings-badge-bg)] text-[var(--settings-section-title)]',
-          busy && 'cursor-not-allowed opacity-40',
-        )}
-      >
-        {t(`${root}.groups.contactsEnable`)}
-      </button>
     </div>
   );
 }
@@ -675,7 +599,7 @@ export function TelegramGroupActivationSettings({
       <div className="text-13 font-medium text-[var(--settings-section-title)]">
         {t(`${root}.groups.title`)}
       </div>
-      <div className="text-11 leading-[1.5] text-[var(--settings-section-desc)] opacity-80">
+      <div className="text-11 leading-[1.5] text-[var(--text-secondary)]">
         {t(`${root}.groups.hint`)}
       </div>
       {error !== null && (
@@ -685,43 +609,33 @@ export function TelegramGroupActivationSettings({
           onRetry={() => setReloadToken((value) => value + 1)}
         />
       )}
-      <ContactsAutoRegisterHint root={root} />
       {groups.length === 0 ? (
         <div className="text-12 text-[var(--settings-section-desc)]">
           {t(`${root}.groups.empty`)}
         </div>
       ) : (
         groups.map((group) => (
-          <div key={group.chatId} className="flex items-center justify-between gap-3">
+          <div key={group.chatId} className="cindy-segmented-row">
             <div className="min-w-0 flex-1">
               <div className="truncate text-12 font-medium text-[var(--settings-section-title)]">
                 {group.chatName || group.chatId}
               </div>
-              <div className="text-11 text-[var(--settings-section-desc)] opacity-70">
+              <div className="text-11 text-[var(--text-secondary)]">
                 {group.chatId}
               </div>
             </div>
-            <div className="flex shrink-0 gap-1.5">
-              {(['mention', 'always'] as const).map((mode) => {
-                const active = group.activation === mode;
-                return (
-                  <button
-                    key={mode}
-                    type="button"
-                    onClick={() => setMode(group.chatId, mode)}
-                    aria-pressed={active}
-                    className={cn(
-                      'h-[28px] rounded-full border px-3 text-11 font-medium transition-colors',
-                      active
-                        ? 'border-[var(--settings-input-border-focus)] bg-[var(--settings-badge-bg)] text-[var(--settings-section-title)]'
-                        : 'border-[var(--settings-btn-secondary-border)] bg-[var(--settings-btn-secondary-bg)] text-[var(--settings-btn-secondary-text)]',
-                    )}
-                  >
-                    {t(`${root}.groups.mode.${mode}`)}
-                  </button>
-                );
-              })}
-            </div>
+            <SegmentedControl
+              aria-label={`${group.chatName || group.chatId} · ${t(`${root}.groups.title`)}`}
+              value={group.activation}
+              onValueChange={(mode) => setMode(group.chatId, mode)}
+              height={34}
+              optionHeight={28}
+              optionClassName="text-11"
+              options={(['mention', 'always'] as const).map((mode) => ({
+                value: mode,
+                label: t(`${root}.groups.mode.${mode}`),
+              }))}
+            />
           </div>
         ))
       )}

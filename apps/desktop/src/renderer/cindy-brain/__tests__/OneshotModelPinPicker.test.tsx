@@ -71,8 +71,23 @@ const xdOption: OneshotPinOption = {
 };
 
 describe('OneshotModelPinPicker shared A adapter', () => {
-  const mount = (extra = {}) => render(<OneshotModelPinPicker defaultLabel="Automatic"
-    declaredLabel={null} options={options} onChange={vi.fn()} ariaLabel="Auxiliary model" {...extra} />);
+  const mount = (extra = {}) => render(<OneshotModelPinPicker defaultOptionLabel="Automatic"
+    options={options} onChange={vi.fn()} ariaLabel="Auxiliary model" {...extra} />);
+
+  it('selects an approved Pi HTTP auxiliary route and retains an unavailable saved Pi route', async () => {
+    const option: OneshotPinOption = { ...options[0], id: 'cat:go:pi:deepseek-v4.1-flash',
+      providerId: 'go', group: 'OpenCode Go', agentKind: 'pi', modelId: 'deepseek-v4.1-flash', modelName: 'DeepSeek' };
+    const onChange = vi.fn();
+    const view = mount({ options: [option], onChange });
+    expect(picker.providersOverride?.[0].models.pi?.[0].id).toBe('deepseek-v4.1-flash');
+    expect(await picker.onUnifiedSelect!({ providerId: 'go', modelId: 'deepseek-v4.1-flash', engine: 'pi', fast: false, favoriteUid: null })).toBe(true);
+    expect(onChange).toHaveBeenCalledWith(option.id);
+    view.unmount();
+    mount({ options: [], value: option.id });
+    expect(picker.currentProviderId).toBe('go');
+    expect(picker.vendorKey).toBe('pi');
+    expect(picker.sourceDisconnected).toBe(true);
+  });
 
   it('uses the shared picker with all host-approved routes, without a separate Agent step', () => {
     mount();
@@ -90,6 +105,17 @@ describe('OneshotModelPinPicker shared A adapter', () => {
     expect(await picker.onUnifiedSelect!({ providerId: 'anthropic', modelId: 'claude-haiku-4-5',
       engine: 'cc', fast: false, favoriteUid: null })).toBe(true);
     expect(onChange).toHaveBeenCalledWith(ANTHROPIC_PIN);
+  });
+
+  // PR #7744: provider grouping must preserve the host's identity name rather than
+  // replace it with the generic translated brand before reaching ModelSelector.
+  it('preserves an updated Cindy AI identity in the real picker adapter', () => {
+    const view = mount({ options: [{ ...xdOption, group: 'Cindy AI · 个人' }], groupByProvider: true });
+    expect(picker.providersOverride?.[0].name).toBe('Cindy AI · 个人');
+    view.rerender(<OneshotModelPinPicker defaultOptionLabel="Automatic" options={[{ ...xdOption, group: 'Cindy AI · 心动', logoKind: 'xd' }]}
+      onChange={vi.fn()} ariaLabel="Auxiliary model" groupByProvider />);
+    expect(picker.providersOverride?.[0].name).toBe('Cindy AI · 心动');
+    expect(picker.providersOverride?.[0].logoKind).toBe('xd');
   });
 
   it('rejects forged, unavailable, and wrong-Harness routes without saving', async () => {
@@ -115,7 +141,7 @@ describe('OneshotModelPinPicker shared A adapter', () => {
     expect(onChange).toHaveBeenCalledWith(xdOption.id);
   });
 
-  it('preserves failure results, same-pin no-op, automatic clearing, and legacy labels', async () => {
+  it('preserves failure results, same-pin no-op, automatic clearing, and unknown-pin labels', async () => {
     const onChange = vi.fn(async () => false);
     const view = mount({ value: OPENROUTER_PIN, onChange });
     expect(await picker.onUnifiedSelect!({ providerId: 'openrouter', modelId: 'openai/gpt-5-mini',
@@ -126,8 +152,9 @@ describe('OneshotModelPinPicker shared A adapter', () => {
     expect(await picker.fallbackOption!.onSelect()).toBe(false);
     expect(onChange).toHaveBeenLastCalledWith(null);
     view.unmount();
-    mount({ value: 'legacy', legacyPinLabel: 'Budget tier' });
-    expect(picker.sourceDisconnected).toBe(false);
-    expect(picker.unknownModelLabel!('legacy')).toBe('Budget tier');
+    mount({ value: 'retired' });
+    expect(picker.sourceDisconnected).toBe(true);
+    expect(picker.unknownModelLabel!('retired')).toBe('retired');
+    expect(picker.fallbackOption?.label).toBe('Automatic');
   });
 });

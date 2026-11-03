@@ -111,6 +111,55 @@ function waitForSessionEvent(session: Session, type: AgentEvent['type']): Promis
 }
 
 describe('Session graceful-stop control state', () => {
+  // #7259: pre-dispatch snapshots need the reservation's cancellation signal.
+  // Unit tier; a suspended acceptance hook exposes the missing cancellation.
+  it('aborts acceptance preparation and never dispatches after Stop', async () => {
+    const stub = createHandle();
+    const sendSpy = vi.spyOn(stub.handle, 'send');
+    const session = createSession(stub);
+    let entered!: () => void;
+    const started = new Promise<void>((resolve) => { entered = resolve; });
+    let preparationSignal: AbortSignal | undefined;
+    const send = session.send('prepare snapshot', {
+      onAccepted: async (signal) => {
+        preparationSignal = signal;
+        entered();
+        await new Promise<void>((resolve) => signal!.addEventListener('abort', () => resolve(), { once: true }));
+      },
+    });
+    await started;
+    await session.abort();
+    expect(preparationSignal?.aborted).toBe(true);
+    await expect(send).resolves.toEqual({ accepted: false, reason: 'cancelled-before-dispatch' });
+    expect(sendSpy).not.toHaveBeenCalled();
+  });
+  it('cancels a pre-dispatch send reservation without aborting the session', async () => {
+    const stub = createHandle();
+    const session = createSession(stub);
+    const sendSpy = vi.spyOn(stub.handle, 'send');
+    let acceptedStarted!: () => void;
+    const accepted = new Promise<void>((resolve) => { acceptedStarted = resolve; });
+    let releaseAcceptance!: () => void;
+    const acceptanceGate = new Promise<void>((resolve) => { releaseAcceptance = resolve; });
+
+    const send = session.send('hello', {
+      onAccepted: async () => {
+        acceptedStarted();
+        await acceptanceGate;
+      },
+    });
+    await accepted;
+
+    expect(session.getStatus()).toBe('active');
+    expect(session.cancelPendingSend()).toBe(true);
+    releaseAcceptance();
+
+    await expect(send).resolves.toEqual({ accepted: false, reason: 'cancelled-before-dispatch' });
+    expect(sendSpy).not.toHaveBeenCalled();
+    expect(stub.abort).not.toHaveBeenCalled();
+    expect(session.getStatus()).toBe('active');
+  });
+
   it('cancels and joins a pre-acceptance send reservation before reporting stop requested', async () => {
     const stub = createHandle();
     let running = false;
@@ -568,6 +617,7 @@ describe('Session current-generation terminal observation', () => {
         reason: 'empty-response',
         sdkError: 'server_error',
         errorStatus: 529,
+        codexErrorInfo: 'badRequest',
       },
     });
     await secondError;
@@ -578,6 +628,7 @@ describe('Session current-generation terminal observation', () => {
       reason: 'empty-response',
       sdkError: 'server_error',
       errorStatus: 529,
+      codexErrorInfo: 'badRequest',
     });
     stub.push({ type: 'done', data: {} });
     await vi.waitFor(() => expect(session.isTurnRunning()).toBe(false));
@@ -588,6 +639,7 @@ describe('Session current-generation terminal observation', () => {
       reason: 'empty-response',
       sdkError: 'server_error',
       errorStatus: 529,
+      codexErrorInfo: 'badRequest',
     });
   });
 

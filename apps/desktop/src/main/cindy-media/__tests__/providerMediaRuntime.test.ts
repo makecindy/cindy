@@ -3,6 +3,7 @@ import {
   configureProviderMediaRuntime,
   listProviderMediaModels,
   listReadyProviderMediaModels,
+  resolveProviderMediaModel,
 } from '../providerMediaRuntime.js';
 
 const visible = {
@@ -36,4 +37,13 @@ describe('provider media runtime display switch', () => {
       hidden.id,
     ]);
   });
+  it('Core discovers only video protocols it can execute, and distinguishes text-only from image input', () => {
+    const video = { ...visible, id: 'private-video', mode: 'video_generation' as const, videoProtocol: 'xai-videos' as const, modalities: { input: ['text'], output: ['video'] } };
+    const legacy = { ...video, id: 'legacy-video', videoProtocol: undefined };
+    configureProviderMediaRuntime({ listModels: () => [visible], listVideoModels: () => [video, legacy], invoke: async () => ({ buffer: Buffer.alloc(0), mimeType: 'image/png' }) });
+    expect(listProviderMediaModels().map(model => model.id)).toEqual([visible.id, video.id]);
+    expect(resolveProviderMediaModel(video.providerId, video.id, 'video.generate')).toEqual(video);
+    expect(resolveProviderMediaModel(video.providerId, video.id, 'video.image_to_video')).toBeNull();
+  });
+
 });

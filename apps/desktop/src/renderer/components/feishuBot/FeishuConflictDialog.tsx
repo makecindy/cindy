@@ -1,3 +1,4 @@
+import { Button } from '@/components/ui/button';
 /**
  * FeishuConflictDialog
  * ---------------------------------------------------------------------------
@@ -40,22 +41,16 @@ export function FeishuConflictDialog({
       <AlertDialog.Portal>
         <AlertDialog.Overlay
           className={cn(
-            'fixed inset-0 z-50',
-            'bg-black/40 backdrop-blur-sm',
-            'data-[state=open]:animate-confirm-overlay-in',
+            'modal-scrim fixed inset-0 z-50',
           )}
         />
         <AlertDialog.Content
           className={cn(
-            'fixed left-1/2 top-1/2 z-50 -translate-x-1/2 -translate-y-1/2',
+            'modal-panel fixed left-1/2 top-1/2 z-50 -translate-x-1/2 -translate-y-1/2',
             // 与 ConfirmDialog 同款入场(250ms 淡入+缩放);keyframe 自带
             // translate(-50%,-50%) 居中,与上面的 -translate-x/y-1/2 终态一致。
-            'data-[state=open]:animate-confirm-content-in',
             'w-[440px] max-w-[90vw]',
-            'rounded-[14px] p-6',
-            'bg-[var(--settings-input-bg)]',
-            'border border-[var(--settings-badge-border)]',
-            'shadow-2xl',
+            'p-6',
             'flex flex-col gap-4',
             'focus:outline-none',
           )}
@@ -99,36 +94,14 @@ export function FeishuConflictDialog({
           {/* Actions */}
           <div className="flex justify-end gap-2 pt-2">
             <AlertDialog.Cancel asChild>
-              <button
-                type="button"
-                onClick={onDismiss}
-                className={cn(
-                  'h-[36px] rounded-full px-4',
-                  'bg-[var(--settings-btn-secondary-bg)]',
-                  'border border-[var(--settings-btn-secondary-border)]',
-                  'text-13 font-medium text-[var(--settings-btn-secondary-text)]',
-                  'hover:bg-[var(--settings-btn-secondary-hover-bg)]',
-                  'transition-colors',
-                )}
-              >
+              <Button variant="secondary" size="lg" type="button" onClick={onDismiss}>
                 {t('imBot.conflictDialog.dismiss')}
-              </button>
+              </Button>
             </AlertDialog.Cancel>
             <AlertDialog.Action asChild>
-              <button
-                type="button"
-                onClick={onCreateOwnApp}
-                className={cn(
-                  'h-[36px] rounded-full px-4',
-                  'bg-[var(--settings-btn-primary-bg)]',
-                  'border border-[var(--settings-btn-primary-border)]',
-                  'text-13 font-medium text-[var(--settings-btn-primary-text)]',
-                  'hover:bg-[var(--settings-btn-primary-hover-bg)]',
-                  'transition-colors',
-                )}
-              >
+              <Button variant="cta" size="lg" type="button" onClick={onCreateOwnApp}>
                 {t('imBot.conflictDialog.createOwnApp')}
-              </button>
+              </Button>
             </AlertDialog.Action>
           </div>
         </AlertDialog.Content>

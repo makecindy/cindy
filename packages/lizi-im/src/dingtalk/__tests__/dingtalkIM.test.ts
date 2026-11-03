@@ -85,6 +85,103 @@ function validCredentialFetcher() {
   );
 }
 
+describe('DingTalk connection recovery', () => {
+  it('backs off repeated failures and cancels retries when credentials are cleared', async () => {
+    vi.useFakeTimers();
+    const random = vi.spyOn(Math, 'random').mockReturnValue(0);
+    const { host } = makeHost();
+    const fetcher = vi.fn<typeof fetch>().mockRejectedValue(new Error('offline'));
+    const im = new DingTalkIM(host, { fetcher });
+    try {
+      await im.init();
+      await vi.advanceTimersByTimeAsync(800);
+      expect(fetcher).toHaveBeenCalledTimes(2);
+      await vi.advanceTimersByTimeAsync(1_599);
+      expect(fetcher).toHaveBeenCalledTimes(2);
+      await vi.advanceTimersByTimeAsync(1);
+      expect(fetcher).toHaveBeenCalledTimes(3);
+      await im.clearCredentials();
+      await vi.advanceTimersByTimeAsync(60_000);
+      expect(fetcher).toHaveBeenCalledTimes(3);
+      expect(im.getStatus().kind).toBe('idle');
+    } finally {
+      await im.dispose();
+      random.mockRestore();
+      vi.useRealTimers();
+    }
+  });
+
+  it('recovers a dropped stream without enabling the SDK retry loop', async () => {
+    vi.useFakeTimers();
+    const { host } = makeHost();
+    const clients: FakeClient[] = [];
+    const im = new DingTalkIM(host, {
+      fetcher: validCredentialFetcher(),
+      clientFactory: () => { const client = new FakeClient(); clients.push(client); return client; },
+    });
+    const received = vi.fn();
+    im.onMessage(received);
+    try {
+      await im.init();
+      expect(clients[0].config.autoReconnect).toBe(false);
+      clients[0].emit(directMessage());
+      await vi.advanceTimersByTimeAsync(0);
+      expect(received).toHaveBeenCalledOnce();
+      clients[0].connected = false;
+      await vi.advanceTimersByTimeAsync(3_000);
+      expect(clients).toHaveLength(2);
+      expect(im.getStatus().kind).toBe('connected');
+      clients[1].emit(directMessage());
+      clients[0].emit(directMessage({ msgId: 'stale-client' }));
+      await vi.advanceTimersByTimeAsync(0);
+      expect(received).toHaveBeenCalledOnce();
+      clients[1].emit(directMessage({ msgId: 'new-message' }));
+      await vi.advanceTimersByTimeAsync(0);
+      expect(received).toHaveBeenCalledTimes(2);
+      await im.dispose();
+      await vi.advanceTimersByTimeAsync(60_000);
+      expect(clients).toHaveLength(2);
+    } finally { await im.dispose(); vi.useRealTimers(); }
+  });
+
+  it('does not open a socket when disposed during credential validation', async () => {
+    const { host } = makeHost();
+    let resolve!: (response: Response) => void;
+    const fetcher = vi.fn<typeof fetch>(() => new Promise((done) => { resolve = done; }));
+    const clientFactory = vi.fn(() => new FakeClient());
+    const im = new DingTalkIM(host, { fetcher, clientFactory });
+    const starting = im.init();
+    await vi.waitFor(() => expect(fetcher).toHaveBeenCalledOnce());
+    await im.dispose();
+    resolve(new Response(JSON.stringify({ accessToken: 'token', expireIn: 7200 })));
+    await starting;
+    expect(clientFactory).not.toHaveBeenCalled();
+    expect(im.getStatus().kind).toBe('idle');
+  });
+
+  it.each(['recover', 'dispose', 'auth'])('handles startup failure: %s', async (outcome) => {
+    vi.useFakeTimers();
+    const { host } = makeHost();
+    const fetcher = validCredentialFetcher();
+    if (outcome === 'auth') {
+      fetcher.mockResolvedValueOnce(new Response('{}', { status: 401 }));
+    } else {
+      fetcher.mockRejectedValueOnce(new Error('network down'));
+    }
+    const im = new DingTalkIM(host, { fetcher, clientFactory: () => new FakeClient() });
+    try {
+      await im.init();
+      if (outcome === 'dispose') await im.dispose();
+      await vi.advanceTimersByTimeAsync(2_000);
+      expect(fetcher).toHaveBeenCalledTimes(outcome === 'recover' ? 2 : 1);
+      if (outcome === 'recover') expect(im.getStatus().kind).toBe('connected');
+    } finally {
+      await im.dispose();
+      vi.useRealTimers();
+    }
+  });
+});
+
 function outboundImageFetcher() {
   return vi.fn<typeof fetch>(async (input) => {
     const url = String(input);
@@ -128,6 +225,42 @@ function directMessage(overrides: Record<string, unknown> = {}) {
 }
 
 describe("DingTalkIM", () => {
+  it.each(['', ' \n '])('does not send an empty final %j', async (text) => {
+    const { host } = makeHost();
+    const fetcher = outboundImageFetcher();
+    const im = new DingTalkIM(host, { clientFactory: () => new FakeClient(), fetcher });
+    await im.init();
+    fetcher.mockClear();
+    await im.commitFinal({ userId: 'owner-1', text, terminal: 'done' });
+    expect(fetcher).not.toHaveBeenCalled();
+    await im.dispose();
+  });
+  it("clears the text waiter after a Desktop decision so the next message is ordinary input", async () => {
+    const { host } = makeHost();
+    const client = new FakeClient();
+    const im = new DingTalkIM(host, {
+      clientFactory: () => client,
+      fetcher: validCredentialFetcher(),
+    });
+    const received: IMMessageEvent[] = [];
+    im.onMessage((event) => received.push(event));
+    await im.init();
+    client.emit(directMessage());
+    await vi.waitFor(() => expect(received).toHaveLength(1));
+    let decide!: (value: string) => void;
+    const shared = {
+      result: new Promise<string>((resolve) => { decide = resolve; }),
+      decide: vi.fn(() => true),
+    };
+    const reply = im.requestTextReply("owner-1", "confirm", (text) => text, 1000, shared);
+    decide("accepted on Desktop");
+    await expect(reply).resolves.toBe("accepted on Desktop");
+    client.emit(directMessage({ msgId: "next", text: { content: "拒绝" } }), "next-callback");
+    await vi.waitFor(() => expect(received).toHaveLength(2));
+    expect(received[1].text).toBe("拒绝");
+    expect(shared.decide).not.toHaveBeenCalled();
+  });
+
   it("uploads remote Markdown images and sends native image messages", async () => {
     const { host } = makeHost();
     const fetchRemoteImage = vi.fn(async () => ({
@@ -294,6 +427,49 @@ describe("DingTalkIM", () => {
       text: "group question",
       speaker: { id: "guest-1", name: "Guest", isOwner: false },
     });
+  });
+
+  it("keeps a bare group @-mention as a summon instead of an empty message", async () => {
+    const { host } = makeHost();
+    const client = new FakeClient();
+    const im = new DingTalkIM(host, {
+      clientFactory: () => client,
+      fetcher: validCredentialFetcher(),
+    });
+    const received: IMMessageEvent[] = [];
+    im.onMessage((event) => received.push(event));
+    await im.init();
+    client.emit(directMessage());
+    await vi.waitFor(() => expect(received).toHaveLength(1));
+
+    // 钉钉回调的 text.content 已剥掉 @机器人, 纯 @ 只剩空白。
+    client.emit(
+      directMessage({
+        conversationId: "group/a",
+        conversationType: "2",
+        msgId: "group-bare-mention",
+        senderStaffId: "guest-1",
+        senderNick: "Guest",
+        isInAtList: true,
+        text: { content: " " },
+      }),
+      "callback-2",
+    );
+    await vi.waitFor(() => expect(received).toHaveLength(2));
+    expect(received[1]).toMatchObject({
+      senderId: "g/group%2Fa",
+      text: "",
+      invoked: true,
+      speaker: { id: "guest-1", isOwner: false },
+    });
+
+    // 私聊的空消息不受影响(仍是空文本, 由业务层照旧过滤)。
+    client.emit(
+      directMessage({ msgId: "dm-empty", text: { content: " " } }),
+      "callback-3",
+    );
+    await vi.waitFor(() => expect(received).toHaveLength(3));
+    expect(received[2].text).toBe("");
   });
 
   it("downloads inbound images through the host SSRF guard", async () => {
@@ -674,5 +850,35 @@ describe("DingTalkIM", () => {
       "picture-1",
       "text-2",
     ]);
+  });
+
+  it("keeps a prefixed, IPC-less instance on its own credential keys and off the settings channels", async () => {
+    const { host, secrets, handlers, broadcasts } = makeHost();
+    secrets.clear();
+    secrets.set("bot-im-abc-dingtalk-bot-app-key", "app-key-2");
+    secrets.set("bot-im-abc-dingtalk-bot-app-secret", "app-secret-2");
+    const client = new FakeClient();
+    const im = new DingTalkIM(host, {
+      clientFactory: () => client,
+      fetcher: validCredentialFetcher(),
+      secretKeyPrefix: "bot-im-abc-",
+      ipc: false,
+    });
+    im.registerIpc();
+    expect(handlers.size).toBe(0);
+    const received: IMMessageEvent[] = [];
+    im.onMessage((event) => received.push(event));
+    await im.init();
+    expect(im.getStatus()).toMatchObject({ kind: "connected", appId: "app-key-2" });
+    client.emit({ ...directMessage(), robotCode: "app-key-2" });
+    await vi.waitFor(() => expect(received).toHaveLength(1));
+    // TOFU 主人也落在前缀键下, 设置页那份键名不受影响。
+    expect(secrets.get("bot-im-abc-dingtalk-bot-owner-user-id")).toBe("owner-1");
+    expect(secrets.has("dingtalk-bot-owner-user-id")).toBe(false);
+    expect(im.getOwnerUserId()).toBe("owner-1");
+    expect(broadcasts).toEqual([]);
+    await im.clearCredentials();
+    expect([...secrets.keys()]).toEqual([]);
+    expect(im.getStatus()).toEqual({ kind: "idle" });
   });
 });

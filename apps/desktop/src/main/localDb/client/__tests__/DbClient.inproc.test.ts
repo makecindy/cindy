@@ -3,6 +3,7 @@ import os from 'node:os';
 import path from 'node:path';
 
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import type { PluginUsageTransaction, PluginUsageHandle } from '../../../../shared/pluginUsage';
 
 vi.mock('electron', () => ({
   app: {
@@ -44,6 +45,20 @@ CREATE TABLE embedding_jobs (
   scheduled_at INTEGER NOT NULL,
   locked_at INTEGER,
   UNIQUE(source, source_id, chunk_index, model_id)
+);
+CREATE TABLE task_tags (
+  id TEXT PRIMARY KEY NOT NULL,
+  name TEXT NOT NULL,
+  name_customized INTEGER NOT NULL DEFAULT 0,
+  color TEXT NOT NULL,
+  favorite_order INTEGER,
+  sort_order INTEGER,
+  revision INTEGER NOT NULL DEFAULT 1
+);
+CREATE TABLE session_task_tags (
+  session_id TEXT NOT NULL,
+  tag_id TEXT NOT NULL,
+  PRIMARY KEY (session_id, tag_id)
 );
 CREATE TABLE sessions (
   id TEXT PRIMARY KEY,
@@ -122,6 +137,17 @@ describe('DbClient in-proc fallback', () => {
         currentDatabase: true,
       }),
     ]);
+
+    const usageMigration = fs.readFileSync(new URL('../../../../../drizzle/0128_demonic_odin.sql', import.meta.url), 'utf8');
+    for (const statement of usageMigration.split('--> statement-breakpoint').filter(s => s.trim())) await client.exec(statement);
+    const identity = { ghostId: 'inproc-plugin', displayName: 'Test', revision: 'revision', sourceKind: 'manual' as const,
+      stableKey: null, pluginId: null, organizationId: null, sourceKey: null, serverRoot: null, version: '1.0', releaseId: null };
+    const bindUsage = { action: 'bind', identity, newId: 'inproc-subject', now: 1 } satisfies PluginUsageTransaction;
+    const handle = await client.tx<PluginUsageHandle | null>('pluginUsage.execute', bindUsage);
+    await client.tx('pluginUsage.execute', { action: 'accept', handle: handle!, callId: 'inproc-call', toolName: 'tool', sessionId: null, occurredAt: 2 });
+    await client.tx('pluginUsage.execute', { action: 'clear', subjectId: handle!.subjectId, now: 3 });
+    await client.tx('pluginUsage.execute', { action: 'settle', handle: handle!, callId: 'inproc-call', outcome: 'failed' });
+    expect(await client.queryOne('SELECT COUNT(*) AS n FROM plugin_usage_events')).toEqual({ n: 0 });
 
     const sourceId = `inproc-source-${Date.now()}`;
     await expect(

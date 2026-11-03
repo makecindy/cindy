@@ -16,9 +16,27 @@ export interface BotSkillSummary {
   description: string;
   /** ISO 串;解析不出来时为空串,由展示方降级成不显示时间。 */
   updatedAt: string;
+  /** A retained source skill can be stored without being mounted. */
+  enabled?: boolean;
 }
 
 /** 展开某条技能时额外带上正文。 */
 export interface BotSkillDetail extends BotSkillSummary {
+  body: string;
+}
+
+/** Saving a learned Skill from settings; `expectedUpdatedAt` rejects a stale overwrite. */
+export interface BotSkillSaveInput {
+  slug: string;
+  name: string;
+  description: string;
+  body: string;
+  expectedUpdatedAt?: string;
+}
+
+/** The shared core every teammate receives (read-only in settings). */
+export interface BotCoreSkill {
+  name: string;
+  description: string;
   body: string;
 }

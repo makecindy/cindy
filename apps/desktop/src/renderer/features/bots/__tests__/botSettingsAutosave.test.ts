@@ -6,6 +6,7 @@ import {
   botSettingsPayloadEqual,
   createBotSettingsAutosave,
   normalizeBotSettingsPayload,
+  reconcileBotSettingsDraft,
   type BotAutosaveStatus,
   type BotSettingsPayload,
 } from '../botSettingsAutosave';
@@ -53,6 +54,7 @@ function harness(options: { textDelayMs?: number; instantDelayMs?: number } = {}
   let current = payload();
   let baseline = payload();
   const commits: BotSettingsPayload[] = [];
+  const modelSelections: boolean[] = [];
   const statuses: BotAutosaveStatus[] = [];
   let failNext = 0;
   let resolveGate: (() => void) | null = null;
@@ -62,8 +64,9 @@ function harness(options: { textDelayMs?: number; instantDelayMs?: number } = {}
     instantDelayMs: options.instantDelayMs ?? 0,
     readPayload: () => current,
     readBaseline: () => baseline,
-    commit: async (next) => {
+    commit: async (next, modelSelection) => {
       commits.push(next);
+      modelSelections.push(modelSelection === true);
       if (resolveGate) {
         await new Promise<void>((resolve) => {
           resolveGate = resolve;
@@ -81,6 +84,7 @@ function harness(options: { textDelayMs?: number; instantDelayMs?: number } = {}
   return {
     autosave,
     commits,
+    modelSelections,
     statuses,
     edit(patch: Partial<BotSettingsPayload>) {
       current = { ...current, ...patch };
@@ -131,9 +135,29 @@ describe('normalizeBotSettingsPayload', () => {
 
     expect(result.name).toBe('PR steward');
     expect(result.description).toBe('spaced');
-    // Long-form prompt text is stored verbatim: trimming it would silently edit
-    // the user's system prompt.
-    expect(result.identitySource).toBe('  kept as typed  ');
+    // The host trims every profile text (`readText`); comparing the same way keeps
+    // surrounding whitespace from reading as an unsaved change.
+    expect(result.identitySource).toBe('kept as typed');
+  });
+
+  it('keeps whitespace still being typed when a save settles', () => {
+    const saved = payload({ name: 'Filo', description: 'Own releases', identitySource: 'You ship.' });
+    const draft = {
+      ...saved,
+      name: 'Filo ',
+      description: 'Own releases\n',
+      identitySource: 'You ship.\n\n',
+    };
+    const next = reconcileBotSettingsDraft(saved, draft, saved);
+    expect(next.name).toBe('Filo ');
+    expect(next.description).toBe('Own releases\n');
+    expect(next.identitySource).toBe('You ship.\n\n');
+    // Nothing unsaved: the whitespace alone does not trigger another save.
+    expect(botSettingsPayloadEqual(normalizeBotSettingsPayload(next, 'Filo'), saved)).toBe(true);
+    // A cleared name still snaps back to the saved one rather than staying blank.
+    expect(reconcileBotSettingsDraft(saved, { ...draft, name: '' }, saved).name).toBe(saved.name);
+    // A newer value from elsewhere still replaces an untouched field.
+    expect(reconcileBotSettingsDraft(saved, saved, { ...saved, description: 'From phone' }).description).toBe('From phone');
   });
 
   it('produces an equal snapshot for the baseline and the untouched draft', () => {
@@ -370,6 +394,44 @@ describe('createBotSettingsAutosave flush & failure', () => {
     expect(h.statuses).toEqual(['saving', 'error', 'saving', 'saved']);
   });
 
+  it.each(['flush', 'flushDetached'] as const)('accepts an unchanged model selection on %s, and only once', async (method) => {
+    const h = harness();
+    h.autosave.schedule('model');
+    expect(h.autosave.isDirty()).toBe(true);
+    await h.autosave[method]();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(h.modelSelections).toEqual([true]);
+    expect(h.autosave.isDirty()).toBe(false);
+    await h.autosave[method]();
+    expect(h.commits).toHaveLength(1);
+  });
+
+  it('retains an unchanged model action after failure and retries it', async () => {
+    const h = harness();
+    h.failNextCommits(1);
+    h.autosave.schedule('model');
+    await h.autosave.flush();
+    expect(h.autosave.isDirty()).toBe(true);
+    await h.autosave.retry();
+    expect(h.modelSelections).toEqual([true, true]);
+    expect(h.autosave.isDirty()).toBe(false);
+  });
+
+  it.each([false, true])('does not acknowledge a later same-model choice from an earlier request (detached=%s)', async (detached) => {
+    const h = harness();
+    const gate = h.gate();
+    h.autosave.schedule('model');
+    void h.autosave.flush();
+    await vi.advanceTimersByTimeAsync(0);
+    h.autosave.schedule('model');
+    const trailing = detached ? h.autosave.flushDetached() : h.autosave.flush();
+    gate.release();
+    await trailing;
+    await vi.advanceTimersByTimeAsync(0);
+    expect(h.modelSelections).toEqual([true, true]);
+    expect(h.autosave.isDirty()).toBe(false);
+  });
+
   it('cancel() drops the pending timer without committing', async () => {
     const h = harness();
     h.edit({ description: 'changed' });
@@ -382,6 +444,19 @@ describe('createBotSettingsAutosave flush & failure', () => {
 
 
 describe('settings changes preserve independently joined capabilities', () => {
+  it('preserves an unacknowledged same-model choice while adopting unrelated host edits', () => {
+    const saved = payload();
+    const incoming = payload({ name: 'Host name', skills: ['host-skill'],
+      capabilities: capabilities({ model: 'host-model', modelChain: [{ ...saved.capabilities.modelChain[0]!, model: 'host-model' }] }) });
+    const next = reconcileBotSettingsDraft(saved, saved, incoming, true);
+    expect(next.name).toBe('Host name');
+    expect(next.skills).toEqual(['host-skill']);
+    expect(next.capabilities.model).toBe(saved.capabilities.model);
+    expect(next.capabilities.modelChain).toEqual(saved.capabilities.modelChain);
+    expect(botSettingsChanges(saved, saved, true, true).capabilities).toMatchObject({ model: saved.capabilities.model });
+    expect(botSettingsChanges(saved, saved)).toEqual({});
+  });
+
   it('does not resend capability selections when only the name changes', () => {
     expect(botSettingsChanges(payload(), payload({ name: 'Updated' }))).toEqual({ name: 'Updated' });
   });

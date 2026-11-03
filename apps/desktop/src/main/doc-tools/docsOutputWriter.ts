@@ -4,7 +4,10 @@ import path from 'node:path';
 // eslint-disable-next-line no-restricted-imports -- final writes need a one-shot cwd-bound process, not a database worker.
 import { utilityProcess } from 'electron';
 
-import { DocsPathError, type WriteDocsOutputFn } from '@cindy/mcps';
+import {
+  DocsPathError,
+  type WriteDocsOutputFn,
+} from '@cindy/mcps';
 
 import {
   relativeOutputParentPath,
@@ -94,18 +97,47 @@ function throwResultError(
   throw new Error(result.message);
 }
 
+function assertDocsOutputGrantCurrent(input: { isCurrent?: () => boolean }): void {
+  if (input.isCurrent?.() === false) {
+    throw new DocsPathError(
+      'PATH_NOT_ALLOWED',
+      '任务权限已变化，这次越界路径授权已失效。',
+      '请用当前任务权限重试。',
+    );
+  }
+}
+
 export const writeDocsOutput: WriteDocsOutputFn = async (input) => {
+  assertDocsOutputGrantCurrent(input);
   const parentDir = path.dirname(input.path);
-  const realRoot = await fs.realpath(input.root);
   const lexicalParent = path.resolve(parentDir);
   const parentRelativePath = relativeOutputParentPath(input.root, lexicalParent);
   if (parentRelativePath === null) {
-    throw new DocsPathError(
-      'PATH_NOT_ALLOWED',
-      `输出目录不在任务工作目录内: ${lexicalParent}`,
-      '请改用任务工作目录内的输出路径。',
-    );
+    if (!input.authorizedOutsideWorkdir) {
+      throw new DocsPathError(
+        'PATH_NOT_ALLOWED',
+        `输出目录不在任务工作目录内: ${lexicalParent}`,
+        '请改用任务工作目录内的输出路径。',
+      );
+    }
+    await fs.mkdir(lexicalParent, { recursive: true });
+    const grantedParent = await fs.lstat(lexicalParent, { bigint: true });
+    if (!grantedParent.isDirectory() || grantedParent.isSymbolicLink()) {
+      throw new DocsPathError(
+        'PATH_NOT_ALLOWED',
+        `授权后的输出目录不再是普通目录: ${lexicalParent}`,
+        '请改用任务工作目录内的输出路径，或确认外部目录在授权后没有被替换。',
+      );
+    }
+    const realParent = await fs.realpath(lexicalParent);
+    return writeDocsOutput({
+      ...input,
+      path: path.join(realParent, path.basename(input.path)),
+      root: realParent,
+      authorizedOutsideWorkdir: false,
+    });
   }
+  const realRoot = await fs.realpath(input.root);
   const rootStat = await fs.lstat(realRoot, { bigint: true });
   if (!rootStat.isDirectory() || rootStat.isSymbolicLink()) {
     throw new DocsPathError(
@@ -185,7 +217,14 @@ export const writeDocsOutput: WriteDocsOutputFn = async (input) => {
         (message as { type?: unknown }).type === 'ready'
       ) {
         ready = true;
-        child.postMessage({ type: 'write', request });
+        void (async () => {
+          try {
+            assertDocsOutputGrantCurrent(input);
+            child.postMessage({ type: 'write', request });
+          } catch (error) {
+            finish(error);
+          }
+        })();
         return;
       }
       const result = parseResult(message);

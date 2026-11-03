@@ -281,7 +281,7 @@ describe('sessionComposerLayout', () => {
       label: '停止',
       visible: true,
     });
-    expect(runningWithDraft.guidanceText).toBe('点发送后会进入桌面端队列，按当前任务设置执行。');
+    expect(runningWithDraft.guidanceText).toBe('点发送后会进入电脑端队列，按当前任务设置执行。');
   });
 
   it('marks busy operations without changing the primary layout shape', () => {
@@ -327,7 +327,7 @@ describe('sessionComposerLayout', () => {
       label: '发送中',
       visible: true,
     });
-    expect(layout.guidanceText).toBe('消息正在写入桌面端队列，完成前请不要重复发送。');
+    expect(layout.guidanceText).toBe('消息正在写入电脑端队列，完成前请不要重复发送。');
     expect(layout.statusText).toBe('正在发送到电脑端');
   });
 
@@ -405,6 +405,6 @@ describe('sessionComposerLayout', () => {
       queueBusy: false,
       sending: false,
       voiceState: 'idle',
-    }).guidanceText).toBe('点发送后会进入桌面端队列，按当前任务设置执行。');
+    }).guidanceText).toBe('点发送后会进入电脑端队列，按当前任务设置执行。');
   });
 });

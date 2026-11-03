@@ -14,7 +14,7 @@
  *   - feishuBot:clear           断开 + 清除所有
  */
 
-import { getHost, getLog } from './moduleScope.js';
+import { bindScope, getHost, getLog, getScope, scopeSlot } from './moduleScope.js';
 import { feishuEvents } from './events.js';
 import * as wsClient from './wsClient.js';
 import * as storage from './storage.js';
@@ -28,8 +28,15 @@ import {
 } from './appRegistration.js';
 import type { FeishuPublicState } from './internal-types.js';
 
-let registered = false;
-let registrationRunId = 0;
+const ipc_SLOT = Symbol('feishu.ipc');
+function createIpcState() {
+  return {
+    registered: false,
+    registrationRunId: 0,
+  };
+}
+/** 本实例(FeishuScope)的模块状态; 没有 scope 时落在默认实例上。 */
+const S = () => scopeSlot(ipc_SLOT, createIpcState);
 
 interface CapturedAccountScope {
   guarded: boolean;
@@ -62,19 +69,30 @@ async function runInAccountScope<T>(
 
 /** Invalidate any background registration before account transport shutdown. */
 export function cancelAppRegistration(): void {
-  registrationRunId += 1;
+  S().registrationRunId += 1;
+}
+
+/** 只有设置页那份实例(scope.ipc)才向 renderer 广播; 伙伴自有连接走宿主自己的 IPC。 */
+function broadcast(channel: string, payload: unknown): void {
+  if (!getScope().ipc) return;
+  getHost().ipc.broadcast(channel, payload);
 }
 
 export function registerFeishuIpc(): void {
-  if (registered) return;
-  registered = true;
+  const scope = getScope();
+  // 通道名固定: 伙伴自有连接(scope.ipc=false)不注册, 否则第二份实例会重复注册。
+  if (!scope.ipc || S().registered) return;
+  S().registered = true;
 
   const log = getLog();
   const host = getHost();
+  // Electron 从 IPC 进来时没有作用域: 每个 handler 显式绑回本实例。
+  const handle: typeof host.ipc.handle = (channel, handler) =>
+    host.ipc.handle(channel, bindScope(scope, handler));
 
-  host.ipc.handle('feishuBot:get-state', async () => getPublicState());
+  handle('feishuBot:get-state', async () => getPublicState());
 
-  host.ipc.handle('feishuBot:save', async (payload) => {
+  handle('feishuBot:save', async (payload) => {
     const p = payload as { appId?: unknown; appSecret?: unknown; service?: unknown } | undefined;
     if (
       !p ||
@@ -94,12 +112,12 @@ export function registerFeishuIpc(): void {
     );
   });
 
-  host.ipc.handle('feishuBot:clear', async () => {
+  handle('feishuBot:clear', async () => {
     await clearAndDisconnect();
     return { ok: true };
   });
 
-  host.ipc.handle('feishuBot:set-lifecycle-announcement', async (payload) => {
+  handle('feishuBot:set-lifecycle-announcement', async (payload) => {
     const p = payload as { enabled?: unknown } | undefined;
     const enabled = typeof p?.enabled === 'boolean' ? p.enabled : true;
     storage.writeLifecycleAnnouncement(enabled);
@@ -107,21 +125,21 @@ export function registerFeishuIpc(): void {
     return { ok: true };
   });
 
-  host.ipc.handle('feishuBot:registration-begin', async (payload) => {
+  handle('feishuBot:registration-begin', async (payload) => {
     const p = payload as { service?: unknown } | undefined;
     if (p?.service !== 'feishu' && p?.service !== 'lark') {
       return { ok: false, error: '[INVALID_PAYLOAD] service required' };
     }
     const service = p.service;
-    registrationRunId++;
-    const runId = registrationRunId;
+    S().registrationRunId++;
+    const runId = S().registrationRunId;
     const accountScope = captureAccountScope();
     if (!isAccountScopeCurrent(accountScope)) {
       return { ok: false, error: '[IM_NOT_READY] IM account is not active' };
     }
     try {
       const begin = await requestAppRegistration(host.httpPostForm, service);
-      if (runId !== registrationRunId || !isAccountScopeCurrent(accountScope)) {
+      if (runId !== S().registrationRunId || !isAccountScopeCurrent(accountScope)) {
         return {
           ok: false,
           error: '[IM_NOT_READY] IM account changed during registration',
@@ -142,20 +160,20 @@ export function registerFeishuIpc(): void {
     }
   });
 
-  host.ipc.handle('feishuBot:registration-cancel', async () => {
+  handle('feishuBot:registration-cancel', async () => {
     cancelAppRegistration();
-    host.ipc.broadcast('feishuBot:registration-status', {
+    broadcast('feishuBot:registration-status', {
       status: 'cancelled',
     });
     return { ok: true };
   });
 
   feishuEvents.on('status', (update) => {
-    host.ipc.broadcast('feishuBot:status-change', update);
+    broadcast('feishuBot:status-change', update);
   });
 
   feishuEvents.on('conflict', (payload) => {
-    host.ipc.broadcast('feishuBot:conflict', payload);
+    broadcast('feishuBot:conflict', payload);
   });
 
   log.info('[feishu/ipc] handlers registered');
@@ -170,6 +188,7 @@ export function getPublicState(): FeishuPublicState {
   // across get-state ↔ init). storage.readOwnerOpenId is the source of truth.
   return {
     status: wsClient.getCurrentStatus(),
+    error: wsClient.getCurrentError(),
     appId: creds?.appId ?? null,
     appSecret: creds?.appSecret ?? null,
     hasSecret: creds != null,
@@ -270,12 +289,12 @@ async function pollRegistrationInBackground(
 
   while (
     Date.now() < deadline &&
-    runId === registrationRunId &&
+    runId === S().registrationRunId &&
     isAccountScopeCurrent(accountScope)
   ) {
     if (!pollWithoutDelay) {
       await delay(currentInterval * 1000);
-      if (runId !== registrationRunId || !isAccountScopeCurrent(accountScope)) return;
+      if (runId !== S().registrationRunId || !isAccountScopeCurrent(accountScope)) return;
     }
     pollWithoutDelay = false;
 
@@ -288,15 +307,15 @@ async function pollRegistrationInBackground(
         currentInterval,
       );
     } catch (err) {
-      if (runId !== registrationRunId || !isAccountScopeCurrent(accountScope)) return;
+      if (runId !== S().registrationRunId || !isAccountScopeCurrent(accountScope)) return;
       const error = err instanceof Error ? err.message : String(err);
-      host.ipc.broadcast('feishuBot:registration-status', {
+      broadcast('feishuBot:registration-status', {
         status: 'error',
         error,
       });
       return;
     }
-    if (runId !== registrationRunId || !isAccountScopeCurrent(accountScope)) return;
+    if (runId !== S().registrationRunId || !isAccountScopeCurrent(accountScope)) return;
 
     const discoveredBrand =
       result.status === 'success' ? result.result.tenantBrand : result.tenantBrand;
@@ -307,7 +326,7 @@ async function pollRegistrationInBackground(
     }
 
     if (result.status === 'pending') {
-      host.ipc.broadcast('feishuBot:registration-status', {
+      broadcast('feishuBot:registration-status', {
         status: 'pending',
       });
       continue;
@@ -315,7 +334,7 @@ async function pollRegistrationInBackground(
 
     if (result.status === 'slow_down') {
       currentInterval = result.interval;
-      host.ipc.broadcast('feishuBot:registration-status', {
+      broadcast('feishuBot:registration-status', {
         status: 'pending',
       });
       continue;
@@ -324,7 +343,7 @@ async function pollRegistrationInBackground(
     if (result.status === 'success') {
       const success = result.result;
       if (!success.clientId || !success.clientSecret) {
-        host.ipc.broadcast('feishuBot:registration-status', {
+        broadcast('feishuBot:registration-status', {
           status: 'pending',
         });
         continue;
@@ -345,13 +364,13 @@ async function pollRegistrationInBackground(
       } catch (err) {
         if (!isAccountScopeCurrent(accountScope)) return;
         const error = err instanceof Error ? err.message : String(err);
-        host.ipc.broadcast('feishuBot:registration-status', {
+        broadcast('feishuBot:registration-status', {
           status: 'error',
           error,
         });
         return;
       }
-      host.ipc.broadcast('feishuBot:registration-status', {
+      broadcast('feishuBot:registration-status', {
         status: 'success',
         appId: success.clientId,
         ownerOpenId: success.ownerOpenId,
@@ -361,7 +380,7 @@ async function pollRegistrationInBackground(
     }
 
     if (result.status === 'expired') {
-      host.ipc.broadcast('feishuBot:registration-status', {
+      broadcast('feishuBot:registration-status', {
         status: 'expired',
         error: result.message,
       });
@@ -369,7 +388,7 @@ async function pollRegistrationInBackground(
     }
 
     if (result.status === 'denied' || result.status === 'error') {
-      host.ipc.broadcast('feishuBot:registration-status', {
+      broadcast('feishuBot:registration-status', {
         status: 'error',
         error: result.message,
       });
@@ -377,9 +396,9 @@ async function pollRegistrationInBackground(
     }
   }
 
-  if (runId === registrationRunId && isAccountScopeCurrent(accountScope)) {
+  if (runId === S().registrationRunId && isAccountScopeCurrent(accountScope)) {
     log.info('[feishu/ipc] registration expired');
-    host.ipc.broadcast('feishuBot:registration-status', { status: 'expired' });
+    broadcast('feishuBot:registration-status', { status: 'expired' });
   }
 }
 
@@ -396,8 +415,7 @@ export async function clearAndDisconnect(): Promise<void> {
   });
   // 逻辑凭证清除(而非 transport 重连): 清掉账号态并重置 lastBoundCreds —
   // 之后重新保存相同 appId/service 不会被误判为同账号重连, 登出前的
-  // opener/锚点不会被新一轮会话认领; 挂起的孤儿提示重试同样丢弃。
+  // opener/锚点不会被新一轮会话认领。
   outbound.forgetBoundAccount();
-  wsClient.clearOrphanRetriesForCredentialClear();
   storage.clearAll();
 }

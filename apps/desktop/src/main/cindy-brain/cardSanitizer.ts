@@ -13,6 +13,7 @@
  * (后者仅 devDependencies),故手写小型 tokenizer(规则 9:代码确定性)。
  */
 
+import { parseGhostCardForm } from '@cindy/maker-shared/ghost-card-form';
 import {
   GHOST_CARD_ACTION_ID_RE,
   GHOST_CARD_HTML_MAX_BYTES,
@@ -134,7 +135,10 @@ function validateKeyframes(css: string, violated: { v: boolean }): void {
 }
 
 function escapeText(s: string): string {
-  return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+  // Preserve character references in text tokens. Never decode them before
+  // tokenization: encoded markup must remain inert text, including on re-sanitize.
+  return s.replace(/&(?!(?:#[0-9]+|#x[0-9a-f]+|[a-z][a-z0-9]*);)/gi, '&amp;')
+    .replace(/</g, '&lt;').replace(/>/g, '&gt;');
 }
 
 function escapeAttr(s: string): string {
@@ -233,6 +237,10 @@ function parseAttrs(raw: string): ParsedAttrs {
 /** 按标签挑出允许的属性并净化值;返回可直接拼接的属性串(含前导空格)或空串。 */
 function sanitizeAttrs(tag: string, attrs: ParsedAttrs, opts: CssOpts): string | null {
   const parts: string[] = [];
+  if (tag === 'div' && parseGhostCardForm(attrs['data-ghost-form'])) {
+    parts.push(` data-ghost-form="${escapeAttr(attrs['data-ghost-form'])}"`);
+    if (GHOST_CARD_ACTION_ID_RE.test(attrs['data-ghost-change'] || '')) parts.push(` data-ghost-change="${escapeAttr(attrs['data-ghost-change'])}"`);
+  }
   const style = attrs['style'];
   if (typeof style === 'string' && style.length > 0) {
     const clean = sanitizeCss(style, opts);
@@ -280,6 +288,7 @@ function sanitizeAttrs(tag: string, attrs: ParsedAttrs, opts: CssOpts): string |
   const actionValid = GHOST_CARD_ACTION_ID_RE.test(action);
   if (actionValid) {
     parts.push(` data-ghost-action="${escapeAttr(action)}"`);
+    if (attrs['data-ghost-submit'] === 'true') parts.push(' data-ghost-submit="true"');
     // data-ghost-prompt:该动作需要用户输入文字(宿主点击时弹输入框收集,
     // 文字随 card-action 的 prompt 字段回传)。属性值 = 输入框占位文案
     // (可空;超限整属性丢)。只在动作合法时放行——无动作的输入声明无意义。

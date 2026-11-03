@@ -6,28 +6,30 @@
 // @expo/fingerprint → 每个 commit 都改 runtimeVersion、破坏 OTA(实测);EXPO_PUBLIC_*
 // 是 JS bundle 层注入,不进 fingerprint。
 //
-// 端口策略(重要):本 app **不含 expo-dev-client**,装好的 debug 包只会连它编译时的默认
-// packager 端口(8081)。所以这里**坚持用 8081**,不会自动挪到 8082+ —— 否则 Metro 起在
-// 8083、app 还连 8081,反而制造"看着像新版、其实是旧 bundle"的坑(正是本工具要消灭的)。
+// 端口策略(重要):本 app **不含 expo-dev-client**,iOS debug 包按设备上的 RCT_jsLocation
+// 选 Metro,没设或那个 Metro 不响应时退回编译时的默认端口(8081)。所以这里**坚持用 8081**,
+// 不会自动挪到 8082+ —— 否则 Metro 起在 8083、app 还连 8081,反而制造"看着像新版、其实是
+// 旧 bundle"的坑(正是本工具要消灭的)。多设备并行见 docs/simulator-debugging.md 的 Parallel devices。
 //   - 8081 空闲 → 起在 8081。
 //   - 8081 已被**本 worktree** 占 → 说明 Metro 已在跑,直接 Fast Refresh 即可,不重开。
 //   - 8081 被**别的 worktree** 占 → 默认明确报错;传 `--takeover` 时仅在确认占用者是
 //     Cindy Metro(cwd 以 /apps/mobile 结尾 + 注入了源码指纹)后停止它。不要求对方
 //     磁盘上的 git 指纹仍与启动时一致;对方目录已删则视为孤儿 Metro,同样可接管。
 //     未知进程 / 非 Metro 即使带 `--takeover` 也 fail closed。
-//     确实要换端口请 `--port <p>` 显式指定(你需自行把模拟器里的 app 指过去,如 dev menu)。
+//     确实要换端口请 `--port <p>` 显式指定;它只起 Metro,还要给目标设备写 RCT_jsLocation。
 //
 // 用法(仓库根):
 //   pnpm mobile:sim:start                 # Global，起在 8081(app 默认连这个)
 //   pnpm mobile:sim:start:cn              # 中国大陆版；Windows 同时启动 cindy-api36
 //   pnpm mobile:sim:start -- --region=cn  # 中国大陆版
 //   pnpm mobile:sim:start -- --region=cn --takeover # 显式接管另一个 Metro
-//   pnpm mobile:sim:start -- --port 8082   # 显式换端口(透传给 expo;需自行把 app 指过去)
+//   pnpm mobile:sim:start -- --mock        # 免登录的 UI 模拟数据(docs/dev-rules/ui-mock-data.md)
+//   pnpm mobile:sim:start -- --port 8082   # 显式换端口;再给目标设备写 RCT_jsLocation(见 Parallel devices)
 //   pnpm mobile:sim:start -- --no-emulator # Windows 只启动 Metro
 
 import { execFileSync, spawn } from 'node:child_process';
-import { existsSync, readFileSync } from 'node:fs';
-import { parseProjectEnv } from '@expo/env';
+import { existsSync } from 'node:fs';
+import { applySimMockArg, readSimEnvironment } from './lib/sim-environment.mjs';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { mobileClientBundleEnv } from '../../../scripts/shared/client-endpoint-build-env.mjs';
@@ -58,7 +60,6 @@ import {
   clearMetroOwner,
   gitSourceIdentity,
   isMetroPid,
-  metroEnvironmentFingerprint,
   portInUse,
   probeMetroOwnership,
   terminateMetro,
@@ -68,7 +69,7 @@ import {
 const mobileDir = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const worktreeRoot = resolve(mobileDir, '../..');
 const DEFAULT_PORT = 8081;
-const { region, passthrough: regionPassthrough } = extractMobileDevRegionArgs(process.argv.slice(2));
+const { region, passthrough: regionPassthrough } = extractMobileDevRegionArgs(applySimMockArg(process.argv.slice(2)));
 const { takeover, passthrough: takeoverPassthrough } = extractSimTakeoverArgs(regionPassthrough);
 const androidArgs = extractAndroidSimulatorArgs(takeoverPassthrough);
 const portArgs = extractSimMetroPortArgs(androidArgs.passthrough, DEFAULT_PORT);
@@ -86,24 +87,8 @@ const buildEnv = withLocalMobileRegionConfig(
 const envResult = ensureMobileEnv({ mobileDir, authRegion: region, endpointEnv: buildEnv });
 console.log(formatMobileEnvStatus(envResult, worktreeRoot));
 const envChanged = envResult.created || envResult.addedKeys.length > 0;
-const projectEnv = parseProjectEnv(mobileDir, {
-  mode: process.env.NODE_ENV ?? 'development',
-  silent: true,
-  systemEnv: { ...process.env },
-});
-const loginScenario = process.env.EXPO_PUBLIC_LOGIN_SCENARIO?.trim()
-  ?? projectEnv.env.EXPO_PUBLIC_LOGIN_SCENARIO?.trim()
-  ?? '';
-const envFingerprint = metroEnvironmentFingerprint({
-  env: {
-    ...buildEnv,
-    EXPO_PUBLIC_LOGIN_SCENARIO: loginScenario,
-  },
-  files: {
-    '.env': readFileSync(envResult.envPath, 'utf8'),
-    'scripts/self-host-regions.json': readFileSync(localConfigResult.configPath, 'utf8'),
-  },
-});
+const { loginScenario, uiMock, envFingerprint } = readSimEnvironment(mobileDir, buildEnv);
+if (uiMock) console.log('› --mock:免登录的 UI 模拟数据(docs/dev-rules/ui-mock-data.md)');
 
 function git(args) {
   try {
@@ -143,8 +128,8 @@ if (portArgs.port === DEFAULT_PORT) {
       envChanged,
       currentSource: sourceIdentity,
       runningSource,
-      currentRegion: process.platform === 'win32' ? region : undefined,
-      runningRegion: process.platform === 'win32' ? ownership?.region : undefined,
+      currentRegion: region,
+      runningRegion: ownership?.region,
       currentEnvFingerprint: envFingerprint,
       runningEnvFingerprint: ownership?.envFingerprint,
       listener,

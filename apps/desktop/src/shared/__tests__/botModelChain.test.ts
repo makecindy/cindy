@@ -1,3 +1,4 @@
+import { serializeModelRoutes } from '@cindy/maker-shared/model-route';
 import { describe, expect, it } from 'vitest';
 
 import {
@@ -144,4 +145,24 @@ describe('Bot model chain', () => {
       ),
     ).toBeNull();
   });
+});
+
+// Regression: shared/local accounts used to collapse to the same candidate and lose their location.
+it('preserves locations through persistence and ordered fallback', () => {
+  const local = { harness: 'codex' as const, model: 'same-model', providerId: 'openai', effort: 'medium', fastMode: false };
+  const shared = { ...local, agentDeviceId: 'share:one' };
+  const other = { ...local, agentDeviceId: 'device-two' };
+  const chain = normalizeBotModelChain(JSON.parse(JSON.stringify([shared, local, other, shared])));
+  expect(chain).toEqual([shared, local, other]);
+  expect(nextBotModelRoute(chain, shared)).toEqual(local);
+  expect(nextBotModelRoute(chain, local)).toEqual(other);
+  expect(nextBotModelRoute(chain, other)).toBeNull();
+});
+
+it('round trips remote forms without exposing a same-named local source to older peers', () => {
+  const route = { harness: 'codex' as const, model: 'same-model', providerId: 'openai', effort: '', fastMode: false, agentDeviceId: 'share:one' };
+  const wire = JSON.parse(serializeModelRoutes([route]));
+  expect(wire[0].providerId).not.toBe('openai');
+  delete wire[0].agentDeviceId; // old editors keep providerId but strip unknown fields
+  expect(normalizeBotModelChain(wire)).toEqual([route]);
 });

@@ -1,8 +1,18 @@
 import { describe, expect, it } from 'vitest';
 
-import { buildAutoTitlePrompt } from '../title-prompt.js';
+import { buildAutoTitlePrompt, buildRegenerateTitlePrompt } from '../title-prompt.js';
 
 describe('buildAutoTitlePrompt', () => {
+  it('自动命名和 AI 重命名都要求最多 40 个字符', () => {
+    for (const prompt of [
+      buildAutoTitlePrompt('研究 Deepseek Harness', 'zh-CN'),
+      buildRegenerateTitlePrompt(null, 'User: 研究 Deepseek Harness', 'zh-CN'),
+    ]) {
+      expect(prompt).toContain('Use at most 40 characters.');
+      expect(prompt).not.toContain('Use at most 20 characters.');
+    }
+  });
+
   it('wraps the user message inside delimiters as quoted data', () => {
     const prompt = buildAutoTitlePrompt('帮我排查登录失败', 'zh-CN');
     expect(prompt).toContain('<user_message>\n帮我排查登录失败\n</user_message>');

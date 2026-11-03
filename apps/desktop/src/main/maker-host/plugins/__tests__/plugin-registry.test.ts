@@ -60,7 +60,6 @@ function knownProviderNames(): KnownProviderName[] {
 function realBuiltinProviderNames(): KnownProviderName[] {
   const providers = createLiziMcpProviders({
     android: {} as never,
-    iosSimulator: {} as never,
     browser: {} as never,
     computer: {} as never,
     feishuBot: {} as never,
@@ -69,7 +68,6 @@ function realBuiltinProviderNames(): KnownProviderName[] {
     scheduler: {} as never,
     ssh: {} as never,
     memory: {} as never,
-    contacts: {} as never,
     docs: {} as never,
     xdtHelper: {} as never,
     orca: {} as never,
@@ -118,28 +116,6 @@ describe('PluginRegistry — scoped priority', () => {
     const state = await registry.getEnableState('android', workingDir);
     expect(state.effectiveEnabled).toBe(false);
     expect(state.projectOverride).toBeNull();
-  });
-
-  it('hides the embedded iOS Simulator from Tools and ignores leftover Tools settings at runtime freeze', async () => {
-    expect(HOSTED_ELSEWHERE_PLUGIN_IDS.has('ios-simulator')).toBe(true);
-    expect(registry.isEnabled('ios-simulator')).toBe(true);
-    expect(registry.isEnabled('ios-simulator', workingDir)).toBe(true);
-    expect((await registry.listPlugins(workingDir)).map((item) => item.id)).not.toContain(
-      'ios-simulator',
-    );
-    expect((await registry.listPlugins()).map((item) => item.id)).not.toContain('ios-simulator');
-    expect(registry.getDisabledRuntimePluginIds(workingDir)).not.toContain('ios-simulator');
-
-    writeProjectSettings(workingDir, { 'ios-simulator': false });
-    registry = createRegistry();
-
-    // Leftover xdtMaker.builtinTools['ios-simulator'] still parses, but must not
-    // freeze Codex/Pi MCP off — live access is the Plugins-page gate.
-    expect(registry.isEnabled('ios-simulator', workingDir)).toBe(false);
-    expect(registry.getDisabledRuntimePluginIds(workingDir)).not.toContain('ios-simulator');
-    expect((await registry.listPlugins(workingDir)).map((item) => item.id)).not.toContain(
-      'ios-simulator',
-    );
   });
 
   it('returns true by default with workingDir', () => {
@@ -384,7 +360,7 @@ describe('PluginRegistry — scoped priority', () => {
     const list = await registry.listPlugins(workingDir, true);
     expect(list.find((item) => item.id === 'browser')).toMatchObject({ effectiveEnabled: false });
     expect(list.find((item) => item.id === 'scheduler')).toMatchObject({ essential: true, effectiveEnabled: true });
-    expect(list.some((item) => item.id === 'contacts')).toBe(true);
+    expect(list.some((item) => item.id === 'android')).toBe(true);
     expect((await registry.listPlugins(workingDir)).some((item) => item.id === 'scheduler')).toBe(false);
   });
 
@@ -432,7 +408,6 @@ describe('PluginRegistry — scoped priority', () => {
     });
     expect(list.find((item) => item.id === 'android')).toBeUndefined();
     expect(list.find((item) => item.id === 'computer')).toBeUndefined();
-    expect(list.find((item) => item.id === 'contacts')).toBeUndefined();
     expect(list.find((item) => item.id === 'ios-simulator')).toBeUndefined();
   });
 

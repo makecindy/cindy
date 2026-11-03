@@ -26,7 +26,6 @@ export interface ExtraDirsButtonProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   panel: ReactNode;
-  autoFocusTarget?: () => HTMLElement | null;
   disabled?: boolean;
   dense?: boolean;
   visualVariant?: 'default' | 'create-agent';
@@ -42,7 +41,6 @@ export function ExtraDirsButton({
   open,
   onOpenChange,
   panel,
-  autoFocusTarget,
   disabled,
   dense = false,
   visualVariant = 'default',
@@ -58,10 +56,7 @@ export function ExtraDirsButton({
       panelWidth={480}
       panelClassName="p-0"
       panelAriaLabel={t('extraDirs.menuAria')}
-      endBg="var(--cmd-palette-bg)"
-      endBorderColor="var(--cmd-palette-border)"
       wrapperClassName="shrink-0"
-      autoFocusTarget={autoFocusTarget}
       trigger={
         <Tip
           text={count === 0 ? t('extraDirs.tooltipEmpty') : t('extraDirs.tooltipCount', { count })}

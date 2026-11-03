@@ -2,6 +2,7 @@
 import { act, createElement } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { HomeViewSession } from '@/session/homeViewSession';
 import { useConversationSearch } from '@/session/useConversationSearch';
 import {
   searchConversationsAcrossDevices,
@@ -27,9 +28,10 @@ const invoke = vi.fn();
 Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
 let root: Root;
 let search: ReturnType<typeof useConversationSearch>;
-function Probe({ count = 1, reachable = true }: { count?: number; reachable?: boolean }) {
+function Probe({ count = 1, reachable = true, retainedState }: { count?: number; reachable?: boolean; retainedState?: HomeViewSession }) {
   search = useConversationSearch({
     enabled: true,
+    retainedState,
     origins: [{ deviceId: 'mac', deviceName: 'Mac', reachable }],
     projects: [
       {
@@ -98,6 +100,24 @@ async function start() {
   });
 }
 describe('mobile search scope refresh', () => {
+  it('keeps the real search query and filters when Home moves between hosts', async () => {
+    const retainedState = new HomeViewSession();
+    vi.mocked(searchConversationsAcrossDevices).mockResolvedValue(page);
+    await act(async () => root.render(<Probe key="page" retainedState={retainedState} />));
+    act(() => {
+      search.setQuery('needle');
+      search.setSortBy('activityDesc');
+      search.setStatusFilter('active');
+      search.setProjectSelection(['mac:/repo']);
+    });
+    await act(async () => root.render(<Probe key="sidebar" retainedState={retainedState} />));
+    expect(search.query).toBe('needle');
+    expect(search.sortBy).toBe('activityDesc');
+    expect(search.statusFilter).toBe('active');
+    expect(search.projectSelection).toEqual(['mac:/repo']);
+    await act(async () => vi.advanceTimersByTimeAsync(250));
+    expect(search.results.map((result) => result.session.id)).toEqual(['body-match']);
+  });
   it('keeps the indexed page visible when project counts and object references refresh', async () => {
     await start();
     expect(search.status).toBe('ready');

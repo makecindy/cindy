@@ -1,5 +1,6 @@
 import { app } from 'electron';
 import path from 'node:path';
+import { readCustomWallpaperUrl } from './custom-wallpaper-settings.js';
 
 import {
   DEFAULT_APPEARANCE_SETTINGS,
@@ -30,28 +31,36 @@ const store = createOverrideSettingsFile<AppearanceSettings>({
 });
 
 export function readAppearanceSettings(): AppearanceSettings {
-  return store.read();
+  const value = store.read();
+  const customWallpaperUrl = readCustomWallpaperUrl();
+  return {
+    ...value,
+    customWallpaperUrl,
+    wallpaperId: value.wallpaperId === 'custom' && !customWallpaperUrl ? 'none' : value.wallpaperId,
+  };
 }
 
 export function readAppearanceSettingsState(): OverrideSettingsState<AppearanceSettings> {
-  return store.readState();
+  return { ...store.readState(), value: readAppearanceSettings() };
 }
 
 export async function writeAppearanceSettingsPatch(
   patch: AppearanceOverrides,
 ): Promise<AppearanceSettings> {
   await store.writePatchAtomic(patch);
-  return store.read();
+  return readAppearanceSettings();
 }
 
 export async function updateAppearanceSettingsAtomic(
   updater: (current: AppearanceSettings) => AppearanceOverrides,
 ): Promise<AppearanceSettings> {
-  return store.updateAtomic((current) => updater(current.value));
+  await store.updateAtomic((current) => updater(current.value));
+  return readAppearanceSettings();
 }
 
 export async function resetAppearanceSettings(): Promise<AppearanceSettings> {
-  return store.resetAtomic();
+  await store.resetAtomic();
+  return readAppearanceSettings();
 }
 
 export const __testing = {

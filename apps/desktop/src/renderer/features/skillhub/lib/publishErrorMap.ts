@@ -7,6 +7,7 @@
  */
 
 import { i18n } from '@/i18n';
+import { publishErrorDetail } from '../../../../shared/skillhubPublishErrors';
 
 export type PublishActionType =
   | 'retry'
@@ -24,6 +25,7 @@ export interface PublishErrorAction {
 export interface PublishErrorCopy {
   title: string;
   message: string;
+  detail?: string;
   primaryAction: PublishErrorAction;
   secondaryAction?: PublishErrorAction;
 }
@@ -35,7 +37,8 @@ type PublishActionLabelKey =
   | 'rename'
   | 'fix'
   | 'republish'
-  | 'abandonPending';
+  | 'abandonPending'
+  | 'editPublication';
 
 interface PublishErrorActionSpec {
   labelKey: PublishActionLabelKey;
@@ -61,6 +64,23 @@ const errorMap: Record<SkillhubPublishErrorCode, PublishErrorSpec> = {
   NAME_TAKEN: {
     primaryAction: { labelKey: 'rename', type: 'rename' },
   },
+  SKILL_DELETED: {
+    primaryAction: { labelKey: 'rename', type: 'rename' },
+    secondaryAction: CLOSE_ACTION,
+  },
+  SKILL_UNPUBLISHED: {
+    primaryAction: { labelKey: 'republish', type: 'republish' },
+    secondaryAction: CLOSE_ACTION,
+  },
+  AUTH_REQUIRED: { primaryAction: CLOSE_ACTION },
+  PERMISSION_DENIED: { primaryAction: CLOSE_ACTION },
+  INVALID_PARAMS: { primaryAction: { labelKey: 'editPublication', type: 'republish' } },
+  SKILL_FILE_TOO_LARGE: { primaryAction: CLOSE_ACTION },
+  NETWORK_ERROR: { primaryAction: RETRY_ACTION, secondaryAction: CLOSE_ACTION },
+  RATE_LIMITED: { primaryAction: RETRY_ACTION, secondaryAction: CLOSE_ACTION },
+  SERVICE_UNAVAILABLE: { primaryAction: RETRY_ACTION, secondaryAction: CLOSE_ACTION },
+  PUBLISH_BUSY: { primaryAction: CLOSE_ACTION },
+  REQUEST_REJECTED: { primaryAction: { labelKey: 'editPublication', type: 'republish' }, secondaryAction: CLOSE_ACTION },
   INVALID_DEPT: {
     primaryAction: CLOSE_ACTION,
   },
@@ -76,7 +96,7 @@ const errorMap: Record<SkillhubPublishErrorCode, PublishErrorSpec> = {
     secondaryAction: CLOSE_ACTION,
   },
   VERSION_RACE: {
-    primaryAction: RETRY_ACTION,
+    primaryAction: { labelKey: 'editPublication', type: 'republish' },
     secondaryAction: CLOSE_ACTION,
   },
   CHECKSUM_MISMATCH: {
@@ -119,7 +139,7 @@ function toAction(spec: PublishErrorActionSpec): PublishErrorAction {
   };
 }
 
-export function getPublishErrorCopy(errorCode: SkillhubPublishErrorCode): PublishErrorCopy {
+export function getPublishErrorCopy(errorCode: SkillhubPublishErrorCode, message?: string): PublishErrorCopy {
   const spec = errorMap[errorCode];
   if (!spec) {
     return {
@@ -132,6 +152,7 @@ export function getPublishErrorCopy(errorCode: SkillhubPublishErrorCode): Publis
   return {
     title: i18n.t(`skillhub.publishError.${errorCode}.title`),
     message: i18n.t(`skillhub.publishError.${errorCode}.message`),
+    detail: publishErrorDetail(errorCode, message),
     primaryAction: toAction(spec.primaryAction),
     secondaryAction: spec.secondaryAction ? toAction(spec.secondaryAction) : undefined,
   };

@@ -11,6 +11,13 @@
 
 import type { BotSessionOwner } from '@/features/cc-agent/lib/projectGrouping';
 import type { BotProfile } from './botStore';
+import type { RemoteBot } from './remoteBotRoster';
+
+/** The durable registry has exactly one canonical link; kind is only presentation. */
+export function canonicalBotSession<T extends { role?: unknown }>(bot: { sessions: readonly T[] }): T | undefined {
+  const matches = bot.sessions.filter((session) => session.role === 'canonical');
+  return matches.length === 1 ? matches[0] : undefined;
+}
 
 /**
  * Find the Bot that owns a real Cindy Session through the projected
@@ -27,23 +34,204 @@ export function findBotProfileForSession(
   );
 }
 
-/**
- * Resolve the public Bot route for a notification or other session-only entry.
- * The stable main task stays on the short Bot route; child and historical tasks
- * retain their own session id so opening a notification never loses context.
+/** Destination of a session-only entry and ownership of its error acknowledgement. */
+export interface BotSessionEntryTarget {
+  route: string;
+  /** The entry navigator disposes the clicked card once this route has committed. */
+  consumesAlert: boolean;
+  /** The route's own ownership gate disposes it instead, given the click id as route state. */
+  gateConsumesAlert?: boolean;
+}
+
+/** The companion's main chat keeps its chat entry; every other task opens its ordinary page.
+ * The task page owns error recovery, so navigation must not consume its alert.
  */
 export function botRouteForOwnedSession(
   profiles: readonly BotProfile[],
   sessionId: string,
-): string | null {
+): BotSessionEntryTarget | null {
   const bot = findBotProfileForSession(profiles, sessionId);
   if (!bot) return null;
-  const canonicalSessionId = bot.sessions.find(
-    (session) => session.role === 'canonical' || session.kind === 'chat',
-  )?.id;
-  return canonicalSessionId === sessionId
-    ? `/bots/${encodeURIComponent(bot.id)}`
-    : `/bots/${encodeURIComponent(bot.id)}/session/${encodeURIComponent(sessionId)}`;
+  const botRoute = `/bots/${encodeURIComponent(bot.id)}`;
+  const canonicalSessionId = canonicalBotSession(bot)?.id;
+  // Keep the original id even if the cached link becomes history before the click lands.
+  if (canonicalSessionId === sessionId) return { route: `${botRoute}/session/${encodeURIComponent(sessionId)}`, consumesAlert: false };
+  return { route: `/cc-agent/${encodeURIComponent(sessionId)}`, consumesAlert: false };
+}
+
+/**
+ * A companion whose main computer is another device: its chat opens on that device's
+ * companion page. Only its main chat is projected here, so that is all an entry can name.
+ */
+export function remoteBotRouteForSession(
+  remoteBots: readonly Pick<RemoteBot, 'id' | 'deviceId' | 'sessionId'>[],
+  sessionId: string,
+): BotSessionEntryTarget | null {
+  const bot = remoteBots.find((candidate) => candidate.sessionId === sessionId);
+  if (!bot) return null;
+  return {
+    route: `/bots/remote/${encodeURIComponent(bot.deviceId)}/${encodeURIComponent(bot.id)}/session/${encodeURIComponent(sessionId)}`,
+    consumesAlert: false,
+  };
+}
+
+type LoadedBotProfilesReader = () => readonly BotProfile[] | null;
+let loadedBotProfilesReader: LoadedBotProfilesReader | null = null;
+
+/**
+ * botStore registers a reader for its loaded projection when its module loads, so
+ * route helpers in `lib/` (notification clicks, sidebar) read it synchronously without
+ * importing the store graph — and without a dynamic import on a click, which made the
+ * shared-task dialog tests time out on slow CI runners.
+ */
+export function registerLoadedBotProfilesReader(reader: LoadedBotProfilesReader | null): void {
+  loadedBotProfilesReader = reader;
+}
+
+/** The loaded Bot profiles, or null while the store is not loaded for this account. */
+export function readLoadedBotProfiles(): readonly BotProfile[] | null {
+  return loadedBotProfilesReader?.() ?? null;
+}
+
+export interface BotSessionEntryRouteDeps {
+  readProfiles: () => readonly BotProfile[];
+  /** Loads the current owner's profiles; `refresh` re-reads an already loaded projection. */
+  loadProfiles: (refresh: boolean) => Promise<readonly BotProfile[]>;
+}
+
+/**
+ * Resolve a session-only entry such as a notification click. The in-memory
+ * projection is only kept fresh while a Bots view is mounted, so a click can
+ * arrive before it was ever loaded for this account, or after a new Bot session
+ * was linked. The session row cannot tell: delegated tasks keep
+ * `source: 'desktop'` and their owner lives only in `bot_session_links`. So a
+ * session the projection does not know always re-reads it once.
+ */
+export async function resolveBotRouteForSessionEntry(
+  sessionId: string,
+  deps: BotSessionEntryRouteDeps,
+): Promise<BotSessionEntryTarget | null> {
+  const current = deps.readProfiles();
+  if (findBotProfileForSession(current, sessionId)) return botRouteForOwnedSession(current, sessionId);
+  const profiles = await deps.loadProfiles(true).catch(() => []);
+  return botRouteForOwnedSession(profiles, sessionId);
+}
+
+export interface SessionEntryNavigatorDeps {
+  /** Compare an explicit link device with this computer before consulting local ownership. */
+  isRemoteDevice?: (deviceId: string) => Promise<boolean>;
+  /** The target from the projection already in memory; null when it does not know the Session. */
+  readKnownBotRoute: (sessionId: string) => BotSessionEntryTarget | null;
+  /** Re-reads the projection for a Session it did not know (see resolveBotRouteForSessionEntry). */
+  resolveBotRoute: (sessionId: string) => Promise<BotSessionEntryTarget | null>;
+  /** `islandEntryId` is handed to a route whose gate disposes the card (gateConsumesAlert). */
+  openBotRoute: (route: string, islandEntryId?: string, messageClientId?: string, sessionId?: string) => void;
+  captureOwner?: () => () => boolean;
+  /** Asks main to dispose the card of this island click (see BotSessionEntryTarget). */
+  consumeAlert: (sessionId: string, islandEntryId: string) => void;
+  /** `isLatest` lets the ordinary path drop its own late async route result too. */
+  openOrdinary: (sessionId: string, messageClientId: string | undefined, isLatest: () => boolean, deviceId?: string) => void;
+}
+
+export interface SessionEntryNavigator {
+  (sessionId: string, messageClientId?: string, islandEntryId?: string, deviceId?: string): void;
+  /** Report every location the router has committed (`pathname + search`). */
+  locationCommitted: (path: string) => void;
+}
+
+/**
+ * Session entries (notification clicks, task deep links) open at once from the
+ * Bot projection already in memory. A Session it does not know opens on its
+ * ordinary task page right away while the projection is re-read in the
+ * background; a re-read that finds a Bot page moves this entry there, unless the
+ * user has meanwhile gone anywhere other than that ordinary page. Waiting for
+ * the re-read first made every ordinary task click wait on the whole Bot list.
+ * Only the latest entry may navigate, so a slow lookup for an earlier click can
+ * never override a newer one.
+ *
+ * An Agent Island click (`islandEntryId`) into a target without a disposal
+ * control asks main to dispose that card only once the router has committed the
+ * target location: immediately when it is already the committed location,
+ * otherwise on the next committed location if it is the target. A newer entry,
+ * the user moving on before the target is known, or a commit to any other
+ * location (redirect, another navigation) drops it, so the card stays and a
+ * later click can still dispose it.
+ */
+export function createSessionEntryNavigator(
+  deps: SessionEntryNavigatorDeps,
+): SessionEntryNavigator {
+  let sequence = 0;
+  let committedPath: string | null = null;
+  // Every location committed since the latest entry opened; a correction is valid only while
+  // all of them are the entry's own landing (ordinary page or the Bot target), so leaving and
+  // coming back never counts as "stayed".
+  let committedSinceOpen = new Set<string>();
+  let pending: { entry: number; sessionId: string; islandEntryId: string; route: string } | null = null;
+  const openBotTarget = (entry: number, sessionId: string, target: BotSessionEntryTarget, disposalId: string | undefined, messageClientId?: string) => {
+    if (target.consumesAlert && disposalId) {
+      if (committedPath === target.route) {
+        deps.consumeAlert(sessionId, disposalId);
+      } else {
+        pending = { entry, sessionId, islandEntryId: disposalId, route: target.route };
+      }
+    }
+    try {
+      deps.openBotRoute(target.route, target.gateConsumesAlert ? disposalId : undefined, messageClientId, sessionId);
+    } catch (error) {
+      if (pending?.entry === entry) pending = null;
+      throw error;
+    }
+  };
+  const open = (sessionId: string, messageClientId?: string, islandEntryId?: string, deviceId?: string) => {
+    const entry = ++sequence;
+    pending = null;
+    committedSinceOpen = new Set();
+    const ownerCurrent = deps.captureOwner?.() ?? (() => true);
+    const isLatest = () => sequence === entry && ownerCurrent();
+    if (deviceId && deps.isRemoteDevice) {
+      void deps.isRemoteDevice(deviceId).then((remote) => {
+        if (!isLatest() || committedSinceOpen.size > 0) return;
+        if (remote) deps.openOrdinary(sessionId, messageClientId, isLatest, deviceId);
+        else openLocal();
+      }).catch(() => undefined);
+      return;
+    }
+    openLocal();
+    function openLocal() {
+      const known = deps.readKnownBotRoute(sessionId);
+      // Background tasks keep their ordinary page with message anchors and visible-session reporting.
+      if (known && !known.route.startsWith('/cc-agent/')) {
+        openBotTarget(entry, sessionId, known, islandEntryId, messageClientId);
+        return;
+      }
+      let movedToBotPage = false;
+      deps.openOrdinary(sessionId, messageClientId, () => isLatest() && !movedToBotPage && committedSinceOpen.size === 0);
+      if (known) return;
+      const ordinaryRoute = `/cc-agent/${encodeURIComponent(sessionId)}`;
+      void deps.resolveBotRoute(sessionId).then((target) => {
+        if (!isLatest() || !target || target.route.startsWith('/cc-agent/')) return;
+        // Correct only this entry's own landing: the ordinary page, or the Bot page the ordinary
+        // path already resolved to. Any other committed location means the user moved on.
+        for (const path of committedSinceOpen) {
+          if (path !== ordinaryRoute && path !== target.route) return;
+        }
+        movedToBotPage = true;
+        openBotTarget(entry, sessionId, target, islandEntryId, messageClientId);
+      }).catch(() => undefined);
+    }
+  };
+  return Object.assign(open, {
+    locationCommitted: (path: string) => {
+      committedPath = path;
+      committedSinceOpen.add(path);
+      const waiting = pending;
+      if (!waiting) return;
+      pending = null;
+      if (waiting.entry === sequence && waiting.route === path) {
+        deps.consumeAlert(waiting.sessionId, waiting.islandEntryId);
+      }
+    },
+  });
 }
 
 export function buildBotSessionOwners(

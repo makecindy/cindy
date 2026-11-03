@@ -1,3 +1,4 @@
+import { Button } from '@/components/ui/button';
 /**
  * SelectionQuoteButton — 聊天消息流的"选中文字 → 添加到对话"浮动按钮。
  *
@@ -17,7 +18,7 @@
  *   文件相对路径复用同一交互,引用随消息携带来源文件。
  */
 
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { MessageSquarePlus } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
@@ -41,8 +42,7 @@ const BUTTON_MIN_TOP_PX = 44;
 // The fixed-position element's auto width is otherwise shrink-to-fit from its
 // untransformed `left` edge. Keep a full pill-width clearance on both sides:
 // the visual centering transform does not participate in that calculation.
-const BUTTON_MIN_X_PX = 100;
-const BUTTON_RIGHT_MARGIN_PX = 100;
+const BUTTON_EDGE_MARGIN_PX = 8;
 const FLOATING_QUOTE_DISABLED_SELECTOR = '[data-selection-floating-quote-disabled]';
 
 interface RectBounds {
@@ -153,7 +153,9 @@ export function SelectionQuoteButton({
   sourcePath,
   getQuoteText,
   getQuoteMetadata,
+  onAskInSideChat,
 }: {
+  onAskInSideChat?: (quote: string) => Promise<boolean>;
   sessionId: string;
   /**
    * 引用来源文件(workdir 相对路径)。文件浏览器宿主传入;聊天消息流不传。
@@ -175,6 +177,12 @@ export function SelectionQuoteButton({
 }) {
   const { t } = useTranslation();
   const [anchor, setAnchor] = useState<SelectionAnchor | null>(null);
+  const [openingSideChat, setOpeningSideChat] = useState(false);
+  const pillRef = useRef<HTMLDivElement>(null);
+  const [pillWidth, setPillWidth] = useState(200);
+  useLayoutEffect(() => {
+    if (anchor && pillRef.current) setPillWidth(pillRef.current.getBoundingClientRect().width);
+  }, [anchor, openingSideChat, onAskInSideChat, t]);
   const anchorRef = useRef<SelectionAnchor | null>(null);
   anchorRef.current = anchor;
 
@@ -265,14 +273,13 @@ export function SelectionQuoteButton({
   };
 
   return createPortal(
-    <button
-      type="button"
+    <div
+      ref={pillRef}
       // mousedown 先于 click 触发浏览器清选区;preventDefault 保住选区与按钮。
       onMouseDown={(e) => e.preventDefault()}
-      onClick={handleAdd}
-      className="fixed z-[60] flex w-max items-center gap-2.5 whitespace-nowrap rounded-full px-3 py-1.5 text-12 shadow-[var(--shadow-menu)]"
+      className="fixed z-[60] flex w-max max-w-[calc(100vw-16px)] flex-wrap justify-center gap-1 rounded-full bg-popover p-1 shadow-[var(--shadow-menu)]"
       style={{
-        left: clamp(anchor.x, BUTTON_MIN_X_PX, window.innerWidth - BUTTON_RIGHT_MARGIN_PX),
+        left: clamp(anchor.x, pillWidth / 2 + BUTTON_EDGE_MARGIN_PX, window.innerWidth - pillWidth / 2 - BUTTON_EDGE_MARGIN_PX),
         top:
           anchor.placement === 'above'
             ? Math.max(anchor.y - BUTTON_GAP_PX, BUTTON_MIN_TOP_PX)
@@ -284,14 +291,25 @@ export function SelectionQuoteButton({
                 ),
               ),
         transform: anchor.placement === 'above' ? 'translate(-50%, -100%)' : 'translate(-50%, 0)',
-        backgroundColor: 'var(--surface-elevated)',
-        border: '1px solid var(--border-default)',
-        color: 'var(--text-primary)',
       }}
     >
-      <MessageSquarePlus className="h-3.5 w-3.5" />
-      {t('chat.quote.addToChat')}
-    </button>,
+      <Button variant="secondary" size="sm" compact type="button" onClick={handleAdd}>
+        <MessageSquarePlus className="h-3.5 w-3.5" />
+        {t('chat.quote.addToChat')}
+      </Button>
+      {onAskInSideChat && <Button variant="secondary" size="sm" compact type="button" disabled={openingSideChat}
+        onClick={async () => {
+          setOpeningSideChat(true);
+          try {
+            if (await onAskInSideChat(anchor.text.slice(0, QUOTE_MAX_CHARS))) {
+              window.getSelection()?.removeAllRanges();
+              setAnchor(null);
+            }
+          } finally { setOpeningSideChat(false); }
+        }}>
+        {t(openingSideChat ? 'chat.sideChat.opening' : 'chat.sideChat.title')}
+      </Button>}
+    </div>,
     document.body,
   );
 }

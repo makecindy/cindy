@@ -148,7 +148,7 @@ describe('SkillPublishService', () => {
       name: 'read-only',
       isFirstPublish: true,
       visibility: 'PUBLIC',
-    })).resolves.toEqual({ success: false, errorCode: 'CANCELLED' });
+    })).resolves.toEqual({ success: false, errorCode: 'AUTH_REQUIRED' });
   });
 
   it('rejects private organization publishing before packing or network access', async () => {
@@ -158,13 +158,17 @@ describe('SkillPublishService', () => {
     serverPolicy.allowedVisibilities = ['PUBLIC', 'DEPARTMENT_SCOPED'];
     const { SkillPublishService } = await import('../publishService');
     const service = new SkillPublishService();
+    const onProgress = vi.fn();
 
     await expect(service.publish({
       absolutePath: '/tmp/skill',
       name: 'org-private',
       isFirstPublish: true,
       visibility: 'PRIVATE',
-    })).resolves.toEqual({ success: false, errorCode: 'INVALID_VISIBILITY' });
+    }, onProgress)).resolves.toEqual({ success: false, errorCode: 'INVALID_VISIBILITY' });
+    expect(onProgress).toHaveBeenCalledWith(expect.objectContaining({
+      phase: 'failed', errorCode: 'INVALID_VISIBILITY', message: '',
+    }));
   });
 
   it('allows version publishes without category metadata and omits category fields from commit', async () => {
@@ -772,9 +776,26 @@ describe('SkillPublishService', () => {
   });
 
   it.each([
-    ['NAME_TAKEN', 409, '名字已被占用'],
-    ['INVALID_VISIBILITY', 400, '当前组织暂不支持组织或私有可见性，请选择公开发布'],
-  ])('maps preserved Hub business error %s to an actionable publish error', async (errorCode, statusCode, message) => {
+    ['NAME_TAKEN', 409, '名字已被占用', 'NAME_TAKEN'],
+    ['SKILL_DELETED', 409, '同名 Skill 已删除，但名称仍被占用', 'SKILL_DELETED'],
+    ['FORBIDDEN', 403, '已删除的 Skill 不能继续发布', 'SKILL_DELETED'],
+    ['FORBIDDEN', 403, '当前账号无权发布', 'PERMISSION_DENIED', ''],
+    ['HTTP_403', 403, 'private diagnostic', 'PERMISSION_DENIED', ''],
+    ['HTTP_400', 400, 'private diagnostic', 'REQUEST_REJECTED', ''],
+    ['NOT_AUTHOR', 403, 'private diagnostic', 'NOT_AUTHOR', ''],
+    ['UNAUTHORIZED', 401, 'private diagnostic', 'AUTH_REQUIRED', ''],
+    ['STORAGE_UNAVAILABLE', 503, 'private diagnostic', 'SERVICE_UNAVAILABLE', ''],
+    ['RATE_LIMITED', 429, 'private diagnostic', 'RATE_LIMITED', ''],
+    ['MANIFEST_INVALID', 400, '缺少 description', 'MANIFEST_INVALID'],
+    ['INVALID_PARAMS', 400, '包含不存在的平台标签', 'INVALID_PARAMS'],
+    ['SKILL_FILE_TOO_LARGE', 413, 'SKILL.md 超过 2 MiB', 'SKILL_FILE_TOO_LARGE'],
+    ['SKILL_HUB_READ_ONLY', 403, '当前组织仅支持读取', 'SKILL_HUB_READ_ONLY', ''],
+    ['INVALID_VISIBILITY', 400, '当前组织暂不支持组织或私有可见性，请选择公开发布', 'INVALID_VISIBILITY'],
+    ['FUTURE_BUSINESS_ERROR', 422, '需要修改某个字段', 'REQUEST_REJECTED'],
+  ].flatMap(([wireCode, statusCode, message, expectedCode, expectedMessage]) => ['init', 'commit'].map((stage) => ({
+    wireCode: String(wireCode), statusCode: Number(statusCode), message: String(message), expectedCode: String(expectedCode), stage,
+    expectedMessage: expectedMessage === undefined ? String(message) : String(expectedMessage),
+  }))))('preserves $wireCode and only its public reason during $stage', async ({ wireCode, statusCode, message, expectedCode, expectedMessage, stage }) => {
     writeApiKeyFile();
     fs.mkdirSync('/tmp/xdt-publish-service-test/skill', { recursive: true });
     fs.writeFileSync(
@@ -805,6 +826,9 @@ describe('SkillPublishService', () => {
     });
     vi.mocked(net.fetch).mockResolvedValue({ ok: true, status: 200 } as Response);
     vi.mocked(serverApiFetch).mockImplementation(async (apiPath: string) => {
+      if (apiPath === `/api/skills-hub/skills/publish/${stage}`) {
+        throw new ServerApiError(wireCode, statusCode, message);
+      }
       if (apiPath === '/api/skills-hub/skills/publish/init') {
         return {
           nextVersion: '1.0.0',
@@ -812,9 +836,7 @@ describe('SkillPublishService', () => {
           uploadUrl: 'https://oss.example.com/skills/lark-task.zip',
         };
       }
-      if (apiPath === '/api/skills-hub/skills/publish/commit') {
-        throw new ServerApiError(errorCode, statusCode, message);
-      }
+
       throw new Error(`unexpected api path ${apiPath}`);
     });
 
@@ -834,8 +856,8 @@ describe('SkillPublishService', () => {
       (event) => events.push(event),
     );
 
-    expect(result).toEqual({ success: false, errorCode });
-    expect(events.at(-1)).toMatchObject({ phase: 'failed', errorCode });
+    expect(result).toEqual({ success: false, errorCode: expectedCode, error: expectedMessage });
+    expect(events.at(-1)).toMatchObject({ phase: 'failed', errorCode: expectedCode, message: expectedMessage });
   });
 
   it('emits a failed progress event when packing throws unexpectedly', async () => {

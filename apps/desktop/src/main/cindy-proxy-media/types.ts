@@ -93,7 +93,7 @@ export interface GatewayImageGenerateParams {
   model: string;
   prompt: string;
   size?: string;
-  quality?: 'low' | 'medium' | 'high';
+  quality?: string;
   n?: number;
 }
 
@@ -103,7 +103,7 @@ export interface GatewayImageEditParams {
   prompt: string;
   imagePaths: string[];
   size?: string;
-  quality?: 'low' | 'medium' | 'high';
+  quality?: string;
   n?: number;
 }
 

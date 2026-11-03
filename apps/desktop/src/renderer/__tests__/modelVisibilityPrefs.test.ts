@@ -110,6 +110,200 @@ beforeEach(() => {
   vi.resetModules();
 });
 
+describe('shared origin readiness', () => {
+  it('does not publish transient pending while a reloaded renderer waits for its owner lock', async () => {
+    memStorage.setItem('xdt:modelVisibilityPrefs:v1.migration-complete.owner.owner-a', '1');
+    memStorage.setItem('xdt:modelVisibilityPrefs:v1.owner.owner-a', JSON.stringify({ 'pi:xd:kept': false }));
+    const locks = new Locks();
+    vi.stubGlobal('navigator', { locks });
+    const release = locks.hold();
+    const prefs = await loadModule();
+    const initialization = prefs.setModelVisibilityOwner('owner-a', 1, 'cloud');
+    await Promise.resolve();
+    expect(prefs.isModelEnabled('pi', 'xd', { id: 'kept' })).toBe(false);
+    expect(syncModelVisibility).not.toHaveBeenCalled();
+    release();
+    await initialization;
+    expect(syncModelVisibility).toHaveBeenCalled();
+    expect(syncModelVisibility).not.toHaveBeenCalledWith('owner-a', 1,
+      expect.anything(), expect.objectContaining({ pending: true }));
+  });
+
+  it('does not repeat owner claims for preference operations while legacy storage stays absent', async () => {
+    setOwnerClaim('owner-a', 1, true, false);
+    ownerClaim.profileOrigin = 'existing';
+    memStorage.setItem('xdt:modelVisibilityPrefs:v1.local-adoption.owner.owner-a', '1');
+    const claim = vi.spyOn(window.electronAPI.maker, 'claimLegacyModelVisibilityOwner');
+    const prefs = await loadModuleForOwner();
+    await prefs.migrateModelVisibilityDefaults('owner-a', 1, []);
+    claim.mockClear();
+    expect(await prefs.setModelVisibility('pi', 'xd', 'kept', false)).toBe(true);
+    expect(claim).not.toHaveBeenCalled();
+    expect(memStorage.getItem('xdt:modelVisibilityPrefs:v1.migration-complete.owner.owner-a')).toBeNull();
+  });
+});
+
+describe('initialization failure diagnostics', () => {
+  afterEach(() => vi.restoreAllMocks());
+
+  it('reports damaged owner preferences even after legacy migration completed', async () => {
+    ownerClaim.profileOrigin = 'existing';
+    const key = 'xdt:modelVisibilityPrefs:v1.owner.owner-a';
+    memStorage.setItem('xdt:modelVisibilityPrefs:v1.migration-complete.owner.owner-a', '1');
+    memStorage.setItem(key, '{ damaged owner preferences');
+    const prefs = await loadModuleForOwner();
+    expect(await prefs.migrateModelVisibilityDefaults('owner-a', 1, [])).toBe(false);
+    expect(prefs.getModelVisibilityInitializationFailure('owner-a', 1)).toBe('preferences-corrupt');
+    expect(memStorage.getItem(key)).toBe('{ damaged owner preferences');
+    memStorage.setItem(key, JSON.stringify({ 'pi:xd:kept-off': false }));
+    expect(await prefs.migrateModelVisibilityDefaults('owner-a', 1, [])).toBe(true);
+    expect(prefs.isModelEnabled('pi', 'xd', { id: 'kept-off', defaultEnabled: true })).toBe(false);
+  });
+
+  it('删除损坏的 owner 偏好后，同一生命周期内重新加载可恢复目录', async () => {
+    ownerClaim.profileOrigin = 'existing';
+    const key = 'xdt:modelVisibilityPrefs:v1.owner.owner-a';
+    memStorage.setItem('xdt:modelVisibilityPrefs:v1.migration-complete.owner.owner-a', '1');
+    memStorage.setItem(key, '{ damaged owner preferences');
+    const prefs = await loadModuleForOwner();
+    const catalog = {
+      id: 'xd', agents: ['pi'], routing: {},
+      models: { pi: [{ id: 'recovered', defaultEnabled: true }] },
+    } as unknown as ProviderView;
+
+    expect(await prefs.migrateModelVisibilityDefaults('owner-a', 1, [catalog])).toBe(false);
+    expect(prefs.getModelVisibilityInitializationFailure('owner-a', 1)).toBe('preferences-corrupt');
+    expect(memStorage.getItem(key)).toBe('{ damaged owner preferences');
+    expect(prefs.isModelEnabled('pi', 'xd', { id: 'recovered', defaultEnabled: true })).toBe(false);
+
+    memStorage.removeItem(key);
+    expect(await prefs.migrateModelVisibilityDefaults('owner-a', 1, [catalog])).toBe(true);
+    expect(prefs.getModelVisibilityInitializationFailure('owner-a', 1)).toBeNull();
+    expect(memStorage.getItem(key)).toBeNull();
+    expect(prefs.isModelEnabled('pi', 'xd', { id: 'recovered', defaultEnabled: false })).toBe(false);
+    expect(prefs.isModelEnabled('pi', 'xd', { id: 'recovered', defaultEnabled: true })).toBe(true);
+  });
+
+  it('保留损坏的 initialization，直到显式恢复默认后才允许目录迁移', async () => {
+    ownerClaim.profileOrigin = 'existing';
+    const initializationKey = 'xdt:modelVisibilityPrefs:v1.initialization.owner.owner-a';
+    const mapKey = 'xdt:modelVisibilityPrefs:v1.owner.owner-a';
+    const initialization = '{ damaged initialization';
+    const map = JSON.stringify({ 'pi:xd:kept-off': false });
+    memStorage.setItem('xdt:modelVisibilityPrefs:v1.migration-complete.owner.owner-a', '1');
+    memStorage.setItem(initializationKey, initialization);
+    memStorage.setItem(mapKey, map);
+    const prefs = await loadModuleForOwner();
+    const catalog = {
+      id: 'xd', agents: ['pi'], routing: {},
+      models: { pi: [{ id: 'recovered', defaultEnabled: true }] },
+    } as unknown as ProviderView;
+
+    expect(prefs.getModelVisibilityInitializationFailure('owner-a', 1)).toBe('preferences-corrupt');
+    expect(await prefs.migrateModelVisibilityDefaults('owner-a', 1, [catalog])).toBe(false);
+    expect(memStorage.getItem(initializationKey)).toBe(initialization);
+    expect(memStorage.getItem(mapKey)).toBe(map);
+    expect(prefs.getModelVisibilityInitializationFailure('owner-a', 1)).toBe('preferences-corrupt');
+
+    expect(await prefs.resetModelVisibilities('xd', [{ agent: 'pi', modelId: 'recovered' }])).toBe(true);
+    expect(prefs.getModelVisibilityInitializationFailure('owner-a', 1)).toBeNull();
+    expect(JSON.parse(memStorage.getItem(initializationKey)!)).toMatchObject({
+      eligibleForDefaults: false,
+      followCatalogKeys: ['pi:xd:recovered'],
+    });
+    expect(await prefs.migrateModelVisibilityDefaults('owner-a', 1, [catalog])).toBe(true);
+    expect(prefs.isModelEnabled('pi', 'xd', { id: 'recovered', defaultEnabled: false })).toBe(false);
+    expect(prefs.isModelEnabled('pi', 'xd', { id: 'recovered', defaultEnabled: true })).toBe(true);
+    expect(prefs.isModelEnabled('pi', 'xd', { id: 'kept-off', defaultEnabled: true })).toBe(false);
+  });
+
+  it('外部修好损坏 initialization 后，同一生命周期内重新加载可恢复目录', async () => {
+    ownerClaim.profileOrigin = 'existing';
+    const initializationKey = 'xdt:modelVisibilityPrefs:v1.initialization.owner.owner-a';
+    const mapKey = 'xdt:modelVisibilityPrefs:v1.owner.owner-a';
+    const initialization = '{ damaged initialization';
+    const map = JSON.stringify({ 'pi:xd:kept-off': false });
+    const repaired = JSON.stringify({
+      eligibleForDefaults: false,
+      defaults: {},
+      scopes: [],
+      followCatalogKeys: ['pi:xd:recovered'],
+    });
+    memStorage.setItem('xdt:modelVisibilityPrefs:v1.migration-complete.owner.owner-a', '1');
+    memStorage.setItem(initializationKey, initialization);
+    memStorage.setItem(mapKey, map);
+    const prefs = await loadModuleForOwner();
+    const catalog = {
+      id: 'xd', agents: ['pi'], routing: {},
+      models: { pi: [{ id: 'recovered', defaultEnabled: true }] },
+    } as unknown as ProviderView;
+
+    expect(prefs.getModelVisibilityInitializationFailure('owner-a', 1)).toBe('preferences-corrupt');
+    expect(await prefs.migrateModelVisibilityDefaults('owner-a', 1, [catalog])).toBe(false);
+    expect(memStorage.getItem(initializationKey)).toBe(initialization);
+
+    memStorage.setItem(initializationKey, repaired);
+    expect(await prefs.migrateModelVisibilityDefaults('owner-a', 1, [catalog])).toBe(true);
+    expect(prefs.getModelVisibilityInitializationFailure('owner-a', 1)).toBeNull();
+    expect(JSON.parse(memStorage.getItem(initializationKey)!)).toMatchObject({
+      eligibleForDefaults: false,
+      followCatalogKeys: ['pi:xd:recovered'],
+    });
+    expect(memStorage.getItem(mapKey)).toBe(map);
+    expect(prefs.isModelEnabled('pi', 'xd', { id: 'recovered', defaultEnabled: false })).toBe(false);
+    expect(prefs.isModelEnabled('pi', 'xd', { id: 'recovered', defaultEnabled: true })).toBe(true);
+    expect(prefs.isModelEnabled('pi', 'xd', { id: 'kept-off', defaultEnabled: true })).toBe(false);
+  });
+
+  it('does not attribute a late lock rejection to the next account', async () => {
+    let reject!: (error: Error) => void;
+    const locks = new Locks();
+    vi.spyOn(locks, 'request').mockImplementationOnce(() => new Promise((_resolve, fail) => { reject = fail; }));
+    vi.stubGlobal('navigator', { locks });
+    const prefs = await loadModule();
+    const oldOwner = prefs.setModelVisibilityOwner('owner-a', 1, 'cloud');
+    setOwnerClaim('owner-b', 2);
+    await prefs.setModelVisibilityOwner('owner-b', 2, 'cloud');
+    reject(new Error('old lock failed'));
+    await oldOwner;
+    expect(prefs.getModelVisibilityInitializationFailure('owner-b', 2)).toBeNull();
+  });
+
+  it('reports quota exhaustion without changing preferences or logging their contents', async () => {
+    ownerClaim.profileOrigin = 'existing';
+    const key = 'xdt:modelVisibilityPrefs:v1';
+    const original = JSON.stringify({ 'pi:xd:private-model-name': false });
+    memStorage.setItem(key, original);
+    const write = vi.spyOn(memStorage, 'setItem').mockImplementation(() => {
+      throw Object.assign(new Error('private storage contents'), { name: 'QuotaExceededError' });
+    });
+    const prefs = await loadModuleForOwner();
+    expect(await prefs.migrateModelVisibilityDefaults('owner-a', 1, [])).toBe(false);
+    expect(prefs.getModelVisibilityInitializationFailure('owner-a', 1)).toBe('storage-quota');
+    expect(prefs.getModelVisibilityInitializationFailure('owner-b', 1)).toBeNull();
+    expect(memStorage.getItem(key)).toBe(original);
+    expect(JSON.stringify(logToMain.mock.calls)).not.toContain('private');
+    write.mockRestore();
+    expect(await prefs.migrateModelVisibilityDefaults('owner-a', 1, [])).toBe(true);
+    expect(prefs.getModelVisibilityInitializationFailure('owner-a', 1)).toBeNull();
+  });
+
+  it('distinguishes damaged settings from unavailable migration ownership and retains the original bytes', async () => {
+    ownerClaim.profileOrigin = 'existing';
+    const key = 'xdt:modelVisibilityPrefs:v1';
+    memStorage.setItem(key, '{ damaged preferences');
+    const prefs = await loadModuleForOwner();
+    expect(await prefs.migrateModelVisibilityDefaults('owner-a', 1, [])).toBe(false);
+    expect(prefs.getModelVisibilityInitializationFailure('owner-a', 1)).toBe('preferences-corrupt');
+    expect(memStorage.getItem(key)).toBe('{ damaged preferences');
+    setOwnerClaim('owner-b', 2, false, false);
+    await prefs.setModelVisibilityOwner('owner-b', 2, 'cloud');
+    expect(await prefs.migrateModelVisibilityDefaults('owner-b', 2, [])).toBe(false);
+    expect(prefs.getModelVisibilityInitializationFailure('owner-b', 2)).toBe('legacy-owner-unavailable');
+    expect(prefs.getModelVisibilityInitializationFailure('owner-a', 1)).toBeNull();
+  });
+});
+
 describe('local profile visibility adoption', () => {
   const initKey = (owner: string) => `xdt:modelVisibilityPrefs:v1.initialization.owner.${owner}`;
   const mapKey = (owner: string) => `xdt:modelVisibilityPrefs:v1.owner.${owner}`;
@@ -1250,7 +1444,10 @@ describe('compact model defaults upgrade', () => {
     const prefs = await upgrade();
     await prefs.setModelVisibility('pi', 'xd', 'fable-5-1', false);
     if (hasLegacy) expect(memStorage.getItem(markerKey)).toBeNull();
-    else expect(JSON.parse(memStorage.getItem(markerKey)!)).toMatchObject({ eligibleForDefaults: true, scopes: [] });
+    else expect(JSON.parse(memStorage.getItem(markerKey)!)).toMatchObject({
+      eligibleForDefaults: true,
+      scopes: provider.agents.map((agent) => JSON.stringify([provider.id, agent])),
+    });
     setOwnerClaim('owner-a', 1);
     await prefs.migrateModelVisibilityDefaults('owner-a', 1, [provider]);
     expect(prefs.isModelEnabled('pi', 'xd', { id: 'gemini', defaultEnabled: true })).toBe(true);

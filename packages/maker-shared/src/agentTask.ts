@@ -167,6 +167,12 @@ export interface AgentTaskUpdate {
  * Derive the visible task status from the live update and its paired tool result.
  * A result is a terminal fact, so it closes a stale `running` update without
  * overriding an explicit failure or stopped state.
+ *
+ * `durableStatus` is the host's `subagent_runs` record for the same task, which
+ * is built from structured lifecycle events rather than result text. A terminal
+ * record is authoritative. A `running` record only proves the paired result is a
+ * launch receipt; the live update still decides whether the task is running, so
+ * a record left behind by a process that died never pins a spinner.
  */
 export function deriveAgentTaskStatus(
   updateStatus: AgentTaskStatus | undefined,
@@ -174,13 +180,118 @@ export function deriveAgentTaskStatus(
   options?: {
     resultIsLaunchReceipt?: boolean;
     persistedStatus?: AgentTaskTerminalStatus;
+
+    resultIsError?: boolean;
+
+    durableStatus?: AgentTaskStatus;
+
   },
 ): AgentTaskStatus {
   const persistedStatus = normalizeAgentTaskTerminalStatus(options?.persistedStatus);
   if (persistedStatus) return persistedStatus;
+  const durableTerminalStatus = normalizeAgentTaskTerminalStatus(options?.durableStatus);
+  if (durableTerminalStatus) return durableTerminalStatus;
+  const resultIsLaunchReceipt =
+    options?.resultIsLaunchReceipt === true || options?.durableStatus === 'running';
   const hasResult = typeof result === 'string' && result.trim().length > 0;
-  if (updateStatus === 'running' && hasResult && !options?.resultIsLaunchReceipt) return 'completed';
+  // resultIsError 只应收口 stale `running` / 缺失 live update 的历史回放;显式
+  // failed / stopped 是用户或系统声明的终态,不得被配对的 tool result 覆盖 ——
+  // live `stopped`(用户中断)配上 SDK 的 <tool_use_error> 回执会被误显示为失败。
+  if (
+    options?.resultIsError
+    && hasResult
+    && (updateStatus === undefined || updateStatus === 'running')
+  ) {
+    return 'failed';
+  }
+  if (updateStatus === 'running' && hasResult && !resultIsLaunchReceipt) return 'completed';
   return updateStatus ?? (hasResult ? 'completed' : 'running');
+}
+
+/**
+
+ * 判断子任务工具结果是否以协议级错误收尾(历史回放恢复 failed 的依据)。
+ *
+ * 仅识别 Claude SDK 协议标记 `<tool_use_error>` — 这是 SDK 在 tool call 失败时
+ * 发出的结构化错误格式。不解析任意 JSON 字段或自然语言错误短语,因为子任务结果
+ * 内容是用户工作产物,其中 "errors"/"status"/"stderr" 等字段是数据而非执行信号。
+ *
+ * 调用方约束:此函数仅应在已确认为子任务上下文的调用点使用
+ * (AgentTaskCard / listSessionTasks)。普通工具结果包含 `<tool_use_error>` 时
+ * 不应传入此函数,否则会将非子任务结果误判为失败。
+ *
+ * Authority: Claude protocol `<tool_use_error>` — SDK 在 tool call 失败时发出。
+ */
+export function isSubagentResultError(result: string | undefined): boolean {
+  const text = typeof result === 'string' ? result.trim() : '';
+  if (text.length === 0) return false;
+  // Only trust protocol-level error markers. Subagent result content is arbitrary
+  // user work product -- fields like "errors", "status", "stderr" in JSON output
+  // are data, not execution failure signals. Parsing arbitrary body for
+  // error-looking fields creates false positives that mark successful tasks as
+  // failed after Desktop reload / Mobile reconnect.
+  //
+  // Authority sources:
+  // 1. Claude protocol <tool_use_error> -- emitted by the SDK when a tool call fails
+  // 2. Persisted structured terminal status (agentTaskStatus) -- written by
+  //    messagePersistBroadcaster on terminal observations
+  //
+  // Note: <error> prefix removed -- too generic. A subagent returning
+  // `<error>校验报告</error>` as work output would be misclassified as failure.
+  // Only <tool_use_error> is a reliable protocol-owned error marker.
+  return text.startsWith('<tool_use_error>');
+}
+
+/**
+ * Durable `subagent_runs` status, keyed by every id a spawning tool call or its
+ * live update may carry (parent tool-use id, harness task id, Cindy aliases).
+ */
+export type SubagentRunStatusIndex = ReadonlyMap<string, AgentTaskStatus>;
+
+export interface SubagentRunStatusSource {
+  parentToolUseId?: string;
+  logicalAgentId?: string;
+  identityAliases?: readonly string[];
+  status: string;
+  updatedAt?: number;
+}
+
+/** When several runs claim one alias, the most recently updated run wins. */
+export function buildSubagentRunStatusIndex(
+  runs: readonly SubagentRunStatusSource[],
+): SubagentRunStatusIndex {
+  const index = new Map<string, AgentTaskStatus>();
+  const updatedAtByKey = new Map<string, number>();
+  for (const run of runs) {
+    const status = run.status === 'running' ? 'running' : normalizeAgentTaskTerminalStatus(run.status);
+    if (!status) continue;
+    const updatedAt = typeof run.updatedAt === 'number' ? run.updatedAt : 0;
+    const keys = [run.parentToolUseId, run.logicalAgentId, ...(run.identityAliases ?? [])];
+    for (const key of keys) {
+      if (typeof key !== 'string' || key.length === 0) continue;
+      const previous = updatedAtByKey.get(key);
+      if (previous !== undefined && previous > updatedAt) continue;
+      index.set(key, status);
+      updatedAtByKey.set(key, updatedAt);
+    }
+  }
+  return index;
+}
+
+/** First durable status found under the call's tool-use id or its update's ids. */
+export function lookupSubagentRunStatus(
+  index: SubagentRunStatusIndex | undefined,
+  toolUseId: string | undefined,
+  update?: Pick<AgentTaskUpdate, 'taskId' | 'parentToolUseId'>,
+): AgentTaskStatus | undefined {
+  if (!index || index.size === 0) return undefined;
+  for (const key of [toolUseId, update?.parentToolUseId, update?.taskId]) {
+    if (typeof key !== 'string' || key.length === 0) continue;
+    const status = index.get(key);
+    if (status) return status;
+  }
+  return undefined;
+
 }
 
 /**
@@ -199,6 +310,18 @@ export function isSubagentSpawnToolName(toolName: string): boolean {
 
 export function isAgentTaskToolName(toolName: string): boolean {
   return isSubagentSpawnToolName(toolName) || toolName.startsWith('collab:');
+}
+
+/**
+ * Claude 子任务工具名（`Agent` / `Task`）。
+ *
+ * `isSubagentResultError` 识别的 `<tool_use_error>` 是 Claude SDK 协议级标记，只对这两个
+ * 工具的结果有意义。后台 Bash、PI subagent 与 Codex `collab:*` 的成功产物可能合法地以该
+ * 前缀开头（例如把该标记当成搜索命中打印出来），无条件按它收口会把成功任务误标成
+ * `failed`。调用方必须先确认工具名属于 Claude 子任务，再把结果交给 `isSubagentResultError`。
+ */
+export function isClaudeSubagentToolName(toolName: string | undefined): boolean {
+  return toolName === 'Agent' || toolName === 'Task';
 }
 
 /** PI 子代理工具名 —— maker-core 的 pi 扩展注册端与本文件的卡片判据共用,不各写字面量。 */
@@ -417,11 +540,15 @@ export function subagentSpawnResultIndicatesRunning(
     && trimmed === 'Cindy subagent launched. The agent is working in the background.') {
     return true;
   }
+  // Claude Code 2.1.280 appends a notice to the first line (`Async agent
+  // launched successfully. (This tool result is internal metadata …)`) and to
+  // the agentId line, so match the lines by prefix instead of exact text.
   if ((toolName === 'Agent' || toolName === 'Task')
     && (
       trimmed === 'Async agent launched successfully.'
       || (
-        trimmed.startsWith('Async agent launched successfully.\nagentId: ')
+        trimmed.startsWith('Async agent launched successfully.')
+        && /\nagentId: \S/.test(trimmed)
         && trimmed.includes('\nThe agent is working in the background.')
       )
     )) {
@@ -451,21 +578,35 @@ export function buildAgentTaskCardModel(input: {
   update?: AgentTaskUpdate;
   result?: string;
   persistedStatus?: AgentTaskTerminalStatus;
+  durableStatus?: AgentTaskStatus;
 }): AgentTaskCardModel {
-  const { toolName, toolInput, update, result, persistedStatus } = input;
-  const status = deriveAgentTaskStatus(update?.status, result, {
-    persistedStatus,
-    resultIsLaunchReceipt:
-      subagentSpawnReceiptName(toolName, toolInput, result) !== undefined
-      || subagentSpawnResultIndicatesRunning(toolName, result),
-  });
-  const provider: 'claude-code' | 'codex' | 'pi' =
+  const { toolName, toolInput, update, result, persistedStatus, durableStatus } = input;
+  // `<tool_use_error>` is only a trustworthy failure witness for Claude
+  // subagent tools (Agent/Task). PI `subagent` / Codex `collab:*` results are
+  // arbitrary work products that may legitimately start with that marker, so
+  // the shared card model narrows by tool name exactly like the desktop
+  // callers (AgentTaskCard / listSessionTasks). With no tool name (history
+  // replay of a legacy update card) fall back to the provider heuristic below,
+  // matching AgentTaskCard's claudeProtocolResult.
+  const providerFallback: 'claude-code' | 'codex' | 'pi' =
     update?.provider
     ?? (toolName?.startsWith('collab:')
       ? 'codex'
       : toolName === PI_SUBAGENT_TOOL_NAME
         ? 'pi'
         : 'claude-code');
+  const claudeProtocolResult = toolName !== undefined
+    ? isClaudeSubagentToolName(toolName)
+    : providerFallback === 'claude-code';
+  const status = deriveAgentTaskStatus(update?.status, result, {
+    persistedStatus,
+    durableStatus,
+    resultIsLaunchReceipt:
+      subagentSpawnReceiptName(toolName, toolInput, result) !== undefined
+      || subagentSpawnResultIndicatesRunning(toolName, result),
+    resultIsError: claudeProtocolResult && isSubagentResultError(result),
+  });
+  const provider = providerFallback;
   const title = compactText(
     formatAgentTaskTitle(provider, update?.title
       ?? readInputString(toolInput, ['description', 'task', 'name'])
@@ -483,7 +624,12 @@ export function buildAgentTaskCardModel(input: {
   const spawnedAgentName = update ? undefined : formatAgentTaskTitle(provider, spawnReceiptName);
   // 启动回执命中时 summary 不携带裸路径(路径已在 spawnedAgentName / title 中),
   // 否则手机端会把 agentPath 原样当摘要展示。
-  const summary = spawnReceiptName ? detailText(update?.summary) : detailText(result, update?.summary);
+  // Claude 异步 Agent 的启动回执是写给模型的内部元数据(agentId / output 文件),不当摘要展示。
+  const claudeLaunchReceipt = (toolName === 'Agent' || toolName === 'Task')
+    && subagentSpawnResultIndicatesRunning(toolName, result);
+  const summary = spawnReceiptName || claudeLaunchReceipt
+    ? detailText(update?.summary)
+    : detailText(result, update?.summary);
   return {
     status,
     provider,

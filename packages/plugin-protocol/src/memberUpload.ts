@@ -42,7 +42,7 @@ export const PLUGIN_MEMBER_UPLOAD_STATUSES = [
 export type PluginMemberUploadStatus = (typeof PLUGIN_MEMBER_UPLOAD_STATUSES)[number];
 
 /** Release review state after a member upload has produced a Release. */
-export const PLUGIN_MEMBER_RELEASE_REVIEW_STATUSES = ['pending', 'approved', 'rejected'] as const;
+export const PLUGIN_MEMBER_RELEASE_REVIEW_STATUSES = ['pending', 'approved', 'rejected', 'cancelled'] as const;
 export type PluginMemberReleaseReviewStatus =
   (typeof PLUGIN_MEMBER_RELEASE_REVIEW_STATUSES)[number];
 
@@ -57,6 +57,10 @@ export const PLUGIN_MEMBER_UPLOAD_FAILURE_CODES = [
   'PLUGIN_GHOST_ID_CONFLICT',
   'PUBLISH_PREFIX_UNREGISTERED',
   'PUBLISH_GHOST_ID_PREFIX_MISMATCH',
+  'PUBLISH_GHOST_ID_INVALID',
+  'PLUGIN_GHOST_ID_RESERVED',
+  'PLUGIN_NAMESPACE_CONFIG_REQUIRED',
+  'PLUGIN_NAMESPACE_CLIENT_REQUIRED',
   'PUBLISH_VERSION_EXISTS',
   'PUBLISH_STORAGE_UNAVAILABLE',
   'PUBLISH_INTERNAL_ERROR',

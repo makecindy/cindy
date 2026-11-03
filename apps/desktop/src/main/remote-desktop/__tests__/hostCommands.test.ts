@@ -17,6 +17,8 @@ function harness(sourceText = source) {
   let reply!: (event: object, id: string, value: unknown) => void;
   const deps = {
     host,
+    wayland: () => false,
+    portalWayland: () => false,
     stopVideo,
     parseDesktopIceReply,
     setTimeout,

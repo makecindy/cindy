@@ -14,6 +14,8 @@
  * IPC 错误语义由上层业务体(profileEdit)统一映射。
  */
 
+import { requestErrorMessage } from './requestErrorMessage';
+
 /** presign-put 成功响应(只校验消费到的字段)。 */
 export interface PresignPutResponse {
   putUrl: string;
@@ -34,6 +36,7 @@ export interface PublicUploadDeps {
   getBaseUrl(): string;
   /** 当前 access token;未登录返回 null。 */
   getToken(): string | null;
+  onError?: (stage: 'presign' | 'put', message: string) => void;
 }
 
 /** presign 是纯本地签名计算,15s 足够;PUT 按 5MB 上限 + 慢网余量放宽。 */
@@ -88,6 +91,10 @@ export async function uploadPublicAsset(
   if (!token) {
     return { ok: false, stage: 'presign', status: 0, code: 'NOT_AUTHENTICATED' };
   }
+  const logError = (stage: 'presign' | 'put', error: unknown) => {
+    try { deps.onError?.(stage, requestErrorMessage(error)); }
+    catch { /* Logging must not change the upload result. */ }
+  };
 
   let presign: PresignPutResponse;
   try {
@@ -113,7 +120,8 @@ export async function uploadPublicAsset(
       try {
         const data = (await response.json()) as { error?: { code?: string } } | null;
         code = data?.error?.code;
-      } catch {
+      } catch (error) {
+        logError('presign', error);
         // 非 JSON 错误体,只保留 status
       }
       return { ok: false, stage: 'presign', status: response.status, ...(code ? { code } : {}) };
@@ -123,7 +131,8 @@ export async function uploadPublicAsset(
       return { ok: false, stage: 'presign', status: response.status, code: 'MALFORMED_RESPONSE' };
     }
     presign = parsed;
-  } catch {
+  } catch (error) {
+    logError('presign', error);
     return { ok: false, stage: 'presign', status: 0 };
   }
 
@@ -142,7 +151,8 @@ export async function uploadPublicAsset(
     if (!response.ok) {
       return { ok: false, stage: 'put', status: response.status };
     }
-  } catch {
+  } catch (error) {
+    logError('put', error);
     return { ok: false, stage: 'put', status: 0 };
   }
 

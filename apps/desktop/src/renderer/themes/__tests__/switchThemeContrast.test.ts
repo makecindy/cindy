@@ -33,10 +33,31 @@ function contrast(first: string, second: string): number {
   return contrastRatio(toRgb(first), toRgb(second));
 }
 
+/**
+ * 表面可能是半透明墨水(CINDY 2026-10-22 起的悬停底):按其 alpha 叠到不透明底上取实际颜色。
+ * 只认 rgba() 与带 `/ alpha` 的 HSL 三元组;不透明值仍走 toRgb 的 fail-closed 解析。
+ */
+function surfaceOver(value: string, base: Rgb): Rgb {
+  const t = value.trim();
+  const rgba = t.match(/^rgba\(\s*([\d.]+),\s*([\d.]+),\s*([\d.]+),\s*([\d.]+)\s*\)$/);
+  const hsla = t.match(/^([\d.]+)\s+([\d.]+)%\s+([\d.]+)%\s*\/\s*([\d.]+)$/);
+  if (!rgba && !hsla) return toRgb(t);
+  const color = rgba
+    ? { r: Number(rgba[1]), g: Number(rgba[2]), b: Number(rgba[3]) }
+    : hslToRgb(Number(hsla![1]), Number(hsla![2]) / 100, Number(hsla![3]) / 100);
+  const alpha = Number((rgba ?? hsla)![4]);
+  return {
+    r: color.r * alpha + base.r * (1 - alpha),
+    g: color.g * alpha + base.g * (1 - alpha),
+    b: color.b * alpha + base.b * (1 - alpha),
+  };
+}
+
+/** 开关实际所在的不透明底;半透明表面逐一叠在它们上面比较。 */
+const OPAQUE_BASES = ['surface', 'surface-elevated', 'surface-card-ivory'] as const;
+
 const SURFACES = [
-  'surface',
-  'surface-elevated',
-  'surface-card-ivory',
+  ...OPAQUE_BASES,
   'surface-hover',
   'surface-hover-soft',
 ] as const;
@@ -44,7 +65,7 @@ const SURFACES = [
 /** 开/关两态共用一套守卫:轨道×滑块、轨道×全部表面均 ≥3:1(非文字组件底线)。 */
 const CONTROL_STATES = [
   { state: 'unchecked', trackId: 'switch-track-off', thumbId: 'switch-thumb-off' },
-  { state: 'checked', trackId: 'switch-track-on', thumbId: 'background' },
+  { state: 'checked', trackId: 'switch-track-on', thumbId: 'switch-thumb-on' },
 ] as const;
 
 const importedDarkTheme: Theme = {
@@ -93,6 +114,8 @@ describe('Switch contrast', () => {
     // 开启态轨道默认沿用 primary:不覆盖的主题(Classic/导入)外观零变化
     expect(colorRegistry.resolveDefault('switch-track-on', 'light')).toBe('hsl(var(--primary))');
     expect(colorRegistry.resolveDefault('switch-track-on', 'dark')).toBe('hsl(var(--primary))');
+    expect(colorRegistry.resolveDefault('switch-thumb-on', 'light')).toBe('hsl(var(--background))');
+    expect(colorRegistry.resolveDefault('switch-thumb-on', 'dark')).toBe('hsl(var(--background))');
     // 禁用态两级弱化的全局定稿值(用户裁决 2026-08-05):整体 0.3 × 滑块 0.5
     for (const [id, expected] of [
       ['switch-disabled-opacity', '0.3'],
@@ -101,6 +124,14 @@ describe('Switch contrast', () => {
       expect(colorRegistry.resolveDefault(id, 'light'), id).toBe(expected);
       expect(colorRegistry.resolveDefault(id, 'dark'), id).toBe(expected);
     }
+  });
+
+  it('keeps old imported background overrides and accepts an explicit checked thumb', () => {
+    const legacy: Theme = { ...importedDarkTheme, colors: { ...importedDarkTheme.colors, background: '0 0% 12%' } };
+    expect(resolveColor(legacy, 'switch-thumb-on')).toBe('0 0% 12%');
+    const customized = { ...legacy, colors: { ...legacy.colors, 'switch-thumb-on': '#FDFDFD' } };
+    expect(resolveColor(customized, 'switch-thumb-on')).toBe('#FDFDFD');
+    expect(legacy.colors).not.toHaveProperty('switch-thumb-on');
   });
 
   it('fails closed for unsupported color formats', () => {
@@ -123,7 +154,10 @@ describe('Switch contrast', () => {
   });
 
   it.each(Object.values(builtinThemes))('$name keeps both switch states distinguishable', (theme) => {
-    const surfaces = SURFACES.map((id) => [id, resolveColor(theme, id)] as const);
+    const surfaces = OPAQUE_BASES.flatMap((baseId) => {
+      const base = toRgb(resolveColor(theme, baseId));
+      return SURFACES.map((id) => [`${id} on ${baseId}`, surfaceOver(resolveColor(theme, id), base)] as const);
+    });
 
     for (const { state, trackId, thumbId } of CONTROL_STATES) {
       const track = resolveColor(theme, trackId);
@@ -132,8 +166,17 @@ describe('Switch contrast', () => {
       expect(contrast(thumb, track), `${theme.id}: ${state} thumb x track`).toBeGreaterThanOrEqual(3);
 
       for (const [surfaceId, surface] of surfaces) {
-        expect(contrast(track, surface), `${theme.id}: ${state} track x ${surfaceId}`).toBeGreaterThanOrEqual(3);
+        expect(contrastRatio(toRgb(track), surface), `${theme.id}: ${state} track x ${surfaceId}`).toBeGreaterThanOrEqual(3);
       }
     }
+  });
+
+  it('composites translucent hover surfaces instead of reading them as opaque ink', () => {
+    const page = { r: 242, g: 242, b: 237 };
+    // 黑 5% 压在页底上是浅灰 #E6E6E1 一类,不是纯黑。
+    const hover = surfaceOver('rgba(0, 0, 0, 0.05)', page);
+    expect(Math.round(hover.r)).toBe(230);
+    expect(surfaceOver('0.0 0.0% 0.0% / 0.05', page)).toEqual(hover);
+    expect(contrastRatio(toRgb('#808080'), hover)).toBeGreaterThanOrEqual(3);
   });
 });

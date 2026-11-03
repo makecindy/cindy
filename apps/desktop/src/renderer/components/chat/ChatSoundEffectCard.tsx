@@ -22,6 +22,7 @@
  * ChatVideoView 同一套黑白反色规范。
  */
 
+import { MediaScrubber } from '@/components/ui/media-scrubber';
 import { Tip } from '@/components/ui/tooltip';
 import { CHAT_MEDIA_PLAY_BUTTON_CLASS } from './chatChrome';
 import { useEffect, useMemo, useRef, useState } from 'react';
@@ -71,7 +72,6 @@ function getLocalAudioPath(audioUrl: string): string | null {
 export function ChatSoundEffectCard({ track, sessionId }: ChatSoundEffectCardProps) {
   const { t } = useTranslation();
   const audioRef = useRef<HTMLAudioElement | null>(null);
-  const progressTrackRef = useRef<HTMLDivElement | null>(null);
   const [playing, setPlaying] = useState(false);
   const [currentTime, setCurrentTime] = useState(0);
   const [menuPos, setMenuPos] = useState<{ x: number; y: number } | null>(null);
@@ -128,10 +128,6 @@ export function ChatSoundEffectCard({ track, sessionId }: ChatSoundEffectCardPro
   const canReveal = localAudioPath !== null || displayAudioUrl.startsWith('cindy-media://');
   const durationLabel = useMemo(() => formatDuration(duration), [duration]);
   const currentLabel = useMemo(() => formatDuration(currentTime), [currentTime]);
-  const progressPct = useMemo(() => {
-    if (!duration) return 0;
-    return Math.min(100, Math.max(0, (currentTime / duration) * 100));
-  }, [currentTime, duration]);
 
   function handleTogglePlay(): void {
     const el = audioRef.current;
@@ -141,16 +137,6 @@ export function ChatSoundEffectCard({ track, sessionId }: ChatSoundEffectCardPro
     } else {
       el.pause();
     }
-  }
-
-  function handleScrub(evt: React.MouseEvent<HTMLDivElement>): void {
-    const el = audioRef.current;
-    const trackEl = progressTrackRef.current;
-    if (!el || !trackEl || !duration) return;
-    const rect = trackEl.getBoundingClientRect();
-    const ratio = Math.min(1, Math.max(0, (evt.clientX - rect.left) / rect.width));
-    el.currentTime = ratio * duration;
-    setCurrentTime(el.currentTime);
   }
 
   async function handleRevealInFolder(): Promise<void> {
@@ -208,24 +194,14 @@ export function ChatSoundEffectCard({ track, sessionId }: ChatSoundEffectCardPro
         {currentLabel}
       </span>
 
-      {/* Progress track — 占满剩余空间 */}
-      <div
-        ref={progressTrackRef}
-        onClick={handleScrub}
-        className={cn(
-          'relative h-1 flex-1 cursor-pointer rounded-full',
-          'bg-[var(--msg-tool-card-border)]',
-        )}
-      >
-        <div
-          className="absolute left-0 top-0 h-full rounded-full bg-[var(--msg-tool-card-text)]"
-          style={{ width: `${progressPct}%` }}
-        />
-        <div
-          className="absolute top-1/2 h-2.5 w-2.5 -translate-y-1/2 rounded-full bg-[var(--msg-tool-card-text)]"
-          style={{ left: `calc(${progressPct}% - 5px)` }}
-        />
-      </div>
+          <MediaScrubber currentTime={currentTime} duration={duration}
+            label={t('chat.media.audioProgress')}
+            onSeek={(seconds) => {
+              const audio = audioRef.current;
+              if (!audio) return;
+              audio.currentTime = seconds;
+              setCurrentTime(audio.currentTime);
+            }} />
 
       {/* Duration */}
       <span className="shrink-0 text-11 font-medium tabular-nums text-[var(--msg-tool-card-chevron)]">

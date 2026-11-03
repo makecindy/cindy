@@ -1,3 +1,4 @@
+import { deviceDisplayName } from '@/lib/deviceName';
 /**
  * switcherDevices —— 机器切换栏设备列表 + 三态分类(纯函数,可单测)。
  * ---------------------------------------------------------------------------
@@ -12,6 +13,7 @@
  */
 
 import type { RemoteDeviceSummary } from './remoteProjectsStore';
+import { isSharedTaskPeer } from '@cindy/device-link';
 import { compareDevicesByName, isMobilePlatform } from '@cindy/maker-shared/device-list';
 
 export type DeviceConnectionStatus = 'connected' | 'connecting' | 'rejected';
@@ -71,8 +73,11 @@ export function buildSwitcherDevices({
   for (const id of selfIds) candidates.delete(id);
   for (const id of mobileIds) candidates.delete(id);
 
+  const nameSources = [...candidates].map((deviceId) => ({ deviceId, name: nameById.get(deviceId) }));
   const devices: SwitcherDevice[] = [];
   for (const deviceId of candidates) {
+    // Shared tasks belong to task navigation, never the device selector.
+    if (isSharedTaskPeer(deviceId)) continue;
     const cachedDevice = cached.get(deviceId);
     let status: DeviceConnectionStatus = 'connecting';
     if (revoked.has(deviceId)) {
@@ -80,7 +85,7 @@ export function buildSwitcherDevices({
     } else if (cachedDevice && cachedDevice.connected !== false) {
       status = 'connected';
     }
-    devices.push({ deviceId, name: nameById.get(deviceId) || deviceId, status });
+    devices.push({ deviceId, name: deviceDisplayName(deviceId, nameById.get(deviceId), nameSources), status });
   }
 
   // 统一按稳定身份(名字 → deviceId)排,不含状态/在线/时间 → 状态抖动不改变顺序

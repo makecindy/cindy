@@ -44,11 +44,11 @@ import { claudeUpstreamEndpoint } from '../maker-host/runtime-configs.js';
  * Claude 'oauth' (subscription) mode is intentionally NOT honored on remote:
  * the per-model OAuth↔gateway split lives in the LOCAL loopback proxy, which a
  * remote machine can't reach. So remote Claude always uses the gateway key +
- * gateway endpoint regardless of the local auth-mode toggle, and the user's
- * Claude.ai subscription token is NEVER ferried to a remote host. (Mirrors the
- * existing remote + compat-mode restriction.) Reads the gateway key directly,
- * not desktopClaudeAuthAdapter.getAuthEnv() — the latter returns the OAuth token
- * (no ANTHROPIC_API_KEY) in oauth mode, which would be wrong here.
+ * gateway endpoint regardless of the local auth-mode toggle. The Claude.ai
+ * subscription lives only inside the local Claude Code CLI login and is never
+ * ferried to a remote host. Reads the gateway key directly, not
+ * desktopClaudeAuthAdapter.getAuthEnv() — that carries no API key for
+ * subscription sessions.
  */
 export function getRemoteClaudeEnv(): Record<string, string> | null {
   const apiKey = readClaudeApiKey();

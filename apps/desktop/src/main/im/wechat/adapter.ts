@@ -21,6 +21,9 @@ export function buildWechatAdapter(
     },
     config,
     ui,
+    companionLane: (userId) => wechatIm.isOwner(userId)
+      ? { kind: 'owner-dm' }
+      : { kind: 'guest-dm', userId },
     sessions: {
       source: 'wechat',
       sessionIdFor,

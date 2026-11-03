@@ -83,6 +83,21 @@ describe('archived session retry backoff', () => {
 });
 
 describe('startRemoteSessionsReconciler', () => {
+  it('keeps a healthy third peer independent of two stalled peers and stops cleanly', async () => {
+    vi.useFakeTimers();
+    const refresh = vi.fn((id: string) => id === 'healthy' ? Promise.resolve('ok') : new Promise<string>(() => {}));
+    const { wake, stop } = startRemoteSessionsReconciler(
+      () => new Map([['a', 'A'], ['b', 'B'], ['healthy', 'C']]), refresh, 1000,
+    );
+    wake();
+    expect(refresh.mock.calls.map(([id]) => id)).toEqual(['a', 'b', 'healthy']);
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(refresh.mock.calls.map(([id]) => id)).toEqual(['a', 'b', 'healthy', 'healthy']);
+    stop();
+    wake();
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(refresh).toHaveBeenCalledTimes(4);
+  });
   it('preserves failure backoff while a window is hidden', async () => {
     vi.useFakeTimers();
     let visible = true;
@@ -215,6 +230,38 @@ describe('startRemoteSessionsReconciler', () => {
     stop();
     await vi.advanceTimersByTimeAsync(2_000);
     expect(refresh).toHaveBeenCalledTimes(3);
+  });
+
+  // 测试价值:startRemoteSessionsReconciler 的 cadence 把有 push 的设备全量对账从每拍放宽到
+  // 间隔一次(实测 3 台 peer 每 10s 三连 sessions:list + 自动化读取),但 sessions 订阅缺口
+  // 的设备没有 push 兜底,必须仍每拍补订;wake 不受间隔约束。unit,fake timers。
+  it('reconciles subscribed peers once per interval but subscription gaps every tick', async () => {
+    vi.useFakeTimers();
+    const gaps = new Set(['gap']);
+    const refresh = vi.fn(async (_id: string) => 'ok');
+    const { stop, wake } = startRemoteSessionsReconciler(
+      () => new Map([['healthy', 'A'], ['gap', 'B']]),
+      refresh,
+      60_000,
+      createReconcileBackoff({ baseMs: 10_000, jitter: (ms) => ms }),
+      () => true,
+      { tickMs: 10_000, needsEveryTick: (id) => gaps.has(id) },
+    );
+    const callsFor = (id: string) => refresh.mock.calls.filter(([device]) => device === id).length;
+    // The first sighting follows bootstrap, so the interval starts there (10s tick).
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(callsFor('healthy')).toBe(0);
+    expect(callsFor('gap')).toBe(6);
+    await vi.advanceTimersByTimeAsync(10_000);
+    expect(callsFor('healthy')).toBe(1);
+    gaps.clear();
+    await vi.advanceTimersByTimeAsync(50_000);
+    expect(callsFor('healthy')).toBe(1);
+    expect(callsFor('gap')).toBe(7);
+    wake();
+    expect(callsFor('healthy')).toBe(2);
+    expect(callsFor('gap')).toBe(8);
+    stop();
   });
 
   it('counts one coalesced refresh failure once when periodic ticks overlap', async () => {

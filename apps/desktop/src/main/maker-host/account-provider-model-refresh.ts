@@ -8,7 +8,7 @@ interface AccountProviderModelRefreshLogger {
 }
 
 export interface AccountProviderModelRefreshDeps {
-  restartCodex(): Promise<void>;
+  restartCodex(refreshEnvironment: () => Promise<void | boolean>): Promise<void>;
   shutdownCodexEnvironment(): Promise<void>;
   loadXaiLkg(): Promise<boolean>;
   refreshProviderModels(
@@ -35,21 +35,13 @@ export async function resetAccountProviderRuntimes(
   shouldContinue: () => boolean = () => true,
 ): Promise<void> {
   if (!shouldContinue()) return;
-  let codexRestarted = false;
   try {
-    await deps.restartCodex();
-    codexRestarted = true;
+    await deps.restartCodex(async () => {
+      if (!shouldContinue()) return false;
+      await deps.shutdownCodexEnvironment();
+    });
   } catch (error) {
     deps.log.warn('restartCodexAfterAuthModeChange on account switch failed', {
-      error: error instanceof Error ? error.message : String(error),
-    });
-  }
-
-  if (!shouldContinue() || !codexRestarted) return;
-  try {
-    await deps.shutdownCodexEnvironment();
-  } catch (error) {
-    deps.log.warn('shutdownCodexEnvironment on account switch failed', {
       error: error instanceof Error ? error.message : String(error),
     });
   }

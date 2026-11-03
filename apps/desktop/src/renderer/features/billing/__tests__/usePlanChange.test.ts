@@ -250,6 +250,7 @@ describe('usePlanChange', () => {
 
   it.each([
     ['[PLAN_CHANGE_NOT_AVAILABLE] target offer is not allowed', 'TARGET_NOT_ALLOWED'],
+    ['[PLAN_CHANGE_RENEWAL_PREPAID] next renewal is already paid', 'RENEWAL_PREPAID'],
     [
       'Error invoking remote method: Error: [PRECONDITION_FAILED] subscription changed',
       'REQUEST_FAILED',
@@ -267,6 +268,22 @@ describe('usePlanChange', () => {
       error: true,
       quoteFailureReason: reason,
     });
+  });
+
+  it('shows prepaid renewal rejection when renewal settles between quote and confirm', async () => {
+    api.quotePlanChange.mockResolvedValue(change());
+    api.confirmPlanChange.mockRejectedValue(
+      new Error('[PLAN_CHANGE_RENEWAL_PREPAID] next renewal is already paid'),
+    );
+    const { result } = renderHook(() => usePlanChange(ACCOUNT_ID, vi.fn()));
+    await act(() => result.current.startQuote('max_month', TARGET_PLAN));
+    await act(() => result.current.confirm());
+    expect(result.current.state).toMatchObject({
+      phase: 'FAILED',
+      error: true,
+      quoteFailureReason: 'RENEWAL_PREPAID',
+    });
+    expect(api.refreshPlanChange).not.toHaveBeenCalled();
   });
 
   it('generates a fresh idempotency key for every new quote attempt', async () => {

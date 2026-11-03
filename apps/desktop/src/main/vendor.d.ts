@@ -14,6 +14,11 @@ declare module '*.md?raw' {
   export default content;
 }
 
+declare module '*.sh?raw' {
+  const content: string;
+  export default content;
+}
+
 declare module '*.cjs?raw' {
   const content: string;
   export default content;

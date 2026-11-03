@@ -311,3 +311,22 @@ describe('sessionsStore — 预览必须活过全量刷新', () => {
     expect(currentTitle()).toBe('我自己起的名字');
   });
 });
+
+describe('sessionsStore.getTitleById', () => {
+  it('indexes titles across buckets and refreshes after any bucket write', async () => {
+    await seed(session({ title: 'Release checklist' }));
+    expect(sessionsStore.getTitleById(SESSION_ID)).toBe('Release checklist');
+    expect(sessionsStore.getTitleById('missing')).toBeNull();
+
+    list.mockResolvedValue([session({ title: 'Renamed' })]);
+    await sessionsStore.forceRefresh('active');
+    expect(sessionsStore.getTitleById(SESSION_ID)).toBe('Renamed');
+  });
+
+  it('reflects in-place title patches such as the auto-title preview', async () => {
+    await seed(session());
+    expect(sessionsStore.getTitleById(SESSION_ID)).toBe(DEFAULT_DRAFT_SESSION_TITLE);
+    emitAutoTitlePreview(SESSION_ID, '帮我排查登录失败');
+    expect(sessionsStore.getTitleById(SESSION_ID)).toBe('帮我排查登录失败');
+  });
+});

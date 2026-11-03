@@ -1,3 +1,4 @@
+import { Button } from '@/components/ui/button';
 /**
  * IssueConfirmCard
  * ---------------------------------------------------------------------------
@@ -22,6 +23,7 @@ import {
   type IssueConfirmDraft,
 } from '@/lib/issueConfirmDraftStore';
 import { cn } from '@/lib/utils';
+import { SegmentedControl } from '@/components/ui/segmented-control';
 import type { PendingIssueConfirm } from '@/lib/makerChatStore';
 import { shouldLabelRegion } from '../../../shared/regionCode';
 import { ISSUE_PUBLIC_NAME_MAX, normalizeIssuePublicName } from '../../../shared/issuePublicName';
@@ -169,22 +171,6 @@ export function IssueConfirmCard({ sessionId, pending, onRespond }: IssueConfirm
     return () => window.removeEventListener('keydown', handler);
   }, [handleSubmit, handleCancel]);
 
-  const typeButton = (value: 'bug' | 'feature', label: string) => (
-    <button
-      type="button"
-      aria-pressed={type === value}
-      onClick={() => updateDraft({ type: value })}
-      className={cn(
-        'rounded-[6px] border px-2.5 py-[3px] text-12 font-medium transition-colors',
-        type === value
-          ? 'border-[var(--chat-input-border)] bg-[var(--perm-allow-btn-bg)] text-[var(--perm-allow-btn-text)]'
-          : 'border-[var(--chat-input-border)] bg-transparent text-[var(--status-bar-meta)] hover:bg-[var(--perm-code-bg)]',
-      )}
-    >
-      {label}
-    </button>
-  );
-
   const identityButton = (identity: PendingIssueConfirm['submissionIdentity'], label: string) => {
     const selected =
       selectedIdentity.kind === identity.kind && selectedIdentity.login === identity.login;
@@ -213,14 +199,22 @@ export function IssueConfirmCard({ sessionId, pending, onRespond }: IssueConfirm
       )}
     >
       {/* Title row: heading + type toggle */}
-      <div className="flex items-center justify-between gap-3">
+      <div className="cindy-segmented-row">
         <p className="text-15 font-semibold leading-tight text-[var(--chat-input-text)]">
           {t('issueAgent.confirm.title')}
         </p>
-        <div className="flex items-center gap-1.5">
-          {typeButton('bug', t('issueAgent.confirm.typeBug'))}
-          {typeButton('feature', t('issueAgent.confirm.typeFeature'))}
-        </div>
+        <SegmentedControl
+          aria-label={[t('issueAgent.confirm.typeBug'), t('issueAgent.confirm.typeFeature')].join(' / ')}
+          value={type}
+          onValueChange={(next) => updateDraft({ type: next })}
+          height={28}
+          optionHeight={24}
+          optionClassName="px-2.5"
+          options={[
+            { value: 'bug', label: t('issueAgent.confirm.typeBug') },
+            { value: 'feature', label: t('issueAgent.confirm.typeFeature') },
+          ]}
+        />
       </div>
 
       {/* Issue title input */}
@@ -336,18 +330,16 @@ export function IssueConfirmCard({ sessionId, pending, onRespond }: IssueConfirm
                   'focus:outline-none focus:ring-1 focus:ring-[var(--focus-ring)]',
                 )}
               />
-              <button
+              <Button
+                variant="secondary"
+                size="md"
+                compact
                 type="button"
                 onClick={() => updateDraft({ publicName: t('issueAgent.confirm.anonymous') })}
-                className={cn(
-                  'shrink-0 rounded-full border px-3 py-2',
-                  'border-[var(--chat-input-border)] bg-transparent',
-                  'select-none text-13 font-medium text-[var(--chat-input-text)]',
-                  'transition-colors hover:bg-[var(--chat-input-bg)]',
-                )}
+                className="shrink-0 select-none"
               >
                 {t('issueAgent.confirm.useAnonymous')}
-              </button>
+              </Button>
             </div>
             <p className="mt-1 text-12 leading-snug text-[var(--status-bar-meta)]">
               {t('issueAgent.confirm.publicNameHint')}
@@ -392,38 +384,26 @@ export function IssueConfirmCard({ sessionId, pending, onRespond }: IssueConfirm
 
       {/* Action buttons */}
       <div className="mt-4 flex items-center justify-end gap-2">
-        <button
-          type="button"
-          onClick={handleCancel}
-          className={cn(
-            'flex items-center gap-2 rounded-[8px] border px-3 py-[7px]',
-            'border-[var(--chat-input-border)] bg-transparent',
-            'text-13 font-medium text-[var(--chat-input-text)]',
-            'transition-colors hover:bg-[var(--perm-code-bg)]',
-          )}
-        >
+        <Button variant="secondary" size="md" compact type="button" onClick={handleCancel}>
           <span>{t('issueAgent.confirm.cancel')}</span>
           <kbd className="rounded-[4px] border border-[var(--chat-input-border)] bg-[var(--perm-code-bg)] px-1.5 py-[1px] text-11 font-normal text-[var(--status-bar-meta)]">
             Esc
           </kbd>
-        </button>
-        <button
+        </Button>
+        <Button
+          variant="cta"
+          palette="permission"
+          size="md"
+          compact
           type="button"
           onClick={handleSubmit}
           disabled={!canSubmit}
-          className={cn(
-            'flex items-center gap-2 rounded-[8px] border px-3 py-[7px]',
-            'border-[var(--chat-input-border)]',
-            'bg-[var(--perm-allow-btn-bg)] text-[var(--perm-allow-btn-text)]',
-            'text-13 font-medium',
-            'transition-colors hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-50',
-          )}
         >
           <span>{t('issueAgent.confirm.submit')}</span>
           <kbd className="rounded-[4px] border border-[var(--perm-allow-kbd-border)] bg-[var(--perm-allow-kbd-bg)] px-1.5 py-[1px] text-11 font-normal text-[var(--perm-allow-btn-text)] opacity-70">
             {window.electronAPI?.platform === 'darwin' ? '⌘↵' : 'Ctrl+Enter'}
           </kbd>
-        </button>
+        </Button>
       </div>
     </div>
   );

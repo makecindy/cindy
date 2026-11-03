@@ -179,7 +179,7 @@ function runClaude(
         reject(
           new Error(
             `claude-code adapter: \`${command}\` not found in PATH. ` +
-              'Install Claude Code CLI or set agent.command in config.yaml.',
+              'Install Claude Code CLI or set agent_options.command in config.yaml.',
           ),
         );
       } else {

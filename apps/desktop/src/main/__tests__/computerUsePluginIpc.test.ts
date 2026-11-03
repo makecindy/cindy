@@ -10,8 +10,10 @@ describe('computer use plugin IPC invariants', () => {
 
     await expect(
       refreshCodexMcpEnvironment({
-        restartCodex: vi.fn(async () => {
+        restartCodex: vi.fn(async (refresh) => {
           calls.push('restart-codex');
+          await refresh();
+          calls.push('release-startups');
         }),
         shutdownCodexEnvironment: vi.fn(async () => {
           calls.push('shutdown-bridge');
@@ -19,7 +21,7 @@ describe('computer use plugin IPC invariants', () => {
       }),
     ).resolves.toEqual({ codexMcpRefreshed: true });
 
-    expect(calls).toEqual(['restart-codex', 'shutdown-bridge']);
+    expect(calls).toEqual(['restart-codex', 'shutdown-bridge', 'release-startups']);
   });
 
   it('keeps the existing bridge alive and reports deferred when Codex is busy', async () => {
@@ -48,7 +50,7 @@ describe('computer use plugin IPC invariants', () => {
 
     await expect(
       refreshCodexMcpEnvironment({
-        restartCodex: vi.fn(async () => undefined),
+        restartCodex: vi.fn(async (refresh) => refresh()),
         shutdownCodexEnvironment: vi.fn(async () => {
           throw new Error('bridge shutdown failed');
         }),

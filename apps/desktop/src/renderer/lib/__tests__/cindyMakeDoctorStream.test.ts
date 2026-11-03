@@ -4,6 +4,7 @@ import type { MakeDoctorReport } from '../../../shared/cindyMakeDoctor';
 
 const h = vi.hoisted(() => ({
   create: vi.fn(),
+  startTask: vi.fn(),
   update: vi.fn(),
   prepend: vi.fn(),
   get: vi.fn(),
@@ -57,7 +58,7 @@ vi.mock('@/lib/makerTransport', () => ({
   isRemoteSessionSticky: () => false,
 }));
 
-import { buildCreateOptsForCurrentSession, makerChatStore } from '@/lib/makerChatStore';
+import { makerChatStore } from '@/lib/makerChatStore';
 import * as messageService from '@/lib/messageService';
 import { tryStartCindyMakeCommand } from '../cindyMakeCommand';
 import {
@@ -150,6 +151,7 @@ const cardReport = (sessionId: string) =>
     ?.systemCardData?.report as MakeDoctorReport | undefined;
 
 beforeEach(() => {
+  h.startTask.mockReset().mockImplementation(async () => sid());
   setDataOwnerGeneration('doctor-test-owner');
   h.create.mockReset().mockImplementation(async (options) => ({ id: sid(), ...options }));
   h.get.mockReset().mockResolvedValue({
@@ -170,7 +172,11 @@ beforeEach(() => {
   main = mainApi();
   h.prepareWorkspace.mockClear();
   vi.stubGlobal('window', {
-    electronAPI: { maker: main.api, prepareCindyMakeWorkspace: h.prepareWorkspace },
+    electronAPI: {
+      maker: main.api,
+      prepareCindyMakeWorkspace: h.prepareWorkspace,
+      startCindyMakeTask: h.startTask,
+    },
   });
   vi.spyOn(makerChatStore, 'sendMessage').mockResolvedValue(true);
 });
@@ -184,7 +190,7 @@ afterEach(async () => {
 
 describe('doctor cards in the message stream', () => {
   it.each(['home', 'existing-task'])(
-    'persists the native Make command from %s as a visible card without starting an Agent',
+    'opens preflight from %s without creating a task or timeline card',
     async (entry) => {
       const sessionId = sid();
       const created = { id: sessionId, agentKind: 'codex', title: 'fix scrolling' };
@@ -199,24 +205,15 @@ describe('doctor cards in the message stream', () => {
         isCurrent: () => true,
         createOptions: { workspaceKind: 'dialogue', agentKind: 'codex' },
       });
-      expect(result).toEqual({ kind: 'started', sessionId });
-      const card = messages(sessionId)[0];
-      expect(card.systemCardType).toBe('cindy-make');
-      expect(card.systemCardData?.request).toBe('fix scrolling');
-      expect(card.systemCardData?.modalOnly).toBeUndefined();
-      await vi.waitFor(() => expect(messageService.create).toHaveBeenCalledOnce());
-      expect(messageService.create).toHaveBeenCalledWith(
-        sessionId,
-        expect.objectContaining({
-          content: {
-            __cindyMakeCard: {
-              type: 'cindy-make',
-              data: expect.objectContaining({ request: 'fix scrolling' }),
-            },
-          },
-        }),
-      );
-      expect(h.create).toHaveBeenCalledTimes(entry === 'home' ? 1 : 0);
+      expect(result).toEqual({
+        kind: 'preflight', request: 'fix scrolling',
+        sessionId: entry === 'home' ? undefined : sessionId,
+        createOptions: { workspaceKind: 'dialogue', agentKind: 'codex' },
+      });
+      expect(messages(sessionId)).toHaveLength(0);
+      expect(messageService.create).not.toHaveBeenCalled();
+      expect(h.create).not.toHaveBeenCalled();
+      expect(main.api.executeDesktopCommand).not.toHaveBeenCalled();
       expect(makerChatStore.sendMessage).not.toHaveBeenCalled();
       expect(h.prepareWorkspace).not.toHaveBeenCalled();
     },
@@ -302,38 +299,23 @@ describe('doctor cards in the message stream', () => {
     await main.complete(runId, { upstream });
     expect(messages(id)[0].systemCardData?.decision).toBe('personal');
   });
-  it('keeps completed environment checks and upstream results while source-only reports update the same card', async () => {
+  it('keeps the historical checks and upstream results when handing source preparation to Main', async () => {
     const id = sid();
     const runId = 'source-run';
     const upstream = { status: 'found' as const, items: [] };
-    const checks = report(runId).checks;
     makerChatStore.insertSystemCard(id, 'cindy-make', {
       request: '修复消息流闪烁',
       report: { ...report(runId), upstream },
     });
-
-    vi.stubGlobal('window', {
-      electronAPI: { maker: main.api, prepareCindyMakeWorkspace: h.prepareWorkspace },
-    });
-    const preparation = prepareMakeSourceInStream(id, runId);
-    await vi.waitFor(() => expect(main.api.executeDesktopCommand).toHaveBeenCalled());
-    main.push(runId, 'running', { checks: [], platform: '', arch: '' });
+    expect(await prepareMakeSourceInStream(id, runId)).toBeTruthy();
     expect(messages(id)[0].systemCardData?.report).toMatchObject({
       upstream,
-      checks,
-      platform: 'win32',
-      arch: 'x64',
+      checks: report(runId).checks,
     });
-    await main.complete(runId, {
-      checks: [],
-      source: { status: 'ready', path: 'C:\\cindy-make\\source' },
-    });
-    await preparation;
-    expect(messages(id)[0].systemCardData?.report).toMatchObject({
-      upstream,
-      checks,
-      source: { status: 'ready' },
-    });
+    expect(h.startTask).toHaveBeenCalledWith(
+      expect.objectContaining({ originSessionId: id, runId, request: '修复消息流闪烁' }),
+    );
+    expect(main.api.executeDesktopCommand).not.toHaveBeenCalled();
   });
   it('does not create a card for a bare Make request', () => {
     const id = sid();
@@ -550,102 +532,6 @@ describe('doctor task placement', () => {
     },
   );
 
-  it('creates a code task in the prepared source directory and sends the original request', async () => {
-    const origin = sid();
-    const sourcePath = 'C:\\cindy-make\\source';
-    const codeTask = {
-      id: sid(),
-      workingDir: sourcePath,
-      workspaceKind: 'project',
-      agentKind: 'codex' as const,
-      model: 'runtime-model',
-      effort: 'high',
-      providerId: 'runtime-provider',
-      fastMode: true,
-      permissionMode: 'ask',
-      planModeEnabled: true,
-    };
-    h.get.mockResolvedValue({
-      agentKind: 'codex',
-      model: 'old-model',
-      effort: 'low',
-      providerId: 'old-provider',
-      fastMode: false,
-      permissionMode: 'ask',
-      planModeEnabled: true,
-      remoteHostId: null,
-      runtimeEffective: {
-        agentKind: 'codex',
-        model: 'runtime-model',
-        effort: 'high',
-        providerId: 'runtime-provider',
-        fastMode: true,
-      },
-    });
-    h.create.mockResolvedValue(codeTask);
-    const runId = 'code-run';
-    const worktreePath = 'C:\\cindy-make\\worktrees\\code-run';
-    const prepareCindyMakeWorkspace = vi.fn(async () => ({
-      path: worktreePath,
-      branch: 'cindy-make/code-run',
-      baseCommit: '0123456789ab',
-    }));
-    vi.stubGlobal('window', { electronAPI: { maker: main.api, prepareCindyMakeWorkspace } });
-    makerChatStore.insertSystemCard(origin, 'cindy-make', {
-      request: '修复消息流闪烁',
-      decision: 'personal',
-      report: {
-        ...report(runId),
-        source: { status: 'ready', path: sourcePath },
-      },
-    });
-
-    const createdId = await startMakeCodeSession(origin, runId);
-
-    expect(createdId).toBe(codeTask.id);
-    // The task never works in the managed checkout: it gets its own worktree.
-    expect(prepareCindyMakeWorkspace).toHaveBeenCalledWith(runId);
-    expect(h.create).toHaveBeenCalledWith(
-      expect.objectContaining({
-        workingDir: worktreePath,
-        source: 'cindy-make',
-        workspaceKind: 'project',
-        model: 'runtime-model',
-        effort: 'high',
-        providerId: 'runtime-provider',
-        fastMode: true,
-        permissionMode: 'ask',
-        planModeEnabled: true,
-      }),
-    );
-    expect(makerChatStore.sendMessage).toHaveBeenCalledWith(
-      codeTask.id,
-      '修复消息流闪烁',
-      'runtime-model',
-      'high',
-      'ask',
-      worktreePath,
-    );
-    expect(
-      buildCreateOptsForCurrentSession(
-        codeTask.id,
-        codeTask.model,
-        codeTask.effort,
-        codeTask.permissionMode,
-        worktreePath,
-      ),
-    ).toMatchObject({
-      agentKind: 'codex',
-      providerId: 'runtime-provider',
-      fastMode: true,
-      planMode: true,
-    });
-    expect(messages(origin)[0].systemCardData).toMatchObject({
-      codeSessionId: codeTask.id,
-      codeWorkspace: { path: worktreePath, branch: 'cindy-make/code-run' },
-    });
-  });
-
   it('does not create a task for a stale composer or report success after creation fails', async () => {
     expect(await ensureMakeTask({ createOptions, isCurrent: () => false })).toBeNull();
     expect(h.create).not.toHaveBeenCalled();
@@ -679,211 +565,114 @@ describe('doctor task placement', () => {
 describe('personal code task handoff', () => {
   const runId = 'code-ready';
   const request = '  修复滚动\n保留 <b>原文</b>  ';
-  const sourcePath = '/Users/test/Cindy/source';
   function readyCard(extra: Record<string, unknown> = {}) {
     const id = sid();
     makerChatStore.insertSystemCard(id, 'cindy-make', {
       request,
       decision: 'personal',
-      report: { ...report(runId), source: { status: 'ready', path: sourcePath } },
+      report: { ...report(runId), source: { status: 'ready', path: '/source' } },
       ...extra,
     });
     return id;
   }
 
-  it('creates a task only after lookup and a personal choice, without preparing the ready source twice', async () => {
+  it('hands off only after the personal choice; Main owns preparation and first dispatch', async () => {
     const id = sid();
     const workflowRun = startMakeDoctorInStream(id, { command: 'cindy-make', request }, main.api)!;
-    const source = { status: 'ready' as const, path: sourcePath };
-    main.push(workflowRun, 'running', { source, upstream: { status: 'searching', items: [] } });
+    main.push(workflowRun, 'running', { upstream: { status: 'searching', items: [] } });
     expect(await chooseMakeUpstream(id, workflowRun, 'personal')).toBeNull();
-    expect(h.create).not.toHaveBeenCalled();
-    expect(makerChatStore.sendMessage).not.toHaveBeenCalled();
-    await main.complete(workflowRun, { source, upstream: { status: 'notFound', items: [] } });
+    expect(h.startTask).not.toHaveBeenCalled();
+    await main.complete(workflowRun, {
+      source: { status: 'ready', path: '/source' },
+      upstream: { status: 'notFound', items: [] },
+    });
     const created = await chooseMakeUpstream(id, workflowRun, 'personal');
     expect(created).toBeTruthy();
-    expect(h.create).toHaveBeenCalledOnce();
-    expect(makerChatStore.sendMessage).toHaveBeenCalledWith(
-      created,
-      request,
-      'selected-model',
-      'high',
-      'ask',
-      `/Users/test/Cindy/worktrees/${workflowRun}`,
+    expect(h.startTask).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({ originSessionId: id, runId: workflowRun, request }),
     );
-    // Only the original workflow command; no follow-up prepare-source invocation.
+    expect(h.create).not.toHaveBeenCalled();
+    expect(h.prepareWorkspace).not.toHaveBeenCalled();
+    expect(makerChatStore.sendMessage).not.toHaveBeenCalled();
     expect(main.api.executeDesktopCommand).toHaveBeenCalledOnce();
     expect(await chooseMakeUpstream(id, workflowRun, 'personal')).toBeNull();
-    expect(h.create).toHaveBeenCalledOnce();
   });
 
-  it('waiting after all steps does not create a code task or invoke another source operation', async () => {
+  it('waiting for upstream does not start a task', async () => {
     const id = readyCard({
       decision: undefined,
-      report: {
-        ...report(runId),
-        source: { status: 'ready', path: sourcePath },
-        upstream: { status: 'found', items: [] },
-      },
+      report: { ...report(runId), upstream: { status: 'found', items: [] } },
     });
     await chooseMakeUpstream(id, runId, 'wait');
     expect(messages(id)[0].systemCardData?.decision).toBe('wait');
-    expect(h.create).not.toHaveBeenCalled();
+    expect(h.startTask).not.toHaveBeenCalled();
     expect(makerChatStore.sendMessage).not.toHaveBeenCalled();
-    expect(main.api.executeDesktopCommand).not.toHaveBeenCalled();
   });
 
-  it('supports a historical search-first card by preparing its missing source before creating a task', async () => {
+  it('hands off historical cards before their missing source is prepared', async () => {
     const id = readyCard({
       decision: undefined,
       report: { ...report(runId), upstream: { status: 'notFound', items: [] } },
     });
-    vi.stubGlobal('window', {
-      electronAPI: { maker: main.api, prepareCindyMakeWorkspace: h.prepareWorkspace },
-    });
-    const result = chooseMakeUpstream(id, runId, 'personal');
-    expect(h.create).not.toHaveBeenCalled();
-    await main.complete(runId, { source: { status: 'ready', path: sourcePath } });
-    expect(await result).toBeTruthy();
-    expect(h.create).toHaveBeenCalledOnce();
-    expect(makerChatStore.sendMessage).toHaveBeenCalledWith(
-      expect.any(String),
-      request,
-      'selected-model',
-      'high',
-      'ask',
-      `/Users/test/Cindy/worktrees/${runId}`,
-    );
+    expect(await chooseMakeUpstream(id, runId, 'personal')).toBeTruthy();
+    expect(h.startTask).toHaveBeenCalledOnce();
+    expect(main.api.executeDesktopCommand).not.toHaveBeenCalled();
   });
 
-  it.each(['failed', 'cancelled'] as const)(
-    'does not create a task when source preparation is %s',
-    async (status) => {
-      const id = readyCard();
-      vi.stubGlobal('window', {
-        electronAPI: { maker: main.api, prepareCindyMakeWorkspace: h.prepareWorkspace },
-      });
-      const result = prepareMakeSourceInStream(id, runId);
-      // A stale ready source must not be actionable while preparation is running.
-      expect(await startMakeCodeSession(id, runId)).toBeNull();
-      main.push(runId, status, { source: { status, path: sourcePath } });
-      await main.complete(runId, { status, source: { status, path: sourcePath } });
-      expect(await result).toBeNull();
-      expect(h.create).not.toHaveBeenCalled();
-    },
-  );
-
-  it('coalesces concurrent clicks and opening a persisted target never replays its first message', async () => {
+  it('coalesces clicks and never replays a persisted task', async () => {
     const id = readyCard();
-    const create = deferred<{ id: string }>();
-    h.create.mockReturnValue(create.promise);
+    const creation = deferred<string>();
+    h.startTask.mockReturnValueOnce(creation.promise);
     const first = startMakeCodeSession(id, runId);
-    const second = startMakeCodeSession(id, runId);
-    expect(first).toBe(second);
+    expect(startMakeCodeSession(id, runId)).toBe(first);
     const target = sid();
-    create.resolve({ id: target });
+    creation.resolve(target);
     expect(await first).toBe(target);
     expect(await startMakeCodeSession(id, runId)).toBe(target);
-    const restored = readyCard({ codeSessionId: target });
-    expect(await startMakeCodeSession(restored, runId)).toBe(target);
-    expect(h.create).toHaveBeenCalledOnce();
-    expect(makerChatStore.sendMessage).toHaveBeenCalledOnce();
-  });
-
-  it.each(['cc', 'codex', 'pi'] as const)(
-    'inherits %s configuration when there is no runtime projection',
-    async (agentKind) => {
-      const id = readyCard();
-      h.get.mockResolvedValue({
-        agentKind,
-        model: 'chosen',
-        effort: 'medium',
-        permissionMode: 'auto',
-        providerId: null,
-        fastMode: false,
-        planModeEnabled: false,
-      });
-      const target = await startMakeCodeSession(id, runId);
-      expect(h.create).toHaveBeenCalledWith(
-        expect.objectContaining({
-          agentKind,
-          model: 'chosen',
-          effort: 'medium',
-          permissionMode: 'auto',
-          providerId: null,
-        }),
-      );
-      expect(makerChatStore.getSnapshot(target!).agentKind).toBe(
-        agentKind === 'cc' ? 'claude-code' : agentKind,
-      );
-    },
-  );
-
-  it('does not inherit stale effort or provider when the runtime explicitly clears them', async () => {
-    const id = readyCard();
-    h.get.mockResolvedValue({
-      agentKind: 'codex',
-      model: 'old',
-      effort: 'high',
-      providerId: 'old',
-      permissionMode: 'ask',
-      runtimeEffective: {
-        agentKind: 'claude-code',
-        model: 'current',
-        effort: null,
-        providerId: null,
-        fastMode: false,
-      },
-    });
-    await startMakeCodeSession(id, runId);
-    expect(h.create).toHaveBeenCalledWith(
-      expect.objectContaining({ agentKind: 'cc', model: 'current', effort: '', providerId: null }),
-    );
-  });
-
-  it.each(['rejected', 'thrown'])(
-    'keeps the created task and request draft when sending is %s',
-    async (failure) => {
-      const id = readyCard();
-      const send = vi.mocked(makerChatStore.sendMessage);
-      if (failure === 'rejected') send.mockResolvedValueOnce(false);
-      else send.mockRejectedValueOnce(new Error('send failed'));
-      const target = await startMakeCodeSession(id, runId);
-      expect(target).toBeTruthy();
-      expect(h.saveDraft).toHaveBeenCalledWith(target, {
-        text: { type: 'doc', content: [{ type: 'text', text: request }] },
-        attachments: [],
-      });
-      expect(messages(id)[0].systemCardData).toMatchObject({
-        codeSessionId: target,
-        codeSessionError: true,
-      });
-      expect(await startMakeCodeSession(id, runId)).toBe(target);
-      expect(send).toHaveBeenCalledOnce();
-      expect(h.create).toHaveBeenCalledOnce();
-    },
-  );
-
-  it('allows a failed creation to be retried without sending to the original task', async () => {
-    const id = readyCard();
-    h.create.mockRejectedValueOnce(new Error('create failed'));
-    expect(await startMakeCodeSession(id, runId)).toBeNull();
-    expect(messages(id)[0].systemCardData?.codeSessionError).toBe(true);
+    expect(h.startTask).toHaveBeenCalledOnce();
     expect(makerChatStore.sendMessage).not.toHaveBeenCalled();
+  });
+
+  it('preserves the exact request, derives a readable title and keeps title generation disabled', async () => {
+    const id = readyCard();
     const target = await startMakeCodeSession(id, runId);
     expect(target).toBeTruthy();
-    expect(target).not.toBe(id);
-    expect(makerChatStore.sendMessage).toHaveBeenCalledOnce();
+    expect(h.startTask).toHaveBeenCalledWith({
+      originSessionId: id,
+      runId,
+      request,
+      title: '[code] 修复滚动 保留 <b>原文</b>',
+    });
+    expect(makerChatStore.getSnapshot(target!).autoTitleDisabled).toBe(true);
+    expect(messages(id)[0].systemCardData?.codeSessionId).toBe(target);
   });
 
-  it('does not start or publish a task after the data owner changes during creation', async () => {
+  it('keeps an already-started task navigable when the sidebar refresh fails', async () => {
     const id = readyCard();
-    const create = deferred<{ id: string }>();
-    h.create.mockReturnValue(create.promise);
+    h.get.mockRejectedValueOnce(new Error('refresh failed'));
+    const target = await startMakeCodeSession(id, runId);
+    expect(target).toBeTruthy();
+    expect(messages(id)[0].systemCardData?.codeSessionError).toBe(false);
+    expect(h.startTask).toHaveBeenCalledOnce();
+  });
+
+  it('allows a failed IPC start to retry without sending from Renderer', async () => {
+    const id = readyCard();
+    h.startTask.mockRejectedValueOnce(new Error('start failed'));
+    expect(await startMakeCodeSession(id, runId)).toBeNull();
+    expect(messages(id)[0].systemCardData?.codeSessionError).toBe(true);
+    expect(await startMakeCodeSession(id, runId)).toBeTruthy();
+    expect(h.startTask).toHaveBeenCalledTimes(2);
+    expect(makerChatStore.sendMessage).not.toHaveBeenCalled();
+  });
+
+  it("does not publish another account's task after an owner switch", async () => {
+    const id = readyCard();
+    const creation = deferred<string>();
+    h.startTask.mockReturnValueOnce(creation.promise);
     const result = startMakeCodeSession(id, runId);
-    await vi.waitFor(() => expect(h.create).toHaveBeenCalledOnce());
     setDataOwnerGeneration('another-owner');
-    create.resolve({ id: sid() });
+    creation.resolve(sid());
     expect(await result).toBeNull();
     expect(h.prepend).not.toHaveBeenCalled();
     expect(makerChatStore.sendMessage).not.toHaveBeenCalled();

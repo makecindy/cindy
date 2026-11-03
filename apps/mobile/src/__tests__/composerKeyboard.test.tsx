@@ -11,6 +11,7 @@ import { ComposerKeyboardAvoidingView } from '@/session/ComposerKeyboardAvoiding
 import { useMobileKeyboardState } from '@/session/useMobileKeyboardState';
 import { useComposerCardTransition } from '@/session/useComposerCardTransition';
 import { motionDuration } from '@/theme/tokens';
+import { usePendingQuestionScroll } from '@/session/usePendingQuestionScroll';
 
 const native = vi.hoisted(() => ({
   platform: { OS: 'ios' },
@@ -82,8 +83,8 @@ vi.mock('@/hooks/useReduceMotion', () => ({
   useReduceMotionEnabled: () => native.reducedMotion,
 }));
 
-function Harness({ active = false, inset = 0 }) {
-  const keyboard = useMobileKeyboardState();
+function Harness({ active = false, inset = 0, enabled = true }) {
+  const keyboard = useMobileKeyboardState(enabled);
   useComposerCardTransition(active, keyboard);
   return (
     <ComposerKeyboardAvoidingView
@@ -133,6 +134,56 @@ function padding() {
   return (container.firstElementChild as HTMLElement).style.paddingBottom;
 }
 
+// PR #6313: the screen's focus flag outlived an input removed without blur.
+// Unit: exercise the production hook's scroll position, including a request
+// switch before native blur. Existing geometry tests do not cover input lifetime.
+describe('pending question input visibility', () => {
+  let controls: ReturnType<typeof usePendingQuestionScroll>;
+  function QuestionHarness({ requestId }: { requestId: string | null }) {
+    controls = usePendingQuestionScroll(requestId);
+    return null;
+  }
+  it('stops revealing a removed input without requiring a blur event', () => {
+    act(() => root.render(<QuestionHarness requestId="q1" />));
+    const viewport = { offset: 0, end: 600 };
+    controls.scrollRef.current = {
+      scrollToEnd: () => { viewport.offset = viewport.end; },
+    } as unknown as NonNullable<typeof controls.scrollRef.current>;
+    let focused = true;
+    const input = { isFocused: () => focused };
+    controls.onFocus({ target: input } as unknown as Parameters<typeof controls.onFocus>[0]);
+    expect(viewport.offset).toBe(600);
+    viewport.end = 700;
+    controls.reveal();
+    expect(viewport.offset).toBe(700);
+    // Native TextInput clears its focus on unmount even when no blur bubbles.
+    focused = false;
+    viewport.offset = 0;
+    controls.reveal();
+    expect(viewport.offset).toBe(0);
+  });
+
+  it('does not carry focus into another queued question or a non-question panel', () => {
+    act(() => root.render(<QuestionHarness requestId="q1" />));
+    let offset = 0;
+    controls.scrollRef.current = {
+      scrollToEnd: () => { offset = 600; },
+    } as unknown as NonNullable<typeof controls.scrollRef.current>;
+    const event = { target: { isFocused: () => true } } as unknown as Parameters<typeof controls.onFocus>[0];
+    controls.onFocus(event);
+    expect(offset).toBe(600);
+    for (const requestId of ['q2', null]) {
+      offset = 0;
+      act(() => root.render(<QuestionHarness requestId={requestId} />));
+      controls.reveal();
+      expect(offset).toBe(0);
+    }
+    act(() => root.render(<QuestionHarness requestId="q2" />));
+    controls.onFocus(event);
+    expect(offset).toBe(600);
+  });
+});
+
 beforeEach(() => {
   Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
   native.platform.OS = 'ios';
@@ -155,6 +206,37 @@ afterEach(() => {
 });
 
 describe('composer keyboard geometry and motion', () => {
+  it('does no keyboard work while disabled and refreshes native geometry when enabled again', () => {
+    render({ enabled: false });
+    expect(native.listeners.size).toBe(0);
+    emit('keyboardDidShow');
+    expect(height()).toBe(0);
+    render();
+    expect(height()).toBe(300);
+    expect(native.schedule).not.toHaveBeenCalled();
+    expect(native.configure).not.toHaveBeenCalled();
+    render({ enabled: false });
+    expect([...native.listeners.values()].every(listeners => listeners.size === 0)).toBe(true);
+    emit('keyboardDidHide');
+    render();
+    expect(height()).toBe(0);
+    emit('keyboardWillShow');
+    expect(height()).toBe(300);
+    expect(native.schedule).toHaveBeenCalledOnce();
+  });
+
+  it('ignores a delayed cross-fade query after disabling and reopening', async () => {
+    let finish!: (crossFade: boolean) => void;
+    native.crossFade.mockImplementation(() => new Promise(resolve => { finish = resolve; }));
+    render();
+    emit('keyboardWillShow', keyboardEvent(0, 844));
+    render({ enabled: false });
+    emit('keyboardDidShow', keyboardEvent(444, 400));
+    render();
+    await act(async () => finish(true));
+    expect(height()).toBe(400);
+  });
+
   it('updates both available height and iOS avoidance when an already-open keyboard changes height', () => {
     render();
     emit('keyboardWillShow');

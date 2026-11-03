@@ -18,60 +18,99 @@ afterEach(() => {
   vi.useRealTimers();
 });
 
-it.each(['rejected', 'missing'] as const)(
-  'rejects native video with %s requested audio and releases capture',
-  async (audio) => {
-    const track = { stop: vi.fn() };
-    const stream = {
-      getTracks: () => [track],
-      getVideoTracks: () => [track],
-      getAudioTracks: () => [],
-      addTrack: vi.fn(),
-    };
-    const stopNative = vi.fn();
-    vi.mocked(nativeCaptureStream).mockResolvedValue({
-      stream,
-      stop: stopNative,
-    } as unknown as Awaited<ReturnType<typeof nativeCaptureStream>>);
-    const capture =
-      audio === 'rejected'
-        ? vi.fn().mockRejectedValue(new Error('unavailable'))
-        : vi.fn().mockResolvedValue(stream);
-    vi.stubGlobal('navigator', { mediaDevices: { getDisplayMedia: capture } });
-    let command!: (value: unknown) => void;
-    const reply = vi.fn().mockResolvedValue(undefined);
-    Object.assign(window, {
-      electronAPI: {
-        remoteDesktop: {
-          onCommand: (callback: typeof command) => {
-            command = callback;
-            return () => {};
-          },
-          registerHost: vi.fn().mockResolvedValue(undefined),
-          state: vi.fn().mockResolvedValue(null),
-          stop: vi.fn().mockResolvedValue(undefined),
-          reply,
-        },
-      },
-    });
-    disposers.push(startDesktopCaptureHost(window.electronAPI.remoteDesktop as any));
-    await act(async () => {
-      command({
-        op: 'offer',
-        id: 'offer',
-        lease: 'lease',
-        sdp: 'sdp',
-        sourceId: 'screen:1',
-        nativeCapture: true,
-        cursorOverlay: true,
-        settings: { audio: true, fps: 30 },
-      });
-    });
-    expect(reply).toHaveBeenCalledWith('offer', { error: 'DESKTOP_AUDIO_UNAVAILABLE' });
-    expect(stopNative).toHaveBeenCalled();
-    expect(track.stop).toHaveBeenCalled();
-  },
-);
+it('keeps system audio with cursor-free native video and stops cursor updates with the lease', async () => {
+  vi.useFakeTimers();
+  const audio = { kind: 'audio', stop: vi.fn() };
+  const chromiumVideo = { kind: 'video', stop: vi.fn() };
+  const nativeVideo = { kind: 'video', stop: vi.fn() };
+  const tracks = [nativeVideo];
+  const stream = {
+    getTracks: () => tracks,
+    getVideoTracks: () => [nativeVideo],
+    getAudioTracks: () => tracks.filter((track) => track.kind === 'audio'),
+    addTrack: (track: typeof audio) => tracks.push(track),
+  };
+  let cursorUpdate!: (value: any) => void;
+  const stopNative = vi.fn();
+  vi.mocked(nativeCaptureStream).mockImplementationOnce(async (_read, _alive, _failed, update) => {
+    cursorUpdate = update!;
+    return { stream, stop: stopNative, clear: vi.fn() } as any;
+  });
+  vi.stubGlobal('navigator', {
+    mediaDevices: {
+      getDisplayMedia: vi.fn(async () => ({
+        getTracks: () => [audio, chromiumVideo],
+        getVideoTracks: () => [chromiumVideo],
+        getAudioTracks: () => [audio],
+      })),
+    },
+  });
+  let peer: any;
+  class Peer {
+    localDescription = { sdp: 'answer' };
+    iceGatheringState = 'complete';
+    close = vi.fn();
+    addTrack = vi.fn();
+    constructor() {
+      peer = this;
+    }
+    getSenders() {
+      return [];
+    }
+    async setRemoteDescription() {}
+    async setLocalDescription() {}
+    async createAnswer() {
+      return {};
+    }
+  }
+  vi.stubGlobal('RTCPeerConnection', Peer);
+  let command!: (value: any) => void;
+  const api = {
+    onCommand: (fn: typeof command) => {
+      command = fn;
+      return () => {};
+    },
+    registerHost: vi.fn(async () => {}),
+    reply: vi.fn(async () => {}),
+  };
+  disposers.push(startDesktopCaptureHost(api as any));
+  await act(async () =>
+    command({
+      op: 'offer',
+      id: 'offer',
+      lease: 'lease',
+      sdp: 'offer',
+      attemptId: 'a',
+      sourceId: 'screen:1',
+      nativeCapture: true,
+      cursorOverlay: true,
+      settings: { audio: true, fps: 60 },
+    }),
+  );
+  expect(api.reply).toHaveBeenCalledWith('offer', 'answer');
+  expect(peer.addTrack.mock.calls.map(([track]: any[]) => track)).toEqual([nativeVideo, audio]);
+  expect(chromiumVideo.stop).toHaveBeenCalledOnce();
+  expect(audio.stop).not.toHaveBeenCalled();
+  const channel = { label: 'input-v1', readyState: 'open', bufferedAmount: 0, send: vi.fn() };
+  peer.ondatachannel({ channel });
+  cursorUpdate({ x: 0.5 });
+  await act(() => vi.advanceTimersByTimeAsync(50));
+  expect(channel.send).toHaveBeenLastCalledWith(
+    JSON.stringify({ type: 'cursor', cursor: { x: 0.5 } }),
+  );
+  channel.bufferedAmount = 65537;
+  cursorUpdate({ x: 0.6 });
+  await act(() => vi.advanceTimersByTimeAsync(50));
+  expect(channel.send).toHaveBeenCalledTimes(1);
+  command({ op: 'stop' });
+  channel.bufferedAmount = 0;
+  cursorUpdate({ x: 0.7 });
+  await act(() => vi.advanceTimersByTimeAsync(100));
+  expect(channel.send).toHaveBeenCalledTimes(1);
+  expect(audio.stop).toHaveBeenCalledOnce();
+  expect(nativeVideo.stop).toHaveBeenCalledOnce();
+  expect(stopNative).toHaveBeenCalledOnce();
+});
 
 it('exchanges replayable candidates without recapturing, tolerates transient disconnect and fences old attempts', async () => {
   vi.useFakeTimers();
@@ -134,7 +173,12 @@ it('exchanges replayable candidates without recapturing, tolerates transient dis
   };
   await act(async () => command(offer));
   expect(reply).toHaveBeenCalledWith('offer', 'answer'); // No gather delay for new endpoints.
-  const channel = { label: 'input-v1', readyState: 'open', send: vi.fn(), onmessage: (_event: any) => {} };
+  const channel = {
+    label: 'input-v1',
+    readyState: 'open',
+    send: vi.fn(),
+    onmessage: (_event: any) => {},
+  };
   peers[0].ondatachannel({ channel });
   await act(() => vi.advanceTimersByTimeAsync(8000));
   expect(channel.send).toHaveBeenCalledTimes(1);

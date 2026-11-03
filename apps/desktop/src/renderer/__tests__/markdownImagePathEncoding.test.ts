@@ -77,6 +77,24 @@ describe('Markdown local image path encoding', () => {
     }
   });
 
+  it('normalizes legacy path-shaped xdt-file image URLs for the custom protocol', () => {
+    const path = 'D:/Users/test/My Pictures/image.png';
+    expect(normalizeMarkdownImageSrc(`xdt-file:///${path}`, '/repo', true)).toBe(
+      `xdt-file://local/?path=${encodeURIComponent(path)}`,
+    );
+  });
+
+  it('keeps legacy POSIX paths and cache-busting revisions intact', () => {
+    const path = '/Users/test/My Pictures/image.png';
+    expect(
+      normalizeMarkdownImageSrc(
+        'xdt-file:///Users/test/My%20Pictures/image.png?v=message%202',
+        '/repo',
+        true,
+      ),
+    ).toBe('xdt-file://local/?path=' + encodeURIComponent(path) + '&v=message%202');
+  });
+
   it('keeps malformed percent sequences instead of throwing during render', () => {
     const path = '/tmp/100%done.png';
     expect(normalizeMarkdownImageSrc(path, '/repo', true)).toBe(

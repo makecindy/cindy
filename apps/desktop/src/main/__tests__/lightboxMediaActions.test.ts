@@ -145,6 +145,7 @@ describe('mime helpers', () => {
 
 function makeDeps(overrides: Partial<LightboxMediaDeps> = {}): LightboxMediaDeps {
   return {
+    realpath: vi.fn(async (filePath: string) => filePath),
     isPathAllowed: () => true,
     resolveImageCacheUrl: (url) => ({
       absPath: `/cache/${url.replace('xdt-image://', '')}`,
@@ -217,6 +218,37 @@ describe('openWithDefaultApp', () => {
 });
 
 describe('saveAs', () => {
+  // Unified previews: PDF/video originals save with their names, while image-only
+  // reading stays closed to binary files and protected symlink targets stay blocked.
+  it.each(['report.pdf', 'clip.mp4', 'archive.zip'])(
+    'saves the original %s without image decoding',
+    async (name) => {
+      const file = path.resolve('/tmp', name);
+      const deps = makeDeps();
+      const handlers = createLightboxMediaHandlers(deps);
+      await expect(handlers.saveAs({ url: localFileUrl(file) })).resolves.toMatchObject({
+        canceled: false,
+      });
+      expect(deps.showSaveDialog).toHaveBeenCalledWith({
+        defaultPath: path.join('/downloads', name),
+      });
+      expect(deps.copyFile).toHaveBeenCalledWith(file, '/downloads/out.png');
+      await expect(handlers.readImageBytes({ url: localFileUrl(file) })).rejects.toThrow();
+    },
+  );
+  it('rejects an allowed-looking file that resolves to a blocked path before offering save', async () => {
+    const blocked = path.resolve('/private/key');
+    const deps = makeDeps({
+      realpath: vi.fn(async () => blocked),
+      isPathAllowed: (value) => value !== blocked,
+    });
+    await expect(
+      createLightboxMediaHandlers(deps).saveAs({ url: localFileUrl('/tmp/document.pdf') }),
+    ).rejects.toThrow();
+    expect(deps.showSaveDialog).not.toHaveBeenCalled();
+    expect(deps.copyFile).not.toHaveBeenCalled();
+  });
+
   it('copies a local source to the chosen path', async () => {
     const deps = makeDeps();
     const result = await createLightboxMediaHandlers(deps).saveAs({

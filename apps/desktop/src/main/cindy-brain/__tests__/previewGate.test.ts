@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 
 import {
   GHOST_EXTERNAL_LINK_MIN_INTERVAL_MS,
@@ -366,6 +366,54 @@ describe('parseGhostPanelMediaUrl(右键菜单形状:图片 + 视频)', () => {
   });
 });
 
+describe('GhostPreviewGate instance isolation', () => {
+  it('keeps same-name root and organization preview grants and rate limits independent', async () => {
+    const ghostCanRead = vi.fn(async (_hash: string, instanceId: string) =>
+      ['art', '_ns__acme__art', '_ns__other__art'].includes(instanceId));
+    const gate = new GhostPreviewGate({
+      ghostCanRead,
+      getBlobInfo: async () => ({ ext: '.png', mimeType: 'image/png' }),
+      blobUrl: () => 'cindy-media://blobs/' + HASH + '.png',
+      now: () => 1000,
+    });
+    for (const instanceId of ['art', '_ns__acme__art', '_ns__other__art']) {
+      await expect(gate.request({
+        ghostId: 'art', instanceId, url: URL_OK, isPanelFocused: () => true,
+      })).resolves.toMatchObject({ ok: true });
+      expect(ghostCanRead).toHaveBeenLastCalledWith(HASH, instanceId);
+      await expect(gate.request({
+        ghostId: 'art', instanceId, url: URL_OK, isPanelFocused: () => true,
+      })).resolves.toEqual({ ok: false, reason: 'rate-limited' });
+    }
+  });
+
+  it('never falls back to the root grant when the organization does not own the image', async () => {
+    const ghostCanRead = vi.fn(async (_hash: string, instanceId: string) => instanceId === 'art');
+    const gate = new GhostPreviewGate({
+      ghostCanRead,
+      getBlobInfo: async () => ({ ext: '.png', mimeType: 'image/png' }),
+      blobUrl: () => 'cindy-media://blobs/' + HASH + '.png',
+    });
+    await expect(gate.request({
+      ghostId: 'art', instanceId: '_ns__acme__art', url: URL_OK, isPanelFocused: () => true,
+    })).resolves.toEqual({ ok: false, reason: 'not-owned' });
+    expect(ghostCanRead).toHaveBeenCalledExactlyOnceWith(HASH, '_ns__acme__art');
+  });
+
+  it('rejects a mismatched instance before querying the ledger', async () => {
+    const ghostCanRead = vi.fn(async () => true);
+    const gate = new GhostPreviewGate({
+      ghostCanRead,
+      getBlobInfo: async () => ({ ext: '.png', mimeType: 'image/png' }),
+      blobUrl: () => 'cindy-media://blobs/' + HASH + '.png',
+    });
+    await expect(gate.request({
+      ghostId: 'art', instanceId: '_ns__acme__other', url: URL_OK, isPanelFocused: () => true,
+    })).resolves.toEqual({ ok: false, reason: 'bad-url' });
+    expect(ghostCanRead).not.toHaveBeenCalled();
+  });
+});
+
 describe('resolveGhostPanelMedia(换发闸:attach / menu 两用途)', () => {
   const DEPS = {
     ghostCanRead: async () => true,
@@ -374,6 +422,76 @@ describe('resolveGhostPanelMedia(换发闸:attach / menu 两用途)', () => {
     blobAbsPath: (hash: string, ext: string) => `/blobs/${hash.slice(0, 2)}/${hash}${ext}`,
     statSize: async () => 1234,
   };
+
+  it.each([
+    ['menu', 'media'],
+    ['menu', 'preview'],
+    ['attach', 'media'],
+    ['attach', 'preview'],
+  ] as const)('%s resolves %s through the verified namespaced instance', async (purpose, shape) => {
+    const ghostCanRead = vi.fn(async (_hash: string, instanceId: string) => instanceId === '_ns__acme__art');
+    await expect(resolveGhostPanelMedia(
+      'cindy-ghost://art/' + shape + '/' + HASH + '.png',
+      purpose,
+      { ...DEPS, ghostCanRead },
+      { ghostId: 'art', instanceId: '_ns__acme__art' },
+    )).resolves.toEqual({ url: 'cindy-media://blobs/' + HASH + '.png', kind: 'image' });
+    expect(ghostCanRead).toHaveBeenCalledWith(HASH, '_ns__acme__art');
+  });
+
+  it('does not borrow a root or another organization media grant', async () => {
+    const ghostCanRead = vi.fn(async (_hash: string, instanceId: string) => instanceId !== '_ns__acme__art');
+    await expect(resolveGhostPanelMedia(
+      'cindy-ghost://art/media/' + HASH + '.png',
+      'menu',
+      { ...DEPS, ghostCanRead },
+      { ghostId: 'art', instanceId: '_ns__acme__art' },
+    )).resolves.toBeNull();
+    expect(ghostCanRead).toHaveBeenCalledExactlyOnceWith(HASH, '_ns__acme__art');
+  });
+
+  it('rejects a URL host that differs from the verified installed manifest', async () => {
+    const ghostCanRead = vi.fn(async () => true);
+    await expect(resolveGhostPanelMedia(
+      'cindy-ghost://other/media/' + HASH + '.png',
+      'attach',
+      { ...DEPS, ghostCanRead },
+      { ghostId: 'art', instanceId: '_ns__acme__art' },
+    )).resolves.toBeNull();
+    expect(ghostCanRead).not.toHaveBeenCalled();
+  });
+
+  it('keeps the legacy root call on the physical root grant', async () => {
+    const ghostCanRead = vi.fn(async (_hash: string, instanceId: string) => instanceId === 'art');
+    await expect(resolveGhostPanelMedia(
+      'cindy-ghost://art/media/' + HASH + '.png',
+      'attach',
+      { ...DEPS, ghostCanRead },
+    )).resolves.toEqual({ url: 'cindy-media://blobs/' + HASH + '.png', kind: 'image' });
+    expect(ghostCanRead).toHaveBeenCalledWith(HASH, 'art');
+  });
+
+  it.each(['', '../art', '_ns/acme/art', '_ns__acme__other'])('rejects invalid or mismatched storage identity %s', async (instanceId) => {
+    const ghostCanRead = vi.fn(async () => true);
+    await expect(resolveGhostPanelMedia(
+      'cindy-ghost://art/media/' + HASH + '.png',
+      'attach',
+      { ...DEPS, ghostCanRead },
+      { ghostId: 'art', instanceId },
+    )).resolves.toBeNull();
+    expect(ghostCanRead).not.toHaveBeenCalled();
+  });
+
+  it('keeps the legacy physical key after an in-place namespace stamp', async () => {
+    const ghostCanRead = vi.fn(async (_hash: string, instanceId: string) => instanceId === 'art');
+    await expect(resolveGhostPanelMedia(
+      'cindy-ghost://art/media/' + HASH + '.png',
+      'menu',
+      { ...DEPS, ghostCanRead },
+      { ghostId: 'art', instanceId: 'art' },
+    )).resolves.toEqual({ url: 'cindy-media://blobs/' + HASH + '.png', kind: 'image' });
+    expect(ghostCanRead).toHaveBeenCalledExactlyOnceWith(HASH, 'art');
+  });
   /** HASH = 'a'×64 的视频换发预期(路径引用元数据齐全)。 */
   const VIDEO_RESOLVED = {
     url: `cindy-media://blobs/${HASH}.mp4`,
@@ -384,6 +502,17 @@ describe('resolveGhostPanelMedia(换发闸:attach / menu 两用途)', () => {
     ext: '.mp4',
     mimeType: 'video/mp4',
   };
+
+  it.each(['menu', 'attach'] as const)('%s resolves namespaced video without changing its public filename', async (purpose) => {
+    const ghostCanRead = vi.fn(async (_hash: string, instanceId: string) => instanceId === '_ns__acme__art');
+    await expect(resolveGhostPanelMedia(
+      'cindy-ghost://art/media/' + HASH + '.mp4',
+      purpose,
+      { ...DEPS, ghostCanRead, getBlobInfo: async () => ({ ext: '.mp4', mimeType: 'video/mp4' }) },
+      { ghostId: 'art', instanceId: '_ns__acme__art' },
+    )).resolves.toEqual(VIDEO_RESOLVED);
+    expect(ghostCanRead).toHaveBeenCalledExactlyOnceWith(HASH, '_ns__acme__art');
+  });
 
   it('menu:图片换发成功并回传 kind=image', async () => {
     await expect(

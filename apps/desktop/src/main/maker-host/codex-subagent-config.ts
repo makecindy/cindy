@@ -41,6 +41,24 @@ function smartRoutingHint(routes: readonly CodexSubagentRouteSnapshot[]): string
   );
 }
 
+/**
+ * 这个 app-server 是否套用「智能调配」(扩展目录、spawn 可指定模型、逐模型 Provider 路由)。
+ * 控制面与 Review 不用；供应商分享受邀者的任务也不用：它的子代理只能沿用会话模型，留在分享的
+ * 供应商内(扩展目录里是本机用户其它供应商的模型)。
+ */
+export function codexHostUsesSmartSubagentRouting(
+  settings: SubagentModelSettings,
+  ctx: {
+    hostPurpose?: 'control-plane' | 'review' | 'custom-context';
+    deviceHostedGuestProviderId?: string;
+  },
+): boolean {
+  return settings.codexSmartSubagentRouting === true
+    && ctx.hostPurpose !== 'control-plane'
+    && ctx.hostPurpose !== 'review'
+    && !ctx.deviceHostedGuestProviderId;
+}
+
 export function buildCodexSubagentSpawnArgs(
   settings: SubagentModelSettings,
   smartConfig?: CodexSmartSubagentConfig,

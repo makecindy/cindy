@@ -8,6 +8,7 @@ import {
 } from "dingtalk-stream";
 
 import { BaseIM } from "../BaseIM.js";
+import { ConnectionRetry } from "../connectionRetry.js";
 import type { ChannelIM, ImFinalOutput } from "../channelIM.js";
 import type {
   IMCardActionEvent,
@@ -69,6 +70,10 @@ export interface DingTalkStreamClient {
 }
 
 export interface DingTalkIMOptions {
+  /** 凭证键名前缀(伙伴自有连接各一个, 缺省空 = 设置页那份)。 */
+  secretKeyPrefix?: string;
+  /** 是否注册 `dingtalkBot:*` 设置卡 IPC 并广播状态(缺省 true; 伙伴连接关掉)。 */
+  ipc?: boolean;
   fetcher?: DingTalkFetch;
   clientFactory?: (credentials: {
     appKey: string;
@@ -110,6 +115,7 @@ export class DingTalkIM extends BaseIM implements ChannelIM {
   private ownerUserId = "";
   private connectionVersion = 0;
   private statusTimer: ReturnType<typeof setInterval> | null = null;
+  private readonly connectionRetry = new ConnectionRetry();
 
   constructor(
     host: IMHost,
@@ -121,22 +127,20 @@ export class DingTalkIM extends BaseIM implements ChannelIM {
   async init(): Promise<void> {
     const credentials = this.readCredentials();
     this.ownerUserId =
-      this.host.secrets.read(OWNER_USER_ID_SECRET)?.trim() ?? "";
+      this.host.secrets.read(this.key(OWNER_USER_ID_SECRET))?.trim() ?? "";
     if (!credentials) {
       this.setStatus({ kind: "idle" });
       return;
     }
     try {
       await this.connect(credentials);
-    } catch (error) {
-      this.setStatus({
-        kind: "error",
-        reason: safeConnectionError(error),
-      });
+    } catch {
+      // connect publishes the failure and schedules recovery for saved credentials.
     }
   }
 
   async dispose(): Promise<void> {
+    this.connectionRetry.reset();
     this.connectionVersion += 1;
     this.stopStatusMonitor();
     this.client?.disconnect();
@@ -150,7 +154,53 @@ export class DingTalkIM extends BaseIM implements ChannelIM {
     this.setStatus({ kind: "idle" });
   }
 
+  /** 本实例的 secret 键名(见 DingTalkIMOptions.secretKeyPrefix)。 */
+  private key(base: string): string {
+    return `${this.options.secretKeyPrefix ?? ""}${base}`;
+  }
+
+  /** TOFU 认定的主人(首个私聊发言人); 还没人私聊过时为空串。 */
+  getOwnerUserId(): string {
+    return this.ownerUserId;
+  }
+
+  /**
+   * 直接认定主人(不等首个私聊): 宿主把设置页那份个人 bot 移给伙伴时带上原主人,
+   * 避免 TOFU 在迁移后换人。须在 saveCredentials 之后调用(换 AppKey 会清主人)。
+   * 写不进安全存储时返回 false, 内存态不变。
+   */
+  presetOwnerUserId(ownerUserId: string): boolean {
+    const next = ownerUserId.trim();
+    if (!next) return false;
+    if (!this.host.secrets.write(this.key(OWNER_USER_ID_SECRET), next)) return false;
+    this.ownerUserId = next;
+    return true;
+  }
+
+  /**
+   * 保存凭证并建连(设置卡与伙伴连接共用): 先连通再落盘, 连不上抛错并回滚到
+   * 之前的凭证。
+   */
+  saveCredentials(credentials: {
+    appKey: string;
+    appSecret: string;
+  }): Promise<DingTalkPublicState> {
+    const appKey = credentials.appKey.trim();
+    const appSecret = credentials.appSecret.trim();
+    if (!appKey || !appSecret || appKey.length > 256 || appSecret.length > 512) {
+      throw new Error("[INVALID_PAYLOAD] appKey and appSecret required");
+    }
+    return this.runInAccountScope(() => this.saveAndConnect({ appKey, appSecret }));
+  }
+
+  /** 断开并清掉本实例的全部凭证(含 TOFU 主人)。 */
+  clearCredentials(): Promise<void> {
+    return this.clearAndDisconnect();
+  }
+
   registerIpc(): void {
+    // 伙伴自有连接不注册设置卡 IPC(通道名固定, 第二份实例会重复注册)。
+    if (this.options.ipc === false) return;
     this.host.ipc.handle("dingtalkBot:get-state", () => this.getPublicState());
     this.host.ipc.handle("dingtalkBot:save", async (payload) => {
       const record = isRecord(payload) ? payload : {};
@@ -174,15 +224,7 @@ export class DingTalkIM extends BaseIM implements ChannelIM {
       return this.runInAccountScope(async () => {
         const credentials = this.readCredentials();
         if (!credentials) throw new Error("DINGTALK_CREDENTIALS_MISSING");
-        try {
-          await this.connect(credentials);
-        } catch (error) {
-          this.setStatus({
-            kind: "error",
-            reason: safeConnectionError(error),
-          });
-          throw error;
-        }
+        await this.connect(credentials);
         return this.getPublicState();
       });
     });
@@ -217,7 +259,7 @@ export class DingTalkIM extends BaseIM implements ChannelIM {
       status: this.status,
       appKey: credentials?.appKey ?? null,
       hasSecret: Boolean(credentials),
-      ownerUserId: this.host.secrets.read(OWNER_USER_ID_SECRET)?.trim() || null,
+      ownerUserId: this.host.secrets.read(this.key(OWNER_USER_ID_SECRET))?.trim() || null,
     };
   }
 
@@ -353,6 +395,7 @@ export class DingTalkIM extends BaseIM implements ChannelIM {
     prompt: string,
     parse: (text: string) => T | null,
     timeoutMs = INTERACTION_TIMEOUT_MS,
+    shared?: { result: Promise<T>; decide(value: T): boolean },
   ): Promise<T> {
     if (this.pendingReplies.has(userId)) {
       throw new Error("DINGTALK_INTERACTION_ALREADY_PENDING");
@@ -369,11 +412,16 @@ export class DingTalkIM extends BaseIM implements ChannelIM {
     }, timeoutMs);
     const pending: PendingReply<T> = {
       parse,
-      resolve: resolveReply,
+      resolve: (value) => { if (shared) shared.decide(value); else resolveReply(value); },
       reject: rejectReply,
       timer,
     };
     this.pendingReplies.set(userId, pending as PendingReply);
+    if (shared) void shared.result.then((value) => {
+      if (this.pendingReplies.get(userId) === pending) this.pendingReplies.delete(userId);
+      clearTimeout(timer);
+      resolveReply(value);
+    });
     try {
       await this.sendText(userId, prompt);
     } catch (error) {
@@ -381,6 +429,7 @@ export class DingTalkIM extends BaseIM implements ChannelIM {
         this.pendingReplies.delete(userId);
       }
       clearTimeout(pending.timer);
+      if (shared) return shared.result;
       throw error;
     }
     return reply;
@@ -394,21 +443,23 @@ export class DingTalkIM extends BaseIM implements ChannelIM {
     }
 
     const previous = this.readCredentials();
-    const previousOwner = this.host.secrets.read(OWNER_USER_ID_SECRET);
+    const previousOwner = this.host.secrets.read(this.key(OWNER_USER_ID_SECRET));
+    const version = this.connectionVersion + 1;
     try {
       await this.connect(credentials);
       if (!this.writeCredentials(credentials)) {
         throw new Error("DINGTALK_CREDENTIAL_SAVE_FAILED");
       }
       if (previous?.appKey !== credentials.appKey) {
-        this.host.secrets.remove(OWNER_USER_ID_SECRET);
+        this.host.secrets.remove(this.key(OWNER_USER_ID_SECRET));
         this.ownerUserId = "";
       }
       return this.getPublicState();
     } catch (error) {
-      this.restoreSecret(APP_KEY_SECRET, previous?.appKey ?? null);
-      this.restoreSecret(APP_SECRET_SECRET, previous?.appSecret ?? null);
-      this.restoreSecret(OWNER_USER_ID_SECRET, previousOwner);
+      if (version !== this.connectionVersion) throw error;
+      this.restoreSecret(this.key(APP_KEY_SECRET), previous?.appKey ?? null);
+      this.restoreSecret(this.key(APP_SECRET_SECRET), previous?.appSecret ?? null);
+      this.restoreSecret(this.key(OWNER_USER_ID_SECRET), previousOwner);
       this.ownerUserId = previousOwner?.trim() ?? "";
       if (previous) {
         try {
@@ -426,9 +477,9 @@ export class DingTalkIM extends BaseIM implements ChannelIM {
 
   private async clearAndDisconnect(): Promise<void> {
     await this.stopConnection();
-    this.host.secrets.remove(APP_KEY_SECRET);
-    this.host.secrets.remove(APP_SECRET_SECRET);
-    this.host.secrets.remove(OWNER_USER_ID_SECRET);
+    this.host.secrets.remove(this.key(APP_KEY_SECRET));
+    this.host.secrets.remove(this.key(APP_SECRET_SECRET));
+    this.host.secrets.remove(this.key(OWNER_USER_ID_SECRET));
     this.ownerUserId = "";
     this.targetByUserId.clear();
     this.seenMessageIds.clear();
@@ -436,9 +487,35 @@ export class DingTalkIM extends BaseIM implements ChannelIM {
     this.setStatus({ kind: "idle" });
   }
 
-  private async connect(credentials: Credentials): Promise<void> {
-    await this.stopConnection();
-    const version = this.connectionVersion;
+  private async connect(credentials: Credentials, retrying = false): Promise<void> {
+    const version = this.connectionVersion + (retrying ? 0 : 1);
+    await this.stopConnection(!retrying);
+    if (version !== this.connectionVersion) throw new Error("DINGTALK_CONNECTION_REPLACED");
+    try {
+      await this.openConnection(credentials, version);
+      if (version !== this.connectionVersion) throw new Error("DINGTALK_CONNECTION_REPLACED");
+      this.connectionRetry.reset();
+    } catch (error) {
+      if (version !== this.connectionVersion) throw error;
+      const reason = safeConnectionError(error);
+      this.setStatus({ kind: "error", reason });
+      const saved = this.readCredentials();
+      if (reason !== "DINGTALK_AUTH_FAILED" && saved?.appKey === credentials.appKey
+        && saved?.appSecret === credentials.appSecret) {
+        this.scheduleReconnect(credentials, version);
+      }
+      throw error;
+    }
+  }
+
+  private scheduleReconnect(credentials: Credentials, version: number): void {
+    this.connectionRetry.schedule(() => {
+      if (version !== this.connectionVersion) return;
+      void this.connect(credentials, true).catch(() => undefined);
+    });
+  }
+
+  private async openConnection(credentials: Credentials, version: number): Promise<void> {
     this.setStatus({ kind: "connecting" });
     const api = new DingTalkApiClient(
       credentials.appKey,
@@ -455,13 +532,23 @@ export class DingTalkIM extends BaseIM implements ChannelIM {
           : "DINGTALK_NETWORK_FAILED",
       );
     }
+    if (version !== this.connectionVersion) {
+      api.close();
+      return;
+    }
     const client = (this.options.clientFactory ?? defaultClientFactory)(
       credentials,
     );
+    this.client = client;
+    const closeAttempt = () => {
+      if (this.client === client) this.client = null;
+      client.disconnect();
+      api.close();
+    };
     client.config.autoReconnect = false;
     client.registerCallbackListener(TOPIC_ROBOT, (message) => {
       this.ackDownstream(client, message);
-      if (version !== this.connectionVersion) return;
+      if (version !== this.connectionVersion || this.client !== client) return;
       const accountToken = this.host.accountScope?.capture();
       if (this.host.accountScope && accountToken === null) return;
       void this.acceptDownstream(message, version, accountToken);
@@ -469,43 +556,43 @@ export class DingTalkIM extends BaseIM implements ChannelIM {
     try {
       await client.connect();
     } catch {
-      client.disconnect();
-      api.close();
+      closeAttempt();
       throw createConnectionError("DINGTALK_STREAM_CONNECTION_FAILED");
     }
     if (version !== this.connectionVersion) {
-      client.disconnect();
-      api.close();
+      closeAttempt();
       throw new Error("DINGTALK_CONNECTION_REPLACED");
     }
     if (!client.connected) {
-      client.disconnect();
-      api.close();
+      closeAttempt();
       throw createConnectionError("DINGTALK_STREAM_CONNECTION_FAILED");
     }
-    client.config.autoReconnect = true;
+    // Own retries here: the SDK retries every second with uncancellable timers.
     this.client = client;
     this.appKey = credentials.appKey;
     this.api = api;
     this.setStatus({ kind: "connected", appId: credentials.appKey });
-    this.startStatusMonitor(version);
+    this.startStatusMonitor(version, credentials);
   }
 
-  private async stopConnection(): Promise<void> {
-    this.connectionVersion += 1;
+  private async stopConnection(resetRetry = true): Promise<void> {
+    if (resetRetry) this.connectionRetry.reset();
+    if (resetRetry) this.connectionVersion += 1;
     this.stopStatusMonitor();
     const client = this.client;
     this.client = null;
     this.api?.close();
     this.api = null;
     client?.disconnect();
-    this.targetByUserId.clear();
-    this.laneQueues.clear();
-    this.seenMessageIds.clear();
-    this.rejectPendingReplies("DINGTALK_CONNECTION_REPLACED");
+    if (resetRetry) {
+      this.targetByUserId.clear();
+      this.laneQueues.clear();
+      this.seenMessageIds.clear();
+      this.rejectPendingReplies("DINGTALK_CONNECTION_REPLACED");
+    }
   }
 
-  private startStatusMonitor(version: number): void {
+  private startStatusMonitor(version: number, credentials: Credentials): void {
     this.stopStatusMonitor();
     this.statusTimer = setInterval(() => {
       if (version !== this.connectionVersion || !this.client) return;
@@ -513,8 +600,9 @@ export class DingTalkIM extends BaseIM implements ChannelIM {
         if (this.status.kind !== "connected") {
           this.setStatus({ kind: "connected", appId: this.appKey });
         }
-      } else if (this.status.kind === "connected") {
-        this.setStatus({ kind: "connecting" });
+      } else {
+        if (this.status.kind === "connected") this.setStatus({ kind: "connecting" });
+        this.scheduleReconnect(credentials, version);
       }
     }, STATUS_POLL_MS);
   }
@@ -601,6 +689,7 @@ export class DingTalkIM extends BaseIM implements ChannelIM {
       return;
     }
     if (isGroup && !envelope.mentioned) return;
+    const text = content.text;
 
     const attachments = [];
     const unsupported = [...content.unsupported];
@@ -621,11 +710,16 @@ export class DingTalkIM extends BaseIM implements ChannelIM {
 
     const event: IMMessageEvent = {
       channelName: "dingtalk",
+      interactionSource: {
+        chatName: typeof envelope.raw.conversationTitle === 'string' ? envelope.raw.conversationTitle : envelope.conversationId,
+        senderName: envelope.senderName,
+      },
       senderId: userId,
       chatId: envelope.conversationId,
       contextId: this.appKey,
       messageId: envelope.messageId,
-      text: content.text,
+      text,
+      invoked: isGroup && envelope.mentioned,
       ...(isGroup
         ? {
             speaker: {
@@ -669,7 +763,7 @@ export class DingTalkIM extends BaseIM implements ChannelIM {
       buffer: downloaded.buffer,
       mimeType: downloaded.mimeType,
     });
-    return imageAttachment(stored.absPath, stored.url, downloaded.mimeType);
+    return imageAttachment(stored.absPath, stored.url, stored.mimeType ?? downloaded.mimeType);
   }
 
   private tryResolvePendingReply(
@@ -691,11 +785,13 @@ export class DingTalkIM extends BaseIM implements ChannelIM {
 
   private claimOwner(senderId: string): boolean {
     if (!this.host.secrets.isAvailable()) return false;
-    if (!this.host.secrets.write(OWNER_USER_ID_SECRET, senderId)) return false;
+    if (!this.host.secrets.write(this.key(OWNER_USER_ID_SECRET), senderId)) return false;
     this.ownerUserId = senderId;
-    this.host.ipc.broadcast("dingtalkBot:owner-change", {
-      ownerUserId: senderId,
-    });
+    if (this.options.ipc !== false) {
+      this.host.ipc.broadcast("dingtalkBot:owner-change", {
+        ownerUserId: senderId,
+      });
+    }
     return true;
   }
 
@@ -750,7 +846,9 @@ export class DingTalkIM extends BaseIM implements ChannelIM {
 
   private setStatus(status: IMStatus): void {
     this.status = status;
-    this.host.ipc.broadcast("dingtalkBot:status-change", { status });
+    if (this.options.ipc !== false) {
+      this.host.ipc.broadcast("dingtalkBot:status-change", { status });
+    }
     for (const handler of this.statusHandlers) {
       try {
         handler(status);
@@ -761,20 +859,20 @@ export class DingTalkIM extends BaseIM implements ChannelIM {
   }
 
   private readCredentials(): Credentials | null {
-    const appKey = this.host.secrets.read(APP_KEY_SECRET)?.trim() ?? "";
-    const appSecret = this.host.secrets.read(APP_SECRET_SECRET)?.trim() ?? "";
+    const appKey = this.host.secrets.read(this.key(APP_KEY_SECRET))?.trim() ?? "";
+    const appSecret = this.host.secrets.read(this.key(APP_SECRET_SECRET))?.trim() ?? "";
     return appKey && appSecret ? { appKey, appSecret } : null;
   }
 
   private writeCredentials(credentials: Credentials): boolean {
-    const previousKey = this.host.secrets.read(APP_KEY_SECRET);
-    const previousSecret = this.host.secrets.read(APP_SECRET_SECRET);
-    if (!this.host.secrets.write(APP_KEY_SECRET, credentials.appKey))
+    const previousKey = this.host.secrets.read(this.key(APP_KEY_SECRET));
+    const previousSecret = this.host.secrets.read(this.key(APP_SECRET_SECRET));
+    if (!this.host.secrets.write(this.key(APP_KEY_SECRET), credentials.appKey))
       return false;
-    if (this.host.secrets.write(APP_SECRET_SECRET, credentials.appSecret))
+    if (this.host.secrets.write(this.key(APP_SECRET_SECRET), credentials.appSecret))
       return true;
-    this.restoreSecret(APP_KEY_SECRET, previousKey);
-    this.restoreSecret(APP_SECRET_SECRET, previousSecret);
+    this.restoreSecret(this.key(APP_KEY_SECRET), previousKey);
+    this.restoreSecret(this.key(APP_SECRET_SECRET), previousSecret);
     return false;
   }
 
@@ -835,7 +933,7 @@ function defaultClientFactory(credentials: Credentials): DingTalkStreamClient {
 }
 
 function chunkText(text: string): string[] {
-  const normalized = text.trim() || "（空回复）";
+  const normalized = text.trim();
   const chunks: string[] = [];
   let remaining = normalized;
   while (remaining.length > OUTBOUND_CHUNK_SIZE) {
@@ -856,7 +954,7 @@ function chunkText(text: string): string[] {
 }
 
 function normalizeFinalText(text: string): string {
-  return text.trim() || "✅ 本轮已完成，没有文本输出。";
+  return text.trim();
 }
 
 function safeConnectionError(error: unknown): string {

@@ -38,6 +38,8 @@ export interface ReadBoundedFileOptions {
   rejectHardLinks?: boolean;
   /** 复读同一句柄并比较字节；内容或版本变化时抛出可重试错误。 */
   verifyContentStability?: boolean;
+  /** Optionally lower the size limit using up to 4 KiB from the same verified handle. */
+  maxBytesForPrefix?: (prefix: Buffer) => number;
 }
 
 type ReadBoundedFileNoFollowSyncOptions = Pick<
@@ -144,7 +146,7 @@ function sameHandleVersion(a: fs.BigIntStats, b: fs.BigIntStats): boolean {
  * 请求区间,单次读会把合法文件截断成解析失败。EOF 提前时这里只返回实际字节；
  * 调用方随后用句柄版本复核（及可选复读）拒绝并发截断或改写。
  */
-async function readToLength(handle: fs.promises.FileHandle, size: number): Promise<Buffer> {
+export async function readToLength(handle: fs.promises.FileHandle, size: number): Promise<Buffer> {
   const buffer = Buffer.alloc(size);
   let offset = 0;
   while (offset < size) {
@@ -239,6 +241,12 @@ export async function readBoundedFileNoFollowWithStat(
     }
     if (options?.containWithin !== undefined) {
       if (!(await verifyStillWithinRoot(stat, filePath, options.containWithin))) return null;
+    }
+    if (options?.maxBytesForPrefix) {
+      const prefix = await readToLength(handle, Math.min(Number(stat.size), 4096));
+      const limit = options.maxBytesForPrefix(prefix);
+      if (!Number.isFinite(limit) || limit < 0 || Number(stat.size) > Math.min(maxBytes, limit))
+        return null;
     }
     const bytes = await readToLength(handle, Number(stat.size));
     const after = await handle.stat({ bigint: true });

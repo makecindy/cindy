@@ -56,12 +56,20 @@ export interface ConversationSearchSessionSummary {
   id: string;
   title: string;
   workingDir: string | null;
+  projectDir?: string | null;
   workspaceKind: ConversationSearchWorkspaceKind;
   agentKind: ConversationSearchAgentKind;
   status: ConversationSearchSessionStatus;
   source?: SessionSource;
   orcaRole?: ConversationSearchOrcaRole | null;
   parentSessionId?: string | null;
+  /** Host-verified companion transcript; channel results are local-only and read-only. */
+  companion?: {
+    id: string;
+    name: string;
+    role: 'canonical' | 'history' | 'channel';
+    readOnly: boolean;
+  };
   userSendAt: string | null;
   updatedAt: string;
   createdAt: string;

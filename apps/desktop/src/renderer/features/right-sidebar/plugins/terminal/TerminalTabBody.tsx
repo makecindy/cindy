@@ -1,3 +1,4 @@
+import { Button } from '@/components/ui/button';
 /**
  * TerminalTabBody —— terminal tab 的 TabBody。
  *
@@ -18,12 +19,14 @@
  */
 
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
-import { RotateCw, AlertTriangle } from 'lucide-react';
+import { RotateCw, AlertTriangle, ServerOff } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 
 import { Spinner } from '@/components/ui/spinner';
 import type { TabKindHostContext } from '../../types';
 import { getOrCreateXterm, type XtermEntry } from './lib/xtermPool';
+import { createTerminalFontController } from './lib/terminalFont';
+import { useTerminalFontSettings } from './lib/useTerminalFontSettings';
 import type {
   TerminalDataEvent,
   TerminalExitEvent,
@@ -34,6 +37,8 @@ interface Props {
   state: TerminalState;
   ctx: TabKindHostContext;
   active?: boolean;
+  /** Keep the PTY at its last usable dimensions while the sidebar is collapsed. */
+  shellVisible?: boolean;
 }
 
 interface RuntimeError {
@@ -42,16 +47,48 @@ interface RuntimeError {
   detail: string;
 }
 
-export function TerminalTabBody({ state, ctx, active }: Props) {
+export function TerminalTabBody({ state, ctx, active, shellVisible = true }: Props) {
+  // The PTY IPC always executes on this Desktop instance. Remote workdirs must
+  // fail closed, including while device-link ownership is still unresolved.
+  const isLocalSession = ctx.remoteHostId === null && ctx.deviceLinkDeviceId === null;
+  if (!isLocalSession) return <RemoteTerminalUnavailable />;
+
+  return <LocalTerminalTabBody state={state} ctx={ctx} active={active} shellVisible={shellVisible} />;
+}
+
+function RemoteTerminalUnavailable() {
+  const { t } = useTranslation();
+  return (
+    <div className="flex h-full min-w-0 select-none items-center justify-center gap-2.5 bg-[var(--panel-bg)] p-6 text-left text-[var(--text-tertiary)]">
+      <ServerOff aria-hidden size={18} strokeWidth={1.6} />
+      <div className="max-w-[300px]">
+        <div className="text-13 font-medium leading-[1.384615] text-[var(--text-primary)]">
+          {t('rightSidebar.terminal.remoteUnavailableTitle')}
+        </div>
+        <div className="mt-[3px] text-12 leading-[1.5] text-[var(--text-secondary)]">
+          {t('rightSidebar.terminal.remoteUnavailableDescription')}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function LocalTerminalTabBody({ state, ctx, active, shellVisible = true }: Props) {
   const { tabId, workdir, patchState } = ctx;
   const { t } = useTranslation();
+  const { terminalFamily, terminalSize } = useTerminalFontSettings();
 
   const slotRef = useRef<HTMLDivElement>(null);
   const entryRef = useRef<XtermEntry | null>(null);
+  const fontControllerRef = useRef<ReturnType<typeof createTerminalFontController> | null>(null);
+  const activeRef = useRef(active);
+  activeRef.current = active;
   /** xterm onData 的 disposer,unmount 时解订阅避免内存泄漏。 */
   const onDataDisposerRef = useRef<{ dispose(): void } | null>(null);
   /** 标记本组件实例是否还活着,异步 callback 里检查。 */
   const aliveRef = useRef(true);
+  const shellVisibleRef = useRef(shellVisible);
+  shellVisibleRef.current = shellVisible;
 
   const [runtimeError, setRuntimeError] = useState<RuntimeError | null>(null);
   const [restarting, setRestarting] = useState(false);
@@ -95,11 +132,19 @@ export function TerminalTabBody({ state, ctx, active }: Props) {
       patchState({ exited: ex.exit });
     });
 
-    // 首次 fit + 拿到尺寸
-    fitNow(entry);
+    fontControllerRef.current = createTerminalFontController(
+      entry.terminal,
+      () => activeRef.current !== false && shellVisibleRef.current && hasSize(slot),
+      () => fitAndPushSize(entry, tabId, slot),
+    );
+
+    // 折叠侧栏或隐藏页签时保留最后可用尺寸，恢复可见后再测量。
+    if (activeRef.current !== false && shellVisibleRef.current) fitNow(entry, slot);
 
     return () => {
       aliveRef.current = false;
+      fontControllerRef.current?.dispose();
+      fontControllerRef.current = null;
       onDataDisposerRef.current?.dispose();
       onDataDisposerRef.current = null;
       offData();
@@ -107,6 +152,11 @@ export function TerminalTabBody({ state, ctx, active }: Props) {
       // xterm 实例和 PTY 都保活,这里仅 detach DOM 不 dispose
     };
   }, [tabId, patchState]);
+
+  // Font changes are independent from the DOM/PTY lifecycle and never focus the terminal.
+  useEffect(() => {
+    fontControllerRef.current?.update({ terminalFamily, terminalSize });
+  }, [terminalFamily, terminalSize, tabId, patchState]);
 
   // ─── 2. PTY 创建 / 跨窗口 re-attach ───
   // 两种进入条件:
@@ -136,6 +186,13 @@ export function TerminalTabBody({ state, ctx, active }: Props) {
       .then((result) => {
         if (cancelled || !aliveRef.current) return;
         entry.ptyAttached = true;
+        // A font can finish loading while create is in flight. Ensure the PTY
+        // receives the final dimensions even if the earlier resize arrived too soon.
+        if (entry.lastSize.cols !== cols || entry.lastSize.rows !== rows) {
+          void window.electronAPI.terminal
+            .resize(tabId, entry.lastSize.cols, entry.lastSize.rows)
+            .catch(() => undefined);
+        }
         // re-attach 路径不重复 patchState —— 持久化字段没变,写一遍只是无谓 IPC。
         if (!isReattach) {
           patchState({
@@ -162,8 +219,8 @@ export function TerminalTabBody({ state, ctx, active }: Props) {
     if (!slot) return;
     const ro = new ResizeObserver(() => {
       const entry = entryRef.current;
-      if (!entry || !aliveRef.current) return;
-      fitAndPushSize(entry, tabId);
+      if (!entry || !aliveRef.current || !shellVisibleRef.current || activeRef.current === false || !hasSize(slot)) return;
+      if (!fontControllerRef.current?.flush()) fitAndPushSize(entry, tabId, slot);
     });
     ro.observe(slot);
     return () => ro.disconnect();
@@ -171,25 +228,37 @@ export function TerminalTabBody({ state, ctx, active }: Props) {
 
   // ─── 4. active 切换时 fit + focus(避免后台 layout 抖动)───
   useEffect(() => {
-    if (!active) return;
+    if (!active || !shellVisible) return;
     const entry = entryRef.current;
     if (!entry) return;
     // 切到本 tab 时 fit 一下,因为后台 tab 的 layout 可能没跟上侧栏宽度变化
-    requestAnimationFrame(() => {
-      if (!aliveRef.current || !entryRef.current) return;
-      fitAndPushSize(entryRef.current, tabId);
-      entryRef.current.terminal.focus();
+    const frame = requestAnimationFrame(() => {
+      const slot = slotRef.current;
+      if (!aliveRef.current || entryRef.current !== entry || !shellVisibleRef.current || activeRef.current === false || !slot || !hasSize(slot)) return;
+      if (!fontControllerRef.current?.flush()) fitAndPushSize(entry, tabId, slot);
+      entry.terminal.focus();
     });
-  }, [active, tabId]);
+    return () => cancelAnimationFrame(frame);
+  }, [active, shellVisible, tabId]);
 
   // ─── 5. Restart 按钮 handler ───
   const onRestart = useCallback(async () => {
     if (restarting) return;
+    const entry = entryRef.current;
     setRestarting(true);
     setRuntimeError(null);
     try {
       const result = await window.electronAPI.terminal.restart(tabId);
       if (!aliveRef.current) return;
+      // The exited PTY ignored font-driven resizes. Restart uses its old grid,
+      // so resend the latest usable size even when the renderer has not changed.
+      // Do not measure a hidden or collapsed panel just to synchronize restart.
+      if (entry && entryRef.current === entry) {
+        const { cols, rows } = entry.lastSize;
+        if (Number.isFinite(cols) && Number.isFinite(rows) && cols > 0 && rows > 0) {
+          void window.electronAPI.terminal.resize(tabId, cols, rows).catch(() => undefined);
+        }
+      }
       patchState({
         created: true,
         shellId: result.shellId,
@@ -231,7 +300,12 @@ export function TerminalTabBody({ state, ctx, active }: Props) {
 
 // ───────── helpers ─────────
 
-function fitNow(entry: XtermEntry): void {
+function hasSize(slot: HTMLElement): boolean {
+  return slot.clientWidth > 0 && slot.clientHeight > 0;
+}
+
+function fitNow(entry: XtermEntry, slot: HTMLElement): void {
+  if (!hasSize(slot)) return;
   try {
     entry.fitAddon.fit();
     entry.lastSize = { cols: entry.terminal.cols, rows: entry.terminal.rows };
@@ -240,7 +314,8 @@ function fitNow(entry: XtermEntry): void {
   }
 }
 
-function fitAndPushSize(entry: XtermEntry, tabId: string): void {
+function fitAndPushSize(entry: XtermEntry, tabId: string, slot: HTMLElement): void {
+  if (!hasSize(slot)) return;
   try {
     entry.fitAddon.fit();
   } catch {
@@ -251,6 +326,8 @@ function fitAndPushSize(entry: XtermEntry, tabId: string): void {
   if (!Number.isFinite(cols) || !Number.isFinite(rows) || cols < 1 || rows < 1) return;
   if (cols === entry.lastSize.cols && rows === entry.lastSize.rows) return;
   entry.lastSize = { cols, rows };
+  // create/reattach will reconcile these dimensions once it has an owner.
+  if (!entry.ptyAttached) return;
   void window.electronAPI.terminal.resize(tabId, cols, rows).catch(() => {
     /* 已 disposed 的 session 静默忽略 */
   });
@@ -285,15 +362,18 @@ function ExitedOverlay({
     <div className="pointer-events-none absolute inset-0 flex items-end justify-center pb-6">
       <div className="pointer-events-auto flex items-center gap-3 rounded-md border border-white/15 bg-black/80 px-4 py-2 text-sm text-white shadow-lg backdrop-blur">
         <span>{message}</span>
-        <button
+        <Button
+          variant="secondary"
+          size="xs"
+          compact
+          loading={restarting}
           type="button"
           onClick={onRestart}
           disabled={restarting}
-          className="inline-flex items-center gap-1 rounded border border-white/20 px-2 py-0.5 text-xs hover:bg-white/10 disabled:opacity-50"
         >
           <Spinner icon={RotateCw} size={12} spinning={restarting} />
           {t('rightSidebar.terminal.restart')}
-        </button>
+        </Button>
       </div>
     </div>
   );
@@ -317,15 +397,18 @@ function ErrorOverlay({
           <AlertTriangle size={14} />
           <span>{message}</span>
         </div>
-        <button
+        <Button
+          variant="secondary"
+          size="xs"
+          compact
+          loading={restarting}
           type="button"
           onClick={onRetry}
           disabled={restarting}
-          className="inline-flex items-center gap-1 rounded border border-white/20 px-2 py-0.5 text-xs hover:bg-white/10 disabled:opacity-50"
         >
           <Spinner icon={RotateCw} size={12} spinning={restarting} />
           {t('rightSidebar.terminal.restart')}
-        </button>
+        </Button>
       </div>
     </div>
   );

@@ -1,3 +1,4 @@
+import { Button } from '@/components/ui/button';
 import { useState } from 'react';
 import { RefreshCw } from 'lucide-react';
 import { Spinner } from '@/components/ui/spinner';
@@ -6,7 +7,11 @@ import { retryBotInvitation, type BotProfile } from './botStore';
 import { useBotTranslation } from './botPronounContext';
 
 /** The same welcome appears while inviting and when returning to a pending companion. */
-export function BotInvitationWelcome({ bot }: { bot: BotProfile }) {
+export function BotInvitationWelcome({ bot, onConfigureModel, onRetry }: {
+  bot: BotProfile;
+  onConfigureModel?: () => void;
+  onRetry?: () => Promise<void>;
+}) {
   const { t } = useBotTranslation();
   const [retrying, setRetrying] = useState(false);
   const [retryFailed, setRetryFailed] = useState(false);
@@ -26,21 +31,23 @@ export function BotInvitationWelcome({ bot }: { bot: BotProfile }) {
         </p>
       </div>
       {stage === 'failed' ? (
-        <button
+        <Button
+          variant="secondary"
+          size="lg"
+          loading={retrying}
           type="button"
           disabled={retrying}
           onClick={() => {
             setRetrying(true);
             setRetryFailed(false);
-            void retryBotInvitation(bot.id)
+            void Promise.resolve().then(() => onRetry ? onRetry() : retryBotInvitation(bot.id))
               .catch(() => setRetryFailed(true))
               .finally(() => setRetrying(false));
           }}
-          className="inline-flex h-9 items-center gap-2 rounded-full border border-[var(--border-default)] px-4 text-13 text-[var(--text-primary)] hover:bg-[var(--surface-hover)] disabled:opacity-50"
         >
           <RefreshCw size={14} />
           {t('commonUi.retry')}
-        </button>
+        </Button>
       ) : (
         <p
           className="flex items-center gap-2 text-13 text-[var(--text-primary)]"
@@ -53,6 +60,11 @@ export function BotInvitationWelcome({ bot }: { bot: BotProfile }) {
           })}
         </p>
       )}
+      {onConfigureModel ? (
+        <Button variant="secondary" size="lg" type="button" disabled={retrying} onClick={onConfigureModel}>
+          {t('bots.invitation.changeModel')}
+        </Button>
+      ) : null}
       {retryFailed ? (
         <p role="alert" className="text-12 text-[var(--text-danger)]">
           {t('bots.invitation.retryFailed')}

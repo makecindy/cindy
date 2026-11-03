@@ -17,12 +17,15 @@ export interface ProjectScheduleConfig {
   agentKind?: 'claude-code' | 'codex' | 'pi';
   /** 显式模型选择的 Harness；省略时保留旧配置的跟随绑定任务语义。 */
   modelAgentKind?: 'claude-code' | 'codex' | 'pi';
+  modelAgentDeviceId?: string;
   model?: string;
   /** 显式来源(供应商)id;省略 = 使用该 Agent 的原生默认来源。 */
   providerId?: string;
+  /** Agent 运行位置，相对项目自动化所在电脑；省略 = 本机。 */
+  agentDeviceId?: string;
   effort?: string;
   /** Codex Fast 模式开关，仅 Codex 有意义。详见 Schedule.fastMode。 */
-  fastMode?: boolean;
+  fastMode?: boolean | 'ultrafast';
   useWorktree?: boolean;
   persistentSession?: boolean;
   silentWhenIdle?: boolean;
@@ -61,8 +64,10 @@ export function scheduleToProjectConfig(
     intervalMs: schedule.intervalMs,
     agentKind: schedule.agentKind,
     modelAgentKind: schedule.modelAgentKind,
+    modelAgentDeviceId: schedule.modelAgentDeviceId,
     model: schedule.model,
     providerId: schedule.providerId || undefined,
+    agentDeviceId: schedule.agentDeviceId,
     effort: schedule.effort,
     fastMode: schedule.fastMode,
     useWorktree: schedule.useWorktree,
@@ -91,8 +96,10 @@ export function formToProjectConfig(
     intervalMs: form.intervalMs,
     agentKind: scheduleAgentKindForForm(form),
     modelAgentKind: form.model.trim() ? form.modelAgentKind : undefined,
+    modelAgentDeviceId: form.model.trim() ? form.modelAgentDeviceId : undefined,
     model: form.model.trim() || undefined,
     providerId: form.providerId.trim() || undefined,
+    agentDeviceId: form.model.trim() ? form.agentDeviceId?.trim() || undefined : undefined,
     effort: form.effort || undefined,
     // Codex / Pi 都生效(runner.ts:665);只认 codex 会丢弃 Pi 任务的 Fast(codex review)。
     fastMode: (form.agentKind === 'codex' || form.agentKind === 'pi') && form.fastMode ? true : undefined,

@@ -38,7 +38,29 @@ const {
 
 vi.mock('react-i18next', () => ({
   useTranslation: () => ({
-    t: (key: string) => key,
+    t: (key: string, vars?: Record<string, unknown>) => {
+      const templates: Record<string, string> = {
+        'update.banner.confirmBusyActivities': 'Restarting will interrupt {{activities}}.',
+        'update.banner.activityJoiner': ', ',
+        'update.banner.activityJoinerPair': ' and ',
+        'update.banner.activityJoinerLast': ', and ',
+        'update.banner.activityNameJoiner': ', ',
+        'update.banner.activityNameJoinerPair': ' and ',
+        'update.banner.activityNameJoinerLast': ', and ',
+        'update.banner.activity.companion': "a teammate's reply",
+        'update.banner.activity.companionOne': "{{names}}'s reply",
+        'update.banner.activity.companionOther': "{{names}}'s replies",
+        'update.banner.activity.conversation': 'a chat in progress',
+        'update.banner.activity.backgroundCommand': 'a background command',
+        'update.banner.activity.scheduledTask': 'a scheduled task',
+        'update.banner.activity.generation': 'a generation',
+        'update.banner.activity.subtask': 'a subtask',
+      };
+      const template = templates[key];
+      if (!template) return key;
+      if (!vars) return template;
+      return template.replace(/\{\{(\w+)\}\}/g, (_, name: string) => String(vars[name] ?? ''));
+    },
   }),
 }));
 
@@ -53,7 +75,7 @@ vi.mock('@/hooks/useUpdateStatus', () => ({
 vi.mock('@/hooks/useUpdateBannerDismiss', () => ({
   useUpdateBannerDismiss: () => ({
     dismissed: dismissState.dismissed,
-    reason: null,
+    reason: dismissState.dismissed ? 'user' : null,
     dismiss: () => { dismissState.dismissed = true; },
     restore: () => { dismissState.dismissed = false; },
     deferBecauseBusy: vi.fn(),
@@ -75,6 +97,7 @@ vi.mock('@/components/ui/tooltip', () => ({
 }));
 
 import { UpdateBanner } from '@/components/sidebar/UpdateBanner';
+import { formatRelaunchActivityHint } from '../../shared/relaunchActivitySummary';
 
 /** 返回一个手动 settle 的探针,用于把「点击后、resolve 前」这段窗口撑开。 */
 function deferredProbe(): (busy: boolean) => void {
@@ -105,6 +128,67 @@ beforeEach(() => {
 afterEach(cleanup);
 
 describe('UpdateBanner relaunch entry', () => {
+  it.each([false, true].flatMap(busy => [false, true].flatMap(hidden =>
+    [false, true].map(collapsed => ({ busy, hidden, collapsed })),
+  )))('keeps repeated Linux failures actionable ($busy/$hidden/$collapsed)', async ({ busy, hidden, collapsed }) => {
+    updateStatus.current.errorCode = 'linux_installation_unsupported';
+    dismissState.dismissed = hidden;
+    anyActivityBlockingRelaunch.mockResolvedValue(busy);
+    const { rerender } = render(<UpdateBanner isCollapsed={collapsed} />);
+    for (let attempt = 1; attempt <= 2; attempt += 1) {
+      fireEvent.click(await screen.findByRole('button', { name: 'update.linuxInstallation.retry' }));
+      if (busy) {
+        fireEvent.click(await screen.findByRole('button', { name: 'update.banner.confirmAria' }));
+      }
+      await waitFor(() => expect(relaunchToUpdate).toHaveBeenCalledTimes(attempt));
+      // Identical main-process result: no boolean error transition to rescue UI.
+      rerender(<UpdateBanner isCollapsed={collapsed} />);
+      await screen.findByText('update.linuxInstallation.title');
+      expect(screen.queryByRole('button', { name: 'update.banner.confirmAria' })).toBeNull();
+    }
+    updateStatus.current = { status: 'idle', errorCode: null };
+    rerender(<UpdateBanner isCollapsed={collapsed} />);
+    expect(screen.queryByText('update.linuxInstallation.title')).toBeNull();
+  });
+
+  it.each([false, true])('cancelling a Linux recheck ignores its late busy=%s result', async (busy) => {
+    updateStatus.current.errorCode = 'linux_installation_unsupported';
+    const settle = deferredProbe();
+    render(<UpdateBanner isCollapsed={false} />);
+    fireEvent.click(await screen.findByRole('button', { name: 'update.linuxInstallation.retry' }));
+    fireEvent.click(screen.getByRole('button', { name: 'update.linuxInstallation.later' }));
+    settle(busy);
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(relaunchToUpdate).not.toHaveBeenCalled();
+    expect(screen.queryByRole('button', { name: 'update.banner.confirmAria' })).toBeNull();
+  });
+
+  it('checks active work again when retrying a Linux update after repairing dependencies', async () => {
+    updateStatus.current.errorCode = 'linux_installation_unsupported';
+    anyActivityBlockingRelaunch.mockResolvedValue(true);
+    render(<UpdateBanner isCollapsed={false} />);
+    fireEvent.click(await screen.findByRole('button', { name: 'update.linuxInstallation.retry' }));
+    await waitFor(() => expect(anyActivityBlockingRelaunch).toHaveBeenCalledTimes(1));
+    expect(relaunchToUpdate).not.toHaveBeenCalled();
+  });
+
+  it.each(['light', 'dark'])('offers the Linux guide without restarting in %s mode', async (theme) => {
+    document.documentElement.classList.toggle('dark', theme === 'dark');
+    updateStatus.current.errorCode = 'linux_installation_unsupported';
+    render(<UpdateBanner isCollapsed={false} />);
+    await screen.findByText('update.linuxInstallation.title');
+    fireEvent.click(screen.getByRole('button', { name: 'update.linuxInstallation.later' }));
+    await waitFor(() => expect(screen.queryByText('update.linuxInstallation.title')).toBeNull());
+    fireEvent.click(screen.getByRole('button', { name: 'update.banner.ariaExpanded' }));
+    await screen.findByText('update.linuxInstallation.title');
+    fireEvent.click(screen.getByRole('button', { name: 'update.linuxInstallation.guide' }));
+    expect(openExternal).toHaveBeenCalledWith('https://github.com/makecindy/cindy/blob/main/docs/linux.md');
+    expect(anyActivityBlockingRelaunch).not.toHaveBeenCalled();
+    expect(relaunchToUpdate).not.toHaveBeenCalled();
+    document.documentElement.classList.remove('dark');
+  });
+
   it('prompts for the VC++ Runtime, keeps the banner, and rechecks on demand', async () => {
     updateStatus.current = {
       status: 'ready',
@@ -308,5 +392,233 @@ describe('UpdateBanner relaunch entry', () => {
     await Promise.resolve();
     await Promise.resolve();
     expect(relaunchToUpdate).not.toHaveBeenCalled();
+  });
+});
+
+
+/**
+ * 测试价值
+ * - 生产入口与可观察结果：UpdateBanner 的「立即重启」。有活动时确认句写出全部类别并可取消；
+ *   没有活动时直接重启。取消和迟到的探针都不重启。
+ * - Bug／规则依据：issue #5265。确认句以前固定是「重启会中断运行中的任务」，看不出是哪一类。
+ * - 现有覆盖缺口：上面的用例只覆盖布尔探针和通用警告，没有类别摘要，也没有摘要通道上的竞态。
+ * - 最小失败输入：摘要同时给出伙伴和后台命令；或摘要还在飞时点「稍后再说」/补丁被替换。
+ * - tier：unit。jsdom 渲染真实组件，探针是注入的 electronAPI。
+ */
+describe('UpdateBanner relaunch activity summary', () => {
+  function withDescribe(impl: () => Promise<unknown>) {
+    Object.defineProperty(window, 'electronAPI', {
+      configurable: true,
+      value: {
+        anyActivityBlockingRelaunch,
+        describeRelaunchBlockingActivity: impl,
+        relaunchToUpdate,
+        openExternal,
+        clientEndpoints: { websiteUrl: 'https://cindy.ai' },
+      },
+    });
+  }
+
+  function deferredDescribe(): (value: unknown) => void {
+    let settle!: (value: unknown) => void;
+    withDescribe(() => new Promise((resolve) => { settle = resolve; }));
+    return (value) => settle(value);
+  }
+
+  const namedHint = "Restarting will interrupt Cindy and Mika's replies and a background command.";
+
+  it('names every interrupting activity and can still be cancelled', async () => {
+    withDescribe(async () => ({
+      busy: true,
+      categories: ['background-command', 'companion'],
+      companionNames: ['Cindy', 'Mika'],
+    }));
+    render(<UpdateBanner isCollapsed={false} />);
+    fireEvent.click(screen.getByRole('button', { name: 'update.banner.ariaExpanded' }));
+    expect(await screen.findByText(namedHint)).toBeTruthy();
+    expect(screen.queryByText('update.banner.confirmBusyHint')).toBeNull();
+    expect(anyActivityBlockingRelaunch).not.toHaveBeenCalled();
+    expect(relaunchToUpdate).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole('button', { name: 'update.banner.cancelAria' }));
+    expect(relaunchToUpdate).not.toHaveBeenCalled();
+    expect(screen.getByRole('button', { name: 'update.banner.ariaExpanded' })).toBeTruthy();
+    expect(screen.queryByText(namedHint)).toBeNull();
+  });
+
+  it('hides an unsafe name and still shows the category', async () => {
+    withDescribe(async () => ({
+      busy: true,
+      categories: ['companion'],
+      companionNames: ['3c4c962a-1111-4111-8111-111111111111'],
+    }));
+    render(<UpdateBanner isCollapsed={false} />);
+    fireEvent.click(screen.getByRole('button', { name: 'update.banner.ariaExpanded' }));
+    const hint = "Restarting will interrupt a teammate's reply.";
+    expect(await screen.findByText(hint)).toBeTruthy();
+    expect(screen.queryByText('3c4c962a-1111-4111-8111-111111111111')).toBeNull();
+    expect(relaunchToUpdate).not.toHaveBeenCalled();
+  });
+
+  it('keeps the generic warning when the summary has no category', async () => {
+    withDescribe(async () => ({ busy: true, categories: [], companionNames: [] }));
+    render(<UpdateBanner isCollapsed={false} />);
+    fireEvent.click(screen.getByRole('button', { name: 'update.banner.ariaExpanded' }));
+    expect(await screen.findByText('update.banner.confirmBusyHint')).toBeTruthy();
+    expect(relaunchToUpdate).not.toHaveBeenCalled();
+  });
+
+  it('relaunches immediately when the summary says nothing is running', async () => {
+    withDescribe(async () => ({ busy: false, categories: ['companion'], companionNames: ['Cindy'] }));
+    render(<UpdateBanner isCollapsed={false} />);
+    fireEvent.click(screen.getByRole('button', { name: 'update.banner.ariaExpanded' }));
+    await waitFor(() => expect(relaunchToUpdate).toHaveBeenCalledTimes(1));
+    expect(screen.queryByRole('button', { name: 'update.banner.confirmAria' })).toBeNull();
+  });
+
+  it('fails closed to the generic warning when the summary shape is unusable', async () => {
+    withDescribe(async () => ({ categories: ['companion'] }));
+    render(<UpdateBanner isCollapsed={false} />);
+    fireEvent.click(screen.getByRole('button', { name: 'update.banner.ariaExpanded' }));
+    expect(await screen.findByText('update.banner.confirmBusyHint')).toBeTruthy();
+    expect(relaunchToUpdate).not.toHaveBeenCalled();
+  });
+
+  it('fails closed when the summary probe rejects', async () => {
+    withDescribe(() => Promise.reject(new Error('ipc channel closed')));
+    render(<UpdateBanner isCollapsed={false} />);
+    fireEvent.click(screen.getByRole('button', { name: 'update.banner.ariaExpanded' }));
+    expect(await screen.findByText('update.banner.confirmBusyHint')).toBeTruthy();
+    expect(relaunchToUpdate).not.toHaveBeenCalled();
+  });
+
+  it('discards a late summary after the user dismisses the banner', async () => {
+    const settle = deferredDescribe();
+    const { rerender } = render(<UpdateBanner isCollapsed={false} />);
+    fireEvent.click(screen.getByRole('button', { name: 'update.banner.ariaExpanded' }));
+    fireEvent.click(screen.getByRole('button', { name: 'update.banner.dismissAria' }));
+    rerender(<UpdateBanner isCollapsed={false} />);
+    settle({ busy: false, categories: [], companionNames: [] });
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(relaunchToUpdate).not.toHaveBeenCalled();
+  });
+
+  it('discards a late summary when the ready patch is replaced', async () => {
+    const settle = deferredDescribe();
+    const { rerender } = render(<UpdateBanner isCollapsed={false} />);
+    fireEvent.click(screen.getByRole('button', { name: 'update.banner.ariaExpanded' }));
+    updateStatus.current = { status: 'superseding', version: '1.2.3', errorCode: null };
+    rerender(<UpdateBanner isCollapsed={false} />);
+    settle({ busy: false, categories: [], companionNames: [] });
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(relaunchToUpdate).not.toHaveBeenCalled();
+    expect(screen.getByText('update.banner.preparingButton')).toBeTruthy();
+  });
+});
+
+/**
+ * 测试价值
+ * - 生产入口与可观察结果：formatRelaunchActivityHint。用户看到的是完整警告句，不是残句。
+ * - Bug／规则依据：#5265 的评审。日语任意类别和英语具名伙伴原先拼不成句子。
+ * - 现有覆盖缺口：组件测试以前只断言翻译键顺序，发现不了残句。
+ * - 最小失败输入：只有后台命令的日语句，以及一个或两个英语伙伴名。
+ * - tier：unit。直接调用生产函数，翻译模板与 locale 文案相同。
+ */
+describe('formatRelaunchActivityHint builds a complete sentence', () => {
+  function translate(dict: Record<string, string>) {
+    return (key: string, vars?: Record<string, string>) => {
+      const template = dict[key] ?? key;
+      if (!vars) return template;
+      return template.replace(/\{\{(\w+)\}\}/g, (_, name: string) => vars[name] ?? '');
+    };
+  }
+
+  const shared = {
+    'update.banner.activityJoiner': ', ',
+    'update.banner.activityJoinerPair': ' and ',
+    'update.banner.activityJoinerLast': ', and ',
+    'update.banner.activityNameJoiner': ', ',
+    'update.banner.activityNameJoinerPair': ' and ',
+    'update.banner.activityNameJoinerLast': ', and ',
+  };
+
+  it('uses a full English sentence and pluralizes teammate names', () => {
+    const t = translate({
+      ...shared,
+      'update.banner.confirmBusyActivities': 'Restarting will interrupt {{activities}}.',
+      'update.banner.activity.companion': "a teammate's reply",
+      'update.banner.activity.companionOne': "{{names}}'s reply",
+      'update.banner.activity.companionOther': "{{names}}'s replies",
+      'update.banner.activity.backgroundCommand': 'a background command',
+      'update.banner.activity.conversation': 'a chat in progress',
+    });
+    expect(formatRelaunchActivityHint(t, {
+      categories: ['background-command'],
+      companionNames: [],
+    })).toBe('Restarting will interrupt a background command.');
+    expect(formatRelaunchActivityHint(t, {
+      categories: ['companion'],
+      companionNames: ['Cindy'],
+    })).toBe("Restarting will interrupt Cindy's reply.");
+    expect(formatRelaunchActivityHint(t, {
+      categories: ['companion', 'background-command'],
+      companionNames: ['Cindy', 'Mika'],
+    })).toBe("Restarting will interrupt Cindy and Mika's replies and a background command.");
+    expect(formatRelaunchActivityHint(t, {
+      categories: ['companion', 'conversation', 'background-command'],
+      companionNames: [],
+    })).toBe("Restarting will interrupt a teammate's reply, a chat in progress, and a background command.");
+    expect(formatRelaunchActivityHint(t, {
+      categories: ['companion'],
+      companionNames: ['Ada', 'Bea', 'Cleo', 'Dora'],
+    })).toBe("Restarting will interrupt a teammate's reply.");
+  });
+
+  it('says in Japanese that the restart will interrupt the activity', () => {
+    const t = translate({
+      'update.banner.confirmBusyActivities': '再起動すると、{{activities}}が中断されます。',
+      'update.banner.activityJoiner': '、',
+      'update.banner.activityJoinerPair': '、',
+      'update.banner.activityJoinerLast': '、',
+      'update.banner.activityNameJoiner': '、',
+      'update.banner.activityNameJoinerPair': 'と',
+      'update.banner.activityNameJoinerLast': '、',
+      'update.banner.activity.companionOne': '仲間 {{names}}の返信',
+      'update.banner.activity.companionOther': '仲間 {{names}}の返信',
+      'update.banner.activity.backgroundCommand': 'バックグラウンドコマンド',
+    });
+    expect(formatRelaunchActivityHint(t, {
+      categories: ['background-command'],
+      companionNames: [],
+    })).toBe('再起動すると、バックグラウンドコマンドが中断されます。');
+    expect(formatRelaunchActivityHint(t, {
+      categories: ['companion'],
+      companionNames: ['Cindy'],
+    })).toBe('再起動すると、仲間 Cindyの返信が中断されます。');
+    expect(formatRelaunchActivityHint(t, {
+      categories: ['companion'],
+      companionNames: ['Cindy', 'Mika'],
+    })).toBe('再起動すると、仲間 CindyとMikaの返信が中断されます。');
+  });
+
+  it('keeps the Chinese warning readable for one or more teammates', () => {
+    const t = translate({
+      'update.banner.confirmBusyActivities': '重启会中断{{activities}}。',
+      'update.banner.activityJoiner': '、',
+      'update.banner.activityJoinerPair': '、',
+      'update.banner.activityJoinerLast': '、',
+      'update.banner.activityNameJoiner': '、',
+      'update.banner.activityNameJoinerPair': '、',
+      'update.banner.activityNameJoinerLast': '、',
+      'update.banner.activity.companionOne': '伙伴 {{names}} 的回复',
+      'update.banner.activity.companionOther': '伙伴 {{names}} 的回复',
+      'update.banner.activity.conversation': '正在进行的对话',
+      'update.banner.activity.backgroundCommand': '后台命令',
+    });
+    expect(formatRelaunchActivityHint(t, {
+      categories: ['companion', 'conversation', 'background-command'],
+      companionNames: ['Cindy', 'Mika'],
+    })).toBe('重启会中断伙伴 Cindy、Mika 的回复、正在进行的对话、后台命令。');
   });
 });

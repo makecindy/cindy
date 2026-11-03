@@ -7,12 +7,15 @@
  */
 
 import type { AgentKind, Effort, PermissionMode } from '@cindy/maker-core';
+import { resolveAutomaticImSettings, resolvedImDefaultFingerprint, usesAutomaticImModel } from '../../shared/imAutomaticModel.js';
 import {
   chatEligibleSourcesForModel,
   connectedProvidersForAgent,
   effectiveSourceIdForModel,
   getModel,
   isModelSelectableForNewRoute,
+  isModelVisible,
+  movedCindyAutoSourceId,
   type ProviderView,
 } from '@cindy/model-providers';
 
@@ -27,22 +30,64 @@ import {
   IM_DEFAULT_SETTINGS,
   type ImDefaultAgentSettings,
   type ImDefaultSettingsChannel,
+  type ImDefaultSettings,
+  type ImDefaultAgentKind,
+  isUnconditionalTurnPolicyChannel,
 } from '../../shared/imDefaultSettings.js';
 import { createLogger } from '../logger';
 import { getMaker } from '../maker-host';
 import { getDesktopProviderService } from '../maker-host/createDesktopProviderService';
 import { readImDefaultSettings } from './defaultSettingsStore';
+import { readImRemoteProviderRoute } from './remoteProviderRoute';
+import { getModelVisibilityOverride, waitForModelVisibilityMirror } from '../maker-host/model-visibility-mirror';
+import { fingerprintImDefaultSettings, type ImDefaultRoute } from './shared/channelDefaultRoute';
 import type { ImOrchestratorConfig } from './shared/types';
 
 const log = createLogger('im:defaults');
 
+/** Read-only projection; never save the resolved automatic route back as a user preference. */
+export async function resolveImAutomaticDefaults<T extends ImDefaultSettings>(
+  raw: T,
+  channel?: ImDefaultSettingsChannel,
+  providerSnapshot?: ProviderView[] | null,
+  agentKind?: ImDefaultAgentKind,
+): Promise<T | null> {
+  const providers = providerSnapshot === undefined ? await listProvidersForDefaults() : providerSnapshot;
+  if (!providers) return null;
+  await waitForModelVisibilityMirror();
+  return resolveAutomaticImSettings(raw, providers, {
+    agentKind,
+    isModelEnabled: (agent, providerId, model) => isModelVisible(
+      getModelVisibilityOverride(agent, providerId, model.id), model.defaultEnabled),
+    allowAgent: channel && isUnconditionalTurnPolicyChannel(channel)
+      ? (agent) => getMaker().getCapabilities(agent).turnPermissionPolicy?.supported.supported === true
+      : undefined,
+  });
+}
+
+/** Resolve every automatic slot for settings/official workspace rows, using one catalog snapshot. */
+export async function projectImDefaultSettings<T extends ImDefaultSettings>(raw: T, channel?: ImDefaultSettingsChannel): Promise<T> {
+  const providers = await listProvidersForDefaults();
+  let view = usesAutomaticImModel(raw)
+    ? await resolveImAutomaticDefaults(raw, channel, providers) ?? raw : raw;
+  for (const agent of ['claude-code', 'codex', 'pi'] as const) {
+    if (agent === view.agentKind || raw.agents[agent].model) continue;
+    const resolved = await resolveImAutomaticDefaults(raw, channel, providers, agent);
+    if (resolved) view = { ...view, agents: { ...view.agents, [agent]: resolved.agents[agent] } };
+  }
+  return view;
+}
+
 export interface ResolvedImSessionDefaults {
+  agentDeviceId?: string | null;
   agentKind: AgentKind;
   model: string;
   effort: Effort;
   providerId: string | null;
   permissionMode: PermissionMode;
-  fastMode: boolean;
+  fastMode: boolean | 'ultrafast';
+  /** 本次解析所读原始设置的指纹(与上面的值出自同一次读取), 写进任务的跟随记录。 */
+  fingerprint: string;
 }
 
 export function getImDefaultEffortFor(
@@ -66,6 +111,30 @@ export async function resolveImSessionDefaults(
   channel?: ImDefaultSettingsChannel,
 ): Promise<ResolvedImSessionDefaults> {
   const raw = readImDefaultSettings(channel);
+  if (usesAutomaticImModel(raw)) {
+    const resolved = await resolveImAutomaticDefaults(raw, channel, providerSnapshot);
+    if (!resolved) throw new Error('im default session has no available chat model; connect or enable a model in settings');
+    return {
+      agentKind: resolved.agentKind,
+      ...resolved.agents[resolved.agentKind],
+      permissionMode: raw.permissionMode ?? config.defaultPermissionMode,
+      fastMode: false,
+      fingerprint: resolvedImDefaultFingerprint(fingerprintImDefaultSettings(raw), resolved),
+    };
+  }
+  const remote = raw.agents[raw.agentKind];
+  if (remote.agentDeviceId) {
+    const { model } = await readImRemoteProviderRoute({ ...remote, agentDeviceId: remote.agentDeviceId, agentKind: raw.agentKind });
+    return {
+      ...remote,
+      agentKind: raw.agentKind,
+      effort: model.efforts.includes(remote.effort) || !model.efforts.length
+        ? remote.effort : model.defaultEffort ?? model.efforts[0],
+      permissionMode: raw.permissionMode ?? config.defaultPermissionMode,
+      fastMode: false,
+      fingerprint: fingerprintImDefaultSettings(raw),
+    };
+  }
   const providers =
     providerSnapshot === undefined ? await listProvidersForDefaults() : providerSnapshot;
   const requestedAgent = raw.agentKind;
@@ -99,6 +168,32 @@ export async function resolveImSessionDefaults(
     providerId,
     permissionMode: raw.permissionMode ?? config.defaultPermissionMode,
     fastMode: false,
+    fingerprint: fingerprintImDefaultSettings(raw),
+  };
+}
+
+/** 渠道当前原始设置的指纹 —— 不读供应商列表, 供每条消息的廉价比对。 */
+export function readImDefaultSettingsFingerprint(channel?: ImDefaultSettingsChannel): string {
+  return fingerprintImDefaultSettings(readImDefaultSettings(channel));
+}
+
+/**
+ * 保存的原始默认路由 —— **不经过**模型可用性回落 / 来源改道。
+ *
+ * `resolveImSessionDefaults` 在旧默认失效(来源断开、模型停用/下架)时会把落点
+ * 挪到别的可用路由上; 而历史任务记录的是当年真实落到的旧路由。给「按旧默认认领
+ * 历史任务」这类值比较用的必须是这份原始值, 否则旧默认一坏就永远匹配不到
+ * (PR #5155 review P2)。
+ */
+export function readImRawDefaultRoute(channel?: ImDefaultSettingsChannel): ImDefaultRoute {
+  const raw = readImDefaultSettings(channel);
+  const settings = raw.agents[raw.agentKind];
+  return {
+    agentKind: raw.agentKind,
+    model: settings.model,
+    providerId: settings.providerId?.trim() || null,
+    agentDeviceId: settings.agentDeviceId ?? null,
+    effort: settings.effort,
   };
 }
 
@@ -180,12 +275,7 @@ function pickModel(
     });
     return { agentKind: systemAgent, modelId: lenient.model };
   }
-  log.warn('im default: all model sources exhausted; using hardcoded system default', {
-    requestedAgent,
-    channelAgent: config.agentKind,
-    channelModel: config.defaultModel,
-  });
-  return { agentKind: systemAgent, modelId: systemFallbackModel };
+  throw new Error('im default session has no available chat model; connect or enable a model in settings');
 }
 
 function hasModel(
@@ -245,6 +335,12 @@ function resolveProviderId(
   modelId: string,
   providerId: string | null,
 ): string | null {
+  // 保存的 Auto 路由在使用时跟随服务端：Auto 被挪到另一家 Cindy 来源后改用新来源，
+  // 与新建任务同一规则；渠道设置里存的值不改写。
+  const movedAuto = providers
+    ? movedCindyAutoSourceId(providers, { agent: agentKind, model: modelId, providerId })
+    : null;
+  if (movedAuto) return movedAuto;
   if (!providerId) {
     if (!providers) return null;
     // 隐式默认(未选来源)同样过裁决:原生默认落点的拷贝被停用而有启用替代时,

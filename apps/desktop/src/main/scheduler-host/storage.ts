@@ -94,6 +94,7 @@ export interface ScheduleSidebarIndexRun {
   readAt?: number;
   firedAt?: number;
   failureKind?: 'precheck' | 'rate-limit' | 'execution';
+  errorMsg?: string;
   failureRecovered?: boolean;
 }
 
@@ -289,6 +290,7 @@ function turnCostFromAgentMeta(agentMeta: string | null): {
       turnCostUsd?: unknown;
       turnCostIsEstimate?: unknown;
       turnUsageDetails?: unknown;
+      mediaCosts?: unknown;
     };
     const totalTokens = normalizeTurnUsageDetails(parsed.turnUsageDetails)?.totalTokens ?? 0;
     const structured = normalizeRegionalMoney(parsed.turnCost);
@@ -299,19 +301,16 @@ function turnCostFromAgentMeta(agentMeta: string | null): {
         ? legacyUsdMoney(parsed.turnCostUsd)
         : undefined;
     const money = structured ?? legacy;
-    if (!money || money.amount <= 0) {
-      return {
-        costMoney: null,
-        estimatedValueMoney: null,
-        legacyProjectedActualAmount: 0,
-        totalTokens,
-      };
-    }
-    const isEstimate = parsed.turnCostIsEstimate === true || money.kind === 'value-estimate';
+    const mediaCosts = (Array.isArray(parsed.mediaCosts) ? parsed.mediaCosts : [])
+      .map(normalizeRegionalMoney)
+      .filter((value): value is RegionalMoney => Boolean(value && value.kind === 'actual-cost' && value.amount > 0));
+    const isEstimate = parsed.turnCostIsEstimate === true || money?.kind === 'value-estimate';
     return {
-      costMoney: isEstimate ? null : money,
-      estimatedValueMoney: isEstimate ? asValueEstimateMoney(money) : null,
-      legacyProjectedActualAmount: !structured && !isEstimate ? money.amount : 0,
+      costMoney: addCompatibleRegionalMoney([
+        ...mediaCosts, ...(money && money.amount > 0 && !isEstimate ? [money] : []),
+      ]),
+      estimatedValueMoney: money && money.amount > 0 && isEstimate ? asValueEstimateMoney(money) : null,
+      legacyProjectedActualAmount: !structured && !isEstimate ? (money?.amount ?? 0) : 0,
       totalTokens,
     };
   } catch {
@@ -457,18 +456,37 @@ export class DrizzleScheduleStorage implements ScheduleStorage {
     return inserted;
   }
 
-  async update(id: string, patch: Partial<Schedule>): Promise<Schedule | null> {
+  async update(id: string, patch: Partial<Schedule>, expected?: Schedule): Promise<Schedule | null> {
     const db = this.getDb();
-    const setObj = schedulePatchToRow(patch);
+    const setObj = {
+      ...schedulePatchToRow(patch),
+      // Completion time is a watermark, including ordinary writes after a
+      // recovery loses CAS. Compare in the write, never in a prior SELECT.
+      ...(patch.lastFinishedAt !== undefined ? {
+        lastFinishedAt: sql`MAX(COALESCE(${schedules.lastFinishedAt}, ${patch.lastFinishedAt}), ${patch.lastFinishedAt})`,
+      } : {}),
+    };
+    const where = and(
+      eq(schedules.id, id),
+      expected ? and(
+        sql`${schedules.lastFiredAt} IS ${expected.lastFiredAt ?? null}`,
+        sql`${schedules.nextFireAt} IS ${expected.nextFireAt ?? null}`,
+        eq(schedules.status, expected.status),
+        eq(schedules.recurring, expected.recurring),
+        eq(schedules.manual, expected.manual ?? false),
+        eq(schedules.cronExpr, expected.cronExpr),
+        eq(schedules.timezone, expected.timezone),
+        sql`${schedules.intervalMs} IS ${expected.intervalMs ?? null}`,
+      ) : undefined,
+    );
     if (Object.keys(setObj).length === 0) {
-      // patch 为空：不发 UPDATE，但仍然返回当前 row（或 null）以保持语义一致
-      return this.get(id);
+      const [current] = await db.select().from(schedules).where(where).limit(1);
+      return current ? scheduleToCamel(current) : null;
     }
-    await db.update(schedules).set(setObj).where(eq(schedules.id, id));
-    // drizzle update 不会 throw "not found"——主动 SELECT 验证
-    const updated = await this.get(id);
-    if (updated) this.bumpSidebarIndexCache();
-    return updated;
+    const [updated] = await db.update(schedules).set(setObj).where(where).returning();
+    if (!updated) return null;
+    this.bumpSidebarIndexCache();
+    return scheduleToCamel(updated);
   }
 
   async delete(id: string): Promise<void> {
@@ -559,6 +577,53 @@ export class DrizzleScheduleStorage implements ScheduleStorage {
     return row ? scheduleRunToCamel(row) : null;
   }
 
+  /** Claim only the interrupted turn in the task the user chose to continue.
+   * Ordinary user input, completed/cleared turns and another running owner
+   * invalidate the claim. Later runs in other tasks do not rewrite this run. */
+  async claimInterruptedRun(sessionId: string, heartbeatAt: number): Promise<ScheduleRun | null> {
+    const [row] = await this.getDb().update(scheduleRuns).set({
+      status: 'running', heartbeatAt, finishedAt: null, errorMsg: null, readAt: null,
+    }).where(sql`${scheduleRuns.id} = (
+      SELECT r.id FROM schedule_runs r
+      JOIN schedules s ON s.id = r.schedule_id
+      JOIN sessions t ON t.id = r.session_id
+      WHERE r.session_id = ${sessionId}
+        AND r.status = 'interrupted' AND r.error_msg = 'app restarted'
+        AND s.status = 'active' AND s.source != 'bot'
+        AND COALESCE(s.execution_mode, 'agent') = 'agent'
+        AND COALESCE(s.job_type, 'prompt') = 'prompt'
+        AND t.status = 'active'
+        AND t.active_turn_started_at > COALESCE(t.last_turn_ended_at, 0)
+        AND t.active_turn_started_at > COALESCE(t.cleared_at, 0)
+        AND (SELECT CASE WHEN json_valid(m.agent_meta)
+               THEN json_extract(m.agent_meta, '$.origin.runId') END
+             FROM messages m WHERE m.session_id = t.id AND m.role = 'user'
+               AND m.rewind_at IS NULL
+             ORDER BY m.created_at DESC, m.id DESC LIMIT 1) = r.id
+        AND NOT EXISTS (SELECT 1 FROM schedule_runs owner
+          WHERE owner.session_id = r.session_id AND owner.status = 'running')
+      ORDER BY r.fired_at, r.id LIMIT 1
+    )`).returning();
+    if (row) this.bumpSidebarIndexCache();
+    return row ? scheduleRunToCamel(row) : null;
+  }
+
+  /** Same failure stays quiet until the existing recovery contract observes success. */
+  async hasUnrecoveredMatchingFailure(run: ScheduleRun): Promise<boolean> {
+    if (!run.errorMsg) return false;
+    const rows = await this.getDb().select({ id: scheduleRuns.id }).from(scheduleRuns).where(sql`
+      ${scheduleRuns.scheduleId} = ${run.scheduleId}
+      AND ${scheduleRuns.id} != ${run.id}
+      AND ${scheduleRuns.status} IN ('failed', 'interrupted')
+      AND ${scheduleRuns.errorMsg} = ${run.errorMsg}
+      AND COALESCE(CASE WHEN json_valid(${scheduleRuns.preRunHookResult})
+        THEN json_extract(${scheduleRuns.preRunHookResult}, '$.stderr') END, '') = ${run.preRunHookResult?.stderr ?? ''}
+      AND ${scheduleRuns.firedAt} <= ${run.firedAt}
+      AND NOT ${failureRecoveredSql('schedule_runs')}
+    `).limit(1);
+    return rows.length > 0;
+  }
+
   async listRuns(scheduleId: string, limit?: number): Promise<ScheduleRun[]> {
     const db = this.getDb();
     const cap = typeof limit === 'number' && limit > 0 ? Math.floor(limit) : 50;
@@ -612,18 +677,12 @@ export class DrizzleScheduleStorage implements ScheduleStorage {
       return runs;
     }
 
-    const rows = (
-      await Promise.all(
-        chunkArray([...sessionIds], SQLITE_IN_CHUNK_SIZE).map((sessionIdChunk) =>
-          db
-            .select({ agentMeta: messages.agentMeta })
-            .from(messages)
-            .where(
-              and(inArray(messages.sessionId, sessionIdChunk), eq(messages.role, 'assistant')),
-            ),
-        ),
-      )
-    ).flat();
+    const rows: { agentMeta: string | null }[] = [];
+    // Chunking bind parameters must also bound RPC fan-out for large histories.
+    for (const sessionIdChunk of chunkArray([...sessionIds], SQLITE_IN_CHUNK_SIZE)) {
+      rows.push(...await db.select({ agentMeta: messages.agentMeta }).from(messages)
+        .where(and(inArray(messages.sessionId, sessionIdChunk), inArray(messages.role, ['user', 'assistant']))));
+    }
     const ledger = new Map<
       string,
       { costValues: RegionalMoney[]; estimatedValues: RegionalMoney[]; totalTokens: number }
@@ -719,6 +778,7 @@ export class DrizzleScheduleStorage implements ScheduleStorage {
       firedAt: scheduleRuns.firedAt,
       failureRecovered: failureRecoveredSql('schedule_runs'),
       failureKind: failureKindSql('schedule_runs'),
+      errorMsg: scheduleRuns.errorMsg,
     };
     const [latestSessionRows, unreadRows, runningRows, latestFailedRows] = await Promise.all([
       db
@@ -789,6 +849,7 @@ export class DrizzleScheduleStorage implements ScheduleStorage {
       ...(row.status === 'failed' || row.status === 'interrupted' ? {
         failureRecovered: Boolean(row.failureRecovered),
         failureKind: row.failureKind,
+        errorMsg: row.errorMsg ?? undefined,
       } : {}),
     }));
 
@@ -897,38 +958,25 @@ export class DrizzleScheduleStorage implements ScheduleStorage {
       linkedScheduleIds.add(schedule.id);
     }
 
-    const messageRows =
-      scanSessionIds.size === 0
-        ? []
-        : (
-            await Promise.all(
-              chunkArray([...scanSessionIds], SQLITE_IN_CHUNK_SIZE).map((sessionIdChunk) =>
-                db
-                  .select({
-                    sessionId: messages.sessionId,
-                    role: messages.role,
-                    agentMeta: messages.agentMeta,
-                    createdAt: messages.createdAt,
-                    id: messages.id,
-                  })
-                  .from(messages)
-                  .where(
-                    and(
-                      inArray(messages.sessionId, sessionIdChunk),
-                      inArray(messages.role, ['user', 'assistant']),
-                    ),
-                  )
-                  .orderBy(
-                    messages.sessionId,
-                    messages.createdAt,
-                    // If a scheduler user message and its assistant result land in the
-                    // same millisecond, the user row must establish activeScheduleId first.
-                    sql`case ${messages.role} when 'user' then 0 else 1 end`,
-                    messages.id,
-                  ),
-              ),
-            )
-          ).flat();
+    const messageRows: Pick<typeof messages.$inferSelect, 'sessionId' | 'role' | 'agentMeta' | 'createdAt' | 'id'>[] = [];
+    for (const sessionIdChunk of chunkArray([...scanSessionIds], SQLITE_IN_CHUNK_SIZE)) {
+      messageRows.push(...await db.select({
+        sessionId: messages.sessionId,
+        role: messages.role,
+        agentMeta: messages.agentMeta,
+        createdAt: messages.createdAt,
+        id: messages.id,
+      }).from(messages).where(and(
+        inArray(messages.sessionId, sessionIdChunk),
+        inArray(messages.role, ['user', 'assistant']),
+      )).orderBy(
+        messages.sessionId,
+        messages.createdAt,
+        // Same-millisecond user rows establish attribution before assistant costs.
+        sql`case ${messages.role} when 'user' then 0 else 1 end`,
+        messages.id,
+      ));
+    }
 
     let activeSessionId: string | null = null;
     let activeScheduleId: string | null = null;
@@ -942,9 +990,8 @@ export class DrizzleScheduleStorage implements ScheduleStorage {
       }
       if (row.role === 'user') {
         activeScheduleId = scheduleOriginFromAgentMeta(row.agentMeta)?.scheduleId ?? null;
-        continue;
       }
-      if (row.role !== 'assistant') continue;
+      if (row.role !== 'assistant' && row.role !== 'user') continue;
       const turnCost = turnCostFromAgentMeta(row.agentMeta);
       const cost = turnCost.costMoney?.amount ?? 0;
       const estimatedValue = turnCost.estimatedValueMoney?.amount ?? 0;
@@ -1197,6 +1244,25 @@ export class DrizzleScheduleStorage implements ScheduleStorage {
           ...(scheduleId !== undefined ? [eq(scheduleRuns.scheduleId, scheduleId)] : []),
         ),
       )
+      .limit(1);
+    return Boolean(row);
+  }
+
+  async hasUnfinishedRuns(scheduleId: string): Promise<boolean> {
+    const [row] = await this.getDb()
+      .select({ id: scheduleRuns.id })
+      .from(scheduleRuns)
+      .where(and(eq(scheduleRuns.scheduleId, scheduleId), or(
+        // A live owner may not have committed its input yet. After the stale
+        // sweep, only the existing accepted-input ledger consumes the trigger.
+        eq(scheduleRuns.status, 'running'),
+        and(eq(scheduleRuns.status, 'interrupted'), sql`EXISTS (
+          SELECT 1 FROM messages m
+          WHERE m.session_id = ${scheduleRuns.sessionId} AND m.role = 'user'
+            AND CASE WHEN json_valid(m.agent_meta)
+              THEN json_extract(m.agent_meta, '$.origin.runId') END = ${scheduleRuns.id}
+        )`),
+      )))
       .limit(1);
     return Boolean(row);
   }

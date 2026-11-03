@@ -45,6 +45,7 @@ const log = createLogger('releaseNotesService');
 // ── Constants ──────────────────────────────────────────────────────────────
 
 const REQUEST_TIMEOUT_MS = 15_000;
+const MAX_RESPONSE_BYTES = 8 * 1024 * 1024;
 const MAX_RETRIES = 3;
 const RETRY_BASE_DELAY_MS = 1_000;
 
@@ -81,61 +82,77 @@ function fetchCdnJsonOnce<T>(url: string): Promise<FetchAttempt<T>> {
       const request = net.request(url);
       const decoder = new StringDecoder('utf8');
       let body = '';
+      let bodyBytes = 0;
       let settled = false;
+      let aborted = false;
 
-      const timeout = setTimeout(() => {
+      const finish = (value: FetchAttempt<T>, abortRequest = false): void => {
         if (!settled) {
           settled = true;
-          request.abort();
-          log.info('Timeout: %s', url);
-          resolve({ ok: false, retryable: true });
+          if (timeout) clearTimeout(timeout);
+          resolve(value);
         }
+        // Resource cleanup is independent of settling the business result.
+        if (abortRequest && !aborted) {
+          aborted = true;
+          request.abort();
+        }
+      };
+      const timeout = setTimeout(() => {
+        log.info('Timeout: %s', url);
+        finish({ ok: false, retryable: true }, true);
       }, REQUEST_TIMEOUT_MS);
 
       request.on('response', (response) => {
+        response.on('error', (err) => {
+          log.error('Response error for %s:', url, err);
+          finish({ ok: false, retryable: true }, true);
+        });
+        response.on('aborted', () => finish({ ok: false, retryable: true }, true));
+        if (settled) {
+          finish({ ok: false, retryable: true }, true);
+          return;
+        }
         if (response.statusCode !== 200) {
           log.info('HTTP %d for %s', response.statusCode, url);
-          clearTimeout(timeout);
-          settled = true;
-          resolve({ ok: false, retryable: false });
+          // No error body is needed; don't leave an unread native loader alive.
+          finish({ ok: false, retryable: false }, true);
           return;
         }
 
         response.on('data', (chunk) => {
+          if (settled) return;
+          bodyBytes += Buffer.byteLength(chunk);
+          if (bodyBytes > MAX_RESPONSE_BYTES) {
+            body = '';
+            finish({ ok: false, retryable: false }, true);
+            return;
+          }
           body += decoder.write(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
         });
         response.on('end', () => {
-          clearTimeout(timeout);
           if (settled) return;
-          settled = true;
           try {
             body += decoder.end();
-            resolve({ ok: true, data: JSON.parse(body) as T });
+            finish({ ok: true, data: JSON.parse(body) as T });
           } catch (err) {
             log.error('JSON parse failed for %s:', url, err);
-            resolve({ ok: false, retryable: false });
-          }
-        });
-        response.on('error', (err) => {
-          log.error('Response error for %s:', url, err);
-          clearTimeout(timeout);
-          if (!settled) {
-            settled = true;
-            resolve({ ok: false, retryable: true });
+            finish({ ok: false, retryable: false });
           }
         });
       });
 
       request.on('error', (err) => {
         log.error('Request error for %s:', url, err);
-        clearTimeout(timeout);
-        if (!settled) {
-          settled = true;
-          resolve({ ok: false, retryable: true });
-        }
+        finish({ ok: false, retryable: true }, true);
       });
 
-      request.end();
+      try {
+        request.end();
+      } catch (err) {
+        log.error('Request start failed for %s:', url, err);
+        finish({ ok: false, retryable: true }, true);
+      }
     } catch (err) {
       log.error('Unexpected error for %s:', url, err);
       resolve({ ok: false, retryable: true });

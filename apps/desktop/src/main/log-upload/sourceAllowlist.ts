@@ -33,7 +33,9 @@ const ALLOWED_ROOT_SCOPES: readonly string[] = [
   'idleManager', //          空闲判定(自动更新重启时机依赖它)
   'app-presence', //         前后台/可见性状态机
   'appSessionState', //      应用级会话状态机(只记状态转换,不记内容)
-  // 渲染进程启动守卫 —— 白屏排查必需(preload-error / 加载失败 / boot guard 重试)。
+  // 渲染进程启动守卫 —— 白屏排查必需(preload-error / 加载失败 / boot guard 重试),以及
+  // 开屏卡住时的启动门快照(main 按 shared/startupGateStall.ts 白名单逐字段重建,只有布尔、
+  // 固定枚举与有界毫秒数,多余字段整份丢弃)。
   // ⚠️ 只含这些无用户内容的加载失败信号:渲染进程 console 的转发**不在**这个 scope 下,
   // 它单独走 `renderer-console`(见下方 NOTABLE_DENIED_ROOTS)。两者曾共用同一个 scope,
   // 于是整类渲染进程 console 正文跟着被放行 —— 2026-08-04 用真实 dev 日志跑采集时发现。
@@ -112,6 +114,7 @@ const ALLOWED_ROOT_SCOPES: readonly string[] = [
  * 不要把一个混着路径的 scope 整体放行。
  */
 const ALLOWED_EXACT_SCOPES: readonly string[] = [
+  'workdir-diagnostics',
   'device-link', //                     服务初始化、relay 连接/断开/重连、心跳
   'device-link:cross-process-lock', //   跨进程锁的获取与释放(只有锁状态,无路径)
   // 主库打开 / migration / schema 漂移 / 完整性 / fatal —— bare `localDb` 只打这些基础设施

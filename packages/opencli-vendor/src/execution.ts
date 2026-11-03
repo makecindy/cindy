@@ -1,0 +1,696 @@
+/**
+ * Command execution: validates args, manages browser sessions, runs commands.
+ *
+ * This is the single entry point for executing any CLI command. It handles:
+ * 1. Argument validation and coercion
+ * 2. Browser session lifecycle (if needed)
+ * 3. Domain pre-navigation for cookie strategies
+ * 4. Timeout enforcement
+ * 5. Lazy-loading of TS modules from manifest
+ * 6. Lifecycle hooks (onBeforeExecute / onAfterExecute)
+ */
+
+import {
+  type BrowserCliCommand,
+  type CliCommand,
+  type InternalCliCommand,
+  type SiteSessionMode,
+  type Arg,
+  type CommandArgs,
+  getRegistry,
+  fullName,
+} from './registry.js';
+import type { IPage } from './types.js';
+import { pathToFileURL } from 'node:url';
+import * as crypto from 'node:crypto';
+import * as fs from 'node:fs';
+import * as os from 'node:os';
+import { executePipeline } from './pipeline/index.js';
+import { adapterLoadError, ArgumentError, CommandExecutionError, SessionBusyError, attachTraceReceipt, getErrorMessage } from './errors.js';
+import { shouldUseBrowserSession } from './capabilityRouting.js';
+import { getBrowserFactory, browserSession, runWithTimeout, DEFAULT_BROWSER_COMMAND_TIMEOUT, type BrowserWindowMode } from './runtime.js';
+import { profileRouteParams, resolveProfileSelection } from './browser/profile.js';
+import { SLOT_WAIT_DEFAULT_MS, MAX_SLOT_DELAY_MS, parseSlotPolicy, type SlotPolicy } from './site-slots.js';
+import { acquireSiteSlot, clearDaemonRunContext, generateRunId, isUnknownOutcomeError, releaseSiteSessionLease, setDaemonCommandTimeoutSeconds, setDaemonRunContext } from './browser/daemon-client.js';
+import { emitHook, type HookContext } from './hooks.js';
+import { log } from './logger.js';
+import { ObservationSession, exportObservationSession, type ObservationExportResult, type ObservationExportStatus } from './observation/index.js';
+import { resolveAdapterSourcePath } from './adapter-source.js';
+
+const _loadedModules = new Map<string, Promise<void>>();
+/** Track mtime of loaded user adapter files for hot-reload in daemon mode. */
+const _moduleMtimes = new Map<string, number>();
+const _userClisDir = `${os.homedir()}/.opencli/clis/`;
+
+type TraceMode = 'off' | 'on' | 'retain-on-failure';
+
+function normalizeTraceMode(raw: unknown): TraceMode {
+  if (raw === undefined || raw === null || raw === '' || raw === 'off') return 'off';
+  if (raw === 'on' || raw === 'retain-on-failure') return raw;
+  throw new ArgumentError(`--trace must be one of: off, on, retain-on-failure. Received: "${String(raw)}"`);
+}
+
+export function coerceAndValidateArgs(cmdArgs: Arg[], kwargs: CommandArgs): CommandArgs {
+  const result: CommandArgs = { ...kwargs };
+
+  for (const argDef of cmdArgs) {
+    const val = result[argDef.name];
+
+    if (argDef.required && (val === undefined || val === null || val === '')) {
+      throw new ArgumentError(
+        `Argument "${argDef.name}" is required.`,
+        argDef.help ?? `Provide a value for --${argDef.name}`,
+      );
+    }
+
+    if (val !== undefined && val !== null) {
+      if (argDef.type === 'int' || argDef.type === 'number') {
+        const num = Number(val);
+        if (!Number.isFinite(num)) {
+          throw new ArgumentError(`Argument "${argDef.name}" must be a valid number. Received: "${val}"`);
+        }
+        if (argDef.type === 'int' && !Number.isInteger(num)) {
+          throw new ArgumentError(`Argument "${argDef.name}" must be a valid integer. Received: "${val}"`);
+        }
+        result[argDef.name] = num;
+      } else if (argDef.type === 'boolean' || argDef.type === 'bool') {
+        if (typeof val === 'string') {
+          const lower = val.toLowerCase();
+          if (lower === 'true' || lower === '1') result[argDef.name] = true;
+          else if (lower === 'false' || lower === '0') result[argDef.name] = false;
+          else throw new ArgumentError(`Argument "${argDef.name}" must be a boolean (true/false). Received: "${val}"`);
+        } else {
+          result[argDef.name] = Boolean(val);
+        }
+      }
+
+      const coercedVal = result[argDef.name];
+      if (argDef.choices && argDef.choices.length > 0) {
+        if (!argDef.choices.map(String).includes(String(coercedVal))) {
+          throw new ArgumentError(`Argument "${argDef.name}" must be one of: ${argDef.choices.join(', ')}. Received: "${coercedVal}"`);
+        }
+      }
+    } else if (argDef.default !== undefined) {
+      result[argDef.name] = argDef.default;
+    }
+  }
+  return result;
+}
+
+async function runCommand(
+  cmd: CliCommand,
+  page: IPage | null,
+  kwargs: CommandArgs,
+  debug: boolean,
+): Promise<unknown> {
+  const internal = cmd as InternalCliCommand;
+  if (internal._lazy && internal._modulePath) {
+    const modulePath = internal._modulePath;
+    // Hot-reload: if a user adapter's file has changed on disk, invalidate cache
+    const isUserAdapter = modulePath.startsWith(_userClisDir);
+    if (isUserAdapter && _loadedModules.has(modulePath)) {
+      try {
+        const stat = fs.statSync(modulePath);
+        const prevMtime = _moduleMtimes.get(modulePath);
+        if (prevMtime !== undefined && stat.mtimeMs !== prevMtime) {
+          _loadedModules.delete(modulePath);
+          _moduleMtimes.delete(modulePath);
+        }
+      } catch { /* file may have been deleted; let import below handle it */ }
+    }
+    if (!_loadedModules.has(modulePath)) {
+      const url = pathToFileURL(modulePath).href;
+      const importUrl = _moduleMtimes.has(modulePath) ? `${url}?t=${Date.now()}` : url;
+      const loadPromise = import(importUrl).then(
+        () => {
+          try { _moduleMtimes.set(modulePath, fs.statSync(modulePath).mtimeMs); } catch {}
+        },
+        (err) => {
+          _loadedModules.delete(modulePath);
+          throw adapterLoadError(
+            `Failed to load adapter module ${modulePath}: ${getErrorMessage(err)}`,
+            'Check that the adapter file exists and has no syntax errors.',
+          );
+        },
+      );
+      _loadedModules.set(modulePath, loadPromise);
+    }
+    await _loadedModules.get(modulePath);
+
+    const updated = getRegistry().get(fullName(cmd));
+    if (updated?.func) {
+      return runCommandFunc(updated, page, kwargs, debug);
+    }
+    if (updated?.pipeline) return executePipeline(page, updated.pipeline, { args: kwargs, debug });
+  }
+
+  if (cmd.func) return runCommandFunc(cmd, page, kwargs, debug);
+  if (cmd.pipeline) return executePipeline(page, cmd.pipeline, { args: kwargs, debug });
+  throw new CommandExecutionError(
+    `Command ${fullName(cmd)} has no func or pipeline`,
+    'This is likely a bug in the adapter definition. Please report this issue.',
+  );
+}
+
+function runCommandFunc(cmd: CliCommand, page: IPage | null, kwargs: CommandArgs, debug: boolean): Promise<unknown> {
+  if (cmd.browser === false) return cmd.func!(kwargs, debug);
+  if (!page) {
+    throw new CommandExecutionError(`Command ${fullName(cmd)} requires a browser session but none was provided`);
+  }
+  return (cmd as BrowserCliCommand).func!(page, kwargs, debug);
+}
+
+function resolvePreNav(cmd: CliCommand): string | null {
+  if (cmd.navigateBefore === false) return null;
+  if (typeof cmd.navigateBefore === 'string') return cmd.navigateBefore;
+  // strategy → navigateBefore expansion already happened in normalizeCommand().
+  return null;
+}
+
+function urlMatchesDomain(url: string | null | undefined, domain: string | undefined): boolean {
+  if (!url || !domain) return false;
+  try {
+    const hostname = new URL(url).hostname;
+    return hostname === domain || hostname.endsWith(`.${domain}`);
+  } catch {
+    return false;
+  }
+}
+
+function isDomainRootPreNav(preNavUrl: string, domain: string | undefined): boolean {
+  if (!domain) return false;
+  try {
+    const parsed = new URL(preNavUrl);
+    const hostnameMatches = parsed.hostname === domain || parsed.hostname.endsWith(`.${domain}`);
+    const rootPath = parsed.pathname === '' || parsed.pathname === '/';
+    return hostnameMatches && rootPath && parsed.search === '' && parsed.hash === '';
+  } catch {
+    return false;
+  }
+}
+
+async function shouldRunPreNav(cmd: CliCommand, page: IPage, siteSession: SiteSessionMode, preNavUrl: string): Promise<boolean> {
+  if (siteSession !== 'persistent' || !cmd.domain) return true;
+  if (!isDomainRootPreNav(preNavUrl, cmd.domain)) return true;
+  const currentUrl = await page.getCurrentUrl?.().catch(() => null);
+  return !urlMatchesDomain(currentUrl, cmd.domain);
+}
+
+export async function executeCommand(
+  cmd: CliCommand,
+  rawKwargs: CommandArgs,
+  debug: boolean = false,
+  opts: {
+    prepared?: boolean;
+    profile?: string;
+    trace?: string;
+    keepTab?: string;
+    windowMode?: string;
+    siteSession?: string;
+    onTraceExport?: (trace: ObservationExportResult) => void;
+  } = {},
+): Promise<unknown> {
+  // Resolve browser-only configuration before argument hooks or any browser
+  // lifecycle setup. Non-browser commands must not be affected by browser
+  // environment defaults, even when those defaults are invalid.
+  const resolvedSiteSession = shouldUseBrowserSession(cmd)
+    ? resolveSiteSession(cmd, opts.siteSession)
+    : null;
+  // A pooled site (OPENCLI_SITE_SLOTS) runs on persistent slot sessions unless
+  // this invocation explicitly asks for a one-shot tab with --site-session.
+  const slotPolicy = resolvedSiteSession !== null && opts.siteSession !== 'ephemeral'
+    ? resolveSiteSlotPolicy(cmd.site)
+    : null;
+  if (slotPolicy && process.env.OPENCLI_CDP_ENDPOINT) {
+    throw new ArgumentError('OPENCLI_SITE_SLOTS requires Browser Bridge; use --site-session ephemeral with a direct CDP endpoint.');
+  }
+  const siteSession = slotPolicy ? 'persistent' : resolvedSiteSession;
+
+  let kwargs: CommandArgs;
+  try {
+    kwargs = opts.prepared ? rawKwargs : prepareCommandArgs(cmd, rawKwargs);
+  } catch (err) {
+    if (err instanceof ArgumentError) throw err;
+    throw new ArgumentError(getErrorMessage(err));
+  }
+
+  const userTimeoutSec = readUserTimeoutSeconds(cmd, kwargs);
+  // Propagate --timeout to the daemon transport so its per-command deadline
+  // (and the derived extension/HTTP deadlines) honor the user's value instead
+  // of the default. Set unconditionally so a previous command's value never
+  // leaks into this one.
+  setDaemonCommandTimeoutSeconds(userTimeoutSec);
+  const traceMode = normalizeTraceMode(opts.trace);
+
+  const hookCtx: HookContext = {
+    command: fullName(cmd),
+    args: kwargs,
+    startedAt: Date.now(),
+  };
+  await emitHook('onBeforeExecute', hookCtx);
+
+  let result: unknown;
+  try {
+    if (siteSession !== null) {
+      const BrowserFactory = getBrowserFactory();
+      // Requirement vs preference: --profile / OPENCLI_PROFILE route strictly;
+      // the config default is a soft preference the daemon arbitrates.
+      const profileSelection = resolveProfileSelection(opts.profile);
+      const profileRouting = profileRouteParams(profileSelection);
+      const contextId = profileSelection?.contextId;
+      const internal = cmd as InternalCliCommand;
+      let session = resolveAdapterBrowserSession(cmd, siteSession);
+      const keepTab = resolveKeepTab(siteSession, opts.keepTab);
+      const windowMode = resolveBrowserWindowMode(cmd.defaultWindowMode ?? 'background', opts.windowMode);
+      // Persistent-session write commands take a logical lease on the site
+      // session so a concurrent retry fails fast instead of driving the same
+      // Chrome tab. The runId flows to the daemon on every command (acquire +
+      // heartbeat); we release it explicitly when the command settles. Read and
+      // ephemeral commands are never leased.
+      let leaseRun = siteSession === 'persistent' && cmd.access === 'write'
+        ? { runId: generateRunId(), session }
+        : null;
+      let slotWaitedSec = 0;
+      if (slotPolicy) {
+        // A pooled site borrows one slot (= one persistent session = one warm
+        // tab) for the whole run, reads included. Every exec carries the
+        // runId so the daemon keeps the slot alive; the finally below returns it.
+        const runId = leaseRun?.runId ?? generateRunId();
+        setDaemonRunContext({ runId, command: fullName(cmd), access: cmd.access });
+        try {
+          // A user --timeout budgets queue wait + run together; without one the
+          // queue has its own default and the run keeps its usual ceiling.
+          const waitMs = userTimeoutSec !== null ? Math.min(MAX_SLOT_DELAY_MS, userTimeoutSec * 1000) : SLOT_WAIT_DEFAULT_MS;
+          const slotStartedAt = Date.now();
+          const grant = await acquireSiteSlot({ site: cmd.site, ...slotPolicy, waitMs, ...profileRouting });
+          session = grant.session;
+          slotWaitedSec = Math.max(grant.waitedMs / 1000, (Date.now() - slotStartedAt) / 1000);
+        } catch (err) {
+          setDaemonRunContext(null);
+          throw err;
+        }
+        leaseRun = { runId, session };
+      } else if (leaseRun) {
+        setDaemonRunContext({ runId: leaseRun.runId, command: fullName(cmd), access: 'write' });
+      }
+      let browserRunError: unknown;
+      // `as` casts defeat literal narrowing: both are assigned only inside the
+      // browserSession callback, which TS's flow analysis does not see from the
+      // finally block below.
+      let adapterStillRunning = false as boolean;
+      let adapterRun = null as Promise<unknown> | null;
+      try {
+      result = await browserSession(BrowserFactory, async (page) => {
+        const observation = traceMode === 'off'
+          ? null
+          : new ObservationSession({
+            scope: {
+              contextId,
+              session,
+              target: page.getActivePage?.(),
+              site: cmd.site,
+              command: fullName(cmd),
+              adapterSourcePath: resolveAdapterSourcePath(internal),
+            },
+          });
+        if (observation) {
+          observation.record({
+            stream: 'action',
+            name: 'command',
+            phase: 'start',
+            data: { args: kwargs },
+          });
+          await page.startNetworkCapture?.().catch(() => false);
+        }
+        if (slotPolicy) await activateSlotTab(page);
+        const preNavUrl = resolvePreNav(cmd);
+        if (preNavUrl && await shouldRunPreNav(cmd, page, siteSession, preNavUrl)) {
+          observation?.record({
+            stream: 'action',
+            name: 'pre_navigate',
+            phase: 'start',
+            data: { url: preNavUrl },
+          });
+          // Navigate directly — the extension's handleNavigate already has a fast-path
+          // that skips navigation if the tab is already at the target URL.
+          // This avoids an extra exec round-trip (getCurrentUrl) on first command.
+          try {
+            await page.goto(preNavUrl);
+            observation?.record({
+              stream: 'action',
+              name: 'pre_navigate',
+              phase: 'end',
+              data: { url: preNavUrl },
+            });
+          } catch (err) {
+            // A busy-session rejection is the whole point of the arbitration —
+            // surface it verbatim instead of burying it in a pre-nav wrapper.
+            if (err instanceof SessionBusyError) throw err;
+            observation?.record({
+              stream: 'action',
+              name: 'pre_navigate',
+              phase: 'error',
+              data: { url: preNavUrl, error: err instanceof Error ? err.message : String(err) },
+            });
+            const wrapped = new CommandExecutionError(
+              `Pre-navigation to ${preNavUrl} failed: ${err instanceof Error ? err.message : err}`,
+              'Check that the site is reachable and the browser extension is running.',
+            );
+            // Keep the original error reachable: the lease-release decision walks
+            // the cause chain, and a pre-nav navigate/exec can itself end with an
+            // unknown outcome while still running against the persistent tab.
+            wrapped.cause = err;
+            if (observation && (traceMode === 'on' || traceMode === 'retain-on-failure')) {
+              observation.record({
+                stream: 'error',
+                message: wrapped.message,
+                stack: wrapped.stack,
+                code: wrapped.code,
+                hint: wrapped.hint,
+              });
+              await collectObservationEvidence(observation, page).catch(() => {});
+              exportTraceArtifact(observation, 'failure', wrapped, opts.onTraceExport);
+            }
+            throw wrapped;
+          }
+        }
+        const browserTimeout = userTimeoutSec !== null
+          ? Math.max(1, userTimeoutSec - slotWaitedSec) + RUNTIME_TIMEOUT_PADDING_SECONDS
+          : DEFAULT_BROWSER_COMMAND_TIMEOUT;
+        const commandRun = runCommand(cmd, page, kwargs, debug);
+        adapterRun = commandRun;
+        // runWithTimeout races but never cancels: when the CLI-layer timeout
+        // wins, the adapter promise keeps driving the tab from this process.
+        // Track settledness so the lease-release decision can tell a finished
+        // adapter apart from one still running behind a timeout.
+        let commandSettled = false;
+        commandRun.then(() => { commandSettled = true; }, () => { commandSettled = true; });
+        try {
+          const result = await runWithTimeout(commandRun, {
+            timeout: browserTimeout,
+            label: fullName(cmd),
+          });
+          observation?.record({
+            stream: 'action',
+            name: 'command',
+            phase: 'end',
+          });
+          if (observation && traceMode === 'on') {
+            await collectObservationEvidence(observation, page).catch(() => {});
+            exportTraceArtifact(observation, 'success', undefined, opts.onTraceExport);
+          }
+          // Adapter commands are one-shot — release the current tab lease immediately
+          // instead of waiting for the 30s idle timeout. The automation container
+          // window stays open for reuse.
+          if (!keepTab) await page.closeWindow?.().catch(() => {});
+          return result;
+        } catch (err) {
+          if (!commandSettled) adapterStillRunning = true;
+          if (observation) {
+            observation.record({
+              stream: 'action',
+              name: 'command',
+              phase: 'error',
+              data: { error: err instanceof Error ? err.message : String(err) },
+            });
+            observation.record({
+              stream: 'error',
+              message: err instanceof Error ? err.message : String(err),
+              stack: err instanceof Error ? err.stack : undefined,
+            });
+            if (traceMode === 'on' || traceMode === 'retain-on-failure') {
+              await collectObservationEvidence(observation, page).catch(() => {});
+              exportTraceArtifact(observation, 'failure', err, opts.onTraceExport);
+            }
+          }
+          // Release the tab lease on failure too — without this, the lease lingers
+          // until the extension's idle timer fires (unreliable on Windows where
+          // MV3 service workers may be suspended before setTimeout triggers).
+          if (!keepTab) await page.closeWindow?.().catch(() => {});
+          throw err;
+        }
+      }, { session, ...profileRouting, windowMode, surface: 'adapter', siteSession });
+      } catch (err) {
+        browserRunError = err;
+        throw err;
+      } finally {
+        // Clear the run identity whether the command succeeded or failed, then
+        // release the lease so a retry succeeds immediately. Best-effort: TTL
+        // reclaims it if the release is lost.
+        //
+        // Exceptions — cases where the session may still be driven, so an
+        // immediate explicit release would hand the lease to a challenger that
+        // then collides with the stale work (the very collision this lease
+        // prevents):
+        // - A CLI-layer timeout does not cancel the adapter promise, and the
+        //   process only exits when the event loop drains, so the adapter may
+        //   keep driving the tab for minutes. Keep the run identity bound: its
+        //   follow-up commands heartbeat the lease (challengers stay blocked
+        //   past the TTL), and cleanup runs when the adapter finally settles.
+        //   If the process dies first, the daemon TTL reclaims the lease.
+        // - An unknown-outcome failure (result-unknown / command-lost /
+        //   result-evicted, anywhere in the cause chain) means the browser-side
+        //   command may STILL be running against the persistent tab; there is
+        //   nothing to await client-side, so the TTL is the quiet period.
+        if (leaseRun) {
+          if (adapterStillRunning && adapterRun) {
+            const runId = leaseRun.runId;
+            const session = leaseRun.session;
+            const settle = (err?: unknown) => {
+              clearDaemonRunContext(runId);
+              // Same rule as the immediate path below: an unknown-outcome
+              // ending means the browser side may still be busy — skip the
+              // explicit release and leave the lease to TTL reclamation.
+              if (!isUnknownOutcomeError(err)) {
+                void releaseSiteSessionLease({ runId, session, surface: 'adapter' });
+              }
+            };
+            adapterRun.then(() => settle(), (err) => settle(err));
+          } else {
+            setDaemonRunContext(null);
+            if (!isUnknownOutcomeError(browserRunError)) {
+              await releaseSiteSessionLease({ runId: leaseRun.runId, session: leaseRun.session, surface: 'adapter' });
+            }
+          }
+        }
+      }
+    } else {
+      // Non-browser commands: enforce a timeout only when the command exposes
+      // a `--timeout` arg (and the resolved value is positive). Without that
+      // arg there is no meaningful default — non-browser cmds are diverse
+      // enough that a hard cap would do more harm than good.
+      if (userTimeoutSec !== null) {
+        const ceiling = userTimeoutSec + RUNTIME_TIMEOUT_PADDING_SECONDS;
+        result = await runWithTimeout(runCommand(cmd, null, kwargs, debug), {
+          timeout: ceiling,
+          label: fullName(cmd),
+          hint: `Pass a higher --timeout value (currently ${userTimeoutSec}s)`,
+        });
+      } else {
+        result = await runCommand(cmd, null, kwargs, debug);
+      }
+    }
+  } catch (err) {
+    hookCtx.error = err;
+    hookCtx.finishedAt = Date.now();
+    await emitHook('onAfterExecute', hookCtx);
+    throw err;
+  }
+
+  hookCtx.finishedAt = Date.now();
+  await emitHook('onAfterExecute', hookCtx, result);
+  return result;
+}
+
+async function collectObservationEvidence(session: ObservationSession, page: IPage): Promise<void> {
+  const target = page.getActivePage?.() ?? session.scope.target;
+  const [url, snapshot, networkEntries, consoleMessages, screenshot] = await Promise.all([
+    page.getCurrentUrl?.().catch(() => null) ?? Promise.resolve(null),
+    page.snapshot().catch(() => undefined),
+    page.readNetworkCapture?.().catch(() => []) ?? Promise.resolve([]),
+    page.consoleMessages('all').catch(() => []),
+    page.screenshot({ format: 'png' }).catch(() => undefined),
+  ]);
+
+  if (snapshot !== undefined || url !== undefined) {
+    session.record({ stream: 'state', url, target, snapshot, label: 'final' });
+  }
+  for (const entry of Array.isArray(networkEntries) ? networkEntries : []) {
+    const record = entry as Record<string, unknown>;
+    session.record({
+      stream: 'network',
+      url: String(record.url ?? ''),
+      method: typeof record.method === 'string' ? record.method : undefined,
+      status: typeof record.responseStatus === 'number' ? record.responseStatus : undefined,
+      contentType: typeof record.responseContentType === 'string' ? record.responseContentType : undefined,
+      size: typeof record.responseBodyFullSize === 'number' ? record.responseBodyFullSize : undefined,
+      requestHeaders: record.requestHeaders as Record<string, unknown> | undefined,
+      responseHeaders: record.responseHeaders as Record<string, unknown> | undefined,
+      requestBody: record.requestBodyPreview,
+      responseBody: record.responsePreview,
+      ts: typeof record.timestamp === 'number' ? record.timestamp : undefined,
+    });
+  }
+  for (const message of Array.isArray(consoleMessages) ? consoleMessages : []) {
+    if (message && typeof message === 'object') {
+      const record = message as Record<string, unknown>;
+      session.record({
+        stream: 'console',
+        level: String(record.type ?? record.level ?? 'log'),
+        text: String(record.text ?? record.message ?? ''),
+        ts: typeof record.timestamp === 'number' ? record.timestamp : undefined,
+      });
+    } else {
+      session.record({ stream: 'console', level: 'log', text: String(message) });
+    }
+  }
+  if (typeof screenshot === 'string' && screenshot) {
+    session.record({ stream: 'screenshot', format: 'png', data: screenshot, label: 'final' });
+  }
+}
+
+function exportTraceArtifact(
+  session: ObservationSession,
+  status: ObservationExportStatus,
+  error?: unknown,
+  onTraceExport?: (trace: ObservationExportResult) => void,
+): ObservationExportResult | undefined {
+  try {
+    const trace = exportObservationSession(session, { error, status });
+    if (status === 'failure' && error !== undefined) {
+      attachTraceReceipt(error, trace.receipt);
+    } else {
+      process.stderr.write(`OpenCLI trace artifact: ${trace.dir}\n`);
+    }
+    try {
+      onTraceExport?.(trace);
+    } catch (err) {
+      log.warn(`[trace] Trace export callback failed: ${err instanceof Error ? err.message : String(err)}`);
+    }
+    return trace;
+  } catch (err) {
+    log.warn(`[trace] Failed to export trace artifact: ${err instanceof Error ? err.message : String(err)}`);
+    return undefined;
+  }
+}
+
+export function prepareCommandArgs(
+  cmd: CliCommand,
+  rawKwargs: CommandArgs,
+): CommandArgs {
+  const kwargs = coerceAndValidateArgs(cmd.args, rawKwargs);
+  cmd.validateArgs?.(kwargs);
+  return kwargs;
+}
+
+/**
+ * Runtime ceiling padding (seconds) added on top of the user's `--timeout`.
+ * The adapter's polling loop typically uses the full user value; the padding
+ * gives us room for the adapter to return + closeWindow + trace export before
+ * the runtime kills the Promise.
+ */
+const RUNTIME_TIMEOUT_PADDING_SECONDS = 30;
+
+function normalizeSiteSession(name: string, raw: unknown): SiteSessionMode | null {
+  if (raw === undefined) return null;
+  if (raw === 'ephemeral' || raw === 'persistent') return raw;
+  throw new ArgumentError(`${name} must be one of: ephemeral, persistent. Received: "${String(raw)}"`);
+}
+
+function resolveSiteSession(cmd: CliCommand, rawOption?: unknown): SiteSessionMode {
+  return normalizeSiteSession('--site-session', rawOption)
+    ?? normalizeSiteSession('OPENCLI_SITE_SESSION', process.env.OPENCLI_SITE_SESSION)
+    ?? cmd.siteSession
+    ?? 'ephemeral';
+}
+
+/**
+ * Every adapter tab shares one automation window, and only a window's active
+ * tab renders: a background tab stalls IntersectionObserver/rAF-driven lazy
+ * loading. A warm slot tab may have been backgrounded since its last run, so
+ * bring it to the front. A session bound to its tab lists exactly that tab;
+ * any other shape (no tab yet — the first navigate creates it active — or a
+ * window-wide listing) is left alone rather than risk selecting a tab that
+ * belongs to another session.
+ */
+async function activateSlotTab(page: IPage): Promise<void> {
+  const tabs = await page.tabs() as Array<{ page?: string; active?: boolean }>;
+  if (tabs.length === 1 && tabs[0].page && !tabs[0].active) await page.selectTab(tabs[0].page);
+}
+
+/**
+ * OPENCLI_SITE_SLOTS="xiaohongshu:1:1500-3000,weibo:2" pools the listed sites:
+ * `site:poolSize[:minMs[-maxMs]]`, where the optional interval spaces slot
+ * grants (one per command run) by a jittered delay.
+ */
+function resolveSiteSlotPolicy(site: string): SlotPolicy | null {
+  for (const raw of (process.env.OPENCLI_SITE_SLOTS ?? '').split(',')) {
+    const entry = raw.trim();
+    if (entry !== site && !entry.startsWith(`${site}:`)) continue;
+    const match = /^(\d+)(?::(\d+)(?:-(\d+))?)?$/.exec(entry.slice(site.length + 1));
+    if (!match || Number(match[1]) < 1) {
+      throw new ArgumentError(`OPENCLI_SITE_SLOTS entry "${entry}" must be site:poolSize[:minMs[-maxMs]] with poolSize >= 1.`);
+    }
+    const minIntervalMs = Number(match[2] ?? 0);
+    const maxIntervalMs = Math.max(minIntervalMs, Number(match[3] ?? minIntervalMs));
+    const policy = parseSlotPolicy({ poolSize: Number(match[1]), minIntervalMs, maxIntervalMs });
+    if (!policy) throw new ArgumentError('OPENCLI_SITE_SLOTS requires poolSize 1–32 and finite intervals no greater than 2147483647 ms.');
+    return policy;
+  }
+  return null;
+}
+
+function resolveAdapterBrowserSession(cmd: CliCommand, siteSession: SiteSessionMode): string {
+  if (siteSession === 'persistent') return `site:${cmd.site}`;
+  return `site:${cmd.site}:${crypto.randomUUID()}`;
+}
+
+function normalizeBooleanOption(name: string, raw: unknown): boolean | null {
+  if (raw === undefined || raw === '') return null;
+  if (raw === 'true') return true;
+  if (raw === 'false') return false;
+  throw new ArgumentError(`${name} must be one of: true, false. Received: "${String(raw)}"`);
+}
+
+function resolveKeepTab(siteSession: SiteSessionMode, rawOption?: unknown): boolean {
+  if (siteSession === 'persistent') return true;
+  return normalizeBooleanOption('--keep-tab', rawOption) ?? false;
+}
+
+function normalizeWindowMode(name: string, raw: unknown): BrowserWindowMode | null {
+  if (raw === undefined || raw === '') return null;
+  if (raw === 'foreground' || raw === 'background') return raw;
+  throw new ArgumentError(`${name} must be one of: foreground, background. Received: "${String(raw)}"`);
+}
+
+function resolveBrowserWindowMode(defaultMode: BrowserWindowMode = 'background', rawOption?: unknown): BrowserWindowMode {
+  return normalizeWindowMode('--window', rawOption)
+    ?? normalizeWindowMode('OPENCLI_WINDOW', process.env.OPENCLI_WINDOW)
+    ?? defaultMode;
+}
+
+/**
+ * Resolve the user-controllable `--timeout` arg, in seconds.
+ *
+ * Convention: a command opts into runtime-enforced timeouts by declaring an
+ * arg named `timeout`. The arg's `default` flows through `prepareCommandArgs`
+ * into `kwargs.timeout`, so by the time runtime enforcement runs, the value
+ * is the merged user-supplied-or-default seconds.
+ *
+ * Returns the parsed positive integer (seconds), or null if the command does
+ * not expose a `timeout` arg. Declaring `timeout` opts into runtime timeout
+ * enforcement, so invalid values must fail upfront instead of silently
+ * disabling the runtime ceiling.
+ */
+function readUserTimeoutSeconds(cmd: CliCommand, kwargs: CommandArgs): number | null {
+  if (!cmd.args.some(a => a.name === 'timeout')) return null;
+  const raw = kwargs.timeout;
+  if (raw === undefined || raw === null || raw === '') {
+    throw new ArgumentError(`Argument "timeout" must be a positive integer. Received: "${String(raw)}"`);
+  }
+  const parsed = Number(raw);
+  if (!Number.isInteger(parsed) || parsed <= 0) {
+    throw new ArgumentError(`Argument "timeout" must be a positive integer. Received: "${String(raw)}"`);
+  }
+  return parsed;
+}

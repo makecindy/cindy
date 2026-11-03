@@ -30,3 +30,24 @@ export function routinePermissionSnapshot(
   }
   return { permissionMode: mode, planMode: stored.planModeEnabled };
 }
+
+export interface SettledRoutinePermissionMismatch {
+  saved: { permissionMode: PermissionMode; planMode: boolean };
+  running: { permissionMode: PermissionMode; planMode: boolean };
+}
+
+/**
+ * Both sides are readable and stable, yet they disagree. Unlike an in-flight switch this
+ * does not settle on its own; callers may surface it once it persists across attempts.
+ */
+export function settledRoutinePermissionMismatch(
+  live: Partial<Pick<Session, 'stablePermissionModeState' | 'stablePlanModeState'>>,
+  stored: { permissionMode: unknown; planModeEnabled: unknown } | null,
+): SettledRoutinePermissionMismatch | null {
+  const saved = routinePermissionSnapshot(undefined, stored);
+  const runningMode = permissionMode(live.stablePermissionModeState?.mode);
+  const runningPlan = live.stablePlanModeState?.enabled;
+  if (!saved || !runningMode || typeof runningPlan !== 'boolean') return null;
+  if (runningMode === saved.permissionMode && runningPlan === saved.planMode) return null;
+  return { saved, running: { permissionMode: runningMode, planMode: runningPlan } };
+}

@@ -1,4 +1,5 @@
 import { shouldShowOpenPathError } from '../../shared/openPathResult';
+import { isDangerousAttachmentName } from '../../shared/attachmentSafety';
 /**
  * remoteFileOpen — 聊天流文件类交互的远程分流入口(renderer 侧)。
  * ---------------------------------------------------------------------------
@@ -18,6 +19,7 @@ import { shouldShowOpenPathError } from '../../shared/openPathResult';
  */
 
 import { i18n } from '@/i18n';
+import { createFileTransferToast } from './fileTransferProgress';
 import { toast } from './toast';
 import type { SessionFileOrigin } from './sessionFileOrigin';
 
@@ -26,10 +28,16 @@ export type RemoteFileOrigin = Exclude<SessionFileOrigin, { kind: 'local' }>;
 
 export type ChatFileFetchOutcome =
   | { ok: true; cachePath: string; stale: boolean; size: number }
-  | { ok: false; code: 'BAD_ARGS' | 'OUTSIDE_WORKDIR' | 'NOT_FOUND' | 'FETCH_FAILED'; message?: string };
+  | {
+      ok: false;
+      code: 'BAD_ARGS' | 'OUTSIDE_WORKDIR' | 'NOT_FOUND' | 'FETCH_FAILED';
+      message?: string;
+    };
 
 /** 失败 code → i18n 文案。 */
-export function chatFileErrorText(code: Exclude<ChatFileFetchOutcome, { ok: true }>['code']): string {
+export function chatFileErrorText(
+  code: Exclude<ChatFileFetchOutcome, { ok: true }>['code'],
+): string {
   if (code === 'OUTSIDE_WORKDIR') return i18n.t('chat.remoteFile.outsideWorkdir');
   if (code === 'NOT_FOUND') return i18n.t('chat.remoteFile.notFound');
   return i18n.t('chat.remoteFile.fetchFailed');
@@ -40,13 +48,19 @@ export async function fetchChatFileToCache(
   origin: RemoteFileOrigin,
   workdir: string,
   absPath: string,
+  requestId?: string,
 ): Promise<ChatFileFetchOutcome> {
   const wireOrigin =
     origin.kind === 'device'
       ? ({ kind: 'device', deviceId: origin.deviceId } as const)
       : ({ kind: 'ssh', remoteHostId: origin.remoteHostId } as const);
   try {
-    return await window.electronAPI.fileBrowser.chatFetch({ origin: wireOrigin, workdir, absPath });
+    return await window.electronAPI.fileBrowser.chatFetch({
+      origin: wireOrigin,
+      workdir,
+      absPath,
+      ...(requestId ? { requestId } : {}),
+    });
   } catch (err) {
     return { ok: false, code: 'FETCH_FAILED', message: String(err) };
   }
@@ -54,7 +68,7 @@ export async function fetchChatFileToCache(
 
 /**
  * 带 toast UX 的取回:成功返回缓存副本路径(stale 时附 warning 提示),失败
- * toast 后返回 null。适用于「取到副本后马上做一个本机动作」的一次性交互
+ * toast 后返回 null;用户在进度 toast 上点了「取消」则静默返回 null。适用于「取到副本后马上做一个本机动作」的一次性交互
  * (打开 / 定位 / 复制文件)。
  */
 export async function fetchChatFileWithToasts(
@@ -62,12 +76,10 @@ export async function fetchChatFileWithToasts(
   workdir: string,
   absPath: string,
 ): Promise<string | null> {
-  let fetchingToastId: string | null = null;
-  const delayed = setTimeout(() => {
-    fetchingToastId = toast.warning(i18n.t('chat.remoteFile.fetching'), { duration: 120_000 });
-  }, 600);
+  const progress = createFileTransferToast(absPath);
   try {
-    const res = await fetchChatFileToCache(origin, workdir, absPath);
+    const res = await fetchChatFileToCache(origin, workdir, absPath, progress.requestId);
+    if (progress.cancelled) return null;
     if (!res.ok) {
       toast.error(chatFileErrorText(res.code));
       return null;
@@ -75,8 +87,7 @@ export async function fetchChatFileWithToasts(
     if (res.stale) toast.warning(i18n.t('chat.remoteFile.staleCopy'));
     return res.cachePath;
   } finally {
-    clearTimeout(delayed);
-    if (fetchingToastId) toast.dismiss(fetchingToastId);
+    progress.dispose();
   }
 }
 
@@ -86,22 +97,67 @@ export async function openRemoteChatFile(
   workdir: string,
   absPath: string,
 ): Promise<void> {
+  // Remote scripts/installers follow the attachment save-only policy. Guard the
+  // common entry so menu, modifier-click and ordinary fallback cannot diverge.
+  if (isDangerousAttachmentName(absPath)) {
+    await downloadRemoteChatEntry(origin, workdir, absPath);
+    return;
+  }
   const cachePath = await fetchChatFileWithToasts(origin, workdir, absPath);
   if (!cachePath) return;
+  if (isDangerousAttachmentName(cachePath)) {
+    await downloadRemoteChatEntry(origin, workdir, absPath);
+    return;
+  }
   const res = await window.electronAPI.openPath(cachePath);
   if (shouldShowOpenPathError(res)) toast.error(res.error || i18n.t('logic.errors.openFileFailed'));
 }
 
-/** 远程会话「定位文件」:取回缓存副本后在文件管理器中定位本地副本。 */
-export async function revealRemoteChatFile(
+type ChatDownloadFailureCode = Extract<
+  Awaited<ReturnType<typeof window.electronAPI.fileBrowser.chatDownload>>,
+  { ok: false }
+>['code'];
+
+function chatDownloadErrorText(code: ChatDownloadFailureCode): string {
+  if (code === 'REMOTE_UNSUPPORTED') return i18n.t('chat.remoteFile.downloadUnsupported');
+  if (code === 'NO_SPACE') return i18n.t('chat.remoteFile.downloadNoSpace');
+  return chatFileErrorText(code);
+}
+
+/**
+ * 远程会话「下载到本地」:文件或文件夹下载到系统「下载」文件夹(重名自动加编号),
+ * 完成后在文件管理器中选中。取回超过 600ms 才弹进度 toast(缓存命中秒回时零打扰)。
+ */
+export async function downloadRemoteChatEntry(
   origin: RemoteFileOrigin,
   workdir: string,
   absPath: string,
 ): Promise<void> {
-  const cachePath = await fetchChatFileWithToasts(origin, workdir, absPath);
-  if (!cachePath) return;
-  const res = await window.electronAPI.showItemInFolder({ filePath: cachePath });
-  if (!res.success) toast.error(res.error ?? i18n.t('chat.media.openFolderFailed'));
+  const progress = createFileTransferToast(absPath);
+  const wireOrigin =
+    origin.kind === 'device'
+      ? ({ kind: 'device', deviceId: origin.deviceId } as const)
+      : ({ kind: 'ssh', remoteHostId: origin.remoteHostId } as const);
+  try {
+    const res = await window.electronAPI.fileBrowser
+      .chatDownload({ origin: wireOrigin, workdir, absPath, requestId: progress.requestId })
+      .catch((err: unknown) => ({
+        ok: false as const,
+        code: 'FETCH_FAILED' as const,
+        message: String(err),
+      }));
+    if (progress.cancelled) return;
+    if (!res.ok) {
+      toast.error(chatDownloadErrorText(res.code));
+      return;
+    }
+    if (res.stale) toast.warning(i18n.t('chat.remoteFile.staleCopy'));
+    if (res.skipped > 0) toast.warning(i18n.t('chat.remoteFile.downloadSkipped'));
+    const shown = await window.electronAPI.showItemInFolder({ filePath: res.path });
+    if (!shown.success) toast.error(shown.error ?? i18n.t('chat.media.openFolderFailed'));
+  } finally {
+    progress.dispose();
+  }
 }
 
 // ── chip 点亮预检(远端精确 stat)──────────────────────────────────────────
@@ -125,6 +181,7 @@ export async function revealRemoteChatFile(
 //     「把 unknown 当结论」这个错误在类型与结构上不可表达,比省一帧重绘值钱。
 
 export type RemotePathVerdict = 'file' | 'directory' | 'nonfile' | 'unknown';
+export type RemoteModifiedWindow = { startMs: number; endMs: number | null };
 
 const VERDICT_CACHE_CAP = 1000;
 /** unknown 负缓存 TTL:链路差时同 key 最多每 30s 重验一次(与移动端同值)。 */
@@ -180,24 +237,36 @@ function notifyVerdictChange(key: string): void {
 function scheduleStaleSweep(delayMs: number): void {
   // 已有定时器就复用:它一定排在同一或更早的时刻,醒来后会把剩下的重新排期。
   if (staleTimer !== null) return;
-  staleTimer = setTimeout(() => {
-    staleTimer = null;
-    const now = Date.now();
-    let earliest = Number.POSITIVE_INFINITY;
-    const expired: string[] = [];
-    for (const [key, until] of unknownUntil) {
-      if (until <= now) expired.push(key);
-      else if (until < earliest) earliest = until;
-    }
-    for (const key of expired) unknownUntil.delete(key);
-    if (earliest !== Number.POSITIVE_INFINITY) scheduleStaleSweep(earliest - now);
-    for (const key of expired) notifyVerdictChange(key);
-  }, Math.max(1, delayMs));
+  staleTimer = setTimeout(
+    () => {
+      staleTimer = null;
+      const now = Date.now();
+      let earliest = Number.POSITIVE_INFINITY;
+      const expired: string[] = [];
+      for (const [key, until] of unknownUntil) {
+        if (until <= now) expired.push(key);
+        else if (until < earliest) earliest = until;
+      }
+      for (const key of expired) unknownUntil.delete(key);
+      if (earliest !== Number.POSITIVE_INFINITY) scheduleStaleSweep(earliest - now);
+      for (const key of expired) notifyVerdictChange(key);
+    },
+    Math.max(1, delayMs),
+  );
 }
 
-function verdictKey(origin: RemoteFileOrigin, workdir: string, absPath: string): string {
-  const endpoint = origin.kind === 'device' ? `dev:${origin.deviceId}` : `ssh:${origin.remoteHostId}`;
-  return `${endpoint}|${workdir}|${absPath}`;
+function verdictKey(
+  origin: RemoteFileOrigin,
+  workdir: string,
+  absPath: string,
+  modifiedWindow?: RemoteModifiedWindow,
+): string {
+  const endpoint =
+    origin.kind === 'device' ? `dev:${origin.deviceId}` : `ssh:${origin.remoteHostId}`;
+  return (
+    `${endpoint}|${workdir}|${absPath}` +
+    (modifiedWindow ? `|mtime:${modifiedWindow.startMs}:${modifiedWindow.endMs}` : '')
+  );
 }
 
 /** 缓存 key(供订阅方按 key 过滤变化通知)。 */
@@ -205,8 +274,9 @@ export function remotePathVerdictKey(
   origin: RemoteFileOrigin,
   workdir: string,
   absPath: string,
+  modifiedWindow?: RemoteModifiedWindow,
 ): string {
-  return verdictKey(origin, workdir, absPath);
+  return verdictKey(origin, workdir, absPath, modifiedWindow);
 }
 
 /**
@@ -251,8 +321,9 @@ export function verifyRemotePathCached(
   origin: RemoteFileOrigin,
   workdir: string,
   absPath: string,
+  modifiedWindow?: RemoteModifiedWindow,
 ): Promise<RemotePathVerdict> {
-  const key = verdictKey(origin, workdir, absPath);
+  const key = verdictKey(origin, workdir, absPath, modifiedWindow);
   const hit = verdictCache.get(key);
   if (hit) return Promise.resolve(hit);
   const pending = verdictInflight.get(key);
@@ -268,7 +339,12 @@ export function verifyRemotePathCached(
       ? ({ kind: 'device', deviceId: origin.deviceId } as const)
       : ({ kind: 'ssh', remoteHostId: origin.remoteHostId } as const);
   const p = window.electronAPI.fileBrowser
-    .chatStat({ origin: wireOrigin, workdir, absPath })
+    .chatStat({
+      origin: wireOrigin,
+      workdir,
+      absPath,
+      ...(modifiedWindow ? { modifiedWindow } : {}),
+    })
     .then((res) => res.verdict)
     .catch(() => 'unknown' as const)
     .then((verdict) => {

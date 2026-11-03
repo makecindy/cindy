@@ -1,6 +1,9 @@
 import { beforeAll, describe, expect, it, vi } from 'vitest';
 import { DEFAULT_MOBILE_VOICE_LITELLM_BASE_URL } from '@/config/env';
 import { i18n } from '@/i18n';
+import { setMobileDebugSink } from '@/debug/mobileDebugLog';
+import { serializeMobileDebugRecord } from '@/debug/mobileDebugRecord';
+import { VoiceInputController, VoiceTimelineLogger } from '@cindy/voice-input-core';
 
 const GW_PROXY = `${DEFAULT_MOBILE_VOICE_LITELLM_BASE_URL}/proxy`;
 const GW_PROXY_WSS = GW_PROXY.replace(/^https/, 'wss');
@@ -65,7 +68,7 @@ async function waitForFakeSocketCount(count: number): Promise<void> {
   }
 }
 
-function volcengineTranscriptPacket(text: string, definite = false): ArrayBuffer {
+function volcengineTranscriptPacket(text: string, definite = false, final = false): ArrayBuffer {
   const payload = gzip(JSON.stringify({
     result: {
       text,
@@ -74,10 +77,11 @@ function volcengineTranscriptPacket(text: string, definite = false): ArrayBuffer
   }));
   const size = new Uint8Array(4);
   new DataView(size.buffer).setUint32(0, payload.length, false);
-  const packet = new Uint8Array(8 + payload.length);
-  packet.set([0x11, 0x90, 0x11, 0x00], 0);
-  packet.set(size, 4);
-  packet.set(payload, 8);
+  const packet = new Uint8Array((final ? 12 : 8) + payload.length);
+  packet.set([0x11, final ? 0x93 : 0x90, 0x11, 0x00], 0);
+  if (final) new DataView(packet.buffer).setInt32(4, -1, false);
+  packet.set(size, final ? 8 : 4);
+  packet.set(payload, final ? 12 : 8);
   return packet.buffer.slice(packet.byteOffset, packet.byteOffset + packet.byteLength) as ArrayBuffer;
 }
 
@@ -179,6 +183,177 @@ function volcengineProvider(options: VolcengineProviderOptions): MobileVolcengin
 }
 
 describe('mobileRealtimeAsrProvider', () => {
+  // Empty completions used to discard PCM in both fallback protocols. Exercise
+  // the controller/provider boundary, including Qwen's bound, young unbound,
+  // and missing-commit paths, so reconnecting alone cannot pass this test.
+  it.each(['openai', 'qwen_bound', 'qwen_unbound', 'qwen_no_commit'] as const)(
+    'replays audio after an empty fallback completion and recovers text: %s', async (scenario) => {
+      vi.useFakeTimers();
+      FakeSocket.instances = [];
+      const qwen = scenario !== 'openai';
+      const cred = qwen ? credential({ asr: {
+        provider: 'litellm-qwen3-asr-flash-realtime', model: 'qwen3-asr-flash-realtime',
+        auth: 'api-key', mode: 'realtime-websocket', pcmSampleRate: 16000,
+        endpointPath: '/dashscope/api-ws/v1/realtime?model=qwen3-asr-flash-realtime',
+        protocolProfile: 'qwen-asr-server-vad',
+      } }) : credential();
+      const asr = realtimeProvider({ credential: cred, websocketFactory: FakeSocket, flushTimeoutMs: 100 });
+      const submitted = vi.fn(() => undefined);
+      const onError = vi.fn();
+      const controller = new VoiceInputController({
+        asr, retryEmptyTranscript: true, stableWaitMs: 1,
+        logger: new VoiceTimelineLogger(),
+        callbacks: { onDraftChanged: () => {}, onSubmitted: submitted, onError },
+      });
+      try {
+        const starting = controller.start();
+        await waitForFakeSocketCount(1);
+        const first = FakeSocket.instances[0];
+        first.open();
+        first.message({ type: 'session.updated' });
+        await starting;
+        controller.appendAudio(new Int16Array(qwen ? 3200 : 4800).fill(1000).buffer);
+        if (scenario === 'qwen_bound' || scenario === 'qwen_no_commit') {
+          await vi.advanceTimersByTimeAsync(2000);
+        }
+        const stopping = controller.stop();
+        if (scenario !== 'qwen_no_commit') {
+          first.message({ type: 'input_audio_buffer.committed', item_id: 'empty-item' });
+        }
+        first.message({
+          type: 'conversation.item.input_audio_transcription.completed', item_id: 'empty-item',
+          ...(qwen ? { text: ' \t ' } : { transcript: '' }),
+        });
+        await vi.advanceTimersByTimeAsync(1);
+        expect(FakeSocket.instances).toHaveLength(2);
+        const retry = FakeSocket.instances[1];
+        retry.open();
+        retry.message({ type: 'session.updated' });
+        await vi.advanceTimersByTimeAsync(0);
+        expect(retry.sent.slice(1)).toEqual([
+          expect.objectContaining({
+            type: 'input_audio_buffer.append',
+            audio: (first.sent[1] as { audio: string }).audio,
+          }),
+          expect.objectContaining({ type: qwen ? 'session.finish' : 'input_audio_buffer.commit' }),
+        ]);
+        retry.message({
+          type: 'conversation.item.input_audio_transcription.completed',
+          item_id: 'recovered-item', transcript: '找回备用识别的文字',
+        });
+        await stopping;
+        expect(submitted).toHaveBeenCalledExactlyOnceWith('找回备用识别的文字', expect.any(Object));
+        expect(onError).not.toHaveBeenCalled();
+        expect(controller.currentState).toBe('done');
+        expect(retry.readyState).toBe(3);
+      } finally {
+        await controller.cancel();
+        vi.useRealTimers();
+      }
+    },
+  );
+
+  it('replays the captured PCM after an empty final response and submits the recovered transcript once', async () => {
+    vi.useFakeTimers();
+    FakeSocket.instances = [];
+    const asr = volcengineProvider({
+      credential: credential({ asr: {
+        provider: 'litellm-volcengine-sauc-asr', model: 'volcengine-sauc-asr',
+        auth: 'api-key', mode: 'provider-native-websocket', pcmSampleRate: 16000,
+        resourceId: 'volc.seedasr.sauc.duration',
+      } }),
+      websocketFactory: FakeSocket, flushTimeoutMs: 100,
+    });
+    const submitted = vi.fn(() => undefined);
+    const onError = vi.fn();
+    const controller = new VoiceInputController({
+      asr, retryEmptyTranscript: true, stableWaitMs: 1,
+      logger: new VoiceTimelineLogger(),
+      callbacks: { onDraftChanged: () => {}, onSubmitted: submitted, onError },
+    });
+    try {
+      const starting = controller.start();
+      await waitForFakeSocketCount(1);
+      const first = FakeSocket.instances[0];
+      first.open();
+      await starting;
+      controller.appendAudio(new Int16Array(1600).fill(1000).buffer);
+      const stopping = controller.stop();
+      first.rawMessage(volcengineTranscriptPacket('', false, true));
+      await vi.advanceTimersByTimeAsync(1);
+      expect(FakeSocket.instances).toHaveLength(2);
+      const retry = FakeSocket.instances[1];
+      retry.open();
+      await vi.advanceTimersByTimeAsync(0);
+      expect(retry.sent).toHaveLength(3); // initial request, original PCM, final silence
+      expect(retry.sent[1]).toEqual(first.sent[1]);
+      retry.rawMessage(volcengineTranscriptPacket('找回这句话', true, true));
+      await stopping;
+      expect(submitted).toHaveBeenCalledExactlyOnceWith('找回这句话', expect.any(Object));
+      expect(onError).not.toHaveBeenCalled();
+      expect(controller.currentState).toBe('done');
+      expect(retry.readyState).toBe(3);
+    } finally {
+      await controller.cancel();
+      vi.useRealTimers();
+    }
+  });
+
+  it.each(['final_response', 'transport_closed', 'transport_error', 'server_error', 'timeout'] as const)(
+    'records why Volcengine finalization settled: %s, without response content', async (reason) => {
+      vi.useFakeTimers();
+      const records: string[] = [];
+      setMobileDebugSink((level, scope, args) => records.push(serializeMobileDebugRecord(level, scope, args)));
+      const provider = volcengineProvider({
+        credential: credential({ asr: {
+          provider: 'litellm-volcengine-sauc-asr', model: 'volcengine-sauc-asr',
+          auth: 'api-key', mode: 'provider-native-websocket', pcmSampleRate: 16000,
+          resourceId: 'volc.seedasr.sauc.duration',
+        } }),
+        websocketFactory: FakeSocket, flushTimeoutMs: 100,
+      });
+      try {
+        FakeSocket.instances = [];
+        const starting = provider.start();
+        await waitForFakeSocketCount(1);
+        const socket = FakeSocket.instances[0];
+        socket.open();
+        await starting;
+        provider.appendAudio(new Int16Array(1600).fill(1000).buffer);
+        const flushing = provider.flushAudio();
+        if (reason === 'final_response') {
+          socket.rawMessage(volcengineTranscriptPacket('', false, true));
+        } else if (reason === 'transport_closed') {
+          socket.onclose?.({ code: 1006, reason: 'PRIVATE_RESPONSE_CONTENT' });
+        } else if (reason === 'transport_error') {
+          socket.onerror?.({ message: 'PRIVATE_RESPONSE_CONTENT' });
+        } else if (reason === 'server_error') {
+          const payload = new TextEncoder().encode('PRIVATE_RESPONSE_CONTENT');
+          const packet = new Uint8Array(12 + payload.length);
+          packet.set([0x11, 0xf0, 0, 0]);
+          const view = new DataView(packet.buffer);
+          view.setUint32(4, 45000081);
+          view.setUint32(8, payload.length);
+          packet.set(payload, 12);
+          socket.rawMessage(packet.buffer);
+        } else await vi.advanceTimersByTimeAsync(100);
+        await flushing;
+        const events = records.map((line) => JSON.parse(line));
+        expect(events.find((event) => event.args[0] === 'volcengine sauc flush settled')?.args[1])
+          .toMatchObject({ reason, hasStable: false, transcriptChars: 0 });
+        if (reason === 'server_error') {
+          expect(events.find((event) => event.args[0] === 'volcengine sauc server error')?.args[1])
+            .toMatchObject({ code: 45000081 });
+        }
+        expect(records.join('\n')).not.toContain('PRIVATE_RESPONSE_CONTENT');
+      } finally {
+        await provider.stop();
+        setMobileDebugSink(undefined);
+        vi.useRealTimers();
+      }
+    },
+  );
+
   it('cancels an in-flight fallback candidate before it can open a managed socket', async () => {
     FakeSocket.instances = [];
     let resolveConnection: ((value: { websocketUrl: string; authorizationToken: string }) => void) | undefined;
@@ -880,7 +1055,7 @@ describe('mobileRealtimeAsrProvider', () => {
       reason: 'Received bad response code from server: 403.',
     });
 
-    await expect(started).rejects.toThrow('Cindy 语音会话已失效或没有权限（WebSocket 403）。请确认登录状态后重试。');
+    await expect(started).rejects.toThrow('Cindy 语音服务的登录已失效或没有权限，请确认登录状态后重试（状态码 403）。');
   });
 
   it('redacts the synced voice key from Volcengine websocket errors', async () => {

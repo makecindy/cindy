@@ -44,7 +44,7 @@ library 根作为会话级只读引用目录（extraDirs / readOnlyRoots）授�
 - 插件 ghost_call 回执只用相对键 / 资源 id / 指纹，禁止出现 `/Users/.../libraries/<ghostId>/`（对齐 plugin-library-storage.md Review 清单第 1 条）。
 - **握手字段同样禁绝对路径**：Mivo `recordLibraryProbe()` 会把 open/status 回执原文落到 `diagnostics/library-probe.json`，插件侧没有脱敏。绝对根只由宿主注入 extraDirs + 宿主提示词给 Agent；插件继续不知道绝对根。
 - 已授权后插件回执的 available 引用改成相对键 `library:assets/<2>/<hash>/blob.<ext>`；未授权维持 `cindy-media://` + `deposit_media`。协议形状不动，只改值。
-- Pi 的 `piExtraDirsPrompt`（`pi/index.ts:1134`）现在把绝对目录逐条写进每个后续 user turn，改成不含绝对路径的能力描述（如「本任务可只读引用插件作品库」）。
+- 2026-09-12 接手修正：只给 basename 会断开原生工具定位。宿主保留 task-bound library 根元数据，随当前已生效的只读目录向该任务下发根映射；Pi 当轮工具结果现读权限快照补映射。插件回执/握手/probe 仍不得带绝对根；不要求用户人工给路径或切全盘权限。
 - Read 工具参数里出现真实路径不可避免，owner 已裁决可接受。落库 8KiB 截断维持现状。
 - reveal_path 不得当库根授权用（它是一次性单文件确认卡）。
 - **library 内路径不保证跨 turn 稳定**：Agent 每次从最新回执取相对键，不得缓存。归档接线后 `archive/` rename 会让热区失效。
@@ -55,7 +55,7 @@ library 根作为会话级只读引用目录（extraDirs / readOnlyRoots）授�
 ### D7 两步变一步的口径
 - 对用户：成立。不再需要「选中 → 送进 cindy-media → Agent 才能看」。
 - 对 Agent 内部：仍是两类工具（插件 MCP 给节点/坐标，Read 给像素），少掉的是 cindy-media 中转那一跳。
-- **只对 confirmed 放开。** 判据只认宿主 `librarySlot.writeCommit` ACK 的 64-hex sha256（`library-write` / `writeCommit` 回执）。仓内无 `libraryConfirmed.ts`（不存在），不得发明该文件。`writing` / `unconfirmed` / `unavailable` 不放开。cindy-media 短指纹（16–128 位）不得升格。
+- **只对 confirmed 放开。** 判据只认宿主 `librarySlot.write` / `writeCommit` ACK 的 64-hex sha256（`library-write` / `writeCommit` 回执）。成功回执兼容可选 `libraryGeneration` / `libraryIdentity`，由实际写入 session 或 stream 捕获，不能事后拼当前全局身份；identity 须区分 owner / 迁根 / 自定义 A→B→A 且不暴露 owner 原值。默认 D→C→D 与 owner X→Y→X 回到同一默认 binding 时两端可复用同一二元组，这只证明绑定身份，不证明当前激活；插件须在见到不同握手后拒绝旧回执。仓内无 `libraryConfirmed.ts`（不存在），不得发明该文件。`writing` / `unconfirmed` / `unavailable` 不放开。cindy-media 短指纹（16–128 位）不得升格。
 - 未进 library 的图、以及未 confirmed 的图，Agent 仍读不到——这是设计而非缺陷。
 - SVG：G2 的新增能力。直读原文字节，不再要求 cindy-media 加 `image/svg+xml`。定位必须经别名索引（节点是 `mivo-asset:<uuid>`，不含 hash）。**未授权时 SVG 没有 cindy-media 备胎**，维持读不到。
 
@@ -70,7 +70,7 @@ library 根作为会话级只读引用目录（extraDirs / readOnlyRoots）授�
 | PR1 安全打开器 | libraryVault 读路径补 fileReadBytes.ts 同款 O_NOFOLLOW + bigint dev/ino 同 fd 复核 | 现 read() 无身份复核，直读把这条缝暴露给 Agent | 仅宿主内部用 |
 | PR2A/2B 改图/上传切根 | editImage / upload 消费口从 cindy-media hash 改认 library 正本 `assets/<hash前2>/<hash>/blob.<ext>`（固定文件名 `blob`，不是 `<hash>.<ext>`，也不是已否决的 canvases/ 前缀）。sidecar `meta.json`/`preview.webp` **禁止当像素** | 画布正本在 library，再经媒体库是双份 | 用 Mivo `BAD_RECEIPT` 公式当契约测试，别只对文档 |
 | PR3 插件可见握手 | **只挂 Library open/status 回执**（不选 app-context：它只消费 locale，3s 超时会让授权态未知成常态）。字段：「已授权只读作品库」布尔 + **库代次/身份**（迁根/bind/unbind 后失效本机 ACK）。谁问谁得（open/status 不带会话身份）。不回绝对路径 | Agent 不知道已授权，会继续往 cindy-media 送；换库后插件说 confirmed、当前根没文件 | 字段定稿前 Mivo 三道回执门禁不放宽 |
-| PR-V（本次主 PR） | ①Mivo 会话 + library ready → 宿主经抽出的 `applyDirectoryGrants` 静默注入 library realpath（专用槽位，不占用户 10 名额）②Codex/Pi 走现成 setExtraDirs；Codex 闸 ≥0.144.6 ③Claude 目录代际不一致时续聊重建 ④Pi prompt 去绝对路径 ⑤迁移/卸载/bind-unbind 同步改撤 extraDirs ⑥临时拷贝兜底带删除条件 ⑦修正 CC 自相矛盾注释 | 图在 library 里 Agent 看不见，是整个目标的最后一公里 | fresh:true 禁用于授权；**必须等 PR3 握手字段落地**，否则 Agent/插件行为不确定 |
+| PR-V（本次主 PR） | ①Mivo 会话 + library ready → 宿主经抽出的 `applyDirectoryGrants` 静默注入 library realpath（专用槽位，不占用户 10 名额）②Codex/Pi 走现成 setExtraDirs；Codex 闸 ≥0.144.6 ③Claude 目录代际不一致时续聊重建 ④Pi 当前任务只读根映射（插件回执仍禁绝对路径） ⑤迁移/卸载/bind-unbind 同步改撤 extraDirs ⑥临时拷贝兜底带删除条件 ⑦修正 CC 自相矛盾注释 | 图在 library 里 Agent 看不见，是整个目标的最后一公里 | fresh:true 禁用于授权；**必须等 PR3 握手字段落地**，否则 Agent/插件行为不确定 |
 
 依赖：**PR0 → PR1 → {PR2A, PR2B} → PR3 → PR-V**。
 PR-V 不再与 PR3 并行。没有握手，授权了 Agent 也不知道该走哪条引用形态。
@@ -80,7 +80,7 @@ PR-V 不再与 PR3 并行。没有握手，授权了 Agent 也不知道该走哪
 ## 3. 验收门槛（不过 = 没做成）
 
 1. Codex：app-server ≥ 0.144.6 时，会话中途注入 library 根，下一 turn Read library 内 confirmed 图成功；Ask/Auto 不弹卡；write 被拒。低版本不得假装授权成功，必须回 cindy-media 备胎。
-2. Pi：中途注入当轮 read 成功；后续 prompt 无 `/Users/.../libraries/`；结构化写进 library 根被拦（含 Full Access）。
+2. Pi：中途注入当轮 read 成功；当前任务获得实际已授权根映射，切根/撤销后不复用旧映射，插件回执仍无绝对根；结构化写进 library 根被拦（含 Full Access）。
 3. Claude：开聊即有根 → 首 turn 可读；中途授权 → 重建后下一 turn 可读且仍是同一场对话；fresh:true 路径未被用于授权。
 4. 静默性：全程无授权卡弹出；权限档保持用户原档（Ask/Auto/Full 均可用）。
 5. 迁移后旧根立刻失效（ENOENT）、新根生效；卸载后撤权；`library-bind` / `library-unbind` 后库代次变化，插件本机 ACK 失效。

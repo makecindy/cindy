@@ -37,6 +37,7 @@ import {
 import {
   buildOAuthReturnAction,
   getGhostOAuthResultCopy,
+  getRemoteOAuthCallbackCopy,
   getOAuthNeutralResultCopy,
   getProviderOAuthResultCopy,
   type OAuthResultPageLang,
@@ -62,7 +63,7 @@ const glossary = JSON.parse(readFileSync(resolve(REPO_ROOT, 'i18n/glossary.json'
 };
 
 /** 该模块用 'zh' 作语言键,术语表用 'zh-CN';不映射的话 zh 分支整段扫不到。 */
-const LANGS: OAuthResultPageLang[] = ['zh', 'zh-TW', 'en', 'ja', 'ko'];
+const LANGS: OAuthResultPageLang[] = ['zh', 'zh-TW', 'en', 'ja', 'ko', 'es', 'fr', 'de', 'pt-PT', 'pt-BR', 'zh-Hant-x-lzh', 'zh-Hans-x-lzh'];
 const toLocale = (lang: OAuthResultPageLang) => (lang === 'zh' ? 'zh-CN' : lang);
 
 /** 占位实参:不含 CJK 与标点,避免实参本身影响判定。 */
@@ -76,6 +77,7 @@ function collectEntries(): { locale: string; key: string; value: string }[] {
   };
 
   for (const lang of LANGS) {
+    for (const [key, value] of Object.entries(getRemoteOAuthCallbackCopy(lang))) push(lang, `remote.${key}`, value);
     const provider = getProviderOAuthResultCopy(lang, PROVIDER, BRAND);
     for (const [k, v] of Object.entries(provider)) {
       if (typeof v === 'string') push(lang, `provider.${k}`, v);

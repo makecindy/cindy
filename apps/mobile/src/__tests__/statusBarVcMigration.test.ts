@@ -77,3 +77,12 @@ describe('status bar VC-based migration source contracts', () => {
     );
   });
 });
+
+// guard: DESIGN dual-mode delivery crosses the native router provider and stack surfaces.
+it('wraps the native stack with the mode-aware navigation theme provider', () => {
+    const layout = readFileSync(resolve(process.cwd(), 'app/_layout.tsx'), 'utf8');
+
+    expect(layout).toContain("mode === 'dark' ? NavigationDarkTheme : NavigationLightTheme");
+    expect(layout).toContain('<NavigationThemeProvider value={navigationTheme}>');
+    expect(layout).toContain('contentStyle: { backgroundColor: colors.surface }');
+  });

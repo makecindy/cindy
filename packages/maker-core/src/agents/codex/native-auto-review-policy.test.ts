@@ -33,6 +33,7 @@ describe("native auto-review continuation configuration", () => {
     "codex/0.153.5",
     "codex/0.153.4-alpha",
     "codex/0.156.0-alpha",
+    "codex/0.156.1",
     "codex/0.159.3",
     "codex/0.166.0-alpha",
     "codex/0.166.1",

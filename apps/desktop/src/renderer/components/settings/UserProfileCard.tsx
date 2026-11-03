@@ -1,3 +1,4 @@
+import { Button } from '@/components/ui/button';
 import { useEffect, useId, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Building2, Copy, LogOut, Pencil, UserPlus, UserRound } from 'lucide-react';
@@ -90,13 +91,15 @@ export function UserProfileCard() {
           </p>
         </div>
         <div className="flex shrink-0 items-center">
-          <button
+          <Button
+            variant="secondary"
+            size="sm"
+            compact
             type="button"
             onClick={() => void handleLocalSignIn()}
-            className="rounded-full border border-[var(--border-default)] px-3 py-1.5 text-12 text-[var(--text-primary)] transition-colors hover:bg-[var(--settings-profile-avatar-bg)]"
           >
             {t('settings.userProfile.local.signIn')}
-          </button>
+          </Button>
         </div>
       </div>
     );
@@ -270,34 +273,28 @@ export function UserProfileCard() {
 
       {mode === 'cloud' && (
         <div className="flex shrink-0 flex-col items-stretch gap-2">
-          <button
+          <Button
+            variant="secondary"
+            size="md"
+            compact
             type="button"
             onClick={() => void handleLogout()}
             aria-label={t('settings.logout.aria')}
-            className={cn(
-              'flex h-8 items-center justify-center gap-1.5 rounded-full border px-3 text-12 font-medium',
-              'border-[var(--settings-logout-border)] bg-[var(--settings-logout-bg)]',
-              'text-[var(--settings-logout-text)] transition-colors hover:bg-[var(--settings-logout-hover-bg)]',
-              'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring-soft)]',
-            )}
           >
             <LogOut size={14} aria-hidden="true" />
             {t('settings.logout.button')}
-          </button>
-          <button
+          </Button>
+          <Button
+            variant="secondary"
+            size="md"
+            compact
             type="button"
             onClick={() => void openAddAccount()}
             aria-label={t('sidebar.user.menuAddAccount')}
-            className={cn(
-              'flex h-8 items-center justify-center gap-1.5 rounded-full border px-3 text-12 font-medium',
-              'border-[var(--settings-btn-secondary-border)] bg-[var(--settings-btn-secondary-bg)]',
-              'text-[var(--settings-btn-secondary-text)] transition-colors hover:bg-[var(--settings-btn-secondary-hover-bg)]',
-              'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring-soft)]',
-            )}
           >
             <UserPlus size={14} aria-hidden="true" />
             {t('sidebar.user.menuAddAccount')}
-          </button>
+          </Button>
         </div>
       )}
 

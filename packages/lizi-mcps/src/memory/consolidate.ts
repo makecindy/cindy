@@ -39,12 +39,11 @@ export function registerMemoryConsolidateTool(registry: MemoryToolRegistry, deps
         body: z.string().min(1),
       }),
     },
-    handler: async ({ sources, target }) =>
-      withStore(deps, (store) =>
-        store.consolidate({
-          sources,
-          target: { ...target },
-        }),
-      ),
+    handler: async ({ sources, target }) => {
+      const saved = deps.beginWrite?.(deps.getSessionContext?.());
+      const result = await withStore(deps, store => store.consolidate({ sources, target: { ...target } }));
+      if (!result.isError) saved?.({ key: `${target.type}_${target.name}.md`, title: target.title, action: 'updated' });
+      return result;
+    },
   });
 }

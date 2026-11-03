@@ -1,3 +1,4 @@
+import { sharedTaskGuestPeer } from '@cindy/device-link';
 /**
  * dispatchWeakNetwork.test.ts — 被控端弱网收尾行为契约。
  * -------------------------------------------------------------------------
@@ -13,11 +14,16 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import {
   DeviceLinkClient,
+  SHARED_TASK_CAPABILITY,
   DeviceLinkError,
   DEVICE_LINK_CAPABILITY_HISTORY_VIEW_V1,
+  DEVICE_LINK_CAPABILITY_BACKGROUND_LINK_V1,
   DL_SUBSCRIBE_CHANNEL,
   INVOKE_TIMEOUT_OVERRIDES_MS,
   PROTOCOL_VERSION,
+  TASK_MIGRATION_CHANNEL,
+  TASK_MIGRATION_ESTIMATE_TIMEOUT_MS,
+  resolveRemoteInvokeTimeoutMs,
   type Envelope,
 } from '@cindy/device-link';
 
@@ -47,18 +53,33 @@ vi.mock('../../logger', async (importOriginal) => ({
 vi.mock('../settings-store', () => ({
   readDeviceLinkSettings: () => deviceLinkSettings.value,
 }));
+// Observe dispatch's teardown calls without loading the unrelated desktop runtime.
+vi.mock('../../remote-desktop', () => ({ remoteDesktop: { stop: vi.fn(), signalingLost: vi.fn() } }));
+const sharedTask = vi.hoisted(() => ({ refresh: vi.fn(), capture: vi.fn() }));
+vi.mock('../sharedTaskDispatch.js', async (original) => ({
+  ...await original<typeof import('../sharedTaskDispatch.js')>(),
+  refreshSharedTaskPeer: sharedTask.refresh,
+  captureSharedTaskPeer: sharedTask.capture,
+}));
 
 import {
   __testing,
+  clearControllerDisplayNames,
+  getControllerDisplayName,
+  setControllerDisplayName,
+  setControllerFallbackDisplayName,
   deactivateAllControllers,
   deactivateController,
   flushRemoteInvokeResultOutboxOnReconnect,
   handleControllerOffline,
   setControllersChangedListener,
+  setOrdinaryPeerLinkAcceptedListener,
   setDispatchPresenceOfflineCheck,
   wireInboundDispatch,
 } from '../dispatch';
 import * as subscriptions from '../subscriptions';
+import { tapWindowBroadcast, tapRemoteModelCatalogChange } from '../broadcast-tap';
+import { remoteDesktop } from '../../remote-desktop';
 
 function mkClient(
   over: Partial<{
@@ -232,9 +253,90 @@ beforeEach(() => {
 
 afterEach(() => {
   vi.useRealTimers();
+  vi.restoreAllMocks();
 });
 
 describe('[1] link-accept 发送失败的有限重试', () => {
+  const backgroundOpen = {
+    controllerName: 'background catalog reader', protocolVersion: PROTOCOL_VERSION, appVersion: '1.0.0',
+    capabilities: [DEVICE_LINK_CAPABILITY_BACKGROUND_LINK_V1],
+  };
+  // #8028 r4429989407 / unit: C sends empty catalog invalidations to B's
+  // already-accepted background link, without sessions/control subscriptions.
+  it.each(['maker:provider:changed', 'maker:agents:changed'])('notifies background catalog readers of %s without controlling C', async channel => {
+    const client = mkClient();
+    __testing.setActiveClient(client as never);
+    __testing.handleLinkOpen(client as never, 'host-b', 'open-b', backgroundOpen);
+    __testing.handleLinkOpen(client as never, 'host-d', 'open-d', backgroundOpen);
+    expect(__testing.getActiveControllers()).toEqual([]);
+    expect(subscriptions.getControllersForTopic('sessions')).toEqual([]);
+    tapWindowBroadcast(channel, { privateSourceDetails: 'must not leave C' });
+    expect(client.sendPush.mock.calls).toEqual([
+      ['host-b', channel, {}], ['host-d', channel, {}],
+    ]);
+    client.sendPush.mockClear();
+    deviceLinkSettings.value.revokedControllers = ['host-b'];
+    tapWindowBroadcast(channel, {});
+    expect(client.sendPush.mock.calls).toEqual([['host-d', channel, {}]]);
+    client.sendPush.mockClear();
+    handleControllerOffline('host-d');
+    tapWindowBroadcast(channel, {});
+    expect(client.sendPush).not.toHaveBeenCalled();
+  });
+
+  it('forwards C invalidation through B once, without source payloads or a C control subscription', () => {
+    const client = mkClient();
+    __testing.setActiveClient(client as never);
+    __testing.handleLinkOpen(client as never, 'controller-a', 'open-a', undefined);
+    __testing.handleLinkOpen(client as never, 'source-c', 'open-c', backgroundOpen);
+    client.sendPush.mockClear();
+    tapRemoteModelCatalogChange('source-c', 'maker:provider:changed', false);
+    expect(client.sendPush.mock.calls).toEqual([['controller-a', 'maker:model-catalog:changed', {}]]);
+    expect(__testing.getActiveControllers().map(controller => controller.deviceId)).toEqual(['controller-a']);
+    client.sendPush.mockClear();
+    tapRemoteModelCatalogChange('source-c', 'maker:model-catalog:changed', false);
+    tapRemoteModelCatalogChange('source-c', 'maker:agents:changed', true);
+    tapRemoteModelCatalogChange(sharedTaskGuestPeer('task', 'guest', 'pc'), 'maker:agents:changed', false);
+    expect(client.sendPush).not.toHaveBeenCalled();
+  });
+
+  it('notifies only the successfully accepted ordinary peer after a failed inbound open', () => {
+    const accepted = vi.fn();
+    setOrdinaryPeerLinkAcceptedListener(accepted);
+    const sendLinkAccept = vi.fn().mockImplementationOnce(() => { throw backpressure(); });
+    const client = mkClient({ sendLinkAccept });
+    __testing.setActiveClient(client as never);
+    __testing.handleLinkOpen(client as never, 'ctrl-a', 'open-a', undefined);
+    expect(accepted).not.toHaveBeenCalled();
+    __testing.handleLinkOpen(client as never, 'ctrl-b', 'open-b', undefined);
+    expect(accepted.mock.calls).toEqual([['ctrl-b']]);
+    accepted.mockClear();
+    vi.advanceTimersByTime(500);
+    expect(accepted.mock.calls).toEqual([['ctrl-a']]);
+    expect(__testing.getActiveControllers().map(c => c.deviceId).sort()).toEqual(['ctrl-a', 'ctrl-b']);
+  });
+
+  it('refreshes first-join authority and ignores an older failed open after a newer success', async () => {
+    const accepted = vi.fn();
+    setOrdinaryPeerLinkAcceptedListener(accepted);
+    const client = mkClient();
+    __testing.setActiveClient(client as never);
+    const peer = sharedTaskGuestPeer('m', 'g', 'd');
+    const payload = { controllerName: 'Guest', protocolVersion: PROTOCOL_VERSION, appVersion: '0.0.0-test', capabilities: [SHARED_TASK_CAPABILITY] };
+    let rejectOld!: (error: Error) => void;
+    sharedTask.capture.mockReturnValue({ author: { displayName: 'Guest' } });
+    sharedTask.refresh.mockImplementationOnce(() => new Promise<void>((_resolve, reject) => { rejectOld = reject; })).mockResolvedValue(undefined);
+    __testing.handleLinkOpen(client as never, peer, 'old', payload);
+    expect(client.sendLinkAccept).not.toHaveBeenCalled();
+    __testing.handleLinkOpen(client as never, peer, 'new', payload);
+    await Promise.resolve();
+    expect(client.sendLinkAccept).toHaveBeenCalledWith(peer, 'new', expect.anything());
+    rejectOld(new Error('old network failure'));
+    await Promise.resolve(); await Promise.resolve();
+    expect(client.closeLink).not.toHaveBeenCalled();
+    expect(client.sendLinkAccept).toHaveBeenCalledTimes(1);
+    expect(accepted).not.toHaveBeenCalled();
+  });
   it('declares history projection support in the host accept, including for legacy controllers', () => {
     const client = mkClient();
     __testing.setActiveClient(client as never);
@@ -645,10 +747,44 @@ describe('[5] orphan 截止时间按 channel 收窄', () => {
       compactBudget * 2,
     );
   });
+
+  it('按与控制端相同的动作级预算给任务复制统计留足时间', () => {
+    const orphan = (action: string) =>
+      __testing.remoteInvokeOrphanTimeoutForChannelMs(TASK_MIGRATION_CHANNEL, [
+        { action, sessionId: 's' },
+      ]);
+    expect(orphan('estimate')).toBe(TASK_MIGRATION_ESTIMATE_TIMEOUT_MS * 2);
+    expect(orphan('status')).toBe(60_000);
+    // A reply that could not be sent is kept for the same action-specific window.
+    const outbox = (action: string) =>
+      __testing.outboxEntryMaxAgeMs(TASK_MIGRATION_CHANNEL, [{ action, sessionId: 's' }]);
+    expect(outbox('estimate')).toBe(TASK_MIGRATION_ESTIMATE_TIMEOUT_MS * 2);
+    expect(outbox('status')).toBe(60_000);
+  });
+
+  it('被控端从不早于控制端放弃：orphan 与 outbox 覆盖每个通道与动作的等待预算', () => {
+    const calls: Array<[string | undefined, unknown[] | undefined]> = [
+      [undefined, undefined],
+      ...Object.keys(INVOKE_TIMEOUT_OVERRIDES_MS).map(
+        (channel) => [channel, undefined] as [string, undefined],
+      ),
+      ...['estimate', 'receive', 'status', 'start', 'caps'].map(
+        (action) => [TASK_MIGRATION_CHANNEL, [{ action, sessionId: 's' }]] as [string, unknown[]],
+      ),
+    ];
+    for (const [channel, args] of calls) {
+      const budget =
+        (channel && resolveRemoteInvokeTimeoutMs(channel, args, 'desktop')) || 30_000;
+      expect(__testing.remoteInvokeOrphanTimeoutForChannelMs(channel, args)).toBeGreaterThanOrEqual(budget);
+      expect(__testing.outboxEntryMaxAgeMs(channel, args)).toBeGreaterThanOrEqual(budget);
+    }
+  });
 });
 
 describe('[6] active controller 生命周期与故障半径', () => {
   it('真实双 peer 链路中 A 的 DEVICE_OFFLINE 不清 B，B 的在途请求仍能完成', async () => {
+    const lost = vi.spyOn(remoteDesktop, 'signalingLost');
+    const stop = vi.spyOn(remoteDesktop, 'stop');
     vi.useRealTimers();
     const relay = new DispatchTestRelay();
     const target = makeDispatchTestClient(relay, 'target');
@@ -697,9 +833,14 @@ describe('[6] active controller 生命周期与故障半径', () => {
     // 模拟 relay 对 target→A 的真实路由错误:DeviceLinkClient 先发 typed offline,
     // 再由 host 接入唯一的 deactivateController 状态转换。
     relay.offline.add('ctrl-a');
+    lost.mockClear();
+    stop.mockClear();
     target.sendInvokeResult('ctrl-a', 'offline-probe', { ok: true, result: null });
 
     expect(routeChanges).toContain('ctrl-a:offline');
+    expect(lost).toHaveBeenCalledWith('ctrl-a');
+    expect(lost).not.toHaveBeenCalledWith('ctrl-b');
+    expect(stop).not.toHaveBeenCalledWith('ctrl-b');
     expect(__testing.getActiveControllers().map((controller) => controller.deviceId).sort()).toEqual([
       'ctrl-b',
     ]);
@@ -736,6 +877,21 @@ describe('[6] active controller 生命周期与故障半径', () => {
     expect(__testing.controllerSupports('ctrl-a', 'cap-a')).toBe(true);
     expect(__testing.controllerSupports('ctrl-b', 'cap-b')).toBe(true);
     expect(changes.at(-1)).toEqual({ active: [], updateRelaunch: [] });
+  });
+
+  // 故障半径:走自建中转时访客在官方连接上,自建中转断开不能让访客静默收不到推送(反之亦然)。
+  it('跨账号控制端在独立连接上时,一条连接断开只清这条连接上的控制端', () => {
+    const guest = sharedTaskGuestPeer('task-a', 'member-a', 'guest-device');
+    const activeIds = () => __testing.getActiveControllers().map((controller) => controller.deviceId);
+    subscriptions.subscribe('ctrl-a', ['session:a'], 'A', []);
+    subscriptions.subscribe(guest, ['session:b'], 'Guest', []);
+
+    deactivateAllControllers('relay-disconnected', 'same-account');
+    expect(activeIds()).toEqual([guest]);
+
+    subscriptions.subscribe('ctrl-a', ['session:a'], 'A', []);
+    deactivateAllControllers('cross-account-relay-disconnected', 'cross-account');
+    expect(activeIds()).toEqual(['ctrl-a']);
   });
 
   it('旧 connection epoch 的 offline 事件不能清掉新 link-open 的 active controller', () => {
@@ -795,5 +951,24 @@ describe('[6] active controller 生命周期与故障半径', () => {
       linkGeneration: 2,
     });
     expect(__testing.getActiveControllers()).toEqual([]);
+  });
+});
+
+describe('被控浮窗读取控制端展示名', () => {
+  afterEach(() => clearControllerDisplayNames());
+
+  it('旧 presence 主机名作为最后一级回退，权威展示名优先', () => {
+    setControllerFallbackDisplayName('ctrl-legacy', 'Legacy Mac');
+    expect(getControllerDisplayName('ctrl-legacy')).toBe('Legacy Mac');
+    setControllerDisplayName('ctrl-legacy', 'Dash 的 MacBook');
+    expect(getControllerDisplayName('ctrl-legacy')).toBe('Dash 的 MacBook');
+    clearControllerDisplayNames();
+    expect(getControllerDisplayName('ctrl-legacy')).toBeUndefined();
+  });
+
+  it('权威名被显式清空时同时清掉旧 presence 主机名', () => {
+    setControllerFallbackDisplayName('ctrl-legacy', 'Legacy Mac');
+    setControllerDisplayName('ctrl-legacy', '');
+    expect(getControllerDisplayName('ctrl-legacy')).toBeUndefined();
   });
 });

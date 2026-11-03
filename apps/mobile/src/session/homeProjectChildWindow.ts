@@ -50,12 +50,13 @@ export function findHomeProjectChildIndex(
 }
 
 /**
- * Keeps a large nested group as a spacer until its child area intersects the
- * viewport. This prevents an off-screen folder header from eagerly mounting a
- * complete child window during a grouping-mode switch.
+ * Finds the visible child anchor, optionally preloading before the viewport.
+ * A negative result means the group is outside that band. Project blocks keep
+ * their window; nested groups can release it and preload on the return trip.
  */
 export function resolveHomeProjectChildAnchor(input: {
   childOffsets: readonly number[];
+  preloadDistance?: number;
   projectHeaderHeight: number;
   projectTop: number;
   shift: number;
@@ -68,7 +69,10 @@ export function resolveHomeProjectChildAnchor(input: {
   const childBottom = childTop + childContentHeight;
   const viewportTop = Math.max(0, input.viewportTop);
   const viewportBottom = viewportTop + Math.max(0, input.viewportHeight);
-  if (childContentHeight === 0 || childTop >= viewportBottom || childBottom <= viewportTop) {
+  const preloadDistance = Math.max(0, input.preloadDistance ?? 0);
+  if (childContentHeight === 0
+    || childTop >= viewportBottom + preloadDistance
+    || childBottom <= viewportTop - preloadDistance) {
     return -1;
   }
   const shift = Math.max(1, Math.floor(input.shift));

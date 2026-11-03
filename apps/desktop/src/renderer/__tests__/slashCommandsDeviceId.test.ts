@@ -16,10 +16,10 @@ function c(name: string, kind: string) {
 }
 
 function stubElectron() {
-  // desktop 含 goal:device-link 远程会话下同样保留(main 按 ctx.deviceId 隧道路由到被控端)。
+  // desktop 含 goal / learn；正常会话由 agent-skill 覆盖/替代 learn，SSH 才保留兼容入口。
   const listDesktopCommands = vi.fn(async () => ({
     success: true,
-    commands: [c('help', 'desktop'), c('goal', 'desktop')],
+    commands: [c('help', 'desktop'), c('goal', 'desktop'), c('learn', 'desktop')],
   }));
   const listAgentCommands = vi.fn(async () => ({
     success: true,
@@ -29,7 +29,10 @@ function stubElectron() {
     commands: import('@cindy/maker-core').UnifiedCommand[];
     runtimeStatus?: import('../../shared/piPackages').PiPackageCommandRuntimeStatus;
   }));
-  const listAgentSkills = vi.fn(async () => ({ success: true, skills: [c('localskill', 'agent-skill')] }));
+  const listAgentSkills = vi.fn(async () => ({
+    success: true,
+    skills: [c('learn', 'agent-skill'), c('localskill', 'agent-skill')],
+  }));
   const invoke = vi.fn(async (_deviceId: string, channel: string, args?: unknown[]) => {
     if (channel === 'maker:list-agent-commands') {
       return args?.[0] === 'pi'
@@ -40,7 +43,9 @@ function stubElectron() {
           }
         : { success: true, commands: [c('host-cmd', 'agent-builtin')] };
     }
-    if (channel === 'maker:list-agent-skills') return { success: true, skills: [c('host-skill', 'agent-skill')] };
+    if (channel === 'maker:list-agent-skills') {
+      return { success: true, skills: [c('learn', 'agent-skill'), c('host-skill', 'agent-skill')] };
+    }
     return { success: false };
   });
   vi.stubGlobal('window', {
@@ -53,6 +58,67 @@ function stubElectron() {
 }
 
 describe('loadAllCommands deviceId', () => {
+  // Unit: task view and composer can ask for the same roster before either
+  // request finishes. Existing routing tests only make sequential calls.
+  // A refresh must still return a fresh roster, and a later read must see edits.
+  it('shares in-flight skill reads while a forced refresh supersedes the older flight', async () => {
+    const s = stubElectron();
+    let finishOld!: (value: Awaited<ReturnType<typeof s.listAgentSkills>>) => void;
+    let finishFresh!: typeof finishOld;
+    s.listAgentSkills.mockImplementationOnce(() => new Promise((resolve) => { finishOld = resolve; }))
+      .mockImplementationOnce(() => new Promise((resolve) => { finishFresh = resolve; }));
+    const first = loadAllCommands('claude-code', '/w', { sessionId: 'shared-read' });
+    const second = loadAllCommands('claude-code', '/w', { sessionId: 'shared-read' });
+    expect(s.listAgentSkills).toHaveBeenCalledTimes(1);
+    const refresh = loadAllCommands('claude-code', '/w', { sessionId: 'shared-read', forceReload: true });
+    expect(s.listAgentSkills).toHaveBeenCalledTimes(2);
+    finishOld({ success: true, skills: [c('old', 'agent-skill')] });
+    expect((await first).some((x) => x.name === 'old')).toBe(true);
+    expect((await second).some((x) => x.name === 'old')).toBe(true);
+    const duringRefresh = loadAllCommands('claude-code', '/w', { sessionId: 'shared-read' });
+    expect(s.listAgentSkills).toHaveBeenCalledTimes(2);
+    finishFresh({ success: true, skills: [c('fresh', 'agent-skill')] });
+    for (const result of await Promise.all([refresh, duringRefresh])) {
+      expect(result.some((x) => x.name === 'fresh')).toBe(true);
+      expect(result.some((x) => x.name === 'old')).toBe(false);
+    }
+    expect((await loadAllCommands('claude-code', '/w', { sessionId: 'shared-read' }))
+      .some((x) => x.name === 'localskill')).toBe(true);
+    expect(s.listAgentSkills).toHaveBeenCalledTimes(3);
+  });
+
+  it('does not share skill reads across a task, folder, agent or device boundary', async () => {
+    const s = stubElectron();
+    const results = await Promise.all([
+      loadAllCommands('claude-code', '/w', { sessionId: 'one' }),
+      loadAllCommands('claude-code', '/w', { sessionId: 'two' }),
+      loadAllCommands('claude-code', '/other', { sessionId: 'one' }),
+      loadAllCommands('codex', '/w', { sessionId: 'one' }),
+      loadAllCommands('claude-code', '/w', { sessionId: 'one' }, 'remote-one'),
+      loadAllCommands('claude-code', '/w', { sessionId: 'one' }, 'remote-two'),
+    ]);
+    expect(s.listAgentSkills).toHaveBeenCalledTimes(4);
+    expect(s.invoke.mock.calls.filter((call) => call[1] === 'maker:list-agent-skills')).toHaveLength(2);
+    expect(results.slice(0, 4).every((commands) => commands.some((x) => x.name === 'localskill'))).toBe(true);
+    expect(results.slice(4).every((commands) => commands.some((x) => x.name === 'host-skill'))).toBe(true);
+  });
+
+  // Unit: a rejected shared IPC must not poison subsequent reads after recovery.
+  it('retries after a shared skill read fails', async () => {
+    const s = stubElectron();
+    s.listAgentSkills.mockRejectedValueOnce(new Error('temporarily disconnected'));
+    const results = await Promise.all([
+      loadAllCommands('claude-code', '/w', { sessionId: 'retry-read' }),
+      loadAllCommands('claude-code', '/w', { sessionId: 'retry-read' }),
+    ]);
+    expect(s.listAgentSkills).toHaveBeenCalledTimes(1);
+    expect(results.every((commands) => commands.some((x) => x.name === 'help'))).toBe(true);
+    expect(results.every((commands) => !commands.some((x) => x.name === 'localskill'))).toBe(true);
+    expect((await loadAllCommands('claude-code', '/w', { sessionId: 'retry-read' }))
+      .some((x) => x.name === 'localskill')).toBe(true);
+    expect(s.listAgentSkills).toHaveBeenCalledTimes(2);
+  });
+
   it('本地会话(无 deviceId):三源全本地,不碰隧道', async () => {
     const s = stubElectron();
     const cmds = await loadAllCommands('claude-code', '/w', { sessionId: 'local-session' });
@@ -62,8 +128,10 @@ describe('loadAllCommands deviceId', () => {
       workingDir: '/w',
       sessionId: 'local-session',
     });
-    // 本地会话:goal 命令保留(可对本地 session 设目标)。
-    expect(cmds.map((x) => x.name).sort()).toEqual(['compact', 'goal', 'help', 'localskill']);
+    // 本地会话:goal 命令保留，learn 由可用的 Agent Skill 提供。
+    expect(cmds.map((x) => x.name).sort()).toEqual([
+      'compact', 'goal', 'help', 'learn', 'localskill',
+    ]);
   });
 
   it('本地 Claude 新对话 workingDir=null 时仍加载全局 skills', async () => {
@@ -86,6 +154,7 @@ describe('loadAllCommands deviceId', () => {
       expect.anything(),
     );
     expect(cmds.some((x) => x.kind === 'agent-skill')).toBe(false);
+    expect(cmds).toContainEqual(expect.objectContaining({ name: 'learn', kind: 'desktop' }));
   });
 
   it('SSH remote 新 Pi 对话不请求控制端本机包预览', async () => {
@@ -134,7 +203,7 @@ describe('loadAllCommands deviceId', () => {
       'dev-1',
     );
     // desktop 始终本地
-    expect(s.listDesktopCommands).toHaveBeenCalled();
+    expect(s.listDesktopCommands).toHaveBeenCalledWith({ deviceId: 'dev-1' });
     // agent-builtin / agent-skill 不走本地、走隧道
     expect(s.listAgentCommands).not.toHaveBeenCalled();
     expect(s.listAgentSkills).not.toHaveBeenCalled();
@@ -146,8 +215,10 @@ describe('loadAllCommands deviceId', () => {
       'claude-code',
       { workingDir: '/host/path', sessionId: 'remote-session' },
     ]);
-    // 结果 = 本地 desktop(help + goal,远程会话不再剔除)+ 被控端 builtin(host-cmd)+ 被控端 skill(host-skill)
-    expect(cmds.map((x) => x.name).sort()).toEqual(['goal', 'help', 'host-cmd', 'host-skill']);
+    // 结果 = 本地 desktop(help + goal)+ 被控端 builtin(host-cmd)+ 被控端 skills(learn + host-skill)
+    expect(cmds.map((x) => x.name).sort()).toEqual([
+      'goal', 'help', 'host-cmd', 'host-skill', 'learn',
+    ]);
     // device-link 下 /goal 保留:业务体经隧道到被控端 goal-host,palette 正常展示。
     expect(cmds.some((x) => x.name === 'goal')).toBe(true);
   });

@@ -170,8 +170,8 @@ describe('ModelPriceOverrideDialog', () => {
     );
 
     await waitFor(() => expect(getModelPriceOverride).toHaveBeenCalledOnce());
-    expect(getByRole('button', { name: 'Claude Code' }).classList.contains('shadow-sm')).toBe(false);
-    expect(getByRole('button', { name: 'Codex' }).classList.contains('shadow-sm')).toBe(false);
+    expect(getByRole('radio', { name: 'Claude Code' }).classList.contains('shadow-sm')).toBe(false);
+    expect(getByRole('radio', { name: 'Codex' }).classList.contains('shadow-sm')).toBe(false);
   });
 
   it('prevents switching runtime while a reset response is pending', async () => {
@@ -204,7 +204,7 @@ describe('ModelPriceOverrideDialog', () => {
     fireEvent.click(reset);
     await waitFor(() => expect(resetModelPriceOverride).toHaveBeenCalledOnce());
 
-    const codex = getByRole('button', { name: 'Codex' });
+    const codex = getByRole('radio', { name: 'Codex' });
     expect(codex.hasAttribute('disabled')).toBe(true);
     fireEvent.click(codex);
     expect(getModelPriceOverride).toHaveBeenCalledOnce();
@@ -247,9 +247,10 @@ describe('ModelPriceOverrideDialog', () => {
         onOpenChange={onOpenChangeA}
       />,
     );
-    const save = await waitFor(() =>
-      first.getByRole('button', { name: 'settings.providers.models.priceOverride.save' }),
-    );
+    const save = first.getByRole('button', {
+      name: 'settings.providers.models.priceOverride.save',
+    });
+    await waitFor(() => expect(save.hasAttribute('disabled')).toBe(false));
     fireEvent.click(save);
     await waitFor(() => expect(setModelPriceOverride).toHaveBeenCalledOnce());
 
@@ -293,9 +294,10 @@ describe('ModelPriceOverrideDialog', () => {
         onOpenChange={onOpenChange}
       />,
     );
-    const save = await waitFor(() =>
-      getByRole('button', { name: 'settings.providers.models.priceOverride.save' }),
-    );
+    const save = getByRole('button', {
+      name: 'settings.providers.models.priceOverride.save',
+    });
+    await waitFor(() => expect(save.hasAttribute('disabled')).toBe(false));
     fireEvent.click(save);
     await waitFor(() => expect(setModelPriceOverride).toHaveBeenCalledOnce());
 

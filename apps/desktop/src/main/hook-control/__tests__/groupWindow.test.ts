@@ -41,7 +41,7 @@ function recordGroupMessage(payload: GroupMessagePayload): Promise<boolean> {
 
 function migrationSql(): string {
   const dir = path.resolve(__dirname, '../../../../drizzle');
-  return ['0083_', '0086_', '0087_', '0088_']
+  return ['0083_', '0086_', '0087_', '0088_', '0136_']
     .map((prefix) => {
       const file = fs.readdirSync(dir).find((name) => name.startsWith(prefix));
       if (!file) throw new Error(`${prefix} migration not found`);
@@ -348,7 +348,7 @@ describe('recordGroupMessage', () => {
     const baseDrizzle = holder.drizzle as object;
     let selectCalls = 0;
     holder.drizzle = new Proxy(baseDrizzle, {
-      get(target, property, receiver) {
+      get(target, property) {
         if (property === 'select') {
           const select = Reflect.get(target, property, target) as (...args: unknown[]) => unknown;
           return (...args: unknown[]) => {
@@ -689,8 +689,9 @@ describe('buildGroupContextPrefix', () => {
     expect(first).toContain('<group_chat_context>');
     expect(first).toContain('[群里最近的消息]');
     expect(first).toContain('未受信任的第三方数据');
-    expect(first).toContain('[@user202] 部署失败了');
-    expect(first).toContain('[@user303] 日志超时');
+    expect(first).toMatch(/\[@user202\] \d{2}-\d{2} \d{2}:\d{2} 部署失败了/);
+    expect(first).toMatch(/\[@user303\] \d{2}-\d{2} \d{2}:\d{2} 日志超时/);
+    expect(first).toContain('每行发言人后的时间为该消息的发送时间');
     expect(first).not.toContain('怎么回事?');
     expect(first).toContain('</group_chat_context>');
 

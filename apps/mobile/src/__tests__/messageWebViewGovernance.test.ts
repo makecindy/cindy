@@ -1,6 +1,8 @@
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { beforeEach, describe, expect, it } from 'vitest';
+import * as React from 'react';
+import ts from 'typescript';
 import {
   getMobileMessageWebViewMetrics,
   registerMobileMessageWebView,
@@ -33,45 +35,20 @@ describe('mobile message WebView lifecycle accounting', () => {
   });
 });
 
-describe('message WebView visibility wiring', () => {
-  it('gates heavy message blocks without changing the list virtualization contract', () => {
-    const renderer = readFileSync(
-      resolve(process.cwd(), 'src/session/MessageRenderer.tsx'),
-      'utf8',
-    );
-    const mermaid = readFileSync(resolve(process.cwd(), 'src/session/mermaidWebView.tsx'), 'utf8');
-    const math = readFileSync(resolve(process.cwd(), 'src/session/mathWebView.tsx'), 'utf8');
-    const media = readFileSync(resolve(process.cwd(), 'src/session/mediaPlayerWebView.tsx'), 'utf8');
-    const composer = readFileSync(resolve(process.cwd(), 'src/session/ComposerRichInput.tsx'), 'utf8');
-
-    expect(renderer).not.toContain('MessageListVisibleKeysContext');
-    expect(renderer).toContain('useViewability<MobileMessageRenderItem>(');
-    expect(renderer).toContain('const heavyContentVisible = focused || isViewable;');
-    expect(renderer).toContain('function ViewabilityGatedMermaidDiagram(');
-    expect(renderer).toContain('function ViewabilityGatedMathFormula(');
-    expect(renderer).toContain('active={heavyContentVisible}');
-    const markdownBodyStart = renderer.indexOf('function MarkdownBody(');
-    const markdownBodyEnd = renderer.indexOf('\nfunction ', markdownBodyStart + 1);
-    const markdownBody = renderer.slice(markdownBodyStart, markdownBodyEnd);
-    expect(markdownBody).not.toContain('useContext(MessageHeavyContentVisibilityContext)');
-    expect(renderer).toContain('getWebViewMetrics: getMobileMessageWebViewMetrics');
-    expect(renderer).toContain('getMarkdownMetrics: getMobileMarkdownRenderMetrics');
-    expect(renderer).toContain('devRecycleItems = false,');
-    expect(renderer).toContain('const recycleItems = __DEV__ ? devRecycleItems === true : false;');
-    expect(renderer).toContain('recycleItems={recycleItems}');
-    expect(renderer).toContain('getItemType={mobileMessageListItemType}');
-    expect(mermaid).toContain('active?: boolean;');
-    expect(mermaid).toMatch(/active\s*\?\s*<WebView/);
-    expect(math).toContain('active?: boolean;');
-    expect(math).toMatch(/active\s*\?\s*<WebView/);
-    expect(math).toContain('renderGenerationRef.current !== renderGeneration');
-    expect(mermaid).toContain('pendingExportsRef.current.clear();');
-    expect(mermaid).toContain('}, [active, source]);');
-    expect(media).toContain('stopPlaybackAndLoading');
-    expect(media).toContain('webViewRef.current?.stopLoading();');
-    expect(media).toContain('lifecycleRef.current.consumeReloadOnActive()');
-    expect(media).toContain('key={reloadGeneration}');
-    expect(media).toContain('if (!mountedRef.current) return;');
-    expect(composer).toContain('if (disposedRef.current) return;');
-  });
+// Actual native rich-view lifecycle is covered by richContentViews.test.tsx.
+// Keep the consumer gate behavioral: a hidden item must pass inactive to the host.
+it.each([false, true])('passes visible=%s to both rich-content hosts', (active) => {
+  const source = readFileSync(resolve(process.cwd(), 'src/session/MessageRenderer.tsx'), 'utf8');
+  const tree = ts.createSourceFile('renderer.tsx', source, ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
+  const functions: ts.Node[] = [];
+  function visit(node: ts.Node) {
+    if (ts.isVariableDeclaration(node) && ['ViewabilityGatedMermaidDiagram', 'ViewabilityGatedMathFormula'].includes(node.name.getText(tree))) functions.push(node);
+    ts.forEachChild(node, visit);
+  }
+  visit(tree);
+  const code = ts.transpileModule(functions.map((node) => 'const ' + node.getText(tree) + ';').join('\n'), { compilerOptions: { jsx: ts.JsxEmit.React, target: ts.ScriptTarget.ES2022 } }).outputText;
+  const bindings = { React, memo: (component: unknown) => component, useContext: () => active, MessageHeavyContentVisibilityContext: {}, MermaidDiagramWebView: 'MermaidHost', MathFormulaWebView: 'MathHost' };
+  const hosts = new Function(...Object.keys(bindings), code + '\nreturn [ViewabilityGatedMermaidDiagram, ViewabilityGatedMathFormula];')(...Object.values(bindings));
+  if (hosts.length !== 2) throw new Error('Missing production rich-content visibility gates');
+  for (const render of hosts) expect(render({ source: 'content', testID: 'rich' }).props).toMatchObject({ active, source: 'content', testID: 'rich' });
 });

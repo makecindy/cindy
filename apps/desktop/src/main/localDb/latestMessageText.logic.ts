@@ -107,7 +107,7 @@ function isBotCollaborationCardRow(meta: Record<string, unknown>): boolean {
     return false;
   }
   const role = (collaboration as { role?: unknown }).role;
-  return role === 'delegation-request' || role === 'interjection';
+  return role === 'delegation-request' || role === 'delegation-result' || role === 'interjection';
 }
 
 /** Only an explicit user send starts a new title turn; steer stays inside the current turn. */

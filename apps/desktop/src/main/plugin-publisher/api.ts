@@ -6,6 +6,7 @@
  * body.status (expired is not a success).
  */
 import {
+  CINDY_CLIENT_VERSION_HEADER,
   parseCommitPluginMemberUploadResponse,
   parseListMyPluginMemberReleasesResponse,
   parsePluginMemberUploadStatusResponse,
@@ -41,6 +42,7 @@ export class PluginPublisherApiError extends Error {
 }
 
 export interface PluginPublisherApiDeps {
+  getClientVersion(): string;
   getToken(): Promise<string>;
   invalidateToken(): void;
   unknownFailureCodeReporter?: UnknownFailureCodeReporter;
@@ -128,8 +130,14 @@ export class PluginPublisherApi {
           'CONNECTION_UNAUTHORIZED',
           'INVALID_CONNECTION_TOKEN',
           'CONNECTION_TOKEN_EXPIRED',
+          'PLUGIN_NAMESPACE_CLIENT_REQUIRED',
+          'PLUGIN_ORGANIZATION_CONTEXT_UNAVAILABLE',
+          'PLUGIN_NAMESPACE_CONFIG_REQUIRED',
+          'PUBLISH_GHOST_ID_INVALID',
+          'PLUGIN_GHOST_ID_RESERVED',
         ],
         ...options,
+        headers: { ...options.headers, [CINDY_CLIENT_VERSION_HEADER]: this.deps.getClientVersion() },
         token,
         skipAutoRefresh: true,
       });

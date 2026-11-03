@@ -20,8 +20,9 @@ describe('resetAccountProviderRuntimes', () => {
     let allow = true;
     await resetAccountProviderRuntimes(
       {
-        restartCodex: async () => {
+        restartCodex: async (refresh) => {
           allow = false;
+          expect(await refresh()).toBe(false);
         },
         shutdownCodexEnvironment,
         log: { warn: vi.fn() },
@@ -37,8 +38,9 @@ describe('resetAccountProviderRuntimes', () => {
     let boundaryPending = false;
     await resetAccountProviderRuntimes(
       {
-        restartCodex: async () => {
+        restartCodex: async (refresh) => {
           boundaryPending = true;
+          await refresh();
         },
         shutdownCodexEnvironment,
         log: { warn: vi.fn() },
@@ -75,8 +77,9 @@ describe('refreshProviderModelsAfterAccountReady', () => {
     const backgroundRefresh = deferred();
     const events: string[] = [];
     const operation = refreshProviderModelsAfterAccountReady({
-      restartCodex: async () => {
+      restartCodex: async (refresh) => {
         events.push('restart');
+        await refresh();
       },
       shutdownCodexEnvironment: async () => {
         events.push('shutdown');
@@ -145,7 +148,7 @@ describe('refreshProviderModelsAfterAccountReady', () => {
     const warn = vi.fn();
     await expect(
       refreshProviderModelsAfterAccountReady({
-        restartCodex: vi.fn(async () => {}),
+        restartCodex: vi.fn(async (refresh) => { await refresh(); }),
         shutdownCodexEnvironment: vi.fn(async () => {}),
         loadXaiLkg: vi.fn(async () => false),
         refreshProviderModels: async () => {
@@ -167,7 +170,7 @@ describe('refreshProviderModelsAfterAccountReady', () => {
     const releaseLkg = deferred();
     const events: string[] = [];
     const operation = refreshProviderModelsAfterAccountReady({
-      restartCodex: async () => {},
+      restartCodex: async (refresh) => { await refresh(); },
       shutdownCodexEnvironment: async () => {},
       loadXaiLkg: async () => {
         events.push('lkg:start');

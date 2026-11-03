@@ -1,9 +1,8 @@
 // @vitest-environment jsdom
 
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
-import { readFileSync } from 'node:fs';
-import path from 'node:path';
 import { act } from 'react';
+import { MemoryRouter, useLocation } from 'react-router-dom';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type {
   SubagentRunDetail,
@@ -56,6 +55,16 @@ vi.mock('@/components/chat/AssistantMessage', () => ({
 }));
 
 import { SubagentsBody } from '../SubagentsBody';
+import { prefillErrorDiagnosisDraft } from '@/lib/errorDiagnosisPrompt';
+
+vi.mock('@/lib/errorDiagnosisPrompt', () => ({
+  buildErrorDiagnosisPrompt: (_t: unknown, url: string, source: { details: string }) => `${url}\n${source.details}`,
+  prefillErrorDiagnosisDraft: vi.fn(),
+}));
+
+function CurrentRoute() {
+  return <span data-testid="current-route">{useLocation().pathname}</span>;
+}
 
 const OWNER_STAMP = { dataOwnerId: 'owner-1', ownerGeneration: 1 };
 
@@ -121,6 +130,7 @@ describe('SubagentsBody', () => {
     if (channel === 'local-db:subagent-runs:detail') {
       return { supported: true, run: currentDetail };
     }
+    if (channel === 'maker:pi-subagent:control') return { ok: true, controlled: 1 };
     return { supported: false, run: null, entries: [] };
   };
   const deviceInvoke = vi.fn(defaultDeviceInvoke);
@@ -171,6 +181,31 @@ describe('SubagentsBody', () => {
     cleanup();
     dataOwnerTesting.reset();
     Reflect.deleteProperty(window, 'electronAPI');
+  });
+
+  it('opens a diagnosis draft for a failed child without retrying or controlling it', async () => {
+    currentDetail = {
+      ...detail(''), status: 'failed',
+      capabilities: { ...detail('').capabilities, viewFullTranscript: true },
+      children: [{ id: 'child-1', role: 'worker', status: 'failed', error: 'provider mismatch' }],
+    };
+    render(<MemoryRouter initialEntries={['/cc-agent/session-1']}>
+      <CurrentRoute />
+      <SubagentsBody
+        state={{ selectedRunId: 'run-1', selectedProvider: 'pi' }}
+        ctx={{
+          tabId: 'tab-1', sessionId: 'session-1', workdir: '/workspace',
+          remoteHostId: null, deviceLinkDeviceId: null, patchState: vi.fn(),
+          onVisibilityChange: vi.fn(), setCloseInterceptor: vi.fn(() => () => undefined),
+        }}
+      />
+    </MemoryRouter>);
+    fireEvent.click(await screen.findByRole('button', { name: 'chat.errorBanner.networkShowRaw' }));
+    fireEvent.click(screen.getByRole('button', { name: 'chat.errorBanner.diagnose' }));
+    expect(prefillErrorDiagnosisDraft).toHaveBeenLastCalledWith(expect.stringMatching(/session-1[\s\S]*subagentRunId: run-1\nchildId: child-1\nprovider mismatch/));
+    expect(screen.getByTestId('current-route').textContent).toBe('/cc-agent/new');
+    expect(controlPiSubagent).not.toHaveBeenCalled();
+    expect(stopAgentTask).not.toHaveBeenCalled();
   });
 
   it('polls a local run to completion when no change push ever arrives', async () => {
@@ -357,31 +392,6 @@ describe('SubagentsBody', () => {
     }
   });
 
-  it('has the session bubbles honour the boundary they are handed', () => {
-    // The two tests above stop at the component seam, because the stubs replace
-    // exactly the components that would carry the flag further. Asserted on the
-    // source instead — same approach as `markdownTargetRendererContract` — so
-    // the panel's boundary cannot be silently dropped one level down.
-    const chatDir = path.resolve(__dirname, '../../../../../components/chat');
-    const assistant = readFileSync(path.join(chatDir, 'AssistantMessage.tsx'), 'utf8')
-      .replace(/\r\n/g, '\n');
-    // Defaulting to true is what keeps every local caller unchanged, and is
-    // also what made the omission invisible.
-    expect(assistant).toContain('allowPrivilegedLinks = true');
-    // Both bodies: the streamed one and the settled one.
-    expect([...assistant.matchAll(/allowPrivilegedLinks=\{allowPrivilegedLinks\}/g)].length)
-      .toBeGreaterThanOrEqual(3);
-
-    const user = readFileSync(path.join(chatDir, 'UserMessage.tsx'), 'utf8')
-      .replace(/\r\n/g, '\n');
-    expect(user).toContain('allowPrivilegedLinks = true');
-    // A remote author's @-chip must not resolve against this filesystem: the
-    // click handler is withheld, which is the inert chip shape the component
-    // already uses for a collapsed long message.
-    expect(user).toContain('longMessageCollapsed || !allowPrivilegedLinks');
-    expect(user).toContain('allowPrivilegedLinks\n                                ? async (abs, name, chip)');
-  });
-
   it('reloads the selected detail when a run change is pushed', async () => {
     render(
       <SubagentsBody
@@ -471,6 +481,7 @@ describe('SubagentsBody', () => {
 
     await waitFor(() => expect(listCalls).toBe(1));
     // Several poll periods elapse while the first read is still outstanding.
+    // real-wait: exercise the production polling interval while the request remains pending.
     await new Promise((resolve) => setTimeout(resolve, 3_500));
     expect(listCalls).toBe(1);
 
@@ -505,6 +516,7 @@ describe('SubagentsBody', () => {
 
     view.unmount();
     const afterUnmount = listCalls;
+    // real-wait: prove no scheduled production poll fires after unmount.
     await new Promise((resolve) => setTimeout(resolve, 2_500));
     expect(listCalls).toBe(afterUnmount);
   }, 15_000);
@@ -598,7 +610,11 @@ describe('SubagentsBody', () => {
     expect(container.querySelector('[data-subagent-error-kind]')?.getAttribute('data-subagent-error-kind'))
       .toBe(kind);
     expect(screen.queryByTestId('session-assistant-message')).toBeNull();
-    expect(screen.getByText(rawError).closest('details')?.hasAttribute('open')).toBe(false);
+    expect(screen.queryByText(rawError)).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: 'chat.errorBanner.networkShowRaw' }));
+    expect(screen.getByText(rawError)).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: 'chat.errorBanner.networkHideRaw' }));
+    expect(screen.queryByText(rawError)).toBeNull();
   });
 
   it('protects a completed child result and offers follow-up instead of steer', async () => {
@@ -1873,6 +1889,57 @@ describe('SubagentsBody', () => {
     });
     // The visible send button is the plain queue path.
     expect(screen.getByLabelText('rightSidebar.subagents.controlActions.follow_up')).toBeTruthy();
+  });
+
+  describe.each([null, 'device-1'])('child composer readiness (device=%s)', (deviceLinkDeviceId) => {
+    it.each([
+      { resultReady: false, output: 'Checking with a tool', expectedAction: 'steer' },
+      { resultReady: true, output: 'Final answer', expectedAction: 'follow_up' },
+      { resultReady: true, output: '', expectedAction: 'follow_up' },
+      { resultReady: undefined, output: 'Legacy answer', expectedAction: 'follow_up' },
+      { resultReady: undefined, output: '', expectedAction: 'steer' },
+    ])('routes modifier send to $expectedAction with readiness=$resultReady and output="$output"', async ({ resultReady, output, expectedAction }) => {
+      currentDetail = {
+        ...detail('running'),
+        capabilities: { ...detail('running').capabilities, viewFullTranscript: true, steer: true },
+        children: [{
+          id: 'child-1', role: 'worker', status: 'running', output,
+          ...(resultReady === undefined ? {} : { resultReady }),
+        }],
+      };
+      render(
+        <SubagentsBody
+          state={{ selectedRunId: 'run-1', selectedProvider: 'pi' }}
+          ctx={{
+            tabId: 'tab-1', sessionId: 'session-1', workdir: '/workspace',
+            remoteHostId: null, deviceLinkDeviceId, patchState: vi.fn(),
+            onVisibilityChange: vi.fn(), setCloseInterceptor: vi.fn(() => () => undefined),
+          }}
+        />,
+      );
+      const input = await screen.findByPlaceholderText(expectedAction === 'steer'
+        ? 'rightSidebar.subagents.composerPlaceholders.runningWithSteer'
+        : 'rightSidebar.subagents.composerPlaceholders.follow_up');
+      const expectControl = async (action: string, message: string) => {
+        const request = { sessionId: 'session-1', taskId: 'task-1', childId: 'child-1', action, message };
+        await waitFor(() => {
+          if (deviceLinkDeviceId) {
+            expect(deviceInvoke).toHaveBeenCalledWith(deviceLinkDeviceId, 'maker:pi-subagent:control', [request]);
+            expect(controlPiSubagent).not.toHaveBeenCalled();
+          } else {
+            expect(controlPiSubagent).toHaveBeenCalledWith(request);
+          }
+        });
+        await waitFor(() => expect((input as HTMLTextAreaElement).value).toBe(''));
+      };
+      fireEvent.change(input, { target: { value: 'Use the corrected target' } });
+      fireEvent.keyDown(input, { key: 'Enter', ctrlKey: true });
+      await expectControl(expectedAction, 'Use the corrected target');
+      // Explicit readiness changes interjection eligibility, never plain send.
+      fireEvent.change(input, { target: { value: 'Then verify the result' } });
+      fireEvent.keyDown(input, { key: 'Enter' });
+      await expectControl('follow_up', 'Then verify the result');
+    });
   });
 
   it('dispatches a follow-up automatically once the child has settled output', async () => {

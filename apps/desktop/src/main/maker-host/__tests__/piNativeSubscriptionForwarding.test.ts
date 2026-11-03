@@ -1,5 +1,5 @@
 import { EventEmitter } from 'node:events';
-import { zstdCompressSync, zstdDecompressSync } from 'node:zlib';
+import { zstdCompress, zstdDecompress, zstdCompressSync, zstdDecompressSync } from 'node:zlib';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { createAnthropicCompatProxy } from '@cindy/anthropic-compat-proxy';
@@ -8,8 +8,17 @@ const { ownerState } = vi.hoisted(() => ({
   ownerState: {
     pending: false,
     scope: 'cloud:owner-a:1',
+    fastAllowed: true,
+    afterFastRead: undefined as 'relax' | 'owner' | undefined,
   },
 }));
+
+// Measure actual asynchronous zstd work on the production HTTP path. The
+// synchronous fixture encoder/decoder remains untouched.
+vi.mock('node:zlib', async importOriginal => {
+  const actual = await importOriginal<typeof import('node:zlib')>();
+  return { ...actual, zstdCompress: vi.fn(actual.zstdCompress), zstdDecompress: vi.fn(actual.zstdDecompress) };
+});
 
 vi.mock('electron', () => ({
   app: { getPath: () => '/tmp/cindy-pi-native-forwarding-test' },
@@ -19,6 +28,18 @@ vi.mock('../../appSessionState.js', () => ({
   isAppSessionBoundaryPending: () => ownerState.pending,
   activeOwnerScopeKey: () => ownerState.scope,
 }));
+vi.mock('../subscription-fast-policy.js', () => ({ createSubscriptionFastPolicy: () => ({
+  isAllowed: () => {
+    const allowed = ownerState.fastAllowed;
+    const action = ownerState.afterFastRead;
+    ownerState.afterFastRead = undefined;
+    if (action) queueMicrotask(() => {
+      if (action === 'relax') ownerState.fastAllowed = true;
+      else ownerState.scope = 'cloud:owner-b:2';
+    });
+    return allowed;
+  },
+}) }));
 
 vi.mock('../logger-adapter.js', () => ({
   createMakerLogger: () => {
@@ -41,6 +62,12 @@ import {
   getPiNativeSubscriptionHandler,
   type PiNativeSubscriptionHandlerDeps,
 } from '../anthropic-responses-bridge-host.js';
+import { buildUserProvider } from '@cindy/model-providers';
+import { setCustomProviders, setXaiDiscoveredModels } from '../active-catalog.js';
+import { registerUsagePricing, clearUsagePricing } from '../model-usage-pricing.js';
+import { registerGuestProviderRoute } from '../guest-provider-route-store.js';
+import { bindHostedSessionProvider } from '../session-provider-store.js';
+import { setSessionFastMode } from '../session-effort-store.js';
 
 function responseRecorder() {
   const response = new EventEmitter() as EventEmitter & {
@@ -90,9 +117,262 @@ function deps(overrides: Partial<PiNativeSubscriptionHandlerDeps> = {}): PiNativ
 }
 
 describe('PI native subscription forwarding', () => {
+  // provider-sharing §12: decoding cannot bypass exact model grants. The earlier
+  // forwarding tests had no hosted binding, while routing tests only sent plain JSON.
+  it.each(['guest', 'owner'].flatMap(trust => [false, true].map(compressed => ({ trust, compressed }))))(
+    'checks the decoded model for $trust subscriptions (zstd: $compressed)', async ({ trust, compressed }) => {
+      const providerId = 'openai-codec-fixture';
+      setCustomProviders([buildUserProvider({
+        id: providerId, name: 'Codec fixture', auth: { method: 'oauth', native: 'codex' },
+        runtimes: { codex: { baseUrl: 'https://chatgpt.example', wireProtocol: 'openai-responses',
+          models: ['gpt-6.1-sol', 'gpt-6.1-sol[1m]'].map(id => ({ id, name: id })) },
+          pi: { baseUrl: 'https://chatgpt.example', wireProtocol: 'openai-responses',
+          models: ['chatgpt/gpt-6.1-sol', 'chatgpt/gpt-6.1-sol[1m]'].map(id => ({ id, name: id })) } },
+      })]);
+      let allowedModel = 'chatgpt/gpt-6.1-sol';
+      const binding = trust === 'guest'
+        ? registerGuestProviderRoute('pi-codec-grant', providerId, model => model === allowedModel)
+        : bindHostedSessionProvider('pi-codec-grant', providerId, (provider, model) => provider === providerId && model === allowedModel);
+      const injected = deps();
+      const handler = getPiNativeSubscriptionHandler(providerId, 'pi-codec-grant', injected);
+      const request = async (model: unknown) => {
+        const body = { model, input: [] };
+        const res = responseRecorder();
+        await handler({
+          rawBody: compressed ? zstdCompressSync(Buffer.from(JSON.stringify(body))) : Buffer.from(JSON.stringify(body)),
+          parsedBody: compressed ? undefined : body,
+          ctx: { reqId: 1, method: 'POST', url: '/codex/responses', headers: compressed ? { 'content-encoding': 'zstd' } : {} },
+          res: res as never,
+        });
+        return res;
+      };
+      try {
+        expect((await request('gpt-6.1-sol')).status).toBe(200);
+        vi.mocked(injected.fetch).mockClear();
+        vi.mocked(injected.getChatgptAuth).mockClear();
+        for (const model of ['gpt-6.1-sol[1m]', 'unknown-model', undefined]) {
+          expect((await request(model)).status).toBe(403);
+          expect(injected.fetch).not.toHaveBeenCalled();
+          expect(injected.getChatgptAuth).not.toHaveBeenCalled();
+        }
+        allowedModel = 'chatgpt/gpt-6.1-sol[1m]';
+        expect((await request('gpt-6.1-sol')).status).toBe(403);
+        expect(injected.fetch).not.toHaveBeenCalled();
+        expect((await request('gpt-6.1-sol[1m]')).status).toBe(200);
+        vi.mocked(injected.fetch).mockClear();
+        vi.mocked(injected.getChatgptAuth).mockImplementationOnce(async () => {
+          binding.release();
+          return { accessToken: 'fixture-token', accountId: 'fixture-account' };
+        });
+        // Removing the hosted binding during an async auth read must not turn
+        // the in-flight request into an unrestricted local request.
+        expect((await request('gpt-6.1-sol[1m]')).status).toBe(403);
+        expect(injected.fetch).not.toHaveBeenCalled();
+      } finally { binding.release(); }
+    },
+  );
+
   afterEach(() => {
+    setCustomProviders([]);
+    setXaiDiscoveredModels(null);
+    setSessionFastMode('session-fast', false);
+    clearUsagePricing('session-fast');
     ownerState.pending = false;
     ownerState.scope = 'cloud:owner-a:1';
+    ownerState.fastAllowed = true;
+    ownerState.afterFastRead = undefined;
+    vi.mocked(zstdCompress).mockClear();
+    vi.mocked(zstdDecompress).mockClear();
+  });
+
+  // The same HTTP request used to decode twice and discard
+  // compression when the final Fast restriction applied. Assert real bytes,
+  // semantics and codec calls, rather than helper return values.
+  it.each(['openai', 'openai-account-fixture'].flatMap(provider => [false, true].flatMap(compressed =>
+    [false, true].flatMap(profile => [false, true].map(fastAllowed => ({ provider, compressed, profile, fastAllowed }))))))(
+    'preserves encoding and applies both rewrites once: %j', async ({ provider, compressed, profile, fastAllowed }) => {
+      setCustomProviders([buildUserProvider({ id: 'openai-account-fixture', name: 'Fixture account',
+        auth: { method: 'oauth', native: 'codex' }, runtimes: {} })]);
+      ownerState.fastAllowed = fastAllowed;
+      // Exercise the combined compressed rewrite with a 10 MiB history too.
+      const repeats = compressed && profile && !fastAllowed ? 655360 : 4096;
+      const payload = { model: 'gpt-6.1-sol' + (profile ? '[1m]' : ''), service_tier: 'priority',
+        input: [{ role: 'user', content: 'fixture-history-'.repeat(repeats) }] };
+      const raw = Buffer.from(JSON.stringify(payload));
+      const bytes = compressed ? zstdCompressSync(raw) : raw;
+      const injected = deps();
+      await getPiNativeSubscriptionHandler(provider, 'fixture-codec-session', injected)({
+        rawBody: bytes, parsedBody: compressed ? undefined : payload,
+        ctx: { reqId: 1, method: 'POST', url: '/codex/responses', headers: compressed ? { 'content-encoding': 'zstd' } : {} },
+        res: responseRecorder(),
+      } as never);
+      expect(injected.fetch).toHaveBeenCalledOnce();
+      const sent = vi.mocked(injected.fetch).mock.calls[0]![1]!;
+      const sentBytes = Buffer.from(sent.body as Uint8Array);
+      if (compressed) expect(sent.headers).toMatchObject({ 'content-encoding': 'zstd' });
+      else expect(sent.headers).not.toHaveProperty('content-encoding');
+      const decoded = JSON.parse((compressed ? zstdDecompressSync(sentBytes) : sentBytes).toString());
+      expect(decoded).toEqual({ ...payload, model: 'gpt-6.1-sol', service_tier: fastAllowed ? 'priority' : 'default' });
+      expect(zstdDecompress).toHaveBeenCalledTimes(compressed ? 1 : 0);
+      expect(zstdCompress).toHaveBeenCalledTimes(compressed && (profile || !fastAllowed) ? 1 : 0);
+      if (!profile && fastAllowed) expect(sentBytes).toEqual(bytes);
+    },
+  );
+
+  it.each([false, true])('passes already-standard requests byte-for-byte, compressed=%s', async compressed => {
+    ownerState.fastAllowed = false;
+    const payload = { model: 'gpt-6.1-sol', service_tier: 'default', input: [] };
+    const raw = Buffer.from('{ "model": "gpt-6.1-sol", "service_tier": "default", "input": [] }');
+    const bytes = compressed ? zstdCompressSync(raw) : raw;
+    const injected = deps();
+    await getPiNativeSubscriptionHandler('openai', 'fixture-standard', injected)({
+      rawBody: bytes, parsedBody: compressed ? undefined : payload,
+      ctx: { reqId: 1, method: 'POST', url: '/codex/responses', headers: compressed ? { 'content-encoding': 'zstd' } : {} },
+      res: responseRecorder(),
+    } as never);
+    const sent = vi.mocked(injected.fetch).mock.calls[0]![1]!;
+    expect(Buffer.from(sent.body as Uint8Array)).toEqual(bytes);
+    if (compressed) expect(sent.headers).toMatchObject({ 'content-encoding': 'zstd' });
+    expect(zstdCompress).not.toHaveBeenCalled();
+    expect(zstdDecompress).toHaveBeenCalledTimes(compressed ? 1 : 0);
+  });
+
+  // Credential refresh and the final guest grant check can both suspend while
+  // the provider/group closes Fast. The outgoing bytes must reflect that change.
+  it.each(['auth', 'final-grant'].flatMap(timing => [false, true].map(compressed => ({ timing, compressed }))))(
+    'rechecks Fast after $timing, compressed=$compressed', async ({ timing, compressed }) => {
+      const providerId = 'openai-fast-race-fixture';
+      setCustomProviders([buildUserProvider({ id: providerId, name: 'Fast race fixture',
+        auth: { method: 'oauth', native: 'codex' },
+        runtimes: { codex: { baseUrl: 'https://chatgpt.example', wireProtocol: 'openai-responses',
+          models: [{ id: 'gpt-6.1-sol', name: 'Fixture' }] } } })]);
+      let authRead = false;
+      const binding = registerGuestProviderRoute('pi-fast-race', providerId, async () => {
+        if (authRead && timing === 'final-grant') ownerState.fastAllowed = false;
+        return true;
+      });
+      const injected = deps({ getChatgptAuth: vi.fn(async () => {
+        authRead = true;
+        if (timing === 'auth') ownerState.fastAllowed = false;
+        return { accessToken: 'fixture-token', accountId: 'fixture-account' };
+      }) });
+      const payload = { model: 'gpt-6.1-sol', service_tier: 'priority', input: [] };
+      const raw = Buffer.from(JSON.stringify(payload));
+      try {
+        const res = responseRecorder();
+        await getPiNativeSubscriptionHandler(providerId, 'pi-fast-race', injected)({
+          rawBody: compressed ? zstdCompressSync(raw) : raw, parsedBody: compressed ? undefined : payload,
+          ctx: { reqId: 1, method: 'POST', url: '/codex/responses', headers: compressed ? { 'content-encoding': 'zstd' } : {} },
+          res,
+        } as never);
+        expect(res.status).toBe(200);
+        expect(injected.getChatgptAuth).toHaveBeenCalledOnce();
+        expect(injected.fetch).toHaveBeenCalledOnce();
+        const sent = vi.mocked(injected.fetch).mock.calls[0]![1]!;
+        const bytes = Buffer.from(sent.body as Uint8Array);
+        expect(JSON.parse((compressed ? zstdDecompressSync(bytes) : bytes).toString()))
+          .toEqual({ ...payload, service_tier: 'default' });
+        expect(zstdDecompress).toHaveBeenCalledTimes(compressed ? 1 : 0);
+        expect(zstdCompress).toHaveBeenCalledTimes(compressed ? 1 : 0);
+      } finally { binding.release(); }
+    },
+  );
+
+  it('rechecks Fast after asynchronous profile recompression before dispatch', async () => {
+    const actual = await vi.importActual<typeof import('node:zlib')>('node:zlib');
+    vi.mocked(zstdCompress).mockImplementationOnce(((...args: unknown[]) => {
+      ownerState.fastAllowed = false;
+      return Reflect.apply(actual.zstdCompress, actual, args);
+    }) as typeof zstdCompress);
+    const payload = { model: 'gpt-6.1-sol[1m]', service_tier: 'priority', input: [] };
+    const injected = deps();
+    await getPiNativeSubscriptionHandler('openai', 'fixture-policy-race', injected)({
+      rawBody: zstdCompressSync(Buffer.from(JSON.stringify(payload))), parsedBody: undefined,
+      ctx: { reqId: 1, method: 'POST', url: '/codex/responses', headers: { 'content-encoding': 'zstd' } },
+      res: responseRecorder(),
+    } as never);
+    const sent = vi.mocked(injected.fetch).mock.calls[0]![1]!;
+    expect(sent.headers).toMatchObject({ 'content-encoding': 'zstd' });
+    expect(JSON.parse(zstdDecompressSync(Buffer.from(sent.body as Uint8Array)).toString()))
+      .toEqual({ ...payload, model: 'gpt-6.1-sol', service_tier: 'default' });
+    expect(zstdDecompress).toHaveBeenCalledOnce();
+  });
+
+  it.each([false, true])('does not dispatch malformed restricted requests, compressed=%s', async compressed => {
+    ownerState.fastAllowed = false;
+    const malformed = Buffer.from('{invalid json');
+    const injected = deps();
+    const res = responseRecorder();
+    await getPiNativeSubscriptionHandler('openai', 'fixture-malformed', injected)({
+      rawBody: compressed ? zstdCompressSync(malformed) : malformed, parsedBody: undefined,
+      ctx: { reqId: 1, method: 'POST', url: '/codex/responses', headers: compressed ? { 'content-encoding': 'zstd' } : {} },
+      res,
+    } as never);
+    expect(injected.fetch).not.toHaveBeenCalled();
+    expect(res.status).toBe(502);
+  });
+
+  it.each(['relax', 'owner'] as const)('preserves the final boundary when %s changes during request rewriting', async action => {
+    ownerState.fastAllowed = false;
+    ownerState.afterFastRead = action;
+    const injected = deps();
+    const res = responseRecorder();
+    await getPiNativeSubscriptionHandler('openai', 'session-fast', injected)({
+      rawBody: zstdCompressSync(Buffer.from(JSON.stringify({ model: 'gpt-6.1-sol', input: [], service_tier: 'priority' }))),
+      parsedBody: undefined,
+      ctx: { reqId: 1, method: 'POST', url: '/codex/responses', headers: { 'content-encoding': 'zstd' } },
+      res,
+    } as never);
+    if (action === 'owner') {
+      expect(injected.fetch).not.toHaveBeenCalled();
+      expect(res.status).toBe(503);
+    } else {
+      expect(injected.fetch).toHaveBeenCalledOnce();
+      const sent = vi.mocked(injected.fetch).mock.calls[0][1]!;
+      expect(JSON.parse(zstdDecompressSync(Buffer.from(sent.body as Uint8Array)).toString()).service_tier).toBe('default');
+      expect(sent.headers).toMatchObject({ 'content-encoding': 'zstd' });
+    }
+  });
+
+  it.each([['grok-4.7', true, 'grok-4.7-build-fast'], ['grok-4.7', false, 'grok-4.7'],
+    ['grok-4.6', true, 'grok-4.6']] as const)('forwards %s Fast=%s to %s', async (model, fast, expected) => {
+    setXaiDiscoveredModels(['grok-4.7', 'grok-4.7-build-fast', 'grok-4.6'].map(id => ({
+      id: `xai/${id}`, contextWindow: 500000, nativeApi: 'openai-responses',
+    })));
+    setSessionFastMode('session-fast', fast);
+    const injected = deps();
+    const handler = getPiNativeSubscriptionHandler('xai', 'session-fast', injected);
+    const parsedBody = { model, input: 'OK' };
+    await handler({ rawBody: Buffer.from(JSON.stringify(parsedBody)), parsedBody,
+      ctx: { reqId: 1, method: 'POST', url: '/v1/responses', headers: {} }, res: responseRecorder() } as never);
+    const request = JSON.parse(Buffer.from(vi.mocked(injected.fetch).mock.calls[0][1]!.body as Uint8Array).toString());
+    expect(request.model).toBe(expected);
+    expect(request.service_tier).toBeUndefined();
+  });
+
+  it.each([true, false, null])('prices the actual native execution when Fast availability is %s', async available => {
+    setXaiDiscoveredModels(available === null ? null : ['grok-4.7', ...(available ? ['grok-4.7-build-fast'] : [])]
+      .map(id => ({ id: `xai/${id}`, contextWindow: 500000, nativeApi: 'openai-responses' })));
+    setSessionFastMode('session-fast', true);
+    const resolvePrice = registerUsagePricing('session-fast');
+    const wire = 'data: ' + JSON.stringify({ type: 'response.completed', response: {
+      usage: { input_tokens: 30, output_tokens: 5, input_tokens_details: { cached_tokens: 10 } },
+    } }) + '\n\n';
+    const injected = deps({ fetch: vi.fn(async () => {
+      setXaiDiscoveredModels(null);
+      setSessionFastMode('session-fast', false);
+      return new Response(wire, { headers: { 'content-type': 'text/event-stream' } });
+    }) });
+    const parsedBody = { model: 'grok-4.7', input: 'OK' };
+    const res = responseRecorder();
+    await getPiNativeSubscriptionHandler('xai', 'session-fast', injected)({
+      rawBody: Buffer.from(JSON.stringify(parsedBody)), parsedBody,
+      ctx: { reqId: 1, method: 'POST', url: '/v1/responses', headers: {} }, res,
+    } as never);
+    const request = JSON.parse(Buffer.from(vi.mocked(injected.fetch).mock.calls[0][1]!.body as Uint8Array).toString());
+    expect(request.model).toBe(available ? 'grok-4.7-build-fast' : 'grok-4.7');
+    expect(Buffer.concat(res.chunks).toString()).toBe(wire);
+    expect(resolvePrice({ inputTokens: 30, outputTokens: 5, cacheReadTokens: 10 })).toBe(available ? 'priority' : 'standard');
   });
 
   it('forwards Codex Responses bytes unchanged with host-owned ChatGPT auth', async () => {
@@ -930,4 +1210,27 @@ it.each([false, true])('scopes independent Grok limits and drops stale token pus
     if (stale) expect(injected.recordXaiRateLimit).not.toHaveBeenCalled();
     else expect(injected.recordXaiRateLimit).toHaveBeenCalledWith(expect.objectContaining({ remainingRequests: 7 }), 'xai-work');
   } finally { setCustomProviderConfigs([]); }
+});
+
+// The production native handler must meter a child model before forwarding its final bytes.
+// This covers the path the turn-summary tests cannot observe. Tier: unit; injected HTTP response.
+it('records a shared native request once by its requested model and preserves streaming bytes', async () => {
+  const record = vi.fn();
+  const providerId = 'openai-meter-fixture';
+  setCustomProviders([buildUserProvider({ id: providerId, name: 'Meter fixture', auth: { method: 'oauth', native: 'codex' },
+    runtimes: { codex: { baseUrl: 'https://chatgpt.example', wireProtocol: 'openai-responses', models: [{ id: 'astra', name: 'Astra' }] },
+      pi: { baseUrl: 'https://chatgpt.example', wireProtocol: 'openai-responses', models: [{ id: 'chatgpt/astra', name: 'Astra' }] } },
+  })]);
+  const binding = registerGuestProviderRoute('guest-meter', providerId, undefined, undefined, undefined, record);
+  const frame = { type: 'response.completed', response: { usage: { input_tokens: 120, output_tokens: 8, input_tokens_details: { cached_tokens: 100 } } } };
+  const wire = `data: ${JSON.stringify(frame)}\n\ndata: ${JSON.stringify(frame)}\n\n`;
+  const injected = deps({ fetch: vi.fn(async () => new Response(wire, { headers: { 'content-type': 'text/event-stream' } })) });
+  const body = { model: 'astra', input: [] };
+  const res = responseRecorder();
+  try {
+    await getPiNativeSubscriptionHandler(providerId, 'guest-meter', injected)({ rawBody: Buffer.from(JSON.stringify(body)), parsedBody: body,
+      ctx: { method: 'POST', url: '/codex/responses', headers: { 'content-type': 'application/json' } }, res } as never);
+    expect(Buffer.concat(res.chunks).toString()).toBe(wire);
+    expect(record).toHaveBeenCalledExactlyOnceWith({ model: 'astra', inputTokens: 20, outputTokens: 8, cacheReadTokens: 100, cacheCreateTokens: 0 });
+  } finally { binding.release(); setCustomProviders([]); }
 });

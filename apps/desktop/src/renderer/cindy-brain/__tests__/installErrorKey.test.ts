@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { GHOST_OFFICIAL_ID_PREFIXES } from '../../../shared/ghost';
+import { GHOST_OFFICIAL_ID_PREFIX } from '../../../shared/ghost';
 import i18n from '../../i18n';
 import { ghostInstallErrorKey } from '../installErrorKey';
 
@@ -60,7 +60,7 @@ describe('ghostInstallErrorKey', () => {
       expect(rawMessage).toEqual(expect.any(String));
       expect(rawMessage).toContain('{{reservedGhostIdPrefixes}}');
       // 渲染结果排除默认变量漏接或插值失效。
-      expect(message).toContain(GHOST_OFFICIAL_ID_PREFIXES.join(' / '));
+      expect(message).toContain(GHOST_OFFICIAL_ID_PREFIX);
       expect(message).not.toContain('{{reservedGhostIdPrefixes}}');
     },
   );
@@ -76,7 +76,7 @@ describe('ghostInstallErrorKey', () => {
       expect(rawMessage).toEqual(expect.any(String));
       expect(rawMessage).toContain('{{reservedGhostIdPrefixes}}');
       // 渲染结果排除默认变量漏接或插值失效。
-      expect(message).toContain(GHOST_OFFICIAL_ID_PREFIXES.join(' / '));
+      expect(message).toContain(GHOST_OFFICIAL_ID_PREFIX);
       expect(message).not.toContain('{{reservedGhostIdPrefixes}}');
     },
   );

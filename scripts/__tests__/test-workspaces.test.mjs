@@ -1,7 +1,9 @@
 import assert from "node:assert/strict";
 import fs from "node:fs";
+import net from "node:net";
 import os from "node:os";
 import path from "node:path";
+import { spawn } from "node:child_process";
 import { EventEmitter } from "node:events";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
@@ -32,6 +34,8 @@ import {
 	discoverTestFiles,
 	expandWorkspacePatterns,
 	filterRunsByWorkspace,
+	findDependencyInstallIssues,
+	selectionNeedsElectron,
 	isIgnoredFile,
 	mapWithConcurrency,
 	normalizeRelPath,
@@ -43,6 +47,7 @@ import {
 	printSummary,
 	readAllFiles,
 	resolveOutputStream,
+	resolveTestInvocation,
 	runCommand,
 	runPlannedTests,
 	runWithExclusiveBarriers,
@@ -213,16 +218,24 @@ test("unit workspace concurrency reserves the full worker budget for heavy works
 		"--maxWorkers=4",
 		...unitTestShardArgs(),
 	]);
-	assert.equal(makerCore.tiers.unit.execution, undefined);
+	// maker-core scales linearly with workers, so it must not overlap the
+	// one-worker package pool where it used to finish last in every shard.
+	assert.equal(makerCore.tiers.unit.execution, "exclusive");
 	assert.deepEqual(makerCore.tiers.unit.exclude, [
 		"**/*.integration.test.ts",
 		"**/*.e2e.test.ts",
 		"**/*.git-integration.test.ts",
+		"src/agents/shared/auto-review-remote-wiring.test.ts",
 	]);
 	assert.deepEqual(makerCore.tiers.unit.command, {
 		type: "packageBin",
 		bin: "vitest",
-		args: ["run", "--pool=forks", "--maxWorkers=1", ...unitTestShardArgs()],
+		args: [
+			"run",
+			"--pool=forks",
+			`--maxWorkers=${desktopUnitWorkerCount()}`,
+			...unitTestShardArgs(),
+		],
 	});
 });
 
@@ -252,6 +265,8 @@ test("real agent integration tests are explicit tiers outside unit", () => {
 	]);
 	assert.deepEqual(desktop.tiers.e2e.include, [
 		"src/main/maker-host/__tests__/*.e2e.test.ts",
+		"src/main/remote-agent/__tests__/groupRelayClaudeFork.e2e.test.ts",
+		"src/main/remote-agent/__tests__/startupProbe.e2e.test.ts",
 	]);
 });
 
@@ -502,6 +517,7 @@ test("desktop unit excludes integration, migration, direct db-tier, and source-c
 			"src/main/scheduler-host/__tests__/*.db.test.ts",
 			"src/main/__tests__/directSessionSendGuard.test.ts",
 			"src/main/__tests__/makerSendToSessionOrdering.test.ts",
+			"src/main/__tests__/authCaptchaIpcSecurity.test.ts",
 			"**/*.bench.ts",
 		],
 	};
@@ -521,6 +537,7 @@ test("desktop unit excludes integration, migration, direct db-tier, and source-c
 			"apps/desktop/src/main/scheduler-host/__tests__/storage.test.ts",
 			"apps/desktop/src/main/__tests__/directSessionSendGuard.test.ts",
 			"apps/desktop/src/main/__tests__/makerSendToSessionOrdering.test.ts",
+			"apps/desktop/src/main/__tests__/authCaptchaIpcSecurity.test.ts",
 			"apps/desktop/src/main/__tests__/lifecycle.test.ts",
 		]),
 		[
@@ -690,16 +707,35 @@ test("desktop guard selects source-contract tests only", () => {
 	const tier = workspace.tiers.guard;
 	assert.equal(tier.status, "required");
 	assert.equal(tier.coverage, "allowlist");
+	// Allowlist entries are exact paths: a renamed or deleted guard file would
+	// otherwise drop out of the gate silently, and one not excluded from unit
+	// would run twice in CI.
+	for (const file of tier.include) {
+		assert.ok(
+			fs.existsSync(path.join(ROOT, workspace.cwd, file)),
+			`guard allowlist entry does not exist: ${file}`,
+		);
+		assert.ok(
+			workspace.tiers.unit.exclude.includes(file),
+			`guard file must be excluded from desktop unit: ${file}`,
+		);
+	}
 	assert.deepEqual(
 		selectFilesForTier(workspace, tier, [
+			"apps/desktop/src/main/plugin-oauth/__tests__/runtimePrompt.test.ts",
 			"apps/desktop/src/main/__tests__/directSessionSendGuard.test.ts",
 			"apps/desktop/src/main/__tests__/makerSendToSessionOrdering.test.ts",
+			"apps/desktop/src/main/__tests__/authCaptchaIpcSecurity.test.ts",
+			"apps/desktop/src/main/cindy-brain/__tests__/ghostIpcSenderTrust.test.ts",
 			"apps/desktop/src/main/__tests__/lifecycle.test.ts",
 			"apps/desktop/src/main/localDb/ipc/messages.test.ts",
 		]),
 		[
+			"apps/desktop/src/main/plugin-oauth/__tests__/runtimePrompt.test.ts",
 			"apps/desktop/src/main/__tests__/directSessionSendGuard.test.ts",
 			"apps/desktop/src/main/__tests__/makerSendToSessionOrdering.test.ts",
+			"apps/desktop/src/main/__tests__/authCaptchaIpcSecurity.test.ts",
+			"apps/desktop/src/main/cindy-brain/__tests__/ghostIpcSenderTrust.test.ts",
 		],
 	);
 });
@@ -926,12 +962,31 @@ test("planRuns includes manual tiers only for explicit tier runs", () => {
 	assert.equal(planRuns(workspaces, { tier: "db", explicit: false }).length, 0);
 });
 
-test("planRuns includes the required desktop guard tier", () => {
+test("planRuns keeps required guard tiers from competing with the typed-send scan", async () => {
 	const runs = planRuns(manifest.workspaces, { tier: "guard" });
 	assert.deepEqual(
 		runs.map((run) => [run.workspace.cwd, run.tier]),
-		[["apps/desktop", "guard"]],
+		[
+			["apps/desktop", "guard"],
+			["apps/mobile", "guard"],
+			["packages/maker-core", "guard"],
+		],
 	);
+	// PR #6196: CI ran both default CPU-sized pools beside the 1 GiB TS
+	// Program and twice hit its existing 15s limit. Use the real manifest and
+	// scheduler: two guard runs plus one microtask must never overlap Desktop.
+	// This observes scheduling, not source text or host-dependent timings.
+	let active = 0;
+	await runWithExclusiveBarriers(runs, 2, async (run) => {
+		assert.equal(active, 0, "Desktop's runtime guard must have the workspace budget");
+		active += 1;
+		await Promise.resolve();
+		active -= 1;
+		if (run.workspace.cwd === "apps/desktop") {
+			assert.ok(run.tierConfig.command.args.includes("--maxWorkers=1"),
+				"other Desktop guards must not compete with the TypeScript Program");
+		}
+	});
 });
 
 test("filterRunsByWorkspace selects by manifest name or cwd and supports exclude", () => {
@@ -976,6 +1031,7 @@ test("parseCliOptions rejects --tier without a value", () => {
 		workspaces: [],
 		excludeWorkspaces: [],
 		workspaceConcurrency: undefined,
+		lock: false,
 		noLock: false,
 		related: false,
 	});
@@ -999,6 +1055,7 @@ test("parseCliOptions supports workspace include and exclude selectors", () => {
 			workspaces: ["desktop", "apps/server", "@cindy/maker-core"],
 			excludeWorkspaces: ["packages/orca-workflow"],
 			workspaceConcurrency: undefined,
+			lock: false,
 			noLock: false,
 			related: false,
 		},
@@ -1037,7 +1094,9 @@ test("workspace concurrency defaults to a bounded CPU count and accepts both CLI
 		() => parseCliOptions(["--workspace-concurrency"]),
 		/requires a positive integer/,
 	);
+	assert.equal(parseCliOptions(["--lock"]).lock, true);
 	assert.equal(parseCliOptions(["--no-lock"]).noLock, true);
+	assert.throws(() => parseCliOptions(["--lock", "--no-lock"]), /cannot be combined/);
 	assert.equal(parseCliOptions(["--related"]).related, true);
 	assert.throws(
 		() => parseCliOptions(["--related", "--all"]),
@@ -1054,23 +1113,19 @@ test("unit CI shard arguments cover valid halves and reject malformed input", ()
 	}
 });
 
-test("test gate lock covers heavy local tiers but skips guard, CI, and explicit bypass", () => {
+test("cross-worktree locking is opt-in and CI never participates", () => {
 	for (const tier of ["unit", "db", "git-integration", "integration", "e2e"]) {
-		assert.equal(shouldUseTestGateLock({ tier, env: {} }), true);
+		assert.equal(shouldUseTestGateLock({ tier, env: {} }), false);
+		assert.equal(shouldUseTestGateLock({ tier, lock: true, env: {} }), true);
 	}
-	assert.equal(shouldUseTestGateLock({ all: true, env: {} }), true);
-	assert.equal(shouldUseTestGateLock({ tier: "guard", env: {} }), false);
-	assert.equal(
-		shouldUseTestGateLock({ tier: "unit", noLock: true, env: {} }),
-		false,
-	);
+	assert.equal(shouldUseTestGateLock({ all: true, env: {} }), false);
+	assert.equal(shouldUseTestGateLock({ all: true, lock: true, env: {} }), true);
+	assert.equal(shouldUseTestGateLock({ tier: "guard", lock: true, env: {} }), false);
+	assert.equal(shouldUseTestGateLock({ lock: true, noLock: true, env: {} }), false);
 	for (const env of [{ CI: "1" }, { CI: "true" }, { GITHUB_ACTIONS: "true" }]) {
-		assert.equal(shouldUseTestGateLock({ tier: "unit", env }), false);
+		assert.equal(shouldUseTestGateLock({ lock: true, env }), false);
 	}
-	assert.equal(
-		shouldUseTestGateLock({ tier: "unit", env: { CI: "false" } }),
-		true,
-	);
+	assert.equal(shouldUseTestGateLock({ lock: true, env: { CI: "false" } }), true);
 });
 
 test("test gate lock identity is stable per clone and normalizes Windows case", () => {
@@ -1232,7 +1287,7 @@ function raceWithDeadline(candidates, deadlineMs, deadlineValue) {
 	});
 }
 
-test("two real test gate lock holders serialize on the same identity", async () => {
+test("two real test gate lock holders serialize after a probe resets its connection", async () => {
 	const root = fs.mkdtempSync(path.join(os.tmpdir(), "test-gate-real-lock-"));
 	let firstLock;
 	let secondLockPromise;
@@ -1248,6 +1303,16 @@ test("two real test gate lock holders serialize on the same identity", async () 
 			lockPortCount: REAL_LOCK_TEST_PORT_COUNT,
 			lockPortStride: REAL_LOCK_TEST_PORT_STRIDE,
 			output: () => {},
+		});
+		// Regression: an early-disconnecting probe emitted an unhandled ECONNRESET
+		// on the holder's accepted socket, terminating the gate before tests finished.
+		// Existing serialization coverage only exercised graceful probes. One real
+		// loopback RST now verifies the public lock entry stays available (runner tier).
+		await new Promise((resolve, reject) => {
+			const probe = net.createConnection({ host: "127.0.0.1", port: firstLock.port });
+			probe.once("error", reject);
+			probe.once("connect", () => probe.resetAndDestroy());
+			probe.once("close", resolve);
 		});
 		secondLockPromise = acquireTestGateLock({
 			repoRoot: root,
@@ -2037,14 +2102,14 @@ test("runPlannedTests passes selected include files to packageBin commands", asy
 			return { exitCode: 0, output: "PASS" };
 		},
 	});
-	// Windows 上 resolvePnpmInvocation 会通过 cmd.exe 包装，实际 pnpm 参数
-	// 放在 env 的 CINDY_PNPM_CMD_ARG_N 里。其他平台参数直接在 args 里。
+	// Non-Vitest wrappers may carry arguments through cmd environment slots;
+	// directly launched Vitest keeps them in the argv array on every platform.
 	const call = calls[0];
-	const pnpmArgs = call.options?.env
-		? Object.keys(call.options.env)
-				.filter((k) => k.startsWith("CINDY_PNPM_CMD_ARG_"))
-				.sort()
-				.map((k) => call.options.env[k])
+	const cmdEnvKeys = Object.keys(call.options?.env ?? {})
+		.filter((k) => k.startsWith("CINDY_PNPM_CMD_ARG_"))
+		.sort();
+	const pnpmArgs = cmdEnvKeys.length
+		? cmdEnvKeys.map((k) => call.options.env[k])
 		: call.args;
 	assert.deepEqual(pnpmArgs.slice(-1), [
 		"src/__tests__/orca-bridge-mcp.test.ts",
@@ -2064,6 +2129,56 @@ test("buildPnpmArgs rejects selected files outside the workspace", () => {
 			),
 		/Selected test file is outside workspace packages\/orca-workflow: packages\/other\/src\/foo\.test\.ts/,
 	);
+});
+
+// PR #6196: the guard exclusion list crossed cmd.exe's 8191-character limit
+// inside pnpm exec on Windows. Exercise the real runner and a small existing
+// suite; nonmatching exclusions reproduce the launch failure without changing
+// test selection or creating another Vitest harness.
+test("Windows long Vitest arguments reach the test process without cmd truncation", async () => {
+	const values = ["a space", "中文", 'a"quote', "%TEMP%", "a&b", "a^b", "long-".repeat(1800)];
+	const echoArgs = ["--dir", ROOT, "exec", "vitest", "process.stdout.write(JSON.stringify(process.argv.slice(1)))", "--", ...values];
+	const options = { platform: "win32", execPath: process.execPath, vitestEntry: "-e", env: { ...process.env, Path: "original-path", PATH: "duplicate-path" } };
+	for (const npmExecPath of [undefined, "pnpm.cmd"]) {
+		const invocation = resolveTestInvocation(echoArgs, { ...options, npmExecPath });
+		assert.equal(invocation.command, process.execPath);
+		assert.equal(invocation.shell, false);
+		assert.equal(Object.keys(invocation.env).filter((key) => key.toLowerCase() === "path").length, 1);
+		const echoed = await runCommand(invocation.command, invocation.args, { env: invocation.env, shell: false, stdout: null, stderr: null });
+		assert.equal(echoed.exitCode, 0, echoed.output);
+		assert.deepEqual(JSON.parse(echoed.output), values);
+	}
+	for (const [args, platform] of [[echoArgs, "linux"], [["--dir", ROOT, "run", "test"], "win32"], [["--dir", ROOT, "exec", "other-tool"], "win32"]]) {
+		const fallbackOptions = { platform, npmExecPath: "/tools/pnpm.cjs", execPath: process.execPath };
+		assert.deepEqual(resolveTestInvocation(args, fallbackOptions), resolvePnpmInvocation(args, fallbackOptions));
+	}
+	const file = "src/main/agent-island/__tests__/nativeContracts.test.ts";
+	const workspace = {
+		name: "desktop",
+		cwd: "apps/desktop",
+		status: "required",
+		tiers: {
+			guard: {
+				status: "required",
+				coverage: "allowlist",
+				command: { type: "packageBin", bin: "vitest", args: ["run", "--pool=forks", "--maxWorkers=1"] },
+				include: [file],
+				exclude: Array.from({ length: 90 }, (_, i) => "src/never-selected/" + "long-path-".repeat(10) + i + ".test.ts"),
+			},
+		},
+	};
+	const files = ["apps/desktop/" + file];
+	const pnpmArgs = buildPnpmArgs(ROOT, workspace, workspace.tiers.guard.command, workspace.tiers.guard, files);
+	assert.ok(pnpmArgs.join(" ").length > 8191);
+	const [result] = await runPlannedTests({
+		root: ROOT,
+		workspaceCwds: [workspace.cwd],
+		manifest: { workspaces: [workspace] },
+		allFiles: files,
+		tier: "guard",
+	});
+	assert.equal(result.exitCode, 0, result.output);
+	assert.match(result.output, /nativeContracts\.test\.ts/);
 });
 
 test("buildPnpmArgs switches vitest to related mode when related files are provided", () => {
@@ -2114,6 +2229,15 @@ test("buildPnpmArgs only loosens Vitest sharding for undersized workspaces", () 
 		]).includes("--passWithNoTests"),
 		false,
 	);
+
+	// Vitest slices ceil(6 / 4) = 2 files per shard, leaving shard 4 empty even
+	// though the workspace has more files than shards.
+	const sixFiles = Array.from(
+		{ length: 6 },
+		(_, i) => `packages/example/src/case-${i}.test.ts`,
+	);
+	assert.equal(buildShard("3/4", sixFiles).includes("--passWithNoTests"), false);
+	assert.equal(buildShard("4/4", sixFiles).includes("--passWithNoTests"), true);
 });
 
 test("runPlannedTests all mode runs required configured tiers and skips manual tiers", async () => {
@@ -2218,4 +2342,120 @@ test("printSummary includes complete command line and skipped workspaces", () =>
 		output,
 		/SKIP apps\/heartbeat-server notApplicable: No tests yet/,
 	);
+});
+
+test("CLI runs independently while another worktree budget is held, and waits only with --lock", async () => {
+	const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "test-lock-opt-in-")));
+	let heldLock;
+	try {
+		for (const dir of [".git", "scripts/shared", "packages/sample", "node_modules"]) {
+			fs.mkdirSync(path.join(root, dir), { recursive: true });
+		}
+		fs.writeFileSync(path.join(root, "node_modules/.modules.yaml"), "{}");
+		for (const file of ["test-workspaces.mjs", "test-related.mjs", "ensure-deps.mjs", "shared/pnpm-invocation.mjs"]) {
+			fs.copyFileSync(path.join(ROOT, "scripts", file), path.join(root, "scripts", file));
+		}
+		// Both the holder and the real CLI child must use the same dispersed test
+		// ports. The production dynamic-port range can be unavailable on Windows CI.
+		const lockPorts = {
+			lockPortStart: REAL_LOCK_TEST_PORT_START,
+			lockPortCount: REAL_LOCK_TEST_PORT_COUNT,
+			lockPortStride: REAL_LOCK_TEST_PORT_STRIDE,
+		};
+		const lockModule = JSON.stringify(new URL("../test-gate-lock.mjs", import.meta.url).href);
+		fs.writeFileSync(path.join(root, "scripts/test-gate-lock.mjs"), `
+export * from ${lockModule};
+import { acquireTestGateLock as acquire } from ${lockModule};
+export const acquireTestGateLock = (options) => acquire({ ...options, ...${JSON.stringify(lockPorts)} });
+`);
+		fs.writeFileSync(path.join(root, "pnpm-workspace.yaml"), 'packages:\n  - "packages/*"\n');
+		fs.writeFileSync(path.join(root, "packages/sample/package.json"), '{"name":"sample"}');
+		fs.writeFileSync(path.join(root, "packages/sample/sample.test.js"), "// test fixture\n");
+		fs.writeFileSync(path.join(root, "scripts/test-workspaces.config.mjs"), `export default ${JSON.stringify({
+			workspaces: [{ name: "sample", cwd: "packages/sample", status: "required", tiers: {
+				unit: { status: "required", command: { type: "packageScript", script: "probe" } },
+			} }],
+		})};`);
+		const pnpmStub = path.join(root, "pnpm-probe.mjs");
+		fs.writeFileSync(pnpmStub, 'import assert from "node:assert/strict"; assert.ok(process.argv.includes("probe")); console.log("PROBE_EXECUTED");');
+		heldLock = await acquireTestGateLock({ repoRoot: root, owner: { pid: process.pid, tier: "unit", cwd: root }, ...lockPorts });
+		const run = (args, onOutput) => new Promise((resolve, reject) => {
+			const child = spawn(process.execPath, [path.join(root, "scripts/test-workspaces.mjs"), ...args], {
+				env: { ...process.env, CI: "false", GITHUB_ACTIONS: "false", npm_execpath: pnpmStub },
+				stdio: ["ignore", "pipe", "pipe"],
+			});
+			let output = "";
+			let failure;
+			// real-wait: watchdog for a real CLI child; the close event clears it without waiting.
+			const timer = setTimeout(() => {
+				failure = new Error(`CLI did not finish: ${output}`);
+				child.kill();
+			}, 30_000);
+			for (const stream of [child.stdout, child.stderr]) stream.on("data", (chunk) => {
+				output += chunk.toString();
+				onOutput?.(output);
+			});
+			child.on("error", (error) => { clearTimeout(timer); reject(error); });
+			child.on("close", (code) => {
+				clearTimeout(timer);
+				if (failure) reject(failure);
+				else resolve({ code, output });
+			});
+		});
+		for (const args of [[], ["--no-lock"]]) {
+			const result = await run(args);
+			assert.equal(result.code, 0, result.output);
+			assert.match(result.output, /PASS packages\/sample unit/);
+			assert.doesNotMatch(result.output, /WAIT test gate/);
+		}
+		let releasePromise;
+		const queued = await run(["--lock"], (output) => {
+			if (output.includes("WAIT test gate") && !releasePromise) {
+				releasePromise = heldLock.release();
+				heldLock = undefined;
+			}
+		});
+		await releasePromise;
+		assert.equal(queued.code, 0, queued.output);
+		assert.match(queued.output, /WAIT test gate/);
+		assert.match(queued.output, /PASS packages\/sample unit/);
+	} finally {
+		await heldLock?.release();
+		fs.rmSync(root, { recursive: true, force: true });
+	}
+});
+
+test("dependency preflight explains missing installs and incomplete Electron", () => {
+	const root = fs.mkdtempSync(path.join(os.tmpdir(), "cindy-dep-preflight-"));
+	try {
+		assert.match(findDependencyInstallIssues(root, {})[0], /pnpm install/);
+
+		fs.mkdirSync(path.join(root, "node_modules/electron"), { recursive: true });
+		fs.writeFileSync(path.join(root, "node_modules/.modules.yaml"), "{}");
+		assert.match(findDependencyInstallIssues(root, {})[0], /node_modules\/electron/);
+		fs.writeFileSync(
+			path.join(root, "node_modules/electron/package.json"),
+			JSON.stringify({ name: "electron", version: "1.0.0" }),
+		);
+		const [electronIssue] = findDependencyInstallIssues(root, {});
+		assert.match(electronIssue, /Electron/);
+		assert.match(electronIssue, /--electron-binary/);
+		assert.deepEqual(
+			findDependencyInstallIssues(root, { ELECTRON_OVERRIDE_DIST_PATH: "/stub" }),
+			[],
+		);
+		assert.deepEqual(findDependencyInstallIssues(root, {}, { needsElectron: false }), []);
+	} finally {
+		fs.rmSync(root, { recursive: true, force: true });
+	}
+});
+
+test("only selections that include Desktop need the Electron binary", () => {
+	const workspaces = manifest.workspaces;
+	assert.equal(selectionNeedsElectron(workspaces), true);
+	assert.equal(selectionNeedsElectron(workspaces, { workspaces: ["apps/desktop"] }), true);
+	assert.equal(selectionNeedsElectron(workspaces, { workspaces: ["desktop", "packages/auth-client"] }), true);
+	assert.equal(selectionNeedsElectron(workspaces, { workspaces: ["packages/auth-client"] }), false);
+	assert.equal(selectionNeedsElectron(workspaces, { excludeWorkspaces: ["desktop"] }), false);
+	assert.equal(selectionNeedsElectron([{ name: "sample", cwd: "packages/sample" }]), false);
 });

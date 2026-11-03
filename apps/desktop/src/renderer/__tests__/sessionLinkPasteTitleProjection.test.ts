@@ -21,7 +21,7 @@ vi.mock('@/lib/sessionService', () => ({
 const getMergedRemoteSessions = vi.fn(() => [] as Array<{ id: string; title: string }>);
 vi.mock('@/features/device-link/remoteProjectsStore', () => ({
   remoteProjectsStore: {
-    getMergedRemoteSessions: () => getMergedRemoteSessions(),
+    getVisibleMergedRemoteSessions: () => getMergedRemoteSessions(),
   },
 }));
 

@@ -23,6 +23,9 @@ export const REMOTE_DESKTOP_ICE_SERVERS = [
   { urls: "stun:stun.cloudflare.com:3478" },
   { urls: "stun:stun.l.google.com:19302" },
 ];
+// Shared by every TURN configuration fetch (desktop/mobile, video/files).
+// Viewer shells allow bridge delivery after this bounded HTTP/resolver budget.
+export const REMOTE_DESKTOP_ICE_CONFIG_TIMEOUT_MS = 8_000;
 // Sequential host stages, followed by transport and WebView delivery headroom.
 // Keep the outer waits derived from these limits so a valid cold start is not discarded.
 export const REMOTE_DESKTOP_OFFER_BUDGET = {
@@ -38,8 +41,11 @@ export const REMOTE_DESKTOP_INVOKE_MS =
   REMOTE_DESKTOP_OFFER_BUDGET.platformStatusMs +
   REMOTE_DESKTOP_OFFER_BUDGET.platformHandshakeMs +
   REMOTE_DESKTOP_OFFER_BUDGET.sourcesMs +
-  REMOTE_DESKTOP_OFFER_BUDGET.hostMs + 5_000;
+  REMOTE_DESKTOP_OFFER_BUDGET.hostMs +
+  5_000;
 export const REMOTE_DESKTOP_NETWORK = {
+  iceConfigMs: REMOTE_DESKTOP_ICE_CONFIG_TIMEOUT_MS,
+  iceConfigBridgeMs: 500,
   maxCandidates: 128,
   batchSize: 16,
   pollMs: 250,

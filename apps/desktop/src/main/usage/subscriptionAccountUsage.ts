@@ -1,21 +1,10 @@
-import { createHash } from 'node:crypto';
 import { addProviderSecretsClearedListener } from '../secrets/providerSecretStore.js';
 import { activeOwnerScopeKey, isAppSessionBoundaryPending } from '../appSessionState.js';
-import {
-  readClaudeAccountOAuth,
-  prepareClaudeAccountUsage,
-  subscriptionAccountKind,
-} from '../maker-host/subscription-account-auth.js';
+import { subscriptionAccountKind } from '../maker-host/subscription-account-auth.js';
 import { getGrokAccessToken, hasGrokOAuthLogin } from '../maker-host/grok-oauth-login.js';
 import { outboundFetch } from '../maker-host/outbound-fetch.js';
 import { isProviderRouteMutationInProgress } from '../maker-host/provider-route.js';
-import { createClaudeSubscriptionUsageReader } from './claudeSubscriptionUsageRefresh.js';
 import { createXaiSubscriptionUsageReader } from './xaiSubscriptionUsageRefresh.js';
-import {
-  fetchClaudeSubscriptionUsageSnapshot,
-  ClaudeSubscriptionUsageRateLimitedError,
-  ClaudeSubscriptionUsageUnauthorizedError,
-} from './claudeSubscriptionUsage.js';
 import {
   fetchXaiSubscriptionUsageSnapshot,
   XaiSubscriptionUsageRateLimitedError,
@@ -39,7 +28,7 @@ export function setSubscriptionAccountUsageBroadcaster(
 // existing reader factories retain their throttle, retry and stale-response rules.
 const readers = new Map<string, ReturnType<typeof createReader>>();
 addProviderSecretsClearedListener(() => readers.clear());
-function createReader(providerId: string, kind: 'claude' | 'xai') {
+function createReader(providerId: string) {
   const scope = activeOwnerScopeKey();
   const current = () => !isAppSessionBoundaryPending() && activeOwnerScopeKey() === scope;
   let snapshot: Snapshot | null = null;
@@ -54,32 +43,6 @@ function createReader(providerId: string, kind: 'claude' | 'xai') {
     recordSnapshot: record,
     onRefreshError: () => {},
   };
-  if (kind === 'claude')
-    return createClaudeSubscriptionUsageReader({
-      ...common,
-      readCredentials: () => (current() ? readClaudeAccountOAuth(providerId) : null),
-      fetchSnapshot: async (original) => {
-        if (isProviderRouteMutationInProgress(providerId)) return null;
-        const credentials = await prepareClaudeAccountUsage(providerId);
-        if (!credentials || !current()) return null;
-        if (credentials.accessToken !== original.accessToken) {
-          queueMicrotask(() => {
-            if (current()) void reader(providerId)?.syncForCredentialChange();
-          });
-          return null;
-        }
-        return fetchClaudeSubscriptionUsageSnapshot({
-          accessToken: credentials.accessToken,
-          subscriptionType: credentials.subscriptionType ?? null,
-          fetchFn: outboundFetch,
-        });
-      },
-      readCachedSnapshot: async () =>
-        current() ? (snapshot as ClaudeSubscriptionUsageSnapshot | null) : null,
-      fingerprintToken: (token) => createHash('sha256').update(token).digest('hex'),
-      isUnauthorizedError: (error) => error instanceof ClaudeSubscriptionUsageUnauthorizedError,
-      isRateLimitedError: (error) => error instanceof ClaudeSubscriptionUsageRateLimitedError,
-    });
   return createXaiSubscriptionUsageReader({
     ...common,
     readCredentials: async () => {
@@ -101,12 +64,12 @@ function createReader(providerId: string, kind: 'claude' | 'xai') {
   });
 }
 function reader(providerId: string) {
-  const kind = subscriptionAccountKind(providerId);
-  if (!kind) return null;
+  // 独立 Claude 账号已停用:没有凭证可用,也就没有余量可查。
+  if (subscriptionAccountKind(providerId) !== 'xai') return null;
   const key = `${activeOwnerScopeKey()}:${providerId}`;
   let value = readers.get(key);
   if (!value) {
-    value = createReader(providerId, kind);
+    value = createReader(providerId);
     readers.set(key, value);
   }
   return value;

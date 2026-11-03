@@ -1,7 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
 import {
-  composerDocumentContainsHostCapabilityChip,
   insertComposerDocumentForRestore,
   normalizeComposerDocumentJSON,
   plainTextToComposerDocument,
@@ -477,6 +476,7 @@ describe('stripHostCapabilityChips', () => {
         },
       ],
     });
+    expect(normalizeComposerDocumentJSON(doc)).toEqual(stripHostCapabilityChips(doc));
   });
 
   it('leaves non-capability chips (slash / session / plugin-resource) untouched', () => {
@@ -538,36 +538,4 @@ describe('stripHostCapabilityChips', () => {
     });
   });
 
-  it('composerDocumentContainsHostCapabilityChip detects chips but ignores other nodes', () => {
-    expect(
-      composerDocumentContainsHostCapabilityChip({
-        type: 'doc',
-        content: [
-          {
-            type: 'paragraph',
-            content: [
-              hostCapabilityChip(),
-              { type: 'text', text: ' ' },
-              { type: 'text', text: '打开模拟器' },
-            ],
-          },
-        ],
-      }),
-    ).toBe(true);
-
-    expect(
-      composerDocumentContainsHostCapabilityChip({
-        type: 'doc',
-        content: [
-          {
-            type: 'paragraph',
-            content: [
-              { type: 'mentionChip', attrs: { kind: 'slash', label: '/plan', path: '/plan' } },
-              { type: 'text', text: '继续' },
-            ],
-          },
-        ],
-      }),
-    ).toBe(false);
-  });
 });

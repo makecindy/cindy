@@ -1,3 +1,6 @@
+export { parseModelDisplayPricing, type ModelDisplayPricing, type ModelDisplayPricingSummary, type SummaryQuote } from './modelDisplayPricing.js';
+export { providerProtocolCandidates, type ProviderProtocolCandidate } from './providerProtocolProbe.js';
+export { remoteInvocationModels } from './remoteModels.js';
 /**
  * @cindy/model-providers — 模型供应商目录 + 路由抽象（纯逻辑，零 Electron / maker-core 运行时依赖）。
  *
@@ -7,8 +10,24 @@
  * - registry：连接状态合成、按 agent 算可见性、resolveRoute 解析路由素材
  */
 
+export {
+  BYOK_CREDENTIALS_PATH,
+  BYOK_PROVIDERS_PATH,
+  isByokImageMode,
+  isByokProviderId,
+  parseByokCredentialsResponse,
+  parseByokProvidersResponse,
+} from './byok.js';
+export type {
+  ByokCredential,
+  ByokModel,
+  ByokProvider,
+  ByokProvidersResponse,
+} from './byok.js';
+
 export type {
   AgentKind,
+  ModelInterfaceSnapshot,
   ProviderWireProtocol,
   CodexCompatibilityWireProtocol,
   Effort,
@@ -29,6 +48,7 @@ export type {
   ProviderRuntimeModelConfig,
   PiReasoningEffort,
   PiModelApi,
+  NativeSubscriptionAuth,
   ProviderPreset,
   ProviderPresetRuntime,
   PresetSortRegion,
@@ -37,8 +57,10 @@ export type {
   OAuthProviderDescriptor,
 } from "./types.js";
 
-export { PI_MODEL_APIS, PI_REASONING_EFFORTS } from "./types.js";
-export { isLocalOnlyProviderForAgent, isOpenAiSubscriptionProvider, providerCatalogId } from './provider-identity.js';
+export { NATIVE_SUBSCRIPTION_AUTHS, NATIVE_SUBSCRIPTION_DEFAULT_PROVIDER_IDS, PI_MODEL_APIS, PI_REASONING_EFFORTS } from "./types.js";
+export { isLocalOnlyProviderForAgent, isOpenAiSubscriptionProvider, supportsSubscriptionFastPolicy, providerCatalogId, isCustomRoutedProvider, isOrganizationManagedProvider, isCindyDistributedProvider, isCindyAutoModelId } from './provider-identity.js';
+export { sourceProviderForPreset } from './providerPresetIdentity.js';
+export { isMimoTokenPlanPreset } from './mimoPresentation.js';
 
 export {
   effectivePiWireProtocol,
@@ -54,11 +76,13 @@ export { modelProtocolComparison, nativeModelAgents } from "./modelProtocol.js";
 export {
   BUNDLED_CATALOG,
   BUILTIN_PROVIDERS,
+  claudeSubscriptionOnlyForClaudeCode,
   parseCatalog,
   presetDisplayName,
   sanitizePresets,
   sortPresetsForRegion,
 } from "./catalog.js";
+export { expandPresetModels } from "./presetModels.js";
 
 export {
   buildUserProvider,
@@ -93,6 +117,8 @@ export {
   decideModelRegistrySnapshot,
   findModelRegistryRoute,
   resolveModelNativeApi,
+  resolveRecommendedAgent,
+  resolveCatalogModelNativeApi,
   resolveModelReferencePrice,
   resolveBaseModelReferencePrice,
 } from "./modelRegistry.js";
@@ -126,6 +152,7 @@ export {
   connectedProvidersForAgent,
   nativeDefaultSourceId,
   effectiveSourceIdForModel,
+  movedCindyAutoSourceId,
   actualSourceIdForModel,
   providerOffersModel,
   getModel,
@@ -169,6 +196,7 @@ export {
   defaultEffortForCapabilities,
   resolveEffort,
   resolveRequestedEffort,
+  resolveRemoteSwitchEffort,
   composeAtomicModelSelection,
   resolveIntentReselectEffort,
   resolveProviderSwitchEffort,
@@ -197,6 +225,9 @@ export {
   CHATGPT_MODEL_PREFIX,
   XAI_MODEL_PREFIX,
   SUBSCRIPTION_DIRECT_MODEL_PREFIXES,
+  CODEX_GATEWAY_WIRE_PREFIXES,
+  isCodexGatewayWireModel,
+  stripCodexGatewayWirePrefix,
   isSubscriptionDirectModel,
   isExclusiveXaiModelId,
   exclusiveXaiCatalogModelId,
@@ -264,12 +295,14 @@ export type { VisionCapability } from "./visionCapability.js";
 
 export {
   parseLocalModelCatalog,
+  localModelDescription,
   isLocalModelLibraryName,
 } from "./localModelCatalog.js";
 export type {
   LocalModelCatalog,
   LocalCatalogModel,
   LocalModelVariant,
+  LocalGgufVariant,
 } from "./localModelCatalog.js";
 
 export {
@@ -278,6 +311,7 @@ export {
   registryEntryDefaults,
   expandedRegistryEntries,
   pickModelMetadata,
+  MODEL_METADATA_FIELDS,
   validModelMetadata,
   mergeModelMetadata,
 } from "./modelMetadataLayers.js";
@@ -295,15 +329,18 @@ export { runtimeUserModelMetadata } from "./modelMetadataLayers.js";
 
 export { PROVIDER_MEDIA_FIELDS, providerMediaField, projectProviderMediaModels } from "./providerMediaModels.js";
 
-export { PROVIDER_MODEL_CATALOG, providerModelRecord, providerModelAdapterId, providerPresetModelRecord, providerModelMetadata, providerCatalogForPi, providerModelsForRoute } from "./providerModelCatalog.js";
+export { PROVIDER_MODEL_CATALOG, providerModelRecord, providerModelGenerationRecord, providerModelAdapterId, providerPresetModelRecord, providerModelMetadata, providerCatalogForPi, providerModelsForRoute } from "./providerModelCatalog.js";
 
 export { parseModelsListResponse, isOpenRouterModelsUrl } from "./modelDiscovery.js";
 
 export type { ProviderModelRecord } from "./providerModelCatalog.js";
 
-export { providerEndpointBindings, bindProviderEndpoint, bindProviderPresetRuntime } from "./providerEndpointTemplate.js";
+export { providerEndpointBindings, bindProviderEndpoint, bindProviderPresetRuntime, canonicalProviderEndpoint } from "./providerEndpointTemplate.js";
 
 export { providerSetupLink } from './providerSetupLinks.js';
 export { providerPresetOAuth, providerPresetOAuthRuntimes, providerOAuthContract } from './providerPresetOAuth.js';
 
 export { alignModelApiRoute, providerWireProtocolForApi, providerBaseUrlForApi } from "./providerInterfaceRoutes.js";
+
+export { availableModelInterfaces, modelWithInterface, MODEL_INTERFACE_CAPABILITIES } from './providerInterfaceRoutes.js';
+export * from './providerDetection.js';

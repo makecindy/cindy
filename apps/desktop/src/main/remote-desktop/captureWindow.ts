@@ -4,6 +4,7 @@ import { REMOTE_DESKTOP_OFFER_BUDGET } from '@cindy/device-link';
 import { readFile } from 'node:fs/promises';
 import { installContentSecurityPolicy, parseOrigin } from '../security/csp';
 import { throwIpcError } from '../utils/ipcValidate';
+import { markCaptureWindowWebContents } from './captureWindowRegistry';
 
 declare const DESKTOP_CAPTURE_VITE_DEV_SERVER_URL: string | undefined;
 declare const DESKTOP_CAPTURE_VITE_NAME: string;
@@ -21,12 +22,16 @@ export class DesktopCaptureWindow {
   } | null = null;
   private captureSession: Session | null = null;
   private get url(): string {
-    return DESKTOP_CAPTURE_VITE_DEV_SERVER_URL
+    const base = DESKTOP_CAPTURE_VITE_DEV_SERVER_URL
       ? new URL('index.html', DESKTOP_CAPTURE_VITE_DEV_SERVER_URL).href
       : CAPTURE_URL;
+    return this.mode === 'desktop' ? base : `${base}?mode=${this.mode}`;
   }
 
-  constructor(private readonly failed: () => void) {}
+  constructor(
+    private readonly failed: () => void,
+    private readonly mode: 'desktop' | 'files' | 'direct' = 'desktop',
+  ) {}
 
   get contents() {
     return this.window?.webContents ?? null;
@@ -57,7 +62,10 @@ export class DesktopCaptureWindow {
 
   private getSession(): Session {
     if (this.captureSession) return this.captureSession;
-    const ses = session.fromPartition('cindy-desktop-capture', { cache: false });
+    const ses = session.fromPartition(
+      this.mode === 'desktop' ? 'cindy-desktop-capture' : this.mode === 'files' ? 'cindy-file-peer' : 'cindy-direct-peer',
+      { cache: false },
+    );
     this.captureSession = ses;
     installContentSecurityPolicy(ses, {
       isDev: Boolean(DESKTOP_CAPTURE_VITE_DEV_SERVER_URL),
@@ -67,6 +75,7 @@ export class DesktopCaptureWindow {
     const origin = `${new URL(this.url).protocol}//${new URL(this.url).host}`;
     ses.setPermissionCheckHandler(
       (owner, permission, requestingOrigin) =>
+        this.mode === 'desktop' &&
         owner === this.contents &&
         owner?.mainFrame.url === this.url &&
         (requestingOrigin === origin || requestingOrigin === `${origin}/`) &&
@@ -74,7 +83,8 @@ export class DesktopCaptureWindow {
     );
     ses.setPermissionRequestHandler((owner, permission, callback, details) => {
       callback(
-        owner === this.contents &&
+        this.mode === 'desktop' &&
+          owner === this.contents &&
           owner?.mainFrame.url === this.url &&
           details.isMainFrame === true &&
           details.requestingUrl === this.url &&
@@ -92,7 +102,12 @@ export class DesktopCaptureWindow {
         if (
           request.method !== 'GET' ||
           url.host !== 'capture' ||
-          url.search ||
+          (url.search !== '' &&
+            !(
+              this.mode !== 'desktop' &&
+              url.search === `?mode=${this.mode}` &&
+              url.pathname === '/index.html'
+            )) ||
           !/^\/(?:index\.html|assets\/[A-Za-z0-9_-]+\.js)$/.test(url.pathname)
         )
           return new Response(null, { status: 403 });
@@ -140,10 +155,19 @@ export class DesktopCaptureWindow {
         navigateOnDragDrop: false,
         webviewTag: false,
         backgroundThrottling: false,
+        autoplayPolicy: 'no-user-gesture-required',
         spellcheck: false,
       },
     });
     this.window = win;
+    markCaptureWindowWebContents(win.webContents);
+    if (this.mode === 'direct') {
+      // This data-only window signals exclusively to already authorized peers.
+      // Chromium's default mDNS host names cannot resolve across routed LANs.
+      // Expose the default route's address without enumerating other interfaces,
+      // granting media permissions, or changing the SDP's ICE/DTLS credentials.
+      win.webContents.setWebRTCIPHandlingPolicy('default_public_and_private_interfaces');
+    }
     const failed = () => {
       if (this.window !== win) return;
       this.dispose();

@@ -4,6 +4,8 @@ import type { ComposerDocument } from '@/session/composerDocument';
 
 export interface RewindPreviewPayload {
   canRewind: boolean;
+  conversationOnly?: boolean;
+  gitSafetyDisabled?: boolean;
   error?: string;
   filesChanged?: string[];
   insertions?: number;
@@ -91,7 +93,21 @@ export function buildRewindPreviewState(
   }
 
   if (payload.canRewind) {
-    return { kind: 'empty', clientId, draftText, draftQuotes, ...orderedDraft, ...documentDraft };
+    return {
+      kind: 'empty',
+      clientId,
+      draftText,
+      draftQuotes,
+      ...orderedDraft,
+      ...documentDraft,
+      ...(payload.conversationOnly
+        ? {
+            note: payload.gitSafetyDisabled
+              ? i18n.t('interaction.rewind.gitSafetyDisabledNote')
+              : i18n.t('interaction.rewind.conversationOnlyNote'),
+          }
+        : {}),
+    };
   }
 
   return {
@@ -109,11 +125,19 @@ export function isCommitReadyRewindState(state: RewindPreviewState): state is Co
   return state.kind === 'default' || state.kind === 'empty';
 }
 
+export function rewindCommitBindOpts(
+  state: CommitReadyRewindState,
+): { allowFileRestore: false } | undefined {
+  return state.kind === 'empty' ? { allowFileRestore: false } : undefined;
+}
+
 function normalizeRewindPreviewPayload(value: unknown): RewindPreviewPayload | null {
   const record = readRecord(value);
   if (!record || typeof record.canRewind !== 'boolean') return null;
   return {
     canRewind: record.canRewind,
+    conversationOnly: record.conversationOnly === true,
+    gitSafetyDisabled: record.gitSafetyDisabled === true,
     error: typeof record.error === 'string' ? record.error : undefined,
     filesChanged: readStringArray(record.filesChanged),
     insertions: readFiniteNumber(record.insertions),

@@ -80,7 +80,7 @@ export const DocSearchBar = forwardRef<HTMLInputElement, DocSearchBarProps>(
             'min-w-0 flex-1',
             'bg-transparent outline-none',
             'text-sm',
-            'placeholder:text-muted-foreground',
+            'placeholder:text-[var(--text-placeholder)]',
           )}
         />
         <span

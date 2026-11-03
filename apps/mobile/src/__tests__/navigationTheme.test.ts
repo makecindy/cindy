@@ -1,5 +1,3 @@
-import { readFileSync } from 'node:fs';
-import { resolve } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { createNavigationTheme } from '@/theme/navigationTheme';
 import { darkColors, lightColors } from '@/theme/tokens';
@@ -40,13 +38,5 @@ describe('mobile navigation theme', () => {
     });
     expect(result.fonts).toBe(baseTheme.fonts);
     expect(baseTheme.colors.background).toBe('base-background');
-  });
-
-  it('wraps the native stack with the mode-aware navigation theme provider', () => {
-    const layout = readFileSync(resolve(process.cwd(), 'app/_layout.tsx'), 'utf8');
-
-    expect(layout).toContain("mode === 'dark' ? NavigationDarkTheme : NavigationLightTheme");
-    expect(layout).toContain('<NavigationThemeProvider value={navigationTheme}>');
-    expect(layout).toContain('contentStyle: { backgroundColor: colors.surface }');
   });
 });

@@ -1,7 +1,11 @@
-import { providerCatalogForPi } from "./providerModelCatalog.js";
+import {
+  PROVIDER_MODEL_CATALOG,
+  providerCatalogForPi,
+} from "./providerModelCatalog.js";
 
 import { defaultEffortForCapabilities } from "./effortResolution.js";
 import { piSupportedEfforts } from "./piThinkingLevels.mjs";
+import { previousModelGenerations } from "./modelGeneration.js";
 import type { ModelMetadata } from "./modelMetadataLayers.js";
 import type {
   CatalogModel,
@@ -16,7 +20,7 @@ interface PiCatalogRow {
   api?: string;
   provider: string;
   baseUrl?: string;
-  contextWindow: number;
+  contextWindow?: number;
   maxTokens?: number;
   input?: string[];
   reasoning?: boolean;
@@ -28,6 +32,21 @@ const PI_CATALOG = providerCatalogForPi() as unknown as {
   generatedAt: string;
   providers: Record<string, PiCatalogRow[]>;
 };
+
+function nativeDefaultEffort(
+  providerId: string,
+  row: PiCatalogRow,
+  efforts: CatalogModel["efforts"],
+) {
+  const declared = PROVIDER_MODEL_CATALOG.providers[providerId]?.find(
+    (model) => model.id === row.id,
+  )?.defaultEffort;
+  // The Pi wire adapter omits Cindy defaults; retain the standard catalog's explicit choice.
+  return declared === null ||
+    (declared !== undefined && efforts.includes(declared))
+    ? declared
+    : defaultEffortForCapabilities(efforts);
+}
 
 function portablePiApi(api: string | undefined): PiModelApi | undefined {
   switch (api) {
@@ -63,38 +82,45 @@ export function piNativeCatalogModels(
     );
   }
   return rows.map((row, index) => {
-    if (
-      row.provider !== piProviderId ||
-      !Number.isFinite(row.contextWindow) ||
-      row.contextWindow <= 0
-    ) {
+    if (row.provider !== piProviderId) {
       throw new Error(
         `[model-providers] invalid Pi catalog row '${piProviderId}/${row.id}'`,
       );
     }
     const efforts = piSupportedEfforts(row);
     const piApi = portablePiApi(row.api);
+    const declaredWindow = Number.isSafeInteger(row.contextWindow) && row.contextWindow! > 0
+      ? row.contextWindow : undefined;
+    const previousWindow = declaredWindow === undefined
+      ? previousModelGenerations(row.id, rows.filter(candidate =>
+          candidate.baseUrl === row.baseUrl && candidate.api === row.api &&
+          Number.isSafeInteger(candidate.contextWindow) && candidate.contextWindow! > 0), candidate => candidate.id)
+        .at(-1)?.contextWindow
+      : undefined;
     return {
       id: `${options.idPrefix ?? ""}${row.id}`,
       name: row.name ?? row.id,
       ...(options.group ? { group: options.group } : {}),
       sortOrder: index,
-      contextWindow: row.contextWindow,
-      contextWindowVerified: true,
+      // Unknown models remain usable. Neither a predecessor window nor the
+      // generic working budget is a verified limit of the newly imported model.
+      contextWindow: declaredWindow ?? previousWindow ?? 200_000,
+      contextWindowVerified: declaredWindow !== undefined,
       ...(Number.isFinite(row.maxTokens) && row.maxTokens! > 0
         ? { maxOutput: row.maxTokens }
         : {}),
       efforts,
       discoveredMetadata: {
         ...(row.name ? { name: row.name } : {}),
-        contextWindow: row.contextWindow,
-        efforts,
+        ...(declaredWindow !== undefined ? { contextWindow: declaredWindow } : {}),
+        // Thinking tiers are imported defaults, not account discovery. Keep
+        // them on the fallback model so shared Registry efforts can replace them.
         ...(row.maxTokens ? { maxOutputTokens: row.maxTokens } : {}),
         ...(row.input
           ? { supportsImageInput: row.input.includes("image") }
           : {}),
       },
-      defaultEffort: defaultEffortForCapabilities(efforts),
+      defaultEffort: nativeDefaultEffort(piProviderId, row, efforts),
       status: "active",
       ...(row.input?.includes("image") ? { supportsImageInput: true } : {}),
       ...(row.cost ? { cost: row.cost } : {}),
@@ -105,8 +131,8 @@ export function piNativeCatalogModels(
 
 function wireProtocolToPiCatalogApi(protocol: ProviderWireProtocol): string {
   switch (protocol) {
-    case 'google-generative-ai':
-      return 'google-generative-ai';
+    case "google-generative-ai":
+      return "google-generative-ai";
     case "anthropic-messages":
       return "anthropic-messages";
     case "openai-responses":
@@ -162,7 +188,7 @@ export function piNativeCatalogModelDefaults(
       ? { maxOutputTokens: row.maxTokens }
       : {}),
     efforts,
-    defaultEffort: defaultEffortForCapabilities(efforts),
+    defaultEffort: nativeDefaultEffort(piProviderId, row, efforts),
     ...(row.input ? { supportsImageInput: row.input.includes("image") } : {}),
   };
 }

@@ -1,9 +1,11 @@
+import { incomingShareSlotOrder } from '@/session/mobileLocalAttachmentUpload';
 import { beforeAll, describe, expect, it } from 'vitest';
 import { DeviceLinkError } from '@cindy/device-link';
 import { i18n } from '@/i18n';
 import {
   buildOutboxItem,
   createOutboxClientId,
+  hasActiveOutboxHandoff,
   isSafelyUnsentOutboxEnqueueError,
   outboxDisplayItem,
   outboxItemAttachments,
@@ -57,6 +59,85 @@ describe('createOutboxClientId', () => {
     const b = createOutboxClientId();
     expect(a).toBeTruthy();
     expect(a).not.toBe(b);
+  });
+});
+
+describe('hasActiveOutboxHandoff', () => {
+  const online = {
+    relayOnline: true,
+    targetAvailable: true,
+    deviceUnresponsive: false,
+    autoRecoveringError: false,
+    syncInProgress: false,
+  };
+  const target = { deviceId: 'device-1', sessionId: 'session-1' };
+  const none = new Set<string>();
+  const record = (overrides: Partial<Parameters<typeof hasActiveOutboxHandoff>[0][number]> = {}) => ({
+    deviceId: 'device-1',
+    item: { sessionId: 'session-1', clientId: 'client-1' } as Parameters<typeof hasActiveOutboxHandoff>[0][number]['item'],
+    state: 'queued' as const,
+    ...overrides,
+  });
+
+  it('待发、enqueue 在途、被控端已收下未确认都算消息正在交接', () => {
+    expect(hasActiveOutboxHandoff([record()], target, online, none)).toBe(true);
+    expect(hasActiveOutboxHandoff([record({ state: 'sending' })], target, online, none)).toBe(true);
+    expect(hasActiveOutboxHandoff([record({ state: 'host-owned', retrySafe: true })], target, online, none)).toBe(true);
+    expect(hasActiveOutboxHandoff([], target, online, none)).toBe(false);
+  });
+
+  it('只看当前设备的当前会话', () => {
+    expect(hasActiveOutboxHandoff([record({ deviceId: 'device-2' })], target, online, none)).toBe(false);
+    expect(hasActiveOutboxHandoff([
+      record({ item: { sessionId: 'session-2', clientId: 'client-1' } as ReturnType<typeof record>['item'] }),
+    ], target, online, none)).toBe(false);
+  });
+
+  it('断线或被控端无响应时消息只是在等重连,不算交接', () => {
+    expect(hasActiveOutboxHandoff([record()], target, { ...online, relayOnline: false }, none)).toBe(false);
+    expect(hasActiveOutboxHandoff([record()], target, { ...online, targetAvailable: false }, none)).toBe(false);
+    expect(hasActiveOutboxHandoff([record()], target, { ...online, deviceUnresponsive: true }, none)).toBe(false);
+    expect(hasActiveOutboxHandoff([record()], target, { ...online, autoRecoveringError: true }, none)).toBe(false);
+  });
+
+  it('发送后的同步不打断交接', () => {
+    expect(hasActiveOutboxHandoff([record()], target, { ...online, syncInProgress: true }, none)).toBe(true);
+    expect(hasActiveOutboxHandoff([record()], target, { ...online, targetAvailable: null }, none)).toBe(true);
+  });
+
+  it('出错、失败、撤销中、挂起和待确认的条目不算交接', () => {
+    expect(hasActiveOutboxHandoff([record({ error: '网络错误' })], target, online, none)).toBe(false);
+    expect(hasActiveOutboxHandoff([record({ state: 'failed' })], target, online, none)).toBe(false);
+    expect(hasActiveOutboxHandoff([record({ state: 'confirming' })], target, online, none)).toBe(false);
+    expect(hasActiveOutboxHandoff([record({ cancelRequested: true })], target, online, none)).toBe(false);
+    expect(hasActiveOutboxHandoff([record({ suspended: true })], target, online, none)).toBe(false);
+  });
+
+  it('未移交的记录只看会话 FIFO 队首:队首卡住时后面的消息不算交接', () => {
+    const later = record({ item: { sessionId: 'session-1', clientId: 'client-2' } as ReturnType<typeof record>['item'] });
+    expect(hasActiveOutboxHandoff([record({ state: 'failed' }), later], target, online, none)).toBe(false);
+    expect(hasActiveOutboxHandoff([record({ suspended: true }), later], target, online, none)).toBe(false);
+    expect(hasActiveOutboxHandoff([record({ cancelRequested: true }), later], target, online, none)).toBe(false);
+    expect(hasActiveOutboxHandoff([record({ state: 'confirming', error: '待确认' }), later], target, online, none)).toBe(false);
+    // 已移交被控端的记录不挡队首,下一条正常推进照样算。
+    expect(hasActiveOutboxHandoff([
+      record({ state: 'host-owned', retrySafe: true, cancelRequested: true }),
+      later,
+    ], target, online, none)).toBe(true);
+  });
+
+  it('已落定、撤销中的已移交记录不算交接', () => {
+    expect(hasActiveOutboxHandoff([record({ state: 'host-owned', retrySafe: true, cleanupOutcome: 'accepted' })], target, online, none)).toBe(false);
+    expect(hasActiveOutboxHandoff([record({ state: 'host-owned', retrySafe: true, cancelRequested: true })], target, online, none)).toBe(false);
+  });
+
+  it('已进被控端队列或已回流进历史的条目不算交接', () => {
+    expect(hasActiveOutboxHandoff([record({ state: 'host-owned', retrySafe: true })], target, online, new Set(['client-1']))).toBe(false);
+    // 历史已确认的 clientId 同样走这个集合:快速 turn 结束后不必等 outbox 对账。
+    expect(hasActiveOutboxHandoff([
+      record({ state: 'host-owned', retrySafe: true }),
+      record({ state: 'host-owned', retrySafe: true, item: { sessionId: 'session-1', clientId: 'client-2' } as ReturnType<typeof record>['item'] }),
+    ], target, online, new Set(['client-1', 'client-2']))).toBe(false);
   });
 });
 
@@ -394,6 +475,24 @@ describe('outboxDisplayItem', () => {
     expect(enqueueFailed.errorText).toBe('RPC boom');
   });
 
+  it('发件箱整条失败时只在投递记下的那张图上标失败,其余图不再转圈;入队失败不标图片', () => {
+    // 与 durableOutboxDisplayItem 的真实输出同形:失败只记在 phase / failedUploadSlot 上,failedIds 为空。
+    const base = buildOutboxItem({
+      clientId: 'c-1', sessionId: 's-1', text: 'hi', permissionModeAtSend: 'ask', readyAttachments: [],
+      claimedUploads: [
+        { localId: 'u-a', failed: false, kind: 'image', previewUri: 'file:///tmp/a.jpg' },
+        { localId: 'u-b', failed: false, kind: 'image', previewUri: 'file:///tmp/b.jpg' },
+      ],
+    });
+    const failed = { ...base, phase: 'failed' as const, enqueueError: 'upload failed', failedUploadSlot: 1 };
+    expect(outboxDisplayItem(failed).thumbnails.map(({ key, uploading, failed: bad }) => ({ key, uploading, failed: bad }))).toEqual([
+      { key: 'c-1-slot-0', uploading: false, failed: undefined },
+      { key: 'c-1-slot-1', uploading: false, failed: true },
+    ]);
+    const enqueueFailed = { ...base, phase: 'failed' as const, enqueueError: 'RPC boom' };
+    expect(outboxDisplayItem(enqueueFailed).thumbnails.some((thumb) => thumb.failed)).toBe(false);
+  });
+
   it('图片槽出缩略格(本地预览 / 落定 ossRef / 上传中态),文件槽走计数行', () => {
     let item = buildOutboxItem({
       clientId: 'c-1',
@@ -468,4 +567,19 @@ describe('outboxWithUploadResult / outboxOwnsUpload / replaceOutboxItem', () => 
     const replaced = replaceOutboxItem(items, { ...item, text: 'changed' });
     expect(replaced[0]?.text).toBe('changed');
   });
+});
+
+it('preserves external share order across completed and pending durable slots', () => {
+  const later = attachmentFor('second.pdf');
+  const item = itemWith({
+    readyAttachments: [later], readyPreviews: ['file:///stage/second'],
+    claimedUploads: [{ localId: 'first', failed: false, kind: 'file', name: 'first.pdf', previewUri: 'file:///share/first' }],
+    attachmentOrder: incomingShareSlotOrder([{ batchId: 'batch', index: 1 }, { batchId: 'batch', index: 0 }]),
+  });
+  expect(item.attachmentSlots).toEqual([null, later]);
+  expect(item.slotByLocalId.first).toBe(0);
+  expect(item.slotMeta.map(meta => meta.name)).toEqual(['first.pdf', 'second.pdf']);
+  expect(item.slotMeta.map(meta => meta.previewUri)).toEqual(['file:///share/first', 'file:///stage/second']);
+  const complete = outboxItemWithUpload(item, 'first', attachmentFor('first.pdf'));
+  expect(outboxItemAttachments(complete).map(attachment => attachment.name)).toEqual(['first.pdf', 'second.pdf']);
 });

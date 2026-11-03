@@ -1,3 +1,4 @@
+import { Button } from '@/components/ui/button';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import * as AlertDialog from '@radix-ui/react-alert-dialog';
 import { Archive, MessageSquare, Trash2 } from 'lucide-react';
@@ -5,7 +6,6 @@ import { useTranslation } from 'react-i18next';
 import type { Schedule, ScheduleRun } from '@cindy/maker-scheduler';
 
 import { cn } from '@/lib/utils';
-import { Spinner } from '@/components/ui/spinner';
 import { toast } from '@/lib/toast';
 import * as sessionService from '@/lib/sessionService';
 import { makerChatStore } from '@/lib/makerChatStore';
@@ -268,20 +268,14 @@ function DeleteScheduleWithSessionsDialog({
       <AlertDialog.Portal>
         <AlertDialog.Overlay
           className={cn(
-            'fixed inset-0 z-[10000]',
-            'bg-neutral-900/40 dark:bg-neutral-950/60',
-            'data-[state=open]:animate-confirm-overlay-in',
-            'data-[state=closed]:animate-confirm-overlay-out',
+            'modal-scrim fixed inset-0 z-[10000]',
           )}
           style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties}
         />
         <AlertDialog.Content
           className={cn(
-            'fixed left-1/2 top-1/2 z-[10000] -translate-x-1/2 -translate-y-1/2',
-            'w-full max-w-[460px] rounded-xl p-4',
-            'bg-[var(--confirm-bg)] shadow-[var(--confirm-shadow)]',
-            'data-[state=open]:animate-confirm-content-in',
-            'data-[state=closed]:animate-confirm-content-out',
+            'modal-panel fixed left-1/2 top-1/2 z-[10000] -translate-x-1/2 -translate-y-1/2',
+            'w-full max-w-[460px] p-4',
           )}
           style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties}
           onEscapeKeyDown={(event) => {
@@ -360,44 +354,28 @@ function DeleteScheduleWithSessionsDialog({
           </div>
 
           <div className="mt-6 flex justify-end gap-2.5">
-            <button
+            <Button
+              variant="cta"
+              size="lg"
+              loading={loading}
               type="button"
               disabled={loading}
               onClick={onConfirm}
-              className={cn(
-                'inline-flex items-center justify-center rounded-full px-6 py-2.5 text-13 font-medium',
-                'transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-offset-2',
-                'active:scale-[0.98]',
-                'bg-[var(--confirm-btn-primary-bg)] text-[var(--confirm-btn-primary-text)]',
-                'hover:bg-[var(--confirm-btn-primary-hover)] focus-visible:ring-[var(--confirm-btn-primary-bg)]',
-                loading &&
-                  'cursor-default opacity-80 active:scale-100 hover:bg-[var(--confirm-btn-primary-bg)]',
-              )}
             >
-              {loading ? (
-                <Spinner size={14} />
-              ) : disposition === 'delete' ? (
-                t('scheduler.deleteDialog.confirmDeleteSessions')
-              ) : (
-                t('scheduler.deleteDialog.confirm')
-              )}
-            </button>
+              {disposition === 'delete'
+                ? t('scheduler.deleteDialog.confirmDeleteSessions')
+                : t('scheduler.deleteDialog.confirm')}
+            </Button>
             <AlertDialog.Cancel asChild>
-              <button
+              <Button
+                variant="secondary"
+                size="lg"
                 type="button"
                 disabled={loading}
                 onClick={onCancel}
-                className={cn(
-                  'inline-flex items-center justify-center rounded-full px-6 py-2.5 text-13 font-medium',
-                  'border bg-transparent transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-offset-2',
-                  'active:scale-[0.98]',
-                  'border-[var(--confirm-btn-secondary-border)] text-[var(--confirm-btn-secondary-text)]',
-                  'hover:bg-[var(--confirm-btn-secondary-hover)] focus-visible:ring-[var(--confirm-btn-secondary-border)]',
-                  loading && 'cursor-default opacity-50 active:scale-100 hover:bg-transparent',
-                )}
               >
                 {t('scheduler.confirm.delete.cancel')}
-              </button>
+              </Button>
             </AlertDialog.Cancel>
           </div>
         </AlertDialog.Content>

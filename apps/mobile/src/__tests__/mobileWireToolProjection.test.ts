@@ -3,6 +3,7 @@ import { MOBILE_TOOL_RESULT_BYTES, projectMobileMessagePage, projectMobileToolMe
 import { normalizeRemoteMessages } from '@/session/messageNormalize';
 import { fetchMobileToolInputDetail } from '@/session/messageToolPayloadProjection';
 import { remoteSessionStore } from '@/session/remoteSessionStore';
+import { readFailedImageDelivery } from '@cindy/maker-shared/tool-process-media';
 import type { RemoteMessage } from '@/session/types';
 
 describe('Desktop tool projection consumed by Mobile', () => {
@@ -88,5 +89,31 @@ describe('Desktop tool projection consumed by Mobile', () => {
     }));
     expect(remoteSessionStore.getMessages(tool.sessionId).find((m) => m.id === tool.id)?.mobileToolInputProjection)
       .toEqual((projectMobileToolMessage(tool) as RemoteMessage).mobileToolInputProjection);
+  });
+
+  // #6420: image retries replace the failed row in place; the rendered model must lose its retry
+  // state and gain the image without a history reload. Existing coverage only replaced plain text.
+  it('replaces failed image delivery with the stored image through a repeated row push', () => {
+    const imageId = 'a'.repeat(64);
+    const imageUrl = `cindy-media://blobs/${'b'.repeat(64)}.png`;
+    const input = { ...tool, content: { toolName: 'imagegen', toolUseId: tool.toolUseId, input: {} } };
+    const failed: RemoteMessage = { ...tool, id: 'image-result', clientId: 'image-result',
+      role: 'tool_result', content: JSON.stringify({ kind: 'generation', ok: false,
+        native_image_delivery: { id: imageId, state: 'failed' } }) };
+    remoteSessionStore.setMessages(tool.sessionId, [input, failed]);
+    const before = normalizeRemoteMessages(remoteSessionStore.getMessages(tool.sessionId));
+    expect(readFailedImageDelivery(before[0].secondaryBody)).toBe(imageId);
+    expect(before[0].media ?? []).toHaveLength(0);
+
+    const stored = { ...failed, content: JSON.stringify({ kind: 'generation', ok: true,
+      native_image_delivery: { id: imageId, state: 'stored' }, xdt_image_url: imageUrl }) };
+    remoteSessionStore.applyRemotePush('wire-device', 'local-db:messages:created',
+      projectMobileToolPush('local-db:messages:created', { sessionId: tool.sessionId, message: stored }));
+
+    const rows = remoteSessionStore.getMessages(tool.sessionId);
+    expect(rows).toHaveLength(2);
+    const after = normalizeRemoteMessages(rows);
+    expect(readFailedImageDelivery(after[0].secondaryBody)).toBeNull();
+    expect(after[0].media).toEqual(expect.arrayContaining([expect.objectContaining({ kind: 'image', url: imageUrl })]));
   });
 });

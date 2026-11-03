@@ -40,7 +40,7 @@ describe('FORGE_GUIDE · oauth 凭证章节', () => {
       'tokenBroker 没同时声明 redirectPort',
       '或与 clientSecret 同时声明',
       '三路资格',
-      '静态官方前缀照旧放行',
+      '随包官方种子或受信任公开市场的官方插件',
       '当前组织的服务端',
       'organization market 包已安装',
       'organizationId 与当前组织一致',
@@ -74,10 +74,11 @@ describe('FORGE_GUIDE · oauth 凭证章节', () => {
       'cindy.request',
       '/app-context',
       'clientIdAlternatives',
-      "region:'cn'|'global'",
       '主机会做清单白名单复验',
     ]) {
       expect(FORGE_GUIDE).toContain(marker);
     }
+    // Guard the public region union, not the Markdown example's whitespace.
+    expect(FORGE_GUIDE).toMatch(/region:\s*'cn'\s*\|\s*'global'/);
   });
 });

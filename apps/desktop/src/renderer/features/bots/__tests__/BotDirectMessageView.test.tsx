@@ -37,6 +37,11 @@ vi.mock('../botStore', () => ({ useBotProfiles: () => mocks.profiles }));
 vi.mock('../BotAvatar', () => ({
   BotAvatar: ({ bot }: { bot: { name: string } }) => <span data-avatar={bot.name} />,
 }));
+vi.mock('@/components/chat/MarkdownRenderer', () => ({
+  MarkdownRenderer: ({ content, allowPrivilegedLinks }: any) => (
+    <div data-markdown={String(allowPrivilegedLinks)}>{content}</div>
+  ),
+}));
 
 function HeaderSlot() {
   return <header data-testid="content-header">{useFeatureContentHeader()}</header>;
@@ -112,6 +117,8 @@ describe('BotDirectMessageView', () => {
     render(<TestPage />, { reactStrictMode: true });
     expect(await screen.findByText('Can you check this?')).toBeTruthy();
     expect(screen.getByText('Checked.')).toBeTruthy();
+    // Messages render as Markdown, never with privileged links.
+    expect(screen.getByText('Checked.').getAttribute('data-markdown')).toBe('false');
     expect(screen.queryByRole('textbox')).toBeNull();
     expect(screen.getByText('bots.directMessage.limitReached')).toBeTruthy();
     fireEvent.click(screen.getByRole('button', { name: 'bots.directMessage.close' }));
@@ -212,4 +219,19 @@ it('does not restore a header when a remote read finishes after navigation away'
   expect(screen.getByTestId('content-header').textContent).toBe('');
   expect(screen.queryByText('Can you check this?')).toBeNull();
   expect(unsubscribe).toHaveBeenCalledTimes(4);
+});
+
+
+// Unit regression for the reported private-thread screen: transport quotes are
+// removed at render time while the stored/API content and inert-link policy stay intact.
+it('renders historical forwarded paragraphs without JSON string quotes', async () => {
+  const result = await mocks.getThread();
+  const content = '[来源] 用户原话由宿主从已接收的输入原样保留。\n用户原话："只检查"\nagent补充："第一段\\n\\n保留 `\\\\n`"';
+  result.thread.messages[0].content = content;
+  mocks.getThread.mockResolvedValue(result);
+  render(<TestPage />);
+  const body = await screen.findByText((_text, element) => element?.getAttribute('data-markdown') === 'false'
+    && Boolean(element.textContent?.includes('第一段\n\n保留 `\\n`')));
+  expect(body.textContent).not.toContain('agent补充："');
+  expect(result.thread.messages[0].content).toBe(content);
 });

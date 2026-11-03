@@ -82,11 +82,11 @@ import {
   useMachineSwitcher,
   useRemoteSessionBootstrapLoading,
 } from '@/features/device-link/useMachineSwitcher';
-import { MENU_CONTENT_CLASS, MENU_ITEM_CLASS, MENU_SEPARATOR_CLASS } from './menuStyles';
+import { MENU_ITEM_CLASS, MENU_ROW_CLASS } from './menuStyles';
 
 /** 段头标题共用样式:与原「全部任务」标题一致(淡灰、hover 加深)。 */
 const SCOPE_TITLE_CLASS =
-  'text-sm font-medium text-[var(--sidebar-list-muted)] transition-colors hover:text-[var(--sidebar-nav-text)]';
+  'text-sm leading-5 font-medium text-[var(--sidebar-list-muted)] transition-colors hover:text-[var(--sidebar-nav-text)]';
 
 export function MachineSwitcherMenu({
   onOpenDisplaySettings,
@@ -135,8 +135,8 @@ export function MachineSwitcherMenu({
   const settingsItems = (
     <>
       {desktopTargets.length>0 && <DropdownMenuSub>
-        <DropdownMenuSubTrigger className={MENU_ITEM_CLASS}><Monitor size={14}/><span>{t('remoteDesktop.title')}</span></DropdownMenuSubTrigger>
-        <DropdownMenuSubContent className={MENU_CONTENT_CLASS}>{desktopTargets.map(device=><DropdownMenuItem
+        <DropdownMenuSubTrigger className={MENU_ROW_CLASS}><Monitor size={14}/><span>{t('remoteDesktop.title')}</span></DropdownMenuSubTrigger>
+        <DropdownMenuSubContent>{desktopTargets.map(device=><DropdownMenuItem
           key={device.deviceId} className={MENU_ITEM_CLASS}
           disabled={!device.online||!device.remoteControlEnabled||!device.controlEnabled}
           onSelect={()=>void window.electronAPI.openRemoteDesktop({deviceId:device.deviceId,name:device.name}).catch(()=>toast.error(t('remoteDesktop.connectionError')))}>
@@ -200,7 +200,7 @@ export function MachineSwitcherMenu({
             'data-[state=open]:text-[var(--sidebar-nav-text)]',
           )}
         >
-          <span className="truncate leading-none">{triggerText}</span>
+          <span className="truncate">{triggerText}</span>
           <ChevronDown size={13} strokeWidth={2} className="shrink-0" />
           {remoteSessionBootstrapLoading && (
             <span
@@ -217,7 +217,7 @@ export function MachineSwitcherMenu({
         side="bottom"
         align="start"
         sideOffset={4}
-        className={cn(MENU_CONTENT_CLASS, 'min-w-48')}
+        className="min-w-48"
       >
         {showDeviceList ? (
           <>
@@ -255,7 +255,7 @@ export function MachineSwitcherMenu({
                 />
               );
             })}
-            <DropdownMenuSeparator className={MENU_SEPARATOR_CLASS} />
+            <DropdownMenuSeparator />
           </>
         ) : null}
         {settingsItems}

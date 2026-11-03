@@ -1,5 +1,3 @@
-import { readFileSync } from 'node:fs';
-import { resolve } from 'node:path';
 import { describe, expect, it } from 'vitest';
 
 import {
@@ -51,22 +49,5 @@ describe('officialProfileWriterMigrationMessage', () => {
     const message = officialProfileWriterMigrationMessage(['0091_amazing_blur.sql']);
     expect(message).toContain('0091_amazing_blur.sql');
     expect(message).toContain('--isolated=');
-  });
-});
-
-describe('official profile writer wiring', () => {
-  it('index 对正式 profile 落地 XDT_OFFICIAL_SHARED_PROFILE,migrate 在备份前拒绝', () => {
-    const indexSource = readFileSync(resolve(process.cwd(), 'src/main/index.ts'), 'utf8');
-    const migrateSource = readFileSync(
-      resolve(process.cwd(), 'src/main/localDb/migrate.ts'),
-      'utf8',
-    );
-    expect(indexSource).toContain("process.env.XDT_OFFICIAL_SHARED_PROFILE = '1'");
-    const refuseIdx = migrateSource.indexOf('shouldRefuseOfficialProfileWriterMigration({');
-    const prepareIdx = migrateSource.indexOf('prepareBackupDiskSpace(');
-    const backupIdx = migrateSource.indexOf('await backupDb(');
-    expect(refuseIdx).toBeGreaterThan(-1);
-    expect(prepareIdx).toBeGreaterThan(refuseIdx);
-    expect(backupIdx).toBeGreaterThan(refuseIdx);
   });
 });

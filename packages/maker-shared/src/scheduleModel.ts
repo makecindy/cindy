@@ -124,7 +124,9 @@ export function displayRunsForMobile(list: readonly RemoteScheduleRun[]): Remote
 }
 
 export function countUnreadRuns(list: readonly RemoteScheduleRun[], now = Date.now()): number {
-  return list.filter((run) => isUnreadRun(run, now)).length;
+  const activeFailures = activeScheduleFailures(list);
+  return list.filter((run) => isUnreadRun(run, now)
+    && (run.status === 'success' || activeFailures.has(run.id))).length;
 }
 
 export function summarizeAutomationOverview(
@@ -604,6 +606,8 @@ export interface FailedScheduleRunSnapshot {
   firedAt: number;
   scheduleId?: string;
   failureKind?: ScheduleFailureKind;
+  /** Optional on older hosts; error content is only disclosed on demand. */
+  errorMsg?: string;
 }
 
 /** Old hosts can omit the classification; keep their warning generic. */

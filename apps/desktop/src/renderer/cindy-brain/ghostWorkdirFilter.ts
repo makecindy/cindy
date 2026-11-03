@@ -14,6 +14,7 @@
  */
 
 import type { InstalledGhost } from '../../shared/ghost';
+import { installedGhostStoragePart } from '../../shared/pluginIdentity';
 
 /** 该 workdir 下被禁用的 ghostId 集合;无 workdir / 查询异常 = 空集。 */
 export function getWorkdirDisabledGhostIds(workdir: string | null | undefined): Set<string> {
@@ -36,6 +37,6 @@ export function filterGhostsForWorkdir(
 ): InstalledGhost[] {
   const disabled = getWorkdirDisabledGhostIds(workdir);
   if (disabled.size === 0) return ghosts;
-  const filtered = ghosts.filter((g) => !disabled.has(g.manifest.id));
+  const filtered = ghosts.filter((g) => !disabled.has(installedGhostStoragePart(g)));
   return filtered.length === ghosts.length ? ghosts : filtered;
 }

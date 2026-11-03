@@ -20,7 +20,8 @@ import { and, desc, eq, inArray, isNotNull, isNull, ne, or } from 'drizzle-orm';
 
 import { getDbClient } from '../../localDb/client/current';
 import { sessions } from '../../localDb/schema';
-import { DESKTOP_VISIBLE_SESSION_SOURCES } from '../../../shared/sessionSource.js';
+import { isProvisionalSession } from '../../localDb/provisionalSessions';
+import { DESKTOP_TASK_LIST_SESSION_SOURCES } from '../../../shared/sessionSource.js';
 import { normalizeWorkingDirForGrouping } from '../../../shared/workingDir.js';
 
 function attachableSessionPredicate() {
@@ -71,15 +72,17 @@ export async function listProjectsForControl(): Promise<ControlProject[]> {
   const db = getDbClient().drizzle;
   const rows = await db
     .select({
+      id: sessions.id,
       title: sessions.title,
       workingDir: sessions.workingDir,
+      projectDir: sessions.projectDir,
       userSendAt: sessions.userSendAt,
       updatedAt: sessions.updatedAt,
     })
     .from(sessions)
     .where(
       and(
-        inArray(sessions.source, DESKTOP_VISIBLE_SESSION_SOURCES),
+        inArray(sessions.source, DESKTOP_TASK_LIST_SESSION_SOURCES),
         eq(sessions.status, 'active'),
         isNotNull(sessions.workingDir),
         attachableSessionPredicate(),
@@ -91,7 +94,9 @@ export async function listProjectsForControl(): Promise<ControlProject[]> {
   const latestByDir = new Map<string, number>();
   const latestTitleByDir = new Map<string, string>();
   for (const r of rows) {
-    const dir = normalizeWorkingDir(r.workingDir);
+    // 新建页里还没发送的任务不出现在渠道的项目 / 任务列表里。
+    if (isProvisionalSession(r.id)) continue;
+    const dir = normalizeWorkingDir(r.projectDir ?? r.workingDir);
     if (!dir) continue;
     const t = r.userSendAt ?? r.updatedAt;
     if (!latestByDir.has(dir) || t > (latestByDir.get(dir) ?? 0)) {
@@ -177,13 +182,14 @@ export async function listRecentSessionsForPicker(
       id: sessions.id,
       title: sessions.title,
       workingDir: sessions.workingDir,
+      projectDir: sessions.projectDir,
       userSendAt: sessions.userSendAt,
       updatedAt: sessions.updatedAt,
     })
     .from(sessions)
     .where(
       and(
-        inArray(sessions.source, DESKTOP_VISIBLE_SESSION_SOURCES),
+        inArray(sessions.source, DESKTOP_TASK_LIST_SESSION_SOURCES),
         eq(sessions.status, 'active'),
         isNotNull(sessions.workingDir),
         attachableSessionPredicate(),
@@ -194,7 +200,9 @@ export async function listRecentSessionsForPicker(
 
   const out: RecentControlSession[] = [];
   for (const r of rows) {
-    const dir = normalizeWorkingDir(r.workingDir);
+    // 新建页里还没发送的任务不出现在渠道的项目 / 任务列表里。
+    if (isProvisionalSession(r.id)) continue;
+    const dir = normalizeWorkingDir(r.projectDir ?? r.workingDir);
     if (!dir) continue;
     const base = dir.split('/').filter(Boolean).pop() ?? '';
     out.push({
@@ -220,13 +228,14 @@ export async function listSessionsForWorkspace(
       id: sessions.id,
       title: sessions.title,
       workingDir: sessions.workingDir,
+      projectDir: sessions.projectDir,
       userSendAt: sessions.userSendAt,
       updatedAt: sessions.updatedAt,
     })
     .from(sessions)
     .where(
       and(
-        inArray(sessions.source, DESKTOP_VISIBLE_SESSION_SOURCES),
+        inArray(sessions.source, DESKTOP_TASK_LIST_SESSION_SOURCES),
         eq(sessions.status, 'active'),
         isNotNull(sessions.workingDir),
         attachableSessionPredicate(),
@@ -236,7 +245,9 @@ export async function listSessionsForWorkspace(
 
   const out: ControlSession[] = [];
   for (const r of rows) {
-    if (normalizeWorkingDir(r.workingDir) !== target) continue;
+    // 新建页里还没发送的任务不出现在渠道的项目 / 任务列表里。
+    if (isProvisionalSession(r.id)) continue;
+    if (normalizeWorkingDir(r.projectDir ?? r.workingDir) !== target) continue;
     out.push({
       id: r.id,
       title: r.title,

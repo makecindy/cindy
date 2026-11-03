@@ -20,25 +20,38 @@ import { WebView } from 'react-native-webview';
 import type { ShouldStartLoadRequest } from 'react-native-webview/lib/WebViewTypes';
 
 import { buildSelectableMarkdownHtml } from '@/session/selectableMarkdownHtml';
+import { MARKDOWN_FILE_PAGER_SCRIPT, parseMarkdownPageSwipe } from '@/session/markdownFilePager';
 import { selectionQuoteMenuLabel } from '@/session/selectionQuote';
+import { useHtmlBrowserViewport } from '@/session/useHtmlBrowserViewport';
+import type { BrowserInsets } from '@/session/htmlBrowserViewport';
 import { lineHeight, useTheme } from '@/theme';
-import { typeScale } from '@/theme/tokens';
+import { spacing, typeScale } from '@/theme/tokens';
 
 export function MarkdownFileReader({
   markdown,
+  onPageSwipe,
   onQuoteSelection,
   targetLine,
   testID,
+  viewportInsets,
+  imageSources,
 }: {
   markdown: string;
+  /** 由文件预览 pager 消费的明确横向翻页；纵向移动会让该手势失败给 WebView。 */
+  onPageSwipe?: (direction: 'previous' | 'next') => void;
   /** chat-text-quote:系统菜单「添加到对话」的采集回调;未传时不加菜单项。 */
   onQuoteSelection?: (text: string) => void;
   /** 定位到源码行(1-based):加载后滚到覆盖该行的块并闪两下高亮(不驻留)。 */
   targetLine?: number | null;
   testID?: string;
+  viewportInsets?: BrowserInsets;
+  imageSources?: ReadonlyMap<string, { uri: string }>;
 }) {
   const { t } = useTranslation();
   const { colors } = useTheme();
+  const { viewRef, measure, viewportStyle, obscuredContentInsets } = useHtmlBrowserViewport(
+    viewportInsets ?? { top: 0, bottom: 0, left: 0, right: 0 },
+  );
   const quoteEnabled = !!onQuoteSelection;
   // 菜单项在渲染时构造(而非模块常量):label 走 i18n;依赖 t 使语言切换后随重渲更新。
   const quoteMenuItems = useMemo(
@@ -46,10 +59,13 @@ export function MarkdownFileReader({
     [t],
   );
   const html = useMemo(() => buildSelectableMarkdownHtml(markdown, {
+    ...(imageSources ? { imageSources } : {}),
     borderColor: colors.border,
     chipColor: colors.surfaceChip,
     inlineCodeColor: colors.chatInlineCodeText,
     fontSize: typeScale.body,
+    // 与文件预览源码 FlatList 的 codeContent 对齐。
+    horizontalPadding: spacing.lg,
     // body(16/22)行高比 1.375,低于 DESIGN.md §3 正文区间 1.43–1.56 下限;
     // 文档阅读是长文连续阅读场景,换 bodyRelaxed(16/24)= 1.50 落到规范值。
     // 字号不动:16 = DESIGN.md 的 Body 档。
@@ -66,7 +82,7 @@ export function MarkdownFileReader({
     },
     textColor: colors.textPrimary,
     ...(targetLine ? { targetLine } : {}),
-  }), [colors, markdown, targetLine]);
+  }), [colors, imageSources, markdown, targetLine]);
 
   // 回调走 ref:onQuoteSelection 引用变化(页面重渲)不应重建 handler,
   // 更不应让 WebView 重载。
@@ -80,9 +96,22 @@ export function MarkdownFileReader({
     if (text && text.trim().length > 0) onQuoteSelectionRef.current?.(text);
   }, []);
 
+  // 文档知道触点是否落在宽公式内；原生外层 Pan 无法区分，会抢走公式横移。
+  // 只接收文档完成的翻页手势，滚动和系统文字选择仍由 WebView 处理。
+  const handleMessage = useCallback((event: { nativeEvent: { data: string } }) => {
+    const direction = parseMarkdownPageSwipe(event.nativeEvent.data);
+    if (direction) onPageSwipe?.(direction);
+  }, [onPageSwipe]);
+
   return (
-    <View style={styles.fill} testID={testID}>
+    <View ref={viewRef} onLayout={measure} collapsable={false} style={[styles.fill, viewportStyle]} testID={testID}>
       <WebView
+        automaticallyAdjustContentInsets={false}
+        contentInsetAdjustmentBehavior="never"
+        obscuredContentInsets={obscuredContentInsets}
+        contentInset={obscuredContentInsets}
+        injectedJavaScript={onPageSwipe ? MARKDOWN_FILE_PAGER_SCRIPT : undefined}
+        onMessage={onPageSwipe ? handleMessage : undefined}
         menuItems={quoteEnabled ? quoteMenuItems : undefined}
         onCustomMenuSelection={quoteEnabled ? handleCustomMenuSelection : undefined}
         onShouldStartLoadWithRequest={interceptNavigation}

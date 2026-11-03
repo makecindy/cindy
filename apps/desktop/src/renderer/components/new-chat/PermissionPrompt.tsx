@@ -13,17 +13,20 @@
  *   Esc         → Deny
  */
 
-import { useCallback, useEffect, useMemo } from 'react';
+import { useCallback, useEffect, useMemo, useRef } from 'react';
 import { useTranslation } from 'react-i18next';
+import { describePermissionAction, type PermissionActionSummary } from '@cindy/maker-shared/interaction';
 
 import { BotAvatar } from '@/features/bots/BotAvatar';
 import type { BotChatIdentity } from '@/features/bots/BotSessionContentHeader';
 
+import { shouldCardShortcutYield } from '@/lib/editableKeyboardTarget';
 import { cn } from '@/lib/utils';
 import { Tip } from '@/components/ui/tooltip';
 import { Button } from '@/components/ui/button';
 import type { PendingPermission } from '@/lib/makerChatStore';
 import { describeSessionPermissionScope } from '@/lib/permissionSuggestionScope';
+import { GHOST_INSTALL_CONSENT_TOOL_NAME } from '../../../shared/ghostInstallConsent';
 
 // ---------------------------------------------------------------------------
 // Props
@@ -39,34 +42,22 @@ interface PermissionPromptProps {
 // Tool input → display text
 // ---------------------------------------------------------------------------
 
-function firstString(input: Record<string, unknown>, keys: string[]): string | undefined {
-  for (const k of keys) {
-    const v = input[k];
-    if (typeof v === 'string' && v.length > 0) return v;
-  }
-  return undefined;
+// harness 无关:命令 / 文件 / 插件 / 浏览器的归类与手机、IM 共用 describePermissionAction;
+// 认不出的工具回退成格式化 JSON。
+export function formatToolInput(toolName: string, input: Record<string, unknown>): string {
+  if (toolName.toLowerCase() === 'cindy.media.download' && typeof input.source === 'string') return input.source;
+  const action = describePermissionAction(toolName, input);
+  if (action.kind !== 'tool') return action.preview;
+  const text = JSON.stringify(input, null, 2);
+  return text.length > 500 ? text.slice(0, 500) + '...' : text;
 }
 
-// harness 无关:CC 工具名首字母大写 + file_path;pi 内置工具名小写 + path/command。
-// 按语义分组(命令 / 文件 / 模式)归一化,任一命名命中就抽出清爽正文,否则回退 JSON。
-export function formatToolInput(toolName: string, input: Record<string, unknown>): string {
-  const name = toolName.toLowerCase();
-  if (name === 'cindy.media.download' && typeof input.source === 'string') return input.source;
-  const fallback = () => {
-    const text = JSON.stringify(input, null, 2);
-    return text.length > 500 ? text.slice(0, 500) + '...' : text;
-  };
-  if (name === 'bash' || name === 'powershell') {
-    return firstString(input, ['command']) ?? fallback();
-  }
-  if (name === 'read' || name === 'edit' || name === 'write') {
-    return firstString(input, ['file_path', 'path', 'notebook_path']) ?? fallback();
-  }
-  if (name === 'glob' || name === 'grep' || name === 'find' || name === 'ls') {
-    return firstString(input, ['pattern', 'path', 'query']) ?? fallback();
-  }
-  return fallback();
-}
+const ACTION_TITLE_KEYS: Record<Exclude<PermissionActionSummary['kind'], 'tool' | 'plugin'>, string> = {
+  command: 'newChat.permissionPrompt.titleCommand',
+  'file-read': 'newChat.permissionPrompt.titleFileRead',
+  'file-write': 'newChat.permissionPrompt.titleFileWrite',
+  browser: 'newChat.permissionPrompt.titleBrowser',
+};
 
 function filterSessionScopedSuggestions(suggestions?: unknown[]): unknown[] {
   if (!Array.isArray(suggestions)) return [];
@@ -84,15 +75,15 @@ function filterSessionScopedSuggestions(suggestions?: unknown[]): unknown[] {
 const actionClass = 'h-auto min-h-9 max-w-full gap-2 px-3 py-1.5';
 const secondaryActionClass = cn(
   actionClass,
-  'border-[var(--chat-input-border)] bg-transparent text-[var(--chat-input-text)]',
-  'enabled:hover:bg-[var(--perm-code-bg)]',
-  'enabled:active:bg-[color-mix(in_srgb,var(--perm-code-bg)_90%,var(--chat-input-text))]',
+  '[--button-face-border:var(--chat-input-border)] [--button-face-bg:transparent] text-[var(--chat-input-text)]',
+  'enabled:hover:[--button-face-bg:var(--perm-code-bg)]',
+  'enabled:active:[--button-face-bg:color-mix(in_srgb,var(--perm-code-bg)_90%,var(--chat-input-text))]',
 );
 const allowActionClass = cn(
   actionClass,
-  'border-[var(--chat-input-border)] bg-[var(--perm-allow-btn-bg)] text-[var(--perm-allow-btn-text)]',
-  'enabled:hover:bg-[color-mix(in_srgb,var(--perm-allow-btn-bg)_90%,var(--perm-allow-btn-text))]',
-  'enabled:active:bg-[color-mix(in_srgb,var(--perm-allow-btn-bg)_80%,var(--perm-allow-btn-text))]',
+  '[--button-face-border:var(--chat-input-border)] [--button-face-bg:var(--perm-allow-btn-bg)] text-[var(--perm-allow-btn-text)]',
+  'enabled:hover:[--button-face-bg:color-mix(in_srgb,var(--perm-allow-btn-bg)_90%,var(--perm-allow-btn-text))]',
+  'enabled:active:[--button-face-bg:color-mix(in_srgb,var(--perm-allow-btn-bg)_80%,var(--perm-allow-btn-text))]',
 );
 
 // ---------------------------------------------------------------------------
@@ -101,17 +92,35 @@ const allowActionClass = cn(
 
 export function PermissionPrompt({ permission, onRespond, companion }: PermissionPromptProps) {
   const { t } = useTranslation();
+  const cardRef = useRef<HTMLDivElement>(null);
   const { toolName, input, title, displayName, description, suggestions, autoReviewUnavailable,
-    submitting, submissionFailed } = permission;
+    autoReviewReason, submitting, submissionFailed } = permission;
   const isMediaDownload = toolName === 'cindy.media.download';
+  // 插件安装确认由 Host 渲染成纯文本：首行是版本与来源，其余是权限清单。手机按原样
+  // 逐行显示；这里首行作说明，清单放进可滚动区域，不显示内部参数。
+  const isPluginInstallConsent = toolName === GHOST_INSTALL_CONSENT_TOOL_NAME;
+  const [consentHead, ...consentBody] = isPluginInstallConsent
+    ? (description ?? '').split('\n')
+    : [];
   const promptDescription = autoReviewUnavailable
     ? t('newChat.permissionPrompt.autoReviewUnavailable')
-    : description;
+    : isPluginInstallConsent
+      ? consentHead
+      : description;
 
-  const displayTitle = displayName
-    ? t('agentIsland.native.permissionPromptTitleWithTool', { toolName: displayName })
-    : title || t('agentIsland.native.permissionPromptTitleWithTool', { toolName });
-  const codeContent = formatToolInput(toolName, input);
+  // Say what will happen ("run this command") instead of an internal tool name or an
+  // English harness title; unknown tools keep the previous wording.
+  const action = describePermissionAction(toolName, input);
+  const displayTitle = action.kind === 'plugin' && action.subject
+    ? t('newChat.permissionPrompt.titlePlugin', { plugin: action.subject })
+    : action.kind !== 'tool' && action.kind !== 'plugin'
+      ? t(ACTION_TITLE_KEYS[action.kind])
+      : displayName
+        ? t('agentIsland.native.permissionPromptTitleWithTool', { toolName: displayName })
+        : title || t('agentIsland.native.permissionPromptTitleWithTool', { toolName });
+  const codeContent = isPluginInstallConsent
+    ? consentBody.join('\n')
+    : formatToolInput(toolName, input);
   const sessionSuggestions = useMemo(() => filterSessionScopedSuggestions(suggestions), [suggestions]);
   const canAlwaysAllowForSession = sessionSuggestions.length > 0;
   // 这个按钮加的是 agent 给的一条具体规则(Bash 多为 `curl:*` 这类前缀模式),
@@ -159,12 +168,12 @@ export function PermissionPrompt({ permission, onRespond, companion }: Permissio
 
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
-      // IME 组合期间的 Enter(确认候选词)不算快捷键;焦点在可编辑元素上时
-      // (侧栏重命名/查找栏等)也不劫持按键,避免把输入操作误判成授权决定。
-      if (e.isComposing) return;
-      const target = e.target as HTMLElement | null;
-      const tag = target?.tagName;
-      if (tag === 'INPUT' || tag === 'TEXTAREA' || target?.isContentEditable) return;
+      // 按键已有归属时不替用户做授权决定：输入法组字、正在打字、刚被菜单处理的 Esc、
+      // 焦点在「拒绝」等按钮上的回车（交给按钮本身激活）都让位。
+      if (e.key !== 'Enter' && e.key !== 'Escape') return;
+      const shortcutKind =
+        e.key === 'Escape' ? 'dismiss' : e.ctrlKey || e.metaKey ? 'modifiedActivate' : 'activate';
+      if (shouldCardShortcutYield(e, shortcutKind, cardRef.current)) return;
       if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) {
         e.preventDefault();
         handleAlwaysAllow();
@@ -185,6 +194,7 @@ export function PermissionPrompt({ permission, onRespond, companion }: Permissio
 
   return (
     <div
+      ref={cardRef}
       className={cn(
         'w-full max-w-[914px] rounded-xl border p-4',
         'border-[var(--chat-input-border)] bg-[var(--chat-input-bg)]',
@@ -204,21 +214,38 @@ export function PermissionPrompt({ permission, onRespond, companion }: Permissio
       </div>
 
       {/* Description */}
+      {autoReviewUnavailable && permission.sourceDescription && (
+        <p className="mt-1.5 whitespace-pre-wrap break-words text-13 font-normal text-[var(--status-bar-meta)]">
+          {permission.sourceDescription}
+        </p>
+      )}
       {promptDescription && (
-        <p className="mt-1.5 text-13 font-normal leading-tight text-[var(--status-bar-meta)]">
+        <p className="mt-1.5 whitespace-pre-wrap break-words text-13 font-normal leading-tight text-[var(--status-bar-meta)]">
           {promptDescription}
+        </p>
+      )}
+      {/* Why Auto stopped to ask: the reviewer's own explanation, in the user's language. */}
+      {!autoReviewUnavailable && autoReviewReason && (
+        <p className="mt-1.5 whitespace-pre-wrap break-words text-13 font-normal leading-snug text-[var(--chat-input-text)]">
+          {t('newChat.permissionPrompt.autoReviewReason', { reason: autoReviewReason })}
         </p>
       )}
 
       {/* Code block */}
       <div
         className={cn(
-          'mt-3 max-h-[120px] overflow-auto rounded-[8px] border px-3.5 py-2.5',
+          'mt-3 overflow-auto rounded-[8px] border px-3.5 py-2.5',
           'border-[var(--perm-code-border)] bg-[var(--perm-code-bg)]',
-          'font-mono text-[length:calc(var(--app-code-font-size)_-_1px)] leading-relaxed text-[var(--chat-input-text)]',
+          isPluginInstallConsent
+            ? 'max-h-[240px] text-13 leading-relaxed text-[var(--chat-input-text)]'
+            : 'max-h-[120px] font-mono text-[length:calc(var(--app-code-font-size)_-_1px)] leading-relaxed text-[var(--chat-input-text)]',
         )}
       >
-        <pre className="whitespace-pre-wrap break-all">{codeContent}</pre>
+        {isPluginInstallConsent ? (
+          <p className="whitespace-pre-wrap break-words">{codeContent}</p>
+        ) : (
+          <pre className="whitespace-pre-wrap break-all">{codeContent}</pre>
+        )}
       </div>
 
       {/* Action buttons — inline text + kbd badges, right-aligned.
@@ -232,6 +259,7 @@ export function PermissionPrompt({ permission, onRespond, companion }: Permissio
       <div className="mt-4 flex flex-wrap items-center justify-end gap-2 [&_button:disabled]:cursor-wait [&_button:disabled]:opacity-50">
         {/* Deny */}
         <Button
+          pressFeedback={false}
           variant="secondary"
           size="lg"
           onClick={handleDeny}
@@ -260,6 +288,7 @@ export function PermissionPrompt({ permission, onRespond, companion }: Permissio
             contentClassName="max-w-[320px] whitespace-pre-line break-all text-left"
           >
             <Button
+              pressFeedback={false}
               variant="secondary"
               size="lg"
               onClick={handleAlwaysAllow}
@@ -283,6 +312,7 @@ export function PermissionPrompt({ permission, onRespond, companion }: Permissio
 
         {/* Allow once (primary) */}
         <Button
+          pressFeedback={false}
           variant="secondary"
           size="lg"
           onClick={handleAllowOnce}

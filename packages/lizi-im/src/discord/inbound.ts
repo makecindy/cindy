@@ -1,7 +1,12 @@
-import fs from 'node:fs';
-import path from 'node:path';
 
-import type { IMAttachment, IMHostMediaCache, IMMessageEvent, IMUnsupportedEntry } from '../types.js';
+import type {
+  IMAttachment,
+  IMHostFileStaging,
+  IMHostMediaCache,
+  IMMessageEvent,
+  IMUnsupportedEntry,
+} from '../types.js';
+import { classifyInboundAttachment } from '../inboundKind.js';
 import { encodeMessageId } from './codec.js';
 
 const MAX_INBOUND_FILE_BYTES = 50 * 1024 * 1024;
@@ -9,9 +14,9 @@ const MAX_INBOUND_FILE_BYTES = 50 * 1024 * 1024;
 export interface MessageLike {
   id: string;
   content?: string | null;
-  author: { id: string };
+  author: { id: string; username?: string; globalName?: string | null };
   channelId?: string;
-  channel?: { id?: string };
+  channel?: { id?: string; name?: string };
   attachments?: Iterable<AttachmentLike> | { values(): IterableIterator<AttachmentLike> };
   stickers?: Iterable<StickerLike> | { values(): IterableIterator<StickerLike> };
   type?: string | number;
@@ -35,10 +40,13 @@ export async function normalizeDmMessage(
   m: MessageLike,
   ctx: {
     contextId: string;
-    mediaDir: string;
-    download: (url: string, dest: string) => Promise<void>;
-    /** host 媒体总仓(可选):入站图片提升进内容寻址仓,缺省回落 mediaDir。 */
+    download: (url: string) => Promise<Uint8Array>;
+    /** host 媒体总仓: 图片与音视频入内容寻址仓; 缺省时这类附件标不支持。 */
     media?: IMHostMediaCache;
+    /** host 文件暂存: 非媒体文件; 缺省时标不支持。均不写 legacy 目录。 */
+    files?: IMHostFileStaging;
+    /** 暂存成功后的回滚句柄 — 下载期间配置换代时由调用方逐个调用。 */
+    stagedDiscards?: Array<() => Promise<void>>;
   },
 ): Promise<IMMessageEvent | null> {
   const chatId = m.channelId ?? m.channel?.id ?? '';
@@ -56,72 +64,84 @@ export async function normalizeDmMessage(
     unsupported.push({ type: 'sticker', label: sticker.name ?? sticker.id ?? 'sticker' });
   }
 
-  if (isVoiceMessage(m)) {
+  const messageAttachments = iterableValues(m.attachments);
+  if (isVoiceMessage(m) && messageAttachments.length === 0) {
     unsupported.push({ type: 'audio', label: 'audio message' });
   }
 
-  fs.mkdirSync(ctx.mediaDir, { recursive: true });
-  const messageAttachments = iterableValues(m.attachments);
-  const filenameCounts = countAttachmentFilenames(messageAttachments);
   for (let i = 0; i < messageAttachments.length; i += 1) {
     const attachment = messageAttachments[i];
     const originalName = attachment.name ?? attachment.filename ?? attachment.id ?? 'attachment';
-    const mimeType = attachment.contentType ?? inferMimeType(originalName);
+    // 平台附件 id 全局唯一, 缺失时退 `msgId-序号` —— host 据此免重下。
+    const token = attachment.id ?? `${m.id}-${i}`;
+    // 去处只由共用判据决定(MIME 与扩展名任一命中; contentType 常缺或给 octet-stream)。
+    const { kind: destination, mimeType } = classifyInboundAttachment(attachment.contentType, originalName);
+    const unsupportedType =
+      destination === 'av' ? (mimeType.startsWith('audio/') ? 'audio' : 'video') : destination;
 
     if (attachment.size > MAX_INBOUND_FILE_BYTES) {
       unsupported.push({ type: 'oversize', label: originalName });
       continue;
     }
-    if (mimeType.startsWith('audio/')) {
-      unsupported.push({ type: 'audio', label: originalName });
-      continue;
-    }
-    if (mimeType.startsWith('video/')) {
-      unsupported.push({ type: 'video', label: originalName });
+    // 没有受控去处就不下载: 图片/音视频要媒体总仓, 其余要文件暂存。
+    const canStore =
+      destination === 'image'
+        ? Boolean(ctx.media)
+        : destination === 'av'
+          ? Boolean(ctx.media?.cacheMedia)
+          : Boolean(ctx.files);
+    if (!canStore) {
+      unsupported.push({ type: unsupportedType, label: originalName });
       continue;
     }
 
-    const dest = uniquePath(
-      ctx.mediaDir,
-      storageFilename(m.id, attachment, originalName, filenameCounts, i),
-    );
+    let buffer: Uint8Array;
     try {
-      await ctx.download(attachment.url, dest);
-      const kind = mimeType.startsWith('image/') ? ('image' as const) : ('file' as const);
-      let absPath = dest;
-      let cindyUrl: string | undefined;
-      // 图片提升进 host 媒体总仓:download 只会写文件,先落历史
-      // 目录再读字节入仓、删临时副本;失败回落老路径(附件不能丢)。token 用
-      // 平台附件 id(全局唯一),缺失时退 `msgId-序号`。
-      if (kind === 'image' && ctx.media) {
-        try {
-          const promoted = await ctx.media.cacheImage({
-            integration: 'discord',
-            token: attachment.id ?? `${m.id}-${i}`,
-            buffer: fs.readFileSync(dest),
-            mimeType: mimeType.toLowerCase(),
-          });
-          absPath = promoted.absPath;
-          cindyUrl = promoted.url;
-          fs.rmSync(dest, { force: true });
-        } catch {
-          // host 仓拒收(白名单外 mime / DB 未就绪):保留老目录副本。
-        }
-      }
-      attachments.push({
-        kind,
-        absPath,
-        originalName,
-        mimeType,
-        ...(cindyUrl ? { url: cindyUrl } : {}),
-      });
+      buffer = await ctx.download(attachment.url);
     } catch {
       unsupported.push({ type: 'download', label: originalName });
+      continue;
+    }
+    try {
+      if (destination === 'image') {
+        // 落库前一律可回收暂存(staging): 换代可回滚; 消息落库时由 host pin 成用户附件。
+        const promoted = await ctx.media!.cacheImage({ integration: 'discord', token, buffer, mimeType, staging: true });
+        if (promoted.discard) ctx.stagedDiscards?.push(promoted.discard);
+        attachments.push({
+          kind: 'image',
+          absPath: promoted.absPath,
+          originalName,
+          mimeType: promoted.mimeType ?? mimeType,
+          url: promoted.url,
+        });
+      } else if (destination === 'av') {
+        const stored = await ctx.media!.cacheMedia!({ integration: 'discord', token, buffer, mimeType });
+        if (stored.discard) ctx.stagedDiscards?.push(stored.discard);
+        attachments.push({
+          kind: 'file',
+          absPath: stored.absPath,
+          originalName,
+          mimeType: stored.mimeType,
+          url: stored.url,
+        });
+      } else {
+        const staged = await ctx.files!.stage({ integration: 'discord', buffer, fileName: originalName });
+        ctx.stagedDiscards?.push(staged.discard);
+        attachments.push({ kind: 'file', absPath: staged.absPath, originalName, mimeType });
+      }
+    } catch {
+      // host 仓拒收(白名单外格式 / 未就绪): 如实标不支持, 不降级写 legacy 目录。
+      unsupported.push({ type: unsupportedType, label: originalName });
     }
   }
 
   return {
     channelName: 'discord',
+    interactionSource: {
+      chatName: m.channel?.name ?? m.author.globalName ?? m.author.username,
+      senderName: m.author.globalName ?? m.author.username ?? m.author.id,
+      messageUrl: `https://discord.com/channels/@me/${chatId}/${m.id}`,
+    },
     senderId: m.author.id,
     chatId,
     contextId: ctx.contextId,
@@ -148,74 +168,6 @@ function hasValues<T>(source: unknown): source is { values(): IterableIterator<T
     'values' in source &&
     typeof (source as { values?: unknown }).values === 'function'
   );
-}
-
-function sanitizeFilename(name: string): string {
-  return name.replace(/[\\/:*?"<>|]/g, '_').slice(0, 120) || 'attachment';
-}
-
-function countAttachmentFilenames(attachments: AttachmentLike[]): Map<string, number> {
-  const counts = new Map<string, number>();
-  for (const attachment of attachments) {
-    const originalName = attachment.name ?? attachment.filename ?? attachment.id ?? 'attachment';
-    const filename = sanitizeFilename(originalName);
-    counts.set(filename, (counts.get(filename) ?? 0) + 1);
-  }
-  return counts;
-}
-
-function storageFilename(
-  messageId: string,
-  attachment: AttachmentLike,
-  originalName: string,
-  filenameCounts: Map<string, number>,
-  index: number,
-): string {
-  const messagePrefix = sanitizeFilename(messageId);
-  const originalFilename = sanitizeFilename(originalName);
-  if ((filenameCounts.get(originalFilename) ?? 0) > 1) {
-    const attachmentPrefix = sanitizeFilename(attachment.id ?? String(index + 1));
-    return `${messagePrefix}-${attachmentPrefix}-${originalFilename}`;
-  }
-  return `${messagePrefix}-${originalFilename}`;
-}
-
-function uniquePath(dir: string, filename: string): string {
-  const ext = path.extname(filename);
-  const base = filename.slice(0, filename.length - ext.length);
-  let candidate = path.join(dir, filename);
-  let index = 1;
-
-  while (fs.existsSync(candidate)) {
-    candidate = path.join(dir, `${base}-${index}${ext}`);
-    index += 1;
-  }
-  return candidate;
-}
-
-function inferMimeType(filename: string): string {
-  const ext = path.extname(filename).toLowerCase();
-  switch (ext) {
-    case '.jpg':
-    case '.jpeg':
-      return 'image/jpeg';
-    case '.png':
-      return 'image/png';
-    case '.gif':
-      return 'image/gif';
-    case '.webp':
-      return 'image/webp';
-    case '.txt':
-      return 'text/plain';
-    case '.json':
-      return 'application/json';
-    case '.pdf':
-      return 'application/pdf';
-    case '.zip':
-      return 'application/zip';
-    default:
-      return 'application/octet-stream';
-  }
 }
 
 function isVoiceMessage(m: MessageLike): boolean {

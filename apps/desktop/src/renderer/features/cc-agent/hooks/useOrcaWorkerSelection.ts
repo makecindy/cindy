@@ -11,7 +11,12 @@ import {
   type ConversationSearchJump,
 } from '../../../../shared/conversationSearchJump';
 import type { CreateWorkerForm } from '../CreateWorkerPopover';
-import { getCollaborationStartErrorMessage } from '../collaborationErrors';
+import type { EditWorkerForm } from '../EditWorkerPopover';
+import {
+  executionDeviceErrorMessage,
+  getCollaborationStartErrorMessage,
+  workerAgentDeviceErrorMessage,
+} from '../collaborationErrors';
 import { createWorkerLabel } from '../workerLabel';
 import { useWorkers } from './useWorkers';
 import { clearWorkerAttention } from '../lib/workerAttentionStore';
@@ -58,6 +63,7 @@ export function useOrcaWorkerSelection({
     refreshCreationState,
   } = useWorkers(leadSessionId);
   const [createOpen, setCreateOpen] = useState(false);
+  const [editWorkerId, setEditWorkerId] = useState<string | null>(null);
   const [searchJumpPinnedWorkerSessionId, setSearchJumpPinnedWorkerSessionId] = useState<
     string | null
   >(null);
@@ -95,6 +101,7 @@ export function useOrcaWorkerSelection({
     setSearchJumpPinnedWorkerSessionId(null);
     setFocusWorkerPinnedSessionId(null);
     setPendingFocusWorkerSessionId(null);
+    setEditWorkerId(null);
   }, [leadSessionId]);
 
   const searchJumpWorkerSessionId = useMemo(
@@ -242,6 +249,10 @@ export function useOrcaWorkerSelection({
   ]);
   const selectedWorkerId = selectedWorkerRecord?.workerId ?? null;
   const workerSessionId = selectedWorkerRecord?.sessionId ?? null;
+  const editWorker = useMemo(
+    () => (editWorkerId ? workers.find((w) => w.workerId === editWorkerId) ?? null : null),
+    [editWorkerId, workers],
+  );
 
   const clearSelectionHints = useCallback(() => {
     selectionIntentGenerationRef.current += 1;
@@ -312,6 +323,16 @@ export function useOrcaWorkerSelection({
             // null(未显式选来源)不传字段:IPC 侧只认非空 string 为显式来源。
             providerId: form.providerId ?? undefined,
             workerPermissionMode: form.workerPermissionMode,
+            ...(form.executionDeviceId
+              ? {
+                  executionDeviceId: form.executionDeviceId,
+                }
+              : {}),
+            ...(form.workingDir !== undefined ? {workingDir: form.workingDir} : {}),
+            ...(form.worktree ? {worktree: form.worktree} : {}),
+            ...(form.projectPath ? {projectPath: form.projectPath} : {}),
+            // Worker 的 Agent 所在电脑(远程供应商)；面板只在任务所在电脑支持时才带。
+            ...(form.agentDeviceId !== undefined ? { agentDeviceId: form.agentDeviceId } : {}),
             label,
             initialTask: form.initialTask || undefined,
           });
@@ -325,7 +346,10 @@ export function useOrcaWorkerSelection({
             continue;
           }
           toast.error(
-            getCollaborationStartErrorMessage(err, t, { remoteDevice: Boolean(deviceId) }),
+            (form.executionDeviceId &&
+              executionDeviceErrorMessage(err, t, form.executionDeviceName, Boolean(form.workingDir)))
+              || (form.agentDeviceId && workerAgentDeviceErrorMessage(err, t))
+              || getCollaborationStartErrorMessage(err, t, { remoteDevice: Boolean(deviceId) }),
           );
           return;
         }
@@ -345,7 +369,10 @@ export function useOrcaWorkerSelection({
     (workerId: string) => {
       clearSelectionHints();
       const worker = workersRef.current.find((item) => item.workerId === workerId);
-      const acknowledgeDone = worker?.status === 'done';
+      const isDone = worker?.status === 'done';
+      // 只有对话真的可见才算看过结果；看不到对话(如分离窗只显示占位)时选中不确认、
+      // 不清提醒，等对话可见后由 visibleDoneWorkerId 的 effect 确认。
+      const acknowledgeDone = isDone && viewVisible;
       void (async () => {
         try {
           const workflows = orcaWorkflowsFor(leadSessionId);
@@ -362,7 +389,7 @@ export function useOrcaWorkerSelection({
               toast.error(msg);
             }
           }
-          if (!acknowledgeDone || acknowledged) clearWorkerAttention(workerId);
+          if (!isDone || acknowledged) clearWorkerAttention(workerId);
           await refresh();
         } catch (err: unknown) {
           const msg = err instanceof Error ? err.message : String(err);
@@ -370,7 +397,7 @@ export function useOrcaWorkerSelection({
         }
       })();
     },
-    [acknowledgeDoneWorker, clearSelectionHints, leadSessionId, refresh],
+    [acknowledgeDoneWorker, clearSelectionHints, leadSessionId, refresh, viewVisible],
   );
 
   const handleArchiveWorker = useCallback(
@@ -386,6 +413,52 @@ export function useOrcaWorkerSelection({
     [leadSessionId, refresh],
   );
 
+  const handleOpenEditWorker = useCallback((workerId: string) => {
+    setEditWorkerId(workerId);
+  }, []);
+
+  const handleCloseEditWorker = useCallback(() => {
+    setEditWorkerId(null);
+  }, []);
+
+  const handleUpdateWorker = useCallback(
+    async (form: EditWorkerForm): Promise<boolean> => {
+      if (!editWorkerId) return false;
+      // 只发用户实际改过的字段：全量提交会把期间 Lead 经 update_worker 改过的
+      // role / label 静默回滚（服务端串行锁拦不住请求自带的旧值）。
+      const payload: { role?: string; label?: string } = {};
+      if (form.role !== undefined) payload.role = form.role.trim();
+      if (form.label !== undefined) payload.label = form.label.trim();
+      if (payload.role === undefined && payload.label === undefined) {
+        setEditWorkerId(null);
+        return true;
+      }
+      try {
+        await orcaWorkflowsFor(leadSessionId).updateWorker({
+          leadSessionId,
+          workerId: editWorkerId,
+          ...payload,
+        });
+        setEditWorkerId(null);
+        await refresh();
+        return true;
+      } catch (err) {
+        const ipcError = extractIpcError(err);
+        if (ipcError?.code === 'DUPLICATE_LABEL') {
+          toast.error(t('orca.editWorker.duplicateLabel', { label: payload.label ?? '' }));
+        } else if (ipcError?.code === 'WORKER_STATE_CHANGED') {
+          toast.error(t('orca.editWorker.labelLocked'));
+        } else if (deviceId && ipcError?.code === 'DEVICE_LINK_CHANNEL_NOT_ALLOWED') {
+          toast.error(t('newChat.collaboration.unsupportedRemoteHint'));
+        } else {
+          toast.error(t('orca.editWorker.saveFailed'));
+        }
+        return false;
+      }
+    },
+    [deviceId, editWorkerId, leadSessionId, refresh, t],
+  );
+
   return {
     workers,
     focusedWorker,
@@ -399,6 +472,10 @@ export function useOrcaWorkerSelection({
     workerSessionId,
     createOpen,
     setCreateOpen,
+    editWorker,
+    handleOpenEditWorker,
+    handleCloseEditWorker,
+    handleUpdateWorker,
     handleCreateWorker,
     handleSwitchFocus,
     handleArchiveWorker,

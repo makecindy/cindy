@@ -3,9 +3,10 @@ import {
   parseMobileMarkdown,
   type MobileMarkdownBlock,
   type MobileMarkdownInline,
+  type MobileMarkdownInlineMark,
 } from '@/session/messageMarkdown';
 import { tokenizeCode } from '@/session/codeHighlight';
-import { parseSessionDeepLinkUrl, shortSessionId } from '@/session/sessionLinks';
+import { parseSessionDeepLinkUrl } from '@/session/sessionLinks';
 import { buildKatexLoaderJs } from '@/session/mathWebViewHtml';
 import { repairMermaidSource } from '@cindy/maker-shared/mermaid-autofix';
 // lineHeight 取别名:本模块内 `lineHeight` 是正文行高的局部变量(来自 options)。
@@ -13,10 +14,10 @@ import { lightColors, lineHeight as lineHeightScale, typeScale } from '@/theme/t
 import { i18n } from '@/i18n';
 
 /**
- * 全屏 markdown 文档 HTML 构建器 —— 当前唯一消费方是文件预览的 MarkdownFileReader
- * (WebView 自身滚动的阅读态)。聊天消息气泡已全面切换为原生 markdown 渲染,
+ * 全屏 markdown 文档 HTML 构建器 —— 文件预览的 MarkdownFileReader 使用完整文档
+ * (WebView 自身滚动的阅读态)，会话分享复用 CSS 与内容片段。聊天消息气泡已全面切换为原生 markdown 渲染,
  * 本模块随之瘦身:气泡专用的 segments 拼装 / bridge 脚本 / 测高估算已删除,
- * 只保留「markdown → 完整 HTML 文档」这一条能力。
+ * 不承担聊天气泡的布局与手势。
  */
 export interface SelectableMarkdownHtmlOptions {
   /** When supplied, export only these embedded images; never expose source URLs. */
@@ -25,6 +26,8 @@ export interface SelectableMarkdownHtmlOptions {
   borderColor?: string;
   chipColor?: string;
   fontSize?: number;
+  /** 文件预览正文左右边距；调用方传入共享 spacing.lg。 */
+  horizontalPadding?: number;
   /** 行内 code 文字色(压暗档,不是底色;见 css 里的说明)。 */
   inlineCodeColor?: string;
   lineHeight?: number;
@@ -44,6 +47,7 @@ export interface SelectableMarkdownHtmlOptions {
     property?: string;
     string?: string;
   };
+  /** 显式指定时保留列宽并在表内横向滚动（会话分享）；省略时按文件预览视口换行。 */
   tableCellMinWidth?: number;
   textColor?: string;
   /**
@@ -173,7 +177,7 @@ export function buildSelectableMarkdownCss(options: SelectableMarkdownHtmlOption
   const inlineCodeColor = cssValue(options.inlineCodeColor ?? lightColors.chatInlineCodeText);
   const fontSize = cssNumber(options.fontSize ?? 16);
   const lineHeight = cssNumber(options.lineHeight ?? 23);
-  const codeFontSize = cssNumber(typeScale.code);
+  const codeFontSize = cssNumber(typeScale.bodySmall);
   // 标题两档大号 + 共用行高(20/28、18/28 都是 lineHeight 阶梯里的既有配对)。
   const headingLargeFontSize = cssNumber(typeScale.title);
   const headingMediumFontSize = cssNumber(typeScale.subtitle);
@@ -187,19 +191,33 @@ export function buildSelectableMarkdownCss(options: SelectableMarkdownHtmlOption
     string: cssValue(options.syntaxColors?.string ?? lightColors.syntaxString),
   };
   const bodyGap = cssNumber(options.bodyGap ?? 10);
+  const horizontalPadding = cssNumber(options.horizontalPadding ?? 16);
   const markerWidth = cssNumber(options.markerWidth ?? 24);
-  const tableCellMinWidth = cssNumber(options.tableCellMinWidth ?? 112);
+  const tableCellMinWidth = cssNumber(options.tableCellMinWidth ?? 0);
+  // 分享沿用原有的最小列宽；文件阅读器未指定列宽，才启用窄屏等分布局。
+  const tableLayout = options.tableCellMinWidth === undefined
+    ? 'table-layout: fixed; width: 100%;'
+    : 'display: block; max-width: 100%; overflow-x: auto;';
 
   return `
-    html, body {
+    html {
       margin: 0;
-      padding: 0;
+      overflow-x: hidden;
+      overscroll-behavior-x: none;
+      touch-action: auto;
+    }
+    body {
+      box-sizing: border-box;
+      margin: 0;
+      min-width: 0;
+      padding: 0 ${horizontalPadding}px;
       background: transparent;
       color: ${textColor};
       font-family: -apple-system, BlinkMacSystemFont, "Inter", "Segoe UI", sans-serif;
       font-size: ${fontSize}px;
       line-height: ${lineHeight}px;
-      overflow: visible;
+      overflow-x: hidden;
+      overflow-y: visible;
       overflow-wrap: anywhere;
       cursor: text;
       touch-action: auto;
@@ -215,6 +233,9 @@ export function buildSelectableMarkdownCss(options: SelectableMarkdownHtmlOption
       display: flex;
       flex-direction: column;
       gap: ${bodyGap}px;
+      max-width: 100%;
+      min-width: 0;
+      width: 100%;
       -webkit-touch-callout: default !important;
       -webkit-user-select: text !important;
       user-select: text !important;
@@ -243,6 +264,7 @@ export function buildSelectableMarkdownCss(options: SelectableMarkdownHtmlOption
     p, h1, h2, h3, h4, h5, h6, blockquote, pre, table, .list-row {
       margin: 0;
     }
+    /* 正文横滑切文件；宽公式保留内部横移，文档手势识别器按触点让路。 */
     /* 标题分三档。改前 h1–h6 全部等于正文字号(只有 font-weight:500 撑),文档里
        完全读不出层级 —— 与聊天消息流同一个缺陷、同一套修法:
          h1  20/28 = 1.400(= desktop h1 比例)
@@ -339,7 +361,7 @@ export function buildSelectableMarkdownCss(options: SelectableMarkdownHtmlOption
       color: inherit;
       text-decoration: underline;
     }
-    /* 直连图片:本模块的唯一消费方 MarkdownFileReader 没有 postMessage bridge,
+    /* 直连图片:MarkdownFileReader 的 bridge 只接翻页，图片没有点击处理，
        生成的 <img> 也不在链接内 —— 点它毫无响应,所以**不带 pointer**(与下面的
        .xdt-image-chip 同一条判据:这个面上「像能点」的反馈一律不给)。
        上一轮只清了 chip、漏了直连图片这对称的另一半,PR #1144 review 实捉。 */
@@ -380,16 +402,16 @@ export function buildSelectableMarkdownCss(options: SelectableMarkdownHtmlOption
       border-left: 1px solid ${borderColor};
       border-spacing: 0;
       border-top: 1px solid ${borderColor};
-      display: block;
-      max-width: 100%;
-      overflow-x: auto;
+      ${tableLayout}
     }
     th, td {
       border-bottom: 1px solid ${borderColor};
       border-right: 1px solid ${borderColor};
       box-sizing: border-box;
       min-width: ${tableCellMinWidth}px;
+      overflow-wrap: anywhere;
       padding: 4px 8px;
+      word-break: break-word;
       text-align: left;
       vertical-align: top;
     }
@@ -397,7 +419,15 @@ export function buildSelectableMarkdownCss(options: SelectableMarkdownHtmlOption
       color: ${mutedColor};
       font-weight: 500;
     }
+    .xdt-math-inline {
+      display: inline-block;
+      max-width: 100%;
+      overflow-x: auto;
+      vertical-align: middle;
+    }
     .xdt-math-block {
+      max-width: 100%;
+      min-width: 0;
       overflow-x: auto;
       text-align: center;
     }
@@ -470,7 +500,20 @@ function renderInlines(inlines: readonly MobileMarkdownInline[], ctx: RenderCont
   return inlines.map((inline) => renderInline(inline, ctx)).join('');
 }
 
+const MARK_TAGS: Record<MobileMarkdownInlineMark, string> = {
+  strong: 'strong',
+  emphasis: 'em',
+  strikethrough: 'del',
+};
+
 function renderInline(inline: MobileMarkdownInline, ctx: RenderContext = {}): string {
+  // 强调里的链接 / 代码等:先按原类型渲染,再由内到外套上外层强调标签。
+  if (inline.marks?.length) {
+    return inline.marks.reduceRight(
+      (html, mark) => `<${MARK_TAGS[mark]}>${html}</${MARK_TAGS[mark]}>`,
+      renderInline({ ...inline, marks: undefined }, ctx),
+    );
+  }
   switch (inline.type) {
     case 'text':
       return escapeHtml(inline.text);
@@ -493,7 +536,7 @@ function renderInline(inline: MobileMarkdownInline, ctx: RenderContext = {}): st
           const title =
             explicit ??
             ctx.sessionLinkTitles?.[session.sessionId] ??
-            i18n.t('message.renderer.sessionChipFallback', { id: shortSessionId(session.sessionId) });
+            i18n.t('message.renderer.sessionChipFallback');
           return `<span class="xdt-session-chip">›&nbsp;${escapeHtml(title)}</span>`;
         }
         // 本地路径(`[README.md](/abs/README.md:17)` 与正文裸写的路径)、mailto 等:

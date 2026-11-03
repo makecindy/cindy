@@ -1,17 +1,112 @@
-import { gzipSync } from 'node:zlib';
+import { gzipSync, gunzipSync } from 'node:zlib';
+import { once } from 'node:events';
 import { WebSocketServer, type WebSocket } from 'ws';
 import { describe, expect, it, vi } from 'vitest';
+import { VoiceConversationInput, type ConversationInputEvent } from '@cindy/voice-input-core';
+
+const diagnosticLog = vi.hoisted(() => ({ debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() }));
+vi.mock('../../logger.js', () => ({ createLogger: () => diagnosticLog }));
 
 import {
   decodeVolcengineMessage,
   encodeAudioOnlyRequest,
   encodeFullClientRequest,
+  getTranscriptConfirmation,
+  extractConversationSegments,
   VolcengineSaucAsrProvider,
 } from '../VolcengineSaucAsrProvider.js';
 import { volcengineSaucLanguageCode } from '../language.js';
 import { mergeRecoveredTranscript } from '../transcriptMerge.js';
 
 describe('VolcengineSaucAsrProvider protocol helpers', () => {
+  it('projects snapshot timestamps and definite flags without treating partials as final', () => {
+    expect(extractConversationSegments({ result: { utterances: [
+      { start_time: 0, end_time: 800, text: '你好', definite: true },
+      { start_time: 1500, end_time: 1400, text: '你好', definite: false },
+      { text: 'missing timestamp', definite: true },
+    ] } })).toEqual([
+      { id: '0', order: 0, text: '你好', final: true, audioEndMs: 800 },
+      { id: '1500', order: 1500, text: '你好', final: false },
+    ]);
+  });
+
+  // Regression: a revised SAUC full snapshot left an obsolete partial waiting
+  // forever, duplicating the draft and eventually failing the 8s final wait.
+  // Existing parser tests used fixed timestamps. Exercise the real provider +
+  // continuous input over one loopback socket; no credentials or external ASR.
+  it('reconciles revised full snapshots without orphaning partials or replaying finalized speech', async () => {
+    const server = new WebSocketServer({ host: '127.0.0.1', port: 0 });
+    let socket: WebSocket | undefined;
+    server.on('connection', (client) => { socket = client; client.send(serverAckPacket()); });
+    const events: ConversationInputEvent[] = [];
+    let input: VoiceConversationInput | undefined;
+    try {
+      await waitFor(() => server.address() !== null);
+      const address = server.address();
+      if (!address || typeof address === 'string') throw new Error('Expected loopback address.');
+      const provider = new VolcengineSaucAsrProvider({
+        proxyApiKey: 'test-key', baseUrl: `http://127.0.0.1:${address.port}`,
+        endpointPath: '/asr', resourceId: 'volc.test',
+      });
+      input = new VoiceConversationInput({ createProvider: async () => provider, emit: (event) => events.push(event) });
+      await input.start();
+      const payload = async (value: unknown) => {
+        const pong = once(socket!, 'pong');
+        socket!.send(serverPayloadPacket(value));
+        socket!.ping();
+        // Same socket: pong observes the preceding frame's synchronous parser,
+        // including frames that intentionally produce no segment callbacks.
+        await pong;
+      };
+      const snapshot = (utterances: unknown[]) => payload({ result: { utterances } });
+      const part = (start_time: number, text: string, definite = false) =>
+        ({ start_time, text, definite });
+      const draft = () => events.filter((event) => event.type === 'draft').at(-1)?.text;
+      await snapshot([part(100, 'obsolete draft')]);
+      // Missing/malformed utterances are not an authoritative empty snapshot.
+      await payload({ result: {} });
+      await payload({ result: { utterances: [{ text: 'malformed' }] } });
+      expect(draft()).toBe('obsolete draft');
+      // A timestamp correction and split replaces the entire provisional tail.
+      await snapshot([part(120, 'first'), part(600, 'provisional tail')]);
+      expect(draft()).toBe('first provisional tail');
+      // The first timestamp returns after a revision; its retired ID cannot be
+      // reused or the consumer would discard this corrected, now-final text.
+      await snapshot([part(100, 'first', true), part(620, 'second', true)]);
+      expect(draft()).toBe('first second');
+      input.finishUtterance(true);
+      await waitFor(() => events.some((event) => event.type === 'utterance'));
+      expect(events.filter((event) => event.type === 'utterance')).toEqual([
+        { type: 'utterance', id: '1', text: 'first second' },
+      ]);
+      // Repeated full snapshots must not send the finalized prefix again.
+      await snapshot([part(100, 'first', true), part(620, 'second', true),
+        part(1000, 'next draft'), part(1300, 'merged tail')]);
+      expect(draft()).toBe('next draft merged tail');
+      await snapshot([part(100, 'first', true), part(620, 'second', true), part(1000, 'next', true)]);
+      input.finishUtterance(true);
+      await waitFor(() => events.filter((event) => event.type === 'utterance').length === 2);
+      expect(events.filter((event) => event.type === 'utterance').at(-1)).toEqual({
+        type: 'utterance', id: '2', text: 'next',
+      });
+      expect(events.some((event) => event.type === 'error')).toBe(false);
+      expect(diagnosticLog.debug).toHaveBeenCalledWith('conversation snapshot reconciled', {
+        replacedPartials: 2, segments: 2, pendingFinalSegments: 0,
+      });
+    } finally {
+      await input?.stop();
+      socket?.terminate();
+      await new Promise<void>((resolve) => server.close(() => resolve()));
+    }
+  });
+  it('requires all utterances to cover the aggregate transcript', () => {
+    const check = (utterances: unknown[]) => getTranscriptConfirmation({ result: { text: '一句。二句。', utterances } }, '一句。二句。');
+    expect(check([{ text: '一句。', definite: true }, { text: '二句。', definite: false }]).confirmed).toBe(false);
+    expect(check([{ text: '一句。', definite: true }]).confirmed).toBe(false);
+    expect(check([{ text: '一句。', definite: true }, { text: '二句。', definite: true, end_time: 1000 }]))
+      .toEqual({ confirmed: true, endMs: 1000 });
+    expect(check([{ text: '一句。二句。', definite: true }])).toEqual({ confirmed: true, endMs: 0 });
+  });
   it('normalizes Traditional Chinese to the documented provider hint', () => {
     expect(volcengineSaucLanguageCode('auto')).toBeUndefined();
     expect(volcengineSaucLanguageCode('zh-TW')).toBe('zh-CN');
@@ -109,7 +204,7 @@ describe('VolcengineSaucAsrProvider protocol helpers', () => {
   });
 
   it('recovers by replaying unconfirmed audio and preserving the visible transcript prefix', async () => {
-    const server = new WebSocketServer({ port: 0 });
+    const server = new WebSocketServer({ host: '127.0.0.1', port: 0 });
     const sockets: WebSocket[] = [];
     const messageCounts: number[] = [];
     let provider: VolcengineSaucAsrProvider | undefined;
@@ -136,14 +231,17 @@ describe('VolcengineSaucAsrProvider protocol helpers', () => {
         resourceId: 'volc.test',
       });
       provider.onEvent((event) => events.push(event));
+      const onSegment = vi.fn();
+      provider.onSegment(onSegment);
 
       await provider.start();
       await waitFor(() => sockets.length === 1);
       provider.appendAudio(makePcmChunk(), makeTrace(0));
       provider.appendAudio(makePcmChunk(), makeTrace(1));
       await waitFor(() => (messageCounts[0] ?? 0) >= 2);
-      sockets[0].send(serverTranscriptPacket('你好，今天', false));
+      sockets[0].send(serverTranscriptPacket('你好，今天', false, 0, 100));
       await waitFor(() => events.some((event) => event.text === '你好，今天'));
+      expect(onSegment).toHaveBeenLastCalledWith(expect.objectContaining({ audioEndMs: 100 }));
 
       provider.appendAudio(makePcmChunk(), makeTrace(2));
       sockets[0].close(1011, 'WebSocket passthrough error');
@@ -154,9 +252,12 @@ describe('VolcengineSaucAsrProvider protocol helpers', () => {
       await recoverPromise;
       await waitFor(() => sockets.length === 2);
       await waitFor(() => (messageCounts[1] ?? 0) >= 5);
-      sockets[1].send(serverTranscriptPacket('今天小镇周会', false));
+      sockets[1].send(serverTranscriptPacket('今天小镇周会', false, 0, 100));
 
       await waitFor(() => events.some((event) => event.text === '你好，今天小镇周会'));
+      // Replay starts a different provider clock; it cannot shorten a later
+      // conversation pause using the old capture offset.
+      expect(onSegment).toHaveBeenLastCalledWith(expect.objectContaining({ audioEndMs: undefined }));
     } finally {
       await provider?.stop();
       for (const socket of sockets) {
@@ -167,7 +268,7 @@ describe('VolcengineSaucAsrProvider protocol helpers', () => {
   });
 
   it('requests a fresh one-shot connection ticket when transport recovery reconnects', async () => {
-    const server = new WebSocketServer({ port: 0 });
+    const server = new WebSocketServer({ host: '127.0.0.1', port: 0 });
     const sockets: WebSocket[] = [];
     const authorizations: Array<string | undefined> = [];
     let provider: VolcengineSaucAsrProvider | undefined;
@@ -208,7 +309,7 @@ describe('VolcengineSaucAsrProvider protocol helpers', () => {
   });
 
   it('waits for a provider protocol response before reporting connected', async () => {
-    const server = new WebSocketServer({ port: 0 });
+    const server = new WebSocketServer({ host: '127.0.0.1', port: 0 });
     const sockets: WebSocket[] = [];
     let provider: VolcengineSaucAsrProvider | undefined;
     server.on('connection', (socket) => {
@@ -248,8 +349,78 @@ describe('VolcengineSaucAsrProvider protocol helpers', () => {
     }
   });
 
+  it.each(['close', 'timeout', 'cancel'] as const)('rejects startup on %s before the protocol ACK without reporting connected', async (outcome) => {
+    const server = new WebSocketServer({ host: '127.0.0.1', port: 0 });
+    const sockets: WebSocket[] = [];
+    const events: string[] = [];
+    let provider: VolcengineSaucAsrProvider | undefined;
+    server.on('connection', (socket) => sockets.push(socket));
+    try {
+      await waitFor(() => server.address() !== null);
+      const address = server.address();
+      if (!address || typeof address === 'string') throw new Error('Expected loopback server');
+      provider = new VolcengineSaucAsrProvider({
+        proxyApiKey: 'test-key', baseUrl: `http://127.0.0.1:${address.port}`,
+        endpointPath: '/asr', resourceId: 'test', connectTimeoutMs: 250,
+      });
+      provider.onEvent((event) => events.push(event.type));
+      // Attach both settlement paths immediately, including the timeout case.
+      const started = provider.start().then(() => 'unexpected success', (error: Error) => error.message);
+      await waitFor(() => sockets.length === 1);
+      if (outcome === 'close') sockets[0].close();
+      if (outcome === 'cancel') await provider.stop();
+      expect(await started).toMatch(outcome === 'timeout' ? /timed out/ : /closed|stopped/i);
+      expect(events).not.toContain('connected');
+      await waitFor(() => sockets[0].readyState === 3);
+    } finally {
+      await provider?.stop();
+      sockets.forEach((socket) => socket.terminate());
+      await new Promise<void>((resolve) => server.close(() => resolve()));
+    }
+  });
+
+  it('sends the first real audio without a second append and finalizes without duplicating it', async () => {
+    const server = new WebSocketServer({ host: '127.0.0.1', port: 0 });
+    const sockets: WebSocket[] = [];
+    const audio: Buffer[] = [];
+    let provider: VolcengineSaucAsrProvider | undefined;
+    server.on('connection', (socket) => {
+      sockets.push(socket);
+      socket.send(serverAckPacket());
+      socket.on('message', (raw) => {
+        const packet = Buffer.from(raw as Buffer);
+        if (packet[1] >> 4 !== 2) return;
+        audio.push(packet);
+        if ((packet[1] & 0xf) === 3) socket.send(serverTranscriptPacket('完成', true, 0x3));
+      });
+    });
+    try {
+      await waitFor(() => server.address() !== null);
+      const address = server.address();
+      if (!address || typeof address === 'string') throw new Error('Expected server address');
+      provider = new VolcengineSaucAsrProvider({
+        proxyApiKey: 'test-key', baseUrl: `http://127.0.0.1:${address.port}`,
+        endpointPath: '/asr', resourceId: 'volc.test',
+      });
+      await provider.start();
+      const pcm = makePcmChunk();
+      provider.appendAudio(pcm, makeTrace(0));
+      await waitFor(() => audio.length === 1);
+      expect(audio[0].readInt32BE(4)).toBe(2);
+      expect(gunzipSync(audio[0].subarray(12))).toEqual(Buffer.from(pcm));
+      await provider.flushAudio();
+      expect(audio).toHaveLength(2);
+      expect(audio[1].readInt32BE(4)).toBe(-3);
+      expect(gunzipSync(audio[1].subarray(12))).toEqual(Buffer.alloc(16000 * 0.3 * 2));
+    } finally {
+      await provider?.stop();
+      sockets.forEach((socket) => socket.terminate());
+      await new Promise<void>((resolve) => server.close(() => resolve()));
+    }
+  });
+
   it('does not open a managed socket when stopped during session allocation', async () => {
-    const server = new WebSocketServer({ port: 0 });
+    const server = new WebSocketServer({ host: '127.0.0.1', port: 0 });
     const sockets: WebSocket[] = [];
     server.on('connection', (socket) => {
       sockets.push(socket);
@@ -289,8 +460,79 @@ describe('VolcengineSaucAsrProvider protocol helpers', () => {
     }
   });
 
+  it.each(['confirmed', 'new_sound', 'missing_time', 'partial_tail', 'short_pause', 'uncovered_audio', 'recovered', 'future_time', 'isolated_click'])
+  ('only skips final response when audio and text are both confirmed: %s', async (scenario) => {
+    diagnosticLog.debug.mockClear();
+    const server = new WebSocketServer({ host: '127.0.0.1', port: 0 });
+    const sockets: WebSocket[] = [];
+    let provider: VolcengineSaucAsrProvider | undefined;
+    server.on('connection', (socket) => { sockets.push(socket); socket.send(serverAckPacket()); });
+    try {
+      await waitFor(() => server.address() !== null);
+      const address = server.address();
+      if (!address || typeof address === 'string') throw new Error('Expected local server');
+      provider = new VolcengineSaucAsrProvider({ proxyApiKey: 'test', baseUrl: `http://127.0.0.1:${address.port}`, endpointPath: '/asr', resourceId: 'test' });
+      const events: Array<{ type: string }> = [];
+      provider.onEvent((event) => events.push(event));
+      await provider.start();
+      provider.appendAudio(new Int16Array(1600).fill(512).buffer);
+      sockets[0].send(serverTranscriptPacket('一句。', false));
+      await waitFor(() => events.some((e) => e.type === 'partial'));
+      sockets[0].send(serverTranscriptPacket('一句。', true, 0,
+        scenario === 'missing_time' ? undefined : scenario === 'uncovered_audio' ? 50 : scenario === 'future_time' ? 10000 : 100));
+      await waitFor(() => events.some((e) => e.type === 'stable'));
+      if (scenario === 'recovered') {
+        await provider.recover();
+        sockets[1].send(serverTranscriptPacket('一句。', true, 0, 100));
+        await waitFor(() => events.filter((e) => e.type === 'stable').length === 2);
+      }
+      if (scenario === 'new_sound') provider.appendAudio(new Int16Array(160).fill(40).buffer);
+      if (scenario === 'isolated_click') {
+        provider.appendAudio(new Int16Array(1600).buffer);
+        const click = new Int16Array(160);
+        click[0] = 30000;
+        provider.appendAudio(click.buffer);
+      }
+      if (scenario === 'partial_tail') {
+        sockets[0].send(serverTranscriptPacket('一句。新尾句', false));
+        await waitFor(() => events.filter((e) => e.type === 'partial').length === 2);
+      }
+      provider.appendAudio(new Int16Array(scenario === 'short_pause' ? 1600 : 32000).buffer);
+      let settled = false;
+      const flushing = provider.flushAudio().then(() => { settled = true; });
+      await sleep(30);
+      const fastFinish = scenario === 'confirmed' || scenario === 'isolated_click';
+      expect(settled).toBe(fastFinish);
+      const decision = diagnosticLog.debug.mock.calls.find(([name]) => name === 'stop finalization decision')?.[1];
+      const expectedReason: Record<string, string> = {
+        new_sound: 'sound_after_confirmed_audio', missing_time: 'no_confirmed_audio_position',
+        partial_tail: 'transcript_not_fully_confirmed', short_pause: 'silence_under_2000ms',
+        uncovered_audio: 'sound_after_confirmed_audio', recovered: 'recovered_audio_clock',
+        future_time: 'confirmed_position_beyond_sent_audio',
+      };
+      expect(decision).toMatchObject({
+        lastSoundEndMs: scenario === 'new_sound' ? 110 : 100,
+        silenceMs: scenario === 'short_pause' ? 100 : scenario === 'isolated_click' ? 2110 : 2000,
+        fastFinish,
+        soundDetection: 'rms_duration_v1',
+      });
+      if (fastFinish) {
+        expect(decision).toMatchObject({ confirmedEndMs: 100, sentAudioMs: scenario === 'isolated_click' ? 2210 : 2100, missedReasons: [] });
+      } else {
+        expect(decision.missedReasons).toContain(expectedReason[scenario]);
+      }
+      sockets[sockets.length - 1].send(serverTranscriptPacket('一句。', true, 3));
+      await flushing;
+      expect(diagnosticLog.debug.mock.calls.find(([name]) => name === 'flush settled')?.[1].stopDecision).toEqual(decision);
+    } finally {
+      await provider?.stop();
+      for (const socket of sockets) socket.terminate();
+      await new Promise<void>((resolve) => server.close(() => resolve()));
+    }
+  });
+
   it('waits for the protocol last response before completing flush', async () => {
-    const server = new WebSocketServer({ port: 0 });
+    const server = new WebSocketServer({ host: '127.0.0.1', port: 0 });
     const sockets: WebSocket[] = [];
     let provider: VolcengineSaucAsrProvider | undefined;
     server.on('connection', (socket) => {
@@ -340,6 +582,7 @@ describe('VolcengineSaucAsrProvider protocol helpers', () => {
 
   it('does not reopen a socket after stop while recovery is connecting', async () => {
     const server = new WebSocketServer({
+      host: '127.0.0.1',
       port: 0,
       verifyClient(_info, done) {
         setTimeout(() => done(true), 80);
@@ -392,6 +635,7 @@ describe('VolcengineSaucAsrProvider protocol helpers', () => {
 
   it('fails startup instead of hanging when the provider-native socket does not open in time', async () => {
     const server = new WebSocketServer({
+      host: '127.0.0.1',
       port: 0,
       verifyClient(_info, done) {
         setTimeout(() => done(true), 200);
@@ -431,8 +675,63 @@ describe('VolcengineSaucAsrProvider protocol helpers', () => {
     }
   });
 
+  it.each([
+    ['proxy key, HTTP 401', 401, false, 1],
+    ['proxy key, HTTP 403', 403, false, 0],
+    ['managed connection ticket, HTTP 401', 401, true, 0],
+  ] as const)('reports the Cindy AI key on a rejected handshake only for the proxy key path (%s)', async (
+    _label,
+    status,
+    managed,
+    reports,
+  ) => {
+    const server = new WebSocketServer({
+      host: '127.0.0.1',
+      port: 0,
+      verifyClient(_info, done) {
+        done(false, status, 'Rejected');
+      },
+    });
+    let provider: VolcengineSaucAsrProvider | undefined;
+    const onAuthorizationRejected = vi.fn();
+
+    try {
+      await waitFor(() => server.address() !== null);
+      const address = server.address();
+      if (!address || typeof address === 'string') throw new Error('Expected local test server address.');
+      const path = '/volcengine/api/v3/sauc/bigmodel_async';
+
+      provider = new VolcengineSaucAsrProvider({
+        ...(managed
+          ? {
+              connectionProvider: async () => ({
+                websocketUrl: `ws://127.0.0.1:${address.port}${path}`,
+                authorizationToken: 'voice-ticket',
+              }),
+            }
+          : {
+              proxyApiKey: 'gateway-key-sent',
+              baseUrl: `http://127.0.0.1:${address.port}`,
+              endpointPath: path,
+            }),
+        resourceId: 'volc.test',
+        connectTimeoutMs: 2_000,
+        onAuthorizationRejected,
+      });
+      provider.onEvent(() => {});
+
+      await expect(provider.start()).rejects.toThrow(`HTTP ${status}`);
+      expect(onAuthorizationRejected).toHaveBeenCalledTimes(reports);
+      if (reports > 0) expect(onAuthorizationRejected).toHaveBeenCalledWith('gateway-key-sent');
+    } finally {
+      await provider?.stop();
+      await new Promise<void>((resolve) => server.close(() => resolve()));
+    }
+  });
+
   it('reports provider-native handshake failures without waiting for the connect timeout', async () => {
     const server = new WebSocketServer({
+      host: '127.0.0.1',
       port: 0,
       verifyClient(_info, done) {
         done(false, 403, 'Forbidden');
@@ -467,18 +766,24 @@ describe('VolcengineSaucAsrProvider protocol helpers', () => {
 
 });
 
-function serverTranscriptPacket(text: string, isFinal: boolean, flags = 0x0): Buffer {
-  const payload = gzipSync(Buffer.from(JSON.stringify({
+function serverTranscriptPacket(text: string, isFinal: boolean, flags = 0x0, endTime?: number): Buffer {
+  return serverPayloadPacket({
     result: {
       text,
       utterances: [
         {
           text,
+          start_time: 0,
           definite: isFinal,
+          end_time: endTime,
         },
       ],
     },
-  })));
+  }, flags);
+}
+
+function serverPayloadPacket(value: unknown, flags = 0x0): Buffer {
+  const payload = gzipSync(Buffer.from(JSON.stringify(value)));
   const size = Buffer.alloc(4);
   size.writeUInt32BE(payload.length, 0);
   const sequence = flags === 0x1 || flags === 0x3 ? Buffer.alloc(4) : Buffer.alloc(0);

@@ -12,10 +12,9 @@ import {
   ComposerOrderedList,
 } from '@/components/new-chat/ComposerListNodes';
 import {
-  findHostCapabilityChipMatch,
   placeGhostAtComposerStart,
-  placeHostCapabilityAtComposerStart,
 } from '@/components/new-chat/ghostComposerPlacement';
+import { normalizeComposerDocumentJSON } from '@/lib/composerListDocument';
 import { MentionChipNode } from '@/components/new-chat/MentionChipNode';
 import type { InstalledGhost } from '../../shared/ghost';
 
@@ -87,6 +86,38 @@ describe('placeGhostAtComposerStart', () => {
     expect(editor.state.selection.to).toBe(editor.state.doc.content.size - 1);
   });
 
+  it('qualifies a namespaced Plugin command only when its command is shared', () => {
+    const editor = editorWith('keep going');
+    const selected = ghost('draw', 'art');
+    selected.namespace = 'acme';
+    selected.dir = '/tmp/_ns/acme/art';
+    expect(placeGhostAtComposerStart(editor, selected, [selected])).toBe(true);
+    expect(editor.getText()).toBe('$draw keep going');
+
+    const sharedEditor = editorWith('keep going');
+    const root = ghost('draw', 'art');
+    root.namespace = null;
+    expect(placeGhostAtComposerStart(sharedEditor, selected, [root, selected])).toBe(true);
+    expect(sharedEditor.getText()).toBe('$draw/acme keep going');
+  });
+
+  it('replaces a bare command that became ambiguous after a same-name install', () => {
+    // `$draw` was inserted while the organization instance was unique; a root sibling arrived later.
+    const org = ghost('draw', 'art');
+    org.namespace = 'acme';
+    org.dir = '/tmp/_ns/acme/art';
+    const root = ghost('draw', 'art');
+    root.namespace = null;
+
+    const pickRoot = editorWith('$draw keep going');
+    expect(placeGhostAtComposerStart(pickRoot, root, [org, root])).toBe(true);
+    expect(pickRoot.getText()).toBe('$draw/@root keep going');
+
+    const pickOrg = editorWith('$draw keep going');
+    expect(placeGhostAtComposerStart(pickOrg, org, [org, root])).toBe(true);
+    expect(pickOrg.getText()).toBe('$draw/acme keep going');
+  });
+
   it('replaces an existing Plugin command instead of stacking commands', () => {
     const current = ghost('mivo');
     const selected = ghost('feishu');
@@ -107,15 +138,15 @@ describe('placeGhostAtComposerStart', () => {
     expect(editor.getText()).toBe('$feishu 帮我整理这段内容');
   });
 
-  it('replaces a Host capability chip instead of stacking Plugin invocations', () => {
+  it('places a Plugin command after restoring a legacy capability draft', () => {
     const capability = hostCapabilityGhost();
     const selected = ghost('feishu');
     const editor = editorWith('继续补充需求');
-    placeHostCapabilityAtComposerStart(editor, capability, [capability, selected]);
+    editor.commands.insertContentAt(1, { type: 'mentionChip', attrs: { kind: 'plugin-capability', label: capability.manifest.name, path: 'ios-simulator', pluginId: capability.manifest.id } });
 
+    editor.commands.setContent(normalizeComposerDocumentJSON(editor.getJSON()));
     expect(placeGhostAtComposerStart(editor, selected, [capability, selected])).toBe(true);
     expect(editor.getText()).toBe('$feishu 继续补充需求');
-    expect(findHostCapabilityChipMatch(editor.state.doc)).toBeNull();
   });
 
   it('adds a command paragraph before a leading structured list', () => {
@@ -261,51 +292,5 @@ describe('placeGhostAtComposerStart', () => {
       content: [{ type: 'text', text: '$mivo ' }],
     });
     expect(editor.getJSON().content?.[1]?.type).toBe('bulletList');
-  });
-});
-
-describe('placeHostCapabilityAtComposerStart', () => {
-  it('prepends an atomic Plugin capability chip and preserves existing text', () => {
-    const selected = hostCapabilityGhost();
-    const editor = editorWith('帮我调试登录流程');
-
-    expect(placeHostCapabilityAtComposerStart(editor, selected, [selected])).toBe(true);
-    const match = findHostCapabilityChipMatch(editor.state.doc);
-    expect(match?.attrs).toMatchObject({
-      kind: 'plugin-capability',
-      label: 'iOS Simulator',
-      path: 'ios-simulator',
-      pluginId: 'ios-simulator',
-      sourceLabel: 'iOS Simulator',
-    });
-    expect(editor.getText()).toBe(' 帮我调试登录流程');
-    expect(editor.state.selection.to).toBe(editor.state.doc.content.size - 1);
-  });
-
-  it('replaces an existing command and keeps a single invocation at message start', () => {
-    const oldPlugin = ghost('mivo');
-    const selected = hostCapabilityGhost();
-    const editor = editorWith('$mivo 继续补充需求');
-
-    expect(placeHostCapabilityAtComposerStart(editor, selected, [oldPlugin, selected])).toBe(true);
-    expect(findHostCapabilityChipMatch(editor.state.doc)?.attrs.pluginId).toBe('ios-simulator');
-    expect(editor.getText()).toBe(' 继续补充需求');
-  });
-
-  it('replaces an existing Host capability chip instead of stacking atoms', () => {
-    const first = hostCapabilityGhost('ios-simulator-old');
-    const selected = hostCapabilityGhost();
-    const editor = editorWith('正文');
-    placeHostCapabilityAtComposerStart(editor, first, [first, selected]);
-
-    expect(placeHostCapabilityAtComposerStart(editor, selected, [first, selected])).toBe(true);
-    let capabilityCount = 0;
-    editor.state.doc.descendants((node) => {
-      if (node.type.name === 'mentionChip' && node.attrs.kind === 'plugin-capability') {
-        capabilityCount += 1;
-      }
-    });
-    expect(capabilityCount).toBe(1);
-    expect(findHostCapabilityChipMatch(editor.state.doc)?.attrs.pluginId).toBe('ios-simulator');
   });
 });

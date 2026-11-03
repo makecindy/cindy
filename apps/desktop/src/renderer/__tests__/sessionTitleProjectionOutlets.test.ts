@@ -31,7 +31,7 @@ const draftRoute = read('features/cc-agent/NewMakerDraftRoute.tsx');
 describe('desktop 会话标题投影出口', () => {
   it('rail 置顶瓷砖、aria-label 与悬浮预览卡都用显示标题', () => {
     expect(railNav).toContain(
-      "const displayTitle = getSessionDisplayTitle(session, t('ccAgent.common.unnamedSession'));",
+      "const displayTitle = getSessionDisplayTitle(session, t('ccAgent.common.unnamedSession'), t);",
     );
     expect(railNav).toContain('aria-label={displayTitle}');
     expect(railNav).toContain('{pinnedTileLabel(displayTitle)}');
@@ -119,9 +119,14 @@ describe('desktop 会话标题投影出口', () => {
     expect(sidebarUpper).toContain(
       'const title = projectDraftSessionTitle(session.title, unnamedLabelRef.current);',
     );
-    expect(sidebarUpper).toContain('void botOwnedSessionNotificationTitle(sessionId).then((botTitle) => {');
+    // /review Reviewer tasks are checked first: they never notify on their own.
+    expect(sidebarUpper).toContain('if (await isReviewSessionNotificationTarget(sessionId)) return;');
+    expect(sidebarUpper).toContain('const botTitle = await botOwnedSessionNotificationTitle(sessionId);');
+    // The task sidebar is the only notification owner, also on /bots routes: group
+    // lanes never notify (docs/product-rules/bot-group-chat.md §3).
+    expect(sidebarUpper).toContain('if (botTitle === BOT_GROUP_LANE_SESSION) return;');
     expect(sidebarUpper).toContain(
-      'sendSessionEventNotification(sessionId, botTitle ?? unnamedLabelRef.current, kind);',
+      'sendSessionEventNotification(sessionId, botTitle ?? unnamedLabelRef.current, kind, options);',
     );
     expect(sidebarUpper).toContain("unnamedLabelRef.current = t('ccAgent.common.unnamedSession');");
   });

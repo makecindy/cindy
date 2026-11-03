@@ -16,6 +16,7 @@ import {
   toRenderItemViewportSnapshot,
 } from '../components/chat/MessageStream';
 import {
+  findRenderItemElement,
   canCompensateMessageHeight,
   viewportAnchorCorrection,
 } from '../components/chat/messageViewportCompensation';
@@ -80,13 +81,16 @@ const messages: ChatMessage[] = [
 ];
 const build = (input: ChatMessage[]) => groupWorkRuns(buildRenderItems(input).items, false);
 
-function setup({ deleted = true, hidden = false, nativeShift = 0 } = {}) {
-  const before = build(messages);
+function setup({ deleted = true, hidden = false, nativeShift = 0, prependedGroup = false } = {}) {
+  const before = build(prependedGroup ? messages.slice(3) : messages);
   const after = build(deleted ? messages.filter((message) => message.clientId !== 'a-draft') : messages);
   const beforeGroup = before.find((item) => item.type === 'work_group')!;
   const afterGroup = after.find((item) => item.type === 'work_group')!;
-  expect(afterGroup.key).toBe(beforeGroup.key);
-  expect(after).toHaveLength(before.length);
+  if (prependedGroup) expect(afterGroup.key).not.toBe(beforeGroup.key);
+  else {
+    expect(afterGroup.key).toBe(beforeGroup.key);
+    expect(after).toHaveLength(before.length);
+  }
 
   vi.stubGlobal('CSS', { escape: (value: string) => value });
   const root = document.createElement('div');
@@ -100,6 +104,7 @@ function setup({ deleted = true, hidden = false, nativeShift = 0 } = {}) {
   const elements = new Map<string, HTMLElement>();
   for (const item of after) {
     const row = items.appendChild(document.createElement('div'));
+    row.dataset.renderItemKey = item.key;
     const rowTop = item.key === afterGroup.key ? 200 : item.type === 'message' && item.message.role === 'user' ? 0 : 1800;
     row.getBoundingClientRect = () => rect(containerTop + rowTop - root.scrollTop, 1000);
     for (const id of collectDeleteAnchorClientIds([item])) {
@@ -113,9 +118,8 @@ function setup({ deleted = true, hidden = false, nativeShift = 0 } = {}) {
   }
   const snapshot: Snapshot = {
     viewportTopKey: beforeGroup.key,
-    offset: 730,
-    messageClientId: 'a-draft',
-    messageOffset: 130,
+    offset: prependedGroup ? -28 : 730,
+    ...(!prependedGroup ? { messageClientId: 'a-draft', messageOffset: 130 } : {}),
   };
   const lastViewportTopRef = ref<Snapshot | null>(snapshot);
   const programmaticScrollRef = ref(false);
@@ -128,6 +132,7 @@ function setup({ deleted = true, hidden = false, nativeShift = 0 } = {}) {
     requestAnimationFrame: (callback: FrameRequestCallback) => frames.push(callback),
     beginProgrammaticScroll: () => { programmaticScrollRef.current = true; return 1; },
     finishProgrammaticScroll: () => { programmaticScrollRef.current = false; },
+    findRenderItemElement,
     canCompensateMessageHeight,
     viewportAnchorCorrection,
     renderItemContainsClientId,
@@ -171,7 +176,7 @@ function setup({ deleted = true, hidden = false, nativeShift = 0 } = {}) {
   };
   expect(effects).toHaveLength(2);
   return {
-    root, snapshot, lastViewportTopRef, elements, positions,
+    root, snapshot, lastViewportTopRef, elements, positions, afterGroup, items,
     compensate: callbacks.compensateMessageHeight,
     commit: () => effects.forEach((effect) => effect()),
     flushFrames: () => frames.splice(0).forEach((callback) => callback(0)),
@@ -184,6 +189,17 @@ afterEach(() => {
 });
 
 describe('message height and deletion compensation lifecycle', () => {
+  it('keeps top spacing when an older page merges the leading work group', () => {
+    const view = setup({ deleted: false, prependedGroup: true });
+    view.commit();
+    expect(view.lastViewportTopRef.current).toEqual({
+      viewportTopKey: view.afterGroup.key, offset: -28,
+    });
+    expect(view.root.scrollTop).toBe(172);
+    view.flushFrames();
+    view.compensate();
+    expect(view.root.scrollTop).toBe(172);
+  });
   it.each([
     { nativeShift: 0, observerFirst: false },
     { nativeShift: -200, observerFirst: false },

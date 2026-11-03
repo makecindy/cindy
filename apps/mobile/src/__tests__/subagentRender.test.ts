@@ -1,92 +1,101 @@
-import { readFileSync } from 'node:fs';
-import { resolve } from 'node:path';
-import { describe, expect, it } from 'vitest';
+// @vitest-environment jsdom
+import { act, createElement } from 'react';
+import { createRoot, type Root } from 'react-dom/client';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { CONTINUE_AFTER_ERROR_PROMPT } from '@cindy/maker-shared/synthetic-trigger';
+import { i18n } from '@/i18n';
+import { __test_internals as expansion } from '@/session/expandedBlockMemory';
+import { collectMobileMessageGalleryImages } from '@/session/messageGallery';
+import { normalizeRemoteMessages } from '@/session/messageNormalize';
+import { buildMobileMessageRenderItems, type MobileSubagentGroupItem } from '@/session/messageRenderModel';
+import type { RemoteMessage } from '@/session/types';
+import { collaborationRenderer } from './fixtures/messageRendererComponents';
 
-describe('subagent nesting render wiring', () => {
-  it('routes subagent_group items to a CollabCardShell-based SubagentCard (no new scroll mechanism)', () => {
-    const source = readFileSync(resolve(process.cwd(), 'src/session/MessageRenderer.tsx'), 'utf8');
-    // RenderItemView 新增 subagent_group 路由。
-    expect(source).toContain("case 'subagent_group':");
-    expect(source).toContain('<SubagentCard item={item} actions={actions} />');
-    // SubagentCard 走共享 CollabCardShell(其内部即 FoldablePanel,与 ToolGroupCard/WorkGroupCard 同款
-    // 折叠路径,未引入新滚动机制)、默认折叠。
-    const cardStart = source.indexOf('function SubagentCard(');
-    expect(cardStart).toBeGreaterThan(-1);
-    const cardEnd = source.indexOf('\nfunction FoldablePanel(', cardStart);
-    const cardSource = source.slice(cardStart, cardEnd);
-    expect(cardSource).toContain('<CollabCardShell');
-    // 展开态走 blockId 共享记忆(默认折叠),不再显式传 defaultExpanded(blockId 存在时该值无效)。
-    expect(cardSource).toContain('blockId={item.key}');
-    expect(cardSource).not.toContain('defaultExpanded');
-    expect(cardSource).toContain('testID="message.subagentToggle"');
-    // 递归渲染内层 childItems(经 RenderItemView)+ 子 agent 终稿。
-    expect(cardSource).toContain('item.childItems.map');
-    expect(cardSource).toContain('<RenderItemView');
-    expect(cardSource).toContain('item.summary');
-    // 颜色走主题 token(图标 textTertiary),不硬编码 hex。
-    expect(cardSource).toContain('colors.textTertiary');
-    expect(cardSource).not.toMatch(/#[0-9a-fA-F]{6}/);
+const renderer = collaborationRenderer();
+let root: Root;
+let host: HTMLDivElement;
+beforeEach(async () => {
+  Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
+  await i18n.changeLanguage('en');
+  expansion.reset();
+  host = document.createElement('div');
+  root = createRoot(host);
+});
+afterEach(() => { act(() => root.unmount()); vi.restoreAllMocks(); expansion.reset(); });
+const message = (id: string, role: string, content: unknown, rest: Record<string, unknown> = {}): RemoteMessage => ({ id, clientId: id, role, content, sessionId: 'task', toolUseId: null, agentMeta: null, createdAt: '2026-01-01T00:00:00Z', ...rest } as RemoteMessage);
+function group(key: string, childItems: MobileSubagentGroupItem['childItems'] = []): MobileSubagentGroupItem {
+  return { type: 'subagent_group', key, header: { description: key, subagentType: 'research' }, childItems, summary: key + ' summary', status: 'running' };
+}
+function click(selector: string) {
+  const button = host.querySelector<HTMLButtonElement>(selector);
+  if (!button) throw new Error('Collaboration toggle was not found: ' + selector);
+  act(() => button.click());
+}
+
+describe('subagent nesting render behavior', () => {
+  it('dispatches nested subagents through collapsed cards, revealing children and summaries on demand', () => {
+    const [normalized] = normalizeRemoteMessages([message('child', 'assistant', 'Nested response')]);
+    const child = group('child-group', [{ type: 'message', key: 'leaf', message: normalized }]);
+    act(() => root.render(createElement(renderer.RenderItemView, { item: group('parent-group', [child]), actions: { screenWidth: 320 } })));
+    expect(host.querySelector('button')?.getAttribute('aria-expanded')).toBe('false');
+    expect(host.textContent).not.toContain('parent-group summary');
+    click('[data-testid="message.subagentToggle"]');
+    expect(host.textContent).toContain('parent-group summary');
+    expect(host.textContent).not.toContain('Nested response');
+    const buttons = host.querySelectorAll<HTMLButtonElement>('[data-testid="message.subagentToggle"]');
+    act(() => buttons[1].click());
+    expect(host.textContent).toContain('Nested response');
+    expect(host.textContent).toContain('child-group summary');
   });
 
-  it('guards both render-item dispatch points with an exhaustive log+skip default (compile-time exhaustiveness, no runtime throw)', () => {
-    const renderer = readFileSync(resolve(process.cwd(), 'src/session/MessageRenderer.tsx'), 'utf8');
-    const gallery = readFileSync(resolve(process.cwd(), 'src/session/messageGallery.ts'), 'utf8');
-    const helper = readFileSync(resolve(process.cwd(), 'src/session/assertNever.ts'), 'utf8');
-    // RenderItemView switch 与 messageGallery visitItem 都以 default: logUnhandledRenderItem(item) 收尾:
-    // 入参仍是 never → 给 union 加变体漏处理 → typecheck 拦下(保留 P3 编译期穷尽性);运行时 log+skip 不 throw
-    // (render/相册路径无 ErrorBoundary,不能崩整列)。
-    expect(helper).toContain('export function logUnhandledRenderItem(value: never): void');
-    expect(renderer).toContain("import { logUnhandledRenderItem } from '@/session/assertNever';");
-    expect(renderer).toContain('default:');
-    expect(renderer).toContain('logUnhandledRenderItem(item);');
-    expect(renderer).not.toContain('assertNever(item);'); // render 路径不再 throw
-    expect(gallery).toContain("import { logUnhandledRenderItem } from '@/session/assertNever';");
-    expect(gallery).toContain('logUnhandledRenderItem(item);');
+  it('logs and skips unknown render variants in both the row and gallery without throwing', () => {
+    const log = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    const unknown = { type: 'future-variant', key: 'future' } as never;
+    expect(() => act(() => root.render(createElement(renderer.RenderItemView, { item: unknown, actions: {} })))).not.toThrow();
+    expect(host.textContent).toBe('');
+    expect(collectMobileMessageGalleryImages([unknown])).toEqual([]);
+    expect(log).toHaveBeenCalledTimes(2);
+    expect(log.mock.calls.every(call => call[1] === unknown)).toBe(true);
   });
 
-  it('passes screenWidth into OrcaCollabCard and skips the foldable shell for empty body (F4 + F3)', () => {
-    const source = readFileSync(resolve(process.cwd(), 'src/session/MessageRenderer.tsx'), 'utf8');
-    const orcaStart = source.indexOf('function OrcaCollabCard(');
-    const orcaSource = source.slice(orcaStart, source.indexOf('\nfunction ', orcaStart + 1));
-    // F4:OrcaCollabCard 收 screenWidth 并透传给 CollabCardShell。
-    expect(orcaSource).toContain('screenWidth?: number');
-    expect(orcaSource).toContain('screenWidth={screenWidth}');
-    // F3:body 为空 → 静态卡(无 CollabCardShell/chevron/空 body 区);有 body 才走折叠 shell。
-    expect(orcaSource).toContain("const body = card.body && card.body.trim() ? card.body : null;");
-    expect(orcaSource).toContain('if (!body) {');
-    expect(orcaSource).toContain('styles.orcaStaticHeader');
+  it('uses a static Orca header for an empty body and responsive fold controls for a populated body', () => {
+    act(() => root.render(createElement(renderer.OrcaCollabCard, { card: { variant: 'dispatch', title: 'Dispatch', body: '  ' }, screenWidth: 320, blockKey: 'empty' })));
+    expect(host.textContent).toBe('Dispatch');
+    expect(host.querySelector('button')).toBeNull();
+    act(() => root.render(createElement(renderer.OrcaCollabCard, { card: { variant: 'dispatch', title: 'Dispatch', body: 'Body' }, screenWidth: 320, blockKey: 'body' })));
+    const compact = host.querySelector('button')!.getAttribute('data-style');
+    expect(host.textContent).not.toContain('Body');
+    click('[data-testid="message.orcaCard.dispatch"]');
+    expect(host.querySelector('[data-testid="message.orcaCardBody"]')?.textContent).toBe('Body');
+    act(() => root.render(createElement(renderer.OrcaCollabCard, { card: { variant: 'dispatch', title: 'Dispatch', body: 'Body' }, screenWidth: 800, blockKey: 'body' })));
+    expect(host.querySelector('button')!.getAttribute('data-style')).not.toBe(compact);
   });
 
-  it('shares one CollabCardShell chrome (FoldablePanel) between SubagentCard and OrcaCollabCard', () => {
-    const source = readFileSync(resolve(process.cwd(), 'src/session/MessageRenderer.tsx'), 'utf8');
-    // CollabCardShell 即 FoldablePanel(card 变体)+ Rail 的预设。
-    const shellStart = source.indexOf('function CollabCardShell(');
-    expect(shellStart).toBeGreaterThan(-1);
-    const shellSource = source.slice(shellStart, source.indexOf('\nfunction MobileSystemCard(', shellStart));
-    expect(shellSource).toContain('<FoldablePanel');
-    expect(shellSource).toContain("variant=\"card\"");
-    expect(shellSource).toContain('<Rail layout={layout}>');
-    // OrcaCollabCard 改用共享 chrome,数据路径仍是 card(message.orcaCard),且保留既有 testID。
-    const orcaStart = source.indexOf('function OrcaCollabCard(');
-    const orcaSource = source.slice(orcaStart, source.indexOf('\nfunction ', orcaStart + 1));
-    expect(orcaSource).toContain('<CollabCardShell');
-    expect(orcaSource).toContain('testID={`message.orcaCard.${card.variant}`}');
-    expect(orcaSource).toContain('testID="message.orcaCardBody"');
-    expect(orcaSource).not.toContain('styles.systemCard}'); // 不再用裸 systemCard 容器
+  it('restores a manually expanded subagent after remounting the shared fold controls', () => {
+    const item = group('remembered');
+    const show = () => createElement(renderer.SubagentCard, { item, actions: { screenWidth: 402 } });
+    act(() => root.render(show()));
+    click('[data-testid="message.subagentToggle"]');
+    expect(host.textContent).toContain('remembered summary');
+    act(() => root.render(null));
+    act(() => root.render(show()));
+    expect(host.querySelector('button')?.getAttribute('aria-expanded')).toBe('true');
+    expect(host.textContent).toContain('remembered summary');
   });
 
-  it('builds subagent_group via the parentUuid grouping path without touching shared builders', () => {
-    const model = readFileSync(resolve(process.cwd(), 'src/session/messageRenderModel.ts'), 'utf8');
-    // 无子 agent 时走原始 shared 路径(普通会话零影响),并把 live agent_task 更新接进 shared builder。
-    // 两条路径出口都套 dropSyntheticTriggerItems:合成续跑行不进渲染(隐藏 prompt 不露出)。
-    expect(model).toContain('if (!hasSubagentMessages(normalized))');
-    expect(model).toContain('return dropSyntheticTriggerItems(buildMessageRenderItems(normalized, options, taskUpdates));');
-    expect(model).toContain('buildSubagentAwareRenderItems(normalized, buildSubagentResultMeta(messages), options)');
-    // 联合类型扩为 mobile-only(shared 类型不动)。
-    expect(model).toContain("type: 'subagent_group';");
-    expect(model).toContain('| MobileSubagentGroupItem');
-    expect(model).toContain('| MobileForkOriginItem');
-    // 待发送气泡(pending_send)也是 mobile-only 的联合成员,同样不动 shared 类型。
-    expect(model).toContain('| MobilePendingSendItem;');
+  it('groups actual parentUuid messages and keeps normal messages while hiding synthetic resume input', () => {
+    const messages = [
+      message('user', 'user', 'Start'),
+      message('agent', 'tool_use', { toolName: 'Agent', toolUseId: 'agent-call', input: { description: 'Research' } }, { toolUseId: 'agent-call' }),
+      message('child', 'assistant', 'Research result', { agentMeta: { parentUuid: 'agent-call' } }),
+      message('result', 'tool_result', 'Research summary', { toolUseId: 'agent-call' }),
+      message('resume', 'user', CONTINUE_AFTER_ERROR_PROMPT, { agentMeta: { autoResume: true } }),
+    ];
+    const items = buildMobileMessageRenderItems(messages, {});
+    const nested = items.find(item => item.type === 'subagent_group');
+    expect(nested).toMatchObject({ type: 'subagent_group', summary: 'Research summary' });
+    expect(items.some(item => item.type === 'message' && item.message.body === 'Start')).toBe(true);
+    expect(items.some(item => item.type === 'message' && item.message.body === CONTINUE_AFTER_ERROR_PROMPT)).toBe(false);
+    expect(nested?.type === 'subagent_group' && nested.childItems.length).toBeGreaterThan(0);
   });
 });

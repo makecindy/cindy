@@ -5,15 +5,20 @@
  * 连了哪些来源无关；可连来源不提供那个 id 时，Send 直接禁用、只能弹「当前模型没有已
  * 连接的来源」。校准只作用于**没被显式选过**的默认值。
  */
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 
-import type { CatalogModel, ProviderView } from '@cindy/model-providers';
+import type { AgentKind, CatalogModel, ProviderView } from '@cindy/model-providers';
+
+import { resolveNewMakerDefaultTuple } from '../lib/newMakerDefaultTuple';
+import { getDraft, getDraftForPreferenceSync, setNewMakerDraftOwner } from '../state/newMakerDraft';
 
 import {
   calibrateDraftModel,
   pickConnectedModelForAgent,
   pickFirstConnectedModelForAgent,
+  resolveDraftEffectiveProviderId,
   resolveDraftSessionProviderId,
+  resolveNewTaskDefaultRoute,
   type DraftModelCalibrationInput,
 } from '../lib/draftModelCalibration';
 
@@ -795,5 +800,545 @@ describe('resolveDraftSessionProviderId', () => {
       providers: [other], agent: 'claude-code', model: 'same-model',
       explicitProviderId: 'account-a', effectiveProviderId,
     })).toBe('account-a');
+  });
+});
+
+describe('resolveNewTaskDefaultRoute(无人值守入口的新建任务默认)', () => {
+  const subscription = provider(
+    'anthropic',
+    true,
+    { 'claude-code': [model('claude-opus-5-5')] },
+    'subscription',
+  );
+  const providers = [gatewayWithoutOpus, subscription];
+
+  it('用户没选过模型:与新建任务同口径,订阅优先', () => {
+    expect(resolveNewTaskDefaultRoute({ providers, agent: 'claude-code' })).toEqual({
+      model: 'claude-opus-5-5',
+      providerId: 'anthropic',
+    });
+  });
+
+  it('用户显式选过且仍可用的模型优先,来源跟着草稿记的来源', () => {
+    expect(
+      resolveNewTaskDefaultRoute({
+        providers,
+        agent: 'claude-code',
+        draft: { model: 'claude-haiku-4-5', providerId: 'xd', chosenByUser: true },
+      }),
+    ).toEqual({ model: 'claude-haiku-4-5', providerId: 'xd' });
+  });
+
+  it('显式选过的模型已没有可用来源时,退回新建任务默认而不是落空', () => {
+    expect(
+      resolveNewTaskDefaultRoute({
+        providers,
+        agent: 'claude-code',
+        draft: { model: 'claude-opus-4-8', providerId: null, chosenByUser: true },
+      }),
+    ).toEqual({ model: 'claude-opus-5-5', providerId: 'anthropic' });
+  });
+
+  it('指定来源时只在该来源内挑', () => {
+    expect(
+      resolveNewTaskDefaultRoute({ providers, agent: 'claude-code', requiredProviderId: 'xd' }),
+    ).toEqual({ model: 'claude-sonnet-5', providerId: 'xd' });
+    expect(
+      resolveNewTaskDefaultRoute({
+        providers,
+        agent: 'claude-code',
+        requiredProviderId: 'not-connected',
+      }),
+    ).toBeNull();
+  });
+
+  it('草稿记的来源挑不出模型时换别的来源', () => {
+    expect(
+      resolveNewTaskDefaultRoute({
+        providers: [gatewayWithoutOpus, connectedButEmpty],
+        agent: 'claude-code',
+        draft: { model: '', providerId: 'anthropic', chosenByUser: false },
+      }),
+    ).toEqual({ model: 'claude-sonnet-5', providerId: 'xd' });
+  });
+
+  it('清单发现失败的来源:没有偏好时跳过,草稿记着该来源时保留', () => {
+    const failing = {
+      ...provider('anthropic', true, { 'claude-code': [model('claude-opus-5-5')] }, 'subscription'),
+      modelDiscoveryFailure: { kind: 'unauthorized' },
+    } as unknown as ProviderView;
+    expect(
+      resolveNewTaskDefaultRoute({ providers: [gatewayWithoutOpus, failing], agent: 'claude-code' }),
+    ).toEqual({ model: 'claude-sonnet-5', providerId: 'xd' });
+    expect(
+      resolveNewTaskDefaultRoute({
+        providers: [gatewayWithoutOpus, failing],
+        agent: 'claude-code',
+        draft: { providerId: 'anthropic', chosenByUser: false },
+      }),
+    ).toEqual({ model: 'claude-opus-5-5', providerId: 'anthropic' });
+  });
+
+  it('一个可用来源都没有 → null,不编造型号', () => {
+    expect(
+      resolveNewTaskDefaultRoute({ providers: [disconnectedAnthropic], agent: 'claude-code' }),
+    ).toBeNull();
+  });
+});
+
+describe('factory defaults survive send-time calibration', () => {
+  it('keeps unattended Codex defaults on visible OpenAI fallback before xAI', () => {
+    const oldSol = model('gpt-6-sol');
+    const openai = provider('openai', true, { codex: [oldSol] }, 'subscription');
+    const xai = provider('xai', true, { codex: [model('xai/grok-4.6')] }, 'subscription');
+    const providers = [xai, openai];
+    const startup = resolveNewMakerDefaultTuple({ providers, providersLoading: false,
+      availableAgents: new Set(['codex']), availableAgentsLoaded: true,
+      isModelEnabled: (_agent, _id, m) => m.defaultEnabled !== false });
+    expect(startup).toMatchObject({ model: 'gpt-6-sol', providerId: 'openai' });
+    expect(resolveNewTaskDefaultRoute({ providers, agent: 'codex' }))
+      .toEqual({ model: 'gpt-6-sol', providerId: 'openai' });
+    expect(resolveNewTaskDefaultRoute({ providers, agent: 'codex',
+      draft: { model: 'xai/grok-4.6', providerId: 'xai', chosenByUser: true } }))
+      .toEqual({ model: 'xai/grok-4.6', providerId: 'xai' });
+    oldSol.defaultEnabled = false;
+    expect(resolveNewTaskDefaultRoute({ providers, agent: 'codex' }))
+      .toEqual({ model: 'xai/grok-4.6', providerId: 'xai' });
+  });
+
+  it.each([null, 'openai'])('keeps startup visibility switches during calibration (source %s)', preferredProviderId => {
+    const openai = provider('openai', true, { codex: [model('gpt-6.1-sol'), model('gpt-6-astra')] }, 'subscription');
+    const isModelEnabled = (agent: AgentKind, providerId: string, candidate: { id: string }) =>
+      !(agent === 'codex' && providerId === 'openai' && candidate.id === 'gpt-6.1-sol');
+    const startup = resolveNewMakerDefaultTuple({ providers: [openai], providersLoading: false,
+      availableAgents: new Set(['codex']), availableAgentsLoaded: true, isModelEnabled });
+    expect(startup).toMatchObject({ model: 'gpt-6-astra', providerId: 'openai' });
+    const input = { providers: [openai], agent: 'codex' as const, model: startup!.model,
+      chosenByUser: false, preferredProviderId, providersLoading: false };
+    expect(calibrateDraftModel({ ...input, isModelEnabled }))
+      .toEqual({ model: 'gpt-6-astra', providerId: 'openai' });
+    // Reopening the switch makes the factory recommendation eligible again.
+    expect(calibrateDraftModel({ ...input, isModelEnabled: () => true }))
+      .toEqual({ model: 'gpt-6.1-sol', providerId: 'openai' });
+    // A hidden model explicitly selected by the user still wins.
+    expect(calibrateDraftModel({ ...input, model: 'gpt-6.1-sol', chosenByUser: true, isModelEnabled }))
+      .toEqual({ model: 'gpt-6.1-sol', providerId: null });
+    // Hiding every model must not disable the existing usable-route fallback.
+    expect(calibrateDraftModel({ ...input, isModelEnabled: () => false }))
+      .toEqual({ model: 'gpt-6-astra', providerId: 'openai' });
+  });
+
+  const gateway = provider('xd', true, { pi: [
+    model('z-ai/glm-5.3-flash', { newSessionDefault: ['pi'] }), model('auto'),
+  ] });
+  it.each([null, 'xd'])('keeps Cindy Auto despite old default markers (source %s)', preferredProviderId => {
+    expect(calibrateDraftModel({ providers: [gateway], agent: 'pi', model: 'auto',
+      chosenByUser: false, preferredProviderId, providersLoading: false }))
+      .toEqual({ model: 'auto', providerId: 'xd' });
+    expect(resolveNewTaskDefaultRoute({ providers: [gateway], agent: 'pi',
+      draft: { model: 'auto', providerId: preferredProviderId, chosenByUser: false } }))
+      .toEqual({ model: 'auto', providerId: 'xd' });
+  });
+  it('preserves explicit user models and follows Auto without a renderer snapshot', () => {
+    expect(calibrateDraftModel({ providers: [gateway], agent: 'pi', model: 'z-ai/glm-5.3-flash',
+      chosenByUser: true, preferredProviderId: 'xd', providersLoading: false }))
+      .toEqual({ model: 'z-ai/glm-5.3-flash', providerId: null });
+    expect(resolveNewTaskDefaultRoute({ providers: [gateway], agent: 'pi' }))
+      .toEqual({ model: 'auto', providerId: 'xd' });
+  });
+});
+
+describe('模型组 Auto：服务端决定默认与来源', () => {
+  const pool = (
+    id: string,
+    models: CatalogModel[],
+    source: ProviderView['source'] = 'organization',
+  ) => ({ ...provider(id, true, { pi: models }), source }) as ProviderView;
+  const groupAuto = (marked: boolean) =>
+    model('auto/group-1', marked ? { newSessionDefault: ['pi'] } : {});
+
+  // unit：旧服务端下的普通号池草稿不能被跨来源校准改成平台计费。
+  // 既有用例只覆盖组 Auto 搬迁，未覆盖没有合格组默认的普通草稿。
+  const oldPoolDraft = { model: 'pool-model', providerId: 'org-pool', chosenByUser: false };
+  const expectedPoolRoute = { model: 'pool-model', providerId: 'org-pool' };
+  const routesForDraft = (providers: ProviderView[], draft = oldPoolDraft) => ({
+    calibration: calibrateDraftModel({
+      providers,
+      agent: 'pi',
+      model: draft.model,
+      chosenByUser: draft.chosenByUser,
+      preferredProviderId: draft.providerId,
+      providersLoading: false,
+    }),
+    unattended: resolveNewTaskDefaultRoute({ providers, agent: 'pi', draft }),
+  });
+
+  it('旧目录只有预设 auto 时，两个入口都保留未手选的号池草稿来源', () => {
+    const providers = [
+      provider('xd', true, { pi: [model('auto', { newSessionDefault: ['pi'] })] }),
+      pool('org-pool', [model('pool-model')]),
+    ];
+    expect(routesForDraft(providers)).toEqual({
+      calibration: expectedPoolRoute,
+      unattended: expectedPoolRoute,
+    });
+  });
+
+  it.each([
+    ['未标默认', {}, {}],
+    ['只标其它引擎', { newSessionDefault: ['codex'] }, {}],
+    ['模型停用', { newSessionDefault: ['pi'], disabled: true }, {}],
+    ['模型退役', { newSessionDefault: ['pi'], status: 'retired' }, {}],
+    ['默认不可见', { newSessionDefault: ['pi'], defaultEnabled: false }, {}],
+    ['不可用于聊天', { newSessionDefault: ['pi'], mode: 'image_generation' }, {}],
+    ['需要付费', { newSessionDefault: ['pi'], availability: 'requires_payment' }, {}],
+    ['来源未连接', { newSessionDefault: ['pi'] }, { connected: false }],
+    ['来源停用', { newSessionDefault: ['pi'] }, { suspended: true }],
+  ] satisfies Array<[string, Partial<CatalogModel>, Partial<ProviderView>]>)(
+    '%s的组 Auto 不授权跨来源校准',
+    (_label, modelPatch, providerPatch) => {
+      const providers = [
+        provider('xd', true, { pi: [model('auto')] }),
+        pool('org-pool', [model('pool-model')]),
+        { ...pool('org-other', [model('auto/group-1', modelPatch)]), ...providerPatch },
+      ];
+      expect(routesForDraft(providers)).toEqual({
+        calibration: expectedPoolRoute,
+        unattended: expectedPoolRoute,
+      });
+    },
+  );
+
+  it('本地隐藏的组 Auto 不授权校准，用户重新显示后才跟随其默认', () => {
+    const providers = [
+      provider('xd', true, { pi: [model('auto'), groupAuto(true)] }),
+      pool('org-pool', [model('pool-model')]),
+    ];
+    for (const visible of [false, true]) {
+      expect(
+        calibrateDraftModel({
+          providers,
+          agent: 'pi',
+          ...oldPoolDraft,
+          preferredProviderId: 'org-pool',
+          providersLoading: false,
+          isModelEnabled: (_agent, _provider, candidate) =>
+            candidate.id !== 'auto/group-1' || visible,
+        }),
+      ).toEqual(visible ? { model: 'auto/group-1', providerId: 'xd' } : expectedPoolRoute);
+    }
+  });
+
+  it.each([false, true])(
+    '平台组默认生效，双来源标记=%s 时仍按平台与 sortOrder 取舍',
+    (poolMarked) => {
+      const providers = [
+        pool('org-pool', [model('pool-model'), ...(poolMarked ? [groupAuto(true)] : [])]),
+        provider('xd', true, {
+          pi: [
+            model('auto/platform-later', { newSessionDefault: ['pi'], sortOrder: 20 }),
+            model('auto/platform-first', { newSessionDefault: ['pi'], sortOrder: 10 }),
+            model('auto'),
+          ],
+        }),
+      ];
+      const expected = { model: 'auto/platform-first', providerId: 'xd' };
+      expect(routesForDraft(providers)).toEqual({ calibration: expected, unattended: expected });
+      expect(
+        resolveNewTaskDefaultRoute({
+          providers,
+          agent: 'pi',
+          draft: oldPoolDraft,
+          requiredProviderId: 'org-pool',
+        }),
+      ).toEqual(poolMarked ? { model: 'auto/group-1', providerId: 'org-pool' } : expectedPoolRoute);
+    },
+  );
+
+  it('草稿已记着组 Auto 时，撤销组默认仍能跨来源回退到预设 auto', () => {
+    const providers = [
+      provider('xd', true, { pi: [model('auto')] }),
+      pool('org-pool', [model('pool-model')]),
+    ];
+    const expected = { model: 'auto', providerId: 'xd' };
+    expect(routesForDraft(providers, { ...oldPoolDraft, model: 'auto/group-removed' })).toEqual({
+      calibration: expected,
+      unattended: expected,
+    });
+  });
+
+  it.each(['缺少手选标记', '空手选标记'])(
+    '旧版持久化草稿（%s）经过真实读取和规范化后仍保留号池',
+    (snapshotKind) => {
+      // 使用账号命名空间切换触发 loadFromStorage/sanitize；同一模块只加载一次。
+      const owner = `legacy-pool-${snapshotKind}`;
+      const key = `xdt:newMakerDraft:v1:${encodeURIComponent(owner)}`;
+      const raw = JSON.stringify({
+        vendor: 'pi',
+        lastByVendor: { pi: { model: 'pool-model', providerId: 'org-pool' } },
+        ...(snapshotKind === '空手选标记' ? { modelChosenByVendor: {} } : {}),
+      });
+      vi.stubGlobal('window', {
+        localStorage: { getItem: (name: string) => (name === key ? raw : null) },
+      });
+      try {
+        setNewMakerDraftOwner(owner);
+        const providers = [
+          provider('xd', true, { pi: [model('auto')] }),
+          pool('org-pool', [model('pool-model')]),
+        ];
+        for (const stored of [getDraft(), getDraftForPreferenceSync()]) {
+          expect(stored.modelChosenByVendor.pi).toBeUndefined();
+          expect(
+            routesForDraft(providers, {
+              model: stored.lastByVendor.pi.model,
+              providerId: stored.lastByVendor.pi.providerId!,
+              chosenByUser: stored.modelChosenByVendor.pi === true,
+            }),
+          ).toEqual({ calibration: expectedPoolRoute, unattended: expectedPoolRoute });
+        }
+      } finally {
+        setNewMakerDraftOwner(null);
+        vi.unstubAllGlobals();
+      }
+    },
+  );
+
+  it('上次自动落点不钉住默认：服务端改标号池里的组 Auto 后，校准与无人值守入口同步跟随', () => {
+    const gateway = provider('xd', true, { pi: [model('auto')] });
+    const byok = pool('org-pool', [model('pool-model'), groupAuto(true)]);
+    const providers = [gateway, byok];
+    const expected = { model: 'auto/group-1', providerId: 'org-pool' };
+    expect(
+      calibrateDraftModel({
+        providers,
+        agent: 'pi',
+        model: 'auto',
+        chosenByUser: false,
+        preferredProviderId: 'xd',
+        providersLoading: false,
+      }),
+    ).toEqual(expected);
+    expect(
+      resolveNewTaskDefaultRoute({
+        providers,
+        agent: 'pi',
+        draft: { model: 'auto', providerId: 'xd', chosenByUser: false },
+      }),
+    ).toEqual(expected);
+    expect(resolveNewTaskDefaultRoute({ providers, agent: 'pi' })).toEqual(expected);
+  });
+
+  it('组 Auto 从号池挪到 Cindy AI 后，按新来源继续，不退成号池里的其它模型', () => {
+    const gateway = provider('xd', true, { pi: [model('auto'), groupAuto(true)] });
+    const byok = pool('org-pool', [model('pool-model')]);
+    const providers = [gateway, byok];
+    const expected = { model: 'auto/group-1', providerId: 'xd' };
+    expect(
+      calibrateDraftModel({
+        providers,
+        agent: 'pi',
+        model: 'auto/group-1',
+        chosenByUser: false,
+        preferredProviderId: 'org-pool',
+        providersLoading: false,
+      }),
+    ).toEqual(expected);
+    expect(
+      resolveNewTaskDefaultRoute({
+        providers,
+        agent: 'pi',
+        draft: { model: 'auto/group-1', providerId: 'org-pool', chosenByUser: false },
+      }),
+    ).toEqual(expected);
+    // 用户手动选的 Auto 同样按 ID 认：记住的号池已不提供它，改用当前提供它的 Cindy AI。
+    expect(
+      resolveNewTaskDefaultRoute({
+        providers,
+        agent: 'pi',
+        draft: { model: 'auto/group-1', providerId: 'org-pool', chosenByUser: true },
+      }),
+    ).toEqual(expected);
+  });
+
+  it('用户自己接的供应商不参与 Cindy 来源之间的改道', () => {
+    const gateway = provider('xd', true, { pi: [model('auto'), groupAuto(true)] });
+    const custom = pool('custom-litellm', [model('custom-model')], 'user');
+    expect(
+      calibrateDraftModel({
+        providers: [gateway, custom],
+        agent: 'pi',
+        model: 'custom-model',
+        chosenByUser: false,
+        preferredProviderId: 'custom-litellm',
+        providersLoading: false,
+      }),
+    ).toEqual({ model: 'custom-model', providerId: 'custom-litellm' });
+  });
+
+  it('用户手动选过的模型不被服务端默认覆盖', () => {
+    const gateway = provider('xd', true, { pi: [model('auto'), groupAuto(true)] });
+    const byok = pool('org-pool', [model('pool-model')]);
+    const providers = [gateway, byok];
+    expect(
+      calibrateDraftModel({
+        providers,
+        agent: 'pi',
+        model: 'pool-model',
+        chosenByUser: true,
+        preferredProviderId: 'org-pool',
+        providersLoading: false,
+      }),
+    ).toEqual({ model: 'pool-model', providerId: null });
+    expect(
+      resolveNewTaskDefaultRoute({
+        providers,
+        agent: 'pi',
+        draft: { model: 'pool-model', providerId: 'org-pool', chosenByUser: true },
+      }),
+    ).toEqual({ model: 'pool-model', providerId: 'org-pool' });
+  });
+
+  it('Auto 从两份目录都消失：不崩，落到记着的来源里仍可用的模型', () => {
+    const gateway = provider('xd', true, { pi: [model('z-ai/glm-5.3-flash')] });
+    const byok = pool('org-pool', [model('pool-model')]);
+    const providers = [gateway, byok];
+    for (const chosenByUser of [false, true]) {
+      expect(
+        resolveNewTaskDefaultRoute({
+          providers,
+          agent: 'pi',
+          draft: { model: 'auto/group-1', providerId: 'org-pool', chosenByUser },
+        }),
+      ).toEqual({ model: 'pool-model', providerId: 'org-pool' });
+    }
+    expect(
+      calibrateDraftModel({
+        providers,
+        agent: 'pi',
+        model: 'auto/group-1',
+        chosenByUser: false,
+        preferredProviderId: 'org-pool',
+        providersLoading: false,
+      }),
+    ).toEqual({ model: 'pool-model', providerId: 'org-pool' });
+  });
+
+  it('回归：订阅、自定义供应商、个人用户与预设 auto 的默认不变', () => {
+    // 个人用户：目录标的是 GLM，默认仍是预设 auto，来源 Cindy AI。
+    const personal = provider('xd', true, {
+      pi: [model('z-ai/glm-5.3-flash', { newSessionDefault: ['pi'] }), model('auto')],
+    });
+    expect(resolveNewTaskDefaultRoute({ providers: [personal], agent: 'pi' })).toEqual({
+      model: 'auto',
+      providerId: 'xd',
+    });
+    // 订阅：Codex 订阅在场时 Codex 默认仍是订阅里的 Sol，不受 Pi 侧 Auto 规则影响。
+    const openai = provider('openai', true, { codex: [model('gpt-6.1-sol')] }, 'subscription');
+    expect(resolveNewTaskDefaultRoute({ providers: [openai, personal], agent: 'codex' })).toEqual({
+      model: 'gpt-6.1-sol',
+      providerId: 'openai',
+    });
+    // 自定义供应商：记着的自定义来源与模型原样保留。
+    const custom = pool('custom-litellm', [model('custom-model')], 'user');
+    expect(
+      resolveNewTaskDefaultRoute({
+        providers: [personal, custom],
+        agent: 'pi',
+        draft: { model: 'custom-model', providerId: 'custom-litellm', chosenByUser: true },
+      }),
+    ).toEqual({ model: 'custom-model', providerId: 'custom-litellm' });
+  });
+
+  it('新建任务提交时，Auto 已挪走的旧来源换成解析出的新来源；其它显式来源原样提交', () => {
+    const gateway = provider('xd', true, { pi: [model('auto'), groupAuto(true)] });
+    const byok = pool('org-pool', [model('pool-model')]);
+    const custom = pool('custom-litellm', [model('custom-model')], 'user');
+    const providers = [gateway, byok, custom];
+    expect(
+      resolveDraftSessionProviderId({
+        providers,
+        agent: 'pi',
+        model: 'auto/group-1',
+        explicitProviderId: 'org-pool',
+        effectiveProviderId: 'xd',
+      }),
+    ).toBe('xd');
+    expect(
+      resolveDraftSessionProviderId({
+        providers,
+        agent: 'pi',
+        model: 'auto/group-1',
+        explicitProviderId: 'org-pool',
+        effectiveProviderId: null,
+      }),
+    ).toBe('org-pool');
+    expect(
+      resolveDraftSessionProviderId({
+        providers,
+        agent: 'pi',
+        model: 'auto/group-1',
+        explicitProviderId: 'custom-litellm',
+        effectiveProviderId: 'xd',
+      }),
+    ).toBe('custom-litellm');
+  });
+});
+
+describe('resolveDraftEffectiveProviderId', () => {
+  const sonnet = model('claude-sonnet-5-5');
+  const anthropic = provider('anthropic', true, { 'claude-code': [sonnet] }, 'subscription');
+  const xd = provider('xd', true, { 'claude-code': [sonnet] }, 'managed');
+
+  it('草稿没存来源时按校准结果(订阅优先)解析，而不是按模型 id 直接取原生默认的 XD', () => {
+    const args = {
+      providers: [xd, anthropic],
+      agent: 'claude-code' as AgentKind,
+      model: 'claude-sonnet-5-5',
+      providerId: null,
+      chosenByUser: false,
+    };
+    expect(resolveDraftEffectiveProviderId(args)).toBe('anthropic');
+  });
+
+  it('草稿存了仍然可用的来源时原样返回', () => {
+    expect(
+      resolveDraftEffectiveProviderId({
+        providers: [xd, anthropic],
+        agent: 'claude-code',
+        model: 'claude-sonnet-5-5',
+        providerId: 'xd',
+        chosenByUser: true,
+      }),
+    ).toBe('xd');
+  });
+
+  it('用户隐藏了出厂推荐模型时跟随新建页的可见性谓词，落到下一个可用来源', () => {
+    const base = {
+      providers: [
+        provider('anthropic', true, { 'claude-code': [model('claude-opus-5-5')] }, 'subscription'),
+        provider('xai', true, { 'claude-code': [model('grok-4.6')] }, 'subscription'),
+      ],
+      agent: 'claude-code' as AgentKind,
+      model: 'claude-opus-5-5',
+      providerId: null,
+      chosenByUser: false,
+    };
+    const hideOpus = (_agent: AgentKind, _providerId: string, m: { id: string }) =>
+      m.id !== 'claude-opus-5-5';
+    expect(resolveDraftEffectiveProviderId(base)).toBe('anthropic');
+    expect(resolveDraftEffectiveProviderId({ ...base, isModelEnabled: hideOpus })).toBe('xai');
+  });
+
+  it('没有任何来源提供该模型时返回 null', () => {
+    expect(
+      resolveDraftEffectiveProviderId({
+        providers: [],
+        agent: 'claude-code',
+        model: 'claude-sonnet-5-5',
+        providerId: null,
+        chosenByUser: false,
+      }),
+    ).toBeNull();
   });
 });

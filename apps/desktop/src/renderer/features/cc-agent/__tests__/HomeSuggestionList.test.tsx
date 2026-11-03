@@ -72,4 +72,70 @@ describe('HomeSuggestionList', () => {
     rerender(<HomeSuggestionList narrow={false} onSelect={onSelect} />);
     expect(ids().some((id) => seen.includes(id))).toBe(false);
   });
+
+  it('previews only the hovered suggestion and clears it on leave, click and unmount', () => {
+    const onSelect = vi.fn();
+    const onPreviewChange = vi.fn();
+    const { unmount } = render(
+      <HomeSuggestionList narrow={false} onSelect={onSelect} onPreviewChange={onPreviewChange} />,
+    );
+    const row = screen.getAllByTestId(/^home-suggestion-/)[0];
+    const id = row.getAttribute('data-testid')!.replace('home-suggestion-', '');
+
+    fireEvent.mouseEnter(row);
+    expect(onPreviewChange).toHaveBeenLastCalledWith(
+      expect.objectContaining({ id, prompt: `newChat.homeSuggestions.${id}.prompt` }),
+    );
+    fireEvent.mouseLeave(row);
+    expect(onPreviewChange).toHaveBeenLastCalledWith(null);
+
+    // Keyboard focus alone does not drive the visual preview (the row description covers it).
+    fireEvent.focus(row);
+    expect(onPreviewChange).toHaveBeenLastCalledWith(null);
+    fireEvent.mouseEnter(row);
+    fireEvent.click(row);
+    expect(onPreviewChange).toHaveBeenLastCalledWith(null);
+    expect(onSelect).toHaveBeenCalledWith(id);
+
+    fireEvent.mouseEnter(row);
+    onPreviewChange.mockClear();
+    unmount();
+    expect(onPreviewChange).toHaveBeenCalledWith(null);
+  });
+
+  it('exposes each full prompt to assistive technology as the row description', () => {
+    render(<HomeSuggestionList narrow={false} onSelect={vi.fn()} />);
+    const row = screen.getAllByTestId(/^home-suggestion-/)[0];
+    const id = row.getAttribute('data-testid')!.replace('home-suggestion-', '');
+    const description = document.getElementById(row.getAttribute('aria-describedby')!);
+    expect(description?.textContent).toBe(`newChat.homeSuggestions.${id}.prompt`);
+    // The description lives outside the button so it never joins the accessible name.
+    expect(row.contains(description)).toBe(false);
+  });
+
+  it('clears the preview when the window narrows past the hovered row', () => {
+    const onPreviewChange = vi.fn();
+    const { rerender } = render(
+      <HomeSuggestionList narrow={false} onSelect={vi.fn()} onPreviewChange={onPreviewChange} />,
+    );
+    const rows = screen.getAllByTestId(/^home-suggestion-/);
+    fireEvent.mouseEnter(rows[3]);
+    onPreviewChange.mockClear();
+    rerender(<HomeSuggestionList narrow onSelect={vi.fn()} onPreviewChange={onPreviewChange} />);
+    expect(onPreviewChange).toHaveBeenLastCalledWith(null);
+  });
+
+  it('describes each row with the exact text a click will fill, not the raw prompt', () => {
+    render(
+      <HomeSuggestionList
+        narrow={false}
+        onSelect={vi.fn()}
+        composerTextFor={(item) => `$mail ${item.prompt}`}
+      />,
+    );
+    const row = screen.getAllByTestId(/^home-suggestion-/)[0];
+    const id = row.getAttribute('data-testid')!.replace('home-suggestion-', '');
+    const description = document.getElementById(row.getAttribute('aria-describedby')!);
+    expect(description?.textContent).toBe(`$mail newChat.homeSuggestions.${id}.prompt`);
+  });
 });

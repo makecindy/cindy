@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { buildMessageRenderItems } from '@cindy/maker-shared/message-render';
+import { CONTINUE_AFTER_ERROR_PROMPT } from '@cindy/maker-shared/synthetic-trigger';
 import { normalizeRemoteMessages } from '@/session/messageNormalize';
 import {
   buildMobileMessageRenderItems,
@@ -50,6 +51,11 @@ function agentResult(toolUseId: string, content: string, createdAt?: string): Re
   return msg({ role: 'tool_result', content, toolUseId, createdAt });
 }
 
+/** 显式 id / toolUseId 的 tool_result:模拟邻接的、非子任务自己的工具结果。 */
+function toolResult(id: string, toolUseId: string, content: string, createdAt?: string): RemoteMessage {
+  return msg({ id, role: 'tool_result', content, toolUseId, createdAt });
+}
+
 function subagentGroups(items: readonly MobileMessageRenderItem[]): MobileSubagentGroupItem[] {
   return items.filter((item): item is MobileSubagentGroupItem => item.type === 'subagent_group');
 }
@@ -70,6 +76,63 @@ function collectSourceIds(items: readonly MobileMessageRenderItem[]): string[] {
 }
 
 describe('subagent grouping (buildMobileMessageRenderItems)', () => {
+  it.each([
+    { streaming: false, autoResume: false },
+    { streaming: true, autoResume: false },
+    { streaming: false, autoResume: true },
+    { streaming: true, autoResume: true },
+  ])('folds progress across Agent segments on recovery (%j)', ({ streaming, autoResume }) => {
+    seq = 0;
+    const messages = [
+      msg({ id: 'u', role: 'user', content: 'go' }),
+      msg({ id: 'progress', role: 'assistant', content: 'Starting research' }),
+      agentToolUse('A1'),
+      msg({ id: 'between', role: 'assistant', content: 'Checking another source', agentMeta: { turnCompleted: true } }),
+      agentToolUse('A2'),
+      msg({ id: 'error', role: 'error', content: 'Interrupted' }),
+      msg({ id: 'resume', role: 'user', content: CONTINUE_AFTER_ERROR_PROMPT, agentMeta: autoResume ? { autoResume: true } : null }),
+      msg({ id: 'active', role: 'assistant', content: 'Continuing' }),
+    ].map((message, index) => ({ ...message, createdAt: new Date(Date.UTC(2026, 0, 1, 0, 0, index)).toISOString() }));
+    const items = buildMobileMessageRenderItems(messages, { isSessionStreaming: streaming });
+    expect(items.map(item => item.type)).toEqual([
+      'message', 'work_group', 'subagent_group', 'work_group', 'subagent_group', 'message', 'message',
+      ...(autoResume ? ['message'] : []),
+    ]);
+    for (const [index, id] of [[1, 'progress'], [3, 'between']] as const) {
+      const item = items[index];
+      expect(item.type).toBe('work_group');
+      if (item.type !== 'work_group') throw new Error('Expected folded progress');
+      expect(item.isStreaming).toBe(false);
+      expect(collectSourceIds(item.children)).toEqual([id]);
+    }
+    expect(collectSourceIds(items)).toEqual(['u', 'progress', 'between', 'error', ...(autoResume ? ['resume'] : []), 'active']);
+
+    const steer = msg({ id: 'steer', role: 'user', content: 'Check this too', agentMeta: { delivery: 'steer' }, createdAt: '2026-01-01T00:00:02.500Z' });
+    const withSteer = [...messages.slice(0, 3), steer, ...messages.slice(3)];
+    const steered = buildMobileMessageRenderItems(withSteer, { isSessionStreaming: streaming });
+    expect(steered.map(item => item.type)).toEqual([
+      'message', 'work_group', 'subagent_group', 'message', 'work_group', 'subagent_group', 'message',
+      ...(autoResume ? ['message'] : []), 'message',
+    ]);
+    expect(collectSourceIds(steered)).toEqual(['u', 'progress', 'steer', 'between', 'error', ...(autoResume ? ['resume'] : []), 'active']);
+
+    // A borrowed recovery must not reach an earlier disconnected history window.
+    const gapped = messages.map((message, index) => index < 2 ? message : {
+      ...message, createdAt: new Date(Date.parse(message.createdAt!) + 48 * 60 * 60_000).toISOString(),
+    });
+    const afterGap = buildMobileMessageRenderItems(gapped, { isSessionStreaming: streaming });
+    expect(afterGap[1].type).toBe('message');
+    expect(afterGap[3].type).toBe('work_group');
+    expect(collectSourceIds(afterGap)).toEqual(collectSourceIds(items));
+
+    // A real user turn blocks recovery from affecting earlier Agent segments.
+    const ordinaryBoundary = msg({ id: 'other', role: 'user', content: 'Another request', createdAt: '2026-01-01T00:00:02.500Z' });
+    messages.splice(3, 0, ordinaryBoundary);
+    const separated = buildMobileMessageRenderItems(messages, { isSessionStreaming: streaming });
+    expect(separated[1].type).toBe('message');
+    expect(collectSourceIds(separated).filter(id => id === 'progress')).toEqual(['progress']);
+  });
+
   it.each([1, 2, 7])('preserves history paragraph order through %s nesting levels and fallback', (depth) => {
     const parents = Array.from({ length: depth }, (_, index) => agentToolUse(`order-A${index}`, {
       parentUuid: index === 0 ? undefined : `order-A${index - 1}`,
@@ -155,6 +218,45 @@ describe('subagent grouping (buildMobileMessageRenderItems)', () => {
     expect(groups[0].status).toBe('completed');
   });
 
+  it('历史 Agent 缺 toolUseId 时,从已配对的 secondaryBody 恢复 failed 终态', () => {
+    // buildSubagentResultMeta 对无 toolUseId 的结果没有条目;归一化层经 adjacency
+    // 把 tool_result 配对进 secondaryBody。若这里不读 secondaryBody,重连后同一失败
+    // 会被显示成 completed(streaming 时为 running)而不是承诺的 failed。
+    const items = buildMobileMessageRenderItems([
+      msg({
+        id: 'legacy-agent',
+        role: 'tool_use',
+        content: { toolUseId: null, toolName: 'Agent', input: { description: 'legacy' } },
+        toolUseId: null,
+        createdAt: '2026-01-01T00:00:01.000Z',
+      }),
+      msg({
+        id: 'legacy-result',
+        role: 'tool_result',
+        content: '<tool_use_error>legacy boom</tool_use_error>',
+        toolUseId: null,
+        createdAt: '2026-01-01T00:00:02.000Z',
+      }),
+    ]);
+    const groups = subagentGroups(items);
+    expect(groups).toHaveLength(1);
+    expect(groups[0].status).toBe('failed');
+  });
+
+  it('带 toolUseId 的在跑 Agent 即使有邻接 secondaryBody 也不提前收口', () => {
+    // 带 ID 的 Agent 尚无自身 result,归一化层可能把下一行其他工具的 result 经
+    // adjacency 临时借进 secondaryBody —— 该借用非权威,不得让任务提前 completed/
+    // failed(尤其邻接文本以 <tool_use_error> 开头时不能误判 failed)。
+    const items = buildMobileMessageRenderItems([
+      agentToolUse('A1', { subagentType: 'Explore', createdAt: '2026-01-01T00:00:01.000Z' }),
+      childTool('Bash', 'A1', '2026-01-01T00:00:02.000Z'),
+      toolResult('other-1', 'tu-other', '<tool_use_error>not the agent result</tool_use_error>'),
+    ], { isSessionStreaming: true });
+    const groups = subagentGroups(items);
+    expect(groups).toHaveLength(1);
+    expect(groups[0].status).toBe('running');
+  });
+
   it('marks status running when no closing tool_result and session is streaming', () => {
     const items = buildMobileMessageRenderItems([
       agentToolUse('A1', { subagentType: 'Explore', createdAt: '2026-01-01T00:00:01.000Z' }),
@@ -201,6 +303,53 @@ describe('subagent grouping (buildMobileMessageRenderItems)', () => {
       expect(subagentGroups(items)[0].status).toBe(status);
     },
   );
+
+  it('restores failed for a replayed protocol error result (<tool_use_error>)', () => {
+    // 回归(#3024):Mobile 重连/历史回放只有配对的 `<tool_use_error>` 结果、无 agentTaskStatus 时,
+    // subagent_group 曾只凭"存在 result"判 completed,同一启动失败在 Desktop 显示 failed、Mobile 显示
+    // completed(跨端终态不一致)。现与 Desktop deriveAgentTaskStatus 同口径恢复 failed。
+    const items = buildMobileMessageRenderItems([
+      agentToolUse('A1', { subagentType: 'Explore', createdAt: '2026-01-01T00:00:01.000Z' }),
+      agentResult('A1', '<tool_use_error>Agent launch failed: model unavailable</tool_use_error>', '2026-01-01T00:00:02.000Z'),
+    ]);
+    const group = subagentGroups(items)[0];
+    expect(group.status).toBe('failed');
+  });
+
+  it('keeps completed when only a nested block array result mentions tool_use_error mid-text (prefix match only)', () => {
+    // 防误报:只有以 `<tool_use_error>` 开头才是协议错误;正文中段出现不算(block 数组形态)。
+    const items = buildMobileMessageRenderItems([
+      agentToolUse('A1', { subagentType: 'Explore', createdAt: '2026-01-01T00:00:01.000Z' }),
+      msg({
+        role: 'tool_result',
+        toolUseId: 'A1',
+        createdAt: '2026-01-01T00:00:02.000Z',
+        content: [{ type: 'text', text: '总结:<tool_use_error> 是 SDK 的错误标记格式,本次任务已完整解析并修复它。' }],
+      }),
+    ]);
+    expect(subagentGroups(items)[0].status).toBe('completed');
+  });
+
+  it('still prefers the persisted terminal status over the protocol error fallback', () => {
+    // persisted agentTaskStatus 优先级不变:即使结果以 <tool_use_error> 开头,
+    // 已持久化的终态(如 failed→重试后 succeeded 场景的 stopped)不被覆盖。
+    const items = buildMobileMessageRenderItems([
+      msg({
+        id: 'agent',
+        role: 'tool_use',
+        toolUseId: 'toolu-agent',
+        content: { toolUseId: 'toolu-agent', toolName: 'Agent', input: { description: 'Retry' } },
+        agentMeta: { agentTaskStatus: 'stopped' },
+      }),
+      msg({
+        id: 'result',
+        role: 'tool_result',
+        toolUseId: 'toolu-agent',
+        content: '<tool_use_error>stale error from earlier attempt</tool_use_error>',
+      }),
+    ]);
+    expect(subagentGroups(items)[0].status).toBe('stopped');
+  });
 
   it('leaves an ordinary session (no Agent / no parentUuid) byte-identical to the shared builder', () => {
     const messages = [

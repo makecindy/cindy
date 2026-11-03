@@ -11,6 +11,7 @@ import { requireObject, requireString, throwIpcError } from '../utils/ipcValidat
 import type { IpcHandlerRegistry } from './ipcHandlerRegistry.js';
 
 export const WORKTREE_DISCARD_PRECREATED_CHANNEL = 'worktree:discard-precreated';
+export const WORKTREE_CANCEL_PRECREATED_CHANNEL = 'worktree:cancel-precreated';
 
 const MAX_SESSION_ID_LENGTH = 256;
 const MAX_EXPECTED_PATH_LENGTH = 4_096;
@@ -31,6 +32,11 @@ export interface PrecreatedWorktreeDiscardHandlerDeps {
     recoveryKey: string,
     options: { canRemove: () => Promise<boolean> },
   ): Promise<DiscardPrecreatedWorktreeResult>;
+  cancel?: (
+    sessionId: string,
+    locator: { path?: string; recoveryKey?: string },
+    options: { canRemove: () => Promise<boolean> },
+  ) => Promise<DiscardPrecreatedWorktreeResult>;
 }
 
 async function readSessionClaimed(
@@ -49,7 +55,7 @@ export function registerPrecreatedWorktreeDiscardHandler(
   registry: IpcHandlerRegistry,
   deps: PrecreatedWorktreeDiscardHandlerDeps,
 ): void {
-  registry.handle(WORKTREE_DISCARD_PRECREATED_CHANNEL, async (event, raw: unknown) => {
+  const register = (channel: string, cancel: boolean) => registry.handle(channel, async (event, raw: unknown) => {
     deps.assertCaller(event);
     const body = requireObject(raw, 'discard pre-created worktree request');
     const sessionId = requireString(body.sessionId, 'sessionId');
@@ -84,7 +90,11 @@ export function registerPrecreatedWorktreeDiscardHandler(
           // WorktreeManager 在真正删除前再次调用，封住 ownership 查询后的竞态窗口。
           canRemove: async () => !(await readSessionClaimed(deps, sessionId)),
         };
-        if (expectedPath !== null) {
+        if (cancel) {
+          if (!deps.cancel) throw new Error('Cancellation unavailable');
+          result = await deps.cancel(sessionId,
+            expectedPath !== null ? { path: expectedPath } : { recoveryKey: recoveryKey! }, options);
+        } else if (expectedPath !== null) {
           result = await deps.discard(sessionId, expectedPath, options);
         } else if (recoveryKey !== null) {
           result = await deps.discardByRecoveryKey(sessionId, recoveryKey, options);
@@ -110,4 +120,6 @@ export function registerPrecreatedWorktreeDiscardHandler(
       };
     });
   });
+  register(WORKTREE_DISCARD_PRECREATED_CHANNEL, false);
+  if (deps.cancel) register(WORKTREE_CANCEL_PRECREATED_CHANNEL, true);
 }

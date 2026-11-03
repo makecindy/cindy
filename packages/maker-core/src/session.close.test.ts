@@ -198,6 +198,19 @@ describe('Session close lifecycle', () => {
     expect(seen.at(-1)?.data).toMatchObject({ result: 'delivered' });
   });
 
+  it('keeps the executor open while a host-initiated RPC operation is in flight', async () => {
+    const { session, handle } = liveTurn();
+    let hostOperationInFlight = true;
+    handle.hasPendingHostOperation = () => hostOperationInFlight;
+
+    await expect(session.closeIfIdle()).resolves.toBe(false);
+    expect(handle.close).not.toHaveBeenCalled();
+
+    hostOperationInFlight = false;
+    await expect(session.closeIfIdle()).resolves.toBe(true);
+    expect(handle.close).toHaveBeenCalledOnce();
+  });
+
   it('rejects a non-Host send while a retiring silent-stop claim is live', async () => {
     const { session, handle, queue, seen, idle } = liveTurn();
     await session.send('work');
@@ -746,6 +759,23 @@ describe('Host automatic review lifecycle', () => {
     return { session, handle, review, reviewGate, closeGate, modeGate, planGate, setProviderPlanMode: (value: boolean | null) => { planMode = value; }, emit };
   }
   const action = { kind: 'other' as const, description: 'plugin file handoff' };
+  it('reports the actual reviewer without bypassing independently initiated Host work', async () => {
+    const { session, handle, review, reviewGate, closeGate } = setup('codex');
+    expect(session.autoReviewOwner).toBe('cindy');
+    handle.getAutoReviewOwner = () => 'native';
+    expect(session.autoReviewOwner).toBe('native');
+    reviewGate.resolve();
+    expect(await session.reviewHostPermissionAction(action)).toMatchObject({ verdict: 'allow' });
+    expect(review).toHaveBeenCalledOnce();
+    handle.getExecutionPlanMode = () => true;
+    expect(session.autoReviewOwner).toBe('cindy');
+    handle.getExecutionPlanMode = () => false;
+    handle.getAutoReviewOwner = () => 'cindy';
+    expect(session.autoReviewOwner).toBe('cindy');
+    closeGate.resolve();
+    await session.close();
+    expect(session.autoReviewOwner).toBe('cindy');
+  });
   it('uses execution Plan authority after the one-shot UI toggle has been consumed', async () => {
     const { session, handle, closeGate } = setup('claude-code', 'bypassPermissions');
     expect(session.getPlanMode()).toBe(false);

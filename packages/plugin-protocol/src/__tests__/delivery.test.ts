@@ -1,3 +1,4 @@
+import { pluginHasToolUi } from '../toolUi.js';
 import { describe, expect, it } from 'vitest';
 import {
   PLUGIN_API_SCHEMA_VERSION,
@@ -46,6 +47,35 @@ const oidcManifest = {
 } as const;
 
 describe('plugin delivery contract', () => {
+  it('preserves optional cumulative download statistics in list and detail without conflating installs', () => {
+    const plugin = {
+      id: pluginId, ghostId: validManifest.id, name: validManifest.name,
+      description: null, author: null, scope: 'public', organizationId: null,
+      defaultInstall: false,
+      currentRelease: {
+        id: 'release-1', version: validManifest.version, sha256: 'a'.repeat(64),
+        sizeBytes: 1024, publishedAt: '2026-07-19T00:00:00.000Z', icon: null,
+        manifest: validManifest,
+      },
+    };
+    for (const downloadStatistics of [
+      { requestCount: '0', last7DaysRequestCount: '0' },
+      { requestCount: '18446744073709551615', last7DaysRequestCount: '12' },
+      { requestCount: '123' },
+    ]) {
+      const withStatistics = { ...plugin, downloadStatistics };
+      const list = parseListPluginsResponse({ schemaVersion: 2, plugins: [withStatistics], nextCursor: null });
+      const detail = parseGetPluginResponse({ schemaVersion: 2, plugin: withStatistics });
+      expect(list.plugins[0]?.downloadStatistics).toEqual(downloadStatistics);
+      expect(detail.plugin.downloadStatistics).toEqual(downloadStatistics);
+      expect(detail.plugin).not.toHaveProperty('usageStatistics');
+    }
+    for (const downloadStatistics of [undefined, null, {}, { requestCount: 0 }, { requestCount: '-1' }, { requestCount: '01' }]) {
+      const detail = parseGetPluginResponse({ schemaVersion: 2, plugin: { ...plugin, downloadStatistics } });
+      expect(detail.plugin).not.toHaveProperty('downloadStatistics');
+    }
+  });
+
   it('parses a paginated visible Plugin summary without requiring a manifest', () => {
     const response = parseListPluginsResponse({
       schemaVersion: PLUGIN_API_SCHEMA_VERSION,
@@ -690,4 +720,136 @@ describe('plugin delivery contract', () => {
     });
     expect(response).not.toHaveProperty('currentOrganization');
   });
+
+  const namespacePlugin = {
+    id: pluginId,
+    ghostId: validManifest.id,
+    name: validManifest.name,
+    description: null,
+    author: null,
+    scope: 'organization' as const,
+    organizationId: 'org-1',
+    defaultInstall: false,
+    currentRelease: {
+      id: 'release-org',
+      version: validManifest.version,
+      sha256: 'a'.repeat(64),
+      sizeBytes: 1024,
+      publishedAt: '2026-07-19T00:00:00.000Z',
+    },
+  };
+
+  it('keeps enterprise namespace distinct from root and validates detail identity', () => {
+    const response = parseGetPluginResponse({
+      schemaVersion: PLUGIN_API_SCHEMA_VERSION,
+      plugin: {
+        ...namespacePlugin,
+        namespace: 'acme',
+        defaultInstall: true,
+        currentRelease: {
+          ...namespacePlugin.currentRelease,
+          id: 'release-namespace',
+          manifest: { ...validManifest, namespace: 'acme' },
+        },
+      },
+    });
+    expect(response.plugin.namespace).toBe('acme');
+    expect(response.plugin.currentRelease.manifest.namespace).toBe('acme');
+  });
+
+  it('rejects omitted organization namespace when currentOrganization.orgSlug is present', () => {
+    expect(() =>
+      parseListPluginsResponse({
+        schemaVersion: PLUGIN_API_SCHEMA_VERSION,
+        plugins: [namespacePlugin],
+        nextCursor: null,
+        currentOrganization: { organizationId: 'org-1', orgSlug: 'acme', pluginPrefix: null },
+      }),
+    ).toThrow(PluginProtocolError);
+    expect(
+      parseListPluginsResponse({
+        schemaVersion: PLUGIN_API_SCHEMA_VERSION,
+        plugins: [namespacePlugin],
+        nextCursor: null,
+        currentOrganization: { organizationId: 'org-1', pluginPrefix: null },
+      }).plugins[0],
+    ).not.toHaveProperty('namespace');
+    expect(
+      parseListPluginsResponse({
+        schemaVersion: PLUGIN_API_SCHEMA_VERSION,
+        plugins: [{ ...namespacePlugin, namespace: 'acme' }],
+        nextCursor: null,
+        currentOrganization: { organizationId: 'org-1', orgSlug: 'acme', pluginPrefix: null },
+      }).plugins[0]?.namespace,
+    ).toBe('acme');
+  });
+
+  it('rejects a namespace that disagrees with scope or manifest', () => {
+    const plugin = {
+      ...namespacePlugin,
+      scope: 'public',
+      organizationId: null,
+      currentRelease: {
+        ...namespacePlugin.currentRelease,
+        id: 'release-root',
+        manifest: { ...validManifest, namespace: 'acme' },
+      },
+    };
+    expect(() =>
+      parseGetPluginResponse({
+        schemaVersion: PLUGIN_API_SCHEMA_VERSION,
+        plugin: { ...plugin, namespace: 'acme' },
+      }),
+    ).toThrow(PluginProtocolError);
+    expect(() =>
+      parseGetPluginResponse({
+        schemaVersion: PLUGIN_API_SCHEMA_VERSION,
+        plugin: {
+          ...plugin,
+          scope: 'organization',
+          organizationId: 'org-1',
+          namespace: 'acme',
+          currentRelease: {
+            ...plugin.currentRelease,
+            manifest: { ...validManifest, namespace: 'other' },
+          },
+        },
+      }),
+    ).toThrow(PluginProtocolError);
+  });
+
+  it('accepts additive download identity while preserving legacy responses', () => {
+    const legacy = {
+      url: 'https://example.com/plugin.cindy?signature=example',
+      expiresAt: '2026-07-19T00:05:00.000Z',
+      sha256: 'c'.repeat(64),
+      sizeBytes: 1024,
+    };
+    const response = parsePluginDownloadResponse({
+      ...legacy,
+      pluginId,
+      releaseId: 'release-namespace',
+      ghostId: validManifest.id,
+      namespace: 'acme',
+    });
+    expect(response.namespace).toBe('acme');
+    expect(parsePluginDownloadResponse(legacy)).not.toHaveProperty('namespace');
+  });
 });
+
+// Unit: an immutable historical Release may carry formerly unknown mcpApps.
+// Real delivery parsing must preserve its tools/data; unrelated errors still fail.
+it.each([null, 'legacy', [], { ui: { resources: [{ uri: 'ui://help', file: '../page.html' }], tools: { help: {} } } }])(
+  'reads historical release mcpApps without granting UI: %j', mcpApps => {
+    const plugin = { id: pluginId, ghostId: validManifest.id, name: validManifest.name, description: null, author: null,
+      scope: 'public', organizationId: null, defaultInstall: false,
+      currentRelease: { id: 'release-1', version: validManifest.version, sha256: 'a'.repeat(64), sizeBytes: 1024,
+        publishedAt: '2026-07-19T00:00:00.000Z', icon: null, manifest: { ...validManifest, mcpApps } } };
+    const parsed = parseGetPluginResponse({ schemaVersion: 2, plugin }).plugin.currentRelease.manifest;
+    expect(parsed.mcpApps).toEqual(mcpApps);
+    expect(parsed.tools).toEqual(validManifest.tools);
+    expect(pluginHasToolUi(parsed)).toBe(false);
+    expect(() => parseGetPluginResponse({ schemaVersion: 2, plugin: { ...plugin,
+      currentRelease: { ...plugin.currentRelease, manifest: { ...plugin.currentRelease.manifest, entry: '../main.js' } } } })).toThrow();
+  },
+);

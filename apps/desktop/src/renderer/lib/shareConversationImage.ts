@@ -40,6 +40,17 @@ export const SHARE_SESSION_ATTR = 'data-share-session-id';
 export const SHARE_MESSAGE_ATTR = 'data-share-message-id';
 /** 打了这个标记的元素是纯交互件(操作栏、复选框、hover 工具栏),不进图。 */
 export const SHARE_EXCLUDE_ATTR = 'data-share-exclude';
+/**
+ * 消息来源标注(来源标签、设备 / 插件标签、Hook 卡片渠道头、共享任务作者行)。
+ * 分享图一律不带来源:这些是本机视角的归属信息(任务名、设备名、渠道、成员名),
+ * 发给别人既无意义又可能泄露身份;正文保留。
+ */
+export const SHARE_SOURCE_ATTR = 'data-share-source';
+/**
+ * 流里尚未加载完、暂时隐藏的图片(ChatLoadingImage)。分享管线自己读图片字节,
+ * 克隆时恢复显示,不能因为流里还在转圈就让图从产物里消失。
+ */
+export const SHARE_PENDING_IMAGE_ATTR = 'data-share-image-pending';
 
 /**
  * 克隆体里必须清掉的锚点属性:离屏容器挂在 document 内,这些 data 属性会让
@@ -116,12 +127,51 @@ export function stripInteractiveElements(root: HTMLElement): void {
   root.querySelectorAll(`[${SHARE_EXCLUDE_ATTR}]`).forEach((el) => el.remove());
 }
 
+/** 删掉消息来源标注(见 SHARE_SOURCE_ATTR),只留正文。 */
+export function stripMessageSources(root: HTMLElement): void {
+  root.querySelectorAll(`[${SHARE_SOURCE_ATTR}]`).forEach((el) => el.remove());
+}
+
+/** 恢复流里仍在加载、被隐藏的图片(见 SHARE_PENDING_IMAGE_ATTR)。 */
+export function revealPendingImages(root: HTMLElement): void {
+  root.querySelectorAll<HTMLElement>(`[${SHARE_PENDING_IMAGE_ATTR}]`).forEach((el) => {
+    el.removeAttribute(SHARE_PENDING_IMAGE_ATTR);
+    el.style.removeProperty('display');
+  });
+}
+
 /** 清掉会污染全局 querySelector 的锚点属性(见 CLONE_STRIPPED_ATTRS 注释)。 */
 export function stripCloneAnchors(root: HTMLElement): void {
   for (const attr of CLONE_STRIPPED_ATTRS) {
     if (root.hasAttribute(attr)) root.removeAttribute(attr);
     root.querySelectorAll(`[${attr}]`).forEach((el) => el.removeAttribute(attr));
   }
+}
+
+/**
+ * 纯布局容器标签:清洗后若只剩这些且没有文字,就是空壳。判空用「只剩容器」而不是
+ * 「有某几种媒体」—— 音频播放器、分隔线等非文字元素种类多且会增加,白名单漏一种
+ * 就会把整条有内容的消息误删。
+ */
+const SHARE_LAYOUT_ONLY_TAGS = new Set(['DIV', 'SPAN', 'P', 'SECTION', 'BR']);
+
+/**
+ * 克隆一条消息并做完全部清洗(交互件、来源标注、收起态、锚点)。清洗后没有文字、
+ * 也只剩纯布局容器时返回 null:例如只发了 `$指令` 的消息,插件标注被剥掉后只剩
+ * 空壳,留着会在图里占一段空白,单独分享时更会生成只有页脚的空图。
+ */
+export function prepareShareMessageClone(node: HTMLElement): HTMLElement | null {
+  const clone = node.cloneNode(true) as HTMLElement;
+  stripInteractiveElements(clone);
+  stripMessageSources(clone);
+  revealPendingImages(clone);
+  expandCollapsedMessages(clone);
+  stripCloneAnchors(clone);
+  if ((clone.textContent ?? '').trim().length > 0) return clone;
+  const hasNonLayoutElement = Array.from(clone.querySelectorAll('*')).some(
+    (el) => !SHARE_LAYOUT_ONLY_TAGS.has(el.tagName),
+  );
+  return hasNonLayoutElement ? clone : null;
 }
 
 const REDACTION_SCOPE_TAGS = new Set([
@@ -267,7 +317,10 @@ export async function inlineCloneImages(root: HTMLElement): Promise<void> {
         img.remove();
         return;
       }
-      if (!isImageBytesReachable(src)) {
+      // Bundled avatars use relative asset URLs. Read them like the bundled
+      // footer artwork; absolute/managed URLs retain the shared byte reader.
+      const relativeAsset = !/^(?:[a-z][a-z\d+.-]*:|\/\/)/i.test(src);
+      if (!relativeAsset && !isImageBytesReachable(src)) {
         log.warn('share image: unreachable image source, dropping', {
           scheme: src.slice(0, 16),
         });
@@ -275,8 +328,11 @@ export async function inlineCloneImages(root: HTMLElement): Promise<void> {
         return;
       }
       try {
-        const { base64, mimeType } = await loadImageSourceBase64(src);
-        img.setAttribute('src', `data:${mimeType};base64,${base64}`);
+        if (relativeAsset) img.setAttribute('src', await sameOriginToDataUrl(src));
+        else {
+          const { base64, mimeType } = await loadImageSourceBase64(src);
+          img.setAttribute('src', `data:${mimeType};base64,${base64}`);
+        }
         img.setAttribute('loading', 'eager');
         img.removeAttribute('srcset');
       } catch (err) {
@@ -307,31 +363,50 @@ export function assertShareImageReadableSize(root: HTMLElement): void {
   }
 }
 
+function isScrollOverflow(value: string): boolean {
+  return value === 'auto' || value === 'scroll' || value === 'overlay';
+}
+
 /**
- * 让横向/纵向可滚动的块在产物里完整展开。
+ * 去掉产物里的所有滚动容器,并让溢出的块完整展开。
  *
- * 流内的宽表格、长代码行是 `overflow-x:auto` —— 用户能滚动看全。克隆进图片后
- * 滚动条不存在,右侧内容会被**静默裁掉**:接收方既看不到也不知道被裁了。所以
- * 导出时把这些容器改成按内容宽度展开,图会变宽但信息完整
- * (html-to-image 的画布宽取 `scrollWidth`,底色铺满整张画布,溢出区不会透明)。
+ * 流内的宽表格、长代码行是 `overflow-x:auto` —— 用户能滚动看全。图片里没法滚动,
+ * 溢出内容会被**静默裁掉**,所以溢出的容器按内容宽高展开(图会变宽但信息完整;
+ * html-to-image 的画布宽取 `scrollWidth`,底色铺满整张画布,溢出区不会透明)。
  *
+ * 没溢出的滚动容器也要改成 visible:html-to-image 会把 `overflow:auto` 连同固定
+ * 像素宽高一起内联进 SVG,却带不走应用的 `::-webkit-scrollbar` 样式。光栅化时只要
+ * 差出亚像素,就会画出系统默认滚动条(Windows 上尤其明显),表格最常见。
+ *
+ * 先读后写:边改样式边读 scrollWidth 会逐个元素强制重排。
  * 必须在克隆体挂进 document **之后**调用 —— getComputedStyle 对游离节点无效。
  */
 export function expandScrollableBlocks(root: HTMLElement): void {
+  const scrollers: { el: HTMLElement; widen: boolean; lengthen: boolean }[] = [];
   for (const el of Array.from(root.querySelectorAll<HTMLElement>('*'))) {
-    const overflowsX = el.scrollWidth > el.clientWidth;
-    const overflowsY = el.scrollHeight > el.clientHeight;
-    if (!overflowsX && !overflowsY) continue;
-
     const style = window.getComputedStyle(el);
-    if (overflowsX && (style.overflowX === 'auto' || style.overflowX === 'scroll')) {
-      el.style.overflowX = 'visible';
+    const scrollsX = isScrollOverflow(style.overflowX);
+    const scrollsY = isScrollOverflow(style.overflowY);
+    if (!scrollsX && !scrollsY) continue;
+    scrollers.push({
+      el,
+      widen: scrollsX && el.scrollWidth > el.clientWidth,
+      lengthen: scrollsY && el.scrollHeight > el.clientHeight,
+    });
+  }
+
+  for (const { el, widen, lengthen } of scrollers) {
+    // 两轴必须一起改:只要另一轴仍是 auto,visible 会被重新计算成 auto。
+    el.style.overflowX = 'visible';
+    el.style.overflowY = 'visible';
+    if (widen) {
       // 只解除 overflow 不够:容器仍被父级宽度约束,内容照旧在边界处截断。
       el.style.width = 'max-content';
       el.style.maxWidth = 'none';
     }
-    if (overflowsY && (style.overflowY === 'auto' || style.overflowY === 'scroll')) {
-      el.style.overflowY = 'visible';
+    if (lengthen) {
+      // 固定高度的容器解除裁剪后,内容会压到下方兄弟节点上。
+      el.style.height = 'auto';
       el.style.maxHeight = 'none';
     }
   }
@@ -349,6 +424,38 @@ export function expandCollapsedMessages(root: HTMLElement): void {
     }
   });
   root.querySelectorAll('button[aria-expanded]').forEach((element) => element.remove());
+}
+
+/**
+ * 按选中顺序把清洗后的消息放进 stage,返回实际放入的条数。
+ *
+ * 跳选断点按「选中序列」判定(orderInAll 为当前已渲染可选序列的位置);清洗后为空的
+ * 消息(本身是选中项)不放进图里,但它之前出现的断点要延续到下一条实际放进图里的
+ * 消息,不能被吞掉。图首不放断点标记:前面没有内容可与之区隔。
+ */
+export function appendShareMessages(
+  stage: HTMLElement,
+  sourceNodes: readonly HTMLElement[],
+  orderedSelectedIds: readonly string[],
+  orderInAll: ReadonlyMap<string, number>,
+): number {
+  let prevIndex: number | null = null;
+  let appendedCount = 0;
+  let gapPending = false;
+  for (const [i, node] of sourceNodes.entries()) {
+    const currentIndex = orderInAll.get(orderedSelectedIds[i]) ?? null;
+    if (prevIndex !== null && currentIndex !== null && currentIndex - prevIndex > 1) {
+      gapPending = true;
+    }
+    prevIndex = currentIndex;
+    const clone = prepareShareMessageClone(node);
+    if (!clone) continue;
+    if (gapPending && appendedCount > 0) stage.appendChild(buildShareImageGapMarker());
+    gapPending = false;
+    stage.appendChild(clone);
+    appendedCount += 1;
+  }
+  return appendedCount;
 }
 
 /**
@@ -370,6 +477,20 @@ export function buildShareImageGapMarker(): HTMLElement {
 }
 
 /**
+ * 冻结 stage 内的入场动画。克隆体挂进 document 时,图片淡入、消息浮入等动画会
+ * 从头重播,html-to-image 按动画中途的 computed style 内联。2026-10-14 实测:聊天
+ * 图片带 ChatLoadingImage 的 `animate-fade-in` 时,产物里整块留白、图片不见;
+ * 冻结后正常。样式表挂在 host 上、不在 stage 内,不会被序列化进产物。
+ */
+export function buildShareStageMotionFreeze(): HTMLStyleElement {
+  const style = document.createElement('style');
+  style.textContent =
+    '[data-share-export],[data-share-export] *,[data-share-export] *::before,' +
+    '[data-share-export] *::after{animation:none!important;transition:none!important}';
+  return style;
+}
+
+/**
  * 同源资源 → data URL。页脚 logo 是打包 asset,html-to-image 本可自行内联,
  * 但预先转掉能把「产物里 logo 空白」这类不确定性彻底消掉。
  */
@@ -379,6 +500,7 @@ async function sameOriginToDataUrl(url: string): Promise<string> {
     throw new Error(`share image asset fetch failed (${response.status})`);
   }
   const blob = await response.blob();
+  if (!blob.type.startsWith('image/')) throw new Error('share image asset is not an image');
   return new Promise<string>((resolve, reject) => {
     const reader = new FileReader();
     reader.onload = () => resolve(reader.result as string);
@@ -480,6 +602,7 @@ export async function buildShareImageBlob({
   host.style.top = '0';
   host.style.zIndex = '-1';
   host.style.pointerEvents = 'none';
+  host.appendChild(buildShareStageMotionFreeze());
 
   const stage = document.createElement('div');
   stage.setAttribute('data-share-export', '');
@@ -504,18 +627,8 @@ export async function buildShareImageBlob({
   const orderInAll = new Map(allIds.map((id, index) => [id, index]));
 
   try {
-    let prevIndex: number | null = null;
-    for (const [i, node] of sourceNodes.entries()) {
-      const currentIndex = orderInAll.get(orderedSelectedIds[i]) ?? null;
-      if (prevIndex !== null && currentIndex !== null && currentIndex - prevIndex > 1) {
-        stage.appendChild(buildShareImageGapMarker());
-      }
-      stage.appendChild(node.cloneNode(true) as HTMLElement);
-      prevIndex = currentIndex;
-    }
-    stripInteractiveElements(stage);
-    expandCollapsedMessages(stage);
-    stripCloneAnchors(stage);
+    const appendedCount = appendShareMessages(stage, sourceNodes, orderedSelectedIds, orderInAll);
+    if (appendedCount === 0) throw new ShareImageNoContentError();
     redactTextNodes(stage);
 
     // 品牌素材是同源打包资源,html-to-image 本可自行内联;预先转掉是为了把

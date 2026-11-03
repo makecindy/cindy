@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
-import { decodeRemoteErrorMessage } from '@/lib/makerChatStore';
+import { decodeRemoteErrorMessage, remoteErrorMessageForBanner } from '@/lib/makerChatStore';
+import { i18n } from '@/i18n';
 
 describe('decodeRemoteErrorMessage', () => {
   it.each([
@@ -34,8 +35,22 @@ describe('decodeRemoteErrorMessage', () => {
     );
   });
 
-  it('decodes remote agent errors while preserving fallback text for missing keys', () => {
-    expect(decodeRemoteErrorMessage('[REMOTE_UNKNOWN] fallback message')).toBe('fallback message');
+  it('summarizes unknown remote codes in the interface language instead of upstream fallback text', () => {
+    const summary = i18n.t('ipcError.INTERNAL');
+    expect(decodeRemoteErrorMessage('[REMOTE_UNKNOWN] fallback message')).toBe(summary);
+    expect(remoteErrorMessageForBanner('[REMOTE_UNKNOWN] fallback message')).toBe(summary);
+    expect(summary).not.toContain('fallback message');
+  });
+
+  it('keeps an explicit fallback for missing keys that are not error copy', () => {
+    expect(i18n.t('not.a.real.key', { defaultValue: 'keep me' })).toBe('keep me');
+    expect(i18n.t('models.options.effortLevels.not-a-real-effort', { defaultValue: '' })).toBe('');
+  });
+
+  it('keeps known codes available to live and tail banners while other callers still get translated text', () => {
+    const raw = '[REMOTE_LOCAL_ONLY_PROVIDER] use a different provider';
+    expect(remoteErrorMessageForBanner(raw)).toBe(raw);
+    expect(decodeRemoteErrorMessage(raw)).not.toBe(raw);
   });
 
   it('maps a missing auto-review confirmation to i18n text, not a user rejection', () => {
@@ -46,5 +61,13 @@ describe('decodeRemoteErrorMessage', () => {
     ).toBe(
       'Automatic review was unavailable, and the confirmation request was not completed. This is not a user rejection.',
     );
+  });
+});
+
+describe('remote session limit guidance', () => {
+  it.each(['DEVICE_LIMIT', 'TOTAL_LIMIT'])('decodes %s inside lazy-create failures', reason => {
+    const message = 'LAZY_CREATE_FAILED: [REMOTE_AGENT_BUSY] [' + reason + '] limit reached';
+    expect(decodeRemoteErrorMessage(message)).toBe(i18n.t('chat.remoteError.REMOTE_AGENT_' + reason));
+    expect(remoteErrorMessageForBanner(message)).toBe(message);
   });
 });

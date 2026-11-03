@@ -37,6 +37,7 @@ import {
   fontWeight,
   iconSize,
   iconStroke,
+  lineHeight,
   radius,
   spacing,
   typeScale,
@@ -48,6 +49,7 @@ import {
 export function RemoteDesktopControls({
   connected,
   controlling,
+  viewOnly = !controlling,
   controlDisabled,
   inputMode,
   displays,
@@ -68,6 +70,7 @@ export function RemoteDesktopControls({
   connected: boolean;
   security?: RemoteDesktopSecuritySettingsProps;
   controlling: boolean;
+  viewOnly?: boolean;
   controlDisabled: boolean;
   inputMode: "touch" | "pointer";
   displays: RemoteDesktopDisplay[];
@@ -81,6 +84,7 @@ export function RemoteDesktopControls({
     canRotate: boolean;
     canPip: boolean;
     canAudio: boolean;
+    enabled?: boolean;
     onRotate(): void;
     onPip(): void;
   };
@@ -96,7 +100,7 @@ export function RemoteDesktopControls({
     notice: string | null;
     onChange(settings: Partial<RemoteDesktopVideoSettings>): void;
     readModes(): Promise<RemoteDesktopDisplayMode[]>;
-    onResolution(id: string): Promise<void>;
+    onResolution(mode: RemoteDesktopDisplayMode): Promise<void>;
   };
 }) {
   const { t } = useTranslation();
@@ -108,7 +112,11 @@ export function RemoteDesktopControls({
   const currentDisplay = displays.find((display) => display.id === displayId);
   const canChooseDisplay = connected && displays.length > 1;
   const nativeDisplayMenu = canChooseDisplay && usesNativePullDownMenu();
-  const hint = !controlling ? "viewOnlyHint" : `${inputMode}Hint`;
+  const hint = viewOnly
+    ? "viewOnlyHint"
+    : !controlling
+      ? "controlUnavailableHint"
+      : `${inputMode}Hint`;
   const displayLabel = (display: RemoteDesktopDisplay, index: number) =>
     display.name?.trim() ||
     t("remoteDesktop.displayNumber", { number: index + 1 });
@@ -137,13 +145,14 @@ export function RemoteDesktopControls({
       icon: Eye,
       onPress: onViewOnly,
       disabled: controlDisabled,
-      selected: connected && !controlling,
+      selected: connected && viewOnly,
     },
     {
       key: "smallWindow",
       icon: PictureInPicture2,
       onPress: presentation.onPip,
-      disabled: !presentation.canPip || !connected,
+      disabled: !presentation.enabled && (!presentation.canPip || !connected),
+      selected: presentation.enabled,
     },
   ];
 
@@ -161,6 +170,11 @@ export function RemoteDesktopControls({
                 testID={`remoteDesktop.${key}`}
                 accessibilityRole="button"
                 accessibilityLabel={t(`remoteDesktop.${key}`)}
+                accessibilityHint={
+                  key === "smallWindow"
+                    ? t("remoteDesktop.backgroundRunningHint")
+                    : undefined
+                }
                 accessibilityState={{ disabled, selected }}
                 disabled={disabled}
                 onPress={onPress}
@@ -188,6 +202,12 @@ export function RemoteDesktopControls({
             ),
           )}
         </View>
+      )}
+
+      {!displaySettings && (
+        <Text style={styles.hint}>
+          {t("remoteDesktop.backgroundRunningHint")}
+        </Text>
       )}
 
       {!displaySettings && (
@@ -219,6 +239,7 @@ export function RemoteDesktopControls({
               {(["touch", "pointer"] as const).map((value) => (
                 <MainWindowOptionButton
                   key={value}
+                  accessibilityRole="tab"
                   label={t(`remoteDesktop.${value}`)}
                   testID={`remoteDesktop.${value}`}
                   variant="segmented"
@@ -244,7 +265,12 @@ export function RemoteDesktopControls({
               importantForAccessibility="no-hide-descendants"
               style={{ flexDirection: "row", opacity: 0 }}
             >
-              {["touchHint", "pointerHint", "viewOnlyHint"].map((key) => (
+              {[
+                "touchHint",
+                "pointerHint",
+                "viewOnlyHint",
+                "controlUnavailableHint",
+              ].map((key) => (
                 <Text
                   key={key}
                   style={[styles.hint, { width: "100%", flexShrink: 0 }]}
@@ -275,6 +301,7 @@ export function RemoteDesktopControls({
               }}
             >
               <NativeSwitch
+                seedColor={colors.inputCaret}
                 accessibilityLabel={t("remoteDesktop.showMouseButtons")}
                 testID="remoteDesktop.showMouseButtons"
                 value={showMouseButtons}
@@ -304,7 +331,7 @@ export function RemoteDesktopControls({
                 </Text>
               )}
             </View>
-            <ChevronRight size={iconSize.md} color={colors.textTertiary} />
+            <ChevronRight size={iconSize.lg} strokeWidth={iconStroke.regular} color={colors.textTertiary} />
           </Pressable>
           {security && (
             <>
@@ -324,7 +351,7 @@ export function RemoteDesktopControls({
                 <Text style={[styles.rowTitle, styles.expand]}>
                   {t("remoteDesktop.security")}
                 </Text>
-                <ChevronRight size={iconSize.md} color={colors.textTertiary} />
+                <ChevronRight size={iconSize.lg} strokeWidth={iconStroke.regular} color={colors.textTertiary} />
               </Pressable>
             </>
           )}
@@ -342,6 +369,7 @@ export function RemoteDesktopControls({
                 {displays.length > 0 && (
                   <>
                     <NativePullDownMenu
+                      disabled={!nativeDisplayMenu}
                       actions={
                         nativeDisplayMenu
                           ? displays.map((display, index) => ({
@@ -509,26 +537,28 @@ const makeStyles = (colors: ThemeColors) =>
     quickLabel: {
       color: colors.textPrimary,
       fontSize: typeScale.caption,
+      lineHeight: lineHeight.caption,
       textAlign: "center",
     },
     quickSelectedLabel: { color: colors.ctaText },
     section: { gap: spacing.sm },
     sectionTitle: {
       color: colors.textTertiary,
-      fontSize: typeScale.caption,
-      fontWeight: fontWeight.medium,
+      fontSize: typeScale.footnote,
+      lineHeight: lineHeight.caption,
+      fontWeight: fontWeight.semibold,
     },
     segments: {
       flexDirection: "row",
       gap: spacing.xs,
       backgroundColor: colors.surfaceChip,
       padding: spacing.xs,
-      borderRadius: radius.control,
+      borderRadius: radius.pill,
     },
-    segment: { flex: 1, minHeight: 44, borderRadius: radius.control },
-    hint: { color: colors.textTertiary, fontSize: typeScale.caption },
+    segment: { flex: 1, minHeight: 44, borderRadius: radius.pill },
+    hint: { color: colors.textSecondary, fontSize: typeScale.footnote, lineHeight: lineHeight.caption },
     group: {
-      backgroundColor: colors.sheetActionSurface,
+      backgroundColor: colors.surfaceTranslucent,
       borderRadius: radius.container,
       borderWidth: StyleSheet.hairlineWidth,
       borderColor: colors.sheetActionBorder,
@@ -542,7 +572,7 @@ const makeStyles = (colors: ThemeColors) =>
       alignItems: "center",
       gap: spacing.sm,
     },
-    rowTitle: { color: colors.textPrimary, fontSize: typeScale.body },
+    rowTitle: { color: colors.textPrimary, fontSize: typeScale.body, lineHeight: lineHeight.body },
     expand: { flex: 1 },
     divider: {
       height: StyleSheet.hairlineWidth,
@@ -567,7 +597,7 @@ const makeStyles = (colors: ThemeColors) =>
       gap: spacing.sm,
       borderRadius: radius.control,
     },
-    disconnectLabel: { color: colors.destructive, fontSize: typeScale.body },
+    disconnectLabel: { color: colors.destructive, fontSize: typeScale.body, lineHeight: lineHeight.body },
     disabled: { opacity: 0.4 },
     pressed: { opacity: 0.72 },
   });

@@ -1,0 +1,891 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<meta name="color-scheme" content="light dark" />
+<title>远程供应商用量 · 原型</title>
+<style>
+  /* 自包含原型：数值取自 Cindy 设计 token（themes/colors.ts、DESIGN.md），版式对齐「设置 → 用量」。 */
+  :root {
+    color-scheme: light;
+    --surface: #f8f8f6;
+    --card: #ffffff;
+    --border: #d7d7d4;
+    --text: #262626;
+    --secondary: #737373;
+    --tertiary: #a3a3a3;
+    --chip: #e5e5e5;
+    --hover: #f2f2ef;
+    --selected: #ececea;
+    --primary-hover: #d7d7d6;
+    --green: #2aae5b;
+    --danger: #ef4444;
+    --focus: rgba(65, 124, 221, 0.5);
+    --scrim: rgba(0, 0, 0, 0.5);
+    --tip-bg: #ffffff;
+    --shadow-menu: 0 8px 24px rgba(0, 0, 0, 0.12), 0 2px 6px rgba(0, 0, 0, 0.06);
+    --m1: #14B8A6; --m2: #F43F5E; --m3: #8B5CF6; --m4: #6366F1; --m5: #F59E0B;
+    --heat: #2563EB;
+  }
+  body.dark {
+    color-scheme: dark;
+    --surface: #1f1f1e;
+    --card: #2c2c2a;
+    --border: #3c3c3a;
+    --text: #d4d4d4;
+    --secondary: #a3a3a3;
+    --tertiary: #737373;
+    --chip: #3c3c3a;
+    --hover: #353533;
+    --selected: #3a3a38;
+    --primary-hover: #4a4a48;
+    --green: #55c886;
+    --scrim: rgba(0, 0, 0, 0.7);
+    --tip-bg: #2c2c2a;
+    --shadow-menu: 0 8px 24px rgba(0, 0, 0, 0.45), 0 2px 6px rgba(0, 0, 0, 0.3);
+    --m1: #2DD4BF; --m2: #FB7185; --m3: #A78BFA; --m4: #818CF8; --m5: #FBBF24;
+    --heat: #60A5FA;
+  }
+  * { box-sizing: border-box; }
+  [hidden] { display: none !important; }
+  body {
+    margin: 0; background: var(--surface); color: var(--text);
+    font: 13px/1.5 Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", "Microsoft YaHei", sans-serif;
+    -webkit-font-smoothing: antialiased;
+  }
+  button, input { font: inherit; color: inherit; }
+  button { cursor: pointer; }
+  button:focus-visible, input:focus-visible, [tabindex]:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
+  svg { display: block; flex-shrink: 0; }
+  .num { font-variant-numeric: tabular-nums; }
+  .muted { color: var(--secondary); }
+  .faint { color: var(--tertiary); }
+
+  /* ---------- 评审工具条（原型外壳，不属于产品界面） ---------- */
+  .reviewbar {
+    position: sticky; top: 0; z-index: 50; display: flex; align-items: center; gap: 12px; flex-wrap: wrap;
+    padding: 10px 24px; background: var(--surface); border-bottom: 1px solid var(--border); font-size: 12px;
+  }
+  .reviewbar strong { font-weight: 500; font-size: 13px; margin-right: 8px; }
+  .reviewbar .spacer { flex: 1; }
+  .seg { display: inline-flex; gap: 2px; padding: 3px; border: 1px solid var(--border); border-radius: 9999px; background: var(--card); flex-wrap: wrap; }
+  .seg button { border: 0; background: transparent; border-radius: 9999px; padding: 4px 12px; min-height: 28px; color: var(--secondary); font-size: 12px; }
+  .seg button[aria-pressed="true"] { background: var(--chip); color: var(--text); font-weight: 500; }
+
+  /* ---------- 通用控件 ---------- */
+  .btn { display: inline-flex; align-items: center; justify-content: center; gap: 6px; height: 32px; padding: 0 24px; border-radius: 9999px; border: 1px solid transparent; font-size: 13px; font-weight: 500; white-space: nowrap; background: transparent; }
+  .btn.primary { background: var(--chip); border-color: var(--chip); }
+  .btn.primary:hover { background: var(--primary-hover); border-color: var(--primary-hover); }
+  .btn.secondary { background: var(--card); border-color: var(--border); }
+  .btn.secondary:hover { background: var(--hover); }
+  .btn.danger { background: var(--danger); color: #fff; }
+  .btn.link { height: 24px; padding: 0 8px; font-weight: 400; color: var(--secondary); font-size: 12px; }
+  .btn.link:hover { background: var(--hover); color: var(--text); }
+  .icon-btn { width: 32px; height: 32px; display: inline-flex; align-items: center; justify-content: center; border: 0; border-radius: 9999px; background: transparent; color: var(--secondary); }
+  .icon-btn:hover { background: var(--hover); color: var(--text); }
+  .avatar { width: 28px; height: 28px; border-radius: 50%; display: inline-flex; align-items: center; justify-content: center; background: var(--chip); font-weight: 500; font-size: 12px; flex-shrink: 0; color: var(--text); }
+  .swatch { width: 8px; height: 8px; border-radius: 2px; flex-shrink: 0; }
+
+  /* ---------- 舞台 ---------- */
+  .stage { max-width: 1000px; margin: 16px auto 48px; padding: 0 24px; }
+  .window { background: var(--surface); border: 1px solid var(--border); border-radius: 12px; overflow: hidden; }
+  .page { padding: 24px 32px 32px; max-width: 900px; }
+  .crumb { display: inline-flex; align-items: center; gap: 4px; color: var(--secondary); font-size: 12px; margin-bottom: 8px; }
+  .pagehead { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+  .pagehead h1 { margin: 0; font-size: 16px; font-weight: 500; flex: 1; }
+  .stub { margin-top: 20px; display: flex; align-items: center; gap: 10px; padding: 12px 16px; border: 1px dashed var(--border); border-radius: 12px; color: var(--tertiary); font-size: 12px; }
+  .stub b { color: var(--secondary); font-weight: 500; font-size: 13px; }
+
+  /* ---------- 用量块 ---------- */
+  .usage { margin-top: 32px; }
+  .usage-head { display: flex; flex-direction: column; gap: 4px; margin-bottom: 12px; }
+  .usage-head h3 { margin: 0; font-size: 13px; font-weight: 500; }
+  .usage-head p { margin: 0; font-size: 12px; line-height: 1.5; color: var(--secondary); max-width: 640px; }
+  .filterbar { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; margin-bottom: 12px; }
+  .filterbar .label { font-size: 13px; font-weight: 500; color: var(--secondary); }
+  .filters { margin-left: auto; display: flex; align-items: center; gap: 8px; flex-wrap: wrap; min-width: 0; }
+  .select { position: relative; }
+  .select-trigger { display: flex; align-items: center; justify-content: space-between; gap: 8px; height: 36px; width: 176px; padding: 0 12px; border-radius: 9999px; border: 1px solid var(--border); background: var(--card); font-size: 13px; text-align: left; }
+  .select-trigger span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .select-trigger svg { color: var(--tertiary); }
+  .select-menu { position: absolute; top: calc(100% + 4px); right: 0; z-index: 30; width: 100%; padding: 4px; border-radius: 12px; border: 1px solid var(--border); background: var(--card); box-shadow: var(--shadow-menu); }
+  .select-item { display: flex; align-items: center; justify-content: space-between; gap: 8px; width: 100%; border: 0; background: transparent; border-radius: 8px; padding: 8px 12px; text-align: left; font-size: 13px; }
+  .select-item:hover { background: var(--hover); }
+  .select-item[aria-selected="true"] { background: var(--selected); font-weight: 500; }
+  .select-item .stack { display: flex; flex-direction: column; min-width: 0; }
+  .select-item .stack > span:first-child { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .select-item .detail { font-size: 12px; font-weight: 400; color: var(--tertiary); white-space: normal; }
+  .select-sep { height: 1px; margin: 4px 8px; background: var(--border); }
+  .datefield { display: flex; align-items: center; gap: 8px; font-size: 13px; color: var(--secondary); }
+  .datefield input { height: 36px; width: 150px; padding: 0 12px; border-radius: 9999px; border: 1px solid var(--border); background: var(--card); }
+  .focusline { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; margin: -4px 0 12px; font-size: 12px; color: var(--secondary); }
+  .focusline .pill { display: inline-flex; align-items: center; gap: 6px; height: 24px; padding: 0 10px; border-radius: 9999px; background: var(--chip); color: var(--text); }
+
+  .card { margin-bottom: 14px; padding: 16px; border-radius: 12px; border: 1px solid var(--border); background: var(--card); }
+  .card-head { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 8px; margin-bottom: 12px; min-height: 24px; }
+  .card-head .title { font-size: 14px; font-weight: 500; }
+  .card-head .subtitle { font-size: 12px; color: var(--tertiary); }
+  .card-head .right { margin-left: auto; }
+  .card-head .seg button { min-height: 24px; padding: 2px 10px; }
+  .empty { padding: 28px 0; text-align: center; color: var(--tertiary); font-size: 13px; }
+
+  .stats { display: flex; gap: 8px; flex-wrap: wrap; }
+  .stat { flex: 1 1 110px; min-width: 0; display: flex; flex-direction: column; gap: 2px; padding: 8px 12px; border-radius: 8px; background: var(--chip); }
+  .stat .v { font-size: 16px; font-weight: 500; line-height: 1.4; font-variant-numeric: tabular-nums; }
+  .stat .l { margin-top: auto; font-size: 12px; line-height: 1.5; color: var(--secondary); }
+
+  /* 每日柱图（UsageTokenBars 同一套：96px 高、最多 3 条刻度、零值日 2px） */
+  .bars { display: flex; gap: 6px; height: 96px; }
+  .yaxis { position: relative; width: 4.5ch; flex-shrink: 0; }
+  .yaxis span { position: absolute; right: 0; transform: translateY(50%); font-size: 11px; line-height: 1; color: var(--tertiary); font-variant-numeric: tabular-nums; }
+  .plot { position: relative; flex: 1; min-width: 0; }
+  .gridline { position: absolute; left: 0; right: 0; border-top: 1px solid var(--border); opacity: .5; }
+  .plot-inner { position: absolute; inset: 0; display: flex; align-items: flex-end; gap: 3px; }
+  .bar { position: relative; flex: 1; min-width: 0; display: flex; align-items: flex-end; justify-content: center; padding: 0; border: 0; background: transparent; }
+  .bar .mark { display: flex; flex-direction: column; overflow: hidden; border-radius: 2px; width: 100%; transition: width 120ms ease-out, opacity 120ms; }
+  .bar:hover .mark, .bar[aria-pressed="true"] .mark { width: calc(100% + 2px); }
+  .plot.has-hl .bar:not([data-hl="true"]) .mark { opacity: .35; }
+  .legend { display: flex; flex-wrap: wrap; gap: 4px 14px; margin-top: 10px; font-size: 12px; color: var(--secondary); }
+  .legend span { display: inline-flex; align-items: center; gap: 6px; }
+
+  /* 热力图 */
+  .heat-months { position: relative; height: 14px; margin-left: 0; }
+  .heat-months span { position: absolute; top: 0; font-size: 10px; line-height: 1.4; color: var(--tertiary); white-space: nowrap; }
+  .heat-grid { display: flex; gap: 3px; }
+  .heat-col { display: flex; flex-direction: column; gap: 3px; }
+  .heat-cell { width: 12px; height: 12px; padding: 0; border: 0; border-radius: 2px; }
+  .heat-cell.ph { visibility: hidden; }
+  .heat-cell[aria-pressed="true"] { outline: 1px solid var(--text); outline-offset: 1px; }
+
+  /* 明细表（UsageBreakdownTables 同一套） */
+  .tablewrap { overflow-x: auto; }
+  table { width: 100%; border-collapse: collapse; }
+  th { white-space: nowrap; border-bottom: 1px solid var(--border); padding: 0 0 8px 12px; text-align: right; font-size: 12px; font-weight: 500; color: var(--secondary); }
+  td { white-space: nowrap; border-bottom: 1px solid var(--border); padding: 8px 0 8px 12px; text-align: right; font-size: 13px; font-variant-numeric: tabular-nums; }
+  tr:last-child td { border-bottom: 0; }
+  th.first, td.first { width: 100%; max-width: 0; padding-left: 0; text-align: left; }
+  td.dim { color: var(--tertiary); }
+  td.act { width: 40px; padding-left: 4px; }
+  .sharecell .b { display: inline-block; height: 4px; border-radius: 2px; margin-right: 6px; vertical-align: 2px; }
+  .sharebar { display: flex; height: 8px; overflow: hidden; border-radius: 2px; margin-bottom: 12px; gap: 0; }
+  tr.click { cursor: pointer; }
+  tr.click:hover td { background: var(--hover); }
+  tr.click td:first-child { border-top-left-radius: 0; }
+  tr.selected td { background: var(--selected); }
+  tr.unused td { color: var(--tertiary); }
+  tr.paused .who { opacity: .7; }
+  .who { display: flex; align-items: center; gap: 8px; min-width: 0; }
+  .who-text { display: flex; flex-direction: column; min-width: 0; }
+  .who-l1 { display: flex; align-items: baseline; gap: 8px; min-width: 0; }
+  .who-l1 .name { font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .who-l1 .tag, .who-l1 .src { font-size: 12px; color: var(--secondary); white-space: nowrap; }
+  .who-l2 { font-size: 12px; color: var(--secondary); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .status { display: inline-flex; align-items: center; gap: 4px; font-size: 12px; color: var(--secondary); white-space: nowrap; }
+  .status .dot { width: 6px; height: 6px; border-radius: 50%; background: var(--green); }
+  .status.paused .dot { background: var(--tertiary); }
+  .model-tag { flex-shrink: 0; border: 1px solid var(--border); border-radius: 4px; padding: 0 4px; font-size: 11px; line-height: 1.4; color: var(--tertiary); }
+  .note { margin: 8px 0 0; font-size: 12px; color: var(--tertiary); }
+
+  /* 行尾菜单与弹窗 */
+  .menu { position: fixed; z-index: 60; min-width: 160px; padding: 4px; border-radius: 12px; border: 1px solid var(--border); background: var(--card); box-shadow: var(--shadow-menu); }
+  .menu button { display: block; width: 100%; border: 0; background: transparent; border-radius: 8px; padding: 8px 12px; text-align: left; font-size: 13px; }
+  .menu button:hover { background: var(--hover); }
+  .menu button.danger { color: var(--danger); }
+  .scrim { position: fixed; inset: 0; z-index: 70; background: var(--scrim); display: flex; align-items: center; justify-content: center; }
+  .dialog { width: 420px; max-width: calc(100% - 32px); padding: 20px; border-radius: 16px; background: var(--card); border: 1px solid var(--border); }
+  .dialog h4 { margin: 0 0 8px; font-size: 14px; font-weight: 500; }
+  .dialog p { margin: 0 0 20px; color: var(--secondary); }
+  .dialog .actions { display: flex; justify-content: flex-end; gap: 8px; }
+
+  /* 悬停浮层（UsageBarsTooltip 的样式） */
+  .tooltip { position: fixed; z-index: 80; width: 240px; padding: 10px 12px; border-radius: 12px; border: 1px solid var(--border); background: var(--tip-bg); box-shadow: var(--shadow-menu); pointer-events: none; font-size: 12px; }
+  .tooltip .d { color: var(--secondary); }
+  .tooltip .t { font-size: 16px; font-weight: 500; font-variant-numeric: tabular-nums; margin: 2px 0 8px; }
+  .tooltip .t small { font-size: 12px; font-weight: 400; color: var(--secondary); margin-left: 4px; }
+  .tooltip .segbar { display: flex; height: 4px; border-radius: 2px; overflow: hidden; margin-bottom: 8px; }
+  .tooltip .r { display: flex; align-items: center; gap: 6px; padding: 2px 0; }
+  .tooltip .r .n { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .tooltip .r .v { font-variant-numeric: tabular-nums; }
+  .tooltip .r .p { width: 34px; text-align: right; color: var(--tertiary); font-variant-numeric: tabular-nums; }
+
+  /* 评审说明 */
+  .notes { margin-top: 20px; display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+  .notes > div { padding: 16px 20px; border-radius: 12px; border: 1px solid var(--border); background: var(--card); }
+  .notes h2 { margin: 0 0 8px; font-size: 14px; font-weight: 500; }
+  .notes ol, .notes ul { margin: 0; padding-left: 18px; color: var(--secondary); }
+  .notes li { margin: 4px 0; }
+  .notes li b { color: var(--text); font-weight: 500; }
+  @media (max-width: 760px) { .notes { grid-template-columns: 1fr; } .page { padding: 20px; } }
+</style>
+</head>
+<body>
+<div class="reviewbar">
+  <strong>远程供应商「用量」· 原型</strong>
+  <div class="seg" id="theme-seg" role="group" aria-label="主题">
+    <button type="button" data-v="light" aria-pressed="true">浅色</button>
+    <button type="button" data-v="dark" aria-pressed="false">深色</button>
+  </div>
+  <div class="seg" id="scenario-seg" role="group" aria-label="场景">
+    <button type="button" data-v="group" aria-pressed="true">建了供应商组（3 台电脑）</button>
+    <button type="button" data-v="single" aria-pressed="false">没有组（只有本机）</button>
+  </div>
+  <span class="spacer"></span>
+  <span class="muted">示意数据 · 悬停柱子/格子看当天明细 · 点表格一行只看这个人或这台电脑</span>
+</div>
+
+<main class="stage">
+  <div class="window">
+    <div class="page">
+      <div class="crumb">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m15 18-6-6 6-6"/></svg>
+        远程与分享
+      </div>
+      <div class="pagehead">
+        <h1>分享 Claude 订阅</h1>
+        <button type="button" class="btn primary">生成分享链接</button>
+      </div>
+      <div class="stub" id="group-stub"><b>供应商组</b><span>本机 · 书房 Windows · 小王的电脑 · 最少占用（原型里略去，保持现状）</span></div>
+      <section class="usage" id="usage" aria-labelledby="usage-title"></section>
+    </div>
+  </div>
+
+  <section class="notes">
+    <div>
+      <h2>这版改了什么</h2>
+      <ul>
+        <li><b>和「设置 → 用量」同一套</b>：右上筛选、概览数字、近 30 天每日柱图、活跃热力图、按模型表，样式和交互（悬停看明细、点柱子或格子选那一天）照搬。</li>
+        <li><b>多电脑：默认看合计</b>。「组内电脑」下拉可以只看一台；新增「按电脑」表，每台用了多少、几个人在用一眼看到。</li>
+        <li><b>每日柱图可切换</b>按人 / 按电脑 / 按模型堆叠，柱子高度就是当天总量。</li>
+        <li><b>按人</b>：原来的人列表变成和「按 Agent」一样的表；分享状态、加入时间、最近使用和 <code>···</code>（关闭／恢复、删除）仍在这一行。点一行 = 只看这个人，整页跟着变，代替原来的“展开看每台电脑”。</li>
+        <li><b>没有组时</b>：不出现「组内电脑」下拉、「按电脑」表和“用到的电脑”，其余一样。</li>
+      </ul>
+    </div>
+    <div>
+      <h2>已确认（2026-10-17）</h2>
+      <ol>
+        <li><b>时间段</b>与设置页一样：所有时间 / 最近 30 天 / 最近 7 天 / 今天，并能选某一天；不再有「本月」。</li>
+        <li><b>「按人」放在概览下面</b>，分享的管理操作不被图表压到下面。</li>
+        <li><b>活跃热力图保留</b>。</li>
+        <li><b>保留估算金额</b>，标注“估算”。</li>
+        <li><b>不搬「最耗 token 的任务」</b>。</li>
+      </ol>
+    </div>
+  </section>
+</main>
+
+<div id="tooltip" class="tooltip" hidden aria-hidden="true"></div>
+<div id="menu-layer"></div>
+
+<script>
+(() => {
+  // ---------------- 示意数据 ----------------
+  function mulberry32(a) { return () => { a |= 0; a = (a + 0x6D2B79F5) | 0; let t = Math.imul(a ^ (a >>> 15), 1 | a); t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t; return ((t ^ (t >>> 14)) >>> 0) / 4294967296; }; }
+  const rand = mulberry32(20261017);
+  const TODAY = new Date(2026, 9, 17);
+  const NOW = new Date(2026, 9, 17, 15, 20).getTime();
+  const keyOf = (d) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+  const shift = (n) => keyOf(new Date(2026, 9, 17 + n));
+  const parseKey = (k) => { const [y, m, d] = k.split('-').map(Number); return new Date(y, m - 1, d); };
+  const TODAY_KEY = keyOf(TODAY);
+
+  const MODELS = [
+    { key: 'opus', name: 'Opus 5.5', agent: 'claude-code', price: [5, 25, 0.5, 6.25], cache: 4.6 },
+    { key: 'sonnet', name: 'Sonnet 5.5', agent: 'claude-code', price: [3, 15, 0.3, 3.75], cache: 3.2 },
+    { key: 'haiku', name: 'Haiku 5.5', agent: 'claude-code', price: [1, 5, 0.1, 1.25], cache: 1.4 },
+  ];
+  const PARTIES = [
+    { key: 'self', kind: 'self', name: 'Magi', initial: 'M', activeToday: true, from: -110, to: 0, activity: 0.82, scale: 1, models: { opus: 0.68, sonnet: 0.27, haiku: 0.05 }, computers: { local: 0.5, study: 0.32, wang: 0.18 } },
+    { key: 'lin', kind: 'member', name: '小林', initial: '林', activeToday: true, joined: '2026-09-02', from: -45, to: 0, activity: 0.64, scale: 0.55, models: { opus: 0.3, sonnet: 0.6, haiku: 0.1 }, computers: { local: 0.28, study: 0.47, wang: 0.25 } },
+    { key: 'jie', kind: 'member', name: '阿杰', initial: '杰', joined: '2026-09-17', from: -30, to: -5, activity: 0.55, scale: 0.4, models: { opus: 0.15, sonnet: 0.75, haiku: 0.1 }, computers: { local: 0.4, study: 0.35, wang: 0.25 } },
+    { key: 'chen', kind: 'member', name: '陈雨', initial: '陈', joined: '2026-10-14', from: -3, to: 0, activity: 0.9, scale: 0.14, models: { sonnet: 0.4, haiku: 0.6 }, computers: { local: 0.5, study: 0.5 } },
+    { key: 'relay', kind: 'relay', name: '经 办公室 iMac 转来', from: -20, to: 0, activity: 0.35, scale: 0.18, models: { sonnet: 0.8, haiku: 0.2 }, computers: { local: 1 } },
+  ];
+  const COMPUTERS = [
+    { key: 'local', name: '本机', source: 'MacBook Pro' },
+    { key: 'study', name: '书房 Windows', source: '我的电脑' },
+    { key: 'wang', name: '小王的电脑', source: '来自 小王 的分享' },
+    { key: 'mini', name: 'Mac mini', source: '已移出组', removed: true },
+  ];
+  const NONE = '__none';
+  const COLORS = ['var(--m1)', 'var(--m2)', 'var(--m3)', 'var(--m4)', 'var(--m5)'];
+  const partyColor = (k) => COLORS[PARTIES.findIndex((p) => p.key === k)] ?? 'var(--tertiary)';
+  const computerColor = (k) => k === NONE ? 'var(--tertiary)' : COLORS[COMPUTERS.findIndex((c) => c.key === k)] ?? 'var(--tertiary)';
+  const modelColor = (k) => COLORS[MODELS.findIndex((m) => m.key === k)] ?? 'var(--tertiary)';
+
+  const BASE_ROWS = [];
+  for (const p of PARTIES) {
+    for (let o = p.from; o <= p.to; o++) {
+      const day = shift(o);
+      const dow = parseKey(day).getDay();
+      const weekend = dow === 0 || dow === 6;
+      if (!(o === 0 && p.activeToday) && rand() > p.activity * (weekend ? 0.55 : 1)) continue;
+      const dayTotal = p.scale * (500000 + rand() * 2600000) * (weekend ? 0.6 : 1);
+      let comps = { ...p.computers };
+      // 分享的人较早的记录没有区分电脑；Mac mini 在 12 天前移出组。
+      if (p.kind === 'member' && o < -35) comps = { [NONE]: 1 };
+      else if (p.kind !== 'relay' && o >= -60 && o <= -12) comps.mini = 0.25;
+      for (const [mk, mw] of Object.entries(p.models)) {
+        const model = MODELS.find((m) => m.key === mk);
+        for (const [ck, cw] of Object.entries(comps)) {
+          const T = dayTotal * mw * cw * (0.6 + rand() * 0.8);
+          if (T < 3000) continue;
+          const input = Math.round(T * 0.8), output = Math.round(T * 0.2);
+          const cacheRead = Math.round(T * model.cache * (0.8 + rand() * 0.4)), cacheCreate = Math.round(T * (0.25 + rand() * 0.3));
+          const [pi, po, pr, pw] = model.price;
+          const hour = o === 0 ? 8 + Math.floor(rand() * 7) : 9 + Math.floor(rand() * 14);
+          BASE_ROWS.push({
+            day, party: p.key, model: mk, computer: ck === NONE ? NONE : ck,
+            input, output, cacheRead, cacheCreate,
+            turns: Math.max(1, Math.round(T / 45000)),
+            amount: (input * pi + output * po + cacheRead * pr + cacheCreate * pw) / 1e6,
+            at: new Date(parseKey(day).getTime() + hour * 3600000 + Math.floor(rand() * 3600000)).getTime(),
+          });
+        }
+      }
+    }
+  }
+
+  // ---------------- 状态 ----------------
+  const state = {
+    theme: 'light', scenario: 'group',
+    party: 'all', computer: 'all', range: '30d', stack: 'party',
+    open: null,
+    statuses: { lin: { status: 'active', running: 1 }, jie: { status: 'paused', running: 0 }, chen: { status: 'active', running: 0 } },
+    removed: new Set(),
+    heatWidth: 800,
+  };
+  const grouped = () => state.scenario === 'group';
+  const rows = () => BASE_ROWS
+    .filter((r) => !state.removed.has(r.party))
+    .map((r) => grouped() || r.computer === NONE ? r : { ...r, computer: 'local' });
+  const visibleParties = () => PARTIES.filter((p) => !state.removed.has(p.key));
+
+  // ---------------- 格式 ----------------
+  const trim0 = (s) => s.replace(/\.0(?=[KMB]?$)/, '');
+  function fmtTok(n) {
+    if (!(n > 0)) return '0';
+    if (n < 1000) return String(Math.round(n));
+    if (n < 1e6) return trim0((n / 1e3).toFixed(n < 1e4 ? 1 : 0)) + 'K';
+    if (n < 1e9) return trim0((n / 1e6).toFixed(n < 1e8 ? 1 : 0)) + 'M';
+    return trim0((n / 1e9).toFixed(1)) + 'B';
+  }
+  const fmtMoney = (x) => '$' + (x < 100 ? x.toFixed(2) : Math.round(x).toLocaleString('en-US'));
+  const fmtPct = (p) => p > 0 && p < 0.01 ? '<1%' : `${Math.round(p * 100)}%`;
+  const fmtDate = (k) => { const d = parseKey(k); return `${d.getMonth() + 1}月${d.getDate()}日`; };
+  const fmtFullDate = (k) => { const d = parseKey(k); return `${d.getFullYear()}年${d.getMonth() + 1}月${d.getDate()}日`; };
+  function fmtRelative(ts) {
+    const m = Math.round((NOW - ts) / 60000);
+    if (m < 60) return `${Math.max(1, m)} 分钟前`;
+    const h = Math.round(m / 60);
+    if (h < 24) return `${h} 小时前`;
+    const d = Math.round(h / 24);
+    return d < 30 ? `${d} 天前` : fmtDate(keyOf(new Date(ts)));
+  }
+  const tokensOf = (r) => r.input + r.output;
+  const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+
+  // ---------------- 筛选 ----------------
+  const singleDay = () => state.range === 'today' || state.range.startsWith('day:');
+  const selectedDay = () => state.range === 'today' ? TODAY_KEY : state.range.startsWith('day:') ? state.range.slice(4) : null;
+  function rangeLabel() {
+    const d = selectedDay();
+    if (state.range.startsWith('day:')) return fmtFullDate(d);
+    return { all: '所有时间', '30d': '最近 30 天', '7d': '最近 7 天', today: '今天' }[state.range];
+  }
+  function inRange(day) {
+    if (state.range === 'all') return true;
+    if (state.range === '30d') return day >= shift(-29);
+    if (state.range === '7d') return day >= shift(-6);
+    return day === selectedDay();
+  }
+  /** 每张表都按「其他维度」筛：按人表不按使用方筛（管理操作一直在），按电脑表不按电脑筛，被选中的那一行高亮。 */
+  function pick({ party = true, computer = true, range = true } = {}) {
+    return rows().filter((r) =>
+      (!party || state.party === 'all' || r.party === state.party) &&
+      (!computer || state.computer === 'all' || r.computer === state.computer) &&
+      (!range || inRange(r.day)));
+  }
+  function sum(list) {
+    const s = { tokens: 0, input: 0, output: 0, cacheRead: 0, cacheCreate: 0, amount: 0, turns: 0, lastAt: 0 };
+    for (const r of list) {
+      s.tokens += tokensOf(r); s.input += r.input; s.output += r.output; s.cacheRead += r.cacheRead;
+      s.cacheCreate += r.cacheCreate; s.amount += r.amount; s.turns += r.turns; s.lastAt = Math.max(s.lastAt, r.at);
+    }
+    return s;
+  }
+  function groupBy(list, key) {
+    const m = new Map();
+    for (const r of list) { const k = r[key]; if (!m.has(k)) m.set(k, []); m.get(k).push(r); }
+    return m;
+  }
+
+  // ---------------- 渲染：下拉 ----------------
+  const chevron = '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m6 9 6 6 6-6"/></svg>';
+  const check = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.25" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 6 9 17l-5-5"/></svg>';
+  const monitorIcon = (size = 14) => `<svg width="${size}" height="${size}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="2" y="3" width="20" height="14" rx="2"/><path d="M8 21h8M12 17v4"/></svg>`;
+  const historyIcon = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><path d="M3 3v5h5M12 7v5l4 2"/></svg>';
+  const dotsIcon = '<svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><circle cx="5" cy="12" r="1.6"/><circle cx="12" cy="12" r="1.6"/><circle cx="19" cy="12" r="1.6"/></svg>';
+
+  function partyOptions() {
+    const opts = [{ value: 'all', label: '所有人', detail: '你和分享的人的合计' }, 'sep'];
+    for (const p of visibleParties()) {
+      if (p.kind === 'self') opts.push({ value: p.key, label: `${p.name}（你）`, detail: '本机和你其他电脑的合计' });
+      else if (p.kind === 'member') opts.push({ value: p.key, label: p.name, detail: state.statuses[p.key].status === 'paused' ? '分享的人 · 已暂停' : '分享的人' });
+      else opts.push({ value: p.key, label: p.name, detail: '看不到具体是谁' });
+    }
+    return opts;
+  }
+  function computerOptions() {
+    const opts = [{ value: 'all', label: '所有组内电脑', detail: '合计' }, 'sep'];
+    for (const c of COMPUTERS) opts.push({ value: c.key, label: c.key === 'local' ? `本机（${c.source}）` : c.name, detail: c.key === 'local' ? null : c.source });
+    return opts;
+  }
+  function rangeOptions() {
+    const opts = ['all', '30d', '7d', 'today'].map((v) => ({ value: v, label: { all: '所有时间', '30d': '最近 30 天', '7d': '最近 7 天', today: '今天' }[v] }));
+    if (state.range.startsWith('day:')) opts.push({ value: state.range, label: rangeLabel() });
+    return opts;
+  }
+  function selectHtml(id, aria, value, options) {
+    const current = options.find((o) => o !== 'sep' && o.value === value);
+    const open = state.open === id;
+    return `<div class="select">
+      <button type="button" class="select-trigger" data-action="open" data-id="${id}" aria-haspopup="listbox" aria-expanded="${open}" aria-label="${aria}">
+        <span>${esc(current ? current.label : '')}</span>${chevron}
+      </button>
+      ${open ? `<div class="select-menu" role="listbox" aria-label="${aria}">${options.map((o) => o === 'sep' ? '<div class="select-sep"></div>' : `
+        <button type="button" role="option" class="select-item" data-action="pick" data-id="${id}" data-value="${esc(o.value)}" aria-selected="${o.value === value}">
+          <span class="stack"><span>${esc(o.label)}</span>${o.detail ? `<span class="detail">${esc(o.detail)}</span>` : ''}</span>
+          ${o.value === value ? check : ''}
+        </button>`).join('')}</div>` : ''}
+    </div>`;
+  }
+
+  // ---------------- 渲染：卡片 ----------------
+  const card = (title, subtitle, body, right = '') =>
+    `<div class="card"><div class="card-head"><span class="title">${title}</span>${subtitle ? `<span class="subtitle">${subtitle}</span>` : ''}${right ? `<span class="right">${right}</span>` : ''}</div>${body}</div>`;
+
+  function renderStats() {
+    const inR = pick();
+    const s = sum(inR);
+    const today = sum(pick({ range: false }).filter((r) => r.day === TODAY_KEY));
+    const parties = new Set(inR.filter((r) => tokensOf(r) > 0).map((r) => r.party)).size;
+    const computers = new Set(inR.filter((r) => r.computer !== NONE).map((r) => r.computer)).size;
+    const models = new Set(inR.map((r) => r.model)).size;
+    const cell = (v, l) => `<div class="stat"><span class="v">${v}</span><span class="l">${l}</span></div>`;
+    return `<div class="stats">
+      ${singleDay() ? '' : cell(today.tokens > 0 ? fmtTok(today.tokens) : '—', '今日 token')}
+      ${cell(s.tokens > 0 ? fmtTok(s.tokens) : '—', `${rangeLabel()} token`)}
+      ${cell(s.amount > 0 ? '约 ' + fmtMoney(s.amount) : '—', '估算金额')}
+      ${cell(parties > 0 ? String(parties) : '—', '使用方')}
+      ${grouped() ? cell(computers > 0 ? `${computers} 台` : '—', '用到的电脑') : ''}
+      ${cell(models > 0 ? String(models) : '—', '用到的模型')}
+    </div>`;
+  }
+
+  function shareCell(p, color) {
+    return `<td class="sharecell dim"><span class="b" style="width:${Math.max(2, p * 46)}px;background:${color}"></span>${fmtPct(p)}</td>`;
+  }
+  function shareBar(items) {
+    const total = items.reduce((a, i) => a + i.tokens, 0);
+    if (!(total > 0)) return '';
+    return `<div class="sharebar" aria-hidden="true">${items.filter((i) => i.tokens > 0).map((i) => `<div style="width:${(i.tokens / total) * 100}%;background:${i.color}" title="${esc(i.name)} · ${fmtTok(i.tokens)} token"></div>`).join('')}</div>`;
+  }
+
+  function renderPeople() {
+    const list = pick({ party: false });
+    const todayList = pick({ party: false, range: false }).filter((r) => r.day === TODAY_KEY);
+    const by = groupBy(list, 'party');
+    const todayBy = groupBy(todayList, 'party');
+    const allTime = groupBy(rows(), 'party');
+    const items = visibleParties().map((p) => {
+      const s = sum(by.get(p.key) ?? []);
+      return { p, s, tokens: s.tokens, color: partyColor(p.key), name: p.name, today: sum(todayBy.get(p.key) ?? []).tokens,
+        computers: new Set((by.get(p.key) ?? []).filter((r) => r.computer !== NONE).map((r) => r.computer)).size,
+        lastAt: sum(allTime.get(p.key) ?? []).lastAt };
+    });
+    const total = items.reduce((a, i) => a + i.tokens, 0);
+    const hasMembers = items.some((i) => i.p.kind === 'member');
+    const head = `<tr>
+      <th class="first">使用方</th><th>${rangeLabel()} token</th><th>占比</th>
+      ${singleDay() ? '' : '<th>今日</th>'}<th>估算金额</th>${grouped() ? '<th>用到的电脑</th>' : ''}${hasMembers ? '<th aria-label="操作"></th>' : ''}
+    </tr>`;
+    const body = items.map((i) => {
+      const p = i.p;
+      const st = state.statuses[p.key];
+      const used = i.tokens > 0;
+      const avatar = p.kind === 'relay'
+        ? `<span class="avatar" style="color:var(--secondary)">${monitorIcon(14)}</span>`
+        : `<span class="avatar">${esc(p.initial)}</span>`;
+      const tag = p.kind === 'self' ? '你' : p.kind === 'member' ? '分享的人' : '看不到具体是谁';
+      const status = p.kind === 'member'
+        ? (st.status === 'paused' ? '<span class="status paused"><span class="dot"></span>已暂停</span>'
+          : `<span class="status"><span class="dot"></span>正常${st.running > 0 ? ` · ${st.running} 个任务运行中` : ''}</span>`)
+        : '';
+      const last = i.lastAt ? `最近使用：${fmtRelative(i.lastAt)}` : '还未使用';
+      const l2 = p.kind === 'member' ? `${fmtDate(p.joined)}加入 · ${last}` : last;
+      const selected = state.party === p.key;
+      return `<tr class="click ${selected ? 'selected' : ''} ${used ? '' : 'unused'} ${st?.status === 'paused' ? 'paused' : ''}" data-action="focus-party" data-value="${p.key}" title="${selected ? '再点一次看所有人' : `只看 ${esc(p.name)}`}">
+        <td class="first"><div class="who">
+          <span class="swatch" style="background:${i.color}"></span>${avatar}
+          <div class="who-text">
+            <div class="who-l1"><span class="name">${esc(p.name)}</span><span class="tag">${tag}</span>${status}</div>
+            <div class="who-l2">${l2}</div>
+          </div>
+        </div></td>
+        <td>${used ? fmtTok(i.tokens) : '—'}</td>
+        ${used && total > 0 ? shareCell(i.tokens / total, i.color) : '<td class="dim">—</td>'}
+        ${singleDay() ? '' : `<td class="dim">${i.today > 0 ? fmtTok(i.today) : '—'}</td>`}
+        <td>${used ? '约 ' + fmtMoney(i.s.amount) : '—'}</td>
+        ${grouped() ? `<td class="dim">${i.computers > 0 ? `${i.computers} 台` : '—'}</td>` : ''}
+        ${hasMembers ? `<td class="act">${p.kind === 'member' ? `<button type="button" class="icon-btn" data-action="menu" data-value="${p.key}" aria-label="${esc(p.name)} 的更多操作">${dotsIcon}</button>` : ''}</td>` : ''}
+      </tr>`;
+    }).join('');
+    const subtitle = state.computer === 'all' ? rangeLabel() : `${rangeLabel()} · ${computerName(state.computer)}`;
+    return card('按人', subtitle, `${shareBar(items)}<div class="tablewrap"><table style="min-width:640px">${head}<tbody>${body}</tbody></table></div>`);
+  }
+
+  function computerName(k) {
+    if (k === NONE) return '更早的记录';
+    const c = COMPUTERS.find((x) => x.key === k);
+    return c.key === 'local' ? `本机（${c.source}）` : c.name;
+  }
+
+  function renderComputers() {
+    const list = pick({ computer: false });
+    const todayList = pick({ computer: false, range: false }).filter((r) => r.day === TODAY_KEY);
+    const by = groupBy(list, 'computer');
+    const todayBy = groupBy(todayList, 'computer');
+    const keys = COMPUTERS.filter((c) => !c.removed || by.has(c.key)).map((c) => c.key);
+    if (by.has(NONE)) keys.push(NONE);
+    const items = keys.map((k) => {
+      const s = sum(by.get(k) ?? []);
+      return { k, s, tokens: s.tokens, color: computerColor(k), name: computerName(k), today: sum(todayBy.get(k) ?? []).tokens,
+        parties: new Set((by.get(k) ?? []).map((r) => r.party)).size };
+    });
+    const total = items.reduce((a, i) => a + i.tokens, 0);
+    const head = `<tr><th class="first">组内电脑</th><th>${rangeLabel()} token</th><th>占比</th>${singleDay() ? '' : '<th>今日</th>'}<th>估算金额</th><th>使用方</th></tr>`;
+    const body = items.map((i) => {
+      const c = COMPUTERS.find((x) => x.key === i.k);
+      const used = i.tokens > 0;
+      const selected = state.computer === i.k;
+      const source = i.k === NONE ? '当时没有区分电脑' : c.source;
+      const name = i.k === NONE ? '更早的记录' : c.name;
+      const clickable = i.k !== NONE;
+      return `<tr class="${clickable ? 'click' : ''} ${selected ? 'selected' : ''} ${used ? '' : 'unused'}" ${clickable ? `data-action="focus-computer" data-value="${i.k}" title="${selected ? '再点一次看所有电脑' : `只看 ${esc(name)}`}"` : ''}>
+        <td class="first"><div class="who">
+          <span class="swatch" style="background:${i.color}"></span>
+          <span style="color:var(--secondary)">${i.k === NONE ? historyIcon : monitorIcon(14)}</span>
+          <div class="who-l1"><span class="name" style="font-weight:${used ? 500 : 400}">${esc(name)}</span><span class="src">${esc(source)}</span></div>
+        </div></td>
+        <td>${used ? fmtTok(i.tokens) : '—'}</td>
+        ${used && total > 0 ? shareCell(i.tokens / total, i.color) : '<td class="dim">—</td>'}
+        ${singleDay() ? '' : `<td class="dim">${i.today > 0 ? fmtTok(i.today) : '—'}</td>`}
+        <td>${used ? '约 ' + fmtMoney(i.s.amount) : '—'}</td>
+        <td class="dim">${used ? `${i.parties} 方` : '—'}</td>
+      </tr>`;
+    }).join('');
+    const who = state.party === 'all' ? null : PARTIES.find((p) => p.key === state.party)?.name;
+    return card('按电脑', who ? `${rangeLabel()} · ${esc(who)}` : rangeLabel(),
+      `${shareBar(items)}<div class="tablewrap"><table style="min-width:600px">${head}<tbody>${body}</tbody></table></div>`);
+  }
+
+  function renderModels() {
+    const list = pick();
+    if (list.length === 0) return card('按模型', rangeLabel(), '<div class="empty">这段时间没有用量</div>');
+    const by = groupBy(list, 'model');
+    const items = MODELS.filter((m) => by.has(m.key)).map((m) => ({ m, s: sum(by.get(m.key)) })).sort((a, b) => b.s.tokens - a.s.tokens);
+    const total = items.reduce((a, i) => a + i.s.tokens, 0);
+    const head = `<tr><th class="first">模型</th><th>${rangeLabel()} token</th><th>占比</th><th>输入</th><th>输出</th><th>缓存读取</th><th>缓存写入</th><th title="缓存读取 ÷（输入 + 缓存读取 + 缓存写入），与消息卡片同口径。">缓存命中率</th><th>估算金额</th></tr>`;
+    const body = items.map(({ m, s }) => {
+      const color = modelColor(m.key);
+      const hit = s.cacheRead / (s.input + s.cacheRead + s.cacheCreate);
+      return `<tr>
+        <td class="first"><div class="who"><span class="swatch" style="background:${color}"></span><span class="name" style="font-weight:500">${m.name}</span><span class="model-tag">${m.agent}</span></div></td>
+        <td>${fmtTok(s.tokens)}</td>${shareCell(s.tokens / total, color)}
+        <td>${fmtTok(s.input)}</td><td>${fmtTok(s.output)}</td><td>${fmtTok(s.cacheRead)}</td><td>${fmtTok(s.cacheCreate)}</td>
+        <td>${fmtPct(hit)}</td><td>约 ${fmtMoney(s.amount)}</td>
+      </tr>`;
+    }).join('');
+    return card('按模型', rangeLabel(), `<div class="tablewrap"><table style="min-width:720px">${head}<tbody>${body}</tbody></table></div><p class="note">金额按本地单价估算，不代表供应商实际账单。</p>`);
+  }
+
+  function stackMeta() {
+    if (state.stack === 'computer') return { field: 'computer', order: [...COMPUTERS.map((c) => c.key), NONE], color: computerColor, name: computerName, label: '按电脑堆叠' };
+    if (state.stack === 'model') return { field: 'model', order: MODELS.map((m) => m.key), color: modelColor, name: (k) => MODELS.find((m) => m.key === k).name, label: '按模型堆叠' };
+    return { field: 'party', order: PARTIES.map((p) => p.key), color: partyColor, name: (k) => PARTIES.find((p) => p.key === k).name, label: '按人堆叠' };
+  }
+  function dayBars() {
+    const meta = stackMeta();
+    const list = pick({ range: false });
+    const byDay = groupBy(list, 'day');
+    const days = [];
+    for (let i = 29; i >= 0; i--) {
+      const day = shift(-i);
+      const segs = new Map();
+      for (const r of byDay.get(day) ?? []) segs.set(r[meta.field], (segs.get(r[meta.field]) ?? 0) + tokensOf(r));
+      const segments = meta.order.filter((k) => segs.get(k) > 0).map((k) => ({ key: k, tokens: segs.get(k), color: meta.color(k), name: meta.name(k) }));
+      days.push({ day, segments, tokens: segments.reduce((a, s) => a + s.tokens, 0) });
+    }
+    return { days, meta };
+  }
+  function niceTicks(max) {
+    if (!(max > 0)) return [];
+    const raw = max / 4, pow = Math.pow(10, Math.floor(Math.log10(raw)));
+    const step = [1, 2, 2.5, 5, 10].map((m) => m * pow).find((s) => s >= raw) ?? 10 * pow;
+    const t = []; for (let v = step; v <= max * 0.95 && t.length < 3; v += step) t.push(v); return t;
+  }
+  function renderBars() {
+    const H = 96;
+    const { days, meta } = dayBars();
+    const max = Math.max(0, ...days.map((d) => d.tokens));
+    const ticks = niceTicks(max);
+    const sel = selectedDay();
+    const hl = (d) => sel ? d.day === sel : state.range === '7d' && d.day >= shift(-6);
+    const anyHl = days.some(hl);
+    const bars = days.map((d) => {
+      const vh = d.tokens > 0 ? Math.max(3, Math.round((d.tokens / max) * H)) : 2;
+      return `<button type="button" class="bar" data-action="day" data-value="${d.day}" data-tip="bar" data-hl="${hl(d)}" aria-pressed="${sel === d.day}" style="height:${Math.max(24, vh)}px" aria-label="${fmtDate(d.day)} · ${d.tokens > 0 ? fmtTok(d.tokens) + ' token' : '当天没有用量记录'}">
+        <span class="mark" style="height:${vh}px;${d.segments.length ? '' : 'background:var(--chip)'}">${[...d.segments].reverse().map((s) => `<span style="height:${(s.tokens / d.tokens) * 100}%;background:${s.color}"></span>`).join('')}</span>
+      </button>`;
+    }).join('');
+    const present = meta.order.filter((k) => days.some((d) => d.segments.some((s) => s.key === k)));
+    const options = grouped() ? [['party', '按人'], ['computer', '按电脑'], ['model', '按模型']] : [['party', '按人'], ['model', '按模型']];
+    const seg = `<div class="seg" role="group" aria-label="柱子按什么分色">${options.map(([v, l]) => `<button type="button" data-action="stack" data-value="${v}" aria-pressed="${state.stack === v}">${l}</button>`).join('')}</div>`;
+    const body = max > 0 ? `<div class="bars">
+        <div class="yaxis">${ticks.map((v) => `<span style="bottom:${(v / max) * H}px">${fmtTok(v)}</span>`).join('')}</div>
+        <div class="plot ${anyHl ? 'has-hl' : ''}">
+          ${ticks.map((v) => `<div class="gridline" style="bottom:${(v / max) * H}px"></div>`).join('')}
+          <div class="plot-inner">${bars}</div>
+        </div>
+      </div>
+      <div class="legend">${present.map((k) => `<span><i class="swatch" style="background:${meta.color(k)}"></i>${esc(meta.name(k))}</span>`).join('')}</div>`
+      : '<div class="empty">近 30 天没有用量</div>';
+    return card('近 30 天每日 token', meta.label, body, seg);
+  }
+
+  function heatData() {
+    const by = new Map();
+    for (const r of pick({ range: false })) by.set(r.day, (by.get(r.day) ?? 0) + tokensOf(r));
+    return by;
+  }
+  function heatWeeks() { return Math.max(20, Math.min(53, Math.floor((state.heatWidth + 3) / 15))); }
+  function renderHeatInner() {
+    const weeks = heatWeeks();
+    const by = heatData();
+    const max = Math.max(0, ...by.values());
+    const startOffset = -TODAY.getDay() - (weeks - 1) * 7;
+    const MIX = [22, 42, 68, 100];
+    const sel = selectedDay();
+    let cols = '', months = '', lastMonth = -1;
+    for (let w = 0; w < weeks; w++) {
+      const firstDay = parseKey(shift(startOffset + w * 7));
+      if (firstDay.getMonth() !== lastMonth) {
+        if (w < weeks - 2) months += `<span style="left:${w * 15}px">${firstDay.getMonth() + 1}月</span>`;
+        lastMonth = firstDay.getMonth();
+      }
+      let cells = '';
+      for (let d = 0; d < 7; d++) {
+        const off = startOffset + w * 7 + d;
+        if (off > 0) { cells += '<span class="heat-cell ph"></span>'; continue; }
+        const day = shift(off);
+        const v = by.get(day) ?? 0;
+        const lv = v <= 0 ? 0 : v / max > 0.75 ? 4 : v / max > 0.5 ? 3 : v / max > 0.25 ? 2 : 1;
+        const bg = lv === 0 ? 'var(--chip)' : `color-mix(in srgb, var(--heat) ${MIX[lv - 1]}%, var(--chip))`;
+        cells += `<button type="button" class="heat-cell" data-action="day" data-value="${day}" data-tip="heat" aria-pressed="${sel === day}" style="background:${bg}" aria-label="${fmtDate(day)} · ${v > 0 ? fmtTok(v) + ' token' : '当天没有用量记录'}"></button>`;
+      }
+      cols += `<div class="heat-col">${cells}</div>`;
+    }
+    return `<div class="heat-months">${months}</div><div class="heat-grid">${cols}</div>`;
+  }
+  function renderHeatmap() {
+    return card('活跃热力图', `近 ${heatWeeks()} 周`, `<div id="heat-body">${renderHeatInner()}</div>`);
+  }
+
+  // ---------------- 整块 ----------------
+  function render() {
+    if (!grouped()) { state.computer = 'all'; if (state.stack === 'computer') state.stack = 'party'; }
+    const el = document.getElementById('usage');
+    const focus = [];
+    if (state.party !== 'all') focus.push(PARTIES.find((p) => p.key === state.party).name);
+    if (state.computer !== 'all') focus.push(computerName(state.computer));
+    el.innerHTML = `
+      <div class="usage-head">
+        <h3 id="usage-title">用量</h3>
+        <p>${grouped()
+          ? '按人统计 Claude 订阅的用量，默认是所有组内电脑的合计，也可以只看某个人或某一台电脑。你自己的用量从这次更新后开始记录。'
+          : '按人统计 Claude 订阅的用量，你自己 = 本机和你其他电脑的合计。你自己的用量从这次更新后开始记录。'}</p>
+      </div>
+      <div class="filterbar">
+        <span class="label">筛选</span>
+        <div class="filters">
+          ${selectHtml('party', '筛选使用方', state.party, partyOptions())}
+          ${grouped() ? selectHtml('computer', '筛选组内电脑', state.computer, computerOptions()) : ''}
+          ${selectHtml('range', '筛选用量时间范围', state.range, rangeOptions())}
+          <label class="datefield">日期<input type="date" id="date-input" max="${TODAY_KEY}" /></label>
+        </div>
+      </div>
+      ${focus.length ? `<div class="focusline">正在看<span class="pill">${focus.map(esc).join(' · ')}</span>的用量<button type="button" class="btn link" data-action="clear">看全部</button></div>` : ''}
+      ${card('概览', '', renderStats())}
+      ${renderPeople()}
+      ${renderBars()}
+      ${renderHeatmap()}
+      ${grouped() ? renderComputers() : ''}
+      ${renderModels()}
+    `;
+    const dateInput = document.getElementById('date-input');
+    if (dateInput) dateInput.value = selectedDay() ?? '';
+    document.getElementById('group-stub').hidden = !grouped();
+  }
+
+  // ---------------- 交互 ----------------
+  const usage = document.getElementById('usage');
+  usage.addEventListener('click', (e) => {
+    const t = e.target.closest('[data-action]');
+    if (!t) return;
+    const { action, id, value } = t.dataset;
+    if (action === 'open') { state.open = state.open === id ? null : id; render(); return; }
+    if (action === 'pick') {
+      // 只接受各筛选器已有的选项，不让 DOM 的 data-id 写入任意状态(如 statuses)。
+      if (id === 'party') {
+        const option = partyOptions().find((o) => o !== 'sep' && o.value === value);
+        if (option) state.party = option.value;
+      } else if (id === 'computer') {
+        const option = computerOptions().find((o) => o !== 'sep' && o.value === value);
+        if (option) state.computer = option.value;
+      } else if (id === 'range') {
+        const option = rangeOptions().find((o) => o.value === value);
+        if (option) state.range = option.value;
+      }
+      state.open = null; render(); return;
+    }
+    if (action === 'stack') { state.stack = value; render(); return; }
+    if (action === 'day') { state.range = `day:${value}`; hideTip(); render(); return; }
+    if (action === 'focus-party') { state.party = state.party === value ? 'all' : value; render(); return; }
+    if (action === 'focus-computer') { state.computer = state.computer === value ? 'all' : value; render(); return; }
+    if (action === 'clear') { state.party = 'all'; state.computer = 'all'; render(); return; }
+    if (action === 'menu') { e.stopPropagation(); openMenu(t, value); }
+  });
+  usage.addEventListener('change', (e) => {
+    if (e.target.id !== 'date-input') return;
+    const v = e.target.value;
+    if (/^\d{4}-\d{2}-\d{2}$/.test(v) && v <= TODAY_KEY) state.range = `day:${v}`;
+    else if (!v) state.range = '30d';
+    render();
+  });
+  document.addEventListener('click', (e) => {
+    if (state.open && !e.target.closest('.select')) { state.open = null; render(); }
+    if (!e.target.closest('.menu') && !e.target.closest('[data-action="menu"]')) closeMenu();
+  });
+  document.addEventListener('keydown', (e) => {
+    if (e.key !== 'Escape') return;
+    if (state.open) { state.open = null; render(); }
+    closeMenu(); closeDialog();
+  });
+
+  // 行尾 ··· 菜单与删除确认
+  const layer = document.getElementById('menu-layer');
+  function closeMenu() { layer.querySelector('.menu')?.remove(); }
+  function closeDialog() { layer.querySelector('.scrim')?.remove(); }
+  function openMenu(anchor, key) {
+    closeMenu();
+    const p = PARTIES.find((x) => x.key === key);
+    const paused = state.statuses[key].status === 'paused';
+    const r = anchor.getBoundingClientRect();
+    const menu = document.createElement('div');
+    menu.className = 'menu'; menu.setAttribute('role', 'menu');
+    menu.innerHTML = `<button type="button" role="menuitem" data-m="toggle">${paused ? '恢复分享' : '关闭分享'}</button><button type="button" role="menuitem" class="danger" data-m="remove">删除</button>`;
+    menu.style.top = `${r.bottom + 4}px`;
+    menu.style.left = `${Math.max(8, r.right - 160)}px`;
+    menu.addEventListener('click', (e) => {
+      const b = e.target.closest('[data-m]'); if (!b) return;
+      closeMenu();
+      if (b.dataset.m === 'toggle') {
+        state.statuses[key] = paused ? { status: 'active', running: 0 } : { status: 'paused', running: 0 };
+        render();
+      } else confirmRemove(p);
+    });
+    layer.appendChild(menu);
+  }
+  function confirmRemove(p) {
+    const scrim = document.createElement('div');
+    scrim.className = 'scrim';
+    scrim.innerHTML = `<div class="dialog" role="dialog" aria-modal="true" aria-labelledby="dlg-t">
+      <h4 id="dlg-t">删除对 ${esc(p.name)} 的分享？</h4>
+      <p>${esc(p.name)} 将立即无法使用 Claude 订阅，正在运行的任务会停止。之后要再分享，需要重新生成链接。用量记录会保留。</p>
+      <div class="actions"><button type="button" class="btn secondary" data-d="cancel">取消</button><button type="button" class="btn danger" data-d="ok">删除分享</button></div>
+    </div>`;
+    scrim.addEventListener('click', (e) => {
+      const b = e.target.closest('[data-d]');
+      if (e.target === scrim || b?.dataset.d === 'cancel') closeDialog();
+      else if (b?.dataset.d === 'ok') { state.removed.add(p.key); if (state.party === p.key) state.party = 'all'; closeDialog(); render(); }
+    });
+    layer.appendChild(scrim);
+    scrim.querySelector('[data-d="cancel"]').focus();
+  }
+
+  // 悬停浮层：柱子显示当天每部分多少，热力格只显示当天合计
+  const tip = document.getElementById('tooltip');
+  function hideTip() { tip.hidden = true; }
+  function showTip(el) {
+    const day = el.dataset.value;
+    let html = `<div class="d">${fmtFullDate(day)}</div>`;
+    if (el.dataset.tip === 'bar') {
+      const { days } = dayBars();
+      const d = days.find((x) => x.day === day);
+      if (!d || d.tokens === 0) html += '<div class="t" style="font-size:13px;margin-bottom:0">当天没有用量记录</div>';
+      else {
+        const segs = [...d.segments].sort((a, b) => b.tokens - a.tokens);
+        html += `<div class="t">${fmtTok(d.tokens)}<small>token</small></div>`;
+        html += `<div class="segbar">${segs.map((s) => `<span style="width:${(s.tokens / d.tokens) * 100}%;background:${s.color}"></span>`).join('')}</div>`;
+        html += segs.map((s) => `<div class="r"><i class="swatch" style="background:${s.color}"></i><span class="n">${esc(s.name)}</span><span class="v">${fmtTok(s.tokens)}</span><span class="p">${fmtPct(s.tokens / d.tokens)}</span></div>`).join('');
+      }
+    } else {
+      const v = heatData().get(day) ?? 0;
+      html += v > 0 ? `<div class="t" style="margin-bottom:0">${fmtTok(v)}<small>token</small></div>` : '<div class="t" style="font-size:13px;margin-bottom:0">当天没有用量记录</div>';
+    }
+    tip.innerHTML = html;
+    tip.hidden = false;
+    const r = el.getBoundingClientRect();
+    const w = tip.offsetWidth, h = tip.offsetHeight;
+    let left = r.left + r.width / 2 - w / 2;
+    left = Math.min(window.innerWidth - w - 8, Math.max(8, left));
+    let top = r.top - h - 8;
+    if (top < 56) top = r.bottom + 8;
+    tip.style.left = `${left}px`; tip.style.top = `${top}px`;
+  }
+  usage.addEventListener('pointerover', (e) => { const el = e.target.closest('[data-tip]'); if (el) showTip(el); });
+  usage.addEventListener('pointerout', (e) => { const el = e.target.closest('[data-tip]'); if (el && !el.contains(e.relatedTarget)) hideTip(); });
+  usage.addEventListener('focusin', (e) => { const el = e.target.closest('[data-tip]'); if (el) showTip(el); });
+  usage.addEventListener('focusout', hideTip);
+  window.addEventListener('scroll', hideTip, true);
+
+  // 热力图按卡片宽度显示至少 20 周
+  new ResizeObserver(() => {
+    const body = document.getElementById('heat-body');
+    if (!body) return;
+    const width = body.clientWidth;
+    if (Math.abs(width - state.heatWidth) < 8) return;
+    state.heatWidth = width;
+    body.innerHTML = renderHeatInner();
+    const sub = body.closest('.card').querySelector('.subtitle');
+    if (sub) sub.textContent = `近 ${heatWeeks()} 周`;
+  }).observe(document.querySelector('.page'));
+
+  // 评审工具条
+  function bindSeg(id, onPick) {
+    const seg = document.getElementById(id);
+    seg.addEventListener('click', (e) => {
+      const b = e.target.closest('button'); if (!b) return;
+      seg.querySelectorAll('button').forEach((x) => x.setAttribute('aria-pressed', String(x === b)));
+      onPick(b.dataset.v);
+    });
+  }
+  bindSeg('theme-seg', (v) => { document.body.classList.toggle('dark', v === 'dark'); });
+  bindSeg('scenario-seg', (v) => { state.scenario = v; render(); });
+
+  render();
+})();
+</script>
+</body>
+</html>

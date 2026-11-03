@@ -92,6 +92,52 @@ describe('round-trip: 每种消息构造后可被解析且等价', () => {
     expect(msg.payload.lifecycleAnnouncement).toBe(false);
   });
 
+  it('hello status palette is optional, preserves native names and bounds malformed declarations', () => {
+    const hello = makeHello({
+      deviceId: 'dev',
+      deviceName: 'Desktop',
+      workspaces: [],
+      agents: [],
+    });
+    roundTrip(hello); // Old desktop remains accepted.
+    const palette = {
+      queued: 'eyes',
+      processing: ['female-technologist::skin-tone-2'],
+      error: 'x',
+    };
+    roundTrip({
+      ...hello,
+      payload: { ...hello.payload, statusReactions: palette },
+    });
+    roundTrip({
+      ...hello,
+      payload: {
+        ...hello.payload,
+        statusReactions: {
+          queued: '👀',
+          processing: ['🤔'],
+          error: '👎',
+          expressiveError: ['😢'],
+        },
+      },
+    });
+    for (const invalid of [
+      null,
+      {},
+      { ...palette, processing: [] },
+      { ...palette, processing: Array(17).fill('🤔') },
+      { ...palette, queued: 'a'.repeat(65) },
+      { ...palette, error: 'two names' },
+      { ...palette, expressiveError: [] },
+      { ...palette, expressiveError: Array(65).fill('👎') },
+    ]) {
+      expectReject(
+        { ...hello, payload: { ...hello.payload, statusReactions: invalid } },
+        'hello.statusReactions',
+      );
+    }
+  });
+
   it('lifecycle.preference', () => {
     roundTrip(makeLifecyclePreference({ enabled: true }));
     expectReject(

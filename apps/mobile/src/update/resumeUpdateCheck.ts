@@ -4,9 +4,8 @@
 // 后台的 App 永远吃不到新版本;这里在 background → active 时补一次检查,但表现必须无感:
 // - JS OTA:静默 check → fetch,**绝不 reload**(reload 会闪屏断状态);下载好的 bundle
 //   由 expo-updates 在下次冷启动自动生效。
-// - 整包(runtimeVersion 变化):静默拉 /latest 比对;唯一允许出 UI 的情况是命中
-//   minVersion 强更(强更本身无法无感),此时上报给 onForcedUpdate 进入阻断态;
-//   非强更完全静默(启动路径已有一次性提示,不在每次切回时骚扰)。
+// - 整包(runtimeVersion 变化):静默拉 /latest 比对，强更上报 onForcedUpdate 进入阻断态；
+//   普通更新交给 onAvailableUpdate，Android 在 Wi-Fi 下备好 APK 后才提示安装。
 // - 节流:只认真正的 background → active(iOS 通知中心/来电导致的 inactive 抖动不算),
 //   两次检查最小间隔 minIntervalMs;创建时间视为"刚检查过"(冷启动路径刚跑完,首次
 //   切回不重复查)。
@@ -54,6 +53,7 @@ export interface ResumeUpdateCheckDeps {
    * 实现因故无法给出出口(如拿不到安装地址)时应自行 no-op,不要留下无出口的阻断屏。
    */
   onForcedUpdate: (evaluation: BundleUpdateEvaluation) => void;
+  onAvailableUpdate?: (evaluation: BundleUpdateEvaluation) => void;
   now: () => number;
   /** hook 卸载/账号切换后使旧检查失效，避免迟到结果给新账号弹窗。 */
   isCurrent?: () => boolean;
@@ -138,7 +138,10 @@ export function createResumeUpdateChecker(
         latest,
       });
       if (!evaluation.needsUpdate || !evaluation.target) return 'up-to-date';
-      if (!evaluation.forced) return 'update-available'; // 非强更静默:启动路径已负责提示
+      if (!evaluation.forced) {
+        deps.onAvailableUpdate?.(evaluation);
+        return 'update-available';
+      }
       if (deps.isCurrent && !deps.isCurrent()) return 'skipped';
       deps.onForcedUpdate(evaluation); // 幂等,不去重:阻断态重复上报无副作用
       return 'forced';

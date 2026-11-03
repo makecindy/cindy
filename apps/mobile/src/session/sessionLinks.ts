@@ -1,4 +1,6 @@
+import { isSharedTaskPeer } from '@cindy/device-link';
 import { BRAND_IDENTITY, allDeepLinkSchemes } from '@cindy/maker-shared/brand-identity';
+import type { RemoteSession } from '@/session/types';
 
 // 深链双 scheme(身份单点派生):cindy 主 + xdt-maker 永久兼容(存量消息里的
 // 老链接不能死);生成一律用主 scheme。与桌面端 shared/deepLinkSchemes 同源镜像。
@@ -21,16 +23,47 @@ export function isCindyDeepLinkUrl(url: string): boolean {
   return typeof url === 'string' && DEEP_LINK_SCHEMES.some((s) => url.startsWith(`${s}://`));
 }
 
-export function buildMobileSessionDeepLink(sessionId: string): string {
-  return `${SESSION_LINK_PREFIX}${encodeURIComponent(sessionId)}`;
+/**
+ * 同账号任务的 device-link 设备冻进 `?device=`(与桌面端 builder 同形):
+ * 目标任务归档 / 未同步后仍能找到所属电脑。共享访客链接保留原有无设备格式。
+ */
+export interface MobileSessionDeepLinkOptions {
+  /** 当前同步的任务信息优先于页面保留的设备路由。 */
+  session?: Pick<RemoteSession, 'canonicalDeviceId' | 'deviceLinkDeviceId'> | null;
+  deviceId?: string | null;
+}
+
+function sessionDeepLinkQuery(
+  opts: MobileSessionDeepLinkOptions | undefined,
+  messageClientId?: string,
+): string {
+  const pairs: string[] = [];
+  if (messageClientId) pairs.push(`message=${encodeURIComponent(messageClientId)}`);
+  const sourceDeviceId = opts?.session?.canonicalDeviceId
+    ?? opts?.session?.deviceLinkDeviceId
+    ?? opts?.deviceId;
+  // 共享句柄只在当前客户端有效,其物理设备也不代表访客的授权路由。
+  // 保留共享链接原有格式,由已同步的共享任务目录提供路由。
+  if (sourceDeviceId && !isSharedTaskPeer(sourceDeviceId)) {
+    pairs.push(`device=${encodeURIComponent(sourceDeviceId)}`);
+  }
+  return pairs.length > 0 ? `?${pairs.join('&')}` : '';
+}
+
+export function buildMobileSessionDeepLink(
+  sessionId: string,
+  opts?: MobileSessionDeepLinkOptions,
+): string {
+  return `${SESSION_LINK_PREFIX}${encodeURIComponent(sessionId)}${sessionDeepLinkQuery(opts)}`;
 }
 
 /** 带消息锚点的会话深链(clientId 语义,与桌面端 builder 等价镜像)。 */
 export function buildMobileSessionMessageDeepLink(
   sessionId: string,
   messageClientId: string,
+  opts?: MobileSessionDeepLinkOptions,
 ): string {
-  return `${buildMobileSessionDeepLink(sessionId)}?message=${encodeURIComponent(messageClientId)}`;
+  return `${SESSION_LINK_PREFIX}${encodeURIComponent(sessionId)}${sessionDeepLinkQuery(opts, messageClientId)}`;
 }
 
 export interface SessionDeepLinkTarget {
@@ -87,6 +120,25 @@ export function parseSessionDeepLinkUrl(url: string): SessionDeepLinkTarget | nu
     }
   }
   return { sessionId, messageClientId, deviceId };
+}
+
+/**
+ * 点开 / 解析会话深链时目标任务所在的设备。已同步列表反查到的可达设备优先
+ * (re-link 后深链冻结的 `?device=` 可能已过期);列表里没有(已归档 / 尚未同步)
+ * 时用冻结值,再退回当前任务所在设备。同账号远程任务链接会冻结 `?device=`;
+ * 电脑本机生成的深链和共享访客链接可以不带它。共享访问仍依赖既有授权目录,
+ * 这里不负责冷启动恢复共享身份。
+ */
+export function resolveSessionLinkDeviceId({
+  listedDeviceId,
+  linkedDeviceId,
+  currentDeviceId,
+}: {
+  listedDeviceId?: string | null;
+  linkedDeviceId?: string | null;
+  currentDeviceId?: string | null;
+}): string | null {
+  return listedDeviceId || linkedDeviceId || currentDeviceId || null;
 }
 
 /**

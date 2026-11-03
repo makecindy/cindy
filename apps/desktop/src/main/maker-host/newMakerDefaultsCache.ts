@@ -1,3 +1,4 @@
+import { normalizeWorkerCreationSelection, type WorkerCreationSelection } from '../../shared/workerCreationSelection.js';
 import { normalizeBotModelChain, type BotModelRoute } from '../../shared/botModelChain.js';
 import { isDataOwnerPushStamp, type DataOwnerPushStamp } from '../../shared/dataOwnerPush.js';
 import {
@@ -40,7 +41,7 @@ export interface NewMakerDraftSnapshot {
   lastByVendor: Partial<Record<VendorKey, VendorPrefsSnapshot>>;
   /** 每个 vendor 是否由用户在 New Maker picker 明确选过模型；旧 renderer 缺省不提供。 */
   modelChosenByVendor?: Partial<Record<VendorKey, boolean>>;
-  fastModeByModel: Record<string, boolean>;
+  fastModeByModel: Record<string, boolean | 'ultrafast'>;
   effortByModel: Record<string, string>;
   /**
    * 「新建会话默认启用 worktree」勾选记忆(vendor 无关的草稿根字段)。
@@ -60,6 +61,8 @@ export function subscribeNewMakerDefaults(listener: (confirmedRequestId?: string
 
 export interface WorkerCreationPrefsSnapshot {
   workerPermissionMode: OrcaWorkerPermissionMode;
+  selection?: WorkerCreationSelection | null;
+  ownerStamp?: DataOwnerPushStamp;
 }
 
 let workerCreationPrefsCache: WorkerCreationPrefsSnapshot | null = null;
@@ -74,7 +77,7 @@ export type ProviderModelMemorySnapshot = Record<
   string,
   {
     effortByModel: Record<string, string>;
-    fastByModel: Record<string, boolean>;
+    fastByModel: Record<string, boolean | 'ultrafast'>;
     thinkingByModel?: Record<string, boolean>;
   }
 >;
@@ -117,6 +120,8 @@ export function syncNewMakerDraftCache(
 /** Renderer localStorage workerCreationPrefs 的 main 端内存镜像。 */
 export function setWorkerCreationPrefsCache(snapshot: WorkerCreationPrefsSnapshot): void {
   workerCreationPrefsCache = {
+    ...workerCreationPrefsCache,
+    ...snapshot,
     workerPermissionMode: resolveOrcaWorkerPermissionMode(snapshot.workerPermissionMode),
   };
 }
@@ -128,19 +133,88 @@ export function getWorkerPermissionModeFromCreationPrefs(): OrcaWorkerPermission
 
 /** Renderer push handler 调; 整体替换 providerModelMemory 镜像。 */
 export function setProviderModelMemoryCache(snapshot: ProviderModelMemorySnapshot): void {
-  providerMemoryCache = snapshot;
+  providerMemoryCache = applyPinnedThinkingIntents(snapshot);
+}
+
+/**
+ * 跨引擎切换提交时写入的思考开关「钉子」：renderer 的全量快照推送可能仍基于尚未
+ * 学习到本次选择的状态（远端推送未回流 / 旧快照在途），整体替换会把刚写入的值抹掉。
+ * 钉子叠加在每次快照替换之上，直到快照自己带上同一个值（renderer 已追上）才撤掉；
+ * 撤掉之后 renderer 就是该值的唯一来源，后续改动不会再被压住。
+ */
+const pinnedThinkingIntents = new Map<string, Map<string, boolean>>();
+
+function applyPinnedThinkingIntents(
+  snapshot: ProviderModelMemorySnapshot,
+): ProviderModelMemorySnapshot {
+  if (pinnedThinkingIntents.size === 0) return snapshot;
+  let next: ProviderModelMemorySnapshot | null = null;
+  for (const [key, pinned] of pinnedThinkingIntents) {
+    const incoming = snapshot[key]?.thinkingByModel ?? {};
+    let merged: Record<string, boolean> | null = null;
+    for (const [model, value] of pinned) {
+      if (incoming[model] === value) {
+        // renderer 已追上该选择：撤钉，之后的改动以 renderer 为准。
+        pinned.delete(model);
+        continue;
+      }
+      merged ??= { ...incoming };
+      merged[model] = value;
+    }
+    if (pinned.size === 0) pinnedThinkingIntents.delete(key);
+    if (merged) {
+      next ??= { ...snapshot };
+      next[key] = {
+        effortByModel: snapshot[key]?.effortByModel ?? {},
+        fastByModel: snapshot[key]?.fastByModel ?? {},
+        thinkingByModel: merged,
+      };
+    }
+  }
+  return next ?? snapshot;
+}
+
+/**
+ * 局部写入某 (agent, provider, model) 的思考开关。跨引擎切换提交后由主进程调用：
+ * 普通 send 的 lazy-create 只读镜像（不经过 bootstrap），远端推送尚未回流时也能
+ * 读到用户刚选的值，避免新建会话用旧偏好。
+ */
+export function setThinkingEnabledInMemory(
+  agentKind: 'claude-code' | 'codex' | 'pi',
+  providerId: string | null | undefined,
+  model: string | undefined,
+  enabled: boolean,
+): void {
+  if (!providerId || !model) return;
+  const key = `${agentKind}:${providerId}`;
+  // 镜像已经带上同一个值：renderer 自己就是该值的来源，不需要钉，钉住只会
+  // 压住后来的用户改动。
+  if (providerMemoryCache?.[key]?.thinkingByModel?.[model] === enabled) return;
+  const entry = providerMemoryCache?.[key];
+  providerMemoryCache = {
+    ...(providerMemoryCache ?? {}),
+    [key]: {
+      effortByModel: entry?.effortByModel ?? {},
+      fastByModel: entry?.fastByModel ?? {},
+      thinkingByModel: { ...entry?.thinkingByModel, [model]: enabled },
+    },
+  };
+  const pinned = pinnedThinkingIntents.get(key) ?? new Map<string, boolean>();
+  pinned.set(model, enabled);
+  pinnedThinkingIntents.set(key, pinned);
 }
 
 export interface WorkerDefaultsFromNewMaker {
   model?: string;
   effort?: string;
-  fastMode?: boolean;
+  fastMode?: boolean | 'ultrafast';
   providerId?: string | null;
 }
 
 /**
  * 读某 (agent, provider, model) 在 providerModelMemory 镜像里的思考开关。
  * 未推送 / 未记录 → undefined，调用方保持模型默认（开）。
+ * 权威 `${agent}:*` 全局槽优先，来源副本兜底（被控端旧快照可能只写过来源槽）。
  */
 export function getThinkingEnabledFromMemory(
   agentKind: 'claude-code' | 'codex' | 'pi',
@@ -148,7 +222,10 @@ export function getThinkingEnabledFromMemory(
   model: string | undefined,
 ): boolean | undefined {
   if (!providerMemoryCache || !providerId || !model) return undefined;
-  return providerMemoryCache[`${agentKind}:${providerId}`]?.thinkingByModel?.[model];
+  return (
+    providerMemoryCache[`${agentKind}:*`]?.thinkingByModel?.[model] ??
+    providerMemoryCache[`${agentKind}:${providerId}`]?.thinkingByModel?.[model]
+  );
 }
 
 /**
@@ -166,8 +243,28 @@ export function getWorkerDefaultsFromNewMaker(
   // effortByModel 是跨 vendor 的"按模型记忆", 优先用; 没有就退回 vendor prefs 上次记录的 effort。
   const effort = cache.effortByModel[model] ?? prefs.effort;
   // fastModeByModel 缺省按 false 兜底 (用户没显式开过就是关)。
-  const fastMode = cache.fastModeByModel[model] === true;
+  const fastMode = (cache.fastModeByModel[model] ?? false);
   return { model, effort, fastMode, providerId: prefs.providerId };
+}
+
+/**
+ * 新建任务草稿里该 Harness 的模型与来源，以及是否由用户显式选过(无人值守入口按新建任务
+ * 口径解析默认模型用,见 shared/draftModelCalibration resolveNewTaskDefaultRoute)。
+ * 与 getSelectedNewMakerRoute 同样按账号隔离:缓存未就绪或仍是上一个账号推来的 → null,
+ * 切账号窗口内不拿上一个账号的模型 / 来源偏好去跑。
+ */
+export function getNewTaskDraftSelection(
+  ownerScope: string,
+  agent: 'claude-code' | 'codex' | 'pi',
+): { model?: string; providerId?: string | null; chosenByUser: boolean } | null {
+  if (!cache || selectedRouteOwner !== ownerScope) return null;
+  const vendor: VendorKey = agent === 'claude-code' ? 'cc' : agent;
+  const prefs = cache.lastByVendor[vendor];
+  return {
+    model: prefs?.model,
+    providerId: prefs?.providerId,
+    chosenByUser: cache.modelChosenByVendor?.[vendor] === true,
+  };
 }
 
 /**
@@ -188,12 +285,12 @@ export interface RemoteNewMakerDefaults {
   /** false = 明确未选过，可应用目录新任务默认；undefined = 旧端未知，保守保留原模型。 */
   modelChosenByUser?: boolean;
   effort?: string;
-  fastMode?: boolean;
+  fastMode?: boolean | 'ultrafast';
   permissionMode?: string;
   providerId?: string | null;
   /** 每个模型各自记忆的 effort / fast(切模型还原用)。旧版被控端不回 → 控制端拿到 undefined。 */
   effortByModel?: Record<string, string>;
-  fastModeByModel?: Record<string, boolean>;
+  fastModeByModel?: Record<string, boolean | 'ultrafast'>;
   /**
    * providerModelMemory 全量快照;`${agent}:*` 是模型级全局预设,来源槽保留旧 v2 兼容副本。
    * device-link 草稿列表行(非选中模型)的真实权威读源:控制端据此镜像被控端每个模型的
@@ -231,7 +328,7 @@ export function getRemoteNewMakerDefaults(
   return {
     model,
     effort: prefs.effort ?? cache.effortByModel[model],
-    fastMode: cache.fastModeByModel[model] === true,
+    fastMode: (cache.fastModeByModel[model] ?? false),
     permissionMode: prefs.permissionMode,
     providerId: prefs.providerId ?? null,
     effortByModel: cache.effortByModel,
@@ -260,13 +357,23 @@ export function getSelectedNewMakerRoute(ownerScope: string): BotModelRoute | un
 
 /** Same snapshot as the selected route; never consume the unfenced legacy preference cache. */
 export function getNewMakerModelTuning(ownerScope: string, agent: 'claude-code' | 'codex' | 'pi',
-  providerId: string, model: string): { effort?: string; fastMode?: boolean } {
+  providerId: string, model: string): { effort?: string; fastMode?: boolean | 'ultrafast' } {
   if (selectedRouteOwner !== ownerScope || !cache) return {};
   const memory = cache.providerModelMemory;
+  // 权威 `${agent}:*` 槽优先,来源副本只兜底旧客户端(同 getThinkingEnabledFromMemory 与
+  // renderer getProviderModel*):来源槽优先会让同模型换个来源就回到旧档位 —— 正是
+  // 「推理强度自己变低」那一类缺陷,只是发生在 main 侧的这条读路径上。
+  const preset = memory?.[`${agent}:*`];
   const provider = memory?.[`${agent}:${providerId}`];
-  const legacy = memory?.[`${agent}:*`];
-  const effort = provider?.effortByModel?.[model] ?? legacy?.effortByModel?.[model] ?? cache.effortByModel[model];
-  const fastMode = provider?.fastByModel?.[model] ?? legacy?.fastByModel?.[model] ?? cache.fastModeByModel[model];
+  const effort = preset?.effortByModel?.[model] ?? provider?.effortByModel?.[model] ?? cache.effortByModel[model];
+  const fastMode = preset?.fastByModel?.[model] ?? provider?.fastByModel?.[model] ?? cache.fastModeByModel[model];
   return { ...(typeof effort === 'string' ? { effort } : {}),
-    ...(typeof fastMode === 'boolean' ? { fastMode } : {}) };
+    ...((typeof fastMode === 'boolean' || fastMode === 'ultrafast') ? { fastMode } : {}) };
+}
+
+/** Route mirrors are owner/generation fenced; changing permission alone preserves them. */
+export function getWorkerCreationSelection(owner: DataOwnerPushStamp): WorkerCreationSelection | null {
+  const stamp = workerCreationPrefsCache?.ownerStamp;
+  return stamp?.dataOwnerId === owner.dataOwnerId && stamp?.ownerGeneration === owner.ownerGeneration
+    ? normalizeWorkerCreationSelection(workerCreationPrefsCache?.selection) : null;
 }

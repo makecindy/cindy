@@ -11,7 +11,20 @@
  */
 
 import { createLogger } from '../../logger';
-import { acquirePendingAgentSwitchForDirectSend } from '../../maker-ipc/register';
+import { eq } from 'drizzle-orm';
+import { getDbClient } from '../../localDb/client/current';
+import { sessions } from '../../localDb/schema';
+import { onChannelTurn } from '../../maker-ipc/channelTurnSignal';
+import { captureImAccountGeneration, isImAccountGenerationCurrent } from '../accountBoundary';
+import { bindingStore } from '../binding';
+import {
+  acquirePendingAgentSwitchForDirectSend,
+  acquirePendingAgentSwitchForImSend,
+  prepareUnhealthySessionForSend,
+  registerSwitchedSessionVendorOptionsResolver,
+} from '../../maker-ipc/register';
+import { createImChannelDefaultRouteSync } from './channelDefaultRouteSync';
+import { createImCompanionRouteDeps } from './imBotBindingRuntime';
 import { createImSessionRepo, type ImSessionRepo } from './sessionRepo';
 import { createCardBuilders, type ImCardBuilders } from './cardBuilders';
 import { createTurnRunner, type ImTurnRunner } from './turnRunner';
@@ -32,19 +45,90 @@ export interface ImOrchestrator {
   detachFromSession(sessionId: string): void;
   /** Stop IM-owned turns and release all account-scoped session hooks. */
   disposeAllSessions(): Promise<void>;
+  /** 从注册表摘掉并注销跨模块挂钩(伙伴自有连接移除 / 停止时)。 */
+  unregister(): void;
 }
 
-/** 渠道名 → orchestrator 注册表 — composition root (im/index.ts) 查询用。 */
-const registry = new Map<ImChannelName, ImOrchestrator>();
+export interface CreateImOrchestratorOptions {
+  /**
+   * 注册表键。缺省 = 渠道名(设置页那份个人连接, 每渠道一份); 伙伴自有连接每条一个
+   * 独立键(`<channel>#<connectionId>`), 与设置页那份并存。
+   */
+  instanceKey?: string;
+  /**
+   * 这条连接属于哪位伙伴: 主人私聊进伙伴主任务, 群 / 话题 / 外部私聊进伙伴的隐藏
+   * 专线(需 adapter.companionLane)。缺省 = 渠道自己的路由。
+   */
+  companionBotId?: string | (() => string | null);
+}
+
+/**
+ * 注册表 — composition root (im/index.ts) 按渠道名查设置页那份; 伙伴自有连接按
+ * instanceKey 登记, `listImOrchestrators` 两者都含。
+ */
+const registry = new Map<string, ImOrchestrator>();
+
+// Background sends can be the first activity after restart: restore only output
+// routing from the saved channel identity, without creating/resuming a session.
+onChannelTurn(async (session, phase, source) => {
+  if (phase !== 'starting') return;
+  if (source === 'provider-wake' || source === 'provider-wake-local') {
+    // No send precedes a harness wake-up: its first event fans out right after this synchronous
+    // call. Only output already wired for a channel can be marked in time; a cold route restored
+    // after the row query would relay from mid-turn, so it is not attempted. Same admission as
+    // below: a logged-out or replaced account, or a disconnected channel, relays nothing.
+    if (captureImAccountGeneration() === null) return;
+    for (const orchestrator of registry.values()) {
+      if (orchestrator.adapter.im.getStatus().kind === 'connected') orchestrator.turnRunner.noteChannelTurnSource(session, source);
+    }
+    return;
+  }
+  const generation = captureImAccountGeneration();
+  if (generation === null || ![...registry.values()].some((o) => o.adapter.im.getStatus().kind === 'connected')) return;
+  const [row] = await getDbClient().drizzle.select().from(sessions)
+    .where(eq(sessions.id, session.id)).limit(1);
+  if (!row || row.status === 'deleted' || row.status === 'archived' || !isImAccountGenerationCurrent(generation)) return;
+  if (row.source === 'bot') {
+    // 伙伴任务没有渠道身份列: 只标记已接好输出的伙伴专线(连接交给伙伴后的群 /
+    // 话题), 是否回传由 turnRunner 按专线 / 主任务判定。冷路径(重启后先来的后台
+    // 结果)不恢复, 下一条渠道消息接线后照常。
+    for (const orchestrator of registry.values()) {
+      if (orchestrator.adapter.im.getStatus().kind === 'connected') {
+        orchestrator.turnRunner.noteChannelTurnSource(session, source);
+      }
+    }
+    return;
+  }
+  const binding = bindingStore.findByTarget(session.id);
+  const orchestrator = registry.get((binding?.channel ?? row.source) as ImChannelName);
+  if (!orchestrator) return;
+  const status = orchestrator.adapter.im.getStatus();
+  const botId = binding?.botContextId ?? (row.source === 'feishu' ? row.feishuBotAppId : row.imBotContextId);
+  if (status.kind !== 'connected') return;
+  const connectedBotId = orchestrator.adapter.getBotContextId?.() ?? status.appId;
+  if (!connectedBotId || connectedBotId !== botId) return;
+  const userId = binding?.userId ?? (row.source === 'feishu' ? row.feishuOpenId : row.imUserId);
+  if (userId) orchestrator.turnRunner.attachSessionOutput(session, userId, {
+    attached: binding !== null,
+    scopeKey: binding?.scopeKey,
+  }, source);
+});
 
 /**
  * 创建并接线一个渠道编排器:所有渠道订阅 im.onMessage；只有 rich-card
  * 渠道订阅 onCardAction。每个渠道只允许调一次(重复调说明 wiring 层 bug,
  * 直接抛)。
  */
-export function createImOrchestrator(adapter: ImChannelAdapter): ImOrchestrator {
-  if (registry.has(adapter.channel)) {
-    throw new Error(`im orchestrator for channel=${adapter.channel} already created`);
+export function createImOrchestrator(
+  adapter: ImChannelAdapter,
+  options: CreateImOrchestratorOptions = {},
+): ImOrchestrator {
+  const instanceKey = options.instanceKey ?? adapter.channel;
+  if (registry.has(instanceKey)) {
+    throw new Error(`im orchestrator ${instanceKey} already created`);
+  }
+  if (options.companionBotId && !adapter.companionLane) {
+    throw new Error(`im orchestrator ${instanceKey}: companionBotId requires adapter.companionLane`);
   }
   // threadScoped 渠道的能力配对断言 — thread 文案组与 messageId→threadKey
   // 提取能力缺一不可, 接线期 fail-fast 好过运行时静默坏掉。
@@ -72,9 +156,28 @@ export function createImOrchestrator(adapter: ImChannelAdapter): ImOrchestrator 
     projectSwitching: adapter.projectSwitching === true,
   });
   const cards = createCardBuilders(adapter.ui, repo.getDefaultEffortFor);
-  const turnRunner = createTurnRunner(adapter, repo, cards, {
-    acquirePendingAgentSwitch: acquirePendingAgentSwitchForDirectSend,
+  const defaultRouteSync = createImChannelDefaultRouteSync({
+    source: adapter.sessions.source,
+    config: adapter.config,
+    isRouteUsable: (route) => turnRunner.hasAuthForRoute(route),
   });
+  const turnRunner = createTurnRunner(adapter, repo, cards, {
+    acquirePendingAgentSwitch: (sessionId, opts) =>
+      opts?.channelOwned
+        ? acquirePendingAgentSwitchForImSend(sessionId, () => defaultRouteSync.syncUnderLock(sessionId))
+        : acquirePendingAgentSwitchForDirectSend(sessionId),
+    channelDefaultRoute: defaultRouteSync,
+    // 发送前故障恢复与桌面直发同源；健康上下文交给 Session 原生压缩。
+    prepareUnhealthySession: (sessionId) => prepareUnhealthySessionForSend(sessionId),
+    // 伙伴自有连接: 消息落在伙伴的主任务 / 隐藏专线上。
+    ...(options.companionBotId
+      ? { companion: createImCompanionRouteDeps(options.companionBotId) }
+      : {}),
+  });
+  // 切换引擎重建会话时补回本渠道的 vendorOptions(bot 专属工具依赖它)。
+  const unregisterVendorOptionsResolver = registerSwitchedSessionVendorOptionsResolver(
+    (sessionId) => turnRunner.vendorOptionsForSession(sessionId),
+  );
   const slash = createSlashHandlers(adapter, repo, cards, turnRunner);
   const attachMessageHandler = createMessageHandler(adapter, slash, turnRunner);
 
@@ -92,14 +195,19 @@ export function createImOrchestrator(adapter: ImChannelAdapter): ImOrchestrator 
     turnRunner,
     detachFromSession: (sessionId) => turnRunner.detachFromSession(sessionId),
     disposeAllSessions: () => turnRunner.disposeAllSessions(),
+    unregister: () => {
+      unregisterVendorOptionsResolver();
+      if (registry.get(instanceKey) === orchestrator) registry.delete(instanceKey);
+    },
   };
-  registry.set(adapter.channel, orchestrator);
-  log.info(`im orchestrator wired for channel=${adapter.channel}`);
+  registry.set(instanceKey, orchestrator);
+  log.info(`im orchestrator wired for ${instanceKey}`);
   return orchestrator;
 }
 
+/** 设置页那份个人连接的编排器(按渠道名); 伙伴自有连接不在这里查。 */
 export function getImOrchestrator(channel: string): ImOrchestrator | undefined {
-  return registry.get(channel as ImChannelName);
+  return registry.get(channel);
 }
 
 export function listImOrchestrators(): ImOrchestrator[] {

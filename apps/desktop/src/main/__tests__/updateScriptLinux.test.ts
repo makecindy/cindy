@@ -38,6 +38,20 @@ describe('shellSingleQuote', () => {
 describe('buildLinuxUpdateScript structure', () => {
   const script = buildLinuxUpdateScript(makeParams());
 
+  it('uses the embedded transaction and stable launcher for a managed user install', () => {
+    const portable = buildLinuxUpdateScript(makeParams({
+      userInstallation: { prefix: '/home/user/Cindy', current: 'releases/1.0.0-aaa', region: 'global', version: '1.0.1' },
+      relaunchArgs: ['--password-store=gnome-libsecret'],
+    }));
+    expect(portable).not.toContain('PKEXEC=');
+    expect(portable).not.toContain('apt-get install');
+    expect(portable).toContain('cindy-user-install --apply');
+    expect(portable).toContain("nohup '/home/user/Cindy/current/Cindy' '--password-store=gnome-libsecret'");
+    expect(portable).toContain('flock -n 9');
+    expect(portable).toContain('INSTALL_EXIT=$?');
+    if (process.platform !== 'win32') execFileSync('bash', ['-n'], { input: portable });
+  });
+
   it('installs the staged .deb through one pkexec bash shell', () => {
     expect(script).toContain('PKEXEC=/usr/bin/pkexec');
     expect(script).toContain('ELEVATED=\'set -eu');

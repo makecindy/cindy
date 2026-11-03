@@ -49,7 +49,7 @@ const doc = (...paras: PMNode[]) => schema.nodes.doc.create(null, paras);
 
 function makeGhost(
   command: string,
-  opts: { enabled?: boolean; icon?: string; id?: string } = {},
+  opts: { enabled?: boolean; icon?: string; id?: string; namespace?: string | null } = {},
 ): InstalledGhost {
   const manifest: GhostManifest = {
     schemaVersion: 2,
@@ -66,6 +66,7 @@ function makeGhost(
     enabled: opts.enabled ?? true,
     approval: { state: 'approved', revision: '00000000-0000-4000-8000-000000000001' },
     ...(opts.icon ? { iconDataUrl: opts.icon } : {}),
+    ...(opts.namespace !== undefined ? { namespace: opts.namespace } : {}),
   };
 }
 
@@ -77,6 +78,15 @@ describe('findGhostCommandMatch — 位置语义与发送期同源', () => {
     // 段落内容从 pos 1 起:$ 在 1,词 2 字,to = 1 + 3
     expect(m).toMatchObject({ from: 1, to: 4 });
     expect(m?.ghost.manifest.id).toBe('ghost-画图');
+  });
+
+  it('`$draw/acme` covers the qualifier and selects that namespace', () => {
+    const root = makeGhost('draw', { id: 'art', namespace: null });
+    const org = makeGhost('draw', { id: 'art', namespace: 'acme' });
+    const m = findGhostCommandMatch(doc(p(txt('$draw/acme a cat'))), [root, org]);
+    expect(m).toMatchObject({ from: 1, to: 11 });
+    expect(m?.ghost.namespace).toBe('acme');
+    expect(findGhostCommandMatch(doc(p(txt('$draw a cat'))), [root, org])).toBeNull();
   });
 
   it('全角触发符(￥/＄)同权命中', () => {
@@ -203,6 +213,67 @@ describe('createGhostCommandPlugin — roster meta 与 decoration 生命周期',
       class: 'ghost-cmd-pill',
       'data-ghost-cmd': 'ghost-画图',
     });
+  });
+
+  it('歧义裸指令:胶囊与发送期不亮,只有放置替换显式开启时才识别位置', () => {
+    const root = makeGhost('sites', { id: 'sites', namespace: null });
+    const org = makeGhost('sites', { id: 'sites', namespace: 'xd' });
+    const d = doc(p(txt('$sites 发布')));
+    expect(findGhostCommandMatch(d, [root, org])).toBeNull();
+    expect(findGhostCommandMatch(d, [root, org], { includeDisabled: true })).toBeNull();
+    expect(findGhostCommandMatch(d, [root, org], { includeDisabled: true, ambiguousBareToken: true }))
+      .toMatchObject({ from: 1, to: 7 });
+  });
+
+  it('同名限定符渲染层收起:企业实例标「团队共享」,root 只收起不加标签;标签未就绪时照常显示', () => {
+    const plugin = createGhostCommandPlugin();
+    const root = makeGhost('sites', { id: 'sites', namespace: null });
+    const org = makeGhost('sites', { id: 'sites', namespace: 'xd' });
+    const labels = { team: 'label:team' };
+    const specs = (state: EditorState) => (plugin.getState(state)?.decorations.find() ?? [])
+      .map((d) => {
+        const attrs = (d as unknown as { type: { attrs: Record<string, string> } }).type.attrs;
+        return [d.from, d.to, attrs.class, attrs['data-ghost-cmd-origin']];
+      });
+    const withText = (text: string, sourceLabels: typeof labels | null) => {
+      const state = EditorState.create({ schema, doc: doc(p(txt(text))), plugins: [plugin] });
+      return state.apply(state.tr.setMeta(META_KEY, [root, org]).setMeta('ghostCommandSourceLabels', sourceLabels));
+    };
+
+    expect(specs(withText('$sites/xd 发布', labels))).toEqual([
+      [1, 2, 'ghost-cmd-sigil', undefined],
+      [2, 7, 'ghost-cmd-pill', 'label:team'],
+      [7, 10, 'ghost-cmd-qualifier', undefined],
+    ]);
+    expect(specs(withText('$sites/@root 发布', labels))).toEqual([
+      [1, 2, 'ghost-cmd-sigil', undefined],
+      [2, 7, 'ghost-cmd-pill', undefined],
+      [7, 13, 'ghost-cmd-qualifier', undefined],
+    ]);
+    expect(globalsSource).toMatch(/\.ghost-cmd-qualifier\s*\{\s*display:\s*none/);
+    expect(globalsSource).toMatch(/\.ghost-cmd-pill\[data-ghost-cmd-origin\]::after\s*\{[^}]*attr\(data-ghost-cmd-origin\)/);
+
+    // 标签未就绪:不收起,避免两颗同名胶囊无从区分
+    expect(specs(withText('$sites/xd 发布', null)).map(([from, to]) => [from, to])).toEqual([[1, 2], [2, 10]]);
+  });
+
+  it('同名实例里有 namespace 未知的旧安装时,root 保留 /@root 不收起', () => {
+    const plugin = createGhostCommandPlugin();
+    const root = makeGhost('sites', { id: 'sites', namespace: null });
+    const legacy = makeGhost('sites', { id: 'sites-legacy' });
+    let state = EditorState.create({ schema, doc: doc(p(txt('$sites/@root 发布'))), plugins: [plugin] });
+    state = state.apply(state.tr
+      .setMeta(META_KEY, [root, legacy])
+      .setMeta('ghostCommandSourceLabels', { team: 'label:team' }));
+    const specs = (plugin.getState(state)?.decorations.find() ?? []).map((d) => {
+      const attrs = (d as unknown as { type: { attrs: Record<string, string> } }).type.attrs;
+      return [d.from, d.to, attrs.class];
+    });
+    // The legacy row renders a bare command, so hiding /@root would make the two identical.
+    expect(specs).toEqual([
+      [1, 2, 'ghost-cmd-sigil'],
+      [2, 13, 'ghost-cmd-pill'],
+    ]);
   });
 });
 

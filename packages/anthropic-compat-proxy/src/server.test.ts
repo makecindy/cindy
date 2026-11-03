@@ -19,6 +19,7 @@ import {
   createDuplicateToolUseIdRecoveryRule,
   createEmptyAssistantMessageRecoveryRule,
   createEmptyThinkingRecoveryRule,
+  createAnthropicContextManagementRecoveryRule,
   createEncryptedContentRecoveryRule,
   createImageGenerationIdRecoveryRule,
   createToolExchangeAdjacencyRecoveryRule,
@@ -29,6 +30,7 @@ import {
   stripEncryptedContentFromBody,
 } from './transform.js';
 import { createXaiModelInputRecoveryRule } from './xai-model-input.js';
+import { createAnthropicEffortCompatibilityRule } from './anthropic-effort-compatibility.js';
 import { listenOnAvailableLoopbackPort } from './test-loopback-server.js';
 import { createThreadStripController } from './thread-strip-controller.js';
 import type { ProxyHandle, RequestTransform } from './types.js';
@@ -251,6 +253,27 @@ describe('anthropic-compat-proxy loopback port guard', () => {
     expect(result.status).toBe(502);
     expect(JSON.parse(result.text).error.code).toBe('response_transform_unavailable');
     expect(transformResponse).toHaveBeenCalledOnce();
+  });
+
+  it.each(['reject', 'oversize', 'stale'])('does not forward a route body rewrite that is %s', async (mode) => {
+    const upstream = await startFakeUpstream((_idx, _body, res) => res.end('{}'));
+    upstreamClose = upstream.close;
+    let current = true;
+    const rewrite = vi.fn(async () => {
+      if (mode === 'reject') throw new Error('Invalid request');
+      if (mode === 'stale') current = false;
+      return { body: Buffer.from('x'.repeat(mode === 'oversize' ? 200 : 2)) };
+    });
+    proxy = await createAnthropicCompatProxy({
+      upstream: upstream.url,
+      maxRequestBodyBytes: 100,
+      bypassRequestTransforms: () => true,
+      routingTransform: () => ({ transformRequestBody: rewrite, dispatchGenerationValid: () => current }),
+    });
+    const result = await post(proxy.url, { model: 'test' });
+    expect(result.status).toBe(mode === 'reject' ? 502 : mode === 'oversize' ? 413 : 503);
+    expect(rewrite).toHaveBeenCalledOnce();
+    expect(upstream.bodies).toEqual([]);
   });
 
   it('can preserve an image request body without changing normal response transforms', async () => {
@@ -772,6 +795,7 @@ describe('anthropic-compat-proxy loopback port guard', () => {
     }).catch(() => 'rejected' as const);
     const result = await Promise.race([
       resultPromise,
+      // real-wait: bound the proxy request while the upstream cancellation path is under test.
       new Promise<'timeout'>((resolve) => setTimeout(() => resolve('timeout'), 1_000)),
     ]);
     controller.abort();
@@ -953,6 +977,39 @@ describe('anthropic-compat-proxy tool_use provider field compatibility', () => {
   });
 });
 
+describe('Anthropic context management rejection (#7041)', () => {
+  const request = {
+    model: 'claude-opus-test', max_tokens: 128,
+    context_management: { edits: [{ type: 'clear_tool_uses_20250919' }] },
+    messages: [{ role: 'user', content: 'hello' }],
+  };
+  it.each([
+    [400, 'ValidationException: context_management: Extra inputs are not permitted', 200, 2],
+    [400, 'ValidationException: context_management: Extra inputs are not permitted', 400, 2],
+    [200, '{}', 200, 1],
+    [400, 'ValidationException: unrelated_field: Extra inputs are not permitted', 400, 1],
+  ] as const)('only retries an explicit context_management rejection (%s, %s)', async (status, error, expectedStatus, count) => {
+    const upstream = await startFakeUpstream((index, _body, res) => {
+      res.writeHead(index === 0 ? status : expectedStatus, { 'content-type': 'application/json' });
+      res.end(index === 0 ? JSON.stringify({ error: { message: error } }) : '{}');
+    });
+    upstreamClose = upstream.close;
+    proxy = await createAnthropicCompatProxy({
+      upstream: upstream.url, transformRequest: [],
+      recoveryRules: [createAnthropicContextManagementRecoveryRule()],
+    });
+    const response = await post(proxy.url, request);
+    expect(response.status).toBe(expectedStatus);
+    expect(upstream.bodies).toHaveLength(count);
+    expect(JSON.parse(upstream.bodies[0]!)).toEqual(request);
+    if (count === 2) {
+      expect(JSON.parse(upstream.bodies[1]!)).toEqual({
+        model: request.model, max_tokens: request.max_tokens, messages: request.messages,
+      });
+    }
+  });
+});
+
 describe('anthropic-compat-proxy encrypted content retry', () => {
   it('normalizes and retries the vLLM Qwen Responses incompatibility once', async () => {
     const upstream = await startFakeUpstream((idx, body, res) => {
@@ -1005,6 +1062,80 @@ describe('anthropic-compat-proxy encrypted content retry', () => {
 
     expect(result.status).toBe(200);
     expect(upstream.bodies).toHaveLength(2);
+  });
+
+  it('omits output_config.effort and retries once when a custom Anthropic gateway rejects the effort (#5032)', async () => {
+    const upstream = await startFakeUpstream((idx, rawBody, res) => {
+      const body = JSON.parse(rawBody) as { output_config?: { effort?: string } };
+      if (idx === 0) {
+        expect(body.output_config?.effort).toBe('high');
+        res.writeHead(400, { 'content-type': 'application/json' });
+        res.end(JSON.stringify({
+          type: 'error',
+          error: { type: 'invalid_request_error', message: 'Unexpected reasoning effort high. Supported types are xhigh (default), medium, and low.' },
+        }));
+        return;
+      }
+      expect(body).not.toHaveProperty('output_config');
+      res.writeHead(200, { 'content-type': 'application/json' });
+      res.end(JSON.stringify({ ok: true }));
+    });
+    upstreamClose = upstream.close;
+    proxy = await createAnthropicCompatProxy({
+      upstream: upstream.url,
+      transformRequest: [],
+      recoveryRules: [createAnthropicEffortCompatibilityRule()],
+    });
+
+    const result = await post(proxy.url, {
+      model: 'Qwen3.8-Flash-Next',
+      max_tokens: 1024,
+      output_config: { effort: 'high' },
+      messages: [{ role: 'user', content: 'hello' }],
+    });
+
+    expect(result.status).toBe(200);
+    expect(upstream.bodies).toHaveLength(2);
+  });
+
+  it('surfaces the gateway effort rejection as-is when the rule is not registered (#5032 baseline)', async () => {
+    const upstream = await startFakeUpstream((_idx, _rawBody, res) => {
+      res.writeHead(400, { 'content-type': 'application/json' });
+      res.end(JSON.stringify({ type: 'error', error: { type: 'invalid_request_error', message: 'Unexpected reasoning effort high. Supported types are xhigh (default), medium, and low.' } }));
+    });
+    upstreamClose = upstream.close;
+    proxy = await createAnthropicCompatProxy({ upstream: upstream.url, transformRequest: [], recoveryRules: [] });
+
+    const result = await post(proxy.url, {
+      model: 'Qwen3.8-Flash-Next',
+      output_config: { effort: 'high' },
+      messages: [{ role: 'user', content: 'hello' }],
+    });
+
+    expect(result.status).toBe(400);
+    expect(upstream.bodies).toHaveLength(1);
+  });
+
+  it('does not retry an unrelated 400 through the effort rule (#5032)', async () => {
+    const upstream = await startFakeUpstream((_idx, _rawBody, res) => {
+      res.writeHead(400, { 'content-type': 'application/json' });
+      res.end(JSON.stringify({ type: 'error', error: { type: 'invalid_request_error', message: 'messages: at least one message is required' } }));
+    });
+    upstreamClose = upstream.close;
+    proxy = await createAnthropicCompatProxy({
+      upstream: upstream.url,
+      transformRequest: [],
+      recoveryRules: [createAnthropicEffortCompatibilityRule()],
+    });
+
+    const result = await post(proxy.url, {
+      model: 'Qwen3.8-Flash-Next',
+      output_config: { effort: 'high' },
+      messages: [],
+    });
+
+    expect(result.status).toBe(400);
+    expect(upstream.bodies).toHaveLength(1);
   });
 
   it('preserves readable agent progress when foreign reasoning ciphertext triggers recovery', async () => {
@@ -3080,6 +3211,7 @@ describe('anthropic-compat-proxy localHandler(路由决策交本地 handler,不�
           await Promise.race([
             seenPromise,
             new Promise<never>((_resolve, reject) => {
+              // real-wait: bound the real PI process handshake if the proxy is never reached.
               reachTimeout = setTimeout(
                 () => reject(new Error(`real PI did not reach proxy: ${stderr}`)),
                 10_000,
@@ -3105,6 +3237,7 @@ describe('anthropic-compat-proxy localHandler(路由决策交本地 handler,不�
       } finally {
         if (child && child.exitCode === null && child.signalCode === null) {
           await new Promise<void>((resolve) => {
+            // real-wait: bound child shutdown after sending SIGTERM to the real PI process.
             const timer = setTimeout(() => {
               if (child?.exitCode === null && child.signalCode === null) child.kill('SIGKILL');
               resolve();
@@ -3579,6 +3712,84 @@ describe('anthropic-compat-proxy 客户端中断传播', () => {
     expect(errorLogs.filter((m) => m.includes('upstream response stream error'))).toHaveLength(0);
   });
 
+  // 回归:Codex CLI 收到 response.completed 即断开,上游 body 往往尚未 end —— 日志里 ~97%
+  // 的 /responses 被误记成 client-aborted。终态事件后断开须按正常完成收口(仍释放上游),
+  // 只有终态前断开才是失败。
+  it.each([
+    {
+      name: 'terminal event forwarded → complete',
+      events: 'event: response.created\ndata: {"type":"response.created"}\n\n'
+        + 'event: response.completed\ndata: {"type":"response.completed","response":{}}\n\n',
+      waitFor: 'response.completed',
+      expected: { type: 'complete', status: 200 },
+      observerEnds: 1,
+      disconnectLogs: 0,
+    },
+    {
+      name: 'terminal event only half sent (no blank line yet) → client-aborted',
+      events: 'event: response.created\ndata: {"type":"response.created"}\n\n'
+        + 'event: response.completed\n',
+      waitFor: 'response.completed',
+      expected: { type: 'failure', failure: 'client-aborted' },
+      observerEnds: 0,
+      disconnectLogs: 1,
+    },
+    {
+      name: 'no terminal event yet → client-aborted',
+      events: 'event: response.created\ndata: {"type":"response.created"}\n\n',
+      waitFor: 'response.created',
+      expected: { type: 'failure', failure: 'client-aborted' },
+      observerEnds: 0,
+      disconnectLogs: 1,
+    },
+  ])('client close after SSE: $name', async ({ events: sse, waitFor, expected, observerEnds, disconnectLogs }) => {
+    let sawUpstreamClose!: () => void;
+    const upstreamClosed = new Promise<void>((r) => { sawUpstreamClose = r; });
+    const upstream = await startFakeUpstream((_idx, _body, res) => {
+      res.writeHead(200, { 'content-type': 'text/event-stream' });
+      res.write(sse);
+      // 永不 end:上游在终态事件后仍保持 body 打开。
+      res.on('close', () => sawUpstreamClose());
+    });
+    upstreamClose = upstream.close;
+    const lifecycle: Array<Record<string, unknown>> = [];
+    const infoLogs: string[] = [];
+    let ends = 0;
+    proxy = await createAnthropicCompatProxy({
+      upstream: upstream.url,
+      transformRequest: [],
+      logger: { info: (msg) => { infoLogs.push(msg); } },
+      routingTransform: () => ({
+        forwardLifecycle: {
+          onComplete: (status) => lifecycle.push({ type: 'complete', status }),
+          onFailure: (failure) => lifecycle.push({ type: 'failure', failure }),
+        },
+      }),
+      responseObserver: () => ({ onEnd: () => { ends += 1; } }),
+    });
+
+    const controller = new AbortController();
+    const res = await fetch(`${proxy.url}/v1/responses`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ model: 'test-model', stream: true }),
+      signal: controller.signal,
+    });
+    const reader = (res.body as ReadableStream<Uint8Array>).getReader();
+    const decoder = new TextDecoder();
+    let received = '';
+    while (!received.includes(waitFor)) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      received += decoder.decode(value, { stream: true });
+    }
+    controller.abort();
+    await upstreamClosed;
+    await vi.waitFor(() => expect(lifecycle).toEqual([expected]));
+    expect(ends).toBe(observerEnds);
+    expect(infoLogs.filter((m) => m.includes('client disconnected'))).toHaveLength(disconnectLogs);
+  });
+
   it('透明重试后的上游 2xx SSE 中断时,立即收口且旧 listener 不误报客户端断开', async () => {
     const errorLogs: Array<{ msg: string; ctx?: Record<string, unknown> }> = [];
     const infoLogs: string[] = [];
@@ -3634,6 +3845,7 @@ describe('anthropic-compat-proxy 客户端中断传播', () => {
     const outcome = await Promise.race([
       operation.then(() => 'settled' as const),
       new Promise<'timeout'>((resolve) => {
+        // real-wait: watchdog the upstream abort path so a hung response cannot stall the test.
         timeoutHandle = setTimeout(() => resolve('timeout'), 1000);
       }),
     ]);
@@ -3970,10 +4182,12 @@ describe('per-thread 已见 id 缓存(codex-connector P1:请求体缺席历史 i
 
   // per-thread 缓存需要**同一 proxy 实例**跨请求累积(每个请求独立建 proxy 会丢缓存),
   // 因此 postAs 复用同一个 upstream + proxy。
-  async function setupSingleProxy(): Promise<void> {
+  async function setupSingleProxy(compatibilityProfiles?: string[]): Promise<void> {
     const upstream = await mintingUpstream();
     upstreamClose = upstream.close;
-    proxy = await createAnthropicCompatProxy({ upstream: upstream.url, transformRequest: [] });
+    proxy = await createAnthropicCompatProxy({ upstream: upstream.url, transformRequest: [],
+      ...(compatibilityProfiles ? { routingTransform: () => ({ upstreamOverride: upstream.url, compatibilityProfiles }) } : {}),
+    });
   }
 
   async function postAs(sessionId: string, body: unknown): Promise<string> {
@@ -4006,19 +4220,18 @@ describe('per-thread 已见 id 缓存(codex-connector P1:请求体缺席历史 i
     expect(r2).toMatch(/Bash_210_dup\d+/);
   });
 
-  it('Kimi Code 的 k3 模型 id 同样判定为 kimi 会话(codex-connector P1)', async () => {
-    await setupSingleProxy();
-    // catalog 里 moonshot-kimi-code provider 的 claude-code runtime model id 是裸 `k3`
-    // (Kimi K3), 不带 kimi 前缀 —— 修复前 isKimiRequest 对 k3 返回 false → 不接管
+  it.each(['k3', 'k3-256k', 'k3.1-pro', 'k3.1-pro-highspeed', 'future-catalog-model'])('Kimi Code 的 %s 首次工具流在 rewind 后仍去重 (#7005)', async (model) => {
+    await setupSingleProxy(model === 'future-catalog-model' ? ['kimi-tool-ids-v1'] : undefined);
+    // Coding ID 不带 kimi 前缀；小数版本也必须记录首个 streamed id。
     const r1 = await postAs('sess-k3', {
-      model: 'k3',
+      model,
       messages: [{ role: 'user', content: '你好' }],
     });
     expect(r1).toContain('"id":"Bash_210"'); // fresh id 透传(无撞车)
 
     // 第二次请求(同 session, 模拟 rewind): 缓存里已有 Bash_210 → 拦截改名
     const r2 = await postAs('sess-k3', {
-      model: 'k3',
+      model,
       messages: [{ role: 'user', content: '继续' }],
     });
     expect(r2).not.toContain('"id":"Bash_210"');
@@ -4156,6 +4369,89 @@ describe('streaming response validity gate (#2242)', () => {
     expect(upstream.bodies[1]).toContain('Remember the test code');
   });
 
+  it('accepts a large complete first SSE event without Content-Type', async () => {
+    const created = JSON.stringify({
+      type: 'response.created',
+      response: { instructions: 'large-context-fixture '.repeat(12_000), output: [] },
+    });
+    const body = `event: response.created\ndata: ${created}\n\ndata: {"type":"response.completed"}\n\n`;
+    expect(Buffer.byteLength(body)).toBeGreaterThan(64 * 1024);
+    const upstream = await startFakeUpstream((_idx, _body, res) => {
+      res.writeHead(200); // Intentionally omit Content-Type for the Codex HTTP fallback.
+      res.write(body.slice(0, 80 * 1024));
+      setImmediate(() => res.end(body.slice(80 * 1024)));
+    });
+    upstreamClose = upstream.close;
+    proxy = await createAnthropicCompatProxy({ upstream: upstream.url });
+
+    const response = await fetch(`${proxy.url}/responses`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ model: 'test-model', stream: true }),
+    });
+    const responseText = await response.text();
+    expect(response.status).toBe(200);
+    expect(response.headers.get('content-type')).toBe('text/event-stream');
+    expect(responseText).toBe(body);
+    expect(upstream.bodies).toHaveLength(1);
+  });
+
+  it('bounds an unfinished inferred SSE event with its dedicated error code', async () => {
+    const body = `event: response.created\ndata: ${'x'.repeat(8 * 1024 * 1024)}`;
+    const upstream = await startFakeUpstream((_idx, _body, res) => {
+      res.writeHead(200); // Intentionally omit Content-Type.
+      res.end(body);
+    });
+    upstreamClose = upstream.close;
+    proxy = await createAnthropicCompatProxy({ upstream: upstream.url });
+
+    const result = await post(proxy.url, { model: 'test-model', stream: true });
+    expect(result.status).toBe(502);
+    expect(JSON.parse(result.text).error.code).toBe('sse_inference_limit_exceeded');
+  });
+
+  it('commits a complete inferred event before rejecting bytes after its cap', async () => {
+    const prefix = 'event: response.created\ndata: ';
+    const firstEvent = `${prefix}${'x'.repeat(8 * 1024 * 1024 - Buffer.byteLength(prefix) - 18)}\n\n`;
+    const remainder = 'data: {"type":"response.completed"}\n\n';
+    const upstream = await startFakeUpstream((_idx, _body, res) => {
+      res.writeHead(200); // Intentionally omit Content-Type.
+      res.end(`${firstEvent}${remainder}`);
+    });
+    upstreamClose = upstream.close;
+    proxy = await createAnthropicCompatProxy({ upstream: upstream.url });
+
+    const result = await post(proxy.url, { model: 'test-model', stream: true });
+    expect(result).toEqual({ status: 200, text: `${firstEvent}${remainder}` });
+  });
+
+  it('infers a complete event with mixed LF and CRLF event delimiters', async () => {
+    const body = 'event: response.created\ndata: {}\n\r\n';
+    const upstream = await startFakeUpstream((_idx, _body, res) => {
+      res.writeHead(200); // Intentionally omit Content-Type.
+      res.end(body);
+    });
+    upstreamClose = upstream.close;
+    proxy = await createAnthropicCompatProxy({ upstream: upstream.url });
+
+    const result = await post(proxy.url, { model: 'test-model', stream: true });
+    expect(result).toEqual({ status: 200, text: body });
+  });
+
+  it('still rejects a large unfinished inferred SSE event below its cap', async () => {
+    const body = `event: response.created\ndata: ${'x'.repeat(128 * 1024)}`;
+    const upstream = await startFakeUpstream((_idx, _body, res) => {
+      res.writeHead(200); // Intentionally omit Content-Type.
+      res.end(body);
+    });
+    upstreamClose = upstream.close;
+    proxy = await createAnthropicCompatProxy({ upstream: upstream.url });
+
+    const result = await post(proxy.url, { model: 'test-model', stream: true });
+    expect(result.status).toBe(502);
+    expect(JSON.parse(result.text).error.code).toBe('non_sse_stream_response');
+  });
+
   it.each([
     { name: 'JSON without MIME', body: '{"ok":true}', headers: {} },
     { name: 'HTML containing an SSE line', body: '<html>\ndata: fake\n</html>', headers: {} },
@@ -4266,5 +4562,27 @@ describe('streaming response validity gate (#2242)', () => {
     proxy = await createAnthropicCompatProxy({ upstream: upstream.url });
 
     await expect(post(proxy.url, { model: 'test-model', stream: true })).rejects.toThrow();
+  });
+});
+
+describe('anthropic-compat-proxy stream gate pending-buffer boundary', () => {
+  it('commits every gated byte when the pending buffer lands exactly on the gate cap', async () => {
+    // 回归:入队条件曾是 `pendingBytes < CAP` 而拒收条件是 `> CAP` —— 累计恰好
+    // 落在 64KiB(回环读常见块大小)时, 后续 chunk 只计数不入队; 事件标记在这些
+    // chunk 里到达并提交后, 它们被永久跳过, 客户端收到中间有缺口的 200 SSE。
+    const pad = 'x'.repeat(64 * 1024);
+    const marker = 'event: message_start\ndata: {"type":"message_start"}\n\n';
+    const upstream = await startFakeUpstream((_idx, _body, res) => {
+      res.writeHead(200, { 'content-type': 'text/event-stream' });
+      res.write(pad);
+      res.write(marker);
+      res.end();
+    });
+    upstreamClose = upstream.close;
+    proxy = await createAnthropicCompatProxy({ upstream: upstream.url });
+    const result = await post(proxy.url, { model: 'test-model', stream: true });
+
+    expect(result.status).toBe(200);
+    expect(result.text).toBe(pad + marker);
   });
 });

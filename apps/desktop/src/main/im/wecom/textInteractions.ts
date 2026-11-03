@@ -1,8 +1,10 @@
 import type { InteractionDecision, InteractionRequest } from '@cindy/maker-core';
 import { escapeWecomMarkdown, type IMMessageEvent, type WecomIM } from '@cindy/im';
 
-import { autoReviewUnavailablePromptLine } from '../shared/autoReviewUnavailablePrompt';
+import { autoReviewUnavailablePromptLine, permissionOperationPreview, permissionPromptDescription } from '../shared/autoReviewUnavailablePrompt';
 import { isStopCommand } from '../shared/controlCommands';
+import type { SharedPermission } from '../../maker-ipc/sharedPermission';
+import { INTERACTION_CHOICE_RECEIVED_TEXT, permissionOutcomeText } from '../shared/permissionPresentation';
 
 interface PendingInteraction {
   request: InteractionRequest;
@@ -11,7 +13,6 @@ interface PendingInteraction {
 }
 
 const INTERACTION_TIMEOUT_MS = 10 * 60_000;
-const MAX_PERMISSION_INPUT_PREVIEW = 800;
 
 export class WecomTextInteractions {
   private readonly pending = new Map<string, PendingInteraction>();
@@ -25,7 +26,9 @@ export class WecomTextInteractions {
     });
   }
 
-  async handle(userId: string, request: InteractionRequest): Promise<InteractionDecision> {
+  async handle(userId: string, request: InteractionRequest, options?: { sharedPermission?: SharedPermission }): Promise<InteractionDecision> {
+    const shared = options?.sharedPermission;
+    if (shared?.decision) return shared.result;
     const previous = this.pending.get(userId);
     if (previous) {
       clearTimeout(previous.timer);
@@ -36,15 +39,25 @@ export class WecomTextInteractions {
     const result = new Promise<InteractionDecision>((resolve) => {
       resolvePending = resolve;
     });
+    const settle = (decision: InteractionDecision) => shared ? shared.decide(decision) : resolvePending(decision);
     const timer = setTimeout(() => {
       this.pending.delete(userId);
-      resolvePending(defaultDecision(request, 'wecom_interaction_timeout'));
+      settle(defaultDecision(request, 'wecom_interaction_timeout'));
     }, INTERACTION_TIMEOUT_MS);
     timer.unref?.();
-    this.pending.set(userId, { request, resolve: resolvePending, timer });
+    const entry = { request, resolve: settle, timer };
+    this.pending.set(userId, entry);
+    if (shared) void shared.result.then((decision) => {
+      if (this.pending.get(userId) === entry) this.pending.delete(userId);
+      clearTimeout(timer);
+      resolvePending(decision);
+    });
 
     try {
       await this.im.sendMarkdownText(userId, formatWecomInteractionPrompt(request));
+      if (shared) void shared.result.then((decision) => this.im.sendText(userId,
+        permissionOutcomeText(decision, request.kind === 'permission' ? request.toolName : undefined),
+      )).catch(() => {});
     } catch {
       const current = this.pending.get(userId);
       if (current?.request.requestId === request.requestId) {
@@ -53,7 +66,7 @@ export class WecomTextInteractions {
       }
       // Denial reasons are classified by exact/prefix match. Raw Error.message
       // is not a system code and would be presented as a user rejection.
-      return defaultDecision(request, 'wecom_interaction_send_failed');
+      return shared ? shared.result : defaultDecision(request, 'wecom_interaction_send_failed');
     }
     return result;
   }
@@ -86,23 +99,8 @@ export class WecomTextInteractions {
     clearTimeout(pending.timer);
     this.pending.delete(event.senderId);
     pending.resolve(decision);
-    void this.im.sendText(event.senderId, '已收到你的选择，继续处理。');
+    void this.im.sendText(event.senderId, INTERACTION_CHOICE_RECEIVED_TEXT);
     return true;
-  }
-}
-
-function previewPermissionInput(input: Record<string, unknown>): string {
-  try {
-    const json = JSON.stringify(input, null, 2);
-    if (!json) return '<无法序列化>';
-    const preview = json.length > MAX_PERMISSION_INPUT_PREVIEW
-      ? `${json.slice(0, MAX_PERMISSION_INPUT_PREVIEW)}\n…（已截断）`
-      : json;
-    // Keep the surrounding template fence intact even when a string value
-    // contains model-controlled backticks. JSON's unicode escape stays valid.
-    return preview.replaceAll('`', '\\u0060');
-  } catch {
-    return '<无法序列化>';
   }
 }
 
@@ -111,11 +109,13 @@ export function formatWecomInteractionPrompt(request: InteractionRequest): strin
     const toolName = escapeWecomMarkdown(request.displayName ?? request.toolName);
     const unavailable = autoReviewUnavailablePromptLine(request);
     return `需要确认工具“${toolName}”。
+${permissionPromptDescription(request) ?? ''}
 ${unavailable ? `\n${unavailable}\n` : ''}
-参数：
-\`\`\`json
-${previewPermissionInput(request.input)}
+${permissionOperationPreview(request) ? `操作：
 \`\`\`
+${permissionOperationPreview(request)}
+\`\`\`
+` : ''}
 
 回复“允许”执行一次，或回复“拒绝”取消本次操作。企业微信内不支持永久授权。`;
   }

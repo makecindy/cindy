@@ -2,9 +2,11 @@
  * useDeviceProviders 的 deviceId-aware 缓存单测(device-link「以被控端为准」)。
  * 守住:远程走隧道 maker:provider:list、按 deviceId 隔离、inflight 去重、缓存命中不重拉、
  * evict 只清该设备、evict 在途结果丢弃不复活 —— 与 useAgentCapabilities 同范式。
- * 模块级缓存:每个用例 vi.resetModules() + 动态 import 拿干净模块。
+ * 模块只加载一次；每例通过生产驱逐入口清理缓存。
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import * as providerCache from '@/hooks/useDeviceProviders';
+import { modelCatalogKey } from '../../shared/controlledModelCatalog';
 import {
   connectedProvidersForAgent,
   visibleModelUnion,
@@ -12,7 +14,67 @@ import {
 } from '@cindy/model-providers';
 
 beforeEach(() => {
-  vi.resetModules();
+  providerCache.evictAllDeviceProviders();
+});
+
+// #8010 unit: the same source can have different access through two task hosts;
+// existing per-device cache tests did not exercise host-mediated reads.
+it('reads through each task host and invalidates only that host without resurrecting late catalogs', async () => {
+  let finish!: (value: Providers) => void;
+  const invoke = vi.fn(async (device: string) => device === 'host-b'
+    ? new Promise<Providers>(resolve => { finish = resolve; }) : result(device));
+  vi.stubGlobal('window', { electronAPI: { deviceLink: { invoke } } });
+  const b = modelCatalogKey('self-a', 'host-b')!;
+  const c = modelCatalogKey('self-a', 'host-c')!;
+  const pending = providerCache.prefetchDeviceProviders(b);
+  await providerCache.prefetchDeviceProviders(c);
+  await providerCache.prefetchDeviceProviders('host-local');
+  expect(invoke).toHaveBeenCalledWith('host-b', 'maker:model-catalog:read', [{
+    op: 'read', agentDeviceId: 'self-a', channel: 'maker:provider:list', args: [{ capabilities: ['provider-logo-kinds-v2'] }],
+  }]);
+  providerCache.evictControlledDeviceProviders('host-b');
+  finish(result('old'));
+  await pending;
+  expect(providerCache.getCachedDeviceProviders(b)).toBeNull();
+  expect(providerCache.getCachedDeviceProviders(c)?.providers[0].id).toBe('host-c-xd');
+  expect(providerCache.getCachedDeviceProviders('host-local')?.providers[0].id).toBe('host-local-xd');
+});
+
+it('expires only subscription share snapshots and preserves ordinary API discovery cache semantics', async () => {
+  const login = { ...provider('subscription'), subscriptionFastPolicy: { allowFast: true, groupAllowsFast: true } };
+  const api = provider('openai');
+  const invoke = vi.fn(async (device: string) => ({ providers: [device === 'share:subscription' ? login : api] }));
+  vi.stubGlobal('window', { electronAPI: { deviceLink: { invoke } } });
+  const mod = await import('@/hooks/useDeviceProviders');
+  await mod.prefetchDeviceProviders('share:subscription');
+  await mod.prefetchDeviceProviders('share:api');
+  expect(mod.isSubscriptionShareCatalogStale('share:subscription')).toBe(false);
+  const later = Date.now() + 61_000;
+  expect(mod.isSubscriptionShareCatalogStale('share:subscription', later)).toBe(true);
+  expect(mod.isSubscriptionShareCatalogStale('share:api', later)).toBe(false);
+  expect(mod.isSubscriptionShareCatalogStale('same-account-computer', later)).toBe(false);
+  mod.evictDeviceProviders('share:subscription');
+  expect(mod.isSubscriptionShareCatalogStale('share:subscription', later)).toBe(false);
+  await mod.prefetchDeviceProviders('share:api');
+  expect(invoke.mock.calls.filter(([device]) => device === 'share:api')).toHaveLength(1);
+});
+
+// A failed policy refresh evicts the authoritative cache. Its subscription
+// identity must survive that soft eviction so the next membership poll retries;
+// account/disconnect eviction must still discard the hint and any late result.
+it('retains subscription freshness after a failed soft refresh and clears it at the owner boundary', async () => {
+  const login = { ...provider('subscription'), subscriptionFastPolicy: { allowFast: true, groupAllowsFast: true } };
+  const invoke = vi.fn().mockResolvedValueOnce({ providers: [login] }).mockRejectedValueOnce(Error('temporary disconnect'));
+  vi.stubGlobal('window', { electronAPI: { deviceLink: { invoke } } });
+  const mod = await import('@/hooks/useDeviceProviders');
+  await mod.prefetchDeviceProviders('share:subscription');
+  const later = Date.now() + 61_000;
+  mod.evictDeviceProviders('share:subscription', { retainDisplaySnapshot: true });
+  await mod.prefetchDeviceProviders('share:subscription');
+  expect(mod.getCachedDeviceProviders('share:subscription')).toBeNull();
+  expect(mod.isSubscriptionShareCatalogStale('share:subscription', later)).toBe(true);
+  mod.evictAllDeviceProviders();
+  expect(mod.isSubscriptionShareCatalogStale('share:subscription', later)).toBe(false);
 });
 
 type Providers = {
@@ -222,6 +284,22 @@ describe('useDeviceProviders deviceId-aware cache', () => {
       mod.getCachedDeviceProviders('dev-luna')?.providers[0]?.models['claude-code']?.map((m) => m.id),
     ).toEqual(['gpt-5.6-luna', 'claude-opus-5']);
     expect(mod.getCachedDeviceProviders('dev-luna')?.providers[0]?.models['claude-code']?.[0]?.defaultEffort).toBe('medium');
+  });
+
+  it.each([undefined, true, false])('preserves provider effort capability marker %s without inferring legacy emptiness', async (effortsUnknown) => {
+    const mod = await import('@/hooks/useDeviceProviders');
+    const base = providerWithModel('remote');
+    const model = {
+      ...base.models['claude-code'][0],
+      efforts: [],
+      defaultEffort: null,
+      ...(effortsUnknown === undefined ? {} : { effortsUnknown }),
+    };
+    const result = mod.parseDeviceProvidersPayload({ providers: [{
+      ...base, models: { 'claude-code': [model] },
+    }] });
+
+    expect(result.providers[0]?.models['claude-code']?.[0]?.effortsUnknown).toBe(effortsUnknown);
   });
 
   it('preserves explicit no-thinking and rejects malformed remote defaults', async () => {

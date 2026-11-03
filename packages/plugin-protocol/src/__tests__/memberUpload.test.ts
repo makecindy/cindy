@@ -52,7 +52,7 @@ describe('member upload contract', () => {
       'failed',
       'expired',
     ]);
-    expect(PLUGIN_MEMBER_RELEASE_REVIEW_STATUSES).toEqual(['pending', 'approved', 'rejected']);
+    expect(PLUGIN_MEMBER_RELEASE_REVIEW_STATUSES).toEqual(['pending', 'approved', 'rejected', 'cancelled']);
     expect(new Set(PLUGIN_MEMBER_UPLOAD_FAILURE_CODES).size).toBe(
       PLUGIN_MEMBER_UPLOAD_FAILURE_CODES.length,
     );
@@ -149,6 +149,10 @@ describe('member upload contract', () => {
   it.each([
     'PUBLISH_PREFIX_UNREGISTERED',
     'PUBLISH_GHOST_ID_PREFIX_MISMATCH',
+    'PUBLISH_GHOST_ID_INVALID',
+    'PLUGIN_GHOST_ID_RESERVED',
+    'PLUGIN_NAMESPACE_CONFIG_REQUIRED',
+    'PLUGIN_NAMESPACE_CLIENT_REQUIRED',
     'PUBLISH_VERSION_EXISTS',
   ] as const)('parses %s failure codes without throwing', (code) => {
     const response = parsePluginMemberUploadStatusResponse({

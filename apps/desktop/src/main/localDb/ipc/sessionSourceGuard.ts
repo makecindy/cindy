@@ -1,4 +1,5 @@
 import { CINDY_MAKE_SESSION_SOURCE } from '../../../shared/cindyMakeSession.js';
+import { CINDY_MAKE_ENABLED } from '@cindy/maker-shared/cindy-make-feature';
 import { normalizeWorkingDirForStorage } from '../../../shared/workingDir.js';
 import { isCindyMakeWorktreePath } from '../../cindy-make/taskWorkspace.js';
 import { normalizeRemoteHostId } from '../mapper.js';
@@ -22,6 +23,9 @@ export function assertRendererSessionSourceAllowed(input: {
       'UNSUPPORTED_CAPABILITY',
       'Bot task creation is only available through the Bot lifecycle service',
     );
+  }
+  if (!CINDY_MAKE_ENABLED) {
+    throwIpcError('UNSUPPORTED_CAPABILITY', 'Cindy Make is currently unavailable');
   }
   if (normalizeRemoteHostId(typeof input.remoteHostId === 'string' ? input.remoteHostId : null)) {
     throwIpcError('UNSUPPORTED_CAPABILITY', 'Cindy Make tasks are local-only');

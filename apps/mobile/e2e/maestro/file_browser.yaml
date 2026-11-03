@@ -35,6 +35,8 @@ appId: ${APP_ID}
       id: "filePreview.sourceReady"
     timeout: 10000
 - tapOn:
+    id: "filePreview.browser.more"
+- tapOn:
     id: "filePreview.copyPath"
 - assertVisible:
     id: "filePreview.notice"

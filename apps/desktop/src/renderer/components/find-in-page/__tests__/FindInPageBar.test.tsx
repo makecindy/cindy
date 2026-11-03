@@ -20,13 +20,16 @@ vi.mock('@/hooks/useAppShortcut', () => ({
   },
 }));
 
-vi.mock('@/components/find-in-page/findInPageOwnership', () => ({
+vi.mock('@/components/find-in-page/findInPageOwnership', async (importOriginal) => ({
+  ...await importOriginal<typeof import('../findInPageOwnership')>(),
   isFindInPageClaimed: () => false,
 }));
 
 import { FindInPageBar } from '../FindInPageBar';
+import { isPageTextAccessActive, PAGE_TEXT_NAVIGATION_EVENT } from '@/lib/pageTextAccess';
 
 class MockHighlight {
+  priority = 0;
   readonly ranges: AbstractRange[];
 
   constructor(...ranges: AbstractRange[]) {
@@ -56,6 +59,101 @@ function getHighlight(name: string): MockHighlight | undefined {
 }
 
 describe('FindInPageBar', () => {
+  // #8232, unit tier: the real global search must live in the
+  // foreground preview and count its document, not the covered chat. Existing
+  // cases only exercise an unobstructed page; actual stacking is also checked
+  // by the markdown-preview-find Electron fixture (unit cannot hit-test CSS).
+  it('searches only the foreground document and closes search before its preview', async () => {
+    const page = document.createElement('main');
+    page.textContent = 'apple in the covered chat';
+    const card = document.createElement('section');
+    card.dataset.textLightboxCard = '';
+    card.dataset.textLightboxSearchHost = '';
+    const content = document.createElement('article');
+    content.dataset.textLightboxSearchRoot = '';
+    content.textContent = 'apple apple';
+    card.append(content);
+    page.append(card);
+    const input = await openFindBar(page);
+    fireEvent.change(input, { target: { value: 'apple' } });
+
+    expect(screen.getByText('1/2')).toBeTruthy();
+    expect(card.contains(input)).toBe(true);
+    expect(getHighlight(MATCH_HIGHLIGHT_NAME)?.ranges.every(
+      range => content.contains(range.startContainer),
+    )).toBe(true);
+    fireEvent.keyDown(input, { key: 'Enter' });
+    expect(screen.getByText('2/2')).toBeTruthy();
+    fireEvent.keyDown(input, { key: 'Enter', shiftKey: true });
+    expect(screen.getByText('1/2')).toBeTruthy();
+
+    const previewEscape = vi.fn();
+    document.addEventListener('keydown', previewEscape);
+    fireEvent.compositionStart(input);
+    fireEvent.keyDown(input, { key: 'Escape', isComposing: true });
+    expect(screen.getByRole('searchbox')).toBe(input);
+    expect(previewEscape).not.toHaveBeenCalled();
+    fireEvent.compositionEnd(input);
+    fireEvent.keyDown(input, { key: 'Escape', repeat: true });
+    expect(screen.getByRole('searchbox')).toBe(input);
+    expect(previewEscape).not.toHaveBeenCalled();
+    fireEvent.keyUp(input, { key: 'Escape' });
+    fireEvent.keyDown(content, { key: 'Escape' });
+    expect(screen.queryByRole('searchbox')).toBeNull();
+    expect(previewEscape).not.toHaveBeenCalled();
+    expect(getHighlight(MATCH_HIGHLIGHT_NAME)).toBeUndefined();
+    fireEvent.keyDown(content, { key: 'Escape' });
+    expect(previewEscape).toHaveBeenCalledTimes(1);
+    document.removeEventListener('keydown', previewEscape);
+  });
+
+  it('retargets an already open search when a preview opens and clears it on dismissal', async () => {
+    const page = document.createElement('main');
+    page.textContent = 'background apple';
+    const input = await openFindBar(page);
+    fireEvent.change(input, { target: { value: 'apple' } });
+    const card = document.createElement('section');
+    card.dataset.textLightboxCard = '';
+    card.dataset.textLightboxSearchHost = '';
+    const content = document.createElement('article');
+    content.dataset.textLightboxSearchRoot = '';
+    content.textContent = 'document pear';
+    card.append(content);
+    await act(async () => { document.body.append(card); });
+    expect(card.contains(screen.getByRole('searchbox'))).toBe(true);
+    expect(getHighlight(MATCH_HIGHLIGHT_NAME)).toBeUndefined();
+    expect(isPageTextAccessActive()).toBe(false);
+    await act(async () => { card.remove(); });
+    expect(screen.queryByRole('searchbox')).toBeNull();
+    await act(async () => { mocks.shortcutHandler?.(new KeyboardEvent('keydown')); });
+    fireEvent.change(screen.getByRole('searchbox'), { target: { value: 'apple' } });
+    expect(screen.getByText('1/1')).toBeTruthy();
+  });
+
+  it('lets the owning message scroller coordinate a match jump', async () => {
+    const page = document.createElement('main');
+    page.textContent = 'owned search target';
+    const navigate = vi.fn((event: Event) => {
+      expect((event as CustomEvent<Range>).detail.toString()).toBe('search target');
+      event.preventDefault();
+    });
+    page.addEventListener(PAGE_TEXT_NAVIGATION_EVENT, navigate);
+    const input = await openFindBar(page);
+    fireEvent.change(input, { target: { value: 'search target' } });
+    expect(screen.getByText('1/1')).toBeTruthy();
+    expect(navigate).toHaveBeenCalled();
+  });
+  it('requests full logical text only while open and releases on close or unmount', async () => {
+    expect(isPageTextAccessActive()).toBe(false);
+    await openFindBar();
+    expect(isPageTextAccessActive()).toBe(true);
+    fireEvent.click(screen.getByRole('button', { name: 'findInPage.close' }));
+    expect(isPageTextAccessActive()).toBe(false);
+    await act(async () => { mocks.shortcutHandler?.(new KeyboardEvent('keydown')); });
+    expect(isPageTextAccessActive()).toBe(true);
+    cleanup();
+    expect(isPageTextAccessActive()).toBe(false);
+  });
   beforeEach(() => {
     vi.clearAllMocks();
     mocks.shortcutHandler = null;
@@ -105,6 +203,9 @@ describe('FindInPageBar', () => {
     expect(getHighlight(MATCH_HIGHLIGHT_NAME)?.ranges).toHaveLength(2);
     expect(getHighlight(MATCH_HIGHLIGHT_NAME)?.ranges[0].toString()).toBe('foo');
     expect(getHighlight(ACTIVE_HIGHLIGHT_NAME)?.ranges).toHaveLength(1);
+    expect(getHighlight(ACTIVE_HIGHLIGHT_NAME)?.priority).toBeGreaterThan(
+      getHighlight(MATCH_HIGHLIGHT_NAME)!.priority,
+    );
   });
 
   it('matches case-insensitively and keeps element-boundary matches explicit', async () => {
@@ -434,6 +535,14 @@ describe('FindInPageBar', () => {
 
     details.open = false;
     await waitFor(() => expect(screen.getByText('0/0')).toBeTruthy());
+  });
+
+  it('opts out of window drag regions so page drag strips cannot swallow its buttons', async () => {
+    await openFindBar();
+    const dialog = screen.getByRole('dialog');
+    expect(
+      (dialog.style as CSSStyleDeclaration & { WebkitAppRegion?: string }).WebkitAppRegion,
+    ).toBe('no-drag');
   });
 
   it('clears highlights when the query is cleared or the bar closes', async () => {

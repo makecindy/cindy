@@ -1,17 +1,11 @@
-import type { AttachedFile } from '@/lib/fileTypes';
-import type { Effort, PermissionMode } from '@/lib/userPreferences.types';
 import type { HomeTaskSuggestion } from './pluginHomeSuggestions';
+import { parsePluginInstanceId } from '../../../shared/pluginIdentity';
 
 export interface PluginSuggestionRequest {
   suggestion: HomeTaskSuggestion;
   ownerId: string;
   targetKey: string;
   workingDir: string | null;
-  model: string;
-  effort: Effort;
-  permissionMode: PermissionMode;
-  providerId?: string | null;
-  files: AttachedFile[];
 }
 export interface PendingPluginSuggestion extends PluginSuggestionRequest {
   nonce: string;
@@ -45,15 +39,31 @@ export function readyPendingPluginSuggestion(
   ownerId: string | null,
   ghostId: string,
 ): string | null {
+  const suggestionPluginId = pending?.suggestion.pluginId;
+  const suggestionIdentity =
+    typeof suggestionPluginId === 'string' ? parsePluginInstanceId(suggestionPluginId) : null;
+  const installedIdentity = parsePluginInstanceId(ghostId);
   if (
     !pending ||
     pending.nonce !== nonce ||
     pending.ownerId !== ownerId ||
-    pending.suggestion.pluginId !== ghostId ||
+    typeof suggestionPluginId !== 'string' ||
+    !suggestionIdentity ||
+    !installedIdentity ||
+    suggestionIdentity.namespace !== installedIdentity.namespace ||
+    suggestionIdentity.ghostId !== installedIdentity.ghostId ||
     pending.phase !== 'setup'
   )
     return null;
-  pending = { ...pending, phase: 'ready' };
+  const pluginPrefix = `plugin:${suggestionPluginId}:`;
+  const suggestion = {
+    ...pending.suggestion,
+    pluginId: ghostId,
+    id: pending.suggestion.id.startsWith(pluginPrefix)
+      ? `plugin:${ghostId}:${pending.suggestion.id.slice(pluginPrefix.length)}`
+      : pending.suggestion.id,
+  };
+  pending = { ...pending, suggestion, phase: 'ready' };
   publish();
   return pending.nonce;
 }

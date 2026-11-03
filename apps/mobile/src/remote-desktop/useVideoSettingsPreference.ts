@@ -8,7 +8,7 @@ let writes: Promise<void> = Promise.resolve();
 
 export function useVideoSettingsPreference() {
   const [settings, setSettings] = useState<RemoteDesktopVideoSettings>({
-    fps: 30, bitrate: 0, audio: true,
+    fps: 30, quality: "auto", audio: true,
   });
   const [loaded, setLoaded] = useState(false);
   const current = useRef(settings);

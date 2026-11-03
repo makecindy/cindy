@@ -347,7 +347,7 @@ export function nativeAgentForProviderModel(
  *
  * 1. 无候选 → null(没有可推荐的东西,不编);
  * 2. 单候选 → 即它(pi 唯一候选时也推荐 pi);
- * 3. 目录声明原生协议且实际路由匹配 → 取该协议首选引擎，其次原生 Pi;
+ * 3. Grok 有 Pi 候选时推荐 Pi；其余模型有原生协议且路由匹配时取协议首选引擎，其次 Pi;
  * 4. 旧目录缺声明时，保留 Google API Pi 与已有底座的回落规则;
  * 5. 没有原生协议或底座依据时默认 Pi（必须是候选）；
  * 6. 其余回落:候选里按 cc > codex 取第一个;都没有则 pi。
@@ -367,6 +367,17 @@ export function pickRecommendedAgent(
     if (model) models[agent] = model;
   }
   const comparison = provider ? modelProtocolComparison(provider, models) : null;
+  // The catalog's official/community recommendation for this exact source wins, unless this
+  // source can only reach that engine through Cindy's local compatibility conversion.
+  const declared = Object.values(models).map(model => model.recommendedAgent).find(Boolean);
+  if (declared && candidates.includes(declared) &&
+      comparison?.forAgent(declared)?.mode !== 'compatibility') return declared;
+  // Grok uses Pi by default even when the supplier speaks Responses. This is a
+  // recommendation only: candidates and explicit engine overrides stay authoritative.
+  if (candidates.includes('pi') && models.pi && groupOf({
+    id: normalizeModelIdForClassification(modelId),
+    ...(models.pi.group !== undefined ? { group: models.pi.group } : {}),
+  }) === 'grok') return 'pi';
   const canonical = comparison?.reference;
   if (canonical) {
     const preferred =
@@ -426,7 +437,7 @@ export function recommendedAgentForModel(
 }
 
 /** 某 (provider, model, agent) 已解析的能力(规格 §2.2)。 */
-export interface UnifiedAgentCapability {
+export interface UnifiedAgentCapability extends Pick<CatalogModel, 'displayPricing' | 'currency' | 'costDiscount'> {
   agent: AgentKind;
   /**
    * ★该引擎下真正要发出去的 model id(bridge 壳已还原)。写 draft / 建会话 / 切模型
@@ -452,6 +463,7 @@ export interface UnifiedAgentCapability {
    * 事实,本包拿不到,由渲染层叠加(registry.ts 明示)。
    */
   supportsFastMode: boolean;
+  supportsUltrafastMode?: boolean;
   /** 该 (provider, agent) 下的上下文窗口(同 id 跨 agent 可不同,如 gpt-5.5 cc=1M / codex=272K)。 */
   contextWindow: number;
   /** 该窗口是否为显式声明的真实上限(`CatalogModel.contextWindowVerified`)。 */
@@ -494,6 +506,9 @@ function capabilityOf(
   return {
     agent,
     wireModelId: model.id,
+    ...(model.displayPricing && model.currency ? {
+      displayPricing: model.displayPricing, currency: model.currency, costDiscount: model.costDiscount,
+    } : {}),
     protocolMode: protocol?.mode ?? 'unknown',
     nativeApi: comparison.reference,
     outboundApi: protocol?.outbound ?? null,
@@ -505,6 +520,7 @@ function capabilityOf(
     ...resolveDefaultEffort(model),
     // 按目录里真实那条 id 查 Fast,避免归一命中后误报 false。
     supportsFastMode: modelSupportsFastMode(provider, model.id, agent),
+    supportsUltrafastMode: agent === 'codex' && model.supportsUltrafastMode === true,
     contextWindow: model.contextWindow,
     contextWindowVerified: model.contextWindowVerified === true,
   };

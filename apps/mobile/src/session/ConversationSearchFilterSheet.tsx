@@ -9,6 +9,7 @@ import { useTranslation } from 'react-i18next';
 import { Text } from '@/components/AppText';
 import { HomeGlassMenuPanel, HomeMenuScrim } from '@/session/HomeGlassMenuPanel';
 import { useModalFadeLifecycle } from '@/session/useModalFadeLifecycle';
+import { useHomeMenuFadeTiming } from '@/session/homeMenuFadeTiming';
 import {
   nextConversationSearchProjectSelection,
   type ConversationSearchProjectOption,
@@ -70,9 +71,9 @@ export function ConversationSearchFilterSheet({
   const { height: screenHeight } = useWindowDimensions();
   const insets = useSafeAreaInsets();
   const scrollMaxHeight = Math.max(200, screenHeight - topOffset - insets.bottom - 24);
+  const menuFadeTiming = useHomeMenuFadeTiming();
   const { mounted, progress, onShowStartIn } = useModalFadeLifecycle(visible, {
-    inMs: 140,
-    outMs: 110,
+    ...menuFadeTiming,
   });
   const selectedProjects = projectSelection === 'all' ? null : new Set(projectSelection);
   const showProjectDevice = new Set(projects.map((project) => project.deviceId)).size > 1;
@@ -238,8 +239,8 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
   headerTitle: {
     color: colors.textTertiary,
     flex: 1,
-    fontSize: typeScale.caption,
-    fontWeight: fontWeight.medium,
+    fontSize: typeScale.footnote,
+    fontWeight: fontWeight.semibold,
     lineHeight: lineHeight.caption,
   },
   resetButton: {
@@ -250,12 +251,13 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
   resetText: {
     color: colors.textTertiary,
     fontSize: typeScale.caption,
-    fontWeight: fontWeight.medium,
+    lineHeight: lineHeight.caption,
+    fontWeight: fontWeight.regular,
   },
   sectionLabel: {
     color: colors.textTertiary,
-    fontSize: typeScale.caption,
-    fontWeight: fontWeight.medium,
+    fontSize: typeScale.footnote,
+    fontWeight: fontWeight.semibold,
     lineHeight: lineHeight.caption,
     paddingHorizontal: spacing.md,
     paddingTop: spacing.sm,
@@ -283,7 +285,8 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
   itemMeta: {
     color: colors.textTertiary,
     fontSize: typeScale.caption,
-    fontWeight: fontWeight.medium,
+    lineHeight: lineHeight.caption,
+    fontWeight: fontWeight.regular,
   },
   divider: {
     backgroundColor: colors.border,

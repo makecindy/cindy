@@ -31,6 +31,13 @@ function createEditor(): Editor {
 }
 
 describe('useComposerSendFocusRestore', () => {
+  it('tolerates a retained editor whose view was unmounted', () => {
+    const editor = createEditor();
+    editor.unmount();
+    expect(editor.isDestroyed).toBe(true);
+    expect(() => renderHook(() => useComposerSendFocusRestore(editor, false))).not.toThrow();
+  });
+
   let nextFrameId = 1;
   let frames = new Map<number, FrameRequestCallback>();
 

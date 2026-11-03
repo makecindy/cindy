@@ -2,13 +2,17 @@
  * 远程端点清单启动解析(clientEndpointStartup)+ env live binding 回写单测。
  *
  * 关键覆盖:
- *  - 正式包只认 CDN 清单;字段缺失/空白不阻断,拉取失败或清单非法仍阻断;
- *  - 不使用包内 endpoint.json 做字段合并或整份回退;
+ *  - 自定义源无官方随包兜底；字段缺失/空白不阻断，配置错误仍阻断；
+ *  - 官方源的缓存/随包恢复见 endpointManifestLoader.test.ts，不做字段合并;
  *  - applyResolvedClientEndpoints 重赋值后,跨模块 ESM live binding 立即可见。
  */
 import { describe, expect, it, vi } from 'vitest';
 
 import type { ManifestFetchResult } from '@/config/clientEndpointStartup';
+
+vi.mock('@react-native-async-storage/async-storage', () => ({
+  default: { getItem: async () => null, setItem: async () => undefined },
+}));
 
 type FetchManifest = (timeoutMs: number) => Promise<ManifestFetchResult>;
 
@@ -675,6 +679,28 @@ describe('applyResolvedClientEndpoints', () => {
     expect(env.AUTH_API_BASE_URL).toBe('https://auth-new.example.com');
     env.applyResolvedClientEndpoints({ authApiBaseUrl: '' });
     expect(env.AUTH_API_BASE_URL).toBe('');
+  });
+
+  // 自建中转(docs/self-hosted-relay-plan.md §5.3):中转地址必须扛过之后的每一次区域写入,
+  // 而推送注册直接读的 realm 缓存要一直是官方地址(否则会把推送登记发到自建中转)。
+  it('自建中转地址覆盖在区域写入后仍生效,realm 缓存保持官方地址', async () => {
+    const { env, startup } = await freshModules();
+    await expect(
+      startup.runStartupEndpointResolve({ fetchManifest: okFetch(FULL_MANIFEST) }),
+    ).resolves.toEqual({ ok: true, source: 'cdn' });
+    env.setDeviceLinkApiBaseOverride('https://relay.home.example/');
+    expect(env.deviceLinkWsUrl()).toBe('wss://relay.home.example/api/device-link/ws');
+    env.applyResolvedClientEndpoints({
+      deviceLinkApiBaseUrl: 'https://device.override.example.com',
+    });
+    env.activateMobileSessionRealm(env.BUILD_AUTH_REGION);
+    env.resetMobileSessionRealm();
+    expect(env.DEVICE_LINK_API_BASE_URL).toBe('https://relay.home.example');
+    expect(
+      env.getMobileEndpointForRealm(env.BUILD_AUTH_REGION, 'deviceLinkApiBaseUrl'),
+    ).toBe('https://device.override.example.com');
+    env.setDeviceLinkApiBaseOverride(null);
+    expect(env.DEVICE_LINK_API_BASE_URL).toBe('https://device.override.example.com');
   });
 
   it('组织会话切换 token 消费端点,退出后恢复构建区域且不改变更新端点', async () => {

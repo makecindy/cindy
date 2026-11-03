@@ -20,7 +20,7 @@ export interface SystemCardSessionLike {
   agentKind?: string | null;
   contextTokens?: number;
   contextWindow?: number;
-  fastMode?: boolean | null;
+  fastMode?: boolean | 'ultrafast' | null;
   model?: string | null;
   permissionMode?: string | null;
   status?: string | null;
@@ -111,7 +111,7 @@ export function buildSystemCardData(
   }
   return {
     agent: session?.agentKind === 'codex' ? 'Codex' : session?.agentKind === 'pi' ? 'Pi' : 'Claude Code',
-    fastMode: session?.fastMode === true,
+    fastMode: (session?.fastMode === 'ultrafast' ? 'ultrafast' : session?.fastMode === true),
     model: session?.model ?? '',
     permissionMode: session?.permissionMode ?? '',
     queuePaused: options.projection?.queuePaused === true,
@@ -194,7 +194,7 @@ export function formatSystemCard(
       { label: 'agent', value: readString(record.agent) || 'unknown' },
       { label: 'model', value: readString(record.model) || 'unknown' },
       { label: 'permission', value: readString(record.permissionMode) || 'unknown' },
-      { label: 'fast mode', value: record.fastMode === true ? 'on' : 'off' },
+      { label: 'fast mode', value: record.fastMode === 'ultrafast' ? 'ultrafast' : record.fastMode === true ? 'on' : 'off' },
       { label: 'queue', value: formatQueueStatus(record.queueSize, record.queuePaused) },
     ],
   };

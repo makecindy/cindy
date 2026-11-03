@@ -15,6 +15,7 @@ export { createCodexResponsesCompatibilityAdapter } from './codex';
 export * from './cindy/proxy/transform';
 export * from './cindy/proxy/xai-model-input';
 export * from './cindy/proxy/vllm-responses-compatibility';
+export * from './cindy/proxy/anthropic-effort-compatibility';
 export * from './cindy/proxy/headers';
 export * from './cindy/proxy/thread-strip-controller';
 export type * from './cindy/proxy/types';

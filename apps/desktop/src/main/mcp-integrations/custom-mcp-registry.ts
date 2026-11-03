@@ -23,6 +23,8 @@ import {
 } from '../maker-host/custom-mcp-store.js';
 import { readCustomMcpToken } from '../secrets/providerSecretStore.js';
 import { CustomMcpProvider } from './custom-mcp-provider.js';
+import { createAppServerProxy } from '../mcp-apps/serverProxy.js';
+import { registerAppServer, resetAppServers, clearAppServerConfigs } from '../mcp-apps/runtime.js';
 
 const log = createLogger('custom-mcp-registry');
 
@@ -42,6 +44,7 @@ export function registerCustomMcpArrays(...arrays: McpProvider[][]): void {
 /** 清空注册表（切账号 / resetMaker 时调用，防止旧数组引用残留）。 */
 export function resetCustomMcpRegistry(): void {
   registeredArrays.length = 0;
+  resetAppServers();
 }
 
 /**
@@ -88,7 +91,8 @@ export async function refreshCustomMcpProviders(): Promise<void> {
         skippedNames.add(serverName);
         return [];
       }
-      return [new CustomMcpProvider(config, readCustomMcpToken)];
+      const provider = new CustomMcpProvider(config, readCustomMcpToken, createAppServerProxy);
+      return [provider];
     });
   } catch (err) {
     log.warn('list custom mcp servers failed; leaving providers unchanged', {
@@ -96,6 +100,9 @@ export async function refreshCustomMcpProviders(): Promise<void> {
     });
     return;
   }
+  // Saved endpoint changes revoke open Views, while existing Agent calls retain their snapshot.
+  clearAppServerConfigs();
+  for (const provider of providers) registerAppServer(provider.name, () => provider.appServerConfig());
   for (const arr of registeredArrays) {
     // 原地移除旧的 custom provider,再追加新的一批(不换数组引用)。
     for (let i = arr.length - 1; i >= 0; i--) {

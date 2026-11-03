@@ -1,6 +1,14 @@
+import type { PluginUsageTransaction, PluginUsageHandle } from '../../../../shared/pluginUsage.js';
+import type { TaskTagRequest, TaskTagResult } from '@cindy/maker-shared';
+import type { ChatCacheTransaction, ChatCacheResult } from '../../worker/opHandlers/chatCacheTx.js';
+
 export type DbTxName =
-  | 'codex.importMessages'
-  | 'claude.importMessages'
+  | 'chatCache.execute'
+  | 'usage.recordMediaSpend'
+  | 'authorization.readProjection'
+  | 'pluginUsage.execute'
+  | 'sessionImport.execute'
+  | 'taskTags.execute'
   | 'rewind.commit'
   | 'session.treeRehydrate'
   | 'fork.session'
@@ -19,6 +27,7 @@ export type DbTxName =
   | 'orca.reconcileInactiveTeamWorkersForLead'
   | 'sessions.renameTitles'
   | 'sessions.setStatus'
+  | 'sessions.setTerminalStatus'
   | 'recentWorkdirs.mergeWindowsIdentity'
   | 'recentWorkdirs.removeWindowsIdentity'
   | 'projectAliases.replaceIdentity'
@@ -29,6 +38,7 @@ export type DbTxName =
   | 'message.updateContent'
   | 'message.leaseMutate'
   | 'message.rewindUserAfterClear'
+  | 'message.purgeRewoundSchedulerPrompts'
   | 'message.delete'
   | 'im.deleteBindings'
   | 'im.replaceBinding'
@@ -47,7 +57,22 @@ export type DbTxName =
   | 'bots.resumeLifecycle'
   | 'bots.archiveLifecycle'
   | 'bots.deleteProfile'
-  | 'bots.assertNoSharedHistory'
+  | 'bots.prepareProfileDeletion'
+  | 'bots.reconcileLanePermission'
+  | 'bots.persistSessionPermission'
+  | 'bots.createGroupLane'
+  | 'bots.createChannelLane'
+  | 'bots.createRoutineLane'
+  | 'bots.createThreadLane'
+  | 'bots.archiveChannelLanes'
+  | 'botGroups.create'
+  | 'botGroups.setMembers'
+  | 'botGroups.delete'
+  | 'botGroups.archiveLanes'
+  | 'botGroups.appendMessage'
+  | 'botGroups.createPlan'
+  | 'botGroups.settleStep'
+  | 'botGroups.removePlanStep'
   | 'im.rotateSession'
   | 'wechatActivateBindingEpoch'
   | 'wechatCommitPollBatch'
@@ -69,35 +94,6 @@ export type DbTxName =
   | 'skillUsage.applyMutation'
   | 'session.importShare';
 
-export interface CodexImportMessagesArgs {
-  sessionId: string;
-  importClientIdPrefix: string;
-  sdkSessionId: string;
-  model: string;
-  rows: Array<{
-    lineNo: number;
-    role: 'user' | 'assistant';
-    text: string;
-    content: unknown;
-    createdAt: number;
-  }>;
-}
-
-export interface ClaudeImportMessagesArgs {
-  sessionId: string;
-  importClientIdPrefix: string;
-  sdkSessionId: string;
-  rows: Array<{
-    lineNo: number;
-    partIndex: number;
-    role: string;
-    content: unknown;
-    toolUseId: string | null;
-    agentMeta: Record<string, unknown> | null;
-    createdAt: number;
-  }>;
-}
-
 export interface RewindCommitArgs {
   sessionId: string;
   targetCreatedAt: number;
@@ -117,6 +113,20 @@ export interface RewindCommitArgs {
    * fork.session 的同名字段),否则后续回退/fork 会把这些锚点当异线程丢弃。
    */
   nativeForkAnchorSessionMap?: Array<[string, string]>;
+  /**
+   * 读历史时看到的 sessions.cleared_at。提交时必须仍相同，否则 /clear 竞态整单回滚。
+   * 省略或 null 表示当时会话未被清空。
+   */
+  expectedClearedAt?: number | null;
+  /**
+   * Claude 目标之前没有可续接的回复：与软删同一事务清掉 sdk_session_id，并追加隐藏
+   * context_rebuild 标记(内容含交接文本)，下次发送开全新原生会话并注入保留下来的历史。
+   */
+  nativeContextReset?: {
+    markerId: string;
+    markerClientId: string;
+    markerContent: string;
+  };
   now: number;
 }
 
@@ -145,6 +155,7 @@ export interface ForkSessionArgs {
   /** 与 targetCreatedAt 同毫秒时按 SQLite 插入顺序截断；null/缺省表示整毫秒前缀。 */
   targetRowid?: number | null;
   newSession: {
+    source?: string;
     id: string;
     title: string;
     workingDir: string | null;
@@ -160,7 +171,7 @@ export interface ForkSessionArgs {
     contextTokens: number;
     contextWindow: number;
     contextWindowRuntime?: number | null;
-    fastMode: boolean | number;
+    fastMode: boolean | 'ultrafast' | number;
     clearedAt: number | null;
     pinnedAt: number | null;
     userSendAt: number | null;
@@ -241,6 +252,16 @@ export interface EmbeddingEnqueueArgs {
  * orcaTeamStore.addOrUpdateWorker 原同步事务逻辑。可选字段值为 undefined 表示
  * "保留 existing 行的当前值",与原 drizzle 写法语义一致。
  */
+export interface OrcaRemoteWorkerProxySessionSeed {
+  title: string;
+  agentKind: string;
+  model: string;
+  effort: string | null;
+  permissionMode: string;
+  fastMode: boolean | 'ultrafast';
+  agentDeviceId?: string | null;
+}
+
 export interface OrcaUpsertWorkerArgs {
   id: string;
   teamId: string;
@@ -251,6 +272,12 @@ export interface OrcaUpsertWorkerArgs {
   role?: string;
   focused?: boolean;
   idleSince?: number | null;
+  remoteExecution?: {
+    deviceId: string;
+    remoteSessionId: string;
+    /** 新建代理与 Worker 路由一起提交；已有代理的更新可省略。 */
+    proxySession?: OrcaRemoteWorkerProxySessionSeed;
+  };
   now: number;
 }
 
@@ -340,6 +367,17 @@ export interface SessionsRenameTitleResult {
 export interface SessionsSetStatusArgs {
   sessionIds: string[];
   status: 'active' | 'archived';
+  closeSharedTasks?: boolean;
+}
+
+export interface SessionsSetTerminalStatusArgs {
+  sessionId: string;
+  status: 'archived' | 'deleted';
+}
+
+export interface SessionsSetTerminalStatusResult extends Omit<SessionsSetStatusResultItem, 'status'> {
+  status: 'archived' | 'deleted';
+  deletedSideChats: Array<Omit<SessionsSetStatusResultItem, 'status'>>;
 }
 
 /** resume 停泊失败后的原子回落:清失效绑定并把边界改成全量交接。 */
@@ -366,7 +404,7 @@ export interface ContextRebuildArgs {
     model: string;
     providerId: string | null;
     effort: string | null;
-    fastMode: boolean;
+    fastMode: boolean | 'ultrafast';
   };
 }
 
@@ -382,6 +420,10 @@ export interface MessageInsertArgs {
   createdAt: number;
   guarded: boolean;
   expectedClearBoundaryMs?: number | null;
+  /** Host-only opening guard, evaluated atomically with the insert. */
+  requireNoUserMessage?: boolean;
+  /** Host-only publication; stages belong to a connection-local TEMP table. */
+  publication?: 'stage' | 'publish' | 'discard' | 'rollback';
 }
 
 export interface MessageUpdateContentArgs {
@@ -404,6 +446,20 @@ export interface MessageRewindUserAfterClearArgs {
   sessionId: string;
   clientId: string;
   rewoundAt: number;
+  discard?: boolean;
+}
+
+export interface MessagePurgeRewoundSchedulerPromptsArgs {
+  limit: number;
+  /** 上一批返回的 cursor（窗口末尾 rewind_at）；省略从头扫。 */
+  cursor?: number;
+}
+
+export interface MessagePurgeRewoundSchedulerPromptsResult {
+  deleted: number;
+  sessionIds: string[];
+  /** 下一批的起点；null 表示所有隐藏行已扫完。 */
+  cursor: number | null;
 }
 
 /**
@@ -497,7 +553,7 @@ export interface SessionImportShareSessionRow {
   totalCostUsd: number;
   contextTokens: number;
   contextWindow: number;
-  fastMode: boolean;
+  fastMode: boolean | 'ultrafast';
   planModeEnabled: boolean;
   agentKind: string;
   /** Orca 角色标记:协同包导入时 lead='lead'、Worker='worker';普通导入缺省(NULL)。 */
@@ -610,6 +666,10 @@ export interface BotsCreateProfileArgs {
 
 export interface BotsUpdateProfileArgs {
   id: string;
+  /** A saved model choice supersedes automation restores in the same commit. */
+  clearScheduledModelBaseline?: boolean;
+  /** Explicit settings changes also update the permanent chat in this transaction. */
+  canonicalPermissionMode?: 'ask' | 'auto' | 'bypassPermissions';
   displayName?: string;
   description?: string;
   avatar?: string;
@@ -648,6 +708,7 @@ export interface BotsReplaceCanonicalSessionArgs {
     id: string;
     title: string;
     workingDir: string | null;
+    projectDir?: string | null;
     workspaceKind: string;
     model: string;
     effort: string;
@@ -655,9 +716,10 @@ export interface BotsReplaceCanonicalSessionArgs {
     agentKind: string;
     remoteHostId: string | null;
     providerId: string | null;
+    agentDeviceId?: string | null;
     parentSessionId?: string | null;
     extraDirs: string;
-    fastMode?: boolean;
+    fastMode?: boolean | 'ultrafast';
     source: string;
     createdAt: number;
     updatedAt: number;
@@ -716,6 +778,8 @@ export interface BotsFinishRuntimeArgs {
   eventPayloadJson: string;
 }
 export interface BotsFinishDelegationArgs {
+  expectedRunSequence?: number;
+  expectedExecution?: { instanceId: string; generation: number };
   delegationId: string;
   status: 'completed' | 'failed' | 'cancelled' | 'timed-out';
   resultSummary: string | null;
@@ -727,6 +791,8 @@ export interface BotsFinishDelegationArgs {
 
 export interface BotsFinishDelegationResult {
   id: string;
+  targetBotId: string | null;
+  runSequence: number;
   parentSessionId: string | null;
   childSessionId: string | null;
   status: 'queued' | 'running' | 'waiting' | 'completed' | 'failed' | 'cancelled' | 'timed-out';
@@ -760,6 +826,159 @@ export interface BotsCreateDelegationArgs {
     createdAt: number;
   };
   session: BotsReplaceCanonicalSessionArgs['session'];
+}
+
+export interface BotGroupsCreateLaneArgs {
+  botId: string;
+  groupId: string;
+  routeKey: string;
+  session: BotsReplaceCanonicalSessionArgs['session'];
+}
+
+export interface BotGroupsCreateLaneResult {
+  sessionId: string;
+  created: boolean;
+  /** Existing runtimes must follow a canonical permission repaired during creation. */
+  permissionRepairCanonicalSessionId?: string;
+}
+
+/** 伙伴接管的个人 IM 群 / 话题专线(`role = 'channel'`)。 */
+export interface BotsCreateChannelLaneArgs {
+  botId: string;
+  routeKey: string;
+  session: BotsReplaceCanonicalSessionArgs['session'];
+}
+
+/**
+ * 主人私聊里的话题(`role = 'thread'`)。根消息必须是这位伙伴当前主任务里可见的
+ * user / assistant 消息;`routeKey` 由调用方按 `botDmThreadRouteKey` 生成。
+ */
+export interface BotsCreateThreadLaneArgs {
+  botId: string;
+  routeKey: string;
+  rootSessionId: string;
+  rootClientId: string;
+  session: BotsReplaceCanonicalSessionArgs['session'];
+}
+
+/**
+ * 归档 IM 连接的伙伴专线: 精确 routeKey 或 routeKey 前缀(整条连接)二选一;
+ * exceptBotId 非空时保留该伙伴的专线(改绑时只收旧伙伴的)。
+ */
+export interface BotsArchiveChannelLanesArgs {
+  routeKey: string | null;
+  routeKeyPrefix: string | null;
+  exceptBotId: string | null;
+  now: number;
+}
+
+export interface BotGroupsCreateArgs {
+  groupId: string;
+  name: string;
+  botIds: string[];
+  now: number;
+}
+
+export interface BotGroupsSetMembersArgs {
+  groupId: string;
+  botIds: string[];
+  routeKey: string;
+  /** 分工 Sessions (`<prefix><planId>`) of removed members are archived with their lanes. */
+  planRouteKeyPrefix?: string;
+  now: number;
+}
+
+export interface BotGroupsSetMembersResult {
+  archivedSessionIds: string[];
+}
+
+export interface BotGroupsDeleteArgs {
+  groupId: string;
+  routeKey: string;
+  planRouteKeyPrefix?: string;
+  now: number;
+}
+
+export interface BotGroupsArchiveLanesArgs {
+  routeKey: string;
+  /** null archives every member's lane in the group. */
+  botIds: string[] | null;
+  now: number;
+}
+
+export interface BotGroupsAppendMessageArgs {
+  message: BotGroupsMessageRow;
+}
+
+export interface BotGroupsMessageRow {
+  id: string;
+  groupId: string;
+  kind: 'message' | 'round-end' | 'notice' | 'plan' | 'plan-end';
+  authorKind: 'user' | 'bot' | 'system';
+  authorBotId: string | null;
+  authorName: string;
+  content: string;
+  mentionsJson: string;
+  noticeCode: string | null;
+  clientId: string | null;
+  planId?: string | null;
+  filesJson?: string;
+  attachmentsJson?: string;
+  createdAt: number;
+}
+
+/** Posts a 安排卡: supersedes the group's other proposed plans in the same transaction. */
+export interface BotGroupsCreatePlanArgs {
+  plan: {
+    id: string;
+    groupId: string;
+    requestText: string;
+    /** The request's attachments, handed to every step. */
+    attachmentsJson?: string;
+    organizerBotId: string;
+    organizerName: string;
+  };
+  steps: Array<{ botId: string; botName: string; task: string }>;
+  message: BotGroupsMessageRow;
+  now: number;
+}
+
+export interface BotGroupsCreatePlanResult {
+  messageId: string;
+  sequence: number;
+  supersededPlanIds: string[];
+}
+
+/**
+ * Settles one step and the plan together, optionally posting the step's hand-off or a
+ * notice. Guarded by the expected plan status so a stopped plan never flips back.
+ */
+export interface BotGroupsSettleStepArgs {
+  planId: string;
+  position: number;
+  expectedPlanStatus: 'running';
+  stepStatus: 'done' | 'failed';
+  planStatus: 'waiting' | 'done';
+  message: BotGroupsMessageRow | null;
+  /** Appended after `message` when the last step finishes. */
+  endMessage: BotGroupsMessageRow | null;
+  now: number;
+}
+
+export interface BotGroupsSettleStepResult {
+  settled: boolean;
+}
+
+export interface BotGroupsRemovePlanStepArgs {
+  planId: string;
+  position: number;
+  now: number;
+}
+
+export interface BotGroupsAppendMessageResult {
+  id: string;
+  sequence: number;
+  created: boolean;
 }
 
 export interface BotsReopenDelegationArgs {
@@ -817,10 +1036,13 @@ export interface ImRotateSessionArgs {
     model: string;
     effort: string;
     permissionMode: string;
-    fastMode: boolean;
+    fastMode: boolean | 'ultrafast';
     agentKind: string;
     source: string;
     providerId: string | null;
+    agentDeviceId?: string | null;
+    /** 跟随渠道默认的记录(JSON, 见 im/shared/channelDefaultRoute.ts)。 */
+    imDefaultRoute?: string | null;
     imBotContextId: string;
     imUserId: string;
   };
@@ -1054,10 +1276,13 @@ export interface WechatStopAllArgs {
   bindingEpoch: string;
   now: number;
   errorCode: string;
+  /** Permanent companion deletion cancels pre-accepted work instead of replaying it. */
+  cancelPending?: boolean;
 }
 
 export interface WechatStopAllResult {
   requeued: number;
+  cancelled: number;
   interrupted: number;
   expired: number;
   repaired: number;
@@ -1148,9 +1373,20 @@ export type SkillUsageApplyMutationArgs =
   | { kind: 'deleteBefore'; analyzerVersion: string; recentSince: number }
   | { kind: 'promote'; analyzerVersion: string };
 
+export interface MediaSpendArgs {
+  providerName?: string;
+  day: string;
+  model: string;
+  amount: number;
+  currency: 'USD' | 'CNY';
+  sessionId?: string;
+  userClientId?: string;
+  now: number;
+}
+
 export type DbTxArgsByName = {
-  'codex.importMessages': CodexImportMessagesArgs;
-  'claude.importMessages': ClaudeImportMessagesArgs;
+  'usage.recordMediaSpend': MediaSpendArgs;
+  'authorization.readProjection': { sessionId: string; leadId: string };
   'rewind.commit': RewindCommitArgs;
   'session.treeRehydrate': SessionTreeRehydrateArgs;
   'fork.session': ForkSessionArgs;
@@ -1169,8 +1405,13 @@ export type DbTxArgsByName = {
   'orca.reconcileInactiveTeamWorkersForLead': OrcaReconcileInactiveTeamWorkersForLeadArgs;
   'sessions.renameTitles': SessionsRenameTitlesArgs;
   'sessions.setStatus': SessionsSetStatusArgs;
+  'sessions.setTerminalStatus': SessionsSetTerminalStatusArgs;
   'recentWorkdirs.mergeWindowsIdentity': RecentWorkdirsMergeWindowsIdentityArgs;
   'recentWorkdirs.removeWindowsIdentity': RecentWorkdirsRemoveWindowsIdentityArgs;
+  'pluginUsage.execute': PluginUsageTransaction;
+  'sessionImport.execute': SessionImportTransactionArgs;
+  'chatCache.execute': ChatCacheTransaction;
+  'taskTags.execute': TaskTagRequest & { newId?: string; callerSessionId?: string };
   'projectAliases.replaceIdentity': ProjectAliasesReplaceIdentityArgs;
   'toolResults.compactSession': CompactSessionToolResultsArgs;
   'session.agentSwitchFallback': SessionAgentSwitchFallbackArgs;
@@ -1179,6 +1420,7 @@ export type DbTxArgsByName = {
   'message.updateContent': MessageUpdateContentArgs;
   'message.leaseMutate': MessageLeaseMutateArgs;
   'message.rewindUserAfterClear': MessageRewindUserAfterClearArgs;
+  'message.purgeRewoundSchedulerPrompts': MessagePurgeRewoundSchedulerPromptsArgs;
   'message.delete': MessageDeleteArgs;
   'im.deleteBindings': ImDeleteBindingsArgs;
   'im.replaceBinding': ImReplaceBindingArgs;
@@ -1197,7 +1439,22 @@ export type DbTxArgsByName = {
   'bots.resumeLifecycle': BotsLifecycleTransitionArgs;
   'bots.archiveLifecycle': BotsArchiveLifecycleArgs;
   'bots.deleteProfile': BotsDeleteProfileArgs;
-  'bots.assertNoSharedHistory': { botId: string };
+  'bots.prepareProfileDeletion': { botId: string };
+  'bots.reconcileLanePermission': { sessionId: string };
+  'bots.persistSessionPermission': { sessionId: string; mode: string };
+  'bots.createGroupLane': BotGroupsCreateLaneArgs;
+  'bots.createChannelLane': BotsCreateChannelLaneArgs;
+  'bots.createRoutineLane': BotsCreateChannelLaneArgs;
+  'bots.createThreadLane': BotsCreateThreadLaneArgs;
+  'bots.archiveChannelLanes': BotsArchiveChannelLanesArgs;
+  'botGroups.create': BotGroupsCreateArgs;
+  'botGroups.setMembers': BotGroupsSetMembersArgs;
+  'botGroups.delete': BotGroupsDeleteArgs;
+  'botGroups.archiveLanes': BotGroupsArchiveLanesArgs;
+  'botGroups.appendMessage': BotGroupsAppendMessageArgs;
+  'botGroups.createPlan': BotGroupsCreatePlanArgs;
+  'botGroups.settleStep': BotGroupsSettleStepArgs;
+  'botGroups.removePlanStep': BotGroupsRemovePlanStepArgs;
   'im.rotateSession': ImRotateSessionArgs;
   wechatActivateBindingEpoch: WechatActivateBindingEpochArgs;
   wechatCommitPollBatch: WechatCommitPollBatchArgs;
@@ -1221,8 +1478,13 @@ export type DbTxArgsByName = {
 };
 
 export type DbTxResultByName = {
-  'codex.importMessages': { changed: number };
-  'claude.importMessages': { changed: number };
+  'usage.recordMediaSpend': {
+    legacyUsd: number;
+    amount: number;
+    currency: 'USD' | 'CNY';
+    approximate: number;
+  } | null;
+  'authorization.readProjection': import('../../autoReviewProjection.js').StoredAutoReviewProjection;
   'rewind.commit': undefined;
   'session.treeRehydrate': { messageCount: number; hiddenClientIds: string[] };
   'fork.session': { messageCount: number };
@@ -1241,8 +1503,13 @@ export type DbTxResultByName = {
   'orca.reconcileInactiveTeamWorkersForLead': string[];
   'sessions.renameTitles': SessionsRenameTitleResult[];
   'sessions.setStatus': SessionsSetStatusResultItem[];
+  'sessions.setTerminalStatus': SessionsSetTerminalStatusResult;
   'recentWorkdirs.mergeWindowsIdentity': undefined;
   'recentWorkdirs.removeWindowsIdentity': { changes: number };
+  'pluginUsage.execute': PluginUsageHandle | null;
+  'sessionImport.execute': SessionImportTransactionResult;
+  'chatCache.execute': ChatCacheResult;
+  'taskTags.execute': TaskTagResult;
   'projectAliases.replaceIdentity': {
     projectKey: string;
     alias: string;
@@ -1255,6 +1522,7 @@ export type DbTxResultByName = {
   'message.updateContent': { changes: number };
   'message.leaseMutate': { changes: number };
   'message.rewindUserAfterClear': { changes: number };
+  'message.purgeRewoundSchedulerPrompts': MessagePurgeRewoundSchedulerPromptsResult;
   'message.delete': MessageDeleteResult;
   'im.deleteBindings': undefined;
   'im.replaceBinding': undefined;
@@ -1273,7 +1541,22 @@ export type DbTxResultByName = {
   'bots.resumeLifecycle': undefined;
   'bots.archiveLifecycle': { sessions: number };
   'bots.deleteProfile': { sessionIds: string[]; status: 'archived' | 'deleted' };
-  'bots.assertNoSharedHistory': undefined;
+  'bots.prepareProfileDeletion': undefined;
+  'bots.reconcileLanePermission': { mode: string | null; changed: boolean; canonicalSessionId?: string };
+  'bots.persistSessionPermission': { updated: boolean };
+  'bots.createGroupLane': BotGroupsCreateLaneResult;
+  'bots.createChannelLane': BotGroupsCreateLaneResult;
+  'bots.createRoutineLane': BotGroupsCreateLaneResult;
+  'bots.createThreadLane': BotGroupsCreateLaneResult;
+  'bots.archiveChannelLanes': { archivedSessionIds: string[] };
+  'botGroups.create': undefined;
+  'botGroups.setMembers': BotGroupsSetMembersResult;
+  'botGroups.delete': { archivedSessionIds: string[] };
+  'botGroups.archiveLanes': { archivedSessionIds: string[] };
+  'botGroups.appendMessage': BotGroupsAppendMessageResult;
+  'botGroups.createPlan': BotGroupsCreatePlanResult;
+  'botGroups.settleStep': BotGroupsSettleStepResult;
+  'botGroups.removePlanStep': { removed: boolean };
   'im.rotateSession': ImRotateSessionResult;
   wechatActivateBindingEpoch: WechatActivateBindingEpochResult;
   wechatCommitPollBatch: WechatCommitPollBatchResult;
@@ -1295,3 +1578,70 @@ export type DbTxResultByName = {
   'skillUsage.applyMutation': undefined;
   'session.importShare': { messageCount: number };
 };
+
+/** session-import 事务（实现见 worker/opHandlers/sessionImportTx.ts）。 */
+export type SessionImportTransactionArgs =
+  | {
+      action: 'begin';
+      now: number;
+      session: {
+        id: string;
+        title: string;
+        workingDir: string | null;
+        workspaceKind: 'project' | 'dialogue';
+        model: string;
+        providerId: string | null;
+        effort: string;
+        permissionMode: string;
+        status: 'active' | 'archived';
+        tokensUsed: number;
+        userSendAt: number;
+        agentKind: 'cc' | 'codex' | 'pi';
+        createdAt: number;
+        updatedAt: number;
+      };
+      record: {
+        source: string;
+        sourceSessionId: string;
+        fingerprint: string | null;
+        version: string | null;
+        mode: 'native' | 'handoff';
+        originalCwd: string | null;
+        requestId: string | null;
+      };
+    }
+  | {
+      action: 'messages';
+      sessionId: string;
+      clientIdPrefix: string;
+      idPrefix: string;
+      rows: Array<{
+        key: string;
+        role: string;
+        content: string;
+        toolUseId: string | null;
+        agentMeta: string | null;
+        agentKind: string | null;
+        createdAt: number;
+      }>;
+    }
+  | {
+      action: 'commit';
+      sessionId: string;
+      now: number;
+      status: 'ready' | 'action' | 'failed';
+      mode?: 'native' | 'handoff';
+      issue: string | null;
+      unhide: boolean;
+      sessionPatch?: { sdkSessionId?: string | null; workingDir?: string };
+      marker?: { id: string; clientId: string; content: string; createdAt: number };
+    }
+  | { action: 'adopt'; sessionId: string; source: string; sourceSessionId: string; now: number }
+  | { action: 'abort'; sessionId: string; requestId?: string };
+
+export type SessionImportTransactionResult =
+  | { created: boolean }
+  | { changed: number }
+  | { ok: true }
+  | { removed: number }
+  | { adopted: boolean };

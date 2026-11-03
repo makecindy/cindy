@@ -1,3 +1,5 @@
+import { Button } from '@/components/ui/button';
+import { GithubConnectButton } from '@/features/cc-agent/GithubConnectButton';
 /**
  * IssueTrackerFeatureLayout — 「我的 Issue」页
  * ---------------------------------------------------------------------------
@@ -6,7 +8,7 @@
  * 口径:看自己的 issue 与提交 issue 走**同一条公共能力**,只要 Cindy 登录态,
  * 不要求用户有 GitHub 账号 —— 所以本页任何状态下都**不得**提示「你需要连接
  * GitHub」。用户自己的 GitHub 身份只是可选增强(把他直接在 GitHub 上提的也并进来),
- * 没有它页面照常工作,界面上也不提。
+ * 没有它页面照常工作;连接入口仅用于可选的 GitHub 账号增强。
  *
  * 一条都没有时,页面退回原来的引导形态(告诉用户怎么用 /issue 提交)。
  *
@@ -65,6 +67,7 @@ export function IssueTrackerFeatureLayout() {
         <h1 className="text-15 font-medium text-foreground">{t('issueTracker.list.header')}</h1>
         {data ? <ViewerLine data={data} /> : null}
         <div className="flex-1" />
+        <GithubConnectButton visible={!loading && !data?.githubEnhancement} />
         <button
           type="button"
           onClick={refresh}
@@ -118,13 +121,7 @@ export function IssueTrackerFeatureLayout() {
  * 两处说明(顶部条与空态)共用它,避免样式与行为各写一套;`size` 只差内边距,
  * 视觉语言(等宽字 + 浅底 + hover 加深)一致。
  */
-function IssueCommandButton({
-  onClick,
-  size = 'sm',
-}: {
-  onClick: () => void;
-  size?: 'sm' | 'lg';
-}) {
+function IssueCommandButton({ onClick, size = 'sm' }: { onClick: () => void; size?: 'sm' | 'lg' }) {
   const { t } = useTranslation();
   return (
     <button
@@ -304,18 +301,16 @@ function EmptyGuide({
         {t('issueAgent.redirect.descriptionAfter')}
       </p>
 
-      <button
+      <Button
+        variant="cta"
+        size="lg"
         type="button"
         onClick={() => window.electronAPI.openExternal(GITHUB_ISSUES_URL)}
-        className={cn(
-          'mt-2 inline-flex h-9 items-center justify-center gap-1.5 rounded-full px-5',
-          'text-sm font-medium transition-colors',
-          'bg-foreground text-background hover:opacity-90',
-        )}
+        className="mt-2"
       >
         {t('issueAgent.redirect.cta')}
         <ExternalLink size={14} />
-      </button>
+      </Button>
     </div>
   );
 }

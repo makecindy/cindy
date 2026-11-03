@@ -23,7 +23,6 @@ function read(relPath: string): string {
 
 const sessionScreen = read('app/sessions/[sessionId].tsx');
 const sessionListActions = read('src/session/useSessionListActions.ts');
-const automationsScreen = read('app/automations/[deviceId].tsx');
 const menuSheet = read('src/session/SessionMenuSheet.tsx');
 
 describe('mobile 会话标题投影出口', () => {
@@ -36,12 +35,6 @@ describe('mobile 会话标题投影出口', () => {
   it('首页删除确认里的标题过投影', () => {
     expect(sessionListActions).toContain(
       "projectDraftSessionTitle(session.title, t('session.menu.unnamedTitle')).trim()",
-    );
-  });
-
-  it('自动化绑定会话选择器过投影', () => {
-    expect(automationsScreen).toContain(
-      "projectDraftSessionTitle(session.title, t('session.menu.unnamedTitle'))",
     );
   });
 

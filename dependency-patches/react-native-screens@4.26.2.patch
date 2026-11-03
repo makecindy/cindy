@@ -1,0 +1,447 @@
+diff --git a/ios/RNSBarButtonItem.h b/ios/RNSBarButtonItem.h
+index a26d1254eafd89268f65d968988cf6a3b8c1e457..ddf5b9daa192ca0f13e7cea8ecd15d268c1b3c4c 100644
+--- a/ios/RNSBarButtonItem.h
++++ b/ios/RNSBarButtonItem.h
+@@ -15,6 +15,14 @@ typedef void (^RNSBarButtonMenuItemAction)(NSString *menuId);
+                         action:(RNSBarButtonItemAction)action
+                     menuAction:(RNSBarButtonMenuItemAction)menuAction
+                    imageLoader:(RCTImageLoader *)imageLoader;
++
++/// Cindy patch: a menu-only item whose configuration differs only in its menu can be
++/// reused, so updating a checkmark does not replace the bar button (which would dismiss
++/// the menu that is currently open, defeating keepsMenuPresented).
++- (BOOL)rns_canReuseWithConfig:(NSDictionary<NSString *, id> *)dict;
++- (void)rns_updateMenuWithConfig:(NSDictionary<NSString *, id> *)dict
++                      menuAction:(RNSBarButtonMenuItemAction)menuAction
++                     imageLoader:(RCTImageLoader *)imageLoader;
+ #endif // defined(__cplusplus)
+ 
+ @end
+diff --git a/ios/RNSBarButtonItem.mm b/ios/RNSBarButtonItem.mm
+index 0eb1f09dee82edd99e3e614938233db5cdeaebfe..2d015f69554ef6088945893837a54f2b2708d737 100644
+--- a/ios/RNSBarButtonItem.mm
++++ b/ios/RNSBarButtonItem.mm
+@@ -6,9 +6,63 @@
+ 
+ static UIMenuOptions RNSMakeUIMenuOptionsFromConfig(NSDictionary *config);
+ 
++// Cindy patch: identity of a bar button (plain button or menu) is its whole config except the
++// menu. Every item of the toolbar must be reusable: one freshly allocated sibling makes the
++// header reassign the whole item array, which dismisses an open menu. Press handlers route
++// through the owning header config, so a reused button keeps working.
++static NSDictionary *RNSBarButtonReuseKey(NSDictionary *dict)
++{
++  if (dict[@"menu"] == nil && dict[@"buttonId"] == nil) {
++    return nil;
++  }
++  NSMutableDictionary *key = [dict mutableCopy];
++  [key removeObjectForKey:@"menu"];
++  return key;
++}
++
++// Cindy patch: shape of a menu config without the values a toggle changes (checkmark,
++// subtitle, disabled). Equal shapes let a menu be updated in place instead of replaced:
++// replacing an open menu pops it back to its root, so a checkmark inside a submenu would
++// collapse the submenu.
++static id RNSMenuShapeKey(id value)
++{
++  if ([value isKindOfClass:[NSDictionary class]]) {
++    NSMutableDictionary *shape = [NSMutableDictionary new];
++    [(NSDictionary *)value enumerateKeysAndObjectsUsingBlock:^(id key, id obj, BOOL *stop) {
++      if ([key isEqual:@"state"] || [key isEqual:@"subtitle"] || [key isEqual:@"disabled"]) {
++        return;
++      }
++      shape[key] = RNSMenuShapeKey(obj);
++    }];
++    return shape;
++  }
++  if ([value isKindOfClass:[NSArray class]]) {
++    NSMutableArray *shape = [NSMutableArray new];
++    for (id obj in (NSArray *)value) {
++      [shape addObject:RNSMenuShapeKey(obj)];
++    }
++    return shape;
++  }
++  return value ?: [NSNull null];
++}
++
++static UIMenuElementState RNSMenuElementStateFromConfig(NSDictionary *dict)
++{
++  NSString *state = dict[@"state"];
++  if ([state isEqualToString:@"on"]) {
++    return UIMenuElementStateOn;
++  }
++  if ([state isEqualToString:@"mixed"]) {
++    return UIMenuElementStateMixed;
++  }
++  return UIMenuElementStateOff;
++}
++
+ @implementation RNSBarButtonItem {
+   NSString *_buttonId;
+   RNSBarButtonItemAction _itemAction;
++  NSDictionary *_reuseKey;
++  id _menuShapeKey;
+ }
+ 
+ - (instancetype)initWithConfig:(NSDictionary<NSString *, id> *)dict
+@@ -116,10 +170,13 @@ - (instancetype)initWithConfig:(NSDictionary<NSString *, id> *)dict
+     NSDictionary *menu = dict[@"menu"];
+     if (menu) {
+       self.menu = [[self class] initUIMenuWithDict:menu menuAction:menuAction imageLoader:imageLoader];
++      _menuShapeKey = RNSMenuShapeKey(menu);
+     }
+   }
+ #endif
+ 
++  _reuseKey = RNSBarButtonReuseKey(dict);
++
+   NSString *buttonId = dict[@"buttonId"];
+   if (buttonId && action) {
+     self.target = self;
+@@ -130,6 +187,180 @@ - (instancetype)initWithConfig:(NSDictionary<NSString *, id> *)dict
+   return self;
+ }
+ 
++- (BOOL)rns_canReuseWithConfig:(NSDictionary<NSString *, id> *)dict
++{
++  NSDictionary *key = RNSBarButtonReuseKey(dict);
++  return key != nil && _reuseKey != nil && [_reuseKey isEqualToDictionary:key];
++}
++
++- (void)rns_updateMenuWithConfig:(NSDictionary<NSString *, id> *)dict
++                      menuAction:(RNSBarButtonMenuItemAction)menuAction
++                     imageLoader:(RCTImageLoader *)imageLoader
++{
++#if !TARGET_OS_TV || __TV_OS_VERSION_MAX_ALLOWED >= 170000
++  if (@available(tvOS 17.0, *)) {
++    NSDictionary *menu = dict[@"menu"];
++    if (menu == nil) {
++      // Plain button reused as-is (its config equals the previous one apart from the menu).
++      self.menu = nil;
++      _menuShapeKey = nil;
++      return;
++    }
++    id shapeKey = RNSMenuShapeKey(menu);
++    if (self.menu != nil && [_menuShapeKey isEqual:shapeKey]) {
++      [[self class] applyValuesFromMenuConfig:menu toMenu:self.menu];
++      [[self class] rns_refreshVisibleMenusWithSource:self.menu];
++      return;
++    }
++    self.menu = [[self class] initUIMenuWithDict:menu menuAction:menuAction imageLoader:imageLoader];
++    _menuShapeKey = shapeKey;
++  }
++#endif
++}
++
++/// Collects the values applyValuesFromMenuConfig writes (check state, disabled flag, subtitles),
++/// keyed by action identifier (menuId) and submenu title.
++static void RNSCollectMenuValues(UIMenu *menu, NSMutableDictionary<NSString *, UIAction *> *actions, NSMutableDictionary *subtitles)
++{
++  for (UIMenuElement *child in menu.children) {
++    if ([child isKindOfClass:[UIAction class]]) {
++      NSString *identifier = ((UIAction *)child).identifier;
++      if (identifier.length > 0) {
++        actions[identifier] = (UIAction *)child;
++      }
++    } else if ([child isKindOfClass:[UIMenu class]]) {
++      UIMenu *submenu = (UIMenu *)child;
++      if (submenu.title.length > 0) {
++        if (@available(iOS 15.0, *)) {
++          subtitles[submenu.title] = submenu.subtitle ?: (id)[NSNull null];
++        }
++      }
++      RNSCollectMenuValues(submenu, actions, subtitles);
++    }
++  }
++}
++
++static BOOL RNSActionValuesEqual(UIAction *a, UIAction *b)
++{
++  if (a.state != b.state || a.attributes != b.attributes) {
++    return NO;
++  }
++  if (@available(iOS 15.0, *)) {
++    return a.subtitle == b.subtitle || [a.subtitle isEqualToString:b.subtitle];
++  }
++  return YES;
++}
++
++/// Returns a copy of `menu` carrying the source values. updateVisibleMenu only redraws when the
++/// block hands back new elements, so changed actions are copied rather than mutated in place.
++static UIMenu *RNSMenuWithValues(UIMenu *menu, NSDictionary<NSString *, UIAction *> *actions, NSDictionary *subtitles)
++{
++  NSMutableArray<UIMenuElement *> *children = [NSMutableArray arrayWithCapacity:menu.children.count];
++  for (UIMenuElement *child in menu.children) {
++    if ([child isKindOfClass:[UIAction class]]) {
++      UIAction *action = (UIAction *)child;
++      UIAction *source = actions[action.identifier ?: @""];
++      if (source != nil && !RNSActionValuesEqual(action, source)) {
++        UIAction *copy = [action copy];
++        copy.state = source.state;
++        copy.attributes = source.attributes;
++        if (@available(iOS 15.0, *)) {
++          copy.subtitle = source.subtitle;
++        }
++        [children addObject:copy];
++      } else {
++        [children addObject:action];
++      }
++    } else if ([child isKindOfClass:[UIMenu class]]) {
++      [children addObject:RNSMenuWithValues((UIMenu *)child, actions, subtitles)];
++    } else {
++      [children addObject:child];
++    }
++  }
++  UIMenu *result = [menu menuByReplacingChildren:children];
++  id subtitle = menu.title.length > 0 ? subtitles[menu.title] : nil;
++  if (subtitle != nil) {
++    if (@available(iOS 15.0, *)) {
++      result.subtitle = subtitle == [NSNull null] ? nil : subtitle;
++    }
++  }
++  return result;
++}
++
++static void RNSCollectContextMenuInteractions(UIView *view, NSMutableArray<UIContextMenuInteraction *> *out)
++{
++  for (id<UIInteraction> interaction in view.interactions) {
++    if ([interaction isKindOfClass:[UIContextMenuInteraction class]]) {
++      [out addObject:(UIContextMenuInteraction *)interaction];
++    }
++  }
++  for (UIView *subview in view.subviews) {
++    RNSCollectContextMenuInteractions(subview, out);
++  }
++}
++
++/// UIKit renders a copy of an open menu, so in-place writes to our UIMenu do not show until
++/// it is reopened. Push the values (checkmarks, disabled flags, subtitles) into whichever menu is currently on screen through the
++/// public updateVisibleMenu API (a no-op for interactions whose menu is not open). Actions
++/// are matched by identifier (menuId), submenus by title.
+++ (void)rns_refreshVisibleMenusWithSource:(UIMenu *)source
++{
++  if (@available(iOS 16.0, *)) {
++    NSMutableDictionary<NSString *, UIAction *> *actions = [NSMutableDictionary new];
++    NSMutableDictionary *subtitles = [NSMutableDictionary new];
++    RNSCollectMenuValues(source, actions, subtitles);
++    if (actions.count == 0 && subtitles.count == 0) {
++      return;
++    }
++    NSMutableArray<UIContextMenuInteraction *> *interactions = [NSMutableArray new];
++    for (UIScene *scene in UIApplication.sharedApplication.connectedScenes) {
++      if (![scene isKindOfClass:[UIWindowScene class]]) {
++        continue;
++      }
++      for (UIWindow *window in ((UIWindowScene *)scene).windows) {
++        RNSCollectContextMenuInteractions(window, interactions);
++      }
++    }
++    for (UIContextMenuInteraction *interaction in interactions) {
++      [interaction updateVisibleMenuWithBlock:^UIMenu *_Nonnull(UIMenu *_Nonnull visibleMenu) {
++        return RNSMenuWithValues(visibleMenu, actions, subtitles);
++      }];
++    }
++  }
++}
++
++/// Writes checkmarks, subtitles and the disabled flag into an existing menu tree whose
++/// shape matches the config (children are created in config order).
+++ (void)applyValuesFromMenuConfig:(NSDictionary *)dict toMenu:(UIMenu *)menu
++{
++  if (@available(iOS 15.0, *)) {
++    menu.subtitle = dict[@"subtitle"];
++  }
++  NSArray *items = dict[@"items"];
++  NSArray<UIMenuElement *> *children = menu.children;
++  if (items.count != children.count) {
++    return;
++  }
++  for (NSUInteger i = 0; i < items.count; i++) {
++    NSDictionary *item = items[i];
++    UIMenuElement *child = children[i];
++    if (item[@"menuId"] != nil && [child isKindOfClass:[UIAction class]]) {
++      UIAction *action = (UIAction *)child;
++      action.state = RNSMenuElementStateFromConfig(item);
++      if (@available(iOS 15.0, *)) {
++        action.subtitle = item[@"subtitle"];
++      }
++      if ([item[@"disabled"] boolValue]) {
++        action.attributes |= UIMenuElementAttributesDisabled;
++      } else {
++        action.attributes &= ~UIMenuElementAttributesDisabled;
++      }
++    } else if ([child isKindOfClass:[UIMenu class]]) {
++      [self applyValuesFromMenuConfig:item toMenu:(UIMenu *)child];
++    }
++  }
++}
++
+ + (void)resolveImageFromConfig:(NSDictionary *)dict
+                    imageLoader:(RCTImageLoader *)imageLoader
+                completionBlock:(void (^)(UIImage *_Nullable))completionBlock
+@@ -188,11 +419,19 @@ + (UIMenu *)initUIMenuWithDict:(NSDictionary<NSString *, id> *)dict
+                  image = img;
+                }];
+ 
+-  return [UIMenu menuWithTitle:dict[@"title"]
+-                         image:image
+-                    identifier:nil
+-                       options:RNSMakeUIMenuOptionsFromConfig(dict)
+-                      children:elements];
++  UIMenu *menu = [UIMenu menuWithTitle:dict[@"title"]
++                                 image:image
++                            identifier:nil
++                               options:RNSMakeUIMenuOptionsFromConfig(dict)
++                              children:elements];
++  // Cindy patch: submenus show their current value under the title (UIMenuElement.subtitle).
++  NSString *subtitle = dict[@"subtitle"];
++  if (subtitle != nil) {
++    if (@available(iOS 15.0, *)) {
++      menu.subtitle = subtitle;
++    }
++  }
++  return menu;
+ }
+ 
+ + (UIAction *)createActionItemFromConfig:(NSDictionary *)dict
+@@ -200,11 +439,21 @@ + (UIAction *)createActionItemFromConfig:(NSDictionary *)dict
+                              imageLoader:(RCTImageLoader *)imageLoader
+ {
+   NSString *menuId = dict[@"menuId"];
++  BOOL togglesInPlace = [dict[@"keepsMenuPresented"] boolValue];
+ 
++  // Cindy patch: identify actions by menuId so the visible copy of an open menu can be found.
+   UIAction *actionElement = [UIAction actionWithTitle:dict[@"title"]
+                                                 image:nil
+-                                           identifier:nil
++                                           identifier:menuId
+                                               handler:^(__kindof UIAction *_Nonnull a) {
++                                                // Cindy patch: a keepsMenuPresented toggle flips its own
++                                                // checkmark; the JS round trip then writes the
++                                                // authoritative values in place and refreshes the
++                                                // menu on screen (rns_refreshVisibleMenusWithSource).
++                                                if (togglesInPlace) {
++                                                  a.state = a.state == UIMenuElementStateOn ? UIMenuElementStateOff
++                                                                                            : UIMenuElementStateOn;
++                                                }
+                                                 menuAction(menuId);
+                                               }];
+ 
+diff --git a/ios/RNSScreenStackHeaderConfig.mm b/ios/RNSScreenStackHeaderConfig.mm
+index 1c844846a5c66e31cfa530ca462774d2fb6bbea1..0607a759241ee9823cca347e382b146ef73bb5cd 100644
+--- a/ios/RNSScreenStackHeaderConfig.mm
++++ b/ios/RNSScreenStackHeaderConfig.mm
+@@ -559,8 +559,13 @@ + (void)updateViewController:(UIViewController *)vc
+   navitem.leftItemsSupplementBackButton = config.backButtonInCustomView;
+ #endif
+   navitem.titleView = nil;
+-  navitem.leftBarButtonItems = nil;
+-  navitem.rightBarButtonItems = nil;
++  // Cindy patch: build the bar button lists locally and assign them only when they change.
++  // Clearing them first (the original behaviour) removes every bar button on each header
++  // update, which dismisses an open menu even for keepsMenuPresented actions.
++  NSArray<UIBarButtonItem *> *previousLeftItems = navitem.leftBarButtonItems ?: @[];
++  NSArray<UIBarButtonItem *> *previousRightItems = navitem.rightBarButtonItems ?: @[];
++  NSMutableArray<UIBarButtonItem *> *leftItems = [NSMutableArray new];
++  NSMutableArray<UIBarButtonItem *> *rightItems = [NSMutableArray new];
+ 
+ #if !TARGET_OS_TV
+   // We want to set navitem.searchController to nil only if we are sure
+@@ -573,17 +578,11 @@ + (void)updateViewController:(UIViewController *)vc
+     // `- [RNSScreenStackHeaderConfig replaceNavigationBarViewsWithSnapshotOfSubview:]` method.
+     switch (subview.type) {
+       case RNSScreenStackHeaderSubviewTypeLeft: {
+-        NSArray<UIBarButtonItem *> *currentItems = navitem.leftBarButtonItems ?: @[];
+-        NSMutableArray<UIBarButtonItem *> *mutableItems = [currentItems mutableCopy];
+-        [mutableItems addObject:[subview getUIBarButtonItem]];
+-        navitem.leftBarButtonItems = mutableItems;
++        [leftItems addObject:[subview getUIBarButtonItem]];
+         break;
+       }
+       case RNSScreenStackHeaderSubviewTypeRight: {
+-        NSArray<UIBarButtonItem *> *currentItems = navitem.rightBarButtonItems ?: @[];
+-        NSMutableArray<UIBarButtonItem *> *mutableItems = [currentItems mutableCopy];
+-        [mutableItems addObject:[subview getUIBarButtonItem]];
+-        navitem.rightBarButtonItems = mutableItems;
++        [rightItems addObject:[subview getUIBarButtonItem]];
+         break;
+       }
+       case RNSScreenStackHeaderSubviewTypeCenter:
+@@ -648,10 +647,18 @@ + (void)updateViewController:(UIViewController *)vc
+   // This assignment should be done after `navitem.titleView = ...` assignment (iOS 16.0 bug).
+   // See: https://github.com/software-mansion/react-native-screens/issues/1570 (comments)
+   navitem.title = config.title;
+-  navitem.leftBarButtonItems = [config barButtonItemsFromConfigs:config.headerLeftBarButtonItems
+-                                                withCurrentItems:navitem.leftBarButtonItems];
+-  navitem.rightBarButtonItems = [config barButtonItemsFromConfigs:config.headerRightBarButtonItems
+-                                                 withCurrentItems:navitem.rightBarButtonItems];
++  NSArray<UIBarButtonItem *> *nextLeftItems = [config barButtonItemsFromConfigs:config.headerLeftBarButtonItems
++                                                                withCurrentItems:leftItems
++                                                                   reusableItems:previousLeftItems];
++  NSArray<UIBarButtonItem *> *nextRightItems = [config barButtonItemsFromConfigs:config.headerRightBarButtonItems
++                                                                 withCurrentItems:rightItems
++                                                                    reusableItems:previousRightItems];
++  if (![nextLeftItems isEqualToArray:previousLeftItems]) {
++    navitem.leftBarButtonItems = nextLeftItems;
++  }
++  if (![nextRightItems isEqualToArray:previousRightItems]) {
++    navitem.rightBarButtonItems = nextRightItems;
++  }
+ 
+   // Setting navigation bar visibility is split to mitigate iOS 26 bug with bar button items
+   // (setting nav bar visibility should be done after `navitem.*BarButtonItems`).
+@@ -784,6 +791,7 @@ - (void)applySemanticContentAttributeIfNeededToNavCtrl:(UINavigationController *
+ 
+ - (NSArray<UIBarButtonItem *> *)barButtonItemsFromConfigs:(NSArray<NSDictionary<NSString *, id> *> *)dicts
+                                          withCurrentItems:(NSArray<UIBarButtonItem *> *)currentItems
++                                            reusableItems:(NSArray<UIBarButtonItem *> *)reusableItems
+ {
+   if (dicts.count == 0) {
+     return currentItems;
+@@ -793,7 +801,27 @@ - (void)applySemanticContentAttributeIfNeededToNavCtrl:(UINavigationController *
+   for (NSUInteger i = 0; i < dicts.count; i++) {
+     NSDictionary *dict = dicts[i];
+     if (dict[@"buttonId"] || dict[@"menu"]) {
+-      RNSBarButtonItem *item = [[RNSBarButtonItem alloc] initWithConfig:dict
++      RNSBarButtonMenuItemAction menuAction = ^(NSString *menuId) {
++        auto eventEmitter = std::static_pointer_cast<const facebook::react::RNSScreenStackHeaderConfigEventEmitter>(
++            self->_eventEmitter);
++        if (eventEmitter && menuId) {
++          eventEmitter->onPressHeaderBarButtonMenuItem(
++              facebook::react::RNSScreenStackHeaderConfigEventEmitter::OnPressHeaderBarButtonMenuItem{
++                  .menuId = std::string([menuId UTF8String])});
++        }
++      };
++      RNSBarButtonItem *reused = nil;
++      for (UIBarButtonItem *candidate in reusableItems) {
++        if ([candidate isKindOfClass:[RNSBarButtonItem class]] && ![items containsObject:candidate] &&
++            [(RNSBarButtonItem *)candidate rns_canReuseWithConfig:dict]) {
++          reused = (RNSBarButtonItem *)candidate;
++          break;
++        }
++      }
++      if (reused != nil) {
++        [reused rns_updateMenuWithConfig:dict menuAction:menuAction imageLoader:_imageLoader];
++      }
++      RNSBarButtonItem *item = reused ?: [[RNSBarButtonItem alloc] initWithConfig:dict
+           action:^(NSString *buttonId) {
+             auto eventEmitter = std::static_pointer_cast<const facebook::react::RNSScreenStackHeaderConfigEventEmitter>(
+                 self->_eventEmitter);
+@@ -803,15 +831,7 @@ - (void)applySemanticContentAttributeIfNeededToNavCtrl:(UINavigationController *
+                       .buttonId = std::string([buttonId UTF8String])});
+             }
+           }
+-          menuAction:^(NSString *menuId) {
+-            auto eventEmitter = std::static_pointer_cast<const facebook::react::RNSScreenStackHeaderConfigEventEmitter>(
+-                self->_eventEmitter);
+-            if (eventEmitter && menuId) {
+-              eventEmitter->onPressHeaderBarButtonMenuItem(
+-                  facebook::react::RNSScreenStackHeaderConfigEventEmitter::OnPressHeaderBarButtonMenuItem{
+-                      .menuId = std::string([menuId UTF8String])});
+-            }
+-          }
++          menuAction:menuAction
+           imageLoader:_imageLoader];
+       NSNumber *index = dict[@"index"];
+       if (index.integerValue < items.count) {

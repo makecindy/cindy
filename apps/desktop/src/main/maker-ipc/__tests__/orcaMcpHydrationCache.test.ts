@@ -49,4 +49,14 @@ describe('orca MCP hydration cache', () => {
     markOrcaMcpHydratedIfNeeded('session-1', {});
     expect(isOrcaMcpHydrated('session-1')).toBe(false);
   });
+
+  it('keeps execution-device handles hydrated without caching them as non-Orca', () => {
+    const opts = { vendorOptions: { orcaRemoteWorker: true } };
+    markKnownNonOrcaIfApplicable('session-1', opts);
+    expect(knownNonOrcaSessionIds.has('session-1')).toBe(false);
+    knownNonOrcaSessionIds.add('session-1');
+    markOrcaMcpHydratedIfNeeded('session-1', opts);
+    expect(isOrcaMcpHydrated('session-1')).toBe(true);
+    expect(knownNonOrcaSessionIds.has('session-1')).toBe(false);
+  });
 });

@@ -80,4 +80,11 @@ describe('UserInfoSection update flame vs rail', () => {
 
     expect(screen.getByRole('button', { name: 'sidebar.user.reopenUpdateBanner' })).toBeTruthy();
   });
+
+  it('keeps the regular app version label for the personal build', () => {
+    render(<UserInfoSection isCollapsed={false} />);
+
+    expect(screen.getByText('1.0.0')).toBeTruthy();
+    expect(screen.queryByText('cindyMake.versions.personal')).toBeNull();
+  });
 });

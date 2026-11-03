@@ -11,7 +11,9 @@ import {
   type BotCommandDefinition,
   buildPersonalBotCommandMenu,
   isBotCommandAvailableOnChannel,
+  isCompanionManagedCommand,
   OFFICIAL_BOT_COMMANDS,
+  buildOfficialBotCommandMenus,
   parsePersonalBotCommand,
   PERSONAL_BOT_COMMAND_LOCALE_POLICY,
   PERSONAL_BOT_COMMANDS,
@@ -108,6 +110,15 @@ describe('bot command registry', () => {
     ]);
   });
 
+  it('伙伴自有连接的菜单去掉交给伙伴后会被拒的 /project /model /permission', () => {
+    expect(
+      buildPersonalBotCommandMenu((key) => `translated:${key}`, { surface: 'companion' }).map((e) => e.command),
+    ).toEqual(['start', 'new', 'help', 'stop', 'session', 'settings', 'ctr', 'exctr']);
+    expect(isCompanionManagedCommand('/model')).toBe(true);
+    expect(isCompanionManagedCommand('permission')).toBe(true);
+    expect(isCompanionManagedCommand('/new')).toBe(false);
+  });
+
   it('归一化隐藏别名 /exitctr, 同时保留原始拼写与参数', () => {
     expect(parsePersonalBotCommand('/exitctr now')).toMatchObject({
       definition: { command: 'exctr', requiresRichCards: false },
@@ -152,12 +163,28 @@ describe('bot command registry', () => {
     expect(undocumented).toEqual([]);
   });
 
-  it('个人 bot 的每条命令都有菜单文案 key', () => {
-    // buildPersonalBotCommandMenu 对 personal 子集用了非空断言, 由这条守住。
-    const missing = PERSONAL_BOT_COMMANDS.filter(
-      (definition) => !definition.telegramMenuDescriptionKey,
-    ).map((definition) => definition.command);
+  it('每条命令都有菜单文案 key(个人菜单与官方菜单都由 desktop 渲染)', () => {
+    // buildPersonalBotCommandMenu / buildOfficialBotCommandMenus 用了非空断言, 由这条守住。
+    const missing = (BOT_COMMANDS as readonly BotCommandDefinition[])
+      .filter((definition) => !definition.telegramMenuDescriptionKey)
+      .map((definition) => definition.command);
     expect(missing).toEqual([]);
+  });
+
+  it('官方菜单: 默认英文 + zh / ja / ko 各一份, 命令集合即官方子集、顺序即表序', () => {
+    const calls: Array<[string, string]> = [];
+    const menus = buildOfficialBotCommandMenus((key, locale) => {
+      calls.push([key, locale]);
+      return `${locale}:${key.split('.').pop()}`;
+    });
+    expect(menus.map((m) => m.languageCode)).toEqual([null, 'zh', 'ja', 'ko']);
+    for (const menu of menus) {
+      expect(menu.commands.map((c) => c.command)).toEqual(
+        OFFICIAL_BOT_COMMANDS.map((definition) => definition.command),
+      );
+    }
+    expect(menus[1].commands.find((c) => c.command === 'effort')?.description).toBe('zh-CN:effort');
+    expect(new Set(calls.map(([, locale]) => locale))).toEqual(new Set(['en', 'zh-CN', 'ja', 'ko']));
   });
 
   it('官方镜像与服务端 TELEGRAM_COMMANDS 一一对应', () => {

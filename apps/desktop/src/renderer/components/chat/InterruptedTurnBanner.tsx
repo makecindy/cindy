@@ -26,17 +26,19 @@
  * 告警的派生投影(usePendingAlertAttention 按 main 侧 pending-alerts 查询收敛),
  * 只有用户点「继续任务」/「忽略」把处置结果落库后才消失。
  *
- * 颜色走主题 token(规则 16):error 语义豁免色 --error-bg / --error-border /
- * --error-fg / --error-fg-strong(与 ErrorMessageCard 同组),不硬编码 Tailwind red。
+ * 错误横幅统一复用 ErrorNotice 的中性表面与操作布局。
  */
 
 import { useMemo, useState } from 'react';
-import { CirclePause, Play, X } from 'lucide-react';
+import { CirclePause, Play } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import { cn } from '@/lib/utils';
 import { extractUsageLimitRecoveryHint } from '@/lib/usageLimitRecovery';
 import type { ToolLoopErrorDetails } from '@cindy/maker-core';
 import { ErrorBanner } from './ErrorBanner';
+import type { ErrorDiagnosisSource } from '@/lib/errorDiagnosisPrompt';
+import { ErrorNotice } from '@/components/ui/error-notice';
+import { Button } from '@/components/ui/button';
 
 export function InterruptedTurnBanner({
   onContinue,
@@ -65,46 +67,28 @@ export function InterruptedTurnBanner({
   };
 
   return (
-    <div
-      className={cn(
-        'mx-auto flex select-none items-start gap-2 rounded-md px-3 py-2',
-        'border bg-[var(--error-bg)] border-[var(--error-border)]',
-        className,
-      )}
+    <ErrorNotice
+      className={cn('mx-auto', className)}
       style={style}
       data-testid="interrupted-turn-banner"
       data-banner-kind="interrupted"
-    >
-      <CirclePause size={14} className="shrink-0 mt-[2px] text-[var(--error-fg)]" />
-      <span className="flex-1 min-w-0 text-xs break-all text-[var(--error-fg)]">
-        {t('chat.interruptedBanner.text')}
-      </span>
-      <button
-        type="button"
-        onClick={() => void handleContinue()}
-        disabled={sending}
-        className={cn(
-          'shrink-0 flex items-center gap-1 text-xs font-medium',
-          'text-[var(--error-fg-strong)]',
-          'hover:opacity-70 transition-opacity',
-          'disabled:opacity-50 disabled:cursor-not-allowed',
-        )}
-        title={t('chat.interruptedBanner.continueTitle')}
-      >
-        <Play size={12} />
-        {sending
-          ? t('chat.interruptedBanner.continuing')
-          : t('chat.interruptedBanner.continueAction')}
-      </button>
-      <button
-        type="button"
-        onClick={onDismiss}
-        className="shrink-0 text-[var(--error-fg)] opacity-60 hover:opacity-100 transition-opacity"
-        title={t('chat.interruptedBanner.dismissTitle')}
-      >
-        <X size={14} />
-      </button>
-    </div>
+      icon={<CirclePause size={16} />}
+      message={t('chat.interruptedBanner.text')}
+      onDismiss={onDismiss}
+      dismissLabel={t('chat.interruptedBanner.dismissTitle')}
+      actions={
+        <Button
+          size="sm"
+          compact
+          onClick={() => void handleContinue()}
+          loading={sending}
+          title={t('chat.interruptedBanner.continueTitle')}
+        >
+          <Play size={12} />
+          {t('chat.interruptedBanner.continueAction')}
+        </Button>
+      }
+    />
   );
 }
 
@@ -115,8 +99,10 @@ export function ErrorTailErrorBanner({
   errorText,
   onContinue,
   onDismiss,
+  dismissOnEscape,
   agentKind,
   remoteHostId,
+  agentDeviceId,
   deviceLinkDeviceId,
   modelId,
   providerId,
@@ -126,9 +112,11 @@ export function ErrorTailErrorBanner({
   silentEncryptedRetryEnabled,
   onForkStripEncrypted,
   forkStripEncryptedRunning,
+  onDiagnose,
   errorReason,
   toolLoop,
   onSilentStopContinue,
+  sessionSource,
   className,
   style,
 }: {
@@ -137,7 +125,9 @@ export function ErrorTailErrorBanner({
   errorText: string;
   onContinue: () => Promise<void> | void;
   onDismiss: () => void;
+  dismissOnEscape?: boolean;
   agentKind?: 'cc' | 'codex' | 'pi';
+  agentDeviceId?: string | null;
   remoteHostId?: string;
   deviceLinkDeviceId?: string | null;
   modelId?: string;
@@ -150,9 +140,11 @@ export function ErrorTailErrorBanner({
   silentEncryptedRetryEnabled?: boolean;
   onForkStripEncrypted?: () => void | Promise<void>;
   forkStripEncryptedRunning?: boolean;
+  onDiagnose?: (error: ErrorDiagnosisSource) => void;
   errorReason?: string | null;
   toolLoop?: ToolLoopErrorDetails;
   onSilentStopContinue?: () => void;
+  sessionSource?: string | null;
   className?: string;
   style?: React.CSSProperties;
 }) {
@@ -169,9 +161,11 @@ export function ErrorTailErrorBanner({
       retryText={ERROR_TAIL_RETRY_TOKEN}
       onRetry={() => void onContinue()}
       onCancel={onDismiss}
+      dismissOnEscape={dismissOnEscape}
       onSilentStopContinue={onSilentStopContinue}
       usageLimitRecovery={usageLimitRecovery}
       agentKind={agentKind}
+      agentDeviceId={agentDeviceId}
       remoteHostId={remoteHostId}
       deviceLinkDeviceId={deviceLinkDeviceId}
       modelId={modelId}
@@ -182,6 +176,8 @@ export function ErrorTailErrorBanner({
       silentEncryptedRetryEnabled={silentEncryptedRetryEnabled}
       onForkStripEncrypted={onForkStripEncrypted}
       forkStripEncryptedRunning={forkStripEncryptedRunning}
+      onDiagnose={onDiagnose}
+      sessionSource={sessionSource}
       className={className}
       style={style}
     />

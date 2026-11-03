@@ -1,19 +1,16 @@
 import { isOpenAiSubscriptionProvider } from '@cindy/model-providers';
 /**
- * textOneshotPinOptions.ts — 快问快答(text.oneshot)钉档的目录模型清单与路由解析。
+ * textOneshotPinOptions.ts — 快问快答(text.oneshot)可选目录模型清单与路由解析。
  *
- * 背景(2026-08-05 与刘佳黎定稿):钉档可选项从 9 个轻量档位扩展为**当前供应商
- * 目录里的全部文本模型**——用户安装插件即承担其成本,主机在安装/详情页如实
- * 展示可选面,不再用一份小清单替用户做成本决定。
+ * 可选项是**当前供应商目录里的全部文本模型**(2026-08-05 与刘佳黎定稿)——用户
+ * 安装插件即承担其成本,主机如实展示可选面。目录钉('cat:' 编码)精确钉死一组
+ * 供应商×agent×模型,系统辅助模型设置沿用这一编码。
  *
- * 钉值两种形态(消费方都要认):
- * - 轻量档位键(如 'litellm-kimi-k2.6',见 utilityModelProfiles):随系统链演进
- *   的逻辑档位,覆盖表里的既有形态;
- * - 目录钉(本文件 'cat:' 编码):精确钉死一组 供应商×agent×模型。
- *
- * 插件还可在身份卡 `cindy.oneshotModel` 声明**偏好**模型 id(目录模型,如
- * 'codex/gpt-5.5'):解析优先级 = 用户钉档 > 插件声明 > 系统默认链。声明只表达
- * 意图——目录没有 / 已停用 / 不可路由时按未声明处理,绝不构成硬依赖。
+ * 插件详情的「模型」字段与插件新建任务共用 pluginTaskPrefsStore(2026-10 合并,
+ * 旧的逐能力钉档已迁移);插件还可在身份卡 `cindy.oneshotModel` 声明**偏好**
+ * 模型 id(目录模型,如 'codex/gpt-5.5'):解析优先级 = 用户选的模型 > 插件声明 >
+ * 系统辅助模型链。声明只表达意图——目录没有 / 已停用 / 不可路由时按未声明处理,
+ * 绝不构成硬依赖。
  *
  * 纯逻辑、零 Electron:被 cindySlot(类型)与 IPC 接线共用,单测直测。
  */
@@ -31,30 +28,36 @@ import {
 } from '@cindy/model-providers';
 
 import { applyProviderOrder } from '../../shared/providerOrder.js';
+import { resolveDirectTextRoute, usesDirectTextRoute } from './directTextRoute.js';
 import {
   decodeCatalogModelPin,
   encodeCatalogModelPin,
 } from '../../shared/catalogModelPin.js';
 
-/** oneshot 可路由的 agent(Pi 的 oneShot 未实现,不进钉档清单)。 */
-const ONESHOT_ROUTE_AGENTS = ['codex', 'claude-code'] as const;
+/** Preserve plugin routing support; auxiliary HTTP admission is resolved separately. */
+const ONESHOT_ROUTE_AGENTS = ['codex', 'claude-code', 'pi'] as const;
 
 /**
- * 执行侧(requestBuiltinProviderText)硬编码认的四家内置供应商。清单侧必须
- * 按同一集合过滤——否则将来新增第五个聊天型内置供应商(如 gemini 配上
- * agent)时,清单会列出执行侧 fallthrough agent_unavailable 的模型,"可见但
- * 不可执行"。两边任一处变动都要同步另一处。
+ * 执行侧(requestBuiltinProviderText)可执行的内置供应商。清单侧必须按同一集合过滤——
+ * 否则清单会列出执行侧 fallthrough / 拒绝的模型,"可见但不可执行"。两边任一处变动都要
+ * 同步另一处。Claude 订阅(anthropic)不在内:它只供内置 Claude Code CLI 自己使用。
  */
-const ONESHOT_EXECUTABLE_BUILTIN_PROVIDERS = new Set(['xd', 'anthropic', 'openai', 'xai']);
+const ONESHOT_EXECUTABLE_BUILTIN_PROVIDERS = new Set(['xd', 'openai', 'xai']);
 
-/** 一次快问快答的路由:用户钉档或插件声明解析出的终态。 */
-export type OneshotRoute =
-  | { kind: 'utility-profile'; profileId: string }
-  | { kind: 'catalog'; providerId: string; agentKind: AgentKind; model: string };
+/**
+ * 一次快问快答的路由:用户在插件详情选的模型或插件声明解析出的终态。
+ * providerId 缺省时由执行侧按 agent×模型唯一推断,推断不出即 fail closed。
+ */
+export type OneshotRoute = {
+  kind: 'catalog';
+  providerId?: string;
+  agentKind: AgentKind;
+  model: string;
+};
 
 /** 目录钉编码:cat:<providerId>:<agentKind>:<modelId>(modelId 可含 '/' 与 ':')。 */
 export function encodeCatalogPin(providerId: string, agentKind: AgentKind, model: string): string {
-  if (agentKind !== 'codex' && agentKind !== 'claude-code') {
+  if (agentKind !== 'codex' && agentKind !== 'claude-code' && agentKind !== 'pi') {
     throw new Error(`unsupported catalog pin agent: ${agentKind}`);
   }
   return encodeCatalogModelPin({ providerId, agentKind, model });
@@ -72,19 +75,27 @@ export function decodeCatalogPin(
  * requestUtilityText 显式路径的静态闸:内置供应商只收执行侧硬编码认的
  * 四家(见 ONESHOT_EXECUTABLE_BUILTIN_PROVIDERS);自定义供应商要求 routing
  * 未禁用 + 鉴权策略受支持 + 有上游地址 + 声明的 wire 与执行侧该 agent 的
- * 实际出线一致(claude-code 恒发 anthropic-messages;codex 发不出
- * anthropic-messages,会被静默当 responses——配置错线的组合钉上恒失败,
- * 不进清单)。
+ * 实际出线一致(claude-code 恒发 anthropic-messages;pi 的出线跟随 runtime
+ * 声明,声明什么发什么;codex 发不出 anthropic-messages,会被静默当
+ * responses;google-generative-ai 两条执行路都拒绝——配置错线的组合钉上
+ * 恒失败,不进清单)。
  */
 function isRoutableForOneshot(provider: Provider, agentKind: AgentKind): boolean {
   if (!provider.agents.includes(agentKind)) return false;
   const routing = provider.routing[agentKind];
   if (!routing || routing.disabled) return false;
-  if (isOpenAiSubscriptionProvider(provider) || provider.auth.native === 'claude' || provider.auth.native === 'xai') return true;
+  if (provider.auth.native === 'claude') return false;
+  if (isOpenAiSubscriptionProvider(provider) || provider.auth.native === 'xai') return true;
   if (provider.source === 'builtin') return ONESHOT_EXECUTABLE_BUILTIN_PROVIDERS.has(provider.id);
   if (agentKind === 'claude-code') {
     if (routing.wireProtocol !== undefined && routing.wireProtocol !== 'anthropic-messages') return false;
-  } else if (routing.wireProtocol === 'anthropic-messages') return false;
+  } else if (
+    // codex 发不出 anthropic-messages;pi 的出线跟随声明,声明的协议都发得出。
+    (routing.wireProtocol === 'anthropic-messages' && agentKind === 'codex')
+    // 执行侧(requestExplicitProviderText)对 google wire 直接 no_candidate,
+    // 清单侧同步排除(含存量 codex 档的同一缺口)。
+    || routing.wireProtocol === 'google-generative-ai'
+  ) return false;
   return (
     (routing.authStrategy === 'api-key-header'
       || routing.authStrategy === 'oauth-token'
@@ -102,9 +113,10 @@ function isChatModel(model: CatalogModel, provider: Provider): boolean {
   return isModelSelectableForNewRoute(model, { userProvider: provider.source === 'user' });
 }
 
-const AGENT_LABEL: Record<(typeof ONESHOT_ROUTE_AGENTS)[number], string> = {
+const AGENT_LABEL: Record<AgentKind, string> = {
   codex: 'Codex',
   'claude-code': 'Claude Code',
+  pi: 'Pi',
 };
 
 /**
@@ -145,7 +157,7 @@ export interface TextOneshotPinOption {
   subscription: boolean;
   /** 供应商路由描述(渲染层厂牌图标判定用,ProviderLogoMark)。 */
   routing?: Provider['routing'];
-  /** 该精确路由使用的 Agent('Codex' / 'Claude Code')。 */
+  /** Configuration source of the exact route; direct auxiliary requests launch no Agent. */
   agentSuffix: string;
 }
 
@@ -171,7 +183,8 @@ function displayOrderedModels(models: readonly CatalogModel[]): CatalogModel[] {
 
 /** Product-facing provider name for the picker; keep the catalog id stable. */
 function displayProviderName(provider: Provider): string {
-  return provider.id === 'xd' ? 'Cindy AI' : provider.name;
+  return provider.id === 'xd' && !provider.name?.startsWith('Cindy AI · ')
+    ? 'Cindy AI' : provider.name;
 }
 
 /**
@@ -191,23 +204,27 @@ export function buildTextOneshotPinOptions(
   overrides: ModelDisableOverrides | undefined,
   providerOrder?: readonly string[],
   hasCredential?: OneshotCredentialProbe,
+  purpose: 'plugin' | 'auxiliary' = 'plugin',
 ): TextOneshotPinOption[] {
-  const entries: { provider: Provider; agentKind: (typeof ONESHOT_ROUTE_AGENTS)[number]; model: CatalogModel }[] = [];
+  const entries: { provider: Provider; agentKind: AgentKind; model: CatalogModel; direct: boolean }[] = [];
   const seenRoutes = new Set<string>();
   for (const provider of orderedProviders(catalog, providerOrder)) {
     if (isProviderDisabled(overrides, provider.id)) continue;
-    // Agent 决定模型可见性和实际 wire。即使内置供应商的两条路由最终共享
-    // 凭证或上游，也分别展示并保存，让用户选择一组确定的 Agent + Model。
-    for (const agentKind of ONESHOT_ROUTE_AGENTS) {
-      if (!isRoutableForOneshot(provider, agentKind)) continue;
+    // Keep the configuration source in each pin: runtimes can have different
+    // credentials or endpoints even when the provider and model ids match.
+    const direct = purpose === 'auxiliary' && usesDirectTextRoute(provider);
+    const agents: readonly AgentKind[] = direct ? ['codex', 'claude-code', 'pi'] : ONESHOT_ROUTE_AGENTS;
+    for (const agentKind of agents) {
+      if (!direct && !isRoutableForOneshot(provider, agentKind)) continue;
       if (hasCredential && !hasCredential(provider, agentKind)) continue;
       for (const model of displayOrderedModels(provider.models[agentKind] ?? [])) {
+        if (direct && !resolveDirectTextRoute(provider, agentKind, model)) continue;
         if (!isChatModel(model, provider)) continue;
         if (isModelDisabled(overrides, provider.id, model.id)) continue;
         const routeKey = `${provider.id}\n${agentKind}\n${model.id}`;
         if (seenRoutes.has(routeKey)) continue;
         seenRoutes.add(routeKey);
-        entries.push({ provider, agentKind, model });
+        entries.push({ provider, agentKind, model, direct });
       }
     }
   }
@@ -215,14 +232,16 @@ export function buildTextOneshotPinOptions(
     const providerName = displayProviderName(e.provider);
     const base = `${e.model.name} · ${providerName}`;
     return {
-      id: encodeCatalogPin(e.provider.id, e.agentKind, e.model.id),
+      id: encodeCatalogModelPin({ providerId: e.provider.id, agentKind: e.agentKind, model: e.model.id }),
       label: `${AGENT_LABEL[e.agentKind]} · ${base}`,
       group: providerName,
       providerId: e.provider.id,
       agentKind: e.agentKind,
       modelId: e.model.id,
       modelName: e.model.name,
-      ...(e.model.defaultEnabled !== undefined ? { defaultEnabled: e.model.defaultEnabled } : {}),
+      ...(e.direct
+        ? { defaultEnabled: e.model.userModelConfig?.defaultEnabled ?? true }
+        : e.model.defaultEnabled !== undefined ? { defaultEnabled: e.model.defaultEnabled } : {}),
       ...(e.model.icon !== undefined ? { icon: e.model.icon } : {}),
       budget: classifyModel(e.model) === 'gpt-budget',
       subscription: e.provider.access?.kind === 'subscription',
@@ -235,7 +254,8 @@ export function buildTextOneshotPinOptions(
 /**
  * 插件声明的偏好模型 id → 可路由的目录条目。供应商序同钉档清单(用户显式
  * 排序优先,缺省 xd 在首),agent 序 codex 先于 claude-code(与
- * inferProviderAgent 同偏好);停用/不可路由/非对话模型跳过。
+ * inferProviderAgent 同偏好),pi 在末(pi 档是路由别名,让位给主 agent);
+ * 停用/不可路由/非对话模型跳过。
  * 找不到返回 null = 按未声明处理(回落系统默认链)。
  */
 export function resolveOneshotCatalogModel(

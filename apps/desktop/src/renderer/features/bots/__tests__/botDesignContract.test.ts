@@ -23,8 +23,8 @@ describe('Cindy Bots design contract', () => {
       expect(source, `${file} must stay shadow-free`).not.toMatch(
         /(?:^|[\s"'])drop-shadow-|(?:^|[\s"'])shadow(?:-|[\s"'])/m,
       );
-      expect(source, `${file} must use the themed modal overlay token`).not.toMatch(
-        /bg-black\/|backdrop-blur/,
+      expect(source, `${file} must use the shared modal scrim`).not.toMatch(
+        /bg-black\/|backdrop-blur|overlay-modal/,
       );
     }
   });

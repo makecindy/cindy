@@ -26,6 +26,7 @@ describe('UserPromptSection placeholder', () => {
     });
     expect(textarea.className).toContain('placeholder:text-[var(--settings-input-placeholder)]');
     expect(textarea.className).toContain('placeholder:font-normal');
-    expect(textarea.className).toContain('placeholder:opacity-45');
+    // 占位档本身已是最淡的文字档(DESIGN.md §10 规则 6),再叠透明度会淡到看不见。
+    expect(textarea.className).not.toMatch(/placeholder:opacity-/);
   });
 });

@@ -450,7 +450,14 @@ export async function assertCodexRolloutRewriteSupported(filePath: string): Prom
     }
     if (isRecord(record) && (
       Object.hasOwn(record, 'ordinal') ||
-      (isRecord(record.payload) && Object.hasOwn(record.payload, 'history_base'))
+      (isRecord(record.payload) && (
+        Object.hasOwn(record.payload, 'history_base') ||
+        // Legacy sanitization cannot preserve the meaning of encrypted agent messages.
+        // Explicit recovery must use Cindy's readable transcript instead.
+        (record.type === 'response_item' && record.payload.type === 'agent_message' &&
+          Array.isArray(record.payload.content) && record.payload.content.some((part) =>
+            isRecord(part) && part.type === 'encrypted_content'))
+      ))
     )) {
       throw new CodexHistoryRecoveryRequiredError();
     }

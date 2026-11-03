@@ -67,6 +67,7 @@ const h = vi.hoisted(() => {
 });
 
 vi.mock('electron', () => ({
+  app: { once: vi.fn() },
   ipcMain: { handle: h.ipcHandle },
   BrowserWindow: { getAllWindows: () => [] },
 }));

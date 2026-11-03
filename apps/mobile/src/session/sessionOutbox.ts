@@ -1,29 +1,11 @@
 /**
- * sessionOutbox.ts — 会话页本地待发队列(outbox)的纯状态模型。
- * ---------------------------------------------------------------------------
- * 带附件消息的乐观发送:点发送时附件可能仍在上传,消息不再卡在 composer 等
- * waitForPendingUploads,而是立刻以「outbox 条目」形态进消息流(InlineQueueSection
- * 尾部,气泡带上传进度),后台等附件落定后按 FIFO 逐条真正 enqueue 给被控端。
- *
- * 不变量:
- * - FIFO:只有队首条目可以 dispatch(附件齐 + 无失败),后发消息(含纯文本)在
- *   outbox 非空时必须排在其后,保证到达被控端的顺序与用户发送顺序一致;
- * - 失败阻塞:任一条目失败(附件上传失败 / enqueue 失败)时它留在队首挡住后续,
- *   用户重试或删除后队列继续——静默跳过会打乱顺序预期;
- * - 附件槽位:发送时刻已就绪的附件占前段槽位,在途上传按托盘顺序占后段,
- *   onUploaded 按 localId 填槽,全部就位后按槽序组装,附件顺序与用户所见一致。
- *
- * 本模块只做纯数据变换(node 可单测);上传路由、enqueue RPC、React state 接线
- * 在 [sessionId].tsx。
- *
- * 生命周期边界：队列只拥有尚未开始 enqueue、或能证明请求尚未发出的条目，并在当前
- * 会话页存活期间自动重连续发。正常切任务 / 退屏由页面 cleanup 把这些正文接回草稿；
- * 一旦 enqueue 已开始，所有权转给既有在线发送 / optimistic projection 路径，回执不确定
- * 的写请求绝不重新降级成会丢 clientId 的草稿。若未来要跨页面或跨进程继续自动重试，
- * 必须单独设计可对账的 outbox owner，不能把草稿库当 write-ahead log（它没有消息边界、
- * 附件任务或远端 acceptance 状态）。
+ * Mobile message snapshots and presentation helpers. App-level persistence and delivery
+ * live in durableOutbox.ts / durableOutboxDelivery.ts; this module has no page ownership.
+ * Recovery helpers remain for legacy direct sends and composer editing.
  */
+import type { ChatReplyQuote } from '@cindy/maker-shared/chat-reply-quote';
 import { i18n } from '@/i18n';
+import { isDurableOutboxHandedOff, type DurableOutboxRecord } from '@/session/durableOutbox';
 import type { MobileSessionReference } from '@/session/sessionReferences';
 import type { RemoteSerializedAttachment } from '@/session/types';
 import { isInFlightDeviceLinkError } from '@cindy/device-link';
@@ -70,6 +52,52 @@ export function shouldHoldOutboxDispatchForConnection(
     || state.deviceUnresponsive
     || state.autoRecoveringError
     || state.syncInProgress;
+}
+
+/**
+ * 本会话是否有消息正在交给被控端:已进待发、尚未被被控端历史确认的条目。
+ *
+ * 活动条(「思考中」)用它把「点发送 → 被控端回报运行」整段连起来:本地写入 outbox
+ * 后 sending 就落下,而 enqueue 往返 + 被控端回报运行状态要一次远程往返,远超活动条
+ * 的下降沿去抖,中间会熄灭一次再亮。
+ *
+ * 按投递的真实推进口径判断(records 须保持 store 的 FIFO 顺序):
+ * - 已移交被控端、还没被历史确认的记录算交接中。settledClientIds 里的不再计入:已出现在
+ *   被控端队列里的归队列管(队列暂停时不该显示「思考中」);已回流进历史的已经落定,
+ *   只是 outbox 还没对账清掉。
+ * - 未移交的记录只看会话 FIFO 队首——投递只派发它。队首在正常推进(待发 / enqueue
+ *   在途)才算;队首出错重试 / 待确认 / 失败 / 撤销中 / 挂起时,后面的消息也走不动,
+ *   不能说成「思考中」。
+ * 断线 / 被控端无响应时消息只是在等重连,一律不算。syncInProgress 不算断线——发送后的
+ * 同步很常见,把它算进来会在交接中途再制造一次熄灭。
+ */
+export function hasActiveOutboxHandoff(
+  records: readonly Pick<
+    DurableOutboxRecord,
+    'deviceId' | 'item' | 'state' | 'error' | 'cancelRequested' | 'suspended' | 'retrySafe' | 'historyConfirmed' | 'cleanupOutcome'
+  >[],
+  target: { deviceId: string; sessionId: string },
+  connection: MobileOutboxConnectionState,
+  settledClientIds: ReadonlySet<string>,
+): boolean {
+  if (
+    !connection.relayOnline
+    || connection.targetAvailable === false
+    || connection.deviceUnresponsive
+    || connection.autoRecoveringError
+  ) return false;
+  const group = records.filter((record) => record.deviceId === target.deviceId
+    && record.item.sessionId === target.sessionId
+    && record.cleanupOutcome === undefined);
+  if (group.some((record) => isDurableOutboxHandedOff(record)
+    && !record.cancelRequested
+    && !settledClientIds.has(record.item.clientId))) return true;
+  const head = group.find((record) => !isDurableOutboxHandedOff(record));
+  return !!head
+    && (head.state === 'queued' || head.state === 'sending')
+    && !head.error
+    && !head.cancelRequested
+    && !head.suspended;
 }
 
 /**
@@ -121,11 +149,15 @@ export interface MobileOutboxItem {
   agentReferences: AgentInputReference[];
   pastedTextRanges: Array<{ start: number; end: number; display: string }>;
   slashCommandRanges: Array<{ start: number; end: number }>;
+  /** 伙伴私聊引用回复;旧记录没有该字段。 */
+  replyQuote?: ChatReplyQuote;
   /**
    * 发送时刻的权限档快照:plan 一次性语义在点发送时就恢复会话档,dispatch 重读
    * store 拿到的已是恢复后的值,消息本身必须仍按发送时刻的档位派发。
    */
   permissionModeAtSend: string;
+  /** 新协议的单条 Plan 快照；旧记录缺失时保留原协议语义。 */
+  planModeAtSend?: boolean;
   /** 附件槽位(按用户可见顺序);null = 对应上传任务尚未落定。 */
   attachmentSlots: ReadonlyArray<RemoteSerializedAttachment | null>;
   /**
@@ -140,6 +172,8 @@ export interface MobileOutboxItem {
   waitingIds: readonly string[];
   /** 已失败的上传任务(可经 controller.retry 重跑)。 */
   failedIds: readonly string[];
+  /** 持久发件箱:上次尝试中上传抛错的槽(只用于展示单图重传)。 */
+  failedUploadSlot?: number;
   /** enqueue RPC 失败的错误文案(附件失败时为 null,错误看 failedIds)。 */
   enqueueError: string | null;
   phase: MobileOutboxPhase;
@@ -156,6 +190,8 @@ export interface MobileOutboxThumb {
   previewRef?: string;
   /** 对应上传任务尚未落定(渲染转圈遮罩)。 */
   uploading: boolean;
+  /** 这张图上传失败:只在它上面放重传按钮,其余图与正文保持原样。 */
+  failed?: boolean;
 }
 
 /** InlineQueueSection 渲染 outbox 行所需的最小视图数据。 */
@@ -165,6 +201,7 @@ export interface MobileOutboxDisplayItem {
   quotesEncoded: boolean;
   pastedTextRanges?: Array<{ start: number; end: number; display: string }>;
   slashCommandRanges?: Array<{ start: number; end: number }>;
+  replyQuote?: ChatReplyQuote;
   attachmentCount: number;
   uploadedCount: number;
   /** 图片槽缩略格(按槽序);非图片附件走 fileCount 计数行。 */
@@ -173,6 +210,12 @@ export interface MobileOutboxDisplayItem {
   fileCount: number;
   fileNames?: string[];
   failed: boolean;
+  /** 已交给电脑(发送中 / 待确认 / 电脑已接手):断线时不是「等着发」,而是在等对账。 */
+  dispatching?: boolean;
+  /** 本机写入发件箱的时刻(手机时钟),跨重启稳定,用于伙伴对话的时间分隔。 */
+  sentAt?: number;
+  /** False while a first-message creation record still owns recovery of the draft. */
+  canCancel?: boolean;
   /** 失败原因(附件失败给统一文案,enqueue 失败给 RPC 错误)。 */
   errorText: string | null;
 }
@@ -205,7 +248,11 @@ export function buildOutboxItem(input: {
   agentReferences?: AgentInputReference[];
   pastedTextRanges?: Array<{ start: number; end: number; display: string }>;
   slashCommandRanges?: Array<{ start: number; end: number }>;
+  replyQuote?: ChatReplyQuote;
   permissionModeAtSend: string;
+  planModeAtSend?: boolean;
+  /** Optional source order across ready and pending slots, for external shares. */
+  attachmentOrder?: readonly number[];
   /** 发送时刻已就绪的附件(占前段槽位)。 */
   readyAttachments: readonly RemoteSerializedAttachment[];
   /** 就绪附件的本地预览 uri(与 readyAttachments 对齐;缺失传 null)。 */
@@ -236,6 +283,15 @@ export function buildOutboxItem(input: {
     if (upload.failed) failedIds.push(upload.localId);
     else waitingIds.push(upload.localId);
   }
+  if (input.attachmentOrder) {
+    const originalSlots = [...slots], originalMeta = [...slotMeta];
+    input.attachmentOrder.forEach((original, position) => {
+      slots[position] = originalSlots[original]; slotMeta[position] = originalMeta[original];
+    });
+    for (const localId of Object.keys(slotByLocalId)) {
+      slotByLocalId[localId] = input.attachmentOrder.indexOf(slotByLocalId[localId]);
+    }
+  }
   return {
     clientId: input.clientId,
     sessionId: input.sessionId,
@@ -247,7 +303,9 @@ export function buildOutboxItem(input: {
     agentReferences: input.agentReferences ?? [],
     pastedTextRanges: input.pastedTextRanges ?? [],
     slashCommandRanges: input.slashCommandRanges ?? [],
+    ...(input.replyQuote ? { replyQuote: input.replyQuote } : {}),
     permissionModeAtSend: input.permissionModeAtSend,
+    ...(input.planModeAtSend !== undefined ? { planModeAtSend: input.planModeAtSend } : {}),
     attachmentSlots: slots,
     slotMeta,
     slotByLocalId,
@@ -422,6 +480,10 @@ export function outboxDisplayItem(item: MobileOutboxItem): MobileOutboxDisplayIt
   const thumbnails: MobileOutboxThumb[] = [];
   let fileCount = 0;
   const fileNames: string[] = [];
+  const failedSlots = new Set(item.failedIds.map((localId) => item.slotByLocalId[localId]));
+  // 失败后没有槽在上传;只有投递记下的那个槽(上传时抛错)才标失败,入队失败等不标任何图片。
+  const failed = item.phase === 'failed';
+  if (failed && item.failedUploadSlot !== undefined) failedSlots.add(item.failedUploadSlot);
   item.attachmentSlots.forEach((slot, index) => {
     const meta = item.slotMeta[index];
     if (meta?.kind !== 'image') {
@@ -433,7 +495,8 @@ export function outboxDisplayItem(item: MobileOutboxItem): MobileOutboxDisplayIt
       key: `${item.clientId}-slot-${index}`,
       uri: meta.previewUri,
       ossRef: slot ? (slot.url ?? slot.path) : null,
-      uploading: slot === null,
+      uploading: slot === null && !failed,
+      ...(slot === null && failedSlots.has(index) ? { failed: true } : {}),
     });
   });
   return {
@@ -442,12 +505,14 @@ export function outboxDisplayItem(item: MobileOutboxItem): MobileOutboxDisplayIt
     quotesEncoded: item.quotesEncoded,
     pastedTextRanges: item.pastedTextRanges,
     slashCommandRanges: item.slashCommandRanges,
+    ...(item.replyQuote ? { replyQuote: item.replyQuote } : {}),
     attachmentCount,
     uploadedCount,
     thumbnails,
     fileCount,
     fileNames,
     failed: item.phase === 'failed',
+    ...(item.phase === 'dispatching' ? { dispatching: true } : {}),
     errorText: item.phase !== 'failed'
       ? null
       : (item.enqueueError ?? (item.failedIds.length > 0 ? i18n.t('session.row.attachmentUploadFailed') : null)),

@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { InvalidResponsesRequestError } from '../types.js';
 
 import {
   decodeThinkingBlock,
@@ -131,6 +132,37 @@ describe('Responses → Anthropic request translation', () => {
       model: 'claude',
       input: [{ type: 'agent_message', content: null }],
     })).toThrowError('input[0].content');
+  });
+
+  it('skips empty assistant messages with null content without dropping other input', () => {
+    const result = translateResponsesRequest({
+      model: 'claude',
+      input: [
+        {
+          type: 'message',
+          id: 'msg_empty',
+          role: 'assistant',
+          status: 'completed',
+          phase: 'final',
+          content: null,
+        },
+        { role: 'assistant', content: null },
+        { type: 'message', role: 'user', content: [{ type: 'input_text', text: 'continue' }] },
+      ],
+    });
+
+    expect(result.request.messages).toEqual([{
+      role: 'user',
+      content: [{ type: 'text', text: 'continue' }],
+    }]);
+    expect(() => translateResponsesRequest({
+      model: 'claude',
+      input: [{ type: 'message', role: 'assistant', content: null, encrypted_content: 'opaque' }],
+    })).toThrowError('message.content');
+    expect(() => translateResponsesRequest({
+      model: 'claude',
+      input: [{ type: 'message', role: 'user', content: null }],
+    })).toThrowError('message.content');
   });
 
   it('keeps collab text inside a valid tool-use round', () => {
@@ -966,8 +998,8 @@ describe('Responses → Anthropic request translation', () => {
     expect(result.request.thinking).toBeUndefined();
   });
 
-  it('cannot disable thinking on fable and mythos models', () => {
-    for (const model of ['claude-fable-5', 'claude-mythos-5']) {
+  it('cannot disable thinking on always-on models', () => {
+    for (const model of ['claude-fable-5', 'claude-mythos-5', 'claude-opus-5-5']) {
       const result = translateResponsesRequest({
         model,
         reasoning: { effort: 'none' },
@@ -977,6 +1009,42 @@ describe('Responses → Anthropic request translation', () => {
       expect(result.request.output_config).toEqual({ effort: 'low' });
     }
   });
+
+  it('uses adaptive thinking for Opus 5.5 with default and explicit efforts', () => {
+    for (const model of ['claude-opus-5-5', 'anthropic/claude-opus-5.5', 'claude-opus-5-5-20260922']) {
+      for (const effort of [undefined, 'low', 'medium', 'high', 'xhigh', 'max']) {
+        const result = translateResponsesRequest({
+          model,
+          ...(effort ? { reasoning: { effort } } : {}),
+          input: [{ role: 'user', content: 'hi' }],
+        });
+        expect(result.request.thinking).toEqual({ type: 'adaptive' });
+        if (effort) expect(result.request.output_config).toEqual({ effort });
+        else expect(result.request.output_config).toBeUndefined();
+      }
+    }
+  });
+
+  it.each(['claude-opus-5-5', 'anthropic/claude-opus-5.5', 'claude-opus-5-5-20260922'])(
+    'rejects incompatible tool requests without disabling thinking for %s', (model) => {
+      const tools = [{ type: 'function', name: 'run', parameters: { type: 'object' } }];
+      const expected = new InvalidResponsesRequestError(
+        'This Anthropic model requires signed thinking history for tool continuation or forced tool choice',
+      );
+      for (const effort of [undefined, 'none', 'high']) {
+        const request = { model, tools, ...(effort ? { reasoning: { effort } } : {}) };
+        for (const tool_choice of ['required', { type: 'function', name: 'run' }]) {
+          expect(() => translateResponsesRequest({ ...request,
+            input: [{ role: 'user', content: 'run the tool' }], tool_choice,
+          })).toThrowError(expected);
+        }
+        expect(() => translateResponsesRequest({ ...request, input: [
+          { type: 'function_call', call_id: 'c1', name: 'run', arguments: '{}' },
+          { type: 'function_call_output', call_id: 'c1', output: 'ok' },
+        ] })).toThrowError(expected);
+      }
+    },
+  );
 
   it('keeps automatic prompt caching off the moving last user block', () => {
     const result = translateResponsesRequest({

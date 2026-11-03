@@ -1,6 +1,7 @@
 import { performance } from 'node:perf_hooks';
 import { describe, expect, it } from 'vitest';
 import {
+  compareSessionListStrings,
   buildRemoteSessionListContext,
   buildRemoteSessionCardPreview,
   buildRemoteSessionSections,
@@ -18,6 +19,14 @@ import {
   toRemoteSessionListItem,
   formatRemoteSessionSidebarTime,
 } from '../sessionList.js';
+
+it('preserves default locale ordering for dates, paths, IDs and multilingual titles', () => {
+  const values = ['', '2026-01-01T00:00:00Z', '2026-09-30T10:00:00.000Z',
+    '/test/History-1', '/test/History-10', 'a', 'A', 'é', 'e', '任务', 'タスク'];
+  for (const left of values) for (const right of values) {
+    expect(Math.sign(compareSessionListStrings(left, right))).toBe(Math.sign(left.localeCompare(right)));
+  }
+});
 import type { PresentationLocalizer } from '../presentationLocalization.js';
 import type { RemoteSchedule, RemoteScheduleRun } from '../scheduleTypes.js';
 import { CONTINUE_AFTER_ERROR_PROMPT } from '../syntheticTrigger.js';
@@ -208,6 +217,19 @@ describe('sessionList', () => {
       detail: '活跃 · 5 minutes ago · 12 条消息',
       messagePreview: null,
       lastActivityAt: '2026-01-01T00:05:00.000Z',
+    });
+  });
+
+  it('uses handoff activity for remote ordering and row time without changing legacy fallbacks', () => {
+    const now = Date.parse('2026-01-01T00:10:00.000Z');
+    const sessions = [
+      session('legacy', { userSendAt: '2026-01-01T00:04:00.000Z', updatedAt: '2026-01-01T00:09:00.000Z' }),
+      session('handoff', { lastActivityAt: '2026-01-01T00:08:00.000Z', userSendAt: '2026-01-01T00:01:00.000Z' }),
+    ];
+    const sections = buildRemoteSessionSections(sessions, now);
+    expect(sections.flatMap(section => section.data).map(item => item.session.id)).toEqual(['handoff', 'legacy']);
+    expect(toRemoteSessionListItem(sessions[1], now)).toMatchObject({
+      lastActivityAt: '2026-01-01T00:08:00.000Z', detail: expect.stringContaining('2 minutes ago'),
     });
   });
 
@@ -435,6 +457,23 @@ describe('sessionList', () => {
       unreadCount: 1,
       running: true,
     });
+  });
+
+  it('carries the latest schedule next run time and omits it when the host has none', () => {
+    const nextFireAt = Date.parse('2026-01-01T00:15:00.000Z');
+    const index = buildSessionScheduleIndex([
+      schedule('sched-1', { nextFireAt }),
+      schedule('sched-2', { status: 'paused', nextFireAt: undefined }),
+      schedule('sched-3', { targetSessionId: 's3', nextFireAt: new Date(nextFireAt).toISOString() }),
+    ], new Map([
+      ['sched-1', [run('run-1', 'sched-1', { sessionId: 's1' })]],
+      ['sched-2', [run('run-2', 'sched-2', { sessionId: 's2' })]],
+    ]));
+
+    expect(index.get('s1')?.nextFireAt).toBe(nextFireAt);
+    expect(index.get('s2')).not.toHaveProperty('nextFireAt');
+    // 持久绑定会话没有 run 也要带上下次运行时间(ISO 时间戳归一为毫秒)。
+    expect(index.get('s3')?.nextFireAt).toBe(nextFireAt);
   });
 
   it('groups multiple automation-generated sessions from the same schedule', () => {
@@ -834,6 +873,16 @@ describe('sessionList', () => {
     expect(sections[0].data[0].messagePreview).not.toContain('{');
   });
 
+  it('shows only the basename for Windows attachment paths in session previews', () => {
+    const messagePreviewIndex = buildSessionMessagePreviewIndex(['windows-file'], () => [
+      message('windows-file', 'm1', 'user', {
+        files: [{ path: 'C:\\work\\report.pdf' }],
+      }, '2026-01-01T00:01:00.000Z'),
+    ]);
+
+    expect(messagePreviewIndex.get('windows-file')).toBe('附件 report.pdf');
+  });
+
   it('never leaks hidden synthetic trigger prompts into session previews', () => {
     // 桌面「失败后继续」的隐藏续跑 prompt(带 [UI_ACTION_TRIGGER] 前缀)常是会话
     // 最后一条 user 行:预览必须回落到上一条可见消息,而不是把裸英文指令亮出来。
@@ -1119,5 +1168,58 @@ describe('formatRemoteSessionSidebarTime', () => {
     expect(formatRemoteSessionSidebarTime('2026-01-01T11:55:00.000Z', now, t)).toBe('5 分钟');
     expect(formatRemoteSessionSidebarTime('2026-01-01T09:00:00.000Z', now, t)).toBe('3 小时');
     expect(formatRemoteSessionSidebarTime('2025-12-30T12:00:00.000Z', now, t)).toBe('2 天');
+  });
+});
+
+describe('project sections fold Windows path spelling', () => {
+  const now = new Date('2026-01-01T00:10:00.000Z').getTime();
+
+  it('keeps one section when Windows sessions report the same project differently', () => {
+    const sessions = [
+      session('win-backslash', { workingDir: 'C:\\Repo\\App' }),
+      session('win-forward', { workingDir: 'c:/repo/app' }),
+    ];
+    const sections = buildRemoteSessionSections(sessions, now);
+    const projectSections = sections.filter((section) => section.key.startsWith('project:'));
+    expect(projectSections).toHaveLength(1);
+    expect(projectSections[0].data).toHaveLength(2);
+    // 标题取组内首条会话的原始写法，不能被分组键的小写归一覆盖。
+    expect(projectSections[0].title).toBe('App');
+    expect(summarizeRemoteSessionOverview(sessions, new Map(), new Map()).projectCount).toBe(1);
+  });
+
+  it('folds a trailing separator and a projectDir/workingDir split into one section', () => {
+    const trailing = buildRemoteSessionSections(
+      [session('no-slash', { workingDir: '/repo/app' }), session('slash', { workingDir: '/repo/app/' })],
+      now,
+    );
+    expect(trailing.filter((section) => section.key.startsWith('project:'))).toHaveLength(1);
+
+    const mixed = buildRemoteSessionSections(
+      [
+        session('with-project-dir', { workingDir: 'C:\\Repo\\App', projectDir: 'C:\\Repo\\App' }),
+        session('cwd-only', { workingDir: 'c:/repo/app' }),
+      ],
+      now,
+    );
+    const mixedProjects = mixed.filter((section) => section.key.startsWith('project:'));
+    expect(mixedProjects).toHaveLength(1);
+    expect(mixedProjects[0].title).toBe('App');
+  });
+});
+
+describe('trim whitespace before grouping', () => {
+  const now = new Date('2026-01-01T00:10:00.000Z').getTime();
+
+  it('does not lose the section title when a session reports a padded working dir', () => {
+    const sessions = [
+      session('padded', { workingDir: ' /repo/app/ ' }),
+      session('plain', { workingDir: '/repo/app' }),
+    ];
+    const sections = buildRemoteSessionSections(sessions, now);
+    const projectSections = sections.filter((section) => section.key.startsWith('project:'));
+    expect(projectSections).toHaveLength(1);
+    expect(projectSections[0].title).toBe('app');
+    expect(summarizeRemoteSessionOverview(sessions, new Map(), new Map()).projectCount).toBe(1);
   });
 });

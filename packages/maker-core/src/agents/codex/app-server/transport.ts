@@ -43,6 +43,8 @@ export type CloseHandler = (info: TransportCloseInfo) => void;
  * 字节流双向 transport。一个 transport 实例只服务一个 client (1:1)。
  */
 export interface Transport {
+  /** Local native SQLite bootstrap failed before any stdout, with a confirmed natural exit. */
+  nativeSqliteInitializationFailed?(): boolean;
   /**
    * 把一行 NDJSON 异步写到对端。promise resolve 仅表示字节进入了
    * 操作系统 buffer (或 ws send buffer), 不保证对端收到 / 处理。

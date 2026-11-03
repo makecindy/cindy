@@ -72,7 +72,7 @@ it("an uncertain release blocks takeover until a heartbeat reconciles and releas
     enabled: false,
   });
 });
-it("stop cancels a pending start and cleans up the returned lease without reopening", async () => {
+it.each([false, true])("stop preserves lock=%s when cleaning up a cancelled pending start", async (lockScreen) => {
   const f = fixture();
   let finish!: (value: unknown) => void;
   const started = deferred<void>();
@@ -85,13 +85,17 @@ it("stop cancels a pending start and cleans up the returned lease without reopen
   );
   const connection = f.session.connect({ isCurrent: () => true });
   await started.promise;
-  const stopping = f.session.stop();
+  const stopping = f.session.stop(lockScreen);
+  // A second ordinary cleanup cannot undo the earlier lock requirement.
+  const secondStop = f.session.stop();
   finish({ lease: "late" });
   await expect(connection).rejects.toThrow("DESKTOP_VIDEO_STOPPED");
   await stopping;
+  await secondStop;
   expect(f.request.mock.calls.at(-1)?.[0]).toEqual({
     op: "stop",
     lease: "late",
+    ...(lockScreen ? { lockScreen: true } : {}),
   });
 });
 
@@ -104,6 +108,37 @@ function deferred<T>() {
   });
   return { promise, resolve, reject };
 }
+
+it.each([false, true])(
+  "waits for unlock preparation and respects cancellation=%s",
+  async (cancel) => {
+    const f = fixture();
+    const ready = deferred<void>();
+    const entered = deferred<void>();
+    const connecting = f.session.connect({
+      isCurrent: () => true,
+      onCapabilities: () => {
+        entered.resolve();
+        return ready.promise;
+      },
+    });
+    await entered.promise;
+    expect(f.request.mock.calls.map(([r]) => r.op)).toEqual(["capabilities"]);
+    const stopping = cancel ? f.session.stop() : undefined;
+    ready.resolve();
+    if (cancel) {
+      await expect(connecting).rejects.toThrow("DESKTOP_VIDEO_STOPPED");
+      await stopping;
+      expect(f.request.mock.calls.map(([r]) => r.op)).toEqual(["capabilities"]);
+    } else {
+      await connecting;
+      expect(f.request.mock.calls.map(([r]) => r.op)).toEqual([
+        "capabilities",
+        "start",
+      ]);
+    }
+  },
+);
 
 it("does not mark a capabilities failure as a start attempt on an older host", async () => {
   const current = fixture();
@@ -238,4 +273,38 @@ it("keeps confirmed control when an older heartbeat omits its projection", async
   await f.session.control(true);
   f.request.mockResolvedValueOnce({});
   expect(await f.session.heartbeat()).toEqual({ controlling: true });
+});
+
+it("a 代输入 window view names only the request, hides controls past the window and refuses a whole display", async () => {
+  const f = fixture();
+  const full = { ...caps, handoffWindow: true, clipboardText: true, displayModes: true, privacyScreen: true, systemAudio: true, autoControl: true };
+  f.request.mockResolvedValueOnce(full).mockResolvedValueOnce({
+    lease: "lease",
+    display: { id: "screen" },
+    controlling: true,
+    window: { app: "Game", title: "Sign in" },
+  });
+  const seen = vi.fn();
+  const { caps: shown, lease } = await f.session.connect({
+    isCurrent: () => true,
+    handoff: "req1",
+    control: true,
+    onCapabilities: seen,
+  });
+  expect(f.request.mock.calls[1][0]).toEqual({ op: "start", displayId: "screen", control: true, handoff: "req1" });
+  expect(shown).toMatchObject({ handoffWindow: true, autoControl: true, canControl: true });
+  for (const key of ["clipboardText", "displayModes", "privacyScreen", "systemAudio", "connectionTakeover"])
+    expect(shown).not.toHaveProperty(key);
+  expect(seen).toHaveBeenCalledWith(shown);
+  expect(lease.window).toEqual({ app: "Game", title: "Sign in" });
+  await f.session.stop();
+
+  // An older host cannot show a single window.
+  f.request.mockResolvedValueOnce(caps);
+  await expect(f.session.connect({ isCurrent: () => true, handoff: "req1" })).rejects.toThrow("CHANNEL_NOT_ALLOWED");
+  // A host that answers with the whole display is released at once.
+  f.request.mockResolvedValueOnce(full).mockResolvedValueOnce({ lease: "whole", display: { id: "screen" } });
+  await expect(f.session.connect({ isCurrent: () => true, handoff: "req1" })).rejects.toThrow("INVALID_RESPONSE");
+  expect(f.request.mock.calls.at(-1)?.[0]).toEqual({ op: "stop", lease: "whole" });
+  expect(f.session.lease).toBeNull();
 });

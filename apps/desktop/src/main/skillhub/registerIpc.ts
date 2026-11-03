@@ -1,12 +1,18 @@
+import { inspectSkillListGrants } from './customizationScanHost';
+import { createRemoteSkillsHost } from './remoteManagementHost';
+import { remoteResourceRegistry } from '../device-link/remoteResourceRegistry';
+import { REMOTE_RESOURCE_CHANGED_CHANNEL } from '@cindy/device-link';
+import { tapWindowBroadcast, getSafeDataOwnerPushStamp } from '../device-link/broadcast-tap';
 import fs from 'node:fs';
 import { t } from '../i18n.js';
 import { throwIpcError } from '../utils/ipcValidate';
-import { setCindySkillEnabled } from './activationPreferences';
-import { inspectLocalSkillTarget, isLocalSkillTargetCurrent, isPluginManagedSkillPath, type LocalSkillTarget } from './localSkillTarget';
+import { isCindyLearnSkillEnabledForListing, setCindySkillEnabled } from './activationPreferences';
+import { isLocalSkillTargetCurrent, isPluginManagedSkillPath, type LocalSkillTarget } from './localSkillTarget';
 import { tryAcquireSkillInstallLock } from './installLock';
 import { randomUUID } from 'node:crypto';
 import path from 'node:path';
 import type { Maker } from '@cindy/maker-core';
+import type { BuiltInSkillDescriptor } from '../maker-host/built-in-skills';
 import { BrowserWindow, dialog, ipcMain } from 'electron';
 import { getCurrentDataOwnerId } from '../authManager';
 import { activeOwnerScopeKey, getActiveDataOwnerPushStamp, isAppSessionBoundaryPending } from '../appSessionState';
@@ -20,12 +26,18 @@ import { assertTrustedAppRendererEvent, isTrustedAppRendererWindow } from '../se
 import { normalizeWorkingDirForStorage } from '../../shared/workingDir.js';
 import { isSkillhubCatalogScope } from '../../shared/skillhubCatalog.js';
 import { computeFolderHashDetailed } from './folderHash';
+import { comparePublishedSkill } from './publishedComparison';
+import type { SkillhubPublishComparisonParams, SkillhubPublishComparison } from '../../shared/skillhubPublishComparison';
 import { type MdKind, parseAndValidateFrontmatter } from './frontmatterValidation';
 import * as importLocalSkill from './importLocalSkill';
 import * as installService from './installService';
+import { ServerApiError } from '../serverApiClient';
 import { SkillhubMarketService, skillhubIpcError } from './marketService';
 import type { PublishParams, PublishProgressEvent } from './publishService';
 import { SkillPublishService } from './publishService';
+import { configureSkillhubAgentServices } from './agentTools';
+import { currentSkillhubIdentityPolicy } from './identityPolicy';
+import { getAppCapabilities } from '../appCapabilities';
 import { reconcileMineRegistry } from './reconcileMineRegistry';
 import { registryService } from './registry';
 import {
@@ -56,12 +68,15 @@ interface LocalImportGrant {
   expiresAt: number;
 }
 
+interface ScannedSkillGrantEntry {
+  root: string;
+  projectRootKey?: string;
+  builtIn?: boolean;
+}
+
 interface ScannedSkillGrant {
   ownerId: string;
-  entries: Array<{
-    root: string;
-    projectRootKey?: string;
-  }>;
+  entries: ScannedSkillGrantEntry[];
 }
 
 /** Bound authenticated review reads without changing native/team catalog selection. */
@@ -94,8 +109,10 @@ function assertReviewOwnerCurrent(ownerScope: string): void {
 }
 
 export interface RegisterSkillhubIpcOptions {
+  remoteIsRelayOnline?: () => boolean;
   getMaker: () => Maker;
   getManagedSkillRoots: () => readonly string[];
+  getBuiltInSkills?: () => readonly BuiltInSkillDescriptor[];
   getAllowedProjectRoots: () => Promise<readonly string[]>;
   marketService?: SkillhubMarketService;
   publishService?: SkillPublishService;
@@ -159,6 +176,7 @@ export function registerSkillhubIpc(options: RegisterSkillhubIpcOptions): void {
     return JSON.stringify([fs.realpathSync.native(source), st.dev, st.ino]);
   };
   const broadcastLocalChange = () => {
+    if (options.remoteIsRelayOnline && !isAppSessionBoundaryPending()) tapWindowBroadcast(REMOTE_RESOURCE_CHANGED_CHANNEL, { collectionId: 'skills' }, getSafeDataOwnerPushStamp());
     for (const win of BrowserWindow.getAllWindows()) {
       if (!win.isDestroyed()) {
         try { win.webContents.send('skillhub:local-state-changed'); } catch { /* Window closed. */ }
@@ -219,63 +237,24 @@ export function registerSkillhubIpc(options: RegisterSkillhubIpcOptions): void {
     });
   };
 
-  const rememberScannedSkillRoots = (
+  const rememberScannedSkillRoots = async (
     event: Electron.IpcMainInvokeEvent,
     ownerId: string,
+    generation: number,
     skills: import('./scanner').Skill[],
   ) => {
-    const entries: ScannedSkillGrant['entries'] = [];
-    const seenEntries = new Set<string>();
-    for (const skill of skills) {
-      const skillProjectRootKey = skill.scope === 'project'
-        ? projectRootKey(skill.projectRoot)
-        : undefined;
-      if (skill.scope === 'project' && !skillProjectRootKey) continue;
-      // discoveredPath preserves an allowed lexical alias when absolutePath was
-      // canonicalized through a parent-directory symlink.
-      for (const candidate of [skill.discoveredPath, skill.absolutePath]) {
-        const root = resolveExistingSkillPathForGrant(candidate);
-        if (root) {
-          const entryKey = `${root}\0${skillProjectRootKey ?? ''}`;
-          if (!seenEntries.has(entryKey)) {
-            seenEntries.add(entryKey);
-            entries.push({
-              root,
-              ...(skillProjectRootKey ? { projectRootKey: skillProjectRootKey } : {}),
-            });
-          }
-          break;
-        }
-      }
-    }
-    scannedSkillRootsBySender.set(event.sender.id, { ownerId, entries });
-    const records = skills.flatMap((skill) => {
-      if (skill.kind !== 'skill') return [];
-      try {
-        return [{ skill, physicalIdentity: physicalIdentity(skill.absolutePath),
-          target: inspectLocalSkillTarget(skill.absolutePath, skill.discoveryPaths ?? [skill.discoveredPath], options.getManagedSkillRoots()) }];
-      } catch { return []; }
-    });
-    const aliasesByIdentity = new Map<string, Set<string>>();
-    for (const record of records) {
-      const aliases = aliasesByIdentity.get(record.physicalIdentity) ?? new Set<string>();
-      for (const alias of record.target?.aliases ?? []) aliases.add(alias);
-      aliasesByIdentity.set(record.physicalIdentity, aliases);
-    }
-    for (const record of records) {
-      // Removing the physical entity must clean every scanned scope's links.
-      // Removing an external import keeps its scope-local operation/aliases.
-      if (record.target && !record.target.linkOnly) {
-        record.target.aliases = [...aliasesByIdentity.get(record.physicalIdentity)!];
-      }
-    }
-    localSkillsBySender.set(event.sender.id, records);
+    const snapshot = await inspectSkillListGrants({ skills,
+      managedSkillRoots: options.getManagedSkillRoots(), builtInSkills: options.getBuiltInSkills?.() ?? [] });
+    if (scanGenerationBySender.get(event.sender.id) !== generation
+      || isAppSessionBoundaryPending() || getCurrentDataOwnerId() !== ownerId) return;
+    scannedSkillRootsBySender.set(event.sender.id, { ownerId, entries: snapshot.entries });
+    localSkillsBySender.set(event.sender.id, snapshot.records);
   };
 
-  const hasScannedSkillGrant = (
+  const findScannedSkillGrant = async (
     event: Electron.IpcMainInvokeEvent,
     targetPath: string,
-  ): Promise<boolean> => {
+  ): Promise<ScannedSkillGrantEntry | null> => {
     assertTrustedAppRendererEvent(event);
     const grant = scannedSkillRootsBySender.get(event.sender.id);
     const ownerId = getCurrentDataOwnerId();
@@ -286,30 +265,71 @@ export function registerSkillhubIpc(options: RegisterSkillhubIpcOptions): void {
       || grant.ownerId !== ownerId
     ) {
       if (grant) scannedSkillRootsBySender.delete(event.sender.id);
-      return Promise.resolve(false);
+      return null;
     }
-    const matchingEntries = grant.entries.filter(({ root }) => (
-      isExistingSkillPathGranted(targetPath, new Set([root]))
+    const matchingEntries = grant.entries.filter(({ root, builtIn }) => (
+      builtIn
+        ? isSameOrInside(realPathOrResolved(targetPath), root)
+        : isExistingSkillPathGranted(targetPath, new Set([root]))
     ));
-    if (matchingEntries.length === 0) return Promise.resolve(false);
-    if (matchingEntries.some(({ projectRootKey: key }) => !key)) return Promise.resolve(true);
+    const globalEntry = matchingEntries.find(({ projectRootKey: key }) => !key);
+    if (globalEntry) return globalEntry;
 
-    return options.getAllowedProjectRoots()
-      .then((roots) => {
-        const allowedKeys = new Set(
-          roots.map(projectRootKey).filter((key): key is string => key !== null),
-        );
-        return matchingEntries.some(({ projectRootKey: key }) => (
-          key !== undefined && allowedKeys.has(key)
-        ));
-      })
-      .catch(() => false);
+    try {
+      const roots = await options.getAllowedProjectRoots();
+      const allowedKeys = new Set(
+        roots.map(projectRootKey).filter((key): key is string => key !== null),
+      );
+      return matchingEntries.find(({ projectRootKey: key }) => (
+        key !== undefined && allowedKeys.has(key)
+      )) ?? null;
+    } catch {
+      return null;
+    }
   };
 
   const scanGrantDenied = () => ({
     success: false as const,
     error: 'path was not granted by this renderer\'s latest SkillHub scan',
   });
+  const readScannedSkillRawContent = async (
+    event: Electron.IpcMainInvokeEvent,
+    filePath: string,
+  ): Promise<string | null> => {
+    const grant = await findScannedSkillGrant(event, filePath);
+    if (!grant) return null;
+    const raw = await readSkillRawFile({
+      filePath,
+      ...(grant.builtIn ? { attestedRoot: grant.root } : {}),
+    });
+    return raw.success ? raw.content ?? null : null;
+  };
+  const normalizePathForCompare = (value: string): string => {
+    const withoutWindowsNamespace = process.platform === 'win32'
+      ? value.replace(/^\\\\\?\\UNC\\/i, '\\\\').replace(/^\\\\\?\\/, '')
+      : value;
+    const normalized = path.resolve(withoutWindowsNamespace);
+    return process.platform === 'win32' ? normalized.toLowerCase() : normalized;
+  };
+  const realPathOrResolved = (value: string): string => {
+    try { return normalizePathForCompare(fs.realpathSync.native(value)); }
+    catch { return normalizePathForCompare(value); }
+  };
+  const isSameOrInside = (candidate: string, root: string): boolean => {
+    const relative = path.relative(root, candidate);
+    return relative === '' || (
+      relative !== '..'
+      && !relative.startsWith(`..${path.sep}`)
+      && !path.isAbsolute(relative)
+    );
+  };
+  const isBuiltInSkillPath = (targetPath: string): boolean => (
+    (options.getBuiltInSkills?.() ?? []).some((skill) => {
+      const root = realPathOrResolved(skill.absolutePath);
+      return isSameOrInside(normalizePathForCompare(targetPath), normalizePathForCompare(skill.absolutePath))
+        || isSameOrInside(realPathOrResolved(targetPath), root);
+    })
+  );
 
   const sweepLocalImportGrants = () => {
     const now = Date.now();
@@ -363,6 +383,20 @@ export function registerSkillhubIpc(options: RegisterSkillhubIpcOptions): void {
   };
   const publishService = options.publishService ?? new SkillPublishService({
     onProgress: broadcastPublishProgress,
+  });
+  if (options.remoteIsRelayOnline) {
+    remoteResourceRegistry.register(createRemoteSkillsHost(options, marketService, broadcastLocalChange, refreshCodexProjectSkillCache).provider());
+  }
+  configureSkillhubAgentServices({
+    market: marketService,
+    publisher: publishService,
+    ownerScope: () => !isAppSessionBoundaryPending() && getCurrentDataOwnerId()
+      && getAppCapabilities().canUseSkillHubCloud && currentSkillhubIdentityPolicy().canWrite
+      ? activeOwnerScopeKey() : null,
+    policy: currentSkillhubIdentityPolicy,
+    isManagedPath: (absolutePath) => isBuiltInSkillPath(absolutePath)
+      || isPluginManagedSkillPath(absolutePath, options.getManagedSkillRoots()),
+    errorCode: (error) => error instanceof ServerApiError ? error.code : 'INTERNAL',
   });
   let usageRefreshBroadcastPromise: Promise<void> | null = null;
   const captureUsageDbSnapshot = (): CurrentDbClientSnapshot => {
@@ -423,6 +457,7 @@ export function registerSkillhubIpc(options: RegisterSkillhubIpcOptions): void {
       // A new scan attempt supersedes the previous snapshot immediately. If
       // discovery fails, stale paths must not remain authorized.
       scannedSkillRootsBySender.delete(event.sender.id);
+      localSkillsBySender.delete(event.sender.id);
       try {
         const scanOwnerId = getCurrentDataOwnerId();
         if (!scanOwnerId || isAppSessionBoundaryPending()) {
@@ -432,24 +467,42 @@ export function registerSkillhubIpc(options: RegisterSkillhubIpcOptions): void {
           params?.projects,
           options.getAllowedProjectRoots,
         );
-        const result = await scanAllSkills({ projects }, options.getMaker(), options.getManagedSkillRoots());
+        const result = await scanAllSkills(
+          { projects },
+          options.getMaker(),
+          options.getManagedSkillRoots(),
+          options.getBuiltInSkills?.() ?? [],
+        );
         if (
           scanGenerationBySender.get(event.sender.id) === scanGeneration
           && !isAppSessionBoundaryPending()
           && getCurrentDataOwnerId() === scanOwnerId
         ) {
-          rememberScannedSkillRoots(event, scanOwnerId, result.skills);
+          await rememberScannedSkillRoots(event, scanOwnerId, scanGeneration, result.skills);
+          if (scanGenerationBySender.get(event.sender.id) !== scanGeneration
+            || isAppSessionBoundaryPending() || getCurrentDataOwnerId() !== scanOwnerId) {
+            return { success: true, ...result };
+          }
           const pendingCleanups = installService.listPendingUninstallCleanups();
           for (const { token } of pendingCleanups) {
             cleanupGrants.set(cleanupGrantKey(event.sender.id, token), { ownerId: scanOwnerId, senderId: event.sender.id });
           }
-          return { success: true, ...result, pendingCleanups };
+          return {
+            success: true,
+            ...result,
+            pendingCleanups,
+            learnSkillEnabled: result.learnSkillEnabled ?? isCindyLearnSkillEnabledForListing(options.getBuiltInSkills?.() ?? []),
+          };
         }
-        return { success: true, ...result };
+        return { success: true, ...result, learnSkillEnabled: result.learnSkillEnabled ?? isCindyLearnSkillEnabledForListing(options.getBuiltInSkills?.() ?? []) };
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
         log.error('[skillhub:scan] failed:', err);
-        return { success: false, error: message };
+        return {
+          success: false,
+          error: message,
+          learnSkillEnabled: isCindyLearnSkillEnabledForListing(options.getBuiltInSkills?.() ?? []),
+        };
       }
     },
   );
@@ -460,8 +513,12 @@ export function registerSkillhubIpc(options: RegisterSkillhubIpcOptions): void {
   ipcMain.handle(
     'skillhub:read-skill',
     async (event, params: { mdPath: string }) => {
-      if (!await hasScannedSkillGrant(event, params.mdPath)) return scanGrantDenied();
-      return readSkillContent(params);
+      const grant = await findScannedSkillGrant(event, params.mdPath);
+      if (!grant) return scanGrantDenied();
+      return readSkillContent({
+        mdPath: params.mdPath,
+        ...(grant.builtIn ? { attestedRoot: grant.root } : {}),
+      });
     },
   );
 
@@ -471,8 +528,12 @@ export function registerSkillhubIpc(options: RegisterSkillhubIpcOptions): void {
   ipcMain.handle(
     'skillhub:list-children',
     async (event, params: { dirPath: string }) => {
-      if (!await hasScannedSkillGrant(event, params.dirPath)) return scanGrantDenied();
-      return listSkillFolderChildren(params);
+      const grant = await findScannedSkillGrant(event, params.dirPath);
+      if (!grant) return scanGrantDenied();
+      return listSkillFolderChildren({
+        dirPath: params.dirPath,
+        ...(grant.builtIn ? { attestedRoot: grant.root } : {}),
+      });
     },
   );
 
@@ -481,8 +542,12 @@ export function registerSkillhubIpc(options: RegisterSkillhubIpcOptions): void {
   ipcMain.handle(
     'skillhub:read-sibling-file',
     async (event, params: { filePath: string }) => {
-      if (!await hasScannedSkillGrant(event, params.filePath)) return scanGrantDenied();
-      return readSkillSiblingFile(params);
+      const grant = await findScannedSkillGrant(event, params.filePath);
+      if (!grant) return scanGrantDenied();
+      return readSkillSiblingFile({
+        filePath: params.filePath,
+        ...(grant.builtIn ? { attestedRoot: grant.root } : {}),
+      });
     },
   );
 
@@ -494,8 +559,12 @@ export function registerSkillhubIpc(options: RegisterSkillhubIpcOptions): void {
   ipcMain.handle(
     'skillhub:read-raw',
     async (event, params: { filePath: string }) => {
-      if (!await hasScannedSkillGrant(event, params.filePath)) return scanGrantDenied();
-      return readSkillRawFile(params);
+      const grant = await findScannedSkillGrant(event, params.filePath);
+      if (!grant) return scanGrantDenied();
+      return readSkillRawFile({
+        filePath: params.filePath,
+        ...(grant.builtIn ? { attestedRoot: grant.root } : {}),
+      });
     },
   );
   // write-file: atomic tmp+rename, file-must-exist (no creation), 1MB cap,
@@ -503,7 +572,14 @@ export function registerSkillhubIpc(options: RegisterSkillhubIpcOptions): void {
   ipcMain.handle(
     'skillhub:write-file',
     async (event, params: { filePath: string; content: string }) => {
-      if (!await hasScannedSkillGrant(event, params.filePath)) return scanGrantDenied();
+      const grant = await findScannedSkillGrant(event, params.filePath);
+      if (!grant) return scanGrantDenied();
+      // The scan grant is the durable attestation for the exact immutable
+      // version shown to this renderer. The active manifest may have advanced
+      // since the scan, so re-checking only the current descriptors is unsafe.
+      if (grant.builtIn || isBuiltInSkillPath(params.filePath)) {
+        return { success: false, error: 'Cindy built-in Skills are read-only' };
+      }
       return writeSkillFile(params);
     },
   );
@@ -528,10 +604,25 @@ export function registerSkillhubIpc(options: RegisterSkillhubIpcOptions): void {
     async (event, params: { absolutePath: string; newName: string }) => {
       const ownerScope = activeOwnerScopeKey();
       const canMutate = () => ownerScope === activeOwnerScopeKey() && !isAppSessionBoundaryPending();
-      if (!await hasScannedSkillGrant(event, params.absolutePath)) return scanGrantDenied();
+      const grant = await findScannedSkillGrant(event, params.absolutePath);
+      if (!grant) return scanGrantDenied();
+      if (grant.builtIn || isBuiltInSkillPath(params.absolutePath)) {
+        return { success: false, error: 'Cindy built-in Skills are read-only' };
+      }
       if (!canMutate()) return { success: false, error: 'Skill mutation context changed' };
       const result = await renameLocalSkill(params, canMutate);
-      if (result.success) broadcastLocalChange();
+      if (result.success) {
+        // The publish dialog intentionally continues with the renamed path.
+        // Carry forward the exact non-built-in grant that authorized the
+        // rename so publish can remain fail-closed without forcing a rescan
+        // between the two operations.
+        const renamedRoot = resolveExistingSkillPathForGrant(result.newAbsolutePath);
+        if (!renamedRoot) {
+          return { success: false, error: 'Skill was renamed; refresh the Skill list and retry' };
+        }
+        grant.root = renamedRoot;
+        broadcastLocalChange();
+      }
       return result;
     },
   );
@@ -773,6 +864,38 @@ export function registerSkillhubIpc(options: RegisterSkillhubIpcOptions): void {
     },
   );
 
+  ipcMain.handle('skillhub:compare-published', async (event, params: SkillhubPublishComparisonParams): Promise<SkillhubPublishComparison> => {
+    assertTrustedAppRendererEvent(event);
+    if (!params || typeof params !== 'object' || typeof params.absolutePath !== 'string'
+      || params.absolutePath.length > 32768 || (params.skillId !== undefined && (typeof params.skillId !== 'string' || params.skillId.length > 512))
+      || (params.includeDiff !== undefined && typeof params.includeDiff !== 'boolean')) {
+      throwIpcError('INVALID_PARAMS', 'Invalid Skill comparison request');
+    }
+    const owner = activeOwnerScopeKey();
+    const record = await requireLocalSkill(event, params.absolutePath, params.skillId);
+    assertReviewOwnerCurrent(owner);
+    if (record.skill.kind !== 'skill' || record.skill.builtIn) return { status: 'not-owner' };
+    let result: SkillhubPublishComparison;
+    try {
+      result = await comparePublishedSkill(record.skill, marketService, params.includeDiff);
+    } catch (error) {
+      // Local filesystem/identity/manifest failures must not throttle unrelated skills.
+      const serviceFailure = error instanceof ServerApiError
+        && (error.statusCode === 0 || error.statusCode === 408 || error.statusCode === 429 || error.statusCode >= 500);
+      result = { status: 'unavailable', ...(serviceFailure ? { reason: 'service' as const } : {}) };
+    }
+    assertReviewOwnerCurrent(owner);
+    const current = await requireLocalSkill(event, params.absolutePath, params.skillId);
+    assertReviewOwnerCurrent(owner);
+    if (current.physicalIdentity !== record.physicalIdentity
+      || current.skill.kind !== record.skill.kind || current.skill.builtIn !== record.skill.builtIn
+      || (current.skill.registrySkillName ?? current.skill.name) !== (record.skill.registrySkillName ?? record.skill.name)
+      || current.skill.registryEntry?.catalogScope !== record.skill.registryEntry?.catalogScope) {
+      return { status: 'unavailable' };
+    }
+    return result;
+  });
+
   // 计算本地 skill 文件夹 hash（进入 DetailView 时触发）
   // 返回 hash + manifest（文件清单 + 各自 sha256），manifest 用于 renderer 端
   // 排查"我没改但 dirty" — 直接 console.table 即可看到本地参与 hash 的全部文件。
@@ -817,13 +940,11 @@ export function registerSkillhubIpc(options: RegisterSkillhubIpcOptions): void {
   // Claude/Codex 自己的 JSONL 文件里,不复制进 Cindy DB。
   ipcMain.handle(
     'skillhub:get-usage-summary',
-    async (_event, { name, mdPath }: { name: string; mdPath?: string }) => {
+    async (event, { name, mdPath }: { name: string; mdPath?: string }) => {
       try {
-        let currentSkillContent: string | null = null;
-        if (mdPath) {
-          const raw = await readSkillRawFile({ filePath: mdPath });
-          if (raw.success) currentSkillContent = raw.content ?? null;
-        }
+        const currentSkillContent = mdPath
+          ? await readScannedSkillRawContent(event, mdPath)
+          : null;
         const readSummary = async () => {
           const snapshot = captureUsageDbSnapshot();
           scheduleUsageAnalyticsRefresh(snapshot);
@@ -854,13 +975,11 @@ export function registerSkillhubIpc(options: RegisterSkillhubIpcOptions): void {
   // 生成 skill 诊断会话首条消息。只返回统计摘要和 transcript 索引,不复制原始对话内容。
   ipcMain.handle(
     'skillhub:get-usage-diagnosis-context',
-    async (_event, { name, mdPath }: { name: string; mdPath?: string }) => {
+    async (event, { name, mdPath }: { name: string; mdPath?: string }) => {
       try {
-        let currentSkillContent: string | null = null;
-        if (mdPath) {
-          const raw = await readSkillRawFile({ filePath: mdPath });
-          if (raw.success) currentSkillContent = raw.content ?? null;
-        }
+        const currentSkillContent = mdPath
+          ? await readScannedSkillRawContent(event, mdPath)
+          : null;
         const readDiagnosisContext = async () => {
           const snapshot = captureUsageDbSnapshot();
           const result = await getLocalSkillUsageDiagnosisContext({
@@ -892,7 +1011,25 @@ export function registerSkillhubIpc(options: RegisterSkillhubIpcOptions): void {
   ipcMain.handle(
     'skillhub:publish',
     async (event, params: PublishParams) => {
-      void event;
+      const grant = await findScannedSkillGrant(event, params.absolutePath);
+      if (!grant) {
+        const message = 'Refresh the Skill list before publishing';
+        return {
+          success: false as const,
+          errorCode: 'INTERNAL' as const,
+          error: message,
+          message,
+        };
+      }
+      if (grant.builtIn || isBuiltInSkillPath(params.absolutePath)) {
+        const message = 'Cindy built-in Skills cannot be published';
+        return {
+          success: false as const,
+          errorCode: 'INTERNAL' as const,
+          error: message,
+          message,
+        };
+      }
       return publishService.publish(params);
     },
   );
@@ -1057,7 +1194,7 @@ export function registerSkillhubIpc(options: RegisterSkillhubIpcOptions): void {
     'skillhub:uninstall',
     async (event, { absolutePath, skillId }: { absolutePath: string; skillId?: string }) => {
       const { target, skill } = await requireLocalSkill(event, absolutePath, skillId);
-      if (!target || !isLocalSkillTargetCurrent(target) || isPluginManagedSkillPath(target.sourcePath, options.getManagedSkillRoots())) {
+      if (skill.builtIn || !target || !isLocalSkillTargetCurrent(target) || isPluginManagedSkillPath(target.sourcePath, options.getManagedSkillRoots())) {
         throwIpcError('PRECONDITION_FAILED', 'Skill cannot be uninstalled; refresh and retry');
       }
       const ownerId = getCurrentDataOwnerId();

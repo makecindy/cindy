@@ -2,9 +2,40 @@ import { describe, expect, it } from 'vitest';
 
 import {
   resolveDeviceLinkDraftDefaults,
+  resolveDeviceLinkWorktreeEnabled,
   shouldReseedDeviceLinkDraftDefaults,
 } from '../deviceLinkDraftDefaults';
 import type { AgentCapabilities } from '@/hooks/useAgentCapabilities';
+import type { CatalogModel, ProviderView } from '@cindy/model-providers';
+
+function providerModel(
+  id: string,
+  efforts: CatalogModel['efforts'],
+  defaultEffort: CatalogModel['defaultEffort'],
+): CatalogModel {
+  return {
+    id,
+    name: id,
+    contextWindow: 200_000,
+    efforts,
+    defaultEffort,
+    effortsUnknown: false,
+    supportsFastMode: false,
+  } as CatalogModel;
+}
+
+function provider(id: string, model: CatalogModel): ProviderView {
+  return {
+    id,
+    name: id,
+    source: 'user',
+    agents: ['pi'],
+    models: { pi: [model] },
+    routing: { pi: { upstream: 'https://provider.test', authStrategy: 'none' } },
+    auth: { method: 'api-key' },
+    connected: true,
+  } as unknown as ProviderView;
+}
 
 // 最小被控端 capabilities:两模型(Opus 支持 fast + 多 effort 档;Haiku 无 effort/fast)。
 function caps(overrides: Partial<AgentCapabilities> = {}): AgentCapabilities {
@@ -24,6 +55,7 @@ function caps(overrides: Partial<AgentCapabilities> = {}): AgentCapabilities {
         contextWindow: 200_000,
         efforts: [],
         defaultEffort: null,
+        effortsUnknown: false,
         supportsFastMode: false,
         sortOrder: 10,
         newSessionDefault: ['claude-code'],
@@ -165,6 +197,95 @@ describe('resolveDeviceLinkDraftDefaults', () => {
     expect(sel.effort).toBe('high');
   });
 
+  it('已知无 effort 模型清掉远端草稿里的旧档位', () => {
+    const sel = resolveDeviceLinkDraftDefaults(caps(), {
+      model: 'claude-haiku-4-5',
+      effort: 'high',
+      fastMode: true,
+    });
+    expect(sel.effort).toBeNull();
+  });
+
+  it('按选中的供应商校准 effort,不被同名其他来源的空档位清掉', () => {
+    const model = 'qwen3:14b';
+    const capabilities = caps({
+      availableModels: [
+        {
+          id: model,
+          displayName: model,
+          contextWindow: 200_000,
+          efforts: [],
+          defaultEffort: null,
+        },
+      ],
+    });
+    const sel = resolveDeviceLinkDraftDefaults(
+      capabilities,
+      { model, providerId: 'ollama', effort: 'medium' },
+      undefined,
+      'pi',
+      [
+        provider('ollama', providerModel(model, ['medium', 'high'], 'high')),
+        provider('other', providerModel(model, [], null)),
+      ],
+    );
+    expect(sel.effort).toBe('medium');
+  });
+
+  it('选中的供应商明确无 effort 时才清掉旧档位', () => {
+    const model = 'qwen3:14b';
+    const sel = resolveDeviceLinkDraftDefaults(
+      caps({
+        availableModels: [
+          {
+            id: model,
+            displayName: model,
+            contextWindow: 200_000,
+            efforts: ['medium', 'high'],
+            defaultEffort: 'high',
+          },
+        ],
+      }),
+      { model, providerId: 'ollama', effort: 'medium' },
+      undefined,
+      'pi',
+      [
+        provider('ollama', providerModel(model, [], null)),
+        provider('other', providerModel(model, ['medium', 'high'], 'high')),
+      ],
+    );
+    expect(sel.effort).toBeNull();
+  });
+
+  it('档位能力尚未声明时保留远端草稿档位', () => {
+    const capabilities = caps();
+    capabilities.availableModels[1]!.effortsUnknown = true;
+    const sel = resolveDeviceLinkDraftDefaults(capabilities, {
+      model: 'claude-haiku-4-5',
+      effort: 'high',
+    });
+    expect(sel.effort).toBe('high');
+  });
+
+  it.each(['medium', 'high'])('旧主机缺少能力标记时保留远端草稿档位 (%s)', (effort) => {
+    const capabilities = caps();
+    delete capabilities.availableModels[1]!.effortsUnknown;
+    const sel = resolveDeviceLinkDraftDefaults(capabilities, {
+      model: 'claude-haiku-4-5', effort,
+    });
+    expect(sel.effort).toBe(effort);
+  });
+
+  it.each(['medium', 'high'])('旧主机来源条目缺少能力标记时不借用扁平目录清空档位 (%s)', (effort) => {
+    const model = providerModel('claude-haiku-4-5', [], null);
+    delete model.effortsUnknown;
+    const sel = resolveDeviceLinkDraftDefaults(
+      caps(), { model: model.id, providerId: 'legacy', effort }, undefined, 'pi',
+      [provider('legacy', model)],
+    );
+    expect(sel.effort).toBe(effort);
+  });
+
   it('模型不支持 fast(或被控端 agent 无 fast 能力)→ fastMode 强制 false', () => {
     // 选中无 fast 的 Haiku
     const a = resolveDeviceLinkDraftDefaults(caps(), {
@@ -253,7 +374,7 @@ describe('resolveDeviceLinkDraftDefaults', () => {
     expect(sel.fastMode).toBe(true);
   });
 
-  it('provider 槽优先于 * 槽', () => {
+  it('* 权威槽优先于 provider 兼容副本', () => {
     const sel = resolveDeviceLinkDraftDefaults(
       caps(),
       {
@@ -263,11 +384,11 @@ describe('resolveDeviceLinkDraftDefaults', () => {
         fastMode: false,
         providerModelMemory: {
           'claude-code:*': {
-            effortByModel: { 'claude-opus-4-8': 'low' },
+            effortByModel: { 'claude-opus-4-8': 'xhigh' },
             fastByModel: {},
           },
           'claude-code:anthropic': {
-            effortByModel: { 'claude-opus-4-8': 'xhigh' },
+            effortByModel: { 'claude-opus-4-8': 'high' },
             fastByModel: { 'claude-opus-4-8': true },
           },
         },
@@ -275,6 +396,7 @@ describe('resolveDeviceLinkDraftDefaults', () => {
       undefined,
       'claude-code',
     );
+    // effort 取权威槽;fast 权威槽没记 → 回落来源副本。
     expect(sel.effort).toBe('xhigh');
     expect(sel.fastMode).toBe(true);
   });
@@ -394,6 +516,25 @@ describe('shouldReseedDeviceLinkDraftDefaults', () => {
         remoteModelChosenByUser: true,
       }),
     ).toBe(true);
+  });
+});
+
+// 回归:在远程电脑上选项目(设备域浏览器)时，新设备快照与切设备同批到达，旧实现的
+// 「先镜像、后重置」两段 effect 把被控端已勾选的 worktree 压回未勾选，会话于是不建
+// worktree、落在被控端仓库当前(默认)分支上，用户选的源分支被静默忽略。
+describe('resolveDeviceLinkWorktreeEnabled', () => {
+  const ready = (worktreeEnabled?: boolean) => ({
+    status: 'ready' as const,
+    value: worktreeEnabled === undefined ? {} : { worktreeEnabled },
+  });
+  const deviceA = { deviceId: 'device-a', remoteDraftState: ready(false) };
+
+  it.each([
+    ['切设备且同批带来新设备快照 → 采用被控端勾选记忆', deviceA, { deviceId: 'device-b', remoteDraftState: ready(true) }, true],
+    ['切设备但快照仍是上一台那份 → 回到未勾选，不串台', deviceA, { deviceId: 'device-b', remoteDraftState: deviceA.remoteDraftState }, false],
+    ['同设备快照缺字段 → 保持当前显示', deviceA, { deviceId: 'device-a', remoteDraftState: ready() }, null],
+  ] as const)('%s', (_name, previous, current, expected) => {
+    expect(resolveDeviceLinkWorktreeEnabled(previous, current)).toBe(expected);
   });
 });
 

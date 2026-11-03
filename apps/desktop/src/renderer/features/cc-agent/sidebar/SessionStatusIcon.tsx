@@ -10,6 +10,9 @@
  *   running:图标切 Thinking Orange + 呼吸;需关注:右上叠状态点(全端统一色表:
  *   error 红 / awaiting TapTap 蓝 / 完成未读绿,tone 按行精准订阅 attention store);
  *   有未发送内容(草稿/暂停队列)且未选中:右下叠铅笔。
+ *   Agent 在另一台电脑运行(任务在本机,或在远程控制的被控电脑上):VendorIcon 右上角加信号
+ *   波纹,悬停说明哪台电脑;右上角正显示状态点时由状态点占位,波纹暂不画(两者同角，叠在一起
+ *   读不出)。
  * idle 时图标照常显示——让用户一眼看出"这是哪一个 agent"。
  *
  */
@@ -24,9 +27,66 @@ import { useComposerDraftPresence } from '@/hooks/useComposerDraftPresence';
 import { useSessionPausedQueue } from '@/hooks/useSessionPausedQueue';
 import { useGhostSessionBusy } from '@/cindy-brain/ghostSessionActivityStore';
 import { useSessionAttentionKind } from '@/lib/sessionAttentionStore';
+import {
+  mergeOrcaLeadAttentionKind,
+  useOrcaLeadWorkerAttentionKind,
+} from '../lib/orcaLeadWorkerAttention';
 import { useSessionAttentionUrgency } from '../contexts/SessionAttentionUrgencyContext';
 import { AttentionDot } from '@/components/sidebar/AttentionDot';
-import { VendorIcon, agentKindToVendor } from '@/components/sidebar/VendorIcon';
+import {
+  VendorIcon,
+  agentKindToVendor,
+  type VendorIconKind,
+} from '@/components/sidebar/VendorIcon';
+import { useDeviceLinkDeviceList } from '@/features/device-link/useDeviceLinkDeviceList';
+import { useProviderShareAgentDevices } from '@/features/provider-share/useProviderShareAgentDevices';
+import { useCindyMakeActivity } from './useCindyMakeActivity';
+
+/**
+ * Agent 在另一台电脑运行的 Agent 图标:带信号波纹，悬停说明在哪台电脑、是否离线。
+ * 单独成组件，只有这类任务的行才订阅设备列表(共享单例，push 驱动)。
+ */
+function AgentDeviceVendorIcon({
+  deviceId,
+  controlledTask,
+  showSignal,
+  ...iconProps
+}: {
+  deviceId: string;
+  /**
+   * 任务在远程控制的被控电脑上:deviceId 是被控电脑投影的值。分享来的供应商(`share:<id>`)是
+   * 被控电脑收到的,本机已收到的分享里查不到它的名字。
+   */
+  controlledTask: boolean;
+  showSignal: boolean;
+  vendor: VendorIconKind;
+  size: number;
+  running: boolean;
+  colorClassName?: string;
+}) {
+  const { t } = useTranslation();
+  const device = useDeviceLinkDeviceList()?.find((item) => item.deviceId === deviceId);
+  // 分享来的供应商(`share:<id>`)不在同账号设备列表里，本机任务的名字取自已收到的分享。
+  const { nameFor: providerShareDeviceName } = useProviderShareAgentDevices();
+  const name = device?.name || (controlledTask ? null : providerShareDeviceName(deviceId));
+  const offline = device ? !device.online : false;
+  return (
+    <VendorIcon
+      {...iconProps}
+      remote={showSignal}
+      title={
+        name
+          ? t(
+              offline
+                ? 'ccAgent.sessionHeader.agentDeviceOffline'
+                : 'ccAgent.sessionHeader.agentDevice',
+              { device: name },
+            )
+          : t('newChat.modelSelector.trigger.agentDeviceUnnamed')
+      }
+    />
+  );
+}
 
 export interface SessionStatusIconProps {
   session: Session;
@@ -70,14 +130,26 @@ export function SessionStatusIcon({
   // fire-and-forget 任务期间用户也能看出"这个会话还有活在跑"。per-row
   // primitive 订阅(性能不变量同下方 attention hooks)。
   const isGhostBusy = useGhostSessionBusy(session.id);
-  const isRunning = isAgentRunning || isGhostBusy;
+  // Native preparation/builds remain task activity outside an Agent turn,
+  // including pinned rail icons that have no row projection.
+  const cindyMakeActivity = useCindyMakeActivity(session);
+  const isRunning = isAgentRunning || isGhostBusy || cindyMakeActivity != null;
   const vendor = agentKindToVendor(session.agentKind);
+  // Agent 在另一台电脑:任务在本机,或在远程控制的被控电脑上(值由被控电脑投影,null = Agent 就在
+  // 被控电脑)。两种都用同一个波纹标识(2026-10-09 用户裁决)。SSH 任务整件在远端，没有这一说。
+  const agentDeviceId =
+    session.agentDeviceId && !session.remoteHostId ? session.agentDeviceId : null;
   const isOrcaLead = isOrcaLeadSession(session);
   const isArchived = session.status === 'archived';
   // 角标 tone:error(含定时任务失败的 urgency context)红 > awaiting 蓝 > 完成未读绿。
   // 两个 hook 都是按 sessionId 的 primitive 精准订阅(性能不变量,见 SessionItem 头注),
   // 本组件也被逐行挂载,禁止退回整表订阅。
-  const attentionKind = useSessionAttentionKind(session.id);
+  // Orca Lead 另并入其 Worker 的出错 / 等待确认(同为按 id 的 primitive 订阅),
+  // 见 lib/orcaLeadWorkerAttention.ts。
+  const ownAttentionKind = useSessionAttentionKind(session.id);
+  const orcaWorkerAttentionKind = useOrcaLeadWorkerAttentionKind(session.id);
+  const attentionKind = mergeOrcaLeadAttentionKind(ownAttentionKind, orcaWorkerAttentionKind);
+  const hasAttentionDot = hasAttentionNotification || orcaWorkerAttentionKind !== undefined;
   const isUrgentFromContext = useSessionAttentionUrgency(session.id);
   const attentionTone =
     attentionToneOverride ??
@@ -138,6 +210,16 @@ export function SessionStatusIcon({
         >
           <RadioTower size={size ?? 12} strokeWidth={1.75} className="shrink-0" />
         </span>
+      ) : agentDeviceId ? (
+        <AgentDeviceVendorIcon
+          deviceId={agentDeviceId}
+          controlledTask={Boolean(session.deviceLinkDeviceId)}
+          showSignal={!(showAttentionDot && hasAttentionDot)}
+          vendor={vendor}
+          size={size ?? (vendor === 'cc' ? 13 : 12)}
+          running={isRunning}
+          colorClassName={isActive ? 'text-[var(--sidebar-item-active-foreground)]' : undefined}
+        />
       ) : (
         <VendorIcon
           vendor={vendor}
@@ -146,7 +228,7 @@ export function SessionStatusIcon({
           colorClassName={isActive ? 'text-[var(--sidebar-item-active-foreground)]' : undefined}
         />
       )}
-      {showAttentionDot && hasAttentionNotification && (
+      {showAttentionDot && hasAttentionDot && (
         <AttentionDot size={6} tone={attentionTone} className="absolute -top-0.5 -right-0.5" />
       )}
       {showDraftIndicator && (

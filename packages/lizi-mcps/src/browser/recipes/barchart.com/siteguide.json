@@ -1,11 +1,15 @@
 {
   "site": "barchart.com",
-  "auth": "需要在持久浏览器登录 barchart.com;站内 proxy 接口靠会话 cookie + 页面 CSRF token 鉴权",
+  "auth": "鉴权以具体命令为准：cookie。需要登录的命令复用当前浏览器会话。",
   "entry": {
-    "quotePage": "https://www.barchart.com/stocks/quotes/<symbol>/overview",
-    "optionsPage": "https://www.barchart.com/stocks/quotes/<symbol>/options",
-    "unusualActivityPage": "https://www.barchart.com/options/unusual-activity/stocks"
+    "home": "https://www.barchart.com"
   },
-  "recipes": ["barchart-quote"],
-  "notes": "关键:Barchart 数据走站内 proxy 接口 /proxies/core-api/v1/...,必须带两样东西——(1) 登录会话 cookie(fetch 时 credentials:'include'),(2) 页面 <meta name=\"csrf-token\"> 的值作为 X-CSRF-TOKEN 请求头。所以不能直接 navigate 到接口 URL,必须先 navigate 到对应 overview/options 页(Angular 注入 csrf-token 可能稍慢,取不到时等几秒重试),再在页面内同源 fetch。直接拿接口或未登录会被喂 SPA HTML / 返回非 JSON。\n常用端点:\n• 行情 GET /proxies/core-api/v1/quotes/get?symbol=<SYM>&fields=symbol,symbolName,lastPrice,priceChange,percentChange,openPrice,highPrice,lowPrice,previousPrice,volume,averageVolume,marketCap,peRatio,earningsPerShare,tradeTime → {data:[{...}]}(barchart-quote 配方已封装,结果直接在 output(已自动解包))。\n• 期权链 GET /proxies/core-api/v1/options/chain?symbol=<SYM>&fields=strikePrice,bidPrice,askPrice,lastPrice,priceChange,volume,openInterest,volatility,delta,gamma,theta,vega,rho,expirationDate,optionType,percentFromLast&raw=1[&expirationDate=YYYY-MM-DD] → {data:[{...}]};按 optionType(call/put)过滤、按 |percentFromLast| 排序取平值附近。\n• 异常期权活跃度 GET /proxies/core-api/v1/options/get?list=options.unusual_activity.stocks.us&fields=baseSymbol,strikePrice,expirationDate,optionType,lastPrice,volume,openInterest,volumeOpenInterestRatio,volatility&orderBy=volumeOpenInterestRatio&orderDir=desc&raw=1&limit=20(盘后该列表可能为空,可回退 list=options.mostActive.us)。\n字段多数已是格式化字符串(如 percentChange='+0.56%'),原始数值可读 row.raw。"
+  "recipes": [
+    "barchart-quote"
+  ],
+  "notes": "兼容入口 barchart-quote 现执行内置 barchart/quote，原参数名保留；结果采用新版适配器的结构化输出。可用 opencli:<站点>/<命令> 调用完整目录，siteguide 查询参数默认值、类型及 read/write 分类。网站可能变更或要求登录、验证；有 Cookie 不保证绕过风控。",
+  "upstream": {
+    "repository": "https://github.com/jackwener/opencli",
+    "revision": "fe5f1d96aff01c32fd84f86b52af922bfe6ca93f"
+  }
 }

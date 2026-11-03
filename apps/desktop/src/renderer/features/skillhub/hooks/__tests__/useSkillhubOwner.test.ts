@@ -1,5 +1,6 @@
 // @vitest-environment jsdom
 
+import { act, renderHook } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { toast, type ToastOptions } from '@/lib/toast';
 
@@ -13,16 +14,31 @@ vi.mock('../useSkillSync', () => ({
   invalidateSkillSyncRequests: vi.fn(),
 }));
 
-import { bootstrapSkillhub, refresh, reset, setSkillhubDataOwner } from '../useSkillhub';
+import {
+  bootstrapSkillhub,
+  refresh,
+  reset,
+  setSkillhubDataOwner,
+  useSkillhub,
+} from '../useSkillhub';
 
 describe('SkillHub data-owner bootstrap', () => {
   const scan = vi.fn();
 
   beforeEach(() => {
     vi.clearAllMocks();
-    scan.mockResolvedValue({ success: true, skills: [], sources: [] });
+    scan.mockResolvedValue({
+      success: true,
+      skills: [],
+      sources: [],
+      learnSkillEnabled: true,
+    });
     (window as unknown as { electronAPI: unknown }).electronAPI = {
-      skillhub: { scan },
+      skillhub: {
+        scan,
+        onLocalStateChanged: vi.fn(() => vi.fn()),
+      },
+      onAuthStateChange: vi.fn(() => vi.fn()),
     };
   });
 
@@ -80,5 +96,21 @@ describe('SkillHub data-owner bootstrap', () => {
     resolveSecond({ success: true, skills: [latestSkill], sources: [] });
     await expect(second).resolves.toEqual([latestSkill]);
     await expect(first).resolves.toEqual([latestSkill]);
+  });
+
+  it('keeps Learn availability aligned with its preference when scanning fails', async () => {
+    reset();
+    scan.mockResolvedValue({
+      success: false,
+      error: 'scan failed',
+      learnSkillEnabled: false,
+    });
+    const { result } = renderHook(() => useSkillhub());
+
+    await act(async () => {
+      await refresh();
+    });
+
+    expect(result.current.learnSkillEnabled).toBe(false);
   });
 });

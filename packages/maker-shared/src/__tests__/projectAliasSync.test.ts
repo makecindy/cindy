@@ -1,4 +1,9 @@
 import { describe, expect, it, vi } from 'vitest';
+// Regression: desktop project renames were never mirrored to controllers.
+// Production entry: createProjectAliasMirror + host identity parsing; the old project-order
+// tests did not cover alias deletion, identity separation or a rename during an in-flight read.
+// Minimal failure: an old read resolves after a changed notification; unit tier uses deferred
+// promises so it verifies the published name and account fencing without real timers or IO.
 import {
   createProjectAliasMirror,
   parseHostProjectAliasesSnapshot,

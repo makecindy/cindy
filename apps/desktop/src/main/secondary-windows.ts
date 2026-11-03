@@ -28,7 +28,7 @@ import {
   type ScreenPoint,
 } from './windowBounds.js';
 import { readWindowBehaviorSettings } from './window-behavior-settings-store.js';
-import { resolveVibrancyConfig } from './vibrancyConfig.js';
+import { resolveVibrancyConfig, resolveWindowVibrancyConfig } from './vibrancyConfig.js';
 import {
   createWindowBackdropMaterialArgument,
   WINDOW_BACKDROP_MATERIAL_CHANGED_CHANNEL,
@@ -98,6 +98,7 @@ export function openSessionInNewWindow(
   mainWindow: BrowserWindow | null,
   deviceId?: string | null,
   anchorPoint?: ScreenPoint,
+  messageClientId?: string | null,
 ): void {
   const createdAt = performance.now();
   // frame 配置复刻主窗(bootstrap-electron.ts createWindow): Mac 隐藏标题栏留红绿灯,
@@ -221,6 +222,7 @@ export function openSessionInNewWindow(
     url.searchParams.set('secondaryWindow', '1');
     url.searchParams.set('bootSession', sessionId);
     if (deviceId) url.searchParams.set('bootDevice', deviceId);
+    if (messageClientId) url.searchParams.set('bootMessage', messageClientId);
     url.hash = hash;
     void win.loadURL(url.toString());
   } else {
@@ -229,6 +231,7 @@ export function openSessionInNewWindow(
         secondaryWindow: '1',
         bootSession: sessionId,
         ...(deviceId ? { bootDevice: deviceId } : {}),
+        ...(messageClientId ? { bootMessage: messageClientId } : {}),
       },
       hash,
     });
@@ -275,7 +278,7 @@ export function isSecondaryAppWindow(win: BrowserWindow | null | undefined): boo
 export function applyVibrancyToSecondaryWindows(familyId: string, isDark: boolean): void {
   for (const win of secondaryWindows) {
     if (win.isDestroyed()) continue;
-    const config = resolveVibrancyConfig(familyId, isDark, process.platform);
+    const config = resolveWindowVibrancyConfig(win, familyId, isDark, process.platform);
     if (process.platform === 'darwin') {
       win.setVibrancy(config.vibrancy as 'under-window' | null);
     }

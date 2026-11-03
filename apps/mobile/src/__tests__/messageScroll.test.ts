@@ -12,7 +12,6 @@ import {
   evaluateMobileAnchorVerify,
   evaluateMobileFollowEndContentSizePin,
   findMobileRenderItemKeyByClientId,
-  firstNonEmptyMessageLine,
   isNearMessageListBottom,
   isNearMobileMessageListBottom,
   isNearMessageListTop,
@@ -31,7 +30,6 @@ import {
   mobileMessageListEndOffset,
   mobileMessageListBottomPadding,
   mobileMessageListNearBottomThreshold,
-  previousUserMessageJumpTarget,
   shouldAutoFollowMessages,
   shouldAutoLoadEarlier,
   shouldShowNewMessageIndicator,
@@ -39,6 +37,7 @@ import {
   mobileMessageListTopPadding,
   mobileTopPaddingCompensationOffset,
   MOBILE_FOLLOW_REPIN_DIRECTION_DEAD_ZONE,
+  MOBILE_FOLLOW_REPIN_END_TOLERANCE,
   MOBILE_FOLLOW_UNPIN_DRAG_DEAD_ZONE,
   MOBILE_MVCP_SETTLE_QUIET_MS,
   resolveMobileNearBottomOnScroll,
@@ -98,6 +97,9 @@ describe('messageScroll', () => {
   it('uses the measured bottom overlay height when it is larger than the fallback padding', () => {
     expect(mobileMessageListBottomPadding(320)).toBe(320);
     expect(mobileMessageListBottomPadding(80)).toBe(MOBILE_MESSAGE_LIST_BOTTOM_PADDING);
+    expect(mobileMessageListBottomPadding(320, 16)).toBe(16);
+    expect(mobileMessageListBottomPadding(320, 0)).toBe(0);
+    expect(mobileMessageListBottomPadding(320, Number.NaN)).toBe(320);
     expect(mobileMessageListNearBottomThreshold(320)).toBe(DEFAULT_NEAR_BOTTOM_THRESHOLD + 320);
 
     const metrics = {
@@ -185,28 +187,6 @@ describe('messageScroll', () => {
       label: '加载更早继续搜索',
       visible: true,
     });
-  });
-
-  it('finds the previous user message above the first visible item', () => {
-    const items = renderItems([
-      remoteMessage({ id: 'u1', role: 'user', content: '\n  first question\nsecond line', createdAt: at(1) }),
-      remoteMessage({ id: 'a1', role: 'assistant', content: 'answer', createdAt: at(2) }),
-      remoteMessage({ id: 'u2', role: 'user', content: 'second question', createdAt: at(3) }),
-      remoteMessage({ id: 'a2', role: 'assistant', content: 'answer 2', createdAt: at(4) }),
-    ]);
-
-    expect(firstNonEmptyMessageLine('\n  first question\nsecond line')).toBe('first question');
-    expect(previousUserMessageJumpTarget(items, 3)).toMatchObject({
-      clientId: 'u2',
-      itemKey: 'message-u2',
-      preview: 'second question',
-    });
-    expect(previousUserMessageJumpTarget(items, 1)).toMatchObject({
-      clientId: 'u1',
-      itemKey: 'message-u1',
-      preview: 'first question',
-    });
-    expect(previousUserMessageJumpTarget(items, 0)).toBeNull();
   });
 
   it('maps client ids inside folded render items to the top-level scroll target', () => {
@@ -446,7 +426,7 @@ describe('shouldUnpinMobileFollowOnDrag', () => {
 
 describe('resolveMobileNearBottomOnScroll', () => {
   // 阈值:96 + 132(无浮层)= 228。内容 2000,视口 800 → end offset 1200,
-  // 阈值带 = offsetY > 972。
+  // 阈值带 = offsetY > 972(只用于判定「保持跟随」;恢复跟随要求距末端 ≤ 容差)。
   const metricsAt = (offsetY: number) => ({ contentHeight: 2000, offsetY, viewportHeight: 800 });
 
   it('距底超出阈值 + 明确上滑 / 已解除 → false(原有离底解除行为不变)', () => {
@@ -491,10 +471,31 @@ describe('resolveMobileNearBottomOnScroll', () => {
     })).toBe(false);
   });
 
-  it('阈值带内 + 已解除 + 明确向下 → 恢复跟随', () => {
+  it('已解除 + 明确向下 + 真正到底 → 恢复跟随', () => {
     expect(resolveMobileNearBottomOnScroll({
-      wasNearBottom: false, metrics: metricsAt(1100), scrollDelta: 2,
+      wasNearBottom: false, metrics: metricsAt(1200), scrollDelta: 2,
     })).toBe(true);
+    expect(resolveMobileNearBottomOnScroll({
+      wasNearBottom: false, metrics: metricsAt(1200 - MOBILE_FOLLOW_REPIN_END_TOLERANCE), scrollDelta: 2,
+    })).toBe(true);
+    // iOS 回弹越过末端同样算到底。
+    expect(resolveMobileNearBottomOnScroll({
+      wasNearBottom: false, metrics: metricsAt(1240), scrollDelta: 6,
+    })).toBe(true);
+  });
+
+  it('已解除 + 停在距底几行处的向下微调/抬手位移 → 保持解除(不在近底阈值带内恢复)', () => {
+    // 距末端约三行(~70px):仍在 228px 近底阈值带内,但不是「回到底部」。
+    expect(resolveMobileNearBottomOnScroll({
+      wasNearBottom: false, metrics: metricsAt(1130), scrollDelta: 3,
+    })).toBe(false);
+    expect(resolveMobileNearBottomOnScroll({
+      wasNearBottom: false, metrics: metricsAt(1200 - MOBILE_FOLLOW_REPIN_END_TOLERANCE - 1), scrollDelta: 2,
+    })).toBe(false);
+    // 恢复的距离口径与底部浮层高度无关:留白已计入 contentHeight。
+    expect(resolveMobileNearBottomOnScroll({
+      wasNearBottom: false, metrics: metricsAt(1000), scrollDelta: 3, bottomOverlayHeight: 400,
+    })).toBe(false);
   });
 
   it('bottomOverlayHeight 放大阈值(与 isNearMobileMessageListBottom 同口径)', () => {

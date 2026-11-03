@@ -10,6 +10,16 @@ const preloadSource = fs.readFileSync(
 );
 
 describe('resource usage BrowserWindow security contract', () => {
+  it('connects the shared hidden animation gate for prewarmed wallpaper playback', () => {
+    const entry = fs.readFileSync(
+      path.resolve(__dirname, '../../../renderer/resource-usage-entry.tsx'),
+      'utf8',
+    );
+    expect(source).toContain('installWindowHiddenBroadcast(win);');
+    expect(preloadSource).toContain('onWindowHiddenChange:');
+    expect(preloadSource).toContain("onPayload('window-hidden-change', cb)");
+    expect(entry).toContain('installHiddenAnimationGate();');
+  });
   it('stays hidden and uses the dedicated preload with Electron isolation enabled', () => {
     expect(source).toContain('show: false');
     expect(source).not.toContain('fullscreen: false');

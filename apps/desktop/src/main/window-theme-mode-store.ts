@@ -23,6 +23,7 @@ export interface WindowThemeVibrancyPayload {
   isDark: boolean;
   mode?: AppThemeMode;
   systemModeFollowsSystem?: boolean;
+  wallpaperCovered?: boolean;
 }
 
 const DEFAULTS: WindowThemeSnapshot = { mode: 'system' };
@@ -32,19 +33,22 @@ export function parseWindowThemeVibrancyPayload(raw: unknown): WindowThemeVibran
   if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null;
   const value = raw as Record<string, unknown>;
   if (
-    typeof value.familyId !== 'string'
-    || value.familyId.trim().length === 0
-    || value.familyId.length > MAX_FAMILY_ID_LENGTH
-    || typeof value.isDark !== 'boolean'
-    || (value.mode !== undefined && !isAppThemeMode(value.mode))
-    || (
-      value.systemModeFollowsSystem !== undefined
-      && typeof value.systemModeFollowsSystem !== 'boolean'
-    )
-  ) return null;
+    typeof value.familyId !== 'string' ||
+    value.familyId.trim().length === 0 ||
+    value.familyId.length > MAX_FAMILY_ID_LENGTH ||
+    typeof value.isDark !== 'boolean' ||
+    (value.wallpaperCovered !== undefined && typeof value.wallpaperCovered !== 'boolean') ||
+    (value.mode !== undefined && !isAppThemeMode(value.mode)) ||
+    (value.systemModeFollowsSystem !== undefined &&
+      typeof value.systemModeFollowsSystem !== 'boolean')
+  )
+    return null;
   return {
     familyId: value.familyId,
     isDark: value.isDark,
+    ...(typeof value.wallpaperCovered === 'boolean'
+      ? { wallpaperCovered: value.wallpaperCovered }
+      : {}),
     ...(isAppThemeMode(value.mode) ? { mode: value.mode } : {}),
     ...(typeof value.systemModeFollowsSystem === 'boolean'
       ? { systemModeFollowsSystem: value.systemModeFollowsSystem }

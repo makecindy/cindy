@@ -292,7 +292,7 @@ describe('LearnController 状态机', () => {
 
     const run = await h.waitForStatus(runId, 'failed');
     expect(run.error).toContain('cancelled-before-dispatch');
-    expect(beforeDispatchUserTurn).toHaveBeenCalledWith('fake-session-1');
+    expect(beforeDispatchUserTurn).toHaveBeenCalledWith('fake-session-1', undefined);
     expect(onUndispatchedUserTurn).toHaveBeenCalledWith('fake-session-1');
     expect(h.session.sent).toHaveLength(1);
     expect(order).toEqual(['persist', 'baseline', 'abort']);
@@ -312,7 +312,7 @@ describe('LearnController 状态机', () => {
 
     const run = await h.waitForStatus(runId, 'failed');
     expect(run.error).toContain('model failed');
-    expect(beforeDispatchUserTurn).toHaveBeenCalledWith('fake-session-1');
+    expect(beforeDispatchUserTurn).toHaveBeenCalledWith('fake-session-1', undefined);
     expect(onUndispatchedUserTurn).not.toHaveBeenCalled();
   });
 
@@ -1509,6 +1509,20 @@ describe('LearnController 状态机', () => {
     await expect(h.controller.startLearn({ input: '', sourceKind: 'session' })).rejects.toMatchObject({
       code: 'INVALID_PARAMS',
     });
+  });
+
+  it('session 源在创建 run 前拒绝没有可蒸馏消息的空任务', async () => {
+    const h = makeHarness({ getConversationBlock: async () => '' });
+
+    await expect(h.controller.startLearn({
+      input: '',
+      sourceKind: 'session',
+      originSessionId: 'empty-origin',
+    })).rejects.toMatchObject({
+      code: 'INVALID_PARAMS',
+      message: 'the origin conversation has no distillable content',
+    });
+    expect(h.store.list()).toEqual([]);
   });
 
   it('证据检索抛错 → 无证据继续(不整轮失败)', async () => {

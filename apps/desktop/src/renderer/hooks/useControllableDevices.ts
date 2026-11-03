@@ -180,10 +180,13 @@ export function useControllableDevices(): ControllableDevice[] {
   const [devices, setDevices] = useState<ControllableDevice[]>([]);
 
   useEffect(() => {
+    // 没有设备互联接口(测试、未挂 preload 的窗口)时当作没有可控设备。
+    const deviceLink = (window as Partial<Window>).electronAPI?.deviceLink;
+    if (!deviceLink) return;
     let cancelled = false;
     const refresh = async () => {
       try {
-        const { devices: list } = await window.electronAPI.deviceLink.listDevices();
+        const { devices: list } = await deviceLink.listDevices();
         if (cancelled) return;
         const next = toControllableDevices(list);
         // 内容无变化则保持旧引用,避免无谓重渲染。
@@ -194,10 +197,10 @@ export function useControllableDevices(): ControllableDevice[] {
       }
     };
     void refresh();
-    const off = window.electronAPI.deviceLink.onPresenceChanged(() => {
+    const off = deviceLink.onPresenceChanged(() => {
       void refresh();
     });
-    const offControlTarget = window.electronAPI.deviceLink.onControlTargetChanged(() => {
+    const offControlTarget = deviceLink.onControlTargetChanged(() => {
       void refresh();
     });
     return () => {

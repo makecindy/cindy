@@ -1,0 +1,19 @@
+{
+  "rendererSource": "46f937a39117ded3ef0fac4874d6e37a276c81ac",
+  "initialMainReadySource": "97b9ff46cad27a76689928d1b088a16a2412d419",
+  "coldStartAtRendererSource": false,
+  "files": [
+    {
+      "path": "screenshots/list-dark.png",
+      "sha256": "d2f1ddfd96c161f58772934e6401f365fc8d0f634f600fc49929fbfa2b3e3460"
+    },
+    {
+      "path": "screenshots/personal-light.png",
+      "sha256": "5bd40f60f174d579b5d78c6795de2168fcdbf5d9117a318ca5ff7419bb17ff85"
+    },
+    {
+      "path": "screenshots/personal-dark.png",
+      "sha256": "aa172d921333bff3b06cc22eab4c7507d8f57f4b4046e8b2890f66531ee8deeb"
+    }
+  ]
+}

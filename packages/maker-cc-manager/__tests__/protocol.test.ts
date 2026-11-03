@@ -23,8 +23,8 @@ describe('protocol constants', () => {
     expect(PROTOCOL_VERSION).toBe(5);
   });
 
-  it('bumps the daemon bundle when the wire contract changes', () => {
-    expect(CC_MGR_BUNDLE_VERSION).toBe('0.0.10');
+  it('bumps the daemon bundle for the SDK environment migration without changing v5', () => {
+    expect(CC_MGR_BUNDLE_VERSION).toBe('0.0.11');
   });
 
   it('METHODS has expected method names', () => {

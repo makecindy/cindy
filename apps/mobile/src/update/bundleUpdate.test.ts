@@ -39,9 +39,19 @@ describe('shouldCheckBundleUpdate', () => {
         isSelfHosted,
         isReviewMode,
         isTestFlightBuild,
+        isGooglePlayInstallation: false,
       })).toBe(expected);
     },
   );
+
+  it('Google Play 安装跳过官网 APK 整包记录', () => {
+    expect(shouldCheckBundleUpdate({
+      isSelfHosted: true,
+      isReviewMode: false,
+      isTestFlightBuild: false,
+      isGooglePlayInstallation: true,
+    })).toBe(false);
+  });
 });
 
 describe('parseLatestRelease', () => {

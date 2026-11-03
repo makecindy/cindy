@@ -12,7 +12,6 @@ import type { MobileModelMemoryAccessors } from '@/session/draftModelMemory';
 import {
   budgetRowDisabled,
   buildRowMetaLine,
-  compactEffortLabelFor,
   effortLabelFor,
   effortLabelFromRuntime,
   formatContextWindow,
@@ -62,9 +61,18 @@ describe('providerDisplayTitle / formatPriceLine / buildRowMetaLine', () => {
   it('内置供应商用桌面 zh-CN 标题,自定义回退 name', () => {
     expect(providerDisplayTitle({ id: 'anthropic', name: 'x' })).toBe('Anthropic');
     expect(providerDisplayTitle({ id: 'openai', name: 'x' })).toBe('OpenAI');
-    expect(providerDisplayTitle({ id: 'xd', name: 'x' })).toBe('Cindy AI');
+    expect(providerDisplayTitle({ id: 'xd', name: 'XD Gateway' })).toBe('Cindy AI');
     expect(providerDisplayTitle({ id: 'my-proxy', name: '我的代理' })).toBe('我的代理');
   });
+
+  it.each(['Cindy AI · 个人', 'Cindy AI · 心动', 'Cindy AI · Example Studio'])(
+    'uses the source computer identity %s in model rows', (name) => {
+      const provider = { id: 'xd', name };
+      expect(providerDisplayTitle(provider)).toBe(name);
+      expect(buildRowMetaLine({ provider, model: { id: 'auto', contextWindow: 272_000 } }))
+        .toBe(`${name} · 272K 上下文`);
+    },
+  );
 
   it('价格行对齐桌面 priceTip 文案;无价 null', () => {
     expect(formatPriceLine({ inputUsdPerMtok: 3, outputUsdPerMtok: 15 })).toBe(
@@ -256,47 +264,6 @@ describe('effortLabelFromRuntime —— 会话摘要按 app 语言覆盖 snapsho
   });
 });
 
-describe('compactEffortLabelFor —— 英文列表紧凑标签', () => {
-  it('英文只压缩长档位，非英文仍用本地化全称', async () => {
-    const previousLanguage = i18n.language;
-    try {
-      await i18n.changeLanguage('en');
-      expect(effortLabelFor({}, 'xhigh', capabilities)).toBe('Extra High');
-      expect(
-        compactEffortLabelFor({ effortDisplayNames: { xhigh: '特高' } }, 'xhigh', capabilities),
-      ).toBe('Extra');
-      expect(compactEffortLabelFor({}, 'minimal', capabilities)).toBe('Minimal');
-      expect(compactEffortLabelFor({}, 'low', capabilities)).toBe('Low');
-      expect(compactEffortLabelFor({}, 'medium', capabilities)).toBe('Medium');
-      expect(compactEffortLabelFor({}, 'high', capabilities)).toBe('High');
-      expect(compactEffortLabelFor({}, 'ultra', capabilities)).toBe('Ultra');
-      expect(compactEffortLabelFor({}, 'max', capabilities)).toBe('Max');
-      expect(
-        compactEffortLabelFor(
-          { effortDisplayNames: { 'adaptive-fast': 'Adaptive Fast' } },
-          'adaptive-fast',
-          capabilities,
-        ),
-      ).toBe('Adaptive Fast');
-      expect(
-        compactEffortLabelFor({}, 'adaptive-safe', {
-          ...capabilities,
-          effortLevels: [{ id: 'adaptive-safe', label: 'Adaptive Safe' }],
-        }),
-      ).toBe('Adaptive Safe');
-
-      await i18n.changeLanguage('zh-CN');
-      expect(compactEffortLabelFor({}, 'high', null)).toBe('高');
-      await i18n.changeLanguage('ja');
-      expect(compactEffortLabelFor({}, 'ultra', null)).toBe('究極');
-      await i18n.changeLanguage('ko');
-      expect(compactEffortLabelFor({}, 'medium', null)).toBe('보통');
-    } finally {
-      await i18n.changeLanguage(previousLanguage);
-    }
-  });
-});
-
 describe('modelRowAccessibilityLabel —— 父行保留完整元信息', () => {
   it('无元信息时只读基础选择动作', () => {
     expect(modelRowAccessibilityLabel({ baseLabel: 'Select Luna' })).toBe('Select Luna');
@@ -425,10 +392,15 @@ describe('rowFastEditable / rowFastOn(严格 per-(供应商, 模型))', () => {
 });
 
 describe('budgetRowDisabled(折扣版置灰三态)', () => {
-  it("只有 codex/ 前缀且被控端明确 absent 才置灰;unknown 不误伤", () => {
+  it("只有折扣前缀且被控端明确 absent 才置灰;unknown 不误伤", () => {
     expect(budgetRowDisabled('codex/gpt-5.5', 'absent')).toBe(true);
+    expect(budgetRowDisabled('openai-codex/gpt-6.1-sol', 'absent')).toBe(true);
+    expect(budgetRowDisabled('openai-codex/gpt-6.1-sol', 'present')).toBe(false);
     expect(budgetRowDisabled('codex/gpt-5.5', 'present')).toBe(false);
     expect(budgetRowDisabled('codex/gpt-5.5', 'unknown')).toBe(false);
     expect(budgetRowDisabled('gpt-5.5', 'absent')).toBe(false);
+    expect(budgetRowDisabled('openai-codex/gpt-6.1-sol', 'absent', { source: 'builtin' })).toBe(true);
+    expect(budgetRowDisabled('openai-codex/gpt-6.1-sol', 'absent', { source: 'user' })).toBe(false);
+    expect(budgetRowDisabled('codex/gpt-5.5', 'absent', { source: 'organization' })).toBe(false);
   });
 });

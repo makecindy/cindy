@@ -1,5 +1,7 @@
 import type { PermissionMode, PermissionModeDescriptor } from '@cindy/maker-core';
 import { requiresFullAccessConfirmation } from '@cindy/maker-shared/permission-mode';
+import { getCurrentDbClientSnapshot } from '../../localDb/client/current.js';
+import { withSessionPermissionChange } from '../../maker-ipc/sessionPermissionChange.js';
 
 import type { ImUiTextPack } from './types';
 
@@ -46,46 +48,56 @@ export async function changeSessionPermissionMode(args: {
     return { kind: 'invalid', reason: `Unsupported permission mode: ${args.mode}` };
   }
 
-  const previousMode = await args.readPreviousMode();
-  if (!previousMode) return { kind: 'invalid', reason: 'Session not found' };
+  const snapshot = getCurrentDbClientSnapshot();
+  const assertCurrent = () => {
+    if (snapshot !== getCurrentDbClientSnapshot()) throw new Error('Account changed during permission update');
+  };
+  return withSessionPermissionChange(args.sessionId, async () => {
+    assertCurrent();
+    const previousMode = await args.readPreviousMode();
+    assertCurrent();
+    if (!previousMode) return { kind: 'invalid', reason: 'Session not found' };
 
-  if (!args.confirmedFullAccess && requiresFullAccessConfirmation(previousMode, args.mode)) {
+    if (!args.confirmedFullAccess && requiresFullAccessConfirmation(previousMode, args.mode)) {
+      return {
+        kind: 'confirmation-required',
+        mode: args.mode,
+        label: descriptor.displayName,
+      };
+    }
+
+    const live = args.getLiveSession();
+    let runtimeChanged = false;
+    try {
+      if (live) {
+        await live.setPermissionMode(args.mode);
+        runtimeChanged = true;
+      }
+      assertCurrent();
+      await args.persist(args.mode);
+      assertCurrent();
+    } catch (error) {
+      if (runtimeChanged && live && snapshot === getCurrentDbClientSnapshot()) {
+        try {
+          await live.setPermissionMode(previousMode);
+        } catch {
+          // The original failure is more useful to the caller. Rollback remains
+          // best effort, matching the existing Feishu card behavior.
+        }
+      }
+      return {
+        kind: 'failed',
+        reason: error instanceof Error ? error.message : String(error),
+      };
+    }
+
     return {
-      kind: 'confirmation-required',
+      kind: 'changed',
       mode: args.mode,
       label: descriptor.displayName,
+      live: Boolean(live),
     };
-  }
-
-  const live = args.getLiveSession();
-  let runtimeChanged = false;
-  try {
-    if (live) {
-      await live.setPermissionMode(args.mode);
-      runtimeChanged = true;
-    }
-    await args.persist(args.mode);
-  } catch (error) {
-    if (runtimeChanged && live) {
-      try {
-        await live.setPermissionMode(previousMode);
-      } catch {
-        // The original failure is more useful to the caller. Rollback remains
-        // best effort, matching the existing Feishu card behavior.
-      }
-    }
-    return {
-      kind: 'failed',
-      reason: error instanceof Error ? error.message : String(error),
-    };
-  }
-
-  return {
-    kind: 'changed',
-    mode: args.mode,
-    label: descriptor.displayName,
-    live: Boolean(live),
-  };
+  });
 }
 
 export function resolvePermissionMode(

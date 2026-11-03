@@ -1,0 +1,31 @@
+{
+  "head": "synthetic-head-a",
+  "criteria": [
+    {
+      "id": "save",
+      "description": "合成保存状态显示",
+      "modes": [
+        "LIGHT",
+        "DARK"
+      ]
+    }
+  ],
+  "checks": [
+    {
+      "id": "light",
+      "criterion": "save",
+      "head": "synthetic-head-a",
+      "mode": "LIGHT",
+      "status": "PASS",
+      "evidence": "synthetic://light-reference-only"
+    },
+    {
+      "id": "dark",
+      "criterion": "save",
+      "head": "synthetic-head-a",
+      "mode": "DARK",
+      "status": "NOT_RUN",
+      "evidence": "synthetic://not-run"
+    }
+  ]
+}

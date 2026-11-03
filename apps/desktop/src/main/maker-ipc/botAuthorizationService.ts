@@ -1,4 +1,8 @@
 import { randomUUID } from 'node:crypto';
+import { deliveryNamespaceFields } from '../../shared/pluginIdentity.js';
+import { getRemoteOauthContext, notifyOauthCardClosed } from '../plugin-oauth/context.js';
+import type { PluginOauthAction } from '@cindy/device-link';
+import type { OauthCardBinding } from '../plugin-oauth/transactions.js';
 import { UI_ACTION_TRIGGER_PREFIX } from '../../shared/interruptedTurn.js';
 import type {
   GhostSetupAllowedAction,
@@ -62,6 +66,7 @@ export async function commitBotAuthorizationInput(
 }
 
 export interface BotAuthorizationAdapter {
+  pluginApprovalToken?: string;
   identity: { id: string; name: string; iconDataUrl?: string };
   assess(): Promise<GhostSetupAssessment>;
   subscribe(wake: () => void): () => void;
@@ -125,7 +130,8 @@ export class BotAuthorizationService {
 
   private requests = new Map<string, ReturnType<BotAuthorizationService['requestCard']>>();
   request(sessionId: string, target: BotAuthorizationTarget, plan?: GhostSetupPlan) {
-    const key = `${this.epoch}:${sessionId}:${target.kind}:${target.id}:${!!target.reauthorize}`;
+    const key = JSON.stringify([this.epoch, sessionId, target.kind, target.id,
+      target.kind === 'plugin' ? deliveryNamespaceFields(target) : null, !!target.reauthorize]);
     const existing = this.requests.get(key);
     if (existing) return existing;
     const pending = this.requestCard(sessionId, target, plan).finally(() =>
@@ -153,6 +159,7 @@ export class BotAuthorizationService {
         e.card.sessionId === sessionId &&
         e.card.target.kind === target.kind &&
         e.card.target.id === target.id &&
+        (e.card.target.kind !== 'plugin' || e.card.target.namespace === (target.kind === 'plugin' ? target.namespace : undefined)) &&
         !!e.card.target.reauthorize === !!target.reauthorize,
     );
     if (existing) {
@@ -178,7 +185,9 @@ export class BotAuthorizationService {
       validatePlan(plan, assessment) ?? defaultPlan(assessment),
     );
     if (!snapshot.steps.length) throw new Error('No supported authorization action');
-    const card: BotAuthorizationCard = { v: 1, sessionId, target, snapshot, createdAt: Date.now() };
+    const card: BotAuthorizationCard = { v: 1, sessionId, target, snapshot, createdAt: Date.now(),
+      ...(target.kind === 'plugin' && adapter.pluginApprovalToken
+        ? { pluginApprovalToken: adapter.pluginApprovalToken } : {}) };
     const entry = this.attach(card, adapter);
     entry.assessmentFingerprint = JSON.stringify(assessment);
     try {
@@ -267,6 +276,17 @@ export class BotAuthorizationService {
           card.sessionId,
           card.completionPending ? { ...card.target, reauthorize: false } : card.target,
         );
+        if (card.target.kind === 'plugin' && card.pluginApprovalToken !== undefined &&
+            card.pluginApprovalToken !== adapter.pluginApprovalToken) {
+          if (epoch !== this.epoch) return null;
+          card.snapshot = { ...card.snapshot, terminal: true, revision: card.snapshot.revision + 1,
+            steps: card.snapshot.steps.map(step => ({ ...step, phase: 'cancelled', action: undefined })) };
+          await this.deps.save(card);
+          return null;
+        }
+        const needsApprovalBinding = card.target.kind === 'plugin' && card.pluginApprovalToken === undefined &&
+          adapter.pluginApprovalToken !== undefined;
+        if (needsApprovalBinding) card.pluginApprovalToken = adapter.pluginApprovalToken;
         // A retained card can start a fresh flow; an old browser URL is never persisted.
         const hadReopenAction = !!card.snapshot.reopenActionId;
         card.snapshot = {
@@ -279,6 +299,7 @@ export class BotAuthorizationService {
         const entry = this.attach(card, adapter);
         entry.assessmentFingerprint = JSON.stringify(assessment);
         if (!(await this.isVisible(entry))) return null;
+        if (needsApprovalBinding || card.snapshot.ghost.id !== adapter.identity.id) await this.refresh(entry, assessment);
         // Broadcast a newer revision before accepting a stale reopen click. The
         // retained card can then start a new flow without a generic action error.
         if (hadReopenAction) await this.save(entry);
@@ -333,6 +354,25 @@ export class BotAuthorizationService {
     return true;
   }
 
+  /** Separate remote entry: plugin OAuth only; host login, navigation and secrets stay local. */
+  async bindRemoteOauth(action: PluginOauthAction): Promise<OauthCardBinding | null> {
+    const entry = await this.get(action.requestId);
+    if (!entry || entry.closed || entry.cancelled || entry.action || entry.card.target.kind !== 'plugin' ||
+      entry.card.snapshot.terminal || entry.card.snapshot.revision !== action.expectedRevision ||
+      !entry.card.snapshot.steps.some(s => s.action?.id === action.actionId && s.action.kind === 'oauth_connect')) return null;
+    return { ghostId: entry.adapter.identity.id, current: () => !entry.closed && !entry.cancelled && !entry.card.snapshot.terminal };
+  }
+  async resolveRemoteOauth(action: PluginOauthAction): Promise<boolean> {
+    const binding = await this.bindRemoteOauth(action);
+    const context = getRemoteOauthContext();
+    if (!binding || !context) return false;
+    context.assertCurrent();
+    const entry = this.entries.get(action.requestId);
+    if (!entry) return false;
+    this.start(entry, action.actionId);
+    return true;
+  }
+
   async submit(requestId: string, raw: unknown): Promise<boolean> {
     const submit = parseGhostSetupInlineSubmit(raw);
     if (!submit) return false;
@@ -353,6 +393,7 @@ export class BotAuthorizationService {
     value?: string,
   ) {
     if (entry.action) return;
+    const remoteOauth = getRemoteOauthContext();
     const assertBoundary = this.deps.captureRequestGuard?.(entry.card.sessionId);
     const assertCurrent = () => {
       if (entry.closed || entry.cancelled) throw new Error('Authorization action is no longer active');
@@ -412,6 +453,7 @@ export class BotAuthorizationService {
       })
       .finally(() => {
         entry.action = undefined;
+        remoteOauth?.finish(false); // No-op after commit; settle stale/early-return actions too.
       });
   }
   private async execute(
@@ -432,7 +474,9 @@ export class BotAuthorizationService {
         assertCurrent();
       },
     };
-    const key = `${entry.card.target.kind}:${entry.card.target.id}:${action.id}`;
+    const key = JSON.stringify([entry.card.target.kind, entry.card.target.id,
+      entry.card.target.kind === 'plugin' ? deliveryNamespaceFields(entry.card.target) : null,
+      action.id, getRemoteOauthContext()?.scope ?? 'local']);
     let flight = this.oauthFlights.get(key);
     if (!flight) {
       const listeners = new Set<(url: string) => void>([onUrl]);
@@ -605,11 +649,18 @@ export class BotAuthorizationService {
   }
   private close(entry: Entry) {
     entry.closed = true;
+    notifyOauthCardClosed(entry.card.snapshot.requestId);
     entry.unsubscribe();
     this.stopPoll(entry);
     if (entry.expiry) clearTimeout(entry.expiry);
     this.entries.delete(entry.card.snapshot.requestId);
   }
+  invalidatePlugin(instanceId: string): void {
+    for (const entry of this.entries.values()) {
+      if (entry.card.target.kind === 'plugin' && entry.adapter.identity.id === instanceId) this.close(entry);
+    }
+  }
+
   async dispose() {
     this.epoch += 1;
     this.deps.onDisposing?.();

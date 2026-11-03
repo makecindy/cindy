@@ -16,11 +16,10 @@
  *     「该不该把默认目录指到工作仓库」的唯一依据(均 2026-08-02 拍定)。
  *   - 「想撤回」把服务端已交付的能力告诉用户 —— 做了但没人知道等于没做。
  *
- * 刻意不写进来的(2026-08-02 Dash 拍定):每日任务上限、上溯链上文进 prompt 的细节,
- * 以及「必须是你自己打的 @」这条约束。**最后一条有已知代价**:服务端的 isDirectMention
- * 只认用户自己打的 @, 所以用户在我们的回帖下追问时(X 自动带的继承前缀)那条追问会被
- * 判否、收不到回应 —— 要接着聊每次都得重新 @ 一次, 而现在没有任何地方告诉他。取舍是
- * 「这一节要短到有人读」优先;若日后有人反馈「追问没反应」, 这就是原因。
+ * 刻意不写进来的(2026-08-02 Dash 拍定):每日任务上限、上溯链上文进 prompt 的细节。
+ * 撤回说明明确要求原提问者在目标回答下回复 `@askmycindy /delete`,正文中手动带上 @。
+ * X 的普通回复不会触发现有入口消费的 mention 事件,不能只依赖回复自动带出的账号。
+ * 2026-10-08 Dash 选择保留现有订阅及费用、修正提示,不新增回复事件订阅。
  *
  * **文案里不能用方位指代**(「下面」/「below」/「아래」…)。本组件被两处渲染:卡内小节
  * 与首次绑定的确认门弹窗 —— 卡内「下面」指得到目录选择器, 弹窗里下方只有撤回那组和
@@ -28,13 +27,13 @@
  * (#1347 review 由 codex 指出)。修法选「与上下文无关的措辞」而不是给组件加 variant:
  * 一加 variant 就把本组件想消掉的「两处文案漂移」风险请了回来。
  *
- * 三条落在文案里、代码里看不出来的约定(由 xUsageGuideCopy 测试守着):
- *   - **bot handle `@askmycindy` 硬编码在四份 locale 的 usageBody 里。** 不走 binding:
+ * 两条落在文案里、代码里看不出来的约定(由 xUsageGuideCopy 测试守着):
+ *   - **bot handle `@askmycindy` 写在五份 locale 的 usageBody 和 withdrawBody 里。** 不走 binding:
  *     这一节在用户还没绑定时就要显示, 那时候没有 scopeName 可取。硬编码是安全的 ——
  *     cn 与 global 两份 endpoint manifest 的 xHookWsUrl 指向同一个 x-hook 服务, 也就是
- *     同一个 bot。改 handle 时四份都要改。
- *   - **`/删除` 只在 zh-CN 里提。** 服务端两个命令词都收, 但中文命令词对非中文用户
- *     是噪音, 少宣传一个不影响功能(Dash 2026-08-02)。
+ *     同一个 bot。改 handle 时所有语言的两处说明都要改。
+ *   - **`/删除` 只在 zh-CN 和 zh-TW 里提,命令本身不翻译。** 服务端不接受 `/刪除`。
+ *     非中文说明只展示通用的 `@askmycindy /delete`,不额外介绍中文命令词。
  */
 
 import { AlertTriangle } from 'lucide-react';
@@ -68,18 +67,16 @@ function GuideGroup({ label, children }: { label: string; children: React.ReactN
  *
  * **颜色沿用 --text-tertiary(本仓 settings 说明文字的既有 token,约 157 处在用),这里
  * 刻意没跟着风险组一起提到 --text-primary。** 两者的判据不同:风险组那两段叠在 warning
- * alpha 底上、且 U2 裁决把 text-secondary 的低对比明确限定在「二级信息」,所以必须换;
- * 而 text-tertiary 在 CINDY 两套主题里已经被整改到 AA(light #686B72 = 5.03、dark
- * #BFC1C4 = 7.38,cindy-*.ts 注明「整改: 非 U2 token AA」),default 主题那份值
- * (light #a3a3a3 = 2.39 / dark #737373 = 2.95)属**冻结的主题数据**,不是本组件能单方面
- * 决定的;只把这一节的说明文字提亮,会让它比 settings 里其它所有说明文字都重一档 ——
+ * alpha 底上、且文字阶梯把 text-secondary 限定在「二级信息」,所以必须换;
+ * 而 text-tertiary 是说明类文字的既有档位(CINDY 下为墨水三级档,DESIGN.md §15.16),
+ * 各主题的值都属**冻结的主题数据**,不是本组件能单方面决定的;只把这一节的说明文字提亮,会让它比 settings 里其它所有说明文字都重一档 ——
  * 那是视觉取舍而非规范缺陷,留给 Dash 判断。
  */
 function GuideBody({ children }: { children: React.ReactNode }) {
   return <span className="text-12 leading-[1.45] text-[var(--text-tertiary)]">{children}</span>;
 }
 
-export function XUsageGuide() {
+export function XUsageGuide({ companion = false }: { companion?: boolean } = {}) {
   const { t } = useTranslation();
   const k = (name: string) => `settings.remoteControl.hook.x.guide.${name}`;
 
@@ -97,8 +94,8 @@ export function XUsageGuide() {
           价格冲突提示)—— 图标 mt-0.5 shrink-0 顶对齐, 文本自己折行向下伸展。
 
           **但文字色刻意不跟那份:这两段走 --text-primary, 不是 --text-secondary。**
-          DESIGN.md §15.5 的 U2 裁决把 text-secondary 的低对比**明确限定在「二级信息」**
-          并承认它低于正文 4.5:1(cindy-dark.ts 就把它标成「直映: 二级信息; U2 例外」)。
+          文字阶梯(DESIGN.md §2 / §15.16,2026-10-22 起取代 U2)把 text-secondary
+          **明确限定在「二级信息」**,它本来就低于正文 4.5:1。
           而这两段是用户绑定后必须读清的公开回帖与私密仓库暴露风险, 不是二级信息;
           叠上 warning-bg-soft 的橙色 alpha 底之后更差。实测(见
           renderer/__tests__/xUsageGuideRiskContrast.test.ts, 有用例钉着):
@@ -106,12 +103,11 @@ export function XUsageGuide() {
             合成底             text-secondary   text-primary
             default light            3.96           12.64
             default dark             4.38            7.46
-            CINDY   light            2.71            8.77
-            CINDY   dark             2.09            7.09
+            CINDY   (墨水阶梯,数值以测试为准)
 
-          四种组合下 secondary 全部低于 4.5, primary 全部 ≥7。修法是在组件内换语义色 ——
-          **不能去改全局 token**: §15.5 写明 text-secondary 的值「never darken
-          unilaterally」, 要改需要新的用户裁决(#1347 review 由 codex 指出 P2)。 */}
+          表中 secondary 全部低于 4.5;primary 在四种组合下都 ≥4.5(测试钉住)。修法是在组件内换语义色 ——
+          **不能去改全局 token**: 文字阶梯任一档改值都需要新的用户裁决(原 U2 保护
+          延续到整条阶梯,#1347 review 由 codex 指出 P2)。 */}
       <GuideGroup label={t(k('riskLabel'))}>
         <div className="flex gap-2 rounded-lg bg-[var(--warning-bg-soft)] px-3 py-2.5">
           <AlertTriangle size={15} className="mt-0.5 shrink-0 text-[var(--warning-fg)]" />
@@ -120,7 +116,7 @@ export function XUsageGuide() {
               {t(k('riskPublicBody'))}
             </span>
             <span className="text-12 leading-[1.45] text-[var(--text-primary)]">
-              {t(k('riskWorkdirBody'))}
+              {t(companion ? 'bots.channels.officialX.riskBody' : k('riskWorkdirBody'))}
             </span>
           </div>
         </div>

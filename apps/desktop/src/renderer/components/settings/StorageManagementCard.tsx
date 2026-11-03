@@ -20,7 +20,7 @@ import { useEffect, useId, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Check, ChevronDown, RefreshCw } from 'lucide-react';
 import * as AlertDialog from '@radix-ui/react-alert-dialog';
-import * as Select from '@radix-ui/react-select';
+import { SelectParts as Select } from '@/components/ui/select';
 
 import { cn } from '@/lib/utils';
 import { toast } from '@/lib/toast';
@@ -35,6 +35,8 @@ import { FormField } from '@/components/ui/form-field';
 import { Switch } from '@/components/ui/switch';
 import { useConfirmDialog } from '@/components/ui/confirm-dialog-provider';
 import { DefaultOverrideControls } from './DefaultOverrideControls';
+import { DialogueDirectorySection } from './DialogueDirectorySection';
+import { ProjectsRootSection } from './ProjectsRootSection';
 import {
   DB_SLIMMING_ARCHIVE_AGE_OPTIONS,
   DB_SLIMMING_DEFAULT_ARCHIVE_AGE,
@@ -58,6 +60,7 @@ type CleanPhase =
 
 export function StorageManagementCard() {
   const { t } = useTranslation();
+  const { confirm } = useConfirmDialog();
   const [stats, setStats] = useState<StatsResult | null>(null);
   const [databaseBytes, setDatabaseBytes] = useState<number | null>(null);
   const [warningThresholdGiB, setWarningThresholdGiB] = useState(10);
@@ -152,6 +155,34 @@ export function StorageManagementCard() {
       toast.error(t('settings.about.storage.chatAttachmentsClearFailed'));
     } finally {
       directoryCleanupBusyRef.current = false;
+    }
+  };
+
+  const handleClearRemoteMedia = async () => {
+    if (cleanupBusyRef.current) return;
+    cleanupBusyRef.current = true;
+    try {
+      const api = window.electronAPI.cindyMediaStorage;
+      const scan = await api.scan({ draftUrls: getAllDraftAttachmentUrls(), scope: 'remote-media' });
+      if (!scan.success) throw new Error('scan failed');
+      const bytes = scan.cache.evictable.reduce((sum, entry) => sum + entry.bytes, 0);
+      if (!await confirm({
+        title: t('settings.about.storage.remoteMediaClearTitle'),
+        description: t('settings.about.storage.remoteMediaClearDescription', { size: formatBytes(bytes) }),
+        confirmText: t('settings.about.storage.remoteMediaClearButton'),
+        cancelText: t('settings.about.storage.cancelButton'),
+      })) return;
+      const result = await api.cleanup({
+        scope: 'remote-media', draftUrls: getAllDraftAttachmentUrls(),
+        evictCacheHashes: scan.cache.evictable.map((entry) => entry.hash),
+        zeroRefHashes: [], deadDirNames: [], cleanTmpFiles: false,
+      });
+      toast.success(t('settings.about.storage.cleanupDoneToast', { size: formatBytes(result.freedBytes) }));
+      void refreshStats();
+    } catch {
+      toast.error(t('settings.about.storage.cleanupFailed'));
+    } finally {
+      cleanupBusyRef.current = false;
     }
   };
 
@@ -251,6 +282,10 @@ export function StorageManagementCard() {
         </div>
       </div>
 
+      <DialogueDirectorySection />
+
+      <ProjectsRootSection />
+
       {/* 占用总览 */}
       <div
         className={cn(
@@ -266,7 +301,7 @@ export function StorageManagementCard() {
           <p className="mt-1 text-12 leading-[1.5] text-[var(--settings-section-sublabel)]">
             {t('settings.about.storage.overviewDescription')}
           </p>
-          <div
+          <div id="settings-search-settings-about-storage-databaseSectionTitle"
             role="progressbar"
             aria-label={t('settings.about.storage.databaseSectionTitle')}
             aria-valuemin={0}
@@ -287,7 +322,7 @@ export function StorageManagementCard() {
             <strong className="block text-24 font-medium leading-none tracking-[-0.04em] text-[var(--settings-section-title)]">
               {totalBytes === null ? t('settings.about.storage.unknown') : formatBytes(totalBytes)}
             </strong>
-            <span className="mt-1 block text-11 text-[var(--settings-section-sublabel)]">
+            <span id="settings-search-settings-about-storage-mediaSectionTitle" className="mt-1 block text-11 text-[var(--settings-section-sublabel)]">
               {t('settings.about.storage.databaseUsage', {
                 size: databaseBytes === null
                   ? t('settings.about.storage.unknown')
@@ -342,7 +377,7 @@ export function StorageManagementCard() {
             <span className="text-13 text-[var(--settings-section-sublabel)]">
               {t('settings.about.storage.legacyImagesLabel')}
             </span>
-            <p className="text-12 leading-[1.4] text-[var(--settings-section-sublabel)] opacity-70">
+            <p className="text-12 leading-[1.4] text-[var(--text-secondary)]">
               {t('settings.about.storage.legacyImagesDescription')}
             </p>
           </div>
@@ -366,7 +401,7 @@ export function StorageManagementCard() {
             <span className="text-13 text-[var(--settings-section-sublabel)]">
               {t('settings.about.storage.chatAttachmentsLabel')}
             </span>
-            <p className="text-12 leading-[1.4] text-[var(--settings-section-sublabel)] opacity-70">
+            <p className="text-12 leading-[1.4] text-[var(--text-secondary)]">
               {t('settings.about.storage.chatAttachmentsDescription')}
             </p>
           </div>
@@ -378,6 +413,21 @@ export function StorageManagementCard() {
               {t('settings.about.storage.chatAttachmentsClearButton')}
             </CardButton>
           </div>
+        </div>
+        <div aria-hidden className="h-px w-full bg-[var(--settings-theme-card-border)]" />
+        <div className="flex items-center justify-between gap-3 px-[18px] py-4">
+          <div className="flex min-w-0 flex-col gap-1">
+            <span className="text-13 text-[var(--settings-section-sublabel)]">
+              <span id="settings-search-settings-about-storage-remoteMediaLabel">{t('settings.about.storage.remoteMediaLabel')}</span>
+              {' · '}{stats?.remoteMedia ? formatBytes(stats.remoteMedia.bytes) : t('settings.about.storage.unknown')}
+            </span>
+            <p className="text-12 leading-[1.4] text-[var(--text-secondary)]">
+              {t('settings.about.storage.remoteMediaDescription')}
+            </p>
+          </div>
+          <CardButton onClick={handleClearRemoteMedia}>
+            {t('settings.about.storage.remoteMediaClearButton')}
+          </CardButton>
         </div>
       </div>
 
@@ -421,10 +471,10 @@ export function StorageManagementCard() {
       >
         <div className="flex items-center justify-between gap-3">
           <div className="flex min-w-0 flex-col gap-1">
-            <span className="text-13 text-[var(--settings-section-sublabel)]">
+            <span id="settings-search-settings-about-storage-cleanupLabel" className="text-13 text-[var(--settings-section-sublabel)]">
               {t('settings.about.storage.cleanupLabel')}
             </span>
-            <p className="text-12 leading-[1.4] text-[var(--settings-section-sublabel)] opacity-70">
+            <p className="text-12 leading-[1.4] text-[var(--text-secondary)]">
               {t('settings.about.storage.cleanupDescription')}
             </p>
           </div>
@@ -520,10 +570,10 @@ export function StorageManagementCard() {
       >
         <div className="flex items-center justify-between gap-3">
           <div className="flex min-w-0 flex-col gap-1">
-            <span className="text-13 text-[var(--settings-section-sublabel)]">
+            <span id="settings-search-settings-about-storage-reconcileLabel" className="text-13 text-[var(--settings-section-sublabel)]">
               {t('settings.about.storage.reconcileLabel')}
             </span>
-            <p className="text-12 leading-[1.4] text-[var(--settings-section-sublabel)] opacity-70">
+            <p className="text-12 leading-[1.4] text-[var(--text-secondary)]">
               {t('settings.about.storage.reconcileDescription')}
             </p>
           </div>
@@ -843,10 +893,10 @@ function DatabaseSlimmingSection({
     <div className="flex flex-col gap-3 px-[18px] py-4" aria-busy={scanLoading}>
       <div className="flex items-center justify-between gap-3">
         <div className="flex min-w-0 flex-col gap-1">
-          <span className="text-13 text-[var(--settings-section-sublabel)]">
+          <span id="settings-search-settings-about-storage-dbSlimmingLabel" className="text-13 text-[var(--settings-section-sublabel)]">
             {t('settings.about.storage.dbSlimmingLabel')}
           </span>
-          <p className="text-12 leading-[1.4] text-[var(--settings-section-sublabel)] opacity-70">
+          <p className="text-12 leading-[1.4] text-[var(--text-secondary)]">
             {t('settings.about.storage.dbSlimmingDescription')}
           </p>
         </div>
@@ -900,8 +950,8 @@ function DatabaseSlimmingSection({
                 align="end"
                 sideOffset={6}
                 className={cn(
-                  'z-[10010] min-w-[var(--radix-select-trigger-width)] rounded-xl p-1.5',
-                  'border border-[var(--settings-input-border)] bg-[var(--settings-theme-card-bg)] shadow-[var(--shadow-menu)]',
+                  'z-[10010] w-[var(--radix-select-trigger-width)] rounded-xl p-1.5',
+                  'border border-[var(--settings-input-border)] bg-[var(--settings-theme-card-bg)]',
                 )}
               >
                 <Select.Viewport className="flex flex-col gap-0.5">
@@ -911,8 +961,8 @@ function DatabaseSlimmingSection({
                       value={String(age)}
                       className={cn(
                         'flex h-8 cursor-pointer select-none items-center justify-between gap-2 rounded-lg px-2.5 text-12 outline-none transition-colors',
-                        'text-[var(--settings-input-text)] data-[highlighted]:bg-[var(--settings-menu-bg-hover)]',
-                        'data-[state=checked]:bg-[var(--settings-menu-bg-selected)] data-[state=checked]:font-medium data-[state=checked]:text-[var(--settings-menu-text-selected)]',
+                        'text-[var(--settings-input-text)]',
+                        'data-[state=checked]:font-medium data-[state=checked]:text-[var(--settings-menu-text-selected)]',
                       )}
                     >
                       <Select.ItemText>
@@ -943,7 +993,7 @@ function DatabaseSlimmingSection({
           <span className="text-12 text-[var(--settings-section-sublabel)]">
             {t('settings.about.storage.dbSlimmingIncludeActiveLabel')}
           </span>
-          <span className="text-11 leading-[1.4] text-[var(--settings-section-sublabel)] opacity-70">
+          <span className="text-11 leading-[1.4] text-[var(--text-secondary)]">
             {t('settings.about.storage.dbSlimmingIncludeActiveDescription')}
           </span>
         </label>
@@ -962,7 +1012,7 @@ function DatabaseSlimmingSection({
           <span className="text-12 text-[var(--settings-section-sublabel)]">
             {t('settings.about.storage.dbSlimmingBackupLabel')}
           </span>
-          <span className="truncate text-11 text-[var(--settings-section-sublabel)] opacity-70">
+          <span className="truncate text-11 text-[var(--text-secondary)]">
             {backupDirectory.selected && backupDirectory.displayPath
               ? backupDirectory.displayPath
               : t('settings.about.storage.dbSlimmingBackupDefaultLocation')}
@@ -1034,7 +1084,7 @@ function DatabaseSlimmingSection({
         onConfirm={handleSchedule}
       />
 
-      <div className="grid grid-cols-[minmax(0,1fr)_auto] items-center gap-x-3 gap-y-2 rounded-lg border border-[var(--settings-theme-card-border)] px-3 py-2.5">
+      <div id="settings-search-settings-about-storage-dbSizeWarningThresholdLabel" className="grid grid-cols-[minmax(0,1fr)_auto] items-center gap-x-3 gap-y-2 rounded-lg border border-[var(--settings-theme-card-border)] px-3 py-2.5">
         <FormField
           id="db-size-warning-threshold"
           label={t('settings.about.storage.dbSizeWarningThresholdLabel')}
@@ -1074,10 +1124,10 @@ function DatabaseSlimmingSection({
           htmlFor="db-size-warning-disabled"
           className="flex min-w-0 cursor-pointer flex-col gap-0.5"
         >
-          <span className="text-12 text-[var(--settings-section-sublabel)]">
+          <span id="settings-search-settings-about-storage-dbSizeWarningDisableLabel" className="text-12 text-[var(--settings-section-sublabel)]">
             {t('settings.about.storage.dbSizeWarningDisableLabel')}
           </span>
-          <span className="text-11 leading-[1.4] text-[var(--settings-section-sublabel)] opacity-70">
+          <span className="text-11 leading-[1.4] text-[var(--text-secondary)]">
             {t('settings.about.storage.dbSizeWarningDisableDescription')}
           </span>
         </label>
@@ -1152,14 +1202,13 @@ function DatabaseCleanupDialog({
     >
       <AlertDialog.Portal>
         <AlertDialog.Overlay
-          className="fixed inset-0 z-[10020] bg-[var(--overlay-modal)]"
+          className="modal-scrim fixed inset-0 z-[10020]"
           style={{ ...WINDOW_DRAG_STYLE, zIndex: 10020 }}
         >
           <AlertDialog.Content
             className={cn(
-              'fixed inset-0 z-[10020] m-auto flex h-fit min-h-[180px] w-full max-w-[640px] flex-col',
-              'rounded-xl border border-[var(--settings-theme-card-border)]',
-              'bg-[var(--confirm-bg)] p-4 shadow-[var(--confirm-shadow)]',
+              'modal-panel fixed inset-0 z-[10020] m-auto flex h-fit min-h-[180px] w-full max-w-[640px] flex-col',
+              'p-4',
               mode === 'report' ? 'select-text' : 'select-none',
             )}
             style={{ ...WINDOW_NO_DRAG_STYLE, zIndex: 10020 }}
@@ -1224,7 +1273,7 @@ function DatabaseCleanupDialog({
                         {t('settings.about.storage.dbSlimmingInsufficientSpace')}
                       </p>
                     )}
-                    <p className="mt-2 text-12 leading-[1.5] text-[var(--settings-section-sublabel)] opacity-70">
+                    <p className="mt-2 text-12 leading-[1.5] text-[var(--text-secondary)]">
                       {backupEnabled
                         ? t('settings.about.storage.dbSlimmingConfirmDescriptionWithBackup')
                         : t('settings.about.storage.dbSlimmingConfirmDescriptionWithoutBackup')}
@@ -1232,33 +1281,22 @@ function DatabaseCleanupDialog({
                   </div>
                   <div className="mt-6 flex shrink-0 justify-end gap-2.5">
                     <AlertDialog.Cancel asChild>
-                      <button
-                        type="button"
-                        className={cn(
-                          'inline-flex min-w-[96px] items-center justify-center rounded-full border px-6 py-2.5 text-13 font-medium',
-                          'border-[var(--confirm-btn-secondary-border)] text-[var(--confirm-btn-secondary-text)]',
-                          'transition-colors hover:bg-[var(--confirm-btn-secondary-hover)]',
-                          'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]',
-                        )}
-                      >
+                      <Button variant="secondary" size="lg" type="button" className="min-w-[96px]">
                         {t('settings.about.storage.cancelButton')}
-                      </button>
+                      </Button>
                     </AlertDialog.Cancel>
-                    <button
+                    <Button
+                      variant="secondary"
+                      size="lg"
+                      tone="danger-solid"
                       ref={confirmButtonRef}
                       type="button"
                       disabled={insufficientSpace || scanned.messageCount === 0}
                       onClick={onConfirm}
-                      className={cn(
-                        'inline-flex min-w-[96px] items-center justify-center rounded-full px-6 py-2.5 text-13 font-medium',
-                        'bg-[hsl(var(--destructive))] text-[var(--accent-pure-cta-fg)]',
-                        'transition-colors hover:opacity-90',
-                        'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]',
-                        'disabled:cursor-not-allowed disabled:opacity-50',
-                      )}
+                      className="min-w-[96px]"
                     >
                       {t('settings.about.storage.dbSlimmingConfirmButton')}
-                    </button>
+                    </Button>
                   </div>
                 </>
               )
@@ -1289,21 +1327,16 @@ function CardButton({
   busy?: boolean;
 }) {
   return (
-    <button
+    <Button
+      variant={emphasis ? 'cta' : 'secondary'}
+      size="sm"
+      compact
       type="button"
       onClick={onClick}
       disabled={disabled}
       aria-busy={busy || undefined}
-      className={cn(
-        'inline-flex shrink-0 items-center gap-1.5 rounded-full px-2.5 py-1 text-12 font-medium transition-colors',
-        'border border-[var(--settings-theme-card-border)]',
-        'disabled:cursor-not-allowed disabled:opacity-50',
-        emphasis
-          ? 'bg-[var(--accent-cta-bg)] text-[var(--accent-pure-cta-fg)] border-transparent hover:opacity-90'
-          : 'text-[var(--settings-section-title)] hover:bg-[var(--settings-theme-card-border)]/40',
-      )}
     >
       {children}
-    </button>
+    </Button>
   );
 }

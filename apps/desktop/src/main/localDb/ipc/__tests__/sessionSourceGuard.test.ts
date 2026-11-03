@@ -19,16 +19,9 @@ describe('assertRendererSessionSourceAllowed', () => {
     ).not.toThrow();
   });
 
-  it('accepts the Cindy Make purpose only for a managed task worktree', () => {
-    expect(() =>
-      assertRendererSessionSourceAllowed({
-        source: 'cindy-make',
-        workingDir: worktree,
-        remoteHostId: null,
-        userData,
-      }),
-    ).not.toThrow();
+  it('rejects the Cindy Make purpose even for a managed task worktree while disabled', () => {
     for (const workingDir of [
+      worktree,
       checkout,
       'C:\\repo',
       undefined,
@@ -43,7 +36,7 @@ describe('assertRendererSessionSourceAllowed', () => {
           remoteHostId: null,
           userData,
         }),
-      ).toThrow(/\[INVALID_PARAMS\]/);
+      ).toThrow(/\[UNSUPPORTED_CAPABILITY\]/);
     }
   });
 

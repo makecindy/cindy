@@ -44,6 +44,8 @@ import { toast } from '@/lib/toast';
 import { extractIpcError } from '@/utils/ipcError';
 import { useAgentCapabilities, type AgentCapabilities } from '@/hooks/useAgentCapabilities';
 import { ModelSelector } from '@/components/new-chat/ModelSelector';
+import { useProviderShareAgentDevices } from '@/features/provider-share/useProviderShareAgentDevices';
+import { agentDeviceModelMemoryAccessors } from '@/state/agentDeviceModelMemory';
 import { PermissionSelector } from '@/components/new-chat/PermissionSelector';
 import type { MakerVendor } from '@/lib/ccAgent.types';
 import {
@@ -93,10 +95,11 @@ function toPrefsCaps(caps: AgentCapabilities | null): PrefsAgentCaps | null {
 export interface HookWorkspacePrefsState {
   /** 按别名查该目录偏好(无行返回全 null 缺省; multi-team 下按选中 team 过滤)。 */
   prefsFor: (alias: string) => HookWorkspacePrefs;
-  /** 该目录的模型来源偏好(纯本地; null = 未设置, 跟随默认路由)。 */
+  /** 目录显式来源优先，否则继承当前引擎的 IM 默认来源。 */
   providerSourceFor: (alias: string) => string | null;
+  agentDeviceFor: (alias: string) => string | null;
   /** 写/清该目录的模型来源偏好(providerId = null 清除)。 */
-  applyProviderSource: (alias: string, providerId: string | null) => void;
+  applyProviderSource: (alias: string, providerId: string | null, agentDeviceId?: string | null) => Promise<boolean>;
   /** 是否可编辑(已连接 + 已绑定 + 快照可用)。 */
   editable: boolean;
   /** 写入在途的目录别名(该卡片下拉禁用)。 */
@@ -114,6 +117,7 @@ export interface HookWorkspacePrefsState {
     workspace: string,
     patch: HookPrefsPatch,
     alsoProviderSource?: string | null,
+    agentDeviceId?: string | null,
   ) => Promise<boolean>;
   /** (multi-team)可用绑定清单(未 displaced); 单绑定/老 server 时 ≤1 条。 */
   teams: Array<{ teamId: string; teamName: string | null }>;
@@ -347,31 +351,37 @@ export function useHookWorkspacePrefs(
     [activePrefsView, multiTeam, selectedTeamId],
   );
 
-  // 目录来源偏好: teamId 精确匹配优先、null 行兜底 —— 与 prefsFor 同语义。
-  const providerSourceFor = useCallback(
-    (alias: string): string | null => {
-      const teamId = multiTeam ? selectedTeamId : null;
-      const match = (want: string | null) =>
-        providerSources.find(
-          (e) => e.channel === provider && e.teamId === want && e.workspace === alias,
-        )?.providerId ?? null;
-      return match(teamId) ?? (teamId !== null ? match(null) : null);
-    },
-    [providerSources, provider, multiTeam, selectedTeamId],
-  );
+  // 与派发端同口径：有目录来源时整组覆盖(缺省位置表示明确选本机)，
+  // 无目录来源才继承该引擎的默认来源及执行位置，不能逐字段混用。
+  const providerRouteFor = useCallback((alias: string) => {
+    const teamId = multiTeam ? selectedTeamId : null;
+    const entry = providerSources.find((e) => e.channel === provider && e.teamId === teamId && e.workspace === alias)
+      ?? providerSources.find((e) => e.channel === provider && e.teamId === null && e.workspace === alias);
+    if (entry) return entry;
+    const agentKind = prefsFor(alias).agentKind;
+    return imDefaults?.agents[isKnownAgent(agentKind) ? agentKind : imDefaults.agentKind] ?? null;
+  }, [providerSources, provider, multiTeam, selectedTeamId, prefsFor, imDefaults]);
+  const providerSourceFor = useCallback((alias: string): string | null =>
+    providerRouteFor(alias)?.providerId ?? null, [providerRouteFor]);
+  const agentDeviceFor = useCallback((alias: string): string | null =>
+    providerRouteFor(alias)?.agentDeviceId ?? null, [providerRouteFor]);
 
   const applyProviderSource = useCallback(
-    (alias: string, providerId: string | null) => {
+    (alias: string, providerId: string | null, agentDeviceId?: string | null) => {
       const teamId = multiTeam ? selectedTeamId : null;
       const revision = ++providerSourceRevisionRef.current;
-      void window.electronAPI.hookControl
-        .setWorkspaceProviderSource({ channel: provider, teamId, workspace: alias, providerId })
+      return window.electronAPI.hookControl
+        .setWorkspaceProviderSource({ channel: provider, teamId, workspace: alias, providerId,
+          ...(agentDeviceId !== undefined ? { agentDeviceId } : {}) })
         .then((res) => {
           if (revision === providerSourceRevisionRef.current) setProviderSources(res.entries);
+          return true;
         })
         .catch((err: unknown) => {
-          if (revision !== providerSourceRevisionRef.current) return;
-          toast.error(extractIpcError(err)?.message ?? t('settings.tina.prefs.toast.saveFailed'));
+          if (revision === providerSourceRevisionRef.current) {
+            toast.error(extractIpcError(err)?.message ?? t('settings.tina.prefs.toast.saveFailed'));
+          }
+          return false;
         });
     },
     [provider, multiTeam, selectedTeamId, t],
@@ -382,8 +392,8 @@ export function useHookWorkspacePrefs(
     // 两个持久面串联而非并行(Greptile/codex review: 并行 fire-and-forget 会在
     // 一半失败时留下「新来源配旧模型」的分裂态)。顺序选「先远端后本地」:远端
     // 失败 → 整体失败, 来源不动, 状态与操作前一致;本地失败(概率远小)→ 旧来源
-    // 配新模型, 派发端 effectiveSourceIdForModel 收窄兜底, 行为等于改前语义。
-    (workspace: string, patch: HookPrefsPatch, alsoProviderSource?: string | null) => {
+    // 配新模型, 派发端校验不通过时拒绝新任务并提示重新选择模型(显式来源不换账号)。
+    (workspace: string, patch: HookPrefsPatch, alsoProviderSource?: string | null, agentDeviceId?: string | null) => {
       // A server push, binding change, retry, or newer mutation must win over
       // this response. Otherwise a delayed set reply can roll the UI back to
       // an older provider snapshot and clear another mutation's pending state.
@@ -398,13 +408,13 @@ export function useHookWorkspacePrefs(
             multiTeam ? selectedTeamId : undefined,
           );
       return request
-        .then((res) => {
+        .then(async (res) => {
           // 来源落地在快照守卫**之前**(codex review): invoke 成功 = 远端已确认
           // 本次 (model, effort) 写入 —— 这一事实不因「更新的快照先到」而失效;
           // 守卫只管下方 UI 快照是否回填,若来源也被守卫跳过(prefs 回执经广播
           // 先到的正常时序), 会留下「新模型 + 旧来源」的持久分裂。
           if (alsoProviderSource !== undefined) {
-            applyProviderSource(workspace, alsoProviderSource);
+            if (!await applyProviderSource(workspace, alsoProviderSource, agentDeviceId)) return false;
           }
           if (revision !== fetchRevisionRef.current) return true;
           const nextPrefs: HookPrefsView | ProviderPrefsView = res.prefs;
@@ -456,6 +466,7 @@ export function useHookWorkspacePrefs(
   return {
     prefsFor,
     providerSourceFor,
+    agentDeviceFor,
     applyProviderSource,
     editable: Boolean(enabled) && bound && loadError === null,
     pendingWs,
@@ -505,9 +516,11 @@ export function WorkspacePrefsEditor({
   maxVisibleModelRows?: number;
 }) {
   const { t } = useTranslation();
-  const claudeCaps = useAgentCapabilities('claude-code');
-  const codexCaps = useAgentCapabilities('codex');
-  const piCaps = useAgentCapabilities('pi');
+  const agentDeviceId = state.agentDeviceFor(alias);
+  const sharedDevices = useProviderShareAgentDevices([agentDeviceId]);
+  const claudeCaps = useAgentCapabilities('claude-code', agentDeviceId ?? undefined);
+  const codexCaps = useAgentCapabilities('codex', agentDeviceId ?? undefined);
+  const piCaps = useAgentCapabilities('pi', agentDeviceId ?? undefined);
   const capsByAgent = useMemo(
     () =>
       ({
@@ -529,7 +542,7 @@ export function WorkspacePrefsEditor({
   const disabled = !state.editable || state.pendingWs === alias;
   const vendorKey = toVendorKey(eff.agentKind.id);
 
-  const pickerAgents = useModelPickerAgents(vendorKey === 'cc' ? 'claude-code' : vendorKey === 'pi' ? 'pi' : 'codex');
+  const pickerAgents = useModelPickerAgents(vendorKey === 'cc' ? 'claude-code' : vendorKey === 'pi' ? 'pi' : 'codex', agentDeviceId);
 
   /** 落一个模型选择(分段行与 flat 行共用): 随手写入 (agent, model) 配对并校准 effort。 */
   const applyModel = (next: string) => {
@@ -547,16 +560,19 @@ export function WorkspacePrefsEditor({
           订阅来源、推理强度全开。来源(providerId)是纯客户端维度, 落本地
           workspaceProviderSourceStore; model/effort 照旧走 server prefs 通道
           (Slack /model 卡展示不受影响)。派发侧按 (来源, 模型) 经
-          effectiveSourceIdForModel 收窄, 来源断开/不提供该模型时自动回落,
-          不会拼出不可能路由 —— 「选 A 落 B」的根因(选了来源没地方存)已消除。 */}
+          effectiveSourceIdForModel 校验: 显式来源失效时拒绝而不换账号; 目录模型
+          跟随默认时, 不提供该模型的残留来源被忽略(issue #5912), 不会拼出不可能
+          路由 —— 「选 A 落 B」的根因(选了来源没地方存)已消除。 */}
       <PrefsField label={t('settings.tina.prefs.modelLabel')} className="flex-1 basis-[220px]">
         <ModelSelector
+          remoteAgent={{ devices: sharedDevices.devices, selectedDeviceId: agentDeviceId }}
           fastModeConfigurable={false}
           unifiedAgents={pickerAgents}
-          onUnifiedSelect={({ engine, modelId, providerId, effort }) => state.applyPatch(
+          onUnifiedSelect={({ engine, modelId, providerId, effort, agentDevice }) => state.applyPatch(
             alias,
             { agentKind: engine === 'cc' ? 'claude-code' : engine, model: modelId, effort: effort || null },
             providerId,
+            agentDevice?.deviceId ?? null,
           )}
           modelId={eff.model.id ?? ''}
           effort={eff.effort.id ?? ''}
@@ -579,7 +595,7 @@ export function WorkspacePrefsEditor({
           // (PrefsSelect 的 modelLabel 回落裸 id)行为一致; 派发侧另有回落并记日志。
           unknownModelLabel={(id) => id}
           // 非选中行 hover 配置(推理强度/Fast)与 composer 共用同一份模型级全局预设。
-          modelMemory={{
+          modelMemory={agentDeviceId ? agentDeviceModelMemoryAccessors(agentDeviceId) : {
             getEffort: getProviderModelEffort,
             setEffort: setProviderModelEffort,
             setChoice: setProviderModelChoice,
@@ -609,9 +625,9 @@ export function WorkspacePrefsEditor({
                   patch.effort = remembered;
                 }
               }
-              return state.applyPatch(alias, patch, providerId);
+              return state.applyPatch(alias, patch, providerId, agentDeviceId);
             } else {
-              state.applyProviderSource(alias, providerId);
+              void state.applyProviderSource(alias, providerId, agentDeviceId);
             }
           }}
           onModelChange={applyModel}

@@ -11,6 +11,7 @@
  * `@/lib/fileTypes` 的现存 import 不用改。
  */
 
+import type { AnnotationRegion } from '@cindy/maker-shared/image-annotation';
 import {
   SUPPORTED_TEXT_EXTS,
   COMPOUND_EXTS,
@@ -100,19 +101,39 @@ export interface AttachedFile {
    */
   annotated?: boolean;
   /**
-   * 非破坏性标注:未烧录**原图**的 xdt-image:// 缓存 url。`annotated` 为真时
-   * 存在;托盘预览用它(而非烧录位图)+ `annotationStrokes` 矢量叠加显示,
-   * 使标注可继续编辑 / 撤销。仅编辑期数据,不进 SerializedAttachedFile。
+   * 底图像素本身已含烧录的标注红线(历史标注图的未烧录原图已被清理,退回烧录图
+   * 继续使用 / 编辑时)。仅 renderer 内使用、不上 wire:序列化时并入 `annotated`,
+   * 让模型照常收到"红色笔迹是用户标注"的说明;旧红线位置已不可知,故不带
+   * `annotationRegions`(与 mobile 的 baseAnnotated 同一规则)。
+   */
+  baseAnnotated?: boolean;
+  /**
+   * 非破坏性标注:发送物化(烧录)后才存在——`url` 已是烧录位图,这里记录未烧录
+   * **原图**的缓存 url(xdt-image:// / cindy-media://),随消息持久化进 ImageRef,
+   * 供历史图"再编辑"还原成"原图 + 矢量笔迹"。托盘(编辑期)附件不设本字段:
+   * 其 `url` 本身就是原图,缩略图 / 预览直接以 `url` + `annotationStrokes` 矢量叠加。
+   * 不进 SerializedAttachedFile(wire 只带 `annotated` 与 `annotationRegions`)。
    */
   annotationSourceUrl?: string;
   /** 非破坏性标注:归一化笔迹(0..1 相对原图自然尺寸)。托盘期唯一事实源;
    *  发送时据此烧录位图,烧录前的原图 url 记入 annotationSourceUrl。 */
   annotationStrokes?: ImageAnnotationStroke[];
   /**
+   * 烧录时由笔迹归纳出的标注区域(归一化外接框,见 summarizeAnnotationRegions)。
+   * 只在 `annotated` 附件上存在,随 wire 透传给 buildMakerUserMessage 生成
+   * "每张图圈在哪"的隐藏说明;remote 会话剥离笔迹时仍保留。
+   */
+  annotationRegions?: AnnotationRegion[];
+  /**
    * url 指向的缓存文件是**共享引用**(如历史消息的原图),不归本附件所有:
    * 删除附件时不清理该文件。缺省(false)为附件私有,删除时照常清理。
    */
   cacheUrlShared?: boolean;
+  /**
+   * `path` points at a staged copy owned by another durable surface. Removing
+   * this draft attachment must not delete that shared staged file.
+   */
+  stagedPathShared?: boolean;
   /**
    * @deprecated image-local-cache removed blob-URL thumbnails. Setting this
    * is now a compile error so any leftover code path surfaces immediately.
@@ -165,6 +186,8 @@ export interface SerializedAttachedFile {
   truncated?: boolean;
   /** 图片带用户手绘标注,见 {@link AttachedFile.annotated}。 */
   annotated?: boolean;
+  /** 标注区域(可选、向后兼容),见 {@link AttachedFile.annotationRegions}。 */
+  annotationRegions?: AnnotationRegion[];
 }
 
 export interface MentionedResource {

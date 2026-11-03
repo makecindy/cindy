@@ -251,7 +251,18 @@ export function classifyInlineCodePathCandidate(text: string): ChatPathCandidate
  * looksLikeFilePath 必然为真 → 恒非歧义,能力不受影响(有用例钉住)。
  */
 export function classifyChatPathLinkTarget(url: string): ChatPathCandidate | null {
-  const raw = url.trim();
+  let raw = url.trim();
+  if (/^xdt-file:\/\//i.test(raw)) {
+    try {
+      // Parse triple-slash spelling directly: Electron's standard-scheme URL parser can
+      // incorrectly treat the first path component as a hostname.
+      raw = /^xdt-file:\/\/\//i.test(raw)
+        ? decodeURIComponent(raw.slice('xdt-file://'.length).split(/[?#]/, 1)[0])
+        : new URL(raw).searchParams.get('path') ?? '';
+      if (/^\/[A-Za-z]:[\\/]/.test(raw)) raw = raw.slice(1);
+      if (!isAbsolutePathShape(raw) || /[\0\r\n]/.test(raw)) return null;
+    } catch { return null; }
+  }
   if (!raw || raw.includes('\n')) return null;
   if (/^https?:\/\//i.test(raw)) return null;
   if (raw.startsWith('#')) return null;
@@ -581,7 +592,12 @@ export interface BareFilePathMatch {
  * 候选 ≠ 点亮:`16/9.0`、`a/b.c` 这类形状达标的误命中同样返回,存在性由远端
  * stat(remotePathVerdict)兜底,解析不到就保持纯文本。
  */
-export function findBareFilePathMatch(input: string, from: number): BareFilePathMatch | null {
+export function findBareFilePathMatch(
+  input: string,
+  from: number,
+  // Optional paragraph-local exec cache, bound to this exact immutable input.
+  search?: (regex: RegExp) => RegExpExecArray | null,
+): BareFilePathMatch | null {
   // 不含任何路径分隔符的文本一定不是带分隔符路径。这条短路在渲染热路径上逐 token
   // 生效(见 messageMarkdown.findNextInlineToken),不能省。
   if (!input.includes('/') && !input.includes('\\')) return null;
@@ -590,7 +606,7 @@ export function findBareFilePathMatch(input: string, from: number): BareFilePath
   const re = new RegExp(BARE_PATH_RE_SOURCE, 'g');
   re.lastIndex = Math.max(0, from);
   let m: RegExpExecArray | null;
-  while ((m = re.exec(input)) !== null) {
+  while ((m = search ? search(re) : re.exec(input)) !== null) {
     const value = m[1];
     if (!looksLikeFilePath(splitChatPathLineSuffix(value).href)) continue;
     const index = m.index + (m[0].length - value.length);

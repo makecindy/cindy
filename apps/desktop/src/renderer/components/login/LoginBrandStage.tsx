@@ -24,8 +24,9 @@ import { useViewportSize } from './LoginStage';
  * LoginBrandStage — 品牌视觉层唯一渲染者(implementation-plan Step 3b WHAT2)。
  *
  * 所有权契约(v6.12 冻结;暗色实现 PR 起画布随 light/dark 二态):
- * - 唯一渲染登录画布背景(不透明纯平底,亮 #EDEDED / 暗 #1F1F1E 经 --login-bg-base
- *   二态;2026-07-22 用户拍板对齐 PR #104 撤 wave4 双红渐变,暗色沿用纯平口径)
+ * - 唯一渲染登录画布背景(不透明纯平底,亮 #F2F2ED / 暗 #181818 经 --login-bg-base
+ *   二态,与登录后 CINDY 皮肤页底同色;2026-07-22 用户拍板对齐 PR #104 撤 wave4
+ *   双红渐变,暗色沿用纯平口径)
  *   与品牌三要素(立绘/字标/Slogan);输入面板与圆钮行归 LoginPage,绝不在此重复。
  *   暗色画布用白字版字标/SLOGAN 资产(figma 532:585),立绘两模式同资产。
  * - overlay `pointer-events: none`,不拦截 hit-test;仅主窗挂载(App.tsx 与 Splash
@@ -119,7 +120,7 @@ export function LoginBrandStage() {
       data-testid="login-stage-root"
       className="pointer-events-none fixed inset-0 z-[9980] overflow-hidden"
     >
-      {/* 静态背景子层:纯平底(--login-bg-base 二态,亮 #EDEDED / 暗 #1F1F1E;
+      {/* 静态背景子层:纯平底(--login-bg-base 二态,亮 #F2F2ED / 暗 #181818;
           PR #104 撤渐变口径),viewport 锚定铺满,不参与 handoff 变换(v6.12 分层冻结) */}
       <div
         aria-hidden

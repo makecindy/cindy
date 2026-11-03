@@ -52,6 +52,7 @@ interface BuildMobileStreamingRenderWindowInput {
     autoResumePending?: Record<string, unknown> | null;
     preserveSourceOrder?: boolean;
     sessionId?: string;
+    sessionSource?: string | null;
   };
   prefixCache?: MobileStreamingRenderPrefixCacheRef;
   previousPrefix?: MobileStreamingRenderPrefixCache | null;

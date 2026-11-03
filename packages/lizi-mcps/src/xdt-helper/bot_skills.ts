@@ -20,11 +20,16 @@ export interface BotSkillSummaryWire {
   name: string;
   description: string;
   updatedAt: string;
+  filePath?: string;
+  bodyStartLine?: number;
+  enabled?: boolean;
 }
 
 export interface BotSkillCallbacks {
   save(params: {
     callerSessionId: string;
+    /** 当前运行实例;IM 专线上 host 据此读逐轮渠道作用域判定「是不是主人触发的轮次」。 */
+    callerSessionInstanceId?: string;
     name: string;
     description: string;
     body: string;
@@ -37,7 +42,11 @@ export interface BotSkillCallbacks {
   >;
   list(params: {
     callerSessionId: string;
-  }): Promise<ControlResult<{ skills: BotSkillSummaryWire[] }, string>>;
+    callerSessionInstanceId?: string;
+    query?: string;
+    offset?: number;
+    limit?: number;
+  }): Promise<ControlResult<{ skills: BotSkillSummaryWire[]; total?: number; nextOffset?: number }, string>>;
 }
 
 export interface BotSkillToolDeps {
@@ -47,6 +56,11 @@ export interface BotSkillToolDeps {
 
 function callerSessionId(deps: BotSkillToolDeps): string | null {
   return deps.getSessionContext().sessionId ?? null;
+}
+
+function callerSessionInstanceId(deps: BotSkillToolDeps): { callerSessionInstanceId: string } | Record<never, never> {
+  const instanceId = deps.getSessionContext().sessionInstanceId;
+  return instanceId ? { callerSessionInstanceId: instanceId } : {};
 }
 
 function missingSession() {
@@ -61,7 +75,8 @@ export function registerBotSkillTools(
     name: 'save_teammate_skill',
     category: 'bots',
     description:
-      '把刚做完的一类任务的可复用做法,存成当前伙伴自己的一个技能(真技能文件,不是记忆分片)。'
+      '用户明确要求把一套做法记成技能、或纠正已有技能时,存成 / 更新当前伙伴自己的一个技能(真技能文件,不是记忆分片)。'
+      + '其他时候不在对话里新建技能,宿主的夜间学习会把反复出现的做法整理成技能。'
       + '同名技能会被原地更新 —— 发现更好的做法就用同一个 name 再存一次。'
       + 'body 写成可照做的步骤,不要写这一次的具体结论。'
       + '需要当前运行位置支持伙伴自有 Skill 存储；远端未挂载时返回不可用，不会代写本机，也不能声称已保存或生效。'
@@ -90,6 +105,7 @@ export function registerBotSkillTools(
       if (!sessionId) return missingSession();
       const result = await deps.callbacks.save({
         callerSessionId: sessionId,
+        ...callerSessionInstanceId(deps),
         name,
         description,
         body,
@@ -106,15 +122,29 @@ export function registerBotSkillTools(
     category: 'bots',
     description:
       '列出当前伙伴已经学会的技能(名称 / 说明 / 更新时间,不含正文)。'
+      + '按 query 搜索完整名称和说明；返回短预览和原文件路径。大目录分页返回，使用 nextOffset 继续，不能把第一页当成全部。'
+      + '需要使用时从 filePath 的 bodyStartLine 开始分段读正文，资源相对路径以原文件目录为准；enabled=false 的技能保留但未启用。'
       + '需要当前运行位置支持伙伴自有 Skill 存储；远端未挂载时返回不可用，不把本机技能表冒充远端可用技能。'
       + '打算沉淀新技能前先看一眼:已经有的就用同名更新,不要重复学一遍。',
-    inputShape: {},
-    handler: async () => {
+    inputShape: {
+      query: z.string().max(1024).optional().describe('名称或说明中的关键词，空白分隔的词均须匹配'),
+      offset: z.number().int().min(0).optional().describe('上一页返回的 nextOffset'),
+      limit: z.number().int().min(1).max(50).optional().describe('每页最多条数，默认 20；宿主同时限制响应大小'),
+    },
+    handler: async ({ query, offset, limit }) => {
       const sessionId = callerSessionId(deps);
       if (!sessionId) return missingSession();
-      const result = await deps.callbacks.list({ callerSessionId: sessionId });
+      const result = await deps.callbacks.list({ callerSessionId: sessionId,
+        ...callerSessionInstanceId(deps),
+        ...(query !== undefined ? { query } : {}),
+        ...(offset !== undefined ? { offset } : {}),
+        ...(limit !== undefined ? { limit } : {}),
+      });
       return result.ok
-        ? okPayload({ skills: result.skills })
+        ? okPayload({ skills: result.skills,
+          ...(result.total !== undefined ? { total: result.total } : {}),
+          ...(result.nextOffset !== undefined ? { nextOffset: result.nextOffset } : {}),
+        })
         : errorPayload(result.errorCode, result.message);
     },
   });

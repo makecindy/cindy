@@ -5,12 +5,14 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import { promisify } from 'node:util';
 import type { RemoteDesktopDisplay } from '@cindy/device-link';
+import { createLinuxViewerDisplay, supportsLinuxViewerDisplay } from './linuxViewerDisplay';
 
 const exec = promisify(execFile);
 let build: Promise<string> | undefined;
 
 /** Prototype only: SPI is not shipped until supported OS/signing tests are complete. */
 export async function viewerDisplaySupported(): Promise<boolean> {
+  if (process.platform === 'linux') return supportsLinuxViewerDisplay();
   try {
     await binary();
     return true;
@@ -79,12 +81,43 @@ export interface ViewerDisplayHandle {
   dispose(): void;
 }
 
+/** CoreGraphics completion precedes Electron's display projection. */
+export async function waitForDisplayRestore(
+  displayId: string,
+  expected: { width: number; height: number } | undefined,
+  requireCurrent: () => void,
+  released: (displays: Electron.Display[]) => boolean = () => true,
+): Promise<RemoteDesktopDisplay> {
+  for (let attempt = 0; attempt < 100; attempt++) {
+    requireCurrent();
+    const displays = screen.getAllDisplays();
+    const display = displays.find((item) => String(item.id) === displayId);
+    // An unplugged source has no remaining geometry to restore.
+    if (
+      released(displays) &&
+      (!display ||
+        !expected ||
+        (display.size.width === expected.width && display.size.height === expected.height))
+    )
+      return {
+        id: displayId,
+        name: display?.label || 'Display',
+        width: display?.size.width || expected?.width || 0,
+        height: display?.size.height || expected?.height || 0,
+      };
+    await new Promise((resolve) => setTimeout(resolve, 50));
+  }
+  throw new Error('DESKTOP_VIEWER_DISPLAY_UNAVAILABLE');
+}
+
 /** The helper owns one temporary mirror, never a global persistent display preference. */
 export async function createViewerDisplay(
   sourceDisplayId: string,
   isCurrent: () => boolean,
   onFailure: () => void,
 ): Promise<ViewerDisplayHandle> {
+  if (process.platform === 'linux')
+    return createLinuxViewerDisplay(sourceDisplayId, isCurrent, onFailure);
   const executable = await binary();
   if (!isCurrent()) throw new Error('DESKTOP_LEASE_EXPIRED');
   const child: ChildProcessWithoutNullStreams = spawn(executable, [], { stdio: 'pipe' });
@@ -110,9 +143,10 @@ export async function createViewerDisplay(
     },
     async resize(width, height, current) {
       if (closed || !current()) throw new Error('DESKTOP_LEASE_EXPIRED');
-      const result = await new Promise<{ id: number }>((resolve, reject) => {
+      type DisplayReply = { id: number; logicalWidth: number; logicalHeight: number };
+      const result = await new Promise<DisplayReply>((resolve, reject) => {
         let text = '';
-        const finish = (error?: Error, value?: { id: number }) => {
+        const finish = (error?: Error, value?: DisplayReply) => {
           clearTimeout(timer);
           child.stdout.off('data', receive);
           child.off('exit', exited);
@@ -130,7 +164,15 @@ export async function createViewerDisplay(
               !Number.isSafeInteger(value.id) ||
               value.id <= 0 ||
               value.width !== width ||
-              value.height !== height
+              value.height !== height ||
+              !Number.isSafeInteger(value.logicalWidth) ||
+              value.logicalWidth <= 0 ||
+              value.logicalWidth > 4096 ||
+              !Number.isSafeInteger(value.logicalHeight) ||
+              value.logicalHeight <= 0 ||
+              value.logicalHeight > 4096 ||
+              Math.abs(value.logicalWidth * height - value.logicalHeight * width) >
+                Math.max(width, height)
             )
               return exited();
             finish(undefined, value);
@@ -149,12 +191,15 @@ export async function createViewerDisplay(
       for (let attempt = 0; attempt < 40; attempt++) {
         if (closed || !current()) throw new Error('DESKTOP_LEASE_EXPIRED');
         const actual = screen.getAllDisplays().find((d) => d.id === result.id);
-        if (actual?.size.width === width && actual.size.height === height)
+        if (
+          actual?.size.width === result.logicalWidth &&
+          actual.size.height === result.logicalHeight
+        )
           return {
             id: String(actual.id),
             name: actual.label || 'Cindy Remote Desktop',
-            width,
-            height,
+            width: actual.size.width,
+            height: actual.size.height,
           };
         await new Promise((resolve) => setTimeout(resolve, 50));
       }
@@ -162,30 +207,14 @@ export async function createViewerDisplay(
     },
     async restore(this: ViewerDisplayHandle, current) {
       this.dispose();
-      for (let attempt = 0; attempt < 100; attempt++) {
-        if (!current()) throw new Error('DESKTOP_LEASE_EXPIRED');
-        const displays = screen.getAllDisplays();
-        const display = displays.find((item) => String(item.id) === sourceDisplayId);
-        if (
-          exited &&
-          !displays.some((item) => item.id === virtualDisplayId) &&
-          // If the source was unplugged, virtual-display cleanup is the only
-          // restoration that remains possible; retire the handle so another
-          // monitor can be selected on the next lease.
-          (!display ||
-            !original ||
-            (display.size.width === original.size.width &&
-              display.size.height === original.size.height))
-        )
-          return {
-            id: sourceDisplayId,
-            name: display?.label || original?.label || 'Display',
-            width: display?.size.width || original?.size.width || 0,
-            height: display?.size.height || original?.size.height || 0,
-          };
-        await new Promise((resolve) => setTimeout(resolve, 50));
-      }
-      throw new Error('DESKTOP_VIEWER_DISPLAY_UNAVAILABLE');
+      return waitForDisplayRestore(
+        sourceDisplayId,
+        original?.size,
+        () => {
+          if (!current()) throw new Error('DESKTOP_LEASE_EXPIRED');
+        },
+        (displays) => exited && !displays.some((item) => item.id === virtualDisplayId),
+      );
     },
     dispose() {
       if (closed) return;

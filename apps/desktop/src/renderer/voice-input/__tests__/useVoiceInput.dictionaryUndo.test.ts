@@ -42,6 +42,7 @@ vi.mock('../eventScope', () => ({
 }));
 
 import { useVoiceInput } from '../useVoiceInput';
+import { createVoiceInputDraftPlugin } from '@/components/new-chat/VoiceInputDraftDecoration';
 
 const baseline = '使用 Cloud Code。';
 const schema = new Schema({
@@ -52,7 +53,7 @@ const schema = new Schema({
   },
 });
 
-function mountDictation() {
+function mountDictation(rawTranscriptText?: string) {
   let onEvent!: (event: VoiceInputRendererEvent) => void;
   vi.stubGlobal('electronAPI', {
     voiceInput: {
@@ -63,10 +64,26 @@ function mountDictation() {
       cancel: vi.fn().mockResolvedValue({ ok: true }),
     },
   });
-  let state = EditorState.create({ doc: schema.node('doc', null, [schema.node('paragraph')]) });
+  const draftPlugin = createVoiceInputDraftPlugin();
+  let state = EditorState.create({
+    doc: schema.node('doc', null, [schema.node('paragraph')]),
+    plugins: [draftPlugin],
+  });
+  state = state.apply(
+    state.tr.setMeta('voiceInputDraftDecoration', {
+      text: baseline,
+      source: 'stable',
+      from: 1,
+      to: 1,
+      anchorLocked: true,
+      caretState: 'processing',
+    }),
+  );
   const listeners = new Set<(payload: { transaction: Transaction }) => void>();
+  const visibleTexts: string[] = [];
   const dispatch = (transaction: Transaction) => {
     state = state.apply(transaction);
+    visibleTexts.push(state.doc.textContent + (draftPlugin.getState(state)?.text ?? ''));
     listeners.forEach((listener) => listener({ transaction }));
   };
   // Real ProseMirror documents, steps and mappings; only the editor view is stubbed.
@@ -98,6 +115,7 @@ function mountDictation() {
         source: 'mic',
         status: 'submitted',
         text: baseline,
+        basedOnText: rawTranscriptText,
         updatedAt: Date.now(),
       },
     }),
@@ -105,6 +123,40 @@ function mountDictation() {
   expect(state.doc.textContent).toBe(baseline);
 
   return {
+    visibleTexts,
+    acceptRefinement() {
+      state = state.apply(
+        state.tr.setMeta('voiceInputDraftDecoration', {
+          text: baseline,
+          source: 'refinement',
+          from: 1,
+          to: baseline.length + 1,
+          anchorLocked: true,
+          caretState: 'processing',
+        }),
+      );
+      act(() =>
+        onEvent({
+          type: 'refined',
+          runId: 'run',
+          text: baseline,
+          segment: {
+            id: 'segment',
+            source: 'mic',
+            status: 'refined',
+            text: baseline,
+            updatedAt: Date.now(),
+          },
+          range: {
+            id: 'range',
+            segmentIds: ['segment'],
+            startOffset: 0,
+            endOffset: baseline.length,
+            userTouched: false,
+          },
+        }),
+      );
+    },
     unmount: hook.unmount,
     correct(replacement = 'Claude') {
       const transaction = state.tr.insertText(replacement, 4, 9);
@@ -136,6 +188,23 @@ afterEach(() => {
 });
 
 describe('in-app dictionary learning after undo', () => {
+  it('keeps pre-refined text visible on confirmation and retains the raw source for learning', () => {
+    const raw = '呃使用 cloud code。';
+    const dictation = mountDictation(raw);
+    dictation.acceptRefinement();
+    expect(dictation.visibleTexts.length).toBeGreaterThan(0);
+    expect(dictation.visibleTexts.every((text) => text === baseline)).toBe(true);
+    dictation.correct('Codex');
+    act(() => vi.advanceTimersByTime(15_000));
+    expect(mocks.advise).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({
+        beforeText: baseline,
+        rawTranscriptText: raw,
+        afterText: '使用 Codex Code。',
+      }),
+    );
+    dictation.unmount();
+  });
   describe.each(['unchanged', 'undone correction'] as const)('clearing %s dictation', (source) => {
     it.each(['clear', 'unmount', 'timeout'] as const)(
       'does not learn unrelated new input on %s',

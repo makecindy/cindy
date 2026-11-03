@@ -5,9 +5,11 @@ import { useTranslation } from 'react-i18next';
 import type { ConversationSearchJump } from '../../../shared/conversationSearchJump';
 import type { ConversationSearchResponse } from '../../../shared/conversationSearch';
 import type { BotProfile } from './botStore';
-import { runBotLifecycleAction } from './botStore';
+import { useBotSettingsTarget } from './useBotSettingsTarget';
 import { Button } from '@/components/ui/button';
+import { Input } from '@/components/ui/input';
 import { BotDeleteDialog } from './BotDeleteDialog';
+import { withoutBotHiddenLanes } from './botGroupLane';
 
 /**
  * User-facing Bot management only. Health counters, delivery queues, Routes and
@@ -28,6 +30,7 @@ export function BotLifecycleSettings({
   onOpenSession: (sessionId: string, searchJump?: ConversationSearchJump) => void;
 }) {
   const { t } = useTranslation();
+  const target = useBotSettingsTarget();
   const [deleting, setDeleting] = useState(false);
   const [query, setQuery] = useState('');
   const [searching, setSearching] = useState(false);
@@ -38,7 +41,8 @@ export function BotLifecycleSettings({
   const [restarted, setRestarted] = useState(false);
   const actionInFlight = useRef(false);
 
-  const archivedSessions = bot.sessions
+  // 群专线 / IM 专线即使被归档，也不是这位伙伴自己的历史任务。
+  const archivedSessions = withoutBotHiddenLanes(bot.sessions)
     .filter((item) => item.kind === 'history')
     .sort((a, b) => b.updatedAt - a.updatedAt);
   const isPaused = bot.status === 'paused';
@@ -52,7 +56,7 @@ export function BotLifecycleSettings({
     setActionError(false);
     try {
       if (beforeAction && !(await beforeAction())) return;
-      await runBotLifecycleAction({ botId: bot.id, action });
+      await target.lifecycle.run({ botId: bot.id, action });
       setRestarted(action === 'restart');
     } catch {
       setActionError(true);
@@ -85,7 +89,7 @@ export function BotLifecycleSettings({
     setSearchError(false);
     try {
       setSearchResult(
-        await window.electronAPI.localDb.bots.searchHistory({
+        await target.history.search({
           botId: bot.id,
           query: trimmed,
           limit: 20,
@@ -141,15 +145,6 @@ export function BotLifecycleSettings({
               {t('bots.lifecycle.deleteTitle')}
             </button>
           </div>
-          <p className="mt-2 px-3 text-12 leading-5 text-[var(--text-secondary)]">
-            {t(
-              isPaused
-                ? 'bots.lifecycle.pausedDescription'
-                : isArchived
-                  ? 'bots.lifecycle.stoppedDescription'
-                  : 'bots.lifecycle.restartDescription',
-            )}
-          </p>
           {restarted ? (
             <p className="mt-3 text-12 text-[var(--text-secondary)]" role="status">
               {t('bots.lifecycle.restarted')}
@@ -173,9 +168,6 @@ export function BotLifecycleSettings({
       {mode !== 'actions' ? (
         <>
           <div className="px-3 pt-3">
-            <p className="mt-1 text-11 leading-5 text-[var(--text-tertiary)]">
-              {t('bots.historySearch.description')}
-            </p>
             <form
               className="mt-3 flex gap-2"
               onSubmit={(event) => {
@@ -183,12 +175,13 @@ export function BotLifecycleSettings({
                 void searchHistory();
               }}
             >
-              <input
-                aria-label={t('bots.historySearch.title')}
+              <Input
+                size="md"
+                ariaLabel={t('bots.historySearch.title')}
                 value={query}
-                onChange={(event) => setQuery(event.target.value)}
-                placeholder={t('bots.historySearch.placeholder')}
-                className="h-9 min-w-0 flex-1 rounded-full border border-[var(--border-default)] bg-[var(--surface)] px-3 text-12 text-[var(--text-primary)] outline-none focus:ring-2 focus:ring-[var(--focus-ring-soft)]"
+                onChange={setQuery}
+                placeholder={t('bots.historySearch.search')}
+                className="min-w-0 flex-1"
               />
               <Button
                 type="submit"

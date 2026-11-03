@@ -41,6 +41,93 @@ function fixture() {
 }
 
 describe('viewer-sized desktop ownership', () => {
+  it.each(['viewerDisplay', 'restoreViewerDisplay'] as const)(
+    'revokes old safety effects and pending privacy initialization during %s',
+    async (op) => {
+      const f = fixture();
+      const { lease } = await f.start();
+      if (op === 'restoreViewerDisplay') {
+        await f.host.request('phone', { op: 'viewerDisplay', lease, width: 900, height: 1600 });
+        await f.host.request('phone', { op: 'control', lease, enabled: true });
+      }
+      let ready!: () => void;
+      f.deps.privacyScreen = vi.fn(
+        () =>
+          new Promise<void>((resolve) => {
+            ready = resolve;
+          }),
+      );
+      f.deps.stopPrivacyScreen = vi.fn();
+      f.deps.hostMute = vi.fn(async () => {});
+      f.deps.stopHostMute = vi.fn(async () => {});
+      f.deps.clipboardVersion = vi.fn(async () => 'old');
+      await f.host.request('phone', { op: 'hostMute', lease, enabled: true });
+      await f.host.request('phone', { op: 'clipboardSync', lease, enabled: true });
+      const privacy = f.host.request('phone', { op: 'privacyScreen', lease, enabled: true });
+      const rejected = expect(privacy).rejects.toThrow('DESKTOP_LEASE_EXPIRED');
+      await f.host.request('phone', { op, lease, width: 900, height: 1600 });
+      expect(f.deps.stopPrivacyScreen).toHaveBeenCalledOnce();
+      expect(f.deps.stopHostMute).toHaveBeenCalledOnce();
+      ready();
+      await rejected;
+      await f.host.request('phone', { op: 'control', lease, enabled: true });
+      await expect(f.host.request('phone', { op: 'clipboardVersion', lease })).rejects.toThrow(
+        'DESKTOP_CLIPBOARD_UNAVAILABLE',
+      );
+    },
+  );
+  it('does not release input or create a display after disconnect during safety restoration', async () => {
+    const f = fixture();
+    const { lease } = await f.start();
+    let restore!: () => void;
+    const restoration = new Promise<void>((resolve) => {
+      restore = resolve;
+    });
+    f.deps.stopHostMute = vi.fn(() => restoration);
+    f.deps.releaseInput = vi.fn(async () => {});
+    const pending = f.host.request('phone', {
+      op: 'viewerDisplay',
+      lease,
+      width: 900,
+      height: 1600,
+    });
+    const rejected = expect(pending).rejects.toThrow('DESKTOP_LEASE_EXPIRED');
+    f.host.stop('phone');
+    restore();
+    await rejected;
+    expect(f.deps.releaseInput).not.toHaveBeenCalled();
+    expect(f.deps.createViewerDisplay).not.toHaveBeenCalled();
+  });
+  it.each(['stop', 'restoreViewerDisplay'] as const)(
+    'restores the original system mode after switching from a system mode to fit on %s',
+    async (ending) => {
+      const f = fixture();
+      let modeId = '10';
+      f.deps.displayModes = async () => [
+        { id: '10', width: 1920, height: 1080, current: modeId === '10' },
+        { id: '20', width: 3840, height: 2160, current: modeId === '20' },
+      ];
+      f.deps.resolution = vi.fn(async (_display, mode, before) => {
+        before();
+        modeId = mode;
+      });
+      vi.mocked(f.handle.restore!).mockResolvedValue({
+        id: '1',
+        name: 'Main',
+        width: 3840,
+        height: 2160,
+      });
+      const { lease } = await f.start();
+      await f.host.request('phone', { op: 'resolution', lease, modeId: '20', temporary: true });
+      await f.host.request('phone', { op: 'control', lease, enabled: true });
+      await f.host.request('phone', { op: 'viewerDisplay', lease, width: 900, height: 1600 });
+      await f.host.request('phone', { op: 'control', lease, enabled: true });
+      const result = await f.host.request('phone', { op: ending, lease });
+      if (ending === 'stop') await f.start();
+      else expect(result).toMatchObject({ display: { width: 1920, height: 1080 } });
+      expect(modeId).toBe('10');
+    },
+  );
   it('hides the helper display during and across stopped-lease restoration', async () => {
     const f = fixture();
     const lease = await f.start();
@@ -243,6 +330,7 @@ describe('viewer-sized desktop ownership', () => {
       height: 1600,
     });
     expect(f.deps.createViewerDisplay).not.toHaveBeenCalled();
+    await vi.waitFor(() => expect(release).toBeTypeOf('function'));
     f.host.stop('phone');
     release();
     await expect(pending).rejects.toThrow('DESKTOP_LEASE_EXPIRED');
@@ -261,6 +349,7 @@ describe('viewer-sized desktop ownership', () => {
       lease: lease.lease,
       display: { id: '2', name: 'Viewer', width: 900, height: 1600 },
       controlling: false,
+      viewerDisplayRequest: { width: 900, height: 1600 },
     });
     expect(f.host.hasLease(lease.lease)).toBe(true);
     await expect(
@@ -342,6 +431,7 @@ describe('viewer-sized desktop ownership', () => {
       width: 900,
       height: 1600,
     });
+    await vi.waitFor(() => expect(resolve).toBeTypeOf('function'));
     f.host.stop('phone');
     resolve(f.handle);
     await expect(pending).rejects.toThrow('DESKTOP_LEASE_EXPIRED');
@@ -393,4 +483,59 @@ describe('viewer-sized desktop ownership', () => {
     expect(f.handle.dispose).toHaveBeenCalledOnce();
     expect(f.host.state).toBeNull();
   });
+});
+
+it('acknowledges requested dimensions separately from actual host geometry', async () => {
+  const f = fixture();
+  const { lease } = await f.start();
+  vi.mocked(f.handle.resize).mockResolvedValue({
+    id: '2',
+    name: 'Viewer',
+    width: 960,
+    height: 710,
+  });
+  await expect(
+    f.host.request('phone', { op: 'viewerDisplay', lease, width: 1920, height: 1420 }),
+  ).resolves.toEqual({
+    lease,
+    controlling: false,
+    display: { id: '2', name: 'Viewer', width: 960, height: 710 },
+    viewerDisplayRequest: { width: 1920, height: 1420 },
+  });
+  expect(f.host.hasLease(lease)).toBe(true);
+  await f.host.request('phone', { op: 'control', lease, enabled: true });
+  expect(f.deps.startInput).toHaveBeenLastCalledWith('2');
+  f.host.stop('phone');
+});
+
+describe('viewer-sized desktop with live video', () => {
+  it.each(['viewerDisplay', 'restoreViewerDisplay'] as const)(
+    '%s keeps the stream on the changed display when requested',
+    async (op) => {
+      const f = fixture();
+      f.deps.pauseVideo = vi.fn(() => true);
+      f.deps.resumeVideo = vi.fn(async () => true);
+      const { lease } = await f.start();
+      if (op === 'restoreViewerDisplay') {
+        await f.host.request('phone', { op: 'viewerDisplay', lease, width: 900, height: 1600 });
+        await f.host.request('phone', { op: 'control', lease, enabled: true });
+      }
+      vi.mocked(f.deps.stopVideo).mockClear();
+      vi.mocked(f.deps.resumeVideo!).mockClear();
+      const result = (await f.host.request('phone', {
+        op,
+        lease,
+        width: 900,
+        height: 1600,
+        keepVideo: true,
+      })) as RemoteDesktopLease;
+      expect(result.videoKept).toBe(true);
+      expect(f.deps.stopVideo).not.toHaveBeenCalled();
+      expect(f.deps.resumeVideo).toHaveBeenCalledWith(
+        op === 'viewerDisplay'
+          ? { id: '2', name: 'Viewer', width: 900, height: 1600 }
+          : { id: '1', name: 'Main', width: 1920, height: 1080 },
+      );
+    },
+  );
 });

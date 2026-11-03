@@ -1,4 +1,10 @@
 /**
+ * Alias regression coverage uses the production grouping projection: the same remote directory
+ * must display its host alias, retain local overrides, and avoid leaking a name across identities.
+ * Existing grouping tests only supplied controller-local names. Minimal input: one remote session
+ * and its host snapshot (or two host identities sharing a legacy group). Pure unit tier.
+ */
+/**
  * projectGrouping — vitest unit tests
  *
  * 覆盖：normalize、displayName 同名消歧、groupSessions 边界。
@@ -28,6 +34,7 @@ import {
   pinnedSidebarEntryComparisonKey,
 } from '@/features/cc-agent/lib/pinnedSidebarOrder';
 import type { Session } from '@/lib/ccAgent.types';
+import { findProjectRepresentativeKey } from '@/features/cc-agent/lib/sidebarProjectVisibility';
 
 /* ---------------- helpers ---------------- */
 
@@ -43,6 +50,7 @@ function s(partial: Partial<Session>): Session {
     userId: 'u',
     title: partial.title ?? `t${id}`,
     workingDir: partial.workingDir ?? null,
+    projectDir: partial.projectDir,
     workspaceKind: partial.workspaceKind ?? 'project',
     model: 'm',
     effort: 'medium' as Session['effort'],
@@ -71,6 +79,94 @@ function s(partial: Partial<Session>): Session {
 }
 
 /* ============================== normalizeWorkingDir ============================== */
+
+describe('host project alias display', () => {
+  // Unit: arbitrary sibling worktrees used to grow separate sidebar projects.
+  // Membership must also drive aliases and remote controller grouping.
+  it.each([undefined, 'remote-device'])('keeps execution directories under the selected project (%s)', deviceLinkDeviceId => {
+    const sessions = [
+      s({ id: 'one', projectDir: '/product', workingDir: '/tmp/checkout-one', deviceLinkDeviceId }),
+      s({ id: 'two', projectDir: '/product', workingDir: '/repo/.cindy-worktrees/two', deviceLinkDeviceId }),
+      s({ id: 'legacy', workingDir: '/product', deviceLinkDeviceId }),
+    ];
+    const key = deviceLinkDeviceId ? `device:${deviceLinkDeviceId}:/product` : 'local:/product';
+    const groups = groupSessions(sessions, { projectAliases: new Map([[key, 'Product']]) });
+    expect(groups.projects).toHaveLength(1);
+    expect(groups.projects[0]).toMatchObject({ workingDir: '/product', displayName: 'Product' });
+    expect(groups.projects[0].sessions.map(item => item.id).sort()).toEqual(['legacy', 'one', 'two']);
+    expect(sessions[0].workingDir).toBe('/tmp/checkout-one');
+  });
+  it('mirrors each host independently and keeps controller-local overrides first', () => {
+    const sessions = [
+      s({ workingDir: '/repo', deviceLinkDeviceId: 'a' }),
+      s({ workingDir: '/repo', deviceLinkDeviceId: 'b' }),
+    ];
+    const remoteProjectAliases = new Map([
+      ['a', { platform: 'darwin', aliases: [{ projectKey: 'local:/repo', alias: 'Host A' }] }],
+      ['b', { platform: 'darwin', aliases: [{ projectKey: 'local:/repo', alias: 'Host B' }] }],
+    ]);
+    const groups = groupSessions(sessions, {
+      remoteProjectAliases,
+      projectAliases: new Map([['device:a:/repo', 'My override']]),
+    });
+    expect(groups.projects.find((project) => project.deviceLinkDeviceId === 'a')?.displayName).toBe('My override');
+    expect(groups.projects.find((project) => project.deviceLinkDeviceId === 'b')?.displayName).toBe('Host B');
+    remoteProjectAliases.set('b', { platform: 'darwin', aliases: [] });
+    expect(groupSessions(sessions, { remoteProjectAliases }).projects.find((project) => project.deviceLinkDeviceId === 'b')?.displayName).not.toBe('Host B');
+  });
+
+  it('matches Windows host aliases without changing the controller project key spelling', () => {
+    const groups = groupSessions([s({ workingDir: 'C:/Repo/.worktrees/branch', deviceLinkDeviceId: 'a' })], {
+      remoteProjectAliases: new Map([['a', {
+        platform: 'win32', aliases: [{ projectKey: 'local:c:/repo', alias: 'Windows project' }],
+      }]]),
+    });
+    expect(groups.projects[0]).toMatchObject({ projectKey: 'device:a:C:/Repo', displayName: 'Windows project' });
+  });
+
+  // Regression: pinning or filtering must not change a mixed remote project's identity.
+  it.each(['local', 'ssh'])('keeps a mixed host directory name when %s is pinned', (kind) => {
+    const local = s({ workingDir: '/repo', deviceLinkDeviceId: 'a', pinnedAt: kind === 'local' ? '2026-10-01' : null });
+    const ssh = s({ workingDir: '/repo', deviceLinkDeviceId: 'a', remoteHostId: 'ssh-a', pinnedAt: kind === 'ssh' ? '2026-10-01' : null });
+    const remoteProjectAliases = new Map([['a', { platform: 'darwin', aliases: [
+      { projectKey: 'local:/repo', alias: 'Local alias' },
+      { projectKey: 'remote:ssh-a:/repo', alias: 'SSH alias' },
+    ] }]]);
+    const result = groupSessions([local, ssh], { remoteProjectAliases });
+    expect(result.projects[0].displayName).toBe('repo');
+    expect(result.projects[0].sessions).toHaveLength(1);
+    expect(result.pinned).toHaveLength(1);
+  });
+
+  it.each(['local', 'ssh'])('uses full members when status/activity filters leave only %s', (kind) => {
+    const local = s({ workingDir: '/repo', deviceLinkDeviceId: 'a' });
+    const ssh = s({ workingDir: '/repo/.worktrees/branch', deviceLinkDeviceId: 'a', remoteHostId: 'ssh-a' });
+    const options = { projectAliasMembers: [local, ssh], remoteProjectAliases: new Map([['a', { platform: 'darwin', aliases: [
+      { projectKey: 'local:/repo', alias: 'Local alias' },
+      { projectKey: 'remote:ssh-a:/repo', alias: 'SSH alias' },
+    ] }]]) };
+    const visible = [kind === 'local' ? local : ssh];
+    const result = groupSessions(visible, options);
+    expect(result.projects[0].displayName).toBe('repo');
+    expect(result.projects[0].sessions).toEqual(visible);
+    const deleted: Session = { ...ssh, status: 'deleted' };
+    expect(groupSessions([local], { ...options, projectAliasMembers: [local, deleted] }).projects[0].displayName).toBe('Local alias');
+    expect(groupSessions([local], { ...options, projectAliases: new Map([['device:a:/repo', 'Override']]) }).projects[0].displayName).toBe('Override');
+  });
+
+  it('resolves unique SSH identities and does not borrow a name for a mixed local/SSH group', () => {
+    const ssh = s({ workingDir: '/repo', deviceLinkDeviceId: 'a', remoteHostId: 'ssh-a' });
+    const local = s({ workingDir: '/repo', deviceLinkDeviceId: 'a' });
+    const remoteProjectAliases = new Map([['a', {
+      platform: 'darwin', aliases: [
+        { projectKey: 'local:/repo', alias: 'Local host project' },
+        { projectKey: 'remote:ssh-a:/repo', alias: 'SSH project' },
+      ],
+    }]]);
+    expect(groupSessions([ssh], { remoteProjectAliases }).projects[0].displayName).toBe('SSH project');
+    expect(groupSessions([local, ssh], { remoteProjectAliases }).projects[0].displayName).toBe('repo');
+  });
+});
 
 describe('normalizeWorkingDir', () => {
   it('returns null for nullish / empty / whitespace', () => {
@@ -323,7 +419,7 @@ describe('groupSessions', () => {
     expect(project.displayName).toBe('Newest alias');
   });
 
-  it('applies last-activity cutoff to persistent projects using lastUsedAt', () => {
+  it('does not use directory registration time as matching task activity', () => {
     const projects = [
       {
         workingDir: '/workspace/old',
@@ -342,8 +438,8 @@ describe('groupSessions', () => {
         projects,
         Date.parse('2026-08-01T00:00:00.000Z'),
       ).map((project) => project.workingDir),
-    ).toEqual(['/workspace/recent']);
-    expect(filterPersistentLocalProjectsByLastActivity(projects, null)).toEqual(projects);
+    ).toEqual([]);
+    expect(filterPersistentLocalProjectsByLastActivity(projects, null)).toBe(projects);
   });
 
   it('distinguishes a truly empty project from a vendor-mismatched historical project', () => {
@@ -398,9 +494,75 @@ describe('groupSessions', () => {
       persistentLocalProjects: activityFiltered,
     }).projects.filter((project) => persistentProjectMatchesVendor(project, 'codex'));
 
-    expect(visibleForCodex.map((project) => project.workingDir)).toEqual([
-      '/workspace/empty-recent',
-    ]);
+    expect(visibleForCodex).toEqual([]);
+  });
+
+  it('retains projects introduced by matching tasks even when directory activity is old', () => {
+    const persistent = [
+      {
+        workingDir: '/workspace/matching',
+        lastUsedAt: '2026-01-01T00:00:00.000Z',
+        knownAgentKinds: [],
+      },
+      {
+        workingDir: '/workspace/empty',
+        lastUsedAt: '2026-08-12T00:00:00.000Z',
+        knownAgentKinds: [],
+      },
+    ];
+    const task = s({ workingDir: '/workspace/matching', updatedAt: '2026-08-12T00:00:00.000Z' });
+    const filtered = groupSessions([task], {
+      persistentLocalProjects: filterPersistentLocalProjectsByLastActivity(
+        persistent,
+        Date.parse('2026-08-05T00:00:00.000Z'),
+      ),
+    });
+    expect(filtered.projects.map((project) => project.workingDir)).toEqual(['/workspace/matching']);
+    expect(filtered.projects[0]?.sessions).toEqual([task]);
+    expect(
+      groupSessions([], {
+        persistentLocalProjects: filterPersistentLocalProjectsByLastActivity(persistent, null),
+      }).projects,
+    ).toHaveLength(2);
+  });
+
+  it.each([
+    ['D:/Work/Repo', 'd:/work/repo'],
+    ['//Server/Share/École', '//server/share/école'],
+  ])('groups Windows case variants under an activity filter: %s', (first, second) => {
+    const tasks = [
+      s({ workingDir: first, updatedAt: '2026-08-12T00:00:00.000Z' }),
+      s({ workingDir: second, updatedAt: '2026-08-11T00:00:00.000Z' }),
+    ];
+    const persistent = [
+      { workingDir: first.toUpperCase(), lastUsedAt: tasks[0].updatedAt, knownAgentKinds: [] },
+    ];
+    const result = groupSessions(tasks, {
+      localPlatform: 'win32',
+      persistentLocalProjects: filterPersistentLocalProjectsByLastActivity(
+        persistent,
+        Date.parse('2026-08-05T00:00:00.000Z'),
+      ),
+    });
+    expect(result.projects).toHaveLength(1);
+    expect(result.projects[0].sessions).toEqual(tasks);
+    expect(result.projects[0].workingDir).toBe(first);
+    expect(
+      findProjectRepresentativeKey(result.projects, `local:${first.toUpperCase()}`, 'win32'),
+    ).toBe(result.projects[0].projectKey);
+  });
+
+  it('keeps POSIX casing and remote identities distinct without persistent seeds', () => {
+    const result = groupSessions(
+      [
+        s({ workingDir: '/Work/Repo' }),
+        s({ workingDir: '/work/repo' }),
+        s({ workingDir: '/work/repo', remoteHostId: 'host-a' }),
+        s({ workingDir: '/work/repo', remoteHostId: 'host-b' }),
+      ],
+      { localPlatform: 'linux' },
+    );
+    expect(result.projects).toHaveLength(4);
   });
 
   it('does not let an older session regress retained project activity', () => {
@@ -715,6 +877,16 @@ describe('groupSessions', () => {
     expect(r.projects).toHaveLength(1);
     expect(r.projects[0].sessions).toHaveLength(1);
     expect(r.projects[0].sessions[0]).toBe(real);
+  });
+
+  // 新建页里正在输入的未发送任务：已选好项目就放在项目下，不进未分类。
+  it('places the new-task page\'s unsent task under its chosen project', () => {
+    const unsent = s({ workingDir: '/p/foo', userSendAt: null });
+    const otherDraft = s({ workingDir: '/p/foo', userSendAt: null });
+    const r = groupSessions([unsent, otherDraft], { provisionalDraftTaskId: unsent.id });
+    expect(r.unclassified).toEqual([otherDraft]);
+    expect(r.projects).toHaveLength(1);
+    expect(r.projects[0].sessions).toEqual([unsent]);
   });
 
   // SDK echo 失败 / 老数据 backfill 漏掉的孤儿：userSendAt 没写上但 messages

@@ -1,0 +1,5 @@
+PyYAML 6.0.3
+Source: https://github.com/yaml/pyyaml/tree/6.0.3
+Local patch: reader.py expresses the YAML printable-codepoint ranges as ordinal
+comparisons instead of one equivalent regular expression, avoiding an ambiguous
+range warning from CodeQL.

@@ -238,6 +238,136 @@ describe('useSessionGitContext remote routing', () => {
     unmount();
   });
 
+  it.each([
+    {
+      label: 'Agent 进入仓库时显示分支',
+      dir: {
+        workdir: '/Users/me/repo',
+        head: { kind: 'branch', branch: 'feature/dialogue', shortSha: null },
+        source: 'telemetry',
+      },
+    },
+    {
+      label: '对话目录不是 git 仓库时分支为空',
+      dir: { workdir: null, head: null, source: null },
+    },
+  ])('对话任务照常返回消息里的 PR:$label', async ({ dir }) => {
+    const gitContext = makeGitContext();
+    gitContext.getForSession.mockResolvedValue(dir);
+    const prRef = {
+      id: 'ref-1',
+      sessionId: 'session-1',
+      owner: 'octo',
+      repo: 'repo',
+      prNumber: 7,
+      url: 'https://github.com/octo/repo/pull/7',
+      firstSeenAt: 1,
+      lastSeenAt: 2,
+    };
+    gitContext.listAllPrRefs.mockResolvedValue([prRef]);
+    gitContext.listPrRefs.mockResolvedValue([prRef]);
+    gitContext.getPrStatuses.mockResolvedValue([
+      {
+        ok: true,
+        owner: 'octo',
+        repo: 'repo',
+        prNumber: 7,
+        status: 'merged',
+        title: 'Dialogue PR',
+        htmlUrl: 'https://github.com/octo/repo/pull/7',
+        branch: 'feature/x',
+        unresolvedCount: 0,
+      },
+    ]);
+    window.electronAPI = {
+      gitContext,
+      deviceLink: { invoke: vi.fn() },
+    } as never;
+
+    const session = { ...sessionBase, workspaceKind: 'dialogue' as const };
+    const { result, unmount } = renderHook(() => useSessionGitContext(session), { wrapper });
+
+    await waitFor(() => {
+      expect(gitContext.getForSession).toHaveBeenCalled();
+      expect(result.current.prRefs).toHaveLength(1);
+      expect(result.current.prStatuses.size).toBe(1);
+    });
+    await waitFor(() => expect(result.current.head).toEqual(dir.head));
+    if (dir.workdir) {
+      expect(gitContext.watch).toHaveBeenCalledWith(dir.workdir);
+    } else {
+      expect(gitContext.watch).not.toHaveBeenCalled();
+    }
+    unmount();
+  });
+
+  it('切回看过的任务立即显示它自己上次的分支,不借用上一个任务的值', async () => {
+    const gitContext = makeGitContext();
+    const pending: Array<(value: unknown) => void> = [];
+    gitContext.getForSession.mockImplementation(
+      () => new Promise((resolve) => pending.push(resolve)),
+    );
+    gitContext.listPrRefs.mockResolvedValue([]);
+    gitContext.getPrStatuses.mockResolvedValue([]);
+    window.electronAPI = { gitContext, deviceLink: { invoke: vi.fn() } } as never;
+    const branch = (name: string) => ({
+      workdir: `/repo/${name}`,
+      head: { kind: 'branch', branch: name, shortSha: null },
+      source: 'worktree',
+    });
+    const a = { ...sessionBase, id: 'switch-a' };
+    const b = { ...sessionBase, id: 'switch-b' };
+    const { result, rerender, unmount } = renderHook(
+      ({ session }: { session: Session }) => useSessionGitContext(session),
+      { initialProps: { session: a }, wrapper },
+    );
+    pending.shift()!(branch('feature/a'));
+    await waitFor(() => expect(result.current.head?.branch).toBe('feature/a'));
+
+    // 第一次打开 B:解析回来前为空,不显示 A 的分支。
+    rerender({ session: b });
+    expect(result.current.head).toBeNull();
+    pending.shift()!(branch('feature/b'));
+    await waitFor(() => expect(result.current.head?.branch).toBe('feature/b'));
+
+    // 切回 A:解析仍在途时已经显示 A 上次的分支。
+    rerender({ session: a });
+    expect(result.current.head?.branch).toBe('feature/a');
+    expect(result.current.branchSource).toBe('worktree');
+    pending.shift()!(branch('feature/a2'));
+    await waitFor(() => expect(result.current.head?.branch).toBe('feature/a2'));
+    unmount();
+  });
+
+  it('同一任务的依赖变化在新结果回来前保留当前分支', async () => {
+    const gitContext = makeGitContext();
+    const pending: Array<(value: unknown) => void> = [];
+    gitContext.getForSession.mockImplementation(
+      () => new Promise((resolve) => pending.push(resolve)),
+    );
+    gitContext.listPrRefs.mockResolvedValue([]);
+    gitContext.getPrStatuses.mockResolvedValue([]);
+    window.electronAPI = { gitContext, deviceLink: { invoke: vi.fn() } } as never;
+    const session: Session = { ...sessionBase, id: 'deps-change', workingDir: null };
+    const { result, rerender, unmount } = renderHook(
+      ({ session }: { session: Session }) => useSessionGitContext(session),
+      { initialProps: { session }, wrapper },
+    );
+    pending.shift()!({
+      workdir: '/repo',
+      head: { kind: 'branch', branch: 'main', shortSha: null },
+      source: 'telemetry',
+    });
+    await waitFor(() => expect(result.current.head?.branch).toBe('main'));
+
+    rerender({ session: { ...session, workingDir: '/repo' } });
+    await waitFor(() => expect(gitContext.getForSession).toHaveBeenCalledTimes(2));
+    expect(result.current.head?.branch).toBe('main');
+    pending.shift()!({ workdir: '/repo', head: null, source: null });
+    await waitFor(() => expect(result.current.head).toBeNull());
+    unmount();
+  });
+
   // 2026-08-13 用户裁决:设备明确断线时不发注定失败的 PR 隧道查询(fail-open:
   // shard 缺失照常尝试,见 prRefsRefreshGating.test.ts 的判定语义)。
   it('被控端标记断线时跳过 PR 引用的隧道查询,重连后恢复', async () => {

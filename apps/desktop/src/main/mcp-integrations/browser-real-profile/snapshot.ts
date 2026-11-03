@@ -7,7 +7,11 @@ import {
   MANAGED_PROFILE,
   REAL_MANAGED_PROFILE,
 } from '../browser-managed-config.js';
-import { REAL_PROFILE_READ_DENIED } from '../../../shared/browserBackend.js';
+import {
+  OPTIONAL_BROWSER_PROFILE_DATABASES,
+  REAL_PROFILE_READ_DENIED,
+  type BrowserProfileCopyWarning,
+} from '../../../shared/browserBackend.js';
 import { resolveSourceBrowserFromOs } from './source.js';
 import {
   isRealProfileError,
@@ -22,9 +26,7 @@ const COMPLETE_MARKER = '.cindy-real-profile-complete';
 const AUTH_DB_RELATIVE_PATHS = [
   'Cookies',
   path.join('Network', 'Cookies'),
-  'Login Data',
-  'Login Data For Account',
-  'Web Data',
+  ...OPTIONAL_BROWSER_PROFILE_DATABASES,
 ] as const;
 
 const PLAIN_PROFILE_FILES = ['Preferences'] as const;
@@ -71,43 +73,32 @@ function asObject(value: unknown): Record<string, unknown> | null {
 }
 
 /**
- * Copies last_used cookies into dest `Default`. Chrome still honors
- * Local State `profile.last_used`, so a verbatim copy would open the original
- * folder (often an empty `Profile 2`) and look signed-out. Point every
- * selection field at Default and keep only that info_cache entry, taking
- * metadata from the source last_used profile when present. Stamp the chip
- * name to `Cindy` so a copied "Dash" / "Person 1" label never leaks; launch
- * decoration uses the same display name.
+ * Only the encryption metadata is needed to reuse website cookies. Never
+ * clone Chrome's device/sign-in identity or profile account cache: this copy
+ * has no matching browser OAuth identity and must not reconcile Google cookies.
+ * Select dest Default explicitly so Chrome cannot reopen an empty sibling.
  */
 export function rewriteLocalStateForManagedDefault(
   localStateRaw: string,
-  sourceProfile: string,
 ): string {
-  let parsed =
-    asObject(
-      (() => {
-        try {
-          return JSON.parse(localStateRaw) as unknown;
-        } catch {
-          return {};
-        }
-      })(),
-    ) ?? {};
-  const profile = { ...(asObject(parsed.profile) ?? {}) };
-  const infoCache = asObject(profile.info_cache) ?? {};
-  const sourceInfo = {
-    ...(asObject(infoCache[sourceProfile]) ?? asObject(infoCache.Default) ?? {}),
+  const source = parseJsonObject(localStateRaw);
+  const parsed = {
+    ...(source?.os_crypt ? { os_crypt: source.os_crypt } : {}),
+    profile: {
+      last_used: 'Default',
+      last_active_profiles: ['Default'],
+      profiles_order: ['Default'],
+      profiles_created: 1,
+      show_picker_on_startup: false,
+      info_cache: {
+        Default: {
+          name: MANAGED_PROFILE,
+          shortcut_name: MANAGED_PROFILE,
+          user_name: MANAGED_PROFILE,
+        },
+      },
+    },
   };
-  sourceInfo.name = MANAGED_PROFILE;
-  sourceInfo.shortcut_name = MANAGED_PROFILE;
-  sourceInfo.user_name = MANAGED_PROFILE;
-  profile.last_used = 'Default';
-  profile.last_active_profiles = ['Default'];
-  profile.profiles_order = ['Default'];
-  profile.profiles_created = 1;
-  profile.show_picker_on_startup = false;
-  profile.info_cache = { Default: sourceInfo };
-  parsed = { ...parsed, profile };
   return `${JSON.stringify(parsed)}\n`;
 }
 
@@ -140,23 +131,102 @@ const DISCARDABLE_PROFILE_CACHE_NAMES = new Set([
 ]);
 
 /**
- * Drop leftover Local Storage / IndexedDB / Service Worker / etc. from a
- * previous source profile. Keep only this snapshot's auth files and caches.
+ * State of extensions installed inside the agent browser. Never copied from
+ * the source profile, so it carries no source credentials; dropping it on every
+ * launch would uninstall the user's agent-browser extensions.
+ *
+ * Chrome names every profile-level extension store with "Extension"
+ * (`Extensions`, `Local Extension Settings`, `Extension State`,
+ * `DNR Extension Rules`, `Extension Cookies` and its SQLite `-wal` / `-journal`
+ * sidecars, ...), so match the word rather than enumerate a list that misses
+ * new stores. `Secure Preferences` holds the extension registry and its MACs.
+ */
+function isAgentExtensionState(name: string): boolean {
+  return name === 'Secure Preferences' || /Extension/.test(name);
+}
+
+/** Per-origin IndexedDB folder owned by an extension (e.g. 1Password's vault). */
+const EXTENSION_INDEXED_DB_ENTRY = /^chrome-extension_/;
+
+/** Throws on enumeration failure so leftover site data blocks the snapshot, like `rmSync` does. */
+function pruneSiteIndexedDb(indexedDbDir: string): void {
+  for (const entry of fs.readdirSync(indexedDbDir, { withFileTypes: true })) {
+    if (EXTENSION_INDEXED_DB_ENTRY.test(entry.name)) continue;
+    fs.rmSync(path.join(indexedDbDir, entry.name), { recursive: true, force: true });
+  }
+}
+
+/**
+ * Drop leftover Local Storage / site IndexedDB / Service Worker / etc. from a
+ * previous source profile. Keep this snapshot's auth files, caches, and the
+ * agent browser's own extension state.
  */
 export function pruneNonAuthProfileState(destProfileDir: string): void {
   const keep = new Set<string>(DISCARDABLE_PROFILE_CACHE_NAMES);
   for (const relative of SNAPSHOT_PROFILE_RELATIVE_PATHS) {
     keep.add(relative.split(/[/\\]/)[0] ?? relative);
   }
-  let entries: fs.Dirent[];
-  try {
-    entries = fs.readdirSync(destProfileDir, { withFileTypes: true });
-  } catch {
-    return;
-  }
-  for (const entry of entries) {
-    if (keep.has(entry.name)) continue;
+  for (const entry of fs.readdirSync(destProfileDir, { withFileTypes: true })) {
+    if (keep.has(entry.name) || isAgentExtensionState(entry.name)) continue;
+    if (entry.name === 'IndexedDB' && entry.isDirectory()) {
+      pruneSiteIndexedDb(path.join(destProfileDir, entry.name));
+      continue;
+    }
     fs.rmSync(path.join(destProfileDir, entry.name), { recursive: true, force: true });
+  }
+}
+
+function parseJsonObject(raw: string | null): Record<string, unknown> | null {
+  if (raw === null) return null;
+  try {
+    return asObject(JSON.parse(raw) as unknown);
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Source `Preferences` refreshed onto dest, except the `extensions` subtree,
+ * which belongs to the agent browser (install signature, commands, pins).
+ * Missing/malformed sources may fall back to the old dest, but every path
+ * removes browser identity before Chrome starts. Otherwise DICE can issue a
+ * Google logout when copied cookies have no matching browser refresh tokens.
+ */
+export function mergeManagedPreferences(
+  sourceRaw: string | null,
+  destRaw: string | null,
+): string {
+  const dest = parseJsonObject(destRaw);
+  const source = parseJsonObject(sourceRaw);
+  const merged = { ...(source ?? dest ?? {}) };
+  const destExtensions = dest?.extensions;
+  if (destExtensions === undefined) {
+    delete merged.extensions;
+  } else {
+    merged.extensions = destExtensions;
+  }
+  for (const key of [
+    'account_info',
+    'account_values',
+    'account_tracker_service_last_update',
+    'google',
+    'gaia_cookie',
+    'sync',
+  ]) {
+    delete merged[key];
+  }
+  // Chromium recomputes allowed at startup from allowed_on_next_startup.
+  // Do not let copied primary-account/device fields survive in this subtree.
+  merged.signin = { allowed: false, allowed_on_next_startup: false };
+  return JSON.stringify(merged);
+}
+
+function readFileIfExists(filePath: string): string | null {
+  try {
+    return fs.readFileSync(filePath, 'utf8');
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === 'ENOENT') return null;
+    throw err;
   }
 }
 
@@ -211,6 +281,25 @@ function isPermissionDenied(err: unknown): boolean {
   return code === 'EPERM' || code === 'EACCES';
 }
 
+function isDatabaseLocked(err: unknown): boolean {
+  const error = err as { code?: string; errcode?: number } | null;
+  // node:sqlite reports ERR_SQLITE_ERROR plus SQLite's numeric (possibly extended) code.
+  const primary = typeof error?.errcode === 'number' ? error.errcode & 0xff : undefined;
+  return (
+    primary === 5 ||
+    primary === 6 ||
+    error?.code === 'SQLITE_BUSY' ||
+    error?.code === 'SQLITE_LOCKED' ||
+    error?.code === 'EBUSY'
+  );
+}
+
+function copyWarningReason(err: unknown): BrowserProfileCopyWarning['reason'] {
+  if (isDatabaseLocked(err)) return 'locked';
+  if (isPermissionDenied(err)) return 'permission-denied';
+  return 'copy-failed';
+}
+
 function tryOpenRead(filePath: string): 'ok' | 'missing' | 'denied' {
   try {
     const fd = fs.openSync(filePath, 'r');
@@ -262,7 +351,8 @@ export function probeSourceProfileReadAccess(source: InstalledChromium): { reada
   const profileDir = tryOpenDir(sourceProfileDir);
   if (profileDir === 'denied') return { readable: false };
 
-  for (const relative of AUTH_DB_RELATIVE_PATHS) {
+  // Optional password/autofill access must not prevent cookie reuse.
+  for (const relative of COOKIE_DB_CANDIDATES) {
     const result = tryOpenRead(path.join(sourceProfileDir, relative));
     if (result === 'denied') return { readable: false };
   }
@@ -351,14 +441,22 @@ function publishStagedSnapshot(options: {
   fs.rmSync(stagingDir, { recursive: true, force: true });
 }
 
-async function copySqliteDatabase(src: string, dest: string): Promise<void> {
+async function copySqliteDatabase(src: string, dest: string, optional: boolean): Promise<void> {
   fs.mkdirSync(path.dirname(dest), { recursive: true });
   removeSqliteAndSidecars(dest);
   if (typeof backup !== 'function') {
     throw new Error('sqlite backup API unavailable');
   }
-  const source = new DatabaseSync(src, { readOnly: true, timeout: 5000 });
+  // Keep OS permission errors distinguishable from SQLite's generic CANTOPEN.
+  const fd = fs.openSync(src, 'r');
+  fs.closeSync(fd);
+  const source = new DatabaseSync(src, { readOnly: true, timeout: optional ? 0 : 5000 });
   try {
+    // Acquire a read snapshot before async backup: an exclusive Chrome password
+    // lock should fail promptly, not leave backup retrying SQLITE_BUSY indefinitely.
+    // Holding this read transaction also prevents a lock race before backup starts.
+    source.exec('BEGIN');
+    source.prepare('PRAGMA schema_version').get();
     // Node 24 / Electron 41: backup is module-level `backup(sourceDb, dest)`.
     // DatabaseSync#backup does not exist; copyFile + WAL sidecars is not a
     // consistent snapshot while the source Chrome is open.
@@ -368,13 +466,20 @@ async function copySqliteDatabase(src: string, dest: string): Promise<void> {
   }
 }
 
-async function copyAuthFile(src: string, dest: string, isSqlite: boolean): Promise<void> {
-  fs.mkdirSync(path.dirname(dest), { recursive: true });
-  if (isSqlite) {
-    await copySqliteDatabase(src, dest);
-    return;
+/**
+ * Web Data also stores Chrome OAuth refresh tokens, not just autofill. Remove
+ * them offline in staging: letting Chrome revoke a copied token on startup
+ * would revoke the everyday browser's token on Google's server as well.
+ */
+function removeCopiedBrowserTokens(webDataPath: string): void {
+  const db = new DatabaseSync(webDataPath);
+  try {
+    if (db.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'token_service'").get()) {
+      db.exec('DELETE FROM token_service');
+    }
+  } finally {
+    db.close();
   }
-  await fs.promises.copyFile(src, dest);
 }
 
 export async function snapshotRealProfile(options: {
@@ -432,7 +537,7 @@ export async function snapshotRealProfile(options: {
     } catch (err) {
       if (isRealProfileError(err)) throw err;
       const code = (err as NodeJS.ErrnoException).code;
-      if (code === 'EPERM' || code === 'EBUSY' || code === 'EACCES') {
+      if (isDatabaseLocked(err) || code === 'EPERM' || code === 'EACCES') {
         throw new RealProfileError(
           'PROFILE_LOCKED',
           'Chrome is locking its cookie database. Quit Chrome completely and try again.',
@@ -456,12 +561,13 @@ export async function snapshotRealProfile(options: {
     secureDir(path.join(stagingProfileDir, 'Network'));
 
     const filesCopied: string[] = [];
+    const warnings: BrowserProfileCopyWarning[] = [];
     const copiedRelative = new Set<string>();
     let authDbCopied = 0;
 
     await fs.promises.writeFile(
       path.join(stagingDir, 'Local State'),
-      rewriteLocalStateForManagedDefault(localStateRaw, sourceProfile),
+      rewriteLocalStateForManagedDefault(localStateRaw),
       'utf8',
     );
     filesCopied.push('Local State');
@@ -470,15 +576,25 @@ export async function snapshotRealProfile(options: {
       const src = path.join(sourceProfileDir, relative);
       if (!fs.existsSync(src)) continue;
       const dest = path.join(stagingProfileDir, relative);
+      const optionalDatabase = OPTIONAL_BROWSER_PROFILE_DATABASES.find((name) => name === relative);
       try {
-        await copyAuthFile(src, dest, true);
+        await copySqliteDatabase(src, dest, optionalDatabase !== undefined);
+        if (relative === 'Web Data') removeCopiedBrowserTokens(dest);
         filesCopied.push(path.join('Default', relative));
         copiedRelative.add(relative);
         authDbCopied += 1;
       } catch (err) {
+        if (optionalDatabase) {
+          removeSqliteAndSidecars(dest);
+          warnings.push({ database: optionalDatabase, reason: copyWarningReason(err) });
+          continue;
+        }
         const code = (err as NodeJS.ErrnoException).code;
         if (isPermissionDenied(err) && platform !== 'win32') throwReadDenied();
-        if (platform === 'win32' && (code === 'EPERM' || code === 'EBUSY' || code === 'EACCES')) {
+        if (
+          isDatabaseLocked(err) ||
+          (platform === 'win32' && (code === 'EPERM' || code === 'EACCES'))
+        ) {
           throw new RealProfileError(
             'PROFILE_LOCKED',
             'Chrome is locking its cookie database. Quit Chrome completely and try again.',
@@ -502,9 +618,13 @@ export async function snapshotRealProfile(options: {
 
     for (const relative of PLAIN_PROFILE_FILES) {
       const src = path.join(sourceProfileDir, relative);
-      if (!fs.existsSync(src)) continue;
+      const sourceRaw = readFileIfExists(src);
       const dest = path.join(stagingProfileDir, relative);
-      await fs.promises.copyFile(src, dest);
+      const merged = mergeManagedPreferences(
+        sourceRaw,
+        readFileIfExists(path.join(destDir, 'Default', relative)),
+      );
+      await fs.promises.writeFile(dest, merged, 'utf8');
       filesCopied.push(path.join('Default', relative));
       copiedRelative.add(relative);
     }
@@ -522,6 +642,7 @@ export async function snapshotRealProfile(options: {
       sourceKind: options.source.kind,
       sourceProfile,
       filesCopied,
+      ...(warnings.length ? { warnings } : {}),
     };
   } catch (err) {
     if (stagingDir) fs.rmSync(stagingDir, { recursive: true, force: true });

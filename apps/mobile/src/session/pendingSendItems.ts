@@ -1,3 +1,4 @@
+import { forwardedRequestDisplayText } from '@cindy/maker-shared/message-source';
 /**
  * 待发送消息 → 消息流渲染项。
  * ---------------------------------------------------------------------------
@@ -15,7 +16,15 @@
  * 未派发条目保持队列 / outbox 顺序。已派发气泡在分组前占据本地用户消息的位置，
  * 正式回流以同一个 clientId 原位替换，不比较控制端与主机的时钟。
  */
+import { queueItemVisibleText, type QueueRowPresentation } from '@cindy/maker-shared/queue';
 import { syntheticTriggerKind } from '@cindy/maker-shared/synthetic-trigger';
+import {
+  isHookSchedulerOrigin,
+  readMessageSourceDevice,
+  readMessageSourcePlugin,
+  sanitizeSourceName,
+  type MessageSourceDevice,
+} from '@cindy/maker-shared/message-source';
 import {
   parseChatQuoteSegments,
   stripChatQuoteMarkerLines,
@@ -27,8 +36,18 @@ import {
   type SentInlineToken,
 } from '@/session/sentMessageAtoms';
 import type { QueuedRemoteMessage } from '@/session/types';
-import type { GetSentMessageImagePreview } from '@/session/sentMessageImagePreviews';
+import type { ChatReplyQuote } from '@cindy/maker-shared/chat-reply-quote';
+import { queuedMessageReplyQuote } from '@/session/inputProjection';
+import { sentImageGalleryKey, type GetSentMessageImagePreview } from '@/session/sentMessageImagePreviews';
 import type { MobileMessageRenderItem } from '@/session/messageRenderModel';
+import {
+  automationOriginLabel,
+  orcaMessageTitle,
+  sessionOriginLabel,
+  sourceIdText,
+  sourcePluginLabel,
+} from '@/session/messageSourceLabels';
+import { parseOrcaPersistedMessage, readOrcaPersistedSource } from '@/session/orcaCollab';
 
 export type MobilePendingSendPhase =
   /** 已确认入队,等被控端派发。 */
@@ -39,17 +58,26 @@ export type MobilePendingSendPhase =
   | 'settling'
   /** 本地 outbox:附件还在上传 / 等轮到队首。 */
   | 'uploading'
+  /** 本地 outbox:电脑离线,消息留在手机上,连上后自动发出(不算失败)。 */
+  | 'waiting'
   /** 上传或 enqueue 失败,气泡保留待用户重试 / 删除。 */
   | 'failed'
   /** 正在底部 composer 里编辑这一条。 */
   | 'editing';
 
-/** 气泡上的三个队列操作在当前条目上可不可用(由 buildQueueRowPresentation 预先算好)。 */
-export interface MobilePendingSendActions {
-  remove: { disabled: boolean; disabledReason: string | null };
-  edit: { disabled: boolean; disabledReason: string | null };
-  steer: { disabled: boolean; disabledReason: string | null };
+/** 排队气泡上方的来源标签种类(对齐桌面排队面板:自动化 / 任务 / 伙伴 / Orca / 插件)。 */
+export type MobilePendingSendSourceKind = 'automation' | 'session' | 'teammate' | 'orca' | 'plugin';
+
+export interface MobilePendingSendSource {
+  kind: MobilePendingSendSourceKind;
+  /** 已本地化的标签,同时用于无障碍播报。 */
+  label: string;
+  /** 已本地化的来源 ID(长按显示,对齐已发送消息的来源标签);脱敏来源没有。 */
+  idText?: string;
 }
+
+/** 队列操作的可用性与移动目标由共享队列规则计算。 */
+export type MobilePendingSendActions = QueueRowPresentation['actions'];
 
 export interface MobilePendingSendItem {
   type: 'pending_send';
@@ -70,10 +98,22 @@ export interface MobilePendingSendItem {
   attachmentCount: number;
   uploadedCount: number;
   errorText: string | null;
+  /** Local outbox may defer cancellation while the first-message creation task owns recovery. */
+  canCancel?: boolean;
   /** 可否轻点展开操作行:只有还在队列里的条目能取消 / 编辑 / 插队。 */
   actions: MobilePendingSendActions | null;
   /** 展开后显示的提示(插队限制等)。 */
   hint: string | null;
+  /** 非本人手动输入的排队条目的来源标签;本人输入与本地 outbox 为 null。 */
+  source?: MobilePendingSendSource | null;
+  /** 手机 / 另一台电脑发来的排队消息的设备来源(气泡按查看设备决定是否显示,与已发送消息同一规则)。 */
+  sourceDevice?: MessageSourceDevice;
+  /** phase 为 waiting 时在等什么。 */
+  waitingFor?: MobilePendingSendWaitingFor;
+  /** 本机发出的时刻(手机时钟),伙伴对话的时间分隔按它分组,回流后同 key 沿用。 */
+  sentAt?: number;
+  /** 伙伴私聊的引用回复:乐观气泡同样先画出引用块,回流后原位不跳。 */
+  replyQuote?: ChatReplyQuote;
 }
 
 export interface MobileMessageListExtraData {
@@ -94,11 +134,20 @@ export function buildMobileMessageListExtraData(
 
 /** 待发送气泡是否处于展开态；生产渲染与状态转换测试共用同一判据。 */
 export function isPendingSendItemSelected(
-  item: Pick<MobilePendingSendItem, 'actions' | 'clientId' | 'phase'>,
+  item: Pick<MobilePendingSendItem, 'actions' | 'canCancel' | 'clientId' | 'phase' | 'queueIndex'>,
   selectedClientId: string | null,
 ): boolean {
-  const interactive = item.actions !== null || item.phase === 'failed';
-  return interactive && selectedClientId === item.clientId;
+  return isPendingSendItemInteractive(item) && selectedClientId === item.clientId;
+}
+
+/** Local outbox rows can be cancelled before desktop accepts them; settled rows cannot. */
+export function isPendingSendItemInteractive(
+  item: Pick<MobilePendingSendItem, 'actions' | 'canCancel' | 'phase' | 'queueIndex'>,
+): boolean {
+  return item.actions !== null
+    || (item.canCancel !== false && (item.phase === 'uploading'
+      || item.phase === 'failed'
+      || ((item.phase === 'sending' || item.phase === 'waiting') && item.queueIndex === null)));
 }
 
 export function pendingSendItemKey(clientId: string): string {
@@ -133,20 +182,117 @@ export function mergePendingSendItems(
   return appendPendingSendItems(replaced, pending);
 }
 
+type PendingSendTextSource = Pick<QueuedRemoteMessage, 'text' | 'chatMessage'>
+  & Partial<Pick<QueuedRemoteMessage, 'persistedContent' | 'files' | 'origin'>>;
+
+function readRecord(value: unknown): Record<string, unknown> | null {
+  return value && typeof value === 'object' && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : null;
+}
+
+function readNonEmptyString(value: unknown): string | undefined {
+  return typeof value === 'string' && value.trim() ? value.trim() : undefined;
+}
+
+/**
+ * 排队条目给人看的正文(不含合成指令遮蔽)。Orca 条目的 `text` 是发给 Agent 的原文
+ * (带「[From Orca …]」前缀),与桌面排队面板一样优先显示 origin.displayText,其次
+ * 落库 JSON 里的正文;其余条目沿用共享判据 queueItemVisibleText。
+ */
+function pendingSendAgentText(item: PendingSendTextSource): string {
+  const origin = readRecord(item.origin);
+  if (origin?.kind === 'orca') {
+    if (typeof origin.displayText === 'string') return origin.displayText;
+    const persisted = parseOrcaPersistedMessage(item.persistedContent);
+    if (persisted) return persisted.body;
+  }
+  const visible = queueItemVisibleText(item);
+  return origin?.kind === 'session' ? forwardedRequestDisplayText(visible) : visible;
+}
+
+/**
+ * 合成 UI 指令判定:以发给 Agent 的 `text` 为准(syntheticTrigger.ts 的唯一判据),
+ * 可见正文也带前缀时同样遮蔽 —— 任一处命中,气泡只显示标签,绝不显示存储的原文。
+ */
+function pendingSendSyntheticKind(
+  item: PendingSendTextSource,
+  visibleText: string,
+): 'continue' | 'generic' | null {
+  return syntheticTriggerKind(item.text ?? '') ?? syntheticTriggerKind(visibleText);
+}
+
 /**
  * 气泡显示文本:合成 UI 指令行(桌面「失败后继续」等隐藏 prompt)用遮蔽标签替代原文
  * —— 裸英文指令不能给用户看(对齐桌面 PendingQueuePanel 的 i18n 遮蔽标签)。
+ * 自动化 / 其他任务发来的条目显示落库可见正文(不带发给 Agent 的前缀或协议),
+ * 与回流后的正式消息一致(queueItemVisibleText,与桌面排队面板同判据)。
  */
-export function pendingSendBubbleText(
-  item: Pick<QueuedRemoteMessage, 'text' | 'chatMessage'>,
-): string {
+export function pendingSendBubbleText(item: PendingSendTextSource): string {
+  const agentText = pendingSendAgentText(item);
   const visibleText = item.chatMessage.quotesEncoded === true
-    ? stripChatQuoteMarkerLines(item.text)
-    : item.text;
-  const kind = syntheticTriggerKind(visibleText);
+    ? stripChatQuoteMarkerLines(agentText)
+    : agentText;
+  const kind = pendingSendSyntheticKind(item, visibleText);
   if (kind === 'continue') return i18n.t('message.queue.continueSystemInstruction');
   if (kind === 'generic') return i18n.t('message.queue.systemInstruction');
   return visibleText;
+}
+
+/** 排队来源的 ID 文案:与已发送消息、桌面排队悬停共用 messageSourceIdEntries(插件优先、伙伴带伙伴 ID)。 */
+function idTextField(item: unknown): { idText?: string } {
+  const idText = sourceIdText(item);
+  return idText ? { idText } : {};
+}
+
+/**
+ * 排队条目的来源标签(对齐桌面 pendingQueueRowPresentation):自动化、其他任务 / 伙伴、
+ * Orca Lead / Worker、插件。只认主机盖章的 origin / sourcePlugin;本人输入返回 null。
+ * 名字来自用户或插件,按不可信展示文本净化(去换行、限长)。
+ */
+export function pendingSendSource(
+  item: Partial<Pick<QueuedRemoteMessage, 'origin' | 'persistedContent'>> & { sourcePlugin?: unknown },
+): MobilePendingSendSource | null {
+  const origin = readRecord(item.origin);
+  // Hook 渠道消息复用 scheduler 形态,不是自动化;与历史消息一致,不出自动化标签。
+  if (isHookSchedulerOrigin(origin)) return null;
+  if (origin?.kind === 'scheduler') {
+    // 共享任务访客拿到的来源可能已脱敏(无 scheduleId):不显示名字。
+    const scheduleId = readNonEmptyString(origin.scheduleId);
+    const scheduleName = scheduleId ? sanitizeSourceName(origin.scheduleName) : undefined;
+    return {
+      kind: 'automation',
+      label: automationOriginLabel({ scheduleName }),
+      ...idTextField(item),
+    };
+  }
+  // 插件优先(与 messageSourceSenderFromMeta 同序):插件在某任务里派发时同时带来源任务 origin。
+  const plugin = origin?.kind === 'orca' ? undefined : readMessageSourcePlugin(item);
+  if (plugin) {
+    return {
+      kind: 'plugin',
+      label: sourcePluginLabel(plugin),
+      ...idTextField(item),
+    };
+  }
+  if (origin?.kind === 'session') {
+    const senderBotName = readNonEmptyString(origin.senderBotId)
+      ? sanitizeSourceName(origin.senderBotName) ?? sanitizeSourceName(origin.senderBotId)
+      : undefined;
+    const senderSessionTitle = sanitizeSourceName(origin.senderSessionTitle);
+    return {
+      kind: senderBotName ? 'teammate' : 'session',
+      label: sessionOriginLabel({ senderBotName, senderSessionTitle }),
+      ...idTextField(item),
+    };
+  }
+  if (origin?.kind === 'orca') {
+    const senderLabel = readNonEmptyString(origin.senderLabel);
+    const direction = readOrcaPersistedSource(item.persistedContent)
+      ?? (senderLabel?.toLowerCase() === 'lead' ? 'lead' : 'worker');
+    return { kind: 'orca', label: orcaMessageTitle(direction, senderLabel) };
+  }
+  return null;
 }
 
 function buildPendingSentInlineTokens(input: {
@@ -186,7 +332,7 @@ function queuedAttachmentThumbs(
 ): { thumbs: MobileOutboxThumb[]; fileCount: number } {
   const thumbs: MobileOutboxThumb[] = [];
   let fileCount = 0;
-  (item.files ?? []).forEach((file, index) => {
+  (item.files ?? []).forEach((file) => {
     if (file.category !== 'image') {
       fileCount += 1;
       return;
@@ -194,7 +340,8 @@ function queuedAttachmentThumbs(
     const ossRef = file.url ?? file.path;
     const preview = getImagePreview?.(item.clientId, thumbs.length, file.name, file.id);
     thumbs.push({
-      key: `${item.clientId}-slot-${index}`,
+      // URLs may settle for one attachment; editing the slot to another must reset its viewer state.
+      key: preview?.galleryImageKey ?? sentImageGalleryKey(item.clientId, file.id),
       // 发送时刻抓下的本地预览优先:sentAttachmentThumbStore 那条兜底链要等「上传落定 →
       // 拷进自有目录 → AsyncStorage hydrate」全部完成才查得到,期间 getSentAttachmentThumbUri
       // 一律返回 null,排队气泡只能画空占位格(实测:兜底文件已生成,气泡仍是空方块)。
@@ -232,7 +379,14 @@ export interface BuildPendingSendItemsInput {
    */
   previewByOssRef?: ReadonlyMap<string, string>;
   getImagePreview?: GetSentMessageImagePreview;
+  /**
+   * 本地待发条目为什么暂时发不出去:手机没网,或电脑离线 / 无响应。只在真正断开时给,
+   * 同步中、自动恢复中这类几秒内就过去的状态不算,避免一闪而过的「等待」。
+   */
+  outboxWaitingFor?: MobilePendingSendWaitingFor | null;
 }
+
+export type MobilePendingSendWaitingFor = 'network' | 'computer';
 
 /**
  * 组装消息流末尾的待发送气泡项。
@@ -251,13 +405,17 @@ export function buildPendingSendItems(input: BuildPendingSendItemsInput): Mobile
     const presentation = queueIndex === null
       ? null
       : input.presentationByClientId.get(item.clientId) ?? null;
+    const agentText = pendingSendAgentText(item);
+    // 合成指令只显示标签:结构化 atom 也不能从原文里重建出来。
+    const synthetic = pendingSendSyntheticKind(item, agentText) !== null;
+    const replyQuote = item.persistedContent ? queuedMessageReplyQuote({ persistedContent: item.persistedContent }) : undefined;
     items.push({
       type: 'pending_send',
       key: pendingSendItemKey(item.clientId),
       clientId: item.clientId,
       text: pendingSendBubbleText(item),
-      sentInlineTokens: buildPendingSentInlineTokens({
-        text: item.text,
+      sentInlineTokens: synthetic ? [] : buildPendingSentInlineTokens({
+        text: agentText,
         quotesEncoded: item.chatMessage.quotesEncoded,
         pastedTextRanges: item.chatMessage.pastedTextRanges,
         slashCommandRanges: item.chatMessage.slashCommandRanges,
@@ -272,6 +430,9 @@ export function buildPendingSendItems(input: BuildPendingSendItemsInput): Mobile
       errorText: null,
       actions: presentation?.actions ?? null,
       hint: presentation?.hint ?? null,
+      source: pendingSendSource(item),
+      ...(readMessageSourceDevice(item) ? { sourceDevice: readMessageSourceDevice(item) } : {}),
+      ...(replyQuote ? { replyQuote } : {}),
     });
   };
 
@@ -294,22 +455,30 @@ export function buildPendingSendItems(input: BuildPendingSendItemsInput): Mobile
     if (seen.has(item.clientId) || input.hiddenClientIds.has(item.clientId)) continue;
     seen.add(item.clientId);
     const uploadsPending = item.attachmentCount > 0 && item.uploadedCount < item.attachmentCount;
+    // 断开时整条投递(含附件上传)都停着:附件没传完也写「等连上」,图片不再转圈。
+    // 已交给电脑的条目不是在等着发,保持原有的交接 / 对账状态。
+    const waitingFor = !item.failed && !item.dispatching ? input.outboxWaitingFor ?? null : null;
     items.push({
       type: 'pending_send',
       key: pendingSendItemKey(item.clientId),
       clientId: item.clientId,
       text: item.quotesEncoded ? stripChatQuoteMarkerLines(item.text) : item.text,
       sentInlineTokens: buildPendingSentInlineTokens(item),
-      phase: item.failed ? 'failed' : uploadsPending ? 'uploading' : 'sending',
+      phase: item.failed ? 'failed' : waitingFor ? 'waiting' : uploadsPending ? 'uploading' : 'sending',
+      ...(waitingFor ? { waitingFor } : {}),
+      ...(item.sentAt !== undefined ? { sentAt: item.sentAt } : {}),
       queueIndex: null,
-      thumbs: item.thumbnails,
+      thumbs: waitingFor ? item.thumbnails.map((thumb) => ({ ...thumb, uploading: false })) : item.thumbnails,
       fileCount: item.fileCount,
       fileNames: item.fileNames,
       attachmentCount: item.attachmentCount,
       uploadedCount: item.uploadedCount,
       errorText: item.errorText,
+      canCancel: item.canCancel,
       actions: null,
       hint: null,
+      source: null,
+      ...(item.replyQuote ? { replyQuote: item.replyQuote } : {}),
     });
   }
   return items;

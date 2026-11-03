@@ -18,7 +18,7 @@ describe('background push recovery', () => {
   beforeEach(() => { vi.useFakeTimers(); vi.setSystemTime(100_000); });
   afterEach(() => vi.useRealTimers());
 
-  function fixture() {
+  function fixture(pendingTransitions?: () => Promise<void>[]) {
     let background = true;
     const release = deferred<void>();
     const stop = vi.fn();
@@ -28,6 +28,7 @@ describe('background push recovery', () => {
     const lifecycle = createBackgroundConnection({
       isBackground: () => background,
       releaseTopics, stop, connect, report,
+      pendingTransitions,
       graceMs: 2500, releaseWaitMs: 1000, suspendMs: 10_000,
     });
     return { lifecycle, release, stop, connect, releaseTopics, report, active: () => { background = false; lifecycle.active(); } };
@@ -50,7 +51,7 @@ describe('background push recovery', () => {
     f.lifecycle.background();
     expect(f.report).toHaveBeenLastCalledWith({ phase: 'background', generation: 1, elapsedMs: 0, releases: 1 });
     await vi.advanceTimersByTimeAsync(2500);
-    expect(f.report).toHaveBeenLastCalledWith({ phase: 'grace-fired', generation: 1, elapsedMs: 2500 });
+    expect(f.report).toHaveBeenLastCalledWith({ phase: 'grace-fired', generation: 1, elapsedMs: 2500, transitions: 0 });
     f.active();
     const count = f.report.mock.calls.length;
     f.release.resolve();
@@ -90,6 +91,33 @@ describe('background push recovery', () => {
     expect(f.stop).not.toHaveBeenCalled();
     expect(f.connect).toHaveBeenCalledTimes(1);
   });
+
+  it.each(['authorize', 'reject', 'timeout', 'foreground', 'dispose'])(
+    'keeps signaling through a slow media handoff without retaining heavy topics: %s', async (outcome) => {
+      const handoff = deferred<void>();
+      const f = fixture(() => [handoff.promise]);
+      f.lifecycle.background();
+      expect(f.releaseTopics).toHaveBeenCalledTimes(1);
+      f.release.resolve();
+      await vi.advanceTimersByTimeAsync(3200);
+      expect(f.stop).not.toHaveBeenCalled();
+      if (outcome === 'foreground') f.active();
+      if (outcome === 'dispose') f.lifecycle.dispose();
+      if (outcome === 'reject') handoff.reject(new Error('denied'));
+      else if (outcome !== 'timeout') handoff.resolve();
+      await vi.advanceTimersByTimeAsync(0);
+      if (outcome === 'timeout') {
+        await vi.advanceTimersByTimeAsync(799);
+        expect(f.stop).not.toHaveBeenCalled();
+        await vi.advanceTimersByTimeAsync(1);
+      }
+      expect(f.stop).toHaveBeenCalledTimes(['foreground', 'dispose'].includes(outcome) ? 0 : 1);
+      handoff.resolve();
+      await vi.advanceTimersByTimeAsync(10_000);
+      expect(f.stop).toHaveBeenCalledTimes(['foreground', 'dispose'].includes(outcome) ? 0 : 1);
+      f.lifecycle.dispose();
+    },
+  );
 
   it('bounds final unsubscribe and prevents an old tail from stopping a later background generation', async () => {
     const f = fixture();
@@ -277,6 +305,15 @@ describe('progressive push snapshots', () => {
     const route = notificationRecoveryRoute('/sessions/a?deviceId=d&notificationResponse=old#tail', 'id:push&2');
     expect(route).toBe('/sessions/a?deviceId=d&notificationResponse=id%3Apush%262#tail');
     expect(notificationRecoveryRoute('/sessions/a', '1')).toBe('/sessions/a?notificationResponse=1');
+  });
+
+  it('keeps the teammate resource params a host adds so the chat opens as that teammate', () => {
+    const route = notificationRecoveryRoute(
+      '/sessions/chat?deviceId=mac&resourceCollectionId=teammates&resourceId=bot%2F1&resourceKind=bot', 'id:1');
+    const query = new URLSearchParams(route.split('?')[1]);
+    expect(route.startsWith('/sessions/chat?')).toBe(true);
+    expect(Object.fromEntries(query)).toEqual({ deviceId: 'mac', resourceCollectionId: 'teammates',
+      resourceId: 'bot/1', resourceKind: 'bot', notificationResponse: 'id:1' });
   });
 });
 

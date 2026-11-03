@@ -230,8 +230,7 @@ function tooltipContractViolations(): string[] {
           const tooltipExemption = jsxAttribute(node, 'data-tooltip-exempt', sourceFile);
           const isWindowsSystemControlException =
             rendererRelativePath === WINDOWS_SYSTEM_CONTROL_PATH &&
-            staticAttributeValue(tooltipExemption) ===
-              WINDOWS_SYSTEM_CONTROL_TOOLTIP_EXEMPTION;
+            staticAttributeValue(tooltipExemption) === WINDOWS_SYSTEM_CONTROL_TOOLTIP_EXEMPTION;
           const isIconControl =
             isInteractiveControl(node, sourceFile) &&
             !isHiddenFromAccessibilityTree &&
@@ -239,9 +238,7 @@ function tooltipContractViolations(): string[] {
 
           if (
             (nativeTitle && isInteractiveControl(node, sourceFile) && !isTruncatedTextException) ||
-            (isIconControl &&
-              !isWindowsSystemControlException &&
-              !hasManagedTip(node, sourceFile))
+            (isIconControl && !isWindowsSystemControlException && !hasManagedTip(node, sourceFile))
           ) {
             const { line } = sourceFile.getLineAndCharacterOfPosition(node.getStart(sourceFile));
             violations.push(`${rendererRelativePath}:${line + 1}`);
@@ -290,9 +287,7 @@ describe('icon-only button tooltip coverage', () => {
     expect(menuButton).toContain("import { Tip } from '@/components/ui/tooltip';");
     expect(menuButton).toContain("text={t('titleBar.menu')}");
     expect(menuButton).toContain('const [menuOpen, setMenuOpen] = useState(false)');
-    expect(menuButton).toContain(
-      '<DropdownMenu open={menuOpen} onOpenChange={setMenuOpen}>',
-    );
+    expect(menuButton).toContain('<DropdownMenu open={menuOpen} onOpenChange={setMenuOpen}>');
     expect(menuButton).toContain(
       '<Tip text={t(\'titleBar.menu\')} side="bottom" controlledOpen={menuOpen ? false : undefined}>',
     );
@@ -306,9 +301,7 @@ describe('icon-only button tooltip coverage', () => {
     );
     expect(windowControls).not.toContain("import { Tip } from '@/components/ui/tooltip';");
     expect(windowControls).not.toContain('<Tip');
-    expect(
-      windowControls.match(/data-tooltip-exempt="windows-system-control"/g),
-    ).toHaveLength(4);
+    expect(windowControls.match(/data-tooltip-exempt="windows-system-control"/g)).toHaveLength(4);
     expect(windowControls).toContain("aria-label={t('titleBar.minimize')}");
     expect(windowControls).toContain("aria-label={t('titleBar.maximizeOrRestore')}");
     expect(windowControls).toContain("aria-label={t('titleBar.close')}");
@@ -329,6 +322,9 @@ describe('icon-only button tooltip coverage', () => {
   it('does not exempt session-row icon actions from visible tips', () => {
     const sessionItem = rendererSource('features/cc-agent/sidebar/SessionItem.tsx');
     const sessionCard = rendererSource('features/cc-agent/sidebar/SessionCard.tsx');
+    const automationButton = rendererSource(
+      'features/cc-agent/sidebar/AutomationSessionButton.tsx',
+    );
     const actionStart = sessionItem.indexOf('function SessionAction(');
     const cardActionStart = sessionCard.indexOf('function CardAction(');
 
@@ -336,8 +332,9 @@ describe('icon-only button tooltip coverage', () => {
     expect(cardActionStart).toBeGreaterThanOrEqual(0);
     expect(sessionItem.slice(actionStart)).toContain('<Tip text={label}');
     expect(sessionCard.slice(cardActionStart)).toContain('<Tip text={label}');
-    expect(sessionItem).toContain("<Tip text={t('ccAgent.sidebar.scheduleBinding.viewTask')}");
-    expect(sessionCard).toContain("<Tip text={t('ccAgent.sidebar.scheduleBinding.viewTask')}");
+    expect(sessionItem).toContain('<AutomationSessionButton');
+    expect(sessionCard).toContain('<AutomationSessionButton');
+    expect(automationButton).toContain("<Tip text={t('ccAgent.sidebar.scheduleBinding.viewTask')}");
     expect(sessionItem).not.toContain("<Tip text={t('ccAgent.sidebar.automationGenerated')}");
     expect(sessionCard).not.toContain("<Tip text={t('ccAgent.sidebar.automationGenerated')}");
     expect(sessionItem).not.toContain('故意不挂 Tip 浮层');

@@ -11,13 +11,19 @@
  * true,IPC 返回后一次性填充)。
  */
 
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useState, useSyncExternalStore } from 'react';
 
 import type { ProviderView } from '@cindy/model-providers';
 import { getDataOwnerGeneration } from '@/contexts/dataOwnerGeneration';
 import { refreshLocalCatalogSnapshot } from '@/lib/localCatalogSnapshot';
 import {
+  getLocalCatalogFailure,
+  subscribeLocalCatalogFailure,
+  type LocalCatalogFailure,
+} from '@/lib/localCatalogLoadState';
+import {
   getCachedProvidersSnapshot,
+  hasProvidersSnapshotLoadFailed,
   subscribeProvidersSnapshot,
   type ProvidersSnapshot,
 } from '@/lib/providersSnapshotStore';
@@ -27,6 +33,9 @@ export interface UseProvidersReturn {
   providerOrder: string[];
   ownerGeneration: number | null;
   loading: boolean;
+  error: LocalCatalogFailure | null;
+  /** A refresh failed; loading still means no usable snapshot for existing readiness guards. */
+  loadFailed: boolean;
   refetch: () => Promise<boolean>;
 }
 
@@ -43,10 +52,11 @@ export interface UseProvidersReturn {
  * 只缓存"快照"不缓存"是否在拉取中",故不破坏 refetch 的现有刷新语义。
  */
 export function useProviders(): UseProvidersReturn {
+  const error = useSyncExternalStore(subscribeLocalCatalogFailure, getLocalCatalogFailure, getLocalCatalogFailure);
   const { dataOwnerId } = getDataOwnerGeneration();
-  const [snapshot, setSnapshot] = useState<ProvidersSnapshot | null>(() =>
-    getCachedProvidersSnapshot(),
-  );
+  const [{ snapshot }, setSnapshotState] = useState(() => ({
+    snapshot: getCachedProvidersSnapshot(),
+  }));
 
   // AuthContext 会先同步切换全局 data owner 代际、再提交 React state。owner 改变后的
   // 首次 render 不能继续暴露旧 state；只接受同 owner state 或 owner-scoped 模块缓存。
@@ -60,8 +70,9 @@ export function useProviders(): UseProvidersReturn {
   }, []);
 
   useEffect(() => {
-    setSnapshot(getCachedProvidersSnapshot());
-    const onRefresh = (next: ProvidersSnapshot | null): void => setSnapshot(next);
+    setSnapshotState({ snapshot: getCachedProvidersSnapshot() });
+    // Status-only notifications must render even when the snapshot is still null.
+    const onRefresh = (next: ProvidersSnapshot | null): void => setSnapshotState({ snapshot: next });
     return subscribeProvidersSnapshot(onRefresh);
   }, [dataOwnerId]);
 
@@ -70,6 +81,8 @@ export function useProviders(): UseProvidersReturn {
     providerOrder: currentSnapshot?.providerOrder ?? [],
     ownerGeneration: currentSnapshot?.ownerGeneration ?? null,
     loading: currentSnapshot == null,
+    error,
+    loadFailed: hasProvidersSnapshotLoadFailed(),
     refetch,
   };
 }

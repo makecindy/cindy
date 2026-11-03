@@ -87,6 +87,15 @@ describe('Bot skill tools', () => {
     expect(parse(result)).toMatchObject({ ok: true, skills: [SKILL] });
   });
 
+  it('forwards search and pagination to the owner and preserves the next page and source location', async () => {
+    const list = vi.fn(async () => ({ ok: true as const, skills: [{ ...SKILL, filePath: '/bot/skills/weekly-report/SKILL.md', bodyStartLine: 5 }], total: 3000, nextOffset: 41 }));
+    const reg = registry({ callbacks: { save: vi.fn(), list } });
+    const result = await reg.call('list_teammate_skills', { query: 'weekly report', offset: 40, limit: 1 });
+    expect(list).toHaveBeenCalledWith({ callerSessionId: 'bot-session', query: 'weekly report', offset: 40, limit: 1 });
+    expect(parse(result)).toMatchObject({ total: 3000, nextOffset: 41,
+      skills: [{ filePath: '/bot/skills/weekly-report/SKILL.md', bodyStartLine: 5 }] });
+  });
+
   it('fails closed without a bound Session', async () => {
     const reg = new XdtHelperToolRegistry();
     registerBotSkillTools(reg, {

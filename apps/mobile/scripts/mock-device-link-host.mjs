@@ -282,6 +282,8 @@ async function handleInvoke(controllerId, channel, args) {
     case 'maker:input:retry-last-error':
     case 'maker:input:clear-error':
       return updateProjection(String(args[0] ?? sessionId), { error: null, errorRetryText: null, recovery: null });
+    case 'maker:input:cancel-usage-limit-wait':
+      return updateProjection(String(args[0] ?? sessionId), { usageLimitWait: null });
     case 'maker:input:remove':
       return removeQueued(String(args[0] ?? sessionId), String(args[1] ?? ''));
     case 'maker:input:update-text':

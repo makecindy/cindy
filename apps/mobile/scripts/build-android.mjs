@@ -3,7 +3,7 @@
 // build-android.mjs —— Android 纯构建(本机出自签 APK / AAB,不含上传 / 分发 / 发布)
 //
 // 流程(--execute):git 闸门 → expo prebuild(注入 versionCode)→ patch build.gradle 用自有
-//       keystore 自签 → 按地区 / --artifacts 执行 assembleRelease / bundleRelease
+//       keystore 自签 → Global 按 website / play 变体构建 APK / AAB，CN/Dev 构建 APK
 //       → 从 APK / AAB 回读内嵌 runtimeVersion并交叉核对
 //       → 本地校验 package/versionCode/签名 → 打印全部产物路径(--out 可另拷一份)。
 // dry-run 纯本地:校验配置 + 打印计划,git 闸门(含 origin/main 远端比对)只在
@@ -69,6 +69,10 @@ import {
   resolveAndroidArtifactKinds,
   resolveAndroidUploadCertificateSha256,
   androidGradleTasksForArtifacts,
+  patchBuildGradleDistributionFlavors,
+  GOOGLE_PLAY_MANIFEST_OVERLAY,
+  assertAndroidInstallPermissionPresent,
+  assertGooglePlayInstallPermissionAbsent,
   resolveAndroidSigningEnv,
   patchBuildGradleSigning,
   patchGradlePropertiesMemory,
@@ -175,6 +179,15 @@ function patchGradleSigning() {
   log('  ✓ 已 patch android/app/build.gradle:release 用自有 keystore 自签(口令走 env,不落盘)');
 }
 
+function configureGooglePlayVariant() {
+  const gradlePath = resolve(MOBILE_DIR, 'android/app/build.gradle');
+  writeFileSync(gradlePath, patchBuildGradleDistributionFlavors(readFileSync(gradlePath, 'utf8')));
+  const overlayPath = resolve(MOBILE_DIR, 'android/app/src/play/AndroidManifest.xml');
+  mkdirSync(dirname(overlayPath), { recursive: true });
+  writeFileSync(overlayPath, GOOGLE_PLAY_MANIFEST_OVERLAY);
+  log('  ✓ 官网 APK 保留安装权限；Play AAB 变体在 manifest 合并时移除该权限');
+}
+
 // 调大生成工程的 Gradle heap / metaspace。只动 prebuild 产物,不影响 fingerprint。
 function patchGradleProps() {
   const props = resolve(MOBILE_DIR, 'android/gradle.properties');
@@ -200,6 +213,7 @@ function buildAndroidArtifacts(env, region, artifactKinds) {
 
   run(NPX, ['--yes', 'expo', 'prebuild', '--platform', 'android', '--clean'], { env });
   patchGradleSigning();
+  if (region.authRegion === 'global') configureGooglePlayVariant();
   patchGradleProps();
 
   // gradle 内部触发 expo export:embed 打 JS bundle,无法透传 --clear;打包前清
@@ -212,7 +226,9 @@ function buildAndroidArtifacts(env, region, artifactKinds) {
   // 不把 javaEnv 传进被日志的函数:它由 process.env + 签名口令(signEnv)派生,
   // CodeQL 会将「机密 env 流入日志」判为泄漏(即便 javaRuntimeDetail 只读版本 /
   // JAVA_HOME)。这里只报静态信息;JDK 由 resolveJavaRuntimeEnv 确定性选 17+。
-  const tasks = androidGradleTasksForArtifacts(artifactKinds);
+  const tasks = androidGradleTasksForArtifacts(artifactKinds, {
+    splitGooglePlay: region.authRegion === 'global',
+  });
   log(`  → gradle ${tasks.join(' ')}(已解析 JDK 17+ 运行时)`);
   const androidDir = resolve(MOBILE_DIR, 'android');
   const gradlew = process.platform === 'win32' ? 'gradlew.bat' : './gradlew';
@@ -221,16 +237,17 @@ function buildAndroidArtifacts(env, region, artifactKinds) {
   const artifacts = {};
   if (artifactKinds.includes('apk')) {
     artifacts.apk = findSingleArtifact(
-      join(androidDir, 'app/build/outputs/apk/release'),
+      join(androidDir, region.authRegion === 'global'
+        ? 'app/build/outputs/apk/website/release' : 'app/build/outputs/apk/release'),
       '.apk',
-      'assembleRelease',
+      region.authRegion === 'global' ? 'assembleWebsiteRelease' : 'assembleRelease',
     );
   }
   if (artifactKinds.includes('aab')) {
     artifacts.aab = findSingleArtifact(
-      join(androidDir, 'app/build/outputs/bundle/release'),
+      join(androidDir, 'app/build/outputs/bundle/playRelease'),
       '.aab',
-      'bundleRelease',
+      'bundlePlayRelease',
     );
   }
   return { androidDir, artifacts, javaEnv };
@@ -274,6 +291,27 @@ function validateApkMetadata(apkPath, expectPackage, expectVersionCode) {
   log(`  ✓ APK manifest 校验通过(package=${expectPackage}, versionCode=${expectVersionCode})`);
 }
 
+function validateDistributionPermissions(artifacts) {
+  if (artifacts.apk) {
+    const aapt2 = locateAapt2();
+    if (!aapt2) throw new Error('缺少 aapt2，无法验证官网 APK 的安装权限');
+    const result = spawnSync(aapt2, ['dump', 'permissions', artifacts.apk], { encoding: 'utf8' });
+    if (result.status !== 0) throw new Error('无法读取官网 APK 的权限');
+    assertAndroidInstallPermissionPresent(result.stdout);
+    log('  ✓ 官网 APK 保留 REQUEST_INSTALL_PACKAGES');
+  }
+  if (artifacts.aab) {
+    const entry = 'base/manifest/AndroidManifest.xml';
+    let result = spawnSync('unzip', ['-p', artifacts.aab, entry], { maxBuffer: 8 * 1024 * 1024 });
+    if (result.error?.code === 'ENOENT') {
+      result = spawnSync('tar', ['-xOf', artifacts.aab, entry], { maxBuffer: 8 * 1024 * 1024 });
+    }
+    if (result.status !== 0) throw new Error('无法读取 Play AAB 的最终 manifest');
+    assertGooglePlayInstallPermissionAbsent(result.stdout);
+    log('  ✓ Play AAB 不包含 REQUEST_INSTALL_PACKAGES');
+  }
+}
+
 function readJsonFile(filePath, label) {
   try {
     return JSON.parse(readFileSync(filePath, 'utf8'));
@@ -282,17 +320,17 @@ function readJsonFile(filePath, label) {
   }
 }
 
-// AAB 的 manifest 是 protobuf,不能用 aapt2 dump badging。这里读取同一 bundleRelease
+// AAB 的 manifest 是 protobuf,不能用 aapt2 dump badging。这里读取同一 bundlePlayRelease
 // 构建产生的 AGP metadata:bundle model 钉 applicationId / 输出文件,merged manifest metadata
 // 钉 versionCode / versionName。任一文件缺失或结构漂移都 fail closed,不把未核验包交给上传侧。
 function validateAabMetadata(aabPath, androidDir, expectPackage, expectVersionCode, expectVersionName) {
   const bundleMetadataPath = join(
     androidDir,
-    'app/build/intermediates/bundle_ide_model/release/produceReleaseBundleIdeListingFile/output-metadata.json',
+    'app/build/intermediates/bundle_ide_model/playRelease/producePlayReleaseBundleIdeListingFile/output-metadata.json',
   );
   const manifestMetadataPath = join(
     androidDir,
-    'app/build/intermediates/merged_manifests/release/processReleaseManifest/output-metadata.json',
+    'app/build/intermediates/merged_manifests/playRelease/processPlayReleaseManifest/output-metadata.json',
   );
   const bundle = readJsonFile(bundleMetadataPath, 'AAB bundle metadata');
   const manifest = readJsonFile(manifestMetadataPath, 'AAB manifest metadata');
@@ -437,7 +475,9 @@ async function main() {
     ? pwPreview('XDT_ANDROID_UPLOAD_CERT_SHA256')
     : '不适用';
   console.log(`sign: 自有 keystore 自签,path=${aSign.keystorePath || '(JSON 未填)'} alias=${aSign.keyAlias || '(JSON 未填)'} storePw(env ${suffix})=${pwPreview('XDT_ANDROID_KEYSTORE_PASSWORD')} keyPw(env ${suffix})=${pwPreview('XDT_ANDROID_KEY_PASSWORD')} uploadCertSha256(env ${suffix})=${uploadCertPreview}`);
-  const gradleTasks = androidGradleTasksForArtifacts(artifactKinds);
+  const gradleTasks = androidGradleTasksForArtifacts(artifactKinds, {
+    splitGooglePlay: region.authRegion === 'global',
+  });
   console.log(`steps: prebuild → patch build.gradle 签名 → gradlew ${gradleTasks.join(' ')} → 回读/核对 runtimeVersion → metadata/签名校验(仅构建,无上传/发布)`);
   if (missingBake.length) {
     console.log(`selfhost 必填缺失: ${missingBake.join(', ')}(--execute 前须在 self-host-regions.json 补齐;prebuild 期 app.config.js 硬校验)`);
@@ -492,6 +532,7 @@ async function main() {
     throw new Error(`APK/AAB runtimeVersion 不一致:${JSON.stringify(runtimeVersions)}`);
   }
   const runtimeVersion = uniqueRuntimeVersions[0];
+  if (region.authRegion === 'global') validateDistributionPermissions(built.artifacts);
 
   const finalArtifacts = { ...built.artifacts };
   if (typeof args.out === 'string' && args.out) {

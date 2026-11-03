@@ -18,7 +18,7 @@ import {
   type ConversationSearchDeviceOrigin,
   type ConversationSearchInvoke,
 } from '@/session/conversationSearch';
-import type { ConversationSearchResponse } from '@cindy/maker-shared/conversation-search';
+import type { ConversationSearchRequest, ConversationSearchResponse } from '@cindy/maker-shared/conversation-search';
 import type { RemoteSession } from '@/session/types';
 
 function session(partial: Partial<RemoteSession> & Pick<RemoteSession, 'id' | 'title'>): RemoteSession {
@@ -70,6 +70,33 @@ function indexedPage(ids: string[]): ConversationSearchResponse {
   };
 }
 
+// #6916 / #7026: exercise fan-out with an uncached host alias hit plus cached
+// fallback, and keep two same-path devices/project filters isolated (unit).
+it('finds a renamed project without mixing devices and honors project filters', async () => {
+  const sessions = [session({ id: 'a', title: 'Task A' }),
+    session({ id: 'b', title: 'Task B', deviceLinkDeviceId: 'dev-b' })];
+  const aliases = new Map([['device:dev-a:/repo', 'Customer Portal']]);
+  const deps = { invoke: vi.fn(async (deviceId: string) => {
+    const page = indexedPage(deviceId === 'dev-a' ? ['uncached'] : []);
+    if (page.results[0]) {
+      page.results[0].titleMatchIndices = [];
+      page.results[0].titleScore = 0;
+      page.results[0].rankScore = 2_000_000;
+    }
+    return page;
+  }) as ConversationSearchInvoke,
+    getCachedSessions: () => sessions, projectAliases: aliases };
+  const origins = [{ deviceId: 'dev-a', deviceName: 'A', reachable: true },
+    { deviceId: 'dev-b', deviceName: 'B', reachable: true }];
+  const result = await searchConversationsAcrossDevices(origins, { query: 'customer' }, deps);
+  expect(result.results.map((item) => item.session.id)).toEqual(['uncached', 'a']);
+  const filtered = await searchConversationsAcrossDevices(origins, {
+    query: 'customer', filters: { workingDirs: ['/another-project'] },
+  }, deps);
+  expect(filtered.results).toEqual([]);
+  expect(listConversationSearchProjects(sessions, undefined, aliases).map((p) => p.title)).toEqual(['Customer Portal', 'repo']);
+});
+
 const studio: ConversationSearchDeviceOrigin = {
   deviceId: 'dev-a',
   deviceName: 'Studio',
@@ -77,6 +104,79 @@ const studio: ConversationSearchDeviceOrigin = {
 };
 
 describe('searchConversationsAcrossDevices', () => {
+  // #7026: the alias fallback could outrank an indexed body hit and erase its
+  // message client id. Existing alias coverage had no overlapping body result.
+  // Unit: one host body hit below 1,000,000 plus a cached alias hit is sufficient;
+  // exercise search and list projection so opening still targets that message.
+  it('preserves indexed message locations when supplementing cached alias hits', async () => {
+    const indexed = indexedPage(['top', 'overlap']);
+    const bodyHit = {
+      messageId: 'message', messageClientId: 'message-client', role: 'assistant' as const,
+      createdAt: '2026-08-19T00:00:00.000Z', snippet: 'Customer details',
+      preview: 'Customer details', score: 0.016, ftsRank: 1, vectorRank: null,
+    };
+    indexed.results[0].rankScore = 1_000_000.2;
+    Object.assign(indexed.results[1], {
+      matchKind: 'content', titleScore: null, titleMatchIndices: [],
+      contentHit: bodyHit, contentHits: [bodyHit], rankScore: 999_999.16,
+    });
+    const cached = [
+      session({ id: 'overlap', title: 'Cached task' }),
+      session({ id: 'alias-only', title: 'Another task' }),
+      session({ id: 'overlap', title: 'Other computer', deviceLinkDeviceId: 'dev-b' }),
+    ];
+    const result = await searchConversationsAcrossDevices([
+      studio, { deviceId: 'dev-b', deviceName: 'Laptop', reachable: false },
+    ], { query: 'customer' }, {
+      invoke: vi.fn(async () => indexed) as ConversationSearchInvoke,
+      getCachedSessions: () => cached,
+      projectAliases: new Map([
+        ['device:dev-a:/repo', 'Customer Portal'], ['device:dev-b:/repo', 'Customer Portal'],
+      ]),
+    });
+    const hit = result.results.find(item => item.session.id === 'overlap' && item.session.deviceLinkDeviceId === 'dev-a')!;
+    expect(hit.contentHit).toEqual(bodyHit);
+    expect(hit.contentHits).toEqual([bodyHit]);
+    expect(hit.rankScore).toBe(999_999.16);
+    expect(toSearchListItem(hit, Date.parse('2026-08-19T00:00:00.000Z'), undefined, cached[0]).searchFocusClientId)
+      .toBe('message-client');
+    expect(result.results.map(item => `${item.session.deviceLinkDeviceId}:${item.session.id}`).sort())
+      .toEqual(['dev-a:alias-only', 'dev-a:overlap', 'dev-a:top', 'dev-b:overlap']);
+  });
+
+  it.each([1, 3, 24, 40])('finds ordinary hits behind %i Make hits on a bounded legacy host', async (hiddenCount) => {
+    const indexed = indexedPage([
+      ...Array.from({ length: hiddenCount }, (_entry, index) => 'make-' + index),
+      'ordinary-0', 'ordinary-1', 'ordinary-2', 'ordinary-3',
+    ]);
+    for (const [index, item] of indexed.results.slice(0, hiddenCount).entries()) {
+      item.session.source = index % 2 === 0 ? 'cindy-make' : 'cindy-make-merge';
+    }
+    const invoke = vi.fn(async (_deviceId: string, _channel: string, args: unknown[]) => {
+      const remoteRequest = args[0] as ConversationSearchRequest;
+      return { ...indexed, results: indexed.results.slice(0, Math.min(remoteRequest.limit ?? 20, 50)) };
+    });
+    const page = await searchConversationsAcrossDevices([studio], { query: 'needle', limit: 3 }, {
+      invoke: invoke as ConversationSearchInvoke,
+      getCachedSessions: () => [],
+    });
+
+    expect(page.results.map((item) => item.session.id)).toEqual(['ordinary-0', 'ordinary-1', 'ordinary-2']);
+    expect(page.results.every((item) => item.session.deviceLinkDeviceId === 'dev-a')).toBe(true);
+    expect(invoke).toHaveBeenCalledExactlyOnceWith('dev-a', 'local-db:conversations:search', [
+      expect.objectContaining({ limit: 50, semanticMode: 'keyword' }),
+    ]);
+  });
+
+  it('excludes Make hits returned by an older desktop before the result limit', async () => {
+    const indexed = indexedPage(['make', 'merge', 'ordinary']);
+    indexed.results[0].session.source = 'cindy-make';
+    indexed.results[1].session.source = 'cindy-make-merge';
+    const page = await searchConversationsAcrossDevices([studio], { query: 'needle', limit: 1 }, {
+      invoke: vi.fn(async () => indexed) as ConversationSearchInvoke, getCachedSessions: () => [],
+    });
+    expect(page.results.map(item => item.session.id)).toEqual(['ordinary']);
+  });
   it('stamps indexed hits and keeps one device failure from wiping the rest', async () => {
     const invoke = vi.fn(async (deviceId: string, channel: string) => {
       if (channel !== 'local-db:conversations:search') throw new Error(`unexpected ${channel}`);
@@ -118,7 +218,7 @@ describe('searchConversationsAcrossDevices', () => {
         ],
       },
     );
-    expect(page.results.map((item) => item.session.id)).toEqual(['hit']);
+    expect(page.results.map((item) => item.session.id)).toEqual(['hit', 'worker']);
   });
 
   it('does not invoke a device that is offline or unresponsive', async () => {
@@ -150,7 +250,7 @@ describe('searchConversationsAcrossDevices', () => {
       {
         invoke,
         getCachedSessions: () => [
-          session({ id: 'in-project', title: 'Planning in repo', workingDir: '/repo' }),
+          session({ id: 'in-project', title: 'Planning in repo', workingDir: '/tmp/checkout', projectDir: '/repo' }),
           session({ id: 'out', title: 'Planning elsewhere', workingDir: '/other' }),
         ],
       },
@@ -208,6 +308,14 @@ describe('searchConversationsAcrossDevices', () => {
 });
 
 describe('searchCachedDeviceSessions', () => {
+  it('excludes Make titles and previews from the cache', () => {
+    const page = searchCachedDeviceSessions(studio, { query: 'needle', limit: 1 }, [
+      session({ id: 'make', title: 'needle', source: 'cindy-make' }),
+      session({ id: 'merge', title: 'Other', preview: 'needle', source: 'cindy-make-merge' }),
+      session({ id: 'ordinary', title: 'Needle notes', source: 'desktop' }),
+    ]);
+    expect(page.results.map(item => item.session.id)).toEqual(['ordinary']);
+  });
   it('matches the current device only', () => {
     const page = searchCachedDeviceSessions(
       studio,
@@ -243,6 +351,24 @@ describe('searchCachedDeviceSessions', () => {
 });
 
 describe('helpers', () => {
+  it('shows project aliases in search filters without changing their stable keys or mixing SSH identities', () => {
+    const local = session({ id: 'local', title: 'Local', workingDir: '/tmp/checkout', projectDir: '/repo/app' });
+    const projectAliases = new Map([['dev-a', {
+      platform: 'darwin',
+      aliases: [{ projectKey: 'local:/repo/app', alias: '黑盒自动化' }],
+    }]]);
+    expect(listConversationSearchProjects([local], undefined, projectAliases)).toMatchObject([
+      { key: 'dev-a:/repo/app', title: '黑盒自动化', workingDir: '/repo/app' },
+    ]);
+    expect(listConversationSearchProjects([
+      local,
+      session({ id: 'ssh', title: 'Remote', workingDir: '/repo/app', remoteHostId: 'ssh-a' }),
+    ], undefined, projectAliases)).toMatchObject([{ key: 'dev-a:/repo/app', title: 'app', count: 2 }]);
+    expect(listConversationSearchProjects([local], undefined, new Map([['dev-a', {
+      platform: 'darwin', aliases: [],
+    }]]))).toMatchObject([{ title: 'app' }]);
+  });
+
   it('classifies CHANNEL_NOT_ALLOWED wrappers', () => {
     expect(isConversationSearchChannelNotAllowed({
       code: 'DEVICE_LINK_CHANNEL_NOT_ALLOWED',
@@ -404,4 +530,12 @@ describe('helpers', () => {
     expect(conversationSearchAllowsLocalWrites(item)).toBe(false);
     expect(conversationSearchAllowsLocalWrites({ session: { id: 'plain' } })).toBe(true);
   });
+});
+
+// Search projection + routing: old coverage had only ordinary tasks. Unit tier.
+it('preserves companion identity and the selected archived transcript', () => {
+  const hit = searchCachedDeviceSessions(studio, { query: 'planning' }, [session({ id: 'old', title: 'Remote planning' })]).results[0];
+  hit.session.companion = { id: 'bot', name: 'Melody', role: 'history', readOnly: true };
+  const item = toSearchListItem(hit, Date.now());
+  expect(item.title).toBe('Melody · Remote planning');
 });

@@ -4,10 +4,11 @@ import {
   parseDesktopIceCandidates,
   parseDesktopIceReply,
 } from "./remoteDesktopIce.js";
-import type {
-  RemoteDesktopCapabilities,
-  RemoteDesktopLease,
-  RemoteDesktopVideoSettings,
+import {
+  remoteDesktopVideoSettingsWire,
+  type RemoteDesktopCapabilities,
+  type RemoteDesktopLease,
+  type RemoteDesktopVideoSettings,
 } from "./remoteDesktop.js";
 import type { DesktopViewerRequest } from "./remoteDesktopViewerSession.js";
 import type { DesktopIceServer } from "./remoteDesktopIceConfig.js";
@@ -97,7 +98,7 @@ export class RemoteDesktopViewerMedia {
             ...(current.caps.trickleIce ? { attemptId: attempt } : {}),
             cursorOverlay: current.caps.cursorOverlay === true,
             ...(current.caps.videoSettings
-              ? { settings: current.settings }
+              ? { settings: remoteDesktopVideoSettingsWire(current.settings) }
               : {}),
           },
           check,
@@ -108,8 +109,9 @@ export class RemoteDesktopViewerMedia {
           /DESKTOP_(AUDIO_UNAVAILABLE|SCREEN_PERMISSION_REQUIRED|DISABLED|STOPPED|LEASE_EXPIRED)/.test(
             String(error),
           );
-        send({ type: "fallback", retry: !permanent });
-        if (valid()) this.deps.onOfferFailure?.();
+        const capturePending = /DESKTOP_CAPTURE_PENDING/.test(String(error));
+        send({ type: "fallback", retry: !permanent, capturePending });
+        if (valid() && !capturePending) this.deps.onOfferFailure?.();
       } finally {
         this.deps.onOfferSettled?.(current.lease);
       }

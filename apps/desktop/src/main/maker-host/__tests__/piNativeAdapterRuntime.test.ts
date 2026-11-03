@@ -9,16 +9,19 @@ import { it, expect } from 'vitest';
 import { PI_NATIVE_PROVIDER_ADAPTER_SOURCE } from '../../../../../../packages/maker-core/src/agents/pi/native-provider-adapter-source.js';
 
 const binary = resolve('../../apps/pi-bin', `${process.platform}-${process.arch}`, process.platform === 'win32' ? 'pi.exe' : 'pi');
-it.skipIf(!existsSync(binary)).each(['github-copilot', 'cloudflare-ai-gateway'])('uses %s native auth with an independent connection ID in the actual Pi runtime', async adapterProvider => {
+// #6454: the existing keyed cases missed host-authenticated aliases without keyEnv.
+// This runtime smoke checks an actual request/reply and proxy header forwarding, not source text.
+it.skipIf(!existsSync(binary)).each(['github-copilot', 'cloudflare-ai-gateway', 'minimax-cn'])('uses %s native auth with an independent connection ID in the actual Pi runtime', async adapterProvider => {
+  const proxyAuthenticated = adapterProvider === 'minimax-cn';
   const directory = await mkdtemp(join(tmpdir(), 'cindy-pi-provider-test-'));
-  const requests: Array<{ authorization?: string; gatewayKey?: string; apiKey?: string; model?: string; maxTokens?: number }> = [];
+  const requests: Array<{ authorization?: string; gatewayKey?: string; apiKey?: string; subscription?: string; model?: string; maxTokens?: number }> = [];
   const server = createServer((req, res) => {
     const chunks: Buffer[] = [];
     req.on('data', chunk => chunks.push(chunk));
     req.on('end', () => {
       const body = JSON.parse(Buffer.concat(chunks).toString());
       requests.push({ authorization: req.headers.authorization, gatewayKey: req.headers['cf-aig-authorization'] as string, apiKey: req.headers['x-api-key'] as string,
-        model: body.model, maxTokens: body.max_tokens });
+        subscription: req.headers['x-cindy-subscription'] as string, model: body.model, maxTokens: body.max_tokens });
       res.writeHead(200, { 'content-type': 'text/event-stream' });
       for (const event of [
         { type: 'message_start', message: { id: 'fixture-message', type: 'message', role: 'assistant', model: 'claude-fixture', content: [], stop_reason: null, usage: { input_tokens: 5, output_tokens: 0 } } },
@@ -38,13 +41,15 @@ it.skipIf(!existsSync(binary)).each(['github-copilot', 'cloudflare-ai-gateway'])
     await writeFile(join(directory, 'adapter.ts'), PI_NATIVE_PROVIDER_ADAPTER_SOURCE + '\nexport default async function(pi: any) { await registerCindyNativeProviderAdapters(pi); }');
     await writeFile(join(directory, 'auth.json'), '{}');
     await writeFile(join(directory, 'models.json'), JSON.stringify({ providers: { 'fixture-connection': {
-      baseUrl, api: 'anthropic-messages', apiKey: '$CINDY_FIXTURE_API_KEY', models: [{ id: 'claude-fixture', name: 'Fixture',
+      baseUrl, api: 'anthropic-messages', apiKey: proxyAuthenticated ? 'pi-native-keyless' : '$CINDY_FIXTURE_API_KEY',
+      ...(proxyAuthenticated ? { headers: { 'x-cindy-subscription': 'fixture-subscription' } } : {}), models: [{ id: 'claude-fixture', name: 'Fixture',
         api: 'anthropic-messages', input: ['text'], contextWindow: 200000, maxTokens: 4096, reasoning: false }],
     } } }));
     child = spawn(binary, ['--print', '--no-session', '--no-extensions', '--extension', join(directory, 'adapter.ts'),
       '--provider', 'fixture-connection', '--model', 'claude-fixture', 'Reply briefly.'], {
       cwd: directory, env: { ...process.env, PI_CODING_AGENT_DIR: directory, CINDY_FIXTURE_API_KEY: 'fixture-key',
-        CINDY_PI_NATIVE_PROVIDER_ADAPTERS: JSON.stringify([{ id: 'fixture-connection', provider: adapterProvider, keyEnv: 'CINDY_FIXTURE_API_KEY' }]),
+        CINDY_PI_NATIVE_PROVIDER_ADAPTERS: JSON.stringify([{ id: 'fixture-connection', name: 'Fixture', provider: adapterProvider,
+          ...(proxyAuthenticated ? {} : { keyEnv: 'CINDY_FIXTURE_API_KEY' }) }]),
       }, stdio: ['ignore', 'pipe', 'pipe'],
     });
     let output = ''; let errors = '';
@@ -55,6 +60,7 @@ it.skipIf(!existsSync(binary)).each(['github-copilot', 'cloudflare-ai-gateway'])
     expect(exit, errors).toBe(0);
     expect(output).toContain('fixture-ok');
     expect(requests).toEqual([{ authorization: adapterProvider === 'github-copilot' ? 'Bearer fixture-key' : undefined,
-      gatewayKey: adapterProvider === 'cloudflare-ai-gateway' ? 'Bearer fixture-key' : undefined, apiKey: undefined, model: 'claude-fixture', maxTokens: 4096 }]);
+      gatewayKey: adapterProvider === 'cloudflare-ai-gateway' ? 'Bearer fixture-key' : undefined, apiKey: proxyAuthenticated ? 'pi-native-keyless' : undefined,
+      subscription: proxyAuthenticated ? 'fixture-subscription' : undefined, model: 'claude-fixture', maxTokens: 4096 }]);
   } finally { child?.kill(); server.closeAllConnections(); await new Promise<void>(resolve => server.close(() => resolve())); await rm(directory, { recursive: true, force: true }); }
 }, 20_000);

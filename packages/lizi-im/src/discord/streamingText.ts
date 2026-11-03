@@ -10,6 +10,7 @@ export function startStreaming(
   deps: {
     send: (text: string) => Promise<string>;
     edit: (messageId: string, text: string) => Promise<void>;
+    remove: (messageId: string) => Promise<void>;
     markdownToDiscord: typeof markdownToDiscord;
     chunk: typeof chunkDiscordText;
     resolveImageUrl?: (url: string) => string;
@@ -102,6 +103,9 @@ class DiscordStreamingTextHandle implements StreamingTextHandle {
       await this.deps.edit(this.messageId, firstChunk);
     } else if (imageAbsPaths.length > 0) {
       await this.deps.edit(this.messageId, IMAGE_ONLY_PLACEHOLDER);
+    } else {
+      await this.deps.remove(this.messageId);
+      return;
     }
     for (const chunk of chunks.slice(1)) {
       await this.deps.send(chunk);

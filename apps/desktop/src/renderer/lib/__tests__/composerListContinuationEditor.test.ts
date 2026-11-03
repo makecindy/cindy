@@ -6,10 +6,17 @@ import Paragraph from '@tiptap/extension-paragraph';
 import Text from '@tiptap/extension-text';
 import HardBreak from '@tiptap/extension-hard-break';
 import { applyListBackspace, applyListContinuation } from '../composerListContinuation';
+import {
+  ComposerBulletList,
+  ComposerListItem,
+  ComposerOrderedList,
+  handleComposerListEnter,
+} from '@/components/new-chat/ComposerListNodes';
+import { serializeEditorContent } from '@/components/new-chat/composerContentSerialization';
 
 /**
  * applyListContinuation 在真实 Tiptap/ProseMirror 编辑器上的行为测试
- * (schema 与 ChatInput 一致的最小子集:Document + Paragraph + Text + HardBreak)。
+ * (schema 与 ChatInput 一致的最小子集,包含文本、换行和结构化列表)。
  * 覆盖行提取(hardBreak 分行)、事务 dispatch(接续插入 / 空项前缀删除)。
  * 纯前缀匹配用例见 composerListContinuation.test.ts。
  */
@@ -25,7 +32,10 @@ function makeEditor(lines: string[]): Editor {
   });
   editor = new Editor({
     element: document.createElement('div'),
-    extensions: [Document, Paragraph, Text, HardBreak],
+    extensions: [
+      Document, Paragraph, Text, HardBreak,
+      ComposerListItem, ComposerBulletList, ComposerOrderedList,
+    ],
     content: { type: 'doc', content: [{ type: 'paragraph', content }] },
   });
   // 光标移到文档末尾(段落收尾位置),模拟用户刚敲完最后一个字符。
@@ -41,6 +51,60 @@ function docText(ed: Editor): string {
 afterEach(() => {
   editor?.destroy();
   editor = null;
+});
+
+/**
+ * #7227: ChatInput's list key handler must honor Enter-as-newline. Existing
+ * command tests bypassed key routing. Minimal failure: "1. test" + Enter
+ * with modifier-enter enabled. Unit tier, real editor transactions/selection.
+ * Standalone Windows run: 1.95s Vitest duration (4.82s command wall time).
+ */
+describe('composer list newline keys', () => {
+  it.each([
+    { name: 'plain ordered', content: '1. test', html: null, expected: '1. test\n2. ' },
+    { name: 'structured ordered', content: '', html: '<ol><li><p>test</p></li></ol>', expected: '1. test\n2. ' },
+    { name: 'structured bullet', content: '', html: '<ul><li><p>test</p></li></ul>', expected: '- test\n- ' },
+    { name: 'empty plain item', content: '1. ', html: null, expected: '' },
+    { name: 'empty structured item', content: '', html: '<ol><li><p></p></li></ol>', expected: '' },
+  ])('continues or exits $name on Enter in modifier-enter mode', ({ content, html, expected }) => {
+    const ed = makeEditor([content]);
+    if (html) {
+      ed.commands.setContent(html);
+      ed.commands.setTextSelection(ed.state.doc.content.size - 3);
+    }
+    const event = new KeyboardEvent('keydown', { key: 'Enter' });
+    expect(handleComposerListEnter(ed.view, event, 'modifier-enter')).toBe(true);
+    expect(serializeEditorContent(ed).text).toBe(expected);
+  });
+
+  it.each([
+    { name: 'default send', preference: 'enter' as const, init: {} },
+    { name: 'macOS send', preference: 'modifier-enter' as const, init: { metaKey: true } },
+    { name: 'Windows send', preference: 'modifier-enter' as const, init: { ctrlKey: true } },
+    { name: 'IME confirmation', preference: 'modifier-enter' as const, init: { isComposing: true } },
+  ])('leaves $name untouched', ({ preference, init }) => {
+    const ed = makeEditor(['1. test']);
+    const event = new KeyboardEvent('keydown', { key: 'Enter', ...init });
+    expect(handleComposerListEnter(ed.view, event, preference)).toBe(false);
+    expect(docText(ed)).toBe('1. test');
+  });
+
+  it.each([{ shiftKey: true }, { altKey: true }])('preserves explicit newline shortcuts: %j', (init) => {
+    const ed = makeEditor(['1. test']);
+    const event = new KeyboardEvent('keydown', { key: 'Enter', ...init });
+    expect(handleComposerListEnter(ed.view, event, 'enter')).toBe(true);
+    expect(docText(ed)).toBe('1. test\n2. ');
+  });
+
+  it.each([
+    { lines: ['plain text'] },
+    { lines: ['```', '1. code'] },
+  ])('leaves ordinary text and code fences to native newline handling: $lines', ({ lines }) => {
+    const ed = makeEditor(lines);
+    const event = new KeyboardEvent('keydown', { key: 'Enter' });
+    expect(handleComposerListEnter(ed.view, event, 'modifier-enter')).toBe(false);
+    expect(docText(ed)).toBe(lines.join('\n'));
+  });
 });
 
 describe('applyListContinuation on a real editor', () => {
@@ -105,12 +169,14 @@ describe('applyListContinuation on a real editor', () => {
 });
 
 describe('applyListBackspace on a real editor', () => {
-  it('deletes the whole empty prefix plus the line break, caret lands at end of previous line', () => {
+  it('deletes only the empty prefix and keeps the line break, caret stays on the emptied line', () => {
     const ed = makeEditor(['1. test', '2. ']);
     expect(applyListBackspace(ed.view)).toBe(true);
-    expect(docText(ed)).toBe('1. test');
-    // 光标在 "1. test" 末尾(pos 1 + 7)
-    expect(ed.state.selection.from).toBe(8);
+    expect(docText(ed)).toBe('1. test\n');
+    // 光标在空行行首(pos 1 + "1. test"(7) + br(1))
+    expect(ed.state.selection.from).toBe(9);
+    // 空行上再按一次不再拦截,交给浏览器原生退格删掉 hardBreak 回到上一行。
+    expect(applyListBackspace(ed.view)).toBe(false);
   });
 
   it('on the first line, deletes only the prefix (exits list, stays on the line)', () => {
@@ -123,7 +189,7 @@ describe('applyListBackspace on a real editor', () => {
   it('keeps indentation-aware deletion (indented empty item)', () => {
     const ed = makeEditor(['- a', '  - ']);
     expect(applyListBackspace(ed.view)).toBe(true);
-    expect(docText(ed)).toBe('- a');
+    expect(docText(ed)).toBe('- a\n');
   });
 
   it('returns false when the item still has content — normal backspace applies', () => {
@@ -150,6 +216,6 @@ describe('applyListBackspace on a real editor', () => {
     // pos = 1 + "1. a"(4) + br(1) + "2. "(3) = 9
     ed.commands.setTextSelection(9);
     expect(applyListBackspace(ed.view)).toBe(true);
-    expect(docText(ed)).toBe('1. a\n3. b');
+    expect(docText(ed)).toBe('1. a\n\n3. b');
   });
 });

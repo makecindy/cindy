@@ -80,6 +80,8 @@ export interface SubagentChildRun {
   awaitingApproval?: boolean;
   output?: string;
   outputTruncated?: boolean;
+  /** Final reply readiness, independent of commentary; absent on legacy hosts/runners. */
+  resultReady?: boolean;
   error?: string;
 }
 
@@ -215,6 +217,12 @@ export interface SubagentRunsListResponse {
   supported: boolean;
   runs: SubagentRun[];
   nextCursor?: string;
+  /**
+   * The answering Host pushes `local-db:subagent-runs:changed` to controllers subscribed
+   * to the task, so a remote reader may wait for that push instead of polling. Absent on
+   * older Hosts, which keep the poll.
+   */
+  changePush?: boolean;
 }
 
 export interface SubagentRunDetailResponse {

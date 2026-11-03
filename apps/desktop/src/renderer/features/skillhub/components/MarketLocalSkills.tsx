@@ -3,7 +3,7 @@ import { ChevronDown } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { DropdownMenu, DropdownMenuContent, DropdownMenuRadioGroup, DropdownMenuRadioItem, DropdownMenuTrigger } from '@/components/ui/dropdown-menu';
 import { useTranslation } from 'react-i18next';
-import { skillhubCatalogKey } from '../../../../shared/skillhubCatalog';
+import { marketLocalCopies } from '../lib/marketLocalCopies';
 import { useSkillhub } from '../hooks/useSkillhub';
 import type { MarketSkill } from '../hooks/useMarketList';
 import { LocalSkillControls } from './LocalSkillControls';
@@ -15,16 +15,7 @@ export function MarketLocalSkills({ skill }: {
   const { t } = useTranslation();
   const { skills } = useSkillhub();
   const [selectedId, setSelectedId] = useState<string | null>(null);
-  const copies = skills.filter((local) => {
-    // Use the physically joined registry identity; casing alone cannot prove
-    // ownership on case-sensitive volumes. Old scans keep exact-name matching.
-    const localName = local.registryEntry ? local.registrySkillName ?? local.name : local.name;
-    if (local.kind !== 'skill' || localName !== skill.name) return false;
-    return local.registryEntry
-      ? skillhubCatalogKey(localName, local.registryEntry.catalogScope)
-        === skillhubCatalogKey(skill.name, skill.catalogScope)
-      : skill.isMine;
-  });
+  const copies = marketLocalCopies(skills, skill);
   if (copies.length === 0) return null;
 
   const selected = copies.find((local) => local.id === selectedId) ?? copies[0]!;
@@ -48,16 +39,15 @@ export function MarketLocalSkills({ skill }: {
             </Button>
           </DropdownMenuTrigger>
           <DropdownMenuContent align="end"
-            className="w-[var(--radix-dropdown-menu-trigger-width)] min-w-0 rounded-xl border-[var(--border-default)] bg-[var(--surface-elevated)] p-1.5 shadow-none">
+            className="w-[var(--radix-dropdown-menu-trigger-width)] min-w-0 p-1.5">
             <DropdownMenuRadioGroup value={selected.id} onValueChange={setSelectedId}>
               {copies.map((local) => (
-                <DropdownMenuRadioItem key={local.id} value={local.id}
-                  className="rounded-lg text-13 focus:bg-[var(--surface-hover)] data-[state=checked]:bg-[var(--surface-chip)]">
+                <DropdownMenuRadioItem key={local.id} value={local.id}>
                   <span className="min-w-0">
                     <span className="block">{scopeLabel(local)}{' · '}
                       {local.registryEntry ? `v${local.registryEntry.version}` : t('skillhub.sidebar.marketLocalCopy')}
                     </span>
-                    <span className="block break-all text-11 text-[var(--text-secondary)]">{locationLabel(local)}</span>
+                    <span className="block break-all text-12 leading-[1.33] text-[var(--cmd-palette-item-meta)]">{locationLabel(local)}</span>
                   </span>
                 </DropdownMenuRadioItem>
               ))}

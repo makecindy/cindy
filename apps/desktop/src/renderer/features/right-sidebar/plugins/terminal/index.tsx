@@ -61,6 +61,7 @@ const plugin: TabKindPlugin<TerminalState> = {
   menu: {
     kind: 'terminal',
     labelKey: 'rightSidebar.tabs.kinds.terminal',
+    descriptionKey: 'rightSidebar.tabs.descriptions.terminal',
     icon: TerminalIcon,
     order: 30, // file-browser=10, web-browser=20, terminal=30
     enabled: true,

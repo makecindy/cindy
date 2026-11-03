@@ -35,6 +35,11 @@ describe('Pi Responses verbosity transform', () => {
       input: [],
       text: { verbosity: 'low' },
     });
+    expect(transform({ model: 'openai-codex/gpt-5.6-sol', input: [] }, CTX)).toEqual({
+      model: 'openai-codex/gpt-5.6-sol',
+      input: [],
+      text: { verbosity: 'low' },
+    });
     expect(resolveProvider).toHaveBeenCalledWith('session-1', 'token-1');
   });
 

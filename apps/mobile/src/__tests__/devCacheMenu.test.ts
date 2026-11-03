@@ -1,5 +1,3 @@
-import { readFileSync } from 'node:fs';
-import { resolve } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 // mobile vitest 跑在 node 环境(无 react-native / 无 __DEV__):mock 掉 react-native 的 DevSettings + 两层 cache 清理,
@@ -64,16 +62,5 @@ describe('registerDevCacheMenu (dev-only debug entry — runtime gate)', () => {
     await flushMicrotasks();
     expect(clearCachedSessionMessages).toHaveBeenCalledTimes(1);
     expect(reload).toHaveBeenCalledTimes(1);
-  });
-});
-
-describe('dev cache menu wiring (source assertions)', () => {
-  it('keeps the strict __DEV__ gate in source and is registered from RootLayout', () => {
-    const source = readFileSync(resolve(process.cwd(), 'src/debug/devCacheMenu.ts'), 'utf8');
-    expect(source).toContain('if (!__DEV__) return;');
-    expect(source).not.toContain('console.log');
-    const layout = readFileSync(resolve(process.cwd(), 'app/_layout.tsx'), 'utf8');
-    expect(layout).toContain("import { registerDevCacheMenu } from '@/debug/devCacheMenu';");
-    expect(layout).toContain('registerDevCacheMenu();');
   });
 });

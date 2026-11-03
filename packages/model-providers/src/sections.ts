@@ -38,6 +38,7 @@ export interface SectionModel {
   defaultEffort: Effort | null;
   effortDisplayNames?: Record<string, string>;
   supportsFastMode?: boolean;
+  supportsUltrafastMode?: boolean;
   thinkingToggle?: boolean;
   /** 区域门控后的新对话默认标记；仅由可信的模型访问响应投影。 */
   newSessionDefault?: CatalogModel['newSessionDefault'];
@@ -54,7 +55,7 @@ export interface ProviderSection {
   models: SectionModel[];
 }
 
-/** 客户端有资产可渲染的模型厂牌图标种类(桌面 AnthropicMark / OpenAIMark / XDIncMark,手机同源厂牌 path)。 */
+/** 客户端有资产可渲染的模型厂牌图标种类(桌面 AnthropicMark / OpenAIMark / CindyMark,手机同源厂牌 path)。 */
 export type ModelIconKind = 'claude' | 'codex' | 'cindy';
 
 /**
@@ -185,6 +186,7 @@ export function buildProviderSections(args: {
       if (m.description !== undefined) sm.description = m.description;
       if (m.effortDisplayNames !== undefined) sm.effortDisplayNames = m.effortDisplayNames;
       if (m.supportsFastMode !== undefined) sm.supportsFastMode = m.supportsFastMode;
+      if (m.supportsUltrafastMode !== undefined) sm.supportsUltrafastMode = m.supportsUltrafastMode;
       if (m.thinkingToggle !== undefined) sm.thinkingToggle = m.thinkingToggle;
       if (m.newSessionDefault !== undefined) sm.newSessionDefault = m.newSessionDefault;
       if (m.codexCompatibilityWireProtocol !== undefined) {

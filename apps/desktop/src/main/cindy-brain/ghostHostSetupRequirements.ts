@@ -8,6 +8,7 @@
  */
 
 import type { GhostManifest, GhostSetupAssessmentGroup } from '../../shared/ghost.js';
+import { ghostPermissionItems } from '../../shared/ghost.js';
 import { t } from '../i18n.js';
 
 export interface GhostHostSetupRequirementProbes {
@@ -27,7 +28,7 @@ const providers: readonly GhostHostSetupRequirementProvider[] = [
     labelKey: 'newChat.pluginSetup.hostRequirements.modelProvider.label',
     descriptionKey: 'newChat.pluginSetup.hostRequirements.modelProvider.description',
     matches: (manifest) =>
-      Object.values(manifest.cindy ?? {}).some((actions) => (actions?.length ?? 0) > 0),
+      ghostPermissionItems(manifest).some((item) => item.kind === 'cindy'),
   },
 ];
 

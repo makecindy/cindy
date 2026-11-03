@@ -91,3 +91,23 @@
 .usage-history-charts .usage-heatmap-month-label {
   font-size: var(--text-11);
 }
+
+/* Both modes render the tooltip dark; in Dark it sits on a near-identical card surface,
+   so a hairline derived from the tooltip text color keeps its edge legible. */
+.usage-bars-tooltip {
+  box-shadow:
+    inset 0 0 0 1px color-mix(in srgb, var(--tooltip-text) 10%, transparent),
+    var(--shadow-menu);
+}
+
+/* The shared daily-bars tooltip is portaled outside .usage-history-charts. It glides
+   between bars (after its first placement) instead of jumping; reduced motion snaps. */
+.usage-bars-tooltip[data-glide='true'] {
+  transition: transform var(--motion-fast) var(--motion-ease-out);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .usage-bars-tooltip[data-glide='true'] {
+    transition: none;
+  }
+}

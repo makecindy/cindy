@@ -17,6 +17,7 @@
  * "父目录/祖先" 不在这里挡 — UI 已经弹 confirmDialog 警告过, 通过则放行。
  */
 
+import { LIBRARY_READ_ROOT } from '@cindy/maker-core';
 import { promises as fs } from 'node:fs';
 import * as path from 'node:path';
 
@@ -54,6 +55,16 @@ export function splitExtraDirSlots(dirs: readonly string[]): { user: string[]; l
 /** 运行时 extraDirs 去掉 library 槽前缀,只留真实绝对路径。 */
 export function extraDirsForRuntime(dirs: readonly string[]): string[] {
   return dirs.map((dir) => libraryRootFromSlot(dir));
+}
+
+/** Keep the host-owned slot identity alongside native absolute directory grants. */
+export function libraryRootForRuntime(dirs: readonly string[]): string | null {
+  const slots = dirs.filter(isLibraryExtraDirSlot);
+  return slots.length === 1 ? libraryRootFromSlot(slots[0]) : null;
+}
+
+export function directoryGrantsForRuntime(dirs: readonly string[]) {
+  return { extraDirs: extraDirsForRuntime(dirs), [LIBRARY_READ_ROOT]: libraryRootForRuntime(dirs) };
 }
 
 /** 保留用户自选目录,library 槽最多一条。root 为 null 则撤槽。 */
@@ -139,7 +150,7 @@ export async function validateExtraDirs(
     }
 
     // 完全重复 — 第一次出现已 push 到 valid; 后续直接静默丢
-    if (seen.has(dir) || seen.has(root)) continue;
+    if (seen.has(dir)) continue;
 
     let stat;
     try {
@@ -166,7 +177,6 @@ export async function validateExtraDirs(
     }
 
     seen.add(dir);
-    seen.add(root);
     valid.push(dir);
   }
 

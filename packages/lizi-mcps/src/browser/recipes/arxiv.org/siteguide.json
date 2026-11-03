@@ -1,9 +1,13 @@
 {
   "site": "arxiv.org",
-  "auth": "只读无需登录",
-  "entry": {
-    "searchApi": "https://export.arxiv.org/api/query?search_query=all:&max_results=20&sortBy=relevance"
-  },
-  "recipes": ["arxiv-search"],
-  "notes": "搜索走公开 arXiv API(https://export.arxiv.org/api/query?search_query=all:&max_results=20&sortBy=relevance),返回 Atom XML(非 JSON):<feed> 下多个 <entry>,每个含 <title>/<summary>/<author><name>/<id>(论文链接)/<published>。直接 navigate 到该 URL 再 extract body 取整段 XML 文本,自行解析 entry。用 https(非 http,避免重定向),search_query 可用 all:/ti:/au:/abs: 等前缀,sortBy 可选 relevance/lastUpdatedDate/submittedDate。"
+  "auth": "鉴权以具体命令为准：public。需要登录的命令复用当前浏览器会话。",
+  "entry": {},
+  "recipes": [
+    "arxiv-search"
+  ],
+  "notes": "兼容入口 arxiv-search 现执行内置 arxiv/search，原参数名保留；结果采用新版适配器的结构化输出。可用 opencli:<站点>/<命令> 调用完整目录，siteguide 查询参数默认值、类型及 read/write 分类。网站可能变更或要求登录、验证；有 Cookie 不保证绕过风控。",
+  "upstream": {
+    "repository": "https://github.com/jackwener/opencli",
+    "revision": "fe5f1d96aff01c32fd84f86b52af922bfe6ca93f"
+  }
 }

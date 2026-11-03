@@ -1,12 +1,23 @@
 {
   "id": "imdb-search",
-  "match": ["imdb.com"],
-  "description": "在 IMDb 按关键词搜电影/剧集/人物,返回匹配列表(标题、年份、类型、IMDb id、详情页 URL)。IMDb 搜索页内容只读无需登录,但数据藏在页面的 Next.js 数据块里(直接拿接口会被反爬),所以先 navigate 到搜索页再在页面内解析。query 是搜索词(片名/人名)。",
-  "inputs": { "query": { "required": true } },
-  "steps": [
-    { "action": "navigate", "url": "https://www.imdb.com/find/?q={{query|url}}&ref_=nv_sr_sm&language=en-US" },
-    { "action": "wait", "loadState": "load" },
-    { "action": "evaluate", "as": "results", "fn": "async () => { const deadline = Date.now() + 12000; const read = () => { const el = document.getElementById('__NEXT_DATA__'); if (!el) return null; let nd; try { nd = JSON.parse(el.textContent || 'null'); } catch(e) { return null; } const pp = nd && nd.props && nd.props.pageProps; if (!pp) return null; const out = []; const titles = (pp.titleResults && pp.titleResults.results) || []; for (const tr of titles) { const it = tr.listItem || {}; const tt = (it.titleText && (it.titleText.text || it.titleText)) || (it.originalTitleText && (it.originalTitleText.text || it.originalTitleText)) || ''; let yr = ''; if (it.releaseYear != null) yr = String(typeof it.releaseYear === 'object' ? (it.releaseYear.year || '') : it.releaseYear); const ty = (it.titleType && (it.titleType.text || it.titleType.id)) || it.titleType || 'title'; out.push({ id: tr.index || '', kind: 'title', title: tt, year: yr, type: ty, url: tr.index ? ('https://www.imdb.com/title/' + tr.index + '/') : '' }); } const names = (pp.nameResults && pp.nameResults.results) || []; for (const nr of names) { const it = nr.listItem || {}; const nm = (it.nameText && (it.nameText.text || it.nameText)) || ''; out.push({ id: nr.index || '', kind: 'name', title: nm, year: '', type: 'Person', url: nr.index ? ('https://www.imdb.com/name/' + nr.index + '/') : '' }); } return out; }; let r = read(); while ((!r || r.length === 0) && Date.now() < deadline) { await new Promise(res => setTimeout(res, 250)); r = read(); } if (r == null) throw new Error('未能解析 IMDb 搜索结果(页面结构可能变更或被反爬拦截),请重试'); return r.slice(0, 25); }" }
+  "match": [
+    "imdb.com"
   ],
-  "output": "{{results}}"
+  "description": "Search IMDb for movies, TV shows, and people",
+  "access": "read",
+  "adapter": "imdb/search",
+  "inputs": {
+    "query": {
+      "required": true,
+      "type": "str",
+      "description": "Search query"
+    },
+    "limit": {
+      "required": false,
+      "type": "int",
+      "default": 20,
+      "description": "Number of results"
+    }
+  },
+  "steps": []
 }

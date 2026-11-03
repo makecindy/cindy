@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<network-security-config>
+  <!-- Development builds also need HTTP to the developer's Metro host, including LAN IPs. -->
+  <base-config cleartextTrafficPermitted="true" />
+</network-security-config>

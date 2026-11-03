@@ -19,7 +19,8 @@ describe('mobile cross-device quote wiring', () => {
     expect(bubbleSource).toContain("segment.kind === 'quote' ? [segment.quote] : []");
     expect(bubbleSource).toContain('joinChatQuoteTextSegments(quoteSegments)');
     expect(bubbleSource).toContain('actions.onPreviewRewind?.(clientId, {');
-    expect(bubbleSource).toContain('{ orderedBody: item.message.body }');
+    expect(bubbleSource).toContain('const draftBody = item.message.draftBody ?? item.message.body;');
+    expect(bubbleSource).toContain('{ orderedBody: draftBody }');
   });
 
   it('propagates quote metadata through direct and attachment-outbox sends', () => {
@@ -28,8 +29,8 @@ describe('mobile cross-device quote wiring', () => {
     expect(source).toContain('quotesEncoded: quotesEncodedAtSend');
     expect(source).toContain('pastedTextRanges: pastedTextRangesAtSend');
     expect(source).toContain('slashCommandRanges: slashCommandRangesAtSend');
-    expect(source).toContain('quotesEncoded: item.quotesEncoded');
-    expect(source).toContain('restoreOutboxItemsToDraft([item])');
+    expect(readSource('src/session/MobileOutboxBridge.tsx')).toContain('quotesEncoded: item.quotesEncoded');
+    expect(source).toContain('await mobileDurableOutbox.add(record)');
     expect(source).toContain('saveComposerDocumentDraft(\n        draftSessionId,\n        recovery.document,');
     expect(source).toContain('createQueueEditTextState(item)');
     expect(source).toContain('resolveQueueEditTextSubmission(queueEditAtSendStart.textState, documentAtSend)');
@@ -53,5 +54,24 @@ describe('mobile cross-device quote wiring', () => {
     expect(source).toContain('stripChatQuoteMarkerLines(item.text)');
     expect(source).toContain('item.chatMessage.quotesEncoded === true');
     expect(source).toContain('item.quotesEncoded ? stripChatQuoteMarkerLines(item.text)');
+  });
+});
+
+// guard: message-source.md: persisted IM/source metadata must survive both renderer branches.
+describe("hookSourceRendering.test.ts call-site contracts", () => {
+it('downgrades only legacy hook rows (stored prompt) and keeps local IM rows as user rows', () => {
+    const source = readFileSync(resolve(process.cwd(), 'src/session/MessageRenderer.tsx'), 'utf8');
+
+    expect(source).toContain('&& !item.message.hookSource.userTextContent');
+    expect(source).toContain("kind: 'system' as const, align: 'agent' as const");
+    expect(source).toContain('testID="message.hookSource"');
+    // 抬头走 i18n「Cindy · 来自 {{platform}}」,不再硬编码 Slack / Telegram / X。
+    expect(source).toContain('{imSourceHeaderTitle(hookSource.im)}');
+    expect(source).not.toContain("hookSource.im === 'x' ? 'X' : 'Slack'");
+    expect(source).toContain('{hookSource.channelName}');
+    // IM 卡片与桌面一样左对齐;长正文仍走有界测量与折叠保护。
+    expect(source).toContain('presentation.isUserAligned && !item.message.hookSource');
+    expect(source).toContain('(isUser || hookSource !== undefined)');
+    expect(source).toContain("(item.message.kind === 'user' || hookSource !== undefined)");
   });
 });

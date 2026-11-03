@@ -64,6 +64,7 @@ const h = vi.hoisted(() => {
 });
 
 vi.mock('electron', () => ({
+  app: { once: vi.fn() },
   ipcMain: { handle: vi.fn() },
   BrowserWindow: {
     getAllWindows: () => [{ isDestroyed: () => false, webContents: { send: h.webContentsSend } }],
@@ -88,6 +89,7 @@ vi.mock('../agent-island/service.js', () => ({
 vi.mock('../imageCacheStore', () => ({ removeSession: vi.fn() }));
 
 import { renameSessionTitlesInDb } from '../localDb/ipc/sessions.js';
+import { admitTaskAction, assertTaskActionCurrent } from '../maker-ipc/taskActionAuthorization.js';
 
 beforeEach(() => {
   vi.clearAllMocks();
@@ -98,6 +100,29 @@ beforeEach(() => {
 });
 
 describe('renameSessionTitlesInDb', () => {
+  // #6399: admission alone misses revocation during SELECT. Unit boundary is the
+  // production batch writer; the existing conditional-title test only covers DB races.
+  it('does not rename after the admitted input is replaced during the read', async () => {
+    h.selectRows.push({ id: 'target', title: 'Old', workingDir: null, updatedAt: 1_700_000_000_000 });
+    let current = true;
+    const decision = await admitTaskAction(
+      { server: 'cindy_helper', tool: 'rename_sessions', sessionId: 'caller', args: {} },
+      { key: 'input', ownerInput: true, delegated: false, assertCurrent: async () => {
+        if (!current) throw new Error('TASK_ACTION_AUTHORIZATION_EXPIRED');
+      } },
+    );
+    if (!decision.ok || !decision.run) throw new Error('Expected admission');
+    h.fakeDb.select.mockImplementationOnce(() => {
+      current = false;
+      return { from: () => ({ where: () => Promise.resolve(h.selectRows) }) };
+    });
+    await expect(decision.run(() => renameSessionTitlesInDb(
+      [{ sessionId: 'target', title: 'New' }], false, assertTaskActionCurrent,
+    ))).rejects.toThrow('TASK_ACTION_AUTHORIZATION_EXPIRED');
+    expect(h.tx).not.toHaveBeenCalled();
+    expect(h.tapWindowBroadcast).not.toHaveBeenCalled();
+  });
+
   it('rolls back visible side effects when a conditional update no longer matches', async () => {
     h.selectRows.push(
       { id: 'session-1', title: 'Old 1', workingDir: '/repo', updatedAt: 1_700_000_000_000 },

@@ -1,7 +1,7 @@
 /**
  * LspBetaCell — Settings → 实验功能区块下的 "LSP 代码智能 (Beta)" 卡片。
  *
- * 风格对齐 ExperimentalFeatureRow: rounded-xl card + Switch + 副标题描述。
+ * 实验功能卡片里的一行(与 ExperimentalFeatureRow 同样式): Switch + 副标题描述。
  * IPC + localStorage 同步对齐 CompatModeCell。
  *
  * 行为:
@@ -19,7 +19,6 @@ import { useCallback, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 
 import { Switch } from '@/components/ui/switch';
-import { cn } from '@/lib/utils';
 import { toast } from '@/lib/toast';
 import { createLogger } from '@/lib/logger';
 import { useLspMode } from '@/hooks/useLspMode';
@@ -62,13 +61,7 @@ export function LspBetaCell() {
   const description = t('settings.lspMode.cell.description');
 
   return (
-    <div
-      className={cn(
-        'flex flex-col gap-3 rounded-xl p-5',
-        'bg-[var(--settings-theme-card-bg)]',
-        'border border-[var(--settings-theme-card-border)]',
-      )}
-    >
+    <div className="flex flex-col gap-3 px-4 py-4">
       <div className="flex items-start justify-between gap-3">
         <div className="flex min-w-0 flex-col gap-1">
           <p
@@ -77,7 +70,7 @@ export function LspBetaCell() {
           >
             {title}
           </p>
-          <p className="text-12 leading-[1.4] text-[var(--settings-section-sublabel)] opacity-70">
+          <p className="text-12 leading-[1.4] text-[var(--text-secondary)]">
             {description}
           </p>
         </div>

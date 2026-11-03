@@ -26,14 +26,19 @@ import {
 } from '@cindy/maker-core';
 
 import { createLogger } from '../../logger';
+import { readImRemoteProviderRoute } from '../remoteProviderRoute';
 import { getMaker } from '../../maker-host';
-import { resolveLenientSessionRoute } from '../../maker-host/model-route-guard-live';
+import {
+  resolveLenientSessionRoute,
+  resolveNewTaskDefaultModelRoute,
+} from '../../maker-host/model-route-guard-live';
 import {
   getSessionProvider,
   normalizeSessionProviderId,
   setSessionProvider,
 } from '../../maker-host/session-provider-store';
 import {
+  applyPiImModelSelectionUnderLock,
   cancelPendingAgentSwitchForSession,
   clearPendingCredentialSwitchForSession,
   getPendingCredentialSwitchTarget,
@@ -43,6 +48,7 @@ import {
   wakeSessionInputAfterCredentialSwitch,
 } from '../../maker-ipc/register';
 import { applyRuntimeSetModelChange } from '../../maker-ipc/runtimeSetModel';
+import { cancelPendingSessionRuntimeMutation } from '../../maker-ipc/sessionRuntimeControl';
 import { getDesktopCcPrefs, type DesktopCcPrefs } from '../index';
 import {
   captureImAccountGeneration,
@@ -73,6 +79,8 @@ import {
   updateModelEffort,
   updatePermissionMode,
 } from './sessionRepo';
+import { COMPANION_MANAGED_COMMAND_FALLBACK } from './botCommands';
+import { markImSessionManualRouteOverride } from './manualRouteOverride';
 import { changeSessionPermissionMode } from './permissionModeControl';
 import type { ImCardBuilders } from './cardBuilders';
 import { enqueueAskCardPatch } from './askCardPatchQueue';
@@ -99,9 +107,8 @@ function pickRandom<T>(arr: readonly T[]): T {
   return arr[Math.floor(Math.random() * arr.length)];
 }
 
-const DESKTOP_CC_DEFAULTS: DesktopCcPrefs = {
-  model: 'claude-sonnet-4-6',
-  providerId: null,
+/** 桌面偏好还没推过来时的兜底;模型不写死,按新建任务口径实时解析。 */
+const DESKTOP_CC_DEFAULTS: Omit<DesktopCcPrefs, 'model' | 'providerId'> = {
   effort: 'medium',
   permissionMode: 'acceptEdits',
   fastMode: false,
@@ -341,6 +348,22 @@ export function createCardActionHandler(
       const previousProviderId = previousRoute
         ? previousRoute.providerId
         : getSessionProvider(sessionId);
+      const liveBeforePick = turnRunner.getMakerSessionById(sessionId);
+      const sessionAgentKind = liveBeforePick?.agentKind ??
+        (await getMaker().getSessionMeta?.(sessionId))?.agentKind;
+      const isPiSession = sessionAgentKind === 'pi';
+      if (previousRoute?.agentDeviceId && sessionAgentKind) {
+        try {
+          await readImRemoteProviderRoute({
+            agentDeviceId: previousRoute.agentDeviceId,
+            agentKind: sessionAgentKind,
+            providerId: providerId === undefined ? previousRoute.providerId : providerId,
+            model: modelId,
+          });
+        } catch (error) {
+          return error instanceof Error ? error.message : String(error);
+        }
+      }
       const restorePersistentRoute = async (reason: string): Promise<void> => {
         if (!previousRoute) return;
         try {
@@ -358,12 +381,17 @@ export function createCardActionHandler(
       const rollbackRuntimeChange = async (reason: string): Promise<void> => {
         setSessionProvider(sessionId, previousProviderId);
         const liveForRollback = turnRunner.getMakerSessionById(sessionId);
-        if (!liveForRollback || !previousRoute) return;
+        if (!previousRoute) return;
         try {
-          await liveForRollback.setModel(previousRoute.model, {
-            providerId: previousRoute.providerId,
-          });
-          if (effort) {
+          if (isPiSession) {
+            await applyPiImModelSelectionUnderLock(sessionId, previousRoute.model,
+              previousRoute.providerId, { model: modelId, providerId: providerId ?? previousProviderId });
+          } else if (liveForRollback) {
+            await liveForRollback.setModel(previousRoute.model, {
+              providerId: previousRoute.providerId,
+            });
+          }
+          if (liveForRollback && effort) {
             await liveForRollback.setEffort(previousRoute.effort);
           }
         } catch (rollbackErr) {
@@ -374,16 +402,28 @@ export function createCardActionHandler(
       };
 
       // 持久化与运行态切换必须和 send / agent switch 共用 session 锁，保证后选覆盖先选。
-      try {
-        await updateModelEffort(sessionId, modelId, effort ?? 'high', providerId);
-      } catch (err) {
-        const msg = err instanceof Error ? err.message : String(err);
-        log.error(`model:pick DB update failed: ${msg}`);
-        return msg;
+      if (!isPiSession) {
+        try {
+          await updateModelEffort(sessionId, modelId, effort ?? 'high', providerId);
+        } catch (err) {
+          const msg = err instanceof Error ? err.message : String(err);
+          log.error(`model:pick DB update failed: ${msg}`);
+          return msg;
+        }
       }
 
+      let piDeferredGeneration: number | undefined;
+      const rollbackPiSelection = async (reason: string): Promise<void> => {
+        if (piDeferredGeneration !== undefined) {
+          cancelPendingSessionRuntimeMutation(sessionId, piDeferredGeneration);
+          return;
+        }
+        await rollbackRuntimeChange(reason);
+      };
       try {
-        const runtimeChange = await applyRuntimeSetModelChange({
+        const runtimeChange = isPiSession
+          ? await applyPiImModelSelectionUnderLock(sessionId, modelId, providerId, previousRoute)
+          : await applyRuntimeSetModelChange({
           maker: getMaker(),
           sessionId,
           model: modelId,
@@ -394,7 +434,25 @@ export function createCardActionHandler(
           wakeSessionInputQueue: wakeSessionInputAfterCredentialSwitch,
           getPendingCredentialSwitch: getPendingCredentialSwitchTarget,
           logger: log,
-        });
+          });
+        if (isPiSession && runtimeChange.status === 'deferred' && 'generation' in runtimeChange) {
+          piDeferredGeneration = runtimeChange.generation;
+        }
+
+        if (isPiSession) {
+          try {
+            // The Pi host transaction reads the old DB route to protect native
+            // history and register a correct rollback snapshot while busy.
+            await updateModelEffort(sessionId, modelId, effort ?? 'high',
+              'effectiveProviderId' in runtimeChange ? runtimeChange.effectiveProviderId : providerId);
+          } catch (err) {
+            const msg = err instanceof Error ? err.message : String(err);
+            log.error(`model:pick DB update failed after Pi selection: ${msg}`);
+            await restorePersistentRoute('Pi DB update');
+            await rollbackPiSelection('Pi DB update');
+            return msg;
+          }
+        }
 
         const liveAfterModel = turnRunner.getMakerSessionById(sessionId);
         if (runtimeChange.status !== 'deferred' && liveAfterModel && effort) {
@@ -404,7 +462,7 @@ export function createCardActionHandler(
             const msg = err instanceof Error ? err.message : String(err);
             log.warn(`model:pick live setEffort failed: ${msg}`);
             await restorePersistentRoute('setEffort');
-            await rollbackRuntimeChange('setEffort');
+            await rollbackPiSelection('setEffort');
             return msg;
           }
         }
@@ -418,6 +476,23 @@ export function createCardActionHandler(
       const liveAfterModel = turnRunner.getMakerSessionById(sessionId);
       if (!liveAfterModel) {
         log.info(`model:pick: no live session for ${sessionId.slice(-8)} — DB updated only`);
+      }
+      // 「脱离跟随」墓碑只在选择真正落地后写: 上面任何失败都会回滚持久路由, 若在
+      // updateModelEffort 里立碑, 失败回滚(同一函数)会让失败的选择永久脱离默认
+      // 跟随(PR #5155 review P2)。写失败按选择失败处理 —— 整体回滚并报错重试。
+      try {
+        await markImSessionManualRouteOverride(sessionId);
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        log.warn(`model:pick manual override marker failed: ${msg}`);
+        // applyRuntimeSetModelChange 可能已向 PendingCredentialSwitch 登记了延迟目标,
+        // 失败回滚必须一并撤销, 否则 turn 收口仍会应用一个卡片已报失败的选择
+        // (PR #5155 review P2)。
+        clearPendingCredentialSwitchForSession(sessionId);
+        await restorePersistentRoute('manual override marker');
+        if (isPiSession) await rollbackPiSelection('manual override marker');
+        else await rollbackRuntimeChange('manual override marker');
+        return msg;
       }
       // 这次 IM 选择晚于 renderer 登记的跨引擎 intent；只有整条 route 更新成功后
       // 才取消旧 intent，失败回滚时仍保留它供下一次发送重试。
@@ -888,8 +963,8 @@ export function createCardActionHandler(
     // 然后 attach binding 把后续渠道消息路由到这个新 session。
     // session 创建参数:
     //   - agentKind = 'claude-code' (跟 desktop 默认一致)
-    //   - model/effort/fastMode 用 desktop 当前偏好(含 providerId, 缺省走
-    //     DESKTOP_CC_DEFAULTS) — 这是"用 desktop 默认"的承诺
+    //   - model/effort/fastMode 用 desktop 当前偏好(含 providerId; 偏好缺省时
+    //     模型按新建任务口径解析, 其余走 DESKTOP_CC_DEFAULTS) — 这是"用 desktop 默认"的承诺
     //   - permissionMode 例外: 飞书群 /ctr 用渠道设置「群聊新建任务权限档」
     //     (默认 auto), 私聊/其它渠道保持 desktop 偏好 — 两个创建分支必须一致,
     //     非 thread 分支才是 feishu(非 threadScoped 渠道)实际走的路径
@@ -911,7 +986,12 @@ export function createCardActionHandler(
       `control:new workingDir=${workingDir} displayName=${displayName} sender=...${event.senderId.slice(-8)}`,
     );
 
-    const desktopPrefs = getDesktopCcPrefs() ?? DESKTOP_CC_DEFAULTS;
+    const newTaskDefault = await resolveNewTaskDefaultModelRoute('claude-code').catch(() => null);
+    const desktopPrefs: DesktopCcPrefs = getDesktopCcPrefs() ?? {
+      ...DESKTOP_CC_DEFAULTS,
+      model: newTaskDefault?.model ?? '',
+      providerId: newTaskDefault?.providerId ?? null,
+    };
     // 飞书群/话题里的 /ctr 新建: 权限档用渠道设置「群聊新建任务权限档」
     // (默认 auto 自动审批, 与群里 @bot 开话题建会话同一个设置项 —— 见
     // feishu adapter 的 sessions.permissionModeFor); 私聊保持 desktop 偏好不变。
@@ -941,9 +1021,9 @@ export function createCardActionHandler(
       // (PR #744 review 第六轮);desiredEffort 让换模型时的 effort 按解析出的
       // 模型条目 reconcile(第十一轮)。
       {
-        fallbackModel: DESKTOP_CC_DEFAULTS.model,
+        fallbackModel: newTaskDefault?.model,
         desiredEffort: desktopPrefs.effort,
-        desiredFastMode: desktopPrefs.fastMode === true,
+        desiredFastMode: desktopPrefs.fastMode ?? false,
       },
     );
     // 换了模型时 effort 用 reconcile 结果(保存档可能超出兜底模型的支持集,原样透传
@@ -1242,6 +1322,15 @@ export function createCardActionHandler(
       await patchProjectCard(im, event.messageId, projectUi.attachedUnsupported);
       return;
     }
+    // 连接已交给伙伴(交出前发出的旧卡片迟到按压): 伙伴的工作目录是它的 Home, 不在渠道里切。
+    if (turnRunner.companionBotIdFor?.(botContextId)) {
+      await patchProjectCard(
+        im,
+        event.messageId,
+        adapter.ui.slash.companionManagedCommand ?? COMPANION_MANAGED_COMMAND_FALLBACK,
+      );
+      return;
+    }
 
     let workingDir: string;
     let displayName: string;
@@ -1380,18 +1469,15 @@ export function createCardActionHandler(
       case 'permission:allow:once':
         return buildPermissionAllowOnceDecision();
       case 'permission:allow:always': {
-        // "Allow always for this session": ask the SDK to add a session-scoped
-        // allow rule for the same toolName so subsequent calls of the same tool
-        // skip the canUseTool callback. toolName comes from the original
-        // InteractionRequest (stashed in pendingInteractions at register time).
+        // 授权范围只从本机保存的原请求恢复，不采信按钮回传的授权标记。
         const entry = requestId ? lookupPending(requestId) : null;
-        const toolName = entry?.toolName;
-        if (!toolName) {
-          // No toolName recoverable — degrade to plain allow (one-shot). User
+        const request = entry?.permissionRequest;
+        if (!request) {
+          // No request recoverable — degrade to plain allow (one-shot). User
           // sees the same outcome as "allow once" for this single call.
           return buildPermissionAllowOnceDecision();
         }
-        return buildPermissionAllowAlwaysDecision(toolName);
+        return buildPermissionAllowAlwaysDecision(request);
       }
       case 'permission:deny':
         return buildPermissionDenyDecision(PERMISSION_USER_DENIED_REASON);
@@ -1587,6 +1673,7 @@ export function createCardActionHandler(
           // 授权卡保留原始正文(工具名 + 参数预览)再追加决策结果 — 用户要能
           // 回看自己批准的是什么; 其它交互卡维持整卡替换的旧形态。
           const resolvedLabel = describeDecision(decision);
+          if (resolved.shared) return; // Shared presenter updates every surface once.
           const spec = resolved.permissionCard
             ? cards.buildResolvedPermissionCard(resolved.permissionCard, resolvedLabel)
             : cards.buildResolvedCard(resolvedLabel);

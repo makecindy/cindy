@@ -1,12 +1,12 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import path from 'node:path';
 
-const mocks = vi.hoisted(() => ({ watch: vi.fn(), mkdir: vi.fn(), close: vi.fn(), on: vi.fn() }));
+const mocks = vi.hoisted(() => ({ watch: vi.fn(), mkdir: vi.fn(), open: vi.fn(), rename: vi.fn(), rm: vi.fn(), close: vi.fn(), on: vi.fn() }));
 vi.mock('electron', () => ({ app: { getPath: () => path.resolve('test-user-data') } }));
 vi.mock('node:fs', async (original) => ({ ...await original<typeof import('node:fs')>(), watch: mocks.watch }));
 vi.mock('node:fs/promises', async (original) => {
   const fs = await original<typeof import('node:fs/promises')>();
-  return { ...fs, default: { ...fs, mkdir: mocks.mkdir } };
+  return { ...fs, default: { ...fs, mkdir: mocks.mkdir, open: mocks.open, rename: mocks.rename, rm: mocks.rm } };
 });
 import { watchRecycleJournal } from '../worktree/recycleJournal';
 
@@ -14,6 +14,9 @@ describe('worktree journal notifications', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mocks.mkdir.mockResolvedValue(undefined);
+    mocks.open.mockResolvedValue({ writeFile: async () => {}, sync: async () => {}, close: async () => {} });
+    mocks.rename.mockResolvedValue(undefined);
+    mocks.rm.mockResolvedValue(undefined);
     mocks.watch.mockReturnValue({ on: mocks.on, close: mocks.close });
   });
   it('listens for atomic journal replacements without watching recovery archive writes', async () => {

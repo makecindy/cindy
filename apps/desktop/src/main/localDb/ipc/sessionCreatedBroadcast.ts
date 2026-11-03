@@ -9,9 +9,23 @@
 import { BrowserWindow } from 'electron';
 
 import { tapWindowBroadcast } from '../../device-link/broadcast-tap';
+import { isProvisionalSession } from '../provisionalSessions';
+
+/** 本机窗口重拉任务列表(不经 device-link)：新建页的未发送任务被删掉时用。 */
+export function emitSessionListChangedLocally(sessionId: string): void {
+  for (const win of BrowserWindow.getAllWindows()) {
+    if (win.isDestroyed()) continue;
+    try {
+      win.webContents.send('local-db:sessions:created', { sessionId });
+    } catch {
+      // best-effort UI refresh
+    }
+  }
+}
 
 export function emitSessionCreated(sessionId: string): void {
-  tapWindowBroadcast('local-db:sessions:created', { sessionId });
+  // 未发送任务只在本机可见；转正时会再通知一次。
+  if (!isProvisionalSession(sessionId)) tapWindowBroadcast('local-db:sessions:created', { sessionId });
   for (const win of BrowserWindow.getAllWindows()) {
     if (win.isDestroyed()) continue;
     try {

@@ -95,6 +95,16 @@ const SAMPLE = {
 const OAUTH_AUTH = JSON.stringify({ tokens: { access_token: 'oauth-token' } });
 
 describe('mapCodexModelsToCatalog', () => {
+  it.each([
+    { service_tiers: [{ id: 'priority' }, { id: 'ultrafast' }] },
+    { additional_speed_tiers: ['fast', 'ultrafast'] },
+  ])('reads both native cache speed declarations: %j', fields => {
+    const [model] = mapCodexModelsToCatalog({ models: [{ slug: 'gpt-6.1-sol',
+      visibility: 'list', supported_in_api: true, ...fields }] });
+    expect(model).toMatchObject({ supportsFastMode: true, supportsUltrafastMode: true });
+    expect(model.discoveredMetadata?.supportsFastMode).toBe(true);
+  });
+
   it('retains native maximum and explicit image capability separately from defaults', () => {
     const [model] = mapCodexModelsToCatalog({
       models: [
@@ -247,7 +257,7 @@ describe('mapCodexModelsToCatalog', () => {
     expect(out.find((m) => m.id === 'gpt-5.6')?.supportsFastMode).toBeUndefined();
   });
 
-  it('display name 保持纯净,保留模型自报的全部合法 effort(含 max/ultra),priority 对齐静态排序锚点', () => {
+  it('display name 保持纯净,保留模型自报的全部合法 effort(含 max/ultra),sortOrder 直接取 priority(账号顺序)', () => {
     const out = mapCodexModelsToCatalog(SAMPLE);
     expect(out.every((m) => !m.name.includes('订阅'))).toBe(true);
     // issue #352:max/ultra 是合法 Codex 档,不再被 CODEX_EFFORTS 白名单过滤掉。
@@ -258,9 +268,9 @@ describe('mapCodexModelsToCatalog', () => {
       'max',
       'ultra',
     ]);
-    expect(out.find((m) => m.id === 'gpt-5.6')?.sortOrder).toBe(19);
-    expect(out.find((m) => m.id === 'gpt-5.5')?.sortOrder).toBe(20);
-    expect(out.find((m) => m.id === 'gpt-5.4')?.sortOrder).toBe(21);
+    expect(out.find((m) => m.id === 'gpt-5.6')?.sortOrder).toBe(3);
+    expect(out.find((m) => m.id === 'gpt-5.5')?.sortOrder).toBe(7);
+    expect(out.find((m) => m.id === 'gpt-5.4')?.sortOrder).toBe(16);
   });
 
   it('只放行 CODEX_EFFORTS 白名单内的档(含 max/ultra),未知 effort id 仍被过滤', () => {
@@ -285,7 +295,7 @@ describe('mapCodexModelsToCatalog', () => {
     expect(out[0].efforts).toEqual(['high', 'max', 'ultra']);
   });
 
-  it('legacy 默认隐藏策略:gpt-5.4-mini defaultEnabled:false(旧目录可见性不因清单动态化漂移)', () => {
+  it('不再写死隐藏例外:gpt-5.4-mini 发现时同样默认可见(是否收起只看模型目录)', () => {
     const out = mapCodexModelsToCatalog({
       models: [
         {
@@ -299,7 +309,7 @@ describe('mapCodexModelsToCatalog', () => {
         },
       ],
     });
-    expect(out[0].defaultEnabled).toBe(false);
+    expect(out[0].defaultEnabled).toBe(true);
   });
 
   it('坏输入(非对象 / 无 models / 空)→ 空数组,不抛', () => {
@@ -315,6 +325,22 @@ describe('mapCodexModelsToCatalog', () => {
 });
 
 describe('mapCodexAppServerModelsToCatalog', () => {
+  // Account access must survive discovery without inferring it from a GPT model ID.
+  it('only exposes Ultrafast when the account advertises that tier', () => {
+    const base = {
+      id: 'gpt-6-astra', model: 'gpt-6-astra', displayName: 'GPT-6 Astra',
+      description: '', hidden: false, supportedReasoningEfforts: [],
+      defaultReasoningEffort: 'high', additionalSpeedTiers: [], isDefault: false,
+    };
+    const available = mapCodexAppServerModelsToCatalog([{
+      ...base, serviceTiers: [{ id: 'ultrafast', name: 'Ultrafast', description: '' }],
+    } as CodexModelListItem]);
+    const unavailable = mapCodexAppServerModelsToCatalog([{
+      ...base, serviceTiers: [],
+    } as CodexModelListItem]);
+    expect(available[0]?.supportsUltrafastMode).toBe(true);
+    expect(unavailable[0]?.supportsUltrafastMode).toBe(false);
+  });
   it('live 即使把内部 ID 标成 hidden:false 也过滤 codex-auto-review', () => {
     const out = mapCodexAppServerModelsToCatalog([
       {
@@ -395,10 +421,10 @@ describe('mapCodexAppServerModelsToCatalog', () => {
       efforts: ['low', 'xhigh'],
       defaultEffort: 'xhigh',
       supportsFastMode: true,
-      sortOrder: 17,
+      sortOrder: 0,
     });
-    expect(out[1].defaultEnabled).toBe(false);
-    expect(out[1].sortOrder).toBe(17.003);
+    expect(out[1].defaultEnabled).toBe(true);
+    expect(out[1].sortOrder).toBe(3);
     // live 协议不给 context_window,这 272k 是统一兜底 → 一律不得标记为已核实。
     // 标了它就会被拿去收敛运行期上报的窗口,把真实更大的窗口压成 272k。
     expect(out.every((model) => model.contextWindowVerified === undefined)).toBe(true);

@@ -14,8 +14,13 @@ import { spawnSync } from 'node:child_process';
 import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs';
 import path from 'node:path';
 import process from 'node:process';
+import { fileURLToPath } from 'node:url';
 
-const ROOT = path.resolve(new URL('../', import.meta.url).pathname.replace(/^\/(\w):/, '$1:'));
+// fileURLToPath 而非 URL.pathname:后者是百分号编码的, 不是文件系统路径 ——
+// 检出路径含空格或非 ASCII(中文用户名的 Windows 极常见)时推导出不存在的
+// ROOT, collectSourceFiles 的 existsSync 守卫会让全部 grep 规则对 0 个文件
+// 空转通过(fail-open)。仓库其余脚本均用 fileURLToPath。
+const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const failures = [];
 
 function failure(rule, detail) {

@@ -7,18 +7,35 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { DiscordIM } from '../index.js';
 import { normalizeDmMessage } from '../inbound.js';
 import type { AttachmentLike, StickerLike } from '../inbound.js';
-import type { IMHost, IMMessageEvent, IMStatus } from '../../types.js';
+import type { IMHost, IMHostMediaCache, IMMessageEvent, IMStatus } from '../../types.js';
 
 afterEach(() => {
   vi.useRealTimers();
   vi.unstubAllGlobals();
+  for (const dir of createdTempDirs.splice(0)) fs.rmSync(dir, { recursive: true, force: true });
+});
+
+describe('Discord routing identity', () => {
+  it('keeps gateway application id separate from the display tag across bot changes', () => {
+    const gateway = makeGateway();
+    const im = new DiscordIM(makeHost(), { gatewayFactory: (handlers) => {
+      gateway.setHandlers(handlers);
+      return gateway;
+    } });
+    gateway.emitStatus({ kind: 'connected', appId: 'bot#0000' });
+    expect(im.getStatus()).toEqual({ kind: 'connected', appId: 'bot#0000' });
+    expect(im.botContextId).toBe('app-1');
+    gateway.setAppId('app-2');
+    expect(im.botContextId).toBe('app-2');
+    gateway.setAppId('');
+    expect(im.botContextId).toBe('');
+  });
 });
 
 describe('normalizeDmMessage', () => {
   it('normalizes plain DM text fields', async () => {
     const event = await normalizeDmMessage(message({ content: 'hello' }), {
       contextId: 'app-1',
-      mediaDir: tempDir(),
       download: vi.fn(),
     });
 
@@ -42,7 +59,7 @@ describe('normalizeDmMessage', () => {
     // string is treated as a missing channel.
     const emptyString = await normalizeDmMessage(
       message({ content: 'hello', channelId: '' }),
-      { contextId: 'app-1', mediaDir: tempDir(), download: vi.fn() },
+      { contextId: 'app-1', download: vi.fn() },
     );
     expect(emptyString).toBeNull();
 
@@ -58,16 +75,35 @@ describe('normalizeDmMessage', () => {
         attachments: [],
         stickers: [],
       } as Parameters<typeof normalizeDmMessage>[0],
-      { contextId: 'app-1', mediaDir: tempDir(), download: vi.fn() },
+      { contextId: 'app-1', download: vi.fn() },
     );
     expect(channelLess).toBeNull();
   });
 
-  it('downloads image attachments into the media dir', async () => {
-    const mediaDir = tempDir();
-    const download = vi.fn(async (_url: string, dest: string) => {
-      fs.writeFileSync(dest, 'image');
-    });
+  it('classifies octet-stream attachments by extension (image → media store, never file staging)', async () => {
+    const download = vi.fn(async () => new Uint8Array([1, 2, 3]));
+    const media = makeMedia();
+    const files = makeFiles();
+
+    const event = (await normalizeDmMessage(
+      message({
+        attachments: [
+          { id: 'att-o', name: 'scan.JPG', url: 'https://cdn.example/scan', size: 10, contentType: 'application/octet-stream' },
+        ],
+      }),
+      { contextId: 'app-1', download, media, files },
+    ))!;
+
+    expect(files.stage).not.toHaveBeenCalled();
+    expect(media.cacheImage.mock.calls[0][0]).toEqual(
+      expect.objectContaining({ token: 'att-o', mimeType: 'image/jpeg', staging: true }),
+    );
+    expect(event.attachments).toEqual([expect.objectContaining({ kind: 'image', originalName: 'scan.JPG' })]);
+  });
+
+  it('routes image attachments into the host media store (no legacy dir)', async () => {
+    const download = vi.fn(async () => new Uint8Array([1, 2, 3]));
+    const media = makeMedia();
 
     const event = (await normalizeDmMessage(
       message({
@@ -81,82 +117,98 @@ describe('normalizeDmMessage', () => {
           },
         ],
       }),
-      { contextId: 'app-1', mediaDir, download },
+      { contextId: 'app-1', download, media },
     ))!;
 
-    expect(download).toHaveBeenCalledWith(
-      'https://cdn.example/photo.png',
-      path.join(mediaDir, 'msg-1-photo.png'),
-    );
+    expect(download).toHaveBeenCalledWith('https://cdn.example/photo.png');
+    expect(media.cacheImage).toHaveBeenCalledTimes(1);
+    expect(media.cacheImage.mock.calls[0][0]).toEqual({
+      integration: 'discord',
+      token: 'att-1',
+      buffer: new Uint8Array([1, 2, 3]),
+      mimeType: 'image/png',
+      staging: true,
+    });
     expect(event.attachments).toEqual([
       {
         kind: 'image',
-        absPath: path.join(mediaDir, 'msg-1-photo.png'),
+        absPath: '/blobs/att-1.png',
         originalName: 'photo.png',
         mimeType: 'image/png',
+        url: 'cindy-media://blobs/att-1.png',
       },
     ]);
     expect(event.unsupported).toEqual([]);
   });
 
-  it('host.media 注入时:图片提升进媒体总仓(absPath=仓内路径、url 透传、删老目录临时副本);file 不走总仓', async () => {
-    const mediaDir = tempDir();
-    const download = vi.fn(async (_url: string, dest: string) => {
-      fs.writeFileSync(dest, 'image-bytes');
-    });
-    const cacheImage = vi.fn(async ({ token }: { token: string }) => ({
-      absPath: `/blobs/${token}.png`,
-      url: `cindy-media://blobs/${'a'.repeat(64)}.png`,
-    }));
-    const media = {
-      cacheImage,
-      getCachedImage: vi.fn(async () => null),
-      resolveMediaUrl: vi.fn(() => null),
-    };
+  it('routes images → cacheImage, audio/video → cacheMedia, other files → host.files.stage', async () => {
+    const download = vi.fn(async (url: string) => new TextEncoder().encode(url));
+    const media = makeMedia();
+    const files = makeFiles();
+    const stagedDiscards: Array<() => Promise<void>> = [];
 
     const event = (await normalizeDmMessage(
       message({
         attachments: [
           { id: 'att-1', name: 'photo.png', url: 'https://cdn.example/photo.png', size: 1024, contentType: 'image/png' },
           { id: 'att-2', name: 'notes.pdf', url: 'https://cdn.example/notes.pdf', size: 1024, contentType: 'application/pdf' },
+          { id: 'att-3', name: 'clip.mp4', url: 'https://cdn.example/clip.mp4', size: 1024, contentType: 'video/mp4' },
+          { id: 'att-4', name: 'voice.ogg', url: 'https://cdn.example/voice.ogg', size: 1024, contentType: 'audio/ogg' },
         ],
       }),
-      { contextId: 'app-1', mediaDir, download, media },
+      { contextId: 'app-1', download, media, files, stagedDiscards },
     ))!;
 
-    expect(cacheImage).toHaveBeenCalledTimes(1);
-    expect(cacheImage.mock.calls[0][0]).toMatchObject({
+    expect(media.cacheImage).toHaveBeenCalledTimes(1);
+    expect(media.cacheImage.mock.calls[0][0]).toMatchObject({ integration: 'discord', token: 'att-1', mimeType: 'image/png' });
+    expect(files.stage).toHaveBeenCalledTimes(1);
+    expect(files.stage.mock.calls[0][0]).toEqual({
       integration: 'discord',
-      token: 'att-1',
-      mimeType: 'image/png',
+      buffer: new TextEncoder().encode('https://cdn.example/notes.pdf'),
+      fileName: 'notes.pdf',
     });
-    expect(event.attachments[0]).toMatchObject({
-      kind: 'image',
-      absPath: '/blobs/att-1.png',
-      url: `cindy-media://blobs/${'a'.repeat(64)}.png`,
-    });
-    // 提升成功后老目录临时副本被删
-    expect(fs.existsSync(path.join(mediaDir, 'msg-1-photo.png'))).toBe(false);
-    // 非图片不走总仓,留在老目录
-    expect(event.attachments[1]).toMatchObject({
-      kind: 'file',
-      absPath: path.join(mediaDir, 'msg-1-notes.pdf'),
-    });
-    expect(event.attachments[1]).not.toHaveProperty('url');
+    expect(media.cacheMedia.mock.calls.map((c) => c[0])).toEqual([
+      expect.objectContaining({ integration: 'discord', token: 'att-3', mimeType: 'video/mp4' }),
+      expect.objectContaining({ integration: 'discord', token: 'att-4', mimeType: 'audio/ogg' }),
+    ]);
+    expect(event.attachments).toEqual([
+      {
+        kind: 'image',
+        absPath: '/blobs/att-1.png',
+        originalName: 'photo.png',
+        mimeType: 'image/png',
+        url: 'cindy-media://blobs/att-1.png',
+      },
+      { kind: 'file', absPath: '/staged/notes.pdf', originalName: 'notes.pdf', mimeType: 'application/pdf' },
+      {
+        kind: 'file',
+        absPath: '/blobs/att-3.bin',
+        originalName: 'clip.mp4',
+        mimeType: 'video/mp4',
+        url: 'cindy-media://blobs/att-3.bin',
+      },
+      {
+        kind: 'file',
+        absPath: '/blobs/att-4.bin',
+        originalName: 'voice.ogg',
+        mimeType: 'audio/ogg',
+        url: 'cindy-media://blobs/att-4.bin',
+      },
+    ]);
+    expect(event.unsupported).toEqual([]);
+    // staged file + both cacheMedia entries hand back rollback handles for config switches.
+    expect(stagedDiscards).toHaveLength(3);
+    await Promise.all(stagedDiscards.map((discard) => discard()));
+    expect(files.discards).toHaveLength(1);
+    expect(files.discards[0]).toHaveBeenCalledTimes(1);
+    expect(media.discards).toHaveLength(2);
+    for (const discard of media.discards) expect(discard).toHaveBeenCalledTimes(1);
   });
 
-  it('host.media.cacheImage 抛错:回落老目录副本,附件不丢', async () => {
-    const mediaDir = tempDir();
-    const download = vi.fn(async (_url: string, dest: string) => {
-      fs.writeFileSync(dest, 'image-bytes');
-    });
-    const media = {
-      cacheImage: vi.fn(async () => {
-        throw new Error('db not ready');
-      }),
-      getCachedImage: vi.fn(async () => null),
-      resolveMediaUrl: vi.fn(() => null),
-    };
+  it('host.media.cacheImage 抛错:标不支持, 不回落老目录', async () => {
+    const download = vi.fn(async () => new Uint8Array([1]));
+    const media = makeMedia();
+    media.cacheImage.mockRejectedValueOnce(new Error('db not ready'));
 
     const event = (await normalizeDmMessage(
       message({
@@ -164,19 +216,102 @@ describe('normalizeDmMessage', () => {
           { id: 'att-1', name: 'photo.png', url: 'https://cdn.example/photo.png', size: 1024, contentType: 'image/png' },
         ],
       }),
-      { contextId: 'app-1', mediaDir, download, media },
+      { contextId: 'app-1', download, media },
     ))!;
 
-    expect(event.attachments[0]).toMatchObject({
-      kind: 'image',
-      absPath: path.join(mediaDir, 'msg-1-photo.png'),
-    });
-    expect(fs.existsSync(path.join(mediaDir, 'msg-1-photo.png'))).toBe(true);
-    expect(event.unsupported).toEqual([]);
+    expect(download).toHaveBeenCalledTimes(1);
+    expect(event.attachments).toEqual([]);
+    expect(event.unsupported).toEqual([{ type: 'image', label: 'photo.png' }]);
+  });
+
+  it('marks attachments unsupported without downloading when the host lacks the capability', async () => {
+    const download = vi.fn(async () => new Uint8Array([1]));
+    const attachments: AttachmentLike[] = [
+      { id: 'att-1', name: 'photo.png', url: 'https://cdn.example/photo.png', size: 1024, contentType: 'image/png' },
+      { id: 'att-2', name: 'notes.pdf', url: 'https://cdn.example/notes.pdf', size: 1024, contentType: 'application/pdf' },
+      { id: 'att-3', name: 'clip.mp4', url: 'https://cdn.example/clip.mp4', size: 1024, contentType: 'video/mp4' },
+      { id: 'att-4', name: 'voice.ogg', url: 'https://cdn.example/voice.ogg', size: 1024, contentType: 'audio/ogg' },
+    ];
+
+    const bare = (await normalizeDmMessage(message({ attachments }), { contextId: 'app-1', download }))!;
+    expect(download).not.toHaveBeenCalled();
+    expect(bare.attachments).toEqual([]);
+    expect(bare.unsupported).toEqual([
+      { type: 'image', label: 'photo.png' },
+      { type: 'file', label: 'notes.pdf' },
+      { type: 'video', label: 'clip.mp4' },
+      { type: 'audio', label: 'voice.ogg' },
+    ]);
+
+    // host.media without cacheMedia: images still go to the store, audio/video stay unsupported.
+    const imageOnlyMedia: IMHostMediaCache = { ...makeMedia(), cacheMedia: undefined };
+    const partial = (await normalizeDmMessage(message({ attachments }), {
+      contextId: 'app-1',
+      download,
+      media: imageOnlyMedia,
+    }))!;
+    expect(download).toHaveBeenCalledTimes(1);
+    expect(download).toHaveBeenCalledWith('https://cdn.example/photo.png');
+    expect(partial.attachments.map((a) => a.originalName)).toEqual(['photo.png']);
+    expect(partial.unsupported).toEqual([
+      { type: 'file', label: 'notes.pdf' },
+      { type: 'video', label: 'clip.mp4' },
+      { type: 'audio', label: 'voice.ogg' },
+    ]);
+  });
+
+  it('marks a staging failure unsupported instead of falling back to a legacy dir', async () => {
+    const download = vi.fn(async () => new Uint8Array([1]));
+    const files = makeFiles();
+    files.stage.mockRejectedValueOnce(new Error('disk full'));
+    const stagedDiscards: Array<() => Promise<void>> = [];
+
+    const event = (await normalizeDmMessage(
+      message({
+        attachments: [
+          { id: 'att-2', name: 'notes.pdf', url: 'https://cdn.example/notes.pdf', size: 1024, contentType: 'application/pdf' },
+        ],
+      }),
+      { contextId: 'app-1', download, files, stagedDiscards },
+    ))!;
+
+    expect(event.attachments).toEqual([]);
+    expect(event.unsupported).toEqual([{ type: 'file', label: 'notes.pdf' }]);
+    expect(stagedDiscards).toEqual([]);
+  });
+
+  it('reports a voice message as unsupported audio only when it carries no attachments', async () => {
+    const download = vi.fn(async () => new Uint8Array([1]));
+    const media = makeMedia();
+
+    const empty = (await normalizeDmMessage(message({ type: 'VoiceMessage' }), {
+      contextId: 'app-1',
+      download,
+      media,
+    }))!;
+    expect(empty.unsupported).toEqual([{ type: 'audio', label: 'audio message' }]);
+
+    const withClip = (await normalizeDmMessage(
+      message({
+        type: 'VoiceMessage',
+        attachments: [
+          { id: 'att-v', name: 'voice-message.ogg', url: 'https://cdn.example/v.ogg', size: 1024, contentType: 'audio/ogg' },
+        ],
+      }),
+      { contextId: 'app-1', download, media },
+    ))!;
+    expect(withClip.unsupported).toEqual([]);
+    expect(withClip.attachments).toEqual([
+      expect.objectContaining({ kind: 'file', originalName: 'voice-message.ogg', mimeType: 'audio/ogg' }),
+    ]);
+    expect(media.cacheMedia).toHaveBeenCalledWith(
+      expect.objectContaining({ integration: 'discord', token: 'att-v', mimeType: 'audio/ogg' }),
+    );
   });
 
   it('marks attachments over 50MiB unsupported without downloading', async () => {
     const download = vi.fn();
+    const files = makeFiles();
 
     const event = (await normalizeDmMessage(
       message({
@@ -190,10 +325,11 @@ describe('normalizeDmMessage', () => {
           },
         ],
       }),
-      { contextId: 'app-1', mediaDir: tempDir(), download },
+      { contextId: 'app-1', download, files },
     ))!;
 
     expect(download).not.toHaveBeenCalled();
+    expect(files.stage).not.toHaveBeenCalled();
     expect(event.attachments).toEqual([]);
     expect(event.unsupported).toEqual([{ type: 'oversize', label: 'huge.zip' }]);
   });
@@ -201,19 +337,17 @@ describe('normalizeDmMessage', () => {
   it('marks stickers unsupported', async () => {
     const event = (await normalizeDmMessage(
       message({ stickers: [{ id: 'sticker-1', name: 'wave' }] }),
-      { contextId: 'app-1', mediaDir: tempDir(), download: vi.fn() },
+      { contextId: 'app-1', download: vi.fn() },
     ))!;
 
     expect(event.unsupported).toEqual([{ type: 'sticker', label: 'wave' }]);
   });
 
-  it('uses different storage paths for same-name attachments on different messages', async () => {
-    const mediaDir = tempDir();
-    const destinations: string[] = [];
-    const download = vi.fn(async (_url: string, dest: string) => {
-      destinations.push(dest);
+  it('uses distinct store tokens for same-name attachments on different messages', async () => {
+    const media = makeMedia();
+    const download = vi.fn(async () => {
       await new Promise((resolve) => setTimeout(resolve, 0));
-      fs.writeFileSync(dest, 'image');
+      return new Uint8Array([1]);
     });
 
     const [first, second] = await Promise.all([
@@ -230,7 +364,7 @@ describe('normalizeDmMessage', () => {
             },
           ],
         }),
-        { contextId: 'app-1', mediaDir, download },
+        { contextId: 'app-1', download, media },
       ),
       normalizeDmMessage(
         message({
@@ -245,68 +379,41 @@ describe('normalizeDmMessage', () => {
             },
           ],
         }),
-        { contextId: 'app-1', mediaDir, download },
+        { contextId: 'app-1', download, media },
       ),
     ]);
 
-    if (!first || !second) throw new Error("expected both messages");
-    expect(destinations).toEqual([
-      path.join(mediaDir, 'msg-a-image.png'),
-      path.join(mediaDir, 'msg-b-image.png'),
-    ]);
-    expect(first.attachments[0]?.absPath).toBe(path.join(mediaDir, 'msg-a-image.png'));
-    expect(second.attachments[0]?.absPath).toBe(path.join(mediaDir, 'msg-b-image.png'));
+    if (!first || !second) throw new Error('expected both messages');
+    expect(media.cacheImage.mock.calls.map((c) => c[0].token)).toEqual(['att-a', 'att-b']);
+    expect(first.attachments[0]?.absPath).toBe('/blobs/att-a.png');
+    expect(second.attachments[0]?.absPath).toBe('/blobs/att-b.png');
     expect(first.attachments[0]?.originalName).toBe('image.png');
     expect(second.attachments[0]?.originalName).toBe('image.png');
   });
 
-  it('uses different storage paths for same-name attachments on the same message', async () => {
-    const mediaDir = tempDir();
-    const download = vi.fn(async (_url: string, dest: string) => {
-      fs.writeFileSync(dest, 'image');
-    });
+  it('uses distinct store tokens for same-name attachments on the same message', async () => {
+    const media = makeMedia();
+    const download = vi.fn(async () => new Uint8Array([1]));
 
     const event = (await normalizeDmMessage(
       message({
         id: 'msg-a',
         attachments: [
-          {
-            id: 'att-1',
-            name: 'image.png',
-            url: 'https://cdn.example/1.png',
-            size: 1024,
-            contentType: 'image/png',
-          },
-          {
-            id: 'att-2',
-            name: 'image.png',
-            url: 'https://cdn.example/2.png',
-            size: 1024,
-            contentType: 'image/png',
-          },
+          { name: 'image.png', url: 'https://cdn.example/1.png', size: 1024, contentType: 'image/png' },
+          { name: 'image.png', url: 'https://cdn.example/2.png', size: 1024, contentType: 'image/png' },
         ],
       }),
-      { contextId: 'app-1', mediaDir, download },
+      { contextId: 'app-1', download, media },
     ))!;
 
-    expect(event.attachments.map((a) => a.absPath)).toEqual([
-      path.join(mediaDir, 'msg-a-att-1-image.png'),
-      path.join(mediaDir, 'msg-a-att-2-image.png'),
-    ]);
+    // Without platform attachment ids the token falls back to `msgId-index`.
+    expect(media.cacheImage.mock.calls.map((c) => c[0].token)).toEqual(['msg-a-0', 'msg-a-1']);
+    expect(event.attachments.map((a) => a.absPath)).toEqual(['/blobs/msg-a-0.png', '/blobs/msg-a-1.png']);
     expect(event.attachments.map((a) => a.originalName)).toEqual(['image.png', 'image.png']);
   });
 });
 
 describe('DiscordIM inbound pipeline', () => {
-  it('requires a discord media directory when wired', () => {
-    const host = makeHost();
-    delete host.paths.discordMediaDir;
-
-    expect(() => new DiscordIM(host)).toThrow(
-      'IMHost.paths.discordMediaDir is required to wire the discord channel',
-    );
-  });
-
   it('defers lifecycle preference reads until explicit init', async () => {
     const host = makeHost({
       initialSecrets: [['discord-bot-lifecycle-announcement', 'false']],
@@ -410,7 +517,9 @@ describe('DiscordIM inbound pipeline', () => {
 
   it('serializes owner DM normalization before emitting messages', async () => {
     const gateway = makeGateway();
-    const im = new DiscordIM(makeHost(), {
+    const media = makeMedia();
+    const host = makeHost({ media });
+    const im = new DiscordIM(host, {
       gatewayFactory: (handlers) => {
         gateway.setHandlers(handlers);
         return gateway;
@@ -463,12 +572,18 @@ describe('DiscordIM inbound pipeline', () => {
     await firstEmit;
 
     expect(received).toEqual(['dm-1|msg-1', 'dm-1|msg-2']);
+    expect(media.cacheImage).toHaveBeenCalledWith(
+      expect.objectContaining({ integration: 'discord', token: 'att-1', mimeType: 'image/png' }),
+    );
+    // The frozen legacy media dir is never written.
+    expect(fs.readdirSync(host.paths.discordMediaDir!)).toEqual([]);
   });
 
   it('times out stalled attachment downloads and unblocks later DMs', async () => {
     vi.useFakeTimers();
     const gateway = makeGateway();
-    const im = new DiscordIM(makeHost(), {
+    const media = makeMedia();
+    const im = new DiscordIM(makeHost({ media }), {
       gatewayFactory: (handlers) => {
         gateway.setHandlers(handlers);
         return gateway;
@@ -527,11 +642,14 @@ describe('DiscordIM inbound pipeline', () => {
     expect(received[0]?.attachments).toEqual([]);
     expect(received[0]?.unsupported).toEqual([{ type: 'download', label: 'photo.png' }]);
     expect(received[1]?.text).toBe('follow up');
+    expect(media.cacheImage).not.toHaveBeenCalled();
   });
 
   it('drops queued DMs captured before a config switch', async () => {
     const gateway = makeGateway();
-    const host = makeHost();
+    const media = makeMedia();
+    const files = makeFiles();
+    const host = makeHost({ media, files });
     const im = new DiscordIM(host, {
       gatewayFactory: (handlers) => {
         gateway.setHandlers(handlers);
@@ -570,6 +688,13 @@ describe('DiscordIM inbound pipeline', () => {
             size: 1024,
             contentType: 'image/png',
           },
+          {
+            id: 'att-2',
+            name: 'notes.pdf',
+            url: 'https://cdn.example/notes.pdf',
+            size: 1024,
+            contentType: 'application/pdf',
+          },
         ],
       }),
     );
@@ -594,6 +719,10 @@ describe('DiscordIM inbound pipeline', () => {
     await new Promise((resolve) => setTimeout(resolve, 0));
 
     expect(received.map((event) => event.messageId)).toEqual(['dm-1|msg-new']);
+    // The stale DM's staged file is rolled back instead of leaking to the new account.
+    expect(files.stage).toHaveBeenCalledTimes(1);
+    expect(files.discards[0]).toHaveBeenCalledTimes(1);
+    expect(fs.readdirSync(host.paths.discordMediaDir!)).toEqual([]);
   });
 
   it('connects gateway when set-config receives a token', async () => {
@@ -1965,6 +2094,7 @@ function message(overrides: {
   channelId?: string;
   attachments?: AttachmentLike[];
   stickers?: StickerLike[];
+  type?: string;
 } = {}) {
   return {
     id: overrides.id ?? 'msg-1',
@@ -1973,11 +2103,53 @@ function message(overrides: {
     channelId: overrides.channelId ?? 'dm-1',
     attachments: overrides.attachments ?? [],
     stickers: overrides.stickers ?? [],
+    ...(overrides.type ? { type: overrides.type } : {}),
   };
 }
 
+const createdTempDirs: string[] = [];
+
 function tempDir(): string {
-  return fs.mkdtempSync(path.join(os.tmpdir(), 'discord-inbound-'));
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'discord-inbound-'));
+  createdTempDirs.push(dir);
+  return dir;
+}
+
+/** Fake cindy-media store: images → `/blobs/<token>.png`, other media → `/blobs/<token>.bin`. */
+function makeMedia() {
+  const discards: Array<ReturnType<typeof vi.fn>> = [];
+  return {
+    discards,
+    cacheImage: vi.fn(async ({ token }: { token: string; buffer: Uint8Array; mimeType: string; integration: string }) => ({
+      absPath: `/blobs/${token}.png`,
+      url: `cindy-media://blobs/${token}.png`,
+    })),
+    cacheMedia: vi.fn(async ({ token, mimeType }: { token: string; buffer: Uint8Array; mimeType: string; integration: string }) => {
+      const discard = vi.fn(async () => {});
+      discards.push(discard);
+      return {
+        absPath: `/blobs/${token}.bin`,
+        url: `cindy-media://blobs/${token}.bin`,
+        mimeType,
+        discard,
+      };
+    }),
+    getCachedImage: vi.fn(async () => null),
+    resolveMediaUrl: vi.fn(() => null),
+  };
+}
+
+/** Fake host file staging: `/staged/<fileName>` with a per-file discard spy. */
+function makeFiles() {
+  const discards: Array<ReturnType<typeof vi.fn>> = [];
+  return {
+    discards,
+    stage: vi.fn(async ({ fileName }: { integration: string; buffer: Uint8Array; fileName: string }) => {
+      const discard = vi.fn(async () => {});
+      discards.push(discard);
+      return { absPath: `/staged/${fileName}`, discard };
+    }),
+  };
 }
 
 function deferred<T = void>(): {
@@ -2008,6 +2180,8 @@ function makeHost(options: {
   initialSecrets?: [string, string][];
   isAvailable?: () => boolean;
   write?: (name: string, value: string, secrets: Map<string, string>) => boolean;
+  media?: IMHost['media'];
+  files?: IMHost['files'];
 } = {}): TestHost {
   const secrets = new Map<string, string>(options.initialSecrets ?? [
     ['discord-bot-token', 'token'],
@@ -2038,6 +2212,8 @@ function makeHost(options: {
       },
       broadcast: () => {},
     },
+    ...(options.media ? { media: options.media } : {}),
+    ...(options.files ? { files: options.files } : {}),
     httpPostForm: async () => ({ status: 200, body: {} }),
     invoke: async (channel, payload) => {
       const handler = handlers.get(channel);

@@ -1,8 +1,10 @@
 import { describe, expect, it } from 'vitest';
+import { sharedTaskHostPeer } from '@cindy/device-link';
 import {
   resolveConnectionBannerSyncActionVisibility,
   resolveConnectionBannerVisibility,
   resolveEffectiveConnectionError,
+  resolveHomeDeviceDisconnected,
 } from '@/components/connectionBannerVisibility';
 
 const base = {
@@ -13,6 +15,17 @@ const base = {
   hasUnstableIssue: false,
   deviceUnresponsive: false,
 };
+
+it('does not infer shared task disconnection from the account device list', () => {
+  const guest = { deviceId: sharedTaskHostPeer('shared', 'desktop'), sessionCount: 1, available: false };
+  const host = { deviceId: 'my-computer', sessionCount: 2, available: false };
+  expect(resolveHomeDeviceDisconnected([guest], null, false)).toBe(false);
+  expect(resolveHomeDeviceDisconnected([guest, host], guest.deviceId, false)).toBe(false);
+  expect(resolveHomeDeviceDisconnected([guest, host], null, false)).toBe(true);
+  expect(resolveHomeDeviceDisconnected([guest, host], host.deviceId, false)).toBe(true);
+  expect(resolveHomeDeviceDisconnected([guest, { ...host, available: true }], null, false)).toBe(false);
+  expect(resolveHomeDeviceDisconnected([host], null, true)).toBe(false);
+});
 
 describe('resolveConnectionBannerVisibility', () => {
   it('normal connecting stays quiet, but real failures still surface during connecting', () => {

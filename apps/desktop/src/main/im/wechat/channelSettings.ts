@@ -20,6 +20,8 @@ const SETTINGS_VERSION = 1;
 export interface WechatChannelSettings {
   version: typeof SETTINGS_VERSION;
   workingDir: string | null;
+  /** Absent means the original independent personal WeChat routing. */
+  companionBotId?: string;
 }
 
 export interface WechatChannelSettingsState extends WechatChannelSettings {
@@ -61,11 +63,16 @@ export function writeWechatWorkingDir(
   rootPath?: string,
 ): WechatChannelSettingsState {
   const workingDir = normalizeSelectedDirectory(selectedPath);
-  writeSettings({ ...DEFAULTS, workingDir }, rootPath);
+  writeSettings({ ...normalizeSettings(readWechatChannelSettings(rootPath)), workingDir }, rootPath);
   return readWechatChannelSettings(rootPath);
 }
 
 export function resetWechatWorkingDir(rootPath?: string): WechatChannelSettingsState {
+  const current = readWechatChannelSettings(rootPath);
+  if (current.companionBotId) {
+    writeSettings({ version: SETTINGS_VERSION, workingDir: null, companionBotId: current.companionBotId }, rootPath);
+    return readWechatChannelSettings(rootPath);
+  }
   const file = settingsFilePath(rootPath);
   try {
     fs.rmSync(file, { force: true });
@@ -77,6 +84,19 @@ export function resetWechatWorkingDir(rootPath?: string): WechatChannelSettingsS
     throw error;
   }
   return { ...DEFAULTS, workingDirAvailable: true };
+}
+
+export function writeWechatCompanionBinding(botId: string | null, rootPath?: string): WechatChannelSettingsState {
+  if (botId !== null && (typeof botId !== 'string' || !/^[A-Za-z0-9_-]{1,128}$/.test(botId))) {
+    throw new Error('WECHAT_COMPANION_INVALID');
+  }
+  const current = readWechatChannelSettings(rootPath);
+  writeSettings({
+    version: SETTINGS_VERSION,
+    workingDir: current.workingDir,
+    ...(botId ? { companionBotId: botId } : {}),
+  }, rootPath);
+  return readWechatChannelSettings(rootPath);
 }
 
 export function resolveWechatWorkingDir(botId: string, rootPath?: string): string {
@@ -118,6 +138,8 @@ function normalizeSettings(raw: unknown): WechatChannelSettings {
   return {
     version: SETTINGS_VERSION,
     workingDir,
+    ...(typeof input.companionBotId === 'string' && /^[A-Za-z0-9_-]{1,128}$/.test(input.companionBotId)
+      ? { companionBotId: input.companionBotId } : {}),
   };
 }
 

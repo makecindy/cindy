@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
+import { isSharedTaskPeer } from '@cindy/device-link';
 
 /**
  * 为依赖远端一次性快照的页面提供有意义的重试代次。
@@ -24,14 +25,28 @@ export function useDeviceLinkReconnectEpoch(deviceId: string | undefined): numbe
       if (snapshot.online && wasOnline !== true) bump();
     });
     const offStatus = window.electronAPI.deviceLink.onStatusChanged(({ status }) => {
+      if (isSharedTaskPeer(deviceId)) return;
       const previous = relayStatusRef.current;
       relayStatusRef.current = status;
+      // Presence from a previous relay connection cannot establish that the
+      // target is already online in this generation. It may recover later.
+      if (status !== 'online') targetOnlineRef.current = null;
       if (status === 'online' && previous !== 'online') bump();
+    });
+
+    const offPeerReset = window.electronAPI.deviceLink.onPeerLinkReset?.((event) => {
+      if (event.deviceId === deviceId) bump();
+    });
+
+    const offReopened = window.electronAPI.deviceLink.onPeerLinkReopened?.((event) => {
+      if (event.deviceId === deviceId) bump();
     });
 
     return () => {
       offPresence();
       offStatus();
+      offPeerReset?.();
+      offReopened?.();
     };
   }, [deviceId]);
 

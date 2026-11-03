@@ -355,10 +355,10 @@ export function VisionBridgeSection() {
       {/* ── 总开关 ────────────────────────────────────────────────────── */}
       <div className="flex items-center justify-between gap-3 rounded-xl border border-[var(--settings-theme-card-border)] bg-[var(--settings-theme-card-bg)] px-4 py-4">
         <div className="flex min-w-0 flex-col gap-1">
-          <p className="text-14 font-medium text-[var(--text-primary)]">
+          <p id="settings-search-settings-visionBridge-enableLabel" className="text-14 font-medium text-[var(--text-primary)]">
             {t('settings.visionBridge.enableLabel')}
           </p>
-          <p className="text-12 leading-[1.4] text-[var(--settings-section-sublabel)] opacity-70">
+          <p className="text-12 leading-[1.4] text-[var(--text-secondary)]">
             {t('settings.visionBridge.enableHint')}
           </p>
         </div>
@@ -374,10 +374,10 @@ export function VisionBridgeSection() {
       <div className="flex flex-col rounded-xl border border-[var(--settings-theme-card-border)] bg-[var(--settings-theme-card-bg)]">
         <div className="flex items-center justify-between gap-3 px-4 py-4">
           <div className="flex min-w-0 flex-col gap-1">
-            <p className="text-14 font-medium text-[var(--text-primary)]">
+            <p id="settings-search-settings-visionBridge-targetModels-label" className="text-14 font-medium text-[var(--text-primary)]">
               {t('settings.visionBridge.targetModels.label')}
             </p>
-            <p className="text-12 leading-[1.4] text-[var(--settings-section-sublabel)] opacity-70">
+            <p className="text-12 leading-[1.4] text-[var(--text-secondary)]">
               {t('settings.visionBridge.targetModels.hint')}
             </p>
           </div>
@@ -431,10 +431,10 @@ export function VisionBridgeSection() {
       <div className="flex flex-col rounded-xl border border-[var(--settings-theme-card-border)] bg-[var(--settings-theme-card-bg)]">
         <div className="px-4 py-4">
           <div className="flex flex-col gap-1">
-            <p className="text-14 font-medium text-[var(--text-primary)]">
+            <p id="settings-search-settings-visionBridge-backends-label" className="text-14 font-medium text-[var(--text-primary)]">
               {t('settings.visionBridge.backends.label')}
             </p>
-            <p className="text-12 leading-[1.4] text-[var(--settings-section-sublabel)] opacity-70">
+            <p className="text-12 leading-[1.4] text-[var(--text-secondary)]">
               {t('settings.visionBridge.backends.hint')}
             </p>
           </div>

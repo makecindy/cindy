@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto';
+import { EventEmitter } from 'node:events';
 import { promises as fsp } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -9,6 +10,9 @@ const h = vi.hoisted(() => ({
   endpoint: 'https://model.cn.example',
   buildEndpoint: 'https://model.cn.example',
   owner: 'owner-default',
+  imageKeys: new Map<string, string>(),
+  speechKey: null as string | null,
+  secretsClearedListeners: new Set<() => void>(),
   canUseCindyGateway: true,
   loads: [] as Array<{
     source: Record<string, unknown>;
@@ -23,17 +27,19 @@ const h = vi.hoisted(() => ({
     resolve: (result: unknown) => void;
   }>,
   customProviderRead: vi.fn(),
-  casUpdate: vi.fn(async (..._args: unknown[]) => true),
-  migrateManaged: vi.fn((_config?: unknown) => null as unknown),
+  casUpdate: vi.fn<(...args: unknown[]) => Promise<boolean>>(async () => true),
+  migrateManaged: vi.fn<(config?: unknown) => unknown>(() => null),
   getGrokAccessToken: vi.fn(),
   recoverGrokAuthAfterRejection: vi.fn(),
   warn: vi.fn(),
+  request: vi.fn(),
+  catalogIo: null as Parameters<typeof import('@cindy/model-providers').loadCatalog>[1] | null,
 }));
 
 vi.mock('electron', () => ({
   app: { getPath: () => os.tmpdir() },
   BrowserWindow: { getAllWindows: () => [] },
-  net: { request: vi.fn() },
+  net: { request: h.request },
 }));
 
 vi.mock('@cindy/model-providers', async (importOriginal) => {
@@ -41,8 +47,13 @@ vi.mock('@cindy/model-providers', async (importOriginal) => {
   return {
     ...actual,
     loadCatalog: vi.fn(
-      (source: Record<string, unknown>, _io: unknown, onResolved?: (result: unknown) => void) =>
+      (
+        source: Record<string, unknown>,
+        io: Parameters<typeof import('@cindy/model-providers').loadCatalog>[1],
+        onResolved?: (result: unknown) => void,
+      ) =>
         new Promise((resolve) => {
+          h.catalogIo = io;
           h.loads.push({
             source,
             resolve: (
@@ -115,10 +126,12 @@ vi.mock('../auth-adapters.js', () => ({
     hasCodexOAuthLoginUnbound: () => false,
   },
 }));
-vi.mock('../claude-credentials-store.js', () => ({
-  hasClaudeAiOAuth: () => false,
-  hasClaudeAiOAuthUnbound: () => false,
+vi.mock('../claude-native-auth.js', () => ({
+  hasClaudeNativeLogin: () => false,
+  hasClaudeNativeLoginUnbound: () => false,
 }));
+vi.mock('../claude-native-connection.js', () => ({ readClaudeNativeLogin: async () => null }));
+vi.mock('../claude-native-cli.js', () => ({ readClaudeCliLoginStatus: async () => ({ loggedIn: false }) }));
 vi.mock('../grok-oauth-login.js', () => ({
   getGrokAccessToken: h.getGrokAccessToken,
   peekGrokAccessToken: () => null,
@@ -136,10 +149,16 @@ vi.mock('../generic-oauth.js', () => ({
 vi.mock('../../secrets/providerSecretStore.js', () => ({
   genericOAuthSecretIo: {},
   readCustomProviderHeaders: () => null,
-  readCustomProviderKey: () => null,
-  getProviderSecretStore: () => ({ get: () => null }),
+  readCustomProviderKey: (providerId: string) => providerId === 'speech-review' ? h.speechKey : null,
+  getProviderSecretStore: () => ({
+    get: (id: string) => id === 'openai-images' ? h.imageKeys.get(h.owner) ?? null : null,
+    invalidateCaches: () => h.secretsClearedListeners.forEach((listener) => listener()),
+  }),
   setProviderSecretsClearedListener: () => undefined,
-  addProviderSecretsClearedListener: () => undefined,
+  addProviderSecretsClearedListener: (listener: () => void) => h.secretsClearedListeners.add(listener),
+}));
+vi.mock('../outbound-fetch.js', () => ({
+  outboundFetch: vi.fn(async () => { throw new Error('offline'); }),
 }));
 vi.mock('../provider-route.js', () => ({
   getProviderRouteCredentialRevision: () => 0,
@@ -188,6 +207,7 @@ import {
   XAI_API_CUSTOM_PROVIDER_ID,
 } from '@cindy/model-providers';
 import { deriveCindyMediaConfig } from '../../cindy-brain/cindyMediaCatalog.js';
+import { getProviderSecretStore } from '../../secrets/providerSecretStore.js';
 import {
   getActiveCatalog,
   commitModelPlaneFromCatalog,
@@ -200,6 +220,7 @@ import {
   __testing,
   ensureActiveCatalogLoaded,
   getDesktopSelectableCatalog,
+  getDesktopProviderService,
   refreshActiveCatalogFromSource,
   refreshCustomProvidersIntoCatalog,
   reloadActiveCatalogForEndpointChange,
@@ -229,6 +250,27 @@ function activeMarker(): string | undefined {
 }
 
 describe('provider catalog realm reload', () => {
+  // #6768 unit regression: a hidden TTS route needs channel readiness in the
+  // actual provider-list wiring before its management switch can be used.
+  // Renderer tests inject that snapshot and could not catch missing Main wiring.
+  it('projects admitted hidden speech routes as manageable and clears readiness when their key is removed', async () => {
+    const previous = getActiveCatalog();
+    const provider = buildUserProvider({ id: 'speech-review', name: 'Speech review', runtimes: {
+      codex: { baseUrl: 'https://api.elevenlabs.io/v1', wireProtocol: 'openai-chat',
+        models: [{ id: 'eleven_v3', name: 'Later speech', mode: 'audio_speech', defaultEnabled: false }] },
+    } });
+    try {
+      setActiveCatalog({ ...BUNDLED_CATALOG, providers: [provider] });
+      h.speechKey = 'fake-speech-key';
+      const list = () => getDesktopProviderService().listProviders({ allowSideEffects: false, snapshotOnly: true });
+      expect((await list()).find(item => item.id === provider.id)?.availableMediaModelIds).toEqual(['eleven_v3']);
+      h.speechKey = null;
+      expect((await list()).find(item => item.id === provider.id)?.availableMediaModelIds).toEqual([]);
+    } finally {
+      h.speechKey = null;
+      setActiveCatalog(previous);
+    }
+  });
   it('passes xAI rejection context into forced recovery and never replays the stale token', async () => {
     h.getGrokAccessToken.mockReset();
     h.recoverGrokAuthAfterRejection.mockReset();
@@ -1247,6 +1289,38 @@ describe('provider catalog realm reload', () => {
     }
   });
 
+  it.each([false, true])('recomputes Images API mode after a same-endpoint owner commit (outgoing key: %s)', async (outgoingHasKey) => {
+    const originalOwner = h.owner;
+    const loadsBefore = h.loads.length;
+    const images = () => getActiveCatalog().providers.find((provider) => provider.id === 'openai')!.imageModels!;
+    const expectMode = (hasKey: boolean) => {
+      expect(images().map((model) => model.id)).toEqual(hasKey
+        ? ['openai/gpt-image-2.5-sunburst', 'openai/gpt-image-2.5-flare', 'openai/gpt-image-2']
+        : ['openai/gpt-image-2']);
+      expect(images().find((model) => model.id === 'openai/gpt-image-2')?.name)
+        .toBe(hasKey ? 'GPT Image 2' : 'GPT Image Gen');
+    };
+    try {
+      h.owner = 'outgoing-owner';
+      h.imageKeys.set(outgoingHasKey ? h.owner : 'local-owner', 'fixture-image-key');
+      // enterLocalMode invalidates caches before committing the next owner.
+      getProviderSecretStore().invalidateCaches();
+      expectMode(outgoingHasKey);
+      h.owner = 'local-owner';
+      const reload = reloadActiveCatalogForEndpointChange();
+      // Correct the projection synchronously, even if background discovery fails.
+      expectMode(!outgoingHasKey);
+      await reload;
+      expectMode(!outgoingHasKey);
+      expect(h.loads).toHaveLength(loadsBefore);
+    } finally {
+      h.imageKeys.clear();
+      h.owner = originalOwner;
+      getProviderSecretStore().invalidateCaches();
+      await reloadActiveCatalogForEndpointChange();
+    }
+  });
+
   it('XDT_DISABLE_MODELS_FETCH=1 时手动刷新不发请求,抛 MODEL_CATALOG_FETCH_DISABLED 而非伪装的网络失败', async () => {
     const savedUrl = process.env.XDT_MODELS_URL;
     const savedPath = process.env.XDT_MODELS_PATH;
@@ -1268,5 +1342,22 @@ describe('provider catalog realm reload', () => {
       if (savedForceOff === undefined) delete process.env.XDT_DISABLE_MODELS_FETCH;
       else process.env.XDT_DISABLE_MODELS_FETCH = savedForceOff;
     }
+  });
+
+  it('aborts a non-200 catalog body before dropping its timeout', async () => {
+    if (!h.catalogIo) {
+      const loading = ensureActiveCatalogLoaded();
+      h.loads.at(-1)!.resolve(BUNDLED_CATALOG);
+      await loading;
+    }
+    const response = Object.assign(new EventEmitter(), { statusCode: 404 });
+    const request = Object.assign(new EventEmitter(), {
+      setHeader: vi.fn(),
+      end: vi.fn(() => request.emit('response', response)),
+      abort: vi.fn(() => response.emit('error', new Error('cancelled'))),
+    });
+    h.request.mockReturnValueOnce(request);
+    await expect(h.catalogIo!.fetchText!('https://catalog.example.test', 100)).rejects.toThrow('HTTP 404');
+    expect(request.abort).toHaveBeenCalledTimes(1);
   });
 });

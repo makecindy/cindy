@@ -25,6 +25,7 @@ export interface HubSkillInfoForDesktop {
   moderationStatus?: string;
   updatedAt: string;
   isMine?: boolean;
+  isCreator?: boolean;
   canManage?: boolean;
   categories?: Array<{ slug: string; name: string; source?: 'platform' }>;
   tags?: Array<{ slug: string; name: string; source?: 'platform' }>;
@@ -51,8 +52,9 @@ export function mapHubSkillInfoToDesktopInfo(hub: HubSkillInfoForDesktop, opts?:
     authorAvatarUrl: null as string | null,
     isMine: opts?.forceMine === true || hub.isMine === true,
     canManage: hub.canManage === true,
+    isCreator: hub.isCreator,
     latestVersion: hub.version,
-    folderHash: hub.folderHash ?? hub.fileHash,
+    folderHash: hub.folderHash, // fileHash is the ZIP checksum, never a directory digest.
     visibility: (hub.visibility === 'public' ? 'PUBLIC' : 'DEPARTMENT_SCOPED') as 'PUBLIC' | 'DEPARTMENT_SCOPED',
     publishedVisibility: (hub.visibility === 'private' || hub.visibility === 'shared' || hub.visibility === 'public'
       ? hub.visibility

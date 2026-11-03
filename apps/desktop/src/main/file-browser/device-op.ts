@@ -58,7 +58,9 @@ import {
   parseFsWatchTopic,
   type PushOwnerStamp,
 } from '@cindy/device-link';
+import { REVEALABLE_IGNORE_DIR_NAMES } from '../../shared/ignoreNames';
 import { WorkdirWatchManager } from '@cindy/remote-file-service';
+import type { FsRpcMethods } from '@cindy/remote-file-service/protocol';
 
 import { createLogger } from '../logger.js';
 import { getDbClient } from '../localDb/client/current.js';
@@ -72,11 +74,20 @@ import {
 import { throwIpcError } from '../utils/ipcValidate.js';
 import { uploadLocalFile } from '../device-link/mediaTransfer.js';
 import { pushToTopicSubscribers } from '../device-link/dispatch.js';
+import { getDeviceLinkInvokeContext } from '../device-link/invoke-context.js';
+import { sharedTaskFileOperation } from '../device-link/sharedTaskDispatch.js';
+import { assertSharedTaskWorkdir } from '../device-link/sharedTaskFileAccess.js';
 import { getSafeDataOwnerPushStamp } from '../device-link/broadcast-tap.js';
 import * as subscriptions from '../device-link/subscriptions.js';
 import { getRipgrepBinaryPath } from '../maker-host/runtime-configs.js';
 import { getRemoteFileBrowser } from './remote-deps.js';
 import { generateFileThumbnail } from './thumbnail.js';
+import {
+  createDirExportDeps,
+  getDirExportStatus,
+  startDirExport,
+  type DirExportDeps,
+} from './dir-export.js';
 
 const log = createLogger('file-browser/device-op');
 
@@ -155,12 +166,25 @@ interface RemoteOpArgs {
   /** readFile:控制端声明可接受 gzip 编码返回(老被控端忽略此字段,无害)。 */
   acceptGzip?: boolean;
   hideMetaFiles?: boolean;
+  includeIgnored?: boolean;
+  maxEntries?: number;
   docMode?: boolean;
+  /**
+   * 「显示被忽略的目录」开关(控制端下发的视图偏好)。listDir 生效;
+   * device-link 的 watch 不走本 op(控制端订阅 topic 触发),那边仍是
+   * hideMetaFiles:true 的默认过滤 —— 打开开关后这些目录在被控端可见，
+   * 但内部改动不会有实时事件(手动刷新可见)。
+   */
+  showIgnoredDirs?: boolean;
   cap?: number;
   query?: string;
   caseSensitive?: boolean;
   maxMatches?: number;
   transferId?: string;
+  /** Optional export budget; omitted by older controllers. */
+  maxBytes?: number;
+  name?: unknown;
+  file?: unknown;
 }
 
 /** 该 workdir 在被控端的执行位置:本地 fs、二跳到 SSH remote host,或歧义拒绝。 */
@@ -196,7 +220,10 @@ async function resolveWorkdirExecution(
     sshHosts = rows.map((r) => r.remoteHostId).filter((h): h is string => !!h);
   } catch (err) {
     log.warn('workdir execution lookup failed', { error: String(err) });
-    if (!localProbe.allowed && (localProbe.reason === 'timeout' || localProbe.reason === 'unavailable')) {
+    if (
+      !localProbe.allowed &&
+      (localProbe.reason === 'timeout' || localProbe.reason === 'unavailable')
+    ) {
       return { kind: 'unavailable', reason: localProbe.reason };
     }
     // 查询失败:退回本地语义(与旧行为一致);明确不存在时由底层返回可读错误。
@@ -216,7 +243,10 @@ async function resolveWorkdirExecution(
   }
   if (isLocalDir) return { kind: 'local' };
   if (sshHosts.length === 1) return { kind: 'ssh', hostId: sshHosts[0] };
-  if (!localProbe.allowed && (localProbe.reason === 'timeout' || localProbe.reason === 'unavailable')) {
+  if (
+    !localProbe.allowed &&
+    (localProbe.reason === 'timeout' || localProbe.reason === 'unavailable')
+  ) {
     return { kind: 'unavailable', reason: localProbe.reason };
   }
   return { kind: 'local' };
@@ -246,6 +276,7 @@ interface ExportJob {
   uploaded: number;
 }
 const exportJobs = new Map<string, ExportJob>();
+let dirExportDeps: DirExportDeps | undefined;
 
 /** 终态 job 保留时长:覆盖控制端轮询间隔(1.5s)+ 瞬断容忍窗口(~40s)富余。 */
 const EXPORT_JOB_LINGER_MS = 10 * 60 * 1000;
@@ -261,7 +292,13 @@ function setExportJobTerminal(transferId: string, job: ExportJob): void {
 async function sshSearchCollect(
   hostId: string,
   q: { workdir: string; query: string; caseSensitive: boolean; maxMatches: number },
-): Promise<{ matches: SearchMatch[]; truncated: boolean; totalMatches: number; totalFiles: number }> {
+  gate?: { beforeSend: () => void | Promise<void> },
+): Promise<{
+  matches: SearchMatch[];
+  truncated: boolean;
+  totalMatches: number;
+  totalFiles: number;
+}> {
   const mgr = getRemoteFileBrowser();
   const matches: SearchMatch[] = [];
   return await new Promise((resolve, reject) => {
@@ -271,7 +308,11 @@ async function sshSearchCollect(
     // 拿到 id 后过滤回放(与 search/index.ts 远程通路同一教训)——否则秒回/
     // 空结果的嵌套搜索会丢 end,干等 20s 超时。
     const buffered: SearchEvent[] = [];
-    const finish = (payload: { truncated: boolean; totalMatches: number; totalFiles: number }): void => {
+    const finish = (payload: {
+      truncated: boolean;
+      totalMatches: number;
+      totalFiles: number;
+    }): void => {
       if (settled) return;
       settled = true;
       off();
@@ -283,7 +324,11 @@ async function sshSearchCollect(
       if (data.type === 'match') {
         matches.push(data);
       } else if (data.type === 'end') {
-        finish({ truncated: data.truncated, totalMatches: data.totalMatches, totalFiles: data.totalFiles });
+        finish({
+          truncated: data.truncated,
+          totalMatches: data.totalMatches,
+          totalFiles: data.totalFiles,
+        });
       } else {
         settled = true;
         off();
@@ -309,8 +354,10 @@ async function sshSearchCollect(
       resolve({ matches, truncated: true, totalMatches: matches.length, totalFiles: 0 });
     }, SEARCH_COLLECT_TIMEOUT_MS);
     timer.unref?.();
-    void mgr
-      .request(hostId, 'searchStart', q)
+    // 同账号调用保持原三参数形状;共享访客在真正发起搜索前复核授权。
+    void (
+      gate ? mgr.request(hostId, 'searchStart', q, gate) : mgr.request(hostId, 'searchStart', q)
+    )
       .then((r) => {
         searchId = r.searchId;
         // 回放启动窗口内缓冲到的本次事件(可能已含终态)。
@@ -336,7 +383,12 @@ function localSearchCollect(q: {
   query: string;
   caseSensitive: boolean;
   maxMatches: number;
-}): Promise<{ matches: SearchMatch[]; truncated: boolean; totalMatches: number; totalFiles: number }> {
+}): Promise<{
+  matches: SearchMatch[];
+  truncated: boolean;
+  totalMatches: number;
+  totalFiles: number;
+}> {
   const searcher = new RipgrepSearcher({ rgPath: getRipgrepBinaryPath(), logger: log });
   const matches: SearchMatch[] = [];
   return new Promise((resolve, reject) => {
@@ -344,7 +396,12 @@ function localSearchCollect(q: {
       if (evt.type === 'match') {
         matches.push(evt);
       } else if (evt.type === 'end') {
-        resolve({ matches, truncated: evt.truncated, totalMatches: evt.totalMatches, totalFiles: evt.totalFiles });
+        resolve({
+          matches,
+          truncated: evt.truncated,
+          totalMatches: evt.totalMatches,
+          totalFiles: evt.totalFiles,
+        });
       } else {
         reject(new Error(evt.message));
       }
@@ -361,11 +418,32 @@ async function handleRemoteOp(args: RemoteOpArgs): Promise<unknown> {
   if (!args || typeof args.op !== 'string' || typeof args.workdir !== 'string' || !args.workdir) {
     return bad('invalid remote-op args');
   }
+  // 共享任务访客:只放行本任务工作目录内的读写(与房主一致);导出类长任务仍只给
+  // 同账号控制端。workdir 必须与本机记录的任务目录一致,先于任何 fs 访问校验。
+  const sharedTask = getDeviceLinkInvokeContext()?.sharedTask;
+  const sharedTaskOperation = sharedTask ? sharedTaskFileOperation(args.op) : null;
+  if (sharedTask && !sharedTaskOperation) return bad('REMOTE_UNSUPPORTED');
+  const sharedTaskEndpoint =
+    sharedTask && sharedTaskOperation && args.op !== 'caps'
+      ? await assertSharedTaskWorkdir(sharedTask, args.workdir, sharedTaskOperation)
+      : null;
   // 能力探测:与 workdir 无关、零 fs 访问,放在 guard 之前。老被控端没有
   // 这个分支,会走到 default 返回 `unknown op: caps`——控制端把它当确定性
-  // 的"不支持压缩"信号(见 fileBrowserTransport 的 caps 缓存)。
+  // 的"能力全无"信号(见 fileBrowserTransport 的 caps 缓存)。
+  //
+  // gzip / completeDirectoryListing / fileRead:上游已落地的能力位;
+  // showIgnoredDirs:listDir 支持「显示被忽略的目录」开关(控制端据此决定
+  // 标题行的开关是可点还是禁用+升级提示;老端会静默忽略该字段)。
   if (args.op === 'caps') {
-    return { ok: true as const, gzip: true as const };
+    return {
+      ok: true as const,
+      gzip: true as const,
+      showIgnoredDirs: true as const,
+      completeDirectoryListing: true as const,
+      fileRead: true as const,
+      dirExport: true as const,
+      folderAttachment: !sharedTask,
+    };
   }
   const guardResult = await checkRemoteWorkingDir(args.workdir);
   if (!guardResult.allowed && guardResult.reason === 'invalid') {
@@ -373,7 +451,13 @@ async function handleRemoteOp(args: RemoteOpArgs): Promise<unknown> {
     throwIpcError(rejection.code, rejection.message);
   }
 
-  const exec = await resolveWorkdirExecution(args.workdir, guardResult);
+  // 共享访客已从任务记录拿到权威端点,直接按它选择本地或 SSH 执行;只有同账号
+  // 请求才按路径反查全部会话(同一路径在本地与其它 SSH 会话并存时不误判歧义)。
+  const exec: WorkdirExecution = sharedTaskEndpoint
+    ? sharedTaskEndpoint.remoteHostId
+      ? { kind: 'ssh', hostId: sharedTaskEndpoint.remoteHostId }
+      : { kind: 'local' }
+    : await resolveWorkdirExecution(args.workdir, guardResult);
   const workdir = args.workdir;
 
   if (exec.kind === 'unavailable') {
@@ -416,23 +500,58 @@ async function handleRemoteOp(args: RemoteOpArgs): Promise<unknown> {
     }
   }
 
+  if (sharedTask && sharedTaskEndpoint) {
+    // 上面的 guard / 端点判定 / 解压都是 await 边界:房主可能已撤权或移动任务目录。
+    // 落盘或读出前按最新任务记录重新绑定目录与端点(内含成员资格复核)。
+    const current = await assertSharedTaskWorkdir(sharedTask, args.workdir, sharedTaskOperation!);
+    // exec 取自请求开始时的任务端点;任务中途换了端点则拒绝,不落到旧端点。
+    if (current.remoteHostId !== sharedTaskEndpoint.remoteHostId)
+      throw new Error('[PERMISSION_DENIED] Shared task working directory endpoint mismatch');
+  }
+
   // —— SSH 二跳:直接透传给本机的 SSH file-service 路由 ——
   if (exec.kind === 'ssh') {
     const mgr = getRemoteFileBrowser();
     const hostId = exec.hostId;
+    // 共享访客:SSH 建链可能等待数秒,期间房主可能撤权或移动任务目录。每次真正
+    // 发送前按最新任务记录重新绑定目录与端点(内含成员资格复核)。
+    const gate =
+      sharedTask && sharedTaskEndpoint
+        ? {
+            beforeSend: async () => {
+              const latest = await assertSharedTaskWorkdir(
+                sharedTask,
+                args.workdir,
+                sharedTaskOperation!,
+              );
+              if (latest.remoteHostId !== hostId)
+                throw new Error(
+                  '[PERMISSION_DENIED] Shared task working directory endpoint mismatch',
+                );
+            },
+          }
+        : undefined;
+    const request = <M extends keyof FsRpcMethods>(method: M, params: FsRpcMethods[M]['params']) =>
+      gate ? mgr.request(hostId, method, params, gate) : mgr.request(hostId, method, params);
     switch (args.op) {
       case 'listDir': {
-        const { entries } = await mgr.request(hostId, 'listDir', {
+        const { entries } = await request('listDir', {
           workdir,
           relPath: args.relPath ?? '',
           hideMetaFiles: args.hideMetaFiles ?? true,
           docMode: args.docMode,
+          showIgnoredDirs: args.showIgnoredDirs === true,
+          includeIgnored: args.includeIgnored,
+          maxEntries: args.maxEntries,
         });
         return entries;
       }
       case 'readFile': {
         try {
-          const data = await mgr.request(hostId, 'readFile', { workdir, relPath: args.relPath ?? '' });
+          const data = await request('readFile', {
+            workdir,
+            relPath: args.relPath ?? '',
+          });
           return await encodeReadFileResult(data, args.acceptGzip);
         } catch (err) {
           const code = (err as Error & { code?: string }).code;
@@ -441,9 +560,9 @@ async function handleRemoteOp(args: RemoteOpArgs): Promise<unknown> {
         }
       }
       case 'stat':
-        return mgr.request(hostId, 'stat', { workdir, relPath: args.relPath ?? '' });
+        return request('stat', { workdir, relPath: args.relPath ?? '' });
       case 'writeFile': {
-        const r = await mgr.request(hostId, 'writeFile', {
+        const r = await request('writeFile', {
           workdir,
           relPath: args.relPath ?? '',
           content: writeContent ?? '',
@@ -451,39 +570,60 @@ async function handleRemoteOp(args: RemoteOpArgs): Promise<unknown> {
         return { ok: true as const, ...r };
       }
       case 'createFile':
-        return { ok: true as const, stat: await mgr.request(hostId, 'createFile', { workdir, relPath: args.relPath ?? '' }) };
+        return {
+          ok: true as const,
+          stat: await request('createFile', { workdir, relPath: args.relPath ?? '' }),
+        };
       case 'createFolder':
-        return { ok: true as const, stat: await mgr.request(hostId, 'createFolder', { workdir, relPath: args.relPath ?? '' }) };
+        return {
+          ok: true as const,
+          stat: await request('createFolder', { workdir, relPath: args.relPath ?? '' }),
+        };
       case 'renameEntry':
         return {
           ok: true as const,
-          stat: await mgr.request(hostId, 'renameEntry', {
+          stat: await request('renameEntry', {
             workdir,
             fromRel: args.fromRel ?? '',
             toRel: args.toRel ?? '',
           }),
         };
       case 'deleteEntry':
-        await mgr.request(hostId, 'deleteEntry', { workdir, relPath: args.relPath ?? '' });
+        await request('deleteEntry', { workdir, relPath: args.relPath ?? '' });
         return { ok: true as const };
       case 'listAllFiles':
-        return mgr.request(hostId, 'listAllFiles', { workdir, cap: args.cap });
+        return request('listAllFiles', { workdir, cap: args.cap });
       case 'exportFileStart':
       case 'exportFileStatus':
+      case 'fileUrl':
         // 嵌套(device-link 套 SSH)的大文件导出要先经 daemon 分片拉回被控端再
         // 上传 OSS,本期不做——控制端对嵌套会话维持 OVERSIZE 占位。
         return bad('exportFile is not supported for nested SSH workdirs yet');
+      case 'exportDirStart':
+      case 'exportDirStatus':
+        return bad('REMOTE_UNSUPPORTED: nested SSH workdir');
       case 'thumbnail':
         // 嵌套 SSH 的缩略图要先分片拉回原图再缩放,成本与收益不成比例,本期
         // 不做——控制端(手机网格)对嵌套会话回退类型占位图。
-        return { ok: false as const, code: 'THUMB_UNSUPPORTED' as const, message: 'nested SSH workdir' };
+        return {
+          ok: false as const,
+          code: 'THUMB_UNSUPPORTED' as const,
+          message: 'nested SSH workdir',
+        };
       case 'searchCollect':
-        return sshSearchCollect(hostId, {
-          workdir,
-          query: args.query ?? '',
-          caseSensitive: args.caseSensitive === true,
-          maxMatches: Math.min(args.maxMatches ?? SEARCH_COLLECT_MAX_MATCHES, SEARCH_COLLECT_MAX_MATCHES),
-        });
+        return sshSearchCollect(
+          hostId,
+          {
+            workdir,
+            query: args.query ?? '',
+            caseSensitive: args.caseSensitive === true,
+            maxMatches: Math.min(
+              args.maxMatches ?? SEARCH_COLLECT_MAX_MATCHES,
+              SEARCH_COLLECT_MAX_MATCHES,
+            ),
+          },
+          gate,
+        );
       default:
         return bad(`unknown op: ${args.op}`);
     }
@@ -491,12 +631,31 @@ async function handleRemoteOp(args: RemoteOpArgs): Promise<unknown> {
 
   // —— 本地执行(被控端自身 fs)——
   switch (args.op) {
+    case 'fileUrl': {
+      const relPath = args.relPath ?? '';
+      const st = await statEntry(workdir, relPath);
+      if (st.type !== 'file') return bad('not a file');
+      const url = new URL('xdt-file://open');
+      url.searchParams.set('path', path.resolve(workdir, relPath));
+      url.searchParams.set('baseDir', workdir);
+      url.searchParams.set('maxBytes', String(Math.max(1, st.size)));
+      return { ok: true, url: url.toString(), size: st.size, mtimeMs: st.mtimeMs };
+    }
     case 'listDir': {
-      const matcher = await loadIgnoreMatcher(workdir, {
-        hideMetaFiles: args.hideMetaFiles ?? true,
-        honorVcsIgnore: false,
+      // includeIgnored 是完全绕过展示过滤(手机 HTML 快照枚举用);
+      // showIgnoredDirs 只放行可放行层(依赖 / 构建产物 / 缓存),VCS / OS 垃圾仍隐藏。
+      const matcher =
+        args.includeIgnored === true
+          ? null
+          : await loadIgnoreMatcher(workdir, {
+              hideMetaFiles: args.hideMetaFiles ?? true,
+              honorVcsIgnore: false,
+              showIgnoredDirs: args.showIgnoredDirs === true,
+            });
+      return listDir(workdir, args.relPath ?? '', matcher, {
+        docMode: args.includeIgnored === true ? false : args.docMode,
+        maxEntries: args.maxEntries,
       });
-      return listDir(workdir, args.relPath ?? '', matcher, { docMode: args.docMode });
     }
     case 'readFile': {
       try {
@@ -534,7 +693,10 @@ async function handleRemoteOp(args: RemoteOpArgs): Promise<unknown> {
     }
     case 'renameEntry': {
       try {
-        return { ok: true as const, stat: await renameEntry(workdir, args.fromRel ?? '', args.toRel ?? '') };
+        return {
+          ok: true as const,
+          stat: await renameEntry(workdir, args.fromRel ?? '', args.toRel ?? ''),
+        };
       } catch (err) {
         return bad(String(err));
       }
@@ -560,6 +722,9 @@ async function handleRemoteOp(args: RemoteOpArgs): Promise<unknown> {
       try {
         const relPath = args.relPath ?? '';
         const st = await statEntry(workdir, relPath);
+        if (args.maxBytes !== undefined && st.size > args.maxBytes) {
+          return bad('REMOTE_FILE_TOO_LARGE');
+        }
         const abs = path.resolve(workdir, relPath);
         const realAbs = await fsp.realpath(abs);
         const realRoot = await fsp.realpath(workdir);
@@ -569,13 +734,19 @@ async function handleRemoteOp(args: RemoteOpArgs): Promise<unknown> {
         const transferId = `exp_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
         exportJobs.set(transferId, { state: 'uploading', size: st.size, uploaded: 0 });
         void uploadLocalFile(realAbs, {
+          ...(args.maxBytes !== undefined ? { maxBytes: args.maxBytes } : {}),
           onProgress: (uploadedBytes) => {
             const j = exportJobs.get(transferId);
             if (j && j.state === 'uploading') j.uploaded = uploadedBytes;
           },
         })
           .then((up) => {
-            setExportJobTerminal(transferId, { state: 'done', key: up.key, size: up.size, uploaded: up.size });
+            setExportJobTerminal(transferId, {
+              state: 'done',
+              key: up.key,
+              size: up.size,
+              uploaded: up.size,
+            });
           })
           .catch((err) => {
             // 回包用 message 而非 String(err):这条会原样显示在控制端(手机预览页)
@@ -584,7 +755,12 @@ async function handleRemoteOp(args: RemoteOpArgs): Promise<unknown> {
             const message = err instanceof Error ? err.message || err.name : String(err);
             // 日志单独带原始 error(stack 与 cause 链都要留着排障),不跟着回包降级成字符串。
             log.warn('exportFile upload failed', { transferId }, err);
-            setExportJobTerminal(transferId, { state: 'error', message, size: st.size, uploaded: 0 });
+            setExportJobTerminal(transferId, {
+              state: 'error',
+              message,
+              size: st.size,
+              uploaded: 0,
+            });
           });
         return { ok: true as const, transferId, size: st.size, mtimeMs: st.mtimeMs };
       } catch (err) {
@@ -604,12 +780,45 @@ async function handleRemoteOp(args: RemoteOpArgs): Promise<unknown> {
         uploaded: job.uploaded,
       };
     }
+    case 'exportDirStart': {
+      // 文件夹下载(两段式第一段):路径安全与 exportFileStart 同源;打包 + 推送在后台
+      // 跑(dir-export.ts),字节直接推给发起下载的控制端,不经 relay。
+      const ctx = getDeviceLinkInvokeContext();
+      if (!ctx?.controllerDeviceId || ctx.sharedTask) return bad('REMOTE_UNSUPPORTED');
+      try {
+        // relPath 为空 = 下载工作目录本身(statEntry 不接受根,根是目录由 guard 保证)。
+        const relPath = args.relPath ?? '';
+        if (relPath && (await statEntry(workdir, relPath)).type !== 'directory') {
+          return bad('not a directory');
+        }
+        const realAbs = await fsp.realpath(path.resolve(workdir, relPath));
+        const realRoot = await fsp.realpath(workdir);
+        if (realAbs !== realRoot && !realAbs.startsWith(realRoot + path.sep)) {
+          return bad(`path escapes workdir: ${relPath}`);
+        }
+        dirExportDeps ??= createDirExportDeps();
+        return {
+          ok: true as const,
+          transferId: startDirExport(realAbs, ctx.controllerDeviceId, dirExportDeps),
+        };
+      } catch (err) {
+        return bad(String(err));
+      }
+    }
+    case 'exportDirStatus': {
+      const status = getDirExportStatus(args.transferId ?? '');
+      if (!status) return bad(`unknown transfer: ${args.transferId ?? '<none>'}`);
+      return { ok: true as const, ...status };
+    }
     case 'searchCollect':
       return localSearchCollect({
         workdir,
         query: args.query ?? '',
         caseSensitive: args.caseSensitive === true,
-        maxMatches: Math.min(args.maxMatches ?? SEARCH_COLLECT_MAX_MATCHES, SEARCH_COLLECT_MAX_MATCHES),
+        maxMatches: Math.min(
+          args.maxMatches ?? SEARCH_COLLECT_MAX_MATCHES,
+          SEARCH_COLLECT_MAX_MATCHES,
+        ),
       });
     case 'thumbnail': {
       // 图片缩略图(手机网格视图):路径安全与 exportFileStart 同源
@@ -618,7 +827,8 @@ async function handleRemoteOp(args: RemoteOpArgs): Promise<unknown> {
       try {
         const relPath = args.relPath ?? '';
         const st = await statEntry(workdir, relPath);
-        if (st.type !== 'file') return { ok: false as const, code: 'THUMB_FAILED' as const, message: 'not a file' };
+        if (st.type !== 'file')
+          return { ok: false as const, code: 'THUMB_FAILED' as const, message: 'not a file' };
         const abs = path.resolve(workdir, relPath);
         const realAbs = await fsp.realpath(abs);
         const realRoot = await fsp.realpath(workdir);
@@ -671,8 +881,7 @@ function isSameOwnerStamp(
   right: PushOwnerStamp | undefined,
 ): boolean {
   return (
-    left?.dataOwnerId === right?.dataOwnerId &&
-    left?.ownerGeneration === right?.ownerGeneration
+    left?.dataOwnerId === right?.dataOwnerId && left?.ownerGeneration === right?.ownerGeneration
   );
 }
 
@@ -692,7 +901,11 @@ async function startFsWatchIfDesired(workdir: string): Promise<void> {
   // 双双通过 has 检查——SSH 嵌套分支就会重复注册 onHostEvent/onHostConnected,
   // 第二次 sshWatchOffs.set 覆盖第一对 off,泄漏的监听让 fileTree 事件双份转发、
   // released 后仍随重连反复 watchStart。同步占位挡掉并发进入。
-  if (localWatchWorkdirs.has(workdir) || sshWatchOffs.has(workdir) || fsWatchStarting.has(workdir)) {
+  if (
+    localWatchWorkdirs.has(workdir) ||
+    sshWatchOffs.has(workdir) ||
+    fsWatchStarting.has(workdir)
+  ) {
     return;
   }
   const token = Symbol(workdir);
@@ -702,6 +915,27 @@ async function startFsWatchIfDesired(workdir: string): Promise<void> {
   } finally {
     if (fsWatchStarting.get(workdir) === token) fsWatchStarting.delete(workdir);
   }
+}
+
+/** relPath 是否落在「隐藏态不可见、只有开着『显示被忽略的目录』才看得见」的
+ *  目录**内部**。用于 device-link 转发前按自己的可见性过滤 daemon 的并集事件流。
+ *
+ *  只判**祖先段**：忽略名单是**目录**规则，同名普通文件（`dist` / `build` /
+ *  `.cache` 这种没有扩展名的构建脚本、配置文件）在 listDir 里是照常显示的 ——
+ *  把叶子段也判进去会让这些文件的 add/change/unlink 事件被丢掉，行陈旧到手动
+ *  刷新（评审 P1）。
+ *
+ *  代价：被忽略目录**自身**的事件（`relPath='node_modules'`）也会转发给隐藏态
+ *  客户端。事件流不携带类型、同名普通文件必须放行，两者无法从路径区分；转发后
+ *  在隐藏态树里是 no-op（该目录不在 entries），只是每次目录级变更多一条无效 IPC。
+ *  这层本来就是粗粒度预过滤，精确判据在 renderer（queueEventRefresh）。
+ *
+ *  段比较折叠大小写：matcher 用的 `ignore` 包默认 `ignorecase=true`（大小写不敏感
+ *  卷上 `DIST` 与 `dist` 是同一个目录），不折叠会把变体目录内部的事件继续推过
+ *  relay（评审 P2）。 */
+function isInsideRevealableIgnoreDir(relPath: string): boolean {
+  const segments = relPath.split('/');
+  return segments.slice(0, -1).some((segment) => REVEALABLE_IGNORE_DIR_NAMES.has(segment.toLowerCase()));
 }
 
 function scheduleFsWatchReconcile(workdir: string): void {
@@ -731,7 +965,10 @@ async function onFsWatchSubscribedInner(workdir: string, token: symbol): Promise
     return;
   }
   if (exec.kind === 'ambiguous') {
-    log.warn('device fs-watch skipped: workdir endpoint ambiguous', { workdir, reason: exec.reason });
+    log.warn('device fs-watch skipped: workdir endpoint ambiguous', {
+      workdir,
+      reason: exec.reason,
+    });
     return;
   }
   if (exec.kind === 'local' && !guardResult.allowed) {
@@ -782,9 +1019,18 @@ async function onFsWatchSubscribedInner(workdir: string, token: symbol): Promise
   const hostId = exec.hostId;
   const offEvent = mgr.onHostEvent(hostId, (evt) => {
     if (evt.event !== 'fileTree') return;
-    const data = evt.data as { workdir: string };
+    const data = evt.data as { workdir: string; relPath?: string };
     if (data.workdir !== workdir) return;
     if (!fsWatchDesired.has(workdir)) return;
+    // device-link 订阅的是**隐藏态**视图,而 daemon 侧的 watcher 用的是与 desktop
+    // 文件树(可能开着「显示被忽略的目录」)并集后的 matcher —— dist / build / Temp
+    // 这类目录内部的事件也会发过来。不在这里按 device-link 自己的可见性再滤一道,
+    // 一次构建就会把成千上万条控制器根本不会显示的事件推过共享 relay(聚合背压
+    // → 断连)(评审 P1)。
+    // 注:恒真忽略(BUILTIN_IGNORE_ALWAYS)与「不 watch 内部」(node_modules /
+    // Library)两层 daemon 自己就不发;`.gitignore` 自定义条目要在 daemon 侧才有
+    // matcher,这里判不了,不在本层职责。
+    if (typeof data.relPath === 'string' && isInsideRevealableIgnoreDir(data.relPath)) return;
     pushToTopicSubscribers(FILE_BROWSER_EVENT_CHANNEL, evt.data, ownerStamp);
   });
   let listenersDisposed = false;
@@ -797,7 +1043,9 @@ async function onFsWatchSubscribedInner(workdir: string, token: symbol): Promise
   };
   const stopWatch = (): void => {
     disposeListeners();
-    void mgr.request(hostId, 'watchStop', { workdir }).catch(() => undefined);
+    void mgr
+      .request(hostId, 'watchStop', { workdir, consumerId: 'device-link' })
+      .catch(() => undefined);
   };
   const isRegistered = (): boolean => sshWatchOffs.get(workdir) === stopWatch;
   const disposeStaleWatch = (): void => {
@@ -828,7 +1076,14 @@ async function onFsWatchSubscribedInner(workdir: string, token: symbol): Promise
       return false;
     }
     try {
-      await mgr.request(hostId, 'watchStart', { workdir, hideMetaFiles: true });
+      // consumerId:daemon 把这里的隐藏态需求与 desktop 文件树(可能开着「显示
+      // 被忽略的目录」)的需求分开登记、取可见性并集 —— 否则后到的一方会把对方
+      // 的 matcher 覆盖掉,desktop 仍列着 build / dist 却收不到它们的事件。
+      await mgr.request(hostId, 'watchStart', {
+        workdir,
+        hideMetaFiles: true,
+        consumerId: 'device-link',
+      });
     } catch (err) {
       if (!isCurrent()) disposeStaleWatch();
       throw err;

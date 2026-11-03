@@ -138,7 +138,7 @@ export const LOGIN_HANDOFF_EASING = {
 
 /** 立绘/字标位移时长:iPad 横屏(358:833 定稿)无位移段 → 0;其余 650ms。 */
 export function loginHandoffMoveMs(mode: LoginSurfaceMode): number {
-  return mode === 'pad-landscape' ? 0 : LOGIN_HANDOFF_TIMING.brandMoveMs;
+  return (mode === 'pad-landscape' || mode === 'compact-wide') ? 0 : LOGIN_HANDOFF_TIMING.brandMoveMs;
 }
 
 /** 面板入场起步时刻(相对 handoff-start;demo 300 + moveMs)。 */

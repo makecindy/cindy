@@ -71,6 +71,10 @@ export interface RemoteResourceDisplay {
   title: RemoteText;
   subtitle?: RemoteText;
   preview?: RemoteText;
+  /** Ephemeral public generation state. Absent when idle; never a connectivity signal. */
+  generation?: { phase: string; startedAt: number | null };
+  /** Optional roster activity; older hosts omit it, older controllers ignore it. */
+  teammateActivity?: { phase: string };
   timestamp?: number;
   /** Latest visible reply in host time; controllers keep their own read position. */
   lastReplyAt?: number;
@@ -109,6 +113,8 @@ export interface RemoteActionField {
 export interface RemoteActionDescriptor {
   id: string;
   label: RemoteText;
+  /** Presentation only: the host still checks current state at invocation. */
+  disabled?: boolean;
   tone?: 'neutral' | 'primary' | 'destructive' | string;
   confirmation?: {
     title: RemoteText;
@@ -124,12 +130,20 @@ export interface RemoteResourceBlock {
   primitive: string;
   title?: RemoteText;
   fallbackMarkdown: string;
+  /** session-controls: { input: 'blocked' | 'available', busy: boolean }.
+   * Controllers may hide their composer while blocked. Hosts must independently
+   * enforce workspace use; this presentation hint never grants permission.
+   * search: { query?: string, placeholder?: RemoteText }. Sent only to controllers
+   * declaring `search`; they re-read the same resource with `RemoteResourceGetRequest.query`.
+   */
   data?: unknown;
 }
 
 export interface RemoteCollectionItem {
   ref: RemoteResourceRef;
   display: RemoteResourceDisplay;
+  /** Optional Host-owned plugin chronology. Missing dates remain unknown on older Hosts. */
+  pluginOrder?: { addedAt?: number; recentIndex?: number };
   links: RemoteResourceLink[];
   actions?: RemoteActionDescriptor[];
   /** Opaque provider revision. Controllers compare it but never interpret it. */
@@ -144,6 +158,7 @@ export interface RemoteCollectionDescriptor {
   id: string;
   resourceKind: string;
   title: RemoteText;
+  /** session:<source> places a resource keyed by Session id beside its composer. */
   placement?: string;
   icon?: {
     name: string;
@@ -179,6 +194,12 @@ export interface RemoteCollectionListResponse {
 export interface RemoteResourceGetRequest {
   client: RemoteResourceClientDescriptor;
   ref: RemoteResourceRef;
+  /**
+   * Optional filter for a resource that advertised a `search` block. Hosts that do
+   * not understand it ignore it and return the unfiltered resource; controllers
+   * only send it after the host declared searchability.
+   */
+  query?: string;
 }
 
 export interface RemoteActionInvokeRequest {
@@ -195,7 +216,9 @@ export type RemoteActionEffect =
   | { kind: 'navigate'; target: RemoteLinkTarget }
   | { kind: 'toast'; message: RemoteText };
 
+/** Optional opaque reply for an explicitly negotiated resource primitive. */
 export interface RemoteActionInvokeResponse {
+  result?: unknown;
   effects: RemoteActionEffect[];
 }
 
@@ -206,6 +229,7 @@ export interface RemoteResourceChangedPayload {
 }
 
 const MAX_ID_CHARS = 160;
+const MAX_RESOURCE_ID_CHARS = 256;
 const MAX_CURSOR_CHARS = 1_024;
 const MAX_QUERY_CHARS = 1_000;
 const MAX_LOCALE_CHARS = 64;
@@ -263,7 +287,7 @@ export function parseRemoteResourceRef(value: unknown): RemoteResourceRef | null
   if (!record) return null;
   const collectionId = boundedText(record.collectionId, MAX_ID_CHARS);
   const kind = boundedText(record.kind, MAX_ID_CHARS);
-  const id = boundedText(record.id, MAX_ID_CHARS);
+  const id = boundedText(record.id, MAX_RESOURCE_ID_CHARS);
   return collectionId && kind && id ? { collectionId, kind, id } : null;
 }
 
@@ -335,7 +359,11 @@ export function parseRemoteResourceGetRequest(value: unknown): RemoteResourceGet
   if (!record) return null;
   const client = parseRemoteResourceClientDescriptor(record.client);
   const ref = parseRemoteResourceRef(record.ref);
-  return client && ref ? { client, ref } : null;
+  if (!client || !ref) return null;
+  // Same bound as collection list queries; an empty query means "no filter".
+  if (record.query === undefined || record.query === '') return { client, ref };
+  const query = boundedText(record.query, MAX_QUERY_CHARS);
+  return query ? { client, ref, query } : null;
 }
 
 export function parseRemoteActionInvokeRequest(value: unknown): RemoteActionInvokeRequest | null {
@@ -374,6 +402,10 @@ export function resolveRemoteText(value: RemoteText, locale?: string): string {
   if (!locale || !value.translations || typeof value.translations !== 'object') return value.fallback;
   const exact = value.translations[locale];
   if (typeof exact === 'string' && exact) return exact;
+  // Copy from hosts that predate the classical editions falls back to their modern base.
+  const modernBase = locale === 'zh-Hant-x-lzh' ? 'zh-TW' : locale === 'zh-Hans-x-lzh' ? 'zh-CN' : undefined;
+  const modern = modernBase ? value.translations[modernBase] : undefined;
+  if (typeof modern === 'string' && modern) return modern;
   const language = locale.split('-')[0];
   const translated = value.translations[language];
   return typeof translated === 'string' && translated ? translated : value.fallback;

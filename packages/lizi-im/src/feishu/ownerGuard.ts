@@ -22,27 +22,35 @@
  */
 
 import * as storage from './storage.js';
+import { scopeSlot } from './moduleScope.js';
 
-let allowed: Set<string> = new Set();
+const owner_SLOT = Symbol('feishu.owner');
+function createOwnerState() {
+  return {
+    allowed: new Set() as Set<string>,
+  };
+}
+/** 本实例(FeishuScope)的模块状态; 没有 scope 时落在默认实例上。 */
+const S = () => scopeSlot(owner_SLOT, createOwnerState);
 
 /** Re-load from disk into the in-memory set. Idempotent. */
 export function loadFromDisk(): void {
-  allowed = new Set();
+  S().allowed = new Set();
   const owner = storage.readOwnerOpenId();
-  if (owner) allowed.add(owner);
+  if (owner) S().allowed.add(owner);
 }
 
 export function getAllowed(): ReadonlyArray<string> {
-  return Array.from(allowed);
+  return Array.from(S().allowed);
 }
 
 export function check(senderOpenId: string): boolean {
-  return allowed.has(senderOpenId);
+  return S().allowed.has(senderOpenId);
 }
 
 /** First whitelisted open_id, used as the lifecycle-announcement target. */
 export function firstAllowed(): string | null {
-  const it = allowed.values().next();
+  const it = S().allowed.values().next();
   return it.done ? null : (it.value as string);
 }
 
@@ -52,15 +60,15 @@ export function firstAllowed(): string | null {
  * Otherwise return false (no-op).
  */
 export function tryClaimOwner(senderOpenId: string): boolean {
-  if (allowed.size > 0) return false;
+  if (S().allowed.size > 0) return false;
   const ok = storage.writeOwnerOpenId(senderOpenId);
   if (!ok) return false;
-  allowed.add(senderOpenId);
+  S().allowed.add(senderOpenId);
   return true;
 }
 
 /** Manual reset (e.g. on credentials clear). Wipes both disk and cache. */
 export function clear(): void {
   storage.clearOwnerOpenId();
-  allowed = new Set();
+  S().allowed = new Set();
 }

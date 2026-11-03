@@ -57,9 +57,10 @@ describe('Windows Acrylic resize backing contract', () => {
   });
 
   it('keeps the root material attribute in sync with runtime material changes', () => {
-    const materialChanged = /win\.webContents\.send\(\s*WINDOW_BACKDROP_MATERIAL_CHANGED_CHANNEL\s*,\s*config\.backgroundMaterial\s*,?\s*\)/;
-    expect(bootstrapSource).toMatch(materialChanged);
-    expect(secondaryWindowsSource).toMatch(materialChanged);
+    const materialChangedSend =
+      /win\.webContents\.send\(\s*WINDOW_BACKDROP_MATERIAL_CHANGED_CHANNEL\s*,\s*config\.backgroundMaterial\s*,?\s*\)/;
+    expect(bootstrapSource).toMatch(materialChangedSend);
+    expect(secondaryWindowsSource).toMatch(materialChangedSend);
     expect(preloadSource).toContain(
       'fanOutWindowBackdropMaterialChanged((material) => {\n      if (typeof material === \'string\' && isWindowsBackdropMaterial(material))',
     );

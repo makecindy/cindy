@@ -3,6 +3,9 @@
  * 适配成 maker-core 的 `McpProvider`,让同一份配置同时被 Claude Code 与 Codex 调用。
  *
  * 仅支持远程 transport(http/sse):
+ *   - Desktop 注入 appProxy 时，两种 transport 都由 Main 的标准 MCP Apps Host 连接，
+ *     Claude/Codex/Pi 通过同一 SDK facade 访问；认证头不交给 View 或子进程。
+ *   - 以下原生配置与 env 注入仅用于未提供 appProxy 的兼容路径。
  *   - Claude:`toClaudeSdkConfig` 返回原生 { type:'http'|'sse', url, headers }
  *     (本地 cc 直用;纯 JSON 也能存活 remote cc 的可序列化过滤)。
  *   - Codex:`toCodexMcpConfig` 返回 { type:'http', url, bearerTokenEnvVar? }
@@ -26,6 +29,8 @@ import type {
 } from '@cindy/maker-core';
 
 import type { CustomMcpConfig } from '../maker-host/custom-mcp-store.js';
+import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
+import type { AppServerConfig } from '../mcp-apps/connection.js';
 
 /**
  * 把 MCP id 规整成合法且**对不同 id 单射**的 env var 名。
@@ -80,11 +85,19 @@ export class CustomMcpProvider implements McpProvider {
   readonly name: string;
   private readonly config: CustomMcpConfig;
   private readonly tokenReader: (id: string) => string | null;
+  readonly supportsApps: boolean;
+  private readonly appProxy?: (read: () => AppServerConfig, context: McpProviderContext) => McpServer;
 
-  constructor(config: CustomMcpConfig, tokenReader: (id: string) => string | null) {
+  constructor(config: CustomMcpConfig, tokenReader: (id: string) => string | null, appProxy?: CustomMcpProvider['appProxy']) {
     this.config = config;
     this.name = config.id;
     this.tokenReader = tokenReader;
+    this.appProxy = appProxy;
+    this.supportsApps = Boolean(appProxy);
+  }
+
+  appServerConfig(): AppServerConfig {
+    return { id: this.config.id, url: this.config.url, transport: this.config.transport, headers: this.buildHeaders() };
   }
 
   /** 合成 Claude 端使用的 headers(用户 headers + 可选 Bearer)。 */
@@ -98,6 +111,7 @@ export class CustomMcpProvider implements McpProvider {
   }
 
   toClaudeSdkConfig(_context: McpProviderContext): unknown {
+    if (this.appProxy) return { type: 'sdk', name: this.name, instance: this.appProxy(() => this.appServerConfig(), _context) };
     const headers = this.buildHeaders();
     return {
       type: this.config.transport, // 'http' | 'sse'
@@ -107,6 +121,7 @@ export class CustomMcpProvider implements McpProvider {
   }
 
   toCodexMcpConfig(_context: McpProviderContext): CodexHttpMcpServerConfig | null {
+    if (this.appProxy) return null; // Existing authenticated host bridge carries the facade.
     // Codex 只支持 Streamable HTTP transport；SSE 协议不兼容，跳过（null = 不注入 Codex）。
     // Claude 侧走 toClaudeSdkConfig，支持 sse，不受此限制。
     if (this.config.transport === 'sse') return null;
@@ -133,6 +148,7 @@ export class CustomMcpProvider implements McpProvider {
   }
 
   getExtraEnv(_context: McpProviderContext): Record<string, string> | null {
+    if (this.appProxy) return null; // Upstream secrets stay in Main.
     // SSE MCPs are not registered in Codex (toCodexMcpConfig returns null), so
     // neither their token nor their custom headers should be injected into the
     // Codex app-server environment.

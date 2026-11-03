@@ -22,7 +22,7 @@ describe('createDesktopConfirmNotifier', () => {
       getFeishuOpenId: async () => 'ou_123',
       sendFeishuText: send,
     });
-    notify('feishu_bot_ou_123', '「提交 GitHub issue」的确认卡');
+    expect(await notify('feishu_bot_ou_123', '「提交 GitHub issue」的确认卡')).toBe(true);
     await flush();
     expect(send).toHaveBeenCalledWith(
       'ou_123',
@@ -38,7 +38,45 @@ describe('createDesktopConfirmNotifier', () => {
       getFeishuOpenId: async () => null,
       sendFeishuText: send,
     });
-    notify('desktop-session', 'x');
+    expect(await notify('desktop-session', 'x')).toBe(false);
+    await flush();
+    expect(send).not.toHaveBeenCalled();
+  });
+
+  it('「消息免打扰」任务 → 连 IM 提示也不发,连 openId 都不查(卡仍在桌面)', async () => {
+    const send = vi.fn(async () => ({}));
+    const getFeishuOpenId = vi.fn(async () => 'ou_123');
+    const notify = createDesktopConfirmNotifier({
+      getFeishuOpenId,
+      sendFeishuText: send,
+      isSuppressed: (sessionId) => sessionId === 'muted',
+    });
+    notify('muted', '「提交 GitHub issue」的确认卡');
+    // 代输入指引走同一个工厂:同一条静音判定一起管。
+    expect(await notify('muted', '任务名')).toBe(true);
+    await flush();
+    expect(send).not.toHaveBeenCalled();
+    expect(getFeishuOpenId).not.toHaveBeenCalled();
+
+    // 同一次装配里未静音的任务不受影响。
+    notify('loud', '「提交 GitHub issue」的确认卡');
+    await flush();
+    expect(send).toHaveBeenCalledOnce();
+  });
+
+  it('解析 openId 期间开启免打扰 → 真正发送前重新判定并放弃', async () => {
+    const send = vi.fn(async () => ({}));
+    let muted = false;
+    const notify = createDesktopConfirmNotifier({
+      getFeishuOpenId: async () => {
+        // 查库期间用户点了「消息免打扰」。
+        muted = true;
+        return 'ou_123';
+      },
+      sendFeishuText: send,
+      isSuppressed: () => muted,
+    });
+    expect(await notify('s1', '「提交 GitHub issue」的确认卡')).toBe(true);
     await flush();
     expect(send).not.toHaveBeenCalled();
   });
@@ -63,7 +101,7 @@ describe('createDesktopConfirmNotifier', () => {
       },
       logWarn: sendFail,
     });
-    notify2('s1', 'x');
+    expect(await notify2('s1', 'x')).toBe(true);
     await flush();
     expect(sendFail).toHaveBeenCalled();
   });

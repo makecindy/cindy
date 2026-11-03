@@ -29,6 +29,7 @@ import {
 } from '@/features/cc-agent/embeddedSessionNavigation';
 import { createLogger } from '@/lib/logger';
 import { isCodexResumeNotReadyProjectionError } from '@cindy/maker-shared/agent-input-projection';
+import { remoteAgentErrorCode } from '@cindy/device-link';
 
 const log = createLogger('useForkAtMessage');
 
@@ -64,20 +65,25 @@ interface UseForkAtMessageOptions {
   draftDocument?: JSONContent | null;
 }
 
+export interface ForkAtMessageRunOptions {
+  /** 用户在确认框点了「开启新任务」、真正开始创建时调用；取消或被拦下时不调用。 */
+  onConfirmed?: () => void;
+}
+
 export function useForkAtMessage({
   sessionId,
   messageClientId,
   forkBlocked,
   draftText,
   draftDocument,
-}: UseForkAtMessageOptions): () => Promise<void> {
+}: UseForkAtMessageOptions): (options?: ForkAtMessageRunOptions) => Promise<void> {
   const { t } = useTranslation();
   const { confirm } = useConfirmDialog();
   const navigate = useNavigate();
   const navigationMode = useSessionNavigationMode();
   const reportSessionNavigation = useSessionNavigationIntent();
 
-  return useCallback(async () => {
+  return useCallback(async (options?: ForkAtMessageRunOptions) => {
     if (!sessionId || !messageClientId) return;
     if (navigationMode === 'sidebar-embedded') {
       log.info('message fork ignored by embedded sidebar view', { sessionId, messageClientId });
@@ -95,6 +101,7 @@ export function useForkAtMessage({
       autoFocusConfirm: true,
     });
     if (!confirmed) return;
+    options?.onConfirmed?.();
     try {
       const newSession = await forkAtMessage(sessionId, messageClientId);
       // Pre-fill the new session's composer so the user lands on a
@@ -124,8 +131,11 @@ export function useForkAtMessage({
     } catch (err) {
       const code = err instanceof ApiError ? err.code : 'UNKNOWN';
       const detail = err instanceof Error ? err.message : String(err);
+      const remoteCode = remoteAgentErrorCode(detail);
       const msg =
-        code === 'FORK_UNSUPPORTED_HISTORY'
+        remoteCode
+          ? t(`chat.remoteError.${remoteCode}`, { defaultValue: t('chat.userMessage.forkErrors.generic') })
+          : code === 'FORK_UNSUPPORTED_HISTORY'
           ? t('chat.userMessage.forkErrors.unsupportedHistory')
           : code === 'NO_PRIOR_ASSISTANT'
             ? t('chat.userMessage.forkErrors.noPriorAssistant')

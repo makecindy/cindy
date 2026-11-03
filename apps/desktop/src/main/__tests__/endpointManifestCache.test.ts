@@ -58,6 +58,17 @@ const canSymlink = (() => {
 })();
 
 describe('endpointManifestCache', () => {
+  it('按区域独立写入且保留旧缓存，互不覆盖', () => {
+    const cn = { ...ENTRY, sourceUrl: 'https://hotfix.cindy.com.cn/cindy/endpoint.json' };
+    const global = { ...ENTRY, sourceUrl: 'https://hotfix.cindy.app/cindy/endpoint.json' };
+    expect(writeEndpointManifestCache(dir, ENTRY)).toBe(true);
+    expect(writeEndpointManifestCache(dir, cn, 'cn')).toBe(true);
+    expect(writeEndpointManifestCache(dir, global, 'global')).toBe(true);
+    expect(readEndpointManifestCache(dir, 'cn')).toEqual(cn);
+    expect(readEndpointManifestCache(dir, 'global')).toEqual(global);
+    expect(readEndpointManifestCache(dir)).toEqual(ENTRY);
+  });
+
   it('写入后可原样读回', () => {
     expect(writeEndpointManifestCache(dir, ENTRY)).toBe(true);
     expect(readEndpointManifestCache(dir)).toEqual(ENTRY);
@@ -147,7 +158,7 @@ describe('缓存端点的受信任域约束(安全边界)', () => {
   const GLOBAL_BASE = 'https://hotfix.cindy.app/cindy';
   const CN_BASE = 'https://hotfix.cindy.com.cn/cindy';
   const TRUSTED = Object.values(REGION_ENDPOINT_DOMAIN);
-  /** CN 构建的策略:非跨区端点锁 cindy.com.cn,slack/telegram/x hook 才允许 cindy.app。 */
+  /** CN 构建的策略:除显式共享的 chat 和 hook 外，端点锁在 cindy.com.cn。 */
   const CN_POLICY = {
     regionDomain: REGION_ENDPOINT_DOMAIN.cn,
     crossRegionDomain: REGION_ENDPOINT_DOMAIN.global,
@@ -165,13 +176,19 @@ describe('缓存端点的受信任域约束(安全边界)', () => {
     expect(REGION_ENDPOINT_DOMAIN.global).toBe('cindy.app');
   });
 
-  it('跨区例外只有 slack / telegram / x hook 三个 key', () => {
+  it('跨区例外只允许共享聊天服务和 slack / telegram / x hook', () => {
     // 每加一个 key 就等于允许该端点跨区,而跨区 token 误发正是要防的事。
     expect([...CROSS_REGION_ENDPOINT_KEYS].sort()).toEqual([
+      'chatApiBaseUrl',
       'slackHookWsUrl',
       'telegramHookWsUrl',
       'xHookWsUrl',
     ]);
+  });
+
+  it('共享聊天服务接受 Global 域，但不接受第三方主机', () => {
+    expect(findUntrustedCachedEndpoint({ chatApiBaseUrl: 'https://chat.cindy.app' }, CN_POLICY)).toBeNull();
+    expect(findUntrustedCachedEndpoint({ chatApiBaseUrl: 'https://chat.example.com' }, CN_POLICY)).toBe('chatApiBaseUrl');
   });
 
   it('CN 构建拒绝换成 Global 真实服务的伪造缓存(跨区 token 误发)', () => {

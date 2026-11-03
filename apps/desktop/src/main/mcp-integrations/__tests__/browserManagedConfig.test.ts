@@ -25,6 +25,31 @@ function isInNet(host: string, pattern: string, mask: string): boolean {
 }
 
 describe('managed browser runtime config', () => {
+  // Chromium's launch protocol controls session-cookie restoration after a
+  // clean exit. Previously no route/profile enabled it, even with a persistent
+  // user-data-dir. Unit tier covers config composition; a real Chrome restart
+  // with a local HttpOnly session cookie verifies the browser behavior.
+  it.each([
+    { useRealProfile: false },
+    { useRealProfile: true },
+    { useRealProfile: false, proxyServer: 'http://proxy.example.test:8080' },
+    { useRealProfile: true, proxyServer: 'http://proxy.example.test:8080' },
+  ])('restores session cookies across restarts for %j', (options) => {
+    expect(buildManagedConfig(options).browser?.extraArgs).toContain('--restore-last-session');
+  });
+
+  // The copied cookies belong to websites, not Chrome's OAuth identity. DICE
+  // must not reconcile them against an incomplete copied browser account list.
+  it.each([undefined, 'http://proxy.example.test:8080'])(
+    'disables browser-account reconciliation for copied logins with proxy=%s',
+    (proxyServer) => {
+      expect(buildManagedConfig({ useRealProfile: true, proxyServer }).browser?.extraArgs)
+        .toContain('--allow-browser-signin=false');
+      expect(buildManagedConfig({ proxyServer }).browser?.extraArgs)
+        .not.toContain('--allow-browser-signin=false');
+    },
+  );
+
   it.each([false, true])('allows private-network browsing with useRealProfile=%s', (useRealProfile) => {
     expect(buildManagedConfig({ useRealProfile }).browser?.ssrfPolicy).toEqual({
       dangerouslyAllowPrivateNetwork: true,
@@ -215,7 +240,8 @@ describe('managed browser runtime config', () => {
     });
 
     it('does not emit PAC args for a direct launch', () => {
-      expect(buildManagedConfig().browser?.extraArgs).toBeUndefined();
+      expect(buildManagedConfig().browser?.extraArgs?.some((arg) => arg.startsWith('--proxy-')))
+        .toBe(false);
     });
 
     it('keeps hostile hostname patterns as data, not PAC source', () => {
@@ -269,7 +295,8 @@ describe('managed browser runtime config', () => {
     expect(proxied.join(' ')).not.toContain('--force-webrtc-ip-handling-policy');
 
     // A direct launch has no proxy to bypass, so it keeps default behavior.
-    expect(buildManagedConfig().browser?.extraArgs).toBeUndefined();
+    expect(buildManagedConfig().browser?.extraArgs)
+      .not.toContain('--webrtc-ip-handling-policy=disable_non_proxied_udp');
   });
 
   it('rejects a credentialed proxy URL before building any launch args', () => {

@@ -17,6 +17,9 @@ import { getDefaultModelForVendor } from '@/lib/modelDefinitions';
 import { getCachedProvidersSnapshot } from '@/lib/providersSnapshotStore';
 import { getDataOwnerGeneration, setDataOwnerGeneration } from '@/contexts/dataOwnerGeneration';
 import { getPersistedVendorModel } from '@/state/newMakerDraft';
+import { readCachedBotWelcomeContext } from '../botWelcomeContext';
+import { createIpcError } from '../../../../shared/ipc-errors';
+vi.mock('../botWelcomeContext', () => ({ readCachedBotWelcomeContext: vi.fn() }));
 
 vi.mock('@/state/newMakerDraft', async (importOriginal) => ({
   ...await importOriginal<typeof import('@/state/newMakerDraft')>(),
@@ -100,6 +103,7 @@ describe('bot profile store', () => {
   const createdIds: string[] = [];
 
   beforeEach(() => {
+    vi.mocked(readCachedBotWelcomeContext).mockReset();
     vi.mocked(getDefaultModelForVendor).mockReturnValue({
       id: 'catalog-new-session-default',
       label: 'Catalog default',
@@ -109,7 +113,7 @@ describe('bot profile store', () => {
       vendorKey: 'pi',
     });
     setProviders([
-      piProvider('xd', true, [piModel('z-ai/glm-5.3-flash')]),
+      piProvider('xd', true, [piModel('auto')]),
     ]);
   });
 
@@ -140,25 +144,25 @@ describe('bot profile store', () => {
 
     expect(bot.capabilities).toMatchObject({
       harness: 'pi',
-      model: 'z-ai/glm-5.3-flash',
+      model: 'auto',
       providerId: 'xd',
       effort: 'high',
     });
   });
 
-  it('uses Cindy selected default when it is selectable', () => {
+  it('uses the teammate recommendation independently of the new-task draft', () => {
     const bot = addBotProfile({ name: 'Pi Bot', description: '' });
     createdIds.push(bot.id);
 
     expect(bot.capabilities).toMatchObject({
       harness: 'pi',
-      model: 'z-ai/glm-5.3-flash',
+      model: 'auto',
       providerId: 'xd',
       effort: 'high',
     });
   });
 
-  it('does not replace an unavailable Cindy default with another connected model', async () => {
+  it('does not recommend a subscription on an unsupported default harness', async () => {
     setProviders([
       piProvider(
         'openai',
@@ -336,6 +340,8 @@ describe('bot profile store', () => {
   });
 
   it('replaces the optimistic Bot with the authoritative profile and stable ID returned by main', async () => {
+    const welcomeContext = { projects: ['Puzzle Studio'], tasks: ['Build a game editor'], automations: [] };
+    vi.mocked(readCachedBotWelcomeContext).mockReturnValue(welcomeContext);
     const create = vi.fn(async (_input: { id: string }) => ({
       id: 'existing-cindy',
       name: 'Hermes identity bot',
@@ -368,6 +374,7 @@ describe('bot profile store', () => {
     try {
       const bot = await addBotProfileAndWait({
         name: 'Draft name',
+        prepareInvitation: true,
         avatarImageBase64: 'iVBORw0KGgo=',
         description: '',
         identitySource: '# SOUL\nPersistent release steward.',
@@ -396,6 +403,7 @@ describe('bot profile store', () => {
       expect(create).toHaveBeenCalledWith(
         expect.objectContaining({
           identitySource: '# SOUL\nPersistent release steward.',
+          welcomeContext,
           avatarImageBase64: 'iVBORw0KGgo=',
           userContextSource: '# USER\nWorks with the release team.',
           avatar: '🛠️',
@@ -520,6 +528,36 @@ describe('保存失败只回滚自己那一行', () => {
       };
   }
 
+  it('accepts the saved primary through the existing version check without persisting the intent flag', async () => {
+    const bot = addBotProfile({ name: 'Reselect primary', description: '' });
+    bot.currentVersion = 3;
+    createdIds.push(bot.id);
+    stubDeferredUpdates();
+    const update = vi.fn(async (_input: unknown) => ({ ...bot, currentVersion: 4 }));
+    const api = (globalThis as unknown as { window: { electronAPI: { localDb: { bots: { update: unknown } } } } }).window.electronAPI.localDb.bots;
+    api.update = update;
+    await updateBotProfile(bot.id, { acceptModelSelection: true });
+    expect(update).toHaveBeenCalledWith(expect.objectContaining({ id: bot.id, acceptSavedModelSelectionVersion: 3 }));
+    expect(update.mock.calls[0]?.[0]).not.toHaveProperty('acceptModelSelection');
+    expect(getBotProfiles().find(item => item.id === bot.id)).not.toHaveProperty('acceptModelSelection');
+  });
+
+  it('rereads the local version after model acceptance conflicts so retry does not repeat the stale version', async () => {
+    const bot = addBotProfile({ name: 'Retry primary', description: '' });
+    bot.currentVersion = 1;
+    createdIds.push(bot.id);
+    stubDeferredUpdates();
+    const update = vi.fn(async (_input: unknown) => ({ ...bot, currentVersion: 3 }))
+      .mockRejectedValueOnce(createIpcError('PRECONDITION_FAILED', 'Profile changed'));
+    const get = vi.fn(async () => ({ ...bot, currentVersion: 2 }));
+    Object.assign(window.electronAPI!.localDb!.bots, { update, get });
+    await expect(updateBotProfile(bot.id, { acceptModelSelection: true })).rejects.toMatchObject({ code: 'PRECONDITION_FAILED' });
+    expect(get).toHaveBeenCalledWith(bot.id);
+    expect(getBotProfiles().find(item => item.id === bot.id)?.currentVersion).toBe(2);
+    await updateBotProfile(bot.id, { acceptModelSelection: true });
+    expect(update).toHaveBeenLastCalledWith(expect.objectContaining({ acceptSavedModelSelectionVersion: 2 }));
+  });
+
   it('forwards the editing baseline to Main without adding it to optimistic profile state', async () => {
     const bot = addBotProfile({ name: 'Settings merge', description: '' });
     createdIds.push(bot.id);
@@ -536,6 +574,20 @@ describe('保存失败只回滚自己那一行', () => {
     expect(getBotProfiles().find((item) => item.id === bot.id)).not.toHaveProperty('capabilityBaseline');
     await expect(pending).resolves.toMatchObject({ skills: ['external', 'local'] });
     expect(getBotProfiles().find((item) => item.id === bot.id)).toMatchObject({ skills: ['external', 'local'] });
+  });
+
+  it.each(['inherit', 'allowlist'] as const)('preserves the Host’s %s tool and MCP grant modes after a save', async mode => {
+    const bot = addBotProfile({ name: 'Capability modes', description: '' });
+    createdIds.push(bot.id);
+    stubDeferredUpdates();
+    const api = (globalThis as unknown as { window: { electronAPI: { localDb: { bots: { update: unknown } } } } }).window.electronAPI.localDb.bots;
+    api.update = vi.fn(async () => ({ ...bot, capabilities: { ...bot.capabilities,
+      toolsetMode: mode, toolsets: [], mcpMode: mode, mcpServers: [],
+    } }));
+    await updateBotProfile(bot.id, { description: 'Updated' });
+    expect(getBotProfiles().find(item => item.id === bot.id)?.capabilities).toMatchObject({
+      toolsetMode: mode, toolsets: [], mcpMode: mode, mcpServers: [],
+    });
   });
 
   it('另一个伙伴在同期保存的修改不被撤销', async () => {

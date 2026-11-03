@@ -122,8 +122,13 @@ export function readPanelCollapsedRecord(kind: PanelKind, ctx: CollapseCtx): boo
   return null;
 }
 
-/** 写面板折叠态(按声明分发;none / 未注册 kind 为 no-op)。 */
-export function writePanelCollapsed(kind: PanelKind, ctx: CollapseCtx, collapsed: boolean): void {
+// In-memory write identity only, never a second preference store. A newer user
+// write must supersede a provisional default even when it writes the same value.
+let nextSessionWriteRevision = 0;
+const sessionWriteRevisions = new Map<string, number>();
+
+/** 写面板折叠态;per-session 返回写代次,供失败默认值的精确撤回使用。 */
+export function writePanelCollapsed(kind: PanelKind, ctx: CollapseCtx, collapsed: boolean): number | undefined {
   const scope = scopeOf(kind);
   if (scope === 'global') {
     writeGlobalToTree(kind, collapsed);
@@ -133,10 +138,34 @@ export function writePanelCollapsed(kind: PanelKind, ctx: CollapseCtx, collapsed
     const sessionId = ctx.sessionId ?? null;
     if (!sessionId) return;
     try {
-      localStorage.setItem(sessionKeyFor(kind, sessionId), String(collapsed));
+      const key = sessionKeyFor(kind, sessionId);
+      localStorage.setItem(key, String(collapsed));
+      const revision = ++nextSessionWriteRevision;
+      sessionWriteRevisions.set(key, revision);
+      return revision;
     } catch {
       // storage 不可用 —— 静默
     }
+  }
+}
+
+/** Withdraw a failed per-session default only if the record still has that value. */
+export function clearPanelCollapsedRecord(
+  kind: PanelKind,
+  ctx: CollapseCtx,
+  expected: boolean,
+  revision: number,
+): void {
+  if (scopeOf(kind) !== 'per-session' || !ctx.sessionId) return;
+  try {
+    const key = sessionKeyFor(kind, ctx.sessionId);
+    if (sessionWriteRevisions.get(key) !== revision) return;
+    if (localStorage.getItem(key) === String(expected)) {
+      localStorage.removeItem(key);
+      sessionWriteRevisions.delete(key);
+    }
+  } catch {
+    // Keep the same best-effort storage semantics as the read/write helpers.
   }
 }
 

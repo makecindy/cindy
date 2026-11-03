@@ -229,6 +229,7 @@ export function registerBrowserTabRoutes(app: BrowserRouteRegistrar, ctx: Browse
     asyncBrowserRoute(async (req, res) => {
       const url = toStringOrEmpty((req.body as { url?: unknown })?.url);
       const label = readOptionalTabLabel(req.body);
+      const background = (req.body as { background?: unknown })?.background === true;
       if (!url) {
         return jsonError(res, 400, "url is required");
       }
@@ -244,7 +245,7 @@ export function registerBrowserTabRoutes(app: BrowserRouteRegistrar, ctx: Browse
             ...browserNavigationPolicyForProfile(ctx, profileCtx),
           });
           await profileCtx.ensureBrowserAvailable();
-          const tab = await profileCtx.openTab(url, { label });
+          const tab = await profileCtx.openTab(url, { label, background });
           res.json(tab);
         },
       });

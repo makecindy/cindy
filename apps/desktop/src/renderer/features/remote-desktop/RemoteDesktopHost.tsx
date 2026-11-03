@@ -62,7 +62,8 @@ export function RemoteDesktopHost() {
         showCancel={false}
         maxWidth={460}
       />
-      {state.active && (
+      {/* The on-screen overlay, where supported, carries the same notice and Disconnect. */}
+      {state.active && !state.overlay && (
         <div
           role="status"
           className="fixed bottom-4 left-1/2 z-50 flex -translate-x-1/2 items-center gap-3 rounded-full border border-[var(--border-default)] bg-[var(--settings-theme-card-bg)] px-4 py-2 text-13 text-[var(--text-primary)]"

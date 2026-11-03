@@ -89,11 +89,20 @@ describe('mobile schedule form model', () => {
 
   it('keeps codex fast mode explicit and clears it when switching back to Claude', () => {
     const draft = updateDraftAgentKind(createMobileScheduleDraft(null), 'codex');
-    expect(buildMobileScheduleInput({ ...draft, name: 'Codex', prompt: 'run', fastMode: true }))
-      .toMatchObject({ agentKind: 'codex', model: 'gpt-5.5', fastMode: true });
+    // 不写死默认模型:留空交给运行电脑按新建任务口径解析,序列化时省略。
+    expect(draft.model).toBe('');
+    const input = buildMobileScheduleInput({ ...draft, name: 'Codex', prompt: 'run', fastMode: true });
+    expect(input).toMatchObject({ agentKind: 'codex', fastMode: true });
+    expect(input).not.toHaveProperty('model');
 
     const claude = updateDraftAgentKind({ ...draft, fastMode: true }, 'claude-code');
     expect(buildMobileScheduleInput({ ...claude, name: 'Claude', prompt: 'run' })).not.toHaveProperty('fastMode');
+  });
+
+  it.each(['60', '1380'])('accepts the advertised whole-hour boundary of %s minutes', (intervalMinutes) => {
+    const draft = { ...createMobileScheduleDraft(null), name: 'Boundary', prompt: 'run', intervalMinutes };
+    expect(validateMobileScheduleDraft(draft)).toBeNull();
+    expect(buildMobileScheduleInput(draft).intervalMs).toBe(Number(intervalMinutes) * 60_000);
   });
 
   it('validates required fields and supported interval-style cron presets', () => {
@@ -107,6 +116,14 @@ describe('mobile schedule form model', () => {
     })).toMatchObject({
       field: 'intervalMinutes',
     });
+    for (const intervalMinutes of ['7', '28', '59', '1440']) {
+      expect(validateMobileScheduleDraft({
+        ...draft,
+        name: 'Bad',
+        prompt: 'run',
+        intervalMinutes,
+      })).toMatchObject({ field: 'intervalMinutes' });
+    }
     expect(validateMobileScheduleDraft({
       ...draft,
       name: 'Manual',

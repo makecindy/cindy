@@ -8,7 +8,7 @@ import type {
 
 const PI_SESSION_ID_HEADER = 'x-cindy-pi-session-id';
 const PI_SESSION_TOKEN_HEADER = 'x-cindy-pi-session-token';
-const CODEX_GPT5_MODEL_RE = /^codex\/gpt-5(?:[.\-]|$)/;
+const CODEX_GPT5_MODEL_RE = /^(?:openai-codex|codex)\/gpt-5(?:[.\-]|$)/;
 const RESPONSES_PATH_RE = /(?:^|\/)responses(?:\?|$)/;
 
 type TextVerbosity = 'low' | 'medium' | 'high';

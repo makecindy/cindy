@@ -1,7 +1,7 @@
+import { ErrorNotice } from '@/components/ui/error-notice';
 import { useEffect, useRef, useState } from 'react';
 import * as Dialog from '@radix-ui/react-dialog';
 import { useTranslation } from 'react-i18next';
-import { useNavigate } from 'react-router-dom';
 
 import { Button } from '@/components/ui/button';
 import { FormField } from '@/components/ui/form-field';
@@ -11,19 +11,21 @@ import {
   isDataOwnerGenerationCurrent,
 } from '@/contexts/dataOwnerGeneration';
 import { isSelectableVendor } from '@/lib/agentVendors';
+import { CindyMakePreflightDialog, type CindyMakePreflightProps } from './CindyMakePreflightDialog';
 
 const MAX_REQUEST_LENGTH = 4000;
 
 export function CindyMakeCreateDialog({ onOpenChange }: { onOpenChange: (open: boolean) => void }) {
   const { t } = useTranslation();
-  const navigate = useNavigate();
+  const [preflight, setPreflight] = useState<Omit<CindyMakePreflightProps, 'onOpenChange'> | null>(
+    null,
+  );
   const [request, setRequest] = useState('');
   const [starting, setStarting] = useState(false);
   const [failed, setFailed] = useState(false);
   const submitting = useRef(false);
   const mounted = useRef(true);
   const owner = useRef(getDataOwnerGeneration());
-  const sessionId = useRef<string | undefined>(undefined);
   const returnFocusRef = useRef(
     document.activeElement instanceof HTMLElement ? document.activeElement : null,
   );
@@ -47,19 +49,15 @@ export function CindyMakeCreateDialog({ onOpenChange }: { onOpenChange: (open: b
     setStarting(true);
     setFailed(false);
     try {
-      const [{ ensureMakeTask, startMakeDoctorInStream }, draftState] = await Promise.all([
-        import('@/lib/cindyMakeDoctorStream'),
-        import('@/state/newMakerDraft'),
-      ]);
+      const draftState = await import('@/state/newMakerDraft');
       if (!isCurrent()) return;
       const draft = draftState.getDraft();
       const vendor = isSelectableVendor(draft.vendor) ? draft.vendor : 'cc';
       const prefs = draft.lastByVendor[vendor];
-      const createdId = await ensureMakeTask({
-        sessionId: sessionId.current,
-        title: t('settings.cindyMake.create.title'),
+      if (!mounted.current) return;
+      setPreflight({
+        request,
         createOptions: {
-          workspaceKind: 'dialogue',
           agentKind: vendor,
           model: prefs.model,
           effort: prefs.effort,
@@ -68,17 +66,7 @@ export function CindyMakeCreateDialog({ onOpenChange }: { onOpenChange: (open: b
           fastMode: draftState.getFastModeForModel(prefs.model),
           planModeEnabled: prefs.planMode,
         },
-        isCurrent,
       });
-      if (!isCurrent()) return;
-      if (!createdId) throw new Error('Cindy Make task was not created');
-      sessionId.current = createdId;
-      const runId = startMakeDoctorInStream(createdId, { command: 'cindy-make', request });
-      if (!runId) throw new Error('Cindy Make workflow was not started');
-      if (mounted.current) {
-        onOpenChange(false);
-        navigate('/cc-agent/' + createdId);
-      }
     } catch {
       if (mounted.current && isCurrent()) setFailed(true);
     } finally {
@@ -90,12 +78,15 @@ export function CindyMakeCreateDialog({ onOpenChange }: { onOpenChange: (open: b
     }
   };
 
+  if (preflight) return <CindyMakePreflightDialog {...preflight} onOpenChange={onOpenChange} />;
+
   return (
     <Dialog.Root open onOpenChange={(open) => !submitting.current && onOpenChange(open)}>
       <Dialog.Portal>
-        <Dialog.Overlay className="fixed inset-0 z-[10000] bg-[var(--overlay-modal)]" />
+        <Dialog.Overlay className="modal-scrim fixed inset-0 z-[10000]" />
         <Dialog.Content
-          className="fixed left-1/2 top-1/2 z-[10001] flex max-h-[85vh] w-[min(460px,calc(100vw-32px))] -translate-x-1/2 -translate-y-1/2 flex-col overflow-y-auto rounded-xl bg-[var(--confirm-bg)] p-4 shadow-[var(--confirm-shadow)] outline-none"
+          onPointerDownOutside={(event) => event.preventDefault()}
+          className="modal-panel fixed left-1/2 top-1/2 z-[10001] flex max-h-[85vh] w-[min(460px,calc(100vw-32px))] -translate-x-1/2 -translate-y-1/2 flex-col overflow-y-auto p-4 outline-none"
           onCloseAutoFocus={(event) => {
             event.preventDefault();
             if (returnFocusRef.current?.isConnected) returnFocusRef.current.focus();
@@ -149,9 +140,7 @@ export function CindyMakeCreateDialog({ onOpenChange }: { onOpenChange: (open: b
               )}
             </FormField>
             {failed && (
-              <p role="alert" className="text-13 text-[var(--error-fg)]">
-                {t('settings.cindyMake.create.failed')}
-              </p>
+              <ErrorNotice role="alert" message={t('settings.cindyMake.create.failed')} />
             )}
             <div className="flex flex-wrap justify-end gap-2">
               <Dialog.Close asChild>
@@ -160,7 +149,7 @@ export function CindyMakeCreateDialog({ onOpenChange }: { onOpenChange: (open: b
                   variant="secondary"
                   size="lg"
                   disabled={starting}
-                  className="border-[var(--confirm-btn-secondary-border)] bg-transparent text-[var(--confirm-btn-secondary-text)] enabled:hover:bg-[var(--confirm-btn-secondary-hover)] enabled:active:bg-[var(--confirm-btn-secondary-hover)]"
+                  palette="confirmation"
                 >
                   {t('settings.cindyMake.create.cancel')}
                 </Button>
@@ -170,7 +159,7 @@ export function CindyMakeCreateDialog({ onOpenChange }: { onOpenChange: (open: b
                 size="lg"
                 disabled={!valid}
                 loading={starting}
-                className="border-transparent bg-[var(--confirm-btn-primary-bg)] text-[var(--confirm-btn-primary-text)] enabled:hover:border-transparent enabled:active:border-transparent enabled:hover:bg-[var(--confirm-btn-primary-hover)] enabled:active:bg-[var(--confirm-btn-primary-hover)]"
+                palette="confirmation"
               >
                 {t('settings.cindyMake.create.continue')}
               </Button>

@@ -1,0 +1,48 @@
+diff --git a/android/src/main/java/com/swmansion/gesturehandler/core/NativeViewGestureHandler.kt b/android/src/main/java/com/swmansion/gesturehandler/core/NativeViewGestureHandler.kt
+--- a/android/src/main/java/com/swmansion/gesturehandler/core/NativeViewGestureHandler.kt
++++ b/android/src/main/java/com/swmansion/gesturehandler/core/NativeViewGestureHandler.kt
+@@ -125,12 +125,15 @@
+     } else if (state == STATE_UNDETERMINED || state == STATE_BEGAN) {
+       when {
+         shouldActivateOnStart -> {
+-          tryIntercept(view, event)
++          if (tryIntercept(view, event)) {
++            (hook as? ScrollViewHook)?.onIntercept()
++          }
+           hook.sendTouchEvent(view, event)
+           activate()
+         }
+ 
+         tryIntercept(view, event) -> {
++          (hook as? ScrollViewHook)?.onIntercept()
+           hook.sendTouchEvent(view, event)
+           activate()
+         }
+@@ -335,7 +338,27 @@
+   }
+ 
+   private class ScrollViewHook : NativeViewGestureHandlerHook {
++    private var hasInterceptedTouchStream = false
++
+     override fun shouldCancelRootViewGestureHandlerIfNecessary() = true
++
++    fun onIntercept() {
++      hasInterceptedTouchStream = true
++    }
++
++    override fun sendTouchEvent(view: View?, event: MotionEvent): Boolean? {
++      // Early/forced activation does not imply that the ScrollView intercepted.
++      // Keep its original delivery path until onInterceptTouchEvent returns true.
++      if (!hasInterceptedTouchStream) return view?.onTouchEvent(event)
++
++      // Interception bypasses root dispatch. Let the ScrollView cancel its child
++      // touch target, or text can run a pending long-press after UP (Cindy #6219).
++      val handled = view?.dispatchTouchEvent(event)
++      if (event.actionMasked == MotionEvent.ACTION_UP || event.actionMasked == MotionEvent.ACTION_CANCEL) {
++        hasInterceptedTouchStream = false
++      }
++      return handled
++    }
+   }
+ 
+   private class ReactViewGroupHook : NativeViewGestureHandlerHook {

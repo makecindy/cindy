@@ -23,7 +23,11 @@ it("projects candidate fields and retains both old and incremental offer shapes"
   expect(
     parseRemoteDesktopRequest({ op: "offer", lease: "lease", sdp: "sdp" }),
   ).toEqual({ op: "offer", lease: "lease", sdp: "sdp" });
-  for (const settings of [undefined, { fps: 30, bitrate: 0, audio: false }])
+  for (const settings of [
+    undefined,
+    { fps: 30, bitrate: 0, audio: false },
+    { fps: 30, quality: "auto", audio: false },
+  ])
     expect(
       parseRemoteDesktopRequest({
         op: "offer",

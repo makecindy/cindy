@@ -1,3 +1,31 @@
+/** Only explicit driver failure signals override legacy/partial observation success. */
+export function isUnavailableWindowObservation(
+  data: unknown,
+  args: Record<string, unknown>,
+): boolean {
+  const captureMode = typeof args.screenshot_out_file === 'string' || args.include_screenshot === true
+    ? 'vision'
+    : args.include_screenshot === false ? 'ax' : args.capture_mode;
+  if (!data || typeof data !== 'object' || Array.isArray(data)) return false;
+  const state = data as Record<string, unknown>;
+  if (state.ok === false || state.isError === true) return true;
+  const screenshotFailed =
+    state.screenshot_frame_valid === false ||
+    (state.screenshot_error !== undefined && state.screenshot_error !== null);
+  const hasElements =
+    Array.isArray(state.elements) && state.elements.length > 0;
+  const hasTree =
+    typeof state.tree_markdown === 'string' &&
+    state.tree_markdown.trim().length > 0;
+  const axUnavailable = state.degraded === true && !hasElements && !hasTree;
+  // A screenshot explicitly requested by vision/SOM cannot be replaced by an AX tree.
+  // Conversely, a valid vision-only result may have no AX surface or input route.
+  if (captureMode === 'vision' || captureMode === 'som')
+    return screenshotFailed;
+  if (captureMode === 'ax') return axUnavailable;
+  return screenshotFailed && axUnavailable;
+}
+
 /** Tool delivery is separate from evidence that a requested postcondition holds. */
 export function computerResultOutcome(
   name: string,

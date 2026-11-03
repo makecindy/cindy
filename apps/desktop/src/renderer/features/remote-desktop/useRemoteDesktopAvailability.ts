@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState, useSyncExternalStore } from 'react';
+import { useCallback, useEffect, useMemo, useState, useSyncExternalStore } from 'react';
 import { REMOTE_DESKTOP_CHANNEL, type RemoteDesktopCapabilities } from '@cindy/device-link';
 import { isMobilePlatform } from '@cindy/maker-shared/device-list';
 import { extractIpcError } from '@/utils/ipcError';
@@ -7,6 +7,14 @@ import {
   useDeviceLinkDeviceListRequestState,
 } from '@/features/device-link/useDeviceLinkDeviceList';
 import { revokedDevicesStore } from '@/features/device-link/revokedDevicesStore';
+import { unresponsiveDevicesStore } from '@/features/device-link/unresponsiveDevicesStore';
+import { isTransientRemoteError } from '@/features/device-link/refreshRemoteSessions';
+
+const CHECK_INTERRUPTED = 'remoteDesktop.shortcut.checkInterrupted';
+const OFFLINE = 'remoteDesktop.shortcut.offline';
+// Probe outcomes that may change without a presence edge: repeat them when the
+// shortcut is revealed instead of keeping a stale failure.
+const RETRYABLE_PROBE_REASONS = new Set([CHECK_INTERRUPTED, OFFLINE]);
 
 export function remoteDesktopUnavailableReason(value: unknown): string | null {
   if (!value || typeof value !== 'object' || Array.isArray(value))
@@ -15,7 +23,8 @@ export function remoteDesktopUnavailableReason(value: unknown): string | null {
   if (caps.version !== 1) return 'remoteDesktop.upgrade';
   if (typeof caps.enabled !== 'boolean') return 'remoteDesktop.shortcut.checkFailed';
   if (!caps.enabled) return 'remoteDesktop.disabled';
-  if (caps.permissions?.screenRecording === 'missing') return 'remoteDesktop.permissionHint';
+  if (caps.permissions?.screenRecording === 'missing')
+    return 'remoteDesktop.shortcut.screenRecordingRequired';
   if (
     !Array.isArray(caps.displays) ||
     !caps.displays.some(
@@ -45,16 +54,28 @@ export function remoteDesktopAvailabilityError(error: unknown): string {
   if (code.includes('REMOTE_DISABLED')) return 'remoteDesktop.remoteDisabled';
   if (code.includes('CHANNEL_NOT_ALLOWED')) return 'remoteDesktop.upgrade';
   if (code.includes('DESKTOP_DISABLED')) return 'remoteDesktop.disabled';
-  if (code.includes('PEER_OFFLINE')) return 'remoteDesktop.shortcut.offline';
+  if (code.includes('PEER_OFFLINE') || code.includes('DEVICE_OFFLINE')) return OFFLINE;
+  // A link that is reconnecting, congested or behind an open circuit says
+  // nothing about the remote desktop itself; the user can check again.
+  if (
+    isTransientRemoteError(code) ||
+    code.includes('DEVICE_UNRESPONSIVE') ||
+    code.includes('DEVICE_LINK_BUSY')
+  )
+    return CHECK_INTERRUPTED;
   return 'remoteDesktop.shortcut.checkFailed';
 }
 
-export function useRemoteDesktopAvailability(deviceId: string, active: boolean) {
+export function useRemoteDesktopAvailability(deviceId: string) {
   const devices = useDeviceLinkDeviceList();
   const { status: directoryStatus } = useDeviceLinkDeviceListRequestState();
   const revoked = useSyncExternalStore(
     revokedDevicesStore.subscribe,
     revokedDevicesStore.getSnapshot,
+  );
+  const unresponsive = useSyncExternalStore(
+    unresponsiveDevicesStore.subscribe,
+    unresponsiveDevicesStore.getSnapshot,
   );
   const device = devices?.find((entry) => entry.deviceId === deviceId);
   const denied = revoked.has(deviceId);
@@ -72,43 +93,58 @@ export function useRemoteDesktopAvailability(deviceId: string, active: boolean) 
             ? 'remoteDesktop.shortcut.controlDisabled'
             : !device.remoteControlEnabled
               ? 'remoteDesktop.remoteDisabled'
-              : null;
+              : unresponsive.has(deviceId)
+                ? 'remoteDesktop.shortcut.unresponsive'
+                : null;
+  // Presence/permission/responsiveness changes invalidate a check; hover and
+  // directory object refreshes do not, except that `retry` repeats a probe the
+  // link interrupted. Keep this scoped to the mounted device row, not disk.
+  const present = !!device;
+  const version = device?.appVersion;
+  const platform = device?.platform;
+  const [attempt, setAttempt] = useState(0);
+  const retry = useCallback(() => setAttempt((value) => value + 1), []);
   const scope = useMemo(
-    () => ({ deviceId, device, active, denied, directoryStatus }),
-    [deviceId, device, active, denied, directoryStatus],
+    () => ({ deviceId, present, blockedReason, version, platform, attempt }),
+    [deviceId, present, blockedReason, version, platform, attempt],
   );
   const [checked, setChecked] = useState<{ scope: typeof scope; reason: string | null } | null>(
     null,
   );
 
+  // Probe when an eligible device first appears, independently of pointer/focus.
   useEffect(() => {
-    if (!scope.active || !scope.device || blockedReason) return;
+    if (!scope.present || scope.blockedReason) return;
     let current = true;
-    const timer = setTimeout(() => {
-      void Promise.resolve()
-        .then(() =>
-          window.electronAPI.deviceLink.invoke(scope.deviceId, REMOTE_DESKTOP_CHANNEL, [
-            { op: 'capabilities' },
-          ]),
-        )
-        .then((value) => {
-          if (current) setChecked({ scope, reason: remoteDesktopUnavailableReason(value) });
-        })
-        .catch((error: unknown) => {
-          if (current) setChecked({ scope, reason: remoteDesktopAvailabilityError(error) });
-        });
-    }, 150);
+    void Promise.resolve()
+      .then(() =>
+        current
+          ? window.electronAPI.deviceLink.invoke(scope.deviceId, REMOTE_DESKTOP_CHANNEL, [
+              { op: 'capabilities' },
+            ])
+          : undefined,
+      )
+      .then((value) => {
+        if (current) setChecked({ scope, reason: remoteDesktopUnavailableReason(value) });
+      })
+      .catch((error: unknown) => {
+        if (current) setChecked({ scope, reason: remoteDesktopAvailabilityError(error) });
+      });
     return () => {
       current = false;
-      clearTimeout(timer);
     };
-  }, [scope, blockedReason]);
+  }, [scope]);
 
   const reason = blockedReason ?? (checked?.scope === scope ? checked.reason : null);
   return {
     checking: !reason && checked?.scope !== scope,
     available: !blockedReason && checked?.scope === scope && checked.reason === null,
     reason,
+    retryable:
+      !blockedReason &&
+      checked?.scope === scope &&
+      RETRYABLE_PROBE_REASONS.has(checked.reason ?? ''),
+    retry,
     markUnavailable: (error: unknown) => {
       setChecked({ scope, reason: remoteDesktopAvailabilityError(error) });
     },

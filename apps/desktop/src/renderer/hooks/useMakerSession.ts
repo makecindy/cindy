@@ -26,7 +26,7 @@ interface CreateSessionParams {
   model: string;
   /** 与 maker-core/types/common.ts 的 Effort union 一致 */
   effort?: 'minimal' | 'low' | 'medium' | 'high' | 'xhigh' | 'max' | 'ultra';
-  fastMode?: boolean;
+  fastMode?: boolean | 'ultrafast';
   permissionMode?: 'ask' | 'auto' | 'bypassPermissions' | 'acceptEdits' | 'plan' | 'default';
   systemPrompt?: string;
   displayReasoning?: 'off' | 'summarized' | 'full';

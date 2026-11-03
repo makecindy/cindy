@@ -19,6 +19,7 @@ import {
 } from '../../shared/utilityModelProfiles.js';
 import { createLogger } from '../logger.js';
 import { getActiveCatalog } from '../maker-host/active-catalog.js';
+import { getCindyAiProviderName } from '../cindyAiProviderName.js';
 import { readModelDisableOverrides } from '../maker-host/model-disable-store.js';
 import { readProviderOrder } from '../maker-host/provider-order-store.js';
 import {
@@ -43,7 +44,7 @@ import { MAKER_INVOKE } from './channels.js';
 const log = createLogger('maker-ipc/auxiliary-model-settings');
 
 function toWireOption(option: TextOneshotPinOption, available: boolean): AuxiliaryModelOption {
-  if (option.agentKind !== 'codex' && option.agentKind !== 'claude-code') {
+  if (option.agentKind !== 'codex' && option.agentKind !== 'claude-code' && option.agentKind !== 'pi') {
     throw new Error(`unsupported auxiliary model agent: ${option.agentKind}`);
   }
   return {
@@ -100,11 +101,12 @@ export function buildAuxiliaryModelOptions(args: {
     args.overrides,
     args.providerOrder,
     args.hasCredential,
+    'auxiliary',
   );
   const availableIds = new Set(available.map((option) => option.id));
   const result = available.map((option) => toWireOption(option, true));
 
-  const allRoutable = buildTextOneshotPinOptions(args.catalog, args.overrides, args.providerOrder);
+  const allRoutable = buildTextOneshotPinOptions(args.catalog, args.overrides, args.providerOrder, undefined, 'auxiliary');
   const allById = new Map(allRoutable.map((option) => [option.id, option]));
   for (const pin of args.settings.models) {
     if (availableIds.has(pin)) continue;
@@ -124,7 +126,7 @@ export function buildAuxiliaryModelOptions(args: {
     if (!decoded) continue;
     result.push({
       id: pin,
-      label: `${decoded.agentKind === 'codex' ? 'Codex' : 'Claude Code'} · ${decoded.model} · ${decoded.providerId}`,
+      label: `${decoded.agentKind === 'codex' ? 'Codex' : decoded.agentKind === 'pi' ? 'Pi' : 'Claude Code'} · ${decoded.model} · ${decoded.providerId}`,
       group: decoded.providerId,
       providerId: decoded.providerId,
       agentKind: decoded.agentKind,
@@ -132,7 +134,7 @@ export function buildAuxiliaryModelOptions(args: {
       modelName: decoded.model,
       budget: false,
       subscription: false,
-      agentSuffix: decoded.agentKind === 'codex' ? 'Codex' : 'Claude Code',
+      agentSuffix: decoded.agentKind === 'codex' ? 'Codex' : decoded.agentKind === 'pi' ? 'Pi' : 'Claude Code',
       available: false,
     });
   }
@@ -143,6 +145,7 @@ function settingsWire(): AuxiliaryModelSettingsState {
   const state = readAuxiliaryModelSettingsState();
   const models = Array.isArray(state.value.models) ? state.value.models : [];
   const settings = { models };
+  const catalog = getActiveCatalog();
   return {
     models,
     isCustomized: state.isCustomized,
@@ -150,7 +153,11 @@ function settingsWire(): AuxiliaryModelSettingsState {
     defaults: state.defaults ?? { models: [] },
     options: buildAuxiliaryModelOptions({
       settings,
-      catalog: getActiveCatalog(),
+      catalog: {
+        ...catalog,
+        providers: catalog.providers.map(provider => provider.id === 'xd'
+          ? { ...provider, name: getCindyAiProviderName() } : provider),
+      },
       overrides: readModelDisableOverrides(),
       providerOrder: readProviderOrder(),
       hasCredential: hasOneshotProviderCredential,
@@ -204,6 +211,8 @@ export function registerAuxiliaryModelSettingsIpc(): void {
           getActiveCatalog(),
           readModelDisableOverrides(),
           readProviderOrder(),
+          undefined,
+          'auxiliary',
         ).map((option) => option.id),
       );
       const patch = parseAuxiliaryModelSettingsPatch(

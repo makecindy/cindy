@@ -3,6 +3,7 @@ import type { Session } from '@/lib/ccAgent.types';
 import { projectKeyComparisonKey } from '../../../../shared/projectKeys';
 import { sessionActivityMs } from './dateSessionGrouping';
 import {
+  filterPersistentLocalProjectsByLastActivity,
   groupSessions,
   projectIdentityKeyForSession,
   type PersistentLocalProject,
@@ -50,6 +51,7 @@ type RestoreVendorPredicate = (session: { agentKind?: string | null }) => boolea
 
 interface CollectRestorableProjectKeysOptions {
   sessions: readonly Session[];
+  provisionalDraftTaskId?: string | null;
   persistentLocalProjects?: readonly PersistentLocalProject[];
   lastActivityCutoff: number | null;
   pinnedProjectKeys: ReadonlySet<string>;
@@ -68,6 +70,7 @@ interface CollectRestorableProjectKeysOptions {
  */
 export function collectRestorableProjectKeys({
   sessions,
+  provisionalDraftTaskId,
   persistentLocalProjects = [],
   lastActivityCutoff,
   pinnedProjectKeys,
@@ -86,18 +89,18 @@ export function collectRestorableProjectKeys({
     lastActivityCutoff === null
       ? vendorSessions
       : vendorSessions.filter((session) => sessionActivityMs(session) >= lastActivityCutoff);
-  const activityProjects =
-    lastActivityCutoff === null
-      ? vendorProjects
-      : vendorProjects.filter(
-          (project) => new Date(project.lastUsedAt).getTime() >= lastActivityCutoff,
-        );
+  const activityProjects = filterPersistentLocalProjectsByLastActivity(
+    vendorProjects,
+    lastActivityCutoff,
+  );
   const activityGroups = groupSessions(activitySessions, {
+    provisionalDraftTaskId,
     includePinnedInProjects: true,
     persistentLocalProjects: activityProjects,
     localPlatform,
   });
   const allGroups = groupSessions(sessions, {
+    provisionalDraftTaskId,
     includePinnedInProjects: true,
     persistentLocalProjects,
     localPlatform,

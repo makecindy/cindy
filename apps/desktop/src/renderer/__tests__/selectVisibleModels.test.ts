@@ -312,7 +312,9 @@ describe('filterChatBridgedCodexProviders — provider source sections', () => {
     const providers = [claude, grok, api];
     expect(filterChatBridgedCodexProviders(providers, 'pi', true)).toEqual([grok, api]);
     expect(filterChatBridgedCodexProviders(providers, 'pi', false)).toEqual(providers);
-    expect(filterChatBridgedCodexProviders([claude], 'claude-code', true)).toEqual([claude]);
+    // Claude 订阅只走本机 Claude Code 登录:SSH 远端的 claude-code 也不展示。
+    expect(filterChatBridgedCodexProviders([claude], 'claude-code', true)).toEqual([]);
+    expect(filterChatBridgedCodexProviders([claude], 'claude-code', false)).toEqual([claude]);
     const input = { agentKind: 'pi' as const, deviceId: undefined, providers, deviceCcModels: [], deviceCodexModels: [], excludeChatBridgedCodex: true };
     expect(ids(selectVisibleModels(input))).toEqual(['grok-model', 'shared']);
     expect(ids(selectVisibleModels({ ...input, deviceId: 'host', devicePiModels: [devModel('claude-only')] }))).toEqual(['claude-only']);

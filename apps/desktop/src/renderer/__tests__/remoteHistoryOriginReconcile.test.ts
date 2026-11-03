@@ -32,7 +32,7 @@ vi.mock('@/lib/sessionService', () => ({
   touchUserSend: vi.fn(async () => ({})),
 }));
 
-import { makerChatStore } from '@/lib/makerChatStore';
+import { makerChatStore, getRemoteHistoryView } from '@/lib/makerChatStore';
 import * as messageService from '@/lib/messageService';
 import * as sessionService from '@/lib/sessionService';
 import { remoteProjectsStore } from '@/features/device-link/remoteProjectsStore';
@@ -116,7 +116,9 @@ describe('makerChatStore.reconcileOpenSessionOrigins (device-link 历史竞速)'
     const s = sid();
     const cached = dbMessage(s, 'cached', 'Saved answer');
     const getMessages = vi.fn(async () => ({ accountCounter: 0, messages: [cached] }));
-    Object.assign(window.electronAPI.deviceLink, { mirrorCache: { getMessages } });
+    Object.assign(window.electronAPI.deviceLink, { mirrorCache: { getMessages,
+      putMessages: vi.fn(async () => ({ ok: true, invalidation: 1 })),
+    } });
     seedRemote(s);
     remoteProjectsStore.markDeviceDisconnected(DEVICE_ID);
     const leave = makerChatStore.enterView(s);
@@ -124,18 +126,23 @@ describe('makerChatStore.reconcileOpenSessionOrigins (device-link 历史竞速)'
     await flush();
     const messages = makerChatStore.getSnapshot(s).messages;
     expect(messages.map((message) => message.clientId)).toEqual([cached.clientId]);
+    // One protected structured-view read and one legacy raw-row fallback read.
+    expect(getMessages).toHaveBeenCalledTimes(2);
     makerChatStore.reconcileOpenSessionOrigins();
     makerChatStore.reconcileOpenSessionOrigins();
     await flush();
     expect(makerChatStore.getSnapshot(s).messages).toBe(messages);
-    expect(getMessages).toHaveBeenCalledTimes(1);
+    expect(getMessages).toHaveBeenCalledTimes(2);
     expect(invoke).not.toHaveBeenCalled();
     remoteHistory = [cached, dbMessage(s, 'new', 'New answer')];
     seedRemote(s);
+    // Match the production remote-projects subscriber before origin reconciliation.
+    getRemoteHistoryView(s)?.setNetworkAvailable(true);
     makerChatStore.reconcileOpenSessionOrigins();
-    await flush();
-    expect(invoke).toHaveBeenCalledWith(DEVICE_ID, 'local-db:messages:list', expect.anything());
-    expect(makerChatStore.getSnapshot(s).messages.map((message) => message.clientId)).toContain('client-new');
+    await vi.waitFor(() => {
+      expect(invoke).toHaveBeenCalledWith(DEVICE_ID, 'local-db:messages:list', expect.anything());
+      expect(makerChatStore.getSnapshot(s).messages.map((message) => message.clientId)).toContain('client-new');
+    });
     leave();
   });
   it('启动竞速:origin 解析后经隧道重载被控端真历史(不再停留本机空库)', async () => {

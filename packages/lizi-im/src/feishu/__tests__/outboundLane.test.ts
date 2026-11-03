@@ -1,9 +1,14 @@
 /**
  * 群 lane 出站路由: open_id / chat_id / reply 三分支与回挂锚点领取语义。
  */
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const larkMocks = vi.hoisted(() => {
+  const request = vi.fn(async () => ({ code: 0 }));
+  const list = vi.fn<() => Promise<{ code: number; data: { items: Array<{
+    message_id: string; thread_id: string; chat_id: string; deleted?: boolean;
+    msg_type?: string; body?: { content: string };
+  }> } }>>(async () => ({ code: 0, data: { items: [] } }));
   const create = vi.fn(async (payload: { params: unknown; data: { content: string } }) => {
     void payload;
     return { data: { message_id: 'om_created' } };
@@ -27,13 +32,13 @@ const larkMocks = vi.hoisted(() => {
     },
   );
   const deleteMessage = vi.fn(
-    function (this: unknown): Promise<{ code?: number; msg?: string; data?: {} }> {
+    function (this: unknown): Promise<{ code?: number; msg?: string; data?: object }> {
       deleteOwners.push(this);
       return Promise.resolve({ data: {} });
     },
   );
   const patch = vi.fn(
-    async (): Promise<{ code?: number; msg?: string; data?: {} }> => ({ data: {} }),
+    async (): Promise<{ code?: number; msg?: string; data?: object }> => ({ data: {} }),
   );
   const getMessage = vi.fn(
     function (
@@ -45,6 +50,7 @@ const larkMocks = vi.hoisted(() => {
       data?: {
         items?: Array<{
           message_id?: string;
+          upper_message_id?: string;
           thread_id?: string;
           chat_id?: string;
           msg_type?: string;
@@ -60,14 +66,16 @@ const larkMocks = vi.hoisted(() => {
       return Promise.resolve({ data: { items: [] } });
     },
   );
-  return { create, reply, deleteMessage, getMessage, patch, replyOwners, getOwners, deleteOwners };
+  return { request, list, create, reply, deleteMessage, getMessage, patch, replyOwners, getOwners, deleteOwners };
 });
 
 vi.mock('@larksuiteoapi/node-sdk', () => ({
   Client: class {
+    request = larkMocks.request;
     im = {
       v1: {
         message: {
+          list: larkMocks.list,
           create: larkMocks.create,
           reply: larkMocks.reply,
           delete: larkMocks.deleteMessage,
@@ -88,7 +96,8 @@ vi.mock('../ownerGuard.js', () => ({
   check: vi.fn(() => true),
 }));
 
-vi.mock('../moduleScope.js', () => ({
+vi.mock('../moduleScope.js', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../moduleScope.js')>()),
   getLog: () => ({
     debug: vi.fn(),
     info: vi.fn(),
@@ -98,6 +107,8 @@ vi.mock('../moduleScope.js', () => ({
 }));
 
 import * as outbound from '../outbound.js';
+import { start } from '../streamingText.js';
+import { createFeishuScope, runInScope } from '../moduleScope.js';
 
 const creds = { appId: 'cli_test', appSecret: 'secret', service: 'feishu' as const };
 const otherCreds = { appId: 'cli_other_account', appSecret: 'secret', service: 'feishu' as const };
@@ -111,9 +122,106 @@ function rebindFresh(next = creds): void {
 }
 
 describe('feishu outbound lane routing', () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
   beforeEach(() => {
     vi.clearAllMocks();
     rebindFresh();
+  });
+
+  // Regression: companion streaming handles escape FeishuIM's ALS boundary when
+  // an already-running agent emits events. Existing lane cases stayed in the
+  // default scope. Exercise real start/outbound routing, with only the SDK faked
+  // (unit tier): an unbound or different caller must never receive the patches.
+  it.each([false, true])(
+    'keeps streamed and final cards on their creating connection (caller connected=%s)',
+    async (callerConnected) => {
+      vi.useFakeTimers();
+      if (!callerConnected) outbound.unbindClient();
+      const companion = createFeishuScope({ host: null, secretKeyPrefix: 'companion' });
+      const handle = await runInScope(companion, () => {
+        outbound.bindClient(otherCreds);
+        return start('ou_companion_owner');
+      });
+      const creator = larkMocks.create.mock.contexts.at(-1);
+      handle.append('draft');
+      await vi.advanceTimersByTimeAsync(1500);
+      expect(larkMocks.patch).toHaveBeenCalledTimes(1);
+      expect(larkMocks.patch.mock.contexts[0]).toBe(creator);
+
+      handle.replace('revised');
+      await vi.advanceTimersByTimeAsync(1500);
+      await handle.finalize('finished');
+      expect(larkMocks.patch).toHaveBeenCalledTimes(3);
+      for (const client of larkMocks.patch.mock.contexts) expect(client).toBe(creator);
+      expect(larkMocks.create.mock.contexts.at(-1)).toBe(creator);
+      expect(larkMocks.create).toHaveBeenCalledTimes(1);
+      expect(larkMocks.patch).toHaveBeenLastCalledWith(expect.objectContaining({
+        path: { message_id: handle.messageId },
+        data: expect.objectContaining({ content: expect.stringContaining('finished') }),
+      }));
+      expect(larkMocks.request).not.toHaveBeenCalled();
+    },
+  );
+
+  it('recalls an empty companion reply in its own scope even from another connection', async () => {
+    const companion = createFeishuScope({ host: null, secretKeyPrefix: 'companion' });
+    const handle = await runInScope(companion, () => {
+      outbound.bindClient(otherCreds);
+      return start('ou_companion_owner');
+    });
+    await handle.finalize('');
+    expect(larkMocks.request.mock.contexts.at(-1)).toBe(
+      runInScope(companion, () => outbound.getBoundClient()),
+    );
+    expect(larkMocks.request).toHaveBeenLastCalledWith({
+      method: 'DELETE',
+      url: `open-apis/im/v1/messages/${handle.messageId}`,
+    });
+  });
+
+  it.each([false, true])('final stays in its lane and does not consume the next queued turn (thread=%s)', async (thread) => {
+    const lane = thread ? 'g/oc_chat/omt_topic' : 'g/oc_chat';
+    outbound.pushReplyAnchor(lane, 'om_first');
+    outbound.pushReplyAnchor(lane, 'om_second');
+    const handle = await start(lane);
+    expect(larkMocks.reply.mock.calls[0][0].path).toEqual({ message_id: 'om_first' });
+    await handle.finalize('answer');
+    if (!thread) expect(larkMocks.reply.mock.calls[0][0].data).not.toHaveProperty('reply_in_thread');
+    expect(larkMocks.reply).toHaveBeenCalledTimes(1);
+    expect(larkMocks.create).not.toHaveBeenCalled();
+    expect(larkMocks.patch).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({
+      path: { message_id: handle.messageId },
+      data: expect.objectContaining({ content: expect.stringContaining('answer') }),
+    }));
+    expect(larkMocks.request).not.toHaveBeenCalled();
+    const next = await start(lane);
+    expect(larkMocks.reply.mock.calls.at(-1)?.[0].path).toEqual({ message_id: 'om_second' });
+    next.close();
+  });
+
+  it.each([false, true])('failed final edit falls back in the same lane without taking the next turn (thread=%s)', async (thread) => {
+    const lane = thread ? 'g/oc_chat/omt_topic' : 'g/oc_chat';
+    outbound.pushReplyAnchor(lane, 'om_first');
+    outbound.pushReplyAnchor(lane, 'om_second');
+    const handle = await start(lane);
+    larkMocks.patch.mockRejectedValueOnce(new Error('card no longer editable'));
+    await handle.finalize('answer');
+    if (thread) {
+      expect(larkMocks.reply.mock.calls[1][0].path).toEqual({ message_id: 'om_first' });
+      expect(larkMocks.create).not.toHaveBeenCalled();
+    } else {
+      expect(larkMocks.create).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({
+        params: { receive_id_type: 'chat_id' },
+        data: expect.objectContaining({ receive_id: 'oc_chat', content: expect.stringContaining('answer') }),
+      }));
+    }
+    expect(larkMocks.request).not.toHaveBeenCalled();
+    const next = await start(lane);
+    expect(larkMocks.reply.mock.calls.at(-1)?.[0].path).toEqual({ message_id: 'om_second' });
+    next.close();
   });
 
   it('sends p2p messages via open_id unchanged', async () => {
@@ -155,6 +263,121 @@ describe('feishu outbound lane routing', () => {
 
   it('topic lane without an anchor rejects instead of leaking into the main chat', async () => {
     await expect(outbound.sendText('g/oc_group1/omt_t1', 'x')).rejects.toThrow(/no reply anchor/);
+    expect(larkMocks.create).not.toHaveBeenCalled();
+  });
+
+  // PR #6330: real streaming final + outbound reply, rather than a mocked
+  // rearm call. Existing tests covered pending openers but not claimed cards.
+  // Unit tier: empty finalize followed by background text, no real I/O/waits.
+  it.each(['same', 'changed-before', 'changed-during', 'new-round', 'delete-failed'])(
+    'empty claimed opener preserves the next reply target (%s)', async (transition) => {
+      const lane = 'g/oc_group1/omt_t1';
+      outbound.pushReplyAnchor(lane, 'om_opener');
+      outbound.pushPatchableOpener(lane, 'om_opener', 'om_trigger');
+      const handle = await start(lane);
+      const replaceAccount = () => {
+        rebindFresh(otherCreds);
+        outbound.pushReplyAnchor(lane, 'om_new');
+        outbound.pushPatchableOpener(lane, 'om_new', 'om_new_trigger');
+        outbound.claimPatchableOpener(lane);
+      };
+      if (transition === 'changed-before') replaceAccount();
+      if (transition === 'changed-during') larkMocks.request.mockImplementationOnce(async () => {
+        replaceAccount();
+        return { code: 0 };
+      });
+      if (transition === 'new-round') larkMocks.request.mockImplementationOnce(async () => {
+        outbound.pushReplyAnchor(lane, 'om_new');
+        outbound.pushPatchableOpener(lane, 'om_new', 'om_new_trigger');
+        outbound.claimPatchableOpener(lane);
+        return { code: 0 };
+      });
+      if (transition === 'delete-failed') {
+        larkMocks.request.mockRejectedValueOnce(new Error('delete failed'));
+        await expect(handle.finalize('')).rejects.toThrow('delete failed');
+      } else {
+        await handle.finalize('');
+      }
+      if (transition === 'changed-before') expect(larkMocks.request).not.toHaveBeenCalled();
+      await outbound.sendText(lane, 'background result');
+      const expected = transition === 'same' ? 'om_trigger'
+        : transition === 'delete-failed' ? 'om_opener' : 'om_new';
+      expect(larkMocks.reply).toHaveBeenLastCalledWith(expect.objectContaining({
+        path: { message_id: expected },
+        data: expect.objectContaining(transition === 'same' ? { reply_in_thread: true } : {}),
+      }));
+    },
+  );
+
+  // Real transport state: a later registered opener must retain its own trigger.
+  it.each(['streaming', 'consume'])('empty %s final does not consume a newer pending trigger', async (mode) => {
+    const lane = 'g/oc_group1/omt_t1';
+    outbound.pushReplyAnchor(lane, 'om_old');
+    outbound.pushPatchableOpener(lane, 'om_old', 'om_old_trigger');
+    const handle = await start(lane);
+    const registerNext = () => {
+      outbound.pushReplyAnchor(lane, 'om_next');
+      outbound.pushPatchableOpener(lane, 'om_next', 'om_next_trigger');
+    };
+    if (mode === 'streaming') {
+      larkMocks.request.mockImplementationOnce(async () => { registerNext(); return { code: 0 }; });
+      await handle.finalize('');
+    } else {
+      registerNext();
+      outbound.rearmAnchorToTrigger(lane, 'om_old');
+    }
+    await outbound.sendText(lane, 'old background result');
+    expect(larkMocks.reply).toHaveBeenLastCalledWith(expect.objectContaining({ path: { message_id: 'om_old_trigger' } }));
+    expect(outbound.getOpenerTrigger(lane)).toBe('om_next_trigger');
+    const next = await start(lane);
+    await next.finalize('');
+    await outbound.sendText(lane, 'next background result');
+    expect(larkMocks.reply).toHaveBeenLastCalledWith(expect.objectContaining({
+      path: { message_id: 'om_next_trigger' }, data: expect.objectContaining({ reply_in_thread: true }),
+    }));
+  });
+
+  it('restores a cold topic anchor before streaming a background result', async () => {
+    larkMocks.list.mockResolvedValueOnce({ code: 0, data: { items: [
+      { message_id: 'om_deleted', thread_id: 'omt_t1', chat_id: 'oc_group1', deleted: true },
+      { message_id: 'om_other', thread_id: 'omt_other', chat_id: 'oc_group1' },
+      { message_id: 'om_saved', thread_id: 'omt_t1', chat_id: 'oc_group1' },
+    ] } });
+    await outbound.sendCardRaw('g/oc_group1/omt_t1', { body: 'background result' });
+    await outbound.sendText('g/oc_group1/omt_t1', 'next result');
+    expect(larkMocks.list).toHaveBeenCalledTimes(1);
+    expect(larkMocks.list).toHaveBeenCalledWith({ params: {
+      container_id_type: 'thread', container_id: 'omt_t1',
+      sort_type: 'ByCreateTimeDesc', page_size: 50,
+    } });
+    expect(larkMocks.reply).toHaveBeenCalledTimes(2);
+    expect(larkMocks.reply).toHaveBeenLastCalledWith(expect.objectContaining({ path: { message_id: 'om_saved' } }));
+    expect(larkMocks.create).not.toHaveBeenCalled();
+  });
+
+  it('keeps a newer inbound anchor when history lookup finishes', async () => {
+    larkMocks.list.mockImplementationOnce(async () => {
+      outbound.pushReplyAnchor('g/oc_group1/omt_t1', 'om_live');
+      return { code: 0, data: { items: [{ message_id: 'om_old', thread_id: 'omt_t1', chat_id: 'oc_group1' }] } };
+    });
+    await outbound.sendCardRaw('g/oc_group1/omt_t1', {});
+    expect(larkMocks.reply).toHaveBeenCalledWith(expect.objectContaining({ path: { message_id: 'om_live' } }));
+  });
+
+  it('rejects anchor lookup completion after account replacement', async () => {
+    larkMocks.list.mockImplementationOnce(async () => {
+      rebindFresh(otherCreds);
+      return { code: 0, data: { items: [{ message_id: 'om_old', thread_id: 'omt_t1', chat_id: 'oc_group1' }] } };
+    });
+    await expect(outbound.sendCardRaw('g/oc_group1/omt_t1', {})).rejects.toThrow(/account replaced/);
+    expect(larkMocks.reply).not.toHaveBeenCalled();
+    expect(larkMocks.create).not.toHaveBeenCalled();
+  });
+
+  it('does not send an already resolved target through a replacement account', async () => {
+    const sending = outbound.sendText('ou_someone', 'old account output');
+    rebindFresh(otherCreds);
+    await expect(sending).rejects.toThrow(/account was replaced/);
     expect(larkMocks.create).not.toHaveBeenCalled();
   });
 
@@ -257,7 +480,7 @@ describe('feishu outbound lane routing', () => {
     });
   });
 
-  it('renders replied media as context markers without downloading it as trigger attachments', async () => {
+  it('retains quoted media references for screened host downloads', async () => {
     larkMocks.getMessage.mockResolvedValueOnce({
       code: 0,
       data: {
@@ -274,8 +497,102 @@ describe('feishu outbound lane routing', () => {
     });
 
     await expect(outbound.resolveReplyMessage('om_parent_image', 'oc_group1')).resolves.toEqual({
-      replyContext: { author: 'Alice', text: '[图片]' },
+      replyContext: {
+        author: 'Alice', text: '[图片]',
+      },
+      attachments: [{ kind: 'image', imageKey: 'img_parent', messageId: 'om_parent_image' }],
     });
+  });
+
+  // Regression: message.get returns envelope + children; items[0] loses all content.
+  // Unit tier, through the production reply/history entry; nested/foreign/deleted
+  // children distinguish membership and resource-owner semantics, not source text.
+  it('expands only descendants of the requested merged forward and preserves image ownership', async () => {
+    larkMocks.getMessage.mockResolvedValueOnce({ code: 0, data: { items: [
+      { message_id: 'om_foreign', chat_id: 'oc_other', msg_type: 'text', body: { content: '{"text":"private"}' } },
+      { message_id: 'om_bundle', chat_id: 'oc_group1', msg_type: 'merge_forward', body: { content: 'Merged and Forwarded Message' } },
+      { message_id: 'om_text', upper_message_id: 'om_bundle', msg_type: 'text', body: { content: '{"text":"first"}' }, sender: { sender_type: 'user', sender_name: 'Alice' } },
+      { message_id: 'om_nested', upper_message_id: 'om_bundle', msg_type: 'merge_forward' },
+      { message_id: 'om_image', upper_message_id: 'om_nested', msg_type: 'image', body: { content: '{"image_key":"img_child"}' } },
+      { message_id: 'om_deleted', upper_message_id: 'om_bundle', deleted: true, msg_type: 'text', body: { content: '{"text":"deleted"}' } },
+      { message_id: 'om_unrelated', upper_message_id: 'om_elsewhere', msg_type: 'text', body: { content: '{"text":"unrelated"}' } },
+      { message_id: 'om_cross_chat', upper_message_id: 'om_bundle', chat_id: 'oc_other', msg_type: 'text', body: { content: '{"text":"cross-chat"}' } },
+    ] } });
+    const result = await outbound.resolveReplyMessage('om_bundle', 'oc_group1');
+    expect(result?.replyContext.text).toBe('[合并转发消息]\n[Alice] first\n[user] [合并转发消息]\n[user] [图片]\n[user] cross-chat');
+    expect(result?.attachments).toEqual([{ kind: 'image', imageKey: 'img_child', messageId: 'om_image' }]);
+  });
+
+  it('expands nested envelopes whose descendants require another read', async () => {
+    larkMocks.getMessage.mockResolvedValueOnce({ code: 0, data: { items: [
+      { message_id: 'om_bundle', chat_id: 'oc_group1', msg_type: 'merge_forward' },
+      { message_id: 'om_nested', upper_message_id: 'om_bundle', msg_type: 'merge_forward' },
+    ] } });
+    larkMocks.getMessage.mockResolvedValueOnce({ code: 0, data: { items: [
+      { message_id: 'om_nested', msg_type: 'merge_forward' },
+      { message_id: 'om_child', upper_message_id: 'om_nested', msg_type: 'text', body: { content: '{"text":"nested content"}' } },
+    ] } });
+    expect((await outbound.resolveReplyMessage('om_bundle', 'oc_group1'))?.replyContext.text).toContain('nested content');
+  });
+
+  it('includes merged-forward text and child resource ownership in group history', async () => {
+    larkMocks.list.mockResolvedValueOnce({ code: 0, data: { items: [
+      { message_id: 'om_history', chat_id: 'oc_group1', thread_id: '', msg_type: 'merge_forward', body: { content: 'Merged and Forwarded Message' } },
+    ] } });
+    larkMocks.getMessage.mockResolvedValueOnce({ code: 0, data: { items: [
+      { message_id: 'om_history', chat_id: 'oc_group1', msg_type: 'merge_forward' },
+      { message_id: 'om_child', upper_message_id: 'om_history', msg_type: 'image', body: { content: '{"image_key":"img_history"}' } },
+    ] } });
+    const page = await outbound.fetchChatHistoryPage({ chatId: 'oc_group1' });
+    expect(page.messages).toHaveLength(1);
+    expect(page.messages[0]).toMatchObject({
+      messageId: 'om_history', text: '[合并转发消息]\n[user] [图片]',
+      attachments: [{ kind: 'image', imageKey: 'img_history', messageId: 'om_child' }],
+    });
+  });
+
+  // Unit regressions r4374812162, through the production history entry: excluded
+  // envelopes must cause no reads, and nested reads must share the turn's budget.
+  it('excludes the trigger and other topics before expanding merged history', async () => {
+    larkMocks.list.mockResolvedValueOnce({ code: 0, data: { items: [
+      { message_id: 'om_trigger', chat_id: 'oc_group1', thread_id: '', msg_type: 'merge_forward' },
+      { message_id: 'om_other_topic', chat_id: 'oc_group1', thread_id: 'omt_other', msg_type: 'merge_forward' },
+      { message_id: 'om_kept', chat_id: 'oc_group1', thread_id: '', msg_type: 'text', body: { content: '{"text":"retained"}' } },
+    ] } });
+    const result = await outbound.fetchChatHistoryPage({ chatId: 'oc_group1', excludeMessageId: 'om_trigger' });
+    expect(result.messages.map((item) => item.text)).toEqual(['retained']);
+    expect(larkMocks.getMessage).not.toHaveBeenCalled();
+  });
+
+  it('shares merged-history reads across nested envelopes and pages', async () => {
+    const mergeForwardReadBudget = { remaining: 2 };
+    larkMocks.list.mockResolvedValueOnce({ code: 0, data: { items: [
+      { message_id: 'om_bundle', chat_id: 'oc_group1', thread_id: '', msg_type: 'merge_forward' },
+    ] } });
+    larkMocks.getMessage.mockResolvedValueOnce({ code: 0, data: { items: [
+      { message_id: 'om_bundle', chat_id: 'oc_group1', msg_type: 'merge_forward' },
+      { message_id: 'om_nested', upper_message_id: 'om_bundle', msg_type: 'merge_forward' },
+    ] } });
+    larkMocks.getMessage.mockResolvedValueOnce({ code: 0, data: { items: [
+      { message_id: 'om_nested', msg_type: 'merge_forward' },
+      { message_id: 'om_child', upper_message_id: 'om_nested', msg_type: 'text', body: { content: '{"text":"nested record"}' } },
+    ] } });
+    const first = await outbound.fetchChatHistoryPage({ chatId: 'oc_group1', mergeForwardReadBudget });
+    expect(first.messages[0]?.text).toContain('nested record');
+    larkMocks.list.mockResolvedValueOnce({ code: 0, data: { items: [
+      { message_id: 'om_older_bundle', chat_id: 'oc_group1', thread_id: '', msg_type: 'merge_forward' },
+      { message_id: 'om_text', chat_id: 'oc_group1', thread_id: '', msg_type: 'text', body: { content: '{"text":"older text"}' } },
+    ] } });
+    const second = await outbound.fetchChatHistoryPage({ chatId: 'oc_group1', pageToken: 'older', mergeForwardReadBudget });
+    expect(second.messages.map((item) => item.text)).toEqual(['older text', '[合并转发消息：读取预算已用完]']);
+    expect(larkMocks.getMessage).toHaveBeenCalledTimes(2);
+  });
+
+  it('keeps an unreadable merged forward visible rather than dropping it', async () => {
+    larkMocks.getMessage.mockResolvedValueOnce({ code: 0, data: { items: [
+      { message_id: 'om_empty', chat_id: 'oc_group1', msg_type: 'merge_forward' },
+    ] } });
+    expect((await outbound.resolveReplyMessage('om_empty', 'oc_group1'))?.replyContext.text).toContain('未能读取子消息');
   });
 
   it('extracts markdown from a replied bot v2 interactive card', async () => {
@@ -552,7 +869,7 @@ describe('feishu outbound lane routing', () => {
     expect(outbound.claimPatchableOpener('g/oc_g/omt_p9')).toBe('om_opener');
 
     // patch 失败撤回开场白卡后: 回拨锚点到触发消息。
-    expect(outbound.rearmAnchorToTrigger('g/oc_g/omt_p9')).toBe(true);
+    expect(outbound.rearmAnchorToTrigger('g/oc_g/omt_p9', 'om_opener')).toBe(true);
     await outbound.sendText('g/oc_g/omt_p9', '兜底回复');
     expect(larkMocks.reply).toHaveBeenLastCalledWith(
       expect.objectContaining({
@@ -561,7 +878,7 @@ describe('feishu outbound lane routing', () => {
       }),
     );
     // 触发记录一次性消费 — 再次回拨返回 false。
-    expect(outbound.rearmAnchorToTrigger('g/oc_g/omt_p9')).toBe(false);
+    expect(outbound.rearmAnchorToTrigger('g/oc_g/omt_p9', 'om_opener')).toBe(false);
   });
 
   it('暂存队列容量淘汰记录 opener id, 连接恢复时撤回(不留思考卡)', async () => {

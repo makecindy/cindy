@@ -1,4 +1,5 @@
 import type { McpProvider } from '@cindy/maker-core';
+import { CustomMcpProvider } from './custom-mcp-provider.js';
 
 /** Desktop-owned loopback hosts. Remote Pi's loopback is a different machine. */
 export function isDesktopLoopbackMcpUrl(url: URL): boolean {
@@ -25,6 +26,7 @@ export function isPiCustomMcpProviderAvailable(
   provider: McpProvider,
   opts?: { remoteHostId?: string | null },
 ): boolean {
+  if (provider instanceof CustomMcpProvider && provider.supportsApps) return true;
   try {
     const config = provider.toCodexMcpConfig?.({ agentKind: 'pi', workingDir: '', vendorOptions: {} });
     if (config?.type !== 'http') return false;

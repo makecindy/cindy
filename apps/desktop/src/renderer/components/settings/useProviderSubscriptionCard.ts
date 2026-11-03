@@ -1,13 +1,20 @@
+import { useProviderAccountUsage } from '@/hooks/useProviderAccountUsage';
+import { isKimiCodingProviderView } from '../../../shared/kimiCodingUsage';
 import { useEffect, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import type { TFunction } from 'i18next';
 import type { ProviderView } from '@cindy/model-providers';
 import type { MobileCodexRateLimitsResult } from '@cindy/maker-shared/device-link-contract';
 import { matchCodexBucketForModel } from '@cindy/maker-shared/codex-usage-buckets';
-import { summarizeCodexRateLimitReset } from '@cindy/maker-shared/session-controls';
 import { useAccountUsage, type RateLimitSnapshot } from '@/hooks/useAccountUsage';
 import { useCodexRateLimits } from '@/hooks/useCodexRateLimits';
 import { useClaudeSubscriptionUsage } from '@/hooks/useClaudeSubscriptionUsage';
+import { useRemoteClaudeSubscriptionUsage } from '@/hooks/useRemoteClaudeSubscriptionUsage';
+import {
+  selectRemoteCodexAccountUsage,
+  useRemoteCodexAccountUsage,
+  useRemoteXaiSubscriptionUsage,
+} from '@/hooks/useRemoteDeviceUsage';
 import {
   useXaiSubscriptionUsage,
   requestXaiSubscriptionRefresh,
@@ -15,6 +22,7 @@ import {
 import { isXaiWeeklyUsageCurrent } from '../../../shared/xaiSubscriptionUsage';
 import { providerWeeklyQuotaSource } from '../new-chat/useProviderWeeklyQuota';
 import {
+  buildKimiUsageCard,
   buildClaudeUsageCard,
   buildCodexUsageCard,
   buildXaiUsageCard,
@@ -52,7 +60,7 @@ export function buildSettingsCodexUsageCard(
   );
   return buildCodexUsageCard(
     quota || planType ? { ...quota, planType, credits: account?.credits } : null,
-    summarizeCodexRateLimitReset(snapshot, nowMs),
+    null, // Reset count and expiry belong to the collapsible reset list.
     t,
     nowMs,
     locale,
@@ -94,4 +102,54 @@ export function useProviderSubscriptionCard(provider?: ProviderView): UsageCardA
   if (source === 'claude' && claude) return buildClaudeUsageCard(claude, t);
   if (source === 'xai' && xai) return buildXaiUsageCard(xai, null, t, nowMs);
   return null;
+}
+
+/**
+ * 同账号另一台电脑上一个供应商连接的订阅额度卡：经 device-link 读那台的余量镜像，与任务底部用量条
+ * 读同一份(按电脑 + 供应商分开缓存)，不借用本机同名账号。Codex 取账号的通用额度槽，不取模型专属桶。
+ */
+function useRemoteProviderSubscriptionCard(
+  provider: ProviderView | undefined,
+  deviceId: string | null,
+): UsageCardAccount | null {
+  const { t, i18n } = useTranslation();
+  const source = provider && deviceId ? providerWeeklyQuotaSource({ ...provider, suspended: false }) : null;
+  const providerId = provider?.id ?? 'openai';
+  const codex = useRemoteCodexAccountUsage(source === 'codex' ? deviceId : null, providerId, { live: true });
+  const claude = useRemoteClaudeSubscriptionUsage(source === 'claude' ? deviceId : null, providerId);
+  const xai = useRemoteXaiSubscriptionUsage(source === 'xai' ? deviceId : null, providerId);
+  const [nowMs, setNowMs] = useState(Date.now);
+  useEffect(() => {
+    if (!source) return;
+    const timer = window.setInterval(() => setNowMs(Date.now()), 60_000);
+    return () => window.clearInterval(timer);
+  }, [source]);
+  if (source === 'codex') {
+    const account = selectRemoteCodexAccountUsage(codex, 'app-server');
+    return account
+      ? buildCodexUsageCard(account, null, t, nowMs, i18n?.resolvedLanguage ?? i18n?.language)
+      : null;
+  }
+  if (source === 'claude' && claude) return buildClaudeUsageCard(claude, t);
+  if (source === 'xai' && xai) return buildXaiUsageCard(xai, null, t, nowMs);
+  return null;
+}
+
+/** 一个供应商连接的订阅额度卡：`deviceId` 为 null 读本机账号，否则读同账号那台电脑上的账号。 */
+export function useDeviceProviderSubscriptionCard(
+  provider: ProviderView | undefined,
+  deviceId: string | null,
+): UsageCardAccount | null {
+  const local = useProviderSubscriptionCard(deviceId === null ? provider : undefined);
+  const remote = useRemoteProviderSubscriptionCard(deviceId === null ? undefined : provider, deviceId);
+  const { t } = useTranslation();
+  const kimi = useProviderAccountUsage(deviceId && isKimiCodingProviderView(provider) ? provider : undefined, undefined, deviceId);
+  if (deviceId && kimi.supported) {
+    const snapshot = kimi.result?.status === 'ready' ? kimi.result.snapshot : null;
+    const card = buildKimiUsageCard(snapshot?.kind === 'kimi-coding-quota' ? snapshot : null, t);
+    if (kimi.result?.status === 'unavailable') card.emptyText = t(`providerAccountUsage.kimi.error.${kimi.result.error}`);
+    if (kimi.result?.status === 'ready' && kimi.result.stale) card.notices = [{ text: t('providerAccountUsage.kimi.stale'), tone: 'warn' }];
+    return card;
+  }
+  return deviceId === null ? local : remote;
 }

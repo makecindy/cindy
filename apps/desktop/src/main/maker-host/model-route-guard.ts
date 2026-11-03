@@ -189,7 +189,7 @@ export function shouldApplyExclusiveProviderReroute(
   if (providerId === 'xai') return false;
   if (!views) return true;
   const source = views.find((provider) => provider.id === providerId)?.source;
-  if (source === 'user') return false;
+  if (source === 'user' || source === 'organization') return false;
   if (source) return true;
   return false;
 }

@@ -1,3 +1,4 @@
+import { Button } from '@/components/ui/button';
 /**
  * NewGoalDialog —— 从 composer 「+」菜单新建目标的弹窗(create 模式)。
  *
@@ -9,10 +10,12 @@
  */
 
 import * as AlertDialog from '@radix-ui/react-alert-dialog';
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
 
 import { goalApiFor } from '@/lib/makerTransport';
+import { extractIpcError } from '@/utils/ipcError';
+import { isWritableDirectoryGrantErrorCode } from '../../../shared/writableDirectoryGrantError';
 import { GoalAdvancedLimits, DEFAULT_GOAL_LIMITS, type GoalLimitValues } from './GoalAdvancedLimits';
 import { ListComposerTextarea } from './ListComposerTextarea';
 
@@ -33,14 +36,21 @@ interface NewGoalDialogProps {
    * (目标的默认文字来自 composer,创建成功后原文该清掉)。
    */
   onCreated?: () => void;
+  creationRecovery?: ReactNode;
+  creationRecoveryBusy?: boolean;
 }
 
-export function NewGoalDialog({ sessionId, open, onOpenChange, onCreate, initialObjective, onCreated }: NewGoalDialogProps): React.ReactElement {
+interface GoalCreationError {
+  message: string;
+  pickerAuthorization: boolean;
+}
+
+export function NewGoalDialog({ sessionId, open, onOpenChange, onCreate, initialObjective, onCreated, creationRecovery, creationRecoveryBusy = false }: NewGoalDialogProps): React.ReactElement {
   const { t } = useTranslation();
   const [objective, setObjective] = useState('');
   const [limits, setLimits] = useState<GoalLimitValues>(DEFAULT_GOAL_LIMITS);
   const [saving, setSaving] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  const [error, setError] = useState<GoalCreationError | null>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
 
   useEffect(() => {
@@ -57,10 +67,18 @@ export function NewGoalDialog({ sessionId, open, onOpenChange, onCreate, initial
     // 故依赖仅 [open]。
   }, [open]);
 
+  useEffect(() => {
+    if (creationRecovery) {
+      // The parent can publish recovery after this dialog's async catch ran.
+      // Discard its handled picker error so returning to editing cannot reveal it.
+      setError((current) => current?.pickerAuthorization ? null : current);
+    }
+  }, [creationRecovery, error?.pickerAuthorization]);
+
   const trimmed = objective.trim();
 
   const save = async () => {
-    if (!trimmed) return;
+    if (!trimmed || saving || creationRecoveryBusy) return;
     setSaving(true);
     setError(null);
     try {
@@ -72,7 +90,12 @@ export function NewGoalDialog({ sessionId, open, onOpenChange, onCreate, initial
       onCreated?.(); // 创建成功 → 通知父组件清空 composer(默认目标文字的来源)
       onOpenChange(false);
     } catch (err) {
-      setError(err instanceof Error ? err.message : t('goal.newGoalDialog.failed'));
+      // The recovery notice explains the handled picker error. A later retry
+      // can fail for another reason while that notice is still visible.
+      setError({
+        message: err instanceof Error ? err.message : t('goal.newGoalDialog.failed'),
+        pickerAuthorization: isWritableDirectoryGrantErrorCode(extractIpcError(err)?.code),
+      });
     } finally {
       setSaving(false);
     }
@@ -81,10 +104,9 @@ export function NewGoalDialog({ sessionId, open, onOpenChange, onCreate, initial
   return (
     <AlertDialog.Root open={open} onOpenChange={onOpenChange}>
       <AlertDialog.Portal>
-        <AlertDialog.Overlay className="fixed inset-0 z-[10000] bg-[var(--overlay-modal)]" />
+        <AlertDialog.Overlay className="modal-scrim fixed inset-0 z-[10000]" />
         <AlertDialog.Content
-          className="fixed left-1/2 top-1/2 z-[10001] flex w-[min(460px,calc(100vw-32px))] -translate-x-1/2 -translate-y-1/2 flex-col gap-4 rounded-xl border p-4 shadow-[var(--confirm-shadow)]"
-          style={{ backgroundColor: 'var(--confirm-bg)', borderColor: 'var(--border-default)' }}
+          className="modal-panel fixed left-1/2 top-1/2 z-[10001] flex w-[min(460px,calc(100vw-32px))] -translate-x-1/2 -translate-y-1/2 flex-col gap-4 p-4"
           onOpenAutoFocus={(event) => {
             // 打开时焦点直接落在目标输入框(否则 radix 默认聚焦取消按钮)。
             event.preventDefault();
@@ -124,37 +146,33 @@ export function NewGoalDialog({ sessionId, open, onOpenChange, onCreate, initial
             }}
           />
           <GoalAdvancedLimits value={limits} onChange={setLimits} />
-          {error && (
+          {creationRecovery}
+          {error && !(error.pickerAuthorization && creationRecovery) && (
             <div className="text-12" style={{ color: 'var(--error-fg)' }}>
-              {error}
+              {error.pickerAuthorization ? t('goal.newGoalDialog.failed') : error.message}
             </div>
           )}
           <div className="flex justify-end gap-2">
             <AlertDialog.Cancel asChild>
-              <button
-                type="button"
-                className="h-8 rounded-full border px-3 text-12 transition-colors hover:bg-[var(--surface-elevated)]"
-                style={{
-                  backgroundColor: 'var(--surface-elevated)',
-                  borderColor: 'var(--border-default)',
-                  color: 'var(--text-primary)',
-                }}
+              <Button variant="secondary" size="md" compact type="button"
                 disabled={saving}
               >
                 {t('goal.newGoalDialog.cancel')}
-              </button>
+              </Button>
             </AlertDialog.Cancel>
-            <button
+            <Button
+              variant="cta"
+              size="md"
+              compact
+              loading={saving}
               type="button"
-              className="h-8 rounded-full px-4 text-12 font-medium transition-opacity hover:opacity-85 disabled:opacity-45"
-              style={{ backgroundColor: 'var(--accent-cta-bg-pure)', color: 'var(--accent-pure-cta-fg)' }}
-              disabled={saving || !trimmed}
+              disabled={saving || creationRecoveryBusy || !trimmed}
               onClick={() => {
                 void save();
               }}
             >
-              {saving ? t('goal.newGoalDialog.starting') : t('goal.newGoalDialog.start')}
-            </button>
+              { t('goal.newGoalDialog.start')}
+            </Button>
           </div>
         </AlertDialog.Content>
       </AlertDialog.Portal>

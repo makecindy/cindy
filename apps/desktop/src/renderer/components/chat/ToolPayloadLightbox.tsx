@@ -1,3 +1,6 @@
+import { PreviewHeader, PreviewButton } from './PreviewChrome';
+import { DropdownMenuItem } from '@/components/ui/dropdown-menu';
+import { Button } from '@/components/ui/button';
 /**
  * ToolPayloadLightbox
  * ---------------------------------------------------------------------------
@@ -28,19 +31,20 @@ import {
 } from './chatChrome';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
-import { Copy, FileText, Folder, X } from 'lucide-react';
+import { Copy, Download, FileText, Folder, X } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 
 import { cn, basename } from '@/lib/utils';
 import { toast } from '@/lib/toast';
 import { Tooltip } from '@/components/ui/tooltip';
+import { FileTypeIcon } from '@/components/ui/file-type-icon';
 
 import { DiffView } from './DiffView';
 import { MarkdownDiffBlock } from './MarkdownDiffBlock';
 import type { DiffDetails } from '@/lib/agent-actions/diffStats';
 import { isRemoteFileOrigin } from '@/lib/sessionFileOrigin';
 import { resolveToolFilePath } from '@/lib/localPathResolver';
-import { revealRemoteChatFile } from '@/lib/remoteFileOpen';
+import { downloadRemoteChatEntry } from '@/lib/remoteFileOpen';
 import { useChatSessionFile } from './ChatSessionFileContext';
 
 export type ToolDiffSegment =
@@ -254,15 +258,20 @@ export function ToolPayloadLightbox({
     }
   }
 
+  const remoteFile = isRemoteFileOrigin(fileCtx.origin);
+  const revealLabel = remoteFile
+    ? t('chat.remoteFile.downloadToLocal')
+    : t('chat.lightbox.openInExplorer');
+
   async function showInFolder() {
     if (payload.kind !== 'diff' || payload.files.length !== 1) return;
     // 模型可能给相对路径(Claude file_path / Codex change path)—— 先按会话
     // workingDir 补成绝对路径,show-item-in-folder 只接受绝对路径。
     const filePath = resolveToolFilePath(payload.files[0].filePath, fileCtx.workingDir);
     // remote 会话:远端路径本机不存在(或更糟,存在同路径本机文件)——
-    // 下载缓存副本后定位副本。
+    // 下载到本地后定位下载的文件。
     if (isRemoteFileOrigin(fileCtx.origin)) {
-      await revealRemoteChatFile(fileCtx.origin, fileCtx.workingDir, filePath);
+      await downloadRemoteChatEntry(fileCtx.origin, fileCtx.workingDir, filePath);
       return;
     }
     const res = await window.electronAPI.showItemInFolder({ filePath });
@@ -290,7 +299,8 @@ export function ToolPayloadLightbox({
     >
       <button
         type="button"
-        aria-label={t('chat.lightbox.close')}
+        tabIndex={-1}
+        aria-hidden="true"
         style={{
           position: 'absolute',
           inset: 0,
@@ -304,103 +314,38 @@ export function ToolPayloadLightbox({
       <div
         data-tool-payload-lightbox-card
         className={cn(
-          'cursor-auto flex flex-col overflow-hidden rounded-xl',
+          'cursor-auto flex flex-col overflow-hidden pt-16',
           'border border-[var(--msg-tool-card-border)]',
           'bg-[var(--msg-tool-card-bg)]',
         )}
         style={{
-          width: '80vw',
-          height: '80vh',
-          maxWidth: '1600px',
-          maxHeight: '1200px',
+          width: '100vw',
+          height: '100vh',
           position: 'relative',
           zIndex: 1,
         }}
       >
-        {/* Toolbar */}
-        <div
-          className={cn(
-            'flex items-center justify-between',
-            'h-14 shrink-0 px-5',
-            'border-b border-[var(--msg-tool-card-border)]',
-          )}
-        >
-          <Tooltip.Root>
-            <Tooltip.Trigger asChild>
-              <button
-                type="button"
-                onClick={copyTitle}
-                className={cn(
-                  'flex items-center gap-2 min-w-0',
-                  'rounded-full px-1 -mx-1 py-0.5',
-                  CHAT_FOCUS_CLASS,
-                  'hover:bg-[var(--msg-code-inline-bg)] transition-colors',
-                  'text-left cursor-pointer',
-                )}
-              >
-                <FileText size={16} className="shrink-0 text-[var(--msg-tool-card-chevron)]" />
-                <span
-                  className={cn(
-                    'font-semibold text-14',
-                    'text-[var(--msg-tool-card-text)]',
-                    'truncate',
-                  )}
-                >
-                  {displayName}
-                </span>
-              </button>
-            </Tooltip.Trigger>
-            <Tooltip.Content>
+        <PreviewHeader
+          name={displayName}
+          onClose={handleClose}
+          actions={
+            <PreviewButton label={t('chat.lightbox.copyContent')} onClick={copyContent}>
+              <Copy className="h-4 w-4" />
+            </PreviewButton>
+          }
+          menu={
+            <>
+              <DropdownMenuItem onClick={copyTitle}>
               {payload.kind === 'diff'
                 ? t('chat.lightbox.clickToCopyPath')
                 : t('chat.lightbox.clickToCopy')}
-            </Tooltip.Content>
-          </Tooltip.Root>
-
-          <div className="flex items-center gap-1">
-            {payload.kind === 'diff' && singleDiffFile && (
-              <Tooltip.Root>
-                <Tooltip.Trigger asChild>
-                  <button
-                    type="button"
-                    onClick={showInFolder}
-                    className={CHAT_LIGHTBOX_ICON_BUTTON_CLASS}
-                    aria-label={t('chat.lightbox.openInExplorer')}
-                  >
-                    <Folder size={18} className="text-[var(--msg-tool-card-chevron)]" />
-                  </button>
-                </Tooltip.Trigger>
-                <Tooltip.Content>{t('chat.lightbox.openInExplorer')}</Tooltip.Content>
-              </Tooltip.Root>
-            )}
-            <Tooltip.Root>
-              <Tooltip.Trigger asChild>
-                <button
-                  type="button"
-                  onClick={copyContent}
-                  className={CHAT_LIGHTBOX_ICON_BUTTON_CLASS}
-                  aria-label={t('chat.lightbox.copyContent')}
-                >
-                  <Copy size={18} className="text-[var(--msg-tool-card-chevron)]" />
-                </button>
-              </Tooltip.Trigger>
-              <Tooltip.Content>{t('chat.lightbox.copyContent')}</Tooltip.Content>
-            </Tooltip.Root>
-            <Tooltip.Root>
-              <Tooltip.Trigger asChild>
-                <button
-                  type="button"
-                  onClick={handleClose}
-                  className={CHAT_LIGHTBOX_ICON_BUTTON_CLASS}
-                  aria-label={t('chat.lightbox.close')}
-                >
-                  <X size={20} className="text-[var(--msg-tool-card-chevron)]" />
-                </button>
-              </Tooltip.Trigger>
-              <Tooltip.Content>{t('chat.lightbox.close')}</Tooltip.Content>
-            </Tooltip.Root>
-          </div>
-        </div>
+            </DropdownMenuItem>
+            {payload.kind === 'diff' && singleDiffFile ? (
+                <DropdownMenuItem onClick={showInFolder}>{revealLabel}</DropdownMenuItem>
+              ) : null}
+            </>
+          }
+        />
 
         {/* Body */}
         <div
@@ -536,30 +481,12 @@ export function ToolPayloadLightbox({
               'border-t border-[var(--msg-tool-card-border)]',
             )}
           >
-            <button
-              type="button"
-              onClick={handleClose}
-              className={cn(
-                'h-8 rounded-full border px-4 text-12 font-medium',
-                'border-[var(--border-default)] bg-[var(--surface-elevated)]',
-                'text-[var(--text-secondary)] hover:bg-[var(--surface-hover)] transition-colors',
-                'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring-soft)]',
-              )}
-            >
+            <Button variant="secondary" size="md" compact type="button" onClick={handleClose}>
               {textEdit.cancelLabel}
-            </button>
-            <button
-              type="button"
-              onClick={handleSaveText}
-              className={cn(
-                'h-8 rounded-full px-4 text-12 font-medium',
-                'bg-[var(--accent-cta-bg)] text-[var(--accent-pure-cta-fg)]',
-                'hover:opacity-90 transition-opacity',
-                'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring-soft)]',
-              )}
-            >
+            </Button>
+            <Button variant="cta" size="md" compact type="button" onClick={handleSaveText}>
               {textEdit.saveLabel}
-            </button>
+            </Button>
           </div>
         )}
       </div>

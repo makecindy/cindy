@@ -4,6 +4,7 @@ import {
   activePiHistoryFromTree,
   normalizePiSessionTree,
   piContextTokensFromTree,
+  piRetryBranch,
   userDraftTextFromPiEntry,
 } from '../session-tree.js';
 
@@ -56,6 +57,70 @@ const treeData = {
 };
 
 describe('pi session tree adapter', () => {
+  function retryTree(tail: Array<Record<string, unknown>>) {
+    const entries = [
+      { type: 'message', message: { role: 'user', content: 'retry me' } },
+      ...tail,
+    ];
+    const nodes = entries.map((entry, i) => ({
+      entry: { ...entry, id: String(i), parentId: i ? String(i - 1) : null },
+      children: [] as unknown[],
+    }));
+    nodes.forEach((node, i) => { if (i) nodes[i - 1].children.push(node); });
+    return { tree: [nodes[0]], leafId: String(nodes.length - 1) };
+  }
+  const emptyFailure = {
+    type: 'message', message: {
+      role: 'assistant', stopReason: 'error', content: [], errorMessage: '413 length limit exceeded',
+    },
+  };
+  const settings = [
+    { type: 'model_change', provider: 'local', modelId: 'replacement' },
+    { type: 'thinking_level_change', thinkingLevel: 'high' },
+  ];
+
+  it('allows model and effort changes around an empty failure without mutating history', () => {
+    const tree = retryTree([...settings, emptyFailure, ...settings]);
+    const before = structuredClone(tree);
+    expect(piRetryBranch(tree, '0')).toEqual({ parentId: null, requestTooLarge: true });
+    expect(tree).toEqual(before);
+  });
+
+  it('does not mistake settings alone for a failed response', () => {
+    expect(() => piRetryBranch(retryTree(settings), '0')).toThrow('no failed response');
+  });
+
+  it('allows omission context edits around repeated empty failures', () => {
+    const omit = { type: 'context_edit', targetId: 'failed', replacement: null };
+    expect(piRetryBranch(retryTree([emptyFailure, omit, emptyFailure, omit]), '0')).toEqual({
+      parentId: null,
+      requestTooLarge: true,
+    });
+  });
+
+  it('does not treat an omission edit alone as a failed response', () => {
+    expect(() => piRetryBranch(retryTree([{ type: 'context_edit', targetId: '0', replacement: null }]), '0'))
+      .toThrow('no failed response');
+  });
+
+  it('still protects a context edit that replaces message content', () => {
+    expect(() => piRetryBranch(retryTree([
+      emptyFailure,
+      { type: 'context_edit', targetId: '1', replacement: 'rewritten' },
+    ]), '0')).toThrow('discard output or session state');
+  });
+
+  it.each([
+    { type: 'message', message: { role: 'assistant', stopReason: 'error', content: [{ type: 'text', text: 'partial' }] } },
+    { type: 'message', message: { role: 'assistant', stopReason: 'error', content: [{ type: 'toolCall', name: 'bash' }] } },
+    { type: 'message', message: { role: 'toolResult', content: [] } },
+    { type: 'custom', customType: 'plan-state' },
+    { type: 'compaction', summary: 'progress' },
+  ])('still protects output and other session state after settings changes: %j', entry => {
+    expect(() => piRetryBranch(retryTree([emptyFailure, ...settings, entry]), '0'))
+      .toThrow('discard output or session state');
+  });
+
   it('restores gateway calls using the same tool contract as live events', () => {
     const data = structuredClone(treeData);
     const block = data.tree[0].children[0].entry.message.content[2];

@@ -480,6 +480,84 @@ describe('mobileVoiceInput', () => {
     expect(result).toEqual({ text: 'mock refined voice draft' });
   });
 
+  // Real gateways send one or two characters per event wrapped in ~180 chars of
+  // JSON; a 1,000-character refinement streams over 100,000 bytes.
+  const longRefinement = '长'.repeat(1_000);
+  const longRefinementSse = ['{"text":"', ...longRefinement, '"}']
+    .map((content) => `data: ${JSON.stringify({
+      id: 'chatcmpl-EXxrC3CJkbLLnU1qOjh6Hn6s6iSdr',
+      object: 'chat.completion.chunk',
+      created: 1791763622,
+      model: 'gpt-5.4-mini',
+      choices: [{ index: 0, delta: { content } }],
+    })}\n\n`)
+    .join('') + 'data: [DONE]\n\n';
+
+  function longRefinementClient(response: Partial<Response>): MobileLiteLlmTextModelClient {
+    return new MobileLiteLlmTextModelClient({
+      deps: {
+        fetch: (async () => ({ ok: true, status: 200, statusText: 'OK', ...response })) as unknown as typeof fetch,
+      },
+      requestTargetProvider: async () => ({
+        url: 'https://voice.example.com/api/voice/sessions/session-1/refine?provider=auto',
+        authorization: 'Bearer refine-token',
+      }),
+    });
+  }
+
+  const refineRequest = {
+    model: 'auto',
+    system: 'Return JSON.',
+    user: { dictationText: 'raw' },
+    schemaName: 'dictation_refinement',
+  };
+
+  it('accepts a long streamed refinement whose SSE framing exceeds the output limit', async () => {
+    expect(longRefinementSse.length).toBeGreaterThan(64_000);
+    const client = longRefinementClient({ body: new Response(longRefinementSse).body });
+
+    await expect(client.requestJson<{ text: string }>(refineRequest))
+      .resolves.toEqual({ text: longRefinement });
+  });
+
+  it('accepts a long buffered refinement whose SSE framing exceeds the output limit', async () => {
+    const client = longRefinementClient({ body: undefined, text: async () => longRefinementSse });
+
+    await expect(client.requestJson<{ text: string }>(refineRequest))
+      .resolves.toEqual({ text: longRefinement });
+  });
+
+  it('rejects runaway refinement output', async () => {
+    const runaway = `data: ${JSON.stringify({
+      choices: [{ delta: { content: `{"text":"${'长'.repeat(64_001)}` } }],
+    })}\n\n`;
+    const streamed = longRefinementClient({ body: new Response(runaway).body });
+    const buffered = longRefinementClient({ body: undefined, text: async () => runaway });
+
+    await expect(streamed.requestJson(refineRequest)).rejects.toThrow('64000');
+    await expect(buffered.requestJson(refineRequest)).rejects.toThrow('64000');
+  });
+
+  it.each([
+    ['one oversized event with little output', `data: ${JSON.stringify({
+      padding: 'x'.repeat(64_001),
+      choices: [{ delta: { content: '{"text":"短"}' } }],
+    })}\n\n`],
+    ['endless framing-only events', `data: ${JSON.stringify({
+      id: 'chatcmpl-EXxrC3CJkbLLnU1qOjh6Hn6s6iSdr',
+      object: 'chat.completion.chunk',
+      created: 1791763622,
+      model: 'gpt-5.4-mini',
+      choices: [{ index: 0, delta: {} }],
+    })}\n\n`.repeat(12_000)],
+  ])('bounds the response when the gateway sends %s', async (_case, sse) => {
+    const streamed = longRefinementClient({ body: new Response(sse).body });
+    const buffered = longRefinementClient({ body: undefined, text: async () => sse });
+
+    await expect(streamed.requestJson(refineRequest)).rejects.toThrow(/\d{5,} 字符/);
+    await expect(buffered.requestJson(refineRequest)).rejects.toThrow(/\d{5,} 字符/);
+  });
+
   it('surfaces managed refine HTTP error details', async () => {
     const fetchCloud = vi.fn(async () => ({
       ok: false,

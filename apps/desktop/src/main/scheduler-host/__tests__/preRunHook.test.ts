@@ -7,10 +7,26 @@
  * @vitest-environment node
  */
 
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
+
+// 透传真实 spawn,只计数:用来断言某些路径根本没有启动真实命令。
+const spawnCalls = vi.hoisted(() => ({ count: 0 }));
+vi.mock('node:child_process', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('node:child_process')>();
+  return {
+    ...actual,
+    spawn: ((...args: Parameters<typeof actual.spawn>) => {
+      spawnCalls.count += 1;
+      return actual.spawn(...args);
+    }) as typeof actual.spawn,
+  };
+});
 
 import {
+  assertPreRunHookCommandSyntax,
   executePreRunHook,
+  findShellSyntaxError,
+  formatPreRunHookFailure,
   resolvePreRunHookTimeoutMs,
   type PreRunHookStdinPayload,
 } from '../pre-run-hook';
@@ -116,6 +132,22 @@ describe('executePreRunHook', () => {
     expect(result.exitCode).not.toBe(0);
   });
 
+  it.skipIf(process.platform === 'win32')(
+    'shell 语法错误(sh 退出码同为 2)按失败阻止,不当成跳过',
+    async () => {
+      const result = await executePreRunHook({
+        // 2026-10 真实事故:单引号没配平,sh 以 2 退出,被误记为"本轮跳过"
+        command: `node -e "process.exit(0)" '//`,
+        stdinPayload: payload,
+      });
+      expect(result.status).toBe('failed');
+      expect(result.decision).toBe('block');
+      expect(result.error).toMatch(/^shell syntax error in command: /);
+      expect(result.stderr).not.toBe('');
+      expect(formatPreRunHookFailure(result)).toContain('shell syntax error');
+    },
+  );
+
   it('spawn 失败会保留启动错误并阻止执行', async () => {
     const result = await executePreRunHook({
       command: 'node -e "process.exit(0)"',
@@ -168,6 +200,55 @@ describe('executePreRunHook', () => {
     // 树杀 + 1s 强制 settle 兜底:远小于 60s 超时即返回
     expect(Date.now() - startedAt).toBeLessThan(10_000);
   }, 15_000);
+});
+
+describe.skipIf(process.platform === 'win32')('前置检查命令语法预检', () => {
+  it('语法正确的命令(含引号路径、管道、heredoc)不报错,且不会被执行', async () => {
+    await expect(findShellSyntaxError(`node '/a b/x.mjs' --flag`)).resolves.toBeUndefined();
+    await expect(findShellSyntaxError('git fetch -q && python3 - scan <<EOF\nx\nEOF')).resolves.toBeUndefined();
+    // -n 只解析:即使命令会失败也不报语法错误
+    await expect(findShellSyntaxError('exit 7')).resolves.toBeUndefined();
+  });
+
+  it('引号未配平 / 结构未闭合 → 返回 shell 报错', async () => {
+    await expect(findShellSyntaxError(`node '/a b/x.mjs'//'`)).resolves.toBeTruthy();
+    await expect(findShellSyntaxError('if true; then echo')).resolves.toBeTruthy();
+  });
+
+  it('命令含 NUL:预检不同步抛错,执行仍折叠成失败结果', async () => {
+    await expect(findShellSyntaxError('node -e "1"\0')).resolves.toBeUndefined();
+    const result = await executePreRunHook({ command: 'node -e "1"\0', stdinPayload: payload });
+    expect(result.status).toBe('failed');
+    expect(result.decision).toBe('block');
+    expect(result.spawnError || result.error).toBeTruthy();
+  });
+
+  it('预检耗尽超时预算 → 直接 timed_out,不再启动真实命令', async () => {
+    spawnCalls.count = 0;
+    const result = await executePreRunHook({
+      command: 'node -e "process.exit(0)"',
+      timeoutMs: 1,
+      stdinPayload: payload,
+    });
+    expect(result.status).toBe('timed_out');
+    expect(result.decision).toBe('block');
+    expect(result.timedOut).toBe(true);
+    expect(spawnCalls.count).toBe(0);
+  });
+
+  it('预检响应取消信号:已取消时不再预检,执行返回 aborted', async () => {
+    const controller = new AbortController();
+    controller.abort();
+    await expect(findShellSyntaxError(`node '/a b/x.mjs'//'`, { signal: controller.signal }))
+      .resolves.toBeUndefined();
+  });
+
+  it('保存时校验:语法错误抛 invalid,正确命令放行', async () => {
+    await expect(assertPreRunHookCommandSyntax(`node '/a b/x.mjs'//'`)).rejects.toThrow(
+      /^invalid pre-run hook configuration: shell syntax error in command: /,
+    );
+    await expect(assertPreRunHookCommandSyntax(`xdt-node '/a b/x.mjs'`)).resolves.toBeUndefined();
+  });
 });
 
 describe('resolvePreRunHookTimeoutMs(无默认超时)', () => {

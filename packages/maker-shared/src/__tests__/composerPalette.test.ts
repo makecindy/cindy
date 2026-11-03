@@ -98,11 +98,11 @@ describe('shared composer palette model', () => {
   });
 
   it('serializes directory and quoted @ references like the desktop composer expects', () => {
-    expect(serializeAtResource({ type: 'dir', name: 'routes', relPath: 'apps/server/src/routes' }))
+    expect(serializeAtResource({ type: 'dir', relPath: 'apps/server/src/routes' }))
       .toBe('@apps/server/src/routes/');
-    expect(serializeAtResource({ type: 'agent', name: 'reviewer', relPath: '.claude/agents/reviewer.md' }))
+    expect(serializeAtResource({ type: 'agent', relPath: '.claude/agents/reviewer.md' }))
       .toBe('@.claude/agents/reviewer.md');
-    expect(serializeAtResource({ type: 'file', name: 'design notes.md', relPath: 'docs/design notes.md' }))
+    expect(serializeAtResource({ type: 'file', relPath: 'docs/design notes.md' }))
       .toBe('@"docs/design notes.md"');
   });
 

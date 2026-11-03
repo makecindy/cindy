@@ -1,52 +1,66 @@
 // @vitest-environment jsdom
-import { act, cleanup, render, waitFor } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const mocks = vi.hoisted(() => ({
   params: { botId: 'bot-a', sessionId: 'chat-a' },
+  location: { state: null as unknown },
   supported: true,
+  historyLoaded: false,
 }));
 vi.mock('react-router-dom', () => ({
   useParams: () => mocks.params,
+  useLocation: () => mocks.location,
   useNavigate: () => vi.fn(),
-  Navigate: () => null,
+  Navigate: () => <div data-testid="original-task" />,
 }));
 vi.mock('react-i18next', () => ({ useTranslation: () => ({ t: (s: string) => s }) }));
 vi.mock('@/hooks/useAgentIslandSettings', () => ({
   isAgentIslandSupported: () => mocks.supported,
 }));
+// The private-chat topic host belongs to the chat surface these tests isolate.
+vi.mock('../BotDmThreadHost', () => ({ BotDmThreadHost: ({ children }: { children: import('react').ReactNode }) => <>{children}</> }));
 vi.mock('@/features/cc-agent/CCAgentSessionView', () => ({
-  CCAgentSessionView: () => <div data-testid="chat" />,
+  CCAgentSessionView: ({ readOnly }: { readOnly?: boolean }) => {
+    useBotIslandVisibleSession(mocks.historyLoaded ? mocks.params.sessionId : null);
+    return <div data-testid="chat" data-readonly={String(!!readOnly)} />;
+  },
 }));
 vi.mock('../botReadState', () => ({ getBotLastReadAt: () => null, markBotRead: vi.fn() }));
 
+import { useBotIslandVisibleSession } from '../useBotIslandVisibleSession';
 import { BotSessionView } from '../BotSessionView';
 import { BotHistorySessionView } from '../BotHistorySessionView';
 
 const report = vi.fn();
+const focus = vi.fn();
+const consumeEntryAlert = vi.fn(async () => ({ ok: true as const, consumed: true }));
 const get = vi.fn();
 const history = vi.fn();
 const profile = {
   id: 'bot-a', status: 'active',
-  sessions: [{ id: 'chat-a', kind: 'chat', status: 'active' }],
+  sessions: [{ id: 'chat-a', kind: 'chat', status: 'active', role: 'canonical' }],
 };
 
 beforeEach(() => {
   vi.clearAllMocks();
   mocks.params = { botId: 'bot-a', sessionId: 'chat-a' };
+  mocks.location = { state: null };
   mocks.supported = true;
+  mocks.historyLoaded = true;
   vi.spyOn(document, 'hasFocus').mockReturnValue(true);
   get.mockResolvedValue(profile);
   history.mockResolvedValue([{ id: 'chat-a' }]);
   Object.defineProperty(window, 'electronAPI', { configurable: true, value: {
-    agentIsland: { setVisibleSession: report },
+    agentIsland: { setVisibleSession: report, consumeEntryAlert },
+    ghosts: { noteSessionFocused: focus },
     localDb: { bots: { get, history, list: vi.fn(async () => []) } },
   } });
 });
 afterEach(() => { cleanup(); vi.restoreAllMocks(); });
 
 describe.each([
-  ['chat', BotSessionView], ['history', BotHistorySessionView],
+  ['chat', BotSessionView],
 ] as const)('%s ownership and visibility', (_, View) => {
   it('waits for validation and discards the previous grant on route changes', async () => {
     let resolveGate!: (value: never) => void;
@@ -117,5 +131,68 @@ describe.each([
     const view = render(<View />);
     await waitFor(() => expect(view.getByTestId('chat')).toBeTruthy());
     expect(report).not.toHaveBeenCalled();
+  });
+});
+
+// 错误页和旧地址外壳不处置提醒；原任务内容加载后才确认可见。
+// 点击重试或跟随兼容地址本身都不是已读。
+describe('unavailable Bot task page never disposes island alerts by itself', () => {
+  it('shows the unavailable state without asking main to dispose anything', async () => {
+    mocks.params = { botId: 'bot-a', sessionId: 'delegated-a' };
+    get.mockResolvedValue({
+      ...profile,
+      sessions: [...profile.sessions, { id: 'delegated-a', kind: 'worker', role: 'delegation', status: 'active' }],
+    });
+    const view = render(<BotSessionView />);
+    await waitFor(() => expect(view.getByTestId('original-task')).toBeTruthy());
+    view.rerender(<BotSessionView />);
+    await act(async () => {});
+    expect(consumeEntryAlert).not.toHaveBeenCalled();
+    expect(report.mock.calls.every(([id]) => id === null)).toBe(true);
+  });
+
+  it('keeps a failed lookup visible without redirecting, and retries without consuming its alert', async () => {
+    const live = render(<BotSessionView />);
+    await waitFor(() => expect(live.getByTestId('chat')).toBeTruthy());
+    live.unmount();
+    get.mockRejectedValue(new Error('db busy'));
+    const failed = render(<BotSessionView />);
+    await waitFor(() => expect(failed.getByText('ccAgent.sessionEntry.failed')).toBeTruthy());
+    expect(failed.queryByTestId('original-task')).toBeNull();
+    expect(failed.queryByTestId('chat')).toBeNull();
+    expect(consumeEntryAlert).not.toHaveBeenCalled();
+    get.mockResolvedValue(profile);
+    fireEvent.click(failed.getByRole('button', { name: 'ccAgent.sessionEntry.retry' }));
+    await waitFor(() => expect(failed.getByTestId('chat')).toBeTruthy());
+    expect(failed.queryByRole('alert')).toBeNull();
+    expect(failed.queryByTestId('original-task')).toBeNull();
+    expect(consumeEntryAlert).not.toHaveBeenCalled();
+  });
+});
+
+// The retired history wrapper only redirects; the standard task page owns alert recovery.
+it('does not consume an error or acknowledge visibility merely by following a history URL', async () => {
+  mocks.location = { state: { islandEntryId: '42' } };
+  render(<BotHistorySessionView />);
+  await act(async () => {});
+  expect(consumeEntryAlert).not.toHaveBeenCalled();
+  expect(report).not.toHaveBeenCalled();
+  expect(get).not.toHaveBeenCalled();
+});
+
+describe.each([BotSessionView])('validated task in front for plugins', (View) => {
+  // A companion chat is where someone uses the simulator; plugins were told "no task"
+  // there, so "open in the current task" failed. Report it once ownership is proven.
+  it('reports the validated chat, never an unowned route, and clears it on leave', async () => {
+    mocks.supported = false;
+    const view = render(<View />);
+    await waitFor(() => expect(focus).toHaveBeenLastCalledWith('chat-a'));
+    mocks.params = { botId: 'bot-b', sessionId: 'not-owned' };
+    view.rerender(<View />);
+    await act(async () => {});
+    expect(focus).not.toHaveBeenCalledWith('not-owned');
+    expect(focus).toHaveBeenLastCalledWith(null);
+    view.unmount();
+    expect(focus).toHaveBeenLastCalledWith(null);
   });
 });

@@ -1,14 +1,19 @@
 /**
- * Provider import deep links.
+ * Provider imports from deep links and local JSON files.
  *
- * The external URL may contain credentials, so it is converted immediately into a
+ * External input may contain credentials, so it is converted immediately into a
  * short-lived Main-process draft. Only the opaque import id and redacted previews
  * are ever sent through Electron IPC to the Renderer.
  */
 
 import { randomUUID } from 'node:crypto';
 import { validateHeaderName, validateHeaderValue } from 'node:http';
-import { isLoopbackProviderUrl } from '@cindy/model-providers';
+import {
+  isLoopbackProviderUrl,
+  MODEL_METADATA_FIELDS,
+  pickModelMetadata,
+  validModelMetadata,
+} from '@cindy/model-providers';
 
 import type {
   AgentKind,
@@ -27,9 +32,12 @@ import type {
 import { isBuiltinApiKeyProviderId, type ProviderSecretId } from '../../shared/providerSecrets.js';
 import {
   MANAGED_LMSTUDIO_PROVIDER_ID,
-  MANAGED_OLLAMA_PROVIDER_ID,
+  isManagedSidecarProviderId,
 } from '../../shared/localModelRuntime.js';
-import { configuredPresetAgents } from '../../shared/piRuntimeInitialization.js';
+import {
+  adaptCustomProviderModelEfforts,
+  configuredPresetAgents,
+} from '../../shared/piRuntimeInitialization.js';
 import { presetConnectionRuntime } from '../../shared/presetConnectionRuntime.js';
 
 const IMPORT_TTL_MS = 10 * 60_000;
@@ -39,6 +47,9 @@ const MAX_API_KEY_LENGTH = 4 * 1024;
 const MAX_BUILTIN_API_KEY_LENGTH = 1024;
 const MAX_ENDPOINTS = 8;
 const MAX_MODELS_PER_ENDPOINT = 256;
+const MAX_FILE_MODELS_PER_ENDPOINT = 10_000;
+export const MAX_PROVIDER_IMPORT_FILE_BYTES = 4 * 1024 * 1024;
+const MAX_FILE_PROVIDERS = 50;
 const MAX_HEADERS_PER_ENDPOINT = 24;
 const MAX_TEXT_LENGTH = 2 * 1024;
 const MAX_DRAFTS = 128;
@@ -62,18 +73,20 @@ function normalizeOAuthParamKey(key: string): string {
   return key.toLowerCase().replace(/[^a-z0-9]/g, '');
 }
 
-const FORBIDDEN_OAUTH_IMPORT_PARAM_KEYS = new Set([
-  'access_token',
-  'assertion',
-  'client_assertion',
-  'client_secret',
-  'code',
-  'device_code',
-  'id_token',
-  'password',
-  'refresh_token',
-  'token',
-].map(normalizeOAuthParamKey));
+const FORBIDDEN_OAUTH_IMPORT_PARAM_KEYS = new Set(
+  [
+    'access_token',
+    'assertion',
+    'client_assertion',
+    'client_secret',
+    'code',
+    'device_code',
+    'id_token',
+    'password',
+    'refresh_token',
+    'token',
+  ].map(normalizeOAuthParamKey),
+);
 
 type ProviderImportScope = { dataOwnerId: string | null; generation: number };
 
@@ -233,17 +246,32 @@ function parseModel(value: unknown, label: string): ProviderRuntimeModelConfig {
     [
       'id',
       'name',
-      'contextWindow',
+      ...MODEL_METADATA_FIELDS,
       'defaultEnabled',
       'supportsImageInput',
       'reasoning',
       'reasoningEfforts',
+      'reasoningDefaultEffort',
+      'discoveredMetadata',
     ],
     label,
   );
   const id = boundedString(model.id, `${label}.id`, 256);
   const name = model.name === undefined ? id : boundedString(model.name, `${label}.name`, 256);
-  const result: ProviderRuntimeModelConfig = { id, name };
+  for (const field of MODEL_METADATA_FIELDS) {
+    if (model[field] !== undefined && !validModelMetadata({ [field]: model[field] }))
+      fail(`${label}.${field} is invalid`);
+  }
+  if (model.discoveredMetadata !== undefined && !validModelMetadata(model.discoveredMetadata))
+    fail(`${label}.discoveredMetadata is invalid`);
+  const result: ProviderRuntimeModelConfig = {
+    ...pickModelMetadata(model),
+    id,
+    name,
+    ...(model.discoveredMetadata
+      ? { discoveredMetadata: pickModelMetadata(model.discoveredMetadata as object) }
+      : {}),
+  };
   if (model.contextWindow !== undefined) {
     if (!Number.isInteger(model.contextWindow) || (model.contextWindow as number) <= 0) {
       fail(`${label}.contextWindow must be a positive integer`);
@@ -255,23 +283,31 @@ function parseModel(value: unknown, label: string): ProviderRuntimeModelConfig {
       fail(`${label}.${field} must be a boolean`);
     }
   }
-  if (typeof model.defaultEnabled === 'boolean') result.defaultEnabled = model.defaultEnabled;
-  if (model.supportsImageInput === true) result.supportsImageInput = true;
+  // A link selects a model, not compatibility engines. Explicit off remains off.
+  if (model.defaultEnabled === false) result.defaultEnabled = false;
+  if (typeof model.supportsImageInput === 'boolean')
+    result.supportsImageInput = model.supportsImageInput;
+  if (model.reasoning === false) result.reasoning = false;
   if (model.reasoning === true) {
-    if (!Array.isArray(model.reasoningEfforts) || model.reasoningEfforts.length === 0) {
+    if (model.reasoningEfforts !== undefined && !Array.isArray(model.reasoningEfforts)) {
       fail(`${label}.reasoningEfforts is required when reasoning is enabled`);
     }
-    const efforts = model.reasoningEfforts.map((effort) => {
+    const efforts = model.reasoningEfforts?.map((effort) => {
       if (typeof effort !== 'string' || !PI_EFFORTS.includes(effort as PiReasoningEffort)) {
         fail(`${label}.reasoningEfforts contains an unsupported value`);
       }
       return effort as PiReasoningEffort;
     });
-    if (new Set(efforts).size !== efforts.length)
+    if (efforts && new Set(efforts).size !== efforts.length)
       fail(`${label}.reasoningEfforts contains duplicates`);
     result.reasoning = true;
-    result.reasoningEfforts = efforts;
-  } else if (model.reasoningEfforts !== undefined) {
+    if (efforts) result.reasoningEfforts = efforts;
+    if (model.reasoningDefaultEffort !== undefined) {
+      if (!efforts?.includes(model.reasoningDefaultEffort as PiReasoningEffort))
+        fail(`${label}.reasoningDefaultEffort is unsupported`);
+      result.reasoningDefaultEffort = model.reasoningDefaultEffort as PiReasoningEffort;
+    }
+  } else if (model.reasoningEfforts !== undefined || model.reasoningDefaultEffort !== undefined) {
     fail(`${label}.reasoningEfforts requires reasoning=true`);
   }
   return result;
@@ -288,15 +324,24 @@ type ParsedEndpoint = {
   apiKey?: string;
 };
 
-/** Discovery is untrusted input too: apply the same count and core model field bounds. */
-export function assertProviderImportModels(models: readonly { id: string; name: string; contextWindow?: number }[]): void {
-  if (models.length > MAX_MODELS_PER_ENDPOINT) fail('models must be a bounded array');
+/** Discovery uses catalog-sized limits, independently of the compact deep-link payload. */
+export function assertProviderImportModels(
+  models: readonly { id: string; name: string; contextWindow?: number }[],
+): void {
+  if (models.length > 10_000) fail('discovered models exceed the catalog limit');
   for (const model of models) {
-    parseModel({ id: model.id, name: model.name, ...(model.contextWindow !== undefined ? { contextWindow: model.contextWindow } : {}) }, 'models');
+    parseModel(
+      {
+        id: model.id,
+        name: model.name,
+        ...(model.contextWindow !== undefined ? { contextWindow: model.contextWindow } : {}),
+      },
+      'models',
+    );
   }
 }
 
-function parseEndpoint(value: unknown, index: number): ParsedEndpoint {
+function parseEndpoint(value: unknown, index: number, maxModels: number): ParsedEndpoint {
   const label = `endpoints[${index}]`;
   const endpoint = object(value, label);
   exactFields(
@@ -323,7 +368,7 @@ function parseEndpoint(value: unknown, index: number): ParsedEndpoint {
     if (new Set(targets).size !== targets.length) fail(`${label}.targets contains duplicates`);
   }
   const modelsRaw = endpoint.models ?? [];
-  if (!Array.isArray(modelsRaw) || modelsRaw.length > MAX_MODELS_PER_ENDPOINT) {
+  if (!Array.isArray(modelsRaw) || modelsRaw.length > maxModels) {
     fail(`${label}.models must be a bounded array`);
   }
   const models = modelsRaw.map((model, modelIndex) =>
@@ -340,9 +385,10 @@ function parseEndpoint(value: unknown, index: number): ParsedEndpoint {
   if (endpoint.apiKey !== undefined)
     apiKey = parseApiKey(endpoint.apiKey, `${label}.apiKey`, MAX_API_KEY_LENGTH);
   const baseUrl = httpUrl(endpoint.baseUrl, `${label}.baseUrl`, false, true);
-  const modelsUrl = endpoint.modelsUrl !== undefined
-    ? httpUrl(endpoint.modelsUrl, `${label}.modelsUrl`, false, true)
-    : undefined;
+  const modelsUrl =
+    endpoint.modelsUrl !== undefined
+      ? httpUrl(endpoint.modelsUrl, `${label}.modelsUrl`, false, true)
+      : undefined;
   if (modelsUrl && new URL(modelsUrl).origin !== new URL(baseUrl).origin) {
     fail(`${label}.modelsUrl must share the endpoint origin`);
   }
@@ -486,7 +532,7 @@ function slugFromName(name: string): string {
   return slug || `provider-${randomUUID().slice(0, 8)}`;
 }
 
-function parsePayload(value: unknown): ProviderImportDraft {
+function parsePayload(value: unknown, maxModels: number): ProviderImportDraft {
   const input = object(value, 'data');
   if (input.kind === 'builtin') {
     exactFields(input, ['kind', 'provider', 'apiKey'], 'data');
@@ -522,9 +568,9 @@ function parsePayload(value: unknown): ProviderImportDraft {
       'cindy',
       'gemini',
       'openai-images',
-      MANAGED_OLLAMA_PROVIDER_ID,
       MANAGED_LMSTUDIO_PROVIDER_ID,
-    ].includes(id)
+    ].includes(id) ||
+    isManagedSidecarProviderId(id)
   ) {
     fail('data.id is reserved');
   }
@@ -557,12 +603,13 @@ function parsePayload(value: unknown): ProviderImportDraft {
   ) {
     fail('data.endpoints must be a bounded non-empty array');
   }
-  const endpoints = input.endpoints.map(parseEndpoint);
+  const endpoints = input.endpoints.map((endpoint, index) => parseEndpoint(endpoint, index, maxModels));
   if (
     auth?.method === 'none' &&
-    endpoints.some((endpoint) =>
-      !isLoopbackProviderUrl(endpoint.baseUrl) ||
-      (endpoint.modelsUrl !== undefined && !isLoopbackProviderUrl(endpoint.modelsUrl)),
+    endpoints.some(
+      (endpoint) =>
+        !isLoopbackProviderUrl(endpoint.baseUrl) ||
+        (endpoint.modelsUrl !== undefined && !isLoopbackProviderUrl(endpoint.modelsUrl)),
     )
   ) {
     fail('no-auth endpoints and model discovery must use loopback URLs');
@@ -618,11 +665,7 @@ function parsePayload(value: unknown): ProviderImportDraft {
     ) {
       fail(`multiple endpoints compete for ${agent}; set explicit targets`);
     }
-    const models = selected.models.map((model) => {
-      if (agent === 'pi') return { ...model };
-      const { reasoning: _reasoning, reasoningEfforts: _efforts, ...portable } = model;
-      return portable;
-    });
+    const models = selected.models.map((source) => adaptCustomProviderModelEfforts(source, agent));
     runtimes[agent] = {
       wireProtocol: selected.protocol,
       baseUrl: selected.baseUrl,
@@ -649,13 +692,78 @@ function decodeBase64Url(value: string): string {
   if (canonical !== value.replace(/=+$/, '')) fail('data is not canonical base64url');
   const decoded = bytes.toString('utf8');
   if (Buffer.from(decoded, 'utf8').compare(bytes) !== 0) fail('data is not valid UTF-8');
-  if (decoded.length === 0 || decoded.length > MAX_JSON_LENGTH)
+  if (bytes.length === 0 || bytes.length > MAX_JSON_LENGTH)
     fail('decoded data exceeds the size limit');
   return decoded;
 }
 
 function pruneExpired(now = Date.now()): void {
   for (const [id, record] of drafts) if (record.expiresAt <= now) drafts.delete(id);
+}
+
+/** Both transports use the same validation, ownership, preview and confirmation lifecycle. */
+function createDraft(value: unknown, maxModels: number, scope?: ProviderImportScope): string {
+  const draft = parsePayload(value, maxModels);
+  if (draft.kind === 'custom' && draft.config.auth?.method === 'oauth') {
+    const discovery = draft.config.auth.oauth?.modelsDiscoveryUrl;
+    if (discovery && Object.values(draft.config.runtimes).some(
+      (runtime) => new URL(runtime!.baseUrl).origin !== new URL(discovery).origin,
+    )) fail('OAuth model discovery must share every runtime origin');
+  }
+  pruneExpired();
+  if (drafts.size >= MAX_DRAFTS) fail('too many pending provider imports');
+  const importId = randomUUID();
+  drafts.set(importId, {
+    draft, expiresAt: Date.now() + IMPORT_TTL_MS, confirming: false,
+    ...(scope ? { scope: { ...scope } } : {}),
+  });
+  return importId;
+}
+
+/** Main-only: the file contains a v1 payload, never a URL or renderer-provided path. */
+export function createProviderImportDraftFromFile(
+  bytes: Buffer,
+  scope: ProviderImportScope,
+): string {
+  return createDraft(decodeProviderImportFile(bytes), MAX_FILE_MODELS_PER_ENDPOINT, scope);
+}
+
+function decodeProviderImportFile(bytes: Buffer): unknown {
+  if (!bytes.length || bytes.length > MAX_PROVIDER_IMPORT_FILE_BYTES)
+    fail('provider import file exceeds the size limit');
+  const decoded = bytes.toString('utf8');
+  if (!Buffer.from(decoded, 'utf8').equals(bytes)) fail('provider import file is not UTF-8');
+  // UTF-8 BOMs are common in files saved by Windows editors.
+  return JSON.parse(decoded.replace(/^\uFEFF/, ''));
+}
+
+/** Validate the whole batch before exposing any drafts; rollback only in-memory drafts on failure. */
+export function createProviderImportDraftsFromFile(bytes: Buffer, scope: ProviderImportScope): string[] {
+  const input = object(decodeProviderImportFile(bytes), 'data');
+  if (!Object.hasOwn(input, 'providers')) return [createDraft(input, MAX_FILE_MODELS_PER_ENDPOINT, scope)];
+  exactFields(input, ['providers'], 'data');
+  if (!Array.isArray(input.providers) || !input.providers.length || input.providers.length > MAX_FILE_PROVIDERS)
+    fail('providers must contain 1 to 50 configurations');
+  const ids: string[] = [];
+  const destinations = new Set<string>();
+  try {
+    for (const value of input.providers) {
+      const id = createDraft(value, MAX_FILE_MODELS_PER_ENDPOINT, scope);
+      ids.push(id);
+      const draft = drafts.get(id)!.draft;
+      const source = object(value, 'provider');
+      const destination = draft.kind === 'builtin' ? `builtin:${draft.provider}`
+        : typeof source.id === 'string' ? `custom:${source.id.trim()}` : undefined;
+      if (destination) {
+        if (destinations.has(destination)) fail('duplicate provider identity in file');
+        destinations.add(destination);
+      }
+    }
+    return ids;
+  } catch (error) {
+    for (const id of ids) drafts.delete(id);
+    throw error;
+  }
 }
 
 /** Parse the exact `provider/import` path and create a short-lived secret-bearing draft. */
@@ -675,21 +783,7 @@ export function createProviderImportDraftFromRest(rest: string): string | null {
   const encoded = params.get('data');
   if (!encoded) return null;
   try {
-    const draft = parsePayload(JSON.parse(decodeBase64Url(encoded)));
-    if (draft.kind === 'custom' && draft.config.auth?.method === 'oauth') {
-      const discovery = draft.config.auth.oauth?.modelsDiscoveryUrl;
-      if (discovery) {
-        const runtimeUrls = Object.values(draft.config.runtimes).map((runtime) => runtime!.baseUrl);
-        if (runtimeUrls.some((baseUrl) => new URL(baseUrl).origin !== new URL(discovery).origin)) {
-          return null;
-        }
-      }
-    }
-    pruneExpired();
-    if (drafts.size >= MAX_DRAFTS) return null;
-    const importId = randomUUID();
-    drafts.set(importId, { draft, expiresAt: Date.now() + IMPORT_TTL_MS, confirming: false });
-    return importId;
+    return createDraft(JSON.parse(decodeBase64Url(encoded)), MAX_MODELS_PER_ENDPOINT);
   } catch {
     return null;
   }
@@ -712,7 +806,8 @@ export function importKeysForCurrentConfig(
     draft.kind !== 'custom' ||
     (draft.config.auth?.method ?? 'apiKey') !== 'apiKey' ||
     (current.auth?.method ?? 'apiKey') !== 'apiKey' ||
-    [MANAGED_OLLAMA_PROVIDER_ID, MANAGED_LMSTUDIO_PROVIDER_ID].includes(current.id)
+    isManagedSidecarProviderId(current.id) ||
+    current.id === MANAGED_LMSTUDIO_PROVIDER_ID
   )
     fail('connection cannot receive imported keys');
   const agents = AGENTS.filter((agent) => draft.keys[agent]);

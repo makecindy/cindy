@@ -6,10 +6,10 @@
  * 协议 TaskAttachment[] 与"引用已剥离/替换"的正文。
  *
  * 引用语义与 IM 渠道收口(@cindy/im slack/streamingText.doFinalize)一致:
- *   - 图片引用 `![alt](xdt-image://...)` → 附件, 正文替换成"已作为附件发送"提示
+ *   - 图片引用 `![alt](xdt-image://...)` → 附件, 正文只保留图片说明（不提前声称送达）
  *   - 文件引用 `[name](xdt-file:///abs/path)` → 附件, 正文整体剥离
- * 引用解析与正文变换直接消费 @cindy/im/xdtRefs 的前向解析器(单一实现,
- * #1855 收敛;旧版此处维护正则副本, 语义靠注释两处同步)。xdt-file 的
+ * 图片引用按共享 Markdown AST 解析，跳过代码示例；文件引用继续使用
+ * @cindy/im/xdtRefs。xdt-file 的
  * URL→路径转换是唯一的本地保留项: hook 会拿它自动读盘, 必须 fail-closed
  * (非法编码 / 相对路径 / null byte 一律拒绝), 严格版见 xdtFileUrlToAbsPath。
  *
@@ -22,12 +22,17 @@
  */
 
 import path from 'node:path';
+import { unified } from 'unified';
+import remarkParse from 'remark-parse';
+import remarkGfm from 'remark-gfm';
+import { visit } from 'unist-util-visit';
+import type { Definition, PhrasingContent } from 'mdast';
 import { promises as fsp } from 'node:fs';
+import { localTaskImagePath, taskImageReferences, rewriteTaskImageReferences } from '../cindy-media/taskImageMarkdown';
 
 import type { TaskAttachment } from '@cindy/slack-hook-protocol';
 import {
   collectXdtFileRefs,
-  collectXdtImageRefs,
   normalizeXdtAbsPath,
   transformXdtRefs,
 } from '@cindy/im';
@@ -36,6 +41,7 @@ const MAX_OUT_IMAGE_BYTES = 5 * 1024 * 1024;
 const MAX_OUT_FILE_BYTES = 10 * 1024 * 1024;
 const MAX_OUT_ATTACHMENTS = 8;
 const MAX_OUT_TOTAL_BYTES = 30 * 1024 * 1024;
+const MAX_X_IMAGES = 4;
 
 /**
  * hook 派发 turn 时附在用户消息末尾的渠道说明(session-runner 消费)。
@@ -58,15 +64,20 @@ export function buildHookPromptNote(im: string | undefined): string {
     '[渠道说明] 以下为系统每轮自动追加的投递与格式规范,不是用户发来的消息;' +
     '回复时不要把它当作用户的请求,也不要引用、复述或据此臆测用户意图。' +
     `本会话来自 ${platform}。要把文件发给用户:在最终回复文本里写 ` +
-    '`[文件名](xdt-file:///绝对路径)`;图片直接引用其地址 ' +
-    '`![说明](cindy-media://… 或 xdt-image://…)`,无需复制文件。' +
-    `系统会在回复结束后自动把它们作为 ${platform} 附件发回,无需调用任何工具;` +
+    '`[文件名](xdt-file:///绝对路径)`;图片写 ' +
+    '`![说明](工具返回的媒体地址或本机图片的绝对路径)`。' +
+    '不要给本地路径拼接 xdt-image:// 或 cindy-media://。' +
+    `PNG/JPEG/GIF/WebP 图片会在回复结束后自动作为 ${platform} 附件发回,无需另调导入工具;` +
+    'SVG 等其它格式先转成 PNG。' +
     'xdt-file 文件必须位于当前工作目录内;无法读取、超限或目录外的附件不会发送,' +
     '最终回复会明确显示附件发送不完整。' +
     '不要用 cindy_feishu_bot 发送,除非用户明确要求发到飞书。';
   if (im === 'x') {
     return (
       `${attachmentNote}\n` +
+      'X 附件只支持最多四张图片,或一个 GIF/视频,不能混发;不支持普通文件。' +
+      '视频写 `[说明](工具返回的 cindy-media:// 地址)` 或 `[说明](xdt-file:///工作目录内视频路径)`;' +
+      '图片每张至多 5MiB,GIF 至多 15MiB;MP4/MOV 视频无需压缩,发送失败时最终回复会提示。\n' +
       // session-runner 会先用 observer.finalText() 按桌面消息流规则拼出正式正文,
       // 再由服务端 X 发送层收口成一条回复。不要退回旧的“只取最后一条消息”描述。
       // 标题、列表、表格等结构仍参与正式正文判定,发布时才转换为纯文本。
@@ -146,6 +157,8 @@ function isPathWithin(base: string, target: string): boolean {
 }
 
 export interface OutboundDeps {
+  /** X supports managed video links and uses the existing file-size transport limit. */
+  provider?: string;
   /** xdt-image:// URL -> absPath(生产: imageCacheStore.resolveSafe; 失败抛错)。 */
   resolveImageUrl: (url: string) => { absPath: string };
   /** xdt-file:// 允许读取的根目录; 未提供时 fail-closed, 不读取任何本地文件。 */
@@ -161,6 +174,10 @@ export interface OutboundDeps {
    * 正文变换仍然只作用于 finalText —— 这里扩大的只是"哪些引用要被收集成附件"。
    */
   refScanText?: string;
+  /** server 支持分块转传时提供: 把视频传到 X 并返回 media id, 失败抛错。省略 = 只内联 10 MiB 以内的视频。 */
+  relayVideo?: (absPath: string, mimeType: string) => Promise<string>;
+  /** 附件未全部发出时附加在正文末尾的提示; 省略 = 英文默认提示。 */
+  formatIncompleteNotice?: (skippedNames: string[]) => string;
   /** realpath 校验(生产: fs.promises.realpath; 测试注入)。 */
   realpath?: (absPath: string) => Promise<string>;
   /** 读文件字节(生产: fs.promises.readFile)。 */
@@ -172,8 +189,50 @@ export interface OutboundResult {
   /** 引用已剥离/替换后的正文。 */
   text: string;
   attachments: TaskAttachment[];
+  /** 已分块转传到 X 的媒体。 */
+  xMediaIds: string[];
   /** 因限额 / 读盘失败被跳过的数量(调用方记日志用)。 */
   skipped: number;
+}
+
+/** 提示里附件名的展示形态: 单行、限长; 说明为空时退回文件名。 */
+function attachmentDisplayName(label: string, fallbackPath?: string): string {
+  const name = label.replace(/\s+/g, ' ').trim() || (fallbackPath ? path.win32.basename(fallbackPath) : '');
+  return name.length > 40 ? `${name.slice(0, 39)}…` : name;
+}
+
+interface OutboundItem {
+  /** 转传的视频没有: 字节不进内存, 选中后才分块上传。 */
+  attachment?: TaskAttachment;
+  mimeType: string;
+  absPath: string;
+  name: string;
+}
+
+/**
+ * X 一条帖子最多四张图片，或一个 GIF/视频。其它组合会被服务端拒绝，整条回帖连正文都发不出去，
+ * 所以发送前就选定：回复里引用的优先，同组内视频和 GIF 优先于图片。
+ */
+function selectXMedia(items: OutboundItem[], implicitPaths: ReadonlySet<string>): OutboundItem[] {
+  const ranked = [...items].sort((a, b) =>
+    Number(implicitPaths.has(a.absPath)) - Number(implicitPaths.has(b.absPath)));
+  const explicit = ranked.filter((item) => !implicitPaths.has(item.absPath));
+  const isMotion = ({ mimeType }: OutboundItem) => mimeType === 'image/gif' || mimeType.startsWith('video/');
+  const motion = (explicit.length ? explicit : ranked).find(isMotion);
+  return motion ? [motion] : ranked.filter((item) => !isMotion(item)).slice(0, MAX_X_IMAGES);
+}
+
+function defaultIncompleteNotice(skippedNames: string[]): string {
+  const count = skippedNames.length;
+  const named = skippedNames.filter(Boolean);
+  return `⚠️ Attachment delivery incomplete: ${count} item${count === 1 ? '' : 's'} could not be sent`
+    + (named.length > 0 ? ` (${named.join(', ')}).` : '.');
+}
+
+// Remote output may use another OS's path syntax. Recognize it for redaction
+// only; this does not grant the local importer access to that path.
+function isLocalImage(url: string): boolean {
+  return Boolean(localTaskImagePath(url)) || path.win32.isAbsolute(url);
 }
 
 /** 文本里是否存在任何托管媒体出站引用(快速前置判断, 避免无谓的收集开销)。 */
@@ -182,7 +241,38 @@ export function hasOutboundRefs(text: string): boolean {
   // 漏了 cindy-media 会让只含总仓图的回帖跳过附件收集,图静默丢失。
   return (
     text.includes('xdt-image://') || text.includes('cindy-media://') || text.includes('xdt-file://')
+    || taskImageReferences(text).some((ref) => isLocalImage(ref.url))
   );
+}
+
+const mediaLinkParser = unified().use(remarkParse).use(remarkGfm);
+
+function visibleLabelText(node: PhrasingContent): string {
+  if (node.type === 'text' || node.type === 'inlineCode') return node.value;
+  if (node.type === 'image' || node.type === 'imageReference') return node.alt ?? '';
+  if (node.type === 'break') return '\n';
+  return 'children' in node ? node.children.map(visibleLabelText).join('') : '';
+}
+
+/** Managed media links, excluding code examples; never interpret them as file paths. */
+function managedMediaLinks(text: string): Array<{ url: string; start: number; end: number; label: string }> {
+  if (!text.includes('cindy-media://')) return [];
+  const tree = mediaLinkParser.parse(text);
+  const definitions = new Map<string, Definition>();
+  visit(tree, 'definition', (node) => {
+    if (!definitions.has(node.identifier)) definitions.set(node.identifier, node);
+  });
+  const refs: Array<{ url: string; start: number; end: number; label: string }> = [];
+  visit(tree, (node) => {
+    if (node.type !== 'link' && node.type !== 'linkReference') return;
+    const target = node.type === 'link' ? node : definitions.get(node.identifier);
+    const start = node.position?.start.offset;
+    const end = node.position?.end.offset;
+    if (!target?.url.startsWith('cindy-media://') || start === undefined || end === undefined) return;
+    const label = node.children.map(visibleLabelText).join('');
+    refs.push({ url: target.url, start, end, label });
+  });
+  return refs;
 }
 
 /**
@@ -196,13 +286,21 @@ export async function collectOutboundAttachments(
 ): Promise<OutboundResult> {
   const readFile = deps.readFile ?? ((p: string) => fsp.readFile(p));
   const realpath = deps.realpath ?? ((p: string) => fsp.realpath(p));
-  const attachments: TaskAttachment[] = [];
-  const sentImageAbsPaths = new Set<string>();
+  const items: OutboundItem[] = [];
+  /** 工具结果旁路带来、回复里没有引用的媒体。 */
+  const implicitPaths = new Set<string>();
   const sentFileAbsPaths = new Set<string>();
-  const imageAbsPathByUrl = new Map<string, string>();
+  const sentMediaPaths = new Set<string>();
+  const mediaLimit = (p: string): number => deps.provider === 'x'
+    ? guessMime(p) === 'image/gif' ? 15 * 1024 * 1024
+      : guessMime(p).startsWith('video/') ? MAX_OUT_FILE_BYTES : MAX_OUT_IMAGE_BYTES
+    : MAX_OUT_IMAGE_BYTES;
   const fileAbsPathByUrl = new Map<string, string | null>();
   let totalBytes = 0;
-  let skipped = 0;
+  const skippedNames: string[] = [];
+  const skip = (name: string): void => {
+    skippedNames.push(name);
+  };
 
   const isAllowedFilePath = async (absPath: string): Promise<boolean> => {
     const roots =
@@ -234,17 +332,31 @@ export async function collectOutboundAttachments(
   const push = async (
     absPath: string,
     maxBytes: number,
+    name: string,
     mimeOverride?: string,
   ): Promise<boolean> => {
-    if (attachments.length >= MAX_OUT_ATTACHMENTS) {
-      skipped += 1;
+    if (deps.provider === 'x' && sentMediaPaths.has(absPath)) return true;
+    if (deps.provider === 'x' && ![
+      'image/jpeg', 'image/png', 'image/webp', 'image/gif', 'video/mp4', 'video/quicktime',
+    ].includes(mimeOverride ?? guessMime(absPath))) {
+      skip(name);
       return false;
+    }
+    if (items.length >= MAX_OUT_ATTACHMENTS) {
+      skip(name);
+      return false;
+    }
+    const mimeType = mimeOverride ?? guessMime(absPath);
+    if (deps.provider === 'x' && deps.relayVideo && mimeType.startsWith('video/')) {
+      sentMediaPaths.add(absPath);
+      items.push({ absPath, name, mimeType });
+      return true;
     }
     let bytes: Buffer;
     try {
       bytes = await readFile(absPath);
     } catch (err) {
-      skipped += 1;
+      skip(name);
       deps.log.warn(
         `outbound attachment read failed (${absPath}): ${err instanceof Error ? err.message : String(err)}`,
       );
@@ -255,15 +367,17 @@ export async function collectOutboundAttachments(
       bytes.length > maxBytes ||
       totalBytes + bytes.length > MAX_OUT_TOTAL_BYTES
     ) {
-      skipped += 1;
+      skip(name);
       deps.log.warn(`outbound attachment skipped by size (${absPath}: ${bytes.length} bytes)`);
       return false;
     }
     totalBytes += bytes.length;
-    attachments.push({
-      name: path.basename(absPath),
-      mimeType: mimeOverride ?? guessMime(absPath),
-      dataBase64: bytes.toString('base64'),
+    sentMediaPaths.add(absPath);
+    items.push({
+      absPath,
+      name,
+      mimeType,
+      attachment: { name: path.basename(absPath), mimeType, dataBase64: bytes.toString('base64') },
     });
     return true;
   };
@@ -275,16 +389,27 @@ export async function collectOutboundAttachments(
   // 1. 图片: 文本引用 + tool_result 旁路, 按 absPath 去重(模型常重复引用)
   const imageAbsPaths: string[] = [];
   const seenImage = new Set<string>();
-  for (const ref of collectXdtImageRefs(refScanText)) {
+  const imageNameByPath = new Map<string, string>();
+  const imageRefs = taskImageReferences(refScanText).filter((ref) => isLocalImage(ref.url)
+    || ref.url.startsWith('xdt-image://') || ref.url.startsWith('cindy-media://'));
+  const visitedImageUrls = new Set<string>();
+  for (const ref of imageRefs) {
+    if (visitedImageUrls.has(ref.url)) continue;
+    visitedImageUrls.add(ref.url);
+    // Local images must already have been imported by the task-scoped adapter.
+    if (isLocalImage(ref.url)) {
+      skip(attachmentDisplayName(ref.alt, localTaskImagePath(ref.url) ?? ref.url));
+      continue;
+    }
     try {
       const { absPath } = deps.resolveImageUrl(ref.url);
-      imageAbsPathByUrl.set(ref.url, absPath);
       if (!seenImage.has(absPath)) {
         seenImage.add(absPath);
         imageAbsPaths.push(absPath);
+        imageNameByPath.set(absPath, attachmentDisplayName(ref.alt, absPath));
       }
     } catch (err) {
-      skipped += 1;
+      skip(attachmentDisplayName(ref.alt));
       deps.log.warn(
         `resolve xdt-image failed (${ref.url}): ${err instanceof Error ? err.message : String(err)}`,
       );
@@ -294,10 +419,27 @@ export async function collectOutboundAttachments(
     if (!seenImage.has(absPath)) {
       seenImage.add(absPath);
       imageAbsPaths.push(absPath);
+      implicitPaths.add(absPath);
     }
   }
   for (const absPath of imageAbsPaths) {
-    if (await push(absPath, MAX_OUT_IMAGE_BYTES)) sentImageAbsPaths.add(absPath);
+    await push(absPath, mediaLimit(absPath), imageNameByPath.get(absPath) ?? attachmentDisplayName('', absPath));
+  }
+
+  if (deps.provider === 'x') {
+    const seenLinks = new Set<string>();
+    for (const ref of managedMediaLinks(refScanText)) {
+      if (seenLinks.has(ref.url)) continue;
+      seenLinks.add(ref.url);
+      try {
+        const { absPath } = deps.resolveImageUrl(ref.url);
+        implicitPaths.delete(absPath);
+        await push(absPath, mediaLimit(absPath), attachmentDisplayName(ref.label, absPath));
+      } catch {
+        skip(attachmentDisplayName(ref.label));
+        deps.log.warn('outbound managed media link could not be read');
+      }
+    }
   }
 
   // 2. 文件引用(去重同上)
@@ -311,41 +453,76 @@ export async function collectOutboundAttachments(
       fileAbsPathByUrl.set(url, absPath);
     } catch {
       fileAbsPathByUrl.set(url, null);
-      skipped += 1;
+      skip(attachmentDisplayName(ref.alt));
       deps.log.warn('outbound file attachment skipped because xdt-file URL was invalid');
       continue;
     }
     if (seenFile.has(absPath)) continue;
     seenFile.add(absPath);
+    const name = attachmentDisplayName(ref.alt, absPath);
     if (!(await isAllowedFilePath(absPath))) {
-      skipped += 1;
+      skip(name);
       continue;
     }
-    if (await push(absPath, MAX_OUT_FILE_BYTES)) sentFileAbsPaths.add(absPath);
+    implicitPaths.delete(absPath);
+    if (await push(absPath, deps.provider === 'x' ? mediaLimit(absPath) : MAX_OUT_FILE_BYTES, name)) sentFileAbsPaths.add(absPath);
   }
 
-  // 3. 正文变换: 只有确实收集成功的引用才声称已发送。失败项保留可读标签，
-  // 并在末尾附加显式警告，避免“正文剥掉了、附件也没到”的静默丢失。
-  const transformed = transformXdtRefs(finalText, {
-    image: ({ alt, url }) => {
-      const absPath = imageAbsPathByUrl.get(url);
-      if (absPath !== undefined && sentImageAbsPaths.has(absPath)) {
-        return alt ? `🖼️ _${alt}(已作为附件发送)_` : '';
-      }
-      return alt ? `🖼️ _${alt}_` : '';
-    },
+  const selected = deps.provider === 'x' ? selectXMedia(items, implicitPaths) : items;
+  for (const item of items) {
+    if (selected.includes(item)) continue;
+    sentFileAbsPaths.delete(item.absPath);
+    // 旁路带来的预览图回复里没提过，让位不算发送失败，不写进公开回帖。
+    if (!implicitPaths.has(item.absPath)) skip(item.name);
+    deps.log.warn(`outbound attachment omitted by X media limits (${item.absPath})`);
+  }
+  const xMediaIds: string[] = [];
+  for (const item of selected) {
+    if (item.attachment || !deps.relayVideo) continue;
+    try {
+      xMediaIds.push(await deps.relayVideo(item.absPath, item.mimeType));
+    } catch (err) {
+      sentFileAbsPaths.delete(item.absPath);
+      skip(item.name);
+      deps.log.warn(`outbound video relay failed: ${(err as { code?: string }).code ?? (err instanceof Error ? err.name : 'unknown')}`);
+    }
+  }
+
+  // Collection is not a delivery receipt. Keep captions without claiming the channel sent them.
+  const imageUrls = new Map([...visitedImageUrls].map((url) => [url, url]));
+  let deliveryText = finalText;
+  if (deps.provider === 'x') {
+    for (const ref of managedMediaLinks(finalText).reverse()) {
+      deliveryText = deliveryText.slice(0, ref.start) + ref.label + deliveryText.slice(ref.end);
+    }
+  }
+  let captionText = rewriteTaskImageReferences(deliveryText, imageUrls, (ref) =>
+    ref.alt ? `🖼️ _${ref.alt.replace(/[*_\[\]\\]/g, '\\$&')}_` : '',
+  );
+  if (deps.provider === 'x') {
+    // Links have become captions; remove their now-unused private definitions too.
+    const definitions: Definition[] = [];
+    visit(mediaLinkParser.parse(captionText), 'definition', (node) => {
+      if (node.url.startsWith('cindy-media://')) definitions.push(node);
+    });
+    for (const node of definitions.reverse()) {
+      const start = node.position?.start.offset;
+      const end = node.position?.end.offset;
+      if (start !== undefined && end !== undefined) captionText = captionText.slice(0, start) + captionText.slice(end);
+    }
+  }
+  const transformed = transformXdtRefs(captionText, {
     file: ({ alt, url }) => {
       const absPath = fileAbsPathByUrl.get(url);
       return absPath !== null && absPath !== undefined && sentFileAbsPaths.has(absPath) ? '' : alt;
     },
   });
-  const warning =
-    skipped > 0
-      ? `⚠️ Attachment delivery incomplete: ${skipped} item${skipped === 1 ? '' : 's'} could not be sent.`
-      : '';
+  const skipped = skippedNames.length;
+  const warning = skipped > 0 ? (deps.formatIncompleteNotice ?? defaultIncompleteNotice)(skippedNames) : '';
   const text = warning
     ? `${transformed.trimEnd()}${transformed.trim().length > 0 ? '\n\n' : ''}${warning}`
     : transformed;
 
-  return { text, attachments, skipped };
+  const attachments = selected.flatMap((item) => (item.attachment ? [item.attachment] : []));
+  return { text, attachments, xMediaIds, skipped };
 }

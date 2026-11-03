@@ -82,7 +82,7 @@ describe('NewMakerDraftRoute worktree send flow', () => {
     const failedCard = source.indexOf("status: 'failed'", worktreeCreate);
     const restoreHelper = source.indexOf('const restoreFirstMessageDraft');
     const saveDraft = source.indexOf('restoreFirstMessageDraft();', failedCard);
-    const restoreText = source.indexOf('plainTextToTiptapDoc(message)', restoreHelper);
+    const restoreText = source.indexOf('plainTextToTiptapDoc(builtInSkillIntent ? builtInSkillDraftMessage : message)', restoreHelper);
 
     expect(worktreeCreate).toBeGreaterThan(-1);
     expect(failedCard).toBeGreaterThan(worktreeCreate);
@@ -199,20 +199,8 @@ describe('NewMakerDraftRoute worktree send flow', () => {
     expect(silentCatch).toBeGreaterThan(handoff);
   });
 
-  it('retries remote draft defaults after the relay or selected workstation reconnects', () => {
-    const epochHook = source.indexOf('useDeviceLinkReconnectEpoch(');
-    const defaultsFetch = source.indexOf("'maker:get-new-maker-defaults'", epochHook);
-    const effectDependencies = source.indexOf('remoteDraftRefreshEpoch,', defaultsFetch);
-    const transientPreserve = source.indexOf(
-      'value: unsupported ? null : previous.value',
-      defaultsFetch,
-    );
-
-    expect(epochHook).toBeGreaterThan(-1);
-    expect(defaultsFetch).toBeGreaterThan(epochHook);
-    expect(effectDependencies).toBeGreaterThan(defaultsFetch);
-    expect(transientPreserve).toBeGreaterThan(defaultsFetch);
-  });
+  // Reconnect/default preservation is exercised through the production hooks
+  // in remoteDraftDefaultsCache.test.tsx, rather than source ordering.
 
   it('does not auto-send if the prepared session is no longer active', () => {
     const worktreeCreate = source.indexOf('window.electronAPI.worktreeCreate');

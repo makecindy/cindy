@@ -1,6 +1,6 @@
 import { AuthApiError } from '@cindy/auth-client';
 
-import { LOGIN_PREPARING_UNLOCK_TIMEOUT_MS } from '../shared/authIpc';
+import { LOGIN_PREPARING_UNLOCK_TIMEOUT_MS, loginPreparingErrorState } from '../shared/authIpc';
 
 /**
  * 冷启动 auth 流程的「限时等待」编排 —— 与 Electron / 网络层解耦的纯逻辑,
@@ -77,6 +77,109 @@ export async function awaitWithStartupTimeout<T>(
   }
 }
 
+export async function resolveColdStartTimeoutRecovery<TCurrent, TPending, TRecovered>(input: {
+  ownerTransitionPending: boolean;
+  authChangedSinceInitialize: boolean;
+  loginCommitPending: boolean;
+  loginCommittedSinceInitialize: boolean;
+  isStartupFallbackEpoch: (epoch: number) => boolean;
+  timeoutStartEpoch: number;
+  currentEpoch: number;
+  currentState: TCurrent;
+  pendingState: TPending;
+  recover: () => Promise<TRecovered>;
+}): Promise<TCurrent | TPending | TRecovered> {
+  // A pending owner transition owns the user-data boundary. A login also reserves
+  // the auth epoch before its async vault/owner transaction commits. Neither may
+  // race a timeout recovery; their own commit/rollback publishes the settled state.
+  if (input.ownerTransitionPending || input.loginCommitPending) return input.pendingState;
+  // A login transaction that settled after this initialize() entered reuses the
+  // epoch snapshotted at entry, so it is invisible to the epoch guards below.
+  // Preserve the authenticated state it published instead of recovering.
+  if (input.loginCommittedSinceInitialize) return input.currentState;
+  // Sibling renderers share one refresh but own independent startup timers. A
+  // user may complete login after one timeout exposes the login page and before
+  // another timer fires; that later timeout must preserve the authenticated state.
+  if (input.authChangedSinceInitialize || input.currentEpoch !== input.timeoutStartEpoch) {
+    if (
+      input.currentEpoch === input.timeoutStartEpoch ||
+      !input.isStartupFallbackEpoch(input.currentEpoch)
+    ) {
+      return input.currentState;
+    }
+  }
+  return input.recover();
+}
+
+/**
+ * 判断冷启动 refresh 流程的迟到结果是否「只被它自己的启动闸超时兜底」超越。
+ *
+ * 背景(2026-10-17 实机):splash 的启动闸超时后,兜底路径会把 owner 收敛回
+ * signed-out —— 那是流程自己的安全网,不是用户手动登录/登出。但它同样推进了
+ * authStateEpoch,于是流程稍后**成功**(token 已轮换并落盘)时,`epochChanged`
+ * 把它误判为「用户改过登录态」而整体丢弃:进程停在未登录,每次启动都重现。
+ *
+ * 豁免必须绑定到「这次兜底造成的那一次代际推进」,因此比对的是
+ * `startupFallback` 的 from/to 转换,而不是「当前代际恰好等于某个记录值」:
+ *
+ * - 多窗口连续兜底 → 每次同步记录一条代际转换。即使 refresh 尚未观察第一条转换,
+ *   也能沿连续的兜底链识别到当前代际。
+ *
+ * 任何用户登录/登出造成的转换没有兜底记录,会截断这条链,流程仍被正常作废。
+ */
+export class ColdStartAuthFallbackRegistry {
+  private readonly fallbacks = new Map<number, number>();
+
+  /** Called synchronously with the auth epoch increment in clearAuth. */
+  record(fromEpoch: number, toEpoch: number): void {
+    if (toEpoch > fromEpoch) this.fallbacks.set(fromEpoch, toEpoch);
+  }
+
+  /** A late refresh is valid only if every intervening epoch came from startup fallback. */
+  containsOnlyFallbacks(fromEpoch: number, toEpoch: number): boolean {
+    let epoch = fromEpoch;
+    while (epoch < toEpoch) {
+      const nextEpoch = this.fallbacks.get(epoch);
+      if (nextEpoch === undefined || nextEpoch <= epoch || nextEpoch > toEpoch) return false;
+      epoch = nextEpoch;
+    }
+    return epoch === toEpoch;
+  }
+
+  /** Apply a refresh commit only while no explicit auth change interrupted its flow. */
+  commitIfCurrent<T>(input: {
+    flowEpoch: number;
+    currentEpoch: number;
+    commit: () => T;
+  }): { committed: true; value: T } | { committed: false } {
+    if (!this.containsOnlyFallbacks(input.flowEpoch, input.currentEpoch)) {
+      return { committed: false };
+    }
+    return { committed: true, value: input.commit() };
+  }
+
+  clear(): void {
+    this.fallbacks.clear();
+  }
+}
+
+export function commitColdStartRefreshIfCurrent<T>(input: {
+  registry: ColdStartAuthFallbackRegistry;
+  flowEpoch: number;
+  currentEpoch: number;
+  commit: () => T;
+}):
+  | { superseded: true }
+  | { superseded: false; flowEpoch: number; value: T } {
+  const result = input.registry.commitIfCurrent({
+    flowEpoch: input.flowEpoch,
+    currentEpoch: input.currentEpoch,
+    commit: input.commit,
+  });
+  if (!result.committed) return { superseded: true };
+  return { superseded: false, flowEpoch: input.currentEpoch, value: result.value };
+}
+
 /**
  * 登录准备态(「正在连接登录服务」)最多阻塞 UI 的时长。getProviders 走
  * CindyAuthClient 默认 15s AbortController,但黑洞 / captive-portal 下 Electron
@@ -95,13 +198,23 @@ export interface PreparingGateLog {
 export type LoginProvidersLoadFailure = {
   success: false;
   code: string;
-  state: { step: 'error'; code: string; recoverTo: 'identifier' };
+  retryAt?: number;
+  state: ReturnType<typeof loginPreparingErrorState>;
 };
 
 /** 把 getProviders 失败(含准备态超时)映射成既有可重试错误步。 */
 export function mapLoginProvidersLoadFailure(error: unknown): LoginProvidersLoadFailure {
   const code = error instanceof AuthApiError ? error.code : 'AUTH_SERVICE_UNAVAILABLE';
-  return { success: false, code, state: { step: 'error', code, recoverTo: 'identifier' } };
+  const state = loginPreparingErrorState(
+    code,
+    error instanceof AuthApiError ? error.retryAt : undefined,
+  );
+  return {
+    success: false,
+    code,
+    state,
+    ...(state.retryAt !== undefined ? { retryAt: state.retryAt } : {}),
+  };
 }
 
 /**

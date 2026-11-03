@@ -38,7 +38,8 @@ import {
   voiceInputDataStore,
   VoiceInputDataStore,
 } from '../VoiceInputDataStore.js';
-import { createVoiceInputHistoryEntry } from '../../../shared/voiceInputData.js';
+import { companionVoicePreference, updateCompanionVoicePreference, updateSentencePlaybackPreference } from '../../voice-conversation/preferences.js';
+import { createVoiceInputHistoryEntry, getDefaultVoiceInputSettings } from '../../../shared/voiceInputData.js';
 
 describe('VoiceInputDataStore persistence', () => {
   let dataDir: string;
@@ -54,6 +55,28 @@ describe('VoiceInputDataStore persistence', () => {
     vi.restoreAllMocks();
   });
 
+  it('reopens per-companion speech preferences and persists reset without freezing a default', () => {
+    const store = new VoiceInputDataStore();
+    const choice = { providerId: 'tts-connection', agent: 'codex' as const, modelId: 'same-model', voice: 'voice-id', protocol: 'elevenlabs' as const };
+    store.updateSettings({ conversationSelections: updateCompanionVoicePreference(store.getSettings(), 'companion', choice) });
+    const reopened = new VoiceInputDataStore();
+    expect(companionVoicePreference(reopened.getSettings(), 'companion')).toEqual({ selection: choice, customized: true, sentencePlayback: true });
+    reopened.updateSettings({ conversationSelections: updateCompanionVoicePreference(reopened.getSettings(), 'companion', null) });
+    expect(companionVoicePreference(new VoiceInputDataStore().getSettings(), 'companion')).toEqual({ selection: null, customized: false, sentencePlayback: true });
+  });
+
+  it('persists explicit sentence playback choices independently and deletes only the reset override', () => {
+    const store = new VoiceInputDataStore();
+    store.updateSettings({ conversationSentencePlayback: { companion: false, other: false } });
+    const reopened = new VoiceInputDataStore();
+    expect(companionVoicePreference(reopened.getSettings(), 'companion').sentencePlayback).toBe(false);
+    expect(companionVoicePreference(reopened.getSettings(), 'new-companion').sentencePlayback).toBe(true);
+    reopened.updateSettings({ conversationSentencePlayback: updateSentencePlaybackPreference(reopened.getSettings(), 'companion', null) });
+    const reset = new VoiceInputDataStore().getSettings();
+    expect(reset.conversationSentencePlayback).toEqual({ other: false });
+    expect(companionVoicePreference(reset, 'companion').sentencePlayback).toBe(true);
+  });
+
   it('关闭同步开关也会立刻广播,让在线手机清掉旧词典', () => {
     const store = new VoiceInputDataStore();
     const listener = vi.fn();
@@ -64,6 +87,30 @@ describe('VoiceInputDataStore persistence', () => {
       listener.mockClear();
       store.updateSettings({ dictionarySyncEnabled: true });
       expect(listener).toHaveBeenCalledWith({ immediate: true });
+    } finally {
+      unsubscribe();
+    }
+  });
+
+  it('恢复默认跨过开关边界也立刻广播:显式关闭后恢复默认不让在线设备留旧词典', () => {
+    const store = new VoiceInputDataStore();
+    const listener = vi.fn();
+    const unsubscribe = onVoiceInputDictionaryChanged(listener);
+    try {
+      store.updateSettings({ dictionarySyncEnabled: false });
+      expect(listener).toHaveBeenCalledWith({ immediate: true });
+      listener.mockClear();
+      // 「恢复默认」传 null:有效值从 false 翻回当前默认值,必须与普通开关翻转
+      // 同样立刻广播,否则早已在线的设备会一直保留旧词典状态。
+      const next = store.updateSettings({ dictionarySyncEnabled: null });
+      expect(next.dictionarySyncEnabled).toBe(
+        getDefaultVoiceInputSettings(process.platform).dictionarySyncEnabled,
+      );
+      expect(listener).toHaveBeenCalledWith({ immediate: true });
+      listener.mockClear();
+      // 有效值没有跨越边界就不广播(例如重复恢复默认)。
+      store.updateSettings({ dictionarySyncEnabled: null });
+      expect(listener).not.toHaveBeenCalled();
     } finally {
       unsubscribe();
     }

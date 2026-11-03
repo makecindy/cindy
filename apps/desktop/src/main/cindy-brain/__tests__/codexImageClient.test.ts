@@ -1,216 +1,343 @@
-import { describe, expect, it, vi } from 'vitest';
+import fs from 'node:fs/promises';
+import os from 'node:os';
+import path from 'node:path';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { createCodexImageChannel } from '../codexImageClient.js';
 
-function sseResponse(events: unknown[], status = 200): Response {
-  const body =
-    events.map((event) => `data: ${JSON.stringify(event)}\n\n`).join('') + 'data: [DONE]\n\n';
-  return new Response(body, { status, headers: { 'Content-Type': 'text/event-stream' } });
+const image = 'iVBORw0KGgo=';
+const params = { model: 'openai/gpt-image-2', prompt: 'a blue circle' };
+const directories: string[] = [];
+afterEach(async () => {
+  await Promise.all(
+    directories.splice(0).map((dir) => fs.rm(dir, { recursive: true, force: true })),
+  );
+});
+function response(body: unknown = { data: [{ b64_json: image }], size: '1254x1254' }) {
+  return Response.json(body);
 }
-
-function makeChannel(
+function channel(
   fetchImplementation: typeof fetch,
-  beforeDispatch?: (model: string) => void,
-  onAuthFailure?: Parameters<typeof createCodexImageChannel>[0]['onAuthFailure'],
+  overrides: Partial<Parameters<typeof createCodexImageChannel>[0]> = {},
 ) {
   return createCodexImageChannel({
     hasOAuthLogin: () => true,
-    getAuth: async () => ({ accessToken: 'oauth-token', accountId: 'account-id' }),
+    getAuth: async () => ({ accessToken: 'test-token', accountId: 'test-account' }),
     fetchImplementation,
-    beforeDispatch,
-    onAuthFailure,
+    ...overrides,
   });
 }
 
-describe('codexImageClient', () => {
-  it('does not dispatch if the selected account changes while preparing an image', async () => {
-    const doFetch = vi.fn<typeof fetch>();
-    const channel = createCodexImageChannel({
-      providerId: 'openai-account-a',
-      hasOAuthLogin: () => true,
-      getAuth: vi.fn()
-        .mockResolvedValueOnce({ accessToken: 'old', accountId: 'account-a' })
-        .mockResolvedValueOnce({ accessToken: 'new', accountId: 'account-b' }),
-      fetchImplementation: doFetch,
+describe('Codex standalone Images API', () => {
+  it('generates with the image model, without a Responses host or hosted tool', async () => {
+    const fetch = vi.fn<typeof globalThis.fetch>(async () => response());
+    const result = await channel(fetch).generateImage({
+      ...params,
+      size: '1024x1024',
+      quality: 'low',
     });
-    await expect(channel.generateImage({ model: 'openai-account-a/gpt-image-2', prompt: 'p' })).rejects.toThrow('Codex image account changed before dispatch');
-    expect(doFetch).not.toHaveBeenCalled();
-  });
-
-  it('dispatches custom account image models using only that account credentials', async () => {
-    const doFetch = vi.fn<typeof fetch>(async () => sseResponse([{ type: 'image_generation_call', result: 'aW1hZ2U=' }]));
-    const channel = createCodexImageChannel({
-      providerId: 'openai-account-a',
-      hasOAuthLogin: () => true,
-      getAuth: async () => ({ accessToken: 'account-a-token', accountId: 'account-a' }),
-      fetchImplementation: doFetch,
+    const [url, init] = fetch.mock.calls[0]!;
+    expect(url).toBe('https://chatgpt.com/backend-api/codex/images/generations');
+    expect(JSON.parse(String(init?.body))).toEqual({
+      model: 'gpt-image-2',
+      prompt: params.prompt,
+      size: '1024x1024',
+      quality: 'low',
+      background: 'opaque',
     });
-    await channel.generateImage({ model: 'openai-account-a/gpt-image-2', prompt: 'p' });
-    expect(JSON.parse(String(doFetch.mock.calls[0]?.[1]?.body)).tools[0].model).toBe('gpt-image-2');
-    expect(doFetch.mock.calls[0]?.[1]?.headers).toMatchObject({ Authorization: 'Bearer account-a-token', 'ChatGPT-Account-Id': 'account-a' });
-    await expect(channel.generateImage({ model: 'openai/gpt-image-2', prompt: 'p' })).rejects.toThrow();
-    expect(doFetch).toHaveBeenCalledTimes(1);
-  });
-  it('用 Codex OAuth hosted image_generation tool 生成 gpt-image-2', async () => {
-    const doFetch = vi.fn<typeof fetch>(async () =>
-      sseResponse([
-        {
-          type: 'response.output_item.done',
-          item: { type: 'image_generation_call', result: 'aW1hZ2U=' },
-        },
-      ]),
-    );
-    const channel = makeChannel(doFetch);
-    const result = await channel.generateImage({
-      model: 'openai/gpt-image-2',
-      prompt: '一只猫',
-      aspectRatio: '3:2',
+    expect(init?.headers).toMatchObject({
+      Authorization: 'Bearer test-token',
+      'ChatGPT-Account-Id': 'test-account',
+      Accept: 'application/json',
     });
-
-    expect(result.data[0]?.b64_json).toBe('aW1hZ2U=');
-    const [url, init] = doFetch.mock.calls[0]!;
-    expect(String(url)).toBe('https://chatgpt.com/backend-api/codex/responses');
-    expect((init?.headers as Record<string, string>)['ChatGPT-Account-Id']).toBe('account-id');
-    const body = JSON.parse(String(init?.body)) as {
-      tools: Array<Record<string, unknown>>;
-      tool_choice?: unknown;
-    };
-    expect(body.tools).toContainEqual(
-      expect.objectContaining({
-        type: 'image_generation',
-        model: 'gpt-image-2',
-        size: '1536x1024',
-        quality: 'medium',
-      }),
-    );
-    expect(body.tool_choice).toBeUndefined();
+    expect(init?.headers).not.toHaveProperty('OpenAI-Beta');
+    expect(result.data).toEqual([{ b64_json: image }]);
+    // Preserve the returned bytes; requested size is not authoritative output metadata.
+    expect(result).not.toHaveProperty('size');
+    expect(fetch).toHaveBeenCalledTimes(1);
   });
 
-  it('未指定画幅时保留 auto 语义;拒绝目录外模型', async () => {
-    const doFetch = vi.fn<typeof fetch>(async () =>
-      sseResponse([{ type: 'image_generation_call', result: 'aW1hZ2U=' }]),
-    );
-    const channel = makeChannel(doFetch);
-    await channel.generateImage({ model: 'openai/gpt-image-2', prompt: 'p' });
-    const body = JSON.parse(String(doFetch.mock.calls[0]?.[1]?.body)) as {
-      tools: Array<Record<string, unknown>>;
-    };
-    expect(body.tools[0]).not.toHaveProperty('size');
-
-    await expect(
-      channel.generateImage({ model: 'another/future-image', prompt: 'p' }),
-    ).rejects.toThrow('不支持模型');
-    expect(doFetch).toHaveBeenCalledTimes(1);
+  it('edits using JSON images with sniffed MIME, not Responses input or multipart', async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'codex-image-edit-'));
+    directories.push(dir);
+    const png = path.join(dir, 'reference.dat');
+    const jpeg = path.join(dir, 'other.dat');
+    await fs.writeFile(png, Buffer.from(image, 'base64'));
+    await fs.writeFile(jpeg, Buffer.from([0xff, 0xd8, 0xff, 0xe0]));
+    const fetch = vi.fn<typeof globalThis.fetch>(async () => response());
+    await channel(fetch).editImage({ ...params, imagePaths: [png, jpeg], aspectRatio: '3:2' });
+    expect(fetch.mock.calls[0]?.[0]).toBe('https://chatgpt.com/backend-api/codex/images/edits');
+    expect(JSON.parse(String(fetch.mock.calls[0]?.[1]?.body))).toEqual({
+      model: 'gpt-image-2',
+      prompt: params.prompt,
+      background: 'opaque',
+      size: '1536x1024',
+      images: [
+        { image_url: 'data:image/png;base64,' + image },
+        { image_url: 'data:image/jpeg;base64,/9j/4A==' },
+      ],
+    });
+    await expect(channel(fetch).editImage({ ...params, imagePaths: [] })).rejects.toThrow();
+    expect(fetch).toHaveBeenCalledTimes(1);
   });
 
-  it('目录新增的同协议型号原样发送，不固定旧图像模型', async () => {
-    const doFetch = vi.fn<typeof fetch>(async () => sseResponse([{ type: 'image_generation_call', result: 'aW1hZ2U=' }]));
+  it('keeps compatibility handles local and respects selected account credentials', async () => {
+    const fetch = vi.fn<typeof globalThis.fetch>(async () => response());
     const beforeDispatch = vi.fn();
-    await makeChannel(doFetch, beforeDispatch).generateImage({ model: 'openai/future-image', prompt: 'p' });
-    expect(JSON.parse(String(doFetch.mock.calls[0]?.[1]?.body)).tools[0].model).toBe('future-image');
-    expect(beforeDispatch).toHaveBeenCalledWith('openai/future-image');
+    const c = channel(fetch, { providerId: 'openai-account-a', beforeDispatch });
+    await c.generateImage({ ...params, model: 'openai-account-a/future-image' });
+    expect(JSON.parse(String(fetch.mock.calls[0]?.[1]?.body)).model).toBe('gpt-image-2');
+    expect(beforeDispatch).toHaveBeenCalledWith('openai-account-a/future-image');
+    await expect(c.generateImage(params)).rejects.toThrow('不支持模型');
+    expect(fetch).toHaveBeenCalledTimes(1);
   });
 
-  it('保留流中最新 partial image;派发前重查可阻止出网', async () => {
-    const doFetch = vi.fn<typeof fetch>(async () =>
-      sseResponse([{ partial_image_b64: 'first' }, { partial_image_b64: 'final' }]),
-    );
-    const channel = makeChannel(doFetch);
-    expect(
-      (await channel.generateImage({ model: 'openai/gpt-image-2', prompt: 'p' })).data[0]?.b64_json,
-    ).toBe('final');
-
-    const blockedFetch = vi.fn<typeof fetch>();
-    const blocked = makeChannel(blockedFetch, () => {
-      throw new Error('模型已停用');
+  it('preserves explicit options and leaves unspecified options omitted', async () => {
+    const fetch = vi.fn<typeof globalThis.fetch>(async () => response());
+    await channel(fetch).generateImage({
+      ...params,
+      model: 'openai/gpt-image-2.5-sunburst',
+      size: '1760x3824',
+      quality: 'max',
     });
-    await expect(
-      blocked.generateImage({ model: 'openai/gpt-image-2', prompt: 'p' }),
-    ).rejects.toThrow('模型已停用');
-    expect(blockedFetch).not.toHaveBeenCalled();
+    expect(JSON.parse(String(fetch.mock.calls[0]?.[1]?.body))).toMatchObject({
+      size: '1760x3824',
+      quality: 'max',
+    });
+    await channel(fetch).generateImage(params);
+    const body = JSON.parse(String(fetch.mock.calls[1]?.[1]?.body));
+    expect(body).not.toHaveProperty('size');
+    expect(body).not.toHaveProperty('quality');
+    await expect(channel(fetch).generateImage({ ...params, size: '1320x2868' })).rejects.toThrow(
+      'divisible by 16',
+    );
+    expect(fetch).toHaveBeenCalledTimes(2);
   });
 
-  it('兼容 CRLF、无尾空行和坏帧,并释放 reader lock', async () => {
-    const releaseLock = vi.spyOn(ReadableStreamDefaultReader.prototype, 'releaseLock');
-    const body = [
-      'data: {bad json}\r\n\r\n',
-      `data: ${JSON.stringify({ partial_image_b64: 'crlf' })}\r\n\r\n`,
-      `data: ${JSON.stringify({ type: 'image_generation_call', result: 'unterminated' })}`,
-    ].join('');
-    const channel = makeChannel(
-      vi.fn<typeof fetch>(
-        async () =>
-          new Response(body, { status: 200, headers: { 'Content-Type': 'text/event-stream' } }),
-      ),
+  it('does not dispatch if the selected account changes during preparation', async () => {
+    const fetch = vi.fn<typeof globalThis.fetch>();
+    const getAuth = vi
+      .fn()
+      .mockResolvedValueOnce({ accessToken: 'old', accountId: 'a' })
+      .mockResolvedValueOnce({ accessToken: 'new', accountId: 'b' });
+    await expect(channel(fetch, { getAuth }).generateImage(params)).rejects.toThrow(
+      'account changed',
     );
+    expect(fetch).not.toHaveBeenCalled();
+  });
 
-    try {
-      await expect(
-        channel.generateImage({ model: 'openai/gpt-image-2', prompt: 'p' }),
-      ).resolves.toMatchObject({ data: [{ b64_json: 'unterminated' }] });
-      expect(releaseLock).toHaveBeenCalled();
-    } finally {
-      releaseLock.mockRestore();
+  it('checks model availability again immediately before dispatch', async () => {
+    const fetch = vi.fn<typeof globalThis.fetch>();
+    const beforeDispatch = vi
+      .fn()
+      .mockImplementationOnce(() => {})
+      .mockImplementationOnce(() => {
+        throw new Error('disabled');
+      });
+    await expect(channel(fetch, { beforeDispatch }).generateImage(params)).rejects.toThrow(
+      'disabled',
+    );
+    expect(fetch).not.toHaveBeenCalled();
+  });
+
+  it.each([400, 401, 403, 429, 500])(
+    'preserves HTTP %s without retrying or switching providers',
+    async (status) => {
+      const fetch = vi.fn<typeof globalThis.fetch>(async () =>
+        Response.json({ error: { message: 'upstream failure' } }, { status }),
+      );
+      const onAuthFailure = vi.fn(async () => {
+        throw new Error('coordinator failed');
+      });
+      await expect(channel(fetch, { onAuthFailure }).generateImage(params)).rejects.toThrow(
+        'HTTP ' + status,
+      );
+      expect(onAuthFailure).toHaveBeenCalledWith({
+        status,
+        body: JSON.stringify({ error: { message: 'upstream failure' } }),
+        failedAccessToken: 'test-token',
+      });
+      expect(fetch).toHaveBeenCalledTimes(1);
+    },
+  );
+
+  it.each([
+    null,
+    {},
+    { data: [] },
+    { data: [{}] },
+    { data: [{ b64_json: '' }] },
+    { data: [{ b64_json: 123 }] },
+    { partial_image_b64: image },
+  ])('rejects incomplete result %j', async (body) => {
+    const fetch = vi.fn<typeof globalThis.fetch>(async () => response(body));
+    await expect(channel(fetch).generateImage(params)).rejects.toThrow();
+    expect(fetch).toHaveBeenCalledTimes(1);
+  });
+
+  it('rejects truncated JSON and network failures without resubmission', async () => {
+    for (const impl of [
+      async () => new Response('{"data":['),
+      async () => {
+        throw new Error('network interrupted');
+      },
+    ]) {
+      const fetch = vi.fn<typeof globalThis.fetch>(impl);
+      await expect(channel(fetch).generateImage(params)).rejects.toThrow();
+      expect(fetch).toHaveBeenCalledTimes(1);
     }
   });
 
-  it('兼容单 CR 的 SSE 事件与行结束符', async () => {
-    const body = [
-      'data: {bad json}\r\r',
-      `data: ${JSON.stringify({ partial_image_b64: 'cr-only' })}\r\r`,
-      'data: [DONE]\r\r',
-    ].join('');
-    const channel = makeChannel(
-      vi.fn<typeof fetch>(
-        async () =>
-          new Response(body, { status: 200, headers: { 'Content-Type': 'text/event-stream' } }),
-      ),
-    );
-
-    await expect(
-      channel.generateImage({ model: 'openai/gpt-image-2', prompt: 'p' }),
-    ).resolves.toMatchObject({ data: [{ b64_json: 'cr-only' }] });
+  it('forwards cancellation and does not submit an already cancelled request', async () => {
+    const controller = new AbortController();
+    const fetch = vi.fn<typeof globalThis.fetch>(async (_url, init) => {
+      expect(init?.signal).toBe(controller.signal);
+      controller.abort();
+      throw new DOMException('aborted', 'AbortError');
+    });
+    const c = channel(fetch);
+    await expect(c.generateImage({ ...params, signal: controller.signal })).rejects.toThrow();
+    await expect(c.generateImage({ ...params, signal: controller.signal })).rejects.toThrow();
+    expect(fetch).toHaveBeenCalledTimes(1);
   });
 
-  it('把认证失败与本次 token 交给失效协调器,且不让协调器异常覆盖 HTTP 错误', async () => {
-    const raw = '{"error":{"code":"token_invalidated"}}';
-    const onAuthFailure = vi.fn(async () => {
-      throw new Error('invalidation failed');
-    });
-    const channel = makeChannel(
-      vi.fn<typeof fetch>(async () => new Response(raw, { status: 401 })),
-      undefined,
-      onAuthFailure,
-    );
-
-    await expect(
-      channel.generateImage({ model: 'openai/gpt-image-2', prompt: 'p' }),
-    ).rejects.toThrow('HTTP 401');
-    expect(onAuthFailure).toHaveBeenCalledWith({
-      status: 401,
-      body: raw,
-      failedAccessToken: 'oauth-token',
-    });
-  });
-
-  it('登录态决定 ready;缺 token 与空图片响应明确失败', async () => {
-    const unavailable = createCodexImageChannel({
+  it('keeps readiness and missing credentials within the existing auth boundary', async () => {
+    const fetch = vi.fn<typeof globalThis.fetch>();
+    const c = channel(fetch, {
       hasOAuthLogin: () => false,
       getAuth: async () => {
-        throw new Error('OpenAI 订阅登录已失效,请重新登录');
+        throw new Error('login required');
       },
-      fetchImplementation: vi.fn<typeof fetch>(),
     });
-    expect(unavailable.ready()).toBe(false);
-    await expect(
-      unavailable.generateImage({ model: 'openai/gpt-image-2', prompt: 'p' }),
-    ).rejects.toThrow('重新登录');
+    expect(c.ready()).toBe(false);
+    await expect(c.generateImage(params)).rejects.toThrow('login required');
+    expect(fetch).not.toHaveBeenCalled();
+  });
+  it.each(['account', 'token'])('blocks a change to only the %s before dispatch', async (field) => {
+    const fetch = vi.fn<typeof globalThis.fetch>();
+    const first = { accessToken: 'token-a', accountId: 'account-a' };
+    const second =
+      field === 'account'
+        ? { ...first, accountId: 'account-b' }
+        : { ...first, accessToken: 'token-b' };
+    const getAuth = vi.fn().mockResolvedValueOnce(first).mockResolvedValueOnce(second);
+    await expect(channel(fetch, { getAuth }).generateImage(params)).rejects.toThrow(
+      'account changed',
+    );
+    expect(fetch).not.toHaveBeenCalled();
+  });
 
-    const empty = makeChannel(
-      vi.fn<typeof fetch>(async () => sseResponse([{ type: 'response.completed' }])),
+  it('stops before reading credentials when the model is disabled initially', async () => {
+    const fetch = vi.fn<typeof globalThis.fetch>();
+    const getAuth = vi.fn();
+    const beforeDispatch = () => {
+      throw new Error('disabled initially');
+    };
+    await expect(channel(fetch, { getAuth, beforeDispatch }).generateImage(params)).rejects.toThrow(
+      'disabled initially',
     );
-    await expect(empty.generateImage({ model: 'openai/gpt-image-2', prompt: 'p' })).rejects.toThrow(
-      '没有图片',
+    expect(getAuth).not.toHaveBeenCalled();
+    expect(fetch).not.toHaveBeenCalled();
+  });
+
+  it('stops when cancelled during credential preparation, before fetch', async () => {
+    const controller = new AbortController();
+    const fetch = vi.fn<typeof globalThis.fetch>();
+    const getAuth = vi.fn(async () => {
+      controller.abort();
+      return { accessToken: 'test-token', accountId: 'test-account' };
+    });
+    await expect(
+      channel(fetch, { getAuth }).generateImage({ ...params, signal: controller.signal }),
+    ).rejects.toMatchObject({ name: 'AbortError' });
+    expect(fetch).not.toHaveBeenCalled();
+  });
+
+  it('does not deliver a complete response if cancellation arrives while parsing it', async () => {
+    const controller = new AbortController();
+    const res = response();
+    vi.spyOn(res, 'json').mockImplementation(async () => {
+      controller.abort();
+      return { data: [{ b64_json: image }] };
+    });
+    const fetch = vi.fn<typeof globalThis.fetch>(async () => res);
+    await expect(
+      channel(fetch).generateImage({ ...params, signal: controller.signal }),
+    ).rejects.toMatchObject({ name: 'AbortError' });
+    expect(fetch).toHaveBeenCalledTimes(1);
+  });
+
+  it('rejects unreadable and non-image references before sending any edit', async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'codex-image-invalid-'));
+    directories.push(dir);
+    const invalid = path.join(dir, 'not-an-image.png');
+    await fs.writeFile(invalid, '<html>not an image</html>');
+    const fetch = vi.fn<typeof globalThis.fetch>();
+    const c = channel(fetch);
+    await expect(c.editImage({ ...params, imagePaths: [invalid] })).rejects.toThrow('格式不支持');
+    await expect(
+      c.editImage({ ...params, imagePaths: [path.join(dir, 'missing.png')] }),
+    ).rejects.toMatchObject({ code: 'ENOENT' });
+    expect(fetch).not.toHaveBeenCalled();
+  });
+
+  it('rejects empty edit input and wrong provider before obtaining credentials', async () => {
+    const fetch = vi.fn<typeof globalThis.fetch>();
+    const getAuth = vi.fn();
+    const c = channel(fetch, { getAuth });
+    await expect(c.editImage({ ...params, imagePaths: [] })).rejects.toThrow('reference image');
+    for (const model of ['xd/gpt-image-2', 'openai/', 'openai/  ']) {
+      await expect(c.generateImage({ ...params, model })).rejects.toThrow('不支持模型');
+    }
+    expect(getAuth).not.toHaveBeenCalled();
+    expect(fetch).not.toHaveBeenCalled();
+  });
+
+  it('omits an absent account header and gives independent requests distinct turn IDs', async () => {
+    const fetch = vi.fn<typeof globalThis.fetch>(async () => response());
+    const c = channel(fetch, {
+      getAuth: async () => ({ accessToken: 'test-token', accountId: null }),
+    });
+    await c.generateImage(params);
+    await c.generateImage(params);
+    const headers = fetch.mock.calls.map((call) => call[1]?.headers as Record<string, string>);
+    expect(headers[0]).not.toHaveProperty('ChatGPT-Account-Id');
+    expect(headers[0]['x-codex-image-turn-id']).toMatch(/^[0-9a-f-]{36}$/);
+    expect(headers[0]['x-codex-image-turn-id']).not.toBe(headers[1]['x-codex-image-turn-id']);
+  });
+
+  it('retains multiple complete images and rejects a partially valid batch', async () => {
+    const fetch = vi.fn<typeof globalThis.fetch>(async () =>
+      response({ data: [{ b64_json: image }, { b64_json: image }] }),
     );
+    expect((await channel(fetch).generateImage(params)).data).toHaveLength(2);
+    const incomplete = vi.fn<typeof globalThis.fetch>(async () =>
+      response({ data: [{ b64_json: image }, null] }),
+    );
+    await expect(channel(incomplete).generateImage(params)).rejects.toThrow('没有图片');
+    expect(incomplete).toHaveBeenCalledTimes(1);
+  });
+
+  it.each([
+    'plain-text upstream failure',
+    '',
+    JSON.stringify({ error: { message: 'x'.repeat(1000) } }),
+  ])('bounds error detail without an auth callback (%#)', async (body) => {
+    const fetch = vi.fn<typeof globalThis.fetch>(async () => new Response(body, { status: 502 }));
+    const error = await channel(fetch)
+      .generateImage(params)
+      .catch((reason: unknown) => reason);
+    expect(error).toBeInstanceOf(Error);
+    expect((error as Error).message).toContain('HTTP 502');
+    expect((error as Error).message.length).toBeLessThan(550);
+    expect(fetch).toHaveBeenCalledTimes(1);
+  });
+
+  it('keeps the HTTP failure if reading its body fails', async () => {
+    const res = new Response('', { status: 503 });
+    vi.spyOn(res, 'text').mockRejectedValue(new Error('body interrupted'));
+    const fetch = vi.fn<typeof globalThis.fetch>(async () => res);
+    await expect(channel(fetch).generateImage(params)).rejects.toThrow('HTTP 503');
+    expect(fetch).toHaveBeenCalledTimes(1);
   });
 });

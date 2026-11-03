@@ -284,10 +284,11 @@ describe('Pi runtime capability lifecycle', () => {
     captured.catalogs.forked = catalog('skill:fork');
     const fork = await new PiAgent(deps()).forkSdkSession({
       sourceSdkSessionId: '/mock/source.jsonl', upToMessageId: undefined, workingDir: cwd,
+      hostedGuestHome: home,
     });
     expect(fork.runtimeCapabilities).toBeUndefined();
     expect(captured.instances.at(-1)?.args).toEqual(expect.arrayContaining([
-      '--no-approve', '--no-extensions',
+      '--no-approve', '--no-extensions', '--session-dir', path.join(home, 'pi-sessions'),
     ]));
     expect(captured.instances.at(-1)?.requests.filter((request) => request.type === 'get_commands')).toHaveLength(0);
 

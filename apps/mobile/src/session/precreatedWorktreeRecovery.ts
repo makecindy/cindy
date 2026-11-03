@@ -29,9 +29,8 @@ interface PendingPrecreatedWorktreeBase {
   deviceId: string;
   createdAt: number;
   /**
-   * Destructive cleanup is allowed only while createSession is known not to
-   * have started. Missing legacy values are normalized to
-   * session-create-started (retain-only).
+   * Every phase may have an in-flight create request. Recovery always requires
+   * the host cancellation fence, including reservations without a create ACK.
    */
   phase: 'reserved' | 'precreated' | 'session-create-started';
 }
@@ -62,6 +61,8 @@ export interface PrecreatedWorktreeRecoveryDeps {
       | { sessionId: string; path: string; recoveryKey?: never }
       | { sessionId: string; recoveryKey: string; path?: never },
   ) => Promise<unknown>;
+  cancelPrecreated?: PrecreatedWorktreeRecoveryDeps['discardPrecreated'];
+  onDiscarded?: (record: PendingPrecreatedWorktree) => void | Promise<void>;
   /**
    * PRECONDITION_FAILED 既可能表示会话已经认领 worktree，也可能表示
    * worktree 有改动/保留标记。调用方用权威 get-session 区分二者，只有前者
@@ -565,16 +566,17 @@ export async function recoverPendingPrecreatedWorktrees(
             return;
           }
           if (!isRecoveryCurrent(deps)) return;
-          if (record.phase !== 'reserved' && record.phase !== 'precreated') {
+          const discard = deps.cancelPrecreated;
+          if (!discard) {
             throw new Error('Pre-created worktree session ownership is unresolved');
           }
           const discardResult = typeof record.recoveryKey === 'string'
-            ? await deps.discardPrecreated(record.deviceId, {
+            ? await discard(record.deviceId, {
                 sessionId: record.sessionId,
                 recoveryKey: record.recoveryKey,
               })
             : typeof record.path === 'string'
-              ? await deps.discardPrecreated(record.deviceId, {
+              ? await discard(record.deviceId, {
               sessionId: record.sessionId,
               path: record.path,
                 })
@@ -582,6 +584,8 @@ export async function recoverPendingPrecreatedWorktrees(
           if (!parseDiscardPrecreatedAck(discardResult)) {
             throw new Error('Invalid pre-created worktree discard acknowledgement');
           }
+          // Persist the draft's cancellation before forgetting its recovery ledger.
+          if (isRecoveryCurrent(deps)) await deps.onDiscarded?.(record);
         },
         {
           maxAttempts: 2,

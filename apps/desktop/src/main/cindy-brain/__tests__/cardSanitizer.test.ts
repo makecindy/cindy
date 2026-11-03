@@ -9,6 +9,7 @@ import { describe, expect, it } from 'vitest';
 
 import { sanitizeGhostCardHtml } from '../cardSanitizer';
 import { GHOST_CARD_HTML_MAX_BYTES } from '../../../shared/ghost';
+import { readGhostCardForm } from '@cindy/maker-shared/ghost-card-form';
 
 const HASH = 'a'.repeat(64);
 const GOOD_IMG = `cindy-media://blobs/${HASH}.png`;
@@ -20,6 +21,15 @@ function ok(html: string): string {
 }
 
 describe('sanitizeGhostCardHtml', () => {
+  it('permits inert form declarations without enabling native forms, scripts or navigation', () => {
+    const fields = [{ name: 'body', label: 'Message', value: '<script>"&', multiline: true }];
+    const encoded = JSON.stringify(fields).replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;');
+    const html = ok(`<div data-ghost-form="${encoded}" onclick="bad()">Preview</div><button data-ghost-action="save" data-ghost-submit="true" formaction="https://example.test">Save</button><input value="secret"><script>bad()</script>`);
+    expect(readGhostCardForm(html)).toEqual(fields);
+    expect(html).toContain('data-ghost-submit="true"');
+    expect(html).not.toMatch(/onclick|formaction|<input|<script/);
+    expect(ok('<div data-ghost-form="bad">Preview</div>')).not.toContain('data-ghost-form');
+  });
   it('保留白名单结构与文本', () => {
     const out = ok('<div><p>你好 <strong>世界</strong></p></div>');
     expect(out).toBe('<div><p>你好 <strong>世界</strong></p></div>');
@@ -95,6 +105,15 @@ describe('sanitizeGhostCardHtml', () => {
     const out = ok('<div><p>未闭合<span>嵌套错</div>');
     expect(out).toBe('<div><p>未闭合<span>嵌套错</span></p></div>');
     expect(() => sanitizeGhostCardHtml('<<<><//>< p <div')).not.toThrow();
+  });
+
+  it('preserves escaped mail text without turning encoded markup into elements', () => {
+    const html = '<p>Dash &lt;self@example.test&gt; &amp; &quot;team&quot; &#39; &#x1F600; &amp;lt;script&amp;gt;</p>';
+    expect(ok(html)).toBe(html);
+    expect(ok(ok(html))).toBe(html);
+    const encodedAttack = '<p>&lt;img src=x onerror=alert(1)&gt; &#60;script&#62;bad()&#60;/script&#62;</p>';
+    expect(ok(encodedAttack)).toBe(encodedAttack);
+    expect(ok(encodedAttack)).not.toMatch(/<img|<script/);
   });
 
   it('plaintext 吞掉余下输入', () => {

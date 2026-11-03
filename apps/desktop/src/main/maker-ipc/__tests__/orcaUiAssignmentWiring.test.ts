@@ -53,7 +53,8 @@ describe('Orca UI assignment wiring', () => {
   });
 
   it('keeps the Worker resumable and recovers a persisted pending receipt on Lead mount', () => {
-    expect(lifecycleSource).toContain('!normalized.initialTask || params.deferDelegateTask');
+    expect(lifecycleSource).toContain('if (normalized.initialTask && !params.deferDelegateTask)');
+    expect(lifecycleSource).toContain("entrypoint: 'enable_collab_mode'");
     expect(sessionViewSource).toContain('getRecoverableDeferredUiAssignment({');
     expect(sessionViewSource).toContain("remoteRouteUnavailable: remoteConn !== 'connected'");
     expect(sessionViewSource).toContain('dispatchDeferredUiAssignment(sessionId, undefined).catch');

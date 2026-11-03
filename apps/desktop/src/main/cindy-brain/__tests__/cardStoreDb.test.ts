@@ -11,6 +11,9 @@ import { drizzle } from 'drizzle-orm/better-sqlite3';
 import fs from 'node:fs';
 import path from 'node:path';
 import type { GhostCardDb } from '../cardStoreDb';
+import { GhostCardService } from '../cardService';
+import { GhostCardActionDispatcher } from '../cardActionDispatch';
+import { GHOST_CARD_REOPEN_WINDOW_MS, type InstalledGhost } from '../../../shared/ghost';
 
 vi.mock('electron', () => ({
   app: { getPath: () => '/tmp/never-used-here' },
@@ -51,6 +54,69 @@ beforeEach(() => {
 });
 
 describe('cardStoreDb', () => {
+  it.each(['_ns__acme__helper', '_archive_helper'])('drains queued inserts before reassigning live and historical actions: %s', async (target) => {
+    let releaseWrite!: () => void;
+    let now = 1_000_000;
+    const pending = new Promise<void>((resolve) => { releaseWrite = resolve; });
+    const svc = new GhostCardService({
+      hasCardSlot: () => true,
+      sanitize: (html) => ({ ok: true, html }),
+      persist: async (card) => { await pending; await store.upsertGhostCard(card, db); },
+      broadcast: vi.fn(),
+      now: () => now,
+    });
+    svc.registerCall('old', { ghostId: 'helper', toolUseId: null, sessionId: 'org-session' });
+    expect(svc.handleCardUpdate('helper', { type: 'card-update', callId: 'old', html: '<p>org</p>' }).accepted).toBe(true);
+    svc.finalizeCall('old');
+
+    const reassign = vi.fn(() => store.reassignGhostCards('helper', target, db));
+    const relocation = svc.relocateGhost('helper', target).then(reassign);
+    await Promise.resolve();
+    expect(reassign).not.toHaveBeenCalled();
+    releaseWrite();
+    await relocation;
+    expect(await store.getGhostCard('old', db)).toEqual(expect.objectContaining({ ghostId: target, sessionId: 'org-session' }));
+    await svc.relocateGhost('helper', target);
+    await store.reassignGhostCards('helper', target, db);
+
+    const archived = target.startsWith('_archive');
+    const sendToGhost = vi.fn();
+    const issueUserActionToken = vi.fn(() => 'user-action-token');
+    const dispatcher = new GhostCardActionDispatcher({
+      resolveLiveInfo: (callId) => svc.callInfoOf(callId),
+      resolvePersistedCard: (callId) => store.getGhostCard(callId, db),
+      reopenForAction: (callId, info) => svc.reopenForAction(callId, info),
+      getGhost: (ghostId) => ghostId === 'helper' || (!archived && ghostId === target)
+        ? { manifest: { id: 'helper', card: {} }, namespace: ghostId === target ? 'acme' : null, enabled: true } as InstalledGhost : null,
+      isRunning: () => true,
+      wake: async () => {},
+      sendToGhost,
+      issueUserActionToken,
+      now: () => now,
+    });
+    for (const historical of [false, true]) {
+      if (historical) {
+        now += GHOST_CARD_REOPEN_WINDOW_MS + 31_000;
+        svc.registerCall('root', { ghostId: 'helper', toolUseId: null, sessionId: 'root-session' });
+        expect(svc.callInfoOf('old')).toBeNull();
+      }
+      expect(await dispatcher.dispatch('old', 'retry', 'org prompt')).toEqual(
+        archived ? { ok: false, reason: 'ghost-unavailable' } : { ok: true },
+      );
+    }
+    if (archived) {
+      expect(sendToGhost).not.toHaveBeenCalled();
+      expect(issueUserActionToken).not.toHaveBeenCalled();
+    } else {
+      expect(sendToGhost.mock.calls.map(([ghostId]) => ghostId)).toEqual([target, target]);
+      expect(sendToGhost).toHaveBeenCalledWith(target, expect.objectContaining({ sessionId: 'org-session', prompt: 'org prompt' }));
+      expect(issueUserActionToken.mock.calls).toEqual([[target, 'org-session'], [target, 'org-session']]);
+    }
+    await svc.relocateGhost(target, 'helper');
+    await store.reassignGhostCards(target, 'helper', db);
+    expect(await store.getGhostCard('old', db)).toEqual(expect.objectContaining({ ghostId: 'helper', sessionId: 'org-session', html: '<p>org</p>' }));
+  });
+
   it('upsert 幂等:同 callId 二次写入覆盖为最新版本', async () => {
     await store.upsertGhostCard(row('c1', { html: '<p>过程</p>' }), db);
     await store.upsertGhostCard(row('c1', { html: '<p>终版</p>', height: 400, updatedAt: 2000 }), db);

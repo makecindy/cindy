@@ -1,4 +1,4 @@
-import { captureTurnUsageContext, type TurnUsageContext } from './turnUsageContext.js';
+import { captureTurnUsageContext, turnBillingSource, type TurnUsageContext } from './turnUsageContext.js';
 import type { AgentEvent, Session } from '@cindy/maker-core';
 
 import { buildTurnUsageDetails } from '../../shared/turnUsageDetails.js';
@@ -26,6 +26,7 @@ import {
   sumTurnUsageSegments,
 } from '../usage/turnCostCalculator.js';
 import { isExclusiveXaiModelId } from '../../shared/subscriptionModels.js';
+import { isCodexGatewayWireModel } from '@cindy/model-providers';
 import { type RegionalMoney } from '../../shared/regionalMoney.js';
 import { currentLedgerCurrency } from '../usage/ledgerCurrency.js';
 import { triggerClaudeSubscriptionUsageRefresh, triggerXaiSubscriptionUsageRefresh } from './usage.js';
@@ -114,7 +115,7 @@ export function recordSessionCodexTurnUsage(
         }
         const isCodexBudgetRoute =
           (sessionProvider == null || sessionProvider === 'xd') &&
-          pricingModel.startsWith('codex/');
+          isCodexGatewayWireModel(pricingModel);
         const isCodexXaiProviderRoute =
           (sessionProvider == null || sessionProvider === 'xai') &&
           isExclusiveXaiModelId(pricingModel);
@@ -152,6 +153,7 @@ export function recordSessionCodexTurnUsage(
           ? codexSubscriptionUsageModelKey(pricingModel)
           : codexApiUsageModelKey(pricingModel);
         await recordModelTurnUsage({
+          sessionId: session.id,
           agentKind: 'codex',
           model: modelUsageKey,
           money: isSubscriptionValue ? deps.unpricedSubscriptionValueMarker() : undefined,
@@ -171,6 +173,7 @@ export function recordSessionCodexTurnUsage(
         // 拉不到 / 模型无条目 → 只落 token 明细,UI 退回显示本轮 token。
         // 明细在 try 外构造:它只依赖上面已拿到的 token 数,价格请求抛错时也要能落。
         const turnUsageDetails = buildTurnUsageDetails({
+          ...turnBillingSource(turnContext, isSubscriptionValue ? 'subscription' : hasEffectiveGatewayRoute ? 'xd-gateway' : usesReferencePriceEstimate ? 'provider-api' : 'unknown'),
           inputTokens: promptTokens,
           outputTokens: completionTokens,
           cacheReadTokens: cachedTokens,
@@ -223,6 +226,7 @@ export function recordSessionCodexTurnUsage(
           // writing them into #billing=api would later reconstruct an estimate as actual cost.
           if (money && (isSubscriptionValue || price?.source === 'gateway')) {
             await recordModelTurnUsage({
+              sessionId: session.id,
               agentKind: 'codex',
               model: modelUsageKey,
               money,
@@ -233,6 +237,7 @@ export function recordSessionCodexTurnUsage(
             });
           }
           if (money && money.amount > 0) {
+            if (turnUsageDetails) turnUsageDetails.perModelCost = [{ model: turnModel, money }];
             const isActualApiCost = !isSubscriptionValue && price?.source === 'gateway';
             if (isActualApiCost) {
               void recordTurnSpend(money);
@@ -276,7 +281,7 @@ export function recordSessionCodexTurnUsage(
           !isCustomProviderRoute &&
           !isExclusiveXaiModelId(model) &&
           (codexAuthInjection === 'env-key' ||
-            model.startsWith('codex/') ||
+            isCodexGatewayWireModel(model) ||
             (sessionProvider === 'xd' && hasGatewayKey))
         ) {
           void triggerClaudeAccountUsageRefresh();

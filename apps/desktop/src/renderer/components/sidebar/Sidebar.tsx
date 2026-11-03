@@ -206,7 +206,8 @@ export function Sidebar({
         >
           <div
             aria-hidden
-            // 60px = 折叠按钮 28 + gap 4 + 菜单 28(ChromeActions 簇宽)。
+            // 占位宽 = ChromeActions 簇宽(折叠/菜单/后退/前进四个按钮,见
+            // CHROME_ACTIONS_GEOMETRY.clusterWidth)。
             className="h-full shrink-0"
             style={
               {
@@ -230,7 +231,8 @@ export function Sidebar({
             {/* 任务列表页把「新建」以外的行搬进自己的列表滚动区(向上滚一起滚走,
               对齐 Codex);此时这里只渲染固定的「新建」。其它视图仍整块渲染常驻行。 */}
             {isRail ? (
-              <SidebarTopNav section="rail" />
+              // 任务视图的 rail 自己按导航偏好渲染全部入口;其它 Feature 只借伙伴图标。
+              !ownsTopNavScrollableRows && <SidebarTopNav section="rail" />
             ) : (
               <SidebarTopNav section={ownsTopNavScrollableRows ? 'pinned' : 'all'} />
             )}

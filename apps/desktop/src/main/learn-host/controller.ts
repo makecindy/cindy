@@ -91,7 +91,7 @@ export interface LearnSessionLike {
   id: string;
   send(
     message: { type: 'user'; content: string },
-    opts?: { onAccepted?: () => Promise<void> | void },
+    opts?: { onAccepted?: (signal?: AbortSignal) => Promise<void> | void },
   ): Promise<LearnSessionSendResult>;
   onEvent(listener: (ev: { type: string; data?: unknown; turnContinuationId?: number }) => void): () => void;
   abort(): Promise<void>;
@@ -145,7 +145,7 @@ export interface LearnControllerDeps {
   persistUserMessage(sessionId: string, content: string): Promise<void>;
   /** 修正 sessions 行(source='learn' + acceptEdits + 继承的 providerId),失败仅 warn。 */
   backfillSessionMeta(sessionId: string): Promise<void>;
-  beforeDispatchUserTurn?: (sessionId: string) => void | Promise<void>;
+  beforeDispatchUserTurn?: (sessionId: string, signal?: AbortSignal) => void | Promise<void>;
   onUndispatchedUserTurn?: (sessionId: string) => void;
   peekPendingHandoff?: (sessionId: string) => Promise<string | null>;
   consumePendingHandoff?: (sessionId: string) => void;
@@ -329,11 +329,21 @@ export class LearnController {
     if (req.sourceKind === 'session' && !req.originSessionId) {
       throw new LearnError('INVALID_PARAMS', 'session source requires the origin session');
     }
+    if (
+      req.sourceKind === 'session'
+      && req.originSessionId
+      && !(await this.deps.getConversationBlock(req.originSessionId))
+    ) {
+      throw new LearnError(
+        'INVALID_PARAMS',
+        'the origin conversation has no distillable content',
+      );
+    }
     if (req.sourceKind === 'hub' && !req.hubSlug) {
       throw new LearnError('INVALID_PARAMS', 'hubSlug is required for hub source');
     }
     // hubSlug 会作为路径段进入 resolveInstalledSkillDir / writeReferenceFiles:
-    // builtins 的 /learn hub: 正则已限,但 IPC learn:start 可直调 —— 边界处再校
+    // 内置 Skill 与 IPC learn:start 都可能传入 hubSlug —— 在状态机边界再校
     // 一次,拒绝分隔符 / '..' 等任意串(自查;与市场 slug 规则一致)。
     if (req.sourceKind === 'hub' && req.hubSlug && !/^[a-z0-9][a-z0-9-]*$/.test(req.hubSlug)) {
       throw new LearnError('INVALID_PARAMS', `invalid hubSlug: ${req.hubSlug}`);
@@ -583,12 +593,12 @@ export class LearnController {
       const sendResult = await session.send(
         outgoingMessage,
         {
-          onAccepted: async () => {
+          onAccepted: async (signal) => {
             await this.deps.persistUserMessage(session.id, cleanMessage).catch((err) => {
               this.deps.logger.warn('[learn] persist user message failed (non-fatal)', err);
             });
             if (this.deps.beforeDispatchUserTurn) {
-              await this.deps.beforeDispatchUserTurn(session.id);
+              await this.deps.beforeDispatchUserTurn(session.id, signal);
               baselineStarted = true;
             }
           },

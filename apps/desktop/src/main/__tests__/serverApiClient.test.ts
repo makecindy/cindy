@@ -11,6 +11,7 @@ const mocks = vi.hoisted(() => ({
   refresh: vi.fn(),
   invalidateSession: vi.fn(),
   logger: {
+    debug: vi.fn(),
     error: vi.fn(),
     warn: vi.fn(),
   },
@@ -25,15 +26,75 @@ vi.mock('../authManager', () => ({
 vi.mock('../i18n.js', () => ({
   getResolvedMainLocale: () => 'zh-CN',
 }));
+vi.mock('../clientEndpointsService.js', () => ({
+  getClientEndpoint: () => 'https://models.example.test',
+}));
 vi.mock('../logger', () => ({
   createLogger: () => mocks.logger,
 }));
 
 import { serverApiFetch } from '../serverApiClient';
+import { readOrganizationAccountUsage } from '../usage/organizationAccountUsage';
 
 describe('serverApiFetch', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+  });
+
+  // Unit: exercise the real quota reader through the HTTP client. Previously its
+  // mocked client hid recurring warnings for a successful legacy fallback.
+  it.each([
+    { status: 404, code: 'NOT_FOUND', fallback: true },
+    { status: 501, code: 'MODEL_ACCESS_QUOTA_NOT_SUPPORTED', fallback: true },
+    { status: 501, code: 'OTHER_FAILURE', fallback: false },
+    { status: 503, code: 'MODEL_ACCESS_QUOTA_NOT_SUPPORTED', fallback: false },
+    { status: 403, code: 'FORBIDDEN', fallback: false },
+    { status: 401, code: 'ACCOUNT_UNAVAILABLE', fallback: false },
+  ])('only downgrades expected quota fallback logs: $status $code', async ({ status, code, fallback }) => {
+    mocks.netFetch.mockResolvedValueOnce(new Response(JSON.stringify({
+      error: { code, message: 'private upstream message' },
+    }), { status }));
+    const result = await readOrganizationAccountUsage();
+    expect(result).toBe(fallback ? undefined : null);
+    expect(mocks.logger.warn).toHaveBeenCalledTimes(fallback ? 0 : 1);
+    expect(mocks.logger.debug).toHaveBeenCalledTimes(fallback ? 1 : 0);
+    expect(JSON.stringify([...mocks.logger.warn.mock.calls, ...mocks.logger.debug.mock.calls]))
+      .not.toContain('private upstream message');
+    if (status === 401) expect(mocks.invalidateSession).toHaveBeenCalledWith('account-unavailable');
+  });
+
+  it('keeps an unfamiliar original error and its cause while redacting secrets before logging', async () => {
+    const cause = Object.assign(new Error('proxy refused tunnel https://api.example.invalid/account/private-account#private-fragment'),
+      { code: 'NEW_PROXY_FAILURE' });
+    const error = new TypeError('fetch failed: https://api.example.invalid/?key=private-value', { cause });
+    Object.assign(error, { request: { body: 'private request body', token: 'private-token' } });
+    mocks.netFetch.mockRejectedValueOnce(error);
+    await expect(serverApiFetch('/api/resource', { baseUrl: 'https://api.example.invalid' })).rejects.toBeTruthy();
+    const logged = JSON.stringify(mocks.logger.error.mock.calls);
+    expect(logged).toContain('fetch failed');
+    expect(logged).toContain('proxy refused tunnel');
+    expect(logged).toContain('NEW_PROXY_FAILURE');
+    expect(logged).toContain('https://api.example.invalid');
+    expect(logged).not.toContain('private-account');
+    expect(logged).not.toContain('private-fragment');
+    expect(logged).not.toContain('private-value');
+    expect(logged).not.toContain('private request body');
+    expect(logged).not.toContain('private-token');
+  });
+
+  // Native JSON errors can quote the response body; transport read failures must stay diagnosable.
+  it.each([
+    { response: new Response('private display name'), logged: 'SyntaxError' },
+    { response: { ok: true, status: 200,
+      json: async () => { throw new TypeError('response stream closed'); } }, logged: 'response stream closed' },
+  ])('logs a response failure without exposing its body or changing EMPTY_RESPONSE: $logged', async ({ response, logged }) => {
+    mocks.netFetch.mockResolvedValueOnce(response);
+    await expect(serverApiFetch('/api/resource', { baseUrl: 'https://api.example.invalid' }))
+      .rejects.toMatchObject({ code: 'EMPTY_RESPONSE', statusCode: 200 });
+    expect(mocks.logger.warn).toHaveBeenCalledWith(
+      'response read failed', '/api/resource', { status: 200 }, logged,
+    );
+    expect(JSON.stringify(mocks.logger.warn.mock.calls)).not.toContain('private display name');
   });
 
   it('TOKEN_EXPIRED refresh 后用新 token 和重新生成的 body 重试', async () => {
@@ -154,6 +215,20 @@ describe('serverApiFetch', () => {
 
     expect(mocks.refresh).not.toHaveBeenCalled();
     expect(mocks.invalidateSession).toHaveBeenCalledWith('account-unavailable');
+  });
+
+  it.each(['ACCOUNT_UNAVAILABLE', 'TOKEN_EXPIRED'])('detached teardown %s cannot refresh or invalidate the next account', async (code) => {
+    mocks.getAccessToken.mockReturnValue('test-new-token');
+    mocks.netFetch.mockResolvedValue({ ok: false, status: 401, json: async () => ({ error: { code } }) });
+    await expect(serverApiFetch('/api/resource', {
+      baseUrl: 'https://old-resource.example.test', token: 'test-old-token',
+      skipAutoRefresh: true, skipSessionInvalidation: true,
+    })).rejects.toMatchObject({ code, statusCode: 401 });
+    expect(mocks.netFetch).toHaveBeenCalledWith('https://old-resource.example.test/api/resource',
+      expect.objectContaining({ headers: expect.objectContaining({ Authorization: 'Bearer test-old-token' }) }));
+    expect(mocks.refresh).not.toHaveBeenCalled();
+    expect(mocks.invalidateSession).not.toHaveBeenCalled();
+    expect(mocks.getAccessToken).not.toHaveBeenCalled();
   });
 
   it.each(['INVALID_TOKEN', 'UNAUTHORIZED'])('%s refresh 一次后重试', async (code) => {
@@ -339,6 +414,35 @@ describe('serverApiFetch', () => {
     expect(logged).toContain('code=SKILL_NOT_FOUND'); // 业务 code 仍记(它不是身份)
   });
 
+  it.each(['providers', 'credentials'])('logs the BYOK %s endpoint and allowed upstream code without response details', async (endpoint) => {
+    mocks.netFetch.mockResolvedValueOnce({
+      ok: false,
+      status: 502,
+      json: async () => ({
+        error: { code: 'ORG_AI_GATEWAY_ERROR', message: 'private upstream body' },
+        apiKey: 'invalid-test-secret',
+      }),
+    });
+    const path = `/api/model-access/byok/${endpoint}`;
+    await expect(serverApiFetch(`${path}?schemaVersion=1`, {
+      baseUrl: 'https://model-access.example.com',
+      redactErrorDetails: true,
+      logLabel: path,
+      allowedRedactedErrorCodes: ['ORG_AI_GATEWAY_ERROR'],
+    })).rejects.toMatchObject({ code: 'ORG_AI_GATEWAY_ERROR', message: '请求失败 (502)' });
+    expect(mocks.logger.warn).toHaveBeenCalledWith(
+      'serverApiFetch.redacted_not_ok',
+      `path=${path}`,
+      'method=GET',
+      'status=502',
+      'code=ORG_AI_GATEWAY_ERROR',
+    );
+    const logged = JSON.stringify(mocks.logger.warn.mock.calls);
+    expect(logged).not.toContain('private upstream body');
+    expect(logged).not.toContain('invalid-test-secret');
+    expect(logged).not.toContain('schemaVersion');
+  });
+
   it('surfaces only explicitly allowed business codes on redacted requests', async () => {
     mocks.getAccessToken.mockReturnValue('token-a');
     mocks.netFetch
@@ -387,6 +491,7 @@ describe('serverApiFetch', () => {
     });
 
     const logged = JSON.stringify(mocks.logger.warn.mock.calls);
+    expect(logged).toContain('code=PLAN_CHANGE_NOT_AVAILABLE');
     expect(logged).not.toContain('private subscription detail');
     expect(logged).not.toContain('PRIVATE_SUBSCRIPTION_STATE');
   });

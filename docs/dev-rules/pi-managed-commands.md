@@ -43,10 +43,17 @@ Full Access 使用通用档位，不再增加包审批；Ask/Auto、任务关闭
 对 bun-binary 的 getSelfUpdateCommand 返回 undefined；0.84.4 同样如此。
 因此只接上 native CLI 无法让 Cindy 的独立分发完成更新。
 
-先执行上游命令。只有上游明确返回不支持当前安装形态的自更新，Host 才下载官方
-GitHub release 对应平台资产，要求官方 SHA-256 digest，复用现有下载器和受限解包器。
+About 的 Pi 单行菜单与受管 `pi update` 命令共用一个 Host 安装服务，直接下载 GitHub
+release 对应平台资产，不再尝试原地更新运行中的目录。上游安装要求官方 SHA-256 digest，
+恢复 Cindy 正式版使用当前区域 release manifest 的 Pi 资产与摘要（不跟随 beta/canary），
+均复用现有下载器和受限解包器。
 新目录在激活前执行真实 `--version`，移动到最终目录后再次核验，再写 `.verified`。
-运行中旧目录不覆盖、不删除；新启动的根 Pi 任务现读 Host 的 ready binary 路径。
+最终目录为 `pi/<真实版本>-<唯一标识>/`，Unix 主可执行文件补齐 0755 权限。原子保存
+`pi/selected.json` 后才切换 ready path；启动优先使用显式选择，恢复低版本不会被高版本
+残留覆盖。保存失败移除未激活的新目录，保留旧选择；缺失／损坏的显式选择不静默切换其它
+版本，可从 About 恢复或再次运行受管更新修复。原生／手动自更新后的可执行文件仍可使用，
+版本真值现读，不因它与记录版本不同而停用。运行中旧目录不覆盖、不删除；新启动的根
+Pi 任务现读 Host 的 ready binary 路径。
 已有任务及其后续启动的子代理继续使用根任务启动时捕获的二进制路径；不承诺所有新子进程都切换路径。
 这不是修改 pin/CDN，也不需要更新当前调用进程才能回传结果。
 
@@ -65,7 +72,7 @@ Host 阶段进一步区分发行信息、资产校验、目录准备、下载、
 ## 验证与边界
 
 定向测试覆盖：语法/别名/冲突、直接命令与工具调用共享服务、Full Access 初始及热切换、
-普通动态 shell 不误判、原地更新后版本变化、独立目录安装、失败保留旧目录、摘要缺失及
+普通动态 shell 不误判、安装后版本变化、独立目录安装与恢复选择持久化、失败保留旧目录、摘要缺失及
 URL 越界拒绝。Windows 安装布局使用平台注入测试，不声称 Windows 真机通过。
 
 可选公网 smoke：`CINDY_PI_BINARY_UPDATE_SMOKE=1 pnpm --filter desktop exec vitest run
@@ -76,7 +83,11 @@ Vitest 无 Electron net，因此 smoke 用 Node fetch + SHA-256，实际解包�
 工具 schema/描述发生一次稳定变化；不改 system prompt 拼接顺序、provider/model 路由、
 usage 或逐 token translator。mocked RPC 测试检查命令回执进入原有消息流且调用者保持存活。
 未启动 dev、未调用付费 API，未实测模型选择工具的成功率、真实 prompt cache 或响应延迟。
-UI 仅同步五语 Full Access 说明；沿用既有双主题组件，Light/Dark 均未进行实机目检。
+About 每个 harness 保持一行，Pi 显示真实版本与检查／安装状态；菜单内提供上游更新、
+正式版恢复、重新检查及更新说明。安装确认绑定用户看到的精确版本，发行版本变化时重新
+检查，不静默换目标。检查失败保留上次结果并标失败；不会把联网失败显示成「已是最新」。
+新 IPC 只向本机可信主 Renderer 开放，手机与 IM 继续使用既有受管命令通道；SSH 不更新
+控制端电脑。安装前 Pi 未注册时提示重启 Cindy，不声称立即可创建 Pi 任务。
 
 ### 测试环境
 

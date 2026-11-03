@@ -21,7 +21,7 @@
 | 伙伴消息（send_to_agent）      | `botDirectMessageService.ts`、`bot_direct_messages`                                                          | `botDirectMessageService.test.ts`、消息流投影用例                                         | 单条异步消息进入双方时间线入口；不建立任务；12 条硬上限、同方连续 2 条上限与冷却共同阻止死循环。           |
 | 后台任务（start_session_task） | `botDelegationService.ts`、`lizi_xdtHelperMcpServer.ts`                                                      | `botCanonicalSession.test.ts` 的 Session 任务用例                                         | 大活开成普通 Cindy 任务，出现在主任务列表、走自己的权限门；check/message/stop 控制同一任务。               |
 | 任务卡与完成信号               | `BotCollaborationCard.tsx`、`botDelegationLive.ts`、`deliverCompletion`                                      | `BotCollaborationCard.test.tsx`、Session 任务完成与重启补投用例                           | 父时间线只有一张持久任务卡；完成信号是隐藏指令，带持久送达标记、幂等键、退避重试和重启补投。               |
-| 统一通知                       | `useSessionRunningStatus.ts`、`sessionEventNotification.ts`、两个任务侧栏                                   | 侧栏与通知入口测试                                                                        | 伙伴页接手统一完成 / 失败 / 待回复观察；沿用全局通道与聚焦去重，通知点击回到伙伴路由。                     |
+| 统一通知                       | `useSessionRunningStatus.ts`、`sessionEventNotification.ts`、两个任务侧栏                                   | 侧栏与通知入口测试                                                                        | 任务侧栏是唯一观察者（伙伴路由共用该侧栏，正在看的伙伴会话视为注视中）；沿用全局通道与聚焦去重，通知点击回到伙伴路由。                     |
 | 自有技能学习                   | `botSkillStore.ts`、`botSkillService.ts`、`save_teammate_skill`                                                   | `botSkillStore.test.ts`、`botSkillService.test.ts`、`bot-own-skills-mount.test.ts`        | 沉淀真技能、同一聊天安全轮次加载、设置页可见可删。                                                                   |
 | Desktop UI                     | `renderer/features/bots/**`                                                                                  | renderer store 与视图测试、typecheck                                                      | 名册、聊天、最小设置（成长/模型/维护）；无工程概念暴露。                                                   |
 
@@ -54,7 +54,7 @@
 
 ## 2026-09-06 手机与另一台电脑的补齐范围
 
-- 多设备名册：来源电脑与伙伴身份共同定位；保存账号隔离的名册缓存，冷启动缓存只按离线展示。单个来源失败只影响该来源，重新连接后重新读取，旧请求不能覆盖停连或换账号后的状态。
+- 多设备名册：来源电脑与伙伴身份共同定位；保存账号隔离的名册缓存，冷启动先显示加载中，首轮权威同步完成后再显示最新名册；relay 启动等待超时则回退到缓存并显示可重试的错误；已完成首轮同步后断线才按缓存展示。单个来源失败只影响该来源，重新连接后重新读取，旧请求不能覆盖停连或换账号后的状态。
 - 后台任务：手机与另一台 Desktop 均可从伙伴时间线读取任务状态、打开来源电脑的子任务、停止任务；状态推送沿父任务订阅回流。远端只得到任务卡所需字段，不输出数据库行或冻结的权限配置。
 - 伙伴私聊：两端从原消息入口打开来源电脑的只读私聊，收到更新或重连时刷新；不会以控制端本机的同名伙伴替换远端身份。
 - 手机呈现：解析与 Desktop 共用的持久任务/私聊标记，显示预设和托管图片头像，恢复成果文件入口与运行模型展示。主任务记录发生恢复替换时，聚焦/重连/资源更新重新解析伙伴身份。

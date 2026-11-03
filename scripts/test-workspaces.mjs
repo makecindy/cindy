@@ -3,7 +3,12 @@ import { execFileSync, spawn } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { createRequire } from "node:module";
 import { fileURLToPath } from "node:url";
+import {
+	electronBinaryCheckSkipReason,
+	findElectronBinaryIssue,
+} from "./ensure-deps.mjs";
 import { resolvePnpmInvocation } from "./shared/pnpm-invocation.mjs";
 import {
 	acquireTestGateLock,
@@ -12,6 +17,7 @@ import {
 import { createRelatedUnitPlan } from "./test-related.mjs";
 
 const ROOT = path.resolve(fileURLToPath(new URL("..", import.meta.url)));
+const require = createRequire(import.meta.url);
 const IGNORED_PARTS = new Set([
 	"node_modules",
 	"dist",
@@ -55,6 +61,7 @@ export function parseCliOptions(args) {
 		workspaces: [],
 		excludeWorkspaces: [],
 		workspaceConcurrency: undefined,
+		lock: false,
 		noLock: false,
 		related: false,
 	};
@@ -63,6 +70,10 @@ export function parseCliOptions(args) {
 		if (arg === "--") continue;
 		if (arg === "--all") {
 			options.all = true;
+			continue;
+		}
+		if (arg === "--lock") {
+			options.lock = true;
 			continue;
 		}
 		if (arg === "--no-lock") {
@@ -107,6 +118,9 @@ export function parseCliOptions(args) {
 			continue;
 		}
 		throw new Error(`Unknown option: ${arg}`);
+	}
+	if (options.lock && options.noLock) {
+		throw new Error("--lock cannot be combined with --no-lock");
 	}
 	if (options.related && options.all) {
 		throw new Error("--related cannot be combined with --all");
@@ -473,8 +487,13 @@ function undersizedVitestShardArgs(commandSpec, selectedFiles) {
 		return [];
 
 	// Vitest rejects every shard when there are fewer files than shards, before
-	// it assigns the files. Limit the compatibility flag to that known case.
-	return selectedFiles.length < count ? ["--passWithNoTests"] : [];
+	// it assigns the files. Otherwise it slices ceil(files / count) files per
+	// shard, so trailing shards can still be empty (6 files over 4 shards gives
+	// 2, 2, 2, 0). Limit the compatibility flag to those two known cases.
+	const fileCount = selectedFiles.length;
+	if (fileCount < count) return ["--passWithNoTests"];
+	const shardStart = Math.ceil(fileCount / count) * (index - 1);
+	return shardStart >= fileCount ? ["--passWithNoTests"] : [];
 }
 
 function toWorkspaceRelativeFile(workspace, file) {
@@ -538,6 +557,35 @@ export function buildPreflightArgs(root, workspace, preflight) {
 	if (preflight.type === "packageScript")
 		return ["--dir", workspaceAbs, "run", preflight.script];
 	throw new Error(`Unsupported preflight type: ${preflight.type}`);
+}
+
+export function resolveTestInvocation(pnpmArgs, options = {}) {
+	const platform = options.platform ?? process.platform;
+	if (platform !== "win32" || pnpmArgs[2] !== "exec" || pnpmArgs[3] !== "vitest") {
+		return resolvePnpmInvocation(pnpmArgs, options);
+	}
+	// pnpm exec resolves vitest.cmd on Windows, which crosses cmd.exe's 8191
+	// character limit once the required guard exclusions grow. Start the same
+	// installed JS entry directly; preserve every selection/shard/exclusion arg.
+	const execPath = options.execPath ?? process.execPath;
+	const vitestEntry = options.vitestEntry ?? require.resolve("vitest/vitest.mjs");
+	const env = { ...(options.env ?? process.env) };
+	const pathKeys = Object.keys(env).filter((key) => key.toLowerCase() === "path");
+	const pathKey = pathKeys[0] ?? "Path";
+	const existingPath = env[pathKey] ?? "";
+	for (const key of pathKeys) delete env[key];
+	env[pathKey] = [
+		path.dirname(execPath),
+		path.join(pnpmArgs[1], "node_modules", ".bin"),
+		path.join(ROOT, "node_modules", ".bin"),
+		existingPath,
+	].join(";");
+	return {
+		command: execPath,
+		args: [vitestEntry, ...pnpmArgs.slice(4)],
+		shell: false,
+		env,
+	};
 }
 
 export function createOutputForwarder(stream) {
@@ -906,7 +954,7 @@ export async function runPlannedTests({
 				fileCheck.selected,
 				Array.isArray(relatedFiles) ? relatedFiles : undefined,
 			);
-			const invocation = resolvePnpmInvocation(pnpmArgs);
+			const invocation = resolveTestInvocation(pnpmArgs);
 			const commandResult = await runCommandImpl(
 				invocation.command,
 				invocation.args,
@@ -1018,6 +1066,44 @@ function intersectRelatedRuns(runs, requested, manifestWorkspaces) {
 	});
 }
 
+// 只有选中 Desktop 时才需要 Electron；只跑其他 workspace 不应被桌面依赖拦住。
+export function selectionNeedsElectron(
+	manifestWorkspaces,
+	{ workspaces = [], excludeWorkspaces = [] } = {},
+) {
+	const desktop = manifestWorkspaces.filter(
+		(workspace) => normalizeRelPath(workspace.cwd) === "apps/desktop",
+	);
+	return (
+		filterRunsByWorkspace(
+			desktop.map((workspace) => ({ workspace })),
+			{ workspaces, excludeWorkspaces },
+		).length > 0
+	);
+}
+
+// 新 worktree 没装依赖、或 Electron 没解出 dist 时，vitest 会让几十个文件各自报错，
+// 极易被当成被测代码或「环境问题」放过。开跑前只读检查一次，直接给出处置命令。
+export function findDependencyInstallIssues(
+	root = ROOT,
+	env = process.env,
+	{ needsElectron = true } = {},
+) {
+	if (!fs.existsSync(path.join(root, "node_modules", ".modules.yaml"))) {
+		return ["依赖尚未安装：请先在当前 checkout 运行 pnpm install"];
+	}
+	if (!needsElectron || electronBinaryCheckSkipReason(env)) return [];
+	if (!fs.existsSync(path.join(root, "node_modules", "electron", "package.json"))) {
+		return ["依赖安装不完整（缺少 node_modules/electron）：请在当前 checkout 运行 pnpm install"];
+	}
+	const electronIssue = findElectronBinaryIssue(root);
+	if (!electronIssue) return [];
+	return [
+		`Electron 安装不完整（${electronIssue.reason}: ${path.relative(root, electronIssue.missingPath)}）：` +
+			"请运行 pnpm install，或 node scripts/ensure-deps.mjs --electron-binary 单独补装",
+	];
+}
+
 async function main() {
 	const options = parseCliOptions(process.argv.slice(2));
 	const {
@@ -1025,6 +1111,7 @@ async function main() {
 		tier,
 		excludeWorkspaces,
 		workspaceConcurrency,
+		lock: useLock,
 		noLock,
 		related,
 	} = options;
@@ -1062,8 +1149,22 @@ async function main() {
 		related &&
 		(relatedPlan?.mode === "full" || relatedPlan?.runTestRunner);
 	if (related && !willRunWorkspaces && !willRunTestRunner) return;
+	if (willRunWorkspaces) {
+		const manifest = (await import("./test-workspaces.config.mjs")).default;
+		const installIssues = findDependencyInstallIssues(ROOT, process.env, {
+			needsElectron: selectionNeedsElectron(manifest.workspaces, {
+				workspaces,
+				excludeWorkspaces,
+			}),
+		});
+		if (installIssues.length > 0) {
+			for (const issue of installIssues) console.error(`DEPENDENCY_SETUP_INCOMPLETE ${issue}`);
+			process.exitCode = 1;
+			return;
+		}
+	}
 
-	const lock = shouldUseTestGateLock({ all, tier, noLock })
+	const lock = shouldUseTestGateLock({ all, tier, lock: useLock, noLock })
 		? await acquireTestGateLock({
 				repoRoot: ROOT,
 				owner: {

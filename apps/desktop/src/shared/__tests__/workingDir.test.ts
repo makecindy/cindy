@@ -1,12 +1,27 @@
 import { describe, expect, it } from 'vitest';
 
 import {
+  normalizeWorkingDirForComparison,
   normalizeWorkingDirForGrouping,
   normalizeWorkingDirForProjectSettings,
   normalizeWorkingDirForStorage,
+  workingDirEquals,
 } from '../workingDir';
 
 describe('workingDir normalization', () => {
+  // #7644 (unit): grouping and settings used to share strict container matching.
+  // Mixed-case Windows containers must become searchable without changing the settings scope.
+  it.each([
+    ['C:/Work/Repo/.CINDY-WORKTREES/topic', 'C:/Work/Repo'],
+    ['//Server/Share/Repo/.XDT-WORKTREES/topic', '//Server/Share/Repo'],
+  ])('groups %s while preserving its independent project settings', (value, base) => {
+    expect(normalizeWorkingDirForGrouping(value)).toBe(base);
+    expect(normalizeWorkingDirForComparison(value)).toBe(normalizeWorkingDirForComparison(base));
+    expect(normalizeWorkingDirForProjectSettings(value)).toBe(value);
+    const standardContainer = value.replace(/\.(CINDY|XDT)-WORKTREES/, (name) => name.toLowerCase());
+    expect(normalizeWorkingDirForProjectSettings(standardContainer)).toBe(base);
+  });
+
   it('preserves significant whitespace through repeated storage normalization', () => {
     for (const path of ['/repo ', '/repo /', '/repo\t']) {
       const expected = path.endsWith('/') ? path.slice(0, -1) : path;
@@ -46,5 +61,27 @@ describe('workingDir normalization', () => {
     expect(
       normalizeWorkingDirForProjectSettings('/repo/.claude/worktrees/manual/src'),
     ).toBe('/repo/.claude/worktrees/manual/src');
+  });
+});
+
+describe('workingDirEquals', () => {
+  it('ignores storage-level spelling differences on every platform', () => {
+    expect(workingDirEquals('/repo/foo', '/repo/foo/')).toBe(true);
+    expect(workingDirEquals('D:\\repo\\foo', 'D:/repo/foo', { windows: true })).toBe(true);
+    expect(workingDirEquals('\\\\?\\D:\\repo\\foo', 'D:/repo/foo')).toBe(true);
+  });
+
+  it('folds Windows drive / UNC case only when asked to', () => {
+    expect(workingDirEquals('D:/repo/foo', 'd:/REPO/FOO', { windows: true })).toBe(true);
+    expect(workingDirEquals('//server/share/foo', '//SERVER/SHARE/FOO', { windows: true })).toBe(true);
+    expect(workingDirEquals('D:/repo/foo', 'd:/REPO/FOO', { windows: false })).toBe(false);
+    // POSIX 下大小写敏感:不能把两个真实存在的不同目录当成同一个。
+    expect(workingDirEquals('/repo/foo', '/REPO/FOO', { windows: true })).toBe(false);
+  });
+
+  it('reports distinct and empty directories as not equal', () => {
+    expect(workingDirEquals('/repo/foo', '/repo/bar')).toBe(false);
+    expect(workingDirEquals('/repo/foo', null)).toBe(false);
+    expect(workingDirEquals(undefined, '')).toBe(false);
   });
 });

@@ -1,3 +1,4 @@
+import { resolveUserDisplayText } from '@/components/chat/userMessageDisplayText';
 /**
  * messageNavRailModel 纯逻辑单测:条目派生过滤 / 当前提问判定 / 空间与截断规划。
  * 全部 node 环境,无 DOM(组件侧几何测量不在此覆盖,见 MessageNavRail.tsx 注释)。
@@ -62,8 +63,22 @@ describe('deriveNavRailEntries', () => {
         automationOrigin: { kind: 'scheduler', scheduleId: 'schedule-1' },
       }),
       msg({ clientId: 'u3', role: 'user', content: '普通提问', automationOrigin: undefined }),
+      // 其他任务经工具发来的消息不是每轮重复的调度 prompt,保持普通刻度。
+      msg({
+        clientId: 'u4',
+        role: 'user',
+        content: '任务发来',
+        automationOrigin: { kind: 'session', senderSessionId: 'caller' },
+      }),
+      // Hook 渠道(IM)提问复用 scheduler 来源,但它是真人提问,不是自动化。
+      msg({
+        clientId: 'u5',
+        role: 'user',
+        content: 'Slack 提问',
+        automationOrigin: { kind: 'scheduler', scheduleId: 'hook:slack-1', scheduleName: 'Hook · Slack' },
+      }),
     ]);
-    expect(entries.map((entry) => entry.isAutomation)).toEqual([false, true, false]);
+    expect(entries.map((entry) => entry.isAutomation)).toEqual([false, true, false, false, false]);
   });
 
   it('运行中插话(delivery=steer)不算新一轮,不产生刻度', () => {
@@ -612,4 +627,14 @@ describe('forwardNavRailWheel', () => {
   it('滚动容器缺席(卸载竞态)时静默不抛', () => {
     expect(() => forwardNavRailWheel(null, { deltaX: 0, deltaY: 10 })).not.toThrow();
   });
+});
+
+
+// Unit regression: bubble and navigation share this projection, which formerly
+// returned JSON-quoted history verbatim. Human examples must remain literal.
+it('shows readable delegated history only on attributed task messages', () => {
+  const content = '[来源] 用户原话由宿主从已接收的输入原样保留。\n用户原话："只检查"\nagent补充："第一段\\n\\n保留 `\\\\n`"';
+  expect(resolveUserDisplayText({ content, automationOrigin: { kind: 'session' } }))
+    .toContain('第一段\n\n保留 `\\n`');
+  expect(resolveUserDisplayText({ content })).toBe(content);
 });

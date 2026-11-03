@@ -13,18 +13,22 @@ import React from 'react';
 import { MemoryRouter, Route, Routes, useLocation } from 'react-router-dom';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
+import type { ProviderShareReceived } from '@cindy/device-link';
 import type { ProviderView } from '@cindy/model-providers';
 
 const {
   wizardSpy,
+  wizardPropsSpy,
   providersState,
   codexAuthState,
   codexAuthActions,
   toastError,
   setModelVisibilitiesSpy,
   customDialogSpy,
+  providerRefetch,
 } = vi.hoisted(() => ({
   wizardSpy: vi.fn(),
+  wizardPropsSpy: vi.fn(),
   providersState: { providers: [] as unknown[], order: [] as string[] },
   codexAuthState: {
     state: { kind: 'unauthenticated' } as Record<string, unknown>,
@@ -40,6 +44,7 @@ const {
   toastError: vi.fn(),
   setModelVisibilitiesSpy: vi.fn(() => true),
   customDialogSpy: vi.fn(),
+  providerRefetch: vi.fn(async (): Promise<void> => undefined),
 }));
 
 vi.mock('react-i18next', () => ({
@@ -52,11 +57,12 @@ vi.mock('@/hooks/useProviders', () => ({
     providerOrder: providersState.order,
     ownerGeneration: 1,
     loading: false,
-    refetch: vi.fn(),
+    refetch: providerRefetch,
   }),
 }));
 
 vi.mock('@/contexts/AuthContext', () => ({
+  useOptionalAuthUser: () => null,
   useAuth: () => ({ mode: 'local', exitLocalMode: vi.fn(async () => undefined) }),
 }));
 
@@ -115,15 +121,17 @@ vi.mock('@/state/modelVisibilityPrefs', () => ({
 }));
 
 vi.mock('@/components/settings/ProviderConnectionDialog', () => ({
-  ProviderConnectionDialog: (props: unknown) => {
+  ProviderConnectionDialog: (props: { initial?: { name?: string } }) => {
     customDialogSpy(props);
-    return React.createElement('div', { 'data-testid': 'custom-provider-dialog-stub' });
+    return React.createElement('div', { 'data-testid': 'custom-provider-dialog-stub' },
+      React.createElement('input', { 'aria-label': props.initial ? 'edit connection draft' : 'custom connection draft', defaultValue: props.initial?.name }));
   },
 }));
 
 vi.mock('@/components/settings/AddProviderWizard', () => ({
   AddProviderWizard: (props: { entry?: unknown }) => {
     wizardSpy(props.entry);
+    wizardPropsSpy(props);
     return React.createElement('div', { 'data-testid': 'wizard-stub' });
   },
 }));
@@ -132,10 +140,14 @@ import { updateCustomProvider } from '@/lib/customProviders';
 
 import { ProvidersSection } from '@/components/settings/ProvidersSection';
 import { useProviderSubscriptionCard } from '@/components/settings/useProviderSubscriptionCard';
+import { __testing as localProviderGroupsTesting } from '@/features/provider-group/useLocalProviderGroups';
+import { resetProviderShareStoreForTests } from '@/features/provider-share/providerShareStore';
 
 vi.mock('@/components/settings/useProviderSubscriptionCard', () => ({
   useProviderSubscriptionCard: vi.fn(() => null),
 }));
+
+vi.mock('@/components/settings/LlamaCppProviderDetail', () => ({ LlamaCppProviderDetail: () => null }));
 
 vi.mock('@/components/settings/OllamaProviderDetail', () => ({ OllamaProviderDetail: () => null }));
 
@@ -177,6 +189,7 @@ function renderAt(search: string) {
 }
 
 beforeEach(() => {
+  providerRefetch.mockReset().mockResolvedValue(undefined);
   vi.mocked(useProviderSubscriptionCard).mockReset().mockReturnValue(null);
   confirmSpy.mockReset().mockResolvedValue(true);
   codexAuthState.state = { kind: 'unauthenticated' };
@@ -200,6 +213,7 @@ beforeEach(() => {
       onProviderOAuthProgress: vi.fn(() => () => undefined),
       auth: { logout: codexAuthActions.logout },
       scanLocalCli: vi.fn(async () => ({ detections: [] })),
+      llamaCppStatus: vi.fn(async () => ({ installed: false, supported: true, running: false, models: [] })),
       localModelStatus: vi.fn(async () => ({ kind: 'ready' })),
       onLocalModelStatus: vi.fn(() => () => undefined),
       requestProviderModelsAutoRefresh: vi.fn(async () => ({ ok: true })),
@@ -254,10 +268,19 @@ describe('ProvidersSection — 深链定位', () => {
     },
   );
 
-  it.each(['anthropic', 'xai', 'cindy-local-ollama'])('shows the saved name in both sidebar and detail header for %s', async (id) => {
+  it('uses the same local header and empty model treatment for llama.cpp', async () => {
+    providersState.providers = [makeProvider('cindy-local-llamacpp', { name: 'llama.cpp', source: 'user', auth: { method: 'none' }, connected: true })];
+    renderAt('?tab=providers&connect=cindy-local-llamacpp');
+    expect(await screen.findByText(/^settings\.providers\.local\.subtitle/)).toBeTruthy();
+    expect(screen.queryByText('settings.providers.detail.emptyModelsConnected')).toBeNull();
+    expect(screen.queryByText('settings.providers.pill.configured')).toBeNull();
+    expect(await screen.findByText('settings.providers.llamacpp.startOnUse')).toBeTruthy();
+    expect(screen.queryByRole('button', { name: 'settings.providers.custom.editAria' })).toBeNull();
+  });
+  it.each(['anthropic', 'xai', 'cindy-local-ollama', 'cindy-local-llamacpp'])('shows the saved name in both sidebar and detail header for %s', async (id) => {
     providersState.providers = [makeProvider(id, {
       name: 'My renamed provider', connected: true,
-      source: id === 'cindy-local-ollama' ? 'user' : 'builtin',
+      source: id.startsWith('cindy-local-') ? 'user' : 'builtin',
     })];
     renderAt(`?tab=providers&connect=${id}`);
     await waitFor(() => expect(screen.getAllByText('My renamed provider').length).toBeGreaterThanOrEqual(2));
@@ -299,7 +322,7 @@ describe('ProvidersSection — 深链定位', () => {
   );
 
   it.each(['subscriptionAccount', 'openAiAccount'] as const)(
-    'collapses usage on %s changes but retains expansion on quota refresh',
+    'shows usage windows without a details disclosure across %s changes',
     async (identityField) => {
       const account = { title: 'ChatGPT', windows: [{ key: 'weekly', title: 'Weekly', window: { utilization: 20 }, detail: 'Weekly usage details' }] };
       vi.mocked(useProviderSubscriptionCard).mockReturnValue(account);
@@ -309,16 +332,13 @@ describe('ProvidersSection — 深链定位', () => {
       });
       providersState.providers = [provider];
       const view = render(<MemoryRouter><ProvidersSection /></MemoryRouter>);
-      fireEvent.click(await screen.findByRole('button', { name: 'quotaCard.usageTitle' }));
-      const refresh = () => view.rerender(
-        <MemoryRouter><ProvidersSection /></MemoryRouter>,
-      );
-      vi.mocked(useProviderSubscriptionCard).mockReturnValue({ ...account, updatedAt: Date.now() });
-      refresh();
-      expect(screen.getByRole('button', { name: 'quotaCard.usageTitle' }).getAttribute('aria-expanded')).toBe('true');
+      const usage = await screen.findByTestId('provider-usage-module');
+      expect(within(usage).getByRole('progressbar', { name: 'Weekly' })).toBeTruthy();
+      expect(within(usage).queryByText('Weekly usage details')).toBeNull();
+      expect(screen.queryByRole('button', { name: 'quotaCard.usageTitle' })).toBeNull();
       providersState.providers = [{ ...provider, [identityField]: { source: 'oauth', identity: 'second@example.test' } }];
-      refresh();
-      expect(screen.getByRole('button', { name: 'quotaCard.usageTitle' }).getAttribute('aria-expanded')).toBe('false');
+      view.rerender(<MemoryRouter><ProvidersSection /></MemoryRouter>);
+      expect(within(screen.getByTestId('provider-usage-module')).getByRole('progressbar', { name: 'Weekly' })).toBeTruthy();
     },
   );
 
@@ -835,6 +855,32 @@ describe('ProvidersSection — 深链定位', () => {
     await waitFor(() => expect(screen.getByTestId('search').textContent).toBe('?tab=providers'));
   });
 
+  it('keeps enterprise models visible inside the unified detail layout without connection editing', async () => {
+    const status = { state: 'ready', providers: [{ providerId: 'byok-team', state: 'ready' }] } as const;
+    const retryByok = vi.fn(async () => status);
+    Object.assign(window.electronAPI, {
+      modelAccess: { getByokStatus: vi.fn(async () => status), retryByok },
+    });
+    providersState.providers = [makeProvider('byok-team', {
+      name: 'Enterprise Provider', source: 'organization',
+      connected: true, agents: ['codex'], auth: { method: 'managed' },
+      models: { codex: [{
+        id: 'byok-team/company-chat', name: 'Company Chat', contextWindow: 128000,
+        efforts: [], defaultEffort: null,
+      }] },
+    })];
+    renderAt('?tab=providers&connect=byok-team&model=byok-team%2Fcompany-chat&agent=codex');
+
+    await screen.findByRole('switch', { name: 'Company Chat' });
+    await waitFor(() => expect(document.querySelector('[data-deep-link-target="true"]')).not.toBeNull());
+    expect(customDialogSpy).not.toHaveBeenCalled();
+    expect(screen.queryByRole('button', { name: 'settings.providers.models.refreshAria' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'settings.providers.custom.editAria' })).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: 'settings.providers.byok.refresh' }));
+    await waitFor(() => expect(retryByok).toHaveBeenCalledOnce());
+    expect(updateCustomProvider).not.toHaveBeenCalled();
+  });
+
   it('connect=<目录外 id> → 视为 preset id,向导 preset entry 打开', async () => {
     renderAt('?tab=providers&connect=deepseek');
 
@@ -975,3 +1021,306 @@ describe('ProvidersSection — 深链定位', () => {
     });
   });
 });
+
+describe('ProvidersSection — 允许被远程调用与供应商组', () => {
+  afterEach(() => localProviderGroupsTesting.reset());
+
+  // Test value: the real settings rail must separate established outgoing shares and keep local
+  // reordering within that section. Existing deep-link tests never render an owned share.
+  // Minimal input: two shared providers interleaved with one ordinary provider; tier: unit.
+  it('separates outgoing shares, preserves selection and reorders within the shared section', async () => {
+    resetProviderShareStoreForTests();
+    let changed!: () => void;
+    let sharedIds = ['shared-a', 'shared-b'];
+    Object.assign(window.electronAPI, {
+      providerShare: {
+        command: vi.fn(async (cmd: { action: string }) => {
+          if (cmd.action === 'received') return [];
+          if (cmd.action === 'shared-provider-ids') return { ready: true, providerIds: sharedIds };
+          throw new Error(`unexpected ${cmd.action}`);
+        }),
+        onReceivedChanged: () => () => undefined,
+        onOwnedChanged: (listener: () => void) => { changed = listener; return () => undefined; },
+      },
+    });
+    providersState.providers = [
+      makeProvider('shared-a', { name: 'Shared A', connected: true }),
+      makeProvider('ordinary', { name: 'Ordinary', connected: true }),
+      makeProvider('shared-b', { name: 'Shared B', connected: true }),
+    ];
+    providersState.order = ['shared-a', 'ordinary', 'shared-b'];
+    renderAt('?tab=providers&connect=shared-a');
+    const group = await screen.findByRole('group', { name: 'providerShare.owned.title' });
+    const rowIds = () => [...group.querySelectorAll('[data-sortable-id]')].map(row => row.getAttribute('data-sortable-id'));
+    expect(rowIds()).toEqual(['shared-a', 'shared-b']);
+    expect(within(group).queryByRole('button', { name: /Ordinary/ })).toBeNull();
+    expect(screen.getAllByRole('button', { name: /Shared A/ })).toHaveLength(1);
+    expect(within(group).getByRole('button', { name: /Shared A/ }).getAttribute('aria-current')).toBe('true');
+
+    fireEvent.keyDown(within(group).getAllByRole('button', { name: 'settings.providers.order.handle' })[0], { key: 'ArrowDown' });
+    await waitFor(() => expect(rowIds()).toEqual(['shared-b', 'shared-a']));
+    expect(window.electronAPI.maker.setProviderOrder).toHaveBeenLastCalledWith(undefined, 1, ['shared-b', 'ordinary', 'shared-a']);
+    fireEvent.click(within(group).getByRole('button', { name: /Shared B/ }));
+    expect(screen.getByTestId('provider-detail-identity').textContent).toContain('Shared B');
+
+    sharedIds = [];
+    await act(async () => changed());
+    expect(screen.queryByTestId('provider-share-owned')).toBeNull();
+    expect(screen.getByRole('button', { name: /Shared B/ }).getAttribute('aria-current')).toBe('true');
+    resetProviderShareStoreForTests();
+  });
+
+  it('folds the provider group into the remote-use row and waits for the group settings before showing it', async () => {
+    localProviderGroupsTesting.reset();
+    let answer!: (groups: Record<string, unknown>) => void;
+    const list = new Promise<Record<string, unknown>>((resolve) => {
+      answer = resolve;
+    });
+    const command = vi.fn((cmd: { action: string }) =>
+      cmd.action === 'list' ? list : Promise.reject(new Error(`unexpected ${cmd.action}`)),
+    );
+    Object.assign(window.electronAPI, {
+      deviceLink: {
+        getState: vi.fn(async () => ({ remoteControlEnabled: true })),
+        listDevices: vi.fn(async () => ({ devices: [] })),
+        onPresenceChanged: () => () => undefined,
+        onControlTargetChanged: () => () => undefined,
+      },
+      providerGroup: { command, onChanged: () => () => undefined },
+    });
+    providersState.providers = [
+      makeProvider('anthropic', { name: 'Anthropic', connected: true, remoteInvocationEnabled: true }),
+    ];
+    renderAt('?tab=providers&connect=anthropic');
+    await waitFor(() => expect(command).toHaveBeenCalledWith({ action: 'list' }));
+    await waitFor(() => expect(window.electronAPI.deviceLink.getState).toHaveBeenCalled());
+    // 等「允许远程控制」读完，只剩组设置没读到。
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+    // 组设置还没读到：整行先不出现，不先显示「远程与分享」再跳成组。
+    expect(screen.queryByTestId('provider-remote-access')).toBeNull();
+
+    await act(async () => {
+      answer({
+        anthropic: {
+          strategy: 'least',
+          autoSwitch: true,
+          members: [
+            { key: 'local', kind: 'local', agentDeviceId: null, providerId: 'anthropic', limit: 4, weight: 1, paused: false },
+            { key: 'device:mini:anthropic', kind: 'device', agentDeviceId: 'mini', providerId: 'anthropic', limit: 4, weight: 1, paused: false },
+          ],
+        },
+      });
+      await list;
+    });
+    const row = await screen.findByTestId('provider-remote-access');
+    // 组的状态写在入口按钮上，不再单独占一行；有组时说明 Agent 由组选电脑运行。
+    expect(within(row).getByTestId('provider-share-entry').textContent).toBe('settings.providers.remote.groupBadge');
+    expect(within(row).getByText('settings.providers.detail.remoteAccess.descriptionGroup')).toBeTruthy();
+    expect(within(row).getByRole('switch', { name: 'settings.providers.detail.remoteAccess.ariaLabel' })).toBeTruthy();
+    expect(screen.queryByTestId('provider-group-row')).toBeNull();
+    expect(command).not.toHaveBeenCalledWith(expect.objectContaining({ action: 'get' }));
+  });
+});
+
+// 模型面板底部「配置模型」在分享来的供应商上带 receivedShare，设置页直接选中那一条。
+describe('ProvidersSection — 分享来的供应商深链', () => {
+  const share: ProviderShareReceived = {
+    shareId: 'share-1',
+    memberId: 'mem-1',
+    providerId: 'anthropic',
+    providerLabel: 'Anthropic',
+    hostDeviceId: 'host-1',
+    deviceName: "Magi's Mac Mini",
+    owner: { displayName: 'Magi', avatarUrl: null, region: 'global' },
+    // 暂停中的分享不读对方目录，详情页不依赖 device-link。
+    status: 'paused',
+    hostOnline: true,
+    hostCapable: true,
+  };
+
+  /** 返回推送新名单的函数(模拟 main 的 RECEIVED_CHANGED)。 */
+  function stubReceived(received: ProviderShareReceived[]) {
+    resetProviderShareStoreForTests();
+    let push: ((list: ProviderShareReceived[]) => void) | null = null;
+    const command = vi.fn(async (cmd: { action: string }) => {
+      if (cmd.action === 'received') return received;
+      throw new Error(`unexpected ${cmd.action}`);
+    });
+    Object.assign(window.electronAPI, {
+      providerShare: {
+        command,
+        onReceivedChanged: (listener: (list: ProviderShareReceived[]) => void) => {
+          push = listener;
+          return () => undefined;
+        },
+      },
+    });
+    return (list: ProviderShareReceived[]) => act(() => push?.(list));
+  }
+
+  afterEach(() => resetProviderShareStoreForTests());
+
+  // #8065 r4430950535: unit/jsdom, real parent selection and deferred refetch.
+  // The earlier completion test protected an edit draft but not the detail pane.
+  // Minimal race: complete a wizard, select a local/shared row while refreshing,
+  // then settle the old refresh; the newer detail selection must remain visible.
+  it.each(['local', 'shared'] as const)('keeps a newer %s provider selection after wizard refresh', async target => {
+    stubReceived([{ ...share, providerLabel: 'Shared fixture' }]);
+    providersState.providers = [
+      makeProvider('anthropic', { name: 'Anthropic', connected: true }),
+      makeProvider('added-endpoint', { name: 'Created endpoint', connected: true }),
+    ];
+    renderAt('?tab=providers&wizard=1');
+    await screen.findByTestId('wizard-stub');
+    let release!: () => void;
+    providerRefetch.mockReturnValueOnce(new Promise<void>(resolve => { release = resolve; }));
+    let completion!: Promise<void>;
+    act(() => { completion = wizardPropsSpy.mock.lastCall![0].onDone('added-endpoint'); });
+    fireEvent.click(await screen.findByRole('button', { name: target === 'local' ? /^Anthropic/ : /Shared fixture/ }));
+    if (target === 'local') expect(screen.getByTestId('provider-detail-identity').textContent).toContain('Anthropic');
+    else await screen.findByTestId('provider-share-received-detail');
+    await act(async () => { release(); await completion; });
+    if (target === 'local') expect(screen.getByTestId('provider-detail-identity').textContent).toContain('Anthropic');
+    else expect(screen.getByTestId('provider-share-received-detail')).toBeTruthy();
+  });
+
+  it('receivedShare=<shareId> → 选中那条分享来的供应商；参数消费后清除', async () => {
+    stubReceived([share]);
+    renderAt('?tab=providers&receivedShare=share-1');
+
+    await screen.findByTestId('provider-share-received-detail');
+    await waitFor(() => expect(screen.getByTestId('search').textContent).toBe('?tab=providers'));
+  });
+
+  it('这条分享已不在列表里 → 只停在供应商页，参数同样清除', async () => {
+    stubReceived([{ ...share, shareId: 'share-other' }]);
+    renderAt('?tab=providers&receivedShare=share-gone');
+
+    await waitFor(() => expect(screen.getByTestId('search').textContent).toBe('?tab=providers'));
+    expect(screen.queryByTestId('provider-share-received-detail')).toBeNull();
+  });
+
+  it('名单暂时为空(断线、换账号) → 保留参数，名单回来后再选中', async () => {
+    const push = stubReceived([]);
+    renderAt('?tab=providers&receivedShare=share-1');
+
+    await waitFor(() => expect(window.electronAPI.providerShare.command).toHaveBeenCalledWith({ action: 'received' }));
+    await act(async () => { await new Promise((resolve) => setTimeout(resolve, 0)); });
+    expect(screen.getByTestId('search').textContent).toBe('?tab=providers&receivedShare=share-1');
+    expect(screen.queryByTestId('provider-share-received-detail')).toBeNull();
+
+    push([share]);
+    await screen.findByTestId('provider-share-received-detail');
+    await waitFor(() => expect(screen.getByTestId('search').textContent).toBe('?tab=providers'));
+  });
+
+  it('名单暂时为空期间用户改选了别的供应商 → 放弃跳转，名单回来后不切走右栏', async () => {
+    providersState.providers = [makeProvider('anthropic', { name: 'Anthropic', connected: true })];
+    const push = stubReceived([]);
+    renderAt('?tab=providers&receivedShare=share-1');
+
+    await waitFor(() => expect(window.electronAPI.providerShare.command).toHaveBeenCalledWith({ action: 'received' }));
+    await act(async () => { await new Promise((resolve) => setTimeout(resolve, 0)); });
+    fireEvent.click(await screen.findByRole('button', { name: /^Anthropic/ }));
+    await waitFor(() => expect(screen.getByTestId('search').textContent).toBe('?tab=providers'));
+
+    push([share]);
+    await act(async () => { await new Promise((resolve) => setTimeout(resolve, 0)); });
+    expect(screen.queryByTestId('provider-share-received-detail')).toBeNull();
+    expect(screen.getByTestId('provider-detail-identity').textContent).toContain('Anthropic');
+  });
+});
+
+
+it('routes a custom-name search through the existing wizard and resumes its draft on cancel', async () => {
+  renderAt('?tab=providers&wizard=1');
+  await screen.findByTestId('wizard-stub');
+  act(() => wizardPropsSpy.mock.lastCall![0].onOpenCustomForm());
+  await screen.findByTestId('custom-provider-dialog-stub');
+  expect(customDialogSpy.mock.lastCall![0].suspended).toBe(false);
+  act(() => customDialogSpy.mock.lastCall![0].onSelectProvider({ kind: 'preset', presetId: 'deepseek' }));
+  expect(wizardSpy).toHaveBeenLastCalledWith({ kind: 'preset', presetId: 'deepseek' });
+  expect(customDialogSpy.mock.lastCall![0].suspended).toBe(true);
+  act(() => wizardPropsSpy.mock.lastCall![0].onClose());
+  expect(screen.queryByTestId('wizard-stub')).toBeNull();
+  expect(customDialogSpy.mock.lastCall![0].suspended).toBe(false);
+});
+
+// #8065 r4435752676: unit/jsdom, real parent state with child boundary stubs.
+// Prior deferred-refresh coverage kept drafts/selections but did not reopen a wizard.
+// Complete, reopen through either entry while refreshing, then settle the old refresh:
+// the completed instance must unmount and the new instance must survive.
+it.each(['add', 'suggestion'] as const)('mounts a fresh wizard from %s while the completed wizard refreshes', async entry => {
+  providersState.providers.push(makeProvider('openai', { name: 'OpenAI' }));
+  vi.mocked(window.electronAPI.maker.scanLocalCli).mockResolvedValue({ detections: [{
+    cli: 'codex-cli', providerId: 'openai', installed: true, loggedIn: true, sharedWithCindy: false,
+  }] });
+  renderAt('?tab=providers&wizard=1');
+  const completedWizard = await screen.findByTestId('wizard-stub');
+  let release!: () => void;
+  providerRefetch.mockReturnValueOnce(new Promise<void>(resolve => { release = resolve; }));
+  let completion!: Promise<void>;
+  act(() => { completion = wizardPropsSpy.mock.lastCall![0].onDone(); });
+  expect(screen.queryByTestId('wizard-stub')).toBeNull();
+  fireEvent.click(await screen.findByRole('button', {
+    name: entry === 'add' ? 'settings.providers.addProvider' : /settings.providers.detect.action/,
+  }));
+  const reopenedWizard = screen.getByTestId('wizard-stub');
+  expect(reopenedWizard).not.toBe(completedWizard);
+  expect(wizardSpy).toHaveBeenLastCalledWith(entry === 'add' ? undefined : { kind: 'builtin', providerId: 'openai' });
+  await act(async () => { release(); await completion; });
+  expect(screen.getByTestId('wizard-stub')).toBe(reopenedWizard);
+});
+
+// #8065 r4430752284: the existing cancel test never deferred completion/refetch.
+// Renderer unit: real parent state, mocked child boundaries; a newly opened edit
+// and its unsaved input must survive the old search wizard's refresh completion.
+it('keeps a newly opened edit draft when the completed search wizard refresh settles', async () => {
+  providersState.providers = [makeProvider('existing-endpoint', {
+    name: 'Existing endpoint', source: 'user', connected: false, auth: { method: 'apiKey' },
+    models: { 'claude-code': [{ id: 'fixture-model', name: 'Fixture', contextWindow: 100, efforts: [], defaultEffort: null }] },
+  })];
+  renderAt('?tab=providers&connect=existing-endpoint');
+  await screen.findByRole('button', { name: 'settings.providers.custom.editAria' });
+  fireEvent.click(screen.getByRole('button', { name: 'settings.providers.addProvider' }));
+  await screen.findByTestId('wizard-stub');
+  act(() => wizardPropsSpy.mock.lastCall![0].onOpenCustomForm());
+  act(() => customDialogSpy.mock.lastCall![0].onSelectProvider({ kind: 'preset', presetId: 'deepseek' }));
+  let release!: () => void;
+  providerRefetch.mockReturnValueOnce(new Promise<void>(resolve => { release = resolve; }));
+  let completion!: Promise<void>;
+  act(() => { completion = wizardPropsSpy.mock.lastCall![0].onDone('added-endpoint'); });
+  fireEvent.click(screen.getByRole('button', { name: 'settings.providers.custom.editAria' }));
+  const input = screen.getByRole('textbox', { name: 'edit connection draft' });
+  fireEvent.change(input, { target: { value: 'Unsaved edit' } });
+  await act(async () => { release(); await completion; });
+  expect(screen.getByRole('textbox', { name: 'edit connection draft' })).toBe(input);
+  expect((input as HTMLInputElement).value).toBe('Unsaved edit');
+  expect(customDialogSpy.mock.lastCall![0].initial.id).toBe('existing-endpoint');
+});
+
+// #8065 r4430831420: real parent state with child boundary stubs (unit/jsdom).
+// Prior cancel coverage did not distinguish connection failures from stale targets.
+// The smallest caller reason must restore the same draft, with a catalog toast
+// only when the target is unavailable; connector errors are already shown upstream.
+it.each(['connection-failed', 'target-unavailable'] as const)(
+  'resumes the search draft with the correct toast policy for %s', async reason => {
+    renderAt('?tab=providers&wizard=1');
+    await screen.findByTestId('wizard-stub');
+    act(() => wizardPropsSpy.mock.lastCall![0].onOpenCustomForm());
+    const input = screen.getByRole('textbox', { name: 'custom connection draft' });
+    fireEvent.change(input, { target: { value: 'My unsaved endpoint' } });
+    act(() => customDialogSpy.mock.lastCall![0].onSelectProvider({ kind: 'ollama' }));
+    expect(customDialogSpy.mock.lastCall![0].suspended).toBe(true);
+    toastError.mockClear();
+    act(() => wizardPropsSpy.mock.lastCall![0].onEntryUnavailable(reason));
+    expect(screen.queryByTestId('wizard-stub')).toBeNull();
+    expect(customDialogSpy.mock.lastCall![0].suspended).toBe(false);
+    expect(screen.getByRole('textbox', { name: 'custom connection draft' })).toBe(input);
+    expect((input as HTMLInputElement).value).toBe('My unsaved endpoint');
+    if (reason === 'connection-failed') expect(toastError).not.toHaveBeenCalled();
+    else expect(toastError).toHaveBeenCalledExactlyOnceWith('settings.providers.custom.nameSearchUnavailable');
+  },
+);

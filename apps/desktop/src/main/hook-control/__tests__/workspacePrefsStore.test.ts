@@ -26,6 +26,10 @@ import {
   resolveWorkspacePrefOverrides,
   setWorkspacePref,
 } from '../workspacePrefsStore';
+import {
+  getWorkspaceProviderSource,
+  setWorkspaceProviderSource,
+} from '../workspaceProviderSourceStore';
 
 describe('workspacePrefsStore', () => {
   beforeEach(() => {
@@ -664,5 +668,65 @@ describe('resolveWorkspacePrefOverrides', () => {
 
   it('尚未迁移时允许沿用 dispatch（升级窗口）', () => {
     expect(resolveWorkspacePrefOverrides(null, dispatched, false)).toEqual(dispatched);
+  });
+});
+
+describe('server 快照改模型时清理配对来源(issue #5912)', () => {
+  beforeEach(() => {
+    tmp.dir = fs.mkdtempSync(path.join(os.tmpdir(), 'wprefs-src-'));
+  });
+  afterEach(() => {
+    fs.rmSync(tmp.dir, { recursive: true, force: true });
+  });
+
+  const row = (workspace: string, model: string | null) => ({
+    workspace,
+    model,
+    effort: null,
+    agentKind: model === null ? null : 'claude-code',
+    permissionMode: null,
+  });
+  const syncedPref = (workspace: string, model: string) => {
+    const saved = setWorkspacePref('x', null, workspace, { model, agentKind: 'codex' });
+    markWorkspacePrefMirrored('x', null, workspace, saved.rev);
+  };
+
+  it('主动推送清空 / 改掉已同步的目录模型: 同键来源清除, 模型未变的目录来源保留', () => {
+    syncedPref('chat', 'gpt-test');
+    syncedPref('repo', 'gpt-test');
+    syncedPref('same', 'gpt-test');
+    setWorkspaceProviderSource('x', null, 'chat', 'openai');
+    setWorkspaceProviderSource('x', null, 'repo', 'openai');
+    setWorkspaceProviderSource('x', null, 'same', 'openai');
+
+    applyIncomingServerWorkspacePrefs('x', [
+      row('repo', 'claude-test'),
+      { ...row('same', 'gpt-test'), agentKind: 'codex' },
+    ]);
+
+    expect(getWorkspaceProviderSource('x', null, 'chat')).toBeNull();
+    expect(getWorkspaceProviderSource('x', null, 'repo')).toBeNull();
+    expect(getWorkspaceProviderSource('x', null, 'same')).toBe('openai');
+  });
+
+  it('重连镜像(reconcile)落快照同样清理: 离线期间 /model 改了模型', () => {
+    reconcileWorkspacePrefsForMirror('x', []);
+    syncedPref('chat', 'gpt-test');
+    setWorkspaceProviderSource('x', null, 'chat', 'openai');
+
+    reconcileWorkspacePrefsForMirror('x', [row('chat', 'claude-test')]);
+
+    expect(getWorkspacePref('x', null, 'chat').model).toBe('claude-test');
+    expect(getWorkspaceProviderSource('x', null, 'chat')).toBeNull();
+  });
+
+  it('本机尚未镜像的写入优先, 快照不改模型, 刚选的来源不被清', () => {
+    setWorkspacePref('x', null, 'chat', { model: 'gpt-test', agentKind: 'codex' });
+    setWorkspaceProviderSource('x', null, 'chat', 'openai');
+
+    applyIncomingServerWorkspacePrefs('x', [row('chat', 'claude-test')]);
+
+    expect(getWorkspacePref('x', null, 'chat').model).toBe('gpt-test');
+    expect(getWorkspaceProviderSource('x', null, 'chat')).toBe('openai');
   });
 });

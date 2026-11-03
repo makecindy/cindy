@@ -6,7 +6,7 @@
  * (标题 / 重新加载 / 回主界面 / 错误详情),而不是 react-router 的
  * 开发者默认错误页,也不会把错误继续往上抛炸掉整个应用。
  */
-import { cleanup, render, screen } from '@testing-library/react';
+import { cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { createMemoryRouter, RouterProvider } from 'react-router-dom';
 
@@ -44,7 +44,8 @@ describe('RouteErrorFallback', () => {
       expect(screen.getByText('appError.title')).toBeTruthy();
       expect(screen.getByText('appError.reload')).toBeTruthy();
       expect(screen.getByText('appError.backHome')).toBeTruthy();
-      expect(screen.getByText('appError.details')).toBeTruthy();
+      expect(screen.queryByText(/boom: element type is invalid/)).toBeNull();
+      fireEvent.click(screen.getByRole('button', { name: 'chat.errorBanner.networkShowRaw' }));
       // 错误详情里能看到原始 message(给用户复制反馈用)
       expect(screen.getByText(/boom: element type is invalid/)).toBeTruthy();
     } finally {

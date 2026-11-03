@@ -10,12 +10,12 @@
  *
  * 因此这里做 source-contract 锚定（与 markdownStrikethrough.test.ts 同思路）：
  *   1. h1–h3 的排版 class 逐字冻结（只允许追加颜色 token）
- *   2. h4–h6 与 strong 只允许带颜色 class —— 不得出现任何 text-<n> / font-* /
- *      my-* / leading-* 排版类
+ *   2. h4–h6 只允许颜色 class；DS-11 的内容 strong 显式封顶 700，避免
+ *      相对 bolder 使嵌套层达到900，其字号/行高/间距仍继承。
  *
  * 与 `themes/__tests__/markdownColorTokens.test.ts`（token 默认值恒为 `inherit`、
  * 无内置主题 override）合起来即完整证明：默认主题下这些元素的渲染结果与引入
- * token 之前等价。
+ * token 之前等价（strong 的 DS-11 有意字重修复单独锁定）。
  */
 
 import { describe, expect, it } from 'vitest';
@@ -47,17 +47,16 @@ describe('Markdown 标题 · h1–h3 排版 class 冻结', () => {
   });
 });
 
-describe('Markdown 标题 · h4–h6 与 strong 只带颜色', () => {
+describe('Markdown 标题 · h4–h6 只带颜色', () => {
   it.each([
     ['h4', '--md-h4-fg'],
     ['h5', '--md-h5-fg'],
     ['h6', '--md-h6-fg'],
-    ['strong', '--md-strong-fg'],
   ])('%s 的 class 只有颜色 token', (tag, token) => {
     expect(classNameFor(tag)).toBe(`text-[var(${token})]`);
   });
 
-  it.each(['h4', 'h5', 'h6', 'strong'])(
+  it.each(['h4', 'h5', 'h6'])(
     '%s 不引入任何字号 / 字重 / 行高 / 间距 class（引入前它们走原生继承）',
     (tag) => {
       const offenders = classNameFor(tag)
@@ -66,6 +65,11 @@ describe('Markdown 标题 · h4–h6 与 strong 只带颜色', () => {
       expect(offenders).toEqual([]);
     },
   );
+});
+
+it('Markdown 内容 strong 使用绝对700；不追加字号、行高或间距', () => {
+  expect(classNameFor('strong')).toBe('font-bold text-[var(--md-strong-fg)]');
+  expect(classNameFor('strong').split(/\s+/).filter((c) => TYPOGRAPHY_CLASS.test(c))).toEqual(['font-bold']);
 });
 
 describe('Markdown 标题 · 颜色一律走 token,不出现硬编码色值', () => {

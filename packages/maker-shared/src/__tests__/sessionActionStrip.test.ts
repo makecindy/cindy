@@ -2,7 +2,6 @@ import { describe, expect, it } from 'vitest';
 import {
   buildSessionActionStrip,
   sessionCollaborationLabel,
-  sessionCollaborationReadOnlyReason,
   sessionWorktreeInfo,
 } from '../index.js';
 import type { SessionActionStripSessionLike } from '../sessionActionStrip.js';
@@ -147,7 +146,6 @@ describe('shared session identity helpers', () => {
   it('labels collaboration sessions and extracts worktree names across platforms', () => {
     expect(sessionCollaborationLabel({ orcaRole: 'lead' })).toBe('协作 Lead');
     expect(sessionCollaborationLabel({ orcaRole: 'reviewer' })).toBe('协作 reviewer');
-    expect(sessionCollaborationReadOnlyReason({ orcaRole: 'worker' })).toContain('只读安全降级');
     expect(sessionWorktreeInfo({ worktreePath: 'D:\\repo\\.xdt-worktrees\\feat-win\\' })).toEqual({
       path: 'D:\\repo\\.xdt-worktrees\\feat-win\\',
       name: 'feat-win',

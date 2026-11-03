@@ -8,6 +8,7 @@ import { DeviceLinkClient, PROTOCOL_VERSION, DEVICE_LINK_CAPABILITY_RELIABLE_TRA
 import type { ProviderView } from '@cindy/model-providers/registry';
 import { useDeviceProviders, type UseDeviceProvidersResult } from '@/device-link/useDeviceProviders';
 import { clearAllDeviceProviders, evictDeviceProviders, fetchDeviceProviders, fetchDeviceProvidersFresh } from '@/device-link/deviceProvidersCache';
+import { createDeviceCatalogRefresh } from '@/device-link/deviceCatalogRefresh';
 
 const state = vi.hoisted(() => ({
   context: { connectionEpoch: 1, status: 'online', recoveringDeviceIds: new Set<string>() },
@@ -69,6 +70,35 @@ afterEach(async () => {
 });
 
 describe('model catalog failure recovery', () => {
+  it('mounted picker and fresh submit share the replacement after a burst invalidates a failed read', async () => {
+    let fail!: (error: Error) => void;
+    const read = state.makers.get('a')!.listProviders;
+    read.mockImplementationOnce(() => new Promise((_resolve, reject) => { fail = reject; }));
+    await render();
+    const refreshRead = vi.fn().mockResolvedValue(catalog('latest'));
+    const refresh = createDeviceCatalogRefresh({
+      readProviders: refreshRead, readCapabilities: async () => null, connectionEpoch: () => 1,
+    });
+    let fresh!: Promise<unknown>;
+    await act(async () => {
+      for (let i = 0; i < 4; i++) refresh.notify('a');
+      fresh = fetchDeviceProvidersFresh('a', refreshRead);
+    });
+    expect(values.a.ready).toBe(false);
+    expect(read).toHaveBeenCalledTimes(1);
+    expect(refreshRead).not.toHaveBeenCalled();
+    await act(async () => {
+      fail(timeout());
+      await fresh;
+    });
+    await advance(1000);
+    expect(refreshRead).toHaveBeenCalledTimes(1);
+    expect(read).toHaveBeenCalledTimes(1);
+    expect(values.a.ready).toBe(true);
+    expect(values.a.providers[0].id).toBe('latest');
+    await act(async () => refresh.dispose());
+  });
+
   it('continues recovery when an external fresh read invalidates an ordinary in-flight read', async () => {
     const read = state.makers.get('a')!.listProviders;
     await render();

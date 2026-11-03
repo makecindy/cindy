@@ -115,7 +115,7 @@ describe('LoginPage browser redirect waiting state', () => {
     expect(screen.getByText('login.localModeDescription')).toBeTruthy();
   });
 
-  it('makes retained accounts reachable from the signed-out error screen', async () => {
+  it('keeps saved-account switching out of the signed-out error screen', () => {
     const listAccounts = vi.fn().mockResolvedValue({
       accounts: [{ accountKey: 'saved-account' }],
       mutationAllowed: true,
@@ -132,22 +132,20 @@ describe('LoginPage browser redirect waiting state', () => {
 
     render(<LoginPage />);
 
-    const trigger = await screen.findByRole('button', {
-      name: 'sidebar.accountSwitcher.title',
-    });
-    expect(listAccounts).toHaveBeenCalledOnce();
-    fireEvent.click(trigger);
-    expect(await screen.findByTestId('account-switcher-dialog')).toBeTruthy();
+    expect(listAccounts).not.toHaveBeenCalled();
+    expect(screen.queryByRole('button', { name: 'sidebar.accountSwitcher.title' })).toBeNull();
+    expect(screen.queryByTestId('account-switcher-dialog')).toBeNull();
+    expect(screen.getByRole('button', { name: 'login.localModeEntry' })).toBeTruthy();
   });
 
-  it('does not advertise account switching when no reusable account remains', async () => {
+  it('does not load saved accounts while waiting for browser login', () => {
     render(<LoginPage />);
 
-    await vi.waitFor(() => expect(loginHook.value.listAccounts).toHaveBeenCalledOnce());
+    expect(loginHook.value.listAccounts).not.toHaveBeenCalled();
     expect(screen.queryByRole('button', { name: 'sidebar.accountSwitcher.title' })).toBeNull();
   });
 
-  it('disables local entry while a login request is pending', () => {
+  it('keeps local entry available while a provider retry is pending', () => {
     loginHook.value = {
       isLoading: true,
       errorCode: null,
@@ -160,6 +158,6 @@ describe('LoginPage browser redirect waiting state', () => {
 
     expect(
       (screen.getByRole('button', { name: 'login.localModeEntry' }) as HTMLButtonElement).disabled,
-    ).toBe(true);
+    ).toBe(false);
   });
 });

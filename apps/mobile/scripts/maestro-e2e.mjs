@@ -32,8 +32,6 @@ const expoUrl = options.expoUrl
 const hostDeviceId = process.env.XDT_MOBILE_E2E_HOST_DEVICE_ID ?? 'mobile-e2e-host';
 const hostDeviceChipId = process.env.XDT_MOBILE_E2E_HOST_DEVICE_CHIP_ID
   ?? `home.deviceChip.${sanitizeTestIdSegment(hostDeviceId)}`;
-const hostAutomationsUrl = process.env.XDT_MOBILE_E2E_HOST_AUTOMATIONS_URL
-  ?? (expoUrl ? expoUrlWithRoute(expoUrl, `/automations/${encodeURIComponent(hostDeviceId)}`) : '');
 const expoLaunchDelayMs = parseNonNegativeInteger(
   process.env.XDT_MOBILE_E2E_EXPO_LAUNCH_DELAY_MS ?? '20000',
   'XDT_MOBILE_E2E_EXPO_LAUNCH_DELAY_MS',
@@ -46,7 +44,6 @@ const expoOpenBeforeTest = normalizeBooleanEnv(
   process.env.XDT_MOBILE_E2E_EXPO_OPEN_BEFORE_TEST ?? 'true',
   'XDT_MOBILE_E2E_EXPO_OPEN_BEFORE_TEST',
 );
-const toolEnv = resolveJavaRuntimeEnv(process.env);
 const flows = options.flows.length > 0
   ? options.flows
   : splitEnv(process.env.XDT_MOBILE_E2E_FLOWS) ?? ['remote_control_smoke.yaml'];
@@ -73,10 +70,13 @@ if (options.dryRun) {
   if (expoUrl) console.log(`- expo terminate before open: ${expoTerminateBeforeOpen}`);
   if (expoUrl) console.log(`- expo open before test: ${expoOpenBeforeTest}`);
   console.log(`- host device chip id: ${hostDeviceChipId}`);
-  if (hostAutomationsUrl) console.log(`- host automations url: ${hostAutomationsUrl}`);
   for (const flow of resolvedFlows) console.log(`- ${flow}`);
   process.exit(0);
 }
+
+// Dry runs only validate/print the plan; Java discovery can start slow external
+// processes and is needed only when actually running Maestro.
+const toolEnv = resolveJavaRuntimeEnv(process.env);
 
 if (includesLogin) {
   const metroPort = expoUrl ? new URL(expoUrl).port || '8081' : '8081';
@@ -124,8 +124,6 @@ for (const flow of resolvedFlows) {
       `XDT_MOBILE_E2E_HOST_DEVICE_ID=${hostDeviceId}`,
       '-e',
       `XDT_MOBILE_E2E_EXPO_URL=${expoUrl ?? ''}`,
-      '-e',
-      `XDT_MOBILE_E2E_HOST_AUTOMATIONS_URL=${hostAutomationsUrl}`,
       flow,
     ],
     {
@@ -136,7 +134,6 @@ for (const flow of resolvedFlows) {
         APP_ID: appId,
         CLEAR_STATE: clearState,
         XDT_MOBILE_E2E_EXPO_URL: expoUrl ?? '',
-        XDT_MOBILE_E2E_HOST_AUTOMATIONS_URL: hostAutomationsUrl,
       },
       stdio: 'inherit',
     },
@@ -236,16 +233,6 @@ function flowIncludesLogin(flow, seen = new Set()) {
     const childPath = resolve(flowRoot, child);
     return existsSync(childPath) && flowIncludesLogin(childPath, seen);
   });
-}
-
-function expoUrlWithRoute(url, route) {
-  const marker = '--/';
-  const routeValue = String(route).replace(/^\/+/, '');
-  const markerIndex = url.indexOf(marker);
-  if (markerIndex >= 0) {
-    return `${url.slice(0, markerIndex + marker.length)}${routeValue}`;
-  }
-  return `${url.replace(/\/+$/, '')}/${marker}${routeValue}`;
 }
 
 function openExpoUrl(url, platform) {

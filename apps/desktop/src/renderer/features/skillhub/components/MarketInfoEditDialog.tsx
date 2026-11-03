@@ -1,3 +1,4 @@
+import { Button } from '@/components/ui/button';
 /**
  * MarketInfoEditDialog — 编辑市场展示信息(显示名/描述/分类)。
  * 列表卡片菜单与详情页「编辑信息」共用;弹窗形态,关闭即回到来源页,
@@ -9,13 +10,12 @@ import * as Dialog from '@radix-ui/react-dialog';
 import { X } from 'lucide-react';
 
 import { cn } from '@/lib/utils';
-import { Spinner } from '@/components/ui/spinner';
 import { toast } from '@/lib/toast';
 
 import { marketActionErrorMessage } from '../lib/marketErrors';
 import { PlatformTagSelector } from './PlatformTagSelector';
 import type { MarketCategory } from '../../../../shared/skillhubCategory';
-import { SUPPORTED_LOCALES, type SupportedLocale } from '../../../../shared/locale';
+import { isClassicalLocale, modernLocaleOf, type SupportedLocale } from '../../../../shared/locale';
 
 const DESCRIPTION_LIMIT = 2_000;
 const DISPLAY_NAME_LIMIT = 100;
@@ -127,9 +127,13 @@ export function MarketInfoEditDialog({
           displayName: displayName.trim(),
           summary: description,
           description,
-          contentLocale: (SUPPORTED_LOCALES as readonly string[]).includes(i18n.resolvedLanguage ?? '')
-            ? i18n.resolvedLanguage as SupportedLocale
-            : 'en',
+          // The market only stores modern-language content; classical editions write their modern base.
+          contentLocale: (() => {
+            const language = isClassicalLocale(i18n.resolvedLanguage) ? modernLocaleOf(i18n.resolvedLanguage) : i18n.resolvedLanguage;
+            return (['zh-CN', 'zh-TW', 'en', 'ja', 'ko'] as readonly string[]).includes(language ?? '')
+              ? language as SupportedLocale
+              : 'en';
+          })(),
           tags: categorySlugs,
         },
       });
@@ -149,14 +153,14 @@ export function MarketInfoEditDialog({
     <Dialog.Root open={open && !loading} onOpenChange={(v) => { if (!saving) onOpenChange(v); }}>
       <Dialog.Portal>
         <Dialog.Overlay
-          className="fixed inset-0 z-[10000] bg-[var(--overlay-modal)]"
+          className="modal-scrim fixed inset-0 z-[10000]"
           style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties}
         />
         <Dialog.Content
+          onPointerDownOutside={(event) => event.preventDefault()}
           className={cn(
-            'fixed left-1/2 top-1/2 z-[10000] -translate-x-1/2 -translate-y-1/2',
-            'w-full max-w-[480px] rounded-xl',
-            'border bg-[var(--cmd-palette-bg)] border-[var(--cmd-palette-border)]',
+            'modal-panel fixed left-1/2 top-1/2 z-[10000] -translate-x-1/2 -translate-y-1/2',
+            'w-full max-w-[480px]',
             'max-h-[85vh] overflow-y-auto',
           )}
           style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties}
@@ -272,33 +276,26 @@ export function MarketInfoEditDialog({
           </div>
 
           <div className="flex items-center justify-end gap-2 p-4">
-            <button
+            <Button
+              variant="secondary"
+              size="md"
+              compact
               type="button"
               onClick={() => onOpenChange(false)}
-              className={cn(
-                'inline-flex h-8 items-center justify-center rounded-full px-4',
-                'text-sm font-normal border bg-[var(--cmd-palette-bg)]',
-                'border-[var(--confirm-btn-secondary-border)] text-[var(--settings-btn-secondary-text)]',
-                'hover:bg-[var(--surface-hover)] transition-colors',
-              )}
             >
               {t('skillhub.publishDialog.cancel')}
-            </button>
-            <button
+            </Button>
+            <Button
+              variant="cta"
+              size="md"
+              compact
+              loading={saving}
               type="button"
               disabled={loading || saving || Boolean(loadError) || invalid || readOnly}
               onClick={() => void handleSave()}
-              className={cn(
-                'inline-flex h-8 items-center justify-center gap-1.5 rounded-full px-4',
-                'text-sm font-medium leading-none',
-                'bg-[var(--lightbox-cta-bg)] text-[var(--lightbox-cta-fg)]',
-                'hover:bg-[var(--lightbox-cta-hover)] transition-colors',
-                'disabled:cursor-not-allowed disabled:opacity-50',
-              )}
             >
-              {saving ? <Spinner size={14} /> : null}
-              {saving ? t('skillhub.visibilityEditor.saving') : t('skillhub.visibilityEditor.save')}
-            </button>
+              { t('skillhub.visibilityEditor.save')}
+            </Button>
           </div>
         </Dialog.Content>
       </Dialog.Portal>

@@ -1,0 +1,22 @@
+{
+  "palette": [
+    "#ff0000",
+    "#00ff00",
+    "#0000ff"
+  ],
+  "tolerance": 0,
+  "canvas": {
+    "width": 4,
+    "height": 2
+  },
+  "grid": {
+    "cellWidth": 2,
+    "cellHeight": 2
+  },
+  "images": [
+    {
+      "id": "hero",
+      "png": "iVBORw0KGgoAAAANSUhEUgAAAAQAAAACCAYAAAB/qH1jAAAAGElEQVR42mP4z8DwH4QZ4OA/w/9fvxACALD9CO6K1jjbAAAAAElFTkSuQmCC"
+    }
+  ]
+}

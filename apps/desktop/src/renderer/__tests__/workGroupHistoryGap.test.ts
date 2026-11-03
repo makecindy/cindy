@@ -23,6 +23,7 @@ import {
   buildRenderItems,
   groupWorkRuns,
   insertForkOriginItem,
+  simplifyBotRenderItems,
 } from '../components/chat/MessageStream';
 import { HISTORY_GAP_SPLIT_MS } from '../lib/historyGap';
 import type { ChatMessage } from '@/lib/makerChatStore';
@@ -124,6 +125,20 @@ describe('历史窗口空洞 — 跨空洞不合并工作组', () => {
     expect(groupContains(beforeGap[0], 't2')).toBe(false);
   });
 
+  it.each([false, true])('伙伴投影保留空洞两侧的正文与独立工作组，active=%s', (streaming) => {
+    const { items } = buildRenderItems(gapMessages());
+    const projected = simplifyBotRenderItems(groupWorkRuns(items, streaming), streaming);
+    const prose = projected.flatMap((item) => item.type === 'message' && item.message.role === 'assistant'
+      ? [item.message.clientId] : []);
+    expect(prose).toEqual(['a1', 'a2']);
+    const groups = workGroups(projected);
+    // 完成的过程仍可展开，但不能跨空洞合并两轮动作。
+    expect(groups.some((group) => groupContains(group, 't1'))).toBe(true);
+    expect(groups.some((group) => groupContains(group, 't2'))).toBe(true);
+    expect(groups.some((group) => groupContains(group, 't1') && groupContains(group, 't2'))).toBe(false);
+    expect(projected.some(item => item.type === 'tool_segment')).toBe(false);
+  });
+
   it('A2. 没有任何组谎报跨空洞时长(修复前是 2820m29s)', () => {
     const { items } = buildRenderItems(gapMessages());
     const grouped = groupWorkRuns(items, false);
@@ -215,6 +230,11 @@ describe('历史窗口空洞 — 长任务不被误判', () => {
     expect(groupContains(groups[0], 'a0')).toBe(true);
     expect(groupContains(groups[0], 't0')).toBe(true);
     expect(groupContains(groups[0], 't3')).toBe(true);
+    const projected = simplifyBotRenderItems(grouped, false);
+    expect(projected.flatMap((item) => item.type === 'message' && item.message.role === 'assistant'
+      ? [item.message.clientId] : [])).toEqual(['a1']);
+    // 完成后进度文字进入可展开过程，最终答复留在外面。
+    expect(workGroups(projected)).toEqual(groups);
   });
 });
 

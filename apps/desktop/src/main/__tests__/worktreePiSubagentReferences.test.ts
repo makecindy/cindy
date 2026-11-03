@@ -112,6 +112,54 @@ describe('detached Pi Subagent worktree references', () => {
     expect(await protects()).toBe(true);
   });
 
+  it('reads past the host launch fence and the staging file a crash leaves in the run root', async () => {
+    const root = path.dirname(runRoot());
+    await fs.mkdir(root, { recursive: true });
+    const fence = JSON.stringify({ version: 1, hostPid: 4_194_303, hostStartTimeSec: 1, createdAt: 0 });
+    const staging = '.launch-fence-4194303.json.tmp-4194303-89aea6ae-a2c7-4fa4-8856-82503af66389';
+    await fs.writeFile(path.join(root, '.launch-fence-4194303.json'), fence);
+    await fs.writeFile(path.join(root, staging), fence);
+    await fs.writeFile(path.join(root, '.launch-fence.json.tmp-4194303-89aea6ae-a2c7-4fa4-8856-82503af66389'), '{"vers');
+
+    // No session holds a reference, so the recycle may go on to its own checks.
+    expect(await readPiSubagentWorktreeReferences()).toEqual(new Map());
+    expect(await livePaths()).not.toBeNull();
+    expect(await protects()).toBe(false);
+
+    // And a real reference beside the debris is still read in full.
+    await writeRun();
+    expect(await readPiSubagentWorktreeReferences()).toEqual(new Map([['parent', [worktree]]]));
+    expect(await protects()).toBe(true);
+  });
+
+  it.each(['directory', 'link'])('preserves when a fence-named entry is a %s', async (shape) => {
+    await writeRun();
+    const entry = path.join(path.dirname(runRoot()), '.launch-fence-4194303.json.tmp-4194303-89aea6ae-a2c7-4fa4-8856-82503af66389');
+    if (shape === 'directory') {
+      await fs.mkdir(entry);
+    } else {
+      const target = path.join(state.root, 'link-target');
+      if (process.platform === 'win32') await fs.mkdir(target);
+      else await fs.writeFile(target, '{}');
+      // Junctions exercise the same lstat link guard without requiring Windows symlink privileges.
+      await fs.symlink(target, entry, process.platform === 'win32' ? 'junction' : undefined);
+      expect((await fs.lstat(entry)).isSymbolicLink()).toBe(true);
+    }
+    const followingStat = vi.spyOn(fs, 'stat');
+    expect(await livePaths()).toBeNull();
+    // A directory junction must not hide a regression that follows the entry before rejecting it.
+    expect(followingStat.mock.calls.some(([target]) => target === entry)).toBe(false);
+  });
+
+  it.each(['notes.txt', '.launch-fence-backup.json', '.launch-fence-.json'])(
+    'preserves when a plain file it does not know (%s) sits in the run root',
+    async (name) => {
+      await writeRun();
+      await fs.writeFile(path.join(path.dirname(runRoot()), name), 'x');
+      expect(await livePaths()).toBeNull();
+    },
+  );
+
   it('does not filter out unfinished or malformed run directories', async () => {
     await fs.mkdir(path.join(runRoot(), 'not-a-uuid'), { recursive: true });
     expect(await livePaths()).toBeNull();

@@ -9,6 +9,7 @@ import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 
 import { describe, expect, it } from 'vitest';
+import { getSessionListActivityAt } from '@cindy/maker-shared/session-activity';
 
 import {
   formatSidebarFutureTime,
@@ -87,9 +88,12 @@ describe('formatSidebarFutureTime', () => {
 describe('SessionItem activity time', () => {
   it('always renders the right-side activity info from the sidebar sort clock', () => {
     expect(sessionItemSource).not.toContain('SHOW_SIDEBAR_TIMESTAMPS');
-    // activityIso uses max(userSendAt, updatedAt) to backfill pre-migration rows
     expect(sessionItemSource).toContain('const activityIso =');
-    expect(sessionItemSource).toContain('session.updatedAt');
+    expect(formatSidebarTime(getSessionListActivityAt({
+      lastActivityAt: '2026-05-20T11:15:00.000Z',
+      userSendAt: '2026-05-19T12:00:00.000Z',
+      updatedAt: '2026-05-20T12:00:00.000Z',
+    }), t, new Date('2026-05-20T12:00:00.000Z'))).toBe('45 分钟');
     // C 期起时间渲染并入 SessionInfoMeta(任务信息复选,同一 activityIso 时间轴);
     // 时间文本与 text-sidebar-action-icon 色由该组件承担。
     // 2026-08-12 起多传 hasPrRef(让 PR 参与「按勾选顺序」排列),调用被 prettier
@@ -99,6 +103,10 @@ describe('SessionItem activity time', () => {
     );
     expect(sessionItemSource).toContain('<SessionInfoMeta');
     expect(sessionItemSource).toContain('pieces={infoPieces}');
+    // 任务标签常显、紧跟标题，不再作为任务信息复选项进右侧信息槽。
+    expect(sessionItemSource).toMatch(
+      /<\/SidebarTitleMarquee>\s*\{\/\*[^*]*\*\/\}\s*<TaskTagDots tags=\{session\.tags\} \/>/,
+    );
     expect(sessionInfoMetaSource).toContain('formatSidebarTime(activityIso, t)');
     expect(sessionInfoMetaSource).toContain('text-sidebar-action-icon');
     expect(sessionItemSource).toContain('transition-opacity');
@@ -115,7 +123,7 @@ describe('SessionItem activity time', () => {
     expect(sessionItemSource).toContain('worktree={infoWorktree ?? undefined}');
     expect(sessionItemSource).toContain('canQuickArchive && archivePending &&');
     expect(sessionItemSource).toContain(
-      "!archivePending && 'group-hover:opacity-0 group-focus-within/slot:opacity-0'",
+      "group-hover:opacity-0 group-hover:w-0 group-hover:overflow-hidden group-focus-within/slot:opacity-0 group-focus-within/slot:w-0 group-focus-within/slot:overflow-hidden",
     );
     expect(sessionItemSource).toContain('group/slot relative ml-auto');
     expect(sessionItemSource).toContain(

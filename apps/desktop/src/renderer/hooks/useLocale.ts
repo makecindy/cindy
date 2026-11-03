@@ -23,11 +23,18 @@ import { createElement } from 'react';
 
 import {
   i18n,
-  DEFAULT_LOCALE,
-  SUPPORTED_LOCALES,
   type LocalePreference,
   type SupportedLocale,
 } from '@/i18n';
+import type { ClassicalReplyStyleId } from '@cindy/maker-shared/classical-reply';
+import {
+  readStoredClassicalStyle,
+  readStoredLocale,
+  writeStoredClassicalStyle,
+  writeStoredLocale,
+  effectiveOf,
+  getEffectiveLocale,
+} from '@/lib/localePreference';
 
 interface LocaleContextValue {
   /** 用户的偏好选择 (含 'system')。 */
@@ -36,43 +43,24 @@ interface LocaleContextValue {
   effectiveLocale: SupportedLocale;
   /** 设置偏好 —— 持久化到 localStorage、刷 i18next、刷 <html lang>。 */
   setLocale: (next: LocalePreference) => void;
+  /** 古典界面（文言）下 AI 作答的输出风格。 */
+  classicalStyle: ClassicalReplyStyleId;
+  setClassicalStyle: (next: ClassicalReplyStyleId) => void;
 }
 
-const STORAGE_KEY = 'language';
 const LocaleContext = createContext<LocaleContextValue | undefined>(undefined);
-
-function isLocalePreference(v: string): v is LocalePreference {
-  if (v === 'system') return true;
-  return (SUPPORTED_LOCALES as readonly string[]).includes(v);
-}
-
-function readStoredLocale(): LocalePreference {
-  try {
-    const raw = localStorage.getItem(STORAGE_KEY);
-    if (raw && isLocalePreference(raw)) return raw;
-  } catch {
-    // localStorage 不可用 (例如 SSR / 沙箱) 时静默回退
-  }
-  return 'system';
-}
-
-function detectSystemLocale(): SupportedLocale {
-  if (typeof window === 'undefined') return DEFAULT_LOCALE;
-  const locale = window.electronAPI?.preferredSystemLocale;
-  return typeof locale === 'string' && (SUPPORTED_LOCALES as readonly string[]).includes(locale)
-    ? (locale as SupportedLocale)
-    : DEFAULT_LOCALE;
-}
-
-function effectiveOf(pref: LocalePreference): SupportedLocale {
-  if (pref === 'system') return detectSystemLocale();
-  return pref;
-}
 
 function syncApplicationMenuLocale(loc: SupportedLocale): void {
   if (typeof window === 'undefined') return;
   void window.electronAPI?.setApplicationMenuLocale?.(loc).catch(() => {
     /* Native app menu is macOS-only; renderer locale still updates normally. */
+  });
+}
+
+function syncClassicalStyle(style: ClassicalReplyStyleId): void {
+  if (typeof window === 'undefined') return;
+  void window.electronAPI?.setClassicalReplyStyle?.(style).catch(() => {
+    /* Older hosts ignore it; replies then keep the default classical style. */
   });
 }
 
@@ -93,24 +81,29 @@ function applyLocale(loc: SupportedLocale): void {
  * in the user's selected language.
  */
 export function bootstrapInitialLocale(): SupportedLocale {
-  const effectiveLocale = effectiveOf(readStoredLocale());
+  const effectiveLocale = getEffectiveLocale();
   applyLocale(effectiveLocale);
   return effectiveLocale;
 }
 
 export function LocaleProvider({ children }: { children: ReactNode }) {
   const [locale, setLocaleState] = useState<LocalePreference>(readStoredLocale);
-  const [effectiveLocale, setEffectiveLocale] = useState<SupportedLocale>(() =>
-    effectiveOf(readStoredLocale()),
-  );
+  const [effectiveLocale, setEffectiveLocale] = useState<SupportedLocale>(getEffectiveLocale);
+  const [classicalStyle, setClassicalStyleState] = useState<ClassicalReplyStyleId>(readStoredClassicalStyle);
+
+  const setClassicalStyle = useCallback((next: ClassicalReplyStyleId) => {
+    setClassicalStyleState(next);
+    writeStoredClassicalStyle(next);
+  }, []);
+
+  // Main builds each turn's reply note, so it keeps the current style too.
+  useEffect(() => {
+    syncClassicalStyle(classicalStyle);
+  }, [classicalStyle]);
 
   const setLocale = useCallback((next: LocalePreference) => {
     setLocaleState(next);
-    try {
-      localStorage.setItem(STORAGE_KEY, next);
-    } catch {
-      // 持久化失败不影响当前会话切换
-    }
+    writeStoredLocale(next);
     const eff = effectiveOf(next);
     setEffectiveLocale(eff);
     applyLocale(eff);
@@ -124,8 +117,8 @@ export function LocaleProvider({ children }: { children: ReactNode }) {
   }, [effectiveLocale]);
 
   const value = useMemo<LocaleContextValue>(
-    () => ({ locale, effectiveLocale, setLocale }),
-    [locale, effectiveLocale, setLocale],
+    () => ({ locale, effectiveLocale, setLocale, classicalStyle, setClassicalStyle }),
+    [locale, effectiveLocale, setLocale, classicalStyle, setClassicalStyle],
   );
 
   return createElement(LocaleContext.Provider, { value }, children);

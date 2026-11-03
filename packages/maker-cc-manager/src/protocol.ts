@@ -48,7 +48,9 @@ export const PROTOCOL_VERSION = 5 as const;
  * 无关依赖变化而变。desktop 用这个（而非 bundle sha256）判断远端 daemon
  * 是否需要 upgrade,避免无关的 pnpm install 触发全量远端重装。
  */
-export const CC_MGR_BUNDLE_VERSION = '0.0.10' as const;
+// SDK 0.3 migration: explicit remote OS-env merge at the SDK boundary.
+// Existing installs must pick up this runtime change; the wire stays at v5.
+export const CC_MGR_BUNDLE_VERSION = '0.0.11' as const;
 
 export type RpcId = number;
 

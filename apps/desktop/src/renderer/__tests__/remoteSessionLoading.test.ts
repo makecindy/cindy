@@ -1,39 +1,111 @@
-/**
- * remoteSessionLoading.test.ts —— 远程会话首屏 loading 决策(慢网可见性)。
- *
- * 守住:本机会话恒不显示(零回归)、加载完成不显示、防闪窗口内不显示、
- * 仅「远程 + 未加载 + 延迟到期」三者同时成立才显示。
- */
-import { describe, it, expect } from 'vitest';
+// @vitest-environment jsdom
+import { act, cleanup, renderHook } from '@testing-library/react';
+import { afterEach, beforeEach, describe, it, expect, vi } from 'vitest';
+import { useRemoteSessionLoading } from '@/features/cc-agent/hooks/useRemoteSessionLoading';
 
-import { shouldShowRemoteLoading } from '@/features/cc-agent/hooks/useRemoteSessionLoading';
-
-describe('shouldShowRemoteLoading', () => {
-  it('本机会话(isRemote=false)→ 恒不显示,无论其它参数', () => {
-    expect(shouldShowRemoteLoading(false, false, true)).toBe(false);
-    expect(shouldShowRemoteLoading(false, false, false)).toBe(false);
-    expect(shouldShowRemoteLoading(false, true, true)).toBe(false);
+// Regression: cached history used to suppress every loading signal, even while
+// remote content was still syncing. Exercise the production hook and its timer,
+// not a copy of its predicate. Fake timers keep this in the unit tier.
+const cached = {
+  sessionId: 'task-a',
+  remoteDeviceId: 'host-a',
+  historyLoaded: true,
+  contentSyncing: true,
+  hasMessages: true,
+  connectionNotice: false,
+  hasTaskHeader: true,
+};
+beforeEach(() => vi.useFakeTimers());
+afterEach(() => {
+  cleanup();
+  vi.useRealTimers();
+});
+const advance = (ms: number) =>
+  act(() => {
+    vi.advanceTimersByTime(ms);
   });
 
-  it('远程 + 已加载 → 不显示(数据已就位)', () => {
-    expect(shouldShowRemoteLoading(true, true, true)).toBe(false);
+describe('remote task loading feedback', () => {
+  it('keeps cached content readable and shows title feedback until content is ready', () => {
+    const { result, rerender } = renderHook(useRemoteSessionLoading, { initialProps: cached });
+    expect(result.current).toBe('hidden');
+    advance(249);
+    expect(result.current).toBe('hidden');
+    advance(1);
+    expect(result.current).toBe('syncing');
+    rerender({ ...cached, contentSyncing: false });
+    expect(result.current).toBe('hidden');
   });
 
-  it('远程 + 未加载 + 防闪窗口内(delayElapsed=false)→ 不显示(快隧道不闪)', () => {
-    expect(shouldShowRemoteLoading(true, false, false)).toBe(false);
+  it('moves the empty viewport indicator into the title without restarting the delay', () => {
+    const props = { ...cached, hasMessages: false, historyLoaded: false };
+    const { result, rerender } = renderHook(useRemoteSessionLoading, { initialProps: props });
+    advance(250);
+    expect(result.current).toBe('loading');
+    rerender(cached);
+    expect(result.current).toBe('syncing');
+    rerender({ ...cached, contentSyncing: false, hasMessages: false });
+    expect(result.current).toBe('hidden');
   });
 
-  it('远程 + 未加载 + 延迟到期 → 显示', () => {
-    expect(shouldShowRemoteLoading(true, false, true)).toBe(true);
+  it('does not flash when cold cache arrives before a fast remote read', () => {
+    const props = { ...cached, historyLoaded: false, hasMessages: false };
+    const { result, rerender } = renderHook(useRemoteSessionLoading, { initialProps: props });
+    advance(50);
+    rerender({ ...props, hasMessages: true });
+    expect(result.current).toBe('hidden');
+    advance(100);
+    rerender({ ...cached, contentSyncing: false });
+    advance(250);
+    expect(result.current).toBe('hidden');
   });
 
-  it('屏上已有消息(冷缓存已画出最近一页)→ 不显示:覆盖层不该盖住可读内容', () => {
-    expect(shouldShowRemoteLoading(true, false, true, true)).toBe(false);
+  it('keeps feedback in the viewport when a bot or embedded pane has no task header', () => {
+    const props = { ...cached, hasTaskHeader: false };
+    const { result, rerender } = renderHook(useRemoteSessionLoading, { initialProps: props });
+    advance(250);
+    expect(result.current).toBe('inline-syncing');
+    rerender({ ...props, hasTaskHeader: true });
+    expect(result.current).toBe('syncing');
+    rerender({ ...props, connectionNotice: true });
+    expect(result.current).toBe('hidden');
   });
 
-  it('hasMessages 缺省 false → 既有调用点行为不变(零回归)', () => {
-    expect(shouldShowRemoteLoading(true, false, true)).toBe(
-      shouldShowRemoteLoading(true, false, true, false),
+  it('never flashes feedback when a read finishes within the delay', () => {
+    const { result, rerender } = renderHook(useRemoteSessionLoading, { initialProps: cached });
+    advance(100);
+    rerender({ ...cached, contentSyncing: false });
+    advance(250);
+    expect(result.current).toBe('hidden');
+  });
+
+  it.each(['sessionId', 'remoteDeviceId'] as const)('resets the delay when %s changes', (key) => {
+    const { result, rerender } = renderHook(useRemoteSessionLoading, { initialProps: cached });
+    advance(250);
+    expect(result.current).toBe('syncing');
+    rerender({ ...cached, [key]: 'other' });
+    expect(result.current).toBe('hidden');
+    advance(250);
+    expect(result.current).toBe('syncing');
+  });
+
+  it('yields to connection notices, then waits for content after reconnection', () => {
+    const { result, rerender } = renderHook(useRemoteSessionLoading, { initialProps: cached });
+    advance(250);
+    rerender({ ...cached, connectionNotice: true });
+    expect(result.current).toBe('hidden');
+    advance(1000);
+    rerender(cached);
+    expect(result.current).toBe('hidden');
+    advance(250);
+    expect(result.current).toBe('syncing');
+  });
+
+  it('never shows remote loading on local tasks', () => {
+    const { result } = renderHook(() =>
+      useRemoteSessionLoading({ ...cached, remoteDeviceId: undefined, historyLoaded: false }),
     );
+    advance(250);
+    expect(result.current).toBe('hidden');
   });
 });

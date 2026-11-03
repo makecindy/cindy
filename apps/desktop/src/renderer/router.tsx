@@ -2,9 +2,9 @@ import { RemoteBotSessionView } from '@/features/bots/RemoteBotSessionView';
 import { createHashRouter, Navigate } from 'react-router-dom';
 
 import { MainLayout } from '@/components/layout/MainLayout';
+import { MainEntryRedirect } from '@/components/layout/MainEntryRedirect';
 import { RouteErrorFallback } from '@/components/error/RouteErrorFallback';
 import { SidebarWindowLayout } from '@/components/layout/SidebarWindowLayout';
-import { GhostPanelWindowLayout } from '@/components/layout/GhostPanelWindowLayout';
 import { SettingsView } from '@/components/settings/SettingsView';
 import { LoginPage } from '@/components/login/LoginPage';
 import { AddAccountLoginPage } from '@/components/login/AddAccountLoginPage';
@@ -20,18 +20,21 @@ import { OrcaWorkflowRoute } from '@/features/cc-agent/OrcaWorkflowRoute';
 import { WorkdirBrowseRoute } from '@/features/cc-agent/workdir-browse/WorkdirBrowseRoute';
 import { IssueTrackerFeatureLayout } from '@/features/issue-tracker/IssueTrackerFeatureLayout';
 import { SkillhubFeatureLayout } from '@/features/skillhub/SkillhubFeatureLayout';
-import { SkillhubHomeView } from '@/features/skillhub/SkillhubHomeView';
-import { SkillhubDetailView } from '@/features/skillhub/SkillhubDetailView';
+import { SkillhubLocalLayout } from '@/features/skillhub/SkillhubLocalLayout';
+import { SkillhubDetailRoute, LegacySkillDetailRedirect } from '@/features/skillhub/SkillhubDetailRoute';
 import { SkillhubMarketListView } from '@/features/skillhub/SkillhubMarketListView';
 import { MakerExperimentalView } from '@/features/maker-experimental/MakerExperimentalView';
 import { SchedulerPage } from '@/features/scheduler';
 import { GhostPluginPage } from '@/features/plugin/GhostPluginPage';
 import { BotsFeatureLayout } from '@/features/bots/BotsFeatureLayout';
+import { BotsListView } from '@/features/bots/BotsListView';
 import { BotsHomeView } from '@/features/bots/BotsHomeView';
 import { BotHistorySessionView } from '@/features/bots/BotHistorySessionView';
 import { BotRosterView } from '@/features/bots/BotRosterView';
+import { BotMarketRoute } from '@/features/bots/BotMarketDialog';
 import { BotSessionView } from '@/features/bots/BotSessionView';
 import { BotDirectMessageView } from '@/features/bots/BotDirectMessageView';
+import { BotGroupChatView } from '@/features/bots/BotGroupChatView';
 import { GhostMainViewFeatureLayout } from '@/features/plugin/GhostMainViewFeatureLayout';
 
 /**
@@ -43,7 +46,7 @@ import { GhostMainViewFeatureLayout } from '@/features/plugin/GhostMainViewFeatu
  *   ProtectedRoute (已登录) — 校验 canEnterApp（真登出或换号窗口）
  *    └── LocalDbGate               → 等 localDb.ensureReady（按 userId 切库）
  *         └── MainLayout            → 主功能区
- *              ├── /                → Navigate to /cc-agent
+ *              ├── /                → Restore account's last top-level entry
  *              ├── /cc-agent/...    → CCAgentFeatureLayout
  *              ├── /bots/...        → BotsFeatureLayout
  *              └── /settings        → SettingsView
@@ -80,13 +83,6 @@ export const router = createHashRouter([
             element: <SidebarWindowLayout />,
             errorElement: <RouteErrorFallback variant="section" />,
           },
-          // 插件面板独立窗口(?ghostPanelWindow=<id>)的根路由 —— 同样与
-          // MainLayout 平级,只挂 46px chrome + 面板体。
-          {
-            path: 'ghost-panel-window',
-            element: <GhostPanelWindowLayout />,
-            errorElement: <RouteErrorFallback variant="section" />,
-          },
           {
             element: <MainLayout />,
             children: [
@@ -96,7 +92,7 @@ export const router = createHashRouter([
                 // 切到其它页面;MainLayout 自身崩溃才冒泡到根级全屏兜底。
                 errorElement: <RouteErrorFallback variant="section" />,
                 children: [
-                  { index: true, element: <Navigate to="/cc-agent" replace /> },
+                  { index: true, element: <MainEntryRedirect /> },
                   {
                     path: 'cc-agent',
                     element: <CCAgentFeatureLayout />,
@@ -126,11 +122,18 @@ export const router = createHashRouter([
                     element: <BotsFeatureLayout />,
                     children: [
                       { index: true, element: <BotsHomeView /> },
+                      { path: 'list', element: <BotsListView /> },
                       // 阵容是主区的一页,不是浮在对话上的模态。静态段排在 :botId
                       // 之前(React Router 也按静态优先定级),所以 /bots/roster 不会
                       // 被当成一个叫 "roster" 的伙伴。
                       { path: 'roster', element: <BotRosterView /> },
+                      { path: 'market/:packageId?', element: <BotMarketRoute /> },
+                      // 伙伴群聊是独立对象(不是某位伙伴的任务),静态段 'groups' 同样排在
+                      // :botId 之前,/bots/groups/<id> 不会被当成一个叫 "groups" 的伙伴。
+                      { path: 'groups/:groupId', element: <BotGroupChatView /> },
                       { path: 'remote/:deviceId/:botId', element: <RemoteBotSessionView /> },
+                      { path: 'remote/:deviceId/:botId/session/:sessionId', element: <RemoteBotSessionView /> },
+                      { path: 'remote/:deviceId/:botId/history/:sessionId', element: <BotHistorySessionView /> },
                       // 伙伴私聊只从双方时间线里的消息入口打开，不出现在左侧伙伴列表。
                       { path: ':botId/direct/:threadId', element: <BotDirectMessageView /> },
                       { path: ':botId', element: <BotsHomeView /> },
@@ -150,17 +153,17 @@ export const router = createHashRouter([
                     children: [
                       { index: true, element: <Navigate to="/skillhub/local" replace /> },
                       {
-                        path: 'local',
+                        element: <SkillhubLocalLayout />,
                         children: [
+                          { path: 'detail', element: <SkillhubDetailRoute /> },
                           {
-                            index: true,
-                            element: <SkillhubHomeView />,
-                          },
-                          { path: 'by-path', element: <SkillhubDetailView /> },
-                          { path: ':kind/global/:name', element: <SkillhubDetailView /> },
-                          {
-                            path: ':kind/project/:projectHash/:name',
-                            element: <SkillhubDetailView />,
+                            path: 'local',
+                            children: [
+                              { index: true, element: null },
+                              { path: 'by-path', element: <LegacySkillDetailRedirect /> },
+                              { path: ':kind/global/:name', element: <LegacySkillDetailRedirect /> },
+                              { path: ':kind/project/:projectHash/:name', element: <LegacySkillDetailRedirect /> },
+                            ],
                           },
                         ],
                       },
@@ -168,16 +171,15 @@ export const router = createHashRouter([
                         path: 'market',
                         children: [
                           { index: true, element: <SkillhubMarketListView /> },
-                          // 全屏详情页/旧管理整页已移除(详情与管理统一走市场列表内的浮窗),
-                          // 旧 URL 一律 fallback 回 market 列表
+                          // Existing market bookmarks resolve to the shared detail page.
                           {
                             path: 'manage/:name',
-                            element: <Navigate to="/skillhub/market" replace />,
+                            element: <LegacySkillDetailRedirect market />,
                           },
-                          { path: ':name', element: <Navigate to="/skillhub/market" replace /> },
+                          { path: ':name', element: <LegacySkillDetailRedirect market /> },
                           {
                             path: ':kind/:name',
-                            element: <Navigate to="/skillhub/market" replace />,
+                            element: <LegacySkillDetailRedirect market />,
                           },
                         ],
                       },
