@@ -401,6 +401,46 @@ describe("Feishu IPC account scope", () => {
     expect(mocks.writeCredentials).not.toHaveBeenCalled();
     expect(mocks.start).not.toHaveBeenCalled();
   });
+
+  it("does not broadcast success when the round is superseded while connecting", async () => {
+    vi.useFakeTimers();
+    const connecting = deferred<"connected">();
+    mocks.start.mockReturnValueOnce(connecting.promise as never);
+    mocks.pollRegistration.mockResolvedValueOnce({
+      status: "success",
+      result: {
+        clientId: "cli_superseded",
+        clientSecret: "superseded-secret",
+        tenantBrand: "feishu",
+        ownerOpenId: "ou_superseded",
+      },
+    });
+    mocks.requestRegistration.mockResolvedValue({
+      deviceCode: "device-code",
+      userCode: "user-code",
+      verificationUri: "https://example.test",
+      interval: 1,
+      expiresIn: 600,
+    });
+
+    const begin = handlers.get("feishuBot:registration-begin");
+    await expect(
+      Promise.resolve(begin?.({ service: "feishu" })),
+    ).resolves.toMatchObject({ ok: true });
+    await vi.advanceTimersByTimeAsync(1000);
+    await vi.waitFor(() => expect(mocks.start).toHaveBeenCalledOnce());
+
+    // 连接尚未返回时用户取消/重新发起: 这一轮已不是当前轮次。
+    cancelAppRegistration();
+    connecting.resolve("connected");
+    await vi.runAllTimersAsync();
+
+    const statuses = broadcasts.mock.calls
+      .filter(([channel]) => channel === "feishuBot:registration-status")
+      .map(([, payload]) => (payload as { status: string }).status);
+    // 旧轮次的完成不得再驱动界面, 否则会切走正在进行的授权。
+    expect(statuses).not.toContain("success");
+  });
 });
 
 describe("Feishu credential connection semantics", () => {

@@ -409,6 +409,10 @@ async function pollRegistrationInBackground(
         });
         return;
       }
+      // saveAndConnect 是 await 的: 期间用户可能已取消或重新发起。这一轮
+      // 已经不是当前轮时不能再广播 success —— 否则旧授权的完成会把界面
+      // 切到已绑定卡片，连带卸载正在进行的新一轮授权。
+      if (runId !== S().registrationRunId) return;
       broadcast("feishuBot:registration-status", {
         status: "success",
         runId,

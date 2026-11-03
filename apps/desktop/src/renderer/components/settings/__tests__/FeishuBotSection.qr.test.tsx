@@ -276,6 +276,43 @@ describe('Feishu bot authorization', () => {
     expect(hook.result.current.userCode).toBe('RETRY');
   });
 
+  it('drops a retry whose cancellation is overtaken by a service switch', async () => {
+    vi.useFakeTimers();
+    const { api } = installApi();
+    let releaseCancel: (value: { ok: true }) => void = () => {};
+    api.registrationCancel.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          releaseCancel = resolve;
+        }),
+    );
+    const hook = renderHook(({ service }) => useFeishuBotRegistration(service), {
+      initialProps: { service: 'feishu' as 'feishu' | 'lark' },
+    });
+    await act(async () => {
+      await hook.result.current.beginRegistration();
+    });
+    act(() => {
+      vi.advanceTimersByTime(30_000);
+    });
+    expect(hook.result.current.phase).toBe('expired');
+
+    let retry: Promise<void>;
+    act(() => {
+      retry = hook.result.current.beginRegistration();
+    });
+    // 等待作废旧轮次期间用户切到 Lark: 这次重试必须作废，不能再用
+    // 捕获的 feishu 服务发一轮 begin。
+    hook.rerender({ service: 'lark' });
+    const beginCallsBefore = api.registrationBegin.mock.calls.length;
+    await act(async () => {
+      releaseCancel({ ok: true });
+      await retry;
+    });
+    expect(api.registrationBegin.mock.calls.length).toBe(beginCallsBefore);
+    expect(hook.result.current.phase).toBe('idle');
+  });
+
   it('ignores a result from an earlier round so it cannot interrupt the current one', async () => {
     const { api, emit } = installApi();
     let resolveFirst: (value: Awaited<ReturnType<typeof api.registrationBegin>>) => void = () => {};
