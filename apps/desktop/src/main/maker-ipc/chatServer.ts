@@ -22,7 +22,7 @@ import { MIRROR_ATTACHMENT_MAX_BYTES } from '../companion-cloud/mirror.js';
 import { request as httpRequest } from 'node:http';
 import { request as httpsRequest } from 'node:https';
 import { migrateLocalGroups, type ChatContentBlock } from './chatServerMigration.js';
-import { chatErrorDiagnostic, chatGroupFailure, missingGroupCode } from './chatServerErrors.js';
+import { chatErrorDiagnostic, chatGroupFailure, contentShapes, detailsDiagnostic, missingGroupCode } from './chatServerErrors.js';
 import { createChatMedia } from './chatServerMedia.js';
 import { mergeChatReplyAttachments } from './chatServerReplyAttachments.js';
 import { prepareChatReplyImages } from './chatServerReplyImages.js';
@@ -735,8 +735,10 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
       const routeTemplate = route.split('?')[0].split('/').map(part =>
         ['conversations','media','complete','messages','plans','members','snapshot','import','actors','me','executions'].includes(part) || !part ? part : ':id').join('/');
       const operation = data && typeof data === 'object' && 'operationId' in data ? data.operationId : null;
+      const details = error instanceof ChatResponseError ? detailsDiagnostic(error.details) : undefined;
       deps.log?.warn('Chat request failed', { route: routeTemplate, method, durationMs: Date.now() - started,
-        ...(typeof operation === 'string' ? { trace: createHash('sha256').update(operation).digest('hex').slice(0, 16) } : {}), ...chatErrorDiagnostic(error) });
+        ...(typeof operation === 'string' ? { trace: createHash('sha256').update(operation).digest('hex').slice(0, 16) } : {}), ...chatErrorDiagnostic(error),
+        ...(details === undefined ? {} : { details }) });
       throw error;
     });
   }
@@ -2181,6 +2183,64 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
     }
     await deliverSettlement(run);
   }
+  type Settlement = NonNullable<Running['settlement']>;
+  /**
+   * The terminal result goes out once, with one explainable degradation: a completion the server
+   * definitely refuses for its content is retried without the optional `cindy.work-record`
+   * locator, so a reply the companion already wrote still reaches the group instead of being lost
+   * (#8598). Same operation, same text and files — the card contract itself is never rewritten to
+   * slip past validation, and the refusal plus what was left out stay in the log.
+   */
+  async function settleRun(run: Running, action: string, pending: Settlement) {
+    const payload = pending.payload!;
+    const blocks = payload.content;
+    try { await updateExecution(run, action, payload); }
+    catch (error) {
+      if (!withoutProcessLocator(action, payload, error)) throw error;
+      deps.log?.warn('Group completion retried without the process locator', { groupId: run.execution.conversation_id, action,
+        ...(Array.isArray(blocks) ? { blocks: contentShapes(blocks) } : {}), ...chatErrorDiagnostic(error), ...refusalDetails(error) });
+      await updateExecution(run, action, payload);
+    }
+  }
+  /**
+   * A definitive refusal of a completion for its content, with the optional locator dropped from
+   * the retry. A refusal of anything else (auth, permissions, the lease) keeps its own handling.
+   */
+  function withoutProcessLocator(action: string, payload: Record<string, unknown>, error: unknown): boolean {
+    if (action !== 'complete' || !(error instanceof ChatResponseError) || retryableResponse(error)) return false;
+    if (error.status < 400 || error.status >= 500 || error.status === 408) return false;
+    if (!['INVALID_INPUT', 'INVALID_PARAMS', 'REQUEST_FAILED'].includes(error.message)) return false;
+    if (!Array.isArray(payload.content)) return false;
+    const kept = (payload.content as unknown[]).filter(block =>
+      (block as { namespace?: unknown } | null)?.namespace !== 'cindy.work-record');
+    if (kept.length === payload.content.length) return false;
+    payload.content = kept;
+    return true;
+  }
+  function refusalDetails(error: unknown) {
+    const details = error instanceof ChatResponseError ? detailsDiagnostic(error.details) : undefined;
+    return details === undefined ? {} : { details };
+  }
+  /**
+   * A terminal result the server refuses outright would otherwise leave the group waiting on a
+   * lease nobody releases, so the turn stays 「处理中」 with no answer and no notice. Retire it with
+   * the failure the group already knows how to present, keep the concrete category for this
+   * account's own projection, and record what was refused. Nothing is posted twice: the refused
+   * attempt never applied.
+   */
+  async function retireRefusedSettlement(run: Running, pending: Settlement, error: unknown) {
+    const action = pending.cancelled ? 'cancel' : pending.terminal.outcome === 'error' ? 'fail' : 'complete';
+    deps.log?.warn('Group settlement refused', { groupId: run.execution.conversation_id, action,
+      ...(Array.isArray(pending.payload?.content) ? { blocks: contentShapes(pending.payload.content) } : {}),
+      ...chatErrorDiagnostic(error), ...refusalDetails(error) });
+    if (action !== 'complete') return;
+    failureCodes.set(`${run.execution.id}:${run.execution.epoch}`, 'RUNTIME_ERROR');
+    if (failureCodes.size > 1000) failureCodes.delete(failureCodes.keys().next().value!);
+    try { await updateExecution(run, 'fail', { detail: botGroupRuntimeFailureDetail('RUNTIME_ERROR') }); }
+    catch (retireError) {
+      deps.log?.warn('Group completion could not be retired', { groupId: run.execution.conversation_id, ...chatErrorDiagnostic(retireError) });
+    }
+  }
   function deliverSettlement(run: Running): Promise<void> {
     if (run.delivery) return run.delivery;
     const pending = run.settlement;
@@ -2262,7 +2322,8 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
               ...(singleSpeaker || run.execution.mask_owner_id ? {} : { continueDiscussion: run.context?.kind !== 'member.joined' && !run.plan && !isBotGroupNoReplyText(text) }) };
         }
         if (!current() || running.get(run.execution.id) !== run || run.settlement !== pending) return;
-        await updateExecution(run, pending.cancelled ? 'cancel' : pending.terminal.outcome === 'error' ? 'fail' : 'complete', pending.payload);
+        const action = pending.cancelled ? 'cancel' : pending.terminal.outcome === 'error' ? 'fail' : 'complete';
+        await settleRun(run, action, pending);
         if (run.execution.mask_kind === 'digest' && !pending.cancelled && pending.terminal.outcome !== 'error') {
           const bot = localBot(run.execution.bot_id);
           if (bot && companion) await companion.receivePrivateReport(bot.id);
@@ -2298,6 +2359,9 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
             : Date.now() + 15000;
           return;
         }
+        // Definitively refused even after the explainable degradation: close the turn instead of
+        // leaving it running, and keep the reason diagnosable (#8598).
+        await retireRefusedSettlement(run, pending, error);
       } finally { run.delivery = undefined; }
       if (running.get(run.execution.id) === run && run.settlement === pending) {
         run.releaseToolAuthority?.();

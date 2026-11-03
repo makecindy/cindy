@@ -863,6 +863,13 @@ Desktop 群聊只对 `TOKEN_EXPIRED`、`INVALID_TOKEN`、`AUTH_REQUIRED` 的 401
 心跳明确拒绝时立即释放旧执行，不能占住伙伴直到等待结束。普通网络丢失响应仍使用
 原提交回执重试，不插入心跳。租约确实过期时接受最终拒绝，不更换执行身份来提交旧结果。
 账号不可用、权限撤回或执行租约失效等明确拒绝仍停止提交，换账号后不重发旧结果。
+**服务端以 4xx 明确拒绝提交内容本身时（#8598：`complete` 返回 400 `INVALID_INPUT`），已生成的回复不能丢**：
+先用同一 `operationId`、同一正文与附件重发一次，只去掉可选的 `cindy.work-record` 过程定位卡——
+它是这条回复的附加入口，不是结算契约；不伪造或改写卡片 schema 去绕过校验。
+重发仍被拒绝时按既有失败口径以 `fail` 收尾（群侧显示本地化的失败提示与重试入口，
+不把执行留在「处理中/未回复」等租约过期），本机保留具体错误类别，且绝不另发一条消息冒充成功。
+两种拒绝都把 action、content 各块的 type／namespace／schemaRevision 与服务端 `error.details`
+写进日志；聊天正文、附件地址与凭证一律不记。
 回归见 `main/maker-ipc/__tests__/chatServer.test.ts`。
 
 ### Desktop 群邀请深链续接

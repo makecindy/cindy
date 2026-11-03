@@ -17,6 +17,52 @@ export function missingGroupCode(code: string): string {
   return code === 'NOT_A_GROUP' ? 'CONVERSATION_NOT_FOUND' : code;
 }
 
+/**
+ * The shape of one message's blocks, for a log line: block type, plus a card's namespace and
+ * revision. Text, captions, card data and media IDs/URLs never leave the process — a request the
+ * server refused has to be diagnosable without turning the log into chat history.
+ */
+export function contentShapes(content: unknown): Array<{ type: string; namespace?: string; schemaRevision?: number }> | undefined {
+  if (!Array.isArray(content)) return undefined;
+  return content.map(block => {
+    const value = block && typeof block === 'object' ? block as Record<string, unknown> : {};
+    return { type: typeof value.type === 'string' ? value.type : 'unknown',
+      ...(typeof value.namespace === 'string' ? { namespace: value.namespace } : {}),
+      ...(typeof value.schemaRevision === 'number' && Number.isInteger(value.schemaRevision)
+        ? { schemaRevision: value.schemaRevision } : {}) };
+  });
+}
+
+/** A field path or other identifier-shaped scalar; prose does not qualify. */
+const DETAIL_IDENTIFIER = /^[A-Za-z0-9_.:\[\]<>=\/-]{1,120}$/;
+
+/**
+ * A server's `error.details`, narrowed to what a validator can safely say: identifier-shaped
+ * scalars (field paths, codes), numbers and booleans stay, anything else becomes its length.
+ * Depth and entry count are bounded. A server that echoes the rejected message body must not
+ * put chat text into the log.
+ */
+export function detailsDiagnostic(details: unknown): unknown {
+  const narrow = (value: unknown, depth: number): unknown => {
+    if (value === null || typeof value === 'boolean' || typeof value === 'number') return value;
+    if (typeof value === 'string') return DETAIL_IDENTIFIER.test(value) ? value : `<text:${value.length}>`;
+    if (depth >= 3) return undefined;
+    if (Array.isArray(value)) {
+      const items = value.slice(0, 20).map(item => narrow(item, depth + 1)).filter(item => item !== undefined);
+      return items.length ? items : undefined;
+    }
+    if (typeof value === 'object') {
+      const entries = Object.entries(value as Record<string, unknown>).slice(0, 20).flatMap(([key, item]) => {
+        const narrowed = narrow(item, depth + 1);
+        return narrowed === undefined || !DETAIL_IDENTIFIER.test(key) ? [] : [[key, narrowed] as const];
+      });
+      return entries.length ? Object.fromEntries(entries) : undefined;
+    }
+    return undefined;
+  };
+  return narrow(details, 0);
+}
+
 /** Stable localized categories for desktop and remote controllers; raw errors stay private. */
 export function chatGroupFailure(error: unknown): BotGroupFailure {
   const { code: raw, status } = chatErrorDiagnostic(error);
