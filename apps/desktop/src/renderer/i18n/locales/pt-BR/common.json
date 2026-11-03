@@ -7667,7 +7667,7 @@
         "agentObserveDetail": "Pode ver o título, o tipo de agente, se está arquivada e o status (em execução, precisa de atenção, última atividade) das sessões dos projetos locais registrados, e abrir uma sessão na janela principal. Não pode ler mensagens, planos ou arquivos, nem enviar mensagens ou alterar sessões.",
         "agentObserveRequest": "Revisar permissão para ver sessões",
         "agentCompanions": "Pode ver os colegas, o status e a resposta mais recente deles",
-        "agentCompanionsDetail": "Pode ver todos os colegas, inclusive os que rodam nos seus outros computadores: nome, descrição, avatar, status (trabalhando, aguardando você, inativo, offline), o tipo de etapa em que cada um está (como pensando ou executando uma ferramenta), os títulos das solicitações que aguardam você e o texto da resposta mais recente; e abrir a conversa de um colega na janela principal. Não pode responder a solicitações, enviar mensagens nem ler mensagens anteriores ou arquivos.",
+        "agentCompanionsDetail": "Pode ver todos os colegas, inclusive os que rodam nos seus outros computadores: nome, descrição, avatar, status (trabalhando, aguardando você, inativo, offline), o tipo de etapa em que cada um está (como pensando ou executando uma ferramenta), as solicitações que aguardam você do jeito que os cartões as mostram (perguntas, comandos a executar, planos) e o texto da resposta mais recente; e abrir a conversa de um colega na janela principal. Com a permissão de entregar mensagens também, pode repassar as respostas que você der no plugin: responder perguntas, recusar solicitações e comentar planos. Para permitir uma etapa, você ainda clica na confirmação do próprio Cindy. Não pode ler mensagens anteriores nem arquivos.",
         "agentCompanionsRequest": "Revisar permissão para ver colegas",
         "agentHiddenTasks": "Pode criar tarefas em segundo plano ocultas da lista de tarefas",
         "agentHiddenTasksDetail": "As tarefas criadas por este plugin podem ficar fora da lista de tarefas, da busca e das notificações. Você sempre pode visualizá-las, abri-las ou exibi-las na lista de tarefas em Tarefas em segundo plano, na página deste plugin; desinstalar o plugin volta a exibi-las.",
@@ -18938,6 +18938,21 @@
     "taskDetail": "Isso permite edições apenas na sessão atual. Um diretório de trabalho separado não é um sandbox do sistema; os comandos continuam sujeitos às verificações de permissão do Cindy. Você pode alterar isso no menu de permissões da sessão.",
     "allow": "Permitir e continuar",
     "cancel": "Agora não"
+  },
+  "pluginCompanionAnswer": {
+    "title": "Confirmar permissão",
+    "planMessage": "Deixar {{companion}} começar a trabalhar neste plano?",
+    "permissionMessage": {
+      "command": "Permitir que {{companion}} execute este comando?",
+      "file-read": "Permitir que {{companion}} leia estes arquivos?",
+      "file-write": "Permitir que {{companion}} altere estes arquivos?",
+      "browser": "Permitir que {{companion}} execute esta etapa no navegador?",
+      "plugin": "Permitir que {{companion}} use “{{tool}}”?",
+      "tool": "Permitir que {{companion}} use {{tool}}?"
+    },
+    "source": "Você escolheu Permitir no plugin “{{plugin}}”. O {{appName}} confirma aqui mais uma vez; depois, o colega continua.",
+    "allow": "Permitir",
+    "cancel": "Cancelar"
   },
   "groupTools": {
     "authorizationRequired": "A autorização do grupo expirou ou não permite esta ação. Peça ao proprietário do colega para fazer uma nova solicitação neste grupo.",

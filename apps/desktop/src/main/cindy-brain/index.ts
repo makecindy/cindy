@@ -9589,18 +9589,28 @@ export function registerGhostIpc(): void {
         if (!window || !isTrustedAppRendererWindow(window)) return Promise.resolve(false);
         return createWindowGhostInstallConsentPrompt(window.webContents)({ purpose: 'task-capability', initiator: 'user', origin: 'local-file', facts });
       };
+      // Answering a companion's request is delivering the owner's words to it: agent.targets as well.
+      const answering = (payload as { kind?: unknown } | null)?.kind === 'answer';
+      if (answering && findGhostForInstanceId(id)?.manifest.agent?.targets !== true) {
+        return { ok: false, error: { code: 'PERMISSION_DENIED', message: 'PERMISSION_DENIED', retryable: false } };
+      }
       try {
-        if (!await requestPluginTaskApproval(id, isCurrent, confirmCapability, false, 'companions')) {
-          return { ok: false, error: { code: 'PERMISSION_DENIED', message: 'PERMISSION_DENIED', retryable: false } };
+        const capabilities: PluginTaskCapability[] = answering ? ['companions', 'tasks', 'targets'] : ['companions'];
+        for (const capability of capabilities) {
+          if (!await requestPluginTaskApproval(id, isCurrent, confirmCapability, false, capability)) {
+            return { ok: false, error: { code: 'PERMISSION_DENIED', message: 'PERMISSION_DENIED', retryable: false } };
+          }
         }
       } catch {
         return { ok: false, error: { code: 'PERMISSION_DENIED', message: 'PERMISSION_DENIED', retryable: false } };
       }
       const revision = pluginCompanionAuthorizationRevision(id);
+      const targetRevision = answering ? pluginTargetAuthorizationRevision(id) : null;
       return handlePluginCompanionRequest(pluginCompanionAdapter, pluginCompanionHub, payload, {
         ghostId: id,
         assertAuthorized: () => {
-          if (!isCurrent() || !revision || pluginCompanionAuthorizationRevision(id) !== revision)
+          if (!isCurrent() || !revision || pluginCompanionAuthorizationRevision(id) !== revision ||
+              (answering && (!targetRevision || pluginTargetAuthorizationRevision(id) !== targetRevision)))
             throw Object.assign(new Error('PERMISSION_DENIED'), { code: 'PERMISSION_DENIED' });
         },
       });

@@ -7543,7 +7543,7 @@
         "agentObserveDetail": "可观已登记之此机案中差事之题、Agent 之类、归档与否及其状（方行、待理、近动之时），并于主窗启某差事。不能读讯、谋划与文件，亦不能遣讯或改差事。",
         "agentObserveRequest": "确认观差事之权柄",
         "agentCompanions": "可观同僚、其状与新复",
-        "agentCompanionsDetail": "可观诸同僚（含行于君他机者）之名、简介、像与其状（方行、待君理、闲、离线），各同僚所行何类之事（如思虑、施器），待君理之请之题，及其最新一复之文，并于主窗启同僚之对谈。不能代君应请、遣讯，亦不能读前此之讯或文件。",
+        "agentCompanionsDetail": "可观诸同僚（含行于君他机者）之名、简介、像与其状（方行、待君理、闲、离线），各同僚所行何类之事（如思虑、施器），待君理之请之文（问、将行之令、策，与对谈所见同），及其最新一复之文，并于主窗启同僚之对谈。兼得遣讯之许者，可将君于法器所予之答转致同僚：答问、却请、议策；许其行事，仍须君于 Cindy 自有之确框亲点。不能读前此之讯或卷。",
         "agentCompanionsRequest": "确认观同僚之权柄",
         "agentHiddenTasks": "可立不见于差事录之背后差事",
         "agentHiddenTasksDetail": "本法器所立之差事，可不现于差事录、搜索与告中。君可随时于法器详情之「背后差事」中观之、启之，或令显于差事录；卸除法器时，此等差事将复显示。",
@@ -18695,6 +18695,21 @@
     "autoMessage": "许「{{name}}」用 Auto 自动审批乎？",
     "autoDetail": "主差事与 Worker 之操作，将交 Cindy 自动审批。需人工确认或遭拒时仍会暂停；此非完全访问。此择存于法器 AI 规制，不改他差事之全域权柄。",
     "autoTaskDetail": "主差事与 Worker 之操作，将交 Cindy 自动审批。需人工确认或遭拒时仍会暂停；此非完全访问。仅改目前差事之权柄，不改法器预设规制。"
+  },
+  "pluginCompanionAnswer": {
+    "title": "确许",
+    "planMessage": "令{{companion}}依此策而行乎？",
+    "permissionMessage": {
+      "command": "许{{companion}}行此令乎？",
+      "file-read": "许{{companion}}读此诸卷乎？",
+      "file-write": "许{{companion}}改此诸卷乎？",
+      "browser": "许{{companion}}于览器行此一步乎？",
+      "plugin": "许{{companion}}用「{{tool}}」乎？",
+      "tool": "许{{companion}}用 {{tool}} 乎？"
+    },
+    "source": "君于法器「{{plugin}}」择许，{{appName}} 于此再询之；许之则同僚续行。",
+    "allow": "许",
+    "cancel": "罢"
   },
   "groupTools": {
     "authorizationRequired": "群授权已失效或不许此操作，请由同僚之主于本群重新发起。",

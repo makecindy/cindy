@@ -4,6 +4,7 @@ import {
   COMPANION_PUSH_INTERVAL_MS,
   createCompanionWatchHub,
   handlePluginCompanionRequest,
+  parsePluginCompanionAnswer,
   type PluginCompanionAdapter,
   type PluginCompanionContext,
 } from '../pluginCompanionSlot.js';
@@ -19,6 +20,8 @@ const adapter = (): PluginCompanionAdapter => ({
   avatar: vi.fn(async () => ({ src: null, fallback: 'A' })),
   reply: vi.fn(async () => ({ text: 'done', createdAt: 3, truncated: false })),
   open: vi.fn(async () => {}),
+  interaction: vi.fn(async (_companionId: string, ref: string) => ({ ref, kind: 'plan' as const, plan: 'Plan', truncated: false })),
+  answer: vi.fn(async () => ({ answered: true })),
 });
 const ctx = (over: Partial<PluginCompanionContext> = {}): PluginCompanionContext =>
   ({ ghostId: 'p', assertAuthorized: () => {}, ...over });
@@ -47,6 +50,9 @@ it.each([
   [{ kind: 'open', companionId: 'x'.repeat(4097) }],
   [{ kind: 'unwatch' }],
   [{ kind: 'send', companionId: 'b1', text: 'hi' }],
+  [{ kind: 'interaction', companionId: 'b1' }],
+  [{ kind: 'answer', companionId: 'b1', interactionRef: 'r' }],
+  [{ kind: 'answer', companionId: 'b1', interactionRef: 'r', answer: { kind: 'permission', decision: 'yes' } }],
   [null],
 ])('rejects %j before touching the adapter', async payload => {
   const a = adapter();
@@ -105,4 +111,32 @@ it('lets only the current subscription stop watching', () => {
   expect(h.unwatch('other', second)).toBe(false);
   expect(h.unwatch('p', second)).toBe(true);
   expect(vi.getTimerCount()).toBe(0);
+});
+
+it('reads one request and hands a well-formed answer to the adapter with the plugin id', async () => {
+  const a = adapter();
+  expect(await handlePluginCompanionRequest(a, hub(), { kind: 'interaction', companionId: 'b1', interactionRef: 'r' }, ctx()))
+    .toEqual({ ok: true, data: { interaction: { ref: 'r', kind: 'plan', plan: 'Plan', truncated: false } } });
+  const answer = { kind: 'question', answers: [{ choices: ['A'], text: 'more' }] };
+  expect(await handlePluginCompanionRequest(a, hub(), { kind: 'answer', companionId: 'b1', interactionRef: 'r', answer }, ctx()))
+    .toEqual({ ok: true, data: { answered: true } });
+  expect(a.answer).toHaveBeenCalledWith('b1', 'r', answer, { ghostId: 'p', guard: expect.any(Function) });
+  (a.answer as ReturnType<typeof vi.fn>).mockRejectedValueOnce(Object.assign(new Error('x'), { code: 'TASK_BUSY' }));
+  expect(await handlePluginCompanionRequest(a, hub(), { kind: 'answer', companionId: 'b1', interactionRef: 'r', answer: { kind: 'plan', decision: 'allow' } }, ctx()))
+    .toMatchObject({ ok: false, error: { code: 'TASK_BUSY' } });
+});
+
+it.each([
+  [{ kind: 'permission', decision: 'allow', updatedInput: { command: 'ls' } }],
+  [{ kind: 'plan', decision: 'allow', feedback: 'why' }],
+  [{ kind: 'plan', decision: 'deny', feedback: 7 }],
+  [{ kind: 'question', answers: [] }],
+  [{ kind: 'question', answers: [{ choices: 'A' }] }],
+  [{ kind: 'question', answers: [{ choices: [1] }] }],
+  [{ kind: 'question', answers: [{ choices: [], text: 'x'.repeat(8001) }] }],
+  [{ kind: 'question', answers: Array.from({ length: 21 }, () => ({ choices: ['A'] })) }],
+  [{ kind: 'ask_user_question', answers: {} }],
+  ['allow'],
+])('refuses the answer %j', value => {
+  expect(parsePluginCompanionAnswer(value)).toBeNull();
 });

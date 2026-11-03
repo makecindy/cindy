@@ -407,7 +407,8 @@ instanceId、generation、outcome（completed/failed/cancelled/interrupted）及
 ## 4.11.9 查看伙伴和状态（未发布）
 
 插件要把伙伴画成角色、头像墙或状态面板时，声明 `"agent": { "companions": true }`，在本机 Desktop 逻辑页使用 `cindy.companions`。
-它是一项独立权限（`agent:companions`），覆盖伙伴名单、实时状态、待处理请求摘要与最新一条回复；安装/更新时已确认的不重复询问，否则首次调用复用既有宿主确认。
+它是一项独立权限（`agent:companions`），覆盖伙伴名单、实时状态、待处理请求（内容与对话卡片上看到的一致）与最新一条回复；安装/更新时已确认的不重复询问，否则首次调用复用既有宿主确认。
+同时声明并获准 `agent.targets`（及其依赖的 `agent.tasks`）时，还可以用 `answer` 把主人在插件页面里给的回答交给伙伴；允许伙伴执行仍由 Cindy 自己的确认框确认。
 它不依赖、也不授予 `agent.tasks` / `targets` / `delegation` / `observe`；旧批准和历史未知字段不授予查看伙伴。拒绝或确认界面不可用时返回 `PERMISSION_DENIED`，不得自动循环重试；用户可在插件详情页点「确认伙伴查看权限」重新允许。
 先检查 `typeof cindy.companions?.list === 'function'`；旧客户端没有此入口时隐藏相关界面，不调用私有 IPC。Mobile 插件页面和没有逻辑页的 mainView 页面拿不到 `cindy.companions`（mainView 经 BroadcastChannel 向本插件逻辑页要数据）。
 
@@ -417,13 +418,24 @@ instanceId、generation、outcome（completed/failed/cancelled/interrupted）及
   - 主力电脑是旧版 Cindy 时仍有状态与工作阶段，但没有当前步骤说明、待处理请求与回复。
   - `activity` 为 `{phase, workingPhase, summary, startedAt, lastActivityAt}`。`phase` 为 `running | needs-interaction | completed | error | idle`（其他电脑连不上时为 `unknown`）。
     `workingPhase` 只在工作中出现，是公开类别：`thinking` 思考、`replying` 写回复、`reading-file` / `saving-file` / `searching` / `searching-files` / `reading-web` / `testing` / `checking` 等执行工具，`compacting` 整理上下文，`processing` 其他；不含命令、参数、网址或思考原文。`summary` 是宿主写的粗粒度说明。
-  - `interactions` 是伙伴正在等主人处理的请求 `[{ref, kind, title}]`：`title` 为问题或待批准的工具名，其他类型为 null；不含工具输入、计划正文或主人在宿主步骤里输入的值。`ref` 不透明，只能传回 `open`。
+  - `interactions` 是伙伴正在等主人处理的请求 `[{ref, kind, title}]`。`kind` 为 `question`（提问）、`permission`（工具确认）、`plan`（计划审阅）或 `other`（Cindy 自己的确认，如安装插件、更新、任务操作、代输入，只能用 `open` 去 Cindy 里处理）。`title` 为问题或待确认的工具名，其他为 null；名单里不含工具输入、计划正文，主人在宿主步骤里输入的值任何时候都不给插件。`ref` 不透明，只能传回 `interaction` / `answer` / `open`。
   - `lastReplyAt` 是最新一条完成回复的持久化时间。一轮工作结束（`phase` 由 `running` 变为 `completed` 或 `lastReplyAt` 变化）时读一次 `reply`，即可拿到这一轮的最后一条消息。
 - `avatar({companionId})`：返回 `{src, fallback}`。`src` 为 `data:image/jpeg` 头像或 null（伙伴用表情做头像时）；`fallback` 是可直接画的单个字形。
 - `reply({companionId})`：返回 `{reply:null | {text, createdAt, truncated}}`：伙伴主对话里最新一条可见回复的文字（其他电脑上的伙伴从它的主力电脑读取），最多 8000 字，超出时 `truncated=true`；不含更早的消息、附件、私密内容或子 Agent 输出。回复可能含个人或工作信息，插件不得外传或长期保存。
-- `open({companionId, interactionRef?})`：在主窗口打开伙伴的对话；带 `interactionRef` 时打开该请求所在的任务；其他电脑上的伙伴打开为远程对话。Cindy 未在前台时不抢焦点。返回 `{opened:true}`。请求一律在 Cindy 原生卡片里处理，插件不能代主人批准、回答或拒绝。
+- `open({companionId, interactionRef?})`：在主窗口打开伙伴的对话；带 `interactionRef` 时打开该请求所在的任务；其他电脑上的伙伴打开为远程对话。Cindy 未在前台时不抢焦点。返回 `{opened:true}`。
+- `interaction({companionId, interactionRef})`：返回 `{interaction}`，即这条请求在对话卡片上显示的内容（工具输入与手机上一样已脱敏）：
+  - `{kind:'question', questions:[{question, header, options:[{label, description}], multiSelect}]}`；
+  - `{kind:'permission', action, tool, subject, preview}`：`action` 为 `command | file-read | file-write | browser | plugin | tool`，`preview` 是要确认的命令、路径或参数（≤4000 字）；
+  - `{kind:'plan', plan, truncated}`：计划正文最多 20000 字；
+  - `{kind:'other', title}`：只能 `open`。
+- `answer({companionId, interactionRef, answer})`（另需 `agent.targets`）：把主人在插件页面里给的回答交给伙伴，返回 `{answered}`。
+  - 提问：`{kind:'question', answers:[{choices:[...], text?}]}`，按问题顺序一一对应；`choices` 只能取该问题的选项 `label`（单选最多一个），`text` 是主人自己写的回答；每题至少答一项。
+  - 拒绝工具：`{kind:'permission', decision:'deny'}`；对计划提意见或拒绝：`{kind:'plan', decision:'deny', feedback?}`（有 `feedback` 时伙伴按意见修改计划）。这些直接生效。
+  - 允许：`{kind:'permission', decision:'allow'}` / `{kind:'plan', decision:'allow'}` 会弹出 Cindy 自己的确认框，显示真实请求；主人在框里点允许才生效，取消时返回 `{answered:false}`。插件页面画不出、也点不到这个框，不要自己再做一层「确认允许」。同一时间只开一个框，再请求返回 `TASK_BUSY`；框打开期间请求变了或已在别处处理，返回 `TARGET_UNAVAILABLE`。
+  - 只能回答 `interaction` 给出的内容，不能改写工具输入，也不能「本会话一直允许」。其他电脑上的伙伴经它的主力电脑作答（需那台电脑在线并开启远程控制）。
+  - 回答后请求会从 `interactions` 里消失；主人在 Cindy、手机或其他插件里先处理了，同样消失，插件据此关掉自己的界面。
 - `watch()` / `unwatch({subscriptionId})`：每插件一个订阅，再次 `watch` 会替换旧订阅。变化时经 `cindy.onHostMessage` 收到 `{type:'companions-changed', subscriptionId, seq}`，不带内容，插件收到后重新 `list`；其他电脑上伙伴的变化也会通知；每插件最快 1 秒一次，订阅期间另有约 5 秒一次的心跳。逻辑页关闭、撤权或卸载后订阅自动结束。
-- 不存在、已归档、不可见，或主力电脑当前连不上（`reply`/`open`）的伙伴返回 `TARGET_UNAVAILABLE`；参数不对返回 `INVALID_PARAMS`；宿主未就绪返回 `HOST_NOT_READY`。只读，不能发消息、改伙伴设置或停止伙伴；派活请改用 `cindy.targets` 并声明对应权限。
+- 不存在、已归档、不可见、请求已不在等待，或主力电脑当前连不上的伙伴返回 `TARGET_UNAVAILABLE`；参数或回答不对返回 `INVALID_PARAMS`；宿主未就绪返回 `HOST_NOT_READY`。不能发消息、改伙伴设置或停止伙伴；派活请改用 `cindy.targets` 并声明对应权限。
 
 ```js
 if (typeof cindy.companions?.list === 'function') {
@@ -443,5 +455,17 @@ if (typeof cindy.companions?.list === 'function') {
   const { subscriptionId } = await cindy.companions.watch();
   cindy.onHostMessage(msg => { if (msg?.type === 'companions-changed' && msg.subscriptionId === subscriptionId) render(); });
   await render();
+}
+
+// The owner answers a companion's question in the plugin's page (agent.targets as well).
+async function answerFirst(c) {
+  const [request] = c.interactions;
+  if (!request || request.kind === 'other') return cindy.companions.open({ companionId: c.id, interactionRef: request?.ref });
+  const { interaction } = await cindy.companions.interaction({ companionId: c.id, interactionRef: request.ref });
+  const answer = interaction.kind === 'question'
+    ? { kind: 'question', answers: await askOwner(interaction.questions) }   // your own UI
+    : { kind: interaction.kind, decision: await ownerAllows(interaction) ? 'allow' : 'deny' }; // allow opens Cindy's dialog
+  const { answered } = await cindy.companions.answer({ companionId: c.id, interactionRef: request.ref, answer });
+  return answered;
 }
 ```

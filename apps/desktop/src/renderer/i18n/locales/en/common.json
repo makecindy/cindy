@@ -7600,7 +7600,7 @@
         "agentObserveDetail": "Can view the titles, agent type, archive state and status (running, needs attention, last activity) of tasks in registered local projects, and open a task in the main window. Cannot read messages, plans or files, send messages, or change tasks.",
         "agentObserveRequest": "Review task viewing permission",
         "agentCompanions": "Can view your teammates, their status and latest replies",
-        "agentCompanionsDetail": "Can view all your teammates, including those running on your other computers: name, description, avatar, status (working, waiting for you, idle, offline), what kind of step each is on (such as thinking or running a tool), the titles of requests waiting for you, and the text of each teammate’s latest reply; and open a teammate’s conversation in the main window. Cannot answer requests, send messages, or read earlier messages or files.",
+        "agentCompanionsDetail": "Can view all your teammates, including those running on your other computers: name, description, avatar, status (working, waiting for you, idle, offline), what kind of step each is on (such as thinking or running a tool), the requests waiting for you as their cards show them (questions, commands to run, plans), and the text of each teammate’s latest reply; and open a teammate’s conversation in the main window. With the message delivery permission as well, it can pass on the answers you give in the plugin: answer questions, decline requests, and give feedback on plans. Allowing a step still takes your click in Cindy’s own confirmation. Cannot read earlier messages or files.",
         "agentCompanionsRequest": "Review teammate viewing permission",
         "agentHiddenTasks": "Can create background tasks hidden from the task list",
         "agentHiddenTasksDetail": "Tasks this plugin creates can stay out of the task list, search and notifications. You can always view, open or show them in the task list from Background Tasks on this plugin’s page; uninstalling the plugin shows them again.",
@@ -18767,6 +18767,21 @@
     "taskDetail": "This allows edits only for the current session. A separate working directory is not a system sandbox; commands still follow Cindy permission checks. You can change this in the session’s permission menu.",
     "allow": "Allow and continue",
     "cancel": "Not now"
+  },
+  "pluginCompanionAnswer": {
+    "title": "Confirm allow",
+    "planMessage": "Let {{companion}} start working on this plan?",
+    "permissionMessage": {
+      "command": "Allow {{companion}} to run this command?",
+      "file-read": "Allow {{companion}} to read these files?",
+      "file-write": "Allow {{companion}} to change these files?",
+      "browser": "Allow {{companion}} to take this browser step?",
+      "plugin": "Allow {{companion}} to use “{{tool}}”?",
+      "tool": "Allow {{companion}} to use {{tool}}?"
+    },
+    "source": "You chose Allow in the plugin “{{plugin}}”. {{appName}} asks once more here; after you allow, the teammate continues.",
+    "allow": "Allow",
+    "cancel": "Cancel"
   },
   "groupTools": {
     "authorizationRequired": "Group authorization has expired or does not allow this action. Ask the teammate owner to make a new request in this group.",

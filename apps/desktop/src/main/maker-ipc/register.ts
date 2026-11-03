@@ -1595,7 +1595,7 @@ import {
   findActiveSessionByWorkdir,
 } from '../localDb/ipc/pluginWorkspaceSessions.js';
 import { normalizeWorkingDirForStorage } from '../../shared/workingDir.js';
-import { openMainWindowSession } from '../deepLink.js';
+import { getDeepLinkMainWindow, openMainWindowSession } from '../deepLink.js';
 import { handleSessionEvent, type SessionEventDependencies } from './sessionEventPipeline.js';
 import {
   createDeferredProductTurnFailureGate,
@@ -15158,6 +15158,28 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     pending: getPendingInteractionsForSession,
     openSession: (id, deviceId) => openMainWindowSession(id, { focus: 'if-active', ...(deviceId ? { deviceId } : {}) }),
     flushMessages: drainPersistQueue,
+    resolve: (requestId, decision) => resolvePendingInteraction(requestId, decision as InteractionDecision),
+    // Cindy's own dialog over the main window: a plugin's page cannot draw or click it.
+    confirmAllow: async ({ ghostId, companion, detail }) => {
+      const window = getDeepLinkMainWindow();
+      const plugin = getInstalledGhostName(ghostId) ?? ghostId;
+      const fill = (key: string, values: Record<string, string>) =>
+        Object.entries(values).reduce((value, [name, replacement]) => value.replaceAll(`{{${name}}}`, replacement), t(key));
+      const body = detail.kind === 'plan'
+        ? `${Array.from(detail.plan).slice(0, 1200).join('')}${Array.from(detail.plan).length > 1200 ? '…' : ''}`
+        : detail.preview;
+      const options = {
+        type: 'question' as const,
+        title: t('pluginCompanionAnswer.title'),
+        message: detail.kind === 'plan'
+          ? fill('pluginCompanionAnswer.planMessage', { companion })
+          : fill(`pluginCompanionAnswer.permissionMessage.${detail.action}`, { companion, tool: detail.subject ?? detail.tool }),
+        detail: `${body}\n\n${fill('pluginCompanionAnswer.source', { plugin })}`,
+        buttons: [t('pluginCompanionAnswer.allow'), t('pluginCompanionAnswer.cancel')], defaultId: 1, cancelId: 1,
+      };
+      const result = window && !window.isDestroyed() ? await dialog.showMessageBox(window, options) : await dialog.showMessageBox(options);
+      return result.response === 0;
+    },
     remote: {
       // The same computers the sidebar reads teammates from: online, remote control on there, allowed here.
       devices: () => {
@@ -15179,6 +15201,12 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
           if (!String((error as { code?: unknown })?.code ?? (error as Error)?.message).includes('UNSUPPORTED_CAPABILITY')) throw error;
           result = await invokeBotPeer(deviceId, channel, args);
         }
+        if (!result.ok) throw Object.assign(new Error(result.error.code), { code: result.error.code });
+        return result.result;
+      },
+      // Answering there goes the way remote control answers: the generic resolve channel, its origin gate included.
+      write: async (deviceId, channel, args) => {
+        const result = await invokeBotPeer(deviceId, channel, args);
         if (!result.ok) throw Object.assign(new Error(result.error.code), { code: result.error.code });
         return result.result;
       },

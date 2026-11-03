@@ -3,17 +3,60 @@ import type { TeammateStatus } from '@cindy/maker-shared/teammate-status';
 /**
  * What `cindy.companions` hands a plugin (agent.companions):
  * every companion of the account, including those running on the owner's other computers, read from each
- * companion's home computer so all computers show the same thing. Never tool inputs, commands, file names,
- * plan bodies or values the owner types for a host step.
+ * companion's home computer so all computers show the same thing. The list never carries tool inputs,
+ * commands, file names, plan bodies or values the owner types for a host step; `interaction` hands over one
+ * request the way the conversation shows it, so the plugin can let the owner answer it in its own page.
  */
+
+/**
+ * What a request asks of the owner. question / permission / plan can be answered with `answer` (allowing
+ * still goes through Cindy's own confirmation); `other` is one of Cindy's own confirmations, done in Cindy.
+ */
+export type PluginCompanionInteractionKind = 'question' | 'permission' | 'plan' | 'other';
 
 /** A request a companion is waiting on. `title` follows the bot-autonomy summary: the question, or the tool to approve; other kinds carry none. */
 export interface PluginCompanionInteraction {
-  /** Opaque; pass back to `open` to show this request in Cindy. */
+  /** Opaque; pass back to `interaction`, `answer` or `open`. */
   ref: string;
-  kind: string;
+  kind: PluginCompanionInteractionKind;
   title: string | null;
 }
+
+/** One request as the conversation card shows it (tool inputs already redacted like on a phone). */
+export type PluginCompanionInteractionDetail =
+  | {
+      ref: string;
+      kind: 'question';
+      questions: Array<{
+        question: string;
+        header: string | null;
+        options: Array<{ label: string; description: string | null }>;
+        multiSelect: boolean;
+      }>;
+    }
+  | {
+      ref: string;
+      kind: 'permission';
+      /** What allowing lets the companion do. */
+      action: 'command' | 'file-read' | 'file-write' | 'browser' | 'plugin' | 'tool';
+      /** The tool's readable name. */
+      tool: string;
+      /** The plugin or server for action=plugin. */
+      subject: string | null;
+      /** The command, paths or arguments being confirmed. */
+      preview: string;
+    }
+  | { ref: string; kind: 'plan'; plan: string; truncated: boolean }
+  | { ref: string; kind: 'other'; title: string | null };
+
+/**
+ * The owner's answer, given in the plugin's page. Answers to questions go by question order: picked option
+ * labels and/or the owner's own words. Allowing a permission or a plan opens Cindy's own confirmation.
+ */
+export type PluginCompanionAnswer =
+  | { kind: 'question'; answers: Array<{ choices: string[]; text?: string }> }
+  | { kind: 'permission'; decision: 'allow' | 'deny' }
+  | { kind: 'plan'; decision: 'allow' | 'deny'; feedback?: string };
 
 export interface PluginCompanion {
   id: string;

@@ -7667,7 +7667,7 @@
         "agentObserveDetail": "Peut voir le titre, le type d'Agent, l'archivage et l'état (en cours, action requise, dernière activité) des sessions des projets locaux enregistrés, et ouvrir une session dans la fenêtre principale. Ne peut pas lire les messages, les plans ni les fichiers, ni envoyer de messages ou modifier les sessions.",
         "agentObserveRequest": "Vérifier l'autorisation de voir les sessions",
         "agentCompanions": "Peut voir les coéquipiers, leur état et leur dernière réponse",
-        "agentCompanionsDetail": "Peut voir tous les coéquipiers, y compris ceux qui s'exécutent sur vos autres ordinateurs : nom, description, avatar, état (au travail, en attente de votre réponse, inactif, hors ligne), le type d'étape en cours (réflexion, exécution d'un outil, etc.), les titres des demandes qui vous attendent et le texte de leur dernière réponse ; et ouvrir la conversation d'un coéquipier dans la fenêtre principale. Ne peut pas répondre aux demandes, envoyer de messages ni lire les messages antérieurs ou les fichiers.",
+        "agentCompanionsDetail": "Peut voir tous les coéquipiers, y compris ceux qui s'exécutent sur vos autres ordinateurs : nom, description, avatar, état (au travail, en attente de votre réponse, inactif, hors ligne), le type d'étape en cours (réflexion, exécution d'un outil, etc.), les demandes qui vous attendent telles que leurs cartes les affichent (questions, commandes à exécuter, plans) et le texte de leur dernière réponse ; et ouvrir la conversation d'un coéquipier dans la fenêtre principale. Avec aussi l'autorisation de remettre des messages, il peut transmettre les réponses que vous donnez dans le plugin : répondre aux questions, refuser des demandes et commenter des plans. Pour autoriser une étape, vous cliquez toujours dans la confirmation propre à Cindy. Ne peut pas lire les messages antérieurs ni les fichiers.",
         "agentCompanionsRequest": "Vérifier l'autorisation de voir les coéquipiers",
         "agentHiddenTasks": "Peut créer des tâches en arrière-plan masquées de la liste des tâches",
         "agentHiddenTasksDetail": "Les tâches créées par ce plugin peuvent ne pas apparaître dans la liste des tâches, la recherche et les notifications. Vous pouvez toujours les voir, les ouvrir ou les afficher dans la liste des tâches depuis Tâches en arrière-plan sur la page de ce plugin ; désinstaller le plugin les fait réapparaître.",
@@ -18938,6 +18938,21 @@
     "taskDetail": "Les modifications sont autorisées uniquement pour la session en cours. Un répertoire de travail distinct n'est pas un bac à sable système ; les commandes restent soumises aux vérifications d'autorisation de Cindy. Vous pouvez changer ce réglage dans le menu des autorisations de la session.",
     "allow": "Autoriser et continuer",
     "cancel": "Pas maintenant"
+  },
+  "pluginCompanionAnswer": {
+    "title": "Confirmer l'autorisation",
+    "planMessage": "Laisser {{companion}} commencer à travailler selon ce plan ?",
+    "permissionMessage": {
+      "command": "Autoriser {{companion}} à exécuter cette commande ?",
+      "file-read": "Autoriser {{companion}} à lire ces fichiers ?",
+      "file-write": "Autoriser {{companion}} à modifier ces fichiers ?",
+      "browser": "Autoriser {{companion}} à effectuer cette étape dans le navigateur ?",
+      "plugin": "Autoriser {{companion}} à utiliser « {{tool}} » ?",
+      "tool": "Autoriser {{companion}} à utiliser {{tool}} ?"
+    },
+    "source": "Vous avez choisi Autoriser dans le plugin « {{plugin}} ». {{appName}} vous le redemande ici ; ensuite, le coéquipier continue.",
+    "allow": "Autoriser",
+    "cancel": "Annuler"
   },
   "groupTools": {
     "authorizationRequired": "L'autorisation du groupe a expiré ou ne permet pas cette action. Demandez au propriétaire du coéquipier de faire une nouvelle demande dans ce groupe.",

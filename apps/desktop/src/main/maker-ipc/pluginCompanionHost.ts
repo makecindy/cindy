@@ -3,8 +3,12 @@ import { eq } from 'drizzle-orm';
 import { COMPANION_LIVE_CHANNEL, COMPANION_LIVE_VERSION, REMOTE_RESOURCE_LIST_CHANNEL } from '@cindy/device-link';
 import { resolveTeammateStatus, TEAMMATE_STATUS_ORDER, type TeammateStatus } from '@cindy/maker-shared/teammate-status';
 import type { SessionActivitySnapshot } from '@cindy/maker-shared/session-activity';
+import { answerKey, describePermissionAction, encodeMultiSelectAnswer, normalizeAskQuestions } from '@cindy/maker-shared/interaction';
 import type { PluginCompanionAdapter } from '../cindy-brain/pluginCompanionSlot.js';
-import type { PluginCompanion, PluginCompanionInteraction, PluginCompanionReply } from '../../shared/pluginCompanions.js';
+import type {
+  PluginCompanion, PluginCompanionAnswer, PluginCompanionInteraction, PluginCompanionInteractionDetail, PluginCompanionInteractionKind, PluginCompanionReply,
+} from '../../shared/pluginCompanions.js';
+import { OWNER_ONLY_HOST_CONFIRMATION_TOOL_NAMES } from '../agent-app-update/constants.js';
 import { isSingleBotAvatarGrapheme } from '../../shared/botAvatarValue.js';
 import { getCurrentDbClientSnapshot } from '../localDb/client/current.js';
 import { sessions } from '../localDb/schema.js';
@@ -26,10 +30,18 @@ export const REMOTE_COMPANION_CACHE_MS = 800;
 export const REMOTE_COMPANION_READ_TIMEOUT_MS = 4000;
 const MAX_REMOTE_COMPANIONS = 200;
 const MAX_TEXT = 200;
+/** Longest plan body handed to a plugin; the rest stays in the conversation. */
+export const PLUGIN_COMPANION_PLAN_MAX = 20000;
+const PREVIEW_MAX = 4000;
+const RESOLVE_INTERACTION_CHANNEL = 'maker:resolve-interaction';
+const PENDING_INTERACTIONS_CHANNEL = 'maker:get-pending-interactions';
+/** Requests only the owner settles in Cindy itself, even though they ride the generic permission card. */
+const OWNER_ONLY_TOOLS: ReadonlySet<string> = new Set([...OWNER_ONLY_HOST_CONFIRMATION_TOOL_NAMES, 'ghost_contribution_submit', 'ghost_cancel_plugin_review']);
 
 const unavailable = (): never => { throw Object.assign(new Error('TARGET_UNAVAILABLE'), { code: 'TARGET_UNAVAILABLE' }); };
 const notReady = (): never => { throw Object.assign(new Error('HOST_NOT_READY'), { code: 'HOST_NOT_READY' }); };
 const invalid = (): never => { throw Object.assign(new Error('INVALID_PARAMS'), { code: 'INVALID_PARAMS' }); };
+const busy = (): never => { throw Object.assign(new Error('TASK_BUSY'), { code: 'TASK_BUSY' }); };
 const hash = (...parts: string[]) => createHash('sha256').update(parts.join('\n')).digest('hex').slice(0, 32);
 /** Opaque and stable for one pending request of one task; never the host's own request id. */
 const interactionRef = (sessionId: string, requestId: string) => hash(sessionId, requestId);
@@ -42,12 +54,90 @@ const record = (value: unknown): Record<string, unknown> =>
 const text = (value: unknown, max = MAX_TEXT) => typeof value === 'string' ? Array.from(value).slice(0, max).join('') : '';
 const time = (value: unknown) => typeof value === 'number' && Number.isFinite(value) && value >= 0 ? value : null;
 const STATUSES: ReadonlySet<string> = new Set(TEAMMATE_STATUS_ORDER);
+const KINDS: ReadonlySet<string> = new Set<PluginCompanionInteractionKind>(['question', 'permission', 'plan', 'other']);
+
+/** What a pending request asks of the owner, as far as a plugin may handle it. */
+export function companionInteractionKind(raw: unknown): PluginCompanionInteractionKind {
+  const request = record(raw);
+  if (request.kind === 'ask_user_question') return normalizeAskQuestions(request.questions).length ? 'question' : 'other';
+  if (request.kind === 'plan_review') return typeof request.plan === 'string' ? 'plan' : 'other';
+  if (request.kind !== 'permission') return 'other';
+  // Cindy's own confirmations (plugin install, app update, task actions…) ride this card; they stay in Cindy.
+  if (record(request.metadata).hostOwnedConfirmation !== undefined) return 'other';
+  const tool = typeof request.toolName === 'string' ? request.toolName : '';
+  return !tool || OWNER_ONLY_TOOLS.has(tool) || OWNER_ONLY_TOOLS.has(tool.split('__').pop() ?? '') ? 'other' : 'permission';
+}
+
+/** One pending request the way its conversation card shows it. */
+export function companionInteractionDetail(raw: unknown, ref: string): PluginCompanionInteractionDetail {
+  const request = record(raw);
+  const kind = companionInteractionKind(raw);
+  if (kind === 'question') {
+    return {
+      ref, kind,
+      questions: normalizeAskQuestions(request.questions).slice(0, 20).map(question => ({
+        question: text(question.question, 2000),
+        header: question.header ? text(question.header) : null,
+        options: (question.options ?? []).slice(0, 20).map(option => ({ label: text(option.label, 400), description: option.description ? text(option.description, 1000) : null })),
+        multiSelect: question.multiSelect === true,
+      })),
+    };
+  }
+  if (kind === 'permission') {
+    const toolName = text(request.toolName, 400);
+    const action = describePermissionAction(toolName, record(request.input));
+    return {
+      ref, kind, action: action.kind, tool: text(request.displayName, 400) || text(request.title, 400) || toolName,
+      subject: action.subject ? text(action.subject, 400) : null, preview: text(action.preview, PREVIEW_MAX),
+    };
+  }
+  if (kind === 'plan') {
+    const chars = Array.from(String(request.plan));
+    return { ref, kind, plan: chars.slice(0, PLUGIN_COMPANION_PLAN_MAX).join(''), truncated: chars.length > PLUGIN_COMPANION_PLAN_MAX };
+  }
+  return { ref, kind, title: summarizeInteraction(raw)?.summary ?? null };
+}
+
+/** The decision Cindy's own card would send for this answer; INVALID_PARAMS when it does not fit the request. */
+export function companionInteractionDecision(raw: unknown, answer: PluginCompanionAnswer): Record<string, unknown> {
+  const request = record(raw);
+  const kind = companionInteractionKind(raw);
+  if (answer.kind !== kind) return invalid();
+  if (answer.kind === 'permission') return { kind: 'permission', behavior: answer.decision };
+  if (answer.kind === 'plan') {
+    const feedback = answer.decision === 'deny' ? answer.feedback?.trim() : undefined;
+    return { kind: 'plan_review', behavior: answer.decision, ...(feedback ? { reason: feedback } : {}) };
+  }
+  const questions = normalizeAskQuestions(request.questions);
+  if (answer.answers.length !== questions.length) return invalid();
+  const answers: Record<string, string> = {};
+  questions.forEach((question, index) => {
+    const { choices, text: own = '' } = answer.answers[index]!;
+    const labels = new Set((question.options ?? []).map(option => option.label));
+    if (choices.some(choice => !labels.has(choice)) || (!question.multiSelect && choices.length > 1)) invalid();
+    const value = question.multiSelect ? encodeMultiSelectAnswer(question.options ?? [], new Set(choices), own) : own.trim() || choices[0] || '';
+    if (!value || value === '[]') invalid();
+    answers[answerKey(question)] = value;
+  });
+  return { kind: 'ask_user_question', answers };
+}
+
+/** Allowing lets the companion act: Cindy confirms that itself instead of trusting the plugin's page. */
+const needsOwnerConfirmation = (answer: PluginCompanionAnswer) => answer.kind !== 'question' && answer.decision === 'allow';
+
+export interface PluginCompanionAllowPrompt {
+  ghostId: string;
+  companion: string;
+  detail: Extract<PluginCompanionInteractionDetail, { kind: 'permission' | 'plan' }>;
+}
 
 export interface PluginCompanionRemoteDeps {
   /** This account's other computers; null when computers cannot be reached from here at all. */
   devices(): Promise<ReadonlyArray<{ deviceId: string; name: string; online: boolean; reachable: boolean }> | null>;
-  /** Invoke a channel on another computer of the account; rejects with an error carrying `code`. */
+  /** Read from another computer of the account; rejects with an error carrying `code`. */
   invoke(deviceId: string, channel: string, args: unknown[]): Promise<unknown>;
+  /** Change something on another computer (answering a request there), the way remote control does. */
+  write?(deviceId: string, channel: string, args: unknown[]): Promise<unknown>;
 }
 
 export interface PluginCompanionHostDeps {
@@ -57,6 +147,10 @@ export interface PluginCompanionHostDeps {
   openSession(sessionId: string, deviceId?: string): void;
   /** Let replies still being written reach the database before reading them. */
   flushMessages(): Promise<void>;
+  /** Settle one of a companion's own requests here (register.ts resolvePendingInteraction); false once it is gone. */
+  resolve?(requestId: string, decision: Record<string, unknown>): boolean;
+  /** Cindy's own confirmation, outside the plugin's page; true only when the owner allows. */
+  confirmAllow?(prompt: PluginCompanionAllowPrompt): Promise<boolean>;
   /** Reading companions whose home is another computer; without it they are listed as unreachable. */
   remote?: PluginCompanionRemoteDeps;
   now?: () => number;
@@ -93,8 +187,8 @@ function parseRemoteCompanion(value: unknown, deviceName: string | null): Plugin
   const interactions = (Array.isArray(item.interactions) ? item.interactions : []).flatMap((raw): PluginCompanionInteraction[] => {
     const interaction = record(raw);
     const ref = text(interaction.ref, 64);
-    const kind = text(interaction.kind, 64);
-    return ref && kind ? [{ ref, kind, title: typeof interaction.title === 'string' ? text(interaction.title, 400) : null }] : [];
+    const kind = KINDS.has(String(interaction.kind)) ? interaction.kind as PluginCompanionInteractionKind : 'other';
+    return ref ? [{ ref, kind, title: typeof interaction.title === 'string' ? text(interaction.title, 400) : null }] : [];
   }).slice(0, 20);
   return {
     id,
@@ -169,9 +263,8 @@ export function createPluginCompanionHost(deps: PluginCompanionHostDeps) {
     if (activity?.phase !== 'needs-interaction') return [];
     return deps.pending(activity.sessionId).flatMap(({ request }) => {
       const summary = summarizeInteraction(request);
-      const kind = (request as { kind?: unknown } | null)?.kind;
-      if (!summary?.interactionId || typeof kind !== 'string') return [];
-      return [{ ref: interactionRef(activity.sessionId, summary.interactionId), kind, title: summary.summary, sessionId: activity.sessionId }];
+      if (!summary?.interactionId) return [];
+      return [{ ref: interactionRef(activity.sessionId, summary.interactionId), kind: companionInteractionKind(request), title: summary.summary, sessionId: activity.sessionId }];
     });
   };
 
@@ -287,6 +380,47 @@ export function createPluginCompanionHost(deps: PluginCompanionHostDeps) {
   const isLocal = async (companionId: string, guard: () => void) =>
     (await localSources(guard)).some(source => source.id === companionId);
 
+  /** A request still pending in the task the companion is working in, by the ref the plugin listed. */
+  interface FoundRequest { requestId: string; request: unknown; companion: string; device?: { deviceId: string; name: string } }
+  const matching = (sessionId: string, ref: string, entries: unknown[]) =>
+    entries.map(entry => record(entry).request).find(request => {
+      const requestId = text(record(request).requestId, 512);
+      return !!requestId && interactionRef(sessionId, requestId) === ref;
+    });
+
+  const localRequest = async (companionId: string, ref: string, guard: () => void): Promise<FoundRequest> => {
+    const view = await localView(guard);
+    const owner = view.companions.find(item => item.id === companionId);
+    const sessionId = view.sessions[ref];
+    if (!sessionId || !owner?.interactions.some(item => item.ref === ref)) return unavailable();
+    const request = matching(sessionId, ref, deps.pending(sessionId)) ?? unavailable();
+    return { requestId: text(record(request).requestId, 512), request, companion: owner.name };
+  };
+
+  const remoteRequest = async (companionId: string, ref: string, guard: () => void): Promise<FoundRequest> => {
+    const device = await remoteHome(companionId, guard);
+    const view = await readHome(device.deviceId, device.name, true);
+    guard();
+    const owner = view.companions.find(item => item.id === companionId);
+    const sessionId = view.sessions[ref];
+    if (!view.reachable || !sessionId || !owner?.interactions.some(item => item.ref === ref)) return unavailable();
+    let pending: unknown;
+    try {
+      pending = await (deps.remote ?? notReady()).invoke(device.deviceId, PENDING_INTERACTIONS_CHANNEL, [sessionId]);
+    } catch (error) {
+      throw errorCode(error) === 'PERMISSION_DENIED' ? error : Object.assign(new Error('TARGET_UNAVAILABLE'), { code: 'TARGET_UNAVAILABLE' });
+    }
+    guard();
+    const request = matching(sessionId, ref, Array.isArray(pending) ? pending : []) ?? unavailable();
+    return { requestId: text(record(request).requestId, 512), request, companion: owner.name, device };
+  };
+
+  const findRequest = async (companionId: string, ref: string, guard: () => void) =>
+    await isLocal(companionId, guard) ? localRequest(companionId, ref, guard) : remoteRequest(companionId, ref, guard);
+
+  // One Cindy confirmation at a time: a second one would stack dialogs the owner did not ask for.
+  let confirming = false;
+
   const adapter: PluginCompanionAdapter = {
     async list(guard) {
       const local = await localView(guard);
@@ -366,6 +500,48 @@ export function createPluginCompanionHost(deps: PluginCompanionHostDeps) {
         return;
       }
       deps.openSession(view.conversations[companionId] ?? unavailable(), device.deviceId);
+    },
+
+    async interaction(companionId, ref, guard) {
+      const found = await findRequest(companionId, ref, guard);
+      return companionInteractionDetail(found.request, ref);
+    },
+
+    async answer(companionId, ref, answer, ctx) {
+      const found = await findRequest(companionId, ref, ctx.guard);
+      const decision = companionInteractionDecision(found.request, answer);
+      if (needsOwnerConfirmation(answer)) {
+        const confirmAllow = deps.confirmAllow ?? notReady();
+        if (confirming) return busy();
+        confirming = true;
+        const shown = JSON.stringify(found.request);
+        let allowed: boolean;
+        try {
+          const detail = companionInteractionDetail(found.request, ref) as PluginCompanionAllowPrompt['detail'];
+          allowed = await confirmAllow({ ghostId: ctx.ghostId, companion: found.companion, detail });
+        } finally {
+          confirming = false;
+        }
+        ctx.guard();
+        if (!allowed) return { answered: false };
+        // The owner allowed what the dialog showed: only that exact request, if it is still waiting.
+        const again = await findRequest(companionId, ref, ctx.guard);
+        if (again.requestId !== found.requestId || JSON.stringify(again.request) !== shown) return unavailable();
+      }
+      if (!found.device) {
+        if (!(deps.resolve ?? notReady())(found.requestId, decision)) return unavailable();
+        return { answered: true };
+      }
+      const write = deps.remote?.write ?? notReady();
+      let result: unknown;
+      try {
+        result = await write(found.device.deviceId, RESOLVE_INTERACTION_CHANNEL, [found.requestId, decision]);
+      } catch (error) {
+        throw errorCode(error) === 'PERMISSION_DENIED' ? error : Object.assign(new Error('TARGET_UNAVAILABLE'), { code: 'TARGET_UNAVAILABLE' });
+      }
+      ctx.guard();
+      if (record(result).accepted !== true) return unavailable();
+      return { answered: true };
     },
   };
 
