@@ -3,6 +3,7 @@ import { act, createElement, forwardRef, useImperativeHandle, type ReactNode } f
 import { createRoot } from "react-dom/client";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { PluginCardActions } from "../plugins/PluginCardActions";
+import { pluginCardPlainText } from "../plugins/pluginCardText";
 import { pendingGhostCardFormDelivery } from "@cindy/maker-shared/ghost-card-form";
 import { MobileMailHtmlPreview } from '../plugins/MobileMailHtmlPreview';
 
@@ -109,6 +110,12 @@ afterEach(() => {
 // Unit: the phone used to show the PR card as a raw URL, identical grey buttons and "开启「…」"
 // buttons. A rich host now sends switches, the primary action, a live state and the title bar's
 // PR status; the phone draws them natively and a switch still goes through the card action.
+// Unit: the PR card on the phone read "\\#42 …", "cindy\\-demo/web" and turned "feat\\(mobile\\)" into a
+// formula: the desktop's escaped card text went through the Markdown renderer.
+it('shows desktop card text as plain text without its Markdown escapes', () => {
+  expect(pluginCardPlainText('\\#7290 feat\\(mobile\\): a\\_b \\*c\\* 5\\.5\ncindy\\-demo/web \\\\ \\[x\\]')).toBe('#7290 feat(mobile): a_b *c* 5.5\ncindy-demo/web \\ [x]');
+});
+
 describe("rich plugin card hints", () => {
   it('draws PR checks, a live state, a primary action, a link by its host and settings as switches', async () => {
     const dispatch = vi.fn(async (_input: unknown) => ({ effects: [] }));

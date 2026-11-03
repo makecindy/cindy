@@ -157,6 +157,7 @@ import {
   MOBILE_COMPOSER_VOICE_ANCHOR_RIGHT,
 } from '@/session/MobileComposerInputRow';
 import { Text } from '@/components/AppText';
+import { pluginCardPlainText } from '@/plugins/pluginCardText';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import type {
   NormalizedAttachment,
@@ -6798,8 +6799,7 @@ function PluginResultCard({ callId, sessionId, excludedUrls, actions }: {
         return <FileChip key={block.id} name={name} path={url} layout={layout}
           onOpen={actions.onOpenPayload ? () => actions.onOpenPayload!(buildFilePayload(name, url)) : undefined} />;
       }
-      return <MarkdownBody key={block.id} text={block.fallbackMarkdown} layout={layout} streaming={false} selectable
-        onOpenPayload={actions.onOpenPayload} onOpenSessionLink={actions.onOpenSessionLink} />;
+      return <Text key={block.id} selectable style={styles.messageText}>{pluginCardPlainText(block.fallbackMarkdown)}</Text>;
     })}
     {!blocks && !error ? <Text style={styles.detailText}>{t('message.renderer.loading')}</Text> : null}
     {error ? <MessageContentOpenButton onPress={retry} accessibilityLabel={t('message.renderer.retryPreview')}>
