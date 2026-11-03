@@ -80,7 +80,7 @@ Use `cindy_scheduler` (`list_tools` with category `scheduler`, then `call_tool`)
 ```json
 {
   "name": "PR #<number>",
-  "prompt": "Follow <PR_URL> with the built-in pr Skill (background round): load it first (in Claude Code its name is `cindy:pr`) and follow its section 5. Checkout: <worktree path> (branch <branch>).",
+  "prompt": "Follow <PR_URL> with the built-in pr Skill (background round): load it first (in Claude Code its name is `cindy:pr`; if this session does not offer it, read <skill-dir>/SKILL.md) and follow its section 5. Checkout: <worktree path> (branch <branch>).",
   "cronExpr": "*/10 * * * *",
   "intervalMs": 600000,
   "timezone": "<the user's IANA time zone>",
@@ -97,6 +97,7 @@ Use `cindy_scheduler` (`list_tools` with category `scheduler`, then `call_tool`)
 ```
 
 - Add a line to the prompt only for facts specific to this PR that cannot be derived (for example a reviewer the user named), and `PR card: <card_id>.` when there is one. General procedure lives in this Skill, not in the prompt.
+- The prompt names `<skill-dir>/SKILL.md` because a task whose agent runs on another computer (a remote or shared provider) may not offer this Skill there, while its shell still runs on this computer.
 - The hook is a check that ships with Cindy: mount it directly, never generate one with `schedule_set_pre_run_hook` or copy the script. Do not pass `workingDir`.
 - **Model.** When the card's settings or the click event carry `follow_model`, the user chose the model for following: pass its `model_agent_kind` as `modelAgentKind`, plus `providerId`, `model`, `effort` (omit when empty) and `fastMode` from it, and its `agent_device_id` as `modelAgentDeviceId` when present (a model on another computer or a shared provider), then confirm them in the `schedule_get` read-back. Without `follow_model`, pass none of these so each round uses this task's model. If the scheduler rejects the chosen model, say so in one line and create the schedule without it rather than guessing another.
 - The hook path must be the resolved stable `<skill-dir>` (it contains `/.active/`). Never put a path under the system temp directory (for example one containing `cindy-claude-skills-`) in the hook: it disappears when Cindy restarts and every check then fails. Resolve it right before creating the schedule: run `realpath` on the base directory Cindy gave when this Skill was loaded and apply the `/.active/` rule above. If that directory no longer exists, load this Skill again for a fresh one. Never search the disk for it.
