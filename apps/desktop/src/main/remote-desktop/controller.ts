@@ -836,7 +836,12 @@ export class RemoteDesktopController {
     if (
       request.events.some((event) =>
         active.screen
-          ? event.kind === 'move' || event.kind === 'button' || event.kind === 'scroll'
+          ? event.kind === 'move' ||
+            event.kind === 'button' ||
+            event.kind === 'scroll' ||
+            // Only the buttons the device offered; the plugin never sees others.
+            (event.kind === 'press' &&
+              !active.screen.buttons.some((button) => button.id === event.button))
           : isLiveScreenOnlyInput(event),
       )
     )

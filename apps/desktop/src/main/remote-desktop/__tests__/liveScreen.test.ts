@@ -276,6 +276,34 @@ describe('live screen session', () => {
     await vi.waitFor(() => expect(ended).toHaveBeenCalledOnce());
   });
 
+  it('settles close only after input in flight and the plugin close, so a reopen cannot be closed late', async () => {
+    const url = await serve(() => {});
+    const plugin = source(url);
+    let release!: () => void;
+    vi.mocked(plugin.input).mockImplementationOnce(
+      () => new Promise<void>((resolve) => (release = resolve)),
+    );
+    const session = new LiveScreenSession(
+      'sim',
+      'UDID-1',
+      screen,
+      { width: 10, height: 20 },
+      { url, screen: { ...screen, width: 10, height: 20 } },
+      plugin,
+      vi.fn(),
+    );
+    session.input([{ kind: 'press', button: 'home' }]);
+    let settled = false;
+    const closing = session.close().then(() => (settled = true));
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(settled).toBe(false);
+    expect(plugin.close).not.toHaveBeenCalled();
+    release();
+    await closing;
+    expect(plugin.close).toHaveBeenCalledOnce();
+    expect(session.close()).toBe(session.close());
+  });
+
   it('keeps only the latest position of a moving finger while a send is in flight', async () => {
     const url = await serve(() => {});
     const plugin = source(url);

@@ -140,6 +140,17 @@ describe('live screen leases', () => {
     expect(() => desktop.controller.input(plain.lease, 1, [touch])).toThrow('INVALID_REQUEST');
   });
 
+  it('forwards only buttons the device offered', async () => {
+    const h = harness();
+    const { lease } = await h.start({ control: true });
+    expect(() => h.controller.input(lease, 1, [{ kind: 'press', button: 'power' }])).toThrow(
+      'INVALID_REQUEST',
+    );
+    expect(h.deps.input).not.toHaveBeenCalled();
+    h.controller.input(lease, 2, [{ kind: 'press', button: 'home' }]);
+    expect(h.deps.input).toHaveBeenCalledOnce();
+  });
+
   it('allows only operations that stay on the screen', async () => {
     const h = harness();
     const { lease } = await h.start({ control: true });

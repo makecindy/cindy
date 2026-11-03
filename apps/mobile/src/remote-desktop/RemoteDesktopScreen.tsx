@@ -3685,7 +3685,6 @@ export function RemoteDesktopSession({
   const volumeUp = liveScreenAction("volume-up");
   const liveScreenActions: LiveScreenAction[] = (liveScreen?.buttons ?? [])
     .filter((b) => shownButton(b.id) && !b.id.startsWith("volume-"))
-    .slice(0, 4)
     .map((b) => liveScreenAction(b.id)!)
     .filter(Boolean);
   const rotation = (direction: "left" | "right") => {

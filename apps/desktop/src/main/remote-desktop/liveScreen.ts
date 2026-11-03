@@ -128,6 +128,7 @@ export class LiveScreenSession {
   private sending = false;
   private touching = false;
   private readonly mapper = new LiveScreenInputMapper();
+  private closing: Promise<void> | null = null;
   private readonly keepalive: ReturnType<typeof setInterval>;
   private keepaliveFailures = 0;
 
@@ -390,18 +391,25 @@ export class LiveScreenSession {
 
   private end(): void {
     if (this.closed) return;
-    this.close();
+    void this.close();
     this.ended();
   }
 
-  close(): void {
-    if (this.closed) return;
+  /**
+   * Ends the session. The plugin closes a screen by device id alone, so the
+   * returned promise (input in flight delivered, then the plugin's close)
+   * must settle before the same device is opened again: a late close would
+   * end the new screen.
+   */
+  close(): Promise<void> {
+    if (this.closing) return this.closing;
     this.release();
     this.closed = true;
     clearInterval(this.keepalive);
     this.disconnect();
     const close = () => this.source.close(this.plugin, this.id).catch(() => {});
-    void this.inputChain.then(close, close);
+    this.closing = this.inputChain.then(close, close);
+    return this.closing;
   }
 }
 

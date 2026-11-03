@@ -126,6 +126,15 @@ const TUCK_MS = 2500;
 const PANEL_WIDTH = 296;
 const ACTION = 52;
 const PICTURES: LiveScreenPicture[] = ["fit", "fill", "zoom"];
+/** The device's buttons, this many to a row; more start another row. */
+const ACTIONS_PER_ROW = 4;
+
+function chunk<T>(items: T[], size: number): T[][] {
+  const rows: T[][] = [];
+  for (let i = 0; i < items.length; i += size)
+    rows.push(items.slice(i, i + size));
+  return rows;
+}
 
 type Side = "left" | "right";
 
@@ -468,14 +477,26 @@ function LiveScreenPanel({
                 </View>
               </View>
               {actions.length > 0 && (
-                <View style={styles.actions}>
-                  {actions.map((action) => (
-                    <ActionButton
-                      key={action.key}
-                      action={action}
-                      disabled={inputDisabled}
-                      onPress={run(action.onPress)}
-                    />
+                <View style={styles.actionRows}>
+                  {chunk(actions, ACTIONS_PER_ROW).map((row) => (
+                    <View key={row[0].key} style={styles.actions}>
+                      {row.map((action) => (
+                        <ActionButton
+                          key={action.key}
+                          action={action}
+                          disabled={inputDisabled}
+                          onPress={run(action.onPress)}
+                        />
+                      ))}
+                      {/* Keep a short last row on the same columns as the rows above. */}
+                      {actions.length > ACTIONS_PER_ROW &&
+                        Array.from(
+                          { length: ACTIONS_PER_ROW - row.length },
+                          (_, index) => (
+                            <View key={`gap-${index}`} style={styles.action} />
+                          ),
+                        )}
+                    </View>
                   ))}
                 </View>
               )}
@@ -821,6 +842,7 @@ const makeStyles = (colors: ThemeColors) =>
       color: colors.textPrimary,
     },
     status: { ...textStyles.caption, color: colors.textTertiary },
+    actionRows: { gap: spacing.sm },
     actions: {
       flexDirection: "row",
       justifyContent: "space-between",

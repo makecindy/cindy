@@ -58,10 +58,15 @@ export async function liveScreenStream(
   let stopped = false;
   let rotation = 0;
   let decoder: VideoDecoder | null = null;
+  /** The plugin sends the avcC once per stream, so a rebuilt decoder needs ours. */
+  let description: Uint8Array | null = null;
   let awaitingKey = true;
   let wantKey = false;
   let timestamp = 0;
   let painted = false;
+  /** Still pictures: one decode at a time, newest waiting, so a slow decode never queues up. */
+  let imageBusy = false;
+  let imageNext: { type: number; payload: Uint8Array<ArrayBuffer> } | null = null;
   let resolveFirst: (() => void) | null = null;
   const first = new Promise<void>((resolve) => {
     resolveFirst = resolve;
@@ -95,9 +100,19 @@ export async function liveScreenStream(
     decoder = null;
     awaitingKey = true;
     wantKey = true;
+    // Rebuild from the last configuration: the keyframe asked for next has
+    // nothing to decode it otherwise and the picture would stay stuck.
+    if (description && !stopped) {
+      try {
+        configure(description);
+      } catch {
+        /* stays without a decoder until the plugin sends a new configuration */
+      }
+    }
   };
-  const configure = (description: Uint8Array) => {
-    const codec = avcCodec(description);
+  const configure = (record: Uint8Array) => {
+    description = record;
+    const codec = avcCodec(record);
     if (!codec) return;
     try {
       decoder?.close();
@@ -118,7 +133,7 @@ export async function liveScreenStream(
     });
     current.configure({
       codec,
-      description: description.slice().buffer,
+      description: record.slice().buffer,
       optimizeForLatency: true,
       hardwareAcceleration: 'prefer-hardware',
     });
@@ -149,17 +164,31 @@ export async function liveScreenStream(
         resetDecoder();
       }
     } else if (type === JPEG || type === PNG) {
-      void createImageBitmap(
-        new Blob([payload.slice()], { type: type === JPEG ? 'image/jpeg' : 'image/png' }),
-      )
-        .then((bitmap) => {
+      imageNext = { type, payload: payload.slice() };
+      if (!imageBusy) void drawImages();
+    }
+  };
+  const drawImages = async () => {
+    imageBusy = true;
+    try {
+      while (imageNext && !stopped) {
+        const { type, payload } = imageNext;
+        imageNext = null;
+        try {
+          const bitmap = await createImageBitmap(
+            new Blob([payload], { type: type === JPEG ? 'image/jpeg' : 'image/png' }),
+          );
           try {
             paint(bitmap, bitmap.width, bitmap.height);
           } finally {
             bitmap.close();
           }
-        })
-        .catch(() => {});
+        } catch {
+          /* a bad picture is skipped */
+        }
+      }
+    } finally {
+      imageBusy = false;
     }
   };
   const stop = () => {

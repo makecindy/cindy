@@ -608,10 +608,14 @@ function liveScreenDeps(): Pick<DesktopControllerDeps, 'liveScreens'> {
         );
         if (!listed) throw new Error('DESKTOP_SCREEN_NOT_FOUND');
         if (listed.state !== 'running') throw new Error('DESKTOP_SCREEN_NOT_RUNNING');
+        // The plugin closes a screen by device id: finish closing the previous
+        // session before opening, or its late close would end the new screen.
+        const previous = liveSession;
+        liveSession = null;
+        await previous?.close();
         const opened = await source.open(plugin, id);
         const { width, height, ...descriptor } = opened.screen;
         const screen = { plugin, id, name: listed.name, ...descriptor };
-        liveSession?.close();
         const session = new LiveScreenSession(
           plugin,
           id,
@@ -636,7 +640,7 @@ function liveScreenDeps(): Pick<DesktopControllerDeps, 'liveScreens'> {
       close: () => {
         const session = liveSession;
         liveSession = null;
-        session?.close();
+        void session?.close();
         syncControlledOverlay();
       },
     },
@@ -1186,7 +1190,9 @@ export function registerRemoteDesktopIpc(
     linuxAudio.stop(); // Clear buffered PCM as well as pixels across lock transitions.
     if (remoteDesktop.state?.controlling) {
       try {
-        input.input([{ kind: 'release' }]);
+        // A live screen lease never starts the desktop input helper.
+        if (liveSession) liveSession.release();
+        else input.input([{ kind: 'release' }]);
       } catch {
         remoteDesktop.stop(undefined, undefined, 'input-failed');
       }
