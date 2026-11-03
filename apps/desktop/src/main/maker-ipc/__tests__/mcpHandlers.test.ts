@@ -26,6 +26,18 @@ import { DeferredCodexRestartService } from '../deferredCodexRestart.js';
 import { CodexCredentialModeSwitchBusyError } from '../../maker-host/codex-credential-switch.js';
 import { IpcHarness } from './helpers/ipcHarness.js';
 
+// This suite uses isolated SQLite fixtures; OS encryption is covered by the store suite.
+vi.mock('electron', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('electron')>();
+  return { ...actual, safeStorage: {
+    ...actual.safeStorage,
+    isEncryptionAvailable: () => true,
+    getSelectedStorageBackend: () => 'gnome_libsecret',
+    encryptString: (value: string) => Buffer.from(value, 'utf8'),
+    decryptString: (value: Buffer) => value.toString('utf8'),
+  } };
+});
+
 vi.mock('../../secrets/providerSecretStore.js', () => ({ readCustomMcpToken: () => null }));
 
 const CREATE_SQL = `

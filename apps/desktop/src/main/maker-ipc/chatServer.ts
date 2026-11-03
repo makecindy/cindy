@@ -85,7 +85,7 @@ interface Room {
   allow_mention_all_bots?: boolean; created_at: string; updated_at: string; revision: number; archived: boolean; dissolved_at?: string | null; organizer_id?: string | null; kind?: string;
 }
 /** `reads`: this reader's read position per Thread (`thread_key` = root ID, `main` for the main timeline); older servers omit it. */
-interface Snapshot { room: Room; members: Member[]; messages: Message[]; cursor: string; mentionReadIds?: string[]; reads?: Array<{ thread_key: string; read_seq: string; following?: boolean; muted?: boolean }> }
+interface Snapshot { room: Room; members: Member[]; messages: Message[]; cursor: string; mentionReadIds?: string[]; reads?: Array<{ thread_key: string; read_seq: string; following?: boolean; muted?: boolean; notification_scope?: 'all' | 'mentions' | null }> }
 interface SavedChatSend {
   snapshot: Snapshot; plans: ServerPlan[]; members: Member[];
   quote: (BotGroupQuoteView & { recipientActorId?: string }) | null;
@@ -377,6 +377,7 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
   let supportsDissolve = false;
   let supportsListRemoval = false;
   let supportsMemberAvatar = false;
+  let supportsNotificationSettings = false;
   let supportsMentionAudiences = false;
   const personalList = createConversationListState();
   const attentionGroups = new Set<string>();
@@ -934,12 +935,13 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
       const profileRevision = localProfilesRevision;
       profiles = await getDbClient().drizzle.select().from(botProfiles).where(undefined);
       localProfilesRead = profileRevision;
-      const me = await request<{ actor: Actor; deviceId?: string | null; capabilities?: { groupDiscussionParity?: number; groupSingleSpeaker?: number; companionHome?: boolean; directRoomClaim?: boolean; groupLifecycleVersion?: number; conversationListStateVersion?: number; groupMemberAvatar?: number; groupMentionAudiences?: number; workAvailabilityVersion?: number; workNotificationsVersion?: number } }>('/me'); selfId = me.actor.id;
+      const me = await request<{ actor: Actor; deviceId?: string | null; capabilities?: { groupDiscussionParity?: number; groupSingleSpeaker?: number; companionHome?: boolean; directRoomClaim?: boolean; groupLifecycleVersion?: number; conversationListStateVersion?: number; groupMemberAvatar?: number; groupMentionAudiences?: number; groupNotificationSettings?: number; workAvailabilityVersion?: number; workNotificationsVersion?: number } }>('/me'); selfId = me.actor.id;
       personalMaskTools = (me.capabilities as { personalMaskTools?: number } | undefined)?.personalMaskTools === 1;
       personalMask = (me.capabilities as { personalMask?: number } | undefined)?.personalMask === 1;
       supportsDissolve = me.capabilities?.groupLifecycleVersion === 1;
       supportsListRemoval = me.capabilities?.conversationListStateVersion === 1;
       supportsMemberAvatar = me.capabilities?.groupMemberAvatar === 1;
+      supportsNotificationSettings = me.capabilities?.groupNotificationSettings === 1;
       supportsMentionAudiences = me.capabilities?.groupMentionAudiences === 1;
       groupDiscussionParity = me.capabilities?.groupDiscussionParity === 1;
       singleSpeaker = me.capabilities?.groupSingleSpeaker === 1;
@@ -1611,7 +1613,8 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
   async function writeReadState<T = unknown>(roomId: string, data: Record<string, unknown>): Promise<T> {
     const value = await api<T>(`/conversations/${roomId}/read`, 'POST', data);
     const cache = history();
-    const ordinaryRead = data.following === undefined && data.muted === undefined && data.markedUnread === undefined;
+    const ordinaryRead = data.following === undefined && data.muted === undefined && data.markedUnread === undefined
+      && data.notificationMode === undefined;
     const applied = ordinaryRead && await cache?.readState(roomId,
       value && typeof value === 'object' ? { ...value, threadRootId: data.threadRootId ?? null } : value, true);
     // Legacy/malformed receipts and preference changes retain authoritative metadata refresh.
@@ -1757,7 +1760,9 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
     const speakers: BotGroupSpeaker[] = [];
     for (const e of executions.filter(e => ['queued', 'running', 'needs_input', 'stopping'].includes(e.status))) {
       const run = running.get(e.id);
-      const startedAt = run?.started ?? (e.created_at ? Date.parse(e.created_at) : undefined);
+      // created_at is the enqueue time, not the start of work; showing it as elapsed time
+      // made queued executions look like they had already been working.
+      const startedAt = run?.started;
       const speaker: BotGroupSpeaker = { botId: localBot(e.bot_id)?.id ?? e.bot_id, sessionId: run?.sessionId || null,
         executionId: e.id, ...(Number.isFinite(startedAt) ? { startedAt } : {}), stopping: e.status === 'stopping',
         executionStatus: e.status as BotGroupSpeaker['executionStatus'],
@@ -1791,7 +1796,8 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
     const lastView = last ? messageView(last, s.members, ownerMembers) : null;
     // The sidebar never resolves shares: it names the sharer and never quotes the card's text.
     const lastIsShare = !!last && !!readBotGroupThreadShareCard(last);
-    return { conversationKind: direct ? 'direct' : 'group', serverBacked: true, reactionRevision: reactionRevisions.get(roomId)?.room ?? runtimeReactionRevision, reactionRevisions: { ...reactionRevisions.get(roomId)?.messages }, supportsGroupLeave: !direct, supportsDissolve: !direct && supportsDissolve, supportsListRemoval, supportsMemberAvatar: !direct && supportsMemberAvatar, supportsMentionAudiences: !direct && supportsMentionAudiences, allowMentionAllBots: !direct && s.room.allow_mention_all_bots === true, dissolvedAt: s.room.dissolved_at ?? null, migrationPending: [...upgradeErrors.keys()].some(source => upgradedGroups.get(source) === roomId), archived: s.room.archived, selfActorId: selfId, topic: s.room.topic, description: s.room.description, revision: s.room.revision, canInvite: !direct && !s.room.dissolved_at && s.members.some(m => m.ownerActorId === selfId && m.state === 'joined' && ['owner', 'admin'].includes(m.role)), canStopAll: !direct && singleSpeaker && !!managementActor(s), ...(!direct && singleSpeaker ? { singleSpeaker: true, supportsDivision: true } : {}), id: s.room.id, name: direct ? s.members.filter(m => m.state === 'joined' && m.id !== selfId).map(member => memberName(member, [])).join(', ') || s.room.name : s.room.name, replyMode: s.room.response_mode, speakingMode: s.room.speaking_mode,
+    const mainRead = s.reads?.find(read => read.thread_key === 'main');
+    return { conversationKind: direct ? 'direct' : 'group', serverBacked: true, reactionRevision: reactionRevisions.get(roomId)?.room ?? runtimeReactionRevision, reactionRevisions: { ...reactionRevisions.get(roomId)?.messages }, supportsGroupLeave: !direct, supportsDissolve: !direct && supportsDissolve, supportsListRemoval, supportsMemberAvatar: !direct && supportsMemberAvatar, supportsNotificationSettings: !direct && supportsNotificationSettings, ...(!direct && supportsNotificationSettings && s.reads ? { notificationMode: mainRead?.muted ? 'none' as const : mainRead?.notification_scope ?? 'all' as const } : {}), supportsMentionAudiences: !direct && supportsMentionAudiences, allowMentionAllBots: !direct && s.room.allow_mention_all_bots === true, dissolvedAt: s.room.dissolved_at ?? null, migrationPending: [...upgradeErrors.keys()].some(source => upgradedGroups.get(source) === roomId), archived: s.room.archived, selfActorId: selfId, topic: s.room.topic, description: s.room.description, revision: s.room.revision, canInvite: !direct && !s.room.dissolved_at && s.members.some(m => m.ownerActorId === selfId && m.state === 'joined' && ['owner', 'admin'].includes(m.role)), canStopAll: !direct && singleSpeaker && !!managementActor(s), ...(!direct && singleSpeaker ? { singleSpeaker: true, supportsDivision: true } : {}), id: s.room.id, name: direct ? s.members.filter(m => m.state === 'joined' && m.id !== selfId).map(member => memberName(member, [])).join(', ') || s.room.name : s.room.name, replyMode: s.room.response_mode, speakingMode: s.room.speaking_mode,
       teammateActivity: teammateChatActivity({ executions, plans: serverPlans, planning: !!deciding,
         archived: s.room.archived, lastMessageAt: last ? Date.parse(last.createdAt) : 0 }),
       members: s.members.filter(m => m.state === 'joined').map(m => {
@@ -2189,7 +2195,7 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
           const s = await snapshot(run.execution.conversation_id);
           const step = run.plan.steps[run.execution.plan_step!];
           const latest = (await api<ServerPlan[]>(`/conversations/${s.room.id}/plans?ids=${run.plan.id}`)).find(p => p.id === run.plan!.id);
-          if (latest?.status !== 'running') deps.onStepSettled({ groupId: s.room.id, groupName: s.room.name,
+          if (latest?.status !== 'running' && !s.reads?.some(read => read.thread_key === 'main' && read.muted)) deps.onStepSettled({ groupId: s.room.id, groupName: s.room.name,
             memberBotIds: s.members.flatMap(m => localBot(m.id)?.id ?? []), planId: run.plan.id, position: step.position,
             botName: step.botName, task: step.task, outcome: pending.terminal.outcome === 'error' ? 'failed' : 'done', planDone: latest?.status === 'done' }, scope);
         }
@@ -2517,10 +2523,24 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
         ...(!run.plan || talk ? ['If you have nothing useful to add, reply with exactly NO_REPLY.'] : []),
         'Keep your reply concise. Your final response will be posted to the group. Do not call another participant just to reply.',
       ].join('\n');
-      await updateExecution(run, 'heartbeat');
+      // The hidden envelope is model context, not user intent. Only this execution's
+      // original human owner message can supply review intent; quotes, cards, AI replies
+      // and other members' messages cannot mint owner authorization (#8072).
+      let autoReviewUserText = '';
+      if (run.context.kind === 'message' && !execution.mask_owner_id && !digest
+        && execution.access_mode === 'owner' && execution.requester_id === selfId
+        && source?.authorId === selfId && source.author.kind === 'human'
+        && source.origin === 'user' && !source.deleted && !source.maskAttribution) {
+        await validateExecutionAuthority(run);
+        autoReviewUserText = source.content.filter(block => block.type === 'text')
+          .map(block => block.text ?? '').join('\n');
+      } else {
+        await updateExecution(run, 'heartbeat');
+      }
       if (!current() || running.get(execution.id) !== run) throw new Error('STALE_EXECUTOR');
       const dispatched = await deps.dispatch({ targetSessionId: lane.sessionId, clientId: run.clientId, message: prompt,
-        persistedContent: `${UI_ACTION_TRIGGER_PREFIX}${prompt}`, attachments, toolsDisabled: execution.access_mode === 'chat',
+        persistedContent: `${UI_ACTION_TRIGGER_PREFIX}${prompt}`, autoReviewUserText,
+        attachments, toolsDisabled: execution.access_mode === 'chat',
         onQueued: async clientId => { run.clientId = clientId; }, onAccepted: async () => {
           if (!current() || running.get(execution.id) !== run) { await deps.abortLane(lane.sessionId); throw new Error('STALE_EXECUTOR'); }
           run.accepted = true;
@@ -2943,6 +2963,7 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
       const actorAction = z.object({ actorId: id });
       const action = z.discriminatedUnion('type', [
         z.object({ type: z.literal('read'), messageId: id, conversationKind: z.literal('direct').optional() }).strict(),
+        z.object({ type: z.literal('notifications'), mode: z.enum(['all', 'mentions', 'none']) }).strict(),
         z.object({ type: z.literal('update'), name: z.string().trim().min(1).max(40), topic: z.string().max(250), description: z.string().max(2000), responseMode: z.enum(['all', 'mentioned']).optional(), speakingMode: z.enum(['auto', 'sequential']).optional(), allowMentionAllBots: z.boolean().optional(), expectedRevision: z.number().int().positive() }).strict(),
         actorAction.extend({ type: z.literal('avatar'), avatar: z.discriminatedUnion('type', [
           z.object({ type: z.literal('keep') }).strict(), z.object({ type: z.literal('reset') }).strict(),
@@ -2968,6 +2989,11 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
         if (BigInt(message.seq) > BigInt(read)) {
           await writeReadState(target, { operationId: `read-main:${message.seq}`, readSeq: message.seq });
         }
+        return {};
+      }
+      if (action.type === 'notifications') {
+        if (!supportsNotificationSettings) throw new Error('CHAT_UNAVAILABLE');
+        await writeReadState(target, { operationId: randomUUID(), readSeq: '0', notificationMode: action.mode });
         return {};
       }
       if (action.type === 'avatar') {
@@ -3445,6 +3471,7 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
     // others. An owner or admin may stop everything (`all`). Work you may not stop is left running.
     stopRound: (roomId, scopeInput) => safe(async () => {
       const room = await groupRoom(id.parse(roomId));
+      const hadPlanning = planning.has(room) || !!pendingPlanCancels.get(room)?.size;
       await replacePlanIntent(room);
       // Older servers keep the whole-round stop; the narrower scope belongs to single-speaker groups (§4.0).
       if (!singleSpeaker) {
@@ -3467,21 +3494,59 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
       const refused = (error: unknown) => error instanceof ChatResponseError && [403, 404, 409].includes(error.status);
       const plans = await api<ServerPlan[]>(`/conversations/${room}/plans`);
       const stoppedPlans = new Set<string>();
-      for (const plan of plans.filter(p => ['proposed','running','waiting'].includes(p.status) && (everything || p.creator_id === selfId))) {
-        try { await actPlan({ groupId: room, planId: plan.id }, 'stop'); stoppedPlans.add(plan.id); }
-        catch (error) { if (!refused(error)) throw error; }
-      }
-      const executions = await api<Execution[]>(`/conversations/${room}/executions`);
-      for (const e of executions.filter(e => ['queued', 'running', 'needs_input'].includes(e.status) && !(e.plan_id && stoppedPlans.has(e.plan_id)))) {
-        // Your own teammate stops its work for others as itself; a request you made, as you.
-        const asBot = !everything && e.requester_id !== selfId && ownBot(e.bot_id);
-        if (!everything && !asBot && e.requester_id !== selfId) continue;
-        try { await api(`/conversations/${room}/executions/${e.id}/control`, 'POST', { operationId: randomUUID(), action: 'stop' }, asBot ? e.bot_id : everything && e.requester_id !== selfId ? asManager : undefined); }
-        catch (error) { if (refused(error)) continue; throw error; }
-        const run = running.get(e.id);
-        if (run) await cancelExecution(run);
-      }
-      changed(room); return { ok: true as const };
+      const refusedPlans = new Map<string, unknown>();
+      const refusedExecutions = new Map<string, unknown>();
+      let stopped = hadPlanning;
+      let unknownRequester = false;
+      try {
+        for (const plan of plans.filter(p => ['proposed','running','waiting'].includes(p.status) && (everything || p.creator_id === selfId))) {
+          try { await actPlan({ groupId: room, planId: plan.id }, 'stop'); stoppedPlans.add(plan.id); stopped = true; }
+          catch (error) { if (!refused(error) && !(error instanceof Error && error.message === 'PLAN_CLOSED')) throw error; refusedPlans.set(plan.id, error); }
+        }
+        const executions = await api<Execution[]>(`/conversations/${room}/executions`);
+        for (const e of executions.filter(e => ['queued', 'running', 'needs_input'].includes(e.status) && !(e.plan_id && stoppedPlans.has(e.plan_id)))) {
+          // Your own teammate stops its work for others as itself; a request you made, as you.
+          const asBot = !everything && e.requester_id !== selfId && ownBot(e.bot_id);
+          if (!everything && !asBot && e.requester_id !== selfId) {
+            // A source message author is not proof of who requested this execution.
+            if (!e.requester_id) unknownRequester = true;
+            continue;
+          }
+          try { await api(`/conversations/${room}/executions/${e.id}/control`, 'POST', { operationId: randomUUID(), action: 'stop' }, asBot ? e.bot_id : everything && e.requester_id !== selfId ? asManager : undefined); }
+          catch (error) { if (refused(error)) { refusedExecutions.set(e.id, error); continue; } throw error; }
+          stopped = true;
+          const run = running.get(e.id);
+          if (run) await cancelExecution(run);
+        }
+        // A rejection can race another stop or completion. Require an explicit settled
+        // state: absence from a recent list is not proof that the target has ended.
+        if (refusedPlans.size) {
+          const latest = await api<ServerPlan[]>(`/conversations/${room}/plans`);
+          for (const [planId, error] of refusedPlans) {
+            if (!latest.some(p => p.id === planId && ['done', 'stopped', 'dismissed', 'superseded'].includes(p.status))) {
+              if (error instanceof ChatResponseError && error.status === 409) throw new Error('REVISION_CONFLICT');
+              throw error;
+            }
+            stopped = true;
+          }
+        }
+        if (refusedExecutions.size) {
+          const latest = await api<Execution[]>(`/conversations/${room}/executions`);
+          for (const [executionId, error] of refusedExecutions) {
+            if (!latest.some(e => e.id === executionId && ['succeeded', 'failed', 'cancelled', 'stopping'].includes(e.status))) {
+              if (error instanceof ChatResponseError && error.status === 409) throw new Error('REVISION_CONFLICT');
+              throw error;
+            }
+            const run = running.get(executionId);
+            if (run) await cancelExecution(run);
+            stopped = true;
+          }
+        }
+        if (unknownRequester) throw new Error('STOP_OWNERSHIP_UNKNOWN');
+        if (!stopped) throw new Error(executions.some(e => ['queued', 'running', 'needs_input'].includes(e.status))
+          || plans.some(p => ['proposed', 'running', 'waiting'].includes(p.status)) ? 'ROLE_REQUIRED' : 'NOTHING_TO_STOP');
+        return { ok: true as const };
+      } finally { changed(room); }
     }),
     settleLaneTurn: async (terminal: BotGroupLaneTerminal) => {
       const run = [...running.values()].find(r => r.sessionId === terminal.sessionId);

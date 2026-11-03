@@ -205,6 +205,21 @@ describe('buildSetupPlan', () => {
     expect(older.checklist.map((item) => item.id)).toContain('ssh');
   });
 
+  // PR #6473: two setup-ready plugins without user keys inflated the review count.
+  // Existing plan cases did not distinguish OAuth readiness from saved user keys (unit).
+  it('counts saved plugin keys, including incomplete setup, but not setup readiness', () => {
+    const plugins = [
+      plugin({ ghostId: 'oauth', setupReady: true, hasUserSecrets: false }),
+      plugin({ ghostId: 'key', setupReady: false, hasUserSecrets: true }),
+      plugin({ ghostId: 'old', setupReady: true }),
+    ];
+    const plan = buildSetupPlan(planInputs({
+      snapshot: snapshot({ transfer: 1, plugins }),
+      ghosts: plugins.map((p) => ({ ghostId: p.ghostId, namespace: null, enabled: true, instanceKey: p.ghostId, builtin: false })),
+    }));
+    expect(plan.secrets?.items.map((item) => item.name)).toEqual(['key']);
+  });
+
   it('drops interface preferences outside the portable whitelist', () => {
     const plan = buildSetupPlan(
       planInputs({

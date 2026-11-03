@@ -4,7 +4,32 @@
 
 import Database from 'better-sqlite3';
 import { drizzle } from 'drizzle-orm/better-sqlite3';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { safeStorage } from 'electron';
+import { randomBytes, createCipheriv, createDecipheriv } from 'node:crypto';
+
+vi.mock('electron', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('electron')>();
+  return { ...actual, safeStorage: { ...actual.safeStorage, getSelectedStorageBackend: () => 'gnome_libsecret' } };
+});
+
+// Exercise the real store with authenticated encryption; no OS keychain or user profile.
+const cipherKey = randomBytes(32);
+beforeEach(() => {
+  vi.spyOn(safeStorage, 'isEncryptionAvailable').mockReturnValue(true);
+  vi.spyOn(safeStorage, 'encryptString').mockImplementation((value) => {
+    const iv = randomBytes(12);
+    const cipher = createCipheriv('aes-256-gcm', cipherKey, iv);
+    const data = Buffer.concat([cipher.update(value, 'utf8'), cipher.final()]);
+    return Buffer.concat([iv, cipher.getAuthTag(), data]);
+  });
+  vi.spyOn(safeStorage, 'decryptString').mockImplementation((value) => {
+    const decipher = createDecipheriv('aes-256-gcm', cipherKey, value.subarray(0, 12));
+    decipher.setAuthTag(value.subarray(12, 28));
+    return Buffer.concat([decipher.update(value.subarray(28)), decipher.final()]).toString('utf8');
+  });
+});
+afterEach(() => vi.restoreAllMocks());
 
 import type { DbClient } from '../../localDb/client/DbClient.js';
 import { clearCurrentDbClient, setCurrentDbClient } from '../../localDb/client/current.js';
@@ -217,5 +242,70 @@ describe('custom-mcp-store CRUD', () => {
     raw?.close();
     mountDb();
     expect(await listCustomMcpServers()).toEqual([]);
+  });
+});
+
+// Regression: PR #6473 two-device test found fake Authorization values in SQLite/WAL.
+// Existing CRUD tests only checked round-trips. Minimum failure: one nonempty header.
+// Tier: existing in-memory DB store suite; validates persistence, upgrade and failure semantics.
+describe('encrypted MCP headers', () => {
+  const headers = { Authorization: 'Bearer invalid-test-only-secret' };
+  const stored = () => (raw!.prepare('SELECT headers FROM custom_mcp_servers WHERE id = ?').get(valid.id) as { headers: string }).headers;
+
+  it('never stores new or updated header values as plaintext and still resolves them', async () => {
+    mountDb();
+    await createCustomMcpServer({ ...valid, headers });
+    expect(stored()).not.toContain(headers.Authorization);
+    expect((await getCustomMcpServer(valid.id))?.headers).toEqual(headers);
+    await updateCustomMcpServer(valid.id, { ...valid, headers: { 'X-Key': 'invalid-replacement' } });
+    expect(stored()).not.toContain('invalid-replacement');
+    expect((await listCustomMcpServers())[0].headers).toEqual({ 'X-Key': 'invalid-replacement' });
+  });
+
+  it('upgrades legacy headers before returning them without changing the runtime generation', async () => {
+    mountDb();
+    await createCustomMcpServer(valid, 100);
+    raw!.prepare('UPDATE custom_mcp_servers SET headers = ?').run(JSON.stringify(headers));
+    expect((await listCustomMcpServers())[0].headers).toEqual(headers);
+    expect(stored()).not.toContain(headers.Authorization);
+    expect(raw!.prepare('SELECT updated_at FROM custom_mcp_servers').get()).toEqual({ updated_at: 100 });
+  });
+
+  it('preserves the entire existing row when encryption is unavailable', async () => {
+    mountDb();
+    await createCustomMcpServer({ ...valid, headers });
+    const before = stored();
+    vi.mocked(safeStorage.isEncryptionAvailable).mockReturnValue(false);
+    await expect(updateCustomMcpServer(valid.id, { ...valid, name: 'changed', headers })).rejects.toThrow();
+    expect(stored()).toBe(before);
+    expect(raw!.prepare('SELECT name FROM custom_mcp_servers').get()).toEqual({ name: valid.name });
+  });
+
+  it('retains old credentials when a database write fails after encryption', async () => {
+    mountDb();
+    await createCustomMcpServer({ ...valid, headers });
+    const before = stored();
+    raw!.exec("CREATE TRIGGER reject_update BEFORE UPDATE ON custom_mcp_servers BEGIN SELECT RAISE(ABORT, 'test write failure'); END");
+    await expect(updateCustomMcpServer(valid.id, { ...valid, headers: { Authorization: 'invalid-new' } })).rejects.toThrow('test write failure');
+    expect(stored()).toBe(before);
+    expect((await getCustomMcpServer(valid.id))?.headers).toEqual(headers);
+  });
+
+  it('keeps legacy data on failed conversion and does not return it as a successful read', async () => {
+    mountDb();
+    await createCustomMcpServer(valid);
+    raw!.prepare('UPDATE custom_mcp_servers SET headers = ?').run(JSON.stringify(headers));
+    vi.mocked(safeStorage.isEncryptionAvailable).mockReturnValue(false);
+    await expect(listCustomMcpServers()).rejects.toThrow();
+    expect(stored()).toBe(JSON.stringify(headers));
+  });
+
+  it('reports corrupt ciphertext without replacing it with an empty header map', async () => {
+    mountDb();
+    await createCustomMcpServer({ ...valid, headers });
+    const before = stored();
+    vi.mocked(safeStorage.decryptString).mockImplementation(() => { throw new Error('decrypt failed'); });
+    await expect(getCustomMcpServer(valid.id)).rejects.toThrow();
+    expect(stored()).toBe(before);
   });
 });

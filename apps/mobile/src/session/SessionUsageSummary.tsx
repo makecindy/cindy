@@ -136,7 +136,7 @@ export function SessionUsageSummary({
         <View key={index} style={styles.quotaRow}>
           <View style={styles.row}>
             <Text style={styles.label}>{row.label}</Text>
-            <Text style={[styles.value, row.warning && styles.warning]}>
+            <Text style={[styles.value, row.level === "warn" && styles.quotaWarn, row.level === "crit" && styles.quotaCrit]}>
               {row.value}
             </Text>
           </View>
@@ -306,6 +306,7 @@ const makeStyles = (colors: ThemeColors) =>
       gap: spacing.md,
     },
     metric: { flexGrow: 1, flexBasis: 0, minWidth: 100, gap: spacing.xs },
-    warning: { color: colors.errorText },
+    quotaWarn: { color: colors.quotaBarWarn },
+    quotaCrit: { color: colors.quotaBarCrit },
     pressed: { opacity: 0.72 },
   });

@@ -128,7 +128,7 @@ describe('built-in Skills', () => {
     }
     // Shipped examples are executable assets, not guide chapters. They must also
     // survive the production Skill copy (a link to a missing example is unusable).
-    for (const example of ['minimal/ghost.json', 'minimal/main.js', 'minimal/ui/page.html', 'sdk/build.mjs', 'files/main.js']) {
+    for (const example of ['static/ghost.json', 'static/main.js', 'static/ui/page.html', 'loader/main.js', 'loader/ui/page.html', 'files/main.js', 'REFERENCE.md', 'README.md']) {
       expect(fs.statSync(path.join(references, 'examples/interactive-pages', example)).isFile()).toBe(true);
     }
     expect(remainingGuide.trim()).toBe('');

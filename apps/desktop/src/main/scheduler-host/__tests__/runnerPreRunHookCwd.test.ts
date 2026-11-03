@@ -343,12 +343,13 @@ describe('MakerScheduleRunner pre-run hook cwd 解析', () => {
     );
   });
 
-  it('显式 workingDir 任务 → 直接用任务目录,不查 session meta', async () => {
+  // #8237: confirmed imports retain the same hook execution as authored schedules.
+  it.each(['user', 'project'] as const)('显式 workingDir 任务 (%s) → 直接用任务目录,不查 session meta', async (source) => {
     const getSessionMeta = vi.fn(async () => null);
     const { runner } = createRunner(getSessionMeta as never);
 
     await runner.fire(
-      baseSchedule({ workingDir: '/repo/project' }),
+      baseSchedule({ workingDir: '/repo/project', source }),
       createFireContext(),
     );
 

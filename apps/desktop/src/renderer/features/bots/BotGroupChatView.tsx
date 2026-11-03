@@ -1037,7 +1037,7 @@ function BotGroupChatContent({ groupId, direct }: { groupId: string; direct: boo
     setStopping(true);
     try {
       const result = await (scope ? api.stopBotGroupRound(groupId, scope) : api.stopBotGroupRound(groupId));
-      if (!result.ok) toast.error(t('bots.groupChat.composer.stopFailed'));
+      if (!result.ok) toast.error(t(botGroupErrorKey(result.errorCode, 'bots.groupChat.composer.stopFailed')));
     } catch {
       toast.error(t('bots.groupChat.composer.stopFailed'));
     } finally {

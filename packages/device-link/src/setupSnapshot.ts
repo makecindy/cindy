@@ -70,6 +70,8 @@ export interface SetupSnapshotPlugin {
   enabled: boolean;
   /** Whether its accounts/keys were set up on the source; null when unknown. */
   setupReady: boolean | null;
+  /** Saved user-provided keys only; OAuth/setup readiness is not a key. Absent on older peers. */
+  hasUserSecrets?: boolean;
 }
 
 /** Custom Git marketplaces. Local-folder markets are machine paths and are not exported. */
@@ -314,6 +316,7 @@ function parsePlugin(value: unknown): SetupSnapshotPlugin | null {
     marketName: boundedString(value.marketName, 200) ?? null,
     enabled: value.enabled !== false,
     setupReady: typeof value.setupReady === 'boolean' ? value.setupReady : null,
+    ...(typeof value.hasUserSecrets === 'boolean' ? { hasUserSecrets: value.hasUserSecrets } : {}),
   };
 }
 

@@ -162,6 +162,7 @@
     "mediaErrorLine": "Error: {{message}}",
     "mediaDeviceLinkHint": "Before opening, your phone asks the remote device to upload this media.",
     "controlDelete": "Delete message",
+    "controlEdit": "Edit",
     "controlRewind": "Back to here",
     "controlFork": "Start new session from here",
     "markdownDocAriaLabel": "Message body",
@@ -261,6 +262,14 @@
     "waitingMessage": "Waiting to send: {{text}}"
   },
   "systemCard": {
+    "pluginModelRoute": {
+      "routed": "{{plugin}} chose {{model}} for this task",
+      "kept": {
+        "no-opinion": "{{plugin}} kept your choice for this task: {{model}}",
+        "failed": "{{plugin}} didn’t answer in time, so this task uses {{model}}",
+        "unavailable-route": "{{plugin}} chose a model you can’t use, so this task uses {{model}}"
+      }
+    },
     "contextRebuild": {
       "labelOverflow": "Context reorganized, continuing",
       "labelTimeout": "Last turn didn't respond; context reorganized to continue",
@@ -441,5 +450,32 @@
       "provider": "API provider",
       "unknown": "Channel not recorded"
     }
+  },
+  "attachmentPreview": {
+    "more": "More actions",
+    "retry": "Retry",
+    "image": "Image",
+    "video": "Video",
+    "file": "File",
+    "close": "Close",
+    "reset": "Reset view",
+    "open": "Open preview",
+    "zoomIn": "Zoom in",
+    "zoomOut": "Zoom out",
+    "fit": "Fit to window",
+    "actualSize": "Actual size (1:1)",
+    "save": "Save original",
+    "share": "Share",
+    "previous": "Previous attachment",
+    "next": "Next attachment",
+    "password": "Enter the PDF password",
+    "find": "Find in document",
+    "matches": "{{count}} matching pages",
+    "previousPage": "Previous page",
+    "nextPage": "Next page",
+    "redo": "Redo",
+    "wrap": "Wrap lines",
+    "lineNumbers": "Line numbers",
+    "rendered": "View document"
   }
 }

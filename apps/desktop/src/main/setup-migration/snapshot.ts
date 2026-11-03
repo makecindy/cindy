@@ -82,6 +82,7 @@ export interface SetupSnapshotSourceDeps {
   readPlugins(): Promise<{ ghosts: SourceGhostFact[]; market: SourceMarketFact[] }>;
   /** `true` when the plugin's accounts/keys are set up here; null when unknown. */
   pluginSetupReady(instanceKey: string): boolean | null;
+  pluginHasUserSecrets?(instanceKey: string): boolean;
   readMarketSources(): Promise<SourceMarketSourceFact[]>;
   readSkills(): Promise<SetupSnapshotSkill[]>;
   readMcpServers(): Promise<SourceMcpFact[]>;
@@ -114,7 +115,7 @@ export async function collectSetupSnapshot(deps: SetupSnapshotSourceDeps): Promi
   );
   if (rendererPrefs === null) unavailable.add('rendererPrefs');
   const plugins = await guard('plugins', [] as SetupSnapshotPlugin[], async () =>
-    projectPlugins(await deps.readPlugins(), deps.pluginSetupReady),
+    projectPlugins(await deps.readPlugins(), deps.pluginSetupReady, deps.pluginHasUserSecrets),
   );
   const marketSources = await guard('plugins', [] as SetupSnapshotMarketSource[], async () =>
     projectMarketSources(await deps.readMarketSources()),
@@ -191,6 +192,7 @@ async function collectSettings(
 export function projectPlugins(
   facts: { ghosts: SourceGhostFact[]; market: SourceMarketFact[] },
   setupReady: (instanceKey: string) => boolean | null,
+  hasUserSecrets: (instanceKey: string) => boolean = () => false,
 ): SetupSnapshotPlugin[] {
   const installedMarket = facts.market.filter((item) => item.installed);
   const out: SetupSnapshotPlugin[] = [];
@@ -207,7 +209,14 @@ export function projectPlugins(
     } catch {
       ready = null;
     }
+    let transferableKeys = false;
+    try {
+      transferableKeys = hasUserSecrets(ghost.instanceKey);
+    } catch {
+      // An unreadable presence probe is not evidence of transferable keys.
+    }
     const base = {
+      hasUserSecrets: transferableKeys,
       ghostId: ghost.ghostId,
       name: ghost.name,
       version: ghost.version,

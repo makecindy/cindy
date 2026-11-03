@@ -273,6 +273,8 @@ describe('bot group remote resources', () => {
       ja: 'Taylorさんがグループに参加しました', ko: 'Taylor 님이 그룹에 참여했습니다',
       es: 'Taylor se unió al grupo', fr: 'Taylor a rejoint le groupe', de: 'Taylor ist der Gruppe beigetreten',
       'pt-PT': 'Taylor juntou-se ao grupo', 'pt-BR': 'Taylor se juntou ao grupo',
+      'zh-Hant-x-lzh': 'Taylor入群議',
+      'zh-Hans-x-lzh': 'Taylor入群议',
     } });
   });
 
@@ -357,6 +359,11 @@ describe('bot group remote resources', () => {
       actionId: 'read', resourceRef: ref('g1'), input: { messageId: 'm2' } });
     expect(service.chatServer.manage).toHaveBeenCalledWith({ groupId: 'g1', action: { type: 'read', messageId: 'm2' } });
     expect(read.effects).toEqual([]);
+
+    service.getGroup.mockResolvedValueOnce({ ok: true, group: detail({ serverBacked: true, supportsNotificationSettings: true, notificationMode: 'all' }) });
+    await remoteResourceRegistry.invoke(context, { client: client(), collectionId: BOT_GROUP_REMOTE_COLLECTION_ID,
+      actionId: 'notifications', resourceRef: ref('g1'), input: { mode: 'mentions' } });
+    expect(service.chatServer.manage).toHaveBeenCalledWith({ groupId: 'g1', action: { type: 'notifications', mode: 'mentions' } });
 
     await remoteResourceRegistry.invoke(context, {
       client: client(), collectionId: BOT_GROUP_REMOTE_COLLECTION_ID, actionId: 'plan-continue', resourceRef: ref('g1'),

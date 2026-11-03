@@ -1,6 +1,26 @@
 /** UI-supported concrete locales. */
-export const SUPPORTED_LOCALES = ['zh-CN', 'zh-TW', 'en', 'ja', 'ko', 'es', 'fr', 'de', 'pt-PT', 'pt-BR'] as const;
+export const SUPPORTED_LOCALES = ['zh-CN', 'zh-TW', 'en', 'ja', 'ko', 'es', 'fr', 'de', 'pt-PT', 'pt-BR', 'zh-Hant-x-lzh', 'zh-Hans-x-lzh'] as const;
 export type SupportedLocale = (typeof SUPPORTED_LOCALES)[number];
+
+/**
+ * Classical editions of a modern locale (文言 for Chinese; Japanese 古文 and Korean 한문
+ * can join later). They are only ever chosen by hand. Intl formatting, server-facing
+ * locales and authored content follow the modern base locale.
+ */
+export const CLASSICAL_LOCALE_BASE = {
+  'zh-Hant-x-lzh': 'zh-TW',
+  'zh-Hans-x-lzh': 'zh-CN',
+} as const satisfies Partial<Record<SupportedLocale, SupportedLocale>>;
+export type ClassicalLocale = keyof typeof CLASSICAL_LOCALE_BASE;
+
+export function isClassicalLocale(locale: string | null | undefined): locale is ClassicalLocale {
+  return typeof locale === 'string' && Object.prototype.hasOwnProperty.call(CLASSICAL_LOCALE_BASE, locale);
+}
+
+/** The modern locale behind a classical edition; other locales return themselves. */
+export function modernLocaleOf(locale: SupportedLocale): SupportedLocale {
+  return isClassicalLocale(locale) ? CLASSICAL_LOCALE_BASE[locale] : locale;
+}
 
 /** User-facing locale preference. 'system' is resolved by the host process. */
 export type LocalePreference = SupportedLocale | 'system';
@@ -69,6 +89,10 @@ function matchSupportedLocale(raw: string | undefined | null): SupportedLocale |
 function matchSystemLocale(raw: string | undefined | null): SupportedLocale | null {
   const normalized = normalizeLocaleTag(raw);
   const language = getLanguageCode(raw);
+  // An app locale passed back through this resolver keeps its exact identity;
+  // otherwise the classical Chinese tags would fold into zh-CN / zh-TW.
+  const exact = normalized ? LOCALE_BY_TAG.get(normalized.toLowerCase()) : undefined;
+  if (exact) return exact;
   if (language === 'zh') {
     const intlLocale = normalized ? new Intl.Locale(normalized) : null;
     const script = intlLocale?.script?.toLowerCase() ?? '';

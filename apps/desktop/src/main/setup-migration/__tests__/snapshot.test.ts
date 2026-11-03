@@ -193,6 +193,7 @@ describe('projectPlugins', () => {
         ],
       },
       (key) => key === '_root__market-one',
+      (key) => key === '_root__custom-one',
     );
     expect(result.map((p) => [p.ghostId, p.source, p.pluginId, p.setupReady])).toEqual([
       ['market-one', 'market', 'p1', true],
@@ -204,6 +205,7 @@ describe('projectPlugins', () => {
       ['org-one', 'market', 'p-org', false],
     ]);
     expect(result.find((p) => p.ghostId === 'manual-one')?.enabled).toBe(false);
+    expect(result.filter((p) => p.hasUserSecrets).map((p) => p.ghostId)).toEqual(['custom-one']);
   });
 });
 

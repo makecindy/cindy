@@ -342,7 +342,7 @@ function secretsItem(
       .filter((item) => item.state !== 'unavailable')
       .filter((item) =>
         input.snapshot.plugins.some(
-          (plugin) => plugin.ghostId === item.ghostId && plugin.namespace === item.namespace && plugin.setupReady === true,
+          (plugin) => plugin.ghostId === item.ghostId && plugin.namespace === item.namespace && plugin.hasUserSecrets === true,
         ),
       )
       .map((item) => ({ kind: 'plugin' as const, ref: item.key, name: item.name })),

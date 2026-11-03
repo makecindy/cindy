@@ -15,7 +15,7 @@ import { planInputs, plugin, snapshot } from './fixtures.js';
 const source = snapshot({
   transfer: 1,
   providers: [{ id: 'or', name: 'OpenRouter', auth: 'apiKey', config: { id: 'or', runtimes: {} } }],
-  plugins: [plugin({ ghostId: 'gmail', setupReady: true })],
+  plugins: [plugin({ ghostId: 'gmail', setupReady: true, hasUserSecrets: true })],
   hints: { builtinKeys: ['brave', 'tavily'], imChannels: [], sshHostCount: 2 },
   sshHosts: [
     { id: 'web', displayName: 'Web', hostname: 'web.example.com', port: 22, user: 'deploy', hostKey: null },

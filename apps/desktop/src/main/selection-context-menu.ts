@@ -74,6 +74,8 @@ function localizedActionLabel(
   if (action === 'addToChat') {
     if (resolvedLocale === 'zh-CN') return '添加到对话';
     if (resolvedLocale === 'zh-TW') return '新增到對話';
+    if (resolvedLocale === 'zh-Hant-x-lzh') return '引入言談';
+    if (resolvedLocale === 'zh-Hans-x-lzh') return '引入言谈';
     if (resolvedLocale === 'ja') return 'チャットに追加';
     if (resolvedLocale === 'ko') return '대화에 추가';
     if (resolvedLocale === 'es') return "Añadir a la conversación";
@@ -88,6 +90,8 @@ function localizedActionLabel(
   if (action === 'lookUp') {
     if (resolvedLocale === 'zh-CN') return `查询“${preview}”`;
     if (resolvedLocale === 'zh-TW') return `查詢「${preview}」`;
+    if (resolvedLocale === 'zh-Hant-x-lzh') return `查「${preview}」`;
+    if (resolvedLocale === 'zh-Hans-x-lzh') return `查「${preview}」`;
     if (resolvedLocale === 'ja') return `「${preview}」を調べる`;
     if (resolvedLocale === 'ko') return `“${preview}” 찾아보기`;
     if (resolvedLocale === 'es') return `Buscar «${preview}»`;
@@ -99,6 +103,8 @@ function localizedActionLabel(
   }
   if (resolvedLocale === 'zh-CN') return `在网页中搜索“${preview}”`;
   if (resolvedLocale === 'zh-TW') return `在網頁中搜尋「${preview}」`;
+  if (resolvedLocale === 'zh-Hant-x-lzh') return `於網上尋「${preview}」`;
+  if (resolvedLocale === 'zh-Hans-x-lzh') return `于网上寻「${preview}」`;
   if (resolvedLocale === 'ja') return `「${preview}」をウェブで検索`;
   if (resolvedLocale === 'ko') return `웹에서 “${preview}” 검색`;
   if (resolvedLocale === 'es') return `Buscar «${preview}» en la web`;

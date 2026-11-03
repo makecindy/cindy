@@ -387,6 +387,8 @@ export interface BotGroupPlanStepView {
 
 export interface BotGroupPlanView {
   id: string;
+  /** Direct Chat Server snapshot revision; absent on legacy computer projections. */
+  revision?: number;
   status: BotGroupPlanStatus;
   organizerBotId: string;
   organizerName: string;
@@ -464,7 +466,11 @@ export interface BotGroupRoundView {
   othersActive?: boolean;
 }
 
+export type ChatGroupNotificationMode = 'all' | 'mentions' | 'none';
+
 export interface BotGroupSummary {
+  /** Execution snapshot already included by server-backed group summaries; absent on older hosts. */
+  round?: BotGroupRoundView;
   /** Owner-controlled companion broadcast; absent on old servers/hosts. */
   supportsMentionAudiences?: boolean;
   allowMentionAllBots?: boolean;
@@ -481,6 +487,8 @@ export interface BotGroupSummary {
   supportsGroupLeave?: boolean;
   supportsListRemoval?: boolean;
   supportsMemberAvatar?: boolean;
+  supportsNotificationSettings?: boolean;
+  notificationMode?: ChatGroupNotificationMode;
   dissolvedAt?: string | null;
   archived?: boolean;
   migrationPending?: boolean;
@@ -575,6 +583,8 @@ export type BotGroupErrorCode =
   | 'LAST_OWNER'
   | 'INVALID_PARAMS'
   | 'REVISION_CONFLICT'
+  | 'STOP_OWNERSHIP_UNKNOWN'
+  | 'NOTHING_TO_STOP'
   | 'NOT_FOUND'
   | 'MEMBER_LIMIT'
   | 'MEMBER_UNAVAILABLE'
@@ -720,6 +730,7 @@ export const BOT_GROUP_MEMBER_LINK_REL = 'member';
 export type BotGroupRemoteActionId =
   | 'create'
   | 'read'
+  | 'notifications'
   | 'mask'
   | 'mask-mentions'
   | 'send'
@@ -865,6 +876,7 @@ export interface ChatInvitePreview {
 }
 export type ChatGroupAction =
   | { type: 'read'; messageId: string; conversationKind?: 'direct' }
+  | { type: 'notifications'; mode: ChatGroupNotificationMode }
   | { type: 'update'; name: string; topic: string; description: string; expectedRevision: number; responseMode?: BotGroupReplyMode; speakingMode?: BotGroupSpeakingMode; allowMentionAllBots?: boolean }
   | { type: 'nickname'; actorId: string; nickname: string | null }
   | { type: 'avatar'; actorId: string; avatar: { type: 'keep' | 'reset' } | { type: 'set'; data: Uint8Array; mimeType: string } }

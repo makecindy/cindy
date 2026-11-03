@@ -52,6 +52,7 @@ import type {
   ScriptExecutionConfig,
   ScriptCapability,
   PreRunHookRunResult,
+  PreRunPluginFailureAction,
 } from '@cindy/maker-scheduler';
 import { normalizeSessionSource } from '../../shared/sessionSource.js';
 import type { SessionSource } from '../../shared/sessionSource.js';
@@ -701,6 +702,11 @@ function parseScriptConfig(raw: string | null): ScriptExecutionConfig | undefine
 const PRE_RUN_HOOK_STATUSES = new Set(['passed', 'skipped', 'failed', 'timed_out', 'aborted']);
 const PRE_RUN_HOOK_DECISIONS = new Set(['run', 'skip', 'block']);
 
+/** 本文件只做 type-only import,取值表在此重复声明;未知值按最严格的 block 读。 */
+function isPreRunPluginFailureAction(value: string | null): value is PreRunPluginFailureAction {
+  return value === 'allow' || value === 'skip' || value === 'block';
+}
+
 /** 兼容损坏/手工写入的 JSON：非法结果不应让整个运行历史加载失败。 */
 function parsePreRunHookResult(raw: string | null): PreRunHookRunResult | undefined {
   if (!raw) return undefined;
@@ -771,6 +777,12 @@ export function scheduleToCamel(row: ScheduleRow): Schedule {
           timeoutMs: row.preRunHookTimeoutMs ?? undefined,
         }
       : undefined,
+    preRunPlugin: row.preRunPluginId
+      ? {
+          pluginId: row.preRunPluginId,
+          onFailure: isPreRunPluginFailureAction(row.preRunPluginOnFailure) ? row.preRunPluginOnFailure : 'block',
+        }
+      : undefined,
     notify: {
       desktop: !!row.notifyDesktop,
       feishu: !!row.notifyFeishu,
@@ -820,6 +832,8 @@ export function scheduleCreateToRow(s: Schedule): ScheduleInsert {
     silentWhenIdle: !!s.silentWhenIdle,
     preRunHookCommand: s.preRunHook?.command ?? null,
     preRunHookTimeoutMs: s.preRunHook?.timeoutMs ?? null,
+    preRunPluginId: s.preRunPlugin?.pluginId ?? null,
+    preRunPluginOnFailure: s.preRunPlugin?.onFailure ?? null,
     notifyDesktop: s.notify.desktop,
     notifyFeishu: s.notify.feishu,
     notifyWecomGroup: s.notify.wecomGroup === true,
@@ -879,6 +893,10 @@ export function schedulePatchToRow(patch: Partial<Schedule>): Partial<ScheduleIn
     // 嵌套对象整体替换(同 notify):出现即两列同写;undefined = 关闭 hook,双列清 NULL
     out.preRunHookCommand = patch.preRunHook?.command ?? null;
     out.preRunHookTimeoutMs = patch.preRunHook?.timeoutMs ?? null;
+  }
+  if (hasKey(patch, 'preRunPlugin')) {
+    out.preRunPluginId = patch.preRunPlugin?.pluginId ?? null;
+    out.preRunPluginOnFailure = patch.preRunPlugin?.onFailure ?? null;
   }
   if (hasKey(patch, 'notify')) {
     const n = patch.notify;

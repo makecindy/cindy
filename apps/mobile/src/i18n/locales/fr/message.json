@@ -162,6 +162,7 @@
     "mediaErrorLine": "Erreur : {{message}}",
     "mediaDeviceLinkHint": "Avant l'ouverture, votre téléphone demande à l'appareil distant d'envoyer ce média.",
     "controlDelete": "Supprimer le message",
+    "controlEdit": "Modifier",
     "controlRewind": "Revenir ici",
     "controlFork": "Démarrer une nouvelle session à partir d'ici",
     "markdownDocAriaLabel": "Corps du message",
@@ -262,6 +263,14 @@
     "imagesNotUploaded_many": "{{count}} images n'ont pas été envoyées"
   },
   "systemCard": {
+    "pluginModelRoute": {
+      "routed": "{{plugin}} a choisi {{model}} pour cette tâche",
+      "kept": {
+        "no-opinion": "{{plugin}} n’a pas changé de modèle cette fois ; cette tâche utilise {{model}}",
+        "failed": "{{plugin}} n’a pas répondu à temps ; cette tâche utilise {{model}}",
+        "unavailable-route": "{{plugin}} a choisi un modèle indisponible ; cette tâche utilise {{model}}"
+      }
+    },
     "contextRebuild": {
       "labelOverflow": "Contexte réorganisé, poursuite en cours",
       "labelTimeout": "Le dernier tour n'a pas répondu ; contexte réorganisé pour continuer",
@@ -442,5 +451,32 @@
       "provider": "Fournisseur d’API",
       "unknown": "Canal non enregistré"
     }
+  },
+  "attachmentPreview": {
+    "more": "Autres actions",
+    "retry": "Réessayer",
+    "image": "Image",
+    "video": "Vidéo",
+    "file": "Fichier",
+    "close": "Fermer",
+    "reset": "Réinitialiser la vue",
+    "open": "Ouvrir l’aperçu",
+    "zoomIn": "Zoom avant",
+    "zoomOut": "Zoom arrière",
+    "fit": "Ajuster à la fenêtre",
+    "actualSize": "Taille réelle (1:1)",
+    "save": "Enregistrer l’original",
+    "share": "Partager",
+    "previous": "Pièce jointe précédente",
+    "next": "Pièce jointe suivante",
+    "password": "Saisir le mot de passe du PDF",
+    "find": "Rechercher dans le document",
+    "matches": "{{count}} pages correspondantes",
+    "previousPage": "Page précédente",
+    "nextPage": "Page suivante",
+    "redo": "Rétablir",
+    "wrap": "Retour à la ligne",
+    "lineNumbers": "Numéros de ligne",
+    "rendered": "Afficher le document"
   }
 }

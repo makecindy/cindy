@@ -42,6 +42,7 @@ import {
   getGhostManager,
   getGhostSetupAssessment,
   readGhostUserSecretsForSetup,
+  hasGhostUserSecretsForSetup,
   setGhostEnabledForUser,
   storeGhostUserSecretsForSetup,
 } from '../cindy-brain/index.js';
@@ -583,6 +584,7 @@ export function registerSetupMigration(options: RegisterSetupMigrationOptions): 
         };
       },
       pluginSetupReady: (instanceKey) => getGhostSetupAssessment(instanceKey).state === 'ready',
+      pluginHasUserSecrets: hasGhostUserSecretsForSetup,
       readMarketSources: async () =>
         (await market().listSources()).map((summary) => ({ name: summary.name, source: summary.source })),
       readSkills: async (): Promise<SetupSnapshotSkill[]> =>
@@ -720,4 +722,3 @@ export function parseDismissRequest(raw: unknown): SetupMigrationDismissRequest 
   }
   throwIpcError('INVALID_PARAMS', 'Invalid dismiss request');
 }
-

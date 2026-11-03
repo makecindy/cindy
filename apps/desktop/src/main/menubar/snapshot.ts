@@ -11,6 +11,14 @@
  */
 
 import {
+  QUOTA_CRIT_REMAINING_PERCENT,
+  QUOTA_WARN_REMAINING_PERCENT,
+  quotaLevelFromRemaining,
+  resetTimeLevel,
+  willLeaveQuotaUnused,
+  type QuotaLevel,
+} from '@cindy/maker-shared/quota-level';
+import {
   type MenubarColor,
   type MenubarDetail,
   type MenubarDetailAction,
@@ -70,6 +78,8 @@ export interface MenubarSubscriptionInput {
   device?: MenubarRemoteDevice | null;
   /** Codex rate-limit resets the user can redeem. */
   resetCredits?: MenubarResetCredits | null;
+  /** Set when the other computer cannot be reached now: the reading is from this time. */
+  lastSeenAtMs?: number | null;
 }
 
 export interface MenubarRemoteDevice {
@@ -163,6 +173,17 @@ export interface MenubarUsageScopeInput {
   daily: MenubarUsageScopeData['daily'];
   models: MenubarUsageScopeData['models'];
   devices: MenubarUsageDeviceInput[];
+  /** Daily value split by model for the iPhone widgets; not sent to the menu bar helper. */
+  modelSeries?: MenubarModelSeries;
+}
+
+/** The models with the most tokens in the last 30 days; each day lists theirs, then everything else. */
+export interface MenubarModelSeries {
+  models: { name: string; harness: MenubarHarness }[];
+  /** Value per day, aligned with `MenubarUsageInput.days`; `models.length + 1` entries, the rest last. */
+  daily: number[][];
+  /** Tokens per day, same shape as `daily`. */
+  tokens: number[][];
 }
 
 export interface MenubarUsageInput {
@@ -192,7 +213,6 @@ export interface MenubarBuildInput {
 
 const HOUR_MS = 3_600_000;
 const DAY_MS = 86_400_000;
-const WARN_REMAINING = 15;
 const SOON_MS = 12 * HOUR_MS;
 const RESTORE_GROUP_MS = 6 * HOUR_MS;
 const RESTORE_HORIZON_MS = 7 * DAY_MS;
@@ -279,10 +299,20 @@ function clamp(value: number, min: number, max: number): number {
   return Math.min(max, Math.max(min, value));
 }
 
+/** The shared quota rule (`@cindy/maker-shared/quota-level`) in the panel's level names. */
 function levelOf(remaining: number): MenubarLevel {
-  if (remaining <= 0) return 'error';
-  if (remaining <= WARN_REMAINING) return 'warn';
-  return 'normal';
+  const level = quotaLevelFromRemaining(remaining);
+  return level === 'crit' ? 'error' : level;
+}
+
+function panelLevel(level: QuotaLevel): MenubarLevel {
+  return level === 'crit' ? 'error' : level;
+}
+
+/** Share of a balance left, judged like a subscription window; empty is always red. */
+function balanceLevel(source: MenubarBalanceInput): MenubarLevel {
+  if (!(source.available > 0)) return 'error';
+  return source.fullAmount && source.fullAmount > 0 ? levelOf((source.available / source.fullAmount) * 100) : 'normal';
 }
 
 function levelColor(level: MenubarLevel): MenubarColor | null {
@@ -480,10 +510,16 @@ class Builder {
     return this.state(source).remaining;
   }
 
+  /** Remaining quota that can be used from here: an offline computer's last reading cannot. */
+  private usableRemaining(source: MenubarSubscriptionInput): number | null {
+    return source.lastSeenAtMs ? null : this.remaining(source);
+  }
+
   /** The subscription with the most room left, else a balance with money on it. */
   private recommended(): MenubarSourceInput | null {
+    // An offline computer's account cannot be used from here until it is back.
     const subscriptions = this.visibleSubscriptions()
-      .filter((source) => (this.remaining(source) ?? 0) > 0)
+      .filter((source) => (this.usableRemaining(source) ?? 0) > 0)
       .sort(
         (a, b) =>
           (this.remaining(b) ?? 0) - (this.remaining(a) ?? 0)
@@ -497,7 +533,7 @@ class Builder {
   private tightest(): MenubarSubscriptionInput | null {
     return (
       this.visibleSubscriptions()
-        .filter((source) => (this.remaining(source) ?? 0) > 0)
+        .filter((source) => (this.usableRemaining(source) ?? 0) > 0)
         .sort((a, b) => (this.remaining(a) ?? 0) - (this.remaining(b) ?? 0))[0] ?? null
     );
   }
@@ -511,7 +547,7 @@ class Builder {
     for (const source of this.visibleSubscriptions()) {
       const { limit, remaining } = this.state(source);
       const atMs = limit?.window.resetsAtMs ?? null;
-      if (remaining === null || remaining > WARN_REMAINING || atMs === null) continue;
+      if (remaining === null || remaining > QUOTA_WARN_REMAINING_PERCENT || atMs === null) continue;
       if (atMs - this.input.nowMs > RESTORE_HORIZON_MS) continue;
       events.push({ atMs, source });
     }
@@ -532,6 +568,7 @@ class Builder {
     const recommended = this.recommended();
     const groups = this.restores();
     const soon = this.visibleSubscriptions()
+      .filter((source) => !source.lastSeenAtMs)
       .map((source) => ({ source, eta: this.state(source).limit?.etaMs ?? null }))
       .filter((entry): entry is { source: MenubarSubscriptionInput; eta: number } => entry.eta !== null && entry.eta < SOON_MS)
       .sort((a, b) => a.eta - b.eta)[0];
@@ -550,7 +587,7 @@ class Builder {
       // "Used up" is only true when something was actually measured empty.
       const measured =
         this.visible.some((source) => source.kind === 'balance')
-        || this.visibleSubscriptions().some((source) => this.remaining(source) !== null);
+        || this.visibleSubscriptions().some((source) => this.usableRemaining(source) !== null);
       if (!measured) {
         const unread = this.visibleSubscriptions().length > 0;
         return unread
@@ -590,8 +627,8 @@ class Builder {
   private balanceWhen(source: MenubarBalanceInput, days: number | null, roomy: boolean): string {
     const resetsAtMs = source.quota?.resetsAtMs ?? null;
     if (resetsAtMs !== null) {
-      const duration = this.shortDuration(resetsAtMs - this.input.nowMs);
-      return roomy ? this.t('cell.resetsIn', { duration }) : duration;
+      // Just the duration under a tube, as on the iPhone widgets (owner decision 2026-10-31).
+      return this.shortDuration(resetsAtMs - this.input.nowMs);
     }
     return days === null ? '' : this.t(roomy ? 'cell.lastsDays' : 'cell.lastsDaysShort', { n: days });
   }
@@ -625,11 +662,13 @@ class Builder {
         value: amount,
         valueUnit: null,
         valueLabel: null,
-        level: source.available > 0 ? 'normal' : 'error',
+        level: balanceLevel(source),
         fill,
         reserve: false,
         when: this.balanceWhen(source, days, roomy),
+        // A Cindy period quota is a budget, not a subscription to use up: no "use it" reminder.
         whenLevel: 'normal',
+        resetsAtMs: source.quota?.resetsAtMs ?? null,
         accessibilityLabel: source.quota
           ? this.t('a11y.quota', { amount })
           : days === null
@@ -660,12 +699,19 @@ class Builder {
     const reserve = remaining <= 0 && (source.creditsUnlimited || (source.credits ?? 0) > 0);
     const limit = state.limit;
     // Read together with the percentage above: "90% · resets in 6d 7h", for the window shown.
+    // An unreachable computer's reading says how old it is instead of a countdown.
+    const seenAtMs = source.lastSeenAtMs ?? null;
     let when = '';
-    if (limit.window.resetsAtMs !== null) {
-      const duration = this.shortDuration(limit.window.resetsAtMs - this.input.nowMs);
-      when = roomy ? this.t('cell.resetsIn', { duration }) : duration;
+    if (seenAtMs !== null) {
+      when = this.ago(seenAtMs);
+    } else if (limit.window.resetsAtMs !== null) {
+      when = this.shortDuration(limit.window.resetsAtMs - this.input.nowMs);
     }
-    const whenLevel: MenubarLevel = level;
+    // The number keeps its ink (the liquid shows how much is left); the reset time colors only
+    // when a long window will reset with quota still unused at the current pace (2026-10-31).
+    const unusedAtReset = seenAtMs === null && limit.window.resetsAtMs !== null
+      && willLeaveQuotaUnused({ usedPercent: 100 - remaining, windowMs: limit.window.windowMinutes * 60_000, leftMs: limit.leftMs });
+    const whenLevel = panelLevel(resetTimeLevel(limit.leftMs, unusedAtReset));
     return {
       ...base,
       name,
@@ -677,6 +723,9 @@ class Builder {
       reserve,
       when,
       whenLevel,
+      resetsAtMs: seenAtMs !== null ? null : limit.window.resetsAtMs,
+      ...(unusedAtReset ? { unusedAtReset: true } : {}),
+      ...(seenAtMs !== null ? { stale: true } : {}),
       accessibilityLabel: reserve
         ? this.t('a11y.reserve', { name: `${source.brand} ${name}` })
         : this.t('a11y.remaining', { name: source.brand === name ? name : `${source.brand} ${name}`, n: Math.round(remaining) }),
@@ -779,7 +828,7 @@ class Builder {
       rings: [{ fraction, color: 'ink' }],
       bigValue: this.balanceMoney(source.available, source.currency),
       bigUnit: null,
-      bigColor: source.available > 0 ? null : 'error',
+      bigColor: null,
       bigCompact: true,
       bigCaption: this.t(quota ? 'detail.quotaCaption' : 'detail.balanceCaption'),
       legend: [],
@@ -964,7 +1013,7 @@ class Builder {
       rings,
       bigValue: String(Math.round(remaining)),
       bigUnit: '%',
-      bigColor: levelColor(level),
+      bigColor: null,
       bigCompact: multi,
       bigCaption: this.t('detail.windowLeft', { window: this.windowLabel(limit.window) }),
       legend: multi
@@ -1089,7 +1138,7 @@ class Builder {
 
   private statusTexts(): Record<MenubarStatusTextMode, string | null> {
     const tightest = this.tightest();
-    const hasSubscriptions = this.visibleSubscriptions().some((source) => this.remaining(source) !== null);
+    const hasSubscriptions = this.visibleSubscriptions().some((source) => this.usableRemaining(source) !== null);
     const scope = this.input.usage.scopes[this.input.settings.scope];
     const today = scope.daily[scope.daily.length - 1];
     const running = this.input.tasks.filter((task) => task.running);
@@ -1137,10 +1186,10 @@ class Builder {
         continue;
       }
       if (source.kind !== 'subscription') continue;
-      const remaining = this.remaining(source);
+      const remaining = this.usableRemaining(source);
       if (remaining === null) continue;
       known += 1;
-      if (remaining > WARN_REMAINING) return false;
+      if (remaining > QUOTA_CRIT_REMAINING_PERCENT) return false;
     }
     return known > 0;
   }

@@ -231,7 +231,7 @@ describe("mobile account deletion", () => {
     expect(layout).toContain("loginText('accountDeletionRestoredCopy')");
     expect(
       loginMessages.match(/(?:["']accountDeletionAcknowledgeCopy["']|accountDeletionAcknowledgeCopy):/g),
-    ).toHaveLength(10);
+    ).toHaveLength(12);
     expect(loginMessages).toContain("其他客户端会在登录状态失效后退出");
     expect(loginMessages).toContain(
       "other clients will sign out when their sign-in session becomes invalid",
@@ -268,7 +268,7 @@ describe("mobile account deletion", () => {
     expect(panel).toContain("getAuthLocale()");
     expect(panel).not.toMatch(/[\u4e00-\u9fff]/);
     expect(loginMessages.match(/accountDeletionPendingTitle:/g)).toHaveLength(
-      5,
+      7,
     );
     expect(loginMessages).toContain("现在重新登录即可取消注销");
     expect(loginMessages).toContain("Sign in now to cancel deletion.");

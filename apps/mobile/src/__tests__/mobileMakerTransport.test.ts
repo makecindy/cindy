@@ -39,6 +39,58 @@ function harness() {
 }
 
 describe("mobile maker transport", () => {
+  // #8332, unit: readBytes must return shared workdir content across the inline
+  // boundary. Existing shared tests only cover direct three-byte media reads;
+  // 65,537 bytes with readBytes' owner export fallback reproduced the rejection.
+  // Standalone file: 2.60s Vitest / 3.68s command wall time on Windows.
+  it.each([
+    { size: 65_536, fileRead: true },
+    { size: 65_537, fileRead: true },
+    { size: 65_537, fileRead: undefined },
+  ])('reads a $size-byte shared workdir file through authorized media (fileRead=$fileRead)', async ({ size, fileRead }) => {
+    const url = `xdt-file://open?path=/work/changed.txt&baseDir=/work&maxBytes=${size}`;
+    const metadata = { ossKey: '', size, mimeType: 'text/plain' };
+    const inline = { ...metadata, inlineBase64: Buffer.alloc(size, 7).toString('base64') };
+    const uploaded = { ...metadata, ossKey: 'shared/changed.txt' };
+    const peer = vi.fn(async () => null);
+    const uninstall = installPeerFileDownload(peer);
+    const invoke = vi.fn(async (_device, channel, [request]) => {
+      if (channel === 'file-browser:remote-op' && request.op === 'caps') return { fileRead };
+      if (channel === 'file-browser:remote-op' && request.op === 'fileUrl') return { ok: true, url };
+      if (channel !== 'device-link:media:fetch') throw new Error('PERMISSION_DENIED');
+      expect(request.url).toBe(url);
+      expect(request).not.toHaveProperty('metadataOnly');
+      return request.prepareOnly ? size <= 65_536 ? inline : { ...metadata, transferRequired: true } : uploaded;
+    });
+    try {
+      const maker = createMobileMakerTransport({ deviceId: sharedTaskHostPeer('shared', 'host'), invoke: invoke as RemoteInvoke });
+      expect(await maker.fileBrowser.readBytes('/work', 'changed.txt')).toEqual(size <= 65_536 ? inline : uploaded);
+      expect(peer).not.toHaveBeenCalled();
+    } finally { uninstall(); }
+  });
+
+  it.each(['prepare', 'upload', 'cancel'] as const)('stops shared file reads on %s rejection', async (failure) => {
+    const abort = new AbortController();
+    const peer = vi.fn(async () => null);
+    const uninstall = installPeerFileDownload(peer);
+    const invoke = vi.fn(async (_device, channel, [request]) => {
+      if (channel === 'file-browser:remote-op' && request.op === 'caps') return { fileRead: true };
+      if (channel === 'file-browser:remote-op' && request.op === 'fileUrl') return { ok: true, url: 'xdt-file://open?path=/work/a' };
+      if (channel !== 'device-link:media:fetch') throw new Error('owner export must not run');
+      if (failure === 'prepare' || !request.prepareOnly) throw new Error('PERMISSION_DENIED');
+      if (failure === 'cancel') abort.abort();
+      return { ossKey: '', size: 65_537, mimeType: 'text/plain', transferRequired: true };
+    });
+    try {
+      const maker = createMobileMakerTransport({ deviceId: sharedTaskHostPeer('shared', 'host'), invoke: invoke as RemoteInvoke });
+      await expect(maker.fileBrowser.readBytes('/work', 'a', abort.signal))
+        .rejects.toThrow(failure === 'cancel' ? 'FILE_PEER_CANCELLED' : 'PERMISSION_DENIED');
+      expect(peer).not.toHaveBeenCalled();
+      expect(invoke.mock.calls.filter(([, channel]) => channel === 'device-link:media:fetch'))
+        .toHaveLength(failure === 'upload' ? 2 : 1);
+    } finally { uninstall(); }
+  });
+
   // Unit: validate the real transport's versioned Host protocol, including an
   // older Host rejection. Creating a side chat is never retried as a new task.
   it('uses versioned side-chat channels and surfaces unsupported hosts without fallback', async () => {
@@ -469,6 +521,7 @@ describe("mobile maker transport", () => {
       "maker:usage:claude-subscription",
       "maker:usage:xai-subscription",
       "maker:claude-session-route:get",
+      "device-link:usage-widget:snapshot:v1",
       "maker:api-key:present",
       "maker:list-agent-commands",
       "maker:list-agent-skills",

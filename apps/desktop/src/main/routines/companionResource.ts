@@ -9,7 +9,7 @@ import { getBotRemoteResourceSource } from '../localDb/ipc/bots.js';
 import { isBotVisibleRemotely } from '../localDb/ipc/botRemoteVisibility.js';
 
 const text = (fallback: string, zh: string, tw: string, ja: string, ko: string, additionalTranslations: Record<string, string> = {}): RemoteText => ({ fallback, translations: { 'zh-CN': zh, 'zh-TW': tw, ja, ko, ...additionalTranslations } });
-const title = text('Routines', '例行任务', '例行任務', 'ルーティン', '루틴', {"es":"Rutinas","fr":"Routines","de":"Routinen","pt-PT":"Rotinas","pt-BR":"Rotinas"});
+const title = text('Routines', '例行任务', '例行任務', 'ルーティン', '루틴', {"es":"Rutinas","fr":"Routines","de":"Routinen","pt-PT":"Rotinas","pt-BR":"Rotinas","zh-Hant-x-lzh":"例行差事","zh-Hans-x-lzh":"例行差事"});
 const ref = (id: string) => ({ collectionId: 'routines', kind: 'routine', id: `bot:${id}` });
 function parseId(id: string): { botId: string; routineId?: string } {
   const parts = id.split('/');
@@ -47,7 +47,7 @@ export async function getBotRoutineRemoteResource(id: string): Promise<RemoteRes
           : trigger.kind === 'once' ? { kind: trigger.kind, at: trigger.at } : { kind: trigger.kind, sourceId: trigger.sourceId, eventType: trigger.eventType }),
     }));
     return { ...base, blocks: [{ id: 'routines', primitive: 'routine-list', fallbackMarkdown: items.map((r) => r.name).join('\n') || '—', data: { items } }],
-      actions: [{ id: 'routine-create', label: text('New Routine', '新例行任务', '新例行任務', '新しいルーティン', '새 루틴', {"es":"Nueva rutina","fr":"Nouvelle routine","de":"Neue Routine","pt-PT":"Nova rotina","pt-BR":"Nova rotina"}) }] };
+      actions: [{ id: 'routine-create', label: text('New Routine', '新例行任务', '新例行任務', '新しいルーティン', '새 루틴', {"es":"Nueva rutina","fr":"Nouvelle routine","de":"Neue Routine","pt-PT":"Nova rotina","pt-BR":"Nova rotina","zh-Hant-x-lzh":"新例行差事","zh-Hans-x-lzh":"新例行差事"}) }] };
   }
   const routine = routines.find((r) => r.id === routineId);
   if (!routine && routineId !== 'new') throw new RemoteResourceRegistryError('NOT_FOUND', 'Automation unavailable');
@@ -63,13 +63,13 @@ export async function getBotRoutineRemoteResource(id: string): Promise<RemoteRes
     sources: sources.slice(0, 64).map((s) => ({ id: s.id, name: s.name, status: s.status, events: s.events.slice(0, 32).map((e) => ({ type: e.type, name: e.name, fields: e.fields.slice(0, 64) })) })),
     history: history.slice(0, 20).map((r) => ({ id: r.id, status: r.status, createdAt: r.createdAt, finishedAt: r.finishedAt, resultText: r.resultText?.slice(0, 2000), error: r.error?.slice(0, 1000) })),
   };
-  return { ...base, display: { title: routine?.name ?? text('New Routine', '新例行任务', '新例行任務', '新しいルーティン', '새 루틴', {"es":"Nueva rutina","fr":"Nouvelle routine","de":"Neue Routine","pt-PT":"Nova rotina","pt-BR":"Nova rotina"}) }, revision: String(routine?.revision ?? 0),
+  return { ...base, display: { title: routine?.name ?? text('New Routine', '新例行任务', '新例行任務', '新しいルーティン', '새 루틴', {"es":"Nueva rutina","fr":"Nouvelle routine","de":"Neue Routine","pt-PT":"Nova rotina","pt-BR":"Nova rotina","zh-Hant-x-lzh":"新例行差事","zh-Hans-x-lzh":"新例行差事"}) }, revision: String(routine?.revision ?? 0),
     blocks: [{ id: 'routine', primitive: 'routine-detail', fallbackMarkdown: routine?.name ?? '—', data }],
     actions: [
-      ...(editable ? [{ id: routine ? 'routine-save' : 'routine-create', label: text('Save', '保存', '儲存', '保存', '저장', {"es":"Guardar","fr":"Enregistrer","de":"Speichern","pt-PT":"Guardar","pt-BR":"Salvar"}) }] : []),
+      ...(editable ? [{ id: routine ? 'routine-save' : 'routine-create', label: text('Save', '保存', '儲存', '保存', '저장', {"es":"Guardar","fr":"Enregistrer","de":"Speichern","pt-PT":"Guardar","pt-BR":"Salvar","zh-Hant-x-lzh":"存之","zh-Hans-x-lzh":"存之"}) }] : []),
       ...(routine ? [
-        { id: 'routine-run', label: text('Run Now', '立即运行', '立即執行', '今すぐ実行', '지금 실행', {"es":"Ejecutar ahora","fr":"Exécuter maintenant","de":"Jetzt ausführen","pt-PT":"Executar agora","pt-BR":"Executar agora"}), confirmation: { title: text('Run this routine now?', '立即运行这项例行任务？', '立即執行這項例行任務？', '今すぐこのルーティンを実行しますか？', '지금 이 루틴을 실행할까요?', {"es":"¿Ejecutar esta rutina ahora?","fr":"Exécuter cette routine maintenant ?","de":"Diese Routine jetzt ausführen?","pt-PT":"Executar esta rotina agora?","pt-BR":"Executar esta rotina agora?"}) } },
-        { id: 'routine-delete', label: text('Delete', '删除', '刪除', '削除', '삭제', {"es":"Eliminar","fr":"Supprimer","de":"Löschen","pt-PT":"Eliminar","pt-BR":"Excluir"}), tone: 'destructive', confirmation: { title: text('Delete this routine?', '删除这项例行任务？', '刪除這項例行任務？', 'このルーティンを削除しますか？', '이 루틴을 삭제할까요?', {"es":"¿Eliminar esta rutina?","fr":"Supprimer cette routine ?","de":"Diese Routine löschen?","pt-PT":"Eliminar esta rotina?","pt-BR":"Excluir esta rotina?"}), body: text('The routine and its run history will be removed.', '将删除这项例行任务及其运行记录。', '將刪除這項例行任務及其執行記錄。', 'ルーティンと実行履歴が削除されます。', '루틴과 실행 기록이 삭제됩니다。', {"es":"Se eliminarán la rutina y su historial de ejecución.","fr":"La routine et son historique d’exécution seront supprimés.","de":"Die Routine und ihr Ausführungsverlauf werden entfernt.","pt-PT":"A rotina e o respetivo histórico de execuções serão removidos.","pt-BR":"A rotina e seu histórico de execuções serão removidos."}) } },
+        { id: 'routine-run', label: text('Run Now', '立即运行', '立即執行', '今すぐ実行', '지금 실행', {"es":"Ejecutar ahora","fr":"Exécuter maintenant","de":"Jetzt ausführen","pt-PT":"Executar agora","pt-BR":"Executar agora","zh-Hant-x-lzh":"即行","zh-Hans-x-lzh":"即行"}), confirmation: { title: text('Run this routine now?', '立即运行这项例行任务？', '立即執行這項例行任務？', '今すぐこのルーティンを実行しますか？', '지금 이 루틴을 실행할까요?', {"es":"¿Ejecutar esta rutina ahora?","fr":"Exécuter cette routine maintenant ?","de":"Diese Routine jetzt ausführen?","pt-PT":"Executar esta rotina agora?","pt-BR":"Executar esta rotina agora?","zh-Hant-x-lzh":"即行此例行差事乎？","zh-Hans-x-lzh":"即行此例行差事乎？"}) } },
+        { id: 'routine-delete', label: text('Delete', '删除', '刪除', '削除', '삭제', {"es":"Eliminar","fr":"Supprimer","de":"Löschen","pt-PT":"Eliminar","pt-BR":"Excluir","zh-Hant-x-lzh":"刪","zh-Hans-x-lzh":"删"}), tone: 'destructive', confirmation: { title: text('Delete this routine?', '删除这项例行任务？', '刪除這項例行任務？', 'このルーティンを削除しますか？', '이 루틴을 삭제할까요?', {"es":"¿Eliminar esta rutina?","fr":"Supprimer cette routine ?","de":"Diese Routine löschen?","pt-PT":"Eliminar esta rotina?","pt-BR":"Excluir esta rotina?","zh-Hant-x-lzh":"刪此例行差事乎？","zh-Hans-x-lzh":"删此例行差事乎？"}), body: text('The routine and its run history will be removed.', '将删除这项例行任务及其运行记录。', '將刪除這項例行任務及其執行記錄。', 'ルーティンと実行履歴が削除されます。', '루틴과 실행 기록이 삭제됩니다。', {"es":"Se eliminarán la rutina y su historial de ejecución.","fr":"La routine et son historique d’exécution seront supprimés.","de":"Die Routine und ihr Ausführungsverlauf werden entfernt.","pt-PT":"A rotina e o respetivo histórico de execuções serão removidos.","pt-BR":"A rotina e seu histórico de execuções serão removidos.","zh-Hant-x-lzh":"此例行差事及其執行記錄將一併刪除。","zh-Hans-x-lzh":"此例行差事及其运行记录将一并删除。"}) } },
       ] : []),
     ] };
 }

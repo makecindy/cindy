@@ -35,6 +35,10 @@ describe('sharedTask dispatch scope', () => {
     expect(() => assertSharedTaskInvoke(capture(), payload)).toThrow();
   });
   it('never inherits the full-device allowlist or wildcard subscriptions', () => {
+    // #8010: shared-task permission does not grant the owner's complete model catalog.
+    expect(() => assertSharedTaskInvoke(capture(), {
+      channel: 'maker:model-catalog:read', args: [{ op: 'locations' }],
+    })).toThrow('PERMISSION_DENIED');
     for (const channel of ['git-context:pr-refs:manage', 'maker:usage:codex-reset-auto-use', 'maker:create-session', 'maker:set-permission-mode', 'device-link:voice:credential-sync', 'local-db:sessions:list', 'maker:remote-resources:list']) {
       expect(() => assertSharedTaskInvoke(capture(), { channel, args: ['task'] })).toThrow('PERMISSION_DENIED');
     }

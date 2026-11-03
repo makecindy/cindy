@@ -587,6 +587,29 @@ describe('GhostManager · 存量插件一次性迁移(§5 升级无感)', () => 
     expect(result).not.toHaveProperty('ghost.delegationCapabilityApproved');
   });
 
+  it('approves observe without tasks and preserves it only while the same instance still declares it', async () => {
+    const manifest = { ...goodManifest(), slots: ['tool', 'agent'], agent: { observe: true } };
+    const pkg = await makeCindy('observe.cindy', manifest, { 'main.js': '// plugin' });
+    await manager.install(pkg, { taskCapabilityApproved: true, targetCapabilityApproved: true });
+    const selected = manager.list()[0]!;
+    if (selected.approval.state !== 'approved') throw new Error('fixture not approved');
+    const id = installedGhostStoragePart(selected);
+    expect(selected).not.toHaveProperty('observeCapabilityApproved');
+    expect(selected).not.toHaveProperty('taskCapabilityApproved');
+    expect(await manager.approveTaskCapability(id, selected.approval.revision, () => true, 'tasks')).toBe(false);
+    expect(await manager.approveTaskCapability(id, 'stale', () => true, 'observe')).toBe(false);
+    expect(await manager.approveTaskCapability(id, selected.approval.revision, () => false, 'observe')).toBe(false);
+    expect(await manager.approveTaskCapability(id, selected.approval.revision, () => true, 'observe')).toBe(true);
+    expect(manager.list()[0]?.observeCapabilityApproved).toBe(true);
+    const update = await makeCindy('observe-update.cindy', { ...manifest, version: '1.0.1' }, { 'main.js': '// update' });
+    const updated = await manager.update(update, { expectedInstalledApproval: ghostInstallApprovalToken(selected.approval) });
+    expect(updated).toHaveProperty('ghost.observeCapabilityApproved', true);
+    if (!('ghost' in updated) || updated.ghost.approval.state !== 'approved') throw new Error('fixture update failed');
+    const removed = await makeCindy('observe-removed.cindy', { ...manifest, version: '1.0.2', agent: { errand: true } }, { 'main.js': '// update' });
+    const result = await manager.update(removed, { expectedInstalledApproval: ghostInstallApprovalToken(updated.ghost.approval) });
+    expect(result).not.toHaveProperty('ghost.observeCapabilityApproved');
+  });
+
   it.each(['future', { future: true }, ['future'], null, false])('keeps historical unknown tasks %j enabled without task approval', async (tasks) => {
     await writeLegacyInstall('hello', {...goodManifest(), slots:['tool','agent'], agent:{tasks}});
     await manager.migrateLegacyApprovalsOnce();
@@ -3191,6 +3214,7 @@ describe('GhostManager · install', () => {
       locales: {
         en: 'locales/en.json',
         'zh-CN': 'locales/zh-CN.json',
+        'zh-TW': 'locales/zh-TW.json',
       },
     };
     const locale = (name: string, description: string, toolDescription: string) =>
@@ -3202,6 +3226,7 @@ describe('GhostManager · install', () => {
     const cindy = await makeCindy('localized.cindy', manifest, {
       'locales/en.json': locale('English name', 'English description', 'English tool'),
       'locales/zh-CN.json': locale('中文名称', '中文说明', '中文工具'),
+      'locales/zh-TW.json': locale('繁體名稱', '繁體說明', '繁體工具'),
     });
     const result = await manager.install(cindy);
     expect(result).toMatchObject({
@@ -3215,6 +3240,22 @@ describe('GhostManager · install', () => {
       },
     });
 
+    // PR #8210: approved manifest snapshots must select the modern Chinese resource
+    // for classical UI editions; app-context mapping alone does not cover this path.
+    for (const [requested, name, description, toolDescription] of [
+      ['zh-Hant-x-lzh', '繁體名稱', '繁體說明', '繁體工具'],
+      ['zh-Hans-x-lzh', '中文名称', '中文说明', '中文工具'],
+    ]) {
+      hostLocale = requested;
+      expect(manager.list()[0].manifest).toMatchObject({
+        name, description, resolvedLocale: requested,
+        tools: [{ name: 'do_thing', description: toolDescription }],
+      });
+      expect(await manager.inspect(cindy)).toMatchObject({
+        manifest: { name, description, tools: [{ name: 'do_thing', description: toolDescription }] },
+        canonicalManifest: { name: 'Base name', description: 'Base description' },
+      });
+    }
     hostLocale = 'ja';
     expect(manager.list()[0].manifest).toMatchObject({
       name: 'English name',

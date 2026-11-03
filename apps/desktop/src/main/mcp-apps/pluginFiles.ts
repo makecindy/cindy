@@ -20,6 +20,11 @@ export class PluginAppFiles {
     private readonly assertCurrent: () => Promise<void>,
   ) {}
 
+  /**
+   * Sign this card's plugin-owned links. Handoff copies always expire, so an
+   * unavailable handoff link stays as metadata only and the card still opens;
+   * Library and media links keep the strict rejection.
+   */
   async project<T>(value: T): Promise<T> {
     await this.assertCurrent();
     this.lifetime.signal.throwIfAborted();
@@ -30,11 +35,18 @@ export class PluginAppFiles {
       if (
         object.type === 'resource_link' &&
         typeof object.uri === 'string' &&
-        /^(?:cindy-media:|library:)/.test(object.uri)
+        /^(?:cindy-media:|library:|handoff:)/.test(object.uri)
       ) {
         const info = await this.access.describe(this.instance, object.uri);
         await this.assertCurrent();
         this.lifetime.signal.throwIfAborted();
+        if (!info && object.uri.startsWith('handoff:')) {
+          // An echoed link may carry an earlier URL; unavailable means no Host file field at all.
+          const meta = object._meta && typeof object._meta === 'object' ? { ...(object._meta as Record<string, unknown>) } : undefined;
+          if (!meta || !('cindy/file' in meta)) return object;
+          delete meta['cindy/file'];
+          return { ...object, _meta: meta };
+        }
         if (!info) throw new Error('MCP_APP_FILE_NOT_AUTHORIZED');
         let token = [...this.grants].find(([, uri]) => uri === object.uri)?.[0];
         if (!token) {

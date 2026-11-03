@@ -57,7 +57,95 @@ const glanceTodo = {
   suggestedDate: null, decision: null, history: [], action: null,
 };
 
+export type GroupRunScene = 'single' | 'multiple' | 'stop-pending' | 'stop-failure' | 'stop-idle';
+let runSceneStopped = false;
+const RUN_SCENE_IDS: Record<string, GroupRunScene> = {
+  'visual-run-single': 'single', 'visual-run-multiple': 'multiple',
+  'visual-run-stop-pending': 'stop-pending', 'visual-run-stop-failure': 'stop-failure',
+  'visual-run-stop-idle': 'stop-idle',
+};
+const RUN_SCENE_TITLES: Record<GroupRunScene, string> = {
+  single: '运行条 · 单执行', multiple: '运行条 · 多执行',
+  'stop-pending': '运行条 · 停止请求中', 'stop-failure': '运行条 · 停止失败', 'stop-idle': '运行条 · 停止后空闲',
+};
+function runSceneResource(id: string, scene: GroupRunScene, now: number) {
+  const speakers = scene === 'stop-pending'
+    ? [{ botId: 'mimi', sessionId: `${id}:mimi`, activity: 'reply' as const, executionStatus: 'stopping' as const, stopping: true }]
+    : scene === 'multiple'
+    ? [{ botId: 'abu', sessionId: `${id}:abu`, activity: 'reply' as const, executionStatus: 'running' as const },
+      { botId: 'mimi', sessionId: `${id}:mimi`, activity: 'reply' as const, executionStatus: 'running' as const }]
+    : [{ botId: 'mimi', sessionId: `${id}:mimi`, activity: 'reply' as const, executionStatus: 'running' as const }];
+  const title = RUN_SCENE_TITLES[scene];
+  return {
+    ref: { collectionId: BOT_GROUP_REMOTE_COLLECTION_ID, kind: BOT_GROUP_REMOTE_RESOURCE_KIND, id },
+    revision: 'visual-1', display: { title }, actions: [], links: [],
+    blocks: [{ id: 'chat', primitive: BOT_GROUP_CHAT_PRIMITIVE, fallbackMarkdown: title, data: {
+      id, name: title,
+      members: [{ botId: 'mimi', name: 'Mimi', status: 'active' }, { botId: 'abu', name: 'Abu', status: 'active' }],
+      messages: [{ id: `${id}-m1`, sequence: 1, kind: 'message', authorKind: 'bot', authorBotId: 'mimi',
+        authorName: 'Mimi', content: '首页改版的稿子我放在群文件夹里了。', createdAt: now }],
+      plans: [], createdAt: now, updatedAt: now,
+      round: scene === 'stop-idle' && runSceneStopped
+        ? { status: 'idle' as const, canContinue: true, speakers: [] }
+        : { status: 'running' as const, canContinue: false, speakers },
+    } }],
+  };
+}
+
+const systemSkillsOn: Record<string, boolean> = { todo: false, routine: true, follow: true };
+let learnedSkillOn = true;
+const SYSTEM_SKILLS: ReadonlyArray<[string, string, string]> = [
+  ['todo', '待办', '记下你交代的事和它留意到的事，到期提醒你。'],
+  ['routine', '例行任务', '设置并维护按时运行的例行任务。'],
+  ['follow', '工作台与跟进', '留意你所有任务的进展，跟进你交给它的任务。'],
+];
+function visualSkillsPage(id: string, section: string | undefined) {
+  const page = (title: string, blocks: unknown[], actions: unknown[] = []) => ({
+    ref: { collectionId: TEAMMATES, kind: 'bot', id }, revision: `visual-${JSON.stringify([systemSkillsOn, learnedSkillOn])}`,
+    display: { title }, links: [], blocks, actions,
+  });
+  const toggle = (title: string, help: string, enabled: boolean) => page(title, [
+    { id: 'capability', title: '使用这个技能', primitive: 'form', fallbackMarkdown: help, data: { actionId: 'capability', values: { enabled } } },
+  ], [{ id: 'capability', label: '使用这个技能', fields: [{ id: 'enabled', label: '使用这个技能', kind: 'toggle' }] }]);
+  if (!section) return page('技能', [
+    { id: 'core', primitive: 'list', fallbackMarkdown: '', data: { entries: [
+      { id: 'core', title: '核心技能', subtitle: '所有伙伴共用 · 始终开启 · 随 Cindy 更新', resourceId: `${id}/_core` }] } },
+    { id: 'system', title: '系统技能', primitive: 'list', fallbackMarkdown: '', data: { entries: SYSTEM_SKILLS.map(([skill, title]) => ({
+      id: skill, title, ...(systemSkillsOn[skill] ? {} : { subtitle: '已关闭' }), resourceId: `${id}/_${skill}` })) } },
+    { id: 'skills', title: '学会的技能', primitive: 'list', fallbackMarkdown: '', data: { entries: [
+      { id: 'release-notes', title: '发布说明写法', ...(learnedSkillOn ? {} : { subtitle: '已关闭' }), resourceId: `${id}/release-notes` }] } },
+  ]);
+  if (section === '_core') return page('核心技能', [
+    { id: 'core', primitive: 'markdown', fallbackMarkdown: '所有伙伴共用 · 始终开启 · 随 Cindy 更新\n\n每位伙伴都以这项技能为基础，内容包括：\n· 任务：在对话里完成工作，需要时开启后台任务。\n· 伙伴：给其他伙伴发消息，一起协作。\n· 模型与工具：按你的要求更换模型，查找工作需要的工具和插件。\n· 记忆：记住你的偏好和纠正，按你的要求保存技能。\n· 了解自己：知道自己能做什么，按你的要求开关自己的能力。' },
+    { id: 'core-original', title: '原文', primitive: 'markdown', fallbackMarkdown: '# Cindy teammate guide\n\nYou are a teammate inside Cindy…' },
+  ]);
+  const system = SYSTEM_SKILLS.find(([skill]) => `_${skill}` === section);
+  if (system) return toggle(system[1], system[2], systemSkillsOn[system[0]]);
+  return toggle('发布说明写法', '按团队格式整理每次发布的说明。', learnedSkillOn);
+}
+
 export function teammateVisualFixture(channel: string, args: unknown[], now = FIXTURE_NOW): unknown {
+  if (channel === 'local-db:bots:get' && args[0] === 'visual-bot-b2b') return {
+    id: 'visual-bot-b2b', canonicalSessionId: 'visual-teammate-b2b',
+    sessions: [{ id: 'visual-teammate-b2b', role: 'canonical', status: 'active' }],
+  };
+  if (channel === REMOTE_RESOURCE_GET_CHANNEL
+    && (args[0] as { ref?: { id?: string } })?.ref?.id === 'visual-bot-b2b') return {
+    ref: { collectionId: TEAMMATES, kind: 'bot', id: 'visual-bot-b2b' }, revision: 'b2b-1',
+    display: { title: 'Cindy · 内部通讯', avatar: teammates[0]!.avatar }, actions: [], blocks: [],
+    links: [{ rel: 'conversation', target: { kind: 'session', sessionId: 'visual-teammate-b2b' } }],
+  };
+  if (channel === 'maker:bot-direct-message-thread:get' && args[0] === 'visual-b2b-thread') return {
+    ok: true, thread: {
+      id: 'visual-b2b-thread', botAId: 'visual-bot-b2b', botAName: 'Cindy', botBId: 'visual-bot-lizi', botBName: 'LiZi',
+      status: 'active', closeReason: null, messageCount: 2, maxMessages: 12,
+      createdAt: now - 90000, updatedAt: now - 70000, closedAt: null,
+      messages: [
+        { id: 'b2b-in', sequence: 1, senderBotId: 'visual-bot-lizi', senderBotName: 'LiZi', recipientBotId: 'visual-bot-b2b', recipientBotName: 'Cindy', content: '请核对版式。', createdAt: now - 90000 },
+        { id: 'b2b-out', sequence: 2, senderBotId: 'visual-bot-b2b', senderBotName: 'Cindy', recipientBotId: 'visual-bot-lizi', recipientBotName: 'LiZi', content: '已核对，入口左对齐。', createdAt: now - 70000 },
+      ],
+    },
+  };
   if (channel === 'git-context:pr-refs:list') return args[0] === `${UI_MOCK_ID_PREFIX}rich-answer`
     ? [{ id: 'visual-pr', sessionId: args[0], owner: 'example', repo: 'demo', prNumber: 7, lastSeenAt: now }] : [];
   if (channel === 'git-context:pr-status') return [{ owner: 'example', repo: 'demo', prNumber: 7, ok: true,
@@ -106,6 +194,18 @@ export function teammateVisualFixture(channel: string, args: unknown[], now = FI
     if (request.input?.operation === 'restore') todoDeleted = false;
     return { effects: [], todo: glanceTodo };
   }
+  // Skill layers (cindy-bots-runtime.md §6「伙伴技能分层」): Cindy's Skills page as the host draws it.
+  // Open the teammate's settings → Skills in --mock.
+  const skillsPage = /^settings:cindy-default\/skills(?:\/(.+))?$/.exec(request?.ref?.id ?? request?.resourceRef?.id ?? '');
+  if (skillsPage && channel === REMOTE_RESOURCE_INVOKE_CHANNEL) {
+    const section = skillsPage[1] ?? '';
+    if (typeof request?.input?.enabled === 'boolean') {
+      if (section.startsWith('_')) systemSkillsOn[section.slice(1)] = request.input.enabled;
+      else learnedSkillOn = request.input.enabled;
+    }
+    return { effects: [{ kind: 'refresh-resource', ref: { collectionId: TEAMMATES, kind: 'bot', id: request!.resourceRef!.id } }] };
+  }
+  if (skillsPage && channel === REMOTE_RESOURCE_GET_CHANNEL) return visualSkillsPage(request!.ref!.id!, skillsPage[1]);
   // PR #7899: synthetic content for native partial selection and mention screenshots.
   // Open /companions/groups/visual-group-text-selection?deviceId=cindy-visual-mock-mac in --mock.
   if (channel === REMOTE_RESOURCE_GET_CHANNEL && request?.ref?.collectionId === BOT_GROUP_REMOTE_COLLECTION_ID
@@ -164,6 +264,22 @@ export function teammateVisualFixture(channel: string, args: unknown[], now = FI
       round: { status: 'running', canContinue: false, speakers: [{ botId: 'cindy-default', activity: 'reply', sessionId: VISUAL_TEAMMATE_SESSION_ID }] },
     } }],
   };
+  // #7806 run-strip scenes: the four round states the screenshot matrix needs, synthetic only.
+  if (channel === REMOTE_RESOURCE_GET_CHANNEL && request?.ref?.collectionId === BOT_GROUP_REMOTE_COLLECTION_ID
+    && request.ref.id && RUN_SCENE_IDS[request.ref.id]) return runSceneResource(request.ref.id, RUN_SCENE_IDS[request.ref.id], now);
+  if (channel === REMOTE_RESOURCE_INVOKE_CHANNEL) {
+    const sceneId = request?.resourceRef?.id ?? request?.ref?.id;
+    const scene = sceneId ? RUN_SCENE_IDS[sceneId] : undefined;
+    if (scene && request?.actionId === 'stop') {
+      // A stop receipt never clears work by itself; only the next idle snapshot does (same as production).
+      if (scene === 'stop-failure') throw new Error('stop failed: offline');
+      // stop-pending: the request stays in flight so the native UI keeps the running strip and a busy stop.
+      if (scene === 'stop-pending') return new Promise<never>(() => {});
+      // stop-idle: the next snapshot is idle, so the strip only clears on that snapshot, not on the receipt.
+      if (scene === 'stop-idle') runSceneStopped = true;
+      return { effects: [] };
+    }
+  }
   // Existing connection/session records for exercising both native settings entries.
   if (channel === REMOTE_RESOURCE_INVOKE_CHANNEL && request?.collectionId === TEAMMATES) {
     const op = request.input?.op;
@@ -183,7 +299,9 @@ export function teammateVisualFixture(channel: string, args: unknown[], now = FI
       display: { title: bot.name, avatar: bot.avatar, lastReplyAt: teammateVisualReplyAt(`${VISUAL_TEAMMATE_SESSION_ID}:${bot.id}`) },
       links: [{ rel: 'conversation', target: { kind: 'session', sessionId: `${VISUAL_TEAMMATE_SESSION_ID}:${bot.id}` } },
         ...(id === 'cindy-default' ? [{ rel: 'todos', target: { kind: 'resource', ref: { collectionId: TEAMMATES, kind: 'bot', id: 'todos:cindy-default' } } }] : [])],
-      actions: [], blocks: [{ id: 'profile', primitive: 'markdown', fallbackMarkdown: bot.preview }],
+      actions: [], blocks: [{ id: 'profile', primitive: 'markdown', fallbackMarkdown: bot.preview },
+        ...(id === 'cindy-default' ? [{ id: 'skills', primitive: 'list', fallbackMarkdown: '',
+          data: { entries: [{ id: 'skills', title: '技能', resourceId: 'settings:cindy-default/skills' }] } }] : [])],
     };
   }
   if (channel !== REMOTE_RESOURCE_LIST_CHANNEL || request?.collectionId !== TEAMMATES) return undefined;

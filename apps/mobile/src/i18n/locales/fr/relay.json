@@ -5,7 +5,7 @@
     "official": "Relais officiel {{appName}}",
     "switchToOfficial": "Revenir au relais officiel",
     "officialHint": "Vos appareils se connectent via le relais officiel {{appName}}. Pour utiliser votre propre relais, affichez son QR code d'invitation sur l'ordinateur qui le fait tourner et scannez-le avec l'appareil photo de votre téléphone.",
-    "selfHostedHint": "Vos appareils se connectent via votre propre relais à l'adresse {{address}}. La connexion, les modèles et les autres services passent toujours par {{appName}}.",
+    "selfHostedHint": "Vos appareils se connectent via votre propre relais à l'adresse {{address}}. La connexion, les modèles, les tâches partagées et les autres services passent toujours par {{appName}}.",
     "removedHint": "Ce téléphone a été retiré du relais, ou le relais a été arrêté. Revenez au relais officiel, ou rejoignez-le à nouveau depuis votre ordinateur.",
     "credentialMissingHint": "L'identifiant du relais n'est plus sur ce téléphone. Rejoignez-le à nouveau depuis votre ordinateur, ou revenez au relais officiel.",
     "confirmTitle": "Revenir au relais officiel ?",
@@ -21,7 +21,7 @@
   "join": {
     "title": "Rejoindre le relais",
     "checking": "Connexion au relais…",
-    "body": "Une fois connecté, ce téléphone communique avec vos ordinateurs via ce relais. La connexion, les modèles et les autres services passent toujours par {{appName}}. Tant que vous utilisez votre propre relais, les notifications de tâches de vos ordinateurs ne sont pas envoyées sur ce téléphone.",
+    "body": "Une fois connecté, ce téléphone communique avec vos ordinateurs via ce relais. La connexion, les modèles, les tâches partagées et les autres services passent toujours par {{appName}}. Tant que vous utilisez votre propre relais, les notifications de tâches de vos ordinateurs ne sont pas envoyées sur ce téléphone.",
     "switchNote": "Rejoindre ce relais fait passer ce téléphone de « {{current}} » à ce relais.",
     "action": "Rejoindre",
     "pairingCodeLabel": "Code d'appairage",

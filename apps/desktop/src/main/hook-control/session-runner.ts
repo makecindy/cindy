@@ -153,6 +153,7 @@ import {
 } from './interactions.js';
 import { collectOutboundAttachments, buildHookPromptNote, hasOutboundRefs } from './outbound.js';
 import { getResolvedMainLocale, t } from '../i18n.js';
+import { modernLocaleOf } from '../../shared/locale.js';
 import { buildUiLanguageErrorNote } from '../maker-ipc/uiLanguageErrorNote.js';
 
 type MainOwnedImChannel = Extract<TurnPermissionOrigin, { kind: 'im' }>['channel'];
@@ -569,7 +570,8 @@ function turnTextsFor(observer: HookTurnObserver): HookTurnTexts {
 /** 附件未发出提示跟随界面语言, 并点名没发出的附件。 */
 function formatHookIncompleteNotice(skippedNames: string[]): string {
   const locale = getResolvedMainLocale();
-  const separator = locale === 'zh-CN' || locale === 'zh-TW' || locale === 'ja' ? '、' : ', ';
+  const modern = modernLocaleOf(locale);
+  const separator = modern === 'zh-CN' || modern === 'zh-TW' || modern === 'ja' ? '、' : ', ';
   const names = skippedNames.map((name) => name || t('imBot.unnamedAttachment', locale));
   return t('imBot.outboundAttachmentsIncomplete', locale)
     .replace('{{count}}', String(skippedNames.length))
@@ -1309,7 +1311,7 @@ export function createMakerHookSessionRunner(deps: {
       const publicCompanionNote = req.companionBotId
         ? '\n[渠道说明] 本轮是主人通过官方 X 账号绑定发起的公开提问，最终回答将公开回帖。请勿公开伙伴记忆或工作目录中的私人信息。回复由当前 X 通道投递，不要另用 X Manager 发帖。'
         : '';
-      const promptWithNote = `${req.prompt}\n\n${buildHookPromptNote(req.source?.im)}${publicCompanionNote}\n\n${buildUiLanguageErrorNote(getResolvedMainLocale())}`;
+      const promptWithNote = `${req.prompt}\n\n${buildHookPromptNote(req.source?.im)}${publicCompanionNote}\n\n${buildUiLanguageErrorNote(getResolvedMainLocale(), { replyStyle: false })}`;
       let replacementHandoff: string | null = null;
       if (req.isNew && req.replacementOfSessionId && req.source?.im === 'slack') {
         try {

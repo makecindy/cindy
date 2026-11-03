@@ -162,6 +162,7 @@
     "mediaErrorLine": "Error: {{message}}",
     "mediaDeviceLinkHint": "Antes de abrir, su teléfono le pide al dispositivo remoto que cargue este medio.",
     "controlDelete": "Eliminar mensaje",
+    "controlEdit": "Editar",
     "controlRewind": "volver a aquí",
     "controlFork": "Iniciar nueva sesión desde aquí",
     "markdownDocAriaLabel": "Cuerpo del mensaje",
@@ -262,6 +263,14 @@
     "imagesNotUploaded_many": "Las imágenes {{count}} no se cargaron"
   },
   "systemCard": {
+    "pluginModelRoute": {
+      "routed": "{{plugin}} eligió {{model}} para esta tarea",
+      "kept": {
+        "no-opinion": "{{plugin}} no cambió el modelo esta vez; esta tarea usa {{model}}",
+        "failed": "{{plugin}} no respondió a tiempo; esta tarea usa {{model}}",
+        "unavailable-route": "{{plugin}} eligió un modelo que no puedes usar; esta tarea usa {{model}}"
+      }
+    },
     "contextRebuild": {
       "labelOverflow": "Contexto reorganizado, continuando",
       "labelTimeout": "El último turno no respondió; contexto reorganizado para continuar",
@@ -442,5 +451,32 @@
       "provider": "Proveedor de API",
       "unknown": "Canal no registrado"
     }
+  },
+  "attachmentPreview": {
+    "more": "Más acciones",
+    "retry": "Reintentar",
+    "image": "Imagen",
+    "video": "Vídeo",
+    "file": "Archivo",
+    "close": "Cerrar",
+    "reset": "Restablecer vista",
+    "open": "Abrir vista previa",
+    "zoomIn": "Acercar",
+    "zoomOut": "Alejar",
+    "fit": "Ajustar a la ventana",
+    "actualSize": "Tamaño real (1:1)",
+    "save": "Guardar original",
+    "share": "Compartir",
+    "previous": "Adjunto anterior",
+    "next": "Adjunto siguiente",
+    "password": "Introduce la contraseña del PDF",
+    "find": "Buscar en el documento",
+    "matches": "{{count}} páginas coincidentes",
+    "previousPage": "Página anterior",
+    "nextPage": "Página siguiente",
+    "redo": "Rehacer",
+    "wrap": "Ajustar líneas",
+    "lineNumbers": "Números de línea",
+    "rendered": "Ver documento"
   }
 }

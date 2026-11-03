@@ -1,4 +1,5 @@
 {
+  "officialRelayNote": "Du nutzt dein eigenes Relay. Inhalte geteilter Aufgaben laufen weiterhin über das {{appName}}-Relay.",
   "selfJoin": "Du hast diese geteilte Aufgabe gestartet und musst daher nicht beitreten. Öffne sie unter „Von mir geteilt“.",
   "waitingHost": "Warten auf die Antwort des Hosts. Du kannst weiterhin Nachrichten senden.",
   "join": "Geteilter Aufgabe beitreten",

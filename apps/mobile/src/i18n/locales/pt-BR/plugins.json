@@ -16,7 +16,24 @@
     "bcc": "Cco",
     "subject": "Assunto",
     "choosePlugin": "Escolha um plugin para abrir este e-mail.",
-    "personalPlugin": "Plugin pessoal"
+    "personalPlugin": "Plugin pessoal",
+    "reply": "Responder",
+    "replyAll": "Responder a todos",
+    "forward": "Encaminhar",
+    "quote": {
+      "reply": "Responder a este e-mail",
+      "replyAll": "Responder a todos neste e-mail",
+      "forward": "Encaminhar este e-mail"
+    },
+    "messageCount_one": "{{count}} e-mail",
+    "messageCount_other": "{{count}} e-mails",
+    "showMessages_one": "Mostrar {{count}} e-mail",
+    "showMessages_other": "Mostrar {{count}} e-mails",
+    "conversationFailed": "Não foi possível carregar outros e-mails desta conversa.",
+    "expandMessage": "Expandir e-mail de {{from}}",
+    "collapseMessage": "Recolher e-mail de {{from}}",
+    "messageCount_many": "{{count}} e-mails",
+    "showMessages_many": "Mostrar {{count}} e-mails"
   },
   "title": "Plugins",
   "all": "Todas",
@@ -148,8 +165,6 @@
   "demo": {
     "hint": "Dados de demonstração · Nenhuma configuração real é alterada"
   },
-  "mailPreview": "Prévia do e-mail",
-  "mailEnlarge": "Ampliar prévia",
   "mailInsertImage": "Inserir na mensagem",
   "mailAttach": "Adicionar anexo",
   "mailUpdated": "Rascunho atualizado (somente leitura)",

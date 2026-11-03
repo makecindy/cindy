@@ -46,6 +46,7 @@ import {
   showMobilePluginTaskPermission,
   setPluginTaskHandler,
   setPluginTargetAdapter,
+  setPluginObserveAdapter,
   assertPluginTargetQueuedDelivery,
   getPluginTaskSourceSessionId,
   setPluginTaskUninstaller,
@@ -60,6 +61,7 @@ import {
   acceptPluginInvocation,
 } from '../cindy-brain/index.js';
 import { listPluginTargetCandidates, resolvePluginTargetSession } from './pluginTargetCandidates.js';
+import { assertPluginObservableTask, listPluginObserveTasks } from './pluginObserveTasks.js';
 import { createPluginTargetStore } from './pluginTargetStore.js';
 import { collectPluginAttachmentPayloadTexts, withPluginMessageAttachments } from '../cindy-media/pluginMessageAttachments.js';
 import { isPluginTaskPermissionMode, type PluginTaskRoute, type PluginTaskRequest } from '../../shared/pluginTasks.js';
@@ -80,6 +82,8 @@ import { ensureManagedLlamaCppProvider } from '../local-model-runtime/managedLla
 import { setBotRemoteMessageService } from './botRemoteMessageReceiver.js';
 import { handleListDevices, defaultDeps as deviceDirectoryDeps } from '../device-link/ipc.js';
 import { configureBotAutonomyHost, getBotAutonomyGlance, noteBotAutonomyInputProjection } from '../bot-autonomy/hub.js';
+import { countMachineRunningTasks } from '../machines/directory.js';
+import { configureLocalMachineActivity, readLocalMachineStatus } from '../machines/localStatus.js';
 import { getHostSourceDevice, getSelfDeviceId, remoteBackgroundInvoke, remoteInvoke as invokeBotPeer } from '../device-link/index.js';
 import { readDeviceProviderViews, readRemoteProviderRoute } from '../remote-agent/controller/deviceCatalog.js';
 import { checkDeviceRoute } from '../remote-agent/controller/deviceRouteCheck.js';
@@ -1097,10 +1101,13 @@ import {
 } from './orcaRemoteWorkerHost.js';
 import { createOrcaRemoteWorkers, invokeDeviceValue, type OrcaRemoteWorkers } from './orcaRemoteWorkers.js';
 import { listWorkerAgentLocations, readWorkerAgentLocations } from './workerAgentLocations.js';
+import { createControlledModelCatalogReader } from './controlledModelCatalog.js';
+import { CONTROLLED_MODEL_CATALOG_CHANNEL } from '../../shared/controlledModelCatalog.js';
 import {
   ORCA_EXECUTION_DEVICES_CHANNEL,
   ORCA_REMOTE_WORKER_BRIDGE_CHANNEL,
   COMPANION_CLOUD_CAPS_CHANNEL,
+  MACHINE_STATUS_CHANNEL,
   COMPANION_CLOUD_FLUSH_CHANNEL,
   COMPANION_CLOUD_HAND_OVER_CHANNEL,
   COMPANION_CLOUD_MERGE_CHANNEL,
@@ -1111,11 +1118,13 @@ import {
   parseCompanionCloudRemoteActionResult,
   parseCompanionCloudRemoteTargets,
 } from '@cindy/device-link';
-import { INPUT_HANDOFF_LOCAL_CHANNEL, INPUT_HANDOFF_LOCAL_PICTURE_CHANNEL, type InputHandoffHolder, type InputHandoffSnapshot } from '@cindy/device-link';
+import { INPUT_HANDOFF_LOCAL_CHANNEL, INPUT_HANDOFF_LOCAL_PICTURE_CHANNEL, INPUT_HANDOFF_LOCAL_RAISE_CHANNEL, type InputHandoffHolder, type InputHandoffSnapshot } from '@cindy/device-link';
 import { getInputHandoffService, initInputHandoffService } from '../input-handoff/service.js';
 import { closeInputHandoffAskpass, initInputHandoffAskpass } from '../input-handoff/askpass/index.js';
+import { resolveGithubAuthRecovery } from '../input-handoff/askpass/githubRecoveryHost.js';
 import { onQuit } from '../lifecycle.js';
 import { isInputHandoffDisabledForSession } from '../input-handoff/botPolicy.js';
+import { isOwnerOwnMessage } from '../input-handoff/ownerMessage.js';
 import { createMacHandoffDriver, readPictureQr } from '../input-handoff/macDriver.js';
 import { supportsRemotePluginOauth } from '../plugin-oauth/runtime.js';
 import {
@@ -1153,7 +1162,7 @@ import {
   takeOverLocalAgentVisibleSession,
 } from '../local-agent/visibleSessions.js';
 import { ingestChatImageFromPath } from '../cindy-media/chatAttachments.js';
-import { UI_ACTION_TRIGGER_PREFIX, CONTINUE_AFTER_APP_EXIT_PROMPT } from '@cindy/maker-shared/synthetic-trigger';
+import { INPUT_HANDOFF_ENDED_PREFIX, UI_ACTION_TRIGGER_PREFIX, CONTINUE_AFTER_APP_EXIT_PROMPT } from '@cindy/maker-shared/synthetic-trigger';
 import {
   createContextOverflowRollover,
   canContinueContextRecovery,
@@ -1485,11 +1494,13 @@ import {
 } from './mobileClientPromptNote.js';
 import { buildWireMessageSourceNote, readWireSourceDevice } from './messageSourceNote.js';
 import { SIDE_CHAT_CONTEXT } from './sideChatContext.js';
-import { getResolvedMainLocale } from '../i18n.js';
+import { getMainClassicalStyle, getResolvedMainLocale } from '../i18n.js';
 import {
   buildUiLanguageErrorNote,
+  readClaimedClassicalStyle,
   readClaimedUiLanguage,
   stampTurnUiLanguage,
+  turnClassicalStyleFromSendOpts,
   turnUiLanguageFromSendOpts,
 } from './uiLanguageErrorNote.js';
 import {
@@ -2761,6 +2772,8 @@ interface OrcaCollabService {
   sendToSession: (params: {
     /** Host-only script follow-up; preserves target authorization without treating script text as consent. */
     readonly [AUTO_REVIEW_DELEGATED_CONTINUATION]?: true;
+    /** Host-generated stable delivery ID for a script retry, not model-supplied metadata. */
+    deliveryClientId?: string;
     messagePurpose?: SessionMessagePurpose;
     /** 省略 → create 新 session;提供 → jump 到该既有 session。 */
     targetSessionId?: string;
@@ -3661,6 +3674,7 @@ initInputHandoffService({
 });
 // sudo / ssh / git password prompts in the owner's local tasks become one-step 代输入 cards.
 initInputHandoffAskpass({
+  getAuthRecovery: resolveGithubAuthRecovery,
   startTerminalPrompt: (request) => getInputHandoffService()?.startTerminalPrompt(request) ?? { ok: false },
   isDisabledForSession: isInputHandoffDisabledForSession,
   logger: log,
@@ -4112,6 +4126,28 @@ function cleanupPendingAgentInteractionsForSession(sessionId: string, reason: st
     sessionId,
     reason === 'session_closed' ? 'session_closed' : 'session_aborted',
   );
+}
+
+/**
+ * The owner wrote in the task: a waiting 代输入 card is over. Hidden continuations
+ * and interface actions are not the owner writing.
+ */
+function dismissInputHandoffForOwnerMessage(sessionId: string, text: unknown): void {
+  // A shared-task guest cannot even see the card: their message is not the owner answering it.
+  if (getDeviceLinkInvokeContext()?.sharedTask) return;
+  if (typeof text === 'string' && (text.startsWith(UI_ACTION_TRIGGER_PREFIX) || text.startsWith(INPUT_HANDOFF_ENDED_PREFIX))) return;
+  getInputHandoffService()?.dismissForOwnerMessage(sessionId);
+}
+
+/** Closes the card for the owner's steered message and returns the note the agent should hear, if any. */
+function inputHandoffSteerNote(sessionId: string, message: unknown): string | null {
+  if (getDeviceLinkInvokeContext()?.sharedTask) return null;
+  dismissInputHandoffForOwnerMessage(sessionId, extractPlainText(message));
+  return getInputHandoffService()?.ownerMessageNote(sessionId) ?? null;
+}
+
+function inputHandoffNoteDelivered(sessionId: string): void {
+  getInputHandoffService()?.ownerMessageNoteDelivered(sessionId);
 }
 
 function cleanupPendingInteractionsForSession(sessionId: string, reason: string): void {
@@ -7504,6 +7540,10 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       // Full scheduled model selection, including bound Harness changes and template overrides.
       supportsScheduleModelSelection: true,
       supportsScheduleAgentDeviceSelection: true,
+      // Remote schedule_create checks workingDir on this computer before insert.
+      // Older peers accept maker:schedule:create without that check; callers must
+      // see this flag or refuse instead of storing a missing path.
+      supportsRemoteScheduleDirectoryCheck: true,
     };
   });
 
@@ -10420,6 +10460,38 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
   };
 
   const makerSessionRegistry = createElectronIpcHandlerRegistry();
+  // A picker reads several source catalogs concurrently. Share only the in-flight
+  // directory request within one account; retain no authorization snapshot.
+  let controlledLocationsRead: {
+    owner: ReturnType<typeof getCurrentDbClientSnapshot>;
+    promise: ReturnType<typeof readWorkerAgentLocations>;
+  } | undefined;
+  const readControlledCatalog = createControlledModelCatalogReader({
+    assertCaller: () => {
+      const caller = getDeviceLinkInvokeContext();
+      if (!caller || caller.sharedTask) throwIpcError('PRECONDITION_FAILED', 'Same-account remote control required');
+    },
+    captureOwner: () => {
+      const owner = getCurrentDbClientSnapshot();
+      return () => {
+        if (!owner || getCurrentDbClientSnapshot() !== owner) {
+          throwIpcError('PRECONDITION_FAILED', 'Model catalog account changed');
+        }
+      };
+    },
+    locations: () => {
+      const owner = getCurrentDbClientSnapshot();
+      if (controlledLocationsRead?.owner === owner) return controlledLocationsRead.promise;
+      const promise = readWorkerAgentLocations({ favoriteSources: true }).finally(() => {
+        if (controlledLocationsRead?.promise === promise) controlledLocationsRead = undefined;
+      });
+      controlledLocationsRead = { owner, promise };
+      return promise;
+    },
+    invoke: (deviceId, channel, args, assertOwner) =>
+      remoteBackgroundInvoke(deviceId, channel, args, { preSend: assertOwner }),
+  });
+  makerSessionRegistry.handle(CONTROLLED_MODEL_CATALOG_CHANNEL, (_event, request) => readControlledCatalog(request));
   registerMakerSessionCreateHandler<Session>(makerSessionRegistry, {
     // CREATE_SESSION 同样先走 remote ensure:remote draft (尤其 collab
     // lead) 的 SSH 重连 / agent 安装 / codex daemon MCP 注入必须先于
@@ -11816,14 +11888,16 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     decide: (sessionId, memberKey, remember, clientId) => sessionGroupService.rebalanceDecision(sessionId, memberKey, remember, clientId),
   });
   // 这台电脑上每个供应商正在运行一轮的任务数：组里「本机」这台显示它，同账号电脑读目录时也带上(§5)。
-  setProviderGroupLocalLoad(() => countProviderRunningTurns({
+  const localTurnSources = {
     // Visible app tasks also live in Maker; the application registry counts them once.
     listTurnRunningSessions: () => maker.listActiveSessions().filter((s) => s.isTurnRunning() && !hasLocalAgentVisibleRuntime(s.id)).map((s) => s.id),
     readSessionRoutes: readProviderLocalLoadRoutes,
-    resolveImplicitProvider: resolveProviderGroupImplicitProvider,
     hostRunningProviders: remoteAgentHostRunningProviders,
     applicationRunningProviders: () => getProviderGroupApplicationLoad().runningProviders(),
-  }));
+  };
+  setProviderGroupLocalLoad(() => countProviderRunningTurns({ ...localTurnSources, resolveImplicitProvider: resolveProviderGroupImplicitProvider }));
+  // list_machines 报的负载按 Agent 实际运行的电脑算，与供应商组同样的范围。
+  configureLocalMachineActivity(() => countMachineRunningTasks(localTurnSources));
   // 经另一台电脑上的组运行的任务：开始 / 结束一轮时报告给组所在电脑，让它的分配看到真实负载。
   providerGroupLeaseReporter?.dispose();
   providerGroupLeaseReporter = createProviderGroupLeaseReporter({
@@ -12943,6 +13017,17 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       if (params.files?.length || params.forceQueue || verifiedOwnerRequestText(params.autoReviewUserText) !== undefined || explicitClientId?.startsWith('bot-dm:') || explicitClientId?.startsWith(BOT_GROUP_CLIENT_ID_PREFIX) || explicitClientId?.startsWith('bot-authorization-resume:') || inputCoordinator.shouldQueueNewTurn(targetSessionId) || agentSwitchPending.get(targetSessionId)) {
         lockStage = 'enqueue-queued-message';
         const qClientId = explicitClientId ?? createId();
+        const durableScriptDelivery = qClientId.startsWith('schedule-delivery:');
+        if (durableScriptDelivery) {
+          await inputCoordinator.ensureQueueRestored(targetSessionId);
+          const persisted = await getPersistedInputClientIds(targetSessionId, [qClientId]);
+          if (persisted.has(qClientId) || inputCoordinator.hasKnownClientId(targetSessionId, qClientId)) {
+            await awaitAgentInputQueueSnapshotPersistence(targetSessionId);
+            return { ok: true as const, targetSessionId, agentKind: meta.agentKind,
+              wakeKind: 'queued' as const, queuedMessageId: qClientId, targetTitle: dbRow.title,
+              targetLastUserSendAt: dbRow.userSendAt !== null ? new Date(dbRow.userSendAt).toISOString() : null };
+          }
+        }
         await enqueueSendToSessionMessage({
           targetSessionId,
           message,
@@ -12963,6 +13048,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
           inheritTargetPlanMode: params.inheritTargetPlanMode,
           taskActionDeliveryGuard: params.taskActionDeliveryGuard,
         });
+        if (durableScriptDelivery) await awaitAgentInputQueueSnapshotPersistence(targetSessionId);
         return {
           ok: true as const,
           targetSessionId,
@@ -13646,11 +13732,12 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         return { ok: false as const, errorCode: 'LANE_UNAVAILABLE', message: error instanceof Error ? error.message : String(error) };
       }
     },
-    dispatch: ({ targetSessionId, message, persistedContent, clientId, attachments, toolsDisabled, onQueued, onAccepted }) =>
+    dispatch: ({ targetSessionId, message, persistedContent, autoReviewUserText, clientId, attachments, toolsDisabled, onQueued, onAccepted }) =>
       dispatchBotSessionMessage({
         targetSessionId,
         message,
         persistedContent,
+        autoReviewUserText,
         clientId,
         toolsDisabled,
         onQueued,
@@ -15003,6 +15090,14 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     }
   };
   setPluginTaskHandler(handlePluginTask);
+  setPluginObserveAdapter({
+    projectTasks: listPluginObserveTasks,
+    openTask: async (taskId, guard) => {
+      await assertPluginObservableTask(taskId);
+      guard();
+      openMainWindowSession(taskId, { focus: 'if-active' });
+    },
+  });
   let pluginTargetReviewReady = false;
   setPluginTargetAdapter({
     prepareInvocation: preparePluginInvocation,
@@ -16367,6 +16462,12 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
   orcaTeamServiceForEvents = orcaTeamService;
   // 数据库可能晚于本注册就绪；bootstrap 在接管数据库后会再调一次，两种顺序都覆盖。
   void restoreOrcaRemoteWorkersForCurrentOwner();
+  ipcMain.handle(MACHINE_STATUS_CHANNEL, async (event) => {
+    if (!isDeviceLinkInvoke()) assertTrustedAppRendererEvent(event);
+    // 共享任务访客看不到这台电脑的资源情况。
+    if (getDeviceLinkInvokeContext()?.sharedTask) throwIpcError('PERMISSION_DENIED', 'not available to shared task guests');
+    return readLocalMachineStatus();
+  });
   ipcMain.handle(ORCA_EXECUTION_DEVICES_CHANNEL, async (event) => {
     if (!isDeviceLinkInvoke()) assertTrustedAppRendererEvent(event);
     // 共享任务访客看不到本账号的设备目录。
@@ -17981,6 +18082,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       }
       return sendToSessionInternal({
         ...params,
+        ...(params.deliveryClientId ? { clientId: params.deliveryClientId } : {}),
         autoReviewUserText: request.autoReviewUserText,
         ...(classification.delegatedContinuation || (params.targetSessionId && params[AUTO_REVIEW_DELEGATED_CONTINUATION])
           ? { autoReviewUserText: { ...request.autoReviewUserText, kind: 'delegated-continuation' as const } } : {}),
@@ -18702,6 +18804,9 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     // 私聊话题的 [话题说明]:按持久化的话题链接现读,不是话题时为 null。
     readBotThreadNote: readBotDmThreadContextNote,
     readTaskDeliveryNote,
+    readInputHandoffOwnerNote: (sessionId) =>
+      getDeviceLinkInvokeContext()?.sharedTask ? null : (getInputHandoffService()?.ownerMessageNote(sessionId) ?? null),
+    inputHandoffOwnerNoteDelivered: (sessionId) => getInputHandoffService()?.ownerMessageNoteDelivered(sessionId),
     planRepeatableWireNotes: (sessionId, notes, opts) => wireNoteMemory.plan(sessionId, notes, opts),
     applyPendingAgentSwitch: async (sessionId, options) => {
       if (!options?.scheduled) await scheduledModelScope.restore(sessionId);
@@ -19173,6 +19278,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       /** coordinator 从队列项透传的手机来源(main 构造,非 wire 输入)。 */
       fromMobileClient?: boolean;
       uiLanguage?: string;
+      classicalStyle?: string;
       /**
        * 消息来源(coordinator 从队列项透传;直连 maker:steer 只有 IPC 边界按 invoke
        * context 盖的 sourceDevice,其余字段的 wire 值已被 stripMainOnlySendOpts 剥掉)。
@@ -19295,7 +19401,9 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         })
       : null;
     const steerLanguageNote = steerAllowsEnvironmentNotes
-      ? buildUiLanguageErrorNote(turnUiLanguageFromSendOpts(so, getResolvedMainLocale()))
+      ? buildUiLanguageErrorNote(turnUiLanguageFromSendOpts(so, getResolvedMainLocale()), {
+          classicalStyle: turnClassicalStyleFromSendOpts(so, getMainClassicalStyle()),
+        })
       : null;
     // 环境说明与 send 事务共用同一份去重记忆:插话进的是同一个原生上下文。
     const steerNotePlan = steerAllowsEnvironmentNotes
@@ -19312,6 +19420,21 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     let steerPayload = steerPlannedNotes['ui-language']
       ? prependNoteToWireUserMessage(withSteerNote as HandoffWireMessage, steerPlannedNotes['ui-language'])
       : withSteerNote;
+    // The owner's message closed a waiting 代输入 card: tell the agent, on this message only.
+    // Same owner test as the queue's: this runs outside the context that told a guest apart at enqueue.
+    const pendingHandoffNote = isOwnerOwnMessage({
+      sharedTaskAuthor: so.sharedTaskAuthor,
+      sourcePlugin: so.sourcePlugin,
+      appMessageGuard: so[MCP_APP_MESSAGE_GUARD],
+    })
+      ? inputHandoffSteerNote(sessionId, message)
+      : null;
+    // A native command keeps its first characters: it carries no note, and the note is dropped, not kept for later.
+    const steerHandoffNote = pendingHandoffNote && shouldPrependMobileClientPromptNote(normalized, sess.agentKind) ? pendingHandoffNote : null;
+    if (pendingHandoffNote && !steerHandoffNote) inputHandoffNoteDelivered(sessionId);
+    if (steerHandoffNote) {
+      steerPayload = prependNoteToWireUserMessage(steerPayload as HandoffWireMessage, steerHandoffNote);
+    }
     if (steerPlannedNotes['side-chat']) {
       steerPayload = prependNoteToWireUserMessage(steerPayload as HandoffWireMessage, steerPlannedNotes['side-chat']);
     }
@@ -19356,6 +19479,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       });
       appContext?.consume();
       steerNotePlan?.commit();
+      if (steerHandoffNote) inputHandoffNoteDelivered(sessionId);
       log.info('steer: delivered', { sessionId, agentKind: sess.agentKind });
     } catch (err) {
       const messageText = err instanceof Error ? err.message : String(err);
@@ -20494,9 +20618,9 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     // auto-resume bookkeeping as direct maker sends.  Keeping one writer also
     // preserves message ordering when a clear-race rewind follows the insert.
     createUserMessage: createUserMessageDurably,
-    rewindPersistedUserMessageAfterClear: (sessionId, clientId) =>
+    rewindPersistedUserMessageAfterClear: (sessionId, clientId, options) =>
       enqueueDurableWrite(`user-rewind:${sessionId}:${clientId}`, () =>
-        rewindPersistedUserMessageAfterClear(sessionId, clientId),
+        rewindPersistedUserMessageAfterClear(sessionId, clientId, options),
       ),
     resolveSessionReferences,
     refreshAgentReferencesBeforeDispatch: async (item) => {
@@ -20665,6 +20789,8 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       failPendingSchedulerAutoResume(sessionId);
       publishUiSessionIntervention(sessionId);
     },
+    // persistedContent can be a JSON envelope (attachments, pasted ranges): read the text the owner typed.
+    onOwnerMessage: (sessionId, item) => dismissInputHandoffForOwnerMessage(sessionId, extractPlainText(item.persistedContent || item.text)),
     previewQueuedUserTurn: (sessionId, item) => {
       if (item.botTaskCoordination) return;
       notifyAgentIslandUserPrompt(
@@ -21378,6 +21504,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     // Only Main-created welcomes and restored host snapshots may carry this policy.
     delete normalized.toolsDisabled;
     delete normalized.uiLanguage;
+    delete normalized.classicalStyle;
     const refs = requireSessionRefs(normalized.sessionRefs);
     if (!isDeviceLinkInvoke()) {
       // preload/renderer 不属于可信边界，不能直接注入历史正文。
@@ -21832,6 +21959,8 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
             remote: deviceLinkInvoke,
             claimed: readClaimedUiLanguage(item),
             fallback: getResolvedMainLocale(),
+            claimedClassicalStyle: readClaimedClassicalStyle(item),
+            fallbackClassicalStyle: getMainClassicalStyle(),
           },
         );
         assertCurrentInputGeneration();
@@ -22147,6 +22276,8 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
             remote: deviceLinkInvoke,
             claimed: readClaimedUiLanguage(item),
             fallback: getResolvedMainLocale(),
+            claimedClassicalStyle: readClaimedClassicalStyle(item),
+            fallbackClassicalStyle: getMainClassicalStyle(),
           },
         );
         assertCurrentInputGeneration();
@@ -22515,6 +22646,8 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
             remote,
             claimed: readClaimedUiLanguage(item),
             fallback: getResolvedMainLocale(),
+            claimedClassicalStyle: readClaimedClassicalStyle(item),
+            fallbackClassicalStyle: getMainClassicalStyle(),
           },
         );
         assertCurrentInputGeneration();
@@ -22891,6 +23024,14 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     assertTrustedAppRendererEvent(event);
     if (typeof requestId !== 'string' || !requestId) throwIpcError('INVALID_PARAMS', 'requestId required');
     return { accepted: (await getInputHandoffService()?.submit(requestId, submission)) ?? false };
+  });
+
+  /** 代输入 sign-in on this computer: the owner chose to go to the window. */
+  ipcMain.handle(INPUT_HANDOFF_LOCAL_RAISE_CHANNEL, async (event, requestId: unknown) => {
+    if (isDeviceLinkInvoke()) throwIpcError('PERMISSION_DENIED', 'only this Desktop may bring its own window forward');
+    assertTrustedAppRendererEvent(event);
+    if (typeof requestId !== 'string' || !requestId) throwIpcError('INVALID_PARAMS', 'requestId required');
+    return (await getInputHandoffService()?.bringToFront(requestId)) ?? false;
   });
 
   /** 代输入 screenshot step on this computer: shown in Cindy's own window only, never pushed or stored. */

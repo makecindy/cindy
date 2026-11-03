@@ -115,6 +115,7 @@ export function PluginModelPicker({
       keyboardAvoidingBehavior={Platform.OS === "ios" ? "padding" : "height"}
       emptyHint={t("plugins.modelsUnavailable")}
       unified={{
+        localOnlyReason: "plugin-task-local-route",
         preferenceScope: "request",
         scope: JSON.stringify([owner.accountKey, deviceId]),
         agents: ["claude-code", "codex", "pi"],

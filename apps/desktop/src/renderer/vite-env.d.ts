@@ -1087,6 +1087,14 @@ interface ProjectAutomationReconcileResult {
   updated: number;
   deleted: number;
   skipped: 'no-file' | 'parse-error' | null;
+  pendingImport?: ProjectAutomationImport;
+}
+
+interface ProjectAutomationImport {
+  workingDir: string;
+  configHash: string;
+  schedules: Array<Record<string, unknown>>;
+  removedNames: string[];
 }
 
 type ProjectAutomationEvent = {
@@ -1097,7 +1105,7 @@ type ProjectAutomationEvent = {
   deleted: number;
   isFirstTime: boolean;
   hashChanged: boolean;
-};
+} | { type: 'import-required'; pendingImport: ProjectAutomationImport };
 
 type ApplicationMenuCommand = import('../shared/applicationMenuCommands').ApplicationMenuCommand;
 type ApplicationMenuLocale = import('../shared/locale').SupportedLocale;
@@ -1216,6 +1224,7 @@ interface ElectronAPI {
   };
   onApplicationMenuCommand: (callback: (command: ApplicationMenuCommand) => void) => () => void;
   setApplicationMenuLocale: (locale: ApplicationMenuLocale) => Promise<{ ok: true }>;
+  setClassicalReplyStyle: (style: string) => Promise<{ ok: true }>;
   billing: import('../shared/billing').BillingRendererApi;
 
   // lifecycle 兜底 catch 到瞬时网络错误时推一次。renderer 收到后由
@@ -1389,7 +1398,11 @@ interface ElectronAPI {
     uiPrompts: () => Promise<Array<{id: string; name: string; version: string}>>;
     deferUiPrompt: (id: string, version: string) => Promise<void>;
     requestUiApproval: (id: string) => Promise<{ granted: boolean }>;
-    requestTaskApproval: (id: string) => Promise<{ granted: boolean }>;
+    requestTaskApproval: (id: string, capability?: 'observe') => Promise<{ granted: boolean }>;
+    getControlPoints: (id: string) => Promise<import('../shared/ghost').GhostControlPointInfo[]>;
+    listControlPointCandidates: (point: 'will-schedule-run' | 'will-routine-run' | 'will-start-task') => Promise<import('../shared/ghost').GhostControlPointCandidate[]>;
+    listPickerModels: () => Promise<import('../shared/ghost').GhostPickerModel[]>;
+    routeNewTask: (pluginId: string, data: import('../shared/ghost').GhostStartTaskPointData) => Promise<import('../shared/ghost').GhostStartTaskRouteResult>;
     /** 详情页「后台任务」:本插件转入后台(hidden)且未删除的任务。 */
     listBackgroundTasks: (id: string) => Promise<{
       items: Array<{ taskId: string; title: string; status: 'active' | 'archived'; updatedAt: number; running: boolean }>;
@@ -1642,6 +1655,9 @@ interface ElectronAPI {
     usageHistorySummary: (subjectId: string) => Promise<import('../shared/pluginUsage').PluginUsageSummary | null>;
     clearUsage: (subjectId: string | null) => Promise<void>;
     libraryOverview: (id: string) => Promise<import('../shared/ghost').GhostLibraryOverview>;
+    handoffList: (id: string) => Promise<import('../shared/ghost').GhostHandoffFile[]>;
+    handoffFolder: (id: string) => Promise<string | null>;
+    handoffDelete: (id: string, ref: string) => Promise<{ existed: boolean }>;
     libraryPickLocation: (id: string) => Promise<{
       ok: boolean;
       cancelled?: boolean;
@@ -3101,7 +3117,7 @@ interface ElectronAPI {
         | { type: 'plugin'; pluginId: string }
         | { type: 'local-plugin-share'; snapshotId: string }
         | { type: 'installed-plugin'; ghostId?: string }
-        | { type: 'settings'; tab: 'voice-input' | 'providers' | 'billing' | 'remote-control'; connect?: string; intent?: 'topup' },
+        | { type: 'settings'; tab: 'voice-input' | 'providers' | 'billing' | 'remote-control' | 'builtin-tools'; connect?: string; intent?: 'topup' },
     ) => void,
   ) => () => void;
 
@@ -3125,7 +3141,7 @@ interface ElectronAPI {
     | { type: 'plugin'; pluginId: string }
     | { type: 'local-plugin-share'; snapshotId: string }
     | { type: 'installed-plugin'; ghostId?: string }
-    | { type: 'settings'; tab: 'voice-input' | 'providers' | 'billing' | 'remote-control'; connect?: string; intent?: 'topup' }
+    | { type: 'settings'; tab: 'voice-input' | 'providers' | 'billing' | 'remote-control' | 'builtin-tools'; connect?: string; intent?: 'topup' }
     | null
   >;
 
@@ -3384,6 +3400,8 @@ interface ElectronAPI {
   resolvePathBatch: (params: {
     hrefs: string[];
     workingDir: string;
+    /** Re-walk hrefs whose cached answer is `none` / `multiple`. */
+    revalidateNegative?: boolean;
   }) => Promise<
     Record<
       string,
@@ -3932,6 +3950,18 @@ interface ElectronAPI {
     get(): Promise<import('../shared/dialogueWorkspaceSettings').DialogueWorkspaceSettingsState>;
     choose(): Promise<import('../shared/dialogueWorkspaceSettings').DialogueWorkspaceSettingsState>;
     reset(): Promise<import('../shared/dialogueWorkspaceSettings').DialogueWorkspaceSettingsState>;
+  };
+  projectsRoot: {
+    get(): Promise<import('../shared/projectsRoot').ProjectsRootState>;
+    choose(): Promise<import('../shared/projectsRoot').ProjectsRootState>;
+    reset(): Promise<import('../shared/projectsRoot').ProjectsRootState>;
+  };
+  createProjectFromTask: {
+    prepare(sessionId: string): Promise<import('../shared/projectsRoot').PreparedProjectFromTask>;
+    chooseParent(): Promise<string | null>;
+    create(
+      input: import('../shared/projectsRoot').CreateProjectFromTaskInput,
+    ): Promise<import('../shared/projectsRoot').CreateProjectFromTaskResult>;
   };
 
   cindyMediaStorage: {
@@ -4604,6 +4634,7 @@ interface ElectronAPI {
 
   // ── session-git-pr-context: 会话分支感知 + PR 关联状态 ──
   gitContext: {
+    readGithub: (method: import('@cindy/maker-shared').GithubReadMethod, args: unknown) => Promise<Record<string, unknown>>;
     githubSetupStatus: () => Promise<import('../shared/githubSetup').GithubSetupState>;
     githubConnection: () => Promise<import('../shared/githubSetup').GithubConnectionState>;
     startGithubSetup: () => Promise<import('../shared/githubSetup').GithubSetupState>;
@@ -5079,6 +5110,13 @@ interface ElectronAPI {
         resetSettings: () => Promise<import('../shared/botAutonomy').BotAutonomySettingsView>;
       };
       listSkills: (botId: string) => Promise<import('../shared/botSkill').BotSkillSummary[]>;
+      skills: {
+        core: () => Promise<import('../shared/botSkill').BotCoreSkill>;
+        read: (botId: string, slug: string) => Promise<import('../shared/botSkill').BotSkillDetail | null>;
+        save: (botId: string, skill: import('../shared/botSkill').BotSkillSaveInput) => Promise<void>;
+        setEnabled: (botId: string, slug: string, enabled: boolean) => Promise<void>;
+        delete: (botId: string, slug: string) => Promise<void>;
+      };
       memory: {
         list: (
           botId: string,
@@ -5760,6 +5798,7 @@ interface ElectronAPI {
     /** 自定义供应商创建模板（目录 presets 段，纯 UI 模板数据）。 */
     listProviderPresets: () => Promise<{
       presets: import('@cindy/model-providers').ProviderPreset[];
+      modelRegistry?: import('@cindy/model-providers').ModelRegistry;
     }>;
     /** 供应商「测试连接」—— 与真实会话同路由口径的最小探测请求（结构化结果，code 走 providerError.* i18n）。 */
     testProviderConnection: (
@@ -6504,6 +6543,8 @@ interface ElectronAPI {
       requestId: string,
       revision: number,
     ) => Promise<import('@cindy/device-link').InputHandoffPicture | null>;
+    /** 代输入 sign-in on this computer: bring its window to the front (trusted frame only). */
+    raiseInputHandoff: (requestId: string) => Promise<boolean>;
     /** 代输入 screenshot step on another computer (sealed offer, this window only). */
     openRemoteInputHandoffPicture: (
       request: import('../shared/pluginOauth').LocalInputHandoffPictureRequest,
@@ -6836,48 +6877,6 @@ interface ElectronAPI {
       defaultMode: 'off' | 'existing-git' | 'all-projects';
       defaultAutoSnapshotEnabled: boolean;
     }>;
-
-    /**
-     * 智能通讯录(maker-contacts)— 设置页管理 UI 数据通道。
-     * DTO 用 unknown 透传, renderer 在 lib/contactsService.ts 收敛为
-     * @cindy/maker-core 的 contacts 类型(type-only import)。
-     */
-    contacts: {
-      settingsGet: () => Promise<{ enabled: boolean; isCustomized: boolean }>;
-      settingsSet: (enabled: boolean) => Promise<{ enabled: boolean; codexMcpRefreshed?: boolean }>;
-      syncStatusGet: () => Promise<unknown>;
-      syncEnabledSet: (enabled: boolean) => Promise<unknown>;
-      syncNow: () => Promise<unknown>;
-      list: (opts?: unknown) => Promise<unknown[]>;
-      get: (id: string) => Promise<unknown>;
-      create: (input: unknown) => Promise<unknown>;
-      update: (id: string, patch: unknown) => Promise<unknown>;
-      delete: (id: string) => Promise<{ deleted: boolean }>;
-      merge: (targetId: string, sourceId: string) => Promise<unknown>;
-      resolve: (value: string, opts?: unknown) => Promise<unknown[]>;
-      search: (query: string, opts?: unknown) => Promise<unknown[]>;
-      stats: () => Promise<{ people: number; orgs: number; pending: number; groups: number }>;
-      addIdentity: (contactId: string, input: unknown) => Promise<unknown>;
-      removeIdentity: (identityId: string) => Promise<{ removed: boolean }>;
-      appendEvent: (contactId: string, input: unknown) => Promise<unknown>;
-      deleteEvent: (eventId: string) => Promise<{ deleted: boolean }>;
-      addRelation: (fromId: string, input: unknown) => Promise<unknown>;
-      removeRelation: (relationId: string) => Promise<{ removed: boolean }>;
-      groupsList: () => Promise<unknown[]>;
-      groupsCreate: (name: string, description?: string) => Promise<unknown>;
-      groupsUpdate: (groupId: string, patch: unknown) => Promise<unknown>;
-      groupsDelete: (groupId: string) => Promise<{ deleted: boolean }>;
-      groupsSetMembers: (
-        groupId: string,
-        payload: { add?: string[]; remove?: string[] },
-      ) => Promise<{ added: number; removed: number }>;
-      resetAll: () => Promise<{ removedCount: number }>;
-      systemRead: () => Promise<unknown[]>;
-      parseVcf: (text: string) => Promise<unknown[]>;
-      import: (records: unknown[], opts?: { groupId?: string }) => Promise<unknown>;
-      onChanged: (cb: () => void) => () => void;
-      onSyncStatusChanged: (cb: (status: unknown) => void) => () => void;
-    };
 
     /** Codex app-server 当前进程启动冻结的鉴权注入方式(oauth-bearer = 走订阅 / env-key = 走网关 / provider-oauth = proxy 注入供应商 OAuth) */
     codexRuntimeRouteGet: () => Promise<{
@@ -7360,7 +7359,8 @@ interface ElectronAPI {
     };
 
     projectAutomation: {
-      reconcile: (params: { workingDir: string }) => Promise<ProjectAutomationReconcileResult>;
+      reconcile: (params: { workingDir: string; approvedHash?: string }) => Promise<ProjectAutomationReconcileResult>;
+      listPendingImports: () => Promise<ProjectAutomationImport[]>;
       listConsents: () => Promise<ProjectAutomationConsent[]>;
       revokeConsent: (workingDir: string) => Promise<{ deleted: number }>;
       upsertSchedule: (params: {

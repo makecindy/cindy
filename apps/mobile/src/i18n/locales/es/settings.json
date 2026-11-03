@@ -68,7 +68,30 @@
       "fr": "Français",
       "de": "Deutsch",
       "pt-PT": "Português (Portugal)",
-      "pt-BR": "Português (Brasil)"
+      "pt-BR": "Português (Brasil)",
+      "classical": "文言"
+    },
+    "classical": {
+      "label": "Escritura y estilo",
+      "hint": "La IA responde en el estilo elegido. Con «Respuestas habituales», la interfaz sigue en chino clásico y las respuestas siguen tu idioma.",
+      "scriptAriaLabel": "Escritura del chino clásico",
+      "styleAriaLabel": "Estilo de respuesta de la IA",
+      "script": {
+        "hans": "简体",
+        "hant": "繁體"
+      },
+      "styles": {
+        "prose": "Prosa clásica (predeterminado)",
+        "tang-poetry": "Poesía Tang",
+        "song-ci": "Ci de los Song",
+        "yuan-qu": "Qu de los Yuan",
+        "chu-ci": "Chuci",
+        "parallel-prose": "Prosa paralela",
+        "pre-qin": "Maestros pre-Qin",
+        "historian": "Estilo del Gran Historiador",
+        "ming-qing-essay": "Ensayos Ming–Qing",
+        "plain": "Respuestas habituales"
+      }
     }
   },
   "version": {

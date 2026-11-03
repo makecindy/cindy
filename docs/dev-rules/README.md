@@ -1,63 +1,38 @@
-# 开发规则
+# 工程专题
 
-这里存放 Cindy 客户端仓的工程约束、实现规则、开发流程和验证方法。
+[架构原则](architecture-invariants.md)解释职责与状态如何划分，下列文档保存具体契约与操作
+入口。修改相关路径前先读正文，涉及专项确认的变更尤其如此。模块内约束就近写在嵌套
+`AGENTS.md` 或实现旁，跨模块契约在这里维护，不两处复述。
 
-## 收录标准
+文档保留产品特有的工程选择、原因与契约，验证由类型、测试和脚本负责；整理原则见
+[开发工作流](development-workflow.md) §5，测试的价值与预算见工程约定。
 
-- 规则说明“代码怎样实现、怎样验证或哪些技术操作被禁止”。
-- 每条规则应写清触发条件、必须做什么、禁止做什么、验证方法和例外条件。
-- 只适用于单个目录或模块的规则，优先放到对应目录的嵌套 `AGENTS.md`；需要跨目录
-  复用或需要较长解释的规则放在这里。
-- 可以由 lint、测试、类型检查或脚本强制的要求，应同时落实到自动化检查，不能只靠
-  Agent 阅读文字。
-
-## 当前文档
-
-- 模块工作入口：[Desktop](../../apps/desktop/AGENTS.md)、[Mobile](../../apps/mobile/AGENTS.md)、
-  [maker-core](../../packages/maker-core/AGENTS.md)；这里只索引模块触发条件，专题正文不重复维护。
-- [`repo-map.md`](repo-map.md)：仓库地图——目录职责，以及发送、权限、恢复、默认模型和手机新建任务的生产入口、共享判据与测试。
-- [`session-regressions.md`](session-regressions.md)：已发生过的任务体验回归、现有测试入口与运行命令。
-- [`environment-setup.md`](environment-setup.md)：公共开发环境、依赖安装与 submodule
-  准备。
-- [`model-catalog-maintenance.md`](model-catalog-maintenance.md)：模型配置与下发统一入口——架构图、字段职责、覆盖顺序、修改位置、代码导航与发布验收。
-- [`model-catalog-runtime.md`](model-catalog-runtime.md)：模型窗口、压缩预算、原生缓存、参考价与显示细则；从架构入口按需进入。
-- [`desktop-development.md`](desktop-development.md)：Desktop 的 Agent 安全启动入口与
-  分层验证命令。
-- [`electron-security-and-process-boundaries.md`](electron-security-and-process-boundaries.md)：
-  Electron 进程职责、Renderer 信任模型、BrowserWindow、独立辅助窗口统一生命周期、
-  preload、IPC 与远程内容安全边界。
-- [`credentials-and-local-storage.md`](credentials-and-local-storage.md)：凭证不入仓、
-  用户持久数据、临时文件与测试目录的安全边界。
-- [`media-storage-and-protocols.md`](media-storage-and-protocols.md)：Desktop 媒体总仓、
-  `cindy-media://` 协议、引用生命周期与历史兼容边界。
-- [`database-and-migrations.md`](database-and-migrations.md)：Desktop SQLite schema、
-  append-only migration、companion script、隔离运行与异步数据库访问规则。
-- [`ui-mock-data.md`](ui-mock-data.md)：Desktop 与 Mobile 共用的免登录 UI 模拟数据，`--mock`
-  启动方式、数据正本与写入边界。
-- [`mobile-development.md`](mobile-development.md)：Mobile 的模拟器开发、分层验证与
-  专项文档入口。
-- [`orca-team-architecture.md`](orca-team-architecture.md)：Orca 多 Agent 协同架构与运行时约束。
-- [`maker-core-and-agent-behavior.md`](maker-core-and-agent-behavior.md)：`packages/maker-core`
-  的 Agent 能力归属、代码优先确定性、缓存率／性能／准确性指标不可回退，以及 system
-  prompt 改动门禁。
-- [`plugin-security-and-authoring.md`](plugin-security-and-authoring.md)：插件（`.cindy`）
-  运行时沙箱与进程隔离、权限即授权边界、网络／凭证／资源交接、存量插件向下兼容红线
-  （升级不得要求用户重装或重新确认），以及作者契约与编写手册（`FORGE_GUIDE`）同步。
-- [`cindy-updater.md`](cindy-updater.md)：客户端自动更新链路的 owner 确认门禁与高风险
-  约束。
-- [`engineering-conventions.md`](engineering-conventions.md)：统一日志、IPC 错误协议
-  （`throwIpcError`）、main 侧默认带测试、macOS／Windows 双端兼容，以及 UI 文案的
-  i18n 落地与 `pnpm check:i18n` 门禁。
-- [`log-upload-and-redaction.md`](log-upload-and-redaction.md)：客户端日志采集／脱敏／上报的
-  三条不变量（记录边界、白名单方向 deny-by-default、标记代次 + 原子清除）、四层收窄管道、
-  授权闸、区域绑定与崩溃时序。
-- [`protocol-compatibility.md`](protocol-compatibility.md)：两仓本地协议实现、device-link
-  relay 层、插件来源与 wire protocol 兼容。
-- [`architecture-invariants.md`](architecture-invariants.md)：package 与 render／main 解耦、
-  main 进程静态依赖，以及主界面布局树不变量。
-- [`configuration-and-overrides.md`](configuration-and-overrides.md)：配置可见性分层、默认值
-  与用户 override 分离、默认值迁移与恢复默认语义。
-- [`remote-and-mobile-adaptation.md`](remote-and-mobile-adaptation.md)：SSH 远程工作区、
-  device-link allowlist、手机版入口与功能类 PR 的远程／手机三选一门禁。
-- [`development-workflow.md`](development-workflow.md)：worktree dogfooding 会话契约、提 PR
-  与直推 `main` 门禁，以及 Review P0／P1／P2 严重度口径。
+| 主题 | 正文 |
+| --- | --- |
+| Desktop、Mobile、maker-core 模块内的触发条件 | [Desktop](../../apps/desktop/AGENTS.md)、[Mobile](../../apps/mobile/AGENTS.md)、[maker-core](../../packages/maker-core/AGENTS.md) 的嵌套 AGENTS.md；专题正文不在模块内重复 |
+| 目录职责、按用户行为定位公共入口与测试、开发环境 | [仓库地图](repo-map.md)、[环境准备](environment-setup.md) |
+| 已发生过的任务体验回归、测试入口与运行命令 | [任务回归台账](session-regressions.md) |
+| Desktop 启动、重启与验证 | [桌面开发](desktop-development.md) |
+| 免登录 UI 模拟数据、`--mock` 启动、数据正本与写入边界 | [UI 模拟数据](ui-mock-data.md) |
+| Mobile 开发、模拟器、原生配置／依赖与冷更确认 | [手机开发](mobile-development.md) |
+| Renderer、preload、窗口、IPC、CSP 与特权边界 | [Electron 进程边界](electron-security-and-process-boundaries.md) |
+| 凭证、持久数据、临时文件与测试目录 | [本地存储](credentials-and-local-storage.md) |
+| 媒体生成、导入、附件、缓存、协议与回收 | [媒体存储](media-storage-and-protocols.md) |
+| Browser Use 工具层、配方目录、外链处理与三种浏览器后端 | [Browser Use](browser-use.md) |
+| 数据库 schema、migration、companion 与运行期访问 | [数据库](database-and-migrations.md) |
+| 模型配置架构、下发、覆盖、价格与默认值 | [模型配置入口](model-catalog-maintenance.md)、[运行细则](model-catalog-runtime.md) |
+| Agent 编排、prompt、tool / MCP、事件、model 映射与 usage | [maker-core 与 system prompt 确认](maker-core-and-agent-behavior.md) |
+| Pi 集成、权限、配置、桥接与原生能力非退化 | [Pi harness](pi-harness.md) |
+| Orca 多 Agent 协同 | [Orca 架构](orca-team-architecture.md) |
+| 个人 IM 与官方 hook 的入站、排队、插话、交互与收尾 | [IM 轮次](im-turn-flow.md) |
+| 插件基座、沙箱、权限、slot、打包、manifest、安装与作者契约 | [插件安全、兼容与合并确认](plugin-security-and-authoring.md) |
+| 插件花名册、ghost 发现链、可见性与作者契约 | [渐进式发现](../ghost-progressive-discovery.md) |
+| 插件持久 Library、binding、迁移、回收站与面板投影 | [插件 Library](plugin-library-storage.md) |
+| 客户端自动更新 | [更新器与 owner 确认](cindy-updater.md) |
+| 日志、IPC 错误、main 业务、测试价值／性能预算、跨平台与 i18n | [工程约定](engineering-conventions.md) |
+| 日志采集、脱敏、上报、行格式与崩溃标记 | [日志上报](log-upload-and-redaction.md) |
+| 本地协议包、插件分发来源、device-link、relay、wire protocol 与 allowlist | [协议兼容](protocol-compatibility.md) |
+| package 依赖、Main 模块加载与布局树 | [架构原则与不变量](architecture-invariants.md) |
+| Settings、配置文件、偏好、运行时 profile 与能力开关 | [配置与 override](configuration-and-overrides.md) |
+| workdir、Agent 进程、任务数据、IPC／推送与断链恢复 | [远程与手机适配](remote-and-mobile-adaptation.md) |
+| 托管 worktree、提交、PR、直推、review、项目知识归属与文档整理原则 | [开发工作流](development-workflow.md) |

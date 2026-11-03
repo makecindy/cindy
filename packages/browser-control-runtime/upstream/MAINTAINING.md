@@ -119,7 +119,7 @@ host 在 `browser-managed-config.ts` 用 `buildManagedConfig({proxyServer?})` �
   **只对代理挑战生效**的凭据通道(例如让 runtime 自己 launch 浏览器而非 `connectOverCDP`,
   用 launch 期的 `proxy:{username,password}`),并重新做 origin 泄漏验证。
 - 调用方的原生 Agent transcript 是 host 边界之前的上游记录:Claude/Codex 可能在 Cindy 收到 MCP 请求前已持久化模型生成的原始 tool input。由于本接口现在直接拒绝带 userinfo 的 URL,正常路径下不存在可被上游 transcript 保留的代理凭据;但调用方若**尝试**传入凭据,那次尝试仍可能留在其自身 transcript 里。
-- 自动附加的新 page 只有在 `Fetch.enable(handleAuthRequests:true)` 成功后才恢复执行;后续 target 安装认证处理器失败时关闭整个受管浏览器,不得继续报告一条可用的认证代理路由。
+- 自动附加的新 page 只有在 `Fetch.enable(handleAuthRequests:true)` 成功后才恢复执行;后续 page / iframe 安装认证处理器失败时关闭整个受管浏览器,不得继续报告一条可用的认证代理路由。**worker 例外**(`service_worker` / `shared_worker` / `worker` / `worklet`,启动时已存在的与 auto-attach 新建的同样适用):Chromium 不保证 worker 暴露 Fetch / Target 域,单个 worker 准备失败只用 `Target.closeTarget` 关闭该 worker(同一 targetId 的并发关闭共享一次执行,结束后淘汰记录),它不会在未受门控的状态下运行;关闭失败时先重查 `Target.getTargets`,目标已不存在(`No target with given id`)视为幂等成功,仅目标仍存活才回落为整机 fail-closed(先标 blocked 再 `Browser.close`)。
 - 后续 target 的认证安装失败要先把 host route 标成 blocked,再尝试 `Browser.close`;即使 CDP 关闭命令失败,普通调用与 `start` 仍须拒绝,直到 `stop` 被验证成功。
 - 认证协调器初始化期间的异步 target 失败不得被最终成功赋值覆盖;认证 CDP WebSocket 意外断开也必须立即把 route 标成 blocked。只有显式 dispose/stop 的主动断开可以忽略。
 - 认证启动返回前必须用 CDP 命令响应作为消息屏障,等待屏障前收到的 auto-attach 认证任务全部完成;屏障内失败时 `start` 必须失败,不能先报告代理可用再异步改成 unknown。
@@ -250,7 +250,7 @@ pnpm --filter @cindy/browser-control-runtime test    # 契约 + SSRF guard
 - 第三个 `BackendKind` `user-browser`:`apps/desktop/src/main/mcp-integrations/browser-backend/user-browser-backend.ts` 把 `BrowserControlRequest` 翻译成随包浏览器扩展的页面作业,经 `cindy-brain/browserExtensionSlot.ts` 持有的桥接(`main/browser-extension/bridge.ts`,从 Cindy Chrome 插件的接线进程原样迁入,线协议 `cindy-browser-extension/3` 不变,已装扩展无需更新)投递到用户正在使用的 Chrome / Edge。
 - 设置 →「自动操作」三选一:专用浏览器(默认)/ 侧边栏 / 我的浏览器;选哪一个是**默认**目标,Agent 的 `setBackend` 仍是同一个全局持久选择。没有声明 `browserExtension.pageControl` 的插件时该目标 `status.ready === false`,健康面板报 `extension-disconnected`,不提供恢复按钮。
 - 能力边界由扩展版本决定(`USER_BROWSER_PARITY_VERSION`,当前 0.4.43):
-  - 0.4.43 起与专用浏览器对齐:截图(含整页、元素、后台标签页)、evaluate、requests、上传、对话框、console、PDF、focus、关闭、坐标与拖拽、站点配方的协议会话都可用;调试接口(`chrome.debugger`)是可选权限,只在需要的动作里临时接上、用完断开,第一次用到时由扩展弹出授权页。
+  - 0.4.43 起与专用浏览器对齐:截图(只限可视区域)、evaluate、requests、上传(超过约 30 MB 由 0.4.61 起分块,最大 1 GB)、对话框、console、focus、关闭、坐标与拖拽可用;PDF、整页/元素/后台标签页截图和站点配方的协议会话需要 Chrome 调试接口(`chrome.debugger`),而 Chrome 不允许把它声明为可选权限(`chrome.permissions.request` 直接拒绝,2026-11-01 实测),发布版扩展没有它,能力表如实报 `pdf: false`、`rawProtocol: false`。不要恢复「首次用到时弹授权页」的流程。
   - 更旧的扩展只有基础能力(tabs / open / navigate / snapshot / extract / act),由 `deps.backendCapabilities()`(`userBrowserCapabilities`)让 MCP 层在派发前拒绝其余动作,错误文案要求模型告知用户而不是自行切换。没有任何连接时按完整能力报,具体断开由后端按作业报告。
   - extract 与登录墙检测走 PR #7432 的声明式 `domRead`,不需要任意脚本。
 - 寻址:新版扩展(≥ 0.4.43)按 tabId 寻址,后端维护 targetId ↔ {连接, 浏览器启动标识, tabId, url};targetId 带启动标识,浏览器重启后旧句柄不再解析。旧版扩展仍按精确 URL 寻址:作业前用 `tabs` 核对,URL 变化报 `PAGE_CHANGED` 并刷新记录,不猜新页。

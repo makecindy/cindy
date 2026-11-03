@@ -98,6 +98,7 @@ import {
 } from './botGroupAttachments';
 import { chatErrorKey } from './chatError';
 import {
+  botGroupErrorKey,
   isActiveBotGroupMember,
   isBotGroupDivisionBlocked,
   type BotGroupComposerPlanState,
@@ -537,7 +538,7 @@ export function BotGroupComposer({
     setStopping(true);
     try {
       const result = await api.stopBotGroupRound(groupId);
-      if (!result.ok) toast.error(t('bots.groupChat.composer.stopFailed'));
+      if (!result.ok) toast.error(t(botGroupErrorKey(result.errorCode, 'bots.groupChat.composer.stopFailed')));
     } catch {
       toast.error(t('bots.groupChat.composer.stopFailed'));
     } finally {

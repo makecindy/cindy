@@ -68,6 +68,7 @@ describe('setup snapshot protocol', () => {
           marketName: null,
           enabled: false,
           setupReady: true,
+          hasUserSecrets: true,
         },
         // A market plugin must carry its market id to be reinstallable.
         { ghostId: 'broken', namespace: null, pluginId: null, source: 'market', enabled: true },
@@ -78,6 +79,7 @@ describe('setup snapshot protocol', () => {
       skills: [{ name: 'deploy', version: '1.0.0', catalogScope: 'team', origin: 'installed', enabled: true }, { name: '' }],
       unavailable: ['skills', 'secrets', 'skills'],
     });
+    expect(parsed.plugins[0].hasUserSecrets).toBe(true);
     expect(parsed.plugins.map((p) => p.ghostId)).toEqual(['cindy-github', 'local-ok']);
     expect(parsed.plugins[0]).toMatchObject({ enabled: false, setupReady: true, namespace: null });
     expect(parsed.plugins[1]).toMatchObject({ namespace: 'xd', pluginId: null, setupReady: null });
