@@ -1025,7 +1025,7 @@
     "saveFileName": "Capture d'écran",
     "saveFailed": "Impossible d'enregistrer la capture d'écran",
     "prompt": {
-      "translate": "Reconnais le texte de cette capture d'écran et traduis-le en français. Conserve les paragraphes et les listes d'origine, et ne renvoie que la traduction. Si le texte est déjà en français, traduis-le en anglais.",
+      "translate": "Détecte automatiquement les langues de la capture et traduis le texte en {{language}}. Conserve les paragraphes, les listes et les tableaux. Laisse inchangé le contenu déjà dans la langue cible ; si plusieurs langues sont présentes, ne traduis que les autres. Si tout le texte est déjà dans la langue cible, indique-le brièvement sans choisir une autre langue. Sinon, affiche uniquement la traduction.",
       "explain": "Explique ce que montre cette capture d'écran. S'il s'agit d'une erreur, explique sa cause et comment la corriger. S'il s'agit d'un graphique, de code ou d'une interface, explique ce qu'il montre et les points clés.",
       "extract": "Extrais le texte de cette capture d'écran exactement tel qu'il est écrit, en conservant les sauts de ligne, les paragraphes et les listes d'origine. Restitue les tableaux sous forme de tableaux Markdown. Ne renvoie que le texte extrait."
     },
@@ -1073,6 +1073,12 @@
       "edit": "Modifier",
       "autoUnavailable": "Le défilement automatique s'est arrêté. Vous pouvez faire défiler manuellement dans la sélection.",
       "autoPermission": "Le défilement automatique nécessite l'autorisation Accessibilité. Autorisez Cindy dans les Réglages Système et réessayez, ou faites défiler manuellement dans la sélection."
+    },
+    "translation": {
+      "action": "Traduire en {{language}}",
+      "targetLanguage": "Langue cible",
+      "followUi": "Utiliser la langue de l’interface",
+      "saveFailed": "Impossible d’enregistrer la langue. Sélectionnez-la à nouveau."
     }
   },
   "privacyExit": {
@@ -2683,6 +2689,13 @@
       "storage": {
         "dialogueDirectoryTitle": "Espace de travail des conversations",
         "dialogueDirectoryDescription": "Pour les nouvelles sessions uniquement. Les fichiers existants restent à leur emplacement.",
+        "projectsRootTitle": "Emplacement des nouveaux projets",
+        "projectsRootInferred": "Suggéré",
+        "projectsRootDefault": "Par défaut",
+        "projectsRootChoose": "Changer de répertoire",
+        "projectsRootReset": "Rétablir l'emplacement suggéré",
+        "projectsRootDescription": "Emplacement des dossiers de projet créés depuis une session. S'il n'est pas défini, un emplacement est suggéré d'après vos projets existants.",
+        "projectsRootFailed": "Impossible de mettre à jour l'emplacement des nouveaux projets",
         "dialogueDirectoryOpen": "Ouvrir le répertoire",
         "dialogueDirectoryChoose": "Changer de répertoire",
         "dialogueDirectoryReset": "Rétablir l'emplacement par défaut",
@@ -3675,6 +3688,8 @@
         "simpleSubtitle": "Plusieurs modèles, facturés via un seul compte."
       },
       "custom": {
+        "nameSearchUnavailable": "Ce fournisseur n’est plus disponible. Continuez avec un endpoint personnalisé ou relancez la recherche.",
+        "nameSearchHint": "Vous pouvez conserver ce nom et continuer avec un endpoint personnalisé.",
         "tag": "Personnalisé",
         "editAria": "Modifier les paramètres de connexion",
         "deleteAria": "Supprimer",
@@ -8665,9 +8680,9 @@
     "localModeEntry": "Passer la connexion",
     "localModeOpening": "Connexion ignorée…",
     "localModeDescription": "Aucun compte Cindy requis. Les données restent sur cet appareil ; les modèles cloud, l'accès multi-appareils et les services de la marketplace ne sont pas disponibles.",
-    "consentStatement": "J'ai lu et j'accepte les <terms>Conditions d'utilisation</terms> et la <privacy>Politique de confidentialité</privacy>",
+    "consentStatement": "J'accepte les <terms>CGU</terms> et la <privacy>Politique de confidentialité</privacy>",
     "consentDialog": {
-      "title": "Conditions et confidentialité",
+      "title": "CGU et Politique de confidentialité",
       "body": "Lisez et acceptez les <terms>Conditions d'utilisation</terms> et la <privacy>Politique de confidentialité</privacy> de Cindy pour continuer.",
       "agree": "Accepter",
       "disagree": "Plus tard"
@@ -14565,6 +14580,26 @@
         "archived_many": "{{count}} sessions archivées",
         "deleted_many": "{{count}} sessions supprimées"
       },
+      "newProjectDialog": {
+        "title": "Nouveau projet",
+        "description": "Crée un dossier de projet et déplace cette session vers le nouveau projet.",
+        "descriptionMoveFiles": "Crée un dossier de projet, y déplace les fichiers de cette session et déplace la session vers le nouveau projet.",
+        "nameLabel": "Nom du projet",
+        "namePlaceholder": "ex. my-app",
+        "targetPath": "Créera {{path}}",
+        "location": "Emplacement",
+        "locationInferred": "Suggéré d'après vos projets existants",
+        "locationWillCreate": "Ce dossier n'existe pas encore et sera créé",
+        "changeLocation": "Modifier…",
+        "remember": "Utiliser cet emplacement pour les nouveaux projets",
+        "cancel": "Annuler",
+        "create": "Créer le projet",
+        "nameTaken": "Un dossier portant ce nom existe déjà",
+        "nameInvalid": "Le nom ne peut pas contenir \\ / : * ? \" < > | ni se terminer par un point ou une espace",
+        "loadFailed": "Impossible de charger l'emplacement du projet",
+        "failed": "Échec de la création du projet",
+        "done": "Projet créé et session déplacée"
+      },
       "sessionMenu": {
         "moreActions": "Plus d'actions",
         "rename": "Renommer",
@@ -14578,6 +14613,7 @@
         "moveToProject": "Déplacer la tâche",
         "moveToProjectHeading": "Projets sur cet ordinateur",
         "browseProjectFolder": "Choisir le dossier du projet",
+        "newProject": "Nouveau projet…",
         "moveToDialogue": "Déplacer vers Conversations",
         "noProjects": "Aucun projet récent",
         "moveToProjectDone": "Déplacée vers le projet",
@@ -15983,6 +16019,7 @@
     "agentControlled": "C'est l'Agent qui a ouvert cet écran. Vérifiez qu'il s'agit bien de l'endroit où vous voulez vous connecter avant de le remplir.",
     "agentPicture": "Ce code provient d'une capture d'écran prise par l'Agent, donc Cindy ne peut pas voir l'écran d'origine ni savoir quand vous avez terminé. Vérifiez qu'il mène au site auquel vous souhaitez vous connecter et choisissez Revenir à Agent après la numérisation.",
     "error": {
+      "raise": "Impossible d'ouvrir la fenêtre. Passez-y depuis l'ordinateur.",
       "decision": "Cela n'a pas abouti. Réessayez.",
       "stale": "L'écran a changé. Utilisez la version la plus récente.",
       "submit": "Votre saisie n'a pas abouti. Réessayez."
@@ -16018,6 +16055,9 @@
       "picture": "Afficher l'écran",
       "backToForm": "Retour au formulaire",
       "liveView": "Vue en direct",
+      "openWindow": "Ouvrir la fenêtre de connexion",
+      "openRemoteDesktop": "Ouvrir le bureau à distance",
+      "useForm": "Utiliser le formulaire",
       "fill": "Remplir",
       "skip": "Passer",
       "continue": "Continuer",
@@ -16025,6 +16065,9 @@
       "showPassword": "Afficher le mot de passe",
       "hidePassword": "Masquer le mot de passe",
       "scan": "Scanner"
+    },
+    "directSignIn": {
+      "hint": "Connectez-vous directement dans la fenêtre. La suite reprendra automatiquement."
     },
     "remoteUnavailable": "Cet ordinateur ne peut pas recevoir de saisie à distance. Terminez cette étape sur l'ordinateur hôte, puis rendez la main à l'Agent.",
     "unnamedField": "Champ",
@@ -19011,6 +19054,9 @@
     "failed": "L'opération n'est pas terminée. Réessayez ou ouvrez les fichiers locaux."
   },
   "attachmentPreview": {
+    "fitWidth": "Ajuster à la largeur",
+    "fitPage": "Ajuster à la page",
+    "pageNumber": "Numéro de page",
     "more": "Autres actions",
     "retry": "Réessayer",
     "image": "Image",

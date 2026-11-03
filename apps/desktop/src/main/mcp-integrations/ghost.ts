@@ -132,7 +132,7 @@ import { getGhostSetupCoordinator } from '../cindy-brain/ghostSetupCoordinator.j
 import { classifyGhostVisibility, classifyInstalledGhostVisibility } from '../cindy-brain/ghostVisibility.js';
 import { readInstalledGhostManual } from '../cindy-brain/ghostManual.js';
 import { isGhostDisabledForWorkdir } from '../cindy-brain/ghostWorkdirPrefs.js';
-import { FORGE_GUIDE, packGhostDir, scaffoldGhostDir } from '../cindy-brain/forge.js';
+import { FORGE_GUIDE, FORGE_PAGE_MANUAL, packGhostDir, scaffoldGhostDir } from '../cindy-brain/forge.js';
 import {
   completeForgePackStaging,
   getForgePackStagingController,
@@ -2847,6 +2847,9 @@ export function getCindyGhostsMcpDeps(
     },
     async forgeGuide(): Promise<string> {
       return FORGE_GUIDE;
+    },
+    async forgePageManual(): Promise<string> {
+      return FORGE_PAGE_MANUAL;
     },
     async forgeScaffold(request): Promise<CindyForgeScaffoldResult> {
       // C-4:owner lease 在首个 await 前捕获并持到副作用结束;workingDir 取权威

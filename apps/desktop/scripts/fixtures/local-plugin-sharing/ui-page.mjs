@@ -9,6 +9,7 @@ export default {
       const subscribe = fn => { window.addEventListener('local-share-demo-change', fn); return () => window.removeEventListener('local-share-demo-change', fn); };
       export function useAuth() { const signedIn = useSyncExternalStore(subscribe, () => window.__localShareDemoSignedIn ?? window.__uiPage.ctx.case !== 'login'); return { isAuthenticated: signedIn, mode: signedIn ? 'cloud' : 'local', dataOwnerId: 'fixture', dataOwnerGeneration: 1, exitLocalMode: async () => { window.__localShareDemoSignedIn = true; window.dispatchEvent(new Event('local-share-demo-change')); } }; }
       export function useOptionalAuthUser() { return null; }
+      export function useOptionalDataOwnerGeneration() { return 1; }
       export function useOptionalAuthDeviceId() { return 'fixture-self'; }`,
   },
   async ready(page) {

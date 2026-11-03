@@ -14,6 +14,7 @@ import {
 import { createLogger } from '../logger';
 import { activeOwnerScopeKey, isAppSessionBoundaryPending } from '../appSessionState';
 import { t } from '../i18n';
+import type { SupportedLocale } from '../../shared/locale';
 import {
   getAppShortcutStore,
   setGlobalShortcutRegistrationFailures,
@@ -36,15 +37,15 @@ import { closeAllPins, openPin, registerPinIpc } from './pins';
 import { saveScreenshotImage } from './save';
 import {
   RegionScreenshotSession,
-  type DisplayCapture,
   type RegionScreenshotResult,
 } from './session';
-import { resolveSnapshotBinary, SnapshotHelper, type SnapshotWindow } from './snapshotHost';
+import { SnapshotHelper, type SnapshotWindow } from './snapshotHost';
+import { captureScreenshotDisplays } from './liveCapture';
 import { REGION_CAPTURE_CHANNEL as LIVE } from '../../shared/regionCapture';
 
 /**
  * 全局框选截图: 用户在「键盘快捷键」里可改的 region-screenshot 快捷键 →
- * 定格所有显示器 (同时拍下窗口列表) → 每块屏一个预热好的框选浮层 → 选区、标注后
+ * 定格所有显示器 (同时拍下窗口列表) → 每块屏一个按需创建、隐藏复用的框选浮层 → 选区、标注后
  * 复制 / 保存 / 贴图, 或交给 Cindy 新任务 (问 / 翻译 / 解释 / 提取文字)。
  *
  * 只在 macOS / Windows 启用 (registry 的 platforms 决定)。快捷键在设置页录制
@@ -55,18 +56,12 @@ import { REGION_CAPTURE_CHANNEL as LIVE } from '../../shared/regionCapture';
 const log = createLogger('region-screenshot');
 const SHORTCUT_ID = 'region-screenshot' as const;
 const CAPTURE_TIMEOUT_MS = 5000;
-/** 主窗口首帧稳定后再在后台预热浮层, 不和启动抢资源。 */
-const PREWARM_DELAY_MS = 8000;
-const DISPLAY_SETTLE_MS = 1500;
-/** 截图结束后为下一次建好新浮层; 稍等片刻, 不和复制 / 贴图等后续动作抢资源。 */
-const REPREWARM_DELAY_MS = 1000;
 
 let initialized = false;
 let registeredAccelerator: string | null = null;
 let recording = false;
 let starting = false;
 let active: RegionScreenshotSession | null = null;
-let prewarmTimer: ReturnType<typeof setTimeout> | null = null;
 const pool = new OverlayPool();
 const recordingPreview = new RecordingPreview();
 const editor = new ScreenshotEditor((result) => {
@@ -76,6 +71,11 @@ const editor = new ScreenshotEditor((result) => {
 /** 每块显示器上一次截图的选区 (DIP), 供「重复上次区域」; 只在本次运行内记住。 */
 const lastRegions = new Map<number, RegionRect>();
 const disposers: Array<() => void> = [];
+
+export function setRegionScreenshotLocale(locale: SupportedLocale): void {
+  editor.setLocale(locale);
+  active?.setLocale(locale);
+}
 
 export function initRegionScreenshot(): void {
   if (initialized) return;
@@ -96,9 +96,8 @@ export function initRegionScreenshot(): void {
     }),
   );
   const onDisplaysChanged = () => {
-    if (active) return;
+    active?.close();
     pool.reset();
-    schedulePrewarm(DISPLAY_SETTLE_MS);
   };
   screen.on('display-added', onDisplaysChanged);
   screen.on('display-removed', onDisplaysChanged);
@@ -119,25 +118,10 @@ export function stopRegionScreenshot(): void {
   if (registeredAccelerator) globalShortcut.unregister(registeredAccelerator);
   registeredAccelerator = null;
   active?.close();
-  // 会话结束会排一次预热，必须在它之后清掉。
-  if (prewarmTimer) clearTimeout(prewarmTimer);
   pool.destroyAll();
   editor.dispose();
   recordingPreview.dispose();
   closeAllPins();
-}
-
-function schedulePrewarm(delay: number): void {
-  if (prewarmTimer) clearTimeout(prewarmTimer);
-  prewarmTimer = setTimeout(() => {
-    prewarmTimer = null;
-    if (!registeredAccelerator || active) return;
-    pool.prewarm();
-    editor.prewarm();
-    recordingPreview.prewarm();
-    // 源码模式顺带把识别程序编译好, 第一次截图不用等编译。
-    void resolveSnapshotBinary();
-  }, delay);
 }
 
 function desiredAccelerator(): string | null {
@@ -168,7 +152,6 @@ function syncShortcut(): void {
   if (ok) {
     registeredAccelerator = desired;
     setGlobalShortcutRegistrationFailures([]);
-    schedulePrewarm(PREWARM_DELAY_MS);
   } else {
     log.warn('screenshot shortcut is unavailable', { accelerator: desired });
     setGlobalShortcutRegistrationFailures([SHORTCUT_ID]);
@@ -217,6 +200,8 @@ function registerIpc(): void {
     (event, token: unknown, payload: unknown) =>
       active?.export(event.sender, event.senderFrame, token, payload) ?? false,
   );
+  ipcMain.handle(C.SET_TRANSLATION_LANGUAGE, (event, token: unknown, value: unknown) =>
+    active?.setTranslationLanguage(event.sender, event.senderFrame, token, value) ?? false);
 }
 
 async function startRegionScreenshot(): Promise<void> {
@@ -239,15 +224,27 @@ async function startRegionScreenshot(): Promise<void> {
       else helper = value;
       return value;
     });
-    const snapshot = helperReady.then(async (h) => ({
-      windows: await h.windows(),
-      frontmostPid: await h.frontmostPid(),
-      topInsets: await h.screenInsets(),
-    }));
-    const [captures, snap] = await Promise.all([
-      captureDisplays(screen.getAllDisplays()),
+    let snapshotMs = 0;
+    let captureMs = 0;
+    const snapshot = helperReady.then(async (h) => {
+      const result = {
+        windows: await h.windows(),
+        frontmostPid: await h.frontmostPid(),
+        topInsets: await h.screenInsets(),
+      };
+      snapshotMs = Date.now() - startedAt;
+      return result;
+    });
+    const displays = screen.getAllDisplays();
+    const [capture, snap] = await Promise.all([
+      helperReady.then(async (h) => {
+        const result = await captureScreenshotDisplays(displays, h);
+        captureMs = Date.now() - startedAt;
+        return result;
+      }),
       snapshot.catch(() => ({ windows: [] as SnapshotWindow[], frontmostPid: null, topInsets: new Map<number, number>() })),
     ]);
+    const { captures, backend } = capture;
     helper = await helperReady;
     if (isAppSessionBoundaryPending() || ownerScope !== activeOwnerScopeKey()) return;
     const capturedAt = Date.now();
@@ -265,6 +262,10 @@ async function startRegionScreenshot(): Promise<void> {
       windows: snap.windows,
       topInsets: snap.topInsets,
       lastRegions,
+      onRevealed: () => log.info('screenshot visible', {
+        totalMs: Date.now() - startedAt, captureMs, snapshotMs, backend,
+        displayCount: captures.length,
+      }),
       openEditor: (image, display, selection) => editor.open(image, display, selection, ownerScope),
       openRecording: (bytes, format, display) => recordingPreview.open(bytes, format, display, ownerScope),
       onResult: (value) => {
@@ -274,7 +275,6 @@ async function startRegionScreenshot(): Promise<void> {
       },
       onClosed: () => {
         if (active === session) active = null;
-        schedulePrewarm(REPREWARM_DELAY_MS);
         // export() 先结束会话再回传结果, 等这一轮同步代码走完再决定焦点去向。
         queueMicrotask(() => {
           const action = (result as RegionScreenshotResult | null)?.action ?? null;
@@ -292,6 +292,8 @@ async function startRegionScreenshot(): Promise<void> {
     log.info('screenshot opened', {
       opened,
       captureMs: capturedAt - startedAt,
+      snapshotMs,
+      backend,
       openMs: Date.now() - capturedAt,
       windows: snap.windows.length,
     });
@@ -310,7 +312,7 @@ function takesFocus(action: RegionScreenshotAction | null): boolean {
   return action === 'save' || isRegionScreenshotAiAction(action);
 }
 
-async function runAction({ action, image, display, selection, ownerScope }: RegionScreenshotResult) {
+async function runAction({ action, image, display, selection, ownerScope, translationLanguage }: RegionScreenshotResult) {
   try {
     if (action === 'copy') {
       clipboard.writeImage(image);
@@ -324,7 +326,7 @@ async function runAction({ action, image, display, selection, ownerScope }: Regi
         height: Math.max(1, Math.round(selection.height)),
       }, ownerScope);
     } else {
-      await handOffScreenshotToTask(image, action, ownerScope);
+      await handOffScreenshotToTask(image, action, ownerScope, translationLanguage);
     }
   } catch (error) {
     log.warn('screenshot action failed', { action, error });
@@ -354,29 +356,4 @@ async function ensureMacScreenRecordingPermission(): Promise<boolean> {
   });
   if (response === 0) await shell.openExternal(MAC_SCREEN_RECORDING_SETTINGS_URL);
   return false;
-}
-
-/**
- * 定格每块显示器。所有屏共用一个缩略图尺寸上限 (取各屏物理像素的最大值),
- * 再按 display_id 精确对应, 不按顺序猜测; 只有单屏单源时才直接对应。
- */
-async function captureDisplays(displays: readonly Display[]): Promise<DisplayCapture[]> {
-  const width = Math.max(...displays.map((d) => Math.round(d.bounds.width * d.scaleFactor)));
-  const height = Math.max(...displays.map((d) => Math.round(d.bounds.height * d.scaleFactor)));
-  const sources = await enumerateDesktopSources(
-    () => desktopCapturer.getSources({ types: ['screen'], thumbnailSize: { width, height } }),
-    CAPTURE_TIMEOUT_MS,
-  );
-  const captures: DisplayCapture[] = [];
-  for (const display of displays) {
-    const source =
-      sources.find((s) => s.display_id === String(display.id)) ??
-      (displays.length === 1 && sources.length === 1 ? sources[0] : undefined);
-    if (!source || source.thumbnail.isEmpty()) {
-      log.warn('display capture missing', { displayId: display.id });
-      continue;
-    }
-    captures.push({ display, image: source.thumbnail });
-  }
-  return captures;
 }
