@@ -398,6 +398,7 @@ query($owner: String!, $name: String!, $number: Int!) {
   repository(owner: $owner, name: $name) {
     pullRequest(number: $number) {
       state isDraft mergeable headRefOid
+      baseRef { target { oid } }
       mergeQueueEntry { state }
       comments(last: 1) { totalCount nodes { updatedAt } }
       reviews(last: 1) { totalCount nodes { updatedAt } }
@@ -425,6 +426,8 @@ function probeFingerprint(pr) {
       pr.reviews?.totalCount ?? 0, pr.reviews?.nodes?.at(-1)?.updatedAt ?? '',
       pr.reviewThreads?.totalCount ?? 0,
     ].join(' '),
+    // base 分支当前提交:只在检查失败期间被 gate 用来判断要不要完整读取。
+    base: pr.baseRef?.target?.oid ?? '',
   };
 }
 

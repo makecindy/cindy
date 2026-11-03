@@ -199,6 +199,24 @@ test('检查失败按名字每个 head 只报一次;换 head 后再失败会再�
   assert.deepEqual(kinds(redAgain), ['checks-failed']);
 });
 
+// Rule (from the retired personal git skill): while checks fail, a base commit may fix a baseline
+// failure, so base progress wakes once; healthy PRs ignore the base's ordinary progress.
+test('检查失败期间 base 前进报一次;健康时 base 前进不唤起;探测看到 base 变了就完整读取', () => {
+  const red = (base, extra = {}) => snap({ baseCommitOid: base, checks: [check('build', 'failed', { required: true })], ...extra });
+  let r = evaluateWatch(seenWatch(snap({ baseCommitOid: 'm1' })), red('m1'), T0);
+  assert.deepEqual(kinds(r), ['checks-failed']);
+  r = evaluateWatch(r.next, red('m2'), T0 + 10 * MIN);
+  assert.deepEqual(r.events, [{ kind: 'base-moved', sha: 'm2' }]);
+  assert.match(eventReport(r.events, red('m2')), /main moved to m2 while checks are failing/);
+  assert.deepEqual(kinds(evaluateWatch(r.next, red('m2'), T0 + 20 * MIN)), [], '同一个 base 只报一次');
+  const green = evaluateWatch(seenWatch(snap({ baseCommitOid: 'm1' })), snap({ baseCommitOid: 'm9' }), T0);
+  assert.deepEqual(kinds(green), [], '健康 PR 不看 base');
+  assert.equal(green.next.baseSha, null);
+  const previous = { watch: r.next, probe: { status: 's', remarks: 'r', base: 'm2' }, lastFullReadAt: T0, lastPassAt: T0 };
+  assert.equal(probeAllowsSkip(previous, { status: 's', remarks: 'r', base: 'm2' }, T0 + MIN), true);
+  assert.equal(probeAllowsSkip(previous, { status: 's', remarks: 'r', base: 'm3' }, T0 + MIN), false);
+});
+
 test('必需检查全部通过报一次;还在跑的其它检查结束时再报一次,之后的增减不再唤起', () => {
   const pushed = (checks) => snap({ latestCommitOid: 'bbb2222', checks });
   let r = evaluateWatch(seenWatch(snap()), pushed([check('build', 'passed', { required: true }), check('codeql', 'pending')]), T0);

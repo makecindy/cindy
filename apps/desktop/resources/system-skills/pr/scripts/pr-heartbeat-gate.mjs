@@ -677,6 +677,7 @@ export function freshWatch(snap, now) {
     wakes: 0,
     checksAwaitedSince: null,
     everHadChecks: false,
+    baseSha: null,
   };
 }
 
@@ -763,6 +764,15 @@ export function evaluateWatch(watch, snap, now, lastKnownConflicting = null) {
   const isDraft = Boolean(snap?.isDraft);
   if (isDraft !== Boolean(watch.isDraft)) events.push({ kind: isDraft ? 'draft-entered' : 'draft-exited' });
 
+  // 检查失败期间盯住 base 分支:base 前进了(可能修掉了导致失败的基线问题)就报一次,
+  // agent 去合并 base 或重跑。没有失败时不看 base,base 的日常前进不会唤起。
+  const baseNow = snap?.baseCommitOid ?? null;
+  let baseSha = null;
+  if (failedChecks.length > 0 && baseNow) {
+    if (watch.baseSha && baseNow !== watch.baseSha && !headMoved) events.push({ kind: 'base-moved', sha: baseNow });
+    baseSha = baseNow;
+  }
+
   const queueProblems = queueProblemsOf(snap);
   if (queueProblems.some((b) => !(watch.queueProblems ?? []).includes(b))) {
     events.push({ kind: 'merge-queue', blockers: queueProblems, reason: snap?.mergeQueue?.reason ?? null });
@@ -776,7 +786,7 @@ export function evaluateWatch(watch, snap, now, lastKnownConflicting = null) {
     exhausted: commentsOnly && wakes >= COMMENT_WAKE_LIMIT,
     next: {
       headSha, failedChecks, passed, passedChecks, owedChecks, remarksThrough, remarkIds,
-      conflicting, isDraft, queueProblems, wakes, checksAwaitedSince, everHadChecks,
+      conflicting, isDraft, queueProblems, wakes, checksAwaitedSince, everHadChecks, baseSha,
     },
   };
 }
@@ -828,6 +838,8 @@ export function eventReport(events, snap, exhausted = false) {
       lines.push('- The PR was converted to a draft.');
     } else if (e.kind === 'draft-exited') {
       lines.push('- The PR left draft and is ready for review.');
+    } else if (e.kind === 'base-moved') {
+      lines.push(`- ${base} moved to ${String(e.sha).slice(0, 7)} while checks are failing${commit}. If the failure came from ${base}, merge it in or re-run the failed checks.`);
     } else if (e.kind === 'merge-queue') {
       lines.push(`- Merge queue problem: ${e.blockers.join(', ')}${e.reason ? ` (reason: ${e.reason})` : ''}.`);
     }
@@ -844,6 +856,7 @@ function eventKey(events) {
     if (e.kind === 'checks-failed') return `${e.kind}:${e.failed.map((c) => c.name).sort().join(',')}`;
     if (e.kind === 'remarks') return `${e.kind}:${e.remarks.map((r) => `${r.id}@${r.at}`).sort().join(',')}`;
     if (e.kind === 'merge-queue') return `${e.kind}:${e.blockers.join(',')}`;
+    if (e.kind === 'base-moved') return `${e.kind}:${e.sha}`;
     return e.kind;
   });
   return createHash('sha256').update(parts.sort().join('\n')).digest('hex').slice(0, 16);
@@ -1126,7 +1139,7 @@ function parseProbe(run) {
   try {
     const value = JSON.parse(run.stdout);
     return typeof value?.status === 'string' && typeof value?.remarks === 'string'
-      ? { status: value.status, remarks: value.remarks } : null;
+      ? { status: value.status, remarks: value.remarks, ...(typeof value.base === 'string' ? { base: value.base } : {}) } : null;
   } catch {
     return null;
   }
@@ -1140,6 +1153,8 @@ function parseProbe(run) {
 export function probeAllowsSkip(previous, probe, now, maxSilenceMs = DEFAULT_MAX_SILENCE_HOURS * 3_600_000) {
   if (!probe || !previous?.watch || !previous.probe) return false;
   if (probe.status !== previous.probe.status || probe.remarks !== previous.probe.remarks) return false;
+  // 检查失败期间 base 前进要报,探测看到 base 变了就完整读取。
+  if (previous.watch.baseSha && probe.base && probe.base !== previous.watch.baseSha) return false;
   if (previous.pendingWatch || previous.inFlight || previous.merged || previous.closed) return false;
   if ((Number(previous.nextAllowAt) || 0) > 0 && now >= Number(previous.nextAllowAt)) return false;
   if (!(now - (Number(previous.lastFullReadAt) || 0) < FULL_REREAD_MS)) return false;

@@ -12,7 +12,7 @@ Each check saves its decision, reason, detail and list as `lastResult`. The agen
 
 ## Cost: a small question first
 
-Every check first runs `pr-snapshot.mjs --probe`: one small GraphQL query for the PR's state, head, mergeability, check counts by state, and the newest comment and review. When it matches the last full read, the check stops there (`unchanged`). It reads the PR in full (three or four API calls) only when the probe differs or when one of these holds: an update was released but not yet acknowledged, checks were still running or mergeability was unknown at the last full read, the PR is merged or closed, 30 minutes have passed since the last full read (the probe cannot see edits inside review threads), a new commit's check deadline or a defer is due, or the silence guard is due. A failed probe also falls back to a full read.
+Every check first runs `pr-snapshot.mjs --probe`: one small GraphQL query for the PR's state, head, mergeability, check counts by state, the newest comment and review, and the base branch's commit (used only while a check is failing). When it matches the last full read, the check stops there (`unchanged`). It reads the PR in full (three or four API calls) only when the probe differs or when one of these holds: an update was released but not yet acknowledged, checks were still running or mergeability was unknown at the last full read, the PR is merged or closed, 30 minutes have passed since the last full read (the probe cannot see edits inside review threads), a new commit's check deadline or a defer is due, or the silence guard is due. A failed probe also falls back to a full read.
 
 ## When the agent is woken
 
@@ -21,6 +21,7 @@ The check keeps a `watch`: what the agent has already been told about. It wakes 
 - **Checks failed:** a check failed (including cancelled, timed out or needing action) that had not failed on this commit before. Reported once per commit and name; a re-run that replaced a failed attempt no longer counts, because the snapshot keeps only the latest run of each check.
 - **Checks passed:** all required checks passed (all checks when the repository marks none as required). Non-required checks still running at that moment get one more update when they all finish; later changes to them do not wake.
 - **Comments:** new comments, reviews with a body or a verdict, and review-thread comments from anyone except the account the agent uses. Edits count as new. Empty "commented" reviews are skipped; their thread comments carry the content.
+- **Base moved while failing:** a check is failing and the base branch got a new commit (`base-moved`), for example a fix for a baseline failure. While nothing fails the base is not watched, so ordinary base progress never wakes.
 - **Conflict:** the branch started to conflict with the base. GitHub's mergeability recomputation ("unknown") neither raises nor clears it.
 - **No checks:** 15 minutes after a new commit, no check has reported, although this PR ran checks before.
 - **Draft:** the PR became a draft (`draft-entered`) or left draft (`draft-exited`).
@@ -55,3 +56,4 @@ Not woken: pushes, checks starting or running, an unchanged failure, the agent's
 - State: `~/.cache/cindy-pr/<owner>__<repo>-<number>.json` (override with `--state-dir` or `CINDY_PR_STATE_DIR`). It lives outside the worktree because cleanup deletes the worktree.
 - `pr-snapshot.mjs`: read-only facts, including merge-queue state, required checks and the viewer; `--probe` prints the small change fingerprint. Not a pre-run hook by itself: its exit codes do not match the hook protocol.
 - `pr-cleanup-plan.mjs`: read-only local cleanup plan after merge or close.
+- `pr-preflight.mjs`: read-only checks before pushing (not on the default branch, DCO only when the repository requires it, Prettier only when configured, uncommitted or unpulled changes), plus the rule files and PR template to follow.
