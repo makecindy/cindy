@@ -648,18 +648,24 @@ describe('built-in Skills', () => {
   // Unit, PR #8493: changes to an already-hashed Skill must be rejected even
   // when its manifest and active target stay unchanged. Mutate during a later
   // Skill read, without sleeps; earlier corruption tests only changed pre-read data.
+  // A linked app-data parent exercises the logical/physical path difference seen
+  // under macOS /var folders on every platform (engineering conventions section 3.3).
   it.each(['rewrite', 'add-file', 'replace-directory'] as const)(
     'rejects %s in an earlier Skill while a later Skill is being hashed', async damage => {
       const input = fixture();
+      fs.mkdirSync(input.appDataDir, { recursive: true });
+      const linkedAppData = path.join(path.dirname(input.appDataDir), 'linked-app-data');
+      fs.symlinkSync(input.appDataDir, linkedAppData, process.platform === 'win32' ? 'junction' : 'dir');
+      input.appDataDir = linkedAppData;
       await prepareBuiltInSkills(input);
       const descriptors = builtInSkillDescriptors(input.userDataDir, input.appDataDir);
-      const first = fs.realpathSync(descriptors[0]!.absolutePath);
-      const later = fs.realpathSync(descriptors[1]!.absolutePath);
+      const first = fs.realpathSync.native(descriptors[0]!.absolutePath);
+      const later = fs.realpathSync.native(descriptors[1]!.absolutePath);
       const readFile = fs.promises.readFile.bind(fs.promises);
       let changed = false;
       vi.spyOn(fs.promises, 'readFile').mockImplementation(async (...args) => {
         const result = await readFile(...args);
-        if (!changed && String(args[0]).startsWith(later + path.sep)) {
+        if (!changed && fs.realpathSync.native(String(args[0])).startsWith(later + path.sep)) {
           changed = true;
           if (damage === 'rewrite') {
             const file = path.join(first, 'SKILL.md');
