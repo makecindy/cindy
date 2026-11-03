@@ -52,6 +52,7 @@ import type {
 import { toolAutoReviewAction, type PermissionMode, type ReviewableAction, type AutoReviewDecision } from '@cindy/maker-core';
 import {
   getLiziMcpSessionContext,
+  resolveLiziMcpSessionContext,
   type LiziMcpSessionContext,
   type SessionPathAuthorization,
   type SessionPathAuthorizationRequest,
@@ -1914,8 +1915,10 @@ function toCindyGhostInfo(ghost: InstalledGhost): CindyGhostInfo {
  * sessionCtx:Claude in-process SDK 路径的会话语境(toClaudeSdkConfig(ctx)
  * 时按 session 闭包进来;每次 startSession 都重建 provider,语境不串号)。
  * Codex HTTP bridge 路径下建线期语境是全局空值,tool-call 期经
- * AsyncLocalStorage(getLiziMcpSessionContext)恢复——因此运行时取语境一律
- * "ALS 优先、闭包兜底"(见 resolveSessionContext)。
+ * AsyncLocalStorage(getLiziMcpSessionContext)恢复。运行时取语境按
+ * resolveLiziMcpSessionContext 的口径:有具体闭包语境(Claude)就用它,只有空占位
+ * (Codex / Pi bridge)才读 ALS。反过来 "ALS 优先" 会被串号:任务 A 的工具调用里
+ * 唤醒任务 B 时,B 新建的 Claude 进程继承 A 的 ALS,B 的插件卡片就记到了 A 名下。
  * 页面调用例外：Main 消费一次性票据后显式传 pageCall 和卡片任务语境；
  * 不建立页面 ALS，避免冷恢复时创建的 Agent/MCP 长期对象继承页面权限。
  */
@@ -1924,8 +1927,10 @@ export function getCindyGhostsMcpDeps(
   hostDeps: CindyGhostsHostDeps = {},
   pageCall?: PluginPageCall,
 ): CindyGhostsMcpDeps {
-  const resolveSessionContext = (): LiziMcpSessionContext | undefined =>
-    pageCall ? sessionCtx : getLiziMcpSessionContext() ?? sessionCtx;
+  const resolveSessionContext = (): LiziMcpSessionContext | undefined => {
+    if (pageCall) return sessionCtx;
+    return sessionCtx ? resolveLiziMcpSessionContext(sessionCtx) : getLiziMcpSessionContext();
+  };
   const installConsentPrompt = (): GhostInstallConsentPrompt => {
     const context = resolveSessionContext();
     return createTaskInstallConsentPrompt(
