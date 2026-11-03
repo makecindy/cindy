@@ -70,8 +70,12 @@ Claude.ai 登录，也不得收集、存储或中转订阅凭证。Cindy 因此�
   端口，它对每个目标重新按系统代理 / PAC 决定直连或走代理（env 作用于整棵进程树，含 Bash
   工具里的 git / npm，内网例外必须照旧直连），明文 HTTP 不下发代理。都是 TCP 隧道，TLS
   端到端，代理、转发端口与 Cindy 都看不到凭证。
-- 订阅会话不设 host 接管标记；Cindy 的所有 Claude 会话统一使用 `claude-desktop` 入口，
-  CLI 会启用 Desktop 宿主的项目级上游 / 鉴权环境过滤。入口身份不改变凭证来源，普通项目
+- 订阅会话不设 host 接管标记，并保留 `claude-desktop` 入口，
+  CLI 会启用 Desktop 宿主的项目级上游 / 鉴权环境过滤。OAuth token 路径同样保留该入口
+  的刷新回调白名单；API Key 路径使用 SDK 原生 `sdk-ts`，避免 Individual API 额度被
+  Desktop 身份误拒（[上游报告](https://github.com/anthropics/claude-code/issues/106458)）。
+  API 路径仍通过 `CLAUDE_CODE_PROVIDER_MANAGED_BY_HOST=1` 锁定上游和认证，远端在
+  route materialization 后按最终认证形态重选入口。入口身份不改变凭证来源，普通项目
   设置、权限与 hooks 仍由 CLI 加载。SDK 模式仍没有终端的工作区信任确认，因此继续对
   CLI 实际加载的项目级设置（工作目录的两份文件，加上主仓库根目录的 `settings.local.json`）
   设闸作为纵深防御（maker-core `workspace-settings-guard`），不依赖上游过滤替代宿主检查：
