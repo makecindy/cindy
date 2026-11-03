@@ -320,20 +320,29 @@ export interface PluginSkillSetupPaletteEntry {
   description: string;
   /** Short row tag, e.g. "needs install". */
   meta?: string;
+  /**
+   * The plugin is installed but unusable in this project, so the Skill linked from its global install
+   * would only fail here: this row takes that command's place. (A same-named Skill of the user's own is
+   * hidden from the list too, but typing its name still runs it.)
+   */
+  replacesInstalled?: boolean;
 }
 
 const pluginSkillSetupCommands = new WeakMap<UnifiedCommand, string>();
 
 /**
  * Palette-only rows for plugin Skills whose plugin is not usable yet. They go
- * after every real command and only when no command of that name exists, so a
- * real Skill always wins. Keep them out of the decoration roster and dispatch:
+ * after every real command and, unless the entry says its installed Skill is
+ * unusable here (`replacesInstalled`), only when no command of that name exists,
+ * so a real Skill wins. Keep them out of the decoration roster and dispatch:
  * they are a setup entry, not a sendable command.
  */
 export function addPluginSkillSetupCommands(
   commands: UnifiedCommand[],
   entries: readonly PluginSkillSetupPaletteEntry[],
 ): UnifiedCommand[] {
+  const replaced = new Set(entries.filter((entry) => entry.replacesInstalled).map((entry) => entry.skillName.toLowerCase()));
+  if (replaced.size > 0) commands = commands.filter((command) => !replaced.has(command.name.toLowerCase()));
   const names = new Set(commands.map((command) => command.name.toLowerCase()));
   const extra = entries
     .filter((entry) => !names.has(entry.skillName.toLowerCase()))

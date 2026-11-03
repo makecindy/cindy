@@ -93,6 +93,13 @@ describe('plugin card lifecycle on Mobile', () => {
     await act(async () => { await vi.advanceTimersByTimeAsync(60_000); });
     expect(h.get).toHaveBeenCalledTimes(2);
   });
+  it('keeps retrying a PR link whose first status lookup failed, so it has no prState yet', async () => {
+    vi.useFakeTimers();
+    h.get.mockResolvedValue({ display: { title: 'GitHub' }, blocks: [{ id: 'actions', primitive: 'plugin-card-actions', fallbackMarkdown: '', data: { items: [{ id: 'link:0', label: '#9', url: 'https://github.com/o/r/pull/9', disabled: false }] } }] });
+    await render();
+    await act(async () => { await vi.advanceTimersByTimeAsync(60_000); });
+    expect(h.get).toHaveBeenCalledTimes(2);
+  });
   it('does not poll a card without PR status', async () => {
     vi.useFakeTimers();
     await render();

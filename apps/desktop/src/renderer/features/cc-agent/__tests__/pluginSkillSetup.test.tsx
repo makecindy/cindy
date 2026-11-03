@@ -143,6 +143,7 @@ describe('usePluginSkillSetup', () => {
         skillName: 'pr',
         description: 'commandPalette.pluginSkills.pr.install',
         meta: 'commandPalette.pluginSkillSetup.install',
+        replacesInstalled: false,
       },
     ]);
     act(() => latest.setup!.onSelect('pr'));
@@ -172,6 +173,7 @@ describe('usePluginSkillSetup', () => {
     installed.ghosts = [github(false)];
     renderAt('/cc-agent/s1');
     expect(latest.setup?.entries[0].meta).toBe('commandPalette.pluginSkillSetup.enable');
+    expect(latest.setup?.entries[0].replacesInstalled).toBe(true);
     act(() => latest.setup!.onSelect('pr'));
     await waitFor(() => expect(latest.path).toMatch(/^\/plugins\?ghost=cindy-github&recommendation=/));
   });

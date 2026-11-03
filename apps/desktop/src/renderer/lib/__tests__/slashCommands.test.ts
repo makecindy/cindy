@@ -738,6 +738,13 @@ describe('plugin Skill setup rows', () => {
     expect(addPluginSkillSetupCommands(none, [])).toBe(none);
   });
 
+  it('lets an enable row replace the Skill linked from an install the project has switched off', () => {
+    const linked = [skill({ name: 'pr' }), skill({ name: 'zeta' })];
+    const result = addPluginSkillSetupCommands(linked, [{ ...entry, replacesInstalled: true }]);
+    expect(result.map((command) => command.name)).toEqual(['zeta', 'pr']);
+    expect(pluginSkillSetupName(result[1])).toBe('pr');
+  });
+
   it('does not mark an ordinary desktop command of the same shape', () => {
     expect(pluginSkillSetupName({ kind: 'desktop', name: 'pr', description: 'x' })).toBeUndefined();
   });

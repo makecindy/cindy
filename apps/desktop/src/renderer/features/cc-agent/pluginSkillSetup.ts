@@ -142,6 +142,7 @@ export function usePluginSkillSetup(params: {
               skillName,
               description: t(descriptionKeys[state]),
               meta: t(SETUP_META_KEYS[state]),
+              replacesInstalled: state === 'enable',
             }),
           )
         : [],

@@ -8,6 +8,10 @@ import { useDeviceLink } from '@/device-link/DeviceLinkContext';
 import { getRemoteResource } from '@/device-link/remoteResources';
 import { startFocusedTopicSubscription } from '@/device-link/focusedTopicSubscription';
 
+/** A link to a GitHub pull request: its state can change without the card being saved. The Host adds `prState` only
+ * once a status lookup has worked, so the link itself must start the refresh, or a first failed lookup is never retried. */
+const GITHUB_PR_URL = /^https:\/\/(?:www\.)?github\.com\/[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+\/pull\/\d+(?:[/?#]|$)/;
+
 /** How often a visible card that shows a PR's live status is read again. The Host only pushes when the card is
  * saved, but the PR's checks and merge state change on GitHub without it. Matches the Host's status cache TTL. */
 const PR_STATUS_REFRESH_MS = 60_000;
@@ -81,7 +85,8 @@ export function useSessionPluginResource(deviceId: string | undefined, sessionId
             if (block.primitive !== 'plugin-card-actions') return false;
             const data = block.data as { prStatus?: unknown; items?: unknown } | undefined;
             return (Array.isArray(data?.prStatus) && data.prStatus.length > 0) ||
-              (Array.isArray(data?.items) && data.items.some(item => !!item && typeof item === 'object' && 'prState' in item));
+              (Array.isArray(data?.items) && data.items.some(item => !!item && typeof item === 'object' &&
+                ('prState' in item || (typeof (item as { url?: unknown }).url === 'string' && GITHUB_PR_URL.test((item as { url: string }).url)))));
           });
         }
       } catch (error) {
