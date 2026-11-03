@@ -40,5 +40,5 @@ tab: remote-control
 **Notes:**
 
 - Remote project sessions **can** be the lead in a collaboration workflow — workers then run on the same remote host (see the Collaboration topic).
-- To keep a computer reachable while you're away, turn on **Keep computer awake** in **Settings > General > App Behavior**.
+- To keep a computer reachable while you're away, turn on **Keep computer awake** in **Settings > General > App Behavior**. It prevents idle sleep only: closing a laptop's lid (with no external display) or choosing Sleep still puts the computer to sleep, and its sessions pause until it wakes.
 - Device control works only between devices on the **same account**; the relay just routes between them — your session data isn't stored on it.
