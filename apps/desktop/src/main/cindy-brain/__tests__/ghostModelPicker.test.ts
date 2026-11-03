@@ -40,6 +40,7 @@ function setup() {
   let cancel!: () => void;
   const target = vi.fn(() => ({
     id: 7,
+    supportsRemoteRoutes: true,
     dismiss,
     send: (request: PluginModelPickerRequest, close: () => void) => {
       sent.push(request);

@@ -4062,6 +4062,7 @@ export function getGhostModelPicker(): GhostModelPicker {
       let cleanup = () => {};
       return {
         id: contents.id,
+        supportsRemoteRoutes: true,
         send: (request, cancel) => {
           if (contents.isDestroyed()) return false;
           const navigation = (_event: unknown, _url: string, sameDocument: boolean, mainFrame: boolean) => {

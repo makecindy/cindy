@@ -62,6 +62,9 @@ const selected = await response.json();
 手机与远程桌面设置页通过业务频道交给电子脑调用 `pickModel`，必须原样转交 Host 附加的
 `mobilePageId`，选择器才会显示在发起操作的设备，并读取插件执行电脑的目录。
 不要把 `mobilePageId` 存成全局最近设备；不传时只在插件运行电脑打开。
+带远程来源的 `initial` 还要求控制端支持来源选择与回传；Host 在页面打开时核验，旧控制端
+未声明支持则返回 `{ok:false,errorCode:'UNAVAILABLE'}` 并提示更新控制端，保留原配置。
+插件不得通过删掉 `initial.agentDeviceId` 重试来规避；新版控制端仍允许用户主动选回本机。
 同一 Host 同时只有一个插件选模请求，等待上限 90 秒；不要后台循环弹窗或自动重试取消。
 窗口、页面、连接、账号或安装版本变化后，旧回执不能交给替代实例。
 此接口可选择 Agent 运行来源，任务文件仍在任务电脑上；不选择 SSH 工作区，也不提供凭证、endpoint 或完整 ProviderView。
