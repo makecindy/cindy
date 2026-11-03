@@ -2638,6 +2638,20 @@ B 上的 Worker 是一条普通任务，`sessions.orca_remote_lead`(migration 01
 
 ## 供应商组任务进行中换号
 
+2026-11-03 新增独立动作 `rebalance-preference { sessionId, enabled: boolean }` → `{ ok: boolean }`，
+发给**任务所在电脑**，与下面两种动作复用本机 IPC 和同账号 `provider-group:remote` 入口及原有准入。
+`enabled: false` 显式关闭本任务的配额均衡换号（含同账号自动接续），不关闭故障恢复或手动换电脑；
+`true` 删除该 override，恢复原默认/自动偏好。`sessionId` 沿用已有 id 校验，非布尔值回 `[INVALID_PARAMS]`。
+任务尚未归组或服务未装配回 `ok: false`；落盘失败不能回成功。关闭后清理未消费决定，发送前再次核对关闭状态，
+拒绝旧控制端的缓存 `rebalance-decision`。旧端不认识新动作时明确拒绝，控制端提示保存失败并在原位置发送，
+不得降级成换号确认。旧动作和旧客户端不变。
+
+持久文件新增可选 `disabledRebalance: { [sessionId]: at }`（每类偏好最多 4000 条），旧 `autoRebalance` 保留；
+新端读取旧文件按未关闭处理。降级旧版本无法执行关闭语义，可能恢复旧版配额均衡行为，旧版写入也可能丢弃新字段。
+本次只扩展端到端 invoke 的业务 payload，不改变 envelope、channel、allowlist、relay 握手/路由或重连；
+官方及自建中转均按现有通用通道透传，无需更改服务器。协议与业务回归由 `remoteHandler.test.ts`、
+`ipc.test.ts`、`service.test.ts` 及两端提示测试覆盖。
+
 产品规则见 [`provider-groups.md`](../product-rules/provider-groups.md) §6.2（2026-10-21 用户裁决：上一轮结束、用户发下一条消息
 前弹窗问要不要换号，可为这个任务选「以后自动换」，手机与电脑一致）。
 

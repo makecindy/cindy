@@ -909,7 +909,9 @@
       "quotaReset": "{{left}} % restant · {{reset}}",
       "confirm": "Changer",
       "cancel": "Annuler",
-      "remember": "Changer automatiquement à l'avenir (pour cette tâche uniquement)"
+      "remember": "Changer automatiquement à l'avenir (pour cette tâche uniquement)",
+      "disable": "Ne pas changer automatiquement (cette tâche)",
+      "disableFailed": "Impossible d’enregistrer votre choix. Vérifiez la connexion et que Cindy est à jour sur l’ordinateur où se trouve la tâche, puis réessayez. Ce message sera envoyé normalement."
     },
     "deleteConfirm": {
       "title": "Supprimer le groupe de fournisseurs {{provider}} ?",

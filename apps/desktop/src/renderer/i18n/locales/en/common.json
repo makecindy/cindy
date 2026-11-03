@@ -894,7 +894,9 @@
       "quotaReset": "{{left}}% left · {{reset}}",
       "confirm": "Switch",
       "cancel": "Cancel",
-      "remember": "Switch automatically from now on (this task only)"
+      "remember": "Switch automatically from now on (this task only)",
+      "disable": "Don't switch automatically (this task)",
+      "disableFailed": "Couldn't save your choice. Check the connection and make sure Cindy on the task’s computer is up to date, then try again. This message will still be sent as usual."
     },
     "deleteConfirm": {
       "title": "Delete the {{provider}} provider group?",

@@ -884,7 +884,9 @@
       "quotaReset": "尚余 {{left}}%，{{reset}}",
       "confirm": "易之",
       "cancel": "罢",
-      "remember": "此后自动易之，不复询问（仅此差事）"
+      "remember": "此后自动易之，不复询问（仅此差事）",
+      "disable": "此任务勿自动切换",
+      "disableFailed": "未能存此选择。请查连线，并确认任务所在电脑之 Cindy 已更新，再试。此讯仍照常送出。"
     },
     "deleteConfirm": {
       "title": "删 {{provider}} 之供方组乎？",

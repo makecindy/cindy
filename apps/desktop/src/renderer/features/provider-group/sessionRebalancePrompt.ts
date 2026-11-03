@@ -1,7 +1,7 @@
 /**
  * 任务进行中换号(provider-groups.md §6.2，2026-10-21 用户裁决)：用户自己发下一条消息前，看任务所在电脑是否提议为了
  * 均匀用完各账号的配额换一台。要换就弹窗确认(换过去 / 取消，可勾「以后自动换」，只管这个任务)；这个任务勾过的
- * 不再弹窗、直接换，消息里的分隔条写明原因。
+ * 不再弹窗、直接换，消息里的分隔条写明原因。第三操作可关闭本任务的配额均衡换号，当前消息仍照常发送。
  *
  * 换号的判断和记录都在任务所在电脑：本机任务问本机，被控电脑上的任务经设备互联问那台。为了不让每次发送都多等一次往返，
  * 提议在任务空闲时预先问好(上一轮结束、打开任务时，空闲期间每 5 分钟再问)，发送时只用问好的结果；没问到、问不到、
@@ -9,6 +9,7 @@
  */
 import { useEffect } from 'react';
 import type { TFunction } from 'i18next';
+import { toast } from '@/lib/toast';
 
 import { PROVIDER_GROUP_REMOTE_CHANNEL } from '@cindy/device-link';
 
@@ -29,18 +30,20 @@ export const SESSION_REBALANCE_REFRESH_MS = 5 * 60_000;
 const MAX_PREFETCHED = 200;
 
 type ConfirmWithCheckbox = (options: {
+  presentation?: 'standard';
   title: string;
   description?: string;
   confirmText?: string;
   cancelText?: string;
   checkboxLabel: string;
+  tertiaryText?: string;
   autoFocusConfirm?: boolean;
-}) => Promise<{ ok: boolean; checked: boolean }>;
+}) => Promise<{ ok: boolean; checked: boolean; tertiary?: boolean }>;
 
-type RebalanceRequest = Extract<ProviderGroupCommand, { action: 'rebalance-suggestion' | 'rebalance-decision' }>;
+type RebalanceRequest = Extract<ProviderGroupCommand, { action: 'rebalance-suggestion' | 'rebalance-decision' | 'rebalance-preference' }>;
 
 const prefetched = new Map<string, { at: number; suggestion: ProviderGroupRebalanceSuggestion }>();
-const inFlight = new Set<string>();
+const inFlight = new Map<string, { invalidated: boolean }>();
 
 function cacheKey(sessionId: string, hostDeviceId: string | undefined): string {
   return `${hostDeviceId ?? ''}\u0000${sessionId}`;
@@ -77,9 +80,11 @@ async function command(hostDeviceId: string | undefined, request: RebalanceReque
 export async function prefetchSessionRebalance(sessionId: string, hostDeviceId?: string): Promise<void> {
   const key = cacheKey(sessionId, hostDeviceId);
   if (inFlight.has(key)) return;
-  inFlight.add(key);
+  const request = { invalidated: false };
+  inFlight.set(key, request);
   try {
     const raw = await withTimeout(command(hostDeviceId, { action: 'rebalance-suggestion', sessionId }), null);
+    if (request.invalidated) return;
     prefetched.delete(key);
     prefetched.set(key, { at: Date.now(), suggestion: parseProviderGroupRebalanceSuggestion(raw) });
     if (prefetched.size > MAX_PREFETCHED) prefetched.delete(prefetched.keys().next().value!);
@@ -153,14 +158,28 @@ export async function offerSessionRebalance(options: {
   if (suggestion.kind === 'auto') {
     return async (clientId) => { await recordDecision(sessionId, suggestion.memberKey, false, hostDeviceId, clientId); };
   }
-  const { ok, checked } = await confirmWithCheckbox({
+  const { ok, checked, tertiary } = await confirmWithCheckbox({
+    presentation: 'standard',
     title: t('providerGroup.rebalance.title', { label: suggestion.label }),
     description: describeSessionRebalance(suggestion, t),
     confirmText: t('providerGroup.rebalance.confirm'),
     cancelText: t('providerGroup.rebalance.cancel'),
     checkboxLabel: t('providerGroup.rebalance.remember'),
+    tertiaryText: t('providerGroup.rebalance.disable'),
     autoFocusConfirm: true,
   });
+  if (tertiary) {
+    const result = await withTimeout(command(hostDeviceId, { action: 'rebalance-preference', sessionId, enabled: false }), null);
+    if (!result || typeof result !== 'object' || (result as { ok?: unknown }).ok !== true) {
+      toast.error(t('providerGroup.rebalance.disableFailed'));
+    } else {
+      const key = cacheKey(sessionId, hostDeviceId);
+      prefetched.delete(key);
+      const pending = inFlight.get(key);
+      if (pending) pending.invalidated = true;
+    }
+    return;
+  }
   if (!ok) return;
   return async (clientId) => { await recordDecision(sessionId, suggestion.memberKey, checked, hostDeviceId, clientId); };
 }

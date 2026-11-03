@@ -119,7 +119,12 @@ import {
   setProviderGroupSessionRebalance,
   setProviderGroupTurnProbe,
 } from '../provider-group/runtime.js';
-import { readProviderGroupAutoRebalance, writeProviderGroupAutoRebalance } from '../provider-group/sessionPrefs.js';
+import {
+  readProviderGroupAutoRebalance,
+  writeProviderGroupAutoRebalance,
+  readProviderGroupRebalanceDisabled,
+  writeProviderGroupRebalanceEnabled,
+} from '../provider-group/sessionPrefs.js';
 import { countProviderRunningTurns, type ProviderLocalLoadRoute } from '../provider-group/localLoad.js';
 import { remoteAgentHostRunningProviders, resolveRemoteAgentHostClaudeSessionId } from '../remote-agent/host/service.js';
 import {
@@ -11875,6 +11880,8 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     // 任务里选过「以后自动换」的换号(provider-groups.md §6.2「任务进行中换号」)。
     readAutoRebalance: readProviderGroupAutoRebalance,
     writeAutoRebalance: (sessionId) => writeProviderGroupAutoRebalance(sessionId),
+    readRebalanceDisabled: readProviderGroupRebalanceDisabled,
+    writeRebalanceEnabled: (sessionId, enabled) => writeProviderGroupRebalanceEnabled(sessionId, enabled),
     now: () => Date.now(),
     log,
   });
@@ -11886,6 +11893,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
   setProviderGroupSessionRebalance({
     suggest: (sessionId) => sessionGroupService.rebalanceSuggestion(sessionId),
     decide: (sessionId, memberKey, remember, clientId) => sessionGroupService.rebalanceDecision(sessionId, memberKey, remember, clientId),
+    preference: (sessionId, enabled) => sessionGroupService.rebalancePreference(sessionId, enabled),
   });
   // 这台电脑上每个供应商正在运行一轮的任务数：组里「本机」这台显示它，同账号电脑读目录时也带上(§5)。
   const localTurnSources = {

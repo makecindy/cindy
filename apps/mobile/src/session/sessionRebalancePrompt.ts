@@ -1,7 +1,8 @@
 /**
  * 任务进行中换号(provider-groups.md §6.2，2026-10-21 用户裁决「手机和电脑一样」)：上一轮结束后用户发下一条消息前，
  * 看任务所在电脑是否提议为了均匀用完各账号的配额换一台。要换就弹窗(换过去 / 换过去并以后自动换 / 取消，手机弹窗
- * 没有复选框，用第二个按钮代替电脑上的「以后自动换」勾选)，只管这个任务；选过以后自动换的不再弹窗，直接换。
+ * 没有复选框，持久选项放入「更多选项」)，只管这个任务；选过以后自动换的不再弹窗，直接换。
+ * 「不自动切换」由任务所在电脑保存，之后不再因配额均衡换号。
  *
  * 判断和记录都在任务所在电脑(`provider-group:remote` 的 `rebalance-suggestion` / `rebalance-decision`)。点发送要立刻清空
  * 输入框、不等网络往返，所以提议在任务空闲时预先问好(上一轮结束、打开任务时，空闲期间每 5 分钟再问)，发送时只用问好的
@@ -38,12 +39,12 @@ export interface MobileRebalanceSuggestion {
   quota: { usedPercent: number; resetAtMs: number | null; windowMs: number };
 }
 
-export type MobileRebalanceChoice = 'switch' | 'remember' | 'cancel';
+export type MobileRebalanceChoice = 'switch' | 'remember' | 'disable' | 'cancel';
 
 type Invoke = (deviceId: string, channel: string, args?: unknown[]) => Promise<unknown>;
 
 const prefetched = new Map<string, { at: number; suggestion: MobileRebalanceSuggestion | null }>();
-const inFlight = new Set<string>();
+const inFlight = new Map<string, { invalidated: boolean }>();
 
 function cacheKey(hostDeviceId: string, sessionId: string): string {
   return `${hostDeviceId}\u0000${sessionId}`;
@@ -91,7 +92,19 @@ export function askMobileSessionRebalance(suggestion: MobileRebalanceSuggestion)
       describeMobileRebalance(suggestion),
       [
         { text: i18n.t('session.providerGroupRebalance.cancel'), style: 'cancel', onPress: () => resolve('cancel') },
-        { text: i18n.t('session.providerGroupRebalance.remember'), onPress: () => resolve('remember') },
+        // Android 的原生 Alert 最多三个按钮；持久选项放入第二层，不能直接追加第四个。
+        { text: i18n.t('session.providerGroupRebalance.moreOptions'), onPress: () => {
+          Alert.alert(
+            i18n.t('session.providerGroupRebalance.title', { label: suggestion.label }),
+            describeMobileRebalance(suggestion),
+            [
+              { text: i18n.t('session.providerGroupRebalance.cancel'), style: 'cancel', onPress: () => resolve('cancel') },
+              { text: i18n.t('session.providerGroupRebalance.disable'), onPress: () => resolve('disable') },
+              { text: i18n.t('session.providerGroupRebalance.remember'), onPress: () => resolve('remember') },
+            ],
+            { cancelable: false },
+          );
+        } },
         { text: i18n.t('session.providerGroupRebalance.confirm'), onPress: () => resolve('switch') },
       ],
       { cancelable: false },
@@ -119,12 +132,14 @@ function withTimeout<T>(promise: Promise<T>, fallback: T): Promise<T> {
 export async function prefetchMobileSessionRebalance(invoke: Invoke, hostDeviceId: string, sessionId: string): Promise<void> {
   const key = cacheKey(hostDeviceId, sessionId);
   if (inFlight.has(key)) return;
-  inFlight.add(key);
+  const request = { invalidated: false };
+  inFlight.set(key, request);
   try {
     const raw = await withTimeout(
       invoke(hostDeviceId, PROVIDER_GROUP_REMOTE_CHANNEL, [{ action: 'rebalance-suggestion', sessionId }]),
       null,
     );
+    if (request.invalidated) return;
     prefetched.delete(key);
     prefetched.set(key, { at: Date.now(), suggestion: parseMobileRebalanceSuggestion(raw) });
     if (prefetched.size > MAX_PREFETCHED) prefetched.delete(prefetched.keys().next().value!);
@@ -176,6 +191,20 @@ export async function offerMobileSessionRebalance(input: {
   if (!suggestion) return;
   const choice = suggestion.kind === 'auto' ? 'switch' : await input.ask(suggestion);
   if (choice === 'cancel') return;
+  if (choice === 'disable') {
+    const result = await withTimeout(invoke(hostDeviceId, PROVIDER_GROUP_REMOTE_CHANNEL, [{
+      action: 'rebalance-preference', sessionId, enabled: false,
+    }]), null);
+    if (!result || typeof result !== 'object' || (result as { ok?: unknown }).ok !== true) {
+      Alert.alert(i18n.t('session.providerGroupRebalance.disable'), i18n.t('session.providerGroupRebalance.disableFailed'));
+    } else {
+      const key = cacheKey(hostDeviceId, sessionId);
+      prefetched.delete(key);
+      const pending = inFlight.get(key);
+      if (pending) pending.invalidated = true;
+    }
+    return;
+  }
   try {
     await invoke(hostDeviceId, PROVIDER_GROUP_REMOTE_CHANNEL, [{
       action: 'rebalance-decision',

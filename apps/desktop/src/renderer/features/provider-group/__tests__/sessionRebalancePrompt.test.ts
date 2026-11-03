@@ -7,6 +7,9 @@ import type { TFunction } from 'i18next';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { i18n } from '@/i18n';
+import { toast } from '@/lib/toast';
+
+vi.mock('@/lib/toast', () => ({ toast: { error: vi.fn() } }));
 
 import { offerSessionRebalance, prefetchSessionRebalance, SESSION_REBALANCE_CACHE_MS } from '../sessionRebalancePrompt';
 
@@ -19,7 +22,7 @@ const suggestion = (kind: 'ask' | 'auto') => ({
   quota: { usedPercent: 20, resetAtMs: Date.now() + 86_400_000, windowMs: 7 * 86_400_000 },
 });
 
-type Answer = { ok: boolean; checked: boolean };
+type Answer = { ok: boolean; checked: boolean; tertiary?: boolean };
 
 function setup(reply: () => Promise<unknown>, answer: Answer = { ok: false, checked: false }) {
   const command = vi.fn((request: { action: string }) =>
@@ -35,6 +38,34 @@ afterEach(() => {
 });
 
 describe('offerSessionRebalance', () => {
+  // Unit/时序，§6.2：弹窗期间刷新的旧提议晚于关闭操作返回，也不能使下一次发送再弹窗。
+  it('invalidates suggestions that were already in flight when opting out', async () => {
+    const h = setup(async () => suggestion('ask'), { ok: false, checked: false, tertiary: true });
+    await prefetchSessionRebalance('disable-in-flight');
+    let resolve!: (value: unknown) => void;
+    const reply = new Promise<unknown>((done) => { resolve = done; });
+    h.command.mockImplementation(async (request) => request.action === 'rebalance-suggestion' ? reply : { ok: true });
+    const pending = prefetchSessionRebalance('disable-in-flight');
+    await offerSessionRebalance({ sessionId: 'disable-in-flight', confirmWithCheckbox: h.confirmWithCheckbox, t });
+    resolve(suggestion('ask'));
+    await pending;
+    await offerSessionRebalance({ sessionId: 'disable-in-flight', confirmWithCheckbox: h.confirmWithCheckbox, t });
+    expect(h.confirmWithCheckbox).toHaveBeenCalledTimes(1);
+  });
+  // Unit, §6.2：原用例未覆盖明确关闭；不能把第三操作当成取消或同意换号。
+  it.each([true, false, 'unsupported'])('records opting out without switching, reporting failed saves (ok=%s)', async (ok) => {
+    const h = setup(async () => suggestion('ask'), { ok: false, checked: false, tertiary: true });
+    vi.mocked(toast.error).mockClear();
+    await prefetchSessionRebalance('opt-out');
+    h.command.mockImplementation(async (request) => {
+      if (ok === 'unsupported') throw new Error('[INVALID_PARAMS] unknown action');
+      return request.action === 'rebalance-preference' ? { ok } : suggestion('ask');
+    });
+    expect(await offerSessionRebalance({ sessionId: 'opt-out', confirmWithCheckbox: h.confirmWithCheckbox, t })).toBeUndefined();
+    expect(h.command).toHaveBeenLastCalledWith({ action: 'rebalance-preference', sessionId: 'opt-out', enabled: false });
+    expect(h.decisions()).toEqual([]);
+    expect(toast.error).toHaveBeenCalledTimes(ok === true ? 0 : 1);
+  });
   it.each([
     ['switch once', 'ask', { ok: true, checked: false }, false],
     ['switch and remember for this task', 'ask', { ok: true, checked: true }, true],

@@ -909,7 +909,9 @@
       "quotaReset": "{{left}}% restante · {{reset}}",
       "confirm": "Trocar",
       "cancel": "Cancelar",
-      "remember": "Alternar automaticamente a partir de agora (só nesta tarefa)"
+      "remember": "Alternar automaticamente a partir de agora (só nesta tarefa)",
+      "disable": "Não alternar automaticamente (esta tarefa)",
+      "disableFailed": "Não foi possível salvar sua escolha. Verifique a conexão e se o Cindy está atualizado no computador onde está a tarefa e tente novamente. Esta mensagem será enviada normalmente."
     },
     "deleteConfirm": {
       "title": "Excluir o grupo de provedores {{provider}}?",

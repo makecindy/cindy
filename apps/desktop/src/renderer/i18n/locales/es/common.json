@@ -909,7 +909,9 @@
       "quotaReset": "{{left}}% restante · {{reset}}",
       "confirm": "Cambiar",
       "cancel": "Cancelar",
-      "remember": "Cambiar automáticamente a partir de ahora (solo esta tarea)"
+      "remember": "Cambiar automáticamente a partir de ahora (solo esta tarea)",
+      "disable": "No cambiar automáticamente (esta tarea)",
+      "disableFailed": "No se pudo guardar tu elección. Comprueba la conexión y que Cindy esté actualizado en el ordenador donde está la tarea, e inténtalo de nuevo. Este mensaje se enviará con normalidad."
     },
     "deleteConfirm": {
       "title": "¿Eliminar el grupo de proveedores {{provider}}?",

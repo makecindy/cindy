@@ -894,7 +894,9 @@
       "quotaReset": "{{left}} % übrig · {{reset}}",
       "confirm": "Wechseln",
       "cancel": "Abbrechen",
-      "remember": "Ab jetzt automatisch wechseln (nur für diese Aufgabe)"
+      "remember": "Ab jetzt automatisch wechseln (nur für diese Aufgabe)",
+      "disable": "Nicht automatisch wechseln (diese Aufgabe)",
+      "disableFailed": "Deine Auswahl konnte nicht gespeichert werden. Prüfe die Verbindung und ob Cindy auf dem Computer mit dieser Aufgabe aktuell ist, und versuche es erneut. Diese Nachricht wird wie gewohnt gesendet."
     },
     "deleteConfirm": {
       "title": "Anbietergruppe {{provider}} löschen?",

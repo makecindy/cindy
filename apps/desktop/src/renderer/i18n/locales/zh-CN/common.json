@@ -884,7 +884,9 @@
       "quotaReset": "还剩 {{left}}%，{{reset}}",
       "confirm": "换过去",
       "cancel": "取消",
-      "remember": "以后自动换，不再询问（仅本任务）"
+      "remember": "以后自动换，不再询问（仅本任务）",
+      "disable": "不自动切换（仅本任务）",
+      "disableFailed": "未能保存选择。请检查连接，并确认任务所在电脑上的 Cindy 已更新后重试。这条消息仍照常发送。"
     },
     "deleteConfirm": {
       "title": "删除 {{provider}} 的供应商组？",
