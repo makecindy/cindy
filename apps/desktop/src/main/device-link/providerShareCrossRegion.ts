@@ -304,7 +304,8 @@ function createClient(rt: Runtime, state: RegionState): DeviceLinkClient {
   const client = new DeviceLinkClient({
     // The capture process is shared with the local-region client. A cross-region
     // socket closing must only close its own sessions, never suspend that process.
-    directRuntime: { create: (id, events) => desktopDirectRuntime.create(id, events) },
+    directRuntime: { capacity: desktopDirectRuntime.capacity,
+      create: (id, events, options) => desktopDirectRuntime.create(id, events, options) },
     getWsUrl: () => wsUrl,
     authorizationScheme: 'ProviderShareGuest',
     getToken: async () => {

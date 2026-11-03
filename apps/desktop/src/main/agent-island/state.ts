@@ -1749,6 +1749,18 @@ export function buildAllSessionActivitySnapshots(
   return snapshots;
 }
 
+/**
+ * 其它设备任务在岛上的镜像，按与本机任务相同的快照口径读出。只供本进程内的消费方
+ * (如键盘状态灯)使用，绝不能并入 {@link buildAllSessionActivitySnapshots} 的 relay 载荷。
+ */
+export function buildDeviceSessionActivitySnapshots(
+  state: AgentIslandState,
+): AgentIslandSessionSnapshot[] {
+  return Array.from(state.sessions.values())
+    .filter((session) => session.sourceDeviceId !== null && !session.groupChat)
+    .map((session) => toSnapshot(session));
+}
+
 export function getNextAgentIslandTimerAt(state: AgentIslandState, now: number): number | null {
   let next: number | null = null;
   for (const value of [

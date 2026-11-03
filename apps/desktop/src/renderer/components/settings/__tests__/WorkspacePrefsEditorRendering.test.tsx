@@ -18,6 +18,10 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { WorkspacePrefsEditor, type HookWorkspacePrefsState } from '../HookWorkspacePrefsEditor';
 
+vi.mock('@/hooks/useModelRouteDevices', () => ({
+  useModelRouteDevices: () => ({ leadAgentDeviceId: null, devices: [] }),
+}));
+
 vi.mock('react-i18next', () => ({
   useTranslation: () => ({ t: (key: string) => key }),
 }));

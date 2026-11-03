@@ -10,7 +10,14 @@ import {
 import { attachmentPreviewKind } from '@cindy/maker-shared/attachment-preview';
 import { FocusScope } from '@radix-ui/react-focus-scope';
 import { toLocalFileUrl } from '@/lib/localPathResolver';
-import { PreviewHeader, PreviewFooter, PreviewButton } from './PreviewChrome';
+import {
+  PREVIEW_PANEL_CLASS,
+  PREVIEW_PANEL_STYLE,
+  PreviewHeader,
+  PreviewFooter,
+  PreviewButton,
+  PreviewScrim,
+} from './PreviewChrome';
 import { DropdownMenuItem } from '@/components/ui/dropdown-menu';
 import { Button } from '@/components/ui/button';
 import { shouldShowOpenPathError } from '../../../shared/openPathResult';
@@ -132,13 +139,19 @@ export function TextLightbox(props: TextLightboxProps) {
   ) : (
     <Suspense
       fallback={createPortal(
-        <div className="fixed inset-0 z-[9999] bg-[var(--surface)]">
-          <PreviewHeader
-            name={props.fileName ?? basename(props.filePath)}
-            onClose={props.onClose}
-          />
-          <Spinner />
-        </div>,
+        <>
+          <PreviewScrim onClose={props.onClose} />
+          <div
+            className={cn('z-[9999] flex items-center justify-center', PREVIEW_PANEL_CLASS)}
+            style={PREVIEW_PANEL_STYLE}
+          >
+            <PreviewHeader
+              name={props.fileName ?? basename(props.filePath)}
+              onClose={props.onClose}
+            />
+            <Spinner />
+          </div>
+        </>,
         document.body,
       )}
     >
@@ -473,7 +486,6 @@ function TextDocumentLightbox({ filePath, fileName, initialLine, triggerRef, onC
         position: 'fixed',
         inset: 0,
         zIndex: TEXT_LIGHTBOX_OVERLAY_Z_INDEX,
-        background: 'var(--overlay-lightbox)',
         display: 'flex',
         flexDirection: 'column',
         alignItems: 'center',
@@ -483,36 +495,18 @@ function TextDocumentLightbox({ filePath, fileName, initialLine, triggerRef, onC
         cursor: 'default',
       }}
     >
-      <button
-        type="button"
-        tabIndex={-1}
-        aria-hidden="true"
-        style={{
-          position: 'absolute',
-          inset: 0,
-          border: 0,
-          padding: 0,
-          background: 'transparent',
-          cursor: 'default',
-        }}
-        onClick={handleClose}
-      />
+      {/* 遮罩在根节点的层叠上下文里,压在预览窗(zIndex 1)之下。 */}
+      <PreviewScrim onClose={handleClose} zIndex={0} />
       {/* F3: Doc Card — clicks inside MUST NOT close (per F6 异常流). */}
       <div
         data-text-lightbox-card
         data-text-lightbox-search-host={renderable.kind === 'markdown' ? '' : undefined}
         className={cn(
-          'cursor-auto flex flex-col overflow-hidden pt-16',
+          'cursor-auto flex flex-col pt-16',
           collection && 'pb-16',
-          'border border-[var(--msg-tool-card-border)]',
-          'bg-[var(--msg-tool-card-bg)]',
+          PREVIEW_PANEL_CLASS,
         )}
-        style={{
-          width: '100vw',
-          height: '100vh',
-          position: 'relative',
-          zIndex: 1,
-        }}
+        style={{ ...PREVIEW_PANEL_STYLE, zIndex: 1 }}
       >
         <PreviewHeader
           name={displayName}

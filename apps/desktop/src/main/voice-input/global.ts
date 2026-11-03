@@ -19,6 +19,7 @@ import {
 } from '@cindy/voice-input-core';
 
 import { markAppearanceSettingsReaderWindow } from '../appearance-settings-reader.js';
+import { markMicrophonePermissionReaderWindow } from './microphonePermissionIpc.js';
 import { createLogger } from '../logger.js';
 import { acquireOverlayEscape } from '../overlayEscape.js';
 import { scheduleMainAppPresenceRestore } from '../appPresence.js';
@@ -2453,6 +2454,7 @@ function createOverlayWindow(shortcutInvokedAt: number): BrowserWindow {
   });
 
   markAppearanceSettingsReaderWindow(window);
+  markMicrophonePermissionReaderWindow(window);
   overlayWindow = window;
   overlayLoaded = false;
   // 浮窗建窗即 backgroundThrottling:false(保住麦克风回调调度),它的 Renderer 也装了
@@ -2589,6 +2591,7 @@ function createDictionaryToastWindow(payload: DictionaryToastPayload): BrowserWi
   });
 
   markAppearanceSettingsReaderWindow(window);
+  markMicrophonePermissionReaderWindow(window);
   window.once('closed', () => {
     if (dictionaryToastWindow === window) dictionaryToastWindow = null;
     if (dictionaryToastCloseTimer) {

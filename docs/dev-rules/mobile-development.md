@@ -128,6 +128,7 @@ pnpm --filter mobile test:smoke
 
 - TypeScript 改动至少运行 typecheck 和相关定向测试。
 - 修改跨端协议、Device Link、导航主流程或原生边界时，追加 scope、smoke 或相应 E2E。
+- 用模拟器验证后运行 `pnpm mobile:sim:logcheck` 并汇报结果：`ERROR` 要修复或说明与本次改动无关，新 `WARN` 要写进汇报，无法判定不算通过。详见[模拟器调试手册](../../apps/mobile/docs/simulator-debugging.md#logs)。
 - 视觉改动同时遵守 [Cindy 设计规范](../design-rules/cindy-design-system.md) 与
   [Mobile 设计规范](../../apps/mobile/docs/mobile-design-guide.md)。
 - 记录实际执行和结果；未执行的高相关检查必须说明原因。
