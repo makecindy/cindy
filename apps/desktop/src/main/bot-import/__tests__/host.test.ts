@@ -22,6 +22,7 @@ import { createBotMemoryService } from '../../maker-ipc/botMemoryService.js';
 
 const h = vi.hoisted(() => ({ root: '', botId: '', created: false, verified: false, sourceEnabled: true, failReadyWrite: false, boundary: false,
   snapshot: null as unknown as ImportSnapshot, store: null as unknown as ReturnType<typeof createCompanionEnvironmentStore>,
+  profiles: [] as Array<{ id: string; name: string; status: string }>, shadowBotIds: [] as string[],
   routines: [] as Routine[], pause: vi.fn(), lifecycle: vi.fn(), sourceEnvironment: {} as Record<string, string>, native: false, invitation: vi.fn(),
   profile: { config: {} } as Record<string, unknown>, importMedia: vi.fn(), writeProfile: vi.fn(), importDocument: vi.fn(), readName: vi.fn(), secretValues: new Map<string, string>(),
   connectImBot: vi.fn(),
@@ -29,11 +30,14 @@ const h = vi.hoisted(() => ({ root: '', botId: '', created: false, verified: fal
 vi.mock('electron', () => ({ app: { getPath: () => h.root, getAppPath: () => process.cwd(), isPackaged: false } }));
 vi.mock('../../appSessionState.js', () => ({ activeOwnerScopeKey: () => h.root, ownerScopedUserDataPath: () => h.root, getActiveAppSession: () => ({ dataOwnerId: 'fixture-owner' }), isAppSessionBoundaryPending: () => h.boundary }));
 vi.mock('../../localDb/ipc/bots.js', () => ({
-  listBotRemoteResourceSources: async () => [],
+  listBotRemoteResourceSources: async () => h.profiles,
   getBotRemoteResourceSource: vi.fn(),
   createBotProfile: vi.fn(), createBotCanonicalSession: async () => ({ canonicalSessionId: 'chat' }),
   prepareImportedBotInvitation: h.invitation,
   getBotMemoryService: () => ({ importDocument: h.importDocument }), reconcileBotProfileFolder: async () => {},
+}));
+vi.mock('../../companion-cloud/homes.js', () => ({
+  companionShadowIdsForLocalNameCheck: () => h.shadowBotIds,
 }));
 vi.mock('../../localDb/ipc/botAvatarSelection.js', () => ({ validateBotAvatarBuffer: vi.fn(), decodeBotAvatarImage: vi.fn() }));
 vi.mock('../../maker-ipc/botProfileFolder.js', () => ({ BOT_PROFILE_TEXT_MAX_BYTES: 100000, readBotProfileFolder: async () => h.profile, writeBotProfileFolder: h.writeProfile,
@@ -88,6 +92,7 @@ import { indexAutomationDependencies, normalizeAutomation } from '../sourceAutom
 
 beforeEach(async () => {
   h.root = await fs.mkdtemp(path.join(os.tmpdir(), 'cindy-import-host-test-'));
+  h.profiles = []; h.shadowBotIds = [];
   h.native = false; h.invitation.mockReset().mockResolvedValue(undefined);
   h.created = false; h.verified = false; h.sourceEnabled = true; h.failReadyWrite = false; h.boundary = false; h.routines = []; h.pause.mockReset(); h.sourceEnvironment = {};
   h.connectImBot.mockReset().mockResolvedValue(undefined);
@@ -469,6 +474,31 @@ it('rejects a simultaneous normalized-name conflict, removes only the loser chec
   expect(profiles.size).toBe(2);
   expect(h.secretValues.size).toBe(4);
   expect(h.pause).not.toHaveBeenCalled();
+});
+
+// 测试价值
+// - 生产入口与可观察结果：startCompanionImport 的公开预检允许 shadow 同名选择并拒绝 active 同名，观察 IMPORT_NAME_EXISTS。
+// - Bug／规则依据：#8272 与 cloud-companions.md §6 的 shadow-only 名称例外。
+// - 现有覆盖缺口：已有竞争创建测试只模拟 create 冲突，没有验证邀请/导入预检对影子名单的投影。
+// - 最小失败输入和 tier：同名 active profile + 当前账号 shadow ID，再添加一条非 shadow 同名 profile；unit fake，无网络。
+// - 实测耗时：单独运行本文件 28.08s；95 项通过，13 个既有夹具用例因缺少 resources/bot-packages 失败；本回归断言通过。
+it('import precheck skips only profile ids in the current shadow snapshot', async () => {
+  h.snapshot.items = [];
+  h.profiles = [{ id: 'shadow-profile', name: 'Ada', status: 'active' }];
+  h.shadowBotIds = ['shadow-profile'];
+  const [source] = await listCompanionImportSources('fixture');
+  const preview = await previewCompanionImport(source!.id, 'fixture');
+  const selection = { requestId: 'shadow-import-name-check', previewId: preview.id, name: 'Ada', entryIds: [], takeover: false };
+  const accepted = await startCompanionImport(selection, 'fixture');
+  const result = await withBotProfileLocks([accepted.botId], () => getCompanionImportResult(selection.requestId));
+  expect(result?.status).toBe('complete');
+  expect(createBotProfile).toHaveBeenCalledOnce();
+
+  h.profiles.push({ id: 'active-profile', name: 'Ada', status: 'active' });
+  const nextPreview = await previewCompanionImport(source!.id, 'fixture');
+  await expect(startCompanionImport({ ...selection, requestId: 'active-import-name-check', previewId: nextPreview.id }, 'fixture'))
+    .rejects.toThrow('IMPORT_NAME_EXISTS');
+  expect(createBotProfile).toHaveBeenCalledOnce();
 });
 
 it('recovers rejected creation cleanup after a storage failure without retrying the impossible create', async () => {
