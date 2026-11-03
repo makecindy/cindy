@@ -1,13 +1,13 @@
 import { isNetworkishErrorMessage, isOverloadErrorMessage } from '@cindy/maker-core';
 import { matchesDeterministicUsageExhaustionText } from '@cindy/maker-shared/error-redaction';
-import type { InterruptedTurnErrorSignals } from './interruptedTurnAutoResume.js';
+import { isRemoteAgentRouteLostReason, type InterruptedTurnErrorSignals } from './interruptedTurnAutoResume.js';
 
 /**
  * The agent serving this route on another computer is gone (remote-agent/controller/proxyHandle).
  * Another candidate route can still run the turn; an owner disconnect is `user-revoked`, not this.
  */
 export function isRemoteAgentRouteLost(signals: InterruptedTurnErrorSignals): boolean {
-  return signals.reason === 'remote_agent_closed' || signals.reason === 'remote_agent_lost';
+  return isRemoteAgentRouteLostReason(signals.reason);
 }
 
 /** A failed provider may be replaced, even when retrying that provider is forbidden. */

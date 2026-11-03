@@ -2,7 +2,7 @@ import { readFileSync } from 'node:fs';
 import { ScriptTarget, transpileModule } from 'typescript';
 import { describe, expect, it, vi } from 'vitest';
 import { canResumeAfterRuntimeFallback, isBotCandidateUnavailable, isRemoteAgentRouteLost } from '../botCandidateRecovery';
-import { isInterruptedTurnError, isAcceptedTurnContinuationOnlyReason } from '../interruptedTurnAutoResume';
+import { isInterruptedTurnError, isContinuationOnlyAutoResumeReason } from '../interruptedTurnAutoResume';
 
 const source = readFileSync(new URL('../register.ts', import.meta.url), 'utf8');
 
@@ -19,9 +19,11 @@ function harness(bot = true) {
   const guard = vi.fn(() => ({ action: 'resume', attempt: 1, maxAttempts: 5,
     episodeAttempt: 1, maxEpisodeAttempts: 10, sessionTotal: 1, attemptToken: 1, delayMs: 1000 }));
   const groupMayHandle = vi.fn((_sessionId: string, _signals: unknown) => false);
+  const liveSession = {};
+  const rebuildLeases = new WeakMap<object, number>();
   const deps = {
     isInterruptedTurnError, isBotCandidateUnavailable, isRemoteAgentRouteLost, canResumeAfterRuntimeFallback,
-    isAcceptedTurnContinuationOnlyReason,
+    isContinuationOnlyAutoResumeReason,
     providerGroupService: { mayHandleTurnError: groupMayHandle },
     inputCoordinator: { isExecutionPaused: () => false, autoRetryLastError: resume },
     interruptedTurnAutoResumeGuard: { onInterruptedTurn: guard, noteResumeSendFailed: vi.fn() },
@@ -34,6 +36,8 @@ function harness(bot = true) {
     },
     saveTurnStartedAtForDeferred: vi.fn(), beginSchedulerAutoResume: vi.fn(),
     pendingSessionRuntimeFallbackRebuilds: new WeakMap(),
+    getStableSessionForTurnBoundary: () => liveSession,
+    pendingContinuationOnlyAutoResumeRebuilds: rebuildLeases,
     log: { debug: vi.fn(), info: vi.fn(), warn: vi.fn() },
   };
   const js = transpileModule(`${hints}\nreturn { callbacks: { ${callbacks} }, botFallbackInputs };`, {
@@ -41,7 +45,7 @@ function harness(bot = true) {
   }).outputText;
   const runtime = new Function(...Object.keys(deps), js)(...Object.values(deps));
   if (bot) runtime.botFallbackInputs.add(item.createOpts);
-  return { item, ...runtime.callbacks, resume, fallback, finalize, guard, groupMayHandle,
+  return { item, ...runtime.callbacks, resume, fallback, finalize, guard, groupMayHandle, liveSession, rebuildLeases,
     run: () => scheduled!(), cancel: () => { current = false; } };
 }
 
@@ -226,6 +230,8 @@ describe('Bot candidate recovery', () => {
     const h = harness();
     expect(h.isResumableTurnErrorCandidate(remoteClosed, h.item)).toBe(true);
     expect(h.onResumableTurnError('s', remoteClosed, h.item)).not.toBeNull();
+    // The dead remote Session closes right after this error; its scheduled resume must outlive that close.
+    expect(h.rebuildLeases.get(h.liveSession)).toBe(1);
     await h.run();
     expect(h.fallback).toHaveBeenCalledWith('s', 1, 1, true, expect.any(Function));
     expect(h.resume).toHaveBeenCalledOnce();
