@@ -27,20 +27,23 @@ function storageKey(): string {
   return `${STORAGE_KEY_PREFIX}.${activeOwnerId ?? 'signed-out'}`;
 }
 
-function readStorage(): ReadStateMap {
-  if (cache) return cache;
-  const next: ReadStateMap = {};
+// Writers refresh synchronously: another window can commit before its storage
+// event invalidates this renderer cache. Getters can keep their cached snapshot.
+function readStorage(refresh = false): ReadStateMap {
+  if (cache && !refresh) return cache;
+  const next: ReadStateMap = refresh ? { ...cache } : {};
   try {
     const raw = window.localStorage.getItem(storageKey());
     const parsed = raw ? (JSON.parse(raw) as unknown) : null;
     if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
       for (const [botId, at] of Object.entries(parsed as Record<string, unknown>)) {
-        if (typeof at === 'number' && Number.isFinite(at) && at > 0) next[botId] = at;
+        if (typeof at === 'number' && Number.isFinite(at) && at > 0) next[botId] = Math.max(next[botId] ?? 0, at);
       }
     }
   } catch {
-    // Corrupt or unavailable storage degrades to "nothing read yet", which only
-    // costs a badge — never a crash in the sidebar.
+    // Keep known reads when storage is unavailable; an initial failure degrades
+    // to "nothing read yet", never a crash in the sidebar.
+    return cache ?? next;
   }
   cache = next;
   return next;
@@ -79,7 +82,7 @@ export function getBotLastReadAt(botId: string): number | null {
  */
 export function markBotRead(botId: string, at: number = Date.now()): boolean {
   if (!botId || !Number.isFinite(at) || at <= 0) return false;
-  const current = readStorage();
+  const current = readStorage(true);
   const previous = current[botId] ?? 0;
   if (at <= previous) return false;
   writeStorage({ ...current, [botId]: Math.floor(at) });
@@ -95,7 +98,7 @@ export function markBotRead(botId: string, at: number = Date.now()): boolean {
  */
 export function seedMissingBotReadState(botIds: readonly string[], at: number = Date.now()): boolean {
   if (!Number.isFinite(at) || at <= 0) return false;
-  const current = readStorage();
+  const current = readStorage(true);
   const next = { ...current };
   let changed = false;
   for (const botId of botIds) {
@@ -109,7 +112,7 @@ export function seedMissingBotReadState(botIds: readonly string[], at: number = 
 
 /** Drop read positions for Bots that no longer exist, keeping the map bounded. */
 export function pruneBotReadState(botIds: readonly string[]): boolean {
-  const current = readStorage();
+  const current = readStorage(true);
   const alive = new Set(botIds);
   const next: ReadStateMap = {};
   let changed = false;
@@ -184,7 +187,7 @@ export function isBotGroupUnread(group: GroupReadSummary): boolean {
   return botGroupUnreadCount(group) > 0;
 }
 export function seedBotGroupReadState(groups: readonly GroupReadSummary[]): void {
-  const current = readStorage();
+  const current = readStorage(true);
   const next = { ...current };
   const alive = new Set(groups.map(group => botGroupReadKey(group.id)));
   for (const key of Object.keys(next)) if (key.startsWith('group:') && !alive.has(key)) delete next[key];

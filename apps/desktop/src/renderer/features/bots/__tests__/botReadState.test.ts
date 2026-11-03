@@ -45,6 +45,16 @@ describe('Bot read positions', () => {
 
     expect(markBotRead('bot-1', 6_000)).toBe(true);
     expect(getBotLastReadAt('bot-1')).toBe(6_000);
+    // A failed write still retains the session watermark across fresh reads.
+    const blocked = vi.spyOn(Storage.prototype, 'setItem').mockImplementation(() => { throw new Error('quota'); });
+    try {
+      expect(markBotRead('bot-1', 7_000)).toBe(true);
+      expect(markBotRead('bot-1', 6_500)).toBe(false);
+      expect(markBotRead('bot-2', 8_000)).toBe(true);
+      expect(getBotLastReadAt('bot-1')).toBe(7_000);
+    } finally {
+      blocked.mockRestore();
+    }
   });
 
   it('keeps each data owner on its own read positions', () => {
@@ -93,6 +103,48 @@ describe('Bot read positions', () => {
     expect(isBotGroupUnread({ id: 'g', lastReplyAt: 200 })).toBe(false);
     seedBotGroupReadState([]); expect(getBotLastReadAt(botGroupReadKey('g'))).toBeNull();
     off();
+  });
+
+  // PR #8637 / unit: another renderer can persist before its storage event
+  // reaches this cached module. Every public writer must preserve that read.
+  it.each(['mark', 'seed-bots', 'prune-bots', 'seed-groups'] as const)(
+    'preserves another window read before storage delivery during %s', action => {
+      setBotReadStateOwner('owner-1');
+      seedBotGroupReadState([{ id: 'g', lastReplyAt: 100 }, { id: 'gone', lastReplyAt: 50 }]);
+      markBotRead('bot-alive', 100);
+      markBotRead('bot-gone', 50);
+      expect(isBotGroupUnread({ id: 'g', lastReplyAt: 200 })).toBe(true);
+      // Simulate the other renderer's successful write, with no storage event.
+      window.localStorage.setItem('cindy.bots.readState.v1.owner-1', JSON.stringify({
+        ...getBotLastReadAtMap(), 'group:g': 200, 'bot-alive': 200, 'thread:other': 300,
+      }));
+      if (action === 'mark') markBotRead('bot-alive', 400);
+      else if (action === 'seed-bots') seedMissingBotReadState(['bot-alive', 'new-bot'], 400);
+      else if (action === 'prune-bots') pruneBotReadState(['bot-alive']);
+      else seedBotGroupReadState([{ id: 'g', lastReplyAt: 200 }, { id: 'new-group', lastReplyAt: 400 }]);
+      expect(isBotGroupUnread({ id: 'g', lastReplyAt: 200 })).toBe(false);
+      const saved = JSON.parse(window.localStorage.getItem('cindy.bots.readState.v1.owner-1')!);
+      expect(saved['group:g']).toBe(200);
+      expect(saved['thread:other']).toBe(300);
+      expect(saved['bot-alive']).toBe(action === 'mark' ? 400 : 200);
+      if (action === 'seed-bots') expect(saved['new-bot']).toBe(400);
+      if (action === 'prune-bots') expect(saved['bot-gone']).toBeUndefined();
+      if (action === 'seed-groups') {
+        expect(saved['group:gone']).toBeUndefined();
+        expect(saved['group:new-group']).toBe(400);
+      }
+      resetBotReadStateForTests(); setBotReadStateOwner('owner-1');
+      expect(isBotGroupUnread({ id: 'g', lastReplyAt: 200 })).toBe(false);
+    },
+  );
+
+  it('does not lower another window read when an older explicit mark arrives first', () => {
+    setBotReadStateOwner('owner-1');
+    markBotRead('group:g', 100);
+    window.localStorage.setItem('cindy.bots.readState.v1.owner-1', JSON.stringify({ 'group:g': 300 }));
+    expect(markBotRead('group:g', 200)).toBe(false);
+    expect(getBotLastReadAt('group:g')).toBe(300);
+    expect(JSON.parse(window.localStorage.getItem('cindy.bots.readState.v1.owner-1')!)).toEqual({ 'group:g': 300 });
   });
 
   it('prunes read positions for Bots that no longer exist', () => {
