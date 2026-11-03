@@ -13,9 +13,10 @@ export const DEEPSEEK_V4_SUPPORTED_CUSTOM_TOOL_NAMES = new Set(['apply_patch']);
  * ("deepseek/deepseek-v4-pro"), but custom-provider entries often spell the bare
  * model name ("deepseek-flash", #8559) and variants add suffixes — they all
  * share the same custom-tool restriction, so matching cannot depend on the
- * exact catalog id.
+ * exact catalog id. Case-insensitive: custom-provider projection keeps the
+ * upstream's mixed-case ids verbatim ("DeepSeek-V4-Pro").
  */
-const DEEPSEEK_MODEL_ID_PATTERN = /(?:^|\/)deepseek(?:[-_./]|$)/;
+const DEEPSEEK_MODEL_ID_PATTERN = /(?:^|\/)deepseek(?:[-_./]|$)/i;
 
 export function isDeepSeekModelId(model: string): boolean {
   return DEEPSEEK_MODEL_ID_PATTERN.test(model);

@@ -26,6 +26,13 @@ describe('DeepSeek custom tool sanitization', () => {
     }
   });
 
+  it('matches mixed-case ids preserved verbatim by custom-provider projection', () => {
+    for (const model of ['DeepSeek-V4-Pro', 'vendor/DeepSeek-V4-Pro']) {
+      const next = sanitizeDeepSeekV4CustomTools(bodyWithExecTool(model));
+      expect(next?.tools, model).toEqual([{ type: 'custom', name: 'apply_patch' }]);
+    }
+  });
+
   it('strips custom tools for third-party vendor-prefixed spellings', () => {
     const next = sanitizeDeepSeekV4CustomTools(
       bodyWithExecTool('openrouter/deepseek/deepseek-chat'),
