@@ -4431,6 +4431,7 @@ describe('session-agent-switch handoff injection', () => {
         scheduledModelScope: { restore: vi.fn(async () => undefined) },
         // UI-origin cross-engine preparation can return without clearing the intent.
         applyPendingAgentSwitchIfIdle: vi.fn(async () => undefined),
+        recoverRenamedSessionModelOnSend: vi.fn(async () => undefined),
         agentSwitchDeps: {}, agentSwitchPending: pending,
         getSessionRowSnapshotStrict: vi.fn(async () => ({ orcaRole, orcaRemoteLead })),
         parseOrcaRemoteLead,

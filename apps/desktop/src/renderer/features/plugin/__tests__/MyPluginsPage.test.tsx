@@ -161,6 +161,29 @@ beforeEach(() => {
 afterEach(() => { cleanup(); vi.restoreAllMocks(); vi.unstubAllGlobals(); });
 
 describe('My Plugins facts', () => {
+  it('requires choosing the exact coexisting installation before preparing and submitting an update', async () => {
+    const api = reader();
+    const candidates = [
+      { instanceId: 'market-instance', version: '1.0.0', origin: 'public' as const, enabled: true },
+      { instanceId: 'exact-instance', version: '1.2.0', origin: 'local' as const, enabled: true },
+    ];
+    const multiple = { ...detail, plugin: { ...detail.plugin, localInstanceId: null, localVersion: null,
+      localInstallation: { state: 'unavailable' as const, candidates } } };
+    vi.mocked(api.detail).mockResolvedValue(multiple);
+    vi.mocked(api.list).mockResolvedValue({ plugins: [multiple.plugin], queriedAt: at, nextCursor: null });
+    const preview = packagePreview('exact-instance', '1.2.0');
+    vi.mocked(api.prepare).mockResolvedValue(preview);
+    const submit = vi.fn().mockResolvedValue(false);
+    view(api, true, {}, candidates.map(item => ({ id: item.instanceId, name: 'Plugin', version: item.version } as GhostPluginListItem)), submit);
+    const local = await screen.findByRole('region', { name: `${prefix}.localVersion` });
+    const picker = await within(local).findByRole('combobox', { name: `${prefix}.localVersion` });
+    expect(api.prepare).not.toHaveBeenCalled();
+    fireEvent.click(picker);
+    fireEvent.click(await screen.findByRole('option', { name: '1.2.0 · settings.ghosts.page.origin.local' }));
+    fireEvent.click(await within(local).findByRole('button', { name: `${prefix}.submitVersion 1.2.0` }));
+    expect(submit).toHaveBeenCalledExactlyOnceWith('exact-instance', { prepared: preview, isCurrent: expect.any(Function) });
+  });
+
   it.each(['personal', 'org'])('shows the actual new package notes to a %s member before submitting the same prepared package', async membershipKind => {
     auth.membershipKind = membershipKind;
     const api = reader();

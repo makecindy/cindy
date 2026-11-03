@@ -1360,6 +1360,7 @@ function BotGroupChatContent({ groupId, direct }: { groupId: string; direct: boo
                   shareScope={shareScope}
                   sharing={sharing}
                   reactionGroupId={group.serverBacked && !direct ? group.id : undefined}
+                  readersEnabled={group.serverBacked && !direct && group.supportsMessageReaders === true}
                   reactionRevision={messageReactionRevision(group, message.id)}
                   readOnly={Boolean(group.archived || group.dissolvedAt)}
                   quoteDisplay={quoteDisplays.get(message.id)?.display}

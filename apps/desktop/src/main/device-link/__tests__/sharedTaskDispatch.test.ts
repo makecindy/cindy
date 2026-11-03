@@ -114,6 +114,14 @@ describe('sharedTask dispatch scope', () => {
       expect(() => assertSharedTaskInteractionResolveCurrent(capture(), args)).toThrow('PERMISSION_DENIED');
     }
   });
+  it('keeps host-owned consent cards away from guests even under a generic tool name', () => {
+    // Provider credential sharing reuses tool names such as Bash; plugin install and
+    // media download use their own names. The host-owned marker decides, not the name.
+    setSharedTaskInteractionReader(() => ({ sessionId: 'task', kind: 'permission', toolName: 'Bash', hostOwnedConfirmation: true }));
+    const args = ['credential-1', { kind: 'permission', behavior: 'allow' }];
+    expect(() => assertSharedTaskInvoke(capture(), { channel: 'maker:resolve-interaction', args })).toThrow('PERMISSION_DENIED');
+    expect(() => assertSharedTaskInteractionResolveCurrent(capture(), args)).toThrow('PERMISSION_DENIED');
+  });
   it.each([{ command: 'different-command' }, {}, null])('rejects guest replacement input %j at admission and consumption', (updatedInput) => {
     setSharedTaskInteractionReader(() => ({ sessionId: 'task', kind: 'permission', toolName: 'Bash' }));
     const args = ['permission-1', { kind: 'permission', behavior: 'allow', updatedInput }];
