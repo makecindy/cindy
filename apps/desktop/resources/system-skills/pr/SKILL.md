@@ -9,6 +9,8 @@ Take a change from its first edit to a merged pull request without the user havi
 
 Reply in the user's language. Read the reference files only when this file points to them.
 
+**PR card:** `ghost_call` `cindy-github` / `pr_card` (in Claude Code `mcp__cindy__ghost_call`; load it with ToolSearch if deferred). The plugin is unavailable only when that call fails; never ask in text instead.
+
 **What wins:** the user's explicit instructions and saved preferences first, then the repository's own rules (AGENTS.md, CLAUDE.md, CONTRIBUTING, the PR template), then this Skill's defaults. This Skill adds no commit, test or PR rules of its own.
 
 `<skill-dir>` below is the stable directory of this Skill. The directory you were given may be a temporary link that disappears when Cindy restarts, so resolve it once: run `realpath` on the directory containing this SKILL.md, and if the result contains `/.versions/<bundle>/`, replace that segment with `/.active/` so the background check also survives Cindy updates. Use that path everywhere, especially in the schedule hook. Quote every path.
