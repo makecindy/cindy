@@ -35,19 +35,23 @@ const entries = new Map<string, PromptRecommendationSnapshot>();
  */
 const retainedRecommendations = new Map<
   string,
-  { revision: number; prompt: string; at: number }
+  { snapshot: PromptRecommendationSnapshot; at: number }
 >();
 const RETAINED_TTL_MS = 30 * 60 * 1000;
 
+/** 存的是快照对象本身：useSyncExternalStore 要求未变化的读取返回同一引用。 */
 function retainReadyRecommendation(sessionId: string, revision: number, prompt: string): void {
-  retainedRecommendations.set(sessionId, { revision, prompt, at: Date.now() });
+  retainedRecommendations.set(sessionId, {
+    snapshot: { revision, phase: 'ready', prompt, requestSeq: 0 },
+    at: Date.now(),
+  });
 }
 
 function dropRetainedRecommendation(sessionId: string): void {
   retainedRecommendations.delete(sessionId);
 }
 
-/** 切回会话时用保留值合成一个 ready 快照；超过 TTL 视为过期。 */
+/** 切回会话时复用保留的快照对象；超过 TTL 视为过期。 */
 function retainedSnapshot(sessionId: string): PromptRecommendationSnapshot | undefined {
   const retained = retainedRecommendations.get(sessionId);
   if (!retained) return undefined;
@@ -55,12 +59,7 @@ function retainedSnapshot(sessionId: string): PromptRecommendationSnapshot | und
     retainedRecommendations.delete(sessionId);
     return undefined;
   }
-  return {
-    revision: retained.revision,
-    phase: 'ready',
-    prompt: retained.prompt,
-    requestSeq: 0,
-  };
+  return retained.snapshot;
 }
 const sessionListeners = new Map<string, Set<() => void>>();
 const runningSessionIds = new Set<string>();
@@ -384,7 +383,7 @@ export function dismissPromptRecommendation(sessionId: string, revision?: number
   const current = entries.get(sessionId);
   // 带 revision 的调用是显式消费（Tab / 发送）：保留区也要作废，避免切回会话后复活。
   const effectiveRevision =
-    current?.revision ?? retainedRecommendations.get(sessionId)?.revision;
+    current?.revision ?? retainedRecommendations.get(sessionId)?.snapshot.revision;
   if (revision != null && effectiveRevision !== revision) return;
   // 无 entry 也可能仍在等待最终 done；显式发送/换目录应取消这份等待。
   // 新 running 的 layout effect 也会调用本函数，不能清掉刚开始的新轮资格。

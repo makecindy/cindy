@@ -277,12 +277,15 @@ describe('promptRecommendationStore', () => {
     __testing.applyRunningSnapshot(new Map());
     vi.advanceTimersByTime(500);
 
-    expect(__testing.getSessionSnapshot('session-a')).toEqual({
+    const restored = __testing.getSessionSnapshot('session-a');
+    expect(restored).toEqual({
       revision: 601,
       phase: 'ready',
       prompt: '接着问点什么',
       requestSeq: 0,
     });
+    // useSyncExternalStore 的快照必须是稳定引用，否则输入框会无限重渲染。
+    expect(__testing.getSessionSnapshot('session-a')).toBe(restored);
     // 保留值是 ready，不会为了重新显示再发一次付费预测。
     expect(beginPromptRecommendationPrediction('session-a', 601)).toBeNull();
   });
