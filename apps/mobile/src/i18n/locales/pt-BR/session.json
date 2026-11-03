@@ -808,7 +808,7 @@
     "remember": "Trocar e fazer isso automaticamente a partir de agora (somente nesta tarefa)",
     "cancel": "Cancelar",
     "disable": "Não alternar automaticamente (esta tarefa)",
-    "disableFailed": "Não foi possível salvar sua escolha. Verifique a conexão e se o Cindy está atualizado no computador onde está a tarefa e tente novamente. Esta mensagem será enviada normalmente.",
+    "disableFailed": "Não foi possível confirmar se sua escolha foi salva. Verifique a conexão e se o Cindy está atualizado no computador onde está a tarefa e tente novamente. Esta mensagem será enviada normalmente.",
     "moreOptions": "Mais opções"
   },
   "messageEdit": {

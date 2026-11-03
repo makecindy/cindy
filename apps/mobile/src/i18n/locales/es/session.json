@@ -808,7 +808,7 @@
     "remember": "Cambia y hazlo automáticamente a partir de ahora (solo esta tarea)",
     "cancel": "Cancelar",
     "disable": "No cambiar automáticamente (esta tarea)",
-    "disableFailed": "No se pudo guardar tu elección. Comprueba la conexión y que Cindy esté actualizado en el ordenador donde está la tarea, e inténtalo de nuevo. Este mensaje se enviará con normalidad.",
+    "disableFailed": "No se pudo confirmar si se guardó tu elección. Comprueba la conexión y que Cindy esté actualizado en el ordenador donde está la tarea, e inténtalo de nuevo. Este mensaje se enviará con normalidad.",
     "moreOptions": "Más opciones"
   },
   "messageEdit": {

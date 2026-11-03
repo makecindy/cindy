@@ -896,7 +896,7 @@
       "cancel": "Jetzt nicht",
       "remember": "Künftig ohne Nachfrage automatisch wechseln",
       "disable": "Nicht automatisch wechseln und nicht erneut fragen",
-      "disableFailed": "Deine Auswahl konnte nicht gespeichert werden. Prüfe die Verbindung und ob Cindy auf dem Computer mit dieser Aufgabe aktuell ist, und versuche es erneut. Diese Nachricht wird wie gewohnt gesendet.",
+      "disableFailed": "Es konnte nicht bestätigt werden, ob deine Auswahl gespeichert wurde. Prüfe die Verbindung und ob Cindy auf dem Computer mit dieser Aufgabe aktuell ist, und versuche es erneut. Diese Nachricht wird wie gewohnt gesendet.",
       "choiceLabel": "Wechselverhalten (nur diese Aufgabe)",
       "send": "Nachricht senden"
     },

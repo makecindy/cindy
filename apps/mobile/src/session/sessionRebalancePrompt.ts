@@ -16,6 +16,14 @@ import { PROVIDER_GROUP_REMOTE_CHANNEL } from '@cindy/device-link';
 import { i18n } from '@/i18n';
 
 import { formatLocalizedSeconds } from './sessionDurationFormat';
+import {
+  applyMobileSessionRebalancePreferencePatch,
+  prefetchedRebalances as prefetched,
+  inFlightRebalances as inFlight,
+  rebalanceCacheKey as cacheKey,
+  type MobileRebalanceSuggestion,
+} from './sessionRebalanceCache';
+export { applyMobileSessionRebalancePreferencePatch, type MobileRebalanceSuggestion } from './sessionRebalanceCache';
 
 /** 预先问一次的上限：问不到就当没有提议。 */
 export const SESSION_REBALANCE_QUERY_TIMEOUT_MS = 5_000;
@@ -32,23 +40,9 @@ const CONTROL_CHARS = /[\u0000-\u001f\u007f]/;
 const MAX_WINDOW_MS = 31 * 86_400_000;
 const MAX_REBALANCE_LABEL_LENGTH = 128 * 2 + 3;
 
-export interface MobileRebalanceSuggestion {
-  kind: 'ask' | 'auto';
-  memberKey: string;
-  label: string;
-  quota: { usedPercent: number; resetAtMs: number | null; windowMs: number };
-}
-
 export type MobileRebalanceChoice = 'switch' | 'remember' | 'disable' | 'cancel';
 
 type Invoke = (deviceId: string, channel: string, args?: unknown[]) => Promise<unknown>;
-
-const prefetched = new Map<string, { at: number; suggestion: MobileRebalanceSuggestion | null }>();
-const inFlight = new Map<string, { invalidated: boolean }>();
-
-function cacheKey(hostDeviceId: string, sessionId: string): string {
-  return `${hostDeviceId}\u0000${sessionId}`;
-}
 
 /** 读 `rebalance-suggestion` 的回包；格式不对按不提议处理。 */
 export function parseMobileRebalanceSuggestion(raw: unknown): MobileRebalanceSuggestion | null {
@@ -192,17 +186,19 @@ export async function offerMobileSessionRebalance(input: {
   const choice = suggestion.kind === 'auto' ? 'switch' : await input.ask(suggestion);
   if (choice === 'cancel') return;
   if (choice === 'disable') {
-    const result = await withTimeout(invoke(hostDeviceId, PROVIDER_GROUP_REMOTE_CHANNEL, [{
+    // Keep reconciling the host result after the bounded UI wait lets this message send.
+    const completion = invoke(hostDeviceId, PROVIDER_GROUP_REMOTE_CHANNEL, [{
       action: 'rebalance-preference', sessionId, enabled: false,
-    }]), null);
-    if (!result || typeof result !== 'object' || (result as { ok?: unknown }).ok !== true) {
+    }]).then((result) => {
+      if (!result || typeof result !== 'object' || (result as { ok?: unknown }).ok !== true) {
+        Alert.alert(i18n.t('session.providerGroupRebalance.disable'), i18n.t('session.providerGroupRebalance.disableFailed'));
+      } else {
+        applyMobileSessionRebalancePreferencePatch(hostDeviceId, sessionId, { providerGroupRebalanceEnabled: false });
+      }
+    }, () => {
       Alert.alert(i18n.t('session.providerGroupRebalance.disable'), i18n.t('session.providerGroupRebalance.disableFailed'));
-    } else {
-      const key = cacheKey(hostDeviceId, sessionId);
-      prefetched.delete(key);
-      const pending = inFlight.get(key);
-      if (pending) pending.invalidated = true;
-    }
+    });
+    await withTimeout(completion, undefined);
     return;
   }
   try {

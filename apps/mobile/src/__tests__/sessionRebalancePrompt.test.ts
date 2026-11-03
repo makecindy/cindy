@@ -14,8 +14,10 @@ import { PROVIDER_GROUP_REMOTE_CHANNEL } from '@cindy/device-link';
 import { i18n } from '@/i18n';
 import {
   askMobileSessionRebalance,
+  applyMobileSessionRebalancePreferencePatch,
   offerMobileSessionRebalance,
   prefetchMobileSessionRebalance,
+  SESSION_REBALANCE_QUERY_TIMEOUT_MS,
 } from '@/session/sessionRebalancePrompt';
 
 const MINI = 'device:mini:anthropic';
@@ -60,6 +62,51 @@ beforeEach(() => {
 });
 
 describe('offerMobileSessionRebalance', () => {
+  // Unit/远程写超时合同：手机 5 秒后照常发送，但继续收敛迟到的保存成功/失败。
+  it.each([true, false])('reconciles a late preference result instead of claiming a UI timeout failed (ok=%s)', async (ok) => {
+    vi.useFakeTimers();
+    try {
+      press('disable');
+      const invoke = invoker(reply('ask'));
+      const sessionId = `late-write-${ok}`;
+      await prefetchMobileSessionRebalance(invoke, 'pc', sessionId);
+      let resolve!: (value: unknown) => void;
+      const pending = new Promise<unknown>((done) => { resolve = done; });
+      invoke.mockImplementation(async (_device, _channel, args) =>
+        (args?.[0] as { action: string }).action === 'rebalance-preference' ? pending : reply('ask'));
+      const sending = offer(invoke, sessionId);
+      await vi.advanceTimersByTimeAsync(SESSION_REBALANCE_QUERY_TIMEOUT_MS);
+      await sending;
+      expect(alert).toHaveBeenCalledTimes(2);
+      await prefetchMobileSessionRebalance(invoke, 'pc', sessionId);
+      resolve({ ok });
+      await vi.advanceTimersByTimeAsync(0);
+      expect(alert).toHaveBeenCalledTimes(ok ? 2 : 3);
+      if (ok) await offer(invoke, sessionId);
+      expect(alert).toHaveBeenCalledTimes(ok ? 2 : 3);
+    } finally { vi.useRealTimers(); }
+  });
+  // Unit/§6.2：收到电脑上关闭的推送后，手机不能继续使用已缓存或在途的旧提议；按任务所属电脑隔离。
+  it('retires cached and pending proposals from another controller preference push', async () => {
+    const invoke = invoker(reply('ask'));
+    await prefetchMobileSessionRebalance(invoke, 'pc', 'remote-disabled');
+    await prefetchMobileSessionRebalance(invoke, 'other', 'remote-disabled');
+    let resolve!: (value: unknown) => void;
+    const response = new Promise<unknown>((done) => { resolve = done; });
+    invoke.mockImplementation(async () => response);
+    const pending = prefetchMobileSessionRebalance(invoke, 'pc', 'remote-disabled');
+    applyMobileSessionRebalancePreferencePatch('pc', 'remote-disabled', { providerGroupRebalanceEnabled: false });
+    const ask = vi.fn(async () => 'cancel' as const);
+    const input = { invoke, hostDeviceId: 'pc', sessionId: 'remote-disabled', clientId: 'm', ask };
+    await offerMobileSessionRebalance(input);
+    expect(ask).not.toHaveBeenCalled();
+    resolve(reply('ask'));
+    await pending;
+    await offerMobileSessionRebalance(input);
+    expect(ask).not.toHaveBeenCalled();
+    await offerMobileSessionRebalance({ ...input, hostDeviceId: 'other' });
+    expect(ask).toHaveBeenCalledTimes(1);
+  });
   // Unit/时序，§6.2：手机也丢弃关闭操作之前发出的、之后才到达的提议。
   it('discards a late suggestion after opting out', async () => {
     press('disable');

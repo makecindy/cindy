@@ -2643,7 +2643,12 @@ B 上的 Worker 是一条普通任务，`sessions.orca_remote_lead`(migration 01
 `enabled: false` 显式关闭本任务的配额均衡换号（含同账号自动接续），不关闭故障恢复或手动换电脑；
 `true` 删除该 override，恢复原默认/自动偏好。`sessionId` 沿用已有 id 校验，非布尔值回 `[INVALID_PARAMS]`。
 任务尚未归组或服务未装配回 `ok: false`；落盘失败不能回成功。关闭后清理未消费决定，发送前再次核对关闭状态，
-拒绝旧控制端的缓存 `rebalance-decision`。旧端不认识新动作时明确拒绝，控制端提示保存失败并在原位置发送，
+拒绝旧控制端的缓存 `rebalance-decision`。
+保存前读取当前组和任务实际位置核验归属，不能仅凭尚未清理的旧绑定写入。控制端 5 秒等待到期只释放发送，
+继续处理迟到的保存回包；不能把界面超时当作明确失败，连接错误提示保存结果未确认。
+成功保存后经已有 `local-db:sessions:patched` 广播可选布尔字段 `providerGroupRebalanceEnabled`，本机窗口与同账号
+控制端据此按任务电脑 + 任务 id 清理已缓存及在途提议；广播沿用写入前捕获的 owner scope。旧端忽略新字段。
+旧端不认识新动作时明确拒绝，控制端提示保存失败并在原位置发送，
 不得降级成换号确认。旧动作和旧客户端不变。
 
 持久文件新增可选 `disabledRebalance: { [sessionId]: at }`（每类偏好最多 4000 条），旧 `autoRebalance` 保留；

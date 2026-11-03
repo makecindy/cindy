@@ -803,7 +803,7 @@
     "remember": "改之，此后自动改（仅此差事）",
     "cancel": "罢",
     "disable": "此任务勿自动切换",
-    "disableFailed": "未能存此选择。请查连线，并确认任务所在电脑之 Cindy 已更新，再试。此讯仍照常送出。",
+    "disableFailed": "未能确认此选择已存。请查连线，并确认任务所在电脑之 Cindy 已更新，再试。此讯仍照常送出。",
     "moreOptions": "更多选项"
   },
   "messageEdit": {

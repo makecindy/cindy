@@ -808,7 +808,7 @@
     "remember": "Changer, et le faire automatiquement désormais (cette tâche uniquement)",
     "cancel": "Annuler",
     "disable": "Ne pas changer automatiquement (cette tâche)",
-    "disableFailed": "Impossible d’enregistrer votre choix. Vérifiez la connexion et que Cindy est à jour sur l’ordinateur où se trouve la tâche, puis réessayez. Ce message sera envoyé normalement.",
+    "disableFailed": "Impossible de confirmer si votre choix a été enregistré. Vérifiez la connexion et que Cindy est à jour sur l’ordinateur où se trouve la tâche, puis réessayez. Ce message sera envoyé normalement.",
     "moreOptions": "Plus d’options"
   },
   "messageEdit": {

@@ -911,7 +911,7 @@
       "cancel": "Ahora no",
       "remember": "Cambiar automáticamente sin volver a preguntar",
       "disable": "No cambiar automáticamente ni volver a preguntar",
-      "disableFailed": "No se pudo guardar tu elección. Comprueba la conexión y que Cindy esté actualizado en el ordenador donde está la tarea, e inténtalo de nuevo. Este mensaje se enviará con normalidad.",
+      "disableFailed": "No se pudo confirmar si se guardó tu elección. Comprueba la conexión y que Cindy esté actualizado en el ordenador donde está la tarea, e inténtalo de nuevo. Este mensaje se enviará con normalidad.",
       "choiceLabel": "Cambio de ordenador (solo esta tarea)",
       "send": "Enviar mensaje"
     },

@@ -2087,6 +2087,10 @@ export function createProviderGroupService(deps: ProviderGroupServiceDeps): Prov
 
     async rebalancePreference(sessionId, enabled) {
       if (!/^[A-Za-z0-9_-]{1,128}$/.test(sessionId) || !deps.readBinding(sessionId) || !deps.writeRebalanceEnabled) return false;
+      const bound = await withTimeout(loadBound(sessionId), PROVIDER_GROUP_BEFORE_SEND_TIMEOUT_MS);
+      if (!bound?.config) return false;
+      const row = await deps.readSessionRow(sessionId);
+      if (!row || !(await actualMemberKey(bound.source, bound.binding.providerId, bound.config, row))) return false;
       await deps.writeRebalanceEnabled(sessionId, enabled);
       // 另一控制端此前确认的换号也不能越过本任务的新选择。
       acceptedRebalance.delete(sessionId);

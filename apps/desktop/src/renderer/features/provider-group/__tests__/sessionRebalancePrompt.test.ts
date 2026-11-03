@@ -14,7 +14,7 @@ import { toast } from '@/lib/toast';
 
 vi.mock('@/lib/toast', () => ({ toast: { error: vi.fn() } }));
 
-import { offerSessionRebalance, prefetchSessionRebalance, SESSION_REBALANCE_CACHE_MS } from '../sessionRebalancePrompt';
+import { applySessionRebalancePreferencePatch, offerSessionRebalance, prefetchSessionRebalance, SESSION_REBALANCE_CACHE_MS, SESSION_REBALANCE_QUERY_TIMEOUT_MS } from '../sessionRebalancePrompt';
 
 const MINI = 'device:mini:anthropic';
 const t = i18n.t.bind(i18n) as TFunction;
@@ -46,6 +46,52 @@ afterEach(() => {
 });
 
 describe('offerSessionRebalance', () => {
+  // Unit/远程写超时合同：5 秒仅结束 UI 等待，迟到的成功仍清缓存，迟到的明确失败才通知。
+  it.each([true, false])('reconciles a preference write after the UI wait expires (ok=%s)', async (ok) => {
+    vi.useFakeTimers();
+    try {
+      const h = setup(async () => suggestion('ask'), { ok: true, choice: 'off' });
+      vi.mocked(toast.error).mockClear();
+      const sessionId = `late-write-${ok}`;
+      await prefetchSessionRebalance(sessionId);
+      let resolve!: (value: unknown) => void;
+      const pending = new Promise<unknown>((done) => { resolve = done; });
+      h.command.mockImplementation(async (request) => request.action === 'rebalance-preference' ? pending : suggestion('ask'));
+      const offer = offerSessionRebalance({ sessionId, confirm: h.confirm, t });
+      await vi.advanceTimersByTimeAsync(SESSION_REBALANCE_QUERY_TIMEOUT_MS);
+      await offer;
+      expect(toast.error).not.toHaveBeenCalled();
+      await prefetchSessionRebalance(sessionId);
+      resolve({ ok });
+      await vi.advanceTimersByTimeAsync(0);
+      expect(toast.error).toHaveBeenCalledTimes(ok ? 0 : 1);
+      if (ok) {
+        await offerSessionRebalance({ sessionId, confirm: h.confirm, t });
+        expect(h.confirm).toHaveBeenCalledTimes(1);
+      }
+    } finally { vi.useRealTimers(); }
+  });
+  // Unit/§6.2：另一控制端的偏好推送必须清除同任务的旧提议与迟到回包；其他电脑上的同名任务保留。
+  it('retires cached and pending proposals on a host-scoped preference push', async () => {
+    const h = setup(async () => suggestion('ask'));
+    const invoke = vi.fn(async (): Promise<unknown> => suggestion('ask'));
+    Object.assign(window.electronAPI!, { deviceLink: { invoke } });
+    await prefetchSessionRebalance('remote-disable');
+    await prefetchSessionRebalance('remote-disable', 'pc');
+    let resolve!: (value: unknown) => void;
+    const response = new Promise<unknown>((done) => { resolve = done; });
+    invoke.mockImplementation(async () => response);
+    const pending = prefetchSessionRebalance('remote-disable', 'pc');
+    applySessionRebalancePreferencePatch('remote-disable', { providerGroupRebalanceEnabled: false }, 'pc');
+    await offerSessionRebalance({ sessionId: 'remote-disable', hostDeviceId: 'pc', confirm: h.confirm, t });
+    expect(h.confirm).not.toHaveBeenCalled();
+    resolve(suggestion('ask'));
+    await pending;
+    await offerSessionRebalance({ sessionId: 'remote-disable', hostDeviceId: 'pc', confirm: h.confirm, t });
+    expect(h.confirm).not.toHaveBeenCalled();
+    await offerSessionRebalance({ sessionId: 'remote-disable', confirm: h.confirm, t });
+    expect(h.confirm).toHaveBeenCalledTimes(1);
+  });
   // Unit/时序，§6.2：弹窗期间刷新的旧提议晚于关闭操作返回，也不能使下一次发送再弹窗。
   it('invalidates suggestions that were already in flight when opting out', async () => {
     const h = setup(async () => suggestion('ask'), { ok: true, choice: 'off' });

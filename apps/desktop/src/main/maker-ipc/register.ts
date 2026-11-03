@@ -11881,7 +11881,11 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     readAutoRebalance: readProviderGroupAutoRebalance,
     writeAutoRebalance: (sessionId) => writeProviderGroupAutoRebalance(sessionId),
     readRebalanceDisabled: readProviderGroupRebalanceDisabled,
-    writeRebalanceEnabled: (sessionId, enabled) => writeProviderGroupRebalanceEnabled(sessionId, enabled),
+    writeRebalanceEnabled: async (sessionId, enabled) => {
+      const ownerScope = captureDataOwnerBroadcastScope();
+      await writeProviderGroupRebalanceEnabled(sessionId, enabled);
+      broadcastSessionPatched(sessionId, { providerGroupRebalanceEnabled: enabled }, ownerScope);
+    },
     now: () => Date.now(),
     log,
   });

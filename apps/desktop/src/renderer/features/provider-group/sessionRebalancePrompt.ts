@@ -12,6 +12,13 @@ import type { TFunction } from 'i18next';
 import { toast } from '@/lib/toast';
 import type { ConfirmOptions } from '@/components/ui/confirm-dialog-provider';
 import { SessionRebalanceChoices, type RebalanceChoice } from './SessionRebalanceChoices';
+import {
+  applySessionRebalancePreferencePatch,
+  prefetchedRebalances as prefetched,
+  inFlightRebalances as inFlight,
+  rebalanceCacheKey as cacheKey,
+} from './sessionRebalanceCache';
+export { applySessionRebalancePreferencePatch } from './sessionRebalanceCache';
 
 import { PROVIDER_GROUP_REMOTE_CHANNEL } from '@cindy/device-link';
 
@@ -34,13 +41,6 @@ const MAX_PREFETCHED = 200;
 type Confirm = (options: ConfirmOptions) => Promise<boolean>;
 
 type RebalanceRequest = Extract<ProviderGroupCommand, { action: 'rebalance-suggestion' | 'rebalance-decision' | 'rebalance-preference' }>;
-
-const prefetched = new Map<string, { at: number; suggestion: ProviderGroupRebalanceSuggestion }>();
-const inFlight = new Map<string, { invalidated: boolean }>();
-
-function cacheKey(sessionId: string, hostDeviceId: string | undefined): string {
-  return `${hostDeviceId ?? ''}\u0000${sessionId}`;
-}
 
 function withTimeout<T>(promise: Promise<T>, fallback: T): Promise<T> {
   return new Promise((resolve) => {
@@ -163,15 +163,15 @@ export async function offerSessionRebalance(options: {
   });
   if (!ok) return;
   if (selection.value === 'off') {
-    const result = await withTimeout(command(hostDeviceId, { action: 'rebalance-preference', sessionId, enabled: false }), null);
-    if (!result || typeof result !== 'object' || (result as { ok?: unknown }).ok !== true) {
-      toast.error(t('providerGroup.rebalance.disableFailed'));
-    } else {
-      const key = cacheKey(sessionId, hostDeviceId);
-      prefetched.delete(key);
-      const pending = inFlight.get(key);
-      if (pending) pending.invalidated = true;
-    }
+    // The UI budget only releases this send; the write may still finish on the task computer.
+    const completion = command(hostDeviceId, { action: 'rebalance-preference', sessionId, enabled: false }).then((result) => {
+      if (!result || typeof result !== 'object' || (result as { ok?: unknown }).ok !== true) {
+        toast.error(t('providerGroup.rebalance.disableFailed'));
+      } else {
+        applySessionRebalancePreferencePatch(sessionId, { providerGroupRebalanceEnabled: false }, hostDeviceId);
+      }
+    }, () => { toast.error(t('providerGroup.rebalance.disableFailed')); });
+    await withTimeout(completion, undefined);
     return;
   }
   return async (clientId) => { await recordDecision(sessionId, suggestion.memberKey, selection.value === 'auto', hostDeviceId, clientId); };

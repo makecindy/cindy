@@ -1381,6 +1381,15 @@ describe('switching accounts between messages to balance quota', () => {
     expect(await h.service.rebalanceSuggestion('s1')).toMatchObject({ kind: 'auto' });
   });
 
+  // Unit/协议：旧提议仍在但任务已经手动挪到组外时，不能凭未清理的绑定写入隐藏偏好。
+  it('does not save a preference after the task has moved outside its cached group', async () => {
+    const h = paced();
+    expect(await h.service.rebalanceSuggestion('s1')).not.toBeNull();
+    h.row.agentDeviceId = 'outside-group';
+    expect(await h.service.rebalancePreference('s1', false)).toBe(false);
+    expect(h.deps.writeRebalanceEnabled).not.toHaveBeenCalled();
+  });
+
   // Unit, §6.2：只关闭配额均衡；原电脑真正不可用时仍按故障恢复处理。
   it('keeps fault recovery after disabling quota balancing and reports preference write failure', async () => {
     const h = paced();

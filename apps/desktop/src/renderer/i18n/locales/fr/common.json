@@ -911,7 +911,7 @@
       "cancel": "Pas maintenant",
       "remember": "Changer automatiquement sans redemander",
       "disable": "Ne pas changer automatiquement ni redemander",
-      "disableFailed": "Impossible d’enregistrer votre choix. Vérifiez la connexion et que Cindy est à jour sur l’ordinateur où se trouve la tâche, puis réessayez. Ce message sera envoyé normalement.",
+      "disableFailed": "Impossible de confirmer si votre choix a été enregistré. Vérifiez la connexion et que Cindy est à jour sur l’ordinateur où se trouve la tâche, puis réessayez. Ce message sera envoyé normalement.",
       "choiceLabel": "Changement d’ordinateur (cette tâche uniquement)",
       "send": "Envoyer le message"
     },
