@@ -125,6 +125,7 @@ interface Running {
   lane?: string;
   laneLookup?: Promise<void>;
   context?: ExecutionContext;
+  attachmentAfter?: string;
   settlement?: { terminal: BotGroupLaneTerminal; cancelled?: boolean; payload?: Record<string, unknown>; reply?: { sourceText: string; text: string; attachments: ChatUploadAttachment[] }; fileReply?: Awaited<ReturnType<typeof prepareChatReplyFiles>>; retryAt: number; keepLease?: boolean };
   delivery?: Promise<void>;
   plan?: ServerPlan;
@@ -2263,6 +2264,21 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
         }
         if (!current() || running.get(run.execution.id) !== run || run.settlement !== pending) return;
         await updateExecution(run, pending.cancelled ? 'cancel' : pending.terminal.outcome === 'error' ? 'fail' : 'complete', pending.payload);
+        if (!pending.cancelled && pending.terminal.outcome !== 'error' && run.attachmentAfter !== undefined) {
+          // Remember only successful, fully delivered input. This is local progress,
+          // not server authority, and cannot cross an authorization or Thread lane.
+          try {
+            const settings = workspaces().read(run.execution.conversation_id) ?? { projectDir: null, plans: {} };
+            const previous = settings.attachmentAfter?.[run.sessionId] ?? '0';
+            if (BigInt(run.attachmentAfter) > BigInt(previous)) {
+              settings.attachmentAfter = { ...settings.attachmentAfter, [run.sessionId]: run.attachmentAfter };
+              workspaces().save(run.execution.conversation_id, settings);
+            }
+          } catch (error) {
+            // A progress-write failure may resend files, never fail/replay an already posted reply.
+            deps.log?.warn('Chat attachment progress was not saved', { error: error instanceof Error ? error.name : 'Error' });
+          }
+        }
         if (run.execution.mask_kind === 'digest' && !pending.cancelled && pending.terminal.outcome !== 'error') {
           const bot = localBot(run.execution.bot_id);
           if (bot && companion) await companion.receivePrivateReport(bot.id);
@@ -2469,7 +2485,13 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
           thread = { root: await rootRead, replies, earlierRepliesOmitted: replies.length >= 100 };
           if (source && !replies.some(message => message.id === source.id)) replies.push(source);
         }
-        const focusMessages = [source, thread?.root, ...(thread?.replies ?? [])].flatMap(message => message ? [message] : []);
+        // Explicit quotes can point outside the recent text window or behind progress.
+        // Read through the same authorized room endpoint; never trust a card's media/path.
+        const quote = !thread && source && !source.deleted ? readBotGroupQuote(source.content) : null;
+        const quoted = quote ? await readMessage(s.room.id, quote.messageId) : undefined;
+        const quotedMessage = quoted && !quoted.deleted && quoted.threadRootId === null
+          && BigInt(quoted.seq) <= BigInt(execution.context_seq) ? quoted : undefined;
+        const focusMessages = [source, quotedMessage, thread?.root, ...(thread?.replies ?? [])].flatMap(message => message ? [message] : []);
         const focus = new Set(focusMessages.map(message => message.id));
         // Text stays bounded, but unseen attachments may precede the latest text page.
         // The server watermark is scoped to this bot/grant/plan step and advances only on success.
@@ -2481,8 +2503,11 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
           ...talkPlan.steps.filter(step => step.position < execution.plan_step!).flatMap(step => step.resultMessageId ? [step.resultMessageId] : [])]) : null;
         const known = [...history, ...focusMessages.filter(message => !history.some(other => other.id === message.id))];
         const attachmentHistory = thread ? [...focusMessages] : talkIds ? known.filter(message => talkIds.has(message.id)) : known;
-        const after = BigInt(execution.attachment_after_seq ?? '0');
-        while (!thread && !talkIds && execution.attachment_after_seq !== undefined && page.length === 100) {
+        const lane = await laneSetup;
+        const localAfter = workspaces().read(s.room.id)?.attachmentAfter?.[lane.sessionId];
+        const after = [execution.attachment_after_seq, localAfter].reduce<bigint>((value, next) =>
+          next !== undefined && BigInt(next) > value ? BigInt(next) : value, 0n);
+        while (!thread && !talkIds && (execution.attachment_after_seq !== undefined || localAfter !== undefined) && page.length === 100) {
           const before = page.reduce((min, m) => BigInt(m.seq) < min ? BigInt(m.seq) : min, contextBefore);
           if (before <= after + 1n) break;
           page = await api<Message[]>(`/conversations/${s.room.id}/messages?all=true&limit=100&before=${before}`);
@@ -2504,7 +2529,7 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
           // Threads have their own lanes: the main lane never takes a Thread's files.
           if (message.threadRootId && !focus.has(message.id)) continue;
           if (message.deleted || block.type !== 'media' || !block.mediaId || mediaDelivery.has(block.mediaId)) continue;
-          if (BigInt(message.seq) <= after && !(thread && focus.has(message.id))) continue;
+          if (BigInt(message.seq) <= after && !focus.has(message.id)) continue;
           mediaDelivery.set(block.mediaId, 'not-included');
           candidates.push({ mediaId: block.mediaId, name: block.caption ?? block.mediaId });
         }
@@ -2523,6 +2548,8 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
           });
         }
         for (const candidate of candidates.slice(next)) missingAttachments.push(candidate.name);
+        // Do not consume failed/capped files: they remain eligible on the next request.
+        if (!missingAttachments.length) run.attachmentAfter = execution.context_seq;
         return { history, source, threadRootId, thread, focusMessages, attachments, missingAttachments, mediaDelivery };
       })();
       // Observed here so a read that fails after a failed setup is not an unhandled rejection.

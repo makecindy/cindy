@@ -1,9 +1,12 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-const fixture = vi.hoisted(() => ({ download: vi.fn(), handle: vi.fn(), profiles: [] as unknown[] }));
+const fixture = vi.hoisted(() => ({ download: vi.fn(), handle: vi.fn(), profiles: [] as unknown[], workspaces: new Map<string, unknown>() }));
 vi.mock('../../authManager.js', () => ({ getAccessToken: () => 'isolated-test-token', refresh: vi.fn(async () => true) }));
 vi.mock('../../clientEndpointsService.js', () => ({ getClientEndpoint: () => 'https://chat.cindy.app' }));
 vi.mock('../chatServerMedia.js', () => ({ createChatMedia: () => ({ upload: vi.fn(async () => []), download: fixture.download }) }));
-vi.mock('../chatServerWorkspaces.js', () => ({ chatServerWorkspaces: () => ({ read: () => null, save: vi.fn() }) }));
+vi.mock('../chatServerWorkspaces.js', () => ({ chatServerWorkspaces: () => ({
+  read: (room: string) => structuredClone(fixture.workspaces.get(room) ?? null),
+  save: (room: string, value: unknown) => fixture.workspaces.set(room, structuredClone(value)),
+}) }));
 vi.mock('../chatSendJournal.js', () => ({ chatSendJournal: () => ({ read: () => null, save: vi.fn(), confirm: vi.fn(), forgetRoom: vi.fn() }) }));
 vi.mock('../chatLocalHistory.js', () => ({ chatLocalHistory: () => ({ read: () => null, save: vi.fn(), forget: vi.fn() }) }));
 vi.mock('../chatMigrationReceipts.js', () => ({ chatMigrationReceipts: () => ({ read: () => null, save: vi.fn() }) }));
@@ -154,6 +157,7 @@ describe('Chat Server Thread context reaches the Agent input', () => {
     vi.setSystemTime(new Date('2026-10-13T00:00:00Z'));
     vi.stubEnv('XDT_ISOLATED', '1');
     ids = 100; seq = 0; messages = []; hidden = new Set(); queue = new Map(); executions = new Map(); completed = []; directPosts = 0; listExecutions = false; failNextRead = new Set();
+    fixture.workspaces.clear();
     fixture.profiles = bots.map(bot => ({ id: bot.local, displayName: bot.name, avatar: null, status: 'active' }));
     fixture.handle.mockImplementation(handle);
     fixture.download.mockImplementation(async (_room: string, mediaId: string) => ({ id: mediaId, name: mediaId, category: 'image', path: '/test/image', url: null }));
@@ -429,14 +433,54 @@ describe('Chat Server Thread context reaches the Agent input', () => {
     expect(inputs('nova')[0].message).not.toContain('release-plan.png');
   });
 
-  it('does not claim earlier delivery for a main request file behind the watermark', async () => {
+  it('delivers the current request file even behind another execution watermark', async () => {
     const request = post('大家看下这张图', { media: ['board.png'] });
     trigger(request, { attachment_after_seq: request.seq });
     await vi.advanceTimersByTimeAsync(2000);
     const input = inputs('nova')[0];
-    expect(input.attachments).toEqual([]);
-    expect(payload(input.message).currentRequest.attachments).toEqual([{ name: 'board.png', delivery: 'not-resent' }]);
-    expect(input.message).toContain('"not-resent" files were not attached this turn and earlier delivery cannot be confirmed');
+    expect(input.attachments?.map(a => a.id)).toEqual([request.content[1].mediaId]);
+    expect(payload(input.message).currentRequest.attachments).toEqual([{ name: 'board.png', delivery: 'included' }]);
+  });
+
+  // Regression: servers without attachment_after_seq sent the same ten images on
+  // every greeting. Exercise dispatch/settlement/restart, not a selection helper (unit).
+  it('remembers successful lane progress without a server watermark and still resolves old image quotes', async () => {
+    const pictures = Array.from({ length: 10 }, (_, n) => post(`old image ${n}`, { media: [`old-${n}.png`] }));
+    const first = post('@Nova 在吗？', { mentions: [bots[0].id] });
+    trigger(first);
+    await vi.advanceTimersByTimeAsync(2000);
+    expect(inputs('nova')[0].attachments).toHaveLength(10);
+    await settle('nova', '在。');
+    service.dispose();
+    service = withChatServer({ listGroups: vi.fn(async () => ({ ok: true, groups: [] })), settleLaneTurn: vi.fn(async () => false), dispose: vi.fn() } as unknown as BotGroupChatService, deps);
+    const second = post('@Nova 回复 1', { mentions: [bots[0].id] });
+    trigger(second);
+    await vi.advanceTimersByTimeAsync(2000);
+    expect(inputs('nova')[1].attachments).toEqual([]);
+    expect(payload(inputs('nova')[1].message).currentRequest.text).toBe('@Nova 回复 1');
+    await settle('nova', '1');
+    for (let n = 0; n < 105; n++) post(`later text ${n}`);
+    const quoted = post('@Nova 这张图片是什么？', { mentions: [bots[0].id] });
+    quoting(quoted, pictures[0], { count: 1, name: 'old-0.png' });
+    trigger(quoted);
+    await vi.advanceTimersByTimeAsync(2000);
+    expect(inputs('nova')[2].attachments?.map(a => a.id)).toEqual([pictures[0].content[1].mediaId]);
+  });
+
+  it('does not consume failed downloads or share attachment progress with another lane', async () => {
+    const picture = post('截图', { media: ['board.png'] });
+    fixture.download.mockRejectedValueOnce(new Error('download failed'));
+    trigger(post('@Nova 看图', { mentions: [bots[0].id] }));
+    await vi.advanceTimersByTimeAsync(2000);
+    expect(inputs('nova')[0].attachments).toEqual([]);
+    await settle('nova', '图片暂时没收到。');
+    trigger(post('@Nova 再试一次', { mentions: [bots[0].id] }));
+    await vi.advanceTimersByTimeAsync(2000);
+    expect(inputs('nova')[1].attachments?.map(a => a.id)).toEqual([picture.content[1].mediaId]);
+    await settle('nova', '已看到。');
+    trigger(post('@Pico 看图', { mentions: [bots[1].id] }));
+    await vi.advanceTimersByTimeAsync(2000);
+    expect(inputs('pico')[0].attachments?.map(a => a.id)).toEqual([picture.content[1].mediaId]);
   });
 
   it('keeps a main-group request in the main lane without Thread replies', async () => {

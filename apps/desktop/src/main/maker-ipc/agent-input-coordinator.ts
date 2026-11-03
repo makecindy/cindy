@@ -3289,7 +3289,16 @@ export class AgentInputCoordinator {
     const continuationOnly = providerRestart || Boolean(
       opts?.auto && isAcceptedTurnContinuationOnlyReason(previousAutoResumeInfo?.reason),
     );
-    let continueText = CONTINUE_AFTER_ERROR_PROMPT;
+    // Group inputs are hidden in the transcript and omitted by engine handoff.
+    // Carry the actual interrupted request as context, even on CONTINUE-only
+    // recovery; a bare "continue" can otherwise answer an unrelated old turn.
+    const groupRecovery = recovery.kind === 'active-turn'
+      && isBotGroupClientId(recovery.item.retrySourceClientId ?? recovery.item.clientId);
+    let continueText = groupRecovery && recovery.kind === 'active-turn'
+      ? recovery.item.originalSyntheticTrigger === 'continue'
+        ? recovery.item.text
+        : `${recovery.item.text}\n\n${CONTINUE_AFTER_ERROR_PROMPT}`
+      : CONTINUE_AFTER_ERROR_PROMPT;
     if (providerRestart) {
       continueText += '\n\n[Host recovery] The provider process stopped or restarted during the previous turn.'
         + (automatic ? ' Cindy is automatically continuing the interrupted task in the original conversation.'
@@ -3399,8 +3408,9 @@ export class AgentInputCoordinator {
           // 人工 Retry 是新的真人介入周期，不能继承上一轮隐藏自动消息的标记；自动路径
           // 则把展示信息随消息落库，成为「已重新连接」活动行的 param 位与展开详情。
           autoResumeInfo: automatic ? (automaticResumeInfo ?? undefined) : undefined,
-          // 附件 / mention 属于原始消息,已在失败 turn 里送达过模型,续跑指令不重带。
-          files: undefined,
+          // Ordinary retries keep files in their native history. Hidden group inputs
+          // may be absent after handoff, so retain their files with the request.
+          files: groupRecovery ? recovery.item.files : undefined,
           mentions: undefined,
           // retry-supersede 只属于零产出克隆重发。续跑分支的原消息是真实历史,
           // 不取代;展开继承的旧值若留着,落库后会把本轮"有产出失败"的 error 行

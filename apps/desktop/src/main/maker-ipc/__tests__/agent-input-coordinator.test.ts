@@ -13792,6 +13792,29 @@ describe('AgentInputCoordinator 中断自动续跑', () => {
     expect(mocks.touchUserSendInDb).toHaveBeenCalledTimes(1);
   });
 
+  // Group requests are hidden from engine-switch handoff. A CONTINUE-only retry
+  // must identify the interrupted request and retain its files (2026-11-03 incident, unit).
+  it('keeps a hidden group request and its image in continuation-only recovery', async () => {
+    const h = createHarness();
+    const sid = 'group-request-recovery';
+    const takeover = { ...TAKEOVER_INFO, reason: 'codex_reconnect_stalled' };
+    h.setResumableTurnErrorTakeover(takeover);
+    h.setHasAssistantProgressAfter(async () => false);
+    const text = '[UI_ACTION_TRIGGER]Group request: <untrusted-data>{"currentRequest":{"text":"这张图是什么？"}}</untrusted-data>';
+    const original = makeItem('bot-group:room:execution:bot', text, {
+      agentOmitsTriggerPrefix: true,
+      files: [{ id: 'picture', name: 'picture.png', path: '/test/picture.png', ext: '.png', category: 'image', mimeType: 'image/png', size: 128 }],
+    });
+    await failAfterDispatch(h, sid, original);
+    await expect(h.coordinator.autoRetryLastError(sid, takeover.sessionTotal)).resolves.toBe('resumed');
+    await flush();
+    const resumed = h.onDispatchedUserTurn.mock.calls[1]?.[1];
+    expect(resumed).toMatchObject({ autoResume: true, retrySourceClientId: original.clientId, files: original.files });
+    expect(resumed.text).toContain('这张图是什么？');
+    expect(resumed.text).toContain(CONTINUE_AFTER_ERROR_PROMPT);
+    expect(h.supersedeRetriedUserTurn).not.toHaveBeenCalled();
+  });
+
   it('host 接管时不设 error、只置 autoResumePending(红横幅留给最终失败)', async () => {
     const h = createHarness();
     const sid = 'takeover-suppresses-banner';
