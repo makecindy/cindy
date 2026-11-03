@@ -1,0 +1,88 @@
+{
+  "cachedHistory": {
+    "title": "De'wI' not rarta'",
+    "hint": "qonlu' content is DuH. Connect your De'wI' to load latlh."
+  },
+  "recovery": {
+    "syncing": "Syncing…",
+    "recovered": "Restored",
+    "syncingHint": "Updating content from your De'wI'."
+  },
+  "syncFailed": "Sync Qagh",
+  "resync": "qenqa'",
+  "resyncing": "Resyncing",
+  "syncShort": "Sync",
+  "deviceUnresponsiveTitle": "Qo' response yet",
+  "deviceUnresponsiveHint": "Qo' jang received yet. Retrying automatically.",
+  "localNetwork": {
+    "title": "wabwI' Web DuHbe'",
+    "hint": "Check your wabwI'’s Web. Reconnection is automatic when it recovers."
+  },
+  "serviceConnection": {
+    "title": "Cannot reach the service",
+    "hint": "Your wabwI' cannot reach the service right DaH. Reconnecting automatically."
+  },
+  "connectStep1": "chagh and poSmoH {{appName}} chu' your De'wI'",
+  "connectStep2": "Hotlh in with the same account as your wabwI'",
+  "connectStep3": "Under SeHlaw' → nov rar, turn chu' \"chaw same-account janmey to control this De'wI'\"",
+  "brandEyebrow": "Cindy Mobile",
+  "cloudTeaserTitle": "{{appName}} in the Cloud, Coming Soon",
+  "cloudTeaserCopy": "Once it launches, the mobile app works chu' its own, Qo' De'wI' needed.",
+  "sectionFirstRun": "Get qavlu'",
+  "sectionOffline": "rarta' janmey",
+  "sectionRemoteDisabled": "chu' Your De'wI'",
+  "sectionAccessRevoked": "Approve Access Again",
+  "retryAccess": "vangqa' Access",
+  "recheck": "qaSpa' yIbej",
+  "deviceRemovedTitle": "jan removed",
+  "deviceRemovedHint": "Hotlh out and Hotlh in again to rejoin the jan list.",
+  "authFailedTitle": "Sign-in expired",
+  "authFailedHint": "Your sign-in has expired. Hotlh out and Hotlh in again.",
+  "replacedTitle": "rar replaced",
+  "replacedHint": "This jan rar was replaced elsewhere. Reconnecting DaH.",
+  "tooManyConnectionsTitle": "Too many rarmey",
+  "tooManyConnectionsHint": "Too many janmey are Web for this account. Disconnect another jan and try again.",
+  "versionMismatchTitle": "juv mismatch",
+  "versionMismatchHint": "This app juv is incompatible with the service. choHqa' to the latest juv and try again.",
+  "unstableTitle": "rar keeps dropping",
+  "unstableHint": "rar is unstable. Check your Web and wait for the rar to recover.",
+  "relay": {
+    "label": {
+      "online": "Relay rarta'",
+      "connecting": "Connecting to Relay",
+      "stopped": "Relay rarHa'lu'"
+    },
+    "hint": {
+      "online": "nov Qu'mey can be synced.",
+      "lastSynced": "Last synced {{time}}",
+      "connecting": "nov Qu'mey will resubscribe automatically when the Web recovers.",
+      "stopped": "The rar will hu'qa' when you return to the app or Hotlh in again."
+    }
+  },
+  "agentAuth": {
+    "noKey": "{{agent}} can't be lo'lu' because Qo' API ngItlh is configured chu' the De'wI'. Configure one in {{appName}} chu' the De'wI' under SeHlaw' → model providermey, then try again.",
+    "noOauth": "{{agent}} can't be lo'lu' because account authorization isn't complete chu' the De'wI'. Reconnect the account in {{appName}} chu' the De'wI' under SeHlaw' → model providermey, then try again.",
+    "noCredentials": "{{agent}} can't be lo'lu' because it isn't Hotlhlu' in chu' the De'wI'. Hotlh in through {{appName}} chu' the De'wI' under SeHlaw' → model providermey, then try again.",
+    "noEncryption": "{{agent}} can't be lo'lu' because secure system storage chu' the De'wI' is DuHbe'. Check Keychain chu' macOS or account encryption chu' Windows, then chu'qa' {{appName}} chu' the De'wI'.",
+    "proxyNotReady": "{{agent}} isn't ready chu' the De'wI' yet. Try again shortly; if this continues, chu'qa' {{appName}} chu' the De'wI'.",
+    "default": "{{agent}} can't be lo'lu' because its De'wI' sign-in is DuHbe'. Hotlh in again through {{appName}} chu' the De'wI' under SeHlaw' → model providermey. ({{reason}})"
+  },
+  "remoteError": {
+    "remoteDisabled": "The nov De'wI' has SoQlu' nov control.",
+    "channelNotAllowed": "The current desktop juv doesn't support this nov capability.",
+    "accessRevoked": "This De'wI' has revoked mobile access.",
+    "deviceUnresponsive": "Qo' jang received yet. Retrying automatically.",
+    "versionMismatch": "The service protocol juv doesn't match. choHqa' the app and try again.",
+    "payloadTooLarge": "This transfer is too large. Split it into smaller parts and try again.",
+    "mediaFetchFailed": "The nav couldn't be fetched from the De'wI'. Try again later.",
+    "voiceTranscribeFailed": "jach transcription Qagh. Try again or use the ngItlh mo.",
+    "linkNotOpen": "The control He to the De'wI' was rarHa'lu' and is reconnecting.",
+    "accountChanged": "The Codex account or juH mIch changed. chu'qa' the quota and vang again.",
+    "offerExpired": "The Codex chegh offer expired. chu'qa' the quota and vang again.",
+    "preconditionFailed": "The operation conditions changed. chu'qa' and vang again.",
+    "transient": "The Web or nov De'wI' is temporarily DuHbe'. Sync again later.",
+    "callFailed": "The nov call did not finish. Try again in a moment.",
+    "unclassified": "This action did not finish. Try again in a moment.",
+    "notFound": "That item Qo' longer exists. Go chegh to the list and chu'qa' before trying again."
+  }
+}

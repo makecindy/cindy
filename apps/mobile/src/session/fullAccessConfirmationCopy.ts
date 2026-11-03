@@ -14,6 +14,7 @@ import frInteraction from "@/i18n/locales/fr/interaction.json";
 import deInteraction from "@/i18n/locales/de/interaction.json";
 import ptPTInteraction from "@/i18n/locales/pt-PT/interaction.json";
 import ptBRInteraction from "@/i18n/locales/pt-BR/interaction.json";
+import tlhInteraction from "@/i18n/locales/tlh/interaction.json";
 import type { SupportedLocale } from "@/i18n/locale";
 import { BRAND_NAME } from "@cindy/maker-shared/branding";
 
@@ -55,6 +56,7 @@ export const FULL_ACCESS_CONFIRMATION_COPY: Record<
   "de": project(deInteraction),
   "pt-PT": project(ptPTInteraction),
   "pt-BR": project(ptBRInteraction),
+  tlh: project(tlhInteraction),
   en: project(enInteraction),
   ja: project(jaInteraction),
   ko: project(koInteraction),

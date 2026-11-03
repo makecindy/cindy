@@ -20,6 +20,7 @@ import koCommon from "@/i18n/locales/ko";
 import zhTWCommon from "@/i18n/locales/zh-TW";
 import lzhHantCommon from "@/i18n/locales/zh-Hant-x-lzh";
 import lzhHansCommon from "@/i18n/locales/zh-Hans-x-lzh";
+import tlhCommon from "@/i18n/locales/tlh";
 import { SUPPORTED_LOCALES } from "@/i18n/locale";
 
 const CATALOGS: Record<string, unknown> = {
@@ -35,6 +36,7 @@ const CATALOGS: Record<string, unknown> = {
   "zh-TW": zhTWCommon,
   "zh-Hant-x-lzh": lzhHantCommon,
   "zh-Hans-x-lzh": lzhHansCommon,
+  tlh: tlhCommon,
 };
 
 /** 展平嵌套 catalog 为 dot-path → 叶子字符串。遇到非 string 叶子直接失败。 */

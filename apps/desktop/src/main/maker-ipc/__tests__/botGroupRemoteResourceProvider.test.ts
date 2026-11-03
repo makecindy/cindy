@@ -275,6 +275,7 @@ describe('bot group remote resources', () => {
       'pt-PT': 'Taylor juntou-se ao grupo', 'pt-BR': 'Taylor se juntou ao grupo',
       'zh-Hant-x-lzh': 'Taylor入群議',
       'zh-Hans-x-lzh': 'Taylor入群议',
+      tlh: "Taylor ghunDaq 'elpu'",
     } });
   });
 

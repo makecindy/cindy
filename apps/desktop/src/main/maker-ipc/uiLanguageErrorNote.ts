@@ -21,6 +21,7 @@ const INTERFACE_LANGUAGE_NAME: Record<SupportedLocale, string> = {
   "pt-BR": "Português (Brasil)",
   "zh-Hant-x-lzh": "文言（繁體）",
   "zh-Hans-x-lzh": "文言（简体）",
+  tlh: "tlhIngan Hol",
 };
 
 export function isSupportedUiLanguage(value: unknown): value is SupportedLocale {

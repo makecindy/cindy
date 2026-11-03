@@ -1,0 +1,356 @@
+{
+  "localLogs": {
+    "upload": "ngeH De' QIn",
+    "uploadResult": {
+      "unavailable": "De' QIn ngeH is DuHbe' in this chenmoH.",
+      "consentRequired": "Accept the Privacy Policy before uploading De' QIn.",
+      "empty": "Qo' recent De' QIn. Enable recording and reproduce the problem first.",
+      "failed": "ngeH Qagh. De' QIn are still qonlu' chu' this wabwI'."
+    },
+    "title": "Debug De' QIn",
+    "record": "Record De' QIn",
+    "export": "ngeHHur De' QIn",
+    "clear": "Clear De' QIn",
+    "busy": "SengtaH…",
+    "failed": "Unable to qon or share De' QIn. Please try again.",
+    "clearHint": "teq the qonlu' diagnostic De' QIn?",
+    "cancel": "mev",
+    "uploadCopied": "De' QIn uploaded. code {{code}} copied",
+    "uploadSucceeded": "De' QIn uploaded. code {{code}}",
+    "footer": "De' QIn stay chu' this wabwI' for up to 7 jupmey or 8 MB and are qaSbe' uploaded automatically. Exported De' QIn exclude conversation Hol and credentials; uploads ngeH only filtered run records and juv info."
+  },
+  "title": "SeHlaw'",
+  "appearance": {
+    "title": "bej",
+    "modeLabel": "bej Mode",
+    "options": {
+      "system": "Auto (follow system)",
+      "light": "Light",
+      "dark": "Dark"
+    },
+    "saveFailed": "Qagh to qon bej mode. The qav setting will return after chu'qa'.",
+    "userBubble": {
+      "title": "My QIn bubble color",
+      "presets": "Color",
+      "default": "qav",
+      "peach": "First Draft",
+      "yellow": "Daybreak",
+      "sage": "Spark",
+      "blue": "Dreamscape",
+      "lavender": "Night Cat",
+      "red": "Red Collar",
+      "custom": "Custom color",
+      "hue": "Hue",
+      "preview": "QIn preview",
+      "sampleUser": "QaH me organize DaH’s ideas.",
+      "sampleAssistant": "Sure, let’s work through your ideas together.",
+      "hint": "Adjusts for light and dark mode so Hol stays readable. qonlu' chu' this jan only.",
+      "customHint": "Drag the color strip to pick a hue. Adjusts for light and dark mode; qonlu' chu' this jan only.",
+      "saveFailed": "The color is applied for DaH but could not be qonlu'.",
+      "retry": "vangqa'",
+      "cancel": "mev",
+      "reset": "chegh to qav",
+      "apply": "lo'",
+      "hex": "Color value"
+    }
+  },
+  "language": {
+    "title": "Hol",
+    "hint": "lo'lu' for the interface and AI Qagh reports. Other replies follow your QIn or Hol request.",
+    "options": {
+      "system": "Auto (follow system)",
+      "zh-CN": "简体中文",
+      "zh-TW": "繁體中文",
+      "en": "English",
+      "ja": "日本語",
+      "ko": "한국어",
+      "es": "Español",
+      "fr": "Français",
+      "de": "Deutsch",
+      "pt-PT": "Português (Portugal)",
+      "pt-BR": "Português (Brasil)",
+      "classical": "文言",
+      "tlh": "tlhIngan Hol"
+    },
+    "classical": {
+      "label": "Script and style",
+      "hint": "AI replies in the chosen style. “Usual replies” keeps the Classical Chinese interface while replies follow your Hol.",
+      "scriptAriaLabel": "Classical Chinese script",
+      "styleAriaLabel": "AI jang style",
+      "script": {
+        "hans": "简体",
+        "hant": "繁體"
+      },
+      "styles": {
+        "prose": "Classical prose (qav)",
+        "tang-poetry": "Tang poetry",
+        "song-ci": "Song ci",
+        "yuan-qu": "Yuan qu",
+        "chu-ci": "Chu ci",
+        "parallel-prose": "Parallel prose",
+        "pre-qin": "Pre-Qin masters",
+        "historian": "Grand Historian style",
+        "ming-qing-essay": "Ming–Qing essays",
+        "plain": "Usual replies"
+      }
+    }
+  },
+  "version": {
+    "sectionTitle": "juv",
+    "updateMethodInApp": "Updates chagh in the app and lo' after a chu'qa'.",
+    "updateMethodPackage": "ngeHHa' and chagh the chu' juv to choHqa'.",
+    "updateMethodUnavailable": "Development builds can’t choHqa' in the app.",
+    "checkAction": "Check for Updates",
+    "testFlightCheckAction": "Check for Content Updates",
+    "checking": "Checking",
+    "checkingAccessibility": "Checking for updates",
+    "testFlightCheckingAccessibility": "Checking for content updates",
+    "testFlightUpdateManaged": "chagh chu' tor builds from TestFlight.",
+    "testFlightNoContentUpdate": "Qo' content choHqa' DuH.",
+    "testFlightContentUpdateUnavailable": "This chenmoH can’t check for content updates.",
+    "googlePlayUpdateManaged": "choHqa' to chu' versions from Google Play.",
+    "googlePlayNoContentUpdate": "Qo' content choHqa' DuH.",
+    "googlePlayContentUpdateUnavailable": "This chenmoH can’t check for content updates.",
+    "bundleUpdateFound": "App package choHqa' DuH",
+    "upToDate": "Already up to jup",
+    "bundleUpToDateNoOta": "Up to jup. This juv doesn’t support hot updates.",
+    "downloadedRestarting": "choHqa' downloaded, restarting",
+    "downloadedRestartRequired": "choHqa' downloaded. Fully quit and reopen the app to lo' it.",
+    "bundleCheckFailed": "Could not check for app package updates. Try again later.",
+    "checkFailedDetail": "choHqa' check Qagh: {{detail}}",
+    "checkFailed": "choHqa' check Qagh. Try again later.",
+    "currentLabel": "Current juv",
+    "pairedDesktopLabel": "Paired desktop juv"
+  },
+  "betaChannel": {
+    "title": "Beta chenmey",
+    "badge": "Beta",
+    "description": "Get upcoming client updates early. Content updates are downloaded chu' the ghIq choHqa' check and take effect after an app chu'qa'.",
+    "saveFailed": "Qagh to qon beta chenmey setting",
+    "unavailable": "The beta chenmey is DuHbe' — could not reach the beta choHqa' server."
+  },
+  "notifications": {
+    "sectionTitle": "jachmey",
+    "taskDone": "QIn and Qu' jachmey",
+    "taskDoneHint": "Get notified about chat QInmey and Qu'mey that finish, fail, or need your jang.",
+    "permissionDenied": "chaw Cindy jachmey in your system SeHlaw'.",
+    "unregisterQueued": "Turned SoQlu'. Unregistering will finish once you’re chegh Web.",
+    "preview": "tu' chat previews",
+    "background": "qon chat rarta' in background",
+    "backgroundActive": "Receiving chat QInmey in background",
+    "backgroundStop": "mev receiving",
+    "backgroundHint": "The background rar works without Google and shows an ongoing jach. You can mev it from that jach.",
+    "googleUnavailable": "Google push is DuHbe'. Enable the background chat rar to receive QInmey."
+  },
+  "about": {
+    "sectionTitle": "About This wabwI'",
+    "deviceName": "jan pong",
+    "deviceNameDetail": "Shown in the De'wI'’s authorization list.",
+    "platform": "Platform",
+    "editAccessibility": "choH {{label}}"
+  },
+  "relay": {
+    "online": "Relay rarta'",
+    "connecting": "Connecting to Relay",
+    "stopped": "Relay not rarta'",
+    "lastSynced": "Last synced {{time}}",
+    "canSync": "nov Qu'mey can sync.",
+    "reconnectHint": "nov Qu'mey will resubscribe automatically when the Web recovers.",
+    "resumeHint": "The rar resumes when you return to the app or Hotlh in again."
+  },
+  "header": {
+    "notSignedIn": "Not Hotlhlu' in",
+    "thisPhone": "This wabwI'"
+  },
+  "debug": {
+    "sectionTitle": "Debug / Developer",
+    "userId": "lo'wI' ID",
+    "notSynced": "Not synced",
+    "deviceId": "jan ID",
+    "initializing": "Initializing",
+    "authServer": "Auth server",
+    "authRegion": "Sign-in Region"
+  },
+  "devServerEnvironment": {
+    "title": "server Environment",
+    "description": "Only affects the backend CindyDev connects to",
+    "accessibility": "Switch server environment",
+    "options": {
+      "dev": "Dev",
+      "release": "ngeH"
+    },
+    "confirmTitle": "Switch to {{environment}}?",
+    "confirmBody": "Switching signs you out and restarts the app.",
+    "cancel": "mev",
+    "switchAction": "Switch",
+    "switching": "Switching",
+    "switchFailed": "Could not switch the server environment. Try again."
+  },
+  "updateInfo": {
+    "embedded": "With app package",
+    "embeddedFallback": "With app package (OTA not applied)",
+    "unknown": "Sovbe'",
+    "source": "SengtaH Source",
+    "sourceEmbedded": "Embedded (with app package)",
+    "sourceEmergencyFallback": "Embedded (emergency launch; OTA not applied)",
+    "sourceOta": "OTA choHqa'",
+    "updateId": "choHqa' ID",
+    "updatedAt": "Updated At",
+    "channel": "chenmey",
+    "runtime": "Runtime",
+    "otaMarker": "OTA Marker",
+    "emergencyLaunch": "Emergency Launch",
+    "emergencyLaunchYes": "HIja' (OTA cannot lo' in this run)",
+    "otaVersion": "OTA juv"
+  },
+  "legal": {
+    "sectionTitle": "Legal",
+    "privacyPolicy": "Privacy Policy",
+    "userAgreement": "lo'wI' Agreement",
+    "view": "View",
+    "openPrivacyPolicy": "poSmoH the privacy policy",
+    "openUserAgreement": "poSmoH the lo'wI' agreement",
+    "appFilingNumber": "App Filing Number",
+    "analytics": "lo' statistics",
+    "analyticsHint": "Helps us understand launches and retention. Reports jan info such as model, OS and app juv, and a jan identifier, plus your account ID once Hotlhlu' in; qaSbe' conversations, navmey, or prompts.",
+    "analyticsSaveFailed": "Couldn't qon this setting; it may revert after a chu'qa'.",
+    "analyticsReset": "chegh to qav",
+    "analyticsResetAction": "chegh"
+  },
+  "account": {
+    "logoutConfirmTitle": "Hotlh out?",
+    "logoutConfirmRunning": "Some Qu'mey are still SengtaH. They qon SengtaH chu' your De'wI', but this wabwI' stops receiving and controlling them, and every account and local mirror qonlu' chu' this wabwI' is cleared.",
+    "logoutHint": "Clears every account and the nov mirror chu' this wabwI'. Qu'mey chu' your De'wI' are not affected.",
+    "logout": "Hotlh Out",
+    "loggingOut": "Signing out",
+    "loggingOutAccessibility": "Signing out"
+  },
+  "copyRow": {
+    "action": "nIb",
+    "done": "Copied",
+    "accessibility": "nIb {{label}}"
+  },
+  "voiceDictionary": {
+    "sectionTitle": "jach dictionary",
+    "label": "View dictionary",
+    "hint": "choH the dictionary chu' a De'wI'; it syncs automatically. Read-only chu' this wabwI'.",
+    "openAccessibility": "View jach dictionary",
+    "screenTitle": "jach dictionary",
+    "entryCount": "{{count}} terms",
+    "aliasSeparator": ", ",
+    "aliases": "Often misheard as: {{aliases}}",
+    "refresh": "chu'qa'",
+    "refreshing": "Refreshing…",
+    "refreshAccessibility": "chu'qa' dictionary",
+    "readOnlyHint": "View chu' your wabwI'; chel or teq entries chu' a De'wI'.",
+    "offlineHint": "Your De'wI'mey are Web Hur. Showing the last synced dictionary.",
+    "noDesktops": "Hotlh in to the same account chu' a De'wI' to sync your dictionary."
+  },
+  "voiceSpeakerFilter": {
+    "actionFailed": "The choH could not be qonlu'. Please try again.",
+    "title": "Recognize my jach",
+    "sectionTitle": "Voiceprint filter",
+    "label": "Recognize my jach",
+    "entryHint": "Mutes other people during jach input. Your voiceprint stays chu' this wabwI'.",
+    "openAccessibility": "poSmoH recognize my jach SeHlaw'",
+    "on": "chu'",
+    "off": "SoQlu'",
+    "hint": "Mutes other people during jach input so only your speech is transcribed; speech overlapping yours can’t be fully removed. Your voiceprint is encrypted chu' this wabwI' and qaSbe' uploaded or synced.",
+    "unsupported": "This juv of the app does not support voiceprints. choHqa' to the latest juv.",
+    "model": {
+      "title": "Recognition model",
+      "needed": "First use downloads a recognition model of about {{size}}. Wi-Fi recommended.",
+      "download": "ngeHHa' recognition model",
+      "downloading": "Downloading ({{done}} / {{total}})",
+      "cancel": "mev ngeHHa'",
+      "retry": "ngeHHa' again",
+      "failed": {
+        "network": "The recognition model Qagh to ngeHHa'. Check your Web and try again.",
+        "disk": "The recognition model could not be qonlu'. Check your phone's free storage and try again.",
+        "checksum": "The downloaded recognition model Qagh verification. Try again.",
+        "unavailable": "The recognition model is DuHbe' right DaH. Try again later."
+      }
+    },
+    "profile": {
+      "title": "Voiceprint",
+      "missing": "Qo' voiceprint yet",
+      "missingHint": "Record your voiceprint to enable filtering.",
+      "enrolled": "Voiceprint recorded",
+      "enrolledAt": "Recorded {{date}}",
+      "enroll": "Record voiceprint",
+      "reenroll": "Record again",
+      "delete": "teq voiceprint",
+      "deleteConfirm": {
+        "title": "teq voiceprint?",
+        "description": "jach input will mev filtering out other people until you record your voiceprint again.",
+        "confirm": "teq",
+        "cancel": "mev"
+      }
+    },
+    "strictness": {
+      "label": "Strictness",
+      "hint": "Stricter keeps out latlh voices but may also pe' your own words in noisy places.",
+      "restoreDefault": "Restore qav",
+      "options": {
+        "relaxed": "Relaxed",
+        "standard": "Standard",
+        "strict": "Strict"
+      }
+    },
+    "enroll": {
+      "description": "Read the {{clips}} passages below in your normal jach. Each recording lasts up to {{seconds}} seconds; mev recording when you finish reading. Record where you usually use jach input, with Qo' one else talking.",
+      "step": "Passage {{current}} of {{total}}",
+      "record": "qav reading",
+      "stop": "mev Recording",
+      "rerecord": "Record this one again",
+      "recording": "Recording… {{seconds}} seconds left",
+      "saving": "Creating voiceprint…",
+      "submit": "Finish",
+      "cancel": "mev",
+      "passages": {
+        "p1": "This morning I will go over the plan for the loS, and in the afternoon I will list the questions we need to discuss and ngeH them out so everyone can read them first.",
+        "p2": "If the weather is nice tomorrow, we can mej a little earlier, pick up some fruit and snacks chu' the way, and have lunch in the park.",
+        "p3": "Please make this Hol latlh concise, qon the ngItlh numbers and conclusions, and then sum up the main points in three to five sentences."
+      },
+      "errors": {
+        "too_short": "Too little speech was detected in passage {{index}}. Record it again.",
+        "no_embedding": "Qo' voiceprint could be read from passage {{index}}. Record it again.",
+        "inconsistent": "Passage {{index}} does not sound like the same person as the others; another jach or noise may have been picked up. Record it again.",
+        "models_missing": "The recognition model has not finished downloading. Try again shortly.",
+        "storage_unavailable": "The system keychain is DuHbe', so the voiceprint cannot be stored encrypted. Try again later.",
+        "failed": "The voiceprint could not be created. Try again.",
+        "microphone": "The microphone cannot be lo'lu'. Check microphone chaw and try again.",
+        "noAudio": "Qo' sound came from the microphone. Check it and try again."
+      },
+      "stepChoice": "Passage {{index}}, {{status}}",
+      "stepStatus": {
+        "pending": "Not recorded",
+        "recorded": "Recorded",
+        "retry": "Record again",
+        "recording": "Recording"
+      },
+      "rerecordStep": "Record Passage {{index}} Again",
+      "readHint": "qav when you are ready. mev recording when you finish reading.",
+      "otherClipsKept": "Your other recordings have been kept."
+    }
+  },
+  "deviceNameEditor": {
+    "screenTitle": "jan pong",
+    "placeholder": "wabwI' pong",
+    "resetAccessibility": "Restore the qav wabwI' pong",
+    "emptyError": "jan pong cannot be chIch.",
+    "deviceInitializing": "The jan is still initializing. Try again later.",
+    "restoredDefault": "Restored the qav pong.",
+    "resetAction": "Restore qav pong",
+    "clearAccessibility": "Clear pong",
+    "discardTitle": "wuH choHmey?",
+    "discardBody": "Your choHmey to the jan pong haven’t been qonlu'.",
+    "discardConfirm": "wuH choHmey",
+    "keepEditing": "qon Editing"
+  },
+  "developer": {
+    "title": "Developer",
+    "identity": "Identifiers",
+    "updateInfo": "choHqa' info"
+  }
+}

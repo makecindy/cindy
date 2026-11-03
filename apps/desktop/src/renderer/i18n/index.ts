@@ -23,6 +23,8 @@ import lzhCommon from './locales/zh-Hant-x-lzh/common.json';
 import lzhAiRename from './locales/zh-Hant-x-lzh/aiRename.json';
 import lzhHansCommon from './locales/zh-Hans-x-lzh/common.json';
 import lzhHansAiRename from './locales/zh-Hans-x-lzh/aiRename.json';
+import tlhCommon from './locales/tlh/common.json';
+import tlhAiRename from './locales/tlh/aiRename.json';
 import i18n from 'i18next';
 import { initReactI18next } from 'react-i18next';
 import { BRAND_NAME } from '@cindy/maker-shared/branding';
@@ -77,6 +79,7 @@ const resources = {
     },
     aiRename: lzhHansAiRename,
   },
+  tlh: { common: tlhCommon, aiRename: tlhAiRename },
   en: {
     common: {
       ...enCommon,

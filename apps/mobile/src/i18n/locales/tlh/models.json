@@ -1,0 +1,118 @@
+{
+  "picker": {
+    "title": "model",
+    "permissionTitle": "chawmey",
+    "searchAccessibility": "nej modelmey",
+    "searchPlaceholder": "nej modelmey…",
+    "noResults": "Qo' matching modelmey",
+    "emptyDefault": "Qo' modelmey DuH",
+    "loadingDefault": "loSlu' modelmey…",
+    "subscriptionBadge": "subscription",
+    "subscriptionBadgeCompact": "Sub",
+    "backToModels": "chegh to model list",
+    "agentSwitchHint": "After you pick a model, the ghIq QIn switches to {{agent}}",
+    "crossAgentEmptyHint": "Connect a {{agent}} model source chu' the nov jan first",
+    "permissionModeAccessibility": "chaw mode: {{mode}}",
+    "selectProviderModelAccessibility": "wuq {{model}} from {{provider}}",
+    "selectModelAccessibility": "wuq {{model}}",
+    "configureAccessibility": "Configure {{model}}",
+    "budgetDisabledHint": "This model needs an API ngItlh configured chu' the nov jan first",
+    "priceLine": "Input {{input}} · Output {{output}} / million tokenmey",
+    "priceTitle": "Per 1M tokenmey",
+    "priceAmounts": "Input {{input}} · Output {{output}}",
+    "discountedVsStandard": "Discounted · {{percent}}% SoQlu' standard",
+    "contextSuffix": "{{size}} Dav",
+    "fastTag": "Fast"
+  },
+  "options": {
+    "speed": {
+      "label": "Speed",
+      "standard": "Standard",
+      "fast": "Fast",
+      "ultrafast": "Ultrafast"
+    },
+    "fastMode": "Fast Mode",
+    "fastModeAccessibility": "Fast mode {{model}}",
+    "reasoningEffort": "Reasoning Effort",
+    "reasoningEffortAccessibility": "Reasoning effort {{label}}",
+    "effortLevels": {
+      "minimal": "Minimal",
+      "low": "Low",
+      "medium": "Medium",
+      "high": "High",
+      "xhigh": "Extra High",
+      "max": "Maximum",
+      "ultra": "Ultra"
+    }
+  },
+  "contextWindowSwitch": {
+    "title": "This model can't rap the current conversation",
+    "remoteTitle": "This nov model switch isn't supported",
+    "description": "This conversation already uses {{used}}, latlh than the chu' model can hold ({{total}}, about {{pct}}%). If you switch, Cindy will make a short qon and taH. Your chat history stays; it just won't naQ be passed through verbatim.",
+    "remoteDescription": "This nov Qu' already uses {{used}} / {{total}} of the smaller model's Dav (about {{pct}}%), so Cindy cannot switch safely. qon the current model or qav a chu' Qu' before choosing this model.",
+    "cancel": "qon this model",
+    "confirm": "Switch and taH"
+  },
+  "switchOutcome": {
+    "applied": "model provider switch is DaH in effect.",
+    "failed": "model provider switch Qagh. Choose the model again."
+  },
+  "agentSwitch": {
+    "browseAccessibility": "Browse {{agent}} modelmey",
+    "confirmTitle": "Switch to {{agent}}?",
+    "confirmMessage": "When you ngeH the ghIq QIn, {{appName}} hands the current Qu' over to {{agent}}. The two Agentmey may interpret Dav and tools differently, so vang before choosing the target model.",
+    "cancel": "mev",
+    "confirm": "taH"
+  },
+  "agentRelocation": {
+    "titleOther": "Run the Agent chu' “{{device}}”?",
+    "titleHost": "Run the Agent chu' “{{host}}” again?",
+    "titleHostUnnamed": "Run the Agent chu' the Qu'’s De'wI' again?",
+    "message": "The conversation record chu' the other De'wI' can’t be moved over, so it continues from a handoff qon. QubtaH and similar De' may not carry over completely. Takes effect when you ngeH the ghIq QIn.",
+    "messageNativeHistory": "The full conversation record is copied over and continues from where it left SoQlu'. If it can’t be restored, it continues from a handoff qon instead, and QubtaH and similar De' may not carry over completely. Takes effect when you ngeH the ghIq QIn.",
+    "confirm": "Switch De'wI'",
+    "cancel": "qon as is"
+  },
+  "unified": {
+    "favoriteConfiguration": "bang This Configuration",
+    "savedConfiguration": "Favorited · Tap to teq",
+    "currentConfiguration": "Current Configuration",
+    "usingRecommended": "Using Recommended SeHlaw'",
+    "customized": "Customized",
+    "resetScopeHint": "Restore Recommended resets the Harnesss, reasoning effort, and Fast. Existing bangmey stay unchanged.",
+    "saveFavoriteHint": "qon these SeHlaw' for quick access from bangmey.",
+    "removeFavoriteHint": "Removing the tlhegh leaves your current SeHlaw' unchanged.",
+    "editFavorite": "choH Original bang",
+    "editFavoriteHint": "choHmey lo' to this bang only after qonlu'. The configuration in use stays unchanged.",
+    "saveFavorite": "qon bang",
+    "cancelEdit": "mev Editing",
+    "originalFavoriteKept": "SeHlaw' updated. The original bang is unchanged.",
+    "parametersSaved": "SeHlaw' qonlu'.",
+    "restoredHint": "Recommended SeHlaw' restored. Existing bangmey are unchanged.",
+    "favoriteRemoved": "bang removed. Current SeHlaw' are unchanged.",
+    "favoriteSaved": "Configuration added to bangmey.",
+    "favoriteUpdated": "bang updated. The configuration in use is unchanged.",
+    "favoriteChanged": "This bang was changed or removed. mev editing and reopen it to try again.",
+    "favoriteExists": "This configuration is already in bangmey. mev editing to use it.",
+    "favorites": "bangmey",
+    "all": "naQ modelmey",
+    "recommended": "Recommended",
+    "source": "Source",
+    "remoteProvider": "{{provider}} · {{device}}",
+    "remoteProviderGroup": "{{provider}} · {{device}} · {{group}}",
+    "providerGroup": "{{provider}} · {{group}}",
+    "groupBadge_one": "provider ghun · {{count}} De'wI'",
+    "groupBadge_other": "provider ghun · {{count}} De'wI'mey",
+    "harness": "Harness",
+    "restoreRecommended": "Restore recommended",
+    "saveFailed": "Could not qon. Please try again.",
+    "configure": "Configure",
+    "syncFailed": "bangmey could not sync. Reopen the picker to vangqa'; the nov De'wI' may need an choHqa'.",
+    "timeUnit": {
+      "day": "d",
+      "hour": "h",
+      "minute": "m",
+      "second": "s"
+    }
+  }
+}

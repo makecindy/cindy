@@ -60,6 +60,22 @@ export const ENDPOINT_MANIFEST_DIALOG_COPY: Record<
   EndpointManifestDialogLocale,
   EndpointManifestDialogCopy
 > = {
+  tlh: {
+    networkTitle: "DaH Cindy rarlaHbe'",
+    configTitle: "DaH Cindy chenmoHlaHbe'",
+    networkBody: "chenDI' Cindy De' rarbe'lu'. De'wI' Web chu' 'a' yIbej, yIvangqa'. Proxy jaH joq Dalo'taHchugh, Web yIchoH.",
+    configBody: "DaH chenmoH rInbe'lu'. pIj yIvangqa'. taHbe'chugh, QaHwI' yInge'.",
+    errorLine: "Qagh: {{error}}",
+    diagnosticsHint: "QaH poQchugh, De' nIb — QaH QInDaq yIlanchu'.",
+    copyDiagnosticsButton: "De' nIb",
+    copiedHint: "De' nIbta'. QaH QInDaq yIngeH.",
+    copyFailedHint: "De' nIb Qagh. yIvangqa'.",
+    noSavedConfigurationHint: "De'wI'vam qon tu'be'. rarqa' poQqu'.",
+    offlineHint: "qon chu' Dalo'laH ({{savedAt}}). Web poQ Doch Qapbe'.",
+    retryButton: "Cindy chenmoHqa'",
+    offlineButton: "qon chu' lo'",
+    quitButton: "mej Cindy",
+  },
   'zh-CN': {
     networkTitle: 'Cindy 暂时无法连接',
     configTitle: 'Cindy 暂时无法启动',

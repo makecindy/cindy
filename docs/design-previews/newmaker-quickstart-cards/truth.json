@@ -487,6 +487,14 @@
             "locator": "newChat.createAgent.quickStarts.explore",
             "hash": "80ac523f1f14b66091ef266c9082f9c5fcfa46c19a83d4395dcf50019dd2637f"
           }
+        },
+        "tlh": {
+          "value": "Explore and understand code",
+          "provenance": {
+            "source": "../../../apps/desktop/src/renderer/i18n/locales/tlh/common.json",
+            "locator": "newChat.createAgent.quickStarts.explore",
+            "hash": "49db053c59f79f541ba54f1bae42cf6e3358c7518444a11bf75d2a668839aea7"
+          }
         }
       }
     },
@@ -602,6 +610,14 @@
             "source": "../../../apps/desktop/src/renderer/i18n/locales/zh-Hans-x-lzh/common.json",
             "locator": "newChat.createAgent.quickStarts.build",
             "hash": "80ac523f1f14b66091ef266c9082f9c5fcfa46c19a83d4395dcf50019dd2637f"
+          }
+        },
+        "tlh": {
+          "value": "chenmoH a feature, app, or tool",
+          "provenance": {
+            "source": "../../../apps/desktop/src/renderer/i18n/locales/tlh/common.json",
+            "locator": "newChat.createAgent.quickStarts.build",
+            "hash": "49db053c59f79f541ba54f1bae42cf6e3358c7518444a11bf75d2a668839aea7"
           }
         }
       }
@@ -719,6 +735,14 @@
             "locator": "newChat.createAgent.quickStarts.review",
             "hash": "80ac523f1f14b66091ef266c9082f9c5fcfa46c19a83d4395dcf50019dd2637f"
           }
+        },
+        "tlh": {
+          "value": "bej code and suggest choHmey",
+          "provenance": {
+            "source": "../../../apps/desktop/src/renderer/i18n/locales/tlh/common.json",
+            "locator": "newChat.createAgent.quickStarts.review",
+            "hash": "49db053c59f79f541ba54f1bae42cf6e3358c7518444a11bf75d2a668839aea7"
+          }
         }
       }
     },
@@ -834,6 +858,14 @@
             "source": "../../../apps/desktop/src/renderer/i18n/locales/zh-Hans-x-lzh/common.json",
             "locator": "newChat.createAgent.quickStarts.fix",
             "hash": "80ac523f1f14b66091ef266c9082f9c5fcfa46c19a83d4395dcf50019dd2637f"
+          }
+        },
+        "tlh": {
+          "value": "Fix Issuemey and failures",
+          "provenance": {
+            "source": "../../../apps/desktop/src/renderer/i18n/locales/tlh/common.json",
+            "locator": "newChat.createAgent.quickStarts.fix",
+            "hash": "49db053c59f79f541ba54f1bae42cf6e3358c7518444a11bf75d2a668839aea7"
           }
         }
       }
@@ -1152,6 +1184,14 @@
           "locator": "newChat.createAgent.quickStart",
           "hash": "80ac523f1f14b66091ef266c9082f9c5fcfa46c19a83d4395dcf50019dd2637f"
         }
+      },
+      "tlh": {
+        "value": "Quick qav",
+        "provenance": {
+          "source": "../../../apps/desktop/src/renderer/i18n/locales/tlh/common.json",
+          "locator": "newChat.createAgent.quickStart",
+          "hash": "49db053c59f79f541ba54f1bae42cf6e3358c7518444a11bf75d2a668839aea7"
+        }
       }
     }
   },
@@ -1249,6 +1289,14 @@
       "provenance": {
         "hash": "4fdab9d79466d01f3876806e1f0fed4e36670d0c5ced911d72cbba5917c3854b",
         "locator": "SUPPORTED_LOCALES[11]",
+        "source": "../../../apps/desktop/src/shared/locale.ts"
+      }
+    },
+    {
+      "value": "tlh",
+      "provenance": {
+        "hash": "77a2bddf9c131b3b19f59e0bf0975c697fb3ca277959bdf4fca0b551f80fcf1e",
+        "locator": "SUPPORTED_LOCALES[12]",
         "source": "../../../apps/desktop/src/shared/locale.ts"
       }
     }

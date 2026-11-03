@@ -55,6 +55,43 @@ export interface ApplicationMenuLabels {
 }
 
 export const APPLICATION_MENU_LABELS: Record<ApplicationMenuLocale, ApplicationMenuLabels> = {
+  tlh: {
+    about: "{{appName}} Sov",
+    hide: "So' {{appName}}",
+    quit: "mej {{appName}}",
+    settings: "SeHlaw'…",
+    checkForUpdates: "choHqa' nej…",
+    fileMenu: "nav",
+    newMaker: "chu' Qu'",
+    viewMenu: "bej",
+    toggleSidebar: "Hur mIch choH",
+    windowMenu: "Qorwagh",
+    helpMenu: "QaH",
+    help: "QaH",
+    releaseNotes: "chu' Dochmey",
+    issues: "ghu' ja'",
+    installCli: "PATH Daq {{cmd}} chagh",
+    installCliConfirmTitle: "chagh'a' {{cmd}} PATH Daq?",
+    installCliConfirmDetail:
+      "{{path}}Daq Cindy rarlu'. pa' nav tu'chugh, teqlu'. ghItlhwo'Daq {{cmd}} . ra'DI' jom poSmoH Cindy — ngItlh poQqu'.",
+    installCliConfirmOk: "chagh",
+    installCliCancel: "mev",
+    installCliSuccessTitle: "chaghlu' {{cmd}}",
+    installCliSuccessDetail:
+      "{{path}}Daq chaghlu'. chu' ghItlhwo' yIpoSmoH. {{cmd}} . yIra'. tu'be'lu'chugh — PATH Daq mIch yIlanchu'.",
+    installCliErrorTitle: "chagh Qagh",
+    installCliErrorDetail: "chaghlaHbe' {{cmd}}.",
+    installCliDevOnlyTitle: "chenmoH ghun neH",
+    installCliDevOnlyDetail:
+      "qengmey chagh Qapbe' — ghun Electron neH. chenmoH {{appName}}vo' yIchagh.",
+    installCliUnsupportedTitle: "Qapbe' De'wI'vam",
+    installCliUnsupportedDetail: "PATH chagh — macOS neH.",
+    installCliNotInApplicationsTitle: "neH: Applications mIchDaq {{appName}} yIqeng",
+    installCliNotInApplicationsDetail:
+      "{{appName}} juHvo' Seng (Applications mIch Hur). chaghchugh, juH He luhotlh — mejDI' app QapHa'. neH: Applications mIchDaq yIqeng. tagha' chagh.",
+    installCliMoveToApplications: "Applications mIchDaq qeng",
+    performanceTrace: "Qap Huv…",
+  },
   'zh-CN': {
     about: '关于 {{appName}}',
     hide: '隐藏 {{appName}}',

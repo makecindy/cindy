@@ -15,6 +15,132 @@ import { getManualLocaleOverride } from "@/i18n/appLanguage";
 export type LoginLocale = SupportedLocale;
 
 const messages = {
+  tlh: {
+    title: "CindyDaq yIHotlh",
+    phonePlaceholder: "phone mI'",
+    emailPlaceholder: "email So''",
+    invalidEmail: "email lugh yIpoQ.",
+    invalidPhone: "phone mI' lugh yIpoQ.",
+    continue: "taH",
+    apple: "Apple lo'taH",
+    google: "Google lo'taH",
+    wechat: "WeChat lo'taH",
+    chooseMethod: "Hotlh mIch yIwuq",
+    orgDetected: '{email} — ghun "{org}".',
+    enterpriseLogin: "ghun Hotlh",
+    personalLogin: "lo'wI' Hotlh",
+    emailCode: "email code ngeH",
+    ssoRequired: "ghun poQ SSO Hotlh.",
+    ssoEntry: "SSO ghun Hotlh",
+    consentStatement:
+      "jIlaD 'ej jIchup <terms>Qun chut</terms> je <privacy>SeH chut</privacy>",
+    consentDialogTitle: "Qun chut je SeH chut",
+    consentDialogBody:
+      "yIlaD 'ej yIchup: Cindy <terms>Qun chut</terms> je <privacy>SeH chut</privacy>.",
+    consentAgree: "jIchup",
+    consentDisagree: "DaH Qo'",
+    ssoOrgTitle: "ghun SSO",
+    ssoOrgSubtitle:
+      "ghun ID, slug joq So' He yIpoS — SSO vaD taH.",
+    ssoOrgPlaceholder: "ghun ID, slug, He",
+    ssoOrgHint: "Sovbe'chugh — ghun SeHwI' DaSuj.",
+    ssoOrgDetected: '"{org}" vaD SSO mIch yIwuq',
+    realmConsentTitle: "ghun Sep rar",
+    realmConsentPersonalTitle: "ghun Hotlh DuH",
+    realmConsentPersonalBodyCn: "ghun tu'lu' Mainland ChinaDaq.\nSSO lo' joq account lo'taH.",
+    realmConsentPersonalBodyGlobal: "ghun tu'lu' Global SepDaq.\nSSO lo' joq account lo'taH.",
+    realmConsentEnterpriseLogin: "SSO ghun Hotlh",
+    realmConsentContinuePersonal: "lo'wI' taH",
+    realmConsentBodyCn:
+      "ghun Mainland ChinaDaq tu'lu'.\nCindy Sepvam rarlu' poQ.",
+    realmConsentBodyGlobal:
+      "ghun Global SepDaq tu'lu'.\nCindy Sepvam rarlu' poQ.",
+    realmConsentAgree: "Hotlh taH",
+    realmConsentDisagree: "mev",
+    ssoVerificationTitle: "ghun pong yIngu'",
+    ssoVerificationSubtitle:
+      "wa'DIch Hotlh: IdP ja'bogh {target} ngu'nISlu'.",
+    enterCode: "code yIpoS",
+    codeSentTo: "code ngeHlu' —",
+    codePlaceholder: "6 mI' code",
+    signIn: "Hotlh",
+    resendCode: "code ngeHqa'",
+    captchaTitle: "nen QaD",
+    captchaFailed: "nen QaD chu'laHbe'. Web yIbej, yIvangqa'.",
+    captchaRetry: "vangqa'",
+    captchaCancel: "mev",
+    resendCountdown: "{n} tup yIloS — ngeHqa' DuH.",
+    chooseAccount: "account yIwuq",
+    chooseAccountSubtitle:
+      "lo'wI' joq ghun account yIwuq.",
+    personalAccount: "lo'wI' account",
+    bindPhoneTitle: "phone yIngu'",
+    bindPhoneSubtitle:
+      "phone ngu'lu' poQ — Hotlh rInmoHmeH.",
+    bindEmailTitle: "email yIngu'",
+    bindEmailSubtitle:
+      "email ngu'lu' poQ — Hotlh rInmoHmeH.",
+    sendCode: "code ngeH",
+    back: "chegh",
+    cancel: "mev",
+    browserTitle: "ghItlhwo'Daq Hotlh rInmoH",
+    browserSubtitle: "CindyDaq cheghqa'.",
+    working: "Seng…",
+    configTitle: "Hotlh SeH rInbe'",
+    accountDeletionPendingTitle: "pong teq qonlu'",
+    accountDeletionProcessingTitle: "pong teq SengtaH",
+    accountDeletionCompletedTitle: "pong teqlu'pu'",
+    accountDeletionPendingCopy:
+      "{date} teq qonlu'. DaH Hotlhchugh teq mevlu'.",
+    accountDeletionProcessingCopy:
+      "Cindy Hotlh pong teqlu'taH. rInchugh beQ teqlu'.",
+    accountDeletionCompletedCopy: "Cindy Hotlh pong teqlu'pu'.",
+    accountDeletionDismiss: "jIyaj'",
+    accountDeletionSettingsAction: "pong teq",
+    accountDeletionScreenTitle: "pong teq",
+    accountDeletionLoading: "pong ghu' nejlu'…",
+    accountDeletionUnavailableTitle: "DuHbe' ghu'vetlh",
+    accountDeletionUnavailableCopy: "SeHlaw'Daq yIchegh, pIj yIvangqa'.",
+    accountDeletionVerifyTitle: "lo'wI' ngu'moH",
+    accountDeletionCodeSent:
+      "{target}Daq code ngeHlu'. 10 tup poS.",
+    accountDeletionAcknowledgeA11y: "pong teq Qap yIyaj",
+    accountDeletionAcknowledgeCopy:
+      "jIyaj: janvam poSlu' qaSpa'; latlh jan poSlu' Hotlh QapHa'DI'; 30 jup Hotlhchugh teq mevlu'; tagha' Cindy pong beQ teqlu' — cheghlaHbe'.",
+    accountDeletionConfirmingA11y: "teq qonlu' taH",
+    accountDeletionConfirmA11y: "pong teq qon",
+    accountDeletionConfirming: "qonlu'taH",
+    accountDeletionConfirm: "pong yIteq",
+    accountDeletionBeforeTitle: "teq paS ghu'",
+    accountDeletionImpactCurrentClient:
+      "janvam poSlu' qaSpa'. latlh jan poSlu' Hotlh QapHa'DI'.",
+    accountDeletionImpactGrace:
+      "30 jup loSlu'. Hotlhchugh teq mevlu'.",
+    accountDeletionImpactPermanent:
+      "loS DIchIdaq — Cindy pong beQ teqlu'.",
+    accountDeletionAppleNotice:
+      "Apple Hotlh lo'chugh — Apple ID SeHlaw'Daq Cindy mevlu' poQ.",
+    accountDeletionCodeWillSend: "{target}Daq code ngeHlu'.",
+    accountDeletionSendingCode: "ngeHlu'taH",
+    accountDeletionErrorChallenge: "code mI' joq poS. yIvangqa'.",
+    accountDeletionErrorAttempts: "vangmey law'qu'. chu' code yIngeH.",
+    accountDeletionErrorRate: "qep law'. loS yIvangqa'.",
+    accountDeletionErrorPending: "teq qonlu'pu' — ghu'vam.",
+    accountDeletionErrorProcessing: "teq SengtaH — ghu'vam.",
+    accountDeletionErrorUnavailable: "DaH DuHbe' ghu'vam.",
+    accountDeletionErrorNetwork: "Web yIbej.",
+    accountDeletionErrorFallback: "rInbe' vang. pIj yIvangqa'.",
+    accountDeletionRestoredTitle: "pong qonqa'lu'",
+    accountDeletionRestoredCopy: "Hotlh teq mevlu'. Cindy pong qonlu'taH.",
+    errorFallback: "Hotlh rInbe'. yIvangqa'.",
+    endpointGateTitle: "De' SeH chu'laHbe'",
+    endpointGateSubtitle:
+      "Web yIbej, yIvangqa' ({reason})",
+    endpointGateResetToDev: "Dev chegh",
+    retry: "vangqa'",
+    configIssueAuthBaseUrl:
+      "Hotlh De' So' — http(s) URL poQqu'.",
+  },
   "zh-TW": {
     title: "登入 Cindy",
     phonePlaceholder: "輸入手機號",
@@ -1481,7 +1607,8 @@ export function loginText(key: LoginMessageKey): string {
 
 /** 登录错误码 → 多语文案(与 catalog 同一 locale 解析;导出供 parity/闸门测试)。 */
 export const authErrorMessages: Record<string, Record<LoginLocale, string>> = {
-  INVALID_CODE: {
+ INVALID_CODE: {
+    tlh: "code mI' joq poS.",
     "zh-CN": "验证码无效或已过期。",
     "zh-TW": "驗證碼無效或已過期。",
     "zh-Hant-x-lzh": "驗證碼無效或已逾期。",
@@ -1496,7 +1623,8 @@ export const authErrorMessages: Record<string, Record<LoginLocale, string>> = {
   "pt-PT": "O código de verificação é inválido ou está expirado.",
   "pt-BR": "O código de verificação é inválido ou expirou.",
 },
-  INVALID_PARAMS: {
+ INVALID_PARAMS: {
+    tlh: "gheltlhwI' yIbej.",
     "zh-CN": "输入内容格式不正确。",
     "zh-TW": "輸入內容格式不正確。",
     "zh-Hant-x-lzh": "所書之格式有誤。",
@@ -1511,7 +1639,8 @@ export const authErrorMessages: Record<string, Record<LoginLocale, string>> = {
   "pt-PT": "Verifique os dados que introduziu.",
   "pt-BR": "Verifique os dados que você digitou.",
 },
-  RATE_LIMITED: {
+ RATE_LIMITED: {
+    tlh: "vangmey law'. loS, yIvangqa'.",
     "zh-CN": "操作过于频繁，请稍后再试。",
     "zh-TW": "操作過於頻繁，請稍後再試。",
     "zh-Hant-x-lzh": "操作過頻，請稍後再試。",
@@ -1526,7 +1655,8 @@ export const authErrorMessages: Record<string, Record<LoginLocale, string>> = {
   "pt-PT": "Demasiadas tentativas. Aguarde e tente novamente.",
   "pt-BR": "Muitas tentativas. Aguarde e tente novamente.",
 },
-  SSO_LOGIN_REQUIRED: {
+ SSO_LOGIN_REQUIRED: {
+    tlh: "ghun poQ SSO Hotlh.",
     "zh-CN": "该邮箱所属企业要求通过 SSO 登录。",
     "zh-TW": "該電子郵件所屬企業要求透過 SSO 登入。",
     "zh-Hant-x-lzh": "此電子郵件所屬企業，須以 SSO 登門。",
@@ -1541,7 +1671,8 @@ export const authErrorMessages: Record<string, Record<LoginLocale, string>> = {
   "pt-PT": "Esta organização exige início de sessão com SSO.",
   "pt-BR": "Esta organização exige login com SSO.",
 },
-  INVALID_RESPONSE: {
+ INVALID_RESPONSE: {
+    tlh: "jang Sovbe'. pIj yIvangqa'.",
     "zh-CN": "登录服务返回了无法识别的结果，请稍后重试。",
     "zh-TW": "登入服務返回了無法識別的結果，請稍後再試。",
     "zh-Hant-x-lzh": "登入服務所返之結果無從辨識，請稍後再試。",
@@ -1556,7 +1687,8 @@ export const authErrorMessages: Record<string, Record<LoginLocale, string>> = {
   "pt-PT": "O serviço de início de sessão devolveu um resultado desconhecido. Tente novamente mais tarde.",
   "pt-BR": "O serviço de login retornou um resultado desconhecido. Tente novamente mais tarde.",
 },
-  AUTH_SERVICE_UNAVAILABLE: {
+ AUTH_SERVICE_UNAVAILABLE: {
+    tlh: "Hotlh Qapbe' DaH. pIj yIvangqa'.",
     "zh-CN": "登录服务暂不可用，请稍后重试。",
     "zh-TW": "登入服務暫不可用，請稍後再試。",
     "zh-Hant-x-lzh": "登入服務暫不可用，請稍後再試。",
@@ -1571,7 +1703,8 @@ export const authErrorMessages: Record<string, Record<LoginLocale, string>> = {
   "pt-PT": "O serviço de início de sessão está temporariamente indisponível. Tente novamente mais tarde.",
   "pt-BR": "O serviço de login está temporariamente indisponível. Tente novamente mais tarde.",
 },
-  CAPTCHA_REQUIRED: {
+ CAPTCHA_REQUIRED: {
+    tlh: "nen QaD wa' DichIdaq rInmoHlu' poQ.",
     "zh-CN": "请先完成安全验证。",
     "zh-TW": "請先完成安全驗證。",
     "zh-Hant-x-lzh": "請先完成安全驗證。",
@@ -1586,7 +1719,8 @@ export const authErrorMessages: Record<string, Record<LoginLocale, string>> = {
   "pt-PT": "Conclua primeiro a verificação de segurança.",
   "pt-BR": "Conclua a verificação de segurança primeiro.",
 },
-  CAPTCHA_INVALID: {
+ CAPTCHA_INVALID: {
+    tlh: "nen QaD Qagh. yIvangqa'.",
     "zh-CN": "安全验证未通过，请重试。",
     "zh-TW": "安全驗證未通過，請重試。",
     "zh-Hant-x-lzh": "安全驗證未通過，請再試。",
@@ -1601,7 +1735,8 @@ export const authErrorMessages: Record<string, Record<LoginLocale, string>> = {
   "pt-PT": "A verificação de segurança falhou. Tente novamente.",
   "pt-BR": "A verificação de segurança falhou. Tente novamente.",
 },
-  CAPTCHA_UNAVAILABLE: {
+ CAPTCHA_UNAVAILABLE: {
+    tlh: "nen QaD Qapbe' DaH. pIj yIvangqa'.",
     "zh-CN": "安全验证服务暂不可用，请稍后再试。",
     "zh-TW": "安全驗證服務暫時無法使用，請稍後再試。",
     "zh-Hant-x-lzh": "安全驗證服務暫不可用，請稍後再試。",
@@ -1616,7 +1751,8 @@ export const authErrorMessages: Record<string, Record<LoginLocale, string>> = {
   "pt-PT": "A verificação de segurança está temporariamente indisponível. Tente novamente mais tarde.",
   "pt-BR": "A verificação de segurança está temporariamente indisponível. Tente novamente mais tarde.",
 },
-  INVALID_AUTH_CODE: {
+ INVALID_AUTH_CODE: {
+    tlh: "chaw' poS. qaSpa' yIchenqa'.",
     "zh-CN": "登录授权已过期，请重新发起。",
     "zh-TW": "登入授權已過期，請重新發起。",
     "zh-Hant-x-lzh": "登入授權已過期，請重新發起。",
@@ -1631,7 +1767,8 @@ export const authErrorMessages: Record<string, Record<LoginLocale, string>> = {
   "pt-PT": "A autorização expirou. Recomece.",
   "pt-BR": "A autorização expirou. Comece novamente.",
 },
-  INVALID_LOGIN_TICKET: {
+ INVALID_LOGIN_TICKET: {
+    tlh: "wuq poS. bovangqa'.",
     "zh-CN": "身份选择已过期，请重新登录。",
     "zh-TW": "身分選擇已過期，請重新登入。",
     "zh-Hant-x-lzh": "身分之擇已過期，請重新登門。",
@@ -1646,7 +1783,8 @@ export const authErrorMessages: Record<string, Record<LoginLocale, string>> = {
   "pt-PT": "A seleção da conta expirou. Inicie sessão novamente.",
   "pt-BR": "A seleção da conta expirou. Entre novamente.",
 },
-  INVALID_BIND_TICKET: {
+ INVALID_BIND_TICKET: {
+    tlh: "Hotlh ngu' poS. bovangqa'.",
     "zh-CN": "绑定流程已过期，请重新登录。",
     "zh-TW": "綁定流程已過期，請重新登入。",
     "zh-Hant-x-lzh": "綁定流程已過期，請重新登門。",
@@ -1661,7 +1799,8 @@ export const authErrorMessages: Record<string, Record<LoginLocale, string>> = {
   "pt-PT": "A verificação expirou. Inicie sessão novamente.",
   "pt-BR": "A verificação expirou. Entre novamente.",
 },
-  STATE_MISMATCH: {
+ STATE_MISMATCH: {
+    tlh: "ngu' Qagh. yIvangqa'.",
     "zh-CN": "登录状态校验失败，请重新登录。",
     "zh-TW": "登入狀態校驗失敗，請重新登入。",
     "zh-Hant-x-lzh": "登入狀態校驗未成，請重新登門。",
@@ -1676,7 +1815,8 @@ export const authErrorMessages: Record<string, Record<LoginLocale, string>> = {
   "pt-PT": "Não foi possível validar o estado do início de sessão. Tente novamente.",
   "pt-BR": "Não foi possível validar o estado do login. Tente novamente.",
 },
-  REGION_MISMATCH: {
+ REGION_MISMATCH: {
+    tlh: "Sepvammey nelbe'.",
     "zh-CN": "客户端区域与登录服务不匹配。",
     "zh-TW": "客戶端區域與登入服務不匹配。",
     "zh-Hant-x-lzh": "客戶端區域與登入服務不符。",
@@ -1691,7 +1831,8 @@ export const authErrorMessages: Record<string, Record<LoginLocale, string>> = {
   "pt-PT": "Esta aplicação não corresponde à região de autenticação.",
   "pt-BR": "Este aplicativo não corresponde à região de autenticação.",
 },
-  NETWORK_ERROR: {
+ NETWORK_ERROR: {
+    tlh: "rarlaHbe'. Web yIbej, yIvangqa'.",
     "zh-CN": "网络连接失败，请检查网络后重试。",
     "zh-TW": "網路連線失敗，請檢查網路後重試。",
     "zh-Hant-x-lzh": "網路連線未成，請察網路後再試。",
@@ -1706,7 +1847,8 @@ export const authErrorMessages: Record<string, Record<LoginLocale, string>> = {
   "pt-PT": "Não foi possível ligar. Verifique a sua rede e tente novamente.",
   "pt-BR": "Não foi possível conectar. Verifique sua rede e tente novamente.",
 },
-  REQUEST_TIMEOUT: {
+ REQUEST_TIMEOUT: {
+    tlh: "qep poS. yIvangqa'.",
     "zh-CN": "登录请求超时，请重试。",
     "zh-TW": "登入請求超時，請重試。",
     "zh-Hant-x-lzh": "登入請求逾時，請再試。",
@@ -1721,7 +1863,8 @@ export const authErrorMessages: Record<string, Record<LoginLocale, string>> = {
   "pt-PT": "O pedido de início de sessão excedeu o tempo limite. Tente novamente.",
   "pt-BR": "A solicitação de login excedeu o tempo limite. Tente novamente.",
 },
-  USER_CANCELLED: {
+ USER_CANCELLED: {
+    tlh: "mevta'.",
     "zh-CN": "已取消登录。",
     "zh-TW": "已取消登入。",
     "zh-Hant-x-lzh": "登門已取消。",
@@ -1736,7 +1879,8 @@ export const authErrorMessages: Record<string, Record<LoginLocale, string>> = {
   "pt-PT": "O início de sessão foi cancelado.",
   "pt-BR": "O login foi cancelado.",
 },
-  SOCIAL_PROVIDER_NOT_CONFIGURED: {
+ SOCIAL_PROVIDER_NOT_CONFIGURED: {
+    tlh: "SeHbe'lu' neH Hotlh mIchvam.",
     "zh-CN": "该登录方式尚未完成配置。",
     "zh-TW": "該登入方式尚未完成設定。",
     "zh-Hant-x-lzh": "此登門之法尚未設妥。",
@@ -1751,7 +1895,8 @@ export const authErrorMessages: Record<string, Record<LoginLocale, string>> = {
   "pt-PT": "Este método de início de sessão ainda não está configurado.",
   "pt-BR": "Este método de login ainda não está configurado.",
 },
-  SOCIAL_PROVIDER_UNAVAILABLE: {
+ SOCIAL_PROVIDER_UNAVAILABLE: {
+    tlh: "janvam Qapbe' Hotlh mIchvam.",
     "zh-CN": "当前设备无法使用该登录方式。",
     "zh-TW": "當前裝置無法使用該登入方式。",
     "zh-Hant-x-lzh": "此裝置不可用此登門之法。",
@@ -1766,7 +1911,8 @@ export const authErrorMessages: Record<string, Record<LoginLocale, string>> = {
   "pt-PT": "Este método de início de sessão não está disponível neste dispositivo.",
   "pt-BR": "Este método de login não está disponível neste dispositivo.",
 },
-  AUTH_REQUEST_FAILED: {
+ AUTH_REQUEST_FAILED: {
+    tlh: "Hotlh Qapbe' DaH.",
     "zh-CN": "登录服务暂时不可用，请稍后重试。",
     "zh-TW": "登入服務暫時不可用，請稍後重試。",
     "zh-Hant-x-lzh": "登入服務一時不可用，請稍後再試。",
@@ -1781,7 +1927,8 @@ export const authErrorMessages: Record<string, Record<LoginLocale, string>> = {
   "pt-PT": "O serviço de início de sessão está temporariamente indisponível.",
   "pt-BR": "O serviço de login está temporariamente indisponível.",
 },
-  ACCOUNT_UNAVAILABLE: {
+ ACCOUNT_UNAVAILABLE: {
+    tlh: "pong lo'laHbe'. poSlu'pu'.",
     "zh-CN": "当前账号不可用，已退出登录。",
     "zh-TW": "目前帳號不可用，已登出。",
     "zh-Hant-x-lzh": "此名籍不可用，已辭出。",
@@ -1796,7 +1943,8 @@ export const authErrorMessages: Record<string, Record<LoginLocale, string>> = {
   "pt-PT": "Esta conta está indisponível. A sua sessão foi terminada.",
   "pt-BR": "Esta conta está indisponível. Sua sessão foi encerrada.",
 },
-  ORG_SSO_NOT_FOUND: {
+ ORG_SSO_NOT_FOUND: {
+    tlh: "ghun tu'be' — SSO rar chImoHbe'lu' joq.",
     "zh-CN": "未找到该企业，或该企业未启用 SSO 登录。",
     "zh-TW": "未找到該企業，或該企業未啟用 SSO 登入。",
     "zh-Hant-x-lzh": "未尋得此企業，或此企業未啟 SSO 登入。",
@@ -1811,7 +1959,8 @@ export const authErrorMessages: Record<string, Record<LoginLocale, string>> = {
   "pt-PT": "A empresa não foi encontrada ou não tem nenhuma ligação SSO ativa.",
   "pt-BR": "A empresa não foi encontrada ou não tem nenhuma conexão SSO habilitada.",
 },
-  ORG_REALM_AMBIGUOUS: {
+ ORG_REALM_AMBIGUOUS: {
+    tlh: "ghun pong cha' SepDaq tu'lu'. SeHwI' DaSujnIS.",
     "zh-CN": "该企业标识同时存在于两个区域，请联系企业管理员处理。",
     "zh-TW": "該企業標識同時存在於兩個區域，請聯絡企業管理員處理。",
     "zh-Hant-x-lzh": "此企業標識並存於兩區域，請詢企業管理員處置。",
@@ -1826,7 +1975,8 @@ export const authErrorMessages: Record<string, Record<LoginLocale, string>> = {
   "pt-PT": "Este identificador empresarial existe em ambas as regiões. Entre em contacto com o seu administrador.",
   "pt-BR": "Este identificador empresarial existe em ambas as regiões. Entre em contato com seu administrador.",
 },
-  ORG_REALM_UNAVAILABLE: {
+ ORG_REALM_UNAVAILABLE: {
+    tlh: "DaH ghun Sep ngu'laHbe'. Web yIbej, yIvangqa'.",
     "zh-CN": "暂时无法确认企业所在区域，请检查网络后重试。",
     "zh-TW": "暫時無法確認企業所在區域，請檢查網路後重試。",
     "zh-Hant-x-lzh": "一時無從確認企業所在區域，請察網路後再試。",
@@ -1841,7 +1991,8 @@ export const authErrorMessages: Record<string, Record<LoginLocale, string>> = {
   "pt-PT": "De momento, a Cindy não consegue verificar a região da empresa. Verifique a ligação e tente novamente.",
   "pt-BR": "A Cindy não consegue verificar a região da empresa agora. Verifique sua conexão e tente novamente.",
 },
-  SSO_EMAIL_REQUIRED: {
+ SSO_EMAIL_REQUIRED: {
+    tlh: "email mI' neH. SeHwI'vaD IdP SeH yIjang.",
     "zh-CN": "该企业身份未提供有效邮箱，请联系企业管理员检查 IdP 配置。",
     "zh-TW": "該企業身分未提供有效電子郵件，請聯絡企業管理員檢查 IdP 設定。",
     "zh-Hant-x-lzh": "此企業身分未提供有效電子郵件，請詢企業管理員察其 IdP 設定。",
@@ -1856,7 +2007,8 @@ export const authErrorMessages: Record<string, Record<LoginLocale, string>> = {
   "pt-PT": "O fornecedor de identidade profissional não indicou um e-mail válido. Peça ao administrador para verificar a configuração do IdP.",
   "pt-BR": "O provedor de identidade profissional não informou um e-mail válido. Peça ao administrador para verificar a configuração do IdP.",
 },
-  INVALID_SSO_VERIFICATION_TICKET: {
+ INVALID_SSO_VERIFICATION_TICKET: {
+    tlh: "ghun ngu' poS. SSO bovangqa'.",
     "zh-CN": "企业身份验证已过期，请重新发起 SSO 登录。",
     "zh-TW": "企業身分驗證已過期，請重新發起 SSO 登入。",
     "zh-Hant-x-lzh": "企業身分驗證已過期，請重新發起 SSO 登入。",

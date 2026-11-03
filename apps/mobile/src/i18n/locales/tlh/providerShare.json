@@ -1,0 +1,16 @@
+{
+  "picker": {
+    "shareName": "Shared by {{owner}}",
+    "numbered": "{{name}} ({{index}})",
+    "unavailable": "DuHbe' share"
+  },
+  "link": {
+    "title": "provider Sharing",
+    "heading": "poSmoH This He chu' a De'wI'",
+    "body": "provider sharing can only be requested and lo'lu' in {{appName}} chu' a De'wI'. ngeH the He to your De'wI' and poSmoH it there, or qem it in SeHlaw' → providermey → providermey Shared with Me.",
+    "note": "Share Hemey expire 5 tupmey after they’re created and work only once.",
+    "copy": "nIb Share He",
+    "copied": "Share He copied",
+    "copyFailed": "Couldn’t nIb the share He. Try again in a moment."
+  }
+}
