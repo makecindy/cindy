@@ -26,7 +26,7 @@ describe('Maker binary startup boundary', () => {
     const register = () => maker?.registerAgent('pi', agent) ?? false;
     const startup = prepareOptionalPiRuntime({
       prepare: () => new Promise((resolve) => { finishPrepare = resolve; }),
-      register,
+      register: () => !maker || register(),
     });
     const pluginRequest = gate.wait(1_000).then((available) => available ? getMaker() : null);
     expect(() => getMaker()).toThrow('startup preparation');
@@ -36,6 +36,7 @@ describe('Maker binary startup boundary', () => {
     piReady = ready;
     finishPrepare(ready ? { ready: true, path: '/managed/pi' } : { ready: false, error: 'NETWORK' });
     const result = await startup;
+    expect(result.status).toBe(ready ? 'passed' : 'failed');
     gate.complete();
     const instance = await pluginRequest;
     expect(instance?.listAvailableAgents()).toEqual(ready ? ['claude-code', 'codex', 'pi'] : ['claude-code', 'codex']);
