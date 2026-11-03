@@ -2,7 +2,7 @@ import { isProviderShareMemberBudget } from '../../shared/providerShareBudget.js
 import { CONTROLLED_MODEL_CATALOG_CHANGED } from '../../shared/controlledModelCatalog.js';
 import { readMemberBudgetStatus, supportsMemberBudget } from './providerShareBudgetRuntime.js';
 import { isRemoteAgentLimitsPatch } from '../../shared/remoteAgentLimits.js';
-import { supportsSubscriptionFastPolicy, unifiedModelKeyId } from '@cindy/model-providers';
+import { isByokProviderId, supportsSubscriptionFastPolicy, unifiedModelKeyId, type AgentKind } from '@cindy/model-providers';
 import { providerFastPolicy } from '../maker-host/provider-fast-policy-store.js';
 import { notifySubscriptionFastPolicyChanged } from '../maker-host/subscription-fast-policy.js';
 import { notifyProviderShareCatalogChanged } from './dispatch.js';
@@ -61,7 +61,13 @@ import { isRemoteProviderInvocationAllowed } from '../maker-host/remote-provider
 import { assertTrustedAppRendererEvent } from '../security/trustedAppRenderer.js';
 import { currentLedgerCurrency } from '../usage/ledgerCurrency.js';
 import { getGatewayModelPricing, getModelPriceQuote } from '../usage/modelPricing.js';
-import { getReferenceModelPricing } from '../usage/referenceModelPricing.js';
+import {
+  getCodexProviderSubscriptionValuePrice,
+  getReferenceModelPricing,
+  readModelPriceOverridesSnapshot,
+  type ModelPriceOverridesSnapshot,
+} from '../usage/referenceModelPricing.js';
+import type { ModelPriceQuote } from '../../shared/regionalMoney.js';
 import { computePriceQuoteTurnMoney, normalizeModelIdForPricing } from '../usage/turnCostCalculator.js';
 import { rememberIssuedClipboardText } from '../textClipboard.js';
 import { activeOwnerScopeKey, ownerScopedUserDataPath } from '../appSessionState.js';
@@ -574,24 +580,60 @@ export function parseProviderShareCommand(raw: unknown): ProviderShareCommand {
   }
 }
 
-/** 每次查询复用报价快照，避免为最多 5,000 行历史逐行重建参考价目录。 */
+type ProviderShareUsageEstimateRow = Omit<ProviderShareModelUsageView, 'amount'> & { sdkCostUsd: number; day?: string };
+
+/**
+ * 账本按天、按模型只存总量。阶梯价按单轮输入选档，直接拿总量会把许多短请求整体算成长上下文价；
+ * 拿不到逐轮分布时按平均每轮选档，再乘轮数。
+ */
+function perTurnAverageMoney(row: ProviderShareUsageEstimateRow, price: ModelPriceQuote | undefined) {
+  const turns = row.turns > 1 ? row.turns : 1;
+  const money = computePriceQuoteTurnMoney({
+    inputTokens: row.inputTokens / turns,
+    outputTokens: row.outputTokens / turns,
+    cacheReadTokens: row.cacheReadTokens / turns,
+    cacheCreateTokens: row.cacheCreateTokens / turns,
+  }, price, currentLedgerCurrency());
+  return money && { amount: money.amount * turns, currency: money.currency };
+}
+
+/** 每次查询复用报价与覆盖快照，避免为最多 5,000 行历史逐行重建参考价目录或重读覆盖文件。 */
 function createUsageEstimator() {
   let gatewayPricing: ReturnType<typeof getGatewayModelPricing> | undefined;
   let referencePricing: ReturnType<typeof getReferenceModelPricing> | undefined;
-  return async (row: Omit<ProviderShareModelUsageView, 'amount'> & { sdkCostUsd: number }): Promise<ProviderShareMoney | null> => {
+  let overrides: ModelPriceOverridesSnapshot | undefined;
+  /** 按天的历史行用当天生效的参考价，与设置 → 用量同一口径；目录里的报价只代表今天。 */
+  const referenceQuote = (row: ProviderShareUsageEstimateRow, model: string, agent: AgentKind | undefined) => {
+    const pricing = (referencePricing ??= getReferenceModelPricing());
+    const current = getModelPriceQuote(pricing, row.providerId, model, agent);
+    const providerId = row.providerId;
+    if (row.day === undefined || !current || !agent || !providerId || isByokProviderId(providerId)) return current;
+    overrides ??= readModelPriceOverridesSnapshot();
+    const dated = getCodexProviderSubscriptionValuePrice(providerId, model, pricing, row.day, overrides, agent);
+    if (dated) return dated;
+    // 没有注册表参考价的路由(自定义供应商的连接价)不随日期变化，沿用当前报价；
+    // 注册表在当天没有生效价时不拿今天的价补。
+    return getCodexProviderSubscriptionValuePrice(providerId, model, pricing, undefined, overrides, agent)
+      ? undefined
+      : current;
+  };
+  return async (row: ProviderShareUsageEstimateRow): Promise<ProviderShareMoney | null> => {
+    const sdkMoney: ProviderShareMoney | null = row.sdkCostUsd > 0 ? { amount: row.sdkCostUsd, currency: 'USD' } : null;
+    // 只有 SDK 金额、没有 token 计数的行无从按单价估算，保留记录的金额而不是算成 0。
+    if (row.inputTokens + row.outputTokens + row.cacheReadTokens + row.cacheCreateTokens <= 0) return sdkMoney;
     try {
-      // XD 的实际报价与其他供应商的参考价独立，不能跨来源借价。
-      const pricing = row.providerId === 'xd'
-        ? await (gatewayPricing ??= getGatewayModelPricing())
-        : (referencePricing ??= getReferenceModelPricing());
       const agent = row.kind === 'claude-code' || row.kind === 'codex' || row.kind === 'pi' ? row.kind : undefined;
-      const price = getModelPriceQuote(pricing, row.providerId, normalizeModelIdForPricing(row.model), agent);
-      const money = computePriceQuoteTurnMoney(row, price, currentLedgerCurrency());
-      if (money) return { amount: money.amount, currency: money.currency };
+      const model = normalizeModelIdForPricing(row.model);
+      // XD 的实际报价与其他供应商的参考价独立，不能跨来源借价。
+      const price = row.providerId === 'xd'
+        ? getModelPriceQuote(await (gatewayPricing ??= getGatewayModelPricing()), row.providerId, model, agent)
+        : referenceQuote(row, model, agent);
+      const money = perTurnAverageMoney(row, price);
+      if (money) return money;
     } catch (error) {
       log.warn('provider share usage estimate failed', { error: String(error) });
     }
-    return row.sdkCostUsd > 0 ? { amount: row.sdkCostUsd, currency: 'USD' } : null;
+    return sdkMoney;
   };
 }
 
