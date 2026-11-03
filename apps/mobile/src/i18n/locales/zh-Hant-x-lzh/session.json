@@ -815,5 +815,6 @@
     "uploadsPending": "尚有附件上傳，待其畢，再修此訊。",
     "rollbackHint": "遣之，將撤上一輪對 {{count}} 卷之改動",
     "conversationOnlyHint": "遣之不復原案中之卷，上一輪之卷改動仍存"
-  }
+  },
+  "zcodeTextOnly": "ZCode 目前僅收文字。請將卷中內容貼入訊中。"
 }

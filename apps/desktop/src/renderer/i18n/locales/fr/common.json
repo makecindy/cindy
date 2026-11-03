@@ -4471,6 +4471,11 @@
         "custom": "Continuez avec des paramètres personnalisés. Vous pouvez récupérer les modèles ou les ajouter manuellement.",
         "configure": "Configurer le fournisseur",
         "keepCustom": "Continuer avec des paramètres personnalisés"
+      },
+      "zcode": {
+        "managed": "Gérez votre compte et le projet de votre équipe dans ZCode. Connecter ZCode autorise ce compte Cindy à utiliser cette session. Le déconnecter ne ferme pas votre session ZCode.",
+        "connect": "Connecter ZCode",
+        "changeFailed": "Impossible de se connecter à ZCode. Vérifiez que vous pouvez utiliser le projet d’équipe sélectionné dans ZCode, puis réessayez."
       }
     },
     "experimental": {
@@ -13143,7 +13148,9 @@
       "remoteCompactEncryptedContent": "La compaction du contexte a échoué, car le modèle n'a pas pu lire l'historique chiffré. La reprise automatique n'a pas abouti. Réessayez pour tenter une récupération.",
       "contextOverflow": "Ce message dépasse à lui seul la fenêtre de contexte du modèle : Cindy ne peut donc pas le poursuivre dans une nouvelle session Agent. Raccourcissez la saisie ou retirez une pièce jointe volumineuse, puis réessayez.",
       "attachmentAccessDeniedTitle": "Cindy ne peut pas lire la pièce jointe source ; le message n'a pas été envoyé.",
-      "attachmentAccessDeniedRecovery": "Enregistrez une copie dans Téléchargements ou dans un autre dossier accessible, retirez la pièce jointe d'origine et ajoutez la copie à l'aide du bouton de pièce jointe avant de renvoyer."
+      "attachmentAccessDeniedRecovery": "Enregistrez une copie dans Téléchargements ou dans un autre dossier accessible, retirez la pièce jointe d'origine et ajoutez la copie à l'aide du bouton de pièce jointe avant de renvoyer.",
+      "zcodeScopeChanged": "Le compte ZCode ou le projet d’équipe a changé. Revenez au compte et au projet utilisés à l’origine pour cette tâche, puis réessayez.",
+      "zcodeScopeUnavailable": "Impossible de vérifier le compte et le projet d’équipe associés à cet historique ZCode. Démarrez une nouvelle tâche."
     },
     "backgroundActivity": {
       "status": "Sous-tâches en arrière-plan en cours d'exécution, consommation du modèle toujours en cours…",
@@ -17007,7 +17014,11 @@
       "remoteCodexNoSourceDescription": "« {{device}} » n'a aucune source de modèle connectée pour Codex, il est donc impossible de démarrer des sessions depuis ici. Ouvrez {{appName}} sur cet appareil, connectez-vous à OpenAI ou connectez une autre source dans Paramètres → Fournisseurs, puis réessayez.",
       "remoteCcNoSourceTitle": "Aucune source Claude connectée sur l'appareil distant",
       "remoteCcNoSourceDescription": "« {{device}} » n'a aucune source de modèle Claude connectée, il est donc impossible de démarrer des sessions depuis ici. Ouvrez {{appName}} sur cet appareil, connectez une source dans Paramètres → Fournisseurs, puis réessayez.",
-      "gotIt": "Compris"
+      "gotIt": "Compris",
+      "zcodeTextOnly": "ZCode n’accepte que du texte pour le moment. Collez le contenu du fichier dans votre message.",
+      "zcodeUserPromptUnsupported": "ZCode ne prend pas encore en charge les instructions personnalisées de Cindy. Effacez-les dans Personnalisation avant d’utiliser ZCode.",
+      "zcodeNotReadyTitle": "ZCode n’est pas encore prêt",
+      "zcodeNotReadyDescription": "Installez ZCode et connectez-vous avec le Coding Plan de votre équipe. Connectez ensuite ZCode dans Cindy, sous Paramètres → Fournisseurs."
     },
     "fileTypes": {
       "fileEmpty": "Le fichier est vide",

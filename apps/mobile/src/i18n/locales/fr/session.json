@@ -820,5 +820,6 @@
     "uploadsPending": "Des pièces jointes sont encore en cours d'envoi. Attendez la fin avant de modifier le message.",
     "rollbackHint": "L'envoi annulera les modifications apportées à {{count}} fichier(s) lors du dernier tour",
     "conversationOnlyHint": "L'envoi ne restaurera pas les fichiers du projet ; les modifications de fichiers précédentes seront conservées"
-  }
+  },
+  "zcodeTextOnly": "ZCode n’accepte que du texte pour le moment. Collez le contenu du fichier dans votre message."
 }

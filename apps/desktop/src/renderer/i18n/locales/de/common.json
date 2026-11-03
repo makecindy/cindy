@@ -4418,6 +4418,11 @@
         "custom": "Fahre mit benutzerdefinierten Einstellungen fort. Du kannst Modelle abrufen oder manuell hinzufügen.",
         "configure": "Anbieter konfigurieren",
         "keepCustom": "Mit benutzerdefinierten Einstellungen fortfahren"
+      },
+      "zcode": {
+        "managed": "Verwalte dein Konto und dein Teamprojekt in ZCode. Nach dem Verbinden darf dieses Cindy-Konto die bestehende Anmeldung nutzen. Beim Trennen bleibst du in ZCode angemeldet.",
+        "connect": "ZCode verbinden",
+        "changeFailed": "ZCode konnte nicht verbunden werden. Prüfe, ob du das ausgewählte Teamprojekt in ZCode nutzen kannst, und versuche es dann erneut."
       }
     },
     "experimental": {
@@ -13030,7 +13035,9 @@
       "remoteCompactEncryptedContent": "Die Kontextkomprimierung ist fehlgeschlagen, weil das Modell den verschlüsselten Verlauf nicht lesen konnte. Die automatische Fortsetzung wurde nicht abgeschlossen. Versuche es erneut, um eine Wiederherstellung zu versuchen.",
       "contextOverflow": "Diese Nachricht allein überschreitet das Kontextfenster des Modells. Deshalb kann Cindy sie nicht in einer neuen Agent-Sitzung fortsetzen. Kürze die Eingabe oder entferne einen großen Anhang und versuche es erneut.",
       "attachmentAccessDeniedTitle": "Cindy kann den ursprünglichen Anhang nicht lesen. Die Nachricht wurde nicht gesendet.",
-      "attachmentAccessDeniedRecovery": "Speichere eine Kopie unter Downloads oder in einem anderen zugänglichen Ordner, entferne den ursprünglichen Anhang und füge die Kopie über die Anhang-Schaltfläche hinzu, bevor du erneut sendest."
+      "attachmentAccessDeniedRecovery": "Speichere eine Kopie unter Downloads oder in einem anderen zugänglichen Ordner, entferne den ursprünglichen Anhang und füge die Kopie über die Anhang-Schaltfläche hinzu, bevor du erneut sendest.",
+      "zcodeScopeChanged": "Das ZCode-Konto oder das Teamprojekt hat sich geändert. Wechsle zu dem Konto und Projekt zurück, mit denen diese Aufgabe ursprünglich erstellt wurde, und versuche es dann erneut.",
+      "zcodeScopeUnavailable": "Das Konto und das Teamprojekt für diesen ZCode-Verlauf konnten nicht verifiziert werden. Starte eine neue Aufgabe."
     },
     "backgroundActivity": {
       "status": "Hintergrund-Unteraufgaben laufen und verbrauchen weiterhin Modellkontingent…",
@@ -16847,7 +16854,11 @@
       "remoteCodexNoSourceDescription": "Auf „{{device}}“ ist keine Modellquelle für Codex verbunden, daher können von hier aus keine Sitzungen gestartet werden. Öffne {{appName}} auf diesem Gerät, melde dich bei OpenAI an oder verbinde unter Einstellungen → Anbieter eine andere Quelle und versuche es dann erneut.",
       "remoteCcNoSourceTitle": "Keine Claude-Quelle auf dem Remote-Gerät verbunden",
       "remoteCcNoSourceDescription": "Auf „{{device}}“ ist keine Claude-Modellquelle verbunden, daher können von hier aus keine Sitzungen gestartet werden. Öffne {{appName}} auf diesem Gerät, verbinde unter Einstellungen → Anbieter eine Quelle und versuche es dann erneut.",
-      "gotIt": "Verstanden"
+      "gotIt": "Verstanden",
+      "zcodeTextOnly": "ZCode unterstützt derzeit nur Texteingaben. Füge den Inhalt der Datei in deine Nachricht ein.",
+      "zcodeUserPromptUnsupported": "ZCode unterstützt die benutzerdefinierten Anweisungen von Cindy noch nicht. Entferne sie unter „Personalisierung“, bevor du ZCode verwendest.",
+      "zcodeNotReadyTitle": "ZCode ist noch nicht bereit",
+      "zcodeNotReadyDescription": "Installiere ZCode und melde dich mit dem Coding Plan deines Teams an. Verbinde ZCode dann in Cindy unter Einstellungen → Anbieter."
     },
     "fileTypes": {
       "fileEmpty": "Datei ist leer",
