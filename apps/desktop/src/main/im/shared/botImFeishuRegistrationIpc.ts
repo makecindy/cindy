@@ -78,7 +78,10 @@ async function beginBotImFeishuRegistration(
           appSecret: success.clientSecret,
           service: success.tenantBrand ?? service,
         },
-        success.ownerOpenId ? { ownerUserId: success.ownerOpenId } : {},
+        {
+          ...(success.ownerOpenId ? { ownerUserId: success.ownerOpenId } : {}),
+          shouldProceed: isCurrent,
+        },
       );
       if (isCurrent()) return;
       // 取消发生在建连过程中: 不能留下这条已经生效的连接。

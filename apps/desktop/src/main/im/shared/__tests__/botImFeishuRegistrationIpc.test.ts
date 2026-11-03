@@ -114,7 +114,7 @@ describe('伙伴飞书扫码授权 IPC', () => {
         appSecret: 'registered-secret',
         service: 'lark',
       },
-      { ownerUserId: 'ou_owner' },
+      { ownerUserId: 'ou_owner', shouldProceed: expect.any(Function) },
     );
     expect(mocks.send).toHaveBeenLastCalledWith(
       'botImConnection:feishu-registration-status',
