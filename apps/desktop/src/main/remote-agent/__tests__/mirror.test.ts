@@ -420,6 +420,41 @@ describe('collectPersonalConfig', () => {
     expect(pi.personal.files).toEqual([]);
   });
 
+  // 内置与插件带的 Skill 以本机为准：整个带过去(放不下就不带，不留半个)，停用的个人 Skill 不带；
+  // Claude Code 的还要把新运行端挪去的插件目录对应回本机，Skill 里的脚本路径才能在本机执行。
+  it('brings managed Skills whole where the agent looks for them and leaves out disabled personal Skills', async () => {
+    const home = path.join(root, 'home');
+    write(path.join(home, '.claude', 'skills', 'mine', 'SKILL.md'), 'mine');
+    write(path.join(home, '.claude', 'skills', 'off', 'SKILL.md'), 'off');
+    const pr = path.join(root, 'bundle', 'pr');
+    write(path.join(pr, 'SKILL.md'), 'pr skill');
+    write(path.join(pr, 'scripts', 'run.mjs'), 'run');
+    const big = path.join(root, 'bundle', 'big');
+    write(path.join(big, 'SKILL.md'), 'big');
+    for (let index = 0; index < 600; index += 1) write(path.join(big, 'references', `r${index}.txt`), 'x');
+    const managedSkills = [{ command: 'cindy-plugin-x:big', dir: big }, { command: 'cindy:pr', dir: pr }];
+    const disabledSkillPaths = [path.join(home, '.claude', 'skills', 'off', 'SKILL.md')];
+
+    const claude = await collectPersonalConfig('claude-code', [], { env: {}, home, disabledSkillPaths, managedSkills });
+    expect(decode(claude.personal.files)).toEqual({
+      '.claude/skills/mine/SKILL.md': 'mine',
+      '.claude/skills/cindy-pr/SKILL.md': 'pr skill',
+      '.claude/skills/cindy-pr/scripts/run.mjs': 'run',
+    });
+    expect(claude.personal.managedSkills).toEqual([{ command: 'cindy:pr', dir: '.claude/skills/cindy-pr' }]);
+    expect(claude.roots).toEqual(expect.arrayContaining([
+      { relative: '.claude/skills/cindy-pr', local: pr },
+      { relative: '.cindy/managed-skills/cindy/skills/pr', local: pr },
+    ]));
+
+    const codex = await collectPersonalConfig('codex', [], { env: {}, home, managedSkills: [] });
+    // 本机没有可用的托管 Skill 也要声明，对方才不会改用它自己的。
+    expect(codex.personal.managedSkills).toEqual([]);
+    const pi = await collectPersonalConfig('pi', [], { env: {}, home, managedSkills });
+    expect(pi.personal.managedSkills).toEqual([{ command: 'cindy:pr', dir: '.agents/skills/cindy-pr' }]);
+    expect(pi.roots).toEqual([{ relative: '.agents/skills/cindy-pr', local: pr }]);
+  });
+
   it('leaves credential files in personal Skills for later on a shared provider', async () => {
     const home = path.join(root, 'home');
     write(path.join(home, '.claude', 'skills', 'deploy', 'SKILL.md'), 'deploy');

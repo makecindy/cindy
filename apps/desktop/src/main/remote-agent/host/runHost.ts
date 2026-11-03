@@ -85,6 +85,8 @@ import {
   decodeOpenPayload,
   decodeSendOptions,
   decodeUserMessage,
+  managedSkillPluginLayout,
+  parseManagedSkillCommand,
   type RemoteAgentOpenPayload,
   type RemoteAgentWireStartOptions,
   type RemoteAgentWireWorkspace,
@@ -172,6 +174,8 @@ export interface HostedStartInput {
    * 认出这条任务请求的令牌，modelIds 是该供应商为本 Agent 提供的模型。
    */
   guestProvider?: { providerId: string; modelIds: string[]; routeToken: string };
+  /** 控制端提供了托管 Skill：Agent 只用这些(Claude Code 的插件目录在影子目录里)，不加载本机的。 */
+  controllerManagedSkills?: { claudePluginRoots: string[] };
 }
 
 /** 一次受邀者任务的出站登记(见 RemoteAgentHostDeps.bindGuestProviderRoute)。 */
@@ -1249,7 +1253,8 @@ export function createRemoteAgentHost(deps: RemoteAgentHostDeps) {
     payload: RemoteAgentOpenPayload,
     hostSessionId: string,
     trust: RemoteAgentControllerTrust,
-  ): Promise<{ shadowDir: string; mirrorRoot: string; shortcutLayout: ExecServerShortcutLayout; sessionRoot: string; extraDirs: string[]; writableDirs: string[]; projectText(text: string): string }> {
+    kind: RemoteAgentKind,
+  ): Promise<{ shadowDir: string; mirrorRoot: string; shortcutLayout: ExecServerShortcutLayout; sessionRoot: string; extraDirs: string[]; writableDirs: string[]; projectText(text: string): string; controllerManagedSkills?: { claudePluginRoots: string[] } }> {
     const sessionRoot = shadowSessionRoot(controller, hostSessionId);
     /** 受邀者的说明文件：指向会话目录之外的 `@` 引用不再被当作导入(否则会在本机读文件)。 */
     const instructionBytes = (data: Buffer, fileDir: string): Buffer => (
@@ -1384,10 +1389,40 @@ export function createRemoteAgentHost(deps: RemoteAgentHostDeps) {
       if (!allowed) continue;
       await writeNew(target, markdownBytes(projectBytes(Buffer.from(file.data, 'base64')), target));
     }
+    // 控制端提供的托管 Skill(字段存在即由控制端决定，本机的不再加载)。Claude Code 以插件挂载，保持 `cindy:pr`
+    // 这样的命名：从项目 Skill 目录整体挪进插件目录，同一个 Skill 不出现两次。Codex / Pi 本来就不带插件前缀，
+    // 留在项目 Skill 目录加载。
+    let controllerManagedSkills: { claudePluginRoots: string[] } | undefined;
+    if (personal.managedSkills) {
+      const pluginRoots = new Set<string>();
+      for (const skill of kind === 'claude-code' ? personal.managedSkills : []) {
+        const parts = parseManagedSkillCommand(skill.command);
+        const layout = managedSkillPluginLayout(skill.command);
+        if (!parts || !layout || !skill.dir.startsWith('.claude/skills/')) continue;
+        const from = path.join(shadowDir, ...skill.dir.split('/'));
+        try {
+          await fsp.access(path.join(from, 'SKILL.md'));
+        } catch {
+          continue;
+        }
+        const root = path.join(shadowDir, ...layout.root.split('/'));
+        if (!pluginRoots.has(root)) {
+          await fsp.mkdir(path.join(root, '.claude-plugin'), { recursive: true });
+          await fsp.writeFile(path.join(root, '.claude-plugin', 'plugin.json'), JSON.stringify({ name: parts.plugin, version: '1.0.0' }));
+          await fsp.mkdir(path.join(root, 'skills'), { recursive: true });
+          pluginRoots.add(root);
+        }
+        await fsp.rename(from, path.join(shadowDir, ...layout.dir.split('/')));
+      }
+      controllerManagedSkills = { claudePluginRoots: [...pluginRoots] };
+    }
     if (personal.permissions) await mergeLocalPermissions(path.join(shadowDir, '.claude', 'settings.local.json'), Object.fromEntries(Object.entries(personal.permissions).map(([key, rules]) => [key, rules?.map(projectText)])));
     // virtualParent 停在控制端有对应目录的最上一级(与控制端 shadowAliases 逐级映射的范围一致)。
     const shortcutLayout: ExecServerShortcutLayout = { mirrorRoot, mappedRoot: virtualParent, ancestorAbsence, taskAncestorAbsence };
-    return { shadowDir, mirrorRoot, shortcutLayout, sessionRoot, extraDirs: virtualAll.slice(0, extraCount), writableDirs: virtualAll.slice(extraCount), projectText };
+    return {
+      shadowDir, mirrorRoot, shortcutLayout, sessionRoot, extraDirs: virtualAll.slice(0, extraCount), writableDirs: virtualAll.slice(extraCount), projectText,
+      ...(controllerManagedSkills ? { controllerManagedSkills } : {}),
+    };
   }
 
   async function startRun(run: Run, payload: RemoteAgentOpenPayload): Promise<void> {
@@ -1431,7 +1466,7 @@ export function createRemoteAgentHost(deps: RemoteAgentHostDeps) {
         guestHome = guestHomeFor(guestScopeOf(run.controller, run.relayKey));
         await fsp.mkdir(guestHome, { recursive: true, mode: 0o700 });
       }
-      const { shadowDir, mirrorRoot, shortcutLayout, sessionRoot, extraDirs, writableDirs, projectText } = await timing.measure('shadow-workspace', () =>
+      const { shadowDir, mirrorRoot, shortcutLayout, sessionRoot, extraDirs, writableDirs, projectText, controllerManagedSkills } = await timing.measure('shadow-workspace', () =>
         withShadowLock(hostSessionId, async () => {
           // 断线后旧实例还没清理就重新打开同一任务时，新旧实例共用同一个影子目录：
           // 先结束旧实例再重建，避免删掉旧 Agent 还在使用的目录，或两个实例争用重建后的目录。
@@ -1440,7 +1475,7 @@ export function createRemoteAgentHost(deps: RemoteAgentHostDeps) {
               await finishRun(other, 'superseded', 'navigation');
             }
           }
-          return prepareShadow(run.controller, payload, hostSessionId, run.trust);
+          return prepareShadow(run.controller, payload, hostSessionId, run.trust, run.kind);
         }),
       );
       run.workspaceDir = sessionRoot;
@@ -1590,6 +1625,7 @@ export function createRemoteAgentHost(deps: RemoteAgentHostDeps) {
           workspace: payload.workspace,
           tunnel: { url: tunnel.url, token: tunnel.token, linkActivity: () => tunnel.linkActivity() },
           mcpServers: payload.mcpServers,
+          ...(controllerManagedSkills ? { controllerManagedSkills } : {}),
           ...(payload.options.localApplication ? { localApplicationStorage: path.join(guestHomeFor(guestScopeOf(run.controller, run.relayKey)),
             'local-applications', payload.options.localApplication.storageKey, run.kind) } : {}),
           ...(run.trust === 'guest' ? { guest: true, ...(guestHome ? { guestHome } : {}), ...(guestProvider ? { guestProvider } : {}) } : {}),

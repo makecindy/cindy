@@ -2925,6 +2925,9 @@ export function getMaker(): Maker {
         makerMemory: () => makerMemoryManager,
         // 插件工具经隧道回到本机：对方 Agent 的插件花名册也按本机真实工作目录给。
         ghostRosterPrompt: (workingDir) => getGhostRosterPrompt({ workingDir }),
+        // 内置与插件带的 Skill 同样以本机为准：说明与它要用的工具、脚本都在本机。
+        managedSkills: listCindyManagedSkills,
+        disabledSkillPaths: readDisabledSkillPaths,
         captureKnownFileBefore,
         noteOpaqueTurnChange,
         // 与审查读 PDF 交付物同一个一次性抽取进程。

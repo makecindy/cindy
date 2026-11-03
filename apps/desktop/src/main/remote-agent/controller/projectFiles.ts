@@ -26,6 +26,8 @@ import path from 'node:path';
 
 import type { RemoteAgentKind } from '@cindy/device-link';
 
+import { isSkillDisabled } from '@cindy/maker-core';
+
 import { isShareCredentialPath } from '../credentials';
 import {
   ANCESTOR_INSTRUCTION_FILES,
@@ -35,6 +37,8 @@ import {
   PROJECT_INSTRUCTION_FILES as TOP_LEVEL_FILES,
   PROJECT_SETTINGS_FILES as SETTINGS_FILES,
   isSafeProjectFilePath,
+  managedSkillDir,
+  managedSkillPluginLayout,
   type RemoteAgentWireAncestorFile,
   type RemoteAgentWireAncestorMarkers,
   type RemoteAgentWireFile,
@@ -286,6 +290,51 @@ export interface CollectedPersonalConfig {
   roots: Array<{ relative: string; local: string }>;
 }
 
+/** 本次要带过去的 Cindy 托管 Skill(已按本机启用状态与伙伴授权过滤)。 */
+export interface LocalManagedSkill {
+  /** Claude 命令名 `<插件>:<Skill>`。 */
+  command: string;
+  /** 本机 Skill 目录(SKILL.md 所在目录)。 */
+  dir: string;
+}
+
+export interface CollectPersonalOptions extends CollectOptions {
+  env?: NodeJS.ProcessEnv;
+  home?: string;
+  /** 本机停用的 Skill：个人 Skill 里停用的不带过去。 */
+  disabledSkillPaths?: readonly string[];
+  /** 提供时(含空数组)由本机决定托管 Skill，对方不再加载它自己的；缺省时对方沿用原规则。 */
+  managedSkills?: readonly LocalManagedSkill[];
+}
+
+/** 一个托管 Skill 要么整个带过去，要么不带：先按额度预算，放不下就跳过，不留半个 Skill。 */
+async function addManagedSkill(
+  skill: LocalManagedSkill,
+  relative: string,
+  budget: Budget,
+  out: RemoteAgentWireFile[],
+): Promise<boolean> {
+  const found: Candidate[] = [];
+  await scan(scanRoot(skill.dir, relative), '', 0, found);
+  if (!found.some((candidate) => candidate.path === `${relative}/SKILL.md`)) return false;
+  let files = 0;
+  let bytes = 0;
+  for (const candidate of found) {
+    try {
+      const stat = await fs.stat(candidate.local);
+      if (!stat.isFile() || stat.size > MAX_FILE_BYTES) continue;
+      files += 1;
+      bytes += stat.size;
+    } catch {
+      // 读不到的文件随后同样跳过。
+    }
+  }
+  if (budget.files + files > MAX_FILES || budget.bytes + bytes > MAX_TOTAL_BYTES) return false;
+  const before = out.length;
+  await readCandidates(found, budget, out);
+  return out.slice(before).some((file) => file.path === `${relative}/SKILL.md`);
+}
+
 /**
  * 你这台的个人配置。项目里已有同名的 Skill / 子代理 / 命令 / 规则时以项目为准(与本机加载顺序一致)。
  * Claude Code：~/.claude 里的说明、规则、Skill、子代理、命令与权限规则；Codex：个人说明与 ~/.agents/skills、
@@ -295,7 +344,7 @@ export interface CollectedPersonalConfig {
 export async function collectPersonalConfig(
   kind: RemoteAgentKind,
   projectFiles: readonly RemoteAgentWireFile[],
-  options: CollectOptions & { env?: NodeJS.ProcessEnv; home?: string } = {},
+  options: CollectPersonalOptions = {},
 ): Promise<CollectedPersonalConfig> {
   const env = options.env ?? process.env;
   const home = options.home ?? os.homedir();
@@ -322,6 +371,9 @@ export async function collectPersonalConfig(
       } catch {
         continue;
       }
+      // 本机停用的个人 Skill 不带过去(与本机任务一致)。
+      if (root.skills && options.disabledSkillPaths?.length
+        && isSkillDisabled(stat.isDirectory() ? path.join(local, 'SKILL.md') : local, options.disabledSkillPaths)) continue;
       if (stat.isDirectory()) await scan(root, item.name, 1, candidates);
       else if (stat.isFile()) candidates.push({ path: relative, local, entry: isEntry(root.skills, item.name) });
       else continue;
@@ -364,6 +416,22 @@ export async function collectPersonalConfig(
   const synced = new Set(personal.files.map((file) => file.path));
   const roots = entries.filter(({ relative }) => synced.has(relative)
     || personal.files.some((file) => file.path.startsWith(`${relative}/`)));
+  if (options.managedSkills) {
+    // 个人配置先占额度；托管 Skill 用剩下的(旧运行端收到超过上限的文件会拒绝打开)。
+    personal.managedSkills = [];
+    const taken = new Set(roots.map(({ relative }) => relative));
+    for (const skill of options.managedSkills) {
+      const relative = managedSkillDir(kind, skill.command);
+      if (!relative || taken.has(relative) || projectEntries.has(relative)) continue;
+      if (!(await addManagedSkill(skill, relative, budget, personal.files))) continue;
+      taken.add(relative);
+      personal.managedSkills.push({ command: skill.command, dir: relative });
+      roots.push({ relative, local: skill.dir });
+      // 新运行端把 Claude Code 的托管 Skill 挪到插件目录：那里的路径同样对应回你这台的 Skill 目录。
+      const plugin = kind === 'claude-code' ? managedSkillPluginLayout(skill.command) : null;
+      if (plugin) roots.push({ relative: plugin.dir, local: skill.dir });
+    }
+  }
   return { personal, roots };
 }
 

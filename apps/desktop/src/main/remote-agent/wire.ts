@@ -27,7 +27,7 @@ import {
   type UserMessage,
 } from '@cindy/maker-core';
 import { projectAutoReviewUserReferences } from '@cindy/maker-shared/auto-review-intent';
-import { REMOTE_AGENT_RELAY_KEY_PATTERN } from '@cindy/device-link';
+import { REMOTE_AGENT_RELAY_KEY_PATTERN, type RemoteAgentKind } from '@cindy/device-link';
 
 import {
   channelForceConfirmMutatingToolCall,
@@ -169,6 +169,44 @@ export interface RemoteAgentWirePersonal {
   permissions?: { allow?: string[]; deny?: string[]; ask?: string[] };
   /** 个人说明(Codex 的 AGENTS.md 等)：写进给 Agent 的环境说明。 */
   instructions?: string;
+  /**
+   * 你这台本次可用的 Cindy 托管 Skill(内置与插件带的，已按你这台的启用状态与伙伴授权过滤)。文件随 `files`
+   * 放在 Agent 找项目 Skill 的位置(`dir`，如 `.claude/skills/cindy-pr`)，旧运行端当项目 Skill 加载。
+   * 字段存在(含空数组)时，新运行端以它为准，不再加载自己的托管 Skill；Claude Code 改挂到
+   * {@link managedSkillPluginLayout} 的插件目录，保持 `cindy:pr` 这样的命名。缺省时沿用运行端原规则。
+   */
+  managedSkills?: RemoteAgentWireManagedSkill[];
+}
+
+export interface RemoteAgentWireManagedSkill {
+  /** 本机的 Claude 命令名 `<插件>:<Skill>`，如 `cindy:pr`。 */
+  command: string;
+  /** 文件在影子目录里的位置(个人 Skill 目录下的一级，见 {@link managedSkillDir})。 */
+  dir: string;
+}
+
+const MANAGED_SKILL_PART = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/;
+
+/** `<插件>:<Skill>` 两段都是安全的目录名时返回两段，否则 null。 */
+export function parseManagedSkillCommand(command: string): { plugin: string; skill: string } | null {
+  const [plugin, skill, extra] = command.split(':');
+  return extra === undefined && plugin && skill && MANAGED_SKILL_PART.test(plugin) && MANAGED_SKILL_PART.test(skill)
+    ? { plugin, skill }
+    : null;
+}
+
+/** 托管 Skill 的文件在影子目录里的位置：Agent 找项目 Skill 的目录下 `<插件>-<Skill>`。 */
+export function managedSkillDir(kind: RemoteAgentKind, command: string): string | null {
+  const parts = parseManagedSkillCommand(command);
+  return parts ? `${kind === 'claude-code' ? '.claude/skills' : '.agents/skills'}/${parts.plugin}-${parts.skill}` : null;
+}
+
+/** 新运行端给 Claude Code 挂的插件目录(相对影子目录)：插件根与其中这个 Skill 的目录。 */
+export function managedSkillPluginLayout(command: string): { root: string; dir: string } | null {
+  const parts = parseManagedSkillCommand(command);
+  if (!parts) return null;
+  const root = `.cindy/managed-skills/${parts.plugin}`;
+  return { root, dir: `${root}/skills/${parts.skill}` };
 }
 
 export interface RemoteAgentOpenPayload {
@@ -464,6 +502,20 @@ function decodePersonal(value: unknown): RemoteAgentWirePersonal {
     const rules = (key: string) => (stringArray(value.permissions && (value.permissions as Record<string, unknown>)[key], 1024) ?? []).slice(0, 512);
     const permissions = { allow: rules('allow'), deny: rules('deny'), ask: rules('ask') };
     if (permissions.allow.length || permissions.deny.length || permissions.ask.length) personal.permissions = permissions;
+  }
+  if (Array.isArray(value.managedSkills)) {
+    if (value.managedSkills.length > MAX_PROJECT_FILES) throw new Error('REMOTE_AGENT_INVALID');
+    const seen = new Set<string>();
+    personal.managedSkills = value.managedSkills.flatMap((item): RemoteAgentWireManagedSkill[] => {
+      if (!isRecord(item) || typeof item.command !== 'string' || typeof item.dir !== 'string') return [];
+      const parts = parseManagedSkillCommand(item.command);
+      // 只认个人 Skill 目录下的一级：运行端会把这个目录整体挪走。
+      const valid = parts && isSafeProjectFilePath(item.dir) && item.dir.split('/').length === 3
+        && (item.dir.startsWith('.claude/skills/') || item.dir.startsWith('.agents/skills/'));
+      if (!valid || seen.has(item.command) || seen.has(item.dir)) return [];
+      seen.add(item.command).add(item.dir);
+      return [{ command: item.command, dir: item.dir }];
+    });
   }
   return personal;
 }

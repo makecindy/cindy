@@ -113,6 +113,9 @@ export function hostedStartOptions(input: HostedStartInput): StartSessionOptions
       ...(input.guest && input.guestProvider
         ? { guestProvider: { ...input.guestProvider, modelIds: [...input.guestProvider.modelIds] } }
         : {}),
+      ...(input.controllerManagedSkills
+        ? { controllerManagedSkills: { claudePluginRoots: [...input.controllerManagedSkills.claudePluginRoots] } }
+        : {}),
     },
     ...(input.onInvalidResumeSession ? { onInvalidResumeSession: input.onInvalidResumeSession } : {}),
   };
