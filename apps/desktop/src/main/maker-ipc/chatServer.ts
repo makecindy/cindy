@@ -2020,9 +2020,9 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
     const existing = notices.get(code);
     if (existing) return existing;
     const name = actors.find(actor => actor.id === run.execution.bot_id)?.name ?? '';
-    // Freeze the payload and client id for bounded retries, even after this turn ends.
+    // Freeze the server operation ID and payload for bounded retries, even after this turn ends.
     const payload = {
-      clientId: `capability:${run.execution.id}:${run.execution.epoch}:${code}`,
+      operationId: `capability:${run.execution.id}:${run.execution.epoch}:${code}`,
       content: [buildBotGroupCapabilityNotice(code, t(`bots.groupChat.notice.capability.${code}`).replaceAll('{{name}}', () => name))],
       mentions: [], ...(threadRootId ? { threadRootId } : {}),
     };

@@ -59,7 +59,18 @@ vi.mock('node:http', async () => {
     fixture.requests.push({ url: String(url), token: options.headers.Authorization, actor: (options.headers as Record<string, string>)['X-Chat-Actor'] });
     const req = Object.assign(new EventEmitter(), {
       end: (data?: string) => {
-        void Promise.resolve().then(() => fixture.handle(new URL(url).pathname.slice(3) + new URL(url).search, options.method, data ? JSON.parse(data) : undefined))
+        void Promise.resolve().then(() => {
+          const route = new URL(url).pathname.slice(3) + new URL(url).search;
+          const body = data ? JSON.parse(data) : undefined;
+          // #8443 / unit HTTP boundary: notice POSTs obey the existing message
+          // contract; accepting clientId here used to hide rejected real sends.
+          if (options.method === 'POST' && route.endsWith('/messages')
+            && body?.content?.some((block: { namespace?: string }) => block.namespace === 'cindy.capability-notice')
+            && (typeof body.operationId !== 'string' || !/^[a-zA-Z0-9_.:-]{8,160}$/.test(body.operationId) || 'clientId' in body)) {
+            return { status: 400, body: { error: { code: 'VALIDATION_FAILED' } } };
+          }
+          return fixture.handle(route, options.method, body);
+        })
           .then(result => {
             const response = Object.assign(new EventEmitter(), { statusCode: result?.status ?? 200, headers: result?.headers ?? {} });
             callback(response);
@@ -1086,14 +1097,14 @@ describe('Chat Server result delivery and refresh', () => {
       await vi.advanceTimersByTimeAsync(3000);
       expect(posted).toHaveLength(3);
     }
-    expect(posted[0]).toMatchObject({ content: [{ type: 'card', namespace: 'cindy.capability-notice', data: { code } }], mentions: [] });
+    expect(posted[0]).toMatchObject({ operationId: `capability:${execution.id}:${execution.epoch}:${code}`, content: [{ type: 'card', namespace: 'cindy.capability-notice', data: { code } }], mentions: [] });
     expect(fixture.requests.filter(request => request.url.endsWith(`/conversations/${roomId}/messages`)).at(-1)?.actor).toBe(botId);
     expect(deliveries()).toHaveLength(0);
     expect(deps.dispatch).toHaveBeenCalledOnce();
   });
 
   // #8443 review: real POST/429 parsing must keep each retry outside Retry-After,
-  // preserving the payload/clientId and the three-attempt budget (unit fake clock).
+  // preserving the payload/operationId and the three-attempt budget (unit fake clock).
   it.each([false, true])('honors Retry-After for capability notices (exhausted: %s)', async exhausted => {
     let invalid = false;
     const posted: Array<{ at: number; body: unknown }> = [];
