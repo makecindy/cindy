@@ -7090,11 +7090,16 @@ function PluginResultCard({ callId, sessionId, excludedUrls, actions }: {
   // Desktop draws every plugin card in a frame; mail cards already draw their own.
   const mailCard = blocks?.some((block) => block.primitive === 'plugin-card-actions'
     && !!((block.data as { mail?: unknown; legacyMail?: unknown } | undefined)?.mail || (block.data as { legacyMail?: unknown } | undefined)?.legacyMail));
+  // With live controls the card's text becomes their title and detail lines (Desktop's layout).
+  const controlsText = !mailCard && actions.remoteDeviceId && blocks?.some((block) => block.primitive === 'plugin-card-actions')
+    ? blocks.find((block) => block.id === 'text' && block.primitive === 'markdown') : undefined;
   return (
     <View style={mailCard ? styles.toolMediaBlock : styles.pluginResultCard} testID="message.pluginResultCard">
     {blocks?.map((block) => {
+      if (block === controlsText) return null;
       if (block.primitive === 'plugin-card-actions') return (
             <PluginCardActions key={block.id} data={block.data} deviceId={actions.remoteDeviceId} sessionId={sessionId} callId={callId}
+        text={controlsText ? pluginCardPlainText(controlsText.fallbackMarkdown) : undefined}
         onOpenAttachment={actions.onOpenPayload ? (url, name) => actions.onOpenPayload!(buildMediaPayload({ kind: 'image', url, previewable: true }, name)) : undefined} />
           );
       const url = (block.data as { url?: unknown } | undefined)?.url;

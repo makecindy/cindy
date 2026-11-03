@@ -16,6 +16,7 @@ vi.mock("@/auth/AuthContext", () => ({ useAuth: () => ({ getAccessToken: async (
 vi.mock("../plugins/mobileMailAttachment", () => ({ pickMobileMailAttachment: (...args: unknown[]) => h.pick(...args) }));
 vi.mock("@/session/useBotGroupRemoteMedia", () => ({ useBotGroupRemoteMedia: () => h.resolve }));
 vi.mock('@/components/FileTypeIcon', () => ({ FileTypeIcon: () => null }));
+vi.mock('lucide-react-native', () => ({ ArrowUpRight: () => null }));
 
 const h = vi.hoisted(() => ({ invoke: vi.fn(), pick: vi.fn(), resolve: vi.fn(), inject: vi.fn(), web: {} as any, mode: 'light' }));
 vi.mock("react-native", () => {
@@ -145,6 +146,30 @@ describe("rich plugin card hints", () => {
     expect(toggle.checked).toBe(true);
     await act(async () => { toggle.click(); });
     expect(dispatch).toHaveBeenCalledWith(expect.objectContaining({ actionId: 'prset:rename' }));
+  });
+
+  // Unit: on the phone the PR card's title, repo and branch were one loose block above a separate
+  // "open github.com" button. With the card text the title becomes the card's own link.
+  it('draws the card text as a title that opens the card link, without a separate link button', async () => {
+    h.invoke.mockImplementation(async () => ({ result: { confirms: [] } }));
+    const container = document.createElement('div'), root = createRoot(container);
+    unmount = () => act(() => root.unmount());
+    await act(async () => root.render(createElement(PluginCardActions, { deviceId: 'device', sessionId: 's', callId: 'c',
+      text: '#9 Fix login\n\no/r · 草稿', data: {
+        pluginId: 'github', revision: '1', form: null,
+        items: [
+          { id: 'link:0', label: '#9 Fix login', url: 'https://github.com/o/r/pull/9', disabled: false },
+          { id: 'pr:ready', label: '转为正式 PR', disabled: false, primary: true },
+        ],
+      } })));
+    const text = container.textContent ?? '';
+    expect(text.split('#9 Fix login')).toHaveLength(2);
+    expect(text).toContain('o/r · 草稿');
+    expect(text).not.toContain('plugins.openLinkHost');
+    const { Alert } = await import('react-native');
+    const title = [...container.querySelectorAll('button')].find((button) => button.textContent === '#9 Fix login')!;
+    await act(async () => { title.click(); });
+    expect(Alert.alert).toHaveBeenCalledWith('plugins.externalTitle', 'https://github.com/o/r/pull/9', expect.anything());
   });
 });
 

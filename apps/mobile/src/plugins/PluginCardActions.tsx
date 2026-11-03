@@ -46,10 +46,13 @@ import {
 } from "@/auth/authOwnerGeneration";
 import {
   fontWeight,
+  iconSize,
+  iconStroke,
   lineHeight,
   radius,
   spacing,
   typeScale,
+  useTheme,
   useThemedStyles,
   type ThemeColors,
 } from "@/theme";
@@ -59,6 +62,7 @@ import { pickMobileMailAttachment } from "./mobileMailAttachment";
 import { PluginCardRecipients } from "./PluginCardRecipients";
 import { invokePlugin } from "./pluginClient";
 import { FileTypeIcon } from '@/components/FileTypeIcon';
+import { ArrowUpRight } from 'lucide-react-native';
 import { formatByteSize } from '@cindy/maker-shared/file-preview';
 
 interface Action {
@@ -160,12 +164,15 @@ export function PluginCardActions({
   sessionId,
   callId,
   onOpenAttachment,
+  text,
 }: {
   data: unknown;
   deviceId?: string;
   sessionId: string;
   callId: string;
   onOpenAttachment?: (url: string, name: string) => void;
+  /** The card's projected text; drawn here as the card's title and detail lines. */
+  text?: string;
 }) {
   const parsed = parse(data);
   return parsed && !parsed.mail?.supersededBy && deviceId ? (
@@ -176,6 +183,7 @@ export function PluginCardActions({
       sessionId={sessionId}
       callId={callId}
       onOpenAttachment={onOpenAttachment}
+      text={text}
     />
   ) : null;
 }
@@ -194,7 +202,9 @@ function CardControls({
   sessionId,
   callId,
   onOpenAttachment,
+  text,
 }: {
+  text?: string;
   live?: string;
   prStatus: PrStatusSlot[];
   form: GhostCardFormField[] | null;
@@ -212,7 +222,15 @@ function CardControls({
 }) {
   const { t } = useTranslation(),
     styles = useThemedStyles(makeStyles);
+  const { colors } = useTheme();
   const history = !!mail?.supersededBy || !!legacyMail;
+  // Non-mail cards read like Desktop's: a title (the card's own link when it has one), quiet
+  // detail lines, and compact buttons. Mail cards keep their editor layout.
+  const compact = !mail && !legacyMail;
+  const lines = compact && text ? text.split("\n").map((line) => line.trim()).filter(Boolean) : [];
+  const titleLink = lines.length ? items.find((action) => action.url && !action.disabled && action.label === lines[0]) : undefined;
+  const titleHost = titleLink?.url ? linkHost(titleLink.url) : undefined;
+  const buttons = (history ? [] : items).filter((action) => !action.toggle && action !== titleLink);
   const { getAccessToken } = useAuth();
   const readonly = history || ['sent', 'sending', 'unconfirmed', 'deleting', 'deleted'].includes(mail?.state ?? '');
   const [countdownNow, setCountdownNow] = useState(Date.now);
@@ -541,6 +559,27 @@ function CardControls({
   }
   return (
     <View style={[styles.root, mail && !history && styles.mailCard]}>
+      {lines.length ? (
+        <View style={styles.cardHeader}>
+          {titleLink && titleHost ? (
+            <Pressable
+              accessibilityRole="link"
+              accessibilityLabel={`${lines[0]}: ${t("plugins.openLinkHost", { host: titleHost })}`}
+              hitSlop={{ top: spacing.xs, bottom: spacing.xs }}
+              onPress={() => choose(titleLink)}
+              style={({ pressed }) => [styles.titleRow, pressed && styles.pressed]}
+            >
+              <Text style={[styles.cardTitle, styles.titleText]}>{lines[0]}</Text>
+              <ArrowUpRight size={iconSize.md} strokeWidth={iconStroke.regular} color={colors.textTertiary} style={styles.titleIcon} />
+            </Pressable>
+          ) : (
+            <Text selectable style={styles.cardTitle}>{lines[0]}</Text>
+          )}
+          {lines.slice(1).map((line, index) => (
+            <Text key={index} selectable style={styles.note}>{line}</Text>
+          ))}
+        </View>
+      ) : null}
       {history ? <Pressable accessibilityRole="button" accessibilityState={{ expanded: historyExpanded }} onPress={() => setHistoryExpanded(!historyExpanded)}>
         <Text style={styles.note}>{historyExpanded ? '▾ ' : '▸ '}{t(legacyMail ? 'plugins.mailLegacy' : 'plugins.mailUpdated')}{' · '}{form?.find(f => f.name === 'subject')?.value}</Text>
       </Pressable> : null}
@@ -550,7 +589,7 @@ function CardControls({
             <Text style={styles.body}>{field.kind === 'mail-attachments' ? visibleMailAttachments(formValues, field.name).map(file => file.filename).join(' · ') : field.value}</Text>}
         </View>
       )}</View> : null}
-      {!history ? <View style={styles.form}>
+      {!history && form?.length ? <View style={styles.form}>
         {form?.map((field) => {
           if (field.kind === 'hidden') return null;
           if (field.kind === 'mail-html') return <MobileMailHtmlPreview key={field.name} html={formValues[field.name]} images={mailPreviewImages(formValues, mail?.images)} deviceId={deviceId}
@@ -640,7 +679,7 @@ function CardControls({
           );
         })}
       </View> : null}
-      <View style={mail && !history ? styles.mailFooter : undefined}>
+      {(mail && !history) || prStatus.length || buttons.length || live || items.some((action) => action.toggle) ? <View style={mail && !history ? styles.mailFooter : compact ? styles.compactFooter : undefined}>
         {mail && !history ? (
           <View style={styles.mailInfo}>
             <Text style={styles.note}>{mail.fromLabel}: {mail.from}</Text>
@@ -665,8 +704,8 @@ function CardControls({
             />
           </View>
         ))}
-        <View style={styles.actions}>
-          {(history ? [] : items).filter((action) => !action.toggle).map((action) => {
+        {buttons.length || live ? <View style={[styles.actions, compact && styles.compactActions]}>
+          {buttons.map((action) => {
             const sendNow = !!mail?.pendingSend && action.id === `mail:now:${mail.key}`;
             const primary = action.primary || (!!mail && action.id === `mail:send:${mail.key}`);
             const host = action.url ? linkHost(action.url) : undefined;
@@ -677,7 +716,8 @@ function CardControls({
                 accessibilityRole={action.url ? "link" : "button"}
                 accessibilityLabel={sendNow && mail ? `${action.label}, ${mailCardStatus(mail, countdownNow)}` : host ? `${label}: ${action.label}` : action.label}
                 disabled={action.disabled || busy || uploading || unknown || status !== "online" || (readonly && !mail?.pendingSend && !action.id.startsWith('mail:continue:'))}
-                style={[styles.button, primary && styles.sendButton, sendNow && styles.sendNowButton, host && styles.quietButton]}
+                hitSlop={compact ? { top: spacing.xs, bottom: spacing.xs } : undefined}
+                style={[styles.button, compact && styles.compactButton, primary && styles.sendButton, sendNow && styles.sendNowButton, host && styles.quietButton]}
                 onPress={() => choose(action)}
               >
                 {sendNow && mail ? (
@@ -685,13 +725,13 @@ function CardControls({
                     <View style={[styles.countdownFill, { width: `${(1 - mailSendRemainingFraction(mail, countdownNow)) * 100}%` }]} />
                   </View>
                 ) : null}
-                <Text style={[styles.label, primary && styles.sendLabel, host && styles.quietLabel]}>{label}</Text>
+                <Text style={[styles.label, compact && styles.compactLabel, primary && styles.sendLabel, host && styles.quietLabel]}>{label}</Text>
               </Pressable>
             );
           })}
-          {live ? <LiveStatus label={live} /> : null}
-        </View>
-      </View>
+          {live ? <View style={compact && styles.liveEnd}><LiveStatus label={live} /></View> : null}
+        </View> : null}
+      </View> : null}
       {unknown ? (
         <Text style={styles.note}>{t("plugins.pageUnconfirmed")}</Text>
       ) : null}
@@ -858,6 +898,17 @@ const makeStyles = (c: ThemeColors) =>
       textAlignVertical: "top",
     },
     actions: { flexDirection: "row", flexWrap: "wrap", justifyContent: 'flex-end', gap: spacing.sm },
+    compactActions: { justifyContent: "flex-start", alignItems: "center" },
+    compactButton: { minHeight: 36, paddingVertical: 0, paddingHorizontal: spacing.md },
+    compactLabel: { fontSize: typeScale.bodySmall, lineHeight: lineHeight.bodySmall },
+    liveEnd: { marginLeft: "auto" },
+    compactFooter: { gap: spacing.xs },
+    cardHeader: { gap: 2 },
+    cardTitle: { color: c.textPrimary, fontSize: typeScale.body, lineHeight: lineHeight.body, fontWeight: fontWeight.semibold },
+    titleRow: { flexDirection: "row", alignItems: "flex-start", alignSelf: "flex-start", maxWidth: "100%" },
+    titleText: { flexShrink: 1 },
+    titleIcon: { marginLeft: spacing.xs, marginTop: 3 },
+    pressed: { opacity: 0.72 },
     sendButton: { backgroundColor: c.cta },
     quietButton: { backgroundColor: "transparent", paddingHorizontal: spacing.sm },
     quietLabel: { color: c.textSecondary },
