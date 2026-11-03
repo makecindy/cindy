@@ -209,10 +209,19 @@ export function parseManagedSkillCommand(command: string): { plugin: string; ski
     : null;
 }
 
-/** 托管 Skill 的文件在影子目录里的位置：Agent 找项目 Skill 的目录下 `<插件>-<Skill>`。 */
+/**
+ * 托管 Skill 的文件在影子目录里的位置：Agent 找项目 Skill 的目录下 `<插件>-<Skill>`。名字本身可以含 `-`，
+ * 两个命令可能拍平成同一个名字（`a-b:c` 与 `a:b-c`）：名字里有 `-` 时追加整条命令的短哈希，保证不同命令不同目录，
+ * 同一条命令每次都得到同一个目录。
+ */
 export function managedSkillDir(kind: RemoteAgentKind, command: string): string | null {
   const parts = parseManagedSkillCommand(command);
-  return parts ? `${kind === 'claude-code' ? '.claude/skills' : '.agents/skills'}/${parts.plugin}-${parts.skill}` : null;
+  if (!parts) return null;
+  const ambiguous = parts.plugin.includes('-') || parts.skill.includes('-');
+  const name = ambiguous
+    ? `${parts.plugin}-${parts.skill}-${createHash('sha256').update(command).digest('hex').slice(0, 8)}`
+    : `${parts.plugin}-${parts.skill}`;
+  return `${kind === 'claude-code' ? '.claude/skills' : '.agents/skills'}/${name}`;
 }
 
 /** 新运行端给 Claude Code 挂的插件目录(相对影子目录)：插件根与其中这个 Skill 的目录。 */

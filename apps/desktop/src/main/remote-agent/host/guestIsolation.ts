@@ -204,6 +204,8 @@ export function sanitizeGuestOpenPayload(payload: RemoteAgentOpenPayload): Remot
     personal: {
       ...payload.personal,
       files: payload.personal.files.flatMap(guestInstructionAsset),
+      // 带来的托管 Skill 与个人 Skill 同一道检查：带 hooks 的 Markdown 丢弃，命令预执行语法断开。
+      ...(payload.personal.managedFiles ? { managedFiles: payload.personal.managedFiles.flatMap(guestInstructionAsset) } : {}),
     },
   };
 }

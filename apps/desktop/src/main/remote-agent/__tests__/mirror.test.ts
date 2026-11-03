@@ -444,8 +444,8 @@ describe('collectPersonalConfig', () => {
     });
     expect(claude.personal.managedSkills).toEqual([{ command: 'cindy:pr', dir: '.claude/skills/cindy-pr' }]);
     expect(claude.roots).toEqual(expect.arrayContaining([
-      { relative: '.claude/skills/cindy-pr', local: pr },
-      { relative: '.cindy/managed-skills/cindy/skills/pr', local: pr },
+      { relative: '.claude/skills/cindy-pr', local: pr, managed: true },
+      { relative: '.cindy/managed-skills/cindy/skills/pr', local: pr, managed: true },
     ]));
 
     const codex = await collectPersonalConfig('codex', [], { env: {}, home, managedSkills: [] });
@@ -453,7 +453,7 @@ describe('collectPersonalConfig', () => {
     expect(codex.personal.managedSkills).toEqual([]);
     const pi = await collectPersonalConfig('pi', [], { env: {}, home, managedSkills });
     expect(pi.personal.managedSkills).toEqual([{ command: 'cindy:pr', dir: '.agents/skills/cindy-pr' }]);
-    expect(pi.roots).toEqual([{ relative: '.agents/skills/cindy-pr', local: pr }]);
+    expect(pi.roots).toEqual([{ relative: '.agents/skills/cindy-pr', local: pr, managed: true }]);
   });
 
   // 新运行端：与它指纹相同的只报名字，其余放进单独的托管额度，不挤占个人配置。
@@ -476,6 +476,40 @@ describe('collectPersonalConfig', () => {
     ]);
     expect(decode(personal.files)).toEqual({ '.claude/skills/mine/SKILL.md': 'mine' });
     expect(decode(personal.managedFiles ?? [])).toEqual({ '.claude/skills/cindy-learn/SKILL.md': 'learn skill' });
+  });
+
+  // 整个带或整个不带：有单个过大的文件、或受邀者任务里的凭证类文件，该 Skill 整个不带(不留只有 SKILL.md 的半个)；
+  // 名字里带 `-` 的两个命令拍平后相同，也各自得到不同的目录，不会有一个被悄悄丢掉。
+  it('never sends half a managed Skill and gives commands that flatten alike different directories', async () => {
+    const home = path.join(root, 'home');
+    const make = (name: string, files: Record<string, string>) => {
+      const dir = path.join(root, 'bundle', name);
+      for (const [file, data] of Object.entries(files)) write(path.join(dir, file), data);
+      return dir;
+    };
+    const big = make('big', { 'SKILL.md': 'big', 'references/huge.txt': 'x'.repeat(600 * 1024) });
+    const secret = make('secret', { 'SKILL.md': 'secret', '.env': 'TOKEN=1' });
+    // 超过清单深度上限(与指纹同一份)：整个 Skill 不带，不是只丢掉最深的文件。
+    const deep = make('deep', { 'SKILL.md': 'deep', 'a/b/c/d/e/f/g/h/i/leaf.txt': 'leaf' });
+    const a = make('a', { 'SKILL.md': 'a' });
+    const b = make('b', { 'SKILL.md': 'b' });
+    const managedSkills = [
+      { command: 'cindy-plugin-x:big', dir: big }, { command: 'cindy-plugin-x:secret', dir: secret },
+      { command: 'cindy-plugin-x:deep', dir: deep },
+      { command: 'cindy-plugin-foo:bar-baz', dir: a }, { command: 'cindy-plugin-foo-bar:baz', dir: b },
+    ];
+    const shared = await collectPersonalConfig('claude-code', [], { env: {}, home, managedSkills, skipCredentials: true });
+    expect(shared.personal.managedSkills?.map((skill) => skill.command)).toEqual([
+      'cindy-plugin-foo:bar-baz', 'cindy-plugin-foo-bar:baz',
+    ]);
+    const dirs = shared.personal.managedSkills!.map((skill) => skill.dir);
+    expect(new Set(dirs).size).toBe(2);
+    expect(decode(shared.personal.files)).toEqual({ [`${dirs[0]}/SKILL.md`]: 'a', [`${dirs[1]}/SKILL.md`]: 'b' });
+    // 自己的任务(不是受邀者)里 .env 也是 Skill 的一部分，整个带过去。
+    const own = await collectPersonalConfig('claude-code', [], { env: {}, home, managedSkills: [managedSkills[1]] });
+    expect(Object.keys(decode(own.personal.files)).sort()).toEqual([
+      `${own.personal.managedSkills![0].dir}/.env`, `${own.personal.managedSkills![0].dir}/SKILL.md`,
+    ]);
   });
 
   it('leaves credential files in personal Skills for later on a shared provider', async () => {

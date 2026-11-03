@@ -1958,13 +1958,18 @@ Cindy 托管 Skill（2026-11-03）：内置 Skill 与插件带的 Skill 以任�
 `open.personal` 追加可选数组 `managedSkills: [{ command, dir }]`：任务所在电脑按本机任务同一来源列出托管 Skill，
 用本机停用偏好与伙伴授权过滤（`resolveAllowedManagedSkills`），本机停用的个人 Skill 也不再同步。文件随
 `personal.files` 放在 Agent 找项目 Skill 的位置（Claude Code 为 `.claude/skills/<插件>-<Skill>`，Codex / Pi 为
-`.agents/skills/...`）。对旧运行端与个人配置共用 512 个文件、4 MB 的额度且个人配置优先；放不下的 Skill 整个不带。
+`.agents/skills/...`）。目录名为 `<插件>-<Skill>`；两段里有 `-` 时追加整条命令的 8 位哈希，避免 `a-b:c` 与 `a:b-c`
+拍平成同一个目录。文件清单与指纹共用 `managedSkillDigest.ts` 的 `listManagedSkillFiles`：清单超出上限、有单个超过
+512 KB 的文件、受邀者任务里的凭证类文件、读不到的文件，该 Skill 整个不带，不留只有 `SKILL.md` 的半个。
+对旧运行端与个人配置共用 512 个文件、4 MB 的额度且个人配置优先；放不下的 Skill 整个不带。
 沿用 `maker:remote-agent:v1`，只加可选的 `caps.managedSkills`，不加错误码或 relay 接口。
 
 - 新运行端看到字段（含空数组）即以它为准，**不加载自己的托管 Skill**，受邀者也一样：Claude Code 把这些目录挪进
   影子目录内的 `.cindy/managed-skills/<插件>/skills/<Skill>` 并以本地插件挂载，命名保持 `cindy:pr`；Codex 对共用
   CODEX_HOME 里本机那份逐线程停用，Pi 不挂本机的。控制端为原位置与插件位置都登记路径映射，Skill 里的脚本路径
-  经 `cindy_exec` 回到任务所在电脑的真实文件。
+  经 `cindy_exec` 回到任务所在电脑的真实文件；连回时托管 Skill 的映射以这次同步的为准（插件更新后目录也变了），
+  其余映射仍保持原目标。受邀者带来的 `managedFiles` 与 `files` 走同一道 Markdown 检查（带 hooks 的丢弃、命令预执行
+  语法断开）。
 - 旧运行端解码时丢弃该字段，把文件当项目 Skill 加载：能用，但 Claude Code 里叫 `pr` 而不是 `cindy:pr`；同账号
   旧运行端自己也有同名托管 Skill 时会出现两份。新运行端遇到旧控制端（字段缺省）沿用原规则：同账号用自己的，
   受邀者不加载。

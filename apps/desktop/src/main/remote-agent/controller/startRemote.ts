@@ -99,7 +99,7 @@ export interface StartRemoteAgentDeps {
     managedSkillDigests?: Readonly<Record<string, string>>;
   }): Promise<{
     personal: RemoteAgentWirePersonal;
-    roots: Array<{ relative: string; local: string }>;
+    roots: Array<{ relative: string; local: string; managed?: true }>;
   }>;
   /**
    * 说明文件里 `@` 导入的文件(只对 Claude Code)；会就地改写传入说明文件里的引用。缺省不同步。
@@ -180,7 +180,7 @@ export function takeGroupSwitchState(
 export function shadowAliases(
   started: { shadowDir: string; mirrorRoot?: string; previousMirrorRoots?: string[]; extraDirs?: string[]; writableDirs?: string[]; virtualWorkspace?: boolean },
   workingDir: string,
-  personalRoots: ReadonlyArray<{ relative: string; local: string }>,
+  personalRoots: ReadonlyArray<{ relative: string; local: string; managed?: true }>,
   directories?: { extraDirs: readonly string[]; writableDirs: readonly string[] },
 ): Array<{ from: string; to: string }> {
   if (!started.shadowDir) return [];
@@ -485,7 +485,7 @@ async function prepareAndStartRemoteAgentSession(
   let restartResumeRequired = false;
   let lastStarted: RemoteStartedInfo | null = null;
 
-  let personalRoots: Array<{ relative: string; local: string }> = [];
+  let personalRoots: Array<{ relative: string; local: string; managed?: true }> = [];
   /** 正在连或连着的那条连接(Codex 的执行环境帧经它推给对方)。 */
   let active: RemoteAgentRunClient | null = null;
   let linkState: LinkState = 'connecting';
@@ -616,8 +616,12 @@ async function prepareAndStartRemoteAgentSession(
     // 连回时只补新映射，不替换已有的(见 ExecutorWorkspace.addAliases)。
     const applyProjection = (projection: Parameters<typeof shadowAliases>[0], virtualRoot: string | undefined) => {
       const aliases = shadowAliases(projection, workspace.workingDir, personalRoots, openedDirs);
-      if (reconnect) workspace.addAliases(aliases);
-      else workspace.setAliases(aliases);
+      if (reconnect) {
+        // 托管 Skill 每次连回都重新同步(插件更新后目录也变了)，它们的映射以这次的为准；其余只补新的。
+        const shadow = projection.shadowDir.replace(/[\\/]+$/, '');
+        const managed = new Set(personalRoots.filter((root) => root.managed).map((root) => `${shadow}/${root.relative}`));
+        workspace.addAliases(aliases, managed);
+      } else workspace.setAliases(aliases);
       workspace.setVirtualRoot(virtualRoot);
     };
     const client: RemoteAgentRunClient = new RemoteAgentRunClient(deps.newId(), poller, {
