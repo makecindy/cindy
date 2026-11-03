@@ -80,7 +80,7 @@ Use `cindy_scheduler` (`list_tools` with category `scheduler`, then `call_tool`)
 ```json
 {
   "name": "PR #<number>",
-  "prompt": "Follow <PR_URL> with the pr Skill (background round). Checkout: <worktree path> (branch <branch>).",
+  "prompt": "Follow <PR_URL> with the built-in pr Skill (background round): load it first (in Claude Code its name is `cindy:pr`) and follow its section 5. Checkout: <worktree path> (branch <branch>).",
   "cronExpr": "*/10 * * * *",
   "intervalMs": 600000,
   "timezone": "<the user's IANA time zone>",
