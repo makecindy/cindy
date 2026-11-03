@@ -16,7 +16,6 @@ vi.mock("@/auth/AuthContext", () => ({ useAuth: () => ({ getAccessToken: async (
 vi.mock("../plugins/mobileMailAttachment", () => ({ pickMobileMailAttachment: (...args: unknown[]) => h.pick(...args) }));
 vi.mock("@/session/useBotGroupRemoteMedia", () => ({ useBotGroupRemoteMedia: () => h.resolve }));
 vi.mock('@/components/FileTypeIcon', () => ({ FileTypeIcon: () => null }));
-vi.mock('lucide-react-native', () => ({ ArrowUpRight: () => null }));
 
 const h = vi.hoisted(() => ({ invoke: vi.fn(), pick: vi.fn(), resolve: vi.fn(), inject: vi.fn(), web: {} as any, mode: 'light' }));
 vi.mock("react-native", () => {

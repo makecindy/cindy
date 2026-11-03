@@ -46,13 +46,10 @@ import {
 } from "@/auth/authOwnerGeneration";
 import {
   fontWeight,
-  iconSize,
-  iconStroke,
   lineHeight,
   radius,
   spacing,
   typeScale,
-  useTheme,
   useThemedStyles,
   type ThemeColors,
 } from "@/theme";
@@ -62,7 +59,6 @@ import { pickMobileMailAttachment } from "./mobileMailAttachment";
 import { PluginCardRecipients } from "./PluginCardRecipients";
 import { invokePlugin } from "./pluginClient";
 import { FileTypeIcon } from '@/components/FileTypeIcon';
-import { ArrowUpRight } from 'lucide-react-native';
 import { formatByteSize } from '@cindy/maker-shared/file-preview';
 
 interface Action {
@@ -222,7 +218,6 @@ function CardControls({
 }) {
   const { t } = useTranslation(),
     styles = useThemedStyles(makeStyles);
-  const { colors } = useTheme();
   const history = !!mail?.supersededBy || !!legacyMail;
   // Non-mail cards read like Desktop's: a title (the card's own link when it has one), quiet
   // detail lines, and compact buttons. Mail cards keep their editor layout.
@@ -569,8 +564,7 @@ function CardControls({
               onPress={() => choose(titleLink)}
               style={({ pressed }) => [styles.titleRow, pressed && styles.pressed]}
             >
-              <Text style={[styles.cardTitle, styles.titleText]}>{lines[0]}</Text>
-              <ArrowUpRight size={iconSize.md} strokeWidth={iconStroke.regular} color={colors.textTertiary} style={styles.titleIcon} />
+              <Text style={styles.cardTitle}>{lines[0]}</Text>
             </Pressable>
           ) : (
             <Text selectable style={styles.cardTitle}>{lines[0]}</Text>
@@ -905,9 +899,7 @@ const makeStyles = (c: ThemeColors) =>
     compactFooter: { gap: spacing.xs },
     cardHeader: { gap: 2 },
     cardTitle: { color: c.textPrimary, fontSize: typeScale.body, lineHeight: lineHeight.body, fontWeight: fontWeight.semibold },
-    titleRow: { flexDirection: "row", alignItems: "flex-start", alignSelf: "flex-start", maxWidth: "100%" },
-    titleText: { flexShrink: 1 },
-    titleIcon: { marginLeft: spacing.xs, marginTop: 3 },
+    titleRow: { alignSelf: "flex-start", maxWidth: "100%" },
     pressed: { opacity: 0.72 },
     sendButton: { backgroundColor: c.cta },
     quietButton: { backgroundColor: "transparent", paddingHorizontal: spacing.sm },
