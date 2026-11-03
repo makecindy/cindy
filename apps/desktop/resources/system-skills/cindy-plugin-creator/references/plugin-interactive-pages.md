@@ -50,7 +50,7 @@ ghost_forge_install({ dir: '<插件源码目录的绝对路径>' });
 
 工具仍声明在 `tools[]`，包括只供页面调用的工具。`mcpApps.ui.resources`
 把一个 `ui://` 名字对应到包内 HTML；`mcpApps.ui.tools` 指定页面和可见性。
-下面是从[完整清单](examples/interactive-pages/loader/ghost.json)抽出的对应关系：
+摘自[完整清单](examples/interactive-pages/loader/ghost.json)：
 
 ```json
 {
@@ -107,8 +107,8 @@ cindy.send({ type: 'tool-result', callId: msg.callId, ok: true, result: {
 
 由 AI 写首屏时使用 show_page({title,html})，返回结构相同。生成页面的 LLM（后端模型或
 对话 AI）读[MCP Apps 页面生成手册](examples/interactive-pages/PAGE-GENERATION.md)；
-loader 用 `manual.items` 挂上同一份，show_page 说明指向 `ghost_manual`。页面不能
-创造插件未提供的能力。
+show_page 说明让 AI 先调 `ghost_forge_guide({section:"pages"})` 读宿主的这份
+（旧版可自带一份）。页面不能创造插件未提供的能力。
 
 ### 5. 加载器显示首屏，生成的页面自己连接
 
