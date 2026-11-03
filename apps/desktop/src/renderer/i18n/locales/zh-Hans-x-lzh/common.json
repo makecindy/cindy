@@ -16814,6 +16814,7 @@
       "steerFailed": "插话未成：{{message}}",
       "qrExpired": "二维码已逾时，请重新起始",
       "registrationFailed": "立之未成，请稍后再试",
+      "credentialSaveFailed": "憑證未存，請重試",
       "silentStopExhausted": "模型屡返空答，自动续行已暂止。点「继续」以复差事。",
       "executionResultUnavailable": "未得行之结果，自动接续已止。可请助手察既有之结果。",
       "outputLimit": "模型已达输出长度之限，此轮之答或有不全。径遣下一讯即可续之。",

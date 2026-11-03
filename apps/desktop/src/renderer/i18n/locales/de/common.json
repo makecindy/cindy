@@ -16881,6 +16881,7 @@
       "steerFailed": "Steuerung fehlgeschlagen: {{message}}",
       "qrExpired": "QR-Code abgelaufen, bitte starte erneut",
       "registrationFailed": "Erstellung fehlgeschlagen, bitte versuche es später erneut",
+      "credentialSaveFailed": "Bot-Zugangsdaten konnten nicht gespeichert werden. Bitte erneut versuchen.",
       "silentStopExhausted": "Das Modell hat wiederholt leere Antworten zurückgegeben; die automatische Fortsetzung ist pausiert. Klicke auf „Fortsetzen“, um die Aufgabe fortzusetzen.",
       "executionResultUnavailable": "Das Ausführungsergebnis konnte nicht abgerufen werden. Die automatische Fortsetzung wurde gestoppt. Bitte den Assistenten, das vorhandene Ausführungsergebnis zu prüfen.",
       "outputLimit": "Das Modell hat sein Ausgabelimit erreicht. Diese Antwort ist daher möglicherweise unvollständig. Sende die nächste Nachricht, um fortzufahren.",

@@ -17041,6 +17041,7 @@
       "steerFailed": "Error de redirección: {{message}}",
       "qrExpired": "El código QR venció, empieza de nuevo",
       "registrationFailed": "No se pudo crear, inténtalo de nuevo más tarde",
+      "credentialSaveFailed": "No se pudieron guardar las credenciales del bot. Vuelve a intentarlo.",
       "silentStopExhausted": "El modelo devolvió respuestas vacías repetidamente; la reanudación automática está en pausa. Haz clic en \"Continuar\" para reanudar la tarea.",
       "executionResultUnavailable": "No se puede recuperar el resultado de la ejecución. La continuación automática se ha detenido. Pídale al asistente que verifique el resultado de la ejecución existente.",
       "outputLimit": "El modelo alcanzó su límite de producción, por lo que esta respuesta puede estar incompleta. Envía el siguiente mensaje para continuar.",

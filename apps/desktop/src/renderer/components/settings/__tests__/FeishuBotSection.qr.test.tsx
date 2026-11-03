@@ -373,4 +373,20 @@ describe('Feishu bot authorization', () => {
     expect(screen.getByRole('button', { name: 'settings.feishuBot.qr.retry' })).toBeTruthy();
     expect(screen.queryByRole('textbox')).toBeNull();
   });
+
+  it('explains a credential save failure and offers a new authorization', async () => {
+    const { emit } = installApi();
+    await act(async () => {
+      render(<FeishuBotSection expanded onToggle={() => {}} />);
+    });
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: 'settings.feishuBot.qr.begin' }));
+    });
+    act(() => {
+      emit({ status: 'error', runId: 7, error: 'CREDENTIAL_SAVE_FAILED' });
+    });
+    // 主进程只回错误码, 界面必须说清凭证没保存成功, 并保留重试入口。
+    expect(screen.getByRole('alert').textContent).toBe('logic.errors.credentialSaveFailed');
+    expect(screen.getByRole('button', { name: 'settings.feishuBot.qr.retry' })).toBeTruthy();
+  });
 });

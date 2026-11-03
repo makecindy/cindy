@@ -441,6 +441,87 @@ describe("Feishu IPC account scope", () => {
     // 旧轮次的完成不得再驱动界面, 否则会切走正在进行的授权。
     expect(statuses).not.toContain("success");
   });
+
+  it("does not save a registration cancelled while the credential save is queued", async () => {
+    vi.useFakeTimers();
+    const gate = deferred<void>();
+    operationGate = gate.promise;
+    mocks.requestRegistration.mockResolvedValue({
+      deviceCode: "device-code",
+      userCode: "user-code",
+      verificationUri: "https://example.test",
+      interval: 1,
+      expiresIn: 600,
+    });
+    mocks.pollRegistration.mockResolvedValueOnce({
+      status: "success",
+      result: {
+        clientId: "cli_queued",
+        clientSecret: "queued-secret",
+        tenantBrand: "feishu",
+        ownerOpenId: "ou_queued",
+      },
+    });
+
+    const begin = handlers.get("feishuBot:registration-begin");
+    await expect(
+      Promise.resolve(begin?.({ service: "feishu" })),
+    ).resolves.toMatchObject({ ok: true });
+    await vi.advanceTimersByTimeAsync(1000);
+    // 保存已经排进连接生命周期队列, 但还没执行。
+    await vi.waitFor(() => expect(accountRun).toHaveBeenCalled());
+
+    cancelAppRegistration();
+    gate.resolve();
+    await vi.runAllTimersAsync();
+
+    // 被取消的授权不得落盘, 更不能把连接拉起来。
+    expect(mocks.writeCredentials).not.toHaveBeenCalled();
+    expect(mocks.start).not.toHaveBeenCalled();
+    const statuses = broadcasts.mock.calls
+      .filter(([channel]) => channel === "feishuBot:registration-status")
+      .map(([, payload]) => (payload as { status: string }).status);
+    expect(statuses).not.toContain("success");
+  });
+
+  it("reports a credential persistence failure instead of success", async () => {
+    vi.useFakeTimers();
+    mocks.writeCredentials.mockReturnValue(false);
+    mocks.requestRegistration.mockResolvedValue({
+      deviceCode: "device-code",
+      userCode: "user-code",
+      verificationUri: "https://example.test",
+      interval: 1,
+      expiresIn: 600,
+    });
+    mocks.pollRegistration.mockResolvedValueOnce({
+      status: "success",
+      result: {
+        clientId: "cli_save_failed",
+        clientSecret: "save-failed-secret",
+        tenantBrand: "feishu",
+        ownerOpenId: "ou_save_failed",
+      },
+    });
+
+    const begin = handlers.get("feishuBot:registration-begin");
+    await expect(
+      Promise.resolve(begin?.({ service: "feishu" })),
+    ).resolves.toMatchObject({ ok: true });
+    await vi.advanceTimersByTimeAsync(1000);
+    await vi.runAllTimersAsync();
+
+    // 凭证没落盘时不能报成功, 否则界面会切到"已绑定"卡片。
+    expect(mocks.start).not.toHaveBeenCalled();
+    const terminal = broadcasts.mock.calls
+      .filter(([channel]) => channel === "feishuBot:registration-status")
+      .map(([, payload]) => payload as { status: string; error?: string })
+      .find((payload) => payload.status !== "pending");
+    expect(terminal).toMatchObject({
+      status: "error",
+      error: "CREDENTIAL_SAVE_FAILED",
+    });
+  });
 });
 
 describe("Feishu credential connection semantics", () => {

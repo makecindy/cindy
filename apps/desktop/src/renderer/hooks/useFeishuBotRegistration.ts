@@ -139,7 +139,13 @@ export function useFeishuBotRegistration(
       }
 
       setPhase('error');
-      setErrorMessage(payload.error ?? t('logic.errors.registrationFailed'));
+      setErrorMessage(
+        // 凭证没落盘时 main 只回错误码; 这里的提示必须说清"没保存成功",
+        // 否则用户会以为机器人已经绑定, 实际什么都没留下。
+        payload.error === 'CREDENTIAL_SAVE_FAILED'
+          ? t('logic.errors.credentialSaveFailed')
+          : (payload.error ?? t('logic.errors.registrationFailed')),
+      );
     });
     return off;
   }, [t]);

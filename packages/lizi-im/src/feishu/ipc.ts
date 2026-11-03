@@ -35,6 +35,10 @@ import {
 import type { FeishuPublicState } from "./internal-types.js";
 
 const ipc_SLOT = Symbol("feishu.ipc");
+
+/** 凭证没能落盘时回给 renderer 的错误码; 由设置页翻译成可重试的提示。 */
+export const CREDENTIAL_SAVE_FAILED = "CREDENTIAL_SAVE_FAILED";
+
 function createIpcState() {
   return {
     registered: false,
@@ -387,18 +391,28 @@ async function pollRegistrationInBackground(
         continue;
       }
 
+      const service = success.tenantBrand ?? pollBrand;
       let verdict: "connected" | "conflict" | "error" | "pending";
       try {
-        ({ verdict } = await runInAccountScope(accountScope, async () => {
+        const saved = await runInAccountScope(accountScope, async () => {
+          // runInAccountScope 会把这次保存排进连接生命周期队列。排队期间用户
+          // 可能已经取消或重新发起: 这一轮不再是当前轮时不能再落盘, 更不能
+          // 把连接拉起来 —— 否则被取消的授权仍会变成实际生效的机器人。
+          if (
+            runId !== S().registrationRunId ||
+            !isAccountScopeCurrent(accountScope)
+          ) {
+            return null;
+          }
           return saveAndConnect(
             success.clientId,
             success.clientSecret,
-            success.tenantBrand ?? pollBrand,
-            {
-              replacementOwnerOpenId: success.ownerOpenId,
-            },
+            service,
+            { replacementOwnerOpenId: success.ownerOpenId },
           );
-        }));
+        });
+        if (saved === null) return;
+        verdict = saved.verdict;
       } catch (err) {
         if (!isAccountScopeCurrent(accountScope)) return;
         const error = err instanceof Error ? err.message : String(err);
@@ -413,6 +427,23 @@ async function pollRegistrationInBackground(
       // 已经不是当前轮时不能再广播 success —— 否则旧授权的完成会把界面
       // 切到已绑定卡片，连带卸载正在进行的新一轮授权。
       if (runId !== S().registrationRunId) return;
+      if (verdict === "error") {
+        // 'error' 可能来自凭证没落盘, 也可能来自凭证已保存但连接失败。前者
+        // 这轮授权等于作废, 必须让用户看到失败并可重试; 后者设置卡会显示
+        // 已绑定 + 连接失败, 不能再报一次"创建成功"。
+        const savedCreds = storage.readCredentials();
+        if (
+          savedCreds?.appId !== success.clientId ||
+          savedCreds.service !== service
+        ) {
+          broadcast("feishuBot:registration-status", {
+            status: "error",
+            runId,
+            error: CREDENTIAL_SAVE_FAILED,
+          });
+          return;
+        }
+      }
       broadcast("feishuBot:registration-status", {
         status: "success",
         runId,
