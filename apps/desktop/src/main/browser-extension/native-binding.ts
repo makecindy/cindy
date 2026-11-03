@@ -80,6 +80,8 @@ export function createNativeBinding(options: NativeBindingOptions): NativeBindin
     throw new Error('NATIVE_PATH_UNSAFE');
   const root = options.registrationKey ? path.join(registrationRoot, options.registrationKey) : registrationRoot;
   const registrationFile = path.join(registrationRoot, options.hostName + '.json');
+  const windowsRegistryKeys = ['Google\\Chrome', 'Microsoft\\Edge', 'BraveSoftware\\Brave-Browser']
+    .map(vendor => 'HKCU\\Software\\' + vendor + '\\NativeMessagingHosts\\' + options.hostName);
   const token = crypto.randomBytes(32).toString('hex');
   const run = options.run ?? (promisify(execFile) as NativeBindingOptions['run']);
   let config: string | null = null;
@@ -104,18 +106,57 @@ export function createNativeBinding(options: NativeBindingOptions): NativeBindin
     }
   }
 
-  async function registeredBinary(): Promise<string | null> {
-    const files = [registrationFile, ...(platform === 'win32' ? [] : browserProfiles().map(profile =>
-      path.join(profile, 'NativeMessagingHosts', options.hostName + '.json')))];
+  async function registeredBinary(expectedBinary?: string): Promise<string | null> {
+    const requiredFiles = new Set<string>();
+    if (expectedBinary !== undefined && platform === 'win32') {
+      // reg.exe uses the same failure code for missing keys and failed reads. Read the
+      // actual write targets through Registry.GetValue so access errors cannot look absent.
+      const keys = Buffer.from(JSON.stringify(windowsRegistryKeys.map(key =>
+        key.replace(/^HKCU/, 'HKEY_CURRENT_USER')))).toString('base64');
+      const script = `
+$ErrorActionPreference = 'Stop'
+[Console]::OutputEncoding = [Text.Encoding]::UTF8
+$keys = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('${keys}')) | ConvertFrom-Json
+$values = @(foreach ($key in $keys) {
+  $value = [Microsoft.Win32.Registry]::GetValue($key, '', $null)
+  if ($null -ne $value) {
+    if ($value -isnot [string]) { throw 'NATIVE_PATH_UNSAFE' }
+    $value
+  }
+})
+[Console]::Write((ConvertTo-Json -InputObject $values -Compress))
+`;
+      const powershell = path.join(env.SystemRoot || env.WINDIR || 'C:\\Windows',
+        'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe');
+      const result = await run!(powershell, ['-NoLogo', '-NoProfile', '-NonInteractive',
+        '-EncodedCommand', Buffer.from(script, 'utf16le').toString('base64')],
+      { windowsHide: true, timeout: 10000 }) as { stdout: string };
+      const values: unknown = JSON.parse(result.stdout.trim());
+      if (!Array.isArray(values)) throw new Error('NATIVE_PATH_UNSAFE');
+      for (const file of values) {
+        if (typeof file !== 'string' || !file) throw new Error('NATIVE_PATH_UNSAFE');
+        requiredFiles.add(file);
+      }
+    }
+    const files = new Set([registrationFile, ...requiredFiles,
+      ...(platform === 'win32' ? [] : browserProfiles().map(profile =>
+        path.join(profile, 'NativeMessagingHosts', options.hostName + '.json')))]);
+    let matched: string | null = null;
     for (const file of files) {
       let text: string;
       try { text = (await readBoundedFileNoFollow(file, 65536))?.toString('utf8') ?? ''; }
-      catch (error) { if ((error as NodeJS.ErrnoException).code === 'ENOENT') continue; throw error; }
+      catch (error) {
+        if ((error as NodeJS.ErrnoException).code === 'ENOENT' && !requiredFiles.has(file)) continue;
+        throw error;
+      }
       const target = (JSON.parse(text) as { path?: unknown }).path;
       if (typeof target !== 'string') throw new Error('NATIVE_PATH_UNSAFE');
-      return target;
+      // Installation must prefer any conflicting browser target over a matching cache.
+      // Closing keeps the historical first-registration ownership check.
+      if (expectedBinary === undefined || target !== expectedBinary) return target;
+      matched = target;
     }
-    return null;
+    return matched;
   }
 
   function browserProfiles(): string[] {
@@ -181,12 +222,12 @@ export function createNativeBinding(options: NativeBindingOptions): NativeBindin
     if (anyLive) return;
     if (platform === 'win32') {
       const reg = path.join(env.SystemRoot || env.WINDIR || 'C:\\Windows', 'System32', 'reg.exe');
-      for (const vendor of ['Google\\Chrome', 'Microsoft\\Edge', 'BraveSoftware\\Brave-Browser']) {
+      for (const key of windowsRegistryKeys) {
         await run!(
           reg,
           [
             'DELETE',
-            'HKCU\\Software\\' + vendor + '\\NativeMessagingHosts\\' + options.hostName,
+            key,
             '/f',
           ],
           { windowsHide: true, timeout: 10000 },
@@ -243,7 +284,7 @@ export function createNativeBinding(options: NativeBindingOptions): NativeBindin
       await privateDirectory(root);
       const binaryName = 'cindy-browser-native' + (platform === 'win32' ? '.exe' : '');
       const binary = path.join(root, binaryName);
-      const registered = await registeredBinary();
+      const registered = await registeredBinary(binary);
       if (registered !== null && registered !== binary) {
         if (!takeover || !await options.confirmTakeover?.())
           return { ok: false as const, error: 'NATIVE_BINDING_UNAVAILABLE' as const, reason: 'NATIVE_HOST_IN_USE' };
@@ -274,16 +315,12 @@ export function createNativeBinding(options: NativeBindingOptions): NativeBindin
       if (platform === 'win32') {
         const file = registrationFile;
         const reg = path.join(env.SystemRoot || env.WINDIR || 'C:\\Windows', 'System32', 'reg.exe');
-        for (const vendor of [
-          'Google\\Chrome',
-          'Microsoft\\Edge',
-          'BraveSoftware\\Brave-Browser',
-        ]) {
+        for (const key of windowsRegistryKeys) {
           await run!(
             reg,
             [
               'ADD',
-              'HKCU\\Software\\' + vendor + '\\NativeMessagingHosts\\' + options.hostName,
+              key,
               '/ve',
               '/t',
               'REG_SZ',
