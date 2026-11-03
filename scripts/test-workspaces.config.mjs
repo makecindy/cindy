@@ -122,6 +122,8 @@ const mobileGuardInclude = [
   // Whole-repo static scan of text colours (five neutral tiers, placeholders); reads production sources.
   'src/__tests__/textColorDiscipline.test.ts',
   'src/auth/__tests__/loginHandoffState.test.ts',
+  // DESIGN.md §16.2 copy budget: catalog strings against the login layout constants.
+  'src/auth/__tests__/loginConsentCopyBudget.test.ts',
   'src/__tests__/accountDeletion.test.ts',
   'src/__tests__/androidSessionInteractionParity.test.tsx',
   'src/__tests__/chatQuoteCrossDevice.test.ts',

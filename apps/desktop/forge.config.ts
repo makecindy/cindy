@@ -2138,6 +2138,11 @@ const config: ForgeConfig = {
           target: 'preload',
         },
         {
+          entry: 'src/main/maker-host/claudeCliStatusWorker.ts',
+          config: 'vite.node-worker.config.ts',
+          target: 'preload',
+        },
+        {
           entry: 'src/main/performance-trace/traceRedactionWorker.ts',
           config: 'vite.node-worker.config.ts',
           target: 'preload',

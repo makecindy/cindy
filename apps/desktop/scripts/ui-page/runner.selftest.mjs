@@ -100,12 +100,13 @@ mountPage({ render: () => <div>Worker finished</div> });`);
 
 // PDF preview blocked every changed-page scan: ?url parsed the worker as JS,
 // with no default export. Existing ?worker coverage bundles source, not URL assets.
-// Exercise scan/build/watch/compare and a real PDF module worker through the CLI.
+// Exercise scan/build/watch/compare, a real PDF module worker and a relative URL
+// worker's message round trip through the CLI.
 // Minimal input: pdfjs-dist's ?url import. Explicit Electron integration tier.
 test('loads PDF URL assets as real workers and tracks URL asset changes', async () => {
   const asset = path.join(dir, 'url-asset.mjs');
-  const original = 'export const value = 17;';
-  const changed = 'export const value = 18;';
+  const original = 'export const value = 17; self.onmessage = () => self.postMessage(value);';
+  const changed = 'export const value = 18; self.onmessage = () => self.postMessage(value);';
   await writeFile(asset, original);
   // A self-contained blank page with a valid xref; no font or network dependencies.
   let pdf = '%PDF-1.4\n';
@@ -124,6 +125,16 @@ test('loads PDF URL assets as real workers and tracks URL asset changes', async 
 import workerUrl from 'pdfjs-dist/build/pdf.worker.min.mjs?url';
 import assetUrl from './url-asset.mjs?url';
 if ((await import(assetUrl)).value !== 17) throw new Error('URL asset failed to load');
+const relativeWorker = new Worker(assetUrl, { type: 'module' });
+try {
+  await new Promise<void>((resolve, reject) => {
+    relativeWorker.onerror = reject;
+    relativeWorker.onmessage = ({ data }) => data === 17 ? resolve() : reject(new Error('Wrong URL worker result'));
+    relativeWorker.postMessage(null);
+  });
+} finally {
+  relativeWorker.terminate();
+}
 pdfjs.GlobalWorkerOptions.workerSrc = workerUrl;
 const worker = new pdfjs.PDFWorker();
 await worker.promise;

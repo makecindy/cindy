@@ -48,6 +48,120 @@ async function fixture() {
 }
 
 describe('native-binding', () => {
+  // Contract: distinct installed instances cannot overwrite the same system host
+  // registration until the owner confirms. Existing cases covered only one shared instance.
+  it('requires explicit takeover and leaves the new registration intact when the old binding closes', async () => {
+    const { binaryDir, profile, root } = await fixture();
+    const options = { hostName: 'com.example.browser', binaryDir, root, profiles: [profile],
+      platform: 'darwin' as const, arch: 'arm64' };
+    const first = createNativeBinding(options);
+    expect(await first.install(18818, [EXT])).toEqual({ ok: true });
+    const confirmTakeover = vi.fn(async () => true);
+    const local = createNativeBinding({ ...options, registrationKey: 'a'.repeat(64), confirmTakeover });
+    expect(await local.install(18819, [EXT])).toMatchObject({ ok: false, reason: 'NATIVE_HOST_IN_USE' });
+    expect(confirmTakeover).not.toHaveBeenCalled();
+    confirmTakeover.mockResolvedValueOnce(false);
+    expect(await local.install(18819, [EXT], { takeover: true })).toMatchObject({ ok: false, reason: 'NATIVE_HOST_IN_USE' });
+    expect(await local.install(18819, [EXT], { takeover: true })).toEqual({ ok: true });
+    expect(confirmTakeover).toHaveBeenCalledTimes(2);
+    await first.close();
+    const file = path.join(profile, 'NativeMessagingHosts', 'com.example.browser.json');
+    expect(JSON.parse(await fs.readFile(file, 'utf8')).path).toBe(path.join(root, 'a'.repeat(64), 'cindy-browser-native'));
+    await local.close();
+  });
+
+  // Regression: install() must check every registration it will overwrite (plugin security §1.2).
+  // Existing tests covered only a single browser and Cindy's own cached manifest.
+  // Minimal inputs: a matching cache/first browser plus a conflicting later browser or HKCU entry.
+  // Unit tier: temporary files and an injected registry runner; no real browser or registry changes.
+  it.each(['darwin', 'linux'] as const)('checks all %s browser registrations before overwriting any', async (platform) => {
+    const { dir, binaryDir, profile, root } = await fixture();
+    if (platform === 'linux') {
+      await fs.mkdir(path.join(binaryDir, 'linux-arm64'));
+      await fs.copyFile(path.join(binaryDir, 'darwin-arm64', 'cindy-browser-native'),
+        path.join(binaryDir, 'linux-arm64', 'cindy-browser-native'));
+    }
+    const otherProfile = path.join(dir, 'other-profile');
+    const ours = path.join(root, 'cindy-browser-native');
+    const foreign = path.join(dir, 'other-program');
+    const cached = path.join(root, 'com.example.browser.json');
+    const files = [profile, otherProfile].map(p => path.join(p, 'NativeMessagingHosts', 'com.example.browser.json'));
+    await fs.mkdir(root);
+    await fs.writeFile(cached, JSON.stringify({ path: ours }));
+    for (const [i, file] of files.entries()) {
+      await fs.mkdir(path.dirname(file), { recursive: true });
+      await fs.writeFile(file, JSON.stringify({ path: i === 0 ? ours : foreign }));
+    }
+    const confirmTakeover = vi.fn(async () => false);
+    const n = createNativeBinding({ hostName: 'com.example.browser', binaryDir, root,
+      profiles: [profile, otherProfile], platform, arch: 'arm64', confirmTakeover });
+    expect(await n.install(18819, [EXT])).toMatchObject({ ok: false, reason: 'NATIVE_HOST_IN_USE' });
+    expect(confirmTakeover).not.toHaveBeenCalled();
+    expect(await n.install(18819, [EXT], { takeover: true })).toMatchObject({ ok: false, reason: 'NATIVE_HOST_IN_USE' });
+    expect(JSON.parse(await fs.readFile(files[1], 'utf8')).path).toBe(foreign);
+    expect(await fs.readFile(cached, 'utf8')).toBe(JSON.stringify({ path: ours }));
+    await expect(fs.access(path.join(root, 'connections', '18819.json'))).rejects.toThrow();
+    confirmTakeover.mockResolvedValue(true);
+    expect(await n.install(18819, [EXT], { takeover: true })).toEqual({ ok: true });
+    for (const file of files) expect(JSON.parse(await fs.readFile(file, 'utf8')).path).toBe(ours);
+    expect(await n.install(18819, [EXT])).toEqual({ ok: true });
+    expect(confirmTakeover).toHaveBeenCalledTimes(2);
+    await n.close();
+  });
+
+  it.each([false, true])('checks Windows HKCU registrations with an existing Cindy cache: %s', async (cached) => {
+    const { dir, binaryDir, root } = await fixture();
+    await fs.mkdir(path.join(binaryDir, 'win32-x64'));
+    await fs.writeFile(path.join(binaryDir, 'win32-x64', 'cindy-browser-native.exe'), 'fixture');
+    const registration = path.join(root, 'com.example.browser.json');
+    const foreignManifest = path.join(dir, '其他程序 manifest.json');
+    const foreignContent = JSON.stringify({ path: path.join(dir, 'other.exe') });
+    await fs.writeFile(foreignManifest, foreignContent);
+    if (cached) {
+      await fs.mkdir(root);
+      await fs.writeFile(registration, JSON.stringify({ path: path.join(root, 'cindy-browser-native.exe') }));
+    }
+    let registered = [foreignManifest];
+    const run = vi.fn(async (_file: string, args: string[]) => {
+      if (args[0] === 'ADD') registered = [registration];
+      return { stdout: JSON.stringify(registered) };
+    });
+    const confirmTakeover = vi.fn(async () => false);
+    const n = createNativeBinding({ hostName: 'com.example.browser', binaryDir, root,
+      platform: 'win32', arch: 'x64', run, confirmTakeover });
+    expect(await n.install(18819, [EXT])).toMatchObject({ ok: false, reason: 'NATIVE_HOST_IN_USE' });
+    expect(confirmTakeover).not.toHaveBeenCalled();
+    expect(await n.install(18819, [EXT], { takeover: true })).toMatchObject({ ok: false, reason: 'NATIVE_HOST_IN_USE' });
+    expect(run.mock.calls.filter(([, args]) => args[0] === 'ADD')).toHaveLength(0);
+    await expect(fs.access(path.join(root, 'connections', '18819.json'))).rejects.toThrow();
+    confirmTakeover.mockResolvedValue(true);
+    expect(await n.install(18819, [EXT], { takeover: true })).toEqual({ ok: true });
+    expect(run.mock.calls.filter(([, args]) => args[0] === 'ADD')).toHaveLength(3);
+    expect(await fs.readFile(foreignManifest, 'utf8')).toBe(foreignContent);
+    expect(await n.install(18819, [EXT])).toEqual({ ok: true });
+    expect(confirmTakeover).toHaveBeenCalledTimes(2);
+    await n.close();
+  });
+
+  it.each([
+    { input: 'access-denied', reason: 'EACCES' },
+    { input: 'malformed', reason: 'INSTALL_FAILED' },
+    { input: 'missing-manifest', reason: 'ENOENT' },
+  ])('does not overwrite Windows registrations when the query is $input', async ({ input, reason }) => {
+    const { dir, binaryDir, root } = await fixture();
+    await fs.mkdir(path.join(binaryDir, 'win32-x64'));
+    await fs.writeFile(path.join(binaryDir, 'win32-x64', 'cindy-browser-native.exe'), 'fixture');
+    const run = vi.fn(async () => {
+      if (input === 'access-denied') throw Object.assign(new Error('denied'), { code: 'EACCES' });
+      return { stdout: input === 'malformed' ? 'invalid JSON' : JSON.stringify([path.join(dir, 'absent.json')]) };
+    });
+    const n = createNativeBinding({ hostName: 'com.example.browser', binaryDir, root,
+      platform: 'win32', arch: 'x64', run });
+    expect(await n.install(18819, [EXT])).toMatchObject({ ok: false, reason });
+    await expect(fs.access(path.join(root, 'com.example.browser.json'))).rejects.toThrow();
+    await expect(fs.access(path.join(root, 'cindy-browser-native.exe'))).rejects.toThrow();
+  });
+
   it('registers only allowed origins; the private authority never enters the browser manifest', async () => {
     const { binaryDir, profile, root } = await fixture();
     const n = createNativeBinding({
@@ -217,7 +331,7 @@ describe('native-binding', () => {
     const { dir, binaryDir } = await fixture();
     await fs.mkdir(path.join(binaryDir, 'win32-x64'), { recursive: true });
     await fs.writeFile(path.join(binaryDir, 'win32-x64', 'cindy-browser-native.exe'), 'fixture');
-    const run = vi.fn(async () => undefined);
+    const run = vi.fn(async (_file: string, _args: string[]) => ({ stdout: '[]' }));
     const n = createNativeBinding({
       hostName: 'com.example.browser',
       binaryDir,
@@ -228,8 +342,9 @@ describe('native-binding', () => {
       run,
     });
     expect((await n.install(18819, [EXT])).ok).toBe(true);
-    expect(run).toHaveBeenCalledTimes(3);
-    for (const [, args, opts] of run.mock.calls as unknown as Array<
+    const writes = run.mock.calls.filter(([, args]) => args[0] === 'ADD');
+    expect(writes).toHaveLength(3);
+    for (const [, args, opts] of writes as unknown as Array<
       [string, string[], { windowsHide: boolean }]
     >) {
       expect(args[0]).toBe('ADD');

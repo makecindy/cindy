@@ -1189,43 +1189,78 @@ describe('fetchGhostOauthIdentity', () => {
 });
 
 describe('fetchGhostOauthAvatar', () => {
+  // 头像对所有插件开放(2026-11-02 去特权),地址是身份响应里的任意 https:
+  // 每一跳都必须经注入的受防护单跳通道,跳转在这里手动复核,body 限量限时。
   const pngBytes = Buffer.from([0x89, 0x50, 0x4e, 0x47]);
   const imageResponse = (mime: string, bytes: Buffer = pngBytes): Response =>
     new Response(new Uint8Array(bytes), { status: 200, headers: { 'Content-Type': mime } });
+  const hopOf = (respond: (url: string, init: RequestInit) => Promise<Response> | Response) => {
+    const release = vi.fn(async () => {});
+    const hop = vi.fn(async (url: string, init: RequestInit) => ({ response: await respond(url, init), release }));
+    return { hop, release };
+  };
 
-  it('图片响应转 data URL,且请求不带 Authorization(头像域名无凭证)', async () => {
-    const fetchImpl = vi.fn(async (_i: unknown, init?: RequestInit) => {
-      expect(new Headers(init?.headers).get('Authorization')).toBeNull();
+  it('图片响应转 data URL;不带 Authorization、不让底层自动跟随跳转,并归还连接', async () => {
+    const { hop, release } = hopOf((_url, init) => {
+      expect(new Headers(init.headers).get('Authorization')).toBeNull();
+      expect(init.redirect).toBe('manual');
       return imageResponse('image/png');
     });
-    await expect(
-      fetchGhostOauthAvatar({ url: 'https://cdn.example.com/a.png', fetchImpl: fetchImpl as unknown as typeof fetch }),
-    ).resolves.toBe(`data:image/png;base64,${pngBytes.toString('base64')}`);
+    await expect(fetchGhostOauthAvatar({ url: 'https://cdn.example.com/a.png', fetchHop: hop }))
+      .resolves.toBe(`data:image/png;base64,${pngBytes.toString('base64')}`);
+    expect(release).toHaveBeenCalledTimes(1);
   });
 
-  it('非 https / 非图片 mime / 超限 / 请求失败 → null(best-effort 不阻断)', async () => {
-    await expect(
-      fetchGhostOauthAvatar({ url: 'http://cdn.example.com/a.png', fetchImpl: vi.fn() as unknown as typeof fetch }),
-    ).resolves.toBeNull();
-    await expect(
-      fetchGhostOauthAvatar({
-        url: 'https://cdn.example.com/a.html',
-        fetchImpl: vi.fn(async () => imageResponse('text/html')) as unknown as typeof fetch,
+  it('跳转逐跳经受防护通道;跳到非 https 或超过跳数上限即放弃', async () => {
+    const redirect = (location: string) => new Response(null, { status: 302, headers: { Location: location } });
+    const followed = hopOf((url) => (url.endsWith('/a.png') ? redirect('/b.png') : imageResponse('image/png')));
+    await expect(fetchGhostOauthAvatar({ url: 'https://cdn.example.com/a.png', fetchHop: followed.hop }))
+      .resolves.toMatch(/^data:image\/png;base64,/);
+    expect(followed.hop.mock.calls.map((c) => c[0]))
+      .toEqual(['https://cdn.example.com/a.png', 'https://cdn.example.com/b.png']);
+
+    const toHttp = hopOf(() => redirect('http://127.0.0.1/secret.png'));
+    await expect(fetchGhostOauthAvatar({ url: 'https://cdn.example.com/a.png', fetchHop: toHttp.hop })).resolves.toBeNull();
+    expect(toHttp.hop).toHaveBeenCalledTimes(1);
+
+    const loop = hopOf(() => redirect('https://cdn.example.com/a.png'));
+    await expect(fetchGhostOauthAvatar({ url: 'https://cdn.example.com/a.png', fetchHop: loop.hop })).resolves.toBeNull();
+    expect(loop.hop).toHaveBeenCalledTimes(4);
+    expect(loop.release).toHaveBeenCalledTimes(4);
+  });
+
+  it('非 https / 非图片 mime / 流式超限 / 通道拒绝 / 超时 → null(best-effort 不阻断)', async () => {
+    const never = vi.fn();
+    await expect(fetchGhostOauthAvatar({ url: 'http://cdn.example.com/a.png', fetchHop: never })).resolves.toBeNull();
+    expect(never).not.toHaveBeenCalled();
+    await expect(fetchGhostOauthAvatar({
+      url: 'https://cdn.example.com/a.html', fetchHop: hopOf(() => imageResponse('text/html')).hop,
+    })).resolves.toBeNull();
+    // 超限按已读字节判定:分块流在越过上限的那一块就放弃,不先整包读进内存。
+    let pulled = 0;
+    const endless = new ReadableStream<Uint8Array>({
+      pull(controller) {
+        pulled += 1;
+        controller.enqueue(new Uint8Array(64 * 1024));
+      },
+    });
+    await expect(fetchGhostOauthAvatar({
+      url: 'https://cdn.example.com/big.png',
+      fetchHop: hopOf(() => new Response(endless, { status: 200, headers: { 'Content-Type': 'image/png' } })).hop,
+    })).resolves.toBeNull();
+    expect(pulled).toBeLessThan(8);
+    await expect(fetchGhostOauthAvatar({
+      url: 'https://intranet.example/a.png',
+      fetchHop: vi.fn(async () => {
+        throw new Error('SSRF blocked');
       }),
-    ).resolves.toBeNull();
-    await expect(
-      fetchGhostOauthAvatar({
-        url: 'https://cdn.example.com/big.png',
-        fetchImpl: vi.fn(async () => imageResponse('image/png', Buffer.alloc(256 * 1024 + 1))) as unknown as typeof fetch,
+    })).resolves.toBeNull();
+    await expect(fetchGhostOauthAvatar({
+      url: 'https://slow.example/a.png',
+      timeoutMs: 1,
+      fetchHop: (_url, init) => new Promise((_resolve, reject) => {
+        init.signal?.addEventListener('abort', () => reject(new Error('aborted')));
       }),
-    ).resolves.toBeNull();
-    await expect(
-      fetchGhostOauthAvatar({
-        url: 'https://cdn.example.com/a.png',
-        fetchImpl: vi.fn(async () => {
-          throw new Error('boom');
-        }) as unknown as typeof fetch,
-      }),
-    ).resolves.toBeNull();
+    })).resolves.toBeNull();
   });
 });

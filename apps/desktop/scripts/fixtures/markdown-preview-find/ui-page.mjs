@@ -279,7 +279,7 @@ export default {
         ), true);
       }
       {
-        // The backdrop is intentionally aria-hidden and tabIndex=-1. Move into
+        // The backdrop is intentionally aria-hidden and not focusable. Move into
         // the readable document instead of requiring an inaccessible Tab stop.
         await body.click({ position: { x: 20, y: 120 } });
         await page.locator('[role="tooltip"]').waitFor({ state: 'detached' });

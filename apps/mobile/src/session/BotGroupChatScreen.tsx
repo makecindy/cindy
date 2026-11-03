@@ -37,9 +37,11 @@ import {
 import { showConfirm } from '@/platform/chrome';
 import { X } from 'lucide-react-native';
 import { NativeChromeBackButton } from '@/platform/chrome/NativeChromeBackButton';
+import { SystemNavigationBack, useSystemNavigationBack } from '@/platform/chrome/SystemNavigationBack';
 import { Stack, useRouter, useNavigation, useFocusEffect } from 'expo-router';
 import { useHeaderHeight } from 'expo-router/react-navigation';
 import { useAdaptiveWindow } from '@/platform/AdaptiveWindowContext';
+import { sessionPaneLayout } from './sessionPaneLayout';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useTranslation } from 'react-i18next';
 import { resolveRemoteText } from '@cindy/device-link';
@@ -90,7 +92,7 @@ import {
 } from './BotGroupAvatars';
 import { CHAT_HEADER_MARK_SIZE, CHAT_HEADER_BLUR_FADE_INSIDE, ChatIdentityHeader } from './ChatIdentityHeader';
 import { SessionHeaderNativeBlur } from './SessionHeaderNativeControls';
-import { CompanionEntering, CompanionFadeIn } from './CompanionEntering';
+import { CompanionEntering } from './CompanionEntering';
 import { BotGroupRuntimeFailureNotice } from './BotGroupRuntimeFailureNotice';
 import { BotGroupComposer, type BotGroupSendInput } from './BotGroupComposer';
 import { BotGroupMessageAttachments } from './BotGroupMessageAttachments';
@@ -111,6 +113,7 @@ import {
   type BotGroupPlanCardAction,
 } from './BotGroupPlan';
 import { BotGroupSettingsSheet } from './BotGroupSettingsSheet';
+import { MessageScrollToBottomButton } from './MessageScrollToBottomButton';
 import { BotGroupWorkArea } from './BotGroupWorkArea';
 import { botGroupActionErrorText } from './botGroupCopy';
 import { keyboardAvoidingBehaviorForPlatform } from './mobileNativeShellLayout';
@@ -205,10 +208,14 @@ function BotGroupChatContent({ deviceId, deviceName, groupId, messageId, notific
   const floatingHeader = Platform.OS === 'ios';
   const insets = useSafeAreaInsets();
   const window = useAdaptiveWindow();
-  const nativeHeader = floatingHeader && window.barEdge === 'none';
+  // A horizontal system bar would span both panes; Duo's vertical bar stays native.
+  const panePersistent = sessionPaneLayout(window).persistent;
+  const systemBack = useSystemNavigationBack();
+  const nativeHeader = floatingHeader && window.barEdge === 'none' && !panePersistent;
   const nativeHeaderHeight = useHeaderHeight();
   const [headerHeight, setHeaderHeight] = useState(0);
   const stickToBottom = useRef(!messageId && !threadRootId);
+  const jumpingToBottom = useRef(false);
   const [jumpTarget, setJumpTarget] = useState(messageId ?? '');
   const [highlightId, setHighlightId] = useState('');
   const jumpAttempts = useRef(0);
@@ -227,6 +234,10 @@ function BotGroupChatContent({ deviceId, deviceName, groupId, messageId, notific
     focused && foreground,
   );
   const viewportOwner = `${user?.id ?? ''}:${accountGeneration}:${deviceId}:${groupId}:${threadRootId ?? 'main'}`;
+  const [awayFromBottom, setAwayFromBottom] = useState<{ owner: string; value: boolean } | null>(null);
+  const isAwayFromBottom = awayFromBottom?.owner === viewportOwner && awayFromBottom.value;
+  const updateAwayFromBottom = (value: boolean) => setAwayFromBottom(previous =>
+    previous?.owner === viewportOwner && previous.value === value ? previous : { owner: viewportOwner, value });
   useEffect(() => {
     planPendingRef.current = null;
     setPlanPending(null);
@@ -277,6 +288,7 @@ function BotGroupChatContent({ deviceId, deviceName, groupId, messageId, notific
     contentHeight: 0, viewportHeight: 0, offsetY: 0 });
   if (viewport.current.owner !== viewportOwner) {
     viewport.current = { owner: viewportOwner, group, measuredGroup: null, contentHeight: 0, viewportHeight: 0, offsetY: 0 };
+    jumpingToBottom.current = false;
     stickToBottom.current = !messageId && !threadRootId;
     messagePositions.current.clear(); messageHeights.current.clear(); returnAnchor.current = null;
   } else if (viewport.current.group !== group) {
@@ -357,7 +369,7 @@ function BotGroupChatContent({ deviceId, deviceName, groupId, messageId, notific
     Alert.alert(chat.online ? botGroupActionErrorText(t, error, fallbackKey) : t(offlineKey));
   }, [chat.online, offlineKey, t]);
   const locateMessage = useCallback((id: string) => {
-    stickToBottom.current = false;
+    jumpingToBottom.current = false; stickToBottom.current = false;
     restoreOffset.current = null;
     returnAnchor.current = null;
     jumpAttempts.current = 0;
@@ -366,7 +378,7 @@ function BotGroupChatContent({ deviceId, deviceName, groupId, messageId, notific
   }, []);
   useEffect(() => { if (messageId) locateMessage(messageId); }, [messageId, notificationResponse, locateMessage]);
   const positionAtMessage = useCallback((id: string, y: number) => {
-    stickToBottom.current = false;
+    jumpingToBottom.current = false; stickToBottom.current = false;
     const restoring = restoreOffset.current;
     scrollRef.current?.scrollTo({ y: Math.max(0, y - (restoring ?? ((floatingHeader ? headerHeight : 0) + spacing.md))), animated: false });
     if (restoring === null) setHighlightId(id);
@@ -414,7 +426,7 @@ function BotGroupChatContent({ deviceId, deviceName, groupId, messageId, notific
       y + (messageHeights.current.get(id) ?? 0) > top).sort((a, b) => a[1] - b[1])[0];
     returnAnchor.current = { owner: viewportOwner, id: visible?.[0] ?? fallbackId,
       offset: visible ? visible[1] - viewport.current.offsetY : (floatingHeader ? headerHeight : 0) + spacing.md };
-    stickToBottom.current = false;
+    jumpingToBottom.current = false; stickToBottom.current = false;
     pauseReadUntilInteraction.current = true;
   }, [floatingHeader, headerHeight, viewportOwner]);
   const openThread = useCallback((message: BotGroupMessageView) => {
@@ -439,7 +451,7 @@ function BotGroupChatContent({ deviceId, deviceName, groupId, messageId, notific
   };
   const loadOlderReplies = () => {
     if (!chat.loadOlder || autoPaging.current || chat.loadingOlder || !group?.hasMoreBefore) return;
-    autoPaging.current = true; setOlderError(false); stickToBottom.current = false;
+    autoPaging.current = true; setOlderError(false); jumpingToBottom.current = false; stickToBottom.current = false;
     const visible = group.messages.filter(message => message.threadRootId === threadRootId)
       .filter(message => (messagePositions.current.get(message.id) ?? -1) + (messageHeights.current.get(message.id) ?? 0) >= viewport.current.offsetY)
       .sort((a, b) => (messagePositions.current.get(a.id) ?? 0) - (messagePositions.current.get(b.id) ?? 0))[0];
@@ -453,7 +465,7 @@ function BotGroupChatContent({ deviceId, deviceName, groupId, messageId, notific
     const anchor = returnAnchor.current;
     returnAnchor.current = null;
     if (anchor.owner !== viewportOwner) return;
-    stickToBottom.current = false;
+    jumpingToBottom.current = false; stickToBottom.current = false;
     restoreOffset.current = anchor.offset;
     jumpAttempts.current = 0;
     setJumpTarget(anchor.id);
@@ -561,13 +573,14 @@ function BotGroupChatContent({ deviceId, deviceName, groupId, messageId, notific
   const onScroll = (event: NativeSyntheticEvent<NativeScrollEvent>) => {
     const { contentOffset, contentSize, layoutMeasurement } = event.nativeEvent;
     previewVisibility.setViewport(contentOffset.y, layoutMeasurement.height);
-    if (stickToBottom.current) setSeen(previous => previous?.owner === viewportOwner && previous.sequence === latestSequence
-      ? previous : { owner: viewportOwner, sequence: latestSequence });
     Object.assign(viewport.current, { measuredGroup: group, contentHeight: contentSize.height,
       offsetY: contentOffset.y, viewportHeight: layoutMeasurement.height });
-    stickToBottom.current = contentSize.height - contentOffset.y - layoutMeasurement.height < STICK_TO_BOTTOM_PX;
+    const atBottom = contentSize.height - contentOffset.y - layoutMeasurement.height < STICK_TO_BOTTOM_PX;
+    if (atBottom) jumpingToBottom.current = false;
+    stickToBottom.current = jumpingToBottom.current || atBottom;
+    updateAwayFromBottom(!atBottom);
     acknowledge();
-    if (threadRootId && userScrolled.current && !olderError && contentOffset.y < (messageHeights.current.get(threadRootId) ?? 0) + 160) loadOlderReplies();
+    if (threadRootId && userScrolled.current && !jumpingToBottom.current && !olderError && contentOffset.y < (messageHeights.current.get(threadRootId) ?? 0) + 160) loadOlderReplies();
   };
 
   const title = group?.name ?? (cachedRow ? resolveRemoteText(cachedRow.item.display.title, i18n.language) : '');
@@ -583,13 +596,19 @@ function BotGroupChatContent({ deviceId, deviceName, groupId, messageId, notific
   const memberLine = direct || memberCount === 0 ? '' : t('groupChat.memberCount', { count: memberCount });
   const headerMembers = group ? group.members.map((member) => identityFor(member.botId, member.name)) : [];
 
-  const threadFollow = threadRootId && chat.followThread ? <BotGroupThreadFollow nativeHeader={nativeHeader}
+  const threadFollow = threadRootId && chat.followThread ? <BotGroupThreadFollow nativeHeader={nativeHeader || systemBack}
     following={chat.threadMeta?.following} online={chat.online}
     onChange={chat.followThread} onError={error => report(error, 'groupChat.thread.followFailed')} /> : undefined;
   const header = imageSelectionActive ? <View style={styles.shareHeader}>
     <Stack.Screen options={{ headerShown: false }} />
     <ShareSelectAllButton busy={imageShareBusy} shareableIds={shareableIds} />
-  </View> : <><ChatIdentityHeader testIDPrefix="botGroup" settingsTestID="botGroup.settingsButton" nativeHeader={nativeHeader}
+  </View> : systemBack ? <>
+    <SystemNavigationBack label={t('shared.back')} onPress={leave} />
+    {threadRootId ? threadFollow : direct ? null : <Stack.Toolbar placement="right">
+      <Stack.Toolbar.Button icon="ellipsis" accessibilityLabel={t('groupChat.settings.open')} disabled={!group} onPress={() => setSettings(true)} />
+    </Stack.Toolbar>}
+    <Stack.Screen options={{ headerTitle: threadRootId ? t('groupChat.thread.title') : title }} />
+  </> : <><ChatIdentityHeader testIDPrefix="botGroup" settingsTestID="botGroup.settingsButton" nativeHeader={nativeHeader}
     mark={threadRootId ? null : peer ? <BotGroupAvatar deviceId={deviceId} identity={identityFor(peer.botId, peer.name)} size={CHAT_HEADER_MARK_SIZE} online={chat.online} /> : <BotGroupDuoAvatar deviceId={deviceId} members={headerMembers} online={chat.online} variant="header"
       working={group?.round.status === 'running'} />}
     title={threadRootId ? t('groupChat.thread.title') : title}
@@ -650,12 +669,23 @@ function BotGroupChatContent({ deviceId, deviceName, groupId, messageId, notific
         keyboardDismissMode="interactive"
         maintainVisibleContentPosition={chat.server && !threadRootId ? { minIndexForVisible: group.hasMoreBefore ? 1 : 0 } : undefined}
         onScroll={onScroll} scrollEventThrottle={64}
-        onScrollBeginDrag={() => { pauseReadUntilInteraction.current = false; userScrolled.current = true; }}
-        onLayout={event => { viewport.current.viewportHeight = event.nativeEvent.layout.height; previewVisibility.setHeight(event.nativeEvent.layout.height); acknowledge(); }}
+        onScrollBeginDrag={() => {
+          jumpingToBottom.current = false;
+          stickToBottom.current = viewport.current.contentHeight - viewport.current.offsetY - viewport.current.viewportHeight < STICK_TO_BOTTOM_PX;
+          pauseReadUntilInteraction.current = false;
+          userScrolled.current = true;
+        }}
+        onLayout={event => {
+          viewport.current.viewportHeight = event.nativeEvent.layout.height;
+          previewVisibility.setHeight(event.nativeEvent.layout.height);
+          updateAwayFromBottom(!stickToBottom.current && viewport.current.contentHeight - viewport.current.offsetY - viewport.current.viewportHeight >= STICK_TO_BOTTOM_PX);
+          acknowledge();
+        }}
         onContentSizeChange={(_width, height) => {
           viewport.current.contentHeight = height;
           viewport.current.measuredGroup = group;
           if (focused && stickToBottom.current) scrollRef.current?.scrollToEnd({ animated: false });
+          updateAwayFromBottom(!stickToBottom.current && height - viewport.current.offsetY - viewport.current.viewportHeight >= STICK_TO_BOTTOM_PX);
           acknowledge();
         }}
         testID="botGroup.timeline">
@@ -681,7 +711,7 @@ function BotGroupChatContent({ deviceId, deviceName, groupId, messageId, notific
             if (jumpTarget === id) positionAtMessage(id, y);
           }}
           resolveMedia={resolveMedia} resolveServerMedia={chat.media}
-          loadOlder={threadRootId ? loadOlderReplies : chat.loadOlder ? () => { stickToBottom.current = false; void chat.loadOlder!().catch(error => report(error, 'groupChat.loadFailedTitle')); } : undefined}
+          loadOlder={threadRootId ? loadOlderReplies : chat.loadOlder ? () => { jumpingToBottom.current = false; stickToBottom.current = false; void chat.loadOlder!().catch(error => report(error, 'groupChat.loadFailedTitle')); } : undefined}
           loadingOlder={chat.loadingOlder} continuing={continuing} planPending={planPending}
           onContinue={() => void continueRound()}
           onPlanAction={(action, planId, revision) => void runPlanAction(action, planId, revision)}
@@ -691,18 +721,27 @@ function BotGroupChatContent({ deviceId, deviceName, groupId, messageId, notific
         onError={message => { if (message) Alert.alert(message); }} /> : null}
       </ScrollView>
       </MessageListVisibilityContext.Provider>
-      {newMessageCount > 0 || mask.mentions.length > 0 ? <View style={styles.newMessages} accessibilityLiveRegion="polite">
+      {!imageSelectionActive && (isAwayFromBottom || newMessageCount > 0 || mask.mentions.length > 0) ? <View
+        style={styles.newMessages} pointerEvents="box-none" accessibilityLiveRegion="polite">
+        {isAwayFromBottom || newMessageCount > 0 ? <MessageScrollToBottomButton
+          hasNewMessages={newMessageCount > 0}
+          testID={newMessageCount > 0 ? 'botGroup.newMessages' : 'botGroup.jumpToLatest'}
+          dotTestID="botGroup.newMessageDot"
+          onPress={() => {
+            setJumpTarget('');
+            setReadTarget('');
+            restoreOffset.current = null;
+            returnAnchor.current = null;
+            pagingAnchor.current = null;
+            pauseReadUntilInteraction.current = false;
+            jumpingToBottom.current = true;
+            stickToBottom.current = true;
+            updateAwayFromBottom(false);
+            scrollRef.current?.scrollToEnd({ animated: true });
+          }} /> : null}
         {mask.mentions.length > 0 ? <MainWindowActionButton density="compact" style={styles.newMessagesButton} action={{
           label: `@ · ${mask.mentions.length}`, accessibilityLabel: t('groupChat.mask.catchup.title'), testID: 'botGroup.mentions', onPress: () => setCatchup(true),
         }} /> : null}
-        {newMessageCount > 0 ? <CompanionFadeIn play distance={spacing.xs}>
-          <MainWindowActionButton density="compact" style={styles.newMessagesButton} action={{
-            label: t('groupChat.timeline.newMessages', { count: newMessageCount }),
-            accessibilityLabel: t('message.renderer.newMessagesToBottom'),
-            testID: 'botGroup.newMessages',
-            onPress: () => { pauseReadUntilInteraction.current = false; stickToBottom.current = true; scrollRef.current?.scrollToEnd({ animated: false }); },
-          }} />
-        </CompanionFadeIn> : null}
       </View> : null}
       </View>
       {!imageSelectionActive && shareDeliveries.length ? <ScrollView style={styles.shareDeliveries} nestedScrollEnabled>
@@ -735,12 +774,18 @@ function BotGroupChatContent({ deviceId, deviceName, groupId, messageId, notific
     </KeyboardAvoidingView>;
   }
 
-  return <SafeAreaView style={styles.screen} edges={floatingHeader ? ['left', 'right', 'bottom'] : ['top', 'left', 'right', 'bottom']} testID="botGroup.screen">
+  // The persistent pane already sits inside the window's safe area horizontally.
+  const sideEdges = panePersistent ? [] as const : ['left', 'right'] as const;
+  // A vertical system bar has no horizontal chrome to blur. Only cover actual
+  // in-page content (offline notice or image selection), matching the timeline inset.
+  const headerBlurHeight = systemBack ? headerHeight
+    : Math.max(headerHeight, nativeHeader ? nativeHeaderHeight : insets.top + navigationChrome.target);
+  return <SafeAreaView style={styles.screen} edges={floatingHeader ? [...sideEdges, 'bottom'] : ['top', ...sideEdges, 'bottom']} testID="botGroup.screen">
     {threadRootId ? <Stack.Screen options={{ gestureEnabled: previousIsGroup }} /> : null}
-    {nativeHeader ? null : <Stack.Screen options={{ headerShown: false }} />}
+    {nativeHeader || systemBack ? null : <Stack.Screen options={{ headerShown: false }} />}
     {floatingHeader ? <>
       <View style={[styles.flex, group ? null : { paddingTop: headerHeight }]}>{body}</View>
-      <SessionHeaderNativeBlur height={Math.max(headerHeight, nativeHeader ? nativeHeaderHeight : insets.top + navigationChrome.target)} fadeInside={CHAT_HEADER_BLUR_FADE_INSIDE} />
+      {headerBlurHeight > 0 ? <SessionHeaderNativeBlur height={headerBlurHeight} fadeInside={CHAT_HEADER_BLUR_FADE_INSIDE} /> : null}
       <View style={[styles.floatingHeader, { paddingTop: nativeHeader && !imageSelectionActive ? nativeHeaderHeight : insets.top }]} onLayout={(event) => setHeaderHeight(event.nativeEvent.layout.height)}>
         {header}
         {offlineNote}
@@ -1077,7 +1122,7 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
   screen: { flex: 1, backgroundColor: colors.surface },
   flex: { flex: 1 },
   hiddenComposer: { display: 'none' },
-  newMessages: { position: 'absolute', bottom: spacing.md, alignSelf: 'center', maxWidth: '90%' },
+  newMessages: { position: 'absolute', bottom: spacing.lg - spacing.xs, right: spacing.lg - spacing.xs, padding: spacing.xs, alignItems: 'flex-end', gap: spacing.sm, maxWidth: '90%' },
   newMessagesButton: { backgroundColor: colors.surfaceElevated },
   locatedMessage: { backgroundColor: colors.surfaceElevated, borderRadius: radius.container },
   replyDraft: { flexDirection: 'row', alignItems: 'center', gap: spacing.sm,

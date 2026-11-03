@@ -1678,6 +1678,40 @@ describe('CodexAgent spawn configuration', () => {
   });
 });
 
+describe('CodexAgent oneShot Goal ownership', () => {
+  it('disables native Goals before sending an auxiliary prompt', async () => {
+    const prompt = 'Generate a title.';
+    const agent = new CodexAgent(createDeps());
+    MockCodexTransport.onCreate = transport => {
+      transport.setMockResponse(Method.TurnStart, { result: { turn: { id: 'one-shot-turn' } } });
+    };
+    const pending = agent.oneShot(prompt, { timeoutMs: 2_000 });
+    void pending.catch(() => undefined);
+    try {
+      await vi.waitFor(() => expect(createdTransports[0]?.lines.some(line =>
+        JSON.parse(line).method === Method.TurnStart)).toBe(true));
+      const transport = createdTransports[0];
+      const messages = transport.lines.map(line => JSON.parse(line));
+      expect(messages.find(message => message.method === Method.ThreadStart)?.params).toMatchObject({
+        sandbox: 'read-only',
+        config: { 'features.goals': false },
+      });
+      const threadId = messages.find(message => message.method === Method.TurnStart).params.threadId;
+      transport.emitMockLine({ method: 'item/completed', params: {
+        threadId, turnId: 'one-shot-turn', item: { type: 'agentMessage', id: 'answer', text: 'Bounded result' },
+      } });
+      await expect(pending).resolves.toBe('Bounded result');
+      expect(transport.lines.map(line => JSON.parse(line)).filter(message =>
+        message.method === Method.ThreadUnsubscribe)).toEqual([
+        expect.objectContaining({ params: { threadId } }),
+      ]);
+    } finally {
+      await pending.catch(() => undefined);
+      await agent.forceDisposeLocalHostForAuthChange('oneShot Goal test cleanup');
+    }
+  });
+});
+
 describe('CodexAgent oneShot dispatch guard', () => {
   it('fails closed without thread/start when ownership changes during host startup', async () => {
     const agent = new CodexAgent(createDeps());

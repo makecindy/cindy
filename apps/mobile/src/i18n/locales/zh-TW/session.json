@@ -451,6 +451,7 @@
     "chipArchived": "已歸檔",
     "titleFallback": "遠端任務",
     "unnamedTitle": "未命名任務",
+    "openSection": "開啟",
     "renameAction": "重新命名任務",
     "copyLinkAction": "複製任務連結",
     "unpin": "取消置頂",

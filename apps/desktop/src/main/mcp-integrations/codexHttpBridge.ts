@@ -51,12 +51,12 @@ export const REMOTE_COLLAB_SERVER_NAMES: ReadonlySet<string> = new Set([
  * 本机 store (per hostId+远端路径 分区, 见 maker-core buildMemoryScopeKey)。
  */
 export const REMOTE_MEMORY_SERVER_NAME = 'cindy_memory';
-/** Remote helper is enabled only for Bot Sessions and rechecks their live surface. */
+/** Remote helper requires a bound Session and rechecks its live tool surface. */
 export const REMOTE_BOT_HELPER_SERVER_NAME = 'cindy_helper';
 /**
  * 远端 (SSH remote-forward) 允许暴露的 server 全集 — additionalBearerTokens
  * (persistent token) 认证的请求只能访问这些 server, 鉴权层按它 scope。
- * 放行协同、按 Session 限定的伙伴 helper 与 Maker Memory (cindy_memory,
+ * 放行协同、按 Session 限定能力面的 helper 与 Maker Memory (cindy_memory,
  * 2026-07 放行: 工具面固定、只触达本机 maker-memory 目录, 与协同同威胁模型);
  * 拿到 persistent token 的远端进程仍不得经 bridge 初始化 cindy_ssh 等其余
  * 本机 server。
