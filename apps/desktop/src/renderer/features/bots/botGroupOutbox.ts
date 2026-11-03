@@ -176,18 +176,25 @@ export function startBotGroupOutbox({ restoreSavedEntries = true }: { restoreSav
   let stopped = false;
   let restoreRequested = restoreSavedEntries ? 1 : 0;
   let restored = 0;
+  const handoffs = new Map<string, number>();
   const handoffKey = `cindy.botGroupOutbox.handoff.${owner.dataOwnerId}`;
   const current = () => !stopped && isDataOwnerGenerationCurrent(owner);
   const run = async () => {
     if (!current() || !owner.dataOwnerId || !durable()) return;
     if (restored !== restoreRequested) {
       const revision = restoreRequested;
+      const restoreAll = restoreSavedEntries && restored === 0;
+      const requested = new Set(handoffs.keys());
       const saved = await durable()!({ action: 'list', owner });
       if (!current()) return;
       for (const value of saved) {
         const entry = value as unknown as BotGroupOutboxEntry;
+        if (!restoreAll && !requested.has(entryKey(entry.input.groupId, entry.input.clientId))) continue;
         const group = groupOf(entry.input.groupId);
         if (!group.entries.some(row => row.input.clientId === entry.input.clientId)) group.entries = [...group.entries, entry];
+      }
+      for (const [key, requestedAt] of handoffs) {
+        if (requestedAt <= revision) handoffs.delete(key);
       }
       restored = revision; emit();
     }
@@ -226,13 +233,28 @@ export function startBotGroupOutbox({ restoreSavedEntries = true }: { restoreSav
   const onHandoff = (event: StorageEvent) => {
     if (!current() || event.key !== handoffKey || event.newValue === null
       || (event.storageArea !== null && event.storageArea !== window.localStorage)) return;
+    if (event.newValue.length > 256_000) return;
+    let entries: unknown;
+    try { entries = JSON.parse(event.newValue).entries; } catch { return; }
+    if (!Array.isArray(entries) || !entries.length || entries.length > 200
+      || !entries.every(row => Array.isArray(row) && row.length === 2
+        && row.every(value => typeof value === 'string' && value.length > 0 && value.length <= 200))) return;
     restoreRequested += 1;
+    for (const [groupId, clientId] of entries as [string, string][]) {
+      handoffs.set(entryKey(groupId, clientId), restoreRequested);
+    }
     tick();
   };
   const handoff = () => {
     if (!current() || !owner.dataOwnerId || !groups.size) return;
-    // Only a wakeup crosses windows; the owner-fenced Main store keeps the rows.
-    try { window.localStorage.setItem(handoffKey, crypto.randomUUID()); } catch { /* Durable rows remain recoverable on restart. */ }
+    // Transfer only this closing window's identities, never another live window's rows.
+    // Message content still comes from the owner-fenced Main store.
+    const entries = [...groups.values()].flatMap(group => group.entries.map(entry => [entry.input.groupId, entry.input.clientId]));
+    try {
+      for (let offset = 0; offset < entries.length; offset += 200) {
+        window.localStorage.setItem(handoffKey, JSON.stringify({ nonce: crypto.randomUUID(), entries: entries.slice(offset, offset + 200) }));
+      }
+    } catch { /* Durable rows remain recoverable on restart. */ }
   };
   if (restoreSavedEntries) window.addEventListener('storage', onHandoff);
   else window.addEventListener('beforeunload', handoff);

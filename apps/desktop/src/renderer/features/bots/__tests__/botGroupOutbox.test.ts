@@ -1005,6 +1005,10 @@ it('hands failed secondary sends to the running main worker on unload', async ()
     await enqueueBotGroupSend(draft({ clientId: 'closing-window' }));
     await vi.advanceTimersByTimeAsync(0);
     expect(getBotGroupOutbox('g1')[0].status).toBe('failed');
+    // A separate, still-active renderer owns this row. Closing our window must
+    // not let main retry a message that renderer may still edit or discard.
+    const active = getBotGroupOutbox('g1')[0];
+    saved.set('active-window', structuredClone({ ...active, input: { ...active.input, clientId: 'active-window' } }));
     window.dispatchEvent(new Event('beforeunload'));
     expect(signal).toHaveBeenCalled();
     stopSecondary();
@@ -1019,6 +1023,7 @@ it('hands failed secondary sends to the running main worker on unload', async ()
     await vi.advanceTimersByTimeAsync(0);
     expect(requests.filter(action => action === 'list')).toHaveLength(2);
     expect(mocks.send.mock.calls.map(([input]) => input.clientId)).toEqual(['closing-window', 'closing-window']);
+    expect(getBotGroupOutbox('g1').map(entry => entry.input.clientId)).toEqual(['closing-window']);
     expect(getBotGroupOutbox('g1')[0].status).toBe('sent');
     stopMain();
     deliver(key);
