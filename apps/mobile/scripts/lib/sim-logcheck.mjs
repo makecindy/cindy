@@ -1,5 +1,5 @@
 // mobile:sim:logcheck 的纯逻辑:定位 Metro 日志,并判定最近一次打包之后的 ERROR / WARN。
-import { mkdirSync, writeFileSync } from "node:fs";
+import { mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -17,7 +17,7 @@ export function metroLogPath(mobileDir, port) {
   return join(mobileDir, "logs", `metro-${port}.log`);
 }
 
-/** 每次启动 Metro 时清空旧日志。失败返回 null,不阻止 Metro 启动。 */
+/** 每次启动 Metro 时清空旧日志。失败时删掉旧日志并返回 null,不阻止 Metro 启动。 */
 export function prepareMetroLog(mobileDir, port, { source, region }) {
   const path = metroLogPath(mobileDir, port);
   try {
@@ -29,6 +29,12 @@ export function prepareMetroLog(mobileDir, port, { source, region }) {
     );
     return path;
   } catch {
+    // 留下上一次的旧日志会被 logcheck 当成这次的结果,拿不到新日志就删掉旧的。
+    try {
+      rmSync(path, { force: true });
+    } catch {
+      // 同样删不掉时,logcheck 会因 Metro 归属或打包记录对不上而无法判定。
+    }
     return null;
   }
 }

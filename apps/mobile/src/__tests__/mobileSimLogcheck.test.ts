@@ -1,12 +1,23 @@
 import { execFileSync } from "node:child_process";
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import {
+  chmodSync,
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
+import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
   analyzeMetroLog,
   logcheckExitCode,
   metroLogEnv,
+  metroLogPath,
+  prepareMetroLog,
 } from "../../scripts/lib/sim-logcheck.mjs";
 import knownWarnings from "../../scripts/sim-logcheck-known-warnings.json";
 
@@ -141,5 +152,64 @@ describe("Metro log preload", () => {
       output: "out\n",
       log: "",
     });
+  });
+});
+
+// 日志丢了一段后留下的是不完整内容,logcheck 读到它可能漏掉后面的 ERROR 而误判通过。
+describe("incomplete Metro log", () => {
+  const { installTee } = createRequire(import.meta.url)(
+    "../../scripts/lib/metro-log-tee.cjs",
+  ) as { installTee: (options: Record<string, unknown>) => void };
+
+  it("discards the log when a write fails, and keeps the original output flowing", () => {
+    const original = vi.fn((_chunk: string) => true);
+    const stream = { write: original };
+    const fsImpl = {
+      openSync: vi.fn(() => 7),
+      writeSync: vi.fn(() => {
+        throw new Error("ENOSPC");
+      }),
+      unlinkSync: vi.fn(),
+      closeSync: vi.fn(),
+    };
+    installTee({ logPath: "/logs/metro.log", streams: [stream], fsImpl });
+    stream.write("first");
+    stream.write("second");
+    expect(fsImpl.unlinkSync).toHaveBeenCalledExactlyOnceWith(
+      "/logs/metro.log",
+    );
+    expect(fsImpl.writeSync).toHaveBeenCalledOnce();
+    expect(original).toHaveBeenCalledTimes(2);
+  });
+
+  it("discards a stale log when it cannot be opened for appending", () => {
+    const fsImpl = {
+      openSync: vi.fn(() => {
+        throw new Error("EACCES");
+      }),
+      unlinkSync: vi.fn(),
+    };
+    installTee({ logPath: "/logs/metro.log", streams: [], fsImpl });
+    expect(fsImpl.unlinkSync).toHaveBeenCalledExactlyOnceWith(
+      "/logs/metro.log",
+    );
+  });
+
+  it("removes the previous run's log when the new one cannot be created", () => {
+    const mobileDir = mkdtempSync(join(tmpdir(), "metro-log-prepare-"));
+    try {
+      const path = metroLogPath(mobileDir, 8081);
+      mkdirSync(join(mobileDir, "logs"));
+      writeFileSync(path, `${BUNDLED}\n`, { mode: 0o400 });
+      chmodSync(path, 0o400);
+      const result = prepareMetroLog(mobileDir, 8081, {
+        source: "s",
+        region: "global",
+      });
+      if (result === null) expect(existsSync(path)).toBe(false);
+      else expect(readFileSync(path, "utf8")).not.toContain("Bundled");
+    } finally {
+      rmSync(mobileDir, { recursive: true, force: true });
+    }
   });
 });

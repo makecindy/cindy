@@ -3,36 +3,64 @@
 // 不用管道 tee:Expo 只在 stdout 是 TTY 时才启用交互(j / r 等快捷键)。也不用 Metro
 // reporter:Expo 会强制覆盖 config.reporter。NODE_OPTIONS 会传给 pnpm 和 Metro worker,
 // 所以只在 `expo start` 主进程生效。写日志失败不能影响 Metro。
-const { closeSync, openSync, writeSync } = require("node:fs");
+//
+// 日志一旦丢了一段(磁盘满、打不开),就删掉日志文件:这时留下的是不完整的内容,
+// logcheck 读到它可能把后面的 ERROR 漏掉而误判通过;删掉后 logcheck 报「无法判定」。
+// 删除文件不需要磁盘空间。
+const fs = require("node:fs");
 const { isMainThread } = require("node:worker_threads");
+
+function discardLog(logPath, fsImpl) {
+  try {
+    fsImpl.unlinkSync(logPath);
+  } catch {
+    // 文件本来就不在,或同样删不掉:logcheck 仍会因没有打包记录而无法判定。
+  }
+}
+
+function installTee({ logPath, streams, fsImpl = fs, onExit }) {
+  let fd = null;
+  try {
+    fd = fsImpl.openSync(logPath, "a", 0o600);
+  } catch {
+    discardLog(logPath, fsImpl);
+    return;
+  }
+  let broken = false;
+  for (const stream of streams) {
+    const write = stream.write;
+    stream.write = function teeWrite(chunk, ...rest) {
+      if (!broken) {
+        try {
+          fsImpl.writeSync(
+            fd,
+            typeof chunk === "string" ? chunk : Buffer.from(chunk),
+          );
+        } catch {
+          broken = true;
+          discardLog(logPath, fsImpl);
+        }
+      }
+      return write.call(stream, chunk, ...rest);
+    };
+  }
+  onExit?.(() => {
+    try {
+      fsImpl.closeSync(fd);
+    } catch {
+      // 进程正在退出。
+    }
+  });
+}
+
+module.exports = { installTee };
 
 const logPath = process.env.CINDY_METRO_LOG_PATH;
 
 if (logPath && isMainThread && !process.send && process.argv[2] === "start") {
-  let fd = null;
-  try {
-    fd = openSync(logPath, "a", 0o600);
-  } catch {
-    // 拿不到日志文件时照常运行,logcheck 会报告日志缺失或没有打包记录。
-  }
-  if (fd !== null) {
-    for (const stream of [process.stdout, process.stderr]) {
-      const write = stream.write;
-      stream.write = function teeWrite(chunk, ...rest) {
-        try {
-          writeSync(fd, typeof chunk === "string" ? chunk : Buffer.from(chunk));
-        } catch {
-          // 磁盘满等情况下放弃这一段日志。
-        }
-        return write.call(stream, chunk, ...rest);
-      };
-    }
-    process.once("exit", () => {
-      try {
-        closeSync(fd);
-      } catch {
-        // 进程正在退出。
-      }
-    });
-  }
+  installTee({
+    logPath,
+    streams: [process.stdout, process.stderr],
+    onExit: (callback) => process.once("exit", callback),
+  });
 }

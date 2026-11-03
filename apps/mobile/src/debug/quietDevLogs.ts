@@ -13,10 +13,10 @@ import {
  */
 export const DEBUGGER_WARNINGS_HINT = "Open debugger to view warnings.";
 
-export function installDevLogFilters(): void {
+/** 仅开发包生效;`isDev` 只为测试注入,生产代码用默认值。由 index.js 在入口最先调用。 */
+export function installDevLogFilters(isDev: boolean = __DEV__): void {
+  if (!isDev) return;
   LogBox.ignoreLogs([DEBUGGER_WARNINGS_HINT]);
   // strict 只提示「渲染期读取 shared value」,单次页面操作会刷上百条且没有调用栈可定位。
   configureReanimatedLogger({ level: ReanimatedLogLevel.warn, strict: false });
 }
-
-if (__DEV__) installDevLogFilters();

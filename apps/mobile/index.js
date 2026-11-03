@@ -4,5 +4,5 @@ if (typeof globalThis.SharedArrayBuffer === 'undefined') {
   globalThis.SharedArrayBuffer = ArrayBuffer;
 }
 
-require('./src/debug/quietDevLogs');
+require('./src/debug/quietDevLogs').installDevLogFilters();
 require('expo-router/entry');

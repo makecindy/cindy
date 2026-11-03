@@ -11,22 +11,19 @@ vi.mock("react-native-reanimated", () => ({
   ReanimatedLogLevel: { warn: 1 },
 }));
 
-describe("quietDevLogs", () => {
-  beforeEach(() => {
-    vi.resetModules();
-    vi.clearAllMocks();
-  });
+import { installDevLogFilters } from "./quietDevLogs";
 
-  it("does nothing outside dev builds", async () => {
-    vi.stubGlobal("__DEV__", false);
-    await import("./quietDevLogs");
+describe("quietDevLogs", () => {
+  beforeEach(() => vi.clearAllMocks());
+
+  it("does nothing outside dev builds", () => {
+    installDevLogFilters(false);
     expect(ignoreLogs).not.toHaveBeenCalled();
     expect(configureReanimatedLogger).not.toHaveBeenCalled();
   });
 
-  it("hides only the debugger hint and keeps other warnings and errors visible", async () => {
-    vi.stubGlobal("__DEV__", true);
-    await import("./quietDevLogs");
+  it("hides only the debugger hint and keeps other warnings and errors visible", () => {
+    installDevLogFilters(true);
     expect(ignoreLogs).toHaveBeenCalledExactlyOnceWith([
       "Open debugger to view warnings.",
     ]);
