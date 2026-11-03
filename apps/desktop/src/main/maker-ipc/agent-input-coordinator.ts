@@ -3299,6 +3299,14 @@ export class AgentInputCoordinator {
         ? recovery.item.text
         : `${recovery.item.text}\n\n${CONTINUE_AFTER_ERROR_PROMPT}`
       : CONTINUE_AFTER_ERROR_PROMPT;
+    if (groupRecovery && recovery.kind === 'active-turn' && recovery.item.recoveryCheckpoint) {
+      // Remove only the host-authored suffix, preserving any marker inside the
+      // original request. A fresh snapshot below replaces this stale progress.
+      const previousCheckpoint = appendRecoveryCheckpointPrompt('', recovery.item.recoveryCheckpoint);
+      if (previousCheckpoint && continueText.endsWith(previousCheckpoint)) {
+        continueText = continueText.slice(0, -previousCheckpoint.length);
+      }
+    }
     if (providerRestart) {
       continueText += '\n\n[Host recovery] The provider process stopped or restarted during the previous turn.'
         + (automatic ? ' Cindy is automatically continuing the interrupted task in the original conversation.'

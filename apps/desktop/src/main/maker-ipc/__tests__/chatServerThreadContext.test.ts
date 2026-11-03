@@ -64,6 +64,7 @@ interface FakeMessage {
 interface FakeExecution {
   id: string; conversation_id: string; source_message_id: string; bot_id: string; requester_id: string;
   context_seq: string; attachment_after_seq?: string; epoch: number; status: string; access_mode: 'chat'; access_revision: number;
+  plan_id?: string; plan_step?: number;
 }
 
 let ids = 100;
@@ -479,6 +480,25 @@ describe('Chat Server Thread context reaches the Agent input', () => {
     expect(inputs('nova')[1].attachments?.map(a => a.id)).toEqual([picture.content[1].mediaId]);
     await settle('nova', '已看到。');
     trigger(post('@Pico 看图', { mentions: [bots[1].id] }));
+    await vi.advanceTimersByTimeAsync(2000);
+    expect(inputs('pico')[0].attachments?.map(a => a.id)).toEqual([picture.content[1].mediaId]);
+  });
+
+  // Review regression: a multi-speaker talk queue excluded explicitly quoted
+  // media from its allowed-message filter. Assert actual per-speaker dispatch (unit).
+  it('delivers an old quoted image to each speaker in a talk queue without unrelated files', async () => {
+    const picture = post('原图', { media: ['quoted.png'] });
+    for (let n = 0; n < 105; n++) post(`later text ${n}`);
+    post('无关文件', { media: ['unrelated.png'] });
+    const request = quoting(post('@Nova @Pico 看这张图', { mentions: bots.map(bot => bot.id) }), picture, { count: 1, name: 'quoted.png' });
+    const planId = uuid(++ids);
+    const plan = { id: planId, kind: 'talk', source_message_id: request.id, request_text: '看这张图',
+      steps: bots.map((bot, position) => ({ position, botId: bot.id, botName: bot.name, task: '回答', status: 'running' })) };
+    fixture.handle.mockImplementation((route, method, body, actor) => route.includes('/plans?ids=') ? { body: [plan] } : handle(route, method, body, actor));
+    trigger(request, { plan_id: planId }).forEach((execution, position) => { execution.plan_step = position; });
+    await vi.advanceTimersByTimeAsync(2000);
+    expect(inputs('nova')[0].attachments?.map(a => a.id)).toEqual([picture.content[1].mediaId]);
+    await settle('nova', '第一位回答');
     await vi.advanceTimersByTimeAsync(2000);
     expect(inputs('pico')[0].attachments?.map(a => a.id)).toEqual([picture.content[1].mediaId]);
   });

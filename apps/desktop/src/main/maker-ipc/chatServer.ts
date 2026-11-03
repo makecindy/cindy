@@ -2497,10 +2497,11 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
         // The server watermark is scoped to this bot/grant/plan step and advances only on success.
         // A Thread lane offers only its own Thread's files.
         // A queue turn sees only its request, the earlier answers and the requester's additions;
-        // it takes only their files, never the rest of the group's (bot-group-chat.md §7.0).
+        // it takes their files and the explicitly quoted original, never unrelated group files (§7.0).
         const talkPlan = run.plan?.kind === 'talk' ? run.plan : undefined;
         const talkIds = talkPlan ? new Set([talkPlan.source_message_id, ...(talkPlan.note_message_ids ?? []),
-          ...talkPlan.steps.filter(step => step.position < execution.plan_step!).flatMap(step => step.resultMessageId ? [step.resultMessageId] : [])]) : null;
+          ...talkPlan.steps.filter(step => step.position < execution.plan_step!).flatMap(step => step.resultMessageId ? [step.resultMessageId] : []),
+          ...(quotedMessage ? [quotedMessage.id] : [])]) : null;
         const known = [...history, ...focusMessages.filter(message => !history.some(other => other.id === message.id))];
         const attachmentHistory = thread ? [...focusMessages] : talkIds ? known.filter(message => talkIds.has(message.id)) : known;
         const lane = await laneSetup;

@@ -13815,6 +13815,35 @@ describe('AgentInputCoordinator 中断自动续跑', () => {
     expect(h.supersedeRetriedUserTurn).not.toHaveBeenCalled();
   });
 
+  // Review regression: repeated group continuations retained the prior checkpoint
+  // before appending a fresh one. Exercise two real error/retry dispatches (unit).
+  it('replaces the previous group checkpoint on repeated recovery', async () => {
+    let summary = 'first durable progress';
+    const h = createHarness({ getRecoveryContextSnapshot: async () => ({
+      contextTokens: 150_000, contextWindow: 200_000, progressCount: 1,
+      recentProgress: [{ role: 'assistant', summary }],
+    }) });
+    const sid = 'group-repeated-checkpoint';
+    h.setHasAssistantProgressAfter(async () => true);
+    await failAfterDispatch(h, sid, makeItem('bot-group:room:execution:bot', '[UI_ACTION_TRIGGER]当前问题：图片是什么？'));
+    await h.coordinator.retryLastError(sid);
+    await flush();
+    expect(h.onDispatchedUserTurn.mock.calls[1]?.[1].text).toContain(summary);
+    summary = 'latest durable progress';
+    h.setRunning(false);
+    h.coordinator.onTurnEvent(sid, 'error', truncationMessage, truncationSignals);
+    await flush();
+    await h.coordinator.retryLastError(sid);
+    await flush();
+    const resumed = h.onDispatchedUserTurn.mock.calls[2]?.[1];
+    expect(resumed.text).toContain('当前问题：图片是什么？');
+    expect(resumed.text).toContain(CONTINUE_AFTER_ERROR_PROMPT);
+    expect(resumed.text.match(/\[CINDY_RECOVERY_CHECKPOINT v1\]/g)).toHaveLength(1);
+    expect(resumed.text).toContain(summary);
+    expect(resumed.text).not.toContain('first durable progress');
+    expect(resumed.recoveryCheckpoint?.attempt).toBe(2);
+  });
+
   it('host 接管时不设 error、只置 autoResumePending(红横幅留给最终失败)', async () => {
     const h = createHarness();
     const sid = 'takeover-suppresses-banner';
