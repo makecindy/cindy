@@ -6363,7 +6363,7 @@ export function MessageStream({
     previousLocalFileRefsRef.current = localFileRefs;
   }, [localFileRefs]);
 
-  // 伙伴聊天的工作过程与回复正文同列：只占头像宽度，不重复画脸。memo 住以保持
+  // 伙伴聊天的工作过程、成果与回复正文同列：只占头像宽度，不重复画脸。memo 住以保持
   // WorkGroupRenderItemView 的 memo 比较成立。
   const botReplyColumnSpacer = useMemo(
     () =>
@@ -6650,10 +6650,10 @@ export function MessageStream({
                     }
 
                     if (item.type === 'generated_files') {
-                      return (
+                      const card = (
                         <GeneratedFilesCard
                           key={item.key}
-                          renderItemKey={item.key}
+                          renderItemKey={botReplyColumnSpacer ? undefined : item.key}
                           files={item.files}
                           turnStartMs={item.turnStartMs}
                           turnEndMs={item.turnEndMs}
@@ -6663,6 +6663,18 @@ export function MessageStream({
                             simplifiedBotConversation ? onGeneratedFilesVisibilityChange : undefined
                           }
                         />
+                      );
+                      if (!botReplyColumnSpacer) return card;
+                      // Keep stat checks mounted, but leave no avatar-sized gap
+                      // while the card has no confirmed visible files.
+                      return (
+                        <div
+                          key={item.key}
+                          data-render-item-key={item.key}
+                          hidden={!visibleGeneratedFileKeys.has(item.key)}
+                        >
+                          {withAssistantAvatar(botReplyColumnSpacer, card)}
+                        </div>
                       );
                     }
 
