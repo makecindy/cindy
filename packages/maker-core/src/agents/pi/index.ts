@@ -7856,7 +7856,7 @@ export class PiAgent extends BaseAgent {
                   const result = await requestPiCompact();
                   rejectIfCancelled(sendOpts, 'send');
                   if (result.noop) {
-                    throw new Error('Pi cannot compact the request rejected with HTTP 413');
+                    throw new Error('Pi cannot compact the request rejected with a body size limit');
                   }
                 } catch (error) {
                   rejectIfCancelled(sendOpts, 'send');

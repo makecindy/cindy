@@ -11,7 +11,7 @@ import { fileURLToPath } from 'node:url';
 import { runPlan } from './run.mjs';
 import { adhocPage } from './registry.mjs';
 import { parseOptions, variantsFor } from './options.mjs';
-import { scanPage, buildPage } from './build.mjs';
+import { scanPage, buildPage, inputsChanged } from './build.mjs';
 
 const cli = fileURLToPath(new URL('./cli.mjs', import.meta.url));
 const harness = fileURLToPath(new URL('./harness/index.tsx', import.meta.url));
@@ -98,43 +98,80 @@ mountPage({ render: () => <div>Worker finished</div> });`);
   assert.equal((await run(['--entry', file, '--theme', 'light', '--json'])).code, 0);
 });
 
-// Integration/E2E regression: PdfPreview imports a package .mjs via Vite ?url.
-// The ?worker case above does not exercise raw asset emission, package resolution
-// or module MIME types. Use the real PDF worker plus one relative raw worker.
-test('serves package and relative ?url modules as assets and tracks compare changes', async () => {
-  const worker = path.join(dir, 'raw.worker.mjs');
-  const source = 'self.onmessage = () => self.postMessage(42);';
-  await writeFile(worker, source);
-  const file = await entry('url-worker', `
-import pdfUrl from 'pdfjs-dist/build/pdf.worker.min.mjs?url';
-import rawUrl from './raw.worker.mjs?url';
-const pdf = await import(pdfUrl);
-if (!pdf.WorkerMessageHandler) throw new Error('PDF worker module unavailable');
-const worker = new Worker(rawUrl, { type: 'module' });
-await new Promise<void>((resolve, reject) => {
-  worker.onerror = reject;
-  worker.onmessage = ({ data }) => { worker.terminate(); data === 42 ? resolve() : reject(new Error('Wrong raw worker result')); };
-  worker.postMessage(null);
-});
-mountPage({ render: () => <div>URL workers ready</div> });`);
+// PDF preview blocked every changed-page scan: ?url parsed the worker as JS,
+// with no default export. Existing ?worker coverage bundles source, not URL assets.
+// Exercise scan/build/watch/compare, a real PDF module worker and a relative URL
+// worker's message round trip through the CLI.
+// Minimal input: pdfjs-dist's ?url import. Explicit Electron integration tier.
+test('loads PDF URL assets as real workers and tracks URL asset changes', async () => {
+  const asset = path.join(dir, 'url-asset.mjs');
+  const original = 'export const value = 17; self.onmessage = () => self.postMessage(value);';
+  const changed = 'export const value = 18; self.onmessage = () => self.postMessage(value);';
+  await writeFile(asset, original);
+  // A self-contained blank page with a valid xref; no font or network dependencies.
+  let pdf = '%PDF-1.4\n';
+  const offsets = [0];
+  for (const body of [
+    '<< /Type /Catalog /Pages 2 0 R >>',
+    '<< /Type /Pages /Kids [3 0 R] /Count 1 >>',
+    '<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 100] /Resources << >> >>',
+  ]) {
+    offsets.push(pdf.length);
+    pdf += `${offsets.length - 1} 0 obj\n${body}\nendobj\n`;
+  }
+  const xref = pdf.length;
+  pdf += `xref\n0 4\n0000000000 65535 f \n${offsets.slice(1).map(offset => `${String(offset).padStart(10, '0')} 00000 n \n`).join('')}trailer\n<< /Size 4 /Root 1 0 R >>\nstartxref\n${xref}\n%%EOF\n`;
+  const file = await entry('pdf-url', `import * as pdfjs from 'pdfjs-dist';
+import workerUrl from 'pdfjs-dist/build/pdf.worker.min.mjs?url';
+import assetUrl from './url-asset.mjs?url';
+if ((await import(assetUrl)).value !== 17) throw new Error('URL asset failed to load');
+const relativeWorker = new Worker(assetUrl, { type: 'module' });
+try {
+  await new Promise<void>((resolve, reject) => {
+    relativeWorker.onerror = reject;
+    relativeWorker.onmessage = ({ data }) => data === 17 ? resolve() : reject(new Error('Wrong URL worker result'));
+    relativeWorker.postMessage(null);
+  });
+} finally {
+  relativeWorker.terminate();
+}
+pdfjs.GlobalWorkerOptions.workerSrc = workerUrl;
+const worker = new pdfjs.PDFWorker();
+await worker.promise;
+if (!(worker.port instanceof Worker)) throw new Error('PDF fell back to the main thread');
+const task = pdfjs.getDocument({ data: new TextEncoder().encode(${JSON.stringify(pdf)}), worker });
+try {
+  const document = await task.promise;
+  const page = await document.getPage(1);
+  const viewport = page.getViewport({ scale: 1 });
+  if (document.numPages !== 1 || viewport.width !== 200 || viewport.height !== 100) throw new Error('PDF parsing failed');
+} finally {
+  await task.destroy();
+  worker.destroy();
+}
+mountPage({ render: () => <div>PDF worker finished</div> });`);
   const definition = adhocPage(file);
   const scanned = await scanPage(definition);
-  assert.ok(scanned.inputs.includes(worker));
-  assert.ok(scanned.inputs.some(input => input.endsWith(`${path.sep}pdf.worker.min.mjs`)));
+  assert.ok(scanned.inputs.includes(asset));
+  assert.ok(scanned.inputs.some(input => input.endsWith('pdf.worker.min.mjs')));
   const bundle = await buildPage(definition);
-  const raw = [...bundle.files.values()].find(asset => asset.body.toString() === source);
-  assert.equal(raw?.contentType, 'text/javascript');
-  const alternateSource = 'self.onmessage = () => self.postMessage(43);';
+  const emitted = [...bundle.files].filter(([url]) => url.endsWith('.mjs'));
+  assert.equal(emitted.length, 2);
+  assert.ok(emitted.every(([, file]) => file.contentType === 'text/javascript'));
+  assert.ok(emitted.some(([, file]) => file.body.toString() === original));
   const alternate = await buildPage(definition, {
-    has: file => file === worker,
-    get: file => file === worker ? alternateSource : undefined,
+    has: file => file === asset,
+    get: file => file === asset ? changed : undefined,
     resolve: () => undefined,
   });
-  assert.ok([...alternate.files.values()].some(asset => asset.body.toString() === alternateSource));
-  assert.notEqual(bundle.fingerprints.get(worker), alternate.fingerprints.get(worker));
+  assert.notEqual(bundle.fingerprints.get(asset), alternate.fingerprints.get(asset));
   assert.notEqual(bundle.bundleDigest, alternate.bundleDigest);
+  assert.ok([...alternate.files.values()].some(file => file.body.toString() === changed));
+  assert.equal(await inputsChanged(bundle.fingerprints), false);
   const result = await run(['--entry', file, '--theme', 'light', '--json']);
   assert.equal(result.code, 0, result.stderr + result.stdout);
+  await writeFile(asset, changed);
+  assert.equal(await inputsChanged(bundle.fingerprints), true);
 });
 
 test('one run reports each failure kind on its own variant', async () => {

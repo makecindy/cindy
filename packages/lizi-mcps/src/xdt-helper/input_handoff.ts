@@ -4,10 +4,10 @@ import type { LiziMcpSessionContext } from '../types.js';
 import { errorPayload, okPayload } from './_payload.js';
 
 /**
- * 代输入 (input handoff): the agent hands the fields on screen that only the
- * owner can type (sign-in name, password, verification code, text it cannot
- * know) to the owner. The owner types them from any of their devices; values
- * go straight to the host and are never returned here. A sign-in QR code is
+ * 代输入 (input handoff): the agent hands the owner what it must never see: a
+ * sign-in, or a secret field on screen (password, key, verification code). The
+ * owner signs in on the window itself and answers other secret fields from any
+ * of their devices; values never come back here. A sign-in QR code is
  * handed to the owner to scan. Buttons and options stay with the agent.
  *
  * The model reaches this through `ask_owner` (kind fill / scan). The original
@@ -43,10 +43,10 @@ export interface InputHandoffCallbacks {
 }
 
 const DESCRIPTION =
-  'Ask the owner to type what only they can into fields on this computer\'s screen: '
-  + 'a sign-in name, password, verification code, or other text you cannot know. '
-  + 'Cindy shows the owner just those fields on their phone or another computer, types the answer in and confirms with the page\'s own main button; '
-  + 'it follows the flow across windows and browsers while fields keep appearing. '
+  'Hand the owner what you must never see on this computer\'s screen: a sign-in, or a password, API key, token or verification code. '
+  + 'Anything else the owner can tell you (an email address, a name) is not for this: ask in your reply and enter it yourself. '
+  + 'The owner does a sign-in on the window itself; for other secret fields Cindy shows just those fields, types the answer in and confirms with the page\'s own main button. '
+  + 'It follows the flow across windows and browsers while fields keep appearing. '
   + 'A sign-in QR code on screen is handed to the owner to scan, and the task continues once they are signed in. '
   + 'Buttons, options and consent pages are yours to handle: a screen with neither a field to type nor a sign-in QR code ends at once with failure nothing_to_fill. '
   + 'Do not type, click or read secrets in that window yourself while it is pending. '
@@ -62,7 +62,7 @@ export const HANDOFF_NOTE = STRING(500);
 export const HANDOFF_TARGET = z.object({
   app: STRING(200).optional().describe('Application name or bundle id showing the step, e.g. "Google Chrome".'),
   pid: z.number().int().positive().optional(),
-  window_title: STRING(300).optional().describe('Window title, when the app has several windows.'),
+  window_title: STRING(300).optional().describe('Window title, when the app has several windows. A minimized window named here is brought back for the owner.'),
 }).strict();
 export const HANDOFF_COMPLETE_WHEN = z.object({
   window_closed: z.boolean().optional(),
