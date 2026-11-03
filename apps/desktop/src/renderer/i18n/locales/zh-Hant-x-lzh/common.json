@@ -6024,8 +6024,10 @@
       "accessRevokedByPeer": "存取之權已遭撤銷，須對方於選項中恢復",
       "deviceControlToggleAria": "切換是否操控 {{name}}",
       "myDevices": {
-        "controlIt": "我控之",
-        "allowInbound": "許其控此機",
+        "iCan": "吾可",
+        "itCan": "彼可",
+        "controlIt": "控之",
+        "controlThisDevice": "控此機",
         "allowInboundAria": "切換是否許 {{name}} 控此機",
         "peerControlOff": "對方未許遠端操控",
         "masterOffHint": "須先開上方總開關",

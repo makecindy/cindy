@@ -6024,8 +6024,10 @@
       "accessRevokedByPeer": "액세스 권한이 철회되었습니다. 상대방이 설정에서 복원해야 합니다",
       "deviceControlToggleAria": "{{name}} 제어 전환",
       "myDevices": {
-        "controlIt": "이 기기를 제어",
-        "allowInbound": "이 기기가 본 기기를 제어하도록 허용",
+        "iCan": "내가",
+        "itCan": "상대가",
+        "controlIt": "제어하기",
+        "controlThisDevice": "본 기기 제어",
         "allowInboundAria": "{{name}}이(가) 본 기기를 제어하도록 허용할지 전환",
         "peerControlOff": "상대방이 제어를 허용하지 않음",
         "masterOffHint": "먼저 위의 메인 스위치를 켜세요",

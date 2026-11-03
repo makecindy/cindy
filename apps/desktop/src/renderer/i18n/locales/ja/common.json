@@ -6024,8 +6024,10 @@
       "accessRevokedByPeer": "アクセス権が撤回されました。相手側の設定で復元する必要があります",
       "deviceControlToggleAria": "{{name}} の操作を切り替え",
       "myDevices": {
-        "controlIt": "このデバイスを操作する",
-        "allowInbound": "このデバイスに本機の操作を許可",
+        "iCan": "こちらから",
+        "itCan": "相手から",
+        "controlIt": "操作する",
+        "controlThisDevice": "本機を操作",
         "allowInboundAria": "{{name}} に本機の操作を許可するか切り替え",
         "peerControlOff": "相手側が操作を許可していません",
         "masterOffHint": "先に上のメインスイッチをオンにしてください",
