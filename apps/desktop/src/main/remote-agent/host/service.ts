@@ -83,6 +83,8 @@ export function hostedStartOptions(input: HostedStartInput): StartSessionOptions
     ...(options.makerMemoryScopeKey ? { makerMemoryScopeKey: options.makerMemoryScopeKey } : {}),
     // 记忆在对方电脑上：没有快照时也给空快照，本机不读自己的记忆库。
     ...(options.makerMemoryEnabled ? { makerMemoryIndexSnapshot: options.makerMemoryIndexSnapshot ?? '' } : {}),
+    // 插件同理在对方电脑上：Agent 用对方给的花名册快照(空串表示对方没有可用插件，也要原样传下去)。
+    ...(options.ghostRosterSnapshot !== undefined ? { ghostRosterSnapshot: options.ghostRosterSnapshot } : {}),
     ...(options.permissionMode ? { permissionMode: options.permissionMode as StartSessionOptions['permissionMode'] } : {}),
     ...(options.planMode !== undefined ? { planMode: options.planMode } : {}),
     ...(options.displayReasoning ? { displayReasoning: options.displayReasoning as StartSessionOptions['displayReasoning'] } : {}),

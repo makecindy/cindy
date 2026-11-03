@@ -29,6 +29,7 @@ export const TASK_ACTION_TOOLS: ReadonlySet<string> = new Set([
   'unarchive_sessions',
   'rename_sessions',
   'move_session',
+  'manage_session_prs',
 ]);
 
 export const ORCA_TASK_ACTION_TOOLS: ReadonlySet<string> = new Set([
@@ -110,6 +111,8 @@ const denied = (errorCode = 'TASK_ACTION_AUTHORIZATION_REQUIRED'): Decision => (
 
 export const HELPER_AUTOMATION_ACTION_TOOLS: ReadonlySet<string> = new Set([
   'routine_save', 'routine_delete', 'routine_run_now', 'schedule_set_pre_run_hook',
+  // Re-enabling a feature the owner switched off is a resume (teammate-authority.md).
+  'set_teammate_capability', 'set_bot_capability',
 ]);
 
 /** Side-effect coverage, not an allowlist of what autonomous teammates may do. */
@@ -216,6 +219,9 @@ export function taskActionRisk(call: Pick<Call, 'server' | 'tool' | 'args'>,
     return 'authority';
   if ((call.tool === 'message_session_task' && args.mode === 'resume') || call.tool === 'schedule_resume')
     return 'resume';
+  // The owner's off switch for memory or a system Skill stands until the owner turns it back on.
+  if ((call.tool === 'set_teammate_capability' || call.tool === 'set_bot_capability') &&
+    args.kind === 'feature' && args.joined === true) return 'resume';
   return undefined;
 }
 
@@ -236,7 +242,7 @@ export function createTaskActionAuthorizer(deps: {
         ? TASK_ACTION_TOOLS.has(call.tool) || HELPER_AUTOMATION_ACTION_TOOLS.has(call.tool)
         : call.server === 'cindy_scheduler' ? SCHEDULER_TASK_ACTION_TOOLS.has(call.tool)
         : call.server === 'cindy_orca' && ORCA_TASK_ACTION_TOOLS.has(call.tool);
-    if (!protectedAction) return { ok: true };
+    if (!protectedAction || (call.tool === 'manage_session_prs' && (call.args as Record<string, unknown>)?.action === 'list')) return { ok: true };
     const scope = await deps.capture(call);
     if (!scope) return { ok: true }; // ordinary user-delegated Agent task, unchanged
     if (!call.sessionId) return denied();

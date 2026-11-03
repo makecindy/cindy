@@ -76,6 +76,7 @@ export const CAPABILITIES: readonly CapabilityEntry[] = [
       '用户本人能对自己的任务、定时任务、项目、伙伴做的操作，Agent 有哪些对应工具、哪些能管到另一台电脑。',
     detail: [
       '【任务链接】已知任务 id 时调用 history/get_task_digest，返回的 sessionUrl 可直接写成 [任务标题](sessionUrl)。list_sessions、search_chat_history、get_chat_history 的任务元数据也附带 sessionUrl，含所属电脑，支持桌面与手机打开。',
+      '【机器】cindy_helper 的顶层工具 list_machines（不经 list_tools）：看账号下所有电脑的实时 CPU、可用内存、磁盘、空闲时长和在跑任务，以及这台电脑配置的 SSH 主机；只报事实，放哪台由你决定。',
       '【原则】用户本人能做的操作(含跨电脑)，Agent 也应有对应工具；是否执行由权限档与自动审核决定。数据保存在各自的电脑上：下结论「没有 / 没人在跟」之前，先确认查的是不是只有本机。',
       '【任务】cindy_helper history 类：list_sessions / search_chat_history(device=local|all|<deviceId>)、get_chat_history(deviceId::sessionId)、get_task_digest(一件任务的 ≤2KB 摘要：状态、已持续分钟、最后的要求与回答、待答问题、错误、模型路线与建议换到的下一条、PR、排队数；deviceId::sessionId 只读)、list_history_devices 可跨电脑；list_workdirs、list_session_queue 仅本机。handoff 类 send_to_session：发给既有任务可跨电脑(deviceId::sessionId)，新建任务仅本机。control 类 archive_sessions / unarchive_sessions 可跨电脑(deviceId::sessionId，单次限定一台电脑)；改名、移动、标签、排队消息、插话、停止、运行设置、list_projects 与项目增删改仅本机。',
       '【定时任务】cindy_scheduler：schedule_list / get / list_runs(device=local|all|<deviceId>，list 可用 query 做文本筛选)与 schedule_update / pause / resume / delete / run_now / schedule_create(device=<deviceId>)可跨电脑；schedule_set_pre_run_hook、当前运行的通知设置仅本机；本机定时任务可用 agentDeviceId 让每次新建的任务在其它电脑或分享来的供应商上运行（schedule_list_models 查位置与模型）。',

@@ -99,6 +99,7 @@
     "incomplete": "Die Spracheingabe wurde nicht abgeschlossen. Versuch es erneut.",
     "missingRefinerTargetProvider": "Die Überarbeitung der Spracheingabe ist nicht verfügbar. Melde dich erneut bei {{appName}} an und versuch es noch einmal.",
     "emptyTranscript": "Die Spracherkennung hat keinen Text zurückgegeben. Nimm erneut auf.",
+    "speakerFiltered": "Stimme einer anderen Person ignoriert",
     "connectionInterrupted": "Die Sprachverbindung wurde unterbrochen. Prüfe dein Netzwerk und versuche es erneut.",
     "recognitionStalled": "Die Spracherkennung liefert keine Ergebnisse mehr. Versuche es erneut.",
     "transcriptKept": "{{message}} Der bisher erkannte Text wurde beibehalten — du kannst ihn direkt bearbeiten.",
@@ -118,6 +119,9 @@
     "unavailable": "Geteilte Inhalte können noch nicht empfangen werden",
     "noCompanions": "Noch keine Teammitglieder",
     "noTasks": "Noch keine Aufgaben",
-    "retry": "Nicht alles konnte geladen werden. Tippe, um es erneut zu versuchen."
+    "retry": "Nicht alles konnte geladen werden. Tippe, um es erneut zu versuchen.",
+    "noMatches": "Keine passenden Ziele",
+    "clearSearch": "Suche löschen",
+    "loadingDevices": "Computer werden geladen…"
   }
 }

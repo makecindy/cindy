@@ -99,6 +99,7 @@
     "incomplete": "La entrada de voz no terminó. Intentar otra vez.",
     "missingRefinerTargetProvider": "El refinamiento de voz no está disponible. Inicie sesión en {{appName}} nuevamente y vuelva a intentarlo.",
     "emptyTranscript": "El reconocimiento de voz no devolvió ningún texto. Por favor grabe nuevamente.",
+    "speakerFiltered": "Se ignoró la voz de otra persona",
     "connectionInterrupted": "La conexión de voz fue interrumpida. Verifique su red e inténtelo nuevamente.",
     "recognitionStalled": "El reconocimiento de voz dejó de dar resultados. Intentar otra vez.",
     "transcriptKept": "{{message}} El texto reconocido hasta ahora se mantuvo; puede editarlo directamente.",
@@ -118,6 +119,9 @@
     "unavailable": "Aún no puedo recibir acciones",
     "noCompanions": "Aún no hay compañeros",
     "noTasks": "Aún no hay tareas",
-    "retry": "No se pudo cargar todo. Toca para volver a intentarlo."
+    "retry": "No se pudo cargar todo. Toca para volver a intentarlo.",
+    "noMatches": "No hay destinos coincidentes",
+    "clearSearch": "Borrar búsqueda",
+    "loadingDevices": "Cargando ordenadores…"
   }
 }

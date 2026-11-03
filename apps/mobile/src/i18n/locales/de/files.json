@@ -102,6 +102,7 @@
     "fetchAvFailed": "Abruf fehlgeschlagen: {{detail}}",
     "fetchPdfFailed": "PDF-Abruf fehlgeschlagen: {{detail}}",
     "fetchingPdf": "PDF wird von deinem Computer abgerufen…",
+    "androidPdfHint": "PDFs können unter Android noch nicht in Cindy angezeigt werden. Tippe unten auf „Exportieren / Teilen“ und wähle einen PDF-Reader.",
     "unsupportedType": "Dieser Typ kann auf deinem Smartphone noch nicht in der Vorschau angezeigt werden",
     "oversize": "Die Datei überschreitet das Vorschaulimit ({{size}}); lade das Original herunter, um sie anzuzeigen",
     "oversizeUnknown": "zu groß",

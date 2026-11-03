@@ -119,6 +119,8 @@ const mobileGuardInclude = [
   'src/auth/__tests__/xdOrgBetaWiring.test.ts',
   // CSP must be applied at the WebView and download call sites, not only in its helper.
   'src/__tests__/htmlPreviewCsp.test.ts',
+  // Whole-repo static scan of text colours (five neutral tiers, placeholders); reads production sources.
+  'src/__tests__/textColorDiscipline.test.ts',
   'src/auth/__tests__/loginHandoffState.test.ts',
   'src/__tests__/accountDeletion.test.ts',
   'src/__tests__/androidSessionInteractionParity.test.tsx',

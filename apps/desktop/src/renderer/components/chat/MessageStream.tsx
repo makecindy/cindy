@@ -1,3 +1,5 @@
+import { AttachmentCollectionContext, type AttachmentCollectionItem } from './AttachmentCollection';
+import { attachmentPreviewKind, previewSourceName } from '@cindy/maker-shared/attachment-preview';
 import { TeammateProcessStatus } from '@/features/bots/TeammateProcessStatus';
 import { scrollRangeIntoView } from '@/lib/scrollRangeIntoView';
 import { historyAfter } from './historyAfter';
@@ -369,7 +371,7 @@ import {
   createGhostCardSpawnIndex,
 } from '@/cindy-brain/ghostCardGallery';
 import { ChatImageView } from './ChatImageView';
-import { ImageGalleryContext, type GalleryImage } from './ImageGalleryContext';
+import { galleryImagePreviewItem, ImageGalleryContext, type GalleryImage } from './ImageGalleryContext';
 import { GhostFulfillmentContext } from './GhostSummonCard';
 import { ChatSessionFileProvider, useChatSessionFileValue } from './ChatSessionFileContext';
 import { toRemoteMediaOrigin } from '@/lib/sessionFileOrigin';
@@ -459,6 +461,11 @@ interface MessageStreamProps {
    *  so message-level controls can gate features unsupported on remote
    *  (e.g. rewind on cc-remote daemon sessions). */
   remoteHostId?: string | null;
+  /** Device ownership resolved by the session view: a device id = remote task,
+   *  null = confirmed local task, undefined = not resolved yet (or unknown to
+   *  the caller). Local-only capabilities that read this machine's file system
+   *  with the session working dir wait for null. */
+  ownerDeviceId?: string | null;
   /** Task origin. Personal WeChat must not be told to switch to Full access. */
   sessionSource?: string | null;
   onDiagnoseError?: (error: ErrorDiagnosisSource) => void;
@@ -1826,11 +1833,11 @@ export function buildRenderItems(
   // 本次 build 内已被认领的活卡(claude 精确锚 / codex 启发式各认领一次)。
   const claimedLiveCallIds = new Set<string>();
   const sessionLiveCards = opts?.sessionId
-    ? ghostCards?.liveCards.filter(lc => lc.sessionId === opts.sessionId) ?? []
+    ? (ghostCards?.liveCards.filter((lc) => lc.sessionId === opts.sessionId) ?? [])
     : [];
   // Mail is a finished document, not plugin progress. Without an exact tool ID,
   // wait for its result rather than attach it to a schema/read call by guesswork.
-  const guessableLiveCards = sessionLiveCards.filter(lc => {
+  const guessableLiveCards = sessionLiveCards.filter((lc) => {
     const entry = ghostCards?.byCallId.get(lc.callId);
     return !(entry?.status === 'ready' && readMailCard(entry.html));
   });
@@ -1979,7 +1986,7 @@ export function buildRenderItems(
       const end = Date.parse(messages[hi]?.createdAt ?? '');
       const artifacts = (opts?.historyArtifacts ?? []).filter((artifact) => {
         const time = Date.parse(artifact.createdAt);
-        return !(Number.isFinite(start) && time < start || Number.isFinite(end) && time >= end);
+        return !((Number.isFinite(start) && time < start) || (Number.isFinite(end) && time >= end));
       });
       const editedPaths = new Set(artifacts.filter((file) => file.exclude && file.ready)
         .map((file) => pathKey(resolveToolFilePath(file.path, workingDir))));
@@ -2996,7 +3003,10 @@ export const WorkGroupRenderItemView = memo(function WorkGroupRenderItemView({
       deferred={item.deferred}
       fitHeader={Boolean(replyColumnSpacer)}
       journal={item.teammateJournal}
-      journalTitle={item.isStreaming ? elapsed => <TeammateProcessStatus sessionId={context.sessionId}>{elapsed}</TeammateProcessStatus> : undefined}
+      journalTitle={item.isStreaming ? (elapsed) => (
+              <TeammateProcessStatus sessionId={context.sessionId}>{elapsed}</TeammateProcessStatus>
+            )
+          : undefined}
     />
   );
   return (
@@ -3024,6 +3034,7 @@ export function MessageStream({
   sessionTitle,
   agentKind,
   remoteHostId,
+  ownerDeviceId,
   sessionSource,
   onDiagnoseError,
   workingDir,
@@ -3110,7 +3121,7 @@ export function MessageStream({
   // 会话文件来源上下文(local / device-link / SSH):顶层构造一次,经
   // ChatSessionFileProvider 下发给整棵消息树;galleryDeviceId 也从这里同源取
   // (见 sessionImageSrcs 处注释)。
-  const sessionFileValue = useChatSessionFileValue(sessionId, workingDir, remoteHostId);
+  const sessionFileValue = useChatSessionFileValue(sessionId, workingDir, remoteHostId, ownerDeviceId);
 
   /** 分享选择模式:只驱动整列缩进(低频)。逐条的选中态由每个复选框自己订阅。 */
   const shareSelectionActive = useShareSelectionActive(sessionId);
@@ -3547,7 +3558,7 @@ export function MessageStream({
   visibleRenderItemsRef.current = visibleRenderItems;
   // Keep complex/stateful cards alive. Plain historical message bodies can be
   // replaced by measured-height placeholders without browser display locking.
-  const viewportEntries = useMemo(() => visibleRenderItems.map(item => ({
+  const viewportEntries = useMemo(() => visibleRenderItems.map((item) => ({
     key: item.key,
     retain: item.type !== 'message' || item.message.isStreaming === true || Boolean(item.message.systemCardType) ||
       (item.message.role !== 'user' && item.message.role !== 'assistant') ||
@@ -3622,7 +3633,7 @@ export function MessageStream({
         : findRenderItemElement(itemsRef.current, previous.viewportTopKey);
       const rect = target?.getBoundingClientRect();
       const viewport = container.getBoundingClientRect();
-      const offset = previous.messageClientId ? previous.messageOffset ?? 0 : previous.offset;
+      const offset = previous.messageClientId ? (previous.messageOffset ?? 0) : previous.offset;
       // Native anchoring also emits scroll events during prepend/size settling.
       // An already aligned reading row must not be replaced by a new offscreen
       // row whose content-visibility estimate temporarily crosses the top edge.
@@ -4093,15 +4104,54 @@ export function MessageStream({
     () => toRemoteMediaOrigin(sessionFileValue.origin, sessionFileValue.workingDir),
     [sessionFileValue],
   );
-  const sessionImageSrcs = useMemo(
+  const messageImageCollections = useMemo(
     () =>
-      collectSessionImageSrcs(
-        renderMetadataItems,
+      new Map(
+        renderMetadataItems.map((item) => [
+          item.key,
+          collectSessionImageSrcs(
+            [item],
         galleryMediaOrigin,
         ghostCardSnapshot,
         isSessionStreaming,
+          ),
+        ]),
       ),
     [renderMetadataItems, galleryMediaOrigin, ghostCardSnapshot, isSessionStreaming],
+  );
+
+  const messageAttachmentCollections = useMemo(
+    () =>
+      new Map(
+        renderMetadataItems.map((item) => {
+          const entries: AttachmentCollectionItem[] = (
+            messageImageCollections.get(item.key) ?? []
+          ).map((image, index) => galleryImagePreviewItem(image, `${item.key}:image:${index}`));
+          if (item.type === 'message' && item.message.role === 'user') {
+            for (const [index, file] of (item.message.files ?? []).entries())
+              entries.push({
+                id: `${item.key}:file:${index}`,
+                name: file.name,
+                source: file.path,
+                kind: attachmentPreviewKind(file.name),
+              });
+          }
+          if (item.type === 'tool_media') {
+            for (const [index, media] of item.items.entries()) {
+              if ((media.kind === 'video' || media.kind === 'audio') && media.url)
+                entries.push({
+                  id: `${item.key}:media:${index}`,
+                  name: previewSourceName(media.url, media.kind),
+                  source: rewriteToRemoteMediaOrigin(media.url, galleryMediaOrigin),
+                  kind: media.kind,
+                  media: true,
+                });
+            }
+          }
+          return [item.key, entries] as const;
+        }),
+      ),
+    [renderMetadataItems, messageImageCollections, galleryMediaOrigin],
   );
 
   // 把可见窗口往前(更早)推 RENDER_WINDOW_GROWTH_ITEMS 个 item,用于滚到顶时的客户端扩窗。
@@ -6477,7 +6527,7 @@ export function MessageStream({
   return (
     <ChatSessionFileProvider value={sessionFileValue}>
       <GhostFulfillmentContext.Provider value={ghostCallsByUserTurn}>
-        <ImageGalleryContext.Provider value={sessionImageSrcs}>
+        <>
           <div className="relative h-full w-full">
             {/* chat-text-quote:选中消息文字 → 浮出"添加到对话"按钮(portal 到 body)。
           绑定本流的滚动容器:协同模式多流并存时,选区归属按各自容器判定。 */}
@@ -6534,7 +6584,8 @@ export function MessageStream({
                   disabled: shareSelectionActive,
                   // Refresh ownership before virtualization mutates the DOM.
                   onProgrammaticScroll: () => handleScroll(),
-                }}>{messageViewport => <div
+                }}>{(messageViewport) => (
+                    <div
                   ref={itemsRef}
                   data-share-selection-active={shareSelectionActive ? '' : undefined}
                   className={cn(
@@ -6550,15 +6601,25 @@ export function MessageStream({
                     'transition-[padding] duration-[var(--motion-base)] ease-[var(--motion-ease-move)] motion-reduce:transition-none',
                   )}
                 >
-                  {visibleRenderItems.map((item, itemIndex) => {
+                  {visibleRenderItems.map((item, itemIndex) => (
+                        <AttachmentCollectionContext.Provider
+                          key={item.key}
+                          value={messageAttachmentCollections.get(item.key) ?? null}
+                        >
+                          <ImageGalleryContext.Provider
+                            value={messageImageCollections.get(item.key) ?? null}
+                          >
+                            {(() => {
                     if (!messageViewport.shouldMount(viewportEntries[itemIndex])) {
-                      return <div key={item.key} data-render-item-key={item.key}
+                      return (
+                                  <div key={item.key} data-render-item-key={item.key}
                         data-message-client-id={item.type === 'message' ? item.message.clientId : undefined}
                         // Previous-question navigation must still find offscreen user rows.
                         data-user-msg-id={item.type === 'message' && item.message.role === 'user'
                           && !item.message.isSyntheticTrigger ? item.message.clientId : undefined}
                         data-message-placeholder="" aria-hidden="true"
-                        style={{ height: messageViewport.placeholderHeight(item.key), flexShrink: 0 }} />;
+                        style={{ height: messageViewport.placeholderHeight(item.key), flexShrink: 0 }} />
+                                );
                     }
                     if (item.type === 'fork_origin') {
                       return (
@@ -6856,9 +6917,15 @@ export function MessageStream({
                         {messageNode}
                       </div>
                     );
-                  })}
-                </div>}</MessageViewport>
-                {footer ? <div className="mt-3.5" data-message-stream-footer>{footer}</div> : null}
+                  })()}
+                          </ImageGalleryContext.Provider>
+                        </AttachmentCollectionContext.Provider>
+                      ))}
+                </div>
+                  )}</MessageViewport>
+                {footer ? (
+                  <div className="mt-3.5" data-message-stream-footer>{footer}</div>
+                ) : null}
               </div>
             </div>
 
@@ -6914,7 +6981,7 @@ export function MessageStream({
                 chipSlot,
               )}
           </div>
-        </ImageGalleryContext.Provider>
+        </>
       </GhostFulfillmentContext.Provider>
     </ChatSessionFileProvider>
   );

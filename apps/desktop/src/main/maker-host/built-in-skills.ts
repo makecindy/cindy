@@ -30,8 +30,8 @@ export const BUILT_IN_SKILLS_BUNDLE_VERSION = 69;
 /** Skills added after the first bundle, with the bundle version that first shipped each one. */
 const LATER_BUILT_IN_SKILL_FIRST_VERSIONS: ReadonlyMap<string, number> = new Map([
   [CINDY_PLUGIN_CREATOR_NAME, 13],
-  // main 的 56–59 版不含 pr,首发版本从 60 起算(合入前 main 若再升版,这里要同步上调)。
-  [CINDY_PR_NAME, 60],
+  // main 的 56–60 版不含 pr,首发版本从 61 起算(合入前 main 若再升版,这里要同步上调)。
+  [CINDY_PR_NAME, 61],
 ]);
 
 export interface BuiltInSkillDescriptor {

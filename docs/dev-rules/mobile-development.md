@@ -18,8 +18,8 @@ pnpm mobile:sim:whoami
 与 Desktop 共用的模拟任务；`whoami`、`rebuild` 也要带同一个开关，见
 [UI 模拟数据](ui-mock-data.md)。
 
-iOS 模拟器不在仓库里固定：`whoami`、`rebuild`、`open` 默认先用 Cindy 模拟器（官方 Baguette
-插件的独立设备目录）中已启动的设备，没有或插件关闭运行时用系统（Xcode）模拟器；个人选择用
+iOS 模拟器不在仓库里固定：`whoami`、`rebuild`、`open` 默认用 Cindy 模拟器（官方 Baguette
+插件的独立设备目录），只有插件未安装或关闭运行时才用系统（Xcode）模拟器；个人选择用
 仓库外的 `CINDY_MOBILE_SIMULATOR=auto|cindy|system|<设备目录绝对路径>`，细节见
 [`simulator-debugging.md`](../../apps/mobile/docs/simulator-debugging.md#which-ios-simulator)。
 
@@ -393,6 +393,11 @@ Swift 源码和打包头像显式进入 fingerprint。首次发布需要原生�
 `device-link:usage-widget:snapshot:v1` 读取电脑快照，由本地模块 `cindy-usage-widgets` 写入 App Group 并刷新组件；
 App Group 里存每台电脑最近一次的快照和「自动」所选电脑（优先上次回应的那台）。组件「编辑小组件」里的
 「数据来源电脑」可选自动或某台电脑；组件绘制时把所选电脑记进 App Group，App 每次刷新也会读取这些电脑。
+「订阅余量」另有两项，与 Mac 菜单栏设置同一思路：「排在前面的账号」（小 / 中 / 大最多 4 / 6 / 7 个，可拖动调整、删除）
+和「隐藏的账号」。可选项是所选电脑快照里的账号（电脑上隐藏的不在快照里）。显示时先排所选账号，其余账号（含以后新加的）
+按电脑顺序跟在后面，隐藏的不显示，既排在前面又隐藏时以隐藏为准；同一账号重复只算一次；全部隐藏时照常显示全部（仍按排在前面的顺序）。
+连接 id 只在所属电脑内有意义（各电脑内置的 OpenAI 连接 id 相同、登录账号却可以不同），所以跨电脑按同一图标与名字认同一账号，id 只作确认，不单凭 id 回退。在编辑页改「电脑」时系统会清空这两项。
+这些选择只存在系统的组件配置里，不写 App Group；改尺寸会保留。
 切换或退出账号时清空。组件只读快照，回满倒计时按 `resetsAtMs` 在本机推进。Swift 源码、图标资源与数字字体
 显式进入 fingerprint；旧包没有该原生模块时 JS 侧静默跳过。真机测试包若签名缺少 App Group，组件只会显示空状态。
 

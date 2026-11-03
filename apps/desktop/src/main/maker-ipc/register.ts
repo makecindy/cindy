@@ -82,6 +82,8 @@ import { ensureManagedLlamaCppProvider } from '../local-model-runtime/managedLla
 import { setBotRemoteMessageService } from './botRemoteMessageReceiver.js';
 import { handleListDevices, defaultDeps as deviceDirectoryDeps } from '../device-link/ipc.js';
 import { configureBotAutonomyHost, getBotAutonomyGlance, noteBotAutonomyInputProjection } from '../bot-autonomy/hub.js';
+import { countMachineRunningTasks } from '../machines/directory.js';
+import { configureLocalMachineActivity, readLocalMachineStatus } from '../machines/localStatus.js';
 import { getHostSourceDevice, getSelfDeviceId, remoteBackgroundInvoke, remoteInvoke as invokeBotPeer } from '../device-link/index.js';
 import { readDeviceProviderViews, readRemoteProviderRoute } from '../remote-agent/controller/deviceCatalog.js';
 import { checkDeviceRoute } from '../remote-agent/controller/deviceRouteCheck.js';
@@ -1105,6 +1107,7 @@ import {
   ORCA_EXECUTION_DEVICES_CHANNEL,
   ORCA_REMOTE_WORKER_BRIDGE_CHANNEL,
   COMPANION_CLOUD_CAPS_CHANNEL,
+  MACHINE_STATUS_CHANNEL,
   COMPANION_CLOUD_FLUSH_CHANNEL,
   COMPANION_CLOUD_HAND_OVER_CHANNEL,
   COMPANION_CLOUD_MERGE_CHANNEL,
@@ -2767,6 +2770,8 @@ interface OrcaCollabService {
   sendToSession: (params: {
     /** Host-only script follow-up; preserves target authorization without treating script text as consent. */
     readonly [AUTO_REVIEW_DELEGATED_CONTINUATION]?: true;
+    /** Host-generated stable delivery ID for a script retry, not model-supplied metadata. */
+    deliveryClientId?: string;
     messagePurpose?: SessionMessagePurpose;
     /** 省略 → create 新 session;提供 → jump 到该既有 session。 */
     targetSessionId?: string;
@@ -11858,14 +11863,16 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     decide: (sessionId, memberKey, remember, clientId) => sessionGroupService.rebalanceDecision(sessionId, memberKey, remember, clientId),
   });
   // 这台电脑上每个供应商正在运行一轮的任务数：组里「本机」这台显示它，同账号电脑读目录时也带上(§5)。
-  setProviderGroupLocalLoad(() => countProviderRunningTurns({
+  const localTurnSources = {
     // Visible app tasks also live in Maker; the application registry counts them once.
     listTurnRunningSessions: () => maker.listActiveSessions().filter((s) => s.isTurnRunning() && !hasLocalAgentVisibleRuntime(s.id)).map((s) => s.id),
     readSessionRoutes: readProviderLocalLoadRoutes,
-    resolveImplicitProvider: resolveProviderGroupImplicitProvider,
     hostRunningProviders: remoteAgentHostRunningProviders,
     applicationRunningProviders: () => getProviderGroupApplicationLoad().runningProviders(),
-  }));
+  };
+  setProviderGroupLocalLoad(() => countProviderRunningTurns({ ...localTurnSources, resolveImplicitProvider: resolveProviderGroupImplicitProvider }));
+  // list_machines 报的负载按 Agent 实际运行的电脑算，与供应商组同样的范围。
+  configureLocalMachineActivity(() => countMachineRunningTasks(localTurnSources));
   // 经另一台电脑上的组运行的任务：开始 / 结束一轮时报告给组所在电脑，让它的分配看到真实负载。
   providerGroupLeaseReporter?.dispose();
   providerGroupLeaseReporter = createProviderGroupLeaseReporter({
@@ -12985,6 +12992,17 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       if (params.files?.length || params.forceQueue || verifiedOwnerRequestText(params.autoReviewUserText) !== undefined || explicitClientId?.startsWith('bot-dm:') || explicitClientId?.startsWith(BOT_GROUP_CLIENT_ID_PREFIX) || explicitClientId?.startsWith('bot-authorization-resume:') || inputCoordinator.shouldQueueNewTurn(targetSessionId) || agentSwitchPending.get(targetSessionId)) {
         lockStage = 'enqueue-queued-message';
         const qClientId = explicitClientId ?? createId();
+        const durableScriptDelivery = qClientId.startsWith('schedule-delivery:');
+        if (durableScriptDelivery) {
+          await inputCoordinator.ensureQueueRestored(targetSessionId);
+          const persisted = await getPersistedInputClientIds(targetSessionId, [qClientId]);
+          if (persisted.has(qClientId) || inputCoordinator.hasKnownClientId(targetSessionId, qClientId)) {
+            await awaitAgentInputQueueSnapshotPersistence(targetSessionId);
+            return { ok: true as const, targetSessionId, agentKind: meta.agentKind,
+              wakeKind: 'queued' as const, queuedMessageId: qClientId, targetTitle: dbRow.title,
+              targetLastUserSendAt: dbRow.userSendAt !== null ? new Date(dbRow.userSendAt).toISOString() : null };
+          }
+        }
         await enqueueSendToSessionMessage({
           targetSessionId,
           message,
@@ -13005,6 +13023,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
           inheritTargetPlanMode: params.inheritTargetPlanMode,
           taskActionDeliveryGuard: params.taskActionDeliveryGuard,
         });
+        if (durableScriptDelivery) await awaitAgentInputQueueSnapshotPersistence(targetSessionId);
         return {
           ok: true as const,
           targetSessionId,
@@ -13688,11 +13707,12 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         return { ok: false as const, errorCode: 'LANE_UNAVAILABLE', message: error instanceof Error ? error.message : String(error) };
       }
     },
-    dispatch: ({ targetSessionId, message, persistedContent, clientId, attachments, toolsDisabled, onQueued, onAccepted }) =>
+    dispatch: ({ targetSessionId, message, persistedContent, autoReviewUserText, clientId, attachments, toolsDisabled, onQueued, onAccepted }) =>
       dispatchBotSessionMessage({
         targetSessionId,
         message,
         persistedContent,
+        autoReviewUserText,
         clientId,
         toolsDisabled,
         onQueued,
@@ -16417,6 +16437,12 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
   orcaTeamServiceForEvents = orcaTeamService;
   // 数据库可能晚于本注册就绪；bootstrap 在接管数据库后会再调一次，两种顺序都覆盖。
   void restoreOrcaRemoteWorkersForCurrentOwner();
+  ipcMain.handle(MACHINE_STATUS_CHANNEL, async (event) => {
+    if (!isDeviceLinkInvoke()) assertTrustedAppRendererEvent(event);
+    // 共享任务访客看不到这台电脑的资源情况。
+    if (getDeviceLinkInvokeContext()?.sharedTask) throwIpcError('PERMISSION_DENIED', 'not available to shared task guests');
+    return readLocalMachineStatus();
+  });
   ipcMain.handle(ORCA_EXECUTION_DEVICES_CHANNEL, async (event) => {
     if (!isDeviceLinkInvoke()) assertTrustedAppRendererEvent(event);
     // 共享任务访客看不到本账号的设备目录。
@@ -18031,6 +18057,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       }
       return sendToSessionInternal({
         ...params,
+        ...(params.deliveryClientId ? { clientId: params.deliveryClientId } : {}),
         autoReviewUserText: request.autoReviewUserText,
         ...(classification.delegatedContinuation || (params.targetSessionId && params[AUTO_REVIEW_DELEGATED_CONTINUATION])
           ? { autoReviewUserText: { ...request.autoReviewUserText, kind: 'delegated-continuation' as const } } : {}),
@@ -20547,9 +20574,9 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     // auto-resume bookkeeping as direct maker sends.  Keeping one writer also
     // preserves message ordering when a clear-race rewind follows the insert.
     createUserMessage: createUserMessageDurably,
-    rewindPersistedUserMessageAfterClear: (sessionId, clientId) =>
+    rewindPersistedUserMessageAfterClear: (sessionId, clientId, options) =>
       enqueueDurableWrite(`user-rewind:${sessionId}:${clientId}`, () =>
-        rewindPersistedUserMessageAfterClear(sessionId, clientId),
+        rewindPersistedUserMessageAfterClear(sessionId, clientId, options),
       ),
     resolveSessionReferences,
     refreshAgentReferencesBeforeDispatch: async (item) => {

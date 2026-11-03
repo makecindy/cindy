@@ -4,6 +4,7 @@ export interface ChatHistoryMessage {
 }
 export interface ChatHistoryRead {
   thread_key: string; read_seq: string; following?: boolean; muted?: boolean; marked_unread?: boolean;
+  notification_scope?: 'all' | 'mentions' | null;
 }
 export interface ChatHistorySnapshot {
   room: { id: string; kind?: string }; cursor: string; messages: ChatHistoryMessage[]; reads?: ChatHistoryRead[];
@@ -353,15 +354,15 @@ export function createChatHistory(input: { api: Api; store: ChatHistoryStore; cu
         || (read.markedUnread !== undefined && typeof read.markedUnread !== 'boolean'))) return false;
       const state = states.get(room);
       if (!state?.snapshot.reads) return false; // Legacy servers/caches retain the full refresh fallback.
-      for (const read of reads as Array<{ threadRootId?: string | null; readSeq: string; following: boolean; muted: boolean; markedUnread?: boolean }>) {
+      for (const read of reads as Array<{ threadRootId?: string | null; readSeq: string; following: boolean; muted: boolean; markedUnread?: boolean; notificationScope?: ChatHistoryRead['notification_scope'] }>) {
         const key = typeof read.threadRootId === 'string' ? read.threadRootId : 'main';
         const previous: ChatHistoryRead | undefined = state.snapshot.reads.find(item => item.thread_key === key);
         const next: ChatHistoryRead = { thread_key: key,
           read_seq: previous && BigInt(previous.read_seq) > BigInt(read.readSeq) ? previous.read_seq : read.readSeq,
           // An ordinary HTTP read can arrive after a newer preference event. It must
           // only advance the position, never roll back that event's follow/mute state.
-          ...(sequenceOnly && previous ? { following: previous.following, muted: previous.muted, marked_unread: previous.marked_unread }
-            : { following: read.following, muted: read.muted, ...(typeof read.markedUnread === 'boolean' ? { marked_unread: read.markedUnread } : {}) }) };
+          ...(sequenceOnly && previous ? { following: previous.following, muted: previous.muted, notification_scope: previous.notification_scope, marked_unread: previous.marked_unread }
+            : { following: read.following, muted: read.muted, notification_scope: read.notificationScope, ...(typeof read.markedUnread === 'boolean' ? { marked_unread: read.markedUnread } : {}) }) };
         state.snapshot.reads = previous ? state.snapshot.reads.map(item => item.thread_key === key ? next : item) : [...state.snapshot.reads, next];
       }
       await save(room, state);

@@ -25,6 +25,7 @@
  * Renderer 可调用。它由业务 dispatch 拦截,绝不放行通用 UI / shell IPC。
  */
 import { FILE_PEER_CHANNEL } from './filePeer.js';
+import { MACHINE_STATUS_CHANNEL } from './machineStatus.js';
 import { PROVIDER_GROUP_REMOTE_CHANNEL } from './providerGroup.js';
 import { REMOTE_AGENT_CHANNEL } from './remoteAgent.js';
 import {
@@ -324,6 +325,7 @@ const CORE_INVOKE_CHANNELS: readonly string[] = [
   'git-context:pr-refs:list',
   'git-context:pr-refs:manage',
   'git-context:pr-status',
+  'git-context:github-read',
   // —— 通用远程资源面——
   // 固定的 manifest / list / get / invoke 入口。业务模块只在被控端 provider
   // registry 注册资源与动作，后续新增模块或动作不再扩张 device-link channel 表。
@@ -446,6 +448,7 @@ const EXTENDED_INVOKE_CHANNELS: readonly string[] = [
   'agent-island:completion-action',
   // —— Project automation ——
   'maker:project-automation:reconcile',
+  'maker:project-automation:pending-imports',
   'maker:project-automation:list-consents',
   'maker:project-automation:revoke-consent',
   'maker:project-automation:upsert-schedule',
@@ -480,6 +483,9 @@ const EXTENDED_INVOKE_CHANNELS: readonly string[] = [
   ORCA_EXECUTION_DEVICES_CHANNEL,
   // 云端伙伴：交出伙伴前探测目标电脑是否支持接手(只读常量，无 sender 依赖、无本机 UI 副作用)。
   // 老版本无 handler → CHANNEL_NOT_ALLOWED，交出方拒绝该目标。
+  // 这台电脑此刻的资源情况(只读，真相在被控端，无 sender 依赖、无 UI 副作用)。不进 sharedTask 访客白名单；
+  // 老版本无 handler → CHANNEL_NOT_ALLOWED，控制端显示需要更新。
+  MACHINE_STATUS_CHANNEL,
   COMPANION_CLOUD_CAPS_CHANNEL,
   // 云端伙伴：在任一台电脑上更换伙伴的主力电脑。只读读取主力电脑视角的可接手电脑，以及请主力电脑
   // 交出伙伴(写)。准入同本机伙伴设置的「主力电脑」一行：同账号 + 主力电脑开启远程控制时控制端本就

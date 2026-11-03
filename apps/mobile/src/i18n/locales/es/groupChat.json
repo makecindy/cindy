@@ -1,4 +1,13 @@
 {
+  "progress": {
+    "stop": "Detener"
+  },
+  "work": {
+    "queued": "En cola {{count}}",
+    "active": "En curso {{count}}",
+    "expand": "Expandir actividad de compañeros",
+    "collapse": "Contraer actividad de compañeros"
+  },
   "title": "Chats grupales",
   "memberSeparator": ", ",
   "memberCount_one": "Miembro de {{count}}",
@@ -191,6 +200,7 @@
     "eyebrow_many": "Plan · Pasos {{count}}"
   },
   "speaking": {
+    "queued": "En cola",
     "stopping": "Parando…",
     "planning": "Dividiendo el trabajo…",
     "step": "Trabajando en ello…"
@@ -263,7 +273,18 @@
       "unavailable": "No se pudo cargar la configuración del grupo. Intentar otra vez."
     },
     "allowMentionAllBots": "Permitir @todos los compañeros",
-    "allowMentionAllBotsHint": "Solo el dueño del grupo puede cambiarlo. Todos los compañeros podrían responder; cuidado en grupos grandes. No afecta a la IA que responde por ti."
+    "allowMentionAllBotsHint": "Solo el dueño del grupo puede cambiarlo. Todos los compañeros podrían responder; cuidado en grupos grandes. No afecta a la IA que responde por ti.",
+    "notifications": {
+      "title": "Notificaciones de mensajes",
+      "all": "Todos los mensajes",
+      "mentions": "Solo menciones",
+      "none": "Desactivadas",
+      "allHint": "Recibe avisos de los mensajes del grupo y las nuevas respuestas en los hilos que sigues.",
+      "mentionsHint": "Recibe avisos cuando te mencionen, también con @todos. Las actualizaciones de los repartos de trabajo seguirán generando avisos.",
+      "noneHint": "Desactiva todos los avisos del sistema de este grupo. Los mensajes no leídos se conservan.",
+      "saving": "Guardando…",
+      "saveFailed": "No se pudieron guardar las notificaciones. Inténtalo de nuevo."
+    }
   },
   "errors": {
     "memberLimit": "Un chat grupal necesita de 2 a 6 compañeros de equipo",
