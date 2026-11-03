@@ -36,6 +36,7 @@ import {
   type HostedStartInput,
   type RemoteAgentGroupRelayDeps,
 } from '../host/runHost';
+import { managedSkillDigest } from '../managedSkillDigest';
 
 const GUEST_A = 'share-guest-a';
 const GUEST_B = 'share-guest-b';
@@ -77,8 +78,10 @@ function fakeAgentHost(name: string, started: Started[], options: {
   resolveProvider?: NonNullable<Parameters<typeof createRemoteAgentHost>[0]['providerAccess']>['resolve'];
   modelAccess?: Partial<NonNullable<Parameters<typeof createRemoteAgentHost>[0]['providerAccess']>>;
   bindGuestProviderRoute?: Parameters<typeof createRemoteAgentHost>[0]['bindGuestProviderRoute'];
+  managedSkills?: Parameters<typeof createRemoteAgentHost>[0]['managedSkills'];
 }) {
   return createRemoteAgentHost({
+    ...(options.managedSkills ? { managedSkills: options.managedSkills } : {}),
     forkHosted: async (_kind, opts) => ({ newSdkSessionId: `${opts.sourceSdkSessionId}-fork`, uuidMap: new Map([['old', 'new']]) }),
     prepareImageEvent: options.prepareImageEvent,
     imageArtifacts: options.imageArtifacts,
@@ -256,6 +259,7 @@ function setup(options: {
   memberBinder?: Parameters<typeof createRemoteAgentHost>[0]['bindGuestProviderRoute'];
   /** 组所在电脑本机的 Agent 表现(组选中本机这一台时)。 */
   owner?: { failStart?: boolean; onSend?: (record: Started) => void | Promise<void>;
+    managedSkills?: Parameters<typeof createRemoteAgentHost>[0]['managedSkills'];
     resolveProvider?: NonNullable<Parameters<typeof createRemoteAgentHost>[0]['providerAccess']>['resolve'];
     prepareImageEvent?: Parameters<typeof createRemoteAgentHost>[0]['prepareImageEvent'];
     modelAccess?: Partial<NonNullable<Parameters<typeof createRemoteAgentHost>[0]['providerAccess']>>;
@@ -2253,6 +2257,65 @@ describe('provider group reshare consent', () => {
     const second = await openAsGuest(env, C_AT_B, openPayload('task-2'));
     // 同账号的组内电脑不需要同意，不带键。
     expect(opens[1]).not.toHaveProperty('reshareKey');
+    await second.client.close('close', 'navigation');
+  });
+
+  // 受邀者按组所在电脑的指纹只报了名字：组内电脑有同样一份的继续只报名字，没有的由组所在电脑补上文件；
+  // 旧版组内电脑不认单独的托管额度，文件放回 files。
+  it('fills in managed skills the chosen group computer does not have', async () => {
+    const own = (name: string) => {
+      const dir = path.join(root, 'own', name);
+      fs.mkdirSync(dir, { recursive: true });
+      fs.writeFileSync(path.join(dir, 'SKILL.md'), name);
+      return dir;
+    };
+    const pr = own('pr');
+    const learn = own('learn');
+    const secret = own('secret');
+    // 指纹允许比同步限制更大的 Skill：补文件时也要按同步限制，放不下就整个不带。
+    const big = own('big');
+    fs.writeFileSync(path.join(big, 'asset.bin'), Buffer.alloc(600 * 1024, 1));
+    const opens: Array<{ personal: Record<string, unknown> }> = [];
+    let oldMember = false;
+    const env = setup({
+      plans: [{ kind: 'member', ...MEMBER_MINI }, { kind: 'member', ...MEMBER_MINI }],
+      owner: { managedSkills: async () => [
+        { command: 'cindy:pr', dir: pr }, { command: 'cindy:learn', dir: learn }, { command: 'cindy-plugin-x:secret', dir: secret },
+        { command: 'cindy:big', dir: big },
+      ] },
+      intercept: async (_agentDeviceId, request, forward) => {
+        if (request.op === 'caps') {
+          const caps = { ...await forward() as Record<string, unknown> };
+          delete caps.managedSkills;
+          return oldMember ? caps : { ...caps, managedSkills: { digests: { 'cindy:pr': await managedSkillDigest(pr) } } };
+        }
+        if (request.op === 'open') opens.push((request.payload as { json: { personal: Record<string, unknown> } }).json);
+        return forward();
+      },
+    });
+    const personal = { files: [], managedSkills: [
+      { command: 'cindy:pr', dir: '.claude/skills/cindy-pr', digest: await managedSkillDigest(pr), reuse: true },
+      { command: 'cindy:learn', dir: '.claude/skills/cindy-learn', digest: await managedSkillDigest(learn), reuse: true },
+      { command: 'cindy:big', dir: '.claude/skills/cindy-big', digest: await managedSkillDigest(big), reuse: true },
+      // 受邀者点名提供者装的插件 Skill：组所在电脑不替它补文件。
+      { command: 'cindy-plugin-x:secret', dir: '.claude/skills/cindy-plugin-x-secret-00000000', digest: await managedSkillDigest(secret), reuse: true },
+    ] };
+    const learnFile = { path: '.claude/skills/cindy-learn/SKILL.md', data: Buffer.from('learn').toString('base64') };
+    const first = await openAsGuest(env, C_AT_B, openPayload('task-1', { personal }));
+    expect(opens[0].personal).toMatchObject({
+      files: [],
+      managedSkills: [personal.managedSkills[0], { command: 'cindy:learn', dir: '.claude/skills/cindy-learn' }],
+      managedFiles: [learnFile],
+    });
+    expect((opens[0].personal.managedSkills as Array<Record<string, unknown>>)[1]).not.toHaveProperty('reuse');
+    await first.client.close('close', 'navigation');
+    oldMember = true;
+    const second = await openAsGuest(env, C_AT_B, openPayload('task-2', { personal }));
+    expect(opens[1].personal.files).toEqual([
+      { path: '.claude/skills/cindy-pr/SKILL.md', data: Buffer.from('pr').toString('base64') },
+      learnFile,
+    ]);
+    expect(opens[1].personal).not.toHaveProperty('managedFiles');
     await second.client.close('close', 'navigation');
   });
 

@@ -8,6 +8,7 @@ import {
   isRemoteDesktopChannelRequest,
   parseRemoteDesktopChannelRequest,
   parseRemoteDesktopChannelReply,
+  isLiveScreenOnlyInput,
 } from "../remoteDesktop";
 import { REMOTE_INVOKE_ALLOWLIST, PUSH_FORWARD_ALLOWLIST } from "../allowlist";
 describe("remote desktop wire boundary", () => {
@@ -300,3 +301,53 @@ it.each([{ op: "start", displayId: "1" }, { op: "heartbeat", lease: "a" }])(
       expect(() => parseRemoteDesktopRequest({ ...request, idleTimeoutMinutes })).toThrow("INVALID_REQUEST");
   },
 );
+
+describe("remote desktop live screens", () => {
+  it("parses a listed screen on start and refuses one combined with a window view", () => {
+    const screen = { plugin: "_ns__acme__sim", id: "AB-12.3:x" };
+    expect(parseRemoteDesktopRequest({ op: "screens", extra: 1 })).toEqual({ op: "screens" });
+    expect(
+      parseRemoteDesktopRequest({ op: "start", displayId: "live-screen", screen: { ...screen, extra: 1 } }),
+    ).toEqual({ op: "start", displayId: "live-screen", screen });
+    for (const bad of [
+      null,
+      "sim|1",
+      { plugin: "a/b", id: "1" },
+      { plugin: "sim", id: "x".repeat(129) },
+      { plugin: "sim", id: "a b" },
+    ])
+      expect(() =>
+        parseRemoteDesktopRequest({ op: "start", displayId: "live-screen", screen: bad }),
+      ).toThrow("INVALID_REQUEST");
+    expect(() =>
+      parseRemoteDesktopRequest({ op: "start", displayId: "x", screen, handoff: "req1" }),
+    ).toThrow("INVALID_REQUEST");
+  });
+
+  it("accepts every-contact touch snapshots and listed buttons, nothing looser", () => {
+    const touch = {
+      kind: "touch",
+      touches: [
+        { id: 0, x: 0, y: 1, phase: "began" },
+        { id: 1, x: 0.5, y: 0.5, phase: "stationary" },
+      ],
+      edge: "bottom",
+    };
+    expect(isDesktopInput(touch)).toBe(true);
+    expect(isDesktopInput({ kind: "touch", touches: [] })).toBe(true);
+    expect(isDesktopInput({ kind: "press", button: "volume-up" })).toBe(true);
+    for (const bad of [
+      { ...touch, edge: "middle" },
+      { kind: "touch", touches: [{ id: 0, x: 1.1, y: 0, phase: "moved" }] },
+      { kind: "touch", touches: [{ id: 10, x: 0, y: 0, phase: "moved" }] },
+      { kind: "touch", touches: [{ id: 0, x: 0, y: 0, phase: "hover" }] },
+      { kind: "touch", touches: [{ id: 2, x: 0, y: 0, phase: "moved" }, { id: 2, x: 1, y: 1, phase: "moved" }] },
+      { kind: "touch", touches: Array.from({ length: 11 }, (_, id) => ({ id, x: 0, y: 0, phase: "moved" })) },
+      { kind: "press", button: "Home" },
+      { kind: "press", button: "x".repeat(33) },
+    ])
+      expect(isDesktopInput(bad)).toBe(false);
+    expect(isLiveScreenOnlyInput(touch as never)).toBe(true);
+    expect(isLiveScreenOnlyInput({ kind: "text", text: "a" })).toBe(false);
+  });
+});

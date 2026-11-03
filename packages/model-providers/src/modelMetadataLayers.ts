@@ -472,6 +472,11 @@ export function applyModelMetadata(
 }
 
 export interface DiscoveredModel {
+  /** Imported gateway IDs are opaque, including when source labels are later unavailable. */
+  opaqueModelId?: true;
+  /** Main-issued receipt for a successful response, including source-field removal. */
+  discoverySnapshotId?: string;
+  discoveredSource?: import("./modelSource.js").DiscoveredModelSource;
   id: string;
   name: string;
   /** Account entitlement, never inherited as public model metadata. */
@@ -514,6 +519,9 @@ export function mergeDiscoveredRuntimeModels(
         id: model.id,
         name: model.name,
         ...accountCapabilities,
+        discoveredSource: model.discoveredSource,
+        ...(model.opaqueModelId ? { opaqueModelId: true as const } : {}),
+        ...(model.discoverySnapshotId ? { discoverySnapshotId: model.discoverySnapshotId } : {}),
         discoveredMetadata,
         ...(model.discoveredCost ? { discoveredCost: model.discoveredCost } : {}),
         ...(hideNew ? { defaultEnabled: false } : {}),
@@ -522,6 +530,9 @@ export function mergeDiscoveredRuntimeModels(
       models[index] = {
         ...models[index],
         ...accountCapabilities,
+        discoveredSource: model.discoveredSource,
+        ...((model.opaqueModelId || models[index].opaqueModelId) ? { opaqueModelId: true as const } : {}),
+        ...(model.discoverySnapshotId ? { discoverySnapshotId: model.discoverySnapshotId } : {}),
         ...(!models[index].discoveredMetadata ? { nameExplicit: true } : {}),
         discoveredMetadata,
         ...(model.discoveredCost ? { discoveredCost: model.discoveredCost } : {}),

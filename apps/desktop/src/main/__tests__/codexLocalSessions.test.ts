@@ -37,6 +37,7 @@ vi.mock('../logger.js', () => ({
 import {
   prepareExternalCodexSessionForResume,
   readCodexThreadStorageForArchive,
+  readCodexThreadStorageForArchiveAsync,
   dumpCodexThreadStateRows,
   classifyCodexHistoryOversized,
   repairCodexRolloutPath,
@@ -304,6 +305,32 @@ afterEach(() => {
 });
 
 describe('Codex local session import', () => {
+  // KFJS unit regression: missing-index discovery must locate the newest exact
+  // thread without blocking on unrelated files or mutating/importing history.
+  // Prior archive tests only used synchronous lookup and indexed state DBs.
+  it('async fallback finds the newest matching rollout without stat-ing unrelated history', async () => {
+    const home = path.join(targetUserData, 'codex-home');
+    const older = path.join(home, 'sessions', `rollout-2026-05-12-${threadId}.jsonl`);
+    const newer = path.join(home, 'archived_sessions', `rollout-2026-05-13-${threadId}.jsonl`);
+    const unrelated = path.join(home, 'sessions', `rollout-2026-05-13-${execThreadId}.jsonl`);
+    const content = JSON.stringify({ type: 'session_meta', payload: { id: threadId, source: 'cli' } }) + '\n';
+    for (const file of [older, newer, unrelated]) {
+      fs.mkdirSync(path.dirname(file), { recursive: true });
+      fs.writeFileSync(file, content);
+    }
+    fs.utimesSync(older, 1000, 1000);
+    fs.utimesSync(newer, 2000, 2000);
+    const stat = vi.spyOn(fs.promises, 'stat');
+    try {
+      await expect(readCodexThreadStorageForArchiveAsync(threadId)).resolves.toEqual({
+        historyHome: home, sqliteHome: home, rolloutPath: newer,
+      });
+      expect(stat.mock.calls.some(([file]) => file === unrelated)).toBe(false);
+      expect(fs.readFileSync(newer, 'utf8')).toBe(content);
+      expect(currentTestDb().prepare('SELECT COUNT(*) AS n FROM sessions').get()).toEqual({ n: 0 });
+      await expect(readCodexThreadStorageForArchiveAsync('not-a-thread')).resolves.toBeUndefined();
+    } finally { stat.mockRestore(); }
+  });
   it('locates archive storage in the known state DB after sqlite_home changes', () => {
     const dbPath = createStateDb(externalHome);
     const newHome = path.join(rootDir, 'new-state');

@@ -333,6 +333,10 @@ Claude 回退／编辑重发的目标之前没有可续接的 assistant（首条
 Claude 用本机保存点），再关闭会话；`rewind.commit` 在同一事务里软删目标、清掉
 `sdk_session_id` 并写入隐藏 `context_rebuild`（reason `message-rewind`），把目标之前仍保留的
 可见历史作为交接，下次任意入口发送时注入全新原生会话，没有 user 历史时交接为空。
+Desktop 发送事务遇到必须占据输入开头的原生命令（Claude 的 `/compact`、Learn 调用及
+Pi 的 slash 输入）时保留待发送交接，在下一条可附带上下文的消息中注入；命令被接受
+不代表交接已送达，不消费内存或持久化的交接标记。回归见
+`makerSendTransaction.test.ts` 的 Learn 命令与后续普通消息用例（#8549）。
 查询与 fork 使用同一隔离控制面 host，关闭其写入进程后才发布子线程身份。
 HTTP 回退遇到缺失 `Content-Type` 的成功响应时，只允许从明文 SSE 前缀（可带注释心跳）
 确认事件流并补齐响应头；显式非 SSE 类型、HTML／JSON、空响应与只有心跳的正文不能放行。

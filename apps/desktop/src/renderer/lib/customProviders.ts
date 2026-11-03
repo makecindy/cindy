@@ -94,6 +94,8 @@ export function customProviderModelConfigFromCatalogModel(
     name: model.name,
     discoveredMetadata: model.discoveredMetadata,
     discoveredCost: model.discoveredCost,
+    ...(model.discoveredSource ? { discoveredSource: model.discoveredSource } : {}),
+    ...(model.opaqueModelId ? { opaqueModelId: true as const } : {}),
     nameExplicit: model.nameExplicit,
     ...(agent === 'pi' && model.piApi ? { piApi: model.piApi } : {}),
     ...(model.route ? { route: { ...model.route } } : {}),
