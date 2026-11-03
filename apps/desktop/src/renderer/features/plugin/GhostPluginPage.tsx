@@ -514,7 +514,7 @@ function LocalGhostPluginPage({
     };
   }, [dataOwnerId, recommendationNonce]);
   const continueRecommendation = useCallback(
-    (nonce: string | undefined, ghostId: string) => {
+    async (nonce: string | undefined, ghostId: string) => {
       if (!recommendationPageMounted.current || !nonce) return false;
       const snapshot = readPluginRecommendationSnapshot();
       if (
@@ -525,6 +525,19 @@ function LocalGhostPluginPage({
       const ready = readyPendingPluginSuggestion(nonce, dataOwnerId, ghostId);
       const pending = getPendingPluginSuggestion();
       if (!ready || !pending) return false;
+      // A plugin Skill is only usable in the task's project if the plugin is not disabled there: a
+      // project-level "off" outlives an uninstall, so a fresh install would still not offer the Skill.
+      if (pending.skillName && pending.workingDir) {
+        try {
+          const dir = pending.workingDir;
+          if (window.electronAPI.ghosts.workdirPrefsSync(dir).disabled.includes(ghostId)) {
+            await window.electronAPI.ghosts.setWorkdirDisabled(dir, ghostId, false);
+          }
+        } catch {
+          return false;
+        }
+        if (!recommendationPageMounted.current || getPendingPluginSuggestion()?.nonce !== nonce) return false;
+      }
       // Back to where the user asked: the new-task draft or the task they were in.
       navigate(pendingPluginSuggestionReturnPath(pending), {
         state: { pluginSuggestionNonce: ready },
@@ -1081,7 +1094,7 @@ function LocalGhostPluginPage({
         } else {
           await window.electronAPI.ghosts.setEnabled(id, enabled);
         }
-        if (enabled) continueRecommendation(pendingNonce, id);
+        if (enabled) await continueRecommendation(pendingNonce, id);
       } catch (error) {
         toast.error(t(ghostInstallErrorKey(extractIpcError(error)?.code)));
       }
@@ -1581,7 +1594,7 @@ function LocalGhostPluginPage({
           isStillActive: () => isMarketBusyLeaseActive(marketBusyLease),
         });
         if (!ghost || !isMarketBusyLeaseActive(marketBusyLease)) return;
-        if (continueRecommendation(pendingNonce, installedGhostStoragePart(ghost))) return;
+        if (await continueRecommendation(pendingNonce, installedGhostStoragePart(ghost))) return;
         // 市场首装装完即开(2026-07-26 定案),toast 用"已安装";更新路径如实
         // 用"已更新"(生效状态未被改变),并留在当前页方便连续更新多个插件。
         toast.success(
