@@ -237,6 +237,41 @@ function Harness({
 }
 
 describe('project drag interaction', () => {
+  // #5713 / discussion_r4451249051, unit: existing drag cases only use cwd
+  // membership. With explicit project B and cwd C, the real hook must leave B
+  // untouched and allow a move to C; otherwise a no-op can rewrite the workspace.
+  it.each([
+    { destination: 'project', shouldMove: false },
+    { destination: 'next-project', shouldMove: true },
+  ])('uses explicit membership when dropping on $destination', ({ destination, shouldMove }) => {
+    vi.useFakeTimers();
+    const move = vi.fn(), expand = vi.fn();
+    render(
+      <Harness
+        move={move}
+        expand={expand}
+        bubble={vi.fn()}
+        session={{ ...task, projectDir: `${project.workingDir}/`, workingDir: nextProject.workingDir }}
+      />,
+    );
+    const transfer = dataTransfer();
+    fireEvent.dragStart(screen.getByTestId('source'), { dataTransfer: transfer });
+    const target = screen.getByTestId(destination);
+    fireEvent.dragOver(target, { dataTransfer: transfer });
+    act(() => vi.advanceTimersByTime(PROJECT_DROP_HOVER_MS));
+    fireEvent.drop(target, { dataTransfer: transfer });
+    if (shouldMove) {
+      expect(expand).toHaveBeenCalledExactlyOnceWith(nextProject.projectKey);
+      expect(move).toHaveBeenCalledExactlyOnceWith(task.id, {
+        kind: 'project',
+        workingDir: nextProject.workingDir,
+      });
+    } else {
+      expect(expand).not.toHaveBeenCalled();
+      expect(move).not.toHaveBeenCalled();
+    }
+  });
+
   it('cancels a departing target before the next dragover and accepts a different target', () => {
     vi.useFakeTimers();
     const move = vi.fn(),

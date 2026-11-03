@@ -1,4 +1,5 @@
 import { isSharedTaskPeer } from '@cindy/device-link';
+import { sessionProjectDirectory } from '@cindy/maker-shared/worktree-paths';
 import type { Session } from '@/lib/ccAgent.types';
 import { isCindyMakeFamilySource } from '../../../../shared/cindyMakeMerge';
 import { isEmptyDraftSession } from '../lib/sessionDisplayTitle';
@@ -42,7 +43,7 @@ export function resolveSessionProjectDrop(
   if ((project.deviceLinkDeviceId ?? null) !== sourceDevice) return null;
   if (
     session.workspaceKind !== 'dialogue' &&
-    normalizeWorkingDir(session.workingDir) === normalizeWorkingDir(project.workingDir)
+    normalizeWorkingDir(sessionProjectDirectory(session)) === normalizeWorkingDir(project.workingDir)
   )
     return null;
   return { kind: 'project', workingDir: project.workingDir };
