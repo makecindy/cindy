@@ -1319,6 +1319,10 @@ export function createContextOverflowRollover(deps: ContextOverflowRolloverDeps)
         inFlight.set(sessionId, claim);
         if (turnIdentity && !claimTurns.has(claim)) claimTurns.set(claim, turnIdentity);
         const inputSignal = deps.getRecoveryAbortSignal?.(sessionId);
+        // A queued input cancels replay of the failed turn. For a Pi body-limit
+        // error, still surface the terminal so pre-send recovery can find its
+        // persisted evidence and rebuild before dispatching that queued input.
+        if (inputSignal?.aborted && isPiRequestBodyTooLarge(errorData)) return false;
         signal = inputSignal ? AbortSignal.any([claim.signal, inputSignal]) : claim.signal;
         if (deps.withSessionLock) {
           return await deps.withSessionLock(sessionId, () =>

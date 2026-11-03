@@ -1839,6 +1839,20 @@ describe('createContextOverflowRollover', () => {
     expect(deps.replayUserMessage).not.toHaveBeenCalled();
   });
 
+  it('surfaces a queued Pi 413 so the next send can detect the bad history', async () => {
+    const deps = makeDeps([msg('user', 'image turn', 'u1')]);
+    const rollover = createContextOverflowRollover({
+      ...deps,
+      // The input coordinator cancels replay when a newer message is queued.
+      getRecoveryAbortSignal: () => AbortSignal.abort(),
+    });
+    rollover.claim('s1');
+    await expect(rollover.tryRecover('s1', { message: '413 Request Entity Too Large' })).resolves.toBe(false);
+    expect(deps.closeSession).not.toHaveBeenCalled();
+    expect(deps.commitRebuild).not.toHaveBeenCalled();
+    expect(deps.replayUserMessage).not.toHaveBeenCalled();
+  });
+
   it('leaves a native IM Pi 413 turn to its channel when no desktop binding exists', async () => {
     const sourceUser = {
       ...msg('user', 'IM message', 'u-im'),
