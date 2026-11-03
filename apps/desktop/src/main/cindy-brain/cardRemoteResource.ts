@@ -45,34 +45,36 @@ function decodeText(value: string): string {
   });
 }
 
-/** Apply a removal until nothing changes, so pieces left behind by one pass cannot join into a new tag. */
-function replaceUntilStable(value: string, replace: (input: string) => string): string {
-  let current = value;
-  for (let pass = 0; pass < 8; pass += 1) {
-    const next = replace(current);
-    if (next === current) break;
-    current = next;
-  }
-  return current;
-}
-
 /** Sanitized card HTML to plain text: block ends become line breaks. */
 function cardText(html: string, inlineLinks: boolean): string {
-  return decodeText(replaceUntilStable(html, (input) => input.replace(/<[^>]+>/g, (tag) => {
-    // Keep destinations and image descriptions readable without an executable link. When the
-    // plugin may open links, the phone gets the link as its own control, so the text keeps only
-    // the link's words instead of a raw address in front of them.
-    const link = / data-ghost-link="([^"]*)"/.exec(tag)?.[1];
-    const alt = /^<img\b/i.test(tag) ? / alt="([^"]*)"/.exec(tag)?.[1] : undefined;
-    if (link) return inlineLinks && isGhostCardLinkAllowed(decodeText(link)) ? '' : ` ${link} `;
-    if (alt) return ` ${alt} `;
-    return /^(?:<br\b|<hr\b|<\/(?:p|div|h[1-4]|li|tr|section|header|footer|blockquote|pre)\b)/i.test(tag) ? '\n' : /^<\/(?:td|th)\b/i.test(tag) ? '\t' : '';
-  })))
+  // Repeat until nothing changes, so pieces left behind by one pass cannot join into a new tag.
+  let stripped = html;
+  let previous: string;
+  do {
+    previous = stripped;
+    stripped = stripped.replace(/<[^>]+>/g, (tag) => {
+      // Keep destinations and image descriptions readable without an executable link. When the
+      // plugin may open links, the phone gets the link as its own control, so the text keeps only
+      // the link's words instead of a raw address in front of them.
+      const link = / data-ghost-link="([^"]*)"/.exec(tag)?.[1];
+      const alt = /^<img\b/i.test(tag) ? / alt="([^"]*)"/.exec(tag)?.[1] : undefined;
+      if (link) return inlineLinks && isGhostCardLinkAllowed(decodeText(link)) ? '' : ` ${link} `;
+      if (alt) return ` ${alt} `;
+      return /^(?:<br\b|<hr\b|<\/(?:p|div|h[1-4]|li|tr|section|header|footer|blockquote|pre)\b)/i.test(tag) ? '\n' : /^<\/(?:td|th)\b/i.test(tag) ? '\t' : '';
+    });
+  } while (stripped !== previous);
+  return decodeText(stripped)
     .replace(/[ \t]+\n/g, '\n').replace(/\n{3,}/g, '\n\n').trim();
 }
 
 function stripStyleAndScript(html: string): string {
-  return replaceUntilStable(html, (input) => input.replace(/<(style|script)\b[^>]*>[\s\S]*?<\/\1>/gi, ''));
+  let stripped = html;
+  let previous: string;
+  do {
+    previous = stripped;
+    stripped = stripped.replace(/<(style|script)\b[^>]*>[\s\S]*?<\/\1>/gi, '');
+  } while (stripped !== previous);
+  return stripped;
 }
 
 /** Project persisted, sanitized cards into inert text and managed media. No HTML,
