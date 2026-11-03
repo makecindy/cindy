@@ -50,6 +50,9 @@ export function PluginModelPicker({
   const [agentDeviceId, setAgentDeviceId] = useState<string | null>(request.initial?.agentDeviceId ?? null);
   const remoteCatalogs = useRemoteAgentCatalogs({ enabled: request.allowRemote === true, controlledDeviceId: deviceId,
     keepDeviceIds: agentDeviceId ? [agentDeviceId] : [] });
+  const remoteSupported = request.allowRemote
+    ? { catalogs: remoteCatalogs, selectedDeviceId: agentDeviceId, hostDeviceId: deviceId }
+    : undefined;
   const modelMemory = useRequestModelMemory();
   const owner = useRef(getMobileAuthOwner()).current,
     alive = useRef(true),
@@ -130,7 +133,7 @@ export function PluginModelPicker({
             throw new Error("CAPABILITIES_UNAVAILABLE");
           return result;
         },
-        remote: request.allowRemote ? { catalogs: remoteCatalogs, selectedDeviceId: agentDeviceId, hostDeviceId: deviceId } : undefined,
+        remote: remoteSupported,
         onConfigure: async (value, source) => {
           setAgentDeviceId(source?.deviceId ?? null);
           setSelection(value);

@@ -10,6 +10,7 @@
  *   3. 点 C 的格浏览 C 的目录,选中那里的模型 = 带着 C 换 Agent 位置;
  *   4. 不传 homeDeviceId 的本机任务照旧用本机目录。
  */
+import type { ModelSelectorContentBaseProps } from '../components/new-chat/ModelSelector';
 import { act, cleanup, fireEvent, render, screen, within } from '@testing-library/react';
 import React from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -180,7 +181,7 @@ const devices = [{ deviceId: 'device-c', name: 'Studio' }];
 
 function renderControlledTaskPanel(
   remoteAgent: Partial<React.ComponentProps<typeof ModelSelectorContent>['remoteAgent']> = {},
-  props: Partial<React.ComponentProps<typeof ModelSelectorContent>> = {},
+  props: Partial<ModelSelectorContentBaseProps> = {},
 ) {
   const onRelocate = vi.fn(async () => true);
   const onProviderChange = vi.fn();
@@ -245,7 +246,7 @@ it.each(['device-a', 'share:b-only'])('reads %s from B and preserves the selecte
     }));
     cleanup();
     // The closed trigger must resolve the same metadata, not report an unknown model.
-    render(<ModelSelector
+    render(<ModelSelector remoteAgent={undefined}
       modelId="c-model" effort="high" currentProviderId="c-open" vendorKey="cc"
       deviceId={key} onModelChange={vi.fn()} onEffortChange={vi.fn()}
     />);
@@ -428,7 +429,7 @@ describe('被控电脑上的任务:模型面板列出第三台电脑的远程供
 describe('远程控制下新建任务:草稿的模型面板同样列出第三台电脑的远程供应商', () => {
   function renderControlledDraftPanel(
     remoteAgent: Partial<React.ComponentProps<typeof ModelSelectorContent>['remoteAgent']> = {},
-    props: Partial<React.ComponentProps<typeof ModelSelectorContent>> = {},
+    props: Partial<ModelSelectorContentBaseProps> = {},
   ) {
     const onUnifiedSelect = vi.fn(async () => true);
     const onProviderChange = vi.fn();
@@ -536,7 +537,7 @@ describe('本机任务不受影响', () => {
 describe('本机草稿:浏览其他电脑的目录后选中不写本机「最近」', () => {
   function renderLocalDraftPanel(
     remoteAgent: Partial<React.ComponentProps<typeof ModelSelectorContent>['remoteAgent']> = {},
-    props: Partial<React.ComponentProps<typeof ModelSelectorContent>> = {},
+    props: Partial<ModelSelectorContentBaseProps> = {},
   ) {
     const onUnifiedSelect = vi.fn(async () => true);
     render(

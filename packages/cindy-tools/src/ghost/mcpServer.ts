@@ -143,6 +143,7 @@ const D_GHOST_FORGE_GUIDE = [
   "读取内置 cindy-plugin-creator Skill 中的插件编写参考资料，随当前主机版本发布。",
   "创建、修改、调试、打包或发布 Cindy 插件时使用该 Skill；本工具保留按章读取同一份资料的兼容入口。",
   '不传参数返回目录，传 section（章号如 "4.7" 或标题关键词如 "network"）返回单章正文。',
+  'section "pages" 返回 MCP Apps 页面生成手册。',
   "本工具只读文档，不安装或发布插件。",
   "发布前另读 §2 的 releaseNotes、§7.3 个人发布和 §7.4 平台署名。",
 ].join("\n");
@@ -1070,6 +1071,10 @@ export async function handleGhostCall(
   }
 }
 
+const FORGE_GUIDE_PAGES_SECTION = "pages";
+const FORGE_GUIDE_PAGES_HINT =
+  '写 MCP Apps 页面前传 {"section":"pages"} 读《Cindy MCP Apps 页面生成手册》。';
+
 /** ghost_forge_guide 的 handler 主体(导出供单测)。 */
 export async function handleForgeGuide(
   deps: CindyGhostsMcpDeps,
@@ -1080,7 +1085,14 @@ export async function handleForgeGuide(
     // 空串/纯空白与未传等价:与工具描述"不传返回目录"一致
     const section = input?.section?.trim();
     if (!section) {
-      return { content: [{ type: "text", text: buildForgeGuideToc(guide) }] };
+      const toc = buildForgeGuideToc(guide);
+      return {
+        content: [{ type: "text", text: deps.forgePageManual ? `${toc}\n${FORGE_GUIDE_PAGES_HINT}` : toc }],
+      };
+    }
+    // 页面手册是独立文件,自带多个 ## 小节:精确匹配后整份返回,不进分章逻辑
+    if (section === FORGE_GUIDE_PAGES_SECTION && deps.forgePageManual) {
+      return { content: [{ type: "text", text: await deps.forgePageManual() }] };
     }
     const hit = extractForgeGuideSection(guide, section);
     if (hit.ok) {
