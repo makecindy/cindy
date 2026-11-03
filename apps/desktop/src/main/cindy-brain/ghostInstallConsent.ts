@@ -12,6 +12,7 @@
  */
 import { pluginHasToolUi } from '@cindy/plugin-protocol';
 import {
+  declaredAutoApproveTools,
   declaredGhostControlPoints,
   GHOST_CONTROL_POINTS,
   type GhostControlPointId,
@@ -93,6 +94,23 @@ export function confirmedControlPoints(
 }
 
 /**
+ * 本次确认里用户看到过的免确认工具(`tools[].approval: "auto"`)。口径同控制节点：
+ * 服务端默认安装(exempt)视为已批准全部声明；未确认/无需确认时返回空，已批准项由 update 延续。
+ */
+export function confirmedAutoTools(
+  decision: GhostInstallConsentDecision,
+  installed: InstalledGhost | null | undefined,
+  next: GhostManifest,
+): string[] {
+  const declared = declaredAutoApproveTools(next);
+  if (decision.mode === 'exempt') return declared;
+  if (decision.mode !== 'confirmed') return [];
+  const facts = evaluateGhostInstallConsent(installed, next);
+  const shown = new Set((facts?.kind === 'install' ? facts.permissions : facts?.added ?? []).map(item => item.key));
+  return declared.filter(tool => shown.has(`tool-auto:${tool}`));
+}
+
+/**
  * 登记一次等待中的确认，账号边界时由 `abortAllGhostInstallConsentPrompts` 一并取消。
  * 确认不得占用 owner 租约；取消是为了让等待中的安装调用尽快按用户取消收口。
  * 返回的函数在确认结束后注销。
@@ -152,7 +170,7 @@ export async function obtainGhostInstallConsent(
       origin: policy.origin,
       ...(policy.trust ? { trust: policy.trust } : {}),
       ...(policy.originLabel ? { originLabel: policy.originLabel } : {}),
-      ...(policy.target ? { target: policy.target } : {}),
+      ...(policy.target ? { target: { ...policy.target, ...(policy.target.namespace === 'local' && manifest.network?.secrets?.some(secret => secret.source === 'oidc-token') ? { organizationIdentityUnavailable: true as const } : {}) } } : {}),
       facts,
     });
   } catch {

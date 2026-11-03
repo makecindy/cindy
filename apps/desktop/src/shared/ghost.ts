@@ -175,6 +175,7 @@ const LEGACY_GHOST_SLOTS = [
   'skill',
   'workspace',
   'ios-simulator',
+  'live-screen',
 ] as const;
 type LegacyGhostSlot = string;
 
@@ -565,6 +566,13 @@ export interface GhostToolDecl {
   description: string;
   /** JSON Schema(object)形态的参数声明;可省略(无参工具)。 */
   parameters?: Record<string, unknown>;
+  /**
+   * 调用审批要求(2026-11-02)。缺省 = 按会话权限档审批。
+   * - `each-call`:即使本会话已允许过,每次调用仍按权限档重新审批。只收紧,不需确认。
+   * - `auto`:Agent 调用时直接执行,不再询问或审阅。这是一项权限:只有用户在安装/更新
+   *   确认里看到过(receipt `approvedAutoTools`)才生效,旧 receipt 缺字段视为未批准。
+   */
+  approval?: 'auto' | 'each-call';
 }
 
 /** cindy 槽·图像类可申请的动作(主机代办菜单的"图像"类目)。 */
@@ -757,6 +765,11 @@ export const GHOST_CONTROL_POINT_IDS = Object.keys(GHOST_CONTROL_POINTS) as Ghos
 
 export function isGhostControlPointId(value: unknown): value is GhostControlPointId {
   return typeof value === 'string' && Object.prototype.hasOwnProperty.call(GHOST_CONTROL_POINTS, value);
+}
+
+/** manifest 里声明 `approval: "auto"` 的工具名(是否生效另看 receipt `approvedAutoTools`)。 */
+export function declaredAutoApproveTools(manifest: Pick<GhostManifest, 'tools'>): string[] {
+  return (manifest.tools ?? []).filter((tool) => tool.approval === 'auto').map((tool) => tool.name);
 }
 
 /** 插件 manifest 里声明且当前 Host 认识的控制节点。 */
@@ -1045,7 +1058,7 @@ export const GHOST_OAUTH_BOUNCE_PATH_RE = /^\/[A-Za-z0-9_-]+(?:\/[A-Za-z0-9_-]+)
  *   授权换来的 access token——用户在意识设置页填 client 凭证并点"连接账号",
  *   主机跑授权流程并保管全部令牌,出网时现取新鲜 token 注入(见
  *   GhostSecretOauthDecl;必须同时声明 oauth 详单)。
- * - 'gh-cli':仅供官方 cindy-github 使用。主机优先现读本机 GitHub CLI 的
+ * - 'gh-cli':已批准且声明此来源的插件可用。主机优先现读本机 GitHub CLI 的
  *   `gh auth token`,不可用时回落到同 key 经 /secrets 保存的 PAT。两种值都
  *   只在 networkSlot 请求 GitHub API 时注入,不进入插件、Renderer、KV 或日志。
  * - 'oidc-token':值 = Cindy 为当前企业 Membership 签发的短时 Connection
@@ -1791,6 +1804,12 @@ export interface GhostManifest {
   workspace?: true;
   /** @deprecated Retirement detection only. No runtime capability is granted. */
   iosSimulator?: true;
+  /**
+   * Device screens the plugin's Node worker serves for viewing on the owner's
+   * phone over remote desktop. Requires `node`; Cindy calls only the fixed
+   * `liveScreen.*` worker methods.
+   */
+  liveScreen?: true;
   /** v3 未知字段为前向兼容原样保留，但 Host 不解释也不授权。 */
   [key: string]: unknown;
 }
@@ -1879,6 +1898,8 @@ export interface InstalledGhost {
   delegationCapabilityApproved?: true;
   /** Host receipt fact: control points the user confirmed, filtered to ones this Host knows and the manifest declares. */
   approvedControlPoints?: GhostControlPointId[];
+  /** Host receipt fact: tools declared `approval: "auto"` that the user confirmed in an install/update prompt. */
+  approvedAutoTools?: string[];
   /** Independent Host consent for read-only project task observation. */
   observeCapabilityApproved?: true;
   manifest: GhostManifest;
@@ -1928,8 +1949,7 @@ export interface InstalledGhost {
 }
 
 /**
- * 插件包的来源与审核等级；通常只决定 UI 徽标。保留的 gh-cli 凭证来源还会
- * 要求 cindy-github 具备 cindy-official Host receipt，防止第三方仅自报 id。
+ * 插件包的来源与审核等级；用于 UI 徽标和历史兼容，不授予通用能力。
  */
 export type GhostTrustLevel = 'cindy-official' | 'reviewed' | 'verified-publisher' | 'unverified';
 
@@ -2001,22 +2021,10 @@ export function isValidNewGhostId(id: unknown): id is string {
   return typeof id === 'string' && NEW_GHOST_ID_RE.test(id);
 }
 
-/**
- * 官方意识历史 id 前缀常量:`cindy-`。完整保留集合与用户装入通道判定以
- * `GHOST_OFFICIAL_ID_PREFIXES` 为准；官方市场可安装命中保留前缀的插件，
- * 用户装入通道(拖入/选文件/forge 转交/自定义市场)则在 packaged 版本上拒装
- * (dev 默认豁免,可用开发开关复现)。否则同 id 的第三方包可抢注官方身份,连带
- * 蹭走凭证别名(providerSecrets 的 GHOST_SECRET_STORAGE_ALIASES 按 id 生效,
- * 抢注者能拿到用户历史填过的机器级 key)。
- */
+/** Historical naming facts for legacy recovery and enterprise compatibility only. */
 export const GHOST_OFFICIAL_ID_PREFIX = 'cindy-';
 
-/**
- * 官方保留前缀全集(2026-07-13 起增补 `filo-`:filo-google 更名时脱离
- * cindy- 命名空间,防抢注保护必须跟着走;同日增补 `xd-`:xd-mivo 更名同因
- * ——官方密钥别名按 id 登记,前缀不保留会被第三方抢注蹭钥匙)。
- * 新增官方前缀在此登记。
- */
+/** This list is not an installation gate or a capability grant. */
 export const GHOST_OFFICIAL_ID_PREFIXES: readonly string[] = [
   GHOST_OFFICIAL_ID_PREFIX,
   'filo-',
@@ -2029,46 +2037,16 @@ export function isOfficialGhostId(id: string): boolean {
 }
 
 /**
- * 用户装入通道（拖入 / 选文件 / forge 转交 / 自定义市场）是否拒装该 id。
- * 仅保留 Cindy 平台前缀；XD/Filo 名字可普通导入，运行时资格另验可信来源。
- */
-export function isUserInstallReservedGhostId(id: string): boolean {
-  return id.startsWith(GHOST_OFFICIAL_ID_PREFIX);
-}
-
-/**
- * 保留命名空间谓词，与 `isOfficialGhostId` 同口径。
- * **不是** tokenBroker 授权：运行时资格见 ghostFirstPartyPrivilege。
- */
-export function isBrokerEligibleGhostId(id: string): boolean {
-  return isOfficialGhostId(id);
-}
-
-/**
- * 保留命名空间谓词，与 `isOfficialGhostId` 同口径。
- * **不是** 宿主原语授权：端口回收 / 头像代下载见 ghostFirstPartyPrivilege。
- */
-export function isFirstPartyHostPrivilegeGhostId(id: string): boolean {
-  return isOfficialGhostId(id);
-}
-
-/**
  * Bundled Ghosts whose execution depends on Cindy account-plane services.
  *
  * Local app sessions may still use external Ghosts and direct/BYOK built-ins
  * (GitHub, GitLab, Google, web search, Mermaid). These entries are hidden and
  * rejected by the main process unless a verified cloud session is active.
  */
-export const CINDY_ACCOUNT_GHOST_IDS: ReadonlySet<string> = new Set([
-  'cindy-art',
-  'xd-pages',
-  'xd-feishu',
-  'xd-atlassian',
-  'xd-mivo',
-]);
-
-export function isCindyAccountGhostId(id: string): boolean {
-  return CINDY_ACCOUNT_GHOST_IDS.has(id);
+export function ghostRequiresCindyAccount(manifest: Pick<GhostManifest, 'network' | 'cindy'>): boolean {
+  return (manifest.network?.secrets ?? []).some(secret =>
+    secret.source === 'login-email' || secret.source === 'oidc-token' || secret.oauth?.tokenBroker !== undefined) ||
+    Boolean(manifest.cindy?.image?.length || manifest.cindy?.video?.length);
 }
 
 /**
@@ -2104,7 +2082,8 @@ export interface GhostPermissionItem {
     | 'preview'
     | 'browser-extension'
     | 'skill'
-    | 'workspace';
+    | 'workspace'
+    | 'live-screen';
   /** i18n key 后缀,消费方拼 `settings.ghosts.perm.<labelKey>`。 */
   labelKey: string;
   /** i18n 插值参数(工具名、指令名、面板标题等)。 */
@@ -2490,6 +2469,15 @@ export function ghostPermissionItems(manifest: GhostManifest): GhostPermissionIt
       detailKey: 'workspaceDetail',
     });
   }
+  // live-screen:手机经远程桌面查看并操作插件提供的设备画面。需要 node 才生效。
+  if (manifest.liveScreen === true && manifest.node) {
+    items.push({
+      key: 'live-screen',
+      kind: 'live-screen',
+      labelKey: 'liveScreen',
+      detailKey: 'liveScreenDetail',
+    });
+  }
   // session-context 槽:派活时可获知当前会话的项目目录位置(路径信息,
   // 非文件访问权;node 槽的执行权另行单列)。
   if (manifest.sessionContext === true) {
@@ -2523,6 +2511,11 @@ export function ghostPermissionItems(manifest: GhostManifest): GhostPermissionIt
         : 'browserExtensionDetail',
       detail: manifest.browserExtension.extensionIds.join('\n'),
     });
+    if (manifest.browserExtension.nativeHost) items.push({
+      key: `browser-native-host:${manifest.browserExtension.nativeHost.name}`,
+      kind: 'browser-extension', labelKey: 'browserNativeHost',
+      labelArgs: { name: manifest.browserExtension.nativeHost.name }, detailKey: 'browserNativeHostDetail',
+    });
   }
   for (const tool of manifest.tools ?? []) {
     items.push({
@@ -2531,6 +2524,16 @@ export function ghostPermissionItems(manifest: GhostManifest): GhostPermissionIt
       labelKey: 'tool',
       labelArgs: { name: tool.name },
       detail: tool.description,
+    });
+  }
+  // 免确认执行是独立权限项(不并入 tool 项,避免改动存量插件的权限指纹),进安装/更新确认。
+  for (const name of declaredAutoApproveTools(manifest)) {
+    items.push({
+      key: `tool-auto:${name}`,
+      kind: 'agent',
+      labelKey: 'toolAutoApprove',
+      labelArgs: { name },
+      detailKey: 'toolAutoApproveDetail',
     });
   }
   if (manifest.command) {
@@ -2780,8 +2783,7 @@ function permissionDetailKeyForFingerprint(item: GhostPermissionItem): string {
   // Main 只注入同一个 network secret key 与同一组目标；变化的是设置页/权限
   // 页对“凭证从哪里来”的说明，不是插件获得了新权限。两档共用历史 key 的
   // 同时也必须共用审阅指纹，否则升级会被误判成扩权并要求存量用户重新确认。
-  // gh-cli 的 manifest 校验只允许官方 cindy-github，因此这个兼容等价不会
-  // 放宽其它插件；其它 detailKey/detailArgs 变化仍按新说明完整性规则复核。
+  // 历史指纹保持稳定；其它实例改用 gh 的新增授权在 installed 权限差异里复核。
   if (isGithubCredentialCompatibilityItem(item)) {
     return 'networkSecretGithubCredentialDetail';
   }
@@ -2865,6 +2867,17 @@ function withoutUnapprovedControlPoints(installed: InstalledGhost): GhostManifes
   return { ...subscribe, hooks: hooks.length > 0 ? hooks : undefined };
 }
 
+/** 声明了 `approval: "auto"` 但用户从没确认过的工具,不算旧权限。 */
+function withoutUnapprovedAutoTools(installed: InstalledGhost): GhostManifest['tools'] {
+  const tools = installed.manifest.tools;
+  if (!tools) return tools;
+  return tools.map((tool) => {
+    if (tool.approval !== 'auto' || installed.approvedAutoTools?.includes(tool.name) === true) return tool;
+    const { approval: _unapproved, ...rest } = tool;
+    return rest;
+  });
+}
+
 export function diffInstalledGhostPermissionItems(
   installed: InstalledGhost,
   next: GhostManifest,
@@ -2876,8 +2889,26 @@ export function diffInstalledGhostPermissionItems(
       mcpApps: installed.uiCapabilityApproved === true ? installed.manifest.mcpApps : undefined,
       // 同理：声明了但用户从没确认过的控制节点不算旧权限，更新时作为新增项复核。
       subscribe: withoutUnapprovedControlPoints(installed),
+      tools: withoutUnapprovedAutoTools(installed),
     };
-    return diffGhostPermissionItems(previous, next);
+    const diff = diffGhostPermissionItems(previous, next);
+    // Only the historical official GitHub installation keeps its PAT -> gh fingerprint
+    // compatibility. Other installations must explicitly approve using the shared login.
+    const legacyGithub = installed.manifest.id === 'cindy-github' && installed.namespace == null &&
+      installed.trust?.level === 'cindy-official';
+    if (!legacyGithub) {
+      for (const secret of next.network?.secrets ?? []) {
+        if (secret.source !== 'gh-cli' || previous.network?.secrets?.some(old =>
+          old.key === secret.key && old.source === 'gh-cli')) continue;
+        const key = `network:secret:${secret.key}`;
+        const permission = ghostPermissionItems(next).find(item => item.key === key);
+        if (permission && !diff.added.some(item => item.key === key)) {
+          diff.added.push(permission);
+          diff.unchanged = diff.unchanged.filter(item => item.key !== key);
+        }
+      }
+    }
+    return diff;
   }
   return {
     added: ghostPermissionItems(next),
@@ -3403,6 +3434,7 @@ const GHOST_MANIFEST_KNOWN_TOP_LEVEL_FIELDS = new Set([
   'pick',
   'workspace',
   'iosSimulator',
+  'liveScreen',
   // Interpreted by Host: ghostBrowserExtensionWithinCap checks it against the reviewed manifest
   // (narrowing is allowed), so it must not also fall under the exact-match rule for unknown fields.
   'browserExtension',
@@ -3419,6 +3451,7 @@ const V3_BOOLEAN_CAPABILITY_FIELDS = [
   'pick',
   'workspace',
   'iosSimulator',
+  'liveScreen',
 ] as const;
 
 const V3_DECLARATION_TO_LEGACY_SLOT = [
@@ -3447,6 +3480,7 @@ const V3_BOOLEAN_TO_LEGACY_SLOT: Record<(typeof V3_BOOLEAN_CAPABILITY_FIELDS)[nu
   pick: 'pick',
   workspace: 'workspace',
   iosSimulator: 'ios-simulator',
+  liveScreen: 'live-screen',
 };
 
 type PreparedGhostManifest = {
@@ -4746,12 +4780,16 @@ function validateGhostManifestInput(value: unknown, preserveHistoricalTasks: boo
           return { ok: false, reason: 'tools[].parameters 必须可序列化' };
         }
       }
+      if (t.approval !== undefined && t.approval !== 'auto' && t.approval !== 'each-call') {
+        return { ok: false, reason: 'tools[].approval 只能是 "auto" 或 "each-call"' };
+      }
       tools.push({
         name: t.name,
         description: t.description,
         ...(t.parameters !== undefined
           ? { parameters: t.parameters as Record<string, unknown> }
           : {}),
+        ...(t.approval !== undefined ? { approval: t.approval } : {}),
       });
     }
   }
@@ -5171,6 +5209,9 @@ function validateGhostManifestInput(value: unknown, preserveHistoricalTasks: boo
   }
   if (slots.includes('node') && node === undefined) {
     return { ok: false, reason: 'slots 声明了 "node" 但缺少 node 工作进程详单' };
+  }
+  if (slots.includes('live-screen') && node === undefined) {
+    return { ok: false, reason: 'liveScreen: true 需要同时声明 node 工作进程' };
   }
 
   // preview 槽详单:与 slots 含 'preview' **严格成对**(有槽必有详单——域名
@@ -5769,12 +5810,6 @@ function validateGhostManifestInput(value: unknown, preserveHistoricalTasks: boo
           }
         }
         if (source === 'gh-cli') {
-          if (raw.id !== 'cindy-github') {
-            return {
-              ok: false,
-              reason: 'network.secrets[].source 为 gh-cli 时仅允许官方 cindy-github 插件使用',
-            };
-          }
           if (
             inj.header !== 'Authorization' ||
             inj.format !== 'Bearer {value}' ||
@@ -6679,6 +6714,7 @@ function validateGhostManifestInput(value: unknown, preserveHistoricalTasks: boo
       ...(slots.includes('pick') ? { pick: true as const } : {}),
       ...(slots.includes('workspace') ? { workspace: true as const } : {}),
       ...(slots.includes('ios-simulator') ? { iosSimulator: true as const } : {}),
+      ...(slots.includes('live-screen') ? { liveScreen: true as const } : {}),
       ...(setup !== undefined ? { setup } : {}),
       ...(raw.command !== undefined ? { command: raw.command as string } : {}),
       ...(keywords !== undefined ? { keywords } : {}),
@@ -7589,6 +7625,8 @@ export type GhostAgentModelsResult =
       }>;
       agentDeviceId?: string;
       locations?: Array<{ agentDeviceId: string; name: string }>;
+      /** Picker and will-start-task verdicts preserve and validate agentDeviceId. */
+      supportsRemoteRoutes?: boolean;
     }
   | { ok: false; errorCode: 'PERMISSION_DENIED' | 'NOT_AVAILABLE'; message: string };
 
@@ -8752,6 +8790,8 @@ export interface GhostRoutineRunPointData {
 
 /** 模型路由(插件看到与回传的同一形状)。agentKind: cc = Claude Code。 */
 export interface GhostModelRoute {
+  /** Agent location relative to the task computer; omitted = local. */
+  agentDeviceId?: string;
   agentKind: 'cc' | 'codex' | 'pi';
   model: string;
   providerId: string;

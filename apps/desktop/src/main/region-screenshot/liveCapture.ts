@@ -4,6 +4,49 @@ import { NativeDesktopCapture } from '../remote-desktop/nativeCapture';
 import { regionSelectionToImageCrop, type RegionRect, type RegionScreenshotBitmap } from '../../shared/regionScreenshot';
 import type { RegionCaptureMode } from '../../shared/regionCapture';
 import { enumerateDesktopSources } from '../remote-desktop/captureSource';
+import type { DisplayCapture } from './session';
+
+/** Freeze only on demand. The existing user-session GDI helper avoids Electron's
+ * screen-source enumeration cost on SDR Windows displays. HDR / wide gamut and
+ * failed native capture retain Electron's existing color/capture behavior. */
+export async function captureScreenshotDisplays(displays: readonly Display[], helper?: SnapshotHelper): Promise<{
+  captures: DisplayCapture[];
+  backend: 'native' | 'electron';
+}> {
+  if (displays.length === 0) return { captures: [], backend: 'electron' };
+  const useNative = process.platform === 'win32' && helper && displays.every(display =>
+    display.depthPerComponent === 8 && display.colorSpace?.includes('primaries:BT709, transfer:SRGB,'));
+  if (useNative) {
+    const captures: DisplayCapture[] = [];
+    for (const display of displays) {
+      const rect = screen.dipToScreenRect(null, display.bounds);
+      const frame = await helper.capture(rect, 32768);
+      // Never silently resize or substitute a display; mixed-DPI coordinates are
+      // resolved by Electron before the helper reads physical desktop pixels.
+      if (!frame || frame.width !== rect.width || frame.height !== rect.height) break;
+      const image = nativeImage.createFromBitmap(Buffer.from(frame.data.buffer, frame.data.byteOffset, frame.data.byteLength), {
+        width: frame.width, height: frame.height, scaleFactor: 1,
+      });
+      if (image.isEmpty()) break;
+      captures.push({ display, image });
+    }
+    if (captures.length === displays.length) return { captures, backend: 'native' };
+    // Recapture the whole set together if a screen failed, rather than combining
+    // frames taken before/after an unavailable helper with different timestamps.
+  }
+  const width = Math.max(...displays.map(d => Math.round(d.bounds.width * d.scaleFactor)));
+  const height = Math.max(...displays.map(d => Math.round(d.bounds.height * d.scaleFactor)));
+  const sources = await enumerateDesktopSources(() => desktopCapturer.getSources({
+    types: ['screen'], thumbnailSize: { width, height },
+  }), 5000);
+  const captures: DisplayCapture[] = [];
+  for (const display of displays) {
+    const source = sources.find(s => s.display_id === String(display.id))
+      ?? (displays.length === 1 && sources.length === 1 ? sources[0] : undefined);
+    if (source && !source.thumbnail.isEmpty()) captures.push({ display, image: source.thumbnail });
+  }
+  return { captures, backend: 'electron' };
+}
 
 /** Main crops before crossing IPC. No whole-display pixels reach the live panel. */
 export async function captureLiveRegion(display: Display, selection: RegionRect, mode: RegionCaptureMode, helper?: SnapshotHelper): Promise<RegionScreenshotBitmap> {

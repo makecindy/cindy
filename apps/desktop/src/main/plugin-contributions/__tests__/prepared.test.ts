@@ -235,3 +235,16 @@ it('reports invalid UI resources before preparing a new contribution', async () 
   harness.inspect.mockResolvedValueOnce({ rejection: { code: 'file-invalid', reason: 'mcpApps.ui.resources 文件 ui/page.html 必须是包内普通文件且不超过 4194304 字节' } });
   await expect(prepared.prepareInstalledContribution('hello')).rejects.toThrow('mcpApps.ui.resources 文件 ui/page.html');
 });
+
+
+it('prepares the selected local instance while leaving a same-ID market copy intact', async () => {
+  const root = harness.ghosts[0];
+  const local = { ...root, namespace: 'local', instanceKey: '_ns__local__hello', dir: path.join(harness.root, 'local') };
+  harness.ghosts = [root, local];
+  const result = await prepared.prepareInstalledContribution('_ns__local__hello');
+  expect(result).toMatchObject({ instanceId: '_ns__local__hello', ghostId: 'hello' });
+  const entry = prepared.getPreparedContribution(result.preparedId);
+  expect(entry.installationDir).toBe(local.dir);
+  expect(() => prepared.assertPreparedInstallation(entry)).not.toThrow();
+  expect(harness.ghosts[0]).toBe(root);
+});

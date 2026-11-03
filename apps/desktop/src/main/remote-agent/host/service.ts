@@ -113,6 +113,9 @@ export function hostedStartOptions(input: HostedStartInput): StartSessionOptions
       ...(input.guest && input.guestProvider
         ? { guestProvider: { ...input.guestProvider, modelIds: [...input.guestProvider.modelIds] } }
         : {}),
+      ...(input.controllerManagedSkills
+        ? { controllerManagedSkills: { claudePluginRoots: [...input.controllerManagedSkills.claudePluginRoots] } }
+        : {}),
     },
     ...(input.onInvalidResumeSession ? { onInvalidResumeSession: input.onInvalidResumeSession } : {}),
   };
@@ -252,7 +255,12 @@ export function createProviderShareMemberPurger(options: {
   return purgeMemberControllers;
 }
 
-export function installRemoteAgentHost(options: { getMaker: () => Maker; userDataDir: string }): void {
+export function installRemoteAgentHost(options: {
+  getMaker: () => Maker;
+  userDataDir: string;
+  /** 这台自己启用中的 Cindy 托管 Skill(与本机任务同一来源)。 */
+  managedSkills?: () => Promise<Array<{ command: string; dir: string }>>;
+}): void {
   if (host) return;
   const previousHostDisposal = hostDisposal;
   const usage = installProviderShareUsageStore(options.userDataDir);
@@ -883,6 +891,7 @@ export function installRemoteAgentHost(options: { getMaker: () => Maker; userDat
         return false;
       }
     },
+    ...(options.managedSkills ? { managedSkills: options.managedSkills } : {}),
     startHosted: async (input) => {
       if (input.groupProviderId) await bindLocalHostedGroupFastPolicy(input.groupProviderId, input.hostSessionId);
       return options.getMaker().startHostedAgentSession(input.kind, {
@@ -914,7 +923,7 @@ export function installRemoteAgentHost(options: { getMaker: () => Maker; userDat
           return rule.models !== null || rule.providerModels !== null || !!(rule.memberBudget?.enabled && rule.memberBudget.rules.length);
         } catch { return true; }
       },
-      resolve: async (kind, model, providerId, controller, sessionId) => {
+      resolve: async (kind, model, providerId, controller, sessionId, context) => {
         const views = await getDesktopProviderService().listProviders({ allowSideEffects: false });
         const access = isProviderSharePeer(controller) ? guestAccessForTask(controller, sessionId) : null;
         const memberId = access?.memberId;
@@ -934,6 +943,7 @@ export function installRemoteAgentHost(options: { getMaker: () => Maker; userDat
             kind,
             model,
             delegated ? undefined : providerId,
+            context,
           );
         }
         return resolveSharedProviderId(views, allowed, kind, model, providerId);

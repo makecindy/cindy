@@ -543,6 +543,7 @@ export interface MakerSendTransactionDeps {
    * session-agent-switch:pending 交接读取(agentHandoff 注册表)。命中时把交接
    * 文本前置进 wire payload(不影响 persistUserMessage 落库显示内容),并在
    * dispatch 跨过不可逆边界(accepted)后 consume;未 accepted / 抛错保留 pending。
+   * 原生命令不附带交接，也不消费；留到下一条可注入上下文的消息。
    */
   peekPendingHandoff?(sessionId: string): Promise<string | null>;
   consumePendingHandoff?(sessionId: string): void;
@@ -604,6 +605,9 @@ export interface MakerSendTransactionDeps {
    */
   readBotThreadNote?(sessionId: string): Promise<string | null>;
   readTaskDeliveryNote?(sessionId: string): Promise<string | null>;
+  /** The owner's message closed a waiting 代输入 card: the agent hears it here, with no turn of its own. */
+  readInputHandoffOwnerNote?(sessionId: string): string | null;
+  inputHandoffOwnerNoteDelivered?(sessionId: string): void;
   /**
    * 逐轮环境说明去重(见 wireNoteMemory.ts):返回本轮真正要前置的段;与上一次已被
    * 引擎接受的内容相同的段不再重复。`force` 在交接首条(原生上下文刚重建)时整体重发。
@@ -1443,7 +1447,7 @@ export function createMakerSendTransaction(deps: MakerSendTransactionDeps): Make
         await cleanupRejectedMaterialization();
         throw err;
       }
-      // session-agent-switch:切换后的首条消息把交接前缀拼进 wire payload。
+      // session-agent-switch:切换后首条可附带上下文的消息注入交接。
       // 落库/显示内容(persistUserMessage.content)不含交接段——display 与 sent 分离。
       const workdirRecoveryNote = shouldPrependMobileClientPromptNote(normalized, sess.agentKind)
         ? deps.peekWorkingDirectoryRecoveryNote?.(sessionId, sess.workDir) ?? null
@@ -1451,7 +1455,11 @@ export function createMakerSendTransaction(deps: MakerSendTransactionDeps): Make
       const withRecoveryNote = workdirRecoveryNote
         ? prependNoteToWireUserMessage(normalized as HandoffWireMessage, workdirRecoveryNote)
         : normalized;
-      const pendingHandoff = (await deps.peekPendingHandoff?.(sessionId)) ?? null;
+      // Native commands must lead the provider input. Defer the handoff rather
+      // than discarding it or consuming it when only the command is accepted.
+      const pendingHandoff = shouldPrependMobileClientPromptNote(normalized, sess.agentKind)
+        ? (await deps.peekPendingHandoff?.(sessionId)) ?? null
+        : null;
       // 原生压缩后的账本刷新:交接首条已含账本时不重复(但同样在 accepted 后消费当时那一代)。
       const workingMemoryRefresh = shouldPrependMobileClientPromptNote(normalized, sess.agentKind)
         ? ((await deps.peekWorkingMemoryRefresh?.(sessionId).catch(() => null)) ?? null)
@@ -1635,6 +1643,14 @@ export function createMakerSendTransaction(deps: MakerSendTransactionDeps): Make
       }
       if (plannedNotes['bot-thread']) {
         outgoing = prependNoteToWireUserMessage(outgoing as HandoffWireMessage, plannedNotes['bot-thread']);
+      }
+      // The note belongs to the message that closed the card. A native command (a slash input) keeps its
+      // first characters, so it carries no note and the note is dropped rather than left for the next message.
+      const pendingOwnerNote = deps.readInputHandoffOwnerNote?.(sessionId) ?? null;
+      const inputHandoffOwnerNote = allowsEnvironmentNotes ? pendingOwnerNote : null;
+      if (pendingOwnerNote && !allowsEnvironmentNotes) deps.inputHandoffOwnerNoteDelivered?.(sessionId);
+      if (inputHandoffOwnerNote) {
+        outgoing = prependNoteToWireUserMessage(outgoing as HandoffWireMessage, inputHandoffOwnerNote);
       }
       const appContext = shouldPrependMobileClientPromptNote(normalized, sess.agentKind)
         ? await mcpAppModelContext(sessionId)
@@ -2045,6 +2061,7 @@ export function createMakerSendTransaction(deps: MakerSendTransactionDeps): Make
             }
           },
         }));
+        if (inputHandoffOwnerNote && sendResult.accepted) deps.inputHandoffOwnerNoteDelivered?.(sessionId);
         sendAccepted = sendResult.accepted;
         if (sendAccepted) {
           appContext?.consume();

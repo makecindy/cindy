@@ -447,6 +447,7 @@
     "chipArchived": "已归档",
     "titleFallback": "远程任务",
     "unnamedTitle": "未命名任务",
+    "openSection": "打开",
     "renameAction": "重命名任务",
     "copyLinkAction": "复制任务链接",
     "unpin": "取消置顶",

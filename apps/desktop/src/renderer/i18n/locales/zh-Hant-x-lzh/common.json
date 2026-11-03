@@ -996,7 +996,7 @@
     "saveFileName": "截圖",
     "saveFailed": "不能存截圖",
     "prompt": {
-      "translate": "請辨此截圖中之文字，譯為繁體中文，保留原有段落與清單結構，唯輸出譯文。若原文已是中文，則譯為英文。",
+      "translate": "辨圖中文字之語，譯為{{language}}，仍其段落、條目與表格。已有目標語言者不改；諸語雜陳，僅譯其餘。若全文已是目標語言，簡言告之，勿另譯他語；否則僅出譯文。",
       "explain": "請釋此截圖之內容。若為錯誤訊息，述其原因與解法；若為圖表、程式碼或介面，述其所表何意、要點為何。",
       "extract": "請將此截圖中之文字照原樣擷出，保留原有換行、段落與清單；表格以 Markdown 表格輸出。唯輸出所擷之文字。"
     },
@@ -1044,6 +1044,12 @@
       "edit": "修",
       "autoUnavailable": "自動捲動已止，可於所選範圍內手動捲動",
       "autoPermission": "自動捲動須「輔助使用」權限。請於系統設定中許 Cindy 而後再試，亦可於所選範圍內手動捲動"
+    },
+    "translation": {
+      "action": "譯為{{language}}",
+      "targetLanguage": "譯文語言",
+      "followUi": "隨介面之語",
+      "saveFailed": "語言未存，請重選。"
     }
   },
   "privacyExit": {
@@ -2618,6 +2624,13 @@
       "storage": {
         "dialogueDirectoryTitle": "言談工作區",
         "dialogueDirectoryDescription": "僅用於新開差事，舊卷仍居原處。",
+        "projectsRootTitle": "新案存放處",
+        "projectsRootInferred": "薦",
+        "projectsRootDefault": "常例",
+        "projectsRootChoose": "易目錄",
+        "projectsRootReset": "復薦處",
+        "projectsRootDescription": "於差事中立新案時，案之卷匣置於此。未設則依汝舊案所在薦之。",
+        "projectsRootFailed": "新案存放處更之未成",
         "dialogueDirectoryOpen": "啟目錄",
         "dialogueDirectoryChoose": "易目錄",
         "dialogueDirectoryReset": "復預設處",
@@ -3824,7 +3837,9 @@
           "modelsBusy": "請先畢方行之模型清單擷取或選擇，再填入他 Runtime",
           "noCompatibleFields": "他 Runtime 不支援今 Runtime 中可復用之欄位",
           "filledToast": "已填入 {{targets}}；各 Runtime 仍各自獨立"
-        }
+        },
+        "nameSearchHint": "亦可仍用此名，續設自定端點。",
+        "nameSearchUnavailable": "此供方今不可用，可續設自定端點，或重尋之。"
       },
       "models": {
         "search": "尋模型",
@@ -7468,6 +7483,8 @@
         "cancel": "罷",
         "updateNeedsConsent": "新權柄須確認",
         "targetIdentity": "納於：{{name}}",
+        "localTarget": "本機開發版",
+        "localOidcUnavailable": "此開發副本不得企業身分。欲自測，請以 Forge 明確裝入目前企業。",
         "personalTarget": "私",
         "sourceChanged": "此次更新將改為此機來源。舊名籍與資料隔離保留，須重新連接名籍。",
         "otherCopies": "已有同名法器 {{count}} 份；彼等不被覆蓋或停用。另納之法器須各自連接名籍。"
@@ -7537,6 +7554,8 @@
         "nodeResident": "Node 程式可常駐背後",
         "nodeResidentDetail": "法器啟用期間持續運行；停用、更新、卸除或退出 Cindy 時即闔。",
         "tool": "器「{{name}}」",
+        "toolAutoApprove": "Agent 用器「{{name}}」無須相詢",
+        "toolAutoApproveDetail": "Agent 每用此器，即行之，不復逐次相詢或審閱。",
         "command": "言談指令 ${{command}}",
         "panelLeft": "面板「{{title}}」· 現於側欄",
         "panelTab": "面板「{{title}}」· 於法器頁內啟之",
@@ -7596,9 +7615,13 @@
         "workspaceDetail": "其發請求時，或由君親擇卷匣，或於確認卡上觀完整路徑後再決；其處置君所發之呼叫時，當前差事工作目錄內之子卷匣可徑用，不另確認。卷匣已有差事者徑復用之，不重立。所立僅為空差事，不自行運行。",
         "sessionContext": "可知當前差事所用之案卷匣位置",
         "sessionContextDetail": "僅於其為當前差事效力時告以位置(差事編號與案卷匣路徑)，不含檔案內容，亦不因此得檔案存取之權。",
+        "liveScreen": "於手機觀並操器物之畫面",
+        "liveScreenDetail": "藉遠端桌面，手機可觀其所供器物之畫面(如模擬器)，並觸之、按之、書文字於其上。唯自手機開啟時方連，不示此電腦他物。",
         "preview": "可於右側欄瀏覽器中啟下列網站之預覽頁",
         "previewDetail": "僅能啟下方所列網站；每啟一頁，皆示為何法器所啟。",
         "browserExtension": "可令其自帶之瀏覽器擴充功能連 Cindy",
+        "browserNativeHost": "可註冊瀏覽連線「{{name}}」",
+        "browserNativeHostDetail": "所註冊程式行於沙箱之外，依系統帳號與授權存取本機。",
         "browserExtensionDetail": "僅下方所列擴充功能可連；連線經此機回環位址，由 Cindy 將擴充功能所發之請求轉交此法器。",
         "browserExtensionPageControlDetail": "僅下方所列擴充功能可連。此擴充功能兼行頁面控制：擇「我的瀏覽器」後，Agent 可經其讀取並操作君正用之瀏覽器頁面。",
         "nodeChildSpawn": "Node 程式可請宿主再啟包內已申報之子處理程序",
@@ -7699,6 +7722,18 @@
         "settingsTitle": "{{name}} 之設",
         "settingsUnavailableUntilRestore": "復法器後，此設可續用。",
         "oauthScopeStale": "當前授權未含法器新增之權柄，請重新連線補足。",
+        "localDevelopment": "本機開發版",
+        "publicInstall": "公開市集",
+        "organizationInstall": "企業：{{name}}",
+        "browserUse": "用此瀏覽擴充",
+        "browserActivated": "已擇此擴充",
+        "browserActivationFailed": "未能擇此擴充，請啟擴充功能並確認切換。",
+        "browserSwitchTitle": "切換瀏覽擴充連線？",
+        "browserSwitchMessage": "以「{{name}}」承此連線？",
+        "browserSwitchDetail": "實例：{{instance}}\n註冊名：{{host}}\n將替今之註冊，擴充轉連此擴充功能。",
+        "portReclaimTitle": "結束佔用回呼埠之程式？",
+        "portReclaimMessage": "「{{name}}」須用埠 {{port}}，可結束下列程式乎？",
+        "portReclaimDetail": "結束或中斷其事、失其未存之資料。亦可取消，自行關閉佔用程式。",
         "configurationTitle": "設定",
         "sidebarEntryTitle": "導覽入口",
         "showInSidebar": "現於左側導覽",
@@ -10704,6 +10739,18 @@
         "reactorFormer": "{{name}}（已不在群中）",
         "reactorsUnavailable_one": "另有 {{count}} 位成員之資訊暫不可得",
         "reactorsUnavailable_other": "另有 {{count}} 位成員之資訊暫不可得",
+        "readStatusSent": "已發",
+        "readStatusRead": "已閱",
+        "readersCount_one": "{{count}} 人已閱",
+        "readersCount_other": "{{count}} 人已閱",
+        "readersView": "觀誰已閱",
+        "readersTooLarge": "群眾過多，不列已閱名單",
+        "readersNone": "無人已閱",
+        "readersLoading": "載入中…",
+        "readersFailed": "未能載入閱者",
+        "readersHeading": "已閱",
+        "readersOfTotal": "已閱 {{read}}/{{total}}",
+        "readerUnknown": "不明成員",
         "invite": "邀入群議",
         "groupCreated": "群議已立",
         "inviteFriends": "邀友同入，共役同僚",
@@ -10844,7 +10891,18 @@
           "accessToolsTitle": "可用工具與資料",
           "accessToolsHint": "可用 {{name}} 已有之工具與君之私人資料，結果全群可見。原有操作審批照常；撤回之後，已成之操作不可撤銷。",
           "capabilitiesRow": "{{name}} 之工具與授權",
-          "accessMenu": "於本群之權柄"
+          "accessMenu": "於本群之權柄",
+          "notifications": {
+            "title": "訊息告知",
+            "all": "凡訊皆告",
+            "mentions": "惟提及吾",
+            "none": "不告",
+            "allHint": "群訊及所關注話題之新答，皆告之。",
+            "mentionsHint": "提及吾或 @全體時告之，分職之進展仍告。",
+            "noneHint": "止本群一切系統告知，未讀之訊仍存。",
+            "saving": "正存之…",
+            "saveFailed": "告知之設未能存，請再試。"
+          }
         }
       },
       "lifecycle": {
@@ -14349,6 +14407,26 @@
           "cancel": "罷"
         }
       },
+      "newProjectDialog": {
+        "title": "立新案",
+        "description": "立一新案之卷匣，並移此差事入新案。",
+        "descriptionMoveFiles": "立一新案之卷匣，徙此差事之檔入內，並移差事入新案。",
+        "nameLabel": "案名",
+        "namePlaceholder": "如 my-app",
+        "targetPath": "將立 {{path}}",
+        "location": "所在",
+        "locationInferred": "依汝舊案所在薦之",
+        "locationWillCreate": "此卷匣尚無，允之即立",
+        "changeLocation": "易…",
+        "remember": "後立新案皆置於此",
+        "cancel": "罷",
+        "create": "立案",
+        "nameTaken": "已有同名卷匣，另擇一名",
+        "nameInvalid": "名中不可含 \\ / : * ? \" < > |，亦不可以句點或空格收尾",
+        "loadFailed": "案之所在讀之未成",
+        "failed": "立案未成",
+        "done": "新案已立，差事已移入"
+      },
       "sessionMenu": {
         "moreActions": "餘者",
         "rename": "易名",
@@ -14362,6 +14440,7 @@
         "moveToProject": "移差事",
         "moveToProjectHeading": "此機之案",
         "browseProjectFolder": "擇案之卷匣",
+        "newProject": "立新案…",
         "moveToDialogue": "移至言談",
         "noProjects": "近無案",
         "moveToProjectDone": "已移至案",
@@ -15762,6 +15841,7 @@
     "agentControlled": "此界面乃 Agent 所啟。填寫之前，請確認此處確為君欲登入之所。",
     "agentPicture": "此 QR 碼出自 Agent 之截圖，Cindy 不見原畫面，掃畢亦不自續。請確認其所指之網站確為君欲登入之所，掃畢點「交還 Agent」。",
     "error": {
+      "raise": "窗不能啟，請於電腦切至之。",
       "decision": "操作未達，請再試。",
       "stale": "界面已變，請依最新內容操作。",
       "submit": "所輸入者未達，請再試。"
@@ -15797,6 +15877,9 @@
       "picture": "觀畫面",
       "backToForm": "歸表單",
       "liveView": "即景",
+      "openWindow": "啟登入之窗",
+      "openRemoteDesktop": "啟遠端桌面",
+      "useForm": "改以表單填寫",
       "fill": "填",
       "skip": "略",
       "continue": "續",
@@ -15804,6 +15887,9 @@
       "showPassword": "示密碼",
       "hidePassword": "隱密碼",
       "scan": "掃碼"
+    },
+    "directSignIn": {
+      "hint": "請逕於窗中登入，畢則自續。"
     },
     "remoteUnavailable": "此機不能自遠方受輸入。請於主機之機上完成此步，再交還 Agent。",
     "unnamedField": "書欄",
@@ -16860,7 +16946,14 @@
     "sectionTitle": "目錄",
     "empty": "尚無引用之目錄",
     "add": "增目錄…",
-    "addReadOnly": "增唯讀目錄…",
+    "back": "歸",
+    "addTitle": "增目錄",
+    "writableHint": "Agent 可讀寫",
+    "writableHintDetail": "Agent 能讀取、建立、修改並刪除此諸目錄中之卷",
+    "searchRecent": "尋目錄",
+    "noRecent": "尚無近用之目錄",
+    "noMatchingRecent": "無相符之目錄",
+    "addFailed": "此目錄未能增，請再試，或擇他卷匣。",
     "atLimit": "已滿 {{max}} 之限",
     "remove": "除 {{name}}",
     "writableParentConfirmTitle": "許讀寫上層目錄乎？",
@@ -18758,6 +18851,9 @@
     "failed": "操作未畢，請再試或覽此機之卷。"
   },
   "attachmentPreview": {
+    "fitWidth": "適寬",
+    "fitPage": "適頁",
+    "pageNumber": "頁碼",
     "more": "更多操作",
     "retry": "重試",
     "image": "圖",

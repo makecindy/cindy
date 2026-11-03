@@ -1,4 +1,7 @@
 {
+  "progress": {
+    "stop": "停止"
+  },
   "title": "グループチャット",
   "memberSeparator": "、",
   "memberCount_one": "メンバー {{count}} 人",
@@ -186,9 +189,16 @@
     "allDone": "すべて完了"
   },
   "speaking": {
+    "queued": "待機中",
     "stopping": "停止中…",
     "planning": "役割分担を考えています…",
     "step": "作業中…"
+  },
+  "work": {
+    "queued": "待機中 {{count}}",
+    "active": "進行中 {{count}}",
+    "expand": "チームメイトの状況を展開",
+    "collapse": "チームメイトの状況を折りたたむ"
   },
   "task": {
     "state": {
@@ -207,6 +217,17 @@
     "untitled": "添付ファイル"
   },
   "settings": {
+    "notifications": {
+      "title": "メッセージ通知",
+      "all": "すべてのメッセージ",
+      "mentions": "自分へのメンションのみ",
+      "none": "通知をオフ",
+      "allHint": "グループのメッセージとフォロー中のスレッドへの新しい返信を通知します。",
+      "mentionsHint": "自分へのメンションと @全員を通知します。役割分担の対応待ちも引き続き通知します。",
+      "noneHint": "このグループのシステム通知をすべてオフにします。未読メッセージは保持されます。",
+      "saving": "保存中…",
+      "saveFailed": "通知設定を保存できませんでした。もう一度お試しください。"
+    },
     "open": "グループの設定",
     "title": "グループの設定",
     "members": "メンバー",

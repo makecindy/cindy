@@ -1492,10 +1492,18 @@ describe('Shared create project picker', () => {
       chatInputSource.indexOf("id: 'add-extra-dir'"),
       chatInputSource.indexOf('if (remoteComposerGhosts.failed)'),
     );
-    expect(directoryAction).toContain('extraDirs: currentWritableDirs');
-    expect(directoryAction).toContain('otherDirs: currentExtraDirs');
-    expect(directoryAction).toContain('writableGrantScope,');
-    expect(directoryAction).toContain('onChange: onWritableDirsChange');
+    // The gated action only opens the add-directory page; both of its add paths (recent list
+    // and system picker) write the writable group with the task-bound grant scope.
+    expect(directoryAction).toContain('run: () => openAddDirectoryViewRef.current()');
+    const directoryHandlers = chatInputSource.slice(
+      chatInputSource.indexOf('const handleAddRecentDir = useCallback('),
+      chatInputSource.indexOf('// ── Send / Stop wiring'),
+    );
+    expect(directoryHandlers).toContain('writableDirs: writableDirs ?? []');
+    expect(directoryHandlers).toContain('extraDirs: writableDirs ?? []');
+    expect(directoryHandlers.match(/otherDirs: extraDirs \?\? \[\]/g)).toHaveLength(2);
+    expect(directoryHandlers.match(/writableGrantScope,/g)?.length).toBeGreaterThanOrEqual(2);
+    expect(directoryHandlers.match(/onChange: onWritableDirsChange/g)).toHaveLength(2);
     expect(chatInputSource).not.toContain("id: 'add-writable-dir'");
     expect(chatInputSource).toMatch(
       /hasReferenceDirs=\{\s*!settingsLocked\s*&&\s*\(onExtraDirsChange !== undefined \|\| onWritableDirsChange !== undefined\)\s*\}/,
@@ -1786,8 +1794,9 @@ describe('New Maker 草稿的 wire model id 口径', () => {
       newMakerDraftRouteSource.indexOf('// ─── 用户改 workingDir', handlerStart),
     );
     // 本地草稿落 lastByVendor(→ createSession)、device-link 草稿落 dlSel、远程 Agent 换落点
-    // 时播种那台电脑的 dlSel —— 三条都用 selection.modelId(wire id),一处都不能换成行 id。
-    expect((handler.match(/model: selection\.modelId,/g) ?? []).length).toBe(3);
+    // 时播种那台电脑的 dlSel，以及 SSH 临时草稿 —— 四条都用 selection.modelId(wire id),
+    // 一处都不能换成行 id，否则目标引擎无法解析首条请求。
+    expect((handler.match(/model: selection\.modelId,/g) ?? []).length).toBe(4);
     // 归一化行 id 不进草稿层,连字段都不该出现在写入实参里。
     expect(handler).not.toContain('rowModelId');
   });
