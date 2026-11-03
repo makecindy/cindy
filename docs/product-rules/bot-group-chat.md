@@ -868,8 +868,10 @@ Desktop 群聊只对 `TOKEN_EXPIRED`、`INVALID_TOKEN`、`AUTH_REQUIRED` 的 401
 它是这条回复的附加入口，不是结算契约；不伪造或改写卡片 schema 去绕过校验。
 重发仍被拒绝时按既有失败口径以 `fail` 收尾（群侧显示本地化的失败提示与重试入口，
 不把执行留在「处理中/未回复」等租约过期），本机保留具体错误类别，且绝不另发一条消息冒充成功。
+这条 `fail` 自身暂时失败（断网、限流、5xx）沿用既有退避与续租继续提交，不遗忘执行；
+只有结算请求本身被拒才进入收尾，结算成功之后的读取失败不算拒绝。
 两种拒绝都把 action、content 各块的 type／namespace／schemaRevision 与服务端 `error.details`
-写进日志；聊天正文、附件地址与凭证一律不记。
+写进日志；聊天正文、附件地址与凭证一律不记（details 只保留字段路径与错误码，其它值只记长度）。
 回归见 `main/maker-ipc/__tests__/chatServer.test.ts`。
 
 ### Desktop 群邀请深链续接

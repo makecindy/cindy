@@ -2464,7 +2464,7 @@ describe('Chat Server result delivery and refresh', () => {
     // The refusal stays diagnosable — action, block shape and the server's own field — while neither
     // the reply nor the message text reaches the log.
     const logged = JSON.stringify(vi.mocked(deps.log!.warn).mock.calls);
-    expect(logged).toContain('Group completion retried without the process locator');
+    expect(logged).toContain('Group settlement refused');
     expect(logged).toContain('"action":"complete"');
     expect(logged).toContain('cindy.work-record');
     expect(logged).toContain('content[1].fallback');
@@ -2477,11 +2477,14 @@ describe('Chat Server result delivery and refresh', () => {
   it('retires a completion the server refuses even without the locator', async () => {
     deps.log = { warn: vi.fn() };
     fixture.handle.mockImplementation((route, _method, body) => body?.action === 'complete'
-      ? { status: 400, body: { error: { code: 'INVALID_INPUT', details: { field: 'content[1].text', received: 'the whole reply text' } } } }
+      ? { status: 400, body: { error: { code: 'INVALID_INPUT', details: { field: 'content[1].text',
+        received: 'private-token-123', message: 'hello', token: 'sk-live-abcdefghijklmnop' } } } }
       : response(route));
     await start();
     expect(await service.settleLaneTurn(terminal)).toBe(true);
     expect(deliveries()).toHaveLength(2);
+    // The failure replaces the reply on the same execution, once, and the turn is not re-run.
+    await vi.advanceTimersByTimeAsync(2000);
     const failures = () => fixture.handle.mock.calls.filter(([, , body]) => body?.action === 'fail');
     expect(failures()).toHaveLength(1);
     expect(failures()[0]![2]).toMatchObject({ action: 'fail', epoch: execution.epoch, detail: 'cindy-runtime-error:RUNTIME_ERROR' });
@@ -2489,13 +2492,69 @@ describe('Chat Server result delivery and refresh', () => {
     expect(deliveries()).toHaveLength(2);
     expect(failures()).toHaveLength(1);
     const logged = JSON.stringify(vi.mocked(deps.log!.warn).mock.calls);
-    expect(logged).toContain('Group settlement refused');
+    expect(logged).toContain('Group settlement refused again');
     expect(logged).toContain('"action":"complete"');
     expect(logged).toContain('content[1].text');
     expect(logged).toContain('INVALID_INPUT');
-    // A server that echoes the rejected message must not turn the log into chat history.
-    expect(logged).not.toContain('the whole reply text');
+    // Only field-like values are stated; an echoed reply, a bare word and a token stay out of the log.
+    expect(logged).not.toContain('private-token-123');
+    expect(logged).not.toContain('sk-live-abcdefghijklmnop');
+    expect(logged).not.toContain('hello');
     expect(logged).not.toContain('Finished reply');
+    expect(deps.dispatch).toHaveBeenCalledOnce();
+  });
+
+  // #8598 review: only the settlement request decides a refusal. A read that fails after the reply
+  // was published must not turn the answer into a failure or post a second terminal result.
+  it('does not retire a published reply when a later read is refused', async () => {
+    deps.log = { warn: vi.fn() };
+    fixture.profiles = [{ id: 'local-bot', displayName: 'Bot', avatar: null, status: 'active' }];
+    const planId = '70000000-0000-4000-8000-000000000001';
+    const plan = { id: planId, revision: 1, source_message_id: execution.source_message_id, request_text: 'Discuss the draft',
+      organizer_id: botId, creator_id: selfId, status: 'running', current_step: 0,
+      steps: [{ position: 0, botId, botName: 'Bot', task: 'Discuss', status: 'running' }], created_at: new Date().toISOString(), updated_at: new Date().toISOString() };
+    deps.workDir = { prepare: vi.fn(), snapshot: vi.fn(), changedFiles: vi.fn(), trashGroupFolder: vi.fn() };
+    deps.onStepSettled = vi.fn();
+    let published = false;
+    fixture.handle.mockImplementation((route, _method, body) => {
+      if (body?.action === 'complete') { published = true; plan.status = 'waiting'; }
+      // The reply is already in the group when this step read is refused.
+      if (published && route.includes('/plans?ids=')) return { status: 400, body: { error: { code: 'INVALID_INPUT' } } };
+      if (route === '/executions/claim') { const next = claimed ? null : { ...execution, plan_id: planId, plan_step: 0 }; claimed = true; return { body: { execution: next } }; }
+      if (route.includes('/plans')) return { body: [plan] };
+      if (route.endsWith(`/messages/${execution.source_message_id}`)) return { body: { id: execution.source_message_id, seq: '1',
+        authorId: selfId, author: { kind: 'human', name: 'Me' }, content: [{ type: 'text', text: 'Discuss the draft' }], deleted: false, threadRootId: null } };
+      return response(route);
+    });
+    await start();
+    await service.settleLaneTurn(terminal);
+    expect(deliveries()).toHaveLength(1);
+    await vi.advanceTimersByTimeAsync(120_000);
+    expect(deliveries()).toHaveLength(1);
+    expect(fixture.handle.mock.calls.filter(([, , body]) => body?.action === 'fail')).toHaveLength(0);
+    expect(deps.dispatch).toHaveBeenCalledOnce();
+  });
+
+  // #8598 review: the failure receipt is a result too — a transient failure of it is retried with
+  // the existing backoff, so the group still gets the failure notice instead of「处理中」.
+  it('keeps retrying the failure receipt when the server is temporarily unavailable', async () => {
+    deps.log = { warn: vi.fn() };
+    let failAttempts = 0;
+    fixture.handle.mockImplementation((route, _method, body) => {
+      if (body?.action === 'complete') return { status: 400, body: { error: { code: 'INVALID_INPUT' } } };
+      if (body?.action === 'fail' && ++failAttempts === 1) return { status: 503, body: { error: { code: 'UPSTREAM_FAILED' } } };
+      return response(route);
+    });
+    await start();
+    await service.settleLaneTurn(terminal);
+    await vi.advanceTimersByTimeAsync(2000);
+    expect(fixture.handle.mock.calls.filter(([, , body]) => body?.action === 'fail')).toHaveLength(1);
+    // Still held for retry: the run is not forgotten and no second reply is posted.
+    await vi.advanceTimersByTimeAsync(16_000);
+    expect(fixture.handle.mock.calls.filter(([, , body]) => body?.action === 'fail')).toHaveLength(2);
+    expect(deliveries()).toHaveLength(2);
+    await vi.advanceTimersByTimeAsync(120_000);
+    expect(fixture.handle.mock.calls.filter(([, , body]) => body?.action === 'fail')).toHaveLength(2);
     expect(deps.dispatch).toHaveBeenCalledOnce();
   });
 

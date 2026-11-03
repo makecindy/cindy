@@ -125,7 +125,7 @@ interface Running {
   lane?: string;
   laneLookup?: Promise<void>;
   context?: ExecutionContext;
-  settlement?: { terminal: BotGroupLaneTerminal; cancelled?: boolean; payload?: Record<string, unknown>; reply?: { sourceText: string; text: string; attachments: ChatUploadAttachment[] }; fileReply?: Awaited<ReturnType<typeof prepareChatReplyFiles>>; retryAt: number; keepLease?: boolean };
+  settlement?: { terminal: BotGroupLaneTerminal; cancelled?: boolean; payload?: Record<string, unknown>; reply?: { sourceText: string; text: string; attachments: ChatUploadAttachment[] }; fileReply?: Awaited<ReturnType<typeof prepareChatReplyFiles>>; retryAt: number; keepLease?: boolean; refused?: boolean };
   delivery?: Promise<void>;
   plan?: ServerPlan;
   workspace?: { workDir: string; branch: string | null; ownerSessionId: string | null };
@@ -135,6 +135,13 @@ interface Running {
 }
 export class ChatResponseError extends Error {
   constructor(code: string, readonly status: number, readonly retryAt?: number, readonly details?: unknown) { super(code); }
+}
+/**
+ * The group's terminal result was definitely refused for its content — not for auth, permissions
+ * or the lease. The reply cannot be published, so the turn has to end as a failure instead.
+ */
+class SettlementRefused extends Error {
+  constructor(readonly refusal: unknown) { super('SETTLEMENT_REFUSED'); }
 }
 const CHAT_AUTH_RETRY_MS = 60_000;
 /** A read list is served from memory this long; a receipt for the group ends it sooner. */
@@ -2190,26 +2197,33 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
    * locator, so a reply the companion already wrote still reaches the group instead of being lost
    * (#8598). Same operation, same text and files — the card contract itself is never rewritten to
    * slip past validation, and the refusal plus what was left out stay in the log.
+   *
+   * Only the settlement request is judged here: a later `plans`/`snapshot` read that fails must not
+   * be mistaken for a refused reply and turn a published answer into a failure.
    */
   async function settleRun(run: Running, action: string, pending: Settlement) {
     const payload = pending.payload!;
     const blocks = payload.content;
-    try { await updateExecution(run, action, payload); }
-    catch (error) {
-      if (!withoutProcessLocator(action, payload, error)) throw error;
-      deps.log?.warn('Group completion retried without the process locator', { groupId: run.execution.conversation_id, action,
-        ...(Array.isArray(blocks) ? { blocks: contentShapes(blocks) } : {}), ...chatErrorDiagnostic(error), ...refusalDetails(error) });
-      await updateExecution(run, action, payload);
-    }
+    const attempt = () => updateExecution(run, action, payload).then(() => null, (error: unknown) => error);
+    const refusal = await attempt();
+    if (!refusal) return;
+    if (!contentRefusal(action, refusal)) throw refusal;
+    reportRefusal(run, action, refusal, blocks, 1);
+    if (!dropProcessLocator(payload)) throw new SettlementRefused(refusal);
+    const retried = await attempt();
+    if (!retried) return;
+    if (!contentRefusal(action, retried)) throw retried;
+    reportRefusal(run, action, retried, blocks, 2);
+    throw new SettlementRefused(retried);
   }
-  /**
-   * A definitive refusal of a completion for its content, with the optional locator dropped from
-   * the retry. A refusal of anything else (auth, permissions, the lease) keeps its own handling.
-   */
-  function withoutProcessLocator(action: string, payload: Record<string, unknown>, error: unknown): boolean {
-    if (action !== 'complete' || !(error instanceof ChatResponseError) || retryableResponse(error)) return false;
-    if (error.status < 400 || error.status >= 500 || error.status === 408) return false;
-    if (!['INVALID_INPUT', 'INVALID_PARAMS', 'REQUEST_FAILED'].includes(error.message)) return false;
+  /** A 4xx the server means as "this content will never be accepted": not auth, permissions or the lease. */
+  function contentRefusal(action: string, error: unknown): error is ChatResponseError {
+    return action === 'complete' && error instanceof ChatResponseError && !retryableResponse(error)
+      && error.status >= 400 && error.status < 500 && error.status !== 408
+      && ['INVALID_INPUT', 'INVALID_PARAMS', 'REQUEST_FAILED'].includes(error.message);
+  }
+  /** Drops the optional locator block the retry leaves out; `false` when there is nothing to drop. */
+  function dropProcessLocator(payload: Record<string, unknown>): boolean {
     if (!Array.isArray(payload.content)) return false;
     const kept = (payload.content as unknown[]).filter(block =>
       (block as { namespace?: unknown } | null)?.namespace !== 'cindy.work-record');
@@ -2217,29 +2231,31 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
     payload.content = kept;
     return true;
   }
+  /** What was refused, without any message text: action, block shapes and the server's own field. */
+  function reportRefusal(run: Running, action: string, error: ChatResponseError, blocks: unknown, attempt: number) {
+    deps.log?.warn(attempt === 1 ? 'Group settlement refused' : 'Group settlement refused again', {
+      groupId: run.execution.conversation_id, action, attempt,
+      ...(Array.isArray(blocks) ? { blocks: contentShapes(blocks) } : {}), ...chatErrorDiagnostic(error), ...refusalDetails(error) });
+  }
   function refusalDetails(error: unknown) {
     const details = error instanceof ChatResponseError ? detailsDiagnostic(error.details) : undefined;
     return details === undefined ? {} : { details };
   }
   /**
-   * A terminal result the server refuses outright would otherwise leave the group waiting on a
-   * lease nobody releases, so the turn stays 「处理中」 with no answer and no notice. Retire it with
-   * the failure the group already knows how to present, keep the concrete category for this
-   * account's own projection, and record what was refused. Nothing is posted twice: the refused
-   * attempt never applied.
+   * The reply cannot be published at all. Retire the turn as a failure through the same delivery
+   * ladder rather than leaving it to a lease nobody releases: a refused settlement keeps the run,
+   * so a transient failure of this receipt keeps retrying with the existing backoff and lease
+   * renewal, and the group gets the failure it already knows how to present (#8598).
    */
-  async function retireRefusedSettlement(run: Running, pending: Settlement, error: unknown) {
-    const action = pending.cancelled ? 'cancel' : pending.terminal.outcome === 'error' ? 'fail' : 'complete';
-    deps.log?.warn('Group settlement refused', { groupId: run.execution.conversation_id, action,
-      ...(Array.isArray(pending.payload?.content) ? { blocks: contentShapes(pending.payload.content) } : {}),
-      ...chatErrorDiagnostic(error), ...refusalDetails(error) });
-    if (action !== 'complete') return;
+  function retireRefusedSettlement(run: Running, pending: Settlement): boolean {
+    if (pending.refused || pending.cancelled || pending.terminal.outcome === 'error') return false;
+    pending.refused = true;
     failureCodes.set(`${run.execution.id}:${run.execution.epoch}`, 'RUNTIME_ERROR');
     if (failureCodes.size > 1000) failureCodes.delete(failureCodes.keys().next().value!);
-    try { await updateExecution(run, 'fail', { detail: botGroupRuntimeFailureDetail('RUNTIME_ERROR') }); }
-    catch (retireError) {
-      deps.log?.warn('Group completion could not be retired', { groupId: run.execution.conversation_id, ...chatErrorDiagnostic(retireError) });
-    }
+    pending.payload = { detail: botGroupRuntimeFailureDetail('RUNTIME_ERROR') };
+    pending.terminal = { ...pending.terminal, outcome: 'error' };
+    pending.retryAt = 0;
+    return true;
   }
   function deliverSettlement(run: Running): Promise<void> {
     if (run.delivery) return run.delivery;
@@ -2349,7 +2365,13 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
         // rejection (including revoked/expired leases) must never rerun the Agent
         // or post the private result under a new execution identity.
         const recoveringAuth = error instanceof ChatResponseError && recoverableAuth(error);
-        if (!(error instanceof ChatResponseError) || retryableResponse(error)) {
+        // The reply itself was refused: publish the failure instead, and keep the run so a
+        // transient failure of that receipt is retried rather than forgotten (#8598).
+        if (error instanceof SettlementRefused) {
+          if (retireRefusedSettlement(run, pending)) return;
+          deps.log?.warn('Group settlement could not be retired', { groupId: run.execution.conversation_id,
+            ...chatErrorDiagnostic(error.refusal), ...refusalDetails(error.refusal) });
+        } else if (!(error instanceof ChatResponseError) || retryableResponse(error)) {
           const rateLimited = chatErrorDiagnostic(error).status === 429;
           const retryAt = rateLimited && error instanceof Error && 'retryAt' in error && typeof error.retryAt === 'number' ? error.retryAt : 0;
           const delayed = recoveringAuth || rateLimited;
@@ -2359,9 +2381,6 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
             : Date.now() + 15000;
           return;
         }
-        // Definitively refused even after the explainable degradation: close the turn instead of
-        // leaving it running, and keep the reason diagnosable (#8598).
-        await retireRefusedSettlement(run, pending, error);
       } finally { run.delivery = undefined; }
       if (running.get(run.execution.id) === run && run.settlement === pending) {
         run.releaseToolAuthority?.();

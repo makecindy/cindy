@@ -33,34 +33,43 @@ export function contentShapes(content: unknown): Array<{ type: string; namespace
   });
 }
 
-/** A field path or other identifier-shaped scalar; prose does not qualify. */
-const DETAIL_IDENTIFIER = /^[A-Za-z0-9_.:\[\]<>=\/-]{1,120}$/;
+/** Field-like keys whose value a validator can state safely; every other value is unreviewed input. */
+const DETAIL_KEY_ALLOWLIST = new Set(['field', 'fields', 'path', 'paths', 'code', 'reason', 'type', 'namespace', 'index', 'expected', 'allowed']);
+/** A key a log line may carry. */
+const DETAIL_KEY = /^[A-Za-z_$][\w$]{0,63}$/;
+/** A JSON path such as `content[1].fallback`; a bare word does not qualify. */
+const DETAIL_PATH = /^[A-Za-z_$][\w$]*(?:\[\d+\])?(?:\.[A-Za-z_$][\w$]*(?:\[\d+\])?)+$/;
+/** A stable error code such as `INVALID_INPUT`. */
+const DETAIL_CODE = /^[A-Z][A-Z0-9_]{1,63}$/;
 
 /**
- * A server's `error.details`, narrowed to what a validator can safely say: identifier-shaped
- * scalars (field paths, codes), numbers and booleans stay, anything else becomes its length.
- * Depth and entry count are bounded. A server that echoes the rejected message body must not
- * put chat text into the log.
+ * A server's `error.details`, narrowed to what a validator can safely state: field paths and error
+ * codes under field-like keys, plus numbers and booleans. Everything else — including a whole
+ * echoed message, a bare word or a token — becomes its length, because the server may put the
+ * rejected user input in any key it likes. Depth and entry count are bounded.
  */
 export function detailsDiagnostic(details: unknown): unknown {
-  const narrow = (value: unknown, depth: number): unknown => {
+  const narrow = (value: unknown, depth: number, key: string | null): unknown => {
     if (value === null || typeof value === 'boolean' || typeof value === 'number') return value;
-    if (typeof value === 'string') return DETAIL_IDENTIFIER.test(value) ? value : `<text:${value.length}>`;
+    if (typeof value === 'string') {
+      const named = key !== null && DETAIL_KEY_ALLOWLIST.has(key);
+      return named && (DETAIL_PATH.test(value) || DETAIL_CODE.test(value)) ? value : `<text:${value.length}>`;
+    }
     if (depth >= 3) return undefined;
     if (Array.isArray(value)) {
-      const items = value.slice(0, 20).map(item => narrow(item, depth + 1)).filter(item => item !== undefined);
+      const items = value.slice(0, 20).map(item => narrow(item, depth + 1, key)).filter(item => item !== undefined);
       return items.length ? items : undefined;
     }
     if (typeof value === 'object') {
-      const entries = Object.entries(value as Record<string, unknown>).slice(0, 20).flatMap(([key, item]) => {
-        const narrowed = narrow(item, depth + 1);
-        return narrowed === undefined || !DETAIL_IDENTIFIER.test(key) ? [] : [[key, narrowed] as const];
+      const entries = Object.entries(value as Record<string, unknown>).slice(0, 20).flatMap(([entryKey, item]) => {
+        const narrowed = narrow(item, depth + 1, entryKey);
+        return narrowed === undefined || !DETAIL_KEY.test(entryKey) ? [] : [[entryKey, narrowed] as const];
       });
       return entries.length ? Object.fromEntries(entries) : undefined;
     }
     return undefined;
   };
-  return narrow(details, 0);
+  return narrow(details, 0, null);
 }
 
 /** Stable localized categories for desktop and remote controllers; raw errors stay private. */
