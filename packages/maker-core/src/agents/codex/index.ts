@@ -3412,6 +3412,8 @@ assertRouteCurrent();
         model: opts?.model ?? 'gpt-5.4-mini',
         approvalPolicy: 'never',
         sandbox: 'read-only', // kebab-case (v2.rs SandboxMode)
+        // Auxiliary title/summary calls must not start a native Goal loop either.
+        config: { 'features.goals': false },
         ...(developerInstructions ? { developerInstructions } : {}),
       } as ThreadStartParams);
       const threadId = startResp.thread.id;
