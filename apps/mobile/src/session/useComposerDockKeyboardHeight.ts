@@ -14,6 +14,7 @@ import {
 import {
   iosKeyboardOverlap,
   loadDockedKeyboardHeights,
+  subscribeDockedKeyboardHeights,
 } from "@/session/keyboardOverlap";
 
 /** Keep UI-thread motion, but use the public keyboard frame once it settles.
@@ -31,11 +32,13 @@ export function useComposerDockKeyboardHeight() {
     // Same judgement as the composer card, including iOS's impossible frames after PiP.
     const overlap = (frame: KeyboardMetrics | undefined) =>
       !frame || frame.screenY === 0 ? 0 : iosKeyboardOverlap(frame, viewport);
-    settledHeight.value = Keyboard.isVisible()
-      ? overlap(Keyboard.metrics())
-      : -1;
+    let lastFrame: KeyboardMetrics | undefined = Keyboard.isVisible()
+      ? Keyboard.metrics()
+      : undefined;
+    settledHeight.value = Keyboard.isVisible() ? overlap(lastFrame) : -1;
     const settle = (event: KeyboardEvent) => {
-      settledHeight.value = overlap(event.endCoordinates);
+      lastFrame = event.endCoordinates;
+      settledHeight.value = overlap(lastFrame);
     };
     const invalidate = () => {
       settledHeight.value = -1;
@@ -46,10 +49,19 @@ export function useComposerDockKeyboardHeight() {
       Keyboard.addListener("keyboardDidShow", settle),
       Keyboard.addListener("keyboardDidChangeFrame", settle),
       Keyboard.addListener("keyboardDidHide", () => {
+        lastFrame = undefined;
         settledHeight.value = 0;
       }),
     ];
+    // Saved heights arrive asynchronously; recompute a settled keyboard that
+    // used the estimate. -1 (moving/not settled) and 0 (hidden) stay as they are.
+    const unsubscribe = subscribeDockedKeyboardHeights(() => {
+      if (lastFrame && settledHeight.value >= 0) {
+        settledHeight.value = overlap(lastFrame);
+      }
+    });
     return () => {
+      unsubscribe();
       for (const subscription of subscriptions) subscription.remove();
     };
   }, [settledHeight, viewport.width, viewport.height]);

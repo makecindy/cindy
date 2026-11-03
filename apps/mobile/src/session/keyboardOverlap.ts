@@ -38,6 +38,21 @@ export function isImplausibleIPhoneKeyboardFrame(frame: KeyboardMetrics, viewpor
 const DOCKED_KEYBOARD_HEIGHTS_KEY = 'cindy.mobile.keyboard-docked-height.v2';
 const dockedKeyboardHeights = new Map<number, number>();
 let dockedKeyboardHeightsLoaded = false;
+const hydrationListeners = new Set<() => void>();
+
+/**
+ * 本机记录是异步读出的：读完前遇到异常坐标只能先用估算，读完若记录更高，已显示的键盘占位
+ * 必须重算，否则会一直停在估算值直到下一次键盘事件。读取改变了任何高度时通知订阅者。
+ */
+export function subscribeDockedKeyboardHeights(listener: () => void) {
+  hydrationListeners.add(listener);
+  return () => { hydrationListeners.delete(listener); };
+}
+
+export function __resetDockedKeyboardHeightsForTest() {
+  dockedKeyboardHeights.clear();
+  dockedKeyboardHeightsLoaded = false;
+}
 
 export function loadDockedKeyboardHeights() {
   if (dockedKeyboardHeightsLoaded || Platform.OS !== 'ios') return;
@@ -46,12 +61,15 @@ export function loadDockedKeyboardHeights() {
     .then((raw) => {
       const saved: unknown = raw ? JSON.parse(raw) : null;
       if (!saved || typeof saved !== 'object') return;
+      let changed = false;
       for (const [width, height] of Object.entries(saved)) {
         const key = Number(width);
         if (Number.isFinite(key) && typeof height === 'number' && height > (dockedKeyboardHeights.get(key) ?? 0)) {
           dockedKeyboardHeights.set(key, height);
+          changed = true;
         }
       }
+      if (changed) for (const listener of [...hydrationListeners]) listener();
     })
     .catch(() => {});
 }

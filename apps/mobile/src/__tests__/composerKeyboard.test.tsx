@@ -9,6 +9,7 @@ import type {
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { ComposerKeyboardAvoidingView } from '@/session/ComposerKeyboardAvoidingView';
 import { useMobileKeyboardState } from '@/session/useMobileKeyboardState';
+import { __resetDockedKeyboardHeightsForTest } from '@/session/keyboardOverlap';
 import { useComposerCardTransition } from '@/session/useComposerCardTransition';
 import { motionDuration } from '@/theme/tokens';
 import { usePendingQuestionScroll } from '@/session/usePendingQuestionScroll';
@@ -195,6 +196,8 @@ beforeEach(() => {
   Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
   native.platform.OS = 'ios';
   native.platform.isPad = false;
+  storage.clear();
+  __resetDockedKeyboardHeightsForTest();
   native.viewport = { width: 390, height: 844, scale: 3, fontScale: 1 };
   native.shown = false;
   native.metrics = undefined;
@@ -373,6 +376,22 @@ describe('composer keyboard geometry and motion', () => {
     emit('keyboardWillHide');
     emit('keyboardWillShow', corner);
     expect(height()).toBe(230);
+  });
+
+  // PR #8665 review：本机记录异步读出，读完前遇到异常坐标只能先用估算；读完若记录更高，
+  // 已显示的键盘占位必须重算，而不是停在估算值直到下一次键盘事件。
+  it('recomputes an already-shown impossible frame once the saved height finishes loading', async () => {
+    native.viewport = { width: 400, height: 900, scale: 3, fontScale: 1 };
+    storage.set('cindy.mobile.keyboard-docked-height.v2', JSON.stringify({ 400: 380 }));
+    render();
+    emit('keyboardWillShow', {
+      duration: 383,
+      easing: 'keyboard',
+      endCoordinates: { screenX: 192, screenY: 500, width: 274, height: 178 },
+    });
+    expect(height()).toBe(342);
+    await act(async () => {});
+    expect(height()).toBe(380);
   });
 
   it('subtracts the new-page safe area once without affecting the full-window detail page', () => {

@@ -1,4 +1,4 @@
-import { useEffect, useLayoutEffect, useRef, useState, type RefObject } from 'react';
+import { useEffect, useLayoutEffect, useReducer, useRef, useState, type RefObject } from 'react';
 import {
   AccessibilityInfo,
   Keyboard,
@@ -16,6 +16,7 @@ import {
   isImplausibleIPhoneKeyboardFrame,
   loadDockedKeyboardHeights,
   rememberDockedKeyboard,
+  subscribeDockedKeyboardHeights,
 } from '@/session/keyboardOverlap';
 import { getCachedReduceMotionEnabled } from '@/hooks/useReduceMotion';
 import { mobileDebugLog } from '@/debug/mobileDebugLog';
@@ -40,6 +41,8 @@ export function useMobileKeyboardState(enabled = true): MobileKeyboardState {
   if (viewportRef.current.width !== viewport.width || viewportRef.current.height !== viewport.height) {
     viewportRef.current = { width: viewport.width, height: viewport.height, changedAt: Date.now() };
   }
+  // 本机记录读完后重渲染，重新计算已显示键盘的遮挡高度。
+  const [, refreshHeights] = useReducer((count: number) => count + 1, 0);
   const [state, setState] = useState(() => readKeyboardSnapshot(enabled));
   const snapshot = useRef(state);
   const transition = useRef<MobileKeyboardState['transition']['current']>(null);
@@ -137,8 +140,10 @@ export function useMobileKeyboardState(enabled = true): MobileKeyboardState {
         update({ duration: 0, easing: 'keyboard', endCoordinates: initialFrame });
       }
     }
+    const unsubscribeHeights = subscribeDockedKeyboardHeights(refreshHeights);
     return () => {
       disposed = true;
+      unsubscribeHeights();
       for (const subscription of subscriptions) subscription.remove();
     };
   }, [enabled]);

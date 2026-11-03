@@ -163,7 +163,7 @@ iPhone Duo（iOS 27）在远程桌面返回并进入画中画后，系统发来�
 `keyboardOverlap.ts` 因此在 iPhone（非 iPad，没有悬浮键盘）上把「显示中却不整宽或不贴底」的
 坐标视为异常，改用「同窗口宽度下见过的最高完整停靠高度」与「按窗口高度估算（竖屏 38%、横屏 42% 且不低于
 220pt）」中较大者：转屏中途和换输入法会出现更矮的整宽帧，沿用偏矮会盖住输入框；转屏后 1 秒内的整宽帧也不记录（过渡帧偏高，记下后会一直抬得过高）；记录持久化在本机，
-冷启动后直接进远程桌面也能用，并记 `keyboard` scope 的
+冷启动后直接进远程桌面也能用（记录异步读出，读完后两个 hook 会重算已显示的键盘占位），并记 `keyboard` scope 的
 `implausible frame replaced`。复现：开「后台运行」、等远程画面出来后返回进入小窗、点输入框，多试几次；
 冷启动后不先打字、从首页直接进远程桌面最容易触发；
 看 Debug 日志里 `frame received` 的 `frame` 是否整宽贴底。输入卡片（`useMobileKeyboardState`）与浮动输入框（新建任务页的 `useComposerDockKeyboardHeight`）必须共用这一判据，
