@@ -27,6 +27,41 @@ export interface PromptRecommendationSnapshot {
 
 const COMPLETION_SETTLE_MS = 500;
 const entries = new Map<string, PromptRecommendationSnapshot>();
+/**
+ * 已生成的推荐在 session 切换后仍然保留：composer 重新挂载时直接复用，
+ * 不重新发起付费预测，也不会因为切走再回来而凭空消失。
+ * 只在新的完成轮次、会话删除、账号/偏好切换或 TTL 到期时作废；
+ * 发送、换目录等操作只清运行期 entry（渲染层因此隐藏），不会丢掉可用文案。
+ */
+const retainedRecommendations = new Map<
+  string,
+  { revision: number; prompt: string; at: number }
+>();
+const RETAINED_TTL_MS = 30 * 60 * 1000;
+
+function retainReadyRecommendation(sessionId: string, revision: number, prompt: string): void {
+  retainedRecommendations.set(sessionId, { revision, prompt, at: Date.now() });
+}
+
+function dropRetainedRecommendation(sessionId: string): void {
+  retainedRecommendations.delete(sessionId);
+}
+
+/** 切回会话时用保留值合成一个 ready 快照；超过 TTL 视为过期。 */
+function retainedSnapshot(sessionId: string): PromptRecommendationSnapshot | undefined {
+  const retained = retainedRecommendations.get(sessionId);
+  if (!retained) return undefined;
+  if (Date.now() - retained.at > RETAINED_TTL_MS) {
+    retainedRecommendations.delete(sessionId);
+    return undefined;
+  }
+  return {
+    revision: retained.revision,
+    phase: 'ready',
+    prompt: retained.prompt,
+    requestSeq: 0,
+  };
+}
 const sessionListeners = new Map<string, Set<() => void>>();
 const runningSessionIds = new Set<string>();
 const sawRunningSessionIds = new Set<string>();
@@ -60,6 +95,7 @@ function clearRuntimeState(): void {
   const changedSessionIds = [...entries.keys()];
   for (const timer of settleTimers.values()) clearTimeout(timer);
   entries.clear();
+  retainedRecommendations.clear();
   runningSessionIds.clear();
   sawRunningSessionIds.clear();
   runStartedAtBySession.clear();
@@ -73,6 +109,7 @@ function handlePreferenceChanged(enabled: boolean): void {
   if (!enabled) {
     const changedSessionIds = [...entries.keys()];
     entries.clear();
+    retainedRecommendations.clear();
     pendingCompletionRevisions.clear();
     sawRunningSessionIds.clear();
     runStartedAtBySession.clear();
@@ -195,6 +232,7 @@ function noteTurnEnded(sessionId: string, revision: number): void {
   const handled = handledCompletionRevisions.get(sessionId) ?? 0;
   const pending = pendingCompletionRevisions.get(sessionId) ?? 0;
   if (revision <= handled || revision <= pending) return;
+  dropRetainedRecommendation(sessionId);
   pendingCompletionRevisions.set(sessionId, revision);
   // 新 revision 已到达时立即隔离旧 Promise，不能等 settle timer 才作废。
   deleteEntry(sessionId);
@@ -278,7 +316,8 @@ function subscribeSession(sessionId: string | undefined, listener: () => void): 
 function getSessionSnapshot(
   sessionId: string | undefined,
 ): PromptRecommendationSnapshot | undefined {
-  return sessionId ? entries.get(sessionId) : undefined;
+  if (!sessionId) return undefined;
+  return entries.get(sessionId) ?? retainedSnapshot(sessionId);
 }
 
 /** 当前 session 的推荐状态；切换 session 时同步读取对应 key，不携带上一 session state。 */
@@ -336,13 +375,17 @@ export function resolvePromptRecommendationPrediction(
     phase: 'ready',
     prompt,
   });
+  retainReadyRecommendation(sessionId, revision, prompt);
   emitSession(sessionId);
 }
 
 /** Tab / 发送 / workingDir 等显式消费路径同步作废当前推荐和迟到的完成通知。 */
 export function dismissPromptRecommendation(sessionId: string, revision?: number): void {
   const current = entries.get(sessionId);
-  if (revision != null && current?.revision !== revision) return;
+  // 带 revision 的调用是显式消费（Tab / 发送）：保留区也要作废，避免切回会话后复活。
+  const effectiveRevision =
+    current?.revision ?? retainedRecommendations.get(sessionId)?.revision;
+  if (revision != null && effectiveRevision !== revision) return;
   // 无 entry 也可能仍在等待最终 done；显式发送/换目录应取消这份等待。
   // 新 running 的 layout effect 也会调用本函数，不能清掉刚开始的新轮资格。
   if (!runningSessionIds.has(sessionId)) {
@@ -351,6 +394,7 @@ export function dismissPromptRecommendation(sessionId: string, revision?: number
     sawRunningSessionIds.delete(sessionId);
     runStartedAtBySession.delete(sessionId);
   }
+  if (revision != null) dropRetainedRecommendation(sessionId);
   deleteEntry(sessionId);
 }
 
@@ -361,6 +405,7 @@ export function clearPromptRecommendationSession(sessionId: string): void {
   runStartedAtBySession.delete(sessionId);
   pendingCompletionRevisions.delete(sessionId);
   handledCompletionRevisions.delete(sessionId);
+  dropRetainedRecommendation(sessionId);
   deleteEntry(sessionId);
 }
 

@@ -264,4 +264,42 @@ describe('promptRecommendationStore', () => {
 
     expect(__testing.getSessionSnapshot('session-a')).toBeUndefined();
   });
+  it('切走再切回来仍复用已生成的推荐，不重新预测', () => {
+    h.statusBySession.set('session-a', ELIGIBLE);
+    complete('session-a', 601);
+    const seq = beginPromptRecommendationPrediction('session-a', 601)!;
+    resolvePromptRecommendationPrediction('session-a', 601, seq, '接着问点什么');
+    expect(__testing.getSessionSnapshot('session-a')?.prompt).toBe('接着问点什么');
+
+    // 切走期间该 session 出现 running 边沿，运行期 entry 被清掉。
+    __testing.applyRunningSnapshot(new Map([['session-a', { isRunning: true }]]));
+    // 切回来：运行期 entry 已不在，保留区仍给出同一句。
+    __testing.applyRunningSnapshot(new Map());
+    vi.advanceTimersByTime(500);
+
+    expect(__testing.getSessionSnapshot('session-a')).toEqual({
+      revision: 601,
+      phase: 'ready',
+      prompt: '接着问点什么',
+      requestSeq: 0,
+    });
+    // 保留值是 ready，不会为了重新显示再发一次付费预测。
+    expect(beginPromptRecommendationPrediction('session-a', 601)).toBeNull();
+  });
+
+  it('新一轮完成后旧文案作废，不把上一轮推荐带进新轮', () => {
+    h.statusBySession.set('session-a', ELIGIBLE);
+    complete('session-a', 601);
+    const seq = beginPromptRecommendationPrediction('session-a', 601)!;
+    resolvePromptRecommendationPrediction('session-a', 601, seq, '上一轮的推荐');
+    expect(__testing.getSessionSnapshot('session-a')?.prompt).toBe('上一轮的推荐');
+
+    complete('session-a', 701);
+
+    expect(__testing.getSessionSnapshot('session-a')).toMatchObject({
+      revision: 701,
+      phase: 'candidate',
+      prompt: null,
+    });
+  });
 });
