@@ -83,6 +83,24 @@ describe('chat interaction controls', () => {
         <button onClick={mask.retry}>Retry mask</button>{mask.error && <span role="alert">Save failed</span>}</>}
     </>;
   }
+  // Unit: actual Provider actions, missing coverage for permanent delegation.
+  // A keystroke must not send a takeover; an explicit disable must still persist.
+  it.each(['always', 'scheduled', 'manual'] as const)('keeps %s delegation under its own participation policy', async trigger => {
+    let state = maskState(); state.settings.trigger = trigger;
+    mocks.mask.mockImplementation(async ({ action }) => {
+      if (action?.type === 'save') state = { ...state, settings: action.settings, status: action.settings.enabled ? 'enabled' : 'off' };
+      if (action?.type === 'participate') state = { ...state, status: 'paused' };
+      return { ok: true, state };
+    });
+    render(<GroupMaskProvider groupId="room"><MaskProbe /></GroupMaskProvider>);
+    const participate = await screen.findByText('Participate');
+    await act(async () => fireEvent.click(participate));
+    expect(mocks.mask.mock.calls.filter(([input]) => input.action?.type === 'participate')).toHaveLength(trigger === 'always' ? 0 : 1);
+    expect(state.status).toBe(trigger === 'always' ? 'enabled' : 'paused');
+    await act(async () => fireEvent.click(screen.getByText('Disable reply')));
+    expect(state.settings.enabled).toBe(false);
+    expect(state.status).toBe('off');
+  });
   it('preserves chat-local state when personal config arrives or authority disappears', async () => {
     let finish!: (value: unknown) => void, changed = () => {};
     mocks.mask.mockImplementationOnce(() => new Promise(resolve => { finish = resolve; }));
@@ -98,6 +116,7 @@ describe('chat interaction controls', () => {
   });
   it.each(['Participate', 'Read original'])('retains a failed save after successful %s and retries that save', async operation => {
     let state = maskState(), fail = true;
+    state.settings.trigger = 'scheduled';
     mocks.mask.mockImplementation(async ({ action }) => {
       if (action?.type === 'save') {
         if (fail) return { ok: false, errorCode: 'NETWORK_ERROR' };

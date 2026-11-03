@@ -34,6 +34,24 @@ beforeEach(() => {
 });
 afterEach(() => { act(() => root?.unmount()); root = undefined; });
 
+// Unit: the production hook must keep permanent delegation on while typing,
+// while its existing explicit switch still persists off. Prior tests cover reads/retries only.
+it.each(['always', 'scheduled', 'manual'] as const)('preserves the %s participation policy and explicit disable', async trigger => {
+  server.settings.trigger = trigger;
+  h.client.mask.mockImplementation(async (_room, action) => {
+    if (action?.type === 'participate') server = { ...server, status: 'paused' };
+    if (action?.type === 'save') server = { ...server, settings: action.settings, status: action.settings.enabled ? 'enabled' : 'off' };
+    return server;
+  });
+  await render();
+  await act(async () => result.participate());
+  expect(h.client.mask.mock.calls.filter(call => call[1]?.type === 'participate')).toHaveLength(trigger === 'always' ? 0 : 1);
+  expect(result.state?.status).toBe(trigger === 'always' ? 'enabled' : 'paused');
+  await act(async () => result.update({ enabled: false }));
+  expect(result.state?.settings.enabled).toBe(false);
+  expect(result.state?.status).toBe('off');
+});
+
 it('reads without acknowledging, acknowledges the selected original, and reflects offline home presence', async () => {
   await render();
   expect(result.mentions).toHaveLength(1);
@@ -64,6 +82,7 @@ it('discards late receipts and queued grants after access disappears, even when 
 // Independent mutations used to clear the shared failure ref. Exercise the real
 // hook with a failed save followed by successful presence/read, then retry it.
 it.each(['participate', 'read'] as const)('retains a failed save after %s succeeds', async operation => {
+  server.settings.trigger = 'scheduled';
   let fail = true;
   h.client.mask.mockImplementation(async (_room, action) => {
     if (action?.type === 'save') {

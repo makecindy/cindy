@@ -26,9 +26,7 @@ export function GroupMaskAvatar({ self, companion, compact = false }: {
 
 export function GroupMaskStatusText({ mask }: { mask: GroupMaskPresentation }) {
   const { t } = useTranslation();
-  return <span>{mask.status === 'paused' && mask.settings.trigger === 'always'
-    ? t(key('presence'), { minutes: mask.settings.resumeMinutes })
-    : mask.status === 'waiting' && mask.settings.trigger === 'scheduled'
+  return <span>{mask.status === 'waiting' && mask.settings.trigger === 'scheduled'
       ? t(key('scheduledWait'), { time: mask.settings.start })
       : t(key(`detail.${mask.status}`))}</span>;
 }
@@ -66,7 +64,9 @@ function MaskIndicator({ mask, onTakeOver }: { mask: GroupMaskPresentation; onTa
       onCloseAutoFocus={event => { if (focusInput) { event.preventDefault(); onTakeOver(); setFocusInput(false); } }}>
       <h3 className="text-14 font-medium">{t(key('title'))}</h3>
       <p className="text-13 leading-normal text-[var(--text-secondary)]"><GroupMaskStatusText mask={mask} /></p>
-      {mask.status === 'enabled' ? <Button size="sm" variant="secondary" className="w-full"
+      {mask.settings.enabled && mask.settings.trigger === 'always' ? <Button size="sm" variant="secondary" className="w-full" disabled={mask.saving}
+        onClick={() => { mask.update({ enabled: false }); setOpen(false); }}>{t(key('stop'))}</Button>
+        : mask.status === 'enabled' ? <Button size="sm" variant="secondary" className="w-full"
         onClick={() => { mask.participate(); setFocusInput(true); setOpen(false); }}>{t(key('takeover'))}</Button>
         : mask.status === 'paused' || mask.status === 'waiting' && mask.settings.trigger === 'manual'
           ? <Button size="sm" variant="secondary" className="w-full" onClick={() => { mask.resume(); setOpen(false); }}>{t(key('resume'))}</Button> : null}
