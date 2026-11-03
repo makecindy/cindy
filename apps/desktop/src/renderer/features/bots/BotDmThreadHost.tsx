@@ -66,7 +66,8 @@ export function BotDmThreadHost({ enabled, bot, rootSessionId, mentions, childre
         return;
       }
       setOpen({ rootClientId, state: { kind: 'ready', sessionId: result.sessionId } });
-      handledLink.current = result.sessionId;
+      // The link effect marks the URL once navigation commits. Marking the new ID here
+      // would make the still-visible old URL look unhandled and reopen the previous topic.
       setSearchParams((params) => {
         const next = new URLSearchParams(params);
         next.set(BOT_DM_THREAD_PARAM, result.sessionId);
