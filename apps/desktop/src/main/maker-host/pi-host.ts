@@ -1464,11 +1464,11 @@ export function buildPiNativeProvidersFromConfigs(
         const explicitRouteApi = explicitRoute
           ? wireProtocolToPiApi(explicitRoute.wireProtocol)
           : undefined;
-        // resolvePiModelRoute already discards a saved endpoint whose protocol
-        // disagrees with an explicit api/piApi override. Do not let that stale
-        // route block the inherited Anthropic root or regain priority below.
-        const matchingModelRoute = m.route?.wireProtocol === explicitRoute?.wireProtocol
-          ? m.route : undefined;
+        // The HTTP bridge resolver discards a route whose protocol disagrees
+        // with an explicit api/piApi override. Native SDK APIs return no bridge
+        // route at all; their saved model endpoint remains authoritative.
+        const matchingModelRoute = m.route && (!explicitRoute ||
+          m.route.wireProtocol === explicitRoute.wireProtocol) ? m.route : undefined;
         // Bundled/official rows may lend capabilities, but never routing. Only an
         // explicit model route or a proven SDK path relationship may override baseUrl.
         // Google's public /v1beta/openai endpoint is one such relationship.

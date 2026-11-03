@@ -644,6 +644,24 @@ describe('buildPiNativeProvidersFromConfigs', () => {
     expect(providers[1].models[0]).not.toHaveProperty('baseUrl');
   });
 
+  // Tier 2: native SDK APIs have no HTTP-bridge route resolution, but their
+  // explicitly configured model endpoint still belongs in the Pi launch spec.
+  it('keeps an explicit model endpoint for a native SDK API', () => {
+    const { providers } = buildPiNativeProvidersFromConfigs([{
+      id: 'azure-routed', name: 'Azure Routed', auth: { method: 'none' },
+      runtimes: { pi: piRuntime({
+        baseUrl: 'https://primary.openai.azure.com/openai/v1', wireProtocol: 'openai-responses',
+        models: [{ id: 'azure-deployment', api: 'azure-openai-responses',
+          route: { baseUrl: 'https://secondary.openai.azure.com/openai/v1', wireProtocol: 'openai-responses' } }],
+      }) },
+    }], () => null);
+
+    expect(providers[0].models[0]).toMatchObject({
+      id: 'azure-deployment', api: 'azure-openai-responses',
+      baseUrl: 'https://secondary.openai.azure.com/openai/v1',
+    });
+  });
+
   // Tier 2: the actual launch builder must carry a user's V6 selection, including
   // protocol limits, instead of reverting to the connection's Messages default.
   it.each(['anthropic-messages', 'openai-completions', 'openai-responses'] as const)(
