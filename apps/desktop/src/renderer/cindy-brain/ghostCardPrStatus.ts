@@ -62,9 +62,12 @@ export function prStatusItems(status: Extract<PrStatusResult, { ok: true }>, t: 
   });
 }
 
+/** 状态位被宿主内容替换前的原始子节点:之后查不到状态时据此恢复插件的兜底内容。 */
+const slotFallbacks = new WeakMap<HTMLElement, Node[]>();
+
 /**
  * 用宿主的 PR 状态替换卡片文档里的状态位。查不到状态(或状态失败、一项都没有)时保留插件的
- * 兜底内容;同一份文档可反复调用(状态刷新时重填)。
+ * 兜底内容——已经换成宿主内容的状态位会恢复成它;同一份文档可反复调用(状态刷新时重填)。
  */
 export function fillGhostCardPrStatus(
   doc: Document,
@@ -74,9 +77,16 @@ export function fillGhostCardPrStatus(
   for (const slot of Array.from(doc.querySelectorAll<HTMLElement>(SLOT_SELECTOR))) {
     const key = prStatusSlotKey(slot.getAttribute('data-ghost-pr-status') ?? '');
     const status = key ? lookup(key) : undefined;
-    if (!status?.ok) continue;
-    const items = prStatusItems(status, t);
-    if (!items.length) continue;
+    const items = status?.ok ? prStatusItems(status, t) : [];
+    if (!items.length) {
+      const original = slotFallbacks.get(slot);
+      if (original) {
+        slot.replaceChildren(...original);
+        slotFallbacks.delete(slot);
+      }
+      continue;
+    }
+    if (!slotFallbacks.has(slot)) slotFallbacks.set(slot, Array.from(slot.childNodes));
     const row = doc.createElement('div');
     row.style.cssText = 'display:flex;flex-wrap:wrap;align-items:center;gap:6px 14px;color:var(--text-secondary)';
     for (const item of items) {

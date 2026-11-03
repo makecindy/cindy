@@ -43,6 +43,19 @@ describe('fillGhostCardPrStatus', () => {
     expect(slot.querySelectorAll('svg')).toHaveLength(3);
   });
 
+  it('puts the plugin snapshot back when the live status later disappears', () => {
+    const slot = card();
+    fillGhostCardPrStatus(document, () => status(), t);
+    expect(slot.textContent).not.toBe('snapshot');
+    fillGhostCardPrStatus(document, () => ({ ok: false, owner: 'octo', repo: 'repo', prNumber: 9, reason: 'not-found' }), t);
+    expect(slot.textContent).toBe('snapshot');
+    // It can be filled again afterwards, and restores again.
+    fillGhostCardPrStatus(document, () => status(), t);
+    expect(slot.textContent).not.toBe('snapshot');
+    fillGhostCardPrStatus(document, () => undefined, t);
+    expect(slot.textContent).toBe('snapshot');
+  });
+
   it('fills every declared slot from its own PR, not only the first one', () => {
     document.body.innerHTML = '<div data-ghost-pr-status="Octo/Repo#9"><div>one</div></div><div data-ghost-pr-status="Octo/Repo#10"><div>two</div></div>';
     const [first, second] = Array.from(document.querySelectorAll('div[data-ghost-pr-status]'));
