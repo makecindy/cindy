@@ -63,8 +63,9 @@ const BUTTON_ROLES = new Set(['AXButton', 'AXLink', 'AXMenuButton', 'AXDisclosur
 /** A password or a one-time code is a sign-in on its own; an account or an email only when the page says it is one. */
 const SIGN_IN_SECRETS = new Set<InputHandoffContentType>(['password', 'one-time-code']);
 const SIGN_IN_ACCOUNTS = new Set<InputHandoffContentType>(['username', 'email']);
-const LOGIN_WORDS = /(sign ?in|log ?in|log ?on|登录|登入|登陆)/i;
-const LOGIN_ADDRESS = /(login|log-in|signin|sign-in|sso|auth|passport|accounts?\.)/i;
+// Whole words only: "Design inspiration" must not read as "sign in", nor "/authors" as an auth page.
+const LOGIN_WORDS = /\b(?:sign ?in|log ?in|log ?on)\b|登录|登入|登陆/i;
+const LOGIN_ADDRESS = /(?:^|[./_-])(?:login|log-in|signin|sign-in|sso|auth|oauth\d*|passport|accounts?)(?=$|[./_-])/i;
 const PRIMARY_LABEL =
   /^(next|continue|sign ?in|log ?in|login|submit|confirm|allow|authori[sz]e|accept|approve|ok|done|verify|send|proceed|下一步|继续|登录|登入|提交|确认|确定|允许|授权|同意|验证|完成|发送|进入)\b/i;
 

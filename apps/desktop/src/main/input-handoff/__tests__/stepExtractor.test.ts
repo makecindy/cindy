@@ -51,6 +51,20 @@ describe('extractStep', () => {
       }
     });
 
+    it('reads login words and addresses as whole words, not pieces of other words', () => {
+      const heading = (title: string) => [node('0.0', 'AXHeading', { title })];
+      for (const text of ['Design inspiration', 'Catalog information', 'Plugin settings']) {
+        expect(extractStep(page('https://shop.example.com/pay', [field('Email')], heading(text))).signIn).toBeUndefined();
+      }
+      for (const url of ['https://shop.example.com/authors/jane', 'https://shop.example.com/authorize-card', 'https://shop.example.com/accountability']) {
+        expect(extractStep(page(url, [field('Email')])).signIn).toBeUndefined();
+      }
+      for (const url of ['https://login.example.com/', 'https://accounts.example.com/x', 'https://example.com/oauth2/start', 'https://example.com/user/sign-in']) {
+        expect(extractStep(page(url, [field('Email')])).signIn).toBe(true);
+      }
+      expect(extractStep(page('https://shop.example.com/pay', [field('Email')], heading('请先登录'))).signIn).toBe(true);
+    });
+
     it('keeps a browser page whose address is unknown as an ordinary form', () => {
       const noAddress = snapshot([node('0', 'AXWebArea', { frame: [0, 60, 1200, 840] }), field('Password', { secure: true })]);
       expect(extractStep(noAddress).signIn).toBeUndefined();
