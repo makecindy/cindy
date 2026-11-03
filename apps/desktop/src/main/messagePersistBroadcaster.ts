@@ -236,10 +236,11 @@ function queueSamplingSettlement(entry: PendingSamplingSettlement): void {
 }
 
 /** Replay only the active owner's durable intents, including after process restart. */
-export async function flushAssistantSamplingMetadata(sessionId: string): Promise<void> {
+export async function flushAssistantSamplingMetadata(sessionId: string): Promise<boolean> {
   await drainPersistQueue();
   for (const entry of assistantSamplingSettlements.list(sessionId)) queueSamplingSettlement(entry);
   await drainPersistQueue();
+  return assistantSamplingSettlements.list(sessionId).length === 0;
 }
 
 /** Release only SDK-proven accepted items (or the remaining items at a terminal boundary). */
@@ -477,7 +478,19 @@ type OwnerScope = ReturnType<typeof broadcastTap.captureDataOwnerBroadcastScope>
 const dbAgentKindBySession = new Map<string, 'cc' | 'codex' | 'pi'>();
 
 export function noteSessionAgentKind(sessionId: string, dbAgentKind: 'cc' | 'codex' | 'pi'): void {
-  if (dbAgentKindBySession.get(sessionId) !== dbAgentKind || !samplingRuntimeIds.has(sessionId)) samplingRuntimeIds.set(sessionId, createId());
+  // Called once per newly bound Session instance; beginBinding filters repeat wiring.
+  // A replacement can have the same business id AND agent kind, but owns no old items.
+  if (dbAgentKindBySession.get(sessionId) === 'codex' || dbAgentKind === 'codex') {
+    flushAssistantBlock(sessionId); // Preserve old buffered prose with its old pending epoch.
+    assistantItemPersistIds.delete(sessionId);
+    pendingSamplingItems.delete(sessionId);
+    lastBoundaryFlushedAssistantBySession.delete(sessionId);
+    sealedAssistantLateFinalBySession.delete(sessionId);
+    lastPersistedMsgBySession.delete(sessionId);
+    lastAssistantPersistIdBySession.delete(sessionId);
+    lastTopLevelAssistantPersistIdBySession.delete(sessionId);
+  }
+  samplingRuntimeIds.set(sessionId, createId());
   dbAgentKindBySession.set(sessionId, dbAgentKind);
 }
 

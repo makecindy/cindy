@@ -377,7 +377,7 @@ export function createCompanionCloudHost(input: {
   // owner's persisted demotion, even before its Chat Server instance has started.
   companionHomes.bindOwner(activeOwnerScopeKey, () => companionShadowStore().read());
   const samplingRows = async (sessionId: string, read: () => Promise<CompanionMirrorRow[]>) => {
-    await flushAssistantSamplingMetadata(sessionId);
+    if (!await flushAssistantSamplingMetadata(sessionId)) throw new Error('COMPANION_STILL_CHANGING');
     const samplingRuntimeId = getAssistantSamplingRuntimeId(sessionId);
     const rows = await read();
     if (getAssistantSamplingRuntimeId(sessionId) !== samplingRuntimeId) throw new Error('COMPANION_STILL_CHANGING');

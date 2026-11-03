@@ -984,6 +984,49 @@ describe('Bot canonical Session lifecycle', () => {
     }));
   });
 
+  // A durable accepted outcome must fence mirror cursors while its DB replay still fails.
+  it.each([false, true])('blocks mirror progress until durable settlement replay succeeds (existing cursor=%s)', async existingCursor => {
+    const created = await invoke('local-db:bots:create-canonical-session', {
+      botId: 'bot-1', expectedCanonicalSessionId: null, expectedProfileVersion: 1,
+    });
+    const sessionId = created.session.id;
+    await createMessage(sessionId, { clientId: 'accepted-retry', role: 'assistant', content: 'Accepted answer', createdAt: 1000,
+      agentMeta: { samplingAttemptPending: { runtimeId: 'retired' } } });
+    await createMessage(sessionId, { clientId: 'later-input', role: 'user', content: 'Later input', createdAt: 20 * 60_000 });
+    const { assistantSamplingSettlements } = await import('../../../assistantSamplingSettlement.js');
+    assistantSamplingSettlements.put({ sessionId, persistId: 'accepted-retry', patch: { samplingAttemptPending: false } });
+    clearSessionPersistState(sessionId);
+    const messageApi = await import('../messages.js');
+    const patch = vi.spyOn(messageApi, 'patchMessageAgentMetaWithResult').mockRejectedValue(new Error('transient SQLite failure'));
+    const { createCompanionMirror } = await import('../../../companion-cloud/mirror.js');
+    const { memoryState, fakeApi } = await import('../../../companion-cloud/__tests__/fakes.js');
+    const { state } = memoryState();
+    state.update('bot-1', 'actor', entry => {
+      entry.roomId = 'room';
+      if (existingCursor) entry.mirror = { sessionId, createdAt: 0, id: '' };
+    });
+    const { api, calls } = fakeApi(() => ({ messages: [] }));
+    const host = createCompanionCloudHost({ deliverToCanonical: async () => ({ ok: true }),
+      ensureCanonicalSession: async () => sessionId, rebuildContext: async () => 'rebuilt', listDevices: async () => [],
+    });
+    const mirror = createCompanionMirror({ api, state, humanActorId: () => 'human', canonicalSession: async () => sessionId,
+      rowsAfter: host.rowsAfter, latestRows: host.latestRows });
+    const before = structuredClone(state.bot('bot-1'));
+    try {
+      await expect(mirror.syncBot('bot-1', 'actor', 'Bot', { drain: true })).rejects.toThrow('COMPANION_STILL_CHANGING');
+      expect(state.bot('bot-1')).toEqual(before);
+      expect(calls).toEqual([]);
+      expect(assistantSamplingSettlements.list(sessionId)).toHaveLength(1);
+    } finally { patch.mockRestore(); }
+    await mirror.syncBot('bot-1', 'actor', 'Bot', { drain: true });
+    await mirror.syncBot('bot-1', 'actor', 'Bot', { drain: true });
+    const imported = calls.filter(call => call.route.endsWith('/import')).flatMap(call =>
+      (call.data as { messages: Array<{ content: Array<{ text?: string }> }> }).messages);
+    expect(imported.filter(message => message.content.some(part => part.text === 'Accepted answer'))).toHaveLength(1);
+    expect(assistantSamplingSettlements.list(sessionId)).toEqual([]);
+    expect(state.bot('bot-1')?.mirror?.createdAt).toBe(20 * 60_000);
+  });
+
   // #7095: the default companion seeded on a fresh computer is demoted mid-meeting; the take-over then
   // writes the cloud profile onto that copy.
   describe('cloud take-over of a copy whose first meeting never finished', () => {

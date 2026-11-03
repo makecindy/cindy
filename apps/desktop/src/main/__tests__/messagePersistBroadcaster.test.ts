@@ -33,6 +33,37 @@ import { readTaskResultsForReply } from '../botTaskReplyResults.js';
  */
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { createSessionBindingLifecycle } from '../maker-ipc/sessionBindingLifecycle.js';
+
+it.each([false, true])('retires old native items on same-kind instance replacement (buffered=%s)', async buffered => {
+  const sessionId = `sampling-replacement-${buffered}`;
+  clearSessionPersistState(sessionId);
+  const bindings = createSessionBindingLifecycle({
+    log: { warn: vi.fn() }, restoreInteractionListener: vi.fn(), beforeReplace: vi.fn(),
+    onBind: () => noteSessionAgentKind(sessionId, 'codex'), broadcastStatus: vi.fn(),
+    captureCloseContext: () => null, cleanupClosedSession: vi.fn(), beforeCloseTeardown: vi.fn(), finalizeClosedSession: vi.fn(),
+  });
+  const session = () => ({ id: sessionId, onStatusChange: vi.fn(() => () => {}), setInteractionListener: vi.fn() });
+  const first = session();
+  bindings.beginBinding(first);
+  const oldEpoch = getAssistantSamplingRuntimeId(sessionId);
+  const oldId = onAssistantTextEvent(sessionId, { agentMessageId: 'reused-item', text: 'retained prose', isFinal: !buffered }, null);
+  expect(bindings.beginBinding(first)).toBeNull();
+  expect(getAssistantSamplingRuntimeId(sessionId)).toBe(oldEpoch);
+  bindings.beginBinding(session());
+  const newEpoch = getAssistantSamplingRuntimeId(sessionId);
+  expect(newEpoch).not.toBe(oldEpoch);
+  // Even identical replayed prose/item IDs belong to the new native runtime.
+  const newId = onAssistantTextEvent(sessionId, { agentMessageId: 'reused-item', text: 'retained prose', isFinal: true }, null);
+  expect(newId).not.toBe(oldId);
+  onAssistantSamplingAccepted(sessionId);
+  await drainPersistQueue();
+  expect(createMessage).toHaveBeenCalledWith(sessionId, expect.objectContaining({ clientId: oldId,
+    agentMeta: expect.objectContaining({ samplingAttemptPending: { runtimeId: oldEpoch } }) }), expect.anything());
+  expect(patchMessageAgentMetaWithResult).not.toHaveBeenCalledWith(sessionId, oldId, expect.anything());
+  expect(patchMessageAgentMetaWithResult).toHaveBeenCalledWith(sessionId, newId, { samplingAttemptPending: false });
+  clearSessionPersistState(sessionId);
+});
 
 // #6351: a completed text item can still belong to a failed sampling request.
 // The observable contract is durable metadata plus the existing row broadcast;
@@ -135,10 +166,13 @@ it.each(['accepted', 'failed'])('retries a rejected %s metadata patch and retire
   await drainPersistQueue();
   // Close before any mirror read: the durable intent must outlive runtime cleanup.
   clearSessionPersistState(sessionId);
-  await flushAssistantSamplingMetadata(sessionId);
+  vi.mocked(patchMessageAgentMetaWithResult).mockRejectedValueOnce(new Error('still unavailable after restart'));
+  expect(await flushAssistantSamplingMetadata(sessionId)).toBe(false);
+  expect(await flushAssistantSamplingMetadata(`${sessionId}-unrelated`)).toBe(true);
+  expect(await flushAssistantSamplingMetadata(sessionId)).toBe(true);
   expect(patchMessageAgentMetaWithResult).toHaveBeenLastCalledWith(sessionId, persistId, expect.objectContaining({ samplingAttemptPending: false }));
   const patches = vi.mocked(patchMessageAgentMetaWithResult).mock.calls.filter(([id]) => id === sessionId);
-  expect(patches).toHaveLength(2);
+  expect(patches).toHaveLength(3);
   if (outcome === 'failed') expect(patches[1]![2]).toHaveProperty('failedSamplingAttempt');
   clearSessionPersistState(sessionId);
   expect(getAssistantSamplingRuntimeId(sessionId)).toBeNull();
