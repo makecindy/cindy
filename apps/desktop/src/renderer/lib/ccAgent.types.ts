@@ -17,7 +17,11 @@ import type { ToolLoopErrorDetails } from '@cindy/maker-core';
 
 export type SessionStatus = 'active' | 'archived' | 'deleted';
 export type WorkspaceKind = 'project' | 'dialogue';
-export type DeviceLinkConnectionStatus = 'connected' | 'disconnected';
+/**
+ * 远端设备在本窗口侧栏里的连接态。`connecting` = 还没拿到权威快照(冷启动的缓存种入、
+ * relay 瞬时重连):画成「检测中」而不是离线,但写操作与 `disconnected` 一样被挡住。
+ */
+export type DeviceLinkConnectionStatus = 'connected' | 'connecting' | 'disconnected';
 
 /**
  * 当前 session 接的是哪个 agent。决定 message.agentMeta 的 JSON 形态。

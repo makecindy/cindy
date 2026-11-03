@@ -1072,6 +1072,42 @@ describe('Chat Server result delivery and refresh', () => {
     expect(fixture.handle.mock.calls.filter(([route]) => route.startsWith('/conversations')).every(([, method]) => method === 'GET')).toBe(true);
     expect(fixture.download).not.toHaveBeenCalled();
   });
+  // #8433 review: raw author.name loses the group nickname/owner and actor ID.
+  // Production HTTP adapter + reader, unit; existing tests had one human name only.
+  it.each(['same-name', 'nickname', 'missing-member'] as const)(
+    'keeps distinguishable group author identities (%s)', async mode => {
+    fixture.profiles = [{ id: 'local-bot', displayName: 'Bot', avatar: null, status: 'active' }];
+    const otherBotId = '20000000-0000-4000-8000-000000000002';
+    const otherOwnerId = '30000000-0000-4000-8000-000000000002';
+    const firstId = '70000000-0000-4000-8000-000000000003';
+    const members = [
+      { id: selfId, kind: 'human', state: 'joined', name: 'Alice' },
+      { id: otherOwnerId, kind: 'human', state: 'joined', name: 'Bob' },
+      { id: botId, kind: 'bot', state: 'joined', name: mode === 'nickname' ? 'Group Cindy' : 'Cindy', ownerActorId: selfId },
+      ...(mode === 'missing-member' ? [] : [{ id: otherBotId, kind: 'bot', state: 'joined', name: 'Cindy', ownerActorId: otherOwnerId }]),
+    ];
+    const base = { deleted: false, createdAt: '2026-11-03T00:00:00Z', threadRootId: null,
+      author: { name: 'Cindy', kind: 'bot' }, content: [{ type: 'text', text: 'a decision' }] };
+    fixture.handle.mockImplementation(route => {
+      if (route.endsWith('/snapshot')) return { body: { room: room(roomId), members } };
+      if (route.endsWith('/members')) return { body: members };
+      if (route.includes('/messages?all=true')) return { body: [
+        { ...base, id: firstId, seq: '41', authorId: botId },
+        { ...base, id: 'other-message', seq: '42', authorId: otherBotId },
+        { ...base, id: 'quoting-message', seq: '43', authorId: selfId, author: { name: 'Alice', kind: 'human' },
+          content: [buildBotGroupQuoteCard({ messageId: firstId, authorName: 'Cindy', authorKind: 'bot',
+            excerpt: 'a decision', attachmentCount: 0, attachmentName: null, sequence: 41 })] },
+      ] };
+      return response(route);
+    });
+    const page = await service.teammateHistory!({ botId: 'local-bot', groupId: roomId });
+    const firstName = mode === 'nickname' ? 'Group Cindy (Alice)' : 'Cindy (Alice)';
+    expect(page.messages?.find(message => message.id === firstId)).toMatchObject({ author: firstName, authorId: botId });
+    expect(page.messages?.find(message => message.id === 'other-message')).toMatchObject({
+      author: mode === 'missing-member' ? 'Cindy' : 'Cindy (Bob)', authorId: otherBotId });
+    expect(page.messages?.find(message => message.id === 'quoting-message')).toMatchObject({
+      quote: { from: firstName, authorId: botId } });
+  });
   // #8433 review / message-source.md, unit: production HTTP adapter + reader.
   // A deleted original's old share fallback must not survive in history/search;
   // the execution-context tests did not exercise this separate history route.

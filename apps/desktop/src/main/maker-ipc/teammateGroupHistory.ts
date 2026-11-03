@@ -1,3 +1,4 @@
+import { chatGroupMemberName } from '@cindy/maker-shared/botGroupPresentation';
 import { readBotGroupThreadShareCard, readBotGroupQuoteCard, readBotGroupQuote,
   botGroupQuoteExcerpt, botGroupQuoteAttachmentName, type BotGroupMessageView } from '../../shared/botGroupChat.js';
 
@@ -10,14 +11,16 @@ export interface TeammateGroupHistoryQuery {
   limit?: number;
 }
 interface Room { id: string; name: string; kind?: string; state: string }
+interface Member { id: string; kind: string; state: string; name?: string; ownerActorId?: string; ownerName?: string }
 interface Message {
+  authorId?: string;
   id: string; seq: string; deleted: boolean; createdAt: string; threadRootId: string | null;
   author: { name: string; kind: string };
   maskAttribution?: BotGroupMessageView['maskAttribution'];
   content: Array<{ type: string; text?: string; fallback?: string; caption?: string }>;
 }
 type HistoryQuote = { messageId: string; deleted: true } | {
-  messageId: string; from: string; text: string; attachmentCount: number;
+  messageId: string; authorId?: string; from: string; text: string; attachmentCount: number;
   attachmentName: string | null; snapshot?: true;
 };
 // Match the execution context: recognized references never contribute their fallback
@@ -25,7 +28,7 @@ type HistoryQuote = { messageId: string; deleted: true } | {
 const historyText = (message: Message) => readBotGroupThreadShareCard(message) ? ''
   : message.content.filter(block => block.type !== 'media' && !readBotGroupQuoteCard(block))
     .map(block => block.text ?? block.fallback ?? '').join('\n');
-function historyQuote(message: Message, known: ReadonlyMap<string, Message>): HistoryQuote | undefined {
+function historyQuote(message: Message, known: ReadonlyMap<string, Message>, authorName: (message: Message) => string): HistoryQuote | undefined {
   const quote = readBotGroupQuote(message.content);
   if (!quote) return;
   const candidate = known.get(quote.messageId);
@@ -34,12 +37,12 @@ function historyQuote(message: Message, known: ReadonlyMap<string, Message>): Hi
   if (!original) return { messageId: quote.messageId, from: quote.authorName, text: quote.excerpt,
     attachmentCount: quote.attachmentCount, attachmentName: quote.attachmentName, snapshot: true };
   const files = original.content.filter(block => block.type === 'media').map(block => ({ name: block.caption ?? '' }));
-  return { messageId: quote.messageId, from: original.author.name, text: botGroupQuoteExcerpt(historyText(original)),
+  return { messageId: quote.messageId, ...(original.authorId ? { authorId: original.authorId } : {}), from: authorName(original), text: botGroupQuoteExcerpt(historyText(original)),
     attachmentCount: files.length, attachmentName: botGroupQuoteAttachmentName(files) };
 }
 export interface TeammateGroupHistoryResult {
   groups?: Array<{ id: string; name: string }>;
-  messages?: Array<{ id: string; sequence: string; author: string; authorKind: string; createdAt: string; threadRootId: string | null; text: string; attachments: string[]; maskAttribution?: BotGroupMessageView['maskAttribution']; sharedReplyId?: string; quote?: HistoryQuote }>;
+  messages?: Array<{ id: string; sequence: string; author: string; authorId?: string; authorKind: string; createdAt: string; threadRootId: string | null; text: string; attachments: string[]; maskAttribution?: BotGroupMessageView['maskAttribution']; sharedReplyId?: string; quote?: HistoryQuote }>;
   nextCursor: string | null;
   hasMore: boolean;
 }
@@ -64,7 +67,7 @@ export function createTeammateGroupHistoryReader(deps: {
       deps.assertCurrent();
       if (!members.some(member => member.id === actorId && member.kind === 'bot' && member.state === 'joined')) throw new Error('PERMISSION_DENIED');
     };
-    const snapshot = await deps.api<{ room: { kind?: string }; messages?: Message[]; members: Array<{ id: string; kind: string; state: string }> }>(`/conversations/${roomId}/snapshot`, actorId);
+    const snapshot = await deps.api<{ room: { kind?: string }; messages?: Message[]; members: Member[] }>(`/conversations/${roomId}/snapshot`, actorId);
     deps.assertCurrent();
     if (snapshot.room.kind !== 'group' || !snapshot.members.some(member => member.id === actorId && member.kind === 'bot' && member.state === 'joined')) throw new Error('PERMISSION_DENIED');
     const page = await deps.api<Message[]>(`/conversations/${roomId}/messages?all=true&limit=${limit}${input.before ? `&before=${encodeURIComponent(input.before)}` : ''}`, actorId);
@@ -72,6 +75,14 @@ export function createTeammateGroupHistoryReader(deps: {
     // Only this authorized request's reads inform reference state. No cross-page
     // cache or extra fetches; the later page takes precedence over the snapshot.
     const known = new Map([...(snapshot.messages ?? []), ...page].map(message => [message.id, message]));
+    const members = snapshot.members.map(member => ({ ...member, name: member.name ?? '' }));
+    // Same room-scoped label as Desktop/Mobile; actor IDs remain the identity
+    // even when historical actors are missing from the current member snapshot.
+    const authorName = (message: Message) => {
+      const member = members.find(candidate => candidate.id === message.authorId && candidate.name);
+      return member ? chatGroupMemberName(member, members) : message.author.name;
+    };
+
     const ordered = [...page].sort((a, b) => BigInt(a.seq) > BigInt(b.seq) ? -1 : BigInt(a.seq) < BigInt(b.seq) ? 1 : 0);
     const messages: NonNullable<TeammateGroupHistoryResult['messages']> = [];
     const query = input.query?.toLocaleLowerCase();
@@ -82,10 +93,10 @@ export function createTeammateGroupHistoryReader(deps: {
       // As in the execution context, a share is a reference: its fallback may
       // outlive edits/deletion of the original and is never authoritative text.
       const text = historyText(message);
-      const quote = historyQuote(message, known);
+      const quote = historyQuote(message, known, authorName);
       const searchable = [text, quote && !('deleted' in quote) ? quote.text : ''].join('\n');
       if (!message.deleted && (!query || searchable.toLocaleLowerCase().includes(query))) {
-        const record = { id: message.id, sequence: message.seq, author: message.author.name, authorKind: message.author.kind,
+        const record = { id: message.id, sequence: message.seq, author: authorName(message), ...(message.authorId ? { authorId: message.authorId } : {}), authorKind: message.author.kind,
           createdAt: message.createdAt, threadRootId: message.threadRootId, text,
           ...(shared ? { sharedReplyId: shared.messageId } : {}),
           ...(quote ? { quote } : {}),

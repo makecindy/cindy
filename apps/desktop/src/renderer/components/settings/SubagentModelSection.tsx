@@ -177,6 +177,7 @@ export function SubagentModelSection() {
           <div className="flex min-w-0 flex-1 items-center gap-2">
             <div className="min-w-0 flex-1">
               <ModelSelector
+                localOnlyReason="subagent-in-parent-task"
                 modelId={settings.claudeCode ?? ''}
                 effort=""
                 onModelChange={(modelId) => {

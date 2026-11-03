@@ -253,6 +253,7 @@ import { setDataOwnerGeneration } from '@/contexts/dataOwnerGeneration';
 import { providerShareFavoriteSource, reconcileProviderShareFavorites } from '@/state/providerShareFavorites';
 import { toast } from '@/lib/toast';
 import { setModelEngineOverride } from '@/state/modelEnginePrefs';
+import { sshModel, sshNativeCodexProvider } from '@/features/cc-agent/__tests__/sshModelFixtures';
 
 const onProviderChange = vi.fn();
 
@@ -714,6 +715,91 @@ describe('远程 OAuth 模型的逐行 Harness 准入', () => {
   });
 });
 
+// #8413: an SSH Codex draft used to replace the whole picker catalog with the host's
+// Codex list, so Claude Code and Pi rows vanished and the draft could not leave Codex.
+describe('SSH 项目 · 远端 Codex 只替换 Codex 行', () => {
+  const piProvider = {
+    id: 'deepseek', name: 'DeepSeek', source: 'builtin', agents: ['pi'], auth: { method: 'api-key' },
+    routing: { pi: {} }, connected: true,
+    models: { pi: [{ id: 'deepseek-v4', name: 'DeepSeek V4', group: 'deepseek', sortOrder: 5,
+      contextWindow: 128000, efforts: ['low', 'high'], defaultEffort: 'high' }] },
+  };
+  const localProviders = providersRef.providers;
+  beforeEach(() => { providersRef.providers = [...localProviders, piProvider]; });
+  afterEach(() => { providersRef.providers = localProviders; });
+  const remote = [sshNativeCodexProvider([sshModel('gpt-remote', { name: 'GPT Remote', supportsFastMode: true })])];
+  const renderSsh = (sshCodex: React.ComponentProps<typeof ModelSelectorContent>['sshCodex']) => {
+    const onUnifiedSelect = vi.fn();
+    renderPanel({
+      vendorKey: 'codex', modelId: 'gpt-remote', currentProviderId: 'openai',
+      unifiedAgents: ['claude-code', 'codex', 'pi'], sshCodex, onUnifiedSelect,
+      excludeSubscriptionDirect: true, excludeChatBridgedCodex: true,
+    });
+    return onUnifiedSelect;
+  };
+
+  it('Codex 草稿里仍能选 Claude Code 与 Pi，Codex 行只来自远端原生连接', async () => {
+    const onUnifiedSelect = renderSsh({ providers: remote, status: 'ready', refresh: vi.fn() });
+    // The controller's own Codex routes (OpenAI GPT-5.6, gateway GPT-5.5) are not offered;
+    // the Claude subscription stays excluded on SSH hosts as before (#7987).
+    const list = within(screen.getByRole('listbox'));
+    expect(list.queryByText('GPT-5.6')).toBeNull();
+    expect(list.queryByText('Opus 5')).toBeNull();
+    for (const [name, selection] of [
+      ['GPT-5.5', { engine: 'cc', providerId: 'xd', modelId: 'gpt-5.5' }],
+      ['DeepSeek V4', { engine: 'pi', providerId: 'deepseek', modelId: 'deepseek-v4' }],
+      ['GPT Remote', { engine: 'codex', providerId: 'openai', modelId: 'gpt-remote' }],
+    ] as const) {
+      await act(async () => { fireEvent.click(rowFor(name)); });
+      expect(onUnifiedSelect).toHaveBeenLastCalledWith(expect.objectContaining(selection));
+    }
+  });
+
+  // PR #8444: a mixed memory accessor exists but intentionally does not store Codex.
+  // Editing a non-selected Codex row must reach the draft, not disappear into a no-op.
+  it.each(['effort', 'fast'] as const)('未选中 Codex 行的 %s 配置应用到草稿', async (setting) => {
+    const onUnifiedSelect = vi.fn();
+    const setEffort = vi.fn();
+    const setFast = vi.fn();
+    renderPanel({
+      vendorKey: 'pi', modelId: 'deepseek-v4', currentProviderId: 'deepseek',
+      unifiedAgents: ['claude-code', 'codex', 'pi'],
+      sshCodex: { providers: remote, status: 'ready', refresh: vi.fn() }, onUnifiedSelect,
+      modelMemory: {
+        supportsAgent: agent => agent !== 'codex',
+        getEffort: () => undefined, getFast: () => undefined, setEffort, setFast,
+      },
+    });
+    const flyout = await openRowFlyout('GPT Remote');
+    await act(async () => {
+      if (setting === 'effort') fireEvent.keyDown(flyout.querySelector('[role="slider"]') as HTMLElement, { key: 'ArrowLeft' });
+      else fireEvent.click(flyout.querySelector('[data-fast-toggle]') as HTMLElement);
+    });
+    expect(onUnifiedSelect).toHaveBeenLastCalledWith(expect.objectContaining({
+      engine: 'codex', providerId: 'openai', modelId: 'gpt-remote',
+      ...(setting === 'effort' ? { effort: 'low' } : { fast: true }),
+    }));
+    expect(setEffort).not.toHaveBeenCalled();
+    expect(setFast).not.toHaveBeenCalled();
+  });
+
+  it.each(['loading', 'error'] as const)('远端 Codex 清单 %s 时其余引擎照常可选，提示只占一行', async (status) => {
+    const refresh = vi.fn();
+    const onUnifiedSelect = renderSsh({ providers: [], status, refresh });
+    expect(within(screen.getByRole('listbox')).queryByText('GPT Remote')).toBeNull();
+    if (status === 'loading') {
+      expect(screen.getByText('newChat.modelSelector.remoteLoading')).toBeTruthy();
+    } else {
+      await act(async () => {
+        fireEvent.click(screen.getByRole('button', { name: /newChat\.modelSelector\.retryRemoteModels/ }));
+      });
+      expect(refresh).toHaveBeenCalledTimes(1);
+    }
+    await act(async () => { fireEvent.click(rowFor('DeepSeek V4')); });
+    expect(onUnifiedSelect).toHaveBeenLastCalledWith(expect.objectContaining({ engine: 'pi' }));
+  });
+});
+
 describe('统一面板 · 会话内形态', () => {
   const onCrossEngineSelect = vi.fn();
   const sessionEngineFilter = {
@@ -797,7 +883,7 @@ describe('统一面板 · 会话内形态', () => {
     expect(within(screen.getByRole('listbox')).getByText('Opus 5')).toBeTruthy();
     expect(screen.queryByRole('button', { name: /^仅 / })).toBeNull();
     fireEvent.click(screen.getByRole('button', { name: 'Cindy AI' }));
-    rerender(React.createElement(ModelSelectorContent, { ...props, sessionEngineFilter }));
+    rerender(React.createElement(ModelSelectorContent, { remoteAgent: undefined, ...props, sessionEngineFilter }));
     expect(screen.getByRole('button', { name: '全部' }).getAttribute('aria-pressed')).toBe('true');
     expect(within(screen.getByRole('listbox')).getByText('Opus 5')).toBeTruthy();
   });
@@ -3176,6 +3262,7 @@ describe('统一面板 · 新会话选中直通', () => {
     const uid = addModelFavorite({ providerId: 'xd', modelId: 'gpt-5.5', agent: 'codex' });
     const { unmount } = render(
       React.createElement(ModelSelectorContent, {
+        remoteAgent: undefined,
         modelId: 'gpt-5.5',
         // 选中的收藏 = 草稿正在跑它的副本(2026-08-19 review P2 的完整配置校验):
         // 引擎对齐副本(vendorKey codex),深度对齐副本解析值(无显式档 → codex 目录默认 high)。
@@ -3197,6 +3284,7 @@ describe('统一面板 · 新会话选中直通', () => {
     // 锚点在当前 owner 的收藏里查无此条(删除 / 切账号)→ 不许两头落空。
     render(
       React.createElement(ModelSelectorContent, {
+        remoteAgent: undefined,
         modelId: 'gpt-5.5',
         effort: 'medium',
         onModelChange: vi.fn(),
@@ -3223,6 +3311,7 @@ describe('统一面板 · 新会话选中直通', () => {
     });
     render(
       React.createElement(ModelSelectorContent, {
+        remoteAgent: undefined,
         modelId: 'gpt-5.5',
         vendorKey: 'cc',
         effort: 'low',
@@ -4398,7 +4487,7 @@ describe('harness configuration keeps the model menu open', () => {
     }));
     function Picker() {
       const [pendingTarget, setPendingTarget] = React.useState<'claude-code' | undefined>();
-      return <ModelSelector
+      return <ModelSelector remoteAgent={undefined}
         modelId="gpt-5.5" effort="high" vendorKey="codex"
         currentProviderId="xd" onModelChange={vi.fn()} onEffortChange={vi.fn()}
         sessionEngineFilter={{
@@ -4454,7 +4543,7 @@ describe('外层 ModelSelector · 取消当前选中的收藏先应用默认配�
     const onSessionFavoriteAnchorChange = vi.fn();
     function Picker() {
       return (
-        <ModelSelector
+        <ModelSelector remoteAgent={undefined}
           modelId="gpt-5.5"
           effort="low"
           fastMode={false}

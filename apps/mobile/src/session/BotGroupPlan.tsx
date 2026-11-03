@@ -1,14 +1,4 @@
-/**
- * 群聊里的分工（docs/product-rules/bot-group-chat.md §7，对照桌面 BotGroupPlan.tsx）：
- * 负责人的安排卡、交接消息下的文件、时间线末尾的「下一步」「没做完」卡与「N 步都做完了」。
- *
- * 安排卡、下一步、没做完都用伙伴卡片的统一外壳（K1 / K9）：眉题写「分工」和进度，标题写要做的事，
- * 步骤一行一个（编号或状态、头像、名字 + 做什么），行间不画分隔线，底部是等宽的两个按钮
- * （CompanionCardButton，可见 38pt，hitSlop 补到 44pt）。只有群里未结束的那张卡能操作：待开始时
- * 点某一步换人或删掉；做完一步停下时，还没做或没做完的步骤仍可换人。
- *
- * 交接文件在电脑的工作目录里，手机不打开，点一下说明去电脑上看。
- */
+/** Group plan cards and handoffs follow docs/product-rules/bot-group-chat.md §7. */
 import type { ReactNode } from 'react';
 import { Alert, Animated as RNAnimated, Easing, Pressable, StyleSheet, View } from 'react-native';
 import { useEffect, useRef } from 'react';
@@ -78,7 +68,7 @@ function StepLead({ plan, step, index }: { plan: BotGroupPlanView; step: BotGrou
     <CircleCheck size={iconSize.md} color={colors.textSecondary} />
   </CompanionFadeIn>;
   // K7: running breathes in Heart Orange, the list's running language.
-  if (step.status === 'running') return <RunningDot />;
+  if (step.status === 'running' && plan.status !== 'stopped') return <RunningDot />;
   if (step.status === 'failed') return <CircleAlert size={iconSize.md} color={colors.errorText} />;
   return <CircleDashed size={iconSize.md} color={colors.textTertiary} />;
 }
@@ -89,13 +79,19 @@ const STEP_STATUS_KEYS: Partial<Record<BotGroupPlanStepView['status'], string>> 
   failed: 'groupChat.plan.stepFailed',
 };
 
+function stepStatusKey(plan: BotGroupPlanView, step: BotGroupPlanStepView) {
+  // A server stop ends the plan before the executor necessarily updates its step.
+  return plan.status === 'stopped' && step.status === 'running'
+    ? 'groupChat.plan.stopped' : STEP_STATUS_KEYS[step.status];
+}
+
 function StepRowContent({ plan, step, index, identity, deviceId, online, muted }: {
   plan: BotGroupPlanView; step: BotGroupPlanStepView; index: number; identity: BotGroupIdentity;
   deviceId: string; online: boolean; muted: boolean;
 }) {
   const { t } = useTranslation();
   const styles = useThemedStyles(makeStyles);
-  const statusKey = started(plan) ? STEP_STATUS_KEYS[step.status] : undefined;
+  const statusKey = started(plan) ? stepStatusKey(plan, step) : undefined;
   return <>
     <View style={styles.stepLead}><StepLead plan={plan} step={step} index={index} /></View>
     <View style={muted ? styles.muted : undefined}>
@@ -112,20 +108,16 @@ function StepRowContent({ plan, step, index, identity, deviceId, online, muted }
 function stepAccessibility(t: (key: string, options?: Record<string, unknown>) => string, plan: BotGroupPlanView,
   step: BotGroupPlanStepView, index: number, name: string): string {
   const status = started(plan)
-    ? t(STEP_STATUS_KEYS[step.status] ?? 'groupChat.plan.stepPending')
+    ? t(stepStatusKey(plan, step) ?? 'groupChat.plan.stepPending')
     : `${index + 1}`;
   return [status, name, step.task].filter(Boolean).join(', ');
 }
 
-/**
- * Body of the organizer's 安排卡 (the header is the usual Bot header plus the 负责人 tag).
- * `actionable` = the group's open plan, still waiting for 开始; `reassignable` = the open
- * plan stopped after a step (steps not done can change hands before 继续 / 重试).
- */
 export function BotGroupPlanCard({
-  plan, members, identityFor, deviceId, online, actionable, reassignable, pending, onStart, onDismiss, onEditStep,
+  plan, fallback, members, identityFor, deviceId, online, actionable, reassignable, pending, onStart, onDismiss, onEditStep,
 }: {
   plan: BotGroupPlanView | undefined;
+  fallback?: string;
   members: readonly BotGroupMemberView[];
   identityFor: BotGroupIdentityLookup;
   deviceId: string;
@@ -140,7 +132,10 @@ export function BotGroupPlanCard({
   const { t, i18n } = useTranslation();
   const styles = useThemedStyles(makeStyles);
   const { colors } = useTheme();
-  if (!plan) return <Text style={styles.note}>{t('groupChat.plan.missing')}</Text>;
+  if (!plan) return <View style={styles.card}>
+    {fallback ? <Text selectable style={styles.stepText}>{fallback}</Text> : null}
+    <Text style={styles.note}>{t('groupChat.plan.missing')}</Text>
+  </View>;
   const muted = plan.status === 'superseded' || plan.status === 'dismissed';
   const finalNote = plan.status === 'superseded' ? 'groupChat.plan.superseded'
     : plan.status === 'dismissed' ? 'groupChat.plan.dismissed'
@@ -154,7 +149,6 @@ export function BotGroupPlanCard({
     : plan.status === 'waiting' ? t('groupChat.plan.progressDone', { done, total: steps })
     : plan.status === 'done' ? t('groupChat.plan.allDone')
     : finalNote ? t(finalNote) : '';
-  // K9: one card — eyebrow with progress, the plan as its title, steps, then the decision.
   return <View testID="botGroup.plan" style={[styles.card, muted && styles.cardMuted]}>
     <View style={styles.eyebrow}>
       <ListChecks size={iconSize.sm} color={colors.textSecondary} />
@@ -193,7 +187,7 @@ export function BotGroupPlanCard({
             }],
           });
         }
-        return <BotGroupMenu key={step.position} title={t('groupChat.plan.stepMenuTitle')} sections={sections} disabled={busy}
+        return <BotGroupMenu key={`${plan.id}:${plan.revision ?? ''}:${step.position}`} title={t('groupChat.plan.stepMenuTitle')} sections={sections} disabled={busy}
           accessibilityLabel={label} testID={`botGroup.plan.stepMenu.${step.position}`}
           onSelect={(id) => {
             if (id === REMOVE_STEP_ID) onEditStep(step, 'remove');
@@ -262,10 +256,6 @@ export function BotGroupPlanEndDivider({ stepCount }: { stepCount: number | null
   </BotGroupDivider>;
 }
 
-/**
- * Under an open plan that stopped after a step (K9): the same card shell as every companion card —
- * what comes next (or what did not finish), then 「结束分工」 and the primary 「继续 / 重试」.
- */
 export function BotGroupPlanFollowUpRow({ followUp, identityFor, deviceId, online, pending, stepNumber, stepTotal, onContinue, onRetry, onEnd }: {
   followUp: BotGroupPlanFollowUp;
   identityFor: BotGroupIdentityLookup;

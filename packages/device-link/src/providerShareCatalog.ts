@@ -165,6 +165,7 @@ function accountIdentity(value: unknown): string | undefined {
  * 供应商组摘要(`group`，列着组内电脑)只给同账号电脑，这里也去掉；只留组里有几台(`groupSize`)、
  * 匿名状态(`groupStatus`)与受邀者自己的运行数(`guestRunning`)，不合理的值一并去掉；这台电脑上的总运行数(`runningTurns`)含分享者
  * 本人与其他人的任务，只给同账号电脑，这里去掉。
+ * 分享来的供应商组不按组所在电脑本机这一份是否登录判断能否选用，见函数内说明。
  * 分享者电脑、受邀者电脑与手机都各过一遍。
  */
 export function scrubSharedProvider<T>(provider: T): T {
@@ -181,6 +182,10 @@ export function scrubSharedProvider<T>(provider: T): T {
   delete fields[PROVIDER_SHARE_GROUP_STATUS_FIELD];
   delete fields[PROVIDER_SHARE_GUEST_RUNNING_FIELD];
   if (groupSize !== null) fields[PROVIDER_SHARE_GROUP_SIZE_FIELD] = groupSize;
+  // 分享来的供应商组由组所在电脑按组选电脑：它本机这一份没登录时不会被选中，任务照样分给组里其他电脑
+  // (provider-groups.md §6)。目录里的 connected 只是本机那一份，受邀者不能据此隐藏整个组；组里一台都
+  // 不能用时由分享者电脑在发送时回 REMOTE_AGENT_UNAVAILABLE。分享者电脑投影时还没有 groupSize，不受影响。
+  if (groupSize !== null && fields.connected === false) fields.connected = true;
   if (groupStatus !== null) fields[PROVIDER_SHARE_GROUP_STATUS_FIELD] = groupStatus;
   if (guestRunning !== null) fields[PROVIDER_SHARE_GUEST_RUNNING_FIELD] = guestRunning;
   const rest = stripNestedUrlSecrets(fields, 0) as Record<string, unknown>;
