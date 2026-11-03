@@ -204,7 +204,8 @@ function AccessPill({
       onClick={() => onToggle(!pressed)}
       className={cn(
         'inline-flex h-7 select-none items-center gap-1 whitespace-nowrap rounded-full border text-12 transition-colors duration-[var(--motion-fast,150ms)]',
-        'focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-[var(--focus-ring)]',
+        // 全局 *:focus-visible 去掉了 outline,焦点环与 Switch 一样用 ring。
+        'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background',
         'disabled:cursor-not-allowed disabled:opacity-40',
         pressed
           ? 'border-transparent bg-[var(--surface-chip)] pl-2.5 pr-3 text-[var(--text-primary)]'
