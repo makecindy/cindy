@@ -225,6 +225,7 @@ import {
   buildUserProvider,
   mergeDiscoveredRuntimeModels,
   findCatalogModel,
+  uniqueRenamedSessionModelId,
   storedCustomProviderId,
   isLocalOnlyProviderForAgent,
   isOrganizationManagedProvider,
@@ -247,6 +248,7 @@ import {
 import { and, asc, desc, eq, gte, inArray, isNull, like, lt, or, sql } from 'drizzle-orm';
 import { applyScheduledModelSelection, createScheduledModelScope, createScheduledModelSelectionResolver, writeScheduledModelBaselineIfProfileCurrent, ScheduledModelSelectionBusyError, type ScheduledModelSelection, type ScheduledModelSelectionLease } from './scheduledModelSelection';
 import { parseScheduledModelBaseline, type ScheduledModelBaseline } from '../../shared/scheduledModelBaseline';
+import { recoverRenamedSessionModelBeforeSend } from './renamedSessionModelRecovery';
 import { recordTurnModelChange, type TurnModelIdentity } from './turnModelChange';
 import { app, BrowserWindow, dialog, ipcMain, shell, type IpcMainInvokeEvent } from 'electron';
 import { accessChatDisplayCache } from './chatDisplayCache.js';
@@ -5306,14 +5308,14 @@ let applyPiImModelSelectionHolder: ((
   sessionId: string, model: string, providerId: string | null | undefined,
   previousRoute: { model: string; providerId: string | null } | null,
   options?: { refreshPiConfiguration?: boolean; source?: 'user' | 'agent' },
-) => Promise<{ status: 'applied' | 'deferred'; generation?: number; effectiveProviderId?: string | null }>) | null = null;
+) => Promise<{ status: 'applied' | 'deferred'; generation?: number; effectiveProviderId?: string | null; effectiveModelId?: string }>) | null = null;
 
 /** IM model cards already own the send lock; reuse Desktop's window-safe Pi transaction. */
 export async function applyPiImModelSelectionUnderLock(
   sessionId: string, model: string, providerId: string | null | undefined,
   previousRoute: { model: string; providerId: string | null } | null,
   options?: { refreshPiConfiguration?: boolean; source?: 'user' | 'agent' },
-): Promise<{ status: 'applied' | 'deferred'; generation?: number; effectiveProviderId?: string | null }> {
+): Promise<{ status: 'applied' | 'deferred'; generation?: number; effectiveProviderId?: string | null; effectiveModelId?: string }> {
   if (!applyPiImModelSelectionHolder) throw new Error('Pi model selection is not ready');
   return applyPiImModelSelectionHolder(sessionId, model, providerId, previousRoute, options);
 }
@@ -12137,6 +12139,9 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     if (override) await scheduledModelScope.begin(sessionId);
     else await scheduledModelScope.restore(sessionId);
   };
+  let recoverRenamedSessionModelOnSend: (sessionId: string) => Promise<void> = async () => {
+    throw new Error('session model recovery is not ready');
+  };
   pendingAgentSwitchApplyHolder = async (sessionId, signal, selection, beforeApply, scheduledModelOverride) => {
     await takeOverLocalAgentVisibleSession(sessionId);
     let stage = 'direct-send:acquire';
@@ -12169,6 +12174,10 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
           bootstrapAfterSwitch: true,
           signal,
         });
+      }
+      if (!deferPendingApply && !selection && !scheduledModelOverride && !signal?.aborted) {
+        stage = 'direct-send:recoverRenamedSessionModel';
+        await recoverRenamedSessionModelOnSend(sessionId);
       }
       // 预算对账的重放：回合中登记的预算重建意图可能被「重选当前模型」清掉，而预算
       // 变更通知只来一次 —— 不在这里补一次，活实例会一直按旧窗口跑（Greptile P1）。
@@ -16942,6 +16951,8 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     fastExplicit?: boolean;
     /** False only for Agent axis-only patches; model/provider routing stays untouched. */
     routeExplicit?: boolean;
+    /** A send-time ID rename must persist even without a user picker transaction. */
+    persistRenamedSessionModel?: boolean;
   };
   let applySessionRuntimeSelection: (
     sessionId: string,
@@ -16960,6 +16971,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     superseded: boolean;
     generation?: number;
     effectiveProviderId?: string | null;
+    effectiveModelId?: string;
     contextWindowConfirmationRequired?: number;
     contextTokensForConfirmation?: number;
   }> = async () => {
@@ -18809,6 +18821,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     applyPendingAgentSwitch: async (sessionId, options) => {
       if (!options?.scheduled) await scheduledModelScope.restore(sessionId);
       await applyPendingAgentSwitchIfIdle(agentSwitchDeps, sessionId);
+      if (!options?.scheduled) await recoverRenamedSessionModelOnSend(sessionId);
       // 桌面发送也是「消息真正发出去」的边界：回合中登记、随后被模型选择器取消的预算
       // 重建必须在这里补一次（调用方已持 send 锁）。
       await replayPendingSessionContextWindowBudgetUnderLock(sessionId);
@@ -23255,6 +23268,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     if (typeof sessionId !== 'string' || typeof model !== 'string') {
       throwIpcError('INVALID_PARAMS', 'sessionId + model required');
     }
+    const requestedModelId = model;
     const normalizedWireArgs =
       internalOptions.source === 'user'
         ? normalizeDeviceLinkSetModelWireArgs(
@@ -23342,6 +23356,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     // 后到的 SET_MODEL 才能写 route。否则切换 DB await 恢复后会用旧 provider
     // 覆盖用户刚选的新 route，形成 DB 与进程内路由分叉。
     const applyLocked = async () => {
+      let model = requestedModelId;
       await assertReviewSettingsUnlocked(sessionId, true);
       if (supersededByOwnerBoundary()) {
         return { deferred: false, superseded: true };
@@ -23474,6 +23489,15 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         allowSideEffects: false,
         catalog: getActiveCatalog(),
       });
+      // Existing sessions may retain the old bare ID after the same provider
+      // publishes it with a bridge namespace. Only migrate an unchanged route
+      // when that provider and engine expose exactly one matching replacement.
+      if (routeExplicit && model === runtimeStatus.model && currentProviderId &&
+          guardProviderId === currentProviderId && !sshCodexProviders) {
+        const sourceProvider = runtimeProviders.find(p => p.id === currentProviderId);
+        const replacement = uniqueRenamedSessionModelId(sourceProvider, model, currentAgentKind);
+        if (replacement) model = replacement;
+      }
       const currentSourceId = currentProviderId ?? actualSourceIdForModel(
         runtimeProviders, null, currentModelId, currentAgentKind,
       );
@@ -23680,6 +23704,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
           deferred: true,
           superseded: false,
           generation,
+          effectiveModelId: model,
           effectiveProviderId: effectiveProviderId === undefined
             ? currentProviderId : normalizeSessionProviderId(effectiveProviderId) ?? null,
         };
@@ -24572,6 +24597,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
           result.persistedRoute !== true &&
           (modelWindowRebuilt ||
             (runtimeAgentKind === 'pi' && (runtimeRouteChanged || piConfigurationRefresh)) ||
+            internalOptions.persistRenamedSessionModel === true ||
             (internalOptions.source === 'user' && (isDeviceLinkInvoke() || atomicSelection)))
         ) {
           // device-link 的通用持久化原本发生在 handler 返回、session 锁释放之后；
@@ -24789,6 +24815,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         // to dispatch and cannot be followed by a stale lock-free route write.
         return Object.assign(response, {
           generation,
+          effectiveModelId: model,
           effectiveProviderId: effectiveProviderId === undefined
             ? currentProviderId : normalizeSessionProviderId(effectiveProviderId) ?? null,
         });
@@ -24808,6 +24835,41 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       }
     };
     return internalOptions.sessionLockHeld ? applyLocked() : withSendToSessionLock(sessionId, applyLocked);
+  };
+  recoverRenamedSessionModelOnSend = async (sessionId) => {
+    if (agentSwitchPending.get(sessionId)) return;
+    const [row] = await getDbClient().drizzle.select({
+      status: sessions.status,
+      model: sessions.model,
+      providerId: sessions.providerId,
+      agentKind: sessions.agentKind,
+      remoteHostId: sessions.remoteHostId,
+      agentDeviceId: sessions.agentDeviceId,
+      effort: sessions.effort,
+      fastMode: sessions.fastMode,
+    }).from(sessions).where(eq(sessions.id, sessionId)).limit(1);
+    if (!row || row.status !== 'active' || !row.providerId ||
+        row.remoteHostId || row.agentDeviceId) return;
+    const providers = await getDesktopProviderService().listProviders({
+      allowSideEffects: false,
+      catalog: getActiveCatalog(),
+    });
+    const profiles = await readSessionRuntimeProfiles(sessionId);
+    await recoverRenamedSessionModelBeforeSend({
+      route: { ...row, agentKind: dbToMakerAgentKind(row.agentKind) },
+      effectiveRoute: profiles?.effective ?? null,
+      hasPendingSelection: !!agentSwitchPending.get(sessionId) || !!profiles?.pendingMutation,
+      providers,
+      apply: (model, providerId) => handleSetModel(
+        sessionId, model, providerId, undefined,
+        { effort: row.effort as SessionRuntimeProfile['effort'], fastMode: row.fastMode },
+        {
+          source: 'agent', sessionLockHeld: true, applyingUserSelectionOnSend: true,
+          persistRenamedSessionModel: true,
+          expectedGeneration: getSessionRuntimeControlSnapshot(sessionId).generation,
+        },
+      ),
+    });
   };
   applyPiModelSettingsRefresh = async (sessionId, model, providerId) => {
     const generation = getSessionRuntimeControlSnapshot(sessionId).generation;
@@ -24854,6 +24916,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       status: result.deferred ? 'deferred' : 'applied',
       generation: result.generation,
       effectiveProviderId: result.effectiveProviderId,
+      effectiveModelId: result.effectiveModelId,
     };
   };
   applySessionRuntimeSelection = (sessionId, model, providerId, selection, options) =>
