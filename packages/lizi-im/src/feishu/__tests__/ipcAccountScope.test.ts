@@ -196,6 +196,33 @@ describe("Feishu IPC account scope", () => {
     cancelAppRegistration();
   });
 
+  it("ignores a stale cancel from a superseded window", async () => {
+    vi.useFakeTimers();
+    mocks.requestRegistration.mockResolvedValue({
+      deviceCode: "device-code",
+      userCode: "user-code",
+      verificationUrl: "https://example.test",
+      interval: 60,
+      expiresIn: 60,
+    });
+    const begin = handlers.get("feishuBot:registration-begin");
+    const cancel = handlers.get("feishuBot:registration-cancel");
+    const first = (await begin?.({ service: "feishu" })) as { runId: number };
+    const second = (await begin?.({ service: "feishu" })) as { runId: number };
+    broadcasts.mockClear();
+
+    // 旧窗口只知道自己那一轮: 取消它不能作废当前轮次。
+    await cancel?.({ runId: first.runId });
+    const cancelled = () =>
+      broadcasts.mock.calls
+        .filter(([channel]) => channel === "feishuBot:registration-status")
+        .map(([, payload]) => (payload as { status: string }).status);
+    expect(cancelled()).not.toContain("cancelled");
+
+    await cancel?.({ runId: second.runId });
+    expect(cancelled()).toContain("cancelled");
+  });
+
   it("switches to Lark immediately when Feishu reports the tenant while pending", async () => {
     vi.useFakeTimers();
     mocks.requestRegistration.mockResolvedValue({

@@ -2520,8 +2520,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
       runId?: number;
       error?: string;
     }> => ipcRenderer.invoke('feishuBot:registration-begin', { service }),
-    registrationCancel: (): Promise<{ ok: true }> =>
-      ipcRenderer.invoke('feishuBot:registration-cancel'),
+    registrationCancel: (runId?: number): Promise<{ ok: true }> =>
+      ipcRenderer.invoke('feishuBot:registration-cancel', runId === undefined ? undefined : { runId }),
     onStatusChange: fanOutFeishuBotStatusChange,
     onConflict: fanOutFeishuBotConflict,
     onRegistrationStatus: fanOutFeishuBotRegistrationStatus,

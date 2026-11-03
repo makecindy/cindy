@@ -2328,7 +2328,7 @@ interface ElectronAPI {
     clear: () => Promise<{ ok: true }>;
     setLifecycleAnnouncement: (enabled: boolean) => Promise<{ ok: true }>;
     registrationBegin: (service: 'feishu' | 'lark') => Promise<FeishuBotRegistrationBeginResult>;
-    registrationCancel: () => Promise<{ ok: true }>;
+    registrationCancel: (runId?: number) => Promise<{ ok: true }>;
     onStatusChange: (
       callback: (update: {
         status: FeishuBotStatus;

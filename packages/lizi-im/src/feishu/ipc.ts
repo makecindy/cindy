@@ -179,8 +179,13 @@ export function registerFeishuIpc(): void {
     }
   });
 
-  handle("feishuBot:registration-cancel", async () => {
+  handle("feishuBot:registration-cancel", async (payload) => {
+    const p = payload as { runId?: unknown } | undefined;
     const cancelledRunId = S().registrationRunId;
+    // 旧窗口只能取消自己那一轮: 当前轮次已被别的窗口取代时不能误杀。
+    if (typeof p?.runId === "number" && p.runId !== cancelledRunId) {
+      return { ok: true };
+    }
     cancelAppRegistration();
     broadcast("feishuBot:registration-status", {
       status: "cancelled",

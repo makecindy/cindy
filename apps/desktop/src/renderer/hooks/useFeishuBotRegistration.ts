@@ -42,7 +42,8 @@ export type FeishuBotRegistrationPhase =
 /** 设置页与伙伴页共用同一套扫码 UI; 由调用方注入各自的 IPC 与轮次通道。 */
 export interface FeishuBotRegistrationTransport {
   begin: (service: 'feishu' | 'lark') => Promise<FeishuBotRegistrationBeginResult>;
-  cancel: () => Promise<unknown>;
+  /** 带上本窗口那一轮的 runId, 避免关窗时误杀别的窗口的新轮次。 */
+  cancel: (runId?: number) => Promise<unknown>;
   onStatus: (callback: (payload: FeishuBotRegistrationStatusPayload) => void) => () => void;
 }
 
@@ -67,7 +68,7 @@ export function useFeishuBotRegistration(
     () =>
       transport ?? {
         begin: (next) => window.electronAPI.feishuBot.registrationBegin(next),
-        cancel: () => window.electronAPI.feishuBot.registrationCancel(),
+        cancel: (runId) => window.electronAPI.feishuBot.registrationCancel(runId),
         onStatus: (callback) => window.electronAPI.feishuBot.onRegistrationStatus(callback),
       },
     [transport],
@@ -96,10 +97,14 @@ export function useFeishuBotRegistration(
 
   const invalidateRegistration = useCallback(() => {
     generationRef.current += 1;
-    mainRunIdRef.current = null;
-    if (activeRunRef.current === null) return;
+    if (activeRunRef.current === null) {
+      mainRunIdRef.current = null;
+      return;
+    }
     activeRunRef.current = null;
-    void resolvedTransport.cancel().catch((err: unknown) => {
+    const runId = mainRunIdRef.current;
+    mainRunIdRef.current = null;
+    void resolvedTransport.cancel(runId ?? undefined).catch((err: unknown) => {
       log.warn('registration cancel failed:', err);
     });
   }, [resolvedTransport]);
@@ -197,13 +202,14 @@ export function useFeishuBotRegistration(
         const retryGeneration = ++generationRef.current;
         token = retryGeneration;
         beginInFlightRef.current = retryGeneration;
+        const previousRunId = mainRunIdRef.current;
         activeRunRef.current = null;
         mainRunIdRef.current = null;
         setPhase('starting');
         setErrorMessage(null);
         setQrDataUrl(null);
         try {
-          await resolvedTransport.cancel();
+          await resolvedTransport.cancel(previousRunId ?? undefined);
         } catch (err) {
           log.warn('registration cancel failed:', err);
         }
@@ -269,7 +275,7 @@ export function useFeishuBotRegistration(
     setPhase('cancelled');
     setErrorMessage(null);
     try {
-      await resolvedTransport.cancel();
+      await resolvedTransport.cancel(mainRunIdRef.current ?? undefined);
     } catch (err) {
       if (generationRef.current !== runId) return;
       setPhase('error');

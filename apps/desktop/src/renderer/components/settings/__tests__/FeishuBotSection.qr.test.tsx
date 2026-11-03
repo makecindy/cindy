@@ -128,6 +128,8 @@ describe('Feishu bot authorization', () => {
     expect(api.registrationBegin).toHaveBeenCalledWith('lark');
     view!.unmount();
     expect(api.registrationCancel).toHaveBeenCalledOnce();
+    // 只取消自己这一轮, 不能误杀另一窗口的新轮次。
+    expect(api.registrationCancel).toHaveBeenCalledWith(7);
   });
 
   it('ignores a previous begin response after cancellation and a new attempt', async () => {
