@@ -7461,6 +7461,8 @@
         "grantsTitle": "설치 후 갖게 되는 권한:",
         "noPermissions": "이 플러그인은 추가 권한을 선언하지 않았습니다.",
         "addedTitle": "추가되거나 변경되는 권한:",
+        "pendingTitle": "확인이 필요한 권한",
+        "capabilityDescription": "플러그인이 아래 권한을 사용하려면 승인이 필요합니다.",
         "removedTitle": "더 이상 필요 없는 권한:",
         "addedBadge": "추가",
         "unchangedCount": "변경 없는 권한: {{count}}개",

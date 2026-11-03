@@ -7461,6 +7461,8 @@
         "grantsTitle": "インストール後に持つ権限:",
         "noPermissions": "このプラグインは追加の権限を宣言していません。",
         "addedTitle": "追加・変更される権限:",
+        "pendingTitle": "確認が必要な権限",
+        "capabilityDescription": "プラグインが以下の権限を使用するには、承認が必要です。",
         "removedTitle": "不要になる権限:",
         "addedBadge": "追加",
         "unchangedCount": "変更のない権限: {{count}} 件",

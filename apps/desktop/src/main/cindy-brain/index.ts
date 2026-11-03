@@ -9462,7 +9462,8 @@ export function registerGhostIpc(): void {
           const permissions = facts.kind === 'update' ? facts.added : facts.permissions;
           const interpolate = (key: string, args: Record<string, string> = {}) => Object.entries(args).reduce((value, [name, replacement]) => value.replaceAll(`{{${name}}}`, replacement), t(key));
           return showMobilePluginTaskPermission(id, pageId, {
-            title: t('settings.ghosts.installConsent.addedTitle'), message: '',
+            title: t('settings.ghosts.installConsent.pendingTitle'),
+            message: t('settings.ghosts.installConsent.capabilityDescription'),
             detail: permissions.map(item => [interpolate(`settings.ghosts.perm.${item.labelKey}`, item.labelArgs), item.detailKey ? interpolate(`settings.ghosts.perm.${item.detailKey}`, item.detailArgs) : item.detail].filter(Boolean).join('\n')).join('\n\n'),
             allow: t('settings.ghosts.connections.confirmAllow'), cancel: t('settings.ghosts.installConsent.cancel'),
           });

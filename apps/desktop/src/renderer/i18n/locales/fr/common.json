@@ -7571,6 +7571,8 @@
         "grantsTitle": "Après l'installation, il disposera de :",
         "noPermissions": "Ce plugin ne déclare aucune autorisation supplémentaire.",
         "addedTitle": "Autorisations nouvelles ou modifiées :",
+        "pendingTitle": "Autorisations à confirmer",
+        "capabilityDescription": "Ces autorisations nécessitent votre accord avant que le plugin puisse les utiliser.",
         "removedTitle": "Plus nécessaires :",
         "addedBadge": "Nouveau",
         "unchangedCount": "Autorisations inchangées : {{count}}",

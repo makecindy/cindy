@@ -7504,6 +7504,8 @@
         "grantsTitle": "Nach der Installation hat es folgende Berechtigungen:",
         "noPermissions": "Dieses Plugin gibt keine zusätzlichen Berechtigungen an.",
         "addedTitle": "Neue oder geänderte Berechtigungen:",
+        "pendingTitle": "Zu bestätigende Berechtigungen",
+        "capabilityDescription": "Dieses Plugin benötigt deine Zustimmung, um die folgenden Berechtigungen zu nutzen.",
         "removedTitle": "Nicht mehr benötigt:",
         "addedBadge": "Neu",
         "unchangedCount": "Unveränderte Berechtigungen: {{count}}",

@@ -7461,6 +7461,8 @@
         "grantsTitle": "安裝後它將擁有：",
         "noPermissions": "這個插件沒有宣告額外權限。",
         "addedTitle": "新增或變更的權限：",
+        "pendingTitle": "待確認權限",
+        "capabilityDescription": "以下權限尚未確認。允許後，插件才能使用對應功能。",
         "removedTitle": "不再需要的權限：",
         "addedBadge": "新增",
         "unchangedCount": "其餘 {{count}} 項權限不變",

@@ -7461,6 +7461,8 @@
         "grantsTitle": "納後其將得：",
         "noPermissions": "此法器未宣告額外權柄。",
         "addedTitle": "新增或變更之權柄：",
+        "pendingTitle": "待允之權柄",
+        "capabilityDescription": "下列權柄尚待君允。允之，法器方可用其能。",
         "removedTitle": "不復需之權柄：",
         "addedBadge": "新",
         "unchangedCount": "餘 {{count}} 項權柄不變",

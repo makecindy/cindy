@@ -7571,6 +7571,8 @@
         "grantsTitle": "Después de la instalación tendrá:",
         "noPermissions": "Este complemento no declara permisos adicionales.",
         "addedTitle": "Permisos nuevos o modificados:",
+        "pendingTitle": "Permisos pendientes de confirmar",
+        "capabilityDescription": "Estos permisos necesitan tu aprobación para que el complemento pueda usarlos.",
         "removedTitle": "Ya no se necesitan:",
         "addedBadge": "Nuevo",
         "unchangedCount": "Permisos sin cambios: {{count}}",

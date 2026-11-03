@@ -88,22 +88,33 @@ describe('GhostInstallConsentHost', () => {
     expect(screen.getByText('settings.ghosts.installConsent.addedBadge')).toBeTruthy();
   });
 
-  it('shows first-use capability consent without claiming a package update or source', async () => {
+  // Regression: an existing capability declaration without independent approval was
+  // labeled New. Exercise the real Host push/render entry (unit); the update
+  // case above still protects genuine added permissions and their badge.
+  it.each([
+    { purpose: 'task-capability' as const,
+      permission: { key: 'agent:tasks', kind: 'agent' as const, labelKey: 'agentTasks', detailKey: 'agentTasksDetail' } },
+    { purpose: 'ui-capability' as const,
+      permission: { key: 'ui:pages', kind: 'panel' as const, labelKey: 'mcpUi', detailKey: 'uiPageAccess' } },
+  ])('shows $purpose as pending without claiming new permissions or a package update', async ({ purpose, permission }) => {
     render(<GhostInstallConsentHost />);
     await act(async () => push?.({
-      requestId:'tasks', purpose:'task-capability', initiator:'user', origin:'local-file',
+      requestId:purpose, purpose, initiator:'user', origin:'local-file',
       facts:{kind:'update',ghostId:'p',name:'Plugin',version:'1',previousVersion:'1',
-        added:[{key:'agent:tasks',kind:'agent',labelKey:'agentTasks',detailKey:'agentTasksDetail'}],
+        added:[permission],
         removed:[],unchangedCount:2,builtinOauthClientChanged:false},
     }));
     const options = mocks.confirm.mock.calls[0][0];
     expect(options.title).toBe('Plugin');
-    expect(options.description).toBe('settings.ghosts.installConsent.addedTitle');
+    expect(options.description).toBe('settings.ghosts.installConsent.capabilityDescription');
     expect(options.confirmText).toBe('settings.ghosts.connections.confirmAllow');
     render(<>{options.content}</>);
-    expect(screen.getByText('settings.ghosts.perm.agentTasksDetail')).toBeTruthy();
+    expect(screen.getByText('settings.ghosts.installConsent.pendingTitle')).toBeTruthy();
+    expect(screen.queryByText('settings.ghosts.installConsent.addedTitle')).toBeNull();
+    expect(screen.queryByText('settings.ghosts.installConsent.addedBadge')).toBeNull();
+    expect(screen.getByText(`settings.ghosts.perm.${permission.detailKey}`)).toBeTruthy();
     expect(screen.queryByText('settings.ghosts.installConsent.updateDescription')).toBeNull();
-    await waitFor(()=>expect(resolveInstallConsent).toHaveBeenCalledWith('tasks',true));
+    await waitFor(()=>expect(resolveInstallConsent).toHaveBeenCalledWith(purpose,true));
   });
 
   // Shared same-ID packages need a distinct replacement action and accurate

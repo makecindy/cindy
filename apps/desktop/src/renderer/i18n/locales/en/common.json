@@ -7504,6 +7504,8 @@
         "grantsTitle": "After installing it will have:",
         "noPermissions": "This plugin declares no additional permissions.",
         "addedTitle": "New or changed permissions:",
+        "pendingTitle": "Permissions to Confirm",
+        "capabilityDescription": "These permissions need your approval before the plugin can use them.",
         "removedTitle": "No longer needed:",
         "addedBadge": "New",
         "unchangedCount": "Unchanged permissions: {{count}}",

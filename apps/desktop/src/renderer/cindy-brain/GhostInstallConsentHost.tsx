@@ -142,9 +142,11 @@ export function GhostInstallConsentContent({ facts, capabilityOnly = false, repl
       ) : null}
       <div className="mt-3">
         {facts.added.length > 0 ? (
-          <ConsentSection title={t('settings.ghosts.installConsent.addedTitle')}>
+          <ConsentSection title={t(capabilityOnly
+            ? 'settings.ghosts.installConsent.pendingTitle'
+            : 'settings.ghosts.installConsent.addedTitle')}>
             {facts.added.map((item) => (
-              <ConsentPermissionRow key={item.key} item={item} change="added" />
+              <ConsentPermissionRow key={item.key} item={item} change={capabilityOnly ? undefined : 'added'} />
             ))}
           </ConsentSection>
         ) : null}
@@ -217,7 +219,7 @@ export function GhostInstallConsentHost() {
                     ? t('settings.ghosts.installConsent.installTitle', { name: facts.name })
                     : t('settings.ghosts.installConsent.updateTitle', { name: facts.name }),
                 description:
-                  capabilityOnly ? t('settings.ghosts.installConsent.addedTitle') : facts.kind === 'install'
+                  capabilityOnly ? t('settings.ghosts.installConsent.capabilityDescription') : facts.kind === 'install'
                     ? t('settings.ghosts.installConsent.installMeta', {
                         version: facts.version,
                         source,
