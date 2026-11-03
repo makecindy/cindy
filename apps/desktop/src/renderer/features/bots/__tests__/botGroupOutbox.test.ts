@@ -979,6 +979,54 @@ it('retries secondary sends without restoring the shared queue and stops on clea
   } finally { stop(); vi.unstubAllGlobals(); vi.useRealTimers(); }
 });
 
+// Unit / review4453998311: a task window can close before its next retry.
+// Keep the main worker alive while discarding renderer memory to model teardown;
+// the durable IPC rows must be recovered without restarting that worker.
+it('hands failed secondary sends to the running main worker on unload', async () => {
+  vi.useFakeTimers();
+  const signal = vi.fn<(key: string, value: string) => void>();
+  const storage = { setItem: signal };
+  vi.stubGlobal('window', Object.assign(new EventTarget(), { localStorage: storage }));
+  const saved = new Map<string, unknown>();
+  const requests: string[] = [];
+  mocks.storage = async request => {
+    requests.push(request.action);
+    if (request.action === 'put') saved.set(request.entry.input.clientId, structuredClone(request.entry));
+    if (request.action === 'remove') saved.delete(request.clientId);
+    return request.action === 'list' ? [...saved.values()] : [];
+  };
+  const stopMain = startBotGroupOutbox();
+  const stopSecondary = startBotGroupOutbox({ restoreSavedEntries: false });
+  try {
+    await vi.advanceTimersByTimeAsync(0);
+    expect(requests.filter(action => action === 'list')).toHaveLength(1);
+    mocks.send.mockRejectedValueOnce(new Error('offline')).mockResolvedValue({ ok: true, messageId: 'recovered' });
+    mocks.getBotGroup.mockResolvedValue({ ok: true, group: { messages: [] } });
+    await enqueueBotGroupSend(draft({ clientId: 'closing-window' }));
+    await vi.advanceTimersByTimeAsync(0);
+    expect(getBotGroupOutbox('g1')[0].status).toBe('failed');
+    window.dispatchEvent(new Event('beforeunload'));
+    expect(signal).toHaveBeenCalled();
+    stopSecondary();
+    resetBotGroupOutboxForTests();
+    expect(getBotGroupOutbox('g1')).toEqual([]);
+    const [key, newValue] = signal.mock.calls.at(-1)!;
+    const deliver = (eventKey: string) => window.dispatchEvent(Object.assign(new Event('storage'), { key: eventKey, newValue, storageArea: storage }));
+    deliver(key + '-other-owner');
+    await vi.advanceTimersByTimeAsync(0);
+    expect(requests.filter(action => action === 'list')).toHaveLength(1);
+    deliver(key);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(requests.filter(action => action === 'list')).toHaveLength(2);
+    expect(mocks.send.mock.calls.map(([input]) => input.clientId)).toEqual(['closing-window', 'closing-window']);
+    expect(getBotGroupOutbox('g1')[0].status).toBe('sent');
+    stopMain();
+    deliver(key);
+    await vi.advanceTimersByTimeAsync(5_000);
+    expect(requests.filter(action => action === 'list')).toHaveLength(2);
+  } finally { stopSecondary(); stopMain(); vi.unstubAllGlobals(); vi.useRealTimers(); }
+});
+
 // Unit regression: a restart between local enqueue and the HTTP response used to lose
 // ownership. The production outbox must save first, then restore the same clientId FIFO.
 it.each(['group', 'direct'] as const)('durably restores %s sends and reconciles both receipt pages without deleting pending entries', async kind => {

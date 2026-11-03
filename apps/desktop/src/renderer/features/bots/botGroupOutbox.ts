@@ -174,11 +174,14 @@ export function startBotGroupOutbox({ restoreSavedEntries = true }: { restoreSav
   ensureOwner();
   const owner = getDataOwnerGeneration();
   let stopped = false;
-  let ready = !restoreSavedEntries;
+  let restoreRequested = restoreSavedEntries ? 1 : 0;
+  let restored = 0;
+  const handoffKey = `cindy.botGroupOutbox.handoff.${owner.dataOwnerId}`;
   const current = () => !stopped && isDataOwnerGenerationCurrent(owner);
   const run = async () => {
     if (!current() || !owner.dataOwnerId || !durable()) return;
-    if (!ready) {
+    if (restored !== restoreRequested) {
+      const revision = restoreRequested;
       const saved = await durable()!({ action: 'list', owner });
       if (!current()) return;
       for (const value of saved) {
@@ -186,7 +189,7 @@ export function startBotGroupOutbox({ restoreSavedEntries = true }: { restoreSav
         const group = groupOf(entry.input.groupId);
         if (!group.entries.some(row => row.input.clientId === entry.input.clientId)) group.entries = [...group.entries, entry];
       }
-      ready = true; emit();
+      restored = revision; emit();
     }
     for (const [groupId, group] of groups) {
       const first = group.entries.find(entry => entry.status !== 'sent');
@@ -220,9 +223,27 @@ export function startBotGroupOutbox({ restoreSavedEntries = true }: { restoreSav
   };
   let running = false;
   const tick = () => { if (!running) { running = true; void run().catch(() => undefined).finally(() => { running = false; }); } };
+  const onHandoff = (event: StorageEvent) => {
+    if (!current() || event.key !== handoffKey || event.newValue === null
+      || (event.storageArea !== null && event.storageArea !== window.localStorage)) return;
+    restoreRequested += 1;
+    tick();
+  };
+  const handoff = () => {
+    if (!current() || !owner.dataOwnerId || !groups.size) return;
+    // Only a wakeup crosses windows; the owner-fenced Main store keeps the rows.
+    try { window.localStorage.setItem(handoffKey, crypto.randomUUID()); } catch { /* Durable rows remain recoverable on restart. */ }
+  };
+  if (restoreSavedEntries) window.addEventListener('storage', onHandoff);
+  else window.addEventListener('beforeunload', handoff);
   const timer = setInterval(tick, 5_000);
   window.addEventListener('online', tick); window.addEventListener('focus', tick); tick();
-  return () => { stopped = true; clearInterval(timer); window.removeEventListener('online', tick); window.removeEventListener('focus', tick); };
+  return () => {
+    if (!restoreSavedEntries) handoff();
+    stopped = true; clearInterval(timer);
+    window.removeEventListener('online', tick); window.removeEventListener('focus', tick);
+    window.removeEventListener('storage', onHandoff); window.removeEventListener('beforeunload', handoff);
+  };
 }
 
 /** Drop entries the outbox still owns; a request in progress settles its own (see `submit`). */
