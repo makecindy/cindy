@@ -323,6 +323,7 @@ import { usePromptRecommendationPrediction } from '@/hooks/usePromptRecommendati
 import { predictPromptUntilDisabled } from '@/lib/predictPromptUntilDisabled';
 import {
   dismissPromptRecommendation,
+  invalidatePromptRecommendation,
   usePromptRecommendation,
 } from '@/lib/promptRecommendationStore';
 import { createLogger } from '@/lib/logger';
@@ -1600,13 +1601,14 @@ export function ChatInput({
     if (turnStarting) {
       turnGenRef.current += 1;
       showRecommendationRef.current = false;
-      if (sessionId) dismissPromptRecommendation(sessionId);
+      // 新轮开始不是"用户消费了这句话"：只作废运行期状态，切回会话仍可复用文案。
+      if (sessionId) invalidatePromptRecommendation(sessionId);
     }
   });
   useEffect(() => {
     if (!recommendationEnabled && sessionId) {
       showRecommendationRef.current = false;
-      dismissPromptRecommendation(sessionId);
+      invalidatePromptRecommendation(sessionId);
     }
   }, [recommendationEnabled, sessionId]);
 

@@ -379,13 +379,12 @@ export function resolvePromptRecommendationPrediction(
 }
 
 /** Tab / 发送 / workingDir 等显式消费路径同步作废当前推荐和迟到的完成通知。 */
-export function dismissPromptRecommendation(sessionId: string, revision?: number): void {
-  const current = entries.get(sessionId);
-  // 带 revision 的调用是显式消费（Tab / 发送）：保留区也要作废，避免切回会话后复活。
-  const effectiveRevision =
-    current?.revision ?? retainedRecommendations.get(sessionId)?.snapshot.revision;
-  if (revision != null && effectiveRevision !== revision) return;
-  // 无 entry 也可能仍在等待最终 done；显式发送/换目录应取消这份等待。
+/**
+ * 非破坏性失效：作废本轮运行期状态（待定 revision、在途预测、entry），
+ * 但保留已生成的文案。会话切换、新轮开始、偏好同步走这里 —— 这些都不是"用户消费了这句话"。
+ */
+export function invalidatePromptRecommendation(sessionId: string): void {
+  // 无 entry 也可能仍在等待最终 done。
   // 新 running 的 layout effect 也会调用本函数，不能清掉刚开始的新轮资格。
   if (!runningSessionIds.has(sessionId)) {
     clearSettleTimer(sessionId);
@@ -393,8 +392,20 @@ export function dismissPromptRecommendation(sessionId: string, revision?: number
     sawRunningSessionIds.delete(sessionId);
     runStartedAtBySession.delete(sessionId);
   }
-  if (revision != null) dropRetainedRecommendation(sessionId);
   deleteEntry(sessionId);
+}
+
+/**
+ * 破坏性失效：用户或产品行为明确消费了这句话（Tab 填入、发送、换工作目录）。
+ * 运行期 entry 与保留区一起作废，避免切回会话或清空输入框后复活。
+ */
+export function dismissPromptRecommendation(sessionId: string, revision?: number): void {
+  const current = entries.get(sessionId);
+  const effectiveRevision =
+    current?.revision ?? retainedRecommendations.get(sessionId)?.snapshot.revision;
+  if (revision != null && effectiveRevision !== revision) return;
+  invalidatePromptRecommendation(sessionId);
+  dropRetainedRecommendation(sessionId);
 }
 
 export function clearPromptRecommendationSession(sessionId: string): void {
