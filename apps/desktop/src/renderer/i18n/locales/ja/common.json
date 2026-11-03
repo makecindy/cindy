@@ -13769,10 +13769,6 @@
     },
     "ghostCall": {
       "prStatus": {
-        "ciPassed": "CI 成功",
-        "ciFailed": "CI 失敗",
-        "ciRunning": "CI 実行中",
-        "threadsOpen": "未解決のレビュー {{count}} 件",
         "threadsNone": "未解決のレビューなし",
         "mergeReady": "マージ可能",
         "mergeConflict": "コンフリクトあり",

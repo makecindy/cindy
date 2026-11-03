@@ -27,10 +27,20 @@ describe('fillGhostCardPrStatus', () => {
     const seen: string[] = [];
     fillGhostCardPrStatus(document, (key) => { seen.push(key); return status(); }, t);
     expect(seen).toEqual(['octo/repo#9']);
-    expect(slot.textContent).toBe('ciPassedthreadsOpen:2mergeApproval');
+    expect(slot.textContent).toBe('3passedunresolved:2mergeApproval');
     // Polling refreshes the same document in place.
     fillGhostCardPrStatus(document, () => status({ checks: { total: 3, passed: 2, failed: 1, pending: 0, skipped: 0 }, mergeState: 'DIRTY' }), t);
-    expect(slot.textContent).toBe('ciFailedthreadsOpen:2mergeConflict');
+    expect(slot.textContent).toBe('1failed2passedunresolved:2mergeConflict');
+  });
+
+  // Unit: the card said only "CI running" while the title bar's PR summary listed
+  // 11 running / 9 passed / 1 skipped and 2 unresolved review threads. The card now
+  // reads each non-zero check category with the summary's own labels and icons.
+  it('lists each non-zero check category like the title bar PR summary', () => {
+    const slot = card();
+    fillGhostCardPrStatus(document, () => status({ checks: { total: 21, passed: 9, failed: 0, pending: 11, skipped: 1 } }), t);
+    expect(slot.textContent).toBe('11pending9passed1skippedLabelunresolved:2mergeApproval');
+    expect(slot.querySelectorAll('svg')).toHaveLength(3);
   });
 
   it('keeps the snapshot when the host has no usable status, and never guesses merge state for older hosts', () => {
@@ -42,6 +52,6 @@ describe('fillGhostCardPrStatus', () => {
     delete (legacy as { mergeState?: unknown }).mergeState;
     delete (legacy as { reviewDecision?: unknown }).reviewDecision;
     fillGhostCardPrStatus(document, () => legacy, t);
-    expect(slot.textContent).toBe('ciPassedthreadsNone');
+    expect(slot.textContent).toBe('3passedthreadsNone');
   });
 });

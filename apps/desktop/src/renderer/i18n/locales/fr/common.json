@@ -13927,10 +13927,6 @@
     },
     "ghostCall": {
       "prStatus": {
-        "ciPassed": "CI réussie",
-        "ciFailed": "CI en échec",
-        "ciRunning": "CI en cours",
-        "threadsOpen": "Fils de revue ouverts : {{count}}",
         "threadsNone": "Aucun fil de revue ouvert",
         "mergeReady": "Prête à fusionner",
         "mergeConflict": "Conflits à résoudre",

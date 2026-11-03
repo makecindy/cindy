@@ -81,15 +81,16 @@ export type PrStatusResult =
 export type PrStatusFailureReason =
   'gh-missing' | 'gh-not-logged-in' | 'no-token' | 'not-found' | 'fetch-failed';
 
-export type PrStatusItemTone = 'good' | 'bad' | 'wait';
+export type PrStatusItemTone = 'good' | 'bad' | 'wait' | 'neutral';
 export type PrStatusItemKey =
-  | 'ciPassed' | 'ciFailed' | 'ciRunning' | 'threadsOpen' | 'threadsNone'
+  | 'checksFailed' | 'checksPending' | 'checksPassed' | 'checksSkipped' | 'threadsOpen' | 'threadsNone'
   | 'merged' | 'closed' | 'draft'
   | 'mergeConflict' | 'mergeBehind' | 'mergeReady' | 'mergeChanges' | 'mergeApproval' | 'mergeWaiting';
 
 /**
- * 插件卡片 PR 状态位的条目(CI、未解决意见、能否合并),桌面与手机共用同一套取舍;
- * 文案由各端按 key 翻译。旧版宿主不带合并字段时省掉合并一项,不猜。
+ * 插件卡片 PR 状态位的条目(检查、未解决意见、能否合并),桌面与手机共用同一套取舍;
+ * 文案由各端按 key 翻译。检查按标题栏 PR 汇总的分类逐项给出数量(失败、进行中、通过、
+ * 跳过或中立,只列非零项),卡片与标题栏读法一致。旧版宿主不带合并字段时省掉合并一项,不猜。
  */
 export function prStatusItemKeys(
   status: Extract<PrStatusResult, { ok: true }>,
@@ -97,9 +98,10 @@ export function prStatusItemKeys(
   const items: Array<{ tone: PrStatusItemTone; key: PrStatusItemKey; count?: number }> = [];
   const checks = status.checks;
   if (checks && checks.total > 0) {
-    if (checks.failed > 0) items.push({ tone: 'bad', key: 'ciFailed' });
-    else if (checks.pending > 0) items.push({ tone: 'wait', key: 'ciRunning' });
-    else items.push({ tone: 'good', key: 'ciPassed' });
+    if (checks.failed > 0) items.push({ tone: 'bad', key: 'checksFailed', count: checks.failed });
+    if (checks.pending > 0) items.push({ tone: 'wait', key: 'checksPending', count: checks.pending });
+    if (checks.passed > 0) items.push({ tone: 'good', key: 'checksPassed', count: checks.passed });
+    if (checks.skipped > 0) items.push({ tone: 'neutral', key: 'checksSkipped', count: checks.skipped });
   }
   if (status.unresolvedCount !== null) {
     items.push(status.unresolvedCount > 0

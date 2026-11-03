@@ -13769,10 +13769,6 @@
     },
     "ghostCall": {
       "prStatus": {
-        "ciPassed": "CI 通过",
-        "ciFailed": "CI 未通过",
-        "ciRunning": "CI 运行中",
-        "threadsOpen": "{{count}} 条意见待处理",
         "threadsNone": "没有待处理意见",
         "mergeReady": "可以合并",
         "mergeConflict": "有冲突",

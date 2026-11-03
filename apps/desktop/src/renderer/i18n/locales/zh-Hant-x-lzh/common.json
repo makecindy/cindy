@@ -13760,10 +13760,6 @@
     },
     "ghostCall": {
       "prStatus": {
-        "ciPassed": "CI 已過",
-        "ciFailed": "CI 未過",
-        "ciRunning": "CI 運行中",
-        "threadsOpen": "{{count}} 條意見待理",
         "threadsNone": "無待理之意見",
         "mergeReady": "可合併",
         "mergeConflict": "有衝突",

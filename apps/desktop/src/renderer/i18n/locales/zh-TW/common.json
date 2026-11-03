@@ -13768,10 +13768,6 @@
     },
     "ghostCall": {
       "prStatus": {
-        "ciPassed": "CI 通過",
-        "ciFailed": "CI 未通過",
-        "ciRunning": "CI 執行中",
-        "threadsOpen": "{{count}} 則意見待處理",
         "threadsNone": "沒有待處理意見",
         "mergeReady": "可以合併",
         "mergeConflict": "有衝突",

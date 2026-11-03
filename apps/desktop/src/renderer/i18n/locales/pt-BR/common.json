@@ -13927,10 +13927,6 @@
     },
     "ghostCall": {
       "prStatus": {
-        "ciPassed": "CI aprovada",
-        "ciFailed": "CI falhou",
-        "ciRunning": "CI em execução",
-        "threadsOpen": "Tópicos de revisão abertos: {{count}}",
         "threadsNone": "Nenhum tópico de revisão aberto",
         "mergeReady": "Pronta para mesclar",
         "mergeConflict": "Tem conflitos",

@@ -16,7 +16,7 @@ vi.mock("@/auth/AuthContext", () => ({ useAuth: () => ({ getAccessToken: async (
 vi.mock("../plugins/mobileMailAttachment", () => ({ pickMobileMailAttachment: (...args: unknown[]) => h.pick(...args) }));
 vi.mock("@/session/useBotGroupRemoteMedia", () => ({ useBotGroupRemoteMedia: () => h.resolve }));
 vi.mock('@/components/FileTypeIcon', () => ({ FileTypeIcon: () => null }));
-vi.mock('lucide-react-native', () => ({ ExternalLink: () => null, GitPullRequest: () => null, GitMerge: () => null, GitPullRequestClosed: () => null, GitPullRequestDraft: () => null }));
+vi.mock('lucide-react-native', () => ({ ExternalLink: () => null, GitPullRequest: () => null, GitMerge: () => null, GitPullRequestClosed: () => null, GitPullRequestDraft: () => null, Check: () => null, CircleMinus: () => null, CircleX: () => null, Clock: () => null }));
 
 const h = vi.hoisted(() => ({ invoke: vi.fn(), pick: vi.fn(), resolve: vi.fn(), inject: vi.fn(), web: {} as any, mode: 'light' }));
 vi.mock("react-native", () => {
@@ -48,7 +48,7 @@ vi.mock("react-native", () => {
       addEventListener: () => ({ remove: () => {} }),
     },
     Alert: { alert: vi.fn() },
-    Linking: { openURL: vi.fn() },
+    Linking: { openURL: vi.fn(async () => true) },
     Switch: ({ value, onValueChange, accessibilityLabel }: { value: boolean; onValueChange(): void; accessibilityLabel?: string }) =>
       createElement("input", { type: "checkbox", checked: value, onChange: onValueChange, "aria-label": accessibilityLabel }),
     AccessibilityInfo: { isReduceMotionEnabled: async () => true },
@@ -138,7 +138,7 @@ describe("rich plugin card hints", () => {
       ],
     } })));
     const text = container.textContent ?? '';
-    for (const part of ['plugins.prStatus.ciPassed', 'plugins.prStatus.threadsOpen', 'plugins.prStatus.mergeApproval', '跟进中', '自动改名', '改成 PR 号', 'plugins.openLinkHost', '转为正式 PR'])
+    for (const part of ['plugins.prStatus.checksPassed', 'plugins.prStatus.threadsOpen', 'plugins.prStatus.mergeApproval', '跟进中', '自动改名', '改成 PR 号', 'plugins.openLinkHost', '转为正式 PR'])
       expect(text).toContain(part);
     expect(text).not.toContain('CI 运行中');
     expect(text).not.toContain('关闭「自动改名」');

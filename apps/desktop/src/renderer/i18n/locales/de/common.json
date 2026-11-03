@@ -13800,10 +13800,6 @@
     },
     "ghostCall": {
       "prStatus": {
-        "ciPassed": "CI bestanden",
-        "ciFailed": "CI fehlgeschlagen",
-        "ciRunning": "CI läuft",
-        "threadsOpen": "Offene Review-Threads: {{count}}",
         "threadsNone": "Keine offenen Review-Threads",
         "mergeReady": "Bereit zum Mergen",
         "mergeConflict": "Hat Konflikte",

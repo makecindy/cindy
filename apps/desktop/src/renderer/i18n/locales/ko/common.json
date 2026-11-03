@@ -13769,10 +13769,6 @@
     },
     "ghostCall": {
       "prStatus": {
-        "ciPassed": "CI 통과",
-        "ciFailed": "CI 실패",
-        "ciRunning": "CI 실행 중",
-        "threadsOpen": "처리할 리뷰 의견 {{count}}개",
         "threadsNone": "처리할 리뷰 의견 없음",
         "mergeReady": "병합 가능",
         "mergeConflict": "충돌 있음",

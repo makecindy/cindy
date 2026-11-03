@@ -6,13 +6,14 @@
  * 永远一致,也不必等 Agent 下一轮回写。插件写在里面的内容是兜底:旧版宿主、手机,或这条
  * PR 不在本任务的 PR 列表里(宿主查不到)时原样显示。
  */
-import { prStatusItemKeys, type PrStatusItemTone } from '@cindy/maker-shared';
+import { Check, CircleMinus, CircleX, Clock, type LucideIcon } from 'lucide-react';
+import { prStatusItemKeys, type PrStatusItemKey, type PrStatusItemTone } from '@cindy/maker-shared';
 import type { PrStatusResult } from '@/lib/gitContext.types';
+import { appIconMarkup, preloadAppIconMarkup } from './ghostCardIcons';
 
 const SLOT_SELECTOR = 'div[data-ghost-pr-status]';
 const SLOT_ATTR_RE = / data-ghost-pr-status="([^"]+)"/;
 const SLOT_VALUE_RE = /^([A-Za-z0-9_.-]+)\/([A-Za-z0-9_.-]+)#(\d+)$/;
-const GREEN = 'light-dark(#2ea043,#3fb950)';
 
 type Tone = PrStatusItemTone;
 type Label = (key: string, options?: Record<string, unknown>) => string;
@@ -29,10 +30,36 @@ export function readPrStatusSlotKey(html: string): string | null {
   return m ? prStatusSlotKey(m[1]) : null;
 }
 
+/**
+ * 检查数量用标题栏 PR 汇总的同一套文案、图标与颜色(失败 / 进行中 / 通过 / 跳过或中立),
+ * 未解决评论数用汇总里的同一句话;合并状态仍是卡片自己的一项。
+ */
+const CHECK_ITEMS = {
+  checksFailed: { label: 'ccAgent.gitContext.pr.failed', icon: CircleX, color: 'var(--error-fg)' },
+  checksPending: { label: 'ccAgent.gitContext.pr.pending', icon: Clock, color: undefined },
+  checksPassed: { label: 'ccAgent.gitContext.pr.passed', icon: Check, color: 'var(--status-success)' },
+  checksSkipped: { label: 'ccAgent.gitContext.pr.skippedLabel', icon: CircleMinus, color: undefined },
+} as const satisfies Partial<Record<PrStatusItemKey, { label: string; icon: LucideIcon; color?: string }>>;
+
+// 状态位多在 effect 里随状态刷新重填,那时同步渲染不会完成,所以图标在模块加载时备好。
+preloadAppIconMarkup(Object.values(CHECK_ITEMS).map((item) => item.icon));
+
+type Item =
+  | { kind: 'check'; key: keyof typeof CHECK_ITEMS; count: number; label: string }
+  | { kind: 'text'; tone: Tone; key: PrStatusItemKey; label: string };
+
 /** 状态条目的取舍与手机端共用(maker-shared prStatusItemKeys),这里只负责翻译。 */
-export function prStatusItems(status: Extract<PrStatusResult, { ok: true }>, t: Label): Array<[Tone, string]> {
-  return prStatusItemKeys(status).map(({ tone, key, count }) =>
-    [tone, t(`chat.ghostCall.prStatus.${key}`, count === undefined ? undefined : { count })]);
+export function prStatusItems(status: Extract<PrStatusResult, { ok: true }>, t: Label): Item[] {
+  return prStatusItemKeys(status).map(({ tone, key, count }): Item => {
+    if (key in CHECK_ITEMS) {
+      const check = key as keyof typeof CHECK_ITEMS;
+      return { kind: 'check', key: check, count: count ?? 0, label: t(CHECK_ITEMS[check].label) };
+    }
+    const label = key === 'threadsOpen'
+      ? t('ccAgent.gitContext.pr.unresolved', { count })
+      : t(`chat.ghostCall.prStatus.${key}`);
+    return { kind: 'text', tone, key, label };
+  });
 }
 
 /**
@@ -51,16 +78,29 @@ export function fillGhostCardPrStatus(
     const items = prStatusItems(status, t);
     if (!items.length) continue;
     const row = doc.createElement('div');
-    row.style.cssText = 'display:flex;flex-wrap:wrap;gap:6px 16px';
-    for (const [tone, label] of items) {
-      const item = doc.createElement('div');
-      item.style.cssText = `display:inline-flex;align-items:center;gap:6px${tone === 'good' ? ';color:var(--text-primary)' : ''}`;
-      const dot = doc.createElement('span');
-      dot.style.cssText = `flex:none;width:7px;height:7px;border-radius:50%;${
-        tone === 'good' ? `background:${GREEN}` : tone === 'bad' ? 'background:var(--error-fg,#d93025)' : 'border:1.5px solid var(--text-tertiary)'
-      }`;
-      item.append(dot, doc.createTextNode(label));
-      row.append(item);
+    row.style.cssText = 'display:flex;flex-wrap:wrap;align-items:center;gap:6px 14px;color:var(--text-secondary)';
+    for (const item of items) {
+      const el = doc.createElement('span');
+      el.style.cssText = 'display:inline-flex;align-items:center;gap:4px;white-space:nowrap';
+      if (item.kind === 'check') {
+        const spec = CHECK_ITEMS[item.key];
+        if (item.key === 'checksFailed') el.style.color = spec.color!;
+        const icon = doc.createElement('span');
+        icon.style.cssText = `display:inline-flex;flex:none;width:12px;height:12px${spec.color && item.key !== 'checksFailed' ? `;color:${spec.color}` : ''}`;
+        icon.innerHTML = appIconMarkup(spec.icon);
+        const count = doc.createElement('span');
+        count.style.cssText = 'font-weight:500;font-variant-numeric:tabular-nums';
+        count.textContent = String(item.count);
+        el.append(icon, count, doc.createTextNode(item.label));
+      } else {
+        // 未解决评论用标题栏的强调色;可以合并 / 已合并用成功色;冲突用错误色;其余次要文字色。
+        const color = item.key === 'threadsOpen' ? 'var(--status-bar-accent)'
+          : item.tone === 'bad' ? 'var(--error-fg)'
+            : item.key === 'mergeReady' || item.key === 'merged' ? 'var(--status-success)' : '';
+        if (color) el.style.color = color;
+        el.textContent = item.label;
+      }
+      row.append(el);
     }
     slot.replaceChildren(row);
   }

@@ -63,7 +63,7 @@ import { pickMobileMailAttachment } from "./mobileMailAttachment";
 import { PluginCardRecipients } from "./PluginCardRecipients";
 import { invokePlugin } from "./pluginClient";
 import { FileTypeIcon } from '@/components/FileTypeIcon';
-import { ExternalLink } from 'lucide-react-native';
+import { Check, CircleMinus, CircleX, Clock, ExternalLink } from 'lucide-react-native';
 import { prStatusVisual } from '@/session/prStatusVisual';
 import { formatByteSize } from '@cindy/maker-shared/file-preview';
 
@@ -824,21 +824,52 @@ function linkHost(url: string): string | undefined {
 }
 
 /** PR checks from the title bar's status (desktop host); the plugin's snapshot otherwise. */
+/** Check counts read like the desktop title bar's PR summary: same categories, icons and colours. */
+const CHECK_ICONS = { checksFailed: CircleX, checksPending: Clock, checksPassed: Check, checksSkipped: CircleMinus } as const;
+
 function PrStatusRow({ slot }: { slot: PrStatusSlot }) {
   const { t } = useTranslation();
+  const { colors } = useTheme();
   const styles = useThemedStyles(makeStyles);
-  const items = slot.status
-    ? prStatusItemKeys(slot.status).map(({ tone, key, count }) => ({ tone, label: t(`plugins.prStatus.${key}`, count === undefined ? undefined : { count }) }))
-    : slot.fallback.map((label) => ({ tone: undefined, label }));
+  if (!slot.status) {
+    if (!slot.fallback.length) return null;
+    return (
+      <View style={styles.statusRow}>
+        {slot.fallback.map((label, index) => (
+          <View key={`${index}:${label}`} style={styles.statusItem}>
+            <View style={[styles.statusDot, styles.dotWait]} />
+            <Text style={styles.note}>{label}</Text>
+          </View>
+        ))}
+      </View>
+    );
+  }
+  const items = prStatusItemKeys(slot.status);
   if (!items.length) return null;
   return (
     <View style={styles.statusRow}>
-      {items.map((item, index) => (
-        <View key={`${index}:${item.label}`} style={styles.statusItem}>
-          <View style={[styles.statusDot, item.tone === "good" ? styles.dotGood : item.tone === "bad" ? styles.dotBad : styles.dotWait]} />
-          <Text style={[styles.note, item.tone === "good" && styles.statusGoodText]}>{item.label}</Text>
-        </View>
-      ))}
+      {items.map(({ tone, key, count }) => {
+        if (key in CHECK_ICONS) {
+          const Icon = CHECK_ICONS[key as keyof typeof CHECK_ICONS];
+          const failed = key === "checksFailed";
+          return (
+            <View key={key} style={styles.statusItem}>
+              <Icon size={iconSize.xs} strokeWidth={iconStroke.regular}
+                color={failed ? colors.statusError : key === "checksPassed" ? colors.statusDone : colors.textSecondary} />
+              <Text style={[styles.note, failed && styles.statusBadText]}>
+                <Text style={styles.statusCount}>{count}</Text> {t(`plugins.prStatus.${key}`)}
+              </Text>
+            </View>
+          );
+        }
+        const color = key === "threadsOpen" ? styles.statusAccentText : tone === "bad" ? styles.statusBadText
+          : key === "mergeReady" || key === "merged" ? styles.statusGoodText : undefined;
+        return (
+          <Text key={key} style={[styles.note, color]}>
+            {t(`plugins.prStatus.${key}`, count === undefined ? undefined : { count })}
+          </Text>
+        );
+      })}
     </View>
   );
 }
@@ -933,10 +964,13 @@ const makeStyles = (c: ThemeColors) =>
     quietLabel: { color: c.textSecondary },
     toggleRow: { flexDirection: "row", alignItems: "center", gap: spacing.md, minHeight: 44 },
     toggleText: { flex: 1, minWidth: 0 },
-    statusRow: { flexDirection: "row", flexWrap: "wrap", columnGap: spacing.lg, rowGap: spacing.xs },
+    statusRow: { flexDirection: "row", flexWrap: "wrap", alignItems: "center", columnGap: spacing.md, rowGap: spacing.xs },
     statusItem: { flexDirection: "row", alignItems: "center", gap: spacing.xs },
     statusDot: { width: 7, height: 7, borderRadius: radius.pill },
-    statusGoodText: { color: c.textPrimary },
+    statusGoodText: { color: c.statusDone },
+    statusBadText: { color: c.statusError },
+    statusAccentText: { color: c.statusAccent },
+    statusCount: { fontWeight: fontWeight.medium, fontVariant: ["tabular-nums"] },
     dotGood: { backgroundColor: c.statusDone },
     dotBad: { backgroundColor: c.statusError },
     dotWait: { borderWidth: 1.5, borderColor: c.textTertiary },
