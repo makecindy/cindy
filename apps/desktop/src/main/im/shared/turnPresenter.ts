@@ -316,6 +316,8 @@ export interface TurnPresenterOptions {
   policy?: PresenterPolicy;
   /** 渠道 id。个人微信不能建议切到完全访问。 */
   channel?: string;
+  /** Replaces the work preview (a guest sees no tool, file or command detail, #8359). */
+  renderActivity?: (activity: TurnActivityState, now: number) => string;
 }
 
 export interface TurnPresenter {
@@ -679,8 +681,9 @@ export function createTurnPresenter(options: TurnPresenterOptions): TurnPresente
   const body: BodyEngine =
     options.mode === 'finalized-segments' ? createSegmentsEngine() : createBufferEngine();
   const activity = createTurnActivity(startedAt);
+  const render = options.renderActivity ?? renderActivity;
   const composeRunning = (b: string): string =>
-    composeProgressView(renderActivity(activity, Date.now()), b);
+    composeProgressView(render(activity, Date.now()), b);
   const composeProgress = (): string => {
     if (options.progressBodyMode !== 'whole') return composeRunning(body.progressBody());
     const whole = composeRunning(body.wholeText());

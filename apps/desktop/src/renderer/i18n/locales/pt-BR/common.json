@@ -11491,6 +11491,7 @@
         "saveFailed": "Não salvo. Tente novamente.",
         "refusedNotice": "🔒 Este bot ainda não está disponível para você.",
         "approvalPending": "⏳ Pedi ao proprietário que aprove esta etapa. Continuo assim que ele responder.",
+        "working": "Trabalhando nisso",
         "engineUnsupported": "{{name}} funciona com Pi, que não consegue limitar um convidado ao projeto dele: convidados vinculados a um projeto são recusados. Mude {{name}} para Claude ou Codex para atendê-los.",
         "engineRemote": "{{name}} funciona em outro computador, que não consegue limitar um convidado ao projeto dele: convidados vinculados a um projeto são recusados. Faça {{name}} funcionar neste computador para atendê-los."
       },

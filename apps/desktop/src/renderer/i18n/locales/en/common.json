@@ -11397,6 +11397,7 @@
         "saveFailed": "Not saved. Try again.",
         "refusedNotice": "🔒 This bot isn't open to you yet.",
         "approvalPending": "⏳ I asked the owner to approve this step. I will continue once they reply.",
+        "working": "Working on it",
         "engineUnsupported": "{{name}} runs on Pi, which cannot keep a guest inside its project: guests bound to a project are refused. Switch {{name}} to Claude or Codex to serve them.",
         "engineRemote": "{{name}} runs on another computer, which cannot keep a guest inside its project: guests bound to a project are refused. Run {{name}} on this computer to serve them."
       },

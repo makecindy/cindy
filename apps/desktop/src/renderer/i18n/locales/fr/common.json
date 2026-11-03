@@ -11491,6 +11491,7 @@
         "saveFailed": "Non enregistré. Réessayez.",
         "refusedNotice": "🔒 Ce bot n'est pas encore ouvert pour vous.",
         "approvalPending": "⏳ J'ai demandé au propriétaire de valider cette étape. Je continue dès qu'il répond.",
+        "working": "Je m'en occupe",
         "engineUnsupported": "{{name}} fonctionne avec Pi, qui ne peut pas limiter un invité à son projet : les invités associés à un projet sont refusés. Passez {{name}} sur Claude ou Codex pour les servir.",
         "engineRemote": "{{name}} fonctionne sur un autre ordinateur, qui ne peut pas limiter un invité à son projet : les invités associés à un projet sont refusés. Faites fonctionner {{name}} sur cet ordinateur pour les servir."
       },

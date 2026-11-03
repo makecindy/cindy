@@ -170,6 +170,7 @@ import {
   markActivityWriting,
   pushToolStep,
   renderActivity,
+  renderGuestActivity,
   setActivityNotice,
   setActivityTokenRate,
   tokenRateFromStatus,
@@ -1161,7 +1162,14 @@ export function createTurnRunner(
       streamingHandle: null,
       streamingHandlePromise: null,
       streamingStartFailed: false,
-      presenter: createTurnPresenter({ mode: 'buffer-replace', channel }),
+      presenter: createTurnPresenter({
+        mode: 'buffer-replace',
+        channel,
+        // A guest's private chat shows only that work is in progress (#8359).
+        ...(target.botOwned?.lane === 'channel' && args.requesterIsOwner !== true && !userId.startsWith('g/')
+          ? { renderActivity: renderGuestActivity(t('bots.channels.guests.working')) }
+          : {}),
+      }),
       mediaAbsPaths: [],
       allowedFileRoots,
       done: false,

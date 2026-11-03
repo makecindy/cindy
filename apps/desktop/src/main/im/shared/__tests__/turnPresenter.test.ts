@@ -14,6 +14,7 @@ import {
   progressDedupeBaseline,
   shouldEmitProgressFrame,
 } from '../turnPresenter';
+import { renderGuestActivity } from '../turnActivity';
 
 /** 造一个 text 事件(带可选 source / agentMeta), 保持与 translator 透出的形状一致。 */
 function text(
@@ -47,6 +48,23 @@ function status(data: Record<string, unknown>): AgentEvent {
 function speed(rate: number, tokens = 100): Record<string, unknown> {
   return { rate, average: rate, tokens, elapsedMs: 1_000, streaming: true };
 }
+
+// #8359: a guest saw the project's file names and commands, in Chinese, in the
+// work preview. Its private chat gets one line in the owner's app language.
+describe('createTurnPresenter — guest work preview', () => {
+  it('shows only that work is in progress, no step, file or speed', () => {
+    const presenter = createTurnPresenter({
+      mode: 'buffer-replace', startedAt: 0, renderActivity: renderGuestActivity('Working on it'),
+    });
+    expect(presenter.composeRunning('')).toBe('');
+    presenter.applyToolUse({ type: 'tool_use', data: { toolName: 'Read', toolUseId: 'r1', input: { file_path: 'tools/build.py' } } } as unknown as AgentEvent);
+    presenter.applyStatus(status({ tokenSpeed: speed(83) }));
+    const view = presenter.composeRunning('answer');
+    expect(view.split('\n')[0]).toMatch(/^⚙️ Working on it · /);
+    expect(view).not.toMatch(/build\.py|tok\/s|>/);
+    expect(view.endsWith('answer')).toBe(true);
+  });
+});
 
 describe('createTurnPresenter — status 事件带出头部 tok/s', () => {
   it('跟随宿主实测速度, 无读数的占位帧保留上一个值, 不可靠时隐藏', () => {

@@ -11351,6 +11351,7 @@
         "saveFailed": "未能存，请再试。",
         "refusedNotice": "🔒 此机器人尚未为汝开放。",
         "approvalPending": "⏳ 已请主人裁可此步，主人复命后吾当续行。",
+        "working": "正理之",
         "engineUnsupported": "{{name}} 今用 Pi，Pi 不能限宾客于其案：已系案之宾客皆谢绝。欲应之，请易 {{name}} 为 Claude 或 Codex。",
         "engineRemote": "{{name}} 今行于他机，不能限宾客于其案：已系案之宾客皆谢绝。欲应之，请令 {{name}} 行于此机。"
       },

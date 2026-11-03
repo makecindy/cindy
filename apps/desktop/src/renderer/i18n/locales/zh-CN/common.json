@@ -11351,6 +11351,7 @@
         "saveFailed": "没保存上，请重试。",
         "refusedNotice": "🔒 这个机器人暂未向你开放。",
         "approvalPending": "⏳ 已请主人确认这一步，主人回复后我会继续。",
+        "working": "正在处理",
         "engineUnsupported": "{{name}} 当前使用 Pi，Pi 无法把访客限制在其项目内：绑定了项目的访客会被拒绝。要为他们服务，请把 {{name}} 切换到 Claude 或 Codex。",
         "engineRemote": "{{name}} 当前在另一台电脑上运行，无法把访客限制在其项目内：绑定了项目的访客会被拒绝。要为他们服务，请让 {{name}} 在这台电脑上运行。"
       },
