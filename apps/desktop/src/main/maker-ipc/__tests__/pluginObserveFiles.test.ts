@@ -30,6 +30,8 @@ it('returns only explicit final-answer file references without paths or message 
   const fence = String.fromCharCode(96).repeat(3);
   source.rows = [final('[Report](report.md)\n\n' + fence + '\n[example](example.md)\n' + fence + '\n[Web](https://example.com)\nplain.md'),
     { ...final('[Progress](progress.md)', 'progress'), agentMeta: '{}' },
+    { ...final('[Streaming](stream.md)', 'stream'), agentMeta: JSON.stringify({ assistantPhase: 'final_answer' }) },
+    { ...final('[Subagent](sub.md)', 'sub'), agentMeta: JSON.stringify({ turnCompleted: true, parentUuid: 'parent' }) },
     { ...final('[Narration](narration.md)', 'commentary'), agentMeta: JSON.stringify({ turnCompleted: true, assistantPhase: 'commentary' }) }];
   const result = await list();
   expect(result).toEqual({ partial: false, files: [{ fileId: expect.stringMatching(/^[a-f0-9]{64}$/), name: 'report.md', referencedAt: 10, source: 'final-answer-link', status: 'available' }] });

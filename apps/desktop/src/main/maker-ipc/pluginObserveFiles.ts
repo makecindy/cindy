@@ -25,8 +25,8 @@ function isFinalAnswer(raw: string | null): boolean {
   if (!raw) return false;
   try {
     const meta = JSON.parse(raw);
-    return meta?.assistantPhase !== 'commentary' && !meta?.reviewRun &&
-      (meta?.turnCompleted === true || meta?.assistantPhase === 'final_answer');
+    return meta?.turnCompleted === true && meta?.assistantPhase !== 'commentary' &&
+      !meta?.reviewRun && !meta?.parentUuid && !meta?.botPrivateReply;
   } catch { return false; }
 }
 
