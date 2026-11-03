@@ -414,10 +414,15 @@ harness + provider + model + effort + fastMode
 
 - 第一项是首选；首次主任务启动和确定性重建从第一项开始尝试。
 - 只有连接、鉴权、配额、容量、模型不可用和启动失败等“候选不可用”错误才进入下一项。
+  路由所在的另一台电脑结束或失联（`remote_agent_closed` / `remote_agent_lost`）也属于候选不可用；
+  供应商组能换一台电脑继续同一模型时由供应商组先处理，伙伴候选链不抢先换模型。来源主人主动断开
+  （`user-revoked`）和原电脑重连（`remote_agent_restarted`）不进入下一项。
 - 候选不可用与原路由自动续跑分开判定；Pi 原生重连耗尽（`pi-gateway-drop`）仍可切到伙伴候选链。
   已落库失败回合只有在切换成功后才自动发送：有持久产出时只续跑，确认零产出才重发原文。
   候选耗尽、切换失败或需要换窗确认时交还错误，不继续重试失效路由；复用现有恢复额度和退避，
-  不覆盖用户的新选择。实现与回归见 `maker-ipc/botCandidateRecovery.ts`、
+  不覆盖用户的新选择。没有其它可用路由（单项候选链、例行任务显式模型）时不存在“候选耗尽”：
+  过载、空响应等普通任务会原路由续跑的错误照常原路由续跑，其余错误交还用户。
+  实现与回归见 `maker-ipc/botCandidateRecovery.ts`、
   `maker-ipc/__tests__/botCandidateRecovery.test.ts` 和 `sessionRuntimeFallbackIntent.test.ts`。
   跨 harness 路由已提交但新引擎启动失败时停止自动恢复并显示错误；不使用提交前的路由代次继续推进候选。
 - 定时自动化的恢复只属于当前运行轮次；候选耗尽或自动恢复放弃后，该轮按失败收口并保留错误记录，

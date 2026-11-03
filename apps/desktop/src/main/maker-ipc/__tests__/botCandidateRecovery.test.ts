@@ -1,7 +1,7 @@
 import { readFileSync } from 'node:fs';
 import { ScriptTarget, transpileModule } from 'typescript';
 import { describe, expect, it, vi } from 'vitest';
-import { canResumeAfterRuntimeFallback, isBotCandidateUnavailable } from '../botCandidateRecovery';
+import { canResumeAfterRuntimeFallback, isBotCandidateUnavailable, isRemoteAgentRouteLost } from '../botCandidateRecovery';
 import { isInterruptedTurnError, isAcceptedTurnContinuationOnlyReason } from '../interruptedTurnAutoResume';
 
 const source = readFileSync(new URL('../register.ts', import.meta.url), 'utf8');
@@ -18,9 +18,11 @@ function harness(bot = true) {
   const finalize = vi.fn();
   const guard = vi.fn(() => ({ action: 'resume', attempt: 1, maxAttempts: 5,
     episodeAttempt: 1, maxEpisodeAttempts: 10, sessionTotal: 1, attemptToken: 1, delayMs: 1000 }));
+  const groupMayHandle = vi.fn((_sessionId: string, _signals: unknown) => false);
   const deps = {
-    isInterruptedTurnError, isBotCandidateUnavailable, canResumeAfterRuntimeFallback,
+    isInterruptedTurnError, isBotCandidateUnavailable, isRemoteAgentRouteLost, canResumeAfterRuntimeFallback,
     isAcceptedTurnContinuationOnlyReason,
+    providerGroupService: { mayHandleTurnError: groupMayHandle },
     inputCoordinator: { isExecutionPaused: () => false, autoRetryLastError: resume },
     interruptedTurnAutoResumeGuard: { onInterruptedTurn: guard, noteResumeSendFailed: vi.fn() },
     maybeApplySessionRuntimeFallback: fallback,
@@ -39,7 +41,7 @@ function harness(bot = true) {
   }).outputText;
   const runtime = new Function(...Object.keys(deps), js)(...Object.values(deps));
   if (bot) runtime.botFallbackInputs.add(item.createOpts);
-  return { item, ...runtime.callbacks, resume, fallback, finalize, guard,
+  return { item, ...runtime.callbacks, resume, fallback, finalize, guard, groupMayHandle,
     run: () => scheduled!(), cancel: () => { current = false; } };
 }
 
@@ -195,5 +197,81 @@ describe('Bot candidate recovery', () => {
     h.guard.mockReturnValue({ action: 'stop' } as ReturnType<typeof h.guard>);
     expect(h.onResumableTurnError('s', drop, h.item)).toBeNull();
     expect(h.fallback).not.toHaveBeenCalled();
+  });
+
+  // A shared route's computer going away is the most common primary failure; it is
+  // a property of that route, so another candidate can take over.
+  const remoteClosed = { reason: 'remote_agent_closed', message: '[REMOTE_AGENT_EXPIRED] The task is no longer running on the other computer.' };
+  it.each([
+    remoteClosed,
+    { reason: 'remote_agent_closed', message: '[REMOTE_AGENT_UNAVAILABLE] The agent on the other computer stopped (controller-gone).' },
+    { reason: 'remote_agent_lost', message: '[REMOTE_AGENT_UNAVAILABLE] The agent on the other computer stopped (unreachable).' },
+  ])('allows a different candidate when the remote agent of the route is gone %j', (signals) => {
+    expect(isRemoteAgentRouteLost(signals)).toBe(true);
+    expect(isBotCandidateUnavailable(signals)).toBe(true);
+  });
+
+  it.each([
+    { reason: 'user-revoked', message: '[REMOTE_AGENT_UNAVAILABLE] The agent on the other computer stopped (controller-disconnected).' },
+    { reason: 'remote_agent_restarted', message: '[REMOTE_AGENT_UNAVAILABLE] The provider process stopped; reconnecting to the original conversation.' },
+  ])('keeps an owner disconnect or same-computer reconnect out of the model chain %j', (signals) => {
+    expect(isRemoteAgentRouteLost(signals)).toBe(false);
+    expect(isBotCandidateUnavailable(signals)).toBe(false);
+  });
+
+  it('moves a Bot to its next route after the remote agent closed', async () => {
+    const ordinary = harness(false);
+    expect(ordinary.isResumableTurnErrorCandidate(remoteClosed, ordinary.item)).toBe(false);
+    expect(ordinary.onResumableTurnError('s', remoteClosed, ordinary.item)).toBeNull();
+    const h = harness();
+    expect(h.isResumableTurnErrorCandidate(remoteClosed, h.item)).toBe(true);
+    expect(h.onResumableTurnError('s', remoteClosed, h.item)).not.toBeNull();
+    await h.run();
+    expect(h.fallback).toHaveBeenCalledWith('s', 1, 1, true, expect.any(Function));
+    expect(h.resume).toHaveBeenCalledOnce();
+  });
+
+  it('never retries the closed remote route itself when no other route exists', async () => {
+    const h = harness();
+    h.fallback.mockResolvedValue({ session: null, outcome: 'unchanged' });
+    h.onResumableTurnError('s', remoteClosed, h.item);
+    await h.run();
+    expect(h.resume).not.toHaveBeenCalled();
+    expect(h.finalize).toHaveBeenCalledWith('s', 1, { surfaceBanner: true });
+  });
+
+  it('leaves a lost remote agent to a provider group that can move the same model', () => {
+    const h = harness();
+    h.groupMayHandle.mockReturnValue(true);
+    expect(h.onResumableTurnError('s', remoteClosed, h.item)).toBeNull();
+    expect(h.groupMayHandle).toHaveBeenCalledWith('s', remoteClosed);
+    expect(h.guard).not.toHaveBeenCalled();
+    expect(h.fallback).not.toHaveBeenCalled();
+  });
+
+  const overload = { reason: 'upstream-overload', message: 'Selected model is at capacity. Please try a different model.' };
+  it('keeps the ordinary same-route retry for a Bot that has no other route', async () => {
+    const h = harness();
+    h.fallback.mockResolvedValue({ session: null, outcome: 'unchanged' });
+    expect(h.onResumableTurnError('s', overload, h.item)).not.toBeNull();
+    await h.run();
+    expect(h.fallback).toHaveBeenCalledWith('s', 1, 1, true, expect.any(Function));
+    expect(h.resume).toHaveBeenCalledOnce();
+  });
+
+  it('does not retry the failed route after other configured routes were exhausted', async () => {
+    const h = harness();
+    h.fallback.mockResolvedValue({ session: null, outcome: 'exhausted' });
+    h.onResumableTurnError('s', overload, h.item);
+    await h.run();
+    expect(h.resume).not.toHaveBeenCalled();
+    expect(h.finalize).toHaveBeenCalledWith('s', 1, { surfaceBanner: true });
+  });
+
+  it.each([
+    ['switched', false, true], ['unchanged', false, false], ['exhausted', false, false],
+    ['unchanged', true, true], ['exhausted', true, false], ['failed', true, false], ['superseded', true, false],
+  ] as const)('resumes a required route change after %s (same route retryable: %s) = %s', (outcome, retryable, expected) => {
+    expect(canResumeAfterRuntimeFallback(true, { session: null, outcome }, retryable)).toBe(expected);
   });
 });
