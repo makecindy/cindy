@@ -59,6 +59,16 @@ export function isLogFromLaunch(text, ownerLaunch) {
   return / launch=(\S+)$/.exec(header)?.[1] === ownerLaunch;
 }
 
+/** Metro 退出后删掉日志:原始输出可能带凭证,而 logcheck 本就不认已停止的 Metro。 */
+export function removeMetroLog(path) {
+  if (!path) return;
+  try {
+    rmSync(path, { force: true });
+  } catch {
+    // 删不掉时留给下次启动覆盖;日志在系统临时目录,不在仓库里。
+  }
+}
+
 export function metroLogEnv(path, existingNodeOptions = "") {
   const preload = `--require ${JSON.stringify(TEE_PRELOAD)}`;
   return {

@@ -40,6 +40,7 @@ describe('native e2e environment', () => {
     const portInUse = vi.fn(async () => occupied);
     const error = vi.fn();
     const prepareMetroLog = vi.fn((_dir: string, _port: number, _info: { launch: string }) => '/repo/apps/mobile/logs/metro-8082.log');
+    const removeMetroLog = vi.fn();
     const execution = runInNewContext(`(async () => { ${source.slice(start)} })()`, {
       DEFAULT_PORT: 8081, portArgs: { port: 8082, passthrough: [] }, portInUse,
       ensureAndroidTarget: vi.fn(), spawn, writeMetroOwner, clearMetroOwner,
@@ -48,7 +49,7 @@ describe('native e2e environment', () => {
       resolvePnpmInvocation: () => ({ command: 'pnpm', args: [] }),
       usablePnpmExecPath: () => undefined, existsSync: () => false,
       mobileDir: '/repo/apps/mobile', worktreeRoot: '/repo', buildEnv: {}, region: 'global',
-      prepareMetroLog, metroLogEnv: (path: string) => ({ CINDY_METRO_LOG_PATH: path }),
+      prepareMetroLog, removeMetroLog, metroLogEnv: (path: string) => ({ CINDY_METRO_LOG_PATH: path }),
       branch: 'test', commit: 'test', sourceIdentity: 'test@123',
       loginScenario: 'providers:email-only', envFingerprint: 'fixture',
     });
@@ -71,6 +72,8 @@ describe('native e2e environment', () => {
       expect(writeMetroOwner).toHaveBeenCalledWith(8082, expect.objectContaining({ pid: 4242, metroLogLaunch: launch }));
       for (const callback of exitCallbacks) callback();
       expect(clearMetroOwner).toHaveBeenCalledWith(8082, 4242);
+      // Review #8560: the raw log may carry credentials, so it goes away with its Metro.
+      expect(removeMetroLog).toHaveBeenCalledWith('/repo/apps/mobile/logs/metro-8082.log');
     }
     expect(portInUse).toHaveBeenCalledWith(8082);
   });

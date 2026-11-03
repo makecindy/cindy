@@ -46,7 +46,7 @@ import {
   extractMobileDevRegionArgs,
   withLocalMobileRegionConfig,
 } from './lib/mobile-dev-region.mjs';
-import { metroLogEnv, prepareMetroLog } from './lib/sim-logcheck.mjs';
+import { metroLogEnv, prepareMetroLog, removeMetroLog } from './lib/sim-logcheck.mjs';
 import {
   classifySimMetroListener,
   extractSimMetroPortArgs,
@@ -223,10 +223,14 @@ if (Number.isInteger(child.pid)) {
     worktreeRoot,
     metroLogLaunch: metroLog ? metroLogLaunch : null,
   });
-  child.once('exit', () => clearMetroOwner(portArgs.port, child.pid));
+  child.once('exit', () => {
+    clearMetroOwner(portArgs.port, child.pid);
+    removeMetroLog(metroLog);
+  });
 }
 
 child.once('error', (error) => {
+  removeMetroLog(metroLog);
   console.error(`✗ 无法启动 Metro: ${error.message}`);
   process.exit(1);
 });

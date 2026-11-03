@@ -471,8 +471,9 @@ pnpm --filter mobile start -- --dev-client --host lan
 
 `mobile:sim:start` also writes Metro's output to
 `<system temp>/cindy-metro-logs/<worktree hash>/metro-<port>.log` (the path is
-printed at start), replacing the previous log each time it starts a Metro. The raw
-output can contain credentials, so it never goes into the worktree. Every simulator verification ends with:
+printed at start), replacing the previous log each time it starts a Metro and
+deleting it when that Metro exits. The raw output can contain credentials, so it
+never goes into the worktree and is not kept after the run. Every simulator verification ends with:
 
 ```bash
 pnpm mobile:sim:logcheck   # add -- --port 8082 for a parallel device
