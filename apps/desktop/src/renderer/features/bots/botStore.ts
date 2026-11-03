@@ -6,6 +6,7 @@ import { botInvitationProgress, type BotInvitationProgress } from '../../../shar
 import { useSyncExternalStore } from 'react';
 import { getDataOwnerGeneration, isDataOwnerGenerationCurrent } from '@/contexts/dataOwnerGeneration';
 import { extractIpcError } from '../../utils/ipcError';
+import { isSecondaryWindow } from '@/lib/secondaryWindow';
 import { getModel } from '@cindy/model-providers';
 import { getDefaultModelForVendor } from '@/lib/modelDefinitions';
 import { pickConnectedModelForAgent } from '@/lib/draftModelCalibration';
@@ -780,8 +781,10 @@ async function hydrateFromDatabase(): Promise<void> {
     // retroactively mark every existing conversation as unread. Pruning keeps
     // the stored map from growing with deleted Bots.
     const visibleIds = profiles.map((bot) => bot.id);
-    seedMissingBotReadState(visibleIds);
-    pruneBotReadState(visibleIds);
+    if (!isSecondaryWindow()) {
+      seedMissingBotReadState(visibleIds);
+      pruneBotReadState(visibleIds);
+    }
     emit();
   } catch {
     // DB readiness can race the first renderer render during account/bootstrap.

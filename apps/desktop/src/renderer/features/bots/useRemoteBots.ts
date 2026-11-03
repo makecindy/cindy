@@ -294,11 +294,20 @@ export function markRemoteBotRead(deviceId: string, botId: string, at: number): 
       const positions = cachedReadPositions(window.localStorage.getItem(READ_PREFIX + owner));
       const key = readKey({ deviceId, id: botId });
       positions.set(key, Math.max(positions.get(key) ?? 0, at));
-      const value = JSON.stringify([...positions].map(([identity, readAt]) => {
+      // A secondary roster is incomplete, so evict by age rather than deleting
+      // absent identities. Always reserve room for the explicit read being made.
+      const rows: string[] = [];
+      let size = 2;
+      for (const [identity, readAt] of [...positions].sort((a, b) =>
+        Number(b[0] === key) - Number(a[0] === key) || b[1] - a[1])) {
         const [deviceId, id] = JSON.parse(identity) as [string, string];
-        return { deviceId, id, readAt };
-      }));
-      if (value.length <= 256 * 1024) window.localStorage.setItem(READ_PREFIX + owner, value);
+        const row = JSON.stringify({ deviceId, id, readAt });
+        const added = row.length + (rows.length ? 1 : 0);
+        if (size + added > 256 * 1024) continue;
+        rows.push(row);
+        size += added;
+      }
+      window.localStorage.setItem(READ_PREFIX + owner, `[${rows.join(',')}]`);
     } catch { /* Keep the current window readable when storage is unavailable. */ }
   }
   publish(snapshot.map((bot) => bot.deviceId === deviceId && bot.id === botId ? { ...bot, readAt: Math.max(bot.readAt ?? 0, at) } : bot));

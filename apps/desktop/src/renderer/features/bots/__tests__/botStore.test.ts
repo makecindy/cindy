@@ -7,6 +7,8 @@ import {
   BotModelSelectionRequiredError,
   duplicateBotProfile,
   getBotProfiles,
+  ensureBotProfilesLoaded,
+  getBotUnreadCounts,
   removeBotProfile,
   setCanonicalBotSession,
   setBotHidden,
@@ -19,6 +21,7 @@ import { getDataOwnerGeneration, setDataOwnerGeneration } from '@/contexts/dataO
 import { getPersistedVendorModel } from '@/state/newMakerDraft';
 import { readCachedBotWelcomeContext } from '../botWelcomeContext';
 import { createIpcError } from '../../../../shared/ipc-errors';
+import { getBotLastReadAt, markBotRead, resetBotReadStateForTests, setBotReadStateOwner } from '../botReadState';
 vi.mock('../botWelcomeContext', () => ({ readCachedBotWelcomeContext: vi.fn() }));
 
 vi.mock('@/state/newMakerDraft', async (importOriginal) => ({
@@ -130,6 +133,51 @@ describe('bot profile store', () => {
 
     expect(bot.sessions).toHaveLength(0);
     expect(bot.canonicalSessionId).toBeUndefined();
+  });
+
+  // Unit / review4457849939: the per-window unread sync now refreshes this
+  // production store in secondary windows; the older list must not prune a
+  // newly created Bot's shared mark. Existing profile mutation tests missed it.
+  it('keeps shared Bot read marks through a late secondary hydration', async () => {
+    const previousOwner = getDataOwnerGeneration();
+    const storage = new Map<string, string>();
+    const location = { search: '?secondaryWindow=1' };
+    let finish!: (rows: unknown[]) => void;
+    const list = vi.fn().mockImplementationOnce(() => new Promise(resolve => { finish = resolve; }));
+    vi.stubGlobal('window', {
+      location, addEventListener: vi.fn(), removeEventListener: vi.fn(),
+      localStorage: { getItem: (key: string) => storage.get(key) ?? null, setItem: (key: string, value: string) => storage.set(key, value) },
+      electronAPI: { localDb: { bots: { list } } },
+    });
+    try {
+      setDataOwnerGeneration('read-pruning-test');
+      resetBotReadStateForTests();
+      setBotReadStateOwner('read-pruning-test');
+      const hydration = ensureBotProfilesLoaded(true);
+      await vi.waitFor(() => expect(list).toHaveBeenCalledOnce());
+      // Main has already discovered the newly created Bot while this old list
+      // was in flight. The secondary must neither prune it nor seed old Bots.
+      markBotRead('new-bot', 100);
+      finish([{ id: 'old-bot', name: 'Old' }]);
+      await hydration;
+      expect(getBotProfiles().map(bot => bot.id)).toEqual(['old-bot']);
+      expect(getBotLastReadAt('new-bot')).toBe(100);
+      expect(getBotLastReadAt('old-bot')).toBeNull();
+      location.search = '';
+      list.mockResolvedValue([{ id: 'new-bot', name: 'New', unreadCount: 1 }]);
+      markBotRead('deleted-bot', 100);
+      await ensureBotProfilesLoaded(true);
+      expect(list.mock.lastCall?.[0].lastReadAtByBotId['new-bot']).toBe(100);
+      expect(getBotUnreadCounts()['new-bot']).toBe(1);
+      expect(getBotLastReadAt('deleted-bot')).toBeNull();
+      markBotRead('new-bot', 200);
+      expect(getBotLastReadAt('new-bot')).toBe(200);
+    } finally {
+      resetBotReadStateForTests();
+      setDataOwnerGeneration(previousOwner.dataOwnerId, previousOwner.generation);
+      getBotProfiles();
+      vi.unstubAllGlobals();
+    }
   });
 
   it('does not let a legacy harness hint bypass the global Bot model chain', () => {

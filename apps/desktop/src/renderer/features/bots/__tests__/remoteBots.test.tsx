@@ -285,6 +285,42 @@ it('retains a secondary-only companion read across main roster writes without re
   expect(isRemoteBotUnread(main.result.current[0])).toBe(false);
 });
 
+// Unit / review4457849952: a full independent read cache must still propagate
+// the next explicit secondary read, including offline restoration.
+it('evicts old read marks to persist a secondary read at the cache cap', async () => {
+  window.history.replaceState(null, '', '/?secondaryWindow=1');
+  h.devices = [host('a')];
+  const secondary = renderHook(useRoster);
+  await waitFor(() => expect(secondary.result.current).toHaveLength(1));
+  const account = h.owner;
+  const key = 'cindy.remoteBotReads.v1.' + account;
+  const row = { deviceId: 'removed-device', id: 'x'.repeat(220), readAt: 1 };
+  const count = Math.floor((256 * 1024 - 2) / (JSON.stringify(row).length + 1)) - 1;
+  const rows = Array.from({ length: count }, (_, index) => ({ ...row, id: String(index).padStart(220, 'x') }));
+  const raw = JSON.stringify(rows);
+  const target = { deviceId: 'a', id: 'same-bot', readAt: 300 };
+  // Fill the remaining space with a valid stale identity so the target cannot
+  // fit without eviction; size is measured in the same units as production.
+  rows.push({ ...row, id: 'z'.repeat(256 * 1024 - raw.length - JSON.stringify({ ...row, id: '' }).length - 1) });
+  expect(JSON.stringify(rows).length).toBeLessThanOrEqual(256 * 1024);
+  expect(JSON.stringify([...rows, target]).length).toBeGreaterThan(256 * 1024);
+  window.localStorage.setItem(key, JSON.stringify(rows));
+  act(() => markRemoteBotRead('a', 'same-bot', 300));
+  const saved = window.localStorage.getItem(key)!;
+  expect(saved.length).toBeLessThanOrEqual(256 * 1024);
+  expect(JSON.parse(saved)).toContainEqual(target);
+  secondary.unmount();
+  h.devices = [];
+  h.owner = account + '-between'; renderHook(useRoster).unmount();
+  h.owner = account;
+  h.devices = [host('a')];
+  window.history.replaceState(null, '', '/');
+  const main = renderHook(useRoster);
+  await waitFor(() => expect(main.result.current).toHaveLength(1));
+  expect(main.result.current[0].readAt).toBe(300);
+  expect(isRemoteBotUnread(main.result.current[0])).toBe(false);
+});
+
 it('merges a newer shared read before a stale refresh writes the roster cache', async () => {
   h.devices = [host('a')];
   const { result } = renderHook(useRoster);
