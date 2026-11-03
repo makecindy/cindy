@@ -1,4 +1,6 @@
 import { useEffect, useState } from 'react';
+import { clampAppearanceWindowZoom } from '../../shared/appearanceSettings';
+import { CHROME_ACTIONS_GEOMETRY } from '@/components/layout/chromeActionsGeometry';
 
 /**
  * useMacFullscreen
@@ -14,9 +16,23 @@ import { useEffect, useState } from 'react';
  *     订阅前就触发过（如 window-state 启动即恢复全屏），不查询会卡在 false。
  *   - 后续变化走 IPC 推送。不要用 resize 推断 —— 与 macOS 全屏动画冲突会闪烁。
  */
-export function useMacFullscreen(): { isMac: boolean; isFullscreen: boolean } {
+export function useMacFullscreen(): {
+  isMac: boolean;
+  isFullscreen: boolean;
+  /** Native macOS buttons keep their physical width; this inset is in CSS px. */
+  trafficLightInset: number;
+} {
   const isMac = window.electronAPI?.platform === 'darwin';
   const [isFullscreen, setIsFullscreen] = useState(false);
+  const [windowZoom, setWindowZoom] = useState(() =>
+    clampAppearanceWindowZoom(window.electronAPI?.appearanceSettings?.getSync?.()?.windowZoom ?? 1),
+  );
+  useEffect(() => {
+    if (!isMac) return;
+    return window.electronAPI?.appearanceSettings?.onChanged?.((settings) => {
+      setWindowZoom(clampAppearanceWindowZoom(settings.windowZoom));
+    });
+  }, [isMac]);
 
   useEffect(() => {
     if (!isMac) return;
@@ -40,5 +56,9 @@ export function useMacFullscreen(): { isMac: boolean; isFullscreen: boolean } {
     };
   }, [isMac]);
 
-  return { isMac, isFullscreen };
+  return {
+    isMac,
+    isFullscreen,
+    trafficLightInset: CHROME_ACTIONS_GEOMETRY.macTrafficLightLeft / windowZoom,
+  };
 }

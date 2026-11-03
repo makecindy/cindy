@@ -101,7 +101,11 @@ export function ContentHeader({
   hidden,
   trailing,
 }: ContentHeaderProps) {
-  const { isMac, isFullscreen } = useMacFullscreen();
+  const {
+    isMac,
+    isFullscreen,
+    trafficLightInset = CHROME_ACTIONS_GEOMETRY.macTrafficLightLeft,
+  } = useMacFullscreen();
   const headerContent = useFeatureContentHeader();
 
   // Sidebar 不可见时红绿灯落在 header 上方 → 非全屏让位。78px = 70px 红绿灯
@@ -120,6 +124,7 @@ export function ContentHeader({
           isSidebarRail
             ? CHROME_ACTIONS_GEOMETRY.macTrafficLightLeft
             : (sidebarWidth ?? CHROME_ACTIONS_MAC_RIGHT_EDGE),
+          trafficLightInset,
         )
       : 0;
 
@@ -157,13 +162,18 @@ export function ContentHeader({
         // （用户决策 2026-06-11）。
         !isInvisibleChrome && 'border-b border-titlebar-border',
         'transition-[padding] duration-[250ms] ease-[cubic-bezier(0.4,0,0.2,1)]',
-        needsTrafficLightInset ? 'pl-[78px]' : 'pl-2',
+        !needsTrafficLightInset && 'pl-2',
       )}
       // 窗口拖拽区(B3 口径修订,Lizi 实测拍板):46px 顶带整条归窗口拖动 ——
       // 曾把本条划给"拖面板"手势,实测窗口没了顺手抓握区,难受;聊天面板的
       // 拖动入口回归长按窗体(面积大,够顺手),面板级"标题条手柄"只保留
       // 36px Tab 条那层(在面板身上,语义准)。
-      style={{ WebkitAppRegion: 'drag' } as React.CSSProperties}
+      style={
+        {
+          WebkitAppRegion: 'drag',
+          paddingLeft: needsTrafficLightInset ? trafficLightInset : undefined,
+        } as React.CSSProperties
+      }
     >
       {chromeActionsHitHole > 0 && (
         <div

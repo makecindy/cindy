@@ -40,7 +40,10 @@ import { useMacFullscreen } from '@/hooks/useMacFullscreen';
 import { RightSidebarDetach } from '@/components/layout/RightSidebarDetach';
 import { RightSidebarMaximize } from '@/components/layout/RightSidebarMaximize';
 import { RightSidebarToggle } from '@/components/layout/RightSidebarToggle';
-import { CHROME_ACTIONS_GEOMETRY } from '@/components/layout/chromeActionsGeometry';
+import {
+  CHROME_ACTIONS_GEOMETRY,
+  chromeActionsHitHoleWidth,
+} from '@/components/layout/chromeActionsGeometry';
 import { TabBar, TabStrip, TabTitleLabel, type PopoutWindowOption } from './TabBar';
 import { EmptyState } from './EmptyState';
 import { getTabKind, hydrateTabState } from './registry';
@@ -229,10 +232,13 @@ export function RightSidebarShell({
   const soloMode = hostedTabIds !== undefined;
   /** 右侧组是页签系统的"主组":任务级的激活位对账、快捷键、浏览器桥的活跃会话上报只由它做。 */
   const isPrimaryGroup = groupId === DEFAULT_TAB_GROUP && !soloMode;
-  const { isFullscreen } = useMacFullscreen();
+  const {
+    isFullscreen,
+    trafficLightInset = CHROME_ACTIONS_GEOMETRY.macTrafficLightLeft,
+  } = useMacFullscreen();
   const chromeActionsLeft =
     isMac && !isFullscreen
-      ? CHROME_ACTIONS_GEOMETRY.macTrafficLightLeft
+      ? trafficLightInset
       : CHROME_ACTIONS_GEOMETRY.defaultLeft;
   // unifiedTopbar 本身有 px-2(8px) 左内边距。加上 chromeActionsLeft 后，
   // spacer 的布局起点正好落在 ChromeActions 簇之前，并在簇后保留 8px 呼吸间距。
@@ -244,7 +250,7 @@ export function RightSidebarShell({
   // 对齐窗口坐标；另加正常流中的 spacer，把 TabStrip 推到按钮簇之后。
   const railChromeActionsSpacerWidth =
     unifiedTopbar && !isFullscreen && railChromeActionsHitHole
-      ? CHROME_ACTIONS_GEOMETRY.clusterWidth
+      ? chromeActionsHitHoleWidth(CHROME_ACTIONS_GEOMETRY.macTrafficLightLeft, trafficLightInset)
       : 0;
   const { t } = useTranslation();
   const installedGhosts = useInstalledGhosts();
@@ -890,7 +896,7 @@ export function RightSidebarShell({
               className="absolute left-0 top-0 h-full"
               style={
                 {
-                  width: CHROME_ACTIONS_GEOMETRY.clusterWidth,
+                  width: railChromeActionsSpacerWidth,
                   WebkitAppRegion: 'no-drag',
                 } as React.CSSProperties
               }

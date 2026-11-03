@@ -1,10 +1,12 @@
 // @vitest-environment jsdom
 
 import { render, screen } from '@testing-library/react';
-import { describe, expect, it, vi } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
+
+const chrome = vi.hoisted(() => ({ trafficLightInset: 78 }));
 
 vi.mock('@/hooks/useMacFullscreen', () => ({
-  useMacFullscreen: () => ({ isMac: true, isFullscreen: false }),
+  useMacFullscreen: () => ({ isMac: true, isFullscreen: false, ...chrome }),
 }));
 
 import { FeatureSidebarSlotProvider } from '@/features/feature-context';
@@ -12,6 +14,31 @@ import { CHROME_ACTIONS_GEOMETRY } from '../chromeActionsGeometry';
 import { ContentHeader } from '../ContentHeader';
 
 describe('ContentHeader rail ChromeActions hit hole', () => {
+  beforeEach(() => {
+    chrome.trafficLightInset = 78;
+  });
+
+  // #8656: at 50% zoom the native safe area exceeds the fixed 78 CSS-px rail.
+  // The old capped hole left the last buttons over a drag region. This unit
+  // renders the real header and checks the full clickable extent, not source text.
+  it('covers the safe-area gap and trailing buttons beside a rail at 50% zoom', () => {
+    chrome.trafficLightInset = 156;
+    render(
+      <FeatureSidebarSlotProvider isCollapsed>
+        <ContentHeader
+          sidebarVisible={false}
+          showCollapsedActions
+          isSidebarRail
+          rightSidebarAvailable={false}
+          hidden={false}
+        />
+      </FeatureSidebarSlotProvider>,
+    );
+    const hitHole = screen.getByTestId('content-header-rail-chrome-actions-hit-hole');
+    expect(hitHole.style.width).toBe('202px');
+    expect(hitHole.parentElement?.style.paddingLeft).toBe('156px');
+  });
+
   it('keeps the macOS rail-edge ChromeActions area outside the window drag region', () => {
     render(
       <FeatureSidebarSlotProvider isCollapsed>
