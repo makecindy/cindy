@@ -9,7 +9,7 @@ import { AUTO_REVIEW_SOURCE_CONTENT, AUTO_REVIEW_USER_INTENT, appendAutoReviewUs
 import { REPLY_QUOTE_SOURCE_CONTENT } from '../chatReplyQuoteNote';
 import { AUTO_REVIEW_DELEGATED_CONTINUATION, restoreAutoReviewUserIntent, type AutoReviewHistoryMessage } from '../autoReviewUserIntent.js';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { admitTaskAction, bindTaskActionInput, taskActionInputGuard } from '../taskActionAuthorization.js';
+import { admitTaskAction, bindTaskActionInput, settleTaskActionInput, taskActionInputGuard } from '../taskActionAuthorization.js';
 import { AgentInputCoordinator } from '../agent-input-coordinator.js';
 import { ProviderGroupUsageLimitError } from '../../provider-group/failurePolicy.js';
 import type { Session } from '@cindy/maker-core';
@@ -201,13 +201,14 @@ describe('task action dispatch authorization', () => {
   describe('recovery of an accepted task action turn', () => {
     const TAKEOVER = { error: 'API Error: Connection closed mid-response.', attempt: 1, maxAttempts: 5, sessionTotal: 1 } as const;
 
+    const settled = vi.fn(async () => {});
     async function failAcceptedTurn(mode: 'auto' | 'manual', progress: boolean) {
       const h = createHarness(), sid = `accepted-task-action-${mode}-${progress}`;
       const queued = makeItem('teammate-sent', 'Please fix the build', {
         origin: { kind: 'session', senderSessionId: 'sender', senderBotId: 'bot', displayText: 'Please fix the build' },
         autoReviewUserText: { kind: 'agent-request', request: { userText: 'Fix the build' } },
       });
-      bindTaskActionInput(sid, queued, async () => {});
+      bindTaskActionInput(sid, queued, Object.assign(async () => {}, { onSettled: settled }));
       if (mode === 'auto') h.setResumableTurnErrorTakeover(TAKEOVER);
       h.setHasAssistantProgressAfter(async () => progress);
       h.coordinator.enqueue(sid, queued);
@@ -237,6 +238,9 @@ describe('task action dispatch authorization', () => {
         origin: { senderBotId: 'bot' },
         autoReviewUserText: { kind: 'agent-request', request: { userText: 'Fix the build' } },
       });
+      // The original's settle callback (receiver claim / sender receipt) still runs for the copy.
+      await settleTaskActionInput(h.onDispatchedUserTurn.mock.calls[1]![1]);
+      expect(settled).toHaveBeenCalledOnce();
     });
 
     it('still judges a never-persisted queue head when its retry follows a failed check', async () => {

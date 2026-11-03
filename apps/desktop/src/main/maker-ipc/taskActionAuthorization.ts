@@ -474,7 +474,11 @@ export function acceptTaskActionRecoveryCopy(
 ): AgentInputQueuedMessage {
   if (!taskActionInputGuard('', original)) return copy;
   delete copy.taskActionRequiresAuthorization;
-  (copy as GuardedInput)[TASK_ACTION_INPUT_GUARD] = async () => {};
+  // Only the authorization check is waived: the original's settle callback (releasing the receiver
+  // claim and sender receipt) still has to run once the copy is dispatched or discarded.
+  const accepted: NonNullable<GuardedInput[typeof TASK_ACTION_INPUT_GUARD]> = async () => {};
+  accepted.onSettled = (original as GuardedInput)[TASK_ACTION_INPUT_GUARD]?.onSettled;
+  (copy as GuardedInput)[TASK_ACTION_INPUT_GUARD] = accepted;
   return copy;
 }
 
