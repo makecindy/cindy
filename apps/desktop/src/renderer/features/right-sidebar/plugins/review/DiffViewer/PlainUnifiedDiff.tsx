@@ -263,6 +263,14 @@ function CodeContent({
       side: line.type === 'add' ? 'add' : 'delete',
     })
     : null;
+  const renderedHtml = inlineHtml || html;
+  // React can rewrite innerHTML when this prop object changes, even if its
+  // content is identical. Keep highlighted nodes (and selection) stable across
+  // review refreshes to avoid flooding Windows with accessibility hide events.
+  const htmlContent = useMemo(
+    () => renderedHtml ? { __html: renderedHtml } : undefined,
+    [renderedHtml],
+  );
 
   return (
     <span className={cn(
@@ -270,10 +278,10 @@ function CodeContent({
       wordWrap ? 'flex-1 whitespace-pre-wrap break-words' : !splitScrollable && 'whitespace-pre',
       compact ? 'pr-3' : 'pr-4',
     )}>
-      {inlineHtml ? (
-        <span dangerouslySetInnerHTML={{ __html: inlineHtml }} />
-      ) : html ? (
-        <span dangerouslySetInnerHTML={{ __html: html }} />
+      {/* Keep code semantics in the AX tree: an ignored span promotes every
+          syntax token to the row and fans out Windows node-show events. */}
+      {htmlContent ? (
+        <code className="font-mono" dangerouslySetInnerHTML={htmlContent} />
       ) : (
         line.content
       )}

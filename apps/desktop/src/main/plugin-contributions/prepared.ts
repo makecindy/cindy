@@ -7,8 +7,8 @@ import type {
   PreparedPluginContribution,
   ContributionInstallationBinding,
 } from '../../shared/pluginContributions.js';
-import { ghostInstallApprovalToken, isUserInstallReservedGhostId } from '../../shared/ghost.js';
-import { findInstalledGhostByInstanceId } from '../../shared/pluginIdentity.js';
+import { ghostInstallApprovalToken } from '../../shared/ghost.js';
+import { findInstalledGhostByInstanceId, LOCAL_PLUGIN_NAMESPACE } from '../../shared/pluginIdentity.js';
 import { app } from 'electron';
 import {
   activeOwnerScopeKey,
@@ -74,11 +74,11 @@ export function readContributionInstallation(instanceId: string, expected?: Cont
     throwIpcError('PRECONDITION_FAILED', 'Original installed plugin no longer matches this account');
   if (ghost.namespace === null && ghost.publishingSource?.kind === 'public-market' && ghost.trust?.level === 'cindy-official')
     throwIpcError('OFFICIAL_PLUGIN_GITHUB_REQUIRED', 'Submit official public plugins through GitHub to keep repository source complete and maintainable');
-  if (ghost.approval.state !== 'approved' || ghost.namespaceState !== 'confirmed' || ghost.namespace !== null ||
-    ghost.builtin || isUserInstallReservedGhostId(ghost.manifest.id))
-    throwIpcError('PERMISSION_DENIED', 'Only an approved, non-reserved root installation can be published');
+  if (ghost.approval.state !== 'approved' || ghost.namespaceState !== 'confirmed' || (ghost.namespace !== null && ghost.namespace !== LOCAL_PLUGIN_NAMESPACE) ||
+    ghost.builtin)
+    throwIpcError('PERMISSION_DENIED', 'Only an approved, non-reserved public or local installation can be published');
   const record = new PluginMarketLedger(ownerScopedUserDataPath('plugin-market', 'ledger.v1.json'))
-    .installationForAuthorization({ ghostId: ghost.manifest.id, namespace: null });
+    .installationForAuthorization({ ghostId: ghost.manifest.id, namespace: ghost.namespace });
   if (record && (record.scope !== 'public' || record.organizationId !== null))
     throwIpcError('PERMISSION_DENIED', 'Private plugin resources cannot be converted to public');
   if (record?.installed && record.source !== 'market' && record.source !== 'legacy-adopted')
@@ -144,7 +144,7 @@ async function prepare(
       current.dir !== ghost.dir ||
       ghostInstallApprovalToken(current.approval) !== approval ||
       current.namespaceState !== 'confirmed' ||
-      current.namespace !== null ||
+      (current.namespace !== null && current.namespace !== LOCAL_PLUGIN_NAMESPACE) ||
       JSON.stringify(current.publishingSource) !== JSON.stringify(source) ||
       inspected.canonicalManifest.id !== ghost.manifest.id ||
       inspected.canonicalManifest.version !== ghost.manifest.version
@@ -214,7 +214,7 @@ export function assertPreparedInstallation(entry: PreparedEntry): void {
   if (
     !current ||
     current.dir !== entry.installationDir ||
-    current.namespace !== null ||
+    (current.namespace !== null && current.namespace !== LOCAL_PLUGIN_NAMESPACE) ||
     current.namespaceState !== 'confirmed' ||
     ghostInstallApprovalToken(current.approval) !== entry.approvalToken ||
     JSON.stringify(current.publishingSource) !== entry.publishingSourceKey

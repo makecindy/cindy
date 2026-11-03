@@ -17,6 +17,7 @@ import {
   candidateAgentsForModel,
   catalogModelIdCandidates,
   findCatalogModel,
+  uniqueRenamedSessionModelId,
   nativeAgentForProviderModel,
   normalizeModelIdForClassification,
   partitionEntriesByNativeAgent,
@@ -1323,4 +1324,16 @@ it('keeps display pricing attached to the selected provider and engine', () => {
     displayPricing: quote, currency: 'CNY', costDiscount: 0.2,
   });
   expect(resolveAgentCapability(providers, 'openai', 'same-model', 'codex')).not.toHaveProperty('displayPricing');
+});
+
+describe('uniqueRenamedSessionModelId', () => {
+  it('migrates a saved bare ID only with one replacement in the same provider and engine', () => {
+    const provider = { models: { codex: [m('chatgpt/gpt-6-luna')] } } as ProviderView;
+    expect(uniqueRenamedSessionModelId(provider, 'gpt-6-luna', 'codex')).toBe('chatgpt/gpt-6-luna');
+    expect(uniqueRenamedSessionModelId(provider, 'gpt-6-luna', 'pi')).toBeNull();
+    provider.models.codex!.push(m('xai/gpt-6-luna'));
+    expect(uniqueRenamedSessionModelId(provider, 'gpt-6-luna', 'codex')).toBeNull();
+    provider.models.codex!.push(m('gpt-6-luna'));
+    expect(uniqueRenamedSessionModelId(provider, 'gpt-6-luna', 'codex')).toBeNull();
+  });
 });

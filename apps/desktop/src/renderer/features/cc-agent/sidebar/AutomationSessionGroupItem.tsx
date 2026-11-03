@@ -492,6 +492,7 @@ export const AutomationSessionGroupItem = withSidebarNavigation<AutomationSessio
           side="right"
           delay={0}
           controlledOpen={rowTooltipOpen}
+          onOpenChange={setRowTooltipOpen}
           contentClassName={cn(
             'bg-[var(--surface-elevated)] text-[var(--text-primary)]',
             'border-[var(--border-default)] dark:border-[var(--border-default)] shadow-sm',
