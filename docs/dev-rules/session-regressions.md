@@ -15,6 +15,7 @@
 | 重启后发现中断任务、运行中断后续跑 | 启动候选与运行期续跑分别验证；已结束、已清空、已删除等边界不能误续跑 | [sessionActiveTurn](../../apps/desktop/src/main/localDb/__tests__/sessionActiveTurn.test.ts)、[interruptedTurnAutoResume](../../apps/desktop/src/main/maker-ipc/__tests__/interruptedTurnAutoResume.test.ts) |
 | 供应商与模型缓存先显示，更新不覆盖手选 | 初值来自现有默认与缓存；任务内手动选择后不被后台默认值重置；伙伴默认与新任务选择独立 | [newSessionHostDefaults](../../apps/mobile/src/__tests__/newSessionHostDefaults.test.tsx)、[newMakerDefaultTuple](../../apps/desktop/src/renderer/lib/__tests__/newMakerDefaultTuple.test.ts)、[botDefaultModelChain](../../apps/desktop/src/shared/__tests__/botDefaultModelChain.test.ts) |
 | 新 worktree 没有个人开发配置 | Global/CN 实际打包不要求或带入私有 dev 配置；显式 dev 仍要求自己的配置 | [envBundleTransform](../../apps/mobile/src/__tests__/envBundleTransform.test.ts)，覆盖 Expo 转换、Metro 依赖收集和解析 |
+| Windows 读取辅助功能树后，刷新或重新打开代码差异 | 未变的高亮节点与文字选区保持；切回时首轮使用已有高亮缓存；高亮代码保留代码语义父节点，避免逐 token 的节点出现事件 | [PlainUnifiedDiff](../../apps/desktop/src/renderer/features/right-sidebar/plugins/review/DiffViewer/__tests__/PlainUnifiedDiff.test.ts) 的统一／分栏刷新与代码语义场景；[highlight](../../apps/desktop/src/renderer/features/right-sidebar/plugins/review/DiffViewer/__tests__/highlight.test.ts) 的首轮缓存与内容变化场景 |
 
 ## 按改动选测
 
@@ -43,3 +44,5 @@ pnpm --filter desktop exec vitest run src/main/maker-ipc/__tests__/sessionPermis
 单测验证数据和控制流程；用户可见的乐观显示、滚动、导航、滑动和错误提示仍按对应 [Desktop](desktop-development.md)／[Mobile](mobile-development.md) 规则验收。记录实际工作区、commit、运行中的版本身份、操作、可见结果和截图／日志位置，避免“代码通过了”被误读成“这台设备上的页面已验证”。
 
 遇到新的复现，优先补在表中已有行为测试里，并写出触发条件和用户结果；只有出现新的业务边界时再建模块。本文只链接测试，不复制测试断言，不维护通过次数或临时任务状态。
+
+Windows 审查页的辅助功能回归须在隔离 Electron 中分别检查首次打开、切出再切回、焦点刷新和滚动，覆盖统一／分栏视图。先确认面板真正可见并通过原生 API 读取其内容，再记录主进程的 `BrowserAccessibilityManager::OnAccessibilityEvents`／`NotifyWinEvent`；仅测 renderer 帧率或读取 `accessibilitySupportEnabled` 不能证明 Windows 通知路径没有阻塞。`get_window_state` 等树读取自身可能改变事件生成条件，重启前后的测量不能直接当成同条件对照。

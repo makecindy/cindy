@@ -299,6 +299,8 @@
       "picture": "看画面",
       "backToForm": "回到表单",
       "liveView": "实时画面",
+      "openRemoteDesktop": "打开远程桌面",
+      "useForm": "改用表单填写",
       "fill": "填写",
       "skip": "跳过",
       "continue": "继续",
@@ -306,6 +308,9 @@
       "showPassword": "显示密码",
       "hidePassword": "隐藏密码",
       "scan": "扫码"
+    },
+    "directSignIn": {
+      "hint": "请直接在窗口里登录，完成后会自动继续。"
     },
     "remoteUnavailable": "这台电脑不能从远程接收输入。请在宿主电脑上完成这一步，再交还给 Agent。",
     "unnamedField": "输入框",
