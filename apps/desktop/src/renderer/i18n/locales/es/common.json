@@ -677,7 +677,7 @@
       "idleHint": "Tras este tiempo de inactividad, la computadora detiene el Agent de la sesión y libera su plaza. El siguiente mensaje retoma la misma conversación. Las sesiones en ejecución nunca se interrumpen por este motivo. Usa 0 para no liberar plazas automáticamente.",
       "idleInvalid": "Introduzca un número entero del 0 al {{max}}.",
       "usage": "Sesiones {{used}} / {{total}} realizadas por dispositivos {{devices}}; el dispositivo más ocupado tiene {{largest}}.",
-      "applyHint": "Los cambios se aplican inmediatamente. Reducir un límite solo bloquea nuevas sesiones; Las sesiones existentes continúan. Los retransmisores de grupo cuentan para el dispositivo conectado directamente.",
+      "applyHint": "Los cambios se aplican inmediatamente. Reducir un límite solo bloquea nuevas sesiones; las sesiones existentes continúan. El uso retransmitido del grupo cuenta para el dispositivo conectado directamente.",
       "save": "Guardar",
       "reset": "Restaurar valores predeterminados",
       "saved": "Límites de sesión remota guardados",
