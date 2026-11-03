@@ -337,6 +337,7 @@ async function mergePiRuntimeSkillStatuses(
   if (manifest?.status !== 'loaded') return sessionResult;
   const loadedExplicitSkills = new Map<string, string>();
   const loadedLegacyProjectSkills = new Map<string, string>();
+  const loadedUserSkills = new Map<string, string>();
   const changedProjectSkills = new Map<string, string>();
   const fingerprintBudget = {
     remainingEntries: PI_PROJECT_SKILL_PALETTE_FINGERPRINT_ENTRY_BUDGET,
@@ -364,7 +365,17 @@ async function mergePiRuntimeSkillStatuses(
   }
   for (const command of manifest.commands) {
     const baseDir = command.sourceInfo.baseDir;
-    if (command.source !== 'skill' || !command.name.startsWith('skill:')) continue;
+    if (command.source !== 'skill') continue;
+    if (
+      typeof command.sourceInfo.path === 'string'
+      && /^(?:skill|cindy):/.test(command.name)
+    ) {
+      // Main-owned built-ins such as Learn live in Pi's user scope. Attribute
+      // them only through this session's command table and exact source path;
+      // the palette's fresh filesystem discovery is not runtime evidence.
+      loadedUserSkills.set(canonicalPiRuntimePath(command.sourceInfo.path), command.name);
+    }
+    if (!command.name.startsWith('skill:')) continue;
     const skillName = command.name.slice('skill:'.length);
     // Explicit --skill is `project` on Windows and `temporary` on macOS.
     // Match that provenance by path first so frontmatter aliases still load.
@@ -386,6 +397,7 @@ async function mergePiRuntimeSkillStatuses(
   if (
     loadedExplicitSkills.size === 0
     && loadedLegacyProjectSkills.size === 0
+    && loadedUserSkills.size === 0
     && changedProjectSkills.size === 0
   ) return sessionResult;
   const changedSkillErrors = [...changedProjectSkills.values()].map((skillPath) => ({
@@ -406,6 +418,8 @@ async function mergePiRuntimeSkillStatuses(
               .map((skillPath) => loadedLegacyProjectSkills.get([skill.name, skillPath].join('\0')))
               .find((commandName) => commandName !== undefined);
         }
+      } else if (skill.scope === 'user' && skill.path) {
+        runtimeCommandName = loadedUserSkills.get(canonicalPiRuntimePath(skill.path));
       }
       return runtimeCommandName
         ? { ...skill, runtimeStatus: 'loaded' as const, runtimeCommandName }

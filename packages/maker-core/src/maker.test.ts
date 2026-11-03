@@ -2357,6 +2357,60 @@ describe('Maker Pi runtime skill status', () => {
     expect(preview.skills.every((skill) => skill.runtimeStatus === 'approved')).toBe(true);
   });
 
+  it('matches a loaded user-scope built-in skill to the live Pi command by exact source path', async () => {
+    const learnPath = '/app-data/cindy-skills/learn/SKILL.md';
+    const agent = createAgent(async (opts) => {
+      const handle = createHandle({ id: `pi-${opts.sessionId}`, agentKind: 'pi' });
+      handle.getRuntimeCapabilities = () => ({
+        sessionId: opts.sessionId,
+        capturedAt: '2026-10-29T00:00:00.000Z',
+        generation: 1,
+        status: 'loaded',
+        source: 'pi:get_commands',
+        commands: [{
+          name: 'skill:learn',
+          source: 'skill',
+          sourceInfo: { path: learnPath },
+        }],
+      });
+      return handle;
+    }, 'pi');
+    agent.listAgentSkills = vi.fn(async () => ({
+      skills: [{
+        kind: 'agent-skill' as const,
+        name: 'learn',
+        source: 'skill' as const,
+        scope: 'user' as const,
+        path: learnPath,
+      }, {
+        kind: 'agent-skill' as const,
+        name: 'learn',
+        source: 'skill' as const,
+        scope: 'user' as const,
+        path: '/other/learn/SKILL.md',
+      }],
+    }));
+    const maker = new Maker({ agents: { pi: agent }, storage: createStorage(), logger: createLogger() });
+    try {
+      await maker.createSession({ id: 'user-scope-built-in', agentKind: 'pi', workingDir: '/repo', model: 'm' });
+      const result = await maker.listAgentSkills('pi', {
+        workingDir: '/repo',
+        sessionId: 'user-scope-built-in',
+      });
+      expect(result.skills).toEqual([
+        expect.objectContaining({
+          name: 'learn',
+          path: learnPath,
+          runtimeStatus: 'loaded',
+          runtimeCommandName: 'skill:learn',
+        }),
+        expect.not.objectContaining({ runtimeStatus: 'loaded' }),
+      ]);
+    } finally {
+      await maker.shutdown();
+    }
+  });
+
   it('fails partial project mappings closed without leaking them across live sessions', async () => {
     const agent = createAgent(async (opts) => {
       const handle = createHandle({ id: `pi-${opts.sessionId}`, agentKind: 'pi' });
