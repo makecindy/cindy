@@ -124,6 +124,8 @@ export function mirrorMessageText(row: CompanionMirrorRow, options: { placeholde
   // Private/coordination replies are hidden in the local timeline as well; so are progress
   // commentary and sub-agent output, which are never a reply (bots.ts canonicalReplyVisibility).
   if (row.role === 'assistant' && (meta.botPrivateReply === true || meta.assistantPhase === 'commentary'
+    // Failed sampling output stays in work history and is not an addressed reply (bots.ts).
+    || (meta.failedSamplingAttempt !== undefined && meta.failedSamplingAttempt !== null)
     || (meta.parentToolUseId ?? null) !== null || (meta.parent_tool_use_id ?? null) !== null
     // Claude sub-agent rows; same predicate as the renderer (a legacy transcript link is not one).
     || (typeof meta.parentUuid === 'string' && !!meta.parentUuid && isSubagentParentToolUseId(meta.parentUuid)))) return null;

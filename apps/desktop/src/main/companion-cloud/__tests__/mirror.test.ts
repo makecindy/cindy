@@ -34,6 +34,7 @@ describe('mirrorMessageText', () => {
     ['a delegated continuation', user('continue', { agentMeta: JSON.stringify({ autoReviewUserText: { kind: 'delegated-continuation' } }) })],
     ['private coordination replies', reply('internal', { agentMeta: JSON.stringify({ botPrivateReply: true }) })],
     ['progress commentary', reply('checking files', { agentMeta: JSON.stringify({ assistantPhase: 'commentary' }) })],
+    ['failed sampling output', reply('partial answer', { agentMeta: JSON.stringify({ failedSamplingAttempt: { threadId: 't', turnId: 'u', attempt: 1, itemId: 'i' } }) })],
     ['sub-agent output', reply('sub result', { agentMeta: JSON.stringify({ parentToolUseId: 'toolu_1' }) })],
     ['sub-agent output (snake case)', reply('sub result', { agentMeta: JSON.stringify({ parent_tool_use_id: 'toolu_1' }) })],
     ['Claude sub-agent output (parentUuid)', reply('sub result', { agentMeta: JSON.stringify({ parentUuid: 'toolu_subagent' }) })],
@@ -129,6 +130,16 @@ describe('companion conversation mirror', () => {
     await t.mirror.syncBot('bot', 'actor', 'Mia');
     expect(t.calls.filter(call => call.route === '/conversations')).toHaveLength(1);
     expect(t.imported()[1]!.map(m => m.content[0]!.text)).toEqual(['again']);
+  });
+
+  it('does not mirror failed sampling attempts as replies', async () => {
+    const failed = reply('partial answer', { agentMeta: JSON.stringify({ failedSamplingAttempt: { threadId: 't', turnId: 'u', attempt: 1, itemId: 'i' } }) });
+    const rows = [user('hi'), failed, reply('done')];
+    const t = setup(rows);
+    await t.mirror.syncBot('bot', 'actor', 'Mia');
+    expect(t.imported()[0]!.map(m => m.content[0]!.text)).toEqual(['hi', 'done']);
+    await t.mirror.syncBot('bot', 'actor', 'Mia');
+    expect(t.imported().flat().map(m => m.content[0]!.text)).toEqual(['hi', 'done']);
   });
 
   it('backfills only the latest 200 eligible messages on the first run', async () => {
