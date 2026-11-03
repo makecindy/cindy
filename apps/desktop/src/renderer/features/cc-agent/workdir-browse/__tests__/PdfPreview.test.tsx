@@ -289,8 +289,12 @@ describe('PdfPreview lazy page rendering', () => {
       }),
     );
     root.scrollTop = nodes[2].offsetTop + 120;
-    const observer = FakeIntersectionObserver.instances.find((item) => item.targets.has(nodes[1]))!;
-    await act(async () => observer.emit(nodes[1], true));
+    let observer: FakeIntersectionObserver | undefined;
+    await waitFor(() => {
+      observer = FakeIntersectionObserver.instances.find((item) => item.targets.has(nodes[1]));
+      expect(observer).toBeDefined();
+    });
+    await act(async () => observer!.emit(nodes[1], true));
     const before = root.scrollTop;
     await act(async () => pending.resolve(landscape));
     expect(nodes[1].style.height).toBe('400px');
