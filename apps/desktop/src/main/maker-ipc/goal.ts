@@ -26,6 +26,9 @@ import { getGoalController } from '../goal-host/index.js';
 import { tapWindowBroadcast } from '../device-link/broadcast-tap.js';
 import type { GoalUpdatePatch, GoalStatusUpdate } from '../goal-host/types.js';
 import { MAKER_INVOKE, MAKER_PUSH } from './channels.js';
+import { getDeviceLinkInvokeContext } from '../device-link/invoke-context.js';
+import { isTrustedAppRendererEvent } from '../security/trustedAppRenderer.js';
+import { getSessionRowSnapshot } from '../localDb/ipc/sessions.js';
 
 const log = createLogger('maker-ipc:goal');
 
@@ -88,6 +91,23 @@ export function broadcastGoalStatus(update: GoalStatusUpdate): void {
 }
 
 export function registerGoalHandlers(): void {
+  // Separate read protocol: old GOAL_GET_STATUS retains its UI resume-on-open behavior.
+  ipcMain.handle(MAKER_INVOKE.GOAL_INSPECT, async (event, sessionId: unknown) => {
+    const remote = getDeviceLinkInvokeContext();
+    if (remote?.sharedTask || (!remote && !isTrustedAppRendererEvent(event)))
+      throwIpcError('PERMISSION_DENIED', 'Goal inspection requires the task owner.');
+    const id = requireString(sessionId, 'sessionId');
+    const controller = getGoalController();
+    if (!controller) throwIpcError('INTERNAL', 'goal controller not started');
+    const task = await getSessionRowSnapshot(id).catch(() => {
+      throwIpcError('INTERNAL', 'failed to inspect target session');
+    });
+    if (getGoalController() !== controller) throwIpcError('PRECONDITION_FAILED', 'Goal host changed.');
+    if (!task || task.status === 'deleted') throwIpcError('NOT_FOUND', 'Session does not exist.');
+    const status = await readGoalStatusForIpc(controller, id);
+    if (getGoalController() !== controller) throwIpcError('PRECONDITION_FAILED', 'Goal host changed.');
+    return status;
+  });
   // 设目标(renderer 备用入口;命令路径走 commands/builtins.ts)。新建/编辑都直接生效并续跑。
   ipcMain.handle(MAKER_INVOKE.GOAL_SET, async (_e, input: unknown) => {
     const obj = requireObject(input, 'goal');

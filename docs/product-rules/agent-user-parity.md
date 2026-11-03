@@ -82,6 +82,7 @@ Agent 新建普通独立任务（`send_to_session` create 与 `start_session_tas
 | 任务     | 改名、移动、标签                                            | 有   | 无               |
 | 任务     | 看输入队列；编辑 / 撤回 / 调序自己发的排队消息；插话；停止 | 有   | 无               |
 | 任务     | 模型、推理强度、Fast                                       | 有   | 无               |
+| 任务     | goal 只读查询、创建、更新、暂停、恢复、清除                  | 有   | 有（目标电脑需支持 `maker:goal:inspect`） |
 | 任务     | 删除、Fork、Rewind、切换权限档、代用户确认权限或回答提问   | 无   | 无               |
 | 协同 / Worker | 单个 / 批量创建、指定已有目录、查询实际目录与自有 worktree | 有 | 有（运行设备；新建 worktree 仅本机） |
 | 协同 / Worker | Lead 使用远程供应商时派发跨设备 Worker；独立选择工作电脑与模型电脑 | 有 | 有（`execution_device_id` + `agent_device_id`；目录查询支持同一工作电脑范围） |
@@ -124,6 +125,12 @@ Worker 工具省略 working_dir 时保持继承 Lead 任务记录目录，不跟
 会让 Agent 改变约束自己的那一层，补之前需要单独的产品决定。
 
 ## 实现入口
+
+- 目标模式：`packages/lizi-mcps/src/xdt-helper/session_goal.ts` 注册六个 `*_session_goal` 工具，
+  `apps/desktop/src/main/mcp-integrations/sessionGoal.ts` 复用 GoalController 与已授权设备连接。
+  `get_session_goal` 只读取，不唤醒休眠目标；`set_session_goal` 对相同已有目标保持原状态，
+  不同已有目标要求使用更新接口。写操作受普通任务行动授权约束，操作后返回实际保存状态，
+  `active` 不证明目标验收已经完成。无需桌面输入；锁屏可调用，系统睡眠／宿主离线不保证执行。
 
 - 工具索引与作用范围：`packages/lizi-mcps/src/lizi_xdtHelperMcpServer.ts`
   （`HELPER_CATEGORY_DESCRIPTIONS`）、`cindy_schedulerMcpServer.ts`

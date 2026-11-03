@@ -112,7 +112,9 @@ import { createTaskDigestReader } from './taskDigest.js';
 import { createDesktopTaskDigestDeps, createRemoteWorkbenchMessageReader } from './taskDigestHost.js';
 import { createTaskToolCallAuthorizer } from '../maker-ipc/taskToolCallAuthorizer.js';
 import { createDesktopTaskActionAuthorizer } from '../maker-ipc/taskActionHost.js';
-import { assertTaskActionCurrent, taskActionScheduleGuard } from '../maker-ipc/taskActionAuthorization.js';
+import { assertTaskActionCurrent, taskActionScheduleGuard, captureTaskActionSyncGuard } from '../maker-ipc/taskActionAuthorization.js';
+import { getGoalController } from '../goal-host/index.js';
+import { createSessionGoalControl, createRemoteSessionGoalControl } from './sessionGoal.js';
 import {
   getSessionRowSnapshot,
   patchSessionMetaInDb,
@@ -981,6 +983,34 @@ export function createDesktopMcpProviders(deps: DesktopMcpProvidersDeps): LiziMc
         getSessionRuntime: wrap((service, params) => service.getSessionRuntime(params)),
         setSessionRuntime: wrap((service, params) => service.setSessionRuntime(params)),
       },
+      sessionGoal: createSessionGoalControl({
+        capture: () => {
+          const db = tryGetDbClient();
+          const controller = getGoalController();
+          const owner = activeOwnerScopeKey();
+          if (!db || !controller || isAppSessionBoundaryPending()) throw new Error('HOST_NOT_READY');
+          return {
+            controller,
+            readTask: async (id) => {
+              const [row] = await db.drizzle.select({ status: sessions.status }).from(sessions)
+                .where(eq(sessions.id, id)).limit(1);
+              return row ?? null;
+            },
+            assertCurrent: () => {
+              if (isAppSessionBoundaryPending() || db !== tryGetDbClient()
+                || controller !== getGoalController() || owner !== activeOwnerScopeKey())
+                throw new Error('OWNER_SCOPE_CHANGED');
+            },
+          };
+        },
+        assertActionCurrent: assertTaskActionCurrent,
+        remote: deps.historyRemote ? createRemoteSessionGoalControl({
+          captureAccess: deps.historyRemote.captureAccess,
+          assertActionCurrent: assertTaskActionCurrent,
+          captureActionGuard: captureTaskActionSyncGuard,
+          invoke: deps.invokeRemote,
+        }) : undefined,
+      }),
       taskDelivery: { report: reportTaskDelivery },
       setCurrentSessionTitle: async ({ sessionId, title }) => {
         if (!tryGetDbClient()) {

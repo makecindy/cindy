@@ -343,12 +343,18 @@ describe('device-link relay wire contract', () => {
     const phone = await connect(h, phoneCredential, false);
 
     const auth = { t: 1, b: 'boot-id-0123456789', c: 1, s: 'sig' };
-    phone.send({ v: 1, kind: 'invoke', id: 'req-1', src: 'forged-device', dst: OWNER_DEVICE, payload: { channel: 'x', args: [] }, auth });
+    // The new observational goal channel needs no relay change: payloads stay opaque.
+    const goalQuery = { channel: 'maker:goal:inspect', args: ['task-1'] };
+    phone.send({ v: 1, kind: 'invoke', id: 'req-1', src: 'forged-device', dst: OWNER_DEVICE, payload: goalQuery, auth });
     const delivered = await host.waitFor((env) => env.kind === 'invoke' && env.id === 'req-1');
     expect(delivered.src).toBe('phone-1');
-    expect(delivered.payload).toEqual({ channel: 'x', args: [] });
+    expect(delivered.payload).toEqual(goalQuery);
     // 设备签名原样交给收件设备核对。
     expect((delivered as Envelope & { auth?: unknown }).auth).toEqual(auth);
+    host.send({ v: 1, kind: 'invoke-result', id: 'req-1', dst: 'phone-1', payload: { ok: true, result: null }, auth });
+    const goalResult = await phone.waitFor(env => env.kind === 'invoke-result' && env.id === 'req-1');
+    expect(goalResult.src).toBe(OWNER_DEVICE);
+    expect(goalResult.payload).toEqual({ ok: true, result: null });
 
     const cases: Array<{ frame: Record<string, unknown>; code: string }> = [
       { frame: { v: 1, kind: 'invoke', id: 'req-2', dst: 'nobody', payload: {} }, code: 'DEVICE_OFFLINE' },

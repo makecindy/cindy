@@ -788,6 +788,8 @@ export const MAKER_INVOKE = {
   GOAL_SET: 'maker:goal:set',
   GOAL_CLEAR: 'maker:goal:clear',
   GOAL_GET_STATUS: 'maker:goal:get-status',
+  /** Strictly read-only; unlike GOAL_GET_STATUS, never resumes dormant goals. */
+  GOAL_INSPECT: 'maker:goal:inspect',
   GOAL_PAUSE: 'maker:goal:pause',
   GOAL_RESUME: 'maker:goal:resume',
   GOAL_UPDATE: 'maker:goal:update',

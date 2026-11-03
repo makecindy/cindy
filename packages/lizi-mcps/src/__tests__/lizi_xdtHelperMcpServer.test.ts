@@ -44,6 +44,59 @@ function parsePayload(result: unknown): Record<string, unknown> {
 }
 
 describe("cindy_helper MCP server", () => {
+  // Agent-user-parity: discover goal operations, preserve the bound caller and reject
+  // invalid changes before invoking Host effects. Existing runtime tests lack goal controls.
+  // Unit tier: the real MCP entry over in-memory transport, no desktop or sockets.
+  it('discovers and validates goal tools for self and qualified remote tasks', async () => {
+    const sessionGoal = vi.fn(async () => ({ ok: true as const, goal: null }));
+    const server = createXdtHelperMcpServer({ sessionGoal }, {
+      agentKind: 'codex', workingDir: '/repo', sessionId: 'caller',
+    });
+    const client = new Client({ name: 'goal-tools-test', version: '1' });
+    const [ct, st] = InMemoryTransport.createLinkedPair();
+    await Promise.all([server.connect(st), client.connect(ct)]);
+    const call = async (name: string, args: Record<string, unknown> = {}) => parsePayload(
+      await client.callTool({ name: 'call_tool', arguments: { name, args } }),
+    );
+    try {
+      const catalog = parsePayload(await client.callTool({ name: 'list_tools', arguments: { category: 'control' } }));
+      expect((catalog.tools as Array<{ name: string }>).map(t => t.name)).toEqual(expect.arrayContaining(
+        ['get', 'set', 'update', 'pause', 'resume', 'clear'].map(action => `${action}_session_goal`),
+      ));
+      expect(await call('get_session_goal')).toMatchObject({ ok: true, scope: 'local', session_id: 'caller', goal: null });
+      expect(sessionGoal).toHaveBeenLastCalledWith(expect.objectContaining({ action: 'get', callerSessionId: 'caller', sessionId: 'caller' }));
+      expect(await call('set_session_goal', { session_id: 'device-b::target', objective: '  Verify A1  ',
+        limits: { maxTurns: null, budgetTokens: null, noProgressLimit: 3 } }))
+        .toMatchObject({ ok: true, scope: 'remote', session_id: 'device-b::target' });
+      expect(sessionGoal).toHaveBeenLastCalledWith(expect.objectContaining({ action: 'set', callerSessionId: 'caller',
+        deviceId: 'device-b', sessionId: 'target', objective: 'Verify A1' }));
+      sessionGoal.mockClear();
+      for (const [name, args] of [
+        ['set_session_goal', { objective: ' ' }],
+        ['set_session_goal', { objective: 'x', limits: { maxTurns: -1, budgetTokens: null, noProgressLimit: 3 } }],
+        ['update_session_goal', { patch: {} }],
+        ['clear_session_goal', { session_id: 'a::b::c' }],
+      ] as const) expect(await call(name, args)).toMatchObject({ ok: false });
+      expect(sessionGoal).not.toHaveBeenCalled();
+    } finally { await client.close(); await server.close(); }
+  });
+
+  it('keeps goal mutation behind the same per-tool authorization as other task actions', async () => {
+    const sessionGoal = vi.fn(async () => ({ ok: true as const, goal: null }));
+    const server = createXdtHelperMcpServer({ sessionGoal, authorizeCall: async () => ({
+      ok: false, errorCode: 'USER_CANCELLED', message: 'Goal action was declined',
+    }) }, { agentKind: 'codex', workingDir: '/repo', sessionId: 'caller' });
+    const client = new Client({ name: 'goal-auth-test', version: '1' });
+    const [ct, st] = InMemoryTransport.createLinkedPair();
+    await Promise.all([server.connect(st), client.connect(ct)]);
+    try {
+      const result = await client.callTool({ name: 'call_tool', arguments: {
+        name: 'set_session_goal', args: { objective: 'Unassigned work' },
+      } });
+      expect(parsePayload(result)).toMatchObject({ ok: false, errorCode: 'USER_CANCELLED' });
+      expect(sessionGoal).not.toHaveBeenCalled();
+    } finally { await client.close(); await server.close(); }
+  });
   // Rule (cindy-bots-runtime.md §6「伙伴技能分层」, 2026-11-01): a system Skill the owner turned off loses its
   // tools and its text together. Unit: the live switch hides and denies the todo tools for every
   // entry (category list, call_tool, direct tool) while other teammate tools keep working.

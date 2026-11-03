@@ -17,6 +17,11 @@ export const TASK_ACTION_TOOLS: ReadonlySet<string> = new Set([
   'steer_session',
   'stop_session_turn',
   'set_session_runtime',
+  'set_session_goal',
+  'update_session_goal',
+  'pause_session_goal',
+  'resume_session_goal',
+  'clear_session_goal',
   'update_session_queued_message',
   'cancel_session_queued_message',
   'steer_session_queued_message',
@@ -217,7 +222,7 @@ export function taskActionRisk(call: Pick<Call, 'server' | 'tool' | 'args'>,
   if (call.tool === 'routine_save' && args.enabled === true && !facts?.routineBuiltin &&
     typeof args.prompt === 'string' && args.prompt.trim() && args.prompt !== facts?.routinePrompt)
     return 'authority';
-  if ((call.tool === 'message_session_task' && args.mode === 'resume') || call.tool === 'schedule_resume')
+  if ((call.tool === 'message_session_task' && args.mode === 'resume') || call.tool === 'schedule_resume' || call.tool === 'resume_session_goal')
     return 'resume';
   // The owner's off switch for memory or a system Skill stands until the owner turns it back on.
   if ((call.tool === 'set_teammate_capability' || call.tool === 'set_bot_capability') &&
