@@ -31,16 +31,34 @@ export function isSkillFilePath(value: string): boolean {
   return parts.every((part, index) => part !== '..' && travels(part, index < parts.length - 1));
 }
 
-// Hashing is repeated every upload cycle, so an unchanged file is only hashed once.
+// Hashing is repeated every upload cycle, so an unchanged file is only hashed once. The map is
+// shared by every skill folder and sees no sync cycle, so entries for paths that no longer exist
+// (a skill deleted, or its folder moved by the enable switch) cannot be told apart from live ones
+// here — instead the map is capped: past the cap the least recently used paths go first, and a
+// live set far below the cap (each skill holds tens of files) never loses a hash.
+const HASH_CACHE_MAX_FILES = 4096;
 const hashes = new Map<string, { size: number; mtimeMs: number; sha256: string }>();
+
+/** Map iteration order is insertion order, so a cache hit re-inserts its entry to count as used. */
+function trimSkillFileHashCache(): void {
+  for (const file of hashes.keys()) {
+    if (hashes.size <= HASH_CACHE_MAX_FILES) break;
+    hashes.delete(file);
+  }
+}
 
 async function fileHash(file: string, size: number, mtimeMs: number): Promise<string> {
   const known = hashes.get(file);
-  if (known?.size === size && known.mtimeMs === mtimeMs) return known.sha256;
+  if (known?.size === size && known.mtimeMs === mtimeMs) {
+    hashes.delete(file);
+    hashes.set(file, known);
+    return known.sha256;
+  }
   const hash = createHash('sha256');
   for await (const chunk of createReadStream(file)) hash.update(chunk as Buffer);
   const sha256 = hash.digest('hex');
   hashes.set(file, { size, mtimeMs, sha256 });
+  trimSkillFileHashCache();
   return sha256;
 }
 
