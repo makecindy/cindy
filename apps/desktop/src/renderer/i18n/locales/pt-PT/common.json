@@ -2689,6 +2689,13 @@
       "storage": {
         "dialogueDirectoryTitle": "Espaço de trabalho da conversa",
         "dialogueDirectoryDescription": "Apenas para novas sessões. Os ficheiros existentes permanecem onde estão.",
+        "projectsRootTitle": "Localização de novos projetos",
+        "projectsRootInferred": "Sugerida",
+        "projectsRootDefault": "Predefinida",
+        "projectsRootChoose": "Alterar diretório",
+        "projectsRootReset": "Restaurar localização sugerida",
+        "projectsRootDescription": "Onde ficam as pastas de projeto ao criar um projeto a partir de uma sessão. Se não estiver definida, é sugerida uma localização com base nos projetos existentes.",
+        "projectsRootFailed": "Não foi possível atualizar a localização de novos projetos",
         "dialogueDirectoryOpen": "Abrir diretório",
         "dialogueDirectoryChoose": "Alterar diretório",
         "dialogueDirectoryReset": "Restaurar localização predefinida",
@@ -8675,7 +8682,7 @@
     "localModeDescription": "Não é necessária uma conta Cindy. Os dados ficam neste dispositivo; os modelos na nuvem, o acesso entre dispositivos e os serviços do marketplace ficam indisponíveis.",
     "consentStatement": "Li e aceito os <terms>Termos de Serviço</terms> e a <privacy>Política de Privacidade</privacy>",
     "consentDialog": {
-      "title": "Termos e privacidade",
+      "title": "Termos e Política de Privacidade",
       "body": "Para continuar, leia e aceite os <terms>Termos de Serviço</terms> e a <privacy>Política de Privacidade</privacy> da Cindy.",
       "agree": "Aceitar",
       "disagree": "Agora não"
@@ -14573,6 +14580,26 @@
         "archived_many": "{{count}} sessões arquivadas",
         "deleted_many": "{{count}} sessões eliminadas"
       },
+      "newProjectDialog": {
+        "title": "Novo projeto",
+        "description": "Cria uma pasta de projeto e move esta sessão para o novo projeto.",
+        "descriptionMoveFiles": "Cria uma pasta de projeto, move os ficheiros desta sessão para lá e move a sessão para o novo projeto.",
+        "nameLabel": "Nome do projeto",
+        "namePlaceholder": "ex.: my-app",
+        "targetPath": "Será criado {{path}}",
+        "location": "Localização",
+        "locationInferred": "Sugerida com base nos projetos existentes",
+        "locationWillCreate": "Esta pasta ainda não existe e será criada",
+        "changeLocation": "Alterar…",
+        "remember": "Utilizar esta localização para novos projetos",
+        "cancel": "Cancelar",
+        "create": "Criar projeto",
+        "nameTaken": "Já existe uma pasta com este nome",
+        "nameInvalid": "O nome não pode conter \\ / : * ? \" < > | nem terminar com ponto ou espaço",
+        "loadFailed": "Não foi possível carregar a localização do projeto",
+        "failed": "Falha ao criar o projeto",
+        "done": "Projeto criado e sessão movida"
+      },
       "sessionMenu": {
         "moreActions": "Mais ações",
         "rename": "Mudar nome",
@@ -14586,6 +14613,7 @@
         "moveToProject": "Mover tarefa",
         "moveToProjectHeading": "Projetos neste computador",
         "browseProjectFolder": "Escolher pasta do projeto",
+        "newProject": "Novo projeto…",
         "moveToDialogue": "Mover para Conversas",
         "noProjects": "Sem projetos recentes",
         "moveToProjectDone": "Movida para o projeto",
@@ -16045,6 +16073,7 @@
     "agentControlled": "O Agent abriu este ecrã. Certifique-se de que é realmente onde pretende iniciar sessão antes de o preencher.",
     "agentPicture": "Este código provém de uma captura de ecrã feita pelo Agent, pelo que o Cindy não consegue ver o ecrã original nem saber quando terminou. Verifique se conduz ao site onde pretende iniciar sessão e escolha Devolver ao Agent após a leitura do código.",
     "error": {
+      "raise": "Não foi possível abrir a janela. Mude para ela no computador.",
       "decision": "A operação não foi concluída. Tente novamente.",
       "stale": "O ecrã mudou. Use a versão mais recente.",
       "submit": "A sua introdução não foi enviada. Tente novamente."
@@ -16080,6 +16109,9 @@
       "picture": "Mostrar ecrã",
       "backToForm": "Voltar ao formulário",
       "liveView": "Vista em direto",
+      "openWindow": "Abrir janela de início de sessão",
+      "openRemoteDesktop": "Abrir ambiente de trabalho remoto",
+      "useForm": "Usar o formulário",
       "fill": "Preencher",
       "skip": "Ignorar",
       "continue": "Continuar",
@@ -16087,6 +16119,9 @@
       "showPassword": "Mostrar palavra-passe",
       "hidePassword": "Ocultar palavra-passe",
       "scan": "Ler código"
+    },
+    "directSignIn": {
+      "hint": "Inicie sessão diretamente na janela. Ao terminar, tudo continua automaticamente."
     },
     "remoteUnavailable": "Este computador não pode receber dados remotamente. Conclua este passo no computador anfitrião e depois devolva o controlo ao Agent.",
     "unnamedField": "Campo",

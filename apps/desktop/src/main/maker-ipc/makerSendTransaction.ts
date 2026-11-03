@@ -604,6 +604,9 @@ export interface MakerSendTransactionDeps {
    */
   readBotThreadNote?(sessionId: string): Promise<string | null>;
   readTaskDeliveryNote?(sessionId: string): Promise<string | null>;
+  /** The owner's message closed a waiting 代输入 card: the agent hears it here, with no turn of its own. */
+  readInputHandoffOwnerNote?(sessionId: string): string | null;
+  inputHandoffOwnerNoteDelivered?(sessionId: string): void;
   /**
    * 逐轮环境说明去重(见 wireNoteMemory.ts):返回本轮真正要前置的段;与上一次已被
    * 引擎接受的内容相同的段不再重复。`force` 在交接首条(原生上下文刚重建)时整体重发。
@@ -1636,6 +1639,14 @@ export function createMakerSendTransaction(deps: MakerSendTransactionDeps): Make
       if (plannedNotes['bot-thread']) {
         outgoing = prependNoteToWireUserMessage(outgoing as HandoffWireMessage, plannedNotes['bot-thread']);
       }
+      // The note belongs to the message that closed the card. A native command (a slash input) keeps its
+      // first characters, so it carries no note and the note is dropped rather than left for the next message.
+      const pendingOwnerNote = deps.readInputHandoffOwnerNote?.(sessionId) ?? null;
+      const inputHandoffOwnerNote = allowsEnvironmentNotes ? pendingOwnerNote : null;
+      if (pendingOwnerNote && !allowsEnvironmentNotes) deps.inputHandoffOwnerNoteDelivered?.(sessionId);
+      if (inputHandoffOwnerNote) {
+        outgoing = prependNoteToWireUserMessage(outgoing as HandoffWireMessage, inputHandoffOwnerNote);
+      }
       const appContext = shouldPrependMobileClientPromptNote(normalized, sess.agentKind)
         ? await mcpAppModelContext(sessionId)
         : undefined;
@@ -2045,6 +2056,7 @@ export function createMakerSendTransaction(deps: MakerSendTransactionDeps): Make
             }
           },
         }));
+        if (inputHandoffOwnerNote && sendResult.accepted) deps.inputHandoffOwnerNoteDelivered?.(sessionId);
         sendAccepted = sendResult.accepted;
         if (sendAccepted) {
           appContext?.consume();
