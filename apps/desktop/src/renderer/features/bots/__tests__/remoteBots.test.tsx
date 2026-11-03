@@ -46,6 +46,10 @@ const collection = (name = 'Writer') => ({
     },
   ],
 });
+const readEntryKey = (account: string, deviceId: string, id: string, at: number) =>
+  'cindy.remoteBotReads.v1.entry.' + JSON.stringify(account) + '.' + JSON.stringify([deviceId, id, at]);
+const secondaryReadKeys = (account: string) => Object.keys(window.localStorage)
+  .filter(key => key.startsWith('cindy.remoteBotReads.v1.entry.' + JSON.stringify(account) + '.'));
 function useRoster() {
   useRemoteBotSync();
   return useRemoteBots();
@@ -230,8 +234,7 @@ it('preserves the shared roster through stale secondary refreshes and offline re
   expect(JSON.parse(window.localStorage.getItem(key)!)).toEqual(newer);
   act(() => markRemoteBotRead('a', 'same-bot', 150));
   expect(JSON.parse(window.localStorage.getItem(key)!)).toEqual(newer);
-  expect(JSON.parse(window.localStorage.getItem('cindy.remoteBotReads.v1.' + account)!))
-    .toEqual([{ deviceId: 'a', id: 'same-bot', readAt: 150 }]);
+  expect(secondaryReadKeys(account)).toContain(readEntryKey(account, 'a', 'same-bot', 150));
   view.unmount();
   // Re-enter the account with no live host response, using the real cache load.
   h.owner = 'other-offline-owner';
@@ -278,8 +281,8 @@ it('retains a secondary-only companion read across main roster writes without re
   await waitFor(() => expect(main.result.current[0]?.id).toBe('only-secondary'));
   expect(main.result.current[0].readAt).toBe(300);
   expect(isRemoteBotUnread(main.result.current[0])).toBe(true);
-  const readsKey = 'cindy.remoteBotReads.v1.' + account;
-  const newValue = JSON.stringify([{ deviceId: 'a', id: 'only-secondary', readAt: 400 }]);
+  const readsKey = readEntryKey(account, 'a', 'only-secondary', 400);
+  const newValue = '1';
   window.localStorage.setItem(readsKey, newValue);
   act(() => window.dispatchEvent(new StorageEvent('storage', { key: readsKey, newValue, storageArea: window.localStorage })));
   expect(isRemoteBotUnread(main.result.current[0])).toBe(false);
@@ -305,10 +308,23 @@ it('evicts old read marks to persist a secondary read at the cache cap', async (
   expect(JSON.stringify(rows).length).toBeLessThanOrEqual(256 * 1024);
   expect(JSON.stringify([...rows, target]).length).toBeGreaterThan(256 * 1024);
   window.localStorage.setItem(key, JSON.stringify(rows));
+  // The compatible legacy array remains readable. Fill the new immutable
+  // partition too, so this acknowledgement actually requires eviction there.
+  let used = 0;
+  for (let index = 0; used < 256 * 1024 - 400; index++) {
+    const entry = readEntryKey(account, 'removed-device', String(index).padStart(220, 'x'), 1);
+    window.localStorage.setItem(entry, '1');
+    used += entry.length + 1;
+  }
+  const overhead = readEntryKey(account, 'removed-device', '', 1).length + 1;
+  const filler = readEntryKey(account, 'removed-device', 'z'.repeat(256 * 1024 - used - overhead), 1);
+  window.localStorage.setItem(filler, '1');
+  expect(secondaryReadKeys(account).reduce((size, entry) => size + entry.length + 1, 0)).toBe(256 * 1024);
   act(() => markRemoteBotRead('a', 'same-bot', 300));
-  const saved = window.localStorage.getItem(key)!;
-  expect(saved.length).toBeLessThanOrEqual(256 * 1024);
-  expect(JSON.parse(saved)).toContainEqual(target);
+  const saved = secondaryReadKeys(account);
+  expect(saved.reduce((size, entry) => size + entry.length + 1, 0)).toBeLessThanOrEqual(256 * 1024);
+  expect(saved).toContain(readEntryKey(account, 'a', 'same-bot', 300));
+  expect(window.localStorage.getItem(key)).toBe(JSON.stringify(rows));
   secondary.unmount();
   h.devices = [];
   h.owner = account + '-between'; renderHook(useRoster).unmount();
@@ -319,6 +335,42 @@ it('evicts old read marks to persist a secondary read at the cache cap', async (
   await waitFor(() => expect(main.result.current).toHaveLength(1));
   expect(main.result.current[0].readAt).toBe(300);
   expect(isRemoteBotUnread(main.result.current[0])).toBe(false);
+});
+
+// Unit / review4458970374: pause one renderer's storage read while another
+// public acknowledgement commits, then close the source before main discovers it.
+it.each(['b', 'a'])('retains concurrent read marks for host %s after the source window closes', async (otherDevice) => {
+  window.history.replaceState(null, '', '/?secondaryWindow=1');
+  const secondary = renderHook(useRoster);
+  await waitFor(() => expect(secondary.result.current).toHaveLength(2));
+  const account = h.owner;
+  const readsKey = 'cindy.remoteBotReads.v1.' + account;
+  const get = Storage.prototype.getItem;
+  let interleave = true;
+  const spy = vi.spyOn(Storage.prototype, 'getItem').mockImplementation(function (this: Storage, key: string) {
+    const raw = get.call(this, key);
+    if (key === readsKey && interleave) {
+      interleave = false;
+      markRemoteBotRead(otherDevice, 'same-bot', 300);
+    }
+    return raw;
+  });
+  try { act(() => markRemoteBotRead('a', 'same-bot', 200)); }
+  finally { spy.mockRestore(); }
+  expect(interleave).toBe(false);
+  secondary.unmount();
+  h.owner = account + '-between'; h.devices = [];
+  renderHook(useRoster).unmount();
+  h.owner = account;
+  h.devices = [host(otherDevice)];
+  window.history.replaceState(null, '', '/');
+  const later = collection();
+  Object.assign(later.items[0].display, { lastReplyAt: 400 });
+  h.invoke.mockResolvedValue(later);
+  const main = renderHook(useRoster);
+  await waitFor(() => expect(main.result.current).toHaveLength(1));
+  expect(main.result.current[0].readAt).toBe(300);
+  expect(isRemoteBotUnread(main.result.current[0])).toBe(true);
 });
 
 it('merges a newer shared read before a stale refresh writes the roster cache', async () => {

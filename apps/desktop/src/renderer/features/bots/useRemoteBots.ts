@@ -34,6 +34,55 @@ function cachedReadPositions(raw: string | null): Map<string, number> {
   } catch { /* Missing/corrupt display cache must not affect the live roster. */ }
   return positions;
 }
+// Each acknowledgement has its own immutable key. Different windows (including
+// two reads of the same companion) cannot replace one another's read position.
+const readEntryPrefix = (account: string) => READ_PREFIX + 'entry.' + JSON.stringify(account) + '.';
+function readEntries(account: string) {
+  const prefix = readEntryPrefix(account);
+  const entries: { key: string; identity: string; readAt: number }[] = [];
+  for (const key of Object.keys(window.localStorage)) {
+    if (!key.startsWith(prefix) || key.length > 256 * 1024) continue;
+    try {
+      const row: unknown = JSON.parse(key.slice(prefix.length));
+      if (!Array.isArray(row) || row.length !== 3 || typeof row[0] !== 'string'
+        || typeof row[1] !== 'string' || typeof row[2] !== 'number' || !Number.isFinite(row[2])
+        || row[2] < 0 || window.localStorage.getItem(key) !== '1') continue;
+      entries.push({ key, identity: readKey({ deviceId: row[0], id: row[1] }), readAt: row[2] });
+    } catch { /* Ignore unrelated/corrupt entries. */ }
+  }
+  return entries;
+}
+function savedReadPositions(account: string): Map<string, number> {
+  // Read the old bounded array for compatibility; new writes never replace it.
+  const positions = cachedReadPositions(window.localStorage.getItem(READ_PREFIX + account));
+  for (const entry of readEntries(account)) {
+    positions.set(entry.identity, Math.max(positions.get(entry.identity) ?? 0, entry.readAt));
+  }
+  return positions;
+}
+function persistReadPosition(account: string, deviceId: string, id: string, readAt: number): void {
+  // Observe legacy reads before committing, but never perform a whole-map RMW.
+  const positions = savedReadPositions(account);
+  readAt = Math.max(positions.get(readKey({ deviceId, id })) ?? 0, readAt);
+  const key = readEntryPrefix(account) + JSON.stringify([deviceId, id, readAt]);
+  if (key.length + 1 > 256 * 1024) return;
+  window.localStorage.setItem(key, '1');
+  const entries = readEntries(account).sort((a, b) => b.readAt - a.readAt);
+  const newest = new Map<string, typeof entries[number]>();
+  for (const entry of entries) if (!newest.has(entry.identity)) newest.set(entry.identity, entry);
+  const retained = new Set<string>();
+  let size = 0;
+  const identity = readKey({ deviceId, id });
+  // Bound the new partition, prioritizing the current identity, then recent
+  // reads. Only delete observed entries; a concurrent new key is never erased.
+  for (const entry of [...newest.values()].sort((a, b) =>
+    Number(b.identity === identity) - Number(a.identity === identity) || b.readAt - a.readAt)) {
+    if (size + entry.key.length + 1 > 256 * 1024) continue;
+    retained.add(entry.key);
+    size += entry.key.length + 1;
+  }
+  for (const entry of entries) if (!retained.has(entry.key)) window.localStorage.removeItem(entry.key);
+}
 function mergeReadPositions(rows: RemoteBot[], positions: ReadonlyMap<string, number>): RemoteBot[] {
   return rows.map(bot => {
     const at = positions.get(readKey(bot));
@@ -44,11 +93,11 @@ const publish = (next: RemoteBot[]) => {
   // A sibling may have marked a reply read before its storage event arrives.
   // Every cache writer must merge that position rather than rewind it.
   let stored: string | null = null;
-  let reads: string | null = null;
+  let reads = new Map<string, number>();
   try { if (owner) stored = window.localStorage.getItem(CACHE_PREFIX + owner); } catch { /* unavailable cache */ }
-  try { if (owner) reads = window.localStorage.getItem(READ_PREFIX + owner); } catch { /* unavailable cache */ }
+  try { if (owner) reads = savedReadPositions(owner); } catch { /* unavailable cache */ }
   next = mergeReadPositions(next, cachedReadPositions(stored));
-  next = mergeReadPositions(next, cachedReadPositions(reads));
+  next = mergeReadPositions(next, reads);
   next = next.map(bot => cindyIds.has(bot.id) ? { ...bot, templateId: 'cindy' } : bot);
   snapshot = next;
   // Keep roster membership/replies single-writer. A stale secondary mirror may
@@ -101,9 +150,12 @@ export function useRemoteBotSync(): void {
     const requestOwner = isAuthenticated ? dataOwnerId : null;
     if (!requestOwner) return;
     const onStorage = (event: StorageEvent) => {
-      if (owner !== requestOwner || (event.key !== CACHE_PREFIX + requestOwner && event.key !== READ_PREFIX + requestOwner) || event.newValue === null
+      if (owner !== requestOwner || (event.key !== CACHE_PREFIX + requestOwner && event.key !== READ_PREFIX + requestOwner && !event.key?.startsWith(readEntryPrefix(requestOwner))) || event.newValue === null
         || (event.storageArea !== null && event.storageArea !== window.localStorage)) return;
       const positions = cachedReadPositions(event.newValue);
+      try {
+        for (const [key, at] of savedReadPositions(requestOwner)) positions.set(key, Math.max(positions.get(key) ?? 0, at));
+      } catch { /* Keep the event's valid positions if storage is unavailable. */ }
       // Only read positions cross windows here; stale roster or connection data
       // must not replace this renderer's live projection. Repair older writes too.
       if (snapshot.some(bot => { const at = positions.get(readKey(bot)); return at !== undefined && at !== bot.readAt; })) {
@@ -182,7 +234,7 @@ export function useRemoteBotSync(): void {
         if (!current() || generations.get(deviceId) !== epoch) return;
         const previous = new Map(snapshot.filter(bot => bot.deviceId === deviceId).map(bot => [bot.id, bot]));
         let savedReads = new Map<string, number>();
-        try { savedReads = cachedReadPositions(window.localStorage.getItem(READ_PREFIX + nextOwner)); } catch { /* unavailable cache */ }
+        try { if (nextOwner) savedReads = savedReadPositions(nextOwner); } catch { /* unavailable cache */ }
         const bots = parseRemoteBots(result, deviceId, host.name).map((bot) => ({
           ...bot,
           delegatedSessionIds: previous.get(bot.id)?.delegatedSessionIds,
@@ -291,23 +343,7 @@ export function markRemoteBotRead(deviceId: string, botId: string, at: number): 
   // this companion yet. Store only identities/positions, never another roster.
   if (owner) {
     try {
-      const positions = cachedReadPositions(window.localStorage.getItem(READ_PREFIX + owner));
-      const key = readKey({ deviceId, id: botId });
-      positions.set(key, Math.max(positions.get(key) ?? 0, at));
-      // A secondary roster is incomplete, so evict by age rather than deleting
-      // absent identities. Always reserve room for the explicit read being made.
-      const rows: string[] = [];
-      let size = 2;
-      for (const [identity, readAt] of [...positions].sort((a, b) =>
-        Number(b[0] === key) - Number(a[0] === key) || b[1] - a[1])) {
-        const [deviceId, id] = JSON.parse(identity) as [string, string];
-        const row = JSON.stringify({ deviceId, id, readAt });
-        const added = row.length + (rows.length ? 1 : 0);
-        if (size + added > 256 * 1024) continue;
-        rows.push(row);
-        size += added;
-      }
-      window.localStorage.setItem(READ_PREFIX + owner, `[${rows.join(',')}]`);
+      persistReadPosition(owner, deviceId, botId, at);
     } catch { /* Keep the current window readable when storage is unavailable. */ }
   }
   publish(snapshot.map((bot) => bot.deviceId === deviceId && bot.id === botId ? { ...bot, readAt: Math.max(bot.readAt ?? 0, at) } : bot));
