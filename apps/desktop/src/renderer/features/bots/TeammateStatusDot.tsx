@@ -11,7 +11,7 @@ const COLOR: Record<Exclude<TeammateStatus, 'idle'>, string> = {
 const MENTION_DOT = TEAMMATE_AVATAR.dot + 4;
 
 /**
- * One fixed solid point, including while running. No changing glyph or outer progress ring.
+ * One fixed point; running reuses the task icon's breath. No outer progress ring.
  * `mentioned` (an unread @ of the user) turns the same point into an @ instead of adding a
  * second mark. Awaiting, error and running keep their color; otherwise the @ reads as unread
  * blue, since a completed reply's green would not say "someone is calling you".
@@ -25,7 +25,10 @@ export function TeammateStatusDot({ status, mentioned = false }: { status: Teamm
   return <span role="img" aria-label={label} title={label} data-teammate-status={status}
     data-teammate-mention={mentioned || undefined}
     className="absolute -bottom-px -right-px flex items-center justify-center rounded-full border-solid border-sidebar text-[var(--bot-unread-fg)]"
-    style={{ width: size, height: size, borderWidth: TEAMMATE_AVATAR.border, backgroundColor: color }}>
-    {mentioned ? <AtSign aria-hidden size={MENTION_DOT - 4} strokeWidth={3} /> : null}
+    style={{ width: size, height: size, borderWidth: TEAMMATE_AVATAR.border }}>
+    <span className={`flex h-full w-full items-center justify-center rounded-full${status === 'running' ? ' session-status-breathing' : ''}`}
+      style={{ backgroundColor: color }}>
+      {mentioned ? <AtSign aria-hidden size={MENTION_DOT - 4} strokeWidth={3} /> : null}
+    </span>
   </span>;
 }

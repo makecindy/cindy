@@ -142,6 +142,15 @@ it('resolves the latest canonical task and passes its verified identity to writa
   );
   expect(h.view.mock.lastCall![0].botIdentity).toBe(identity);
 });
+// Unit regression: the old roster (0/50) can precede a visible reply (100).
+// Existing coverage only read a reply older than the roster, hiding the stale cap.
+it.each([0, 50])('acknowledges the visible reply despite a stale roster timestamp %s', async lastReplyAt => {
+  h.lastReplyAt = lastReplyAt;
+  render(<RemoteBotSessionView />);
+  await screen.findByText('remote-conversation');
+  act(() => h.view.mock.lastCall![0].onBotReadThrough(100));
+  expect(h.markRead).toHaveBeenLastCalledWith('home', 'writer', 100);
+});
 it('never mounts a task with a mismatched authoritative source', async () => {
   h.invoke
     .mockImplementationOnce(async () => ({

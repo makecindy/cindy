@@ -1,11 +1,9 @@
 import { useEffect, useRef, useState } from 'react';
 import { Animated, Easing, StyleSheet } from 'react-native';
 import { useReduceMotionEnabled } from '@/hooks/useReduceMotion';
+import { createSessionBreathing, SESSION_BREATH_MIN_OPACITY } from '@/hooks/useSessionBreathing';
 import { motionDuration, radius, useTheme } from '@/theme';
 
-/** Opacity range and half-period of the running breath; the task row's MobileVendorIcon uses the same values. */
-const BREATH_MIN = 0.3;
-const BREATH_HALF_MS = 750;
 const REDUCED_OPACITY = 0.8;
 
 /**
@@ -16,7 +14,7 @@ const REDUCED_OPACITY = 0.8;
 export function CompanionPresenceRing({ active, gap = 2, width = 2 }: { active: boolean; gap?: number; width?: number }) {
   const { colors } = useTheme();
   const reduceMotion = useReduceMotionEnabled();
-  const opacity = useRef(new Animated.Value(active ? BREATH_MIN : 0)).current;
+  const opacity = useRef(new Animated.Value(active ? SESSION_BREATH_MIN_OPACITY : 0)).current;
   const [mounted, setMounted] = useState(active);
   const mountedRef = useRef(active); mountedRef.current = mounted;
 
@@ -34,9 +32,8 @@ export function CompanionPresenceRing({ active, gap = 2, width = 2 }: { active: 
       opacity.setValue(REDUCED_OPACITY);
       return;
     }
-    opacity.setValue(BREATH_MIN);
-    const breathe = (toValue: number) => Animated.timing(opacity, { toValue, duration: BREATH_HALF_MS, easing: Easing.inOut(Easing.ease), useNativeDriver: true });
-    const loop = Animated.loop(Animated.sequence([breathe(1), breathe(BREATH_MIN)]));
+    opacity.setValue(SESSION_BREATH_MIN_OPACITY);
+    const loop = createSessionBreathing(opacity);
     loop.start();
     return () => loop.stop();
   }, [active, opacity, reduceMotion]);

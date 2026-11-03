@@ -4,7 +4,9 @@ import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 const h = vi.hoisted(() => ({ awaiting: new Set<string>(), unread: new Set<string>(),
   listeners: new Set<() => void>(), rowRenders: [] as string[] }));
+vi.mock('@/hooks/useSessionBreathing', () => ({ useSessionBreathing: () => 1 }));
 vi.mock('react-native', () => ({
+  Animated: { View: 'div' },
   View: ({ children, testID, style }: any) => el('div', { 'data-testid': testID, style: Object.assign({}, ...[style].flat().filter(Boolean)) }, children),
   Pressable: ({ children, testID, accessibilityLabel, disabled, onPress, style }: any) => {
     if (testID?.startsWith('teammates.item.')) h.rowRenders.push(testID);

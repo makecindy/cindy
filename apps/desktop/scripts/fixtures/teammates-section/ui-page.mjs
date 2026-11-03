@@ -177,6 +177,22 @@ export default {
         const size = await dot.evaluate(node => ({ width: node.getBoundingClientRect().width, height: node.getBoundingClientRect().height }));
         assert.equal(size.width, 14); assert.equal(size.height, 14);
       }
+      // Observe the running animation itself, including the accessibility fallback.
+      await page.emulateMedia({ reducedMotion: 'no-preference' });
+      const running = page.locator('[data-teammate-status="running"] > span');
+      const breath = await running.evaluate(node => {
+        const animation = node.getAnimations()[0];
+        const timing = animation?.effect?.getTiming();
+        return { name: animation?.animationName, duration: timing?.duration,
+          iterations: timing?.iterations, frames: animation?.effect?.getKeyframes().map(frame => frame.opacity) };
+      });
+      assert.equal(breath.name, 'session-breathing');
+      assert.equal(breath.duration, 1500);
+      assert.deepEqual(breath.frames, ['0.3', '1', '0.3']);
+      assert.equal(await page.locator('[data-teammate-status]:not([data-teammate-status="running"]) > span')
+        .evaluateAll(nodes => nodes.reduce((count, node) => count + node.getAnimations().length, 0)), 0);
+      await page.emulateMedia({ reducedMotion: 'reduce' });
+      assert.equal(await running.evaluate(node => node.getAnimations().length), 0);
       await ui.capture('expanded-states');
       await page.getByRole('button', { name: await ui.t('bots.title'), exact: true }).click();
       await page.locator('[data-teammate-status="running"]').first().waitFor();
@@ -211,7 +227,7 @@ export default {
       assert.equal(await badge.count(), 2, 'only the groups that mention the user are marked');
       const box = await badge.first().boundingBox();
       assert.ok(box && box.width === 18 && box.height === 18, 'the @ point keeps its 18px ring geometry');
-      const colors = await badge.evaluateAll(nodes => nodes.map(node => node.style.backgroundColor));
+      const colors = await badge.evaluateAll(nodes => nodes.map(node => node.firstElementChild.style.backgroundColor));
       assert.deepEqual(colors, ['var(--status-bar-accent)', 'var(--bot-unread-bg)'], 'running stays orange, otherwise unread blue');
       assert.equal(await page.locator('button:has([data-teammate-mention]) [data-teammate-status]').count(), 2, 'one indicator per marked avatar');
       await ui.capture('collapsed-mention');

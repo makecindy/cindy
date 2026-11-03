@@ -1,11 +1,13 @@
-import { View } from 'react-native';
+import { Animated, View } from 'react-native';
 import { useTranslation } from 'react-i18next';
 import { TEAMMATE_AVATAR, type TeammateStatus } from '@cindy/maker-shared/teammate-status';
 import { useTheme, radius } from '@/theme';
+import { useSessionBreathing } from '@/hooks/useSessionBreathing';
 
 export function TeammateStatusDot({ status }: { status: TeammateStatus }) {
   const { colors } = useTheme();
   const { t } = useTranslation();
+  const opacity = useSessionBreathing(status === 'running');
   if (status === 'idle') return null;
   const color = { running: colors.statusAccent, awaiting: colors.statusAwaiting,
     done: colors.statusDone, error: colors.statusError, unread: colors.botUnread }[status];
@@ -13,7 +15,7 @@ export function TeammateStatusDot({ status }: { status: TeammateStatus }) {
     accessibilityLabel={t(`devices.companions.avatarStatus.${status}`)}
     style={{ position: 'absolute', right: -1, bottom: -1, padding: TEAMMATE_AVATAR.border,
       borderRadius: radius.pill, backgroundColor: colors.surface }}>
-    <View style={{ width: TEAMMATE_AVATAR.dot, height: TEAMMATE_AVATAR.dot,
-      borderRadius: radius.pill, backgroundColor: color }} />
+    <Animated.View style={{ width: TEAMMATE_AVATAR.dot, height: TEAMMATE_AVATAR.dot,
+      borderRadius: radius.pill, backgroundColor: color, opacity }} />
   </View>;
 }

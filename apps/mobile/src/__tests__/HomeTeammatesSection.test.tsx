@@ -8,7 +8,9 @@ const h = vi.hoisted(() => ({ cloudRefresh: vi.fn(async () => {}), cloudError: n
   cacheRevision: 0, cacheListeners: new Set<() => void>(), unreadIds: new Set<string>(),
   stripRenders: [] as string[], avatarRenders: [] as string[], identityReads: 0 }));
 vi.mock('@/session/remoteSessionStore', () => ({ remoteSessionStore: { subscribe: () => () => {}, getPendingInteractions: () => [], getSessionLiveActivity: () => null } }));
+vi.mock('@/hooks/useSessionBreathing', () => ({ useSessionBreathing: () => 1 }));
 vi.mock('react-native', () => ({
+  Animated: { View: 'div' },
   View: ({ children, testID }: any) => el('div', { 'data-testid': testID }, children),
   ScrollView: ({ children, testID }: any) => el('div', { 'data-testid': testID }, children),
   Pressable: ({ children, testID, disabled, onPress, accessibilityLabel }: any) => {

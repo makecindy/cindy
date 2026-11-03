@@ -8,9 +8,10 @@ const h = vi.hoisted(() => {
   return { remoteMedia: vi.fn<(media: unknown, deps: unknown, options: unknown) => Promise<{ url: string; previewable: boolean; mimeType: string }>>(async () => { throw new Error('Computer media only'); }), invoke: vi.fn(), avatars: new Map<string, string>(), store: false, failImage: null as null | (() => void),
     auth: { user: { id: 'owner' }, accountGeneration: 1, apiFetch: vi.fn() } };
 });
+vi.mock('@/hooks/useSessionBreathing', () => ({ useSessionBreathing: () => 1 }));
 vi.mock('react-native', async () => {
   const { createElement } = await import('react');
-  return { View: ({ children, style }: any) => createElement('div', { style: Object.assign({}, ...[style].flat(Infinity).filter(Boolean)) }, children),
+  return { Animated: { View: 'div' }, View: ({ children, style }: any) => createElement('div', { style: Object.assign({}, ...[style].flat(Infinity).filter(Boolean)) }, children),
     Image: ({ source, onError }: any) => { h.failImage = onError; return createElement('img', { src: source.uri, 'data-asset': typeof source === 'string' ? source : undefined }); },
     StyleSheet: { create: (value: any) => value } };
 });

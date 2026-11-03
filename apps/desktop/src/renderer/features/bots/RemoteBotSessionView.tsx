@@ -130,7 +130,9 @@ function RemoteBotSessionGate() {
   const acknowledge = useCallback((at: number) => {
     if ((!requestedSessionId || ready?.sessionId === requestedSessionId) && !originalTask && isDataOwnerGenerationCurrent(readOwner.current) && bot?.online && !failed && ready?.id === bot.id && ready.deviceId === bot.deviceId
       && validatedSessionId === bot.sessionId) {
-      markRemoteBotRead(bot.deviceId, bot.id, Math.min(at, bot.lastReplyAt ?? 0));
+      // The visible reply can be newer than the independently refreshed roster.
+      // A stale roster must not leave a reply unread after it has been read.
+      markRemoteBotRead(bot.deviceId, bot.id, at);
     }
   }, [bot, failed, ready, validatedSessionId, requestedSessionId, originalTask]);
 
