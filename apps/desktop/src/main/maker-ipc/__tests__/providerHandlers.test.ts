@@ -5424,3 +5424,151 @@ it.each([undefined, 'https://api.minimax.io/v1/old-models'])(
     });
   },
 );
+
+// Daily refresh adds a Main-owned saved-query branch and a queued delta save. Existing
+// form/OAuth tests do not cover their concurrency. Unit: real IPC + in-memory database,
+// fake credentials only; minimum input is a stale discovery result from one route.
+describe('saved custom model discovery', () => {
+  async function setup(config: CustomProviderConfig = { id: 'daily-refresh-test', name: 'Daily', runtimes: {
+    pi: { baseUrl: 'https://discovery.example.test/v1', wireProtocol: 'openai-chat', models: [{ id: 'old', name: 'My old name', nameExplicit: true, defaultEnabled: false }] },
+  } }, extra: Partial<ProviderHandlerDeps> = {}) {
+    mountDb(); await createCustomProvider(config);
+    const owner = { dataOwnerId: 'test-user', generation: 1 };
+    const deps = makeDeps({
+      currentOwnerSession: () => owner,
+      beginRouteMutation: beginProviderRouteMutation,
+      readCustomProviderKeyForMutation: () => 'FAKE-CURRENT-KEY',
+      listProviders: async () => (await listCustomProviders()).map(config => ({ ...buildUserProvider(config), connected: true })),
+      ...extra,
+    });
+    const harness = new IpcHarness();
+    const service = registerProviderHandlers(harness, deps);
+    const query = (agent: AgentKind = 'pi') => harness.invoke(MAKER_INVOKE.PROVIDER_MODELS_FETCH, {
+      kind: 'saved', providerId: config.id, agent, apiKey: 'FAKE-STALE-KEY', baseUrl: 'https://untrusted.example.test',
+    }) as Promise<import('../../maker-host/provider-model-fetch.js').ProviderModelsFetchResult>;
+    return { config, deps, harness, service, query, owner };
+  }
+
+  it('queries with Main credentials, merges latest settings and rejects the same result after commit', async () => {
+    const f = await setup(); const response = await f.query();
+    expect(response.ok).toBe(true); expect(response.snapshot).toBeDefined();
+    expect(f.deps.fetchModels).toHaveBeenCalledWith(expect.objectContaining({
+      apiKey: 'FAKE-CURRENT-KEY', baseUrl: 'https://discovery.example.test/v1', savedProviderId: f.config.id,
+    }), expect.any(Function));
+    expect(JSON.stringify(response)).not.toContain('FAKE-');
+    const latest = structuredClone(f.config); latest.name = 'Renamed while fetching';
+    latest.runtimes.pi!.models.push({ id: 'user-added', name: 'My new model', contextWindow: 64000 });
+    await f.harness.invoke(MAKER_INVOKE.PROVIDER_CUSTOM_UPDATE, latest, {});
+    const delta = { snapshot: response.snapshot!, models: [{ id: 'old', name: 'Remote name' }, { id: 'new', name: 'New' }] };
+    await f.harness.invoke(MAKER_INVOKE.PROVIDER_CUSTOM_UPDATE, { id: f.config.id }, {}, { discovery: [delta] });
+    const saved = await getCustomProvider(f.config.id);
+    expect(saved?.name).toBe(latest.name);
+    expect(saved?.runtimes.pi!.models).toEqual(expect.arrayContaining([
+      expect.objectContaining({ id: 'old', name: 'My old name', defaultEnabled: false }),
+      expect.objectContaining({ id: 'user-added', contextWindow: 64000 }), expect.objectContaining({ id: 'new' }),
+    ]));
+    await expect(f.harness.invoke(MAKER_INVOKE.PROVIDER_CUSTOM_UPDATE, { id: f.config.id }, {}, { discovery: [delta] })).rejects.toThrow(/INVALID_PARAMS/);
+  });
+  it('expires Pi discovery after model and key saves without revoking existing Codex Host routes', async () => {
+    const config = imageProviderConfig('daily-independent-generations');
+    config.runtimes.pi = { baseUrl: 'https://pi.example.test/v1', models: [{ id: 'pi-old', name: 'Old' }] };
+    const f = await setup(config, {
+      codexCustomProviderConfigSignature: config => JSON.stringify(config.runtimes.codex),
+    });
+    const before = getProviderRouteCredentialRevision(config.id);
+    const result = await f.query('pi');
+    const delta = { snapshot: result.snapshot!, models: [{ id: 'pi-new', name: 'New' }] };
+    await f.harness.invoke(MAKER_INVOKE.PROVIDER_CUSTOM_UPDATE, { id: config.id }, {}, { discovery: [delta] });
+    expect(getProviderRouteCredentialRevision(config.id)).toBe(before);
+    expect(f.deps.prepareCodexCustomProviderHostChange).not.toHaveBeenCalled();
+    await expect(f.harness.invoke(MAKER_INVOKE.PROVIDER_CUSTOM_UPDATE, { id: config.id }, {}, { discovery: [delta] })).rejects.toThrow(/INVALID_PARAMS/);
+    const afterModels = await f.query('pi');
+    const latest = (await getCustomProvider(config.id))!;
+    await f.harness.invoke(MAKER_INVOKE.PROVIDER_CUSTOM_UPDATE, latest, { pi: 'FAKE-REPLACEMENT-KEY' });
+    expect(getProviderRouteCredentialRevision(config.id)).toBe(before);
+    expect(f.deps.prepareCodexCustomProviderHostChange).not.toHaveBeenCalled();
+    await expect(f.harness.invoke(MAKER_INVOKE.PROVIDER_CUSTOM_UPDATE, { id: config.id }, {}, {
+      discovery: [{ ...delta, snapshot: afterModels.snapshot! }],
+    })).rejects.toThrow(/INVALID_PARAMS/);
+  });
+  it('avoids database, generation and broadcast changes for identical discovery', async () => {
+    const f = await setup();
+    const result = await f.query();
+    const delta = { snapshot: result.snapshot!, models: [{ id: 'old', name: 'Remote name' }] };
+    await f.harness.invoke(MAKER_INVOKE.PROVIDER_CUSTOM_UPDATE, { id: f.config.id }, {}, { discovery: [delta] });
+    vi.mocked(f.deps.broadcastChanged).mockClear();
+    const before = raw!.prepare('select * from custom_providers').get();
+    const revision = getProviderRouteCredentialRevision(f.config.id);
+    const again = await f.query();
+    await f.harness.invoke(MAKER_INVOKE.PROVIDER_CUSTOM_UPDATE, { id: f.config.id }, {}, { discovery: [{ ...delta, snapshot: again.snapshot! }] });
+    expect(raw!.prepare('select * from custom_providers').get()).toEqual(before);
+    expect(getProviderRouteCredentialRevision(f.config.id)).toBe(revision);
+    expect(f.deps.broadcastChanged).not.toHaveBeenCalled();
+  });
+  it.each(['owner', 'credential', 'delete-recreate'] as const)('rejects stale deltas after %s changes', async change => {
+    const f = await setup(); const result = await f.query();
+    if (change === 'owner') f.owner.generation++;
+    else if (change === 'credential') {
+      await f.harness.invoke(MAKER_INVOKE.PROVIDER_CUSTOM_UPDATE, f.config, { pi: 'FAKE-NEW-KEY' });
+    } else {
+      await f.harness.invoke(MAKER_INVOKE.PROVIDER_CUSTOM_DELETE, f.config.id);
+      await f.harness.invoke(MAKER_INVOKE.PROVIDER_CUSTOM_CREATE, f.config, { pi: 'FAKE-NEW-KEY' });
+    }
+    await expect(f.harness.invoke(MAKER_INVOKE.PROVIDER_CUSTOM_UPDATE, { id: f.config.id }, {}, {
+      discovery: [{ snapshot: result.snapshot!, models: [{ id: 'late' }] }],
+    })).rejects.toThrow(/INVALID_PARAMS/);
+    expect((await getCustomProvider(f.config.id))!.runtimes.pi!.models.some(m => m.id === 'late')).toBe(false);
+  });
+  it('does not mark temporary legacy queries as saved discovery and rejects mixed saves', async () => {
+    const f = await setup();
+    const form = await f.harness.invoke(MAKER_INVOKE.PROVIDER_MODELS_FETCH, {
+      agent: 'pi', baseUrl: 'https://discovery.example.test/v1', authMethod: 'apiKey', apiKey: 'FAKE-FORM-KEY', savedProviderId: f.config.id,
+    });
+    expect(form).not.toHaveProperty('snapshot');
+    const result = await f.query(); const discovery = [{ snapshot: result.snapshot!, models: [] }];
+    for (const [input, keys] of [[f.config, {}], [{ id: f.config.id }, { pi: 'FAKE-KEY' }]] as const)
+      await expect(f.harness.invoke(MAKER_INVOKE.PROVIDER_CUSTOM_UPDATE, input, keys, { discovery })).rejects.toThrow(/INVALID_PARAMS/);
+  });
+  it('skips background updates requiring a busy Host change before preparing, while manual confirmation still works', async () => {
+    const config = imageProviderConfig('daily-image');
+    const f = await setup(config, { listBusyLocalCodexSessionIds: () => ['busy'],
+      // Exercise the save-layer signature boundary independently of catalog enrichment.
+      codexCustomProviderConfigSignature: config => JSON.stringify(config.runtimes.codex?.models),
+    });
+    const before = await getCustomProvider(config.id);
+    await f.service.run();
+    expect(await getCustomProvider(config.id)).toEqual(before);
+    expect(f.deps.prepareCodexCustomProviderHostChange).not.toHaveBeenCalled();
+    expect(f.deps.broadcastChanged).not.toHaveBeenCalled();
+    const result = await f.query('codex');
+    const discovery = [{ snapshot: result.snapshot!, models: result.models! }];
+    const confirmation = await f.harness.invoke(MAKER_INVOKE.PROVIDER_CUSTOM_UPDATE, { id: config.id }, {}, { source: 'manual-settings', discovery });
+    expect(confirmation).toMatchObject({ ok: false, confirmationRequired: 'codex-image-generation-reload' });
+    await f.harness.invoke(MAKER_INVOKE.PROVIDER_CUSTOM_UPDATE, { id: config.id }, {}, {
+      source: 'manual-settings', discovery, codexImageGenerationRestartPolicy: 'interrupt',
+    });
+    expect((await getCustomProvider(config.id))?.runtimes.codex!.models.some(m => m.id === 'm1')).toBe(true);
+    expect(f.deps.prepareCodexCustomProviderHostChange).toHaveBeenCalledOnce();
+  });
+  it('requests non-interrupting Host preparation and preserves configuration if it becomes busy while reserving', async () => {
+    const config = imageProviderConfig('daily-host-race');
+    const f = await setup(config, { listBusyLocalCodexSessionIds: () => [],
+      codexCustomProviderConfigSignature: config => JSON.stringify(config.runtimes.codex?.models),
+      prepareCodexCustomProviderHostChange: vi.fn(async options => {
+        expect(options).toEqual({ interrupt: false });
+        throw new Error('Host became busy while acquiring the reservation');
+      }),
+    });
+    const before = await getCustomProvider(config.id);
+    await f.service.run();
+    expect(f.deps.prepareCodexCustomProviderHostChange).toHaveBeenCalledOnce();
+    expect(await getCustomProvider(config.id)).toEqual(before);
+    expect(f.deps.finalizeCodexCustomProviderHostChange).not.toHaveBeenCalled();
+    expect(f.deps.broadcastChanged).not.toHaveBeenCalled();
+  });
+  it('keeps saved query and discovery writes behind the trusted sender guard', async () => {
+    const f = await setup(undefined, { assertTrustedSender: () => throwIpcError('PERMISSION_DENIED', 'untrusted') });
+    await expect(f.query()).rejects.toThrow(/PERMISSION_DENIED/);
+    expect(f.deps.fetchModels).not.toHaveBeenCalled();
+  });
+});

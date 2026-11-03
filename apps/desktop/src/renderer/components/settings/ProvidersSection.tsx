@@ -1,3 +1,4 @@
+import type { CustomProviderDiscoveryDelta } from '../../../shared/customProviderUpdate.js';
 import { AddSpeechModelsDialog } from './AddSpeechModelsDialog';
 import { providerSpeechSetup } from '../../../shared/speechProviderSetup';
 import { useCodexRateLimits } from '@/hooks/useCodexRateLimits';
@@ -65,7 +66,6 @@ import {
   appendDiscoveredCustomProviderModels,
   deleteCustomProvider,
   providerViewToCustomProviderConfig,
-  readCustomProviderKey,
   updateCustomProvider,
 } from '@/lib/customProviders';
 import { providerDisplayName } from '@/lib/providerDisplayName';
@@ -2931,7 +2931,7 @@ export function ProvidersSection() {
   }, [confirm, t]);
 
   /**
-   * 自定义供应商「刷新模型」:读回各 runtime 密钥 → fetchProviderModels →
+   * 自定义供应商「刷新模型」:Main 读取当前连接与凭证 → fetchProviderModels →
    * additions-only 合并进配置;已确认的 API Key 连接缺少语音型号时补一个参考。
    * 已有型号及其显式可见性不变;后台自动刷新不补参考型号。
    */
@@ -2942,29 +2942,23 @@ export function ProvidersSection() {
         const config = providerViewToCustomProviderConfig(p);
         let added = 0;
         const refreshedAgents = new Set<AgentKind>();
+        const discovery: CustomProviderDiscoveryDelta[] = [];
         for (const agent of p.agents) {
           const rt = config.runtimes[agent];
           if (!rt?.baseUrl) continue;
           const authMethod =
             p.auth.method === 'none' ? 'none' : p.auth.method === 'oauth' ? 'oauth' : 'apiKey';
-          const apiKey = authMethod === 'apiKey' ? await readCustomProviderKey(p.id, agent) : null;
-          // 鉴权请求头是 main-only 密文,renderer 不回读;交由 main 按 savedProviderId
-          // 注入已存请求头(否则仅靠请求头鉴权的端点刷新会因缺头 401,codex review)。
-          const r = await window.electronAPI.maker.fetchProviderModels({
-            agent,
-            baseUrl: rt.baseUrl,
-            authMethod,
-            ...(rt.wireProtocol ? { wireProtocol: rt.wireProtocol } : {}),
-            modelsUrl: rt.modelsUrl ?? null,
-            apiKey,
-            savedProviderId: p.id,
-          });
+          const r = await window.electronAPI.maker.fetchProviderModels(p.auth.native ? {
+            agent, baseUrl: rt.baseUrl, authMethod, savedProviderId: p.id,
+          } : { kind: 'saved', providerId: p.id, agent });
           if (!r.ok || !r.models) continue;
           if (p.auth.native) {
             toast.success(t('settings.providers.models.refreshDone'));
             refetch();
             return;
           }
+          if (!r.snapshot) continue;
+          discovery.push({ snapshot: r.snapshot, models: r.models });
           refreshedAgents.add(agent);
           const openRouterCatalog = /^https:\/\/openrouter\.ai\/api(?:\/v1)?\/?$/.test(rt.baseUrl)
             ? (rt.modelsUrl ?? 'https://openrouter.ai/api/v1/models')
@@ -2987,6 +2981,7 @@ export function ProvidersSection() {
         const saved = await confirmProviderChange(async (options) => {
           const result = await updateCustomProvider(config, {}, {
             ...options,
+            discovery,
             ...(providerSpeechSetup(p) ? { speechReferenceRefreshAgents: [...refreshedAgents] } : {}),
           });
           speechReferenceAdded = result.ok && result.speechReferenceAdded === true;

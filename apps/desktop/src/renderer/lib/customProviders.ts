@@ -1,4 +1,4 @@
-import { catalogModelMetadata, mergeDiscoveredRuntimeModels, isOpenRouterModelsUrl, type DiscoveredModel } from '@cindy/model-providers';
+import { catalogModelMetadata } from '@cindy/model-providers';
 /**
  * customProviders —— 自定义供应商「配置 + per-runtime 密钥」的 renderer 侧写入编排。
  *
@@ -160,39 +160,7 @@ export function providerViewToCustomProviderConfig(p: ProviderView): CustomProvi
   };
 }
 
-/** Refresh metadata and append new models; native-engine defaults decide visibility. */
-export function appendDiscoveredCustomProviderModels(
-  existing: readonly ProviderRuntimeModelConfig[],
-  discovered: readonly DiscoveredModel[],
-  discoveryUrl?: string,
-): { models: ProviderRuntimeModelConfig[]; addedIds: string[] } {
-  let prior = existing;
-  if (discoveryUrl && isOpenRouterModelsUrl(discoveryUrl)) {
-    const actual = new Map(discovered.map(model => [model.id, model]));
-    // Repair only discovery-created Anthropic wrappers confirmed by the complete
-    // canonical response. Keep manual IDs and never guess another supplier's aliases.
-    const canonicalId = (model: ProviderRuntimeModelConfig) => {
-      if (actual.has(model.id) || !model.discoveredMetadata || model.nameExplicit || model.route || model.piApi || !model.id.startsWith('anthropic/')) return model.id;
-      const candidate = model.id.slice('anthropic/'.length).replace(/\[1m\]$/, '');
-      return actual.has(candidate) ? candidate : model.id;
-    };
-    const normalized = new Map(existing.filter(model => canonicalId(model) === model.id).map(model => [model.id, model]));
-    for (const model of existing) {
-      const id = canonicalId(model);
-      if (id === model.id) continue;
-      const canonical = normalized.get(id);
-      normalized.set(id, { ...model, ...canonical, id,
-        name: canonical?.nameExplicit ? canonical.name : actual.get(id)?.name ?? model.name });
-    }
-    prior = [...normalized.values()];
-  }
-  const models = mergeDiscoveredRuntimeModels(prior, discovered);
-  const known = new Set(existing.map((model) => model.id));
-  return {
-    models,
-    addedIds: models.filter((model) => !known.has(model.id)).map((model) => model.id),
-  };
-}
+export { appendDiscoveredCustomProviderModels } from '../../shared/customProviderModelRefresh.js';
 
 /**
  * 读取该自定义供应商**某 runtime** 本机已存的明文密钥（用户自己的 key）；无密钥返回 null，
@@ -230,7 +198,8 @@ export async function updateCustomProvider(
   keys: RuntimeKeys,
   options?: CustomProviderUpdateOptions,
 ): Promise<CustomProviderUpdateResult> {
-  const storedConfig = { ...config, id: storedCustomProviderId(config.id) };
+  const storedConfig = options?.discovery ? { id: storedCustomProviderId(config.id) }
+    : { ...config, id: storedCustomProviderId(config.id) };
   return options === undefined
     ? window.electronAPI.maker.updateCustomProvider(storedConfig, keys)
     : window.electronAPI.maker.updateCustomProvider(storedConfig, keys, options);

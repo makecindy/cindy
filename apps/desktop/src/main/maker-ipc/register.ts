@@ -1,3 +1,4 @@
+import { createCustomProviderRefreshAttempts } from '../maker-host/custom-provider-model-refresh.js';
 import { createTaskCompletionDeliveryHost, type TaskCompletionDeliveryHost } from './taskCompletionDeliveryHost.js';
 import { setRoutineResultDispatch } from '../routines/deliveryDispatch.js';
 import { McpSetupBridge } from './mcpSetupBridge.js';
@@ -250,7 +251,7 @@ import { applyScheduledModelSelection, createScheduledModelScope, createSchedule
 import { parseScheduledModelBaseline, type ScheduledModelBaseline } from '../../shared/scheduledModelBaseline';
 import { recoverRenamedSessionModelBeforeSend } from './renamedSessionModelRecovery';
 import { recordTurnModelChange, type TurnModelIdentity } from './turnModelChange';
-import { app, BrowserWindow, dialog, ipcMain, shell, type IpcMainInvokeEvent } from 'electron';
+import { app, BrowserWindow, dialog, ipcMain, powerMonitor, shell, type IpcMainInvokeEvent } from 'electron';
 import { accessChatDisplayCache } from './chatDisplayCache.js';
 import { accessBotGroupOutbox } from './botGroupOutboxStorage.js';
 import {
@@ -7770,7 +7771,14 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     return { dataOwnerId: session.dataOwnerId, generation: session.generation };
   });
 
-  registerProviderHandlers(createElectronIpcHandlerRegistry(), {
+  const customModelRefresh = registerProviderHandlers(createElectronIpcHandlerRegistry(), {
+    customModelRefresh: {
+      ready: () => !isAppSessionBoundaryPending(),
+      attempts: createCustomProviderRefreshAttempts({
+        filePath: () => ownerScopedUserDataPath('model-discovery', 'custom-provider-refresh.json'),
+        scopeKey: activeOwnerScopeKey, log,
+      }),
+    },
     listProviders: (opts) => getDesktopProviderService().listProviders(opts),
     isOrganizationManagedProviderId: (providerId) =>
       getActiveCatalog().providers.some(
@@ -7809,7 +7817,8 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     testConnection: (input, signal) => testProviderConnection(input, undefined, signal),
     detectProvider: detectProviderDeployment,
     accountUsage: (input) => readProviderAccountUsage(input),
-    fetchModels: async (spec) => {
+    fetchModels: async (spec, isCurrent = () => true) => {
+      if (!isCurrent()) return { ok: false, code: 'AUTH_INVALID' };
       if (spec.savedProviderId && subscriptionAccountKind(spec.savedProviderId)) {
         return { ok: await refreshSubscriptionAccountModels(spec.savedProviderId), models: [] };
       }
@@ -7832,13 +7841,16 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
           provider,
           spec.agent,
           storedCustomProviderId(provider.id),
-          () => getActiveAppSession().generation === owner.generation &&
+          () => isCurrent() && getActiveAppSession().generation === owner.generation &&
             getActiveCatalog().providers.find((p) => p.id === provider.id) === provider,
           undefined,
           spec.headers,
         );
       }
-      return fetchProviderModels(spec);
+      return fetchProviderModels(spec, async (url, init) => {
+        if (!isCurrent()) throw new Error('Provider discovery expired');
+        return outboundFetch(url, init);
+      });
     },
     builtinApiKeyDeps: options.builtinApiKeyDeps,
     selectProviderImportFile: async (event) => {
@@ -8192,6 +8204,17 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         : removeGenericOAuthCredentialsReversibly(storedCustomProviderId(providerId));
     },
   });
+  customModelRefresh.start();
+  const wakeCustomModelRefresh = () => customModelRefresh.kick();
+  powerMonitor.on('resume', wakeCustomModelRefresh);
+  // Invalidation fires before the new owner is committed; the timer runs after that boundary.
+  const removeCustomModelRefreshOwnerListener = onAppSessionInvalidated(wakeCustomModelRefresh);
+  app.once('before-quit', () => {
+    customModelRefresh.stop();
+    powerMonitor.removeListener('resume', wakeCustomModelRefresh);
+    removeCustomModelRefreshOwnerListener();
+  });
+
 
   // 自定义 MCP 服务器 CRUD —— CRUD 成功后刷新三个 agent 的 mcpProviders 数组
   // （下次新建会话生效）并广播 MCP_CHANGED 让设置页列表 live 刷新。

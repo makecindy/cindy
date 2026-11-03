@@ -66,6 +66,7 @@ export interface ProviderModelsFetchSpec {
 /** 结构化结果（查询型返回：renderer 需要 code 渲染分类文案，不走 throwIpcError）。 */
 export interface ProviderModelsFetchResult {
   ok: boolean;
+  snapshot?: import('../../shared/customProviderUpdate.js').CustomProviderDiscoverySnapshot;
   /** 拉到的模型清单（ok=true 时给出；已按 id 去重;contextWindow 为端点声明的上下文长度,尽力提取）。 */
   models?: DiscoveredModel[];
   /** 失败分类码（ok=false 时给出）。 */

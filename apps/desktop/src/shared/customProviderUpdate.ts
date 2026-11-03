@@ -1,8 +1,30 @@
-import type { AgentKind } from '@cindy/model-providers';
+import type { AgentKind, DiscoveredModel } from '@cindy/model-providers';
+
+/** Non-secret binding to the Main route/credential snapshot used for discovery. */
+export interface CustomProviderDiscoverySnapshot {
+  providerId: string;
+  agent: AgentKind;
+  ownerGeneration: number;
+  ownerId: string;
+  credentialRevision: number;
+  routeSignature: string;
+}
+
+export interface CustomProviderDiscoveryDelta {
+  snapshot: CustomProviderDiscoverySnapshot;
+  models: DiscoveredModel[];
+}
+
+export interface SavedProviderModelsFetchInput {
+  kind: 'saved';
+  providerId: string;
+  agent: AgentKind;
+}
 
 export type CodexImageGenerationRestartPolicy = 'interrupt';
 
 export interface CustomProviderUpdateOptions {
+  discovery?: CustomProviderDiscoveryDelta[];
   source?: 'manual-settings';
   /** Local Settings additions, merged against the latest connection in Main. */
   appendSpeechModelsOnly?: true;

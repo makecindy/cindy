@@ -1260,8 +1260,8 @@ describe('AddProviderWizard — preset 直达', () => {
 
   it('智谱绑定合并 V4 与 V1 目录，并给 glm-5.3 保存 Responses 路由', async () => {
     vi.mocked(window.electronAPI.maker.fetchProviderModels).mockImplementation(
-      async ({ baseUrl }: { baseUrl: string }) =>
-        baseUrl === 'https://open.bigmodel.cn/api/v1'
+      async request =>
+        ('baseUrl' in request ? request.baseUrl : undefined) === 'https://open.bigmodel.cn/api/v1'
           ? { ok: true, models: [{ id: 'glm-5.3', name: 'GLM-5.3' }] }
           : { ok: true, models: [{ id: 'glm-5.2', name: 'GLM-5.2', discoveredMetadata: {} }] },
     );
@@ -1311,8 +1311,8 @@ describe('AddProviderWizard — preset 直达', () => {
 
   it('智谱主目录失败时附加目录不会改写预设模型的 V4 路由', async () => {
     vi.mocked(window.electronAPI.maker.fetchProviderModels).mockImplementation(
-      async ({ baseUrl }: { baseUrl: string }) =>
-        baseUrl === 'https://open.bigmodel.cn/api/v1'
+      async request =>
+        ('baseUrl' in request ? request.baseUrl : undefined) === 'https://open.bigmodel.cn/api/v1'
           ? {
               ok: true,
               models: [
@@ -1341,8 +1341,8 @@ describe('AddProviderWizard — preset 直达', () => {
 
   it('可编辑预设改为同源 endpoint 后继续合并 Responses 目录', async () => {
     vi.mocked(window.electronAPI.maker.fetchProviderModels).mockImplementation(
-      async ({ baseUrl }: { baseUrl: string }) =>
-        baseUrl === 'https://editable.example/api/v1'
+      async request =>
+        ('baseUrl' in request ? request.baseUrl : undefined) === 'https://editable.example/api/v1'
           ? { ok: true, models: [{ id: 'responses-model', name: 'Responses Model' }] }
           : {
               ok: true,
@@ -1972,7 +1972,7 @@ describe('identified provider handoff', () => {
     expect(config.runtimes.codex!.models.some(m => m.id === 'private-alias')).toBe(true);
     expect(config.runtimes['claude-code']).toEqual(own);
     expect(keys['claude-code']).toBe('own-key');
-    expect(vi.mocked(window.electronAPI.maker.fetchProviderModels).mock.calls.every(([request]) => request.baseUrl !== own.baseUrl)).toBe(true);
+    expect(vi.mocked(window.electronAPI.maker.fetchProviderModels).mock.calls.every(([request]) => ('baseUrl' in request ? request.baseUrl : undefined) !== own.baseUrl)).toBe(true);
   });
   it('returns selected models only to their own engine with its discovery metadata', async () => {
     const onReturnCustom = vi.fn();

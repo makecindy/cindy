@@ -3489,16 +3489,17 @@ export async function prepareCodexForAuthModeChange(options: { allLocalHosts?: b
 /**
  * Hold the shared local Codex Host change guard and force-retire that Host before a custom
  * Provider route or credential is persisted. Forced retirement closes all attached local Codex
- * sessions at once; remote Codex and other agents use different Hosts and are unaffected.
+ * sessions at once; background discovery opts out with interrupt: false so the reservation
+ * rejects busy/starting Hosts. Remote Codex and other agents use different Hosts.
  */
-export async function prepareCodexForCustomProviderHostChange(): Promise<void> {
+export async function prepareCodexForCustomProviderHostChange(options: { interrupt?: boolean } = {}): Promise<void> {
   if (_codexCredentialChangeGuard) {
     throw new Error('Codex credential mode change is already in progress');
   }
   const guard = _codexAgent
     ? await _codexAgent.beginLocalHostCredentialChange(
         'Codex custom Provider route or credential changed',
-        { allLocalHosts: true, forceRetire: true },
+        { allLocalHosts: true, forceRetire: options.interrupt !== false },
       )
     : null;
   let prepared = false;

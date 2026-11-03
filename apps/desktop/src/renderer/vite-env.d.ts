@@ -5729,7 +5729,7 @@ interface ElectronAPI {
       options?: CustomProviderUpdateOptions,
     ) => Promise<CustomProviderUpdateResult>;
     updateCustomProvider: (
-      config: import('@cindy/model-providers').CustomProviderConfig,
+      config: import('@cindy/model-providers').CustomProviderConfig | Pick<import('@cindy/model-providers').CustomProviderConfig, 'id'>,
       keys: Partial<Record<'claude-code' | 'codex' | 'pi', string>>,
       options?: CustomProviderUpdateOptions,
     ) => Promise<CustomProviderUpdateResult>;
@@ -5817,7 +5817,7 @@ interface ElectronAPI {
       authMethod: 'apiKey' | 'none'; apiKey?: string | null; headers?: Record<string, string>;
       wireProtocol?: import('@cindy/model-providers').ProviderWireProtocol;
     })) => Promise<import('../shared/providerDetection').DeploymentDetectionResult>;
-    fetchProviderModels: (input: {
+    fetchProviderModels: (input: import('../shared/customProviderUpdate').SavedProviderModelsFetchInput | {
       allowEmpty?: boolean;
       redirect?: 'error';
       agent: 'claude-code' | 'codex' | 'pi';
@@ -5832,6 +5832,7 @@ interface ElectronAPI {
     }) => Promise<{
       ok: boolean;
       models?: import('@cindy/model-providers').DiscoveredModel[];
+      snapshot?: import('../shared/customProviderUpdate').CustomProviderDiscoverySnapshot;
       code?: import('../shared/providerErrors').ProviderErrorCode;
       status?: number;
       detail?: string;

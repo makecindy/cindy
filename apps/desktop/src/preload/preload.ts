@@ -6657,7 +6657,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
     ): Promise<CustomProviderUpdateResult> =>
       ipcRenderer.invoke('maker:provider:custom:create', config, keys, options),
     updateCustomProvider: (
-      config: import('@cindy/model-providers').CustomProviderConfig,
+      config: import('@cindy/model-providers').CustomProviderConfig | Pick<import('@cindy/model-providers').CustomProviderConfig, 'id'>,
       keys: Partial<Record<'claude-code' | 'codex' | 'pi', string>>,
       options?: CustomProviderUpdateOptions,
     ): Promise<CustomProviderUpdateResult> =>
@@ -6707,7 +6707,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
       wireProtocol?: import('@cindy/model-providers').ProviderWireProtocol;
     })): Promise<import('../shared/providerDetection').DeploymentDetectionResult> =>
       ipcRenderer.invoke('maker:provider:detect', input),
-    fetchProviderModels: (input: {
+    fetchProviderModels: (input: import('../shared/customProviderUpdate').SavedProviderModelsFetchInput | {
       allowEmpty?: boolean;
       redirect?: 'error';
       agent: 'claude-code' | 'codex' | 'pi';
@@ -6725,6 +6725,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
     }): Promise<{
       ok: boolean;
       models?: import('@cindy/model-providers').DiscoveredModel[];
+      snapshot?: import('../shared/customProviderUpdate').CustomProviderDiscoverySnapshot;
       code?: import('../shared/providerErrors').ProviderErrorCode;
       status?: number;
       detail?: string;

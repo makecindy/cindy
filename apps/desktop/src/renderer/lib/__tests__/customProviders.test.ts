@@ -687,6 +687,22 @@ describe('appendDiscoveredCustomProviderModels', () => {
   });
 });
 
+// The saved refresh IPC must contain only a connection ID and deltas, even if the
+// page still holds an older full configuration. Ordinary edits keep their contract.
+describe('discovery update payload', () => {
+  it('strips the stale page config before invoking Main', async () => {
+    const update = vi.fn(async () => ({ ok: true as const }));
+    vi.stubGlobal('window', { electronAPI: { maker: { updateCustomProvider: update } } });
+    const config = { id: 'example', name: 'Old page name', runtimes: {
+      codex: { baseUrl: 'https://old.example.test/v1', models: [] },
+    } };
+    const options = { discovery: [{ snapshot: { providerId: 'example', agent: 'codex' as const,
+      ownerId: 'owner', ownerGeneration: 1, credentialRevision: 0, routeSignature: 'a'.repeat(64) }, models: [{ id: 'new', name: 'New' }] }] };
+    await updateCustomProvider(config, {}, options);
+    expect(update).toHaveBeenCalledWith({ id: 'example' }, {}, options);
+  });
+});
+
 describe('custom provider credential lifecycle', () => {
   it('maps the legacy runtime id back to its stored config and credential keys', async () => {
     const read = vi.fn(async () => 'legacy-key');

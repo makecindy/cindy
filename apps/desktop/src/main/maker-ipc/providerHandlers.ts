@@ -1,3 +1,6 @@
+import { appendDiscoveredCustomProviderModels } from '../../shared/customProviderModelRefresh.js';
+import { createCustomProviderModelRefresh, customProviderDiscoverySignature, type CustomProviderModelRefreshDeps } from '../maker-host/custom-provider-model-refresh.js';
+import { getProviderRouteCredentialRevision, isProviderRouteMutationInProgress } from '../maker-host/provider-route.js';
 import { appendSpeechModels, missingSpeechReference } from '../../shared/speechProviderSetup.js';
 import { setProviderPresentation, retainProviderPresentationAfterAuthChange } from '../maker-host/provider-presentation-store.js';
 import type { DeploymentDetectionResult } from '../../shared/providerDetection.js';
@@ -41,6 +44,7 @@ import { MANAGED_OLLAMA_PROVIDER_ID, isManagedSidecarProviderId } from '../../sh
 import type {
   CodexImageGenerationRestartPolicy,
   CustomProviderUpdateOptions,
+  CustomProviderDiscoveryDelta,
   CustomProviderUpdateResult,
 } from '../../shared/customProviderUpdate.js';
 import { notifyManagedOllamaRemoved } from '../local-model-runtime/ipc.js';
@@ -76,6 +80,7 @@ import {
   customProviderExists,
   deleteCustomProvider,
   getCustomProvider,
+  listCustomProviders,
   updateCustomProvider,
   validateCustomProviderConfig,
 } from '../maker-host/custom-provider-store.js';
@@ -200,12 +205,29 @@ function parseRuntimeKeys(input: unknown): RuntimeKeys | null {
   return Object.fromEntries(entries) as RuntimeKeys;
 }
 
-function parseCustomProviderUpdateOptions(input: unknown): CustomProviderUpdateOptions | null {
+function parseCustomProviderUpdateOptions(input: unknown, allowDiscovery = false): CustomProviderUpdateOptions | null {
   if (input === undefined) return {};
   if (!input || typeof input !== 'object' || Array.isArray(input)) return null;
   const entries = Object.entries(input as Record<string, unknown>);
-  if (entries.some(([key]) => key !== 'source' && key !== 'codexImageGenerationRestartPolicy' && key !== 'appendSpeechModelsOnly' && key !== 'speechReferenceRefreshAgents'))
+  if (entries.some(([key]) => key !== 'discovery' && key !== 'source' && key !== 'codexImageGenerationRestartPolicy' && key !== 'appendSpeechModelsOnly' && key !== 'speechReferenceRefreshAgents'))
     return null;
+  const discovery = (input as Record<string, unknown>).discovery;
+  if (discovery !== undefined) {
+    if (!allowDiscovery) return null;
+    if (!Array.isArray(discovery) || discovery.length === 0 || discovery.length > 3) return null;
+    const seen = new Set<string>();
+    for (const delta of discovery) {
+      if (!delta || typeof delta !== 'object' || !delta.snapshot || !Array.isArray(delta.models) || delta.models.length > 10000) return null;
+      const snap = delta.snapshot;
+      if (typeof snap.providerId !== 'string' || !/^[a-z0-9_-]+$/.test(snap.providerId) || !VALID_AGENTS.includes(snap.agent) ||
+        typeof snap.ownerId !== 'string' || !Number.isSafeInteger(snap.ownerGeneration) ||
+        !Number.isSafeInteger(snap.credentialRevision) || typeof snap.routeSignature !== 'string' ||
+        !/^[a-f0-9]{64}$/.test(snap.routeSignature) || seen.has(snap.agent)) return null;
+      seen.add(snap.agent);
+      if (delta.models.some((model: unknown) => !model || typeof model !== 'object' ||
+        typeof (model as { id?: unknown }).id !== 'string' || !(model as { id: string }).id.length)) return null;
+    }
+  }
   const source = (input as Record<string, unknown>).source;
   if (source !== undefined && source !== 'manual-settings') return null;
   const policy = (input as Record<string, unknown>).codexImageGenerationRestartPolicy;
@@ -217,9 +239,10 @@ function parseCustomProviderUpdateOptions(input: unknown): CustomProviderUpdateO
     new Set(refreshAgents).size !== refreshAgents.length)) return null;
   if (append !== undefined && append !== true) return null;
   if (policy !== undefined && policy !== 'interrupt') return null;
-  if (append && (source || policy || refreshAgents)) return null;
+  if (append && (source || policy || refreshAgents || discovery)) return null;
   return {
     ...(source === 'manual-settings' ? { source } : {}),
+    ...(discovery ? { discovery: discovery as CustomProviderDiscoveryDelta[] } : {}),
     ...(policy ? { codexImageGenerationRestartPolicy: policy } : {}),
     ...(append ? { appendSpeechModelsOnly: true as const } : {}),
     ...(refreshAgents ? { speechReferenceRefreshAgents: refreshAgents as AgentKind[] } : {}),
@@ -315,7 +338,7 @@ export interface ProviderHandlerDeps {
   /** Non-sensitive spawn-config signature for one custom Provider config. */
   codexCustomProviderConfigSignature?(config: CustomProviderConfig): string;
   /** Force-retire the shared local Codex Host and hold its change guard before mutation. */
-  prepareCodexCustomProviderHostChange?(): Promise<void>;
+  prepareCodexCustomProviderHostChange?(options?: { interrupt?: boolean }): Promise<void>;
   retireCodexAccount?(providerId: string): Promise<void>;
   /** Release the prepared Host guard after catalog/credential mutation commits. */
   finalizeCodexCustomProviderHostChange?(): Promise<void>;
@@ -340,7 +363,8 @@ export interface ProviderHandlerDeps {
   /** 账户余额查询（生产 = readProviderAccountUsage；单测注入 stub 不联网）。 */
   accountUsage(input: ProviderAccountUsageRequest): Promise<ProviderAccountUsageResult>;
   /** 获取模型列表（生产 = fetchProviderModels；单测注入 stub 不联网）。 */
-  fetchModels(spec: ProviderModelsFetchSpec): Promise<ProviderModelsFetchResult>;
+  fetchModels(spec: ProviderModelsFetchSpec, isCurrent?: () => boolean): Promise<ProviderModelsFetchResult>;
+  customModelRefresh?: Pick<CustomProviderModelRefreshDeps, 'attempts' | 'ready'>;
   /** Main's native file picker; no renderer-supplied paths or file contents. */
   selectProviderImportFile?(event: unknown): Promise<string | null>;
   detectProvider?(spec: ProviderModelsFetchSpec, signal: AbortSignal): Promise<DeploymentDetectionResult>;
@@ -656,8 +680,14 @@ function parseModelsFetchInput(input: unknown): ProviderModelsFetchSpec | null {
 export function registerProviderHandlers(
   registry: IpcHandlerRegistry,
   deps: ProviderHandlerDeps,
-): void {
+) {
   const oauthMutationGeneration = new Map<string, symbol>();
+  // Discovery results must expire after a save without revoking frozen Codex Host routes
+  // when only another runtime's models or credentials changed. Real Host mutations still
+  // contribute their existing route generation (including delete/recreate).
+  const discoveryRevisions = new Map<string, number>();
+  const discoveryRevision = (id: string): number => getProviderRouteCredentialRevision(id) +
+    (discoveryRevisions.get(storedCustomProviderId(id)) ?? 0);
   const acceptingOAuthGenerations = new Set<symbol>();
   const beginOAuthMutation = (providerId: string): symbol => {
     // Unique token avoids ABA when a completed entry is deleted and the same provider starts again.
@@ -1249,6 +1279,7 @@ export function registerProviderHandlers(
     codexHostPrepared: boolean,
     commitRouteMutation?: () => void,
   ): Promise<void> {
+    const owner = captureProviderOwnerSession();
     commitRouteMutation?.();
     try {
       await refreshCatalogAfterCommit();
@@ -1268,8 +1299,34 @@ export function registerProviderHandlers(
         }
       }
     }
+    assertProviderMutationOwner(owner);
     deps.broadcastChanged();
+    customModelRefresh.kick();
   }
+
+  const customModelRefresh = createCustomProviderModelRefresh({
+    ...deps.customModelRefresh,
+    owner: () => captureProviderOwnerSession() ?? { dataOwnerId: null, generation: 0 },
+    listIds: async () => (await listCustomProviders()).map(config => config.id),
+    read: async id => {
+      if (deps.isOrganizationManagedProviderId(id) || isManagedSidecarProviderId(id)) return null;
+      const config = await getCustomProvider(id);
+      const providers = await deps.listProviders({ allowSideEffects: false, snapshotOnly: true });
+      const provider = providers.find(p => p.id === runtimeCustomProviderId(id));
+      return config && provider ? { config, provider } : null;
+    },
+    revision: discoveryRevision,
+    mutating: isProviderRouteMutationInProgress,
+    credentials: (id, agent) => {
+      try {
+        const apiKey = deps.readCustomProviderKeyForMutation(id, agent);
+        const headers = deps.readCustomProviderHeadersForMutation(id, agent);
+        return typeof apiKey === 'symbol' || typeof headers === 'symbol' ? null : { apiKey, headers: headers ?? undefined };
+      } catch { return null; }
+    },
+    fetch: (spec, isCurrent) => deps.fetchModels(spec, isCurrent),
+    apply: (id, discovery) => updateProviderFromInput(undefined, { id }, {}, { discovery }, undefined, true),
+  });
 
   const providerImportScope = (): { dataOwnerId: string | null; generation: number } =>
     captureProviderOwnerSession() ?? { dataOwnerId: null, generation: 0 };
@@ -1461,6 +1518,7 @@ export function registerProviderHandlers(
     required: boolean,
     options: CustomProviderUpdateOptions,
     ownerAtIngress: ReturnType<typeof captureProviderOwnerSession>,
+    automatic = false,
   ): Promise<{ prepared: boolean; confirmation: CustomProviderUpdateResult | null }> {
     if (!required) return { prepared: false, confirmation: null };
     const busySessionIds = deps.listBusyLocalCodexSessionIds?.() ?? [];
@@ -1479,7 +1537,8 @@ export function registerProviderHandlers(
     if (!deps.prepareCodexCustomProviderHostChange || !deps.finalizeCodexCustomProviderHostChange) {
       throwIpcError('INTERNAL', 'local Codex Host reload is unavailable');
     }
-    await deps.prepareCodexCustomProviderHostChange();
+    if (automatic) await deps.prepareCodexCustomProviderHostChange({ interrupt: false });
+    else await deps.prepareCodexCustomProviderHostChange();
     assertProviderMutationOwner(ownerAtIngress);
     return { prepared: true, confirmation: null };
   }
@@ -2171,15 +2230,22 @@ export function registerProviderHandlers(
     keyInput?: unknown,
     optionsInput?: unknown,
     resolveLatest?: (current: CustomProviderConfig) => CustomProviderConfig,
+    automatic = false,
   ): Promise<CustomProviderUpdateResult> {
-    assertTrustedProviderMutationSender(event);
-    const v = validateCustomProviderConfig(input, { allowLegacyXai: true });
-    if (!v.ok) throwIpcError(v.code, v.message);
+    if (!automatic) assertTrustedProviderMutationSender(event);
     const keys = parseRuntimeKeys(keyInput);
     if (!keys) throwIpcError('INVALID_PARAMS', 'invalid provider runtime keys');
-    const options = parseCustomProviderUpdateOptions(optionsInput);
+    const options = parseCustomProviderUpdateOptions(optionsInput, true);
     if (!options) throwIpcError('INVALID_PARAMS', 'invalid custom provider update options');
-    let config = input as CustomProviderConfig;
+    if (options.discovery) {
+      if (!input || typeof input !== 'object' || typeof (input as { id?: unknown }).id !== 'string' ||
+        Object.keys(keys).length || Object.keys(input).some(key => key !== 'id'))
+        throwIpcError('INVALID_PARAMS', 'discovery updates accept only a connection id and discovery results');
+    } else {
+      const v = validateCustomProviderConfig(input, { allowLegacyXai: true });
+      if (!v.ok) throwIpcError(v.code, v.message);
+    }
+    let config = options.discovery ? { id: (input as { id: string }).id, name: '', runtimes: {} } as CustomProviderConfig : input as CustomProviderConfig;
     if (deps.isOrganizationManagedProviderId(config.id)) {
       throwIpcError('PERMISSION_DENIED', 'Enterprise connections are managed by your organization');
     }
@@ -2201,7 +2267,24 @@ export function registerProviderHandlers(
         const previous = await getCustomProvider(config.id);
         assertProviderMutationOwner(ownerAtIngress);
         if (!previous) throwIpcError('NOT_FOUND', `custom provider '${config.id}' not found`);
-        if (options.appendSpeechModelsOnly) {
+        if (options.discovery) {
+          config = previous;
+          for (const { snapshot, models } of options.discovery) {
+            const owner = captureProviderOwnerSession();
+            if (!owner || snapshot.providerId !== config.id || snapshot.ownerId !== owner.dataOwnerId ||
+              snapshot.ownerGeneration !== owner.generation || snapshot.credentialRevision !== discoveryRevision(config.id) ||
+              snapshot.routeSignature !== customProviderDiscoverySignature(previous) || !previous.runtimes[snapshot.agent])
+              throwIpcError('INVALID_PARAMS', 'provider discovery expired; refresh the connection again');
+            const runtime = config.runtimes[snapshot.agent]!;
+            const discoveryUrl = /^https:\/\/openrouter\.ai\/api(?:\/v1)?\/?$/.test(runtime.baseUrl)
+              ? runtime.modelsUrl ?? 'https://openrouter.ai/api/v1/models' : undefined;
+            const merged = appendDiscoveredCustomProviderModels(runtime.models, models, discoveryUrl);
+            config = { ...config, runtimes: { ...config.runtimes, [snapshot.agent]: { ...runtime, models: merged.models } } };
+          }
+          const validation = validateCustomProviderConfig(config, { allowLegacyXai: true });
+          if (!validation.ok) throwIpcError(validation.code, validation.message);
+          separated = splitCustomProviderHeaders(config);
+        } else if (options.appendSpeechModelsOnly) {
           if (Object.keys(keys).length) throwIpcError('INVALID_PARAMS', 'speech additions cannot change credentials');
           try { config = appendSpeechModels(previous, config, deps.listPresets()); }
           catch { throwIpcError('INVALID_PARAMS', 'connection changed or invalid speech additions'); }
@@ -2231,6 +2314,7 @@ export function registerProviderHandlers(
             speechReferenceAdded = true;
           }
         }
+        if (options.discovery && JSON.stringify(config) === JSON.stringify(previous)) return { ok: true };
         // 即便 OAuth 描述符没变，runtime / model 编辑也必须让旧登录尾部的自动发现失效，
         // 否则旧 endpoint 的迟到结果可能合并进刚保存的新配置。
         generation = beginOAuthMutation(config.id);
@@ -2267,10 +2351,13 @@ export function registerProviderHandlers(
           previousCodexConfigSignature !== targetCodexConfigSignature ||
           (codexCredentialGenerationChanged &&
             (previousCodexConfigSignature.length > 0 || targetCodexConfigSignature.length > 0));
+        if (automatic && codexHostChangeRequired && (deps.listBusyLocalCodexSessionIds?.().length ?? 0) > 0)
+          return { ok: false, confirmationRequired: 'codex-image-generation-reload', busyCount: deps.listBusyLocalCodexSessionIds!().length };
         const preparation = await prepareCodexCustomProviderChange(
           codexHostChangeRequired,
           options,
           ownerAtIngress,
+          automatic,
         );
         if (preparation.confirmation) return preparation.confirmation;
         codexHostPrepared = preparation.prepared;
@@ -2327,7 +2414,13 @@ export function registerProviderHandlers(
         assertProviderMutationOwner(ownerAtIngress);
         await afterChange(
           codexHostPrepared,
-          codexHostChangeRequired ? commitRouteMutation : undefined,
+          () => {
+            if (codexHostChangeRequired) commitRouteMutation();
+            else if (keyMutations.length > 0 || headerMutations.length > 0 || options.discovery ||
+              customProviderDiscoverySignature(previous) !== customProviderDiscoverySignature(config)) {
+              discoveryRevisions.set(config.id, (discoveryRevisions.get(config.id) ?? 0) + 1);
+            }
+          },
         );
         assertProviderMutationOwner(ownerAtIngress);
         return { ok: true, ...(speechReferenceAdded ? { speechReferenceAdded: true as const } : {}) };
@@ -2570,6 +2663,13 @@ export function registerProviderHandlers(
     // 与重新发现一样，必须先确认调用方是 Cindy 自有顶层页面，避免 WebView / 子 frame
     // 把 Main 变成可向任意 http(s) 地址发凭证请求的代理。
     assertTrustedProviderMutationSender(event);
+    if (input && typeof input === 'object' && (input as { kind?: unknown }).kind === 'saved') {
+      const saved = input as { providerId?: unknown; agent?: unknown };
+      if (typeof saved.providerId !== 'string' || !/^(?:custom:)?[a-z0-9_-]+$/.test(saved.providerId) ||
+        typeof saved.agent !== 'string' || !VALID_AGENTS.includes(saved.agent))
+        throwIpcError('INVALID_PARAMS', 'invalid saved models-fetch input');
+      return customModelRefresh.fetchSaved(saved.providerId, saved.agent as AgentKind);
+    }
     const parsed = parseModelsFetchInput(input);
     if (!parsed) throwIpcError('INVALID_PARAMS', 'invalid models-fetch input');
     // 已保存供应商:main 侧按 (id, agent) 并入 main-only 鉴权请求头,无需 renderer 回读
@@ -2890,4 +2990,5 @@ export function registerProviderHandlers(
       }
     },
   );
+  return customModelRefresh;
 }
