@@ -17,6 +17,7 @@ const h = vi.hoisted(() => ({
   confirm: vi.fn(),
   leave: vi.fn(),
   focused: true,
+  nativeMenus: true,
   appState: 'active',
   appStateListeners: new Set<(state: string) => void>(),
   closeSettings: null as null | (() => void),
@@ -107,7 +108,7 @@ vi.mock('expo-router', () => ({
   },
   useRouter: () => ({ back: h.back, replace: h.replace, push: h.push }),
   useNavigation: () => ({ getState: () => h.navigation }),
-  useFocusEffect: (effect: () => void) => useEffect(effect, [effect]),
+  useFocusEffect: (effect: () => void) => useEffect(() => h.focused ? effect() : undefined, [effect, h.focused]),
 }));
 vi.mock('expo-router/react-navigation', () => ({ useHeaderHeight: () => 72 }));
 vi.mock('react-native-safe-area-context', () => ({ SafeAreaView: ({ children }: any) => el('main', null, children), useSafeAreaInsets: () => ({ top: 59, bottom: 34, left: 0, right: 0 }) }));
@@ -140,7 +141,7 @@ vi.mock('@/device-link/remoteResourceCache', () => ({ markRemoteResourceRead: h.
 vi.mock('@/device-link/remoteResourceAvailability', () => ({ readRemoteCollectionCache: () => [] }));
 vi.mock('@/platform/chrome', () => ({ showConfirm: h.confirm }));
 vi.mock('@/platform/chrome/NativePullDownMenu', () => ({
-  usesNativePullDownMenu: () => true,
+  usesNativePullDownMenu: () => h.nativeMenus,
   NativePullDownMenu: ({ actions, onAction, children, testID, disabled, longPress }: any) => {
     const [opened, setOpened] = useState(false);
     const flat = (list: any[]): any[] => list.flatMap((action) => action.subactions ? flat(action.subactions) : [action]);
@@ -348,6 +349,7 @@ async function render(data: BotGroupRemoteChatData | null = group(), kind: 'read
 }
 
 beforeEach(() => {
+  h.nativeMenus = true;
   shareSelectionStore.exit();
   h.management = null;
   h.cloudRows = null;
@@ -648,6 +650,72 @@ describe('group timeline', () => {
     expect(h.chat.act).toHaveBeenLastCalledWith('plan-edit', { planId: 'p1', position: 0, action: 'remove' });
   });
 
+  // #5759: a retained background group must not alert on its cancelled plan action (unit).
+  it.each(['direct', 'bridge'])('keeps the %s pending lock aligned with transport cancellation across blur', async transport => {
+    let finish!: () => void;
+    let reject!: (error: Error) => void;
+    h.chat.server = transport === 'direct';
+    const deviceId = transport === 'direct' ? '' : 'mac';
+    h.chat.act.mockImplementationOnce(() => new Promise((yes, no) => { finish = () => yes({ effects: [] }); reject = no; }));
+    await render(group(), 'ready', undefined, deviceId);
+    await click('botGroup.plan.start');
+    h.focused = false; await render(group(), 'ready', undefined, deviceId);
+    h.focused = true; await render(group(), 'ready', undefined, deviceId);
+    expect(byId('botGroup.plan.start')?.disabled).toBe(transport === 'bridge');
+    if (transport === 'bridge') {
+      await click('botGroup.plan.start');
+      expect(h.chat.act).toHaveBeenCalledTimes(1);
+      await act(async () => { finish(); });
+    } else await act(async () => { reject(new Error('OWNER_CHANGED')); });
+    expect(h.alert).not.toHaveBeenCalled();
+    await click('botGroup.plan.start');
+    expect(h.chat.act).toHaveBeenCalledTimes(2);
+  });
+
+  // #8456: a subscription update must dismiss an old step menu, not retarget its positional edit (unit).
+  it('closes the old step menu on a plan revision and submits only the newly displayed revision', async () => {
+    h.nativeMenus = false; h.chat.server = true;
+    const data = group();
+    Object.assign(data.plans[0]!, { revision: 2 });
+    await render(data, 'ready', undefined, '');
+    await click('botGroup.plan.step');
+    expect(byId('botGroup.plan.stepMenu.0.sheet')).not.toBeNull();
+    const next = { ...data, plans: data.plans.map(plan => ({ ...plan, revision: 3 })) };
+    await render(next, 'ready', undefined, '');
+    expect(byId('botGroup.plan.stepMenu.0.sheet')).toBeNull();
+    expect(h.chat.act).not.toHaveBeenCalled();
+    await click('botGroup.plan.step');
+    await click('botGroup.plan.stepMenu.0.option.remove');
+    expect(h.chat.act).toHaveBeenLastCalledWith('plan-edit', { planId: 'p1', position: 0, action: 'remove', expectedRevision: 3 });
+  });
+
+  // #5759, unit: direct-server plans used to bypass role checks on the existing
+  // timeline. Render the real card with one non-manageable open plan (no native IO).
+  it('keeps a system-signed plan card and its fallback when plan reading is unavailable', async () => {
+    const data = group();
+    data.plans = []; data.openPlan = null;
+    data.messages = [message('plan', 1, { kind: 'plan', authorKind: 'system', planId: 'p1', content: 'Builder: Build; Reviewer: Review' })];
+    await render(data);
+    expect(byId('botGroup.message.plan')?.textContent).toContain('Builder: Build; Reviewer: Review');
+    expect(byId('botGroup.message.plan')?.textContent).toContain('groupChat.plan.missing');
+    expect(byId('botGroup.plan.start')).toBeNull();
+  });
+
+  it.each(['proposed', 'waiting'] as const)('shows a read-only %s plan without management controls', async status => {
+    h.chat.server = true;
+    const data = group();
+    data.plans[0] = { ...data.plans[0]!, status, canManage: false, currentStep: status === 'waiting' ? 0 : null,
+      steps: data.plans[0]!.steps.map((step, index) => ({ ...step, status: status === 'waiting' && index === 0 ? 'done' : 'pending' })) };
+    data.openPlan = { ...data.openPlan!, status, currentStep: status === 'waiting' ? 0 : null };
+    await render(data, 'ready', undefined, '');
+    expect(byId('botGroup.plan')).not.toBeNull();
+    expect(byId('botGroup.plan.start')).toBeNull();
+    expect(byId('botGroup.plan.stepMenu.0')).toBeNull();
+    expect(byId('botGroup.followUp.continue')).toBeNull();
+    expect(byId('botGroup.followUp.end')).toBeNull();
+    expect(h.chat.act).not.toHaveBeenCalled();
+  });
+
   // The computer's 自动交接 survives the phone's parse, so the card does not promise a 继续 that never comes.
   it.each([[true, 'groupChat.plan.autoNote'], [undefined, 'groupChat.plan.pauseNote']] as const)('says how steps hand on (autoContinue=%s)', async (autoContinue, note) => {
     const data = group();
@@ -739,6 +807,16 @@ describe('group timeline', () => {
     expect(byId('botGroup.plan.start')).toBeNull();
     expect(byId('botGroup.plan.stepMenu.0')).toBeNull();
     expect(byId('botGroup.plan.finalNote')?.textContent).toBe('groupChat.plan.superseded');
+    // #5759 runtime: stopping a queued execution can leave its step running.
+    // The real card must not continue to claim active work after the plan stops.
+    data.plans[0] = { ...data.plans[0]!, status: 'stopped', currentStep: 1,
+      steps: [{ ...data.plans[0]!.steps[0]!, status: 'done' }, { ...data.plans[0]!.steps[1]!, status: 'running' }] };
+    await render(data);
+    expect(byId('botGroup.plan.finalNote')?.textContent).toBe('groupChat.plan.stopped');
+    expect(byId('botGroup.plan.running')).toBeNull();
+    expect(byId('botGroup.message.plan')?.textContent).not.toContain('groupChat.plan.stepRunning');
+    expect(byId('botGroup.message.plan')?.textContent).toContain('groupChat.plan.stepDone');
+    expect(byId('botGroup.plan.start')).toBeNull();
   });
 
   it('shows one row per speaker with its lane session', async () => {

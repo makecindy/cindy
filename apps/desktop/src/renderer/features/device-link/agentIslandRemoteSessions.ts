@@ -51,7 +51,10 @@ export function buildAgentIslandRemoteSessionInputs(
   const companionSessionIds = new Set(inputs.map((input) => input.sessionId));
   for (const session of selectVisibleSessions([], remoteSessions, selection)) {
     const deviceId = session.deviceLinkDeviceId;
-    if (!deviceId || session.deviceLinkConnectionStatus === 'disconnected') continue;
+    // `connecting` rows are cached/unverified (cold start, relay reconnect): their retained
+    // activity may be stale, so it must not be presented as live in the island.
+    const status = session.deviceLinkConnectionStatus;
+    if (!deviceId || status === 'disconnected' || status === 'connecting') continue;
     if (companionSessionIds.has(session.id)) continue;
     // Companions were added first, so the cap trims tasks, never a companion.
     if (inputs.length >= AGENT_ISLAND_REMOTE_SESSIONS_MAX) break;

@@ -11,7 +11,7 @@ import { fileURLToPath } from 'node:url';
 import { runPlan } from './run.mjs';
 import { adhocPage } from './registry.mjs';
 import { parseOptions, variantsFor } from './options.mjs';
-import { scanPage, buildPage } from './build.mjs';
+import { scanPage, buildPage, inputsChanged } from './build.mjs';
 
 const cli = fileURLToPath(new URL('./cli.mjs', import.meta.url));
 const harness = fileURLToPath(new URL('./harness/index.tsx', import.meta.url));
@@ -98,41 +98,69 @@ mountPage({ render: () => <div>Worker finished</div> });`);
   assert.equal((await run(['--entry', file, '--theme', 'light', '--json'])).code, 0);
 });
 
-// PDF preview imports its worker as a URL. E2E tier: verify raw asset bytes,
-// compare/changed tracking and actual module-worker loading (including MIME).
-test('serves URL imports as assets and tracks them across revisions', async () => {
-  const asset = path.join(dir, 'url-worker.mjs');
-  const source = 'self.postMessage(typeof document === "undefined" ? 23 : -1);';
-  await writeFile(asset, source);
-  const file = await entry('url-worker', `
-import workerUrl from './url-worker.mjs?url';
-import pdfWorkerUrl from 'pdfjs-dist/build/pdf.worker.min.mjs?url';
-await new Promise<void>((resolve, reject) => {
-  const worker = new Worker(workerUrl, { type: 'module' });
-  worker.onerror = reject;
-  worker.onmessage = ({ data }) => { worker.terminate(); data === 23 ? resolve() : reject(new Error('Wrong URL worker result')); };
-});
-
-const pdf = await import(pdfWorkerUrl);
-if (!pdf.WorkerMessageHandler) throw new Error('PDF worker asset missing');
-mountPage({ render: () => <div>URL workers loaded</div> });`);
+// PDF preview blocked every changed-page scan: ?url parsed the worker as JS,
+// with no default export. Existing ?worker coverage bundles source, not URL assets.
+// Exercise scan/build/watch/compare and a real PDF module worker through the CLI.
+// Minimal input: pdfjs-dist's ?url import. Explicit Electron integration tier.
+test('loads PDF URL assets as real workers and tracks URL asset changes', async () => {
+  const asset = path.join(dir, 'url-asset.mjs');
+  const original = 'export const value = 17;';
+  const changed = 'export const value = 18;';
+  await writeFile(asset, original);
+  // A self-contained blank page with a valid xref; no font or network dependencies.
+  let pdf = '%PDF-1.4\n';
+  const offsets = [0];
+  for (const body of [
+    '<< /Type /Catalog /Pages 2 0 R >>',
+    '<< /Type /Pages /Kids [3 0 R] /Count 1 >>',
+    '<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 100] /Resources << >> >>',
+  ]) {
+    offsets.push(pdf.length);
+    pdf += `${offsets.length - 1} 0 obj\n${body}\nendobj\n`;
+  }
+  const xref = pdf.length;
+  pdf += `xref\n0 4\n0000000000 65535 f \n${offsets.slice(1).map(offset => `${String(offset).padStart(10, '0')} 00000 n \n`).join('')}trailer\n<< /Size 4 /Root 1 0 R >>\nstartxref\n${xref}\n%%EOF\n`;
+  const file = await entry('pdf-url', `import * as pdfjs from 'pdfjs-dist';
+import workerUrl from 'pdfjs-dist/build/pdf.worker.min.mjs?url';
+import assetUrl from './url-asset.mjs?url';
+if ((await import(assetUrl)).value !== 17) throw new Error('URL asset failed to load');
+pdfjs.GlobalWorkerOptions.workerSrc = workerUrl;
+const worker = new pdfjs.PDFWorker();
+await worker.promise;
+if (!(worker.port instanceof Worker)) throw new Error('PDF fell back to the main thread');
+const task = pdfjs.getDocument({ data: new TextEncoder().encode(${JSON.stringify(pdf)}), worker });
+try {
+  const document = await task.promise;
+  const page = await document.getPage(1);
+  const viewport = page.getViewport({ scale: 1 });
+  if (document.numPages !== 1 || viewport.width !== 200 || viewport.height !== 100) throw new Error('PDF parsing failed');
+} finally {
+  await task.destroy();
+  worker.destroy();
+}
+mountPage({ render: () => <div>PDF worker finished</div> });`);
   const definition = adhocPage(file);
   const scanned = await scanPage(definition);
   assert.ok(scanned.inputs.includes(asset));
   assert.ok(scanned.inputs.some(input => input.endsWith('pdf.worker.min.mjs')));
   const bundle = await buildPage(definition);
-  const emitted = [...bundle.files.values()].find(value => value.body.toString() === source);
-  assert.ok(emitted, 'URL imports must preserve the original bytes');
-  assert.equal(emitted.contentType, 'text/javascript');
+  const emitted = [...bundle.files].filter(([url]) => url.endsWith('.mjs'));
+  assert.equal(emitted.length, 2);
+  assert.ok(emitted.every(([, file]) => file.contentType === 'text/javascript'));
+  assert.ok(emitted.some(([, file]) => file.body.toString() === original));
   const alternate = await buildPage(definition, {
     has: file => file === asset,
-    get: file => file === asset ? source.replace('23', '24') : undefined,
+    get: file => file === asset ? changed : undefined,
     resolve: () => undefined,
   });
   assert.notEqual(bundle.fingerprints.get(asset), alternate.fingerprints.get(asset));
   assert.notEqual(bundle.bundleDigest, alternate.bundleDigest);
+  assert.ok([...alternate.files.values()].some(file => file.body.toString() === changed));
+  assert.equal(await inputsChanged(bundle.fingerprints), false);
   const result = await run(['--entry', file, '--theme', 'light', '--json']);
-  assert.equal(result.code, 0, result.stdout + result.stderr);
+  assert.equal(result.code, 0, result.stderr + result.stdout);
+  await writeFile(asset, changed);
+  assert.equal(await inputsChanged(bundle.fingerprints), true);
 });
 
 // E2E: the real settings route previously crashed on import.meta.glob. Verify

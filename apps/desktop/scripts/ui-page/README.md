@@ -166,6 +166,12 @@ mountPage({
 `AppFrame` 复刻主界面的侧栏（默认 260px）与内容区结构，并挂载真实的 `ContentHeaderSlot`，
 让页面在真实宽度和标题栏里排版；不需要外框时直接渲染组件。
 
+构建器支持 Vite 的 `?url` 资源导入（含包路径与相对路径），按原字节生成独立资源 URL；
+PDF worker 的 `.mjs` 在 Electron 与 Chromium 宿主均按 JavaScript 提供。`?worker` 则编译为
+真实模块 worker。两类输入都纳入 `--changed`、`--compare` 与预览刷新，不应为绕过构建错误
+替换整个 PDF 组件。回归由 `runner.selftest.mjs` 验证真实 PDF worker 解析与资源变更追踪；
+这不代表单页工具会自动加载项目的其它 Vite 插件或其提供的静态目录。
+
 `check(page, ui)` 里的 `page` 是 Playwright Page。`ui` 包含当前变体
 （`case`、`theme`、`locale`、`viewport`、`data`）以及：
 

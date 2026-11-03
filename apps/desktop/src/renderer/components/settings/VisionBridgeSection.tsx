@@ -451,6 +451,7 @@ export function VisionBridgeSection() {
             </div>
             <div className="min-w-0 flex-1">
               <ModelSelector
+                localOnlyReason="vision-bridge-local-proxy"
                 providersOverride={visionProviders}
                 modelId={primary?.modelId ?? ''}
                 effort=""
@@ -505,6 +506,7 @@ export function VisionBridgeSection() {
             </div>
             <div className="min-w-0 flex-1">
               <ModelSelector
+                localOnlyReason="vision-bridge-local-proxy"
                 providersOverride={visionProviders}
                 modelId={fallback?.modelId ?? ''}
                 effort=""

@@ -858,9 +858,6 @@
     "apps/desktop/src/renderer/features/right-sidebar/plugins/resource-usage/__tests__/subscription.test.ts": {
       "resetModules": 1
     },
-    "apps/desktop/src/renderer/features/right-sidebar/plugins/review/DiffViewer/__tests__/highlight.test.ts": {
-      "resetModules": 1
-    },
     "apps/desktop/src/renderer/features/skillhub/hooks/__tests__/useCategoryList.test.tsx": {
       "resetModules": 1
     },
