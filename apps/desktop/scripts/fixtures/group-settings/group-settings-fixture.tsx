@@ -1,6 +1,6 @@
 /** Isolated test adapter: a shared group's settings drawer, seen as its owner, an admin or a member. */
-import { useEffect, useRef } from 'react';
-import { useSearchParams } from 'react-router-dom';
+import { useEffect, useRef, useState } from 'react';
+import { useLocation, useSearchParams } from 'react-router-dom';
 import { ctx, forbid, mountPage, subscription } from '../../ui-page/harness';
 import { BotGroupSettingsDrawer } from '../../../src/renderer/features/bots/BotGroupSettingsDrawer';
 import { BOT_GROUP_SETTINGS_PARAM } from '../../../src/renderer/features/bots/botGroupPresentation';
@@ -76,6 +76,8 @@ void mountPage({
 
 /** The drawer is route-owned: open it the way the header button does. */
 function OpenSettings() {
+  const location = useLocation();
+  const [backgroundClicks, setBackgroundClicks] = useState(0);
   const [, setSearchParams] = useSearchParams();
   // The drawer reads the shared group list, which the sidebar normally loads. Open it once:
   // setSearchParams changes with every page the drawer opens.
@@ -86,5 +88,13 @@ function OpenSettings() {
     refreshBotGroups();
     setSearchParams({ [BOT_GROUP_SETTINGS_PARAM]: '1' }, { replace: true });
   }, [setSearchParams]);
-  return <BotGroupSettingsDrawer />;
+  return <>
+    <button type="button" data-testid="reopen-settings"
+      onClick={() => setSearchParams({ [BOT_GROUP_SETTINGS_PARAM]: '1' }, { replace: true })}>群设置</button>
+    <button type="button" data-testid="background-action" className="fixed left-8 top-80 h-12 w-40"
+      onClick={() => setBackgroundClicks(value => value + 1)}>背景操作 {backgroundClicks}</button>
+    <output data-testid="settings-route" hidden>{location.search}</output>
+    <output data-testid="background-clicks" hidden>{backgroundClicks}</output>
+    <BotGroupSettingsDrawer />
+  </>;
 }

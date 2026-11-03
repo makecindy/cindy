@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 
-import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
-import { MemoryRouter } from 'react-router-dom';
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { createMemoryRouter, MemoryRouter, RouterProvider } from 'react-router-dom';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type { BotGroupSummary } from '../../../../shared/botGroupChat';
@@ -94,6 +94,48 @@ beforeEach(() => {
 });
 
 afterEach(cleanup);
+
+// Unit regression: the reported inert group-settings scrim (DESIGN.md §4, Dialog & Modal).
+// Existing tests cover mutations, not dismissal through the real drawer and Radix events.
+// Minimal failure: open the drawer, then pointer-down/click its scrim; the dialog must disappear
+// and clear only settings queries, just like ×. Reopening must not restore the old subpage.
+// Standalone run: 10.69s (7.45s importing real drawer dependencies, 0.79s executing all 9 tests).
+it.each(['scrim', 'close button'] as const)('closes from the %s and clears settings routes', async (target) => {
+  const router = createMemoryRouter([{ path: '*', element: <BotGroupSettingsDrawer /> }], {
+    initialEntries: ['/bots/groups/g1?groupSettings=1&groupSettingsPage=manage&groupMask=1&keep=1'],
+  });
+  render(<RouterProvider router={router} />);
+  // Radix installs the document pointer listener on the next task.
+  await act(async () => { await new Promise((resolve) => setTimeout(resolve, 0)); });
+  const dialog = screen.getByRole('dialog');
+  fireEvent.pointerDown(dialog, { pointerType: 'mouse', button: 0 });
+  fireEvent.click(dialog);
+  expect(screen.getByRole('dialog')).toBe(dialog);
+
+  if (target === 'scrim') {
+    const scrim = dialog.parentElement!;
+    fireEvent.pointerDown(scrim, { pointerType: 'mouse', button: 0 });
+    fireEvent.click(scrim);
+  } else {
+    fireEvent.click(screen.getByRole('button', { name: 'bots.close' }));
+  }
+  await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
+  expect(router.state.location.pathname).toBe('/bots/groups/g1');
+  expect(router.state.location.search).toBe('?keep=1');
+  await act(async () => { await router.navigate('/bots/groups/g1?keep=1&groupSettings=1'); });
+  expect(screen.getByRole('dialog', { name: 'bots.groupChat.settings.title' })).toBeTruthy();
+});
+
+it('keeps IME Escape in the drawer and closes on ordinary Escape', () => {
+  renderDrawer();
+  const dialog = screen.getByRole('dialog');
+  fireEvent.keyDown(dialog, { key: 'Escape', isComposing: true });
+  expect(screen.getByRole('dialog')).toBe(dialog);
+  fireEvent.keyDown(dialog, { key: 'Escape', keyCode: 229 });
+  expect(screen.getByRole('dialog')).toBe(dialog);
+  fireEvent.keyDown(dialog, { key: 'Escape' });
+  expect(screen.queryByRole('dialog')).toBeNull();
+});
 
 it('keeps the drawer out of the window drag region so its close button stays clickable', () => {
   renderDrawer();
