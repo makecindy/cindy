@@ -11622,7 +11622,7 @@
         "source": {
           "label": "Mode de connexion",
           "existing": "Utiliser le bot déjà configuré dans Cindy",
-          "manual": "Saisir de nouveaux identifiants",
+          "manual": "Créer un nouveau bot par QR code",
           "moveNote": "Le bot est retiré de Paramètres → Bots de messagerie, qui restera vide. Ses conversations se poursuivent avec {{name}}."
         }
       },

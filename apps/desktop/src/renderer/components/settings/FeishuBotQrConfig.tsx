@@ -1,3 +1,4 @@
+import { useEffect, useRef } from 'react';
 import { useTranslation } from 'react-i18next';
 import { ExternalLink, QrCode } from 'lucide-react';
 
@@ -5,7 +6,10 @@ import { Button } from '@/components/ui/button';
 import { SegmentedControl } from '@/components/ui/segmented-control';
 import { Spinner } from '@/components/ui/spinner';
 import type { FeishuBotService } from '@/hooks/useFeishuBot';
-import { useFeishuBotRegistration } from '@/hooks/useFeishuBotRegistration';
+import {
+  useFeishuBotRegistration,
+  type FeishuBotRegistrationTransport,
+} from '@/hooks/useFeishuBotRegistration';
 
 const SERVICES = ['feishu', 'lark'] as const;
 
@@ -18,12 +22,23 @@ const OPEN_PLATFORM_URL: Record<FeishuBotService, string> = {
 export function FeishuBotQrConfig({
   service,
   setService,
+  transport,
+  onConnected,
 }: {
   service: FeishuBotService;
   setService: (service: FeishuBotService) => void;
+  /** 伙伴页传入自己的 IPC; 设置页不传, 走个人 bot 的授权通道。 */
+  transport?: FeishuBotRegistrationTransport;
+  /** 授权并建连完成(伙伴页据此刷新连接列表并关闭弹窗)。 */
+  onConnected?: () => void;
 }) {
   const { t } = useTranslation();
-  const registration = useFeishuBotRegistration(service);
+  const registration = useFeishuBotRegistration(service, transport);
+  const connectedRef = useRef(onConnected);
+  connectedRef.current = onConnected;
+  useEffect(() => {
+    if (registration.phase === 'success') connectedRef.current?.();
+  }, [registration.phase]);
   const { phase, qrDataUrl, verificationUrl, userCode, secondsLeft, errorMessage } = registration;
   const isStarting = phase === 'starting';
   const isAuthorizing = phase === 'qr';
@@ -101,6 +116,7 @@ export function FeishuBotQrConfig({
       {isAuthorizing && verificationUrl ? (
         <div className="flex flex-wrap gap-2">
           <Button
+            type="button"
             variant="cta"
             size="lg"
             onClick={() => void window.electronAPI.openExternal(verificationUrl)}
@@ -108,12 +124,18 @@ export function FeishuBotQrConfig({
             <ExternalLink size={16} />
             {t('settings.feishuBot.qr.openLink')}
           </Button>
-          <Button tone="quiet" size="lg" onClick={() => void registration.cancelRegistration()}>
+          <Button
+            type="button"
+            tone="quiet"
+            size="lg"
+            onClick={() => void registration.cancelRegistration()}
+          >
             {t('settings.feishuBot.qr.cancel')}
           </Button>
         </div>
       ) : !isConnecting ? (
         <Button
+          type="button"
           variant="cta"
           size="lg"
           loading={isStarting}

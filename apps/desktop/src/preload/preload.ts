@@ -2688,6 +2688,23 @@ contextBridge.exposeInMainWorld('electronAPI', {
       payload: import('../shared/botImConnection').BotImAdoptPersonalBotInput,
     ): Promise<import('../shared/botImConnection').BotImConnectionAddResult> =>
       ipcRenderer.invoke('botImConnection:adopt', payload),
+    feishuRegistrationBegin: (payload: {
+      botId: string;
+      service: 'feishu' | 'lark';
+    }): Promise<import('../shared/botImConnection').BotImFeishuRegistrationBeginResult> =>
+      ipcRenderer.invoke('botImConnection:feishu-registration-begin', payload),
+    feishuRegistrationCancel: (): Promise<{ ok: true }> =>
+      ipcRenderer.invoke('botImConnection:feishu-registration-cancel'),
+    onFeishuRegistrationStatus: (
+      listener: (payload: import('../shared/botImConnection').BotImFeishuRegistrationStatus) => void,
+    ): (() => void) => {
+      const wrapped = (
+        _event: unknown,
+        payload: import('../shared/botImConnection').BotImFeishuRegistrationStatus,
+      ) => listener(payload);
+      ipcRenderer.on('botImConnection:feishu-registration-status', wrapped);
+      return () => ipcRenderer.removeListener('botImConnection:feishu-registration-status', wrapped);
+    },
     onChanged: (
       listener: (payload: import('../shared/botImConnection').BotImConnectionListPayload) => void,
     ): (() => void) => {

@@ -230,6 +230,13 @@ export function createRemoteBotSettingsTarget(input: RemoteBotSettingsInput) {
     resetLane: (payload) => call2('channels.im.resetLane', { ...payload }),
     listAdoptable: () => invokeBotSettings(deviceId, 'channels.im.listAdoptable', null),
     adopt: (payload) => call2('channels.im.adopt', { channel: payload.channel }),
+    // 扫码授权必须在那台电脑上完成, 远程页不发起。
+    feishuRegistrationBegin: hostOnly,
+    feishuRegistrationCancel: hostOnly,
+    onFeishuRegistrationStatus: () => {
+      hostOnly().catch(() => undefined);
+      return () => undefined;
+    },
     onChanged: (listener) => pollWhileVisible(() => call2<{ connections: unknown[] }>('channels.im.list'), listener as never),
   };
   let wechatRead: { at: number; value: Promise<{ state: WechatBotState; channelSettings: WechatChannelSettingsState }> } | null = null;

@@ -13,9 +13,9 @@ import { standardSessionRoute } from '@/lib/orcaSessionIdentity';
  */
 
 import { HookConnectionsSection } from '@/components/settings/HookConnectionsSection';
-import { useCallback, useEffect, useId, useRef, useState, type FormEvent } from 'react';
+import { useCallback, useEffect, useId, useMemo, useRef, useState, type FormEvent } from 'react';
 import * as Dialog from '@radix-ui/react-dialog';
-import { Archive, ArrowUpRight, Briefcase, ChevronRight, ChevronUp, Gamepad2, MessageSquare, Plus, Send, Zap, type LucideIcon } from 'lucide-react';
+import { Archive, Briefcase, ChevronRight, ChevronUp, Gamepad2, MessageSquare, Plus, Send, Zap, type LucideIcon } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 
 import { ChromeIconButton } from '@/components/title-bar/ChromeIconButton';
@@ -27,9 +27,11 @@ import { FormField } from '@/components/ui/form-field';
 import { Input } from '@/components/ui/input';
 import { SegmentedControl } from '@/components/ui/segmented-control';
 import { Spinner } from '@/components/ui/spinner';
+import { FeishuBotQrConfig } from '@/components/settings/FeishuBotQrConfig';
 import { WechatBotSection } from '@/components/settings/WechatBotSection';
 import { cn } from '@/lib/utils';
 import { toast } from '@/lib/toast';
+import { type FeishuBotRegistrationTransport } from '@/hooks/useFeishuBotRegistration';
 import { formatRelative } from '@/hooks/useRelativeTime';
 import { extractIpcError } from '@/utils/ipcError';
 import type {
@@ -67,11 +69,6 @@ import {
 
 const BOT_TOKEN_PATTERN = /^\d+:[A-Za-z0-9_-]{20,}$/;
 const OWNER_USER_ID_PATTERN = /^\d{4,20}$/;
-// Same application launchers as Settings → IM bots.
-const FEISHU_APP_LAUNCHER_URL: Record<BotImFeishuService, string> = {
-  feishu: 'https://open.feishu.cn/page/launcher?from=backend_oneclick',
-  lark: 'https://open.larksuite.com/page/launcher?from=backend_oneclick',
-};
 const DISCORD_OWNER_ID_PATTERN = /^\d{17,20}$/;
 
 const CHANNEL_ICON: Record<BotImChannel, LucideIcon> = {
@@ -707,10 +704,6 @@ function BotChannelAddDialog({
   const [token, setToken] = useState('');
   const [ownerUserId, setOwnerUserId] = useState('');
   const [service, setService] = useState<BotImFeishuService>('feishu');
-  const [guideOpen, setGuideOpen] = useState(false);
-  const guideId = useId();
-  const [appId, setAppId] = useState('');
-  const [appSecret, setAppSecret] = useState('');
   // 企业微信 / 钉钉 / Discord 各自的两格: 字段名跟平台的叫法走, 互不串用。
   const [wecomBotId, setWecomBotId] = useState('');
   const [wecomSecret, setWecomSecret] = useState('');
@@ -730,9 +723,36 @@ function BotChannelAddDialog({
   const useExisting = existing !== null && (source === 'existing' || !credentialsHere);
   const manualFeishu = channel === 'feishu' && credentialsHere && !useExisting;
   const serviceName = t('bots.channels.platform.' + service);
-
   const apiRef = useRef(api);
   apiRef.current = api;
+  // t 只用于把主进程错误码翻成人话; 放 ref 里, 避免文案函数重建时作废在途授权。
+  const translateRef = useRef(t);
+  translateRef.current = t;
+  const feishuTransport = useMemo<FeishuBotRegistrationTransport | undefined>(() => {
+    if (!api) return undefined;
+    // 伙伴不可用时主进程只回错误码, 换成和手动添加一致的说明。
+    const describeBeginError = (error?: string) =>
+      error === 'BOT_NOT_FOUND' || error === 'BOT_INACTIVE'
+        ? translateRef.current('bots.channels.add.errors.botUnavailable', { name: bot.name })
+        : error;
+    return {
+      begin: async (next) => {
+        const result = await api.feishuRegistrationBegin({ botId: bot.id, service: next });
+        return result.ok ? result : { ...result, error: describeBeginError(result.error) };
+      },
+      cancel: () => api.feishuRegistrationCancel(),
+      onStatus: (callback) => api.onFeishuRegistrationStatus(callback),
+    };
+  }, [api, bot.id, bot.name]);
+  const handleFeishuConnected = useCallback(() => {
+    const current = apiRef.current;
+    if (!current) return;
+    void current
+      .list()
+      .then((next) => onApplied(next))
+      .catch(() => undefined)
+      .finally(() => onOpenChange(false));
+  }, [onApplied, onOpenChange]);
   const refreshAdoptable = useCallback(() => {
     void listAdoptablePersonalBots(apiRef.current)
       .then((next) => setAdoptable(next.bots))
@@ -753,7 +773,7 @@ function BotChannelAddDialog({
       : channel === 'telegram'
       ? filled(token, ownerUserId)
       : channel === 'feishu'
-        ? filled(appId, appSecret)
+        ? false
         : channel === 'wecom'
           ? filled(wecomBotId, wecomSecret)
           : channel === 'dingtalk'
@@ -769,12 +789,9 @@ function BotChannelAddDialog({
         if (!OWNER_USER_ID_PATTERN.test(trimmedOwner)) return t('bots.channels.add.errors.invalidOwner');
         return { botId: bot.id, channel: 'telegram', token: trimmedToken, ownerUserId: trimmedOwner };
       }
-      case 'feishu': {
-        const trimmedAppId = appId.trim();
-        const trimmedSecret = appSecret.trim();
-        if (!trimmedAppId || !trimmedSecret) return t('bots.channels.add.errors.invalidFeishu');
-        return { botId: bot.id, channel: 'feishu', appId: trimmedAppId, appSecret: trimmedSecret, service };
-      }
+      case 'feishu':
+        // 飞书改走扫码授权, 表单不会再提交凭证; 保留分支只为类型穷尽。
+        return t('bots.channels.add.errors.invalidFeishu');
       case 'wecom': {
         const trimmedBotId = wecomBotId.trim();
         const trimmedSecret = wecomSecret.trim();
@@ -965,89 +982,18 @@ function BotChannelAddDialog({
                   </FormField>
                 </>
               ) : channel === 'feishu' ? (
-                <>
-                  <SegmentedControl
-                    aria-label={t('bots.channels.add.feishu.serviceLabel')}
-                    value={service}
-                    options={[
-                      { value: 'feishu', label: t('bots.channels.platform.feishu') },
-                      { value: 'lark', label: t('bots.channels.platform.lark') },
-                    ]}
-                    onValueChange={setService}
-                    disabled={busy}
+                feishuTransport ? (
+                  <FeishuBotQrConfig
+                    service={service}
+                    setService={setService}
+                    transport={feishuTransport}
+                    onConnected={handleFeishuConnected}
                   />
-                  <section className="flex flex-col gap-2 rounded-xl border border-[var(--border-default)] p-3">
-                    <div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-13 leading-[1.5]">
-                      <p className="font-medium text-[var(--text-primary)]">
-                        {t('bots.channels.add.feishu.createPrompt', { service: serviceName })}
-                      </p>
-                      <a
-                        href={FEISHU_APP_LAUNCHER_URL[service]}
-                        onClick={(event) => {
-                          event.preventDefault();
-                          void window.electronAPI.openExternal?.(FEISHU_APP_LAUNCHER_URL[service]);
-                        }}
-                        className="inline-flex items-center gap-0.5 text-[var(--text-secondary)] underline underline-offset-2 outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]"
-                      >
-                        {t('bots.channels.add.feishu.createLink', { service: serviceName })}
-                        <ArrowUpRight size={13} aria-hidden="true" className="shrink-0" />
-                      </a>
-                    </div>
-                    <p className="text-12 leading-[1.5] text-[var(--text-secondary)]">
-                      {t('bots.channels.add.feishu.credentialsHint')}
-                    </p>
-                    <Button
-                      type="button"
-                      variant="secondary"
-                      tone="quiet"
-                      size="sm"
-                      className="w-fit justify-start gap-1 px-1 text-[var(--text-secondary)]"
-                      aria-expanded={guideOpen}
-                      aria-controls={guideId}
-                      onClick={() => setGuideOpen((open) => !open)}
-                    >
-                      <ChevronRight size={12} aria-hidden="true" className={cn('shrink-0 transition-transform motion-reduce:transition-none', guideOpen && 'rotate-90')} />
-                      {t('bots.channels.add.feishu.stepsLabel')}
-                    </Button>
-                    <Collapse open={guideOpen} id={guideId}>
-                      <ol className="list-decimal space-y-2 pl-5 text-12 leading-[1.5] text-[var(--text-secondary)]">
-                        <li>{t('bots.channels.add.feishu.stepCreate')}</li>
-                        <li>{t('bots.channels.add.feishu.stepCredentials')}</li>
-                        <li>{t('bots.channels.add.feishu.stepConnect', { service: serviceName })}</li>
-                      </ol>
-                    </Collapse>
-                  </section>
-                  <FormField label={t('bots.channels.add.feishu.appIdLabel')}>
-                    {(control) => (
-                      <Input
-                        {...control}
-                        mono
-                        value={appId}
-                        onChange={setAppId}
-                        placeholder={t('bots.channels.add.feishu.appIdPlaceholder')}
-                        autoComplete="off"
-                        spellCheck={false}
-                        disabled={busy}
-                      />
-                    )}
-                  </FormField>
-                  <FormField label={t('bots.channels.add.feishu.appSecretLabel')}>
-                    {(control) => (
-                      <Input
-                        {...control}
-                        secret
-                        mono
-                        value={appSecret}
-                        onChange={setAppSecret}
-                        placeholder={t('bots.channels.add.feishu.appSecretPlaceholder')}
-                        autoComplete="off"
-                        spellCheck={false}
-                        disabled={busy}
-                        secretTipContentClassName="z-[10001]"
-                      />
-                    )}
-                  </FormField>
-                </>
+                ) : (
+                  <p role="alert" className="text-12 text-[var(--error-fg)]">
+                    {t('bots.channels.add.errors.failed')}
+                  </p>
+                )
               ) : channel === 'wecom' ? (
                 <>
                   <FormField label={t('bots.channels.add.wecom.botIdLabel')}>
@@ -1171,20 +1117,18 @@ function BotChannelAddDialog({
                   {t('bots.cancel')}
                 </Button>
               </Dialog.Close>
-              <Button
-                type="submit"
-                variant="cta"
-                palette="confirmation"
-                size="lg"
-                loading={busy}
-                disabled={!canSubmit || busy}
-              >
-                {busy
-                  ? t('bots.channels.add.connecting')
-                  : manualFeishu
-                    ? t('bots.channels.add.feishu.confirm', { service: serviceName })
-                    : t('bots.channels.add.confirm')}
-              </Button>
+              {manualFeishu ? null : (
+                <Button
+                  type="submit"
+                  variant="cta"
+                  palette="confirmation"
+                  size="lg"
+                  loading={busy}
+                  disabled={!canSubmit || busy}
+                >
+                  {busy ? t('bots.channels.add.connecting') : t('bots.channels.add.confirm')}
+                </Button>
+              )}
             </div>
           </form>
         </Dialog.Content>

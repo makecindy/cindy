@@ -2462,6 +2462,16 @@ interface ElectronAPI {
     adopt: (
       payload: import('../shared/botImConnection').BotImAdoptPersonalBotInput,
     ) => Promise<import('../shared/botImConnection').BotImConnectionAddResult>;
+    feishuRegistrationBegin: (payload: {
+      botId: string;
+      service: 'feishu' | 'lark';
+    }) => Promise<import('../shared/botImConnection').BotImFeishuRegistrationBeginResult>;
+    feishuRegistrationCancel: () => Promise<{ ok: true }>;
+    onFeishuRegistrationStatus: (
+      listener: (
+        payload: import('../shared/botImConnection').BotImFeishuRegistrationStatus,
+      ) => void,
+    ) => () => void;
     onChanged: (
       listener: (payload: import('../shared/botImConnection').BotImConnectionListPayload) => void,
     ) => () => void;

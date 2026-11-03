@@ -305,7 +305,7 @@ export function getBotFeishuTransport(botId: string, ownerOpenId?: string): Feis
   return null;
 }
 
-async function readBotProfileStatus(botId: string): Promise<string | null> {
+export async function readBotProfileStatus(botId: string): Promise<string | null> {
   const [row] = await getDbClient()
     .drizzle.select({ status: botProfiles.status })
     .from(botProfiles)

@@ -76,6 +76,24 @@ function resolveManagedImageAbsPath(url: string): string {
     : resolveXdtImageUrl(url).absPath;
 }
 
+/** 表单 POST: 飞书授权协议与各渠道 API 共用的唯一出口。 */
+export async function postForm(
+  url: string,
+  form: URLSearchParams,
+): Promise<{ status: number; body: unknown }> {
+  const res = await net.fetch(url, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+    body: form.toString(),
+  });
+  const text = await res.text();
+  try {
+    return { status: res.status, body: JSON.parse(text) as unknown };
+  } catch {
+    return { status: res.status, body: { error: text || 'HTTP ' + res.status } };
+  }
+}
+
 const host: IMHost = {
   accountScope: imHostAccountScope,
   paths: {
@@ -175,19 +193,7 @@ const host: IMHost = {
       }
     },
   },
-  async httpPostForm(url, form) {
-    const res = await net.fetch(url, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-      body: form.toString(),
-    });
-    const text = await res.text();
-    try {
-      return { status: res.status, body: JSON.parse(text) as unknown };
-    } catch {
-      return { status: res.status, body: { error: text || `HTTP ${res.status}` } };
-    }
-  },
+  httpPostForm: postForm,
   createLogger,
 };
 

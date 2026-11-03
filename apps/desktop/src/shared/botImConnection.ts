@@ -30,7 +30,9 @@ export function readBotImChannelsFromVendorOptions(
 ): BotImChannel[] {
   const raw = vendorOptions?.[BOT_IM_CHANNELS_VENDOR_KEY];
   if (!Array.isArray(raw)) return [];
-  return (BOT_IM_CHANNELS as readonly string[]).filter((channel) => raw.includes(channel)) as BotImChannel[];
+  return (BOT_IM_CHANNELS as readonly string[]).filter((channel) =>
+    raw.includes(channel),
+  ) as BotImChannel[];
 }
 
 /** 各渠道专线在 vendorOptions 里记目标 chat 的字段名(与各 adapter 的 buildVendorOptions 同源)。 */
@@ -191,3 +193,20 @@ export interface BotImConnectionLanesPayload {
 }
 
 export const BOT_IM_CONNECTION_CHANGED_EVENT = 'botImConnection:changed';
+
+/** 伙伴自有飞书连接的扫码授权: main 只回验证信息与轮次, 凭证不经过 renderer。 */
+export interface BotImFeishuRegistrationBeginResult {
+  ok: boolean;
+  userCode?: string;
+  verificationUrl?: string;
+  expiresIn?: number;
+  runId?: number;
+  error?: string;
+}
+
+export interface BotImFeishuRegistrationStatus {
+  status: 'pending' | 'success' | 'expired' | 'cancelled' | 'error';
+  /** 产生该结果的授权轮次; renderer 据此丢弃旧轮次。 */
+  runId?: number;
+  error?: string;
+}

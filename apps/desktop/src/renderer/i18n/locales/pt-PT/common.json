@@ -11622,7 +11622,7 @@
         "source": {
           "label": "Como ligar",
           "existing": "Usar o bot já configurado no Cindy",
-          "manual": "Introduzir novas credenciais",
+          "manual": "Criar um novo bot por código QR",
           "moveNote": "O bot sai de Definições → Bots de IM, que ficará vazio. As conversas continuam com {{name}}."
         }
       },

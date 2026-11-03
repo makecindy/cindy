@@ -39,6 +39,13 @@ function getQrColors(): { dark: string; light: string } {
 export type FeishuBotRegistrationPhase =
   'idle' | 'starting' | 'qr' | 'success' | 'expired' | 'cancelled' | 'error';
 
+/** 设置页与伙伴页共用同一套扫码 UI; 由调用方注入各自的 IPC 与轮次通道。 */
+export interface FeishuBotRegistrationTransport {
+  begin: (service: 'feishu' | 'lark') => Promise<FeishuBotRegistrationBeginResult>;
+  cancel: () => Promise<unknown>;
+  onStatus: (callback: (payload: FeishuBotRegistrationStatusPayload) => void) => () => void;
+}
+
 interface UseFeishuBotRegistrationReturn {
   phase: FeishuBotRegistrationPhase;
   verificationUrl: string | null;
@@ -53,8 +60,18 @@ interface UseFeishuBotRegistrationReturn {
 
 export function useFeishuBotRegistration(
   service: 'feishu' | 'lark' = 'feishu',
+  transport?: FeishuBotRegistrationTransport,
 ): UseFeishuBotRegistrationReturn {
   const { t } = useTranslation();
+  const resolvedTransport = useMemo<FeishuBotRegistrationTransport>(
+    () =>
+      transport ?? {
+        begin: (next) => window.electronAPI.feishuBot.registrationBegin(next),
+        cancel: () => window.electronAPI.feishuBot.registrationCancel(),
+        onStatus: (callback) => window.electronAPI.feishuBot.onRegistrationStatus(callback),
+      },
+    [transport],
+  );
   const [phase, setPhase] = useState<FeishuBotRegistrationPhase>('idle');
   const [verificationUrl, setVerificationUrl] = useState<string | null>(null);
   const [userCode, setUserCode] = useState<string | null>(null);
@@ -75,10 +92,10 @@ export function useFeishuBotRegistration(
     mainRunIdRef.current = null;
     if (activeRunRef.current === null) return;
     activeRunRef.current = null;
-    void window.electronAPI.feishuBot.registrationCancel().catch((err: unknown) => {
+    void resolvedTransport.cancel().catch((err: unknown) => {
       log.warn('registration cancel failed:', err);
     });
-  }, []);
+  }, [resolvedTransport]);
 
   useEffect(() => {
     setPhase('idle');
@@ -112,7 +129,7 @@ export function useFeishuBotRegistration(
   }, [phase, secondsLeft]);
 
   useEffect(() => {
-    const off = window.electronAPI.feishuBot.onRegistrationStatus((payload) => {
+    const off = resolvedTransport.onStatus((payload) => {
       if (payload.status === 'pending') return;
       // 旧轮次的结果一律不认: main 侧 runId 与当前轮次对不上,说明这是
       // 用户切换服务或重新发起之前那一轮的收尾,写回界面会打断当前授权。
@@ -148,7 +165,7 @@ export function useFeishuBotRegistration(
       );
     });
     return off;
-  }, [t]);
+  }, [t, resolvedTransport]);
 
   const beginRegistration = useCallback(async () => {
     // 只挡"同一代"的重复点击: 取消或切换服务会推进代次, 之后必须能重新发起。
@@ -171,7 +188,7 @@ export function useFeishuBotRegistration(
         setErrorMessage(null);
         setQrDataUrl(null);
         try {
-          await window.electronAPI.feishuBot.registrationCancel();
+          await resolvedTransport.cancel();
         } catch (err) {
           log.warn('registration cancel failed:', err);
         }
@@ -187,7 +204,7 @@ export function useFeishuBotRegistration(
       setQrDataUrl(null);
 
       try {
-        const result = await window.electronAPI.feishuBot.registrationBegin(service);
+        const result = await resolvedTransport.begin(service);
         if (generationRef.current !== runId) return;
         if (!result.ok || !result.verificationUrl || !result.expiresIn) {
           invalidateRegistration();
@@ -222,7 +239,7 @@ export function useFeishuBotRegistration(
     } finally {
       if (beginInFlightRef.current === token) beginInFlightRef.current = null;
     }
-  }, [invalidateRegistration, service, t]);
+  }, [invalidateRegistration, resolvedTransport, service, t]);
 
   const cancelRegistration = useCallback(async () => {
     const runId = ++generationRef.current;
@@ -230,13 +247,13 @@ export function useFeishuBotRegistration(
     setPhase('cancelled');
     setErrorMessage(null);
     try {
-      await window.electronAPI.feishuBot.registrationCancel();
+      await resolvedTransport.cancel();
     } catch (err) {
       if (generationRef.current !== runId) return;
       setPhase('error');
       setErrorMessage(err instanceof Error ? err.message : String(err));
     }
-  }, []);
+  }, [resolvedTransport]);
 
   return {
     phase,
