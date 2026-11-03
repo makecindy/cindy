@@ -239,7 +239,7 @@ function CardControls({
   // A PR link leads with the app's own PR icon in its status colour (as on the home task row);
   // other links end with a quiet external-link mark.
   const titlePr = titleLink?.url && /^https:\/\/(?:www\.)?github\.com\/[^/]+\/[^/]+\/pull\/\d+/.test(titleLink.url)
-    ? prStatusVisual(titleLink.prState ?? prStatus.find((slot) => slot.status)?.status?.status ?? null, colors) : undefined;
+    ? prStatusVisual(titleLink.prState ?? prStatus.find((slot) => slot.key === githubPrKeyOfUrl(titleLink.url!))?.status?.status ?? null, colors) : undefined;
   const buttons = (history ? [] : items).filter((action) => !action.toggle && action !== titleLink);
   const { getAccessToken } = useAuth();
   const readonly = history || ['sent', 'sending', 'unconfirmed', 'deleting', 'deleted'].includes(mail?.state ?? '');
@@ -812,6 +812,11 @@ function CardControls({
       </Modal>
     </View>
   );
+}
+/** `owner/repo#N` (lower-case) of a GitHub pull request URL, the key the Host's PR status slots use. */
+function githubPrKeyOfUrl(url: string): string | undefined {
+  const m = /^https:\/\/(?:www\.)?github\.com\/([^/]+)\/([^/]+)\/pull\/(\d+)/.exec(url);
+  return m ? `${m[1].toLowerCase()}/${m[2].toLowerCase()}#${Number(m[3])}` : undefined;
 }
 /** A plugin link reads as "open github.com" instead of repeating the card's title. */
 function linkHost(url: string): string | undefined {

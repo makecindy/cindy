@@ -29,6 +29,8 @@ export function GhostCardModelSelect({
   const [route, setRoute] = useState(initial);
   const draft = useRef(initial);
   const closed = useRef(false);
+  // A model row was chosen (even the current one): that is a decision to dispatch, unlike an outside click.
+  const picked = useRef(false);
   const agentDeviceId = route?.agentDeviceId ?? null;
   const preferenceStore = useTransientModelPickerPreferences();
   const agents = useModelPickerAgents(
@@ -54,7 +56,7 @@ export function GhostCardModelSelect({
     if (closed.current) return;
     closed.current = true;
     const next = draft.current;
-    if (next && JSON.stringify(next) !== JSON.stringify(initial)) onSelect(next);
+    if (next && (picked.current || JSON.stringify(next) !== JSON.stringify(initial))) onSelect(next);
     onClose();
   };
   return (
@@ -90,6 +92,7 @@ export function GhostCardModelSelect({
             if (draft.current) update({ ...draft.current, fastMode });
           }}
           onUnifiedSelect={({ providerId, modelId, engine, effort, fast, agentDevice }) => {
+            picked.current = true;
             update({
               providerId,
               model: modelId,

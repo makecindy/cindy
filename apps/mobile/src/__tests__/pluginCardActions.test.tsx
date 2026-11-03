@@ -16,7 +16,11 @@ vi.mock("@/auth/AuthContext", () => ({ useAuth: () => ({ getAccessToken: async (
 vi.mock("../plugins/mobileMailAttachment", () => ({ pickMobileMailAttachment: (...args: unknown[]) => h.pick(...args) }));
 vi.mock("@/session/useBotGroupRemoteMedia", () => ({ useBotGroupRemoteMedia: () => h.resolve }));
 vi.mock('@/components/FileTypeIcon', () => ({ FileTypeIcon: () => null }));
-vi.mock('lucide-react-native', () => ({ ExternalLink: () => null, GitPullRequest: () => null, GitMerge: () => null, GitPullRequestClosed: () => null, GitPullRequestDraft: () => null, Check: () => null, CircleMinus: () => null, CircleX: () => null, Clock: () => null }));
+vi.mock('lucide-react-native', async () => {
+  const { createElement: el } = await import('react');
+  const icon = (name: string) => () => el('i', { 'data-icon': name });
+  return Object.fromEntries(['ExternalLink', 'GitPullRequest', 'GitMerge', 'GitPullRequestClosed', 'GitPullRequestDraft', 'Check', 'CircleMinus', 'CircleX', 'Clock'].map((name) => [name, icon(name)]));
+});
 
 const h = vi.hoisted(() => ({ invoke: vi.fn(), pick: vi.fn(), resolve: vi.fn(), inject: vi.fn(), web: {} as any, mode: 'light' }));
 vi.mock("react-native", () => {
@@ -146,6 +150,23 @@ describe("rich plugin card hints", () => {
     expect(toggle.checked).toBe(true);
     await act(async () => { toggle.click(); });
     expect(dispatch).toHaveBeenCalledWith(expect.objectContaining({ actionId: 'prset:rename' }));
+  });
+
+  it('draws a PR link with its own status, never another PR\'s', async () => {
+    h.invoke.mockImplementation(async () => ({ result: { confirms: [] } }));
+    const container = document.createElement('div'), root = createRoot(container);
+    unmount = () => act(() => root.unmount());
+    const merged = { ok: true, status: 'merged', unresolvedCount: 0, checks: { total: 0, passed: 0, failed: 0, pending: 0, skipped: 0 } };
+    const render = async (url: string) => {
+      await act(async () => root.render(createElement(PluginCardActions, { deviceId: 'device', sessionId: 's', callId: 'c', text: '#9 Fix login\n\no/r', data: {
+        pluginId: 'github', revision: '1', form: null, prStatus: [{ key: 'o/r#10', fallback: [], status: merged }],
+        items: [{ id: 'link:0', label: '#9 Fix login', url, disabled: false }],
+      } })));
+      return Array.from(container.querySelectorAll('i')).map((node) => node.getAttribute('data-icon'));
+    };
+    expect(await render('https://github.com/o/r/pull/9')).toContain('GitPullRequest');
+    expect(await render('https://github.com/o/r/pull/9')).not.toContain('GitMerge');
+    expect(await render('https://github.com/O/R/pull/10')).toContain('GitMerge');
   });
 
   // Unit: on the phone the PR card's title, repo and branch were one loose block above a separate
