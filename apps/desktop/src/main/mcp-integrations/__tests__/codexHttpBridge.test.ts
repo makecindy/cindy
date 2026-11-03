@@ -282,13 +282,16 @@ describe('codexHttpBridge', () => {
     expect(await readRpcResponse(execution)).toMatchObject({ result: { content: [{ text: 'bot-parent' }] } });
   });
 
-  it.each(['codex', 'claude-code'] as const)('serves only live Bot tasks over the %s remote helper route', async (agentKind) => {
+  it.each(['codex', 'claude-code'] as const)('serves live remote introspection and keeps Bot tasks scoped over the %s helper route', async (agentKind) => {
     let surface: 'bot' | 'default' = 'bot';
     const start = vi.fn(async () => ({ ok: true as const, delegationId: 'remote-task', childSessionId: 'child-session', status: 'running', deadlineAt: 1000 }));
     const unavailable = vi.fn(async () => ({ ok: false as const, errorCode: 'UNEXPECTED', message: 'unused' }));
+    const machines = { computers: [{ name: 'Desktop', availability: 'online' }], ssh: [] };
+    const listMachines = vi.fn(async () => ({ ok: true as const, machines }));
     bridge = await startCodexHttpBridge({
       serverFactories: { cindy_helper: () => createXdtHelperMcpServer({
         resolveSurface: async () => surface,
+        machines: { list: listMachines },
         sessionTasks: { startSessionTask: start, getSessionTask: unavailable, messageSessionTask: unavailable, stopSessionTask: unavailable },
       }, { agentKind, workingDir: '', getSessionContext: getLiziMcpSessionContext }) },
       pluginIdByServerName: { cindy_helper: 'xdt_helper' },
@@ -346,7 +349,15 @@ describe('codexHttpBridge', () => {
     expect(start).toHaveBeenCalledWith(expect.objectContaining({ callerSessionId: 'remote-bot', objective: 'Build the report' }));
     // The ordinary remote surface retains Cindy introspection, but not local controls or Bot-only tasks.
     surface = 'default';
-    expect((await list()).result.tools.map(t => t.name).sort()).toEqual(['call_tool', 'list_tools']);
+    expect((await list()).result.tools.map(t => t.name).sort()).toEqual(['call_tool', 'list_machines', 'list_tools']);
+    // #8406: a bound ordinary SSH task can discover and invoke the direct tool,
+    // while the existing live surface continues to reject Bot-only operations.
+    const machineResult = await readRpcResponse(await request('tools/call', {
+      name: 'list_machines', arguments: {},
+      ...(agentKind === 'codex' ? { _meta: { threadId: 'remote-thread' } } : {}),
+    })) as { result: { content: Array<{ text: string }> } };
+    expect(JSON.parse(machineResult.result.content[0]!.text)).toEqual({ ok: true, machines });
+    expect(listMachines).toHaveBeenCalledWith({ callerSessionId: ctx.sessionId });
     const categories = await readRpcResponse(await request('tools/call', { name: 'list_tools', arguments: {} })) as {
       result: { content: Array<{ text: string }> };
     };

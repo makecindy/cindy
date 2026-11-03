@@ -502,14 +502,14 @@ describe('plugin page ghost_call approval policy', () => {
     await expect(call()).rejects.toThrow('MCP_APP_TOOL_DENIED');
     expect(mode === 'auto' ? review : prompt).toHaveBeenCalledOnce();
   });
-  it.each(['bypassPermissions', 'media', 'media-auto'] as const)('does not ask for %s', async mode => {
+  it.each(['bypassPermissions', 'media', 'media-auto'] as const)('uses session approval for undeclared plugin tools (%s)', async mode => {
     bind(mode === 'bypassPermissions' ? 'notes' : 'cindy-art');
     state.session.permissionMode = mode === 'media-auto' ? 'auto' : mode === 'media' ? 'default' : mode;
     const review = vi.fn(async () => ({ verdict: 'ask' as const }));
     registerMcpAppsIpc(async () => {}, request, review);
     await call(mode === 'bypassPermissions' ? tool : { ...tool, name: 'gen_image' });
-    expect(review).not.toHaveBeenCalled();
-    expect(request).not.toHaveBeenCalled();
+    expect(review).toHaveBeenCalledTimes(mode === 'media-auto' ? 1 : 0);
+    expect(request).toHaveBeenCalledTimes(mode === 'bypassPermissions' ? 0 : 1);
   });
   it.each([undefined, null, 'example'])('reviews the original ghost_call identity and page origin in Auto: %s', async namespace => {
     bind('notes', namespace); state.session.permissionMode = 'auto';

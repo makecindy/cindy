@@ -1184,7 +1184,7 @@ import { handleIncomingCindyFile } from './cindy-brain/openFileInstall.js';
 import { registerCindyFileAssociation } from './cindy-brain/fileAssociation.js';
 import { runPluginStorageSmoke } from './smoke/pluginStorageSmoke.js';
 import { runComputerUseSmokeIfRequested } from './smoke/computerUseSmoke.js';
-import { setMainClassicalStyle, setMainLocale, t } from './i18n.js';
+import { getResolvedMainLocale, setMainClassicalStyle, setMainLocale, t } from './i18n.js';
 import { isClassicalReplyStyle } from '@cindy/maker-shared/classical-reply';
 import { requireObject, throwIpcError } from './utils/ipcValidate.js';
 import { pickNativeAtResource } from './nativeAtResourcePicker.js';
@@ -3186,6 +3186,8 @@ ipcMain.handle('app-locale:set-classical-style', (_event, style: unknown): { ok:
 
 ipcMain.handle('app-menu:set-locale', (_event, locale: unknown): { ok: true } => {
   const previousLocale = currentApplicationMenuLocale;
+  // Real previous locale (OS fallback before the first sync), not the menu cache that starts null.
+  const previousResolvedLocale = getResolvedMainLocale();
   currentApplicationMenuLocale = resolveApplicationMenuLocale(
     typeof locale === 'string' ? locale : null,
   );
@@ -3202,7 +3204,7 @@ ipcMain.handle('app-menu:set-locale', (_event, locale: unknown): { ok: true } =>
   remoteDesktopViewerWindows.setLocale(currentApplicationMenuLocale);
   rsbWindowController.setLocale(currentApplicationMenuLocale);
   sidebarTabWindowsController.setLocale(currentApplicationMenuLocale);
-  refreshGhostLocalization();
+  refreshGhostLocalization(previousResolvedLocale);
   const mainWindow = mainWindowRef && !mainWindowRef.isDestroyed() ? mainWindowRef : null;
   if (mainWindow) {
     installApplicationMenu(mainWindow, currentApplicationMenuLocale);
