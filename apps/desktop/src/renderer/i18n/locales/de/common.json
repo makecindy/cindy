@@ -13327,7 +13327,7 @@
         "empty": "Keine Befehle verfügbar."
       },
       "cost": {
-        "title": "Sitzungskosten",
+        "title": "Sitzungsauslastung",
         "tokensUsed": "Verwendete Tokens (dieser Dialogschritt)"
       },
       "pwd": {

@@ -13362,7 +13362,7 @@
         "empty": "No commands available."
       },
       "cost": {
-        "title": "Session Cost",
+        "title": "Session Usage",
         "tokensUsed": "Tokens Used (This Turn)"
       },
       "pwd": {
