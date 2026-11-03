@@ -5997,7 +5997,7 @@
           "check": {
             "checking": "Verificando o servidor…",
             "checkingHint": "Conectando ao servidor para verificar o sistema, as portas e os serviços existentes.",
-            "idle": "Depois que você escolher um servidor, o Cindy verifica se é possível fazer a implantação nele.",
+            "idle": "Escolha um servidor para a Cindy verificar se dá para implantar nele.",
             "ready": "Pronto para implantar",
             "blocked": "Não é possível implantar automaticamente",
             "recheck": "Verificar novamente",
@@ -8680,9 +8680,9 @@
     "localModeEntry": "Pular login",
     "localModeOpening": "Pulando login…",
     "localModeDescription": "Não é necessário ter uma conta do Cindy. Os dados ficam neste dispositivo; modelos na nuvem, acesso entre dispositivos e serviços do marketplace ficam indisponíveis.",
-    "consentStatement": "Li e concordo com os <terms>Termos de Serviço</terms> e a <privacy>Política de Privacidade</privacy>",
+    "consentStatement": "Aceito os <terms>Termos de Serviço</terms> e a <privacy>Política de Privacidade</privacy>",
     "consentDialog": {
-      "title": "Termos e privacidade",
+      "title": "Termos e Política de Privacidade",
       "body": "Para continuar, leia e aceite os <terms>Termos de Serviço</terms> e a <privacy>Política de Privacidade</privacy> da Cindy.",
       "agree": "Aceitar",
       "disagree": "Agora não"
