@@ -14,6 +14,7 @@ import { join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import {
   analyzeMetroLog,
+  isLogFromLaunch,
   logcheckExitCode,
   metroLogEnv,
   metroLogPath,
@@ -129,6 +130,21 @@ describe("mobile:sim:logcheck analysis", () => {
   });
 });
 
+// Review #8560: a stale log that could be neither replaced nor deleted must not pass.
+describe("Metro log ownership", () => {
+  const header = "# sim-start port=8081 region=global source=s launch=new-1";
+
+  it("accepts only the log written for the running Metro's launch", () => {
+    expect(isLogFromLaunch(`${header}\n${BUNDLED}`, "new-1")).toBe(true);
+    expect(isLogFromLaunch(`${header}\n${BUNDLED}`, "old-0")).toBe(false);
+  });
+
+  it("rejects any log when the running Metro started without one", () => {
+    expect(isLogFromLaunch(`${header}\n${BUNDLED}`, null)).toBe(false);
+    expect(isLogFromLaunch(`${header}\n${BUNDLED}`, undefined)).toBe(false);
+  });
+});
+
 describe("Metro log preload", () => {
   const run = (args: string[]) => {
     const dir = mkdtempSync(join(tmpdir(), "metro-log-tee-"));
@@ -218,6 +234,7 @@ describe("incomplete Metro log", () => {
       const result = prepareMetroLog(mobileDir, 8081, {
         source: "s",
         region: "global",
+        launch: "l",
       });
       if (result === null) expect(existsSync(path)).toBe(false);
       else expect(readFileSync(path, "utf8")).not.toContain("Bundled");

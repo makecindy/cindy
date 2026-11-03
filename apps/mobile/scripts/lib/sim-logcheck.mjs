@@ -18,13 +18,13 @@ export function metroLogPath(mobileDir, port) {
 }
 
 /** 每次启动 Metro 时清空旧日志。失败时删掉旧日志并返回 null,不阻止 Metro 启动。 */
-export function prepareMetroLog(mobileDir, port, { source, region }) {
+export function prepareMetroLog(mobileDir, port, { source, region, launch }) {
   const path = metroLogPath(mobileDir, port);
   try {
     mkdirSync(dirname(path), { recursive: true });
     writeFileSync(
       path,
-      `# sim-start port=${port} region=${region} source=${source}\n`,
+      `# sim-start port=${port} region=${region} source=${source} launch=${launch}\n`,
       { mode: 0o600 },
     );
     return path;
@@ -37,6 +37,16 @@ export function prepareMetroLog(mobileDir, port, { source, region }) {
     }
     return null;
   }
+}
+
+/**
+ * 日志是否属于当前 Metro:日志头的 launch 必须等于 Metro 归属记录里的 metroLogLaunch。
+ * 建日志失败时归属记录写 null,旧日志即使删不掉也对不上。
+ */
+export function isLogFromLaunch(text, ownerLaunch) {
+  if (!ownerLaunch) return false;
+  const header = text.split(/\r?\n/, 1)[0];
+  return / launch=(\S+)$/.exec(header)?.[1] === ownerLaunch;
 }
 
 export function metroLogEnv(path, existingNodeOptions = "") {

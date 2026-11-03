@@ -182,7 +182,11 @@ if (portArgIdx >= 0) console.log(`  Metro 端口:${args[portArgIdx + 1]}(模拟�
 console.log('  注入 EXPO_PUBLIC_XDT_GIT_SOURCE / EXPO_PUBLIC_XDT_GIT_BRANCH / EXPO_PUBLIC_XDT_GIT_COMMIT 给 __DEV__ build label\n');
 
 // 只在真正启动时清空日志:复用已有 Metro 的分支在上面已退出,不能抹掉它的日志。
-const metroLog = prepareMetroLog(mobileDir, portArgs.port, { source: sourceIdentity, region });
+// launch 同时写进日志头和 Metro 归属记录,logcheck 据此确认日志属于这一次启动。
+const metroLogLaunch = `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+const metroLog = prepareMetroLog(mobileDir, portArgs.port, {
+  source: sourceIdentity, region, launch: metroLogLaunch,
+});
 console.log(metroLog
   ? `  Metro 日志:${metroLog}(验证后运行 pnpm mobile:sim:logcheck)\n`
   : '  ⚠ 无法创建 Metro 日志,mobile:sim:logcheck 将无法判定\n');
@@ -217,6 +221,7 @@ if (Number.isInteger(child.pid)) {
     loginScenario,
     envFingerprint,
     worktreeRoot,
+    metroLogLaunch: metroLog ? metroLogLaunch : null,
   });
   child.once('exit', () => clearMetroOwner(portArgs.port, child.pid));
 }

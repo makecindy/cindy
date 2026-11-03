@@ -11,6 +11,7 @@ import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
   analyzeMetroLog,
+  isLogFromLaunch,
   logcheckExitCode,
   metroLogPath,
 } from "./lib/sim-logcheck.mjs";
@@ -18,7 +19,7 @@ import {
   classifySimMetroListener,
   extractSimMetroPortArgs,
 } from "./lib/sim-whoami.mjs";
-import { probeMetroOwnership } from "./sim-metro.mjs";
+import { probeMetroOwnership, readMetroOwner } from "./sim-metro.mjs";
 
 const scriptsDir = dirname(fileURLToPath(import.meta.url));
 const mobileDir = resolve(scriptsDir, "..");
@@ -51,7 +52,13 @@ if (!listener.isTarget) {
 const known = JSON.parse(
   readFileSync(resolve(scriptsDir, "sim-logcheck-known-warnings.json"), "utf8"),
 );
-const result = analyzeMetroLog(readFileSync(logPath, "utf8"), known);
+const logText = readFileSync(logPath, "utf8");
+if (!isLogFromLaunch(logText, readMetroOwner(port)?.metroLogLaunch)) {
+  inconclusive(
+    `${logPath} 不是当前这次启动的 Metro 写的(可能是旧日志,或这次启动没能建出日志),请重新运行 pnpm mobile:sim:start。`,
+  );
+}
+const result = analyzeMetroLog(logText, known);
 const print = ({ line, message, count }) =>
   console.log(
     `  L${line}${count > 1 ? ` ×${count}` : ""}  ${message.slice(0, 300)}`,

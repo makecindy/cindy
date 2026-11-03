@@ -484,7 +484,7 @@ exercise the path first.
 | ---- | ------- | --------------- |
 | `0` | No errors. New warnings may be listed. | Include every listed warning in your report. |
 | `1` | An `ERROR` or failed bundle. | Fix it, or report why it is unrelated to your change. Never claim a clean verification. |
-| `2` | Cannot tell: no log, Metro belongs to another worktree or stopped, or nothing bundled. | Fix the setup and rerun. This is not a pass. |
+| `2` | Cannot tell: no log, Metro belongs to another worktree or stopped, the log was not written for this Metro launch, or nothing bundled. | Fix the setup and rerun. This is not a pass. |
 
 `scripts/sim-logcheck-known-warnings.json` lists warnings we are not fixing now,
 each with a reason. Add an entry only with that reason, and remove it once the

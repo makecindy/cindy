@@ -39,7 +39,7 @@ describe('native e2e environment', () => {
     const clearMetroOwner = vi.fn();
     const portInUse = vi.fn(async () => occupied);
     const error = vi.fn();
-    const prepareMetroLog = vi.fn(() => '/repo/apps/mobile/logs/metro-8082.log');
+    const prepareMetroLog = vi.fn((_dir: string, _port: number, _info: { launch: string }) => '/repo/apps/mobile/logs/metro-8082.log');
     const execution = runInNewContext(`(async () => { ${source.slice(start)} })()`, {
       DEFAULT_PORT: 8081, portArgs: { port: 8082, passthrough: [] }, portInUse,
       ensureAndroidTarget: vi.fn(), spawn, writeMetroOwner, clearMetroOwner,
@@ -66,7 +66,9 @@ describe('native e2e environment', () => {
       expect(spawn).toHaveBeenCalledWith(expect.anything(), expect.anything(), expect.objectContaining({
         env: expect.objectContaining({ CINDY_METRO_LOG_PATH: '/repo/apps/mobile/logs/metro-8082.log' }),
       }));
-      expect(writeMetroOwner).toHaveBeenCalledWith(8082, expect.objectContaining({ pid: 4242 }));
+      const launch = prepareMetroLog.mock.calls[0]?.[2]?.launch;
+      expect(launch).toEqual(expect.any(String));
+      expect(writeMetroOwner).toHaveBeenCalledWith(8082, expect.objectContaining({ pid: 4242, metroLogLaunch: launch }));
       for (const callback of exitCallbacks) callback();
       expect(clearMetroOwner).toHaveBeenCalledWith(8082, 4242);
     }
