@@ -64,8 +64,12 @@ function MaskIndicator({ mask, onTakeOver }: { mask: GroupMaskPresentation; onTa
       onCloseAutoFocus={event => { if (focusInput) { event.preventDefault(); onTakeOver(); setFocusInput(false); } }}>
       <h3 className="text-14 font-medium">{t(key('title'))}</h3>
       <p className="text-13 leading-normal text-[var(--text-secondary)]"><GroupMaskStatusText mask={mask} /></p>
+      {mask.error && <div className="flex flex-wrap items-center gap-2">
+        <p role="alert" className="min-w-0 flex-1 text-13 leading-normal text-[var(--text-danger)]">{t(key('saveError'))}</p>
+        <Button size="sm" variant="secondary" disabled={mask.saving} onClick={mask.retry}>{t(key('retry'))}</Button>
+      </div>}
       {mask.settings.enabled && mask.settings.trigger === 'always' ? <Button size="sm" variant="secondary" className="w-full" disabled={mask.saving}
-        onClick={() => { mask.update({ enabled: false }); setOpen(false); }}>{t(key('stop'))}</Button>
+        onClick={() => mask.update({ enabled: false })}>{t(key('stop'))}</Button>
         : mask.status === 'enabled' ? <Button size="sm" variant="secondary" className="w-full"
         onClick={() => { mask.participate(); setFocusInput(true); setOpen(false); }}>{t(key('takeover'))}</Button>
         : mask.status === 'paused' || mask.status === 'waiting' && mask.settings.trigger === 'manual'
