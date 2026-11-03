@@ -74,8 +74,6 @@ export interface ConfirmThreeOptions extends ConfirmOptions {
 
 /** 带业务复选框的 confirm(如装意识的"立即开启"):返回确认与勾选态。 */
 export interface ConfirmWithCheckboxOptions extends Omit<ConfirmOptions, 'dontShowAgainKey' | 'dontShowAgainLabel'> {
-  /** 可选第三操作，与取消和带勾选状态的确认分别返回。 */
-  tertiaryText?: string;
   /** 复选框文案。复用 ConfirmDialog 的复选框管线,但不写 localStorage(纯本次语义)。 */
   checkboxLabel: string;
   /** 复选框初始勾选态,缺省 false;每次弹出都复位到该值。 */
@@ -87,7 +85,7 @@ interface ConfirmDialogContextValue {
   /** 三状态 confirm — 用于「保存 / 不保存 / 取消」这类需要区分 cancel 与 negative 的场景。 */
   confirmThree: (options: ConfirmThreeOptions) => Promise<ConfirmThreeResult>;
   /** 带业务复选框(初始勾选态由 checkboxDefaultChecked 决定,缺省不勾;取消时 checked 恒为 false)。 */
-  confirmWithCheckbox: (options: ConfirmWithCheckboxOptions) => Promise<{ ok: boolean; checked: boolean; tertiary?: boolean }>;
+  confirmWithCheckbox: (options: ConfirmWithCheckboxOptions) => Promise<{ ok: boolean; checked: boolean }>;
 }
 
 interface QueueItem {
@@ -208,13 +206,13 @@ export function ConfirmDialogProvider({ children }: { children: ReactNode }) {
   );
 
   const confirmWithCheckbox = useCallback(
-    (options: ConfirmWithCheckboxOptions): Promise<{ ok: boolean; checked: boolean; tertiary?: boolean }> => {
+    (options: ConfirmWithCheckboxOptions): Promise<{ ok: boolean; checked: boolean }> => {
       return new Promise((resolve) => {
         const item: QueueItem = {
           options,
           // ConfirmDialog 的复选框状态经 onConfirm({dontShowAgain}) 回传,
           // 这里只是换个语义消费;取消路径拿不到勾选态,按未勾处理。
-          resolve: (r, checked) => resolve({ ok: r === 'confirm', checked: Boolean(checked), ...(r === 'tertiary' ? { tertiary: true } : {}) }),
+          resolve: (r, checked) => resolve({ ok: r === 'confirm', checked: Boolean(checked) }),
         };
         queueRef.current.push(item);
         if (!isShowingRef.current) {

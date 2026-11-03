@@ -2677,8 +2677,10 @@ B 上的 Worker 是一条普通任务，`sessions.orca_remote_lead`(migration 01
   分配，但不能作为主动换号结果；旧调用端不传该字段，行为不变。
 - **分隔条内容可选 `switchReason: 'quota-rebalance'`**：`agent_switch` 边界行（`AgentSwitchBoundaryContent`）只在供应商组为此换了
   电脑时带上，桌面与手机在位置后写「· 这个账号的配额更该先用」。旧端忽略，照常只显示位置。
-- **本机持久数据**：「以后自动换」存在按账号隔离的 `provider-group-session-prefs.json`（`{ autoRebalance: { [sessionId]: at } }`，
-  最多 4000 条、超出丢最早的；读不出时保留原文件、按都没选过处理）。不同步、不外发；降级旧版忽略这个文件，相当于每次都不提议。
+- **本机持久数据**：自动偏好与显式关闭状态存在按账号隔离的 `provider-group-session-prefs.json`
+  （`{ autoRebalance: { [sessionId]: at }, disabledRebalance?: { [sessionId]: at } }`），每类最多 4000 条、超出丢最早的；
+  读不出时保留原文件、按都没选过处理。文件不同步、不外发；手机与其他控制端通过上述动作读取建议、保存选择。
+  不支持新动作的旧版本会忽略关闭状态，降级风险见本节开头。
 - 实现：`provider-group/service.ts`、`usage.ts`(`providerGroupRebalanceTarget`)、`router.ts`(`rebalanceCandidates`)、`runtime.ts`、
   `ipc.ts`、`remoteHandler.ts`、`remoteRegistration.ts`、`sessionPrefs.ts`、`maker-ipc/sessionAgentSwitchHandler.ts`；客户端
   `renderer/features/provider-group/sessionRebalancePrompt.ts` 与 `apps/mobile/src/session/sessionRebalancePrompt.ts`。回归见

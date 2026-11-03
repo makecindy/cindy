@@ -1,15 +1,17 @@
 /**
  * 任务进行中换号(provider-groups.md §6.2，2026-10-21 用户裁决)：用户自己发下一条消息前，看任务所在电脑是否提议为了
- * 均匀用完各账号的配额换一台。要换就弹窗确认(换过去 / 取消，可勾「以后自动换」，只管这个任务)；这个任务勾过的
- * 不再弹窗、直接换，消息里的分隔条写明原因。第三操作可关闭本任务的配额均衡换号，当前消息仍照常发送。
+ * 均匀用完各账号的配额换一台。弹窗以单选项区分仅这次换、以后自动换、不自动换(仅本任务)；选过自动换的
+ * 不再弹窗、直接换，消息里的分隔条写明原因。选择不自动换则关闭本任务的配额均衡，当前消息仍照常发送。
  *
  * 换号的判断和记录都在任务所在电脑：本机任务问本机，被控电脑上的任务经设备互联问那台。为了不让每次发送都多等一次往返，
  * 提议在任务空闲时预先问好(上一轮结束、打开任务时，空闲期间每 5 分钟再问)，发送时只用问好的结果；没问到、问不到、
  * 旧版本不认识这个请求都按不提议处理。无论用户怎么选，这条消息都照常发出。
  */
-import { useEffect } from 'react';
+import { createElement, useEffect } from 'react';
 import type { TFunction } from 'i18next';
 import { toast } from '@/lib/toast';
+import type { ConfirmOptions } from '@/components/ui/confirm-dialog-provider';
+import { SessionRebalanceChoices, type RebalanceChoice } from './SessionRebalanceChoices';
 
 import { PROVIDER_GROUP_REMOTE_CHANNEL } from '@cindy/device-link';
 
@@ -29,16 +31,7 @@ export const SESSION_REBALANCE_CACHE_MS = 10 * 60_000;
 export const SESSION_REBALANCE_REFRESH_MS = 5 * 60_000;
 const MAX_PREFETCHED = 200;
 
-type ConfirmWithCheckbox = (options: {
-  presentation?: 'standard';
-  title: string;
-  description?: string;
-  confirmText?: string;
-  cancelText?: string;
-  checkboxLabel: string;
-  tertiaryText?: string;
-  autoFocusConfirm?: boolean;
-}) => Promise<{ ok: boolean; checked: boolean; tertiary?: boolean }>;
+type Confirm = (options: ConfirmOptions) => Promise<boolean>;
 
 type RebalanceRequest = Extract<ProviderGroupCommand, { action: 'rebalance-suggestion' | 'rebalance-decision' | 'rebalance-preference' }>;
 
@@ -149,26 +142,27 @@ export function describeSessionRebalance(
 export async function offerSessionRebalance(options: {
   sessionId: string;
   hostDeviceId?: string;
-  confirmWithCheckbox: ConfirmWithCheckbox;
+  confirm: Confirm;
   t: TFunction;
 }): Promise<((clientId: string) => Promise<void>) | undefined> {
-  const { sessionId, hostDeviceId, confirmWithCheckbox, t } = options;
+  const { sessionId, hostDeviceId, confirm, t } = options;
   const suggestion = takePrefetched(sessionId, hostDeviceId);
   if (!suggestion) return;
   if (suggestion.kind === 'auto') {
     return async (clientId) => { await recordDecision(sessionId, suggestion.memberKey, false, hostDeviceId, clientId); };
   }
-  const { ok, checked, tertiary } = await confirmWithCheckbox({
+  const selection: { value: RebalanceChoice } = { value: 'once' };
+  const ok = await confirm({
     presentation: 'standard',
     title: t('providerGroup.rebalance.title', { label: suggestion.label }),
     description: describeSessionRebalance(suggestion, t),
-    confirmText: t('providerGroup.rebalance.confirm'),
+    content: createElement(SessionRebalanceChoices, { onChange: (value) => { selection.value = value; } }),
+    confirmText: t('providerGroup.rebalance.send'),
     cancelText: t('providerGroup.rebalance.cancel'),
-    checkboxLabel: t('providerGroup.rebalance.remember'),
-    tertiaryText: t('providerGroup.rebalance.disable'),
     autoFocusConfirm: true,
   });
-  if (tertiary) {
+  if (!ok) return;
+  if (selection.value === 'off') {
     const result = await withTimeout(command(hostDeviceId, { action: 'rebalance-preference', sessionId, enabled: false }), null);
     if (!result || typeof result !== 'object' || (result as { ok?: unknown }).ok !== true) {
       toast.error(t('providerGroup.rebalance.disableFailed'));
@@ -180,6 +174,5 @@ export async function offerSessionRebalance(options: {
     }
     return;
   }
-  if (!ok) return;
-  return async (clientId) => { await recordDecision(sessionId, suggestion.memberKey, checked, hostDeviceId, clientId); };
+  return async (clientId) => { await recordDecision(sessionId, suggestion.memberKey, selection.value === 'auto', hostDeviceId, clientId); };
 }

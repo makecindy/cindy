@@ -9,11 +9,10 @@
  * 2. confirmIcon 是纯装饰:必须 aria-hidden,且按钮的可访问名称仍等于
  *    confirmText —— 图标不得混进读屏输出或破坏按名称查询。
  */
-import { cleanup, fireEvent, render, screen } from '@testing-library/react';
+import { cleanup, render, screen } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { ConfirmDialog } from '../confirm-dialog';
-import { ConfirmDialogProvider, useConfirmDialog } from '../confirm-dialog-provider';
 
 vi.mock('react-i18next', () => ({
   useTranslation: () => ({ t: (key: string) => key }),
@@ -24,29 +23,6 @@ vi.mock('@/lib/scrollbarAutoHide', () => ({
 }));
 
 afterEach(cleanup);
-
-// Unit, provider-groups.md §6.2：已有直接组件测试不覆盖 Provider 返回值；第三操作必须与取消、勾选确认区分。
-describe('ConfirmDialogProvider checkbox choices', () => {
-  it.each(['Switch', 'Disable', 'Cancel'])('returns a distinct result for %s', async (action) => {
-    const resolved = vi.fn();
-    function Consumer() {
-      const { confirmWithCheckbox } = useConfirmDialog();
-      return <button onClick={() => void confirmWithCheckbox({
-        title: 'Balance quota', description: 'Choose', confirmText: 'Switch', cancelText: 'Cancel',
-        tertiaryText: 'Disable', checkboxLabel: 'Remember',
-      }).then(resolved)}>Open</button>;
-    }
-    render(<ConfirmDialogProvider><Consumer /></ConfirmDialogProvider>);
-    fireEvent.click(screen.getByRole('button', { name: 'Open' }));
-    fireEvent.click(screen.getByRole('checkbox'));
-    fireEvent.click(screen.getByRole('button', { name: action }));
-    await vi.waitFor(() => expect(resolved).toHaveBeenCalledWith(
-      action === 'Switch' ? { ok: true, checked: true }
-        : action === 'Disable' ? { ok: false, checked: false, tertiary: true }
-          : { ok: false, checked: false },
-    ));
-  });
-});
 
 const permissionList = (
   <div>
