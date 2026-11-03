@@ -90,7 +90,7 @@ explicitly leaves visible-window acceptance to a screenshot/manual check. Withou
    机型要求，不能因另一型号已经启动就把它当作目标，也不使用已知被其他任务占用的设备。机型
    和个人选择都没有时可复用唯一已启动设备，否则询问。后续命令保持相同 region、UDID、模拟器
    后端和 mock 开关。
-   Cindy 模拟器经已安装的 `baguette-simulator` 插件操作：先查实时详情和 `devices`，按精确 UDID
+   Cindy 模拟器经已安装的 `cindy-simulator` 插件操作：先查实时详情和 `devices`，按精确 UDID
    操作，只用 `environment` 列出的已安装 runtime，同机型有可复用设备时不重复创建。`auto` 只在
    插件未安装或 `RUNTIME_DISABLED` 时回退系统模拟器；固定 `cindy` 时报告不可用，不替用户重新
    启用插件。Cindy 模拟器的设备全部关机或都被其他任务占用，不是回退理由：通过插件复用或新建
@@ -260,7 +260,7 @@ When `8081` serves another task and you are not authorized to take it over, give
 this task its own device and port instead of waiting or taking over:
 
 1. Use a device no other task is using, in the backend this task already selected:
-   for Cindy's simulator create or reuse one through the `baguette-simulator` plugin;
+   for Cindy's simulator create or reuse one through the `cindy-simulator` plugin;
    only for the system simulator use `xcrun simctl create`. Either set can
    `xcrun simctl clone` a shut-down device to keep its login (for Cindy's, add the
    `--set` below). One device follows one Metro; never repoint a device another task
