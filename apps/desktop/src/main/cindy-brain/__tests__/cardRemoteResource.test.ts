@@ -288,6 +288,11 @@ describe('plugin-card-rich projection', () => {
     expect(data).not.toHaveProperty('live');
   });
 
+  it('keeps the link address in the text for a client without the actions primitive', async () => {
+    const { text } = await read([]);
+    expect(text).toContain('https://github.com/o/r/pull/9');
+  });
+
   // Unit: with PR settings open the phone showed 「跟随当前任务指定模型」「Sonnet 5.5 · Anthropic高」 as card
   // text — the inside of buttons it already draws from their labels.
   it('gives newer phones switches, the primary action, the live label and the title bar PR status', async () => {

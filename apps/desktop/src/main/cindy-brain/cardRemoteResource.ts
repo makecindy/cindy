@@ -259,13 +259,16 @@ export function createGhostCardRemoteProvider(deps: {
     async get(_context, request) {
       const { card, revision } = await read(request.ref.id);
       const supportsForms = Boolean(deps.interactions) && request.client.primitives.includes('plugin-card-actions') && request.client.primitives.includes('plugin-card-forms');
+      // Link addresses leave the text only when an actions block will carry them as controls; a client
+      // without that primitive keeps the address in the text.
+      const linksAsActions = Boolean(deps.interactions) && request.client.primitives.includes('plugin-card-actions');
       const mail = readMailCard(card.html), legacyMail = isLegacyMailCard(card.html);
       const obsolete = !!mail?.supersededBy || legacyMail;
       const externalLinks = deps.interactions?.externalLinks(card.ghostId) ?? false;
       const rich = Boolean(deps.interactions) && request.client.primitives.includes('plugin-card-actions') && request.client.primitives.includes('plugin-card-rich')
         ? projectRichCardParts(card.html) : undefined;
       const textSource = rich?.textHtml ?? card.html;
-      const blocks = supportsForms && (mail || legacyMail) ? [] : projectGhostCardBlocks(supportsForms ? omitGhostCardFormPreview(textSource) : textSource, { inlineLinks: externalLinks });
+      const blocks = supportsForms && (mail || legacyMail) ? [] : projectGhostCardBlocks(supportsForms ? omitGhostCardFormPreview(textSource) : textSource, { inlineLinks: externalLinks && linksAsActions });
       const prStatus = rich ? await Promise.all(rich.prStatus.map(async (slot) => {
         const status = await deps.prStatus?.(card.sessionId!, slot.key).catch(() => undefined);
         return { ...slot, ...(status?.ok ? { status } : {}) };
