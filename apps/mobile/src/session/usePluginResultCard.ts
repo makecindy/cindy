@@ -93,11 +93,12 @@ export function useSessionPluginResource(deviceId: string | undefined, sessionId
         const code = error && typeof error === 'object' ? (error as { code?: unknown }).code : undefined;
         const unavailable = /NOT_FOUND|FORBIDDEN|UNAUTHORIZED/.test(String(code ?? '') + String(error));
         // A card gone for good stops the refresh; a transient failure keeps it going so the next minute retries.
-        if (unavailable) pollsPrStatus = false;
+        if (unavailable && valid()) pollsPrStatus = false;
         if (valid()) setState((previous) => ({ binding, ...(!unavailable && previous?.binding === binding ? { callId: previous.callId, blocks: previous.blocks, title: previous.title } : {}), error: true }));
       }
     };
-    const loadAndSchedule = async () => { await load(); scheduleStatusRefresh(); };
+    // A read that a newer one overtook must not touch the refresh timer: the newer read schedules its own.
+    const loadAndSchedule = async () => { const before = generation; await load(); if (generation === before + 1) scheduleStatusRefresh(); };
     const offPush = onRemoteResourceChanged((source, payload) => {
       if (source !== deviceId || payload.collectionId !== collectionId) return;
       if (payload.resourceRefs?.length && !payload.resourceRefs.some((ref) => ref.kind === kind && (ref.id === id || ref.id === resolvedId))) return;

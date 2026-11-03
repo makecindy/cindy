@@ -100,6 +100,19 @@ describe('plugin card lifecycle on Mobile', () => {
     await act(async () => { await vi.advanceTimersByTimeAsync(60_000); });
     expect(h.get).toHaveBeenCalledTimes(2);
   });
+  it('a stale failure from an overtaken read does not stop the refresh the newer read started', async () => {
+    vi.useFakeTimers();
+    const live = { display: { title: 'GitHub' }, blocks: [{ id: 'actions', primitive: 'plugin-card-actions', fallbackMarkdown: '', data: { prStatus: [{ key: 'o/r#1', fallback: [] }] } }] };
+    let failOld!: (error: unknown) => void;
+    h.get.mockImplementationOnce(() => new Promise((_resolve, reject) => { failOld = reject; })).mockResolvedValue(live);
+    await render();
+    // A push starts a newer read that succeeds while the first is still pending.
+    await act(async () => { h.push?.('mac', { collectionId: 'plugin-results' }); await vi.advanceTimersByTimeAsync(250); });
+    expect(h.get).toHaveBeenCalledTimes(2);
+    await act(async () => failOld(Object.assign(new Error('NOT_FOUND'), { code: 'NOT_FOUND' })));
+    await act(async () => { await vi.advanceTimersByTimeAsync(60_000); });
+    expect(h.get).toHaveBeenCalledTimes(3);
+  });
   it('does not poll a card without PR status', async () => {
     vi.useFakeTimers();
     await render();
