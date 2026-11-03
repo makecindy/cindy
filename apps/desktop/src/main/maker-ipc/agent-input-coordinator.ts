@@ -2,7 +2,7 @@ import { FORWARDED_REQUEST_RECEIPT, verifiedOwnerRequestText, type ForwardedRequ
 import { AUTO_REVIEW_SOURCE_CONTENT, AUTO_REVIEW_USER_INTENT } from '@cindy/maker-core';
 import { getDeviceLinkInvokeContext } from '../device-link/invoke-context.js';
 import { assertSharedTaskQueueMutation } from './sharedTaskInput.js';
-import { assertTaskActionCurrent, combineInputGuards, hasTaskActionAuthorization, isTaskActionRevoked, taskActionInputGuard, TASK_ACTION_INPUT_GUARD } from './taskActionAuthorization.js';
+import { assertTaskActionCurrent, combineInputGuards, hasTaskActionAuthorization, taskActionRevocationCode, taskActionInputGuard, TASK_ACTION_INPUT_GUARD } from './taskActionAuthorization.js';
 import { isBotGroupClientId } from '../../shared/botGroupChat.js';
 import { SchedulerQueuedPreparationError } from './schedulerQueuedPreparation.js';
 import { ProviderGroupUsageLimitError } from '../provider-group/failurePolicy.js';
@@ -5089,6 +5089,16 @@ export class AgentInputCoordinator {
 
     let appMessageGuardRejected = false;
     const taskActionGuard = taskActionInputGuard(sessionId, head);
+    const logTaskActionRevocation = (error: unknown, stage: 'pre-check' | 'before-persistence'): boolean => {
+      const errorCode = taskActionRevocationCode(error);
+      if (!errorCode) return false;
+      // The guard may fail again immediately before persistence. Both exits need
+      // the same diagnostic; only host-defined codes, never arbitrary error text.
+      log.info('discarding revoked task action input before dispatch', {
+        sessionId, clientId: head.clientId, reason: errorCode, errorCode, stage,
+      });
+      return true;
+    };
     try {
       if (taskActionGuard) {
         // A revoked task action settles before screening, persistence or a vendor
@@ -5099,10 +5109,7 @@ export class AgentInputCoordinator {
         const rejection = await taskActionGuard().then(() => null, (error: unknown) => ({ error }));
         if (!this.isActiveTurnCurrent(sessionId, active)) return;
         if (rejection) {
-          if (!isTaskActionRevoked(rejection.error)) throw rejection.error;
-          log.info('discarding revoked task action input before dispatch', {
-            sessionId, clientId: head.clientId, reason: errorMessage(rejection.error),
-          });
+          if (!logTaskActionRevocation(rejection.error, 'pre-check')) throw rejection.error;
           this.discardRevokedAppInput(sessionId, active, head);
           return;
         }
@@ -5190,7 +5197,7 @@ export class AgentInputCoordinator {
             await taskActionGuard?.();
           } catch (error) {
             // Only a proven revocation discards; a failed check keeps the message retryable.
-            if (isTaskActionRevoked(error)) appMessageGuardRejected = true;
+            if (logTaskActionRevocation(error, 'before-persistence')) appMessageGuardRejected = true;
             throw error;
           }
         } } : {}),
