@@ -656,7 +656,7 @@ export function ChatThreadPanel({ group, rootId, quoteSources = group.messages, 
               <Fragment key={adoptedKeysRef.current.get(message.id) ?? message.id}>
                 {message.id === firstNewId ? (
                   <div data-testid="bot-group-thread-new-replies" className="mt-3 flex select-none items-center gap-3 text-12 font-medium text-[var(--text-primary)]">
-                    <span className="flex shrink-0 items-center gap-1.5"><span aria-hidden className="size-1.5 rounded-full bg-[var(--bot-unread-bg)]" />{t(key('thread.newSeparator'))}</span>
+                    <span className="flex shrink-0 items-center gap-1.5"><span aria-hidden className="size-1.5 rounded-full bg-[var(--card-status-done)]" />{t(key('thread.newSeparator'))}</span>
                     <span aria-hidden className="h-px flex-1 bg-[var(--border-default)]" />
                   </div>
                 ) : null}

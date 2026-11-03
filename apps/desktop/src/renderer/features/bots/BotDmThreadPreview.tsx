@@ -48,7 +48,7 @@ export function BotDmThreadPreview({ thread, bot, unread, onOpen, align = 'left'
       {/* Unread replaces the last-reply time: a dot in the unread color, the words stay neutral. */}
       {unread ? (
         <span className="flex min-w-0 items-center gap-1.5 text-12 font-medium text-[var(--text-primary)]" data-dm-thread-unread="">
-          <span aria-hidden className="size-1.5 shrink-0 rounded-full bg-[var(--bot-unread-bg)]" />
+          <span aria-hidden className="size-1.5 shrink-0 rounded-full bg-[var(--card-status-done)]" />
           <span className="truncate">{t('bots.dmThread.newReply')}</span>
         </span>
       ) : relative ? (

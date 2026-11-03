@@ -92,7 +92,7 @@ export function BotGroupThreadPreview({ message, members, onOpen }: {
       {/* Unread replies replace the last-reply time: a dot in the unread color, the words stay neutral. */}
       {unread ? (
         <span className="flex min-w-0 items-center gap-1.5 text-12 font-medium text-[var(--text-primary)]" data-thread-unread={unread.count}>
-          <span aria-hidden className="size-1.5 shrink-0 rounded-full bg-[var(--bot-unread-bg)]" />
+          <span aria-hidden className="size-1.5 shrink-0 rounded-full bg-[var(--card-status-done)]" />
           <span className="truncate">{t(key('newReplies'), { count: unread.count })}</span>
           {unread.mentioned ? <span className="shrink-0">{t(key('mentionedYou'))}</span> : null}
         </span>

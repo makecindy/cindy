@@ -29,7 +29,7 @@ const hasNews = (threads: readonly BotGroupThreadSummary[], dismissed: ReadonlyM
   threads.some(thread => (thread.unread.latest ?? 0) > (dismissed.get(thread.rootId) ?? -1));
 
 function UnreadDot() {
-  return <span aria-hidden className="size-1.5 shrink-0 rounded-full bg-[var(--bot-unread-bg)]" />;
+  return <span aria-hidden className="size-1.5 shrink-0 rounded-full bg-[var(--card-status-done)]" />;
 }
 
 function ThreadRow({ thread, members, onOpen }: {
