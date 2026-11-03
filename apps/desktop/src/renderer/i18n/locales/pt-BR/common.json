@@ -1025,7 +1025,7 @@
     "saveFileName": "Captura de tela",
     "saveFailed": "Não foi possível salvar a captura de tela",
     "prompt": {
-      "translate": "Reconheça o texto nesta captura de tela e traduza-o para o inglês. Mantenha os parágrafos e as listas originais e retorne apenas a tradução. Se o texto já estiver em inglês, traduza-o para o chinês simplificado.",
+      "translate": "Detecte automaticamente os idiomas na captura de tela e traduza o texto para {{language}}. Mantenha os parágrafos, as listas e as tabelas. Preserve o conteúdo que já estiver no idioma de destino; se houver vários idiomas, traduza apenas os demais. Se todo o texto já estiver no idioma de destino, informe isso brevemente sem traduzi-lo para outro idioma. Nos demais casos, apresente apenas a tradução.",
       "explain": "Explique o que esta captura de tela mostra. Se for um erro, explique a causa e como corrigi-lo. Se for um gráfico, código ou uma interface, explique o que ele mostra e os pontos principais.",
       "extract": "Extraia o texto desta captura de tela exatamente como está escrito, mantendo as quebras de linha, os parágrafos e as listas originais. Apresente tabelas como tabelas Markdown. Retorne apenas o texto extraído."
     },
@@ -1073,6 +1073,12 @@
       "edit": "Editar",
       "autoUnavailable": "A rolagem automática parou. Você pode rolar manualmente na seleção.",
       "autoPermission": "A rolagem automática precisa de permissão de Acessibilidade. Autorize Cindy nos Ajustes do Sistema e tente novamente, ou role manualmente na seleção."
+    },
+    "translation": {
+      "action": "Traduzir para {{language}}",
+      "targetLanguage": "Idioma de destino",
+      "followUi": "Usar o idioma da interface",
+      "saveFailed": "Não foi possível salvar o idioma. Selecione-o novamente."
     }
   },
   "privacyExit": {
@@ -2683,6 +2689,13 @@
       "storage": {
         "dialogueDirectoryTitle": "Espaço de trabalho da conversa",
         "dialogueDirectoryDescription": "Apenas para novas sessões. Os arquivos existentes permanecem onde estão.",
+        "projectsRootTitle": "Local de novos projetos",
+        "projectsRootInferred": "Sugerido",
+        "projectsRootDefault": "Padrão",
+        "projectsRootChoose": "Alterar diretório",
+        "projectsRootReset": "Restaurar local sugerido",
+        "projectsRootDescription": "Onde ficam as pastas de projeto ao criar um projeto a partir de uma sessão. Se não for definido, um local é sugerido com base nos seus projetos existentes.",
+        "projectsRootFailed": "Não foi possível atualizar o local de novos projetos",
         "dialogueDirectoryOpen": "Abrir diretório",
         "dialogueDirectoryChoose": "Alterar diretório",
         "dialogueDirectoryReset": "Restaurar local padrão",
@@ -3675,6 +3688,8 @@
         "simpleSubtitle": "Vários modelos, cobrados por uma única conta."
       },
       "custom": {
+        "nameSearchUnavailable": "Este provedor não está mais disponível. Continue com um endpoint personalizado ou pesquise novamente.",
+        "nameSearchHint": "Você pode manter este nome e continuar com um endpoint personalizado.",
         "tag": "Personalizado",
         "editAria": "Editar configurações da conexão",
         "deleteAria": "Excluir",
@@ -5982,7 +5997,7 @@
           "check": {
             "checking": "Verificando o servidor…",
             "checkingHint": "Conectando ao servidor para verificar o sistema, as portas e os serviços existentes.",
-            "idle": "Depois que você escolher um servidor, o Cindy verifica se é possível fazer a implantação nele.",
+            "idle": "Escolha um servidor para a Cindy verificar se dá para implantar nele.",
             "ready": "Pronto para implantar",
             "blocked": "Não é possível implantar automaticamente",
             "recheck": "Verificar novamente",
@@ -8665,9 +8680,9 @@
     "localModeEntry": "Pular login",
     "localModeOpening": "Pulando login…",
     "localModeDescription": "Não é necessário ter uma conta do Cindy. Os dados ficam neste dispositivo; modelos na nuvem, acesso entre dispositivos e serviços do marketplace ficam indisponíveis.",
-    "consentStatement": "Li e concordo com os <terms>Termos de Serviço</terms> e a <privacy>Política de Privacidade</privacy>",
+    "consentStatement": "Aceito os <terms>Termos de Serviço</terms> e a <privacy>Política de Privacidade</privacy>",
     "consentDialog": {
-      "title": "Termos e privacidade",
+      "title": "Termos e Política de Privacidade",
       "body": "Para continuar, leia e aceite os <terms>Termos de Serviço</terms> e a <privacy>Política de Privacidade</privacy> da Cindy.",
       "agree": "Aceitar",
       "disagree": "Agora não"
@@ -10979,7 +10994,18 @@
           "accessToolsTitle": "Ferramentas e informações",
           "accessToolsHint": "Pode usar as ferramentas existentes de {{name}} e suas informações privadas. Os resultados ficam visíveis para todos os membros. As aprovações continuam sendo exigidas; revogar o acesso não desfaz ações já concluídas.",
           "capabilitiesRow": "Ferramentas e acesso de {{name}}",
-          "accessMenu": "Permissões neste grupo"
+          "accessMenu": "Permissões neste grupo",
+          "notifications": {
+            "title": "Notificações de mensagens",
+            "all": "Todas as mensagens",
+            "mentions": "Apenas menções",
+            "none": "Desativadas",
+            "allHint": "Receba notificações de mensagens do grupo e de novas respostas nos tópicos que você segue.",
+            "mentionsHint": "Receba notificações quando alguém mencionar você, inclusive com @todos. As atualizações da divisão do trabalho continuam gerando avisos.",
+            "noneHint": "Desative todos os alertas do sistema deste grupo. As mensagens não lidas são mantidas.",
+            "saving": "Salvando…",
+            "saveFailed": "Não foi possível salvar as notificações. Tente novamente."
+          }
         },
         "replyCount_many": "{{count}} respostas",
         "reactorsUnavailable_many": "Nomes indisponíveis para mais {{count}} membros"
@@ -14554,6 +14580,26 @@
         "archived_many": "{{count}} sessões arquivadas",
         "deleted_many": "{{count}} sessões excluídas"
       },
+      "newProjectDialog": {
+        "title": "Novo projeto",
+        "description": "Cria uma pasta de projeto e move esta sessão para o novo projeto.",
+        "descriptionMoveFiles": "Cria uma pasta de projeto, move os arquivos desta sessão para ela e move a sessão para o novo projeto.",
+        "nameLabel": "Nome do projeto",
+        "namePlaceholder": "ex.: my-app",
+        "targetPath": "Será criado {{path}}",
+        "location": "Local",
+        "locationInferred": "Sugerido com base nos seus projetos existentes",
+        "locationWillCreate": "Esta pasta ainda não existe e será criada",
+        "changeLocation": "Alterar…",
+        "remember": "Usar este local para novos projetos",
+        "cancel": "Cancelar",
+        "create": "Criar projeto",
+        "nameTaken": "Já existe uma pasta com este nome",
+        "nameInvalid": "O nome não pode conter \\ / : * ? \" < > | nem terminar com ponto ou espaço",
+        "loadFailed": "Não foi possível carregar o local do projeto",
+        "failed": "Falha ao criar o projeto",
+        "done": "Projeto criado e sessão movida"
+      },
       "sessionMenu": {
         "moreActions": "Mais ações",
         "rename": "Renomear",
@@ -14567,6 +14613,7 @@
         "moveToProject": "Mover tarefa",
         "moveToProjectHeading": "Projetos neste computador",
         "browseProjectFolder": "Escolher pasta do projeto",
+        "newProject": "Novo projeto…",
         "moveToDialogue": "Mover para Conversa",
         "noProjects": "Nenhum projeto recente",
         "moveToProjectDone": "Movida para o projeto",
@@ -15972,6 +16019,7 @@
     "agentControlled": "O Agent abriu esta tela. Verifique se é realmente onde você quer entrar antes de preenchê-la.",
     "agentPicture": "Este código vem de uma captura de tela feita pelo Agent, então o Cindy não pode ver a tela original nem saber quando você terminou. Verifique se ele leva ao site em que você pretende entrar e escolha Devolver ao Agent após escanear.",
     "error": {
+      "raise": "Não foi possível abrir a janela. Mude para ela no computador.",
       "decision": "Não deu certo. Tente novamente.",
       "stale": "A tela mudou. Use a versão mais recente.",
       "submit": "Sua entrada não foi enviada. Tente novamente."
@@ -16007,6 +16055,9 @@
       "picture": "Mostrar tela",
       "backToForm": "Voltar ao formulário",
       "liveView": "Visualização ao vivo",
+      "openWindow": "Abrir janela de login",
+      "openRemoteDesktop": "Abrir área de trabalho remota",
+      "useForm": "Usar o formulário",
       "fill": "Preencher",
       "skip": "Pular",
       "continue": "Continuar",
@@ -16014,6 +16065,9 @@
       "showPassword": "Mostrar senha",
       "hidePassword": "Ocultar senha",
       "scan": "Escanear"
+    },
+    "directSignIn": {
+      "hint": "Faça login diretamente na janela. Ao terminar, tudo continua automaticamente."
     },
     "remoteUnavailable": "Este computador não pode receber entrada remotamente. Conclua esta etapa no computador host e devolva o controle ao Agent.",
     "unnamedField": "Campo",
@@ -19000,6 +19054,9 @@
     "failed": "A operação não foi concluída. Tente novamente ou abra os arquivos locais."
   },
   "attachmentPreview": {
+    "fitWidth": "Ajustar à largura",
+    "fitPage": "Ajustar à página",
+    "pageNumber": "Número da página",
     "more": "Mais ações",
     "retry": "Tentar novamente",
     "image": "Imagem",

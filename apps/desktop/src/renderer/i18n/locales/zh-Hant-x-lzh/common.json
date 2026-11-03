@@ -996,7 +996,7 @@
     "saveFileName": "截圖",
     "saveFailed": "不能存截圖",
     "prompt": {
-      "translate": "請辨此截圖中之文字，譯為繁體中文，保留原有段落與清單結構，唯輸出譯文。若原文已是中文，則譯為英文。",
+      "translate": "辨圖中文字之語，譯為{{language}}，仍其段落、條目與表格。已有目標語言者不改；諸語雜陳，僅譯其餘。若全文已是目標語言，簡言告之，勿另譯他語；否則僅出譯文。",
       "explain": "請釋此截圖之內容。若為錯誤訊息，述其原因與解法；若為圖表、程式碼或介面，述其所表何意、要點為何。",
       "extract": "請將此截圖中之文字照原樣擷出，保留原有換行、段落與清單；表格以 Markdown 表格輸出。唯輸出所擷之文字。"
     },
@@ -1044,6 +1044,12 @@
       "edit": "修",
       "autoUnavailable": "自動捲動已止，可於所選範圍內手動捲動",
       "autoPermission": "自動捲動須「輔助使用」權限。請於系統設定中許 Cindy 而後再試，亦可於所選範圍內手動捲動"
+    },
+    "translation": {
+      "action": "譯為{{language}}",
+      "targetLanguage": "譯文語言",
+      "followUi": "隨介面之語",
+      "saveFailed": "語言未存，請重選。"
     }
   },
   "privacyExit": {
@@ -2618,6 +2624,13 @@
       "storage": {
         "dialogueDirectoryTitle": "言談工作區",
         "dialogueDirectoryDescription": "僅用於新開差事，舊卷仍居原處。",
+        "projectsRootTitle": "新案存放處",
+        "projectsRootInferred": "薦",
+        "projectsRootDefault": "常例",
+        "projectsRootChoose": "易目錄",
+        "projectsRootReset": "復薦處",
+        "projectsRootDescription": "於差事中立新案時，案之卷匣置於此。未設則依汝舊案所在薦之。",
+        "projectsRootFailed": "新案存放處更之未成",
         "dialogueDirectoryOpen": "啟目錄",
         "dialogueDirectoryChoose": "易目錄",
         "dialogueDirectoryReset": "復預設處",
@@ -3824,7 +3837,9 @@
           "modelsBusy": "請先畢方行之模型清單擷取或選擇，再填入他 Runtime",
           "noCompatibleFields": "他 Runtime 不支援今 Runtime 中可復用之欄位",
           "filledToast": "已填入 {{targets}}；各 Runtime 仍各自獨立"
-        }
+        },
+        "nameSearchHint": "亦可仍用此名，續設自定端點。",
+        "nameSearchUnavailable": "此供方今不可用，可續設自定端點，或重尋之。"
       },
       "models": {
         "search": "尋模型",
@@ -10844,7 +10859,18 @@
           "accessToolsTitle": "可用工具與資料",
           "accessToolsHint": "可用 {{name}} 已有之工具與君之私人資料，結果全群可見。原有操作審批照常；撤回之後，已成之操作不可撤銷。",
           "capabilitiesRow": "{{name}} 之工具與授權",
-          "accessMenu": "於本群之權柄"
+          "accessMenu": "於本群之權柄",
+          "notifications": {
+            "title": "訊息告知",
+            "all": "凡訊皆告",
+            "mentions": "惟提及吾",
+            "none": "不告",
+            "allHint": "群訊及所關注話題之新答，皆告之。",
+            "mentionsHint": "提及吾或 @全體時告之，分職之進展仍告。",
+            "noneHint": "止本群一切系統告知，未讀之訊仍存。",
+            "saving": "正存之…",
+            "saveFailed": "告知之設未能存，請再試。"
+          }
         }
       },
       "lifecycle": {
@@ -14349,6 +14375,26 @@
           "cancel": "罷"
         }
       },
+      "newProjectDialog": {
+        "title": "立新案",
+        "description": "立一新案之卷匣，並移此差事入新案。",
+        "descriptionMoveFiles": "立一新案之卷匣，徙此差事之檔入內，並移差事入新案。",
+        "nameLabel": "案名",
+        "namePlaceholder": "如 my-app",
+        "targetPath": "將立 {{path}}",
+        "location": "所在",
+        "locationInferred": "依汝舊案所在薦之",
+        "locationWillCreate": "此卷匣尚無，允之即立",
+        "changeLocation": "易…",
+        "remember": "後立新案皆置於此",
+        "cancel": "罷",
+        "create": "立案",
+        "nameTaken": "已有同名卷匣，另擇一名",
+        "nameInvalid": "名中不可含 \\ / : * ? \" < > |，亦不可以句點或空格收尾",
+        "loadFailed": "案之所在讀之未成",
+        "failed": "立案未成",
+        "done": "新案已立，差事已移入"
+      },
       "sessionMenu": {
         "moreActions": "餘者",
         "rename": "易名",
@@ -14362,6 +14408,7 @@
         "moveToProject": "移差事",
         "moveToProjectHeading": "此機之案",
         "browseProjectFolder": "擇案之卷匣",
+        "newProject": "立新案…",
         "moveToDialogue": "移至言談",
         "noProjects": "近無案",
         "moveToProjectDone": "已移至案",
@@ -15762,6 +15809,7 @@
     "agentControlled": "此界面乃 Agent 所啟。填寫之前，請確認此處確為君欲登入之所。",
     "agentPicture": "此 QR 碼出自 Agent 之截圖，Cindy 不見原畫面，掃畢亦不自續。請確認其所指之網站確為君欲登入之所，掃畢點「交還 Agent」。",
     "error": {
+      "raise": "窗不能啟，請於電腦切至之。",
       "decision": "操作未達，請再試。",
       "stale": "界面已變，請依最新內容操作。",
       "submit": "所輸入者未達，請再試。"
@@ -15797,6 +15845,9 @@
       "picture": "觀畫面",
       "backToForm": "歸表單",
       "liveView": "即景",
+      "openWindow": "啟登入之窗",
+      "openRemoteDesktop": "啟遠端桌面",
+      "useForm": "改以表單填寫",
       "fill": "填",
       "skip": "略",
       "continue": "續",
@@ -15804,6 +15855,9 @@
       "showPassword": "示密碼",
       "hidePassword": "隱密碼",
       "scan": "掃碼"
+    },
+    "directSignIn": {
+      "hint": "請逕於窗中登入，畢則自續。"
     },
     "remoteUnavailable": "此機不能自遠方受輸入。請於主機之機上完成此步，再交還 Agent。",
     "unnamedField": "書欄",
@@ -18758,6 +18812,9 @@
     "failed": "操作未畢，請再試或覽此機之卷。"
   },
   "attachmentPreview": {
+    "fitWidth": "適寬",
+    "fitPage": "適頁",
+    "pageNumber": "頁碼",
     "more": "更多操作",
     "retry": "重試",
     "image": "圖",

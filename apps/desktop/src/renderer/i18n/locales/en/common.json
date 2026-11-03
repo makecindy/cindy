@@ -1007,8 +1007,14 @@
     },
     "saveFileName": "Screenshot",
     "saveFailed": "Couldn't save the screenshot",
+    "translation": {
+      "action": "Translate to {{language}}",
+      "targetLanguage": "Translation language",
+      "followUi": "Follow interface language",
+      "saveFailed": "Could not save the language. Select it again to retry."
+    },
     "prompt": {
-      "translate": "Recognize the text in this screenshot and translate it into English. Keep the original paragraphs and lists, and output only the translation. If the text is already in English, translate it into Simplified Chinese.",
+      "translate": "Detect the languages in this screenshot and translate the text into {{language}}. Preserve the original paragraphs, lists and tables. Leave text already in the target language unchanged; for mixed-language content, translate only the other languages. If all text is already in the target language, briefly say so without switching to another language. Otherwise output only the translation.",
       "explain": "Explain what this screenshot shows. If it's an error, explain the cause and how to fix it. If it's a chart, code, or an interface, explain what it shows and the key points.",
       "extract": "Extract the text from this screenshot exactly as written, keeping the original line breaks, paragraphs, and lists. Output tables as Markdown tables. Output only the extracted text."
     },
@@ -2648,6 +2654,13 @@
       "storage": {
         "dialogueDirectoryTitle": "Chat workspace",
         "dialogueDirectoryDescription": "For new sessions only. Existing files stay where they are.",
+        "projectsRootTitle": "New project location",
+        "projectsRootInferred": "Suggested",
+        "projectsRootDefault": "Default",
+        "projectsRootChoose": "Change directory",
+        "projectsRootReset": "Restore suggested location",
+        "projectsRootDescription": "Where project folders go when you create a project from a session. If not set, a location is suggested from where your existing projects are.",
+        "projectsRootFailed": "Couldn't update the new project location",
         "dialogueDirectoryOpen": "Open directory",
         "dialogueDirectoryChoose": "Change directory",
         "dialogueDirectoryReset": "Restore default location",
@@ -3629,6 +3642,8 @@
         "simpleSubtitle": "Multiple models, billed through one account."
       },
       "custom": {
+        "nameSearchUnavailable": "This provider is no longer available. Continue with a custom endpoint or search again.",
+        "nameSearchHint": "You can keep this name and continue with a custom endpoint.",
         "tag": "Custom",
         "editAria": "Edit connection settings",
         "deleteAria": "Delete",
@@ -8598,7 +8613,7 @@
     "localModeEntry": "Skip Sign-In",
     "localModeOpening": "Skipping sign-in…",
     "localModeDescription": "No Cindy account required. Data stays on this device; cloud models, cross-device access, and marketplace services are unavailable.",
-    "consentStatement": "I have read and agree to the <terms>Terms of Service</terms> and <privacy>Privacy Policy</privacy>",
+    "consentStatement": "I agree to the <terms>Terms of Service</terms> and <privacy>Privacy Policy</privacy>",
     "consentDialog": {
       "title": "Terms of Service & Privacy Policy",
       "body": "Read and agree to Cindy's <terms>Terms of Service</terms> and <privacy>Privacy Policy</privacy> to continue.",
@@ -10781,6 +10796,17 @@
         "copyFailed": "Could not copy. Select the link and copy it manually.",
         "createDescription": "Choose companions, or create the group first and invite people to join.",
         "settings": {
+          "notifications": {
+            "title": "Message notifications",
+            "all": "All messages",
+            "mentions": "Mentions only",
+            "none": "Off",
+            "allHint": "Get notified about group messages and new replies in followed threads.",
+            "mentionsHint": "Get notified when you are mentioned, including @everyone. Work split updates still notify you.",
+            "noneHint": "Turn off all system alerts for this group. Unread messages are kept.",
+            "saving": "Saving…",
+            "saveFailed": "Could not save notification settings. Try again."
+          },
           "name": "Group name",
           "topic": "Topic",
           "description": "Description",
@@ -14415,6 +14441,26 @@
           "cancel": "Cancel"
         }
       },
+      "newProjectDialog": {
+        "title": "New project",
+        "description": "Creates a project folder and moves this session to the new project.",
+        "descriptionMoveFiles": "Creates a project folder, moves this session's files into it, and moves the session to the new project.",
+        "nameLabel": "Project name",
+        "namePlaceholder": "e.g. my-app",
+        "targetPath": "Will create {{path}}",
+        "location": "Location",
+        "locationInferred": "Suggested from your existing projects",
+        "locationWillCreate": "This folder doesn't exist yet and will be created",
+        "changeLocation": "Change…",
+        "remember": "Use this location for new projects",
+        "cancel": "Cancel",
+        "create": "Create Project",
+        "nameTaken": "A folder with this name already exists",
+        "nameInvalid": "Names can't contain \\ / : * ? \" < > | or end with a period or space",
+        "loadFailed": "Couldn't load the project location",
+        "failed": "Failed to create project",
+        "done": "Project created and session moved"
+      },
       "sessionMenu": {
         "moreActions": "More actions",
         "rename": "Rename",
@@ -14428,6 +14474,7 @@
         "moveToProject": "Move task",
         "moveToProjectHeading": "Projects on this computer",
         "browseProjectFolder": "Choose project folder",
+        "newProject": "New project…",
         "moveToDialogue": "Move to Chat",
         "noProjects": "No recent projects",
         "moveToProjectDone": "Moved to project",
@@ -15829,6 +15876,7 @@
     "agentControlled": "The agent opened this screen. Make sure it's really where you want to sign in before filling it.",
     "agentPicture": "This code is from a screenshot the agent took, so Cindy can't see the original screen or tell when you're done. Check that it leads to the site you mean to sign in to, and choose Hand Back to Agent after scanning.",
     "error": {
+      "raise": "Couldn't open the window. Switch to it on the computer.",
       "decision": "That didn't go through. Try again.",
       "stale": "The screen has changed. Use the latest version.",
       "submit": "Your input didn't go through. Try again."
@@ -15864,6 +15912,9 @@
       "picture": "Show screen",
       "backToForm": "Back to form",
       "liveView": "Live View",
+      "openWindow": "Open sign-in window",
+      "openRemoteDesktop": "Open remote desktop",
+      "useForm": "Use the form instead",
       "fill": "Fill In",
       "skip": "Skip",
       "continue": "Continue",
@@ -15871,6 +15922,9 @@
       "showPassword": "Show Password",
       "hidePassword": "Hide Password",
       "scan": "Scan"
+    },
+    "directSignIn": {
+      "hint": "Sign in directly in the window. Cindy continues on its own when you finish."
     },
     "remoteUnavailable": "This computer can't receive input remotely. Finish this step on the host computer, then hand back to the agent.",
     "unnamedField": "Field",
@@ -18830,6 +18884,9 @@
     "failed": "The operation did not finish. Retry or open the local files."
   },
   "attachmentPreview": {
+    "fitWidth": "Fit Width",
+    "fitPage": "Fit Page",
+    "pageNumber": "Page Number",
     "more": "More actions",
     "retry": "Retry",
     "image": "Image",

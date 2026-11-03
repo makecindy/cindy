@@ -1,4 +1,7 @@
 {
+  "progress": {
+    "stop": "Stop"
+  },
   "title": "Group Chats",
   "memberSeparator": ", ",
   "memberCount_one": "{{count}} member",
@@ -186,9 +189,16 @@
     "allDone": "All done"
   },
   "speaking": {
+    "queued": "Queued",
     "stopping": "Stopping…",
     "planning": "Splitting the work…",
     "step": "Working on it…"
+  },
+  "work": {
+    "queued": "Queued {{count}}",
+    "active": "In progress {{count}}",
+    "expand": "Expand teammate activity",
+    "collapse": "Collapse teammate activity"
   },
   "task": {
     "state": {
@@ -207,6 +217,17 @@
     "untitled": "Attachment"
   },
   "settings": {
+    "notifications": {
+      "title": "Message notifications",
+      "all": "All messages",
+      "mentions": "Mentions only",
+      "none": "Off",
+      "allHint": "Get notified about group messages and new replies in followed threads.",
+      "mentionsHint": "Get notified when you are mentioned, including @everyone. Work split updates still notify you.",
+      "noneHint": "Turn off all system alerts for this group. Unread messages are kept.",
+      "saving": "Saving…",
+      "saveFailed": "Could not save notification settings. Try again."
+    },
     "open": "Group Settings",
     "title": "Group Settings",
     "members": "Members",
