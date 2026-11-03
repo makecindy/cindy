@@ -883,6 +883,7 @@ function BotGroupChatContent({ groupId, direct }: { groupId: string; direct: boo
     const element = scrollRef.current;
     if (!element || prependAnchorRef.current) return;
     if (stickToBottomRef.current) element.scrollTop = element.scrollHeight;
+    setNearBottom(element.scrollHeight - element.scrollTop - element.clientHeight < STICK_TO_BOTTOM_PX);
   }, [lastRowKey, speakingKey, rows.length, hasControlledBanner, controlledBannerCollapsed]);
 
   // Markdown, code blocks and avatars finish layout after the first paint, and the composer or
@@ -894,6 +895,7 @@ function BotGroupChatContent({ groupId, direct }: { groupId: string; direct: boo
     if (!ready || !scroller || !content || typeof ResizeObserver === 'undefined') return;
     const observer = new ResizeObserver(() => {
       if (stickToBottomRef.current && !prependAnchorRef.current) scroller.scrollTop = scroller.scrollHeight;
+      setNearBottom(scroller.scrollHeight - scroller.scrollTop - scroller.clientHeight < STICK_TO_BOTTOM_PX);
     });
     observer.observe(content);
     observer.observe(scroller);

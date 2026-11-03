@@ -2357,6 +2357,50 @@ describe('BotGroupChatView', () => {
       expect(screen.queryByRole('complementary')).toBeNull();
     });
 
+    it.each(['message', 'content resize', 'viewport resize'] as const)('reveals unread navigation when a located short group grows: %s', async change => {
+      const observed = new Map<Element, ResizeObserverCallback>();
+      vi.stubGlobal('ResizeObserver', class {
+        constructor(private callback: ResizeObserverCallback) {}
+        observe(element: Element) { observed.set(element, this.callback); }
+        disconnect() {}
+      });
+      const messages = [
+        msg({ id: 'original', sequence: 1, content: 'Short original' }),
+        msg({ id: 'quoted', sequence: 2, content: 'Short quote', quote: quoteOf('original') }),
+      ];
+      mocks.getBotGroup.mockResolvedValue({ ok: true, group: detail({ serverBacked: true, messages }) });
+      renderView();
+      const scroll = await screen.findByTestId('bot-group-timeline');
+      let contentHeight = 500;
+      let viewportHeight = 500;
+      Object.defineProperties(scroll, {
+        scrollHeight: { configurable: true, get: () => contentHeight },
+        clientHeight: { configurable: true, get: () => viewportHeight },
+      });
+      scroll.scrollTop = 0;
+      fireEvent.click(await screen.findByTestId('bot-group-quote'));
+      await waitFor(() => expect(document.activeElement?.getAttribute('data-bot-group-message-id')).toBe('original'));
+      const arrived = msg({ id: 'arrival', sequence: 3, authorKind: 'bot', content: 'Unread after locating', createdAt: 2000 });
+      if (change === 'message') contentHeight = 1000;
+      mocks.getBotGroup.mockResolvedValue({ ok: true, group: detail({ serverBacked: true, messages: [...messages, arrived] }) });
+      act(() => mocks.pushes.forEach(push => push({ groupId: 'g1', change: 'messages' })));
+      await screen.findByText('Unread after locating');
+      if (change !== 'message') {
+        expect(document.querySelector('[data-group-bottom-bubbles]')?.hasAttribute('inert')).toBe(false);
+        if (change === 'content resize') contentHeight = 1000;
+        else viewportHeight = 250;
+        const resized = change === 'content resize' ? scroll.firstElementChild! : scroll;
+        act(() => observed.get(resized)!([], {} as ResizeObserver));
+      }
+      expect(screen.getByRole('button', { name: 'chat.newMessageIndicator.aria' }).parentElement?.className).toContain('opacity-100');
+      expect(document.querySelector('[data-group-bottom-bubbles]')?.hasAttribute('inert')).toBe(true);
+      expect(scroll.scrollTop).toBe(0);
+      contentHeight = viewportHeight;
+      act(() => observed.get(scroll)!([], {} as ResizeObserver));
+      expect(document.querySelector('[data-group-bottom-bubbles]')?.hasAttribute('inert')).toBe(false);
+      expect(scroll.scrollTop).toBe(0);
+    });
+
     it('shows a deleted original without its snapshot and never jumps', async () => {
       const base = detail({ serverBacked: true });
       mocks.getBotGroup.mockResolvedValue({ ok: true, group: { ...base, messages: [

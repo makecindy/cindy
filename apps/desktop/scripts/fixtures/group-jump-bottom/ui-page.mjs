@@ -13,6 +13,8 @@ export default {
   },
   notCovered: 'PDF/Drawio previews, real network, sending and native input; actual group layout and wheel navigation use synthetic host data.',
   cases: {
+    'short-growth': { about: 'A located short chat keeps its reading position and reveals unread navigation when content grows',
+      data: { ...group.cases['long-thread'].data, messages: 2, sidebar: false, shortGrowth: true, controlled: true } },
     default: { about: 'History navigation temporarily replaces topic hints without changing scroll geometry',
       data: { ...group.cases['long-thread'].data, sidebar: false, threadUnread: true } },
     'with-control': { about: 'Navigation replaces both topic and connection bubbles; idle/return restores them unchanged',
@@ -33,6 +35,41 @@ export default {
     const bubbles = page.locator('[data-group-bottom-bubbles]');
     const hint = page.locator('[data-thread-hint]');
     const banner = page.locator('[data-controlled-banner-chip]');
+    if (ui.data.shortGrowth) {
+      await page.evaluate(async () => {
+        const { group } = await window.electronAPI.maker.getBotGroup('fixture-group');
+        group.serverBacked = true;
+        group.messages = group.messages.map((message, index) => index === 1 ? { ...message,
+          quote: { messageId: 'm0', authorName: 'You', authorKind: 'user', excerpt: 'Layout message 1',
+            attachmentCount: 0, attachmentName: null, sequence: 1 },
+        } : message);
+        window.__uiPage.emit('botGroupChanged', { groupId: group.id, change: 'messages' });
+      });
+      await page.getByTestId('bot-group-quote').click();
+      assert.equal(await timeline.evaluate(el => el.scrollHeight - el.clientHeight), 0, 'located chat initially fits');
+      await page.evaluate(async () => {
+        const { group } = await window.electronAPI.maker.getBotGroup('fixture-group');
+        group.messages = [...group.messages, { ...group.messages[0], id: 'new-reply', sequence: 3,
+          authorKind: 'bot', authorBotId: 'a', authorName: 'Aster', content: 'New reply after locating',
+          createdAt: Date.now() }];
+        window.__uiPage.emit('botGroupChanged', { groupId: group.id, change: 'messages' });
+      });
+      await page.getByText('New reply after locating', { exact: true }).waitFor();
+      await page.locator('[data-bot-group-message-id="new-reply"]').evaluate(el => { el.style.minHeight = '1000px'; });
+      await page.waitForFunction(() => document.querySelector('[data-group-bottom-bubbles]').hasAttribute('inert'));
+      assert.equal(await timeline.evaluate(el => el.scrollTop), 0, 'content growth must preserve the historical position');
+      const unread = page.getByRole('button', { name: await ui.t('chat.newMessageIndicator.aria', { count: 1 }), exact: true });
+      assert.equal(await unread.evaluate(el => el.parentElement.classList.contains('opacity-100')), true);
+      await ui.capture('short-group-unread');
+      await unread.click();
+      await page.waitForFunction(() => {
+        const el = document.querySelector('[data-testid="bot-group-timeline"]');
+        return el.scrollHeight - el.scrollTop - el.clientHeight < 2;
+      });
+      await page.waitForFunction(() => !document.querySelector('[data-group-bottom-bubbles]').hasAttribute('inert'));
+      await ui.capture('short-group-returned');
+      return;
+    }
     await page.waitForFunction(() => {
       const el = document.querySelector('[data-testid="bot-group-timeline"]');
       return el && el.scrollHeight > el.clientHeight && el.scrollTop > 0;
