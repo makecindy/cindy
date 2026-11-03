@@ -153,17 +153,16 @@ export function PreviewHeader({
   const styles = useThemedStyles(makeStyles);
   const [menu, setMenu] = useState(false);
   const afterClose = useRef<(() => void) | null>(null);
-  // 文件详情与浏览器一致收进「更多」,阅读区上方只留文件名。
-  const menuActions: readonly PreviewAction[] = detail
-    ? [
-        {
-          key: "preview.fileInfo",
-          label: t("files.preview.browserFileInfo"),
-          onPress: () => Alert.alert(name, detail),
-        },
-        ...actions,
-      ]
-    : actions;
+  // 「文件信息」始终在「更多」里:标题只显示一行,被截断的完整文件名要有地方看
+  // (没有 detail 时只显示文件名)。
+  const menuActions: readonly PreviewAction[] = [
+    {
+      key: "preview.fileInfo",
+      label: t("files.preview.browserFileInfo"),
+      onPress: () => Alert.alert(name, detail),
+    },
+    ...actions,
+  ];
   const nativeMenu = usesNativePullDownMenu();
   return (
     <>

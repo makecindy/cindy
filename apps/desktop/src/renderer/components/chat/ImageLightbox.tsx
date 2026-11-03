@@ -1424,14 +1424,14 @@ function ImageLightboxContent({
 
   // 遮罩颜色走统一 token，不再按 Light / Dark 分支判断。
   const overlay = (
-    <>
-    <PreviewScrim onClose={closeFromBackdrop} />
     // FocusScope(trapped+loop):键盘打开后焦点进入弹窗并圈禁在内,Tab 不再
     // 穿过被遮挡的聊天控件。挂载焦点给 overlay 根(tabIndex=-1 由 FocusScope
     // 合入,全局 outline:none 保证不闪全屏焦点框):Enter 不触发任何动作,
     // Tab 依次到达工具栏/翻页按钮;卸载时 FocusScope 默认把焦点还给打开前
     // 的元素(ChatImageView 键盘路径 = 预览触发器,与 onClose 里的显式恢复
     // 指向同一元素)。
+    <>
+    <PreviewScrim onClose={closeFromBackdrop} />
     <FocusScope
       onUnmountAutoFocus={restorePreviewFocus}
       asChild
