@@ -18782,6 +18782,9 @@
     "failed": "操作が完了しませんでした。再試行するか、ローカルファイルを確認してください。"
   },
   "attachmentPreview": {
+    "fitWidth": "幅に合わせる",
+    "fitPage": "ページに合わせる",
+    "pageNumber": "ページ番号",
     "more": "その他の操作",
     "retry": "再試行",
     "image": "画像",

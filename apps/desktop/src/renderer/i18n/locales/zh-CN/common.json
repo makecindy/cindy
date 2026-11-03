@@ -18782,6 +18782,9 @@
     "failed": "操作未完成，请重试或查看本地文件。"
   },
   "attachmentPreview": {
+    "fitWidth": "适应宽度",
+    "fitPage": "适应页面",
+    "pageNumber": "页码",
     "more": "更多操作",
     "retry": "重试",
     "image": "图片",

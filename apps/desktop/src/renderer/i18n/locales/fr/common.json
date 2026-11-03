@@ -19024,6 +19024,9 @@
     "failed": "L'opération n'est pas terminée. Réessayez ou ouvrez les fichiers locaux."
   },
   "attachmentPreview": {
+    "fitWidth": "Ajuster à la largeur",
+    "fitPage": "Ajuster à la page",
+    "pageNumber": "Numéro de page",
     "more": "Autres actions",
     "retry": "Réessayer",
     "image": "Image",

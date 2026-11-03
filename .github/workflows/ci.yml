@@ -85,7 +85,7 @@ jobs:
           DESIGN_HEAD_REF: ${{ github.sha }}
         run: pnpm check:design-colors --base-ref "$DESIGN_BASE_REF" --head-ref "$DESIGN_HEAD_REF"
 
-      - name: Check design inventory freshness
+      - name: Check design inventory registration
         run: pnpm check:design-inventory
 
       - name: Check endpoint literals

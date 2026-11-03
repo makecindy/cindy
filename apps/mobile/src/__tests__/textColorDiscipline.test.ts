@@ -299,7 +299,8 @@ describe('text color discipline', () => {
     const { violations, stale } = reconcile(found, KNOWN_TEXT_COLOR_DEBT, `use one of ${NEUTRAL_TEXT_COLORS.join(' / ')} or a registered semantic text token`);
     expect(violations).toEqual([]);
     expect(stale, '已修复的存量请从 KNOWN_TEXT_COLOR_DEBT 删除或调低次数').toEqual([]);
-  });
+    // 全量扫描 src/ + app/ 已接近默认 5s 预算，CI 并发时会超时；放宽时限而不是减少扫描范围。
+  }, 30_000);
 
   it('uses textPlaceholder for input placeholders (DESIGN.md §4 Inputs)', () => {
     const found = new Map<string, number>();

@@ -18854,6 +18854,9 @@
     "failed": "The operation did not finish. Retry or open the local files."
   },
   "attachmentPreview": {
+    "fitWidth": "Fit Width",
+    "fitPage": "Fit Page",
+    "pageNumber": "Page Number",
     "more": "More actions",
     "retry": "Retry",
     "image": "Image",
