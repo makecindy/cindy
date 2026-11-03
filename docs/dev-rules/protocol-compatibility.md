@@ -1,5 +1,29 @@
 # 跨端协议兼容
 
+## 群聊代答的工作记录兼容（2026-11-03）
+
+已发布 Desktop 在普通和个人代答的完成请求中附带 `cindy.work-record` revision 1，
+`fallback: ""` 表示它只保存定位信息、不增加正文。Chat Server 须允许这一已知版本的空 fallback，
+否则会以 `INVALID_INPUT` 拒收完整回复；租约过期后重复执行还可能让模型返回 `NO_REPLY`。
+未知卡片或工作记录的未知版本仍要求非空 fallback。客户端请求形状不变，需全部 API 副本升级；
+本地 HTTP + PostgreSQL 回归不代表生产已部署，不自动补发旧回复。无 Device Link、中转或鉴权变化。
+
+## 永久代答由本人显式关闭（2026-11-02）
+
+`trigger: always` 开启后不再因输入、发言或在线自动接回。Desktop 与 Mobile 不发送自动
+`participate`，状态入口的停止操作沿用 `save` 写入 `enabled: false`。定时、手动触发不变。
+不新增字段、action、能力位或中转行为；`resumeMinutes` 仍保留在旧配置与请求中以兼容旧端，
+新版不使用它判定永久模式，也不展示离开恢复设置。
+
+服务端应用与追加迁移 `036_personal_mask_always.sql` 必须先完成所有副本升级：状态判定忽略
+永久模式的旧参与时间，显式 `participate` 不取消永久执行，入库触发器对旧消息写入端也沿用新规则。
+新客户端连接旧服务器仍可能在发送时被服务器暂停，不能宣称只更新客户端即可完整生效。
+旧客户端连接新服务器时，旧「接回」操作对永久模式不再停答，须用已有的代答开关关闭；
+旧界面的离开恢复配置不再生效。混合副本期间旧应用仍可能响应暂停，必须完成服务端滚动升级。
+既有取消记录不复活，手动关闭继续取消在途和排队回复。回滚应用可保留兼容的数据库函数和数据，
+但旧应用会恢复旧的参与判定，不能承诺回滚期间保持新语义。Device Link 和自建中转无需适配。
+本地回归与生产部署分别验收，不将代码完成视为线上已生效。
+
 ## 机器实时状态（2026-11-02）
 
 新增只读 invoke `maker:machine:status`（`packages/device-link/src/machineStatus.ts`），同账号远控可用，不进共享任务访客白名单。
@@ -1206,6 +1230,21 @@ Claude Code 终态 error 事件可带 `usageResetAt`（unix ms）。服务端无
     被控端拒绝越界操作（`DESKTOP_HANDOFF_WINDOW_ONLY`），代输入结束即结束（`DESKTOP_HANDOFF_ENDED`），
     非 macOS 或要求音频时拒绝（`DESKTOP_HANDOFF_UNAVAILABLE` / `DESKTOP_AUDIO_UNAVAILABLE`）。
   - 先发被控端：卡片上的 `liveView` 由执行代输入的那台电脑给出，它本身就是新版。
+- **插件实时屏幕**（手机上的模拟器等）同样沿用远程桌面业务通道，不改 relay、IPC allowlist 或协议版本：
+  - 被控端以可选能力 `liveScreens` 声明支持，并接受租约外的 `screens` 列表操作；控制端只在 `start` 里附
+    `screen: {plugin, id}`（取自 `screens`），由被控端解析插件与设备。
+  - 响应的 lease 附 `screen: {plugin, id, name, platform, …}`。控制端收到不带同一 `screen` 的 lease
+    时立即 `stop` 并报 `INVALID_RESPONSE`——旧被控端会丢掉 `screen` 并开成整屏远程桌面。
+  - 新输入 `touch` / `press` 只在实时屏幕租约内有效；旧被控端会因未知输入结束会话，所以控制端只在
+    能力位存在时发送。被控端在整屏租约里拒绝这两种输入，在实时屏幕租约里拒绝 `move` / `button` /
+    `scroll`（`INVALID_REQUEST`）。
+  - 该 lease 只允许 stop / heartbeat / control / presentation / input / offer / ice / viewerHidden /
+    screenShape，其余返回 `DESKTOP_SCREEN_ONLY`；不需要屏幕录制或辅助功能权限，结束时不锁屏，与整屏租约共用
+    「每台电脑一个远程租约」（替换需 `takeover`）。
+  - 设备画面转动后的形状：heartbeat 结果附可选 `shape: {width, height}`；控制端另发
+    `screenShape {lease, known?}` 等待形状与 `known` 不同（被控端最多等 6 秒后照常返回）。旧被控端
+    对 `screenShape` 返回 `INVALID_REQUEST`，控制端即停止该请求，改用 heartbeat 或按请求的朝向估计。
+  - 先发被控端；新手机连旧电脑时不出现入口，旧手机连新电脑行为不变。
 
 ## Agent 跨设备历史发现与搜索
 
@@ -1980,6 +2019,41 @@ handler 无 sender 依赖；不加入共享任务访客白名单，不进入自�
 `useRemoteSessionBackgroundTasks.ts`。
 
 ## 远程 Agent：Agent 在另一台电脑运行
+
+Cindy 托管 Skill（2026-11-03）：内置 Skill 与插件带的 Skill 以任务所在电脑为准，用远程供应商与本机体验一致。
+`open.personal` 追加可选数组 `managedSkills: [{ command, dir }]`：任务所在电脑按本机任务同一来源列出托管 Skill，
+用本机停用偏好与伙伴授权过滤（`resolveAllowedManagedSkills`），本机停用的个人 Skill 也不再同步。文件随
+`personal.files` 放在 Agent 找项目 Skill 的位置（Claude Code 为 `.claude/skills/<插件>-<Skill>`，Codex / Pi 为
+`.agents/skills/...`）。目录名为 `<插件>-<Skill>`；两段里有 `-` 时追加整条命令的 8 位哈希，避免 `a-b:c` 与 `a:b-c`
+拍平成同一个目录；该目录已被项目或个人的同名 Skill（本机里是不同命令）占用时同样换成带哈希的目录共存，不丢托管的。
+`managedSkills` 条目最多 512 个（超过时接收方拒绝整个打开），收集时截断。文件清单与指纹共用 `managedSkillDigest.ts` 的 `listManagedSkillFiles`：清单超出上限、有单个超过
+512 KB 的文件、受邀者任务里的凭证类文件、读不到的文件，该 Skill 整个不带，不留只有 `SKILL.md` 的半个。
+对旧运行端与个人配置共用 512 个文件、4 MB 的额度且个人配置优先；放不下的 Skill 整个不带。
+沿用 `maker:remote-agent:v1`，只加可选的 `caps.managedSkills`，不加错误码或 relay 接口。
+
+- 新运行端看到字段（含空数组）即以它为准，**不加载自己的托管 Skill**，受邀者也一样：Claude Code 把这些目录挪进
+  影子目录内的 `.cindy/managed-skills/<插件>/skills/<Skill>` 并以本地插件挂载，命名保持 `cindy:pr`；Codex 对共用
+  CODEX_HOME 里本机那份逐线程停用，Pi 不挂本机的。控制端为原位置与插件位置都登记路径映射，Skill 里的脚本路径
+  经 `cindy_exec` 回到任务所在电脑的真实文件；连回时托管 Skill 的映射以这次同步的为准（插件更新后目录也变了），
+  其余映射仍保持原目标（上次有、这次已停用或卸载的托管 Skill 的映射也撤掉）。受邀者带来的 `managedFiles` 与 `files` 走同一道 Markdown 检查（带 hooks 的丢弃、命令预执行
+  语法断开）；复用提供者自己那份时同样过这道检查和落地改写。不变量：同一份内容，复用与传输落到受邀者任务里的文件
+  逐字节相同（`guestHost.test.ts` 直接比较两条路径）。
+- 旧运行端解码时丢弃该字段，把文件当项目 Skill 加载：能用，但 Claude Code 里叫 `pr` 而不是 `cindy:pr`；同账号
+  旧运行端自己也有同名托管 Skill 时会出现两份。新运行端遇到旧控制端（字段缺省）沿用原规则：同账号用自己的，
+  受邀者不加载。
+- 不重复传、单独额度：新运行端在 `caps` 追加可选 `managedSkills: { digests }`（自己启用中的托管 Skill：命令名 →
+  内容指纹，规则见 `managedSkillDigest.ts`；受邀者只看到 `cindy:` 内置的，不透露装了哪些插件）。控制端看到声明后，
+  指纹相同的条目只带 `{ digest, reuse: true }` 不带文件，运行端复制自己那份（复制前再核对指纹，不一致就不带这个 Skill）；
+  受邀者只能复用 `cindy:` 内置的，点名提供者装的插件 Skill 一律不复制（运行端直接收和组所在电脑中转补文件都一样）；
+  其余文件放进 `personal.managedFiles`，单独 2048 个文件、16 MB 额度，不占个人配置的 512。旧运行端不声明，控制端
+  仍用上面的共用额度方式。`caps` 本来每次打开前都问，不多一次往返；两台版本与插件相同时打开、连回都不再传托管 Skill。
+- 供应商组中转：受邀者看到的是组所在电脑的 `caps`。组所在电脑转发前按组内电脑的 `caps` 重排：那台也有同指纹的继续
+  只报名字，没有的用组所在电脑自己那份补成文件（指纹与受邀者一致才补，且按正常收集的大小限制：单个文件 512 KB、
+  新版 16 MB、旧版与个人配置共用 4 MB，放不下整个不带）；组内电脑是旧版时文件放回 `files`，放不下 512 的
+  Skill 整个不带。
+- 控制端列不出托管 Skill 时不带该字段，对方沿用原规则。实现见 `controller/projectFiles.ts`、`host/runHost.ts`，
+  回归见 `mirror.test.ts`、`roundtrip.test.ts`、`guestHost.test.ts`、`groupRelay.test.ts` 与三 harness 的
+  `device-hosted-guest` 测试。
 
 插件花名册（2026-11-01）：`open` 的 `options` 追加可选字符串 `ghostRosterSnapshot`，由任务所在电脑按真实
 工作目录生成（与本机任务同一 formatter 与过滤），空串表示“那台没有可召回的插件”，同样要带。沿用

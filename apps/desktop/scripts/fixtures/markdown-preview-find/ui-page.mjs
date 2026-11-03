@@ -269,7 +269,7 @@ export default {
     await page.keyboard.press('Shift+Enter');
     await card.getByText('1/2', { exact: true }).waitFor();
     if (ui.case === 'outside-focus') {
-      for (const target of [page.locator('[data-text-lightbox-overlay] > button'), page.getByTestId('open-preview')]) {
+      for (const target of [page.locator('[data-text-lightbox-overlay] > [data-preview-scrim]'), page.getByTestId('open-preview')]) {
         await input.focus();
         for (let tab = 0; tab < 20 && !await target.evaluate(el => document.activeElement === el); tab += 1) {
           await page.keyboard.press('Tab');
