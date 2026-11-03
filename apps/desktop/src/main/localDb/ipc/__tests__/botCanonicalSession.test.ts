@@ -22,6 +22,7 @@ import type { AgentInputQueuedMessage } from '../../../../shared/agentInputQueue
 import type { ProviderView } from '@cindy/model-providers';
 import { createHash } from 'node:crypto';
 import { createCompanionCloudHost } from '../../../companion-cloud/host';
+import { clearSessionPersistState, noteSessionAgentKind, getAssistantSamplingRuntimeId } from '../../../messagePersistBroadcaster';
 import { join, resolve } from 'node:path';
 import { existsSync, mkdirSync, promises as fsPromises, readFileSync, rmSync, writeFileSync } from 'node:fs';
 
@@ -956,6 +957,25 @@ describe('Bot canonical Session lifecycle', () => {
       .rejects.toMatchObject({ code: 'PRECONDITION_FAILED' });
     expect(h.sqlite!.prepare('SELECT display_name AS name, current_version FROM bot_profiles WHERE id = ?').get('bot-1'))
       .toEqual({ name: 'Release Bot', current_version: 1 });
+  });
+
+  it('captures live sampling ownership on mirror rows and retires it when the native runtime closes', async () => {
+    const created = await invoke('local-db:bots:create-canonical-session', {
+      botId: 'bot-1', expectedCanonicalSessionId: null, expectedProfileVersion: 1,
+    });
+    const sessionId = created.session.id;
+    noteSessionAgentKind(sessionId, 'codex');
+    const runtimeId = getAssistantSamplingRuntimeId(sessionId)!;
+    await createMessage(sessionId, { clientId: 'unconfirmed', role: 'assistant', content: 'uncertain',
+      agentMeta: { samplingAttemptPending: { runtimeId } } });
+    const host = createCompanionCloudHost({ deliverToCanonical: async () => ({ ok: true }),
+      ensureCanonicalSession: async () => sessionId, rebuildContext: async () => 'rebuilt', listDevices: async () => [],
+    });
+    expect(await host.latestRows(sessionId, 200)).toContainEqual(expect.objectContaining({ clientId: 'unconfirmed', samplingRuntimeId: runtimeId }));
+    clearSessionPersistState(sessionId);
+    expect(await host.rowsAfter(sessionId, { createdAt: 0, id: '' }, 200)).toContainEqual(expect.objectContaining({
+      clientId: 'unconfirmed', samplingRuntimeId: null, agentMeta: JSON.stringify({ samplingAttemptPending: { runtimeId } }),
+    }));
   });
 
   // #7095: the default companion seeded on a fresh computer is demoted mid-meeting; the take-over then

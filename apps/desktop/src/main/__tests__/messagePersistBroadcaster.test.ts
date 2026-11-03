@@ -46,6 +46,7 @@ it('marks exact failed assistant items, including a live block, without rewritin
   await drainPersistQueue();
   expect(patchMessageAgentMetaWithResult).toHaveBeenCalledWith(sessionId, first, {
     failedSamplingAttempt: { threadId: 'native-thread', turnId: 'native-turn', attempt: 1, itemId: 'failed-1' },
+    samplingAttemptPending: false,
     turnCompleted: false,
   });
   expect(createMessage).toHaveBeenCalledWith(sessionId, expect.objectContaining({
@@ -68,6 +69,67 @@ it('marks exact failed assistant items, including a live block, without rewritin
   expect(patchMessageAgentMetaWithResult).not.toHaveBeenCalled();
   clearSessionPersistState(sessionId);
   clearSessionPersistState(otherSession);
+});
+
+// A completed item is durable before its sampling request succeeds. Protect that
+// interval, but release accepted pre-tool text without waiting for the whole turn.
+it('persists native sampling uncertainty and releases exact accepted items without reviving failed ones', async () => {
+  const sessionId = 'pending-sampling';
+  clearSessionPersistState(sessionId);
+  noteSessionAgentKind(sessionId, 'codex');
+  noteAgentMeta(sessionId, { model: 'test-model' });
+  const text = (id: string) => onAssistantTextEvent(sessionId, { agentMessageId: id, text: id, isFinal: true, isFullText: true }, null);
+  const accepted = onAssistantTextEvent(sessionId, { agentMessageId: 'accepted', text: 'accepted' }, null);
+  flushAssistantBlock(sessionId);
+  const failed = text('failed');
+  await drainPersistQueue();
+  expect(createMessage).toHaveBeenCalledWith(sessionId, expect.objectContaining({ clientId: accepted,
+    agentMeta: { agentMessageId: 'accepted', model: 'test-model', samplingAttemptPending: { runtimeId: expect.any(String) } } }), expect.anything());
+  onAssistantAttemptFailure(sessionId, { assistantAttemptFailure: {
+    threadId: 't', turnId: 'u', attempt: 1, agentMessageIds: ['failed'],
+  } });
+  onAssistantSamplingAccepted(sessionId, ['accepted', 'failed']);
+  await drainPersistQueue();
+  expect(patchMessageAgentMetaWithResult).toHaveBeenCalledWith(sessionId, failed, expect.objectContaining({
+    failedSamplingAttempt: expect.anything(), samplingAttemptPending: false,
+  }));
+  expect(patchMessageAgentMetaWithResult).toHaveBeenCalledWith(sessionId, accepted, { samplingAttemptPending: false });
+  const patches = vi.mocked(patchMessageAgentMetaWithResult).mock.calls.filter(([id, clientId]) => id === sessionId && clientId === failed);
+  expect(patches).toHaveLength(1);
+  // Late calibration of an already accepted item must not put it back in pending.
+  text('accepted');
+  await drainPersistQueue();
+  expect(patchMessageAgentMetaWithResult).toHaveBeenCalledWith(sessionId, accepted, expect.objectContaining({ samplingAttemptPending: false }));
+  const final = text('final');
+  onAssistantSamplingAccepted(sessionId);
+  await drainPersistQueue();
+  expect(patchMessageAgentMetaWithResult).toHaveBeenCalledWith(sessionId, final, { samplingAttemptPending: false });
+  clearSessionPersistState(sessionId);
+});
+
+it.each(['accepted', 'failed'])('retries a rejected %s metadata patch and retires its native runtime on close', async outcome => {
+  const sessionId = `sampling-retry-${outcome}`;
+  clearSessionPersistState(sessionId);
+  noteSessionAgentKind(sessionId, 'codex');
+  const runtimeId = getAssistantSamplingRuntimeId(sessionId);
+  const persistId = onAssistantTextEvent(sessionId, { agentMessageId: 'item', text: 'retained locally', isFinal: true }, null);
+  await drainPersistQueue();
+  vi.mocked(patchMessageAgentMetaWithResult).mockRejectedValueOnce(new Error('transient write failure'));
+  if (outcome === 'accepted') onAssistantSamplingAccepted(sessionId);
+  else onAssistantAttemptFailure(sessionId, { assistantAttemptFailure: {
+    threadId: 't', turnId: 'u', attempt: 1, agentMessageIds: ['item'],
+  } });
+  await drainPersistQueue();
+  await flushAssistantSamplingMetadata(sessionId);
+  expect(patchMessageAgentMetaWithResult).toHaveBeenLastCalledWith(sessionId, persistId, expect.objectContaining({ samplingAttemptPending: false }));
+  const patches = vi.mocked(patchMessageAgentMetaWithResult).mock.calls.filter(([id]) => id === sessionId);
+  expect(patches).toHaveLength(2);
+  if (outcome === 'failed') expect(patches[1]![2]).toHaveProperty('failedSamplingAttempt');
+  clearSessionPersistState(sessionId);
+  expect(getAssistantSamplingRuntimeId(sessionId)).toBeNull();
+  noteSessionAgentKind(sessionId, 'codex');
+  expect(getAssistantSamplingRuntimeId(sessionId)).not.toBe(runtimeId);
+  clearSessionPersistState(sessionId);
 });
 
 vi.mock('../localDb/ipc/messages.js', () => ({
@@ -144,6 +206,9 @@ import {
   prepareSyntheticToolEventForBroadcast,
   onAssistantTextEvent,
   onAssistantAttemptFailure,
+  onAssistantSamplingAccepted,
+  flushAssistantSamplingMetadata,
+  getAssistantSamplingRuntimeId,
   drainPersistQueue,
   onStandaloneTextEvent,
   getSessionTextSnapshot,

@@ -212,6 +212,59 @@ interface AssistantBlock {
 const assistantBlocks = new Map<string, AssistantBlock>();
 /** Exact provider item → durable row links, scoped to the current product turn. */
 const assistantItemPersistIds = new Map<string, Map<string, string>>();
+/** Native items whose response can still be invalidated by a sampling disconnect. */
+const pendingSamplingItems = new Map<string, Set<string>>();
+/** A closed native runtime no longer owns an unresolved item from its old history. */
+const samplingRuntimeIds = new Map<string, string>();
+export function getAssistantSamplingRuntimeId(sessionId: string): string | null {
+  return samplingRuntimeIds.get(sessionId) ?? null;
+}
+/** Settled metadata remains retryable until its existing durable write succeeds. */
+const samplingMetaPatches = new Map<string, Map<string, { patch: Record<string, unknown>; writing: boolean }>>();
+
+function queueSamplingMetaPatch(sessionId: string, persistId: string, patch: Record<string, unknown>): void {
+  let patches = samplingMetaPatches.get(sessionId);
+  if (!patches) { patches = new Map(); samplingMetaPatches.set(sessionId, patches); }
+  const entry = { patch, writing: true };
+  patches.set(persistId, entry);
+  enqueueWrite(`assistant_sampling_meta:${sessionId}:${persistId}`, async ownerScope => {
+    try {
+      const patched = await patchMessageAgentMetaWithResult(sessionId, persistId, patch);
+      // A resolved null means the row was removed, not a retryable write error.
+      if (patches.get(persistId) === entry) patches.delete(persistId);
+      if (!patches.size && samplingMetaPatches.get(sessionId) === patches) samplingMetaPatches.delete(sessionId);
+      if (patched) await broadcastMessageAgentMetaUpdate(sessionId, persistId, ownerScope);
+    } finally { entry.writing = false; }
+  });
+}
+
+/** Mirror reads retry settled metadata and then read after the existing FIFO, never before it. */
+export async function flushAssistantSamplingMetadata(sessionId: string): Promise<void> {
+  for (const [persistId, entry] of samplingMetaPatches.get(sessionId) ?? []) {
+    if (!entry.writing) queueSamplingMetaPatch(sessionId, persistId, entry.patch);
+  }
+  await drainPersistQueue();
+}
+
+
+/** Release only SDK-proven accepted items (or the remaining items at a terminal boundary). */
+export function onAssistantSamplingAccepted(sessionId: string, itemIds?: readonly string[]): void {
+  const pending = pendingSamplingItems.get(sessionId);
+  if (!pending) return;
+  const links = assistantItemPersistIds.get(sessionId);
+  for (const itemId of itemIds ?? [...pending]) {
+    if (!pending.delete(itemId)) continue;
+    const persistId = links?.get(itemId);
+    if (!persistId) continue;
+    const block = assistantBlocks.get(sessionId);
+    if (block?.persistId === persistId) {
+      block.agentMeta = { ...(block.agentMeta ?? lastAgentMetaBySession.get(sessionId)), samplingAttemptPending: false };
+    } else {
+      queueSamplingMetaPatch(sessionId, persistId, { samplingAttemptPending: false });
+    }
+  }
+  if (!pending.size) pendingSamplingItems.delete(sessionId);
+}
 
 /** Mark an SDK-proven failed sampling attempt without changing or deleting its prose. */
 export function onAssistantAttemptFailure(sessionId: string, data: unknown): void {
@@ -233,17 +286,14 @@ export function onAssistantAttemptFailure(sessionId: string, data: unknown): voi
       ...(typeof message === 'string' ? { error: redactSensitiveText(message) } : {}),
     };
     links.delete(itemId);
+    pendingSamplingItems.get(sessionId)?.delete(itemId);
     const block = assistantBlocks.get(sessionId);
     if (block?.persistId === persistId) {
-      block.agentMeta = { ...block.agentMeta, failedSamplingAttempt: marker, turnCompleted: false };
+      block.agentMeta = { ...(block.agentMeta ?? lastAgentMetaBySession.get(sessionId)), failedSamplingAttempt: marker, samplingAttemptPending: false, turnCompleted: false };
       flushAssistantBlock(sessionId);
     } else {
-      enqueueWrite(`assistant_attempt_failed:${sessionId}:${persistId}`, async (ownerScope) => {
-        const patched = await patchMessageAgentMetaWithResult(sessionId, persistId, {
-          failedSamplingAttempt: marker,
-          turnCompleted: false,
-        });
-        if (patched) await broadcastMessageAgentMetaUpdate(sessionId, persistId, ownerScope);
+      queueSamplingMetaPatch(sessionId, persistId, {
+        failedSamplingAttempt: marker, samplingAttemptPending: false, turnCompleted: false,
       });
     }
     if (lastTopLevelAssistantPersistIdBySession.get(sessionId) === persistId) {
@@ -391,6 +441,8 @@ export function noteSessionClearBoundary(sessionId: string, clearedAt: string | 
   const current = clearBoundaryBySession.get(sessionId);
   if (current === undefined || parsed > current) {
     assistantItemPersistIds.delete(sessionId);
+    pendingSamplingItems.delete(sessionId);
+    samplingMetaPatches.delete(sessionId);
     clearSessionThinkingSnapshots(sessionId);
     clearBoundaryBySession.set(sessionId, parsed);
     sealedAssistantLateFinalBySession.delete(sessionId);
@@ -431,6 +483,7 @@ type OwnerScope = ReturnType<typeof broadcastTap.captureDataOwnerBroadcastScope>
 const dbAgentKindBySession = new Map<string, 'cc' | 'codex' | 'pi'>();
 
 export function noteSessionAgentKind(sessionId: string, dbAgentKind: 'cc' | 'codex' | 'pi'): void {
+  if (dbAgentKindBySession.get(sessionId) !== dbAgentKind || !samplingRuntimeIds.has(sessionId)) samplingRuntimeIds.set(sessionId, createId());
   dbAgentKindBySession.set(sessionId, dbAgentKind);
 }
 
@@ -872,7 +925,10 @@ function enqueuePersistAssistant(
     role: 'assistant',
     content,
     // Add identity only after the caller has resolved model/usage fallbacks.
-    agentMeta: agentMessageId ? { ...agentMeta, agentMessageId } : agentMeta ?? null,
+    agentMeta: agentMessageId ? { ...agentMeta, agentMessageId,
+      ...(pendingSamplingItems.get(sessionId)?.has(agentMessageId)
+        ? { samplingAttemptPending: { runtimeId: samplingRuntimeIds.get(sessionId)! } } : {}),
+    } : agentMeta ?? null,
     createdAt,
   });
   notePersistedMessage(sessionId, 'assistant', clientId, content, agentMessageId);
@@ -2189,6 +2245,7 @@ function releaseUnfinalizedThinkingSnapshots(sessionId: string): void {
  */
 export function resetTurnPersistState(sessionId: string): void {
   assistantItemPersistIds.delete(sessionId);
+  pendingSamplingItems.delete(sessionId);
   // Event-stream completion is not a persistence barrier. Snapshots that already
   // saw `final` survive until their queued write settles (or an explicit
   // history/owner cleanup); blocks that never saw one belong to a dead attempt —
@@ -2260,6 +2317,15 @@ export function onAssistantTextEvent(
   agentMeta: AgentMeta | null,
   turnScope?: 'turn' | 'background',
 ): string | undefined {
+  if (getSessionDbAgentKind(sessionId) === 'codex' && turnScope !== 'background' && typeof data.agentMessageId === 'string') {
+    const itemId = data.agentMessageId;
+    let pending = pendingSamplingItems.get(sessionId);
+    const accepted = assistantItemPersistIds.get(sessionId)?.has(itemId) && !pending?.has(itemId);
+    if (!accepted) {
+      if (!pending) { pending = new Set(); pendingSamplingItems.set(sessionId, pending); }
+      pending.add(itemId);
+    }
+  }
   const persistId = assembleAssistantTextEvent(sessionId, data, agentMeta, turnScope);
   if (persistId && typeof data.agentMessageId === 'string' && turnScope !== 'background') {
     let links = assistantItemPersistIds.get(sessionId);
@@ -3079,7 +3145,10 @@ export function clearCodexPlanRowsForSession(sessionId: string): void {
 }
 
 export function clearSessionPersistState(sessionId: string): void {
+  samplingRuntimeIds.delete(sessionId);
+  samplingMetaPatches.delete(sessionId);
   assistantItemPersistIds.delete(sessionId);
+  pendingSamplingItems.delete(sessionId);
   clearSessionThinkingSnapshots(sessionId);
   clearCodexPlanRowsForSession(sessionId);
   assistantBlocks.delete(sessionId);
