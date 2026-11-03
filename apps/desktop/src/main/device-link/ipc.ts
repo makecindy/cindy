@@ -26,7 +26,7 @@ import { currentOauthIdentityScope, trustOauthPeer } from '../plugin-oauth/deskt
 import { RemotePluginOauthUnsupportedError, resolveOauthPeerIdentity } from '../plugin-oauth/identityResolver.js';
 import { getDeviceId } from '../authManager.js';
 import { copyPrivateDeviceCode } from '../plugin-oauth/deviceCodeClipboard.js';
-import { PLUGIN_OAUTH_CHANNEL, PLUGIN_OAUTH_LOCAL_CHANNEL, PLUGIN_SECRET_LOCAL_CHANNEL, PLUGIN_CONNECTION_LOCAL_CHANNEL, INPUT_HANDOFF_LOCAL_CHANNEL, INPUT_HANDOFF_REMOTE_LOCAL_CHANNEL, INPUT_HANDOFF_LOCAL_PICTURE_CHANNEL, INPUT_HANDOFF_REMOTE_PICTURE_CHANNEL, INPUT_HANDOFF_REMOTE_PICTURE_ANSWER_CHANNEL } from '@cindy/device-link';
+import { PLUGIN_OAUTH_CHANNEL, PLUGIN_OAUTH_LOCAL_CHANNEL, PLUGIN_SECRET_LOCAL_CHANNEL, PLUGIN_CONNECTION_LOCAL_CHANNEL, INPUT_HANDOFF_LOCAL_CHANNEL, INPUT_HANDOFF_REMOTE_LOCAL_CHANNEL, INPUT_HANDOFF_LOCAL_PICTURE_CHANNEL, INPUT_HANDOFF_LOCAL_RAISE_CHANNEL, INPUT_HANDOFF_REMOTE_PICTURE_CHANNEL, INPUT_HANDOFF_REMOTE_PICTURE_ANSWER_CHANNEL } from '@cindy/device-link';
 import { handleAssistPluginOauth, handleSubmitPluginSecret, handleSubmitPluginConnection, handleSubmitInputHandoff, handleOpenInputHandoffPicture, handleAnswerInputHandoffPicture, type LocalOauthDeps } from '../plugin-oauth/localIpc.js';
 import { LocalDeviceCodeSessions } from '../plugin-oauth/deviceCodeSessions.js';
 import { PLUGIN_OAUTH_DEVICE_CODE_CHANNEL } from '../../shared/pluginOauthDeviceCode.js';
@@ -625,7 +625,7 @@ export async function handleInvoke(
   if (channel === MCP_APPS_INVOKE) throwIpcError('PERMISSION_DENIED', 'MCP_APP_FRAME_REQUIRED');
   if (channel === PLUGIN_OAUTH_CHANNEL || channel === PLUGIN_SECRET_LOCAL_CHANNEL || channel === PLUGIN_CONNECTION_LOCAL_CHANNEL
     || channel === INPUT_HANDOFF_LOCAL_CHANNEL || channel === INPUT_HANDOFF_REMOTE_LOCAL_CHANNEL
-    || channel === INPUT_HANDOFF_LOCAL_PICTURE_CHANNEL || channel === INPUT_HANDOFF_REMOTE_PICTURE_CHANNEL
+    || channel === INPUT_HANDOFF_LOCAL_PICTURE_CHANNEL || channel === INPUT_HANDOFF_LOCAL_RAISE_CHANNEL || channel === INPUT_HANDOFF_REMOTE_PICTURE_CHANNEL
     || channel === INPUT_HANDOFF_REMOTE_PICTURE_ANSWER_CHANNEL)
     throwIpcError('PERMISSION_DENIED', 'Authorization transport is Host-only');
   let callArgs = Array.isArray(args) ? args : [];

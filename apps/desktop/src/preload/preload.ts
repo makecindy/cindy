@@ -53,6 +53,12 @@ import type { MobileCodexRateLimitsResult, MobileCodexRateLimitResetResult } fro
 import type { AppearanceSettings } from '../shared/appearanceSettings';
 import type { DialogueWorkspaceSettingsState } from '../shared/dialogueWorkspaceSettings';
 import type {
+  CreateProjectFromTaskInput,
+  CreateProjectFromTaskResult,
+  PreparedProjectFromTask,
+  ProjectsRootState,
+} from '../shared/projectsRoot';
+import type {
   CustomProviderUpdateOptions,
   CustomProviderUpdateResult,
 } from '../shared/customProviderUpdate';
@@ -4718,6 +4724,19 @@ contextBridge.exposeInMainWorld('electronAPI', {
     reset: (): Promise<DialogueWorkspaceSettingsState> =>
       ipcRenderer.invoke('dialogue-workspace:reset'),
   },
+  projectsRoot: {
+    get: (): Promise<ProjectsRootState> => ipcRenderer.invoke('projects-root:get'),
+    choose: (): Promise<ProjectsRootState> => ipcRenderer.invoke('projects-root:choose'),
+    reset: (): Promise<ProjectsRootState> => ipcRenderer.invoke('projects-root:reset'),
+  },
+  createProjectFromTask: {
+    prepare: (sessionId: string): Promise<PreparedProjectFromTask> =>
+      ipcRenderer.invoke('create-project-from-task:prepare', sessionId),
+    chooseParent: (): Promise<string | null> =>
+      ipcRenderer.invoke('create-project-from-task:chooseParent'),
+    create: (input: CreateProjectFromTaskInput): Promise<CreateProjectFromTaskResult> =>
+      ipcRenderer.invoke('create-project-from-task:create', input),
+  },
 
   cindyMediaStorage: {
     /**
@@ -7469,6 +7488,9 @@ contextBridge.exposeInMainWorld('electronAPI', {
       revision: number,
     ): Promise<import('@cindy/device-link').InputHandoffPicture | null> =>
       ipcRenderer.invoke('input-handoff:picture', requestId, revision),
+    /** 代输入 sign-in on this computer: bring its window to the front; trusted top-level frame only. */
+    raiseInputHandoff: (requestId: string): Promise<boolean> =>
+      ipcRenderer.invoke('input-handoff:raise', requestId),
     /** 代输入 screenshot step on another computer: the sealed picture for this window only. */
     openRemoteInputHandoffPicture: (
       request: import('../shared/pluginOauth').LocalInputHandoffPictureRequest,
