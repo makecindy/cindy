@@ -734,12 +734,16 @@ function BotGroupChatContent({ deviceId, deviceName, groupId, messageId, notific
 
   // The persistent pane already sits inside the window's safe area horizontally.
   const sideEdges = panePersistent ? [] as const : ['left', 'right'] as const;
+  // A vertical system bar has no horizontal chrome to blur. Only cover actual
+  // in-page content (offline notice or image selection), matching the timeline inset.
+  const headerBlurHeight = systemBack ? headerHeight
+    : Math.max(headerHeight, nativeHeader ? nativeHeaderHeight : insets.top + navigationChrome.target);
   return <SafeAreaView style={styles.screen} edges={floatingHeader ? [...sideEdges, 'bottom'] : ['top', ...sideEdges, 'bottom']} testID="botGroup.screen">
     {threadRootId ? <Stack.Screen options={{ gestureEnabled: previousIsGroup }} /> : null}
     {nativeHeader || systemBack ? null : <Stack.Screen options={{ headerShown: false }} />}
     {floatingHeader ? <>
       <View style={[styles.flex, group ? null : { paddingTop: headerHeight }]}>{body}</View>
-      <SessionHeaderNativeBlur height={Math.max(headerHeight, nativeHeader ? nativeHeaderHeight : insets.top + navigationChrome.target)} fadeInside={CHAT_HEADER_BLUR_FADE_INSIDE} />
+      {headerBlurHeight > 0 ? <SessionHeaderNativeBlur height={headerBlurHeight} fadeInside={CHAT_HEADER_BLUR_FADE_INSIDE} /> : null}
       <View style={[styles.floatingHeader, { paddingTop: nativeHeader && !imageSelectionActive ? nativeHeaderHeight : insets.top }]} onLayout={(event) => setHeaderHeight(event.nativeEvent.layout.height)}>
         {header}
         {offlineNote}

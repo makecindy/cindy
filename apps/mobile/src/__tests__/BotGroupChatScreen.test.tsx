@@ -42,7 +42,8 @@ const h = vi.hoisted(() => ({
   discarded: [] as any[],
   deleted: [] as string[],
   keyboardAvoidingView: null as any,
-  platform: { OS: 'ios' }, headerBlur: [] as number[], headerFade: [] as (number | undefined)[], screenOptions: [] as any[],
+  platform: { OS: 'ios' }, insets: { top: 59, bottom: 34, left: 0, right: 0 },
+  headerBlur: [] as number[], headerFade: [] as (number | undefined)[], screenOptions: [] as any[],
 }));
 
 // Keep production message components; adapt native surfaces for jsdom.
@@ -110,8 +111,11 @@ vi.mock('expo-router', () => ({
   useFocusEffect: (effect: () => void) => useEffect(effect, [effect]),
 }));
 vi.mock('expo-router/react-navigation', () => ({ useHeaderHeight: () => 72 }));
-vi.mock('react-native-safe-area-context', () => ({ SafeAreaView: ({ children }: any) => el('main', null, children), useSafeAreaInsets: () => ({ top: 59, bottom: 34, left: 0, right: 0 }) }));
-vi.mock('@/session/SessionHeaderNativeControls', () => ({ SessionHeaderNativeBlur: ({ height, fadeInside }: any) => { h.headerBlur.push(height); h.headerFade.push(fadeInside); return null; } }));
+vi.mock('react-native-safe-area-context', () => ({ SafeAreaView: ({ children }: any) => el('main', null, children), useSafeAreaInsets: () => h.insets }));
+vi.mock('@/session/SessionHeaderNativeControls', () => ({ SessionHeaderNativeBlur: ({ height, fadeInside }: any) => {
+  h.headerBlur.push(height); h.headerFade.push(fadeInside);
+  return el('div', { 'data-testid': 'headerBlur', 'data-height': height });
+} }));
 vi.mock('react-i18next', async (importOriginal) => ({
   ...await importOriginal<typeof import('react-i18next')>(),
   useTranslation: () => ({
@@ -359,6 +363,7 @@ beforeEach(() => {
   h.uuid = 0; h.inputs = {}; h.teammateQuery = ''; h.teammates = { rows: [], loading: false, failed: false };
   h.appState = 'active'; h.appStateListeners.clear();
   h.platform.OS = 'ios'; h.focused = true; h.inputFocused = false; h.keyboardVisible = false; h.keyboardAvoidingView = null; h.headerBlur = []; h.headerFade = []; h.screenOptions = [];
+  h.insets = { top: 59, bottom: 34, left: 0, right: 0 };
   h.chat = { pending: [], reload: vi.fn(), act: vi.fn(async () => ({ effects: [] })), online: true };
   h.discarded = []; h.deleted = []; h.leaveGuard = []; h.leaveDecision = async () => false;
   h.local = {
@@ -495,10 +500,13 @@ describe('group timeline', () => {
     expect(h.headerBlur.at(-1)).toBe(72);
   });
 
-  // #8303 follow-up: Duo's vertical system bar owns back/settings in split view.
-  it('keeps Duo vertical system navigation beside the persistent sidebar without duplicate controls', async () => {
-    const geometry = { width: 1000, height: 800, insets: { top: 59, right: 0, bottom: 34, left: 0 },
-      regularWidth: true, regularHeight: true, barEdge: 'right' as const, regions: [], reservedRegionsSupported: false };
+  // #8303, component/unit: the real screen must not cover messages with a 44pt blur
+  // when Duo puts navigation at either side. The old test checked buttons only;
+  // a vertical bar with zero top inset is the minimal failing geometry.
+  it.each(['left', 'right'] as const)('keeps Duo %s navigation without duplicate controls or a top blur', async barEdge => {
+    h.insets = { top: 0, right: barEdge === 'right' ? 59 : 0, bottom: 0, left: barEdge === 'left' ? 59 : 0 };
+    const geometry = { width: 1000, height: 800, insets: h.insets,
+      regularWidth: true, regularHeight: true, barEdge, regions: [], reservedRegionsSupported: false };
     h.chat = { pending: [], ...h.chat, state: { kind: 'ready', group: group() } };
     await act(async () => root.render(el(GeometryContext.Provider, { value: geometry },
       el(BotGroupChatScreen, { deviceId: 'mac', deviceName: 'Mac', groupId: 'g1' }))));
@@ -507,6 +515,35 @@ describe('group timeline', () => {
     expect(byId('botGroup.back')).toBeNull();
     expect(byId('botGroup.settingsButton')).toBeNull();
     expect(h.screenOptions.at(-1)?.headerTitle).toBe(group().name);
+    expect(byId('headerBlur')).toBeNull();
+    expect(h.scroll.scrollIndicatorInsets.top).toBe(0);
+  });
+
+  // Vertical navigation can still have in-page chrome. Its measured height must
+  // match both blur and content clearance, then return to zero when dismissed.
+  it.each(['offline notice', 'image selection'] as const)('sizes Duo blur to the %s and removes it afterwards', async content => {
+    vi.useFakeTimers();
+    h.insets = { top: 0, right: 59, bottom: 0, left: 0 };
+    const geometry = { width: 1000, height: 800, insets: h.insets,
+      regularWidth: true, regularHeight: true, barEdge: 'right' as const, regions: [], reservedRegionsSupported: false };
+    h.chat = { pending: [], ...h.chat, state: { kind: 'ready', group: group() }, online: content !== 'offline notice' };
+    const screen = () => act(async () => root.render(el(GeometryContext.Provider, { value: geometry },
+      el(BotGroupChatScreen, { deviceId: 'mac', deviceName: 'Mac', groupId: 'g1' }))));
+    await screen();
+    if (content === 'offline notice') await act(async () => { await vi.advanceTimersByTimeAsync(3_000); });
+    else await act(async () => shareSelectionStore.enter('bot-group:owner:1:mac:g1:main', 'm1'));
+    let header = byId(content === 'offline notice' ? 'botGroup.offlineNote' : 'session.shareImage.selectAll') as HTMLElement & { nativeLayout?: (event: unknown) => void };
+    expect(header).not.toBeNull();
+    while (!header.nativeLayout) header = header.parentElement as typeof header;
+    const height = content === 'offline notice' ? 24 : 44;
+    await act(async () => header.nativeLayout!({ nativeEvent: { layout: { height } } }));
+    expect(Number(byId('headerBlur')!.dataset.height)).toBe(height);
+    expect(h.scroll.scrollIndicatorInsets.top).toBe(height);
+    if (content === 'offline notice') { h.chat.online = true; await screen(); }
+    else await act(async () => shareSelectionStore.exit());
+    await act(async () => header.nativeLayout!({ nativeEvent: { layout: { height: 0 } } }));
+    expect(byId('headerBlur')).toBeNull();
+    expect(h.scroll.scrollIndicatorInsets.top).toBe(0);
   });
 
   it('waits for measured tail positioning before acknowledging replies, including new snapshots', async () => {
