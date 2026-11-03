@@ -87,7 +87,8 @@ const BLOCKS: Record<keyof typeof UI_MOCK_PR_CARD_IDS, unknown[]> = {
             "id": "link:0",
             "label": "#42 登录页表单随窗口收缩",
             "url": "https://github.com/cindy-demo/web/pull/42",
-            "disabled": false
+            "disabled": false,
+            "prState": "draft"
           },
           {
             "id": "prui:settings",
@@ -126,7 +127,8 @@ const BLOCKS: Record<keyof typeof UI_MOCK_PR_CARD_IDS, unknown[]> = {
             "id": "link:0",
             "label": "#42 登录页表单随窗口收缩",
             "url": "https://github.com/cindy-demo/web/pull/42",
-            "disabled": false
+            "disabled": false,
+            "prState": "open"
           },
           {
             "id": "prui:settings",
@@ -195,7 +197,8 @@ const BLOCKS: Record<keyof typeof UI_MOCK_PR_CARD_IDS, unknown[]> = {
             "id": "link:0",
             "label": "#42 登录页表单随窗口收缩",
             "url": "https://github.com/cindy-demo/web/pull/42",
-            "disabled": false
+            "disabled": false,
+            "prState": "merged"
           }
         ]
       }

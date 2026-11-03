@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { prStatusItemKeys, type PrStatusResult } from "@cindy/maker-shared";
+import { prStatusItemKeys, type PrStatusKind, type PrStatusResult } from "@cindy/maker-shared";
 import {
   parseGhostCardForm,
   parseMailCard,
@@ -63,7 +63,8 @@ import { pickMobileMailAttachment } from "./mobileMailAttachment";
 import { PluginCardRecipients } from "./PluginCardRecipients";
 import { invokePlugin } from "./pluginClient";
 import { FileTypeIcon } from '@/components/FileTypeIcon';
-import { ExternalLink, Github } from 'lucide-react-native';
+import { ExternalLink } from 'lucide-react-native';
+import { prStatusVisual } from '@/session/prStatusVisual';
 import { formatByteSize } from '@cindy/maker-shared/file-preview';
 
 interface Action {
@@ -76,7 +77,10 @@ interface Action {
   /** Rich hints from hosts that honour `plugin-card-rich`. */
   primary?: boolean;
   toggle?: { on: boolean; title: string; hint?: string };
+  /** The linked PR's current state (desktop hosts that know the task's PRs). */
+  prState?: PrStatusKind;
 }
+const PR_STATES: readonly PrStatusKind[] = ["open", "draft", "merged", "closed"];
 interface PrStatusSlot { key: string; fallback: string[]; status?: Extract<PrStatusResult, { ok: true }> }
 
 function isCount(value: unknown): value is number {
@@ -141,6 +145,7 @@ function parse(value: unknown): {
       (item.submit === undefined || typeof item.submit === "boolean") &&
       (item.url === undefined || typeof item.url === "string") &&
       (item.primary === undefined || typeof item.primary === "boolean") &&
+      (item.prState === undefined || PR_STATES.includes(item.prState)) &&
       (item.toggle === undefined || (typeof item.toggle === "object" && item.toggle !== null &&
         typeof item.toggle.on === "boolean" && typeof item.toggle.title === "string" && item.toggle.title.length <= 200 &&
         (item.toggle.hint === undefined || (typeof item.toggle.hint === "string" && item.toggle.hint.length <= 400)))),
@@ -231,6 +236,10 @@ function CardControls({
   const lines = compact && text ? text.split("\n").map((line) => line.trim()).filter(Boolean) : [];
   const titleLink = lines.length ? items.find((action) => action.url && !action.disabled && action.label === lines[0]) : undefined;
   const titleHost = titleLink?.url ? linkHost(titleLink.url) : undefined;
+  // A PR link leads with the app's own PR icon in its status colour (as on the home task row);
+  // other links end with a quiet external-link mark.
+  const titlePr = titleLink?.url && /^https:\/\/(?:www\.)?github\.com\/[^/]+\/[^/]+\/pull\/\d+/.test(titleLink.url)
+    ? prStatusVisual(titleLink.prState ?? prStatus.find((slot) => slot.status)?.status?.status ?? null, colors) : undefined;
   const buttons = (history ? [] : items).filter((action) => !action.toggle && action !== titleLink);
   const { getAccessToken } = useAuth();
   const readonly = history || ['sent', 'sending', 'unconfirmed', 'deleting', 'deleted'].includes(mail?.state ?? '');
@@ -574,11 +583,9 @@ function CardControls({
               onPress={() => choose(titleLink)}
               style={({ pressed }) => [styles.titleRow, pressed && styles.pressed]}
             >
-              {titleHost === "github.com" ? (
-                <Github size={iconSize.md} strokeWidth={iconStroke.thin} color={colors.textSecondary} style={styles.titleMark} />
-              ) : null}
-              <Text style={[styles.cardTitle, styles.titleText, styles.titleLink, { textDecorationColor: colors.textTertiary }]}>{lines[0]}</Text>
-              {titleHost !== "github.com" ? (
+              {titlePr ? <titlePr.Icon size={iconSize.md} strokeWidth={iconStroke.regular} color={titlePr.color} style={styles.titleMark} /> : null}
+              <Text style={[styles.cardTitle, styles.titleText]}>{lines[0]}</Text>
+              {!titlePr ? (
                 <ExternalLink size={iconSize.sm} strokeWidth={iconStroke.thin} color={colors.textTertiary} style={styles.titleIcon} />
               ) : null}
             </Pressable>
@@ -917,9 +924,7 @@ const makeStyles = (c: ThemeColors) =>
     cardTitle: { color: c.textPrimary, fontSize: typeScale.body, lineHeight: lineHeight.body, fontWeight: fontWeight.semibold },
     titleRow: { flexDirection: "row", alignItems: "flex-start", alignSelf: "flex-start", maxWidth: "100%", gap: 6 },
     titleText: { flexShrink: 1 },
-    // Underline = tappable in chat text (DESIGN.md); GitHub pages carry the GitHub mark, other
-    // addresses a quiet "opens outside the app" mark. Marks are centred on the first line.
-    titleLink: { textDecorationLine: "underline" },
+    // Marks are centred on the title's first line.
     titleMark: { marginTop: (lineHeight.body - iconSize.md) / 2 },
     titleIcon: { marginTop: (lineHeight.body - iconSize.sm) / 2 },
     pressed: { opacity: 0.72 },

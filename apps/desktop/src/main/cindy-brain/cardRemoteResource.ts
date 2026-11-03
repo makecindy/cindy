@@ -4,7 +4,7 @@ import type { GhostCardRow } from './cardService.js';
 import { createHash } from 'node:crypto';
 import { REMOTE_RESOURCE_CHANGED_CHANNEL, type RemoteResourceBlock } from '@cindy/device-link';
 import { managedToolMediaKind } from '@cindy/maker-shared/payload-summary';
-import type { PrStatusResult } from '@cindy/maker-shared';
+import type { PrStatusKind, PrStatusResult } from '@cindy/maker-shared';
 import { getGhostCard, upsertGhostCard, type GhostCardRecord } from './cardStoreDb.js';
 import { assertRemoteBotInvocationAllowed } from '../device-link/remoteBotSessionBoundary.js';
 import { remoteResourceRegistry, RemoteResourceRegistryError, type RemoteResourceProvider } from '../device-link/remoteResourceRegistry.js';
@@ -166,6 +166,14 @@ export interface RemotePluginCardAction {
   /** Phone hints (only for `plugin-card-rich` clients). */
   primary?: true;
   toggle?: { on: boolean; title: string; hint?: string };
+  /** A link to one of this task's GitHub PRs: its current state, from the title bar's status. */
+  prState?: PrStatusKind;
+}
+
+/** owner/repo#N key for a GitHub pull request page, matching `data-ghost-pr-status`. */
+function githubPrKey(url: string): string | undefined {
+  const m = /^https:\/\/(?:www\.)?github\.com\/([A-Za-z0-9_.-]+)\/([A-Za-z0-9_.-]+)\/pull\/(\d+)(?:[/?#]|$)/.exec(url);
+  return m ? `${m[1].toLowerCase()}/${m[2].toLowerCase()}#${Number(m[3])}` : undefined;
 }
 /** Input is already sanitizer-owned HTML. Only declared inert controls are projected. */
 export function projectGhostCardActions(
@@ -243,10 +251,16 @@ export function createGhostCardRemoteProvider(deps: {
         const status = await deps.prStatus?.(card.sessionId!, slot.key).catch(() => undefined);
         return { ...slot, ...(status?.ok ? { status } : {}) };
       })) : undefined;
+      const items = obsolete ? [] : await Promise.all(projectGhostCardActions(card.html, externalLinks, rich).map(async (action) => {
+        const prKey = rich && action.url ? githubPrKey(action.url) : undefined;
+        const status = prKey ? await deps.prStatus?.(card.sessionId!, prKey).catch(() => undefined) : undefined;
+        const next = action.submit && !supportsForms ? { ...action, disabled: true } : action;
+        return status?.ok ? { ...next, prState: status.status } : next;
+      }));
       if (deps.interactions && request.client.primitives.includes('plugin-card-actions')) blocks.push({
         id: 'actions', primitive: 'plugin-card-actions', fallbackMarkdown: '',
         data: { pluginId: card.ghostId, revision, mail, legacyMail, mailUpload: supportsForms && !!mailUploadAction(card.html), changeAction: supportsForms && !obsolete ? readGhostCardFormChange(card.html) : undefined, form: supportsForms ? readGhostCardForm(card.html) : null,
-          items: obsolete ? [] : projectGhostCardActions(card.html, externalLinks, rich).map(action => action.submit && !supportsForms ? { ...action, disabled: true } : action),
+          items,
           ...(rich?.live ? { live: rich.live } : {}),
           ...(prStatus?.length ? { prStatus } : {}) },
       });

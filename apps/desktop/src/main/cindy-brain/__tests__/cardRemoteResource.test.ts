@@ -287,6 +287,8 @@ describe('plugin-card-rich projection', () => {
     const { text, data } = await read(['plugin-card-actions', 'plugin-card-forms', 'plugin-card-rich'], lookup);
     expect(text).toBe('#9 Fix login');
     expect(lookup).toHaveBeenCalledWith('s', 'o/r#9');
+    // The PR link carries the PR's state so the phone can mark the title with the app's PR icon.
+    expect((data.items as Array<Record<string, unknown>>)[0]).toMatchObject({ id: 'link:0', prState: 'open' });
     expect(data).toMatchObject({ live: '跟进中', prStatus: [{ key: 'o/r#9', fallback: ['CI 运行中', '等待合并'], status }] });
     expect((data.items as Array<Record<string, unknown>>).slice(1)).toEqual([
       { id: 'pr:ready', label: '转为正式 PR', disabled: false, primary: true },
