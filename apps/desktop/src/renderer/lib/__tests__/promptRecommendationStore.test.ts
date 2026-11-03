@@ -300,6 +300,20 @@ describe('promptRecommendationStore', () => {
     expect(__testing.getSessionSnapshot('session-a')).toBeUndefined();
   });
 
+  it('同一会话新一轮进行中不暴露上一轮的推荐', () => {
+    h.statusBySession.set('session-a', ELIGIBLE);
+    complete('session-a', 601);
+    const seq = beginPromptRecommendationPrediction('session-a', 601)!;
+    resolvePromptRecommendationPrediction('session-a', 601, seq, '上一轮的推荐');
+    expect(__testing.getSessionSnapshot('session-a')?.prompt).toBe('上一轮的推荐');
+
+    // 另一个窗口 / 远端开始了新一轮：running 边沿清掉 entry，保留值也不能露出来。
+    h.startedAtBySession.set('session-a', 700);
+    __testing.applyRunningSnapshot(new Map([['session-a', { isRunning: true }]]));
+
+    expect(__testing.getSessionSnapshot('session-a')).toBeUndefined();
+  });
+
   it('新一轮完成后旧文案作废，不把上一轮推荐带进新轮', () => {
     h.statusBySession.set('session-a', ELIGIBLE);
     complete('session-a', 601);

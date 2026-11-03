@@ -313,7 +313,13 @@ function getSessionSnapshot(
   sessionId: string | undefined,
 ): PromptRecommendationSnapshot | undefined {
   if (!sessionId) return undefined;
-  return entries.get(sessionId) ?? retainedSnapshot(sessionId);
+  const current = entries.get(sessionId);
+  if (current) return current;
+  // 同一会话已经开始了下一轮（另一窗口 / 远端 / 队列续跑）：上一轮的文案必须隐藏，
+  // 否则忙碌期间输入框仍可 Tab / 点击接受过期推荐。等本轮完成通知到达后自然恢复。
+  if (runningSessionIds.has(sessionId)) return undefined;
+  if (pendingCompletionRevisions.has(sessionId)) return undefined;
+  return retainedSnapshot(sessionId);
 }
 
 /** 当前 session 的推荐状态；切换 session 时同步读取对应 key，不携带上一 session state。 */
