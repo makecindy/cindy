@@ -335,7 +335,7 @@ describe('model advanced editor', () => {
 
   // #7258: selecting Responses first must not leave a generated route that
   // survives refresh and blocks Pi's Messages /v1 endpoint correction.
-  it('keeps a Pi Responses then Messages selection free of a generated route', async () => {
+  it.each(['openai-chat', 'anthropic-messages'] as const)('avoids generated Pi %s routes on refresh', async (wireProtocol) => {
     const update = vi.fn(async (...args: unknown[]) => {
       void args;
       return { ok: true };
@@ -343,7 +343,7 @@ describe('model advanced editor', () => {
     const previous = window.electronAPI;
     Object.defineProperty(window, 'electronAPI', { configurable: true, value: { maker: { updateCustomProvider: update } } });
     const source = { ...buildUserProvider({ id: 'mixed-gateway', name: 'Mixed Gateway', runtimes: {
-      pi: { baseUrl: 'https://gateway.example/v1', wireProtocol: 'openai-chat',
+      pi: { baseUrl: 'https://gateway.example/v1', wireProtocol,
         models: [{ id: 'messages-model', name: 'Messages Model' }] },
     } }), connected: true } as ProviderView;
     try {
@@ -354,7 +354,8 @@ describe('model advanced editor', () => {
       fireEvent.click(await screen.findByRole('menuitemradio', { name: 'Responses' }));
       await waitFor(() => expect(update).toHaveBeenCalledTimes(1));
       const responsesConfig = update.mock.calls[0]![0] as Parameters<typeof buildUserProvider>[0];
-      expect(responsesConfig.runtimes.pi!.models[0]!.api).toBe('openai-responses');
+      expect(responsesConfig.runtimes.pi!.models[0]).toEqual({ id: 'messages-model', name: 'Messages Model',
+        api: 'openai-responses', piApi: 'openai-responses' });
 
       cleanup();
       const refreshed = { ...buildUserProvider(responsesConfig), connected: true } as ProviderView;
