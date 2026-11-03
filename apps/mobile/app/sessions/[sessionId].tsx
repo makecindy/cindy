@@ -66,6 +66,7 @@ import {
   List,
   ListTodo,
   Monitor,
+  Smartphone,
   Menu,
   MessagesSquare,
   Mic,
@@ -87,6 +88,8 @@ import {
 } from 'expo-audio';
 import { renderConversationShareHtmlToPng } from 'xdt-screenshot-monitor';
 import { Stack, useFocusEffect, useIsFocused, useLocalSearchParams, useNavigation, useRouter } from 'expo-router';
+import { useTaskLiveScreens } from '@/remote-desktop/useTaskLiveScreens';
+import { liveScreenParam } from '@/remote-desktop/liveScreen';
 import { forwardRef, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type ReactNode, type RefObject, type SetStateAction } from 'react';
 import {
   ActivityIndicator,
@@ -3242,6 +3245,21 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
   // 前进导航防连点:快速双击「新建」会把 /sessions/new 压栈两层(返回要退两次),
   // 与首页各入口同一把 guardedPush 锁。
   const guardedPush = useGuardedPush();
+  // 电脑侧边栏里手机能打开的入口:插件实时屏幕(如模拟器)，绑定本任务且在运行的。
+  const liveScreensFocused = useIsFocused();
+  const taskLiveScreens = useTaskLiveScreens(
+    deviceId,
+    sessionId,
+    liveScreensFocused && !!currentSession && currentSession.orcaRole !== 'worker'
+      && currentSession.source !== 'side-chat',
+  );
+  const openTaskLiveScreen = (screen: (typeof taskLiveScreens)[number]) => {
+    if (!deviceId) return;
+    guardedPush({
+      pathname: '/devices/desktop/[deviceId]',
+      params: { deviceId, deviceName, liveScreen: liveScreenParam(screen) },
+    });
+  };
   const homeNewSessionActionRef = newSessionActionRef;
   const handleDrawerNewSession = useCallback(() => {
     if (homeNewSessionActionRef.current) { homeNewSessionActionRef.current(); return; }
@@ -10292,6 +10310,10 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
                   params: { deviceId, deviceName },
                 });
               }}
+              liveScreen={taskLiveScreens[0] ? {
+                label: taskLiveScreens[0].name,
+                onPress: () => openTaskLiveScreen(taskLiveScreens[0]),
+              } : undefined}
               onToggleSearch={() => {
                 if (searchOpen) closeSearch();
                 else setSearchOpen(true);
@@ -10385,6 +10407,36 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
         <MountOnFirstOpen open={settingsOpen}>{() =>
               currentSession ? (
           <SessionMenuSheet
+            openEntries={currentSession && deviceId ? [
+              {
+                id: 'remoteDesktop',
+                label: t('remoteDesktop.title'),
+                icon: Monitor,
+                onPress: () => {
+                  setSettingsOpen(false);
+                  guardedPush({ pathname: '/devices/desktop/[deviceId]', params: { deviceId, deviceName } });
+                },
+              },
+              ...taskLiveScreens.map((screen) => ({
+                id: `screen-${screen.plugin}-${screen.id}`,
+                label: screen.name,
+                icon: Smartphone,
+                onPress: () => {
+                  setSettingsOpen(false);
+                  openTaskLiveScreen(screen);
+                },
+              })),
+              {
+                id: 'files',
+                label: t('session.presentation.overview.actions.files.a11y'),
+                icon: Folder,
+                disabled: !currentSession.workingDir,
+                onPress: () => {
+                  setSettingsOpen(false);
+                  guardedPush({ pathname: '/files/[sessionId]', params: { sessionId, deviceId, deviceName } });
+                },
+              },
+            ] : undefined}
             onOpenSideChats={canUseSideChats ? () => {
               setSideChatsPendingOpen(true);
               setSettingsOpen(false);
@@ -11667,6 +11719,7 @@ function SessionHeaderBar({
   onOpenSettings,
   onOpenUsage,
   onOpenRemoteDesktop,
+  liveScreen,
   onTitleDoubleTap,
   onToggleSearch,
   pendingCount,
@@ -11700,6 +11753,11 @@ function SessionHeaderBar({
   onOpenSettings(): void;
   onOpenUsage(): void;
   onOpenRemoteDesktop(): void;
+  /**
+   * 电脑侧边栏里第一个手机能打开的入口(本任务在运行的模拟器等);有它时占第二个位置,
+   * 文件移到「更多 → 打开」。远程桌面始终在最左。
+   */
+  liveScreen?: { label: string; onPress(): void };
   /** 双击标题直接打开重命名;不可重命名时不传。 */
   onTitleDoubleTap?: () => void;
   onToggleSearch(): void;
@@ -11732,7 +11790,7 @@ function SessionHeaderBar({
   const workerHeader = currentSession?.orcaRole === 'worker' || currentSession?.source === 'side-chat';
   const headerActions = (actionProjection?.primaryActions ?? [])
     .filter((action) => action.id === 'files');
-  const visibleHeaderActions = workerHeader ? [] : headerActions;
+  const visibleHeaderActions = workerHeader || liveScreen ? [] : headerActions;
   const actionHandlers = {
     files: onOpenFiles,
     queue: () => undefined,
@@ -11801,6 +11859,7 @@ function SessionHeaderBar({
             filesLabel={t('session.presentation.overview.actions.files.a11y')}
             moreLabel={t('session.menu.details')} files={files} detailsOnly={workerHeader}
             onDetails={onOpenSettings} onDesktop={onOpenRemoteDesktop}
+            screen={liveScreen}
             onAction={(id) => actionHandlers[id]()} />
         </Stack.Toolbar.View>
       </Stack.Toolbar>
@@ -11834,7 +11893,10 @@ function SessionHeaderBar({
             <Stack.Toolbar.Button icon={require('../../assets/navigation/monitor.png')} iconRenderingMode="template"
           accessibilityLabel={t('remoteDesktop.title')} disabled={!currentSession} onPress={onOpenRemoteDesktop} />
           )}
-        {workerHeader ? null : (
+        {workerHeader ? null : liveScreen ? (
+            <Stack.Toolbar.Button icon="iphone" accessibilityLabel={liveScreen.label}
+              disabled={!currentSession} onPress={liveScreen.onPress} />
+          ) : (
             <Stack.Toolbar.Button icon={require('../../assets/navigation/folder.png')} iconRenderingMode="template"
           accessibilityLabel={t('session.presentation.overview.actions.files.a11y')}
           disabled={!currentSession || !overview?.actions.some(
@@ -11905,6 +11967,7 @@ function SessionHeaderBar({
           detailsOnly={workerHeader}
           onDetails={onOpenSettings}
           onDesktop={onOpenRemoteDesktop}
+          screen={liveScreen}
           onAction={(id) => actionHandlers[id]()}
         />
       ) : (
@@ -11919,6 +11982,16 @@ function SessionHeaderBar({
             testID="session.remoteDesktop"
           />
         )}
+        {liveScreen && !workerHeader ? (
+          <SessionHeaderIconButton
+            accessibilityLabel={liveScreen.label}
+            active={false}
+            disabled={!currentSession}
+            icon={Smartphone}
+            onPress={currentSession ? liveScreen.onPress : undefined}
+            testID="session.liveScreen"
+          />
+        ) : null}
         {visibleHeaderActions.map((action) => (
           <SessionHeaderIconButton
             accessibilityHint={action.disabledReason ?? undefined}
