@@ -11527,7 +11527,8 @@
         "source": {
           "label": "So verbindest du dich",
           "existing": "Den bereits in Cindy eingerichteten Bot verwenden",
-          "manual": "Neuen Bot per QR-Code erstellen",
+          "manual": "Neue Zugangsdaten eingeben",
+          "manualFeishu": "Neuen Bot per QR-Code erstellen",
           "moveNote": "Der Bot wird aus Einstellungen → IM-Bots verschoben; dieser Bereich bleibt leer. Seine Chats werden mit {{name}} fortgesetzt."
         }
       },

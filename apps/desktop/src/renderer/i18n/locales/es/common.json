@@ -11622,7 +11622,8 @@
         "source": {
           "label": "Cómo conectar",
           "existing": "Usar el bot ya configurado en Cindy",
-          "manual": "Crear un bot nuevo con código QR",
+          "manual": "Ingresar nuevas credenciales",
+          "manualFeishu": "Crear un bot nuevo con código QR",
           "moveNote": "El bot se retira de Configuración → Bots de mensajería instantánea, que quedará vacío. Sus chats continúan con {{name}}."
         }
       },

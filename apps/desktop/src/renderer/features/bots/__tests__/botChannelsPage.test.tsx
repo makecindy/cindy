@@ -531,7 +531,9 @@ describe('BotChannelsPage', () => {
     const existing = await within(dialog).findByRole('radio', { name: /bots\.channels\.add\.source\.existing/ });
     // 默认复用设置页的机器人: 不出现扫码入口。
     expect(within(dialog).queryByRole('button', { name: 'settings.feishuBot.qr.begin' })).toBeNull();
-    fireEvent.click(within(dialog).getByRole('radio', { name: 'bots.channels.add.source.manual' }));
+    fireEvent.click(
+      within(dialog).getByRole('radio', { name: 'bots.channels.add.source.manualFeishu' }),
+    );
     expect(within(dialog).getByRole('button', { name: 'settings.feishuBot.qr.begin' })).toBeTruthy();
     expect(within(dialog).queryByLabelText('bots.channels.add.feishu.appSecretLabel')).toBeNull();
     fireEvent.click(existing);

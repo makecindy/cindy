@@ -11527,7 +11527,8 @@
         "source": {
           "label": "How to connect",
           "existing": "Use the bot already set up in Cindy",
-          "manual": "Create a new bot by QR code",
+          "manual": "Enter new credentials",
+          "manualFeishu": "Create a new bot by QR code",
           "moveNote": "The bot moves out of Settings → IM bots, which will be left empty. Its chats continue with {{name}}."
         }
       },

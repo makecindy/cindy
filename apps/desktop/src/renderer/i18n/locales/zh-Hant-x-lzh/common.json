@@ -11481,7 +11481,8 @@
         "source": {
           "label": "連線之法",
           "existing": "用已於 Cindy 設置之機器人",
-          "manual": "掃碼新立機器人",
+          "manual": "填新憑證",
+          "manualFeishu": "掃碼新立機器人",
           "moveNote": "此機器人將自 規制 → IM 機器人 移來，彼處將空；原有私訊與群組改由 {{name}} 接續回覆。"
         }
       },

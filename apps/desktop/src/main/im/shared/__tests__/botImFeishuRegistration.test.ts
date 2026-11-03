@@ -130,10 +130,11 @@ describe('伙伴飞书扫码授权会话', () => {
       .fn()
       .mockResolvedValueOnce({ status: 'pending', tenantBrand: 'lark' })
       .mockResolvedValue({ status: 'pending' });
+    // 即使用户选的是 Lark, 首轮也必须先问飞书端点(device_code 由飞书签发)。
     const { started } = setup(
       poll,
       vi.fn(async () => undefined),
-      'feishu',
+      'lark',
     );
 
     await expect(started).resolves.toMatchObject({ ok: true });

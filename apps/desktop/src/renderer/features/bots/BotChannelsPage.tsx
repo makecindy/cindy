@@ -930,7 +930,11 @@ function BotChannelAddDialog({
                     <SourceOption
                       checked={!useExisting}
                       disabled={busy}
-                      title={t('bots.channels.add.source.manual')}
+                      title={t(
+                        channel === 'feishu'
+                          ? 'bots.channels.add.source.manualFeishu'
+                          : 'bots.channels.add.source.manual',
+                      )}
                       onSelect={() => setSource('manual')}
                     />
                   ) : null}

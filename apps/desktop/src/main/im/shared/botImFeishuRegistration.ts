@@ -92,7 +92,8 @@ async function poll(
 
   const deadline = Date.now() + begin.expiresIn * 1000;
   let interval = Math.max(begin.interval, 1);
-  let service = options.service;
+  // device_code 一律由飞书端点签发: 必须先在飞书轮询, 收到 tenantBrand 后再切 Lark。
+  let pollBrand: 'feishu' | 'lark' = 'feishu';
   let immediate = false;
 
   while (Date.now() < deadline && isCurrent()) {
@@ -104,7 +105,7 @@ async function poll(
 
     let result: FeishuAppRegistrationPoll;
     try {
-      result = await options.poll(service, begin.deviceCode, interval);
+      result = await options.poll(pollBrand, begin.deviceCode, interval);
     } catch (err) {
       finish({ status: 'error', runId: id, error: messageOf(err) });
       return;
@@ -112,8 +113,8 @@ async function poll(
     if (!isCurrent()) return;
 
     const discovered = result.status === 'success' ? result.result.tenantBrand : result.tenantBrand;
-    if (service === 'feishu' && discovered === 'lark') {
-      service = 'lark';
+    if (pollBrand === 'feishu' && discovered === 'lark') {
+      pollBrand = 'lark';
       immediate = true;
       continue;
     }
@@ -134,7 +135,7 @@ async function poll(
       }
       try {
         await options.commit(
-          { ...result.result, tenantBrand: result.result.tenantBrand ?? service },
+          { ...result.result, tenantBrand: result.result.tenantBrand ?? pollBrand },
           isCurrent,
         );
       } catch (err) {

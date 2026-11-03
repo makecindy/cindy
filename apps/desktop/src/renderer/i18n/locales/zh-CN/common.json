@@ -11481,7 +11481,8 @@
         "source": {
           "label": "连接方式",
           "existing": "使用已在 Cindy 设置的机器人",
-          "manual": "扫码新建机器人",
+          "manual": "填写新的凭证",
+          "manualFeishu": "扫码新建机器人",
           "moveNote": "这个机器人会从 设置 → IM 机器人 移过来，那里将变为空；原来的私聊和群聊改由 {{name}} 接着回复。"
         }
       },
