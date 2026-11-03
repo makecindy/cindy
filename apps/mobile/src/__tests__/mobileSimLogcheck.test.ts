@@ -243,7 +243,10 @@ describe("incomplete Metro log", () => {
       expect(first).not.toBeNull();
       expect(dirname(first!)).not.toBe(dirname(second!));
       expect(relative(tmpdir(), first!).startsWith("..")).toBe(false);
-      expect(statSync(dirname(first!)).mode & 0o777).toBe(0o700);
+      // POSIX permission bits only; Windows reports synthetic modes and protects temp dirs by ACL.
+      if (process.platform !== "win32") {
+        expect(statSync(dirname(first!)).mode & 0o777).toBe(0o700);
+      }
       expect(readFileSync(first!, "utf8")).not.toContain("Bundled");
     } finally {
       removeMetroLog(first);
