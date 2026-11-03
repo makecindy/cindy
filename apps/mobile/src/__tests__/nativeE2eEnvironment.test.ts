@@ -34,8 +34,8 @@ describe('native e2e environment', () => {
       pid: 4242,
       once: (event: string, callback: () => void) => { if (event === 'exit') exitCallbacks.push(callback); },
       on: vi.fn(),
-      kill: vi.fn(),
     };
+    const terminateMetro = vi.fn(async () => true);
     const spawn = vi.fn(() => child);
     const writeMetroOwner = vi.fn(() => {
       if (mode === 'owner-write-fails') throw new Error('EACCES');
@@ -53,7 +53,7 @@ describe('native e2e environment', () => {
       resolvePnpmInvocation: () => ({ command: 'pnpm', args: [] }),
       usablePnpmExecPath: () => undefined, existsSync: () => false,
       mobileDir: '/repo/apps/mobile', worktreeRoot: '/repo', buildEnv: {}, region: 'global',
-      prepareMetroLog, removeMetroLog, metroLogEnv: (path: string) => ({ CINDY_METRO_LOG_PATH: path }),
+      prepareMetroLog, removeMetroLog, terminateMetro, metroLogEnv: (path: string) => ({ CINDY_METRO_LOG_PATH: path }),
       branch: 'test', commit: 'test', sourceIdentity: 'test@123',
       loginScenario: 'providers:email-only', envFingerprint: 'fixture',
     });
@@ -68,7 +68,8 @@ describe('native e2e environment', () => {
     } else if (mode === 'owner-write-fails') {
       // Review #8560: without an owner record nothing can claim this Metro, so stop it and drop its log.
       await expect(execution).rejects.toThrow('exit:1');
-      expect(child.kill).toHaveBeenCalledOnce();
+      // Review #8560: on Windows the child is only the pnpm/cmd wrapper, so stop the whole tree.
+      expect(terminateMetro).toHaveBeenCalledWith(4242, { worktreeRoot: '/repo' });
       expect(removeMetroLog).toHaveBeenCalledWith('/repo/apps/mobile/logs/metro-8082.log');
       expect(exitCallbacks).toHaveLength(1);
     } else {

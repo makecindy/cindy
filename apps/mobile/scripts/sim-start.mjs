@@ -231,9 +231,12 @@ if (Number.isInteger(child.pid)) {
     });
   } catch (error) {
     // 没有归属记录,whoami / logcheck 都认不出这个 Metro;停掉它,不留无人认领的进程和日志。
-    console.error(`✗ 无法写入 Metro 归属记录,已停止 Metro: ${error.message}`);
-    child.kill();
+    // Windows 上 child 只是 pnpm/cmd 外壳,沿用接管时的整树终止,并等它真正停下。
+    const stopped = await terminateMetro(child.pid, { worktreeRoot });
     removeMetroLog(metroLog);
+    console.error(stopped
+      ? `✗ 无法写入 Metro 归属记录,已停止 Metro: ${error.message}`
+      : `✗ 无法写入 Metro 归属记录,且未能在限定时间内停止 Metro(pid=${child.pid}): ${error.message}`);
     process.exit(1);
   }
 }
