@@ -43,7 +43,7 @@ describe('native e2e environment', () => {
     const clearMetroOwner = vi.fn();
     const portInUse = vi.fn(async () => occupied);
     const error = vi.fn();
-    const prepareMetroLog = vi.fn((_dir: string, _port: number, _info: { launch: string }) => '/repo/apps/mobile/logs/metro-8082.log');
+    const prepareMetroLog = vi.fn((_port: number, _info: { source: string; region: string }) => '/tmp/cindy-metro-log-x/metro-8082.log');
     const removeMetroLog = vi.fn();
     const execution = runInNewContext(`(async () => { ${source.slice(start)} })()`, {
       DEFAULT_PORT: 8081, portArgs: { port: 8082, passthrough: [] }, portInUse,
@@ -70,21 +70,20 @@ describe('native e2e environment', () => {
       await expect(execution).rejects.toThrow('exit:1');
       // Review #8560: on Windows the child is only the pnpm/cmd wrapper, so stop the whole tree.
       expect(terminateMetro).toHaveBeenCalledWith(4242, { worktreeRoot: '/repo' });
-      expect(removeMetroLog).toHaveBeenCalledWith('/repo/apps/mobile/logs/metro-8082.log');
+      expect(removeMetroLog).toHaveBeenCalledWith('/tmp/cindy-metro-log-x/metro-8082.log');
       expect(exitCallbacks).toHaveLength(1);
     } else {
       await execution;
       expect(spawn).toHaveBeenCalledOnce();
       expect(spawn).toHaveBeenCalledWith(expect.anything(), expect.anything(), expect.objectContaining({
-        env: expect.objectContaining({ CINDY_METRO_LOG_PATH: '/repo/apps/mobile/logs/metro-8082.log' }),
+        env: expect.objectContaining({ CINDY_METRO_LOG_PATH: '/tmp/cindy-metro-log-x/metro-8082.log' }),
       }));
-      const launch = prepareMetroLog.mock.calls[0]?.[2]?.launch;
-      expect(launch).toEqual(expect.any(String));
-      expect(writeMetroOwner).toHaveBeenCalledWith(8082, expect.objectContaining({ pid: 4242, metroLogLaunch: launch }));
+      // logcheck finds the log only through the owner record of this launch.
+      expect(writeMetroOwner).toHaveBeenCalledWith(8082, expect.objectContaining({ pid: 4242, metroLogPath: '/tmp/cindy-metro-log-x/metro-8082.log' }));
       for (const callback of exitCallbacks) callback();
       expect(clearMetroOwner).toHaveBeenCalledWith(8082, 4242);
       // Review #8560: the raw log may carry credentials, so it goes away with its Metro.
-      expect(removeMetroLog).toHaveBeenCalledWith('/repo/apps/mobile/logs/metro-8082.log');
+      expect(removeMetroLog).toHaveBeenCalledWith('/tmp/cindy-metro-log-x/metro-8082.log');
     }
     expect(portInUse).toHaveBeenCalledWith(8082);
   });

@@ -26,6 +26,17 @@ function discardLog(logPath, fsImpl, fd = null) {
   }
 }
 
+// writeSync 在配额或磁盘将满时可能只写进一部分而不报错,写不完整就当作失败。
+function writeAll(fd, chunk, fsImpl) {
+  const bytes = Buffer.from(chunk);
+  let offset = 0;
+  while (offset < bytes.length) {
+    const written = fsImpl.writeSync(fd, bytes, offset, bytes.length - offset);
+    if (!(written > 0)) throw new Error("short write");
+    offset += written;
+  }
+}
+
 function installTee({ logPath, streams, fsImpl = fs, onExit }) {
   let fd = null;
   try {
@@ -40,10 +51,7 @@ function installTee({ logPath, streams, fsImpl = fs, onExit }) {
     stream.write = function teeWrite(chunk, ...rest) {
       if (!broken) {
         try {
-          fsImpl.writeSync(
-            fd,
-            typeof chunk === "string" ? chunk : Buffer.from(chunk),
-          );
+          writeAll(fd, chunk, fsImpl);
         } catch {
           broken = true;
           discardLog(logPath, fsImpl, fd);

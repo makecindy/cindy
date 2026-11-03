@@ -9,12 +9,7 @@
 import { existsSync, readFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import {
-  analyzeMetroLog,
-  isLogFromLaunch,
-  logcheckExitCode,
-  metroLogPath,
-} from "./lib/sim-logcheck.mjs";
+import { analyzeMetroLog, logcheckExitCode } from "./lib/sim-logcheck.mjs";
 import {
   classifySimMetroListener,
   extractSimMetroPortArgs,
@@ -31,12 +26,6 @@ function inconclusive(message) {
   process.exit(2);
 }
 
-const logPath = metroLogPath(mobileDir, port);
-if (!existsSync(logPath)) {
-  inconclusive(
-    `没有 ${logPath}。请用 pnpm mobile:sim:start 启动 Metro 后再检查。`,
-  );
-}
 const ownership = probeMetroOwnership(port);
 const listener = classifySimMetroListener({
   cwd: ownership?.cwd ?? null,
@@ -49,16 +38,22 @@ if (!listener.isTarget) {
   );
 }
 
+// 日志路径只从这次 Metro 的归属记录取,不猜固定路径,读不到旧日志或别人的文件。
+const owner = readMetroOwner(port);
+const logPath =
+  owner && resolve(owner.worktreeRoot ?? "") === worktreeRoot
+    ? owner.metroLogPath
+    : null;
+if (!logPath || !existsSync(logPath)) {
+  inconclusive(
+    "这次启动的 Metro 没有可用的日志(没能建出日志,或日志已丢失)。请用 pnpm mobile:sim:start 重新启动 Metro 后再检查。",
+  );
+}
+
 const known = JSON.parse(
   readFileSync(resolve(scriptsDir, "sim-logcheck-known-warnings.json"), "utf8"),
 );
-const logText = readFileSync(logPath, "utf8");
-if (!isLogFromLaunch(logText, readMetroOwner(port)?.metroLogLaunch)) {
-  inconclusive(
-    `${logPath} 不是当前这次启动的 Metro 写的(可能是旧日志,或这次启动没能建出日志),请重新运行 pnpm mobile:sim:start。`,
-  );
-}
-const result = analyzeMetroLog(logText, known);
+const result = analyzeMetroLog(readFileSync(logPath, "utf8"), known);
 const print = ({ line, message, count }) =>
   console.log(
     `  L${line}${count > 1 ? ` ×${count}` : ""}  ${message.slice(0, 300)}`,

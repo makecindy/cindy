@@ -1,11 +1,10 @@
 import { execFileSync } from "node:child_process";
 import {
-  chmodSync,
   existsSync,
-  mkdirSync,
   mkdtempSync,
   readFileSync,
   rmSync,
+  statSync,
   writeFileSync,
 } from "node:fs";
 import { createRequire } from "node:module";
@@ -14,11 +13,10 @@ import { dirname, join, relative } from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import {
   analyzeMetroLog,
-  isLogFromLaunch,
   logcheckExitCode,
   metroLogEnv,
-  metroLogPath,
   prepareMetroLog,
+  removeMetroLog,
 } from "../../scripts/lib/sim-logcheck.mjs";
 import knownWarnings from "../../scripts/sim-logcheck-known-warnings.json";
 
@@ -108,41 +106,25 @@ describe("mobile:sim:logcheck analysis", () => {
         " WARN  Sending `onAnimatedValueUpdate` with no listeners registered.",
         ' WARN  Attempted to import the module "/repo/node_modules/@noble/hashes/crypto.js" which is not listed in the "exports" of "/repo/node_modules/@noble/hashes"',
         " WARN  Require cycle: ../../packages/model-providers/src/modelMetadataLayers.ts -> ../../packages/model-providers/src/modelGeneration.ts -> ../../packages/model-providers/src/modelMetadataLayers.ts",
-        " WARN  [device-link] relay connection error WebSocket error",
       ].join("\n"),
       knownWarnings,
     );
     expect(result.newWarnings).toEqual([]);
-    expect(result.knownWarningCount).toBe(4);
+    expect(result.knownWarningCount).toBe(3);
   });
 
-  // Review #8560: only the reconnecting relay drop is known; other device-link warnings stay visible.
-  it("still reports device-link request timeouts and unlisted missing listeners as new warnings", () => {
+  // Review #8560: device-link warnings (including relay auth failures) and other missing listeners stay visible.
+  it("still reports device-link warnings and unlisted missing listeners as new warnings", () => {
     const result = analyzeMetroLog(
       [
         BUNDLED,
-        " WARN  [device-link] device-link request timeout kind=invoke channel=device-link:remote-desktop:v1",
+        " WARN  [device-link] relay connection error Unexpected server response: 401",
         " WARN  Sending `onPushNotificationReceived` with no listeners registered.",
       ].join("\n"),
       knownWarnings,
     );
     expect(result.newWarnings).toHaveLength(2);
     expect(result.knownWarningCount).toBe(0);
-  });
-});
-
-// Review #8560: a stale log that could be neither replaced nor deleted must not pass.
-describe("Metro log ownership", () => {
-  const header = "# sim-start port=8081 region=global source=s launch=new-1";
-
-  it("accepts only the log written for the running Metro's launch", () => {
-    expect(isLogFromLaunch(`${header}\n${BUNDLED}`, "new-1")).toBe(true);
-    expect(isLogFromLaunch(`${header}\n${BUNDLED}`, "old-0")).toBe(false);
-  });
-
-  it("rejects any log when the running Metro started without one", () => {
-    expect(isLogFromLaunch(`${header}\n${BUNDLED}`, null)).toBe(false);
-    expect(isLogFromLaunch(`${header}\n${BUNDLED}`, undefined)).toBe(false);
   });
 });
 
@@ -217,6 +199,24 @@ describe("incomplete Metro log", () => {
     expect(original).toHaveBeenCalledTimes(2);
   });
 
+  // Review #8560: writeSync can return a partial count without throwing when the disk fills.
+  it("discards the log when a write is cut short without an error", () => {
+    const stream = { write: vi.fn((_chunk: string) => true) };
+    const fsImpl = {
+      openSync: vi.fn(() => 7),
+      writeSync: vi.fn().mockReturnValueOnce(3).mockReturnValueOnce(0),
+      ftruncateSync: vi.fn(),
+      unlinkSync: vi.fn(),
+    };
+    installTee({ logPath: "/logs/metro.log", streams: [stream], fsImpl });
+    stream.write(" ERROR  boom");
+    expect(fsImpl.writeSync).toHaveBeenCalledTimes(2);
+    expect(fsImpl.ftruncateSync).toHaveBeenCalledExactlyOnceWith(7, 0);
+    expect(fsImpl.unlinkSync).toHaveBeenCalledExactlyOnceWith(
+      "/logs/metro.log",
+    );
+  });
+
   it("discards a stale log when it cannot be opened for appending", () => {
     const fsImpl = {
       openSync: vi.fn(() => {
@@ -235,34 +235,32 @@ describe("incomplete Metro log", () => {
     );
   });
 
-  it("removes the previous run's log when the new one cannot be created", () => {
-    const mobileDir = mkdtempSync(join(tmpdir(), "metro-log-prepare-"));
+  // Review #8560: each launch gets its own private, unpredictable directory under the system temp dir.
+  it("creates each log in a fresh private directory outside the worktree and removes it with Metro", () => {
+    const first = prepareMetroLog(8081, { source: "s", region: "global" });
+    const second = prepareMetroLog(8081, { source: "s", region: "global" });
     try {
-      const path = metroLogPath(mobileDir, 8081);
-      mkdirSync(dirname(path), { recursive: true });
-      writeFileSync(path, `${BUNDLED}\n`, { mode: 0o400 });
-      chmodSync(path, 0o400);
-      const result = prepareMetroLog(mobileDir, 8081, {
-        source: "s",
-        region: "global",
-        launch: "l",
-      });
-      if (result === null) expect(existsSync(path)).toBe(false);
-      else expect(readFileSync(path, "utf8")).not.toContain("Bundled");
+      expect(first).not.toBeNull();
+      expect(dirname(first!)).not.toBe(dirname(second!));
+      expect(relative(tmpdir(), first!).startsWith("..")).toBe(false);
+      expect(statSync(dirname(first!)).mode & 0o777).toBe(0o700);
+      expect(readFileSync(first!, "utf8")).not.toContain("Bundled");
     } finally {
-      rmSync(dirname(metroLogPath(mobileDir, 8081)), {
-        recursive: true,
-        force: true,
-      });
-      rmSync(mobileDir, { recursive: true, force: true });
+      removeMetroLog(first);
+      removeMetroLog(second);
     }
+    expect(existsSync(dirname(first!))).toBe(false);
+    expect(existsSync(dirname(second!))).toBe(false);
   });
 
-  // Review #8560: raw Metro output can carry credentials, so it must never land in the worktree.
-  it("keeps the log outside the worktree and apart for each worktree", () => {
-    const path = metroLogPath("/repo/apps/mobile", 8081);
-    expect(relative("/repo", path).startsWith("..")).toBe(true);
-    expect(path).not.toBe(metroLogPath("/other/apps/mobile", 8081));
-    expect(path).toBe(metroLogPath("/repo/apps/mobile", 8081));
+  it("never removes a directory it did not create", () => {
+    const outside = mkdtempSync(join(tmpdir(), "not-a-metro-log-"));
+    try {
+      writeFileSync(join(outside, "metro-8081.log"), "keep");
+      removeMetroLog(join(outside, "metro-8081.log"));
+      expect(existsSync(join(outside, "metro-8081.log"))).toBe(true);
+    } finally {
+      rmSync(outside, { recursive: true, force: true });
+    }
   });
 });

@@ -10,9 +10,5 @@
   {
     "pattern": "^Require cycle: .*packages/model-providers/src/modelMetadataLayers\\.ts",
     "reason": "待拆开 model-providers 的循环依赖,修复后删除本条。"
-  },
-  {
-    "pattern": "^\\[device-link\\] relay connection error ",
-    "reason": "与中继的网络连接断开,反映当时的网络状况,客户端会自动重连。请求超时、丢帧等其他 device-link 警告不在此列。"
   }
 ]

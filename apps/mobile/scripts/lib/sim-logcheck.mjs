@@ -1,8 +1,7 @@
 // mobile:sim:logcheck 的纯逻辑:定位 Metro 日志,并判定最近一次打包之后的 ERROR / WARN。
-import { createHash } from "node:crypto";
-import { mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { dirname, join, resolve } from "node:path";
+import { basename, dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const TEE_PRELOAD = join(
@@ -14,58 +13,44 @@ const ANSI = /\x1b\[[0-9;?]*[A-Za-z]/g;
 const ENTRY_BUNDLED = /\b(?:iOS|Android) Bundled\b.*\bindex\.js\b/;
 const BUNDLE_FAILED = /\b(?:iOS|Android) Bundling failed\b/;
 const LOG_ENTRY = /^\s*(ERROR|WARN)\s+(.*)$/;
+const LOG_DIR_PREFIX = "cindy-metro-log-";
 
 /**
- * Metro 原始输出可能带凭证(请求或错误对象),不能落进仓库工作区,即使被 gitignore。
- * 放在系统临时目录,按 worktree 分开,同一端口的多个 worktree 互不覆盖。
+ * 每次启动 Metro 新建一个私有临时目录存日志(mkdtemp:路径不可预测、只有本人可访问),
+ * 不复用固定路径,也就不会碰到别人预先放好的目录或链接,也读不到上一次的旧日志。
+ * Metro 原始输出可能带凭证,所以不放进仓库工作区。失败返回 null,不阻止 Metro 启动。
  */
-export function metroLogPath(mobileDir, port) {
-  const worktreeKey = createHash("sha256")
-    .update(resolve(mobileDir))
-    .digest("hex")
-    .slice(0, 16);
-  return join(tmpdir(), "cindy-metro-logs", worktreeKey, `metro-${port}.log`);
-}
-
-/** 每次启动 Metro 时清空旧日志。失败时删掉旧日志并返回 null,不阻止 Metro 启动。 */
-export function prepareMetroLog(mobileDir, port, { source, region, launch }) {
-  const path = metroLogPath(mobileDir, port);
+export function prepareMetroLog(port, { source, region }) {
+  let dir = null;
   try {
-    mkdirSync(dirname(path), { recursive: true, mode: 0o700 });
+    dir = mkdtempSync(join(tmpdir(), LOG_DIR_PREFIX));
+    const path = join(dir, `metro-${port}.log`);
     writeFileSync(
       path,
-      `# sim-start port=${port} region=${region} source=${source} launch=${launch}\n`,
-      { mode: 0o600 },
+      `# sim-start port=${port} region=${region} source=${source}\n`,
+      {
+        flag: "wx",
+        mode: 0o600,
+      },
     );
     return path;
   } catch {
-    // 留下上一次的旧日志会被 logcheck 当成这次的结果,拿不到新日志就删掉旧的。
-    try {
-      rmSync(path, { force: true });
-    } catch {
-      // 同样删不掉时,logcheck 会因 Metro 归属或打包记录对不上而无法判定。
-    }
+    removeMetroLog(dir && join(dir, "metro.log"));
     return null;
   }
 }
 
-/**
- * 日志是否属于当前 Metro:日志头的 launch 必须等于 Metro 归属记录里的 metroLogLaunch。
- * 建日志失败时归属记录写 null,旧日志即使删不掉也对不上。
- */
-export function isLogFromLaunch(text, ownerLaunch) {
-  if (!ownerLaunch) return false;
-  const header = text.split(/\r?\n/, 1)[0];
-  return / launch=(\S+)$/.exec(header)?.[1] === ownerLaunch;
-}
-
-/** Metro 退出后删掉日志:原始输出可能带凭证,而 logcheck 本就不认已停止的 Metro。 */
+/** Metro 退出后删掉这次的日志目录:原始输出可能带凭证,而 logcheck 本就不认已停止的 Metro。 */
 export function removeMetroLog(path) {
   if (!path) return;
+  const dir = dirname(path);
+  // 只删 prepareMetroLog 建的目录,路径来自别处时不动。
+  if (dirname(dir) !== tmpdir() || !basename(dir).startsWith(LOG_DIR_PREFIX))
+    return;
   try {
-    rmSync(path, { force: true });
+    rmSync(dir, { recursive: true, force: true });
   } catch {
-    // 删不掉时留给下次启动覆盖;日志在系统临时目录,不在仓库里。
+    // 删不掉时留在系统临时目录,不在仓库里。
   }
 }
 
