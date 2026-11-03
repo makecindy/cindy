@@ -3,6 +3,7 @@ import {
   cancelPendingPluginSuggestion,
   getPendingPluginSuggestion,
   pendingPluginSuggestionReturnPath,
+  pendingSuggestionIsForGhost,
   readyPendingPluginSuggestion,
   startPendingPluginSuggestion,
   takePendingPluginSuggestion,
@@ -30,6 +31,12 @@ describe('installation continuation', () => {
       'My full prompt',
     );
     expect(takePendingPluginSuggestion(nonce, 'a', 'local')).toBeNull();
+  });
+  it('knows which plugin a request is about, so another plugin cannot act on its project state', () => {
+    expect(pendingSuggestionIsForGhost(request, 'test')).toBe(true);
+    expect(pendingSuggestionIsForGhost(request, '_root__test')).toBe(true);
+    expect(pendingSuggestionIsForGhost(request, 'other')).toBe(false);
+    expect(pendingSuggestionIsForGhost({ ...request, suggestion: { ...request.suggestion, pluginId: undefined } }, 'test')).toBe(false);
   });
   it('rebinds a logical root suggestion to its physical install instance', () => {
     const nonce = startPendingPluginSuggestion({

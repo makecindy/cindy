@@ -42,24 +42,31 @@ export function cancelPendingPluginSuggestion(nonce?: string): void {
     publish();
   }
 }
+/** Whether `ghostId` is the plugin this request is about (same namespace and id). */
+export function pendingSuggestionIsForGhost(request: PluginSuggestionRequest, ghostId: string): boolean {
+  const suggestionPluginId = request.suggestion.pluginId;
+  const suggestionIdentity =
+    typeof suggestionPluginId === 'string' ? parsePluginInstanceId(suggestionPluginId) : null;
+  const installedIdentity = parsePluginInstanceId(ghostId);
+  return (
+    !!suggestionIdentity &&
+    !!installedIdentity &&
+    suggestionIdentity.namespace === installedIdentity.namespace &&
+    suggestionIdentity.ghostId === installedIdentity.ghostId
+  );
+}
 export function readyPendingPluginSuggestion(
   nonce: string | undefined,
   ownerId: string | null,
   ghostId: string,
 ): string | null {
   const suggestionPluginId = pending?.suggestion.pluginId;
-  const suggestionIdentity =
-    typeof suggestionPluginId === 'string' ? parsePluginInstanceId(suggestionPluginId) : null;
-  const installedIdentity = parsePluginInstanceId(ghostId);
   if (
     !pending ||
     pending.nonce !== nonce ||
     pending.ownerId !== ownerId ||
     typeof suggestionPluginId !== 'string' ||
-    !suggestionIdentity ||
-    !installedIdentity ||
-    suggestionIdentity.namespace !== installedIdentity.namespace ||
-    suggestionIdentity.ghostId !== installedIdentity.ghostId ||
+    !pendingSuggestionIsForGhost(pending, ghostId) ||
     pending.phase !== 'setup'
   )
     return null;

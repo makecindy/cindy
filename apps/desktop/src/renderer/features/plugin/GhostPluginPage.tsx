@@ -55,6 +55,7 @@ import {
   cancelPendingPluginSuggestion,
   getPendingPluginSuggestion,
   pendingPluginSuggestionReturnPath,
+  pendingSuggestionIsForGhost,
   readyPendingPluginSuggestion,
   subscribePendingPluginSuggestion,
 } from '@/features/cc-agent/pendingPluginSuggestion';
@@ -523,7 +524,8 @@ function LocalGhostPluginPage({
       )
         return false;
       const early = getPendingPluginSuggestion();
-      if (!early || early.nonce !== nonce) return false;
+      // Another plugin being installed or enabled while this request is open must not touch its project state.
+      if (!early || early.nonce !== nonce || !pendingSuggestionIsForGhost(early, ghostId)) return false;
       // A plugin Skill is only usable in the task's project if the plugin is not disabled there: a
       // project-level "off" outlives an uninstall, so a fresh install would still not offer the Skill.
       // Do this before the request leaves the setup phase, so a failure here leaves it resumable.
