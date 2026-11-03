@@ -13,7 +13,7 @@ export interface SessionPrRef {
   priority?: number;
   manuallyAdded?: boolean;
   removedAt?: number | null;
-  /** Absent on older hosts. Legacy references require explicit confirmation. */
+  /** Absent on older hosts. Active message references use explicit with origin=message. */
   associationSource?: string;
   associationOrigin?: string | null;
 }

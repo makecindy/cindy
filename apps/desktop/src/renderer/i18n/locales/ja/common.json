@@ -995,8 +995,14 @@
     },
     "saveFileName": "スクリーンショット",
     "saveFailed": "スクリーンショットを保存できませんでした",
+    "translation": {
+      "action": "{{language}}に翻訳",
+      "targetLanguage": "翻訳先の言語",
+      "followUi": "表示言語に合わせる",
+      "saveFailed": "言語を保存できませんでした。もう一度選択してください。"
+    },
     "prompt": {
-      "translate": "このスクリーンショットの文字を読み取り、日本語に翻訳してください。元の段落やリストの構成を保ち、訳文だけを出力してください。原文がすでに日本語の場合は英語に翻訳してください。",
+      "translate": "スクリーンショット内の言語を自動判別し、文字を{{language}}に翻訳してください。元の段落、リスト、表を保持してください。翻訳先と同じ言語の部分はそのまま残し、複数の言語が混在する場合は他の言語の部分だけを翻訳してください。すべて翻訳先と同じ言語の場合は、その旨を簡潔に伝え、別の言語には翻訳しないでください。それ以外は訳文のみを出力してください。",
       "explain": "このスクリーンショットの内容を説明してください。エラーの場合は原因と解決方法を、グラフ・コード・画面の場合は何を表しているかと要点を説明してください。",
       "extract": "このスクリーンショットの文字をそのまま抽出してください。元の改行・段落・リストを保ち、表は Markdown の表で出力してください。抽出した文字だけを出力してください。"
     },
@@ -2618,6 +2624,13 @@
       "storage": {
         "dialogueDirectoryTitle": "チャットワークスペース",
         "dialogueDirectoryDescription": "新しいセッションにのみ適用されます。既存のファイルの場所は変わりません。",
+        "projectsRootTitle": "新規プロジェクトの保存先",
+        "projectsRootInferred": "提案",
+        "projectsRootDefault": "既定",
+        "projectsRootChoose": "フォルダーを変更",
+        "projectsRootReset": "提案の保存先に戻す",
+        "projectsRootDescription": "セッションからプロジェクトを作成するとき、プロジェクトフォルダーはここに作成されます。未設定の場合は、既存のプロジェクトの場所から提案します。",
+        "projectsRootFailed": "新規プロジェクトの保存先を更新できませんでした",
         "dialogueDirectoryOpen": "フォルダーを開く",
         "dialogueDirectoryChoose": "フォルダーを変更",
         "dialogueDirectoryReset": "既定の保存先に戻す",
@@ -3588,6 +3601,8 @@
         "simpleSubtitle": "複数のモデルをひとつのアカウントで精算。"
       },
       "custom": {
+        "nameSearchUnavailable": "このプロバイダーは現在利用できません。カスタムエンドポイントの設定を続けるか、再検索してください。",
+        "nameSearchHint": "この名前のまま、カスタムエンドポイントを設定できます。",
         "tag": "カスタム",
         "editAria": "接続設定を編集",
         "deleteAria": "削除",
@@ -14360,6 +14375,26 @@
           "cancel": "キャンセル"
         }
       },
+      "newProjectDialog": {
+        "title": "新規プロジェクト",
+        "description": "プロジェクトフォルダーを作成し、このセッションを新しいプロジェクトへ移動します。",
+        "descriptionMoveFiles": "プロジェクトフォルダーを作成してこのセッションのファイルを移し、セッションを新しいプロジェクトへ移動します。",
+        "nameLabel": "プロジェクト名",
+        "namePlaceholder": "例: my-app",
+        "targetPath": "{{path}} を作成します",
+        "location": "場所",
+        "locationInferred": "既存のプロジェクトをもとに提案しています",
+        "locationWillCreate": "このフォルダーはまだないため、作成されます",
+        "changeLocation": "変更…",
+        "remember": "今後の新規プロジェクトもここに作成する",
+        "cancel": "キャンセル",
+        "create": "プロジェクトを作成",
+        "nameTaken": "同じ名前のフォルダーがすでにあります",
+        "nameInvalid": "名前に \\ / : * ? \" < > | は使えません。末尾をピリオドや空白にすることもできません",
+        "loadFailed": "プロジェクトの場所を読み込めませんでした",
+        "failed": "プロジェクトを作成できませんでした",
+        "done": "プロジェクトを作成し、セッションを移動しました"
+      },
       "sessionMenu": {
         "moreActions": "その他のアクション",
         "rename": "名前変更",
@@ -14373,6 +14408,7 @@
         "moveToProject": "タスクを移動",
         "moveToProjectHeading": "現在のコンピューターのプロジェクト",
         "browseProjectFolder": "プロジェクトフォルダーを選択",
+        "newProject": "新規プロジェクト…",
         "moveToDialogue": "対話へ移動",
         "noProjects": "最近使ったプロジェクトはありません",
         "moveToProjectDone": "プロジェクトへ移動しました",
@@ -15773,6 +15809,7 @@
     "agentControlled": "この画面は Agent が開きました。入力する前に、本当にサインインしたい場所か確認してください。",
     "agentPicture": "このコードは Agent が撮ったスクリーンショットのもので、Cindy には元の画面が見えず、スキャン後も自動では続行しません。サインインしたいサイトにつながるか確認し、スキャンしたら「Agent に戻す」を押してください。",
     "error": {
+      "raise": "ウィンドウを開けませんでした。コンピュータで切り替えてください。",
       "decision": "操作が届きませんでした。もう一度お試しください。",
       "stale": "画面が変わりました。最新の内容で操作してください。",
       "submit": "入力が届きませんでした。もう一度お試しください。"
@@ -15808,6 +15845,9 @@
       "picture": "画面を見る",
       "backToForm": "フォームに戻る",
       "liveView": "ライブ表示",
+      "openWindow": "ログインウィンドウを開く",
+      "openRemoteDesktop": "リモートデスクトップを開く",
+      "useForm": "フォームで入力する",
       "fill": "入力",
       "skip": "スキップ",
       "continue": "続ける",
@@ -15815,6 +15855,9 @@
       "showPassword": "パスワードを表示",
       "hidePassword": "パスワードを隠す",
       "scan": "スキャン"
+    },
+    "directSignIn": {
+      "hint": "ウィンドウで直接ログインしてください。完了すると自動で続行します。"
     },
     "remoteUnavailable": "このコンピュータはリモートから入力を受け取れません。ホストのコンピュータでこのステップを完了してから Agent に戻してください。",
     "unnamedField": "入力欄",
@@ -18769,6 +18812,9 @@
     "failed": "操作が完了しませんでした。再試行するか、ローカルファイルを確認してください。"
   },
   "attachmentPreview": {
+    "fitWidth": "幅に合わせる",
+    "fitPage": "ページに合わせる",
+    "pageNumber": "ページ番号",
     "more": "その他の操作",
     "retry": "再試行",
     "image": "画像",

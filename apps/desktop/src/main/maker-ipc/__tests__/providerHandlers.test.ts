@@ -3826,7 +3826,7 @@ describe('model price override handlers', () => {
 });
 
 describe('provider:presets handler', () => {
-  it('returns injected presets as { presets }', async () => {
+  it('returns injected presets with the current registry snapshot', async () => {
     const harness = new IpcHarness();
     const presets = [
       {
@@ -3835,8 +3835,11 @@ describe('provider:presets handler', () => {
         runtimes: { codex: { baseUrl: 'https://openrouter.ai/api/v1', models: [{ id: 'a', name: 'A' }] } },
       },
     ];
-    registerProviderHandlers(harness, makeDeps({ listPresets: () => presets }));
-    expect(await harness.invoke(MAKER_INVOKE.PROVIDER_PRESETS_LIST)).toEqual({ presets });
+    const modelRegistry = { ...BUNDLED_CATALOG.modelRegistry!, updatedAt: '2026-11-02T00:00:00Z' };
+    registerProviderHandlers(harness, makeDeps({ listPresets: () => presets,
+      getModelCatalog: () => ({ ...BUNDLED_CATALOG, modelRegistry }),
+    }));
+    expect(await harness.invoke(MAKER_INVOKE.PROVIDER_PRESETS_LIST)).toEqual({ presets, modelRegistry });
   });
 });
 
