@@ -605,7 +605,7 @@ import {
   sessions,
   schedules,
 } from '../localDb/schema.js';
-import { nextBotModelRoute, normalizeBotModelChain, type BotModelRoute } from '../../shared/botModelChain.js';
+import { botModelRouteIndex, nextBotModelRoute, normalizeBotModelChain, type BotModelRoute } from '../../shared/botModelChain.js';
 import { createBotModelRouteApplier, createBotModelRouteReconciler } from './botModelRouteReconciler.js';
 import {
   cindyAutoRouteToFollow,
@@ -1535,7 +1535,7 @@ import {
 } from './autoResumeBookkeeping.js';
 import {
   InterruptedTurnAutoResumeGuard,
-  isAcceptedTurnContinuationOnlyReason,
+  isContinuationOnlyAutoResumeReason,
   isAutoResumeUserMessage,
   isInterruptedTurnError,
   shouldPreserveWaitingContinuationOnlyAutoResume,
@@ -17447,7 +17447,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     sessionId: string,
     current: SessionRuntimeProfile,
     controlSessionId = sessionId,
-  ): Promise<{ isBot: boolean; candidate: SessionRuntimeProfile | null }> => {
+  ): Promise<{ isBot: boolean; candidate: SessionRuntimeProfile | null; routeLocked?: boolean }> => {
     const [row] = await getDbClient()
       .drizzle.select({
         capabilitiesJson: botProfileVersions.capabilitiesJson,
@@ -17486,7 +17486,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     const routineModel = row.role === 'routine'
       ? await readRoutineLaneModel(row.botId, row.routeKey) : null;
     // An explicit routine choice never falls back to its companion's expensive primary model.
-    if (routineModel) return { isBot: true, candidate: null };
+    if (routineModel) return { isBot: true, candidate: null, routeLocked: true };
     const chain = await readEffectiveBotModelChain(config);
     const toAgentKind = (harness: string): AgentKind =>
       harness === 'codex' ? 'codex' : harness === 'pi' ? 'pi' : 'claude-code';
@@ -17499,14 +17499,17 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     const [controlSession] = controlSessionId === sessionId ? [{ remoteHostId: row.remoteHostId }]
       : await getDbClient().drizzle.select({ remoteHostId: sessions.remoteHostId })
         .from(sessions).where(eq(sessions.id, controlSessionId)).limit(1);
-    const route = nextBotModelRoute(
-      chain,
-      { harness: currentHarness, model: current.model, providerId: current.providerId, agentDeviceId: current.agentDeviceId },
-      control.visitedRoutes,
-      (candidate) => !controlSession?.remoteHostId || candidate.harness === currentHarness,
-    );
+    const currentRoute: Pick<BotModelRoute, 'harness' | 'model' | 'providerId' | 'agentDeviceId'> = {
+      harness: currentHarness, model: current.model, providerId: current.providerId, agentDeviceId: current.agentDeviceId,
+    };
+    const usable = (candidate: BotModelRoute) => !controlSession?.remoteHostId || candidate.harness === currentHarness;
+    const route = nextBotModelRoute(chain, currentRoute, control.visitedRoutes, usable);
+    // No other usable route is configured at all: nothing can be exhausted.
+    const currentIndex = botModelRouteIndex(chain, currentRoute);
+    const routeLocked = !chain.some((candidate, index) => index !== currentIndex && usable(candidate));
     return {
       isBot: true,
+      routeLocked,
       candidate: route
         ? {
             agentKind: toAgentKind(route.harness),
@@ -17617,7 +17620,9 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
             maxHops: 2,
           });
       }
-      if (!candidate) return { session: null, outcome: 'exhausted' };
+      // A Bot with no other route has nothing to exhaust; the caller decides whether
+      // the same route may be retried.
+      if (!candidate) return { session: null, outcome: botFallback.routeLocked ? 'unchanged' : 'exhausted' };
       runtimeSession = maker.getSession(sessionId) ?? null;
       if (runtimeSession) {
         pendingSessionRuntimeFallbackRebuilds.set(runtimeSession, attemptToken);
@@ -20428,7 +20433,9 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       item: AgentInputQueuedMessage,
     ) => {
       if (!canRecoverTurn(signals, item) || inputCoordinator.isExecutionPaused(sessionId)) return null;
-      const requireRouteChange = botFallbackInputs.has(item.createOpts) && isBotCandidateUnavailable(signals);
+      const botInput = botFallbackInputs.has(item.createOpts);
+      const requireRouteChange = botInput && isBotCandidateUnavailable(signals);
+      const sameRouteRetryable = isInterruptedTurnError(signals);
       const erroredAt = Date.now();
       const decision = interruptedTurnAutoResumeGuard.onInterruptedTurn(sessionId, erroredAt);
       if (decision.action !== 'resume') {
@@ -20469,7 +20476,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       if (schedulerRunId) {
         beginSchedulerAutoResume(sessionId, schedulerRunId, decision.attemptToken);
       }
-      if (isAcceptedTurnContinuationOnlyReason(signals.reason)) {
+      if (isContinuationOnlyAutoResumeReason(signals.reason)) {
         const runtimeSession = getStableSessionForTurnBoundary(sessionId);
         if (runtimeSession) {
           pendingContinuationOnlyAutoResumeRebuilds.set(runtimeSession, decision.attemptToken);
@@ -20494,7 +20501,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
               );
               fallbackRebuildSession = fallback.session;
               if (!attempt.isCurrent()) return;
-              if (!canResumeAfterRuntimeFallback(requireRouteChange, fallback)) {
+              if (!canResumeAfterRuntimeFallback(requireRouteChange, fallback, sameRouteRetryable)) {
                 interruptedTurnAutoResumeGuard.noteResumeSendFailed(sessionId, decision.attemptToken);
                 autoResumeBookkeeping.finalizeSuppressedError(sessionId, decision.attemptToken, {
                   surfaceBanner: true,
