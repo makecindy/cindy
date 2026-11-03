@@ -140,14 +140,19 @@ describe('live screen leases', () => {
     expect(() => desktop.controller.input(plain.lease, 1, [touch])).toThrow('INVALID_REQUEST');
   });
 
-  it('forwards only buttons the device offered', async () => {
+  it('forwards only buttons and as many fingers as the device offered', async () => {
     const h = harness();
     const { lease } = await h.start({ control: true });
-    expect(() => h.controller.input(lease, 1, [{ kind: 'press', button: 'power' }])).toThrow(
+    const finger = (id: number) => ({ id, x: 0.5, y: 0.5, phase: 'began' });
+    expect(() =>
+      h.controller.input(lease, 1, [{ kind: 'touch', touches: [finger(0), finger(1), finger(2)] }]),
+    ).toThrow('INVALID_REQUEST');
+    expect(h.deps.input).not.toHaveBeenCalled();
+    expect(() => h.controller.input(lease, 2, [{ kind: 'press', button: 'power' }])).toThrow(
       'INVALID_REQUEST',
     );
     expect(h.deps.input).not.toHaveBeenCalled();
-    h.controller.input(lease, 2, [{ kind: 'press', button: 'home' }]);
+    h.controller.input(lease, 3, [{ kind: 'press', button: 'home' }]);
     expect(h.deps.input).toHaveBeenCalledOnce();
   });
 
