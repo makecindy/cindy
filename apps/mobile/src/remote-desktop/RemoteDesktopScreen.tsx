@@ -2,12 +2,21 @@ import { deviceDisplayName } from "@/device-link/deviceName";
 import { foldDesktopLayout, foldDesktopRegion } from "./foldDesktopLayout";
 import { useAdaptiveWindow } from "@/platform/AdaptiveWindowContext";
 import { controlRegion } from "@/platform/windowGeometry";
+import { FoldDesktopKeyboard } from "./FoldDesktopKeyboard";
+import { RemoteKeySurface, type SystemKeyAction } from "./RemoteKeySurface";
+import {
+  AllWindowsIcon,
+  OmarchyMenuIcon,
+  ShowDesktopIcon,
+  WorkspaceLeftIcon,
+  WorkspaceRightIcon,
+} from "./RemoteDesktopIcons";
 import { FoldTouchpad } from "./FoldTouchpad";
 import {
   FoldDesktopBezel,
   FoldDesktopDeck,
-  FoldDesktopKeycap,
   FoldDesktopSkinSwitch,
+  DEFAULT_FOLD_DESKTOP_SKIN,
   retroDesktopViewport,
   foldDesktopSkinColors,
   type FoldDesktopSkin,
@@ -37,7 +46,14 @@ import {
   useWindowDimensions,
 } from "react-native";
 import Animated from "react-native-reanimated";
-import { Monitor } from "lucide-react-native";
+import {
+  ChevronDown,
+  Keyboard as KeyboardIcon,
+  Languages,
+  LayoutGrid,
+  Monitor,
+  Search,
+} from "lucide-react-native";
 import { useReduceMotionEnabled } from "@/hooks/useReduceMotion";
 import { motionDuration } from "@/theme/tokens";
 import {
@@ -55,9 +71,7 @@ import { transferClipboardContent } from "./clipboardTransfer";
 import * as Clipboard from "expo-clipboard";
 import { RemoteDesktopClipboardButton } from "./RemoteDesktopClipboardButton";
 import { RemoteDesktopMouseControls } from "./RemoteDesktopMouseControls";
-import { RemoteDesktopPanelButton } from "./RemoteDesktopPanelButton";
 import { useTranslation } from "react-i18next";
-import SegmentedControl from "@expo/ui/community/segmented-control";
 import {
   RemoteDesktopViewerSession,
   REMOTE_DESKTOP_CONNECTION_TIMEOUT_MS,
@@ -170,34 +184,7 @@ type ChannelOutcome =
   | { kind: "result"; value: unknown }
   | { kind: "relay" }
   | { kind: "error"; code: string };
-const MODIFIERS = ["ControlLeft", "ShiftLeft", "AltLeft", "MetaLeft"];
-const KEY_PAGES = [
-  [
-    [
-      "Minus",
-      "Equal",
-      "BracketLeft",
-      "BracketRight",
-      "Backslash",
-      "Semicolon",
-      "Quote",
-      "Comma",
-      "Period",
-      "Slash",
-    ],
-    [..."1234567890"].map((key) => `Digit${key}`),
-    [..."QWERTYUIOP"].map((key) => `Key${key}`),
-    [..."ASDFGHJKL"].map((key) => `Key${key}`).concat("Backspace"),
-    [..."ZXCVBNM"].map((key) => `Key${key}`).concat("Space", "Enter"),
-  ],
-  [
-    ["Escape", "Tab", "Backquote", "Insert", "Home", "PageUp"],
-    ["F1", "F2", "F3", "Delete", "End", "PageDown"],
-    ["F4", "F5", "F6", "Backspace", "Space", "Enter"],
-    ["F7", "F8", "F9", null, "ArrowUp", null],
-    ["F10", "F11", "F12", "ArrowLeft", "ArrowDown", "ArrowRight"],
-  ],
-];
+const KEY_BAR_HEIGHT = 44;
 const LABELS: Record<string, string> = {
   Minus: "− _",
   Equal: "= +",
@@ -599,22 +586,47 @@ export function RemoteDesktopSession({
   // flow layout; only iOS needs an offset above the native keyboard.
   const landscapeKeyboardOverlay =
     landscape && (Platform.OS === "ios" || fullKeys);
+  // Going to the phone's keyboard, iOS keeps the keys until it has risen over
+  // them, so neither the bar nor the desktop moves during the swap.
+  const [awaitingSystemKeyboard, setAwaitingSystemKeyboard] = useState(false);
+  const panelKeys = fullKeys || awaitingSystemKeyboard;
+  useEffect(() => {
+    if (!awaitingSystemKeyboard) return;
+    // A hardware keyboard means the phone's never rises.
+    const timer = setTimeout(() => setAwaitingSystemKeyboard(false), 800);
+    return () => clearTimeout(timer);
+  }, [awaitingSystemKeyboard]);
   const keyboardBottom =
-    Platform.OS === "ios" && keyboard && !fullKeys ? nativeKeyboardHeight : 0;
+    Platform.OS === "ios" && keyboard && !panelKeys ? nativeKeyboardHeight : 0;
+  // The keys take the phone keyboard's last height in this orientation, for the same reason.
+  const systemKeyboardHeight = useRef({ portrait: 0, landscape: 0 });
   const foldLayout = foldDesktopLayout(
     geometry,
     keyboardBottom,
     keyboardPanelHeight,
     keyboard,
   );
-  const [foldSkin, setFoldSkin] = useState<FoldDesktopSkin>("macii");
+  const [foldSkin, setFoldSkin] = useState<FoldDesktopSkin>(
+    DEFAULT_FOLD_DESKTOP_SKIN,
+  );
   const foldSkinAvailable = Boolean(foldLayout);
   const retroDesktop =
     foldSkinAvailable &&
     foldSkin !== "modern" &&
+    foldSkin !== "keyboard" &&
     frameReady &&
     !keyboard &&
     !operations;
+  const keyboardDeck =
+    foldSkinAvailable &&
+    foldSkin === "keyboard" &&
+    frameReady &&
+    focused &&
+    !keyboard &&
+    !operations;
+  // The deck replaces the toolbar and, like hardware skins, covers the lower
+  // half up to the seam; only its interactive content stays in the safe region.
+  const physicalDeck = retroDesktop || keyboardDeck;
   const viewerColors = retroDesktop ? darkColors : colors;
   // Artwork covers both physical halves, including the division and system
   // reservations. Only interactive content is constrained to the safe regions.
@@ -642,10 +654,6 @@ export function RemoteDesktopSession({
       : null;
   const fullScreenFoldBackground = Boolean(foldLayout);
   const foldControls = foldLayout?.controls ?? controlRegion(geometry);
-  const heldKeys = useRef(new Map<string, string[]>());
-  const [keyPage, setKeyPage] = useState(0);
-  const [comboMode, setComboMode] = useState(true);
-  const [modifiers, setModifiers] = useState<string[]>([]);
   const send = useCallback((message: object) => {
     const command = message as Record<string, unknown>;
     // Every control handoff retires the parent batch together with the viewer
@@ -914,6 +922,7 @@ export function RemoteDesktopSession({
     request,
     exitLock.current,
   );
+  const keyResync = useRef<(() => void) | null>(null);
   const transferClipboard = async (action: "copy" | "paste") => {
     const current = active.current;
     const epoch = generation.current;
@@ -929,8 +938,8 @@ export function RemoteDesktopSession({
     };
     check();
     send({ type: "events", events: [{ kind: "release" }] });
-    heldKeys.current.clear();
-    setModifiers([]);
+    // The key surface still holds what the user's fingers hold; press it again.
+    keyResync.current?.();
     if (
       caps?.clipboardContent &&
       remotePresentation?.readClipboard &&
@@ -972,8 +981,22 @@ export function RemoteDesktopSession({
       );
       setNativeKeyboardHeight(height);
       setNativeKeyboard(height > 0);
+      // Android resizes the window for the keyboard, leaving only this field reliable.
+      const measured = event.endCoordinates.height;
+      if (measured > 0) {
+        // The stable orientation, as `landscape` uses: adjustResize can make
+        // an Android portrait window wider than tall while the IME is open.
+        const { width: w, height: h } = Dimensions.get(
+          Platform.OS === "android" ? "screen" : "window",
+        );
+        systemKeyboardHeight.current[w > h ? "landscape" : "portrait"] =
+          measured;
+      }
     };
-    const show = Keyboard.addListener("keyboardDidShow", updateFrame);
+    const show = Keyboard.addListener("keyboardDidShow", (event) => {
+      updateFrame(event);
+      setAwaitingSystemKeyboard(false);
+    });
     const frame =
       Platform.OS === "ios"
         ? Keyboard.addListener("keyboardWillChangeFrame", updateFrame)
@@ -1033,7 +1056,6 @@ export function RemoteDesktopSession({
       if (previous) pendingMediaOffers.current.delete(previous);
       mediaAttempt.current = null;
       viewerMedia.reset();
-      heldKeys.current.clear();
       streaming.current = false;
       receiveWindow.current = {
         since: Date.now(),
@@ -1051,7 +1073,6 @@ export function RemoteDesktopSession({
         setSettingBusy(false);
         setNetwork(null);
         setStatus("disconnected");
-        setModifiers([]);
         setKeyboard(false);
         setBusy(false);
       }
@@ -1153,10 +1174,8 @@ export function RemoteDesktopSession({
     const current = active.current;
     if (!current?.controlling) return;
     current.controlling = false;
-    heldKeys.current.clear();
     send({ type: "control", enabled: false });
     if (alive.current) {
-      setModifiers([]);
       setKeyboard(false);
       setLease({ ...current });
     }
@@ -1187,9 +1206,7 @@ export function RemoteDesktopSession({
     if (current.controlling !== controlling) {
       current.controlling = controlling;
       if (!controlling) {
-        heldKeys.current.clear();
         if (alive.current) {
-          setModifiers([]);
           setKeyboard(false);
         }
       }
@@ -1641,8 +1658,6 @@ export function RemoteDesktopSession({
   useEffect(() => {
     if (!retroDesktop || !focused) return;
     return () => {
-      heldKeys.current.clear();
-      setModifiers([]);
       send({ type: "releaseInput" });
     };
   }, [retroDesktop, foldSkin, focused, send]);
@@ -1656,8 +1671,6 @@ export function RemoteDesktopSession({
       // overlay. Release held input, but keep this viewer's lease and stream.
       if (state === "inactive") {
         send({ type: "releaseInput" });
-        heldKeys.current.clear();
-        setModifiers([]);
         if (
           pipEnabledRef.current &&
           NativeRemoteDesktopView &&
@@ -2527,8 +2540,6 @@ export function RemoteDesktopSession({
     if (viewOnly) {
       // Local only: stop forwarding and release held keys and buttons on the
       // host, which keeps control and its input helper.
-      heldKeys.current.clear();
-      setModifiers([]);
       setKeyboard(false);
       send({ type: "control", enabled: false, release: true });
       return;
@@ -2758,8 +2769,6 @@ export function RemoteDesktopSession({
       current.controlling = false;
       // Background presentation temporarily releases input; it does not
       // change the user's fullscreen control preference.
-      heldKeys.current.clear();
-      setModifiers([]);
       setKeyboard(false);
       setLease({ ...current });
       pipPrepared.current = true;
@@ -3283,76 +3292,150 @@ export function RemoteDesktopSession({
     if (code === "Backspace" && caps?.platform !== "darwin") return "Backspace";
     return LABELS[code] ?? code.replace(/^Key|^Digit/, "");
   };
-  const heldKey = (code: string, retro = false) => (
-    <Pressable
-      key={code}
-      testID={retro ? `remoteDesktop.retroKey.${code}` : undefined}
-      disabled={retro && !canInput}
-      accessibilityRole="button"
-      accessibilityLabel={keyLabel(code)}
-      style={({ pressed }) => [
-        styles.computerKey,
-        retro && styles.retroKey,
-        retro && code === "Space" && { flex: 4 },
-        pressed && styles.keyPressed,
-      ]}
-      onPressIn={() => {
-        if (!inputAllowed(Boolean(active.current?.controlling))) return;
-        const alreadyHeld = new Set([...heldKeys.current.values()].flat());
-        const keys = !retro && comboMode ? [...modifiers, code] : [code];
-        heldKeys.current.set(code, keys);
-        send({
-          type: "events",
-          events: keys
-            .filter((key) => !alreadyHeld.has(key))
-            .map((key) => ({
-              kind: "key",
-              code: key,
-              down: true,
-            })),
-        });
-      }}
-      onPressOut={() => {
-        const keys = heldKeys.current.get(code) ?? [];
-        heldKeys.current.delete(code);
-        const stillHeld = new Set([...heldKeys.current.values()].flat());
-        send({
-          type: "events",
-          events: keys
-            .filter((key) => !stillHeld.has(key))
-            .toReversed()
-            .map((key) => ({ kind: "key", code: key, down: false })),
-        });
-        if (!comboMode) setModifiers([]);
-      }}
-    >
-      {retro && <FoldDesktopKeycap skin={foldSkin} wide={code === "Space"} />}
-      <Text
-        numberOfLines={1}
-        adjustsFontSizeToFit
-        style={[
-          /^Key|^Digit|^Arrow/.test(code) || (retro && code === "Space")
-            ? styles.keyText
-            : styles.specialKeyText,
-          retro && {
-            color: foldDesktopSkinColors(foldSkin).textPrimary,
-            fontWeight: fontWeight.medium,
-            maxWidth: "100%",
-            flexShrink: 1,
-            textAlign: "center",
+  const openWindows = () => {
+    if (caps?.windowActions) {
+      setOperations(false);
+      Keyboard.dismiss();
+      setKeyboard(false);
+      setWindowsOpen(true);
+      return;
+    }
+    shortcut(
+      caps?.platform === "darwin"
+        ? ["ControlLeft", "ArrowUp"]
+        : ["MetaLeft", "Tab"],
+    );
+  };
+  const showDesktop = () =>
+    caps?.windowActions && lease && canInput
+      ? void request({
+          op: "windowAction",
+          action: "desktop",
+          lease: lease.lease,
+        }).catch(() =>
+          Alert.alert(
+            t("remoteDesktop.showDesktop"),
+            t("remoteDesktop.settingFailed"),
+          ),
+        )
+      : shortcut(caps?.platform === "darwin" ? ["F11"] : ["MetaLeft", "KeyD"]);
+  const toggleOperations = () => {
+    Keyboard.dismiss();
+    setKeyboard(false);
+    send({ type: "events", events: [{ kind: "release" }] });
+    setOperations(!operations);
+  };
+  const foldKeyInputAllowed = () =>
+    inputAllowed(Boolean(active.current?.controlling));
+  const openFoldInputMethod = () => {
+    setOperations(false);
+    setKeyboard(true);
+    selectKeyboardMode(false);
+  };
+  const foldUndo = () =>
+    shortcut([
+      caps?.platform === "darwin" ? "MetaLeft" : "ControlLeft",
+      "KeyZ",
+    ]);
+  const foldRedo = () =>
+    shortcut(
+      caps?.platform === "darwin"
+        ? ["MetaLeft", "ShiftLeft", "KeyZ"]
+        : ["ControlLeft", "KeyY"],
+    );
+  // Desktop-level shortcuts cannot reach anything in a single-window handoff.
+  const foldDesktopAction = {
+    id: "desktop",
+    label: t("remoteDesktop.showDesktop"),
+    Icon: ShowDesktopIcon,
+    press: showDesktop,
+  };
+  const foldSystemActions: SystemKeyAction[] = handoff
+    ? []
+    : caps?.workspaceNavigation
+      ? [
+          ...(caps.omarchyMenu
+            ? [
+                {
+                  id: "omarchyMenu",
+                  label: t("remoteDesktop.omarchyMenu"),
+                  Icon: OmarchyMenuIcon,
+                  press: () => workspaceAction("omarchyMenu"),
+                },
+              ]
+            : []),
+          {
+            id: "workspaceLeft",
+            label: t("remoteDesktop.workspaceLeft"),
+            Icon: WorkspaceLeftIcon,
+            press: () => workspaceAction("workspaceLeft"),
           },
-        ]}
-      >
-        {retro && code === "MetaLeft" && caps?.platform === "darwin"
-          ? "⌘"
-          : retro && code === "ControlLeft"
-            ? "Ctrl"
-            : retro && code === "Backspace"
-              ? "⌫"
-              : keyLabel(code)}
-      </Text>
-    </Pressable>
-  );
+          {
+            id: "workspaceRight",
+            label: t("remoteDesktop.workspaceRight"),
+            Icon: WorkspaceRightIcon,
+            press: () => workspaceAction("workspaceRight"),
+          },
+        ]
+      : [
+          {
+            id: "search",
+            label:
+              caps?.platform === "darwin"
+                ? "Spotlight"
+                : t("remoteDesktop.keySearch"),
+            Icon: Search,
+            press: () =>
+              shortcut(
+                caps?.platform === "darwin"
+                  ? ["MetaLeft", "Space"]
+                  : caps?.platform === "win32"
+                    ? ["MetaLeft", "KeyS"]
+                    : ["MetaLeft"],
+              ),
+          },
+          {
+            id: "overview",
+            label:
+              caps?.platform === "darwin"
+                ? "Mission Control"
+                : t("remoteDesktop.keyTaskView"),
+            Icon: LayoutGrid,
+            press: () =>
+              shortcut(
+                caps?.platform === "darwin"
+                  ? ["ControlLeft", "ArrowUp"]
+                  : ["MetaLeft", "Tab"],
+              ),
+          },
+          // Cindy's own window list when the host offers it; otherwise App Exposé.
+          ...(caps?.windowActions
+            ? [
+                {
+                  id: "windows",
+                  label: t("remoteDesktop.allWindows"),
+                  Icon: AllWindowsIcon,
+                  press: openWindows,
+                },
+              ]
+            : caps?.platform === "darwin"
+              ? [
+                  {
+                    id: "windows",
+                    label: t("remoteDesktop.keyAppWindows"),
+                    Icon: AllWindowsIcon,
+                    press: () => shortcut(["ControlLeft", "ArrowDown"]),
+                  },
+                ]
+              : []),
+          foldDesktopAction,
+        ];
+  const foldDeckInsets = {
+    top: Math.max(0, foldControls.y - hardwareControls.y),
+    bottom: Math.max(0, geometry.height - foldControls.y - foldControls.height),
+    left: foldControls.x,
+    right: Math.max(0, geometry.width - foldControls.x - foldControls.width),
+  };
   // A device screen turns with the phone by default: hold the phone sideways
   // and the device goes landscape; upright again, and it turns back. Turning
   // it by hand (an iPad on an iPhone, a landscape game, upside down) stops
@@ -3519,17 +3602,47 @@ export function RemoteDesktopSession({
   }, [zoomEditing, leaseId, viewerReadyRevision]);
   const selectKeyboardMode = (computer: boolean) => {
     send({ type: "events", events: [{ kind: "release" }] });
-    heldKeys.current.clear();
+    setAwaitingSystemKeyboard(
+      !computer && fullKeys && keyboard && Platform.OS === "ios",
+    );
     setFullKeys(computer);
-    setModifiers([]);
     if (!computer) setKeyboardFocusRequest((value) => value + 1);
   };
-  const selectKeyPage = (page: number) => {
-    if (page !== 0 && page !== 1) return;
-    send({ type: "events", events: [{ kind: "release" }] });
-    heldKeys.current.clear();
-    setModifiers([]);
-    setKeyPage(page);
+  const keyboardCompact =
+    (foldLayout ? foldControls.width : windowSize.width) < 560;
+  const panelBottomPadding = foldLayout
+    ? 0
+    : panelKeys
+      ? Math.max(spacing.sm, insets.bottom)
+      : spacing.xs;
+  const rememberedKeyboard =
+    systemKeyboardHeight.current[landscape ? "landscape" : "portrait"];
+  const keysHeight = rememberedKeyboard
+    ? rememberedKeyboard - panelBottomPadding + spacing.xs
+    : landscape
+      ? 180
+      : keyboardCompact
+        ? 276
+        : 300;
+  const keyboardSurfaceHeight = Math.min(
+    KEY_BAR_HEIGHT +
+      Math.max(
+        landscape ? 160 : 220,
+        Math.min(landscape ? 240 : 320, keysHeight),
+      ),
+    foldLayout ? foldControls.height : windowSize.height * 0.7,
+  );
+  const keySurface = {
+    platform: caps?.platform,
+    // Inactive already released host input; latched modifiers must not outlive it.
+    enabled: canInput && appState === "active",
+    allowInput: foldKeyInputAllowed,
+    resyncRef: keyResync,
+    send,
+    systemActions: foldSystemActions,
+    undo: foldUndo,
+    redo: foldRedo,
+    keyLabel,
   };
   // A plugin live screen: its own buttons, in the plugin's order of importance.
   const liveScreen = lease?.screen;
@@ -3596,10 +3709,18 @@ export function RemoteDesktopSession({
     (NativeRemoteDesktopView || canPip),
   );
   const latency = network?.latencyMs;
+  const deckClipboard = (
+    <RemoteDesktopClipboardButton
+      enabled={!connectionPending && canInput}
+      supported={caps?.clipboardText === true}
+      transfer={transferClipboard}
+      tint={colors.textSecondary}
+    />
+  );
   return (
     <KeyboardAvoidingView
       testID="remoteDesktop.layout"
-      enabled={!landscapeKeyboardOverlay && !foldLayout}
+      enabled={!landscapeKeyboardOverlay && !foldLayout && !panelKeys}
       behavior={Platform.OS === "ios" ? "padding" : undefined}
       style={styles.root}
     >
@@ -3963,6 +4084,12 @@ export function RemoteDesktopSession({
                   )
                 }
               >
+                {!liveScreen && foldSkinAvailable && controlPage === "controls" ? (
+                  <FoldDesktopSkinSwitch
+                    skin={foldSkin}
+                    onChange={setFoldSkin}
+                  />
+                ) : null}
                 {liveScreen ? (
                   <LiveScreenSettings
                     background={{
@@ -4079,36 +4206,32 @@ export function RemoteDesktopSession({
             testID="remoteDesktop.foldControls"
             style={{
               position: "absolute",
-              left: retroDesktop ? hardwareControls.x : foldControls.x,
-              top: retroDesktop ? hardwareControls.y : foldControls.y,
-              width: retroDesktop ? hardwareControls.width : foldControls.width,
-              height: retroDesktop
+              left: physicalDeck ? hardwareControls.x : foldControls.x,
+              top: physicalDeck ? hardwareControls.y : foldControls.y,
+              width: physicalDeck ? hardwareControls.width : foldControls.width,
+              height: physicalDeck
                 ? hardwareControls.height
                 : foldControls.height,
-              paddingBottom: retroDesktop
+              paddingBottom: physicalDeck
                 ? 0
                 : toolbarSize.height + (showMouseButtons ? 80 : 0),
             }}
           >
-            {retroDesktop ? (
+            {keyboardDeck ? (
+              <FoldDesktopKeyboard
+                {...keySurface}
+                onInputMethod={openFoldInputMethod}
+                onOperations={toggleOperations}
+                clipboard={deckClipboard}
+                safeInsets={foldDeckInsets}
+                bottomReserve={showMouseButtons ? 80 : 0}
+              />
+            ) : retroDesktop ? (
               <FoldDesktopDeck
-                renderKey={(code) => heldKey(code, true)}
-                send={send}
-                enabled={canInput}
+                keys={keySurface}
                 skin={foldSkin}
                 onChange={setFoldSkin}
-                safeInsets={{
-                  top: Math.max(0, foldControls.y - hardwareControls.y),
-                  bottom: Math.max(
-                    0,
-                    geometry.height - foldControls.y - foldControls.height,
-                  ),
-                  left: foldControls.x,
-                  right: Math.max(
-                    0,
-                    geometry.width - foldControls.x - foldControls.width,
-                  ),
-                }}
+                safeInsets={foldDeckInsets}
                 bottomReserve={toolbarSize.height + (showMouseButtons ? 80 : 0)}
               />
             ) : (
@@ -4117,8 +4240,6 @@ export function RemoteDesktopSession({
                   <FoldDesktopSkinSwitch
                     skin={foldSkin}
                     onChange={(value) => {
-                      heldKeys.current.clear();
-                      setModifiers([]);
                       send({ type: "releaseInput" });
                       setFoldSkin(value);
                     }}
@@ -4130,7 +4251,7 @@ export function RemoteDesktopSession({
             {showMouseButtons && canInput ? (
               <RemoteDesktopMouseControls
                 send={send}
-                bottom={toolbarSize.height}
+                bottom={keyboardDeck ? 0 : toolbarSize.height}
                 right={0}
                 compact
                 labels={{
@@ -4142,7 +4263,7 @@ export function RemoteDesktopSession({
             ) : null}
           </View>
         ) : null}
-        {!keyboard && !screenPlugin && (
+        {!keyboard && !keyboardDeck && !screenPlugin && (
           <Animated.View
             key={landscape ? "landscape-toolbar" : "portrait-toolbar"}
             testID="remoteDesktop.toolbarPosition"
@@ -4244,45 +4365,10 @@ export function RemoteDesktopSession({
               canControl={canInput}
               keyboard={keyboard}
               operations={operations}
-              onWindows={() => {
-                if (caps?.windowActions) {
-                  setOperations(false);
-                  Keyboard.dismiss();
-                  setKeyboard(false);
-                  setWindowsOpen(true);
-                  return;
-                }
-                shortcut(
-                  caps?.platform === "darwin"
-                    ? ["ControlLeft", "ArrowUp"]
-                    : ["MetaLeft", "Tab"],
-                );
-              }}
-              onDesktop={() =>
-                caps?.windowActions && lease && canInput
-                  ? void request({
-                      op: "windowAction",
-                      action: "desktop",
-                      lease: lease.lease,
-                    }).catch(() =>
-                      Alert.alert(
-                        t("remoteDesktop.showDesktop"),
-                        t("remoteDesktop.settingFailed"),
-                      ),
-                    )
-                  : shortcut(
-                      caps?.platform === "darwin"
-                        ? ["F11"]
-                        : ["MetaLeft", "KeyD"],
-                    )
-              }
+              onWindows={openWindows}
+              onDesktop={showDesktop}
               onKeyboard={toggleKeyboard}
-              onOperations={() => {
-                Keyboard.dismiss();
-                setKeyboard(false);
-                send({ type: "events", events: [{ kind: "release" }] });
-                setOperations(!operations);
-              }}
+              onOperations={toggleOperations}
             />
           </Animated.View>
         )}
@@ -4347,9 +4433,7 @@ export function RemoteDesktopSession({
             {
               paddingLeft: Math.max(spacing.xs, edgePadding.paddingLeft),
               paddingRight: Math.max(spacing.sm, edgePadding.paddingRight),
-              paddingBottom: fullKeys
-                ? Math.max(spacing.sm, insets.bottom)
-                : spacing.xs,
+              paddingBottom: panelBottomPadding,
             },
             foldLayout && {
               position: "absolute",
@@ -4363,232 +4447,77 @@ export function RemoteDesktopSession({
             },
           ]}
         >
-          <View style={styles.keyboardHeader}>
-            <RemoteDesktopClipboardButton
-              enabled={!connectionPending && canInput}
-              supported={caps?.clipboardText === true}
-              transfer={transferClipboard}
-            />
-            {Platform.OS === "ios" ? (
-              <View style={{ flex: 1 }}>
-                <SegmentedControl
-                  values={[
-                    t("remoteDesktop.inputMethod"),
-                    t("remoteDesktop.computerKeyboard"),
-                  ]}
-                  selectedIndex={fullKeys ? 1 : 0}
-                  appearance={colorScheme}
-                  style={{ height: 44 }}
-                  onChange={({ nativeEvent }) => {
-                    if ([0, 1].includes(nativeEvent.selectedSegmentIndex))
-                      selectKeyboardMode(
-                        nativeEvent.selectedSegmentIndex === 1,
-                      );
-                  }}
-                />
-              </View>
-            ) : (
-              <View style={styles.modeSegments}>
-                {[false, true].map((computer) => (
-                  <Pressable
-                    key={String(computer)}
-                    accessibilityRole="tab"
-                    accessibilityState={{ selected: fullKeys === computer }}
-                    onPress={() => selectKeyboardMode(computer)}
-                    style={({ pressed }) => [
-                      styles.modeTab,
-                      fullKeys === computer && styles.modeTabSelected,
-                      pressed && mobileInteractionStyles.pressed,
-                    ]}
-                  >
-                    <Text
-                      numberOfLines={1}
-                      style={[
-                        styles.modeText,
-                        fullKeys === computer && styles.modeTextSelected,
-                      ]}
-                    >
-                      {t(
-                        computer
-                          ? "remoteDesktop.computerKeyboard"
-                          : "remoteDesktop.inputMethod",
-                      )}
-                    </Text>
-                  </Pressable>
-                ))}
-              </View>
-            )}
-            <RemoteDesktopPanelButton
-              label={t("remoteDesktop.close")}
-              onPress={() => {
-                setKeyboard(false);
-                heldKeys.current.clear();
-                setModifiers([]);
-                send({ type: "events", events: [{ kind: "release" }] });
+          <View
+            testID="remoteDesktop.keyboardSurface"
+            style={{
+              height: panelKeys ? keyboardSurfaceHeight : KEY_BAR_HEIGHT,
+            }}
+          >
+            <RemoteKeySurface
+              key={panelKeys ? "keys" : "bar"}
+              {...keySurface}
+              compact={keyboardCompact}
+              mode={panelKeys ? "keyboard" : "bar"}
+              strip={{
+                height: KEY_BAR_HEIGHT,
+                left: KEY_BAR_HEIGHT,
+                right: KEY_BAR_HEIGHT * 2,
               }}
             />
-          </View>
-          {fullKeys && (
-            <View>
-              <View style={styles.modifierRow}>
+            {/* The same bar in both modes: only the keys between these change. */}
+            <View pointerEvents="box-none" style={styles.keyboardBar}>
+              <Pressable
+                testID="remoteDesktop.keyboardMode"
+                accessibilityRole="button"
+                accessibilityLabel={t(
+                  fullKeys
+                    ? "remoteDesktop.inputMethod"
+                    : "remoteDesktop.computerKeyboard",
+                )}
+                onPress={() => selectKeyboardMode(!fullKeys)}
+                style={({ pressed }) => [
+                  styles.keyboardBarButton,
+                  pressed && mobileInteractionStyles.pressed,
+                ]}
+              >
+                {fullKeys ? (
+                  <Languages
+                    size={iconSize.action}
+                    strokeWidth={iconStroke.regular}
+                    color={colors.textSecondary}
+                  />
+                ) : (
+                  <KeyboardIcon
+                    size={iconSize.action}
+                    strokeWidth={iconStroke.regular}
+                    color={colors.textSecondary}
+                  />
+                )}
+              </Pressable>
+              <View style={styles.keyboardBarEnd}>
+                {deckClipboard}
                 <Pressable
                   accessibilityRole="button"
-                  accessibilityState={{ selected: comboMode }}
-                  accessibilityLabel={t("remoteDesktop.comboMode")}
+                  accessibilityLabel={t("remoteDesktop.close")}
                   onPress={() => {
+                    setKeyboard(false);
+                    setAwaitingSystemKeyboard(false);
                     send({ type: "events", events: [{ kind: "release" }] });
-                    heldKeys.current.clear();
-                    setComboMode(!comboMode);
-                    setModifiers([]);
                   }}
                   style={({ pressed }) => [
-                    styles.comboKey,
-                    comboMode && styles.modifierSelected,
-                    pressed && styles.keyPressed,
+                    styles.keyboardBarButton,
+                    pressed && mobileInteractionStyles.pressed,
                   ]}
                 >
-                  <Text
-                    numberOfLines={2}
-                    style={[
-                      styles.modifierText,
-                      comboMode && styles.modifierTextSelected,
-                    ]}
-                  >
-                    {t("remoteDesktop.comboMode")}
-                  </Text>
+                  <ChevronDown
+                    size={iconSize.action}
+                    strokeWidth={iconStroke.regular}
+                    color={colors.textSecondary}
+                  />
                 </Pressable>
-                {MODIFIERS.map((code) => (
-                  <Pressable
-                    key={code}
-                    accessibilityRole="button"
-                    accessibilityState={{ selected: modifiers.includes(code) }}
-                    onPressIn={() => {
-                      if (
-                        comboMode ||
-                        !inputAllowed(Boolean(active.current?.controlling)) ||
-                        heldKeys.current.has(code)
-                      )
-                        return;
-                      heldKeys.current.set(code, [code]);
-                      send({
-                        type: "events",
-                        events: [{ kind: "key", code, down: true }],
-                      });
-                    }}
-                    onPressOut={() => {
-                      if (!heldKeys.current.has(code)) return;
-                      heldKeys.current.delete(code);
-                      send({
-                        type: "events",
-                        events: [{ kind: "key", code, down: false }],
-                      });
-                    }}
-                    onPress={() => {
-                      if (
-                        !comboMode ||
-                        !inputAllowed(Boolean(active.current?.controlling))
-                      )
-                        return;
-                      setModifiers((previous) =>
-                        previous.includes(code)
-                          ? previous.filter((v) => v !== code)
-                          : [...previous, code],
-                      );
-                    }}
-                    style={({ pressed }) => [
-                      styles.modifierKey,
-                      modifiers.includes(code) && styles.modifierSelected,
-                      pressed && styles.keyPressed,
-                    ]}
-                  >
-                    <Text
-                      style={[
-                        styles.modifierText,
-                        modifiers.includes(code) && styles.modifierTextSelected,
-                      ]}
-                    >
-                      {keyLabel(code)}
-                    </Text>
-                  </Pressable>
-                ))}
               </View>
-              <ScrollView
-                testID="remoteDesktop.keyPageViewport"
-                style={{ flexShrink: 1, maxHeight: landscape ? 156 : 300 }}
-                keyboardShouldPersistTaps="always"
-              >
-                <View style={styles.tools}>
-                  {KEY_PAGES[keyPage].map((row, index) => (
-                    <View
-                      key={index}
-                      style={keyPage === 1 ? styles.functionRow : styles.keyRow}
-                    >
-                      {keyPage === 1
-                        ? [row.slice(0, 3), row.slice(3)].map(
-                            (group, groupIndex) => (
-                              <View
-                                key={groupIndex}
-                                style={styles.functionGroup}
-                              >
-                                {group.map((code, slot) =>
-                                  code ? (
-                                    heldKey(code)
-                                  ) : (
-                                    <View
-                                      key={`gap-${slot}`}
-                                      style={styles.emptyKey}
-                                      pointerEvents="none"
-                                    />
-                                  ),
-                                )}
-                              </View>
-                            ),
-                          )
-                        : row.map((code) => (code ? heldKey(code) : null))}
-                    </View>
-                  ))}
-                </View>
-              </ScrollView>
-              {Platform.OS === "ios" ? (
-                <SegmentedControl
-                  values={["ABC", t("remoteDesktop.functionKeys")]}
-                  selectedIndex={keyPage}
-                  appearance={colorScheme}
-                  style={{ height: 44 }}
-                  onChange={({ nativeEvent }) => {
-                    selectKeyPage(nativeEvent.selectedSegmentIndex);
-                  }}
-                />
-              ) : (
-                <View style={styles.pageNavigation}>
-                  {[0, 1].map((page) => (
-                    <Pressable
-                      key={page}
-                      accessibilityRole="tab"
-                      accessibilityState={{ selected: keyPage === page }}
-                      onPress={() => selectKeyPage(page)}
-                      style={styles.pageTab}
-                    >
-                      <Text
-                        style={[
-                          styles.pageLabel,
-                          keyPage === page && styles.pageLabelSelected,
-                        ]}
-                      >
-                        {page === 0 ? "ABC" : t("remoteDesktop.functionKeys")}
-                      </Text>
-                      <View
-                        style={[
-                          styles.pageIndicator,
-                          keyPage === page && styles.pageIndicatorSelected,
-                        ]}
-                      />
-                    </Pressable>
-                  ))}
-                </View>
-              )}
             </View>
-          )}
+          </View>
         </View>
       )}
       {screenPlugin && (
@@ -4733,7 +4662,6 @@ const makeStyles = (colors: ThemeColors) =>
       lineHeight: lineHeight.body,
       fontWeight: fontWeight.medium,
     },
-    actionRow: { flexDirection: "row", flexWrap: "wrap", gap: spacing.sm },
     viewOnly: {
       position: "absolute",
       alignSelf: "center",
@@ -4754,11 +4682,6 @@ const makeStyles = (colors: ThemeColors) =>
     landscape: { flexDirection: "row" },
     canvas: { flex: 1, overflow: "hidden" },
     webview: { flex: 1, backgroundColor: colors.surface },
-    tools: { gap: spacing.xs, paddingVertical: spacing.xs },
-    keyRow: { flexDirection: "row", gap: spacing.xs },
-    functionRow: { flexDirection: "row", gap: spacing.md },
-    functionGroup: { flex: 1, flexDirection: "row", gap: spacing.xs },
-    emptyKey: { flex: 1, minHeight: 44 },
     button: {
       minHeight: 44,
       minWidth: 44,
@@ -4787,131 +4710,23 @@ const makeStyles = (colors: ThemeColors) =>
       borderTopWidth: StyleSheet.hairlineWidth,
       borderTopColor: colors.border,
     },
-    keyboardHeader: {
+    keyboardBar: {
+      position: "absolute",
+      top: 0,
+      left: 0,
+      right: 0,
+      height: KEY_BAR_HEIGHT,
       flexDirection: "row",
-      alignItems: "center",
-      gap: spacing.sm,
-      paddingVertical: spacing.sm,
+      justifyContent: "space-between",
     },
-    modeSegments: {
-      flex: 1,
-      flexDirection: "row",
-      backgroundColor: colors.surfaceChip,
-      borderRadius: radius.pill,
-      padding: spacing.xs,
-    },
-    modeTab: {
-      flex: 1,
-      minHeight: 36,
+    keyboardBarEnd: { flexDirection: "row" },
+    keyboardBarButton: {
+      width: KEY_BAR_HEIGHT,
+      height: KEY_BAR_HEIGHT,
       alignItems: "center",
       justifyContent: "center",
-      borderRadius: radius.pill,
-    },
-    modeTabSelected: { backgroundColor: colors.surfaceElevated },
-    modeText: {
-      fontSize: typeScale.bodySmall,
-      lineHeight: lineHeight.bodySmall,
-      fontWeight: fontWeight.regular,
-      color: colors.textTertiary,
     },
     // 选中只换色,字重保持与未选一致。
-    modeTextSelected: {
-      color: colors.textPrimary,
-    },
-    closeKey: {
-      width: 44,
-      height: 44,
-      justifyContent: "center",
-      alignItems: "center",
-      borderRadius: radius.pill,
-    },
-    modifierRow: {
-      flexDirection: "row",
-      gap: spacing.xs,
-      paddingBottom: spacing.xs,
-    },
-    comboKey: {
-      flex: 1.25,
-      minHeight: 44,
-      paddingHorizontal: spacing.xs,
-      alignItems: "center",
-      justifyContent: "center",
-      backgroundColor: colors.surfaceChip,
-      borderRadius: radius.control,
-    },
-    modifierKey: {
-      flex: 1,
-      minHeight: 40,
-      alignItems: "center",
-      justifyContent: "center",
-      backgroundColor: colors.surfaceChip,
-      borderRadius: radius.control,
-    },
-    modifierSelected: { backgroundColor: colors.textPrimary },
-    modifierText: {
-      color: colors.textPrimary,
-      fontSize: typeScale.footnote,
-      lineHeight: lineHeight.caption,
-      fontWeight: fontWeight.medium,
-    },
-    modifierTextSelected: { color: colors.ctaText },
-    keyPressed: { opacity: 0.55 },
-    keyText: {
-      color: colors.textPrimary,
-      fontSize: typeScale.body,
-      lineHeight: lineHeight.body,
-      fontWeight: fontWeight.medium,
-    },
-    specialKeyText: {
-      color: colors.textPrimary,
-      fontSize: typeScale.caption,
-      lineHeight: lineHeight.caption,
-    },
-    pageNavigation: {
-      flexDirection: "row",
-      justifyContent: "center",
-      gap: spacing.lg,
-      paddingTop: 0,
-    },
-    pageTab: {
-      minWidth: 64,
-      height: 44,
-      alignItems: "center",
-      justifyContent: "center",
-      gap: 0,
-    },
-    pageLabel: {
-      color: colors.textTertiary,
-      fontSize: typeScale.caption,
-      lineHeight: lineHeight.caption,
-      fontWeight: fontWeight.regular,
-    },
-    pageLabelSelected: { color: colors.textPrimary },
-    pageIndicator: {
-      width: 16,
-      height: 2,
-      borderRadius: radius.pill,
-      backgroundColor: "transparent",
-    },
-    pageIndicatorSelected: { backgroundColor: colors.textPrimary },
-    computerKey: {
-      flex: 1,
-      minHeight: 44,
-      paddingHorizontal: 2,
-      alignItems: "center",
-      justifyContent: "center",
-      backgroundColor: colors.surfaceElevated,
-      borderRadius: radius.control,
-      borderBottomWidth: StyleSheet.hairlineWidth,
-      borderBottomColor: colors.border,
-    },
-    retroKey: {
-      backgroundColor: "transparent",
-      borderBottomWidth: 0,
-      paddingHorizontal: spacing.sm,
-      paddingBottom: spacing.xs,
-      overflow: "hidden",
-    },
   });
 
 /** A device screen's reported upright size, or null when absent or malformed. */

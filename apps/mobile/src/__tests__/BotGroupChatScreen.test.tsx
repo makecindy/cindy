@@ -17,6 +17,7 @@ const h = vi.hoisted(() => ({
   confirm: vi.fn(),
   leave: vi.fn(),
   focused: true,
+  nativeMenus: true,
   appState: 'active',
   appStateListeners: new Set<(state: string) => void>(),
   closeSettings: null as null | (() => void),
@@ -107,7 +108,7 @@ vi.mock('expo-router', () => ({
   },
   useRouter: () => ({ back: h.back, replace: h.replace, push: h.push }),
   useNavigation: () => ({ getState: () => h.navigation }),
-  useFocusEffect: (effect: () => void) => useEffect(effect, [effect]),
+  useFocusEffect: (effect: () => void) => useEffect(() => h.focused ? effect() : undefined, [effect, h.focused]),
 }));
 vi.mock('expo-router/react-navigation', () => ({ useHeaderHeight: () => 72 }));
 vi.mock('react-native-safe-area-context', () => ({ SafeAreaView: ({ children }: any) => el('main', null, children), useSafeAreaInsets: () => ({ top: 59, bottom: 34, left: 0, right: 0 }) }));
@@ -140,7 +141,7 @@ vi.mock('@/device-link/remoteResourceCache', () => ({ markRemoteResourceRead: h.
 vi.mock('@/device-link/remoteResourceAvailability', () => ({ readRemoteCollectionCache: () => [] }));
 vi.mock('@/platform/chrome', () => ({ showConfirm: h.confirm }));
 vi.mock('@/platform/chrome/NativePullDownMenu', () => ({
-  usesNativePullDownMenu: () => true,
+  usesNativePullDownMenu: () => h.nativeMenus,
   NativePullDownMenu: ({ actions, onAction, children, testID, disabled, longPress }: any) => {
     const [opened, setOpened] = useState(false);
     const flat = (list: any[]): any[] => list.flatMap((action) => action.subactions ? flat(action.subactions) : [action]);
@@ -188,7 +189,7 @@ vi.mock('@/session/BotGroupAvatars', () => ({
 }));
 vi.mock('@/session/TeammateProcess', () => ({ useTeammateElapsedTitle: () => 'Working', TeammateWorkSegment: ({ title, children }: any) => el('div', null, title, children), TeammateProcessLink: ({ title, onPress }: any) => el('button', { onClick: onPress }, title), TeammateProcess: ({ title, children }: any) => el('section', null, title, children) }));
 vi.mock('@/session/BotGroupSpeakerRow', () => ({
-  BotGroupSpeakerRow: ({ identity, activity, sessionId }: any) => el('div', { 'data-testid': `speaker.${identity.botId}.${activity}`, 'data-session': sessionId }, identity.name),
+  BotGroupSpeakerRow: ({ identity, activity, sessionId, onStop, stopPending }: any) => el('div', { 'data-testid': `speaker.${identity.botId}.${activity}`, 'data-session': sessionId }, identity.name, onStop ? el('button', { 'data-testid': 'botGroup.work.stop', disabled: stopPending, onClick: onStop }, 'stop') : null),
 }));
 vi.mock('@/session/MobileComposerInputRow', () => ({
   // Like the real row: the card shows the tray above the input and the toolbar below it.
@@ -240,7 +241,13 @@ vi.mock('@/session/ComposerAttachmentTray', () => ({
     { 'data-testid': testID, onClick: onPress }, String(attachments.length + pendingUploads.length)),
 }));
 vi.mock('@/session/ImageLightbox', () => ({
-  ImageLightbox: ({ images, initialUrl }: any) => el('div', { 'data-testid': 'lightbox', 'data-url': initialUrl, 'data-count': String(images.length) }),
+  ImageLightbox: ({ images, initialUrl, resolveOpaqueSource, onResolveRemoteMedia }: any) => {
+    const [url, setUrl] = useState(resolveOpaqueSource ? '' : initialUrl);
+    useEffect(() => {
+      if (resolveOpaqueSource) void onResolveRemoteMedia({ url: initialUrl }, {}).then((value: any) => setUrl(value.url));
+    }, []);
+    return el('div', { 'data-testid': 'lightbox', 'data-url': url, 'data-count': String(images.length) });
+  },
 }));
 vi.mock('@/session/MessageRenderer', () => ({
   AttachmentStrip: ({ attachments, onOpen, onOpenFile, align }: any) => el('div', { 'data-testid': 'attachmentStrip', 'data-align': align },
@@ -253,7 +260,7 @@ vi.mock('@/session/MessageRenderer', () => ({
         : { kind: 'file', title: item.name, body: '' }),
     }, item.name))),
 }));
-vi.mock('@/session/useBotGroupRemoteMedia', () => ({ useBotGroupRemoteMedia: () => async () => { throw new Error('offline'); } }));
+vi.mock('@/session/useBotGroupRemoteMedia', () => ({ useBotGroupRemoteMedia: () => async (media: any) => ({ url: media.url, previewable: true, mimeType: 'image/png' }) }));
 vi.mock('@/session/useHostTeammates', () => ({ useHostTeammates: (_host: unknown, _enabled: boolean, query = '') => { h.teammateQuery = query; return h.teammates; } }));
 vi.mock('@/session/useBotGroupChat', () => ({ useBotGroupChat: (...args: unknown[]) => { h.hookCalls(...args); return h.chat; } }));
 vi.mock('@/session/useBotGroupSettingsManagement', () => ({ useBotGroupSettingsManagement: () => h.management ?? ({
@@ -342,6 +349,7 @@ async function render(data: BotGroupRemoteChatData | null = group(), kind: 'read
 }
 
 beforeEach(() => {
+  h.nativeMenus = true;
   shareSelectionStore.exit();
   h.management = null;
   h.cloudRows = null;
@@ -384,6 +392,11 @@ describe('group timeline', () => {
     await render(parseBotGroupChatData(deleted)!);
     expect(byId('botGroup.quote')!.textContent).toContain('groupChat.quote.deleted');
     expect(node.textContent).not.toContain('私密的原文');
+    // PR #8009: moving the quote into a bubble must preserve its locate action.
+    // A missing source with no older page must report unavailability, not silently do nothing.
+    await render({ ...deleted, hasMoreBefore: false, messages: [deleted.messages[1]] });
+    await click('botGroup.quote');
+    expect(h.alert).toHaveBeenCalledWith('groupChat.quote.unavailable');
   });
 
   it('shows a task another owner\'s teammate started from the group as its posted title and state', async () => {
@@ -637,6 +650,72 @@ describe('group timeline', () => {
     expect(h.chat.act).toHaveBeenLastCalledWith('plan-edit', { planId: 'p1', position: 0, action: 'remove' });
   });
 
+  // #5759: a retained background group must not alert on its cancelled plan action (unit).
+  it.each(['direct', 'bridge'])('keeps the %s pending lock aligned with transport cancellation across blur', async transport => {
+    let finish!: () => void;
+    let reject!: (error: Error) => void;
+    h.chat.server = transport === 'direct';
+    const deviceId = transport === 'direct' ? '' : 'mac';
+    h.chat.act.mockImplementationOnce(() => new Promise((yes, no) => { finish = () => yes({ effects: [] }); reject = no; }));
+    await render(group(), 'ready', undefined, deviceId);
+    await click('botGroup.plan.start');
+    h.focused = false; await render(group(), 'ready', undefined, deviceId);
+    h.focused = true; await render(group(), 'ready', undefined, deviceId);
+    expect(byId('botGroup.plan.start')?.disabled).toBe(transport === 'bridge');
+    if (transport === 'bridge') {
+      await click('botGroup.plan.start');
+      expect(h.chat.act).toHaveBeenCalledTimes(1);
+      await act(async () => { finish(); });
+    } else await act(async () => { reject(new Error('OWNER_CHANGED')); });
+    expect(h.alert).not.toHaveBeenCalled();
+    await click('botGroup.plan.start');
+    expect(h.chat.act).toHaveBeenCalledTimes(2);
+  });
+
+  // #8456: a subscription update must dismiss an old step menu, not retarget its positional edit (unit).
+  it('closes the old step menu on a plan revision and submits only the newly displayed revision', async () => {
+    h.nativeMenus = false; h.chat.server = true;
+    const data = group();
+    Object.assign(data.plans[0]!, { revision: 2 });
+    await render(data, 'ready', undefined, '');
+    await click('botGroup.plan.step');
+    expect(byId('botGroup.plan.stepMenu.0.sheet')).not.toBeNull();
+    const next = { ...data, plans: data.plans.map(plan => ({ ...plan, revision: 3 })) };
+    await render(next, 'ready', undefined, '');
+    expect(byId('botGroup.plan.stepMenu.0.sheet')).toBeNull();
+    expect(h.chat.act).not.toHaveBeenCalled();
+    await click('botGroup.plan.step');
+    await click('botGroup.plan.stepMenu.0.option.remove');
+    expect(h.chat.act).toHaveBeenLastCalledWith('plan-edit', { planId: 'p1', position: 0, action: 'remove', expectedRevision: 3 });
+  });
+
+  // #5759, unit: direct-server plans used to bypass role checks on the existing
+  // timeline. Render the real card with one non-manageable open plan (no native IO).
+  it('keeps a system-signed plan card and its fallback when plan reading is unavailable', async () => {
+    const data = group();
+    data.plans = []; data.openPlan = null;
+    data.messages = [message('plan', 1, { kind: 'plan', authorKind: 'system', planId: 'p1', content: 'Builder: Build; Reviewer: Review' })];
+    await render(data);
+    expect(byId('botGroup.message.plan')?.textContent).toContain('Builder: Build; Reviewer: Review');
+    expect(byId('botGroup.message.plan')?.textContent).toContain('groupChat.plan.missing');
+    expect(byId('botGroup.plan.start')).toBeNull();
+  });
+
+  it.each(['proposed', 'waiting'] as const)('shows a read-only %s plan without management controls', async status => {
+    h.chat.server = true;
+    const data = group();
+    data.plans[0] = { ...data.plans[0]!, status, canManage: false, currentStep: status === 'waiting' ? 0 : null,
+      steps: data.plans[0]!.steps.map((step, index) => ({ ...step, status: status === 'waiting' && index === 0 ? 'done' : 'pending' })) };
+    data.openPlan = { ...data.openPlan!, status, currentStep: status === 'waiting' ? 0 : null };
+    await render(data, 'ready', undefined, '');
+    expect(byId('botGroup.plan')).not.toBeNull();
+    expect(byId('botGroup.plan.start')).toBeNull();
+    expect(byId('botGroup.plan.stepMenu.0')).toBeNull();
+    expect(byId('botGroup.followUp.continue')).toBeNull();
+    expect(byId('botGroup.followUp.end')).toBeNull();
+    expect(h.chat.act).not.toHaveBeenCalled();
+  });
+
   // The computer's 自动交接 survives the phone's parse, so the card does not promise a 继续 that never comes.
   it.each([[true, 'groupChat.plan.autoNote'], [undefined, 'groupChat.plan.pauseNote']] as const)('says how steps hand on (autoContinue=%s)', async (autoContinue, note) => {
     const data = group();
@@ -728,6 +807,16 @@ describe('group timeline', () => {
     expect(byId('botGroup.plan.start')).toBeNull();
     expect(byId('botGroup.plan.stepMenu.0')).toBeNull();
     expect(byId('botGroup.plan.finalNote')?.textContent).toBe('groupChat.plan.superseded');
+    // #5759 runtime: stopping a queued execution can leave its step running.
+    // The real card must not continue to claim active work after the plan stops.
+    data.plans[0] = { ...data.plans[0]!, status: 'stopped', currentStep: 1,
+      steps: [{ ...data.plans[0]!.steps[0]!, status: 'done' }, { ...data.plans[0]!.steps[1]!, status: 'running' }] };
+    await render(data);
+    expect(byId('botGroup.plan.finalNote')?.textContent).toBe('groupChat.plan.stopped');
+    expect(byId('botGroup.plan.running')).toBeNull();
+    expect(byId('botGroup.message.plan')?.textContent).not.toContain('groupChat.plan.stepRunning');
+    expect(byId('botGroup.message.plan')?.textContent).toContain('groupChat.plan.stepDone');
+    expect(byId('botGroup.plan.start')).toBeNull();
   });
 
   it('shows one row per speaker with its lane session', async () => {
@@ -775,6 +864,11 @@ describe('group composer', () => {
     await click('botGroup.composer.send');
     expect(h.row.value).toBe('引用回复');
     expect(byId('botGroup.cancelReply')).not.toBeNull();
+    // PR #8009: replacing the cancel control must remove only the quote, not the draft.
+    await click('botGroup.cancelReply');
+    expect(byId('botGroup.quote')).toBeNull();
+    expect(h.row.value).toBe('引用回复');
+    await click(`botGroup.thread.context.${originalId}.action.quote`);
     await click('botGroup.composer.send');
     expect(h.chat.act).toHaveBeenLastCalledWith('send', expect.objectContaining({
       text: '引用回复', quote: { messageId: originalId }, clientId: 'uuid-1',
@@ -1691,6 +1785,42 @@ it('renders component body as readable text without changing the message', async
   expect(reply.content).toBe(content);
 });
 
+// PR #7806 integration fixture: the real screen/work area consumes server state.
+// A stop receipt alone must not hide work; only the next idle snapshot clears both surfaces.
+it('keeps one group stop for concurrent work and clears header and strip on the idle snapshot', async () => {
+  const active = group({ round: { status: 'running', canContinue: false, speakers: [
+    { botId: 'abu', sessionId: 's-abu', activity: 'reply', executionStatus: 'running' },
+    { botId: 'mimi', sessionId: 's-mimi', activity: 'reply', executionStatus: 'stopping', stopping: true },
+  ] } });
+  await render(active);
+  expect(node.textContent).toContain('groupChat.list.running');
+  expect(all('botGroup.work.stop')).toHaveLength(1);
+  expect(byId('botGroup.work.stop')!.disabled).toBe(false);
+  let finish!: () => void;
+  h.chat.act.mockImplementation(() => new Promise<void>(resolve => { finish = resolve; }));
+  await click('botGroup.work.stop');
+  expect(byId('botGroup.work.stop')!.disabled).toBe(true);
+  expect(h.chat.act).toHaveBeenCalledWith('stop');
+  await act(async () => finish());
+  expect(byId('botGroup.work')).not.toBeNull();
+  await render(group());
+  expect(byId('botGroup.work')).toBeNull();
+  expect(node.textContent).not.toContain('groupChat.list.running');
+  expect(byId('botGroup.composer.stop')).toBeNull();
+});
+
+it('keeps active status and reports a failed stop so the user can retry', async () => {
+  const active = group({ round: { status: 'running', canContinue: false, speakers: [
+    { botId: 'abu', sessionId: 's-abu', activity: 'reply' },
+  ] } });
+  await render(active);
+  h.chat.act.mockRejectedValueOnce(new Error('offline'));
+  await click('botGroup.work.stop');
+  expect(h.alert).toHaveBeenCalled();
+  expect(byId('botGroup.work.stop')!.disabled).toBe(false);
+  expect(node.textContent).toContain('groupChat.list.running');
+});
+
 
 // Unit: the actual main/thread timeline must retain owner-only historical progress.
 // The remote resource parser and the disclosure state have separate regression coverage.
@@ -2110,3 +2240,13 @@ describe('mobile group threads', () => {
     await act(async () => { h.hardwareBack?.(); }); expect(h.leave).toHaveBeenCalledTimes(2);
   });
 });
+
+vi.mock('@/session/SheetModal', () => ({ SheetModal: ({ visible, children }: any) => visible ? children : null }));
+
+vi.mock('@/session/PdfDocumentPreview', () => ({ PdfDocumentPreview: () => null }));
+
+vi.mock('@/session/ModelDocumentPreview', () => ({ ModelDocumentPreview: () => null }));
+
+vi.mock('@/session/BotGroupTextAttachmentPreview', () => ({ BotGroupTextAttachmentPreview: () => null, botGroupTextAttachmentPreviewKind: () => null }));
+vi.mock('@/session/NativeVideoPlayer', () => ({ NativeVideoPlayer: () => null }));
+vi.mock('@/session/mediaPlayerWebView', () => ({ RemoteMediaPlayerWebView: () => null }));

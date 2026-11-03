@@ -80,7 +80,7 @@ struct WidgetSnapshot: Decodable {
   let updatedAtMs: Double?
   let locale: String
   let moneySymbol: String
-  let sources: [WidgetSource]
+  var sources: [WidgetSource]
   let usage: WidgetUsage
   let strings: [String: String]
 }
@@ -119,6 +119,72 @@ enum WidgetState: Decodable {
     if case .snapshot(_, _, let snapshot) = self { return snapshot }
     return nil
   }
+
+  /// The edit sheet's arrangement: pinned accounts first in their order, hidden ones left out,
+  /// the rest (accounts added later included) after them in the computer's order. Nil when it
+  /// changes nothing. Hiding every account shows them all, still in the pinned order, as the Mac
+  /// panel does.
+  func arranged(pinned: [String]?, hidden: [String]?) -> (state: WidgetState, pinnedCount: Int)? {
+    guard case .snapshot(let receivedAtMs, let deviceName, var snapshot) = self else { return nil }
+    let sources = snapshot.sources
+    var hiddenIDs = Set(Self.matching(hidden ?? [], in: sources).map(\.id))
+    var first = Self.matching(pinned ?? [], in: sources).filter { !hiddenIDs.contains($0.id) }
+    func ordered() -> [WidgetSource] {
+      let firstIDs = Set(first.map(\.id))
+      return first + sources.filter { !hiddenIDs.contains($0.id) && !firstIDs.contains($0.id) }
+    }
+    var shown = ordered()
+    if shown.isEmpty {
+      // Never an empty widget: show everything, keeping the pinned order.
+      hiddenIDs = []
+      first = Self.matching(pinned ?? [], in: sources)
+      shown = ordered()
+    }
+    if first.isEmpty && hiddenIDs.isEmpty { return nil }
+    snapshot.sources = shown
+    return (.snapshot(receivedAtMs: receivedAtMs, deviceName: deviceName, snapshot: snapshot), first.count)
+  }
+
+  /// The sources the keys name, in key order and each once (the edit sheet lets one account fill
+  /// two places). A connection's id only means something on its own computer (every computer's
+  /// built-in OpenAI connection can be a different login), so an account is the same one on
+  /// another computer when its logo and name match; the id only confirms it. Every key is looked
+  /// up among all sources and duplicates dropped afterwards, so a repeated choice never falls
+  /// through to a different account that happens to share its logo and name.
+  private static func matching(_ keys: [String], in sources: [WidgetSource]) -> [WidgetSource] {
+    var found: [WidgetSource] = []
+    for key in keys.map(AccountKey.init(encoded:)) {
+      let source = sources.first(where: { $0.id == key.id && $0.logo == key.logo && $0.name == key.name })
+        ?? sources.first(where: { $0.logo == key.logo && $0.name == key.name })
+      if let source, !found.contains(where: { $0.id == source.id }) { found.append(source) }
+    }
+    return found
+  }
+}
+
+/// A chosen account as the widget configuration stores it: the source id, logo and name in one
+/// string (the configuration keeps only entity ids).
+struct AccountKey {
+  let id: String
+  let logo: String?
+  let name: String
+
+  private static let separator: Character = "\u{1F}"
+
+  init(source: WidgetSource) {
+    id = source.id
+    logo = source.logo
+    name = source.name
+  }
+
+  init(encoded: String) {
+    let parts = encoded.split(separator: Self.separator, omittingEmptySubsequences: false).map(String.init)
+    id = parts[0]
+    logo = parts.count > 1 && !parts[1].isEmpty ? parts[1] : nil
+    name = parts.count > 2 ? parts[2...].joined(separator: String(Self.separator)) : ""
+  }
+
+  var encoded: String { [id, logo ?? "", name].joined(separator: String(Self.separator)) }
 }
 
 /// `UsageWidgetStore` in the app: every computer's latest state and the automatic choice.

@@ -7,6 +7,7 @@ import { isBotGroupClientId } from '../../shared/botGroupChat.js';
 import { SchedulerQueuedPreparationError } from './schedulerQueuedPreparation.js';
 import { ProviderGroupUsageLimitError } from '../provider-group/failurePolicy.js';
 import { MCP_APP_MESSAGE_GUARD, isUnrestorableMcpAppMessage, queuedAppMessageGuard, type McpAppMessageGuard } from '../mcp-apps/message.js';
+import { isOwnerOwnMessage } from '../input-handoff/ownerMessage.js';
 /**
  * AgentInputCoordinator — main 侧排队输入事务协调器。
  *
@@ -395,7 +396,7 @@ export interface AgentInputCoordinatorDeps {
    */
   createUserMessage?: typeof createDbMessage;
   /** Hide a user row that was written after `/clear` won the persistence race. */
-  rewindPersistedUserMessageAfterClear?: (sessionId: string, clientId: string) => Promise<void>;
+  rewindPersistedUserMessageAfterClear?: (sessionId: string, clientId: string, options?: { discard?: boolean }) => Promise<void>;
   /**
    * interrupted-turn-resume:判断某条已派发 user 消息之后 agent 是否已产出内容
    * (assistant / tool_use / thinking 持久化行)。retryLastError 用它决定语义:
@@ -636,6 +637,8 @@ export interface AgentInputCoordinatorDeps {
    * pendingQueue.unshift、不经这两个用户输入入口, 于是不会自我作废。
    */
   onUserEnqueue?: (sessionId: string) => void;
+  /** A new message from a person (not retransmitted, not automatic) entered the queue. */
+  onOwnerMessage?: (sessionId: string, item: AgentInputQueuedMessage) => void;
   /**
    * 真人消息刚进队、尚未 drain / sendToAgent。灵动岛用它在 agent 进程拉起前
    * 就进入 running 并播开始音效,避免「任务开始」跟着 isRunning 一起晚响。
@@ -1962,6 +1965,10 @@ export class AgentInputCoordinator {
       this.deps.onAutomaticEnqueue?.(sessionId, item);
     } else if (!automaticOrigin) {
       this.deps.onUserEnqueue?.(sessionId);
+      // Only the owner's own message closes their card, not a guest, a plugin, a teammate bot or an App card.
+      if (isOwnerOwnMessage({ ...item, appMessageGuard: queuedAppMessageGuard(item) }) && !getDeviceLinkInvokeContext()?.sharedTask) {
+        this.deps.onOwnerMessage?.(sessionId, item);
+      }
     }
     if (!schedulerOrigin) {
       // 有用户动作入队(用户自己接手,或自愈的续跑指令本身)→ 撤掉「重新连接中」提示。
@@ -5471,6 +5478,7 @@ export class AgentInputCoordinator {
   /** Only proven preparation rejection can erase a scheduled continuation row.
    * The coordinator owns its clientId even when dispatch beats enqueue's return.
    * Unknown vendor outcomes and interactive messages keep their existing history.
+   * The row is deleted, not tombstoned: a deferring routine would otherwise leave one hidden copy per attempt.
    */
   private async rewindSchedulerPreparationFailure(
     sessionId: string,
@@ -5491,7 +5499,7 @@ export class AgentInputCoordinator {
         && (failure?.code === 'PRECONDITION_FAILED' || message.includes('[PRECONDITION_FAILED]')));
     if (!preparationRejected) return false;
     try {
-      await this.deps.rewindPersistedUserMessageAfterClear(sessionId, item.clientId);
+      await this.deps.rewindPersistedUserMessageAfterClear(sessionId, item.clientId, { discard: true });
       return true;
     } catch (err) {
       log.warn('scheduled preparation rollback failed; retaining failure presentation', {

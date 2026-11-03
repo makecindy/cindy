@@ -129,6 +129,7 @@ function baseSession(): Record<string, unknown> {
     agentKind: 'cc',
     orcaRole: null,
     remoteHostId: null,
+    agentDeviceId: null,
     codexHistoryHasProductPrompt: null,
     clearedAt: null,
     userSendAt: 1700000000000,
@@ -635,10 +636,73 @@ describe('exportSessionShare', () => {
     await expect(fsp.stat(target)).rejects.toThrow();
   });
 
-  it('rejects remote / orca worker / deleted / empty sessions', async () => {
+  // Regression: remote suppliers used to reject export altogether. Existing local-history
+  // cases cannot detect accidentally bundling a stale local transcript with the same native id.
+  // Production entry: exportSessionShare; minimal input: a remote agent + persisted messages.
+  // Unit tier: mocked DB/stores and private temporary files, no remote connection required.
+  // Standalone file: 2.27s on Windows (27 passed, 2 existing platform skips).
+  it.each(['cc', 'codex', 'pi'] as const)(
+    'exports a remote %s supplier task as message history without local native history',
+    async (agentKind) => {
+      const sdkSessionId = agentKind === 'pi'
+        ? path.join(tmpRoot, 'rollout-1-thread-1.jsonl')
+        : agentKind === 'codex' ? 'thread-1' : 'sid-b';
+      sessionRowRef.row = { ...baseSession(), agentKind, sdkSessionId, agentDeviceId: 'remote-device' };
+      messagesRef.rows[1].agentMeta = JSON.stringify({ sdkSessionId, usage: { inputTokens: 7 } });
+      const target = path.join(tmpRoot, `remote-${agentKind}.cshare`);
+      const outcome = await exportSessionShare({ sessionId: 'xdt-session-1', targetPath: target });
+
+      expect(outcome.status).toBe('ok');
+      if (outcome.status !== 'ok') return;
+      expect(outcome.fidelity).toBe('db-only');
+      const zip = await unzipOf(target);
+      const manifest = validateManifest(JSON.parse(await zip.file('manifest.json')!.async('string')));
+      expect(manifest.exportFidelity).toBe('db-only');
+      expect(manifest.counts).toEqual({ messages: 2, media: 1 });
+      expect(manifest.sdkSessionIds).toEqual([]);
+      expect(manifest.activeSdkSessionId).toBeNull();
+      expect(manifest.transcripts).toEqual([]);
+      expect(Object.keys(zip.files).some(name => name.startsWith('transcripts/') || name.startsWith('codex-state/'))).toBe(false);
+      const snapshot = JSON.parse(await zip.file('session.json')!.async('string'));
+      expect(snapshot.sdkSessionId).toBeNull();
+      expect(snapshot).not.toHaveProperty('agentDeviceId');
+      const messages = (await zip.file('messages.jsonl')!.async('string')).split('\n').map(line => JSON.parse(line));
+      expect(messages.map(message => message.content)).toEqual(messagesRef.rows.map(message => message.content));
+      expect(JSON.parse(messages[1].agentMeta)).toEqual({ usage: { inputTokens: 7 } });
+    },
+  );
+
+  it('detaches parked native sessions in remote history while keeping the visible switch record', async () => {
+    sessionRowRef.row = { ...baseSession(), agentKind: 'codex', agentDeviceId: 'remote-device' };
+    const switchContent = {
+      fromAgentKind: 'cc', toAgentKind: 'codex', fromModel: 'claude-sonnet-4-6',
+      fromAgentDeviceId: null, fromSdkSessionId: 'sid-a', handoff: 'Continue the saved requirements.',
+    };
+    messagesRef.rows.push({
+      ...messagesRef.rows[1], id: 'switch-1', clientId: 'switch-client', role: 'agent_switch',
+      content: JSON.stringify(switchContent), agentMeta: null, createdAt: 1700000000300,
+    });
+    const target = path.join(tmpRoot, 'remote-parked-session.cshare');
+    const outcome = await exportSessionShare({ sessionId: 'xdt-session-1', targetPath: target });
+    expect(outcome.status).toBe('ok');
+    const zip = await unzipOf(target);
+    const messages = (await zip.file('messages.jsonl')!.async('string')).split('\n').map(line => JSON.parse(line));
+    const boundary = messages.find(message => message.role === 'agent_switch');
+    // Import keeps this content. A null binding prevents findParkedEngineSession and
+    // historical forks from resuming the source task's unbundled native session.
+    expect(JSON.parse(boundary.content)).toEqual({ ...switchContent, fromSdkSessionId: null });
+    expect(messages.slice(0, 2).map(message => message.content)).toEqual(baseMessages().map(message => message.content));
+  });
+
+  it('rejects SSH / remote full migration / orca worker / deleted / empty sessions', async () => {
     sessionRowRef.row = { ...baseSession(), remoteHostId: 'host-1' };
     await expect(
       exportSessionShare({ sessionId: 'xdt-session-1', targetPath: path.join(tmpRoot, 'x1') }),
+    ).rejects.toMatchObject({ code: 'PRECONDITION_FAILED' });
+
+    sessionRowRef.row = { ...baseSession(), agentDeviceId: 'remote-device' };
+    await expect(
+      exportSessionShare({ sessionId: 'xdt-session-1', targetPath: path.join(tmpRoot, 'remote-migration'), migration: true }),
     ).rejects.toMatchObject({ code: 'PRECONDITION_FAILED' });
 
     // Worker 子会话拒绝直接导出(入口应是所属 lead)
@@ -671,6 +735,35 @@ describe('exportSessionShare', () => {
     expect(manifest.formatVersion).toBe(1);
     expect(manifest.minReaderVersion).toBe(1);
     expect(manifest.orca).toBeUndefined();
+  });
+
+  it('marks a local lead with a remote supplier worker as partial instead of bundling stale worker history', async () => {
+    sessionRowRef.row = { ...baseSession(), orcaRole: 'lead' };
+    activeTeamRef.row = { id: 'team-1', status: 'active' };
+    workerRowsRef.rows = [{ sessionId: 'worker-remote', status: 'done', label: null, role: 'developer', focused: 0 }];
+    workerSessionsById.set('worker-remote', {
+      ...baseSession(), id: 'worker-remote', orcaRole: 'worker', agentDeviceId: 'remote-device',
+    });
+    const workerMessages = baseMessages();
+    workerMessages[1] = {
+      ...workerMessages[1], role: 'agent_switch',
+      content: JSON.stringify({ fromAgentKind: 'cc', fromSdkSessionId: 'sid-a' }),
+    };
+    workerMessagesBySession.set('worker-remote', workerMessages);
+    const target = path.join(tmpRoot, 'remote-worker.cshare');
+    const outcome = await exportSessionShare({ sessionId: 'xdt-session-1', targetPath: target });
+    expect(outcome.status).toBe('ok');
+    if (outcome.status !== 'ok') return;
+    expect(outcome.fidelity).toBe('partial');
+    const zip = await unzipOf(target);
+    const manifest = validateManifest(JSON.parse(await zip.file('manifest.json')!.async('string')));
+    expect(manifest.orca!.workers[0].counts.messages).toBe(2);
+    expect(manifest.orca!.workers[0].activeSdkSessionId).toBeNull();
+    const exportedWorkerMessages = (await zip.file('orca/workers/0/messages.jsonl')!.async('string'))
+      .split('\n').map(line => JSON.parse(line));
+    expect(JSON.parse(exportedWorkerMessages[1].content)).toEqual({ fromAgentKind: 'cc', fromSdkSessionId: null });
+    expect(Object.keys(zip.files).some(name => name.startsWith('orca/workers/0/transcripts/'))).toBe(false);
+    expect(zip.file('transcripts/claude/sid-b.jsonl')).toBeTruthy();
   });
 
   it.each([false, true])(

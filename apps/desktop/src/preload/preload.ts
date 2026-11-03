@@ -52,6 +52,12 @@ import type { MobileCodexRateLimitsResult, MobileCodexRateLimitResetResult } fro
 import type { AppearanceSettings } from '../shared/appearanceSettings';
 import type { DialogueWorkspaceSettingsState } from '../shared/dialogueWorkspaceSettings';
 import type {
+  CreateProjectFromTaskInput,
+  CreateProjectFromTaskResult,
+  PreparedProjectFromTask,
+  ProjectsRootState,
+} from '../shared/projectsRoot';
+import type {
   CustomProviderUpdateOptions,
   CustomProviderUpdateResult,
 } from '../shared/customProviderUpdate';
@@ -1762,6 +1768,19 @@ contextBridge.exposeInMainWorld('electronAPI', {
     speak: (input) => ipcRenderer.invoke('voice-conversation:speak', input),
     readSpeech: (callId, requestId) => ipcRenderer.invoke('voice-conversation:read-speech', callId, requestId),
     interrupt: (callId) => ipcRenderer.invoke('voice-conversation:interrupt', callId),
+    callStatus: () => ipcRenderer.invoke('voice-conversation:call-status'),
+    publishCallStatus: (update) => ipcRenderer.send('voice-conversation:call-publish', update),
+    callCommand: (command) => ipcRenderer.invoke('voice-conversation:call-command', command),
+    onCallStatus: (callback) => {
+      const listener = (_event: unknown, update: Parameters<typeof callback>[0]) => callback(update);
+      ipcRenderer.on('voice-conversation:call-status-changed', listener);
+      return () => ipcRenderer.removeListener('voice-conversation:call-status-changed', listener);
+    },
+    onCallCommand: (callback) => {
+      const listener = (_event: unknown, command: Parameters<typeof callback>[0]) => callback(command);
+      ipcRenderer.on('voice-conversation:call-command', listener);
+      return () => ipcRenderer.removeListener('voice-conversation:call-command', listener);
+    },
     onEvent: (callback) => {
       const listener = (_event: Electron.IpcRendererEvent, payload: Parameters<typeof callback>[0]) => callback(payload);
       ipcRenderer.on('voice-conversation:event', listener);
@@ -4567,6 +4586,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
   resolvePathBatch: (params: {
     hrefs: string[];
     workingDir: string;
+    /** Re-walk hrefs whose cached answer is `none` / `multiple`. */
+    revalidateNegative?: boolean;
   }): Promise<
     Record<
       string,
@@ -4700,6 +4721,19 @@ contextBridge.exposeInMainWorld('electronAPI', {
       ipcRenderer.invoke('dialogue-workspace:choose'),
     reset: (): Promise<DialogueWorkspaceSettingsState> =>
       ipcRenderer.invoke('dialogue-workspace:reset'),
+  },
+  projectsRoot: {
+    get: (): Promise<ProjectsRootState> => ipcRenderer.invoke('projects-root:get'),
+    choose: (): Promise<ProjectsRootState> => ipcRenderer.invoke('projects-root:choose'),
+    reset: (): Promise<ProjectsRootState> => ipcRenderer.invoke('projects-root:reset'),
+  },
+  createProjectFromTask: {
+    prepare: (sessionId: string): Promise<PreparedProjectFromTask> =>
+      ipcRenderer.invoke('create-project-from-task:prepare', sessionId),
+    chooseParent: (): Promise<string | null> =>
+      ipcRenderer.invoke('create-project-from-task:chooseParent'),
+    create: (input: CreateProjectFromTaskInput): Promise<CreateProjectFromTaskResult> =>
+      ipcRenderer.invoke('create-project-from-task:create', input),
   },
 
   cindyMediaStorage: {
@@ -5532,6 +5566,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
 
   // ── session-git-pr-context: 会话分支感知 + PR 关联状态 ──
   gitContext: {
+    readGithub: (method: import('@cindy/maker-shared').GithubReadMethod, args: unknown): Promise<unknown> =>
+      ipcRenderer.invoke('git-context:github-read', { method, args }),
     githubConnection: (): Promise<import('../shared/githubSetup').GithubConnectionState> =>
       ipcRenderer.invoke('git-context:github-setup:connection'),
     githubSetupStatus: (): Promise<import('../shared/githubSetup').GithubSetupState> =>
@@ -6013,6 +6049,18 @@ contextBridge.exposeInMainWorld('electronAPI', {
       },
       listSkills: (botId: string): Promise<import('../shared/botSkill').BotSkillSummary[]> =>
         ipcRenderer.invoke('local-db:bots:skills:list', botId),
+      skills: {
+        core: (): Promise<import('../shared/botSkill').BotCoreSkill> =>
+          ipcRenderer.invoke('local-db:bots:skills:core'),
+        read: (botId: string, slug: string): Promise<import('../shared/botSkill').BotSkillDetail | null> =>
+          ipcRenderer.invoke('local-db:bots:skills:read', botId, slug),
+        save: (botId: string, skill: import('../shared/botSkill').BotSkillSaveInput): Promise<void> =>
+          ipcRenderer.invoke('local-db:bots:skills:save', botId, skill),
+        setEnabled: (botId: string, slug: string, enabled: boolean): Promise<void> =>
+          ipcRenderer.invoke('local-db:bots:skills:set-enabled', botId, slug, enabled),
+        delete: (botId: string, slug: string): Promise<void> =>
+          ipcRenderer.invoke('local-db:bots:skills:delete', botId, slug),
+      },
       memory: {
         list: (botId: string, query?: string): Promise<unknown> =>
           ipcRenderer.invoke('local-db:bots:memory:list', botId, query),
@@ -6626,6 +6674,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
     /** 自定义供应商创建模板（目录 presets 段，纯 UI 模板数据）。 */
     listProviderPresets: (): Promise<{
       presets: import('@cindy/model-providers').ProviderPreset[];
+      modelRegistry?: import('@cindy/model-providers').ModelRegistry;
     }> => ipcRenderer.invoke('maker:provider:presets'),
     /**
      * 供应商「测试连接」—— 与真实会话同路由口径的最小探测请求。
@@ -7438,6 +7487,9 @@ contextBridge.exposeInMainWorld('electronAPI', {
       revision: number,
     ): Promise<import('@cindy/device-link').InputHandoffPicture | null> =>
       ipcRenderer.invoke('input-handoff:picture', requestId, revision),
+    /** 代输入 sign-in on this computer: bring its window to the front; trusted top-level frame only. */
+    raiseInputHandoff: (requestId: string): Promise<boolean> =>
+      ipcRenderer.invoke('input-handoff:raise', requestId),
     /** 代输入 screenshot step on another computer: the sealed picture for this window only. */
     openRemoteInputHandoffPicture: (
       request: import('../shared/pluginOauth').LocalInputHandoffPictureRequest,
@@ -7872,71 +7924,6 @@ contextBridge.exposeInMainWorld('electronAPI', {
       defaultMode: 'off' | 'existing-git' | 'all-projects';
       defaultAutoSnapshotEnabled: boolean;
     }> => ipcRenderer.invoke('maker:git-safety:reset'),
-
-    // 智能通讯录(maker-contacts)—— 设置页管理 UI 的数据通道。
-    // DTO 形状即 @cindy/maker-core contacts/types.ts(renderer 直接 type-import),
-    // 这里保持 unknown 透传, 类型收敛在 renderer service 层做。
-    // 开关只 gate agent 侧 cindy_contacts MCP; 数据通道恒可用。
-    contacts: {
-      settingsGet: (): Promise<{ enabled: boolean; isCustomized: boolean }> =>
-        ipcRenderer.invoke('maker:contacts:settings:get'),
-      // codexMcpRefreshed:false = 开关已落盘但 Codex 失效失败(会话正忙), 对 Codex 延迟生效
-      settingsSet: (enabled: boolean): Promise<{ enabled: boolean; codexMcpRefreshed?: boolean }> =>
-        ipcRenderer.invoke('maker:contacts:settings:set', enabled),
-      syncStatusGet: (): Promise<unknown> => ipcRenderer.invoke('maker:contacts:sync:status:get'),
-      syncEnabledSet: (enabled: boolean): Promise<unknown> =>
-        ipcRenderer.invoke('maker:contacts:sync:enabled:set', enabled),
-      syncNow: (): Promise<unknown> => ipcRenderer.invoke('maker:contacts:sync:now'),
-      list: (opts?: unknown): Promise<unknown[]> => ipcRenderer.invoke('maker:contacts:list', opts),
-      get: (id: string): Promise<unknown> => ipcRenderer.invoke('maker:contacts:get', id),
-      create: (input: unknown): Promise<unknown> =>
-        ipcRenderer.invoke('maker:contacts:create', input),
-      update: (id: string, patch: unknown): Promise<unknown> =>
-        ipcRenderer.invoke('maker:contacts:update', id, patch),
-      delete: (id: string): Promise<{ deleted: boolean }> =>
-        ipcRenderer.invoke('maker:contacts:delete', id),
-      merge: (targetId: string, sourceId: string): Promise<unknown> =>
-        ipcRenderer.invoke('maker:contacts:merge', targetId, sourceId),
-      resolve: (value: string, opts?: unknown): Promise<unknown[]> =>
-        ipcRenderer.invoke('maker:contacts:resolve', value, opts),
-      search: (query: string, opts?: unknown): Promise<unknown[]> =>
-        ipcRenderer.invoke('maker:contacts:search', query, opts),
-      stats: (): Promise<{ people: number; orgs: number; pending: number; groups: number }> =>
-        ipcRenderer.invoke('maker:contacts:stats'),
-      addIdentity: (contactId: string, input: unknown): Promise<unknown> =>
-        ipcRenderer.invoke('maker:contacts:add-identity', contactId, input),
-      removeIdentity: (identityId: string): Promise<{ removed: boolean }> =>
-        ipcRenderer.invoke('maker:contacts:remove-identity', identityId),
-      appendEvent: (contactId: string, input: unknown): Promise<unknown> =>
-        ipcRenderer.invoke('maker:contacts:append-event', contactId, input),
-      deleteEvent: (eventId: string): Promise<{ deleted: boolean }> =>
-        ipcRenderer.invoke('maker:contacts:delete-event', eventId),
-      addRelation: (fromId: string, input: unknown): Promise<unknown> =>
-        ipcRenderer.invoke('maker:contacts:add-relation', fromId, input),
-      removeRelation: (relationId: string): Promise<{ removed: boolean }> =>
-        ipcRenderer.invoke('maker:contacts:remove-relation', relationId),
-      groupsList: (): Promise<unknown[]> => ipcRenderer.invoke('maker:contacts:groups:list'),
-      groupsCreate: (name: string, description?: string): Promise<unknown> =>
-        ipcRenderer.invoke('maker:contacts:groups:create', name, description),
-      groupsUpdate: (groupId: string, patch: unknown): Promise<unknown> =>
-        ipcRenderer.invoke('maker:contacts:groups:update', groupId, patch),
-      groupsDelete: (groupId: string): Promise<{ deleted: boolean }> =>
-        ipcRenderer.invoke('maker:contacts:groups:delete', groupId),
-      groupsSetMembers: (
-        groupId: string,
-        payload: { add?: string[]; remove?: string[] },
-      ): Promise<{ added: number; removed: number }> =>
-        ipcRenderer.invoke('maker:contacts:groups:set-members', groupId, payload),
-      resetAll: (): Promise<{ removedCount: number }> =>
-        ipcRenderer.invoke('maker:contacts:reset-all'),
-      systemRead: (): Promise<unknown[]> => ipcRenderer.invoke('maker:contacts:system-read'),
-      parseVcf: (text: string): Promise<unknown[]> =>
-        ipcRenderer.invoke('maker:contacts:parse-vcf', text),
-      import: (records: unknown[], opts?: { groupId?: string }): Promise<unknown> =>
-        ipcRenderer.invoke('maker:contacts:import', records, opts),
-      onChanged: createIpcFanOut('maker:contacts:changed'),
-      onSyncStatusChanged: createIpcFanOut('maker:contacts:sync:status-changed'),
-    },
 
     // Codex app-server 当前进程启动冻结的鉴权注入方式(oauth-bearer = 走订阅 / env-key = 走网关 / provider-oauth = proxy 注入供应商 OAuth)。
     // 右下角用量 chip 据此显示订阅/API 计费形态。退役全局鉴权开关后无 SET。
@@ -8497,8 +8484,10 @@ contextBridge.exposeInMainWorld('electronAPI', {
     },
 
     projectAutomation: {
-      reconcile: (params: { workingDir: string }): Promise<unknown> =>
+      reconcile: (params: { workingDir: string; approvedHash?: string }): Promise<unknown> =>
         ipcRenderer.invoke('maker:project-automation:reconcile', params),
+      listPendingImports: (): Promise<unknown[]> =>
+        ipcRenderer.invoke('maker:project-automation:pending-imports'),
       listConsents: (): Promise<unknown[]> =>
         ipcRenderer.invoke('maker:project-automation:list-consents'),
       revokeConsent: (workingDir: string): Promise<{ deleted: number }> =>

@@ -157,9 +157,12 @@ Library 请求同时绑定迁移代次和安装批准，根解析、排队及开
   [代输入](../product-rules/input-handoff.md)边界：登录密码、验证码等需要主人填写的值仍由
   `ask_owner` 交给主人，主人填的值只交给宿主执行、不进模型上下文、工具结果与日志，任务权限档位和
   自动审核不能代替这条边界。Chrome 调试接口（PDF、读 Cookie、抓包等配方）
-  按需申请可选权限：首次需要时在用户窗口打开说明页、十分钟内最多一次、用后断开，开关放
-  扩展自己的选项页，不进 Cindy 设置；新增权限不得改变 Chrome 的安装提示（`<all_urls>` 可加，
-  `tabGroups` 只能做可选权限）。Agent 操作的页面显示红光边框与「Cindy 正在自动操作此页面」
+  做不了：Chrome 不允许把 `debugger` 声明为可选权限，`chrome.permissions.request` 直接拒绝
+  （2026-11-01 实测并写入扩展回归测试），只能声明为必需权限，而那会新增安装提示、让更新后的
+  扩展被停用，当前不这么做。所以不要再设计「首次需要时打开说明页让用户开启」的流程，也不要
+  提供对应的设置开关；能力表如实报告 `pdf: false`、`rawProtocol: false`，需要时告知用户可
+  改用专用浏览器，由用户决定。大文件上传走分块，不依赖调试接口。新增权限不得改变 Chrome 的
+  安装提示（`<all_urls>` 可加，`tabGroups` 只能做可选权限）。Agent 操作的页面显示红光边框与「Cindy 正在自动操作此页面」
   标签，保持到最后一次动作后约 20 秒。新增 id 或新增 `pageControl` 视为权限变多，删减视为收权。
 - 无配置的布尔能力只接受字面量 `true`：`notify`、`badge`、`confirm`、`fs`、`library`、
   `sessionContext`、`pick`、`workspace`。不用就省略，写 `false` 是无效清单。
@@ -840,6 +843,8 @@ Host receipt 的 `simulatorPreviousRelId` 只允许这对 ID 和 root 路径，�
 技能随应用内置 bundle 升级，不另建安装或权限流程。
 `forgeGuide.ts` 从这些 Markdown 构造兼容的 `FORGE_GUIDE`，供旧 `ghost_forge_guide`
 调用按原章节号读取。不要在 TypeScript、工具描述或界面文案中另存一套编写流程。
+页面手册 `PAGE-GENERATION.md` 另以 `FORGE_PAGE_MANUAL` 导出，`ghost_forge_guide({section:"pages"})` 整份返回，
+不拼进 `FORGE_GUIDE`（手册自带 `## ` 小节，拼进去会被当成章节切开）。
 修改随包 Skill 字节时同步递增 `BUILT_IN_SKILLS_BUNDLE_VERSION`。改动其中的《Cindy MCP Apps 页面生成手册》
 （`PAGE-GENERATION.md`）时，还要在对应客户端上线前把新手册发布到各区域 CDN，用法与发版前检查见
 [`media-storage-and-protocols.md`](media-storage-and-protocols.md) 的《Cindy MCP Apps 页面生成手册》一条。

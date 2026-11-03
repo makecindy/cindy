@@ -7,7 +7,7 @@
     "NSDownloadsFolderUsageDescription": "Cindy's AI agent needs access to read and write files in your Downloads folder.",
     "NSAppleEventsUsageDescription": "Cindy uses Apple Events to read Contacts you import and to add or update Contacts you explicitly export.",
     "NSContactsUsageDescription": "Cindy accesses Contacts only when you import them or explicitly export additions or updates.",
-    "NSLocalNetworkUsageDescription": "Cindy uses your local network to sync end-to-end encrypted Smart Contacts directly between your online desktop devices."
+    "NSLocalNetworkUsageDescription": "Cindy uses your local network to connect directly, with encryption, to your other devices signed in to the same account."
   },
   "zh-Hans": {
     "NSMicrophoneUsageDescription": "Cindy 需要使用麦克风进行语音输入。",
@@ -17,7 +17,7 @@
     "NSDownloadsFolderUsageDescription": "Cindy 的 AI Agent 需要读取和写入你下载文件夹中的文件。",
     "NSAppleEventsUsageDescription": "Cindy 使用 Apple Events 读取你导入的通讯录联系人，以及添加或更新你明确导出的联系人。",
     "NSContactsUsageDescription": "Cindy 仅在你导入联系人或明确导出新增、更新的联系人时访问通讯录。",
-    "NSLocalNetworkUsageDescription": "Cindy 使用局域网在你的在线电脑之间直接同步端到端加密的智能通讯录。"
+    "NSLocalNetworkUsageDescription": "Cindy 使用局域网与同一账号下的其他设备直接建立加密连接。"
   },
   "zh-Hant": {
     "NSMicrophoneUsageDescription": "Cindy 需要使用麥克風進行語音輸入。",
@@ -27,7 +27,7 @@
     "NSDownloadsFolderUsageDescription": "Cindy 的 AI Agent 需要讀取和寫入你下載項目檔案夾中的檔案。",
     "NSAppleEventsUsageDescription": "Cindy 使用 Apple Events 讀取你匯入的聯絡人，以及新增或更新你明確匯出的聯絡人。",
     "NSContactsUsageDescription": "Cindy 僅在你匯入聯絡人或明確匯出新增、更新的聯絡人時存取通訊錄。",
-    "NSLocalNetworkUsageDescription": "Cindy 使用區域網路在你的上線電腦之間直接同步端對端加密的智慧通訊錄。"
+    "NSLocalNetworkUsageDescription": "Cindy 使用區域網路與同一帳號下的其他裝置直接建立加密連線。"
   },
   "ja": {
     "NSMicrophoneUsageDescription": "Cindy は音声入力のためにマイクへのアクセスを必要とします。",
@@ -37,7 +37,7 @@
     "NSDownloadsFolderUsageDescription": "Cindy の AI Agent がダウンロードフォルダー内のファイルを読み書きするためにアクセスを必要とします。",
     "NSAppleEventsUsageDescription": "Cindy は Apple Events を使用して、インポートする連絡先を読み取り、明示的にエクスポートする連絡先を追加または更新します。",
     "NSContactsUsageDescription": "Cindy は連絡先のインポート、または追加・更新の明示的なエクスポート時にのみ連絡先にアクセスします。",
-    "NSLocalNetworkUsageDescription": "Cindy はローカルネットワークを使用し、オンラインのコンピューター間でエンドツーエンド暗号化されたスマート連絡先を直接同期します。"
+    "NSLocalNetworkUsageDescription": "Cindy はローカルネットワークを使用し、同じアカウントの他のデバイスと暗号化された接続で直接通信します。"
   },
   "ko": {
     "NSMicrophoneUsageDescription": "Cindy가 음성 입력을 사용하려면 마이크 접근 권한이 필요합니다.",
@@ -47,7 +47,7 @@
     "NSDownloadsFolderUsageDescription": "Cindy의 AI Agent가 다운로드 폴더의 파일을 읽고 쓰려면 접근 권한이 필요합니다.",
     "NSAppleEventsUsageDescription": "Cindy는 Apple Events를 사용하여 가져오는 연락처를 읽고, 명시적으로 내보내는 연락처를 추가하거나 업데이트합니다.",
     "NSContactsUsageDescription": "Cindy는 연락처를 가져오거나 추가 및 업데이트를 명시적으로 내보낼 때만 연락처에 접근합니다.",
-    "NSLocalNetworkUsageDescription": "Cindy는 로컬 네트워크를 사용하여 온라인 상태인 컴퓨터 간에 종단 간 암호화된 스마트 연락처를 직접 동기화합니다."
+    "NSLocalNetworkUsageDescription": "Cindy는 로컬 네트워크를 사용하여 같은 계정의 다른 기기와 암호화된 연결로 직접 통신합니다."
   },
   "es": {
     "NSMicrophoneUsageDescription": "Cindy necesita acceso al micrófono para la entrada de voz.",
@@ -57,7 +57,7 @@
     "NSDownloadsFolderUsageDescription": "El Agent de IA de Cindy necesita acceso para leer y escribir archivos en tu carpeta Descargas.",
     "NSAppleEventsUsageDescription": "Cindy usa Apple Events para leer los contactos que importas y añadir o actualizar los contactos que exportas explícitamente.",
     "NSContactsUsageDescription": "Cindy solo accede a Contactos cuando los importas o exportas explícitamente adiciones o actualizaciones.",
-    "NSLocalNetworkUsageDescription": "Cindy usa tu red local para sincronizar Smart Contacts con cifrado de extremo a extremo directamente entre tus ordenadores conectados."
+    "NSLocalNetworkUsageDescription": "Cindy usa tu red local para conectarse directamente, con cifrado, a tus otros dispositivos con la misma cuenta."
   },
   "fr": {
     "NSMicrophoneUsageDescription": "Cindy a besoin d’accéder au microphone pour la saisie vocale.",
@@ -67,7 +67,7 @@
     "NSDownloadsFolderUsageDescription": "L’Agent IA de Cindy a besoin d’un accès pour lire et écrire des fichiers dans votre dossier Téléchargements.",
     "NSAppleEventsUsageDescription": "Cindy utilise Apple Events pour lire les contacts que vous importez et ajouter ou mettre à jour ceux que vous exportez explicitement.",
     "NSContactsUsageDescription": "Cindy accède aux contacts uniquement lorsque vous les importez ou exportez explicitement des ajouts ou des mises à jour.",
-    "NSLocalNetworkUsageDescription": "Cindy utilise votre réseau local pour synchroniser directement les Contacts intelligents chiffrés de bout en bout entre vos ordinateurs en ligne."
+    "NSLocalNetworkUsageDescription": "Cindy utilise votre réseau local pour se connecter directement, de façon chiffrée, à vos autres appareils utilisant le même compte."
   },
   "de": {
     "NSMicrophoneUsageDescription": "Cindy benötigt Zugriff auf das Mikrofon für die Spracheingabe.",
@@ -77,7 +77,7 @@
     "NSDownloadsFolderUsageDescription": "Cindys KI-Agent benötigt Zugriff, um Dateien in deinem Ordner Downloads zu lesen und zu schreiben.",
     "NSAppleEventsUsageDescription": "Cindy verwendet Apple Events, um importierte Kontakte zu lesen und ausdrücklich exportierte Kontakte hinzuzufügen oder zu aktualisieren.",
     "NSContactsUsageDescription": "Cindy greift nur auf Kontakte zu, wenn du sie importierst oder Ergänzungen und Aktualisierungen ausdrücklich exportierst.",
-    "NSLocalNetworkUsageDescription": "Cindy nutzt dein lokales Netzwerk, um „Intelligente Kontakte“ Ende-zu-Ende-verschlüsselt direkt zwischen deinen verbundenen Computern zu synchronisieren."
+    "NSLocalNetworkUsageDescription": "Cindy nutzt dein lokales Netzwerk, um sich verschlüsselt und direkt mit deinen anderen Geräten mit demselben Konto zu verbinden."
   },
   "pt-PT": {
     "NSMicrophoneUsageDescription": "O Cindy precisa de acesso ao microfone para a introdução por voz.",
@@ -87,7 +87,7 @@
     "NSDownloadsFolderUsageDescription": "O Agent de IA do Cindy precisa de acesso para ler e escrever ficheiros na pasta Descargas.",
     "NSAppleEventsUsageDescription": "O Cindy utiliza Apple Events para ler os contactos que importa e adicionar ou atualizar os contactos que exporta explicitamente.",
     "NSContactsUsageDescription": "O Cindy só acede aos Contactos quando os importa ou exporta explicitamente adições ou atualizações.",
-    "NSLocalNetworkUsageDescription": "O Cindy utiliza a rede local para sincronizar diretamente o Smart Contacts com encriptação ponto a ponto entre os seus computadores online."
+    "NSLocalNetworkUsageDescription": "O Cindy utiliza a rede local para se ligar diretamente, com encriptação, aos seus outros dispositivos com a mesma conta."
   },
   "pt-BR": {
     "NSMicrophoneUsageDescription": "O Cindy precisa de acesso ao microfone para a entrada por voz.",
@@ -97,6 +97,6 @@
     "NSDownloadsFolderUsageDescription": "O Agent de IA do Cindy precisa de acesso para ler e gravar arquivos na pasta Downloads.",
     "NSAppleEventsUsageDescription": "O Cindy usa Apple Events para ler os contatos que você importa e adicionar ou atualizar os contatos que exporta explicitamente.",
     "NSContactsUsageDescription": "O Cindy só acessa os Contatos quando você os importa ou exporta explicitamente adições ou atualizações.",
-    "NSLocalNetworkUsageDescription": "O Cindy usa a rede local para sincronizar diretamente os Contatos inteligentes com criptografia de ponta a ponta entre seus computadores online."
+    "NSLocalNetworkUsageDescription": "O Cindy usa a rede local para se conectar diretamente, com criptografia, aos seus outros dispositivos com a mesma conta."
   }
 }

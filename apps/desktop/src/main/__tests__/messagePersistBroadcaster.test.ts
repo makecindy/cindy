@@ -2042,6 +2042,29 @@ describe('done orphan:残留 buffer 在 turn 末 flush', () => {
 });
 
 describe('thinking persistence', () => {
+  it('drops interrupted thinking at the turn boundary but keeps finalized blocks pending write', async () => {
+    // 回归：turn 中途死掉的思考块(无 final)若留在快照里,历史视图会把它当 live 行
+    // 追加到时间线末尾,「正在工作…」预览被钉死在早已结束的历史思考上。
+    // 旧实现里 resetTurnPersistState 不碰快照,本用例在修复前返回两条而失败。
+    let finishWrite!: () => void;
+    vi.mocked(createMessage).mockImplementationOnce(() => new Promise((resolve) => {
+      finishWrite = () => resolve({} as Awaited<ReturnType<typeof createMessage>>);
+    }));
+    onThinkingEvent(SESSION, { stage: 'start', blockId: 'dead-thought' }, null);
+    onThinkingEvent(SESSION, { stage: 'delta', blockId: 'dead-thought', text: 'streamed, then the attempt died' }, null);
+    onThinkingEvent(SESSION, { stage: 'final', blockId: 'sealed-thought', text: 'complete thought' }, null);
+    resetTurnPersistState(SESSION);
+    expect(getSessionThinkingSnapshots(SESSION)).toEqual([expect.objectContaining({
+      clientId: 'sealed-thought', content: expect.objectContaining({ text: 'complete thought' }),
+    })]);
+    // Drain before resolving: the queued write must consume its pending mock first,
+    // otherwise the module-level writeChain stalls for every later test.
+    await flushWrites();
+    finishWrite();
+    await flushWrites();
+    expect(getSessionThinkingSnapshots(SESSION)).toEqual([]);
+  });
+
   it('keeps final thinking across terminal resets until the queued write succeeds', async () => {
     let finishWrite!: () => void;
     vi.mocked(createMessage).mockImplementationOnce(() => new Promise((resolve) => {
@@ -2078,6 +2101,35 @@ describe('thinking persistence', () => {
       expect(getSessionThinkingSnapshots(SESSION)).toEqual([]);
     },
   );
+
+  it('keeps a replacement final marker when an older write settles after history cleanup', async () => {
+    // Greptile P2 回归：releaseSnapshot 闭包持旧快照。若按 blockId 无条件删当前标记,
+    // 旧写收口会误删同 blockId 替代快照的 final 标记 → 随后的 turn 终态误删待写快照,
+    // 写失败时也无法按既有契约保留。修复后标记按捕获的快照身份比对。
+    let finishOld!: () => void;
+    let finishNew!: () => void;
+    vi.mocked(createMessage).mockImplementationOnce(() => new Promise((resolve) => {
+      finishOld = () => resolve({} as Awaited<ReturnType<typeof createMessage>>);
+    }));
+    vi.mocked(createMessage).mockImplementationOnce(() => new Promise((resolve) => {
+      finishNew = () => resolve({} as Awaited<ReturnType<typeof createMessage>>);
+    }));
+    onThinkingEvent(SESSION, { stage: 'final', blockId: 'reused', text: 'old' }, null);
+    await flushWrites(); // 旧写已开跑、挂起
+    clearSessionThinkingSnapshots(SESSION);
+    onThinkingEvent(SESSION, { stage: 'delta', blockId: 'reused', text: 'new' }, null);
+    onThinkingEvent(SESSION, { stage: 'final', blockId: 'reused', text: 'new full' }, null);
+    finishOld(); // 旧写收口 → 旧 release 回调跑,不得碰替代快照的标记
+    await flushWrites();
+    expect(getSessionThinkingSnapshots(SESSION)).toEqual([expect.objectContaining({
+      clientId: 'reused', content: expect.objectContaining({ text: 'new full' }),
+    })]);
+    resetTurnPersistState(SESSION);
+    expect(getSessionThinkingSnapshots(SESSION)).toHaveLength(1);
+    finishNew();
+    await flushWrites();
+    expect(getSessionThinkingSnapshots(SESSION)).toEqual([]);
+  });
 
   it('does not let an old write release a replacement snapshot after history cleanup', async () => {
     let finishWrite!: () => void;

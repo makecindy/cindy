@@ -324,6 +324,20 @@ vi.mock("@/platform/chrome/NativePullDownMenu", () => ({
 vi.mock("lucide-react-native", () => ({
   Smartphone: () => null,
   Tablet: () => null,
+  ArrowBigUp: () => null,
+  ArrowBigUpDash: () => null,
+  ArrowRightToLine: () => null,
+  ChevronUp: () => null,
+  Command: () => null,
+  CornerDownLeft: () => null,
+  Delete: () => null,
+  Ellipsis: () => null,
+  Languages: () => null,
+  LayoutGrid: () => null,
+  Redo2: () => null,
+  Search: () => null,
+  Undo2: () => null,
+  Option: () => null,
   createLucideIcon: () => () => null,
   Clipboard: () => null,
   ArrowLeft: () => null,
@@ -360,7 +374,6 @@ vi.mock("lucide-react-native", () => ({
   Mic: () => null,
   Play: () => null,
   Power: () => null,
-  Undo2: () => null,
   Vibrate: () => null,
   Volume1: () => null,
 }));
@@ -391,25 +404,21 @@ vi.mock("@/theme", async () => {
       ),
   };
 });
-vi.mock("../retroMacArtwork", () => ({
-  retroMacArtwork: {
-    display: 1,
-    deck: 2,
-    keycap: 3,
-    compact: 4,
-    edge: 5,
-    rail: 6,
-    keys: 7,
-    pad: 8,
-    darkKeycap: 9,
-    trackpoint: 10,
-    heritage: {
-      macii: { display: 11, rail: 12, keys: 13, palm: 14, control: 15 },
-      powerbook: { display: 16, rail: 17, keys: 18, palm: 19, control: 20 },
-      thinkpad: { display: 21, rail: 22, keys: 23, palm: 24, control: 25 },
+vi.mock("../retroMacArtwork", () => {
+  const deck = { deck: 1, control: 2 };
+  return {
+    retroMacArtwork: {
+      display: 1,
+      compact: 2,
+      edge: 3,
+      keycap: 4,
+      darkKeycap: 5,
+      trackpoint: 6,
+      displays: { macii: 7, powerbook: 8, thinkpad: 9 },
+      decks: { classic: deck, macii: deck, powerbook: deck, thinkpad: deck },
     },
-  },
-}));
+  };
+});
 vi.mock("@/device-link/DeviceLinkContext", () => ({
   useDeviceLink: () => ({
     status: fixture.status,
@@ -3468,16 +3477,38 @@ describe("remote desktop controls", () => {
       await act(async () => root.render(<RemoteDesktopScreen />));
       await connect();
       act(() => button("keyboard").click());
-      act(() => button("computerKeyboard").click());
-      const style = fixture.views["remoteDesktop.keyPageViewport"].style;
-      expect(style).toEqual({
-        flexShrink: 1,
-        maxHeight: landscape ? 156 : 300,
-      });
-      act(() => button("functionKeys").click());
-      expect(fixture.views["remoteDesktop.keyPageViewport"].style).toEqual(
-        style,
+      act(() => fixture.views["remoteDesktop.keyboardMode"].onPress());
+      const keys = fixture.views["remoteDesktop.keys"];
+      expect(keys).toBeDefined();
+      // Unit: a phone-width portrait panel uses the compact page; landscape has room for all keys.
+      const width = landscape ? 780 : 370;
+      act(() =>
+        keys.onLayout({ nativeEvent: { layout: { width, height: 200 } } }),
       );
+      expect(Boolean(fixture.views["remoteDesktop.key.page"])).toBe(!landscape);
+      expect(Boolean(fixture.views["remoteDesktop.key.Backquote"])).toBe(
+        landscape,
+      );
+      if (!landscape) {
+        const center = (id: string) => {
+          const style = Object.assign(
+            {},
+            ...fixture.views[`remoteDesktop.key.${id}`].style
+              .flat(Infinity)
+              .filter(Boolean),
+          );
+          return {
+            nativeEvent: {
+              identifier: 1,
+              locationX: style.left + style.width / 2,
+              locationY: style.top + style.height / 2,
+            },
+          };
+        };
+        act(() => keys.onTouchStart(center("page")));
+        act(() => keys.onTouchEnd(center("page")));
+        expect(fixture.views["remoteDesktop.key.Backquote"]).toBeDefined();
+      }
       expect(sent()).toContainEqual({
         type: "events",
         events: [{ kind: "release" }],
@@ -4253,10 +4284,7 @@ describe("remote desktop controls", () => {
       bottomInset: 270,
       keyboardOpen: true,
     });
-    const computer = [...host.querySelectorAll("button")].find(
-      (element) => element.textContent === "remoteDesktop.computerKeyboard",
-    )!;
-    act(() => computer.click());
+    act(() => fixture.views["remoteDesktop.keyboardMode"].onPress());
     act(() => panel().onLayout({ nativeEvent: { layout: { height: 280 } } }));
     expect(panel().style.flat(Infinity)).toContainEqual({ bottom: 0 });
     expect(
@@ -4276,6 +4304,166 @@ describe("remote desktop controls", () => {
       bottomInset: 0,
       keyboardOpen: false,
     });
+  });
+
+  // Unit: switching keyboards must not move the bar or the desktop. Earlier
+  // coverage only checked panel insets at rest, not the swap between the modes.
+  it("keeps the keys under the rising iOS keyboard, sized to match it, then swaps to the bar", async () => {
+    await act(async () => root.render(<RemoteDesktopScreen />));
+    await connect();
+    act(() => button("keyboard").click());
+    const surface = () =>
+      Object.assign(
+        {},
+        ...[fixture.views["remoteDesktop.keyboardSurface"].style]
+          .flat(Infinity)
+          .filter(Boolean),
+      );
+    const avoiding = () => fixture.views["remoteDesktop.keyboardPanel"];
+    expect(avoiding()).toBeDefined();
+    act(() =>
+      fixture.keyboardListeners.keyboardDidShow({
+        endCoordinates: { screenY: 500, height: 344 },
+      }),
+    );
+    expect(surface().height).toBe(44);
+    const mode = () => fixture.views["remoteDesktop.keyboardMode"];
+    act(() => mode().onPress());
+    const keysHeight = surface().height;
+    // 344 keyboard - safe bottom + bar spacing + bar.
+    expect(keysHeight).toBeGreaterThan(44 + 220);
+    act(() => mode().onPress());
+    // Still the keys while the system keyboard rises.
+    expect(surface().height).toBe(keysHeight);
+    act(() =>
+      fixture.keyboardListeners.keyboardDidShow({
+        endCoordinates: { screenY: 500, height: 344 },
+      }),
+    );
+    expect(surface().height).toBe(44);
+  });
+
+  // Unit: review of #8430. A latched modifier outlived an iOS interruption, and an
+  // Android portrait IME was filed under the landscape height bucket.
+  it("drops latched modifiers when the app goes inactive", async () => {
+    await act(async () => root.render(<RemoteDesktopScreen />));
+    await connect();
+    act(() => button("keyboard").click());
+    act(() => fixture.views["remoteDesktop.keyboardMode"].onPress());
+    const keys = fixture.views["remoteDesktop.keys"];
+    act(() =>
+      keys.onLayout({ nativeEvent: { layout: { width: 370, height: 276 } } }),
+    );
+    const tap = (id: string) => {
+      const style = Object.assign(
+        {},
+        ...fixture.views[`remoteDesktop.key.${id}`].style
+          .flat(Infinity)
+          .filter(Boolean),
+      );
+      const event = {
+        nativeEvent: {
+          identifier: 1,
+          locationX: style.left + style.width / 2,
+          locationY: style.top + style.height / 2,
+        },
+      };
+      act(() => fixture.views["remoteDesktop.keys"].onTouchStart(event));
+      act(() => fixture.views["remoteDesktop.keys"].onTouchEnd(event));
+    };
+    tap("ShiftLeft");
+    act(() => {
+      AppState.currentState = "inactive";
+      fixture.appState!("inactive");
+    });
+    act(() => {
+      AppState.currentState = "active";
+      fixture.appState!("active");
+    });
+    fixture.post.mockClear();
+    tap("KeyA");
+    expect(
+      sent()
+        .filter((m) => m.type === "events")
+        .flatMap((m: any) => m.events),
+    ).toEqual([
+      { kind: "key", code: "KeyA", down: true },
+      { kind: "key", code: "KeyA", down: false },
+    ]);
+  });
+
+  // Unit: review of #8430. Clipboard sends a host-wide release; a modifier the
+  // user still holds must be pressed again, not silently lost.
+  it("presses a still-held modifier again after the clipboard control released input", async () => {
+    fixture.nativeMenus = true;
+    const original = fixture.invoke.getMockImplementation()!;
+    fixture.invoke.mockImplementation(async (...args) => {
+      const result = await original(...args);
+      return args[2][0].op === "capabilities"
+        ? { ...result, clipboardText: true }
+        : result;
+    });
+    await act(async () => root.render(<RemoteDesktopScreen />));
+    await connect();
+    act(() => button("keyboard").click());
+    act(() => fixture.views["remoteDesktop.keyboardMode"].onPress());
+    const keys = fixture.views["remoteDesktop.keys"];
+    act(() =>
+      keys.onLayout({ nativeEvent: { layout: { width: 370, height: 276 } } }),
+    );
+    const at = (id: string, identifier: number) => {
+      const style = Object.assign(
+        {},
+        ...fixture.views[`remoteDesktop.key.${id}`].style
+          .flat(Infinity)
+          .filter(Boolean),
+      );
+      return {
+        nativeEvent: {
+          identifier,
+          locationX: style.left + style.width / 2,
+          locationY: style.top + style.height / 2,
+        },
+      };
+    };
+    act(() => keys.onTouchStart(at("ShiftLeft", 1)));
+    act(() => keys.onTouchStart(at("KeyA", 2)));
+    act(() => keys.onTouchEnd(at("KeyA", 2)));
+    fixture.post.mockClear();
+    await act(async () =>
+      host
+        .querySelector<HTMLButtonElement>('[data-testid="native-menu.paste"]')!
+        .click(),
+    );
+    // The host-wide release comes first, then Shift is pressed again.
+    expect(
+      sent()
+        .filter((m) => m.type === "events")
+        .flatMap((m: any) => m.events)
+        .slice(0, 2),
+    ).toEqual([
+      { kind: "release" },
+      { kind: "key", code: "ShiftLeft", down: true },
+    ]);
+  });
+
+  it("falls back to the bar when no system keyboard rises, as with a hardware keyboard", async () => {
+    vi.useFakeTimers();
+    try {
+      await act(async () => root.render(<RemoteDesktopScreen />));
+      await connect();
+      act(() => button("keyboard").click());
+      const mode = () => fixture.views["remoteDesktop.keyboardMode"];
+      act(() => mode().onPress());
+      act(() => mode().onPress());
+      const height = () =>
+        fixture.views["remoteDesktop.keyboardSurface"].style.height;
+      expect(height()).toBeGreaterThan(44);
+      act(() => vi.advanceTimersByTime(800));
+      expect(height()).toBe(44);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("keeps Android native keyboard avoidance without adding its height twice", async () => {
@@ -4299,10 +4487,7 @@ describe("remote desktop controls", () => {
         .filter((m) => m.type === "mouseButtons")
         .at(-1),
     ).toMatchObject({ bottomInset: 0, keyboardOpen: false });
-    const computer = [...host.querySelectorAll("button")].find(
-      (element) => element.textContent === "remoteDesktop.computerKeyboard",
-    )!;
-    act(() => computer.click());
+    act(() => fixture.views["remoteDesktop.keyboardMode"].onPress());
     act(() => panel().onLayout({ nativeEvent: { layout: { height: 280 } } }));
     expect(panel().style.flat(Infinity)).toContainEqual({ bottom: 0 });
     expect(
@@ -5713,32 +5898,88 @@ describe("remote desktop controls", () => {
     const viewer = host.querySelector('[data-testid="remoteDesktop.viewer"]');
     const starts = requests().filter((r) => r.op === "start").length;
     const stops = requests().filter((r) => r.op === "stop").length;
+    const deck = '[data-testid="remoteDesktop.foldKeyboard"]';
+    expect(host.querySelector(deck)).not.toBeNull();
+    act(() =>
+      fixture.views["remoteDesktop.keys"].onLayout({
+        nativeEvent: { layout: { width: 680, height: 260 } },
+      }),
+    );
+    const keys = fixture.views["remoteDesktop.keys"];
+    const keyCenter = (id: string) => {
+      const style = Object.assign(
+        {},
+        ...fixture.views[`remoteDesktop.key.${id}`].style
+          .flat(Infinity)
+          .filter(Boolean),
+      );
+      return {
+        locationX: style.left + style.width / 2,
+        locationY: style.top + style.height / 2,
+      };
+    };
+    // Unit: Android reports a second finger against the first finger's view,
+    // so these touches reach the shared surface and are placed by coordinates.
+    const touch = (identifier: number, id: string) => ({
+      nativeEvent: { identifier, ...keyCenter(id) },
+    });
+    act(() => keys.onTouchStart(touch(1, "MetaLeft.left")));
+    act(() => keys.onTouchStart(touch(2, "KeyC")));
     expect(
-      host.querySelector('[data-testid="remoteDesktop.retroKeys"]'),
-    ).not.toBeNull();
-    expect(fixture.views["remoteDesktop.skinSwitch"]).toBeDefined();
-    const letter = fixture.views["remoteDesktop.retroKey.KeyA"];
-    act(() => letter.onPressIn());
-    act(() => letter.onPressOut());
-    expect(sent()).toContainEqual({
+      sent()
+        .filter((m) => m.type === "events")
+        .at(-1),
+    ).toEqual({
       type: "events",
-      events: [{ kind: "key", code: "KeyA", down: true }],
+      events: [
+        { kind: "key", code: "MetaLeft", down: true },
+        { kind: "key", code: "KeyC", down: true },
+      ],
+    });
+    act(() => keys.onTouchEnd(touch(2, "KeyC")));
+    act(() => keys.onTouchEnd(touch(1, "MetaLeft.left")));
+    expect(
+      sent()
+        .filter((m) => m.type === "events")
+        .at(-1),
+    ).toEqual({
+      type: "events",
+      events: [{ kind: "key", code: "MetaLeft", down: false }],
+    });
+    // Unit: function-row shortcuts run when the finger lifts.
+    act(() => keys.onTouchStart(touch(3, "undo")));
+    expect(fixture.views["remoteDesktop.keyHint"]).toBeDefined();
+    act(() => keys.onTouchEnd(touch(3, "undo")));
+    expect(
+      sent()
+        .filter((m) => m.type === "events")
+        .at(-1),
+    ).toEqual({
+      type: "events",
+      events: [
+        { kind: "key", code: "MetaLeft", down: true },
+        { kind: "key", code: "KeyZ", down: true },
+        { kind: "key", code: "KeyZ", down: false },
+        { kind: "key", code: "MetaLeft", down: false },
+      ],
     });
     // Android IME resizes the window instead of adding an iOS keyboard inset.
     fixture.size = { width: 700, height: 550 };
     render({ ...geometry, ...fixture.size });
-    expect(
-      host.querySelector('[data-testid="remoteDesktop.retroKeys"]'),
-    ).toBeNull();
+    expect(host.querySelector(deck)).toBeNull();
     fixture.size = { width: 700, height: 900 };
     render(geometry);
+    expect(host.querySelector(deck)).not.toBeNull();
+    // Unit: the keyboard key hands off to the phone's input method.
+    const reopened = fixture.views["remoteDesktop.keys"];
+    act(() => reopened.onTouchStart(touch(4, "inputMethod")));
+    act(() => reopened.onTouchEnd(touch(4, "inputMethod")));
+    expect(host.querySelector(deck)).toBeNull();
     expect(
-      host.querySelector('[data-testid="remoteDesktop.retroKeys"]'),
+      host.querySelector('[data-testid="remoteDesktop.keyboardPanel"]'),
     ).not.toBeNull();
     render({ ...geometry, regions: [] });
-    expect(
-      host.querySelector('[data-testid="remoteDesktop.retroKeys"]'),
-    ).toBeNull();
+    expect(host.querySelector(deck)).toBeNull();
     expect(host.querySelector('[data-testid="remoteDesktop.viewer"]')).toBe(
       viewer,
     );
@@ -5859,6 +6100,28 @@ describe("remote desktop controls", () => {
       barEdge: "none",
       regions: [{ kind: "division", x: 0, y: 400, width: 700, height: 30 }],
     });
+    // Unit: the default deck replaces the toolbar and leaves the viewer in the upper half.
+    // Unit: clipboard and Controls live in the top row, leaving only the trackpad below.
+    expect(
+      host.querySelector('[data-testid="remoteDesktop.foldOperations"]'),
+    ).not.toBeNull();
+    expect(
+      host.querySelector('[data-testid="remoteDesktop.foldKeyboard"]'),
+    ).not.toBeNull();
+    expect(
+      host.querySelector('[data-testid="remoteDesktop.toolbarPosition"]'),
+    ).toBeNull();
+    expect(
+      host.querySelector('[data-testid="remoteDesktop.retroBezel"]'),
+    ).toBeNull();
+    const chooseMacintoshII = () => {
+      act(() => fixture.views["remoteDesktop.foldOperations"].onPress());
+      // The deck has no rail; its appearance moves to Controls. Keyboard → classic → … → Macintosh II.
+      for (let index = 0; index < 4; index++)
+        act(() => fixture.views["remoteDesktop.skinSwitch"].onPress());
+      act(() => fixture.views["remoteDesktop.operations"].onPress());
+    };
+    chooseMacintoshII();
     expect(
       sent()
         .filter((m) => m.type === "mouseButtons")
@@ -5927,8 +6190,34 @@ describe("remote desktop controls", () => {
       host.querySelector('[data-testid="remoteDesktop.retroKeys"]'),
     ).not.toBeNull();
     fixture.post.mockClear();
-    const letter = fixture.views["remoteDesktop.retroKey.KeyA"];
-    act(() => letter.onPressIn());
+    // Unit: hardware skins keep the toolbar and only the typing keys.
+    expect(
+      host.querySelector('[data-testid="remoteDesktop.toolbarPosition"]'),
+    ).not.toBeNull();
+    expect(
+      host.querySelector('[data-testid="remoteDesktop.key.undo"]'),
+    ).toBeNull();
+    act(() =>
+      fixture.views["remoteDesktop.retroKeys"].onLayout({
+        nativeEvent: { layout: { width: 600, height: 300 } },
+      }),
+    );
+    const retroKeys = fixture.views["remoteDesktop.retroKeys"];
+    const letterStyle = Object.assign(
+      {},
+      ...fixture.views["remoteDesktop.key.KeyA"].style
+        .flat(Infinity)
+        .filter(Boolean),
+    );
+    act(() =>
+      retroKeys.onTouchStart({
+        nativeEvent: {
+          identifier: 1,
+          locationX: letterStyle.left + 2,
+          locationY: letterStyle.top + 2,
+        },
+      }),
+    );
     expect(sent()).toContainEqual({
       type: "events",
       events: [{ kind: "key", code: "KeyA", down: true }],
@@ -5983,12 +6272,10 @@ describe("remote desktop controls", () => {
       host.querySelector('[data-testid="remoteDesktop.retroKeys"]'),
     ).toBeNull();
     expect(sent()).toContainEqual({ type: "releaseInput" });
-    act(() => letter.onPressOut());
-    expect(
-      sent()
-        .filter((m) => m.type === "events")
-        .at(-1),
-    ).toEqual({ type: "events", events: [] });
+    // Unit: a surface that was replaced has already released its keys; a late lift sends nothing.
+    const eventCount = sent().filter((m) => m.type === "events").length;
+    act(() => retroKeys.onTouchEnd({ nativeEvent: { identifier: 1 } }));
+    expect(sent().filter((m) => m.type === "events")).toHaveLength(eventCount);
     expect(sent().some((m) => m.type === "nativeTouchpad")).toBe(false);
     expect(
       sent()
@@ -6011,18 +6298,16 @@ describe("remote desktop controls", () => {
     expectHostAspect();
     swipe(100); // Compact → classic.
     expectHostAspect();
-    swipe(100); // Classic wraps to modern.
+    swipe(100); // Classic wraps to the default keyboard.
     expect(
       host.querySelector('[data-testid="remoteDesktop.retroKeys"]'),
     ).toBeNull();
-    act(() =>
-      fixture.views["remoteDesktop.skinSwipe"].onStartShouldSetResponderCapture(
-        {
-          nativeEvent: { pageX: 100, pageY: 440 },
-        },
-      ),
-    );
+    expect(
+      host.querySelector('[data-testid="remoteDesktop.foldKeyboard"]'),
+    ).not.toBeNull();
+    act(() => fixture.views["remoteDesktop.foldOperations"].onPress());
     act(() => fixture.views["remoteDesktop.skinSwitch"].onPress()); // Next tap wraps to classic.
+    act(() => fixture.views["remoteDesktop.operations"].onPress());
     expect(
       host.querySelector('[data-testid="remoteDesktop.retroKeys"]'),
     ).not.toBeNull();

@@ -1,5 +1,39 @@
 # 跨端协议兼容
 
+## 机器实时状态（2026-11-02）
+
+新增只读 invoke `maker:machine:status`（`packages/device-link/src/machineStatus.ts`），同账号远控可用，不进共享任务访客白名单。
+没有新帧、能力位或 relay 行为，中转（含自建）只转发，不需要适配。旧被控端返回 `CHANNEL_NOT_ALLOWED`，控制端显示 `update_required`；
+解析按字段容错，新版本多报的字段被忽略，缺的字段是 `null`，只有 CPU 核数与内存总量缺失才视为无效。
+
+## 分享来的供应商组按组判断可选（2026-11-02）
+
+不新增 wire 字段、channel 或错误码。受邀者对既有分享目录的解读：带合法 `groupSize` 的供应商，
+`connected: false` 在受邀者侧记为 `true`（`scrubSharedProvider`），因为它只代表组所在电脑本机那一份，
+组会把任务分给组里其他电脑（[供应商分享](../product-rules/provider-sharing.md) §5.1）。
+主进程 `readDeviceProviderViews` 与被控电脑代读分享目录时也过同一份投影，与 Renderer 直读一致；只有供应商组
+读组内电脑时保留原始 `connected`（`groupMember`），因为带 `groupAssigned` 的任务在那台直接运行。
+分享者电脑投影时还没有 `groupSize`，发出的数据不变；旧分享者不带 `groupSize` 时按原连接状态处理。
+分享者的启动预检也需更新：宿主仅对尚未分配的直接受邀者任务传入内部 `groupRouting` 上下文，
+核对分享来源与模型授权后由组选电脑，不用本机登录状态否决整组。选中本机、续接本机或启动失败后换回本机时，
+均在本机启动入口按原始连接状态重新核对。组所在电脑向已确认的组员转发换模型或分支任务时，同样
+只核对来源与模型授权，不看本机登录；分支依据宿主已保存的执行电脑判断，本机分支仍按原状态核对。
+实际执行电脑收到的已分配、已中转与受托执行不进入组预检。该上下文不进入 wire。
+完整修复需分享者与受邀者均更新；只更新受邀者时候选可见，但旧分享者仍可能因本机断连而拒绝启动。
+旧受邀者仍按本机那一份隐藏；新受邀者对组里一台都不能用的分享会在发送时收到既有的
+`REMOTE_AGENT_UNAVAILABLE`。手机经新版被控电脑代读即生效，手机自身解析同样走该函数。
+官方与自建中转只透传既有 invoke，无需改动。
+
+## 仓库自动任务导入确认（2026-11-01）
+
+同账号 invoke 新增 `maker:project-automation:pending-imports`，返回已知项目目录的待导入配置。
+既有 `reconcile` 参数可选追加 `approvedHash`，返回值可选追加 `pendingImport`；未提供匹配当前
+文件内容的 hash 时只预览，不创建、修改或删除自动任务。推送新增 `import-required` 分支，
+原 `reconciled` 分支不变。旧控制端不会确认新宿主的导入，须在新版 Desktop 查看确认；
+新控制端连接旧宿主时发现接口不可用，不伪造待导入内容，旧宿主仍保持旧版行为，安全修复须升级执行电脑。
+Mobile 暂无此确认界面；已保存任务及 Agent 工具的授权流程不变。无数据库迁移或新增持久授权记录。
+官方及自建中转沿用通用 invoke／push 转发，没有帧、鉴权或重连协议变化，无需修改中转内核。
+
 ## iPhone / Android 桌面小组件快照（新增接口，尚未发布）
 
 新增只读 invoke `device-link:usage-widget:snapshot:v1`（无参数），列入 Desktop
@@ -373,6 +407,7 @@ Renderer → Main 输入附带可选 `projectDir`，旧输入缺字段时回落�
 不绑项目且未传 `working_dir` 时复用既有托管目录创建流程；传目录或使用 worktree 也不改变归属。
 创建回执返回 `project_path`、实际 `working_dir` 与 `workspace_kind`；
 `list_projects` / `create_project` 保留 `working_dir` 并新增 `project_path` 回执。
+`list_projects` 另新增 `projects_root`（`path`、`source`：`setting`／`inferred`／`default`、`exists`），只读、仅本机；旧调用方忽略该字段即可（#8259）。
 `send_to_session` 的既有任务投递不要求项目，跨电脑投递合同不变。
 
 ## 手机读取项目别名（#6916）
@@ -1125,7 +1160,9 @@ Claude Code 终态 error 事件可带 `usageResetAt`（unix ms）。服务端无
   不做结构化拒收。新能力一律加**可选**字段：`picture`（本步按截图作答，像素不在快照里）、`liveView`
   （可打开单窗口实时画面）、`deviceCode`（`{ code, url, origin }`，设备码登录）、`holder`、`remoteInput`、
   `agentPicture`（2026-10-30：码来自 Agent 截图，主人扫完手动交还；同时带 `agentControlled`，旧端照常显示该提醒
-  与跳过；加密 offer 的 presentation 不变）等。
+  与跳过；加密 offer 的 presentation 不变）、`directSignIn`（2026-11-01：这一步由主人在窗口上完成；`controls` 仍保留，
+  旧控制端照旧显示表单，无实时画面的设备也退回表单或截图）等。
+  本机带路用只限受信本地窗口的 `INPUT_HANDOFF_LOCAL_RAISE_CHANNEL`，不进远程 allowlist（`device-link/ipc.ts` 拒绝）。
   旧控制端忽略不认识的字段，仍能看到本步的说明文字并交还／取消；新控制端只在字段存在时展示对应入口。
   `deviceCode` 在打开前必须经 `isInputHandoffDeviceCode` 复核（https、无账号密码、origin 与显示一致）。
 - **带值提交**只走插件授权 v3：`capabilities` 声明 `inputHandoff: true`，`start` 带 `inputHandoff: true`；
@@ -1928,6 +1965,14 @@ handler 无 sender 依赖；不加入共享任务访客白名单，不进入自�
 `useRemoteSessionBackgroundTasks.ts`。
 
 ## 远程 Agent：Agent 在另一台电脑运行
+
+插件花名册（2026-11-01）：`open` 的 `options` 追加可选字符串 `ghostRosterSnapshot`，由任务所在电脑按真实
+工作目录生成（与本机任务同一 formatter 与过滤），空串表示“那台没有可召回的插件”，同样要带。沿用
+`maker:remote-agent:v1`，不加能力位、错误码或 relay 接口；供应商组中转随 `options` 原样透传。旧运行端
+解码时丢弃该字段，行为不变；新运行端遇到旧控制端（字段缺省）时，受邀者照旧不注入花名册，同账号照旧用
+运行端自己的花名册，均不劣于升级前。运行端只在隧道确实提供 `cindy` MCP 时注入，绝不读自己的已装插件
+代替。规则正文见 [插件渐进式发现 §3.4](../ghost-progressive-discovery.md)，回归见 `roundtrip.test.ts` 与
+三 harness 的 `device-hosted-guest` 测试。
 
 直连分享任务的授权失效与进程重启分开处理：M 仍有该 run 但其任务许可已失效时，poll 只返回
 既有 `closed/access-revoked` 终态，不读取该 run 缓冲的内容，也不再返回 `missing`。新旧控制端
@@ -4470,7 +4515,7 @@ Chat Server 请求复用既有消息 `content` 的 media 块及 `threadRootId`�
 
 工具参数表把 `cindy_handoff_files` 声明为数组（`{"type":"array"}`）才启用，同名的其它形态参数不受影响；未声明的工具与旧插件行为逐字不变（非媒体仍报改用 dir）。
 插件收到 `args.cindy_handoff_files`，`upload` 增加三选一的 `handoff` 来源，失败码 `HANDOFF_UNAVAILABLE`；
-用到它的插件需声明 `minCindyVersion: 0.1.123-beta`（版本号待确认），旧宿主不认识该参数。
+用到它的插件需声明 `minCindyVersion: 0.1.122-beta`，旧宿主不认识该参数。
 卡片记录的 `cindy/attachments` 新增 `handoff:<uuid>` 资源链接，字段沿用标准 `resource_link`，不新增
 device-link 操作、字段或白名单。远程打开在执行端判定：新执行端把 `handoff:` 视为执行电脑文件，
 新旧查看端都收到既有的 `MCP_APP_FILES_LOCAL_ONLY` 提示；Mobile 自带的同名检查同步认 `handoff:`。
@@ -4480,3 +4525,7 @@ device-link 操作、字段或白名单。远程打开在执行端判定：新�
 不放行。设置页列表与删除只走本机 IPC（`ghosts:handoff-list` / `ghosts:handoff-delete`）。
 回归入口：`handoffStore.test.ts`、`ghostWorkdirGate.test.ts`、`networkSlot.test.ts`、`pluginServer.test.ts`、
 `viewAuthorization.test.ts`、Mobile `mcpAppCard.test.tsx`，以及 `mcp-apps-sandbox.verify.mjs --handoff`。
+
+## GitHub 公共读取能力
+
+`git-context:github-read` 只在同账号授权链路开放，控制端先检查 `github-read-v1`。未声明的旧电脑返回明确不支持，既有 `pr-status` 的关联范围过滤与链接打开不变。新通道不进入共享任务访客 allowlist；中转仍转发原 invoke / invoke-result 帧，不引入服务器消息种类。关联新增 `associationSource / associationOrigin` 可选字段；旧消费者按原字段兼容，新消费者默认只显示宿主投影的明确有效关联。详见 [功能合同](../product-rules/github-status-and-associations.md)。

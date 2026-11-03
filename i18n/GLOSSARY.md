@@ -634,6 +634,10 @@ issue #882：模型管理/新对话选择器的分类标签，对应 Gateway mod
 
 当前登录账号向公开市场发布插件、查看发布情况与发布记录的页面，个人和组织成员均可使用；区别于本机已安装插件和旧企业我的发布。
 
+### New project location
+
+存储设置名称（#8259）：在任务里「新建项目…」时项目文件夹的上级目录。未设置时按已登记项目最常见的父目录推荐，否则为 ~/Projects。与「对话工作区」（不绑项目任务的工作目录分配位置）是两个设置。
+
 ### Nightly learning
 
 伙伴的内置例行任务：到点（默认每天 3:30，可改每周一 3:30）回看上次之后和主人的对话，整理伙伴自己的记忆与技能（合并、拆分、停用、把反复出现的做法转正为技能），每条改动可撤销；没有新对话时不调用模型（docs/product-rules/bot-routines.md「内置夜间学习」）。英文句中小写 nightly learning，故 checkCase 为 false。只出现过一次、等待再次出现的做法叫「在观察的做法 / approaches being watched」，不叫候选技能。先登记为 proposed，等 UI 走查后再定。
@@ -864,10 +868,6 @@ macOS TCC 的 kTCCServiceListenEvent(系统设置里叫「输入监控」)在 Ci
 
 登录页免账号入口的动作名（面板内文字按钮 + 登录服务不可用时的 error 步逃生按钮，#697 起取代原游客圆钮）。与 not-signed-in 成对：动作叫「跳过登录」，进入后的状态叫「未登录」。历史说法「本地模式」「游客登录」已废弃——前者暗示另一种服务端连接方式，后者在本产品里没有对应的 guest 账号概念（代码里 GuestRoute 等内部标识不受本条约束）。先登记 proposed：en 的 Title Case 形态（Skip Sign-In）与本仓其它按钮的句首大写风格不一致，待随登录页文案统一时裁决。
 
-### Smart Contacts
-
-原生权限说明沿用现有设置页的十语功能名称。西语和葡萄牙葡语保留 Smart Contacts；本条仅登记现有用词，等待术语裁决，不更改通讯录行为或权限。
-
 ### Smart routing
 
 Codex Subagent 的可选扩展调配开关。默认关闭以保留 Codex 原生 Sol/Terra 调配；开启后允许 Codex 从 Cindy 已连接的更多模型中按任务选择。
@@ -884,9 +884,21 @@ Codex Subagent 的可选扩展调配开关。默认关闭以保留 Codex 原生 
 
 Cindy 里的**持久 AI 助手实体**（原名 Bot）：有长期身份、自有记忆与技能、模型候选链，可以通过有界私信互相沟通，也可以启动独立 Cindy 任务。产品定位参照「AI teammates」，故取人称名词而非机器名词。英文用法分两层：功能名与复数用 Teammates（侧栏标题），句中单数用小写 teammate（`this teammate`、`Archive teammate`）——故 checkCase 为 false。**与 IM 平台机器人严格区分**：Telegram Bot / Discord Bot / 飞书 bot / 企业微信机器人 / @BotFather / bot token 指的是消息平台上的 bot 账号，仍写作 Bot / 机器人，不改成本词；判据是「这个词指的是 Cindy 里那个持久助手实体」才用本词。覆盖 desktop 的 bots.* 命名空间、sidebar.tabs.bots、newChat.atMention.bot 与 mobile 的 devices.json bots.*。先登记为 proposed：改名刚落地，等 UI 走查与产品评审后再定 decided，届时再决定是否把「Bot」登记为各语言的 forbidden 译法（现在不能登记——存量 IM 平台 bot 文案会被大面积误伤）。
 
+### Core skill
+
+伙伴能力页的第一组：所有伙伴相同、常驻、随 Cindy 更新、不能关闭或修改的编排技能（内部名 teammate-guide；docs/product-rules/cindy-bots-runtime.md §6「伙伴技能分层」）。不叫「基础技能」「基座」。先登记为 proposed，等 UI 走查后再定。
+
+### System skills
+
+伙伴能力页的第二组：待办、例行任务、工作台与跟进，默认开启，主人可按伙伴单独关闭；关闭时提示词、工具与后台动作一起停（同上）。不叫「内置技能」，以免与本机内置技能混淆。先登记为 proposed。
+
 ### Todo
 
 伙伴独立事务清单，含交办与获准信息中的主动发现；项目、执行任务与PR仅可选关联。不替代Session任务生命周期。
+
+### Terms of Service
+
+与 privacy-policy 成对的法律文件名，取自现有 termsOfServiceLabel 与 login.consentDialog.body。登录协议行与协议弹窗标题是单行槽（DESIGN.md §16.2），带两个全称的句子超出预算，所以这两处只缩写本条（privacy-policy 保持已裁决全称）：协议行 fr「CGU」；弹窗标题 es「Términos」、fr「CGU」、de「Bedingungen」、pt「Termos」（#8188 / #8181）。弹窗正文与设置页仍用全称。待裁决：这些单行槽简称（尤其 fr 用「CGU」还是其他写法）。
 
 ### Token Plan
 

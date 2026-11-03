@@ -25,7 +25,7 @@ import { CompanionPortraitPicker, randomCompanionPortrait } from './CompanionPor
 import { CompanionProfileNativeView } from './CompanionProfileNativeView';
 import { CompanionChannelTasks } from './CompanionChannelTasks';
 import { CompanionProfileArtifacts } from './CompanionProfileArtifacts';
-import { loadCompanionProfile, profileFormDirty, type CompanionProfileData, type ProfilePanel, type ProfileValues } from './companionProfileData';
+import { companionEditorSections, loadCompanionProfile, profileFormDirty, type CompanionProfileData, type ProfilePanel, type ProfileValues } from './companionProfileData';
 import { CompanionMemoryPage } from './CompanionMemoryPage';
 import { useCompanionMemory } from './useCompanionMemory';
 import { saveCompanionReplyTargetPreference, useCompanionReplyTargetPreference } from './companionReplyTargetPreference';
@@ -82,6 +82,7 @@ function CompanionProfileSheetContent(props: CompanionProfileSheetProps) {
   const [editorLoading, setEditorLoading] = useState(false);
   const [values, setValues] = useState<ProfileValues>({});
   const [editing, setEditing] = useState(false);
+  const [modelSelection, setModelSelection] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState(false);
   const [deleteFailure, setDeleteFailure] = useState(false);
@@ -99,7 +100,13 @@ function CompanionProfileSheetContent(props: CompanionProfileSheetProps) {
   current.current = binding;
   useEffect(() => () => { current.current = ''; }, []);
   const panel = page === 'editor' ? editor?.panels.find(item => item.id === editorPanel) : data?.panels.find(item => item.id === page);
-  const dirty = editing && profileFormDirty(panel ? { ...panel, values: draftBase.current } : undefined, values);
+  const dirty = editing && (modelSelection || profileFormDirty(panel ? { ...panel, values: draftBase.current } : undefined, values));
+  // Legacy hosts can save a changed route but cannot acknowledge same-value fallback recovery.
+  // Task-only edits do not turn an unchanged primary selection into a supported request.
+  const unsupportedModelSelection = page === 'models' && modelSelection && panel?.acceptsModelSelection !== true
+    && (values.followsDefault === true) === (draftBase.current.followsDefault === true)
+    && (values.followsDefault === true || serializeModelRoutes(readCompanionModelChain(values.modelChain))
+      === serializeModelRoutes(readCompanionModelChain(draftBase.current.modelChain)));
   const draftScope = useRef({ dirty, page, base: page === 'editor' ? editor : data });
   draftScope.current = { dirty, page, base: page === 'editor' ? editor : data };
   const label = (value: RemoteText) => resolveRemoteText(value, i18n.language);
@@ -131,6 +138,7 @@ function CompanionProfileSheetContent(props: CompanionProfileSheetProps) {
     }
   }, [binding, read]);
   useEffect(() => {
+    setModelSelection(false);
     setModelStage('profile'); setConflict(null); setEditor(null); setEditorPanel(null); setEditorLoading(false); setData(null); setPage(props.initialPage === 'memory' ? 'memoryEntries' : props.initialPage === 'capabilities' ? 'skills' : 'home'); setValues({}); setReceipt(null); setConfirmation(null); setDeleted(false); setError(false); setDeleteFailure(false); setNameTakenOnSave(false); setEditing(false); setBusy(false);
     return () => { generation.current++; };
   }, [binding]);
@@ -153,6 +161,7 @@ function CompanionProfileSheetContent(props: CompanionProfileSheetProps) {
   };
   const open = (next: string) => {
     if (inFlight.current) return;
+    setModelSelection(false);
     if (next === 'memoryEntries') {
       void settleDraft(() => {
         setReceipt(null); setError(false); setDeleteFailure(false); setNameTakenOnSave(false); setConfirmation(null); setEditing(false); setPage(next);
@@ -166,6 +175,7 @@ function CompanionProfileSheetContent(props: CompanionProfileSheetProps) {
     setValues(data?.panels.find(item => item.id === next)?.values ?? {});
   };
   const submit = async (target: ProfilePanel, confirmed = false): Promise<boolean> => {
+    if (target.id === 'models' && unsupportedModelSelection) return false;
     if (!target.action || target.action.disabled || inFlight.current || !online || !resource || conflict?.page === page) return false;
     if (target.action.confirmation && !confirmed) { setConfirmation(target); return false; }
     inFlight.current = true; generation.current++; setBusy(true); setError(false); setDeleteFailure(false); setNameTakenOnSave(false); setReceipt(null);
@@ -176,13 +186,15 @@ function CompanionProfileSheetContent(props: CompanionProfileSheetProps) {
       const response = await invokeRemoteResourceAction(invoke, { deviceId, deviceName }, {
         collectionId, resourceRef: page === 'editor' ? editor!.resource.ref : resource.ref, actionId: target.action.id,
         input: Object.fromEntries((target.action.fields ?? [])
-          .filter(field => target.id === 'delete' || (values[field.id] ?? '') !== (draftBase.current[field.id] ?? ''))
+          .filter(field => target.id === 'delete' ||
+            (target.id === 'models' && modelSelection && ['modelChain', 'followsDefault'].includes(field.id)) ||
+            (values[field.id] ?? '') !== (draftBase.current[field.id] ?? ''))
           .map(field => [field.id, (editing ? values[field.id] : target.values[field.id]) ?? ''])),
       }, i18n.language);
       if (current.current !== started) return false;
       const toast = response.effects.find(effect => effect.kind === 'toast');
       if (toast?.kind === 'toast') setReceipt(toast.message);
-      setConfirmation(null); setEditing(false);
+      setConfirmation(null); setEditing(false); setModelSelection(false);
       if (target.id === 'delete') { pendingDeleted.current = true; setDeleted(true); return true; }
       if (page === 'editor' && editor) {
         let ref = editor.resource.ref;
@@ -262,7 +274,7 @@ function CompanionProfileSheetContent(props: CompanionProfileSheetProps) {
   // discard it instead of silently keeping the user on a page they cannot leave.
   const settleDraft = async (proceed: () => void | Promise<void>) => {
     if (!dirty || !panel) { await proceed(); return; }
-    if (online && resource && panel.action && !panel.action.disabled && conflict?.page !== page) {
+    if (online && resource && panel.action && !panel.action.disabled && !unsupportedModelSelection && conflict?.page !== page) {
       if (await submit(panel)) await proceed();
       return;
     }
@@ -288,7 +300,7 @@ function CompanionProfileSheetContent(props: CompanionProfileSheetProps) {
           const nextPanel = conflict.next.panels.find(item => item.id === (page === 'editor' ? editorPanel : page));
           if (page === 'editor') setEditor(conflict.next); else setData(conflict.next);
           setValues(nextPanel?.values ?? {}); draftBase.current = nextPanel?.values ?? {};
-          setEditing(false); setConflict(null); setError(false);
+          setEditing(false); setModelSelection(false); setConflict(null); setError(false);
         } else { setEditing(false); onClose(); }
       } },
     ]);
@@ -318,7 +330,8 @@ function CompanionProfileSheetContent(props: CompanionProfileSheetProps) {
     setModelPurpose(purpose); setModelIndex(index); setModelStage('closing-profile');
   };
   const models = <View style={{ gap: spacing.lg }}>
-    <CompanionModelChain deviceId={deviceId} values={modelValues} disabled={busy || !online || !panel?.action} onChange={changeValues}
+    {unsupportedModelSelection ? note('hostUpgrade') : null}
+    <CompanionModelChain deviceId={deviceId} values={modelValues} disabled={busy || !online || !panel?.action} onChange={next => { setModelSelection(true); changeValues(next); }}
       onPick={index => pickModel('primary', index)} />
     {panel?.action?.fields?.some(field => field.id === 'taskModel') && <View style={{ gap: spacing.sm }}>
       <Text style={{ fontSize: typeScale.body, lineHeight: lineHeight.body, fontWeight: fontWeight.medium, color: colors.textPrimary }}>{t('devices.companionProfile.taskModel')}</Text>
@@ -350,7 +363,7 @@ function CompanionProfileSheetContent(props: CompanionProfileSheetProps) {
       }
       const chain = readCompanionModelChain(modelValues.modelChain);
       if (chain.some((item, index) => index !== modelIndex && item.harness === route.harness && item.model === route.model && item.providerId === route.providerId && (item.agentDeviceId ?? null) === (route.agentDeviceId ?? null))) return false;
-      chain[modelIndex] = route; changeValues({ ...modelValues, modelChain: serializeModelRoutes(chain), followsDefault: false }); return true; }} />;
+      chain[modelIndex] = route; setModelSelection(true); changeValues({ ...modelValues, modelChain: serializeModelRoutes(chain), followsDefault: false }); return true; }} />;
 
   if (Platform.OS === 'ios') return <>{modelPicker}<CompanionProfileNativeView models={models}
     visible={visible && modelStage === 'profile'} title={confirmation?.action?.confirmation ? label(confirmation.action.confirmation.title) : page === 'editor' && editor ? label(editor.resource.display.title) : t(`devices.companionProfile.${titleKey}`)}
@@ -407,10 +420,17 @@ function CompanionProfileSheetContent(props: CompanionProfileSheetProps) {
   const editorView = panel ? <>
     {formPanel(panel)}
     {editor?.panels.filter(item => item.id === 'remove' && item.action).map(item => <View key={item.id} style={styles.group}>{actionRow(item, () => confirm(item), true)}</View>)}
-  </> : editor ? <View style={styles.group}>{editor.panels.flatMap(item => item.entries?.length
-    ? item.entries.map(entry => <ContextSheetRow key={`${item.id}:${entry.resourceId}`} icon={null} trailing="chevron" label={label(entry.title)} onPress={() => void openEditor(entry.resourceId)} />)
-    : [item.action ? <ContextSheetRow key={item.id} icon={null} trailing="chevron" label={label(item.title ?? item.action.label)} onPress={() => selectEditorPanel(item)} />
-      : <Text key={item.id} style={[styles.body, styles.groupText]}>{item.text || t('devices.companionProfile.emptyEditor')}</Text>])}</View> : null;
+  </> : editor ? <>{companionEditorSections(editor.panels).map(section => {
+    // Same sections as iOS: a host block title heads its own group, subtitles sit under the row title.
+    const group = <View key={section.key} style={styles.group}>{section.panels.flatMap(item => item.entries?.length
+      ? item.entries.map(entry => <ContextSheetRow key={`${item.id}:${entry.resourceId}`} icon={null} trailing="chevron" label={label(entry.title)}
+        detail={entry.subtitle ? label(entry.subtitle) : undefined} detailLines={2} onPress={() => void openEditor(entry.resourceId)} />)
+      : [item.action ? <ContextSheetRow key={item.id} icon={null} trailing="chevron" label={label(item.title ?? item.action.label)} onPress={() => selectEditorPanel(item)} />
+        : <Text key={item.id} style={[styles.body, styles.groupText]}>{item.text || t('devices.companionProfile.emptyEditor')}</Text>])}</View>;
+    return section.title ? <View key={section.key} style={styles.field}>
+      <Text accessibilityRole="header" style={styles.groupLabel}>{label(section.title)}</Text>{group}
+    </View> : group;
+  })}</> : null;
 
   return <>{modelPicker}<CompanionSheet visible={visible && modelStage === 'profile'} onClosed={afterClosed} onClose={dismiss}
       preventDismiss={dirty || busy || !!confirmation || memory.dirty || memory.busy}

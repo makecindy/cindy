@@ -83,6 +83,30 @@ it.each(['member', 'guest'] as const)('keeps %s read-only based on account membe
   ]);
 });
 
+it('lets an ordinary member save notifications without a manager or online computer, and refreshes personal changes', async () => {
+  snapshot.members[0].role = 'member';
+  snapshot.reads = [{ thread_key: 'main', read_seq: '7', muted: false, notification_scope: null }];
+  const original = request.getMockImplementation()!;
+  request.mockImplementation(async (path, method, body, actor) => {
+    if (path === '/me') return { actor: { id: id(2), kind: 'human' }, capabilities: { groupNotificationSettings: 1 } };
+    if (path.endsWith('/read') && method === 'POST') {
+      expect(actor).toBeUndefined();
+      snapshot.reads![0].notification_scope = body.notificationMode;
+      return { readSeq: '7', muted: false, notificationScope: body.notificationMode };
+    }
+    return original(path, method, body, actor);
+  });
+  await render();
+  expect(result.editable).toBe(false);
+  await act(async () => { await result.act('notifications', { mode: 'mentions' }); });
+  expect(writes()).toEqual([[`/conversations/${id(1)}/read`, 'POST', { operationId: 'operation-1', readSeq: '0', notificationMode: 'mentions' }]]);
+  expect(result.group?.notificationMode).toBe('mentions');
+  snapshot.reads[0].muted = true;
+  source = { ...source, notificationMode: 'none' };
+  await render();
+  expect(result.group?.notificationMode).toBe('none');
+});
+
 it('selects only an owned manager, never a foreign owner', async () => {
   snapshot.members[0].role = 'member'; snapshot.members[1].role = 'admin';
   snapshot.members.push({ ...snapshot.members[0], id: id(9), ownerActorId: id(9), role: 'owner' });
