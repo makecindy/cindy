@@ -122,6 +122,35 @@ export function botProcessItems(items: readonly RenderItem[], isStreaming: boole
   });
 }
 
+/**
+ * Latest settled companion reply in the projected stream, at any nesting depth.
+ *
+ * 伙伴读位不能只看顶层:完成态时间线把同一用户轮次的收尾正文折进 `work_group`,
+ * 而 `botProcessItems` / `simplifyBotRenderItems` 只提升「正式回复」(已封口 /
+ * final_answer / 带交付)。一轮里既有后台唤醒的封口回复、又有未封口的收尾回复时,
+ * 收尾那条留在组内;只扫顶层会让 `markBotRead` 停在封口那条,未读角标永不归零
+ * (#8629)。主进程的未读口径(`canonicalReplyVisibility`)本来就认这条收尾正文,
+ * 读位必须同口径。
+ */
+export function latestSettledAssistantMs(items: readonly RenderItem[]): number {
+  let latest = 0;
+  const visit = (list: readonly RenderItem[]): void => {
+    for (const item of list) {
+      if (item.type === 'work_group') {
+        visit(item.children);
+        continue;
+      }
+      if (item.type !== 'message') continue;
+      const { message } = item;
+      if (message.role !== 'assistant' || message.isStreaming) continue;
+      const stamp = Date.parse(message.createdAt ?? '');
+      if (Number.isFinite(stamp) && stamp > latest) latest = stamp;
+    }
+  };
+  visit(items);
+  return latest;
+}
+
 /** Empty avatar rows never make a fold on their own; unloaded history still does. */
 function hasWorkContent(item: RenderItem): boolean {
   if (item.type === 'work_group') return Boolean(item.deferred) || item.children.some(hasWorkContent);

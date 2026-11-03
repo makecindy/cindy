@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import type { ChatMessage } from '@/lib/makerChatStore';
 import { groupWorkRuns, type MessageRenderItem, type ToolSegmentRenderItem, type RenderItem } from '@/components/chat/messageWorkGroups';
-import { botProcessItems, simplifyBotRenderItems } from '../botConversationPresentation';
+import { botProcessItems, latestSettledAssistantMs, simplifyBotRenderItems } from '../botConversationPresentation';
 
 const message = (id: string, role: ChatMessage['role'], content = id,
   extra: Partial<ChatMessage> = {}): MessageRenderItem => ({
@@ -432,5 +432,29 @@ describe('continuous teammate process', () => {
     const result = botProcessItems(groupWorkRuns(rows, true), true);
     expect(proseIds(result)).toEqual(['intro', 'final1']);
     expect(result.filter(item => item.type === 'work_group')).toHaveLength(2);
+  });
+});
+
+describe('companion read position', () => {
+  // #8629: 一轮里既有后台唤醒的封口回复、又有未封口的收尾回复时,收尾正文不是
+  // 「正式回复」,会被 completion 折叠留在 work_group 里;主进程
+  // canonicalReplyVisibility 仍把它算作未读。只扫顶层的读位停在封口那条,
+  // markBotRead 单调推进会一直拒绝前进,未读角标因此永远清不掉。
+  const projectBot = (items: RenderItem[], streaming: boolean) =>
+    botProcessItems(groupWorkRuns(items, streaming), streaming);
+  it('acknowledges a closing reply that the work fold keeps', () => {
+    const closedAt = '2026-11-03T09:41:00.000Z';
+    const rows: RenderItem[] = [
+      message('u', 'user', 'Check the inbox', { createdAt: '2026-11-03T08:55:00.000Z' }),
+      tool('scan'),
+      message('wake', 'assistant', 'Woke up: inbox empty', { turnCompleted: true, createdAt: '2026-11-03T09:18:00.000Z' }),
+      tool('follow-up'),
+      message('closing', 'assistant', 'Two PRs need your review', { createdAt: closedAt }),
+    ];
+    const projected = projectBot(rows, false);
+    // 只有封口回复被提升为正式回复,收尾正文留在组内 —— 这就是读位的盲区。
+    expect(proseIds(projected)).toEqual(['wake']);
+    expect(allKeys(projected)).toContain('msg-closing');
+    expect(latestSettledAssistantMs(projected)).toBe(Date.parse(closedAt));
   });
 });
