@@ -114,6 +114,19 @@ describe("mobile:sim:logcheck analysis", () => {
     expect(result.newWarnings).toEqual([]);
     expect(result.knownWarningCount).toBe(4);
   });
+
+  // Review #8560: only the reconnecting relay drop is known; other device-link warnings stay visible.
+  it("still reports device-link request timeouts as new warnings", () => {
+    const result = analyzeMetroLog(
+      [
+        BUNDLED,
+        " WARN  [device-link] device-link request timeout kind=invoke channel=device-link:remote-desktop:v1",
+      ].join("\n"),
+      knownWarnings,
+    );
+    expect(result.newWarnings).toHaveLength(1);
+    expect(result.knownWarningCount).toBe(0);
+  });
 });
 
 describe("Metro log preload", () => {
