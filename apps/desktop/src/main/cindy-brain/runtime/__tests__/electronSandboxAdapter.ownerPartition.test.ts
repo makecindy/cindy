@@ -127,12 +127,15 @@ import {
   revokeLegacyGhostProtocolPartition,
   setGhostAppContextProvider,
   setGhostAgentModelsProvider,
+  setGhostModelPickerProvider,
   setGhostKvStore,
   setGhostConnectionsHandler,
   setGhostOauthHandler,
   setGhostSecretsHandler,
   setGhostMediaModelsProvider,
 } from '../electronSandboxAdapter';
+import { createGhostAgentModelsCache } from '../../ghostAgentModels.js';
+import type { ProviderView } from '@cindy/model-providers';
 
 function ghost(id: string): InstalledGhost {
   return {
@@ -797,7 +800,50 @@ describe('electronSandboxAdapter owner partition', () => {
   });
 });
 
+describe('Host model picker endpoint', () => {
+  beforeEach(() => {
+    kvEndpoint.readBoundedBodyText.mockImplementation((request: Request) => request.text());
+  });
+  // New interactive route: catalog tests cover GET only. Minimal POST must use the
+  // physical plugin identity; author-supplied remote origins must be rejected. Tier: unit.
+  it('opens only from a same-instance POST and returns a credential-free selection', async () => {
+    const route = { agentKind: 'codex', providerId: 'provider', model: 'model', effort: '', fastMode: false };
+    const provider = vi.fn().mockResolvedValue({ ok: true, route });
+    setGhostModelPickerProvider(provider);
+    ensureGhostProtocolRegistered(ghost('model-picker'));
+    const handler = harness.sessions.get(approvedPartition('cindy-ghost-owner:cloud:opaque-owner-a:model-picker'))!.protocolHandler!;
+    for (const [url, method, body, status] of [
+      ['model-picker/model-picker', 'GET', undefined, 405],
+      ['other/model-picker', 'POST', '{}', 403],
+      ['model-picker/model-picker?owner=b', 'POST', '{}', 400],
+      ['model-picker/model-picker', 'POST', '{"mobilePageId":"other"}', 400],
+      ['model-picker/model-picker', 'POST', '{', 400],
+    ] as const) {
+      const result = await handler(new Request('cindy-ghost://' + url, { method, body }));
+      expect(result.status).toBe(status);
+    }
+    expect(provider).not.toHaveBeenCalled();
+    const result = await handler(new Request('cindy-ghost://model-picker/model-picker', { method: 'POST', body: '{}' }));
+    expect(await result.json()).toEqual({ ok: true, route });
+    expect(result.headers.get('cache-control')).toBe('no-store');
+    expect(provider.mock.calls[0][0]).toBe('model-picker');
+  });
+
+  it('withholds an interactive result when the originating installation changes while the picker is open', async () => {
+    let finish!: (value: import('../../../../shared/pluginModelPicker').PluginModelPickerResult) => void;
+    setGhostModelPickerProvider(() => new Promise(resolve => { finish = resolve; }));
+    ensureGhostProtocolRegistered(ghost('model-picker-owner'));
+    const handler = harness.sessions.get(approvedPartition('cindy-ghost-owner:cloud:opaque-owner-a:model-picker-owner'))!.protocolHandler!;
+    const pending = handler(new Request('cindy-ghost://model-picker-owner/model-picker', { method: 'POST', body: '{}' }));
+    await vi.waitFor(() => expect(finish).toBeTypeOf('function'));
+    harness.activeOwner = { mode: 'cloud', dataOwnerId: 'owner-b', generation: 2 };
+    finish({ ok: true, route: { agentKind: 'codex', providerId: 'provider', model: 'model', effort: '', fastMode: false } });
+    expect((await pending).status).toBe(403);
+  });
+});
+
 describe('read-only agent model directory', () => {
+  // 测试价值：生产入口 protocolHandler GET /agent-models；#7452 远程位置/400/503/60s 缓存；原用例只覆盖无参。tier=unit
   it('identifies the organization instance when a root plugin has the same id', async () => {
     const provider = vi.fn().mockResolvedValue({ ok: true, models: [] });
     setGhostAgentModelsProvider(provider);
@@ -839,6 +885,139 @@ describe('read-only agent model directory', () => {
     finish({ ok: true, models: [] });
     expect((await pending).status).toBe(403);
     expect((await handler(new Request('cindy-ghost://agent-owner/agent-models'))).status).toBe(403);
+  });
+
+  it('appends locations on unparameterized GET and still calls the provider with one argument', async () => {
+    const provider = vi.fn().mockResolvedValue({
+      ok: true,
+      models: [{ id: 'local', name: 'Local', agent: 'codex', providerId: 'p', providerName: 'P', efforts: [], defaultEffort: null }],
+      locations: [{ agentDeviceId: 'claude', name: 'Claude' }],
+    });
+    setGhostAgentModelsProvider(provider);
+    ensureGhostProtocolRegistered(ghost('agent-locations'));
+    const handler = harness.sessions.get(approvedPartition('cindy-ghost-owner:cloud:opaque-owner-a:agent-locations'))!.protocolHandler!;
+    const response = await handler(new Request('cindy-ghost://agent-locations/agent-models'));
+    expect(response.status).toBe(200);
+    expect(provider).toHaveBeenCalledExactlyOnceWith('agent-locations');
+    expect(await response.json()).toEqual({
+      ok: true,
+      models: [{ id: 'local', name: 'Local', agent: 'codex', providerId: 'p', providerName: 'P', efforts: [], defaultEffort: null }],
+      locations: [{ agentDeviceId: 'claude', name: 'Claude' }],
+    });
+  });
+
+  it('rejects duplicate, empty, oversized, or extra query parameters with 400', async () => {
+    const provider = vi.fn().mockResolvedValue({ ok: true, models: [{ id: 'local' }] });
+    setGhostAgentModelsProvider(provider);
+    ensureGhostProtocolRegistered(ghost('agent-bad-query'));
+    const handler = harness.sessions.get(approvedPartition('cindy-ghost-owner:cloud:opaque-owner-a:agent-bad-query'))!.protocolHandler!;
+    for (const path of [
+      'agent-models?agent_device_id=a&agent_device_id=b',
+      'agent-models?agent_device_id=',
+      `agent-models?agent_device_id=${'x'.repeat(129)}`,
+      'agent-models?agent_device_id=ok&extra=1',
+    ]) {
+      const response = await handler(new Request('cindy-ghost://agent-bad-query/' + path));
+      expect(response.status).toBe(400);
+      expect(await response.text()).toBe('');
+    }
+    expect(provider).not.toHaveBeenCalled();
+  });
+
+  it('reads a remote location, echoes agentDeviceId, and keeps no-store GET-only constraints', async () => {
+    const provider = vi.fn().mockResolvedValue({
+      ok: true,
+      agentDeviceId: 'claude',
+      models: [
+        { id: 'opus', name: 'Opus', agent: 'claude-code', providerId: 'anthropic', providerName: 'Anthropic', efforts: ['high'], defaultEffort: 'high', visible: true },
+        { id: 'opus', name: 'Opus', agent: 'claude-code', providerId: 'anthropic-api', providerName: 'Anthropic API', efforts: ['high'], defaultEffort: 'high', visible: true },
+      ],
+    });
+    setGhostAgentModelsProvider(provider);
+    ensureGhostProtocolRegistered(ghost('agent-remote'));
+    const handler = harness.sessions.get(approvedPartition('cindy-ghost-owner:cloud:opaque-owner-a:agent-remote'))!.protocolHandler!;
+    const response = await handler(new Request('cindy-ghost://agent-remote/agent-models?agent_device_id=claude'));
+    expect(response.status).toBe(200);
+    expect(response.headers.get('cache-control')).toBe('no-store');
+    expect(provider).toHaveBeenCalledExactlyOnceWith('agent-remote', 'claude');
+    expect(await response.json()).toEqual({
+      ok: true,
+      agentDeviceId: 'claude',
+      models: [
+        { id: 'opus', name: 'Opus', agent: 'claude-code', providerId: 'anthropic', providerName: 'Anthropic', efforts: ['high'], defaultEffort: 'high', visible: true },
+        { id: 'opus', name: 'Opus', agent: 'claude-code', providerId: 'anthropic-api', providerName: 'Anthropic API', efforts: ['high'], defaultEffort: 'high', visible: true },
+      ],
+    });
+    expect((await handler(new Request('cindy-ghost://agent-remote/agent-models?agent_device_id=claude', { method: 'POST' }))).status).toBe(405);
+  });
+
+  it('returns 503 NOT_AVAILABLE without local models when a well-formed location cannot be read', async () => {
+    const provider = vi.fn().mockResolvedValue({ ok: false, errorCode: 'NOT_AVAILABLE', message: 'Model catalog unavailable' });
+    setGhostAgentModelsProvider(provider);
+    ensureGhostProtocolRegistered(ghost('agent-missing'));
+    const handler = harness.sessions.get(approvedPartition('cindy-ghost-owner:cloud:opaque-owner-a:agent-missing'))!.protocolHandler!;
+    const response = await handler(new Request('cindy-ghost://agent-missing/agent-models?agent_device_id=offline-box'));
+    expect(response.status).toBe(503);
+    expect(provider).toHaveBeenCalledExactlyOnceWith('agent-missing', 'offline-box');
+    const body = await response.json();
+    expect(body).toEqual({ ok: false, errorCode: 'NOT_AVAILABLE', message: 'Model catalog unavailable' });
+    expect(JSON.stringify(body)).not.toMatch(/endpoint|apiKey|local/);
+  });
+
+  it('does not deliver an in-flight parameterized catalog after owner changes', async () => {
+    let finish!: (value: { ok: true; models: []; agentDeviceId: string }) => void;
+    setGhostAgentModelsProvider(() => new Promise(resolve => { finish = resolve; }));
+    ensureGhostProtocolRegistered(ghost('agent-remote-owner'));
+    const handler = harness.sessions.get(approvedPartition('cindy-ghost-owner:cloud:opaque-owner-a:agent-remote-owner'))!.protocolHandler!;
+    const pending = handler(new Request('cindy-ghost://agent-remote-owner/agent-models?agent_device_id=claude'));
+    harness.activeOwner = { mode: 'cloud', dataOwnerId: 'owner-b', generation: 2 };
+    finish({ ok: true, models: [], agentDeviceId: 'claude' });
+    expect((await pending).status).toBe(403);
+  });
+
+  it('caches successful locations and remote catalogs for 60s and does not cache failures', async () => {
+    let now = 1_000;
+    const listLocations = vi.fn()
+      .mockRejectedValueOnce(new Error('cloud down'))
+      .mockResolvedValue({ status: 'complete', locations: [{ agentDeviceId: 'claude', name: 'Claude' }] });
+    const readRemote = vi.fn()
+      .mockRejectedValueOnce(new Error('offline'))
+      .mockResolvedValue([] as ProviderView[]);
+    const cache = createGhostAgentModelsCache({ now: () => now });
+    setGhostAgentModelsProvider(async (_id, agentDeviceId) => {
+      if (agentDeviceId) return cache.catalog('owner-a', agentDeviceId, () => readRemote());
+      const locations = await cache.locations('owner-a', listLocations);
+      return { ok: true, models: [], ...(locations ? { locations } : {}) };
+    });
+    ensureGhostProtocolRegistered(ghost('agent-cache'));
+    const handler = harness.sessions.get(approvedPartition('cindy-ghost-owner:cloud:opaque-owner-a:agent-cache'))!.protocolHandler!;
+    const noArg = () => handler(new Request('cindy-ghost://agent-cache/agent-models'));
+    const withArg = () => handler(new Request('cindy-ghost://agent-cache/agent-models?agent_device_id=claude'));
+
+    expect(await (await noArg()).json()).toEqual({ ok: true, models: [] });
+    expect(listLocations).toHaveBeenCalledTimes(1);
+    expect(await (await noArg()).json()).toEqual({
+      ok: true, models: [], locations: [{ agentDeviceId: 'claude', name: 'Claude' }],
+    });
+    expect(listLocations).toHaveBeenCalledTimes(2);
+    now += 30_000;
+    await noArg();
+    expect(listLocations).toHaveBeenCalledTimes(2);
+    now += 30_000;
+    await noArg();
+    expect(listLocations).toHaveBeenCalledTimes(3);
+
+    now = 100_000;
+    expect((await withArg()).status).toBe(503);
+    expect(readRemote).toHaveBeenCalledTimes(1);
+    expect(await (await withArg()).json()).toMatchObject({ ok: true, agentDeviceId: 'claude' });
+    expect(readRemote).toHaveBeenCalledTimes(2);
+    now += 30_000;
+    await withArg();
+    expect(readRemote).toHaveBeenCalledTimes(2);
+    now += 30_000;
+    await withArg();
+    expect(readRemote).toHaveBeenCalledTimes(3);
   });
 });
 

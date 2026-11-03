@@ -6,6 +6,8 @@ import os from "node:os";
 import path from "node:path";
 import { createServer } from "node:http";
 import { expect, it } from "vitest";
+import { sendCodexApprovalFeedback } from "./approval-feedback.js";
+import { resolveAutoReviewDecision, formatPermissionDenial } from "../shared/auto-review-decision.js";
 import { AppServerHost } from "./app-server/host.js";
 import { createStdioTransport } from "./app-server/stdioTransport.js";
 import { nativeAutoReviewContinuationConfig } from "./native-auto-review-policy.js";
@@ -229,3 +231,85 @@ for await (const line of createInterface({input:process.stdin})) {
   },
   45_000,
 );
+
+// Regression: a stock native decline reports "rejected by user"; the following
+// model request must also contain Cindy's actual reason, without binary patches.
+it.skipIf(!binaryPath)("delivers a long-command denial to the model through stock same-turn steer", async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "cindy-denial-feedback-"));
+  const reason = "Keep the existing document; this rewrite removes its contents.";
+  const command = `printf '%s' '${"LaTeX paragraph. ".repeat(1000)}' > notes.tex`;
+  const modelInputs: string[] = [];
+  const reviewed: string[] = [];
+  const server = createServer(async (request, response) => {
+    if (request.method !== "POST") { response.end('{"models":[]}'); return; }
+    let text = "";
+    for await (const chunk of request) text += chunk;
+    const body = JSON.parse(text);
+    modelInputs.push(JSON.stringify(body.input));
+    const output = modelInputs.length === 1 ? [{
+      type: "custom_tool_call", name: "exec", call_id: "long-command",
+      input: `text(await tools.exec_command(${JSON.stringify({ cmd: command, sandbox_permissions: "require_escalated", justification: "Rewrite the test document." })}));`,
+    }] : [{ type: "message", role: "assistant", id: "feedback-observed", status: "completed",
+      content: [{ type: "output_text", text: "Done.", annotations: [] }] }];
+    response.writeHead(200, { "content-type": "text/event-stream" });
+    for (const item of output) response.write(`data: ${JSON.stringify({type:"response.output_item.done",output_index:0,item})}\n\n`);
+    response.end(`data: ${JSON.stringify({ type: "response.completed", response: {
+      id: `resp_${modelInputs.length}`, object: "response", status: "completed", model: body.model, output,
+      usage: { input_tokens: 10, output_tokens: 1, total_tokens: 11 },
+    } })}\n\n`);
+  });
+  let host: AppServerHost | undefined;
+  try {
+    await new Promise<void>(resolve => server.listen(0, "127.0.0.1", resolve));
+    const address = server.address();
+    if (!address || typeof address === "string") throw new Error("Missing address");
+    host = new AppServerHost({ logger, clientInfo: { name: "cindy-denial-test", version: "1" },
+      createTransport: () => createStdioTransport({ binaryPath: binaryPath!, cwd: root,
+        env: { PATH: process.env.PATH ?? "", HOME: root, CODEX_HOME: root, USERPROFILE: root,
+          ...(process.env.SystemRoot ? { SystemRoot: process.env.SystemRoot } : {}) },
+        extraArgs: ["-c", 'model_provider="probe"', "-c", 'model_providers.probe.name="Probe"',
+          "-c", `model_providers.probe.base_url="http://127.0.0.1:${address.port}"`,
+          "-c", 'model_providers.probe.wire_api="responses"', "-c", "model_providers.probe.requires_openai_auth=false"],
+      }),
+    });
+    await host.ensureStarted();
+    const { thread } = await host.request<{thread:{id:string}}>("thread/start", { cwd: root,
+      model: "gpt-5.6-luna", modelProvider: "probe", ephemeral: true,
+      approvalPolicy: "on-request", approvalsReviewer: "user", sandbox: "workspace-write" });
+    let complete = false;
+    let feedbackError: unknown;
+    const subscription = host.subscribeThread(thread.id, {
+      commandExecutionApproval: async params => {
+        const action = { kind: "exec" as const, command: params.command ?? "", cwd: params.cwd ?? root };
+        const decision = await resolveAutoReviewDecision({ agentKind: "codex", model: "probe",
+          userIntent: "Update my notes.", workspaceRoots: [root], platform: process.platform, action,
+        }, async request => {
+          reviewed.push(request.action.kind === "exec" ? request.action.command : "wrong-kind");
+          return { verdict: "block", reason };
+        });
+        try {
+          await sendCodexApprovalFeedback((method, params, options) => host!.request(method, params, options), {
+            threadId: params.threadId, turnId: params.turnId, itemId: params.itemId,
+            reason: formatPermissionDenial("auto", decision.reason),
+          });
+        } catch (error) { feedbackError = error; }
+        return { decision: "decline" };
+      },
+      turnCompleted: () => { complete = true; },
+    });
+    try {
+      await host.request("turn/start", { threadId: thread.id, input: [{ type: "text", text: "Update my notes." }] });
+      await expect.poll(() => complete, { timeout: 15_000 }).toBe(true);
+      expect(feedbackError).toBeUndefined();
+      expect(reviewed).toHaveLength(1);
+      expect(reviewed[0]).toContain(command);
+      expect(modelInputs.slice(1).join("\n")).toContain(reason);
+      expect(modelInputs.slice(1).join("\n")).toContain("not a user message or additional authorization");
+      await expect(fs.stat(path.join(root, "notes.tex"))).rejects.toMatchObject({ code: "ENOENT" });
+    } finally { await subscription.release(); }
+  } finally {
+    await host?.retire("denial feedback probe complete");
+    await new Promise<void>(resolve => { server.close(() => resolve()); server.closeAllConnections(); });
+    await fs.rm(root, { recursive: true, force: true });
+  }
+}, 30_000);

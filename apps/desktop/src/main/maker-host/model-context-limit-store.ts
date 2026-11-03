@@ -6,13 +6,9 @@
  *
  * ## 这个设置解决什么
  *
- * 自动压缩的触发是「已用 token / 上下文窗口 ≥ 阈值百分比」。阈值百分比用户能调
- * (设置 → 个性化,compaction-settings-store,默认 90),但**分母**是模型窗口,由路由钉死:
- * Claude 给 1M、GPT 给 272K,用户想「这个模型我只想用到 500K 就开始压缩」无从下手 ——
- * 调百分比会同时影响所有模型,且换算成 token 数还得自己算。
- *
- * 所以这里存的是**分母的用户上限**:运行时按显式值配置窗口与原生压缩预算。
- * 缺席时保持原有路由判定；不会把路由默认快照进本地偏好。
+ * 窗口上限与压缩比例在模型详情中设置：前者约束工作窗口，后者决定何时整理上下文。
+ * 压缩比例按供应商连接＋规范模型 ID 保存，所有 Harness 共用；缺席时统一为 90%。
+ * 窗口缺席时保持原有路由判定，不把默认值快照进本地偏好。
  *
  * ## 为什么在 main 而不是 renderer localStorage
  *
@@ -35,7 +31,11 @@
  * 上限只挡明显荒谬的量级(MAX_LIMIT_TOKENS),避免写进一个天文数字让比例判定失效。
  */
 
-import type { AgentKind } from '@cindy/model-providers';
+import type { AgentKind, Catalog } from '@cindy/model-providers';
+import {
+  DEFAULT_MODEL_COMPACTION_PCT,
+  modelCompactionTarget,
+} from '../../shared/modelContextLimit.js';
 
 import { desktopMakerLogger } from './logger-adapter.js';
 import { createOverrideSettingsFile } from './override-settings-file.js';
@@ -59,6 +59,8 @@ const MAX_ENTRIES = 4096;
 
 export interface ModelContextLimitPrefs {
   limits: Record<string, number>;
+  /** JSON [providerId, canonicalModelId] keys; absent overrides use the shared 90% default. */
+  compactionPcts?: Record<string, number>;
 }
 
 const DEFAULTS: ModelContextLimitPrefs = { limits: {} };
@@ -105,18 +107,28 @@ function sanitizeLimits(raw: unknown): Record<string, number> {
 
 function normalize(raw: unknown): ModelContextLimitPrefs {
   if (!raw || typeof raw !== 'object') return { limits: {} };
-  return { limits: sanitizeLimits((raw as { limits?: unknown }).limits) };
+  const input = raw as ModelContextLimitPrefs;
+  const compactionPcts = Object.fromEntries(
+    Object.entries(input.compactionPcts ?? {})
+      .filter(([key, value]) => key && Number.isInteger(value) && value >= 50 && value <= 90)
+      .slice(0, MAX_ENTRIES),
+  );
+  return {
+    limits: sanitizeLimits(input.limits),
+    ...(Object.keys(compactionPcts).length ? { compactionPcts } : {}),
+  };
 }
 
-const createStore = (filePath: () => string) => createOverrideSettingsFile<ModelContextLimitPrefs>({
-  filePath,
-  defaults: DEFAULTS,
-  normalize,
-  log,
-  label: 'model-context-limit',
-  maxBytes: 1_048_576,
-  preserveUnreadableFile: true,
-});
+const createStore = (filePath: () => string) =>
+  createOverrideSettingsFile<ModelContextLimitPrefs>({
+    filePath,
+    defaults: DEFAULTS,
+    normalize,
+    log,
+    label: 'model-context-limit',
+    maxBytes: 1_048_576,
+    preserveUnreadableFile: true,
+  });
 
 let store = createStore(() => ownerScopedUserDataPath('model-context-limit-prefs.json'));
 
@@ -129,6 +141,112 @@ function readPrefs(): ModelContextLimitPrefs {
 /** 全部 override 快照。 */
 export function readModelContextLimits(): Record<string, number> {
   return readPrefs().limits;
+}
+
+export function readModelCompactionPct(providerId: string, modelId: string): number | null {
+  return readPrefs().compactionPcts?.[JSON.stringify([providerId, modelId])] ?? null;
+}
+
+/**
+ * A separate owner-pinned store wrote the shared prefs file. The module store's
+ * mtime guard can miss that write when both land within the filesystem's mtime
+ * granularity (seen on Windows CI), so drop its cache, as the rollback paths do.
+ */
+function dropCachedStore(): void {
+  store = createStore(() => ownerScopedUserDataPath('model-context-limit-prefs.json'));
+}
+
+/** Participate in the existing provider deletion transaction, including rollback. */
+export function stageProviderModelCompactionClear(providerId: string): () => boolean {
+  const filePath = ownerScopedUserDataPath('model-context-limit-prefs.json');
+  const ownerStore = createStore(() => filePath);
+  const previous = ownerStore.read().compactionPcts ?? {};
+  // Match the serialized provider element exactly, including escaped characters.
+  const prefix = `[${JSON.stringify(providerId)},`;
+  const removed = Object.fromEntries(Object.entries(previous).filter(([key]) => key.startsWith(prefix)));
+  if (Object.keys(removed).length === 0) return () => true;
+  ownerStore.writePatch({
+    compactionPcts: Object.fromEntries(Object.entries(previous).filter(([key]) => !key.startsWith(prefix))),
+  });
+  dropCachedStore();
+  return () => {
+    try {
+      // Reload the pinned owner's file even when intervening writes share its mtime.
+      const rollbackStore = createStore(() => filePath);
+      const current = { ...rollbackStore.read().compactionPcts };
+      // Restore only removed entries; do not overwrite a newer external edit.
+      for (const [key, value] of Object.entries(removed)) current[key] ??= value;
+      rollbackStore.writePatch({ compactionPcts: current });
+      dropCachedStore();
+      return true;
+    } catch (error) {
+      log.warn('restore provider model compaction failed', {
+        providerId,
+        error: error instanceof Error ? error.message : String(error),
+      });
+      return false;
+    }
+  };
+}
+
+/** All desktop harnesses use the same supplier/model policy, never the retired global sliders. */
+export function resolveModelCompactionPct(
+  catalog: Pick<Catalog, 'providers'>,
+  agent: AgentKind,
+  providerId: string | null | undefined,
+  modelId: string,
+): number {
+  const provider = catalog.providers.find((entry) => entry.id === providerId);
+  const target = provider ? modelCompactionTarget(provider, agent, modelId) : null;
+  return (
+    (target ? readModelCompactionPct(target.providerId, target.modelId) : null) ??
+    DEFAULT_MODEL_COMPACTION_PCT
+  );
+}
+
+/** Same owner-scoped file and existing provider mutation queue as window settings. */
+export async function writeModelCompactionWithRefresh(
+  targets: readonly { providerId: string; modelId: string }[],
+  pct: number | null,
+  refresh: () => Promise<void>,
+  refreshAfterRollback: () => Promise<void>,
+): Promise<void> {
+  if (pct !== null && (!Number.isInteger(pct) || pct < 50 || pct > 90))
+    throw new Error('invalid compaction percentage');
+  const filePath = ownerScopedUserDataPath('model-context-limit-prefs.json');
+  const previous = { ...readPrefs().compactionPcts };
+  const next = { ...previous };
+  for (const target of targets) {
+    if (!target.providerId || !target.modelId) throw new Error('invalid compaction target');
+    const key = JSON.stringify([target.providerId, target.modelId]);
+    if (pct === null) delete next[key];
+    else next[key] = pct;
+  }
+  if (Object.keys(next).length > MAX_ENTRIES)
+    throw new Error('compaction preference capacity exceeded');
+  store.writePatch({ compactionPcts: next });
+  try {
+    await refresh();
+  } catch (error) {
+    const originalStore = createStore(() => filePath);
+    const restored = { ...originalStore.read().compactionPcts };
+    for (const target of targets) {
+      const key = JSON.stringify([target.providerId, target.modelId]);
+      if ((restored[key] ?? null) !== pct) continue;
+      if (previous[key] === undefined) delete restored[key];
+      else restored[key] = previous[key];
+    }
+    originalStore.writePatch({ compactionPcts: restored });
+    store = createStore(() => ownerScopedUserDataPath('model-context-limit-prefs.json'));
+    if (ownerScopedUserDataPath('model-context-limit-prefs.json') === filePath) {
+      try {
+        await refreshAfterRollback();
+      } catch {
+        /* The saved policy is restored; surface the original failure. */
+      }
+    }
+    throw error;
+  }
 }
 
 /** 某个 (引擎, 供应商, 模型) 的用户上限;未设过返回 null。 */
@@ -215,7 +333,10 @@ export async function writeModelContextLimitsWithRefresh(
     }
     // Earlier queue wakes may already have resumed handles with the rejected
     // budget. Reconcile them only after restoring this owner's preferences.
-    if (refreshAfterRollback && ownerScopedUserDataPath('model-context-limit-prefs.json') === filePath) {
+    if (
+      refreshAfterRollback &&
+      ownerScopedUserDataPath('model-context-limit-prefs.json') === filePath
+    ) {
       try {
         await refreshAfterRollback();
       } catch (refreshError) {
@@ -230,7 +351,8 @@ export async function writeModelContextLimitsWithRefresh(
 
 /** 清空全部上限 override(供应商级 / 整体「恢复默认」用)。 */
 export function resetModelContextLimits(): void {
-  store.reset();
+  store.invalidateIfChanged();
+  store.writePatch({ limits: {} });
 }
 
 export const __testing = {

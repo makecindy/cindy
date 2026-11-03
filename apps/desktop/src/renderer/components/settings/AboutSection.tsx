@@ -207,6 +207,13 @@ function AgentVersionRow({
 }) {
   const { t, i18n } = useTranslation();
   const { confirm } = useConfirmDialog();
+  const [preparing, setPreparing] = useState(false);
+  const preparingRef = useRef(false);
+  const active = useRef(true);
+  useEffect(() => {
+    active.current = true;
+    return () => { active.current = false; };
+  }, []);
   const stateRef = useRef(state);
   stateRef.current = state;
   const currentVersion = state.version ? extractSemver(state.version) : null;
@@ -218,7 +225,7 @@ function AgentVersionRow({
   const canUpdate = () => {
     const next = stateRef.current;
     return Boolean(
-      !next.checking &&
+      active.current && !next.checking &&
         next.updateAvailable &&
         next.version &&
         next.latestVersion &&
@@ -226,7 +233,9 @@ function AgentVersionRow({
         extractSemver(next.latestVersion),
     );
   };
-  const status = state.checking
+  const status = preparing
+    ? t('settings.about.piKernel.download')
+    : state.checking
     ? t('settings.about.harnessChecking')
     : state.checkFailed
       ? t('settings.about.harnessCheckFailed')
@@ -235,7 +244,21 @@ function AgentVersionRow({
         : '';
 
   const handleUpdate = async () => {
-    if (!canUpdate() || !currentVersion || !latestVersion) return;
+    if (preparingRef.current || !canUpdate() || !currentVersion || !latestVersion) return;
+    const targetVersion = stateRef.current.latestVersion;
+    if (!targetVersion) return;
+    preparingRef.current = true;
+    setPreparing(true);
+    try {
+      await window.electronAPI.prepareHarnessUpdate(kind, targetVersion);
+    } catch {
+      toast.error(t('settings.about.harnessUpdateFailed'));
+      return;
+    } finally {
+      preparingRef.current = false;
+      if (active.current) setPreparing(false);
+    }
+    if (!canUpdate() || stateRef.current.latestVersion !== targetVersion) return;
     const confirmed = await confirm({
       title: t('settings.about.harnessUpdateTitle', { name }),
       description: t('settings.about.harnessUpdateDescription', {
@@ -272,7 +295,7 @@ function AgentVersionRow({
     if (!canUpdate()) return;
 
     try {
-      await window.electronAPI.relaunchForHarnessUpdate(kind);
+      await window.electronAPI.relaunchForHarnessUpdate(kind, targetVersion);
     } catch {
       toast.error(t('settings.about.harnessUpdateFailed'));
     }
@@ -284,16 +307,16 @@ function AgentVersionRow({
       manageLabel={t('settings.about.harnessManage', { name })}
       version={renderVersion(state, t)}
       status={status}
-      pending={state.checking}
+      pending={state.checking || preparing}
     >
       <HarnessVersionMenuItem
         label={t('settings.about.harnessUpdateButton', { name })}
         version={latestVersion}
-        disabled={!updateAvailable || state.checking}
+        disabled={!updateAvailable || state.checking || preparing}
         onSelect={() => void handleUpdate()}
       />
       <DropdownMenuSeparator />
-      <DropdownMenuItem className={HARNESS_MENU_ITEM_CLASS} disabled={state.checking} onSelect={onCheck}>
+      <DropdownMenuItem className={HARNESS_MENU_ITEM_CLASS} disabled={state.checking || preparing} onSelect={onCheck}>
         {state.checking ? t('settings.about.harnessChecking') : t('settings.about.harnessCheck')}
       </DropdownMenuItem>
       {state.checkedAt && (

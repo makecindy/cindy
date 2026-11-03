@@ -92,6 +92,10 @@
     },
     {
       "file": "extension/src/browser/routes/agent.act.ts",
+      "desc": "execute fixed structured DOM reads in an isolated world without the interaction grace delay"
+    },
+    {
+      "file": "extension/src/browser/routes/agent.act.ts",
       "desc": "resolve the selected tab alias before comparing or executing action targets"
     },
     {
@@ -120,7 +124,7 @@
     }
   ],
   "fileCount": 335,
-  "contentHash": "0e13e4827f1eea59d796bb5727e1775aac55b5066f98fe204458801fba1f6171",
+  "contentHash": "1e5b9ed7f2156b726934dd3f3fd1f2c306129d12dc25bdd1471b2e233e390d24",
   "fsSafe": {
     "package": "@openclaw/fs-safe",
     "version": "0.4.0"

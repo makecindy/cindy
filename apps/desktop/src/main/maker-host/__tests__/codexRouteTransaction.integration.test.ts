@@ -31,7 +31,7 @@ const logger: Logger = {
 };
 
 describe.skipIf(!binaryPath)('Desktop route transactions with real Codex app-server', () => {
-  it.each([...['A', 'B', 'C', 'initialize', 'capability', 'resume', 'transfer'].flatMap((window) => [false, true].map((reviewMode) => ({ window, reviewMode }))), ...['skills', 'config'].map((window) => ({ window, reviewMode: true })), ...['restricted', 'bot', 'local-skill', 'transfer-fork-failure', 'transfer-cas-failure', 'transfer-resume-failure', 'transfer-busy', 'transfer-retire-resolve-success', 'transfer-retire-resolve-failure', 'transfer-retire-list-success', 'transfer-retire-list-failure', 'transfer-picker', 'transfer-picker-shared', 'transfer-picker-resume-failure', 'transfer-picker-shared-resume-failure', 'transfer-picker-cold-task', 'transfer-picker-cold-control', 'transfer-picker-shared-cold-task', 'transfer-picker-shared-cold-control'].map((window) => ({ window, reviewMode: false }))])('waits for Desktop window $window with Review=$reviewMode before start and switch', async ({ window, reviewMode }) => {
+  it.each([...['A', 'B', 'C', 'initialize', 'capability', 'resume', 'transfer'].flatMap((window) => [false, true].map((reviewMode) => ({ window, reviewMode }))), ...['skills', 'config'].map((window) => ({ window, reviewMode: true })), ...['restricted', 'bot', 'local-skill', 'transfer-fork-failure', 'transfer-cas-failure', 'transfer-resume-failure', 'transfer-busy', 'transfer-retire-resolve-success', 'transfer-retire-resolve-failure', 'transfer-retire-list-success', 'transfer-retire-list-failure', 'transfer-picker', 'transfer-picker-shared', 'transfer-picker-shared-activity', 'transfer-picker-resume-failure', 'transfer-picker-shared-resume-failure', 'transfer-picker-cold-task', 'transfer-picker-cold-control', 'transfer-picker-shared-cold-task', 'transfer-picker-shared-cold-control'].map((window) => ({ window, reviewMode: false }))])('waits for Desktop window $window with Review=$reviewMode before start and switch', async ({ window, reviewMode }) => {
     const releases: Array<() => void> = [];
     const beginMutation = () => { const finish = beginProviderRouteMutation('cprov-fixture'); releases.push(finish); return finish; };
     const lateWindow = ['initialize', 'capability', 'resume', 'skills', 'config', 'restricted', 'bot', 'local-skill'].includes(window);
@@ -136,7 +136,7 @@ describe.skipIf(!binaryPath)('Desktop route transactions with real Codex app-ser
     try {
       if (window.startsWith('transfer')) {
         const sqlite = new Database(':memory:');
-        sqlite.exec('CREATE TABLE sessions (id TEXT PRIMARY KEY, status TEXT, agent_kind TEXT, remote_host_id TEXT, sdk_session_id TEXT, model TEXT, provider_id TEXT, effort TEXT, fast_mode INTEGER, updated_at INTEGER)');
+        sqlite.exec('CREATE TABLE sessions (id TEXT PRIMARY KEY, status TEXT, agent_kind TEXT, remote_host_id TEXT, sdk_session_id TEXT, model TEXT, provider_id TEXT, effort TEXT, fast_mode INTEGER, updated_at INTEGER, working_dir TEXT)');
         if (window.includes('picker')) {
           const existing = new Set((sqlite.prepare('PRAGMA table_info(sessions)').all() as Array<{ name: string }>).map(column => column.name));
           for (const column of Object.values(getTableColumns(sessions))) {
@@ -201,6 +201,22 @@ describe.skipIf(!binaryPath)('Desktop route transactions with real Codex app-ser
           const siblingHost = hostMap.get(sibling.codexHostKey ?? (retirementWindow ? 'local:external-auth' : 'local'))!;
           const connection = siblingHost.getConnectionId();
           if (window.includes('picker')) {
+            // Regression: ordinary activity can land after the route snapshot and
+            // again while the native fork awaits. Exercise the production picker
+            // closures and real Codex writer, then check one accepted send per ID.
+            if (window.endsWith('-activity')) {
+              const requiresTransfer = maker.requiresCodexThreadHostTransfer.bind(maker);
+              spies.push(vi.spyOn(maker, 'requiresCodexThreadHostTransfer').mockImplementation(async (input) => {
+                sqlite.prepare('UPDATE sessions SET updated_at = updated_at + 1 WHERE id = ?').run(input.sessionId);
+                return requiresTransfer(input);
+              }));
+              const fork = maker.forkSdkSession.bind(maker);
+              spies.push(vi.spyOn(maker, 'forkSdkSession').mockImplementation(async (...args) => {
+                const result = await fork(...args);
+                sqlite.prepare('UPDATE sessions SET updated_at = updated_at + 1 WHERE id = ?').run('source');
+                return result;
+              }));
+            }
             const picker = createCodexPickerHarness({ maker, db, workingDir, createMessage: async (id, message) => {
               sqlite.prepare('INSERT INTO picker_messages VALUES (?, ?, ?)').run(message.clientId, id, JSON.stringify(message.content));
             } });
@@ -265,7 +281,7 @@ describe.skipIf(!binaryPath)('Desktop route transactions with real Codex app-ser
           }
           if (retirementWindow) {
             await maker.closeSession('source');
-            const sourceRow = (await db.drizzle.select({ id: sessions.id, sdkSessionId: sessions.sdkSessionId, model: sessions.model, providerId: sessions.providerId, effort: sessions.effort, fastMode: sessions.fastMode, updatedAt: sessions.updatedAt }).from(sessions)).find((row) => row.id === 'source')!;
+            const sourceRow = (await db.drizzle.select({ id: sessions.id, sdkSessionId: sessions.sdkSessionId, model: sessions.model, providerId: sessions.providerId, effort: sessions.effort, fastMode: sessions.fastMode, workingDir: sessions.workingDir }).from(sessions)).find((row) => row.id === 'source')!;
             const sourceHost = hostMap.get('local')!;
             const internals = agent as unknown as {
               resolveLocalAuthSelection(providerId: string | null | undefined, model: string): Promise<{ policy: 'isolated' | 'legacy-shared'; isCurrent(): boolean }>;
@@ -350,7 +366,7 @@ describe.skipIf(!binaryPath)('Desktop route transactions with real Codex app-ser
             return;
           }
           for (const providerId of ['cprov-fixture', 'openai']) {
-            const sourceRow = (await db.drizzle.select({ id: sessions.id, sdkSessionId: sessions.sdkSessionId, model: sessions.model, providerId: sessions.providerId, effort: sessions.effort, fastMode: sessions.fastMode, updatedAt: sessions.updatedAt }).from(sessions)).find((row) => row.id === 'source')!;
+            const sourceRow = (await db.drizzle.select({ id: sessions.id, sdkSessionId: sessions.sdkSessionId, model: sessions.model, providerId: sessions.providerId, effort: sessions.effort, fastMode: sessions.fastMode, workingDir: sessions.workingDir }).from(sessions)).find((row) => row.id === 'source')!;
             const original = sourceRow.sdkSessionId!;
             const rolloutPath = await (agent as unknown as { findRolloutPath(id: string): Promise<string> }).findRolloutPath(original);
             const history = await readFile(rolloutPath, 'utf8');

@@ -1,3 +1,4 @@
+import { getSessionListActivityAt } from '@cindy/maker-shared/session-activity';
 import type { Session } from '@/lib/ccAgent.types';
 import {
   groupSessions,
@@ -22,7 +23,7 @@ const ROW_ONLY_FIELDS = new Set([
 ]);
 
 function sameGroupingInput(a: Session, b: Session): boolean {
-  if ((a.userSendAt ?? a.updatedAt) !== (b.userSendAt ?? b.updatedAt)) return false;
+  if (getSessionListActivityAt(a) !== getSessionListActivityAt(b)) return false;
   // Only crossing the draft boundary changes grouping.
   if (((a._count?.messages ?? 0) === 0) !== ((b._count?.messages ?? 0) === 0)) return false;
   const keys = new Set([...Object.keys(a), ...Object.keys(b)]);
@@ -59,7 +60,15 @@ function sameOptions(a: GroupSessionsOptions, b: GroupSessionsOptions): boolean 
   return (
     a.projectAliases === b.projectAliases &&
     a.remoteProjectAliases === b.remoteProjectAliases &&
-    a.projectAliasMembers === b.projectAliasMembers &&
+    // Complete alias members are rebuilt even for row-only patches. Reuse the
+    // same conservative structural comparison: identity/eligibility changes
+    // outside the visible filter must still invalidate the displayed name.
+    (a.projectAliasMembers === b.projectAliasMembers ||
+      (!!a.projectAliasMembers && !!b.projectAliasMembers &&
+        a.projectAliasMembers.length === b.projectAliasMembers.length &&
+        a.projectAliasMembers.every((member, i) =>
+          member === b.projectAliasMembers![i] || sameGroupingInput(member, b.projectAliasMembers![i]),
+        ))) &&
     a.includePinnedInProjects === b.includePinnedInProjects &&
     a.includeDraftsInProjects === b.includeDraftsInProjects &&
     a.provisionalDraftTaskId === b.provisionalDraftTaskId &&

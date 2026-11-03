@@ -14,7 +14,7 @@ import { normalizeMobileAgentCapabilities } from '@/session/agentCapabilities';
 export function createDeviceCatalogRefresh(options: {
   readProviders(deviceId: string): Promise<DeviceProvidersPayload>;
   readCapabilities(deviceId: string, agent: 'claude-code' | 'codex' | 'pi'): Promise<unknown>;
-  connectionEpoch(): number;
+  connectionEpoch(deviceId: string): number;
   canRead?(deviceId: string): boolean;
 }) {
   let disposed = false;
@@ -29,7 +29,7 @@ export function createDeviceCatalogRefresh(options: {
     // Keep the invalidation pending without putting requests on an unreadable
     // link. Reuse the scheduler's backoff and cancellation, including dispose.
     if (options.canRead?.(id) === false) return { retry: true };
-    const epoch = options.connectionEpoch();
+    const epoch = options.connectionEpoch(id);
     const providerGeneration = getDeviceProvidersGen(id);
     const generation = getAgentCapabilitiesGeneration(id);
     const read = <T,>(fetcher: () => Promise<T>): Promise<T> => {
@@ -51,6 +51,7 @@ export function createDeviceCatalogRefresh(options: {
     return { retry: !disposed && options.canRead?.(id) === false };
   });
   return {
+    deviceIds(): readonly string[] { return [...devices]; },
     wake(deviceId?: string) {
       if (disposed) return;
       for (const id of deviceId ? [deviceId] : devices) {

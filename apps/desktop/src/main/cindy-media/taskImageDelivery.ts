@@ -84,17 +84,22 @@ export async function taskImageRoots(session: SessionImageScope): Promise<string
   return roots;
 }
 
-/** Read through one handle, rejecting escapes and replacement during validation. */
+/** Read through one handle, rejecting escapes and replacement during validation.
+ * `roots: null` accepts any local path; channel delivery uses it because the
+ * desktop chat already shows any local image the Agent references.
+ */
 export async function readTaskImage(
   source: string,
-  roots: readonly string[],
+  roots: readonly string[] | null,
 ): Promise<{ buffer: Buffer; mimeType: string }> {
+  const withinRoots = (target: string): boolean =>
+    roots === null || roots.some((root) => isPathWithin(root, target));
   // Reject Windows UNC / WebDAV / device namespaces before realpath can contact
   // a remote server. Apply to decoded paths too, independent of the host OS.
   if (/^[\\/]{2}|^[\\/]\?\?[\\/]/.test(source))
     throw new Error('task-image: network or device path');
   const real = await fs.realpath(source);
-  if (!roots.some((root) => isPathWithin(root, real))) throw new Error('task-image: outside task');
+  if (!withinRoots(real)) throw new Error('task-image: outside task');
   const handle = await fs.open(
     real,
     constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0) | (constants.O_NONBLOCK ?? 0),
@@ -109,7 +114,7 @@ export async function readTaskImage(
       checked !== real ||
       named.ino !== before.ino ||
       named.dev !== before.dev ||
-      !roots.some((root) => isPathWithin(root, checked))
+      !withinRoots(checked)
     )
       throw new Error('task-image: changed source');
     const buffer = Buffer.alloc(before.size);
@@ -139,7 +144,11 @@ function markdownContent(value: string): { text: string; serialize(text: string)
   }
 }
 
-async function captureTaskImages(sessionId: string, client?: DbClient) {
+async function captureTaskImages(
+  sessionId: string,
+  client?: DbClient,
+  options: { anyLocalPath?: boolean } = {},
+) {
   const snapshot = getCurrentDbClientSnapshot();
   if (!snapshot || (client && client !== snapshot.client)) return null;
   const db = snapshot.client.drizzle;
@@ -163,7 +172,7 @@ async function captureTaskImages(sessionId: string, client?: DbClient) {
     .limit(1);
   assertStillValid();
   if (!session || session.remoteHostId || session.status === 'deleted') return null;
-  const roots = await taskImageRoots(session);
+  const roots = options.anyLocalPath ? null : await taskImageRoots(session);
   assertStillValid();
   const newRefs: string[] = [];
   return {
@@ -185,8 +194,9 @@ async function captureTaskImages(sessionId: string, client?: DbClient) {
         compensate: remove,
       });
     },
-    materialize: (text: string) =>
+    materialize: (text: string, onFailure?: (source: string, error: unknown) => void) =>
       materializeTaskImageMarkdown(text, {
+        onFailure,
         importImage: async (source) => {
           const image = await readTaskImage(source, roots);
           assertStillValid();
@@ -221,31 +231,44 @@ async function captureTaskImages(sessionId: string, client?: DbClient) {
   };
 }
 
-/** Channel adapter: same source validation/import as durable chat. Never rewrites Agent history. */
+/** Channel adapter: same file validation/import as durable chat, but any local path. Never rewrites Agent history. */
 export async function materializeTaskImageText(sessionId: string, text: string): Promise<string> {
   return (await materializeTaskImageTextResult(sessionId, text)).text;
 }
 
 /** Keep the existing replacement table so projections share the same imported bytes. */
-export async function materializeTaskImageTextResult(sessionId: string, text: string) {
+export async function materializeTaskImageTextResult(
+  sessionId: string,
+  text: string,
+  log?: { warn(msg: string): void },
+) {
   const client = getCurrentDbClientSnapshot()?.client;
   const unchanged = { text, replacements: new Map<string, string>(), failures: [] as string[] };
   if (!client || !hasLocalTaskImages(text)) return unchanged;
   return withSessionMediaRefLock(client.drizzle, sessionId, () =>
-    materializeTaskImageTextUnlocked(client, sessionId, unchanged),
+    materializeTaskImageTextUnlocked(client, sessionId, unchanged, log),
   );
 }
+
+const errorMessage = (error: unknown): string =>
+  error instanceof Error ? error.message : String(error);
 
 async function materializeTaskImageTextUnlocked(
   client: DbClient,
   sessionId: string,
   unchanged: Awaited<ReturnType<typeof materializeTaskImageMarkdown>>,
+  log?: { warn(msg: string): void },
 ) {
   let scope: Awaited<ReturnType<typeof captureTaskImages>> = null;
   try {
-    scope = await captureTaskImages(sessionId, client);
-    if (!scope) return unchanged;
-    const result = await scope.materialize(unchanged.text);
+    scope = await captureTaskImages(sessionId, client, { anyLocalPath: true });
+    if (!scope) {
+      log?.warn('task image import skipped: task is unavailable on this host');
+      return unchanged;
+    }
+    const result = await scope.materialize(unchanged.text, (source, error) => {
+      log?.warn(`task image import failed (${path.win32.basename(source)}): ${errorMessage(error)}`);
+    });
     scope.assertStillValid();
     const [current] = await scope.db
       .select({
@@ -269,7 +292,8 @@ async function materializeTaskImageTextUnlocked(
     )
       throw new Error('task-image: task changed');
     return result;
-  } catch {
+  } catch (error) {
+    log?.warn(`task image import abandoned: ${errorMessage(error)}`);
     await scope?.rollback().catch(() => {});
     return unchanged;
   }

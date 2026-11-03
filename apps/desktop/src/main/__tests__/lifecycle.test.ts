@@ -656,7 +656,7 @@ describe('installQuitHandler render-process-gone', () => {
     }
   });
 
-  it('resource usage renderer crash does NOT shut the app down', async () => {
+  it('recoverable auxiliary renderer crashes do NOT shut the app down', async () => {
     resourceUsageWebContentsIds.add(44);
     const { handler, app, restore } = await installAndGrabHandler();
     try {
@@ -667,6 +667,19 @@ describe('installQuitHandler render-process-gone', () => {
         expect.stringContaining('resource usage render-process-gone'),
       );
       expect(mocks.logger.error).not.toHaveBeenCalled();
+      // Unit regression for the real Windows direct-renderer crash: local
+      // cleanup ran, but the app-wide event still disposed DB/device-link.
+      // Other auxiliary tests never registered the transport factory's owner.
+      const { markCaptureWindowWebContents } = await import('../remote-desktop/captureWindowRegistry');
+      const capture = { id: 46, getType: () => 'window' };
+      markCaptureWindowWebContents(capture as unknown as Electron.WebContents);
+      handler(undefined, capture, { reason: 'crashed', exitCode: 5 });
+      await Promise.resolve();
+      expect(app.exit).not.toHaveBeenCalled();
+      expect(mocks.spawn).not.toHaveBeenCalled();
+      expect(mocks.logger.warn).toHaveBeenCalledWith(
+        expect.stringContaining('capture transport render-process-gone'),
+      );
     } finally {
       restore();
     }

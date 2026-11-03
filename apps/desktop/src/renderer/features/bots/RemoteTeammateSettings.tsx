@@ -8,6 +8,7 @@ import { Spinner } from '@/components/ui/spinner';
 import { getDataOwnerGeneration } from '@/contexts/dataOwnerGeneration';
 import { isDeviceLinkRemotePushCurrent } from '@/lib/remoteDataOwnerPushFence';
 import { extractIpcError } from '@/utils/ipcError';
+import { standardSessionRoute } from '@/lib/orcaSessionIdentity';
 import type { BotSettingsOp } from '../../../shared/botRemoteSettings';
 import { BotPronounProvider } from './botPronounContext';
 import { BotSettings } from './BotsHomeView';
@@ -21,7 +22,7 @@ import type { BotProfile } from './botStore';
 
 interface Props {
   bot: RemoteBot;
-  initialPage?: 'home' | 'memory' | 'capabilities' | 'model' | 'voice' | 'channels';
+  initialPage?: 'home' | 'memory' | 'capabilities' | 'model' | 'voice' | 'channels' | 'routines';
   beforeCloseRef: MutableRefObject<(() => Promise<boolean>) | null>;
   onBack: () => void;
   onDeleted: () => void;
@@ -153,12 +154,9 @@ function RemoteSettingsPages({ bot, ops, initialPage: requestedPage = 'home', be
 
   const onOpenSession = useCallback(
     (sessionId: string, searchJump?: ConversationSearchJump) => {
-      const projection = profile?.sessions.find((item) => item.id === sessionId);
-      const base = `/bots/remote/${encodeURIComponent(bot.deviceId)}/${encodeURIComponent(bot.id)}`;
-      if (projection?.kind === 'history') navigate(`${base}/history/${encodeURIComponent(sessionId)}`, { state: searchJump ? { searchJump } : undefined });
-      else if (projection?.role === 'canonical') navigate(base, { state: searchJump ? { searchJump } : undefined });
+      navigate(standardSessionRoute(sessionId, bot.deviceId), { state: searchJump ? { searchJump } : undefined });
     },
-    [bot.deviceId, bot.id, navigate, profile],
+    [bot.deviceId, navigate],
   );
 
   if (!profile) {

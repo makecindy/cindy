@@ -25,6 +25,7 @@ import {
 } from '@/features/device-link/remoteSessionActivityStore';
 
 import { SessionCard } from '../SessionCard';
+import type { Session } from '@/lib/ccAgent.types';
 import { SessionItem } from '../SessionItem';
 import { sessionCardVisualCases } from '../__fixtures__/sessionCardVisualCases';
 import { SPLIT_GROUP_SESSION_MIME } from '../../splitGroupDnd';
@@ -120,6 +121,16 @@ vi.mock('@/components/sidebar/WorktreeBadge', () => ({
     mocks.worktreeSessionIds.has(sessionId)
       ? createElement('span', { 'data-testid': 'worktree-badge' }, 'WT')
       : null,
+}));
+
+vi.mock('@/lib/worktreeRemovalWarning', async (importOriginal) => ({
+  ...await importOriginal<typeof import('@/lib/worktreeRemovalWarning')>(),
+  prefetchDirtyWorktreeForRemoval: vi.fn(),
+}));
+
+vi.mock('@/features/device-link/useDeviceLinkDeviceList', async (importOriginal) => ({
+  ...await importOriginal<typeof import('@/features/device-link/useDeviceLinkDeviceList')>(),
+  useDeviceLinkDeviceList: () => [],
 }));
 
 vi.mock('@/contexts/WorktreeContext', () => {
@@ -268,6 +279,25 @@ describe('SessionCard visual cases', () => {
     }
   });
 
+  it.each(['list', 'card'] as const)(
+    'shows the sorting timestamp in the %s row with legacy fallback',
+    (variant) => {
+      const session: Session = {
+        ...sessionCardVisualCases[0].session,
+        updatedAt: '2026-10-24T09:00:00.000Z',
+        userSendAt: '2026-10-24T08:00:00.000Z',
+        lastActivityAt: '2026-10-24T10:00:00.000Z',
+      };
+      for (const expected of [session.lastActivityAt, session.userSendAt, session.updatedAt]) {
+        const view = renderCase(sessionCardVisualCases[0].id, { session, variant });
+        expect(view.container.querySelector('time')?.getAttribute('dateTime')).toBe(expected);
+        view.unmount();
+        if (session.lastActivityAt) delete session.lastActivityAt;
+        else session.userSendAt = null;
+      }
+    },
+  );
+
   it('scrolls a text row into nearest view only when it becomes active', () => {
     const props = {
       session: sessionCardVisualCases[0].session,
@@ -340,6 +370,25 @@ describe('SessionCard visual cases', () => {
     mocks.pendingPluginSetupSessionIds.add(visualCase.session.id);
     renderCase(visualCase.id, { variant: 'list', navigationOnly: true });
     expect(screen.getByText('等待插件设置')).toBeTruthy();
+  });
+
+  // Regression: remote-supplier tasks have local messages, but agentDeviceId hid export.
+  // The existing shared-task menu cases cover guests, not owner tasks using a remote agent.
+  // Unit tier: render the production rows and inspect the menu opened by a context click.
+  // Standalone file: 5.28s on Windows; existing imports take 3.50s, test bodies 0.76s.
+  it.each(['list', 'text'] as const)('offers history export for a remote supplier in the %s row', async (variant) => {
+    const session = { ...sessionCardVisualCases[0].session, agentDeviceId: 'remote-device' };
+    const props = {
+      session, isActive: false, isRunning: false, hasAttentionNotification: false,
+      onClick: vi.fn(), onRename: vi.fn(), onAction: vi.fn(), onTogglePin: vi.fn(),
+    };
+    const view = render(variant === 'list'
+      ? createElement(SessionCard, { ...props, variant: 'list' })
+      : createElement(SessionItem, props));
+    await act(async () => {
+      fireEvent.contextMenu(view.container.querySelector<HTMLElement>('[data-sidebar-session-row="true"]')!);
+    });
+    expect(screen.getByRole('menuitem', { name: 'ccAgent.sidebar.sessionMenu.exportShare' })).toBeTruthy();
   });
 
   it.each(['list', 'text'] as const)('shows only leave sharing on a guest %s row', (variant) => {

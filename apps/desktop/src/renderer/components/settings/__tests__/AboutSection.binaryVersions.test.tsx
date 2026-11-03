@@ -17,6 +17,7 @@ import { ConfirmDialogProvider } from '@/components/ui/confirm-dialog-provider';
 const getBinaryVersion = vi.fn();
 const getState = vi.fn();
 const relaunchForHarnessUpdate = vi.fn();
+const prepareHarnessUpdate = vi.fn();
 const anyActivityBlockingRelaunch = vi.fn();
 
 type Online = { latestVersion: string; updateAvailable: boolean } | 'failed' | null;
@@ -52,11 +53,13 @@ describe('AboutSection agent binary versions', () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+    prepareHarnessUpdate.mockResolvedValue({ ready: true });
     getState.mockResolvedValue({ currentVersion: '0.84.4', restartRequired: false, official: { release: null }, upstream: { release: null }, operation: null });
     anyActivityBlockingRelaunch.mockResolvedValue(false);
     HTMLElement.prototype.scrollIntoView = vi.fn();
     (window as unknown as { electronAPI: unknown }).electronAPI = {
       relaunchForHarnessUpdate,
+      prepareHarnessUpdate,
       anyActivityBlockingRelaunch,
       maker: {
         piKernel: { getState },
@@ -224,7 +227,7 @@ describe('AboutSection agent binary versions', () => {
   });
 
   it('requires confirmation and relaunches only for the confirmed harness', async () => {
-    mockOnline({ codex: CODEX_UPDATE });
+    mockOnline({ codex: { ...CODEX_UPDATE, latestVersion: 'v1.1.0' } });
     relaunchForHarnessUpdate.mockResolvedValue({ accepted: true });
 
     renderRows();
@@ -233,8 +236,46 @@ describe('AboutSection agent binary versions', () => {
     fireEvent.click(screen.getByRole('menuitem', { name: /harnessUpdateButton Codex/ }));
     await screen.findByText('settings.about.harnessUpdateDescription Codex');
     expect(relaunchForHarnessUpdate).not.toHaveBeenCalled();
+    expect(prepareHarnessUpdate).toHaveBeenCalledExactlyOnceWith('codex', 'v1.1.0');
     fireEvent.click(screen.getByRole('button', { name: 'settings.about.harnessUpdateConfirm Codex' }));
-    await waitFor(() => expect(relaunchForHarnessUpdate).toHaveBeenCalledExactlyOnceWith('codex'));
+    await waitFor(() => expect(relaunchForHarnessUpdate).toHaveBeenCalledExactlyOnceWith('codex', 'v1.1.0'));
+  });
+
+  // Manual updates now prepare outside Splash. Keep restart confirmation after
+  // the transfer, and leave failed or abandoned requests safe to retry. Tier: unit.
+  it('shows preparation before asking to restart and permits a retry after download failure', async () => {
+    mockOnline({ codex: CODEX_UPDATE });
+    const preparation = Promise.withResolvers<{ ready: true }>();
+    prepareHarnessUpdate.mockReturnValueOnce(preparation.promise);
+    renderRows();
+    await openMenu('Codex');
+    fireEvent.click(screen.getByRole('menuitem', { name: /harnessUpdateButton Codex/ }));
+    await screen.findByText('settings.about.piKernel.download');
+    expect(screen.queryByText('settings.about.harnessUpdateDescription Codex')).toBeNull();
+    expect(anyActivityBlockingRelaunch).not.toHaveBeenCalled();
+    expect(relaunchForHarnessUpdate).not.toHaveBeenCalled();
+    preparation.reject(new Error('download failed'));
+    await waitFor(() => expect(screen.queryByText('settings.about.piKernel.download')).toBeNull());
+    expect(relaunchForHarnessUpdate).not.toHaveBeenCalled();
+    await openMenu('Codex');
+    fireEvent.click(screen.getByRole('menuitem', { name: /harnessUpdateButton Codex/ }));
+    await screen.findByText('settings.about.harnessUpdateDescription Codex');
+    expect(prepareHarnessUpdate).toHaveBeenCalledTimes(2);
+  });
+
+  it('does not open a restart confirmation after the settings row was unmounted during preparation', async () => {
+    mockOnline({ codex: CODEX_UPDATE });
+    const preparation = Promise.withResolvers<{ ready: true }>();
+    prepareHarnessUpdate.mockReturnValueOnce(preparation.promise);
+    const rendered = renderRows();
+    await openMenu('Codex');
+    fireEvent.click(screen.getByRole('menuitem', { name: /harnessUpdateButton Codex/ }));
+    await screen.findByText('settings.about.piKernel.download');
+    rendered.unmount();
+    preparation.resolve({ ready: true });
+    await preparation.promise;
+    expect(anyActivityBlockingRelaunch).not.toHaveBeenCalled();
+    expect(relaunchForHarnessUpdate).not.toHaveBeenCalled();
   });
 
   it('asks again before a harness restart would interrupt in-flight work', async () => {
@@ -251,7 +292,7 @@ describe('AboutSection agent binary versions', () => {
     expect(relaunchForHarnessUpdate).not.toHaveBeenCalled();
 
     fireEvent.click(screen.getByRole('button', { name: 'settings.about.harnessUpdateConfirm Codex' }));
-    await waitFor(() => expect(relaunchForHarnessUpdate).toHaveBeenCalledExactlyOnceWith('codex'));
+    await waitFor(() => expect(relaunchForHarnessUpdate).toHaveBeenCalledExactlyOnceWith('codex', '1.1.0'));
   });
 
   it('does not relaunch when the busy probe fails and the interruption warning is declined', async () => {

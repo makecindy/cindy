@@ -266,6 +266,7 @@ test("real agent integration tests are explicit tiers outside unit", () => {
 	assert.deepEqual(desktop.tiers.e2e.include, [
 		"src/main/maker-host/__tests__/*.e2e.test.ts",
 		"src/main/remote-agent/__tests__/groupRelayClaudeFork.e2e.test.ts",
+		"src/main/remote-agent/__tests__/startupProbe.e2e.test.ts",
 	]);
 });
 

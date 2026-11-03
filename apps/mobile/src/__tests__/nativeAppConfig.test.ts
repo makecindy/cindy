@@ -51,6 +51,25 @@ afterEach(() => {
 });
 
 describe('mobile native app config', () => {
+  // Unit: OS permission sheets bypass i18next. Resolve the real Expo config
+  // through Expo's native localization entry point, including platform scoping.
+  it('resolves localized iOS permission resources without leaking them into Android', async () => {
+    const buildConfig = require(resolve(process.cwd(), 'app.config.js'));
+    const { getResolvedLocalesAsync } = require(join(dirname(require.resolve('@expo/config-plugins')), 'utils/locales.js'));
+    const config = buildConfig();
+    const ios = await getResolvedLocalesAsync(process.cwd(), config.locales, 'ios');
+    expect(Object.keys(ios.localesMap).sort()).toEqual(['de', 'en', 'es', 'fr', 'ja', 'ko', 'pt-BR', 'pt-PT', 'zh-Hans', 'zh-Hant']);
+    expect(ios.localesMap.fr.NSCameraUsageDescription).toContain('Cindy');
+    expect(ios.localesMap['pt-PT'].NSPhotoLibraryUsageDescription).not.toBe(ios.localesMap.en.NSPhotoLibraryUsageDescription);
+    for (const copy of Object.values(ios.localesMap) as Record<string, string>[]) {
+      for (const key of ['NSCameraUsageDescription', 'NSMicrophoneUsageDescription', 'NSPhotoLibraryUsageDescription']) {
+        expect(copy[key]?.trim()).toBeTruthy();
+      }
+    }
+    const android = await getResolvedLocalesAsync(process.cwd(), config.locales, 'android');
+    expect(Object.values(android.localesMap).every(copy => Object.keys(copy as object).length === 0)).toBe(true);
+  });
+
   it('generates all three official WeChat query schemes without dropping existing callbacks', async () => {
     const withWechatLogin = require(resolve(process.cwd(), 'modules/xdt-wechat-login/plugin/index.js'));
     const config = withWechatLogin({ name: 'Test app', slug: 'test-app' }, {

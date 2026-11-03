@@ -4,6 +4,7 @@ import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 
 const h = vi.hoisted(() => ({
+  disk: new Map<string, unknown>(),
   accountGeneration: 1, focused: true,
   appState: { currentState: 'active', listeners: new Set<(state: string) => void>() },
   listeners: new Set<(deviceId: string, payload: { collectionId: string; resourceRefs?: { id: string; kind: string; collectionId: string }[] }) => void>(),
@@ -20,6 +21,22 @@ vi.mock('expo-router', async () => { const { useEffect } = await import('react')
 vi.mock('react-i18next', () => ({ useTranslation: () => ({ t: (key: string) => key, i18n: { language: 'zh-CN' } }) }));
 vi.mock('@/auth/AuthContext', () => ({ useAuth: () => ({ user: { id: 'owner' }, accountGeneration: h.accountGeneration }) }));
 vi.mock('@/device-link/DeviceLinkContext', () => ({ useDeviceLink: () => h.link }));
+vi.mock('@/chat/useChatServer', () => ({ useChatServerGroup: () => ({ isListHidden: () => false, acceptListState: async () => {} }) }));
+vi.mock('@/auth/authOwnerGeneration', () => ({
+  getMobileAuthOwner: () => ({ accountId: 'owner', generation: h.accountGeneration }),
+  isMobileAuthOwnerCurrent: (owner: { generation: number }) => owner.generation === h.accountGeneration,
+}));
+vi.mock('@/session/remoteHistoryDiskCache', () => ({
+  historyDiskAuthority: (device: string, group: string) => {
+    const generation = h.accountGeneration;
+    return { key: `${generation}:${device}:${group}`, current: () => generation === h.accountGeneration };
+  },
+  readConversationDisk: async (authority: { key: string }, valid: (value: unknown) => boolean) => {
+    const value = h.disk.get(authority.key); return valid(value) ? value : null;
+  },
+  writeConversationDisk: async (authority: { key: string }, value: unknown) => { h.disk.set(authority.key, value); return true; },
+  clearHistoryDisk: async () => { h.disk.clear(); },
+}));
 vi.mock('@/device-link/remoteStatus', async () => ({ formatRemoteError: (await import('@cindy/maker-shared/device-link-contract')).formatRemoteError }));
 
 import { useBotGroupChat } from '@/session/useBotGroupChat';
@@ -47,7 +64,7 @@ async function push(payload: Parameters<typeof h.listeners extends Set<infer L> 
 }
 
 beforeEach(() => {
-  h.focused = true; h.accountGeneration = 1; h.appState.currentState = 'active'; h.appState.listeners.clear();
+  h.focused = true; h.accountGeneration++; h.disk.clear(); h.appState.currentState = 'active'; h.appState.listeners.clear();
   vi.clearAllMocks(); h.listeners.clear(); h.link.status = 'online';
   h.link.getPresenceAvailability.mockReturnValue(true);
   h.link.onRemoteResourceChanged.mockImplementation((listener) => { h.listeners.add(listener); return () => h.listeners.delete(listener); });
@@ -75,6 +92,17 @@ it('reads the group with the chat primitive and follows its change pushes', asyn
   });
   expect(reads()).toHaveLength(2);
   expect(result.state).toMatchObject({ kind: 'ready', group: { name: '新名字' } });
+});
+
+// Integration tier: reopen the real hook with an unavailable host; the saved
+// conversation must render before the pending remote read can settle.
+it('reopens a saved legacy group while the computer read remains pending', async () => {
+  await render();
+  expect(result.state).toMatchObject({ kind: 'ready', group: { name: '官网' } });
+  act(() => root?.unmount()); root = undefined;
+  h.link.invoke.mockReturnValue(new Promise(() => {}));
+  await render();
+  expect(result.state).toMatchObject({ kind: 'ready', group: { name: '官网' } });
 });
 
 it('keeps the conversation on a failed re-read, and reports a missing group', async () => {

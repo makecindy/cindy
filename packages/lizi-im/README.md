@@ -1,16 +1,19 @@
 # @cindy/im
 
-Pure-Node IM transport package. Provides a `BaseIM` abstraction and ready-to-use channel implementations (currently feishu) for hosts that want to expose an IM bot interface — chat in feishu, work happens in the host.
+Pure-Node IM transport package. Provides a `BaseIM` abstraction and ready-to-use Feishu, Discord, Telegram, WeCom, and DingTalk channel implementations for hosts that want to expose an IM bot interface — chat on these channels, work happens in the host.
 
 This package is **fully decoupled from any application** — host code injects every capability the package can't provide on its own (encrypted storage, IPC bridge, file paths, optional logger). Designed to be lifted out of this repo as a standalone npm package.
 
 ## Design constraints
 
 - **Zero runtime dependencies** outside what the IM protocols actually require:
-  - `@larksuiteoapi/node-sdk` (feishu WebSocket + REST) — only this one
+  - `@larksuiteoapi/node-sdk` (Feishu WebSocket + REST)
+  - `discord.js` (Discord gateway + REST)
+  - `dingtalk-stream` (DingTalk Stream)
+  - `@wecom/aibot-node-sdk` (WeCom AI bot SDK)
 - **No** `electron`, `@cindy/maker-core`, `@cindy/mcps`, `drizzle-orm`, `@paralleldrive/cuid2`, or workspace-internal packages
 - **No** imports from `apps/**` (enforced by the source directory boundary; verified by ESLint `no-restricted-imports` rule on `electron`)
-- **Pure transport / connection layer** — knows nothing about agents, sessions, business cards, model selection, or DB. Host owns all of those and uses the package's outbound API to drive feishu.
+- **Pure transport / connection layer** — knows nothing about agents, sessions, business cards, model selection, or DB. Host owns all of those and uses the package's outbound API to drive the channels.
 
 ## Architecture
 
@@ -50,8 +53,13 @@ const host: IMHost = {
     remove(name) { /* delete */ },
   },
   ipc: {
+    throwIpcError(code, message) { throw new Error(`[${code}] ${message}`); },
     handle(channel, handler) { /* bind invoke handler — used for Settings UI */ },
     broadcast(channel, payload) { /* push to all UI windows */ },
+  },
+  async httpPostForm(url, form) {
+    const response = await fetch(url, { method: 'POST', body: form });
+    return { status: response.status, body: await response.json() };
   },
   // optional:
   // createLogger(scope) { return /* your logger */; },
@@ -77,6 +85,7 @@ feishuIm.onCardAction((event) => {
 });
 
 // 5. Outbound — send to a user any time, not just in reply.
+const openId = 'ou_xxxx...';
 await feishuIm.sendText(openId, 'Hello!');
 const handle = await feishuIm.startStreamingText(openId);
 handle.append('streaming chunk');
@@ -88,8 +97,8 @@ await feishuIm.sendInteractiveCard(openId, {
 });
 await feishuIm.sendFile(openId, '/abs/path/to/file.pdf');
 
-// 6. Whitelist — required for incoming messages to be processed (p2p only).
-feishuIm.setAllowedSenderOpenIds(['ou_xxxx...']);
+// 6. Owner — the first p2p sender is claimed automatically (TOFU).
+// Clear credentials via Settings to reset it.
 ```
 
 ## Public API
@@ -100,7 +109,8 @@ See `src/index.ts` for the full export surface. Highlights:
 |---|---|
 | `BaseIM` | Abstract base — extend to add a new channel |
 | `createIM(channels)` | Aggregate facade with `init / dispose / registerIpc` |
-| `createFeishuIM(host)` | Concrete feishu channel |
+| `createFeishuIM(host)` | Concrete Feishu channel |
+| `createDiscordIM` / `createTelegramIM` / `createWecomIM` / `createDingTalkIM` | Other concrete channel factories |
 | `FeishuIM` | Class — exposes inbound subscriptions + outbound API |
 | `IMHost` | Capabilities the host must provide |
 | `IMMessageEvent` | Inbound message payload (text + attachments + unsupported + ack id) |
@@ -112,7 +122,7 @@ See `src/index.ts` for the full export surface. Highlights:
 ## Channel-specific behavior (feishu)
 
 - **p2p only.** Group / topic chats are dropped at the WS layer. Outbound API takes a single `openId: string` (no chat_id).
-- **Whitelist required.** With an empty `setAllowedSenderOpenIds([])`, every incoming message is silently dropped. Caller (host) decides who to allow — typically the currently logged-in feishu user.
+- **TOFU owner by default.** The first p2p sender becomes the persisted owner; later senders are dropped unless public guest access is configured. Clearing credentials resets the owner.
 - **`xdt-image://` / `xdt-file://` rewrite in streaming text.** The `startStreamingText` handle's `finalize` step uploads any `xdt-image://` references to feishu (mediaDir-resolved) and inlines them as `img` elements in the final card; `xdt-file://` references are sent as separate file messages and stripped from the card body. Mid-stream patches show friendly placeholders.
 - **Conflict detection.** Multi-device occupancy of the same App ID is detected via WS reconnect heuristics (legacy SDK behavior) and surfaces as a `'feishuBot:conflict'` push to `host.ipc.broadcast` callers.
 - **Lifecycle announcements.** On connect / graceful disconnect, an "online" / "offline" text is sent to the first whitelisted open_id (best-effort, 1.5 s timeout on stop).

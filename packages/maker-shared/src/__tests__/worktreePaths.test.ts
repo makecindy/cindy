@@ -8,6 +8,33 @@ import {
 } from '../worktreePaths.js';
 
 describe('worktreePaths', () => {
+  // #7644 (unit): existing cases only use lowercase containers. A Windows path such as
+  // C:/Repo/.CINDY-WORKTREES/topic must group under C:/Repo without becoming managed.
+  // These are cross-device path strings, not paths accessed on the test host.
+  it.each([
+    ['C:/Repo/.CINDY-WORKTREES/topic', 'C:/Repo'],
+    [String.raw`C:\Repo\.Cindy-Worktrees\topic`, String.raw`C:\Repo`],
+    ['C:/Repo/.XDT-WORKTREES/topic', 'C:/Repo'],
+    ['C:/Repo/.WORKTREES/topic', 'C:/Repo'],
+    ['C:/Repo/.CLAUDE/Worktrees/topic', 'C:/Repo'],
+    [String.raw`\\Server\Share\Repo\.CINDY-WORKTREES\topic`, String.raw`\\Server\Share\Repo`],
+    ['//Server/Share/Repo/.CINDY-WORKTREES/topic', '//Server/Share/Repo'],
+    ['C:/.CINDY-WORKTREES/topic', 'C:/'],
+  ])('groups Windows container case variants without broadening managed recognition: %s', (value, base) => {
+    expect(groupingWorktreeBaseRepo(value)).toBe(base);
+    expect(managedWorktreeBaseRepo(value)).toBeNull();
+  });
+
+  it.each([
+    '/repo/.CINDY-WORKTREES/topic',
+    '/Users/me/repo/.Cindy-Worktrees/topic',
+    '/repo/.CLAUDE/Worktrees/topic',
+    'C:/Repo/.CINDY-WORKTREES',
+    'C:/Repo/.CINDY-WORKTREESish/topic',
+  ])('does not fold POSIX case variants, bare containers or partial names: %s', (value) => {
+    expect(groupingWorktreeBaseRepo(value)).toBeNull();
+  });
+
   it('collapses Cindy-managed worktrees (current and legacy dir name) to their base repo', () => {
     expect(managedWorktreeBaseRepo('/repo/.cindy-worktrees/serene-lovelace')).toBe('/repo');
     expect(managedWorktreeBaseRepo('/repo/.cindy-worktrees/serene-lovelace/src/main')).toBe('/repo');
@@ -69,5 +96,7 @@ describe('worktreePaths', () => {
     expect(isManagedWorktreeDirectoryName('.cindy-worktrees')).toBe(true);
     expect(isManagedWorktreeDirectoryName('.xdt-worktrees')).toBe(true);
     expect(isManagedWorktreeDirectoryName('.worktrees')).toBe(false);
+    expect(isManagedWorktreeDirectoryName('.CINDY-WORKTREES')).toBe(false);
+    expect(isManagedWorktreeDirectoryName('.Xdt-Worktrees')).toBe(false);
   });
 });

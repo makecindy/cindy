@@ -1,13 +1,20 @@
+import { getPluginToolUi, pluginHasToolUi, pluginToolVisible } from '@cindy/plugin-protocol';
 import crypto from 'node:crypto';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { createGhostBackgroundRefresh } from '../../cindy-brain/ghostBackgroundRefresh.js';
+import { GhostManager } from '../../cindy-brain/GhostManager.js';
+import { runGhostSnapshotWorkerRequest } from '../../cindy-brain/ghostSnapshotWorkerProcess.js';
+import { writeTestCindyPackage } from '../../cindy-brain/__tests__/cindyPackageFixture.js';
+import { assertGhostInstallConsent, confirmedUiCapability, type GhostInstallConsentDecision } from '../../cindy-brain/ghostInstallConsent.js';
+import { installedGhostStoragePart } from '../../../shared/pluginIdentity.js';
 import { emptyPluginInstanceRegistry } from '../../cindy-brain/pluginInstanceRegistry.js';
 
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import {
+  ghostInstallApprovalToken,
   ghostManifestToAuthorFormat,
   ghostManifestToLegacyV2DigestFormat,
   validateGhostManifest,
@@ -17,6 +24,7 @@ import {
   type InstalledGhost,
 } from '../../../shared/ghost.js';
 const runtime = vi.hoisted(() => ({
+  receiptManager: null as GhostManager | null,
   listScans: 0,
   installationScanComplete: true,
   onList: undefined as (() => void) | undefined,
@@ -112,7 +120,7 @@ vi.mock('../../logger.js', () => ({
 vi.mock('../../cindy-brain/index.js', () => ({
   refreshPluginUsageBindings: vi.fn(async () => undefined),
   confirmLegacyLibraryReattach: (plugin: unknown) => runtime.confirmLegacyLibraryReattach(plugin),
-  getGhostManager: () => ({
+  getGhostManager: () => runtime.receiptManager ?? ({
     isInstallationScanComplete: () => runtime.installationScanComplete,
     createBackgroundRefresh() {
       const state = () => ({ owner: JSON.stringify(runtime.session), mutation: runtime, identity: JSON.stringify(runtime.ghosts) });
@@ -268,6 +276,9 @@ function deferred(): { promise: Promise<void>; resolve: () => void } {
 }
 
 afterEach(() => {
+  runtime.receiptManager = null;
+  vi.mocked(downloadVerifiedPlugin).mockReset();
+  vi.mocked(downloadVerifiedPlugin).mockResolvedValue(undefined);
   runtime.listScans = 0;
   runtime.installationScanComplete = true;
   runtime.onList = undefined;
@@ -599,6 +610,40 @@ function sameReleaseRecoveryHarness(
   });
   return { ...h, item, evidence, dir };
 }
+
+describe('workflow display author projection', () => {
+  it.each(['verified', 'missing', 'mismatch'] as const)('binds older-version attribution only to verified installed package evidence (%s)', async state => {
+    const h = sameReleaseRecoveryHarness('market', 'legacy');
+    h.evidence.packageSha256 = h.item.currentRelease.sha256;
+    h.item.scope = 'public'; h.item.organizationId = null; h.item.namespace = null;
+    runtime.ghosts[0] = { ...runtime.ghosts[0], namespace: null,
+      approval: { state: 'approved', revision: 'public-fixture' } };
+    h.ledger.upsertInstallation(recordForTest(h.item, {
+      namespace: null, manifestDigest: ghostManifestDigest(h.evidence.approvedManifest),
+    }));
+    if (state === 'missing') runtime.approvedInstallEvidence.mockReturnValue(null);
+    if (state === 'mismatch') h.evidence.packageSha256 = 'c'.repeat(64);
+    h.item.displayAuthor = 'Current name';
+    const installedRelease = h.item.currentRelease;
+    h.item.currentRelease = { ...h.item.currentRelease, id: 'release-2', version: '2.0.0', sha256: 'b'.repeat(64) };
+    const item = (await h.service.snapshot({ discoveryOnly: true })).items[0];
+    expect(item.installState).toBe('update-available');
+    expect(item.author).toBe('Current name');
+    expect(item.installedAuthor).toBe(state === 'verified' ? null : undefined);
+    if (state === 'verified') {
+      h.item.currentRelease = installedRelease;
+      expect((await h.service.snapshot({ discoveryOnly: true })).items[0].installedAuthor).toBe('Current name');
+    }
+  });
+  it.each([
+    { displayAuthor: '名'.repeat(100), expected: '名'.repeat(100) },
+    { displayAuthor: null, expected: null },
+    { displayAuthor: undefined, expected: 'Cindy' },
+  ])('uses the workflow name and preserves old-server compatibility (%j)', async ({ displayAuthor, expected }) => {
+    const h = harness([summary({ displayAuthor })]);
+    expect((await h.service.snapshot({ discoveryOnly: true })).items[0].author).toBe(expected);
+  });
+});
 
 describe('same-release legacy organization source recovery', () => {
   it.each([
@@ -1553,18 +1598,25 @@ describe('PluginMarketService migration and defaultInstall', () => {
   });
 
   it('takes bounded local snapshots instead of reading the ledger per market item', async () => {
-    const items = Array.from({ length: 50 }, (_, index) =>
-      summary({
-        id: `c${index.toString(36).padStart(24, '0')}`,
-        ghostId: `cindy-test-${index}`,
-      }),
-    );
-    const h = harness(items);
-    const read = vi.spyOn(h.ledger, 'read');
+    const ledgerReadsFor = async (count: number): Promise<number> => {
+      const items = Array.from({ length: count }, (_, index) =>
+        summary({
+          id: `c${index.toString(36).padStart(24, '0')}`,
+          ghostId: `cindy-test-${index}`,
+        }),
+      );
+      const h = harness(items);
+      const read = vi.spyOn(h.ledger, 'read');
+      await h.service.snapshot();
+      return read.mock.calls.length;
+    };
 
-    await h.service.snapshot();
-
-    expect(read.mock.calls.length).toBeLessThan(10);
+    // Maintenance stages each read the whole ledger a fixed number of times: the
+    // count must not grow with market items, and stays within the per-stage budget
+    // (one read added by the stale default-install opt-out repair stage).
+    const reads = await ledgerReadsFor(50);
+    expect(reads).toBe(await ledgerReadsFor(1));
+    expect(reads).toBeLessThan(11);
   });
 
   it('shows only public market plugins in account-free local mode', async () => {
@@ -1692,6 +1744,35 @@ describe('PluginMarketService migration and defaultInstall', () => {
     ).rejects.toThrow('[GHOST_FILE_INVALID]');
     expect(h.api.download).not.toHaveBeenCalled();
     expect(runtime.install).not.toHaveBeenCalled();
+  });
+
+  // The share contract delegates regional ID resolution to Plugin Server.
+  // Existing detail cases use only IDs already in the catalog. One historical
+  // ID returning a listed public projection must open it, never install (unit).
+  it.each(['cloud', 'signed-out', 'local'] as const)(
+    'uses the server-resolved regional plugin ID for %s detail navigation',
+    async (mode) => {
+      runtime.session = { mode, dataOwnerId: mode === 'signed-out' ? null : 'user-1', generation: 2 };
+      const item = summary();
+      const canonicalId = `c${'z'.repeat(24)}`;
+      const h = harness([item]);
+      h.api.detail.mockResolvedValueOnce(detail(item));
+
+      await expect(h.service.detail(canonicalId)).resolves.toMatchObject({
+        pluginId: item.id, scope: 'public',
+      });
+      expect(h.api.detail).toHaveBeenCalledWith(canonicalId);
+      expect(h.api.download).not.toHaveBeenCalled();
+      expect(runtime.install).not.toHaveBeenCalled();
+    },
+  );
+
+  it('still rejects a different catalog item returned for an already known plugin ID', async () => {
+    const first = summary();
+    const other = summary({ id: `c${'z'.repeat(24)}`, ghostId: 'cindy-other' });
+    const h = harness([first, other]);
+    h.api.detail.mockResolvedValueOnce(detail(other));
+    await expect(h.service.detail(first.id)).rejects.toThrow('[PRECONDITION_FAILED]');
   });
 
   it('keeps signed-out detail blocked while the account boundary is pending', async () => {
@@ -4667,22 +4748,26 @@ describe('PluginMarketService migration and defaultInstall', () => {
     expect(h.service.consumeRemovalNotice()).toBeNull();
   });
 
-  it('keeps a pre-existing opt-out intact after a successful purge', async () => {
-    // 退订只读的另一半(不清):早先手动卸载写过退订、之后又重新安装的用户,
-    // purge 成功后退订必须原样保留,穿越重新上架周期继续生效。
+  it('repairs a stale opt-out of a reinstalled Plugin before a purge and the purge writes none', async () => {
+    // 早先手动卸载写过退订、之后又从市场重新安装的用户已重新订阅：维护对账先清掉这条
+    // 「已安装 + 退订」，purge 本身对退订仍只读(不写也不清)，重新上架后按默认下发装回。
     const notice = removal();
     const h = harness([], [notice]);
-    runtime.ghosts = [ghostEntry(notice.ghostId)];
+    const installDir = fs.mkdtempSync(path.join(os.tmpdir(), 'cindy-market-installed-'));
+    roots.push(installDir);
+    fs.writeFileSync(path.join(installDir, 'ghost.json'), JSON.stringify(manifest()));
+    runtime.ghosts = [{ ...ghostEntry(notice.ghostId), dir: installDir }];
     mockUninstallDropsGhost();
-    h.ledger.upsertInstallation(removalRecord());
+    const installedRecord = removalRecord({ manifestDigest: ghostManifestDigest(manifest()) });
+    h.ledger.upsertInstallation(installedRecord);
     h.ledger.markRemovedRecord(h.ledger.installationForGhost(notice.ghostId)!, 'user-1');
-    h.ledger.upsertInstallation(removalRecord());
+    h.ledger.upsertInstallation(installedRecord);
 
     await h.service.snapshot();
 
     expect(runtime.uninstall).toHaveBeenCalledTimes(1);
     expect(h.ledger.installationForGhost(notice.ghostId)?.installed).toBe(false);
-    expect(h.ledger.isDefaultInstallSuppressed('user-1', notice.pluginId)).toBe(true);
+    expect(h.ledger.isDefaultInstallSuppressed('user-1', notice.pluginId)).toBe(false);
     expect(h.service.consumeRemovalNotice()).toEqual({ count: 1, name: 'Test Plugin' });
   });
 
@@ -6081,7 +6166,8 @@ describe('organization default Plugin takeover', () => {
 
     expect(h.api.detail).toHaveBeenCalledTimes(1);
     expect(h.api.download).toHaveBeenCalledTimes(1);
-    expect(runtime.install).toHaveBeenCalledTimes(1);
+    // Exempt delivery now rechecks its entitlement immediately after download.
+    expect(runtime.install).not.toHaveBeenCalled();
     expect(fs.readFileSync(path.join(dir, 'ghost.json'), 'utf8')).toBe(
       JSON.stringify(localManifest),
     );
@@ -6424,7 +6510,10 @@ describe('PluginMarketService install consent', () => {
     );
   });
 
-  it('does not silently grow permissions after the user opted out of default install', async () => {
+  // Regression: older clients kept the uninstall opt-out after a market reinstall
+  // (and some wrote false opt-outs), so a default Plugin still in use held every
+  // permission-growing update. Maintenance repairs the installed route first.
+  it('repairs a stale opt-out on an installed default Plugin before its update', async () => {
     const { item, h } = upgradeFixture({ defaultInstall: true, nextCapabilities: ['notify', 'fs'] });
     h.ledger.markRemovedRecord(h.ledger.installationForGhost(item.ghostId)!, 'user-1');
     h.ledger.upsertInstallation({
@@ -6437,11 +6526,93 @@ describe('PluginMarketService install consent', () => {
 
     const first = await h.service.snapshot();
 
-    expect(first.items[0]).toMatchObject({
-      installState: 'update-available',
-      updateRequiresConsent: true,
+    expect(h.ledger.isDefaultInstallSuppressed('user-1', item.id)).toBe(false);
+    expect(first.items[0]).toMatchObject({ installState: 'installed', version: '2.0.0' });
+    expect(first.items[0]?.updateRequiresConsent).not.toBe(true);
+    expect(runtime.install).toHaveBeenCalledWith(
+      expect.stringMatching(/\.cindy$/),
+      expect.objectContaining({ consent: { mode: 'exempt', reason: 'server-default-install' } }),
+    );
+  });
+
+  // The repair re-subscribes only an approved package whose bytes the record proves.
+  // An unapproved install or a digest-less legacy record (it matches any package)
+  // keeps its opt-out, so permission growth never lands silently.
+  it.each([
+    ['is not approved', { state: 'legacy-unapproved' } as GhostInstallApproval, true],
+    ['only has a digest-less legacy record', undefined, false],
+  ] as const)('keeps the opt-out when the installed default Plugin %s', async (_label, approval, digest) => {
+    const { item, h } = upgradeFixture({ defaultInstall: true, nextCapabilities: ['notify', 'fs'] });
+    if (approval) runtime.ghosts[0]!.approval = approval;
+    h.ledger.markRemovedRecord(h.ledger.installationForGhost(item.ghostId)!, 'user-1');
+    h.ledger.upsertInstallation({
+      ...recordForTest(item),
+      releaseId: 'release-1',
+      version: '1.0.0',
+      ...(digest ? { manifestDigest: ghostManifestDigest(manifest(item.ghostId, '1.0.0')) } : {}),
     });
+
+    await h.service.snapshot();
+
+    expect(h.ledger.isDefaultInstallSuppressed('user-1', item.id)).toBe(true);
     expect(runtime.install).not.toHaveBeenCalled();
+  });
+
+  // An explicit market reinstall re-subscribes the user: the opt-out written by the
+  // earlier uninstall is cleared with the install record, so a later permission-growing
+  // release of the same default Plugin updates silently instead of being held.
+  it('clears the opt-out on an explicit reinstall so later permission growth stays silent', async () => {
+    const item = summary({ defaultInstall: true });
+    const h = harness([item]);
+    h.ledger.upsertInstallation(recordForTest(item));
+    h.ledger.markRemovedRecord(h.ledger.installationForGhost(item.ghostId)!, 'user-1');
+    const installDir = fs.mkdtempSync(path.join(os.tmpdir(), 'cindy-market-reinstall-'));
+    roots.push(installDir);
+    runtime.install.mockImplementation(async () => {
+      const installedManifest = runtime.inspectedManifest!;
+      fs.writeFileSync(path.join(installDir, 'ghost.json'), JSON.stringify(installedManifest));
+      const ghost = { manifest: installedManifest, dir: installDir, enabled: true };
+      runtime.ghosts = [ghost];
+      return ghost;
+    });
+
+    await h.service.install(item.id, reviewedInstallOptions(item), TEST_INSTALL_CONTEXT);
+    expect(h.ledger.isDefaultInstallSuppressed('user-1', item.id)).toBe(false);
+
+    const next = { ...item, currentRelease: { ...item.currentRelease, id: 'release-2', version: '2.0.0' } };
+    const nextManifest = manifest(item.ghostId, '2.0.0', ['notify', 'fs']);
+    h.api.listAll.mockResolvedValue({ plugins: [next], removals: [], currentOrganization: null });
+    h.api.detail.mockImplementation(async () => {
+      runtime.inspectedManifest = nextManifest;
+      return { ...next, currentRelease: { ...next.currentRelease, manifest: nextManifest } };
+    });
+    const snapshot = await h.service.snapshot();
+
+    expect(snapshot.items[0]).toMatchObject({ installState: 'installed', version: '2.0.0' });
+    expect(runtime.install).toHaveBeenLastCalledWith(
+      expect.stringMatching(/\.cindy$/),
+      expect.objectContaining({ consent: { mode: 'exempt', reason: 'server-default-install' } }),
+    );
+  });
+
+  // Re-subscription is tied to a landed package: a declined confirmation or a failed
+  // placement leaves the uninstall opt-out (and the removed record) untouched.
+  it.each([
+    ['the user declines the confirmation', false, '[MUTATION_CANCELLED]'],
+    ['package placement fails', true, 'placement failed'],
+  ] as const)('keeps the opt-out when %s', async (_label, confirmed, error) => {
+    const item = summary({ defaultInstall: true });
+    const h = harness([item]);
+    h.ledger.upsertInstallation(recordForTest(item));
+    h.ledger.markRemovedRecord(h.ledger.installationForGhost(item.ghostId)!, 'user-1');
+    runtime.install.mockRejectedValue(new Error('placement failed'));
+
+    await expect(h.service.install(item.id, reviewedInstallOptions(item), {
+      consent: { prompt: async () => confirmed, initiator: 'user' },
+    })).rejects.toThrow(error);
+
+    expect(h.ledger.isDefaultInstallSuppressed('user-1', item.id)).toBe(true);
+    expect(h.ledger.installationForGhost(item.ghostId)?.installed).toBe(false);
   });
 
   it('does not hold the plugin mutation while waiting for install confirmation', async () => {
@@ -6627,5 +6798,261 @@ describe('organization catalog access error', () => {
     expect(snapshot.organizationAccessError).toBe('PLUGIN_FUTURE_REASON');
     expect(snapshot.unavailableReason).toBeNull();
     expect(snapshot.items.map((entry) => entry.pluginId)).toContain(item.id);
+  });
+});
+
+
+/**
+ * Unit / production composition: snapshot/install -> consent policy -> actual
+ * GhostManager package transaction and receipt read. §3.1 default delivery grants
+ * pages too. Existing market tests stopped at a mocked install return and missed
+ * both first grants and old-Host recovery. Minimum input: one packaged UI page
+ * plus a bound market record; only the Electron/runtime side effects are replaced.
+ */
+describe('server default UI approval receipts', () => {
+  async function setup(options: { organization?: boolean; defaultInstall?: boolean; historicalMcpApps?: unknown } = {}) {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'default-ui-receipt-'));
+    roots.push(root);
+    const manager = new GhostManager({
+      getRootDir: () => path.join(root, 'ghosts'),
+      mutateSnapshot: async ({ parentDir, ...request }) => runGhostSnapshotWorkerRequest(request, parentDir),
+      onArchiveSourceState: async () => undefined,
+    });
+    runtime.receiptManager = manager;
+    const item = summary({
+      ghostId: 'page-fixture', namespace: options.organization ? 'acme' : null,
+      defaultInstall: options.defaultInstall ?? true,
+      ...(options.organization ? { scope: 'organization', organizationId: 'org-1' } : {}),
+    });
+    if (options.organization) setCurrentOrganization();
+    const pageManifest = (version: string): GhostManifest => normalizedManifest({
+      ...manifest(item.ghostId, version), tools: [{ name: 'open', description: 'Open page' }],
+      mcpApps: { ui: { resources: [{
+            uri: "ui://planner",
+            file: 'ui/planner.html'
+        }], tools: { open: { resourceUri: "ui://planner" } } } },
+    });
+    let next = pageManifest('1.0.0');
+    if ('historicalMcpApps' in options) next.mcpApps = options.historicalMcpApps;
+    let file = await writeTestCindyPackage(path.join(root, 'package.cindy'), next,
+      { 'main.js': '// fixture', 'ui/planner.html': '<html>planner</html>', 'ui/extra.html': '<html>extra</html>' });
+    const bytes = fs.readFileSync(file);
+    item.currentRelease = { ...item.currentRelease, id: RELEASE_ID, sha256: crypto.createHash('sha256').update(bytes).digest('hex'), sizeBytes: bytes.length };
+    const h = harness([item]);
+    const download = () => ({
+      url: 'https://downloads.test.invalid/plugin.cindy', expiresAt: '2099-01-01T00:00:00.000Z',
+      sha256: item.currentRelease.sha256, sizeBytes: item.currentRelease.sizeBytes,
+      pluginId: item.id, releaseId: item.currentRelease.id, ghostId: item.ghostId, namespace: item.namespace!,
+    });
+    h.api.download.mockImplementation(async () => download());
+    h.api.detail.mockImplementation(async () => parsedDetail(item, { ...next, namespace: item.namespace }));
+    vi.mocked(downloadVerifiedPlugin).mockImplementation(async (_url, _expected, target) => { fs.copyFileSync(file, target); });
+    // Substitute only the process-owning Main adapter. Decisions are obtained by
+    // the real market service; the real consent helper and manager write/read disk.
+    runtime.install.mockImplementation(async (packagePath: string, opts: {
+      consent: GhostInstallConsentDecision; namespace?: string | null; sourceChanged?: boolean;
+      expectedInstalledApproval?: string; beforeCommitInLock?: () => void; assertCurrent?: () => void;
+    }) => {
+      opts.assertCurrent?.();
+      opts.beforeCommitInLock?.();
+      const inspected = await manager.inspect(packagePath, 'stored-release');
+      if ('rejection' in inspected) throw new Error(inspected.rejection.reason);
+      const old = manager.list().find(g => g.manifest.id === item.ghostId && g.namespace === opts.namespace);
+      assertGhostInstallConsent(opts.consent, old, inspected.manifest, inspected.packageSha256);
+      const common = {
+        manifestSource: 'stored-release' as const,
+        namespace: opts.namespace, expectedPackageSha256: inspected.packageSha256,
+        uiCapabilityApproved: confirmedUiCapability(opts.consent, old, inspected.manifest),
+      };
+      const result = old
+        ? await manager.update(packagePath, { ...common, expectedInstalledApproval: opts.expectedInstalledApproval!,
+            ...(opts.sourceChanged ? { sourceStateArchiveId: '_ns__cindy-archive-00000000-0000-4000-8000-000000000002__page-fixture' } : {}),
+            beforePackageCommit: () => opts.assertCurrent?.(),
+          })
+        : await manager.install(packagePath, { ...common, initiallyEnabled: true,
+            beforePackagePlacement: () => { opts.assertCurrent?.(); opts.beforeCommitInLock?.(); },
+          });
+      if ('rejection' in result) throw new Error(result.rejection.reason);
+      return result.ghost;
+    });
+    const read = () => {
+      const ghost = manager.list()[0]!;
+      return manager.readApprovedInstallReceipt(installedGhostStoragePart(ghost));
+    };
+    const bind = () => {
+      const ghost = manager.list()[0]!;
+      h.ledger.upsertInstallation(recordForTest(item, {
+        namespace: item.namespace, manifestDigest: ghostManifestDigest(ghost.manifest),
+        rawManifestSha256: crypto.createHash('sha256').update(fs.readFileSync(path.join(ghost.dir, 'ghost.json'))).digest('hex'),
+      }));
+    };
+    return { ...h, item, manager, read, bind,
+      async seed(bound = true, approved = false, origin: 'manual' | 'agent-forge' = 'manual') {
+        const result = await manager.install(file, { manifestSource: 'stored-release', namespace: item.namespace, initiallyEnabled: false,
+          uiCapabilityApproved: approved, installOrigin: origin });
+        expect(result).toHaveProperty('ghost');
+        if (bound) bind();
+      },
+      async expand() {
+        next = pageManifest('2.0.0');
+        if ('historicalMcpApps' in options) next.mcpApps = options.historicalMcpApps;
+        else getPluginToolUi(next)!.resources.push({ uri: 'ui://extra', file: 'ui/extra.html' });
+        file = await writeTestCindyPackage(path.join(root, 'expanded.cindy'), next,
+          { 'main.js': '// fixture', 'ui/planner.html': '<html>planner</html>', 'ui/extra.html': '<html>extra</html>' });
+        const bytes = fs.readFileSync(file);
+        item.currentRelease = { ...item.currentRelease, id: 'release-2', version: '2.0.0',
+          sha256: crypto.createHash('sha256').update(bytes).digest('hex'), sizeBytes: bytes.length };
+      },
+    };
+  }
+
+  // Unit: historical delivery crosses the real service's detail/inspect gate,
+  // installs a real archive and updates its receipt; old UI cases only used valid data.
+  it.each([null, { ui: { resources: [{ uri: 'ui://old', file: '../page.html' }], tools: { open: {} } } }])(
+    'installs and updates a historical release without granting pages: %j', async historicalMcpApps => {
+      const h = await setup({ historicalMcpApps });
+      await h.service.snapshot();
+      expect(h.read()).toMatchObject({ enabled: true, manifest: { mcpApps: historicalMcpApps } });
+      expect(h.read()!.uiCapabilityApproved).not.toBe(true);
+      expect(pluginHasToolUi(h.read()!.manifest)).toBe(false);
+      expect(pluginToolVisible(h.read()!.manifest, 'open', 'model')).toBe(true);
+      await h.expand();
+      const snapshot = await h.service.snapshot();
+      expect(h.read()).toMatchObject({ enabled: true, manifest: { version: '2.0.0', mcpApps: historicalMcpApps } });
+      expect(h.read()!.uiCapabilityApproved).not.toBe(true);
+      expect(snapshot.items[0]?.updateRequiresConsent).not.toBe(true);
+    },
+  );
+
+  it('grants first default delivery in its installed receipt without any prompt', async () => {
+    const h = await setup();
+    await h.service.snapshot();
+    expect(h.read()).toMatchObject({ enabled: true, uiCapabilityApproved: true });
+    expect(runtime.install.mock.calls[0]?.[1].consent.mode).toBe('exempt');
+  });
+
+  it.each([false, true])('grants organization takeover with old page approval=%s, not by inheriting the old source', async oldApproved => {
+    const h = await setup({ organization: true });
+    await h.seed(false, oldApproved);
+    const oldRevision = h.read()!.revision;
+    await h.service.snapshot();
+    expect(runtime.install.mock.calls[0]?.[1].sourceChanged).toBe(true);
+    expect(h.read()).toMatchObject({ uiCapabilityApproved: true });
+    expect(h.read()!.revision).not.toBe(oldRevision);
+    expect(h.ledger.installationForPlugin(h.item)?.source).toBe('market');
+  });
+
+  it('keeps same-source expanded pages approved in the new receipt', async () => {
+    const h = await setup();
+    await h.seed(true, true);
+    await h.expand();
+    await h.service.snapshot();
+    expect(h.read()).toMatchObject({ uiCapabilityApproved: true, manifest: { version: '2.0.0', mcpApps: { ui: { resources: expect.arrayContaining([{ uri: 'ui://extra', file: 'ui/extra.html' }]) } } } });
+  });
+
+  it.each(['withdrawn', 'stale-opt-out'] as const)('respects current default entitlement when updating pages: %s', async state => {
+    const h = await setup();
+    await h.seed(true, true);
+    const old = h.read();
+    if (state === 'withdrawn') h.item.defaultInstall = false;
+    else {
+      h.ledger.markRemovedRecord(h.ledger.installationForPlugin(h.item)!, 'user-1');
+      h.bind();
+    }
+    await h.expand();
+    await h.service.snapshot();
+    if (state === 'withdrawn') {
+      expect(h.read()).toEqual(old);
+      expect(runtime.install).not.toHaveBeenCalled();
+    } else {
+      // Main repairs an old opt-out only after verifying the approved package
+      // against its installed market record; this restores default entitlement.
+      expect(h.read()).toMatchObject({ enabled: false, uiCapabilityApproved: true, manifest: { version: '2.0.0' } });
+      expect(runtime.install.mock.calls[0]?.[1].consent.mode).toBe('exempt');
+    }
+  });
+
+  it.each(['legacy', 'declined', 'confirmed'] as const)('keeps ordinary manual install approval explicit: %s', async answer => {
+    const h = await setup({ defaultInstall: false });
+    const prompt = Object.assign(vi.fn(async () => answer !== 'declined'), { uiCapabilityApproval: answer !== 'legacy' });
+    const request = h.service.install(h.item.id, { expectedReleaseId: h.item.currentRelease.id }, { consent: { prompt, initiator: 'user' } });
+    if (answer === 'declined') {
+      await expect(request).rejects.toThrow();
+      expect(h.manager.list()).toEqual([]);
+    } else {
+      await request;
+      expect(h.read()!.uiCapabilityApproved).toBe(answer === 'confirmed' ? true : undefined);
+    }
+    expect(prompt).toHaveBeenCalledOnce();
+  });
+
+  it('reconsiders a held permission update when the server starts default delivery', async () => {
+    const h = await setup({ defaultInstall: false });
+    await h.seed();
+    await h.expand();
+    const held = await h.service.snapshot();
+    expect(held.items[0]?.updateRequiresConsent).toBe(true);
+    expect(h.read()!.uiCapabilityApproved).toBeUndefined();
+    h.item.defaultInstall = true;
+    await h.service.snapshot();
+    expect(h.read()).toMatchObject({ uiCapabilityApproved: true, manifest: { version: '2.0.0' } });
+  });
+
+  it.each([false, true])('restores missing old-Host UI approval without re-enabling; disconnected route=%s', async disconnected => {
+    const h = await setup();
+    await h.seed();
+    const old = h.read()!;
+    if (disconnected) h.ledger.upsertInstallation({ ...h.ledger.installationForPlugin(h.item)!, installed: false });
+    await h.service.snapshot();
+    expect(h.read()).toMatchObject({ enabled: false, uiCapabilityApproved: true });
+    expect(h.read()!.revision).not.toBe(old.revision);
+    expect(h.read()!.packageSha256).toBe(old.packageSha256);
+    await h.service.snapshot();
+    expect(h.api.download).toHaveBeenCalledOnce();
+  });
+
+  it.each(['withdrawn', 'stale-opt-out', 'forge', 'unbound'] as const)('requires verified default entitlement to recover UI approval: %s', async reason => {
+    const h = await setup();
+    await h.seed(reason !== 'unbound', false, reason === 'forge' ? 'agent-forge' : 'manual');
+    if (reason === 'withdrawn') h.item.defaultInstall = false;
+    if (reason === 'stale-opt-out') {
+      h.ledger.markRemovedRecord(h.ledger.installationForPlugin(h.item)!, 'user-1');
+      h.bind();
+    }
+    const old = h.read()!;
+    await h.service.snapshot();
+    if (reason === 'stale-opt-out') {
+      expect(h.read()).toMatchObject({ enabled: false, uiCapabilityApproved: true, packageSha256: old.packageSha256 });
+      expect(h.read()!.revision).not.toBe(old.revision);
+      expect(h.api.download).toHaveBeenCalledOnce();
+    } else {
+      expect(h.read()).toEqual(old);
+      expect(h.api.download).not.toHaveBeenCalled();
+    }
+  });
+
+  it.each(['owner', 'opt-out', 'revision'] as const)('rejects a late default grant after %s changes during download', async change => {
+    const h = await setup();
+    await h.seed();
+    const before = h.read()!;
+    const copy = vi.mocked(downloadVerifiedPlugin).getMockImplementation()!;
+    vi.mocked(downloadVerifiedPlugin).mockImplementation(async (...args) => {
+      await copy(...args);
+      if (change === 'owner') runtime.session.generation++;
+      if (change === 'opt-out') {
+        h.ledger.markRemovedRecord(h.ledger.installationForPlugin(h.item)!, 'user-1');
+        h.bind();
+      }
+      if (change === 'revision') {
+        const ghost = h.manager.list()[0]!;
+        const replacement = await h.manager.update(args[2], {
+          namespace: ghost.namespace, expectedInstalledApproval: ghostInstallApprovalToken(ghost.approval),
+        });
+        expect(replacement).toHaveProperty('ghost');
+      }
+    });
+    await h.service.snapshot().catch(() => undefined);
+    expect(h.read()!.uiCapabilityApproved).toBeUndefined();
+    expect(h.read()!.packageSha256).toBe(before.packageSha256);
   });
 });

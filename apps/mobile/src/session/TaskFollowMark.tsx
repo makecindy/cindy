@@ -43,3 +43,14 @@ export function TaskFollowMark({ follower, testID }: { follower: HostedRemoteCol
     </View>
   );
 }
+
+/** Creation/ownership persists when the task is archived or no longer followed. */
+export function TaskCreatorMark({ teammate, deviceId, testID }: {
+  teammate: import('./teammateTaskSource').TaskTeammate; deviceId: string; testID: string;
+}) {
+  const { status, getPresenceAvailability } = useDeviceLink();
+  return <View accessible={false} importantForAccessibility="no-hide-descendants" testID={testID}>
+    <RemoteCompanionAvatar avatar={teammate.avatar} deviceId={deviceId} name={teammate.name}
+      framed size={iconSize.md} online={status === 'online' && getPresenceAvailability(deviceId) !== false} />
+  </View>;
+}

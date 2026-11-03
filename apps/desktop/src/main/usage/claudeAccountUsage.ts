@@ -44,12 +44,14 @@ import { readOrganizationAccountUsage } from './organizationAccountUsage.js';
  */
 
 import { BrowserWindow } from 'electron';
+import { isProviderDisabled } from '@cindy/model-providers';
 
 import type { MoneyCurrency } from '../../shared/regionalMoney';
 import { getAuthState } from '../authManager';
 import { tapWindowBroadcast } from '../device-link/broadcast-tap.js';
 import { createLogger } from '../logger';
 import { readClaudeApiKey } from '../maker-host/auth-adapters';
+import { readModelDisableOverrides } from '../maker-host/model-disable-store.js';
 import { reportCindyGatewayKeyRejected } from '../model-access/gatewayKeyRejection';
 import { outboundFetch } from '../maker-host/outbound-fetch';
 import { claudeUpstreamEndpoint } from '../maker-host/runtime-configs';
@@ -144,6 +146,7 @@ interface QuotaOwner {
 
 /** 组织账号与 local 手填网关可读周期配额；个人账号只读额度池账本。 */
 function currentQuotaOwner(): QuotaOwner | null {
+  if (isProviderDisabled(readModelDisableOverrides(), 'xd')) return null;
   const auth = getAuthState();
   if (auth.mode === 'cloud') {
     if (auth.user?.membershipKind !== 'org' || !auth.dataOwnerId) return null;
@@ -238,6 +241,7 @@ async function fetchOnce(authenticatedUserId?: string): Promise<ClaudeAccountUsa
     const managed = await readOrganizationAccountUsage();
     if (managed !== undefined) return managed;
   }
+  if (!currentQuotaOwner()) return null;
   // 币种优先取账号目录声明。取不到时**不放弃整个快照**,回落本地账本币种:
   // 手填 XD key 是明确支持的兜底流程(Model Access 处于 disabled / failed 时),那时没有
   // 目录可推导,若直接 return 会让这些会话永久看不到账号配额 —— 比"币种按账本回落"更糟。

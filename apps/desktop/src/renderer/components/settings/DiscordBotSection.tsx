@@ -1,4 +1,5 @@
 import { Button } from '@/components/ui/button';
+import { ImConnectionError, ImSavedConnectionRecovery } from './ImConnectionRecovery';
 import { useCallback, useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Check, ChevronDown, ChevronRight, Eye, EyeOff, Trash2 } from 'lucide-react';
@@ -58,6 +59,7 @@ export function DiscordBotSection({
     isDisconnecting,
     canConnect,
     connect,
+    reconnect,
     disconnect,
   } = useDiscordBot();
 
@@ -154,6 +156,13 @@ export function DiscordBotSection({
         />
       ) : (
         <div className="flex flex-col gap-3">
+          {hasSavedCreds && ownerUserId && (
+            <ImSavedConnectionRecovery
+              loading={isSaving}
+              disabled={isDisconnecting}
+              onReconnect={reconnect}
+            />
+          )}
           <label
             className="text-12 font-medium text-[var(--settings-section-desc)]"
             style={{ letterSpacing: '0.12px' }}
@@ -219,9 +228,7 @@ export function DiscordBotSection({
                   {validationError}
                 </p>
               ) : status.kind === 'error' ? (
-                <p className="text-12 text-[var(--settings-error-text)]" role="alert">
-                  {status.reason}
-                </p>
+                <ImConnectionError details={status.reason} />
               ) : (
                 <p className="text-12 text-[var(--settings-source-meta)]">
                   {t('settings.discordBot.formHint')}

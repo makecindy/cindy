@@ -39,6 +39,8 @@ import {
   isCrossRegionReceivedReady,
   ensureCrossRegionReceivedForFavorites,
   refreshProviderShareCrossRegion,
+  restoreCrossRegionReceivedForRemoteGroup,
+  waitForCrossRegionReceived,
   startProviderShareCrossRegion,
   stopProviderShareCrossRegion,
 } from './providerShareCrossRegion.js';
@@ -50,6 +52,7 @@ const RECEIVED_POLL_MS = 60_000;
 const RECEIVED_IDLE_POLL_MS = 5 * 60_000;
 const REQUEST_POLL_MS = 4_000;
 const ACCESS_FAILURE_REFRESH_MS = 10_000;
+const GROUP_LOCAL_REFRESH_INTERVAL_MS = 30_000;
 const SHARE_DEVICE_PREFIX = 'share:';
 // 任务记录里的电脑 id 最长 128 个字符(含 `share:` 前缀)。
 const SHARE_ID = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,121}$/;
@@ -79,6 +82,8 @@ interface Runtime {
   timer: ReturnType<typeof setTimeout> | null;
   refreshing: Promise<void> | null;
   pending: Map<string, PendingRequest>;
+  groupRecoveries: Set<Promise<void>>;
+  nextGroupLocalRefreshAt: number;
   stopped: boolean;
 }
 
@@ -196,12 +201,48 @@ export function resolveRemoteAgentTarget(agentDeviceId: string): string {
  * 未登录或设备互联未就绪时按连不上处理。
  */
 export async function resolveRemoteAgentTargetWhenReady(agentDeviceId: string): Promise<string> {
-  if (!parseProviderShareAgentDeviceId(agentDeviceId)) return agentDeviceId;
+  const shareId = parseProviderShareAgentDeviceId(agentDeviceId);
+  if (!shareId) return agentDeviceId;
   const rt = runtime;
   if (!rt || !current(rt)) throw new Error('[DEVICE_LINK_NOT_CONNECTED] provider sharing is not ready');
+  // An already loaded share remains usable even while the other region is unavailable.
+  if (findReceivedShare(shareId)) return resolveRemoteAgentTarget(agentDeviceId);
   if (rt.fetchedAt === 0) await refreshReceivedShares('resolve');
-  if (rt.fetchedAt === 0) throw new Error('[DEVICE_LINK_NOT_CONNECTED] shared providers are not loaded yet');
+  if (!current(rt)) throw new Error('[DEVICE_LINK_NOT_CONNECTED] provider sharing account changed');
+  if (findReceivedShare(shareId)) return resolveRemoteAgentTarget(agentDeviceId);
+  await Promise.all(rt.groupRecoveries);
+  if (!current(rt)) throw new Error('[DEVICE_LINK_NOT_CONNECTED] provider sharing account changed');
+  if (findReceivedShare(shareId)) return resolveRemoteAgentTarget(agentDeviceId);
+  const crossReady = await waitForCrossRegionReceived();
+  if (!current(rt)) throw new Error('[DEVICE_LINK_NOT_CONNECTED] provider sharing account changed');
+  if (findReceivedShare(shareId)) return resolveRemoteAgentTarget(agentDeviceId);
+  if (rt.fetchedAt === 0 || !crossReady) throw new Error('[DEVICE_LINK_NOT_CONNECTED] shared providers are not loaded yet');
   return resolveRemoteAgentTarget(agentDeviceId);
+}
+
+/** Capture before reading a same-account group, so a late reply cannot activate another account. */
+export function captureProviderShareGroupRecovery(): (agentDeviceIds: readonly string[]) => Promise<void> {
+  const rt = runtime;
+  return (agentDeviceIds) => {
+    if (!rt || !current(rt)) return Promise.resolve();
+    const missing = agentDeviceIds.map(parseProviderShareAgentDeviceId)
+      .filter((id): id is string => !!id && !findReceivedShare(id));
+    if (missing.length === 0) return Promise.resolve();
+    const recovery = (async () => {
+      // Check the local service first: a recently accepted same-region share needs no peer lookup.
+      // Bound this check too, so repeated group views cannot bypass either region's retry policy.
+      if (Date.now() >= rt.nextGroupLocalRefreshAt) {
+        rt.nextGroupLocalRefreshAt = Date.now() + GROUP_LOCAL_REFRESH_INTERVAL_MS;
+        await refreshReceivedShares('remote-group');
+      } else {
+        await rt.refreshing;
+      }
+      if (!current(rt)) return;
+      await restoreCrossRegionReceivedForRemoteGroup(missing.filter((id) => !findReceivedShare(id)));
+    })();
+    rt.groupRecoveries.add(recovery);
+    return recovery.finally(() => { rt.groupRecoveries.delete(recovery); });
+  };
 }
 
 // ─── 已收到的分享 ────────────────────────────────────────────────
@@ -227,6 +268,8 @@ export function startProviderShareGuest(events: ProviderShareGuestEvents, option
     timer: null,
     refreshing: null,
     pending: new Map(),
+    groupRecoveries: new Set(),
+    nextGroupLocalRefreshAt: 0,
     stopped: false,
   };
   runtime = rt;
@@ -335,8 +378,9 @@ export async function resolveProviderShareLink(input: string | ProviderShareInvi
 }
 
 export async function previewProviderShare(link: string | ProviderShareInvitationIntent): Promise<ProviderShareLinkPreview> {
-  requireRuntime();
+  const rt = requireRuntime();
   const { intent, region } = await resolveProviderShareLink(link);
+  if (!current(rt)) throwIpcError('DEVICE_LINK_NOT_CONNECTED', 'Account changed');
   return region ? crossRegionPreview(region, intent.invitation) : providerShareApi.preview(intent.invitation);
 }
 
@@ -381,18 +425,22 @@ function pollRequest(rt: Runtime, requestId: string): void {
 export async function sendProviderShareRequest(link: string | ProviderShareInvitationIntent): Promise<ProviderShareRequestState> {
   const rt = requireRuntime();
   const { intent, region } = await resolveProviderShareLink(link);
+  if (!current(rt)) throwIpcError('DEVICE_LINK_NOT_CONNECTED', 'Account changed');
   const { invitation } = intent;
   let state: ProviderShareRequestState;
   let cross: PendingRequest['cross'] = null;
   let preview: ProviderShareLinkPreview | null;
   if (region) {
     preview = await crossRegionPreview(region, invitation).catch(() => null);
+    if (!current(rt)) throwIpcError('DEVICE_LINK_NOT_CONNECTED', 'Account changed');
     const sent = await crossRegionSendRequest(region, invitation);
     state = sent.state;
     cross = { region, requestToken: sent.requestToken };
   } else {
     preview = await providerShareApi.preview(invitation).catch(() => null);
+    if (!current(rt)) throwIpcError('DEVICE_LINK_NOT_CONNECTED', 'Account changed');
     const card = await fetchIdentityCard('share-request', sha256Hex(invitation));
+    if (!current(rt)) throwIpcError('DEVICE_LINK_NOT_CONNECTED', 'Account changed');
     state = await providerShareApi.sendRequest(invitation, card);
   }
   if (!current(rt)) throwIpcError('DEVICE_LINK_NOT_CONNECTED', 'Account changed');

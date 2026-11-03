@@ -116,7 +116,8 @@ export function SessionLinkChip({ href, label }: SessionLinkChipProps) {
     };
   }, [sessionId, messageClientId]);
 
-  const remoteSession = remoteSessions.find((s) => s.id === sessionId) ?? null;
+  const remoteSession = remoteSessions.find((s) =>
+    s.id === sessionId && (!targetDeviceId || s.deviceLinkDeviceId === targetDeviceId)) ?? null;
   const remoteTitle = fetchedTitle ? null : remoteSession?.title?.trim() || null;
   const openTarget = async (separate: boolean) => {
     if (!target || !sessionId) return;
@@ -137,7 +138,7 @@ export function SessionLinkChip({ href, label }: SessionLinkChipProps) {
         await window.electronAPI.maker.openSessionInNewWindow(sessionId, deviceId, messageClientId);
         return null;
       }
-      return resolveSessionRoute(sessionId, remoteSession);
+      return resolveSessionRoute(sessionId, remoteSession, { remote: !!deviceId });
     };
     // device-link 远程会话本地无 row,resolveSessionRoute 内部的 sessionService.get
     // 会 miss → 远程 Orca 会话被当普通会话路由,后续 redirect 会丢 searchJump 锚点。
@@ -162,6 +163,11 @@ export function SessionLinkChip({ href, label }: SessionLinkChipProps) {
           : undefined,
       );
     });
+  };
+  const handleMouseDown = (event: MouseEvent<HTMLElement>) => {
+    // Shift extends the text selection on mousedown, before click opens the window.
+    // Cancel only that gesture so ordinary text selection and copying still work.
+    if (event.button === 0 && event.shiftKey) event.preventDefault();
   };
   const handleClick = (event: MouseEvent<HTMLElement>) => {
     event.preventDefault();
@@ -221,6 +227,7 @@ export function SessionLinkChip({ href, label }: SessionLinkChipProps) {
           aria-label={visibleMessageLabel}
           title={display}
           onClick={handleClick}
+          onMouseDown={handleMouseDown}
           onAuxClick={(event) => {
             if (event.button === 1) handleClick(event);
           }}
@@ -243,6 +250,7 @@ export function SessionLinkChip({ href, label }: SessionLinkChipProps) {
         tooltip={display}
         ariaLabel={display}
         onClick={handleClick}
+        onMouseDown={handleMouseDown}
         onAuxClick={(event) => {
           if (event.button === 1) handleClick(event);
         }}

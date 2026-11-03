@@ -56,7 +56,13 @@ function sameRefList(
 ): a is SessionPrRef[] {
   if (!a || a.length !== b.length) return false;
   for (let i = 0; i < a.length; i += 1) {
-    if (a[i].id !== b[i].id || a[i].lastSeenAt !== b[i].lastSeenAt) return false;
+    if (
+      a[i].id !== b[i].id ||
+      a[i].lastSeenAt !== b[i].lastSeenAt ||
+      a[i].pinned !== b[i].pinned ||
+      a[i].priority !== b[i].priority
+    )
+      return false;
   }
   return true;
 }
@@ -494,9 +500,16 @@ export function PrRefsProvider({ children }: { children: ReactNode }) {
   }).current;
 
   const invalidateRemotePrRefs = useRef((sessionId: string) => {
-    const deviceId = prConsumers.current.get(sessionId)?.deviceId;
-    if (!deviceId) return;
     remoteRefsFetchedAt.current.delete(sessionId);
+    const deviceId = prConsumers.current.get(sessionId)?.deviceId;
+    if (!deviceId) {
+      // A late read must not restore the invalidated TTL after the last consumer
+      // leaves. Its existing finally path consumes this marker without refetching.
+      if (remoteRefsInFlight.current.get(sessionId) === ownerGenRef.current) {
+        remoteRefsInvalidated.current.add(sessionId);
+      }
+      return;
+    }
     remoteRefsInvalidated.current.add(sessionId);
     fetchRefsForRemoteSession(sessionId, deviceId);
   }).current;
@@ -614,6 +627,18 @@ export function usePrRefsForSession(sessionId: string): SessionPrRef[] {
     () => store.getRefs(sessionId),
     () => store.getRefs(sessionId),
   );
+}
+
+/** Bounded multi-task views reuse the same refs cache; unrelated changes keep the snapshot stable. */
+export function usePrRefsForSessions(sessionIds: readonly string[]): SessionPrRef[] {
+  const store = useContext(PrStoreContext);
+  const previous = useRef<SessionPrRef[]>([]);
+  const read = () => {
+    const next = sessionIds.flatMap(id => store.getRefs(id).slice(0, MAX_STATUS_QUERIES));
+    if (next.length !== previous.current.length || next.some((ref, i) => ref !== previous.current[i])) previous.current = next;
+    return previous.current;
+  };
+  return useSyncExternalStore(store.subscribe, read, read);
 }
 
 /** 单个 PR 的状态(按会话 + prStatusKey 订阅;结果未变时引用稳定)。列表行徽标专用。 */

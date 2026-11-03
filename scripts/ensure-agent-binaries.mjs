@@ -18,10 +18,11 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { execFileSync } from 'node:child_process';
+import { randomUUID } from 'node:crypto';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
 import { downloadFromCdn } from './agent-binary-cdn-fallback.mjs';
-import { verifyDirDistManifest } from '../tools/shared/dir-dist-manifest.mjs';
+import { verifyDirDistManifest, writeDirDistManifest } from '../tools/shared/dir-dist-manifest.mjs';
 
 const ROOT = path.resolve(fileURLToPath(new URL('..', import.meta.url)));
 const LFS_POINTER_HEADER = 'version https://git-lfs.github.com/spec/v1';
@@ -271,6 +272,26 @@ export function tryReuseDirDistFromSiblingWorktree({
   return null;
 }
 
+/** Called only after package validation: retain the strict manifest after adding our launcher. */
+export function ensureCodexPackageLauncher(packageDir, platformKey) {
+  if (platformKey.startsWith('win32')) return;
+  const launcher = fs.readFileSync(new URL('../tools/codex-package/codex-path-launcher.sh', import.meta.url), 'utf8');
+  const destination = path.join(packageDir, 'codex-path', 'codex');
+  if (fs.existsSync(destination)) {
+    const existing = fs.readFileSync(destination, 'utf8');
+    if (existing === launcher || existing.split(/\r?\n/)[1] !== launcher.split('\n')[1]) return;
+  }
+  const tempPath = `${destination}.launcher-${randomUUID()}`;
+  try {
+    fs.writeFileSync(tempPath, launcher, { encoding: 'utf8', mode: 0o755 });
+    fs.chmodSync(tempPath, 0o755);
+    fs.renameSync(tempPath, destination);
+  } finally {
+    fs.rmSync(tempPath, { force: true });
+  }
+  writeDirDistManifest(packageDir);
+}
+
 /** 确保固定版本的运行包就位，返回主执行文件路径。 */
 export async function ensureBinary(kind, platformKey = currentPlatformKey(), { force = false } = {}) {
   const cfg = KINDS[kind];
@@ -299,6 +320,7 @@ export async function ensureBinary(kind, platformKey = currentPlatformKey(), { f
     ? isValidDirDist(binDirPath, binPath, requiredDirDistFilesFor(cfg, platformKey))
     : isValidBinary(binPath);
   if (!force && presentAndValid && readInstalledVersion(markerPath) === version) {
+    if (kind === 'codex') ensureCodexPackageLauncher(binDirPath, platformKey);
     log(`${kind} ${platformKey}: already present @ ${version}, skip`);
     return binPath;
   }
@@ -373,6 +395,7 @@ export async function ensureBinary(kind, platformKey = currentPlatformKey(), { f
         `The previous binary may be locked (app running); close it and retry, or run "pnpm update:${updateScript}".`,
     );
   }
+  if (kind === 'codex') ensureCodexPackageLauncher(binDirPath, platformKey);
   return binPath;
 }
 

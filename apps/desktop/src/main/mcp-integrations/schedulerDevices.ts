@@ -12,6 +12,7 @@ const CHANNELS: Record<SchedulerRemoteOp, string> = {
   list: 'maker:schedule:list',
   get: 'maker:schedule:get',
   'list-runs': 'maker:schedule:list-runs',
+  create: 'maker:schedule:create',
   update: 'maker:schedule:update',
   pause: 'maker:schedule:pause',
   resume: 'maker:schedule:resume',
@@ -33,6 +34,7 @@ const MESSAGES: Record<string, string> = {
 };
 
 const WRITE_OPS: ReadonlySet<SchedulerRemoteOp> = new Set([
+  'create',
   'update',
   'pause',
   'resume',
@@ -100,6 +102,32 @@ export function createSchedulerRemoteDeps(deps: {
       }
       let response: InvokeResultPayload;
       try {
+        if (op === 'create') {
+          const capabilities = await deps.invoke(deviceId, 'maker:get-capabilities', ['claude-code'], { preSend: assertCurrent });
+          assertCurrent();
+          const supported = capabilities.ok ? capabilities.result as { supportsRemoteScheduleDirectoryCheck?: boolean } | null : null;
+          if (supported?.supportsRemoteScheduleDirectoryCheck !== true) {
+            return { ok: false, code: 'REMOTE_UNSUPPORTED', message: '目标电脑的版本不支持远程创建定时任务，请先更新目标电脑' };
+          }
+        }
+        const patch = op === 'update' ? args[1] as Record<string, unknown> | undefined : undefined;
+        const needsModelSelection = patch?.modelAgentKind != null;
+        const needsLocationSelection = patch && (Object.prototype.hasOwnProperty.call(patch, 'modelAgentDeviceId')
+          || ['modelAgentKind', 'model', 'providerId', 'effort'].some((key) => patch[key] === null));
+        if (needsModelSelection || needsLocationSelection) {
+          const capabilities = await deps.invoke(deviceId, 'maker:get-capabilities', ['claude-code'], { preSend: assertCurrent });
+          assertCurrent();
+          const supported = capabilities.ok ? capabilities.result as {
+            supportsScheduleModelSelection?: boolean;
+            supportsScheduleAgentDeviceSelection?: boolean;
+          } | null : null;
+          if (needsModelSelection && supported?.supportsScheduleModelSelection !== true) {
+            return { ok: false, code: 'REMOTE_UNSUPPORTED', message: '目标电脑的版本不支持自动化完整模型选择，请先更新目标电脑' };
+          }
+          if (needsLocationSelection && !supported?.supportsScheduleAgentDeviceSelection) {
+            return { ok: false, code: 'REMOTE_UNSUPPORTED', message: '目标电脑的版本不支持自动化选择远程或分享供应商，请先更新目标电脑' };
+          }
+        }
         response = await deps.invoke(deviceId, CHANNELS[op], args, { preSend: assertCurrent });
       } catch (error) {
         if (error instanceof DeviceLinkError) {

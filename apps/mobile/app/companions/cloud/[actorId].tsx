@@ -1,3 +1,4 @@
+import { deviceDisplayName } from '@/device-link/deviceName';
 import { useLocalSearchParams } from 'expo-router';
 import { useAuth } from '@/auth/AuthContext';
 import { CloudCompanionScreen } from '@/session/CloudCompanionScreen';
@@ -18,5 +19,5 @@ export default function CloudCompanionRoute() {
   const actorId = firstParam(params.actorId);
   const deviceId = firstParam(params.deviceId);
   return <CloudCompanionScreen key={`${accountGeneration}:${actorId}`} actorId={actorId} botId={firstParam(params.botId)}
-    deviceId={deviceId} deviceName={firstParam(params.deviceName) || deviceId} title={firstParam(params.title)} />;
+    deviceId={deviceId} deviceName={deviceDisplayName(deviceId, firstParam(params.deviceName))} title={firstParam(params.title)} />;
 }

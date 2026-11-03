@@ -135,9 +135,9 @@ describe('BotChannelsPage', () => {
     expect(mocks.navigate).not.toHaveBeenCalled();
   });
 
-  // 测试价值: 真实列表点击应打开主界面只读详情, 旧覆盖只有重启; 最小输入为一条渠道记录。
+  // 测试价值: 真实列表点击应打开普通任务页, 旧覆盖只有重启; 最小输入为一条渠道记录。
   // unit: 校验路由与副作用, 不需真实飞书连接。
-  it('opens each IM record in the existing history page without restarting it', async () => {
+  it('opens each IM record in the ordinary task page without restarting it', async () => {
     const lanes = ['owner-dm', 'group', 'topic', 'guest-dm'].map((kind) => ({
       sessionId: `s/${kind}`, kind, chatId: '-1001', threadId: 'thread-1', name: kind,
       state: 'idle', lastActivityAt: null, contextMessageCount: 0,
@@ -153,7 +153,7 @@ describe('BotChannelsPage', () => {
       const name = lane.kind === 'owner-dm' ? 'bots.channels.lanes.ownerName' : lane.name;
       const open = await screen.findByRole('button', { name: new RegExp(`^${name}`) });
       fireEvent.click(open);
-      expect(mocks.navigate).toHaveBeenLastCalledWith(`/bots/bot%2F1/history/${encodeURIComponent(lane.sessionId)}`);
+      expect(mocks.navigate).toHaveBeenLastCalledWith(`/cc-agent/${encodeURIComponent(lane.sessionId)}`);
     }
     expect(lanesApi.resetLane).not.toHaveBeenCalled();
     expect(mocks.confirm).not.toHaveBeenCalled();
@@ -477,7 +477,7 @@ describe('BotChannelsPage', () => {
     fireEvent.change(within(dialog).getByLabelText('bots.channels.add.feishu.appSecretLabel'), {
       target: { value: 'secret' },
     });
-    fireEvent.click(within(dialog).getByRole('button', { name: 'bots.channels.add.confirm' }));
+    fireEvent.click(within(dialog).getByRole('button', { name: /^bots\.channels\.add\.feishu\.confirm:/ }));
 
     await waitFor(() =>
       expect(api.add).toHaveBeenCalledWith({
@@ -493,6 +493,66 @@ describe('BotChannelsPage', () => {
       'bots.channels.add.errors.connectFailed:{"reason":"invalid app secret"}',
     );
     expect(screen.getByRole('dialog')).toBeTruthy();
+  });
+
+  // Feature: users can create an application before entering credentials. Exercise
+  // the real form, external-link bridge and service payload; no live Feishu account.
+  it('opens the matching creation platform, toggles setup help and connects Lark with the entered credentials', async () => {
+    const api = installApi({ connections: [] });
+    const openExternal = vi.fn();
+    Object.assign(window.electronAPI, { openExternal });
+    render(<BotChannelsPage bot={mia} />);
+    fireEvent.click(await screen.findByRole('button', { name: 'bots.channels.add.button' }));
+    const dialog = await screen.findByRole('dialog');
+    fireEvent.click(within(dialog).getByRole('radio', { name: 'bots.channels.platform.feishu' }));
+
+    const create = () => within(dialog).getByRole('link', { name: /^bots\.channels\.add\.feishu\.createLink:/ });
+    const steps = within(dialog).getByRole('button', { name: 'bots.channels.add.feishu.stepsLabel' });
+    expect(steps.getAttribute('aria-expanded')).toBe('false');
+    expect(within(dialog).queryByText('bots.channels.add.feishu.stepCreate')).toBeNull();
+    fireEvent.click(steps);
+    expect(steps.getAttribute('aria-expanded')).toBe('true');
+    expect(await within(dialog).findByText('bots.channels.add.feishu.stepCreate')).toBeTruthy();
+    fireEvent.click(steps);
+    expect(steps.getAttribute('aria-expanded')).toBe('false');
+
+    fireEvent.click(create());
+    expect(openExternal).toHaveBeenLastCalledWith('https://open.feishu.cn/page/launcher?from=backend_oneclick');
+    expect(api.add).not.toHaveBeenCalled();
+    expect(screen.getByRole('dialog')).toBe(dialog);
+    const submit = () => within(dialog).getByRole('button', { name: /^bots\.channels\.add\.feishu\.confirm:/ });
+    expect((submit() as HTMLButtonElement).disabled).toBe(true);
+    fireEvent.change(within(dialog).getByLabelText('bots.channels.add.feishu.appIdLabel'), { target: { value: ' cli_lark ' } });
+    fireEvent.change(within(dialog).getByLabelText('bots.channels.add.feishu.appSecretLabel'), { target: { value: ' secret ' } });
+    fireEvent.click(within(dialog).getByRole('radio', { name: 'bots.channels.platform.lark' }));
+    expect(create().textContent).toContain('"service":"bots.channels.platform.lark"');
+    expect(submit().textContent).toContain('"service":"bots.channels.platform.lark"');
+    expect(within(dialog).getByText(/^bots\.channels\.add\.feishu\.description:/).textContent).toContain('"service":"bots.channels.platform.lark"');
+    fireEvent.click(create());
+    expect(openExternal).toHaveBeenLastCalledWith('https://open.larksuite.com/page/launcher?from=backend_oneclick');
+    fireEvent.click(submit());
+    await waitFor(() => expect(api.add).toHaveBeenCalledWith({ botId: 'bot-1', channel: 'feishu', service: 'lark', appId: 'cli_lark', appSecret: 'secret' }));
+    await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
+  });
+
+  it('shows creation guidance only for manual Feishu setup and preserves existing-bot adoption', async () => {
+    const api = Object.assign(installApi({ connections: [] }), {
+      listAdoptable: vi.fn(async () => ({ bots: [{ channel: 'feishu', identity: 'cli_existing' }] })),
+      adopt: vi.fn(async () => ({ connections: [connection({ channel: 'feishu' })] })),
+    });
+    render(<BotChannelsPage bot={mia} />);
+    fireEvent.click(await screen.findByRole('button', { name: 'bots.channels.add.button' }));
+    const dialog = await screen.findByRole('dialog');
+    fireEvent.click(within(dialog).getByRole('radio', { name: 'bots.channels.platform.feishu' }));
+    const existing = await within(dialog).findByRole('radio', { name: /bots\.channels\.add\.source\.existing/ });
+    expect(within(dialog).queryByRole('button', { name: 'bots.channels.add.feishu.stepsLabel' })).toBeNull();
+    fireEvent.click(within(dialog).getByRole('radio', { name: 'bots.channels.add.source.manual' }));
+    expect(within(dialog).getByRole('button', { name: 'bots.channels.add.feishu.stepsLabel' })).toBeTruthy();
+    fireEvent.click(existing);
+    expect(within(dialog).queryByLabelText('bots.channels.add.feishu.appSecretLabel')).toBeNull();
+    fireEvent.click(within(dialog).getByRole('button', { name: 'bots.channels.add.confirm' }));
+    await waitFor(() => expect(api.adopt).toHaveBeenCalledWith({ botId: 'bot-1', channel: 'feishu' }));
+    expect(api.add).not.toHaveBeenCalled();
   });
 
   it('tells the user when the same bot is already connected on this computer', async () => {
@@ -579,14 +639,18 @@ describe('BotChannelsPage for a teammate on another computer', () => {
       state: 'idle', lastActivityAt: null, contextMessageCount: 0 };
     lanesApi = { listLanes: vi.fn(), resetLane: vi.fn(), archiveLane: vi.fn() };
     const archiveLane = vi.fn(async () => ({ connectionId: 'a1b2c3d4e5f6', lanes: [] }));
+    const resetLane = vi.fn();
     const api = remoteApi({
       listLanes: vi.fn(async () => ({ connectionId: 'a1b2c3d4e5f6', lanes: [lane] })),
-      resetLane: vi.fn(),
+      resetLane,
       ...(supported ? { archiveLane } : {}),
     });
     const own = renderRemote(api);
     await expandTaskList();
-    expect((await screen.findByRole('button', { name: /^Remote room/ }) as HTMLButtonElement).disabled).toBe(true);
+    const open = await screen.findByRole('button', { name: /^Remote room/ });
+    expect((open as HTMLButtonElement).disabled).toBe(false);
+    fireEvent.click(open);
+    expect(mocks.navigate).toHaveBeenLastCalledWith('/cc-agent/remote-lane?device=mac');
     const archive = screen.queryByRole('button', { name: 'bots.channels.lanes.archiveAria:{"lane":"Remote room"}' });
     if (supported) {
       expect(archive).toBeTruthy();
@@ -596,7 +660,7 @@ describe('BotChannelsPage for a teammate on another computer', () => {
     } else expect(archive).toBeNull();
     expect(own.listLanes).not.toHaveBeenCalled();
     expect(own.archiveLane).not.toHaveBeenCalled();
-    expect(mocks.navigate).not.toHaveBeenCalled();
+    expect(resetLane).not.toHaveBeenCalled();
   });
 
   it('asks for credentials only on the other computer', async () => {
@@ -606,6 +670,10 @@ describe('BotChannelsPage for a teammate on another computer', () => {
     const dialog = await screen.findByRole('dialog');
     expect(within(dialog).queryByLabelText('bots.channels.add.telegram.tokenLabel')).toBeNull();
     expect(within(dialog).getByText(/bots\.remoteSettings\.finishOnHost:.*Studio/)).toBeTruthy();
+    expect((within(dialog).getByRole('button', { name: 'bots.channels.add.confirm' }) as HTMLButtonElement).disabled).toBe(true);
+    fireEvent.click(within(dialog).getByRole('radio', { name: 'bots.channels.platform.feishu' }));
+    expect(within(dialog).queryByLabelText('bots.channels.add.feishu.appIdLabel')).toBeNull();
+    expect(within(dialog).queryByRole('button', { name: 'bots.channels.add.feishu.stepsLabel' })).toBeNull();
     expect((within(dialog).getByRole('button', { name: 'bots.channels.add.confirm' }) as HTMLButtonElement).disabled).toBe(true);
     expect(api.add).not.toHaveBeenCalled();
   });

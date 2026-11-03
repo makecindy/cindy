@@ -339,7 +339,7 @@ export function extractUsageLimitRecoveryHint(
     isBillingDepletionError(root) ||
     codexErrorInfo === 'serverOverloaded' ||
     status === 529 ||
-    /\b(?:at capacity|overloaded_error)\b/i.test(text)
+    /\b(?:at capacity|overloaded_error|currently overloaded)\b/i.test(text)
   ) {
     return null;
   }

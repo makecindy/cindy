@@ -166,27 +166,21 @@ export async function ensureReady(userId: string): Promise<EnsureReadyResult> {
   let startupWriterLease: SchemaMigrationLease | null = null;
   let readerLeaseAcquiredThisCall = false;
 
-  const startupLease = acquireSchemaStartupLease({
+  const startupLease = await acquireSchemaStartupLease({
     dbFilePath: filePath,
     packaged: app.isPackaged,
     sharedPassive: passiveSharedUserData,
     readerLifecycle: schemaMigrationReaderLeaseLifecycle,
   });
   if (!startupLease.acquired) {
-    const readerHint = startupLease.activeReaderCount
-      ? `（当前有 ${startupLease.activeReaderCount} 个 passive 实例）`
-      : '';
-    const waitingForWriter = startupLease.reason === 'writer-active';
-    const message = waitingForWriter
-      ? '另一个实例正在执行数据库 schema migration，当前实例无法同时启动维护。请等待迁移完成后重试，或改用 --isolated 启动独立数据。'
-      : `当前不能执行数据库 schema 启动维护${readerHint}。` +
-        '请先关闭共享该 userData 的 passive dev 后重试，或让这些实例使用 --isolated。';
+    const message = t(`localDbFatal.schemaLease.${startupLease.reason}`);
+    log.warn(JSON.stringify({ event: 'localDb.schemaLease.blocked', reason: startupLease.reason }));
     showFatalDialog(
-      waitingForWriter ? '数据库 schema 正在维护' : '数据库 schema 正被其它实例使用',
+      t('localDbFatal.schemaLease.title'),
       message,
-      'MIGRATE_FAILED',
+      'DB_SCHEMA_LOCKED',
     );
-    return { ready: false, error: { code: 'MIGRATE_FAILED', message } };
+    return { ready: false, error: { code: 'DB_SCHEMA_LOCKED', message } };
   }
   const schemaMaintenanceReadOnly = startupLease.kind === 'reader' && !passiveSharedUserData;
   readerLeaseAcquiredThisCall = startupLease.kind === 'reader' && startupLease.newlyAcquired;
@@ -253,14 +247,15 @@ export async function ensureReady(userId: string): Promise<EnsureReadyResult> {
     const errCode = (err as { code?: string }).code ?? '';
     if (errCode === 'SQLITE_CORRUPT' || /corrupt/i.test(message)) {
       if (passiveSharedUserData || schemaMaintenanceReadOnly) {
-        const readOnlyStartupMessage =
-          '共享数据库当前由其它实例使用，Cindy 不会在其运行期间自动恢复或修改 schema。' +
-          '请关闭共享该 userData 的 passive 实例后重试，或改用 --isolated。';
-        showFatalDialog('共享数据库无法恢复', readOnlyStartupMessage, 'DB_CORRUPT_NO_BACKUP');
+        // 经 i18n 取文案：该 message 会原样带回 renderer 的 LocalDbFatalScreen（retry-local-db 视图），
+        // 硬编码中文会在 en/ja/ko/zh-TW 下与已本地化的标题和按钮混排。
+        const readOnlyStartupMessage = t('localDbFatal.passiveCorrupt.description');
+        // 本进程是只读/passive，从未检查过备份：不能报「无可用备份」，按「被占用，关闭后重试」处理。
+        showFatalDialog(t('localDbFatal.passiveCorrupt.title'), readOnlyStartupMessage, 'DB_SCHEMA_LOCKED');
         releaseSchemaLeasesAfterFailure();
         return {
           ready: false,
-          error: { code: 'DB_CORRUPT_NO_BACKUP', message: readOnlyStartupMessage },
+          error: { code: 'DB_SCHEMA_LOCKED', message: readOnlyStartupMessage },
         };
       }
       const restored = tryRestoreWithFallback(filePath);

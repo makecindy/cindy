@@ -58,6 +58,9 @@ import {
 export const TELEGRAM_DM_COMPLETION_EFFECT_ID = '5107584321108051014';
 
 const NO_REPLY = 'NO_REPLY';
+// 包含等待在途进度、终稿分段及清理。超时交回已有服务端出箱，不截短 retry_after
+// 后继续发请求；否则小时级限流会一直挡住 turn.end 和同一任务的下一轮。
+const CLIENT_FINAL_TIMEOUT_MS = 120_000;
 
 /** Telegram 完整应答后的 4xx(渠道错误码; 服务端自判的 RATE_LIMITED 也映射为 429)。 */
 function isTelegramClientError(err: unknown): boolean {
@@ -162,7 +165,7 @@ export function createOfficialTelegramTurnCarrier(
     }
     const send = deps.getSend();
     if (!send) throw new TelegramMsgOpError('telegram turn carrier is offline');
-    return router.request(
+    const result = await router.request(
       connectionId,
       send,
       makeMessageOp({
@@ -176,6 +179,13 @@ export function createOfficialTelegramTurnCarrier(
       opId,
       deps.resultTimeoutMs,
     );
+    if (result && !result.ok) {
+      // 只记诊断字段，不写正文或服务端原始错误（可能包含用户内容）。
+      log.warn(
+        `telegram msg.op rejected: requestId=${requestId} purpose=${purpose} action=${action.kind} code=${result.errorCode ?? 'none'} channelCode=${result.channelErrorCode ?? 'none'} retryAfterMs=${result.retryAfterMs ?? 'none'}`,
+      );
+    }
+    return result;
   }
 
   /** 定案的失败回执: 停手码让本轮停止出站, 其余映射成同形错误抛给 outboundPolicy。 */
@@ -354,15 +364,30 @@ export function createOfficialTelegramTurnCarrier(
         close();
         return false;
       }
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      const deadline = new Promise<boolean>((resolve) => {
+        timer = setTimeout(() => {
+          // 先关闭旧载体并唤醒退避，迟到回执不得在服务端接管后再发消息。
+          close();
+          log.warn(
+            `telegram client final for ${requestId} timed out after ${CLIENT_FINAL_TIMEOUT_MS}ms; handing back to the server`,
+          );
+          resolve(false);
+        }, CLIENT_FINAL_TIMEOUT_MS);
+        timer.unref?.();
+      });
       try {
-        await carrier.finalize(input.finalText);
-        return isLive();
+        return await Promise.race([
+          carrier.finalize(input.finalText).then(() => isLive()),
+          deadline,
+        ]);
       } catch (err) {
         log.warn(
           `telegram client final for ${requestId} not confirmed; handing back to the server: ${err instanceof Error ? err.message : String(err)}`,
         );
         return false;
       } finally {
+        clearTimeout(timer);
         close();
       }
     },

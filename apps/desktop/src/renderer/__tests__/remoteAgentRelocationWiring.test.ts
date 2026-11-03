@@ -85,7 +85,7 @@ describe('ChatInput:换位置进切换事务', () => {
 
   it('意图期内目录跟随意图里的电脑', () => {
     expect(chatInputSource).toContain(
-      'const catalogDeviceId = effectiveAgentDeviceId ?? deviceLinkDeviceId ?? undefined;',
+      'const catalogDeviceId = modelCatalogKey(effectiveAgentDeviceId ?? deviceLinkDeviceId ?? undefined, catalogHostDeviceId);',
     );
   });
 
@@ -148,14 +148,14 @@ describe('被控电脑上的任务:换 Agent 所在电脑', () => {
   });
 
   it('改回被控电脑的确认标题写那台电脑的名字', () => {
-    expect(chatInputSource).toContain('device: deviceLinkDeviceName || deviceLinkDeviceId,');
+    expect(chatInputSource).toContain('device: deviceDisplayName(deviceLinkDeviceId, deviceLinkDeviceName),');
   });
 
   it('会话视图:候选电脑去掉被控电脑本身,并入全部可用分享;目录跟随 Agent 所在电脑', () => {
     expect(sessionViewSource).toContain('controlledTaskSupportsAgentLocation(session) &&');
     expect(sessionViewSource).toContain('!isSharedTaskPeer(remoteDeviceId) &&');
     const branch = sessionViewSource.indexOf(
-      'if (remoteDeviceId) {\n      return controlledAgentLocation',
+      'if (remoteDeviceId) {\n      if (controlledModelRoute.catalogHostDeviceId) return controlledModelRoute.devices;',
     );
     expect(branch).toBeGreaterThan(0);
     const remoteBranch = sessionViewSource.slice(
@@ -165,7 +165,7 @@ describe('被控电脑上的任务:换 Agent 所在电脑', () => {
     expect(remoteBranch).toContain('selectControlledTaskAgentDevices({');
     expect(remoteBranch).toContain('shareDevices: providerShareDevices,');
     expect(sessionViewSource).toContain(
-      'const catalogDeviceId = controlledAgentDeviceId ?? remoteDeviceId ?? agentDeviceId;',
+      'controlledAgentDeviceId ?? remoteDeviceId ?? agentDeviceId, controlledModelRoute.catalogHostDeviceId,',
     );
     expect(sessionViewSource).toContain('deviceLinkDeviceName={controlledDeviceName}');
   });
@@ -182,7 +182,7 @@ describe('被控电脑上的任务:换 Agent 所在电脑', () => {
       '...(controlledShareIds ? { readableShareIds: controlledShareIds } : {}),',
     );
     const branch = sessionViewSource.indexOf(
-      'if (remoteDeviceId) {\n      return controlledAgentLocation',
+      'if (remoteDeviceId) {\n      if (controlledModelRoute.catalogHostDeviceId) return controlledModelRoute.devices;',
     );
     const remoteBranch = sessionViewSource.slice(
       branch,

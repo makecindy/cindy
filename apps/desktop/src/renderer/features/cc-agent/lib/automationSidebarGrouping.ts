@@ -7,6 +7,7 @@ import {
   isAutomationGeneratedSession,
 } from './scheduledSessionGrouping';
 import { normalizeWorkingDir } from './projectGrouping';
+import { isTeammateTaskSession } from '../../../../shared/sessionSource';
 import { sessionActivityMs } from './dateSessionGrouping';
 import {
   getSessionListCollapseView,
@@ -60,6 +61,11 @@ export interface AutomationSessionGroup {
   projectConfigId?: string;
   /** 远程设备上的自动化分组（组键已按设备作用域隔离，组内会话同属这台设备）。 */
   deviceLinkDeviceId?: string;
+  /**
+   * 伙伴例行任务分组（同一伙伴同一条规则）。规则由伙伴例行任务引擎管理，不是 schedule：
+   * 组头只提供标为已读，运行与编辑去伙伴设置的「例行任务」页。
+   */
+  teammateRoutine?: { botId: string; routineId: string };
   title: string;
   sessions: Session[];
   attentionSessionIds: string[];
@@ -78,7 +84,8 @@ export function getEntryActivityMs(entry: SidebarSessionEntry): number {
   return entry.group.sessions.reduce((max, s) => Math.max(max, sessionActivityMs(s)), 0);
 }
 
-export type AutomationScheduleAction = 'run' | 'edit' | 'toggle-pause' | 'delete' | 'mark-read';
+export type AutomationScheduleAction =
+  'run' | 'edit' | 'toggle-pause' | 'delete' | 'mark-read' | 'archive-all';
 
 interface ScopedAutomationGroupKey {
   key: string;
@@ -87,7 +94,7 @@ interface ScopedAutomationGroupKey {
 
 function fallbackAutomationGroupKey(session: Session): ScopedAutomationGroupKey {
   const workspace = session.workspaceKind ?? 'project';
-  const dir = normalizeWorkingDir(session.workingDir) ?? '__no_working_dir__';
+  const dir = normalizeWorkingDir(session.projectDir ?? session.workingDir) ?? '__no_working_dir__';
   const title = getAutomationSessionDisplayTitle(session).trim() || session.id;
   return scopeAutomationGroupKey(`fallback:${workspace}:${dir}:${title}`, session);
 }
@@ -95,6 +102,14 @@ function fallbackAutomationGroupKey(session: Session): ScopedAutomationGroupKey 
 function scopeAutomationGroupKey(key: string, session: Session): ScopedAutomationGroupKey {
   const deviceId = session.deviceLinkDeviceId?.trim();
   return deviceId ? { key: `${key}:device:${deviceId}`, legacyKey: key } : { key };
+}
+
+/** 伙伴例行任务 Session 的规则归属；旧主机不带 routineId 时为 null（维持平铺）。 */
+function teammateRoutineOf(session: Session): { botId: string; routineId: string } | null {
+  if (!isTeammateTaskSession(session) || session.orcaRole === 'worker') return null;
+  const companion = session.companion;
+  if (companion?.role !== 'routine' || !companion.routineId) return null;
+  return { botId: companion.id, routineId: companion.routineId };
 }
 
 export function getAutomationSidebarGroupInfo(
@@ -110,7 +125,20 @@ export function getAutomationSidebarGroupInfo(
   nextFireAt?: number;
   workingDir?: string;
   projectConfigId?: string;
+  teammateRoutine?: { botId: string; routineId: string };
 } | null {
+  const teammateRoutine = teammateRoutineOf(session);
+  if (teammateRoutine) {
+    return {
+      ...scopeAutomationGroupKey(
+        `routine:${teammateRoutine.botId}:${teammateRoutine.routineId}`,
+        session,
+      ),
+      // 例行任务 Session 以规则名为标题（「每次新建任务」时各次同名）。
+      title: session.title,
+      teammateRoutine,
+    };
+  }
   if (!isAutomationGeneratedSession(session)) return null;
 
   const indexed = scheduleSessionIndex?.get(session.id);
@@ -167,6 +195,7 @@ export function groupAutomationSidebarEntries(
         workingDir: groupInfo.workingDir,
         projectConfigId: groupInfo.projectConfigId,
         ...(session.deviceLinkDeviceId ? { deviceLinkDeviceId: session.deviceLinkDeviceId } : {}),
+        ...(groupInfo.teammateRoutine ? { teammateRoutine: groupInfo.teammateRoutine } : {}),
         title: groupInfo.title,
         sessions: [session],
         attentionSessionIds: options.notifications.has(session.id) ? [session.id] : [],
@@ -336,7 +365,7 @@ export function getVisibleAutomationGroupSessions(
 }
 
 /**
- * 组内「最新一条」运行:按 sessionActivityMs(updatedAt / userSendAt 取较新)降序取首。
+ * 组内「最新一条」运行:按 sessionActivityMs 的换手时间及旧数据回退降序取首。
  * 侧栏组头(折叠态)用它作为整组的代表 —— 状态、running/loading、点击打开目标都跟这条一致
  * (「组头 = 最新一条运行的代理」)。group.sessions 恒非空(分组至少 2 条),返回可能仍为
  * undefined 仅为类型安全兜底。

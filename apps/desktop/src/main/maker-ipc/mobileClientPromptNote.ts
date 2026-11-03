@@ -187,6 +187,7 @@ const MAIN_ONLY_SEND_FIELDS = [
   'fromMobileClient',
   'fromDeviceLinkClient',
   'uiLanguage',
+  'classicalStyle',
   'expectedInputGeneration',
   'expectedTurnSession',
   'expectedTurnGeneration',

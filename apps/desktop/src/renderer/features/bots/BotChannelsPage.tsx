@@ -1,3 +1,4 @@
+import { standardSessionRoute } from '@/lib/orcaSessionIdentity';
 /**
  * 伙伴设置 →「消息平台」: 这位伙伴自己的 IM 机器人。
  *
@@ -14,7 +15,7 @@
 import { HookConnectionsSection } from '@/components/settings/HookConnectionsSection';
 import { useCallback, useEffect, useId, useRef, useState, type FormEvent } from 'react';
 import * as Dialog from '@radix-ui/react-dialog';
-import { Archive, Briefcase, ChevronRight, ChevronUp, Gamepad2, MessageSquare, Plus, Send, Zap, type LucideIcon } from 'lucide-react';
+import { Archive, ArrowUpRight, Briefcase, ChevronRight, ChevronUp, Gamepad2, MessageSquare, Plus, Send, Zap, type LucideIcon } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 
 import { ChromeIconButton } from '@/components/title-bar/ChromeIconButton';
@@ -25,7 +26,6 @@ import { useConfirmDialog } from '@/components/ui/confirm-dialog-provider';
 import { FormField } from '@/components/ui/form-field';
 import { Input } from '@/components/ui/input';
 import { SegmentedControl } from '@/components/ui/segmented-control';
-import { Select } from '@/components/ui/select';
 import { Spinner } from '@/components/ui/spinner';
 import { WechatBotSection } from '@/components/settings/WechatBotSection';
 import { cn } from '@/lib/utils';
@@ -67,6 +67,11 @@ import {
 
 const BOT_TOKEN_PATTERN = /^\d+:[A-Za-z0-9_-]{20,}$/;
 const OWNER_USER_ID_PATTERN = /^\d{4,20}$/;
+// Same application launchers as Settings → IM bots.
+const FEISHU_APP_LAUNCHER_URL: Record<BotImFeishuService, string> = {
+  feishu: 'https://open.feishu.cn/page/launcher?from=backend_oneclick',
+  lark: 'https://open.larksuite.com/page/launcher?from=backend_oneclick',
+};
 const DISCORD_OWNER_ID_PATTERN = /^\d{17,20}$/;
 
 const CHANNEL_ICON: Record<BotImChannel, LucideIcon> = {
@@ -230,8 +235,8 @@ export function BotChannelsPage({ bot }: { bot: BotProfile }) {
                   <ConnectionGroups api={im} connectionId={view.id} botName={bot.name} />
                 ) : null}
                 {view.botContextId && botImConnectionLanesSupported(im) ? (
-                  <ConnectionLanes api={im} connectionId={view.id} botId={bot.id} botName={bot.name}
-                    platform={platformName(view)} canOpenHistory={target.kind === 'local'} />
+                  <ConnectionLanes api={im} connectionId={view.id} botName={bot.name}
+                    platform={platformName(view)} deviceId={target.deviceId} />
                 ) : null}
               </li>
             );
@@ -378,12 +383,11 @@ const LANE_KIND_KEY: Record<BotImConnectionLane['kind'], string> = {
 /**
  * 一条连接的「隐藏任务」小节: 主人私聊(伙伴主任务)、每个群 / 话题与其他人的私聊各一行,
  * 显示状态、最近活动和当前上下文里的消息数; 卡住时可以让某一条重新开始(同一条任务,
- * 记录保留, 下一条消息换干净的上下文)。点击记录复用主界面的只读历史页, 不取消隐藏。
+ * 记录保留, 下一条消息换干净的上下文)。点击记录打开原任务的普通界面, 不取消隐藏。
  */
-function ConnectionLanes({ api, connectionId, botId, botName, platform, canOpenHistory }: {
-  api: BotImConnectionApi | null; connectionId: string; botId: string; botName: string; platform: string;
-  /** The read-only history page lives on the teammate's computer; a remote teammate's lanes only list. */
-  canOpenHistory: boolean;
+function ConnectionLanes({ api, connectionId, botName, platform, deviceId }: {
+  api: BotImConnectionApi | null; connectionId: string; botName: string; platform: string;
+  deviceId?: string;
 }) {
   const { t } = useBotTranslation();
   const navigate = useNavigate();
@@ -552,8 +556,7 @@ function ConnectionLanes({ api, connectionId, botId, botName, platform, canOpenH
           <div key={lane.sessionId} className="flex items-center gap-3">
             <button
               type="button"
-              disabled={!canOpenHistory}
-              onClick={() => navigate(`/bots/${encodeURIComponent(botId)}/history/${encodeURIComponent(lane.sessionId)}`)}
+              onClick={() => navigate(standardSessionRoute(lane.sessionId, deviceId))}
               className="min-w-0 flex-1 text-left outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]"
             >
                 <span className="flex min-w-0 items-center gap-1.5">
@@ -704,6 +707,8 @@ function BotChannelAddDialog({
   const [token, setToken] = useState('');
   const [ownerUserId, setOwnerUserId] = useState('');
   const [service, setService] = useState<BotImFeishuService>('feishu');
+  const [guideOpen, setGuideOpen] = useState(false);
+  const guideId = useId();
   const [appId, setAppId] = useState('');
   const [appSecret, setAppSecret] = useState('');
   // 企业微信 / 钉钉 / Discord 各自的两格: 字段名跟平台的叫法走, 互不串用。
@@ -723,6 +728,8 @@ function BotChannelAddDialog({
   const existing = adoptable.find((item) => item.channel === channel) ?? null;
   const credentialsHere = remoteName === undefined;
   const useExisting = existing !== null && (source === 'existing' || !credentialsHere);
+  const manualFeishu = channel === 'feishu' && credentialsHere && !useExisting;
+  const serviceName = t('bots.channels.platform.' + service);
 
   const apiRef = useRef(api);
   apiRef.current = api;
@@ -850,13 +857,15 @@ function BotChannelAddDialog({
               {t('bots.channels.add.title', { name: bot.name })}
             </Dialog.Title>
             <Dialog.Description className="mt-2 text-13 leading-[1.5] text-[var(--confirm-desc)]">
-              {t('bots.channels.add.description')}
+              {manualFeishu
+                ? t('bots.channels.add.feishu.description', { service: serviceName, name: bot.name })
+                : t('bots.channels.add.description')}
             </Dialog.Description>
 
             <div
               role="radiogroup"
               aria-label={t('bots.channels.add.platformLabel')}
-              className="mt-4 grid grid-cols-3 gap-2"
+              className="mt-4 grid grid-cols-2 gap-2 min-[400px]:grid-cols-3"
             >
               {PLATFORMS.map((item, index) => {
                 const checked = item === channel;
@@ -870,7 +879,7 @@ function BotChannelAddDialog({
                     disabled={busy}
                     onClick={() => setChannel(item)}
                     className={cn(
-                      'flex min-h-11 min-w-0 items-center justify-center gap-2 rounded-xl border px-3 text-13 outline-none transition-colors',
+                      'flex min-h-9 min-w-0 items-center justify-center gap-2 rounded-full border px-3 text-13 outline-none transition-colors',
                       'focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-[var(--focus-ring)]',
                       'disabled:cursor-not-allowed',
                       checked
@@ -957,21 +966,57 @@ function BotChannelAddDialog({
                 </>
               ) : channel === 'feishu' ? (
                 <>
-                  <FormField label={t('bots.channels.add.feishu.serviceLabel')}>
-                    {(control) => (
-                      <Select
-                        id={control.id}
-                        label={t('bots.channels.add.feishu.serviceLabel')}
-                        value={service}
-                        options={[
-                          { value: 'feishu', label: t('bots.channels.platform.feishu') },
-                          { value: 'lark', label: t('bots.channels.platform.lark') },
-                        ]}
-                        onValueChange={(next) => setService(next === 'lark' ? 'lark' : 'feishu')}
-                        disabled={busy}
-                      />
-                    )}
-                  </FormField>
+                  <SegmentedControl
+                    aria-label={t('bots.channels.add.feishu.serviceLabel')}
+                    value={service}
+                    options={[
+                      { value: 'feishu', label: t('bots.channels.platform.feishu') },
+                      { value: 'lark', label: t('bots.channels.platform.lark') },
+                    ]}
+                    onValueChange={setService}
+                    disabled={busy}
+                  />
+                  <section className="flex flex-col gap-2 rounded-xl border border-[var(--border-default)] p-3">
+                    <div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-13 leading-[1.5]">
+                      <p className="font-medium text-[var(--text-primary)]">
+                        {t('bots.channels.add.feishu.createPrompt', { service: serviceName })}
+                      </p>
+                      <a
+                        href={FEISHU_APP_LAUNCHER_URL[service]}
+                        onClick={(event) => {
+                          event.preventDefault();
+                          void window.electronAPI.openExternal?.(FEISHU_APP_LAUNCHER_URL[service]);
+                        }}
+                        className="inline-flex items-center gap-0.5 text-[var(--text-secondary)] underline underline-offset-2 outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]"
+                      >
+                        {t('bots.channels.add.feishu.createLink', { service: serviceName })}
+                        <ArrowUpRight size={13} aria-hidden="true" className="shrink-0" />
+                      </a>
+                    </div>
+                    <p className="text-12 leading-[1.5] text-[var(--text-secondary)]">
+                      {t('bots.channels.add.feishu.credentialsHint')}
+                    </p>
+                    <Button
+                      type="button"
+                      variant="secondary"
+                      tone="quiet"
+                      size="sm"
+                      className="w-fit justify-start gap-1 px-1 text-[var(--text-secondary)]"
+                      aria-expanded={guideOpen}
+                      aria-controls={guideId}
+                      onClick={() => setGuideOpen((open) => !open)}
+                    >
+                      <ChevronRight size={12} aria-hidden="true" className={cn('shrink-0 transition-transform motion-reduce:transition-none', guideOpen && 'rotate-90')} />
+                      {t('bots.channels.add.feishu.stepsLabel')}
+                    </Button>
+                    <Collapse open={guideOpen} id={guideId}>
+                      <ol className="list-decimal space-y-2 pl-5 text-12 leading-[1.5] text-[var(--text-secondary)]">
+                        <li>{t('bots.channels.add.feishu.stepCreate')}</li>
+                        <li>{t('bots.channels.add.feishu.stepCredentials')}</li>
+                        <li>{t('bots.channels.add.feishu.stepConnect', { service: serviceName })}</li>
+                      </ol>
+                    </Collapse>
+                  </section>
                   <FormField label={t('bots.channels.add.feishu.appIdLabel')}>
                     {(control) => (
                       <Input
@@ -1134,7 +1179,11 @@ function BotChannelAddDialog({
                 loading={busy}
                 disabled={!canSubmit || busy}
               >
-                {t(busy ? 'bots.channels.add.connecting' : 'bots.channels.add.confirm')}
+                {busy
+                  ? t('bots.channels.add.connecting')
+                  : manualFeishu
+                    ? t('bots.channels.add.feishu.confirm', { service: serviceName })
+                    : t('bots.channels.add.confirm')}
               </Button>
             </div>
           </form>

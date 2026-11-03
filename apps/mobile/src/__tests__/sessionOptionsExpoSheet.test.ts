@@ -70,6 +70,7 @@ vi.mock('@expo/ui/swift-ui/modifiers', () => ({
       'containerRelativeFrame',
       'buttonStyle',
       'disabled',
+      'environment',
       'font',
       'foregroundStyle',
       'onGeometryChange',

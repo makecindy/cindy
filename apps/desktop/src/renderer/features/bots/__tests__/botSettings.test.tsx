@@ -218,8 +218,10 @@ function renderSettings(overrides: Partial<BotProfile> = {}, initialSearch = 'se
   mocks.initialSearch = initialSearch;
   const onBack = vi.fn();
   const onOpenSession = vi.fn();
+  // The capability page asks before discarding an edited Skill, as in the app shell.
   const view = render(
     <BotSettings bot={bot(overrides)} onBack={onBack} onOpenSession={onOpenSession} />,
+    { wrapper: ConfirmDialogProvider },
   );
   return { ...view, onBack, onOpenSession };
 }
@@ -525,6 +527,38 @@ describe('Bot settings profile consolidation', () => {
     expect(task.getByTestId('current-model').textContent).toBe('claude-x');
   });
 
+  it('submits an explicit primary selection even when the configured route is unchanged', async () => {
+    const primary: BotModelRoute = { harness: 'pi', model: 'custom-model', providerId: 'custom', effort: 'high', fastMode: false };
+    const chain = [primary];
+    renderSettings({ capabilities: capabilities({ ...primary, modelChain: chain, modelChainOverride: chain,
+      modelOverride: { model: primary.model, providerId: primary.providerId, effort: primary.effort, fastMode: primary.fastMode } }) });
+    fireEvent.click(screen.getByRole('button', { name: 'bots.settingsTabs.model' }));
+    await act(async () => { fireEvent.click(within(screen.getByTestId('bot-primary-model-controls')).getByTestId('model-selector')); });
+    await waitFor(() => expect(mocks.updateBotProfile).toHaveBeenCalledWith('bot-1', expect.objectContaining({
+      acceptModelSelection: true,
+    })));
+  });
+
+  it('keeps a same-model choice through a failed save and a newer host profile', async () => {
+    vi.useFakeTimers();
+    const primary: BotModelRoute = { harness: 'pi', model: 'custom-model', providerId: 'custom', effort: 'high', fastMode: false };
+    const config = (route: BotModelRoute) => capabilities({ ...route, modelChain: [route], modelChainOverride: [route],
+      modelOverride: { model: route.model, providerId: route.providerId, effort: route.effort, fastMode: route.fastMode } });
+    let rejectSave!: (error: Error) => void;
+    mocks.updateBotProfile.mockImplementationOnce(() => new Promise((_resolve, reject) => { rejectSave = reject; }));
+    const view = renderSettings({ capabilities: config(primary) });
+    fireEvent.click(screen.getByRole('button', { name: 'bots.settingsTabs.model' }));
+    fireEvent.click(within(screen.getByTestId('bot-primary-model-controls')).getByTestId('model-selector'));
+    await act(async () => { await vi.advanceTimersByTimeAsync(0); });
+    view.rerender(<BotSettings bot={bot({ currentVersion: 2, skills: ['release-check'],
+      capabilities: config({ ...primary, model: 'host-changed' }) })} onBack={view.onBack} onOpenSession={view.onOpenSession} />);
+    await act(async () => { rejectSave(new Error('Profile changed')); });
+    expect(within(screen.getByTestId('bot-primary-model-controls')).getByTestId('current-model').textContent).toBe(primary.model);
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'bots.autosave.retry' })); });
+    expect(mocks.updateBotProfile).toHaveBeenLastCalledWith('bot-1', expect.objectContaining({ acceptModelSelection: true,
+      capabilities: expect.objectContaining({ modelChainOverride: [primary] }) }));
+  });
+
   it('keeps a long description inside the single editable field', () => {
     const long = 'x'.repeat(500);
     renderSettings({ description: long });
@@ -631,9 +665,6 @@ describe('Bot settings unified autosave', () => {
     vi.useFakeTimers();
     const route = capabilities().modelChain[0]!;
     const view = renderSettings({ capabilities: capabilities({ modelChainOverride: [route] }) });
-    const details = view.container.querySelector('[data-testid="bot-model-chain-editor"] details')!;
-    (details as HTMLDetailsElement).open = true;
-    fireEvent(details, new Event('toggle'));
     fireEvent.click(screen.getByText('bots.model.restoreDefault'));
     await act(async () => { await vi.advanceTimersByTimeAsync(1600); });
     expect(mocks.updateBotProfile.mock.lastCall?.[1]).toMatchObject({

@@ -1,7 +1,11 @@
 import { createHash } from 'node:crypto';
 import { and, eq, isNotNull, or } from 'drizzle-orm';
 import type { AgentEvent, GeneratedImageEventData } from '@cindy/maker-core';
-import { REMOTE_AGENT_CHANNEL, REMOTE_AGENT_READ_MAX_BYTES } from '@cindy/device-link';
+import {
+  parseProviderSharePeer,
+  REMOTE_AGENT_CHANNEL,
+  REMOTE_AGENT_READ_MAX_BYTES,
+} from '@cindy/device-link';
 import { sessions, messages } from '../localDb/schema';
 import { broadcastMessageRow, createMessage } from '../localDb/ipc/messages';
 import { captureDataOwnerBroadcastScope } from '../device-link/broadcast-tap';
@@ -14,6 +18,7 @@ import {
   generatedImageId,
   initialGeneratedImageRecord,
   type GeneratedImageCleanup,
+  type GeneratedImageRecord,
 } from './generatedImageJournal';
 import { commitChatImageUrls } from './chatAttachments';
 import { MAX_GENERATED_IMAGE_BYTES } from './generatedMedia';
@@ -28,6 +33,9 @@ const taskFields = {
   workingDir: sessions.workingDir,
 };
 
+/** Additive journal metadata: old share aliases meant O, never a dynamic executor. */
+type LegacyImageOrigin = { legacyOwnerRoute?: string };
+
 export interface GeneratedImageDeliveryDeps {
   invoke(
     deviceId: string,
@@ -36,6 +44,12 @@ export interface GeneratedImageDeliveryDeps {
     options?: { preSend?: () => void },
   ): Promise<{ ok: boolean; result?: unknown }>;
   publish(sessionId: string, event: AgentEvent, persistId: string, resolvedContent?: string): void;
+  /** Live routing is evidence of the image's source, not authorization for later access. */
+  liveSharedTaskTarget?(sessionId: string, ownerRoute: string): string | null;
+  /** Locate the durable task and acquire a fresh, task-scoped executor lease. */
+  authorizeSharedTaskHistory?(sessionId: string, ownerRoute: string): Promise<string>;
+  /** Resolve the share's original O identity; O enforces its existing guest/task access. */
+  resolveSharedOwnerTarget?(ownerRoute: string): Promise<string>;
   readSource?(
     sessionId: string,
     image: GeneratedImageEventData,
@@ -46,6 +60,82 @@ export interface GeneratedImageDeliveryDeps {
 /** Deliberately has no Agent.send/imagegen dependency. Every retry reuses an existing artifact. */
 export function createGeneratedImageDelivery(deps: GeneratedImageDeliveryDeps) {
   const inFlight = new Map<string, Promise<void>>();
+
+  async function authorizeSource(sessionId: string, source: string, assertCurrent: () => void) {
+    assertCurrent();
+    const peer = parseProviderSharePeer(source);
+    const ownerRoute = peer ? `share:${peer.shareId}` : source.startsWith('share:') ? source : null;
+    if (!ownerRoute) return source;
+    if (!deps.authorizeSharedTaskHistory) throw new Error('REMOTE_SOURCE_REQUIRED');
+    const target = await deps.authorizeSharedTaskHistory(sessionId, ownerRoute);
+    assertCurrent();
+    const authorizedPeer = parseProviderSharePeer(target);
+    // A remembered executor may not be replaced by O (or another member), even when
+    // that machine would successfully acknowledge releasing an absent artifact.
+    if (
+      (peer && (peer.role !== 'host' || target !== source)) ||
+      !authorizedPeer ||
+      authorizedPeer.role !== 'host' ||
+      `share:${authorizedPeer.shareId}` !== ownerRoute
+    )
+      throw new Error('REMOTE_SOURCE_REQUIRED');
+    return target;
+  }
+
+  async function currentSource(sessionId: string, source: string, assertCurrent: () => void) {
+    if (!source.startsWith('share:')) return source;
+    const live = deps.liveSharedTaskTarget?.(sessionId, source);
+    if (!live) return authorizeSource(sessionId, source, assertCurrent);
+    const peer = parseProviderSharePeer(live);
+    if (!peer || peer.role !== 'host' || `share:${peer.shareId}` !== source)
+      throw new Error('REMOTE_SOURCE_REQUIRED');
+    return live;
+  }
+
+  async function historicalSource(
+    sessionId: string,
+    value: { agentDeviceId?: string } & LegacyImageOrigin,
+    assertCurrent: () => void,
+  ): Promise<{ agentDeviceId: string } & LegacyImageOrigin> {
+    const source = value.agentDeviceId;
+    if (!source) throw new Error('REMOTE_SOURCE_REQUIRED');
+    const legacyOwnerRoute =
+      value.legacyOwnerRoute ?? (source.startsWith('share:') ? source : undefined);
+    if (!legacyOwnerRoute)
+      return { agentDeviceId: await authorizeSource(sessionId, source, assertCurrent) };
+    assertCurrent();
+    if (!deps.resolveSharedOwnerTarget) throw new Error('REMOTE_SOURCE_REQUIRED');
+    const target = await deps.resolveSharedOwnerTarget(legacyOwnerRoute);
+    assertCurrent();
+    const peer = parseProviderSharePeer(target);
+    if (
+      !peer ||
+      peer.role !== 'host' ||
+      `share:${peer.shareId}` !== legacyOwnerRoute ||
+      (source !== legacyOwnerRoute && source !== target)
+    )
+      throw new Error('REMOTE_SOURCE_REQUIRED');
+    return { agentDeviceId: target, legacyOwnerRoute };
+  }
+
+  async function authorizeRecordSource(
+    storage: ReturnType<typeof captureGeneratedImageStorage>,
+    sessionId: string,
+    record: GeneratedImageRecord & LegacyImageOrigin,
+  ) {
+    const origin = await historicalSource(sessionId, record, storage.assertCurrent);
+    if (
+      origin.agentDeviceId !== record.agentDeviceId ||
+      origin.legacyOwnerRoute !== record.legacyOwnerRoute
+    ) {
+      await storage.journal.update(record.scope, record.id, (current) => {
+        if (!current || current.agentDeviceId !== record.agentDeviceId)
+          throw new Error('REMOTE_SOURCE_REQUIRED');
+        return { ...current, ...origin };
+      });
+    }
+    return origin.agentDeviceId;
+  }
 
   async function remote(deviceId: string, request: object, assertCurrent: () => void) {
     assertCurrent();
@@ -115,7 +205,11 @@ export function createGeneratedImageDelivery(deps: GeneratedImageDeliveryDeps) {
     }
   }
 
-  async function deliver(sessionId: string, event: AgentEvent): Promise<void> {
+  async function deliver(
+    sessionId: string,
+    event: AgentEvent,
+    sourceDeviceId?: string,
+  ): Promise<void> {
     const image = event.data as GeneratedImageEventData;
     if (
       event.type !== 'image' ||
@@ -129,7 +223,7 @@ export function createGeneratedImageDelivery(deps: GeneratedImageDeliveryDeps) {
     const key = `${storage.snapshot.clientEpoch}:${sessionId}:${id}`;
     const pending = inFlight.get(key);
     if (pending) return pending;
-    const operation = perform(storage, sessionId, id, image, event, Date.now());
+    const operation = perform(storage, sessionId, id, image, event, Date.now(), sourceDeviceId);
     inFlight.set(key, operation);
     try {
       await operation;
@@ -145,6 +239,7 @@ export function createGeneratedImageDelivery(deps: GeneratedImageDeliveryDeps) {
     image: GeneratedImageEventData,
     event: AgentEvent,
     admittedAt: number,
+    sourceDeviceId?: string,
   ) {
     const scope = `task:${sessionId}`;
     const [session] = await storage.db
@@ -162,6 +257,17 @@ export function createGeneratedImageDelivery(deps: GeneratedImageDeliveryDeps) {
       await cleanup(sessionId);
       return;
     }
+    // Never create another ambiguous share alias. Early direct events can precede
+    // live-handle registration; locate them before the first receipt is written.
+    // If O is unavailable, M keeps the recoverable artifact and no source is guessed.
+    const existing = await storage.journal.read(scope, id);
+    const source = existing
+      ? existing.agentDeviceId
+      : (sourceDeviceId ??
+        (session.agentDeviceId
+          ? await currentSource(sessionId, session.agentDeviceId, storage.assertCurrent)
+          : null));
+    storage.assertCurrent();
     let record = await storage.journal.update(
       scope,
       id,
@@ -171,7 +277,7 @@ export function createGeneratedImageDelivery(deps: GeneratedImageDeliveryDeps) {
           clearedAt: session.clearedAt,
           remoteHostId: session.remoteHostId,
           workingDir: session.workingDir,
-          ...(session.agentDeviceId ? { agentDeviceId: session.agentDeviceId } : {}),
+          ...(source ? { agentDeviceId: source } : {}),
         },
     );
     const toolUseId = `codex-image-${id}`;
@@ -216,8 +322,9 @@ export function createGeneratedImageDelivery(deps: GeneratedImageDeliveryDeps) {
     async function releaseSource(value: typeof record) {
       if (!value.agentDeviceId || value.sourceReleased) return;
       try {
+        const target = await authorizeRecordSource(storage, sessionId, value);
         await remote(
-          value.agentDeviceId,
+          target,
           {
             op: 'images',
             sessionId,
@@ -361,11 +468,13 @@ export function createGeneratedImageDelivery(deps: GeneratedImageDeliveryDeps) {
               if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
             }
           }
-          if (!cached)
+          if (!cached) {
+            const target = await authorizeRecordSource(storage, sessionId, record);
             source = {
               ...image,
-              data: await download(record.agentDeviceId, sessionId, id, storage.assertCurrent),
+              data: await download(target, sessionId, id, storage.assertCurrent),
             };
+          }
         }
         const staged = await storage.stage(
           scope,
@@ -405,14 +514,21 @@ export function createGeneratedImageDelivery(deps: GeneratedImageDeliveryDeps) {
   }
 
   // Release-only enumeration: never passes an unknown artifact to the message writer.
-  async function cleanupUnknown(receipt: GeneratedImageCleanup) {
+  async function cleanupUnknown(receipt: GeneratedImageCleanup & LegacyImageOrigin) {
     const storage = captureGeneratedImageStorage();
-    const caps = await remote(receipt.agentDeviceId, { op: 'caps' }, storage.assertCurrent);
+    const origin = await historicalSource(receipt.sessionId, receipt, storage.assertCurrent);
+    const target = origin.agentDeviceId;
+    if (target !== receipt.agentDeviceId || origin.legacyOwnerRoute !== receipt.legacyOwnerRoute)
+      await storage.journal.updateCleanup(receipt.scope, (current) => ({
+        ...current!,
+        ...origin,
+      }));
+    const caps = await remote(target, { op: 'caps' }, storage.assertCurrent);
     if (caps.imageRecovery !== true) return;
     let offset = 0;
     for (;;) {
       const page = await remote(
-        receipt.agentDeviceId,
+        target,
         { op: 'images', sessionId: receipt.sessionId, action: 'list', offset },
         storage.assertCurrent,
       );
@@ -440,7 +556,7 @@ export function createGeneratedImageDelivery(deps: GeneratedImageDeliveryDeps) {
         )
           continue;
         await remote(
-          receipt.agentDeviceId,
+          target,
           { op: 'images', sessionId: receipt.sessionId, action: 'release', imageId: value.id },
           storage.assertCurrent,
         );
@@ -461,16 +577,27 @@ export function createGeneratedImageDelivery(deps: GeneratedImageDeliveryDeps) {
       .limit(1);
     storage.assertCurrent();
     if (session?.agentDeviceId && (session.status === 'deleted' || session.clearedAt !== null)) {
-      const scope = `cleanup:${sessionId}:${session.agentDeviceId}`;
-      const receipt = await storage.journal.updateCleanup(scope, (previous) => ({
-        version: 1,
-        scope,
-        sessionId,
-        agentDeviceId: session.agentDeviceId!,
-        clearedAt: Math.max(previous?.clearedAt ?? 0, session.clearedAt ?? 0),
-        deleted: previous?.deleted === true || session.status === 'deleted',
-      }));
-      await cleanupUnknown(receipt).catch(() => undefined);
+      const legacy = await storage.journal.readCleanup(
+        `cleanup:${sessionId}:${session.agentDeviceId}`,
+      );
+      if (legacy) await cleanupUnknown(legacy).catch(() => undefined);
+      try {
+        const source = await currentSource(sessionId, session.agentDeviceId, storage.assertCurrent);
+        // Keep old O and new M enumeration receipts independent across a task clear.
+        const scope = `cleanup:${sessionId}:${source}`;
+        const receipt = await storage.journal.updateCleanup(scope, (previous) => ({
+          ...previous,
+          version: 1,
+          scope,
+          sessionId,
+          agentDeviceId: source,
+          clearedAt: Math.max(previous?.clearedAt ?? 0, session.clearedAt ?? 0),
+          deleted: previous?.deleted === true || session.status === 'deleted',
+        }));
+        await cleanupUnknown(receipt);
+      } catch {
+        /* A later reconcile retries the cleared/deleted task without guessing its source. */
+      }
       storage.assertCurrent();
     }
     for (const record of await storage.journal.list(`task:${sessionId}`)) {
@@ -479,8 +606,9 @@ export function createGeneratedImageDelivery(deps: GeneratedImageDeliveryDeps) {
       await storage.release(record.scope, record.id);
       if (record.agentDeviceId && !record.sourceReleased) {
         try {
+          const target = await authorizeRecordSource(storage, sessionId, record);
           await remote(
-            record.agentDeviceId,
+            target,
             {
               op: 'images',
               sessionId,
@@ -529,12 +657,25 @@ export function createGeneratedImageDelivery(deps: GeneratedImageDeliveryDeps) {
     if (!session?.agentDeviceId || session.status === 'deleted') return;
     // Each stable result ID is checked by perform/assertTask. An unrelated tombstone or
     // rewound row must not permanently disable recovery for all future paid outputs.
-    const caps = await remote(session.agentDeviceId, { op: 'caps' }, storage.assertCurrent);
+    const target = await authorizeSource(sessionId, session.agentDeviceId, storage.assertCurrent);
+    for (const record of (await storage.journal.list(scope)) as Array<
+      GeneratedImageRecord & LegacyImageOrigin
+    >) {
+      if (
+        record.clearedAt === session.clearedAt &&
+        !record.legacyOwnerRoute &&
+        record.agentDeviceId &&
+        parseProviderSharePeer(record.agentDeviceId) &&
+        record.agentDeviceId !== target
+      )
+        throw new Error('REMOTE_SOURCE_REQUIRED');
+    }
+    const caps = await remote(target, { op: 'caps' }, storage.assertCurrent);
     if (caps.imageRecovery !== true) return;
     let offset = 0;
     for (;;) {
       const page = await remote(
-        session.agentDeviceId,
+        target,
         {
           op: 'images',
           sessionId,
@@ -555,11 +696,15 @@ export function createGeneratedImageDelivery(deps: GeneratedImageDeliveryDeps) {
         )
           throw new Error('INVALID_IMAGE_DELIVERY');
         if (session.clearedAt !== null && value.image.deliveryEpoch !== session.clearedAt) continue;
-        await deliver(sessionId, {
-          type: 'image',
-          source: 'codex',
-          data: { ...value.image, pathOrigin: 'remote-agent' },
-        });
+        await deliver(
+          sessionId,
+          {
+            type: 'image',
+            source: 'codex',
+            data: { ...value.image, pathOrigin: 'remote-agent' },
+          },
+          target,
+        );
       }
       if (page.next === null) break;
       if (typeof page.next !== 'number' || page.next <= offset)

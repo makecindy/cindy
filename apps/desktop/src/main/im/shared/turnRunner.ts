@@ -59,6 +59,7 @@ const GROUP_APPROVAL_OWNER_DM_NOTE =
 
 import { eq } from 'drizzle-orm';
 import { stripInternalWebCitations } from '@cindy/maker-shared/internal-citation';
+import { hasRichAnswer, richAnswerText } from '@cindy/maker-shared/rich-answer';
 import {
   isProductTurnDoneEvent,
   isTurnContinuationBoundaryEvent,
@@ -77,6 +78,7 @@ import { hydrateSessionProvider } from '../../maker-host/session-provider-store'
 import { setSessionEffort, setSessionFastMode } from '../../maker-host/session-effort-store';
 import { hasCustomProviderKey } from '../../maker-host/provider-route';
 import { createLogger } from '../../logger';
+import { t } from '../../i18n';
 import { resolveSafe as resolveXdtImageUrl } from '../../imageCacheStore';
 import { resolveSafe as resolveCindyMediaUrl } from '../../cindy-media/blobStore';
 import { beginHeadlessGhostSetupTurn } from '../../mcp-integrations/ghostSetupInteractionSurface.js';
@@ -159,7 +161,8 @@ import {
   generateImSessionTitleText,
   persistGeneratedSessionTitle,
 } from './fbotTitle';
-import { materializeLocalMarkdownImages } from './localMarkdownImages';
+import { localTaskImagePath, rewriteTaskImageReferences, taskImageReferences } from '../../cindy-media/taskImageMarkdown';
+import { materializeLocalMarkdownImageRefs, materializeLocalMarkdownImages } from './localMarkdownImages';
 import {
   applyStatusTokenRate,
   clearRunningIndicators,
@@ -2928,17 +2931,32 @@ export function createTurnRunner(
    * 消息只留干净正文(error 收口不置 done — 保留过程区, 用户能看到死在哪步)。
    * 纯文本快答没有 tool_use, renderActivity 返回空串, 视图与旧行为逐字一致。
    */
-  function composeStreamingView(turn: TurnState): string {
+  function composeStreamingView(turn: TurnState, final = turn.done): string {
     const rawBody = turn.outputCardPrefix
       ? turn.outputCardPrefix + turn.presenter.wholeText()
       : turn.presenter.wholeText();
-    // External-channel safeguard: maker-core normally strips these tokens,
-    // while this boundary also protects old continuations and future adapters.
-    const body = stripInternalWebCitations(rawBody);
+    const body = composeOutboundBody(rawBody, final);
     if (turn.done) return body;
     // 过程区在上、正文在下的合成骨架与官方 bot 共用(presenter.composeRunning →
     // composeProgressView); 纯文本快答无 tool_use 时过程区为空, 视图与旧行为逐字一致。
     return turn.presenter.composeRunning(body);
+  }
+
+  /** Project only the outbound copy; persistence keeps the original component events. */
+  function composeOutboundBody(source: string, final: boolean): string {
+    let body = stripInternalWebCitations(richAnswerText(source));
+    // Card channels patch the live body; a machine-local image path must not show before finalize imports it.
+    if (!final && output.kind === 'rich-card' && body.includes('![')) {
+      const local = new Map(
+        taskImageReferences(body)
+          .filter((ref) => localTaskImagePath(ref.url))
+          .map((ref) => [ref.url, ref.url] as const),
+      );
+      if (local.size > 0) body = rewriteTaskImageReferences(body, local, 'alt');
+    }
+    // A partial component can legitimately project to nothing. Never fall back
+    // to its protocol source; wait while streaming and explain an unreadable final.
+    return final && !body.trim() && hasRichAnswer(source) ? t('richAnswer.incomplete') : body;
   }
 
   /** tool_use → 过程区时间线推进 + 卡片刷新(渠道 handle 自带节流兜底)。 */
@@ -2993,7 +3011,7 @@ export function createTurnRunner(
   /** 转播卡正文:运行中 = 头 + 步骤时间线 + 正文;收口 = 头 + 正文(去步骤)。 */
   function composeTranspondView(state: SessionState, t: ScheduledTranspond, final: boolean): string {
     const header = t.header;
-    const publicBody = stripInternalWebCitations(t.buffer);
+    const publicBody = composeOutboundBody(t.buffer, final);
     // Rich transports resolve managed refs themselves. A remote session's refs
     // must stay text, never reach those host-local file/media resolvers.
     const body = state.makerSession.remoteHostId
@@ -3194,15 +3212,21 @@ export function createTurnRunner(
         return;
       }
       if (silenced && !t.streamingHandlePromise) return;
-      if (output.kind === 'chunked-text' && !state.makerSession.remoteHostId && t.buffer.includes('![')) {
+      // Component images become Markdown only after projection. Collect from the
+      // outbound copy so the text channel cannot strip an uncollected image.
+      const projectedBody = composeOutboundBody(t.buffer, true);
+      if (output.kind === 'chunked-text' && !state.makerSession.remoteHostId && projectedBody.includes('![')) {
         const materialized = await materializeLocalMarkdownImages({
-          text: t.buffer, workingDir: state.workingDir, sessionId: state.makerSession.id,
+          text: projectedBody, workingDir: state.workingDir, sessionId: state.makerSession.id,
           maxImages: 4, existingAbsPaths: t.mediaAbsPaths,
         });
         t.buffer = materialized.text;
         for (const absPath of materialized.absPaths) {
           if (!t.mediaAbsPaths.includes(absPath)) t.mediaAbsPaths.push(absPath);
         }
+      } else if (output.kind === 'rich-card' && !state.makerSession.remoteHostId && projectedBody.includes('![')) {
+        t.buffer = await materializeLocalMarkdownImageRefs({ text: projectedBody, sessionId: state.makerSession.id })
+          .catch(() => projectedBody);
       }
       if (sessionStates.get(state.makerSession.id) !== state) return;
       const base = composeTranspondView(state, t, true);
@@ -3864,7 +3888,7 @@ export function createTurnRunner(
       } : undefined,
     );
     if (turn?.streamingHandle) {
-      const view = composeStreamingView(turn);
+      const view = composeStreamingView(turn, true);
       const body = view ? `${view}\n\n❌ 错误：${msg}` : `❌ 错误：${msg}`;
       await finalizeTurnStream(turn, body);
     } else {
@@ -3901,16 +3925,19 @@ export function createTurnRunner(
   }
 
   async function materializeTurnLocalImages(state: SessionState, turn: TurnState): Promise<void> {
-    if (
-      output.kind !== 'chunked-text' ||
-      turn.allowedFileRoots.length === 0 ||
-      !turn.presenter.wholeText().includes('![')
-    ) {
-      return;
-    }
+    if (turn.allowedFileRoots.length === 0) return;
+    const projectedBody = composeOutboundBody(turn.presenter.wholeText(), true);
+    if (!projectedBody.includes('![')) return;
     try {
+      if (output.kind === 'rich-card') {
+        // Card channels upload managed references in place, keeping images beside their text.
+        turn.presenter.replaceBody(
+          await materializeLocalMarkdownImageRefs({ text: projectedBody, sessionId: state.makerSession.id }),
+        );
+        return;
+      }
       const materialized = await materializeLocalMarkdownImages({
-        text: turn.presenter.wholeText(),
+        text: projectedBody,
         workingDir: state.workingDir,
         sessionId: state.makerSession.id,
         maxImages: 4,

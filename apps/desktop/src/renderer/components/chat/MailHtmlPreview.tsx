@@ -2,7 +2,7 @@ import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import * as Dialog from '@radix-ui/react-dialog';
 import { Maximize2, X } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
-import { externalMailImageUrl, hasMailExternalImages, mailInlineDocument, safeMailDocument, validMailImageUrl } from '@cindy/maker-shared/mail-text-edit';
+import { externalMailImageUrl, hasMailExternalImages, mailInlineDocument, mailReadingDocument, safeMailDocument, validMailImageUrl } from '@cindy/maker-shared/mail-text-edit';
 import { Button } from '@/components/ui/button';
 import { useSidebarTargetSessionId } from '@/features/cc-agent/embeddedSessionNavigation';
 import { useChatSessionFile } from './ChatSessionFileContext';
@@ -29,9 +29,10 @@ function PreviewFrame({ value, images = [], enlarged = false, reading = false, d
   const current = useRef({ disabled, onChange, images, reading, sidebarTargetSessionId, t });
   current.current = { disabled, onChange, images, reading, sidebarTargetSessionId, t };
   const revision = model.current.revision;
+  const previewDocument = onChange ? mailInlineDocument : mailReadingDocument;
   // Keep the browsing context alive in both views. Other-view autosaves update
   // its sanitized DOM before paint rather than navigating through a blank page.
-  const [html] = useState(() => mailInlineDocument(value, images, allowExternalImages));
+  const [html] = useState(() => previewDocument(value, images, allowExternalImages));
   const ready = useRef(false);
   const serialize = useRef<ReturnType<typeof mailBodySerializer> | undefined>(undefined);
   const fit = () => {
@@ -65,7 +66,7 @@ function PreviewFrame({ value, images = [], enlarged = false, reading = false, d
     const scroll = [doc.documentElement.scrollTop, doc.body.scrollTop];
     stopTheme.current?.();
     if (replaceContents) {
-      const next = new DOMParser().parseFromString(mailInlineDocument(model.current.emitted, current.current.images, allowExternalImages), 'text/html');
+      const next = new DOMParser().parseFromString(previewDocument(model.current.emitted, current.current.images, allowExternalImages), 'text/html');
       for (const [target, source] of [[doc.documentElement, next.documentElement], [doc.head, next.head], [doc.body, next.body]]) {
         for (const attr of [...target.attributes]) target.removeAttribute(attr.name);
         for (const attr of source.attributes) target.setAttribute(attr.name, attr.value);
@@ -73,8 +74,8 @@ function PreviewFrame({ value, images = [], enlarged = false, reading = false, d
       doc.head.replaceChildren(...[...next.head.childNodes].map(node => doc.importNode(node, true)));
       doc.body.replaceChildren(...[...next.body.childNodes].map(node => doc.importNode(node, true)));
     }
-    serialize.current = mailBodySerializer(doc, model.current.emitted, () => current.current.images);
-    stopTheme.current = followMailPreviewTheme(doc, document, current.current.reading && !current.current.onChange);
+    serialize.current = current.current.onChange ? mailBodySerializer(doc, model.current.emitted, () => current.current.images) : undefined;
+    stopTheme.current = followMailPreviewTheme(doc, document, !current.current.onChange);
     bodyResize.current?.disconnect();
     if (!enlarged && typeof ResizeObserver !== 'undefined') {
       bodyResize.current = new ResizeObserver(fit);
@@ -95,7 +96,7 @@ function PreviewFrame({ value, images = [], enlarged = false, reading = false, d
     return () => observer.disconnect();
   }, [enlarged, reading]);
   // Hide only the initial load. Synchronized content never hides/remounts it.
-  return <iframe ref={frame} title={t('chat.ghostCall.mailPreview')} sandbox="allow-same-origin" scrolling={reading ? 'no' : undefined}
+  return <iframe ref={frame} title={t('chat.ghostCall.mailPreview')} sandbox="allow-same-origin"
     className="block w-full border-0" aria-busy="true"
     style={{ height: enlarged ? '100%' : 120, visibility: 'hidden', backgroundColor: 'transparent' }} srcDoc={html}
     onLoad={() => {
@@ -104,7 +105,7 @@ function PreviewFrame({ value, images = [], enlarged = false, reading = false, d
       if (boundDocument.current === doc) return;
       boundDocument.current = doc;
       ready.current = true;
-      applySource(mailInlineDocument(model.current.emitted, current.current.images, allowExternalImages) !== html);
+      applySource(previewDocument(model.current.emitted, current.current.images, allowExternalImages) !== html);
       let composing = false;
       const update = () => {
         if (composing || current.current.disabled || !current.current.onChange) return;

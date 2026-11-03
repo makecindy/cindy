@@ -68,15 +68,13 @@ describe('side chat task entry', () => {
     mocks.status.mockResolvedValue(undefined);
   });
 
-  // Full-page navigation must happen after the branch entry and draft exist, so
-  // returning to the parent can resume the same task instead of creating another.
-  it('opens the full task page after preserving the branch entry and draft', async () => {
-    const open = vi.fn();
-    expect(await openSideChatTab('parent', { prompt: 'follow-up', onOpen: open })).toBe(true);
-    expect(open).toHaveBeenCalledExactlyOnceWith('child', null);
-    expect(mocks.save.mock.invocationCallOrder[0]).toBeLessThan(open.mock.invocationCallOrder[0]);
+  // The draft must exist before the embedded editor appears; opening a follow-up
+  // keeps the main task visible instead of navigating away (2026-10-25 regression).
+  it('opens the parent sidebar after preserving the branch entry and draft', async () => {
+    expect(await openSideChatTab('parent', { prompt: 'follow-up' })).toBe(true);
+    expect(mocks.save.mock.invocationCallOrder[0]).toBeLessThan(mocks.add.mock.invocationCallOrder[0]);
     expect(mocks.tabs).toContainEqual(expect.objectContaining({ state: { sessionId: 'child', deviceId: null } }));
-    expect(mocks.reveal).toHaveBeenCalledExactlyOnceWith('close', { sessionId: 'child', animate: false });
+    expect(mocks.reveal).toHaveBeenCalledExactlyOnceWith('open', { sessionId: 'parent', userInitiated: true });
   });
 
   it('pins the remote child before exposing its quote and editor', async () => {
@@ -89,19 +87,15 @@ describe('side chat task entry', () => {
     expect(mocks.pin.mock.invocationCallOrder[0]).toBeLessThan(mocks.add.mock.invocationCallOrder[0]);
   });
 
-  // Unit, #6529: full-page navigation cannot rely on a hidden child's list push.
-  // A create result must supply the complete remote metadata before navigation.
-  // The owning host must also cross the navigation boundary: an in-memory pin
-  // and asynchronous disk cache both disappear in the cold-renderer case.
-  it('caches remote metadata before navigating to the full task page', async () => {
+  // Unit, #6529: hidden children do not arrive in ordinary task lists. The create
+  // result must supply metadata before the embedded editor can read/send remotely.
+  it('caches remote metadata before opening the embedded task', async () => {
     mocks.device = 'execution-host';
     const child = { id: 'child', source: 'side-chat', model: 'test-model', workingDir: '/work' };
     mocks.create.mockResolvedValue(child);
-    const open = vi.fn();
-    expect(await openSideChatTab('parent', { onOpen: open })).toBe(true);
-    expect(open).toHaveBeenCalledExactlyOnceWith('child', 'execution-host');
+    expect(await openSideChatTab('parent')).toBe(true);
     expect(mocks.cache).toHaveBeenCalledWith('execution-host', 'Host', [child]);
-    expect(mocks.cache.mock.invocationCallOrder[0]).toBeLessThan(open.mock.invocationCallOrder[0]);
+    expect(mocks.cache.mock.invocationCallOrder[0]).toBeLessThan(mocks.add.mock.invocationCallOrder[0]);
   });
 
   // Unit, #6529: /side used to clear the composer while dropping its files.

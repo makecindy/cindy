@@ -9,6 +9,7 @@ describe('parseHelperMessage', () => {
     expect(parseHelperMessage({ type: 'panel', open: true })).toEqual({ type: 'panel', open: true });
     expect(parseHelperMessage({ type: 'open-session', sessionId: 's1' })).toEqual({ type: 'open-session', sessionId: 's1' });
     expect(parseHelperMessage({ type: 'refresh', extra: 1 })).toEqual({ type: 'refresh' });
+    expect(parseHelperMessage({ type: 'open-remote-control-settings' })).toEqual({ type: 'open-remote-control-settings' });
   });
 
   it('rejects malformed or unknown messages', () => {

@@ -62,16 +62,20 @@ export interface ProductTurnFailureOwner {
   readonly fingerprint: ProductTurnFailureFingerprint;
   /** The product receipt still belongs to the failed execution after a runtime-only rebuild. */
   readonly originalExecution?: { readonly instanceId: string; readonly generation: number };
+  /** Accepted plugin inputs captured before terminal handling advances the queue. */
+  readonly pluginTargetInputIds?: string[];
 }
 
 export function captureProductTurnFailureOwner(
   session: Session,
   event: AgentEvent,
   agentMeta?: unknown,
+  pluginTargetInputIds?: string[],
 ): ProductTurnFailureOwner {
   return {
     session,
     sessionId: session.id,
+    pluginTargetInputIds: pluginTargetInputIds?.length ? [...pluginTargetInputIds] : undefined,
     instanceId:
       typeof event.sessionInstanceId === 'string' && event.sessionInstanceId.length > 0
         ? event.sessionInstanceId
@@ -108,6 +112,24 @@ export interface DeferredProductTurnFailureGate {
   ): boolean;
   /** Exposed for focused unit tests and diagnostics; callers must not mutate it. */
   pending(sessionId: string): ProductTurnFailureOwner | undefined;
+}
+
+export function createProductTurnFailureFinalizer(deps: {
+  gate: Pick<DeferredProductTurnFailureGate, 'clear'>;
+  isCurrentOwner: (owner: ProductTurnFailureOwner) => boolean;
+  commitActivity: (sessionId: string) => void;
+  settlePluginTasks: (sessionId: string, execution: { instanceId: string; generation: number }, inputClientIds?: string[]) => void;
+  interrupt: (sessionId: string, owner?: ProductTurnFailureOwner) => Promise<void>;
+}): (sessionId: string, owner?: ProductTurnFailureOwner) => Promise<void> {
+  return async (sessionId, owner) => {
+    if (owner) {
+      deps.gate.clear(owner);
+      if (!deps.isCurrentOwner(owner)) return;
+    }
+    deps.commitActivity(sessionId);
+    if (owner) deps.settlePluginTasks(sessionId, owner.originalExecution ?? owner, owner.pluginTargetInputIds);
+    await deps.interrupt(sessionId, owner);
+  };
 }
 
 function sameOwner(a: ProductTurnFailureOwner, b: ProductTurnFailureOwner): boolean {

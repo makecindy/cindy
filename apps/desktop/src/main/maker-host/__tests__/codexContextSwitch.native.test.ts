@@ -18,13 +18,14 @@ const logger: Logger = { trace() {}, debug() {}, info() {}, warn() {}, error() {
 // Different-provider catalogs cannot assume the old model is available. SSH uses
 // thread config instead of a local catalog. Neither removes native pre-turn
 // compaction with the target model; verify the real requests, not only RPC config.
-it.skipIf(!binary).each(['same-provider', 'different-provider', 'thread-budget'] as const)(
+it.skipIf(!binary).each(['same-provider', 'different-provider', 'thread-budget', 'custom-compaction'] as const)(
   'cold-resumes and natively compacts before continuing (%s)', async mode => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'cindy-context-switch-native-'));
   const home = path.join(root, 'home');
   const work = path.join(root, 'work');
   const oldModel = mode === 'thread-budget' ? 'fixture-wide' : 'codex/fixture-wide';
-  const windows: Record<string, number> = { [oldModel]: 500_000, 'fixture-small': 272_000 };
+  const windows: Record<string, number> = { [oldModel]: 500_000, 'fixture-small': mode === 'custom-compaction' ? 500_000 : 272_000 };
+  const compactionPct = (model: string) => mode === 'custom-compaction' && model === 'fixture-small' ? 50 : null;
   const requests: Array<{ model: string; input: unknown[] }> = [];
   const server = createServer(async (req, res) => {
     if (req.method !== 'POST') { res.end('{"models":[]}'); return; }
@@ -63,6 +64,7 @@ it.skipIf(!binary).each(['same-provider', 'different-provider', 'thread-budget']
     ].join('\n'));
     const makeAgent = () => new CodexAgent({
       binaryPath: binary!, logger, runtimeConfig: {}, resolveCodexLocalAuthPolicy: () => 'isolated',
+      resolveModelCompactionPct: (_provider, model) => compactionPct(model),
       resolveCodexThreadContextWindow: mode === 'thread-budget' ? undefined : (_provider, model) => windows[model] ?? null,
       resolveModelContextLimit: mode === 'thread-budget' ? (_provider, model) => windows[model] ?? null : undefined,
       prepareCodexExtraSpawnConfig: async (_providers, ctx) => {
@@ -74,6 +76,7 @@ it.skipIf(!binary).each(['same-provider', 'different-provider', 'thread-budget']
         const catalog = await prepareCodexCustomContextCatalog({ binaryPath: binary!, codexHome: home,
           modelId: ctx.customContextModel!, contextWindow: ctx.customContextWindow!,
           modelIds: targetProvider ? ['fixture-small'] : Object.keys(windows),
+          resolveCompactionPct: compactionPct,
           resolveContextWindow: model => targetProvider ? null : windows[model] ?? null });
         return { extraArgs: catalog.extraArgs, extraEnv: {}, codexProxyActive: true };
       },
@@ -117,7 +120,7 @@ it.skipIf(!binary).each(['same-provider', 'different-provider', 'thread-budget']
     expect(JSON.stringify(requests[1]!.input)).toContain('FIRST_REPLY');
     expect(JSON.stringify(requests[2]!.input)).toContain('NATIVE_SUMMARY');
     expect(JSON.stringify(requests[2]!.input)).toContain('CONTINUE_MARKER');
-    expect(handle.getUsageSnapshot().contextWindow).toBe(258_400);
+    expect(handle.getUsageSnapshot().contextWindow).toBe(mode === 'custom-compaction' ? 475_000 : 258_400);
     await handle.close();
   } finally {
     await agent?.dispose();

@@ -6,7 +6,7 @@ import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 const h = vi.hoisted(() => ({
   stub: (_name: string) => () => null,
   room: { status: 'ready', messages: [] as unknown[], before: null, loadingOlder: false, reload: vi.fn(), loadOlder: vi.fn(), media: vi.fn() },
-  strips: [] as Array<{ messageId: string; align: string; names: string[]; resolve: unknown }>,
+  strips: [] as Array<{ messageId: string; align: string; names: string[]; resolve: unknown; previewServerImages: boolean }>,
 }));
 vi.mock('react-native', async () => {
   const { createElement: el } = await import('react');
@@ -18,6 +18,7 @@ vi.mock('expo-router', () => ({ Stack: { Screen: () => null }, useRouter: () => 
 vi.mock('expo-router/react-navigation', () => ({ useHeaderHeight: () => 0 }));
 vi.mock('react-native-safe-area-context', async () => ({ SafeAreaView: (await import('react-native')).View }));
 vi.mock('react-i18next', () => ({ useTranslation: () => ({ t: (key: string) => key }) }));
+vi.mock('@/i18n', () => ({ i18n: { t: (key: string) => key, language: 'en' } }));
 vi.mock('@/auth/AuthContext', () => ({ useAuth: () => ({ user: { id: 'u' } }) }));
 vi.mock('@/components/AppText', async () => ({ Text: (await import('react-native')).View }));
 vi.mock('@/components/RemoteCompanionAvatar', () => ({ RemoteCompanionAvatar: h.stub('avatar') }));
@@ -40,7 +41,16 @@ vi.mock('@/session/BotGroupMessageText', async () => {
   return { BotGroupUserText: ({ content }: any) => el('p', { 'data-kind': 'user-text' }, content),
     BotGroupMarkdownText: ({ content }: any) => el('p', { 'data-kind': 'reply-text' }, content) };
 });
-vi.mock('@/session/MessageRenderer', () => ({ MarkdownBody: h.stub('markdown') }));
+vi.mock('@/session/MessageRenderer', async () => {
+  const { createElement: el } = await import('react');
+  return { MarkdownBody: ({ onOpenPayload }: any) => el('button', { 'data-testid': 'open-rich-video', onClick: () => onOpenPayload?.({
+    kind: 'media', title: 'Cloud video', media: { kind: 'video', url: 'https://media.test/cloud.mp4', previewable: true },
+  }) }, 'Play') };
+});
+vi.mock('@/session/ImageLightbox', async () => {
+  const { createElement: el } = await import('react');
+  return { ImageLightbox: ({ images, onClose }: any) => el('button', { 'data-testid': 'shared-viewer', onClick: onClose }, el('video', { src: images[0]?.url })) };
+});
 vi.mock('@/session/messageContentLayout', () => ({ buildMessageContentLayout: () => ({}) }));
 vi.mock('@/session/ChatIdentityHeader', () => ({ CHAT_HEADER_MARK_SIZE: 32, ChatIdentityHeader: h.stub('header'), ChatIdentitySubtitle: h.stub('subtitle') }));
 vi.mock('@/session/CompanionCardButton', () => ({ CompanionCardActions: h.stub('actions'), CompanionCardButton: h.stub('button') }));
@@ -51,7 +61,7 @@ vi.mock('@/session/useTeammateRoster', () => ({ TEAMMATE_COLLECTION_ID: 'teammat
 vi.mock('@/session/BotGroupMessageAttachments', async () => {
   const { createElement: el } = await import('react');
   return { BotGroupMessageAttachments: (props: any) => {
-    h.strips.push({ messageId: props.messageId, align: props.align, names: props.attachments.map((a: any) => a.name), resolve: props.resolveServerMedia });
+    h.strips.push({ messageId: props.messageId, align: props.align, names: props.attachments.map((a: any) => a.name), resolve: props.resolveServerMedia, previewServerImages: props.previewServerImages });
     return el('div', { 'data-kind': 'strip', 'data-message': props.messageId });
   } };
 });
@@ -69,6 +79,18 @@ beforeEach(() => {
 });
 afterEach(() => act(() => root.unmount()));
 const render = () => act(async () => root.render(createElement(CloudCompanionScreen, { actorId: id(1), botId: 'mia', deviceId: 'mac', deviceName: 'Mac', title: 'Mia' })));
+
+// Unit regression #8085: cloud rich answers had no open-payload callback after
+// inline playback moved into the shared viewer. Tapping must open that viewer.
+it('opens a cloud rich video in the existing media viewer and closes it', async () => {
+  const text = '```cindy-ui\n' + JSON.stringify({ version: 1, seq: 1, op: 'create', id: 'v', kind: 'video', props: { src: 'https://media.test/cloud.mp4' } }) + '\n```';
+  h.room.messages = [message(2, id(1), [{ type: 'text', text }])];
+  await render();
+  act(() => (container.querySelector('[data-testid="open-rich-video"]') as HTMLButtonElement).click());
+  expect(container.querySelector('video')?.src).toBe('https://media.test/cloud.mp4');
+  act(() => (container.querySelector('[data-testid="shared-viewer"]') as HTMLButtonElement).click());
+  expect(container.querySelector('video')).toBeNull();
+});
 
 // Tier: behavior. The offline cloud conversation drew only message.text, so an owner's file or a
 // companion's deliverable (media blocks of the room message) never appeared; an attachment-only message vanished.
@@ -89,6 +111,8 @@ it('shows the owner\'s and the companion\'s attachments under their messages, in
   ]);
   // Each strip fetches its addresses from the room hook.
   expect(h.strips.every(strip => strip.resolve === h.room.media)).toBe(true);
+  // cloud-companions.md §3.1: signed private URLs are acquired only on an explicit tap.
+  expect(h.strips.every(strip => strip.previewServerImages === false)).toBe(true);
   expect(container.querySelectorAll('[data-testid="cloudCompanion.message.user"]')).toHaveLength(2);
   expect(container.querySelectorAll('[data-testid="cloudCompanion.message.companion"]')).toHaveLength(3);
   // Captions are the attachments' names, not text repeated beside them; an attachment-only message has no empty bubble.

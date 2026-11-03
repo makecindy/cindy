@@ -8,6 +8,7 @@ import type { ProviderView } from '@cindy/model-providers';
 
 import { cn } from '@/lib/utils';
 import { providerAccountLabel } from '@/lib/providerDisplayName';
+import { stopWheelPropagation } from '@/lib/stopWheelPropagation';
 import { Tip } from '@/components/ui/tooltip';
 
 import {
@@ -25,6 +26,7 @@ import {
   type UnifiedRailFilter,
   type UnifiedRailItem,
 } from './unifiedModelSelection';
+import { QUOTA_FILL_COLOR_CLASSES, quotaSeverity } from '../status/QuotaBar';
 
 /**
  * UnifiedModelRail —— 统一面板左侧的视图筛选栏(model-selector-unified §1.2 / §1.6)。
@@ -76,7 +78,12 @@ export function UnifiedModelRail({
   return (
     // 设计稿 .rail:宽 48(含 6px 侧距 + 1px 右分隔线)、纵向 8px、格间 2px。
     // 与侧栏窄图标栏一致：滚动条不占宽度，避免挤压按钮并触发横向溢出。
-    <div className="flex min-h-0 w-12 shrink-0 flex-col items-center gap-0.5 overflow-x-hidden overflow-y-auto scrollbar-hide border-r border-[var(--model-dropdown-border)] px-1.5 py-2">
+    // onWheel:模态对话框里 react-remove-scroll 会拦下浮层的滚轮,rail 又藏着
+    // 滚动条,不放行的话供应商一多就完全滚不到(stopWheelPropagation 注释有全景)。
+    <div
+      className="flex min-h-0 w-12 shrink-0 flex-col items-center gap-0.5 overflow-x-hidden overflow-y-auto scrollbar-hide border-r border-[var(--model-dropdown-border)] px-1.5 py-2"
+      onWheel={stopWheelPropagation}
+    >
       {items.map((item, index) => {
         const key = railItemKey(item);
         const isActive = activeKey === key;
@@ -314,11 +321,9 @@ function RailButtonView({
             <span
               className={cn(
                 'block h-full rounded-full',
-                quota.usedPercent >= 90
-                  ? 'bg-[var(--quota-bar-crit)]'
-                  : quota.usedPercent > 70
-                    ? 'bg-[var(--quota-bar-warn)]'
-                    : 'bg-current',
+                quotaSeverity(quota.usedPercent) === 'normal'
+                  ? 'bg-current'
+                  : QUOTA_FILL_COLOR_CLASSES[quotaSeverity(quota.usedPercent)],
               )}
               style={{ width: `${100 - quota.usedPercent}%` }}
             />

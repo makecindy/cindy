@@ -52,7 +52,8 @@ export function CodexResetAutoUseControl({ state, providerId, onChanged }: {
           <Button variant="secondary" tone="quiet" size="md" compact aria-label={label('rules')}><ChevronDown className="h-3.5 w-3.5" /></Button>
         </PopoverTrigger>
       </div>
-      <PopoverContent align="end" className="w-80 max-w-[calc(100vw-32px)] space-y-4 text-13">
+      {/* The usage dialog is at 10000; keep rules above it and below Select's 10010. */}
+      <PopoverContent align="end" className="z-[10001] w-80 max-w-[calc(100vw-32px)] space-y-4 text-13">
         <div className="text-14 font-medium text-[var(--text-primary)]">{label('rules')}</div>
         <div className="space-y-2">
           <label className="flex items-start gap-2 text-[var(--text-primary)]">

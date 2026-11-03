@@ -8,8 +8,12 @@ import { createBotRemoteSettingsResource } from './botRemoteSettingsResource.js'
 import { createBotProfile, createBotCanonicalSession, getBotMemoryService, getBotRemoteResourceSource, getBotRemoteSettingsSource, readBotSettingsProfile, searchBotHistory, setBotProfileAvatar, updateBotProfile } from './bots.js';
 import { activeOwnerScopeKey, isAppSessionBoundaryPending } from '../../appSessionState.js';
 import { throwIpcError } from '../../utils/ipcValidate.js';
-import { listBotSkillsForBot, readBotSkillForBot, saveBotSkillForSession, deleteBotSkillForBot } from '../../maker-ipc/botSkillService.js';
+import { listBotSkillsForBot, readBotSkillForBot, deleteBotSkillForBot } from '../../maker-ipc/botSkillService.js';
+import {
+  deleteBotSkillForSettings, readBotCoreSkill, readBotSkillForSettings, saveBotSkillForSettings, setBotSkillEnabledForSettings,
+} from './botSkillSettingsIpc.js';
 import { requestBotRuntimeEpochRefresh } from '../../maker-ipc/botRuntimeEpochRefreshSignal.js';
+import { buildTeammateGuide } from '../../maker-ipc/teammateGuide.js';
 import { createBotRemoteEditors } from './botRemoteEditors.js';
 import { decodeBotAvatarImage } from './botAvatarSelection.js';
 import { runRegisteredBotLifecycleAction } from '../../maker-ipc/botLifecycleService.js';
@@ -101,19 +105,20 @@ const getEditor = createBotRemoteEditors({ ...deps,
     await setBotProfileAvatar(botId, image, version, expectedAvatar);
   },
   skill: readBotSkillForBot,
+  // Same save as the local settings page, so an imported skill keeps its own frontmatter.
   async saveSkill(botId, skill) {
     const owner = deps.owner();
-    const { source } = await deps.read(botId);
+    await saveBotSkillForSettings(botId, { slug: skill.slug, name: skill.name, description: skill.description, body: skill.body }, { remote: true });
     deps.assertOwner(owner);
-    if (!source.canonicalSessionId) throwIpcError('PRECONDITION_FAILED', 'Teammate unavailable');
-    const result = await saveBotSkillForSession({ callerSessionId: source.canonicalSessionId, ...skill });
-    if (!result.ok) throwIpcError('PRECONDITION_FAILED', 'Skill could not be saved; refresh before retrying');
   },
   async removeSkill(botId, slug) {
     const owner = deps.owner(); const { source } = await deps.read(botId); deps.assertOwner(owner);
     await deleteBotSkillForBot(botId, slug); deps.assertOwner(owner);
     if (source.canonicalSessionId) await requestBotRuntimeEpochRefresh(source.canonicalSessionId, 'resource');
   },
+  // Same move-and-refresh as the local settings page.
+  setSkillEnabled: (botId, slug, enabled) => setBotSkillEnabledForSettings(botId, slug, enabled, { remote: true }),
+  coreGuide: systemSkillsOff => buildTeammateGuide({ systemSkillsOff }),
   async capabilities(callerSessionId, kind) {
     return listBotSettingsCapabilities({ callerSessionId, kind });
   },
@@ -131,7 +136,7 @@ async function getInvitation(context: RemoteResourceHostContext, botId: string) 
   const resource = botRemoteResourceFromSource(source);
   if (source.invitation?.stage !== 'failed' || source.status !== 'active') return resource;
   const revision = `${source.currentVersion}:${source.invitation.stage}:${source.status}`;
-  return settings.bindResource(context, { ...resource, revision, actions: [{ id: 'retry-invitation', label: { fallback: 'Try Again', translations: { 'zh-CN': '重试', 'zh-TW': '重試', ja: '再試行', ko: '다시 시도' } } }] }, async () => {
+  return settings.bindResource(context, { ...resource, revision, actions: [{ id: 'retry-invitation', label: { fallback: 'Try Again', translations: { 'zh-CN': '重试', 'zh-TW': '重試', ja: '再試行', ko: '다시 시도' , "es":"Volver a intentar","fr":"Réessayer","de":"Erneut versuchen","pt-PT":"Tentar novamente","pt-BR":"Tentar novamente","zh-Hant-x-lzh":"再試","zh-Hans-x-lzh":"再试"} } }] }, async () => {
     const current = await getBotRemoteResourceSource(botId); deps.assertOwner(owner);
     return `${current.currentVersion}:${current.invitation?.stage}:${current.status}`;
   }, async request => {
@@ -187,11 +192,19 @@ const settingsHost = createBotRemoteSettingsHost({
     canonicalSessionId: async botId => (await getBotRemoteSettingsSource(botId)).source.canonicalSessionId ?? null,
     capabilities: (callerSessionId, kind) => listBotSettingsCapabilities({ callerSessionId, kind }),
     personalSkills: listBotSkillsForBot,
+    skills: {
+      core: readBotCoreSkill,
+      read: (botId, slug) => readBotSkillForSettings(botId, slug, { remote: true }),
+      save: (botId, input) => saveBotSkillForSettings(botId, input, { remote: true }),
+      setEnabled: (botId, slug, enabled) => setBotSkillEnabledForSettings(botId, slug, enabled, { remote: true }),
+      delete: (botId, slug) => deleteBotSkillForSettings(botId, slug, { remote: true }),
+    },
     autonomy: { get: getBotAutonomySettingsView, set: setBotAutonomySchedulerBotId, reset: resetBotAutonomySchedulerSettings },
     searchHistory: searchBotHistory,
     routines: {
       list: async (botId) => (await routineTools()).list(botId),
       sources: async () => (await routineTools()).sources(),
+      deliveryTargets: async (botId) => (await routineTools()).deliveryTargets(botId),
       history: async (botId, id) => (await routineTools()).history(botId, id),
       save: async (botId, input, id) => (await routineTools()).save(botId, input, id),
       runNow: async (botId, id) => (await routineTools()).runNow(botId, id),

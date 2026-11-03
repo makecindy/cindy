@@ -71,11 +71,11 @@ describe('collectMobileVoiceDictionaryHosts', () => {
     ]);
   });
 
-  it('设备没有名字时回退到 deviceId 前缀,不显示空标题', () => {
+  it('设备没有名字时显示可读提示,不显示 ID', () => {
     const [host] = collectMobileVoiceDictionaryHosts([
       device({ deviceId: 'abcdef1234567890', name: '   ' }),
     ]);
-    expect(host.name).toBe('abcdef12');
+    expect(host.name).toBe('another computer');
   });
 
   it('平台判定只认桌面三件套', () => {

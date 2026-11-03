@@ -201,7 +201,7 @@ export function searchCachedDeviceSessions(
 
   const hits: ConversationSearchResultItem[] = [];
   sessions.forEach((session, index) => {
-    if ((!CINDY_MAKE_ENABLED && isCindyMakeSource(session.source)) || session.orcaRole === 'worker') return;
+    if (!CINDY_MAKE_ENABLED && isCindyMakeSource(session.source)) return;
     if (!sessionBelongsToDevice(session, origin.deviceId)) return;
     const alias = session.workspaceKind === 'project'
       ? resolveProjectAliasForSessions([session], projectAliases, origin.deviceId ?? undefined) : undefined;
@@ -252,6 +252,7 @@ function sessionToSearchSummary(
     id: session.id,
     title: session.title,
     workingDir: session.workingDir,
+    projectDir: session.projectDir,
     workspaceKind: session.workspaceKind,
     agentKind: session.agentKind,
     status: session.status,
@@ -272,20 +273,6 @@ export type ConversationSearchListItem = RemoteSessionListItem & {
   searchCompanion?: ConversationSearchSessionSummary['companion'];
   searchLocallyCached: boolean;
 };
-
-/** Keep the exact transcript selected by search, including an archived personal thread. */
-export function conversationSearchCompanionParams(item: object): Record<string, string> {
-  const companion = (item as Partial<ConversationSearchListItem>).searchCompanion;
-  if (!companion) return {};
-  return {
-    resourceCollectionId: 'teammates',
-    resourceKind: 'bot',
-    resourceId: companion.id,
-    ...(companion.readOnly
-      ? { resourceHistorySessionId: (item as ConversationSearchListItem).session.id }
-      : {}),
-  };
-}
 
 export function conversationSearchSessionCacheKey(
   session: Pick<RemoteSession, 'id'> & {
@@ -332,6 +319,7 @@ export function toSearchListItem(
         id: item.session.id,
         title: item.session.title,
         workingDir: item.session.workingDir,
+        projectDir: item.session.projectDir,
         workspaceKind: item.session.workspaceKind,
         agentKind: item.session.agentKind,
         status: item.session.status,
@@ -476,7 +464,7 @@ export function scopedConversationSearchOrigins(
 }
 
 export function listConversationSearchProjects(
-  sessions: readonly Pick<RemoteSession, 'canonicalDeviceId' | 'deviceLinkDeviceId' | 'deviceLinkDeviceName' | 'orcaRole' | 'workingDir' | 'workspaceKind' | 'remoteHostId'>[],
+  sessions: readonly Pick<RemoteSession, 'canonicalDeviceId' | 'deviceLinkDeviceId' | 'deviceLinkDeviceName' | 'orcaRole' | 'workingDir' | 'projectDir' | 'workspaceKind' | 'remoteHostId'>[],
   deviceIds?: ReadonlySet<string>,
   projectAliases?: ProjectAliasDisplayIndex,
 ): ConversationSearchProjectOption[] {
@@ -488,7 +476,7 @@ export function listConversationSearchProjects(
     if (session.workspaceKind === 'dialogue') continue;
     const deviceId = session.canonicalDeviceId ?? session.deviceLinkDeviceId;
     if (!deviceId) continue;
-    const workingDir = stripTrailingPathSeparators(session.workingDir?.trim() ?? '');
+    const workingDir = stripTrailingPathSeparators((session.projectDir ?? session.workingDir)?.trim() ?? '');
     if (!workingDir) continue;
     const dirKey = collapseWorktreeDirForGrouping(workingDir) ?? workingDir;
     const key = `${deviceId}:${dirKey}`;

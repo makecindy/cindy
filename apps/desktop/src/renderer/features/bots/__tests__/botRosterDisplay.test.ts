@@ -43,11 +43,11 @@ function bot(
 }
 
 describe('Hermes-style Bot roster display', () => {
-  it('distinguishes missing and duplicate host names by their actual device IDs', () => {
+  it('distinguishes missing and duplicate host names without exposing device IDs', () => {
     const device = { deviceId: 'mac-1', name: ' Studio ' };
     expect(botDeviceLabel(device, [device, device])).toBe('Studio');
-    expect(botDeviceLabel(device, [device, { deviceId: 'mac-2', name: 'studio' }])).toBe('Studio (mac-1)');
-    expect(botDeviceLabel({ deviceId: 'mac-2', name: ' ' }, [])).toBe('mac-2');
+    expect(botDeviceLabel(device, [device, { deviceId: 'mac-2', name: 'studio' }])).toBe('Studio (1)');
+    expect(botDeviceLabel({ deviceId: 'mac-2', name: ' ' }, [])).toBe('another computer');
   });
   it('sorts pinned Bots first and keeps recency ordering inside both groups', () => {
     const rows = sortBotRoster([

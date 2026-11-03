@@ -2,11 +2,12 @@ import { FORWARDED_REQUEST_RECEIPT, verifiedOwnerRequestText, type ForwardedRequ
 import { AUTO_REVIEW_SOURCE_CONTENT, AUTO_REVIEW_USER_INTENT } from '@cindy/maker-core';
 import { getDeviceLinkInvokeContext } from '../device-link/invoke-context.js';
 import { assertSharedTaskQueueMutation } from './sharedTaskInput.js';
-import { assertTaskActionCurrent, combineInputGuards, hasTaskActionAuthorization, taskActionInputGuard, TASK_ACTION_INPUT_GUARD } from './taskActionAuthorization.js';
+import { assertTaskActionCurrent, combineInputGuards, hasTaskActionAuthorization, isTaskActionRevoked, taskActionInputGuard, TASK_ACTION_INPUT_GUARD } from './taskActionAuthorization.js';
 import { isBotGroupClientId } from '../../shared/botGroupChat.js';
 import { SchedulerQueuedPreparationError } from './schedulerQueuedPreparation.js';
 import { ProviderGroupUsageLimitError } from '../provider-group/failurePolicy.js';
 import { MCP_APP_MESSAGE_GUARD, isUnrestorableMcpAppMessage, queuedAppMessageGuard, type McpAppMessageGuard } from '../mcp-apps/message.js';
+import { isOwnerOwnMessage } from '../input-handoff/ownerMessage.js';
 /**
  * AgentInputCoordinator — main 侧排队输入事务协调器。
  *
@@ -88,6 +89,7 @@ import {
 import { CONTINUE_AFTER_ERROR_PROMPT, syntheticTriggerKind } from '../../shared/interruptedTurn.js';
 import { isSyntheticTriggerText } from '@cindy/maker-shared/synthetic-trigger';
 import { attachSessionReferenceMetadata } from '../../shared/sessionReferenceMetadata.js';
+import { collectInlineMessageReferenceKeys } from '@cindy/maker-shared/agent-input-projection';
 import {
   appendRecoveryCheckpointPrompt,
   buildRecoveryCheckpoint,
@@ -247,6 +249,8 @@ export interface AgentInputSendOpts {
    */
   fromMobileClient?: boolean;
   uiLanguage?: string;
+  /** Classical output style stamped with uiLanguage; direct wire values are stripped. */
+  classicalStyle?: string;
   /** Queue provenance stamped by the controlled desktop at device-link input IPC entry. */
   fromDeviceLinkClient?: boolean;
   /**
@@ -260,6 +264,7 @@ export interface AgentInputSendOpts {
    * 也不参与任何权限判定;刻意不复用 `origin`(那是 scheduler 的 turn origin)。
    */
   sourceOrigin?: AgentInputQueuedMessage['origin'];
+  [FORWARDED_REQUEST_RECEIPT]?: AgentInputQueuedMessage['autoReviewUserText'];
   sourcePlugin?: AgentInputQueuedMessage['sourcePlugin'];
   sharedTaskAuthor?: AgentInputQueuedMessage['sharedTaskAuthor'];
   /** Main-owned clear token captured when this input became active. */
@@ -300,7 +305,7 @@ export interface AgentInputSendOpts {
     origin?: AgentInputQueuedMessage['origin'];
     shouldBroadcast?: () => boolean;
     onPersisting?: () => void;
-    onPersisted?: () => void | Promise<void>;
+    onPersisted?: (signal?: AbortSignal) => void | Promise<void>;
     onPersistFailed?: () => void;
   };
 }
@@ -391,7 +396,7 @@ export interface AgentInputCoordinatorDeps {
    */
   createUserMessage?: typeof createDbMessage;
   /** Hide a user row that was written after `/clear` won the persistence race. */
-  rewindPersistedUserMessageAfterClear?: (sessionId: string, clientId: string) => Promise<void>;
+  rewindPersistedUserMessageAfterClear?: (sessionId: string, clientId: string, options?: { discard?: boolean }) => Promise<void>;
   /**
    * interrupted-turn-resume:判断某条已派发 user 消息之后 agent 是否已产出内容
    * (assistant / tool_use / thinking 持久化行)。retryLastError 用它决定语义:
@@ -486,6 +491,7 @@ export interface AgentInputCoordinatorDeps {
   /** 在 vendor dispatch 前读取用户选中的本地/在线会话引用。 */
   resolveSessionReferences?: (
     refs: AgentInputQueuedMessage['sessionRefs'],
+    options?: { inlineMessageKeys?: ReadonlySet<string> },
   ) => Promise<AgentInputSessionReferenceContext[]>;
   /**
    * Refresh ephemeral structured-reference state at the actual dispatch
@@ -529,6 +535,7 @@ export interface AgentInputCoordinatorDeps {
   beforeDispatchUserTurn?: (
     sessionId: string,
     item: AgentInputQueuedMessage,
+    signal?: AbortSignal,
   ) => void | Promise<void>;
   /**
    * Called when a user row crossed the persistence boundary but never reached
@@ -630,6 +637,8 @@ export interface AgentInputCoordinatorDeps {
    * pendingQueue.unshift、不经这两个用户输入入口, 于是不会自我作废。
    */
   onUserEnqueue?: (sessionId: string) => void;
+  /** A new message from a person (not retransmitted, not automatic) entered the queue. */
+  onOwnerMessage?: (sessionId: string, item: AgentInputQueuedMessage) => void;
   /**
    * 真人消息刚进队、尚未 drain / sendToAgent。灵动岛用它在 agent 进程拉起前
    * 就进入 running 并播开始音效,避免「任务开始」跟着 isRunning 一起晚响。
@@ -766,6 +775,8 @@ interface SessionInputState {
   error: string | null;
   /** Stable error reason for live projections; null when no terminal error is active. */
   errorReason: string | null;
+  /** The failed scheduled input was persisted before its recovery was released. */
+  errorCanContinue: boolean;
   /** Bounded structured details for tool-loop terminal errors. */
   toolLoop: AgentInputToolLoopDetails | null;
   stickyError: string | null;
@@ -903,6 +914,7 @@ function createInitialInputState(
     activeTurn: null,
     error: null,
     errorReason: null,
+    errorCanContinue: false,
     toolLoop: null,
     stickyError: null,
     autoResumePending: null,
@@ -1140,19 +1152,21 @@ function recordPendingTerminalEvent(active: ActiveTurn, event: ActiveTurnTermina
 }
 
 function clearErrorProjectionSignals(
-  state: Pick<SessionInputState, 'errorReason' | 'toolLoop'>,
+  state: Pick<SessionInputState, 'errorReason' | 'toolLoop' | 'errorCanContinue'>,
 ): void {
   state.errorReason = null;
   state.toolLoop = null;
+  state.errorCanContinue = false;
 }
 
 function setErrorProjectionSignals(
-  state: Pick<SessionInputState, 'errorReason' | 'toolLoop'>,
+  state: Pick<SessionInputState, 'errorReason' | 'toolLoop' | 'errorCanContinue'>,
   signals?: Omit<InterruptedTurnErrorSignals, 'message'>,
 ): void {
   state.errorReason =
     typeof signals?.reason === 'string' && signals.reason.length > 0 ? signals.reason : null;
   state.toolLoop = parseAgentInputToolLoopDetails(signals?.toolLoop) ?? null;
+  state.errorCanContinue = false;
 }
 
 function isActiveTurnDispatched(active: ActiveTurn): boolean {
@@ -1185,11 +1199,22 @@ function isScheduledQuotaRecovery(
 
 /** Scheduler / Orca / tool-sent session inputs are automation, not a fresh human intervention. */
 function isAutomaticOriginItem(item: AgentInputQueuedMessage | null | undefined): boolean {
-  return isAutomaticInputOriginKind(item?.origin?.kind);
+  return !isManualSchedulerContinuation(item) && isAutomaticInputOriginKind(item?.origin?.kind);
+}
+
+// A same-process receipt: wire input and restored automation cannot impersonate
+// a fresh Continue click. Object spreads preserve it; JSON persistence does not.
+const manualSchedulerContinuation = Symbol('manual-scheduler-continuation');
+export function markManualSchedulerContinuation(item: AgentInputQueuedMessage): AgentInputQueuedMessage {
+  return Object.assign(item, { [manualSchedulerContinuation]: true as const });
+}
+function isManualSchedulerContinuation(item: AgentInputQueuedMessage | null | undefined): boolean {
+  return (item as (AgentInputQueuedMessage & { [manualSchedulerContinuation]?: true }) | undefined)?.[manualSchedulerContinuation] === true;
 }
 
 function isUiContinuationItem(item: AgentInputQueuedMessage): boolean {
-  return !isSchedulerOriginItem(item) && item.originalSyntheticTrigger === 'continue';
+  return (!isSchedulerOriginItem(item) || isManualSchedulerContinuation(item))
+    && item.originalSyntheticTrigger === 'continue';
 }
 
 function isActiveTurnBeforeVendorDispatch(active: ActiveTurn): boolean {
@@ -1343,12 +1368,21 @@ export class AgentInputCoordinator {
       retrySourceClientId: item.retrySourceClientId ?? item.supersedesUserClientId };
   }
 
+  /** Account-scoped tools use the task's account; shared guests keep their own identity. */
+  isActiveInputAccountScoped(sessionId: string): boolean {
+    const item = this.states.get(sessionId)?.activeTurn?.item;
+    return !!item && !item.sharedTaskAuthor;
+  }
+
   /**
    * Owner-only Host actions (app update) require the active input itself to be text
    * this account's user typed on Desktop or a same-account remote device. Automation,
    * other tasks, Orca, plugins, shared-task guests and automatic resumes never qualify.
    */
-  isActiveInputOwnerAuthored(sessionId: string): boolean {
+  isActiveInputOwnerAuthored(sessionId: string, vendorGeneration?: number): boolean {
+    const active = this.states.get(sessionId)?.activeTurn;
+    if (vendorGeneration !== undefined && active?.vendorTurnGeneration != null
+      && vendorGeneration !== active.vendorTurnGeneration) return false;
     return this.activeInputHasOwnerAuthor(sessionId, false);
   }
 
@@ -1358,7 +1392,12 @@ export class AgentInputCoordinator {
    * Host actions such as app update.
    */
   isActiveInputOwnerContinuation(sessionId: string): boolean {
-    return this.activeInputHasOwnerAuthor(sessionId, true);
+    const item = this.states.get(sessionId)?.activeTurn?.item;
+    // A relay is not fresh owner input (updates and other owner-only actions
+    // still use isActiveInputOwnerAuthored), but task actions retain its scope.
+    const relayed = !!item && !item.sourcePlugin && !item.sharedTaskAuthor
+      && verifiedOwnerRequestText(item.autoReviewUserText) !== undefined;
+    return relayed || this.activeInputHasOwnerAuthor(sessionId, true);
   }
 
   private activeInputHasOwnerAuthor(sessionId: string, allowContinuation: boolean): boolean {
@@ -1903,7 +1942,7 @@ export class AgentInputCoordinator {
     // 渠道回流的记账), 而**就是**一次续跑意图 —— 所以在这里发续跑信号并带上 clientId,
     // 让消费方按 clientId 做权威归属(见 deps.onUiRetry 的说明)。
     // (错误横幅那条走 retryLastError, 压根不经本入口。)
-    const schedulerOrigin = isSchedulerOriginItem(item);
+    const schedulerOrigin = isSchedulerOriginItem(item) && !isManualSchedulerContinuation(item);
     const automaticOrigin = isAutomaticOriginItem(item);
     if (!schedulerOrigin) {
       // 自动续跑可能已经从 pendingQueue 进入 activeTurn、但仍卡在持久化或其它
@@ -1926,6 +1965,10 @@ export class AgentInputCoordinator {
       this.deps.onAutomaticEnqueue?.(sessionId, item);
     } else if (!automaticOrigin) {
       this.deps.onUserEnqueue?.(sessionId);
+      // Only the owner's own message closes their card, not a guest, a plugin, a teammate bot or an App card.
+      if (isOwnerOwnMessage({ ...item, appMessageGuard: queuedAppMessageGuard(item) }) && !getDeviceLinkInvokeContext()?.sharedTask) {
+        this.deps.onOwnerMessage?.(sessionId, item);
+      }
     }
     if (!schedulerOrigin) {
       // 有用户动作入队(用户自己接手,或自愈的续跑指令本身)→ 撤掉「重新连接中」提示。
@@ -2637,6 +2680,10 @@ export class AgentInputCoordinator {
         ...(appMessageGuard ? { [MCP_APP_MESSAGE_GUARD]: appMessageGuard } : {}),
         ...(item.sharedTaskAuthor ? { sharedTaskAuthor: item.sharedTaskAuthor } : {}),
         [AUTO_REVIEW_SOURCE_CONTENT]: queuedAutoReviewText(item),
+        ...(verifiedOwnerRequestText(item.autoReviewUserText) !== undefined ? {
+          [AUTO_REVIEW_USER_INTENT]: verifiedOwnerRequestText(item.autoReviewUserText),
+          [FORWARDED_REQUEST_RECEIPT]: item.autoReviewUserText,
+        } : {}),
         ...(item.autoReviewUserText && typeof item.autoReviewUserText === 'object' && item.autoReviewUserText.kind === 'delegated-continuation'
           ? { [AUTO_REVIEW_DELEGATED_CONTINUATION]: true as const } : {}),
         ...(typeof item.autoReviewUserText !== 'object' && readAutoReviewUserText(item.persistedContent) === null
@@ -2656,6 +2703,7 @@ export class AgentInputCoordinator {
         // 同 drain:steer 投递也在入队时的 async context 之外。
         ...(item.fromMobileClient ? { fromMobileClient: true } : {}),
         ...(item.uiLanguage ? { uiLanguage: item.uiLanguage } : {}),
+        ...(item.classicalStyle ? { classicalStyle: item.classicalStyle } : {}),
         // 消息来源同样随 steer 透传(只用于说明与归属,steer 不经 send 事务)。主机生成的
         // 隐藏指令([UI_ACTION_TRIGGER])与自动续跑不是来源方的话,同 send 事务不加 `[消息来源]`。
         ...(item.sourceDevice ? { sourceDevice: item.sourceDevice } : {}),
@@ -3227,17 +3275,28 @@ export class AgentInputCoordinator {
     let continueItem: AgentInputQueuedMessage | null = null;
     let progressKnown = false;
     const previousAutoResumeInfo = opts?.auto ? state.autoResumePending : null;
+    const providerRestart = state.errorReason === 'remote_agent_restarted';
+    // Keep quota/error details for other recoveries. A provider restart already
+    // has a localized reconnect label on Desktop and Mobile; it is not an error
+    // summary to append to an otherwise successful continuation.
     // 额度重置后的续跑记录带上当初的限额原文，作为活动行展开详情里的原因。
     const automaticResumeInfo = opts?.auto
       ? previousAutoResumeInfo
       : usageWait
-        ? { ...usageWait.info, ...(state.error ? { error: state.error } : {}) }
+        ? { ...usageWait.info, ...(state.error && !providerRestart ? { error: state.error } : {}) }
         : null;
     const attemptToken = opts?.auto ? (opts.attemptToken ?? null) : null;
-    const continuationOnly = Boolean(
+    const continuationOnly = providerRestart || Boolean(
       opts?.auto && isAcceptedTurnContinuationOnlyReason(previousAutoResumeInfo?.reason),
     );
     let continueText = CONTINUE_AFTER_ERROR_PROMPT;
+    if (providerRestart) {
+      continueText += '\n\n[Host recovery] The provider process stopped or restarted during the previous turn.'
+        + (automatic ? ' Cindy is automatically continuing the interrupted task in the original conversation.'
+          : ' Continue the interrupted task in the original conversation.')
+        + ' Some tools may already have executed on the task computer without their results reaching you.'
+        + ' Check the current files, processes and external state before continuing; do not repeat side effects.';
+    }
     let recoveryCheckpoint: RecoveryCheckpoint | undefined;
     if (recovery.kind === 'active-turn') {
       let hasProgress = false;
@@ -4018,12 +4077,13 @@ export class AgentInputCoordinator {
         const schedulerItem = active.item && isSchedulerOriginItem(active.item);
         const resumableCandidate = this.isResumableTurnErrorCandidate(sessionId, message, signals, active.item);
         const scheduledQuota = isScheduledQuotaRecovery(active.item, message, signals);
+        setErrorProjectionSignals(state, signals);
         const outcome = this.setActiveTurnRecovery(state, active.item, {
           allowSchedulerAutoResume: Boolean(schedulerItem && resumableCandidate) || scheduledQuota,
+          persistedFailure: true,
         });
         if (outcome === 'dropped-scheduler') {
           state.error = message ?? state.error;
-          setErrorProjectionSignals(state, signals);
           // **紧随的 done 必须被配对吃掉。**各 agent 的失败收尾都是 terminal error 后再补
           // 一个 done;普通用户项靠下方"!active && recovery.kind==='active-turn'"那道守卫
           // 挡住它,而 scheduler 项恰恰没有 recovery 可挡 —— done 会一路落到方法尾部的
@@ -4053,10 +4113,9 @@ export class AgentInputCoordinator {
           clearErrorProjectionSignals(state);
         } else {
           state.error = message ?? state.error;
-          setErrorProjectionSignals(state, signals);
           // 限额失败保留 Retry 与等待；其它确定性错误仍交给 runner 收口。
           if (schedulerItem && !scheduledQuota) {
-            state.recovery = null;
+            this.setActiveTurnRecovery(state, active.item, { persistedFailure: true });
             this.markPendingExternalTerminalDone(sessionId, state);
             this.emit(sessionId);
             this.scheduleDrainAfterExternalTurnSettles(
@@ -4506,6 +4565,7 @@ export class AgentInputCoordinator {
       queueEditLocks: [...state.queueEditLocks],
       queueAbortPending: state.queueAbortPending,
       error,
+      ...(error && state.errorCanContinue ? { errorCanContinue: true } : {}),
       ...(error && state.errorReason ? { errorReason: state.errorReason } : {}),
       ...(error && state.toolLoop ? { toolLoop: state.toolLoop } : {}),
       recovery,
@@ -4583,7 +4643,10 @@ export class AgentInputCoordinator {
       throw new Error('Remote session reference snapshot is missing; edit and resend the message.');
     }
     try {
-      return await (this.deps.resolveSessionReferences?.(item.sessionRefs) ?? []);
+      return await (this.deps.resolveSessionReferences?.(item.sessionRefs, {
+        // 引用的消息正文已经在用户消息里逐字送达，引用载荷不再重复投递。
+        inlineMessageKeys: collectInlineMessageReferenceKeys(item.agentReferences),
+      }) ?? []);
     } catch (error) {
       // Session links are still useful as ordinary Agent-facing text when the
       // referenced session belongs to another account, was deleted, or is
@@ -5025,7 +5088,25 @@ export class AgentInputCoordinator {
     this.emit(sessionId);
 
     let appMessageGuardRejected = false;
+    const taskActionGuard = taskActionInputGuard(sessionId, head);
     try {
+      if (taskActionGuard) {
+        // A revoked task action settles before screening, persistence or a vendor
+        // turn, so the receiving task never shows a failed reply for it. A check that
+        // merely failed is not a revocation: it takes the ordinary pre-accept failure
+        // path below, which keeps the message as a retryable queue head. The send
+        // transaction still rechecks the same guard at dispatch.
+        const rejection = await taskActionGuard().then(() => null, (error: unknown) => ({ error }));
+        if (!this.isActiveTurnCurrent(sessionId, active)) return;
+        if (rejection) {
+          if (!isTaskActionRevoked(rejection.error)) throw rejection.error;
+          log.info('discarding revoked task action input before dispatch', {
+            sessionId, clientId: head.clientId, reason: errorMessage(rejection.error),
+          });
+          this.discardRevokedAppInput(sessionId, active, head);
+          return;
+        }
+      }
       // 意识拦截钩(订阅槽①):落库/派发之前问一遍——block 即丢弃本项
       // (不入库不起 turn),通知宿主降级气泡,继续放行后续排队消息;
       // rewrite 用新正文替换 head(送 agent / 落库 / 显示都用它),通知宿主
@@ -5092,18 +5173,31 @@ export class AgentInputCoordinator {
       // may synchronously emit the new turn's started marker before it returns;
       // post-dispatch acknowledgements must remain older than that marker.
       const preVendorDispatchAt = Math.max(0, Date.now() - 1);
-      const appMessageGuard = combineInputGuards(queuedAppMessageGuard(head), taskActionInputGuard(sessionId, head));
+      const appMessageGuard = queuedAppMessageGuard(head);
       const result = await this.deps.sendToAgent(sessionId, makerUserMessage, head.createOpts, {
-        ...(appMessageGuard ? { [MCP_APP_MESSAGE_GUARD]: async () => {
+        ...(appMessageGuard || taskActionGuard ? { [MCP_APP_MESSAGE_GUARD]: async () => {
           try {
-            await appMessageGuard();
+            await appMessageGuard?.();
           } catch (error) {
             appMessageGuardRejected = true;
+            throw error;
+          }
+          // A task action is judged until its row is persisted. Afterwards a refusal could only
+          // leave a user row with a failed reply, and a queued task action cannot be retried (its
+          // guard is bound to the original clientId), so the message is delivered instead.
+          if (active.persisted) return;
+          try {
+            await taskActionGuard?.();
+          } catch (error) {
+            // Only a proven revocation discards; a failed check keeps the message retryable.
+            if (isTaskActionRevoked(error)) appMessageGuardRejected = true;
             throw error;
           }
         } } : {}),
         ...(head.supersedesUserClientId ? { retryUserClientId: head.supersedesUserClientId } : {}),
         [AUTO_REVIEW_SOURCE_CONTENT]: queuedAutoReviewText(head),
+        ...(verifiedOwnerRequestText(head.autoReviewUserText) !== undefined
+          ? { [AUTO_REVIEW_USER_INTENT]: verifiedOwnerRequestText(head.autoReviewUserText) } : {}),
         ...(head.autoReviewUserText && typeof head.autoReviewUserText === 'object' && head.autoReviewUserText.kind === 'delegated-continuation'
           ? { [AUTO_REVIEW_DELEGATED_CONTINUATION]: true as const } : {}),
         messageUuid: active.messageUuid,
@@ -5122,6 +5216,7 @@ export class AgentInputCoordinator {
         // 手机来源透传到 send 事务:drain 已脱离入队时的 async context。
         ...(head.fromMobileClient ? { fromMobileClient: true } : {}),
         ...(head.uiLanguage ? { uiLanguage: head.uiLanguage } : {}),
+        ...(head.classicalStyle ? { classicalStyle: head.classicalStyle } : {}),
         ...(head.fromDeviceLinkClient ? { fromDeviceLinkClient: true } : {}),
         ...(head.sourceDevice ? { sourceDevice: head.sourceDevice } : {}),
         persistUserMessage: {
@@ -5149,7 +5244,7 @@ export class AgentInputCoordinator {
               active.persisting = true;
             }
           },
-          onPersisted: async () => {
+          onPersisted: async (signal) => {
             // The DB row already owns any staged attachment references. This
             // callback intentionally runs before generation checks: a clear
             // or Stop may win the pre-vendor race after persistence, but it
@@ -5165,7 +5260,7 @@ export class AgentInputCoordinator {
               // 已送达的消息二次恢复(issue #761)。
               this.maybePersistQueueSnapshot(sessionId);
             }
-            await this.deps.beforeDispatchUserTurn?.(sessionId, head);
+            await this.deps.beforeDispatchUserTurn?.(sessionId, head, signal ?? this.getInputAbortSignal(sessionId, active.generation));
             if (!this.isActiveTurnCurrent(sessionId, active)) {
               throw new Error(
                 '[SEND_CANCELLED_BEFORE_DISPATCH] User turn was cancelled before vendor dispatch',
@@ -5332,7 +5427,9 @@ export class AgentInputCoordinator {
       latest.stickyError = null;
       // 同 handleSendNotDispatched:调度来源的 prompt 不留可被人手动 Retry 的 recovery
       // (review #944 第九轮 P1;判据内建在 setActiveTurnRecovery)。
-      const schedulerOrigin = this.setActiveTurnRecovery(latest, head) === 'dropped-scheduler';
+      const schedulerOrigin = this.setActiveTurnRecovery(latest, head, {
+        persistedFailure: !rewound,
+      }) === 'dropped-scheduler';
       // 已落库的派发失败必须立刻放开边界。否则 coordinator 会一直占着 activeTurn,
       // 下一轮被 dispatch-boundary-busy 挡住,界面上只剩用户气泡、没有红条、也不能重试。
       latest.activeTurn = null;
@@ -5381,6 +5478,7 @@ export class AgentInputCoordinator {
   /** Only proven preparation rejection can erase a scheduled continuation row.
    * The coordinator owns its clientId even when dispatch beats enqueue's return.
    * Unknown vendor outcomes and interactive messages keep their existing history.
+   * The row is deleted, not tombstoned: a deferring routine would otherwise leave one hidden copy per attempt.
    */
   private async rewindSchedulerPreparationFailure(
     sessionId: string,
@@ -5401,7 +5499,7 @@ export class AgentInputCoordinator {
         && (failure?.code === 'PRECONDITION_FAILED' || message.includes('[PRECONDITION_FAILED]')));
     if (!preparationRejected) return false;
     try {
-      await this.deps.rewindPersistedUserMessageAfterClear(sessionId, item.clientId);
+      await this.deps.rewindPersistedUserMessageAfterClear(sessionId, item.clientId, { discard: true });
       return true;
     } catch (err) {
       log.warn('scheduled preparation rollback failed; retaining failure presentation', {
@@ -5485,14 +5583,16 @@ export class AgentInputCoordinator {
     // 调度来源的 prompt **不留 active-turn recovery**。它的 Retry 走的是普通用户 turn:
     // 没有 scheduler 回调、没有 run 跟踪 —— 而这条 run 此刻已经顺延或落终态了,留着就等于
     // 让一条已收口的调度 prompt 之后还能被人手动跑一次(review #944 第九轮 P1)。
-    // 失败本身经 scheduler 自己的运行历史 + 通知呈现,不靠这里的重试入口。
+    // 未撤回的失败只授予隐藏续跑资格,不保留或重放已结束的 scheduler prompt。
     // 注:isPromptTracked 用的 hasQueuedItemWhere 默认不含 recovery,所以摘掉它不会影响
     // runner 的排队存活探测。
-    const schedulerOrigin = this.setActiveTurnRecovery(latest, item) === 'dropped-scheduler';
     const cancelledByUserBoundary =
       latest.queueAbortPending &&
       result.kind === 'session-dispatch' &&
       result.reason === 'cancelled-before-dispatch';
+    const schedulerOrigin = this.setActiveTurnRecovery(latest, item, {
+      persistedFailure: !rewoundScheduler && !cancelledByUserBoundary,
+    }) === 'dropped-scheduler';
     if (!cancelledByUserBoundary) this.notifyRejectedUserTurn(sessionId, item);
     this.notifyUndispatchedUserTurn(
       sessionId,
@@ -5972,7 +6072,9 @@ export class AgentInputCoordinator {
       state.stickyError = null;
       // 同 onTurnEvent / handleSendNotDispatched:scheduler 的 prompt 不留重试入口
       // (判据内建在 setActiveTurnRecovery,第十八轮 P1)。
-      const schedulerOrigin = this.setActiveTurnRecovery(state, item) === 'dropped-scheduler';
+      const schedulerOrigin = this.setActiveTurnRecovery(state, item, {
+        persistedFailure: true,
+      }) === 'dropped-scheduler';
       this.notifyUndispatchedUserTurn(sessionId, item, 'failed');
       log.warn(
         schedulerOrigin
@@ -6539,7 +6641,8 @@ export class AgentInputCoordinator {
    * 不要再直接写 `state.recovery = { kind: 'active-turn', ... }`。
    *
    * Schedule 的瞬时错误与账号限额可保留 recovery，复用普通聊天的恢复路径；
-   * 其余失败由 runner 收口。
+   * 其余失败由 runner 收口；仍在历史里的失败输入可单独授予隐藏续跑资格，
+   * 不保留或重放旧 scheduler prompt。
    *
    * @returns `kept` = 留下了;`dropped-scheduler` = 因 scheduler 来源被摘掉,此时队列少了
    * 「用户点 clearError / Retry」这个唤醒源,调用方通常要补一次 scheduleDrain(Stop 那条
@@ -6550,14 +6653,18 @@ export class AgentInputCoordinator {
   private setActiveTurnRecovery(
     state: SessionInputState,
     item: AgentInputQueuedMessage | null | undefined,
-    opts?: { allowSchedulerAutoResume?: boolean },
+    opts?: { allowSchedulerAutoResume?: boolean; persistedFailure?: boolean },
   ): 'kept' | 'dropped-scheduler' | 'no-item' {
+    state.errorCanContinue = false;
     if (!item) {
       state.recovery = null;
       return 'no-item';
     }
     if (isSchedulerOriginItem(item) && !opts?.allowSchedulerAutoResume) {
       state.recovery = null;
+      // This is the sole granting boundary. Stop, rewound rows and controls
+      // never pass persistedFailure; dispatch errors and terminal settlement do.
+      state.errorCanContinue = opts?.persistedFailure === true;
       return 'dropped-scheduler';
     }
     state.recovery = { kind: 'active-turn', item };
@@ -7107,7 +7214,7 @@ export class AgentInputCoordinator {
       // Scheduler recovery only belongs to the live auto-resume attempt. Once
       // that attempt ends, the runner settles the failed run; keeping Retry
       // here would block every later fire (and replay outside run accounting).
-      this.setActiveTurnRecovery(state, state.recovery.item);
+      this.setActiveTurnRecovery(state, state.recovery.item, { persistedFailure: true });
       // Reuse normal scheduler failure settlement, including its bounded wait
       // for a paired done, so an old terminal cannot clear the next turn.
       this.markPendingExternalTerminalDone(sessionId, state);
@@ -7401,12 +7508,13 @@ export class AgentInputCoordinator {
       const deferredPersistSuppressed = terminalEvent.resumableCandidate === true;
       const schedulerItem = active.item && isSchedulerOriginItem(active.item);
       const scheduledQuota = isScheduledQuotaRecovery(active.item, terminalEvent.message, terminalEvent.signals);
+      setErrorProjectionSignals(state, terminalEvent.signals);
       const outcome = this.setActiveTurnRecovery(state, active.item, {
         allowSchedulerAutoResume: Boolean(schedulerItem && deferredPersistSuppressed) || scheduledQuota,
+        persistedFailure: true,
       });
       if (outcome === 'dropped-scheduler') {
         state.error = terminalEvent.message ?? state.error;
-        setErrorProjectionSignals(state, terminalEvent.signals);
         if (deferredPersistSuppressed) {
           this.notifyResumableTurnErrorDiscarded(sessionId, {
             surfaceError: true,
@@ -7447,7 +7555,6 @@ export class AgentInputCoordinator {
         clearErrorProjectionSignals(state);
       } else {
         state.error = terminalEvent.message ?? state.error;
-        setErrorProjectionSignals(state, terminalEvent.signals);
         // 先登记换电脑，再移交候选期暂存的错误；否则 host 会先放出错误卡与 Worker 失败回报。
         if (outcome === 'kept' && active.item && terminalEvent.supersededByUser !== true) {
           this.holdForProviderGroupSwitch(
@@ -7463,7 +7570,7 @@ export class AgentInputCoordinator {
           });
         }
         if (schedulerItem && !scheduledQuota) {
-          state.recovery = null;
+          this.setActiveTurnRecovery(state, active.item, { persistedFailure: true });
           this.markPendingExternalTerminalDone(sessionId, state);
           this.emit(sessionId);
           this.scheduleDrainAfterExternalTurnSettles(sessionId, 'scheduler-prompt-terminal-error');

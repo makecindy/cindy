@@ -19,6 +19,7 @@ import {
   createDuplicateToolUseIdRecoveryRule,
   createEmptyAssistantMessageRecoveryRule,
   createEmptyThinkingRecoveryRule,
+  createAnthropicContextManagementRecoveryRule,
   createEncryptedContentRecoveryRule,
   createImageGenerationIdRecoveryRule,
   createToolExchangeAdjacencyRecoveryRule,
@@ -973,6 +974,39 @@ describe('anthropic-compat-proxy tool_use provider field compatibility', () => {
 
     expect(r.status).toBe(200);
     expect(upstream.bodies).toHaveLength(2);
+  });
+});
+
+describe('Anthropic context management rejection (#7041)', () => {
+  const request = {
+    model: 'claude-opus-test', max_tokens: 128,
+    context_management: { edits: [{ type: 'clear_tool_uses_20250919' }] },
+    messages: [{ role: 'user', content: 'hello' }],
+  };
+  it.each([
+    [400, 'ValidationException: context_management: Extra inputs are not permitted', 200, 2],
+    [400, 'ValidationException: context_management: Extra inputs are not permitted', 400, 2],
+    [200, '{}', 200, 1],
+    [400, 'ValidationException: unrelated_field: Extra inputs are not permitted', 400, 1],
+  ] as const)('only retries an explicit context_management rejection (%s, %s)', async (status, error, expectedStatus, count) => {
+    const upstream = await startFakeUpstream((index, _body, res) => {
+      res.writeHead(index === 0 ? status : expectedStatus, { 'content-type': 'application/json' });
+      res.end(index === 0 ? JSON.stringify({ error: { message: error } }) : '{}');
+    });
+    upstreamClose = upstream.close;
+    proxy = await createAnthropicCompatProxy({
+      upstream: upstream.url, transformRequest: [],
+      recoveryRules: [createAnthropicContextManagementRecoveryRule()],
+    });
+    const response = await post(proxy.url, request);
+    expect(response.status).toBe(expectedStatus);
+    expect(upstream.bodies).toHaveLength(count);
+    expect(JSON.parse(upstream.bodies[0]!)).toEqual(request);
+    if (count === 2) {
+      expect(JSON.parse(upstream.bodies[1]!)).toEqual({
+        model: request.model, max_tokens: request.max_tokens, messages: request.messages,
+      });
+    }
   });
 });
 

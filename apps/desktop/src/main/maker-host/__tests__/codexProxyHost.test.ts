@@ -151,6 +151,16 @@ vi.mock('@cindy/anthropic-compat-proxy', async (importOriginal) => {
   };
 });
 
+// Media-store persistence is covered by oversized-attachment-recovery.test.ts; keep the
+// real request rewrite and replace only where the preserved file is published.
+vi.mock('../oversized-attachment-recovery.js', async () => {
+  const { recoverInlineAttachments } = await vi.importActual<typeof import('@cindy/anthropic-compat-proxy')>('@cindy/anthropic-compat-proxy');
+  return {
+    createAttachmentRecovery: () => () => (body: Parameters<typeof recoverInlineAttachments>[0], target: number) =>
+      recoverInlineAttachments(body, target, { prepare: async () => '/tmp/preserved.png', commit: async () => {} }),
+  };
+});
+
 vi.mock('@cindy/responses-chat-bridge', async (importOriginal) => ({
   ...await importOriginal<typeof import('@cindy/responses-chat-bridge')>(),
   createResponsesChatHandler: mockState.createResponsesChatHandler,
@@ -796,6 +806,81 @@ describe('chatBridgeCapabilitiesForRoute', () => {
     expect(capabilities.passthroughFields).not.toContain('n');
     expect(capabilities.passthroughFields).not.toContain('logprobs');
     expect(capabilities.passthroughFields).not.toContain('top_logprobs');
+  });
+
+  // #7906: first 400 repairs the persisted history pair, then only that thread is pre-cleaned.
+  it('recovers duplicate Responses call IDs and keeps later turns from repeating the 400', async () => {
+    const host = await freshCodexProxyHost(true);
+    const actual = await vi.importActual<typeof import('@cindy/anthropic-compat-proxy')>('@cindy/anthropic-compat-proxy');
+    const requests: Array<Record<string, unknown>> = [];
+    const upstream = createServer(async (req, res) => {
+      const chunks: Buffer[] = [];
+      for await (const chunk of req) chunks.push(Buffer.from(chunk));
+      const body = JSON.parse(Buffer.concat(chunks).toString('utf8')) as Record<string, unknown>;
+      requests.push(body);
+      const input = body.input as Array<Record<string, unknown>>;
+      const callIds = input.filter(item => item.type === 'function_call' || item.type === 'custom_tool_call').map(item => item.call_id);
+      const outputIds = input.filter(item => item.type === 'function_call_output' || item.type === 'custom_tool_call_output').map(item => item.call_id);
+      const hasDuplicateCall = new Set(callIds).size !== callIds.length;
+      const hasDuplicateOutput = new Set(outputIds).size !== outputIds.length;
+      if (hasDuplicateCall || hasDuplicateOutput) {
+        res.writeHead(400, { 'content-type': 'application/json' });
+        res.end(JSON.stringify({ error: { message: "Duplicate function_call_output for call_id 'call_retry'. Each function_call must have exactly one matching function_call_output" } }));
+        return;
+      }
+      res.writeHead(200, { 'content-type': 'application/json' });
+      res.end(JSON.stringify({ output: [] }));
+    });
+    await new Promise<void>(resolve => upstream.listen(0, '127.0.0.1', resolve));
+    const upstreamUrl = `http://127.0.0.1:${(upstream.address() as AddressInfo).port}`;
+    mockState.createAnthropicCompatProxy.mockImplementation((opts: Parameters<typeof actual.createAnthropicCompatProxy>[0]) =>
+      actual.createAnthropicCompatProxy({
+        ...opts,
+        upstream: upstreamUrl,
+        resolveOutboundProxy: () => null,
+        routingTransform: async (body, ctx) => ({ ...(await opts.routingTransform?.(body, ctx)), upstreamOverride: upstreamUrl }),
+      }),
+    );
+    const input = [
+      { type: 'function_call', id: 'fc_1', call_id: 'call_retry', name: 'write', arguments: '{}' },
+      { type: 'function_call_output', id: 'fco_1', call_id: 'call_retry', output: 'failed' },
+      { type: 'function_call', id: 'fc_2', call_id: 'call_retry', name: 'write', arguments: '{}' },
+      { type: 'function_call_output', id: 'fco_2', call_id: 'call_retry', output: 'succeeded' },
+    ];
+    const post = () => new Promise<number | undefined>((resolve, reject) => {
+      const req = httpRequest(host.getCodexProxyEndpoint() + '/v1/responses', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', 'thread-id': 'thread-7906' },
+      }, res => {
+        res.resume();
+        res.once('end', () => resolve(res.statusCode));
+      });
+      req.once('error', reject);
+      req.end(JSON.stringify({ model: 'amazon/nova-pro-v1', input }));
+    });
+
+    try {
+      await host.ensureCodexProxyReady();
+      expect(await post()).toBe(200);
+      expect(requests).toHaveLength(2);
+      expect(requests[1]?.input).toEqual([
+        input[0], input[1],
+        { ...input[2], call_id: 'call_retry__cindy_dup_2' },
+        { ...input[3], call_id: 'call_retry__cindy_dup_2' },
+      ]);
+
+      expect(await post()).toBe(200);
+      expect(requests).toHaveLength(3);
+      expect(requests[2]?.input).toEqual(requests[1]?.input);
+    } finally {
+      host.unregister('session-7906');
+      const { responsesToolCallHistoryStripController } = await import('../thread-strip-controllers.js');
+      responsesToolCallHistoryStripController.clear('thread-7906');
+      await host.disposeCodexProxy();
+      upstream.closeAllConnections();
+      await new Promise<void>(resolve => upstream.close(() => resolve()));
+      mockState.realStripTransforms = false;
+    }
   });
 
   it.each([
@@ -2777,7 +2862,7 @@ describe('codex proxy host', () => {
         // upstream 是函数形态(每请求现取,model-access 下发可运行期换 endpoint);
         // 断言其当前求值 = 网关 base + /v1
         upstream: expect.any(Function),
-        // [armed HTTP recovery strip(WS 错误后落回 HTTP 即激活对应 strip), encrypted activeStrip, image generation activeStrip, provider-aware Guardian reviewer, locked Subagent route, instructions 注入, locked Subagent exec guard, Gateway 原生 web_search, 跨来源压缩块兼容, xAI ModelInput activeStrip, responses item id activeStrip(#4738), responses item id length activeStrip(#4227), exec function adapter, strict gateway history 兼容, xAI ModelInput sanitize, DeepSeek V4 custom tool 兼容, xAI Responses 兼容, XD Gateway Grok 兼容, ByteDance Seed tool 兼容, MiniMax effort 兼容, provider model rewrite, provider 参数归一, routed-model armed HTTP recovery strip, raw reasoning activeStrip, 视觉桥(controller 未注入 → 短路透传), 工具 ID 校正, stripNonAnthropicFields]
+        // [armed HTTP recovery strip(WS 错误后落回 HTTP 即激活对应 strip), encrypted activeStrip, image generation activeStrip, provider-aware Guardian reviewer, locked Subagent route, instructions 注入, locked Subagent exec guard, Gateway 原生 web_search, 跨来源压缩块兼容, xAI ModelInput activeStrip, responses item id activeStrip(#4738), responses item id length activeStrip(#4227), exec function adapter, strict gateway history 兼容, xAI ModelInput sanitize, DeepSeek V4 custom tool 兼容, xAI Responses 兼容, XD Gateway Grok 兼容, ByteDance Seed tool 兼容, MiniMax effort 兼容, provider model rewrite, provider 参数归一, routed-model armed HTTP recovery strip, raw reasoning activeStrip, 视觉桥(controller 未注入 → 短路透传), 工具 ID 校正, Responses 重复工具调用清理 activeStrip(#7906), stripNonAnthropicFields]
         transformRequest: [
           expect.any(Function), expect.any(Function), expect.any(Function), expect.any(Function), expect.any(Function),
           expect.any(Function), expect.any(Function), expect.any(Function), expect.any(Function), expect.any(Function),
@@ -2785,7 +2870,7 @@ describe('codex proxy host', () => {
           expect.any(Function), expect.any(Function), expect.any(Function), expect.any(Function),
           expect.any(Function), expect.any(Function), expect.any(Function), expect.any(Function),
           expect.any(Function), expect.any(Function), expect.any(Function), // frozen custom-provider effort
-          expect.any(Function), expect.any(Function),
+          expect.any(Function), expect.any(Function), expect.any(Function),
         ],
         transformResponse: expect.any(Function),
         routingTransform: expect.any(Function),
@@ -2796,6 +2881,8 @@ describe('codex proxy host', () => {
           expect.objectContaining({ id: 'responses_item_id_prefix' }),
           expect.objectContaining({ id: 'responses_item_id_length' }),
           expect.objectContaining({ id: 'responses_reasoning_content' }),
+          // #7906: 只去重工具 ID，不许在同一次透明重试里叠洗其它 strip。
+          expect.objectContaining({ id: 'duplicate_responses_tool_call', allowExtraRules: false }),
           expect.objectContaining({ id: 'xai_model_input' }),
         ]),
       }),
@@ -2817,6 +2904,46 @@ describe('codex proxy host', () => {
     const body = { model: 'gpt-5', input: [] };
     strip(body, { url: '/responses' });
     expect(mockState.stripNonAnthropicFields).toHaveBeenCalledWith(body, { url: '/responses' });
+  });
+
+  // #7055: ChatGPT closes WebSocket messages over ~16 MiB with 1009. A reconnect resends the
+  // whole image-heavy history, so every retry was rejected until the turn timed out.
+  it('fits an oversized WebSocket request under the upstream message limit before forwarding', async () => {
+    const host = await freshCodexProxyHost();
+    mockState.createAnthropicCompatProxy.mockResolvedValueOnce({
+      url: 'http://127.0.0.1:43210',
+      dispose: vi.fn(async () => undefined),
+    });
+    await host.ensureCodexProxyReady();
+    const proxyOpts = mockState.createAnthropicCompatProxy.mock.calls[0][0] as {
+      webSocketTransforms: (ctx: { url: string; headers: Readonly<Record<string, string>> }) => { outbound: Transform };
+    };
+    const { createWebSocketMessageTransform } = await vi.importActual<typeof import('@cindy/anthropic-compat-proxy')>('@cindy/anthropic-compat-proxy');
+    const send = async (input: unknown[]): Promise<Buffer> => {
+      const payload = Buffer.from(JSON.stringify({ type: 'response.create', model: 'gpt-5.4', input }));
+      const header = Buffer.alloc(14);
+      header[0] = 129; header[1] = 128 | 127; header.writeBigUInt64BE(BigInt(payload.length), 2);
+      const { outbound } = proxyOpts.webSocketTransforms({ url: '/backend-api/codex/responses', headers: {} });
+      const forwarded: Buffer[] = [];
+      outbound.on('data', chunk => forwarded.push(chunk));
+      const ended = once(outbound, 'end');
+      outbound.end(Buffer.concat([header, payload])); // zero mask
+      await ended;
+      let message: Buffer = Buffer.alloc(0);
+      const reader = createWebSocketMessageTransform(true, decoded => { message = decoded; return decoded; });
+      reader.resume(); const read = once(reader, 'end'); reader.end(Buffer.concat(forwarded)); await read;
+      return message;
+    };
+    const image = { type: 'input_image', image_url: `data:image/png;base64,${Buffer.alloc(3 << 20, 1).toString('base64')}` };
+
+    const ordinary = await send([image, image]);
+    expect(JSON.parse(ordinary.toString()).input).toEqual([image, image]);
+
+    const oversized = await send([image, image, image, image, image]);
+    expect(oversized.length).toBeLessThanOrEqual(12 << 20);
+    const input = JSON.parse(oversized.toString()).input;
+    expect(input[0]).toMatchObject({ type: 'input_text', text: expect.stringContaining('/tmp/preserved.png') });
+    expect(input.at(-1)).toEqual(image);
   });
 
   it('only resolves the websocket upstream for the oauth-bearer spawn identity', async () => {
@@ -7175,7 +7302,7 @@ describe('codex proxy host', () => {
     await host.ensureCodexProxyReady();
 
     const transforms = mockState.createAnthropicCompatProxy.mock.calls[0]?.[0]?.transformRequest ?? [];
-    expect(transforms).toHaveLength(29); // ordinary transforms + dump + frozen custom-provider effort
+    expect(transforms).toHaveLength(30); // ordinary transforms + dump + frozen custom-provider effort
     const ctx = {
       method: 'POST',
       url: '/v1/responses',

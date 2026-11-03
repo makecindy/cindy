@@ -1,0 +1,399 @@
+{
+  "_说明": "历史上出现过的 login-* 默认值,按模式分槽位(light / dark)。取自主干上冻结快照 desktop-color-defaults.json 的全部 git 历史(2026-09-02 建档起),已排除当前值。用于 local-themes-normalize 在加载期识别旧版「导出当前主题」写进本地主题的过期 override;只对完整导出快照生效。历史快照,不要随主题数值更新而改动;建档之前的更早版本不在其中。",
+  "defaults": {
+    "login-action-control-bg": {
+      "light": [
+        "#EEEEEE"
+      ],
+      "dark": [
+        "#2A2828"
+      ]
+    },
+    "login-back-border": {
+      "light": [
+        "#FFFFFF"
+      ],
+      "dark": [
+        "#434343"
+      ]
+    },
+    "login-bg-base": {
+      "light": [
+        "#EDEDED"
+      ],
+      "dark": [
+        "#1F1F1E"
+      ]
+    },
+    "login-callback-body": {
+      "light": [
+        "#6F6F6F"
+      ],
+      "dark": [
+        "#6F6F6F"
+      ]
+    },
+    "login-callback-card-bg": {
+      "light": [
+        "#FBFBFB"
+      ],
+      "dark": [
+        "#312F2F"
+      ]
+    },
+    "login-callback-card-border": {
+      "light": [
+        "#D4D4D4"
+      ],
+      "dark": [
+        "#434343"
+      ]
+    },
+    "login-callback-cta-bg": {
+      "light": [
+        "#2A2828"
+      ],
+      "dark": []
+    },
+    "login-callback-cta-border": {
+      "light": [
+        "#434343"
+      ],
+      "dark": [
+        "#FFFFFF"
+      ]
+    },
+    "login-callback-cta-text": {
+      "light": [
+        "#D4D4D4"
+      ],
+      "dark": [
+        "#2A2828"
+      ]
+    },
+    "login-callback-title": {
+      "light": [
+        "#252222"
+      ],
+      "dark": [
+        "#D4D4D4"
+      ]
+    },
+    "login-consent-radio-bg": {
+      "light": [
+        "#F1F0F1"
+      ],
+      "dark": [
+        "#2A2828"
+      ]
+    },
+    "login-consent-radio-border": {
+      "light": [
+        "#434343"
+      ],
+      "dark": [
+        "#F1F0F1"
+      ]
+    },
+    "login-consent-radio-check": {
+      "light": [
+        "#FFFFFF"
+      ],
+      "dark": [
+        "#2A2828"
+      ]
+    },
+    "login-consent-radio-checked-bg": {
+      "light": [
+        "#2A2828"
+      ],
+      "dark": [
+        "#F1F0F1"
+      ]
+    },
+    "login-control-bg": {
+      "light": [
+        "#EEEEEE"
+      ],
+      "dark": [
+        "#2C2A2A"
+      ]
+    },
+    "login-control-border": {
+      "light": [
+        "#D4D4D4"
+      ],
+      "dark": [
+        "#434343"
+      ]
+    },
+    "login-control-border-active": {
+      "light": [
+        "#2A2828"
+      ],
+      "dark": [
+        "#EEEEEE"
+      ]
+    },
+    "login-control-border-disabled": {
+      "light": [
+        "#B4B4B4"
+      ],
+      "dark": [
+        "#B4B4B4"
+      ]
+    },
+    "login-control-placeholder": {
+      "light": [
+        "#D4D4D4"
+      ],
+      "dark": [
+        "#6F6F6F"
+      ]
+    },
+    "login-control-text": {
+      "light": [
+        "#252222"
+      ],
+      "dark": [
+        "#EEEEEE"
+      ]
+    },
+    "login-deletion-bubble-bg": {
+      "light": [
+        "#FFFFFF"
+      ],
+      "dark": [
+        "#1F1F1E"
+      ]
+    },
+    "login-deletion-bubble-border": {
+      "light": [
+        "#D7D7D4"
+      ],
+      "dark": [
+        "#3C3C3A"
+      ]
+    },
+    "login-disabled-button-bg": {
+      "light": [
+        "#2A2828"
+      ],
+      "dark": [
+        "#2A2828"
+      ]
+    },
+    "login-disabled-button-overlay": {
+      "light": [
+        "rgba(255, 255, 255, 0.7)"
+      ],
+      "dark": [
+        "rgba(255, 255, 255, 0.7)"
+      ]
+    },
+    "login-disabled-button-text": {
+      "light": [
+        "#D4D4D4"
+      ],
+      "dark": [
+        "#D4D4D4"
+      ]
+    },
+    "login-link-hover": {
+      "light": [
+        "#4A4848"
+      ],
+      "dark": [
+        "#A8A8A8"
+      ]
+    },
+    "login-link-pressed": {
+      "light": [
+        "#1A1818"
+      ],
+      "dark": [
+        "#C0BEBE"
+      ]
+    },
+    "login-link-text": {
+      "light": [
+        "#2A2828"
+      ],
+      "dark": [
+        "#EEEEEE"
+      ]
+    },
+    "login-loading-ring-track": {
+      "light": [
+        "rgba(42, 40, 40, 0.18)"
+      ],
+      "dark": [
+        "rgba(212, 212, 212, 0.18)"
+      ]
+    },
+    "login-overlay-back-hover": {
+      "light": [
+        "rgba(255, 255, 255, 0.7)"
+      ],
+      "dark": [
+        "rgba(255, 255, 255, 0.08)"
+      ]
+    },
+    "login-overlay-back-pressed": {
+      "light": [
+        "rgba(0, 0, 0, 0.08)"
+      ],
+      "dark": [
+        "rgba(0, 0, 0, 0.08)"
+      ]
+    },
+    "login-overlay-button-hover": {
+      "light": [
+        "rgba(255, 255, 255, 0.08)"
+      ],
+      "dark": []
+    },
+    "login-overlay-button-pressed": {
+      "light": [
+        "rgba(0, 0, 0, 0.5)"
+      ],
+      "dark": [
+        "rgba(0, 0, 0, 0.1)"
+      ]
+    },
+    "login-overlay-input-hover": {
+      "light": [
+        "rgba(0, 0, 0, 0.05)"
+      ],
+      "dark": [
+        "rgba(255, 255, 255, 0.05)"
+      ]
+    },
+    "login-overlay-row-hover": {
+      "light": [
+        "rgba(255, 255, 255, 0.08)"
+      ],
+      "dark": [
+        "rgba(255, 255, 255, 0.08)"
+      ]
+    },
+    "login-overlay-row-pressed": {
+      "light": [
+        "rgba(0, 0, 0, 0.08)"
+      ],
+      "dark": [
+        "rgba(0, 0, 0, 0.08)"
+      ]
+    },
+    "login-overlay-secondary-hover": {
+      "light": [
+        "rgba(255, 255, 255, 0.1)"
+      ],
+      "dark": [
+        "rgba(255, 255, 255, 0.08)"
+      ]
+    },
+    "login-overlay-secondary-pressed": {
+      "light": [
+        "rgba(0, 0, 0, 0.1)"
+      ],
+      "dark": [
+        "rgba(0, 0, 0, 0.2)"
+      ]
+    },
+    "login-panel-bg": {
+      "light": [
+        "#FBFBFB"
+      ],
+      "dark": [
+        "#312F2F"
+      ]
+    },
+    "login-panel-border": {
+      "light": [
+        "#D4D4D4"
+      ],
+      "dark": [
+        "#434343"
+      ]
+    },
+    "login-primary-button-bg": {
+      "light": [
+        "#2A2828"
+      ],
+      "dark": []
+    },
+    "login-primary-button-border": {
+      "light": [
+        "#434343"
+      ],
+      "dark": [
+        "#FFFFFF"
+      ]
+    },
+    "login-primary-button-text": {
+      "light": [
+        "#D4D4D4"
+      ],
+      "dark": [
+        "#2A2828"
+      ]
+    },
+    "login-secondary-button-bg": {
+      "light": [
+        "#EEEEEE"
+      ],
+      "dark": [
+        "#434141"
+      ]
+    },
+    "login-secondary-button-border": {
+      "light": [
+        "#FFFFFF"
+      ],
+      "dark": [
+        "#565454"
+      ]
+    },
+    "login-secondary-button-text": {
+      "light": [
+        "#2A2828"
+      ],
+      "dark": [
+        "#EEEEEE"
+      ]
+    },
+    "login-secondary-text": {
+      "light": [
+        "#6F6F6F"
+      ],
+      "dark": [
+        "#6F6F6F"
+      ]
+    },
+    "login-splash-progress-fill": {
+      "light": [
+        "#252222"
+      ],
+      "dark": [
+        "#D4D4D4"
+      ]
+    },
+    "login-splash-progress-track": {
+      "light": [
+        "#D9D9D9"
+      ],
+      "dark": [
+        "#434343"
+      ]
+    },
+    "login-title-text": {
+      "light": [
+        "#252222"
+      ],
+      "dark": [
+        "#D4D4D4"
+      ]
+    }
+  }
+}

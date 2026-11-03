@@ -63,6 +63,24 @@ function historyWithSessions(): XdtHelperHistoryDeps {
   };
 }
 
+describe("list_sessions agent_kind", () => {
+  it("passes the pi filter through registry validation to the host", async () => {
+    const history = historyWithSessions();
+    const registry = new XdtHelperToolRegistry();
+    registerListSessionsTool(registry, { history });
+
+    expect(registry.get("list_sessions")?.description).toContain(
+      "agent_kind: cc(Claude Code) | codex | pi",
+    );
+    const result = await registry.call("list_sessions", { agent_kind: "pi" });
+
+    expect(parse(result)).toMatchObject({ ok: true });
+    expect(history.listSessions).toHaveBeenCalledWith(
+      expect.objectContaining({ agentKind: "pi" }),
+    );
+  });
+});
+
 describe("list_sessions queuedCount", () => {
   it("adds live queuedCount values for the returned page", async () => {
     const sessionQueue: SessionQueueDeps = {
