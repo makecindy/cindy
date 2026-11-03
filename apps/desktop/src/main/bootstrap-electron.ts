@@ -717,7 +717,10 @@ import {
   registerPiAgentIfAvailable,
   setBotConversationConnectionsReader,
 } from './maker-host/index.js';
-import { createPiRuntimeRecovery } from './agent-binaries/pi-runtime-recovery.js';
+import {
+  createPiRuntimeRecovery,
+  prepareOptionalPiRuntime,
+} from './agent-binaries/pi-runtime-recovery.js';
 import { createDynamicMaker } from './maker-host/dynamic-maker.js';
 import { ensureBundledRipgrepReady } from './maker-host/runtime-configs.js';
 import {
@@ -6792,23 +6795,15 @@ const registerIpcHandlers = () => {
       : undefined;
     resetBeforeSegment('pi', claudeRes.downloaded === true || codexRes.downloaded === true);
 
-    let piInfo: { status: 'passed' | 'failed'; path?: string; error?: string };
-    try {
-      const piRes = await binaryPrepare('pi', {
-        ...stepOptsFor('pi'),
-        broadcastFailure: false,
-        signal: piInstallSignal,
-      });
-      piInfo =
-        piRes.ready && piRes.path
-          ? { status: 'passed' as const, path: piRes.path }
-          : { status: 'failed' as const, error: piRes.error ?? 'pi binary not available' };
-    } catch (err: unknown) {
-      piInfo = {
-        status: 'failed' as const,
-        error: err instanceof Error ? err.message : String(err),
-      };
-    }
+    const piInfo = await prepareOptionalPiRuntime({
+      prepare: () =>
+        binaryPrepare('pi', {
+          ...stepOptsFor('pi'),
+          broadcastFailure: false,
+          signal: piInstallSignal,
+        }),
+      register: registerPiAgentIfAvailable,
+    });
     if (piInfo.status === 'failed') {
       piRuntimeRecovery.markUnavailable(piInfo.error);
       console.warn(
