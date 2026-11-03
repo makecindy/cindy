@@ -89,7 +89,7 @@ vi.mock('react-native', () => {
     } },
     BackHandler: { addEventListener: (_event: string, fn: () => boolean) => { h.hardwareBack = fn; return { remove() {} }; } },
     Keyboard: { dismiss: () => {}, isVisible: () => h.keyboardVisible },
-    Animated: { View: box('div'), Value: class { setValue() {} interpolate() { return this; } }, timing: () => ({ start() {}, stop() {} }),
+    Animated: { createAnimatedComponent: (component: any) => component, View: box('div'), Value: class { setValue() {} interpolate() { return this; } }, timing: () => ({ start() {}, stop() {} }),
       loop: () => ({ start() {}, stop() {} }), sequence: () => ({}) },
     Easing: { inOut: () => undefined, ease: undefined, bezier: () => undefined },
   };
@@ -479,6 +479,26 @@ describe('group timeline', () => {
     expect(h.headerFade.at(-1)).toBe(0);
   });
 
+  it('returns from history without new messages and resumes following the tail', async () => {
+    await render();
+    await act(async () => h.scroll.onScroll({ nativeEvent: {
+      contentOffset: { y: 200 }, contentSize: { height: 2000 }, layoutMeasurement: { height: 500 },
+    } }));
+    const jump = byId('botGroup.jumpToLatest') as HTMLButtonElement;
+    expect(jump).not.toBeNull();
+    expect(byId('botGroup.newMessages')).toBeNull();
+    h.scrollToEnd.mockClear();
+    await act(async () => jump.click());
+    expect(h.scrollToEnd).toHaveBeenCalledWith({ animated: true });
+    await act(async () => h.scroll.onScroll({ nativeEvent: {
+      contentOffset: { y: 1500 }, contentSize: { height: 2000 }, layoutMeasurement: { height: 500 },
+    } }));
+    expect(byId('botGroup.jumpToLatest')).toBeNull();
+    h.scrollToEnd.mockClear();
+    await act(async () => h.scroll.onContentSizeChange(400, 2100));
+    expect(h.scrollToEnd).toHaveBeenCalledWith({ animated: false });
+  });
+
   it('waits for measured tail positioning before acknowledging replies, including new snapshots', async () => {
     vi.useFakeTimers();
     await render();
@@ -515,10 +535,14 @@ describe('group timeline', () => {
     expect(h.markRead).not.toHaveBeenCalled();
     // The reader stays in history, sees the arrival, and can explicitly return to it.
     const jump = byId('botGroup.newMessages') as HTMLButtonElement;
-    expect(jump.textContent).toContain('count=1');
+    expect(byId('botGroup.newMessageDot')).not.toBeNull();
+    expect(byId('botGroup.jumpToLatest')).toBeNull();
     h.scrollToEnd.mockClear();
     await act(async () => jump.click());
-    expect(h.scrollToEnd).toHaveBeenCalledWith({ animated: false });
+    expect(h.scrollToEnd).toHaveBeenCalledWith({ animated: true });
+    expect(h.markRead).not.toHaveBeenCalled();
+    await act(async () => scroll(500, 3000));
+    expect(byId('botGroup.newMessages')).not.toBeNull();
     expect(h.markRead).not.toHaveBeenCalled();
     await act(async () => scroll(2500, 3000));
     expect(byId('botGroup.newMessages')).toBeNull();
@@ -537,7 +561,7 @@ describe('group timeline', () => {
     h.chat = { pending: [], ...h.chat, state: { kind: 'ready', group: { ...data, messages: [...data.messages, message('arrival', 20, {})] } } };
     await act(async () => root.render(el(BotGroupChatScreen, props)));
     await act(async () => h.scroll.onContentSizeChange(400, 2500));
-    expect(byId('botGroup.newMessages')?.textContent).toContain('count=1');
+    expect(byId('botGroup.newMessageDot')).not.toBeNull();
     expect(h.markRead).not.toHaveBeenCalled();
     expect(h.scrollToEnd).not.toHaveBeenCalled();
   });

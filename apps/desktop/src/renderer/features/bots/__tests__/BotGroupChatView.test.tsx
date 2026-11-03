@@ -369,6 +369,42 @@ beforeEach(() => {
 afterEach(() => { cleanup(); vi.unstubAllGlobals(); });
 
 describe('BotGroupChatView', () => {
+  it('offers jump to bottom while scrolling down through read history', async () => {
+    mocks.getControlledState.mockResolvedValue({ controlledBy: [{ deviceId: 'studio', name: 'Mac Studio' }] });
+    const view = renderView();
+    const scroll = await screen.findByTestId('bot-group-timeline');
+    Object.defineProperties(scroll, {
+      scrollHeight: { configurable: true, value: 2000 },
+      clientHeight: { configurable: true, value: 500 },
+    });
+    vi.useFakeTimers();
+    try {
+      scroll.scrollTop = 100; fireEvent.scroll(scroll);
+      const jump = screen.getByRole('button', { name: 'chat.jumpToBottom' });
+      expect(jump.parentElement?.className).toContain('opacity-100');
+      const chip = view.container.querySelector('[data-controlled-banner-chip]')!;
+      expect(chip).toBeTruthy();
+      expect(chip.closest('[inert]')).not.toBeNull();
+      act(() => vi.advanceTimersByTime(2000));
+      expect(chip.closest('[inert]')).toBeNull();
+      expect(view.container.querySelector('[data-controlled-banner-chip]')).toBe(chip);
+      expect(jump.parentElement?.className).toContain('opacity-0');
+      scroll.scrollTop = 200; fireEvent.scroll(scroll);
+      expect(jump.parentElement?.className).toContain('opacity-100');
+      scroll.scrollTop = 100; fireEvent.scroll(scroll);
+      expect(jump.parentElement?.className).toContain('opacity-0');
+      scroll.scrollTop = 200; fireEvent.scroll(scroll);
+      const scrollTo = vi.fn(); scroll.scrollTo = scrollTo;
+      fireEvent.click(jump);
+      expect(scrollTo).toHaveBeenCalledWith({ top: 2000, behavior: 'smooth' });
+      expect(chip.closest('[inert]')).not.toBeNull();
+      scroll.scrollTop = 400; fireEvent.scroll(scroll);
+      expect(chip.closest('[inert]')).not.toBeNull();
+      scroll.scrollTop = 1500; fireEvent.scroll(scroll);
+      expect(jump.parentElement?.className).toContain('opacity-0');
+    } finally { view.unmount(); vi.useRealTimers(); }
+  });
+
   // Renderer integration: isolated confirmed deltas must not conceal a missing page after reconnect.
   it('keeps a skipped message reachable by pagination after multiple deltas overtake a full page', async () => {
     const page = (from: number, to: number) => Array.from({ length: to - from + 1 }, (_, index) =>
@@ -1269,14 +1305,15 @@ describe('BotGroupChatView', () => {
     const view = renderView();
     await screen.findByRole('textbox');
     const main = view.container.querySelector('main')!;
-    const originalRows = main.childElementCount;
+    const bottomStack = main.querySelector('[data-group-bottom-bubbles]')!;
+    const originalRows = bottomStack.childElementCount;
     expect(main.querySelector('[data-controlled-banner-chip]')).toBeNull();
     act(() => mocks.controlledPush?.({ controllers: [{ deviceId: 'studio', name: 'Mac Studio' }] }));
-    expect(main.childElementCount).toBe(originalRows + 1);
+    expect(bottomStack.childElementCount).toBe(originalRows + 1);
     expect(main.querySelector('[data-controlled-banner-chip]')).toBeTruthy();
     expect(fallback.container.childElementCount).toBe(0);
     act(() => mocks.controlledPush?.({ controllers: [] }));
-    expect(main.childElementCount).toBe(originalRows);
+    expect(bottomStack.childElementCount).toBe(originalRows);
     expect(document.querySelector('[data-controlled-banner-chip]')).toBeNull();
   });
 
@@ -3240,9 +3277,20 @@ it('keeps copy/share in each author row\'s more menu and shares only message con
     act(() => window.dispatchEvent(new Event('focus')));
     expect(getBotLastReadAt(botGroupReadKey('g1'))).toBe(200);
     expect(scroll.scrollTop).toBe(0);
-    expect(screen.getByRole('button', { name: 'chat.newMessageIndicator.aria' })).toBeTruthy();
+    const newMessages = screen.getByRole('button', { name: 'chat.newMessageIndicator.aria' });
+    expect(newMessages).toBeTruthy();
+    const bubbles = document.querySelector('[data-group-bottom-bubbles]')!;
+    expect(bubbles.hasAttribute('inert')).toBe(true);
+    scroll.scrollTo = vi.fn();
+    fireEvent.click(newMessages);
+    scroll.scrollTop = 400; fireEvent.scroll(scroll);
+    // Smooth navigation does not acknowledge unread replies before reaching the tail.
+    expect(getBotLastReadAt(botGroupReadKey('g1'))).toBe(200);
+    expect(newMessages.parentElement?.className).toContain('opacity-100');
+    expect(screen.getByRole('button', { name: 'chat.jumpToBottom' }).parentElement?.className).toContain('opacity-0');
     scroll.scrollTop = 900; fireEvent.scroll(scroll);
     expect(getBotLastReadAt(botGroupReadKey('g1'))).toBe(1200);
+    expect(bubbles.hasAttribute('inert')).toBe(false);
   } finally { focus.mockRestore(); resetBotReadStateForTests(); }
 });
 

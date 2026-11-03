@@ -90,7 +90,7 @@ import {
 } from './BotGroupAvatars';
 import { CHAT_HEADER_MARK_SIZE, CHAT_HEADER_BLUR_FADE_INSIDE, ChatIdentityHeader } from './ChatIdentityHeader';
 import { SessionHeaderNativeBlur } from './SessionHeaderNativeControls';
-import { CompanionEntering, CompanionFadeIn } from './CompanionEntering';
+import { CompanionEntering } from './CompanionEntering';
 import { BotGroupRuntimeFailureNotice } from './BotGroupRuntimeFailureNotice';
 import { BotGroupComposer, type BotGroupSendInput } from './BotGroupComposer';
 import { BotGroupMessageAttachments } from './BotGroupMessageAttachments';
@@ -111,6 +111,7 @@ import {
   type BotGroupPlanCardAction,
 } from './BotGroupPlan';
 import { BotGroupSettingsSheet } from './BotGroupSettingsSheet';
+import { MessageScrollToBottomButton } from './MessageScrollToBottomButton';
 import { BotGroupWorkArea } from './BotGroupWorkArea';
 import { botGroupActionErrorText } from './botGroupCopy';
 import { keyboardAvoidingBehaviorForPlatform } from './mobileNativeShellLayout';
@@ -227,6 +228,10 @@ function BotGroupChatContent({ deviceId, deviceName, groupId, messageId, notific
     focused && foreground,
   );
   const viewportOwner = `${user?.id ?? ''}:${accountGeneration}:${deviceId}:${groupId}:${threadRootId ?? 'main'}`;
+  const [awayFromBottom, setAwayFromBottom] = useState<{ owner: string; value: boolean } | null>(null);
+  const isAwayFromBottom = awayFromBottom?.owner === viewportOwner && awayFromBottom.value;
+  const updateAwayFromBottom = (value: boolean) => setAwayFromBottom(previous =>
+    previous?.owner === viewportOwner && previous.value === value ? previous : { owner: viewportOwner, value });
   const shareScope = `bot-group:${viewportOwner}`;
   const imageSelectionActive = useShareSelectionActive(shareScope);
   useShareSelectionRevision();
@@ -547,11 +552,10 @@ function BotGroupChatContent({ deviceId, deviceName, groupId, messageId, notific
   const onScroll = (event: NativeSyntheticEvent<NativeScrollEvent>) => {
     const { contentOffset, contentSize, layoutMeasurement } = event.nativeEvent;
     previewVisibility.setViewport(contentOffset.y, layoutMeasurement.height);
-    if (stickToBottom.current) setSeen(previous => previous?.owner === viewportOwner && previous.sequence === latestSequence
-      ? previous : { owner: viewportOwner, sequence: latestSequence });
     Object.assign(viewport.current, { measuredGroup: group, contentHeight: contentSize.height,
       offsetY: contentOffset.y, viewportHeight: layoutMeasurement.height });
     stickToBottom.current = contentSize.height - contentOffset.y - layoutMeasurement.height < STICK_TO_BOTTOM_PX;
+    updateAwayFromBottom(!stickToBottom.current);
     acknowledge();
     if (threadRootId && userScrolled.current && !olderError && contentOffset.y < (messageHeights.current.get(threadRootId) ?? 0) + 160) loadOlderReplies();
   };
@@ -637,11 +641,17 @@ function BotGroupChatContent({ deviceId, deviceName, groupId, messageId, notific
         maintainVisibleContentPosition={chat.server && !threadRootId ? { minIndexForVisible: group.hasMoreBefore ? 1 : 0 } : undefined}
         onScroll={onScroll} scrollEventThrottle={64}
         onScrollBeginDrag={() => { pauseReadUntilInteraction.current = false; userScrolled.current = true; }}
-        onLayout={event => { viewport.current.viewportHeight = event.nativeEvent.layout.height; previewVisibility.setHeight(event.nativeEvent.layout.height); acknowledge(); }}
+        onLayout={event => {
+          viewport.current.viewportHeight = event.nativeEvent.layout.height;
+          previewVisibility.setHeight(event.nativeEvent.layout.height);
+          updateAwayFromBottom(!stickToBottom.current && viewport.current.contentHeight - viewport.current.offsetY - viewport.current.viewportHeight >= STICK_TO_BOTTOM_PX);
+          acknowledge();
+        }}
         onContentSizeChange={(_width, height) => {
           viewport.current.contentHeight = height;
           viewport.current.measuredGroup = group;
           if (focused && stickToBottom.current) scrollRef.current?.scrollToEnd({ animated: false });
+          updateAwayFromBottom(!stickToBottom.current && height - viewport.current.offsetY - viewport.current.viewportHeight >= STICK_TO_BOTTOM_PX);
           acknowledge();
         }}
         testID="botGroup.timeline">
@@ -677,18 +687,21 @@ function BotGroupChatContent({ deviceId, deviceName, groupId, messageId, notific
         onError={message => { if (message) Alert.alert(message); }} /> : null}
       </ScrollView>
       </MessageListVisibilityContext.Provider>
-      {newMessageCount > 0 || mask.mentions.length > 0 ? <View style={styles.newMessages} accessibilityLiveRegion="polite">
+      {!imageSelectionActive && (isAwayFromBottom || newMessageCount > 0 || mask.mentions.length > 0) ? <View
+        style={styles.newMessages} pointerEvents="box-none" accessibilityLiveRegion="polite">
+        {isAwayFromBottom || newMessageCount > 0 ? <MessageScrollToBottomButton
+          hasNewMessages={newMessageCount > 0}
+          testID={newMessageCount > 0 ? 'botGroup.newMessages' : 'botGroup.jumpToLatest'}
+          dotTestID="botGroup.newMessageDot"
+          onPress={() => {
+            pauseReadUntilInteraction.current = false;
+            stickToBottom.current = true;
+            updateAwayFromBottom(false);
+            scrollRef.current?.scrollToEnd({ animated: true });
+          }} /> : null}
         {mask.mentions.length > 0 ? <MainWindowActionButton density="compact" style={styles.newMessagesButton} action={{
           label: `@ · ${mask.mentions.length}`, accessibilityLabel: t('groupChat.mask.catchup.title'), testID: 'botGroup.mentions', onPress: () => setCatchup(true),
         }} /> : null}
-        {newMessageCount > 0 ? <CompanionFadeIn play distance={spacing.xs}>
-          <MainWindowActionButton density="compact" style={styles.newMessagesButton} action={{
-            label: t('groupChat.timeline.newMessages', { count: newMessageCount }),
-            accessibilityLabel: t('message.renderer.newMessagesToBottom'),
-            testID: 'botGroup.newMessages',
-            onPress: () => { pauseReadUntilInteraction.current = false; stickToBottom.current = true; scrollRef.current?.scrollToEnd({ animated: false }); },
-          }} />
-        </CompanionFadeIn> : null}
       </View> : null}
       </View>
       {!imageSelectionActive && shareDeliveries.length ? <ScrollView style={styles.shareDeliveries} nestedScrollEnabled>
@@ -1063,7 +1076,7 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
   screen: { flex: 1, backgroundColor: colors.surface },
   flex: { flex: 1 },
   hiddenComposer: { display: 'none' },
-  newMessages: { position: 'absolute', bottom: spacing.md, alignSelf: 'center', maxWidth: '90%' },
+  newMessages: { position: 'absolute', bottom: spacing.lg, right: spacing.lg, alignItems: 'flex-end', gap: spacing.sm, maxWidth: '90%' },
   newMessagesButton: { backgroundColor: colors.surfaceElevated },
   locatedMessage: { backgroundColor: colors.surfaceElevated, borderRadius: radius.container },
   replyDraft: { flexDirection: 'row', alignItems: 'center', gap: spacing.sm,
