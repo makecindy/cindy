@@ -52,7 +52,7 @@ import {
   readBotGroupExecutionFailure, type BotGroupExecutionFailureView,
   buildBotGroupThreadShareCard, botGroupThreadShareOperationId, readBotGroupThreadShareCard,
   type BotGroupThreadShareView, type BotGroupThreadSummary, type BotGroupThreadUnread,
-  type BotGroupDetail, type BotGroupSpeaker, type BotGroupPlanView, type BotGroupFailure, type BotGroupMessageView, type BotGroupAttachment, type ChatServerApi,
+  type BotGroupDetail, type BotGroupMessageReaders, type BotGroupSpeaker, type BotGroupPlanView, type BotGroupFailure, type BotGroupMessageView, type BotGroupAttachment, type ChatServerApi,
   botGroupQuoteAttachmentName, botGroupQuoteExcerpt, botGroupQuoteFromMessage, buildBotGroupQuoteCard, readBotGroupQuote, readBotGroupQuoteCard, type BotGroupQuoteView,
   readBotGroupTaskCard, botGroupMessageSummaryText,
 } from '../../shared/botGroupChat.js';
@@ -65,6 +65,7 @@ import { companionSnapshot, registerCompanionHomes } from '../companion-cloud/ho
 import { startCompanionCloud, type CompanionCloudRuntime } from '../companion-cloud/runtime.js';
 import { DIRECT_ROOM_COMPLETION, deliverDirectRoomMessage, directRoomClientId } from '../companion-cloud/directRoom.js';
 import { createChatHistory, type ChatHistory } from '@cindy/maker-shared/chat-history';
+import { createOthersReadOverlay, isReadByOthers, parseReadReceiptFrame, projectMessageReaders } from '@cindy/maker-shared/chat-read-receipts';
 import { readAllRoomMessages } from '../companion-cloud/room.js';
 import type { ChatMaskState, ChatMaskSettings, ChatMaskMention } from '../../shared/botGroupChat.js';
 
@@ -84,8 +85,12 @@ interface Room {
   id: string; name: string; topic: string; description: string; response_mode: 'all' | 'mentioned'; speaking_mode: 'auto' | 'sequential';
   allow_mention_all_bots?: boolean; created_at: string; updated_at: string; revision: number; archived: boolean; dissolved_at?: string | null; organizer_id?: string | null; kind?: string;
 }
-/** `reads`: this reader's read position per Thread (`thread_key` = root ID, `main` for the main timeline); older servers omit it. */
-interface Snapshot { room: Room; members: Member[]; messages: Message[]; cursor: string; mentionReadIds?: string[]; reads?: Array<{ thread_key: string; read_seq: string; following?: boolean; muted?: boolean; notification_scope?: 'all' | 'mentions' | null }> }
+/**
+ * `reads`: this reader's read position per Thread (`thread_key` = root ID, `main` for the main timeline); older servers omit it.
+ * `othersRead`: per Thread, the highest read position among the other human members; only servers
+ * that report message readers (`capabilities.messageReaders`) send it.
+ */
+interface Snapshot { room: Room; members: Member[]; messages: Message[]; cursor: string; mentionReadIds?: string[]; reads?: Array<{ thread_key: string; read_seq: string; following?: boolean; muted?: boolean; notification_scope?: 'all' | 'mentions' | null }>; othersRead?: Array<{ thread_key: string; read_seq: string }> }
 interface SavedChatSend {
   snapshot: Snapshot; plans: ServerPlan[]; members: Member[];
   quote: (BotGroupQuoteView & { recipientActorId?: string }) | null;
@@ -132,6 +137,11 @@ export class ChatResponseError extends Error {
   constructor(code: string, readonly status: number, readonly retryAt?: number, readonly details?: unknown) { super(code); }
 }
 const CHAT_AUTH_RETRY_MS = 60_000;
+/** A read list is served from memory this long; a receipt for the group ends it sooner. */
+/** How long the positions of a snapshot are trusted while my messages in it are unread; a lost receipt is healed by reading it again. */
+const OTHERS_READ_RECHECK_MS = 30_000;
+const MESSAGE_READERS_TTL_MS = 60_000;
+const MESSAGE_READERS_CACHE_LIMIT = 200;
 const ATTACHMENT_REFRESH_COALESCE_MS = 200;
 /** Threads listed in a group's 话题 list. */
 const THREAD_LIST_LIMIT = 50;
@@ -375,7 +385,14 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
     return value;
   }
   let supportsDissolve = false;
+  let supportsMessageReaders = false;
   let supportsListRemoval = false;
+  /** Receipts that arrived after the snapshot in use; see `createOthersReadOverlay`. */
+  const othersRead = createOthersReadOverlay();
+  const messageReaders = new Map<string, { at: number; value: BotGroupMessageReaders }>();
+  // Bumped whenever lists are dropped, so a read that began before a receipt never caches its older answer.
+  let messageReadersEpoch = 0;
+  const forgetMessageReaders = (roomId: string) => { messageReadersEpoch++; for (const key of messageReaders.keys()) if (key.startsWith(`${roomId}:`)) messageReaders.delete(key); };
   let supportsMemberAvatar = false;
   let supportsNotificationSettings = false;
   let supportsMentionAudiences = false;
@@ -622,6 +639,19 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
         if (targetId === roomId) deps.onChanged?.({ groupId: sourceId, change: 'messages' }, scope);
     }, CHANGE_COALESCE_MS));
   };
+  // A receipt that reads one of my loaded messages is the only one worth a re-read: the rest of a
+  // detail read (executions, plans) is not needed for it, and each message changes at most once.
+  const pendingReceiptRefresh = new Map<string, ReturnType<typeof setTimeout>>();
+  function refreshReadReceipts(roomId: string) {
+    if (!current() || pendingReceiptRefresh.has(roomId)) return;
+    pendingReceiptRefresh.set(roomId, setTimeout(() => {
+      pendingReceiptRefresh.delete(roomId);
+      if (!current()) return;
+      deps.onChanged?.({ groupId: roomId, change: 'messages' }, scope);
+      for (const [sourceId, targetId] of upgradedGroups)
+        if (targetId === roomId) deps.onChanged?.({ groupId: sourceId, change: 'messages' }, scope);
+    }, CHANGE_COALESCE_MS));
+  }
   /** Live transport used for snapshot reuse; sending subscribe is not a server acknowledgement. */
   const hasLiveSubscription = (roomId: string) => connected && socket?.readyState === WebSocket.OPEN && rooms.has(roomId);
   // TLS for production; explicit loopback is only enabled by the isolated fixture.
@@ -935,7 +965,8 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
       const profileRevision = localProfilesRevision;
       profiles = await getDbClient().drizzle.select().from(botProfiles).where(undefined);
       localProfilesRead = profileRevision;
-      const me = await request<{ actor: Actor; deviceId?: string | null; capabilities?: { groupDiscussionParity?: number; groupSingleSpeaker?: number; companionHome?: boolean; directRoomClaim?: boolean; groupLifecycleVersion?: number; conversationListStateVersion?: number; groupMemberAvatar?: number; groupMentionAudiences?: number; groupNotificationSettings?: number; workAvailabilityVersion?: number; workNotificationsVersion?: number } }>('/me'); selfId = me.actor.id;
+      const me = await request<{ actor: Actor; deviceId?: string | null; capabilities?: { messageReaders?: number; groupDiscussionParity?: number; groupSingleSpeaker?: number; companionHome?: boolean; directRoomClaim?: boolean; groupLifecycleVersion?: number; conversationListStateVersion?: number; groupMemberAvatar?: number; groupMentionAudiences?: number; groupNotificationSettings?: number; workAvailabilityVersion?: number; workNotificationsVersion?: number } }>('/me'); selfId = me.actor.id;
+      supportsMessageReaders = me.capabilities?.messageReaders === 1;
       personalMaskTools = (me.capabilities as { personalMaskTools?: number } | undefined)?.personalMaskTools === 1;
       personalMask = (me.capabilities as { personalMask?: number } | undefined)?.personalMask === 1;
       supportsDissolve = me.capabilities?.groupLifecycleVersion === 1;
@@ -1115,6 +1146,8 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
         const event = JSON.parse(String(raw));
         if (event.type === 'ready') {
           notificationBaselines.clear();
+          // Receipts sent while disconnected are gone: lists and layered positions start over from the server.
+          messageReaders.clear(); messageReadersEpoch++; othersRead.clear();
           memberJoinedClaims = true;
           triggerClaim(undefined, 'reconnect');
           for (const cache of histories.values()) cache.reconnect();
@@ -1214,6 +1247,15 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
             actorCursor = event.cursor;
           }
           ws.send(JSON.stringify({ type: 'ack', scope: event.scope, cursor: event.cursor }));
+        } else if (event.type === 'ephemeral' && event.scope === `actor:${selfId}`) {
+          // Someone read my messages: the server sends this to the author only. Lossy and not part of the
+          // change log, so no ack, lease check or snapshot read; a snapshot or the read list is authoritative
+          // and this only moves the positions shown meanwhile.
+          const receipt = supportsMessageReaders ? parseReadReceiptFrame(event, selfId) : null;
+          if (receipt && rooms.has(receipt.conversationId)) {
+            forgetMessageReaders(receipt.conversationId);
+            if (othersRead.advance(receipt.conversationId, receipt.advances)) refreshReadReceipts(receipt.conversationId);
+          }
         } else if (event.type === 'scope_error' && event.scope === `actor:${selfId}`) {
           if (event.error?.code === 'CURSOR_AHEAD') {
             actorCursor = '0'; workPolling.reset();
@@ -1250,6 +1292,7 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
             }).catch(() => ws.close());
           } else {
             rooms.delete(roomId);
+            othersRead.forget(roomId); forgetMessageReaders(roomId);
             clearGroupAttention(roomId);
             displayHistory.forget(roomId); sendJournal.forgetRoom(roomId);
             // Access may come back with a narrower history; re-read every reference.
@@ -1513,6 +1556,25 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
       changed(roomId);
     }, ATTACHMENT_REFRESH_COALESCE_MS));
   }
+  /**
+   * Takes the read positions of a snapshot as soon as it is in hand. A receipt that comes while the rest of a read is still
+   * awaited then lands on this snapshot's layer, not on the previous snapshot's, which the read would otherwise replace.
+   */
+  function fenceReceipts(s: Snapshot) {
+    if (supportsMessageReaders && isGroupRoom(s.room)) othersRead.positions(s.room.id, s.othersRead);
+  }
+  /** Where other members have read up to for this snapshot, or null when the server reports none. */
+  function readPositions(roomId: string, s: Snapshot, extra: Message[] = []) {
+    if (!supportsMessageReaders || !isGroupRoom(s.room)) return null;
+    return othersRead.positions(roomId, s.othersRead, [...s.messages, ...extra]
+      .filter(m => m.authorId === selfId && !m.deleted && m.origin !== 'system' && m.origin !== 'import'));
+  }
+  /** Own messages show a single or double check; others' messages and notices never do. */
+  function markReadByOthers(views: BotGroupMessageView[], positions: ReturnType<typeof readPositions>) {
+    if (!positions) return;
+    for (const view of views) if (view.isSelf && view.kind !== 'notice' && !view.deleted && view.serverSequence)
+      view.readByOthers = isReadByOthers(view.serverSequence, view.threadRootId, positions);
+  }
   async function messageViews(roomId: string, messages: Message[], members: Member[], ownerMembers: readonly Member[] = members) {
     return messages.map(message => {
       const view = messageView(message, members, ownerMembers);
@@ -1606,6 +1668,8 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
     if (!messages.length) return;
     const threadVersion = threads.version(roomId);
     const views = await messageViews(roomId, messages, snapshot.members);
+    // The check belongs to the message as it is pushed, not to a later full read of the room.
+    markReadByOthers(views, readPositions(roomId, snapshot, messages));
     await decorateThreads(roomId, views, messages, [...known, ...snapshot.messages], snapshot.members, false);
     if (!current() || cache?.generation(roomId) !== snapshot.cacheGeneration || threads.version(roomId) !== threadVersion) return;
     deps.onChanged?.({ groupId: roomId, change: 'messages', messages: views, historyRevision: snapshot.cacheGeneration }, scope);
@@ -1668,6 +1732,7 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
     const cache = history();
     try {
       const s = cache ? await cache.snapshot<Snapshot>(i.groupId) : await groupSnapshot(i.groupId);
+      fenceReceipts(s);
       if (!isGroupRoom(s.room)) throw new Error('NOT_A_GROUP');
       verifiedGroups.add(i.groupId);
       const revision = cache ? (s as Snapshot & { cacheGeneration: string }).cacheGeneration : undefined;
@@ -1688,6 +1753,8 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
       await decorateThreads(i.groupId, rootViews, [root], page, members, false);
       const replies = await messageViews(i.groupId, [...page].reverse(), members);
       const messageUpdates = projection ? await messageViews(i.groupId, projection.messages.filter(m => m.threadRootId === i.rootId), members) : undefined;
+      const positions = readPositions(i.groupId, s, [root, ...page, ...(projection?.messages ?? [])]);
+      for (const views of [rootViews, replies, messageUpdates ?? []]) markReadByOthers(views, positions);
       const retry = () => {
         if (attempt >= 2) throw new Error('CHAT_HISTORY_CHANGED');
         return threadDetail(input, attempt + 1);
@@ -1729,6 +1796,9 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
     // A followed room reports every later change, so its snapshot may run alongside. A new
     // room first takes the snapshot cursor it will follow from, before the rest is read.
     const direct = o.conversationKind === 'direct';
+    // A lost receipt is made up for by the snapshot's read positions, but the history cache reuses its snapshot until metadata
+    // changes: while my messages are still unread in an old one, read it again (at most once per interval).
+    if (!direct && othersRead.stale(roomId, OTHERS_READ_RECHECK_MS)) history()?.invalidate(roomId, true);
     let cacheGeneration: string | undefined;
     const snapshotRead = deps.chatHistoryStore ? (async () => {
       await ensureRegistered();
@@ -1736,6 +1806,7 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
       cacheGeneration = value.cacheGeneration;
       if (direct ? value.room.kind !== 'direct' : !isGroupRoom(value.room)) throw new Error('NOT_A_GROUP');
       if (!direct) verifiedGroups.add(roomId);
+      fenceReceipts(value);
       subscribe(roomId, value.cursor);
       return value;
     })() : direct ? directSnapshot(roomId) : groupSnapshot(roomId);
@@ -1744,6 +1815,8 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
     const executionsRead = direct ? Promise.resolve([] as Execution[]) : api<Execution[]>(`/conversations/${roomId}/executions`);
     for (const read of [messagesRead, executionsRead]) read?.catch(() => undefined);
     const s = await snapshotRead;
+    // The snapshot this read adopts (not a side read such as the readers list), so a receipt that arrives while the rest is awaited lands on its layer.
+    fenceReceipts(s);
     const page = (await messagesRead) ?? s.messages;
     const ownerMembers = direct ? [] : s.members;
     const executions = await executionsRead;
@@ -1777,6 +1850,9 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
     const messages = summaryOnly ? [] : await messageViews(roomId, page, s.members, ownerMembers);
     const projection = !summaryOnly ? await history()?.projection<Message>(roomId, o.sourceMessageIds ?? []) : undefined;
     const messageUpdates = projection ? await messageViews(roomId, projection.messages, s.members, ownerMembers) : undefined;
+    // The messages on screen, not only the snapshot's newest 100, so a receipt for an older one still refreshes it.
+    const positions = readPositions(roomId, s, [...page, ...(projection?.messages ?? [])]);
+    for (const views of [messages, messageUpdates ?? []]) markReadByOthers(views, positions);
     const shares = summaryOnly || direct ? undefined : await decorateThreads(roomId, [...messages, ...(messageUpdates ?? [])],
       [...page, ...(projection?.messages ?? [])], s.messages, s.members, true, o.shownShares);
     if (cacheGeneration && history()?.generation(roomId) !== cacheGeneration) {
@@ -1797,7 +1873,7 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
     // The sidebar never resolves shares: it names the sharer and never quotes the card's text.
     const lastIsShare = !!last && !!readBotGroupThreadShareCard(last);
     const mainRead = s.reads?.find(read => read.thread_key === 'main');
-    return { conversationKind: direct ? 'direct' : 'group', serverBacked: true, reactionRevision: reactionRevisions.get(roomId)?.room ?? runtimeReactionRevision, reactionRevisions: { ...reactionRevisions.get(roomId)?.messages }, supportsGroupLeave: !direct, supportsDissolve: !direct && supportsDissolve, supportsListRemoval, supportsMemberAvatar: !direct && supportsMemberAvatar, supportsNotificationSettings: !direct && supportsNotificationSettings, ...(!direct && supportsNotificationSettings && s.reads ? { notificationMode: mainRead?.muted ? 'none' as const : mainRead?.notification_scope ?? 'all' as const } : {}), supportsMentionAudiences: !direct && supportsMentionAudiences, allowMentionAllBots: !direct && s.room.allow_mention_all_bots === true, dissolvedAt: s.room.dissolved_at ?? null, migrationPending: [...upgradeErrors.keys()].some(source => upgradedGroups.get(source) === roomId), archived: s.room.archived, selfActorId: selfId, topic: s.room.topic, description: s.room.description, revision: s.room.revision, canInvite: !direct && !s.room.dissolved_at && s.members.some(m => m.ownerActorId === selfId && m.state === 'joined' && ['owner', 'admin'].includes(m.role)), canStopAll: !direct && singleSpeaker && !!managementActor(s), ...(!direct && singleSpeaker ? { singleSpeaker: true, supportsDivision: true } : {}), id: s.room.id, name: direct ? s.members.filter(m => m.state === 'joined' && m.id !== selfId).map(member => memberName(member, [])).join(', ') || s.room.name : s.room.name, replyMode: s.room.response_mode, speakingMode: s.room.speaking_mode,
+    return { conversationKind: direct ? 'direct' : 'group', serverBacked: true, reactionRevision: reactionRevisions.get(roomId)?.room ?? runtimeReactionRevision, reactionRevisions: { ...reactionRevisions.get(roomId)?.messages }, supportsGroupLeave: !direct, supportsDissolve: !direct && supportsDissolve, supportsListRemoval, supportsMemberAvatar: !direct && supportsMemberAvatar, ...(!direct && supportsMessageReaders ? { supportsMessageReaders: true } : {}), supportsNotificationSettings: !direct && supportsNotificationSettings, ...(!direct && supportsNotificationSettings && s.reads ? { notificationMode: mainRead?.muted ? 'none' as const : mainRead?.notification_scope ?? 'all' as const } : {}), supportsMentionAudiences: !direct && supportsMentionAudiences, allowMentionAllBots: !direct && s.room.allow_mention_all_bots === true, dissolvedAt: s.room.dissolved_at ?? null, migrationPending: [...upgradeErrors.keys()].some(source => upgradedGroups.get(source) === roomId), archived: s.room.archived, selfActorId: selfId, topic: s.room.topic, description: s.room.description, revision: s.room.revision, canInvite: !direct && !s.room.dissolved_at && s.members.some(m => m.ownerActorId === selfId && m.state === 'joined' && ['owner', 'admin'].includes(m.role)), canStopAll: !direct && singleSpeaker && !!managementActor(s), ...(!direct && singleSpeaker ? { singleSpeaker: true, supportsDivision: true } : {}), id: s.room.id, name: direct ? s.members.filter(m => m.state === 'joined' && m.id !== selfId).map(member => memberName(member, [])).join(', ') || s.room.name : s.room.name, replyMode: s.room.response_mode, speakingMode: s.room.speaking_mode,
       teammateActivity: teammateChatActivity({ executions, plans: serverPlans, planning: !!deciding,
         archived: s.room.archived, lastMessageAt: last ? Date.parse(last.createdAt) : 0 }),
       members: s.members.filter(m => m.state === 'joined').map(m => {
@@ -2987,7 +3063,7 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
         if (message.threadRootId) throw new Error('MAIN_MESSAGE_REQUIRED');
         const read = snapshot.reads.find(entry => entry.thread_key === 'main')?.read_seq ?? '0';
         if (BigInt(message.seq) > BigInt(read)) {
-          await writeReadState(target, { operationId: `read-main:${message.seq}`, readSeq: message.seq });
+          await writeReadState(target, { operationId: `read-main:${target}:${message.seq}`, readSeq: message.seq });
         }
         return {};
       }
@@ -3182,6 +3258,29 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
         const member = members.find(m => m.id === actorId);
         return { actorId, name: member ? memberName(member, members) : null, isSelf: actorId === self, formerMember: !!member && member.state !== 'joined' };
       }) };
+    }),
+    readers: input => result(async () => {
+      const i = z.object({ groupId: id, messageId: id }).strict().parse(input);
+      if (!supportsMessageReaders) throw new Error('CHAT_UNAVAILABLE');
+      const room = await resolveGroup(i.groupId);
+      const key = `${room}:${i.messageId}`;
+      const known = messageReaders.get(key);
+      if (known && Date.now() - known.at < MESSAGE_READERS_TTL_MS) return { readers: known.value };
+      await recentSnapshot(room, true);
+      const epoch = messageReadersEpoch;
+      const reply = inviteResponse(z.object({
+        messageId: id, eligibleCount: z.number().int().min(0),
+        readCount: z.number().int().min(0).optional(), listed: z.boolean().optional(),
+        readers: z.array(z.object({ actorId: id, readAt: z.string().nullable() })),
+      }), await api(`/conversations/${room}/messages/${i.messageId}/readers`));
+      // Former members stay on the list under their group name; a bot is never a reader.
+      const members = await api<Member[]>(`/conversations/${room}/members`);
+      const nameOf = (actorId: string) => { const member = members.find(m => m.id === actorId); return member ? memberName(member, members) : null; };
+      const value = projectMessageReaders(reply, members, nameOf);
+      if (epoch === messageReadersEpoch) messageReaders.set(key, { at: Date.now(), value });
+      // Bounded: drop the oldest lists first.
+      while (messageReaders.size > MESSAGE_READERS_CACHE_LIMIT) messageReaders.delete(messageReaders.keys().next().value!);
+      return { readers: value };
     }),
     createInvite: input => result(async () => {
       const i = z.object({ groupId: id, clientId: operationId }).parse(input);
@@ -3681,6 +3780,8 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
       attachmentRefreshes.clear();
       for (const pending of pendingChanges.values()) clearTimeout(pending);
       pendingChanges.clear();
+      for (const pending of pendingReceiptRefresh.values()) clearTimeout(pending);
+      pendingReceiptRefresh.clear(); othersRead.clear(); messageReaders.clear();
       for (const retry of planCancelRetries.values()) clearTimeout(retry);
       planCancelRetries.clear();
       for (const run of running.values()) {

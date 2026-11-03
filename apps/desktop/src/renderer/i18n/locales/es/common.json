@@ -10872,6 +10872,18 @@
         "reactorFormer": "{{name}} (ya no está en el grupo)",
         "reactorsUnavailable_one": "Nombre no disponible para {{count}} miembro más",
         "reactorsUnavailable_other": "Nombres no disponibles para {{count}} miembros más",
+        "readStatusSent": "Enviado",
+        "readStatusRead": "Leído",
+        "readersCount_one": "Leído por {{count}}",
+        "readersCount_other": "Leído por {{count}}",
+        "readersView": "Ver quién lo ha leído",
+        "readersTooLarge": "El grupo es demasiado grande para mostrar quién lo ha leído",
+        "readersNone": "Nadie lo ha leído",
+        "readersLoading": "Cargando…",
+        "readersFailed": "No se pudo cargar quién lo ha leído",
+        "readersHeading": "Leído",
+        "readersOfTotal": "Leído {{read}}/{{total}}",
+        "readerUnknown": "Miembro desconocido",
         "invite": "Invitar al grupo",
         "groupCreated": "Chat grupal creado",
         "inviteFriends": "Invita a tus amigos a unirse y trabajar con tu compañero.",
@@ -11026,7 +11038,8 @@
           }
         },
         "replyCount_many": "{{count}} responde",
-        "reactorsUnavailable_many": "Nombres no disponibles para {{count}} miembros más"
+        "reactorsUnavailable_many": "Nombres no disponibles para {{count}} miembros más",
+        "readersCount_many": "Leído por {{count}}"
       },
       "lifecycle": {
         "dissolve": "Disolver grupo",

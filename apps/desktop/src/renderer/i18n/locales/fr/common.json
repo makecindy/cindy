@@ -10872,6 +10872,18 @@
         "reactorFormer": "{{name}} (ne fait plus partie du groupe)",
         "reactorsUnavailable_one": "Nom indisponible pour {{count}} autre membre",
         "reactorsUnavailable_other": "Noms indisponibles pour {{count}} autres membres",
+        "readStatusSent": "Envoyé",
+        "readStatusRead": "Lu",
+        "readersCount_one": "Lu par {{count}}",
+        "readersCount_other": "Lu par {{count}}",
+        "readersView": "Voir qui a lu",
+        "readersTooLarge": "Ce groupe est trop grand pour afficher qui a lu",
+        "readersNone": "Personne n'a lu ce message",
+        "readersLoading": "Chargement…",
+        "readersFailed": "Impossible de charger qui a lu ce message",
+        "readersHeading": "Lu",
+        "readersOfTotal": "Lu {{read}}/{{total}}",
+        "readerUnknown": "Membre inconnu",
         "invite": "Inviter dans le groupe",
         "groupCreated": "Discussion de groupe créée",
         "inviteFriends": "Invitez des amis à rejoindre le groupe et à travailler avec votre coéquipier.",
@@ -11026,7 +11038,8 @@
           }
         },
         "replyCount_many": "{{count}} réponses",
-        "reactorsUnavailable_many": "Noms indisponibles pour {{count}} autres membres"
+        "reactorsUnavailable_many": "Noms indisponibles pour {{count}} autres membres",
+        "readersCount_many": "Lu par {{count}}"
       },
       "lifecycle": {
         "dissolve": "Dissoudre le groupe",
