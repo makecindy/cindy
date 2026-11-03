@@ -1,7 +1,7 @@
 [
   {
-    "pattern": "^Sending `\\w+` with no listeners registered\\.",
-    "reason": "RN 事件发出时没有 JS 监听者,目前未见用户可感知的影响。"
+    "pattern": "^Sending `(onAnimatedValueUpdate|websocketMessage|websocketClosed)` with no listeners registered\\.",
+    "reason": "动画结束、WebSocket 关闭后 RN 仍发出的这三个事件没有 JS 监听者,已在日志中观察到,无用户可感知影响。其他事件缺监听者可能是原生集成问题,不在此列。"
   },
   {
     "pattern": "@noble/hashes/crypto\\.js.*not listed in the \"exports\"",

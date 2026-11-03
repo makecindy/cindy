@@ -117,15 +117,16 @@ describe("mobile:sim:logcheck analysis", () => {
   });
 
   // Review #8560: only the reconnecting relay drop is known; other device-link warnings stay visible.
-  it("still reports device-link request timeouts as new warnings", () => {
+  it("still reports device-link request timeouts and unlisted missing listeners as new warnings", () => {
     const result = analyzeMetroLog(
       [
         BUNDLED,
         " WARN  [device-link] device-link request timeout kind=invoke channel=device-link:remote-desktop:v1",
+        " WARN  Sending `onPushNotificationReceived` with no listeners registered.",
       ].join("\n"),
       knownWarnings,
     );
-    expect(result.newWarnings).toHaveLength(1);
+    expect(result.newWarnings).toHaveLength(2);
     expect(result.knownWarningCount).toBe(0);
   });
 });

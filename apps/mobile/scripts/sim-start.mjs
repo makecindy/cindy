@@ -213,20 +213,29 @@ const child = spawn(invocation.command, invocation.args, {
 });
 
 if (Number.isInteger(child.pid)) {
-  writeMetroOwner(portArgs.port, {
-    pid: child.pid,
-    launcherPid: child.pid,
-    source: sourceIdentity,
-    region,
-    loginScenario,
-    envFingerprint,
-    worktreeRoot,
-    metroLogLaunch: metroLog ? metroLogLaunch : null,
-  });
+  // 先挂清理再写归属记录:写记录失败时 Metro 已经在跑,日志也要随它一起清掉。
   child.once('exit', () => {
     clearMetroOwner(portArgs.port, child.pid);
     removeMetroLog(metroLog);
   });
+  try {
+    writeMetroOwner(portArgs.port, {
+      pid: child.pid,
+      launcherPid: child.pid,
+      source: sourceIdentity,
+      region,
+      loginScenario,
+      envFingerprint,
+      worktreeRoot,
+      metroLogLaunch: metroLog ? metroLogLaunch : null,
+    });
+  } catch (error) {
+    // 没有归属记录,whoami / logcheck 都认不出这个 Metro;停掉它,不留无人认领的进程和日志。
+    console.error(`✗ 无法写入 Metro 归属记录,已停止 Metro: ${error.message}`);
+    child.kill();
+    removeMetroLog(metroLog);
+    process.exit(1);
+  }
 }
 
 child.once('error', (error) => {

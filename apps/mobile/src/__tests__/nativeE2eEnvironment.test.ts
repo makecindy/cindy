@@ -24,7 +24,8 @@ describe('native e2e environment', () => {
 
   });
 
-  it.each([false, true])('preserves custom-port ownership when occupied=%s', async (occupied) => {
+  it.each(['free', 'occupied', 'owner-write-fails'] as const)('preserves custom-port ownership when the port is %s', async (mode) => {
+    const occupied = mode === 'occupied';
     const source = readFileSync(resolve(process.cwd(), 'scripts/sim-start.mjs'), 'utf8');
     const start = source.indexOf("const args = ['exec', 'expo', 'start'");
     if (start < 0) throw new Error('script workflow entry missing');
@@ -33,9 +34,12 @@ describe('native e2e environment', () => {
       pid: 4242,
       once: (event: string, callback: () => void) => { if (event === 'exit') exitCallbacks.push(callback); },
       on: vi.fn(),
+      kill: vi.fn(),
     };
     const spawn = vi.fn(() => child);
-    const writeMetroOwner = vi.fn();
+    const writeMetroOwner = vi.fn(() => {
+      if (mode === 'owner-write-fails') throw new Error('EACCES');
+    });
     const clearMetroOwner = vi.fn();
     const portInUse = vi.fn(async () => occupied);
     const error = vi.fn();
@@ -61,6 +65,12 @@ describe('native e2e environment', () => {
       expect(prepareMetroLog).not.toHaveBeenCalled();
       expect(writeMetroOwner).not.toHaveBeenCalled();
       expect(clearMetroOwner).not.toHaveBeenCalled();
+    } else if (mode === 'owner-write-fails') {
+      // Review #8560: without an owner record nothing can claim this Metro, so stop it and drop its log.
+      await expect(execution).rejects.toThrow('exit:1');
+      expect(child.kill).toHaveBeenCalledOnce();
+      expect(removeMetroLog).toHaveBeenCalledWith('/repo/apps/mobile/logs/metro-8082.log');
+      expect(exitCallbacks).toHaveLength(1);
     } else {
       await execution;
       expect(spawn).toHaveBeenCalledOnce();
