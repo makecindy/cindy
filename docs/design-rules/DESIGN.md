@@ -516,6 +516,19 @@ recovery content may fill the explanation slot without replacing the header layo
 Identity, state, action semantics and pending implementation are defined in
 [供应商设置](../product-rules/provider-settings.md). This contract does not declare existing headers migrated.
 
+### Provider dialog disclosures
+
+In Desktop `ProviderConnectionDialog`, Manual add model and Advanced connection settings are
+registered frameless text disclosures (user-approved lightweight indentation layout, 2026-11-03).
+Stack the sections vertically with aligned left chevrons, existing 13px/500 settings section title
+color and a minimum 32px hit height. Resting, hover and pressed states retain no fill or border
+and do not change label color or geometry. Keyboard focus independently uses a 2px semantic
+`--focus-ring` with a pill outline; this does not introduce a resting button frame. The left
+chevron rotates with the expanded state. Indent the expanded manual form by 20px, retaining
+vertical fields and existing shared inputs, select and Add button. Light and Dark use existing
+semantic theme tokens. This registration covers only these two disclosures; other provider
+actions retain their shared Button treatment. Model and connection logic remain unchanged.
+
 ### Teammate model settings
 
 The existing model page groups the primary model and task model by purpose. Both use the shared
