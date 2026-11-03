@@ -6781,7 +6781,10 @@ function PluginResultCard({ callId, sessionId, excludedUrls, actions }: {
   const styles = useThemedStyles(makeStyles);
   const { t } = useTranslation();
   if (hidden) return null;
-  return <View style={styles.toolMediaBlock} testID="message.pluginResultCard">
+  // Desktop draws every plugin card in a frame; mail cards already draw their own.
+  const mailCard = blocks?.some((block) => block.primitive === 'plugin-card-actions'
+    && !!((block.data as { mail?: unknown; legacyMail?: unknown } | undefined)?.mail || (block.data as { legacyMail?: unknown } | undefined)?.legacyMail));
+  return <View style={mailCard ? styles.toolMediaBlock : styles.pluginResultCard} testID="message.pluginResultCard">
     {blocks?.map((block) => {
       if (block.primitive === 'plugin-card-actions') return <PluginCardActions key={block.id} data={block.data} deviceId={actions.remoteDeviceId} sessionId={sessionId} callId={callId}
         onOpenAttachment={actions.onOpenPayload ? (url, name) => actions.onOpenPayload!(buildMediaPayload({ kind: 'image', url, previewable: true }, name)) : undefined} />;
@@ -6799,7 +6802,7 @@ function PluginResultCard({ callId, sessionId, excludedUrls, actions }: {
         return <FileChip key={block.id} name={name} path={url} layout={layout}
           onOpen={actions.onOpenPayload ? () => actions.onOpenPayload!(buildFilePayload(name, url)) : undefined} />;
       }
-      return <Text key={block.id} selectable style={styles.messageText}>{pluginCardPlainText(block.fallbackMarkdown)}</Text>;
+      return <Text key={block.id} selectable style={mailCard ? styles.messageText : styles.pluginResultCardText}>{pluginCardPlainText(block.fallbackMarkdown)}</Text>;
     })}
     {!blocks && !error ? <Text style={styles.detailText}>{t('message.renderer.loading')}</Text> : null}
     {error ? <MessageContentOpenButton onPress={retry} accessibilityLabel={t('message.renderer.retryPreview')}>
@@ -9358,6 +9361,16 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
   },
   // tool 产出媒体独立块:agent 侧左对齐,逐个竖排(图片 attachment 帧自带圆角)。
   toolMediaBlock: { alignItems: 'flex-start', maxWidth: '100%' },
+  pluginResultCard: {
+    alignSelf: 'stretch',
+    gap: spacing.sm,
+    padding: spacing.md,
+    borderRadius: radius.container,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: colors.border,
+    backgroundColor: colors.surfaceElevated,
+  },
+  pluginResultCardText: { color: colors.textPrimary, fontSize: typeScale.body, lineHeight: lineHeight.body },
   imagePreviewWrap: {
     backgroundColor: colors.surfaceChip,
     borderRadius: radius.container,
