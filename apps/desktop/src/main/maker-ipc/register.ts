@@ -8085,8 +8085,10 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
           },
         },
       );
-      if (result.ok && isCurrent()) {
+      const afterCommit = async () => {
+        if (!isCurrent()) return;
         // 授权成功后按 agent 自动发现模型（与内置订阅体验统一,用户不必手填模型）:
+        // 事务先接受凭证并清除旧来源，再发现新来源，避免清理删掉刚保存的结果。
         // 发现端点 = 描述符显式声明 ?? 由该 runtime 的 baseUrl 推导（…/v1/models）。
         // 自定义供应商的发现结果 additions-only 持久化进配置（重启后仍在）;内置供应商走
         // 内存 augment（静态目录 first-wins）。任何一步失败都只降级为纯静态,不影响登录结果。
@@ -8165,8 +8167,9 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
           if (provider.source === 'builtin') await retainProviderPresentationAfterAuthChange(providerId);
           if (isCurrent()) broadcastToAllWindows(MAKER_PUSH.PROVIDER_CHANGED, {});
         }
-      }
-      return { ...result, ...(rollbackCredentials ? { rollbackCredentials } : {}) };
+      };
+      return { ...result, ...(rollbackCredentials ? { rollbackCredentials } : {}),
+        ...(result.ok ? { afterCommit } : {}) };
     },
     readCustomProviderKeyForMutation,
     storeCustomProviderKey,
