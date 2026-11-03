@@ -3294,10 +3294,13 @@ export class AgentInputCoordinator {
     // recovery; a bare "continue" can otherwise answer an unrelated old turn.
     const groupRecovery = recovery.kind === 'active-turn'
       && isBotGroupClientId(recovery.item.retrySourceClientId ?? recovery.item.clientId);
+    const groupRecoveryText = groupRecovery && recovery.kind === 'active-turn'
+      && typeof recovery.item.chatMessage.content === 'string'
+      ? recovery.item.chatMessage.content : recovery.kind === 'active-turn' ? recovery.item.text : '';
     let continueText = groupRecovery && recovery.kind === 'active-turn'
       ? recovery.item.originalSyntheticTrigger === 'continue'
-        ? recovery.item.text
-        : `${recovery.item.text}\n\n${CONTINUE_AFTER_ERROR_PROMPT}`
+        ? groupRecoveryText
+        : `${groupRecoveryText}\n\n${CONTINUE_AFTER_ERROR_PROMPT}`
       : CONTINUE_AFTER_ERROR_PROMPT;
     if (groupRecovery && recovery.kind === 'active-turn' && recovery.item.recoveryCheckpoint) {
       // Remove only the host-authored suffix, preserving any marker inside the
@@ -3456,6 +3459,7 @@ export class AgentInputCoordinator {
     const previousToolLoop = state.toolLoop;
     const previousStickyError = state.stickyError;
     let retryItem = recovery.kind === 'active-turn' ? recovery.item : null;
+    if (retryItem && groupRecovery) retryItem = { ...retryItem, text: groupRecoveryText };
     if (
       !continueItem &&
       retryItem &&
