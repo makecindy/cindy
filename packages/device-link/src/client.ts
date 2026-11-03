@@ -40,6 +40,7 @@ import {
   type LinkClosePayload,
 } from './protocol.js';
 import {
+  DEVICE_LINK_CAPABILITY_GITHUB_READ_V1,
   DEVICE_LINK_CAPABILITY_RELIABLE_LINK_CONFIRM,
   DEVICE_LINK_CAPABILITY_RELIABLE_TRANSPORT,
   DEVICE_LINK_CAPABILITY_TRANSPORT_TIMEOUT_CLOSE,
@@ -72,7 +73,7 @@ import {
 import { PLUGIN_SYNC_CHANNEL } from './pluginSyncProtocol.js';
 import { RELAY_AUTH_CHANNEL, relayAuthHandshake } from './selfHostedRelayAuth.js';
 import { DIRECT_LINK_CAPABILITY, DIRECT_LINK_SIGNAL, PROVIDER_SHARE_DIRECT_CAPABILITY, DirectLinkNegotiator, parseDirectSignal,
-  type DirectRuntime } from './directNegotiation.js';
+  type DirectRuntime, type DirectDiagnostic, type DirectDiagnosticReason } from './directNegotiation.js';
 import { MAKER_EVENT_BATCH_CHANNEL } from './topics.js';
 import {
   DIRECT_PATH_HIGH_WATER_BYTES,
@@ -110,7 +111,7 @@ const RELAY_TRY_AGAIN_LATER_CLOSE_CODE = 1013;
  *   约束下同键驱逐在多会话混流时够不着队头,机制无效),这类通道整体回到
  *   原背压语义,由各自上游的整流/重试契约保证送达。
  * - 不可合并事件/流控数据(local-db:messages:created、确认卡、fs-watch、
- *   contacts-sync 分片等):静默驱逐 = UI 永久漏事件或传输永久拼不出。
+ *   插件同步帧等):静默驱逐 = UI 永久漏事件或传输永久拼不出。
  *
  * 新增 push 通道默认**不可驱逐**(fail-closed);要进本表必须论证「流内自
  * 相似、无键控终态、丢帧可由受保护通道自愈」三点。
@@ -283,6 +284,8 @@ interface RelayChallengeQueue {
 export interface DeviceLinkClientOptions {
   /** Host WebRTC adapter. Both peers must opt in; unavailable/old hosts keep using relay. */
   directRuntime?: DirectRuntime;
+  /** Host executions/outbox can outlive transport admission; keep their direct peer alive. */
+  isPeerBusy?(peer: string): boolean;
   /** relay 的完整 ws(s) URL,如 wss://host/api/device-link/ws */
   getWsUrl(): string;
   /** 每次(重)连前取新鲜 token;null = 当前无登录态,跳过本轮并按退避重试 */
@@ -329,8 +332,10 @@ export interface DeviceLinkClientOptions {
   /** Optional local counters; no content/identities, never part of delivery decisions. */
   invokeMetrics?: {
     enabled(): boolean;
-    record(event: { channel: string; phase: 'sent' | 'result'; payloadBytes?: number;
-      notModified?: boolean; gzip?: boolean }): void;
+    record(event: { channel: string; phase: 'sent' | 'result' | 'decoded'; payloadBytes?: number;
+      notModified?: boolean; gzip?: boolean; inflateMs?: number; parseMs?: number }): void;
+    /** Coarser or finer metric row than the channel. Must return fixed names only, never ids or content. */
+    label?(channel: string, args: unknown[] | undefined): string;
   };
   /**
    * 只服务跨账号 peer(共享任务 / 供应商分享)的专用连接:同账号 peer 的路由帧在入站边界丢弃。
@@ -705,6 +710,7 @@ interface PeerTransportState {
    * 整连接重连语义(升级前行为),而错误的 true 会违背用户关闭意图。
    */
   linkAcceptedInbound: boolean;
+  supportsGithubRead?: boolean;
   /**
    * 本机是否已显式结束**出站**控制方向(closeLink direction='outbound')。
    * 迟到 transport-timeout 的拦截依据:只有本机不再主动控制对方时才吞帧;
@@ -925,6 +931,10 @@ export class DeviceLinkClient {
    */
   private readonly directPaths = new Map<string, DeviceLinkDirectChannel>();
   private readonly directPeerSupport = new Set<string>();
+  /** Bounded anonymous diagnostic identities, never credentials, SDP or addresses. */
+  private readonly directDiagnostics = new Map<string, {
+    logged: Partial<Record<DirectDiagnosticReason, number>>; hash: Promise<string>;
+  }>();
   /** Relay-authenticated provider-share path leases never survive process/account replacement. */
   private readonly providerShareDirectLeases = new Map<string, {
     wallUntil: number; monotonicUntil: number; timer: ReturnType<typeof setTimeout>;
@@ -940,6 +950,13 @@ export class DeviceLinkClient {
       runtime: opts.directRuntime,
       identity: () => this.selfDeviceId,
       peerDeviceId: (id) => parseProviderSharePeer(id)?.deviceId ?? (isScopedPeer(id) ? null : id),
+      kind: (id) => isProviderSharePeer(id) ? 'share' : 'device',
+      isBusy: (id) => {
+        const peer = this.peerTransport.get(id);
+        return this.opts.isPeerBusy?.(id) === true || !!peer?.pending.size || [...this.pending.values()].some(p => p.dst === id)
+          || !!peer && [...peer.receive.values()].some(s => s.deliveringSeq !== null || s.bufferedBytes > 0);
+      },
+      diagnostic: (id, event) => this.logDirectDiagnostic(id, event),
       canSignal: (peer) => this.status === 'online'
         && (!isProviderSharePeer(peer) || this.hasServerCapability(PROVIDER_SHARE_DIRECT_SIGNAL_CAPABILITY)),
       streams: (id) => {
@@ -981,6 +998,31 @@ export class DeviceLinkClient {
       warn: () => {},
       error: () => {},
     };
+  }
+
+  private logDirectDiagnostic(peerId: string, event: DirectDiagnostic): void {
+    const now = Date.now();
+    let entry = this.directDiagnostics.get(peerId);
+    const previous = entry?.logged[event.reason];
+    if (previous !== undefined && now - previous < 60_000) return;
+    if (!entry) {
+      if (this.directDiagnostics.size >= 256) this.directDiagnostics.delete(this.directDiagnostics.keys().next().value!);
+      // WebCrypto is optional in older Mobile hosts. Never fall back to logging an ID.
+      const hash = Promise.resolve().then(async () => {
+        if (!globalThis.crypto?.subtle) return 'unavailable';
+        const bytes = await globalThis.crypto.subtle.digest('SHA-256', new TextEncoder().encode(`cindy:direct-peer-v1:${peerId}`));
+        return [...new Uint8Array(bytes)].map(b => b.toString(16).padStart(2, '0')).join('').slice(0, 16);
+      }).catch(() => 'unavailable');
+      entry = { logged: {}, hash };
+      this.directDiagnostics.set(peerId, entry);
+    }
+    entry.logged[event.reason] = now;
+    // Only fixed metadata crosses the logging boundary. Hashing never delays routing.
+    void entry.hash.then(hash => {
+      this.log.info(`direct transport reason=${event.reason} peerHash=${hash} kind=${event.kind}`
+        + ` active=${event.active} limit=${event.limit} queued=${event.queued}`
+        + ` device=${event.device} share=${event.share} reserved=${event.reserved}`);
+    }).catch(() => { /* Logging is independent of transport scheduling. */ });
   }
 
   // ─── 生命周期 ───────────────────────────────────────────────────────────────
@@ -1205,6 +1247,7 @@ export class DeviceLinkClient {
     this.inboundInvokeTransfer.clear();
     if (this.stopped) return;
     this.stopped = true;
+    this.directDiagnostics.clear();
     this.clearTimers();
     this.handshakeTimeoutStreak = 0;
     this.failAllPending(new DeviceLinkError('NOT_CONNECTED', 'client stopped'));
@@ -1726,6 +1769,9 @@ export class DeviceLinkClient {
       // Admission may wait: validate caller ownership/cancellation after dequeue,
       // synchronously before creating the request or retaining a transport frame.
       options?.preSend?.();
+      if (payload.channel === 'git-context:github-read' && !this.getPeerTransport(dst).supportsGithubRead) {
+        return { ok: false as const, error: { code: 'IPC_ERROR' as const, message: 'GITHUB_READ_UNSUPPORTED: update the target computer to use GitHub queries' } };
+      }
       if (resolveInvokePriority(payload.channel, options?.background) === 'background'
         && (this.networkProbeTimer || this.networkChangeTimer)) {
         throw new DeviceLinkError('BACKPRESSURE', 'background refresh paused while checking relay connectivity');
@@ -1740,9 +1786,9 @@ export class DeviceLinkClient {
         'invoke-result',
         timeoutMs,
       );
-      this.reportInvokeMetric(payload.channel, env.payload as InvokeResultPayload);
+      this.reportInvokeMetric(payload, env.payload as InvokeResultPayload);
       const result = transfer
-        ? transfer.decode(env.payload as InvokeResultPayload)
+        ? await transfer.decode(env.payload as InvokeResultPayload, (timing) => this.reportInvokeDecode(payload, timing))
         : env.payload as InvokeResultPayload;
       return result.ok
         ? {
@@ -1929,14 +1975,26 @@ export class DeviceLinkClient {
 
   // ─── 内部:请求配对 ─────────────────────────────────────────────────────────
 
-  private reportInvokeMetric(channel: string, result?: InvokeResultPayload): void {
+  private invokeMetricChannel(payload: InvokePayload): string {
+    return this.opts.invokeMetrics?.label?.(payload.channel, payload.args) ?? payload.channel;
+  }
+
+  private reportInvokeMetric(payload: InvokePayload, result?: InvokeResultPayload): void {
     try {
       if (!this.opts.invokeMetrics?.enabled()) return;
+      const channel = this.invokeMetricChannel(payload);
       this.opts.invokeMetrics.record(result === undefined ? { channel, phase: 'sent' } : {
         channel, phase: 'result', payloadBytes: byteLength(JSON.stringify(result)),
         notModified: result.ok && result.transfer?.notModified === true,
         gzip: result.ok && typeof result.transfer?.gzipBase64 === 'string',
       });
+    } catch { /* Diagnostics must never affect delivery or response decoding. */ }
+  }
+
+  private reportInvokeDecode(payload: InvokePayload, timing: { inflateMs: number; parseMs: number }): void {
+    try {
+      if (!this.opts.invokeMetrics?.enabled()) return;
+      this.opts.invokeMetrics.record({ channel: this.invokeMetricChannel(payload), phase: 'decoded', ...timing });
     } catch { /* Diagnostics must never affect delivery or response decoding. */ }
   }
 
@@ -2013,7 +2071,7 @@ export class DeviceLinkClient {
         noteFirstWrite: () => {
           if (firstWriteAt !== undefined) return;
           firstWriteAt = this.monotonicNow();
-          if (env.kind === 'invoke') this.reportInvokeMetric((env.payload as InvokePayload).channel);
+          if (env.kind === 'invoke') this.reportInvokeMetric(env.payload as InvokePayload);
           // Only the first write can move the deadline. Replays and partial writes
           // cannot extend it; total transport lifetime is at most sendWaitMs + timeout.
           deadlineMonotonicAt = Math.min(firstWriteAt + timeout, startedMonotonicAt + sendWaitMs + timeout);
@@ -3363,6 +3421,7 @@ export class DeviceLinkClient {
       }
       return true;
     }
+    if (env.src) this.directNegotiator?.activity(env.src);
     if (env.kind === 'invoke' && env.src && env.id && !isScopedPeer(env.src)) {
       this.inboundInvokeTransfer.record(env.src, env.id, env.payload);
     }
@@ -3470,6 +3529,7 @@ export class DeviceLinkClient {
   }
 
   private sendPeerEnvelope(env: Envelope, allowClosedLegacyResponse = false): boolean {
+    if (env.dst) this.directNegotiator?.activity(env.dst);
     if (!env.dst || !isReliableKind(env.kind)) {
       this.sendBestEffortRoutedEnvelope(env);
       return false;
@@ -4581,6 +4641,7 @@ export class DeviceLinkClient {
     source: 'inbound-open' | 'outbound-accept' = 'inbound-open',
   ): void {
     const peer = this.getPeerTransport(dst);
+    if (source === 'outbound-accept') peer.supportsGithubRead = capabilities?.includes(DEVICE_LINK_CAPABILITY_GITHUB_READ_V1) === true;
     if (this.directNegotiator && capabilities?.includes(DIRECT_LINK_CAPABILITY)
       && (!isScopedPeer(dst) || (isProviderSharePeer(dst)
         && capabilities.includes(PROVIDER_SHARE_DIRECT_CAPABILITY)))) {

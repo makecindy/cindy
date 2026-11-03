@@ -250,7 +250,7 @@ pnpm --filter @cindy/browser-control-runtime test    # 契约 + SSRF guard
 - 第三个 `BackendKind` `user-browser`:`apps/desktop/src/main/mcp-integrations/browser-backend/user-browser-backend.ts` 把 `BrowserControlRequest` 翻译成随包浏览器扩展的页面作业,经 `cindy-brain/browserExtensionSlot.ts` 持有的桥接(`main/browser-extension/bridge.ts`,从 Cindy Chrome 插件的接线进程原样迁入,线协议 `cindy-browser-extension/3` 不变,已装扩展无需更新)投递到用户正在使用的 Chrome / Edge。
 - 设置 →「自动操作」三选一:专用浏览器(默认)/ 侧边栏 / 我的浏览器;选哪一个是**默认**目标,Agent 的 `setBackend` 仍是同一个全局持久选择。没有声明 `browserExtension.pageControl` 的插件时该目标 `status.ready === false`,健康面板报 `extension-disconnected`,不提供恢复按钮。
 - 能力边界由扩展版本决定(`USER_BROWSER_PARITY_VERSION`,当前 0.4.43):
-  - 0.4.43 起与专用浏览器对齐:截图(含整页、元素、后台标签页)、evaluate、requests、上传、对话框、console、PDF、focus、关闭、坐标与拖拽、站点配方的协议会话都可用;调试接口(`chrome.debugger`)是可选权限,只在需要的动作里临时接上、用完断开,第一次用到时由扩展弹出授权页。
+  - 0.4.43 起与专用浏览器对齐:截图(只限可视区域)、evaluate、requests、上传(超过约 30 MB 由 0.4.61 起分块,最大 1 GB)、对话框、console、focus、关闭、坐标与拖拽可用;PDF、整页/元素/后台标签页截图和站点配方的协议会话需要 Chrome 调试接口(`chrome.debugger`),而 Chrome 不允许把它声明为可选权限(`chrome.permissions.request` 直接拒绝,2026-11-01 实测),发布版扩展没有它,能力表如实报 `pdf: false`、`rawProtocol: false`。不要恢复「首次用到时弹授权页」的流程。
   - 更旧的扩展只有基础能力(tabs / open / navigate / snapshot / extract / act),由 `deps.backendCapabilities()`(`userBrowserCapabilities`)让 MCP 层在派发前拒绝其余动作,错误文案要求模型告知用户而不是自行切换。没有任何连接时按完整能力报,具体断开由后端按作业报告。
   - extract 与登录墙检测走 PR #7432 的声明式 `domRead`,不需要任意脚本。
 - 寻址:新版扩展(≥ 0.4.43)按 tabId 寻址,后端维护 targetId ↔ {连接, 浏览器启动标识, tabId, url};targetId 带启动标识,浏览器重启后旧句柄不再解析。旧版扩展仍按精确 URL 寻址:作业前用 `tabs` 核对,URL 变化报 `PAGE_CHANGED` 并刷新记录,不猜新页。

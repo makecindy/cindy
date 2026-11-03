@@ -7,7 +7,7 @@ const source = fs.readFileSync(
   'utf8',
 );
 
-function createUi() {
+function createUi(language = 'en-US') {
   const elements = new Map<
     string,
     {
@@ -28,8 +28,9 @@ function createUi() {
   let retryCalls = 0;
   const context = vm.createContext({
     console,
-    navigator: { language: 'en-US' },
+    navigator: { language },
     document: {
+      documentElement: { lang: '' },
       getElementById(id: string) {
         const element = {
           hidden: false,
@@ -76,6 +77,12 @@ function createUi() {
     context,
   );
   context.window.retryCopy = context.retryCopy;
+  vm.runInContext(
+    fs.readFileSync(new URL('../../../cindy-updater/ui/copy.js', import.meta.url), 'utf8'),
+    context,
+  );
+  context.window.updaterCopy = context.updaterCopy;
+  context.window.updaterMessage = context.updaterMessage;
   vm.runInContext(source, context);
   return {
     elements,
@@ -87,6 +94,29 @@ function createUi() {
 }
 
 describe('updater failure retry UI', () => {
+  // Unit: the rendered updater previously showed Chinese regardless of language.
+  // Existing retry tests did not cover phase/progress copy or diagnostic preservation.
+  it('localizes progress and failures while preserving native diagnostics', async () => {
+    const ui = createUi('fr-CA');
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    expect(ui.elements.get('title')!.textContent).toBe('Mise à jour de Cindy');
+    ui.status({ phase: 'extracting', progress: 42, message: 'native diagnostic' });
+    expect(ui.elements.get('message')!.textContent).toBe('Extraction de la mise à jour… 42%');
+    ui.status({ phase: 'failed', error: 'EACCES: C:\\Cindy', can_retry: false });
+    expect(ui.elements.get('error-text')!.textContent).toContain('journaux');
+    expect(ui.elements.get('error-details')!.hidden).toBe(false);
+    expect(ui.elements.get('error-diagnostic')!.textContent).toBe('EACCES: C:\\Cindy');
+    ui.status({ phase: 'failed', error: 'processes_running', can_retry: true });
+    expect(ui.elements.get('error-details')!.hidden).toBe(true);
+    expect(ui.elements.get('btn-retry')!.hidden).toBe(false);
+    // Main added classical Chinese while this patch was being prepared. Preserve
+    // its retry copy without indexing an absent standalone phase catalog.
+    for (const [locale, retry] of [['zh-Hant-x-lzh', '再試'], ['zh-Hans-x-lzh', '再试']]) {
+      const classical = createUi(locale);
+      expect(classical.elements.get('title')!.textContent).toBe('Cindy 更新');
+      expect(classical.elements.get('btn-retry')!.textContent).toBe(retry);
+    }
+  });
   it('provides retry copy for all supported languages with English fallback', () => {
     const context = vm.createContext({});
     vm.runInContext(

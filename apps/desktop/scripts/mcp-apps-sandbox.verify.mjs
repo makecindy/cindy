@@ -457,6 +457,26 @@ try {
         await wait(()=>inner().executeJavaScript("document.querySelector('#result').textContent.startsWith('已保存')"));
         const switchWrites=loaderCalls.filter(call=>call.name==='api_write');
         assert.equal(switchWrites.at(-1).args.idempotencyKey,switchWrites.at(-2).args.idempotencyKey,'same content after a switch reuses the write key');
+        // Regression (review): with several handed-off files, uploading one must keep the others
+        // reachable; the preview opens below the list and cancel only closes the preview.
+        stage='loader handoff list survives a preview';
+        const handoffRefs=['handoff:00000000-0000-4000-8000-000000000001','handoff:00000000-0000-4000-8000-000000000002'];
+        loaderResultOverride={content:[{type:'text',text:'页面已准备好。'}],_meta:{view:{html:'<h1>Files</h1><ul id="files">'+handoffRefs.map((ref,index)=>'<li>file-'+index+'.csv<button data-file-ref="'+ref+'">上传并预览</button></li>').join('')+'</ul><p id="result" role="status"></p>'}}};
+        await inner().executeJavaScript("document.querySelector('[data-view=form]').click()");
+        await wait(()=>inner().executeJavaScript("document.querySelectorAll('[data-file-ref]').length===2"));
+        loaderResultOverride=undefined;
+        const uploadsBefore=loaderCalls.filter(call=>call.name==='upload_files').length;
+        await inner().executeJavaScript("document.querySelector('[data-file-ref]').click()");
+        await wait(()=>inner().executeJavaScript("!!document.querySelector('#import-preview #confirm-import')"));
+        assert.equal(await inner().executeJavaScript("document.querySelectorAll('[data-file-ref]').length"),2,'other handed-off files stay reachable');
+        await wait(()=>inner().executeJavaScript("!document.querySelectorAll('[data-file-ref]')[1].disabled"));
+        await inner().executeJavaScript("document.querySelectorAll('[data-file-ref]')[1].click()");
+        await wait(async()=>loaderCalls.filter(call=>call.name==='upload_files').length===uploadsBefore+2);
+        assert.deepEqual(loaderCalls.filter(call=>call.name==='upload_files').slice(-2).map(call=>call.args.files),handoffRefs.map(ref=>[ref]));
+        await wait(()=>inner().executeJavaScript("!!document.querySelector('#import-preview #confirm-import')"));
+        await inner().executeJavaScript("document.querySelector('#import-preview #confirm-import').nextElementSibling.click()");
+        await wait(()=>inner().executeJavaScript("!document.querySelector('#import-preview')"));
+        assert.equal(await inner().executeJavaScript("document.querySelectorAll('[data-file-ref]').length"),2,'cancel keeps the file list');
         stage='loader themes and narrow screen';
         for(const theme of ['light','dark']){
           const variables=theme==='light'?{'--color-background-primary':'rgb(248,248,246)','--color-background-secondary':'rgb(238,238,235)','--color-text-primary':'rgb(38,38,38)','--color-border-primary':'rgb(160,160,158)'}:{'--color-background-primary':'rgb(31,31,30)','--color-background-secondary':'rgb(44,44,42)','--color-text-primary':'rgb(235,235,232)','--color-border-primary':'rgb(100,100,98)'};

@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
-import { canonicalJson, createCompanionUploader, valueHash as canonicalHash, type CompanionPreferenceValue } from '../uploader.js';
+import { resolveCompanionSkillFiles } from '../skillFiles.js';
+import { canonicalJson, COMPANION_VALUE_MAX_BYTES, createCompanionUploader, valueHash as canonicalHash, type CompanionPreferenceValue } from '../uploader.js';
 import { fakeApi, memoryState, rejection } from './fakes.js';
 
 const profile = (soul: string): CompanionPreferenceValue =>
@@ -173,5 +174,103 @@ describe('companion profile uploader', () => {
 
   it('serialises JSON with sorted keys', () => {
     expect(canonicalJson({ b: 1, a: [{ d: null, c: 'x' }], e: undefined })).toBe('{"a":[{"c":"x","d":null}],"b":1}');
+  });
+});
+
+describe('skill files', () => {
+  const key = 'companion.skill-files.v1:brew';
+  const local = (name: string, sha256 = `sha-${name}`) =>
+    ({ path: `scripts/${name}`, size: 3, sha256, absolutePath: `/skills/brew/scripts/${name}` });
+  const run = async (localFiles: ReturnType<typeof local>[], upload: (file: { name: string }) => Promise<string>, known: Record<string, string> = {}) => {
+    const retain = vi.fn();
+    const values = await resolveCompanionSkillFiles([memory('a.md', 'a'), { key, value: null, localFiles }],
+      { known: sha => known[sha], upload, retain, log: { warn: vi.fn() } });
+    return { values, retain, list: values.find(value => value.key === key)! };
+  };
+
+  it('sends only what the room does not have, and reuses identical content', async () => {
+    const upload = vi.fn(async (file: { name: string }) => `media-${file.name}`);
+    const { values, list, retain } = await run([local('old.py'), local('new.py'), local('copy.py', 'sha-new.py')], upload, { 'sha-old.py': 'media-old' });
+    expect(upload.mock.calls.map(([file]) => file.name)).toEqual(['new.py']);
+    expect(values[0]?.key).toBe('companion.memory.v1:a.md');
+    expect(list.value).toEqual({ slug: 'brew', files: [
+      { path: 'scripts/old.py', size: 3, sha256: 'sha-old.py', mediaId: 'media-old' },
+      { path: 'scripts/new.py', size: 3, sha256: 'sha-new.py', mediaId: 'media-new.py' },
+      { path: 'scripts/copy.py', size: 3, sha256: 'sha-new.py', mediaId: 'media-new.py' }] });
+    expect(retain).toHaveBeenCalledWith({ 'sha-old.py': 'media-old', 'sha-new.py': 'media-new.py' }, {});
+  });
+
+  it('holds the skill back while a failure may pass, so the upload cycle leaves its cloud list alone', async () => {
+    const { list, retain } = await run([local('a.py')], async () => { throw new Error('ECONNRESET'); });
+    expect(list).toEqual({ key, value: null, unread: true });
+    expect(retain).not.toHaveBeenCalled();
+  });
+
+  it('moves on without a file that can never be sent, and says the list is incomplete', async () => {
+    const upload = vi.fn(async (file: { name: string }) => {
+      if (file.name === 'big.bin') throw new Error('ATTACHMENT_TOO_LARGE');
+      return `media-${file.name}`;
+    });
+    const { list } = await run([local('big.bin'), local('a.py')], upload);
+    expect(list.value).toEqual({ slug: 'brew', omitted: ['scripts/big.bin'], files: [{ path: 'scripts/a.py', size: 3, sha256: 'sha-a.py', mediaId: 'media-a.py' }] });
+  });
+
+  it('stops asking a server without file storage', async () => {
+    const upload = vi.fn(async () => { throw rejection(503, 'MEDIA_STORAGE_UNAVAILABLE'); });
+    const { list } = await run([local('a.py'), local('b.py')], upload);
+    expect(upload).toHaveBeenCalledTimes(1);
+    expect(list.value).toEqual({ slug: 'brew', omitted: ['scripts/a.py', 'scripts/b.py'], files: [] });
+  });
+
+  it('lists an empty file without uploading it', async () => {
+    const upload = vi.fn(async () => 'media');
+    const { list } = await run([{ ...local('empty.py'), size: 0 }], upload);
+    expect(upload).not.toHaveBeenCalled();
+    expect(list.value).toEqual({ slug: 'brew', files: [{ path: 'scripts/empty.py', size: 0, sha256: 'sha-empty.py', mediaId: '' }] });
+  });
+
+  it('passes on what the cloud never had, until this computer has the file', async () => {
+    const retain = vi.fn();
+    const pass = (values: CompanionPreferenceValue[], gaps: Record<string, { omitted: string[] }>) =>
+      resolveCompanionSkillFiles(values, { known: () => 'media', upload: async () => 'media', gaps, retain });
+    const skill = { key: 'companion.skill.v1:brew', value: { slug: 'brew', content: 'steps' } };
+    const gaps = { brew: { omitted: ['data/big.bin'] } };
+    // The new home has only what arrived, or nothing at all: both still say the big file exists.
+    const some = await pass([skill, { key, value: null, localFiles: [local('a.py')] }], gaps);
+    expect(some[1]?.value).toMatchObject({ omitted: ['data/big.bin'] });
+    expect(retain).toHaveBeenLastCalledWith({ 'sha-a.py': 'media' }, gaps);
+    expect((await pass([skill], gaps)).find(value => value.key === key)?.value).toEqual({ slug: 'brew', files: [], omitted: ['data/big.bin'] });
+    // Back where the file is, it is an ordinary file again; a skill that is gone takes its gap with it.
+    const back = await pass([skill, { key, value: null, localFiles: [{ ...local('x'), path: 'data/big.bin' }] }], gaps);
+    expect(back[1]?.value).not.toHaveProperty('omitted');
+    expect(retain).toHaveBeenLastCalledWith(expect.anything(), {});
+    expect(await pass([memory('a.md', 'a')], gaps)).toHaveLength(1);
+  });
+
+  it('does not publish an older copy kept because the newer one did not arrive, until it is edited', async () => {
+    const retain = vi.fn();
+    const held = { ...local('run.sh'), sha256: 'old' };
+    const gaps = { brew: { omitted: ['scripts/run.sh'], stale: { 'scripts/run.sh': 'old' } } };
+    const upload = vi.fn(async () => 'media');
+    const unchanged = await resolveCompanionSkillFiles([{ key, value: null, localFiles: [held] }], { known: () => undefined, upload, gaps, retain });
+    expect(upload).not.toHaveBeenCalled();
+    expect(unchanged[0]?.value).toEqual({ slug: 'brew', files: [], omitted: ['scripts/run.sh'] });
+    expect(retain).toHaveBeenLastCalledWith({}, gaps);
+    const edited = await resolveCompanionSkillFiles([{ key, value: null, localFiles: [{ ...held, sha256: 'edited' }] }], { known: () => undefined, upload, gaps, retain });
+    expect(edited[0]?.value).toMatchObject({ files: [{ path: 'scripts/run.sh', sha256: 'edited' }] });
+    expect(retain).toHaveBeenLastCalledWith({ edited: 'media' }, {});
+  });
+
+  it('keeps the list inside one value', async () => {
+    // Also the cost: once per upload cycle on the main process.
+    const started = performance.now();
+    await run(Array.from({ length: 5000 }, (_, index) => local(`${'n'.repeat(60)}${index}.py`)), async file => `media-${file.name}`);
+    expect(performance.now() - started).toBeLessThan(1000);
+    const many = Array.from({ length: 800 }, (_, index) => local(`${'n'.repeat(60)}${index}.py`));
+    const { list } = await run(many, async file => `media-${file.name}`);
+    const value = list.value as { files: unknown[]; omitted: string[]; truncated?: boolean };
+    expect(Buffer.byteLength(canonicalJson(value))).toBeLessThanOrEqual(COMPANION_VALUE_MAX_BYTES);
+    expect(value.omitted.length).toBeGreaterThan(0);
+    expect(value.files.length + value.omitted.length === 800 || value.truncated === true).toBe(true);
   });
 });

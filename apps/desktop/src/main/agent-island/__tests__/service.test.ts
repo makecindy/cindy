@@ -36,6 +36,27 @@ import type { AgentIslandCompanionIdentity } from '../companionIdentity.js';
 import { setDeepLinkMainWindow, takePendingDeepLink } from '../../deepLink.js';
 import { runDeviceLinkInvokeContext } from '../../device-link/invoke-context.js';
 
+// Keep the real implementation; record each instance so its scheduled publishing
+// cannot outlive a test and run against reset Electron mocks in the next test.
+const serviceInstances = vi.hoisted(() => new Set<AgentIslandService>());
+vi.mock('../service.js', async importOriginal => {
+  const actual = await importOriginal<typeof import('../service.js')>();
+  return {
+    ...actual,
+    AgentIslandService: class extends actual.AgentIslandService {
+      constructor(...args: ConstructorParameters<typeof actual.AgentIslandService>) {
+        super(...args);
+        serviceInstances.add(this);
+      }
+    },
+  };
+});
+
+afterEach(() => {
+  for (const service of serviceInstances) service.resetRuntimeState();
+  serviceInstances.clear();
+});
+
 const REMOTE_DAEMON_CLOSED_REASON = 'remote_daemon_closed';
 
 vi.mock('../../appSessionState', () => ({
@@ -1466,7 +1487,7 @@ describe('AgentIslandService native publishing', () => {
     vi.setSystemTime(new Date('2026-01-01T00:00:00.000Z'));
     try {
       const { AgentIslandService } = await import('../service.js');
-      const { AGENT_ISLAND_UNREAD_TRANSIENT_TTL_MS } = await import('../state.js');
+      const { AGENT_ISLAND_COMPLETED_RETENTION_MS } = await import('../state.js');
       const publish = vi.fn((state: AgentIslandDisplayState) => {
         void state;
         return true;
@@ -1486,7 +1507,7 @@ describe('AgentIslandService native publishing', () => {
       expect(sessions.sessions.has('s1')).toBe(true);
       mocks.tapWindowBroadcast.mockClear();
 
-      await vi.advanceTimersByTimeAsync(AGENT_ISLAND_UNREAD_TRANSIENT_TTL_MS + 50);
+      await vi.advanceTimersByTimeAsync(AGENT_ISLAND_COMPLETED_RETENTION_MS + 50);
       expect(sessions.sessions.has('s1')).toBe(false);
       expect(sessions.remoteUnreadTerminals.has('s1')).toBe(true);
       expect(mocks.tapWindowBroadcast).toHaveBeenCalledWith(
@@ -1512,7 +1533,7 @@ describe('AgentIslandService native publishing', () => {
     vi.setSystemTime(new Date('2026-01-01T00:00:00.000Z'));
     try {
       const { AgentIslandService } = await import('../service.js');
-      const { AGENT_ISLAND_UNREAD_TRANSIENT_TTL_MS } = await import('../state.js');
+      const { AGENT_ISLAND_COMPLETED_RETENTION_MS } = await import('../state.js');
       const publish = vi.fn((state: AgentIslandDisplayState) => {
         void state;
         return true;
@@ -1532,7 +1553,7 @@ describe('AgentIslandService native publishing', () => {
       });
       mocks.tapWindowBroadcast.mockClear();
 
-      await vi.advanceTimersByTimeAsync(AGENT_ISLAND_UNREAD_TRANSIENT_TTL_MS + 50);
+      await vi.advanceTimersByTimeAsync(AGENT_ISLAND_COMPLETED_RETENTION_MS + 50);
       expect(publish.mock.calls.at(-1)?.[0]).toMatchObject({ totalCount: 0 });
       expect(mocks.tapWindowBroadcast).toHaveBeenCalledWith(
         SESSION_ACTIVITY_CHANNEL,
@@ -4373,6 +4394,44 @@ describe('AgentIslandService native publishing', () => {
     ]);
   });
 
+  // Codex Micro lit only local tasks: other-device tasks the island shows never reached it.
+  it('gives activity consumers the other-device tasks the island shows, without relaying them', async () => {
+    const { AgentIslandService } = await import('../service.js');
+    const publish = vi.fn((_state: AgentIslandDisplayState, _frame: AgentIslandNativeFrame | AgentIslandNativeFrame[]) => true);
+    const onSessionActivityChange = vi.fn();
+    const service = new AgentIslandService({
+      getMainWindow: () => null,
+      nativeHost: { failed: false, publish },
+      onSessionActivityChange,
+    });
+    syncEnabledForTest(service, publish);
+    const remote = {
+      sessionId: 'r1', deviceId: 'd1', deviceName: 'Studio', title: 'Remote task', workingDir: null,
+      workspaceKind: null, agentKind: null, phase: 'running' as const, detail: 'Working',
+    };
+
+    service.handleUserPrompt({ sessionId: 'local', agentKind: 'codex' }, 'Work');
+    service.setDeviceSessions([remote]);
+    expect(onSessionActivityChange.mock.calls.at(-1)?.[0]).toEqual([
+      expect.objectContaining({ sessionId: 'local', phase: 'running' }),
+      expect.objectContaining({ sessionId: 'r1', phase: 'running' }),
+    ]);
+    // The relay payload still carries only this computer's tasks.
+    expect(service.getSessionActivitySnapshots().map((item) => item.sessionId)).toEqual(['local']);
+
+    service.setDeviceSessions([{ ...remote, phase: 'completed' }]);
+    expect(onSessionActivityChange.mock.calls.at(-1)?.[0]).toContainEqual(
+      expect.objectContaining({ sessionId: 'r1', phase: 'completed', attention: true }),
+    );
+
+    // Leaving the sidebar scope or disconnecting drops the task from the consumer too.
+    service.setDeviceSessions([]);
+    expect(onSessionActivityChange.mock.calls.at(-1)?.[0]).toEqual([
+      expect.objectContaining({ sessionId: 'local' }),
+    ]);
+    service.resetRuntimeState();
+  });
+
   it.each([
     [false, 'user'], [true, 'user'], [false, 'scheduler'], [true, 'scheduler'],
   ] as const)('keeps direct IM completions quiet (headless=%s, kind=%s)', async (headless, kind) => {
@@ -4718,7 +4777,10 @@ describe('AgentIslandService native publishing', () => {
     }
   });
 
-  it.each([false, true])('keeps scheduled completions silent on source and remote devices (oldUnread=%s)', async oldUnread => {
+  // B2B completion must not reach the remote desktop toast callback, even if
+  // an older owner reply keeps the session unread. The same silent relay state
+  // also gates the renderer's Feishu/mobile notification callback.
+  it.each([false, true].flatMap(oldUnread => ['scheduled', 'b2b'].map(origin => ({ oldUnread, origin }))))('keeps internal completions silent on source and remote devices (%j)', async ({ oldUnread, origin }) => {
     vi.useFakeTimers();
     const { AgentIslandService } = await import('../service.js');
     const sourcePublish = vi.fn((state: AgentIslandDisplayState) => state.visible);
@@ -4747,13 +4809,17 @@ describe('AgentIslandService native publishing', () => {
         source.handleAgentEvent(meta, doneEvent());
         await vi.advanceTimersByTimeAsync(2000);
       }
-      source.handleScheduleEvent({ type: 'silenced', scheduleId: 'schedule', runId: 'run', sessionId: meta.sessionId });
+      if (origin === 'scheduled') source.handleScheduleEvent({ type: 'silenced', scheduleId: 'schedule', runId: 'run', sessionId: meta.sessionId });
       source.handleUserPrompt(meta, 'Scheduled check');
       await vi.advanceTimersByTimeAsync(2000);
       sourceSound.mockClear(); remoteSound.mockClear(); desktopEvent.mockClear();
-      source.handleAgentEvent(meta, doneEvent());
-      source.handleScheduleEvent({ type: 'completed', scheduleId: 'schedule', runId: 'run', sessionId: meta.sessionId, silenced: true });
+      source.handleAgentEvent(meta, { ...doneEvent(), ...(origin === 'b2b' ? { agentMeta: { botPrivateReply: true } } : {}) });
+      if (origin === 'scheduled') source.handleScheduleEvent({ type: 'completed', scheduleId: 'schedule', runId: 'run', sessionId: meta.sessionId, silenced: true });
       await vi.advanceTimersByTimeAsync(0);
+      // With no old unread, the quiet completion drops out of the activity list.
+      // Otherwise retain the old unread, explicitly marking this completion silent.
+      if (oldUnread) expect(source.getSessionActivitySnapshot(meta.sessionId)).toMatchObject({ completionNotification: 'silent' });
+      else expect(source.getSessionActivitySnapshot(meta.sessionId)?.attention).not.toBe(true);
       expect(sourceSound).not.toHaveBeenCalled();
       expect(desktopEvent).not.toHaveBeenCalled();
       expect(remoteSound).not.toHaveBeenCalled();
@@ -7104,7 +7170,7 @@ describe('会话关闭原因决定条目去留', () => {
     vi.setSystemTime(new Date('2026-01-01T00:00:00.000Z'));
     try {
       const { AgentIslandService } = await import('../service.js');
-      const { AGENT_ISLAND_UNREAD_TRANSIENT_TTL_MS } = await import('../state.js');
+      const { AGENT_ISLAND_COMPLETED_RETENTION_MS } = await import('../state.js');
       const publish = vi.fn(() => true);
       const service = new AgentIslandService({
         getMainWindow: () => null,
@@ -7113,7 +7179,7 @@ describe('会话关闭原因决定条目去留', () => {
       service.setEnabled(false);
       service.handleUserPrompt({ sessionId: 's1', agentKind: 'codex' }, 'run tests');
       service.handleAgentEvent({ sessionId: 's1', agentKind: 'codex' }, doneEvent());
-      await vi.advanceTimersByTimeAsync(AGENT_ISLAND_UNREAD_TRANSIENT_TTL_MS + 50);
+      await vi.advanceTimersByTimeAsync(AGENT_ISLAND_COMPLETED_RETENTION_MS + 50);
       const islandState = (
         service as unknown as { state: { sessions: Map<string, unknown>; remoteUnreadTerminals: Map<string, unknown> } }
       ).state;
@@ -7137,7 +7203,7 @@ describe('会话关闭原因决定条目去留', () => {
     vi.setSystemTime(new Date('2026-01-01T00:00:00.000Z'));
     try {
       const { AgentIslandService } = await import('../service.js');
-      const { AGENT_ISLAND_UNREAD_TRANSIENT_TTL_MS } = await import('../state.js');
+      const { AGENT_ISLAND_COMPLETED_RETENTION_MS } = await import('../state.js');
       const publish = vi.fn(() => true);
       const service = new AgentIslandService({
         getMainWindow: () => null,
@@ -7146,7 +7212,7 @@ describe('会话关闭原因决定条目去留', () => {
       service.setEnabled(false);
       service.handleUserPrompt({ sessionId: 's1', agentKind: 'codex' }, 'run tests');
       service.handleAgentEvent({ sessionId: 's1', agentKind: 'codex' }, doneEvent());
-      await vi.advanceTimersByTimeAsync(AGENT_ISLAND_UNREAD_TRANSIENT_TTL_MS + 50);
+      await vi.advanceTimersByTimeAsync(AGENT_ISLAND_COMPLETED_RETENTION_MS + 50);
       const islandState = (
         service as unknown as { state: { sessions: Map<string, unknown>; remoteUnreadTerminals: Map<string, unknown> } }
       ).state;
@@ -7362,7 +7428,7 @@ describe('Agent Island device sessions', () => {
   });
 });
 
-it('does not sound or mark attention for internal coordination completion, but surfaces a failure', async () => {
+it.each([{ botTaskCoordination: true, botPrivateReply: false }, { botPrivateReply: true }])('does not sound or mark attention for internal completion (%j), but surfaces a failure', async (agentMeta) => {
   const { AgentIslandService } = await import('../service.js');
   const publish = vi.fn(() => true);
   const playSound = vi.fn(() => true);
@@ -7373,7 +7439,7 @@ it('does not sound or mark attention for internal coordination completion, but s
   const meta = { sessionId: 'coordination', agentKind: 'codex' as const };
   service.handleAgentEvent(meta, { type: 'status', source: 'codex', data: { isRunning: true } });
   playSound.mockClear();
-  service.handleAgentEvent(meta, { ...doneEvent(), agentMeta: { botTaskCoordination: true, botPrivateReply: false } });
+  service.handleAgentEvent(meta, { ...doneEvent(), agentMeta });
   expect(playSound).not.toHaveBeenCalled();
   expect(service.getSessionActivitySnapshot(meta.sessionId)?.attention).not.toBe(true);
   service.handleAgentEvent(meta, terminalErrorEvent('User action required'));

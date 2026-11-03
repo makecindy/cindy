@@ -118,16 +118,20 @@ const RETRY_COPY = {
   },
 };
 
-globalThis.retryCopy = function retryCopy(language = 'en') {
-  const locale = language.toLowerCase();
-  if (/^zh-hant-x-lzh$/.test(locale)) return RETRY_COPY['zh-Hant-x-lzh'];
-  if (/^zh-hans-x-lzh$/.test(locale)) return RETRY_COPY['zh-Hans-x-lzh'];
-  if (/^zh-(tw|hk|mo|hant)(-|$)/.test(locale)) return RETRY_COPY['zh-TW'];
-  if (locale === 'zh' || locale.startsWith('zh-')) return RETRY_COPY['zh-CN'];
+globalThis.updaterLocale = function updaterLocale(language = 'en') {
+  const locale = language.replace(/_/g, '-').toLowerCase();
+  if (locale === 'zh-hant-x-lzh') return 'zh-Hant-x-lzh';
+  if (locale === 'zh-hans-x-lzh') return 'zh-Hans-x-lzh';
+  if (/^zh-(tw|hk|mo|hant)(-|$)/.test(locale)) return 'zh-TW';
+  if (locale === 'zh' || locale.startsWith('zh-')) return 'zh-CN';
   if (locale.split('-')[0] === 'pt') {
     const parts = locale.split('-');
     const region = parts[/^[a-z]{4}$/.test(parts[1] || '') ? 2 : 1];
-    return RETRY_COPY[region === 'br' ? 'pt-BR' : 'pt-PT'];
+    return region === 'br' ? 'pt-BR' : 'pt-PT';
   }
-  return RETRY_COPY[locale.split('-')[0]] || RETRY_COPY.en;
+  return Object.hasOwn(RETRY_COPY, locale.split('-')[0]) ? locale.split('-')[0] : 'en';
+};
+
+globalThis.retryCopy = function retryCopy(language = 'en') {
+  return RETRY_COPY[globalThis.updaterLocale(language)];
 };

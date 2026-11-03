@@ -1,5 +1,63 @@
 # 跨端协议兼容
 
+## 群聊代答的工作记录兼容（2026-11-03）
+
+已发布 Desktop 在普通和个人代答的完成请求中附带 `cindy.work-record` revision 1，
+`fallback: ""` 表示它只保存定位信息、不增加正文。Chat Server 须允许这一已知版本的空 fallback，
+否则会以 `INVALID_INPUT` 拒收完整回复；租约过期后重复执行还可能让模型返回 `NO_REPLY`。
+未知卡片或工作记录的未知版本仍要求非空 fallback。客户端请求形状不变，需全部 API 副本升级；
+本地 HTTP + PostgreSQL 回归不代表生产已部署，不自动补发旧回复。无 Device Link、中转或鉴权变化。
+
+## 永久代答由本人显式关闭（2026-11-02）
+
+`trigger: always` 开启后不再因输入、发言或在线自动接回。Desktop 与 Mobile 不发送自动
+`participate`，状态入口的停止操作沿用 `save` 写入 `enabled: false`。定时、手动触发不变。
+不新增字段、action、能力位或中转行为；`resumeMinutes` 仍保留在旧配置与请求中以兼容旧端，
+新版不使用它判定永久模式，也不展示离开恢复设置。
+
+服务端应用与追加迁移 `036_personal_mask_always.sql` 必须先完成所有副本升级：状态判定忽略
+永久模式的旧参与时间，显式 `participate` 不取消永久执行，入库触发器对旧消息写入端也沿用新规则。
+新客户端连接旧服务器仍可能在发送时被服务器暂停，不能宣称只更新客户端即可完整生效。
+旧客户端连接新服务器时，旧「接回」操作对永久模式不再停答，须用已有的代答开关关闭；
+旧界面的离开恢复配置不再生效。混合副本期间旧应用仍可能响应暂停，必须完成服务端滚动升级。
+既有取消记录不复活，手动关闭继续取消在途和排队回复。回滚应用可保留兼容的数据库函数和数据，
+但旧应用会恢复旧的参与判定，不能承诺回滚期间保持新语义。Device Link 和自建中转无需适配。
+本地回归与生产部署分别验收，不将代码完成视为线上已生效。
+
+## 机器实时状态（2026-11-02）
+
+新增只读 invoke `maker:machine:status`（`packages/device-link/src/machineStatus.ts`），同账号远控可用，不进共享任务访客白名单。
+没有新帧、能力位或 relay 行为，中转（含自建）只转发，不需要适配。旧被控端返回 `CHANNEL_NOT_ALLOWED`，控制端显示 `update_required`；
+解析按字段容错，新版本多报的字段被忽略，缺的字段是 `null`，只有 CPU 核数与内存总量缺失才视为无效。
+
+## 分享来的供应商组按组判断可选（2026-11-02）
+
+不新增 wire 字段、channel 或错误码。受邀者对既有分享目录的解读：带合法 `groupSize` 的供应商，
+`connected: false` 在受邀者侧记为 `true`（`scrubSharedProvider`），因为它只代表组所在电脑本机那一份，
+组会把任务分给组里其他电脑（[供应商分享](../product-rules/provider-sharing.md) §5.1）。
+主进程 `readDeviceProviderViews` 与被控电脑代读分享目录时也过同一份投影，与 Renderer 直读一致；只有供应商组
+读组内电脑时保留原始 `connected`（`groupMember`），因为带 `groupAssigned` 的任务在那台直接运行。
+分享者电脑投影时还没有 `groupSize`，发出的数据不变；旧分享者不带 `groupSize` 时按原连接状态处理。
+分享者的启动预检也需更新：宿主仅对尚未分配的直接受邀者任务传入内部 `groupRouting` 上下文，
+核对分享来源与模型授权后由组选电脑，不用本机登录状态否决整组。选中本机、续接本机或启动失败后换回本机时，
+均在本机启动入口按原始连接状态重新核对。组所在电脑向已确认的组员转发换模型或分支任务时，同样
+只核对来源与模型授权，不看本机登录；分支依据宿主已保存的执行电脑判断，本机分支仍按原状态核对。
+实际执行电脑收到的已分配、已中转与受托执行不进入组预检。该上下文不进入 wire。
+完整修复需分享者与受邀者均更新；只更新受邀者时候选可见，但旧分享者仍可能因本机断连而拒绝启动。
+旧受邀者仍按本机那一份隐藏；新受邀者对组里一台都不能用的分享会在发送时收到既有的
+`REMOTE_AGENT_UNAVAILABLE`。手机经新版被控电脑代读即生效，手机自身解析同样走该函数。
+官方与自建中转只透传既有 invoke，无需改动。
+
+## 仓库自动任务导入确认（2026-11-01）
+
+同账号 invoke 新增 `maker:project-automation:pending-imports`，返回已知项目目录的待导入配置。
+既有 `reconcile` 参数可选追加 `approvedHash`，返回值可选追加 `pendingImport`；未提供匹配当前
+文件内容的 hash 时只预览，不创建、修改或删除自动任务。推送新增 `import-required` 分支，
+原 `reconciled` 分支不变。旧控制端不会确认新宿主的导入，须在新版 Desktop 查看确认；
+新控制端连接旧宿主时发现接口不可用，不伪造待导入内容，旧宿主仍保持旧版行为，安全修复须升级执行电脑。
+Mobile 暂无此确认界面；已保存任务及 Agent 工具的授权流程不变。无数据库迁移或新增持久授权记录。
+官方及自建中转沿用通用 invoke／push 转发，没有帧、鉴权或重连协议变化，无需修改中转内核。
+
 ## iPhone / Android 桌面小组件快照（新增接口，尚未发布）
 
 新增只读 invoke `device-link:usage-widget:snapshot:v1`（无参数），列入 Desktop
@@ -13,6 +71,18 @@
 其他电脑离线或单个账号读取失败时，该账号保留最后读数最多 3 天，单元格带可选 `stale` 且 `when` 写成「x 小时前」。
 单元格的可选 `resetsAtMs`、`stale` 只进 Desktop 内部视图模型与快照，菜单栏 helper 忽略未知字段。无服务端、relay
 或数据库变更；手机侧组件扩展需要原生新包，见 [Mobile 冷更边界](mobile-development.md#原生配置与-runtime-fingerprint冷更边界)。
+
+## 插件与伙伴包的十语资源（2026-10-31）
+
+客户端接受 `zh-CN / zh-TW / en / ja / ko / es / fr / de / pt-PT / pt-BR` 的
+插件 manifest 资源与推荐词条。旧清单无需补字段，英文回退、权限判据和批准记录不变。
+`app-context` 与 `host-context-changed` 可选新增 `uiLocale`；旧字段 `locale`
+仍仅返回 zh-CN / en / ja / ko，其他语言固定返回 en。新插件读取
+`uiLocale ?? locale`，旧插件无需重装或重新授权；缺少资源仍回退英文。
+伙伴包新增的五种拉丁语系译文同样可选，旧五语包仍可导入；切换语言只影响展示与新导入快照，
+不会重写用户已有伙伴资料、例行任务授权或回执指纹。
+官方插件仓发布门禁、官方 Telegram 菜单和 SkillHub 内容语言属于独立仓库，未在本次修改或验证。
+没有 Device Link channel、relay、allowlist 或自建中转协议变更。
 
 ## Desktop 群聊消息的即时投影（2026-10-31）
 
@@ -194,6 +264,18 @@ Pi 只改写副本首行的 session ID 与 cwd，使其指向接收端工作目�
 新增 Renderer IPC 仅本机宿主使用，不进入 device-link 通用 invoke/push 白名单；跨设备
 复用既有插件页面资源与密封设置链。正文详见 [插件规则](plugin-security-and-authoring.md#宿主统一模型选择器新增接口尚未发布)。
 
+模型选择成功配置与 `will-start-task` 路由新增可选 `agentDeviceId`，省略维持旧本机配置。
+选择请求新增可选 `allowRemote`，仅显式 true 时列远程/分享来源并接受远程答案，已有调用方默认保持本机。
+新 Host 在 `/agent-models` 无参响应声明 `supportsRemoteRoutes:true`，路由插件仅在有此标志时
+允许保存/回传远程来源；旧控制端无法识别带来源的答案时拒绝，不静默丢字段。
+手机原生插件页与远程 Desktop 设置控制端在既有 `open:<surface>` / `settings:open` 的 input
+可选声明 `modelPickerRemoteSources:true`；Host 将能力绑定到该页面租约。只有实际支持来源选择
+与回传的控制端才声明；旧 Host 忽略该字段，旧控制端缺省为不支持。带 `agentDeviceId` 的 initial
+在投递前要求此能力，否则以既有 `UNAVAILABLE` 返回升级提示，避免旧控制端去掉来源后把本机
+同名模型当成用户确认。新版控制端仍可显式选回本机；不带远程初值的旧本机选模行为不变。
+手机与远程设置页沿现有请求/回执携带来源，不新增 channel、权限或中转帧；自建中转仍按原
+通用 payload 转发，无需同步修改。来源授权在执行端用既有供应商目录和创建任务校验重验。
+
 ## 浏览器扩展桥接迁入宿主
 
 随包浏览器扩展的本机桥接从插件自带的 Node 接线进程迁入宿主（`main/browser-extension/bridge.ts`）。
@@ -258,6 +340,10 @@ Renderer 均保留它。导航先与本机设备 ID 比较；远端链接先登�
 该字段时不提供此 fallback；原有 retry token 与历史错误卡仍沿用旧路径。
 旧控制端忽略新增字段。标记仅随当前错误存在，清错、下一轮输入和控制操作失败都会清除，
 不落盘、不保留旧 run，不新增 channel、权限、服务端或原生指纹变更。
+
+产品语义（2026-10-30 裁决）：Cindy 退出或重启中断的定时任务运行，由用户点击现有「继续任务」
+入口手动续跑，不在启动或定时扫描时自动续跑；续跑接回原来的定时运行记录，完成后更新同一条
+记录的结果，不另起一条。这只针对应用退出后的恢复，运行中的临时网络故障仍按既有方式自动恢复。
 
 ## 手机经电脑确认群消息已读
 
@@ -357,6 +443,7 @@ Renderer → Main 输入附带可选 `projectDir`，旧输入缺字段时回落�
 不绑项目且未传 `working_dir` 时复用既有托管目录创建流程；传目录或使用 worktree 也不改变归属。
 创建回执返回 `project_path`、实际 `working_dir` 与 `workspace_kind`；
 `list_projects` / `create_project` 保留 `working_dir` 并新增 `project_path` 回执。
+`list_projects` 另新增 `projects_root`（`path`、`source`：`setting`／`inferred`／`default`、`exists`），只读、仅本机；旧调用方忽略该字段即可（#8259）。
 `send_to_session` 的既有任务投递不要求项目，跨电脑投递合同不变。
 
 ## 手机读取项目别名（#6916）
@@ -397,6 +484,40 @@ stream 匹配后才处理；信令不进入业务可靠 FIFO，也不走直连�
 直连重试保留 5 / 10 / 20 / 40 / 60 秒的指数退避档位，每次在当前档位的 80%～100%
 区间随机错峰（含 60 秒封顶档），避免多个 peer 同时失败后集中重新协商。平均间隔约为
 原固定档位的 90%；稳定连接满 60 秒后重置退避，撤权、断链或停止时仍取消待重试。
+
+直连容量是本机传输资源预算，独立于供应商组的执行并发上限。Desktop 一个数据进程的所有
+客户端（含跨区域连接）合计最多 64 个实际协商中／已打开的 peer；同账号设备与供应商分享
+各保留 8 个名额，余下 48 个共享，因此单类最多 56 个。Mobile 维持原有 16 个、不设分类预留。
+分类不赋予权限：分享仍须通过原有 capability、可靠握手和许可检查，见
+[`provider-sharing-direct-execution.md`](../product-rules/provider-sharing-direct-execution.md)。
+`directCapacity.ts` 是预算与排队判据正本，Main/WebView bridge 与生成的浏览器 runtime
+同步支持桌面硬上限；平台只能选择不超过它的预算，不增能力位、不改 relay 信令格式。
+
+满额时业务继续走 relay；有界等待队列按类内 FIFO、类间轮转补建，不驱逐健康通道。
+释放名额后自动唤醒等待者，再次核验当前授权与 stream；入站 offer 最多保留 15 秒，
+撤权／换代／过期后不得补建。失败尝试立即释放物理名额，重试状态不占直连容量。
+每个客户端最多保留 256 个候选、同一数据进程最多 256 个等待者；无业务活动的失败／等待状态
+在 5 分钟后回收（正在进行的请求例外），新业务可以再触发尝试。有等待者时每分钟检查长期
+空闲通道：至少 5 分钟无收发、没有在途请求、接收处理或缓冲时才让出名额。无压力时保留已建立
+的通道，分享许可续期不因本机空闲策略而换通道。
+Desktop 还通过 `isPeerBusy` 接入 dispatch 的执行中请求和待发回包，不能把可靠帧已 ACK
+误当作宿主业务已完成；这只阻止空闲回收，不延后 ACK 或阻塞后续 stop／steer／push。
+
+匿名诊断仅记录固定 reason、kind、active/limit/queued、分类占用与预留数，以及完整 peer key 的 SHA-256 前 16 位；
+每个 peer 的同一 reason 每分钟最多一次，不输出原始 scoped key、SDP、IP 或错误对象。
+旧 Mobile 宿主没有 WebCrypto 时记 `peerHash=unavailable`，不退回明文 ID。容量满、队列满、
+协商超时、网络失败、runtime 故障与空闲让出分别记录；不会把 `channel-closed` 猜成网络失败。
+自建中转沿用已有签名 push 的不透明转发，不需改服务端；共享客户端测试、relay 测试和
+`pnpm --filter @cindy/device-link-relay run interop` 同时验证。
+
+本地容量／吞吐复现：`node scripts/direct-link-smoke.mjs <Chrome路径> --capacity`。
+64 是本机浏览器压测后的初始桌面预算，不等于跨机器、长时间高负载或手机真机验收；
+单 peer 帧／缓冲上限保持不变，更多 PeerConnection 会增加 CPU、内存和网络资源占用。
+2026-11-02 的 Windows / Node 22.22.3 本机 Chromium 记录：64 条通道建立 541ms，
+8 轮合计 52 MiB UTF-8 正文传输 3466ms，20ms 定时探针观察到最大延迟 78ms；第 65 条
+释放后补建，其余 63 条保留原通道。这些是一次本机 fixture 测量，不作为生产性能保证。
+另已通过共享客户端全套、桌面适配器与跨区域测试、自建 relay 测试／互通、两个独立
+Electron 进程的 IPC/WebRTC smoke，以及 Desktop、Mobile 和共享包类型检查；真机长时压测待补。
 
 数据通道 `device-link-v1` 只使用可靠有序 SCTP；同一完整 envelope 拆为不超过 16 KiB 的
 二进制片，首字节 0/1 表示续片/末片，剩余字节是 UTF-8。单条最多 `MAX_FRAME_BYTES`，
@@ -762,21 +883,32 @@ Gateway 边界对整块报价校验，非法或无有效币种即整体省略，
 
 ## 群聊邀请公开链接
 
-device-link-server 的公开页 `<deviceLinkBase>/chat-invite/join#<token>[?app=cindy|cindycn|cindydev]`
-与 Desktop 粘贴解析共用同一规则：口令为 43 位 base64url，只放在 fragment；URL 无 query、无用户信息；
-fragment 只允许一个闭集 `app` 提示，不允许额外 `#` / `?` 段；协议为 https，仅本机回环地址允许 http。
-公开页按 `app` 提示尝试唤起对应的 `cindy` / `cindycn` / `cindydev` scheme；手机由原生链接入口
-交给单一邀请 Host，登录完成后继续同一邀请。浏览器限制唤起或尚未安装时保留复制／下载后重开原链接的后备；
-真实微信与安装续接需单独验收。客户端解析见
-`packages/device-link/src/chatInvitation.ts`（`parseChatInvitationToken`），继续接受裸口令与
-`cindy://chat-invite/<token>`；链接主机只校验形状，从不作为请求地址，也不据此切换 Chat Server
-或登录区域，口令只以请求正文发给当前账号的 Chat Server。
+新生成邀请为 `<shareBaseUrl>/chat-invite/<32 位 base64url 编号>`；CN `share.cindy.com.cn` 与
+Global `share.cindy.app` 读取同一记录，链接不带口令。Share Server 用 AES-256-GCM 加密保存口令，
+以口令哈希去重，并记录生成时群名、人数和最多五个成员头像。桌面建链提交生成邀请所用的 actorId；
+分享服务使用同一调用者凭证和 `X-Chat-Actor` 预览，要求 groupId 一致、joined=true。一律署名账号本人；
+伙伴身份创建时，App 预览仍显示伙伴邀请人。群聊服务、账号服务及原预览/接受协议保持不变。
 
-本轮生成出口部分切换：已核验公开页的 Global / 中国大陆构建，通过当前 `deviceLinkApiBaseUrl`
-生成 HTTPS 邀请，口令仅位于 fragment，app 提示沿构建身份。开发构建及明确的本机回环端点
-保留旧 scheme；开发公网公开页尚未核验，不宣称三区部署完成。不做运行期部署探测。
-「伙伴 → + → 输入邀请链接…」继续保留；旧客户端点击 HTTPS 经页面转到 scheme 仍可用，
-粘贴 HTTPS 需要支持该解析的新客户端。链接不会切换接收者的账号区域或 Chat Server。
+客户端共享解析分别提供 `parseChatInvitationShareId` 和 `parseChatInvitationToken`。前者只提取编号，
+主机只校验 URL 形状，从不作为请求目标或切换区域的依据；取口令始终向自身配置的 `shareBaseUrl`
+发送 `POST /api/chat-invites/:id/token`。后者继续接受裸口令和 `cindy(cn|dev)://chat-invite/<token>`。
+删除 device-link 旧 `/chat-invite/join#<token>` 网页与解析，不保留双入口。
+
+分享网页加载后立即取口令，所有设备只显示一个原生拉起按钮；按钮准备好后自动尝试拉起一次，保留按钮供手动重试。
+电脑沿用统一 `cindy://`；手机按可信访问入口选择国内 `cindycn://` 或海外 `cindy://`，失败不切换到其他版本。
+浏览器阻止拉起不影响已准备好的按钮，也不报为口令读取失败；
+小字提示也可在 Cindy 中直接粘贴邀请链接，不附加区域或版本条件。电脑具体实例由系统协议注册决定，不新增桌面区域协议。
+深链不展示、不复制；网页复制只给 HTTPS 链接。桌面需已注册 `cindy://`，旧版粘贴 HTTPS 链接需升级；
+此前发出的原生深链继续可用。
+手机群邀请此前未发布，沿 #7930 同一常驻面板、首页加入入口、剪贴板识别和明确确认加入的合同，
+先在原 15 秒/AbortSignal 窗口内取口令，再把内存目标归一为原生深链，接受及未知结果重试的 operationId 不变。
+不增加原生 Universal Link 配置或安装归因。
+
+桌面分享服务不可用时明确报错，以同一创建 operationId 重试，不回退生成深链。
+撤销先完成群聊服务操作，再通知分享服务，仅创建账号可记录 disabledAt；通知失败重试一次，不回滚撤销。
+分享服务不判断其他实时失效，原预览仍由群聊服务最终判定。口令不写 URL、reference、署名回调、日志、HTML
+或客户端持久存储；路径编号脱敏。此变更涉及新增分享服务表、加密密钥与匿名取口令，须人工安全 review。
+必须先完成分享服务配置、sh-dev 验证并发布生产，再合并并发布客户端；本地测试不表示实际部署已完成。
 
 Chat Server 既有预览接口兼容追加 `avatar` / `memberCount`，V9（2026-10-28）再可选追加
 `memberAvatars?: Array<{avatar:string|null,initial:string}>`，不改请求或接受操作幂等合同。
@@ -929,6 +1061,10 @@ stale 时不能再用消息时间戳复活已被接收顺序判定为旧的正�
 历史画面已就绪时，两端只构建实际展示的历史序列，不额外解析随后会丢弃的 raw 渲染结果。
 详情展开意图沿用串行队列，同一控制器只发送尚未发出的最新替换状态；不取消在途请求，
 不跨控制器合并旧主机释放，也不记忆成功结果来跳过重连后的重新订阅。
+Desktop / Mobile 的详情读取、搜索定位与展开意图只发送 `HistoryWorkReference` 的消息范围字段；
+摘要里的文件产出、预览和活动行保留在查看端，不回传为请求参数，避免其中的文件路径被共享任务
+输入引用校验误判为文件访问。沿用原 channel 和主机范围校验，修复需更新查看端，旧主机无需升级；
+不新增权限、数据库或 Mobile 原生配置。实现与回归见 `historyViewController.ts`、`sharedTaskDispatch.test.ts`。
 本地 `history view changed` 调试记录使用设备／任务短引用与缓存、最新页、旧页、详情、降级、
 重置来源及行数；手机滚动采样携带相同短引用和可见列表项数，区分数据替换与布局重测，
 不记录正文、不扩展遥测上传。
@@ -1109,7 +1245,9 @@ Claude Code 终态 error 事件可带 `usageResetAt`（unix ms）。服务端无
   不做结构化拒收。新能力一律加**可选**字段：`picture`（本步按截图作答，像素不在快照里）、`liveView`
   （可打开单窗口实时画面）、`deviceCode`（`{ code, url, origin }`，设备码登录）、`holder`、`remoteInput`、
   `agentPicture`（2026-10-30：码来自 Agent 截图，主人扫完手动交还；同时带 `agentControlled`，旧端照常显示该提醒
-  与跳过；加密 offer 的 presentation 不变）等。
+  与跳过；加密 offer 的 presentation 不变）、`directSignIn`（2026-11-01：这一步由主人在窗口上完成；`controls` 仍保留，
+  旧控制端照旧显示表单，无实时画面的设备也退回表单或截图）等。
+  本机带路用只限受信本地窗口的 `INPUT_HANDOFF_LOCAL_RAISE_CHANNEL`，不进远程 allowlist（`device-link/ipc.ts` 拒绝）。
   旧控制端忽略不认识的字段，仍能看到本步的说明文字并交还／取消；新控制端只在字段存在时展示对应入口。
   `deviceCode` 在打开前必须经 `isInputHandoffDeviceCode` 复核（https、无账号密码、origin 与显示一致）。
 - **带值提交**只走插件授权 v3：`capabilities` 声明 `inputHandoff: true`，`start` 带 `inputHandoff: true`；
@@ -1126,6 +1264,21 @@ Claude Code 终态 error 事件可带 `usageResetAt`（unix ms）。服务端无
     被控端拒绝越界操作（`DESKTOP_HANDOFF_WINDOW_ONLY`），代输入结束即结束（`DESKTOP_HANDOFF_ENDED`），
     非 macOS 或要求音频时拒绝（`DESKTOP_HANDOFF_UNAVAILABLE` / `DESKTOP_AUDIO_UNAVAILABLE`）。
   - 先发被控端：卡片上的 `liveView` 由执行代输入的那台电脑给出，它本身就是新版。
+- **插件实时屏幕**（手机上的模拟器等）同样沿用远程桌面业务通道，不改 relay、IPC allowlist 或协议版本：
+  - 被控端以可选能力 `liveScreens` 声明支持，并接受租约外的 `screens` 列表操作；控制端只在 `start` 里附
+    `screen: {plugin, id}`（取自 `screens`），由被控端解析插件与设备。
+  - 响应的 lease 附 `screen: {plugin, id, name, platform, …}`。控制端收到不带同一 `screen` 的 lease
+    时立即 `stop` 并报 `INVALID_RESPONSE`——旧被控端会丢掉 `screen` 并开成整屏远程桌面。
+  - 新输入 `touch` / `press` 只在实时屏幕租约内有效；旧被控端会因未知输入结束会话，所以控制端只在
+    能力位存在时发送。被控端在整屏租约里拒绝这两种输入，在实时屏幕租约里拒绝 `move` / `button` /
+    `scroll`（`INVALID_REQUEST`）。
+  - 该 lease 只允许 stop / heartbeat / control / presentation / input / offer / ice / viewerHidden /
+    screenShape，其余返回 `DESKTOP_SCREEN_ONLY`；不需要屏幕录制或辅助功能权限，结束时不锁屏，与整屏租约共用
+    「每台电脑一个远程租约」（替换需 `takeover`）。
+  - 设备画面转动后的形状：heartbeat 结果附可选 `shape: {width, height}`；控制端另发
+    `screenShape {lease, known?}` 等待形状与 `known` 不同（被控端最多等 6 秒后照常返回）。旧被控端
+    对 `screenShape` 返回 `INVALID_REQUEST`，控制端即停止该请求，改用 heartbeat 或按请求的朝向估计。
+  - 先发被控端；新手机连旧电脑时不出现入口，旧手机连新电脑行为不变。
 
 ## Agent 跨设备历史发现与搜索
 
@@ -1180,6 +1333,21 @@ SSH 主机不自动成为设备目录成员。实现与回归见 `mcp-integratio
 插件 id 只对插件所在的电脑有意义：`cindy_scheduler` 跨电脑修改拒绝设置该字段，伙伴搬家时带插件检查的
 例行任务先关闭再到达；Mobile 与项目自动化配置不编辑、不保存它。不新增 device-link channel：插件下拉用
 本机专用的 `ghosts:control-points:candidates`，不进 allowlist。
+
+## 插件提供的模型（2026-11-01）
+
+清单新增可选 `models: { types }`，只声明能力；旧 Host 把它当未知字段保留，不授权也不阻止安装。列表由插件经
+`PUT /models` 运行时发布，Host 校验后存到 `ghost-published-models`，选择器只读这份记录，不调用插件。不认识的
+`target.type` 跳过该项，其余照常显示，所以新版插件在旧一点的 Host 上仍可用支持的模型。
+
+插件 `event-verdict` 新增 `action: 'route'` 与 `route: { agentKind, model, providerId, effort?, agentDeviceId? }`，只在控制节点
+`will-start-task` 生效；询问数据带 `modelId`（用户选的已发布模型）。旧 Host 丢弃不认识的 action，插件按超时处理
+（沿用原模型）。新增本机专用 IPC `ghosts:models:list` 与 `ghosts:start-task:route`，不进 device-link allowlist。
+新任务草稿（本机 `localStorage`）新增 `pluginModel: { pluginId, modelId } | null`，只在本机草稿使用，不同步、
+不上传；远程电脑、SSH 主机、多 Agent 协同草稿不提供。`route` 模型不进执行目录：定时任务、伙伴、协同 worker 和
+Mobile 看到的仍只有真实模型。首条消息后写一条空正文 assistant 消息，
+`agentMeta.pluginModelRoute = { pluginName, outcome: 'routed' | 'kept', modelName, effort?, reason?, why? }`，
+Desktop 与 Mobile 渲染为系统说明行；旧端没有对应渲染，按普通的空 assistant 消息处理；历史投影不计入正文。
 
 ## 定时任务的 Agent 运行位置（2026-10-22）
 
@@ -1885,6 +2053,49 @@ handler 无 sender 依赖；不加入共享任务访客白名单，不进入自�
 `useRemoteSessionBackgroundTasks.ts`。
 
 ## 远程 Agent：Agent 在另一台电脑运行
+
+Cindy 托管 Skill（2026-11-03）：内置 Skill 与插件带的 Skill 以任务所在电脑为准，用远程供应商与本机体验一致。
+`open.personal` 追加可选数组 `managedSkills: [{ command, dir }]`：任务所在电脑按本机任务同一来源列出托管 Skill，
+用本机停用偏好与伙伴授权过滤（`resolveAllowedManagedSkills`），本机停用的个人 Skill 也不再同步。文件随
+`personal.files` 放在 Agent 找项目 Skill 的位置（Claude Code 为 `.claude/skills/<插件>-<Skill>`，Codex / Pi 为
+`.agents/skills/...`）。目录名为 `<插件>-<Skill>`；两段里有 `-` 时追加整条命令的 8 位哈希，避免 `a-b:c` 与 `a:b-c`
+拍平成同一个目录；该目录已被项目或个人的同名 Skill（本机里是不同命令）占用时同样换成带哈希的目录共存，不丢托管的。
+`managedSkills` 条目最多 512 个（超过时接收方拒绝整个打开），收集时截断。文件清单与指纹共用 `managedSkillDigest.ts` 的 `listManagedSkillFiles`：清单超出上限、有单个超过
+512 KB 的文件、受邀者任务里的凭证类文件、读不到的文件，该 Skill 整个不带，不留只有 `SKILL.md` 的半个。
+对旧运行端与个人配置共用 512 个文件、4 MB 的额度且个人配置优先；放不下的 Skill 整个不带。
+沿用 `maker:remote-agent:v1`，只加可选的 `caps.managedSkills`，不加错误码或 relay 接口。
+
+- 新运行端看到字段（含空数组）即以它为准，**不加载自己的托管 Skill**，受邀者也一样：Claude Code 把这些目录挪进
+  影子目录内的 `.cindy/managed-skills/<插件>/skills/<Skill>` 并以本地插件挂载，命名保持 `cindy:pr`；Codex 对共用
+  CODEX_HOME 里本机那份逐线程停用，Pi 不挂本机的。控制端为原位置与插件位置都登记路径映射，Skill 里的脚本路径
+  经 `cindy_exec` 回到任务所在电脑的真实文件；连回时托管 Skill 的映射以这次同步的为准（插件更新后目录也变了），
+  其余映射仍保持原目标（上次有、这次已停用或卸载的托管 Skill 的映射也撤掉）。受邀者带来的 `managedFiles` 与 `files` 走同一道 Markdown 检查（带 hooks 的丢弃、命令预执行
+  语法断开）；复用提供者自己那份时同样过这道检查和落地改写。不变量：同一份内容，复用与传输落到受邀者任务里的文件
+  逐字节相同（`guestHost.test.ts` 直接比较两条路径）。
+- 旧运行端解码时丢弃该字段，把文件当项目 Skill 加载：能用，但 Claude Code 里叫 `pr` 而不是 `cindy:pr`；同账号
+  旧运行端自己也有同名托管 Skill 时会出现两份。新运行端遇到旧控制端（字段缺省）沿用原规则：同账号用自己的，
+  受邀者不加载。
+- 不重复传、单独额度：新运行端在 `caps` 追加可选 `managedSkills: { digests }`（自己启用中的托管 Skill：命令名 →
+  内容指纹，规则见 `managedSkillDigest.ts`；受邀者只看到 `cindy:` 内置的，不透露装了哪些插件）。控制端看到声明后，
+  指纹相同的条目只带 `{ digest, reuse: true }` 不带文件，运行端复制自己那份（复制前再核对指纹，不一致就不带这个 Skill）；
+  受邀者只能复用 `cindy:` 内置的，点名提供者装的插件 Skill 一律不复制（运行端直接收和组所在电脑中转补文件都一样）；
+  其余文件放进 `personal.managedFiles`，单独 2048 个文件、16 MB 额度，不占个人配置的 512。旧运行端不声明，控制端
+  仍用上面的共用额度方式。`caps` 本来每次打开前都问，不多一次往返；两台版本与插件相同时打开、连回都不再传托管 Skill。
+- 供应商组中转：受邀者看到的是组所在电脑的 `caps`。组所在电脑转发前按组内电脑的 `caps` 重排：那台也有同指纹的继续
+  只报名字，没有的用组所在电脑自己那份补成文件（指纹与受邀者一致才补，且按正常收集的大小限制：单个文件 512 KB、
+  新版 16 MB、旧版与个人配置共用 4 MB，放不下整个不带）；组内电脑是旧版时文件放回 `files`，放不下 512 的
+  Skill 整个不带。
+- 控制端列不出托管 Skill 时不带该字段，对方沿用原规则。实现见 `controller/projectFiles.ts`、`host/runHost.ts`，
+  回归见 `mirror.test.ts`、`roundtrip.test.ts`、`guestHost.test.ts`、`groupRelay.test.ts` 与三 harness 的
+  `device-hosted-guest` 测试。
+
+插件花名册（2026-11-01）：`open` 的 `options` 追加可选字符串 `ghostRosterSnapshot`，由任务所在电脑按真实
+工作目录生成（与本机任务同一 formatter 与过滤），空串表示“那台没有可召回的插件”，同样要带。沿用
+`maker:remote-agent:v1`，不加能力位、错误码或 relay 接口；供应商组中转随 `options` 原样透传。旧运行端
+解码时丢弃该字段，行为不变；新运行端遇到旧控制端（字段缺省）时，受邀者照旧不注入花名册，同账号照旧用
+运行端自己的花名册，均不劣于升级前。运行端只在隧道确实提供 `cindy` MCP 时注入，绝不读自己的已装插件
+代替。规则正文见 [插件渐进式发现 §3.4](../ghost-progressive-discovery.md)，回归见 `roundtrip.test.ts` 与
+三 harness 的 `device-hosted-guest` 测试。
 
 直连分享任务的授权失效与进程重启分开处理：M 仍有该 run 但其任务许可已失效时，poll 只返回
 既有 `closed/access-revoked` 终态，不读取该 run 缓冲的内容，也不再返回 `missing`。新旧控制端
@@ -2969,6 +3180,13 @@ bot 同一份过程载体与渲染（见 `docs/product-rules/telegram-bot-parity
 
 新增拒绝码 `TURN_UNAVAILABLE`（终稿 / 卡片 op 时这一轮已收口或不属于该设备）。`msg.op`
 各 purpose 允许的动作与附属字段由 parse 强制联动，放错位置一律拒收。
+
+### X 删除指令保持正文 @ 提及（2026-10-08）
+
+官方 X 服务只消费 `post.mention.create`；普通回帖属于 `post.reply.create`，接入回复事件
+会增加 X 侧投递费用。用户选择保持费用不变：删除机器人回帖继续要求原提问者在目标回帖下
+发送正文含 `@askmycindy` 的 `/delete` 指令，产品只改多语言使用说明把这一点讲清楚。后续不要
+把「自动订阅所有回复事件」当作已授权的修复。
 
 ### X 回复链的结构化输入
 
@@ -4066,6 +4284,7 @@ SQL NULL 对应缺省；项目 `version: 1` 配置同样允许该字段，旧文
 绑定任务或持续模式的 Agent 自动化显式选本机时也须有 `modelAgentKind` 与 `model`；不完整选择在保存前拒绝，
 不把“选本机”误作继承绑定任务的位置。更新可沿用已存的完整选择，恢复跟随时清除显式选择。
 `maker:get-capabilities` 返回 `supportsScheduleAgentDeviceSelection: true`。
+远程创建定时任务前，调用方还必须看到 `supportsRemoteScheduleDirectoryCheck: true`。旧端虽有 `maker:schedule:create`，但不会检查 `workingDir` 是否存在，因此缺此能力时必须在写入前返回 `REMOTE_UNSUPPORTED`，不能静默落库。
 新调用方只有明确看到此能力才向其它电脑提交位置选择；旧端未知字段会被忽略，禁止静默降级。
 跨电脑更新非空 `modelAgentKind` 时，即使省略位置以继承原位置，也必须先确认既有
 `supportsScheduleModelSelection: true`；旧端不支持时在写入前拒绝。同时设置位置或清空模型
@@ -4419,7 +4638,7 @@ Chat Server 请求复用既有消息 `content` 的 media 块及 `threadRootId`�
 
 工具参数表把 `cindy_handoff_files` 声明为数组（`{"type":"array"}`）才启用，同名的其它形态参数不受影响；未声明的工具与旧插件行为逐字不变（非媒体仍报改用 dir）。
 插件收到 `args.cindy_handoff_files`，`upload` 增加三选一的 `handoff` 来源，失败码 `HANDOFF_UNAVAILABLE`；
-用到它的插件需声明 `minCindyVersion: 0.1.123-beta`（版本号待确认），旧宿主不认识该参数。
+用到它的插件需声明 `minCindyVersion: 0.1.122-beta`，旧宿主不认识该参数。
 卡片记录的 `cindy/attachments` 新增 `handoff:<uuid>` 资源链接，字段沿用标准 `resource_link`，不新增
 device-link 操作、字段或白名单。远程打开在执行端判定：新执行端把 `handoff:` 视为执行电脑文件，
 新旧查看端都收到既有的 `MCP_APP_FILES_LOCAL_ONLY` 提示；Mobile 自带的同名检查同步认 `handoff:`。
@@ -4429,3 +4648,7 @@ device-link 操作、字段或白名单。远程打开在执行端判定：新�
 不放行。设置页列表与删除只走本机 IPC（`ghosts:handoff-list` / `ghosts:handoff-delete`）。
 回归入口：`handoffStore.test.ts`、`ghostWorkdirGate.test.ts`、`networkSlot.test.ts`、`pluginServer.test.ts`、
 `viewAuthorization.test.ts`、Mobile `mcpAppCard.test.tsx`，以及 `mcp-apps-sandbox.verify.mjs --handoff`。
+
+## GitHub 公共读取能力
+
+`git-context:github-read` 只在同账号授权链路开放，控制端先检查 `github-read-v1`。未声明的旧电脑返回明确不支持，既有 `pr-status` 的关联范围过滤与链接打开不变。新通道不进入共享任务访客 allowlist；中转仍转发原 invoke / invoke-result 帧，不引入服务器消息种类。关联新增 `associationSource / associationOrigin` 可选字段；旧消费者按原字段兼容，新消费者默认只显示宿主投影的明确有效关联。详见 [功能合同](../product-rules/github-status-and-associations.md)。

@@ -15,7 +15,7 @@
 //   pnpm mobile:sim:whoami -- --json           # Skill 可消费的结构化状态
 //   pnpm mobile:sim:whoami -- --mock           # 核对的是 --mock 启动的模拟数据 Metro
 //
-// 模拟器默认先找 Cindy 模拟器(Baguette 插件的独立设备目录)，没有再找系统模拟器；
+// 模拟器默认用 Cindy 模拟器(Baguette 插件的独立设备目录)，不可用时才找系统模拟器；
 // CINDY_MOBILE_SIMULATOR=cindy|system|<设备目录绝对路径> 可固定其一。
 
 import { execFileSync } from "node:child_process";
@@ -35,10 +35,12 @@ import {
   extractSimMetroPortArgs,
   extractSimWhoamiUdidArgs,
   getSimulatorAppContainer,
+  inspectTargetNativeIdentity,
   resolveMobileSimulatorBundleId,
   resolveSimulatorDeviceSets,
   selectBootedSimulator,
   simctlArgs,
+  simulatorBackendNotice,
 } from "./lib/sim-whoami.mjs";
 import { gitSourceIdentity } from "./sim-metro.mjs";
 
@@ -134,7 +136,10 @@ if (!jsonOutput) {
 }
 const { deviceSet, booted, targetBooted } = timedCheck('simulator', () => selectBootedSimulator(
   deviceSets,
-  (set) => shFile("xcrun", simctlArgs(set, ["list", "devices", "booted"])),
+  // A failed listing must stay a failure: "" would read as "nothing booted" and pick a backend.
+  (set) => execFileSync("xcrun", simctlArgs(set, ["list", "devices", "booted"]), {
+    encoding: "utf8", stdio: ["ignore", "pipe", "pipe"], timeout: 15_000, killSignal: "SIGKILL",
+  }).trim(),
   simulatorUdid,
 ));
 if (!jsonOutput) console.log(`==== booted 模拟器(${deviceSet.name})====`);
@@ -146,6 +151,14 @@ if (targetBooted.length !== 1) {
   if (!jsonOutput) console.log(`  (需要唯一的已启动目标模拟器；多设备时传 --udid)`);
   healthy = false;
 }
+const backendNotice = simulatorBackendNotice({
+  deviceSet, booted, simulatorUdid,
+  listDevices: (set) => shFile("xcrun", simctlArgs(set, ["list", "devices"])),
+});
+if (backendNotice && !jsonOutput) {
+  console.log(`  ⚠️ ${backendNotice.message}`);
+  backendNotice.reusable?.forEach((line) => console.log(`    ${line}`));
+}
 
 if (!jsonOutput) console.log(`\n==== 模拟器里装的 ${bundleId}(native 安装包版本)====`);
 const container = timedCheck('installed-app', () => targetBooted.length === 1 ? getSimulatorAppContainer(shFile, simulatorUdid, bundleId, deviceSet) : "");
@@ -155,7 +168,7 @@ if (!container) {
     console.log(
       simulatorUdid
         ? `  (目标模拟器 ${simulatorUdid} 未安装 / 未启动)`
-        : "  (未安装 / 无 booted 设备)",
+        : targetBooted.length === 1 ? "  (未安装)" : "  (没有唯一的目标模拟器，未检查)",
     );
   }
   healthy = false;
@@ -176,17 +189,21 @@ if (!container) {
   }
 }
 
-const native = timedCheck('native-fingerprint', () => probeErrors.length > 0
-  ? { healthy: false, code: 'native-unknown', reason: 'probe-timeout', installedFingerprint: null, expectedFingerprint: null }
-  : inspectSimulatorNativeIdentity({
-  appPath: container, projectDir: mobileDir,
-  env: { ...process.env, ...withLocalMobileRegionConfig(mobileClientBundleEnv({ authRegion: region })) },
+const native = timedCheck('native-fingerprint', () => inspectTargetNativeIdentity({
+  targetBooted,
+  probeFailed: probeErrors.length > 0,
+  inspect: () => inspectSimulatorNativeIdentity({
+    appPath: container, projectDir: mobileDir,
+    env: { ...process.env, ...withLocalMobileRegionConfig(mobileClientBundleEnv({ authRegion: region })) },
+  }),
 }));
 if (!native.healthy) healthy = false;
 if (!jsonOutput) {
   console.log(`  native: ${native.code}`);
   if (!native.healthy) {
-    if (probeErrors.length > 0 || native.reason === 'native-fingerprint-timeout' || native.reason === 'native-fingerprint-unavailable') {
+    if (native.reason === 'target-not-unique') {
+      console.log('  未检查原生身份：先确定唯一的已启动目标模拟器，这不代表 App 未安装。');
+    } else if (probeErrors.length > 0 || native.reason === 'native-fingerprint-timeout' || native.reason === 'native-fingerprint-unavailable') {
       console.log(`  原生身份检查未完成（${native.reason}）；先修复探测/指纹计算，再决定是否需要 rebuild。`);
     } else {
       const mock = uiMock ? ' --mock' : '';
@@ -264,6 +281,7 @@ if (!jsonOutput) {
       currentSourceOnExpectedPort,
       anyMetro,
       simulator: deviceSet.name,
+      simulatorNotice: backendNotice,
       booted: booted.map((line) => line.trim()),
       installed,
       native,

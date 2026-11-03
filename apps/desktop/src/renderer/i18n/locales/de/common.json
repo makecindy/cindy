@@ -1008,7 +1008,7 @@
     "saveFileName": "Screenshot",
     "saveFailed": "Screenshot konnte nicht gespeichert werden",
     "prompt": {
-      "translate": "Erkenne den Text in diesem Screenshot und übersetze ihn ins Englische. Behalte die ursprünglichen Absätze und Listen bei und gib nur die Übersetzung aus. Wenn der Text bereits auf Englisch ist, übersetze ihn ins vereinfachte Chinesisch.",
+      "translate": "Erkenne die Sprachen im Screenshot automatisch und übersetze den Text ins {{language}}. Behalte Absätze, Listen und Tabellen bei. Inhalte in der Zielsprache bleiben unverändert; bei gemischten Sprachen werden nur die anderen Sprachen übersetzt. Wenn der gesamte Text bereits in der Zielsprache ist, weise kurz darauf hin und wechsle nicht zu einer anderen Sprache. Gib ansonsten nur die Übersetzung aus.",
       "explain": "Erkläre, was dieser Screenshot zeigt. Falls es ein Fehler ist, erkläre die Ursache und wie er sich beheben lässt. Falls es ein Diagramm, Code oder eine Benutzeroberfläche ist, erkläre den Inhalt und die wichtigsten Punkte.",
       "extract": "Extrahiere den Text aus diesem Screenshot exakt wie geschrieben und behalte die ursprünglichen Zeilenumbrüche, Absätze und Listen bei. Gib Tabellen als Markdown-Tabellen aus. Gib nur den extrahierten Text aus."
     },
@@ -1056,6 +1056,12 @@
       "edit": "Bearbeiten",
       "autoUnavailable": "Automatisches Scrollen gestoppt. Du kannst manuell in der Auswahl scrollen.",
       "autoPermission": "Automatisches Scrollen erfordert die Berechtigung für Bedienungshilfen. Erlaube Cindy in den Systemeinstellungen und versuche es erneut oder scrolle manuell in der Auswahl."
+    },
+    "translation": {
+      "action": "Ins {{language}} übersetzen",
+      "targetLanguage": "Zielsprache",
+      "followUi": "Sprache der Oberfläche verwenden",
+      "saveFailed": "Die Sprachauswahl konnte nicht gespeichert werden. Bitte erneut auswählen."
     }
   },
   "privacyExit": {
@@ -1228,7 +1234,6 @@
     "clipboardSyncSkipped": "Dieses Format wird bei der Synchronisierung der Zwischenablage nicht unterstützt und wurde übersprungen.",
     "clipboardSyncTooLarge": "Der Inhalt überschreitet die Größenbegrenzung für die Synchronisierung der Zwischenablage und wurde übersprungen.",
     "clipboardSyncPermission": "Die Zwischenablagesynchronisierung benötigt Zugriff zum Einfügen. Erlaube ihn und kehre dann zu diesem Fenster zurück, um fortzufahren.",
-    "clipboardSyncWaiting": "Die Zwischenablage des Remote-Computers ist derzeit nicht verfügbar (möglicherweise ist sie gesperrt). Die Synchronisierung wird automatisch fortgesetzt.",
     "lockingOnExit": "Computer wird gesperrt…",
     "idleLock": "Bei Inaktivität trennen und sperren",
     "idleNever": "Nie",
@@ -1347,6 +1352,20 @@
       "lock-corrupt": "Die Wartungssperre der lokalen Daten ist beschädigt. Cindy kann deshalb nicht feststellen, ob die Daten noch verwendet werden. Starte deinen Computer neu und öffne Cindy erneut. Falls das Problem weiterhin besteht, kontaktiere den Support. Lösche keine Datenbankdateien.",
       "lock-unreadable": "Die Wartungssperre der lokalen Daten konnte nicht gelesen oder gespeichert werden. Prüfe den Zugriff auf das Datenverzeichnis und öffne die Daten erneut, sobald der Zugriff wiederhergestellt ist. Kontaktiere den Support, falls das Problem weiterhin besteht.",
       "recovery-busy": "Eine andere Cindy-Instanz prüft gerade die Wartungssperre der lokalen Daten. Öffne die lokalen Daten in Kürze erneut."
+    },
+    "passiveCorrupt": {
+      "title": "Gemeinsame Datenbank kann nicht wiederhergestellt werden",
+      "description": "Cindy läuft im schreibgeschützten bzw. gemeinsamen Modus und stellt diese gemeinsame Datenbank nicht automatisch wieder her und ändert sie nicht. Verwendet eine andere Instanz dieselben userData, schließe sie und versuche es erneut, oder starte mit --isolated."
+    },
+    "corrupt": {
+      "title": "Lokale Datenbank kann nicht geöffnet werden",
+      "description": "Die lokale Datenbank ist möglicherweise beschädigt oder wird von einer anderen Cindy-Instanz mit denselben Daten verwendet. Falls eine andere Instanz geöffnet ist, schließe sie und versuche es erneut. Besteht das Problem weiter, konnte kein verwendbares Backup sie automatisch wiederherstellen; kopiere die technischen Details und teile sie dem Team mit, um Hilfe bei der Datenwiederherstellung zu erhalten.",
+      "copy": "Technische Details kopieren"
+    },
+    "initFailed": {
+      "title": "Lokale Datenbank konnte nicht gestartet werden",
+      "description": "Die lokale Datenbank konnte nicht gestartet werden. Versuche es zuerst erneut. Falls es weiterhin fehlschlägt, teile dem Team die technischen Details unten mit.",
+      "retry": "Datenbankstart erneut versuchen"
     },
     "databaseCleanup": {
       "interruptedTitle": "Datenbankbereinigung wurde unterbrochen",
@@ -2635,6 +2654,13 @@
       "storage": {
         "dialogueDirectoryTitle": "Chat-Arbeitsbereich",
         "dialogueDirectoryDescription": "Nur für neue Sitzungen. Vorhandene Dateien bleiben an ihrem bisherigen Speicherort.",
+        "projectsRootTitle": "Speicherort für neue Projekte",
+        "projectsRootInferred": "Vorgeschlagen",
+        "projectsRootDefault": "Standard",
+        "projectsRootChoose": "Verzeichnis ändern",
+        "projectsRootReset": "Vorgeschlagenen Speicherort wiederherstellen",
+        "projectsRootDescription": "Hier werden Projektordner angelegt, wenn du aus einer Sitzung ein Projekt erstellst. Ohne Einstellung wird ein Ort anhand deiner vorhandenen Projekte vorgeschlagen.",
+        "projectsRootFailed": "Speicherort für neue Projekte konnte nicht aktualisiert werden",
         "dialogueDirectoryOpen": "Verzeichnis öffnen",
         "dialogueDirectoryChoose": "Verzeichnis ändern",
         "dialogueDirectoryReset": "Standardspeicherort wiederherstellen",
@@ -3616,6 +3642,8 @@
         "simpleSubtitle": "Mehrere Modelle, Abrechnung über ein Konto."
       },
       "custom": {
+        "nameSearchUnavailable": "Dieser Anbieter ist nicht mehr verfügbar. Fahre mit einem benutzerdefinierten Endpunkt fort oder suche erneut.",
+        "nameSearchHint": "Du kannst diesen Namen beibehalten und mit einem benutzerdefinierten Endpunkt fortfahren.",
         "tag": "Benutzerdefiniert",
         "editAria": "Verbindungseinstellungen bearbeiten",
         "deleteAria": "Löschen",
@@ -4890,9 +4918,6 @@
         "title": "Gruppenteilnahme",
         "hint": "Hier erscheinen Gruppen, die der Bot gesehen hat. „Aktiv“ = Er liest jede Nachricht und entscheidet selbst, ob er sich beteiligt (jede Nachricht verbraucht Tokens).",
         "empty": "Noch keine Gruppen. Füge den Bot zu einer Gruppe hinzu. Sobald jemand etwas schreibt, erscheint sie hier.",
-        "contactsOn": "Personen, die in Gruppen sprechen, werden automatisch zu Smart Contacts hinzugefügt (Hauptschalter ist eingeschaltet).",
-        "contactsOff": "Smart Contacts ist deaktiviert – Personen, die in Gruppen sprechen, werden nicht automatisch erinnert.",
-        "contactsEnable": "Aktivieren",
         "error": {
           "load": "Telegram-Gruppen konnten nicht geladen werden. Prüfe die Verbindung und versuche es erneut.",
           "save": "Der Gruppenmodus wurde nicht gespeichert. Der zuletzt bestätigte Modus wurde wiederhergestellt.",
@@ -5418,7 +5443,6 @@
         "title": "Meine Browser-Anmeldedaten verwenden",
         "description": "Der Agent öffnet Websites mit deinen angemeldeten Chrome-, Edge- oder Brave-Konten.",
         "toggleAria": "Meine Browser-Anmeldedaten verwenden",
-        "unavailableEmbedded": "Gilt nur für den Standalone-Browser. Durch das Ausschalten werden die kopierten Anmeldedateien gelöscht.",
         "confirmTitle": "Dem Agent Zugriff auf deine Browser-Anmeldedaten erlauben?",
         "confirmDescription": "Der Agent kann Websites mit deinen angemeldeten Konten öffnen, einschließlich E-Mail, Cloud-Speichern und Arbeitskonsolen. Du kannst dies jederzeit deaktivieren; die Kopie wird dann gelöscht.",
         "confirmDescriptionMac": "Der Agent kann Websites mit deinen angemeldeten Konten öffnen, einschließlich E-Mail, Cloud-Speichern und Arbeitskonsolen. Zum Lesen der Chrome-Anmeldedateien ist außerdem Festplattenvollzugriff erforderlich. Du kannst dies jederzeit deaktivieren; die Kopie wird dann gelöscht.",
@@ -5750,10 +5774,6 @@
         "ssh": {
           "name": "SSH-Befehle",
           "description": "Befehle auf entfernten Computern über konfigurierte SSH-Verbindungen ausführen."
-        },
-        "contacts": {
-          "name": "Intelligente Kontakte",
-          "description": "Kontaktprofile und Interaktionsverlauf finden und verwalten."
         }
       }
     },
@@ -5829,7 +5849,7 @@
         "requests": {
           "item": "{{name}} möchte beitreten",
           "verify": "Kopplungscode",
-          "verifyHint": "Genehmige nur, wenn der Code mit dem auf diesem Gerät übereinstimmt.",
+          "verifyHint": "Genehmige nur, wenn er mit dem Code auf dem anderen Gerät übereinstimmt.",
           "replaces": "Dieses Gerät ist schon einmal beigetreten. Durch die Genehmigung wird sein alter Zugangsnachweis widerrufen.",
           "approve": "Genehmigen",
           "reject": "Ablehnen",
@@ -5851,7 +5871,7 @@
         },
         "confirm": {
           "ownerTitle": "Relay auf diesem Computer stoppen?",
-          "ownerDescription": "Beigetretene Geräte werden getrennt und erhalten die Meldung, dass das Relay gestoppt wurde. Dieser Computer schaltet zurück auf das Cindy-Relais.",
+          "ownerDescription": "Beigetretene Geräte werden getrennt und erhalten die Meldung, dass das Relay gestoppt wurde. Dieser Computer schaltet zurück auf das Cindy-Relay.",
           "memberTitle": "Zurück zum Cindy-Relay wechseln?",
           "memberDescription": "Dieser Computer verlässt „{{name}}“ und nutzt das Cindy-Relay. Um erneut beizutreten, fordere einen neuen Beitrittslink an.",
           "serverTitle": "Zurück zum Cindy-Relay wechseln?",
@@ -5874,7 +5894,7 @@
           "SECURE_STORAGE_UNAVAILABLE": "Der System-Schlüsselbund ist nicht verfügbar, daher können die Relay-Anmeldeinformationen nicht sicher gespeichert werden.",
           "PORT_IN_USE": "Port {{port}} wird bereits verwendet. Wähle einen anderen Port.",
           "START_FAILED": "Das Relay konnte nicht gestartet werden. Versuche einen anderen Port.",
-          "EXTERNAL_URL_REQUIRED": "Gib die Adresse ein, die andere Geräte verwenden, oder stelle „Wer kann sich verbinden“ auf „Beliebiges Netzwerk“.",
+          "EXTERNAL_URL_REQUIRED": "Gib die Adresse ein, die andere Geräte verwenden, oder stelle „Wer kann sich verbinden“ auf „Jedes Netzwerk“.",
           "SSH_FAILED": "Verbindung zum Server nicht möglich. Prüfe seine SSH-Einstellungen unter „Remote“.",
           "SHELL_UNAVAILABLE": "Dieses SSH-Konto kann keine Befehle ausführen (zum Beispiel das git-Konto eines Git-Dienstes) und daher nicht für die Bereitstellung verwendet werden. Wähle einen Server, bei dem du dich mit einer Shell anmelden kannst.",
           "NEEDS_ROOT": "Hierfür ist das root-Konto oder ein Konto erforderlich, das sudo ohne Passwort verwenden kann. Cindy fragt dich nie nach deinem Serverpasswort.",
@@ -5922,7 +5942,7 @@
           "check": {
             "checking": "Server wird geprüft…",
             "checkingHint": "Verbindung zum Server wird hergestellt, um System, Ports und vorhandene Dienste zu prüfen.",
-            "idle": "Nachdem du einen Server ausgewählt hast, prüft Cindy, ob eine Bereitstellung darauf möglich ist.",
+            "idle": "Nach der Serverauswahl prüft Cindy, ob die Bereitstellung möglich ist.",
             "ready": "Bereit zur Bereitstellung",
             "blocked": "Automatische Bereitstellung nicht möglich",
             "recheck": "Erneut prüfen",
@@ -6239,9 +6259,6 @@
             "title": "Gruppenteilnahme",
             "hint": "Gruppen, die der offizielle Bot sieht, erscheinen hier. Der aktive Modus gilt nur für Nachrichten deines verknüpften Kontos; andere Mitglieder liefern lokalen Kontext, können aber keine Aufgaben auslösen.",
             "empty": "Noch keine Gruppen. Füge den Bot zu einer Gruppe hinzu und sende eine Nachricht von deinem verknüpften Konto.",
-            "contactsOn": "Andere Personen, die in Gruppen schreiben, werden automatisch zu Smart Contacts hinzugefügt.",
-            "contactsOff": "Smart Contacts ist deaktiviert, sodass andere Gruppenmitglieder nicht automatisch gespeichert werden.",
-            "contactsEnable": "Aktivieren",
             "error": {
               "load": "Telegram-Gruppen konnten nicht geladen werden. Prüfe die Verbindung und versuche es erneut.",
               "save": "Der Gruppenmodus wurde nicht gespeichert. Der zuletzt bestätigte Modus wurde wiederhergestellt.",
@@ -7509,6 +7526,8 @@
         "cancel": "Abbrechen",
         "updateNeedsConsent": "Neue Berechtigungen müssen bestätigt werden",
         "targetIdentity": "Installieren für: {{name}}",
+        "localTarget": "Lokale Entwicklung",
+        "localOidcUnavailable": "Diese Entwicklungskopie kann die Organisationsidentität nicht verwenden. Installiere sie zum Testen über Forge ausdrücklich in deiner aktuellen Organisation.",
         "personalTarget": "Persönlich",
         "sourceChanged": "Dieses Update wechselt zu einer lokalen Quelle. Bestehende Konten und Daten werden separat archiviert. Verbinde deine Konten nach dem Update erneut.",
         "otherCopies": "Es gibt {{count}} weitere Kopien dieses Plugins. Sie bleiben installiert und behalten ihren aktuellen Aktivierungsstatus. Eine separate Kopie benötigt eigene Kontoverbindungen."
@@ -7530,10 +7549,14 @@
       "controlPoints": {
         "title": "Prüfungen vor der Ausführung",
         "description": "Dieses Plugin kann Automatisierungen oder Routinen vor dem Start prüfen. Es kann einen Lauf überspringen oder stoppen, aber nie für dich genehmigen.",
+        "titleWithStartTask": "Wann dieses Plugin eingreift",
+        "descriptionWithStartTask": "Es greift nur bei Aufgaben ein, für die du es gewählt hast: Vor einem Lauf kann es ihn nur überspringen oder stoppen, bei einer neuen Aufgabe wählt es einmal ein Modell für die erste Nachricht. Es genehmigt nie etwas für dich.",
         "usage": "Wähle es beim Bearbeiten einer Automatisierung oder Routine unter Vorabprüfung aus.",
+        "usageStartTask": "So nutzt du es: Wähle in der Modellauswahl einer neuen Aufgabe ein Modell, das dieses Plugin bereitstellt.",
         "points": {
           "will-schedule-run": "Vor der Ausführung einer Automatisierung",
-          "will-routine-run": "Vor der Ausführung einer Routine eines Teammitglieds"
+          "will-routine-run": "Vor der Ausführung einer Routine eines Teammitglieds",
+          "will-start-task": "Wenn eine neue Aufgabe startet"
         },
         "inactive": "Noch nicht verfügbar. Erlaube es beim Aktualisieren oder Neuinstallieren dieses Plugins."
       },
@@ -7588,6 +7611,8 @@
         "nodeResident": "Das Node-Programm kann im Hintergrund weiterlaufen",
         "nodeResidentDetail": "Wird ausgeführt, während das Plugin aktiviert ist, und stoppt, wenn es deaktiviert, aktualisiert oder deinstalliert wird oder wenn Cindy beendet wird.",
         "tool": "Tool „{{name}}“",
+        "toolAutoApprove": "Agent darf das Tool „{{name}}“ ohne Bestätigung ausführen",
+        "toolAutoApproveDetail": "Ruft der Agent dieses Tool auf, wird es sofort ausgeführt – ohne Rückfrage oder Prüfung pro Aufruf.",
         "command": "Chatbefehl ${{command}}",
         "panelLeft": "Panel „{{title}}“ · wird in der Seitenleiste angezeigt",
         "panelTab": "Panel „{{title}}“ · wird innerhalb der Seite „Plugins“ geöffnet",
@@ -7610,6 +7635,8 @@
         "subscribeScheduleRunDetail": "Automatisierungen, bei denen du es unter Vorabprüfung wählst, fragen es zuerst. Es sieht Name und Anweisungen und kann den Lauf überspringen oder stoppen, aber nichts für dich genehmigen.",
         "subscribeRoutineRun": "Kann ausgewählte Teammate-Routinen vor dem Start prüfen",
         "subscribeRoutineRunDetail": "Routinen, bei denen du es unter Vorabprüfung wählst, fragen es zuerst. Es sieht die Anweisungen und auslösenden Ereignisse und kann den Lauf überspringen oder stoppen, aber nichts für dich genehmigen.",
+        "subscribeStartTask": "Kann das Modell für neue Aufgaben wählen",
+        "subscribeStartTaskDetail": "Wenn eine neue Aufgabe ein Modell dieses Plugins nutzt, liest es die erste Nachricht und wählt eines deiner verbundenen Modelle. Es wählt einmal; das Modell ändert sich während der Aufgabe nicht.",
         "card": "Stellt Nachrichtenkarten dar",
         "cardExternalLink": "Karten können externe Links enthalten, die nach Bestätigung deinen Browser öffnen",
         "cardExternalLinkDetail": "Beim Anklicken eines Kartenlinks erscheint ein Bestätigungsdialog. Die URL öffnet sich erst nach deiner Zustimmung im Systembrowser. Nur http/https-Adressen sind erlaubt.",
@@ -7653,9 +7680,13 @@
         "workspaceDetail": "Bei einer Anfrage wählst du entweder selbst den Ordner aus oder siehst vor deiner Entscheidung den vollständigen Pfad auf einer Bestätigungskarte. Während es einen von dir gestarteten Aufruf bearbeitet, werden Unterordner im Arbeitsverzeichnis der aktuellen Sitzung direkt ohne zusätzliche Rückfrage verwendet. Ordner, die bereits eine Sitzung haben, werden wiederverwendet. Erstellt wird eine leere Sitzung – nichts startet von selbst.",
         "sessionContext": "Kann erfahren, in welchem Projektordner die aktuelle Sitzung arbeitet",
         "sessionContextDetail": "Teilt nur Angaben zum Speicherort (Sitzungs-ID und Projektordnerpfad), während es für die aktuelle Sitzung arbeitet – keine Dateiinhalte, und es wird kein Dateizugriff gewährt.",
+        "liveScreen": "Geräte-Bildschirme auf dem Telefon ansehen und bedienen",
+        "liveScreenDetail": "Über den Remote-Desktop kann Ihr Telefon die Geräte-Bildschirme anzeigen, die es bereitstellt (zum Beispiel Simulatoren), und Berührungen, Tasten und Text an sie senden. Die Verbindung besteht nur, wenn Sie sie vom Telefon aus öffnen, und es wird nichts anderes von diesem Computer angezeigt.",
         "preview": "Kann Vorschauseiten der folgenden Websites im Seitenleistenbrowser öffnen",
         "previewDetail": "Nur die unten aufgeführten Websites können geöffnet werden. Jede geöffnete Seite wird diesem Plugin zugeordnet.",
         "browserExtension": "Erlaubt seiner mitgelieferten Browsererweiterung, sich mit Cindy zu verbinden",
+        "browserNativeHost": "Kann die Browserverbindung „{{name}}“ registrieren",
+        "browserNativeHostDetail": "Das registrierte Programm läuft außerhalb der Sandbox und greift mit deinem Benutzerkonto und den Systemberechtigungen lokal zu.",
         "browserExtensionDetail": "Nur die unten aufgeführten Erweiterungen können sich über die lokale Loopback-Adresse verbinden. Cindy leitet die Anfragen der Erweiterung an dieses Plugin weiter.",
         "browserExtensionPageControlDetail": "Nur die unten aufgeführten Erweiterungen können sich verbinden. Die Erweiterung ermöglicht auch die Seitensteuerung: Wenn „Mein Browser“ ausgewählt ist, kann der Agent Seiten in deinem verwendeten Browser lesen und bedienen.",
         "nodeChildSpawn": "Sein Node-Programm kann den Host bitten, deklarierte Unterprozesse aus seinem Paket zu starten",
@@ -7750,6 +7781,18 @@
         "settingsTitle": "Einstellungen für {{name}}",
         "settingsUnavailableUntilRestore": "Stelle das Plugin wieder her, um diese Konfiguration erneut zu verwenden.",
         "oauthScopeStale": "Diese Autorisierung umfasst keine neu hinzugefügten Berechtigungen. Verbinde dich erneut, um sie zu erteilen.",
+        "localDevelopment": "Lokale Entwicklung",
+        "publicInstall": "Öffentlicher Marktplatz",
+        "organizationInstall": "Organisation: {{name}}",
+        "browserUse": "Diese Browsererweiterung verwenden",
+        "browserActivated": "Browsererweiterung ausgewählt",
+        "browserActivationFailed": "Auswahl fehlgeschlagen. Aktiviere das Plugin und bestätige den Verbindungswechsel.",
+        "browserSwitchTitle": "Verbindung der Browsererweiterung wechseln?",
+        "browserSwitchMessage": "„{{name}}“ für diese Verbindung verwenden?",
+        "browserSwitchDetail": "Instanz: {{instance}}\nRegistrierung: {{host}}\nDies ersetzt die aktuelle Registrierung. Die Erweiterung verbindet sich mit diesem Plugin.",
+        "portReclaimTitle": "Programm am Rückruf-Port beenden?",
+        "portReclaimMessage": "„{{name}}“ benötigt Port {{port}}. Das folgende Programm beenden?",
+        "portReclaimDetail": "Dadurch können Arbeit unterbrochen und ungespeicherte Daten verloren gehen. Du kannst abbrechen und das Programm selbst schließen.",
         "configurationTitle": "Konfiguration",
         "sidebarEntryTitle": "Navigationseintrag",
         "showInSidebar": "In der linken Navigation anzeigen",
@@ -8281,7 +8324,8 @@
       "dialog": {
         "createTitle": "MCP-Server hinzufügen",
         "editTitle": "MCP-Server bearbeiten",
-        "desc": "Nur Remote-MCP über http / sse. Neue Sitzungen können ihn nach dem Speichern aufrufen; laufende Sitzungen bleiben unverändert."
+        "desc": "Nur Remote-MCP über http / sse. Neue Sitzungen können ihn nach dem Speichern aufrufen; laufende Sitzungen bleiben unverändert.",
+        "teammateDesc": "Nur Remote-MCP über http / sse. Nach dem Speichern fügt dein Teammitglied ihn seinen Werkzeugen hinzu und kann ihn ab der nächsten Nachricht in diesem Chat nutzen; eine neue Sitzung ist nicht nötig."
       },
       "fields": {
         "name": "Anzeigename",
@@ -8315,187 +8359,6 @@
         "title": "„{{name}}“ löschen?",
         "message": "Neue Sitzungen laden diesen MCP nicht mehr.",
         "confirm": "Löschen"
-      }
-    },
-    "contacts": {
-      "title": "Intelligente Kontakte",
-      "description": "Ein Personen- und Organisationsverzeichnis für Agents: plattformübergreifende Identitätsauflösung (E-Mail / Feishu / Slack / GitHub-ID → wer ist das), Beziehungskontext und datierte Ereignisse. Agents sammeln Einträge bei ihrer Arbeit; Einträge mit geringer Sicherheit landen zur Prüfung in einer Warteschlange. Die Daten bleiben standardmäßig auf diesem Gerät, mit optionaler Gerätesynchronisierung. Abfragen und Organisation erfolgen über dein eigenes Modell.",
-      "enable": {
-        "label": "Smart Contacts aktivieren",
-        "description": "Wenn aktiviert, können Agents Kontaktinformationen nachschlagen und automatisch sammeln (unsichere Einträge warten auf deine Prüfung). Das Deaktivieren hat keinen Einfluss darauf, wie du vorhandene Daten hier durchsuchst oder verwaltest.",
-        "toggleAria": "Smart Contacts umschalten"
-      },
-      "sync": {
-        "label": "Auf meinen Geräten synchronisieren",
-        "description": "Aktiviere dies einmal auf jedem Desktop, den du einbeziehen möchtest. Geräte, die online sind, synchronisieren sich automatisch – wenn möglich direkt im selben lokalen Netzwerk, sonst über eine Ende-zu-Ende-verschlüsselte Weiterleitung. Der Abgleich erfolgt programmgesteuert, ohne Modell- oder Token-Nutzung.",
-        "toggleAria": "Gerätesynchronisierung für Kontakte umschalten",
-        "syncNow": "Jetzt synchronisieren",
-        "onlineDevices_one": "{{count}} weiteres Gerät online",
-        "onlineDevices_other": "{{count}} weitere Geräte online",
-        "route": {
-          "lan": "Lokales Netzwerk",
-          "relay": "Verschlüsselte Weiterleitung"
-        },
-        "status": {
-          "loading": "Synchronisierungsstatus wird gelesen…",
-          "signInRequired": "Melde dich bei deinem Cindy-Konto an, um Geräte zu synchronisieren",
-          "off": "Synchronisierung ist deaktiviert",
-          "waiting": "Warten, bis ein weiterer Desktop mit aktivierter Synchronisierung online ist",
-          "syncing": "Sichere Synchronisierung läuft…",
-          "ready": "Bereit – Geräte synchronisieren sich, sobald sie online sind",
-          "lastSuccess": "{{device}} · {{time}} · {{route}}"
-        },
-        "error": {
-          "secure-storage-unavailable": "Der sichere Systemspeicher ist nicht verfügbar. Der Geräteschlüssel kann daher nicht geschützt werden",
-          "peer-identity-changed": "Eine Geräteidentität hat sich geändert. Die Synchronisierung wurde zum Schutz deiner Daten pausiert",
-          "sync-failed": "Synchronisierung fehlgeschlagen. Ein neuer Versuch erfolgt, sobald ein Gerät wieder online ist"
-        },
-        "toast": {
-          "enabled": "Gerätesynchronisierung aktiviert",
-          "disabled": "Gerätesynchronisierung deaktiviert"
-        }
-      },
-      "stats": "{{people}} Personen / {{orgs}} Organisationen / {{groups}} Gruppen",
-      "kind": {
-        "person": "Person",
-        "org": "Organisation"
-      },
-      "filters": {
-        "all": "Alle",
-        "person": "Personen",
-        "org": "Organisationen",
-        "pending": "Ausstehend"
-      },
-      "list": {
-        "searchPlaceholder": "Name / E-Mail / Stichwort suchen",
-        "newAria": "Neuer Kontakt",
-        "newNamePlaceholder": "Name oder Organisation",
-        "newKindAria": "Typ wechseln (Person / Organisation)",
-        "newConfirm": "Erstellen",
-        "groupFilterAria": "Nach Gruppe filtern",
-        "groupFilterAll": "Alle Gruppen",
-        "loadMore": "Mehr laden",
-        "noResults": "Keine passenden Kontakte",
-        "empty": "Deine Kontakte sind leer. Nach der Aktivierung sammeln Agents Einträge bei ihrer Arbeit – oder klicke auf +, um einen manuell hinzuzufügen."
-      },
-      "detail": {
-        "empty": "Wähle links einen Kontakt aus, um sein Profil anzuzeigen",
-        "pendingBanner": "Dieser Eintrag wurde von einem Agent mit geringer Sicherheit erfasst. Bitte prüfe ihn.",
-        "pendingConfirm": "Bestätigen",
-        "pendingDiscard": "Verwerfen",
-        "nameAria": "Anzeigename",
-        "deleteAria": "Kontakt löschen",
-        "summaryPlaceholder": "Kurzbeschreibung",
-        "identities": "Identitäten",
-        "identityRemoveAria": "Identität {{value}} entfernen",
-        "identityPlatformAria": "Plattform",
-        "identityValuePlaceholder": "E-Mail / Plattform-ID / Benutzername",
-        "identityAddAria": "Identität hinzufügen",
-        "narrative": "Beziehung & Hintergrund",
-        "narrativePlaceholder": "Deine Beziehung, bisherige Zusammenarbeit und Hintergrund (Markdown)",
-        "agentNotes": "Anweisungen für Agents",
-        "agentNotesPlaceholder": "z. B. Das ist die persönliche E-Mail des Chefs – niemals für Massenmails verwenden",
-        "events": "Chronik",
-        "eventsEmpty": "Noch keine Ereignisse",
-        "eventDeleteAria": "Ereignis löschen",
-        "eventDatePlaceholder": "2026-07-07",
-        "eventTextPlaceholder": "Was ist passiert?",
-        "eventAddAria": "Ereignis hinzufügen",
-        "groups": "Gruppen",
-        "groupRemoveAria": "Aus Gruppe {{name}} entfernen",
-        "groupAddAria": "Zu Gruppe hinzufügen",
-        "groupAddPlaceholder": "Zu Gruppe hinzufügen…",
-        "discardChanges": "Änderungen verwerfen",
-        "save": "Speichern",
-        "identitiesEmpty": "Noch keine Identitäten",
-        "relations": "Verbindungen",
-        "relationsEmpty": "Noch keine Verbindungen (Organisationen / zugehörige Personen)",
-        "relationAddAria": "Verbindung hinzufügen",
-        "relationRemoveAria": "Verbindung mit {{name}} entfernen",
-        "relationVerbPlaceholder": "arbeitet bei / Familie…",
-        "relationTargetAria": "Verknüpften Kontakt auswählen",
-        "relationTargetPlaceholder": "Person oder Organisation auswählen…",
-        "relationNotePlaceholder": "Notiz (Titel…)"
-      },
-      "deleteConfirm": {
-        "title": "„{{name}}“ löschen?",
-        "description": "Alle Identitäten, Ereignisse in der Chronik und Gruppenmitgliedschaften werden gelöscht. Das kann nicht rückgängig gemacht werden.",
-        "confirm": "Löschen",
-        "cancel": "Abbrechen"
-      },
-      "toast": {
-        "enabled": "Smart Contacts aktiviert",
-        "disabled": "Smart Contacts deaktiviert",
-        "codexRefreshDeferred": "Einstellung gespeichert, aber Codex ist beschäftigt – sie gilt nach einem Neustart der App für Codex-Sitzungen",
-        "toggleFailed": "Smart Contacts konnte nicht umgeschaltet werden",
-        "created": "„{{name}}“ erstellt",
-        "createFailed": "Kontakt konnte nicht erstellt werden",
-        "deleted": "„{{name}}“ gelöscht",
-        "deleteFailed": "Kontakt konnte nicht gelöscht werden",
-        "saved": "Gespeichert",
-        "saveFailed": "Speichern fehlgeschlagen",
-        "confirmFailed": "Eintrag konnte nicht bestätigt werden",
-        "identityAddFailed": "Identität konnte nicht hinzugefügt werden",
-        "identityRemoveFailed": "Identität konnte nicht entfernt werden",
-        "eventAddFailed": "Ereignis konnte nicht hinzugefügt werden",
-        "eventDeleteFailed": "Ereignis konnte nicht gelöscht werden",
-        "groupAddFailed": "Hinzufügen zur Gruppe fehlgeschlagen",
-        "groupRemoveFailed": "Entfernen aus der Gruppe fehlgeschlagen",
-        "relationAddFailed": "Verbindung konnte nicht hinzugefügt werden",
-        "relationRemoveFailed": "Verbindung konnte nicht entfernt werden"
-      },
-      "manage": "Verwalten",
-      "manager": {
-        "title": "Intelligente Kontakte",
-        "closeAria": "Schließen"
-      },
-      "merge": {
-        "button": "Duplikat zusammenführen",
-        "buttonAria": "Doppelten Kontakt zusammenführen",
-        "hint": "Wähle ein Duplikat aus, um seine Identitäten, Ereignisse und Verbindungen in „{{target}}“ zu übernehmen und es anschließend zu löschen.",
-        "searchPlaceholder": "Duplikate suchen…",
-        "confirmTitle": "„{{source}}“ mit „{{target}}“ zusammenführen?",
-        "confirmDescription": "Alle Identitäten, Ereignisse, Verbindungen und Gruppen von „{{source}}“ werden übernommen und das Profil wird gelöscht. Das kann nicht rückgängig gemacht werden.",
-        "confirm": "Zusammenführen",
-        "success": "„{{source}}“ mit „{{target}}“ zusammengeführt",
-        "failed": "Zusammenführen fehlgeschlagen"
-      },
-      "import": {
-        "title": "Kontakte importieren",
-        "button": "Importieren",
-        "pickHint": "Massenimport aus einer externen Quelle. Einträge, deren E-Mail oder Telefonnummer mit einem bestehenden Profil übereinstimmt, werden automatisch zusammengeführt (keine Duplikate); ähnliche Namen kommen auf eine Liste zur manuellen Prüfung.",
-        "sourceSystem": "Systemkontakte",
-        "sourceSystemDesc": "Schreibgeschützt; benötigt beim ersten Zugriff eine Systemberechtigung",
-        "sourceVcf": "vCard-Datei",
-        "sourceVcfDesc": ".vcf (Standardformat für den Kontaktexport)",
-        "emptySource": "Keine importierbaren Kontakte in dieser Quelle",
-        "permissionDenied": "Kontaktzugriff verweigert — erlaube ihn unter Systemeinstellungen → Datenschutz & Sicherheit → Automation",
-        "systemReadFailed": "Systemkontakte konnten nicht gelesen werden",
-        "vcfParseFailed": "Die vCard-Datei konnte nicht verarbeitet werden",
-        "selectedCount": "{{checked}} / {{total}} ausgewählt",
-        "groupPlaceholder": "Nach dem Import zur Gruppe hinzufügen (optional; wird bei Bedarf erstellt)",
-        "run": "{{count}} importieren",
-        "running": "Wird importiert…",
-        "failed": "Import fehlgeschlagen",
-        "doneSummary": "Import abgeschlossen: {{created}} erstellt, {{enriched}} mit bestehenden Profilen zusammengeführt, {{orgs}} Organisationen erstellt.",
-        "needsReview": "{{count}} Einträge haben ähnliche Namen wie bestehende Profile und wurden nicht importiert — bitte prüfen: {{names}}",
-        "identityConflicts": "{{count}} Datensätze enthielten Identitäten, die bereits anderen Kontakten ({{names}}) zugeordnet sind, und wurden nicht zusammengeführt — prüfe sie in der Verwaltung und entscheide, ob sie zusammengeführt werden sollen",
-        "relationErrors": "{{count}} Beschäftigungsverhältnisse konnten nicht erstellt werden ({{names}})",
-        "skipped": "{{count}} Einträge übersprungen (ungültig oder fehlgeschlagen)."
-      },
-      "ipcError": {
-        "IDENTITY_CONFLICT": "Diese Identität gehört bereits zu einem anderen Kontakt. Aktualisiere dieses Profil oder führe die Kontakte zuerst zusammen.",
-        "PERMISSION_DENIED": "Kontaktzugriff nicht erlaubt. Erlaube ihn unter Systemeinstellungen > Datenschutz & Sicherheit > Automation.",
-        "UNSUPPORTED_CAPABILITY": "Diese Aktion wird auf dieser Plattform nicht unterstützt.",
-        "NOT_FOUND": "Das Ziel existiert nicht mehr.",
-        "ALREADY_EXISTS": "Ein Element mit demselben Namen oder Inhalt existiert bereits.",
-        "INVALID_PARAMS": "Ungültige Eingabe. Überprüfe sie und versuch es erneut.",
-        "INTERNAL": "Vorgang fehlgeschlagen. Versuch es später erneut."
-      },
-      "guide": {
-        "hint": "Lass dir von KI helfen, Kontaktprofile hinzuzufügen, ausstehende Einträge zu prüfen und Duplikate zu bereinigen.",
-        "cta": "Kontakte mit KI verwalten",
-        "managementPrompt": "Hilf mir, meine Smart Contacts zu verwalten. Prüfe zuerst den aktuellen Stand und die bereits verfügbaren Tools. Hilf mir dann, nützliche Kontakte hinzuzufügen, Duplikate zu prüfen und ausstehende Einträge zu bearbeiten. Frage mich vor jedem Schreibvorgang, jeder Zusammenführung und jeder Löschung."
       }
     },
     "remotePermission": {
@@ -8763,18 +8626,18 @@
     "chooseMethod": "Wähle deine Anmeldemethode",
     "emailCode": "Mit E-Mail-Code anmelden",
     "orgDetected": "{{email}} gehört zu „{{org}}“",
-    "enterpriseLogin": "Mit deinem Firmenkonto anmelden",
+    "enterpriseLogin": "Mit Firmenkonto",
     "enterpriseVia": "Single Sign-on über {{name}}",
-    "personalLogin": "Mit einem persönlichen Konto anmelden",
-    "personalDesc": "Bestätigungscode an deine E-Mail-Adresse senden",
+    "personalLogin": "Mit persönlichem Konto",
+    "personalDesc": "Code per E-Mail erhalten",
     "ssoRequired": "Diese Organisation erfordert eine SSO-Anmeldung",
     "ssoEntry": "Mit Unternehmens-SSO anmelden",
     "localModeEntry": "Anmeldung überspringen",
     "localModeOpening": "Anmeldung wird übersprungen…",
     "localModeDescription": "Kein Cindy-Konto erforderlich. Die Daten bleiben auf diesem Gerät; Cloud-Modelle, geräteübergreifender Zugriff und Marketplace-Dienste sind nicht verfügbar.",
-    "consentStatement": "Ich habe die <terms>Nutzungsbedingungen</terms> und die <privacy>Datenschutzerklärung</privacy> gelesen und stimme ihnen zu",
+    "consentStatement": "Ich akzeptiere <terms>Nutzungsbedingungen</terms> und <privacy>Datenschutzerklärung</privacy>",
     "consentDialog": {
-      "title": "Nutzungsbedingungen & Datenschutz",
+      "title": "Bedingungen & Datenschutzerklärung",
       "body": "Lies Cindys <terms>Nutzungsbedingungen</terms> und <privacy>Datenschutzerklärung</privacy> und stimme ihnen zu, um fortzufahren.",
       "agree": "Zustimmen",
       "disagree": "Nicht jetzt"
@@ -8816,9 +8679,9 @@
     },
     "sendCode": "Code senden",
     "completeSignIn": "Anmeldung abschließen",
-    "preparing": "Verbindung zur Anmeldung wird hergestellt",
+    "preparing": "Anmeldung wird vorbereitet",
     "preparingSubtitle": "Verfügbare Methoden für diese Region werden geladen",
-    "unavailable": "Anmeldung vorübergehend nicht verfügbar",
+    "unavailable": "Anmeldung derzeit nicht möglich",
     "retry": "Erneut versuchen",
     "browserWaiting": "Bestätigung im Browser abschließen",
     "browserCallback": {
@@ -10923,6 +10786,18 @@
         "reactorFormer": "{{name}} (nicht mehr in der Gruppe)",
         "reactorsUnavailable_one": "Name für {{count}} weiteres Mitglied nicht verfügbar",
         "reactorsUnavailable_other": "Namen für {{count}} weitere Mitglieder nicht verfügbar",
+        "readStatusSent": "Gesendet",
+        "readStatusRead": "Gelesen",
+        "readersCount_one": "Gelesen von {{count}}",
+        "readersCount_other": "Gelesen von {{count}}",
+        "readersView": "Anzeigen, wer es gelesen hat",
+        "readersTooLarge": "Die Gruppe ist zu groß, um anzuzeigen, wer es gelesen hat",
+        "readersNone": "Niemand hat es gelesen",
+        "readersLoading": "Wird geladen …",
+        "readersFailed": "Konnte nicht laden, wer es gelesen hat",
+        "readersHeading": "Gelesen",
+        "readersOfTotal": "Gelesen {{read}}/{{total}}",
+        "readerUnknown": "Unbekanntes Mitglied",
         "invite": "Zur Gruppe einladen",
         "groupCreated": "Gruppenchat erstellt",
         "inviteFriends": "Lade Freunde ein, beizutreten und mit deinem Teammitglied zusammenzuarbeiten.",
@@ -11063,7 +10938,18 @@
           "accessToolsTitle": "Tools und Informationen",
           "accessToolsHint": "Kann die vorhandenen Tools von {{name}} und deine privaten Informationen nutzen. Ergebnisse sind für alle sichtbar. Bisherige Freigaberegeln gelten weiter; ein Widerruf des Zugriffs macht bereits ausgeführte Aktionen nicht rückgängig.",
           "capabilitiesRow": "Tools und Zugriffsrechte von {{name}}",
-          "accessMenu": "Berechtigungen in dieser Gruppe"
+          "accessMenu": "Berechtigungen in dieser Gruppe",
+          "notifications": {
+            "title": "Nachrichtenbenachrichtigungen",
+            "all": "Alle Nachrichten",
+            "mentions": "Nur Erwähnungen",
+            "none": "Aus",
+            "allHint": "Erhalte Benachrichtigungen über Gruppennachrichten und neue Antworten in abonnierten Themen.",
+            "mentionsHint": "Erhalte Benachrichtigungen, wenn du erwähnt wirst, auch bei @alle. Aktualisierungen zur Arbeitsteilung werden weiterhin gemeldet.",
+            "noneHint": "Deaktiviere alle Systembenachrichtigungen für diese Gruppe. Ungelesene Nachrichten bleiben erhalten.",
+            "saving": "Wird gespeichert…",
+            "saveFailed": "Benachrichtigungen konnten nicht gespeichert werden. Versuche es erneut."
+          }
         }
       },
       "lifecycle": {
@@ -11128,22 +11014,112 @@
       "skill": "Skills",
       "mcp": "MCP",
       "toolset": "Integrierte Tools",
-      "unavailable": "Nicht verfügbar",
       "empty": "Keine passenden Fähigkeiten",
-      "accessHint": "Wähle die integrierten Tools, MCP-Server und Skills, die dieses Teammitglied nutzen darf. Änderungen gelten ab seiner nächsten Anfrage, auch für autorisierte Gruppenanfragen.",
-      "inheritedHint": "Aktuell gelten die auf diesem Computer aktivierten Tools. Wenn du einen Eintrag deaktivierst, wird diese Liste zu einer expliziten Auswahl.",
-      "selectedHint": "Dieses Teammitglied darf nur die ausgewählten Einträge in dieser Liste nutzen.",
-      "personalHint": "Ein von diesem Teammitglied erlernter Skill, der mit seinem Profil geladen wird.",
       "unavailableHint": "Auf diesem Computer oder Ausführungsziel nicht verfügbar. Richte zuerst die Verbindung oder den Systemzugriff ein.",
       "notOnThisComputer": "Auf diesem Computer nicht verfügbar",
-      "configure": "Konfiguration öffnen",
       "empty_toolset": "Auf diesem Ausführungsziel sind keine integrierten Tools verfügbar.",
       "empty_mcp": "Es wurden keine eigenen MCP-Server hinzugefügt.",
       "empty_skill": "Keine Skills zur Auswahl verfügbar.",
       "inputHandoff": {
         "title": "Eingabeübergabe",
         "description": "Wenn dieses Teammitglied bei einer Anmeldung, einem Passwort oder einem Code ankommt, den es nicht selbst eingeben kann, kann es dich bitten, die Eingabe auf einem deiner Geräte zu übernehmen. Deine Eingaben werden niemals mit ihm geteilt."
-      }
+      },
+      "intro": "Wähle, welche Skills, Tools und MCP-Server dieser Teammate nutzen kann. Änderungen gelten ab der nächsten Nachricht.",
+      "alwaysOn": "Immer an",
+      "core": {
+        "group": "Kern-Skill",
+        "name": "Teammate-Kern",
+        "hint": "Aufgaben, andere Teammates, Modelle, Tools und Plugins, Gedächtnis. Wird mit Cindy aktualisiert.",
+        "meta": "Für alle Teammates · Immer an · Wird mit Cindy aktualisiert",
+        "note": "Die Koordination, die jeder Teammate hat. Sie lässt sich nicht ausschalten oder bearbeiten. Soll dieser Teammate anders arbeiten, sag es ihm im Chat – er merkt es sich als eigenen Skill.",
+        "covers": "Umfasst",
+        "raw": "Originaltext anzeigen",
+        "items": {
+          "tasks": {
+            "title": "Aufgaben",
+            "body": "Entscheidet, wann eine Hintergrundaufgabe startet, steuert die eigenen Aufgaben und bringt das Ergebnis in den Chat zurück – auch auf deinen anderen Computern."
+          },
+          "teammates": {
+            "title": "Andere Teammates",
+            "body": "Schreibt anderen Teammates oder legt für dich einen neuen an."
+          },
+          "models": {
+            "title": "Modelle und Tools",
+            "body": "Wechselt auf Wunsch das Modell und nutzt bei Bedarf Tools und Plugins."
+          },
+          "memory": {
+            "title": "Gedächtnis",
+            "body": "Merkt sich deine Vorlieben und deinen Hintergrund, prüft vorher und aktualisiert bei Änderungen."
+          },
+          "self": {
+            "title": "Sich selbst kennen",
+            "body": "Weiß, was er kann, und schaltet Funktionen für dich ein oder aus. Bei Cindy-Fragen wie Telegram, MCP oder Plugins liest er zuerst die Hilfe."
+          }
+        }
+      },
+      "system": {
+        "group": "System-Skills",
+        "meta": "{{on}} von {{total}} an",
+        "pageMeta": "System-Skill · Wird mit Cindy aktualisiert",
+        "use": "Für diesen Teammate einschalten",
+        "whenOff": "Wenn aus",
+        "items": {
+          "todo": {
+            "name": "To-dos",
+            "hint": "Hält fest, worum du bittest und was ihm auffällt, und erinnert dich rechtzeitig.",
+            "off": "Er erfasst, ordnet und meldet keine To-dos mehr. Bestehende To-dos bleiben erhalten und gehen weiter, sobald du wieder einschaltest."
+          },
+          "routine": {
+            "name": "Routinen",
+            "hint": "Richtet regelmäßig laufende Routinen ein und pflegt sie.",
+            "off": "Er legt keine Routinen mehr an und ändert keine. Bestehende Routinen laufen weiter und bleiben auf der Seite „Routinen“ verwaltbar."
+          },
+          "follow": {
+            "name": "Arbeitsplatz und Nachverfolgung",
+            "hint": "Behält den Stand all deiner Aufgaben im Blick und verfolgt die nach, die du ihm gibst.",
+            "off": "Er prüft und verfolgt deine Aufgaben nicht mehr von sich aus. Im Chat kannst du ihn weiterhin fragen."
+          }
+        }
+      },
+      "learned": {
+        "group": "Gelernte Skills",
+        "empty": "Noch keine gelernten Skills. Das nächtliche Lernen macht aus wiederkehrenden Vorgehensweisen Skills, oder du bittest ihn im Chat, sich eine zu merken.",
+        "meta": "Gelernt · Aktualisiert am {{date}}",
+        "metaUndated": "Gelernt",
+        "missing": "Diesen Skill gibt es nicht mehr.",
+        "use": "Diesen Skill nutzen",
+        "useHint": "Ausgeschaltet bleibt der Skill erhalten, wird aber nicht genutzt.",
+        "edit": "Bearbeiten",
+        "delete": "Löschen",
+        "cancel": "Abbrechen",
+        "save": "Speichern",
+        "saveFailed": "Speichern fehlgeschlagen. Versuche es später erneut.",
+        "deleteFailed": "Löschen fehlgeschlagen. Versuche es später erneut.",
+        "deleteTitle": "„{{name}}“ löschen?",
+        "deleteBody": "Der Teammate nutzt diesen Skill nicht mehr, und der Inhalt lässt sich nicht wiederherstellen. Brauchst du ihn später, bitte ihn im Chat, sich die Vorgehensweise erneut zu merken.",
+        "unsavedTitle": "Ungespeicherte Änderungen",
+        "unsavedDescription": "Wenn du diese Ansicht verlässt, werden die Änderungen an diesem Skill verworfen.",
+        "discard": "Änderungen verwerfen",
+        "continueEditing": "Weiter bearbeiten",
+        "descriptionLabel": "Wann nutzen",
+        "bodyLabel": "Vorgehen"
+      },
+      "local": {
+        "group": "Skills auf diesem Computer"
+      },
+      "followMeta": "Folgt diesem Computer · {{count}}",
+      "selectedMeta": "{{count}} von {{total}} ausgewählt",
+      "showRest": "{{count}} weitere anzeigen",
+      "showLess": "Weniger anzeigen",
+      "manage": "Verwalten",
+      "toolSettings": "Tool-Einstellungen",
+      "notTurnedOn": "Auf diesem Computer noch nicht eingeschaltet",
+      "turnOn": "Einschalten",
+      "permissions": "Berechtigungen"
+    },
+    "systemSkills": {
+      "followOffHint": "Der System-Skill „Arbeitsplatz und Nachverfolgung“ von {{name}} ist aus. Schalte ihn unter „Fähigkeiten“ wieder ein, um dies zu nutzen.",
+      "offHint": "Der System-Skill „{{skill}}“ ist aus. Er läuft wieder, sobald du ihn unter „Fähigkeiten“ einschaltest."
     },
     "guided": {
       "title": "Teammitglied erstellen",
@@ -11536,6 +11512,8 @@
       }
     },
     "voiceMode": {
+      "openConversation": "Unterhaltung öffnen",
+      "inCallWith": "Im Anruf mit {{name}}",
       "showDetails": "Anruftranskript anzeigen",
       "hideDetails": "Anruftranskript ausblenden",
       "transcriptTitle": "Aktuelle Transkription",
@@ -11604,6 +11582,7 @@
       "unsent": "Nicht gesendet · Text zum Kopieren auswählen",
       "hint": "Mach eine Sprechpause zum Senden. Antworten werden mit einer KI-Stimme vorgelesen. Sprich jederzeit, um zu unterbrechen.",
       "status": {
+        "questionElsewhere": "Eine Frage wartet in der Aufgabe · Anruf läuft weiter",
         "idle": "Bereit, wenn du es bist",
         "connecting": "Verbindung zur Spracherkennung wird hergestellt…",
         "listening": "Hört zu",
@@ -11619,6 +11598,7 @@
         "muted": "Mikrofon aus · Du kannst weiter zuhören"
       },
       "errors": {
+        "busy": "Die Sprachfunktion wird von einem anderen Anruf, Vorlesen, einer Hörprobe oder Diktat verwendet. Beende diese und versuche es erneut.",
         "connection": "Sprachverbindung unterbrochen. Dein ungesendeter Text bleibt unten erhalten.",
         "microphone": "Mikrofon gestoppt. Prüfe Berechtigung und Verbindung und fahre dann fort.",
         "send": "Diese Nachricht wurde nicht angenommen. Dein Text bleibt unten erhalten.",
@@ -12505,6 +12485,7 @@
         "titleLocal": "Agent wieder auf diesem Computer ausführen?",
         "titleOther": "Agent auf „{{device}}“ ausführen?",
         "description": "Der Unterhaltungsverlauf auf dem anderen Computer kann nicht übertragen werden. Die Fortsetzung erfolgt daher anhand einer Übergabezusammenfassung. Denkprozesse und ähnliche Details werden möglicherweise nicht vollständig übernommen. Wird beim Senden der nächsten Nachricht wirksam.",
+        "descriptionNativeHistory": "Der vollständige Unterhaltungsverlauf wird mitkopiert und nahtlos fortgesetzt. Kann er nicht wiederhergestellt werden, erfolgt die Fortsetzung anhand einer Übergabezusammenfassung; Denkprozesse und ähnliche Details werden dann möglicherweise nicht vollständig übernommen. Wird beim Senden der nächsten Nachricht wirksam.",
         "confirm": "Computer wechseln",
         "cancel": "So beibehalten"
       }
@@ -12748,6 +12729,7 @@
     "cindyServiceUnavailable": "Der Cindy-Sprachdienst ist nicht verfügbar. Prüfe dein Netzwerk oder wechsle die Dienstquelle.",
     "asrServiceUnavailable": "Verbindung zum Spracherkennungsdienst fehlgeschlagen. Prüfe dein Netzwerk und versuche es erneut.",
     "emptyTranscript": "Sprache wurde erkannt, aber kein Text. Versuche es erneut.",
+    "speakerFiltered": "Stimme einer anderen Person ignoriert",
     "connectionInterrupted": "Die Sprachverbindung wurde unterbrochen. Prüfe dein Netzwerk und versuche es erneut.",
     "recognitionStalled": "Die Spracherkennung liefert keine Ergebnisse mehr. Versuche es erneut.",
     "transcriptKept": "{{message}} Der bisher erkannte Text wurde beibehalten — du kannst ihn direkt bearbeiten.",
@@ -12773,6 +12755,14 @@
     "verificationFailed": "Cindy konnte nicht bestätigen, ob die ChatGPT-Anmeldung wiederhergestellt ist. Prüfe es erneut."
   },
   "chat": {
+    "pluginModelRoute": {
+      "routed": "hat für diese Aufgabe gewählt:",
+      "kept": {
+        "no-opinion": "{{plugin}} hat das Modell diesmal nicht geändert, diese Aufgabe nutzt",
+        "failed": "{{plugin}} hat nicht rechtzeitig geantwortet, diese Aufgabe nutzt",
+        "unavailable-route": "{{plugin}} hat ein nicht nutzbares Modell gewählt, diese Aufgabe nutzt"
+      }
+    },
     "imageDelivery": {
       "stored": "Bild übertragen",
       "failed": "Bildübertragung fehlgeschlagen. Versuche erneut, das vorhandene Bild zu übertragen.",
@@ -14485,6 +14475,26 @@
           "cancel": "Abbrechen"
         }
       },
+      "newProjectDialog": {
+        "title": "Neues Projekt",
+        "description": "Erstellt einen Projektordner und verschiebt diese Sitzung in das neue Projekt.",
+        "descriptionMoveFiles": "Erstellt einen Projektordner, verschiebt die Dateien dieser Sitzung dorthin und verschiebt die Sitzung in das neue Projekt.",
+        "nameLabel": "Projektname",
+        "namePlaceholder": "z. B. my-app",
+        "targetPath": "Erstellt {{path}}",
+        "location": "Speicherort",
+        "locationInferred": "Vorgeschlagen anhand deiner vorhandenen Projekte",
+        "locationWillCreate": "Dieser Ordner existiert noch nicht und wird erstellt",
+        "changeLocation": "Ändern…",
+        "remember": "Diesen Speicherort für neue Projekte verwenden",
+        "cancel": "Abbrechen",
+        "create": "Projekt erstellen",
+        "nameTaken": "Ein Ordner mit diesem Namen existiert bereits",
+        "nameInvalid": "Der Name darf \\ / : * ? \" < > | nicht enthalten und nicht mit Punkt oder Leerzeichen enden",
+        "loadFailed": "Projektspeicherort konnte nicht geladen werden",
+        "failed": "Projekt konnte nicht erstellt werden",
+        "done": "Projekt erstellt und Sitzung verschoben"
+      },
       "sessionMenu": {
         "moreActions": "Weitere Aktionen",
         "rename": "Umbenennen",
@@ -14498,6 +14508,7 @@
         "moveToProject": "Aufgabe verschieben",
         "moveToProjectHeading": "Projekte auf diesem Computer",
         "browseProjectFolder": "Projektordner auswählen",
+        "newProject": "Neues Projekt…",
         "moveToDialogue": "In Chat verschieben",
         "noProjects": "Keine zuletzt verwendeten Projekte",
         "moveToProjectDone": "In Projekt verschoben",
@@ -14730,6 +14741,7 @@
           "hint": "Bis zu 3 in der Kopfzeile; angeheftete PRs erscheinen zuerst",
           "empty": "Füge zum Hinzufügen einen GitHub-PR-Link ein",
           "removed": "Entfernt: {{count}}",
+          "legacy": "Unbestätigte Verweise: {{count}}",
           "addLabel": "PR-Link hinzufügen",
           "add": "PR hinzufügen",
           "loading": "Wird geladen…",
@@ -15059,6 +15071,14 @@
       }
     },
     "projectAutomation": {
+      "import": {
+        "found": "Repository-Automatisierungen in {{projectName}} gefunden",
+        "review": "Import prüfen",
+        "title": "Repository-Automatisierungen importieren",
+        "description": "Quelle: {{workingDir}}. Prüfen Sie die folgenden Definitionen. Der Import übernimmt diese Änderungen und aktiviert neue Automatisierungen. Diese können Befehle ausführen und Agents mit Vollzugriff starten. Importieren Sie nur vertrauenswürdige Inhalte.",
+        "accept": "Import bestätigen",
+        "removed": "Wird entfernt: {{names}}"
+      },
       "toast": {
         "summary": "{{inserted}} hinzugefügt · {{updated}} aktualisiert · {{deleted}} entfernt",
         "installed": "Projektautomatisierung für {{projectName}} installiert ({{summary}})",
@@ -15233,6 +15253,7 @@
         "timeout": "Zeitlimit (Sekunden, optional)",
         "timeoutPlaceholder": "Kein Zeitlimit",
         "capabilities": {
+          "github_read": "GitHub lesen",
           "jira_read": "Jira lesen",
           "jira_comment": "In Jira kommentieren",
           "sessions_dispatch": "Sitzungen zuweisen",
@@ -15244,6 +15265,7 @@
         "capabilitiesSearch": "Fähigkeiten suchen",
         "capabilitiesEmpty": "Keine passenden Fähigkeiten",
         "capabilityDescs": {
+          "github_read": "PRs, CI, Reviews und beobachtete Änderungen lesen, ohne Aufgaben zu verknüpfen",
           "jira_read": "Jira-Vorgänge lesen (per Schlüssel / JQL-Suche)",
           "jira_comment": "Kommentare zu Jira-Vorgängen hinzufügen",
           "sessions_dispatch": "{{appName}}-Sitzungen erstellen oder aktivieren und Nachrichten zustellen",
@@ -15888,6 +15910,7 @@
     "agentControlled": "Der Agent hat diesen Bildschirm geöffnet. Prüfe vor dem Ausfüllen, ob du dich wirklich hier anmelden möchtest.",
     "agentPicture": "Dieser Code stammt aus einem Screenshot des Agent, daher kann Cindy den ursprünglichen Bildschirm nicht sehen oder erkennen, wann du fertig bist. Prüfe, ob er zur gewünschten Anmeldeseite führt, und wähle nach dem Scannen „An Agent zurückgeben“.",
     "error": {
+      "raise": "Das Fenster ließ sich nicht öffnen. Wechsle am Computer dorthin.",
       "decision": "Das hat nicht geklappt. Versuch es erneut.",
       "stale": "Der Bildschirm hat sich geändert. Verwende die neueste Version.",
       "submit": "Deine Eingabe wurde nicht übermittelt. Versuche es erneut."
@@ -15923,6 +15946,9 @@
       "picture": "Bildschirm anzeigen",
       "backToForm": "Zurück zum Formular",
       "liveView": "Live-Ansicht",
+      "openWindow": "Anmeldefenster öffnen",
+      "openRemoteDesktop": "Remote-Desktop öffnen",
+      "useForm": "Stattdessen Formular verwenden",
       "fill": "Ausfüllen",
       "skip": "Überspringen",
       "continue": "Weiter",
@@ -15930,6 +15956,9 @@
       "showPassword": "Passwort anzeigen",
       "hidePassword": "Passwort ausblenden",
       "scan": "Scannen"
+    },
+    "directSignIn": {
+      "hint": "Melde dich direkt im Fenster an. Danach geht es automatisch weiter."
     },
     "remoteUnavailable": "Dieser Computer kann keine Remote-Eingaben empfangen. Schließe diesen Schritt auf dem Host-Computer ab und gib dann an den Agent zurück.",
     "unnamedField": "Feld",
@@ -16987,7 +17016,14 @@
     "sectionTitle": "Verzeichnisse",
     "empty": "Noch keine Referenzverzeichnisse",
     "add": "Verzeichnis hinzufügen…",
-    "addReadOnly": "Schreibgeschütztes Verzeichnis hinzufügen…",
+    "back": "Zurück",
+    "addTitle": "Verzeichnis hinzufügen",
+    "writableHint": "Agent darf lesen und schreiben",
+    "writableHintDetail": "Der Agent kann in diesen Verzeichnissen Dateien lesen, erstellen, ändern und löschen.",
+    "searchRecent": "Verzeichnisse suchen",
+    "noRecent": "Noch keine zuletzt verwendeten Verzeichnisse",
+    "noMatchingRecent": "Keine passenden Verzeichnisse",
+    "addFailed": "Dieses Verzeichnis konnte nicht hinzugefügt werden. Versuchen Sie es erneut oder wählen Sie einen anderen Ordner.",
     "atLimit": "Limit erreicht ({{max}})",
     "remove": "{{name}} entfernen",
     "writableParentConfirmTitle": "Lese- und Schreibzugriff auf ein übergeordnetes Verzeichnis erlauben?",
@@ -17745,6 +17781,14 @@
         "skillDisabled": "Skill „{{title}}“ deaktiviert",
         "skillMerged": "Skill „{{title}}“ mit „{{into}}“ zusammengeführt und deaktiviert"
       }
+    },
+    "remote": {
+      "pause": "Routine pausieren",
+      "resume": "Routine fortsetzen",
+      "addSchedule": "Zeitplan hinzufügen",
+      "addInterval": "Intervall hinzufügen",
+      "addEvent": "Ereignisauslöser hinzufügen",
+      "filterField": "Filterfeld"
     }
   },
   "cindyMakeDoctor": {
@@ -18879,5 +18923,35 @@
     "unavailable": "Für diesen Build ist kein Upload-Ziel für Berichte festgelegt. Öffne die lokalen Dateien, um sie mit dem Support zu teilen.",
     "consent": "Akzeptiere vor dem Senden die Datenschutzerklärung in den Einstellungen. Deine lokalen Dateien bleiben erhalten.",
     "failed": "Der Vorgang wurde nicht abgeschlossen. Versuch es erneut oder öffne die lokalen Dateien."
+  },
+  "attachmentPreview": {
+    "fitWidth": "An Breite anpassen",
+    "fitPage": "An Seite anpassen",
+    "pageNumber": "Seitenzahl",
+    "more": "Weitere Aktionen",
+    "retry": "Erneut versuchen",
+    "image": "Bild",
+    "video": "Video",
+    "file": "Datei",
+    "close": "Schließen",
+    "reset": "Ansicht zurücksetzen",
+    "open": "Vorschau öffnen",
+    "zoomIn": "Vergrößern",
+    "zoomOut": "Verkleinern",
+    "fit": "An Fenster anpassen",
+    "actualSize": "Originalgröße (1:1)",
+    "save": "Original speichern",
+    "share": "Teilen",
+    "previous": "Vorheriger Anhang",
+    "next": "Nächster Anhang",
+    "password": "PDF-Passwort eingeben",
+    "find": "Im Dokument suchen",
+    "matches": "{{count}} passende Seiten",
+    "previousPage": "Vorherige Seite",
+    "nextPage": "Nächste Seite",
+    "source": "Quelltext anzeigen",
+    "rendered": "Dokument anzeigen",
+    "wrap": "Zeilenumbruch",
+    "lineNumbers": "Zeilennummern"
   }
 }

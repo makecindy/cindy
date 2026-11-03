@@ -381,20 +381,26 @@ function PrChip({
                   {unresolved > 99 ? '99+' : unresolved}
                 </span>
               )}
-              <span
-                className={cn(
-                  'inline-flex items-center gap-0.5 text-10 font-medium leading-none',
-                  checks && checks.failed > 0 && 'text-[var(--error-fg)]',
-                )}
-              >
-                <CheckIcon
-                  size={9}
-                  strokeWidth={2}
-                  aria-hidden="true"
-                  className={cn('shrink-0', CheckIcon === Check && 'text-[var(--status-success)]')}
-                />
-                {checkCount > 0 && checkCount}
-              </span>
+              {/* Checks no longer gate a merged PR; the panel keeps the details. */}
+              {kind !== 'merged' && (
+                <span
+                  className={cn(
+                    'inline-flex items-center gap-0.5 text-10 font-medium leading-none',
+                    checks && checks.failed > 0 && 'text-[var(--error-fg)]',
+                  )}
+                >
+                  <CheckIcon
+                    size={9}
+                    strokeWidth={2}
+                    aria-hidden="true"
+                    className={cn(
+                      'shrink-0',
+                      CheckIcon === Check && 'text-[var(--status-success)]',
+                    )}
+                  />
+                  {checkCount > 0 && checkCount}
+                </span>
+              )}
             </span>
           </button>
         </PopoverTrigger>

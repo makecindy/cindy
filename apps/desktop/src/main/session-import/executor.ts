@@ -299,7 +299,7 @@ async function importOne(job: Job, key: string, source: SourceSession): Promise<
     item.messagesWritten = sink.written;
     // 一条都没读到：要么来源格式变了，要么原记录本来是空的。不留一个点开什么都没有的任务。
     if (sink.written === 0) throw new ImportEmptyError();
-    void recordPrRefsForImportedMessages(sessionId, sink.prCandidates).catch(() => undefined);
+    void recordPrRefsForImportedMessages(sessionId).catch(() => undefined);
 
     item.step = 'verify';
     emit(job);

@@ -82,7 +82,10 @@ beforeEach(() => { vi.clearAllMocks(); h.link.openLink.mockResolvedValue(undefin
 afterEach(() => { act(() => root?.unmount()); root = undefined; vi.useRealTimers(); });
 
 describe('companion task visibility refresh', () => {
-  it('does not acknowledge on entry and never acknowledges beyond the rendered tail', async () => {
+  // The detail and history requests are independent: a newly rendered reply can
+  // be newer than the profile snapshot. Previously its receipt was capped at 200,
+  // leaving the roster's newer reply unread indefinitely (unit regression).
+  it('acknowledges only the rendered reply, even when the profile snapshot lags behind it', async () => {
     h.get.mockResolvedValue({ links: [{ rel: 'conversation', target: { kind: 'session', sessionId: 'task-1' } }], display: { lastReplyAt: 200 } });
     container = document.createElement('div'); root = createRoot(container);
     await act(async () => root!.render(createElement(Probe, { canMarkRead: true })));
@@ -90,7 +93,7 @@ describe('companion task visibility refresh', () => {
     result.markReadThrough(100);
     expect(h.markRead).toHaveBeenLastCalledWith('owner', 'mac', 'bot-1', 100);
     result.markReadThrough(300);
-    expect(h.markRead).toHaveBeenLastCalledWith('owner', 'mac', 'bot-1', 200);
+    expect(h.markRead).toHaveBeenLastCalledWith('owner', 'mac', 'bot-1', 300);
   });
   it('does not mark read until the entered task has rendered its synchronized history', async () => {
     h.get.mockResolvedValue({ links: [{ rel: 'conversation', target: { kind: 'session', sessionId: 'task-1' } }], display: { lastReplyAt: 200 } });
@@ -186,7 +189,7 @@ it('shows the clicked identity immediately but waits for resource and session va
   expect(result.ready).toBe(false);
   h.metadataVerified = true; await render(true);
   expect(result.ready).toBe(true);
-  expect(h.markRead).toHaveBeenCalledExactlyOnceWith('owner', 'mac', 'bot-1', 42);
+  expect(h.markRead).toHaveBeenCalledExactlyOnceWith('owner', 'mac', 'bot-1', 200);
   expect(h.get).toHaveBeenCalledTimes(1);
   expect(h.link.invoke).not.toHaveBeenCalled(); // Session metadata is the screen's existing read.
 });

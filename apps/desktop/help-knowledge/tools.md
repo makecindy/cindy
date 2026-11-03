@@ -15,7 +15,7 @@ Two Settings tabs decide which tools the agents get: **Tools** (built-in tools a
   - **Feishu Bot** — send files and notifications to Feishu users through your bound bot.
   - **Personal WeChat** — send messages to known WeChat contacts.
   - **Browser** — browse and act on web pages. It's listed here only when the scope is **New session defaults**; per-project control is under **Settings > Automation**.
-- Core tools (memory, scheduling, and the helper that tells agents what's available) are always on and aren't listed. Smart Contacts has its own switch under **Settings > Personalization > Smart Contacts**.
+- Core tools (memory, scheduling, and the helper that tells agents what's available) are always on and aren't listed.
 - **Scope picker** (top right): **New session defaults** applies to sessions without a project override; choosing a recent project changes the setting for that project only. Project settings take priority. When you open Settings from a project session, that project is selected first.
 - A small label on each row shows where the current value comes from: **project**, **user default**, or **product default** (hover for details). After you change a row, it shows **Custom**; **Restore default** clears your change.
 

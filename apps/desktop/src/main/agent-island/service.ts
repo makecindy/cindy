@@ -110,6 +110,7 @@ import {
   buildAgentIslandDisplayState,
   buildAgentIslandTaskOverview,
   buildAllSessionActivitySnapshots,
+  buildDeviceSessionActivitySnapshots,
   closeAgentIslandSessionPreservingUnread,
   completeAgentIslandSessionWithoutAttention,
   completedReplySummary,
@@ -228,7 +229,11 @@ export interface AgentIslandServiceDeps {
   nativeHost?: AgentIslandNativeRenderer;
   /** Main-process upgrade window used to classify remote daemon shutdowns. */
   isPlannedRemoteDaemonClose?: (sessionId: string) => boolean;
-  /** Optional process-local consumer for task activity, such as hardware status lighting. */
+  /**
+   * Optional process-local consumer for task activity, such as hardware status lighting.
+   * Unlike the relay payload it also carries tasks mirrored from other devices, so it sees
+   * the same tasks Agent Island shows.
+   */
   onSessionActivityChange?: (activity: readonly AgentIslandSessionActivity[]) => void;
   /** 其它设备任务的状态跃迁。灵动岛开启时由岛面展示;关闭时才交给这里发桌面通知。 */
   onDeviceSessionEvent?: (event: AgentIslandDeviceSessionEvent) => void;
@@ -331,6 +336,31 @@ function safeSessionActionSummary(snapshot: AgentIslandSessionSnapshot): string 
   if (latestKind === 'assistant') return '正在生成回复';
   if (latestKind === 'user') return '正在处理新消息';
   return '正在运行';
+}
+
+function toSessionActivity(s: AgentIslandSessionSnapshot): AgentIslandSessionActivity {
+  return {
+    ...(s.completionToken ? { completionToken: s.completionToken } : {}),
+    ...(s.completionNotification ? { completionNotification: s.completionNotification } : {}),
+    ...projectSessionActivity({
+      sessionId: s.sessionId,
+      recordStatus: 'active',
+      title: s.title,
+      source: 'live',
+      livePhase: s.phase,
+      startedAtMs: s.startedAt,
+      lastActivityAtMs: s.lastActivityAt,
+      currentActionSummary: safeSessionActionSummary(s),
+      interactionKind: s.interactionKind,
+      attention: s.attention,
+    }),
+    phase: s.phase,
+    interactionKind: s.interactionKind,
+    // 完成后这份摘要只给其它设备的完成卡片用(本机岛面直接读展示快照)。
+    compactDetail: s.phase === 'completed' ? completedReplySummary(s) : s.compactDetail,
+    summaryFormat: 'plain-text',
+    workingPhase: s.workingPhase,
+  };
 }
 
 function canonicalSessionActivity(
@@ -1833,6 +1863,7 @@ export class AgentIslandService {
   private isCompletionEventSilenced(sessionId: string, event: AgentEvent): boolean {
     if (!isCompletionDoneEvent(event)) return false;
     return event.agentMeta?.botTaskCoordination === true
+      || event.agentMeta?.botPrivateReply === true
       || this.isGroupLaneEvent(sessionId, event)
       || event.turnOrigin?.surface === 'im' || this.silencedSessionRunIds.has(sessionId);
   }
@@ -1921,28 +1952,21 @@ export class AgentIslandService {
    * attention=true 投给远程侧栏,直到真正已读。
    */
   private buildSessionActivityPayload(): AgentIslandSessionActivity[] {
-    return buildAllSessionActivitySnapshots(this.state).map((s) => ({
-      ...(s.completionToken ? { completionToken: s.completionToken } : {}),
-      ...(s.completionNotification ? { completionNotification: s.completionNotification } : {}),
-      ...projectSessionActivity({
-        sessionId: s.sessionId,
-        recordStatus: 'active',
-        title: s.title,
-        source: 'live',
-        livePhase: s.phase,
-        startedAtMs: s.startedAt,
-        lastActivityAtMs: s.lastActivityAt,
-        currentActionSummary: safeSessionActionSummary(s),
-        interactionKind: s.interactionKind,
-        attention: s.attention,
-      }),
-      phase: s.phase,
-      interactionKind: s.interactionKind,
-      // 完成后这份摘要只给其它设备的完成卡片用(本机岛面直接读展示快照)。
-      compactDetail: s.phase === 'completed' ? completedReplySummary(s) : s.compactDetail,
-      summaryFormat: 'plain-text',
-      workingPhase: s.workingPhase,
-    }));
+    return buildAllSessionActivitySnapshots(this.state).map(toSessionActivity);
+  }
+
+  /**
+   * 本机活动之外再加上其它设备任务的岛面镜像，只交给本进程内的消费方(键盘状态灯),
+   * 使它与灵动岛看到同一批任务；relay、renderer 与订阅方仍只拿本机活动。
+   */
+  private buildProcessLocalActivityPayload(
+    local: readonly AgentIslandSessionActivity[],
+  ): AgentIslandSessionActivity[] {
+    const localIds = new Set(local.map((activity) => activity.sessionId));
+    const device = buildDeviceSessionActivitySnapshots(this.state)
+      .filter((snapshot) => !localIds.has(snapshot.sessionId))
+      .map(toSessionActivity);
+    return [...local, ...device];
   }
 
   /** Current public activity only; avoids scanning historical Bot Session links. */
@@ -2060,7 +2084,7 @@ export class AgentIslandService {
     const payload = this.buildSessionActivityPayload();
     this.sessionActivityRelay.publish(payload);
     this.emitSessionActivityTransitions(payload, Date.now());
-    this.notifySessionActivityConsumer(payload);
+    this.notifySessionActivityConsumer(this.buildProcessLocalActivityPayload(payload));
     // 广播给所有 app content window(含「在新窗口打开」的副窗),不只主窗 —— 副窗也有侧栏、
     // 也订阅同一频道,只发主窗会让副窗卡片预览停在陈旧 summary(PR #246 review)。
     const windows = BrowserWindow.getAllWindows().filter(isAppContentWindow);

@@ -1,42 +1,38 @@
-# 产品规则
+# 产品专题
 
-这里存放 Cindy 客户端必须长期保持的产品行为、用户体验和跨端一致性要求。
+[核心产品原则](core-product-principles.md)解释长期取舍，下列专题维护具体契约。改动涉及某个
+主题时先读正文。这里只记录 Cindy 特有的决策与理由，临时待办留在跟踪系统，不要求每篇套用
+同一份验收清单。
 
-## 收录标准
+实现与发布状态以专题正文为准：旧索引对供应商组“方案，未实现”的说法已被
+[供应商组](provider-groups.md)的分阶段实现记录取代，不据此推断生产已部署；供应商分享的
+跨区域能力仍由服务端开关控制、默认关闭，见[供应商分享](provider-sharing.md)。
 
-- 规则说明“用户应该得到什么结果”以及“哪些产品行为不能被破坏”。
-- 每条规则应写清适用场景、产品不变量、原因、验收方法和允许的例外。
-- 具体代码写法、命令和测试实现放到 `docs/dev-rules/`，不要与产品目标混写。
-- 临时需求、待办事项和已经有正式跟踪的问题不作为永久产品规则。
-
-## 当前规则
-
-模型相关工作先读 [模型配置与下发](../dev-rules/model-catalog-maintenance.md)，再按任务进入：
-
-- [模型资料优先级](model-metadata-precedence.md)：公共资料、默认/实报/用户覆盖、多账号身份与成员空值语义。
-- [本地模型筛选](local-model-selection.md)：候选、推荐、量化包装和硬件证据。
-- [供应商设置](provider-settings.md)：连接身份、状态、操作与用量展示。
-- [供应商分享](provider-sharing.md)：把远程供应商分享给其他账号的一次性链接、双方确认、管理页与跨区域规则（跨区域默认关闭）。
-- [供应商组](provider-groups.md)：一台电脑把多台电脑上的同一个供应商合成一组，本机、同账号其他电脑与分享的人都按组策略分配运行电脑（方案，未实现）。
-- [V4 全类型规范](../model-registry-v4-media.md)：媒体字段、成员投影及额外发布条件。
-
-- [`core-product-principles.md`](core-product-principles.md)：Cindy 的目的、连接本质、
-  Core 边界，以及 Agent、Skill、插件的产品分工。
-- [`agent-user-parity.md`](agent-user-parity.md)：Agent 的工具能力与用户本人一致（含跨电脑），
-  限制由权限档与自动审核承担；跨电脑的统一口径与能力现状台账。
-- [`teammate-authority.md`](teammate-authority.md)：伙伴每轮代表谁（主人代办 / 受托 / 自主），
-  自主轮能做的范围，以及转达主人原话的核实凭证。
-- [`review-product-direction.md`](review-product-direction.md)：Cindy Review 的北极星、
-  通用成果复核定义、运行与证据原则、当前边界、后续路线和待确认事项。
-- [`region-and-editions.md`](region-and-editions.md)：Global 与中国大陆版的关系、
-  身份命名与默认值方向、区域相关 UI 标注与对外口径。
-- [`task-and-conversation-naming.md`](task-and-conversation-naming.md)：`session` 的中文
-  叫「任务」，任务 / 对话 / 消息的分层定义与判定规则，以及「任务」与 `task` 的歧义处理。
-- [`document-workshop-quality.md`](document-workshop-quality.md)：无插件文档基础能力的
-  HTML-first 工序、四格式统一视觉语言、Session 作品卡和插件增强层边界。
-- [`input-handoff.md`](input-handoff.md)：代输入——Agent 把需要主人的一步（登录、密码、验证码、
-  授权、未知选项）交给主人逐步完成，值不留痕；兜底、提醒、结束判定与已知边界。
-- [`session-runtime-control.md`](session-runtime-control.md)：Agent 调整任务模型、来源、
-  推理强度与 Fast 的统一控制面，baseline/effective/pending 状态和自动降级边界。
-- [`archive-pauses-automations.md`](archive-pauses-automations.md)：运行中的自动化会恢复已归档的
-  原普通任务并保持激活（包括持续会话），归档前提示；暂停自动化和托管任务保留原生命周期。
+| 主题 | 正文 |
+| --- | --- |
+| Agent 管理用户自己的资源、跨电脑工具与能力发现 | [Agent 与用户同权](agent-user-parity.md) |
+| 任务、对话、消息的用户称谓 | [命名](task-and-conversation-naming.md) |
+| 消息发送、来源标签与模型说明 | [消息来源](message-source.md) |
+| IM 上下文展示与完成未读 | [IM 消息呈现](im-message-presentation.md) |
+| IM 工具授权、多端确认与暂停回执 | [IM 权限确认](im-permission-confirmation.md) |
+| Telegram 命令、消息、附件与官方／个人 bot 差异 | [Telegram 能力台账](telegram-bot-parity.md) |
+| 登录、密码、验证码等主人代输入 | [代输入](input-handoff.md) |
+| 邮件卡的收件人与编辑、发送确认、深浅色、已读标记与头像权限 | [邮件卡](mail-card.md) |
+| 目标运行、补充消息、停止与手机 `/goal` | [目标模式](goal-mode.md) |
+| 自动任务与目标任务的生命线：归档后恢复、归档前确认、失败后手动继续 | [归档与自动化](archive-pauses-automations.md) |
+| 用量上限、重置时刻与自动继续 | [用量上限](usage-limit-auto-continue.md) |
+| 任务模型、来源、推理强度与 Fast | [运行时控制](session-runtime-control.md) |
+| 共享任务、跨账号访客与成员权限 | [共享任务](shared-task-mode.md) |
+| 伙伴身份、生命周期、fallback、工作目录、Skill / MCP 与委派 | [伙伴运行时](cindy-bots-runtime.md) |
+| 伙伴每轮代表谁（主人代办／受托／自主）、自主轮范围与转达凭证 | [伙伴授权](teammate-authority.md) |
+| 伙伴跨电脑身份、主力电脑、云端对话与资料 | [云端伙伴](cloud-companions.md) |
+| 伙伴群聊、群专线、分工与手机群聊 | [伙伴群聊](bot-group-chat.md) |
+| `/review`、成果快照、Finding 与复核生命周期 | [成果复核](review-product-direction.md) |
+| 区域、构建身份、端点与版本文案 | [区域与版本](region-and-editions.md) |
+| 模型资料、目录下发、窗口、价格与默认值 | [模型架构入口](../dev-rules/model-catalog-maintenance.md)、[资料优先级](model-metadata-precedence.md) |
+| 本地模型候选、包装、硬件与推荐 | [本地模型](local-model-selection.md) |
+| 供应商连接、状态、操作与用量 | [供应商设置](provider-settings.md) |
+| 跨账号供应商分享、申请、审批与管理 | [供应商分享](provider-sharing.md) |
+| 供应商组、选电脑策略、转发与用量 | [供应商组](provider-groups.md) |
+| 媒体模型资料与发布兼容 | [V4 全类型规范](../model-registry-v4-media.md) |
+| 文档成果、四格式与插件增强 | [文档工坊](document-workshop-quality.md) |

@@ -15,16 +15,6 @@ export async function authorFixture(mode, temporary, transform = fixture => fixt
   const main = await readFile(path.join(source, 'main.js'), 'utf8');
   const html = await readFile(path.join(source, 'ui/page.html'), 'utf8');
   const assets = mode === 'files' ? Object.fromEntries(await Promise.all(['settings.html', 'settings.js'].map(async name => [name, await readFile(path.join(source, name), 'utf8')]))) : {};
-  // Manual units ship with the package; each is a single MANUAL.md in these examples.
-  for (const item of manifest.manual?.items ?? []) {
-    const relative = path.posix.join(item.dir, 'MANUAL.md');
-    assets[relative] = await readFile(path.join(source, relative), 'utf8');
-  }
-  // Single source: the loader page manual must stay byte-identical to PAGE-GENERATION.md.
-  if (mode === 'loader') {
-    assert.equal(assets['manual/pages/MANUAL.md'], await readFile(path.join(examples, 'PAGE-GENERATION.md'), 'utf8'),
-      'loader/manual/pages/MANUAL.md must match PAGE-GENERATION.md');
-  }
   const fixture = transform({ manifest, main, html, assets });
   if (mode === 'loader') await verifyLoaderMain(fixture.main);
   await packAuthorFixture(fixture, temporary);
@@ -95,6 +85,19 @@ async function verifyLoaderMain(main) {
   assert.equal(staged.structuredContent.offline, true);
   assert.equal((await call('api_write', { path: '/api/imports/confirm', body: { batchId: staged.structuredContent.batchId }, idempotencyKey: 'three' })).structuredContent.status, 'confirmed');
   assert.ok(libraryWrites.at(-1).content.includes('"R-1","record"'));
+  // Chat handoff (cindy_handoff_files): the first screen lists name and size with the reference on the
+  // button and carries no file content or staged preview; clicking hands the reference to upload_files.
+  const handoffRef = 'handoff:0f8e2b4c-1d2a-4c3b-9e8f-7a6b5c4d3e2f';
+  const handoffFile = { ref: handoffRef, name: '订单<b>.csv', mimeType: 'text/csv', size: 1234, sha256: 'a'.repeat(64), createdAt: 1, expiresAt: 2 };
+  const handedOff = (await call('import_file', { cindy_handoff_files: [handoffFile] }))._meta.view.html;
+  assert.ok(handedOff.includes('data-file-ref="' + handoffRef + '"') && handedOff.includes('订单&lt;b&gt;.csv') && handedOff.includes('1234 字节'));
+  assert.ok(handedOff.includes('离线示例：只显示名称和大小'));
+  const firstScreen = handedOff.slice(handedOff.indexOf('<main id="content">'), handedOff.indexOf('</main>'));
+  assert.ok(firstScreen.includes(handoffRef) && !/confirm-import|demo-batch|Record A|出错/.test(firstScreen), 'no staged preview before the click');
+  assert.equal((await call('upload_files', { files: [handoffRef], path: '/api/imports/stage' })).structuredContent.offline, true);
+  for (const files of [['handoff:not-a-uuid'], [handoffRef, 'library:imports/list.csv'], ['library:other.csv']]) {
+    assert.equal((await call('upload_files', { files, path: '/api/imports/stage' })).isError, true, files.join());
+  }
   const network = []; let response = { ok: true, status: 200, body: '{"items":[]}' };
   const live = runtime(main.replace('const USE_MOCK = true;', 'const USE_MOCK = false;'), {
     fetch: async request => { network.push(request); return response; },
@@ -119,9 +122,24 @@ async function verifyLoaderMain(main) {
   assert.equal(network.at(-1).uploadDir.fileField, 'file');
   assert.equal(network.at(-1).callId, 'fixture');
   assert.ok(preview._meta.view.html.includes('&lt;b&gt;data&lt;/b&gt;'));
-  assert.ok(!preview._meta.view.html.includes('离线示例'), 'a real staged batch is not labelled as sample data');
+  const previewScreen = preview._meta.view.html.slice(preview._meta.view.html.indexOf('<main id="content">'), preview._meta.view.html.indexOf('</main>'));
+  assert.ok(previewScreen.includes('确认导入') && !previewScreen.includes('离线示例'), 'a real staged batch is not labelled as sample data');
   assert.ok(!JSON.stringify(preview).includes('test-handoff'));
-  console.log('AUTHOR_MAIN_VERDICT=passed (loader routing, private HTML, HTTP errors, no retry, deduplication, handoff, offline preview/records/export)');
+  // Live handoff: import_file asks the backend for the page with only ref/name/mimeType/size and uploads
+  // nothing; upload_files sends handoff references through upload.handoff, never as library paths.
+  response = { ok: true, status: 200, body: JSON.stringify({ html: '<!doctype html><p>files</p>' }) };
+  const liveFiles = await live('import_file', { cindy_handoff_files: [handoffFile] });
+  assert.equal(liveFiles._meta.view.html, '<!doctype html><p>files</p>');
+  assert.equal(new URL(network.at(-1).url).pathname, '/view');
+  assert.equal(network.at(-1).upload, undefined);
+  assert.equal(network.at(-1).body, JSON.stringify({ intent: 'files', fields: { files: [{ ref: handoffRef, name: '订单<b>.csv', mimeType: 'text/csv', size: 1234 }] }, fragment: false }));
+  response = { ok: true, status: 201, body: '{"batchId":"B-2","total":2,"rows":[],"errors":[]}' };
+  assert.equal((await live('upload_files', { files: [handoffRef], path: '/api/imports/stage' })).structuredContent.batchId, 'B-2');
+  assert.equal(JSON.stringify(network.at(-1).upload.handoff), JSON.stringify([handoffRef]));
+  assert.equal(network.at(-1).upload.library, undefined);
+  response = { ok: false, errorCode: 'HANDOFF_UNAVAILABLE' };
+  assert.match((await live('upload_files', { files: [handoffRef], path: '/api/imports/stage' })).content[0].text, /重新发送/);
+  console.log('AUTHOR_MAIN_VERDICT=passed (loader routing, private HTML, HTTP errors, no retry, deduplication, dir and chat-file handoff, offline preview/records/export)');
 }
 export async function packAuthorFixture({ manifest, main, html, assets = {} }, temporary) {
   const dir = path.join(temporary, manifest.id);
@@ -148,7 +166,7 @@ export async function packAuthorFixture({ manifest, main, html, assets = {} }, t
   for (const query of ['4.23', 'ui', 'mcp app', '交互页面']) {
     const section = extractForgeGuideSection(FORGE_GUIDE, query);
     assert.equal(section.ok, true, JSON.stringify(section));
-    assert.ok(section.text.startsWith('## 4.23 '));
+    assert.ok(section.text.startsWith('## 4.23 交互页面 MCP Apps'));
   }
   const packed = await packGhostDir(dir, { sessionWorkdir: temporary });
   assert.equal(packed.ok, true, JSON.stringify(packed.ok ? {} : packed));

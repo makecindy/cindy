@@ -1,3 +1,5 @@
+import { AttachmentCollectionContext, type AttachmentCollectionItem } from './AttachmentCollection';
+import { attachmentPreviewKind, previewSourceName } from '@cindy/maker-shared/attachment-preview';
 import { TeammateProcessStatus } from '@/features/bots/TeammateProcessStatus';
 import { scrollRangeIntoView } from '@/lib/scrollRangeIntoView';
 import { historyAfter } from './historyAfter';
@@ -120,8 +122,11 @@ import { useTurnChangeSets } from './useTurnChangeSets';
 import {
   canCompensateMessageHeight,
   findRenderItemElement,
+  isRestoredScrollTakeover,
+  measureRestoredScrollGeometry,
   rememberedItemIntrinsicSize,
   viewportAnchorCorrection,
+  type RestoredScrollGeometry,
 } from './messageViewportCompensation';
 import { isEditableKeyboardTarget } from '@/lib/editableKeyboardTarget';
 import { createLogger } from '@/lib/logger';
@@ -163,12 +168,6 @@ import { isValidPluginNamespace } from '@cindy/plugin-protocol';
 // logToMain 照样走 IPC 再被 main 按级别丢弃,每次切换白付两次 IPC。无 PII。
 const perfLog = createLogger('perf/session-switch');
 
-// jump-down chip 静止隐藏时长 — 用户向下滚动停止后多久淡出。2s 是用户要求,
-// 与 prev-msg-jump 的 IDLE_HIDE_MS=3000 区分(向上 chip 显示更长方便回看,
-// 向下 chip 是快捷跳转 affordance,短一些不打扰)。
-const JUMP_DOWN_IDLE_MS = 2000;
-// 方向判断死区 — 1px 内的 scrollTop 变化不算方向。
-const SCROLL_DIRECTION_DEAD_ZONE_PX = 1;
 const TOUCH_HISTORY_INTENT_THRESHOLD_PX = 8;
 const HISTORY_NAVIGATION_KEYS: ReadonlySet<string> = new Set(['PageUp', 'ArrowUp', 'Home']);
 
@@ -369,7 +368,7 @@ import {
   createGhostCardSpawnIndex,
 } from '@/cindy-brain/ghostCardGallery';
 import { ChatImageView } from './ChatImageView';
-import { ImageGalleryContext, type GalleryImage } from './ImageGalleryContext';
+import { galleryImagePreviewItem, ImageGalleryContext, type GalleryImage } from './ImageGalleryContext';
 import { GhostFulfillmentContext } from './GhostSummonCard';
 import { ChatSessionFileProvider, useChatSessionFileValue } from './ChatSessionFileContext';
 import { toRemoteMediaOrigin } from '@/lib/sessionFileOrigin';
@@ -382,6 +381,7 @@ import { PrevMessageJumpChip, firstNonEmptyLine } from './PrevMessageJumpChip';
 import { useTopRightChipSlot } from './TopRightChipStack';
 import { usePrevUserMessageInView } from './usePrevUserMessageInView';
 import { JumpToBottomChip } from './JumpToBottomChip';
+import { SCROLL_DIRECTION_DEAD_ZONE_PX, useJumpToBottomVisibility } from './useJumpToBottomVisibility';
 import { MessageNavRail } from './MessageNavRail';
 import {
   NAV_RAIL_BACKFILL_MAX_ROUNDS,
@@ -459,6 +459,11 @@ interface MessageStreamProps {
    *  so message-level controls can gate features unsupported on remote
    *  (e.g. rewind on cc-remote daemon sessions). */
   remoteHostId?: string | null;
+  /** Device ownership resolved by the session view: a device id = remote task,
+   *  null = confirmed local task, undefined = not resolved yet (or unknown to
+   *  the caller). Local-only capabilities that read this machine's file system
+   *  with the session working dir wait for null. */
+  ownerDeviceId?: string | null;
   /** Task origin. Personal WeChat must not be told to switch to Full access. */
   sessionSource?: string | null;
   onDiagnoseError?: (error: ErrorDiagnosisSource) => void;
@@ -1818,11 +1823,11 @@ export function buildRenderItems(
   // 本次 build 内已被认领的活卡(claude 精确锚 / codex 启发式各认领一次)。
   const claimedLiveCallIds = new Set<string>();
   const sessionLiveCards = opts?.sessionId
-    ? ghostCards?.liveCards.filter(lc => lc.sessionId === opts.sessionId) ?? []
+    ? (ghostCards?.liveCards.filter((lc) => lc.sessionId === opts.sessionId) ?? [])
     : [];
   // Mail is a finished document, not plugin progress. Without an exact tool ID,
   // wait for its result rather than attach it to a schema/read call by guesswork.
-  const guessableLiveCards = sessionLiveCards.filter(lc => {
+  const guessableLiveCards = sessionLiveCards.filter((lc) => {
     const entry = ghostCards?.byCallId.get(lc.callId);
     return !(entry?.status === 'ready' && readMailCard(entry.html));
   });
@@ -1966,7 +1971,7 @@ export function buildRenderItems(
       const end = Date.parse(messages[hi]?.createdAt ?? '');
       const artifacts = (opts?.historyArtifacts ?? []).filter((artifact) => {
         const time = Date.parse(artifact.createdAt);
-        return !(Number.isFinite(start) && time < start || Number.isFinite(end) && time >= end);
+        return !((Number.isFinite(start) && time < start) || (Number.isFinite(end) && time >= end));
       });
       const editedPaths = new Set(artifacts.filter((file) => file.exclude && file.ready)
         .map((file) => pathKey(resolveToolFilePath(file.path, workingDir))));
@@ -2983,7 +2988,10 @@ export const WorkGroupRenderItemView = memo(function WorkGroupRenderItemView({
       deferred={item.deferred}
       fitHeader={Boolean(replyColumnSpacer)}
       journal={item.teammateJournal}
-      journalTitle={item.isStreaming ? elapsed => <TeammateProcessStatus sessionId={context.sessionId}>{elapsed}</TeammateProcessStatus> : undefined}
+      journalTitle={item.isStreaming ? (elapsed) => (
+              <TeammateProcessStatus sessionId={context.sessionId}>{elapsed}</TeammateProcessStatus>
+            )
+          : undefined}
     />
   );
   return (
@@ -3011,6 +3019,7 @@ export function MessageStream({
   sessionTitle,
   agentKind,
   remoteHostId,
+  ownerDeviceId,
   sessionSource,
   onDiagnoseError,
   workingDir,
@@ -3097,7 +3106,7 @@ export function MessageStream({
   // 会话文件来源上下文(local / device-link / SSH):顶层构造一次,经
   // ChatSessionFileProvider 下发给整棵消息树;galleryDeviceId 也从这里同源取
   // (见 sessionImageSrcs 处注释)。
-  const sessionFileValue = useChatSessionFileValue(sessionId, workingDir, remoteHostId);
+  const sessionFileValue = useChatSessionFileValue(sessionId, workingDir, remoteHostId, ownerDeviceId);
 
   /** 分享选择模式:只驱动整列缩进(低频)。逐条的选中态由每个复选框自己订阅。 */
   const shareSelectionActive = useShareSelectionActive(sessionId);
@@ -3124,6 +3133,7 @@ export function MessageStream({
     restoreSnapshotRef.current ? restoreSnapshotRef.current.isNearBottom === false : false,
   );
   const restoreLoadRef = useRef<'idle' | 'pending' | 'loaded' | 'failed' | 'settled'>('idle');
+  const restoredScrollGeometryRef = useRef<RestoredScrollGeometry | null>(null);
   const restoreMountedRef = useRef(false);
   const [restoreRevision, setRestoreRevision] = useState(0);
   const restoreCancelledRef = useRef(false);
@@ -3534,7 +3544,7 @@ export function MessageStream({
   visibleRenderItemsRef.current = visibleRenderItems;
   // Keep complex/stateful cards alive. Plain historical message bodies can be
   // replaced by measured-height placeholders without browser display locking.
-  const viewportEntries = useMemo(() => visibleRenderItems.map(item => ({
+  const viewportEntries = useMemo(() => visibleRenderItems.map((item) => ({
     key: item.key,
     retain: item.type !== 'message' || item.message.isStreaming === true || Boolean(item.message.systemCardType) ||
       (item.message.role !== 'user' && item.message.role !== 'assistant') ||
@@ -3609,7 +3619,7 @@ export function MessageStream({
         : findRenderItemElement(itemsRef.current, previous.viewportTopKey);
       const rect = target?.getBoundingClientRect();
       const viewport = container.getBoundingClientRect();
-      const offset = previous.messageClientId ? previous.messageOffset ?? 0 : previous.offset;
+      const offset = previous.messageClientId ? (previous.messageOffset ?? 0) : previous.offset;
       // Native anchoring also emits scroll events during prepend/size settling.
       // An already aligned reading row must not be replaced by a new offscreen
       // row whose content-visibility estimate temporarily crosses the top edge.
@@ -4080,15 +4090,54 @@ export function MessageStream({
     () => toRemoteMediaOrigin(sessionFileValue.origin, sessionFileValue.workingDir),
     [sessionFileValue],
   );
-  const sessionImageSrcs = useMemo(
+  const messageImageCollections = useMemo(
     () =>
-      collectSessionImageSrcs(
-        renderMetadataItems,
+      new Map(
+        renderMetadataItems.map((item) => [
+          item.key,
+          collectSessionImageSrcs(
+            [item],
         galleryMediaOrigin,
         ghostCardSnapshot,
         isSessionStreaming,
+          ),
+        ]),
       ),
     [renderMetadataItems, galleryMediaOrigin, ghostCardSnapshot, isSessionStreaming],
+  );
+
+  const messageAttachmentCollections = useMemo(
+    () =>
+      new Map(
+        renderMetadataItems.map((item) => {
+          const entries: AttachmentCollectionItem[] = (
+            messageImageCollections.get(item.key) ?? []
+          ).map((image, index) => galleryImagePreviewItem(image, `${item.key}:image:${index}`));
+          if (item.type === 'message' && item.message.role === 'user') {
+            for (const [index, file] of (item.message.files ?? []).entries())
+              entries.push({
+                id: `${item.key}:file:${index}`,
+                name: file.name,
+                source: file.path,
+                kind: attachmentPreviewKind(file.name),
+              });
+          }
+          if (item.type === 'tool_media') {
+            for (const [index, media] of item.items.entries()) {
+              if ((media.kind === 'video' || media.kind === 'audio') && media.url)
+                entries.push({
+                  id: `${item.key}:media:${index}`,
+                  name: previewSourceName(media.url, media.kind),
+                  source: rewriteToRemoteMediaOrigin(media.url, galleryMediaOrigin),
+                  kind: media.kind,
+                  media: true,
+                });
+            }
+          }
+          return [item.key, entries] as const;
+        }),
+      ),
+    [renderMetadataItems, messageImageCollections, galleryMediaOrigin],
   );
 
   // 把可见窗口往前(更早)推 RENDER_WINDOW_GROWTH_ITEMS 个 item,用于滚到顶时的客户端扩窗。
@@ -4279,6 +4328,7 @@ export function MessageStream({
     ) {
       restoreLoadRef.current = 'settled';
       refreshViewportAnchor();
+      restoredScrollGeometryRef.current = measureRestoredScrollGeometry(container, target);
       return true;
     }
     const cTop = container.getBoundingClientRect().top;
@@ -4288,11 +4338,13 @@ export function MessageStream({
     if (Math.abs(delta) < 1) {
       restoreLoadRef.current = 'settled';
       refreshViewportAnchor();
+      restoredScrollGeometryRef.current = measureRestoredScrollGeometry(container, target);
       return true;
     }
     const generation = beginProgrammaticScroll();
     container.scrollTop += delta;
     restoreLoadRef.current = 'settled';
+    restoredScrollGeometryRef.current = measureRestoredScrollGeometry(container, target);
     requestAnimationFrame(() => {
       if (finishProgrammaticScroll(generation) === false) refreshViewportAnchor();
     });
@@ -4667,21 +4719,8 @@ export function MessageStream({
 
   // ── jump-to-bottom chip ──
   // 用户向下滚动且未到底时显示扁平的"跳到底部" chip,2s 内无滚动自动隐藏。
-  // 与 NewMessageIndicator 互斥(它有未读时优先)。state 用 setter 直接控制,
-  // timer 走 ref 持有句柄方便 reset / cleanup。
-  const [showJumpDown, setShowJumpDown] = useState(false);
-  const jumpDownIdleTimerRef = useRef<number | null>(null);
-
-  // 卸载时清掉 idle timer 防泄漏
-  useEffect(
-    () => () => {
-      if (jumpDownIdleTimerRef.current !== null) {
-        window.clearTimeout(jumpDownIdleTimerRef.current);
-        jumpDownIdleTimerRef.current = null;
-      }
-    },
-    [],
-  );
+  // 与 NewMessageIndicator 互斥(它有未读时优先)，与群聊共用显隐策略。
+  const { visible: showJumpDown, onScroll: updateJumpDown } = useJumpToBottomVisibility();
 
   // ── chip-jump expand/load 抑制 ──
   // chip click 跳转的 smooth scroll 期间,如果路径穿过 scrollTop<50 会触发
@@ -4723,8 +4762,8 @@ export function MessageStream({
   );
   // wheel/touch/键盘接管：结束当前 smooth，但让期间延期的删除补偿重放。
   const clearChipJumpSuppression = useCallback(() => {
-    // Only input intent ends restoration. Chromium's intrinsic-size correction
-    // also emits scroll events and must not be mistaken for a user scroll.
+    // Direct input (or a settled, layout-stable chained scroll) ends restoration.
+    // Chromium's intrinsic-size corrections must still preserve the anchor.
     restoringRef.current = false;
     suppressHeightCompensationUntilRef.current = 0;
     disclosureAnchorRef.current = null;
@@ -5861,9 +5900,18 @@ export function MessageStream({
 
     const draggingScrollbar = scrollbarDragStartTopRef.current != null;
     if (restoringRef.current && !draggingScrollbar) {
-      applyRestoreRef.current();
-      prevScrollTopRef.current = el.scrollTop;
-      return;
+      if (isRestoredScrollTakeover(
+        el, restoredScrollGeometryRef.current,
+        restoreLoadRef.current === 'settled', programmaticScrollRef.current,
+      )) {
+        // An iframe's chained wheel never reached onWheel. Let the normal
+        // scroll path save this new reading position and update follow intent.
+        clearChipJumpSuppression();
+      } else {
+        applyRestoreRef.current();
+        prevScrollTopRef.current = el.scrollTop;
+        return;
+      }
     }
     const draggingUp =
       draggingScrollbar &&
@@ -5945,31 +5993,7 @@ export function MessageStream({
           }
         }
       }
-      if (effectiveNearBottom) {
-        // 到底了:无论方向都隐藏 chip,清掉 timer
-        if (jumpDownIdleTimerRef.current !== null) {
-          window.clearTimeout(jumpDownIdleTimerRef.current);
-          jumpDownIdleTimerRef.current = null;
-        }
-        setShowJumpDown((cur) => (cur ? false : cur));
-      } else if (delta > SCROLL_DIRECTION_DEAD_ZONE_PX) {
-        // 向下滚 + 未到底:显示 chip,reset idle timer
-        setShowJumpDown((cur) => (cur ? cur : true));
-        if (jumpDownIdleTimerRef.current !== null) {
-          window.clearTimeout(jumpDownIdleTimerRef.current);
-        }
-        jumpDownIdleTimerRef.current = window.setTimeout(() => {
-          jumpDownIdleTimerRef.current = null;
-          setShowJumpDown(false);
-        }, JUMP_DOWN_IDLE_MS);
-      } else if (delta < -SCROLL_DIRECTION_DEAD_ZONE_PX) {
-        // 向上滚:立即隐藏 chip(用户改变方向了,跳底意图消失)
-        if (jumpDownIdleTimerRef.current !== null) {
-          window.clearTimeout(jumpDownIdleTimerRef.current);
-          jumpDownIdleTimerRef.current = null;
-        }
-        setShowJumpDown((cur) => (cur ? false : cur));
-      }
+      updateJumpDown(delta, effectiveNearBottom);
 
       // render-window-bidirectional 要点 5: 向下扩窗。
       // 用户向下滚动接近当前窗口下缘时，扩 anchoredForwardItems 纳入更多 item。
@@ -6039,6 +6063,7 @@ export function MessageStream({
     prevScrollTopAtLoadRef.current = el.scrollTop;
     onLoadMore();
   }, [
+    updateJumpDown,
     onLoadMore,
     isLoadingMore,
     hasMoreMessages,
@@ -6056,6 +6081,7 @@ export function MessageStream({
     setAnchoredForwardItems,
     sessionId,
     unpinAutoFollowForUserUpIntent,
+    clearChipJumpSuppression,
   ]);
 
   // 渲染窗口下移到 render-item 轴后,U2 "末尾窗口全是 orphan tool_result"
@@ -6313,7 +6339,7 @@ export function MessageStream({
     previousLocalFileRefsRef.current = localFileRefs;
   }, [localFileRefs]);
 
-  // 伙伴聊天的工作过程与回复正文同列：只占头像宽度，不重复画脸。memo 住以保持
+  // 伙伴聊天的工作过程、成果与回复正文同列：只占头像宽度，不重复画脸。memo 住以保持
   // WorkGroupRenderItemView 的 memo 比较成立。
   const botReplyColumnSpacer = useMemo(
     () =>
@@ -6323,6 +6349,14 @@ export function MessageStream({
         </span>
       ) : undefined,
     [assistantAvatar, simplifiedBotConversation],
+  );
+  const renderBotArtifacts = useCallback(
+    (content: ReactNode, renderItemKey?: string) => (
+      <div data-render-item-key={renderItemKey}>
+        {withAssistantAvatar(botReplyColumnSpacer, content)}
+      </div>
+    ),
+    [botReplyColumnSpacer],
   );
   const workGroupRenderContext = useMemo<WorkGroupRenderContext>(
     () => ({
@@ -6464,7 +6498,7 @@ export function MessageStream({
   return (
     <ChatSessionFileProvider value={sessionFileValue}>
       <GhostFulfillmentContext.Provider value={ghostCallsByUserTurn}>
-        <ImageGalleryContext.Provider value={sessionImageSrcs}>
+        <>
           <div className="relative h-full w-full">
             {/* chat-text-quote:选中消息文字 → 浮出"添加到对话"按钮(portal 到 body)。
           绑定本流的滚动容器:协同模式多流并存时,选区归属按各自容器判定。 */}
@@ -6521,7 +6555,8 @@ export function MessageStream({
                   disabled: shareSelectionActive,
                   // Refresh ownership before virtualization mutates the DOM.
                   onProgrammaticScroll: () => handleScroll(),
-                }}>{messageViewport => <div
+                }}>{(messageViewport) => (
+                    <div
                   ref={itemsRef}
                   data-share-selection-active={shareSelectionActive ? '' : undefined}
                   className={cn(
@@ -6537,15 +6572,25 @@ export function MessageStream({
                     'transition-[padding] duration-[var(--motion-base)] ease-[var(--motion-ease-move)] motion-reduce:transition-none',
                   )}
                 >
-                  {visibleRenderItems.map((item, itemIndex) => {
+                  {visibleRenderItems.map((item, itemIndex) => (
+                        <AttachmentCollectionContext.Provider
+                          key={item.key}
+                          value={messageAttachmentCollections.get(item.key) ?? null}
+                        >
+                          <ImageGalleryContext.Provider
+                            value={messageImageCollections.get(item.key) ?? null}
+                          >
+                            {(() => {
                     if (!messageViewport.shouldMount(viewportEntries[itemIndex])) {
-                      return <div key={item.key} data-render-item-key={item.key}
+                      return (
+                                  <div key={item.key} data-render-item-key={item.key}
                         data-message-client-id={item.type === 'message' ? item.message.clientId : undefined}
                         // Previous-question navigation must still find offscreen user rows.
                         data-user-msg-id={item.type === 'message' && item.message.role === 'user'
                           && !item.message.isSyntheticTrigger ? item.message.clientId : undefined}
                         data-message-placeholder="" aria-hidden="true"
-                        style={{ height: messageViewport.placeholderHeight(item.key), flexShrink: 0 }} />;
+                        style={{ height: messageViewport.placeholderHeight(item.key), flexShrink: 0 }} />
+                                );
                     }
                     if (item.type === 'fork_origin') {
                       return (
@@ -6593,6 +6638,7 @@ export function MessageStream({
                         <GeneratedFilesCard
                           key={item.key}
                           renderItemKey={item.key}
+                          renderBotArtifacts={botReplyColumnSpacer ? renderBotArtifacts : undefined}
                           files={item.files}
                           turnStartMs={item.turnStartMs}
                           turnEndMs={item.turnEndMs}
@@ -6843,9 +6889,15 @@ export function MessageStream({
                         {messageNode}
                       </div>
                     );
-                  })}
-                </div>}</MessageViewport>
-                {footer ? <div className="mt-3.5" data-message-stream-footer>{footer}</div> : null}
+                  })()}
+                          </ImageGalleryContext.Provider>
+                        </AttachmentCollectionContext.Provider>
+                      ))}
+                </div>
+                  )}</MessageViewport>
+                {footer ? (
+                  <div className="mt-3.5" data-message-stream-footer>{footer}</div>
+                ) : null}
               </div>
             </div>
 
@@ -6901,7 +6953,7 @@ export function MessageStream({
                 chipSlot,
               )}
           </div>
-        </ImageGalleryContext.Provider>
+        </>
       </GhostFulfillmentContext.Provider>
     </ChatSessionFileProvider>
   );

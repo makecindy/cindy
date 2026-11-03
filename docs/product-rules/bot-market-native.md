@@ -26,7 +26,7 @@
 
 ## 文件责任与验证
 
-`main/bot-import/nativePackage.ts` 负责受信内置包解析与目录投影；`host.ts`、`transfer.ts` 沿用唯一导入请求与恢复；Desktop shared/preload 提供最小 typed IPC；`renderer/features/bots/BotMarketDialog.tsx` 实现列表/详情并沿原伙伴导航和删除确认。`resources/bot-packages` 只内置十包 0.5.1（工程交付、代码审计、产品巡检、选题策划、研究信号、视频剪辑、原型开发、投放监控、搜索广告复盘、游戏美术）。已从目录移除的包，已安装的伙伴按原回执照常使用与删除，目录不再列出它。旧版本构建源保存在设计资料目录，不随仓库分发。
+`main/bot-import/nativePackage.ts` 负责受信内置包解析与目录投影；`host.ts`、`transfer.ts` 沿用唯一导入请求与恢复；Desktop shared/preload 提供最小 typed IPC；`renderer/features/bots/BotMarketDialog.tsx` 实现列表/详情并沿原伙伴导航和删除确认。`resources/bot-packages` 只内置十包 0.5.2（工程交付、代码审计、产品巡检、选题策划、研究信号、视频剪辑、原型开发、投放监控、搜索广告复盘、游戏美术）。十语文案改变 manifest hash，随包版本同步递增；旧 0.5.1 的未完成导入继续使用原回执和持久快照，不覆盖已安装伙伴。已从目录移除的包，已安装的伙伴按原回执照常使用与删除，目录不再列出它。旧版本构建源保存在设计资料目录，不随仓库分发。
 
 每个内置包是离线编译器产出的「客户端发布版」，只含客户端会读的文件：`manifest.json`（紧凑 JSON，`integrity.files` 只列随包文件，例行任务不带 `sourcePaths`）、`assets/avatar.webp`、`knowledge/method.md` 和 `skills/<slug>/` 下各技能的全部文件（共 10 个文件）。身份提示读 manifest 里的 `profile.identitySource`，署名、来源、适配与行为评估等审计记录不随包进入仓库，留在设计资料目录的完整包里。`packageHash` 是 manifest 规范化 JSON 的哈希，与缩进、键序无关；发布版与完整包的 manifest 不同，所以哈希也不同。十个包合计约 409 KB（单文件均小于 100 KB），逐字节核对见 `nativePackage.test`。头像进入伙伴后沿既有路径：`avatarImageBase64` → `decodeBotAvatarImage`（PNG/JPEG/WebP 白名单）→ `toSdrAvatarImage`（SDR 原样保留）→ 托管媒体（`.webp`）；列表与详情的 `<img>`、云端头像上传（oss avatar 场景允许 webp）、通知头像（sharp 转 JPEG）和手机缩略图（本就是 WebP）都接受 WebP。
 

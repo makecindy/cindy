@@ -323,6 +323,62 @@ describe('subscriptionGateway owner boundary', () => {
 
 const TURN_DATA = { sessionId: 's1', agent: 'claude-code' };
 
+// Unit regression: async discovery must preserve ordered delivery without a
+// synchronous scan, and must not reuse another owner's pending discovery.
+// Existing fan-out tests only exercise synchronous discovery / wake boundaries.
+describe('asynchronous notification discovery', () => {
+  it('shares an in-flight scan, delivers in order and refreshes the next burst', async () => {
+    let resolve!: (ghosts: InstalledGhost[]) => void;
+    const pending = new Promise<InstalledGhost[]>((done) => { resolve = done; });
+    const listGhosts = vi.fn(() => { throw new Error('synchronous scan'); });
+    const listGhostsAsync = vi.fn(() => pending);
+    const subscriber = ghost('a', { topics: ['turn'] });
+    const { gw, sent, running } = makeGateway({ listGhosts, listGhostsAsync });
+    running.add('a');
+    gw.publish('turn', 'did-turn-start', TURN_DATA);
+    gw.publish('turn', 'did-turn-end', { ...TURN_DATA, durationMs: 5, endReason: 'completed' });
+    expect(sent).toEqual([]);
+    expect(listGhostsAsync).toHaveBeenCalledOnce();
+    resolve([subscriber]);
+    await vi.waitFor(() => expect(sent.map(({ payload }) => payload.name)).toEqual(['did-turn-start', 'did-turn-end']));
+    gw.publish('turn', 'did-turn-start', TURN_DATA);
+    await vi.waitFor(() => expect(sent).toHaveLength(3));
+    expect(listGhostsAsync).toHaveBeenCalledTimes(2);
+    expect(listGhosts).not.toHaveBeenCalled();
+  });
+
+  it('starts fresh discovery after owner changes while an old scan is pending', async () => {
+    let owner = 1;
+    const releases: Array<(ghosts: InstalledGhost[]) => void> = [];
+    const { gw, sent, running } = makeGateway({
+      listGhostsAsync: () => new Promise((resolve) => { releases.push(resolve); }),
+      ownerScope: { capture: () => owner, isCurrent: (stamp) => stamp === owner, isStable: () => true },
+    });
+    running.add('a');
+    gw.publish('turn', 'did-turn-start', { ...TURN_DATA, sessionId: 'old' });
+    owner++;
+    gw.publish('turn', 'did-turn-start', { ...TURN_DATA, sessionId: 'new' });
+    expect(releases).toHaveLength(2);
+    releases[0]!([ghost('a', { topics: ['turn'] })]);
+    releases[1]!([ghost('a', { topics: ['turn'] })]);
+    await vi.waitFor(() => expect(sent).toHaveLength(1));
+    expect(sent[0]!.payload).toMatchObject({ data: { sessionId: 'new' } });
+  });
+
+  it('does not deliver when the subscriber was disabled during discovery', async () => {
+    const subscriber = ghost('a', { topics: ['turn'] });
+    const { gw, sent, running } = makeGateway({
+      listGhostsAsync: async () => [subscriber],
+      findGhostForDelivery: () => ({ ...subscriber, enabled: false }),
+    });
+    running.add('a');
+    gw.publish('turn', 'did-turn-start', TURN_DATA);
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(sent).toEqual([]);
+  });
+});
+
 describe('did- 旁听扇出', () => {
   it('does not deliver an old buffered event after its physical key has been reused', async () => {
     let release!: () => void;
@@ -1550,5 +1606,37 @@ describe('control points', () => {
     const allowed = gw.screenControlPoint(point, data, { pluginId: 'p1', onFailure: 'allow' });
     await vi.advanceTimersByTimeAsync(30_000 + 10);
     expect(await allowed).toEqual({ action: 'allow' });
+  });
+
+  // Rule (2026-10-31): only the new-task point may pick a model; the route is reduced to the four
+  // known fields before Main validates it, and a route sent to a run point is just "no objection".
+  it('returns a sanitized route only at the new-task point', async () => {
+    const start = 'will-start-task' as const;
+    const startData = { modelId: 'auto', text: 'fix the login bug', attachmentCount: 0, route: { agentKind: 'codex' as const, model: 'm1', providerId: 'p' } };
+    const { gw, sent, running } = makeGateway({
+      listGhosts: () => [{ ...ghost('r1', { hooks: [start, point] }), approvedControlPoints: [start, point] }],
+    });
+    running.add('r1');
+    const verdict = (index: number, route: unknown) => gw.handleVerdict('r1', {
+      type: 'event-verdict', hookId: (sent[index].payload as { hookId: string }).hookId, action: 'route', reason: 'code', route,
+    });
+
+    const routed = gw.screenControlPoint(start, startData, { pluginId: 'r1', onFailure: 'block' });
+    await vi.advanceTimersByTimeAsync(0);
+    verdict(0, { agentKind: 'cc', model: 'opus', providerId: 'anthropic', effort: 'high', agentDeviceId: 'share:fixture', endpoint: 'https://evil' });
+    expect(await routed).toEqual({
+      action: 'route', ghostId: 'r1', ghostName: '意识r1', reason: 'code',
+      route: { agentKind: 'cc', model: 'opus', providerId: 'anthropic', effort: 'high', agentDeviceId: 'share:fixture' },
+    });
+
+    const malformed = gw.screenControlPoint(start, startData, { pluginId: 'r1', onFailure: 'block' });
+    await vi.advanceTimersByTimeAsync(0);
+    verdict(1, { agentKind: 'gpt', model: 'opus', providerId: 'anthropic' });
+    expect(await malformed).toEqual({ action: 'allow' });
+
+    const runPoint = gw.screenControlPoint(point, data, { pluginId: 'r1', onFailure: 'block' });
+    await vi.advanceTimersByTimeAsync(0);
+    verdict(2, { agentKind: 'cc', model: 'opus', providerId: 'anthropic' });
+    expect(await runPoint).toEqual({ action: 'allow' });
   });
 });
