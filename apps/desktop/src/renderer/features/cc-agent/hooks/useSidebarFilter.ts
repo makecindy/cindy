@@ -6,6 +6,7 @@
  *   - projects : 'all' | string[]                 → 客户端 render 阶段过滤(含对话哨兵)
  *   - vendor   : 'all' | 'cc' | 'codex'           → 客户端 render 阶段过滤
  *   - lastActivity : 'all' | '1d' | ...           → 客户端 render 阶段过滤
+ *   - hideAutomation : boolean                   → 客户端 render 阶段过滤（隐藏自动化生成的任务记录）
  *   - groupBy  : 'project' | 'flat'               → 客户端 render 阶段切换主列表分组
  *   - sortBy   : 'recency' | 'created' | 'priority'           → 客户端 render 阶段切换任务排序
  *   - projectOrder : 'activity' | 'custom'        → 按项目分组时的项目行顺序
@@ -17,6 +18,7 @@
  *   - localStorage key `cc-agent.sidebar.filter.vendor`
  *   - localStorage key `cc-agent.sidebar.filter.groupBy`
  *   - localStorage key `cc-agent.sidebar.filter.lastActivity`
+ *   - localStorage key `cc-agent.sidebar.filter.hideAutomation`
  *   - localStorage key `cc-agent.sidebar.filter.sortBy`
  *   - localStorage key `cc-agent.sidebar.filter.projectOrder`
  *   - owner-scoped localStorage key derived from `cc-agent.sidebar.filter.manualProjectOrder`
@@ -68,6 +70,7 @@ import {
   loadGroupDialogue,
   loadGroupDevice,
   loadLastActivity,
+  loadHideAutomation,
   loadSortBy,
   loadProjectOrder,
   loadManualProjectOrder,
@@ -81,6 +84,7 @@ import {
   persistGroupDialogue,
   persistGroupDevice,
   persistLastActivity,
+  persistHideAutomation,
   persistSortBy,
   persistProjectOrder,
   persistManualProjectOrder,
@@ -96,6 +100,7 @@ import {
   type FilterVendor,
   type FilterGroupBy,
   type FilterLastActivity,
+  type FilterHideAutomation,
   type FilterSortBy,
   type FilterProjectOrder,
 } from './helpers/sidebarFilterCore';
@@ -106,6 +111,7 @@ export type {
   FilterVendor,
   FilterGroupBy,
   FilterLastActivity,
+  FilterHideAutomation,
   FilterSortBy,
   FilterProjectOrder,
 } from './helpers/sidebarFilterCore';
@@ -116,6 +122,7 @@ export {
   VENDOR_KEY,
   GROUP_BY_KEY,
   LAST_ACTIVITY_KEY,
+  HIDE_AUTOMATION_KEY,
   SORT_BY_KEY,
   PROJECT_ORDER_KEY,
   TASK_INFO_KEY,
@@ -143,6 +150,8 @@ export interface UseSidebarFilterReturn {
   vendor: FilterVendor;
   /** 最近活跃范围筛选。默认 'all'。 */
   lastActivity: FilterLastActivity;
+  /** 自动化记录筛选。默认 false；true = 侧栏隐藏自动化生成的任务记录（不影响置顶区）。 */
+  hideAutomation: FilterHideAutomation;
   /** Sidebar 主列表分组方式(D 期):'project' = 按项目分组;'flat' = 全平铺。 */
   groupBy: FilterGroupBy;
   /** 「对话归为一组」开关(D 期):true = 无项目任务收进「对话」组;默认 false 散排。 */
@@ -175,6 +184,8 @@ export interface UseSidebarFilterReturn {
   setVendor: (v: FilterVendor) => void;
   /** 设置最近活跃范围，持久化到 localStorage。 */
   setLastActivity: (lastActivity: FilterLastActivity) => void;
+  /** 设置自动化记录筛选，持久化到 localStorage。 */
+  setHideAutomation: (hideAutomation: FilterHideAutomation) => void;
   /** 设置主列表分组方式，持久化到 localStorage。 */
   setGroupBy: (groupBy: FilterGroupBy) => void;
   /** 设置「对话归为一组」，持久化到 localStorage。 */
@@ -266,6 +277,9 @@ export function useSidebarFilter(
   const [vendor, setVendorState] = useState<FilterVendor>(() => loadVendor());
   const [lastActivity, setLastActivityState] = useState<FilterLastActivity>(() =>
     loadLastActivity(),
+  );
+  const [hideAutomation, setHideAutomationState] = useState<FilterHideAutomation>(() =>
+    loadHideAutomation(),
   );
   const [groupBy, setGroupByState] = useState<FilterGroupBy>(() => loadGroupBy());
   const [groupDialogue, setGroupDialogueState] = useState<boolean>(() => loadGroupDialogue());
@@ -530,6 +544,11 @@ export function useSidebarFilter(
     persistLastActivity(next);
   }, []);
 
+  const setHideAutomation = useCallback((next: FilterHideAutomation) => {
+    setHideAutomationState(next);
+    persistHideAutomation(next);
+  }, []);
+
   const setGroupBy = useCallback((next: FilterGroupBy) => {
     setGroupByState(next);
     persistGroupBy(next);
@@ -567,6 +586,8 @@ export function useSidebarFilter(
     persistVendor('all');
     setLastActivityState('all');
     persistLastActivity('all');
+    setHideAutomationState(false);
+    persistHideAutomation(false);
   }, [ownerId]);
 
   const setManualProjectOrder = useCallback(
@@ -641,7 +662,7 @@ export function useSidebarFilter(
   );
 
   const isSessionContentFiltered =
-    status !== 'active' || projects !== 'all' || vendor !== 'all' || lastActivity !== 'all' || creators !== 'all';
+    status !== 'active' || projects !== 'all' || vendor !== 'all' || lastActivity !== 'all' || creators !== 'all' || hideAutomation;
 
   const isFilterActive = isSessionContentFiltered || groupBy !== 'project' || sortBy !== 'recency';
 
@@ -658,6 +679,7 @@ export function useSidebarFilter(
     isSessionContentFiltered,
     vendor,
     lastActivity,
+    hideAutomation,
     groupBy,
     groupDialogue,
     groupDevice,
@@ -672,6 +694,7 @@ export function useSidebarFilter(
     gc,
     setVendor,
     setLastActivity,
+    setHideAutomation,
     setGroupBy,
     setGroupDialogue,
     setGroupDevice,

@@ -11,7 +11,7 @@ import { getSessionListActivityAt } from '@cindy/maker-shared/session-activity';
 
 import type { Session, AgentKind } from '@/lib/ccAgent.types';
 
-import { extractDisplayName, normalizeWorkingDir } from './projectGrouping';
+import { extractDisplayName, normalizeWorkingDir, projectIdentityKeyForSession, projectKeyComparisonKey } from './projectGrouping';
 
 /**
  * legacy automation 会话的标题前缀。**非 i18n 串**:它是旧数据唯一的来源标记
@@ -28,6 +28,21 @@ export function isScheduledSession(s: Session): boolean {
 
 export function isAutomationGeneratedSession(s: Session): boolean {
   return s.source === 'scheduler' || isScheduledSession(s);
+}
+
+/** Content filters do not hide pinned tasks or projects. */
+export function matchesSidebarAutomationFilter(
+  session: Session,
+  pinnedProjectKeys: ReadonlySet<string>,
+  localPlatform: string,
+): boolean {
+  if (!isAutomationGeneratedSession(session) || session.pinnedAt != null) return true;
+  if (session.workspaceKind === 'dialogue') return false;
+  const projectKey = projectIdentityKeyForSession(session);
+  const comparisonKey = projectKeyComparisonKey(projectKey, localPlatform);
+  return comparisonKey != null && Array.from(pinnedProjectKeys).some(
+    (key) => projectKeyComparisonKey(key, localPlatform) === comparisonKey,
+  );
 }
 
 /** 从 `[Schedule] my-cron-job` 切掉前缀；不匹配时返回原 title 保兜底显示。 */

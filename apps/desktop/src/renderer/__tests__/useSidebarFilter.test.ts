@@ -32,12 +32,14 @@ import {
   MANUAL_PROJECT_ORDER_KEY,
   DEVICE_GROUP_COLLAPSED_KEY,
   loadDeviceGroupCollapsedKeys,
+  HIDE_AUTOMATION_KEY,
   DIALOGUE_GROUP_COLLAPSED_KEY,
   DIALOGUE_GROUP_ALL_KEY,
   loadStatus,
   loadProjects,
   loadGroupBy,
   loadLastActivity,
+  loadHideAutomation,
   loadSortBy,
   loadTaskInfoFields,
   loadManualProjectOrder,
@@ -49,6 +51,7 @@ import {
   persistProjects,
   persistGroupBy,
   persistLastActivity,
+  persistHideAutomation,
   persistSortBy,
   persistProjectOrder,
   persistTaskInfoFields,
@@ -247,6 +250,32 @@ describe('loadLastActivity', () => {
   it("returns 'all' when localStorage is unavailable", () => {
     uninstallLocalStorage();
     expect(loadLastActivity()).toBe('all');
+  });
+});
+
+describe('loadHideAutomation', () => {
+  beforeEach(() => installMemoryLocalStorage());
+  afterEach(() => uninstallLocalStorage());
+
+  it('defaults to false when storage is empty', () => {
+    expect(loadHideAutomation()).toBe(false);
+  });
+
+  it('returns persisted boolean strings', () => {
+    localStorage.setItem(HIDE_AUTOMATION_KEY, 'true');
+    expect(loadHideAutomation()).toBe(true);
+    localStorage.setItem(HIDE_AUTOMATION_KEY, 'false');
+    expect(loadHideAutomation()).toBe(false);
+  });
+
+  it('falls back to false on illegal value', () => {
+    localStorage.setItem(HIDE_AUTOMATION_KEY, 'yes');
+    expect(loadHideAutomation()).toBe(false);
+  });
+
+  it('returns false when localStorage is unavailable', () => {
+    uninstallLocalStorage();
+    expect(loadHideAutomation()).toBe(false);
   });
 });
 
@@ -544,6 +573,15 @@ describe('persist round-trip', () => {
     expect(loadLastActivity()).toBe('7d');
     persistLastActivity('all');
     expect(loadLastActivity()).toBe('all');
+  });
+
+  it('persistHideAutomation → loadHideAutomation returns the same value', () => {
+    persistHideAutomation(true);
+    expect(loadHideAutomation()).toBe(true);
+    expect(localStorage.getItem(HIDE_AUTOMATION_KEY)).toBe('true');
+    persistHideAutomation(false);
+    expect(loadHideAutomation()).toBe(false);
+    expect(localStorage.getItem(HIDE_AUTOMATION_KEY)).toBe('false');
   });
 
   it('persistSortBy → loadSortBy returns the same value', () => {
