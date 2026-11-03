@@ -2423,9 +2423,12 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
               const prepared = await deps.workDir?.prepare({ groupId: s.room.id, projectDir: settings.projectDir });
               if (!prepared?.ok) throw new Error('WORKDIR_UNAVAILABLE');
               run.workspace = prepared;
-              settings.plans[key] = prepared; settings.plans[run.plan.id] = prepared;
               if (!current()) throw new Error('OWNER_CHANGED');
-              workspaces().save(s.room.id, settings);
+              // Preparation yields: another lane may settle or save settings in
+              // the meantime. Add this workspace to the latest persisted record.
+              const latestSettings = workspaces().read(s.room.id) ?? settings;
+              latestSettings.plans[key] = prepared; latestSettings.plans[run.plan.id] = prepared;
+              workspaces().save(s.room.id, latestSettings);
             }
             run.beforeFiles = await deps.workDir?.snapshot(run.workspace.workDir);
           }

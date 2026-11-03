@@ -63,7 +63,7 @@ interface FakeMessage {
 }
 interface FakeExecution {
   id: string; conversation_id: string; source_message_id: string; bot_id: string; requester_id: string;
-  context_seq: string; attachment_after_seq?: string; epoch: number; status: string; access_mode: 'chat'; access_revision: number;
+  context_seq: string; attachment_after_seq?: string; epoch: number; status: string; access_mode: 'chat' | 'owner'; access_revision: number;
   plan_id?: string; plan_step?: number;
 }
 
@@ -501,6 +501,42 @@ describe('Chat Server Thread context reaches the Agent input', () => {
     await settle('nova', '第一位回答');
     await vi.advanceTimersByTimeAsync(2000);
     expect(inputs('pico')[0].attachments?.map(a => a.id)).toEqual([picture.content[1].mediaId]);
+  });
+
+  // Review regression: plan preparation yielded with stale settings, then erased
+  // another lane's completed media progress. Exercise dispatch/settlement (unit).
+  it('keeps attachment progress settled while another lane prepares its workspace', async () => {
+    trigger(post('@Nova 看图', { mentions: [bots[0].id], media: ['board.png'] }));
+    const request = post('@Pico 准备分工', { mentions: [bots[1].id] });
+    const planId = uuid(++ids);
+    const plan = { id: planId, kind: 'work', source_message_id: request.id, request_text: '准备分工',
+      steps: [{ position: 0, botId: bots[1].id, botName: 'Pico', task: '准备', status: 'running' }] };
+    const prepared = { ok: true as const, workDir: '/test/group-work', branch: null, ownerSessionId: null };
+    let finishPrepare!: (value: typeof prepared) => void;
+    const prepare = vi.fn(() => new Promise<typeof prepared>(resolve => { finishPrepare = resolve; }));
+    deps.workDir = { prepare,
+      snapshot: vi.fn(async () => new Map()), changedFiles: vi.fn(async () => []), trashGroupFolder: vi.fn(async () => {}) };
+    fixture.handle.mockImplementation((route, method, body, actor) => route.includes('/plans?ids=') ? { body: [plan] }
+      : route.endsWith('/members') ? { body: [
+        { id: ownerId, kind: 'human', state: 'joined', ownerActorId: ownerId },
+        ...bots.map(bot => ({ id: bot.id, kind: 'bot', state: 'joined', ownerActorId: ownerId, accessRevision: 1 })),
+      ] } : handle(route, method, body, actor));
+    trigger(request, { plan_id: planId, plan_step: 0, access_mode: 'owner' });
+    await vi.advanceTimersByTimeAsync(2000);
+    expect(inputs('nova')[0].attachments).toHaveLength(1);
+    expect(prepare).toHaveBeenCalledOnce();
+    expect(inputs('pico')).toHaveLength(0);
+    await settle('nova', '看到了。');
+    const progress = structuredClone(fixture.workspaces.get(roomId));
+    expect(progress).toMatchObject({ attachmentAfter: { 'lane-nova': '1' } });
+    finishPrepare(prepared);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(inputs('pico')).toHaveLength(1);
+    expect(fixture.workspaces.get(roomId)).toMatchObject({ attachmentAfter: { 'lane-nova': '1' },
+      plans: { [planId]: prepared } });
+    trigger(post('@Nova 回复1', { mentions: [bots[0].id] }));
+    await vi.advanceTimersByTimeAsync(2000);
+    expect(inputs('nova')[1].attachments).toEqual([]);
   });
 
   it('keeps a main-group request in the main lane without Thread replies', async () => {
