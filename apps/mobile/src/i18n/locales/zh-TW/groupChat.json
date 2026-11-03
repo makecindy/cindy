@@ -1,4 +1,7 @@
 {
+  "progress": {
+    "stop": "停止"
+  },
   "title": "群聊",
   "memberSeparator": "、",
   "memberCount_one": "{{count}} 位成員",
@@ -186,9 +189,16 @@
     "allDone": "都做完了"
   },
   "speaking": {
+    "queued": "排隊中",
     "stopping": "正在停止…",
     "planning": "正在安排…",
     "step": "正在做…"
+  },
+  "work": {
+    "queued": "排隊 {{count}}",
+    "active": "進行中 {{count}}",
+    "expand": "展開夥伴動態",
+    "collapse": "收起夥伴動態"
   },
   "task": {
     "state": {
@@ -207,6 +217,17 @@
     "untitled": "附件"
   },
   "settings": {
+    "notifications": {
+      "title": "訊息通知",
+      "all": "所有訊息",
+      "mentions": "僅 @我",
+      "none": "關閉通知",
+      "allHint": "群聊訊息和已關注話題的新回覆都會提醒",
+      "mentionsHint": "有人 @你或 @所有人時提醒，分工待處理仍會提醒",
+      "noneHint": "關閉本群所有系統提醒，未讀訊息仍會保留",
+      "saving": "正在儲存…",
+      "saveFailed": "未能儲存通知設定，請重試"
+    },
     "open": "群聊設定",
     "title": "群聊設定",
     "members": "成員",

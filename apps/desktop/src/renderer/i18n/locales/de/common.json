@@ -1008,7 +1008,7 @@
     "saveFileName": "Screenshot",
     "saveFailed": "Screenshot konnte nicht gespeichert werden",
     "prompt": {
-      "translate": "Erkenne den Text in diesem Screenshot und übersetze ihn ins Englische. Behalte die ursprünglichen Absätze und Listen bei und gib nur die Übersetzung aus. Wenn der Text bereits auf Englisch ist, übersetze ihn ins vereinfachte Chinesisch.",
+      "translate": "Erkenne die Sprachen im Screenshot automatisch und übersetze den Text ins {{language}}. Behalte Absätze, Listen und Tabellen bei. Inhalte in der Zielsprache bleiben unverändert; bei gemischten Sprachen werden nur die anderen Sprachen übersetzt. Wenn der gesamte Text bereits in der Zielsprache ist, weise kurz darauf hin und wechsle nicht zu einer anderen Sprache. Gib ansonsten nur die Übersetzung aus.",
       "explain": "Erkläre, was dieser Screenshot zeigt. Falls es ein Fehler ist, erkläre die Ursache und wie er sich beheben lässt. Falls es ein Diagramm, Code oder eine Benutzeroberfläche ist, erkläre den Inhalt und die wichtigsten Punkte.",
       "extract": "Extrahiere den Text aus diesem Screenshot exakt wie geschrieben und behalte die ursprünglichen Zeilenumbrüche, Absätze und Listen bei. Gib Tabellen als Markdown-Tabellen aus. Gib nur den extrahierten Text aus."
     },
@@ -1056,6 +1056,12 @@
       "edit": "Bearbeiten",
       "autoUnavailable": "Automatisches Scrollen gestoppt. Du kannst manuell in der Auswahl scrollen.",
       "autoPermission": "Automatisches Scrollen erfordert die Berechtigung für Bedienungshilfen. Erlaube Cindy in den Systemeinstellungen und versuche es erneut oder scrolle manuell in der Auswahl."
+    },
+    "translation": {
+      "action": "Ins {{language}} übersetzen",
+      "targetLanguage": "Zielsprache",
+      "followUi": "Sprache der Oberfläche verwenden",
+      "saveFailed": "Die Sprachauswahl konnte nicht gespeichert werden. Bitte erneut auswählen."
     }
   },
   "privacyExit": {
@@ -3631,6 +3637,8 @@
         "simpleSubtitle": "Mehrere Modelle, Abrechnung über ein Konto."
       },
       "custom": {
+        "nameSearchUnavailable": "Dieser Anbieter ist nicht mehr verfügbar. Fahre mit einem benutzerdefinierten Endpunkt fort oder suche erneut.",
+        "nameSearchHint": "Du kannst diesen Namen beibehalten und mit einem benutzerdefinierten Endpunkt fortfahren.",
         "tag": "Benutzerdefiniert",
         "editAria": "Verbindungseinstellungen bearbeiten",
         "deleteAria": "Löschen",
@@ -10891,7 +10899,18 @@
           "accessToolsTitle": "Tools und Informationen",
           "accessToolsHint": "Kann die vorhandenen Tools von {{name}} und deine privaten Informationen nutzen. Ergebnisse sind für alle sichtbar. Bisherige Freigaberegeln gelten weiter; ein Widerruf des Zugriffs macht bereits ausgeführte Aktionen nicht rückgängig.",
           "capabilitiesRow": "Tools und Zugriffsrechte von {{name}}",
-          "accessMenu": "Berechtigungen in dieser Gruppe"
+          "accessMenu": "Berechtigungen in dieser Gruppe",
+          "notifications": {
+            "title": "Nachrichtenbenachrichtigungen",
+            "all": "Alle Nachrichten",
+            "mentions": "Nur Erwähnungen",
+            "none": "Aus",
+            "allHint": "Erhalte Benachrichtigungen über Gruppennachrichten und neue Antworten in abonnierten Themen.",
+            "mentionsHint": "Erhalte Benachrichtigungen, wenn du erwähnt wirst, auch bei @alle. Aktualisierungen zur Arbeitsteilung werden weiterhin gemeldet.",
+            "noneHint": "Deaktiviere alle Systembenachrichtigungen für diese Gruppe. Ungelesene Nachrichten bleiben erhalten.",
+            "saving": "Wird gespeichert…",
+            "saveFailed": "Benachrichtigungen konnten nicht gespeichert werden. Versuche es erneut."
+          }
         }
       },
       "lifecycle": {
@@ -18839,5 +18858,35 @@
     "unavailable": "Für diesen Build ist kein Upload-Ziel für Berichte festgelegt. Öffne die lokalen Dateien, um sie mit dem Support zu teilen.",
     "consent": "Akzeptiere vor dem Senden die Datenschutzerklärung in den Einstellungen. Deine lokalen Dateien bleiben erhalten.",
     "failed": "Der Vorgang wurde nicht abgeschlossen. Versuch es erneut oder öffne die lokalen Dateien."
+  },
+  "attachmentPreview": {
+    "fitWidth": "An Breite anpassen",
+    "fitPage": "An Seite anpassen",
+    "pageNumber": "Seitenzahl",
+    "more": "Weitere Aktionen",
+    "retry": "Erneut versuchen",
+    "image": "Bild",
+    "video": "Video",
+    "file": "Datei",
+    "close": "Schließen",
+    "reset": "Ansicht zurücksetzen",
+    "open": "Vorschau öffnen",
+    "zoomIn": "Vergrößern",
+    "zoomOut": "Verkleinern",
+    "fit": "An Fenster anpassen",
+    "actualSize": "Originalgröße (1:1)",
+    "save": "Original speichern",
+    "share": "Teilen",
+    "previous": "Vorheriger Anhang",
+    "next": "Nächster Anhang",
+    "password": "PDF-Passwort eingeben",
+    "find": "Im Dokument suchen",
+    "matches": "{{count}} passende Seiten",
+    "previousPage": "Vorherige Seite",
+    "nextPage": "Nächste Seite",
+    "source": "Quelltext anzeigen",
+    "rendered": "Dokument anzeigen",
+    "wrap": "Zeilenumbruch",
+    "lineNumbers": "Zeilennummern"
   }
 }

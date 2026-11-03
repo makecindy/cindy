@@ -52,7 +52,12 @@ describe('ChatVideoView inline keyboard controls', () => {
     expect(screen.queryByRole('button', { name: 'chat.lightbox.close' })).toBeNull();
 
     await user.tab();
+    const preview = screen.getByRole('button', { name: 'attachmentPreview.open' });
+    expect(document.activeElement).toBe(preview);
+    await user.tab();
     expect(document.activeElement).toBe(screen.getByRole('button', { name: 'After' }));
+    await user.tab({ shift: true });
+    expect(document.activeElement).toBe(preview);
     await user.tab({ shift: true });
     expect(document.activeElement).toBe(video);
   });

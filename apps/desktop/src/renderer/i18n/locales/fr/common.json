@@ -1025,7 +1025,7 @@
     "saveFileName": "Capture d'écran",
     "saveFailed": "Impossible d'enregistrer la capture d'écran",
     "prompt": {
-      "translate": "Reconnais le texte de cette capture d'écran et traduis-le en français. Conserve les paragraphes et les listes d'origine, et ne renvoie que la traduction. Si le texte est déjà en français, traduis-le en anglais.",
+      "translate": "Détecte automatiquement les langues de la capture et traduis le texte en {{language}}. Conserve les paragraphes, les listes et les tableaux. Laisse inchangé le contenu déjà dans la langue cible ; si plusieurs langues sont présentes, ne traduis que les autres. Si tout le texte est déjà dans la langue cible, indique-le brièvement sans choisir une autre langue. Sinon, affiche uniquement la traduction.",
       "explain": "Explique ce que montre cette capture d'écran. S'il s'agit d'une erreur, explique sa cause et comment la corriger. S'il s'agit d'un graphique, de code ou d'une interface, explique ce qu'il montre et les points clés.",
       "extract": "Extrais le texte de cette capture d'écran exactement tel qu'il est écrit, en conservant les sauts de ligne, les paragraphes et les listes d'origine. Restitue les tableaux sous forme de tableaux Markdown. Ne renvoie que le texte extrait."
     },
@@ -1073,6 +1073,12 @@
       "edit": "Modifier",
       "autoUnavailable": "Le défilement automatique s'est arrêté. Vous pouvez faire défiler manuellement dans la sélection.",
       "autoPermission": "Le défilement automatique nécessite l'autorisation Accessibilité. Autorisez Cindy dans les Réglages Système et réessayez, ou faites défiler manuellement dans la sélection."
+    },
+    "translation": {
+      "action": "Traduire en {{language}}",
+      "targetLanguage": "Langue cible",
+      "followUi": "Utiliser la langue de l’interface",
+      "saveFailed": "Impossible d’enregistrer la langue. Sélectionnez-la à nouveau."
     }
   },
   "privacyExit": {
@@ -3677,6 +3683,8 @@
         "simpleSubtitle": "Plusieurs modèles, facturés via un seul compte."
       },
       "custom": {
+        "nameSearchUnavailable": "Ce fournisseur n’est plus disponible. Continuez avec un endpoint personnalisé ou relancez la recherche.",
+        "nameSearchHint": "Vous pouvez conserver ce nom et continuer avec un endpoint personnalisé.",
         "tag": "Personnalisé",
         "editAria": "Modifier les paramètres de connexion",
         "deleteAria": "Supprimer",
@@ -10981,7 +10989,18 @@
           "accessToolsTitle": "Outils et informations",
           "accessToolsHint": "Peut utiliser les outils existants de {{name}} et vos informations privées. Les résultats sont visibles par tous. Les règles d’approbation restent applicables ; révoquer l’accès n’annule pas les actions déjà effectuées.",
           "capabilitiesRow": "Outils et accès de {{name}}",
-          "accessMenu": "Autorisations ici"
+          "accessMenu": "Autorisations ici",
+          "notifications": {
+            "title": "Notifications de messages",
+            "all": "Tous les messages",
+            "mentions": "Mentions uniquement",
+            "none": "Désactivées",
+            "allHint": "Recevez des notifications pour les messages du groupe et les nouvelles réponses dans les fils suivis.",
+            "mentionsHint": "Recevez une notification lorsque vous êtes mentionné, y compris avec @tout le monde. Les mises à jour des répartitions du travail restent signalées.",
+            "noneHint": "Désactivez toutes les alertes système de ce groupe. Les messages non lus sont conservés.",
+            "saving": "Enregistrement…",
+            "saveFailed": "Impossible d’enregistrer les notifications. Réessayez."
+          }
         },
         "replyCount_many": "{{count}} réponses",
         "reactorsUnavailable_many": "Noms indisponibles pour {{count}} autres membres"
@@ -19009,5 +19028,35 @@
     "unavailable": "Cette version ne peut pas envoyer les rapports. Ouvrez les fichiers locaux pour les transmettre à l’assistance.",
     "consent": "Acceptez la politique de confidentialité dans Paramètres avant de soumettre. Vos fichiers locaux sont préservés.",
     "failed": "L'opération n'est pas terminée. Réessayez ou ouvrez les fichiers locaux."
+  },
+  "attachmentPreview": {
+    "fitWidth": "Ajuster à la largeur",
+    "fitPage": "Ajuster à la page",
+    "pageNumber": "Numéro de page",
+    "more": "Autres actions",
+    "retry": "Réessayer",
+    "image": "Image",
+    "video": "Vidéo",
+    "file": "Fichier",
+    "close": "Fermer",
+    "reset": "Réinitialiser la vue",
+    "open": "Ouvrir l’aperçu",
+    "zoomIn": "Zoom avant",
+    "zoomOut": "Zoom arrière",
+    "fit": "Ajuster à la fenêtre",
+    "actualSize": "Taille réelle (1:1)",
+    "save": "Enregistrer l’original",
+    "share": "Partager",
+    "previous": "Pièce jointe précédente",
+    "next": "Pièce jointe suivante",
+    "password": "Saisir le mot de passe du PDF",
+    "find": "Rechercher dans le document",
+    "matches": "{{count}} pages correspondantes",
+    "previousPage": "Page précédente",
+    "nextPage": "Page suivante",
+    "source": "Voir la source",
+    "rendered": "Afficher le document",
+    "wrap": "Retour à la ligne",
+    "lineNumbers": "Numéros de ligne"
   }
 }

@@ -1025,7 +1025,7 @@
     "saveFileName": "Captura de ecrã",
     "saveFailed": "Não foi possível guardar a captura de ecrã",
     "prompt": {
-      "translate": "Reconheça o texto nesta captura de ecrã e traduza-o para inglês. Mantenha os parágrafos e as listas originais e apresente apenas a tradução. Se o texto já estiver em inglês, traduza-o para chinês simplificado.",
+      "translate": "Deteta automaticamente os idiomas na captura de ecrã e traduz o texto para {{language}}. Mantém os parágrafos, as listas e as tabelas. Preserva o conteúdo que já esteja no idioma de destino; se houver vários idiomas, traduz apenas os restantes. Se todo o texto já estiver no idioma de destino, indica-o brevemente sem o traduzir para outro idioma. Nos restantes casos, apresenta apenas a tradução.",
       "explain": "Explique o que esta captura de ecrã mostra. Se for um erro, explique a causa e como o corrigir. Se for um gráfico, código ou uma interface, explique o que mostra e os pontos principais.",
       "extract": "Extraia o texto desta captura de ecrã exatamente como está escrito, mantendo as quebras de linha, os parágrafos e as listas originais. Apresente as tabelas como tabelas Markdown. Apresente apenas o texto extraído."
     },
@@ -1073,6 +1073,12 @@
       "edit": "Editar",
       "autoUnavailable": "O deslocamento automático parou. Pode deslocar manualmente a seleção.",
       "autoPermission": "O deslocamento automático requer permissão de Acessibilidade. Autorize Cindy nas Definições do Sistema e tente novamente, ou desloque manualmente a seleção."
+    },
+    "translation": {
+      "action": "Traduzir para {{language}}",
+      "targetLanguage": "Idioma de destino",
+      "followUi": "Usar o idioma da interface",
+      "saveFailed": "Não foi possível guardar o idioma. Selecione-o novamente."
     }
   },
   "privacyExit": {
@@ -3677,6 +3683,8 @@
         "simpleSubtitle": "Vários modelos, faturados através de uma única conta."
       },
       "custom": {
+        "nameSearchUnavailable": "Este fornecedor já não está disponível. Continue com um endpoint personalizado ou pesquise novamente.",
+        "nameSearchHint": "Pode manter este nome e continuar com um endpoint personalizado.",
         "tag": "Personalizado",
         "editAria": "Editar definições da ligação",
         "deleteAria": "Eliminar",
@@ -10981,7 +10989,18 @@
           "accessToolsTitle": "Ferramentas e informações",
           "accessToolsHint": "Pode usar as ferramentas existentes de {{name}} e as suas informações privadas. Os resultados são visíveis para todos os membros. As aprovações continuam a aplicar-se; revogar o acesso não permite anular ações já concluídas.",
           "capabilitiesRow": "Ferramentas e acesso de {{name}}",
-          "accessMenu": "Permissões neste grupo"
+          "accessMenu": "Permissões neste grupo",
+          "notifications": {
+            "title": "Notificações de mensagens",
+            "all": "Todas as mensagens",
+            "mentions": "Apenas menções",
+            "none": "Desativadas",
+            "allHint": "Receba notificações de mensagens do grupo e de novas respostas nos tópicos que segue.",
+            "mentionsHint": "Receba notificações quando alguém o mencionar, incluindo @todos. As atualizações da divisão do trabalho continuam a ser notificadas.",
+            "noneHint": "Desative todos os alertas do sistema deste grupo. As mensagens não lidas são mantidas.",
+            "saving": "A guardar…",
+            "saveFailed": "Não foi possível guardar as notificações. Tente novamente."
+          }
         },
         "replyCount_many": "{{count}} respostas",
         "reactorsUnavailable_many": "Nomes indisponíveis para mais {{count}} membros"
@@ -19009,5 +19028,35 @@
     "unavailable": "Esta compilação não tem um destino para carregar relatórios. Abra os ficheiros locais para os partilhar com o apoio técnico.",
     "consent": "Aceite a política de privacidade nas Definições antes de enviar. Os seus ficheiros locais são preservados.",
     "failed": "A operação não foi concluída. Tente novamente ou abra os ficheiros locais."
+  },
+  "attachmentPreview": {
+    "fitWidth": "Ajustar à largura",
+    "fitPage": "Ajustar à página",
+    "pageNumber": "Número da página",
+    "more": "Mais ações",
+    "retry": "Tentar novamente",
+    "image": "Imagem",
+    "video": "Vídeo",
+    "file": "Ficheiro",
+    "close": "Fechar",
+    "reset": "Repor vista",
+    "open": "Abrir pré-visualização",
+    "zoomIn": "Ampliar",
+    "zoomOut": "Reduzir",
+    "fit": "Ajustar à janela",
+    "actualSize": "Tamanho real (1:1)",
+    "save": "Guardar original",
+    "share": "Partilhar",
+    "previous": "Anexo anterior",
+    "next": "Anexo seguinte",
+    "password": "Introduzir palavra-passe do PDF",
+    "find": "Pesquisar no documento",
+    "matches": "{{count}} páginas correspondentes",
+    "previousPage": "Página anterior",
+    "nextPage": "Página seguinte",
+    "source": "Ver código-fonte",
+    "rendered": "Ver documento",
+    "wrap": "Moldar linhas",
+    "lineNumbers": "Números de linha"
   }
 }

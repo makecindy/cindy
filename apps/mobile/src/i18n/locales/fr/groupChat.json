@@ -1,4 +1,13 @@
 {
+  "progress": {
+    "stop": "Arrêter"
+  },
+  "work": {
+    "queued": "En attente {{count}}",
+    "active": "En cours {{count}}",
+    "expand": "Développer l’activité des coéquipiers",
+    "collapse": "Réduire l’activité des coéquipiers"
+  },
   "title": "Conversations de groupe",
   "memberSeparator": ", ",
   "memberCount_one": "{{count}} membre",
@@ -191,6 +200,7 @@
     "eyebrow_many": "Plan · {{count}} étapes"
   },
   "speaking": {
+    "queued": "En attente",
     "stopping": "Arrêt en cours…",
     "planning": "Répartition du travail…",
     "step": "Travail en cours…"
@@ -263,7 +273,18 @@
       "unavailable": "Impossible de charger les paramètres du groupe. Réessayez."
     },
     "allowMentionAllBots": "Autoriser @tous les coéquipiers",
-    "allowMentionAllBotsHint": "Seul le propriétaire du groupe peut le modifier. Tous les coéquipiers peuvent répondre : prudence en grand groupe. Sans effet sur l’IA qui répond pour vous."
+    "allowMentionAllBotsHint": "Seul le propriétaire du groupe peut le modifier. Tous les coéquipiers peuvent répondre : prudence en grand groupe. Sans effet sur l’IA qui répond pour vous.",
+    "notifications": {
+      "title": "Notifications de messages",
+      "all": "Tous les messages",
+      "mentions": "Mentions uniquement",
+      "none": "Désactivées",
+      "allHint": "Recevez des notifications pour les messages du groupe et les nouvelles réponses dans les fils suivis.",
+      "mentionsHint": "Recevez une notification lorsque vous êtes mentionné, y compris avec @tout le monde. Les mises à jour des répartitions du travail restent signalées.",
+      "noneHint": "Désactivez toutes les alertes système de ce groupe. Les messages non lus sont conservés.",
+      "saving": "Enregistrement…",
+      "saveFailed": "Impossible d’enregistrer les notifications. Réessayez."
+    }
   },
   "errors": {
     "memberLimit": "Une conversation de groupe nécessite de 2 à 6 coéquipiers",

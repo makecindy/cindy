@@ -279,7 +279,7 @@ cindy.onHostMessage(async msg => {
         result = { content: [text('文件已下载。'), { type: 'resource_link', uri: response.library.ref, name: a.name }] };
       }
     } else if (msg.tool === 'import_file' && Array.isArray(a.cindy_handoff_files) && a.cindy_handoff_files.length) {
-      // 对话交接（0.1.123-beta 起）：只把引用和基本信息交给后端生成页面，不读取文件内容；
+      // 对话交接（0.1.122-beta 起）：只把引用和基本信息交给后端生成页面，不读取文件内容；
       // 首屏只显示名称和大小，用户点按钮后才经 upload_files 上传。
       const files = a.cindy_handoff_files.map(file => ({ ref: file?.ref, name: String(file?.name || ''), mimeType: String(file?.mimeType || ''), size: Number(file?.size) || 0 }));
       if (files.some(file => typeof file.ref !== 'string' || !file.ref.startsWith('handoff:'))) throw new InputError('交接的文件引用无效。');

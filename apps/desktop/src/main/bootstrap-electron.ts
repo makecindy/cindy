@@ -996,7 +996,7 @@ import { disposeRemoteFileBrowser } from './file-browser/remote-deps.js';
 import { registerFileBrowserDeviceOp } from './file-browser/device-op.js';
 import { registerSearchIpc } from './file-browser/search/index.js';
 import { registerVoiceInputIpc } from './voice-input/index.js';
-import { initRegionScreenshot, stopRegionScreenshot } from './region-screenshot/index.js';
+import { initRegionScreenshot, setRegionScreenshotLocale, stopRegionScreenshot } from './region-screenshot/index.js';
 import { installWindowHiddenBroadcast } from './windowHiddenBroadcast.js';
 import { getRenderWatchdogContext } from './renderWatchdogContext.js';
 import {
@@ -3187,6 +3187,7 @@ ipcMain.handle('app-menu:set-locale', (_event, locale: unknown): { ok: true } =>
   );
   setSelectionContextMenuLocale(currentApplicationMenuLocale);
   setMainLocale(currentApplicationMenuLocale);
+  setRegionScreenshotLocale(currentApplicationMenuLocale);
   if (previousLocale !== currentApplicationMenuLocale) {
     // Identity names are localized on the source host; refresh its cached views
     // and linked devices through the existing provider-change notification.
@@ -8466,10 +8467,13 @@ const registerIpcHandlers = () => {
 
     const lightboxMedia = createLightboxMediaHandlers({
       isPathAllowed,
+      realpath: (absPath) => fs.promises.realpath(absPath),
       resolveImageCacheUrl: (url) =>
         url.startsWith('cindy-media://')
           ? cindyMediaBlobStore.resolveSafe(url)
-          : imageCacheStore.resolveSafe(url),
+          : url.startsWith('xdt-video://')
+            ? videoCacheStore.resolveSafe(url)
+            : imageCacheStore.resolveSafe(url),
       // 规则 25:lightbox「发送到对话」的缓存写同样进媒体总仓(草稿语义,
       // 发送时统一由 register.ts 挂引用),与 IPC from-path/from-buffer 一致。
       cacheImageFromPath: (params) =>

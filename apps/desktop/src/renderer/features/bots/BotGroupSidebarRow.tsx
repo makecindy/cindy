@@ -18,7 +18,7 @@ import { groupTeammateStatus } from './teammateRosterStatus';
  * 别人带来的伙伴按「伙伴名 (主人昵称)」显示（与群聊页同一规则）。
  */
 import type { KeyboardEventHandler, MouseEventHandler, ReactNode } from 'react';
-import { Sparkles } from 'lucide-react';
+import { Users, Sparkles } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 
 import { cn } from '@/lib/utils';
@@ -217,6 +217,7 @@ export function BotGroupSidebarRow({
       </span>
       <span className="flex min-w-0 flex-1 flex-col gap-0.5">
         <span className="flex min-w-0 items-center gap-1.5">
+          <Users size={12} className="shrink-0 text-[var(--sidebar-list-muted)]" aria-label={t('bots.groupChat.sidebar.title')} />
           <span className="min-w-0 truncate text-14 leading-5" title={group.name}>{group.name}</span>
           {group.archived && <span className={cn('shrink-0 text-11 leading-4', mutedClass)}>{t('bots.archived')}</span>}
         </span>
