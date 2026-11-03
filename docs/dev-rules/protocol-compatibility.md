@@ -48,6 +48,28 @@ Main、Desktop 与 Mobile 的视图缓存均以墙钟或单调时钟任一先到
 回归入口为 `metadataContinuity.test.ts`、Main `providerMetadataContinuity.test.ts`、
 `deviceLinkIpc.test.ts`、`responsivenessTracker.test.ts` 与两端模型目录缓存测试。
 
+### 同账号组的新任务连续性
+
+`RemoteAgentCaps.groupContinuity: true` 是可选严格能力位，只对同账号控制端提供。
+O 在原 Fast 策略绑定之后，通过既有 `provider-group:remote` 发送 `continuity-prepare`，
+M 保存限定 O/C/组/供应商/Agent/模型的内存上下文并回 `{id, remainingMs}`；O 再把可选
+`continuity: {id, remainingMs, config}` 附在原 `pick` 成功结果。各跳从请求开始扣时，双时钟收口，
+重读/失败/业务流量不能续期。组设置和供应商权限变化发送精确 `continuity-revoke`，迟到 prepare 不得覆盖 revoke。
+
+O 不可达时，C 只向已预备 M 发 `continuity-inspect` 读实时可用性/负载，并对选中 M 发
+`continuity-admit {id, ownerDeviceId, sessionId}`。M 校验真实来源 C、自身权限/模型和原期限，
+将既收 O 的 Fast 策略绑定到新任务，之后仍走现有 Agent open。C 不传策略值或修订号。
+旧 M 缺此位时 O 不发新动作；旧 C 忽略 pick 可选字段，保持原路径。所有新动作仍受现有
+同账号 dispatch 边界保护，不进入供应商分享/共享任务访客授权；不扩大旧 task-specific 分享许可。
+候选、在途和回执数量有界；软并发保留原语义，准入临时计数只避免同时选择时低估负载。
+
+Desktop 本地 `STATUS_CHANGED/getState` 可附 `directDataDeviceIds`；路径事件再附单目标
+`dataPathChangedDeviceId`。它们由 Main 当前认证/就绪路径生成，界面不能据缓存伪造。
+一台目标失效只失效它的就绪状态、镜像和重试；全局信令状态仍单独用于诊断。Mobile 新前台客户端
+沿用 SDK 的最长 30 分钟保留，后台仍释放，旧端生命周期不变。无新增 wire 帧或服务端要求。
+回归入口：`continuityRouting.test.ts`、`continuityRuntime.test.ts`、`remoteHandler.test.ts`、
+`hostLifecycle.test.ts`、`remoteConnectionStatus.test.ts`、`remoteProjectsStartup.test.tsx` 和 Mobile `historyViewProvider.test.tsx`。
+
 ## 机器实时状态（2026-11-02）
 
 新增只读 invoke `maker:machine:status`（`packages/device-link/src/machineStatus.ts`），同账号远控可用，不进共享任务访客白名单。

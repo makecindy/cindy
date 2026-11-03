@@ -95,7 +95,7 @@ function setupStartup() {
   }> }>();
   state.readCache.mockReturnValue(cache.promise);
   const listen = () => () => {};
-  let onStatus = (_event: { status: string }) => {};
+  let onStatus = (_event: { status: string; directDataDeviceIds?: string[]; dataPathChangedDeviceId?: string }) => {};
   Object.defineProperty(window, 'electronAPI', { configurable: true, value: { deviceLink: {
     getState: () => link.promise,
     listDevices: () => directory.promise,
@@ -107,8 +107,27 @@ function setupStartup() {
     onControlTargetChanged: listen, onRemotePush: listen, onResponsivenessChanged: listen,
   } } });
   saveLastChatView({ kind: 'session', sessionId: 'remote-A' });
-  return { cache, link, directory, status: (status: string) => onStatus({ status }), stop: () => onStatus({ status: 'stopped' }) };
+  return { cache, link, directory, status: (status: string) => onStatus({ status }), stop: () => onStatus({ status: 'stopped' }),
+    dataStatus: (status: string, directDataDeviceIds: string[], dataPathChangedDeviceId?: string) => onStatus({ status, directDataDeviceIds, dataPathChangedDeviceId }) };
 }
+
+it('preserves only the authenticated direct mirror across relay loss and disconnects it when that data path ends', async () => {
+  const f = setupStartup();
+  renderHook(() => useDeviceLinkRemoteProjects());
+  const row = (id: string) => ({ id, status: 'active', source: 'desktop' }) as import('@/lib/ccAgent.types').Session;
+  await act(async () => { f.cache.resolve([]); f.link.resolve({ linkStatus: 'online' }); f.directory.resolve({ devices: [] }); });
+  await act(async () => {
+    remoteProjectsStore.setDeviceSessions('M', 'M', [row('m-task')]);
+    remoteProjectsStore.setDeviceSessions('other', 'Other', [row('other-task')]);
+  });
+  const epoch = remoteProjectsStore.getDeviceLifecycleEpoch('M');
+  await act(async () => { f.dataStatus('connecting', ['M']); await vi.advanceTimersByTimeAsync(60_000); });
+  expect(remoteProjectsStore.getDeviceSessions('M')[0].deviceLinkConnectionStatus).toBe('connected');
+  expect(remoteProjectsStore.getDeviceLifecycleEpoch('M')).toBe(epoch);
+  expect(remoteProjectsStore.getDeviceSessions('other')[0].deviceLinkConnectionStatus).toBe('disconnected');
+  await act(async () => { f.dataStatus('connecting', [], 'M'); });
+  expect(remoteProjectsStore.getDeviceSessions('M')[0].deviceLinkConnectionStatus).toBe('disconnected');
+});
 
 // PR #8182: the primary synchronizer owns same-account mirrors. A healthy
 // shared task has its own poller/connection and must retain its writable row

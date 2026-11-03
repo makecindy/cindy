@@ -20,7 +20,8 @@ import {
 } from '../../shared/providerGroup.js';
 import { captureProviderShareGroupRecovery, getReceivedShares } from '../device-link/providerShareGuest.js';
 import { handleListDevices, defaultDeps as deviceDirectoryDeps } from '../device-link/ipc.js';
-import { remoteBackgroundInvoke } from '../device-link/index.js';
+import { remoteBackgroundInvoke, getDeviceLinkStatus, getRemoteLinkCloseEpoch, getSelfDeviceId, hasOfflineDirectPath } from '../device-link/index.js';
+import { captureProviderMetadataContinuityScope, isTemporaryProviderMetadataFailure } from '../device-link/providerMetadataContinuity.js';
 import { isMobilePlatform } from '../device-link/controllerPlatform.js';
 import { deviceName } from '../device-link/deviceName.js';
 import { getDesktopProviderService } from '../maker-host/createDesktopProviderService.js';
@@ -33,6 +34,7 @@ import { createProviderGroupRemoteClient, type ProviderGroupRemoteClient } from 
 import { createProviderGroupRouter, type ProviderGroupRouter } from './router.js';
 import type { ProviderGroupRemoteGroups } from './service.js';
 import { readProviderGroup } from './store.js';
+import { createGroupContinuityClient } from './continuityClient.js';
 import { createProviderGroupUsageReader, providerGroupUsageSnapshot, providerGroupCodexUsageSnapshot, providerGroupCodexUsageFromReads, type ProviderGroupCodexUsageSnapshot } from './usage.js';
 
 interface OwnerRuntime {
@@ -230,6 +232,10 @@ export function getProviderGroupOwnerScope(): ProviderGroupOwnerScope {
 }
 
 let remoteClient: ProviderGroupRemoteClient | null = null;
+let continuityClient: ReturnType<typeof createGroupContinuityClient> | null = null;
+let localContinuityHandler: ((controller: string, raw: unknown) => Promise<unknown>) | null = null;
+export function setProviderGroupContinuityHandler(handler: typeof localContinuityHandler): void { localContinuityHandler = handler; }
+export function hasProviderGroupContinuityHandler(): boolean { return localContinuityHandler !== null; }
 
 /** 问其他电脑上的组(无状态，按调用时的账号经设备互联发出)。 */
 export function getProviderGroupRemoteClient(): ProviderGroupRemoteClient {
@@ -245,6 +251,28 @@ export function getProviderGroupRemoteClient(): ProviderGroupRemoteClient {
  */
 export function getProviderGroupRemoteGroups(): ProviderGroupRemoteGroups {
   const client = getProviderGroupRemoteClient();
+  continuityClient ??= createGroupContinuityClient({
+    livePick: client.pick,
+    invoke: async (deviceId, channel, args, options) => {
+      options?.preSend?.();
+      if (deviceId === getSelfDeviceId()) {
+        if (!localContinuityHandler) throw new Error('[REMOTE_AGENT_UNAVAILABLE] Group continuity is not ready');
+        return { ok: true, result: await localContinuityHandler(deviceId, args[0]) };
+      }
+      return remoteBackgroundInvoke(deviceId, channel, args, options);
+    },
+    capture(ownerDeviceId, executor) {
+      const ownerScope = captureProviderMetadataContinuityScope(ownerDeviceId);
+      const executorScope = executor ? captureProviderMetadataContinuityScope(executor) : () => true;
+      const ownerEpoch = getRemoteLinkCloseEpoch(ownerDeviceId), executorEpoch = executor ? getRemoteLinkCloseEpoch(executor) : 0;
+      return () => ownerScope() && executorScope() && ownerEpoch === getRemoteLinkCloseEpoch(ownerDeviceId)
+        && (!executor || executorEpoch === getRemoteLinkCloseEpoch(executor));
+    },
+    ownerMayRespond: owner => getDeviceLinkStatus() === 'online' || hasOfflineDirectPath(owner),
+    retryable: error => isTemporaryProviderMetadataFailure(error)
+      || (error instanceof Error && /^\[REMOTE_AGENT_UNAVAILABLE\]/.test(error.message) && !/Fast policy/.test(error.message)),
+    wall: Date.now, mono: () => performance.now(),
+  });
   return {
     async readGroup(ownerDeviceId, providerId) {
       let views: ProviderView[];
@@ -256,7 +284,7 @@ export function getProviderGroupRemoteGroups(): ProviderGroupRemoteGroups {
       const view = views.find((candidate) => candidate.id === providerId);
       return view ? readProviderGroupSummary((view as { group?: unknown }).group, providerId) : null;
     },
-    pick: (ownerDeviceId, input) => client.pick(ownerDeviceId, input),
+    pick: (ownerDeviceId, input) => continuityClient!.pick(ownerDeviceId, input),
     cool: (ownerDeviceId, input) => client.cool(ownerDeviceId, input),
     view: (ownerDeviceId, providerId, model, agentKind) => client.view(ownerDeviceId, providerId, agentKind ? { model, agentKind } : model),
     invalidate: (ownerDeviceId) => directoryFacade.invalidate(ownerDeviceId),

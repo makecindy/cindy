@@ -152,6 +152,8 @@ export interface DeviceLinkState {
    */
   keepAwake: boolean;
   linkStatus: DeviceLinkStatus;
+  /** Optional local projection; never a device authorization or a wire capability. */
+  directDataDeviceIds?: string[];
   /** 当前连接问题(null = 无;变化走 CONNECTION_ISSUE push) */
   connectionIssue: DeviceLinkConnectionIssue | null;
   /** 本机另一个 Cindy 实例持有 device-link,当前实例处于待命。 */

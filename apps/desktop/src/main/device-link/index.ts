@@ -394,6 +394,13 @@ function refreshControllerDisplayNamesFromDirectory(generation: number): Promise
 }
 
 let client: DeviceLinkClient | null = null;
+const directDataPeers = new Set<string>();
+/** UI readiness follows authenticated usable data, independently of relay status. */
+export function getDirectDataDeviceIds(): string[] {
+  if (isAppSessionBoundaryPending()) return [];
+  return [...directDataPeers].filter(id => !isScopedPeer(id)
+    && client?.getPeerPath(id) === 'direct' && client.isLinkReady(id));
+}
 // Local IPC metadata, never accepted from a push payload or sent over the wire.
 const sharedHostStreams = new Map<string, { streamId: string; epoch: number }>();
 let sharedHostSourceEpoch = 0;
@@ -907,7 +914,15 @@ export function initDeviceLinkService(options: DeviceLinkServiceOptions = {}): v
       presenceAvailableByDevice.set(change.deviceId, false);
       invalidatePluginOauth(change.deviceId);
       handleControllerOffline(change.deviceId, change);
+      broadcast(DEVICE_LINK_PUSH.PEER_LINK_RESET, { deviceId: change.deviceId, offline: true });
     }
+  });
+  directDataPeers.clear();
+  const dataPathClient = client;
+  client.onPeerPathChanged(({ deviceId, path }) => {
+    if (client !== dataPathClient) return;
+    if (path === 'direct') directDataPeers.add(deviceId); else directDataPeers.delete(deviceId);
+    broadcast(DEVICE_LINK_PUSH.STATUS_CHANGED, { status: getDeviceLinkStatus(), directDataDeviceIds: getDirectDataDeviceIds(), dataPathChangedDeviceId: deviceId });
   });
   client.onPeerTransportReset(({ deviceId }) => {
     invalidatePluginOauth(deviceId);
@@ -951,7 +966,7 @@ export function initDeviceLinkService(options: DeviceLinkServiceOptions = {}): v
       clearControllerPlatforms();
       presenceNameByDevice.clear();
     }
-    broadcast(DEVICE_LINK_PUSH.STATUS_CHANGED, { status });
+    broadcast(DEVICE_LINK_PUSH.STATUS_CHANGED, { status, directDataDeviceIds: getDirectDataDeviceIds() });
     if (status === 'online') {
       markStartupMilestone('device-link-online');
       // 本地 last-known 先同步种入，覆盖 REST 返回前的 link-open 竞态；随后用

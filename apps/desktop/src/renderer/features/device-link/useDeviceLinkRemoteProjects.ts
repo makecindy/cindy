@@ -471,6 +471,8 @@ export function useDeviceLinkRemoteProjects(
     let directoryGeneration = 0;
     /** relay 在线时才跑 anti-entropy；初始状态未知时保守暂停，避免离线失败重试。 */
     let linkOnline: boolean | null = null;
+    let directDataDevices = new Set<string>();
+    const peerReadable = (deviceId: string) => linkOnline !== false || directDataDevices.has(deviceId);
     /** push 一旦到达即权威：迟到的 getState 快照不得覆盖更新的 link status。 */
     let linkStatusPushSeen = false;
     /**
@@ -489,12 +491,12 @@ export function useDeviceLinkRemoteProjects(
       connectingGraceTimer = null;
     };
     const markAllConnecting = (): void => {
-      remoteProjectsStore.markAllConnecting((deviceId) => !isSharedTaskPeer(deviceId));
+      remoteProjectsStore.markAllConnecting((deviceId) => !isSharedTaskPeer(deviceId) && !directDataDevices.has(deviceId));
       clearConnectingGrace();
       connectingGraceTimer = setTimeout(() => {
         connectingGraceTimer = null;
         if (disposed || linkOnline) return;
-        remoteProjectsStore.markAllDisconnected((deviceId) => !isSharedTaskPeer(deviceId));
+        remoteProjectsStore.markAllDisconnected((deviceId) => !isSharedTaskPeer(deviceId) && !directDataDevices.has(deviceId));
       }, CONNECTING_GRACE_MS);
     };
     /** 当前合格设备:deviceId → 友好名 */
@@ -570,7 +572,7 @@ export function useDeviceLinkRemoteProjects(
         deviceId,
         setTimeout(() => {
           archivedRetryTimers.delete(deviceId);
-          if (disposed || !eligible.has(deviceId) || !linkOnline) return;
+          if (disposed || !eligible.has(deviceId) || !peerReadable(deviceId)) return;
           retryRemoteSessionStatus(deviceId, 'archived');
         }, delay),
       );
@@ -606,7 +608,7 @@ export function useDeviceLinkRemoteProjects(
      * 任一步返回 ACCESS_REVOKED → 标记已撤销并移除该设备;全程无撤销 → 清掉残留标记(恢复收尾)。
      */
     const canBootstrap = (deviceId: string, lifecycleEpoch: number): boolean =>
-      !disposed && linkOnline !== false && eligible.has(deviceId) && !unresponsiveDevicesStore.has(deviceId) &&
+      !disposed && peerReadable(deviceId) && eligible.has(deviceId) && !unresponsiveDevicesStore.has(deviceId) &&
       remoteProjectsStore.getDeviceLifecycleEpoch(deviceId) === lifecycleEpoch;
     const refreshAliases = (deviceId: string, invalidate = false): Promise<void> => {
       const lifecycleEpoch = remoteProjectsStore.getDeviceLifecycleEpoch(deviceId);
@@ -741,7 +743,7 @@ export function useDeviceLinkRemoteProjects(
         // Link 还没上线(冷启动 / 重连中):只记下合格性,不发 subscribe。上线那一刻按 eligible
         // 直接 bootstrap,不再等 reseed 的那次 REST 往返——这正是启动时「先离线再在线」里
         // 多出来的一跳。Unknown(getState 失败且没收到 status push)保留原有的直接 bootstrap。
-        if (linkOnline === false) {
+        if (!peerReadable(d.deviceId)) {
           eligible.set(d.deviceId, d.name);
           return;
         }
@@ -858,7 +860,7 @@ export function useDeviceLinkRemoteProjects(
       // 预期收口:不会去连(待命 / 关闭远程控制)直接标离线,会去连或未知则进宽限计时。
       if (linkOnline !== true) {
         if (linkExpectedToConnect === false) {
-          remoteProjectsStore.markAllDisconnected((deviceId) => !isSharedTaskPeer(deviceId));
+          remoteProjectsStore.markAllDisconnected((deviceId) => !isSharedTaskPeer(deviceId) && !directDataDevices.has(deviceId));
         } else {
           markAllConnecting();
         }
@@ -890,7 +892,7 @@ export function useDeviceLinkRemoteProjects(
         timerKey,
         setTimeout(() => {
           reseedTimers.delete(timerKey);
-          if (!disposed && linkOnline && eligible.has(deviceId)) {
+          if (!disposed && peerReadable(deviceId) && eligible.has(deviceId)) {
             void refreshRemoteDeviceSessions(deviceId, name, {
               snapshotMode: 'merge',
               status,
@@ -915,7 +917,7 @@ export function useDeviceLinkRemoteProjects(
       );
     });
     const periodicReconcile = startRemoteSessionsReconciler(
-      () => (linkOnline ? [...eligible].filter(([id]) => !unresponsiveDevicesStore.has(id)) : []),
+      () => [...eligible].filter(([id]) => peerReadable(id) && !unresponsiveDevicesStore.has(id)),
       async (deviceId, name) => {
         log.debug(`sessions refresh trigger=periodic window=${windowRole} peer=${deviceId.slice(0, 8)} visible=${periodicReconcileActiveRef.current}`);
         if (sessionsSubscribeRetry.has(deviceId)) {
@@ -976,6 +978,7 @@ export function useDeviceLinkRemoteProjects(
       .then((state) => {
         if (disposed) return;
         if (!linkStatusPushSeen) linkOnline = state.linkStatus === 'online';
+        if (!linkStatusPushSeen) directDataDevices = new Set(state.directDataDeviceIds ?? []);
         // Presence can start bootstrap before this initial snapshot settles.
         // Reuse disconnect cleanup to clear loading and invalidate in-flight snapshots.
         if (!linkStatusPushSeen && !linkOnline) {
@@ -983,8 +986,8 @@ export function useDeviceLinkRemoteProjects(
           // 冷启动时 auth 还没完成,linkStatus 多半还是 stopped,但下一步就是 connecting。
           linkExpectedToConnect = state.remoteControlEnabled && !state.standby;
           if (linkExpectedToConnect) markAllConnecting();
-          else remoteProjectsStore.markAllDisconnected((deviceId) => !isSharedTaskPeer(deviceId));
-          for (const deviceId of eligible.keys()) remoteProjectAliases.suspend(deviceId);
+          else remoteProjectsStore.markAllDisconnected((deviceId) => !isSharedTaskPeer(deviceId) && !directDataDevices.has(deviceId));
+          for (const deviceId of eligible.keys()) if (!directDataDevices.has(deviceId)) remoteProjectAliases.suspend(deviceId);
         }
         if (!controlTargetPushSeen) disabledControlDeviceIds = new Set(state.disabledControlDeviceIds ?? []);
         // 「无响应」熔断镜像的初值:按设备合并,已被 push 覆盖的设备以 push 为准
@@ -1085,9 +1088,18 @@ export function useDeviceLinkRemoteProjects(
       const wasOnline = linkOnline;
       linkStatusPushSeen = true;
       linkOnline = p.status === 'online';
+      directDataDevices = new Set(p.directDataDeviceIds ?? []);
+      if (p.dataPathChangedDeviceId) {
+        const deviceId = p.dataPathChangedDeviceId;
+        if (!linkOnline && !directDataDevices.has(deviceId)) {
+          remoteProjectsStore.markDeviceDisconnected(deviceId);
+          remoteProjectAliases.suspend(deviceId);
+        }
+        return; // One data path changes no other peer's retry/grace lifetime.
+      }
       if (p.status !== 'online') {
         clearAllArchivedSessionRetries();
-        for (const deviceId of eligible.keys()) remoteProjectAliases.suspend(deviceId);
+        for (const deviceId of eligible.keys()) if (!directDataDevices.has(deviceId)) remoteProjectAliases.suspend(deviceId);
         // relay 瞬时重连(connecting):保留远程会话镜像,只标记 disconnected,让 All Sessions
         // 不因网络抖动反复增删/重排。eligible 保留不动 → 重连 online 时下面的分支自动
         // 重 subscribe+bootstrap。stopped(登出 / 停服)才清空。
@@ -1102,12 +1114,12 @@ export function useDeviceLinkRemoteProjects(
         // (非登出)」会在约 1.2s 后抹掉侧边栏冷缓存 —— 而「停服后重启、relay 仍未恢复」
         // 正是这份缓存要解决的场景(review: P2)。整体删除只归 owner 边界的 clearAll。
         clearTimeout(initialDiscoveryTimer);
-        remoteProjectsStore.clear((deviceId) => !isSharedTaskPeer(deviceId));
+        remoteProjectsStore.clear((deviceId) => !isSharedTaskPeer(deviceId) && !directDataDevices.has(deviceId));
         for (const deviceId of new Set([...eligible.keys(), ...remoteProjectAliases.getSnapshot().keys()])) {
-          if (!isSharedTaskPeer(deviceId)) remoteProjectAliases.remove(deviceId);
+          if (!isSharedTaskPeer(deviceId) && !directDataDevices.has(deviceId)) remoteProjectAliases.remove(deviceId);
         }
         cancelSessionListPersist();
-        clearRemoteSessionActivity((deviceId) => !isSharedTaskPeer(deviceId));
+        clearRemoteSessionActivity((deviceId) => !isSharedTaskPeer(deviceId) && !directDataDevices.has(deviceId));
         // 'stopped'(登出 / 停服)还要清掉「已撤销」标记:否则切换栏的 buildSwitcherDevices 仍会拿
         // revoked 集合单独撑起一颗 rejected chip,停服后切换栏残留陈旧被拒 chip。'connecting' 是瞬态
         // 重连,被拒状态应跨重连保留(正常在线期一直可见),故不清。登出 unmount 时的 clearAll 仍是兜底。
@@ -1131,9 +1143,13 @@ export function useDeviceLinkRemoteProjects(
     });
 
     // A peer reset can lose invalidations while relay presence stays online.
-    const offPeerReset = window.electronAPI.deviceLink.onPeerLinkReset?.(({ deviceId }) => {
+    const offPeerReset = window.electronAPI.deviceLink.onPeerLinkReset?.(({ deviceId, offline }) => {
+      if (offline) {
+        directDataDevices.delete(deviceId);
+        remoteProjectsStore.markDeviceDisconnected(deviceId);
+      }
       remoteProjectAliases.suspend(deviceId);
-      if (!disposed) void refreshAliases(deviceId);
+      if (!disposed && !offline) void refreshAliases(deviceId);
     });
 
     const offControlTarget = window.electronAPI.deviceLink.onControlTargetChanged((p) => {

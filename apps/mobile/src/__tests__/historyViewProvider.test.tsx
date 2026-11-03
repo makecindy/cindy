@@ -113,6 +113,8 @@ const transport = vi.hoisted(() => {
     onSeparateCrossAccountStatus(listener: Client['crossAccountStatusChanged']) { this.crossAccountStatusChanged = listener; return () => {}; }
     onSeparateCrossAccountIssue = () => () => {};
     retainedPeers = new Set<string>();
+    readyPeers = new Set<string>();
+    isLinkReady = (deviceId: string) => this.readyPeers.has(deviceId) || this.retainedPeers.has(deviceId);
     hasOfflineDirectPath = (deviceId: string) => this.retainedPeers.has(deviceId);
     crossAccountConnection() { return this.separate ?? this; }
     connectAllNow(...args: unknown[]) { (this.connectNow as (...input: unknown[]) => void)(...args); }
@@ -169,6 +171,27 @@ beforeEach(async () => {
 afterEach(async () => { await act(async () => root.unmount()); });
 
 describe('Provider device roster reads', () => {
+  it('uses a bounded roster during an HTTP outage, projects only actual retained peers online, and never treats it as new presence', async () => {
+    vi.useFakeTimers({ toFake: ['Date', 'performance'] });
+    try {
+      const device = (deviceId: string): DeviceView => ({ deviceId, name: deviceId, platform: 'darwin', appVersion: 'test',
+        online: true, remoteControlEnabled: true, busy: false, lastSeenAt: new Date().toISOString(), isSelf: false });
+      auth.apiFetch.mockResolvedValueOnce({ devices: [device('M'), device('other')] });
+      await act(async () => { await context.readDeviceList({ fresh: true }); });
+      const client = transport.clients[0]; client.readyPeers.add('M');
+      auth.apiFetch.mockRejectedValue(Object.assign(new Error('service unavailable'), { status: 503 }));
+      vi.setSystemTime(Date.now() + 5 * 60_000);
+      let snapshot!: { devices: DeviceView[] };
+      await act(async () => { snapshot = await context.readDeviceList({ fresh: true }); });
+      expect(snapshot.devices.map(row => [row.deviceId, row.online])).toEqual([['M', true], ['other', false]]);
+      expect(context.getPresenceAvailability('other')).toBe(true); // stale roster did not install a false verdict.
+      client.readyPeers.clear(); client.retainedPeers.add('M'); client.status = 'connecting';
+      await act(async () => { snapshot = await context.readDeviceList({ fresh: true }); });
+      expect(snapshot.devices.map(row => [row.deviceId, row.online])).toEqual([['M', true], ['other', false]]);
+      vi.setSystemTime(Date.now() + 25 * 60_000 + 1);
+      await expect(context.readDeviceList({ fresh: true })).rejects.toThrow('service unavailable');
+    } finally { vi.useRealTimers(); }
+  });
   it('starts a fresh snapshot when Home joins a recovery read that predates its presence fence', async () => {
     const stale = deferredRoster();
     const current = deferredRoster();

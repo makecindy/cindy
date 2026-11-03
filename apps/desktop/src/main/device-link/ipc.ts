@@ -53,6 +53,7 @@ import {
 } from '../../shared/deviceLinkIpc';
 import {
   getDeviceLinkStatus,
+  getDirectDataDeviceIds,
   hasOfflineDirectPath,
   getDeviceLinkConnectionIssue,
   isDeviceLinkStandby,
@@ -204,6 +205,7 @@ export function defaultDeps(): DeviceLinkIpcDeps {
         remoteControlEnabled: s.remoteControlEnabled,
         keepAwake: s.keepAwake,
         linkStatus: getDeviceLinkStatus(),
+        directDataDeviceIds: getDirectDataDeviceIds(),
         connectionIssue: getDeviceLinkConnectionIssue(),
         standby: isDeviceLinkStandby(),
         controlledBy: getActiveControllers(),

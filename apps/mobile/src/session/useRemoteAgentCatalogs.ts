@@ -24,6 +24,7 @@ import {
   getCachedDeviceProviders,
   subscribeDeviceProviders,
   subscribeDeviceProvidersError,
+  subscribeDeviceProvidersGen,
   type DeviceProvidersPayload,
 } from '@/device-link/deviceProvidersCache';
 import { createMobileMakerTransport } from '@/device-link/mobileMakerTransport';
@@ -74,7 +75,7 @@ export function useRemoteAgentCatalogsWithStatus(input: RemoteAgentCatalogsInput
   settled: boolean;
 } {
   const { readDeviceList, invoke, openLink, connectionEpoch, status, presenceVersion, getPresenceAvailability } =
-    useDeviceLink();
+    useDeviceLink(input.controlledDeviceId);
   const { accountGeneration } = useAuth();
   const { t } = useTranslation();
   const revoked = useRevokedDevices();
@@ -160,6 +161,9 @@ export function useRemoteAgentCatalogsWithStatus(input: RemoteAgentCatalogsInput
             // 有缓存继续显示缓存;从未读到过才标成读不到。
             const fallback = getCachedDeviceProviders(device.deviceId);
             patch(device.deviceId, fallback ? { status: 'ready', payload: fallback } : { status: 'error' });
+          }));
+          cleanups.push(subscribeDeviceProvidersGen(device.deviceId, reason => {
+            patch(device.deviceId, { status: reason === 'fresh-invalidate' ? 'loading' : 'error' });
           }));
           if (!device.canOpen) continue;
           const transport = createMobileMakerTransport({

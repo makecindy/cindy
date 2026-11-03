@@ -43,6 +43,8 @@ import {
   type RemoteResourceChangedPayload,
   type Topic,
   decodeModelSpeedPayload,
+  MetadataContinuityReader,
+  isProviderAccessDeniedError,
 } from '@cindy/device-link';
 import { createContext, useCallback, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type ReactNode } from 'react';
 import { PROJECT_ALIASES_GET_CHANNEL, PROJECT_ALIASES_CHANGED_CHANNEL } from '@cindy/maker-shared/project-alias-sync';
@@ -541,6 +543,14 @@ export function DeviceLinkProvider({ children }: { children: ReactNode }) {
   ), []);
   const [lastPresenceSnapshot, setLastPresenceSnapshot] = useState<PresenceSnapshot | null>(null);
   const accountGenerationRef = useRef<number | null>(null);
+  const [rosterContinuity] = useState(() => new MetadataContinuityReader({ retryable(error) {
+    if (isProviderAccessDeniedError(error)) return false;
+    const row = error && typeof error === 'object' ? error as { status?: unknown; statusCode?: unknown; code?: unknown; message?: unknown } : {};
+    const status = row.statusCode ?? row.status;
+    return status === 0 || status === 429 || (typeof status === 'number' && status >= 500 && status < 600)
+      || row.code === 'NOT_CONNECTED' || row.code === 'NETWORK_ERROR'
+      || (status === undefined && /^(Network request failed|Failed to fetch)$/.test(String(row.message)));
+  } }));
 
   // Home and direct task entry share the same in-flight roster read. Evidence
   // belongs to the connection that started it, not whichever one finishes it.
@@ -551,12 +561,18 @@ export function DeviceLinkProvider({ children }: { children: ReactNode }) {
     if (!options.fresh && pending?.client === client && pending.epoch === epoch) return pending.promise;
     const generation = ++rosterRequestGenerationRef.current;
     const apply = rosterConsumerRef.current?.();
-    const promise = auth.apiFetch<{ devices: DeviceView[] }>('/api/device-link/devices', {
+    const owner = auth.accountGeneration;
+    const promise = rosterContinuity.read({ key: JSON.stringify([owner, DEVICE_LINK_API_BASE_URL]), joinPending: false,
+      current: () => clientRef.current === client && accountGenerationRef.current === owner,
+      signalingAvailable: () => true,
+    }, 'device-directory', () => auth.apiFetch<{ devices: DeviceView[] }>('/api/device-link/devices', {
       baseUrl: DEVICE_LINK_API_BASE_URL, timeoutMs: 12_000,
-    }).then((result) => {
+    })).then((snapshot) => {
+      const result = snapshot.stale ? { devices: snapshot.value.devices.map(device => ({ ...device,
+        online: client?.connectionFor(device.deviceId).isLinkReady(device.deviceId) === true })) } : snapshot.value;
       // A fresh read supersedes every older roster consumer, even when the older
       // response arrives first and would otherwise outrank the new snapshot.
-      if (rosterRequestGenerationRef.current === generation) apply?.(result.devices);
+      if (!snapshot.stale && rosterRequestGenerationRef.current === generation) apply?.(result.devices);
       return result;
     });
     rosterRequestRef.current = { client, epoch, promise };
@@ -564,9 +580,10 @@ export function DeviceLinkProvider({ children }: { children: ReactNode }) {
       if (rosterRequestRef.current?.promise === promise) rosterRequestRef.current = null;
     }).catch(() => undefined);
     return promise;
-  }, [auth.apiFetch, auth.accountGeneration]);
+  }, [auth.apiFetch, auth.accountGeneration, rosterContinuity]);
 
   const clearPerAccountDeviceLinkState = useCallback(() => {
+    rosterContinuity.clear();
     remoteSessionStore.clear();
     clearSessionScheduleIndexCache();
     remoteScheduleEventStore.clearAll();
@@ -580,7 +597,7 @@ export function DeviceLinkProvider({ children }: { children: ReactNode }) {
     resetTaskTagCatalogCache();
     setLastPresenceSnapshot(null);
     setPresenceVersion((version) => version + 1);
-  }, []);
+  }, [rosterContinuity]);
 
   /**
    * availability 放在 ref 里供 transport 同步读取；每次真实的三态变化也必须发布给

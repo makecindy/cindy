@@ -56,6 +56,11 @@ export async function readProviderDirectoryContinuity<T>(request: () => Promise<
   return reader.read({ ...scope(), joinPending: false }, 'device-directory', request);
 }
 
+/** Other bounded routing snapshots share the same known-permission invalidation fence. */
+export function captureProviderMetadataContinuityScope(target: string): () => boolean {
+  return scope(() => true, target).current;
+}
+
 /** Only the two explicit metadata reads below may use a snapshot. In particular caps, pick,
  * delegation checks, usage writes and Agent operations always reach their real authority. */
 export async function invokeProviderMetadataContinuity(

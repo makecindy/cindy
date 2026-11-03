@@ -4200,6 +4200,7 @@ interface ElectronAPI {
       remoteControlEnabled: boolean;
       keepAwake: boolean;
       linkStatus: 'stopped' | 'connecting' | 'online';
+      directDataDeviceIds?: string[];
       connectionIssue: DeviceLinkConnectionIssuePayload | null;
       standby: boolean;
       controlledBy: Array<{ deviceId: string; name: string }>;
@@ -4238,7 +4239,7 @@ interface ElectronAPI {
     onPresenceChanged: (cb: (snap: DeviceLinkPresenceSnapshot) => void) => () => void;
     /** 本机 relay 连接状态变化 */
     onStatusChanged: (
-      cb: (payload: { status: 'stopped' | 'connecting' | 'online' }) => void,
+      cb: (payload: { status: 'stopped' | 'connecting' | 'online'; directDataDeviceIds?: string[]; dataPathChangedDeviceId?: string }) => void,
     ) => () => void;
     /** 本机 relay 连接问题变化(鉴权失效/被顶号/超限/版本不符;null = 已恢复) */
     onConnectionIssue: (
@@ -4276,7 +4277,7 @@ interface ElectronAPI {
     onKeepAwakeChanged: (cb: (payload: { keepAwake: boolean }) => void) => () => void;
     /** Main 本地投影:单个 peer 的恢复作废旧内容就绪证据，不代表 relay 离线。 */
     onPeerLinkReopened?: (cb: (payload: { deviceId: string }) => void) => () => void;
-    onPeerLinkReset?: (cb: (payload: { deviceId: string }) => void) => () => void;
+    onPeerLinkReset?: (cb: (payload: { deviceId: string; offline?: boolean }) => void) => () => void;
     /** 控制端:目标设备「无响应」熔断状态翻转(弱网 / 对端卡死;presence 可能仍在线) */
     onResponsivenessChanged: (
       cb: (payload: { deviceId: string; unresponsive: boolean; recovered?: boolean }) => void,

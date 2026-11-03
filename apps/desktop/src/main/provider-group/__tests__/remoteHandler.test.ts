@@ -92,6 +92,31 @@ function deps(overrides: Partial<ProviderGroupRemoteHandlerDeps> = {}) {
 const PICK = { action: 'pick', sessionId: 's1', providerId: 'anthropic', agentKind: 'claude-code', model: 'opus', exclude: ['local'] };
 
 describe('provider-group:remote', () => {
+  it('prepares continuity only after the original Fast binding and preserves a legacy pick without an optional acknowledgement', async () => {
+    const order: string[] = [];
+    const d = deps({ bindFastPolicy: async () => { order.push('fast'); }, prepareContinuity: async () => {
+      order.push('prepare'); return { id: 'grant', remainingMs: 1000, config: CONFIG };
+    } });
+    const request = { action: 'pick', providerId: 'anthropic', sessionId: 'task', agentKind: 'claude-code', model: 'model' };
+    expect(await handleProviderGroupRemote(d, 'C', request)).toMatchObject({ kind: 'member', continuity: { id: 'grant' } });
+    expect(order).toEqual(['fast', 'prepare']);
+    d.prepareContinuity = async () => { throw new Error('[INVALID_PARAMS] legacy endpoint'); };
+    const legacy = await handleProviderGroupRemote(d, 'C', request);
+    expect(legacy).toMatchObject({ kind: 'member' });
+    expect(legacy).not.toHaveProperty('continuity');
+  });
+  it('does not return a prepared route if the group was edited while its optional acknowledgement was pending', async () => {
+    let config: ProviderGroupConfig = CONFIG;
+    let finish!: () => void;
+    const d = deps({ readGroup: () => config, prepareContinuity: async () => {
+      await new Promise<void>(resolve => { finish = resolve; });
+      return { id: 'grant', remainingMs: 1000, config: CONFIG };
+    } });
+    const pending = handleProviderGroupRemote(d, 'C', { action: 'pick', providerId: 'anthropic', sessionId: 'task', agentKind: 'claude-code', model: 'model' });
+    await Promise.resolve(); await Promise.resolve();
+    config = { ...CONFIG, autoSwitch: !CONFIG.autoSwitch }; finish();
+    expect(await pending).toEqual({ kind: 'unavailable' });
+  });
   it('tries another member when the selected executor cannot acknowledge a prohibited Fast policy', async () => {
     const bind = vi.fn().mockRejectedValueOnce(Error('[REMOTE_AGENT_PEER_TOO_OLD] update')).mockResolvedValue(undefined);
     const d = deps({ bindFastPolicy: bind });
