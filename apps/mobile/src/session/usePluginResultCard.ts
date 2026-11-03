@@ -76,8 +76,13 @@ export function useSessionPluginResource(deviceId: string | undefined, sessionId
         if (valid()) {
           resolvedId = JSON.stringify([sessionId, next]);
           setState({ binding, callId: next, blocks: resource.blocks ?? [], title: typeof resource.display.title === 'string' ? resource.display.title : resource.display.title.fallback, error: kind === 'card' && !resource.blocks?.length });
-          pollsPrStatus = !!resource.blocks?.some(block => block.primitive === 'plugin-card-actions' &&
-            Array.isArray((block.data as { prStatus?: unknown } | undefined)?.prStatus) && ((block.data as { prStatus: unknown[] }).prStatus.length > 0));
+          // Live PR state arrives either as a status slot or only on a PR link's `prState` (the title icon).
+          pollsPrStatus = !!resource.blocks?.some(block => {
+            if (block.primitive !== 'plugin-card-actions') return false;
+            const data = block.data as { prStatus?: unknown; items?: unknown } | undefined;
+            return (Array.isArray(data?.prStatus) && data.prStatus.length > 0) ||
+              (Array.isArray(data?.items) && data.items.some(item => !!item && typeof item === 'object' && 'prState' in item));
+          });
         }
       } catch (error) {
         const code = error && typeof error === 'object' ? (error as { code?: unknown }).code : undefined;

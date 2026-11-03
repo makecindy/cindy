@@ -522,14 +522,14 @@ function LocalGhostPluginPage({
         !snapshot.sources.some((s) => s.ghostId === ghostId && s.enabled)
       )
         return false;
-      const ready = readyPendingPluginSuggestion(nonce, dataOwnerId, ghostId);
-      const pending = getPendingPluginSuggestion();
-      if (!ready || !pending) return false;
+      const early = getPendingPluginSuggestion();
+      if (!early || early.nonce !== nonce) return false;
       // A plugin Skill is only usable in the task's project if the plugin is not disabled there: a
       // project-level "off" outlives an uninstall, so a fresh install would still not offer the Skill.
-      if (pending.skillName && pending.workingDir) {
+      // Do this before the request leaves the setup phase, so a failure here leaves it resumable.
+      if (early.skillName && early.workingDir) {
         try {
-          const dir = pending.workingDir;
+          const dir = early.workingDir;
           if (window.electronAPI.ghosts.workdirPrefsSync(dir).disabled.includes(ghostId)) {
             await window.electronAPI.ghosts.setWorkdirDisabled(dir, ghostId, false);
           }
@@ -538,6 +538,9 @@ function LocalGhostPluginPage({
         }
         if (!recommendationPageMounted.current || getPendingPluginSuggestion()?.nonce !== nonce) return false;
       }
+      const ready = readyPendingPluginSuggestion(nonce, dataOwnerId, ghostId);
+      const pending = getPendingPluginSuggestion();
+      if (!ready || !pending) return false;
       // Back to where the user asked: the new-task draft or the task they were in.
       navigate(pendingPluginSuggestionReturnPath(pending), {
         state: { pluginSuggestionNonce: ready },
