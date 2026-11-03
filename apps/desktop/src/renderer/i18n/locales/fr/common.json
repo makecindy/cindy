@@ -4031,7 +4031,7 @@
             "title": "Compactage automatique",
             "hint": "Compacter le contexte au pourcentage d'utilisation sélectionné. Une valeur plus basse compacte plus tôt ; les limites du moteur s'appliquent toujours.",
             "default": "{{pct}} % (par défaut)",
-            "timing": "S'applique à tous les Harness disponibles pour ce modèle et cette source lors des exécutions suivantes, sans interrompre une réponse."
+            "timing": "S'applique à tous les moteurs disponibles pour ce modèle et cette source lors des exécutions suivantes, sans interrompre une réponse."
           },
           "contextLimitRoute": "Actuellement {{tokens}} jetons",
           "contextLimitOverWindow": "Supérieur à la fenêtre déclarée par le fournisseur ; les requêtes peuvent échouer.",
@@ -12250,7 +12250,7 @@
         "effortEndFast": "Plus rapide",
         "effortEndSmart": "Plus intelligent",
         "railSameEngine": "{{agent}} uniquement",
-        "crossEngineWarning": "Changer de Harness reconstruit le contexte et peut entraîner une perte de contenu",
+        "crossEngineWarning": "Changer de moteur reconstruit le contexte et peut entraîner une perte de contenu",
         "favoritesSyncFailed": "Impossible de synchroniser les favoris. Rouvrez le sélecteur pour réessayer ; l'ordinateur distant a peut-être besoin d'une mise à jour.",
         "favoritesSyncFailedUnreachable": "Les favoris ne sont pas encore synchronisés : cet ordinateur est injoignable. Rouvrez le sélecteur une fois la connexion rétablie.",
         "railRemoteProviderGroup": "{{provider}} · {{device}} · {{group}}",
