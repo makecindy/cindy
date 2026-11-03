@@ -3,6 +3,8 @@
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
+import { EventEmitter } from 'node:events';
+import type { WebContents } from 'electron';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 const state = vi.hoisted(() => ({ root: '', owner: { dataOwnerId: 'a', generation: 1 }, pin: vi.fn(), add: vi.fn(), remove: vi.fn() }));
 vi.mock('../../appSessionState.js', () => ({
@@ -90,4 +92,57 @@ it('restores a companion broadcast unchanged for a lost-receipt retry', async ()
   restarted.confirm(restored!.input.clientId, restored!.signature as string, 'broadcast-receipt');
   expect(chatSendJournal('https://chat.example', () => state.owner === owner)
     .read(restored!.input.clientId, restored!.signature as string)).toMatchObject({ receipt: 'broadcast-receipt' });
+});
+
+// Unit / PR #8637: main reload or same-account generation repair must not steal
+// a live secondary's editable failure. Crash/navigation/destruction releases it.
+it.each(['render-process-gone', 'destroyed', 'did-navigate'])('restores only orphaned sends after %s', async event => {
+  const secondary = Object.assign(new EventEmitter(), { isDestroyed: () => false });
+  const main = Object.assign(new EventEmitter(), { isDestroyed: () => false });
+  const sender = (value: typeof main) => value as unknown as WebContents;
+  const entry = { input: { groupId: 'room', clientId: 'owned', text: 'editable', mentions: { all: false, botIds: [] } }, createdAt: 1,
+    draft: 'editable', signature: 'owned', attachmentScope: 'room', after: 0, tracked: [], attachments: [], status: 'failed' as const, files: [] };
+  await accessBotGroupOutbox({ action: 'put', owner: state.owner, entry }, sender(secondary));
+  state.owner = { ...state.owner, generation: 2 };
+  expect(await accessBotGroupOutbox({ action: 'list', owner: state.owner }, sender(main))).toEqual([]);
+  await accessBotGroupOutbox({ action: 'remove', owner: state.owner, groupId: 'room', clientId: 'owned' }, sender(secondary));
+  expect(await accessBotGroupOutbox({ action: 'list', owner: state.owner }, sender(main))).toEqual([]);
+  await accessBotGroupOutbox({ action: 'put', owner: state.owner, entry }, sender(secondary));
+  // In-page navigation cannot relinquish a still-live composer's queue.
+  secondary.emit('did-start-navigation', {}, 'app://cindy', true, true);
+  secondary.emit('did-start-navigation', {}, 'app://cindy', false, true);
+  secondary.emit('did-navigate-in-page');
+  expect(await accessBotGroupOutbox({ action: 'list', owner: state.owner }, sender(main))).toEqual([]);
+  secondary.emit(event);
+  const restored = await accessBotGroupOutbox({ action: 'list', owner: state.owner }, sender(main));
+  expect(restored.map(row => row.input.clientId)).toEqual(['owned']);
+  const another = Object.assign(new EventEmitter(), { isDestroyed: () => false });
+  expect(await accessBotGroupOutbox({ action: 'list', owner: state.owner }, sender(another))).toEqual([]);
+  await accessBotGroupOutbox({ action: 'remove', owner: state.owner, groupId: 'room', clientId: 'owned' }, sender(main));
+  expect(await accessBotGroupOutbox({ action: 'list', owner: state.owner }, sender(main))).toEqual([]);
+});
+
+// A renderer can die while an accepted put/remove waits behind media pinning.
+// The serialized removal must still tombstone the edited message before recovery.
+it('finishes accepted writes and removals after their renderer crashes', async () => {
+  const secondary = new EventEmitter() as unknown as WebContents;
+  const main = new EventEmitter() as unknown as WebContents;
+  let pinned!: () => void;
+  let entered!: () => void;
+  const pin = new Promise<void>(resolve => { pinned = resolve; });
+  const started = new Promise<void>(resolve => { entered = resolve; });
+  state.pin.mockImplementation(() => { entered(); return pin; });
+  const entry = { input: { groupId: 'room', clientId: 'edited-before-crash', text: 'old', mentions: { all: false, botIds: [] } }, createdAt: 1,
+    draft: 'old', signature: 'old', attachmentScope: 'room', after: 0, tracked: [], attachments: [], status: 'failed' as const,
+    files: [{ url: 'cindy-media://blob/held.png' }] };
+  const put = accessBotGroupOutbox({ action: 'put', owner: state.owner, entry }, secondary);
+  await started;
+  const remove = accessBotGroupOutbox({ action: 'remove', owner: state.owner, groupId: 'room', clientId: entry.input.clientId }, secondary);
+  secondary.emit('render-process-gone');
+  const restored = accessBotGroupOutbox({ action: 'list', owner: state.owner }, main);
+  pinned();
+  await put;
+  await remove;
+  expect(await restored).toEqual([]);
+  main.emit('destroyed');
 });

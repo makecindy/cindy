@@ -2,6 +2,7 @@ import { createHash } from 'node:crypto';
 import { mkdirSync, readdirSync, rmSync } from 'node:fs';
 import path from 'node:path';
 import { z } from 'zod';
+import type { WebContents } from 'electron';
 import { getActiveAppSession, isAppSessionBoundaryPending, ownerScopedUserDataPath } from '../appSessionState.js';
 import { getDbClient } from '../localDb/client/current.js';
 import { parseBlobUrl } from '../cindy-media/blobStore.js';
@@ -23,17 +24,49 @@ const requestSchema = z.intersection(z.object({ owner: z.object({ dataOwnerId: i
     z.object({ action: z.literal('remove'), groupId: identifier, clientId: identifier })]));
 const hash = (value: string) => createHash('sha256').update(value).digest('hex');
 let chain = Promise.resolve<unknown>(undefined);
+interface RendererOwner { live: boolean }
+const rendererOwners = new WeakMap<WebContents, RendererOwner>();
+const entryOwners = new Map<string, RendererOwner>();
+let ownershipAccount: string | null = null;
+
+/** Main-derived incarnation, never a renderer-supplied ID or a persisted lease. */
+function rendererOwner(sender: WebContents): RendererOwner {
+  const existing = rendererOwners.get(sender);
+  if (existing) return existing;
+  const owner = { live: true };
+  const release = () => {
+    owner.live = false;
+    rendererOwners.delete(sender);
+    for (const [key, held] of entryOwners) if (held === owner) entryOwners.delete(key);
+    sender.removeListener('destroyed', release);
+    sender.removeListener('render-process-gone', release);
+    sender.removeListener('did-navigate', release);
+  };
+  rendererOwners.set(sender, owner);
+  sender.once('destroyed', release);
+  sender.once('render-process-gone', release);
+  sender.once('did-navigate', release);
+  return owner;
+}
 
 /** Serialized per-record writes preserve other windows' messages and fence account changes. */
-export function accessBotGroupOutbox(input: unknown): Promise<BotGroupOutboxStoredEntry[]> {
+export function accessBotGroupOutbox(input: unknown, sender?: WebContents): Promise<BotGroupOutboxStoredEntry[]> {
   const request = requestSchema.parse(input);
+  const renderer = sender ? rendererOwner(sender) : undefined;
   const operation = async () => {
     const current = () => !isAppSessionBoundaryPending() && getActiveAppSession().dataOwnerId === request.owner.dataOwnerId
       && getActiveAppSession().generation === request.owner.generation;
     const check = () => { if (!current()) throw new Error('OUTBOX_OWNER_CHANGED'); };
     check();
+    // A different login drops all previous renderer projections; same-account
+    // generation repair must instead preserve the live windows' ownership.
+    if (ownershipAccount !== request.owner.dataOwnerId) {
+      entryOwners.clear();
+      ownershipAccount = request.owner.dataOwnerId;
+    }
     const root = ownerScopedUserDataPath('bot-group-outbox');
     const file = (groupId: string, clientId: string) => path.join(root, `${hash(JSON.stringify([groupId, clientId]))}.json`);
+    const ownershipKey = (groupId: string, clientId: string) => JSON.stringify([request.owner.dataOwnerId, groupId, clientId]);
     const read = (filename: string) => {
       const raw = readAtomicFileSync(filename);
       if (!raw) return null;
@@ -45,10 +78,21 @@ export function accessBotGroupOutbox(input: unknown): Promise<BotGroupOutboxStor
       let names: string[];
       try { names = readdirSync(root); } catch (error) { if ((error as NodeJS.ErrnoException).code === 'ENOENT') return []; throw error; }
       const files = new Set(names.filter(name => /^[a-f0-9]{64}\.json(?:\.bak)?$/.test(name)).map(name => name.replace(/\.bak$/, '')));
-      return [...files].flatMap(name => { const value = read(path.join(root, name)); return value ? [value] : []; }).sort((a, b) => a.createdAt - b.createdAt);
+      return [...files].flatMap(name => {
+        const value = read(path.join(root, name));
+        if (!value) return [];
+        const key = ownershipKey(value.input.groupId, value.input.clientId);
+        const held = entryOwners.get(key);
+        if (renderer && held?.live && held !== renderer) return [];
+        if (renderer) entryOwners.set(key, renderer);
+        return [value];
+      }).sort((a, b) => a.createdAt - b.createdAt);
     }
     const identity = request.action === 'put' ? request.entry.input : request;
     const filename = file(identity.groupId, identity.clientId);
+    const key = ownershipKey(identity.groupId, identity.clientId);
+    const held = entryOwners.get(key);
+    if (renderer && held?.live && held !== renderer) throw new Error('OUTBOX_ENTRY_OWNED');
     const refId = `outbox:${hash(JSON.stringify([identity.groupId, identity.clientId]))}`;
     const db = getDbClient().drizzle;
     if (request.action === 'remove') {
@@ -57,6 +101,7 @@ export function accessBotGroupOutbox(input: unknown): Promise<BotGroupOutboxStor
       atomicWriteFileSync(filename, 'null');
       await ledger.removeRefs({ refKind: 'bot-group-attachment', refId }, db); check();
       rmSync(`${filename}.bak`, { force: true }); rmSync(filename, { force: true });
+      entryOwners.delete(key);
       return [];
     }
     const raw = JSON.stringify(request.entry);
@@ -74,6 +119,9 @@ export function accessBotGroupOutbox(input: unknown): Promise<BotGroupOutboxStor
         }
       }
       check(); mkdirSync(root, { recursive: true, mode: 0o700 }); atomicWriteFileSync(filename, raw);
+      // An already accepted write finishes even if its renderer died while
+      // awaiting media pinning; the resulting row is then immediately orphaned.
+      if (renderer?.live) entryOwners.set(key, renderer);
     } catch (error) {
       await Promise.all(added.map(id => ledger.removeRefById(id, db).catch(() => undefined)));
       throw error;

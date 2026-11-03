@@ -23,7 +23,7 @@ function cachedReadPositions(raw: string | null): Map<string, number> {
     if (!raw || raw.length > 256 * 1024) return positions;
     const rows: unknown = JSON.parse(raw);
     if (!Array.isArray(rows)) return positions;
-    for (const row of rows.slice(0, 200)) {
+    for (const row of rows) {
       if (!row || typeof row.deviceId !== 'string' || typeof row.id !== 'string'
         || typeof row.readAt !== 'number' || !Number.isFinite(row.readAt) || row.readAt < 0) continue;
       const key = readKey(row);
@@ -119,7 +119,7 @@ export function useRemoteBotSync(): void {
           const raw = window.localStorage.getItem(CACHE_PREFIX + nextOwner);
           if (raw && raw.length <= 256 * 1024) {
             const rows = JSON.parse(raw);
-            if (Array.isArray(rows)) cached = rows.slice(0, 200).filter((bot) => bot && ['id', 'deviceId', 'deviceName', 'name', 'avatar', 'avatarColor', 'description', 'preview'].every((key) => typeof bot[key] === 'string') && Number.isFinite(bot.activityAt)).map((bot) => ({
+            if (Array.isArray(rows)) cached = rows.filter((bot) => bot && ['id', 'deviceId', 'deviceName', 'name', 'avatar', 'avatarColor', 'description', 'preview'].every((key) => typeof bot[key] === 'string') && Number.isFinite(bot.activityAt)).map((bot) => ({
               id: bot.id, deviceId: bot.deviceId, deviceName: bot.deviceName, name: bot.name,
               templateId: typeof bot.templateId === 'string' ? bot.templateId : undefined,
               avatar: bot.avatar, avatarColor: bot.avatarColor, description: bot.description, preview: bot.preview,

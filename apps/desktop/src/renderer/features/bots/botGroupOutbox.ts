@@ -169,34 +169,29 @@ function forgetSaved(groupId: string, clientId: string): void {
   void durable()?.({ action: 'remove', owner: getDataOwnerGeneration(), groupId, clientId }).catch(() => undefined);
 }
 
-/** Every window retries its own sends; only main restores the shared durable queue. */
+/** Every window retries its sends; main also recovers rows released by dead renderers. */
 export function startBotGroupOutbox({ restoreSavedEntries = true }: { restoreSavedEntries?: boolean } = {}): () => void {
   ensureOwner();
   const owner = getDataOwnerGeneration();
   let stopped = false;
-  let restoreRequested = restoreSavedEntries ? 1 : 0;
-  let restored = 0;
-  const handoffs = new Map<string, number>();
-  const handoffKey = `cindy.botGroupOutbox.handoff.${owner.dataOwnerId}`;
   const current = () => !stopped && isDataOwnerGenerationCurrent(owner);
   const run = async () => {
     if (!current() || !owner.dataOwnerId || !durable()) return;
-    if (restored !== restoreRequested) {
-      const revision = restoreRequested;
-      const restoreAll = restoreSavedEntries && restored === 0;
-      const requested = new Set(handoffs.keys());
+    if (restoreSavedEntries) {
+      // Main filters and claims only rows with no other live renderer owner.
+      // Reusing the retry tick recovers crashes, where unload never ran.
+      const managed = new Set([...groups.values()].flatMap(group =>
+        group.entries.map(entry => entryKey(entry.input.groupId, entry.input.clientId))));
       const saved = await durable()!({ action: 'list', owner });
       if (!current()) return;
       for (const value of saved) {
         const entry = value as unknown as BotGroupOutboxEntry;
-        if (!restoreAll && !requested.has(entryKey(entry.input.groupId, entry.input.clientId))) continue;
+        // An edit/removal while list was pending must not resurrect old text.
+        if (managed.has(entryKey(entry.input.groupId, entry.input.clientId))) continue;
         const group = groupOf(entry.input.groupId);
         if (!group.entries.some(row => row.input.clientId === entry.input.clientId)) group.entries = [...group.entries, entry];
       }
-      for (const [key, requestedAt] of handoffs) {
-        if (requestedAt <= revision) handoffs.delete(key);
-      }
-      restored = revision; emit();
+      emit();
     }
     for (const [groupId, group] of groups) {
       const first = group.entries.find(entry => entry.status !== 'sent');
@@ -230,41 +225,11 @@ export function startBotGroupOutbox({ restoreSavedEntries = true }: { restoreSav
   };
   let running = false;
   const tick = () => { if (!running) { running = true; void run().catch(() => undefined).finally(() => { running = false; }); } };
-  const onHandoff = (event: StorageEvent) => {
-    if (!current() || event.key !== handoffKey || event.newValue === null
-      || (event.storageArea !== null && event.storageArea !== window.localStorage)) return;
-    if (event.newValue.length > 256_000) return;
-    let entries: unknown;
-    try { entries = JSON.parse(event.newValue).entries; } catch { return; }
-    if (!Array.isArray(entries) || !entries.length || entries.length > 200
-      || !entries.every(row => Array.isArray(row) && row.length === 2
-        && row.every(value => typeof value === 'string' && value.length > 0 && value.length <= 200))) return;
-    restoreRequested += 1;
-    for (const [groupId, clientId] of entries as [string, string][]) {
-      handoffs.set(entryKey(groupId, clientId), restoreRequested);
-    }
-    tick();
-  };
-  const handoff = () => {
-    if (!current() || !owner.dataOwnerId || !groups.size) return;
-    // Transfer only this closing window's identities, never another live window's rows.
-    // Message content still comes from the owner-fenced Main store.
-    const entries = [...groups.values()].flatMap(group => group.entries.map(entry => [entry.input.groupId, entry.input.clientId]));
-    try {
-      for (let offset = 0; offset < entries.length; offset += 200) {
-        window.localStorage.setItem(handoffKey, JSON.stringify({ nonce: crypto.randomUUID(), entries: entries.slice(offset, offset + 200) }));
-      }
-    } catch { /* Durable rows remain recoverable on restart. */ }
-  };
-  if (restoreSavedEntries) window.addEventListener('storage', onHandoff);
-  else window.addEventListener('beforeunload', handoff);
   const timer = setInterval(tick, 5_000);
   window.addEventListener('online', tick); window.addEventListener('focus', tick); tick();
   return () => {
-    if (!restoreSavedEntries) handoff();
     stopped = true; clearInterval(timer);
     window.removeEventListener('online', tick); window.removeEventListener('focus', tick);
-    window.removeEventListener('storage', onHandoff); window.removeEventListener('beforeunload', handoff);
   };
 }
 

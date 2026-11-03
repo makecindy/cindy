@@ -225,6 +225,28 @@ it('merges a newer shared read before a stale refresh writes the roster cache', 
   expect(JSON.parse(window.localStorage.getItem(key)!)[0].readAt).toBe(300);
 });
 
+// Unit / review4454475377: 200 is per host, not the aggregate roster bound.
+it('merges cross-window reads past row 200 across home devices', async () => {
+  h.invoke.mockImplementation(async () => ({ collectionId: 'teammates', items: Array.from({ length: 101 }, (_, index) => ({
+    ref: { collectionId: 'teammates', kind: 'bot', id: `bot-${index}` },
+    display: { title: `Bot ${index}`, lastReplyAt: 100 },
+  })) }));
+  const { result } = renderHook(useRoster);
+  await waitFor(() => expect(result.current).toHaveLength(202));
+  const target = result.current[201];
+  const key = 'cindy.remoteBots.v1.' + h.owner;
+  const shared = (at: number) => JSON.stringify(result.current.map((bot, index) => ({ ...bot, readAt: index === 201 ? at : bot.readAt })));
+  const newValue = shared(300);
+  window.localStorage.setItem(key, newValue);
+  act(() => window.dispatchEvent(new StorageEvent('storage', { key, newValue, storageArea: window.localStorage })));
+  expect(result.current.find(bot => remoteBotKey(bot) === remoteBotKey(target))?.readAt).toBe(300);
+  window.localStorage.setItem(key, shared(400));
+  act(() => h.status({ status: 'online' }));
+  await act(async () => {});
+  expect(result.current.find(bot => remoteBotKey(bot) === remoteBotKey(target))?.readAt).toBe(400);
+  expect(JSON.parse(window.localStorage.getItem(key)!)[201].readAt).toBe(400);
+});
+
 it('does not reinterpret a resource read error as device disconnection', async () => {
   h.devices = [host('reachable')];
   h.invoke.mockResolvedValue(collection());

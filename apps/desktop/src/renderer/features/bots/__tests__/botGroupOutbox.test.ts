@@ -979,21 +979,21 @@ it('retries secondary sends without restoring the shared queue and stops on clea
   } finally { stop(); vi.unstubAllGlobals(); vi.useRealTimers(); }
 });
 
-// Unit / review4453998311: a task window can close before its next retry.
-// Keep the main worker alive while discarding renderer memory to model teardown;
-// the durable IPC rows must be recovered without restarting that worker.
-it('hands failed secondary sends to the running main worker on unload', async () => {
+// Unit / reviews4453998311/4454475372: keep main alive while a secondary
+// loses all renderer memory without beforeunload. Main's existing retry tick
+// must discover rows the Main store releases, without taking live-window rows.
+it('recovers orphaned secondary sends on the main retry tick without unload', async () => {
   vi.useFakeTimers();
-  const signal = vi.fn<(key: string, value: string) => void>();
-  const storage = { setItem: signal };
-  vi.stubGlobal('window', Object.assign(new EventTarget(), { localStorage: storage }));
+  vi.stubGlobal('window', new EventTarget());
   const saved = new Map<string, unknown>();
+  let secondaryAlive = true;
   const requests: string[] = [];
   mocks.storage = async request => {
     requests.push(request.action);
     if (request.action === 'put') saved.set(request.entry.input.clientId, structuredClone(request.entry));
     if (request.action === 'remove') saved.delete(request.clientId);
-    return request.action === 'list' ? [...saved.values()] : [];
+    // Main lease filtering is covered against real files in chatPersistence.test.
+    return request.action === 'list' && !secondaryAlive ? [saved.get('closing-window')] : [];
   };
   const stopMain = startBotGroupOutbox();
   const stopSecondary = startBotGroupOutbox({ restoreSavedEntries: false });
@@ -1005,31 +1005,49 @@ it('hands failed secondary sends to the running main worker on unload', async ()
     await enqueueBotGroupSend(draft({ clientId: 'closing-window' }));
     await vi.advanceTimersByTimeAsync(0);
     expect(getBotGroupOutbox('g1')[0].status).toBe('failed');
-    // A separate, still-active renderer owns this row. Closing our window must
-    // not let main retry a message that renderer may still edit or discard.
     const active = getBotGroupOutbox('g1')[0];
     saved.set('active-window', structuredClone({ ...active, input: { ...active.input, clientId: 'active-window' } }));
-    window.dispatchEvent(new Event('beforeunload'));
-    expect(signal).toHaveBeenCalled();
     stopSecondary();
     resetBotGroupOutboxForTests();
+    secondaryAlive = false;
     expect(getBotGroupOutbox('g1')).toEqual([]);
-    const [key, newValue] = signal.mock.calls.at(-1)!;
-    const deliver = (eventKey: string) => window.dispatchEvent(Object.assign(new Event('storage'), { key: eventKey, newValue, storageArea: storage }));
-    deliver(key + '-other-owner');
-    await vi.advanceTimersByTimeAsync(0);
-    expect(requests.filter(action => action === 'list')).toHaveLength(1);
-    deliver(key);
-    await vi.advanceTimersByTimeAsync(0);
+    await vi.advanceTimersByTimeAsync(5_000);
     expect(requests.filter(action => action === 'list')).toHaveLength(2);
     expect(mocks.send.mock.calls.map(([input]) => input.clientId)).toEqual(['closing-window', 'closing-window']);
     expect(getBotGroupOutbox('g1').map(entry => entry.input.clientId)).toEqual(['closing-window']);
     expect(getBotGroupOutbox('g1')[0].status).toBe('sent');
     stopMain();
-    deliver(key);
     await vi.advanceTimersByTimeAsync(5_000);
     expect(requests.filter(action => action === 'list')).toHaveLength(2);
   } finally { stopSecondary(); stopMain(); vi.unstubAllGlobals(); vi.useRealTimers(); }
+});
+
+// Unit: a periodic list can finish after the user edits away a locally owned
+// failure. The stale disk snapshot must not put its old text back into sending.
+it('does not revive a send edited away while a durable list is pending', async () => {
+  vi.useFakeTimers();
+  vi.stubGlobal('window', new EventTarget());
+  let resolveList!: (rows: unknown[]) => void;
+  const pending = new Promise<unknown[]>(resolve => { resolveList = resolve; });
+  let reads = 0;
+  mocks.storage = async request => request.action === 'list' && ++reads === 2 ? pending : [];
+  const stop = startBotGroupOutbox();
+  const composer = { restore: vi.fn(() => true), notifyFailed: vi.fn() };
+  const unmount = registerBotGroupComposer('g1', composer);
+  try {
+    await vi.advanceTimersByTimeAsync(0);
+    mocks.send.mockRejectedValueOnce(new Error('offline')).mockResolvedValue({ ok: true, messageId: 'wrong-old-text' });
+    await enqueueBotGroupSend(draft({ clientId: 'edited' }));
+    await vi.advanceTimersByTimeAsync(0);
+    const old = structuredClone(getBotGroupOutbox('g1')[0]);
+    expect(old.status).toBe('failed');
+    window.dispatchEvent(new Event('focus'));
+    expect(editBotGroupSend('g1', 'edited')).toBe(true);
+    resolveList([old]);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(getBotGroupOutbox('g1')).toEqual([]);
+    expect(mocks.send).toHaveBeenCalledTimes(1);
+  } finally { stop(); unmount(); vi.unstubAllGlobals(); vi.useRealTimers(); }
 });
 
 // Unit regression: a restart between local enqueue and the HTTP response used to lose
