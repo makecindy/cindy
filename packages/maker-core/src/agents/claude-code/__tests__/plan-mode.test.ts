@@ -906,6 +906,8 @@ describe('ClaudeCodeAgent plan mode', () => {
       expect(subscriptionEnv.ANTHROPIC_BASE_URL).toBeUndefined();
       expect(subscriptionEnv.CLAUDE_CODE_PROVIDER_MANAGED_BY_HOST).toBeUndefined();
       expect(subscriptionEnv.ANTHROPIC_API_KEY).toBeUndefined();
+      // User-level settings (a terminal claude's apiKeyHelper / gateway env) would override the subscription login.
+      expect(sdkMock.query.mock.calls.at(-1)?.[0]?.options?.settingSources).toEqual(['project', 'local']);
       await vi.waitFor(() => expect(seen).toEqual([rateLimitInfo]));
 
       handles.push(await agent.startSession({
@@ -916,6 +918,7 @@ describe('ClaudeCodeAgent plan mode', () => {
       expect(gatewayEnv.ANTHROPIC_BASE_URL).toBe('http://127.0.0.1:1');
       expect(gatewayEnv.CLAUDE_CODE_PROVIDER_MANAGED_BY_HOST).toBe('1');
       expect(gatewayEnv.ANTHROPIC_API_KEY).toBe('sk-must-not-reach-anthropic');
+      expect(sdkMock.query.mock.calls.at(-1)?.[0]?.options?.settingSources).toEqual(['user', 'project', 'local']);
       // Gateway sessions go through the local proxy; their rate_limit_event is not the subscription quota.
       await new Promise((resolve) => setTimeout(resolve, 20));
       expect(seen).toEqual([rateLimitInfo]);
