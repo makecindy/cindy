@@ -35,6 +35,7 @@ const screens = {
     node('1', 'AXWebArea', { frame }),
     node('1.0', 'AXTextField', { title: 'Password', secure: true }),
   ],
+  noPage: [node('0', 'AXTextField', { desc: '地址和搜索栏', hasValue: true })],
   noAddressEmail: [
     node('0', 'AXTextField', { desc: '地址和搜索栏', hasValue: true }),
     node('1', 'AXWebArea', { frame }),
@@ -265,6 +266,21 @@ describe('a sign-in step', () => {
         snapshot.controls.some((c) => c.kind === 'text' && c.label === 'Reply'),
       ),
     ).toBe(false);
+  });
+
+  it('keeps covering the sign-in page while the browser shows no page to read', async () => {
+    const { driver, state } = desktop('password');
+    const run = start(driver);
+    await run.session.start();
+    state.screen = 'noPage';
+    await settle();
+    const before = run.guarded.length;
+    await settle();
+    // The protection expires after a while: it is renewed every watch, readable or not.
+    expect(run.guarded.length).toBeGreaterThan(before);
+    expect(run.guarded.at(-1)).toBe('https://login.example.com/');
+    expect(run.finished).toEqual([]);
+    run.session.cancel();
   });
 
   it('does not call the sign-in done while the page address is missing', async () => {

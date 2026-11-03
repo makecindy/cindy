@@ -283,6 +283,8 @@ export class InputHandoffSession {
   /** The asked fields went away without an answer through the card: the owner did it on the window. */
   private doneOutside = false;
   private ambiguousTitles: string[] | undefined;
+  /** The page last covered for a sign-in on the window, renewed while the card waits. */
+  private guardedPage: { pid: number; url?: string } | undefined;
   /** The process this request switched page accessibility on for, to switch it back off. */
   private pageExposedOn: number | undefined;
   private watchTimer: ReturnType<typeof setTimeout> | undefined;
@@ -669,8 +671,10 @@ export class InputHandoffSession {
   /** The owner types a password straight into this page: the agent's page reads pause there, as after a form. */
   private guardSignInPage(step: ExtractedStep): void {
     // Every direct sign-in field counts, not only a password: a one-time code or an account typed in the window is as readable.
-    if (step.signIn && this.target)
-      this.options.onSecretEntered?.({ pid: this.target.pid, ...(step.url ? { url: step.url } : {}) });
+    if (step.signIn && this.target) {
+      this.guardedPage = { pid: this.target.pid, ...(step.url ? { url: step.url } : {}) };
+      this.options.onSecretEntered?.(this.guardedPage);
+    }
   }
 
   private present(read: ExtractedStep, suppressAutoFinish = false): void {
@@ -1061,6 +1065,8 @@ export class InputHandoffSession {
     }
     const driver = this.options.driver;
     const target = this.target!;
+    // The protection expires; a card can wait longer, and a page that cannot be read now renews nothing below.
+    if (this.guardedPage) this.options.onSecretEntered?.(this.guardedPage);
     const list = await driver.windows().catch(() => null);
     if (!list || !this.watching() || this.target !== target) return;
     const previous = this.watchList;
