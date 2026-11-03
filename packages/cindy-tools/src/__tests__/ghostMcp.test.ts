@@ -1520,6 +1520,26 @@ describe("cindy_ghosts · ghost_forge(锻造)", () => {
     expect(payload.message).toContain("4.7 网络代发(network 槽)");
   });
 
+  // 协议:show_page 说明让模型调 ghost_forge_guide({section:"pages"}) 读页面手册,命中失败
+  // 模型就只能凭记忆写页面。手册自带多个 ## 小节,必须整份返回而不是被当成章节切开;
+  // 宿主未提供时与旧版一致报 SECTION_NOT_FOUND。最小失败输入:旧代码对 "pages" 报未命中。
+  it("forge_guide section pages 整份返回宿主页面手册,目录提示该入口;宿主未提供时按旧行为未命中", async () => {
+    const PAGE_MANUAL = ["# 页面手册", "## 1. 首屏", "first", "## 2. 规则", "second"].join("\n");
+    const deps = fakeDeps({
+      forgeGuide: async () => SECTIONED_GUIDE,
+      forgePageManual: async () => PAGE_MANUAL,
+    });
+    const pages = await handleForgeGuide(deps, { section: "pages" });
+    expect(pages.isError).toBeUndefined();
+    expect(pages.content[0].text).toBe(PAGE_MANUAL);
+    const toc = (await handleForgeGuide(deps)).content[0].text;
+    expect(toc).toContain('{"section":"pages"}');
+
+    const legacy = await handleForgeGuide(sectionedDeps(), { section: "pages" });
+    expect(parsePayload(legacy)).toMatchObject({ ok: false, errorCode: "SECTION_NOT_FOUND" });
+    expect((await handleForgeGuide(sectionedDeps())).content[0].text).not.toContain('"pages"');
+  });
+
   it("forge_scaffold 透传模板和创建文件；目标存在时标 isError", async () => {
     const okResult = await handleForgeScaffold(fakeDeps(), {
       dir: "/src/my-ghost",

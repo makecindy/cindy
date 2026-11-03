@@ -2624,6 +2624,13 @@
       "storage": {
         "dialogueDirectoryTitle": "言谈工作区",
         "dialogueDirectoryDescription": "仅用于新开差事，旧卷仍居原处。",
+        "projectsRootTitle": "新案存放处",
+        "projectsRootInferred": "荐",
+        "projectsRootDefault": "常例",
+        "projectsRootChoose": "易目录",
+        "projectsRootReset": "复荐处",
+        "projectsRootDescription": "于差事中立新案时，案之卷匣置于此。未设则依汝旧案所在荐之。",
+        "projectsRootFailed": "新案存放处更之未成",
         "dialogueDirectoryOpen": "启目录",
         "dialogueDirectoryChoose": "易目录",
         "dialogueDirectoryReset": "复预设处",
@@ -14368,6 +14375,26 @@
           "cancel": "罢"
         }
       },
+      "newProjectDialog": {
+        "title": "立新案",
+        "description": "立一新案之卷匣，并移此差事入新案。",
+        "descriptionMoveFiles": "立一新案之卷匣，徙此差事之档入内，并移差事入新案。",
+        "nameLabel": "案名",
+        "namePlaceholder": "如 my-app",
+        "targetPath": "将立 {{path}}",
+        "location": "所在",
+        "locationInferred": "依汝旧案所在荐之",
+        "locationWillCreate": "此卷匣尚无，允之即立",
+        "changeLocation": "易…",
+        "remember": "后立新案皆置于此",
+        "cancel": "罢",
+        "create": "立案",
+        "nameTaken": "已有同名卷匣，另择一名",
+        "nameInvalid": "名中不可含 \\ / : * ? \" < > |，亦不可以句点或空格收尾",
+        "loadFailed": "案之所在读之未成",
+        "failed": "立案未成",
+        "done": "新案已立，差事已移入"
+      },
       "sessionMenu": {
         "moreActions": "余者",
         "rename": "易名",
@@ -14381,6 +14408,7 @@
         "moveToProject": "移差事",
         "moveToProjectHeading": "此机之案",
         "browseProjectFolder": "择案之卷匣",
+        "newProject": "立新案…",
         "moveToDialogue": "移至言谈",
         "noProjects": "近无案",
         "moveToProjectDone": "已移至案",
@@ -15781,6 +15809,7 @@
     "agentControlled": "此界面乃 Agent 所启。填写之前，请确认此处确为君欲登录之所。",
     "agentPicture": "此 QR 码出自 Agent 之截屏，Cindy 不见原画面，扫毕亦不自续。请确认其所指之网站确为君欲登录之所，扫毕点「交还 Agent」。",
     "error": {
+      "raise": "窗不能启，请于电脑切至之。",
       "decision": "操作未达，请再试。",
       "stale": "界面已变，请依最新内容操作。",
       "submit": "所输入者未达，请再试。"
@@ -15816,6 +15845,9 @@
       "picture": "观画面",
       "backToForm": "归表单",
       "liveView": "即景",
+      "openWindow": "启登录之窗",
+      "openRemoteDesktop": "启远程桌面",
+      "useForm": "改以表单填写",
       "fill": "填",
       "skip": "略",
       "continue": "续",
@@ -15823,6 +15855,9 @@
       "showPassword": "示密码",
       "hidePassword": "隐密码",
       "scan": "扫码"
+    },
+    "directSignIn": {
+      "hint": "请径于窗中登录，毕则自续。"
     },
     "remoteUnavailable": "此机不能自远方受输入。请于主机之机上完成此步，再交还 Agent。",
     "unnamedField": "书栏",
@@ -18777,6 +18812,9 @@
     "failed": "操作未毕，请再试或览此机之卷。"
   },
   "attachmentPreview": {
+    "fitWidth": "适宽",
+    "fitPage": "适页",
+    "pageNumber": "页码",
     "more": "更多操作",
     "retry": "重试",
     "image": "图",

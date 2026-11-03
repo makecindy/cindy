@@ -231,6 +231,7 @@ it.skipIf(!binaryPath)(
           input: [{ type: "text", text: "Probe disabled Goal tools." }],
         });
         await expect.poll(() => completed, { timeout: 15_000 }).toBe(3);
+        // real-wait: Observe the real app-server after turn completion for an unwanted Goal-owned request.
         await new Promise(resolve => setTimeout(resolve, 500));
         expectGoalProbesRejected(probeStart, "resumed");
         expect(await resumed.request("thread/goal/get", { threadId: thread.id })).toEqual(goal);
@@ -263,6 +264,7 @@ it.skipIf(!binaryPath)(
       expect(await agent.oneShot("Produce a bounded title or summary.", {
         model: "gpt-6-astra", timeoutMs: 15_000,
       })).toBe("One step completed.");
+      // real-wait: Observe the native oneShot host after release for an unwanted Goal continuation.
       await new Promise(resolve => setTimeout(resolve, 500));
       expectGoalProbesRejected(probeStart, "oneShot");
     } finally {

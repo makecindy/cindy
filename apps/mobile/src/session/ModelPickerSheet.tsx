@@ -71,7 +71,7 @@ const EMPTY_FLAT_OPTIONS: readonly MobileModelOption[] = [];
 export interface ModelPickerSheetProps {
   /** Host-owned context, such as the plugin requesting this selection. */
   title?: string;
-  unified?: UnifiedMobilePickerOptions;
+  unified: UnifiedMobilePickerOptions;
   visible: boolean;
   onClose(): void;
   onClosed?(): void;
