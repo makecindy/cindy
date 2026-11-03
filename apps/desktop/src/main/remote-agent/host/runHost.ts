@@ -1392,7 +1392,7 @@ export function createRemoteAgentHost(deps: RemoteAgentHostDeps) {
     // 任务所在电脑报「与你那份一样」的托管 Skill：复制这台自己的，指纹不再一致(刚更新过)就不带这个 Skill。
     const reused = personal.managedSkills?.filter((skill) => skill.reuse) ?? [];
     if (reused.length) {
-      const own = await ownManagedSkills();
+      const own = await ownManagedSkills(trust === 'guest');
       for (const skill of reused) {
         const source = own.get(skill.command);
         const files = source ? await listManagedSkillFiles(source) : null;
@@ -1860,10 +1860,15 @@ export function createRemoteAgentHost(deps: RemoteAgentHostDeps) {
   // ─── 供应商组：本机是组所在电脑，把受邀者的任务转给组内电脑 ─────────────────
 
   /** 转给组内电脑的打开载荷：已按受邀者复核过；来源换成那台上的供应商，带防转圈标记与受邀者的 relay 键。 */
-  /** 这台自己的托管 Skill：命令名 → SKILL.md 所在目录。列不出来时当作没有。 */
-  async function ownManagedSkills(): Promise<Map<string, string>> {
+  /**
+   * 这台自己的托管 Skill：命令名 → SKILL.md 所在目录。列不出来时当作没有。受邀者只能看到、也只能复用 Cindy 内置的
+   * (`cindy:`)：提供者装的插件不对受邀者透露、也不被受邀者点名复制进它的任务。
+   */
+  async function ownManagedSkills(guest: boolean): Promise<Map<string, string>> {
     try {
-      return new Map((await deps.managedSkills?.() ?? []).map((skill) => [skill.command, skill.dir]));
+      return new Map((await deps.managedSkills?.() ?? [])
+        .filter((skill) => !guest || skill.command.startsWith('cindy:'))
+        .map((skill) => [skill.command, skill.dir]));
     } catch (error) {
       deps.log?.warn('remote agent: managed skills unavailable', { error: String(error) });
       return new Map();
@@ -1873,8 +1878,7 @@ export function createRemoteAgentHost(deps: RemoteAgentHostDeps) {
   /** caps 里报的指纹。受邀者只看到 Cindy 内置的，不透露这台装了哪些插件。 */
   async function ownManagedSkillDigests(guest: boolean): Promise<Record<string, string>> {
     const digests: Record<string, string> = {};
-    for (const [command, dir] of await ownManagedSkills()) {
-      if (guest && !command.startsWith('cindy:')) continue;
+    for (const [command, dir] of await ownManagedSkills(guest)) {
       const digest = await managedSkillDigest(dir);
       if (digest) digests[command] = digest;
     }
@@ -1889,9 +1893,10 @@ export function createRemoteAgentHost(deps: RemoteAgentHostDeps) {
   async function adaptManagedSkillsForMember(
     personal: RemoteAgentWirePersonal,
     memberDigests: Readonly<Record<string, string>> | undefined,
+    guest: boolean,
   ): Promise<RemoteAgentWirePersonal> {
     if (!personal.managedSkills) return personal;
-    const own = await ownManagedSkills();
+    const own = await ownManagedSkills(guest);
     const skills: RemoteAgentWireManagedSkill[] = [];
     const filesBySkill = new Map<string, RemoteAgentWireFile[]>();
     for (const file of personal.managedFiles ?? []) {
@@ -2313,7 +2318,7 @@ export function createRemoteAgentHost(deps: RemoteAgentHostDeps) {
           sessionId: relaySessionIdFor(run.controller, payload.sessionId), relay: relayKeyFor(run.controller) });
         if (run.closing) return;
         const relayed = relayedOpenPayload(run, payload, current);
-        relayed.personal = await adaptManagedSkillsForMember(relayed.personal, caps.managedSkills?.digests);
+        relayed.personal = await adaptManagedSkillsForMember(relayed.personal, caps.managedSkills?.digests, run.trust === 'guest');
         if (run.closing) return;
         const started = await backend.client.open(run.kind, relayed);
         if (run.closing) {

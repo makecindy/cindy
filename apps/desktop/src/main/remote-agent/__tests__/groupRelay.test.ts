@@ -2271,11 +2271,14 @@ describe('provider group reshare consent', () => {
     };
     const pr = own('pr');
     const learn = own('learn');
+    const secret = own('secret');
     const opens: Array<{ personal: Record<string, unknown> }> = [];
     let oldMember = false;
     const env = setup({
       plans: [{ kind: 'member', ...MEMBER_MINI }, { kind: 'member', ...MEMBER_MINI }],
-      owner: { managedSkills: async () => [{ command: 'cindy:pr', dir: pr }, { command: 'cindy:learn', dir: learn }] },
+      owner: { managedSkills: async () => [
+        { command: 'cindy:pr', dir: pr }, { command: 'cindy:learn', dir: learn }, { command: 'cindy-plugin-x:secret', dir: secret },
+      ] },
       intercept: async (_agentDeviceId, request, forward) => {
         if (request.op === 'caps') {
           const caps = { ...await forward() as Record<string, unknown> };
@@ -2289,6 +2292,8 @@ describe('provider group reshare consent', () => {
     const personal = { files: [], managedSkills: [
       { command: 'cindy:pr', dir: '.claude/skills/cindy-pr', digest: await managedSkillDigest(pr), reuse: true },
       { command: 'cindy:learn', dir: '.claude/skills/cindy-learn', digest: await managedSkillDigest(learn), reuse: true },
+      // 受邀者点名提供者装的插件 Skill：组所在电脑不替它补文件。
+      { command: 'cindy-plugin-x:secret', dir: '.claude/skills/cindy-plugin-x-secret-00000000', digest: await managedSkillDigest(secret), reuse: true },
     ] };
     const learnFile = { path: '.claude/skills/cindy-learn/SKILL.md', data: Buffer.from('learn').toString('base64') };
     const first = await openAsGuest(env, C_AT_B, openPayload('task-1', { personal }));

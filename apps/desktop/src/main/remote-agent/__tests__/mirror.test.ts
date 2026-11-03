@@ -24,7 +24,7 @@ import {
   collectPersonalConfig,
   collectProjectInstructionFiles,
 } from '../controller/projectFiles';
-import { shadowAliases, startRemoteAgentSession } from '../controller/startRemote';
+import { managedAliasSources, shadowAliases, startRemoteAgentSession } from '../controller/startRemote';
 import { EXEC_SERVER_NOT_FOUND_CODE } from '../host/execServerShortcut';
 import { createRemoteAgentHost, mirrorSegments, type HostedStartInput } from '../host/runHost';
 import { createProviderShareMemberPurger, hostedStartOptions } from '../host/service';
@@ -510,6 +510,30 @@ describe('collectPersonalConfig', () => {
     expect(Object.keys(decode(own.personal.files)).sort()).toEqual([
       `${own.personal.managedSkills![0].dir}/.env`, `${own.personal.managedSkills![0].dir}/SKILL.md`,
     ]);
+  });
+
+  // 连回时托管 Skill 的映射以这次为准：更新过的指向新目录，上次有、这次已停用的撤掉，个人 Skill 的映射不动。
+  it('replaces managed Skill aliases on reconnect, including ones that went away', () => {
+    const roots = (list: Array<[string, string, boolean]>) => list.map(([relative, local, managed]) => ({ relative, local, ...(managed ? { managed: true as const } : {}) }));
+    const shadow = path.join(root, 'shadow');
+    const project = path.join(root, 'project');
+    const dirs = Object.fromEntries(['pr-v1', 'pr-v2', 'learn', 'mine'].map((name) => [name, path.join(root, name)]));
+    for (const dir of [project, ...Object.values(dirs)]) fs.mkdirSync(dir, { recursive: true });
+    const projection = { shadowDir: shadow, mirrorRoot: path.dirname(shadow) };
+    const first = roots([['.claude/skills/cindy-pr', dirs['pr-v1'], true], ['.claude/skills/cindy-learn', dirs.learn, true], ['.claude/skills/mine', dirs.mine, false]]);
+    const workspace = new ExecutorWorkspace({ workingDir: project });
+    workspace.setAliases(shadowAliases(projection, project, first));
+    workspace.setVirtualRoot(path.dirname(shadow));
+    const previous = managedAliasSources(shadow, first);
+    // 重连：pr 更新到新目录、learn 被停用。
+    const second = roots([['.claude/skills/cindy-pr', dirs['pr-v2'], true], ['.claude/skills/mine', dirs.mine, false]]);
+    const current = managedAliasSources(shadow, second);
+    workspace.addAliases(shadowAliases(projection, project, second), new Set([...previous, ...current]));
+    const localOf = (relative: string) => path.normalize(workspace.mapTextFromAgent(`${shadow}/${relative}`));
+    expect(localOf('.claude/skills/cindy-pr/run.mjs')).toBe(path.join(dirs['pr-v2'], 'run.mjs'));
+    expect(localOf('.claude/skills/mine/a.md')).toBe(path.join(dirs.mine, 'a.md'));
+    // 已停用的不再指向它原来的本机目录，只剩工作区的普通映射。
+    expect(localOf('.claude/skills/cindy-learn/x.md')).toBe(path.join(project, '.claude/skills/cindy-learn/x.md'));
   });
 
   it('leaves credential files in personal Skills for later on a shared provider', async () => {

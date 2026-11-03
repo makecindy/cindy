@@ -319,6 +319,8 @@ describe('guest agents', () => {
       payload: { json: openPayload('task-1', { personal: { files: [], managedSkills: [
         { command: 'cindy:pr', dir: '.claude/skills/cindy-pr', digest, reuse: true },
         { command: 'cindy:learn', dir: '.claude/skills/cindy-learn', digest: '0'.repeat(64), reuse: true },
+        // 受邀者点名提供者装的插件 Skill(指纹它是知道不了的，但不能因此靠猜就复制进它的任务)。
+        { command: 'cindy-plugin-x:secret', dir: '.claude/skills/cindy-plugin-x-secret-00000000', digest: await managedSkillDigest(secret), reuse: true },
       ] } }) },
     });
     await waitForStarted(host, GUEST, RUN_1);
@@ -326,6 +328,8 @@ describe('guest agents', () => {
     expect(started[0].input.controllerManagedSkills).toEqual({ claudePluginRoots: [plugin] });
     expect(fs.readFileSync(path.join(plugin, 'skills', 'pr', 'SKILL.md'), 'utf8')).toBe('own pr');
     expect(fs.existsSync(path.join(plugin, 'skills', 'learn'))).toBe(false);
+    expect(fs.existsSync(path.join(shadowDir(GUEST, 'task-1'), '.cindy', 'managed-skills', 'cindy-plugin-x'))).toBe(false);
+    expect(JSON.stringify(fs.readdirSync(sessionRoot(GUEST, 'task-1'), { recursive: true }))).not.toContain('secret');
     host.dispose();
   });
 

@@ -177,6 +177,15 @@ export function takeGroupSwitchState(
  * 影子目录(对方电脑上的路径) → 本机真实路径的映射。虚拟工作区使用固定 opaque 层级，旧协议
  * 仍按真实路径逐级镜像；同步过去的个人 Skill 等映射回你这台的个人配置目录。越具体的放越前面。
  */
+/** 托管 Skill 的映射在影子目录里的虚拟路径(`shadowAliases` 生成的 `from`)。 */
+export function managedAliasSources(
+  shadowDir: string,
+  personalRoots: ReadonlyArray<{ relative: string; managed?: true }>,
+): Set<string> {
+  const shadow = shadowDir.replace(/[\\/]+$/, '');
+  return new Set(personalRoots.filter((root) => root.managed).map((root) => `${shadow}/${root.relative}`));
+}
+
 export function shadowAliases(
   started: { shadowDir: string; mirrorRoot?: string; previousMirrorRoots?: string[]; extraDirs?: string[]; writableDirs?: string[]; virtualWorkspace?: boolean },
   workingDir: string,
@@ -486,6 +495,8 @@ async function prepareAndStartRemoteAgentSession(
   let lastStarted: RemoteStartedInfo | null = null;
 
   let personalRoots: Array<{ relative: string; local: string; managed?: true }> = [];
+  /** 上一次打开时托管 Skill 的映射来源：这次不再有的要撤掉。 */
+  let managedAliasFroms = new Set<string>();
   /** 正在连或连着的那条连接(Codex 的执行环境帧经它推给对方)。 */
   let active: RemoteAgentRunClient | null = null;
   let linkState: LinkState = 'connecting';
@@ -616,12 +627,13 @@ async function prepareAndStartRemoteAgentSession(
     // 连回时只补新映射，不替换已有的(见 ExecutorWorkspace.addAliases)。
     const applyProjection = (projection: Parameters<typeof shadowAliases>[0], virtualRoot: string | undefined) => {
       const aliases = shadowAliases(projection, workspace.workingDir, personalRoots, openedDirs);
+      const managed = managedAliasSources(projection.shadowDir, personalRoots);
       if (reconnect) {
-        // 托管 Skill 每次连回都重新同步(插件更新后目录也变了)，它们的映射以这次的为准；其余只补新的。
-        const shadow = projection.shadowDir.replace(/[\\/]+$/, '');
-        const managed = new Set(personalRoots.filter((root) => root.managed).map((root) => `${shadow}/${root.relative}`));
-        workspace.addAliases(aliases, managed);
+        // 托管 Skill 每次连回都重新同步(插件更新后目录也变了)：这次的以新的为准，上次有、这次已停用或卸载的也撤掉；
+        // 其余映射只补新的。
+        workspace.addAliases(aliases, new Set([...managedAliasFroms, ...managed]));
       } else workspace.setAliases(aliases);
+      managedAliasFroms = managed;
       workspace.setVirtualRoot(virtualRoot);
     };
     const client: RemoteAgentRunClient = new RemoteAgentRunClient(deps.newId(), poller, {
