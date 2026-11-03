@@ -33,6 +33,8 @@ import {
 import type { AuthAdapter } from '../../interfaces/auth-adapter.js';
 import type { AgentEvent as CoreAgentEvent, InteractionDecision, InteractionRequest } from '../../types/events.js';
 import type { Logger } from '../../interfaces/logger.js';
+import { normalizeRuleGroup } from '../shared/approval-rules/normalize.js';
+import { parseApprovalRuleSnapshot } from '../shared/approval-rules/schema.js';
 import {
   AUTO_REVIEW_CONFIRM_UNDELIVERED_CODE,
   AUTO_REVIEW_UNAVAILABLE_METADATA_KEY,
@@ -373,6 +375,600 @@ function createDeps(
     ...overrides,
   };
 }
+
+// Unit: actual start/send/native approval handler. A cached/local allow must not
+// bypass a current, scoped personal deny on an approval Codex already requested.
+describe('Codex managed command approvals', () => {
+  // Unit / Codex first-red B/C2: actual Agent start/send/registered native
+  // approval callback. Legacy schema-valid residual data is injected at the Host
+  // contract; this proves neither new namespace support nor a real CLI/model.
+  // Existing exact-only cases cannot expose shortcut or text-only card changes.
+  function residualData(text: string, command: string, known?: 'deny' | 'ask') {
+    const scope = { ownerId: 'o', executionHostId: 'h', harnesses: ['codex'] as ['codex'] };
+    const group = normalizeRuleGroup({ harness: 'cindy', layer: 'user', sourceId: 'residual-component:codex',
+      locator: 'cindy://component-fixture/codex', dialectVersion: '1', decisionDomain: 'personal-approval' }, scope,
+      [{ id: 'text', decision: 'ask', original: text, reason: 'unresolved verbatim', tool: { domain: 'exec', name: 'exec' } },
+        ...(known ? [{ id: 'known', decision: known, original: 'exec(' + command + ')', tool: { domain: 'exec' as const, name: 'exec' },
+          matcher: { kind: 'cc-command' as const, mode: 'exact' as const, pattern: command } }] : [])]);
+    parseApprovalRuleSnapshot({ schemaVersion: 1, revision: 1, groups: [group], tombstones: [], managedOverrides: [] });
+    return { scope, groups: [group], fingerprint: text };
+  }
+  it.each(['unknown', 'compound', 'known-deny', 'known-ask'] as const)(
+    'Codex requirements B: %s whole group is consumed before the local shortcut', async scenario => {
+      const command = scenario === 'compound' ? "/bin/bash -lc 'pwd -L && printf done'" : 'pwd';
+      const data = residualData('  保留完整原文\r\nUnicode 🧪  ', 'pwd', scenario === 'known-deny' ? 'deny' : scenario === 'known-ask' ? 'ask' : undefined);
+      const review: AutoReviewDelegate = vi.fn<AutoReviewDelegate>(async () => ({ verdict: 'allow' }));
+      const envelopes: AutoReviewRequest[] = [];
+      review.precheckManagedAction = async request => {
+        envelopes.push(request);
+        if (!request.managedToolExecution) return { kind: 'unavailable', reason: 'unverified execution' };
+        return { kind: 'clear', contextKey: 'root', revision: 1, isCurrent: () => true,
+          isExecutionCurrent: request.managedToolExecution!.codexApproval!.isCurrent, personalRequirements: data };
+      };
+      const agent = new CodexAgent(createDeps({}, { reviewAutoPermissionAction: review }));
+      const host = installFakeHost(agent, method => method === Method.TurnStart ? { turn: { id: 'managed-turn' } } : undefined,
+        { userAgent: 'fixture/0.159.2' });
+      const handle = await agent.startSession({ sessionId: 'managed', sessionInstanceId: 'instance', workingDir: '/repo',
+        model: 'gpt-5.4', permissionMode: 'auto' });
+      const human = vi.fn(async (): Promise<InteractionDecision> => ({ kind: 'permission', behavior: 'deny' }));
+      handle.setInteractionResolver(human);
+      try {
+        await handle.send({ type: 'user', content: 'Show current directory' });
+        const result = await host.getThreadHandlers()!.commandExecutionApproval!({ threadId: 'start-thread-id',
+          turnId: 'managed-turn', itemId: 'residual-item', approvalId: 'residual-approval', command, cwd: '/repo' });
+        expect(envelopes[0]).toMatchObject({ managedToolExecution: { toolName: 'exec', input: { command, cwd: '/repo' },
+          codexApproval: { threadId: 'start-thread-id', turnId: 'managed-turn', itemId: 'residual-item', approvalId: 'residual-approval' } } });
+        expect(envelopes[0]!.managedToolExecution!.codexApproval!.isCurrent()).toBe(true);
+        expect.soft(result).toEqual({ decision: scenario === 'unknown' || scenario === 'compound' ? 'accept' : 'decline' });
+        expect.soft(review).toHaveBeenCalledTimes(scenario === 'known-deny' ? 0 : 1);
+        if (scenario !== 'known-deny') expect.soft(review).toHaveBeenCalledWith(expect.objectContaining({
+          userIntent: 'Show current directory', personalRequirements: data }));
+        expect.soft(human).toHaveBeenCalledTimes(scenario === 'known-ask' ? 1 : 0);
+      } finally { await handle.close(); }
+    });
+
+  it.each(['allow', 'deny', 'unchanged-allow'] as const)(
+    'Codex requirements C2: text changes while the real card awaits human %s', async behavior => {
+      let data = residualData('v1 complete text', 'git push');
+      let revision = 1;
+      const observedTexts: string[] = [];
+      const review: AutoReviewDelegate = vi.fn<AutoReviewDelegate>(async request => request.personalRequirements?.fingerprint === 'v2 complete text'
+        ? { verdict: 'block', reason: 'new text requires rejection' } : { verdict: 'ask', reason: 'v1 confirmation' });
+      review.precheckManagedAction = async request => {
+        const rev = revision;
+        observedTexts.push(data.fingerprint);
+        return { kind: 'clear', contextKey: 'root', revision, isCurrent: () => rev === revision,
+          isExecutionCurrent: request.managedToolExecution!.codexApproval!.isCurrent, personalRequirements: data };
+      };
+      const agent = new CodexAgent(createDeps({}, { reviewAutoPermissionAction: review }));
+      const host = installFakeHost(agent, method => method === Method.TurnStart ? { turn: { id: 'managed-turn' } } : undefined,
+        { userAgent: 'fixture/0.159.2' });
+      const handle = await agent.startSession({ sessionId: 'managed', sessionInstanceId: 'instance', workingDir: '/repo',
+        model: 'gpt-5.4', permissionMode: 'auto' });
+      const human = deferred<InteractionDecision>();
+      const cards = vi.fn(async () => human.promise); handle.setInteractionResolver(cards);
+      try {
+        await handle.send({ type: 'user', content: 'Push this work' });
+        const pending = host.getThreadHandlers()!.commandExecutionApproval!({ threadId: 'start-thread-id', turnId: 'managed-turn',
+          itemId: 'text-change', approvalId: 'text-approval', command: 'git push', cwd: '/repo' });
+        await waitForExpectation(() => expect(cards).toHaveBeenCalledOnce());
+        expect(review).toHaveBeenCalledOnce();
+        expect(review).toHaveBeenCalledWith(expect.objectContaining({ personalRequirements: data, userIntent: 'Push this work' }));
+        if (behavior !== 'unchanged-allow') { data = residualData('v2 complete text', 'git push'); revision++; }
+        human.resolve({ kind: 'permission', behavior: behavior === 'deny' ? 'deny' : 'allow' });
+        expect.soft(await pending).toEqual({ decision: behavior === 'unchanged-allow' ? 'accept' : 'decline' });
+        if (behavior === 'allow') expect(observedTexts).toContain('v2 complete text');
+        expect.soft(review).toHaveBeenCalledTimes(behavior === 'allow' ? 2 : 1);
+        expect(cards).toHaveBeenCalledOnce();
+      } finally { human.resolve({ kind: 'permission', behavior: 'deny' }); await handle.close(); }
+    });
+
+  // Unit: no third review/card after a second text change, using the actual
+  // registered callback. Existing exact deny/type fences cannot prove this.
+  it.each(['second-review', 'second-card', 'second-card-unchanged'] as const)(
+    'bounds complete-text versions at %s', async scenario => {
+      let data = residualData('v1', 'git push'); let revision = 1; let reviews = 0;
+      const model = [deferred<{ verdict: 'allow' }>(), deferred<{ verdict: 'allow' }>()];
+      const human = [deferred<InteractionDecision>(), deferred<InteractionDecision>()];
+      const review: AutoReviewDelegate = vi.fn(async () => {
+        const n = reviews++; return scenario === 'second-review' ? model[n]!.promise : { verdict: 'ask' as const };
+      });
+      review.precheckManagedAction = async request => { const rev = revision;
+        return { kind: 'clear', contextKey: 'root', revision, isCurrent: () => rev === revision,
+          isExecutionCurrent: request.managedToolExecution!.codexApproval!.isCurrent, personalRequirements: data }; };
+      const agent = new CodexAgent(createDeps({}, { reviewAutoPermissionAction: review }));
+      const host = installFakeHost(agent, method => method === Method.TurnStart ? { turn: { id: 'managed-turn' } } : undefined,
+        { userAgent: 'fixture/0.159.2' });
+      const handle = await agent.startSession({ sessionId: 'managed', sessionInstanceId: 'instance', workingDir: '/repo', model: 'gpt-5.4', permissionMode: 'auto' });
+      let cards = 0; handle.setInteractionResolver(async () => human[cards++]!.promise);
+      try {
+        await handle.send({ type: 'user', content: 'Push this work' });
+        const pending = host.getThreadHandlers()!.commandExecutionApproval!({ threadId: 'start-thread-id', turnId: 'managed-turn', itemId: 'bounded', command: 'git push', cwd: '/repo' });
+        await waitForExpectation(() => expect(scenario === 'second-review' ? reviews : cards).toBe(1));
+        data = residualData('v2', 'git push'); revision++;
+        if (scenario === 'second-review') model[0]!.resolve({ verdict: 'allow' }); else human[0]!.resolve({ kind: 'permission', behavior: 'allow' });
+        await waitForExpectation(() => expect(scenario === 'second-review' ? reviews : cards).toBe(2));
+        if (scenario !== 'second-card-unchanged') { data = residualData('v3', 'git push'); revision++; }
+        if (scenario === 'second-review') model[1]!.resolve({ verdict: 'allow' }); else human[1]!.resolve({ kind: 'permission', behavior: 'allow' });
+        expect(await pending).toEqual({ decision: scenario === 'second-card-unchanged' ? 'accept' : 'decline' });
+        expect(reviews).toBe(2); expect(cards).toBe(scenario === 'second-review' ? 0 : 2);
+      } finally { model.forEach(p => p.resolve({ verdict: 'allow' })); human.forEach(p => p.resolve({ kind: 'permission', behavior: 'deny' })); await handle.close(); }
+    });
+
+  it('sends the complete matched Codex allow as data without overriding the ordinary reviewer block', async () => {
+    const scope = { ownerId: 'o', executionHostId: 'h', harnesses: ['codex'] as ['codex'] };
+    const group = normalizeRuleGroup({ harness: 'cindy', layer: 'user', sourceId: 'exact-codex-command:test',
+      locator: 'cindy://personal-approval/exact-codex-command/test', dialectVersion: '1', decisionDomain: 'personal-approval' }, scope,
+      [{ id: 'test', original: 'exec(git push)', decision: 'allow', tool: { domain: 'exec', name: 'exec' },
+        matcher: { kind: 'cc-command', mode: 'exact', pattern: 'git push' } }]);
+    const review: AutoReviewDelegate = vi.fn(async () => ({ verdict: 'block' as const, reason: 'ordinary restriction' }));
+    review.precheckManagedAction = async request => request.managedToolExecution
+      ? { kind: 'clear', contextKey: 'root', revision: 1, isCurrent: () => true,
+        personalRequirements: { scope, groups: [group], fingerprint: 'managed-1' } }
+      : { kind: 'unavailable', reason: 'no envelope' };
+    const agent = new CodexAgent(createDeps({}, { reviewAutoPermissionAction: review }));
+    const host = installFakeHost(agent, method => method === Method.TurnStart ? { turn: { id: 'managed-turn' } } : undefined,
+      { userAgent: 'fixture/0.159.2' });
+    const handle = await agent.startSession({ sessionId: 'managed', sessionInstanceId: 'instance',
+      workingDir: '/repo', model: 'gpt-5.4', permissionMode: 'auto' });
+    try {
+      await handle.send({ type: 'user', content: 'Push this work' });
+      expect(await host.getThreadHandlers()!.commandExecutionApproval!({ threadId: 'start-thread-id',
+        turnId: 'managed-turn', itemId: 'cmd', command: 'git push', cwd: '/repo' })).toEqual({ decision: 'decline' });
+      expect(review).toHaveBeenCalledOnce();
+      expect(review).toHaveBeenCalledWith(expect.objectContaining({ userIntent: 'Push this work',
+        personalRequirements: { scope, groups: [group], fingerprint: 'managed-1' } }));
+    } finally { await handle.close(); }
+  });
+
+  it.each(['new-ask', 'new-deny', 'full-during-fence', 'stop-during-fence'] as const)(
+    'finishes the native response against %s after the ordinary review', async scenario => {
+      let reads = 0;
+      let revision = 1;
+      let kind: 'clear' | 'ask' | 'deny' = 'clear';
+      const gate = deferred<void>();
+      const review: AutoReviewDelegate = vi.fn(async () => ({ verdict: 'allow' as const }));
+      review.precheckManagedAction = async request => {
+        if (!request.managedToolExecution) return { kind: 'unavailable', reason: 'no envelope' };
+        reads++;
+        // Calls 1..3 are the shared review. Call4 guards direct accept;
+        // call5 is the real handler's final response fence.
+        if (reads === 5 && scenario.startsWith('new-')) { kind = scenario === 'new-ask' ? 'ask' : 'deny'; revision++; }
+        if (reads === 4 && scenario.endsWith('-fence')) await gate.promise;
+        const rev = revision;
+        return { kind, contextKey: 'root', revision, ruleId: 'exact', reason: 'personal ' + kind,
+          isExecutionCurrent: request.managedToolExecution.codexApproval!.isCurrent,
+          isCurrent: () => rev === revision && request.managedToolExecution!.codexApproval!.isCurrent() };
+      };
+      const agent = new CodexAgent(createDeps({}, { reviewAutoPermissionAction: review }));
+      const host = installFakeHost(agent, method => method === Method.TurnStart
+        ? { turn: { id: 'managed-turn' } } : method === Method.TurnInterrupt ? {} : undefined,
+        { userAgent: 'fixture/0.159.2' });
+      const handle = await agent.startSession({ sessionId: 'managed', sessionInstanceId: 'instance',
+        workingDir: '/repo', model: 'gpt-5.4', permissionMode: 'auto' });
+      const resolver = vi.fn(async (): Promise<InteractionDecision> => ({ kind: 'permission', behavior: 'allow' }));
+      handle.setInteractionResolver(resolver);
+      try {
+        await handle.send({ type: 'user', content: 'Push the work' });
+        const pending = host.getThreadHandlers()!.commandExecutionApproval!({ threadId: 'start-thread-id',
+          turnId: 'managed-turn', itemId: 'cmd', command: 'git push', cwd: '/repo' });
+        if (scenario.endsWith('-fence')) {
+          await waitForExpectation(() => expect(reads).toBe(4));
+          if (scenario === 'full-during-fence') await handle.setPermissionMode!('bypassPermissions');
+          else await handle.abort();
+          // The real response settles before the blocked Host read is released.
+        }
+        expect(await pending).toEqual({ decision: scenario === 'new-deny' || scenario === 'stop-during-fence' ? 'decline' : 'accept' });
+        expect(resolver).toHaveBeenCalledTimes(scenario === 'new-ask' ? 1 : 0);
+      } finally { gate.resolve(); await handle.close(); }
+    });
+
+  it.each(['ask', 'pending-deny', 'pending-remove', 'pending-full', 'pending-owner', 'human-deny',
+    'review-deny', 'review-ask', 'review-owner', 'review-owner-full', 'review-input', 'review-host', 'review-directory'] as const)(
+    'keeps the actual command approval fence for %s', async scenario => {
+      let rule: 'ask' | 'deny' | 'clear' = scenario.startsWith('review-') ? 'clear' : 'ask';
+      let valid = true;
+      let revision = 1;
+      const model = deferred<{ verdict: 'allow' }>();
+      const human = deferred<InteractionDecision>();
+      const review: AutoReviewDelegate = vi.fn(async () => scenario.startsWith('review-') ? model.promise : { verdict: 'allow' as const });
+      review.precheckManagedAction = async request => {
+        const execution = request.managedToolExecution;
+        if (!execution) return { kind: 'unavailable', reason: 'no command envelope' };
+        const capturedRevision = revision;
+        return { kind: rule, contextKey: 'root', revision, ruleId: 'rule', reason: 'personal ' + rule,
+          isExecutionCurrent: () => valid && execution.codexApproval!.isCurrent(),
+          isCurrent: () => valid && revision === capturedRevision && execution.codexApproval!.isCurrent() };
+      };
+      const agent = new CodexAgent(createDeps({}, { reviewAutoPermissionAction: review }));
+      const host = installFakeHost(agent, method => method === Method.TurnStart
+        ? { turn: { id: 'managed-turn' } } : method === Method.TurnSteer ? { turnId: 'managed-turn' } : undefined, { userAgent: 'fixture/0.159.2' });
+      const handle = await agent.startSession({ sessionId: 'managed', sessionInstanceId: 'instance',
+        workingDir: '/repo', model: 'gpt-5.4', permissionMode: 'auto' });
+      const resolver = vi.fn(async () => human.promise);
+      handle.setInteractionResolver(resolver);
+      try {
+        await handle.send({ type: 'user', content: 'Push this work' });
+        const pending = host.getThreadHandlers()!.commandExecutionApproval!({ threadId: 'start-thread-id',
+          turnId: 'managed-turn', itemId: 'cmd', command: 'git push', cwd: '/repo' });
+        if (scenario.startsWith('review-')) {
+          await waitForExpectation(() => expect(review).toHaveBeenCalledOnce());
+          if (scenario === 'review-deny') { rule = 'deny'; revision++; }
+          if (scenario === 'review-ask') { rule = 'ask'; revision++; }
+          if (scenario === 'review-owner' || scenario === 'review-owner-full') valid = false;
+          if (scenario === 'review-owner-full') await handle.setPermissionMode!('bypassPermissions');
+          if (scenario === 'review-input') await handle.steer({ type: 'user', content: 'Push this work' });
+          if (scenario === 'review-host') host.getThreadHandlers()!.hostForcedRetire!({ reason: 'test host replacement' });
+          if (scenario === 'review-directory') await handle.setWritableDirs?.(['/repo', '/other']);
+          model.resolve({ verdict: 'allow' });
+          if (scenario === 'review-ask') {
+            await waitForExpectation(() => expect(resolver).toHaveBeenCalledOnce());
+            human.resolve({ kind: 'permission', behavior: 'allow' });
+          }
+        } else {
+          await waitForExpectation(() => expect(resolver).toHaveBeenCalledOnce());
+          if (scenario === 'pending-deny') { rule = 'deny'; revision++; }
+          if (scenario === 'pending-remove') { rule = 'clear'; revision++; }
+          if (scenario === 'pending-owner') valid = false;
+          if (scenario === 'pending-full') await handle.setPermissionMode!('bypassPermissions');
+          human.resolve({ kind: 'permission', behavior: scenario === 'human-deny' ? 'deny' : 'allow' });
+        }
+        const denied = ['pending-deny', 'pending-owner', 'human-deny', 'review-deny', 'review-owner', 'review-owner-full', 'review-input', 'review-host', 'review-directory'].includes(scenario);
+        expect(await pending).toEqual({ decision: denied ? 'decline' : 'accept' });
+        expect(resolver).toHaveBeenCalledTimes(scenario.startsWith('review-') && scenario !== 'review-ask' ? 0 : 1);
+        if (!scenario.startsWith('review-')) expect(review).not.toHaveBeenCalled();
+      } finally { model.resolve({ verdict: 'allow' }); human.resolve({ kind: 'permission', behavior: 'deny' }); await handle.close(); }
+    });
+
+  it.each(['ask', 'bypassPermissions', 'missing-cwd', 'missing-command', 'file-change', 'guardian', 'plan'] as const)(
+    'does not mint a personal command envelope for %s', async scenario => {
+      const review: AutoReviewDelegate = vi.fn(async () => ({ verdict: 'allow' as const }));
+      review.precheckManagedAction = vi.fn(async () => ({ kind: 'unavailable' as const, reason: 'no personal rule' }));
+      const agent = new CodexAgent(createDeps({}, { reviewAutoPermissionAction: review }));
+      const host = installFakeHost(agent, method => method === Method.TurnStart
+        ? { turn: { id: 'managed-turn' } } : undefined, { userAgent: 'fixture/0.159.2' });
+      const handle = await agent.startSession({ sessionId: 'managed', sessionInstanceId: 'instance',
+        providerId: scenario === 'guardian' ? 'openai' : undefined, planMode: scenario === 'plan',
+        workingDir: '/repo', model: scenario === 'guardian' ? 'codex/gpt-5.4' : 'gpt-5.4',
+        permissionMode: scenario === 'ask' || scenario === 'bypassPermissions' ? scenario : 'auto' });
+      handle.setInteractionResolver(async request => {
+        expect(request.kind === 'permission' && request.autoCommand).toBeUndefined();
+        return { kind: 'permission', behavior: 'allow' };
+      });
+      try {
+        await handle.send({ type: 'user', content: 'Do the work' });
+        const h = host.getThreadHandlers()!;
+        if (scenario === 'file-change') await h.fileChangeApproval!({ threadId: 'start-thread-id', turnId: 'managed-turn', itemId: 'file', grantRoot: '/repo' });
+        else await h.commandExecutionApproval!({ threadId: 'start-thread-id', turnId: 'managed-turn', itemId: 'cmd',
+          ...(scenario !== 'missing-command' ? { command: 'git status' } : {}),
+          ...(scenario !== 'missing-cwd' ? { cwd: '/repo' } : {}) });
+        expect(vi.mocked(review.precheckManagedAction!).mock.calls.every(([request]) => !request.managedToolExecution)).toBe(true);
+        if (scenario === 'ask' || scenario === 'bypassPermissions') expect(review).not.toHaveBeenCalled();
+        const start = host.request.mock.calls.find(([m]) => m === Method.ThreadStart)?.[1];
+        if (scenario === 'guardian') expect(start).toMatchObject({ approvalsReviewer: 'auto_review', sandbox: 'workspace-write' });
+      } finally { await handle.close(); }
+    });
+
+  it.each(['git push', "/bin/bash -lc 'touch /home/xd.guest/approval-test-work/CINDY_REMEMBER_TARGET_c20261026a'"])(
+    'binds remember intent only to the real pending root Auto command %s', async command => {
+    const review: AutoReviewDelegate = vi.fn(async () => ({ verdict: 'ask' as const }));
+    review.precheckManagedAction = async () => ({ kind: 'clear', contextKey: 'root',
+      isCurrent: () => true, isExecutionCurrent: () => true });
+    const agent = new CodexAgent(createDeps({}, { reviewAutoPermissionAction: review }));
+    const host = installFakeHost(agent, method => method === Method.TurnStart
+      ? { turn: { id: 'remember-turn' } } : undefined, { userAgent: 'fixture/0.159.2' });
+    const handle = await agent.startSession({ sessionId: 'remember', sessionInstanceId: 'instance',
+      workingDir: '/repo', model: 'gpt-5.4', permissionMode: 'auto' });
+    let capability: Extract<InteractionRequest, { kind: 'permission' }>['autoCommand'];
+    handle.setInteractionResolver(async request => {
+      if (request.kind === 'permission') capability = request.autoCommand;
+      expect(capability).toMatchObject({ harness: 'codex', command, cwd: '/repo' });
+      expect(capability?.isCurrent()).toBe(true);
+      return { kind: 'permission', behavior: 'allow' };
+    });
+    try {
+      await handle.send({ type: 'user', content: 'Do the work' });
+      expect(await host.getThreadHandlers()!.commandExecutionApproval!({ threadId: 'start-thread-id',
+        turnId: 'remember-turn', itemId: 'remember-command', command, cwd: '/repo' })).toEqual({ decision: 'accept' });
+      expect(capability?.isCurrent()).toBe(false);
+    } finally { await handle.close(); }
+  });
+
+  it('blocks a new managed deny before an older local command allow', async () => {
+    let deny = false;
+    const review: AutoReviewDelegate = vi.fn(async () => ({ verdict: 'allow' as const }));
+    review.precheckManagedAction = vi.fn(async request => request.managedToolExecution
+      ? { kind: deny ? 'deny' as const : 'clear' as const, contextKey: 'root', revision: deny ? 2 : 1,
+        ruleId: 'codex-exact', reason: 'personal deny', isCurrent: () => true }
+      : { kind: 'unavailable' as const, reason: 'no actual execution' });
+    const agent = new CodexAgent(createDeps({}, { reviewAutoPermissionAction: review }));
+    const host = installFakeHost(agent, method => method === Method.TurnStart
+      ? { turn: { id: 'managed-turn' } } : undefined, { userAgent: 'fixture/0.159.2' });
+    const handle = await agent.startSession({ sessionId: 'managed', sessionInstanceId: 'instance',
+      workingDir: '/repo', model: 'gpt-5.4', permissionMode: 'auto' });
+    try {
+      await handle.send({ type: 'user', content: 'Inspect status' });
+      const handler = host.getThreadHandlers()!.commandExecutionApproval!;
+      const input = { threadId: 'start-thread-id', turnId: 'managed-turn', itemId: 'one', approvalId: 'a1',
+        command: 'git status', cwd: '/repo' };
+      expect(await handler(input)).toEqual({ decision: 'accept' });
+      deny = true;
+      expect(await handler({ ...input, itemId: 'two', approvalId: 'a2' })).toEqual({ decision: 'decline' });
+      expect(review.precheckManagedAction).toHaveBeenCalledWith(expect.objectContaining({
+        managedToolExecution: expect.objectContaining({ sessionInstanceId: 'instance', toolName: 'exec',
+          input: { command: 'git status', cwd: '/repo' } }) }));
+    } finally { await handle.close(); }
+  });
+});
+
+// Test value (unit): real startSession -> send -> abort, with an in-memory
+// app-server only. Automatic source CONTENT observation must not accept a user
+// input after Stop while config/read is pending; existing turn/interrupt tests
+// begin after turn/start and cannot cover this new pre-acceptance await.
+describe('Codex user source content observation', () => {
+  // Unit: real startSession -> send must expose project metadata through the
+  // same config/read as user, before turn/start. Old coverage only read user.
+  it('observes user and project contents from one actual send metadata request', async () => {
+    const results: unknown[] = [];
+    const agent = new CodexAgent(createDeps({}, { onCodexUserRuleContent: async request => {
+      results.push(await request.read());
+      if ('readProject' in request && typeof request.readProject === 'function') results.push(await request.readProject());
+    } }));
+    const host = installFakeHost(agent, (method, params) => {
+      if (method === Method.ConfigRead && (params as { includeLayers?: boolean })?.includeLayers) return { layers: [
+        { name: { type: 'user', file: '/fixture/profile/config.toml' }, version: 'user-v1' },
+        { name: { type: 'project', dotCodexFolder: '/repo/.codex' }, version: 'project-v1', disabledReason: null },
+      ] };
+      if (method === Method.TurnStart) return { turn: { id: 'project-content-turn' } };
+      return undefined;
+    }, { userAgent: 'fixture/0.159.2', codexHome: '/fixture/profile' });
+    const handle = await agent.startSession({ sessionId: 'project-content', sessionInstanceId: 'instance', workingDir: '/repo', model: 'gpt-5.4' });
+    try {
+      await handle.send({ type: 'user', content: 'ordinary input' });
+      expect(results).toEqual([
+        { kind: 'available', requestedCwd: '/repo', nativeEffect: 'not-attested', sources: [{ file: '/fixture/profile/config.toml', profile: null, version: 'user-v1' }] },
+        { kind: 'available', requestedCwd: '/repo', nativeEffect: 'not-attested', sources: [{ dotCodexFolder: path.normalize('/repo/.codex'), version: 'project-v1' }], unavailableSources: [] },
+      ]);
+      expect(host.request.mock.calls.filter(([method, params]) => method === Method.ConfigRead
+        && (params as { includeLayers?: boolean })?.includeLayers)).toHaveLength(1);
+      expect(host.request.mock.calls.filter(([method]) => method === Method.TurnStart)).toHaveLength(1);
+    } finally { await handle.close(); }
+  });
+
+  it.each(['disabled', 'enabled-duplicate', 'version-conflict', 'enabled-disabled', 'disabled-enabled', 'conflict-then-enabled', 'invalid-version'] as const)(
+    'partitions %s project metadata without blocking an independent folder', async scenario => {
+      const folder = '/repo/.codex';
+      const enabled = { name: { type: 'project', dotCodexFolder: folder }, version: 'v1' };
+      const disabled = { ...enabled, disabledReason: 'untrusted' };
+      const bad = scenario === 'enabled-duplicate' ? [enabled, enabled] : scenario === 'disabled' ? [disabled]
+        : scenario === 'invalid-version' ? [{ ...enabled, version: '' }]
+        : scenario === 'version-conflict' ? [enabled, { ...enabled, version: 'v2' }]
+        : scenario === 'enabled-disabled' ? [enabled, disabled]
+        : scenario === 'disabled-enabled' ? [disabled, enabled] : [enabled, disabled, enabled];
+      let result: unknown, user: unknown;
+      const agent = new CodexAgent(createDeps({}, { onCodexUserRuleContent: async request => {
+        user = await request.read(); result = await request.readProject?.();
+      } }));
+      const host = installFakeHost(agent, (method, params) => {
+        if (method === Method.ConfigRead && (params as { includeLayers?: boolean })?.includeLayers) return { layers: [
+          { name: { type: 'user', file: '/fixture/profile/config.toml' }, version: 'u1', disabledReason: 'excluded' },
+          ...bad, { name: { type: 'project', dotCodexFolder: '/parent/.codex' }, version: 'good' },
+        ] };
+        if (method === Method.TurnStart) return { turn: { id: 'project-metadata' } };
+        return undefined;
+      }, { userAgent: 'fixture/0.159.2', codexHome: '/fixture/profile' });
+      const handle = await agent.startSession({ sessionId: 'project-folders', sessionInstanceId: 'instance', workingDir: '/repo', model: 'gpt-5.4' });
+      try {
+        await handle.send({ type: 'user', content: 'ordinary input' });
+        expect(user).toEqual({ kind: 'unavailable', reason: 'source-disabled' });
+        expect(result).toEqual({ kind: 'available', requestedCwd: '/repo', nativeEffect: 'not-attested',
+          sources: [...(scenario === 'enabled-duplicate' ? [{ dotCodexFolder: path.normalize(folder), version: 'v1' }] : []),
+            { dotCodexFolder: path.normalize('/parent/.codex'), version: 'good' }],
+          unavailableSources: scenario === 'enabled-duplicate' ? [] : [{ dotCodexFolder: path.normalize(folder), reason: scenario === 'disabled' ? 'source-disabled'
+            : scenario === 'invalid-version' ? 'layer-invalid' : 'source-conflict' }] });
+        expect(host.request.mock.calls.filter(([method, params]) => method === Method.ConfigRead
+          && (params as { includeLayers?: boolean })?.includeLayers)).toHaveLength(1);
+        expect(host.request.mock.calls.filter(([method]) => method === Method.TurnStart)).toHaveLength(1);
+      } finally { await handle.close(); }
+    });
+
+  it.each(['abort', 'graceful-stop', 'close', 'signal'] as const)('does not send a turn when %s wins a pending metadata read', async (action) => {
+    let resolveMetadata: ((value: unknown) => void) | undefined;
+    const metadata = new Promise<unknown>(resolve => { resolveMetadata = resolve; });
+    let observed: Parameters<NonNullable<AgentDeps['onCodexUserRuleContent']>>[0] | undefined;
+    const observe = vi.fn(async (request: NonNullable<typeof observed>) => {
+      observed = request;
+      await request.readProject?.();
+      await request.read();
+    });
+    const agent = new CodexAgent(createDeps({}, { onCodexUserRuleContent: observe }));
+    const host = installFakeHost(agent, (method, params) => {
+      if (method === Method.ConfigRead && (params as { includeLayers?: boolean })?.includeLayers) return metadata;
+      if (method === Method.TurnStart) return { turn: { id: 'should-not-start' } };
+      return undefined;
+    }, { userAgent: 'fixture/0.159.2', codexHome: '/fixture/native-profile' });
+    const handle = await agent.startSession({ sessionId: 'content-stop', sessionInstanceId: 'instance-stop',
+      workingDir: '/repo', model: 'gpt-5.4' });
+    const controller = new AbortController();
+    const signal = controller.signal;
+    const sending = handle.send({ type: 'user', content: 'ordinary user input' }, { signal });
+    const outcome = sending.then(() => 'accepted', error => String(error));
+    try {
+      await vi.waitFor(() => expect(observe).toHaveBeenCalledOnce(), { timeout: 50, interval: 1 });
+      await vi.waitFor(() => expect(host.request.mock.calls.some(([method, params]) =>
+        method === Method.ConfigRead && (params as { includeLayers?: boolean })?.includeLayers)).toBe(true),
+      { timeout: 50, interval: 1 });
+      if (action === 'abort') await handle.abort();
+      else if (action === 'graceful-stop') await handle.requestGracefulStop?.();
+      else if (action === 'close') await handle.close();
+      else controller.abort();
+      resolveMetadata?.({ layers: [{ name: { type: 'user', file: '/fixture/native-profile/config.toml' }, version: 'v1', config: {} }] });
+      expect(await outcome).toContain('cancelled before acceptance');
+      expect(signal.aborted).toBe(action === 'signal');
+      expect(observed?.isCurrent()).toBe(false);
+      expect(observed?.signal.aborted).toBe(true);
+      expect(host.request.mock.calls.some(([method]) => method === Method.TurnStart || method === Method.TurnInterrupt)).toBe(false);
+    } finally {
+      resolveMetadata?.({ layers: [] });
+      await outcome;
+      await handle.close();
+    }
+  });
+
+  it('captures the initialized session before lazy read and exposes only enabled user content metadata', async () => {
+    const requests: Array<Parameters<NonNullable<AgentDeps['onCodexUserRuleContent']>>[0]> = [];
+    const observe = vi.fn(async (request: typeof requests[number]) => {
+      requests.push(request);
+      expect(request.isCurrent()).toBe(true);
+      const first = request.read();
+      expect(request.read()).toBe(first);
+      expect(await first).toEqual({ kind: 'available', requestedCwd: '/repo', nativeEffect: 'not-attested',
+        sources: [{ file: '/fixture/profile/config.toml', profile: null, version: 'v1' }] });
+    });
+    const agent = new CodexAgent(createDeps({}, { onCodexUserRuleContent: observe }));
+    let thread = 0;
+    const host = installFakeHost(agent, (method, params) => {
+      if (method === Method.ThreadStart) return { thread: { id: 'content-thread-' + ++thread }, model: 'gpt-5.4', cwd: '/repo' };
+      if (method === Method.TurnStart) return { turn: { id: 'content-turn-' + thread } };
+      if (method === Method.ConfigRead && (params as { includeLayers?: boolean })?.includeLayers) return {
+        config: { env: { DO_NOT_IMPORT: 'opaque' } }, layers: [
+          { name: { type: 'user', file: '/fixture/profile/config.toml' }, version: 'v1', disabledReason: null },
+          { name: { type: 'project', file: '/repo/.codex/config.toml' }, version: 'project' },
+        ],
+      };
+      return undefined;
+    }, { userAgent: 'fixture/0.159.2', codexHome: '/fixture/profile' });
+    const first = await agent.startSession({ sessionId: 'first', sessionInstanceId: 'one', workingDir: '/repo', model: 'gpt-5.4' });
+    const second = await agent.startSession({ sessionId: 'second', sessionInstanceId: 'two', workingDir: '/repo', model: 'gpt-5.4' });
+    try {
+      expect(observe).not.toHaveBeenCalled(); // Startup need not have a Maker active row.
+      await first.send({ type: 'user', content: 'first input' });
+      await second.send({ type: 'user', content: 'second input' });
+      expect(requests.map(request => [request.sessionId, request.sessionInstanceId, request.threadId, request.serverProfile]))
+        .toEqual(['first', 'second'].map((id, index) => [id, index ? 'two' : 'one', 'content-thread-' + (index + 1),
+          { codexHome: '/fixture/profile', userAgent: 'fixture/0.159.2' }]));
+      expect(requests.every(request => !request.isCurrent() && request.signal.aborted)).toBe(true);
+      const reads = host.request.mock.calls.filter(([method, params]) => method === Method.ConfigRead
+        && (params as { includeLayers?: boolean })?.includeLayers);
+      expect(reads).toHaveLength(2);
+      expect(reads.every(([, params]) => JSON.stringify(params) === JSON.stringify({ includeLayers: true, cwd: '/repo' }))).toBe(true);
+      expect(host.request.mock.calls.filter(([method]) => method === Method.TurnStart)).toHaveLength(2);
+    } finally { await first.close(); await second.close(); }
+  });
+
+  it.each([
+    ['layers-unavailable', {}],
+    ['source-empty', { layers: [] }],
+    ['source-excluded', { layers: [{ name: { type: 'project', file: '/repo/config.toml' }, version: 'v1' }] }],
+    ['source-disabled', { layers: [{ name: { type: 'user', file: '/fixture/config.toml' }, version: 'v1', disabledReason: 'excluded' }] }],
+    ['layer-invalid', { layers: [{ name: { type: 'user', file: 42 }, version: 'v1' }] }],
+    ['source-conflict', { layers: ['v1', 'v2'].map(version => ({ name: { type: 'user', file: '/fixture/config.toml' }, version })) }],
+    ['read-failed', new Error('unsupported config/read')],
+  ])('keeps native send when content metadata is %s', async (reason, response) => {
+    let result: unknown;
+    const agent = new CodexAgent(createDeps({}, { onCodexUserRuleContent: async request => { result = await request.read(); } }));
+    const host = installFakeHost(agent, (method, params) => {
+      if (method === Method.ConfigRead && (params as { includeLayers?: boolean })?.includeLayers) {
+        if (response instanceof Error) throw response;
+        return response;
+      }
+      if (method === Method.TurnStart) return { turn: { id: 'metadata-fallback' } };
+      return undefined;
+    }, { userAgent: 'fixture/0.159.2', codexHome: '/fixture/profile' });
+    const handle = await agent.startSession({ sessionId: 'metadata', sessionInstanceId: 'instance', workingDir: '/repo', model: 'gpt-5.4' });
+    try {
+      await handle.send({ type: 'user', content: 'ordinary input' });
+      expect(result).toEqual({ kind: 'unavailable', reason });
+      expect(host.request.mock.calls.filter(([method]) => method === Method.TurnStart)).toHaveLength(1);
+      expect(host.retire).not.toHaveBeenCalled();
+    } finally { await handle.close(); }
+  });
+
+  it('discards metadata from a replaced app-server and retains each initialize profile', async () => {
+    let release: ((value: unknown) => void) | undefined;
+    const pending = new Promise<unknown>(resolve => { release = resolve; });
+    let captured: Parameters<NonNullable<AgentDeps['onCodexUserRuleContent']>>[0] | undefined;
+    let result: unknown;
+    const agent = new CodexAgent(createDeps({}, { onCodexUserRuleContent: async request => {
+      captured = request;
+      await request.readProject?.();
+      result = await request.read();
+    } }));
+    const oldHost = installFakeHost(agent, (method, params) => {
+      if (method === Method.ConfigRead && (params as { includeLayers?: boolean })?.includeLayers) return pending;
+      if (method === Method.TurnStart) return { turn: { id: 'must-not-start' } };
+      return undefined;
+    }, { userAgent: 'fixture/0.159.2', codexHome: '/fixture/old-profile' });
+    const first = await agent.startSession({ sessionId: 'old-session', sessionInstanceId: 'old-instance', workingDir: '/repo', model: 'gpt-5.4' });
+    const sending = first.send({ type: 'user', content: 'ordinary input' }).then(() => 'accepted', error => String(error));
+    await vi.waitFor(() => expect(captured).toBeDefined(), { timeout: 50, interval: 1 });
+    installFakeHost(agent, undefined, { userAgent: 'fixture/0.159.2', codexHome: '/fixture/new-profile' });
+    const second = await agent.startSession({ sessionId: 'new-session', sessionInstanceId: 'new-instance', workingDir: '/repo', model: 'gpt-5.4' });
+    try {
+      expect(captured?.serverProfile.codexHome).toBe('/fixture/old-profile');
+      expect(captured?.isCurrent()).toBe(false);
+      release?.({ layers: [{ name: { type: 'user', file: '/fixture/old-profile/config.toml' }, version: 'old' }] });
+      expect(await sending).toContain('app-server was replaced');
+      expect(result).toEqual({ kind: 'unavailable', reason: 'stale' });
+      expect(oldHost.request.mock.calls.some(([method]) => method === Method.TurnStart)).toBe(false);
+    } finally { release?.({ layers: [] }); await sending; await first.close(); await second.close(); }
+  });
+
+  it.each(['missing-profile', 'unsupported-version', 'callback-error'] as const)('keeps the native path for %s', async mode => {
+    const observe = vi.fn(async () => { throw new Error('host unavailable'); });
+    const agent = new CodexAgent(createDeps({}, { onCodexUserRuleContent: observe }));
+    const host = installFakeHost(agent, method => method === Method.TurnStart
+      ? { turn: { id: 'native-fallback' } } : undefined, {
+      userAgent: mode === 'unsupported-version' ? 'fixture/0.144.6' : 'fixture/0.159.2',
+      ...(mode === 'missing-profile' ? {} : { codexHome: '/fixture/profile' }),
+    });
+    const handle = await agent.startSession({ sessionId: 'fallback', sessionInstanceId: 'instance', workingDir: '/repo', model: 'gpt-5.4' });
+    try {
+      await handle.send({ type: 'user', content: 'ordinary input' });
+      expect(observe).toHaveBeenCalledTimes(mode === 'callback-error' ? 1 : 0);
+      expect(host.request.mock.calls.some(([method, params]) => method === Method.ConfigRead
+        && (params as { includeLayers?: boolean })?.includeLayers)).toBe(false);
+      expect(host.request.mock.calls.filter(([method]) => method === Method.TurnStart)).toHaveLength(1);
+    } finally { await handle.close(); }
+  });
+
+  it.each(['capture-wait', 'metadata-wait'] as const)('bounds the whole callback including %s without stopping the server', async stage => {
+    let captured: Parameters<NonNullable<AgentDeps['onCodexUserRuleContent']>>[0] | undefined;
+    let release: (() => void) | undefined;
+    const wait = new Promise<void>(resolve => { release = resolve; });
+    let late: unknown;
+    const agent = new CodexAgent(createDeps({}, { onCodexUserRuleContent: async request => {
+      captured = request;
+      if (stage === 'capture-wait') await wait;
+      await request.readProject?.();
+      late = await request.read();
+    } }));
+    const host = installFakeHost(agent, (method, params) => {
+      if (method === Method.ConfigRead && (params as { includeLayers?: boolean })?.includeLayers)
+        return wait.then(() => ({ layers: [{ name: { type: 'user', file: '/fixture/config.toml' }, version: 'v1' }] }));
+      if (method === Method.TurnStart) return { turn: { id: 'timeout-native-turn' } };
+      return undefined;
+    }, { userAgent: 'fixture/0.159.2', codexHome: '/fixture/profile' });
+    const handle = await agent.startSession({ sessionId: 'timeout', sessionInstanceId: 'instance', workingDir: '/repo', model: 'gpt-5.4' });
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'performance'] });
+    try {
+      const sending = handle.send({ type: 'user', content: 'ordinary input' });
+      await vi.advanceTimersByTimeAsync(0);
+      expect(captured?.isCurrent()).toBe(true);
+      await vi.advanceTimersByTimeAsync(1000);
+      await sending;
+      expect(captured?.isCurrent()).toBe(false);
+      expect(captured?.signal.aborted).toBe(true);
+      release?.();
+      await vi.advanceTimersByTimeAsync(0);
+      expect(late).toEqual({ kind: 'unavailable', reason: 'stale' });
+      expect(host.request.mock.calls.filter(([method]) => method === Method.TurnStart)).toHaveLength(1);
+      expect(host.request.mock.calls.some(([method]) => method === Method.TurnInterrupt)).toBe(false);
+      expect(host.retire).not.toHaveBeenCalled();
+    } finally { release?.(); vi.useRealTimers(); await handle.close(); }
+  });
+
+});
 
 describe('Codex managed Skill startup', () => {
   it('does not submit a Bot thread when refreshed discovery has an unscoped error', async () => {
@@ -1986,6 +2582,7 @@ function installFakeHost(
   });
   Object.defineProperty(agent, 'getHost', {
     value: getHost,
+    configurable: true, // A replacement fake server can exercise the real host-identity fence.
   });
 
   return Object.assign(host, { getHost });
@@ -21757,7 +22354,8 @@ describe('CodexAgent yield continuation', () => {
   }
 
   it('keeps the product turn open and waits the yielded cell after commandExecution completes', async () => {
-    const agent = new CodexAgent(createDeps());
+    const observe = vi.fn(async () => {});
+    const agent = new CodexAgent(createDeps({}, { onCodexUserRuleContent: observe }));
     let turnSeq = 0;
     const host = installFakeHost(agent, (method) => {
       if (method === Method.TurnStart) {
@@ -21765,9 +22363,10 @@ describe('CodexAgent yield continuation', () => {
         return { turn: { id: `turn-${turnSeq}` } };
       }
       return undefined;
-    });
+    }, { userAgent: 'fixture/0.159.2', codexHome: '/fixture/profile' });
     const handle = await agent.startSession({
       sessionId: 'session-yield-command-execution',
+      sessionInstanceId: 'instance-yield-content',
       model: 'gpt-5.4',
       workingDir: '/repo',
     });
@@ -21815,6 +22414,7 @@ describe('CodexAgent yield continuation', () => {
     }];
     expect(params.input[0]?.text).toContain('Wait for cell ID 226');
     expect(params.input[0]?.text).not.toContain('run typecheck');
+    expect(observe).toHaveBeenCalledOnce(); // The implicit continuation is not a new owner input.
     await handle.close();
   });
 

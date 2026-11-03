@@ -255,6 +255,21 @@ describe('permission interaction IPC', () => {
     await vi.waitFor(() => expect(makerChatStore.getSnapshot(SESSION_ID).pendingPermission).toBeNull());
   });
 
+  it('sends remember intent without a command or native grant and keeps a failed save retryable', async () => {
+    makerChatStore.initGlobalListeners();
+    const request = showPermission();
+    getPendingInteractions.mockResolvedValueOnce([{ request }]);
+    resolveInteraction.mockRejectedValueOnce(new Error('marker write failed'));
+    makerChatStore.respondToPermission(SESSION_ID, { behavior: 'allow', rememberAutoCommand: true });
+    expect(resolveInteraction).toHaveBeenCalledWith('receipt-1', expect.objectContaining({ rememberAutoCommand: true }));
+    await vi.waitFor(() => expect(makerChatStore.getSnapshot(SESSION_ID).pendingPermission?.submitting).toBe(false));
+    expect(makerChatStore.getSnapshot(SESSION_ID).pendingPermission?.submissionFailed).toBe(true);
+    expect(makerChatStore.getSnapshot(SESSION_ID).pendingPermission).not.toBeNull();
+    makerChatStore.respondToPermission(SESSION_ID, { behavior: 'allow' });
+    expect(resolveInteraction.mock.calls.at(-1)?.[1]).not.toHaveProperty('rememberAutoCommand');
+    await vi.waitFor(() => expect(makerChatStore.getSnapshot(SESSION_ID).pendingPermission).toBeNull());
+  });
+
   it('keeps the card until acknowledged and ignores duplicate decisions', async () => {
     const receipt = deferred<{ accepted: boolean }>();
     resolveInteraction.mockReturnValueOnce(receipt.promise);

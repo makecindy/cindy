@@ -1,3 +1,4 @@
+import { fileURLToPath } from 'node:url';
 // 桌面打包参数解析与产物架构命名的单测（apps/desktop/scripts/ci/package-lib.mjs）。
 //
 // 这层是「在哪台机器上能打出哪个包、包叫什么名字」的唯一判定点，错了会直接
@@ -249,4 +250,165 @@ test('build-info 记录安装包内手册,打包拒绝未提交的手册', () =>
   assert.doesNotThrow(() => assertPageManualCommitted({ porcelain: '', versionless: false, manualPath }));
   assert.throws(() => assertPageManualCommitted({ porcelain: ' M x/PAGE-GENERATION.md\n', versionless: false, manualPath }), /未提交改动/);
   assert.doesNotThrow(() => assertPageManualCommitted({ porcelain: ' M x/PAGE-GENERATION.md\n', versionless: true, manualPath }));
+});
+
+// Production entry: actual smoke-packaged.mjs, child_process adapter only.
+// Regression: environment-setup sandbox contract. Existing brand tests do not
+// observe Electron's environment. No Electron/App/network runs.
+// Tier: existing scripts node:test launcher contract.
+test('packaged smoke removes inherited sandbox disable and retains successful DB validation', (t) => {
+  const temp = fs.mkdtempSync(path.join(os.tmpdir(), 'cindy-smoke-env-'));
+  t.after(() => fs.rmSync(temp, { recursive: true, force: true }));
+  const out = path.join(temp, 'packaged');
+  fs.mkdirSync(out);
+  fs.writeFileSync(path.join(out, 'Cindy'), 'not an Electron executable');
+  const preload = path.join(temp, 'capture-spawn.cjs');
+  fs.writeFileSync(preload, [
+    "const cp = require('node:child_process');",
+    "const { EventEmitter } = require('node:events');",
+    "const { PassThrough } = require('node:stream');",
+    "cp.spawn = (exe, argv, options) => {",
+    "  console.log('CAPTURE:' + JSON.stringify({",
+    "    keys: Object.keys(options.env).filter(k => k.toLowerCase() === 'electron_disable_sandbox'),",
+    "    marker: options.env.SMOKE_ENV_TEST_MARKER,",
+    "    parent: process.env.ELECTRON_DISABLE_SANDBOX ?? null,",
+    "    parentMixedCase: process.env.Electron_Disable_Sandbox ?? null,",
+    "    userData: argv.find(a => a.startsWith('--user-data-dir='))?.slice('--user-data-dir='.length),",
+    "    smoke: argv.includes('--smoke-test'),",
+    "  }));",
+    "  const child = new EventEmitter();",
+    "  child.stdout = new PassThrough(); child.stderr = new PassThrough();",
+    "  child.kill = () => { throw new Error('unexpected timeout'); };",
+    "  process.nextTick(() => {",
+    "    child.stdout.end(JSON.stringify({ ok: true, schema_version: 0, tables: { sessions: 0, messages: 0, migration_meta: 0 } }) + String.fromCharCode(10));",
+    "    child.emit('exit', 0, null);",
+    "  });",
+    "  return child;",
+    "};",
+    "require('node:module').syncBuiltinESMExports();",
+  ].join('\n'));
+  for (const inherited of [undefined, '1']) {
+    const env = { ...process.env, SMOKE_ENV_TEST_MARKER: 'kept' };
+    for (const key of Object.keys(env)) {
+      if (key.toLowerCase() === 'electron_disable_sandbox') delete env[key];
+    }
+    if (inherited !== undefined) {
+      env.ELECTRON_DISABLE_SANDBOX = inherited;
+      env.Electron_Disable_Sandbox = inherited;
+    }
+    const result = spawnSync(process.execPath, [
+      '--require', preload,
+      fileURLToPath(new URL('../../apps/desktop/scripts/smoke-packaged.mjs', import.meta.url)),
+      '--platform=linux', '--arch=arm64', '--out-dir=' + out,
+    ], { env, encoding: 'utf8' });
+    assert.equal(result.status, 0, result.stderr);
+    const observed = JSON.parse(result.stdout.split(/\r?\n/).find(l => l.startsWith('CAPTURE:')).slice(8));
+    assert.deepEqual(observed.keys, []);
+    assert.equal(observed.marker, 'kept');
+    assert.equal(observed.parent, inherited ?? null);
+    assert.equal(observed.parentMixedCase, inherited ?? null);
+    assert.equal(observed.smoke, true);
+    assert.equal(fs.existsSync(observed.userData), false);
+    assert.match(result.stdout, /smoke test passed/);
+  }
+});
+
+// Production parser/checkpoint and actual Node entries; environment-setup's
+// sandbox contract. Existing launcher tests do not cover permission handoff.
+// Unit launcher contract: synthetic process identity is never OS/root proof.
+test('Linux sandbox checkpoint is explicit and cannot accompany skipped smoke', () => {
+  const defaults = { platform: 'linux', arch: 'arm64' };
+  assert.equal(parsePackageArgs([], defaults).prepareLinuxSandbox, undefined);
+  assert.equal(parsePackageArgs(['--prepare-linux-sandbox'], defaults).prepareLinuxSandbox, true);
+  assert.throws(() => parsePackageArgs(['--prepare-linux-sandbox', '--skip-smoke'], defaults), /mandatory smoke/);
+  for (const platform of ['darwin', 'win32']) {
+    assert.throws(() => parsePackageArgs(['--prepare-linux-sandbox'], { platform, arch: 'x64' }), /requires Linux/);
+  }
+});
+
+test('Linux sandbox preparation rejects changed bytes, directories, permissions and shared inode', async () => {
+  const { assertPreparedLinuxSandbox } = await import('../../apps/desktop/scripts/ci/linux-sandbox-checkpoint.mjs');
+  const before = { dirs: [{ dev: 1, ino: 10 }], helper: {
+    dev: 1, ino: 20, uid: 501, gid: 501, mode: 0o755, nlink: 2, sha256: 'original',
+  } };
+  const ready = structuredClone(before);
+  Object.assign(ready.helper, { ino: 21, uid: 0, gid: 0, mode: 0o4755, nlink: 1 });
+  assert.doesNotThrow(() => assertPreparedLinuxSandbox(before, ready));
+  assert.doesNotThrow(() => assertPreparedLinuxSandbox(ready, ready));
+  for (const [field, value, error] of [
+    ['sha256', 'different', /identity or bytes/], ['dev', 2, /identity or bytes/],
+    ['uid', 501, /root:root/], ['gid', 501, /root:root/],
+    ['mode', 0o755, /4755/], ['nlink', 2, /hard link/], ['ino', 20, /private copy/],
+  ]) {
+    const changed = structuredClone(ready);
+    changed.helper[field] = value;
+    assert.throws(() => assertPreparedLinuxSandbox(before, changed), error);
+  }
+  const changedDirectory = structuredClone(ready);
+  changedDirectory.dirs[0].ino++;
+  assert.throws(() => assertPreparedLinuxSandbox(before, changedDirectory), /identity or bytes/);
+});
+
+test('actual packaging and checkpoint Node entries reject unsafe preparation before any child launch', (t) => {
+  const temp = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'cindy-checkpoint-')));
+  t.after(() => fs.rmSync(temp, { recursive: true, force: true }));
+  const preload = path.join(temp, 'isolate.cjs');
+  fs.writeFileSync(preload, [
+    "const fs = require('node:fs'); const cp = require('node:child_process');",
+    "const exists = fs.existsSync; const read = fs.readFileSync;",
+    "const privateFile = p => /(?:^|[\\\\/])(?:[.]env|release-regions[.]json|log-upload[.]json)$/.test(String(p));",
+    "fs.existsSync = p => privateFile(p) ? false : exists(p);",
+    "fs.readFileSync = (p, ...a) => { if (privateFile(p)) throw new Error('PRIVATE_FILE_READ'); return read(p, ...a); };",
+    "for (const name of ['spawn', 'spawnSync', 'execSync', 'execFileSync']) cp[name] = () => { console.error('UNEXPECTED_CHILD'); throw new Error('UNEXPECTED_CHILD'); };",
+    "global.fetch = () => { throw new Error('UNEXPECTED_NETWORK'); };",
+    "Object.defineProperty(process, 'platform', { value: process.env.CHECKPOINT_PLATFORM });",
+    "process.getuid = () => Number(process.env.CHECKPOINT_UID);",
+    "Object.defineProperty(process.stdin, 'isTTY', { value: process.env.CHECKPOINT_TTY === '1' });",
+    "Object.defineProperty(process.stdout, 'isTTY', { value: process.env.CHECKPOINT_TTY === '1' });",
+    "require('node:module').syncBuiltinESMExports();",
+  ].join('\n'));
+  const run = (script, args, identity, input = '') => spawnSync(process.execPath, [
+    '--require', preload, script, ...args,
+  ], { encoding: 'utf8', input, env: {
+    PATH: process.env.PATH, HOME: temp, TMPDIR: temp,
+    CHECKPOINT_PLATFORM: identity.platform, CHECKPOINT_UID: String(identity.uid),
+    CHECKPOINT_TTY: identity.tty ? '1' : '0',
+  } });
+  const checkFailure = (result, error) => {
+    assert.equal(result.status, 1, result.stderr);
+    assert.match(result.stderr, error);
+    assert.doesNotMatch(result.stdout + result.stderr, /UNEXPECTED_CHILD|PRIVATE_FILE_READ|UNEXPECTED_NETWORK|SMOKE_STARTED/);
+  };
+  const packaging = fileURLToPath(new URL('../../apps/desktop/scripts/package-desktop.mjs', import.meta.url));
+  for (const identity of [
+    { platform: 'darwin', uid: 501, tty: true },
+    { platform: 'linux', uid: 0, tty: true },
+    { platform: 'linux', uid: 501, tty: false },
+  ]) {
+    checkFailure(run(packaging, ['--platform', 'linux', '--arch', process.arch, '--prepare-linux-sandbox'], identity), /ordinary user foreground terminal/);
+  }
+  const out = path.join(temp, 'out'); const app = path.join(out, 'Cindy-linux-' + process.arch);
+  fs.mkdirSync(app, { recursive: true, mode: 0o700 }); fs.chmodSync(out, 0o700);
+  const helper = path.join(app, 'chrome-sandbox'); fs.writeFileSync(helper, 'synthetic helper', { mode: 0o755 });
+  const runner = path.join(temp, 'checkpoint.mjs');
+  const checkpointUrl = new URL('../../apps/desktop/scripts/ci/linux-sandbox-checkpoint.mjs', import.meta.url).href;
+  const smokeUrl = new URL('../../apps/desktop/scripts/smoke-packaged.mjs', import.meta.url).href;
+  fs.writeFileSync(runner, [
+    'import { prepareLinuxSandboxCheckpoint } from ' + JSON.stringify(checkpointUrl) + ';',
+    'await prepareLinuxSandboxCheckpoint(process.argv[2], process.argv[3]);',
+    "console.log('SMOKE_STARTED');",
+    'await import(' + JSON.stringify(smokeUrl) + ');',
+  ].join('\n'));
+  // Real temp metadata is used here. A synthetic root identity never grants
+  // filesystem privileges; uid matches only the ordinary test user's files.
+  const uid = fs.statSync(app).uid;
+  const identity = { platform: 'linux', uid, tty: true };
+  checkFailure(run(runner, [out, app], { ...identity, tty: false }), /foreground terminal|ordinary Linux/);
+  if (uid !== 0) {
+    checkFailure(run(runner, [out, app], identity), /preparation aborted/);
+    checkFailure(run(runner, [out, app], identity, 'continue\n'), /root:root/);
+    fs.renameSync(helper, helper + '.original'); fs.symlinkSync(helper + '.original', helper);
+    checkFailure(run(runner, [out, app], identity, 'continue\n'), /regular file/);
+    assert.equal(fs.readFileSync(helper + '.original', 'utf8'), 'synthetic helper');
+  }
 });

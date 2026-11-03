@@ -677,6 +677,29 @@ export interface PiSubagentRunnerLaunchRequest {
   env: NodeJS.ProcessEnv;
 }
 
+/** Current config visibility only: never a thread's loaded exec-policy state. */
+export type CodexUserRuleContent = {
+  kind: 'available';
+  requestedCwd: string;
+  nativeEffect: 'not-attested';
+  sources: Array<{ file: string; profile: string | null; version: string }>;
+} | { kind: 'unavailable'; reason: string };
+
+/** Enabled project config visibility, not a thread's loaded exec policy.
+ * The folder is the server's logical address, never an inferred project root. */
+export type CodexProjectRuleContent = {
+  kind: 'available'; requestedCwd: string; nativeEffect: 'not-attested';
+  sources: Array<{ dotCodexFolder: string; version: string }>;
+  unavailableSources: Array<{ dotCodexFolder: string; reason: string }>;
+} | { kind: 'unavailable'; reason: string };
+
+/** Host content-import outcome. Absence of an observation is never proof that
+ * managed requirements are empty or that execution identity was verified. */
+export type ClaudeLiveUserRulesResult =
+  | { kind: 'saved'; revision: number; observation?: import('./shared/auto-review-decision.js').PersonalTurnObservation }
+  | { kind: 'unavailable'; reason: string; detail?: string;
+      observation?: import('./shared/auto-review-decision.js').PersonalTurnObservation };
+
 export interface AgentDeps {
   /** Opaque companion credential identity, freshly resolved at startup. No values enter the harness. */
   resolveSessionEnvironment?: (sessionId: string) => Promise<{ identity: string; assertCurrent?(): void } | undefined>;
@@ -766,6 +789,9 @@ export interface AgentDeps {
    * understand a valid future package shape must not remove Pi functionality.
    */
   resolvePiNativePackagePaths?: () => Promise<PiNativePackageEntry[]>;
+
+  /** Existing Host package generation; missing/failed evidence grants no builtin identity. */
+  getPiManagedBuiltinBashGeneration?: () => number | undefined;
 
   /**
    * Pi-only: shared Host service for typed Pi management commands and legacy
@@ -1440,6 +1466,54 @@ export interface AgentDeps {
    * Codex 不消费此字段。
    */
   claudeHooks?: Partial<Record<HookEvent, HookCallbackMatcher[]>>;
+
+  /** Optional local ordinary-root CC import. Called at input acceptance, after
+   * startup registration. Host captures its owner lease BEFORE calling read();
+   * recheck isCurrent plus that lease inside any eventual store lock. A live
+   * observation carries no file locator, persistent identity or applied claim.
+   * Callback/read failures and the adapter's bounded deadline do not stop input. */
+  onClaudeLiveUserRules?: (request: {
+    sessionId: string;
+    sessionInstanceId: string;
+    workingDir: string;
+    /** Logical config address from this Query's actual spawn environment, not a
+     * canonical file locator or proof that another Query loaded these rules. */
+    spawnProfile: { platform: NodeJS.Platform; configRoot: string;
+      basis: 'explicit-config-dir' | 'default-home' } | null;
+    /** Independent execution facts; never extends the bounded read/write request. */
+    execution?: { turnGeneration: number; isCurrent(): boolean };
+    /** Synchronous one-shot handoff after Host capture/assertCurrent, before
+     * native content awaits. Receiving it never extends this request's deadline
+     * or write lease; its independent execution revalidation remains mandatory. */
+    onManagedObservation?: (observation: import('./shared/auto-review-decision.js').PersonalTurnObservation) => void;
+    signal: AbortSignal;
+    isCurrent: () => boolean;
+    read: () => Promise<import('./shared/approval-rules/readers/claude-code.js').ClaudeLiveUserRules>;
+    /** Optional per-layer views of that SAME lazy response; unavailable layers
+     * never represent deletion. Capture the Host lease before either read. */
+    readSources?: () => Promise<import('./shared/approval-rules/readers/claude-code.js').ClaudeLiveSourceContents>;
+  }) => Promise<ClaudeLiveUserRulesResult>;
+
+  /** Optional ordinary local-root Codex source CONTENT observation at send.
+   * Host captures owner/instance authority before invoking lazy read(), then
+   * rechecks isCurrent inside any later write lock. No file read, registration,
+   * loaded-policy qualification or persistent source identity is supplied here.
+   * One bounded observation may fail without changing the native send route. */
+  onCodexUserRuleContent?: (request: {
+    sessionId: string;
+    sessionInstanceId: string;
+    threadId: string;
+    workingDir: string;
+    hostGeneration: number;
+    /** From this session's same app-server initialize, not global HOME. */
+    serverProfile: { codexHome: string; userAgent: string;
+      platformFamily?: string; platformOs?: string };
+    signal: AbortSignal;
+    isCurrent: () => boolean;
+    read: () => Promise<CodexUserRuleContent>;
+    /** Project view of the SAME lazy config/read; no second RPC or deletion. */
+    readProject?: () => Promise<CodexProjectRuleContent>;
+  }) => Promise<void>;
 
   /** Host bridge for repairing Claude Code subagent usage when provider usage is zero. */
   registerClaudeSubagentTask?: (task: ClaudeSubagentTaskRegistration) => void;
@@ -2391,6 +2465,8 @@ export interface AgentSessionHandle {
   readonly model: string;
   /** Pi-only, per-session runtime command catalog. Undefined for other agents. */
   getRuntimeCapabilities?(): PiRuntimeCapabilityManifest | undefined;
+  /** Pi-only live builtin qualification; read-only and never serialized as authority. */
+  getPersonalRuleConsumerReady?(): boolean;
   /** Subscribe to Pi runtime catalog replacement; returns an idempotent disposer. */
   onRuntimeCapabilitiesChange?(
     listener: (manifest: PiRuntimeCapabilityManifest | undefined) => void,

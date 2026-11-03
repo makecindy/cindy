@@ -12524,6 +12524,10 @@
       "defer": "Not now"
     },
     "permissionPrompt": {
+      "rememberAllow": "Always allow similar commands",
+      "rememberScope": "Auto Review only · {{harness}} · exact command: {{command}}",
+      "rememberProjectScope": "Current project only: {{project}}",
+      "rememberFailed": "Could not confirm that the allow rule was saved. Retry or allow once.",
       "alwaysAllowScoped": "Always Allow {{scope}} in This Session",
       "alwaysAllowScopedHint": "Applies to the whole session, and only to what is listed here.",
       "alwaysAllowSessionHint": "Applies to the whole session, not just this one request.",
@@ -13938,6 +13942,28 @@
       "readOnlyHint": "Read-only task: you can review the tiers and price bands, but not change them.",
       "shrinkWarning": "{{used}} already in use — a smaller window compacts or rolls over first.",
       "saveFailed": "Failed to save the context window tier"
+    },
+    "approvalRule": {
+      "hostIdentityConflict": "The device identity of an existing rule could not be verified. Original data and input are preserved; nothing was saved or published.",
+      "saved": "Rule updated.",
+      "published": "Rule published. Runtime application still needs verification.",
+      "unsupported": "This rule command or task is not supported. Your input remains.",
+      "existingTaskOnly": "Set rules in an existing local Claude Code, Codex or Pi task",
+      "failed": "Rule operation did not finish. Your input remains.",
+      "statusTitle": "Personal rules · Current task",
+      "statusLimit": "Local ordinary Auto command approvals only. Saving does not prove native loading.",
+      "statusReasons": {
+        "pending-activation": "Not effective: saved changes await activation",
+        "ready": "Available to Auto Review; checked at execution",
+        "no-rules": "Not effective: no saved rules",
+        "storage-unavailable": "Not effective: rules could not be read",
+        "unsupported-rules": "Not effective: unsupported by this engine",
+        "no-current-task": "Not effective: no current task on this engine",
+        "auto-required": "Not effective: Auto mode required",
+        "plan-mode": "Not effective: Plan mode",
+        "native-owned": "Not effective: native review owns approval",
+        "runtime-unverified": "Not effective: runtime not verified"
+      }
     },
     "agentStatus": {
       "readingMemory": "Reading memory…",

@@ -393,6 +393,7 @@ export interface MakerSendTransactionLog {
 }
 
 export interface MakerSendTransactionDeps {
+  capturePersonalRuleInput?(sessionId: string, message: unknown, sendOpts: unknown): { commit(): Promise<void> } | undefined;
   getSession(sessionId: string): MakerSendTransactionSession | undefined | null;
   closeSession(sessionId: string): Promise<void>;
   preflightBotRuntimeResources(opts: CreateOpts): Promise<void>;
@@ -1151,6 +1152,7 @@ export function createMakerSendTransaction(deps: MakerSendTransactionDeps): Make
       sendOpts,
     ): Promise<DesktopMakerSendResult> {
       if (typeof sessionId !== 'string') throwIpcError('INVALID_PARAMS', 'sessionId required');
+      const personalRuleInput = deps.capturePersonalRuleInput?.(sessionId, message, sendOpts);
       if (deps.prepareExternalInput) await deps.prepareExternalInput(sessionId);
       const dispatchProductTurn = deps.prepareProductTurn?.(sessionId);
       const requestedSendOpts = (sendOpts ?? {}) as MakerSendOptions;
@@ -2030,6 +2032,7 @@ export function createMakerSendTransaction(deps: MakerSendTransactionDeps): Make
                 // onPersisted 里可能挂着排队 orca 消息的 accepted 副作用(置 running /
                 // autoBridgePending), 必须 await 完再放行 turn(同直发路径语义)。
                 await persistUserMessage.onPersisted?.(signal);
+                await personalRuleInput?.commit();
               }
             : directPreDispatchHook ? async (signal) => {
                 await directPreDispatchHook(sessionId, signal);

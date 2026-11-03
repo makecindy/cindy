@@ -1,3 +1,4 @@
+export * from './edit_personal_approval_rule.js';
 /**
  * xdt-helper/index.ts
  *

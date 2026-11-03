@@ -166,6 +166,11 @@ function cleanupUserData() {
 const SMOKE_USER = '__smoke_test__';
 const TIMEOUT_MS = 60_000;
 
+const childEnv = { ...process.env };
+for (const key of Object.keys(childEnv)) {
+  if (key.toLowerCase() === 'electron_disable_sandbox') delete childEnv[key];
+}
+
 const child = spawn(
   exePath,
   [
@@ -176,12 +181,7 @@ const child = spawn(
   ],
   {
     stdio: ['ignore', 'pipe', 'pipe'],
-    env: {
-      ...process.env,
-      // 禁用自动更新 / Windows Squirrel startup 钩子（smoke 跑的是已安装的 exe，
-      // 但为了稳妥这里也显式清掉会影响启动的环境变量）
-      ELECTRON_DISABLE_SANDBOX: '1',
-    },
+    env: childEnv,
   },
 );
 

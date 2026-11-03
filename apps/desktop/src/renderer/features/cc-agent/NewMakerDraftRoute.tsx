@@ -46,6 +46,7 @@ import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, use
 import { DraftDirectoryRecovery, type DraftDirectoryRecoveryContext } from './draftDirectoryRecovery';
 import { DraftDirectoryRecoveryNotice } from './DraftDirectoryRecoveryNotice';
 import { NEW_MAKER_DRAFT_KEY } from './newMakerDraftKeys';
+import { isApprovalRuleCommand } from '../../../shared/approvalRuleCommand';
 import { CreateWorkerPopover, type CreateWorkerForm } from './CreateWorkerPopover';
 import { createWorkerLabel } from './workerLabel';
 import { useLocation, useNavigate, useOutletContext } from 'react-router-dom';
@@ -3707,6 +3708,10 @@ export function NewMakerDraftRoute() {
         onAccepted?: () => void;
       },
     ): Promise<boolean | undefined> => {
+      if (isApprovalRuleCommand(message)) {
+        toast.warning(t('ccAgent.approvalRule.existingTaskOnly'));
+        return false;
+      }
       if (sendInFlightRef.current || directoryRecoveryRef.current?.isSelecting()) return false;
       if (effectiveCollab.enabled && collabPolicy.loading) {
         toast.warning(t('newChat.collaboration.loadingHint'));

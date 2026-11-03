@@ -1,4 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import { normalizeRuleGroup } from '../../../../../../packages/maker-core/src/agents/shared/approval-rules/normalize';
+import { matchedPersonalAutoAsks } from '../../../../../../packages/maker-core/src/agents/shared/auto-review-decision';
 
 import {
   DEFAULT_AUTO_REVIEW_TIMEOUT_POLICY,
@@ -527,4 +529,55 @@ it('keeps registered plugin scope separate from actual user restrictions', () =>
  expect(payload.delegatedTask.task).toBe('Fix the project and run tests');
  expect(prompt).toContain('Actual user restrictions and revocations in userIntent always win');
  expect(prompt).not.toContain('host-revision');
+});
+
+// Unit: production reviewer payload must preserve the complete Host group without
+// forging userIntent. Existing prompt cases had no personal restriction data.
+it.each(['claude-code', 'pi'] as const)('sends complete personal sibling requirements as independent %s reviewer data', async agentKind => {
+  const personalRequirements: NonNullable<AutoReviewRequest['personalRequirements']> = {
+    fingerprint: 'current-query', scope: { ownerId: 'owner', executionHostId: 'host', harnesses: ['claude-code'] },
+    groups: [{ id: 'g', revision: 0, updatedBy: 'native', scope: { ownerId: 'owner', executionHostId: 'host', harnesses: ['claude-code'] },
+      origin: { harness: 'claude-code', layer: 'user', sourceId: 'live', locator: 'claude-code-live://userSettings/live', dialectVersion: 'live-user-v1' },
+      clauses: [{ id: 'known', original: 'Bash(pwd)', decision: 'allow', matcher: { kind: 'cc-command', mode: 'exact', pattern: 'pwd' } },
+        { id: 'unknown', original: 'Bash(*private*)', decision: 'deny', reason: 'unverified wildcard' }] }],
+  };
+  if (agentKind === 'pi') {
+    personalRequirements.scope.harnesses = ['pi'];
+    const group = personalRequirements.groups[0]!;
+    personalRequirements.groups = [{ ...group, scope: personalRequirements.scope,
+      origin: { ...group.origin, harness: 'cindy', sourceId: 'exact-bash:pi', locator: 'cindy://personal-approval/exact-bash/pi' },
+      clauses: [group.clauses[0]!] }];
+  } else {
+    personalRequirements.scope.projectId = '/repo';
+    const source = personalRequirements.groups[0]!;
+    source.origin.decisionDomain = 'personal-approval';
+    source.clauses.push({ id: 'ask', original: 'Bash(pwd)', decision: 'ask',
+      matcher: { kind: 'cc-command', mode: 'exact', pattern: 'pwd' } });
+    const userScope = { ...personalRequirements.scope };
+    delete userScope.projectId;
+    const remembered = normalizeRuleGroup({ harness: 'cindy', layer: 'user', sourceId: 'exact-bash:remembered',
+      locator: 'cindy://personal-approval/exact-bash/remembered', dialectVersion: '1', decisionDomain: 'personal-approval' },
+      userScope, [{ id: 'remembered', original: 'Bash(pwd)', decision: 'allow',
+        matcher: { kind: 'cc-command', mode: 'exact', pattern: 'pwd' }, tool: { domain: 'exec', name: 'Bash' },
+        autoAskExceptions: matchedPersonalAutoAsks(personalRequirements, 'pwd') }]);
+    personalRequirements.groups = [...personalRequirements.groups, remembered];
+  }
+  let received: unknown; let actualPrompt = '';
+  const reviewer = createAutoPermissionReviewer({ logger: { debug() {}, warn() {} },
+    requestText: async (_r, prompt) => {
+      actualPrompt = prompt;
+      received = JSON.parse(prompt.split('<review_input>\n')[1]!.split('\n</review_input>')[0]!);
+      return '{"verdict":"allow"}';
+    } });
+  expect(await reviewer(request({ agentKind, personalRequirements }))).toMatchObject({ verdict: 'allow' });
+  expect(received).toMatchObject({ personalRequirements, userIntent: request().userIntent });
+  expect(actualPrompt).toContain('for this ' + agentKind + ' action.');
+  // Real 2026-11-02 reviewer returned block for a separate-confirmation requirement.
+  // Unit checks only the delivered instruction contract; actual model/card proof is live.
+  if (agentKind === 'claude-code') {
+    expect(actualPrompt).toContain('Do not mechanically ask again for an identified exception');
+    expect(JSON.stringify(received)).toContain('Bash(*private*)');
+    expect(JSON.stringify(received)).toContain('autoAskExceptions');
+    expect(personalRequirements.groups[0]!.clauses.some(clause => clause.decision === 'ask')).toBe(true);
+  }
 });

@@ -25,6 +25,7 @@
 import { LIBRARY_READ_ROOT, withLibraryNativeReadContext } from '../shared/library-native-read.js';
 import { promises as fs } from 'node:fs';
 import { randomUUID } from 'node:crypto';
+import { isDeepStrictEqual } from 'node:util';
 import os from 'node:os';
 import path from 'node:path';
 
@@ -44,6 +45,9 @@ import type {
   Settings,
 } from '@anthropic-ai/claude-agent-sdk';
 import { discoverSubagentDefinitions } from './subagent-definitions.js';
+import { readClaudeLiveSourceContents, type ClaudeLiveUserRules, type ClaudeLiveSourceContents } from '../shared/approval-rules/readers/claude-code.js';
+import { ruleScopeMatches } from '../shared/approval-rules/evaluate.js';
+import { requirementsKey } from '../shared/approval-rules/requirements.js';
 import { spawnObservedClaudeProcess } from './local-process-spawn.js';
 import { claudeMcpServerToolsReport, type ClaudeMcpServerStatusEntry } from './mcp-server-tools.js';
 import {
@@ -169,6 +173,10 @@ import {
   withAutoReviewContext,
   toolAutoReviewAction,
   type AutoReviewDecision,
+  type PersonalTurnObservation,
+  type PersonalRequirements,
+  evaluatePersonalRequirements,
+  matchedPersonalAutoAsks,
 } from '../shared/auto-review-decision.js';
 import type { ReviewableAction } from '../shared/auto-review.js';
 import {
@@ -1395,6 +1403,10 @@ export class ClaudeCodeAgent extends BaseAgent {
     // 电脑上。自带的文件与命令工具关掉，改用经隧道回到那台电脑的 Cindy 工具(cindy_exec)；
     // Cindy 自己的工具也都经隧道。opts.workingDir 是本机影子目录(只放项目说明)。
     const hosted = opts.deviceHosted && !opts.remoteHostId && !reviewMode ? opts.deviceHosted : undefined;
+    const observeUserRules = this.deps.onClaudeLiveUserRules;
+    const hasPersonalObserver = !!observeUserRules && !!opts.sessionId && !!opts.sessionInstanceId
+      && !opts.remoteHostId && !hosted && !reviewMode && !opts.botRuntimeProfile
+      && !opts[LOCAL_AGENT_CLIENT]?.hostToolsOnly;
     // 受邀者(另一个账号)只能用分享给它的那一个供应商：host 必须给出供应商边界(含本机 proxy 的
     // 路由令牌)，且启动来源就是它。缺了就不启动，请求不能按本机默认规则落到本机用户的其它供应商上。
     const guestProvider = hosted?.guest ? hosted.guestProvider : undefined;
@@ -2635,6 +2647,75 @@ export class ClaudeCodeAgent extends BaseAgent {
         : normalizedAction;
       const directorySensitivePermission = builtinReviewAction?.kind === 'read'
         || builtinReviewAction?.kind === 'file-write';
+      const personalState = toolName === 'Bash' && !options.agentID && hasPersonalObserver
+        && mutablePermissionMode === 'auto' && !usesNativeClaudeAutoReview() ? personalTurn : undefined;
+      if (hasPersonalObserver && toolName === 'Bash' && !options.agentID
+        && mutablePermissionMode === 'auto' && !mutablePlanMode && !planTurnActive
+        && !usesNativeClaudeAutoReview() && typeof (input as Record<string, unknown>).command === 'string'
+        && !!(input as { command: string }).command.trim() && personalState?.kind !== 'verified')
+        return { behavior: 'deny', message: 'Personal rule execution is unverified; retry the request.' };
+      const personal = personalState?.kind === 'verified' ? personalState : undefined;
+      let requirements: PersonalRequirements | undefined = personal?.observation;
+      let personalCommand = (input as Record<string, unknown>).command;
+      let personalRequiresConfirmation = false;
+      let personalDenied = false;
+      let personalUnavailable = false;
+      let personalReviewUnavailable = false;
+      const personalEvidence = () => ({ fingerprint: requirements?.fingerprint,
+        residual: !!requirements?.groups.some(group => group.clauses.some(clause => !clause.matcher)),
+        unavailable: personalUnavailable });
+      const requirementsChanged = (before: ReturnType<typeof personalEvidence>) =>
+        before.fingerprint !== requirements?.fingerprint && (before.residual || personalEvidence().residual);
+      const changedPersonalDenial = () => ({ behavior: 'deny' as const,
+        message: 'Personal requirements changed; retry with current rules.' });
+      const missingPersonalReview = () => ({ verdict: 'ask' as const, unavailable: true,
+        reason: 'Automatic review is unavailable, so this action needs your confirmation.' });
+      const personalDenialMessage = () => personalDenied ? 'Blocked by a current personal rule.' : 'Personal rule execution context changed.';
+      const personalCurrent = async () => {
+        personalDenied = false;
+        if (!personal) return true;
+        try {
+          if (mutablePermissionMode !== 'bypassPermissions' && (personalTurn !== personal || !personal.isCurrent())) return false;
+          if (!await personal.observation.revalidate()) return false;
+          if ((mutablePermissionMode as PermissionMode) === 'bypassPermissions') return true;
+          if (personalTurn !== personal || !personal.isCurrent()) return false;
+          if (personal.observation.readManaged) {
+            const managed = await personal.observation.readManaged();
+            // Main's read already checks identity and publication after its last
+            // await. Do not open a new unverified publication window here.
+            if ((mutablePermissionMode as PermissionMode) === 'bypassPermissions') return true;
+            if (personalTurn !== personal || !personal.isCurrent()) return false;
+            personalUnavailable = !!managed && 'kind' in managed;
+            requirements = managed && !('kind' in managed)
+              ? { scope: personal.observation.scope, groups: [...personal.observation.groups, ...managed.groups],
+                fingerprint: JSON.stringify([personal.observation.fingerprint, managed.fingerprint]) }
+              : personal.observation;
+          }
+          const match = requirements && typeof personalCommand === 'string'
+            ? evaluatePersonalRequirements(requirements, personalCommand) : undefined;
+          personalRequiresConfirmation = match?.status === 'matched' && match.decision === 'ask';
+          personalDenied = match?.status === 'matched' && match.decision === 'deny';
+          return !personalDenied;
+        } catch {
+          // FullAccess withdraws the personal contribution, never the independent
+          // owner/Query/input/directory identity fence.
+          if ((mutablePermissionMode as PermissionMode) === 'bypassPermissions') {
+            try { return await personal.observation.revalidate()
+              && (mutablePermissionMode as PermissionMode) === 'bypassPermissions'; } catch { return false; }
+          }
+          return false;
+        }
+      };
+      if (personal && !await personalCurrent()) return { behavior: 'deny', message: personalDenialMessage() };
+      if (personal && (mutablePermissionMode as PermissionMode) === 'bypassPermissions' && !isPlanToolBlocked(toolName))
+        return { behavior: 'allow', updatedInput: input };
+      // Match the actual Bash input before existing turn policies wrap the
+      // review envelope; those wrappers must not erase a personal restriction.
+      const personalMatch = personal && typeof (input as Record<string, unknown>).command === 'string'
+        ? evaluatePersonalRequirements(requirements!, (input as { command: string }).command) : undefined;
+      if (personalMatch?.status === 'matched' && personalMatch.decision === 'deny')
+        return { behavior: 'deny', message: 'Blocked by a current personal rule.' };
+      personalRequiresConfirmation = personalMatch?.status === 'matched' && personalMatch.decision === 'ask';
       const reviewPermissionMode = mutablePermissionMode;
       if (reviewPermissionMode === 'auto' || (mcpApprovalPolicy === 'auto-approve' && !turnPolicyForcePrompt)) {
         // 设备托管：路径都在任务所在电脑上，以那台电脑的真实工作目录为准。
@@ -2669,19 +2750,27 @@ export class ClaudeCodeAgent extends BaseAgent {
           action.resolvedWritableRoots = resolvedWritableRoots;
           executionInput = bindClaudeFileWriteTarget(toolName, input, reviewedWritePath);
         }
-        const autoDecision = await reviewAutoAction(
+        const reviewedEvidence = personalEvidence();
+        personalReviewUnavailable = personalUnavailable;
+        let autoDecision = personalUnavailable ? missingPersonalReview() : await reviewAutoAction(
           turnPolicyForcePrompt ? toolAutoReviewAction(toolName, input, undefined, action) : action,
           workspaceRoots,
           writableRoots,
           hosted ? hosted.platform : opts.remoteHostId ? 'linux' : process.platform,
           mcpApprovalPolicy === 'auto-approve' && !turnPolicyForcePrompt,
           reviewPermissionMode !== 'auto',
+          requirements,
         );
         // 热切换收口:reviewAutoAction 是 async,期间 setPermissionMode 可能收紧(Auto→Ask)
         // 或放宽(→Full)。必须按**最新**档位决策,否则进入审查前的旧 auto 档 allow 会绕过用户
         // 刚通过 setPermissionMode 要求的确认(codex review P1;与已修复的 Pi 线程同口径)。
         // cast 破 TS 收窄:TS 不建模 await 期间经 setPermissionMode 闭包的重赋值,会把此处
         // mutablePermissionMode 仍视为 'auto';运行期它确实可能已变,故按 union 类型现读。
+        if (personal && !await personalCurrent()) return { behavior: 'deny', message: personalDenialMessage() };
+        if ((mutablePermissionMode as PermissionMode) !== 'bypassPermissions'
+          && !personalUnavailable && !reviewedEvidence.unavailable && requirementsChanged(reviewedEvidence))
+          return changedPersonalDenial();
+        if (personalUnavailable && autoDecision.verdict !== 'block') autoDecision = missingPersonalReview();
         const modeAfterReview = mutablePermissionMode as PermissionMode;
         if (isPlanToolBlocked(toolName)) {
           return { behavior: 'deny', message: 'The current Plan turn is read-only.' };
@@ -2692,7 +2781,7 @@ export class ClaudeCodeAgent extends BaseAgent {
         if (modeAfterReview !== reviewPermissionMode) {
           // 已收紧到 Ask/更严:不吃 auto 裁决,强制走用户确认(下方 forcePrompt 流程)。
           forcePrompt = true;
-        } else if (!forcePrompt && autoDecision.verdict === 'allow') {
+        } else if (!forcePrompt && autoDecision.verdict === 'allow' && !personalRequiresConfirmation) {
           return { behavior: 'allow', updatedInput: executionInput };
         } else if (!forcePrompt && reviewPermissionMode === 'auto' && autoDecision.verdict === 'block') {
           // 模型判定动作有更安全的做法 —— 按 Auto 本意保持静默,只把 reason 喂给模型。
@@ -2730,12 +2819,21 @@ export class ClaudeCodeAgent extends BaseAgent {
         suggestions: forcePrompt
           ? undefined
           : this.normalizeSessionPermissionSuggestions(options.suggestions),
+        ...(personal && !unavailableHandoff && opts.sessionInstanceId && typeof personalCommand === 'string' ? { autoCommand: {
+          sessionInstanceId: opts.sessionInstanceId,
+          harness: 'claude-code' as const, command: personalCommand, cwd: opts.workingDir,
+          autoAskExceptions: requirements ? matchedPersonalAutoAsks(requirements, personalCommand) : [],
+          isCurrent: () => mutablePermissionMode === 'auto' && personalTurn === personal && personal.isCurrent()
+            && !options.signal.aborted && pendingInteractions.get(options.toolUseID)?.settled === false,
+        } } : {}),
         metadata: {
           ...(options.blockedPath ? { blockedPath: options.blockedPath } : {}),
           ...(options.decisionReason ? { decisionReason: options.decisionReason } : {}),
           ...(options.agentID ? { agentID: options.agentID } : {}),
         },
       };
+      const cardEvidence = { ...personalEvidence(), unavailable: personalUnavailable || personalReviewUnavailable };
+      const cardInput = JSON.stringify(executionInput);
       const decision = await dispatchInteraction(
         annotatePermissionRequestForAutoReview(permissionRequest, {
           unavailable: unavailableHandoff,
@@ -2764,6 +2862,72 @@ export class ClaudeCodeAgent extends BaseAgent {
             reviewedWritePath,
           ),
         };
+        personalCommand = out.updatedInput.command;
+        if (personal) {
+          // Extend this callback's existing one re-review / second-card budget.
+          // Every await is followed by a current read AND a comparison to the
+          // evidence actually approved. Never refresh the fingerprint at the
+          // final fence and then silently consume the preceding allow.
+          let approved = cardEvidence;
+          let approvedInput = cardInput;
+          let reviewedAgain = false;
+          let cards = 1;
+          const actualInput = JSON.stringify(out.updatedInput);
+          for (;;) {
+            if (!await personalCurrent() || isPlanToolBlocked(toolName))
+              return { behavior: 'deny', message: personalDenialMessage() };
+            if (JSON.stringify(out.updatedInput) !== actualInput) return changedPersonalDenial();
+            if ((mutablePermissionMode as PermissionMode) === 'bypassPermissions') return out;
+            let nextReview: { verdict: 'allow' | 'ask' | 'block'; reason?: string; unavailable?: boolean } | undefined;
+            if (personalUnavailable) {
+              if (approved.unavailable && approvedInput === actualInput) return out;
+              nextReview = missingPersonalReview();
+            } else if (approved.unavailable || approvedInput !== actualInput || requirementsChanged(approved)
+              || (personalRequiresConfirmation && approved.fingerprint !== requirements?.fingerprint)) {
+              if (reviewedAgain) return changedPersonalDenial();
+              reviewedAgain = true;
+              const reviewed = personalEvidence();
+              nextReview = await reviewAutoAction(normalizeBuiltinToolForAutoReview(toolName, out.updatedInput),
+                [opts.workingDir, ...mutableExtraDirs, ...mutableWritableDirs],
+                [opts.workingDir, ...mutableWritableDirs], process.platform, false, false, requirements);
+              if (!await personalCurrent() || isPlanToolBlocked(toolName))
+                return { behavior: 'deny', message: personalDenialMessage() };
+              if (JSON.stringify(out.updatedInput) !== actualInput) return changedPersonalDenial();
+              if ((mutablePermissionMode as PermissionMode) === 'bypassPermissions') return out;
+              if (nextReview.verdict === 'block')
+                return { behavior: 'deny', message: formatPermissionDenial('auto', nextReview.reason) };
+              if (personalUnavailable) nextReview = missingPersonalReview();
+              else {
+                if (requirementsChanged(reviewed)) return changedPersonalDenial();
+                if (nextReview.verdict === 'allow' && !personalRequiresConfirmation) {
+                  approved = personalEvidence(); approvedInput = actualInput;
+                  continue; // Final asynchronous identity/read fence still compares this exact evidence.
+                }
+              }
+            } else return out;
+            if (cards >= 2) return changedPersonalDenial();
+            cards++;
+            const unavailable = !!nextReview?.unavailable;
+            if (unavailable) autoReviewUnavailableNotice.notify();
+            approved = personalEvidence();
+            approvedInput = actualInput;
+            const confirmed = await dispatchInteraction(annotatePermissionRequestForAutoReview({
+              ...permissionRequest, input: out.updatedInput, suggestions: undefined,
+              autoCommand: !unavailable && permissionRequest.autoCommand && typeof personalCommand === 'string'
+                ? { ...permissionRequest.autoCommand, command: personalCommand,
+                  autoAskExceptions: requirements ? matchedPersonalAutoAsks(requirements, personalCommand) : [] }
+                : undefined,
+            }, { unavailable, reason: nextReview?.reason }));
+            notifyIfAutoReviewConfirmUndelivered(unavailable, confirmed);
+            // A real human deny settles before any rule refresh or model call.
+            if (confirmed.kind !== 'permission' || confirmed.behavior !== 'allow')
+              return { behavior: 'deny', message: confirmed.kind === 'permission'
+                ? formatPermissionDenial(isSystemPermissionDenialReason(confirmed.reason) ? 'system' : 'user', confirmed.reason)
+                : 'Edited command was not approved.' };
+            if (confirmed.updatedInput && JSON.stringify(confirmed.updatedInput) !== actualInput)
+              return { behavior: 'deny', message: 'Command changed again; submit the edited command for a fresh review.' };
+          }
+        }
         // Pass-through vendor-specific permission rule updates. BaseAgent owns
         // the session-scope normalization; Claude SDK validates the final shape.
         // PermissionUpdate shapes; we don't validate — SDK throws on bad shape.
@@ -2988,6 +3152,12 @@ export class ClaudeCodeAgent extends BaseAgent {
     // 必须在 buildQuery / forward loop 之前声明, 否则 ctx getter 会捕获到 TDZ。
     let mutableAutoReviewCredentialMode = effectiveCredentialMode;
     let nativeAutoReviewUnavailable = false;
+    type PersonalTurn = { kind: 'verified'; observation: PersonalTurnObservation; isCurrent(): boolean }
+      | { kind: 'unverified'; isCurrent(): boolean };
+    const unverifiedPersonalTurn = (): PersonalTurn | undefined => hasPersonalObserver
+      ? { kind: 'unverified', isCurrent: () => false } : undefined;
+    let personalTurn = unverifiedPersonalTurn();
+    let personalModeGeneration = 0;
     let currentAutoReviewIntent: AutoReviewUserIntent = '';
     let autoReviewIntentInitialized = false;
     const autoReviewActionContext = createAutoReviewActionContext();
@@ -3015,6 +3185,7 @@ export class ClaudeCodeAgent extends BaseAgent {
       // that Query still carries its broader directory allowlist.
       && !activeQueryHasDirectoryGrants;
     const setAutoReviewIntent = (content: AutoReviewUserIntent, source = { authority: currentAutoReviewAuthority }): void => {
+      personalTurn = unverifiedPersonalTurn();
       autoReviewActionContext.advance(typeof content !== 'string' && JSON.stringify(currentAutoReviewAuthority ?? null) === JSON.stringify(source.authority ?? null));
       currentAutoReviewIntent = normalizeAutoReviewUserIntent(content);
       autoReviewIntentInitialized = true;
@@ -3059,11 +3230,13 @@ export class ClaudeCodeAgent extends BaseAgent {
       platform: NodeJS.Platform,
       hostAutoApprove = false,
       hostShortcutOnly = false,
+      personal?: PersonalRequirements,
     ): Promise<AutoReviewDecision> => {
       const directoryGeneration = autoReviewDirectoryGeneration;
       const request = {
         sessionId: opts.sessionId,
         agentKind: 'claude-code' as const,
+        ...(personal ? { personalRequirements: { scope: personal.scope, groups: personal.groups, fingerprint: personal.fingerprint } } : {}),
         providerId: mutableProviderId,
         model: mutableModel,
         userIntent: currentAutoReviewIntent,
@@ -3074,6 +3247,9 @@ export class ClaudeCodeAgent extends BaseAgent {
         writableRoots,
         platform,
       };
+      const personalMatch = personal && action.kind === 'exec' ? evaluatePersonalRequirements(personal, action.command) : undefined;
+      const skipPersonalCache = personalMatch?.status === 'uncovered' || !!personalMatch?.uncoveredRuleIds?.length
+        || !!personal?.groups.some(group => group.clauses.some(clause => !clause.matcher));
       let key: string | undefined;
       let pending: Promise<AutoReviewDecision> | undefined;
       return withAutoReviewContext(request, this.deps.reviewAutoPermissionAction, (prepared) => {
@@ -3081,19 +3257,19 @@ export class ClaudeCodeAgent extends BaseAgent {
           return Promise.resolve({ verdict: 'block', reason: 'User instructions changed; retry against the current request.' });
         }
         key = JSON.stringify([prepared, hostAutoApprove, hostShortcutOnly]);
-        const cached = autoReviewDecisionCache.get(key);
+        const cached = skipPersonalCache ? undefined : autoReviewDecisionCache.get(key);
         pending = cached ?? resolveAutoReviewDecision(
             prepared,
             this.deps.reviewAutoPermissionAction,
             hostAutoApprove,
             hostShortcutOnly,
           );
-        if (!cached) autoReviewDecisionCache.set(key, pending);
+        if (!cached && !skipPersonalCache) autoReviewDecisionCache.set(key, pending);
         return pending;
       }, (decision) => {
         if (!pending || !key) return decision;
         if (request.userIntent !== currentAutoReviewIntent || request.authorizationContext !== (currentAutoReviewAuthority ?? undefined)
-            || autoReviewDecisionCache.get(key) !== pending) {
+            || (!skipPersonalCache && autoReviewDecisionCache.get(key) !== pending)) {
           return { verdict: 'block', reason: 'User instructions changed; retry against the latest authorization.' };
         }
         if (directoryGeneration !== autoReviewDirectoryGeneration) {
@@ -3291,6 +3467,7 @@ export class ClaudeCodeAgent extends BaseAgent {
     const beginNewTurn = (priceVariant: 'standard' | 'priority' = mutableFastMode ? 'priority' : 'standard'): void => {
       // usageTracker.beginTurn() 只清 usage 桶；translator 的 turnState 也要在新 turn
       // 开始时清掉，避免上一轮 abnormal/abort 没走 result 时污染下一轮状态。
+      personalTurn = unverifiedPersonalTurn();
       usageTracker.beginTurn();
       resetClaudeGenerationTiming(runtimeState.generation);
       runtimeState.activeUsageSegmentByParent.clear();
@@ -3365,6 +3542,11 @@ export class ClaudeCodeAgent extends BaseAgent {
     const bridgeStateActive = (): boolean =>
       queuedBridgeTurns > 0 || activeBridgeKind !== null || activeBridgeRewindResumeAt !== undefined;
     let q: Query;
+    const closedLiveRuleQueries = new WeakSet<Query>();
+    const liveRuleUserSources = new WeakMap<Query, {
+      enabled: Record<keyof ClaudeLiveSourceContents, boolean>;
+      profile: Parameters<NonNullable<AgentDeps['onClaudeLiveUserRules']>>[0]['spawnProfile'];
+    }>();
     // Query-scoped lifecycle fact: modelUsage is cumulative within the SDK
     // process. A query created without a resume id starts that counter at zero;
     // resumed queries may include prior transcript usage and must establish a
@@ -4381,6 +4563,65 @@ export class ClaudeCodeAgent extends BaseAgent {
       // A fork keeps its resume source but must publish a new destination id.
       const newSdkSessionId = !resumeSdkSid || finalFork ? randomUUID() : undefined;
       const previousSdkSessionId = sdkSessionId;
+      let query: Query;
+      // This hook belongs to this Query, never to whichever Query happens to be
+      // current when an old SDK callback resumes. It routes, and grants nothing.
+      const managedRequirementRoutingHook: HookCallback = async (input, toolUseId, context) => {
+        const unchanged = { continue: true as const };
+        if (input.hook_event_name !== 'PreToolUse' || !hasPersonalObserver
+          || opts.remoteHostId || hosted || reviewMode || opts.botRuntimeProfile
+          || opts[LOCAL_AGENT_CLIENT]?.hostToolsOnly || mutablePermissionMode !== 'auto'
+          || mutablePlanMode || planTurnActive || activeToolsDisabled || usesNativeClaudeAutoReview()) return unchanged;
+        const pre = input as PreToolUseHookInput & { agent_id?: string; agent_type?: string };
+        const command = (pre.tool_input as Record<string, unknown> | undefined)?.command;
+        const personal = personalTurn;
+        if (pre.tool_name !== 'Bash' || pre.agent_id != null || pre.agent_type != null
+          || typeof command !== 'string' || !command.trim()
+          || typeof toolUseId !== 'string' || !toolUseId) return unchanged;
+        const actualInput = structuredClone(pre.tool_input);
+        const requestSessionId = pre.session_id;
+        const decide = (permissionDecision: 'ask' | 'deny', permissionDecisionReason: string) => ({
+          continue: true as const, hookSpecificOutput: {
+            hookEventName: 'PreToolUse' as const, permissionDecision, permissionDecisionReason,
+          },
+        });
+        const denied = () => decide('deny', 'Personal rule execution context changed; retry the request.');
+        const executionCurrent = () => !closed && q === query && !closedLiveRuleQueries.has(query)
+          && !canceledBridgeQueries.has(query) && !querySignal.aborted && !context.signal.aborted
+          && sdkSessionId === requestSessionId && pre.session_id === requestSessionId
+          && (!('tool_use_id' in pre) || pre.tool_use_id === toolUseId)
+          && pre.tool_name === 'Bash' && pre.agent_id == null && pre.agent_type == null
+          && isDeepStrictEqual(pre.tool_input, actualInput);
+        const ownsAuto = () => mutablePermissionMode === 'auto' && !mutablePlanMode
+          && !planTurnActive && !activeToolsDisabled && !usesNativeClaudeAutoReview();
+        try {
+          if (!executionCurrent() || personal?.kind !== 'verified' || !personal.isCurrent()) return denied();
+          if (!personal.observation.readManaged) return unchanged;
+          if (!await personal.observation.revalidate() || !executionCurrent()) return denied();
+          // A mode change withdraws only this personal contribution. The Main
+          // execution lease above still rejects owner/input/directory failures.
+          if (!ownsAuto()) return unchanged;
+          if (personalTurn !== personal || !personal.isCurrent()) return denied();
+          const managed = await personal.observation.readManaged();
+          // Main checks the independent lease and publication after its last
+          // await. Do not add an unverified async gap before returning the route.
+          if (!executionCurrent()) return denied();
+          if (!ownsAuto()) return unchanged;
+          if (personalTurn !== personal || !personal.isCurrent()) return denied();
+          if (managed && 'kind' in managed) return decide('ask', 'Personal rule evidence is unavailable; Cindy must review this action.');
+          if (!managed) return unchanged;
+          const applicable = managed.groups.some(group => requirementsKey(group) !== undefined
+            && ruleScopeMatches(group.scope, personal.observation.scope, 'claude-code')
+            && group.clauses.some(clause => clause.decision === 'requirement'));
+          const known = evaluatePersonalRequirements(managed, command);
+          return applicable || (known.status === 'matched' && known.decision !== 'allow')
+            ? decide('ask', 'Cindy reviews the complete current personal requirements.') : unchanged;
+        } catch {
+          // readManaged converts storage faults to unavailable. An exception
+          // here cannot be treated as absence of restrictions or a human grant.
+          return denied();
+        }
+      };
       const createLocalQueryArgs = (): Parameters<typeof sdkQuery>[0] => ({
         prompt: inputQueue as unknown as Parameters<typeof sdkQuery>[0]['prompt'],
         options: {
@@ -4541,11 +4782,13 @@ export class ClaudeCodeAgent extends BaseAgent {
           // prepends its narrow capability-route guard. Both run in-process
           // before Claude's permission mode (including Full access).
           ...(Object.keys(localClaudeHooks).length > 0
-            ? { hooks: localClaudeHooks }
+            ? { hooks: mergeClaudeHookSets(localClaudeHooks,
+              observeUserRules && !opts.remoteHostId && !hosted && !reviewMode && !opts.botRuntimeProfile
+                && !opts[LOCAL_AGENT_CLIENT]?.hostToolsOnly
+                ? { PreToolUse: [{ matcher: 'Bash', hooks: [managedRequirementRoutingHook] }] } : undefined) }
             : {}),
         },
       });
-      let query: Query;
       try {
         companionEnvironment?.assertCurrent?.();
         if (managedPlugins && querySignal.aborted) throw new Error('Claude session closed before skill plugins were loaded');
@@ -4553,6 +4796,34 @@ export class ClaudeCodeAgent extends BaseAgent {
         if (newSdkSessionId) sdkSessionId = newSdkSessionId;
         onRuntimeStartAttempted();
         query = sdkQuery(queryArgs);
+        const spawnEnv = queryArgs.options?.env;
+        const platform = process.platform;
+        const pathApi = platform === 'win32' ? path.win32 : path.posix;
+        const envValue = (name: string) => {
+          if (platform !== 'win32') return spawnEnv?.[name];
+          const keys = Object.keys(spawnEnv ?? {}).filter(key => key.toUpperCase() === name);
+          return keys.length === 1 ? spawnEnv?.[keys[0]!] : undefined;
+        };
+        const explicit = envValue('CLAUDE_CONFIG_DIR');
+        const home = envValue(platform === 'win32' ? 'USERPROFILE' : 'HOME');
+        // Do not query Host HOME or inspect config files to fill missing evidence.
+        const address = explicit || (home && pathApi.isAbsolute(home) ? pathApi.join(home, '.claude') : undefined);
+        const ambiguousWindowsKeys = platform === 'win32' && ['CLAUDE_CONFIG_DIR', 'USERPROFILE', 'HOME']
+          .some(name => Object.keys(spawnEnv ?? {}).filter(key => key.toUpperCase() === name).length > 1);
+        // POSIX default HOME is covered by the pinned loader/probe. Windows
+        // default-home resolution is not established here; do not guess it.
+        const supported = platform === 'linux' || platform === 'darwin'
+          || (platform === 'win32' && !!explicit && path.win32.parse(explicit).root.length > 1);
+        liveRuleUserSources.set(query, {
+          enabled: {
+            userSettings: queryArgs.options?.settingSources?.includes('user') === true,
+            projectSettings: queryArgs.options?.settingSources?.includes('project') === true,
+            localSettings: queryArgs.options?.settingSources?.includes('local') === true,
+          },
+          profile: !ambiguousWindowsKeys && supported && address && pathApi.isAbsolute(address)
+            ? { platform, configRoot: pathApi.normalize(address),
+              basis: explicit ? 'explicit-config-dir' : 'default-home' } : null,
+        });
       } catch (error) {
         if (sdkSessionId === newSdkSessionId) sdkSessionId = previousSdkSessionId;
         querySignal.removeEventListener('abort', releaseManagedPlugins);
@@ -4564,9 +4835,10 @@ export class ClaudeCodeAgent extends BaseAgent {
       } else if (newSdkSessionId) {
         durableSdkSessionId = newSdkSessionId;
       }
-      if (managedPlugins) {
+      if (managedPlugins || observeUserRules) {
         const closeQuery = query.close.bind(query);
         query.close = () => {
+          closedLiveRuleQueries.add(query);
           try { return closeQuery(); }
           finally {
             querySignal.removeEventListener('abort', releaseManagedPlugins);
@@ -6839,6 +7111,111 @@ export class ClaudeCodeAgent extends BaseAgent {
             parent_tool_use_id: null,
             ...(sendOpts?.messageUuid ? { uuid: sendOpts.messageUuid } : {}),
           };
+          let personalCandidate: PersonalTurn | undefined;
+          let commitPersonal = () => {};
+          if (observeUserRules && opts.sessionId && opts.sessionInstanceId && !opts.remoteHostId && !hosted
+            && !reviewMode && !opts.botRuntimeProfile && !opts[LOCAL_AGENT_CLIENT]?.hostToolsOnly) {
+            const sessionId = opts.sessionId;
+            const sessionInstanceId = opts.sessionInstanceId;
+            const observedQuery = q;
+            const observedQueue = inputQueue;
+            const observedTurn = turnState.generation;
+            const observedPermission = mutablePermissionMode;
+            const observedModeGeneration = personalModeGeneration;
+            const observedDirectory = autoReviewDirectoryGeneration;
+            let acceptedIntent: AutoReviewUserIntent | undefined;
+            let committed = false;
+            commitPersonal = () => { acceptedIntent = currentAutoReviewIntent; committed = true; };
+            const executionIdentityCurrent = () => sendCurrent()
+              && autoReviewDirectoryGeneration === observedDirectory
+              && (!committed || acceptedIntent === currentAutoReviewIntent);
+            const executionCurrent = () => executionIdentityCurrent() && mutablePermissionMode === observedPermission
+              && observedModeGeneration === personalModeGeneration
+              && observedPermission === 'auto' && !mutablePlanMode && !planTurnActive && !usesNativeClaudeAutoReview();
+            let active = true;
+            const deadline = performance.now() + 1000;
+            const observation = new AbortController();
+            const sendCurrent = () => !closed && q === observedQuery && inputQueue === observedQueue
+              && !closedLiveRuleQueries.has(observedQuery) && !canceledBridgeQueries.has(observedQuery)
+              && turnState.generation === observedTurn && turnState.interruptGeneration !== observedTurn
+              && !sendOpts?.signal?.aborted;
+            const isCurrent = () => active && performance.now() < deadline && sendCurrent();
+            personalCandidate = { kind: 'unverified', isCurrent: executionCurrent };
+            const installObservation = (value: PersonalTurnObservation) => {
+              if (isCurrent() && executionCurrent()) personalCandidate = {
+                kind: 'verified', observation: value, isCurrent: executionCurrent,
+              };
+            };
+            let managedHandedOff = false;
+            let reading: Promise<ClaudeLiveSourceContents> | undefined;
+            const unavailable = (reason: Extract<ClaudeLiveUserRules, { kind: 'unavailable' }>['reason']): ClaudeLiveSourceContents => ({
+              userSettings: { kind: 'unavailable', reason },
+              projectSettings: { kind: 'unavailable', reason },
+              localSettings: { kind: 'unavailable', reason },
+            });
+            const readSources = (): Promise<ClaudeLiveSourceContents> => {
+              if (!isCurrent()) return Promise.resolve(unavailable('stale'));
+              return reading ??= (async (): Promise<ClaudeLiveSourceContents> => {
+                try {
+                  const enabled = liveRuleUserSources.get(observedQuery)?.enabled;
+                  if (!enabled || !Object.values(enabled).some(Boolean)) return unavailable('source-excluded');
+                  // This pinned SDK exposes the method at runtime, not in Query's
+                  // declared interface. Never fall back to private control request.
+                  if (!('listPermissionRules' in observedQuery)
+                    || typeof observedQuery.listPermissionRules !== 'function'
+                    || typeof observedQuery.initializationResult !== 'function')
+                    return unavailable('capability-unavailable');
+                  await observedQuery.initializationResult();
+                  if (!isCurrent()) return unavailable('stale');
+                  const response: unknown = await observedQuery.listPermissionRules();
+                  if (!isCurrent()) return unavailable('stale');
+                  return readClaudeLiveSourceContents(response, enabled);
+                } catch { return unavailable(isCurrent() ? 'read-failed' : 'stale'); }
+              })();
+            };
+            const read = async (): Promise<ClaudeLiveUserRules> => {
+              if (isCurrent() && liveRuleUserSources.get(observedQuery)?.enabled.userSettings !== true)
+                return { kind: 'unavailable', reason: 'source-excluded' };
+              return (await readSources()).userSettings;
+            };
+            let timer: ReturnType<typeof setTimeout> | undefined;
+            let cancelObservation = () => {};
+            try {
+              // One bounded local control read, never a provider/model request.
+              // Timeout revokes content observation, not the independent execution
+              // lease, the real Query or its input.
+              await Promise.race([
+                new Promise<void>(resolve => {
+                  cancelObservation = () => { active = false; observation.abort(); resolve(); };
+                  timer = setTimeout(cancelObservation, 1000);
+                  sendOpts?.signal?.addEventListener('abort', cancelObservation, { once: true });
+                }),
+                Promise.resolve().then(async () => {
+                  if (!isCurrent()) return;
+                  const result = await observeUserRules({
+                    sessionId, sessionInstanceId,
+                    workingDir: opts.workingDir, isCurrent, read, readSources,
+                    execution: { turnGeneration: observedTurn, isCurrent: executionIdentityCurrent },
+                    onManagedObservation: value => {
+                      if (managedHandedOff) return;
+                      managedHandedOff = true;
+                      if (value.readManaged) installObservation(value);
+                    },
+                    spawnProfile: liveRuleUserSources.get(observedQuery)?.profile ?? null,
+                    signal: observation.signal,
+                  });
+                  if (result.observation) installObservation(result.observation);
+                }).catch(() => {}),
+              ]);
+            } finally {
+              active = false;
+              observation.abort();
+              clearTimeout(timer);
+              sendOpts?.signal?.removeEventListener('abort', cancelObservation);
+            }
+            if (sendOpts?.signal?.aborted) throw new Error('Claude send cancelled before acceptance');
+            if (!sendCurrent()) throw new Error('Claude query changed before input acceptance');
+          }
           const accepted = inputQueue.push(sdkInput);
           if (!accepted) {
             // close() can win while content conversion is still preparing files or
@@ -6858,6 +7235,8 @@ export class ClaudeCodeAgent extends BaseAgent {
           }
           activeCapabilitySelectionText = userMessageTextForCapabilityRouting(message.content);
           setAutoReviewIntent(appendAutoReviewUserIntent(priorAutoReviewIntent(), message.content, sendOpts), { authority: autoReviewContext() });
+          commitPersonal();
+          if (personalCandidate?.isCurrent()) personalTurn = personalCandidate;
           replayableUserInput = sdkInput;
           sendInAcceptPhase = false;
           // upstream-response-idle watchdog 起表 — 放在 inputQueue.push 之后, 避免把
@@ -7705,7 +8084,8 @@ export class ClaudeCodeAgent extends BaseAgent {
         // 会命中先前那条 `unavailable` block —— 审阅器早就恢复了,同一个动作还是被拒
         // (greptile P1 of #1574)。一次性提示同步重新武装:用户既然接管过,之后又不可用
         // 值得再提醒一次。
-        if (newMode !== mutablePermissionMode) {
+        const personalModeChanged = newMode !== mutablePermissionMode;
+        if (personalModeChanged) {
           autoReviewDecisionCache.clear();
           autoReviewUnavailableNotice.reset();
           autoReviewConfirmUndeliveredNotice.reset();
@@ -7715,6 +8095,7 @@ export class ClaudeCodeAgent extends BaseAgent {
         if (mutablePlanMode || planTurnActive) {
           log.debug('setPermissionMode (deferred, plan mode active)', { from: mutablePermissionMode, to: newMode });
           mutablePermissionMode = newMode;
+          if (personalModeChanged) { personalModeGeneration++; personalTurn = unverifiedPersonalTurn(); }
           return;
         }
         // 老 agentManager.ts:1850-1893 的"切到更宽松 mode 时挂着的 ask 自动 allow,
@@ -7734,6 +8115,9 @@ export class ClaudeCodeAgent extends BaseAgent {
           await q.setPermissionMode(sdkMode);
         }
         mutablePermissionMode = newMode;
+        // Keep the existing FullAccess dismissal valid while SDK control waits;
+        // invalidate the personal slot when the effective local mode changes.
+        if (personalModeChanged) { personalModeGeneration++; personalTurn = unverifiedPersonalTurn(); }
       },
 
       async useCindyAutoReviewFallback() {
@@ -7758,6 +8142,7 @@ export class ClaudeCodeAgent extends BaseAgent {
         if (reviewMode) return;
         if (mutablePlanMode === enabled) return;
         mutablePlanMode = enabled;
+        personalModeGeneration++;
         // turn 流式中(含 plan turn 本身)只记账武装态、递延 SDK 切档:立即 push 会
         // 改写 in-flight turn 的工具权限,而武装态语义只作用于下一条消息。
         // 补推时机:send 消耗武装态时(!sdkInPlanMode → push plan);disarm 则无需

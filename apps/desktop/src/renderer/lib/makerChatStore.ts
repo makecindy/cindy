@@ -819,6 +819,7 @@ export interface PendingPermission {
   suggestions?: unknown[];
   autoReviewUnavailable?: boolean;
   autoReviewReason?: string;
+  rememberAutoCommand?: CCAgentPermissionRequestPayload['rememberAutoCommand'];
   /** Renderer-only delivery state; never part of the permission decision. */
   submitting?: boolean;
   submissionFailed?: boolean;
@@ -6710,6 +6711,7 @@ export function handleStreamEvent(
         suggestions?: unknown[];
         autoReviewUnavailable?: boolean;
         autoReviewReason?: string;
+        rememberAutoCommand?: CCAgentPermissionRequestPayload['rememberAutoCommand'];
       };
       return {
         ...state,
@@ -6724,6 +6726,7 @@ export function handleStreamEvent(
           suggestions: data.suggestions,
           autoReviewUnavailable: data.autoReviewUnavailable === true,
           autoReviewReason: data.autoReviewReason,
+          rememberAutoCommand: data.rememberAutoCommand,
           ...(state.pendingPermission?.requestId === data.requestId
             ? {
                 submitting: state.pendingPermission.submitting,
@@ -8695,6 +8698,12 @@ function initGlobalListeners(options: GlobalListenerOptions = {}): void {
         autoReviewUnavailable: metadata?.autoReviewUnavailable === true,
         autoReviewReason: typeof metadata?.autoReviewReason === 'string' && metadata.autoReviewReason.trim()
           ? metadata.autoReviewReason.trim() : undefined,
+        rememberAutoCommand: !isRemoteSessionSticky(sessionId) && metadata?.rememberAutoCommand
+          && typeof metadata.rememberAutoCommand === 'object'
+          && !Array.isArray(metadata.rememberAutoCommand)
+          && typeof (metadata.rememberAutoCommand as Record<string, unknown>).command === 'string'
+          && ['claude-code', 'pi', 'codex'].includes(String((metadata.rememberAutoCommand as Record<string, unknown>).harness))
+          ? metadata.rememberAutoCommand as NonNullable<CCAgentPermissionRequestPayload['rememberAutoCommand']> : undefined,
         sourceDescription: typeof metadata?.imSourceDescription === 'string' ? metadata.imSourceDescription : undefined,
       };
       setState(sessionId, (s) =>
@@ -17474,6 +17483,7 @@ function respondToPermission(sessionId: string, result: CCAgentPermissionResult,
       const receipt = await withReceiptTimeout(() => makerApiFor(sessionId).resolveInteraction(requestId, {
         kind: 'permission',
         behavior: result.behavior,
+        ...(result.rememberAutoCommand === true ? { rememberAutoCommand: true } : {}),
         updatedInput: (result as { updatedInput?: Record<string, unknown> }).updatedInput,
         reason: (result as { message?: string }).message,
         permissionUpdates: Array.isArray(result.updatedPermissions)
@@ -17496,7 +17506,7 @@ function respondToPermission(sessionId: string, result: CCAgentPermissionResult,
     } catch (err) {
       if (!hasCurrentCard()) return;
       log.warn('Permission decision receipt unavailable', err);
-      toast.warning(i18n.t('newChat.permissionPrompt.submissionFailed'));
+      toast.warning(i18n.t(result.rememberAutoCommand ? 'newChat.permissionPrompt.rememberFailed' : 'newChat.permissionPrompt.submissionFailed'));
       try {
         await withReceiptTimeout(() => reconcilePendingInteractions(sessionId, isCurrent));
       } catch {

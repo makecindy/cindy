@@ -26,7 +26,10 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import * as subagentRuns from '../pi-subagent-runs.js';
-import type { AutoReviewRequest } from '../../shared/auto-review-decision.js';
+import type { AutoReviewRequest, AutoReviewDelegate, ManagedAutoReviewCheck } from '../../shared/auto-review-decision.js';
+import { parseApprovalRuleSnapshot } from '../../shared/approval-rules/schema.js';
+import type { PersonalRequirements } from '../../shared/auto-review-decision.js';
+import { normalizeRuleGroup } from '../../shared/approval-rules/normalize.js';
 
 const captured = vi.hoisted(() => ({
   args: [] as string[],
@@ -221,6 +224,7 @@ import { Session } from '../../../session.js';
 import type { AgentDeps, AgentSessionHandle } from '../../base-agent.js';
 import type { Logger } from '../../../interfaces/logger.js';
 import {
+  classifyLocalAutoReviewTier,
   AUTO_REVIEW_CONFIRM_UNDELIVERED_CODE,
   AUTO_REVIEW_UNAVAILABLE_METADATA_KEY,
   AUTO_REVIEW_UNAVAILABLE_PROMPT_TEXT,
@@ -327,6 +331,7 @@ describe('pi auto-review dispatch & spawn config (mocked pi process)', () => {
     mcp?: McpSetup,
   ): AgentDeps {
     return {
+      getPiManagedBuiltinBashGeneration: () => 0,
       ...(mcp?.policy ? { getMcpToolApprovalPolicy: mcp.policy } : {}),
       ...(mcp?.serverNames
         ? {
@@ -471,6 +476,480 @@ describe('pi auto-review dispatch & spawn config (mocked pi process)', () => {
     }) as Promise<PiTestSessionHandle>;
   }
 
+  // Unit / Pi first-red B,C2: actual root RPC permission dispatcher with the
+  // existing Host-injected clear.personalRequirements contract. These generic
+  // Cindy residual groups pass TODAY's schema; they are neither the unsupported
+  // new requirements namespace nor proof of a native Pi process. Existing exact
+  // cache/fence tests do not cover local pwd or full residual edits during a card.
+  function piResidual(version: number, command: string, knownDecision: 'allow' | 'deny' = 'allow'): PersonalRequirements {
+    const scope = { ownerId: 'o', executionHostId: 'h', harnesses: ['pi' as const] };
+    const group = normalizeRuleGroup({ harness: 'cindy', layer: 'user', sourceId: 'pi-residual:first-red',
+      locator: 'cindy://test/pi-residual', dialectVersion: '1', decisionDomain: 'personal-approval' }, scope, [
+      { id: 'unresolved', original: `  Pi 原文 v${version} 🧪\r\n保留 e\u0301 与末尾空格  `,
+        decision: 'ask', reason: 'unparsed personal text', tool: { domain: 'exec', name: 'bash' } },
+      { id: 'known', original: `bash(${command})`, decision: knownDecision,
+        matcher: { kind: 'cc-command', mode: 'exact', pattern: command }, tool: { domain: 'exec', name: 'bash' } },
+    ]);
+    const snapshot = parseApprovalRuleSnapshot({ schemaVersion: 1, revision: group.revision, groups: [group], tombstones: [] });
+    return { fingerprint: `pi-residual-v${version}`, scope, groups: snapshot.groups };
+  }
+
+  it.each(['pwd', 'pwd -L && printf done'])('Pi requirements B: sends complete residual for %s without a human card', async command => {
+    let payload = piResidual(1, 'pwd');
+    const seen: AutoReviewRequest[] = [];
+    const checks: AutoReviewRequest[] = [];
+    const review: AutoReviewDelegate = vi.fn(async request => { seen.push(request); return { verdict: 'allow' as const }; });
+    review.precheckManagedAction = async request => {
+      checks.push(request);
+      return { kind: 'clear', contextKey: 'root', isCurrent: () => true, personalRequirements: payload };
+    };
+    const handle = await new PiAgent(buildDeps(review)).startSession({ sessionId: 's1', sessionInstanceId: 'root',
+      workingDir: cwd, model: 'm', permissionMode: 'auto' });
+    const confirm = vi.fn(async () => ({ kind: 'permission' as const, behavior: 'deny' as const }));
+    handle.setInteractionResolver?.(confirm);
+    try {
+      await handle.send({ type: 'user', content: 'Show the working directory only.' });
+      firePermissionInputRequest('pi-residual-pwd', 'bash', { command }, { resolvedCredentialPaths: [] });
+      expect(await waitForResponse('pi-residual-pwd')).toMatchObject({ value: 'allow' });
+      // This envelope is minted by the production dispatcher after startup's
+      // builtin generation/no-replacement proof, not injected by the test event.
+      expect(checks.length).toBeGreaterThan(0);
+      expect(checks.every(request => request.managedToolExecution?.sessionInstanceId === 'root')).toBe(true);
+      expect(checks[0]?.managedToolExecution).toEqual({ sessionInstanceId: 'root', toolName: 'bash', input: { command },
+        piExecution: { rpcId: 'pi-residual-pwd', input: { command }, isCurrent: expect.any(Function), isAuto: expect.any(Function) } });
+      expect(checks[0]!.managedToolExecution!.piExecution!.isCurrent()).toBe(true);
+      expect(Object.isFrozen(checks[0]!.managedToolExecution!.piExecution!.input)).toBe(true);
+      expect.soft(checks[0]?.action).toEqual({ kind: 'exec', command });
+      if (command === 'pwd') expect.soft(classifyLocalAutoReviewTier(checks[0]!)).toBe('auto-approve');
+      expect.soft(review).toHaveBeenCalledOnce();
+      expect.soft(seen[0]?.personalRequirements).toEqual(payload);
+      expect.soft(seen[0]?.userIntent).toBe(checks[0]?.userIntent);
+      expect(confirm).not.toHaveBeenCalled();
+      // A known deny in the SAME complete residual group must also survive
+      // the local path/cache. This is a separate actual RPC request, not replay.
+      payload = piResidual(2, 'pwd', 'deny');
+      firePermissionInputRequest('pi-residual-known-deny', 'bash', { command: 'pwd' }, { resolvedCredentialPaths: [] });
+      expect.soft(String((await waitForResponse('pi-residual-known-deny')).value)).toContain('auto-review-deny');
+      expect(confirm).not.toHaveBeenCalled();
+    } finally { await handle.close(); }
+  });
+
+  it.each(['edited-allow', 'unchanged-allow', 'edited-human-deny'] as const)(
+    'Pi requirements C2: pending residual card %s binds the reviewed version', async scenario => {
+      let version = 1;
+      const seen: AutoReviewRequest[] = [];
+      const checks: AutoReviewRequest[] = [];
+      const readVersions: number[] = [];
+      const review: AutoReviewDelegate = vi.fn(async request => {
+        seen.push(request);
+        return { verdict: request.personalRequirements?.fingerprint === 'pi-residual-v2' ? 'block' as const : 'ask' as const };
+      });
+      review.precheckManagedAction = async request => {
+        checks.push(request); readVersions.push(version);
+        return { kind: 'clear', contextKey: 'root', isCurrent: () => true, personalRequirements: piResidual(version, 'touch sentinel') };
+      };
+      const handle = await new PiAgent(buildDeps(review)).startSession({ sessionId: 's1', sessionInstanceId: 'root',
+        workingDir: cwd, model: 'm', permissionMode: 'auto' });
+      let answer!: (decision: { kind: 'permission'; behavior: 'allow' | 'deny' }) => void;
+      let opened!: () => void;
+      const waiting = new Promise<void>(resolve => { opened = resolve; });
+      const confirm = vi.fn(async () => {
+        opened();
+        return await new Promise<{ kind: 'permission'; behavior: 'allow' | 'deny' }>(resolve => { answer = resolve; });
+      });
+      handle.setInteractionResolver?.(confirm);
+      try {
+        await handle.send({ type: 'user', content: 'Create a sentinel in this test directory.' });
+        firePermissionInputRequest('pi-residual-card', 'bash', { command: 'touch sentinel' }, { resolvedCredentialPaths: [] });
+        await waiting;
+        expect(checks[0]?.managedToolExecution).toEqual({ sessionInstanceId: 'root', toolName: 'bash', input: { command: 'touch sentinel' },
+          piExecution: { rpcId: 'pi-residual-card', input: { command: 'touch sentinel' }, isCurrent: expect.any(Function), isAuto: expect.any(Function) } });
+        expect(checks[0]!.managedToolExecution!.piExecution!.isCurrent()).toBe(true);
+        expect(seen[0]?.personalRequirements).toEqual(piResidual(1, 'touch sentinel'));
+        expect(seen[0]?.userIntent).toBe(checks[0]?.userIntent);
+        if (scenario !== 'unchanged-allow') version = 2;
+        answer({ kind: 'permission', behavior: scenario === 'edited-human-deny' ? 'deny' : 'allow' });
+        const resolution = String((await waitForResponse('pi-residual-card')).value);
+        if (scenario === 'edited-allow') {
+          // The real post-card fence DID read v2; it currently ignores the
+          // new review data instead of requiring a decision for that version.
+          expect(readVersions).toContain(2);
+          expect.soft(resolution).not.toBe('allow');
+        }
+        else if (scenario === 'edited-human-deny') expect(resolution).toContain('user-deny');
+        else expect(resolution).toBe('allow');
+        expect(checks.every(request => request.managedToolExecution?.input.command === 'touch sentinel')).toBe(true);
+        expect(confirm).toHaveBeenCalledOnce();
+        expect(vi.mocked(review).mock.calls.length).toBeLessThanOrEqual(2);
+        if (scenario !== 'edited-allow') expect(review).toHaveBeenCalledOnce();
+        // The actual input is never replayed as a second permission request.
+        expect(captured.sent.filter(message => message.id === 'pi-residual-card')).toHaveLength(1);
+      } finally { answer?.({ kind: 'permission', behavior: 'deny' }); await handle.close(); }
+    },
+  );
+
+  // Unit: a second edit during the only permitted rereview/second card must
+  // reject the original RPC, never start a third review/card or replay a tool.
+  it.each(['second-review', 'second-card'] as const)('bounds whole-text edits in %s', async scenario => {
+    let version = 1; let reviews = 0; let cards = 0;
+    const review: AutoReviewDelegate = vi.fn(async () => {
+      reviews++;
+      if (reviews === 2 && scenario === 'second-review') { version = 3; return { verdict: 'allow' as const }; }
+      return { verdict: 'ask' as const };
+    });
+    review.precheckManagedAction = async () => ({ kind: 'clear', contextKey: 'root', isCurrent: () => true,
+      personalRequirements: piResidual(version, 'touch sentinel') });
+    const handle = await new PiAgent(buildDeps(review)).startSession({ sessionId: 's1', sessionInstanceId: 'root',
+      workingDir: cwd, model: 'm', permissionMode: 'auto' });
+    handle.setInteractionResolver?.(async () => { cards++; version = cards + 1; return { kind: 'permission', behavior: 'allow' }; });
+    try {
+      await handle.send({ type: 'user', content: 'Create this isolated sentinel.' });
+      firePermissionInputRequest('bounded-text', 'bash', { command: 'touch sentinel' }, { resolvedCredentialPaths: [] });
+      expect(String((await waitForResponse('bounded-text')).value)).not.toBe('allow');
+      expect(reviews).toBe(2); expect(cards).toBe(scenario === 'second-card' ? 2 : 1);
+      expect(captured.sent.filter(response => response.id === 'bounded-text')).toHaveLength(1);
+    } finally { await handle.close(); }
+  });
+
+  // Unit: actual Pi permission dispatcher with fake RPC transport. Original
+  // shell identity must reach managed precheck before local allow/cache, and
+  // credential normalization and live FullAccess must retain their semantics.
+  // Unit: actual permission dispatcher; a personal deny must not replace the
+  // default human decision or FullAccess, even if the managed delegate exists.
+  it.each(['ask', 'bypassPermissions'] as const)('does not consume Auto personal rules in %s mode', async mode => {
+    const review: AutoReviewDelegate = vi.fn(async () => ({ verdict: 'block' as const }));
+    review.precheckManagedAction = vi.fn(async () => ({ kind: 'deny' as const,
+      contextKey: 'instance', revision: 1, ruleId: 'rule', reason: 'personal deny', isCurrent: () => true }));
+    const handle = await start(mode, review);
+    const resolver = vi.fn(async (request: InteractionRequest) => {
+      expect(request.kind === 'permission' && request.autoCommand).toBeUndefined();
+      return { kind: 'permission' as const, behavior: 'allow' as const };
+    });
+    handle.setInteractionResolver?.(resolver);
+    try {
+      await handle.send({ type: 'user', content: 'Inspect status' });
+      firePermissionInputRequest('non-auto-personal', 'bash', { command: 'git status' });
+      expect(await waitForResponse('non-auto-personal')).toMatchObject({ value: 'allow' });
+      expect(resolver).toHaveBeenCalledTimes(mode === 'ask' ? 1 : 0);
+      expect(review).not.toHaveBeenCalled();
+      expect(review.precheckManagedAction).not.toHaveBeenCalled();
+    } finally { await handle.close(); }
+  });
+
+  it('preserves root Bash input for managed deny and keeps shell and live mode boundaries', async () => {
+    const seen: AutoReviewRequest[] = [];
+    let deny = false;
+    let widen = false;
+    const review: AutoReviewDelegate = vi.fn(async () => ({ verdict: 'allow' as const }));
+    let handle: AgentSessionHandle;
+    review.precheckManagedAction = async request => {
+      seen.push(request);
+      if (widen) { widen = false; await handle.setPermissionMode?.('bypassPermissions'); }
+      return { kind: request.managedToolExecution && deny ? 'deny' : 'clear',
+        contextKey: 'instance', revision: 1, ruleId: 'rule', reason: 'managed-bash-deny', isCurrent: () => true } as ManagedAutoReviewCheck;
+    };
+    handle = await new PiAgent(buildDeps(review)).startSession({ sessionId: 's1',
+      sessionInstanceId: 'root-instance', workingDir: cwd, model: 'm', permissionMode: 'auto' });
+    try {
+      await handle.send({ type: 'user', content: 'Inspect status' });
+      firePermissionInputRequest('managed-local-allow', 'bash', { command: 'git status' });
+      expect(await waitForResponse('managed-local-allow')).toMatchObject({ value: 'allow' });
+      deny = true;
+      firePermissionInputRequest('managed-cached-deny', 'bash', { command: 'git status' });
+      expect(String((await waitForResponse('managed-cached-deny')).value)).toContain('auto-review-deny');
+      expect(seen.find(r => r.managedToolExecution)?.managedToolExecution).toEqual({
+        sessionInstanceId: 'root-instance', toolName: 'bash', input: { command: 'git status' },
+        piExecution: { rpcId: 'managed-local-allow', input: { command: 'git status' }, isCurrent: expect.any(Function), isAuto: expect.any(Function) } });
+      firePermissionInputRequest('managed-powershell', 'powershell', { command: 'git status' });
+      expect(await waitForResponse('managed-powershell')).toMatchObject({ value: 'allow' });
+      expect(seen.at(-1)?.managedToolExecution).toBeUndefined();
+      firePermissionInputRequest('managed-credential', 'bash', { command: 'cat .env' });
+      expect(String((await waitForResponse('managed-credential')).value)).toContain('auto-review-deny');
+      expect(seen.at(-1)?.managedToolExecution?.input.command).toBe('cat .env');
+      deny = false;
+      firePermissionInputRequest('managed-removed', 'bash', { command: 'git status' });
+      expect(await waitForResponse('managed-removed')).toMatchObject({ value: 'allow' });
+      deny = true; widen = true;
+      firePermissionInputRequest('managed-full-access', 'bash', { command: 'git status' });
+      expect(await waitForResponse('managed-full-access')).toMatchObject({ value: 'allow' });
+    } finally { await handle.close(); }
+  });
+
+  // Real permission dispatcher: a newly active ask must precede an existing
+  // local allow cache, while Allow once approves only this exact pending call.
+  it('applies a new managed ask before cached local allow and retains one explicit answer', async () => {
+    let ask = false;
+    const review: AutoReviewDelegate = vi.fn(async () => ({ verdict: 'allow' as const }));
+    review.precheckManagedAction = async () => ({ kind: ask ? 'ask' : 'clear',
+      contextKey: 'root', revision: 1, ruleId: 'rule', reason: 'personal ask', isCurrent: () => true });
+    const handle = await new PiAgent(buildDeps(review)).startSession({ sessionId: 's1',
+      sessionInstanceId: 'root', workingDir: cwd, model: 'm', permissionMode: 'auto' });
+    const confirm = vi.fn(async (request: InteractionRequest) => {
+      expect(request.kind === 'permission' && request.autoCommand).toMatchObject({ harness: 'pi', command: 'git status' });
+      expect(request.kind === 'permission' && request.autoCommand?.isCurrent()).toBe(true);
+      return { kind: 'permission' as const, behavior: 'allow' as const };
+    });
+    handle.setInteractionResolver?.(confirm);
+    try {
+      await handle.send({ type: 'user', content: 'Inspect status' });
+      firePermissionInputRequest('before-personal-ask', 'bash', { command: 'git status' });
+      expect(await waitForResponse('before-personal-ask')).toMatchObject({ value: 'allow' });
+      ask = true;
+      firePermissionInputRequest('after-personal-ask', 'bash', { command: 'git status' });
+      expect(await waitForResponse('after-personal-ask')).toMatchObject({ value: 'allow' });
+      expect(confirm).toHaveBeenCalledOnce();
+      ask = false;
+      firePermissionInputRequest('removed-personal-ask', 'bash', { command: 'git status' });
+      expect(await waitForResponse('removed-personal-ask')).toMatchObject({ value: 'allow' });
+      expect(confirm).toHaveBeenCalledOnce();
+    } finally { await handle.close(); }
+  });
+
+  it.each(['ask', 'deny'] as const)('rechecks new managed %s after the real reviewer wait', async decision => {
+    let active = false; let release!: () => void;
+    const gate = new Promise<void>(resolve => { release = resolve; });
+    const review: AutoReviewDelegate = vi.fn(async () => { await gate; return { verdict: 'allow' as const }; });
+    review.precheckManagedAction = async () => ({ kind: active ? decision : 'clear', contextKey: 'root',
+      revision: active ? 2 : 1, ruleId: 'r', reason: 'personal ' + decision, isCurrent: () => true });
+    const handle = await new PiAgent(buildDeps(review)).startSession({ sessionId: 's1',
+      sessionInstanceId: 'root', workingDir: cwd, model: 'm', permissionMode: 'auto' });
+    const confirm = vi.fn(async () => ({ kind: 'permission' as const, behavior: 'allow' as const }));
+    handle.setInteractionResolver?.(confirm);
+    try {
+      await handle.send({ type: 'user', content: 'Create a sentinel' });
+      firePermissionInputRequest('pending-new-managed-rule', 'bash', { command: 'touch sentinel' });
+      await vi.waitFor(() => expect(review).toHaveBeenCalledOnce());
+      active = true; release();
+      const response = String((await waitForResponse('pending-new-managed-rule')).value);
+      expect(response).toBe(decision === 'ask' ? 'allow' : 'auto-review-deny:personal deny');
+      expect(confirm).toHaveBeenCalledTimes(decision === 'ask' ? 1 : 0);
+    } finally { release(); await handle.close(); }
+  });
+  it('keys the real Pi reviewer cache by managed allow content without changing authorization', async () => {
+    let version = 1;
+    const seen: AutoReviewRequest[] = [];
+    const review: AutoReviewDelegate = vi.fn(async (request: AutoReviewRequest) => { seen.push(request); return { verdict: 'allow' as const }; });
+    review.prepareRequest = async request => ({ ...request, authorizationContext: { requesterAuthority: 'owner', source: 'direct' } });
+    review.precheckManagedAction = async () => ({ kind: 'clear', contextKey: 'root', isCurrent: () => true,
+      personalRequirements: { fingerprint: String(version), scope: { ownerId: 'o', executionHostId: 'h', harnesses: ['pi'] },
+        groups: [normalizeRuleGroup({ harness: 'cindy', layer: 'user', sourceId: 'exact-bash:test',
+          locator: 'cindy://test', dialectVersion: '1', decisionDomain: 'personal-approval' },
+        { ownerId: 'o', executionHostId: 'h', harnesses: ['pi'] }, [{ id: 'a', original: 'Bash(touch sentinel)', decision: 'allow',
+          matcher: { kind: 'cc-command', mode: 'exact', pattern: 'touch sentinel' } }])] } });
+    const handle = await new PiAgent(buildDeps(review)).startSession({ sessionId: 's1', sessionInstanceId: 'root',
+      workingDir: cwd, model: 'm', permissionMode: 'auto' });
+    try {
+      await handle.send({ type: 'user', content: 'Create a sentinel' });
+      for (let i = 0; i < 3; i++) {
+        if (i === 2) version++;
+        firePermissionInputRequest('allow-cache-' + i, 'bash', { command: 'touch sentinel' });
+        expect(await waitForResponse('allow-cache-' + i)).toMatchObject({ value: 'allow' });
+      }
+      expect(review).toHaveBeenCalledTimes(2);
+      expect(seen.map(request => request.personalRequirements?.fingerprint)).toEqual(['1', '2']);
+      expect(seen[1]?.userIntent).toEqual(seen[0]?.userIntent);
+    } finally { await handle.close(); }
+  });
+  it.each(['removed', 'retired', 'retired-block'] as const)('withdraws %s managed allow data in the actual dispatcher', async scenario => {
+    let active = true; let generation = 0;
+    const seen: AutoReviewRequest[] = [];
+    const review: AutoReviewDelegate = vi.fn(async request => {
+      seen.push(request);
+      if (scenario === 'removed') active = false; else generation++;
+      return { verdict: scenario === 'retired-block' || !request.personalRequirements ? 'block' as const : 'allow' as const };
+    });
+    review.precheckManagedAction = async () => ({ kind: 'clear', contextKey: 'root', isCurrent: () => true,
+      ...(active ? { personalRequirements: { fingerprint: 'allow-active',
+        scope: { ownerId: 'o', executionHostId: 'h', harnesses: ['pi'] },
+        groups: [normalizeRuleGroup({ harness: 'cindy', layer: 'user', sourceId: 'exact-bash:test',
+          locator: 'cindy://test', dialectVersion: '1', decisionDomain: 'personal-approval' },
+        { ownerId: 'o', executionHostId: 'h', harnesses: ['pi'] }, [{ id: 'a', original: 'Bash(touch sentinel)', decision: 'allow',
+          matcher: { kind: 'cc-command', mode: 'exact', pattern: 'touch sentinel' } }])] } } : {}) });
+    const handle = await new PiAgent(Object.assign(buildDeps(review), { getPiManagedBuiltinBashGeneration: () => generation }))
+      .startSession({ sessionId: 's1', sessionInstanceId: 'root', workingDir: cwd, model: 'm', permissionMode: 'auto' });
+    try {
+      await handle.send({ type: 'user', content: 'Create a sentinel' });
+      firePermissionInputRequest('withdraw-managed-allow', 'bash', { command: 'touch sentinel' });
+      expect(String((await waitForResponse('withdraw-managed-allow')).value)).toContain('auto-review-deny');
+      expect(seen[0]?.personalRequirements?.groups).toHaveLength(1);
+      expect(seen[0]?.userIntent).toEqual(seen.at(-1)?.userIntent);
+      expect(review).toHaveBeenCalledTimes(scenario === 'retired-block' ? 1 : 2);
+      if (scenario !== 'retired-block') expect(seen[1]?.personalRequirements).toBeUndefined();
+    } finally { await handle.close(); }
+  });
+
+  // Unit: a managed package generation can change while policy I/O is pending.
+  // The actual dispatcher must discard only the obsolete builtin contribution,
+  // then use the ordinary reviewer once instead of denying a replacement tool.
+  it.each(['auto', 'full-access'] as const)('discards builtin deny after an observed package generation change in %s', async mode => {
+    let generation = 0;
+    let handle!: AgentSessionHandle;
+    const review: AutoReviewDelegate = vi.fn(async () => ({ verdict: 'allow' as const }));
+    review.precheckManagedAction = async request => {
+      if (!request.managedToolExecution) return { kind: 'unavailable', reason: 'not-builtin' };
+      generation++;
+      if (mode === 'full-access') await handle.setPermissionMode?.('bypassPermissions');
+      return { kind: 'deny', contextKey: 'root', revision: 1, ruleId: 'rule',
+        reason: 'obsolete builtin deny', isCurrent: () => true, isExecutionCurrent: () => true };
+    };
+    const deps = Object.assign(buildDeps(review), { getPiManagedBuiltinBashGeneration: () => generation });
+    handle = await new PiAgent(deps).startSession({ sessionId: 's1',
+      sessionInstanceId: 'root', workingDir: cwd, model: 'm', permissionMode: 'auto' });
+    try {
+      await handle.send({ type: 'user', content: 'Create a sentinel' });
+      firePermissionInputRequest('retired-builtin', 'bash', { command: 'touch sentinel' });
+      expect(await waitForResponse('retired-builtin')).toMatchObject({ value: 'allow' });
+      expect(review).toHaveBeenCalledTimes(mode === 'auto' ? 1 : 0);
+    } finally { await handle.close(); }
+  });
+
+  it.each(['allow', 'block'] as const)('keeps ordinary reviewer %s when builtin proof retires during review', async verdict => {
+    let generation = 0;
+    const review: AutoReviewDelegate = vi.fn(async () => {
+      generation++;
+      return { verdict, reason: 'ordinary reviewer result' };
+    });
+    review.precheckManagedAction = async request => request.managedToolExecution
+      ? { kind: generation ? 'deny' : 'clear', contextKey: 'root', revision: 1, ruleId: 'rule',
+          reason: 'obsolete builtin deny', isCurrent: () => true, isExecutionCurrent: () => true }
+      : { kind: 'unavailable', reason: 'not-builtin' };
+    const deps = Object.assign(buildDeps(review), { getPiManagedBuiltinBashGeneration: () => generation });
+    const handle = await new PiAgent(deps).startSession({ sessionId: 's1',
+      sessionInstanceId: 'root', workingDir: cwd, model: 'm', permissionMode: 'auto' });
+    try {
+      await handle.send({ type: 'user', content: 'Create a sentinel' });
+      firePermissionInputRequest('retire-during-review', 'bash', { command: 'touch sentinel' });
+      const response = String((await waitForResponse('retire-during-review')).value);
+      expect(response).toBe(verdict === 'allow' ? 'allow' : 'auto-review-deny:ordinary reviewer result');
+      expect(review).toHaveBeenCalledOnce();
+    } finally { await handle.close(); }
+  });
+
+  it.each(['missing', 'failed', 'partial'] as const)('retires builtin identity without blocking the original route when evidence is %s', async state => {
+    let failed = false;
+    const seen: AutoReviewRequest[] = [];
+    const review: AutoReviewDelegate = vi.fn(async () => ({ verdict: 'allow' as const }));
+    review.precheckManagedAction = async request => {
+      seen.push(request);
+      return request.managedToolExecution
+        ? { kind: 'deny', contextKey: 'root', revision: 1, ruleId: 'rule', reason: 'builtin deny', isCurrent: () => true }
+        : { kind: 'unavailable', reason: 'not-builtin' };
+    };
+    const deps = buildDeps(review);
+    if (state === 'missing') delete deps.getPiManagedBuiltinBashGeneration;
+    else deps.getPiManagedBuiltinBashGeneration = () => {
+      if (failed) {
+        if (state === 'failed') throw Error('host getter unavailable');
+        return 1; // An observed commit fences even when retirement is deferred/partial.
+      }
+      return 0;
+    };
+    const agent = new PiAgent(deps);
+    const options = { sessionId: 's1', sessionInstanceId: 'root', workingDir: cwd, model: 'm', permissionMode: 'auto' as const };
+    let handle = await agent.startSession(options);
+    try {
+      await handle.send({ type: 'user', content: 'Create a sentinel' });
+      failed = true;
+      firePermissionInputRequest('retired-proof', 'bash', { command: 'touch sentinel' });
+      expect(await waitForResponse('retired-proof')).toMatchObject({ value: 'allow' });
+      expect(seen.every(request => !request.managedToolExecution)).toBe(true);
+      // A getter recovering never revives this runtime's stale startup arrays.
+      failed = false;
+      firePermissionInputRequest('proof-stays-retired', 'bash', { command: 'touch other-sentinel' });
+      expect(await waitForResponse('proof-stays-retired')).toMatchObject({ value: 'allow' });
+      if (state !== 'missing') {
+        await handle.close();
+        handle = await agent.startSession({ ...options, sessionInstanceId: 'new-root' });
+        await handle.send({ type: 'user', content: 'Create a sentinel' });
+        firePermissionInputRequest('fresh-proof', 'bash', { command: 'touch sentinel' });
+        expect(String((await waitForResponse('fresh-proof')).value)).toContain('auto-review-deny:builtin deny');
+      }
+    } finally { await handle.close(); }
+  });
+
+  // Unit regression: real permission dispatcher; the previous review-only
+  // fence missed a publish while Allow once was pending (isolated VM report).
+  it.each(['published-deny', 'unchanged', 'owner-changed', 'unavailable',
+    'initial-unavailable', 'user-denied', 'full-access', 'full-access-during-check', 'prepare-failed', 'full-access-during-prepare',
+    'builtin-retired', 'retired-during-fence', 'retired-user-denied', 'retired-owner-changed'] as const)(
+    'rechecks personal policy after Allow once with %s before permission response', async scenario => {
+    let publishedDeny = false;
+    let confirming = false;
+    let generation = 0;
+    const review: AutoReviewDelegate = vi.fn(async () => ({ verdict: 'ask' as const }));
+    let handle: AgentSessionHandle;
+    review.prepareRequest = async request => {
+      if (confirming && (scenario === 'prepare-failed' || scenario === 'full-access-during-prepare')) {
+        if (scenario === 'full-access-during-prepare') await handle.setPermissionMode?.('bypassPermissions');
+        throw new Error('authorization lookup failed');
+      }
+      return request;
+    };
+    review.precheckManagedAction = async request => {
+      // Legacy unstructured failure has no independent Host lease: even a
+      // human allow cannot verify that old execution. Real storage faults with
+      // a lease are covered separately by the Desktop store integration.
+      if (scenario === 'initial-unavailable' || (confirming && scenario === 'unavailable'))
+        return { kind: 'unavailable', reason: 'managed-policy-unavailable' };
+      if (confirming && scenario === 'retired-during-fence') generation++;
+      if (confirming && scenario === 'full-access-during-check') await handle.setPermissionMode?.('bypassPermissions');
+      return request.managedToolExecution
+      ? { kind: publishedDeny ? 'deny' : 'clear', contextKey: confirming && (scenario === 'owner-changed' || scenario === 'retired-owner-changed') ? 'other' : 'root',
+          revision: publishedDeny ? 2 : 1,
+          ruleId: 'published-rule', reason: 'personal rule deny', isCurrent: () => true }
+      : { kind: 'unavailable', reason: 'not-builtin' };
+    };
+    handle = await new PiAgent(Object.assign(buildDeps(review), { getPiManagedBuiltinBashGeneration: () => generation })).startSession({ sessionId: 's1',
+      sessionInstanceId: 'root', workingDir: cwd, model: 'm', permissionMode: 'auto' });
+    let confirm!: (decision: { kind: 'permission'; behavior: 'allow' | 'deny' }) => void;
+    let opened!: () => void;
+    const waiting = new Promise<void>(resolve => { opened = resolve; });
+    handle.setInteractionResolver?.(async () => {
+      opened();
+      return await new Promise<{ kind: 'permission'; behavior: 'allow' | 'deny' }>(resolve => { confirm = resolve; });
+    });
+    try {
+      await handle.send({ type: 'user', content: 'Create a sentinel' });
+      firePermissionInputRequest('published-while-confirming', 'bash', { command: 'touch sentinel' });
+      await waiting;
+      publishedDeny = true;
+      if (scenario === 'unchanged') publishedDeny = false;
+      confirming = true;
+      if (scenario === 'builtin-retired' || scenario === 'retired-user-denied' || scenario === 'retired-owner-changed') generation++;
+      if (scenario === 'full-access') await handle.setPermissionMode?.('bypassPermissions');
+      confirm({ kind: 'permission', behavior: scenario === 'user-denied' || scenario === 'retired-user-denied' ? 'deny' : 'allow' });
+      const resolution = String((await waitForResponse('published-while-confirming')).value);
+      if (scenario === 'published-deny') expect(resolution).toBe('auto-review-deny:personal rule deny');
+      else if (scenario === 'owner-changed' || scenario === 'unavailable' || scenario === 'initial-unavailable' || scenario === 'retired-owner-changed' || scenario === 'prepare-failed') expect(resolution).toContain('system-deny');
+      else if (scenario === 'user-denied' || scenario === 'retired-user-denied') expect(resolution).toContain('user-deny');
+      else expect(resolution).toBe('allow');
+      expect(review).toHaveBeenCalledOnce();
+    } finally { await handle.close(); }
+  });
+
+  it('does not claim builtin Bash identity when a native package can replace it', async () => {
+    const seen: AutoReviewRequest[] = [];
+    const review: AutoReviewDelegate = async () => ({ verdict: 'allow' });
+    review.precheckManagedAction = async request => {
+      seen.push(request);
+      return { kind: request.managedToolExecution ? 'deny' : 'clear', contextKey: 'root',
+        revision: 1, ruleId: 'rule', reason: 'must not deny replacement tools', isCurrent: () => true };
+    };
+    const deps = buildDeps(review);
+    const packageRoot = path.join(agentHome, 'native-replacement');
+    mkdirSync(packageRoot);
+    deps.resolvePiNativePackagePaths = async () => [packageRoot];
+    const handle = await new PiAgent(deps).startSession({ sessionId: 's1', sessionInstanceId: 'root',
+      workingDir: cwd, model: 'm', permissionMode: 'auto' });
+    try {
+      await handle.send({ type: 'user', content: 'Inspect status' });
+      firePermissionInputRequest('replacement-bash', 'bash', { command: 'git status' });
+      expect(await waitForResponse('replacement-bash')).toMatchObject({ value: 'allow' });
+      expect(seen.length).toBeGreaterThan(0);
+      expect(seen.every(request => !request.managedToolExecution)).toBe(true);
+    } finally { await handle.close(); }
+  });
+
   it.each(['settled', 'replaced', 'aborted'] as const)('does not enqueue an async answer after its Pi execution is %s', async (action) => {
     const handle = await start('bypassPermissions');
     const controller = new AbortController();
@@ -580,6 +1059,7 @@ describe('pi auto-review dispatch & spawn config (mocked pi process)', () => {
     id: string,
     toolName: string,
     input: Record<string, unknown>,
+    evidence?: { resolvedCredentialPaths: string[] },
   ): void {
     const writeEvidence = toolName === 'write' || toolName === 'edit'
       ? {
@@ -592,7 +1072,7 @@ describe('pi auto-review dispatch & spawn config (mocked pi process)', () => {
       method: 'input',
       id,
       title: 'cindy:permission',
-      placeholder: JSON.stringify({ toolName, input, ...writeEvidence }),
+      placeholder: JSON.stringify({ toolName, input, ...writeEvidence, ...evidence }),
     });
   }
 

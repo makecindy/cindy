@@ -1,4 +1,7 @@
 import { refreshInstalledPluginApps } from '../cindy-brain/index.js';
+import { createClaudeLiveUserRulesImporter, createCodexUserRuleContentImporter } from './approval-rule-sources.js';
+import { captureManagedApprovalOwner, isManagedApprovalOwnerCurrent } from './managed-approval-owner.js';
+import { createManagedAutoReviewPrecheck } from './managed-auto-review.js';
 import { configureSessionModelInterfaceStorage, sessionModelInterface } from './session-model-interface.js';
 import { readGeneratedImageEpoch } from '../cindy-media/generatedImageStorage';
 import { resolveHelperSurface } from '../mcp-integrations/helperSurface.js';
@@ -140,6 +143,7 @@ import { getProviderGroupGuestSwitch } from '../provider-group/guestSwitch.js';
 import { tapWindowBroadcast } from '../device-link/broadcast-tap.js';
 import { openRemoteLink, remoteBackgroundInvoke, remoteInvoke } from '../device-link/index.js';
 import { isCrossRegionProviderShareTarget, renewCrossRegionProviderShareLink } from '../device-link/providerShareCrossRegion.js';
+import { getSessionRowSnapshotStrict } from '../localDb/ipc/sessions.js';
 import { handleListDevices, defaultDeps as deviceDirectoryDeps } from '../device-link/ipc.js';
 import { parseProviderShareAgentDeviceId } from '../device-link/providerShareGuest.js';
 import { isProviderShareCredentialConsentSkipped } from '../device-link/providerShareGuestPrefs.js';
@@ -201,6 +205,7 @@ import {
   createBashConcurrencyHooks,
   mergeClaudeHooks,
 } from './claude-hooks/bash-concurrency-hook.js';
+import { createManagedBashDenyHooks } from './claude-hooks/managed-bash-deny-hook.js';
 import { createReadImageHook } from './claude-hooks/read-image-hook.js';
 import { createDesktopInputShellGuardHooks } from './claude-hooks/desktop-input-shell-guard-hook.js';
 import { readAgentResourceSettings } from './agent-resource-settings-store.js';
@@ -478,6 +483,13 @@ reviewAutoPermissionAction.prepareRequest = async request => {
   if (!autoReviewContextResolver) throw new Error('Authorization context is not ready');
   return autoReviewContextResolver(request);
 };
+reviewAutoPermissionAction.precheckManagedAction = createManagedAutoReviewPrecheck({
+  captureOwner: captureManagedApprovalOwner,
+  ownerCurrent: isManagedApprovalOwnerCurrent,
+  listSessions: () => _maker?.listActiveSessions() ?? [],
+  readSessionRow: getSessionRowSnapshotStrict,
+  canonicalWorkDir: workDir => fs.realpath(workDir),
+});
 
 /**
  * Codex 模型补拉 coordinator —— 随 maker 一起创建(需要 maker 实例做 live 拉取)、随
@@ -1507,7 +1519,22 @@ export function getMaker(): Maker {
           () => getPluginRegistry().isEnabled('computer'),
           desktopMakerLogger,
         ),
+        createManagedBashDenyHooks({
+          captureOwner: captureManagedApprovalOwner,
+          ownerCurrent: isManagedApprovalOwnerCurrent,
+          listSessions: () => _maker?.listActiveSessions() ?? [],
+          readSessionRow: getSessionRowSnapshotStrict,
+          canonicalWorkDir: workDir => fs.realpath(workDir),
+        }),
       ),
+      onClaudeLiveUserRules: async request => {
+        return createClaudeLiveUserRulesImporter({
+          captureOwner: captureManagedApprovalOwner,
+          ownerCurrent: isManagedApprovalOwnerCurrent,
+          listSessions: () => _maker?.listActiveSessions() ?? [],
+          readSessionRow: getSessionRowSnapshotStrict,
+        })(request);
+      },
       registerClaudeSubagentTask: (task) => claudeSubagentUsageBridge.registerTask(task),
       getClaudeSubagentTaskUsage: (taskId) => claudeSubagentUsageBridge.getTaskUsage(taskId),
       // 远端 Claude 会话的路由 materialization:把该会话真实上游 + 鉴权 + 定制头解析成 cc
@@ -1749,6 +1776,14 @@ export function getMaker(): Maker {
         ?? 'default';
     };
     const codexAgent = new CodexAgent({
+      onCodexUserRuleContent: async request => {
+        await createCodexUserRuleContentImporter({
+          captureOwner: captureManagedApprovalOwner,
+          ownerCurrent: isManagedApprovalOwnerCurrent,
+          listSessions: () => _maker?.listActiveSessions() ?? [],
+          readSessionRow: getSessionRowSnapshotStrict,
+        })(request);
+      },
       resolveSessionEnvironment: resolveCompanionRuntimeEnvironment,
       getDisabledSkillPaths: readDisabledSkillPaths,
       getManagedSkills: listCindyManagedSkills,
@@ -2549,6 +2584,7 @@ export function getMaker(): Maker {
     // latest-byte-edge runtime snapshot for its durable mutation.
     const pendingPiPackageRuntimeSnapshots: PiPackageRuntimeInvalidationSnapshot[] = [];
     const buildPiAgentForDesktop = () => buildPiAgent({
+      getPiManagedBuiltinBashGeneration: () => _maker?.getLocalPiPackageRuntimeGeneration(),
       logger: desktopMakerLogger,
       turnChangeCapture: {
         beforeKnownFileWrite: captureKnownFileBefore,

@@ -24,6 +24,7 @@ import { createIpcError } from '../../../../shared/ipc-errors';
 import { dbToMakerAgentKind } from '../../../../shared/agentKindConversion';
 import { askPluginModelRoute, writePluginModelRouteNote } from '../pluginModelRoute';
 import type { GhostStartTaskRouteResult } from '../../../../shared/ghost';
+import { isApprovalRuleCommand } from '../../../../shared/approvalRuleCommand';
 
 vi.mock('@/lib/makerTransport', () => ({ makerApiFor: vi.fn() }));
 vi.mock('@/features/device-link/remoteProjectsStore', () => ({ getSessionDeviceId: vi.fn() }));
@@ -248,6 +249,7 @@ async function submit(options: {
       ? { builtInSkillIntent: options.builtInSkillIntent } : null,
     NEW_MAKER_DRAFT_KEY: 'fixture', rewriteBrowserCommentsFromRehomedFiles: () => [],
     leadingSlashInvocation, rebaseInlineRangesAfterSlashCommandRewrite, rewriteBuiltInSkillDraftForSend, setPending,
+    isApprovalRuleCommand,
     rewritePiSkillMessageForSend: async ({ message }: { message: string }) => message,
     clearComposerDraftAndNotify: noop, attachmentState: { clearFiles: noop },
     resetDraftWorkspaceAfterSend: noop, navigate: vi.fn(), setWtCreating: noop,
@@ -296,7 +298,7 @@ async function submit(options: {
       await callback(options.message ?? 'hello', selectedModel, options.submittedEffort ?? selection.effort ?? '',
         'default', [], [], { providerId: selectedProviderId, slashCommandRanges: options.slashCommandRanges });
     }
-    await finished;
+    if (!options.message?.startsWith('/approval-rule')) await finished;
     if (hasWorktree && createSession.mock.calls.length) await worktreeFinished;
     return { createSession, ipcCreate, sendMessage, setGoal, errors, environment, setPending, toastError, listAgentSkills, invokeRemote, enableOrca, createNote };
   } finally { vi.unstubAllGlobals(); }
@@ -325,6 +327,12 @@ describe('homepage submission to Main admission and first-message handoff', () =
     const result = await submit({ deviceId: 'host-b', agentDeviceId: selected.effectiveAgentDeviceId });
     expect(result.errors).toEqual([]);
     expect(result.invokeRemote).toHaveBeenCalledWith('host-b', 'maker:create-session', [expect.objectContaining({ agentDeviceId: 'source-a' })]);
+  });
+  it('keeps an approval-rule command in the composer before creating a first task', async () => {
+    const result = await submit({ message: '/approval-rule deny user -- git push', agentKind: 'claude-code' });
+    expect(result.createSession).not.toHaveBeenCalled();
+    expect(result.sendMessage).not.toHaveBeenCalled();
+    expect(result.setPending).not.toHaveBeenCalled();
   });
   // PR #6787, unit: the form stored both computers but the real draft builder
   // dropped the model computer. Existing route tests stubbed that builder. Use

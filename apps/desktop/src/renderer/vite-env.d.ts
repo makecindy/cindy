@@ -789,9 +789,11 @@ interface CCAgentPermissionRequestPayload {
   autoReviewUnavailable?: boolean;
   /** Auto-review's reason for asking; shown as the card's "why". */
   autoReviewReason?: string;
+  rememberAutoCommand?: { harness: 'claude-code' | 'pi' | 'codex'; command: string; projectId?: string };
 }
 
 interface CCAgentPermissionResult {
+  rememberAutoCommand?: true;
   behavior: 'allow' | 'deny';
   message?: string;
   updatedPermissions?: unknown[];
@@ -6087,6 +6089,10 @@ interface ElectronAPI {
       error?: string;
       doctorReport?: import('../shared/cindyMakeDoctor').MakeDoctorReport;
     }>;
+
+    approvalRuleCommand: (
+      request: import('../shared/approvalRuleCommand').ApprovalRuleCommandRequest,
+    ) => Promise<import('../shared/approvalRuleCommand').ApprovalRuleCommandResult>;
 
     startReview: (input: {
       sourceSessionId: string;

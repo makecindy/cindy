@@ -12619,6 +12619,10 @@
       "defer": "Ahora no"
     },
     "permissionPrompt": {
+      "rememberAllow": "Permitir siempre comandos similares",
+      "rememberScope": "Solo Auto Review · {{harness}} · comando exacto: {{command}}",
+      "rememberProjectScope": "Solo este proyecto: {{project}}",
+      "rememberFailed": "No se pudo confirmar que se guardó la regla. Reintenta o permite una vez.",
       "alwaysAllowScoped": "Permitir siempre {{scope}} durante esta sesión",
       "alwaysAllowScopedHint": "Se aplica a toda la sesión y solo a lo que se indica aquí.",
       "alwaysAllowSessionHint": "Se aplica a toda la sesión, no solo a esta solicitud.",
@@ -14066,6 +14070,28 @@
       "readOnlyHint": "Tarea de solo lectura: puedes consultar los niveles y rangos de precios, pero no cambiarlos.",
       "shrinkWarning": "{{used}} ya en uso: una ventana más pequeña primero compacta o inicia un nuevo contexto.",
       "saveFailed": "No se pudo guardar el nivel de la ventana de contexto"
+    },
+    "approvalRule": {
+      "hostIdentityConflict": "No se pudo verificar la identidad del dispositivo de una regla existente. Se conservan los datos y la entrada; no se guardó ni publicó nada.",
+      "saved": "Regla actualizada.",
+      "published": "Regla publicada. Aún falta verificar su aplicación en ejecución.",
+      "unsupported": "Este comando de reglas o esta tarea no son compatibles. Se conserva tu entrada.",
+      "existingTaskOnly": "Configura las reglas en una tarea local existente de Claude Code, Codex o Pi",
+      "failed": "La operación de reglas no terminó. Se conserva tu entrada.",
+      "statusTitle": "Reglas personales · Tarea actual",
+      "statusLimit": "Solo aprobaciones locales de comandos Auto en tareas raíz normales. Guardar no demuestra que el motor nativo las haya cargado.",
+      "statusReasons": {
+        "pending-activation": "No efectiva: cambios guardados pendientes de activación",
+        "ready": "Disponible para Auto Review; se comprueba al ejecutar",
+        "no-rules": "No efectiva: no hay reglas guardadas",
+        "storage-unavailable": "No efectiva: no se pudieron leer las reglas",
+        "unsupported-rules": "No efectiva: este motor no las admite",
+        "no-current-task": "No efectiva: no hay una tarea actual con este motor",
+        "auto-required": "No efectiva: requiere el modo Auto",
+        "plan-mode": "No efectiva: modo Plan",
+        "native-owned": "No efectiva: la revisión nativa controla la aprobación",
+        "runtime-unverified": "No efectiva: ejecución no verificada"
+      }
     },
     "agentStatus": {
       "readingMemory": "Leyendo la memoria…",

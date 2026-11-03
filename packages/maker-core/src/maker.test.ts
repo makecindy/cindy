@@ -385,7 +385,9 @@ describe('Maker local Pi package generation fence', () => {
       });
       await vi.waitFor(() => expect(startSession).toHaveBeenCalledTimes(1));
 
+      const previousGeneration = maker.getLocalPiPackageRuntimeGeneration();
       maker.advanceLocalPiPackageRuntimeGeneration();
+      expect(maker.getLocalPiPackageRuntimeGeneration()).toBe(previousGeneration + 1);
       started.resolve(handle);
 
       await expect(creating).rejects.toThrow('invalidated by a package change');

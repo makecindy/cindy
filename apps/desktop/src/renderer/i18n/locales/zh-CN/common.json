@@ -12478,6 +12478,10 @@
       "defer": "暂不下载"
     },
     "permissionPrompt": {
+      "rememberAllow": "以后同类都允许",
+      "rememberScope": "仅 Auto Review · {{harness}} · 仅匹配此完整命令：{{command}}",
+      "rememberProjectScope": "仅当前项目：{{project}}",
+      "rememberFailed": "未能确认允许规则已保存，请重试或选择允许一次。",
       "alwaysAllowScoped": "本任务都允许 {{scope}}",
       "alwaysAllowScopedHint": "作用于整个任务，且只限这里列出的范围。",
       "alwaysAllowSessionHint": "作用于整个任务，不只是这一次请求。",
@@ -13872,6 +13876,28 @@
       "readOnlyHint": "只读任务：可以查看档位与价带，但不能修改。",
       "shrinkWarning": "当前已用 {{used}}，换到更小档位会先触发压缩或换窗。",
       "saveFailed": "保存上下文窗口档位失败"
+    },
+    "approvalRule": {
+      "hostIdentityConflict": "旧规则的本机身份无法确认，原数据与输入已保留；本次未保存或发布",
+      "saved": "规则已更新",
+      "published": "规则已发布；当前执行是否生效仍需验证",
+      "unsupported": "这条规则命令或当前任务暂不支持，输入已保留",
+      "existingTaskOnly": "请在已有的本机 Claude Code、Codex 或 Pi 任务中设置规则",
+      "failed": "规则操作未完成，输入已保留",
+      "statusTitle": "个人规则 · 当前任务",
+      "statusLimit": "仅适用于本机普通 Auto 命令审批；保存不代表原生已加载。",
+      "statusReasons": {
+        "pending-activation": "未生效：保存内容尚未激活",
+        "ready": "可供 Auto 审核使用，执行时核验",
+        "no-rules": "未生效：未保存规则",
+        "storage-unavailable": "未生效：规则读取失败",
+        "unsupported-rules": "未生效：当前端不支持此规则",
+        "no-current-task": "未生效：当前未运行该端任务",
+        "auto-required": "未生效：需要 Auto 模式",
+        "plan-mode": "未生效：当前为计划模式",
+        "native-owned": "未生效：由原生审核",
+        "runtime-unverified": "未生效：运行状态未验证"
+      }
     },
     "agentStatus": {
       "readingMemory": "正在读取记忆…",

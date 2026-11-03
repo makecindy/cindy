@@ -1,3 +1,4 @@
+/// <reference path="../../../../../lizi-mcps/src/vite-env.d.ts" />
 /**
  * PiAgent × cindy-bridge 端到端集成测试 —— 证明「模型经桥调 cindy MCP 工具」
  * 与「ask 权限门放行/拒绝」两条链真通。

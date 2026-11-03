@@ -12619,6 +12619,10 @@
       "defer": "Agora não"
     },
     "permissionPrompt": {
+      "rememberAllow": "Permitir sempre comandos semelhantes",
+      "rememberScope": "Somente Auto Review · {{harness}} · comando exato: {{command}}",
+      "rememberProjectScope": "Somente este projeto: {{project}}",
+      "rememberFailed": "Não foi possível confirmar que a regra foi salva. Tente novamente ou permita uma vez.",
       "alwaysAllowScoped": "Sempre permitir {{scope}} nesta sessão",
       "alwaysAllowScopedHint": "Aplica-se à sessão inteira e apenas ao que está listado aqui.",
       "alwaysAllowSessionHint": "Aplica-se à sessão inteira, não apenas a esta solicitação.",
@@ -14066,6 +14070,28 @@
       "readOnlyHint": "Tarefa somente leitura: você pode consultar as faixas e os preços, mas não alterá-los.",
       "shrinkWarning": "{{used}} já em uso — uma janela menor compacta ou inicia um novo contexto antes.",
       "saveFailed": "Falha ao salvar a faixa da janela de contexto"
+    },
+    "approvalRule": {
+      "hostIdentityConflict": "Não foi possível verificar a identidade do dispositivo de uma regra existente. Os dados e a entrada foram preservados; nada foi salvo nem publicado.",
+      "saved": "Regra atualizada.",
+      "published": "Regra publicada. A aplicação em execução ainda precisa ser verificada.",
+      "unsupported": "Este comando de regras ou esta tarefa não são compatíveis. A entrada foi preservada.",
+      "existingTaskOnly": "Defina regras em uma tarefa local existente de Claude Code, Codex ou Pi",
+      "failed": "A operação de regras não terminou. A entrada foi preservada.",
+      "statusTitle": "Regras pessoais · Tarefa atual",
+      "statusLimit": "Somente aprovações locais de comandos Auto em tarefas principais comuns. Salvar não comprova o carregamento nativo.",
+      "statusReasons": {
+        "pending-activation": "Sem efeito: alterações salvas aguardam ativação",
+        "ready": "Disponível para Auto Review; verificação ao executar",
+        "no-rules": "Sem efeito: não há regras salvas",
+        "storage-unavailable": "Sem efeito: não foi possível ler as regras",
+        "unsupported-rules": "Sem efeito: não compatíveis com este mecanismo",
+        "no-current-task": "Sem efeito: não há tarefa atual neste mecanismo",
+        "auto-required": "Sem efeito: requer o modo Auto",
+        "plan-mode": "Sem efeito: modo Plan",
+        "native-owned": "Sem efeito: a revisão nativa controla a aprovação",
+        "runtime-unverified": "Sem efeito: execução não verificada"
+      }
     },
     "agentStatus": {
       "readingMemory": "Lendo a memória…",

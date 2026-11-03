@@ -1,7 +1,7 @@
 import { isSharedTaskPeer, sharedTaskHostPeer } from '@cindy/device-link';
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
-import { createElement, isValidElement } from 'react';
+import { createElement, Fragment, isValidElement } from 'react';
 import { describe, expect, it } from 'vitest';
 import ts from 'typescript';
 
@@ -27,7 +27,7 @@ function findNode<T extends ts.Node>(matches: (node: ts.Node) => node is T): T {
 function evaluate(expression: ts.Expression, scope: Record<string, unknown>): unknown {
   const { outputText } = ts.transpileModule(`return (${expression.getText(ast)});`, {
     fileName: 'composer-expression.tsx',
-    compilerOptions: { target: ts.ScriptTarget.ESNext, jsx: ts.JsxEmit.React, jsxFactory: 'createElement' },
+    compilerOptions: { target: ts.ScriptTarget.ESNext, jsx: ts.JsxEmit.React, jsxFactory: 'createElement', jsxFragmentFactory: 'Fragment' },
   });
   return new Function(...Object.keys(scope), outputText)(...Object.values(scope));
 }
@@ -88,8 +88,12 @@ describe('Cindy Make composer presentation', () => {
       throw new Error('ChatInput must expose its recovery actions through topSlot');
     }
     const expression = topSlot.initializer.expression;
-    const renderSlot = (cindyMakeRecoveryId: string | null, session: { id: string } | null) =>
-      evaluate(expression, {
+    const accessory = findNode((node): node is ts.VariableDeclaration =>
+      ts.isVariableDeclaration(node) && node.name.getText(ast) === 'composerAccessory');
+    expect(accessory.initializer).toBeDefined();
+    const renderSlot = (cindyMakeRecoveryId: string | null, session: { id: string } | null,
+      personalRuleStatusPanel: unknown = null) => {
+      const composerAccessory = evaluate(accessory.initializer!, {
         createElement,
         CindyMakeEditingActions: 'editing-actions',
         cindyMakeRecoveryId,
@@ -98,6 +102,8 @@ describe('Cindy Make composer presentation', () => {
         pendingReplyQuote: null,
         remoteMakeCards: { blocked: false, handlesSession: false, supported: false },
       });
+      return evaluate(expression, { createElement, Fragment, composerAccessory, personalRuleStatusPanel });
+    };
 
     // Recovery must still reach ChatInput, never replace it with a blocking card.
     for (let child: ts.Node = input; !ts.isJsxExpression(child.parent); child = child.parent) {
@@ -130,6 +136,13 @@ describe('Cindy Make composer presentation', () => {
     expect(renderSlot(null, { id: 'task-a' })).toBeUndefined();
     expect(renderSlot('completion-a', null)).toBeUndefined();
     expect(renderSlot(null, null)).toBeUndefined();
+    // The status panel must coexist with, rather than replace, recovery.
+    const panel = createElement('rule-status');
+    const combined = renderSlot('completion-a', { id: 'task-a' }, panel);
+    expect(isValidElement(combined)).toBe(true);
+    if (!isValidElement<{ children: unknown[] }>(combined)) throw new Error('Missing composer top slot');
+    expect(combined.type).toBe(Fragment);
+    expect(combined.props.children).toEqual([panel, renderSlot('completion-a', { id: 'task-a' })]);
   });
 
   it('locks preparation and first-test input but leaves continued editing unlocked', () => {
@@ -167,10 +180,6 @@ describe('Cindy Make composer presentation', () => {
     };
     visit(ast);
     expect(topSlot).toBeDefined();
-    expect(topSlot!.getText(ast)).toMatch(/cindyMakeRecoveryId\s*&&\s*session\s*\?/);
-    expect(topSlot!.getText(ast)).toContain('<CindyMakeEditingActions');
-    expect(topSlot!.getText(ast)).toContain('sessionId={session.id}');
-    expect(topSlot!.getText(ast)).toContain('messageId={cindyMakeRecoveryId}');
     expect(inputLock).toBeDefined();
     expect(inputLock!.getText(ast)).toContain('cindyMakeComposerPhase || cindyMakePendingTest');
     expect(inputLock!.getText(ast)).not.toContain('cindyMakeRecoveryId');

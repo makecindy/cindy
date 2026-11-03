@@ -124,6 +124,47 @@ describe("cindy_helper MCP server", () => {
     } finally { await client.close(); await server.close(); }
   });
 
+  // 首红价值：真实 MCP discovery 应提供个人 Auto 长期规则写入口（阶段二聊天采纳合同）。
+  // 旧测试只覆盖任务/伙伴工具，未覆盖本人 set/edit/delete；最小输入为本机普通 Codex 任务。
+  // unit：实际 server + SDK InMemoryTransport；不指定未来工具名/schema，不冒充 Host 保存授权。
+  it('discovers a callable personal approval-rule writer for explicit long-term chat edits', async () => {
+    const server = createXdtHelperMcpServer({
+      resolveSurface: async () => 'default',
+      sessionControl: {
+        updateQueuedMessage: vi.fn(), cancelQueuedMessage: vi.fn(), steerQueuedMessage: vi.fn(),
+        moveQueuedMessage: vi.fn(), steerSession: vi.fn(), stopSessionTurn: vi.fn(),
+        getSessionRuntime: vi.fn(), setSessionRuntime: vi.fn(),
+      },
+    }, {
+      agentKind: 'codex', workingDir: '/synthetic-chat-project', sessionId: 'chat-rule-task',
+    });
+    const client = new Client({ name: 'chat-rule-discovery', version: '1' });
+    const [ct, st] = InMemoryTransport.createLinkedPair();
+    await Promise.all([server.connect(st), client.connect(ct)]);
+    try {
+      const overview = parsePayload(await client.callTool({ name: 'list_tools', arguments: {} }));
+      const categories = overview.categories as Array<{ name: string }>;
+      expect(categories.map(category => category.name)).toContain('control');
+      expect(parsePayload(await client.callTool({ name: 'call_tool', arguments: {
+        name: 'get_current_session_id', args: {},
+      } }))).toMatchObject({ session_id: 'chat-rule-task', agent_kind: 'codex' });
+      const declarations: Array<{ name: string; description: string }> = [];
+      for (const category of categories) {
+        const result = parsePayload(await client.callTool({ name: 'list_tools', arguments: { category: category.name } }));
+        declarations.push(...result.tools as Array<{ name: string; description: string }>);
+      }
+      // Match the advertised capability, not a proposed API spelling. This inspects
+      // protocol responses rather than source literals; the full declaration is evidence.
+      const writers = declarations.filter(tool => {
+        const advertised = tool.name + ' ' + tool.description;
+        return /个人.{0,12}(?:规则|要求)|personal.{0,20}(?:approval|rule|requirement)|approval[_ -]?rule/i.test(advertised)
+          && /保存|设置|修改|编辑|删除|save|set|edit|update|delete|remove/i.test(advertised);
+      });
+      console.info('chat-rule-discovery-receipt', JSON.stringify({ categories, declarations, writers }));
+      expect(writers, 'missing write entry: accepted chat cannot reach a personal-rule save/edit/delete tool').not.toEqual([]);
+    } finally { await client.close(); await server.close(); }
+  });
+
   it.each(['default', 'bot-main'] as const)('exposes runtime declarations through the same helper tool for %s', async (surface) => {
     const runtimeCapabilities = vi.fn(async () => ({ ok: true, capabilities: [{ server: 'fixture' }] }));
     const server = createXdtHelperMcpServer({ resolveSurface: async () => surface, runtimeCapabilities }, {

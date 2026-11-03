@@ -12619,6 +12619,10 @@
       "defer": "Pas maintenant"
     },
     "permissionPrompt": {
+      "rememberAllow": "Toujours autoriser les commandes similaires",
+      "rememberScope": "Auto Review uniquement · {{harness}} · commande exacte : {{command}}",
+      "rememberProjectScope": "Ce projet uniquement : {{project}}",
+      "rememberFailed": "Impossible de confirmer l’enregistrement de la règle. Réessayez ou autorisez une seule fois.",
       "alwaysAllowScoped": "Toujours autoriser {{scope}} dans cette session",
       "alwaysAllowScopedHint": "S'applique à toute la session, et uniquement à ce qui est listé ici.",
       "alwaysAllowSessionHint": "S'applique à toute la session, pas seulement à cette demande.",
@@ -14066,6 +14070,28 @@
       "readOnlyHint": "Tâche en lecture seule : vous pouvez consulter les paliers et les tranches de prix, mais pas les modifier.",
       "shrinkWarning": "{{used}} déjà utilisés : une fenêtre plus petite compacte ou bascule d'abord.",
       "saveFailed": "Échec de l'enregistrement du palier de fenêtre de contexte"
+    },
+    "approvalRule": {
+      "hostIdentityConflict": "L’identité de l’appareil d’une règle existante n’a pas pu être vérifiée. Les données et la saisie sont conservées ; rien n’a été enregistré ni publié.",
+      "saved": "Règle mise à jour.",
+      "published": "Règle publiée. Son application à l’exécution reste à vérifier.",
+      "unsupported": "Cette commande de règles ou cette tâche ne sont pas prises en charge. Votre saisie est conservée.",
+      "existingTaskOnly": "Définissez les règles dans une tâche locale existante Claude Code, Codex ou Pi",
+      "failed": "L’opération de règles n’a pas abouti. Votre saisie est conservée.",
+      "statusTitle": "Règles personnelles · Tâche actuelle",
+      "statusLimit": "Uniquement les approbations locales de commandes Auto des tâches racines ordinaires. L’enregistrement ne prouve pas leur chargement natif.",
+      "statusReasons": {
+        "pending-activation": "Non effectif : modifications enregistrées en attente d’activation",
+        "ready": "Disponible pour Auto Review ; vérification à l’exécution",
+        "no-rules": "Non effectif : aucune règle enregistrée",
+        "storage-unavailable": "Non effectif : lecture des règles impossible",
+        "unsupported-rules": "Non effectif : moteur non compatible",
+        "no-current-task": "Non effectif : aucune tâche actuelle avec ce moteur",
+        "auto-required": "Non effectif : mode Auto requis",
+        "plan-mode": "Non effectif : mode Plan",
+        "native-owned": "Non effectif : approbation gérée par la révision native",
+        "runtime-unverified": "Non effectif : exécution non vérifiée"
+      }
     },
     "agentStatus": {
       "readingMemory": "Lecture de la mémoire…",

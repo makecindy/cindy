@@ -12524,6 +12524,10 @@
       "defer": "Nicht jetzt"
     },
     "permissionPrompt": {
+      "rememberAllow": "Ähnliche Befehle immer erlauben",
+      "rememberScope": "Nur Auto Review · {{harness}} · exakter Befehl: {{command}}",
+      "rememberProjectScope": "Nur dieses Projekt: {{project}}",
+      "rememberFailed": "Das Speichern der Erlaubnisregel konnte nicht bestätigt werden. Erneut versuchen oder einmal erlauben.",
       "alwaysAllowScoped": "{{scope}} in dieser Sitzung immer erlauben",
       "alwaysAllowScopedHint": "Gilt für die gesamte Sitzung und nur für die hier aufgeführten Elemente.",
       "alwaysAllowSessionHint": "Gilt für die gesamte Sitzung, nicht nur für diese Anfrage.",
@@ -13938,6 +13942,28 @@
       "readOnlyHint": "Schreibgeschützte Aufgabe: Du kannst die Stufen und Preisbereiche ansehen, aber nicht ändern.",
       "shrinkWarning": "{{used}} bereits belegt — bei einem kleineren Fenster wird zuerst komprimiert oder ein neuer Kontext begonnen.",
       "saveFailed": "Die Kontextfensterstufe konnte nicht gespeichert werden"
+    },
+    "approvalRule": {
+      "hostIdentityConflict": "Die Geräteidentität einer bestehenden Regel konnte nicht bestätigt werden. Daten und Eingabe bleiben erhalten; nichts wurde gespeichert oder veröffentlicht.",
+      "saved": "Regel aktualisiert.",
+      "published": "Regel veröffentlicht. Die Anwendung zur Laufzeit muss noch geprüft werden.",
+      "unsupported": "Dieser Regelbefehl oder diese Aufgabe wird nicht unterstützt. Die Eingabe bleibt erhalten.",
+      "existingTaskOnly": "Regeln in einer bestehenden lokalen Aufgabe mit Claude Code, Codex oder Pi festlegen",
+      "failed": "Der Regelvorgang wurde nicht abgeschlossen. Die Eingabe bleibt erhalten.",
+      "statusTitle": "Persönliche Regeln · Aktuelle Aufgabe",
+      "statusLimit": "Nur lokale Auto-Befehlsfreigaben gewöhnlicher Hauptaufgaben. Speichern belegt kein natives Laden.",
+      "statusReasons": {
+        "pending-activation": "Nicht wirksam: gespeicherte Änderungen warten auf Aktivierung",
+        "ready": "Für Auto Review verfügbar; Prüfung bei Ausführung",
+        "no-rules": "Nicht wirksam: keine gespeicherten Regeln",
+        "storage-unavailable": "Nicht wirksam: Regeln konnten nicht gelesen werden",
+        "unsupported-rules": "Nicht wirksam: von dieser Engine nicht unterstützt",
+        "no-current-task": "Nicht wirksam: keine aktuelle Aufgabe mit dieser Engine",
+        "auto-required": "Nicht wirksam: Auto-Modus erforderlich",
+        "plan-mode": "Nicht wirksam: Plan-Modus",
+        "native-owned": "Nicht wirksam: native Prüfung steuert die Freigabe",
+        "runtime-unverified": "Nicht wirksam: Laufzeit nicht bestätigt"
+      }
     },
     "agentStatus": {
       "readingMemory": "Erinnerungen werden gelesen…",

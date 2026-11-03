@@ -52,6 +52,8 @@ export const MAKER_INVOKE = {
   DELETE_MESSAGE: 'maker:message:delete',
   ABORT_SESSION: 'maker:abort-session',
   SEND: 'maker:send',
+  /** Local first-party composer only; deliberately absent from device-link. */
+  APPROVAL_RULE_COMMAND: 'maker:approval-rule:command',
   STEER: 'maker:steer',
   GET_CONTEXT_USAGE: 'maker:get-context-usage',
   INPUT_GET_PROJECTION: 'maker:input:get-projection',

@@ -345,6 +345,41 @@ function createDeps(overrides: Partial<MakerSendTransactionDeps> = {}) {
   return { deps, session };
 }
 
+// 阶段二聊天采纳的可达层绿对照：实际 transaction 的 accepted hook 交付完整本人原文。
+// 旧 hello 用例不含持久意图/多行原文；这不是新规则授权类型，也不证明 owner store 已写入。
+// unit：复用现 Agent/DB 注入边界，不连接 native CLI/SQLite/模型。
+describe('explicit long-term rule chat accepted-input boundary', () => {
+  it.each([
+    '记住：只对 Codex 的个人 Auto 规则，设置 key release：  保留完整原文\r\n读取目录前应核对任务目标 🧪  ',
+    '以后在 Codex 的个人 Auto 规则里，请一直按这条长期要求执行（key release）：读取目录前应核对任务目标，不要总结改写。',
+  ])('persists the complete explicit long-term request through the current accepted hook: %s', async original => {
+    const { deps, session } = createDeps();
+    const onPersisted = vi.fn();
+    const transaction = createMakerSendTransaction(deps);
+    const result = await transaction.sendToAgentAccepted('session-1', { type: 'user', content: original }, undefined, {
+      messageUuid: 'chat-rule-input',
+      // Existing Main-only source context; this fixture starts after sender validation.
+      // It proves persistence delivery, not production owner authentication.
+      [MAIN_OWNED_SEND_CONTEXT]: { origin: { kind: 'desktop' }, rawChannelText: original },
+      persistUserMessage: {
+        clientId: 'chat-rule-input', content: original, delivery: 'turn',
+        agentFacingWireContent: { type: 'user', content: original },
+        origin: { kind: 'desktop' },
+        onPersisted,
+      },
+    });
+    expect(result.accepted).toBe(true);
+    expect(deps.createDbMessage).toHaveBeenCalledExactlyOnceWith('session-1', expect.objectContaining({
+      clientId: 'chat-rule-input', role: 'user', content: original,
+      agentMeta: expect.objectContaining({ autoReviewUserText: original, origin: expect.objectContaining({ kind: 'desktop' }) }),
+    }), undefined);
+    expect(onPersisted).toHaveBeenCalledOnce();
+    const sendOptions = vi.mocked(session.send).mock.calls[0]?.[1];
+    expect(sendOptions?.[MAIN_OWNED_SEND_CONTEXT]).toEqual({ origin: { kind: 'desktop' }, rawChannelText: original });
+    expect(deps.commitUserPromptPreview).toHaveBeenCalledWith('session-1', 'chat-rule-input');
+  });
+});
+
 describe('MCP App message authorization', () => {
   it.each(['claude-code', 'pi', 'codex'] as const)(
     'keeps App slash text literal and includes its source note for %s',

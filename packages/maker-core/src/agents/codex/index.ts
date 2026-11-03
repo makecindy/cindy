@@ -58,6 +58,8 @@ import {
   type AgentSessionHandle,
   type AgentDeps,
   type CodexExtraSpawnConfig,
+  type CodexUserRuleContent,
+  type CodexProjectRuleContent,
   type StartSessionOptions,
   type OneShotOptions,
   type PinnedSkillInvocation,
@@ -131,6 +133,8 @@ import {
   withAutoReviewContext,
   toolAutoReviewAction,
   type AutoReviewDecision,
+  type AutoReviewRequest,
+  type ManagedAutoReviewFence,
 } from '../shared/auto-review-decision.js';
 import type { ReviewableAction } from '../shared/auto-review.js';
 import { UsageTracker } from '../shared/usage-tracker.js';
@@ -291,6 +295,8 @@ import {
   type McpServerElicitationRequestResponse,
   type CodexMcpServerStatusListResponse,
   type PermissionsRequestApprovalParams,
+  type ConfigReadParams,
+  type ConfigReadResponse,
   type PermissionsRequestApprovalResponse,
   type ServerRequestResolvedNotification,
   type SandboxMode,
@@ -685,6 +691,68 @@ function asRecord(value: unknown): Record<string, unknown> {
   return value && typeof value === 'object' && !Array.isArray(value)
     ? (value as Record<string, unknown>)
     : {};
+}
+
+function codexUserContentSources(response: ConfigReadResponse, cwd: string): CodexUserRuleContent {
+  const unavailable = (reason: string): CodexUserRuleContent => ({ kind: 'unavailable', reason });
+  const layers: unknown = response?.layers;
+  if (!Array.isArray(layers)) return unavailable('layers-unavailable');
+  if (!layers.length) return unavailable('source-empty');
+  const sources: Extract<CodexUserRuleContent, { kind: 'available' }>['sources'] = [];
+  for (const value of layers) {
+    const layer = asRecord(value), name = asRecord(layer.name);
+    if (typeof name.type !== 'string' || !name.type) return unavailable('layer-invalid');
+    if (name.type !== 'user') continue;
+    if (layer.disabledReason !== undefined && layer.disabledReason !== null) {
+      if (typeof layer.disabledReason !== 'string' || !layer.disabledReason)
+        return unavailable('layer-invalid');
+      return unavailable('source-disabled');
+    }
+    if (typeof name.file !== 'string' || !path.isAbsolute(name.file)
+      || typeof layer.version !== 'string' || !layer.version
+      || (name.profile !== undefined && name.profile !== null
+        && (typeof name.profile !== 'string' || !name.profile))) return unavailable('layer-invalid');
+    const source = { file: name.file, profile: typeof name.profile === 'string' ? name.profile : null,
+      version: layer.version };
+    const prior = sources.find(entry => entry.file === source.file && entry.profile === source.profile);
+    if (prior && prior.version !== source.version) return unavailable('source-conflict');
+    if (!prior) sources.push(source);
+  }
+  return sources.length ? { kind: 'available', requestedCwd: cwd, nativeEffect: 'not-attested', sources }
+    : unavailable('source-excluded');
+}
+
+/** Only server-reported enabled folders are candidates. Conflicting records
+ * block that entire logical folder; independent folders remain observable. */
+function codexProjectContentSources(response: ConfigReadResponse, cwd: string): CodexProjectRuleContent {
+  const unavailable = (reason: string): CodexProjectRuleContent => ({ kind: 'unavailable', reason });
+  if (!Array.isArray(response?.layers)) return unavailable('layers-unavailable');
+  if (!response.layers.length) return unavailable('source-empty');
+  const folders = new Map<string, { version: string; reason?: string }>();
+  for (const value of response.layers) {
+    const layer = asRecord(value), name = asRecord(layer.name);
+    if (typeof name.type !== 'string' || !name.type) return unavailable('layer-invalid');
+    if (name.type !== 'project') continue;
+    if (typeof name.dotCodexFolder !== 'string' || !path.isAbsolute(name.dotCodexFolder)
+      || name.dotCodexFolder.includes('\0')) return unavailable('layer-invalid');
+    const folder = path.normalize(name.dotCodexFolder);
+    const version = typeof layer.version === 'string' ? layer.version : '';
+    let reason: string | undefined;
+    if (!version) reason = 'layer-invalid';
+    else if (layer.disabledReason !== undefined && layer.disabledReason !== null)
+      reason = typeof layer.disabledReason === 'string' && layer.disabledReason ? 'source-disabled' : 'layer-invalid';
+    const prior = folders.get(folder);
+    if (prior && (prior.version !== version || prior.reason !== reason)) reason = 'source-conflict';
+    folders.set(folder, { version, reason });
+  }
+  const sources: Extract<CodexProjectRuleContent, { kind: 'available' }>['sources'] = [];
+  const unavailableSources: Extract<CodexProjectRuleContent, { kind: 'available' }>['unavailableSources'] = [];
+  for (const [dotCodexFolder, entry] of folders) {
+    if (entry.reason) unavailableSources.push({ dotCodexFolder, reason: entry.reason });
+    else sources.push({ dotCodexFolder, version: entry.version });
+  }
+  return sources.length ? { kind: 'available', requestedCwd: cwd, nativeEffect: 'not-attested', sources, unavailableSources }
+    : unavailable(unavailableSources[0]?.reason ?? 'source-excluded');
 }
 
 function hasCodexMcpTransport(value: unknown): boolean {
@@ -4489,6 +4557,9 @@ assertRouteCurrent();
      * 新一轮的合法 turn(review #844 codex/greptile P1)。判据统一为"我这一轮还是最新世代吗"。
      */
     let sendGeneration = 0;
+    // Only the new pre-acceptance content observation. Stop can arrive before
+    // any turn id exists and need not abort sendOpts.signal.
+    let cancelUserRuleContentObservation: (() => void) | undefined;
 
     /** 登记一次即将发出的 turn/start, 返回它的序号。 */
     const beginTurnStart = (
@@ -5307,6 +5378,13 @@ assertRouteCurrent();
       throw error;
     }
     const sessionCodexHome = initResp.codexHome ?? null;
+    const observeUserRuleContent = this.deps.onCodexUserRuleContent;
+    const contentServerProfile = typeof sessionCodexHome === 'string' && path.isAbsolute(sessionCodexHome)
+      && typeof initResp.userAgent === 'string' && /(?:^|\/|\s)0\.159\.2(?:\s|$)/.test(initResp.userAgent)
+      ? Object.freeze({ codexHome: sessionCodexHome, userAgent: initResp.userAgent,
+          ...(typeof initResp.platformFamily === 'string' ? { platformFamily: initResp.platformFamily } : {}),
+          ...(typeof initResp.platformOs === 'string' ? { platformOs: initResp.platformOs } : {}) })
+      : null;
     if (initResp.codexHome && !accountProviderId && !sessionStorage) this.codexHome = initResp.codexHome;
     // reviewer 路由的凭证模式判定: 远程 daemon 用的是 auth sync 推过去的
     // 同一份订阅凭证, reviewer 调用发生在 daemon 本地 — 订阅下走 daemon →
@@ -5694,9 +5772,18 @@ assertRouteCurrent();
     // 关掉抹平 → fail-closed(不把远端 /private/tmp 误当 /tmp 区内)。本地用真实 process.platform。
     // 定义在此(startSession 作用域,opts=session)以避开 awaitApprovalDecision 内层 opts 的遮蔽。
     const sessionReviewPlatform: NodeJS.Platform = opts.remoteHostId ? 'linux' : hosted ? hosted.platform : process.platform;
-    const reviewAutoAction = (action: ReviewableAction, hostAutoApprove = false, hostShortcutOnly = false): Promise<AutoReviewDecision> => {
+    type ManagedCommandApproval = {
+      execution: NonNullable<AutoReviewRequest['managedToolExecution']>;
+      current(): boolean;
+      fence?: ManagedAutoReviewFence;
+      confirmed: boolean;
+      check(confirmed: boolean): Promise<AutoReviewDecision>;
+    };
+    const reviewAutoAction = (action: ReviewableAction, hostAutoApprove = false, hostShortcutOnly = false,
+      managed?: ManagedCommandApproval): Promise<AutoReviewDecision> => {
       const directoryGeneration = autoReviewDirectoryGeneration;
       const request = {
+        ...(managed ? { managedToolExecution: managed.execution } : {}),
         sessionId: opts.sessionId,
         agentKind: 'codex' as const,
         providerId: mutableProviderId,
@@ -5732,7 +5819,9 @@ assertRouteCurrent();
           );
         if (!cached) autoReviewDecisionCache.set(key, pending);
         return pending;
-      }, (decision) => {
+      }, (decision, contribution) => {
+        if (managed && (!managed.current() || managed.fence?.isExecutionCurrent?.() === false))
+          return { verdict: 'block', reason: 'Command approval execution changed.' };
         if (!pending || !key) return decision;
         if (request.userIntent !== currentAutoReviewIntent || request.authorizationContext !== (currentAutoReviewAuthority ?? undefined)
             || autoReviewDecisionCache.get(key) !== pending) {
@@ -5743,7 +5832,7 @@ assertRouteCurrent();
         }
         autoReviewActionContext.record(action, decision);
         return decision;
-      });
+      }, managed ? fence => { managed.fence = fence; } : undefined);
     };
     const readonlyReferencesConfig = (): Record<string, unknown> => ({
       [`permissions.${READONLY_REFERENCES_PERMISSION_PROFILE}`]: {
@@ -6237,6 +6326,7 @@ assertRouteCurrent();
     const terminateHandleAfterThreadCleanupFailure = (reason: string): void => {
       if (closed) return;
       closed = true;
+      cancelUserRuleContentObservation?.();
       cancelInteractionContinuation(reason);
       translatorRt.samplingSegments.clear();
       resetCodexGenerationTiming(translatorRt);
@@ -8028,6 +8118,7 @@ assertRouteCurrent();
         autoReviewAction?: ReviewableAction;
         hostAutoApprove?: boolean;
         itemId?: string;
+        managed?: ManagedCommandApproval;
       },
     ): Promise<{ decision: ApprovalDecision; reason?: string }> {
       // Stock Codex approval responses cannot carry reasons. Native exec/patch
@@ -8105,6 +8196,7 @@ assertRouteCurrent();
                 : opts.autoReviewAction,
               opts?.hostAutoApprove === true && !forcePrompt,
               reviewPermissionMode !== 'auto',
+              opts?.managed,
             );
           } finally {
             if (pendingApprovals.get(requestId) === reviewEntry) pendingApprovals.delete(requestId);
@@ -8125,9 +8217,13 @@ assertRouteCurrent();
           // 放宽(→Full)。按**最新**档位决策,否则旧 auto 档 allow 会绕过用户刚要求的确认
           // (codex review P1;与已修复的 Pi / Claude 线程同口径)。cast 破 TS 收窄:TS 不建模
           // await 期间经 setPermissionMode 的重赋值,仍视此处为 'auto';运行期确实可能已变。
+          if (decision.verdict === 'allow' && opts?.managed) {
+            const current = await opts.managed.check(false);
+            if (current.verdict !== 'allow') decision = current;
+          }
           const modeAfterReview = mutablePermissionMode as PermissionMode;
           if (modeAfterReview === 'bypassPermissions') {
-            return 'accept';
+            return opts?.managed && (!opts.managed.current() || opts.managed.fence?.isExecutionCurrent?.() === false) ? 'decline' : 'accept';
           }
           if (modeAfterReview !== reviewPermissionMode) {
             forcePrompt = true;
@@ -8154,7 +8250,7 @@ assertRouteCurrent();
         }
         const routedRequest =
           forcePrompt && approvalRequest.kind === 'permission'
-            ? { ...approvalRequest, suggestions: undefined }
+            ? { ...approvalRequest, suggestions: undefined, ...(unavailableHandoff ? { autoCommand: undefined } : {}) }
             : approvalRequest;
         return await new Promise<ApprovalDecision>((resolve) => {
           const entry: PendingEntry = {
@@ -8178,8 +8274,11 @@ assertRouteCurrent();
             // confirmation applies to this call only and must never persist.
             resolve(forcePrompt && d === 'acceptForSession' ? 'accept' : d);
           };
-          dispatchInteraction(routedRequest)
-            .then((decision) => {
+          let personalCards = 0;
+          const dispatchConfirmation = (prompt: InteractionRequest): void => {
+            personalCards++;
+            dispatchInteraction(prompt)
+            .then(async (decision) => {
               if (entry.settled) return;
               if (decision.kind !== 'permission') {
                 log.warn('unexpected non-permission decision → decline', { kind: decision.kind });
@@ -8203,6 +8302,22 @@ assertRouteCurrent();
               if (decision.behavior === 'deny') {
                 denialReason = formatPermissionDenial(isSystemPermissionDenialReason(decision.reason) ? 'system' : 'user', decision.reason);
               }
+              // Explicit human refusal settles before any asynchronous personal
+              // fence or FullAccess change can reinterpret it as consent.
+              if (decision.behavior === 'deny') { finalize('decline'); return; }
+              if (opts?.managed) {
+                opts.managed.confirmed = true;
+                const current = await opts.managed.check(true);
+                if (entry.settled) return; // FullAccess/Stop may have settled it.
+                if (current.verdict === 'ask' && opts.managed.fence?.canConfirmAgain?.() === true
+                  && personalCards < 2 && mutablePermissionMode === 'auto') {
+                  if (current.unavailable) autoReviewUnavailableNotice.notify();
+                  dispatchConfirmation(prompt.kind === 'permission'
+                    ? annotatePermissionRequestForAutoReview({ ...prompt, suggestions: undefined, autoCommand: undefined }, current) : prompt);
+                  return;
+                }
+                if (current.verdict !== 'allow') { finalize('decline'); return; }
+              }
               finalize(mapPermissionDecisionToApproval(decision));
             })
             .catch((e) => {
@@ -8213,6 +8328,8 @@ assertRouteCurrent();
               denialReason = formatPermissionDenial('system', 'Approval could not be completed.');
               finalize('decline');
             });
+          };
+          dispatchConfirmation(routedRequest);
         });
       });
       if (decision === 'decline' && kind !== 'mcpServerElicitation' && requestThreadId && turnId && opts?.itemId) {
@@ -9169,13 +9286,82 @@ assertRouteCurrent();
       params: CommandExecutionRequestApprovalParams,
     ): Promise<CommandExecutionRequestApprovalResponse> => {
       if (reviewMode) return { decision: 'decline' };
+      params = Object.freeze({ ...params });
       // buffered/墓碑 turn 的审批请求不得上 UI (codex R12 P1) — 孤儿直接拒。
       const turnGate = gateServerRequestTurn(params.turnId, params.threadId);
       if (turnGate === false) return { decision: 'decline' };
       if (turnGate instanceof Promise && !(await turnGate)) return { decision: 'decline' };
       // requestId: approvalId 优先 (zsh-exec-bridge 多 callback 场景); 否则用 itemId
       const requestId = params.approvalId ?? params.itemId;
-      const decision = await awaitApprovalDecision(params.threadId, params.turnId, requestId, 'commandExecution', {
+      const capturedInput = sendGeneration;
+      const capturedTurn = turnStartGeneration;
+      const capturedDirectory = autoReviewDirectoryGeneration;
+      const capturedIntent = currentAutoReviewIntent;
+      const capturedActionContext = autoReviewActionContext.precedingBlockedActions;
+      const capturedAuthority = currentAutoReviewAuthority;
+      const command = params.command;
+      const commandCwd = params.cwd;
+      const current = () => !closed && isCurrentHost() && threadId === params.threadId
+        && !mutablePlanMode && !planCycleActive && !currentTurnPlanModeActive
+        && sendGeneration === capturedInput && turnStartGeneration === capturedTurn
+        && autoReviewDirectoryGeneration === capturedDirectory
+        && currentAutoReviewIntent === capturedIntent && currentAutoReviewAuthority === capturedAuthority
+        && autoReviewActionContext.precedingBlockedActions === capturedActionContext
+        && (!currentTurnId || currentTurnId === params.turnId)
+        && !completedTurnIds.has(params.turnId) && !terminalErroredTurnIds.has(params.turnId)
+        && turnInterruptOrigins.get(params.turnId)?.source !== 'user-stop';
+      let managed: ManagedCommandApproval | undefined;
+      if (mutablePermissionMode === 'auto' && !mutablePlanMode && !planCycleActive && !currentTurnPlanModeActive
+        && sessionCredentialMode !== 'oauth-bearer'
+        && currentApprovalConfig().approvalsReviewer !== 'auto_review'
+        && !hosted && !opts.remoteHostId && !opts.botRuntimeProfile
+        && opts.sessionInstanceId && params.threadId === threadId && typeof params.turnId === 'string'
+        && !!params.turnId && typeof params.itemId === 'string' && !!params.itemId
+        && typeof command === 'string' && !!command.trim()
+        && typeof commandCwd === 'string' && !!commandCwd.trim() && current()) {
+        managed = {
+          execution: { sessionInstanceId: opts.sessionInstanceId, toolName: 'exec',
+            input: { command, cwd: commandCwd }, codexApproval: {
+              threadId: params.threadId, turnId: params.turnId, itemId: params.itemId,
+              ...(params.approvalId ? { approvalId: params.approvalId } : {}),
+              hostGeneration, inputGeneration: capturedInput, directoryGeneration: capturedDirectory, isCurrent: current,
+              isAuto: () => mutablePermissionMode === 'auto' } },
+          current, confirmed: false,
+          async check(confirmed) {
+            const stale = (): AutoReviewDecision => ({ verdict: 'block', reason: 'Command approval execution changed.' });
+            if (!current() || managed?.fence?.isExecutionCurrent?.() === false) return stale();
+            if (mutablePermissionMode === 'bypassPermissions') return { verdict: 'allow' };
+            if (mutablePermissionMode !== 'auto') return stale();
+            // Reuse the original approval cancellation owner while an extra
+            // Host fence awaits. FullAccess/Stop must settle it without waiting
+            // for an abandoned DB read, and a late read cannot settle it twice.
+            let entry: PendingEntry | undefined;
+            let cancelled: Promise<AutoReviewDecision> | undefined;
+            if (!pendingApprovals.has(requestId)) {
+              cancelled = new Promise(resolve => {
+                entry = { kind: 'commandExecution', turnId: params.turnId, itemId: params.itemId, settled: false,
+                  resolve: decision => resolve(decision === 'accept' ? { verdict: 'allow' } : stale()) };
+                pendingApprovals.set(requestId, entry);
+              });
+            }
+            let result: AutoReviewDecision;
+            try {
+              const checked = managed?.fence?.({ confirmed }) ?? Promise.resolve({ verdict: 'allow' as const });
+              result = await (cancelled ? Promise.race([checked, cancelled]) : checked);
+            } finally {
+              if (entry) {
+                entry.settled = true;
+                if (pendingApprovals.get(requestId) === entry) pendingApprovals.delete(requestId);
+              }
+            }
+            if (!current() || managed?.fence?.isExecutionCurrent?.() === false) return stale();
+            if ((mutablePermissionMode as PermissionMode) === 'bypassPermissions') return { verdict: 'allow' };
+            if (mutablePermissionMode !== 'auto') return stale();
+            return result;
+          },
+        };
+      }
+      const request: InteractionRequest = {
         kind: 'permission',
         requestId,
         toolUseId: params.itemId,
@@ -9184,10 +9370,16 @@ assertRouteCurrent();
         title: 'Allow Codex to run this command?',
         description: params.reason ?? undefined,
         suggestions: commandSupportsAcceptForSession(params) ? codexSessionApprovalSuggestions() : undefined,
+        ...(managed ? { autoCommand: { sessionInstanceId: managed.execution.sessionInstanceId, harness: 'codex' as const, command: command!, cwd: commandCwd!,
+          isCurrent: () => current() && mutablePermissionMode === 'auto'
+            && managed?.fence?.isExecutionCurrent?.() !== false
+            && pendingApprovals.get(requestId)?.settled === false } } : {}),
         metadata: params.reason ? { reason: params.reason } : undefined,
-      }, {
+      };
+      const approvalOptions = {
+        ...(managed ? { managed } : {}),
         autoReviewAction: {
-          kind: 'exec',
+          kind: 'exec' as const,
           command: params.command ?? '',
           ...(opts.remoteHostId ? { destructivePathResolution: 'unavailable' as const } : {}),
           // 空串/空白 cwd 表示 server 上报了但内容不可用 → 按**未知**处理,不得回落成 workingDir
@@ -9199,7 +9391,22 @@ assertRouteCurrent();
               : { cwdUnknown: true }),
         },
         itemId: params.itemId,
-      });
+      };
+      let decision = await awaitApprovalDecision(params.threadId, params.turnId, requestId,
+        'commandExecution', request, approvalOptions);
+      if (managed && decision.decision !== 'decline' && decision.decision !== 'cancel') {
+        let final = await managed.check(managed.confirmed);
+        if (final.verdict === 'ask' && !managed.confirmed) {
+          // A new explicit ask arrived after the former review's final await.
+          // Ask once through the existing UI, never replay the command/model.
+          decision = await awaitApprovalDecision(params.threadId, params.turnId, requestId,
+            'commandExecution', request, { ...approvalOptions, forcePrompt: true });
+          if (decision.decision === 'decline' || decision.decision === 'cancel') return { decision: decision.decision };
+          final = await managed.check(managed.confirmed);
+        }
+        if (final.verdict !== 'allow' || !current() || managed.fence?.isExecutionCurrent?.() === false
+          || (mutablePermissionMode === 'auto' && managed.fence?.isCurrent?.() === false)) return { decision: 'decline' };
+      }
       return { decision: decision.decision };
     };
 
@@ -13072,6 +13279,7 @@ assertRouteCurrent();
     ): Promise<void> {
       if (closed) return;
       closed = true;
+      cancelUserRuleContentObservation?.();
       cancelInteractionContinuation('session_closed', true);
       translatorRt.samplingSegments.clear();
       resetCodexGenerationTiming(translatorRt);
@@ -13212,6 +13420,7 @@ assertRouteCurrent();
         // 早先的标量要在这里清, 是因为"新 turn 的响应 / 容量错误先于它的 turnStarted
         // 到达"时会读到上一个 turn 的状态(review #844 codex P1); 按 id 记账后这类乱序
         // 不再影响判定, 也不会再被别的 turn(含被 Stop 的旧 send 的孤儿)污染。
+        cancelUserRuleContentObservation?.();
         const mySendGen = ++sendGeneration;
         isTurnStartPending = true;
         if (!isContinuation) translatorRt.tokenSpeed.reset();
@@ -13317,6 +13526,88 @@ assertRouteCurrent();
           abandonBufferedTurns('send cancelled after input preparation');
           flushDeferredTerminalTurnCompletionsIfIdle();
           return;
+        }
+        if (observeUserRuleContent && contentServerProfile && opts.sessionId && opts.sessionInstanceId
+          && !opts.remoteHostId && !hosted && !reviewMode && !opts.botRuntimeProfile
+          && !opts[LOCAL_AGENT_CLIENT]?.hostToolsOnly && !isContinuation && yieldAttempt == null) {
+          const sessionId = opts.sessionId, sessionInstanceId = opts.sessionInstanceId;
+          const observedThreadId = threadId;
+          let active = true, stopped = false;
+          const deadline = performance.now() + 1000;
+          const observation = new AbortController();
+          const sendCurrent = () => !closed && !stopped && sendGeneration === mySendGen
+            && threadId === observedThreadId && isCurrentHost() && !sendOpts?.signal?.aborted;
+          const isCurrent = () => active && performance.now() < deadline && sendCurrent();
+          let reading: Promise<CodexUserRuleContent> | undefined;
+          let readingProject: Promise<CodexProjectRuleContent> | undefined;
+          let metadata: Promise<ConfigReadResponse> | undefined;
+          const readMetadata = () => metadata ??= host.request<ConfigReadResponse>(Method.ConfigRead,
+            { includeLayers: true, cwd: opts.workingDir } satisfies ConfigReadParams, {
+              timeoutMs: Math.max(1, Math.ceil(deadline - performance.now())),
+            });
+          const read = (): Promise<CodexUserRuleContent> => {
+            if (!isCurrent()) return Promise.resolve({ kind: 'unavailable', reason: 'stale' });
+            return reading ??= (async (): Promise<CodexUserRuleContent> => {
+              try {
+                const response = await readMetadata();
+                if (!isCurrent()) return { kind: 'unavailable', reason: 'stale' };
+                return codexUserContentSources(response, opts.workingDir);
+              } catch { return { kind: 'unavailable', reason: isCurrent() ? 'read-failed' : 'stale' }; }
+            })();
+          };
+          const readProject = (): Promise<CodexProjectRuleContent> => {
+            if (!isCurrent()) return Promise.resolve({ kind: 'unavailable', reason: 'stale' });
+            return readingProject ??= (async (): Promise<CodexProjectRuleContent> => {
+              try {
+                const response = await readMetadata();
+                if (!isCurrent()) return { kind: 'unavailable', reason: 'stale' };
+                return codexProjectContentSources(response, opts.workingDir);
+              } catch { return { kind: 'unavailable', reason: isCurrent() ? 'read-failed' : 'stale' }; }
+            })();
+          };
+          let timer: ReturnType<typeof setTimeout> | undefined;
+          let cancelObservation = () => {};
+          const stopObservation = () => { stopped = true; cancelObservation(); };
+          cancelUserRuleContentObservation = stopObservation;
+          try {
+            await Promise.race([
+              new Promise<void>(resolve => {
+                cancelObservation = () => { active = false; observation.abort(); resolve(); };
+                timer = setTimeout(cancelObservation, 1000);
+                sendOpts?.signal?.addEventListener('abort', cancelObservation, { once: true });
+              }),
+              Promise.resolve().then(() => isCurrent() ? observeUserRuleContent({
+                sessionId, sessionInstanceId, threadId: observedThreadId,
+                workingDir: opts.workingDir, hostGeneration, serverProfile: contentServerProfile,
+                signal: observation.signal, isCurrent, read, readProject,
+              }) : undefined).catch(() => {}),
+            ]);
+          } finally {
+            active = false;
+            observation.abort();
+            clearTimeout(timer);
+            sendOpts?.signal?.removeEventListener('abort', cancelObservation);
+            if (cancelUserRuleContentObservation === stopObservation) cancelUserRuleContentObservation = undefined;
+          }
+          try {
+            if (stopped || sendGeneration !== mySendGen)
+              throw new Error('Codex send cancelled before acceptance');
+            if (rejectClosedOrCancelledSend(sendOpts, 'after source content observation')) {
+              isTurnStartPending = false;
+              abandonBufferedTurns('send cancelled after source content observation');
+              flushDeferredTerminalTurnCompletionsIfIdle();
+              return;
+            }
+            assertCurrentHost('after source content observation');
+            if (threadId !== observedThreadId) throw new Error('Codex thread changed before input acceptance');
+          } catch (error) {
+            if (sendGeneration === mySendGen) {
+              isTurnStartPending = false;
+              abandonBufferedTurns('send cancelled after source content observation');
+              flushDeferredTerminalTurnCompletionsIfIdle();
+            }
+            throw error;
+          }
         }
         const autoReviewIntent = (sendOpts as CodexInternalSendOptions | undefined)?.[
           CODEX_AUTO_REVIEW_INTENT
@@ -14099,6 +14390,9 @@ assertRouteCurrent();
       },
 
       async requestGracefulStop(stopOpts) {
+        const pendingContent = cancelUserRuleContentObservation;
+        pendingContent?.();
+        if (pendingContent && !currentTurnId) return;
         if (!currentTurnId && interactionContinuation) {
           await handle.abort();
           return;
@@ -14201,6 +14495,7 @@ assertRouteCurrent();
       },
 
       async abort() {
+        cancelUserRuleContentObservation?.();
         const cancelledInteraction = cancelInteractionContinuation('turn_interrupted', true);
         if (cancelledInteraction) dismissAllPendingUserInput('turn_interrupted');
         const cancelledYield = cancelActiveYieldContinuation('aborted');
