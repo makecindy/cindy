@@ -2,6 +2,7 @@ import { readLocalWorkerCreationSelection } from './state/workerCreationPrefs';
 import { useModelFavoritesHost } from './state/useModelFavoritesHost';
 import { getDataOwnerGeneration } from './contexts/dataOwnerGeneration';
 import { RouterProvider } from 'react-router-dom';
+import { AppOutboxProvider } from '@/components/layout/AppWindowSync';
 
 import { useEffect } from 'react';
 import { RemoteDesktopHost } from '@/features/remote-desktop/RemoteDesktopHost';
@@ -232,7 +233,9 @@ function OwnerScopedRouter() {
   const ownerKey = `${dataOwnerId ?? 'signed-out'}:${dataOwnerRecoveryEpoch}`;
   return (
     <MainViewHistoryProvider ownerKey={ownerKey} locationKey={router.state.location.key}>
-      <RouterProvider key={ownerKey} router={router} />
+      <AppOutboxProvider key={dataOwnerId ?? 'signed-out'}>
+        <RouterProvider key={ownerKey} router={router} />
+      </AppOutboxProvider>
     </MainViewHistoryProvider>
   );
 }

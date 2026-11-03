@@ -50,6 +50,18 @@ const readEntryKey = (account: string, deviceId: string, id: string, at: number)
   'cindy.remoteBotReads.v1.entry.' + JSON.stringify(account) + '.' + JSON.stringify([deviceId, id, at]);
 const secondaryReadKeys = (account: string) => Object.keys(window.localStorage)
   .filter(key => key.startsWith('cindy.remoteBotReads.v1.entry.' + JSON.stringify(account) + '.'));
+function fillReadPartition(account: string, at: number) {
+  let used = 0;
+  for (let index = 0; used < 256 * 1024 - 400; index++) {
+    const entry = readEntryKey(account, 'removed-device', String(index).padStart(220, 'x'), at);
+    window.localStorage.setItem(entry, '1');
+    used += entry.length + 1;
+  }
+  const overhead = readEntryKey(account, 'removed-device', '', at).length + 1;
+  const filler = readEntryKey(account, 'removed-device', 'z'.repeat(256 * 1024 - used - overhead), at);
+  window.localStorage.setItem(filler, '1');
+  expect(secondaryReadKeys(account).reduce((size, entry) => size + entry.length + 1, 0)).toBe(256 * 1024);
+}
 function useRoster() {
   useRemoteBotSync();
   return useRemoteBots();
@@ -310,16 +322,7 @@ it('evicts old read marks to persist a secondary read at the cache cap', async (
   window.localStorage.setItem(key, JSON.stringify(rows));
   // The compatible legacy array remains readable. Fill the new immutable
   // partition too, so this acknowledgement actually requires eviction there.
-  let used = 0;
-  for (let index = 0; used < 256 * 1024 - 400; index++) {
-    const entry = readEntryKey(account, 'removed-device', String(index).padStart(220, 'x'), 1);
-    window.localStorage.setItem(entry, '1');
-    used += entry.length + 1;
-  }
-  const overhead = readEntryKey(account, 'removed-device', '', 1).length + 1;
-  const filler = readEntryKey(account, 'removed-device', 'z'.repeat(256 * 1024 - used - overhead), 1);
-  window.localStorage.setItem(filler, '1');
-  expect(secondaryReadKeys(account).reduce((size, entry) => size + entry.length + 1, 0)).toBe(256 * 1024);
+  fillReadPartition(account, 1);
   act(() => markRemoteBotRead('a', 'same-bot', 300));
   const saved = secondaryReadKeys(account);
   expect(saved.reduce((size, entry) => size + entry.length + 1, 0)).toBeLessThanOrEqual(256 * 1024);
@@ -335,6 +338,49 @@ it('evicts old read marks to persist a secondary read at the cache cap', async (
   await waitFor(() => expect(main.result.current).toHaveLength(1));
   expect(main.result.current[0].readAt).toBe(300);
   expect(isRemoteBotUnread(main.result.current[0])).toBe(false);
+});
+
+// Unit / review4459376600: pause A immediately before its native write;
+// B acknowledges a different companion while A's eviction is in flight.
+it.each(['before', 'after'] as const)('preserves concurrent acknowledgements paused %s the native write at capacity', async (pause) => {
+  window.history.replaceState(null, '', '/?secondaryWindow=1');
+  const outerId = 'a'.repeat(1000);
+  const innerId = 'b'.repeat(1000);
+  h.invoke.mockImplementation(async (deviceId: string) => ({ ...collection(), items: collection().items.map(item => ({
+    ...item, ref: { ...item.ref, id: deviceId === 'a' ? outerId : innerId },
+  })) }));
+  const secondary = renderHook(useRoster);
+  await waitFor(() => expect(secondary.result.current).toHaveLength(2));
+  const account = h.owner;
+  fillReadPartition(account, 400);
+  const set = Storage.prototype.setItem;
+  let interleave = true;
+  const spy = vi.spyOn(Storage.prototype, 'setItem').mockImplementation(function (this: Storage, key: string, value: string) {
+    if (key === readEntryKey(account, pause === 'after' ? 'b' : 'a', pause === 'after' ? innerId : outerId, pause === 'after' ? 300 : 500) && interleave) {
+      interleave = false;
+      if (pause === 'after') set.call(this, key, value);
+      if (pause === 'after') markRemoteBotRead('a', outerId, 500);
+      else markRemoteBotRead('b', innerId, 300);
+      if (pause === 'after') return;
+    }
+    set.call(this, key, value);
+  });
+  try { act(() => pause === 'after' ? markRemoteBotRead('b', innerId, 300) : markRemoteBotRead('a', outerId, 500)); }
+  finally { spy.mockRestore(); }
+  expect(interleave).toBe(false);
+  secondary.unmount();
+  h.devices = [];
+  h.owner = account + '-between'; renderHook(useRoster).unmount();
+  h.owner = account;
+  h.devices = [host('b')];
+  h.invoke.mockResolvedValue({ ...collection(), items: collection().items.map(item => ({
+    ...item, ref: { ...item.ref, id: innerId }, display: { title: 'Writer', lastReplyAt: 600 },
+  })) });
+  window.history.replaceState(null, '', '/');
+  const main = renderHook(useRoster);
+  await waitFor(() => expect(main.result.current).toHaveLength(1));
+  expect(main.result.current[0].readAt).toBe(300);
+  expect(isRemoteBotUnread(main.result.current[0])).toBe(true);
 });
 
 // Unit / review4458970374: pause one renderer's storage read while another

@@ -61,13 +61,16 @@ function savedReadPositions(account: string): Map<string, number> {
   return positions;
 }
 function persistReadPosition(account: string, deviceId: string, id: string, readAt: number): void {
+  // Fix eviction candidates before committing this acknowledgement. A sibling
+  // writing during this operation must not become a new eviction candidate.
+  const entries = readEntries(account);
   // Observe legacy reads before committing, but never perform a whole-map RMW.
   const positions = savedReadPositions(account);
   readAt = Math.max(positions.get(readKey({ deviceId, id })) ?? 0, readAt);
   const key = readEntryPrefix(account) + JSON.stringify([deviceId, id, readAt]);
   if (key.length + 1 > 256 * 1024) return;
-  window.localStorage.setItem(key, '1');
-  const entries = readEntries(account).sort((a, b) => b.readAt - a.readAt);
+  entries.push({ key, identity: readKey({ deviceId, id }), readAt });
+  entries.sort((a, b) => b.readAt - a.readAt);
   const newest = new Map<string, typeof entries[number]>();
   for (const entry of entries) if (!newest.has(entry.identity)) newest.set(entry.identity, entry);
   const retained = new Set<string>();
@@ -81,7 +84,13 @@ function persistReadPosition(account: string, deviceId: string, id: string, read
     retained.add(entry.key);
     size += entry.key.length + 1;
   }
+  // Commit before cleanup so a failed write cannot evict the previous marks.
+  // Cleanup only the pre-write snapshot, never keys discovered after this write.
+  window.localStorage.setItem(key, '1');
   for (const entry of entries) if (!retained.has(entry.key)) window.localStorage.removeItem(entry.key);
+  // A sibling may have observed the first write and evicted it while this
+  // cleanup was paused. Finish with the acknowledgement still committed.
+  if (window.localStorage.getItem(key) !== '1') window.localStorage.setItem(key, '1');
 }
 function mergeReadPositions(rows: RemoteBot[], positions: ReadonlyMap<string, number>): RemoteBot[] {
   return rows.map(bot => {

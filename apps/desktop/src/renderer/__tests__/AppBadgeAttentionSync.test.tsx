@@ -1,6 +1,7 @@
 // @vitest-environment jsdom
-import { cleanup, render, renderHook } from '@testing-library/react';
+import { cleanup, fireEvent, render, renderHook, screen } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import { Link, MemoryRouter, Route, Routes } from 'react-router-dom';
 import type { AgentIslandCompanionChatRead, AgentIslandCompanionChatsInput } from '../../shared/agentIsland';
 import type { DataOwnerPushStamp } from '../../shared/dataOwnerPush';
 
@@ -49,7 +50,7 @@ vi.mock('@/features/bots/botReadState', () => ({
   markBotRead: botState.markRead,
 }));
 vi.mock('@/features/bots/useRemoteBots', () => ({ useRemoteBotSync: () => {}, useRemoteBots: () => botState.remote, markRemoteBotRead: botState.markRemoteRead }));
-vi.mock('@/contexts/AuthContext', () => ({ useAuth: () => ({}) }));
+vi.mock('@/contexts/AuthContext', () => ({ useAuth: () => ({ canEnterApp: true, isInitializing: false }) }));
 vi.mock('@/contexts/dataOwnerGeneration', () => ({
   getDataOwnerGeneration: () => state.owner,
   isDataOwnerPushCurrent: (stamp: { dataOwnerId: string; ownerGeneration: number }) =>
@@ -96,7 +97,7 @@ vi.mock('@/state/agentIslandActivity', () => ({ useAgentIslandActivityMap: () =>
 vi.mock('@/lib/orcaSessionIdentity', () => ({ isOrcaWorkerSession: () => false }));
 
 import { AppBadgeAttentionSync } from '../components/layout/AppBadgeAttentionSync';
-import { AppWindowSync } from '../components/layout/AppWindowSync';
+import { AppOutboxProvider, AppWindowSync } from '../components/layout/AppWindowSync';
 import { useSessionDisplayRunningState } from '../features/cc-agent/hooks/useSessionDisplayRunningState';
 
 afterEach(() => {
@@ -135,14 +136,47 @@ describe('app badge projection lifecycle', () => {
     vi.stubGlobal('electronAPI', { notificationSetAppAttentionCount: state.publish, agentIsland: {
       setCompanionChats: island, onCompanionChatRead: () => () => {},
     } });
-    const view = render(<AppWindowSync />);
+    const view = render(<AppOutboxProvider><AppWindowSync /></AppOutboxProvider>);
     expect(outbox.start).toHaveBeenCalledTimes(1);
     expect(outbox.start).toHaveBeenLastCalledWith({ restoreSavedEntries: !secondary });
     expect(state.publish).toHaveBeenCalledTimes(secondary ? 0 : 1);
     expect(island).toHaveBeenCalledTimes(secondary ? 0 : 1);
     state.owner = { ...state.owner, generation: state.owner.generation + 1 };
-    view.rerender(<AppWindowSync />);
+    view.rerender(<AppOutboxProvider><AppWindowSync /></AppOutboxProvider>);
     expect(outbox.stop).toHaveBeenCalledTimes(1);
+    expect(outbox.start).toHaveBeenCalledTimes(2);
+    view.unmount();
+    expect(outbox.stop).toHaveBeenCalledTimes(2);
+  });
+  // Unit / review4459376595: the add-account sibling route keeps the same
+  // renderer alive; worker lifetime must follow its owner, not MainLayout.
+  it('keeps an activated outbox running across add-account without starting before app readiness', () => {
+    window.history.replaceState(null, '', '/?secondaryWindow=1');
+    function Shell() {
+      return <AppOutboxProvider key={state.owner.dataOwnerId}>
+        <MemoryRouter initialEntries={['/add-account']}>
+          <Routes>
+            <Route path="/" element={<><AppWindowSync /><Link to="/add-account">Add account</Link></>} />
+            <Route path="/add-account" element={<Link to="/">Enter app</Link>} />
+          </Routes>
+        </MemoryRouter>
+      </AppOutboxProvider>;
+    }
+    const view = render(<Shell />);
+    expect(outbox.start).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByText('Enter app'));
+    expect(outbox.start).toHaveBeenCalledTimes(1);
+    expect(outbox.start).toHaveBeenLastCalledWith({ restoreSavedEntries: false });
+    fireEvent.click(screen.getByText('Add account'));
+    expect(screen.getByText('Enter app')).toBeTruthy();
+    expect(outbox.stop).not.toHaveBeenCalled();
+    state.owner = { ...state.owner, generation: 2 };
+    view.rerender(<Shell />);
+    expect(outbox.stop).toHaveBeenCalledTimes(1);
+    expect(outbox.start).toHaveBeenCalledTimes(2);
+    state.owner = { dataOwnerId: 'owner-b', generation: 3 };
+    view.rerender(<Shell />);
+    expect(outbox.stop).toHaveBeenCalledTimes(2);
     expect(outbox.start).toHaveBeenCalledTimes(2);
     view.unmount();
     expect(outbox.stop).toHaveBeenCalledTimes(2);
