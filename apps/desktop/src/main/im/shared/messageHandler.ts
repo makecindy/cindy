@@ -359,11 +359,15 @@ export function createMessageHandler(
     // ── invoke agent ────────────────────────────────────────────────────────
     // 本条的渠道来源事实(只进模型正文); 取不到按"不写说明"降级, 不阻断消息。与下面的
     // 群上下文拼装互不依赖, 先发起、派发前再取, 群名查询不额外拖慢首条消息。
+    // Set synchronously when the channel already knows the source (see the early persist).
+    let channelNoteSourceNow: ImChannelNoteSource | null = null;
     const channelNoteSourcePromise: Promise<ImChannelNoteSource | null> = (async () => {
       try {
-        return adapter.channelNoteSourceFor
-          ? await adapter.channelNoteSourceFor(event)
+        const source = adapter.channelNoteSourceFor
+          ? adapter.channelNoteSourceFor(event)
           : imChannelNoteSourceFromEvent(event);
+        if (!(source instanceof Promise)) channelNoteSourceNow = source;
+        return await source;
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);
         log.warn(`channelNoteSourceFor failed (note omitted): ${msg}`);
@@ -424,7 +428,10 @@ export function createMessageHandler(
               ...(event.protectedContent === true ? { protectedContent: true } : {}),
               // 群 / 私聊此刻还没算出来(渠道说明在拼), 先把发言人存上; 派发时补齐。
               ...(() => {
-                const messageOrigin = imMessageOriginFor(event, null);
+                // A channel that knows the chat kind synchronously (Telegram) says
+                // so now: this row is not rewritten at dispatch, and a guest's
+                // private message must not read as a group message (#8359).
+                const messageOrigin = imMessageOriginFor(event, channelNoteSourceNow);
                 return messageOrigin ? { messageOrigin } : {};
               })(),
             })) ?? null;

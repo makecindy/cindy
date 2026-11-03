@@ -32,6 +32,8 @@ export interface FeishuScopeOptions {
   ipc?: boolean;
   /** 对外开放: 非主人的私聊与群 @ 进业务层(带非主人标记), 命令仍只认主人。 */
   guests?: boolean;
+  /** Sent to a guest whose approval card went to the owner's DM (#8359). */
+  guestApprovalNotice?: () => string;
   /** Runtime ownership is independent of the owner's saved announcement preference. */
   shouldAnnounceLifecycle?: () => boolean;
 }
@@ -42,6 +44,7 @@ export interface FeishuScope {
   readonly secretKeyPrefix: string;
   readonly ipc: boolean;
   readonly guests: boolean;
+  readonly guestApprovalNotice?: () => string;
   readonly shouldAnnounceLifecycle?: () => boolean;
   readonly events: FeishuEventBus;
   /** 各模块的实例状态(scopeSlot 按 symbol 懒建)。 */
@@ -58,6 +61,7 @@ export function createFeishuScope(options: FeishuScopeOptions): FeishuScope {
     secretKeyPrefix: options.secretKeyPrefix ?? '',
     ipc: options.ipc !== false,
     guests: options.guests === true,
+    guestApprovalNotice: options.guestApprovalNotice,
     shouldAnnounceLifecycle: options.shouldAnnounceLifecycle,
     events: new FeishuEventBus(),
     slots: new Map(),

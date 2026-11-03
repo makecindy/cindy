@@ -674,6 +674,38 @@ describe('TelegramIM', () => {
     });
   });
 
+  it('a guest\'s approval card goes to the owner; the guest only gets the waiting notice (#8359)', async () => {
+    // Only the owner can answer a card, so a card in the guest's chat could never be
+    // answered there and would show the guest the command.
+    await im.dispose();
+    im = new TelegramIM(ctx.host, {
+      apiFactory: () => api,
+      guestDm: true,
+      guestApprovalNotice: () => 'Waiting for the owner.',
+    });
+    im.registerIpc();
+    const events: IMMessageEvent[] = [];
+    im.onMessage((e) => events.push(e));
+    await connect();
+    api.pushUpdates([privateMessage('change the footer', 555, 72)]);
+    await vi.waitFor(() => expect(events).toHaveLength(1));
+
+    await im.sendInteractiveCard(
+      events[0].senderId,
+      { title: 'Bash', body: 'ls', buttons: [{ id: 'allow', label: 'Allow', type: 'primary' }] },
+      { deliverToOwnerDm: true },
+    );
+    const sends = api.calls.filter((c) => c.method === 'sendMessage');
+    const card = sends.find((c) => c.params.reply_markup !== undefined)!;
+    expect(card.params.chat_id).toBe(OWNER_ID);
+    await vi.waitFor(() => expect(
+      api.calls.some((c) => c.method === 'sendMessage' && String(c.params.chat_id) === '555'
+        && String(c.params.text).includes('Waiting for the owner.')),
+    ).toBe(true));
+    expect(api.calls.some((c) => c.method === 'sendMessage' && String(c.params.chat_id) === '555'
+      && c.params.reply_markup !== undefined)).toBe(false);
+  });
+
   it('私聊的授权卡照旧落在私聊、正文不加群来源说明', async () => {
     const events: IMMessageEvent[] = [];
     im.onMessage((e) => events.push(e));

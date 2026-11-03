@@ -11490,6 +11490,7 @@
         "loadFailed": "No se pudieron cargar los invitados",
         "saveFailed": "No se guardó. Inténtalo de nuevo.",
         "refusedNotice": "🔒 Este bot aún no está disponible para ti.",
+        "approvalPending": "⏳ He pedido al propietario que apruebe este paso. Continuaré en cuanto responda.",
         "engineUnsupported": "{{name}} funciona con Pi, que no puede limitar a un invitado a su proyecto: los invitados vinculados a un proyecto se rechazan. Cambia {{name}} a Claude o Codex para atenderlos.",
         "engineRemote": "{{name}} funciona en otro ordenador, que no puede limitar a un invitado a su proyecto: los invitados vinculados a un proyecto se rechazan. Haz que {{name}} funcione en este ordenador para atenderlos."
       },

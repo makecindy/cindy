@@ -323,6 +323,11 @@ export interface TelegramIMOptions {
    * 开放时打开: 陌生人私聊带 `speaker.isOwner=false` 进业务层, 命令仍只认主人。
    */
   guestDm?: boolean;
+  /**
+   * Sent to a guest whose approval card went to the owner's DM (#8359). Only the
+   * owner can answer a card, so a guest never sees the buttons or the command.
+   */
+  guestApprovalNotice?: () => string;
 }
 
 /** 宿主 Agent 工具可直接发出的媒体种类 → Bot API 方法与字段名。 */
@@ -895,6 +900,35 @@ export class TelegramIM extends BaseIM implements ChannelIM {
         spec.title ? `[${spec.title}]` : spec.body.slice(0, 100),
         sent,
       );
+      return { messageId: encodeMessageId(String(sent.chat.id), String(sent.message_id)) };
+    }
+    // A guest's private chat: the card goes to the owner, who alone can answer
+    // it; the guest only learns that the owner was asked.
+    if (
+      opts?.deliverToOwnerDm === true
+      && this.opts.guestDm === true
+      && this.ownerUserId
+      && !decodeLaneUserId(userId)
+      && userId !== this.ownerUserId
+    ) {
+      this.stopTypingLoopsForChat(userId);
+      const body = opts.ownerDmNote ? `${opts.ownerDmNote}\n\n${spec.body}` : spec.body;
+      const { html, replyMarkup } = buildCardPayload({ ...spec, body });
+      const sent = await this.callSend<TgMessage>('sendMessage', {
+        chat_id: this.ownerUserId,
+        text: html,
+        parse_mode: 'HTML',
+        ...(replyMarkup ? { reply_markup: replyMarkup } : {}),
+      });
+      this.recordOwnEcho(
+        this.ownerUserId,
+        spec.title ? `[${spec.title}]` : spec.body.slice(0, 100),
+        sent,
+      );
+      const notice = this.opts.guestApprovalNotice?.();
+      if (notice) {
+        void this.sendPlainChunked(userId, notice).catch(() => undefined);
+      }
       return { messageId: encodeMessageId(String(sent.chat.id), String(sent.message_id)) };
     }
     this.claimTurnReplyTargetIfIdle(userId);

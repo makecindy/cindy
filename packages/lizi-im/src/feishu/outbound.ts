@@ -25,7 +25,7 @@ import { open as openFile, type FileHandle } from 'node:fs/promises';
 import path from 'node:path';
 import * as Lark from '@larksuiteoapi/node-sdk';
 
-import { getLog, scopeSlot } from './moduleScope.js';
+import { getLog, getScope, scopeSlot } from './moduleScope.js';
 import { buildInteractiveCardV1, buildMarkdownCardV2 } from './cards.js';
 import { decodeLaneUserId } from './codec.js';
 import * as ownerGuard from './ownerGuard.js';
@@ -1173,6 +1173,22 @@ export async function sendInteractive(
       : spec;
     const card = buildInteractiveCardV1(dmSpec);
     return createMessage({ kind: 'open_id', id: owner }, 'interactive', JSON.stringify(card));
+  }
+  // A guest's private chat: only the owner can answer the card, so it goes to the
+  // owner; the guest only learns that the owner was asked (#8359).
+  if (opts?.deliverToOwnerDm && owner && getScope().guests && !decodeLaneUserId(userId)
+    && !ownerGuard.check(userId)) {
+    const dmSpec: InteractiveCardSpec = opts.ownerDmNote
+      ? { ...spec, body: `${opts.ownerDmNote}\n\n${spec.body}` }
+      : spec;
+    const sent = await createMessage(
+      { kind: 'open_id', id: owner },
+      'interactive',
+      JSON.stringify(buildInteractiveCardV1(dmSpec)),
+    );
+    const notice = getScope().guestApprovalNotice?.();
+    if (notice) void sendText(userId, notice).catch(() => undefined);
+    return sent;
   }
   const card = buildInteractiveCardV1(spec);
   const result = await withSendTarget(userId, opts, (target) => createMessage(
