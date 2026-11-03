@@ -1,4 +1,4 @@
-import type { BotGroupMessageView } from '../../shared/botGroupChat.js';
+import { readBotGroupThreadShareCard, type BotGroupMessageView } from '../../shared/botGroupChat.js';
 
 /** Read as the companion actor, never as its owner. No local history cache or read receipts. */
 export interface TeammateGroupHistoryQuery {
@@ -17,7 +17,7 @@ interface Message {
 }
 export interface TeammateGroupHistoryResult {
   groups?: Array<{ id: string; name: string }>;
-  messages?: Array<{ id: string; sequence: string; author: string; authorKind: string; createdAt: string; threadRootId: string | null; text: string; attachments: string[]; maskAttribution?: BotGroupMessageView['maskAttribution'] }>;
+  messages?: Array<{ id: string; sequence: string; author: string; authorKind: string; createdAt: string; threadRootId: string | null; text: string; attachments: string[]; maskAttribution?: BotGroupMessageView['maskAttribution']; sharedReplyId?: string }>;
   nextCursor: string | null;
   hasMore: boolean;
 }
@@ -53,10 +53,14 @@ export function createTeammateGroupHistoryReader(deps: {
     let budget = 16_000;
     let scanned: string | null = null;
     for (const message of ordered) {
-      const text = message.content.filter(block => block.type !== 'media').map(block => block.text ?? block.fallback ?? '').join('\n');
+      const shared = readBotGroupThreadShareCard(message);
+      // As in the execution context, a share is a reference: its fallback may
+      // outlive edits/deletion of the original and is never authoritative text.
+      const text = shared ? '' : message.content.filter(block => block.type !== 'media').map(block => block.text ?? block.fallback ?? '').join('\n');
       if (!message.deleted && (!query || text.toLocaleLowerCase().includes(query))) {
         const record = { id: message.id, sequence: message.seq, author: message.author.name, authorKind: message.author.kind,
           createdAt: message.createdAt, threadRootId: message.threadRootId, text,
+          ...(shared ? { sharedReplyId: shared.messageId } : {}),
           ...(message.maskAttribution ? { maskAttribution: message.maskAttribution } : {}),
           attachments: message.content.filter(block => block.type === 'media').map(block => block.caption ?? '') };
         // Budget the actual serialized record, including captions, metadata and

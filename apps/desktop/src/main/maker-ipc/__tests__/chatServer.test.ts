@@ -1072,6 +1072,43 @@ describe('Chat Server result delivery and refresh', () => {
     expect(fixture.handle.mock.calls.filter(([route]) => route.startsWith('/conversations')).every(([, method]) => method === 'GET')).toBe(true);
     expect(fixture.download).not.toHaveBeenCalled();
   });
+  // #8433 review / message-source.md, unit: production HTTP adapter + reader.
+  // A deleted original's old share fallback must not survive in history/search;
+  // the execution-context tests did not exercise this separate history route.
+  it.each(['share', 'mixed', 'unknown', 'thread'] as const)(
+    'keeps thread-share references out of historical body/search (%s)', async kind => {
+    fixture.profiles = [{ id: 'local-bot', displayName: 'Bot', avatar: null, status: 'active' }];
+    const members = [{ id: botId, kind: 'bot', state: 'joined' }];
+    const replyId = '70000000-0000-4000-8000-000000000003';
+    const rootId = '70000000-0000-4000-8000-000000000001';
+    const card = buildBotGroupThreadShareCard({ messageId: replyId, threadRootId: rootId,
+      authorName: 'Original', text: 'outdated phrase' });
+    const base = { deleted: false, createdAt: '2026-11-03T00:00:00Z', threadRootId: null,
+      author: { name: 'Sharer', kind: 'human' } };
+    fixture.handle.mockImplementation(route => {
+      if (route === `/conversations/${roomId}/snapshot`) return { body: { room: room(roomId), members } };
+      if (route === `/conversations/${roomId}/members`) return { body: members };
+      if (route.includes('/messages?all=true')) return { body: [
+        { ...base, id: 'share-id', seq: '42', threadRootId: kind === 'thread' ? rootId : null,
+          content: kind === 'mixed' ? [card, { type: 'text', text: 'ordinary words' }]
+            : [{ ...card, schemaRevision: kind === 'unknown' ? 99 : 1 }] },
+        { ...base, id: replyId, seq: '41', deleted: true, threadRootId: rootId,
+          content: [{ type: 'text', text: 'outdated phrase' }] },
+      ] };
+      return response(route);
+    });
+    const input = { botId: 'local-bot', groupId: roomId, limit: 2 };
+    const page = await service.teammateHistory!(input);
+    expect(page.messages).toHaveLength(1);
+    if (kind === 'share') expect(page.messages![0]).toMatchObject({ text: '', sharedReplyId: replyId });
+    else {
+      expect(page.messages![0].text).toContain('outdated phrase');
+      expect(page.messages![0]).not.toHaveProperty('sharedReplyId');
+    }
+    const search = await service.teammateHistory!({ ...input, query: 'outdated phrase' });
+    expect(search.messages).toHaveLength(kind === 'share' ? 0 : 1);
+    expect(search).toMatchObject({ hasMore: true, nextCursor: '41' });
+  });
   it('propagates a companion-actor membership refusal without retrying as the owner', async () => {
     fixture.profiles = [{ id: 'local-bot', displayName: 'Bot', avatar: null, status: 'active' }];
     fixture.handle.mockImplementation(route => route.endsWith('/snapshot')
