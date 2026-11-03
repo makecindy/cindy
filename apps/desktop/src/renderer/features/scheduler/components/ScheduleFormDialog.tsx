@@ -6,6 +6,7 @@ import { Check, FolderOpen, Info, Play, Sparkles, X } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 
 import { SegmentedControl } from '@/components/ui/segmented-control';
+import { PreRunPluginFields } from './PreRunPluginFields';
 import { cn } from '@/lib/utils';
 import { toast } from '@/lib/toast';
 import * as sessionService from '@/lib/sessionService';
@@ -230,6 +231,9 @@ export function ScheduleFormDialog({
   const isTemplateMode = mode === 'gallery' || !!selectedTemplate;
   // script/agent 双执行模式的唯一判别常量——所有条件渲染共用,避免散拷漂移
   const isScriptMode = (form.executionMode ?? 'agent') === 'script';
+  // 项目自动化的配置文件不保存插件前置检查(插件装在各自的电脑上),只提供脚本。
+  const usePluginSource = form.preRunSource === 'plugin' && !isProjectAutomationMode;
+  const setPreRunPluginId = useCallback((pluginId: string) => setField('preRunPluginId', pluginId), [setField]);
   const submitLabel = isEdit
     ? t('scheduler.editor.promptDialog.save')
     : t('scheduler.editor.promptDialog.create');
@@ -1105,7 +1109,7 @@ export function ScheduleFormDialog({
                   {t('scheduler.editor.preRunHook.enable')}
                 </button>
                 <Tip
-                  text={t('scheduler.editor.preRunHook.tooltip')}
+                  text={t(usePluginSource ? 'scheduler.editor.preRunPlugin.tooltip' : 'scheduler.editor.preRunHook.tooltip')}
                   side="top"
                   contentClassName="z-[10020]"
                 >
@@ -1122,13 +1126,37 @@ export function ScheduleFormDialog({
                     <Info size={13} />
                   </span>
                 </Tip>
-                {form.preRunHookEnabled && (
+                {form.preRunHookEnabled && !isProjectAutomationMode && (
+                  <SegmentedControl
+                    aria-label={t('scheduler.editor.preRunPlugin.sourceLabel')}
+                    value={form.preRunSource}
+                    height={34}
+                    options={(['script', 'plugin'] as const).map((source) => ({
+                      value: source,
+                      label: t(`scheduler.editor.preRunPlugin.source.${source}`),
+                    }))}
+                    onValueChange={(source) => {
+                      setHookTestResult(null);
+                      setField('preRunSource', source);
+                    }}
+                  />
+                )}
+                {form.preRunHookEnabled && !usePluginSource && (
                   <span className="text-xs leading-none text-[var(--cmd-palette-item-meta)] dark:text-[var(--settings-section-desc)]">
                     {t('scheduler.editor.preRunHook.protocol')}
                   </span>
                 )}
               </div>
-              {form.preRunHookEnabled && (
+              {form.preRunHookEnabled && usePluginSource && (
+                <PreRunPluginFields
+                  point="will-schedule-run"
+                  pluginId={form.preRunPluginId}
+                  onFailure={form.preRunPluginOnFailure}
+                  onPluginChange={setPreRunPluginId}
+                  onFailureChange={(action) => setField('preRunPluginOnFailure', action)}
+                />
+              )}
+              {form.preRunHookEnabled && !usePluginSource && (
                 <>
                   <div className="flex items-center gap-2">
                     <input

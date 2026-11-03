@@ -8,6 +8,7 @@ import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import { Session } from '@cindy/maker-core';
+import { pagePermissionGrants } from '../../mcp-apps/pagePermissions.js';
 
 import { GhostFsSlot, validateFsRelPath, workdirWriteVerdict, type FsSlotDeps, type FsSessionSnapshot } from '../fsSlot.js';
 import { resolveGhostFsSessionSnapshot } from '../../maker-ipc/ghostFsSessionSnapshot.js';
@@ -447,9 +448,46 @@ describe('GhostFsSlot', () => {
     }
     expect(await slot.handleFsRequest(GHOST_ID, {
       type: 'fs-request', op: 'read', root: 'data', path: 'ghost.txt',
-    })).toMatchObject({ ok: false });
+    })).toMatchObject({ ok: false, errorCode: 'NOT_FOUND' });
     const l = await slot.handleFsRequest(GHOST_ID, { type: 'fs-request', op: 'list', root: 'data' });
     expect(l).toMatchObject({ ok: true, entries: [] });
+  });
+
+  // Integration: the task plugin must distinguish a fresh ledger from unreadable storage.
+  it('data:missing ledger returns NOT_FOUND but permission errors never indicate an empty ledger', async () => {
+    const { slot } = makeHarness(dataRoot);
+    const request = { type: 'fs-request', op: 'read', root: 'data', path: 'ledger/r000000.json' };
+    await fs.promises.mkdir(path.join(dataRoot, GHOST_ID), { recursive: true });
+    expect(await slot.handleFsRequest(GHOST_ID, request)).toMatchObject({ ok: false, errorCode: 'NOT_FOUND' });
+    const denied = Object.assign(new Error('permission denied'), { code: 'EACCES' });
+    const realpath = vi.spyOn(fs.promises, 'realpath').mockRejectedValueOnce(denied);
+    try {
+      const result = await slot.handleFsRequest(GHOST_ID, request);
+      expect(result.ok).toBe(false);
+      expect(result).not.toHaveProperty('errorCode', 'NOT_FOUND');
+    } finally { realpath.mockRestore(); }
+    const lstat = vi.spyOn(fs.promises, 'lstat').mockRejectedValueOnce(denied);
+    try {
+      const result = await slot.handleFsRequest(GHOST_ID, request);
+      expect(result.ok).toBe(false);
+      expect(result).not.toHaveProperty('errorCode', 'NOT_FOUND');
+    } finally { lstat.mockRestore(); }
+  });
+
+  // Unit: a file may disappear after lstat; only ENOENT permits ledger initialization.
+  it.each(['ENOENT', 'EACCES', 'EIO'])('data:readFile %s preserves the missing-versus-unreadable distinction', async code => {
+    const { slot } = makeHarness(dataRoot);
+    const request = { type: 'fs-request', op: 'read', root: 'data', path: 'ledger.json' };
+    await fs.promises.mkdir(path.join(dataRoot, GHOST_ID), {recursive:true});
+    await fs.promises.writeFile(path.join(dataRoot, GHOST_ID, 'ledger.json'), 'existing ledger');
+    const read = vi.spyOn(fs.promises, 'readFile').mockRejectedValueOnce(Object.assign(new Error('read failed'), {code}));
+    try {
+      const result = await slot.handleFsRequest(GHOST_ID, request);
+      expect(result.ok).toBe(false);
+      if (code === 'ENOENT') expect(result).toMatchObject({errorCode:'NOT_FOUND'});
+      else expect(result).not.toHaveProperty('errorCode', 'NOT_FOUND');
+    } finally { read.mockRestore(); }
+    expect(await fs.promises.readFile(path.join(dataRoot, GHOST_ID, 'ledger.json'), 'utf8')).toBe('existing ledger');
   });
 
   it('单次写入超 GHOST_FS_WRITE_MAX_BYTES 拒', async () => {
@@ -460,6 +498,24 @@ describe('GhostFsSlot', () => {
     });
     expect(r).toMatchObject({ ok: false });
     expect((r as { message: string }).message).toContain('超限');
+  });
+
+  // Unit: allowing a page tool must not allow its workdir write. Existing cases
+  // had no page grant; minimum input is one remembered page call then a denied write.
+  it('still confirms workdir writes after the page tool was allowed for the task', async () => {
+    const grant = { sessionId: 'sess-1', serverId: 'plugin-test', tool: 'write', revision: 'one', clearedAt: null };
+    const owner = {}; pagePermissionGrants.allow(owner, grant);
+    try {
+      expect(pagePermissionGrants.has(owner, grant)).toBe(true);
+      const { slot, confirmCalls } = makeHarness(dataRoot, {
+        session: { workingDir: workdir, permissionMode: 'default', planModeEnabled: false, remoteHostId: null },
+        confirm: async () => ({ confirmed: false }),
+      });
+      expect(await slot.handleFsRequest(GHOST_ID, { type: 'fs-request', op: 'write', root: 'workdir',
+        path: 'page.txt', content: 'blocked', callId: 'call-1' })).toMatchObject({ ok: false });
+      expect(confirmCalls).toEqual(['sess-1']);
+      expect(fs.existsSync(path.join(workdir, 'page.txt'))).toBe(false);
+    } finally { pagePermissionGrants.clearSession('sess-1'); }
   });
 
   it('workdir:免批模式(acceptEdits)直写,不弹确认', async () => {

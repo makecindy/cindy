@@ -1,3 +1,4 @@
+import { sharedTaskGuestPeer, providerShareGuestPeer } from '@cindy/device-link';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { RemotePluginManagement, type RemotePluginManagementDeps } from '../remotePluginManagement';
 import { ghostInstallApprovalToken, type InstalledGhost } from '../../../shared/ghost';
@@ -738,5 +739,142 @@ describe('remote plugin management receipt boundaries', () => {
     f.service.invalidate();
     await flush();
     expect((await f.invoke('operation', { operationId: 'pending' })).phase).toBe('cancelled');
+  });
+});
+
+// Fixed share installs reuse Host receipts and consent. Unit tier: fake I/O and
+// virtual timers. Exact bytes and peer cancellation are the contract under test.
+describe('remote local share installation', () => {
+  const snapshot = { schemaVersion: 1 as const, snapshotId: 'a'.repeat(32), ghostId: 'shared', name: 'Shared',
+    version: '1.0.0', sha256: 'a'.repeat(64), sizeBytes: 123, description: null, author: null,
+    icon: null, createdAt: '2026-10-28T00:00:00.000Z' };
+  const input = { operationId: 'share-operation', kind: 'install-share', expectedSnapshot: snapshot };
+  it('advertises support only when the target installer exists', async () => {
+    const f = fixture();
+    expect(await f.invoke('snapshot', {})).not.toHaveProperty('localShares');
+    f.deps.installShare = vi.fn();
+    expect(await f.invoke('snapshot', {})).toHaveProperty('localShares', true);
+  });
+  it('installs the clicked fixed package after original consent and replays only its receipt', async () => {
+    const f = fixture();
+    const placed: string[] = [];
+    f.deps.installShare = vi.fn(async (expected, prompt, current) => {
+      if (!await prompt({ initiator: 'user', origin: 'local-file', facts: {
+        kind: 'install', name: expected.name, version: expected.version, permissions: [],
+      } })) throw { code: 'MUTATION_CANCELLED' };
+      current(); placed.push(expected.sha256);
+    });
+    await f.invoke('begin', input);
+    const receipt = await f.invoke('operation', { operationId: input.operationId });
+    expect(receipt.phase).toBe('confirmation');
+    expect(placed).toEqual([]);
+    await f.invoke('answer', { operationId: input.operationId, requestId: receipt.consent!.requestId, confirmed: true });
+    await flush();
+    expect((await f.invoke('begin', input)).phase).toBe('succeeded');
+    expect(placed).toEqual([snapshot.sha256]);
+    expect(f.deps.installShare).toHaveBeenCalledOnce();
+    await expect(f.invoke('begin', { ...input, expectedSnapshot: { ...snapshot, sha256: 'b'.repeat(64) } }))
+      .rejects.toMatchObject({ code: 'NOT_FOUND' });
+  });
+  it.each(['cancel', 'revoke', 'owner'] as const)('fences %s before the target places the package', async action => {
+    const f = fixture();
+    let resume!: () => void;
+    const placed: string[] = [];
+    f.deps.installShare = vi.fn(async (expected, _prompt, current) => {
+      await new Promise<void>(resolve => { resume = resolve; });
+      current(); placed.push(expected.sha256);
+    });
+    await f.invoke('begin', input);
+    if (action === 'cancel') await f.invoke('cancel', { operationId: input.operationId });
+    else if (action === 'revoke') f.revoke('desktop-a');
+    else f.switchOwner();
+    resume(); await flush();
+    expect(placed).toEqual([]);
+  });
+  it('rejects a URL or a malformed package binding before starting a target install', async () => {
+    const f = fixture();
+    f.deps.installShare = vi.fn();
+    await expect(f.invoke('begin', { ...input, url: 'https://other.test/package' })).rejects.toMatchObject({ code: 'INVALID_PARAMS' });
+    await expect(f.invoke('begin', { ...input, expectedSnapshot: { ...snapshot, sha256: 'bad' } })).rejects.toMatchObject({ code: 'INVALID_PARAMS' });
+    expect(f.deps.installShare).not.toHaveBeenCalled();
+  });
+});
+
+/* unit: 新旧控制端协商、访客和迟到确认的权限边界。最小输入为同一插件的一条
+ * approve-ui 事务，确认前换 owner/revision 或断链；原有安装测试不覆盖可选页面批准。 */
+describe('interactive page consent transactions', () => {
+  function pages() {
+    const f = fixture();
+    const suppressed = new Set<string>();
+    f.deps.ui = {
+      suppressed: g => suppressed.has(installedGhostStoragePart(g)),
+      defer: (id, current) => { current(); suppressed.add(id); },
+      approve: async (id, prompt, current) => {
+        const accepted = await prompt({ purpose: 'ui-capability', initiator: 'user', origin: 'local-file',
+          facts: { kind: 'install', ghostId: id, name: 'Weather', version: '1.0.0', permissions: [] } });
+        current();
+        if (accepted) f.ghosts.find(g => installedGhostStoragePart(g) === id)!.uiCapabilityApproved = true;
+        return accepted;
+      },
+    };
+    const input = { operationId: 'page-approval', kind: 'approve-ui', uiConsentVersion: 1,
+      expectedInstalledApproval: ghostInstallApprovalToken(f.ghosts[0].approval) };
+    const start = () => f.invoke('begin', input, 'desktop-a', installedGhostStoragePart(f.ghosts[0]));
+    return { ...f, input, start };
+  }
+  it.each([sharedTaskGuestPeer('task', 'member', 'device'), providerShareGuestPeer('share', 'member', 'device')])('rejects forged page approval from %s', async peer => {
+    const f = pages();
+    await expect(f.invoke('begin', f.input, peer, installedGhostStoragePart(f.ghosts[0]))).rejects.toBeDefined();
+    expect(f.ghosts[0].uiCapabilityApproved).toBeUndefined();
+  });
+  it('negotiates page consent and shares defer state across same-owner viewers', async () => {
+    const f = pages();
+    expect(await f.invoke('snapshot', {})).toMatchObject({ uiCapabilityApproval: true });
+    await f.invoke('begin', { ...f.input, kind: 'defer-ui' }, 'desktop-a', installedGhostStoragePart(f.ghosts[0]));
+    await flush();
+    expect(await f.invoke('snapshot', {}, 'phone-b')).toMatchObject({ ghosts: [{ uiPromptSuppressed: true }, {}] });
+    await expect(f.begin('approve-ui', 'legacy')).rejects.toMatchObject({ code: 'INVALID_PARAMS' });
+  });
+  it('binds negotiation to fingerprint and consumes the answer once', async () => {
+    const f = pages();
+    const receipt = await f.start();
+    expect(receipt).toMatchObject({ phase: 'confirmation', consent: { purpose: 'ui-capability' } });
+    await expect(f.invoke('begin', { ...f.input, uiConsentVersion: undefined }, 'desktop-a', installedGhostStoragePart(f.ghosts[0]))).rejects.toBeDefined();
+    const answer = { operationId: f.input.operationId, requestId: receipt.consent!.requestId, confirmed: true };
+    await f.invoke('answer', answer);
+    await flush();
+    expect(f.ghosts[0].uiCapabilityApproved).toBe(true);
+    await expect(f.invoke('answer', answer)).rejects.toMatchObject({ code: 'NOT_FOUND' });
+  });
+  it.each(['owner', 'revision', 'disconnect'] as const)('rejects a late page confirmation after %s changes', async change => {
+    const f = pages(); const receipt = await f.start();
+    if (change === 'owner') f.switchOwner();
+    if (change === 'disconnect') f.disconnect();
+    if (change === 'revision') f.ghosts[0].approval = { state: 'approved', revision: '00000000-0000-4000-8000-000000000002' };
+    try { await f.invoke('answer', { operationId: f.input.operationId, requestId: receipt.consent!.requestId, confirmed: true }); } catch { /* expired scope */ }
+    await flush();
+    expect(f.ghosts[0].uiCapabilityApproved).toBeUndefined();
+    if (change === 'revision') expect(await f.invoke('operation', { operationId: f.input.operationId })).toMatchObject({ phase: 'failed', errorCode: 'NOT_FOUND' });
+  });
+  // Main's UI gate returns false after a stale confirmation. Minimal input: an
+  // update while its dialog is open. A rejected version must not look cancelled.
+  it('keeps a failed receipt when the UI approval gate returns false after an update', async () => {
+    const f = pages();
+    const approve = f.deps.ui!.approve;
+    f.deps.ui!.approve = async (...args) => { try { return await approve(...args); } catch { return false; } };
+    const receipt = await f.start();
+    f.ghosts[0].approval = { state: 'approved', revision: '00000000-0000-4000-8000-000000000002' };
+    await f.invoke('answer', { operationId: f.input.operationId, requestId: receipt.consent!.requestId, confirmed: true });
+    await flush();
+    expect(f.ghosts[0].uiCapabilityApproved).toBeUndefined();
+    expect(await f.invoke('operation', { operationId: f.input.operationId })).toMatchObject({ phase: 'failed', errorCode: 'NOT_FOUND' });
+  });
+  it.each([false, true])('ordinary install carries negotiated page approval=%s into the existing prompt', async negotiated => {
+    const f = pages();
+    f.deps.market.install = vi.fn(async (_id, _options, prompt) => {
+      expect(prompt.uiCapabilityApproval).toBe(negotiated);
+    });
+    await f.invoke('begin', { operationId: 'install-page', kind: 'install', pluginId: 'weather', expectedReleaseId: 'r1', ...(negotiated ? { uiConsentVersion: 1 } : {}) });
+    await flush(); expect(f.deps.market.install).toHaveBeenCalledOnce();
   });
 });

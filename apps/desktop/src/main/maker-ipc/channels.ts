@@ -309,6 +309,8 @@ export const MAKER_INVOKE = {
    * (远程改被控端全局设置越权)。
    */
   MODEL_CONTEXT_LIMIT_GET: 'maker:model-context-limit:get',
+  MODEL_IMAGE_INPUT_GET: 'maker:model-image-input:get',
+  MODEL_IMAGE_INPUT_SET: 'maker:model-image-input:set',
   MODEL_COMPACTION_SET: 'maker:model-compaction:set',
   MODEL_CONTEXT_LIMIT_SET: 'maker:model-context-limit:set',
   MODEL_CONTEXT_LIMIT_RESET: 'maker:model-context-limit:reset',
@@ -480,46 +482,6 @@ export const MAKER_INVOKE = {
   GIT_SAFETY_GET: 'maker:git-safety:get',
   GIT_SAFETY_SET: 'maker:git-safety:set',
   GIT_SAFETY_RESET: 'maker:git-safety:reset',
-  /**
-   * 智能通讯录(maker-contacts) ——
-   *  - SETTINGS_GET/SET: 功能开关(<userData>/contacts-settings.json), 只 gate agent 侧
-   *    cindy_contacts MCP(新 session 生效); 下面的数据 CRUD 通道不受 gate, 设置页
-   *    管理 UI 关着开关也能浏览/清理。
-   *  - 数据通道: 实体/身份/事件/分组 CRUD + resolve/search/stats, 直达全局
-   *    MakerContactsManager(maker-core), 与 session 无关。
-   */
-  CONTACTS_SETTINGS_GET: 'maker:contacts:settings:get',
-  CONTACTS_SETTINGS_SET: 'maker:contacts:settings:set',
-  CONTACTS_SYNC_STATUS_GET: 'maker:contacts:sync:status:get',
-  CONTACTS_SYNC_ENABLED_SET: 'maker:contacts:sync:enabled:set',
-  CONTACTS_SYNC_NOW: 'maker:contacts:sync:now',
-  CONTACTS_LIST: 'maker:contacts:list',
-  CONTACTS_GET: 'maker:contacts:get',
-  CONTACTS_CREATE: 'maker:contacts:create',
-  CONTACTS_UPDATE: 'maker:contacts:update',
-  CONTACTS_DELETE: 'maker:contacts:delete',
-  CONTACTS_MERGE: 'maker:contacts:merge',
-  CONTACTS_RESOLVE: 'maker:contacts:resolve',
-  CONTACTS_SEARCH: 'maker:contacts:search',
-  CONTACTS_STATS: 'maker:contacts:stats',
-  CONTACTS_ADD_IDENTITY: 'maker:contacts:add-identity',
-  CONTACTS_REMOVE_IDENTITY: 'maker:contacts:remove-identity',
-  CONTACTS_APPEND_EVENT: 'maker:contacts:append-event',
-  CONTACTS_ADD_RELATION: 'maker:contacts:add-relation',
-  CONTACTS_REMOVE_RELATION: 'maker:contacts:remove-relation',
-  CONTACTS_DELETE_EVENT: 'maker:contacts:delete-event',
-  CONTACTS_GROUPS_LIST: 'maker:contacts:groups:list',
-  CONTACTS_GROUPS_CREATE: 'maker:contacts:groups:create',
-  CONTACTS_GROUPS_UPDATE: 'maker:contacts:groups:update',
-  CONTACTS_GROUPS_DELETE: 'maker:contacts:groups:delete',
-  CONTACTS_GROUPS_SET_MEMBERS: 'maker:contacts:groups:set-members',
-  CONTACTS_RESET_ALL: 'maker:contacts:reset-all',
-  /** macOS 系统通讯录只读拉取(JXA); 非 darwin 抛 UNSUPPORTED_CAPABILITY */
-  CONTACTS_SYSTEM_READ: 'maker:contacts:system-read',
-  /** vCard 文本解析(renderer 禁止 runtime import maker-core, 解析必须在 main 做) */
-  CONTACTS_PARSE_VCF: 'maker:contacts:parse-vcf',
-  /** 批量导入(系统通讯录/vCard 共用管道: identity 撞档自动并入, 名字相似进 needsReview) */
-  CONTACTS_IMPORT: 'maker:contacts:import',
   /** Codex app-server 当前进程启动时固定下来的鉴权注入方式(oauth-bearer / env-key)。 */
   CODEX_RUNTIME_ROUTE_GET: 'maker:codex-runtime-route:get',
   /**
@@ -593,6 +555,7 @@ export const MAKER_INVOKE = {
   LLAMACPP_STOP: 'maker:llamacpp:stop',
   LLAMACPP_CANCEL: 'maker:llamacpp:cancel',
   PROVIDER_IMPORT_PREVIEW: 'maker:provider:import:preview',
+  PROVIDER_IMPORT_FILE: 'maker:provider:import:file',
   PROVIDER_IMPORT_CONFIRM: 'maker:provider:import:confirm',
   PROVIDER_IMPORT_CANCEL: 'maker:provider:import:cancel',
   /**
@@ -703,6 +666,7 @@ export const MAKER_INVOKE = {
   /** script 任务能力选择器的运行时可用性探测(意识装入/唤醒态);只做提示,不过滤清单。 */
   SCHEDULE_SCRIPT_CAPABILITY_STATUS: 'maker:schedule:script-capability-status',
   PROJECT_AUTOMATION_RECONCILE: 'maker:project-automation:reconcile',
+  PROJECT_AUTOMATION_PENDING_IMPORTS: 'maker:project-automation:pending-imports',
   PROJECT_AUTOMATION_LIST_CONSENTS: 'maker:project-automation:list-consents',
   PROJECT_AUTOMATION_REVOKE_CONSENT: 'maker:project-automation:revoke-consent',
   PROJECT_AUTOMATION_UPSERT_SCHEDULE: 'maker:project-automation:upsert-schedule',
@@ -840,6 +804,8 @@ export const MAKER_INVOKE = {
   BOT_DIRECT_MESSAGE_THREAD_GET: 'maker:bot-direct-message-thread:get',
   /** 伙伴群聊：列表、详情、创建、修改、成员、删除、发言、继续讨论与停止。 */
   CHAT_SERVER_MANAGE: 'maker:chat-server:manage',
+  CHAT_SERVER_MASK: 'maker:chat-server:mask',
+  CHAT_SERVER_MENTIONS: 'maker:chat-server:mentions',
   CHAT_SERVER_OWNEDBOTS: 'maker:chat-server:ownedBots',
   CHAT_SERVER_REFRESHPROFILE: 'maker:chat-server:refreshProfile',
   CHAT_SERVER_STATUS: 'maker:chat-server:status',

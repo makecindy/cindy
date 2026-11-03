@@ -4,11 +4,49 @@ import { BUNDLED_CATALOG, buildUserProvider, connectedProvidersForAgent, provide
 
 import { checkModelRoute } from '../model-route-guard.js';
 import { createProviderService, type ConnectionReadOptions } from '../provider-service.js';
+import { cindyAiAccountName, cindyAiAccountLogoKind } from '../../../shared/cindyAiPresentation.js';
+import type { XdOrgIdentity } from '../../../shared/xdOrg.js';
 
 /** 注入内置 bundled 目录作为「当前生效目录」(桌面端真实注入的是 active-catalog 的 getActiveCatalog)。 */
 const bundledCatalog = () => BUNDLED_CATALOG;
 
 describe('createProviderService', () => {
+  it('projects the live membership name without changing routes, models or custom names', async () => {
+    let user: XdOrgIdentity | null = { membershipKind: 'personal', orgName: null, orgSlug: null };
+    const labels: Record<string, string> = {
+      'settings.providers.xd.title': 'Cindy AI',
+      'settings.providers.xd.personal': '个人',
+      'settings.providers.xd.xdOrganization': '心动',
+      'settings.providers.xd.organization': '企业',
+    };
+    const svc = createProviderService({
+      getCatalog: bundledCatalog,
+      connection: { xd: () => true, anthropic: () => false, openai: () => false, xai: () => false },
+      getProviderPresentation: (id) => id === 'xd' ? { name: cindyAiAccountName(user, key => labels[key]!), logoKind: cindyAiAccountLogoKind(user) } : {},
+    });
+    const read = async () => (await svc.listProviders({ snapshotOnly: true })).find(p => p.id === 'xd')!;
+    const personal = await read();
+    expect(personal.name).toBe('Cindy AI · 个人');
+    expect(personal.logoKind).toBe('cindy');
+    user = { membershipKind: 'org', orgSlug: 'xd', orgName: '心动网络' };
+    const xd = await read();
+    expect(xd).toEqual({ ...personal, name: 'Cindy AI · 心动', logoKind: 'xd' });
+    user = { membershipKind: 'org', orgSlug: 'other', orgName: ' Example Studio ' };
+    expect((await read()).name).toBe('Cindy AI · Example Studio');
+    expect((await read()).logoKind).toBe('cindy');
+    user = { membershipKind: 'org', orgSlug: null, orgName: '心动网络' };
+    expect((await read()).name).toBe('Cindy AI · 心动');
+    expect((await read()).logoKind).toBe('xd');
+    user = { membershipKind: 'org', orgSlug: 'other', orgName: '心动网络' };
+    expect((await read()).name).toBe('Cindy AI · 心动网络');
+    expect((await read()).logoKind).toBe('cindy');
+    user = { membershipKind: 'org', orgSlug: null, orgName: null };
+    expect((await read()).name).toBe('Cindy AI · 企业');
+    user = null;
+    expect((await read()).name).toBe('Cindy AI');
+    expect((await read()).logoKind).toBe('cindy');
+    expect(BUNDLED_CATALOG.providers.find(p => p.id === 'xd')?.name).toBe('XD Gateway');
+  });
   it('snapshot mode suppresses side effects and skips both account presentation readers', async () => {
     const read = vi.fn((_options: ConnectionReadOptions) => true);
     const account = vi.fn(async () => ({ source: 'unknown' as const }));

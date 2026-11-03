@@ -473,6 +473,16 @@ describe('inputProjection', () => {
     );
   });
 
+  it('localizes compact ciphertext rejection even when only its reason survives projection', () => {
+    const projection = normalizeInputProjection({
+      sessionId: 'compact', error: 'Error running remote compact task',
+      errorReason: 'remote-compact-encrypted-content',
+    });
+    expect(localizeAgentError(projection.errorReason, null)).toBe(
+      i18n.t('session.tail.remoteCompactEncryptedContent'),
+    );
+  });
+
   it('localizes live tool-loop errors instead of rendering the host message', () => {
     const localized = localizeAgentError(
       'tool_use_loop_detected',

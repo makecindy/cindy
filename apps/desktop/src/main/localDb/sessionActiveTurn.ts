@@ -49,7 +49,7 @@
  * turn 主流程。
  */
 
-import { and, desc, eq, gt, inArray, isNull, lt, sql } from 'drizzle-orm';
+import { and, desc, eq, gt, inArray, isNull, lt, or, sql } from 'drizzle-orm';
 
 import { getDbClient } from './client/current';
 import { listCindyMakePendingFailureSessionIds } from './cindyMakeAttention';
@@ -57,7 +57,7 @@ import {
   getSessionInterruptionBootAt,
   setSessionInterruptionBootAtForTests,
 } from './sessionInterruptionBoot';
-import { messages, sessions } from './schema';
+import { botProfiles, botSessionLinks, messages, sessions } from './schema';
 import { createLogger } from '../logger';
 import { DESKTOP_TASK_LIST_SESSION_SOURCES } from '../../shared/sessionSource.js';
 import { boundedSummary } from '../maker-ipc/recoveryCoordinator.js';
@@ -375,19 +375,46 @@ export function _setBootAtMsForTests(ms: number): void {
  * 启动首拉消费它(见下方两条腿消费周期的说明);但 startedAt < bootAt 的守卫让它
  * 在任何时刻调用都不会把运行中的会话算进来,批量处置因此也可以安全复用。
  */
-export async function listInterruptedPendingRows(): Promise<
-  { sessionId: string; startedAt: number }[]
-> {
+export interface InterruptedBotTaskLink {
+  botId: string;
+  role: string;
+  profileStatus: string;
+}
+
+export async function listInterruptedPendingRows(
+  options: { includeBotTasks?: boolean } = {},
+): Promise<{ sessionId: string; startedAt: number; botTask?: InterruptedBotTaskLink }[]> {
   const db = getDbClient().drizzle;
+  // 只统计桌面 sidebar 可见来源(含 feishu/slack 等 IM 渠道)——
+  // 不可见来源的红点无处展示也无法清除。
+  const listedSource = inArray(sessions.source, DESKTOP_TASK_LIST_SESSION_SOURCES);
+  // 伙伴任务只给启动弹窗用(includeBotTasks):范围只收有页面 / 列在普通任务列表的角色
+  // (主对话、委派、例行、渠道);group 与私聊话题专线是隐藏专线,history 只读。能不能
+  // 真正继续(伙伴启用、未降级)不在这里重写判据,由调用方用发送路径同一套守卫判定。
+  const visibleBotRole = inArray(botSessionLinks.role, [
+    'canonical',
+    'delegation',
+    'routine',
+    'channel',
+  ]);
   const rows = await db
-    .select({ id: sessions.id, startedAt: sessions.activeTurnStartedAt })
+    .select({
+      id: sessions.id,
+      source: sessions.source,
+      startedAt: sessions.activeTurnStartedAt,
+      botId: botSessionLinks.botId,
+      botRole: botSessionLinks.role,
+      botStatus: botProfiles.status,
+    })
     .from(sessions)
+    .leftJoin(botSessionLinks, eq(botSessionLinks.sessionId, sessions.id))
+    .leftJoin(botProfiles, eq(botProfiles.id, botSessionLinks.botId))
     .where(
       and(
         eq(sessions.status, 'active'),
-        // 只统计桌面 sidebar 可见来源(含 feishu/slack 等 IM 渠道)——
-        // 不可见来源的红点无处展示也无法清除。
-        inArray(sessions.source, DESKTOP_TASK_LIST_SESSION_SOURCES),
+        options.includeBotTasks
+          ? or(listedSource, and(eq(sessions.source, 'bot'), visibleBotRole))
+          : listedSource,
         // 插件后台隐藏任务不在侧栏展示，红点无处展示也无法清除。
         isNull(sessions.hiddenAt),
         gt(sessions.activeTurnStartedAt, sql`COALESCE(${sessions.lastTurnEndedAt}, 0)`),
@@ -398,7 +425,17 @@ export async function listInterruptedPendingRows(): Promise<
     );
   // startedAt 必非 null(上面的 gt/lt 比较已排除),类型收窄用于批量处置的 CAS。
   return rows.flatMap((r) =>
-    r.startedAt == null ? [] : [{ sessionId: r.id, startedAt: r.startedAt }],
+    r.startedAt == null
+      ? []
+      : [
+          {
+            sessionId: r.id,
+            startedAt: r.startedAt,
+            ...(r.source === 'bot' && r.botId && r.botRole && r.botStatus
+              ? { botTask: { botId: r.botId, role: r.botRole, profileStatus: r.botStatus } }
+              : {}),
+          },
+        ],
   );
 }
 
@@ -490,6 +527,20 @@ export async function listErrorTailPendingSessionIds(): Promise<string[]> {
  * 运行中的会话在任何时刻都不会被它算进来。
  */
 
+// SQL counterpart of isEmptyModelChangeMarker: exclude only a known divider,
+// before COUNT/LIMIT. Invalid metadata and nonempty assistant output remain progress.
+function notEmptyModelChangeMarker() {
+  return sql`CASE
+    WHEN ${messages.role} = 'assistant' AND ${messages.content} IN ('', '""')
+      AND json_valid(${messages.agentMeta})
+    THEN CASE WHEN json_type(${messages.agentMeta}, '$.modelChange') = 'object'
+      AND json_type(${messages.agentMeta}, '$.modelChange.fromModel') = 'text'
+      AND json_type(${messages.agentMeta}, '$.modelChange.toModel') = 'text'
+      AND json_type(${messages.agentMeta}, '$.modelChange.modelOnly') = 'true'
+    THEN 0 ELSE 1 END
+    ELSE 1 END`;
+}
+
 /**
  * 错误重试续跑判定(agent-input-coordinator 的 hasAssistantProgressAfter dep):
  * 某条已派发 user 消息之后,agent 是否已产出内容(assistant / tool_use / thinking /
@@ -516,6 +567,7 @@ export async function hasAssistantProgressAfterMessage(
       and(
         eq(messages.sessionId, sessionId),
         inArray(messages.role, ['assistant', 'tool_use', 'thinking', 'ask_user', 'plan_review']),
+        notEmptyModelChangeMarker(),
         isNull(messages.rewindAt),
         sql`EXISTS (
           SELECT 1 FROM messages u
@@ -562,6 +614,7 @@ export async function getRecoveryContextSnapshot(
   const visibleProgress = and(
     eq(messages.sessionId, sessionId),
     inArray(messages.role, progressRoles),
+    notEmptyModelChangeMarker(),
     isNull(messages.rewindAt),
     afterUser,
   );

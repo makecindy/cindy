@@ -32,7 +32,7 @@ export function useRemoteDesktopSafety(
   const [privacy, setPrivacy, privacyLoaded] = useRemoteDesktopPreference(
     deviceId,
     "privacy-screen",
-    false,
+    true,
   );
   const [sync, setSync, syncLoaded] = useRemoteDesktopPreference(
     deviceId,

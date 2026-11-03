@@ -50,6 +50,24 @@ const readActivity = (sessionId: string): RemoteSessionActivity | undefined =>
   activities.get(sessionId);
 
 describe('buildAgentIslandRemoteSessionInputs', () => {
+  // Unit regression #7972: the selected project must survive renderer -> IPC
+  // parsing -> island state, including a later explicit move clearing membership.
+  it('carries project membership through the complete remote island projection', () => {
+    const state = createAgentIslandState();
+    const session = remoteSession('a-1', 'device-a', {
+      projectDir: '/products/Chosen', workingDir: '/tmp/checkout',
+    });
+    const sync = () => syncAgentIslandDeviceSessions(state, parseAgentIslandRemoteSessions(
+      buildAgentIslandRemoteSessionInputs([session], MACHINE_ALL, readActivity),
+    )!, 2000);
+    sync();
+    expect(buildAgentIslandDisplayState(state, 2000).sessions[0]?.projectName).toBe('Chosen · Mac device-a');
+    session.projectDir = null;
+    session.workingDir = '/products/Moved';
+    sync();
+    expect(buildAgentIslandDisplayState(state, 2000).sessions[0]?.projectName).toBe('Moved · Mac device-a');
+  });
+
   // #7566 review, unit: new host plain text survives the complete transport chain;
   // an old/unknown format still uses Markdown compatibility on the same text.
   it('preserves literal code through relay, store, IPC and running/completed cards', () => {
@@ -246,12 +264,16 @@ describe('buildAgentIslandRemoteSessionInputs', () => {
     expect(parseAgentIslandRemoteSessions(inputs)).not.toBeNull();
   });
 
-  it('skips Bot tasks and disconnected devices', () => {
+  // Review (#8381): a relay reconnect now leaves sessions `connecting` instead of
+  // `disconnected`; their retained running / waiting activity must not stay live in the island.
+  it('skips Bot tasks and disconnected or still-reconnecting devices', () => {
     expect(
       buildAgentIslandRemoteSessionInputs(
         [
           remoteSession('a-1', 'device-a', { source: 'bot' }),
           remoteSession('b-1', 'device-b', { deviceLinkConnectionStatus: 'disconnected' }),
+          // b-2 has retained activity; while its device reconnects it must not be shown as live.
+          remoteSession('b-2', 'device-c', { deviceLinkConnectionStatus: 'connecting' }),
         ],
         MACHINE_ALL,
         readActivity,

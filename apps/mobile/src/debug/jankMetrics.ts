@@ -44,12 +44,34 @@ type TransferCounters = { sent: number; results: number; payloadBytes: number; n
 let transfers = new Map<string, TransferCounters>();
 let storeSizeSource: (() => RemoteSessionStoreSizeMetrics) | null = null;
 
-export function setJankMetricsEnabled(next: boolean): void {
-  if (enabled === next) return;
-  enabled = next;
+/** `inflateMs` is wall time, not thread time, when inflated off the JS thread; JSON.parse always blocks it. */
+type DecodeTiming = { count: number; inflateMs: number; parseMs: number };
+let decodes = new Map<string, DecodeTiming>();
+
+/** Where gunzip ran. `onThreadMs` is the part that actually blocked the JS thread. */
+const emptyGunzip = () => ({ offThread: 0, onThread: 0, onThreadMs: 0, fallbacks: 0 });
+/** Delay of a short JS timer: one large `maxMs` is a long task, many small ones are starvation. */
+const emptyLoopLag = () => ({ maxMs: 0, over250: 0, over1000: 0 });
+/** Time for a message to reach the native main thread, measured independently of JS busyness. */
+const emptyUiThread = () => ({ pings: 0, maxLagMs: 0, over250: 0 });
+let gunzip = emptyGunzip();
+let loopLag = emptyLoopLag();
+let uiThread = emptyUiThread();
+
+function resetCounters(): void {
   pushes = new Map();
   invokes = new Map();
   transfers = new Map();
+  decodes = new Map();
+  gunzip = emptyGunzip();
+  loopLag = emptyLoopLag();
+  uiThread = emptyUiThread();
+}
+
+export function setJankMetricsEnabled(next: boolean): void {
+  if (enabled === next) return;
+  enabled = next;
+  resetCounters();
 }
 
 export function jankMetricsEnabled(): boolean {
@@ -73,9 +95,17 @@ export function recordInvokeSent(channel: string): void {
 /** Relay requests that actually wrote to the socket, and encoded response payloads.
  * Excludes peer-direct traffic, frame headers and retransmissions; not a wire-byte total.
  */
-export function recordInvokeTransfer(event: { channel: string; phase: 'sent' | 'result';
-  payloadBytes?: number; notModified?: boolean; gzip?: boolean }): void {
+export function recordInvokeTransfer(event: { channel: string; phase: 'sent' | 'result' | 'decoded';
+  payloadBytes?: number; notModified?: boolean; gzip?: boolean; inflateMs?: number; parseMs?: number }): void {
   if (!enabled) return;
+  if (event.phase === 'decoded') {
+    const timing = decodes.get(event.channel) ?? { count: 0, inflateMs: 0, parseMs: 0 };
+    timing.count++;
+    timing.inflateMs += event.inflateMs ?? 0;
+    timing.parseMs += event.parseMs ?? 0;
+    decodes.set(event.channel, timing);
+    return;
+  }
   const entry = transfers.get(event.channel) ?? { sent: 0, results: 0, payloadBytes: 0, notModified: 0, gzip: 0 };
   if (event.phase === 'sent') entry.sent++;
   else {
@@ -85,6 +115,55 @@ export function recordInvokeTransfer(event: { channel: string; phase: 'sent' | '
     if (event.gzip) entry.gzip++;
   }
   transfers.set(event.channel, entry);
+}
+
+// Request fields are supplied by the host or a plugin, so a name that merely looks harmless is not
+// safe to persist. Only identifiers this app itself sends are written; everything else is `?`.
+const KNOWN_COLLECTIONS: ReadonlySet<string> = new Set([
+  'teammates', 'bot-groups', 'plugins', 'plugin-results', 'session-import', 'companion-import',
+]);
+const KNOWN_ACTIONS: ReadonlySet<string> = new Set([
+  'create', 'import', 'cancel', 'delete', 'archive', 'hide', 'mask-mentions', 'nickname', 'avatar',
+  'transfer', 'bot-access', 'set-member-role', 'remove-member', 'enable', 'disable',
+  'management:settings', 'settings:open', 'todo-update', 'todo-daily-check', 'close', 'suspend', 'answer',
+]);
+const KNOWN_OPS: ReadonlySet<string> = new Set(['caps', 'channels.im.list', 'channels.im.listLanes']);
+const known = (set: ReadonlySet<string>, value: unknown) =>
+  typeof value === 'string' && set.has(value) ? value : '?';
+
+/**
+ * `maker:remote-resources:invoke` multiplexes many actions, so its channel alone cannot name a
+ * large response. The label is built only from the allowlists above; resource refs and free-form
+ * input never reach the log.
+ */
+export function invokeMetricLabel(channel: string, args: unknown[] | undefined): string {
+  if (channel !== 'maker:remote-resources:invoke') return channel;
+  const request = args?.[0] as { collectionId?: unknown; actionId?: unknown; input?: { op?: unknown } } | undefined;
+  const op = request?.input?.op;
+  return `${channel}#${known(KNOWN_COLLECTIONS, request?.collectionId)}/${known(KNOWN_ACTIONS, request?.actionId)}`
+    + (op === undefined ? '' : `/${known(KNOWN_OPS, op)}`);
+}
+
+export function recordGunzip(event: { offThread: boolean; onThreadMs?: number; fallback?: boolean }): void {
+  if (!enabled) return;
+  if (event.offThread) gunzip.offThread++;
+  else gunzip.onThread++;
+  gunzip.onThreadMs += event.onThreadMs ?? 0;
+  if (event.fallback) gunzip.fallbacks++;
+}
+
+export function recordLoopLag(lagMs: number): void {
+  if (!enabled) return;
+  loopLag.maxMs = Math.max(loopLag.maxMs, lagMs);
+  if (lagMs > 250) loopLag.over250++;
+  if (lagMs > 1000) loopLag.over1000++;
+}
+
+export function recordUiThreadLag(lagMs: number): void {
+  if (!enabled) return;
+  uiThread.pings++;
+  uiThread.maxLagMs = Math.max(uiThread.maxLagMs, lagMs);
+  if (lagMs > 250) uiThread.over250++;
 }
 
 /** The store registers itself so this module does not import the store's module graph. */
@@ -151,5 +230,28 @@ export function takeJankMetrics(): {
   pushes = new Map();
   invokes = new Map();
   transfers = new Map();
+  return snapshot;
+}
+
+/**
+ * Read and reset where JS and main-thread time went. Logged as its own line because `jank metrics`
+ * already sits close to the writer's 120-value budget.
+ */
+export function takeSyncWorkMetrics() {
+  const snapshot = {
+    decodes: topChannels(
+      [...decodes].map(([channel, timing]) => ({
+        channel, count: timing.count, inflateMs: Math.round(timing.inflateMs), parseMs: Math.round(timing.parseMs),
+      })),
+      (row) => row.inflateMs + row.parseMs,
+    ),
+    gunzip: { ...gunzip, onThreadMs: Math.round(gunzip.onThreadMs) },
+    loopLag: { ...loopLag, maxMs: Math.round(loopLag.maxMs) },
+    uiThread: { ...uiThread, maxLagMs: Math.round(uiThread.maxLagMs) },
+  };
+  decodes = new Map();
+  gunzip = emptyGunzip();
+  loopLag = emptyLoopLag();
+  uiThread = emptyUiThread();
   return snapshot;
 }

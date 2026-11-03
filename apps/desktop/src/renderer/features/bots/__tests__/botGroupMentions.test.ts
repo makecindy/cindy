@@ -23,6 +23,22 @@ const members = [
 ];
 
 describe('resolveBotGroupMentions', () => {
+  // User decision: Everyone addresses humans; All Teammates is an independent
+  // broadcast. Existing tests cover only one broadcast kind (unit regression).
+  it('keeps human and companion broadcasts separate, including a picked namesake', () => {
+    const input = { members: [...members, { botId: 'namesake', name: '所有伙伴' }],
+      allLabels: ['所有人'], allBotLabels: ['所有伙伴'] };
+    expect(resolveBotGroupMentions('@所有伙伴 看下', input)).toEqual({ all: false, allBots: true, botIds: [] });
+    expect(resolveBotGroupMentions('@所有人 @所有伙伴 @小满 看下', input))
+      .toEqual({ all: true, allBots: true, botIds: ['xiaoman'] });
+    const tracked = [{ botId: 'namesake', label: '所有伙伴', start: 0 }];
+    const draft = '@所有伙伴 看下';
+    const kept = retainBotGroupTrackedMentions(draft, `${draft}！`, { ...input, tracked });
+    expect(resolveBotGroupMentions(`${draft}！`, { ...input, tracked: kept }))
+      .toEqual({ all: false, botIds: ['namesake'] });
+    expect(splitBotGroupRelaySteps('@所有伙伴 出方案，@小满 实现', input)).toBeNull();
+  });
+
   it('re-derives mentions from the text, in the order they were mentioned', () => {
     expect(
       resolveBotGroupMentions('@阿布 看下天气，@小满帮我查余票', { members, allLabels: ['所有人'] }),

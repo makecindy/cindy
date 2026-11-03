@@ -97,6 +97,7 @@ import {
   handleSetKeepAwake,
   handleSetDeviceControlEnabled,
   handleListDevices,
+  __resetDeviceListCoalescingForTests,
   handleRenameDevice,
   handleDeleteDevice,
   handleOpenLink,
@@ -181,6 +182,8 @@ describe('device-link IPC handlers', () => {
   beforeEach(() => {
     refcountTesting.reset(); // 多窗口订阅引用计数:每个用例独立
     capabilities.canUseDeviceLink = true;
+    __resetDeviceListCoalescingForTests(); // /devices 合并窗口:不让上一用例的在途请求漏到下一个
+    vi.restoreAllMocks();
   });
 
   it('getState 透传 deps 状态', () => {
@@ -302,6 +305,42 @@ describe('device-link IPC handlers', () => {
     await expect(handleSetDeviceControlEnabled(deps, 'dev-1', 'yes')).rejects.toThrowError(/\[INVALID_PARAMS\]/);
   });
 
+  // 启动 / 重连时侧栏、切换栏、设置页、main 在同一拍里各发一次 /devices。同一在途请求
+  // 300ms 内的后来者共用它(目录快照是同一时刻的);请求结束后的新调用才再次发请求。
+  it('listDevices:同一拍里的并发调用共用一个在途请求,结束后再调才重新发', async () => {
+    __resetDeviceListCoalescingForTests();
+    let resolveFirst: ((value: { devices: unknown[] }) => void) | undefined;
+    const apiFetch = vi.fn()
+      .mockImplementationOnce(() => new Promise((resolve) => { resolveFirst = resolve; }))
+      .mockResolvedValue({ devices: [] });
+    const deps = makeDeps({ apiFetch });
+    const first = handleListDevices(deps);
+    const second = handleListDevices(deps);
+    expect(apiFetch).toHaveBeenCalledTimes(1);
+    resolveFirst?.({ devices: [] });
+    await expect(first).resolves.toEqual({ devices: [] });
+    await expect(second).resolves.toEqual({ devices: [] });
+    await handleListDevices(deps);
+    expect(apiFetch).toHaveBeenCalledTimes(2);
+  });
+
+  // Review (#8381): a refresh issued right after a rename / delete must not join a list
+  // request sent before it, or the removed device / old name comes back until the next poll.
+  it.each(['rename', 'delete'] as const)('listDevices:%s 成功后的刷新不复用改动前的在途请求', async (op) => {
+    let resolveFirst: ((value: { devices: unknown[] }) => void) | undefined;
+    const apiFetch = vi.fn()
+      .mockImplementationOnce(() => new Promise((resolve) => { resolveFirst = resolve; }))
+      .mockResolvedValue({ deviceId: 'dev-1', name: 'New', deleted: true, devices: [] });
+    const deps = makeDeps({ apiFetch });
+    const before = handleListDevices(deps);
+    if (op === 'rename') await handleRenameDevice(deps, 'dev-1', 'New');
+    else await handleDeleteDevice(deps, 'dev-1');
+    const after = handleListDevices(deps);
+    expect(apiFetch).toHaveBeenCalledTimes(3);
+    resolveFirst?.({ devices: [] });
+    await Promise.all([before, after]);
+  });
+
   it('listDevices:503 → DEVICE_LINK_UNAVAILABLE,网络错(status 0)同样', async () => {
     const deps503 = makeDeps({
       apiFetch: vi.fn().mockRejectedValue(new ServerApiError('SERVICE_UNAVAILABLE', 503, 'off')),
@@ -400,6 +439,8 @@ describe('device-link IPC handlers', () => {
         isSelf: false,
       });
 
+      // 两次调用间隔超过合并窗口(否则会共用同一在途请求,见上面的合并用例)。
+      vi.spyOn(Date, 'now').mockReturnValueOnce(0).mockReturnValueOnce(1_000);
       const oldRequest = handleListDevices(deps);
       const newRequest = handleListDevices(deps);
       resolvers[1]?.({ devices: [device('新数据库名')] });

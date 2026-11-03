@@ -133,6 +133,33 @@ describe('Session graceful-stop control state', () => {
     await expect(send).resolves.toEqual({ accepted: false, reason: 'cancelled-before-dispatch' });
     expect(sendSpy).not.toHaveBeenCalled();
   });
+  it('cancels a pre-dispatch send reservation without aborting the session', async () => {
+    const stub = createHandle();
+    const session = createSession(stub);
+    const sendSpy = vi.spyOn(stub.handle, 'send');
+    let acceptedStarted!: () => void;
+    const accepted = new Promise<void>((resolve) => { acceptedStarted = resolve; });
+    let releaseAcceptance!: () => void;
+    const acceptanceGate = new Promise<void>((resolve) => { releaseAcceptance = resolve; });
+
+    const send = session.send('hello', {
+      onAccepted: async () => {
+        acceptedStarted();
+        await acceptanceGate;
+      },
+    });
+    await accepted;
+
+    expect(session.getStatus()).toBe('active');
+    expect(session.cancelPendingSend()).toBe(true);
+    releaseAcceptance();
+
+    await expect(send).resolves.toEqual({ accepted: false, reason: 'cancelled-before-dispatch' });
+    expect(sendSpy).not.toHaveBeenCalled();
+    expect(stub.abort).not.toHaveBeenCalled();
+    expect(session.getStatus()).toBe('active');
+  });
+
   it('cancels and joins a pre-acceptance send reservation before reporting stop requested', async () => {
     const stub = createHandle();
     let running = false;

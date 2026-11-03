@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { act, cleanup, renderHook } from '@testing-library/react';
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from 'vitest';
 
 vi.mock('@/contexts/AuthContext', () => ({
   useAuth: () => ({
@@ -37,6 +37,7 @@ import { useDeviceLinkRemoteProjects } from '@/features/device-link/useDeviceLin
 import { remoteProjectsStore } from '@/features/device-link/remoteProjectsStore';
 import { revokedDevicesStore } from '@/features/device-link/revokedDevicesStore';
 import { prefetchDeviceGitSafetySettings } from '@/hooks/useGitSafetySettings';
+import { readCachedSessionList } from '@/features/device-link/mirrorCacheClient';
 
 /** Real hook/store/refresh orchestration with independent controllable peer transports. */
 const peers = ['slow', 'healthy'].map((deviceId) => ({
@@ -291,5 +292,32 @@ describe('multi-device recovery lifecycle', () => {
     expect(subscribe.mock.calls.filter(([peer]) => peer === 'slow')).toHaveLength(2);
     expect(remoteProjectsStore.hasDevice('slow')).toBe(true);
     expect(remoteProjectsStore.hasDevice('healthy')).toBe(true);
+  });
+});
+
+// Review (#8381): a cache read that lands after getState() seeds `connecting` shards. They must
+// be settled against what the link will do: a standby instance (another Cindy owns the link)
+// shows them offline immediately; an instance that will connect gets the normal grace and then
+// falls back to offline if the link never comes up. Before the fix both stayed `connecting`.
+describe('late cold-start cache hydrate', () => {
+  it.each([
+    { standby: true, immediately: 'disconnected', afterGrace: 'disconnected' },
+    { standby: false, immediately: 'connecting', afterGrace: 'disconnected' },
+  ] as const)('settles cached shards when standby=$standby', async ({ standby, immediately, afterGrace }) => {
+    const cache = deferred<Array<{ deviceId: string; deviceName: string; sessions: never[] }>>();
+    // The hook reads the cache from more than one place; every read sees the late snapshot.
+    vi.mocked(readCachedSessionList).mockImplementation(() => cache.promise as never);
+    onTestFinished(() => { vi.mocked(readCachedSessionList).mockImplementation(async () => []); });
+    getState.mockResolvedValue({
+      linkStatus: 'stopped', remoteControlEnabled: true, standby, disabledControlDeviceIds: [],
+    });
+    renderHook(() => useDeviceLinkRemoteProjects());
+    await settle(); // getState settles first
+    cache.resolve([{ deviceId: 'slow', deviceName: 'slow', sessions: [{ id: 's-1' }] as never[] }]);
+    await settle();
+    const status = () => remoteProjectsStore.getDeviceSessions('slow')[0]?.deviceLinkConnectionStatus;
+    expect(status()).toBe(immediately);
+    await act(async () => { await vi.advanceTimersByTimeAsync(20_000); });
+    expect(status()).toBe(afterGrace);
   });
 });

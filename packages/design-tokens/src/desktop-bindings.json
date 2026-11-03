@@ -3736,7 +3736,7 @@
       {
         "id": "text-tertiary",
         "category": "",
-        "use": "Placeholder / tertiary"
+        "use": "Tertiary text / metadata (never placeholders — use --text-placeholder)"
       },
       {
         "id": "text-tertiary-stone",

@@ -47,6 +47,7 @@ function makeFilter(overrides: Partial<UseSidebarFilterReturn> = {}): UseSidebar
     creatorOptions: [],
     toggleCreator: vi.fn(),
     setCreatorsAll: vi.fn(),
+    setCreatorsNone: vi.fn(),
     status: 'active',
     projects: 'all',
     projectsAsSet: null,
@@ -214,6 +215,8 @@ it('keeps the creator submenu open for multiple selections and exposes an all re
   fireEvent.click(within(submenu).getByRole('menuitemcheckbox', { name: 'Dash Laptop' }));
   expect(filter.toggleCreator).toHaveBeenCalledWith('["remote","a"]');
   expect(screen.getAllByRole('menu')).toHaveLength(3);
-  fireEvent.click(within(submenu).getByRole('menuitem', { name: '不限来源' }));
+  fireEvent.click(within(submenu).getByRole('menuitem', { name: '全部' }));
   expect(filter.setCreatorsAll).toHaveBeenCalledOnce();
+  fireEvent.click(within(submenu).getByRole('menuitem', { name: '都不显示' }));
+  expect(filter.setCreatorsNone).toHaveBeenCalledOnce();
 });

@@ -140,7 +140,10 @@ export function useMessageViewport(options: Options) {
       // Drain mutations already represented by this commit before trusting the
       // cached interval. Nested message updates can run without a parent render.
       const records = mutations.current?.takeRecords();
-      if (records?.length) { geometry.mutations(records, items); measurement.current = null; }
+      if (records?.length) {
+        geometry.mutations(records, items);
+        if (geometry.invalid) measurement.current = null;
+      }
       const cached = measurement.current;
       const position = root.scrollTop;
       return !cached || geometry.invalid || cached.entries !== latest.current.entries ||
@@ -251,6 +254,7 @@ export function useMessageViewport(options: Options) {
     };
     const invalidate = (records: MutationRecord[]) => {
       geometry.mutations(records, items);
+      if (!geometry.invalid) return;
       measurement.current = null;
       schedule();
     };
@@ -269,7 +273,7 @@ export function useMessageViewport(options: Options) {
     geometry.observe(observer);
     const mutationObserver = new MutationObserver(invalidate);
     mutations.current = mutationObserver;
-    mutationObserver.observe(items, { subtree: true, childList: true, characterData: true, attributes: true });
+    mutationObserver.observe(items, { subtree: true, childList: true, characterData: true, attributes: true, attributeOldValue: true });
     root.addEventListener('scroll', reconcileBeforePaint, { passive: true });
     root.addEventListener('pointerdown', retainInteraction, true);
     root.addEventListener('focusin', retainInteraction);

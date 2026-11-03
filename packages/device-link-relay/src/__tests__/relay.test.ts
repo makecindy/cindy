@@ -15,7 +15,7 @@ import { randomUUID } from 'node:crypto';
 import { mkdtemp, readdir, rm } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
-import { connect as connectTcp } from 'node:net';
+import { connect as connectTcp, Socket } from 'node:net';
 import { PassThrough } from 'node:stream';
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import {
@@ -36,7 +36,7 @@ import {
 } from '@cindy/device-link';
 import { nodeRelayAuthCrypto as crypto } from '@cindy/device-link/node-relay-crypto';
 import type { Envelope } from '@cindy/device-link-protocol';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import WebSocket from 'ws';
 import { createDeviceCredential, initializeRelay, startRelayServer, type RelayServerHandle } from '../index';
 import { startChallengeServer } from '../certificates';
@@ -60,10 +60,11 @@ interface Harness {
 const cleanups: Array<() => Promise<void>> = [];
 
 afterEach(async () => {
+  vi.restoreAllMocks();
   for (const cleanup of cleanups.splice(0).reverse()) await cleanup();
 });
 
-async function setup(options: { publicUrl?: string } = {}): Promise<Harness> {
+async function setup(options: { publicUrl?: string; trustProxyHeaders?: boolean } = {}): Promise<Harness> {
   const dataDir = await mkdtemp(path.join(os.tmpdir(), 'cindy-relay-test-'));
   const owner = createDeviceCredential();
   const ownerKey = createRelaySigningKey(crypto);
@@ -382,6 +383,33 @@ describe('device-link relay wire contract', () => {
 });
 
 describe('pairing and administration', () => {
+  // PR #7776：Nginx 后的来源必须按真实客户端隔离；默认不信任代理头，非法链不能绕过限流。
+  // 真实 startRelayServer + HTTP 入口，20 次无效申请后另一来源用合法加入码，旧实现会误拦为 429。
+  it.each([
+    [true, '203.0.113.20', '203.0.113.21', 200, undefined],
+    [false, '203.0.113.20', '203.0.113.21', 429, undefined],
+    [true, '203.0.113.20, 127.0.0.1', '203.0.113.21, 127.0.0.1', 429, undefined],
+    [true, '203.0.113.20', '203.0.113.21', 429, '198.51.100.2'],
+  ] as const)('isolates pairing sources only for explicit trusted proxies (%s, %s, %s, %s, peer=%s)', async (trustProxyHeaders, attacker, visitor, expected, peer) => {
+    const h = await setup({ trustProxyHeaders });
+    // 保留真实 HTTP 处理，仅替换传输层报告的 peer，证明非回环来源不能自报代理头。
+    if (peer) {
+      const transport = Socket.prototype as unknown as { _getpeername(): { address: string } };
+      vi.spyOn(transport, '_getpeername').mockReturnValue({ address: peer });
+    }
+    for (let i = 0; i < 20; i++) {
+      expect((await api(h.base, 'POST', '/api/device-link/relay/pair', {
+        body: {}, headers: { 'x-forwarded-for': attacker },
+      })).status).toBe(400);
+    }
+    const code = (await api(h.base, 'POST', '/api/device-link/relay/admin/join-codes', { credential: h.ownerCredential })).json.code;
+    const result = await api(h.base, 'POST', '/api/device-link/relay/pair', {
+      headers: { 'x-forwarded-for': visitor },
+      body: { code, deviceId: 'source-check', deviceName: 'Phone', accountUserId: OWNER_USER, ...deviceKeys(h, 'source-check') },
+    });
+    expect(result.status).toBe(expected);
+  });
+
   it('admits a device only through a one-time join code and the owner approval', async () => {
     const h = await setup();
     const code = (await api(h.base, 'POST', '/api/device-link/relay/admin/join-codes', { credential: h.ownerCredential })).json.code;

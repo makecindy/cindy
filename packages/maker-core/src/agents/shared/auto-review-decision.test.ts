@@ -230,32 +230,26 @@ describe('resolveAutoReviewDecision', () => {
     expect(called).toBe(false);
   });
 
-  it('silently blocks oversized gray actions instead of reviewing a truncated sample', async () => {
-    let called = false;
+  it('reviews a complete long document rewrite instead of rejecting at the static parser budget', async () => {
+    const command = `cat > notes.tex <<'EOF'\n${'LaTeX paragraph.\n'.repeat(1000)}EOF`;
+    const delegate = vi.fn(async () => ({ verdict: 'allow' as const }));
     await expect(resolveAutoReviewDecision(
-      request({ kind: 'exec', command: `npm run build -- ${'x'.repeat(4_100)}` }),
-      async () => {
-        called = true;
-        return { verdict: 'allow' };
-      },
-    )).resolves.toMatchObject({
-      verdict: 'block',
-      reason: expect.stringContaining('at most 4096 characters'),
-    });
-    expect(called).toBe(false);
+      request({ kind: 'exec', command }), delegate,
+    )).resolves.toEqual({ verdict: 'allow' });
+    expect(delegate).toHaveBeenCalledWith(expect.objectContaining({ action: { kind: 'exec', command } }));
   });
 
   it('counts exec cwd in the complete evidence size limit', async () => {
     let called = false;
     await expect(resolveAutoReviewDecision(
-      request({ kind: 'exec', command: 'pwd', cwd: `/${'x'.repeat(4_100)}` }),
+      request({ kind: 'exec', command: 'pwd', cwd: `/${'x'.repeat(131_072)}` }),
       async () => {
         called = true;
         return { verdict: 'allow' };
       },
     )).resolves.toMatchObject({
-      verdict: 'block',
-      reason: expect.stringContaining('at most 4096 characters'),
+      verdict: 'ask',
+      reason: expect.stringContaining('confirmation'),
     });
     expect(called).toBe(false);
   });
@@ -359,10 +353,10 @@ describe('resolveAutoReviewDecision', () => {
       expect(noEvidence.unavailable).toBeUndefined();
 
       const oversized = await resolveAutoReviewDecision(
-        request({ kind: 'exec', command: `npm run build -- ${'x'.repeat(4_100)}` }),
+        request({ kind: 'exec', command: `npm run build -- ${'x'.repeat(131_072)}` }),
         async () => ({ verdict: 'allow' }),
       );
-      expect(oversized.verdict).toBe('block');
+      expect(oversized.verdict).toBe('ask');
       expect(oversized.unavailable).toBeUndefined();
     });
 
@@ -669,17 +663,17 @@ describe('user authorization across ordinary follow-ups', () => {
     expect(intentText(intent)).not.toContain(approval);
   });
 
-  it('rejects oversized actions before static parsing or model review', async () => {
+  it('asks about actions beyond the full review budget before parsing or model review', async () => {
     const classifier = vi.spyOn(staticReview, 'reviewAction');
     const delegate = vi.fn(async () => ({ verdict: 'allow' as const }));
     for (const action of [
-      { kind: 'exec', command: ' '.repeat(50_000) + '!' },
-      { kind: 'network', target: 'https://' + '/'.repeat(50_000) },
-      { kind: 'file-write', path: '/repo/file', resolvedPath: '/'.repeat(50_000) },
-      { kind: 'file-write', path: '/repo/file', resolvedWritableRoots: ['/'.repeat(50_000)] },
+      { kind: 'exec', command: ' '.repeat(131_072) + '!' },
+      { kind: 'network', target: 'https://' + '/'.repeat(131_072) },
+      { kind: 'file-write', path: '/repo/file', resolvedPath: '/'.repeat(131_072) },
+      { kind: 'file-write', path: '/repo/file', resolvedWritableRoots: ['/'.repeat(131_072)] },
     ] as const) {
       expect(await resolveAutoReviewDecision(request(action), delegate))
-        .toMatchObject({ verdict: 'block', reason: expect.stringContaining('4096') });
+        .toMatchObject({ verdict: 'ask', reason: expect.stringContaining('confirmation') });
     }
     expect(classifier).not.toHaveBeenCalled();
     expect(delegate).not.toHaveBeenCalled();

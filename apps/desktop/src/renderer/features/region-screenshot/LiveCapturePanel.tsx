@@ -92,7 +92,8 @@ export function LiveCapturePanel({ begin, token, bridge }: { begin: RegionCaptur
         state.startedAt = performance.now(); state.elapsed = 0;
         state.recorder = new CaptureRecorder(state.canvas!, begin.mode === 'gif' ? 'gif' : 'webm', () => { setStatus('limit'); void finish(); });
       }
-      state.recorder.add(currentTime());
+      await state.recorder.add(currentTime());
+      if (!state.active || state.phase !== 'capturing') return;
       setElapsed(Math.floor(currentTime() / 1000) * 1000);
       if (currentTime() >= MAX_RECORDING_MS) { setStatus('limit'); queueMicrotask(() => void finish()); }
     }

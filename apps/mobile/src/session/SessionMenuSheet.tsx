@@ -1,3 +1,4 @@
+import { SessionPrLinks } from './SessionPrLinks';
 import { CodexResetAutoUseControl } from './CodexResetAutoUseControl';
 import { TaskTagLabels, TaskTagsPanel } from './TaskTags';
 import { TaskTagsSheet, useTaskTagsSheet } from './TaskTagsSheet';
@@ -819,6 +820,7 @@ export function SessionMenuSheet({
 
   const infoContent = (
     <View style={styles.infoBody} testID="session.infoSheetBody">
+      {!sharedGuest && (tagDeviceId ?? session.deviceLinkDeviceId) && <SessionPrLinks key={`${session.id}:${tagDeviceId ?? session.deviceLinkDeviceId}`} sessionId={session.id} deviceId={(tagDeviceId ?? session.deviceLinkDeviceId)!} readOnly={session.source === 'review'} />}
       <SessionUsageSummary modelLabel={modelLabel} providerName={providerName} session={session} usage={menuUsage} contextUsage={contextUsage} detail translucent={Platform.OS === 'ios'} />
       <View style={styles.infoSection}>
         <View style={styles.infoSectionHeader}>

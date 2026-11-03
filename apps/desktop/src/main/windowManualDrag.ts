@@ -5,8 +5,9 @@
  * 事件(macOS/Windows 实测连 mousedown 都收不到,见 electron#37789),因此
  * "既能拖窗、又能响应双击"的元素(如会话标题文字)无法用原生拖拽区实现。
  * 解法:元素标 no-drag 保留 DOM 事件,renderer 检测到按住移动后通过 IPC 请求
- * 本控制器接管——用光标屏幕坐标驱动 win.setPosition() 跟随,直到 renderer
- * 发 stop(pointerup / pointercancel)。
+ * 本控制器接管——用光标屏幕坐标驱动 win.setBounds() 跟随,直到 renderer
+ * 发 stop(pointerup / pointercancel)。Windows 优先由原生 bridge 在物理坐标下
+ * 使用 SWP_NOSIZE 移窗,避免分数 DPI 下宽高反复取整。
  *
  * 逻辑:start 时记录"光标 → 窗口原点"的偏移,之后按固定间隔把窗口移动到
  * (cursor - offset)。窗口 y 以光标所在显示器的 workArea.y 为上限 clamp,
@@ -39,8 +40,9 @@ export interface DragWindowLike {
   isDestroyed(): boolean;
   isMaximized(): boolean;
   isFullScreen(): boolean;
-  getPosition(): number[];
-  setPosition(x: number, y: number, animate?: boolean): void;
+  getNativeWindowHandle?(): Buffer;
+  getBounds(): { x: number; y: number; width: number; height: number };
+  setBounds(bounds: { x: number; y: number; width: number; height: number }, animate?: boolean): void;
 }
 
 /** 跟随间隔:~60fps,和原生拖拽手感对齐。 */
@@ -59,6 +61,8 @@ export class WindowManualDragController {
     private readonly screen: ScreenLike,
     private readonly intervalMs: number = FOLLOW_INTERVAL_MS,
     private readonly maxDurationMs: number = MAX_DRAG_DURATION_MS,
+    private readonly nativeFollower?: (win: DragWindowLike) => (() => boolean) | null,
+    private readonly onNativeStartError?: (error: unknown) => void,
   ) {}
 
   /**
@@ -74,11 +78,21 @@ export class WindowManualDragController {
     this.stop();
     if (win.isDestroyed() || win.isMaximized() || win.isFullScreen()) return;
 
+    let followNative: (() => boolean) | null | undefined;
+    try {
+      followNative = this.nativeFollower?.(win);
+    } catch (error: unknown) {
+      // Offset reads may fail during a Windows desktop switch. Keep the drag
+      // available through the fixed-bounds fallback instead of escaping IPC.
+      this.onNativeStartError?.(error);
+    }
     const cursor = this.screen.getCursorScreenPoint();
-    const [winX, winY] = win.getPosition();
+    const { x: winX, y: winY, width, height } = win.getBounds();
     const offsetX = cursor.x - winX;
     const offsetY = cursor.y - winY;
     const startedAt = Date.now();
+    let lastX = winX;
+    let lastY = winY;
 
     this.activeWin = win;
     this.timer = setInterval(() => {
@@ -86,9 +100,21 @@ export class WindowManualDragController {
         this.stop();
         return;
       }
+      if (followNative) {
+        if (!followNative()) this.stop();
+        return;
+      }
       const point = this.screen.getCursorScreenPoint();
       const minY = this.screen.getDisplayNearestPoint(point).workArea.y;
-      win.setPosition(point.x - offsetX, Math.max(minY, point.y - offsetY), false);
+      const x = point.x - offsetX;
+      const y = Math.max(minY, point.y - offsetY);
+      if (x === lastX && y === lastY) return;
+      // On Windows fractional DPI, setPosition round-trips the current native
+      // size through integer DIPs and can enlarge it on every tick (#7860).
+      // Keep the gesture's starting size instead of feeding that rounding back.
+      win.setBounds({ x, y, width, height }, false);
+      lastX = x;
+      lastY = y;
     }, this.intervalMs);
   }
 

@@ -32,7 +32,7 @@ const memoryDirFor = (root: string) => path.join(root, 'maker-memory', SCOPE_DIR
 // This file opens real better-sqlite3 databases and rebuilds FTS indexes. On
 // Windows runners, Defender can make that synchronous file work exceed
 // Vitest's default 5s timeout; keep the migration assertions unchanged while
-// giving the test the same bounded Windows allowance as the contacts tests.
+// giving the test a bounded Windows allowance for sqlite setup.
 vi.setConfig({ testTimeout: process.platform === 'win32' ? 30_000 : 5_000 });
 
 let rootA: string;

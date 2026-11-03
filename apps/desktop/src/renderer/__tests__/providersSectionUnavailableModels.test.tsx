@@ -580,8 +580,8 @@ describe('ProvidersSection — 双栏管理', () => {
       ]) }) }),
     }), {}, { source: 'manual-settings' });
     const saved = vi.mocked(updateCustomProvider).mock.calls[0]![0];
-    // Refresh adds membership without freezing a visibility choice. Native
-    // projection decides defaults; compatibility still requires an override.
+    // Refresh adds membership without freezing a visibility choice. Codex speaks the
+    // Responses API the supplier serves, so a Chat-native model is not local conversion.
     for (const modelId of ['new-model', 'chat-model']) {
       const model = saved.runtimes.codex?.models.find(model => model.id === modelId);
       expect(model).toBeDefined();
@@ -589,7 +589,7 @@ describe('ProvidersSection — 双栏管理', () => {
     }
     const projected = buildUserProvider(saved).models.codex!;
     expect(projected.find(model => model.id === 'new-model')?.defaultEnabled).toBe(true);
-    expect(projected.find(model => model.id === 'chat-model')?.defaultEnabled).toBe(false);
+    expect(projected.find(model => model.id === 'chat-model')?.defaultEnabled).toBe(true);
     if (hasModels) expect(projected.find(model => model.id === 'old-model')?.defaultEnabled).toBe(false);
     expect(refetchProvidersSpy).toHaveBeenCalled();
   });

@@ -27,7 +27,8 @@ import { evictTaskTagCatalog } from '../task-tags/taskTagEvents';
  *
  * 唯一的盘上痕迹是**非权威冷缓存**:列表快照落在 main 的 userData
  * (`main/device-link/mirrorCacheStore.ts`),仅用于冷启动首屏 —— mount 时
- * `hydrateFromCache` 把上次看到的行画出来并标 disconnected,bootstrap 一到即整片替换;
+ * `hydrateFromCache` 把上次看到的行画出来并标 connecting(检测中,写路径仍按断线对待),
+ * bootstrap 一到即整片替换;link 在 CONNECTING_GRACE_MS 内没上线才降为 disconnected;
  * 设备明确离场(撤销 / 关被控 / 禁用控制)时连它的缓存一起清。整棵缓存的删除归 owner
  * 边界(main 的 teardownAuthAccountBoundary),这里只负责作废未落盘的回写。
  */
@@ -136,6 +137,14 @@ const RESEED_DEBOUNCE_MS = 300;
 // Limit only the startup route's discovery wait, not the request or peer lifetime.
 // Matches the background device directory's 10s budget; late results still apply.
 const INITIAL_DISCOVERY_WAIT_MS = 10_000;
+/**
+ * 「检测中」最多撑多久:冷启动缓存种入 / relay 重连期间分片标 connecting,link 过了这么久
+ * 还没上线就降为 disconnected,免得 relay 长时间不可用时侧栏一直显示检测中。
+ * 取值覆盖 device-link 一次完整握手超时(15s)再留余量;上线即清除。
+ */
+const CONNECTING_GRACE_MS = 20_000;
+/** 首台远程设备 bootstrap 完成的启动计时只打一次(与 main 的 startup 里程碑对读)。 */
+let firstRemoteDeviceBootstrapLogged = false;
 
 /**
  * best-effort push 的窗口内 anti-entropy 周期。列表、置顶、归档/删除走 sessions:patched /
@@ -439,6 +448,30 @@ export function useDeviceLinkRemoteProjects(
     let linkOnline: boolean | null = null;
     /** push 一旦到达即权威：迟到的 getState 快照不得覆盖更新的 link status。 */
     let linkStatusPushSeen = false;
+    /**
+     * 「检测中」宽限:缓存种入 / relay 重连时分片标 connecting,到期 link 仍未上线就降为
+     * disconnected。上线(status online)与卸载都清掉它;重复进入 connecting 只重置计时。
+     */
+    let connectingGraceTimer: ReturnType<typeof setTimeout> | null = null;
+    /**
+     * 本机这条 link 会不会去连:getState 的 remoteControlEnabled && !standby,或收到 connecting
+     * push 即为 true;stopped push 或待命 / 关闭远程控制为 false;未知为 null。缓存种入晚于
+     * 这些信号时据此收口,避免留下一个没有宽限计时器、永远「检测中」的分片。
+     */
+    let linkExpectedToConnect: boolean | null = null;
+    const clearConnectingGrace = (): void => {
+      if (connectingGraceTimer) clearTimeout(connectingGraceTimer);
+      connectingGraceTimer = null;
+    };
+    const markAllConnecting = (): void => {
+      remoteProjectsStore.markAllConnecting((deviceId) => !isSharedTaskPeer(deviceId));
+      clearConnectingGrace();
+      connectingGraceTimer = setTimeout(() => {
+        connectingGraceTimer = null;
+        if (disposed || linkOnline) return;
+        remoteProjectsStore.markAllDisconnected((deviceId) => !isSharedTaskPeer(deviceId));
+      }, CONNECTING_GRACE_MS);
+    };
     /** 当前合格设备:deviceId → 友好名 */
     const eligible = new Map<string, string>();
     /** 本机主动关闭控制的目标设备(控制端本地偏好)。 */
@@ -611,6 +644,11 @@ export function useDeviceLinkRemoteProjects(
       // 预取被控端能力(model/effort/fast/permission/fork/rewind),使首次打开远程会话时
       // 模型下拉等不为空、modelDefinitions 同步层已热。成功后逐项预取，避免弱网突发。
       if (result === 'ok') {
+        if (!firstRemoteDeviceBootstrapLogged) {
+          firstRemoteDeviceBootstrapLogged = true;
+          // 与 main 的 `startup` 里程碑对读:这里的基准是 renderer 启动,不是进程启动。
+          log.info(`startup milestone first-remote-device-bootstrapped +${Math.round(performance.now())}ms since renderer start peer=${deviceId.slice(0, 8)}`);
+        }
         await prefetchDeviceCapabilities(deviceId);
         if (!canBootstrap(deviceId, lifecycleEpoch)) return;
         await prefetchDeviceProviders(deviceId);
@@ -675,9 +713,13 @@ export function useDeviceLinkRemoteProjects(
         d.remoteControlEnabled &&
         !disabledControlDeviceIds.has(d.deviceId);
       if (ok) {
-        // Confirmed offline waits for the online reseed. Unknown retains the existing
-        // bootstrap fallback when getState fails and no subsequent status push arrives.
-        if (linkOnline === false) return;
+        // Link 还没上线(冷启动 / 重连中):只记下合格性,不发 subscribe。上线那一刻按 eligible
+        // 直接 bootstrap,不再等 reseed 的那次 REST 往返——这正是启动时「先离线再在线」里
+        // 多出来的一跳。Unknown(getState 失败且没收到 status push)保留原有的直接 bootstrap。
+        if (linkOnline === false) {
+          eligible.set(d.deviceId, d.name);
+          return;
+        }
         const prevName = eligible.get(d.deviceId);
         const wasEligible = prevName !== undefined;
         eligible.set(d.deviceId, d.name);
@@ -787,6 +829,15 @@ export function useDeviceLinkRemoteProjects(
       const usable = devices.filter((device) => !cacheHydrationBlocked.has(device.deviceId));
       if (usable.length === 0) return;
       remoteProjectsStore.hydrateFromCache(usable);
+      // 种入的分片是 connecting。link 已上线时由 bootstrap / reseed 接手;否则按已知的连接
+      // 预期收口:不会去连(待命 / 关闭远程控制)直接标离线,会去连或未知则进宽限计时。
+      if (linkOnline !== true) {
+        if (linkExpectedToConnect === false) {
+          remoteProjectsStore.markAllDisconnected((deviceId) => !isSharedTaskPeer(deviceId));
+        } else {
+          markAllConnecting();
+        }
+      }
       return reseed();
     }).catch((err) => log.debug('initial remote cache read failed', err));
 
@@ -892,7 +943,11 @@ export function useDeviceLinkRemoteProjects(
         // Presence can start bootstrap before this initial snapshot settles.
         // Reuse disconnect cleanup to clear loading and invalidate in-flight snapshots.
         if (!linkStatusPushSeen && !linkOnline) {
-          remoteProjectsStore.markAllDisconnected();
+          // 本机会去连(远程控制开着、不是待命实例)就是「检测中」,否则才是确认不可达。
+          // 冷启动时 auth 还没完成,linkStatus 多半还是 stopped,但下一步就是 connecting。
+          linkExpectedToConnect = state.remoteControlEnabled && !state.standby;
+          if (linkExpectedToConnect) markAllConnecting();
+          else remoteProjectsStore.markAllDisconnected((deviceId) => !isSharedTaskPeer(deviceId));
           for (const deviceId of eligible.keys()) remoteProjectAliases.suspend(deviceId);
         }
         if (!controlTargetPushSeen) disabledControlDeviceIds = new Set(state.disabledControlDeviceIds ?? []);
@@ -983,7 +1038,8 @@ export function useDeviceLinkRemoteProjects(
         // 不因网络抖动反复增删/重排。eligible 保留不动 → 重连 online 时下面的分支自动
         // 重 subscribe+bootstrap。stopped(登出 / 停服)才清空。
         if (p.status === 'connecting') {
-          remoteProjectsStore.markAllDisconnected();
+          linkExpectedToConnect = true;
+          markAllConnecting();
           return;
         }
         // 顺序要紧:cancel 必须在 clear **之后**。`clear()` 在 shards 非空时会同步通知
@@ -992,17 +1048,25 @@ export function useDeviceLinkRemoteProjects(
         // (非登出)」会在约 1.2s 后抹掉侧边栏冷缓存 —— 而「停服后重启、relay 仍未恢复」
         // 正是这份缓存要解决的场景(review: P2)。整体删除只归 owner 边界的 clearAll。
         clearTimeout(initialDiscoveryTimer);
-        remoteProjectsStore.clear();
-        remoteProjectAliases.clear();
+        remoteProjectsStore.clear((deviceId) => !isSharedTaskPeer(deviceId));
+        for (const deviceId of new Set([...eligible.keys(), ...remoteProjectAliases.getSnapshot().keys()])) {
+          if (!isSharedTaskPeer(deviceId)) remoteProjectAliases.remove(deviceId);
+        }
         cancelSessionListPersist();
-        clearRemoteSessionActivity();
+        clearRemoteSessionActivity((deviceId) => !isSharedTaskPeer(deviceId));
         // 'stopped'(登出 / 停服)还要清掉「已撤销」标记:否则切换栏的 buildSwitcherDevices 仍会拿
         // revoked 集合单独撑起一颗 rejected chip,停服后切换栏残留陈旧被拒 chip。'connecting' 是瞬态
         // 重连,被拒状态应跨重连保留(正常在线期一直可见),故不清。登出 unmount 时的 clearAll 仍是兜底。
-        if (p.status === 'stopped') revokedDevicesStore.clearAll();
+        if (p.status === 'stopped') {
+          linkExpectedToConnect = false;
+          for (const deviceId of revokedDevicesStore.getSnapshot()) {
+            if (!isSharedTaskPeer(deviceId)) revokedDevicesStore.clearRevoked(deviceId);
+          }
+        }
         return;
       }
       if (wasOnline) return;
+      clearConnectingGrace();
       for (const [deviceId, name] of eligible) void subscribeAndBootstrap(deviceId, name);
       reseed();
     });
@@ -1085,6 +1149,7 @@ export function useDeviceLinkRemoteProjects(
     return () => {
       disposed = true;
       clearTimeout(initialDiscoveryTimer);
+      clearConnectingGrace();
       setRemoteReseedImpl(null);
       setRemoteSessionBootstrapRetryImpl(null);
       wakeRemoteReconcileRef.current = () => undefined;

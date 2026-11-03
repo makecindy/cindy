@@ -15,6 +15,7 @@
  * stdout 每行一个 JSON 事件(initialized / listening / error),供部署器解析;
  * 日志写 stderr,不含凭证、加入码与签名地址。
  */
+import { AcmeNetworkError } from './acme';
 import { CertificateManager, startChallengeServer, type TlsMaterial } from './certificates';
 import { identifierFor } from './csr';
 import { RelayError } from './errors';
@@ -22,10 +23,15 @@ import type { RelayLogger } from './logger';
 import { readTlsFiles, startRelayServer } from './server';
 import { initializeRelay } from './store';
 import { RELAY_VERSION } from './version';
+import { manageNginx } from './nginx';
+import { lookup } from 'node:dns/promises';
+import { isIP } from 'node:net';
 
-const BOOLEAN_FLAGS = new Set(['trust-proxy']);
+const BOOLEAN_FLAGS = new Set(['trust-proxy', 'ipv6', 'existing-certificate']);
 /** 首次申请证书失败后的重试间隔(Let's Encrypt 对同一名字每小时只允许几次失败验证)。 */
 const ACME_RETRY_DELAYS_MS = [60_000, 5 * 60_000, 15 * 60_000, 30 * 60_000, 60 * 60_000];
+/** 只是连不上 CA(不算失败验证、不占配额)时更快重试,部署等待的几分钟里能多试几次。 */
+const ACME_NETWORK_RETRY_DELAYS_MS = [15_000, 30_000, 60_000, 2 * 60_000, 5 * 60_000];
 const RENEWAL_CHECK_MS = 60 * 60 * 1000;
 
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
@@ -48,12 +54,16 @@ async function prepareAcme(flags: Map<string, string>, dataDir: string, host: st
   await startChallengeServer({ host, port: parsePort(flags.get('acme-http-port'), 80, 'acme-http-port'), challenges: manager.challenges });
   let material: TlsMaterial | null = await manager.load();
   if (material && manager.needsRenewal(material)) material = null;
-  for (let attempt = 0; !material; attempt++) {
+  let failures = 0;
+  let networkFailures = 0;
+  while (!material) {
     emit({ event: 'certificate', status: 'requesting', identifier: identifier.value });
     try {
       material = await manager.obtain();
     } catch (error) {
-      const delay = ACME_RETRY_DELAYS_MS[Math.min(attempt, ACME_RETRY_DELAYS_MS.length - 1)];
+      const delays = error instanceof AcmeNetworkError ? ACME_NETWORK_RETRY_DELAYS_MS : ACME_RETRY_DELAYS_MS;
+      const index = error instanceof AcmeNetworkError ? networkFailures++ : failures++;
+      const delay = delays[Math.min(index, delays.length - 1)];
       emit({ event: 'certificate', status: 'failed', retryInMs: delay, message: error instanceof Error ? error.message : 'unknown' });
       // 证书还没到手但旧证书仍有效:先用旧的服务,后台继续申请。
       const previous = await manager.load();
@@ -120,6 +130,21 @@ async function main(): Promise<void> {
   const { command, flags } = parseArgs(process.argv.slice(2));
   if (flags.has('version')) {
     emit({ event: 'version', relayVersion: RELAY_VERSION });
+    return;
+  }
+  if (command === 'nginx') {
+    const action = required(flags, 'action');
+    const address = flags.get('address');
+    const resolvedAddresses = action === 'prepare' && address
+      ? isIP(address) ? [address] : (await lookup(identifierFor(address).value, { all: true })).map((entry) => entry.address)
+      : undefined;
+    const result = manageNginx(action, {
+      address,
+      resolvedAddresses,
+      ipv6: flags.has('ipv6'),
+      existingCertificate: flags.has('existing-certificate'),
+    });
+    emit({ event: 'nginx', ...result });
     return;
   }
   if (command === 'init') {

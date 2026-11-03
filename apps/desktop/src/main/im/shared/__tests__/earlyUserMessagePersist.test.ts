@@ -19,6 +19,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { ChannelIM, IMMessageEvent } from '@cindy/im';
 
 const mocks = vi.hoisted(() => ({
+  recordImage: vi.fn(async () => undefined),
   logger: {
     info: vi.fn(),
     warn: vi.fn(),
@@ -36,6 +37,10 @@ vi.mock('../slashCommands', () => ({
 }));
 
 import { createMessageHandler } from '../messageHandler';
+vi.mock('../receivedImageHistory', async (original) => ({
+  ...(await original<typeof import('../receivedImageHistory')>()),
+  recordReceivedImageMessage: mocks.recordImage,
+}));
 import { activateImAccountBoundary } from '../../accountBoundary';
 import type { ImSlashHandlers } from '../slashCommands';
 import type { ImRunAgentTurnArgs, ImTurnRunner } from '../turnRunner';
@@ -68,6 +73,7 @@ interface Harness {
 function wire(
   opts: {
     withPrepare: boolean;
+    channel?: string;
     notificationSessionId?: string;
     ambientTurnGate?: ImChannelAdapter['ambientTurnGate'];
   } = { withPrepare: true },
@@ -101,7 +107,7 @@ function wire(
   } as unknown as ChannelIM;
 
   const adapter = {
-    channel: 'feishu',
+    channel: opts.channel ?? 'feishu',
     ...(opts.notificationSessionId ? { resolveNotificationReply: async () => opts.notificationSessionId } : {}),
     im,
     ui: slackUi,
@@ -135,6 +141,40 @@ beforeEach(() => {
 });
 
 describe('messageHandler early user-message persist', () => {
+  // Regression: local-history channels previously passed no image read lease to the provider.
+  it.each([
+    {
+      channel: 'wecom',
+      senderId: `group/${Buffer.from('chat').toString('base64url')}`,
+      messageId: 'msg',
+    },
+    { channel: 'dingtalk', senderId: 'owner', messageId: 'msg' },
+    { channel: 'discord', senderId: 'owner', messageId: 'chat|msg' },
+  ])(
+    'registers %s image history before assembling context, with native message IDs',
+    async ({ channel, senderId, messageId }) => {
+      const h = wire({ withPrepare: true, channel });
+      h.prepareAgentTurnText!.mockImplementation(async () => {
+        expect(mocks.recordImage).toHaveBeenCalledOnce();
+        return null;
+      });
+      h.deliver(
+        makeEvent({
+          channelName: channel as IMMessageEvent['channelName'],
+          senderId,
+          chatId: 'chat',
+          messageId,
+        }),
+      );
+      await vi.waitFor(() => expect(h.runAgentTurn).toHaveBeenCalledOnce());
+      expect(turnArgs(h.runAgentTurn).groupHistoryAccess).toEqual({
+        access: 'lane',
+        provider: `${channel}-personal:cli_bot`,
+        lane: { provider: `${channel}-personal:cli_bot`, chatId: 'chat', threadId: '' },
+      });
+      expect(mocks.recordImage).toHaveBeenCalledWith(expect.objectContaining({ messageId: 'msg' }));
+    },
+  );
   it('先落库再拼群上下文, 并把落库结果透传给 turn', async () => {
     const h = wire();
     h.deliver(makeEvent());
@@ -240,7 +280,6 @@ describe('messageHandler early user-message persist', () => {
     expect(turnArgs(h.runAgentTurn).prePersistedUserMessage).toBeUndefined();
   });
 });
-
 
 it('does not persist a notification reply into the default IM session before dispatch', async () => {
   activateImAccountBoundary();

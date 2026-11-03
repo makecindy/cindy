@@ -1219,16 +1219,17 @@ describe("cindy · media MCP 边界", () => {
     expect(parsePayload(result)).toMatchObject({ ok: true, status: "prepared" });
   });
 
-  it("把受管媒体地址交给 Host 按需解析本地路径", async () => {
-    const url = `cindy-media://blobs/${"a".repeat(64)}.png`;
-    const callMedia = vi.fn(async () => ({ ok: true, local_path: "/media/a.png" }));
+  it.each(['png', 'mp4', 'webm'])("把受管 %s 地址交给 Host 按需解析本地路径", async (ext) => {
+    const url = `cindy-media://blobs/${"a".repeat(64)}.${ext}`;
+    const localPath = `/media/a.${ext}`;
+    const callMedia = vi.fn(async () => ({ ok: true, local_path: localPath }));
     const result = await handleMedia(fakeDeps({ callMedia }), {
       action: "resolve_local_path",
       url,
     });
 
     expect(callMedia).toHaveBeenCalledWith({ action: "resolve_local_path", url });
-    expect(parsePayload(result)).toMatchObject({ ok: true, local_path: "/media/a.png" });
+    expect(parsePayload(result)).toMatchObject({ ok: true, local_path: localPath });
   });
 
   it("在进入 Host 前拒绝缺失字段和未知 capability", async () => {
@@ -1517,6 +1518,26 @@ describe("cindy_ghosts · ghost_forge(锻造)", () => {
     expect(payload).toMatchObject({ ok: false, errorCode: "SECTION_NOT_FOUND" });
     expect(payload.message).toContain("1. 起步");
     expect(payload.message).toContain("4.7 网络代发(network 槽)");
+  });
+
+  // 协议:show_page 说明让模型调 ghost_forge_guide({section:"pages"}) 读页面手册,命中失败
+  // 模型就只能凭记忆写页面。手册自带多个 ## 小节,必须整份返回而不是被当成章节切开;
+  // 宿主未提供时与旧版一致报 SECTION_NOT_FOUND。最小失败输入:旧代码对 "pages" 报未命中。
+  it("forge_guide section pages 整份返回宿主页面手册,目录提示该入口;宿主未提供时按旧行为未命中", async () => {
+    const PAGE_MANUAL = ["# 页面手册", "## 1. 首屏", "first", "## 2. 规则", "second"].join("\n");
+    const deps = fakeDeps({
+      forgeGuide: async () => SECTIONED_GUIDE,
+      forgePageManual: async () => PAGE_MANUAL,
+    });
+    const pages = await handleForgeGuide(deps, { section: "pages" });
+    expect(pages.isError).toBeUndefined();
+    expect(pages.content[0].text).toBe(PAGE_MANUAL);
+    const toc = (await handleForgeGuide(deps)).content[0].text;
+    expect(toc).toContain('{"section":"pages"}');
+
+    const legacy = await handleForgeGuide(sectionedDeps(), { section: "pages" });
+    expect(parsePayload(legacy)).toMatchObject({ ok: false, errorCode: "SECTION_NOT_FOUND" });
+    expect((await handleForgeGuide(sectionedDeps())).content[0].text).not.toContain('"pages"');
   });
 
   it("forge_scaffold 透传模板和创建文件；目标存在时标 isError", async () => {
@@ -2109,7 +2130,7 @@ describe('connect_account transport', () => {
     } finally { await client.close(); await server.close(); }
   });
 
-  it('exposes a Host connection without requiring an installed plugin', async () => {
+  it('exposes Host connections (Grok, teammate messaging platforms) without requiring an installed plugin', async () => {
     const { Client } = await import('@modelcontextprotocol/sdk/client/index.js');
     const { InMemoryTransport } = await import('@modelcontextprotocol/sdk/inMemory.js');
     const connectAccount = vi.fn(async () => ({ ok: false, errorCode: 'SETUP_REQUIRED', requestId: 'card' }));
@@ -2122,9 +2143,13 @@ describe('connect_account transport', () => {
       expect(tools.tools.some(tool => tool.name === 'connect_account')).toBe(true);
       await client.callTool({ name: 'connect_account', arguments: { kind: 'host', id: 'grok' } });
       expect(connectAccount).toHaveBeenCalledWith({ kind: 'host', id: 'grok', reauthorize: undefined }, expect.any(AbortSignal));
-      const rejected = await client.callTool({ name: 'connect_account', arguments: { kind: 'host', id: 'invented' } });
-      expect(rejected.isError).toBe(true);
-      expect(connectAccount).toHaveBeenCalledTimes(1);
+      await client.callTool({ name: 'connect_account', arguments: { kind: 'host', id: 'im-telegram' } });
+      expect(connectAccount).toHaveBeenLastCalledWith({ kind: 'host', id: 'im-telegram', reauthorize: undefined }, expect.any(AbortSignal));
+      for (const id of ['invented', 'im-unknown']) {
+        const rejected = await client.callTool({ name: 'connect_account', arguments: { kind: 'host', id } });
+        expect(rejected.isError).toBe(true);
+      }
+      expect(connectAccount).toHaveBeenCalledTimes(2);
     } finally { await client.close(); await server.close(); }
   });
 

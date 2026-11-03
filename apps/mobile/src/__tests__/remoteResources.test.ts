@@ -330,3 +330,15 @@ describe('bot group chat block', () => {
     expect(resource.blocks?.[0]).toEqual({ id: 'chat', primitive: 'bot-group-chat', fallbackMarkdown: '**阿布**: 写好了' });
   });
 });
+
+// Unit: the actual controller normalizer must retain the host state before any chat is opened.
+// Existing generation coverage missed this optional field and legacy/future host fallback.
+it('preserves optional teammate activity, without interpreting unknown phases', () => {
+  const input = (teammateActivity?: unknown) => ({ items: [{ ref: { collectionId: 'teammates', kind: 'bot', id: 'bot' },
+    display: { title: 'Cindy', teammateActivity }, links: [], revision: '1' }] });
+  for (const phase of ['needs-interaction', 'completed', 'future-state']) {
+    expect(normalizeRemoteCollectionItems(input({ phase }), 'teammates')[0].display.teammateActivity).toEqual({ phase });
+  }
+  expect(normalizeRemoteCollectionItems(input(), 'teammates')[0].display.teammateActivity).toBeUndefined();
+  expect(normalizeRemoteCollectionItems(input({ phase: {} }), 'teammates')[0].display.teammateActivity).toBeUndefined();
+});

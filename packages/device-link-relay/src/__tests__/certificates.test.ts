@@ -14,6 +14,8 @@ const h = vi.hoisted(() => ({
   files: new Map<string, string>(),
   failCommit: false,
   issued: { certPem: 'cert-key-one', keyPem: 'key-one', notBefore: 0, notAfter: 100_000 },
+  issueError: null as Error | null,
+  NetworkError: class extends Error {},
 }));
 
 vi.mock('node:fs/promises', () => ({
@@ -41,8 +43,12 @@ vi.mock('node:crypto', async importOriginal => ({
 vi.mock('../acme', () => ({
   AcmeClient: class {
     accountUrl = null;
-    async obtainCertificate() { return h.issued; }
+    async obtainCertificate() {
+      if (h.issueError) throw h.issueError;
+      return h.issued;
+    }
   },
+  AcmeNetworkError: h.NetworkError,
   createAccountKey: () => ({ export: () => 'test-account-key' }),
   certificateValidity: () => ({ notBefore: 0, notAfter: 100_000 }),
   LETS_ENCRYPT_DIRECTORY: 'https://ca.invalid/directory',
@@ -61,6 +67,19 @@ beforeEach(() => {
   h.files.clear();
   h.failCommit = false;
   h.issued = { certPem: 'cert-key-one', keyPem: 'key-one', notBefore: 0, notAfter: 100_000 };
+  h.issueError = null;
+});
+
+// 部署方读 status.json 决定继续等还是报失败:暂时连不上 CA 必须标 transient,CA 拒绝验证不能标。
+it('marks only certificate-authority network failures as transient in the status file', async () => {
+  const status = () => JSON.parse(h.files.get(path.join(dataDir, 'status.json'))!).certificate;
+  h.issueError = new h.NetworkError('could not reach the certificate authority (ECONNRESET)');
+  await expect(manager().obtain()).rejects.toThrow('ECONNRESET');
+  expect(status()).toMatchObject({ state: 'failed', transient: true });
+  h.issueError = new Error('validation failed: connection refused');
+  await expect(manager().obtain()).rejects.toThrow('validation failed');
+  expect(status()).toMatchObject({ state: 'failed' });
+  expect(status().transient).toBeUndefined();
 });
 
 it('preserves the previous complete TLS identity when committing a renewal fails', async () => {

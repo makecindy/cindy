@@ -58,7 +58,7 @@ function createTransport(): DbTransport {
 
 function migrationSql(): string {
   const dir = path.resolve(__dirname, '../../../../../drizzle');
-  return ['0083_', '0086_', '0087_', '0088_']
+  return ['0083_', '0086_', '0087_', '0088_', '0136_']
     .map((prefix) => {
       const file = fs.readdirSync(dir).find((name) => name.startsWith(prefix));
       if (!file) throw new Error(`${prefix} migration not found`);
@@ -69,8 +69,8 @@ function migrationSql(): string {
 }
 
 function stats(): { b: number; n: number } {
-  const row = h.sqlite!
-    .prepare(
+  const row = h
+    .sqlite!.prepare(
       'SELECT text_bytes AS b, row_count AS n FROM hook_group_message_stats WHERE provider = ?',
     )
     .get(PROVIDER) as { b: number; n: number } | undefined;
@@ -92,11 +92,26 @@ afterEach(() => {
 });
 
 describe('群历史回收(worker RPC 代理下)', () => {
-  it('回收真的执行了 —— 边界查询整条走 query builder, 不是 raw SQL', async () => {
+  // #7756 review: image locators were missing from both quota accounting and
+  // eviction boundaries. Unit: real writer over worker RPC + in-memory SQLite;
+  // the minimal new input is 21 rows with image refs and a 20-row byte budget.
+  it.each([false, true])('回收真的执行了 —— 含图片标识: %s', async (withImages) => {
     // 上限 2000 字节, 低水位 1800。第 21 条 100 字节的消息把总量顶到 2100,
     // 正好落在触发点上。raw SQL 那版会在这里抛 "should execute through worker RPC"。
-    const retention = { maxTextBytesPerNamespace: 2_000, maxRowsPerNamespace: 5_000_000 };
-    const body = 'x'.repeat(100);
+    const body = withImages ? '图' : 'x'.repeat(100);
+    const imageRefs = withImages
+      ? [
+          {
+            fileId: 'photo',
+            name: 'image.png',
+            mimeType: 'image/png',
+            downloadToken: '签'.repeat(100),
+          },
+        ]
+      : undefined;
+    const rowBytes =
+      Buffer.byteLength(body) + (imageRefs ? Buffer.byteLength(JSON.stringify(imageRefs)) : 0);
+    const retention = { maxTextBytesPerNamespace: rowBytes * 20, maxRowsPerNamespace: 5_000_000 };
     for (let i = 0; i < 21; i += 1) {
       await recordGroupWindowEntry(
         {
@@ -106,6 +121,7 @@ describe('群历史回收(worker RPC 代理下)', () => {
           messageId: `p${i}`,
           author: { name: '@u' },
           text: body,
+          imageRefs,
           sentAt: 1,
         },
         retention,
@@ -113,16 +129,15 @@ describe('群历史回收(worker RPC 代理下)', () => {
     }
 
     const after = stats();
-    expect(after.b).toBeLessThanOrEqual(1_800); // 收敛到低水位, 不是压线
-    expect(after.b).toBeGreaterThan(1_700); // 也没删过头
+    expect(after).toEqual({ b: rowBytes * 18, n: 18 }); // 低水位，且不删过头
     expect(
-      h.sqlite!
-        .prepare('SELECT 1 FROM hook_group_messages WHERE provider = ? AND message_id = ?')
+      h
+        .sqlite!.prepare('SELECT 1 FROM hook_group_messages WHERE provider = ? AND message_id = ?')
         .get(PROVIDER, 'p0'),
     ).toBeUndefined(); // 删的是最旧的
     expect(
-      h.sqlite!
-        .prepare('SELECT 1 FROM hook_group_messages WHERE provider = ? AND message_id = ?')
+      h
+        .sqlite!.prepare('SELECT 1 FROM hook_group_messages WHERE provider = ? AND message_id = ?')
         .get(PROVIDER, 'p20'),
     ).toBeDefined(); // 最新的还在
   });

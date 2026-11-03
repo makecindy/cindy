@@ -170,6 +170,7 @@ export type BotGroupErrorVariant =
   | 'memberLimit'
   | 'memberUnavailable'
   | 'mentionUnavailable'
+  | 'allBotsMentionDisabled'
   | 'notFound'
   | 'hostNotReady'
   | 'planOpen'
@@ -194,6 +195,7 @@ const ERROR_VARIANTS: ReadonlyMap<string, BotGroupErrorVariant> = new Map<BotGro
   ['MEMBER_LIMIT', 'memberLimit'],
   ['MEMBER_UNAVAILABLE', 'memberUnavailable'],
   ['MENTION_UNAVAILABLE', 'mentionUnavailable'],
+  ['ALL_BOTS_MENTION_DISABLED', 'allBotsMentionDisabled'],
   ['NOT_FOUND', 'notFound'],
   ['HOST_NOT_READY', 'hostNotReady'],
   ['PLAN_OPEN', 'planOpen'],
@@ -365,7 +367,7 @@ export function botGroupSidebarPlanPreview(group: BotGroupSummary): BotGroupSide
   const plan = group.openPlan;
   if (!plan) return null;
   const botName = plan.currentBotName?.trim() ?? '';
-  if (plan.status === 'running') {
+  if (plan.status === 'running' && plan.currentStepStatus === 'running') {
     return {
       kind: 'running',
       botName,
@@ -374,10 +376,10 @@ export function botGroupSidebarPlanPreview(group: BotGroupSummary): BotGroupSide
     };
   }
   if (plan.status === 'proposed') return { kind: 'proposed', organizerName: memberName(group.organizerBotId) };
-  if (plan.status === 'waiting') {
+  if (plan.status === 'waiting' || plan.status === 'running') {
     if (botName && plan.currentStepStatus === 'done') return { kind: 'step-done', botName };
     if (botName && plan.currentStepStatus === 'failed') return { kind: 'step-failed', botName };
-    return { kind: 'waiting' };
+    if (plan.status === 'waiting') return { kind: 'waiting' };
   }
   return null;
 }

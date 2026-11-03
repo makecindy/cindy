@@ -647,9 +647,9 @@ describe('guest provider access and usage', () => {
       samples: [{ model: 'claude-opus', turns: 1, inputTokens: 12, outputTokens: 3, cacheReadTokens: 0, cacheCreateTokens: 0, sdkCostUsd: 0.02 }],
     };
     expect(recordGuestUsage).toHaveBeenCalledTimes(1);
-    expect(recordGuestUsage).toHaveBeenCalledWith(GUEST, usage);
+    expect(recordGuestUsage).toHaveBeenCalledWith(GUEST, usage, 'task-1');
     expect(recordOwnerUsage).toHaveBeenCalledTimes(1);
-    expect(recordOwnerUsage).toHaveBeenCalledWith(OWNER, usage);
+    expect(recordOwnerUsage).toHaveBeenCalledWith(OWNER, usage, 'task-2');
     expect(host.activeControllers().sort()).toEqual([GUEST, OWNER].sort());
     host.dispose();
   });

@@ -1,5 +1,5 @@
 diff --git a/ios/RNUITextView.mm b/ios/RNUITextView.mm
-index d0c31ed20b4865679ec1397543fc74056e47b978..55961f88d6d14f2fc76e8e28c492615d686be07a 100644
+index d0c31ed20b4865679ec1397543fc74056e47b978..3de5f0c16392e43daa7e446e78edcb48b4ab8ae6 100644
 --- a/ios/RNUITextView.mm
 +++ b/ios/RNUITextView.mm
 @@ -1,4 +1,5 @@
@@ -8,7 +8,7 @@ index d0c31ed20b4865679ec1397543fc74056e47b978..55961f88d6d14f2fc76e8e28c492615d
  #import "RNUITextViewShadowNode.h"
  #import "RNUITextViewComponentDescriptor.h"
  #import "RNUITextViewChild.h"
-@@ -22,6 +23,36 @@ using namespace facebook::react;
+@@ -22,6 +23,36 @@ @implementation RNUITextView{
    RNUITextViewShadowNode::ConcreteState::Shared _state;
    UITapGestureRecognizer * _outsideTapRecognizer;
    BOOL _suppressSelectionChange;
@@ -45,7 +45,7 @@ index d0c31ed20b4865679ec1397543fc74056e47b978..55961f88d6d14f2fc76e8e28c492615d
  }
  
  + (ComponentDescriptorProvider)componentDescriptorProvider
-@@ -65,6 +96,18 @@ using namespace facebook::react;
+@@ -65,6 +96,18 @@ - (instancetype)initWithFrame:(CGRect)frame
                                                                      action:@selector(handleOutsideTap:)];
      _outsideTapRecognizer.cancelsTouchesInView = NO;
      _outsideTapRecognizer.delegate = self;
@@ -64,18 +64,50 @@ index d0c31ed20b4865679ec1397543fc74056e47b978..55961f88d6d14f2fc76e8e28c492615d
    }
  
    return self;
-@@ -77,6 +120,7 @@ using namespace facebook::react;
-     [self.window addGestureRecognizer:_outsideTapRecognizer];
-   } else {
-     [_outsideTapRecognizer.view removeGestureRecognizer:_outsideTapRecognizer];
+@@ -73,10 +116,34 @@ - (instancetype)initWithFrame:(CGRect)frame
+ - (void)didMoveToWindow
+ {
+   [super didMoveToWindow];
+-  if (self.window) {
+-    [self.window addGestureRecognizer:_outsideTapRecognizer];
+-  } else {
+-    [_outsideTapRecognizer.view removeGestureRecognizer:_outsideTapRecognizer];
++  [self syncOutsideTapRecognizer];
++  if (!self.window) {
 +    [self invalidateSelectionDisplayLink];
++  }
++}
++
++- (BOOL)hasActiveTextSelection
++{
++  const NSRange range = _textView.selectedRange;
++  if (!_textView.selectable || range.location == NSNotFound || range.length == 0) {
++    return NO;
++  }
++  const NSUInteger length = _textView.text.length;
++  return range.location <= length && range.length <= length - range.location;
++}
++
++- (void)syncOutsideTapRecognizer
++{
++  // A table can mount hundreds of text views. Only a view with a selection
++  // needs to observe touches outside itself; idle cells must not each hit-test
++  // the window and schedule a selection-clear block for every ordinary tap.
++  UIWindow *target = [self hasActiveTextSelection] ? self.window : nil;
++  if (_outsideTapRecognizer.view == target) {
++    return;
++  }
++  [_outsideTapRecognizer.view removeGestureRecognizer:_outsideTapRecognizer];
++  if (target) {
++    [target addGestureRecognizer:_outsideTapRecognizer];
    }
  }
  
-@@ -94,21 +138,27 @@ using namespace facebook::react;
+@@ -94,21 +161,28 @@ - (void)prepareForRecycle
    // Reset the frame to zero so that when it properly lays out on the next use
    _textView.frame = CGRectZero;
    _textView.attributedText = nil;
++  [self syncOutsideTapRecognizer];
 +  _lastAppliedAttributedString = facebook::react::AttributedString{};
 +  _hasAppliedText = NO;
 +  _textApplyGeneration += 1;
@@ -108,7 +140,7 @@ index d0c31ed20b4865679ec1397543fc74056e47b978..55961f88d6d14f2fc76e8e28c492615d
  {
    if (!_state) {
      return;
-@@ -116,19 +166,23 @@ using namespace facebook::react;
+@@ -116,19 +190,23 @@ - (void)drawRect:(CGRect)rect
  
    const auto &props = *std::static_pointer_cast<RNUITextViewProps const>(_props);
  
@@ -135,11 +167,15 @@ index d0c31ed20b4865679ec1397543fc74056e47b978..55961f88d6d14f2fc76e8e28c492615d
      // Reassigning attributedText clears any active selection. Save it and
      // restore after, while suppressing the synthetic textViewDidChangeSelection
      // events the clear-then-restore would otherwise produce — those would
-@@ -145,27 +199,56 @@ using namespace facebook::react;
+@@ -144,28 +222,59 @@ - (void)drawRect:(CGRect)rect
+   if (frameChanged) {
      _textView.frame = _view.frame;
    }
- 
+-
 -  __block std::vector<std::string> lines;
++  // Applying text can clear or restore selection while JS events are suppressed.
++  [self syncOutsideTapRecognizer];
++
 +  os_log_debug(OS_LOG_DEFAULT, "[RNUITextView] apply tag=%ld len=%lu textChanged=%d frameChanged=%d",
 +               (long)self.tag, (unsigned long)convertedAttrString.length, textChanged, frameChanged);
 +
@@ -211,7 +247,7 @@ index d0c31ed20b4865679ec1397543fc74056e47b978..55961f88d6d14f2fc76e8e28c492615d
  }
  
  - (void)updateProps:(Props::Shared const &)props oldProps:(Props::Shared const &)oldProps
-@@ -181,6 +264,14 @@ using namespace facebook::react;
+@@ -181,6 +290,14 @@ - (void)updateProps:(Props::Shared const &)props oldProps:(Props::Shared const &
      _textView.selectable = newViewProps.selectable;
    }
  
@@ -226,7 +262,14 @@ index d0c31ed20b4865679ec1397543fc74056e47b978..55961f88d6d14f2fc76e8e28c492615d
    if (oldViewProps.allowFontScaling != newViewProps.allowFontScaling) {
      if (@available(iOS 11.0, *)) {
        _textView.adjustsFontForContentSizeCategory = newViewProps.allowFontScaling;
-@@ -215,7 +306,15 @@ using namespace facebook::react;
+@@ -209,13 +326,22 @@ - (void)updateProps:(Props::Shared const &)props oldProps:(Props::Shared const &
+   }
+ 
+   [super updateProps:props oldProps:oldProps];
++  [self syncOutsideTapRecognizer];
+ }
+ 
+ // See RCTParagraphComponentView
  - (void)updateState:(const facebook::react::State::Shared &)state oldState:(const facebook::react::State::Shared &)oldState
  {
    _state = std::static_pointer_cast<const RNUITextViewShadowNode::ConcreteState>(state);
@@ -243,7 +286,31 @@ index d0c31ed20b4865679ec1397543fc74056e47b978..55961f88d6d14f2fc76e8e28c492615d
  }
  
  // MARK: - UIGestureRecognizerDelegate
-@@ -297,4 +396,10 @@ using namespace facebook::react;
+@@ -229,7 +355,7 @@ - (BOOL)gestureRecognizer:(UIGestureRecognizer *)gestureRecognizer shouldReceive
+ {
+   if (gestureRecognizer == _outsideTapRecognizer) {
+     UIWindow *window = touch.window;
+-    if (!window) {
++    if (!window || window != self.window || ![self hasActiveTextSelection]) {
+       return NO;
+     }
+     UIView *hitView = [window hitTest:[touch locationInView:nil] withEvent:nil];
+@@ -243,11 +369,13 @@ - (void)handleOutsideTap:(UITapGestureRecognizer *)sender
+   // Defer past the current event loop turn so any in-flight edit-menu action
+   // (Copy / Define / Look Up / …) reads the live selection before we clear it.
+   UITextView *textView = _textView;
++  __weak RNUITextView *weakSelf = self;
+   dispatch_async(dispatch_get_main_queue(), ^{
+     UITextRange *range = textView.selectedTextRange;
+     if (range != nil && !range.isEmpty) {
+       textView.selectedTextRange = nil;
+     }
++    [weakSelf syncOutsideTapRecognizer];
+   });
+ }
+ 
+@@ -296,6 +424,12 @@ - (void)handlePressIfNecessary:(UITapGestureRecognizer*)sender
+ 
  - (void)handleLongPressIfNecessary:(UILongPressGestureRecognizer*)sender
  {
 +  // Long presses also report movement and release. Dispatch the action only
@@ -254,7 +321,17 @@ index d0c31ed20b4865679ec1397543fc74056e47b978..55961f88d6d14f2fc76e8e28c492615d
 +
    const auto location = [self getLocationOfPress:sender];
    const auto child = [self getTouchChild:location];
-@@ -328,6 +433,248 @@ using namespace facebook::react;
+ 
+@@ -308,6 +442,8 @@ - (void)handleLongPressIfNecessary:(UILongPressGestureRecognizer*)sender
+ 
+ - (void)textViewDidChangeSelection:(UITextView *)textView
+ {
++  // Native cleanup must also work without a JS listener and during text updates.
++  [self syncOutsideTapRecognizer];
+   if (_suppressSelectionChange) {
+     return;
+   }
+@@ -328,6 +464,249 @@ - (void)textViewDidChangeSelection:(UITextView *)textView
        static_cast<int>(selectedRange.location),
        static_cast<int>(selectedRange.location + selectedRange.length),
      });
@@ -305,6 +382,7 @@ index d0c31ed20b4865679ec1397543fc74056e47b978..55961f88d6d14f2fc76e8e28c492615d
 +    UITextView *innerTextView = strongSelf->_textView;
 +    dispatch_async(dispatch_get_main_queue(), ^{
 +      innerTextView.selectedTextRange = nil;
++      [weakSelf syncOutsideTapRecognizer];
 +    });
 +  };
 +  NSMutableArray<UIMenuElement *> *children = [NSMutableArray array];
@@ -504,7 +582,7 @@ index d0c31ed20b4865679ec1397543fc74056e47b978..55961f88d6d14f2fc76e8e28c492615d
  
  Class<RCTComponentViewProtocol> RNUITextViewCls(void)
 diff --git a/ios/RNUITextViewShadowNode.cpp b/ios/RNUITextViewShadowNode.cpp
-index 8b39111b9b945527e48ab3d93e5619427385e4ac..f563211079e2924490482f8144ffc9314a22a343 100644
+index 8b39111b9b945527e48ab3d93e5619427385e4ac..3b8260260b9363fd7797ab502fc25f75d899a086 100644
 --- a/ios/RNUITextViewShadowNode.cpp
 +++ b/ios/RNUITextViewShadowNode.cpp
 @@ -28,15 +28,32 @@ Size RNUITextViewShadowNode::measureContent(
@@ -587,7 +665,7 @@ index 8b39111b9b945527e48ab3d93e5619427385e4ac..f563211079e2924490482f8144ffc931
  }
  }
 diff --git a/ios/RNUITextViewShadowNode.h b/ios/RNUITextViewShadowNode.h
-index 27797444bfb990b51c5d63d170d362596a384415..9b1e7bfa57f9fb41f51e561d8b1d3c9b894d3961 100644
+index 27797444bfb990b51c5d63d170d362596a384415..b9ba5de9e034f40005e7a555a7a6cdeca6b5cb2c 100644
 --- a/ios/RNUITextViewShadowNode.h
 +++ b/ios/RNUITextViewShadowNode.h
 @@ -43,6 +43,8 @@ public:

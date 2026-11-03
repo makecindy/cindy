@@ -67,6 +67,7 @@ export function PluginModelPickerDialog({
       content={
         <>
           <ModelSelectorContent
+            localOnlyReason="plugin-task-local-route"
             preferenceStore={preferenceStore}
             deviceId={deviceId}
             modelId={route?.model ?? ''}

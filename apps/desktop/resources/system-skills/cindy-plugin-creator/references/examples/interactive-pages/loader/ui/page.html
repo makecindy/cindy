@@ -1,0 +1,30 @@
+<!doctype html>
+<html lang="zh-CN">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>加载页面</title>
+<style>:root{color-scheme:light dark}body{font:14px/1.5 system-ui;padding:16px;color:CanvasText;background:Canvas}</style>
+<p id="status" role="status">正在加载页面…</p>
+<script type="module">
+import { App } from '@modelcontextprotocol/ext-apps';
+const app = new App({ name: '页面加载器', version: '1.0.0' }, {}, { autoResize: true });
+let loaded = false;
+app.ontoolresult = async result => {
+  if (loaded) return;
+  const html = result._meta?.view?.html;
+  if (result.isError || typeof html !== 'string' || !html.trim()) {
+    document.querySelector('#status').textContent = '页面未能加载，请重新打开。';
+    return;
+  }
+  loaded = true;
+  await app.close();
+  // HTML 是完整的可信应用代码；不是待清洗的用户文本。
+  document.open();
+  document.write(html);
+  document.close();
+};
+app.onteardown = async () => { loaded = true; return {}; };
+try { await app.connect(); }
+catch { document.querySelector('#status').textContent = '连接失败，请检查 Cindy 版本后重新打开。'; }
+</script>
+</html>

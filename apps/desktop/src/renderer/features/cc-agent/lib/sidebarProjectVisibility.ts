@@ -8,7 +8,7 @@ import {
 
 type SidebarProjectSession = Pick<
   Session,
-  'workingDir' | 'remoteHostId' | 'deviceLinkDeviceId' | 'workspaceKind'
+  'workingDir' | 'projectDir' | 'remoteHostId' | 'deviceLinkDeviceId' | 'workspaceKind'
 >;
 
 /**

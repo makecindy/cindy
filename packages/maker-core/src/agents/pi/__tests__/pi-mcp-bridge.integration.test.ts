@@ -195,6 +195,17 @@ function scriptedAnthropicTurn(requestBody: string): string {
     return call ? anthropicToolTurn(toolResultCount + 1, call.name, call.input)
       : anthropicTextTurn(3, 'Result received');
   }
+  if (requestBody.includes('recover MCP transport')) {
+    const calls = [
+      { name: 'cindy_mcp_list_tools', input: { server: 'recovery', tool: 'echo' } },
+      { name: 'cindy_mcp_call_tool', input: { server: 'recovery', tool: 'echo', args: { text: 'write' } } },
+      { name: 'cindy_mcp_list_tools', input: { server: 'recovery', tool: 'echo' } },
+      { name: 'cindy_mcp_call_tool', input: { server: 'recovery', tool: 'echo', args: { text: 'inspect' } } },
+    ];
+    const call = calls[toolResultCount];
+    return call ? anthropicToolTurn(toolResultCount + 1, call.name, call.input)
+      : anthropicTextTurn(5, 'Recovery complete');
+  }
   if (requestBody.includes('local host tool isolation')) {
     const calls = [
       { name: 'cindy_mcp_list_tools', input: {} },
@@ -419,6 +430,10 @@ describe.skipIf(!piAvailable)('PiAgent × cindy-bridge (real pi + MCP bridge + p
   const modelRequestBodies: string[] = [];
   const modelRequests: Array<Record<string, unknown>> = [];
   const opaqueTurnCaptures: Array<{ sessionId: string; provider: string; cwd: string }> = [];
+  let recoveryMode: 'disconnect' | 'expired' | 'sse-eof' = 'disconnect';
+  let recoveryWrites = 0;
+  const recoveryCalls: string[] = [];
+  const recoveryHandshakes: Array<string | string[] | undefined> = [];
 
   beforeAll(async () => {
     agentHome = mkdtempSync(path.join(tmpdir(), 'pi-mcp-int-'));
@@ -439,6 +454,38 @@ describe.skipIf(!piAvailable)('PiAgent × cindy-bridge (real pi + MCP bridge + p
     mcpHttp = createServer(async (req: IncomingMessage, res: ServerResponse) => {
       seenMcpUrls.push(req.url ?? '');
       const auth = req.headers.authorization ?? '';
+      if (req.url?.includes('/recovery')) {
+        if (auth !== `Bearer ${MCP_TOKEN}`) { res.writeHead(401).end(); return; }
+        const body = JSON.parse(await readBody(req));
+        if (body.id === undefined) { res.writeHead(202).end(); return; }
+        let result: unknown = {};
+        if (body.method === 'initialize') {
+          recoveryHandshakes.push(req.headers['mcp-session-id']);
+          res.setHeader('mcp-session-id', 'session-' + recoveryHandshakes.length);
+          result = { protocolVersion: '2025-03-26', capabilities: { tools: {} }, serverInfo: { name: 'recovery', version: '1' } };
+        } else if (body.method === 'tools/list') {
+          result = { tools: [{ name: 'echo', description: 'Recovery fixture', inputSchema: {
+            type: 'object', properties: { text: { type: 'string' } }, required: ['text'],
+          } }] };
+        } else if (body.method === 'tools/call') {
+          recoveryCalls.push(body.params.arguments.text);
+          if (body.params.arguments.text === 'write') {
+            if (recoveryMode === 'expired') { res.writeHead(404).end(); return; }
+            recoveryWrites++;
+            if (recoveryMode === 'sse-eof') {
+              res.writeHead(200, { 'content-type': 'text/event-stream' });
+              res.end('data: {"method":"notifications/progress"}\n\n');
+              return;
+            }
+            res.destroy();
+            return;
+          }
+          result = { content: [{ type: 'text', text: 'writes=' + recoveryWrites }] };
+        }
+        res.writeHead(200, { 'content-type': 'application/json' });
+        res.end(JSON.stringify({ jsonrpc: '2.0', id: body.id, result }));
+        return;
+      }
       const apiKey = Array.isArray(req.headers['x-api-key'])
         ? req.headers['x-api-key'][0]
         : req.headers['x-api-key'];
@@ -790,7 +837,7 @@ describe.skipIf(!piAvailable)('PiAgent × cindy-bridge (real pi + MCP bridge + p
 
   function buildDeps(
     bridgeMode:
-        | 'local' | 'orca' | 'local-multi' | 'bot-memory' | 'remote' | 'remote-sse' | 'remote-paginated' | 'remote-failures' = 'local',
+        | 'local' | 'orca' | 'local-multi' | 'bot-memory' | 'remote' | 'remote-sse' | 'remote-paginated' | 'remote-failures' | 'recovery' = 'local',
     logger: Logger = noopLogger,
   ): AgentDeps {
     return {
@@ -824,6 +871,9 @@ describe.skipIf(!piAvailable)('PiAgent × cindy-bridge (real pi + MCP bridge + p
       // `?session=` —— 既验 PiAgent.startSession 把 opts.sessionId 透传进 ctx,
       // 又让假 server 能观察到真 pi 是否原样转发该 query(见 seenMcpUrls 断言)。
       preparePiExtraSpawnConfig: async (_providers, ctx): Promise<PiExtraSpawnConfig> => {
+        if (bridgeMode === 'recovery') {
+          return { mcpBridge: { token: MCP_TOKEN, servers: [{ name: 'recovery', url: mcpUrl + '/recovery' }] } };
+        }
         if (bridgeMode === 'remote') {
           return {
             mcpBridge: {
@@ -991,7 +1041,7 @@ describe.skipIf(!piAvailable)('PiAgent × cindy-bridge (real pi + MCP bridge + p
     permissionMode: 'ask' | 'bypassPermissions',
     resolver: (req: InteractionRequest) => Promise<InteractionDecision>,
     bridgeMode:
-        | 'local' | 'orca' | 'local-multi' | 'bot-memory' | 'remote' | 'remote-sse' | 'remote-paginated' = 'local',
+        | 'local' | 'orca' | 'local-multi' | 'bot-memory' | 'remote' | 'remote-sse' | 'remote-paginated' | 'recovery' = 'local',
     prompt = 'call the echo tool',
     localHostOnly: boolean | 'native' = false,
     // 披露记录按 sessionId 落盘，所以要真正走到「首次未披露」必须给独立会话；
@@ -1046,6 +1096,24 @@ describe.skipIf(!piAvailable)('PiAgent × cindy-bridge (real pi + MCP bridge + p
       rmSync(cwd, { recursive: true, force: true });
     }
   }
+
+  it.each(['disconnect', 'expired', 'sse-eof'] as const)('recovers MCP %s through real Pi without replaying a write', { timeout: 90_000 }, async (mode) => {
+    recoveryMode = mode;
+    recoveryWrites = 0;
+    recoveryCalls.length = 0;
+    recoveryHandshakes.length = 0;
+    const approvals: string[] = [];
+    const { requestBodies } = await runOneTurn('ask', async (req) => {
+      if (req.kind === 'permission') approvals.push(req.toolName);
+      return { kind: 'permission', behavior: 'allow' };
+    }, 'recovery', 'recover MCP transport', false, 'recovery-' + mode);
+    expect(recoveryCalls).toEqual(['write', 'inspect']);
+    expect(recoveryHandshakes).toEqual([undefined, undefined]);
+    expect(recoveryWrites).toBe(mode === 'expired' ? 0 : 1);
+    expect(approvals.filter(name => name === 'mcp__recovery__echo')).toHaveLength(2);
+    expect(requestBodies.at(-1)).toContain('not replayed');
+    expect(requestBodies.at(-1)).toContain('writes=' + recoveryWrites);
+  });
 
   // PR2 integration: Pi has no private Worker schema. Exercise the real shared schema through
   // tools/list, schema disclosure, approval identity, tools/call, and the resulting model input.
@@ -1173,11 +1241,24 @@ describe.skipIf(!piAvailable)('PiAgent × cindy-bridge (real pi + MCP bridge + p
       const toolResult = events.filter(event => event.type === 'tool_result_full').at(-1)!;
       expect((toolResult.data as { isError: boolean }).isError).toBe(scenario !== 'success');
       if (scenario === 'rich-failure') {
-        const blocks = result.content as Array<Record<string, unknown>>;
-        expect(blocks.map(block => block.type)).toEqual(['text', 'image', 'text', 'text']);
-        expect(blocks[0].text).toBe('Screenshot of the failing input');
-        expect(blocks[1].source).toMatchObject({ type: 'base64', media_type: 'image/png' });
-        expect(blocks[2].text).toBe('Correct the highlighted field');
+        if (Array.isArray(result.content)) {
+          const blocks = result.content as Array<Record<string, unknown>>;
+          expect(blocks.map(block => block.type)).toEqual(['text', 'image', 'text', 'text']);
+          expect(blocks[0].text).toBe('Screenshot of the failing input');
+          expect(blocks[1].source).toMatchObject({ type: 'base64', media_type: 'image/png' });
+          expect(blocks[2].text).toBe('Correct the highlighted field');
+        } else {
+          // Pi 1.4 moves images after tool results in the same user message.
+          // Assert the actual image still reaches the model, not just a marker.
+          expect(result.content).toContain('Screenshot of the failing input');
+          expect(result.content).toContain('Correct the highlighted field');
+          const containing = messages.find(message => message.content.includes(result))!;
+          const images = containing.content.slice(containing.content.indexOf(result) + 1)
+            .filter(block => block.type === 'image');
+          expect(images).toHaveLength(1);
+          expect(images[0].source).toMatchObject({ type: 'base64', media_type: 'image/png',
+            data: 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aifoAAAAASUVORK5CYII=' });
+        }
       }
       expect(JSON.stringify(requests)).not.toContain('MCP_CLIENT_ONLY_CANARY');
     },

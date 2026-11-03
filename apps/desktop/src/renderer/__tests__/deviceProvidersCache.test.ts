@@ -2,9 +2,11 @@
  * useDeviceProviders 的 deviceId-aware 缓存单测(device-link「以被控端为准」)。
  * 守住:远程走隧道 maker:provider:list、按 deviceId 隔离、inflight 去重、缓存命中不重拉、
  * evict 只清该设备、evict 在途结果丢弃不复活 —— 与 useAgentCapabilities 同范式。
- * 模块级缓存:每个用例 vi.resetModules() + 动态 import 拿干净模块。
+ * 模块只加载一次；每例通过生产驱逐入口清理缓存。
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import * as providerCache from '@/hooks/useDeviceProviders';
+import { modelCatalogKey } from '../../shared/controlledModelCatalog';
 import {
   connectedProvidersForAgent,
   visibleModelUnion,
@@ -12,7 +14,30 @@ import {
 } from '@cindy/model-providers';
 
 beforeEach(() => {
-  vi.resetModules();
+  providerCache.evictAllDeviceProviders();
+});
+
+// #8010 unit: the same source can have different access through two task hosts;
+// existing per-device cache tests did not exercise host-mediated reads.
+it('reads through each task host and invalidates only that host without resurrecting late catalogs', async () => {
+  let finish!: (value: Providers) => void;
+  const invoke = vi.fn(async (device: string) => device === 'host-b'
+    ? new Promise<Providers>(resolve => { finish = resolve; }) : result(device));
+  vi.stubGlobal('window', { electronAPI: { deviceLink: { invoke } } });
+  const b = modelCatalogKey('self-a', 'host-b')!;
+  const c = modelCatalogKey('self-a', 'host-c')!;
+  const pending = providerCache.prefetchDeviceProviders(b);
+  await providerCache.prefetchDeviceProviders(c);
+  await providerCache.prefetchDeviceProviders('host-local');
+  expect(invoke).toHaveBeenCalledWith('host-b', 'maker:model-catalog:read', [{
+    op: 'read', agentDeviceId: 'self-a', channel: 'maker:provider:list', args: [{ capabilities: ['provider-logo-kinds-v2'] }],
+  }]);
+  providerCache.evictControlledDeviceProviders('host-b');
+  finish(result('old'));
+  await pending;
+  expect(providerCache.getCachedDeviceProviders(b)).toBeNull();
+  expect(providerCache.getCachedDeviceProviders(c)?.providers[0].id).toBe('host-c-xd');
+  expect(providerCache.getCachedDeviceProviders('host-local')?.providers[0].id).toBe('host-local-xd');
 });
 
 it('expires only subscription share snapshots and preserves ordinary API discovery cache semantics', async () => {

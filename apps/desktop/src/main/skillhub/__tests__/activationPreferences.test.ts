@@ -22,6 +22,27 @@ beforeAll(async () => {
 afterAll(() => fs.rmSync(root, { recursive: true, force: true }));
 
 describe('Skill activation preferences', () => {
+  // Unit regression: a listing already verifies its descriptor snapshot. Reading
+  // activation intent must preserve live toggles/aliases without hashing that same
+  // bundle again for each item. Existing tests only cover standalone readers.
+  it('uses a verified listing snapshot while still reading current activation preferences', async () => {
+    const prefs = await import('../activationPreferences');
+    const descriptors = (await import('../../maker-host/built-in-skills')).builtInSkillDescriptors(root, root);
+    const learn = descriptors.find((descriptor) => descriptor.name === 'learn')!;
+    await prefs.setCindySkillEnabled(learn.absolutePath, false);
+    const read = vi.spyOn(fs, 'readFileSync');
+    try {
+      expect(prefs.readDisabledSkillPaths(descriptors)).toContain(prefs.skillActivationKey(learn.absolutePath));
+      expect(read.mock.calls.filter(([file]) => typeof file === 'string' && path.basename(file) === 'SKILL.md'))
+        .toHaveLength(0);
+      await prefs.setCindySkillEnabled(learn.absolutePath, true);
+      expect(prefs.readDisabledSkillPaths(descriptors)).not.toContain(prefs.skillActivationKey(learn.absolutePath));
+    } finally {
+      read.mockRestore();
+      await prefs.setCindySkillEnabled(learn.absolutePath, true);
+    }
+  });
+
   it('clears only captured disabled intent, preserving later toggles and unrelated paths', async () => {
     const prefs = await import('../activationPreferences');
     const source = path.join(root, 'intent-source');

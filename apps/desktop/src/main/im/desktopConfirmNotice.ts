@@ -63,27 +63,28 @@ export function buildInputHandoffNoticeText(taskTitle: string): string {
 
 /**
  * 组装 fire-and-forget 通知函数(DI 便于单测;生产接线见
- * desktopConfirmNoticeWiring.ts)。
+ * desktopConfirmNoticeWiring.ts)。返回提醒是否已接管(含免打扰),而非是否发送成功;
+ * 忽略返回值的既有调用方仍为 best-effort,不抛出。
  */
 export function createDesktopConfirmNotifier(
   deps: DesktopConfirmNoticeDeps,
   buildText: (what: string) => string = buildDesktopConfirmNoticeText,
-): (sessionId: string, what: string) => void {
-  return (sessionId, what) => {
-    if (deps.isSuppressed?.(sessionId)) return;
-    void (async () => {
-      try {
-        const openId = await deps.getFeishuOpenId(sessionId);
-        if (!openId) return;
-        // 解析 openId 要查库,期间用户可能刚开了免打扰:真正发之前再确认一次
-        // (与 notificationService 在异步富化后、发送前的那道判定同口径)。
-        if (deps.isSuppressed?.(sessionId)) return;
-        await deps.sendFeishuText(openId, buildText(what));
-      } catch (err) {
-        deps.logWarn?.(
-          `desktop-confirm IM notice failed (non-fatal): ${err instanceof Error ? err.message : String(err)}`,
-        );
-      }
-    })();
+): (sessionId: string, what: string) => Promise<boolean> {
+  return async (sessionId, what) => {
+    if (deps.isSuppressed?.(sessionId)) return true;
+    let handled = false;
+    try {
+      const openId = await deps.getFeishuOpenId(sessionId);
+      if (deps.isSuppressed?.(sessionId)) return true;
+      if (!openId) return false;
+      // Finding a target claims this notice, even when best-effort delivery fails.
+      handled = true;
+      await deps.sendFeishuText(openId, buildText(what));
+    } catch (err) {
+      deps.logWarn?.(
+        `desktop-confirm IM notice failed (non-fatal): ${err instanceof Error ? err.message : String(err)}`,
+      );
+    }
+    return handled;
   };
 }

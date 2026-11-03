@@ -51,8 +51,8 @@ export function parseTaskTeammate(value: unknown): TaskTeammate | undefined {
 }
 
 /** Cached device-specific selections keep matching when cloud/preset identity arrives later. */
-export function normalizeTaskTeammateSelection(selection: 'all' | readonly string[], cloudIds: ReadonlySet<string>, cindyIds: ReadonlySet<string> = new Set()): 'all' | string[] {
-  if (selection === 'all') return selection;
+export function normalizeTaskTeammateSelection(selection: 'all' | 'none' | readonly string[], cloudIds: ReadonlySet<string>, cindyIds: ReadonlySet<string> = new Set()): 'all' | 'none' | string[] {
+  if (selection === 'all' || selection === 'none') return selection;
   return [...new Set(selection.map(key => {
     try {
       const parts: unknown = JSON.parse(key);

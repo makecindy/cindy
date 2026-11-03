@@ -10,6 +10,8 @@ export interface BrowserBackendControllerOptions {
   initialKind: BackendKind;
   externalBackend: BrowserBackend;
   createRsbBackend: () => BrowserBackend;
+  /** 用户浏览器(经扩展)后端工厂;实例无状态可重建,桥接归插件槽所有。缺省 = 该目标不可选。 */
+  createUserBrowserBackend?: () => BrowserBackend;
   /** Save explicit selections inside the existing transition queue. */
   persistKind?: (kind: BackendKind) => void;
   logger: ControllerLogger;
@@ -84,7 +86,12 @@ export class BrowserBackendController implements BrowserBackend {
   }
 
   private createBackend(kind: BackendKind): BrowserBackend {
-    const backend = kind === 'external' ? this.opts.externalBackend : this.opts.createRsbBackend();
+    const backend =
+      kind === 'external'
+        ? this.opts.externalBackend
+        : kind === 'user-browser'
+          ? this.createUserBrowserBackend()
+          : this.opts.createRsbBackend();
     if (backend.kind !== kind) {
       throw new Error(`browser backend factory returned ${backend.kind} for ${kind}`);
     }
@@ -96,6 +103,12 @@ export class BrowserBackendController implements BrowserBackend {
    * need the profile queue acquire it inside this operation, matching reset.
    * Ordinary page calls bypass this lifecycle queue.
    */
+  private createUserBrowserBackend(): BrowserBackend {
+    if (!this.opts.createUserBrowserBackend)
+      throw new Error('user browser backend factory not configured');
+    return this.opts.createUserBrowserBackend();
+  }
+
   runLifecycle<T>(operation: () => Promise<T>): Promise<T> {
     const result = this.transition.then(operation, operation);
     const settled = result.then(
@@ -110,4 +123,23 @@ export class BrowserBackendController implements BrowserBackend {
       this.transition = this.transition.then(() => undefined);
     });
   }
+}
+
+/**
+ * Resolve the `profile` a browser request addresses for the active backend.
+ *
+ * - rsb-webview has exactly one profile.
+ * - external Chrome falls back to the managed profile when the agent names none.
+ * - The user's own browser has no managed profile: `profile` there is an
+ *   extension connection id chosen by the agent, so the managed Chrome profile
+ *   name must never be substituted (it would match no connection).
+ */
+export function resolveBackendProfile(
+  kind: BackendKind,
+  profile: string | undefined,
+  managedProfile: () => string,
+): string | undefined {
+  if (kind === 'rsb-webview') return 'rsb';
+  if (kind === 'user-browser') return profile;
+  return profile || managedProfile();
 }

@@ -8,6 +8,7 @@
  *   3. 那台的目录读不到时置灰列出;目录里已没有这个模型时不显示,收藏保留;
  *   4. 被控电脑上的任务:收藏读写被控电脑那一份(经设备互联)。
  */
+import type { ModelSelectorContentBaseProps } from '../components/new-chat/ModelSelector';
 import { act, cleanup, fireEvent, render, screen, within } from '@testing-library/react';
 import React from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -20,7 +21,7 @@ import {
 } from '@cindy/device-link';
 
 // The shared-quota rail observes auth; this component fixture has no auth host.
-vi.mock('@/contexts/AuthContext', () => ({ useOptionalAuthUser: () => null }));
+vi.mock('@/contexts/AuthContext', () => ({ useOptionalAuthUser: () => null, useOptionalAuthDeviceId: () => null }));
 
 vi.mock('react-i18next', async (importOriginal) => ({
   ...(await importOriginal<typeof import('react-i18next')>()),
@@ -216,7 +217,7 @@ const rowOf = (scope: HTMLElement, name: string) =>
 
 function renderPanel(
   remoteAgent: Partial<React.ComponentProps<typeof ModelSelectorContent>['remoteAgent']> = {},
-  props: Partial<React.ComponentProps<typeof ModelSelectorContent>> = {},
+  props: Partial<ModelSelectorContentBaseProps> = {},
 ) {
   const onUnifiedSelect = vi.fn(async () => true);
   const onRelocate = vi.fn(async () => true);
@@ -397,6 +398,7 @@ describe('被控电脑上的任务:收藏读写被控电脑那一份', () => {
     ];
     render(
       React.createElement(ModelSelectorContent, {
+        remoteAgent: undefined,
         modelId: 'b-model',
         effort: 'high',
         onModelChange: vi.fn(),
@@ -694,6 +696,7 @@ describe('Cindy AI(xd)来源行：只有本机自己的 Cindy AI 保留简介(#6
   it('直接打开分享的目录(不经远程 Agent)时，分享的 Cindy AI 同样带来源', async () => {
     render(
       React.createElement(ModelSelectorContent, {
+        remoteAgent: undefined,
         modelId: 'qwen3.8-flash',
         effort: 'high',
         onModelChange: vi.fn(),
@@ -714,6 +717,7 @@ describe('Cindy AI(xd)来源行：只有本机自己的 Cindy AI 保留简介(#6
     catalogs.byDevice['device-b'] = [xdProvider([['glm-5.3-flash', LOCAL]])];
     render(
       React.createElement(ModelSelectorContent, {
+        remoteAgent: undefined,
         modelId: 'glm-5.3-flash',
         effort: 'high',
         onModelChange: vi.fn(),

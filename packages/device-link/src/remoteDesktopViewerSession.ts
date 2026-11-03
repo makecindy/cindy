@@ -41,6 +41,7 @@ export class RemoteDesktopViewerSession {
   private controlGeneration = 0;
   private releaseUnconfirmed = false;
   private lifecycle: Promise<void> | null = null;
+  private starting: { lockScreen: boolean } | null = null;
   constructor(private readonly request: DesktopViewerRequest) {}
 
   get lease(): RemoteDesktopLease | null {
@@ -99,24 +100,35 @@ export class RemoteDesktopViewerSession {
       caps.displays.find((d) => d.id === options.displayId) ?? caps.displays[0];
     if (!display) throw new Error("DESKTOP_DISPLAY_MISSING");
     options.onStart?.();
-    const lease = await this.request<RemoteDesktopLease>(
-      {
-        op: "start",
-        displayId: display.id,
-        ...(options.takeover && caps.connectionTakeover
-          ? { takeover: true }
-          : options.resume
-            ? { resume: true }
+    const starting = { lockScreen: false };
+    this.starting = starting;
+    let lease: RemoteDesktopLease;
+    try {
+      lease = await this.request<RemoteDesktopLease>(
+        {
+          op: "start",
+          displayId: display.id,
+          ...(options.takeover && caps.connectionTakeover
+            ? { takeover: true }
+            : options.resume
+              ? { resume: true }
+              : {}),
+          ...(options.control && caps.autoControl && caps.canControl
+            ? { control: true }
             : {}),
-        ...(options.control && caps.autoControl && caps.canControl
-          ? { control: true }
-          : {}),
-        ...(options.handoff !== undefined ? { handoff: options.handoff } : {}),
-      },
-      check,
-    );
+          ...(options.handoff !== undefined ? { handoff: options.handoff } : {}),
+        },
+        check,
+      );
+    } finally {
+      if (this.starting === starting) this.starting = null;
+    }
     if (generation !== this.generation || !options.isCurrent()) {
-      await this.request({ op: "stop", lease: lease.lease }).catch(() => {});
+      await this.request({
+        op: "stop",
+        lease: lease.lease,
+        ...(starting.lockScreen && !options.handoff ? { lockScreen: true } : {}),
+      }).catch(() => {});
       throw new Error("DESKTOP_VIDEO_STOPPED");
     }
     // A window view that came back as a whole display is not what was asked for.
@@ -279,15 +291,19 @@ export class RemoteDesktopViewerSession {
     }
   }
 
-  stop(lockScreen = false): Promise<unknown> {
+  /** A protected transient retry leaves the bounded host lease running, so its
+   * idle deadline survives. The next start must resume; absent recovery, the
+   * host's heartbeat expiry locks it. Explicit exits always send stop. */
+  stop(lockScreen = false, preserveLease = false): Promise<unknown> {
     this.generation++;
+    if (this.starting && lockScreen) this.starting.lockScreen = true;
     const lease = this.active;
     this.active = null;
     this.controlPending = null;
     this.controlGeneration++;
     this.releaseUnconfirmed = false;
     return this.serialize(() =>
-      lease
+      lease && (!preserveLease || lockScreen)
         ? this.request({
             op: "stop",
             lease: lease.lease,
@@ -395,6 +411,8 @@ export function findRememberedMode(
 
 /** Only transient connection errors may restart a viewer. Explicit stop wins. */
 export function remoteDesktopFailureKey(code: string): string | null {
+  if (/DESKTOP_INPUT_UNSUPPORTED/.test(code)) return "inputUnsupported";
+  if (/DESKTOP_IDLE_TIMEOUT/.test(code)) return "idleDisconnected";
   if (/DESKTOP_CONNECTION_TIMEOUT/.test(code)) return "connectionTimeout";
   if (/ACCESS_REVOKED/.test(code)) return "accessRevoked";
   if (/REMOTE_DISABLED/.test(code)) return "remoteDisabled";

@@ -64,6 +64,8 @@ import { __testing as registry } from '../device-link/invoke-registry';
 import type { InvokeResultPayload } from '@cindy/device-link';
 
 const SRC = 'controller-device';
+const kimiRead = vi.hoisted(() => vi.fn());
+vi.mock('../maker-host/provider-account-usage.js', () => ({ readKimiCodingAccountUsage: kimiRead }));
 const TMP_DIR = os.tmpdir(); // 真实存在的目录(模拟"浏览到/新建的远程目录")
 let managedWorktreeTestRoot = '';
 let managedWorktreeDir = '';
@@ -448,4 +450,36 @@ describe('device-link host dispatch (runInvoke) — real gate + async fs guard +
     expect(res.error.code).toBe('IPC_ERROR');
     expect(res.error.message).toContain('[NOT_FOUND]');
   });
+});
+
+// Tier 2: the real remote dispatch admits the dedicated read, sanitizes inputs,
+// and retains the existing remote-control gate before accessing credentials.
+describe('Kimi same-account quota read', () => {
+  it('forwards only the validated query and preserves the read-only result', async () => {
+    kimiRead.mockResolvedValueOnce({ status: 'unavailable', error: 'auth' });
+    const result = await runInvoke(SRC, { channel: 'maker:usage:kimi-coding', args: [{ providerId: 'kimi', agent: 'pi', forceRefresh: true, endpoint: 'https://untrusted.invalid', token: 'untrusted' }] });
+    expect(result).toEqual({ ok: true, result: { status: 'unavailable', error: 'auth' } });
+    expect(kimiRead).toHaveBeenLastCalledWith({ providerId: 'kimi', agent: 'pi', forceRefresh: true });
+  });
+  it('rejects malformed queries and disabled remote access before querying', async () => {
+    kimiRead.mockClear();
+    expect(await runInvoke(SRC, { channel: 'maker:usage:kimi-coding', args: [{ providerId: 'kimi', agent: 'invalid' }] })).toMatchObject({ ok: false, error: { code: 'IPC_ERROR' } });
+    h.settings.remoteControlEnabled = false;
+    expect(await runInvoke(SRC, { channel: 'maker:usage:kimi-coding', args: [{ providerId: 'kimi' }] })).toMatchObject({ ok: false, error: { code: 'REMOTE_DISABLED' } });
+    expect(kimiRead).not.toHaveBeenCalled();
+  });
+});
+
+// Tier 2: the real tunnel must advertise quota support without releasing routes.
+it('advertises Kimi quota only from official routes in the redacted remote catalog', async () => {
+  registerHandler('maker:provider:list', async () => ({ providers: [
+    { id: 'kimi', name: 'Kimi', auth: { method: 'apiKey' }, agents: ['pi'], models: {}, routing: { pi: { upstream: 'https://api.kimi.com/coding/v1', authStrategy: 'api-key-header' } } },
+    { id: 'proxy', name: 'Proxy', auth: { method: 'apiKey' }, agents: ['pi'], models: {}, kimiCodingUsageAgents: ['pi'], routing: { pi: { upstream: 'https://proxy.example/coding/v1' } } },
+  ] }));
+  const result = await runInvoke(SRC, { channel: 'maker:provider:list', args: [] });
+  expect(result).toMatchObject({ ok: true, result: { providers: [{ id: 'kimi', kimiCodingUsageAgents: ['pi'] }, { id: 'proxy' }] } });
+  const text = JSON.stringify(result);
+  expect(text).not.toContain('api.kimi.com');
+  expect(text).not.toContain('proxy.example');
+  expect(text.match(/kimiCodingUsageAgents/g)).toHaveLength(1);
 });

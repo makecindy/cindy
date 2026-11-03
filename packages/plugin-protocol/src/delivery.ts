@@ -2,7 +2,7 @@ import { parsePluginObjectUrl, type PluginObjectUrlOptions } from './deliveryObj
 import {
   ghostManifestUsesOidcToken,
   isValidGhostId,
-  validateGhostManifest,
+  validateStoredGhostManifest,
   type GhostManifest,
 } from './manifest.js';
 import {
@@ -324,7 +324,7 @@ function parseReleaseSummary(value: unknown, path: string, options?: PluginObjec
 function parseReleaseDetail(value: unknown, ghostId: string, path: string, options?: PluginObjectUrlOptions): PluginReleaseDetail {
   const raw = object(value, path);
   const summary = parseReleaseSummary(raw, path, options);
-  const validatedManifest = validateGhostManifest(raw.manifest);
+  const validatedManifest = validateStoredGhostManifest(raw.manifest);
   if (!validatedManifest.ok) {
     throw new PluginProtocolError(`${path}.manifest 不合法: ${validatedManifest.reason}`);
   }

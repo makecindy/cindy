@@ -53,7 +53,7 @@ describe('草稿页:建到被控电脑的任务也能选第三台电脑', () => 
 
   it('选了另一台电脑时模型目录跟着那台', () => {
     expect(draftRouteSource).toContain(
-      'const catalogDeviceId = effectiveAgentDeviceId ?? effectiveDeviceLinkDeviceId;',
+      'effectiveAgentDeviceId ?? effectiveDeviceLinkDeviceId, controlledModelRoute.catalogHostDeviceId,',
     );
   });
 

@@ -1,7 +1,8 @@
 /**
  * 自建中转的本机配置与秘密(按当前账号隔离)。
  *
- * - `config.json`:当前用哪个中转(官方 / 自建)、本机中转的开启设置、部署到服务器的中转记录。不含秘密。
+ * - `config.json`:当前用哪个中转(官方 / 自建)、本机中转的开启设置、部署到服务器的中转记录(一台服务器一条)。
+ *   不含秘密。记录列表存在 `deployments`;同时把其中一条写进旧字段 `deployment`,装回旧版本时仍能看到它。
  * - `secrets/<中转ID>.enc`:本机在这个中转上的设备凭证与签名私钥,经 Electron safeStorage
  *   (钥匙串 / DPAPI)加密。Linux 只有明文后端(basic_text)时不保存,直接报不可用。
  *   主人(本机中转 / 部署的服务器中转)与成员(加入的中转)都按中转 ID 各存一份:切走再切回不用重新加入。
@@ -70,7 +71,8 @@ export interface RelayConfig {
   /** null = 使用 Cindy 官方中转。 */
   active: ActiveRelay | null;
   host: RelayHostSettings;
-  deployment: RelayDeployment | null;
+  /** 部署到服务器的中转,按部署顺序;中转 ID 与 SSH 主机都不重复。 */
+  deployments: RelayDeployment[];
 }
 
 /** 本机在某个中转上的秘密。 */
@@ -84,7 +86,7 @@ const DEFAULT_CONFIG: RelayConfig = {
   version: CONFIG_VERSION,
   active: null,
   host: { enabled: false, port: DEFAULT_RELAY_PORT, listenAll: false, externalUrl: null, relayId: null },
-  deployment: null,
+  deployments: [],
 };
 
 interface Cache {
@@ -167,6 +169,19 @@ function parseDeployment(raw: unknown): RelayDeployment | null {
   };
 }
 
+/** 新版本存 `deployments`;只有旧字段 `deployment` 时(旧版本写的)按一条读入。重复的中转或服务器只留第一条。 */
+function parseDeployments(value: Record<string, unknown>): RelayDeployment[] {
+  const raw = Array.isArray(value.deployments) ? value.deployments : [value.deployment];
+  const result: RelayDeployment[] = [];
+  for (const item of raw) {
+    const deployment = parseDeployment(item);
+    if (deployment && !result.some((d) => d.relayId === deployment.relayId || d.sshHostId === deployment.sshHostId)) {
+      result.push(deployment);
+    }
+  }
+  return result;
+}
+
 function parseConfig(raw: unknown): RelayConfig {
   if (!raw || typeof raw !== 'object') return structuredClone(DEFAULT_CONFIG);
   const value = raw as Record<string, unknown>;
@@ -183,8 +198,13 @@ function parseConfig(raw: unknown): RelayConfig {
       externalUrl: typeof host.externalUrl === 'string' && host.externalUrl ? host.externalUrl : null,
       relayId: current && isString(host.relayId) && RELAY_ID_PATTERN.test(host.relayId) ? host.relayId : null,
     },
-    deployment: current ? parseDeployment(value.deployment) : null,
+    deployments: current ? parseDeployments(value) : [],
   };
+}
+
+/** 写给旧版本看的那一条:正在用的优先,否则第一条。 */
+function legacyDeployment(config: RelayConfig): RelayDeployment | null {
+  return config.deployments.find((d) => d.relayId === config.active?.relayId) ?? config.deployments[0] ?? null;
 }
 
 function secretsFile(relayId: string): string {
@@ -296,7 +316,7 @@ function requireSignedIn(): void {
 export function writeRelayConfig(next: RelayConfig): void {
   requireSignedIn();
   const state = load();
-  writeAtomically(relayDataPath('config.json'), JSON.stringify(next, null, 2));
+  writeAtomically(relayDataPath('config.json'), JSON.stringify({ ...next, deployment: legacyDeployment(next) }, null, 2));
   state.config = structuredClone(next);
 }
 

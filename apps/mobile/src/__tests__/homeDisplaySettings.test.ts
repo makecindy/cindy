@@ -87,6 +87,11 @@ describe('home content filters (desktop 筛选 parity)', () => {
     expect(result.projects.map(row => row.key)).toEqual(['p2']);
     expect(result.pinned).toBe(fixture.pinned);
     expect(activeContentFilterCount(filters)).toBe(1);
+    const hidden = applyHomeContentFilters(fixture, { ...filters, teammates: 'none' }, NOW);
+    expect(hidden.chats.map(row => row.session.id)).toEqual(fixture.chats.filter(row => row.session.id !== 'chat-cc').map(row => row.session.id));
+    expect(hidden.projects.map(row => row.key)).toEqual(['p1']);
+    expect(hidden.pinned).toBe(fixture.pinned);
+    expect(filterSharedHomeRows([{ id: 'unknown' }, { id: 'known', item: item('chat-cc') }], { ...filters, teammates: 'none' }, NOW).map(row => row.id)).toEqual(['unknown']);
     expect(filterSharedHomeRows([{ id: 'unknown' }, { id: 'known', item: item('chat-cc') }], filters, NOW).map(row => row.id)).toEqual(['known']);
   });
 

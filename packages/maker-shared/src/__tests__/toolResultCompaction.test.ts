@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import {
+  extractToolResultDiagnostics,
   formatToolResultCompactionBytes,
   parseToolResultCompactionMarker,
 } from '../toolResultCompaction.js';
@@ -43,3 +44,69 @@ describe('tool result compaction marker', () => {
   });
 });
 
+
+// CU-008: preserve observed uncertainty without retaining private payloads or guessing from prose.
+describe('tool result diagnostics', () => {
+  it('keeps verification and observation separate from an unknown action', () => {
+    expect(extractToolResultDiagnostics(JSON.stringify({
+      tool: 'click', ok: false, outcome: { status: 'unknown' },
+      data: { outcome_unknown: true, effect: 'unverifiable', status: 'unsatisfied', delivery: { mode: 'background' } },
+      observation: { ok: true, screenshot: 'PRIVATE' },
+    }))).toEqual({ ok: false, outcome: 'unknown', outcomeUnknown: true, effect: 'unverifiable',
+      verificationStatus: 'unsatisfied', deliveryMode: 'background', observationOk: true });
+  });
+
+  // #7985 review: type_text returns explicit assertions inside postcheck, while
+  // the existing fixture only covered a standalone verify_state result (unit).
+  it.each(['satisfied', 'unsatisfied', 'unknown', 'PRIVATE_STATUS'])(
+    'retains only an explicit allowlisted postcheck status: %s', status => {
+      const diagnostics = extractToolResultDiagnostics({
+        ok: true, tool: 'type_text', data: { effect: 'unverifiable' },
+        outcome: { status: 'unknown' },
+        postcheck: { ok: true, tool: 'verify_state', data: { status, message: 'PRIVATE' } },
+      });
+      expect(diagnostics).toEqual({ ok: true, outcome: 'unknown', effect: 'unverifiable',
+        ...(status !== 'PRIVATE_STATUS' ? { verificationStatus: status } : {}) });
+    },
+  );
+
+  // #7985: ownership cancellation emits YIELDED, not BUSY. Preserve the stable
+  // reason through both extraction and the shared archive reader (unit).
+  it.each(['DESKTOP_INPUT_BUSY', 'DESKTOP_INPUT_YIELDED'])(
+    'retains the explicit input ownership reason: %s', errorCode => {
+      const diagnostics = extractToolResultDiagnostics({
+        ok: false, errorCode, data: { outcome_unknown: true, message: 'PRIVATE' },
+      });
+      expect(diagnostics).toEqual({ ok: false, errorCode, outcomeUnknown: true });
+      expect(parseToolResultCompactionMarker({ type: 'tool_result_compacted', version: 1,
+        originalBytes: 100, compactedAt: 1, diagnostics })?.diagnostics).toEqual(diagnostics);
+    },
+  );
+
+  it('drops private and unrecognized fields when reading a marker', () => {
+    const marker = { type: 'tool_result_compacted', version: 1, originalBytes: 200, compactedAt: 1 };
+    expect(parseToolResultCompactionMarker({ ...marker, diagnostics: {
+      ok: false, errorCode: 'PRIVATE_SECRET', afterSnapshotErrorCode: 'PRIVATE_TOKEN', observationErrorCode: 'PRIVATE', effect: 'PRIVATE', input: 'PRIVATE', message: 'PRIVATE',
+    } })).toEqual({ ...marker, diagnostics: { ok: false } });
+    expect(parseToolResultCompactionMarker({ ...marker, diagnostics: { errorCode: 'PRIVATE' } })).toEqual(marker);
+  });
+
+  it('unwraps one MCP text result while preserving the outer error flag', () => {
+    expect(extractToolResultDiagnostics({ isError: true, content: [{ type: 'text',
+      text: JSON.stringify({ ok: false, errorCode: 'BROWSER_RUNTIME_INVALID_REQUEST' }) }] }))
+      .toEqual({ ok: false, isError: true, errorCode: 'BROWSER_RUNTIME_INVALID_REQUEST' });
+    expect(extractToolResultDiagnostics({ content: [
+      { type: 'text', text: '{"ok":true}' }, { type: 'text', text: '{"ok":false}' },
+    ] })).toBeUndefined();
+  });
+
+  it('handles encoded errors without inventing a code from free text', () => {
+    expect(extractToolResultDiagnostics(JSON.stringify('<tool_use_error>{"ok":false,"code":"STALE_SNAPSHOT"}</tool_use_error>')))
+      .toEqual({ ok: false, isError: true, errorCode: 'STALE_SNAPSHOT' });
+    expect(extractToolResultDiagnostics('<tool_use_error>PRIVATE failure</tool_use_error>')).toEqual({ isError: true });
+    expect(extractToolResultDiagnostics('STALE_SNAPSHOT PRIVATE failure')).toBeUndefined();
+    expect(extractToolResultDiagnostics({ status: 'unknown' })).toEqual({ verificationStatus: 'unknown' });
+    expect(extractToolResultDiagnostics('{"ok":true')).toBeUndefined();
+    expect(extractToolResultDiagnostics(JSON.stringify({ ok: true, data: 'x'.repeat(1024 * 1024) }))).toBeUndefined();
+  });
+});

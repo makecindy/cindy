@@ -66,8 +66,8 @@ export class PluginTaskError extends Error {
     this.name = 'PluginTaskError';
   }
 }
-/** Bounds legacy receipts before parsing; oversized authority never becomes a missing plan. */
-export function readPluginTaskPlanReceipt(payload: string): { teamPlan?: PluginTeamPlan; settledLabels?: string[]; route?: PluginTaskRoute; [key: string]: unknown } {
+/** Bounds stored batch metadata before parsing; existing receipt fields remain intact. */
+export function readPluginTaskPlanReceipt(payload: string): { teamPlan?: PluginTeamPlan; route?: PluginTaskRoute; [key: string]: unknown } {
   if (typeof payload !== 'string' || payload.length > PLUGIN_TASK_RECEIPT_MAX_JSON_CHARS)
     throw new PluginTaskError('INVALID_REQUEST', 'Task receipt exceeds the supported size');
   const data = JSON.parse(payload);
@@ -76,38 +76,6 @@ export function readPluginTaskPlanReceipt(payload: string): { teamPlan?: PluginT
   return data;
 }
 
-/**
- * true = 给定 label 中被已登记计划的**未结算**条目引用。
- * 计划整体不可变，且 label 是 Worker 归属与委派自动授权的寻址键；
- * 活动计划引用到的 label 不允许改名，否则 releaseWorker 与自动授权都会找不到条目。
- */
-export function isTeamPlanLabelLocked(
-  plan: PluginTeamPlan | undefined,
-  settledLabels: readonly string[] | undefined,
-  labels: ReadonlyArray<string | null>,
-): boolean {
-  if (!plan) return false;
-  const settled = new Set(settledLabels ?? []);
-  const locked = new Set(
-    plan.items.filter((item) => !settled.has(item.label)).map((item) => item.label),
-  );
-  return labels.some((label) => label !== null && locked.has(label));
-}
-
-/**
- * 收据级计划锁：只有当插件仍安装（pluginInstalled，任务归属未被卸载撤销）时才锁定 label。
- * 插件卸载后，原插件任务按普通 Orca 任务继续使用，releaseWorker 已不可用，
- * 保留的收据不得继续禁止改名；停用 / 未批准可恢复，重新启用后计划仍会继续，故仍锁定。
- */
-export function isTeamPlanLabelLockedByReceipt(
-  receipt: Pick<PluginTaskReceipt, 'payload' | 'operation'> | undefined,
-  pluginInstalled: boolean,
-  labels: ReadonlyArray<string | null>,
-): boolean {
-  if (!receipt || receipt.operation !== 'create' || !pluginInstalled) return false;
-  const data = readPluginTaskPlanReceipt(receipt.payload);
-  return isTeamPlanLabelLocked(data.teamPlan, data.settledLabels, labels);
-}
 /** Service failures must reject the public task API, without exposing internal diagnostics. */
 export function assertPluginTaskResult(result: { ok: boolean; errorCode?: string }, message: string): void {
   if (!result.ok) throw new PluginTaskError(result.errorCode || 'HOST_NOT_READY', message);
@@ -173,6 +141,10 @@ export interface PluginTaskServiceDeps {
   setHidden?(taskId: string, hidden: boolean, assertAllowed: () => void): Promise<void>;
   /** Uninstall fallback: reveal this plugin's background tasks before ownership is revoked. */
   revealPluginTasks?(pluginId: string): Promise<void>;
+  /** Host archive writer (same path as the sidebar); `assertAllowed` runs right before the write. */
+  archive?(taskId: string, assertAllowed: () => void): Promise<void>;
+  /** Live execution or queued input right now; read synchronously so it can run under the write lock. */
+  isBusy?(taskId: string): boolean;
   setModel?(taskId: string, route: PluginTaskRoute, assertCurrent: () => Promise<void>): Promise<{ status: string }>;
   readSession(taskId: string): Promise<PluginTaskView | null>;
   readLiveSession(taskId: string): Pick<Session, 'instanceId' | 'stablePlanModeState'> | undefined;
@@ -454,13 +426,6 @@ export function createPluginTaskService(deps: PluginTaskServiceDeps) {
       await save(row,{...data,teamPlan:plan});
       return {ok:true};
     }),
-    settleWorkerLabel: (pluginId: string, taskId: string, label: string) => exclusive(async () => {
-      await ownTask(pluginId,taskId);
-      const row = (await deps.store.get(taskId))!;
-      const data = readPluginTaskPlanReceipt(row.payload);
-      if (!data.teamPlan?.items.some((x: {label:string})=>x.label===label)) return fail('INVALID_REQUEST','Worker is not in team plan');
-      await save(row,{...data,settledLabels:[...new Set([...(data.settledLabels||[]),label])]});
-    }),
     assertDispatch,
     setModel: (pluginId: string, request: { taskId: string; expectedRevision: number; route: PluginTaskRoute | 'plugin-default' }) => exclusive(async () => {
       const modelFields = ['agentKind', 'providerId', 'model', 'effort', 'fastMode'] as const;
@@ -505,6 +470,25 @@ export function createPluginTaskService(deps: PluginTaskServiceDeps) {
           assertHiddenTasksAllowed(pluginId);
         });
       }
+      return ownTask(pluginId, request.taskId);
+    }),
+    /**
+     * Archive this plugin's own idle local task. Reversible by the user (unarchive) and never a
+     * delete; a task with live execution or queued input stays active so nothing is cut off.
+     */
+    archive: (pluginId: string, request: { taskId: string }) => exclusive(async () => {
+      const task = await ownTask(pluginId, request.taskId);
+      if (task.status === 'archived') return task;
+      if (!deps.archive) return fail('HOST_NOT_READY', 'Task archive service is not ready');
+      const observed = await deps.inspect(request.taskId);
+      if (observed.execution || observed.pending.length) return fail('TASK_BUSY', 'The task is still working');
+      await deps.archive(request.taskId, () => {
+        deps.assertCurrent();
+        deps.assertAuthorized(pluginId);
+        // The idle check above ran before this write waited for the session lock; input sent in
+        // between must still stop the archive.
+        if (deps.isBusy?.(request.taskId)) throw new PluginTaskError('TASK_BUSY', 'The task is still working');
+      });
       return ownTask(pluginId, request.taskId);
     }),
     list: (pluginId: string, after = '', limit = 50) =>

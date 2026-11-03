@@ -10,7 +10,7 @@
 import { readFile } from 'node:fs/promises';
 import { createServer as createHttpServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
 import { createServer as createHttpsServer } from 'node:https';
-import type { AddressInfo, Socket } from 'node:net';
+import { isIP, type AddressInfo, type Socket } from 'node:net';
 import path from 'node:path';
 import { PROTOCOL_VERSION, WS_MAX_PAYLOAD_BYTES } from '@cindy/device-link-protocol';
 import { WebSocketServer } from 'ws';
@@ -40,7 +40,7 @@ export interface RelayServerOptions {
   tls?: { cert: string | Buffer; key: string | Buffer };
   /** 其他设备访问中转用的地址(如 https://1.2.3.4),用于生成媒体签名地址;不填时按请求推断。 */
   publicUrl?: string;
-  /** 中转在前置代理之后时,按 X-Forwarded-Proto / X-Forwarded-Host 推断外部地址。默认 false。 */
+  /** 前置代理模式：按转发头推断外部地址；仅对回环代理使用单个 X-Forwarded-For IP 限流。默认 false。 */
   trustProxyHeaders?: boolean;
   media?: Partial<MediaLimits>;
   hub?: Partial<HubLimits>;
@@ -145,6 +145,15 @@ export async function startRelayServer(options: RelayServerOptions): Promise<Rel
     return `${proto}://${safeHost}`;
   }
 
+  function pairingSource(req: IncomingMessage): string {
+    const remote = req.socket.remoteAddress ?? 'unknown';
+    const peer = remote.replace(/^::ffff:/i, '');
+    const loopback = peer === '::1' || (isIP(peer) === 4 && peer.startsWith('127.'));
+    const forwarded = headerValue(req.headers['x-forwarded-for']);
+    // Nginx 必须覆盖此头。拒绝客户端自带链、无效地址及非回环连接，直连仍按 socket 限流。
+    return options.trustProxyHeaders && loopback && forwarded && isIP(forwarded) ? forwarded : remote;
+  }
+
   function authenticate(req: IncomingMessage): StoredDevice {
     const credential = parseRelayAuthorization(req.headers.authorization);
     const device = credential ? store.findByCredential(credential) : undefined;
@@ -175,7 +184,7 @@ export async function startRelayServer(options: RelayServerOptions): Promise<Rel
   });
   route('POST', /^\/api\/device-link\/relay\/pair$/, async ({ req, res }) => {
     const body = await readJson(req);
-    sendJson(res, 200, pairing.submit(body, req.socket.remoteAddress ?? 'unknown'));
+    sendJson(res, 200, pairing.submit(body, pairingSource(req)));
   });
   route('GET', /^\/api\/device-link\/relay\/pair\/([0-9a-f-]{36})$/, async ({ req, res, url, params }) => {
     const wait = Math.min(Math.max(Number(url.searchParams.get('wait') ?? 0) * 1000, 0), MAX_POLL_WAIT_MS);

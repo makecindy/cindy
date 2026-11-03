@@ -403,7 +403,7 @@ export function normalizeRemoteMessages(
       const c = parseMaybeJsonObject(message.content);
       const rawText = typeof c?.message === 'string' ? c.message : contentToPreview(message.content);
       const toolLoop = parseMobileToolLoopErrorDetails(c?.toolLoop);
-      const guidance = describeAgentAuthError(rawText) ?? localizeAgentError(c?.reason, toolLoop);
+      const guidance = describeAgentAuthError(rawText) ?? localizeAgentError(c?.reason, toolLoop, rawText);
       const errText = guidance ?? localizeUnclassifiedAgentError(rawText, options.sessionSource);
       result.push({
         key: messageNormalizeKey(message),
@@ -458,6 +458,22 @@ export function normalizeRemoteMessages(
       const goalCard = normalizeGoalCard(message);
       if (goalCard) {
         result.push(goalCard);
+        continue;
+      }
+      const routeNote = readRecord(message.agentMeta?.pluginModelRoute);
+      if (routeNote) {
+        result.push({
+          key: messageNormalizeKey(message),
+          source: message,
+          kind: 'system',
+          role: message.role,
+          label: 'system:plugin-model-route',
+          body: '',
+          systemCardType: 'plugin-model-route',
+          systemCardData: routeNote,
+          align: 'agent',
+          createdAt: message.createdAt,
+        });
         continue;
       }
     }

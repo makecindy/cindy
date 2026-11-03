@@ -53,6 +53,7 @@ import { isResourceUsageWebContentsId } from './resource-usage-window/registry.j
 import { isRemoteDesktopViewer } from './remote-desktop-viewer/registry.js';
 import { isRsbWindowWebContentsId } from './right-sidebar-window/registry.js';
 import { isReviewArtifactConfirmWebContentsId } from './reviewer/reviewArtifactConfirmWindowRegistry.js';
+import { isCaptureWindowWebContents } from './remote-desktop/captureWindowRegistry.js';
 
 /**
  * 瞬时网络错误的 wire payload (main → renderer)。code 永远存在 (Node 的 ErrnoException
@@ -639,7 +640,14 @@ export function installQuitHandler(timeoutMs = 2000): void {
   // 例外 3:RSB popup 虽然是 `window` 类型,但它是局部网页 surface；崩溃时由
   // native popup manager 回收并让对应 tab 展示恢复态,不能拖垮主窗口。
   // 例外 4:资源用量窗是预热复用的辅助 renderer；Controller 会有限重建，崩溃不影响主界面。
+  // 隐藏传输窗口也有自己的失败清理；其 renderer 崩溃只撤下对应传输，不能关闭 device-link。
   app.on('render-process-gone', (_event, webContents, details) => {
+    if (isCaptureWindowWebContents(webContents)) {
+      log.warn(
+        `capture transport render-process-gone (isolated, no shutdown): reason=${details.reason} exitCode=${details.exitCode}`,
+      );
+      return;
+    }
     if (isGhostSandboxWebContentsId(webContents.id)) {
       log.warn(
         `ghost sandbox render-process-gone (isolated, no shutdown): reason=${details.reason} exitCode=${details.exitCode}`,

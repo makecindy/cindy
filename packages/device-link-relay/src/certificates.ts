@@ -10,7 +10,14 @@ import { mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises';
 import { createServer, type Server } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import path from 'node:path';
-import { AcmeClient, certificateValidity, createAccountKey, LETS_ENCRYPT_DIRECTORY, type IssuedCertificate } from './acme';
+import {
+  AcmeClient,
+  AcmeNetworkError,
+  certificateValidity,
+  createAccountKey,
+  LETS_ENCRYPT_DIRECTORY,
+  type IssuedCertificate,
+} from './acme';
 import type { CertificateIdentifier } from './csr';
 import type { RelayLogger } from './logger';
 
@@ -131,8 +138,10 @@ export class CertificateManager {
       return { cert: issued.certPem, key: issued.keyPem, notBefore: issued.notBefore, notAfter: issued.notAfter };
     } catch (error) {
       const message = error instanceof Error ? error.message : 'unknown error';
-      await this.writeStatus('failed', { error: message.slice(0, 500) });
-      this.options.logger.error('certificate request failed', { reason: message.slice(0, 500) });
+      // transient:只是暂时连不上 CA,中转稍后自己重试;部署方据此继续等待,不当作验证失败。
+      const transient = error instanceof AcmeNetworkError;
+      await this.writeStatus('failed', { error: message.slice(0, 500), ...(transient ? { transient } : {}) });
+      this.options.logger.error('certificate request failed', { reason: message.slice(0, 500), transient });
       throw error;
     }
   }
@@ -168,7 +177,7 @@ export class CertificateManager {
     }
   }
 
-  async writeStatus(state: CertificateState, extra: { notAfter?: string; error?: string } = {}): Promise<void> {
+  async writeStatus(state: CertificateState, extra: { notAfter?: string; error?: string; transient?: boolean } = {}): Promise<void> {
     const status = {
       certificate: { state, identifier: this.options.identifier.value, ...extra, updatedAt: new Date(this.now()).toISOString() },
     };

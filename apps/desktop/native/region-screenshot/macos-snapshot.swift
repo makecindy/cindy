@@ -257,6 +257,10 @@ func screenInsets() -> [[String: Any]] {
   }
 }
 
+// AppKit's window hit-testing needs an application connection even in this
+// stdin-driven helper; without it windowNumber(at:) returns 0 for real windows.
+// Stay a background-only process: no Dock entry, activation or app event loop.
+NSApplication.shared.setActivationPolicy(.prohibited)
 setvbuf(stdout, nil, _IOLBF, 0)
 while let line = readLine() {
   guard let data = line.data(using: .utf8),
