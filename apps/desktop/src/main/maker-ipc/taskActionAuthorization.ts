@@ -381,11 +381,15 @@ const REVOKED_MESSAGES: ReadonlySet<string> = new Set([
  * message stays queued for retry instead of being destroyed. Group errors are matched by
  * code (`GROUP_AUTHORIZATION_UNAVAILABLE` is the temporary one) to avoid importing the group module.
  */
-export function isTaskActionRevoked(error: unknown): boolean {
-  if (error instanceof TaskActionAuthorizationError) return true;
+export function taskActionRevocationCode(error: unknown): string | undefined {
+  if (error instanceof TaskActionAuthorizationError) return 'TASK_ACTION_AUTHORIZATION_EXPIRED';
   if (typeof error === 'object' && error !== null && (error as { code?: unknown }).code === 'GROUP_AUTHORIZATION_REQUIRED')
-    return true;
-  return error instanceof Error && REVOKED_MESSAGES.has(error.message);
+    return 'GROUP_AUTHORIZATION_REQUIRED';
+  return error instanceof Error && REVOKED_MESSAGES.has(error.message) ? error.message : undefined;
+}
+
+export function isTaskActionRevoked(error: unknown): boolean {
+  return taskActionRevocationCode(error) !== undefined;
 }
 
 /** Capture once; late callbacks must not pick up another invocation's authority. */

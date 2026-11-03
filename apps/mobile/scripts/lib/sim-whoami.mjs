@@ -155,7 +155,7 @@ export function simulatorBackendNotice({
   }
   return {
     code: "cindy-idle",
-    message: "Cindy 模拟器可用，但没有已开机设备：用 baguette-simulator 插件启动或新建一台。只有用户明确要求或插件不可用时，才传 --udid 或设 CINDY_MOBILE_SIMULATOR=system 使用系统模拟器。",
+    message: "Cindy 模拟器可用，但没有已开机设备：用 cindy-simulator 插件启动或新建一台。只有用户明确要求或插件不可用时，才传 --udid 或设 CINDY_MOBILE_SIMULATOR=system 使用系统模拟器。",
     reusable,
   };
 }

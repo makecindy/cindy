@@ -14,13 +14,14 @@
  *   7. recordRecentUsage 开启时选择成功才写 recentModels(「最近」区当场出现)。
  */
 
-import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { act, fireEvent, render, renderHook, screen, waitFor, within } from '@testing-library/react';
 import React from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { FastMode } from '@cindy/maker-shared';
 import { MemoryRouter } from 'react-router-dom';
 import { ConfirmDialogProvider } from '@/components/ui/confirm-dialog-provider';
 import { CreateWorkerPopover } from '@/features/cc-agent/CreateWorkerPopover';
+import { useTransientModelPickerPreferences } from '@/components/new-chat/modelPickerPreferences';
 import { PluginModelPickerDialog } from '@/cindy-brain/PluginModelPickerHost';
 import type { AgentCapabilities } from '@/hooks/useAgentCapabilities';
 
@@ -285,6 +286,23 @@ it('keeps plugin engine and favorite edits local after cancelling the real dialo
   unmount();
   expect(getModelEngineOverride('xd', 'gpt-5.5')).toBeUndefined();
   expect(listModelFavorites()).toEqual(baseline);
+});
+
+// Bug: browsing a share used the persistent remote-model memory. One request must isolate
+// identical model IDs by source and discard edits on unmount. Existing cancel case covers only
+// local engine/favorite edits. Minimal input: two sources, same tuple, different effort. Tier: unit.
+it('isolates request model tuning by location and discards it when the picker closes', () => {
+  const request = renderHook(() => useTransientModelPickerPreferences());
+  act(() => {
+    request.result.current.memoryForLocation!('share:fixture').setEffort('codex', 'xd', 'gpt-5.5', 'high');
+    request.result.current.memoryForLocation!(null).setEffort('codex', 'xd', 'gpt-5.5', 'low');
+  });
+  expect(request.result.current.memoryForLocation!('share:fixture').getEffort('codex', 'xd', 'gpt-5.5')).toBe('high');
+  expect(request.result.current.memory.getEffort('codex', 'xd', 'gpt-5.5')).toBe('low');
+  request.unmount();
+  const next = renderHook(() => useTransientModelPickerPreferences());
+  expect(next.result.current.memoryForLocation!('share:fixture').getEffort('codex', 'xd', 'gpt-5.5')).toBeUndefined();
+  next.unmount();
 });
 
 function renderPanel(
@@ -3597,14 +3615,15 @@ describe('统一面板 · 合并行与 wire id', () => {
     expect(getEffort.mock.calls).not.toContainEqual(['claude-code', 'openai', 'gpt-5.6']);
   });
 
-  it('全部模型优先显示来源，Cindy AI 保留单行本地简介', () => {
+  it('全部模型保留来源，Cindy AI 在原描述行显示供应商', () => {
     renderPanel();
     const row = rowFor('GPT-5.6');
     expect(row.textContent).not.toContain('A very long English');
     expect(row.querySelector('[data-model-source-details]')?.textContent).toBe('OpenAI');
     expect(within(row).queryByText('用于编写代码、排查错误与改进程序。')).toBeNull();
-    const desc = within(rowFor('GPT-5.5')).getByText('用于编写代码、排查错误与改进程序。');
-    expect(desc.getAttribute('title')).toBe('用于编写代码、排查错误与改进程序。');
+    const desc = within(rowFor('GPT-5.5')).getByText('Cindy AI');
+    expect(within(rowFor('GPT-5.5')).queryByText('用于编写代码、排查错误与改进程序。')).toBeNull();
+    expect(desc.getAttribute('title')).toBe('Cindy AI');
     expect(desc).toBeTruthy();
     expect(desc.className).toContain('truncate');
     const name = within(row).getByText('GPT-5.6');
@@ -3639,7 +3658,7 @@ describe('统一面板 · 合并行与 wire id', () => {
     }
   });
 
-  it('收藏保持来源第二行，切到单供应商分栏恢复简介', () => {
+  it('收藏保持来源第二行，单供应商分栏在原描述行显示供应商', () => {
     renderPanel();
     fireEvent.click(within(rowFor('GPT-5.6')).getByRole('button', { name: '存为收藏' }));
     fireEvent.click(document.querySelector('[data-rail-item="favorites"]')!);
@@ -3649,7 +3668,8 @@ describe('统一面板 · 合并行与 wire id', () => {
     for (const name of providerRows) {
       const row = name.closest('[data-unified-anchor]') as HTMLElement;
       expect(row.querySelector('[data-model-source-details]')).toBeNull();
-      expect(within(row).getByText('用于编写代码、排查错误与改进程序。')).toBeTruthy();
+      expect(within(row).getByText('OpenAI')).toBeTruthy();
+      expect(within(row).queryByText('用于编写代码、排查错误与改进程序。')).toBeNull();
     }
   });
 

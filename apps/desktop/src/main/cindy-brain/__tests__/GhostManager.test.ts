@@ -3446,6 +3446,23 @@ describe('GhostManager · install', () => {
   });
 
 
+  it('keeps root, enterprise and local copies separate through update and uninstall', async () => {
+    const file = await makeCindy('same-id.cindy', goodManifest());
+    for (const namespace of [null, 'acme', 'local']) await manager.install(file, { namespace });
+    const local = manager.list().find(item => item.namespace === 'local')!;
+    const result = await manager.update(await makeCindy('local-next.cindy', { ...goodManifest(), version: '2.0.0' }), {
+      namespace: 'local', expectedInstalledApproval: ghostInstallApprovalToken(local.approval),
+    });
+    expect(result).toMatchObject({ ghost: { namespace: 'local', instanceKey: local.instanceKey, manifest: { version: '2.0.0' } } });
+    manager = new GhostManager({ getRootDir: () => rootDir });
+    expect(manager.list().map(item => [item.namespace, item.manifest.version])).toEqual(expect.arrayContaining([
+      [null, '1.0.0'], ['acme', '1.0.0'], ['local', '2.0.0'],
+    ]));
+    await expect(manager.uninstall(installedGhostPhysicalRelId(local))).resolves.toEqual({ ok: true });
+    expect(manager.list().map(item => item.namespace)).toEqual(expect.arrayContaining([null, 'acme']));
+    expect(manager.list()).toHaveLength(2);
+  });
+
   it('reads namespaced receipts from storage part and install rel id', async () => {
     const organizationOrigin = forgeInstallOriginForMembership('org');
     const result = await manager.install(
@@ -4169,11 +4186,19 @@ describe('GhostManager · list', () => {
   // and retry after a Host removal. Sync list coverage cannot exercise these
   // await windows (plugin-security-and-authoring §5; unit, one installed plugin).
   it('async scan reads fresh receipts without using the synchronous receipt reader', async () => {
+    // BWG3: production source projection consumes receipt facts. Without that
+    // callback the old test missed instanceProjection's second synchronous read.
+    const sourceFacts: unknown[] = [];
+    manager = new GhostManager({ getRootDir: () => rootDir,
+      sourcesForInstance: (_record, fact) => { sourceFacts.push(fact); return {}; },
+    });
     await manager.install(await makeCindy('async.cindy', goodManifest()));
+    sourceFacts.length = 0;
     const syncRead = vi.spyOn(GhostInstallReceiptStore.prototype, 'readForRecovery');
     try {
       const first = await manager.listAsync();
       expect(first[0]).toMatchObject({ enabled: true, approval: { state: 'approved' } });
+      expect(sourceFacts).toContainEqual(expect.objectContaining({ ghostId: 'hello', revision: first[0].approval.state === 'approved' ? first[0].approval.revision : '' }));
       expect(syncRead).not.toHaveBeenCalled();
       const receiptPath = path.join(workDir, 'ghosts-install-state', '_ns', '_root', 'hello.json');
       await fs.promises.writeFile(receiptPath, '{invalid');
@@ -6863,4 +6888,20 @@ describe('registry publish after install commit', () => {
       pluginId: 'plugin-helper',
     });
   });
+});
+
+
+it('keeps an old receipt usable when its original archive already carried an unknown approval hint', async () => {
+  const file = await makeCindy('future-hint.cindy', { ...goodManifest(), tools: [{ name: 'run', description: 'Run', approval: 'auto' }] });
+  const result = await manager.install(file, { namespace: 'local' });
+  if (!('ghost' in result)) throw new Error('fixture install failed');
+  const receiptPath = path.join(manager.approvalStateRoot(), '_ns', 'local', 'hello.json');
+  const receipt = JSON.parse(fs.readFileSync(receiptPath, 'utf8'));
+  delete receipt.manifest.tools[0].approval;
+  delete receipt.approvedAutoTools;
+  fs.writeFileSync(receiptPath, JSON.stringify(receipt));
+  const [old] = new GhostManager({ getRootDir: () => rootDir }).list();
+  expect(old.approval.state).toBe('approved');
+  expect(old.approvedAutoTools).toBeUndefined();
+  expect(old.manifest.tools?.[0].approval).toBeUndefined();
 });

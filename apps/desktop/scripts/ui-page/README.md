@@ -201,6 +201,9 @@ Tailwind 配置由 Tailwind 直接从磁盘加载，两侧都用当前版本；�
 
 ## 运行方式
 
+- 构建器支持 Vite 的 `?worker` 与 `?url` 导入：前者构建真实 worker，后者把文件原样
+  输出为资源 URL（包括 PDF.js 的预构建 `.mjs` worker）。两者的源文件都参与改动扫描与
+  对照指纹；`.mjs` 在 Electron 和 Chromium 检查模式中按 JavaScript 提供，不以替身绕过加载。
 - 默认 `--engine electron`：仓库里的 Electron，与 Cindy 同一个 Chromium。每次运行使用新的
   临时 profile、拒绝权限与下载、只允许访问测试源，运行完删除临时数据；后台检查不显示窗口、
   不占 Dock。

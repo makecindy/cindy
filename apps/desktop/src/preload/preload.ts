@@ -1,6 +1,9 @@
 import type { VoiceConversationApi } from '../shared/voiceConversation';
 import { PERFORMANCE_TRACE_CHANNEL, PERFORMANCE_TRACE_EVENTS_CHANNEL, PERFORMANCE_TRACE_STATE_CHANNEL, type PerformanceTraceAPI, type PerformanceTraceState } from '../shared/performanceTrace';
 import { createAccessibilitySupportBridge } from './accessibilitySupport';
+import { createMicrophonePermissionSnapshot } from './microphonePermissionSnapshot';
+import { createVoiceInputDataSnapshot } from './voiceInputDataSnapshot';
+import type { VoiceInputDataSnapshot } from '../shared/voiceInputData';
 import { createWallpaperAssetsBridge } from './wallpaperAssets';
 import type { CompanionImportApi, CompanionImportSelection } from '@cindy/maker-shared/companion-import';
 import { TASK_MIGRATION_LOCAL_CHANNEL } from '@cindy/device-link';
@@ -1107,6 +1110,9 @@ ipcRenderer.on('appearance-settings:changed', (_event, settings: AppearanceSetti
   appearanceSettingsInfo = settings;
 });
 
+const readMicrophonePermissionSnapshot = createMicrophonePermissionSnapshot();
+const voiceInputDataSnapshot = createVoiceInputDataSnapshot();
+
 contextBridge.exposeInMainWorld('electronAPI', {
   localAgent: {
     onConfirmation: (listener: (request: import('../shared/localAgent').LocalAgentConfirmation) => void): (() => void) => {
@@ -1354,6 +1360,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   // 意识仓库 (shared/ghost.ts)。listSync 走 sendSync:意识面板要与内置
   // 面板同帧注册进布局引擎(规则 7 无跳变);目录扫描极小,同步读不卡启动。
   ghosts: {
+    activateBrowser: (id: string): Promise<{ ok: boolean }> => ipcRenderer.invoke('ghosts:activate-browser', id),
     mailPreview: (sessionId: string, url: string, read: boolean, opened = false, providerId?: string) => ipcRenderer.invoke('ghosts:mail-preview', sessionId, url, read, opened, providerId),
     openRemoteSettings: (target: import('../shared/remotePluginSettings').RemotePluginSettingsTarget): Promise<import('../shared/remotePluginSettings').RemotePluginSettingsView> =>
       ipcRenderer.invoke('device-link:plugin-settings:open', target),
@@ -1490,6 +1497,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
     /** 目录级禁用清单(插件页项目范围视图;sendSync 保证切换同帧渲染)。 */
     workdirPrefsSync: (workdir: string): { disabled: string[] } =>
       ipcRenderer.sendSync('ghosts:workdir-prefs', workdir),
+    workdirPrefs: (workdir: string): Promise<{ disabled: string[] }> =>
+      ipcRenderer.invoke('ghosts:workdir-prefs', workdir),
     setWorkdirDisabled: (
       workdir: string,
       id: string,
@@ -1795,9 +1804,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
     getBenchmarkFixtureAudio: (): Promise<
       { ok: true; path: string; wav: ArrayBuffer } | { ok: false }
     > => ipcRenderer.invoke('voice-input:benchmark-fixture-audio'),
-    getMicrophonePermissionCached: ():
-      { ok: true; status: string } | { ok: false; status: string; error: string } =>
-      ipcRenderer.sendSync('voice-input:get-microphone-permission-cached'),
+    getMicrophonePermissionCached: readMicrophonePermissionSnapshot,
     getSystemPermissionsCached: (): {
       microphone: { ok: true; status: string } | { ok: false; status: string; error: string };
       inputMonitoring: { ok: true; status: string } | { ok: false; status: string; error: string };
@@ -1868,13 +1875,14 @@ contextBridge.exposeInMainWorld('electronAPI', {
     cancel: (params?: { runId?: string }): Promise<{ ok: true }> =>
       ipcRenderer.invoke('voice-input:cancel', params),
     onEvent: fanOutVoiceInputEvent,
-    getDataSnapshot: (): unknown => ipcRenderer.sendSync('voice-input:data:get'),
+    getDataSnapshot: voiceInputDataSnapshot.read,
     migrateLegacyRendererData: (payload: {
       settingsRaw?: string | null;
       historyRaw?: string | null;
     }): unknown => {
       const result = ipcRenderer.sendSync('voice-input:data:migrate-legacy', payload);
       throwVoiceInputSyncError(result);
+      voiceInputDataSnapshot.replace(result as VoiceInputDataSnapshot);
       return result;
     },
     updateSettings: (patch: unknown): Promise<unknown> =>
@@ -3964,6 +3972,12 @@ contextBridge.exposeInMainWorld('electronAPI', {
       success: boolean;
       path: string | null;
     }> => ipcRenderer.invoke('dialog:show-open-directory', params ?? {}),
+    /** 把最近项目列表里的目录授权为当前任务的可写目录（只认列表里原样保存的路径）。 */
+    authorizeRecentWritableDirectory: (params: {
+      directory: string;
+      writableGrantScope: string;
+    }): Promise<{ success: true }> =>
+      ipcRenderer.invoke('dialog:authorize-recent-writable-directory', params),
     /** 打开系统文件选择对话框，返回用户选中的文件路径（取消时 path=null）。 */
     showOpenFile: (params?: {
       defaultPath?: string;
@@ -6491,6 +6505,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
         ipcRenderer.invoke('maker:chat-server:shareToMain', input),
       react: (input: Parameters<import('../shared/botGroupChat').ChatServerApi['react']>[0]): ReturnType<import('../shared/botGroupChat').ChatServerApi['react']> =>
         ipcRenderer.invoke('maker:chat-server:react', input),
+      readers: (input: Parameters<import('../shared/botGroupChat').ChatServerApi['readers']>[0]): ReturnType<import('../shared/botGroupChat').ChatServerApi['readers']> =>
+        ipcRenderer.invoke('maker:chat-server:readers', input),
       reactors: (input: Parameters<import('../shared/botGroupChat').ChatServerApi['reactors']>[0]): ReturnType<import('../shared/botGroupChat').ChatServerApi['reactors']> =>
         ipcRenderer.invoke('maker:chat-server:reactors', input),
       createInvite: (input: Parameters<import('../shared/botGroupChat').ChatServerApi['createInvite']>[0]): ReturnType<import('../shared/botGroupChat').ChatServerApi['createInvite']> =>
