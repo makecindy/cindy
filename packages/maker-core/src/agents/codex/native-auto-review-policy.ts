@@ -3,7 +3,9 @@ import currentPolicy from "./native-auto-review-policy-0.153.4.md?raw";
 import { AUTO_REVIEW_CONTINUATION_POLICY } from "../shared/continuation-policy.js";
 
 /** Complete default policies captured from stock Codex 0.145.0 and 0.153.4
- * reviewer requests. Only those exact stable runtimes are covered: a new native
+ * reviewer requests. 0.156.0, 0.159.2 and 0.166.0 retain the exact 0.153.4
+ * tenant policy; 0.159.2 and 0.166.0 were captured and compared on 2026-11-03.
+ * Only those exact stable runtimes are covered: a new native
  * version must be checked against its own full policy before adding support.
  * Native built-in evidence/risk/output instructions remain owned by Codex.
  * auto_review.policy is inline Markdown, NOT a filename. Managed requirements
@@ -13,9 +15,9 @@ export function nativeAutoReviewContinuationConfig(
   userAgent: string | undefined,
   effectiveConfig: Record<string, unknown>,
 ): Record<string, unknown> {
-  const version = /\/(0\.145\.0|0\.153\.4)(?:[ )]|$)/.exec(userAgent ?? "")?.[1];
+  const version = /\/(0\.145\.0|0\.153\.4|0\.156\.0|0\.159\.2|0\.166\.0)(?:[ )]|$)/.exec(userAgent ?? "")?.[1];
   if (!version) return {};
-  const policy = version === "0.153.4" ? currentPolicy : defaultPolicy;
+  const policy = version === "0.145.0" ? defaultPolicy : currentPolicy;
   const autoReview = effectiveConfig.auto_review;
   if (
     autoReview !== undefined &&

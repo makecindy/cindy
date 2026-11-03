@@ -41,6 +41,7 @@
     "./message-window": "./src/messageWindow.ts",
     "./mobile-home": "./src/mobileHome.ts",
     "./payload-summary": "./src/payloadSummary.ts",
+    "./project-alias-sync": "./src/projectAliasSync.ts",
     "./project-order-sync": "./src/projectOrderSync.ts",
     "./path-text": "./src/pathText.ts",
     "./permission-mode": "./src/permissionMode.ts",

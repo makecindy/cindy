@@ -17,12 +17,13 @@ describe('Ghost account-boundary teardown ordering', () => {
     const start = bootstrap.indexOf(
       'async function teardownGhostProjectionBoundary(reason: string): Promise<void> {',
     );
+    expect(start).toBeGreaterThanOrEqual(0);
     const end = bootstrap.indexOf('\n}\n', start);
     const body = bootstrap.slice(start, end);
 
-    const interrupt = body.indexOf('interruptGhostCallsForAccountBoundary));');
-    const wait = body.indexOf('waitForGhostMutations));');
-    const suspend = body.indexOf('suspendAllGhosts);');
+    const interrupt = body.search(/interruptGhostCallsForAccountBoundary\s*,?\s*\)\s*,?\s*\)/);
+    const wait = body.search(/waitForGhostMutations\s*,?\s*\)\s*,?\s*\)/);
+    const suspend = body.search(/suspendAllGhosts\s*,?\s*\)/);
 
     expect(interrupt).toBeGreaterThan(-1);
     expect(interrupt).toBeLessThan(wait);

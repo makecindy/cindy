@@ -43,7 +43,9 @@ it.skipIf(!binaryPath)(
       for await (const chunk of request) text += chunk;
       const body = JSON.parse(text);
       let output: unknown[];
-      if (body.model === "codex-auto-review") {
+      // Native review may use the configured provider's model instead of the
+      // dedicated codex-auto-review model. Identify its verdict schema as well.
+      if (body.model === "codex-auto-review" || body.text?.format?.schema?.properties?.outcome) {
         policies.push(body.instructions ?? body.input
           .filter((item: { role?: string }) => item.role === "developer")
           .flatMap((item: { content?: Array<{ text?: string }> }) => item.content ?? [])
@@ -174,7 +176,7 @@ for await (const line of createInterface({input:process.stdin})) {
           }),
       });
       const init = await host.ensureStarted();
-      const expectedPolicy = init.userAgent?.includes('/0.153.4 ') ? currentPolicy : defaultPolicy;
+      const expectedPolicy = init.userAgent?.includes('/0.145.0 ') ? defaultPolicy : currentPolicy;
       const config = nativeAutoReviewContinuationConfig(init.userAgent, {});
       expect(config["auto_review.policy"]).toBeTruthy();
       for (const overrides of [{}, config]) {
