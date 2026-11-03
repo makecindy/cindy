@@ -722,6 +722,7 @@ import {
   prepareOptionalPiRuntime,
 } from './agent-binaries/pi-runtime-recovery.js';
 import { createDynamicMaker } from './maker-host/dynamic-maker.js';
+import { makerStartupGate } from './maker-host/startup-gate.js';
 import { ensureBundledRipgrepReady } from './maker-host/runtime-configs.js';
 import {
   ensureActiveCatalogLoaded,
@@ -6466,6 +6467,9 @@ const registerIpcHandlers = () => {
     // (见 anthropic-compat-proxy-host / anthropic-responses-bridge-host),纯内存懒装配,
     // 无独立 server、无启动 / 关停生命周期。
     await ensureAnthropicCompatProxyReady();
+    // Pi has settled before this function is called. Keep early plugin callers
+    // behind the catalog/proxy prerequisites as well as binary preparation.
+    makerStartupGate.complete();
     // codex proxy 两种 spawn 形态(oauth-bearer / env-key)都经它出口,首个 codex session spawn 时
     // 由 prepareCodexExtraSpawnConfig 懒启动(幂等);此处不再按全局开关 eager-start。
     try {
@@ -6811,7 +6815,7 @@ const registerIpcHandlers = () => {
       );
     }
 
-    // 必装 binary 都 ready,现在才能安全构造 Maker 单例并挂 maker:* / 相关 IPC。
+    // Required binaries are ready and the first optional Pi attempt has settled.
     await registerMakerIpcsAfterSplash();
     startBinaryBackgroundUpdates();
 

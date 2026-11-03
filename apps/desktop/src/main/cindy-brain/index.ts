@@ -83,6 +83,7 @@ async function resolveMobilePluginMedia(instanceId: string, url: string, current
   return file && /^[a-f0-9]{64}\.[a-z0-9]+$/.test(file) ? { path: `/media/${file}`, mediaKind: result.kind } : null;
 }
 import { getModelVisibilityOverride, waitForModelVisibilityMirror } from '../maker-host/model-visibility-mirror.js';
+import { makerStartupGate } from '../maker-host/startup-gate.js';
 import {
   createGhostAgentModelsCache,
   projectGhostAgentModels,
@@ -5732,13 +5733,23 @@ export function getGhostCindySlot(): GhostCindySlot {
       // 模块的单测(hook-script-generator 同款做法)。失败面折叠成 slot 层
       // 的三档 reason;attempts 细节只进日志,不给沙箱探测面。
       oneshotText: async ({ prompt, maxTokens, timeoutMs, route }) => {
+        const ownerScope = activeOwnerScopeKey();
+        const deadline = performance.now() + timeoutMs;
+        if (!await makerStartupGate.wait(timeoutMs)) {
+          return { ok: false, reason: 'timeout', message: '快问快答超时,请稍后再试' };
+        }
         const [{ requestUtilityText }, { getMaker }] = await Promise.all([
           import('../utility-model/oneShotCandidates.js'),
           import('../maker-host/index.js'),
         ]);
+        const remainingMs = Math.floor(deadline - performance.now());
+        if (remainingMs <= 0) return { ok: false, reason: 'timeout', message: '快问快答超时,请稍后再试' };
+        if (isAppSessionBoundaryPending() || ownerScope !== activeOwnerScopeKey()) {
+          return { ok: false, reason: 'failed', message: 'ACCOUNT_CHANGED' };
+        }
         const r = await requestUtilityText(getMaker(), prompt, {
           maxTokens,
-          timeoutMs,
+          timeoutMs: remainingMs,
           // 用户选的模型 / 身份卡声明走显式供应商路径(钉死,不回落);
           // 缺省 route = 系统辅助模型链。
           ...(route
