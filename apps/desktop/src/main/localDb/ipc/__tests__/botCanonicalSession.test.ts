@@ -10769,6 +10769,24 @@ afterAll(() => {
 
 
 describe('Bot self control uses the same profile authority as settings', () => {
+  // #8511, DB tier: the Agent-facing profile patch must persist visible avatar
+  // and user-context fields through the same owner-scoped transaction as Settings.
+  it('saves an explicit emoji avatar, color, gender and user context for its own Bot', async () => {
+    const canonical = await invoke('local-db:bots:create-canonical-session', { botId: 'bot-1', expectedCanonicalSessionId: null, expectedProfileVersion: 1 });
+    const sessionId = canonical.session.id;
+    const service = createBotCapabilityService(capabilityDeps);
+    const before = await service.inspect({ callerSessionId: sessionId });
+    if (!before.ok) throw new Error('Expected current Bot');
+    expect(await service.updateProfile({ callerSessionId: sessionId, expectedVersion: before.state.profile.version,
+      avatar: '🧑‍💻', avatarColor: 'teal', gender: 'female', userContextSource: '用户喜欢简洁回答。' }))
+      .toMatchObject({ ok: true });
+    expect(await invoke('local-db:bots:get', 'bot-1')).toMatchObject({ avatar: '🧑‍💻', avatarColor: 'teal',
+      gender: 'female', userContextSource: '用户喜欢简洁回答。' });
+    expect(await service.inspect({ callerSessionId: sessionId })).toMatchObject({ ok: true,
+      state: { profile: { avatar: '🧑‍💻', avatarColor: 'teal', gender: 'female', userContextSource: '用户喜欢简洁回答。' } } });
+    expect(await service.updateProfile({ callerSessionId: sessionId, expectedVersion: before.state.profile.version,
+      avatar: '/another/bot/avatar.png' })).toMatchObject({ ok: false });
+  });
   it('reads only its own state and patches requested fields without replacing independent configuration', async () => {
     const canonical = await invoke('local-db:bots:create-canonical-session', { botId: 'bot-1', expectedCanonicalSessionId: null, expectedProfileVersion: 1 });
     const sessionId = canonical.session.id;

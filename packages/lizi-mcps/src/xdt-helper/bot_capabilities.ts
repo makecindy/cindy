@@ -19,6 +19,10 @@ export interface BotCapabilityCallbacks {
     name?: string;
     description?: string;
     identitySource?: string;
+    avatar?: string;
+    avatarColor?: string;
+    gender?: 'female' | 'male';
+    userContextSource?: string;
     modelChain?: { id: string; effort?: string; fastMode?: boolean | 'ultrafast' }[] | null;
   }): Promise<ControlResult<{ effective: "next-turn" }, string>>;
   list(params: {
@@ -68,7 +72,8 @@ export interface BotControlState {
     connectionsAvailable: boolean;
     guidance: string;
   };
-  profile: { id: string; name: string; description: string; identitySource: string; version: number };
+  profile: { id: string; name: string; description: string; identitySource: string; version: number;
+    avatar: string; avatarColor: string; gender?: 'female' | 'male'; userContextSource: string };
   session: { id: string; workingDir: string | null; remoteHostId: string | null };
   model: { source: "override" | "default"; candidates: { harness: string; providerId?: string | null; model: string }[] };
   memory: { enabled: boolean; scope: "self" };
@@ -80,7 +85,7 @@ export interface BotControlState {
 /** Shared by the core prompt's self-knowledge and the profile tools' descriptions; details live in read_teammate_skill. */
 export const TEAMMATE_CONTROL_GUIDANCE = [
   'Use `get_teammate_state` to inspect your profile, stable chat, configured model candidates, memory switch, turned-off system Skills and capability references. Candidates and references are not proof of the model or tools running this turn; the live runtime and registered tools are authoritative. Empty references do not mean you have no Skills: the shared core and your personal shelf are separate.',
-  'Use `update_teammate_profile` when the user asks to change your name, introduction, identity or your own model selection. Read the current version first and patch only the requested fields; for modelChain read `get_app_default_model` first and supply the complete ordered chain (1–5 routes), or null to follow the application default. Saves apply next turn and never change the application default, other teammates, Skills, memory or chat history. Details: `read_teammate_skill` name=models.',
+  'Use `update_teammate_profile` when the user asks to change your name, introduction, identity, avatar color, gender, user context or your own model selection. For an image avatar use `set_teammate_avatar`; a single emoji or built-in avatar can be saved with either tool. Read the current version first and patch only the requested fields; for modelChain read `get_app_default_model` first and supply the complete ordered chain (1–5 routes), or null to follow the application default. Saves apply next turn and never change the application default, other teammates, Skills, memory or chat history. Details: `read_teammate_skill` name=models.',
 ].join('\n');
 
 /** @deprecated Internal compatibility export; new teammate guidance uses the product name. */
@@ -145,6 +150,10 @@ export function registerBotCapabilityTools(
       name: z.string().trim().min(1).max(200).optional(),
       description: z.string().max(12000).optional(),
       identitySource: z.string().max(12000).optional(),
+      avatar: z.string().min(1).max(200).optional().describe('Single emoji or built-in cindy://avatar/ preset. Use set_teammate_avatar for an image path or URL.'),
+      avatarColor: z.enum(['red', 'orange', 'amber', 'green', 'teal', 'blue', 'violet', 'pink', 'graphite']).optional(),
+      gender: z.enum(['female', 'male']).optional(),
+      userContextSource: z.string().max(12000).optional(),
       modelChain: z.array(z.strictObject({
         id: z.string().min(1).max(2048).describe('Enabled route id from get_app_default_model.'),
         effort: z.string().max(64).optional(),
@@ -154,7 +163,7 @@ export function registerBotCapabilityTools(
     handler: async (input) => {
       const callerSessionId = deps.getSessionContext().sessionId;
       if (!callerSessionId) return errorPayload("NOT_A_BOT_SESSION", "当前调用未绑定伙伴任务");
-      if (input.name === undefined && input.description === undefined && input.identitySource === undefined && input.modelChain === undefined)
+      if (input.name === undefined && input.description === undefined && input.identitySource === undefined && input.modelChain === undefined && input.avatar === undefined && input.avatarColor === undefined && input.gender === undefined && input.userContextSource === undefined)
         return errorPayload("INVALID_PARAMS", "请选择要修改的资料");
       const result = await deps.callbacks.updateProfile!({ ...input, callerSessionId });
       return result.ok ? okPayload({ effective: result.effective }) : errorPayload(result.errorCode, result.message);

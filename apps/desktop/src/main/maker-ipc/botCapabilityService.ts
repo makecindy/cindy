@@ -5,6 +5,7 @@ import { and, eq } from 'drizzle-orm';
 import { botProfiles, botProfileVersions, botSessionLinks, sessions } from '../localDb/schema.js';
 import { getDbClient } from '../localDb/client/current.js';
 import { updateBotProfile } from '../localDb/ipc/bots.js';
+import { isCindyBotAvatarValue, isSingleBotAvatarGrapheme } from '../../shared/botAvatarValue.js';
 import { activeOwnerScopeKey, isAppSessionBoundaryPending } from '../appSessionState.js';
 import { listCustomMcpServers } from '../maker-host/custom-mcp-store.js';
 import { normalizeBotToolCapabilities } from '../../shared/botCapabilitySelection.js';
@@ -74,6 +75,8 @@ async function context(callerSessionId: string, opts?: { allowPaused?: boolean; 
       botId: botProfiles.id,
       displayName: botProfiles.displayName,
       description: botProfiles.description,
+      avatar: botProfiles.avatar,
+      avatarColor: botProfiles.avatarColor,
       identitySource: botProfileVersions.identitySource,
       version: botProfiles.currentVersion,
       profileStatus: botProfiles.status,
@@ -334,7 +337,10 @@ export function createBotCapabilityService(deps: BotCapabilityServiceDeps) {
         const state: BotControlState = {
           ...(conversations ? { conversations } : {}),
           profile: { id: ctx.botId, name: ctx.displayName, description: ctx.description,
-            identitySource: ctx.identitySource, version: ctx.version },
+            identitySource: ctx.identitySource, version: ctx.version,
+            avatar: ctx.avatar, avatarColor: ctx.avatarColor,
+            ...(ctx.config.gender === 'female' || ctx.config.gender === 'male' ? { gender: ctx.config.gender } : {}),
+            userContextSource: typeof ctx.config.userContextSource === 'string' ? ctx.config.userContextSource : '' },
           session: { id: input.callerSessionId, workingDir: ctx.workingDir, remoteHostId: ctx.remoteHostId },
           model: { source: explicit === null ? 'default' : 'override', candidates },
           memory: { enabled: ctx.config.memory !== false, scope: 'self' },
@@ -352,6 +358,8 @@ export function createBotCapabilityService(deps: BotCapabilityServiceDeps) {
       try {
         const ctx = await context(input.callerSessionId);
         if (ctx.version !== input.expectedVersion) throw new Error('Profile changed');
+        if (input.avatar !== undefined && !isSingleBotAvatarGrapheme(input.avatar) && !isCindyBotAvatarValue(input.avatar))
+          throw new Error('Invalid avatar');
         let modelChain: BotModelRoute[] | null | undefined;
         if (input.modelChain === null) modelChain = null;
         else if (input.modelChain !== undefined) {
@@ -381,6 +389,10 @@ export function createBotCapabilityService(deps: BotCapabilityServiceDeps) {
           ...(input.name !== undefined ? { name: input.name } : {}),
           ...(input.description !== undefined ? { description: input.description } : {}),
           ...(input.identitySource !== undefined ? { identitySource: input.identitySource } : {}),
+          ...(input.avatar !== undefined ? { avatar: input.avatar } : {}),
+          ...(input.avatarColor !== undefined ? { avatarColor: input.avatarColor } : {}),
+          ...(input.gender !== undefined ? { gender: input.gender } : {}),
+          ...(input.userContextSource !== undefined ? { userContextSource: input.userContextSource } : {}),
           ...(modelChain !== undefined ? { capabilities: {
             modelChainOverride: modelChain, modelOverride: null,
           } } : {}),
