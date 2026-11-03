@@ -70,6 +70,9 @@ monorepo 组织。
 | 远程托管 | Cindy 云端账号 | 使用 Cindy 的完整托管服务；[中国大陆定价](https://cindy.cn/#pricing) · [国际版定价](https://cindy.app/#pricing)。 |
 | 跳过登录 | 无需登录 Cindy 账号 | 在登录页选择「跳过登录」即可使用本机 agent 功能，应用内显示为「未登录」。依赖服务端的能力在该状态下不可用。 |
 
+本地模型、现有 Profile 中的记忆、技能和插件说明见
+[本机运行指南（葡萄牙语）](docs/local-only-setup.md)。
+
 ## 前置要求
 
 - **Node.js** 22.x
