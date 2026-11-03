@@ -10734,6 +10734,7 @@ describe('Teammate model selection shares profile persistence and route reconcil
     const waiting = new Promise<void>((resolve) => { savingReachedLock = resolve; });
     configureBotModelSelectionCoordinator(createBotModelSelectionCoordinator({
       acquireSessionLock: (id) => { savingReachedLock(); return acquireSendToSessionLock(id); },
+      cancelRecovery: () => {}, // This fixture has no input coordinator or pending continuation.
       invalidate: reconcile.invalidate,
     }));
     const deps = { read, apply, isBusy: () => false, createId: () => 'race-scope',
