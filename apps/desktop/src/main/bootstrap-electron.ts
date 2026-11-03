@@ -607,6 +607,7 @@ import {
   writeLinuxClipboard,
 } from './remote-desktop/linuxClipboardNative';
 import { initHeartbeatService } from './heartbeatService';
+import { markStartupMilestone } from './startupTimeline';
 import { registerRemoteDesktopIpc } from './remote-desktop';
 import { initAnalyticsSettingsService, noteAuthColdStartState } from './analyticsSettingsService';
 import { initLogUploadService, scheduleStartupBackfill } from './log-upload';
@@ -6184,6 +6185,14 @@ const registerIpcHandlers = () => {
           },
         })
         .finally(() => authCredentialRecovery.request());
+      // 启动里程碑记在这里而不是 authManager.initialize() 体内:那个函数会被
+      // authColdStartRecovery 测试按源码抽出单独执行。冷启动门超时先返回时,
+      // 以后台完成的那次登录为准。
+      const markAuthMilestone = (s: authManager.AuthState) => {
+        if (s.isAuthenticated) markStartupMilestone('auth-initialized');
+      };
+      markAuthMilestone(state);
+      void (pendingCompletion as Promise<authManager.AuthState> | null)?.then(markAuthMilestone, () => undefined);
       // Plugin downloads/reconciliation retain their owner-scoped retries, but
       // must not delay AuthContext starting the owner DB or showing the app.
       authManager.requestStableOwnerPostCommit('auth-initialize');
@@ -9329,6 +9338,7 @@ app.on('ready', async () => {
   if (!(await initClientEndpoints())) {
     return; // 用户在错误框选择退出,app.exit 已调用
   }
+  markStartupMilestone('client-endpoints-ready');
   registerClientEndpointsIpc();
 
   // 网关凭据自动下发:订阅登录态(登录后向 model-access-server 拉 endpoint +
@@ -10060,6 +10070,7 @@ app.on('ready', async () => {
   }
   startupWindowCreationAllowed = true;
   createWindow();
+  markStartupMilestone('main-window-created');
   // The macOS release watcher stays disarmed until a task drag begins. Start
   // its tiny helper after the first window exists so drag latency never pays
   // a dev swiftc compile or process-spawn cost.
