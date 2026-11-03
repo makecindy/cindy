@@ -95,7 +95,7 @@
     - 不改变用户眼前的东西:不切换用户窗口里的标签页(`focus` 对用户窗口会被拒绝),也不把任何窗口带到前台。需要用户亲手操作(登录、验证码)时对 Cindy 窗口里的那一页 `focus`:它在 Cindy 窗口内切到这一页并让浏览器图标闪动提醒,然后告诉用户切到 Chrome 的 Cindy 窗口去完成。截图(只限可视区域)、`evaluate`、`requests` / `responseBody`、上传、原生弹窗、`focus` / `close`、坐标点击、拖拽、`resize` 可用,但有这些差别:
     - 这些动作要 Chrome 的调试接口,而 Chrome 不允许扩展按需申请,所以这里做不了:`pdf`、读 Cookie 或抓网络请求的配方;整页 / 元素截图退回可视区域并在 `note` 里说明,用户窗口里的后台标签页不能截图。不要让用户去找开启入口;需要时告诉用户可以改用 Cindy 专用浏览器,由用户决定。大文件上传不受影响,最大 1 GB。`resize` 只作用于 Cindy 自己的窗口。
     - 快照已包含所有 iframe 和开放 Shadow DOM 里的内容,主内容区与对话框排在最前,ref 可直接操作,不需要 `frame` 参数(`evaluate`、`extract` 与 selector 定位的动作仍只作用于顶层页面)。`truncated:true` 表示后面还有内容:加大 `limit` / `maxChars` 或用 `selector` 限定(如 `[role=main]`),不要据此判断页面上没有或工具做不到。
-    - 点击、坐标与拖拽是合成事件(非可信输入),个别要求可信输入的站点会忽略。扩展 0.4.63 起点击发出完整的指针与鼠标事件序列,收起的菜单仍未展开时会补按一次回车;旧版只发 `click`,靠「按下」打开的菜单可能打不开,改用第 4 步的按键办法;页面 CSP 禁止脚本时 `evaluate` 报 `EVAL_BLOCKED_BY_PAGE`,改用 snapshot / extract。
+    - 点击、坐标与拖拽是合成事件(非可信输入),个别要求可信输入的站点会忽略。扩展 0.4.63 起点击发出完整的指针与鼠标事件序列,不会自行按键;旧版只发 `click`,靠「按下」打开的菜单可能打不开,改用第 4 步的按键办法;页面 CSP 禁止脚本时 `evaluate` 报 `EVAL_BLOCKED_BY_PAGE`,改用 snapshot / extract。
     - 控制台从第一次 `console` 调用开始捕获;`requests` 来自页面资源计时(无方法与请求头);`responseBody` 以页面身份重新请求该地址;`dialog` 预先应答页面下一个 alert / confirm / prompt,已经弹出的原生弹窗需要用户自己处理。
     - 不支持:`saveResource` 与语义 `query`。`status.data.updateNote` 出现时说明扩展是旧版,只有基础读取与交互,请用户更新 Cindy 扩展。遇到不支持的操作先告诉用户,由用户决定是否改用专用浏览器,**不要自行 setBackend 切换**。
   - `profile` 是浏览器连接 id(一个浏览器用户配置一条),多条连接时必须指定,不要猜账号。
