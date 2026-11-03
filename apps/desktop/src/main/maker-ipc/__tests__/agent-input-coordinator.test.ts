@@ -116,6 +116,13 @@ describe('task action dispatch authorization', () => {
     expect(h.sendToAgent.mock.calls[0]![3].persistUserMessage?.clientId).toBe('owner');
     expect(h.onDiscardedQueuedMessage).toHaveBeenCalledWith(sid, expect.objectContaining({ clientId: 'automatic' }));
     expect(h.onUndispatchedUserTurn).not.toHaveBeenCalled();
+    expect(mocks.logger.info).toHaveBeenCalledWith(
+      'discarding revoked task action input before dispatch',
+      expect.objectContaining({
+        sessionId: sid, clientId: 'automatic', stage: 'pre-check',
+        errorCode: mode === 'restored' ? 'TASK_ACTION_AUTHORIZATION_REQUIRED' : 'TASK_ACTION_AUTHORIZATION_EXPIRED',
+      }),
+    );
     expect(h.coordinator.getProjection(sid)).toMatchObject({ error: null, pendingQueue: [] });
   });
 
@@ -129,6 +136,7 @@ describe('task action dispatch authorization', () => {
     { name: 'a failed pre-check', call: 1, error: 'failed', outcome: 'retained' },
     { name: 'a failed re-check before persistence', call: 2, error: 'failed', outcome: 'retained' },
     { name: 'a revocation before persistence', call: 2, error: 'revoked', outcome: 'discarded' },
+    { name: 'a group revocation before persistence', call: 2, error: 'group-revoked', outcome: 'discarded' },
     { name: 'a revocation after persistence', call: 3, error: 'revoked', outcome: 'delivered' },
   ] as const)('$name is $outcome', async ({ call, error, outcome }) => {
     const h = createHarness(), sid = `task-action-judged-${call}-${error}`;
@@ -146,6 +154,8 @@ describe('task action dispatch authorization', () => {
     const queued = makeItem('automatic', 'Continue');
     bindTaskActionInput(sid, queued, async () => {
       if (++calls !== call) return;
+      if (error === 'group-revoked')
+        throw Object.assign(new Error('private message body must not reach logs'), { code: 'GROUP_AUTHORIZATION_REQUIRED' });
       throw error === 'revoked'
         ? new Error('TASK_ACTION_AUTHORIZATION_EXPIRED')
         : Object.assign(new Error('verification unavailable'), { code: 'GROUP_AUTHORIZATION_UNAVAILABLE' });
@@ -163,11 +173,22 @@ describe('task action dispatch authorization', () => {
       await vi.waitFor(() => expect(h.onDiscardedQueuedMessage).toHaveBeenCalledOnce());
       expect(dispatched).not.toHaveBeenCalled();
       expect(h.coordinator.getProjection(sid)).toMatchObject({ error: null, recovery: null, pendingQueue: [] });
+      // #8516: a revocation at the second guard used to discard without a reason log.
+      // This production coordinator unit case also ensures arbitrary group error text stays private.
+      const errorCode = error === 'group-revoked' ? 'GROUP_AUTHORIZATION_REQUIRED' : 'TASK_ACTION_AUTHORIZATION_EXPIRED';
+      expect(mocks.logger.info).toHaveBeenCalledWith(
+        'discarding revoked task action input before dispatch',
+        { sessionId: sid, clientId: 'automatic', stage: 'before-persistence', reason: errorCode, errorCode },
+      );
     } else {
       await vi.waitFor(() => expect(h.coordinator.getProjection(sid).recovery).toEqual({ kind: 'queue-head', clientId: 'automatic' }));
       expect(dispatched).not.toHaveBeenCalled();
       expect(h.onDiscardedQueuedMessage).not.toHaveBeenCalled();
       expect(h.coordinator.getProjection(sid).pendingQueue).toHaveLength(1);
+    }
+    if (outcome !== 'discarded') {
+      expect(mocks.logger.info.mock.calls.filter(([event]) =>
+        event === 'discarding revoked task action input before dispatch')).toHaveLength(0);
     }
     // No outcome may leave a persisted user row with a failed reply behind.
     expect(h.onUndispatchedUserTurn).not.toHaveBeenCalled();
