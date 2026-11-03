@@ -492,7 +492,14 @@ export function KeyboardShortcutsSection() {
               {/* 条目标题 + 说明双行: 标题主文字色 + 说明次级色,
                   对齐 LinkOpenSection 卡片条目的用色规范 */}
               <div className="flex min-w-0 flex-1 flex-col gap-[2px]">
-                <p className="truncate text-13 font-medium text-[var(--text-primary)]">
+                <p
+                  id={
+                    def.id === 'region-screenshot'
+                      ? 'settings-search-settings-shortcuts-region-screenshot-label'
+                      : undefined
+                  }
+                  className="truncate text-13 font-medium text-[var(--text-primary)]"
+                >
                   {itemLabel(def)}
                 </p>
                 <p className="truncate text-12 leading-[1.4] text-[var(--text-secondary)]">

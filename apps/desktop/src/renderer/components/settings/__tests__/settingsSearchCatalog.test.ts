@@ -24,6 +24,9 @@ const translations: Record<string, string> = {
   'settings.wecomBot.title': '企业微信智能机器人',
   'settings.dingtalkBot.title': '钉钉机器人',
   'settings.imBot.groups.personal': '个人',
+  'settings.shortcuts.items.region-screenshot.label': '截图',
+  'settings.shortcuts.items.region-screenshot.description': '在任意应用中截图',
+  'settings.tabs.shortcuts': '键盘快捷键',
 };
 
 const t = ((key: string) => translations[key] ?? key) as unknown as TFunction;
@@ -115,6 +118,23 @@ describe('settings search catalog', () => {
     expect(searchSettings(documents, 'remote host')[0]?.entry.id).toBe('remoteControl.ssh');
   });
 
+  it('finds the global screenshot shortcut and routes to its row', () => {
+    const documents = buildSettingsSearchDocuments(t, ['shortcuts']);
+
+    expect(searchSettings(documents, '截图')[0]?.entry.id).toBe(
+      'settings.shortcuts.items.region-screenshot',
+    );
+    expect(searchSettings(documents, '截屏')[0]?.entry.id).toBe(
+      'settings.shortcuts.items.region-screenshot',
+    );
+    expect(
+      resolveSettingsSearchTarget(
+        'shortcuts',
+        'settings.shortcuts.items.region-screenshot',
+      ),
+    ).toBe('settings-search-settings-shortcuts-region-screenshot-label');
+  });
+
   it('keeps the declaration catalog complete and unique', () => {
     expect(validateSettingsSearchCatalog()).toEqual([]);
     expect(new Set(SETTINGS_SEARCH_MODULES.map(({ id }) => id)).size).toBe(
@@ -193,8 +213,9 @@ describe('settings search catalog', () => {
       if (target) {
         const dynamicProviderAnchor =
           /^cindy-im-(slack|telegram|x)$/.test(target) &&
-          source.includes('id={\`cindy-im-\${provider}\`}');
-        expect(source.includes('id="' + target + '"') || dynamicProviderAnchor, target).toBe(true);
+          source.includes("id={`cindy-im-${provider}`}");
+        const conditionalAnchor = source.includes(`'${target}'`) && source.includes('id={');
+        expect(source.includes('id="' + target + '"') || dynamicProviderAnchor || conditionalAnchor, target).toBe(true);
       }
     }
     for (const [, target] of source.matchAll(/id="(settings-search-[^"]+)"/g)) {

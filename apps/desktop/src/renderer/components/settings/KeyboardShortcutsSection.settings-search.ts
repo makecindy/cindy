@@ -7,5 +7,15 @@ export default {
   entries: [
     { id: 'shortcuts', tab: 'shortcuts', targetId: 'settings-panel-shortcuts', titleKey: 'settings.tabs.shortcuts', sectionKey: 'settings.sections.shortcuts' },
     { id: 'settings.shortcuts.accessories.title', fallbackTargetId: 'settings-panel-shortcuts', tab: 'shortcuts', targetId: 'settings-search-settings-shortcuts-accessories-title', titleKey: 'settings.shortcuts.accessories.title', sectionKey: 'settings.tabs.shortcuts', descriptionKey: 'settings.shortcuts.accessories.description' },
+    {
+      id: 'settings.shortcuts.items.region-screenshot',
+      fallbackTargetId: 'settings-panel-shortcuts',
+      tab: 'shortcuts',
+      targetId: 'settings-search-settings-shortcuts-region-screenshot-label',
+      titleKey: 'settings.shortcuts.items.region-screenshot.label',
+      sectionKey: 'settings.tabs.shortcuts',
+      descriptionKey: 'settings.shortcuts.items.region-screenshot.description',
+      aliases: ['截屏', 'screen capture'],
+    },
   ],
 } satisfies SettingsSearchModule;
