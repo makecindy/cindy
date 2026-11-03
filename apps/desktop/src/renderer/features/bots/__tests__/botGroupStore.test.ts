@@ -115,6 +115,52 @@ describe('group list mirror', () => {
     expect(getBotGroupListSnapshot().groups[0]?.name).toBe('新账号');
   });
 
+  // Unit / review4456776776: the real window mount must keep a secondary
+  // pre-create response from overwriting a newer owner-scoped display cache.
+  it('keeps the main group cache through a late secondary list, visibility push and failed follow-up', async () => {
+    const old = summary('Old group');
+    const created = { ...summary('New group'), id: 'g2' };
+    let saved: readonly BotGroupSummary[] = [];
+    chatDisplayCache.mockImplementation(async input => {
+      if (input.action === 'write') saved = structuredClone(input.value);
+      return input.action === 'read' ? structuredClone(saved) : null;
+    });
+    listBotGroups.mockResolvedValue({ ok: true, groups: [old] });
+    const main = render(createElement(AppWindowSync));
+    await act(() => vi.advanceTimersByTimeAsync(0));
+    expect(saved).toEqual([old]); // The main mount still owns persistence.
+    main.unmount();
+    resetBotGroupStoreForTests();
+    window.history.replaceState(null, '', '/?secondaryWindow=1');
+    let finish!: (value: unknown) => void;
+    listBotGroups.mockImplementationOnce(() => new Promise(resolve => { finish = resolve; }));
+    const secondary = render(createElement(AppWindowSync));
+    await act(() => vi.advanceTimersByTimeAsync(0));
+    // Simulate Main's post-create IPC cache write while this renderer's
+    // pre-create list is pending. IPC is the only boundary substituted here.
+    saved = [old, created];
+    listBotGroups.mockRejectedValue(new Error('connection dropped'));
+    act(() => push({ groupId: 'g2', change: 'created' }));
+    await act(() => vi.advanceTimersByTimeAsync(300));
+    await act(async () => finish({ ok: true, groups: [old] }));
+    expect(getBotGroupListSnapshot().groups).toEqual([old]);
+    expect(saved).toEqual([old, created]);
+    // Main has also processed this personal visibility push first. Its cached
+    // new group must survive the secondary's immediate persistList path.
+    saved = [created];
+    act(() => push({ groupId: 'g1', change: 'list', listState: { hidden: true, revision: 1 } }));
+    expect(getBotGroupListSnapshot().groups).toEqual([]);
+    expect(saved).toEqual([created]);
+    await act(() => vi.advanceTimersByTimeAsync(300));
+    expect(saved).toEqual([created]);
+    secondary.unmount();
+    resetBotGroupStoreForTests();
+    window.history.replaceState(null, '', '/');
+    render(createElement(AppWindowSync));
+    await act(() => vi.advanceTimersByTimeAsync(0));
+    expect(getBotGroupListSnapshot().groups).toEqual([created]);
+  });
+
   // #8084: a deletion observed while a different room is open must also release thread media.
   // Unit: real sync push entry, without mounting the deleted group's chat view.
   it.each(['deleted', 'hidden'] as const)('discards closed thread drafts on an authoritative %s push', async boundary => {

@@ -13,6 +13,7 @@ import { useCallback, useSyncExternalStore } from 'react';
 import { seedBotGroupReadState } from './botReadState';
 import { discardDraftTree } from '@/lib/composerDraftStore';
 import { botGroupAttachmentScope } from './botGroupAttachments';
+import { isSecondaryWindow } from '@/lib/secondaryWindow';
 
 import {
   getDataOwnerGeneration,
@@ -120,7 +121,8 @@ function applySnapshot(next: BotGroupListSnapshot): void {
 }
 
 function persistList(): void {
-  if (!owner.dataOwnerId) return;
+  // Each window keeps a live mirror; only main persists the shared list cache.
+  if (!owner.dataOwnerId || isSecondaryWindow()) return;
   void botGroupApi()?.chatDisplayCache?.({ action: 'write', key: 'groups', owner, value: snapshot.groups }).catch(() => undefined);
 }
 
