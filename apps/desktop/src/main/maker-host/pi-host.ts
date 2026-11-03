@@ -1169,15 +1169,15 @@ function officialPiRouteMatches(
   );
 }
 
-/** Anthropic's SDK adds /v1/messages; an OpenAI /v1 connection needs its origin for that model. */
-function anthropicRootForOpenAiV1(baseUrl: string): string | undefined {
+/** Anthropic's SDK appends /v1/messages, so remove an inherited final /v1. */
+function anthropicRootForV1Endpoint(baseUrl: string): string | undefined {
   try {
     const url = new URL(baseUrl);
     if ((url.protocol !== 'http:' && url.protocol !== 'https:') ||
-        !/^\/v1\/?$/.test(url.pathname) || url.search || url.hash || url.username || url.password) {
+        !/\/v1\/?$/.test(url.pathname) || url.search || url.hash || url.username || url.password) {
       return undefined;
     }
-    return url.origin;
+    return url.origin + url.pathname.replace(/\/v1\/?$/, '');
   } catch {
     return undefined;
   }
@@ -1470,14 +1470,13 @@ export function buildPiNativeProvidersFromConfigs(
         const nativeGoogleBaseUrl =
           modelApi === 'google-generative-ai' && !m.route?.requestPath && !rt.requestPath
             ? providerBaseUrlForApi(rt.baseUrl, modelApi) : undefined;
-        // OpenAI clients use /v1 as their root; Anthropic appends /v1/messages.
-        // An absent model route may inherit the OpenAI /v1 endpoint, but a saved
-        // route remains authoritative even when it equals the provider endpoint.
+        // Anthropic appends /v1/messages. A route-free model may inherit a /v1
+        // endpoint from either runtime; saved routes remain authoritative even
+        // when they equal the provider endpoint.
         const nativeAnthropicBaseUrl =
           modelApi === 'anthropic-messages' &&
-          (runtimeApi === 'openai-completions' || runtimeApi === 'openai-responses') &&
           authMethod !== 'oauth' && !rt.requestPath && !m.route
-            ? anthropicRootForOpenAiV1(rt.baseUrl) : undefined;
+            ? anthropicRootForV1Endpoint(rt.baseUrl) : undefined;
         const modelBaseUrl =
           nativeAnthropicBaseUrl ?? (m.api && m.route ? m.route.baseUrl :
             m.route && explicitRouteApi === modelApi ? explicitRoute?.baseUrl : nativeGoogleBaseUrl);

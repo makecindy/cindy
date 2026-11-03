@@ -583,7 +583,9 @@ describe('buildPiNativeProvidersFromConfigs', () => {
     expect(providers[0].models[1]).not.toHaveProperty('baseUrl');
   });
 
-  it('leaves an OpenAI proxy prefix intact for Messages models with or without selector routes', () => {
+  // Tier 2: the launch mapper must retain a proxy prefix while removing the
+  // inherited /v1 that the Anthropic SDK itself appends; saved routes stay authoritative.
+  it('keeps a proxy prefix for route-free Messages models and preserves a saved same-endpoint route', () => {
     const baseUrl = 'https://proxy.example/custom/v1';
     const { providers } = buildPiNativeProvidersFromConfigs([{
       id: 'custom-proxy', name: 'Custom Proxy', auth: { method: 'none' },
@@ -599,10 +601,38 @@ describe('buildPiNativeProvidersFromConfigs', () => {
     }], () => null);
 
     expect(providers[0].baseUrl).toBe(baseUrl);
-    expect(providers[0].models[0]).toMatchObject({ api: 'anthropic-messages' });
-    expect(providers[0].models[0]).not.toHaveProperty('baseUrl');
+    expect(providers[0].models[0]).toMatchObject({
+      api: 'anthropic-messages', baseUrl: 'https://proxy.example/custom',
+    });
     expect(providers[0].models[1]).toMatchObject({ api: 'anthropic-messages' });
     expect(providers[0].models[1]).not.toHaveProperty('baseUrl');
+  });
+
+  it('removes inherited /v1 for a route-free Anthropic runtime unless it has a custom request path', () => {
+    const baseUrl = 'https://proxy.example/custom/v1';
+    const { providers } = buildPiNativeProvidersFromConfigs([
+      {
+        id: 'anthropic-proxy', name: 'Anthropic Proxy', auth: { method: 'none' },
+        runtimes: { pi: piRuntime({
+          baseUrl, wireProtocol: 'anthropic-messages',
+          models: [{ id: 'messages-model', name: 'Messages Model' }],
+        }) },
+      },
+      {
+        id: 'custom-path-proxy', name: 'Custom Path Proxy', auth: { method: 'none' },
+        runtimes: { pi: piRuntime({
+          baseUrl, wireProtocol: 'anthropic-messages', requestPath: '/custom/messages',
+          models: [{ id: 'custom-path-model', name: 'Custom Path Model' }],
+        }) },
+      },
+    ], () => null);
+
+    expect(providers[0]).toMatchObject({ baseUrl, api: 'anthropic-messages' });
+    expect(providers[0].models[0]).toMatchObject({
+      id: 'messages-model', baseUrl: 'https://proxy.example/custom',
+    });
+    expect(providers[1]).toMatchObject({ baseUrl, api: 'anthropic-messages' });
+    expect(providers[1].models[0]).not.toHaveProperty('baseUrl');
   });
 
   // Tier 2: the actual launch builder must carry a user's V6 selection, including
