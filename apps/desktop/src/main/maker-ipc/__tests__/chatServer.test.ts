@@ -1141,6 +1141,33 @@ describe('Chat Server result delivery and refresh', () => {
       quote: { from: 'Alice', authorId: selfId, authorKind: expectedKind } });
     if (origin) expect(quoting.quote).toHaveProperty('origin', origin); else expect(quoting.quote).not.toHaveProperty('origin');
   });
+  // #8433 review / bot-group-chat.md §4.4: migrated failures are notices,
+  // not model conversation text. The production reader must share UI recognition.
+  it.each(['metadata', 'legacy-prefix', 'human-copy', 'ordinary-import'] as const)(
+    'filters imported runtime-failure history without hiding ordinary content (%s)', async mode => {
+    fixture.profiles = [{ id: 'local-bot', displayName: 'Bot', avatar: null, status: 'active' }];
+    const members = [{ id: botId, kind: 'bot', state: 'joined' }];
+    const marker = 'cindy-runtime-error:AUTH_REQUIRED';
+    fixture.handle.mockImplementation(route => {
+      if (route.endsWith('/snapshot')) return { body: { room: room(roomId), members } };
+      if (route.endsWith('/members')) return { body: members };
+      if (route.includes('/messages?all=true')) return { body: [{ id: 'failure-history', seq: '41', deleted: false,
+        createdAt: '2026-11-03T00:00:00Z', threadRootId: null, author: { name: 'Bot', kind: 'bot' },
+        origin: mode === 'human-copy' ? 'user' : 'import', content: [
+          { type: 'text', text: marker }, { type: 'card', namespace: 'cindy.local-history', schemaRevision: 1,
+            fallback: marker, data: { kind: mode === 'ordinary-import' ? 'message' : 'notice', authorKind: 'system',
+              ...(mode === 'metadata' ? { runtimeFailureCode: 'AUTH_REQUIRED' } : {}) } },
+        ] }] };
+      return response(route);
+    });
+    const input = { botId: 'local-bot', groupId: roomId };
+    const hidden = mode === 'metadata' || mode === 'legacy-prefix';
+    const page = await service.teammateHistory!(input);
+    expect(page.messages![0].text).toBe(hidden ? '' : [marker, marker].join('\n'));
+    expect(page.messages![0].authorKind).toBe(hidden ? 'system' : 'bot');
+    const search = await service.teammateHistory!({ ...input, query: marker });
+    expect(search.messages).toHaveLength(hidden ? 0 : 1);
+  });
   // #8433 review / message-source.md, unit: production HTTP adapter + reader.
   // A deleted original's old share fallback must not survive in history/search;
   // the execution-context tests did not exercise this separate history route.

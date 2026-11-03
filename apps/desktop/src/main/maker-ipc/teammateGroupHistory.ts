@@ -1,5 +1,5 @@
 import { chatGroupMemberName } from '@cindy/maker-shared/botGroupPresentation';
-import { readBotGroupThreadShareCard, readBotGroupQuoteCard, readBotGroupQuote,
+import { readImportedBotGroupRuntimeFailureCode, readBotGroupThreadShareCard, readBotGroupQuoteCard, readBotGroupQuote,
   botGroupQuoteExcerpt, botGroupQuoteAttachmentName, type BotGroupMessageView } from '../../shared/botGroupChat.js';
 
 /** Read as the companion actor, never as its owner. No local history cache or read receipts. */
@@ -28,12 +28,12 @@ type HistoryQuote = { messageId: string; deleted: true } | {
 // Match promptMessage/messageView: only the HTTP message's server origin can
 // establish a system record; actor kind or a card payload cannot substitute for it.
 const historySource = (message: Message) => ({
-  authorKind: message.origin === 'system' ? 'system' : message.author.kind,
+  authorKind: message.origin === 'system' || readImportedBotGroupRuntimeFailureCode(message) ? 'system' : message.author.kind,
   ...(message.origin ? { origin: message.origin } : {}),
 });
 // Match the execution context: recognized references never contribute their fallback
 // to the author's own words. Unknown card revisions remain ordinary readable content.
-const historyText = (message: Message) => readBotGroupThreadShareCard(message) ? ''
+const historyText = (message: Message) => readImportedBotGroupRuntimeFailureCode(message) || readBotGroupThreadShareCard(message) ? ''
   : message.content.filter(block => block.type !== 'media' && !readBotGroupQuoteCard(block))
     .map(block => block.text ?? block.fallback ?? '').join('\n');
 function historyQuote(message: Message, known: ReadonlyMap<string, Message>, authorName: (message: Message) => string): HistoryQuote | undefined {
