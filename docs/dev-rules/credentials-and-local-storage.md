@@ -70,8 +70,12 @@ Claude.ai 登录，也不得收集、存储或中转订阅凭证。Cindy 因此�
   端口，它对每个目标重新按系统代理 / PAC 决定直连或走代理（env 作用于整棵进程树，含 Bash
   工具里的 git / npm，内网例外必须照旧直连），明文 HTTP 不下发代理。都是 TCP 隧道，TLS
   端到端，代理、转发端口与 Cindy 都看不到凭证。
-- 订阅会话不设 host 接管标记；Cindy 的所有 Claude 会话统一使用 `claude-desktop` 入口，
-  CLI 会启用 Desktop 宿主的项目级上游 / 鉴权环境过滤。入口身份不改变凭证来源，普通项目
+- 订阅会话不设 host 接管标记，并保留 `claude-desktop` 入口，
+  CLI 会启用 Desktop 宿主的项目级上游 / 鉴权环境过滤。OAuth token 路径同样保留该入口
+  的刷新回调白名单；API Key 路径使用 SDK 原生 `sdk-ts`，避免 Individual API 额度被
+  Desktop 身份误拒（[上游报告](https://github.com/anthropics/claude-code/issues/106458)）。
+  API 路径仍通过 `CLAUDE_CODE_PROVIDER_MANAGED_BY_HOST=1` 锁定上游和认证，远端在
+  route materialization 后按最终认证形态重选入口。入口身份不改变凭证来源，普通项目
   设置、权限与 hooks 仍由 CLI 加载。SDK 模式仍没有终端的工作区信任确认，因此继续对
   CLI 实际加载的项目级设置（工作目录的两份文件，加上主仓库根目录的 `settings.local.json`）
   设闸作为纵深防御（maker-core `workspace-settings-guard`），不依赖上游过滤替代宿主检查：
@@ -265,6 +269,7 @@ promise，恢复信号不能在旧请求结束后追加立即续期。只有用�
 | iOS 桌面小组件数据 | App Group `group.<bundle id>`（与 expo-sharing 共用）里的 `usage-widget-snapshot.json`：每台电脑最近一次的余量与用量快照（已按电脑上「隐藏个人信息」打码，含账号名或邮箱前缀、余量、近 30 天用量与模型名）、「自动」所选电脑 id 与电脑名列表；不含凭证。同一 App Group 的 UserDefaults 键 `usageWidgetPins` 只记组件选中的电脑 id 与时间，超过 2 天的丢弃。App 在前台时整份原子替换写入；切换或退出账号时删除快照文件。见 `apps/mobile/modules/cindy-usage-widgets` 与 `plugins/usage-widgets` |
 | Android 桌面小组件数据 | 应用私有 `noBackupFilesDir/usage-widget-snapshot.json`（不进 Android 自动备份），内容与 iOS 的 App Group 文件相同（已打码的余量与用量快照、「自动」所选电脑 id 与电脑名列表，不含凭证）；SharedPreferences `cindy-usage-widgets` 里 `computer.<组件 id>` 记组件选中的电脑，`usageWidgetPins` 记固定电脑 id 与时间（超过 2 天丢弃），删除组件时清理。切换或退出账号时删除快照文件，并清掉所有 `computer.` / `pinned.` / `hidden.` 与 `usageWidgetPins`（它们含上一个账号的电脑 id 与账号名），再重绘组件。见 `apps/mobile/modules/cindy-usage-widgets/android` |
 | Windows 锁屏控制的系统服务程序 | `%ProgramFiles%\Cindy Remote Desktop\<安装目录哈希>\`,由「授权开启」的管理员提权步骤写入:两个原生 helper 与记录所属安装目录的 `install.txt`。目录与文件的所有者是 Administrators,只有 Administrators 与 SYSTEM 可写——SYSTEM 服务不能从用户可写的安装目录启动,否则本机任何普通进程都能换掉它。不含凭证、账号或对话。源码运行的开发版另将构建缓存放在 `userData/remote-desktop/development/<安装身份哈希>/`，只含本机编译产物与源码摘要；它仍复制到上述受保护目录后才注册服务。只有设置页的「移除服务」(同样需要管理员确认)会删除它;按安装目录分子目录,多份安装互不影响。见 `native/remote-desktop/windows-host/src/staging.rs`、`apps/desktop/src/main/remote-desktop/windowsHost.ts` 与 [`../remote-desktop.md`](../remote-desktop.md) |
+| 新项目存放位置 | `userData/owners/<账号>/projects-root-settings.json`，只存用户在设置页或「新建项目…」弹窗里经原生选择框选定的目录（`directory`），未设置为 null；推荐位置（已登记可见项目最常见的父目录，否则 `~/Projects`）读取时推算，不写回文件。复用 override settings 跨进程锁、原子写入与损坏保留，选择框返回后核对账号未切换再写入。不含凭证或对话；见 `projects-root-settings.ts`、`mcp-integrations/projectManagement.ts`（`resolveProjectsRoot`）与 `createProjectFromTaskHost.ts` |
 | 用户明确导出的文件                  | 用户选择或任务明确指定的目标路径                                                                                                                                                                                                                                                                                                                                                                                |
 
 - worktree 启动维护（回收重试、旧归档清理、快照引用清理、审计与池恢复）在主窗口首帧、
@@ -301,6 +306,12 @@ promise，恢复信号不能在旧请求结束后追加立即续期。只有用�
   回归见对应上传策略测试和 `packages/lizi-mcps/src/browser/opencli-recipes.test.ts`。
 
 ## Review 清单
+
+截图翻译语言覆盖存于 `userData/screenshot-translation-settings.json`，仅保存
+`targetLanguage`，本机客户端共用，不含截图、识别文字或账号数据，不同步到其他设备。
+复用 override settings 的跨进程锁和原子写；恢复「跟随界面语言」移除覆盖，
+文件损坏时保留原文件并报告保存失败。实现与回归见
+`main/region-screenshot/translationPreferences.ts` 及其同名单测。
 
 1. 写入目标是否可能位于仓库、当前工作目录或被 Git 跟踪的路径？
 2. 是否把真实凭证带入了测试、fixture、日志、错误或 Renderer？

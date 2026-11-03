@@ -1025,7 +1025,7 @@
     "saveFileName": "Captura de ecrã",
     "saveFailed": "Não foi possível guardar a captura de ecrã",
     "prompt": {
-      "translate": "Reconheça o texto nesta captura de ecrã e traduza-o para inglês. Mantenha os parágrafos e as listas originais e apresente apenas a tradução. Se o texto já estiver em inglês, traduza-o para chinês simplificado.",
+      "translate": "Deteta automaticamente os idiomas na captura de ecrã e traduz o texto para {{language}}. Mantém os parágrafos, as listas e as tabelas. Preserva o conteúdo que já esteja no idioma de destino; se houver vários idiomas, traduz apenas os restantes. Se todo o texto já estiver no idioma de destino, indica-o brevemente sem o traduzir para outro idioma. Nos restantes casos, apresenta apenas a tradução.",
       "explain": "Explique o que esta captura de ecrã mostra. Se for um erro, explique a causa e como o corrigir. Se for um gráfico, código ou uma interface, explique o que mostra e os pontos principais.",
       "extract": "Extraia o texto desta captura de ecrã exatamente como está escrito, mantendo as quebras de linha, os parágrafos e as listas originais. Apresente as tabelas como tabelas Markdown. Apresente apenas o texto extraído."
     },
@@ -1073,6 +1073,12 @@
       "edit": "Editar",
       "autoUnavailable": "O deslocamento automático parou. Pode deslocar manualmente a seleção.",
       "autoPermission": "O deslocamento automático requer permissão de Acessibilidade. Autorize Cindy nas Definições do Sistema e tente novamente, ou desloque manualmente a seleção."
+    },
+    "translation": {
+      "action": "Traduzir para {{language}}",
+      "targetLanguage": "Idioma de destino",
+      "followUi": "Usar o idioma da interface",
+      "saveFailed": "Não foi possível guardar o idioma. Selecione-o novamente."
     }
   },
   "privacyExit": {
@@ -2683,6 +2689,13 @@
       "storage": {
         "dialogueDirectoryTitle": "Espaço de trabalho da conversa",
         "dialogueDirectoryDescription": "Apenas para novas sessões. Os ficheiros existentes permanecem onde estão.",
+        "projectsRootTitle": "Localização de novos projetos",
+        "projectsRootInferred": "Sugerida",
+        "projectsRootDefault": "Predefinida",
+        "projectsRootChoose": "Alterar diretório",
+        "projectsRootReset": "Restaurar localização sugerida",
+        "projectsRootDescription": "Onde ficam as pastas de projeto ao criar um projeto a partir de uma sessão. Se não estiver definida, é sugerida uma localização com base nos projetos existentes.",
+        "projectsRootFailed": "Não foi possível atualizar a localização de novos projetos",
         "dialogueDirectoryOpen": "Abrir diretório",
         "dialogueDirectoryChoose": "Alterar diretório",
         "dialogueDirectoryReset": "Restaurar localização predefinida",
@@ -3675,6 +3688,8 @@
         "simpleSubtitle": "Vários modelos, faturados através de uma única conta."
       },
       "custom": {
+        "nameSearchUnavailable": "Este fornecedor já não está disponível. Continue com um endpoint personalizado ou pesquise novamente.",
+        "nameSearchHint": "Pode manter este nome e continuar com um endpoint personalizado.",
         "tag": "Personalizado",
         "editAria": "Editar definições da ligação",
         "deleteAria": "Eliminar",
@@ -6079,7 +6094,7 @@
           "backgroundHint": "Fechar esta janela não interrompe a implementação",
           "background": "Continuar em segundo plano",
           "doneTitle": "{{name}} está pronto",
-          "doneHint": "Este computador ainda utiliza a rota atual. Escolha Utilizar esta rota para mudar e, em seguida, adicione o telemóvel e outros computadores.",
+          "doneHint": "Este computador ainda utiliza a rota atual. Escolha Usar esta rota para mudar e, em seguida, adicione o telemóvel e outros computadores.",
           "doneLater": "Também pode mudar mais tarde em Rota de ligação",
           "use": "Usar esta rota",
           "finish": "Concluído"
@@ -7578,6 +7593,8 @@
         "cancel": "Cancelar",
         "updateNeedsConsent": "As novas permissões precisam de confirmação",
         "targetIdentity": "Instalar para: {{name}}",
+        "localTarget": "Desenvolvimento local",
+        "localOidcUnavailable": "Esta cópia de desenvolvimento não pode usar a identidade da organização. Para testar, instala-a explicitamente na tua organização atual através do Forge.",
         "personalTarget": "Pessoal",
         "sourceChanged": "Esta atualização muda para uma fonte local. As contas e os dados existentes são arquivados separadamente. Ligue novamente as suas contas após a atualização.",
         "otherCopies": "Existem {{count}} outras cópias deste plugin. Permanecerão instaladas e manterão o estado de ativação atual. Uma cópia separada necessita das suas próprias ligações a contas."
@@ -7661,6 +7678,8 @@
         "nodeResident": "O programa Node pode permanecer em execução em segundo plano",
         "nodeResidentDetail": "É executado enquanto o plugin está ativo e para quando este é desativado, atualizado ou desinstalado, ou quando Cindy é encerrado.",
         "tool": "Ferramenta \"{{name}}\"",
+        "toolAutoApprove": "O Agent pode executar a ferramenta \"{{name}}\" sem confirmação",
+        "toolAutoApproveDetail": "Quando o Agent chama esta ferramenta, ela é executada de imediato, sem pedir confirmação nem rever cada chamada.",
         "command": "Comando de conversa ${{command}}",
         "panelLeft": "Painel \"{{title}}\" · apresentado na barra lateral",
         "panelTab": "Painel \"{{title}}\" · abre dentro da página Plugins",
@@ -7726,9 +7745,13 @@
         "workspaceDetail": "Quando o pede, escolhe a pasta ou vê o caminho completo num cartão de confirmação antes de decidir; enquanto processa uma chamada que iniciou, as subpastas dentro do diretório de trabalho da sessão atual são usadas diretamente, sem um pedido adicional. As pastas que já têm uma sessão são reutilizadas, e o que é criado é uma sessão vazia — nada começa a ser executado por si só.",
         "sessionContext": "Pode saber em que pasta de projeto está a trabalhar a sessão atual",
         "sessionContextDetail": "Partilha apenas informações de localização (ID da sessão e caminho da pasta do projeto) enquanto trabalha para a sessão atual — sem conteúdo de ficheiros e sem conceder acesso a ficheiros.",
+        "liveScreen": "Ver e controlar ecrãs de dispositivos no telemóvel",
+        "liveScreenDetail": "Através do ambiente de trabalho remoto, o telemóvel pode mostrar os ecrãs de dispositivos que fornece (como simuladores) e enviar-lhes toques, botões e texto. Só liga quando o abre a partir do telemóvel e não mostra mais nada deste computador.",
         "preview": "Pode abrir páginas de pré-visualização dos sites abaixo no navegador da barra lateral",
         "previewDetail": "Só podem ser abertos os sites indicados abaixo; cada página aberta é atribuída a este plugin.",
         "browserExtension": "Permite que a extensão de navegador incluída se ligue a Cindy",
+        "browserNativeHost": "Pode registar a ligação «{{name}}»",
+        "browserNativeHostDetail": "O programa registado é executado fora da sandbox e acede ao computador com a sua conta e as permissões do sistema.",
         "browserExtensionDetail": "Apenas as extensões listadas abaixo podem ligar-se, através do endereço de loopback local; Cindy encaminha para este plugin os pedidos feitos pela extensão.",
         "browserExtensionPageControlDetail": "Apenas as extensões listadas abaixo podem ligar-se. A extensão também implementa o controlo de páginas: com “O meu navegador” selecionado, o Agent pode ler e operar páginas no navegador que está a utilizar.",
         "nodeChildSpawn": "O seu programa Node pode pedir ao anfitrião para iniciar subprocessos declarados no seu pacote",
@@ -7823,6 +7846,18 @@
         "settingsTitle": "Definições de {{name}}",
         "settingsUnavailableUntilRestore": "Restaure o plugin para voltar a usar esta configuração.",
         "oauthScopeStale": "Esta autorização não inclui as permissões adicionadas recentemente. Volte a ligar para as conceder.",
+        "localDevelopment": "Desenvolvimento local",
+        "publicInstall": "Mercado público",
+        "organizationInstall": "Organização: {{name}}",
+        "browserUse": "Usar esta extensão do navegador",
+        "browserActivated": "Extensão do navegador selecionada",
+        "browserActivationFailed": "Não foi possível selecionar. Ative o plugin e confirme a mudança de ligação.",
+        "browserSwitchTitle": "Mudar a ligação da extensão?",
+        "browserSwitchMessage": "Usar «{{name}}» nesta ligação?",
+        "browserSwitchDetail": "Instância: {{instance}}\nRegisto: {{host}}\nSubstitui o registo atual. A extensão liga-se a este plugin.",
+        "portReclaimTitle": "Terminar o programa que usa a porta de retorno?",
+        "portReclaimMessage": "«{{name}}» precisa da porta {{port}}. Terminar o programa seguinte?",
+        "portReclaimDetail": "Pode interromper o trabalho ou perder dados não guardados. Pode cancelar e fechar o programa manualmente.",
         "configurationTitle": "Configuração",
         "sidebarEntryTitle": "Entrada de navegação",
         "showInSidebar": "Mostrar na navegação à esquerda",
@@ -8354,7 +8389,8 @@
       "dialog": {
         "createTitle": "Adicionar servidor MCP",
         "editTitle": "Editar servidor MCP",
-        "desc": "Apenas MCP remoto http / sse. As novas sessões podem utilizá-lo após guardar; as sessões em curso não são afetadas."
+        "desc": "Apenas MCP remoto http / sse. As novas sessões podem utilizá-lo após guardar; as sessões em curso não são afetadas.",
+        "teammateDesc": "Apenas MCP remoto http / sse. Depois de guardar, o seu colega adiciona-o às ferramentas dele e pode utilizá-lo a partir da próxima mensagem desta conversa, sem precisar de uma nova sessão."
       },
       "fields": {
         "name": "Nome apresentado",
@@ -8655,10 +8691,10 @@
     "chooseMethod": "Escolher como iniciar sessão",
     "emailCode": "Iniciar sessão com um código por email",
     "orgDetected": "{{email}} pertence a \"{{org}}\"",
-    "enterpriseLogin": "Iniciar sessão com a sua identidade profissional",
-    "enterpriseVia": "Início de sessão único através de {{name}}",
-    "personalLogin": "Iniciar sessão com uma conta pessoal",
-    "personalDesc": "Enviar um código de verificação para o seu email",
+    "enterpriseLogin": "Com a identidade profissional",
+    "enterpriseVia": "SSO através de {{name}}",
+    "personalLogin": "Com uma conta pessoal",
+    "personalDesc": "Receber um código por email",
     "ssoRequired": "Esta organização exige início de sessão por SSO",
     "ssoEntry": "Iniciar sessão com SSO empresarial",
     "localModeEntry": "Ignorar início de sessão",
@@ -8666,7 +8702,7 @@
     "localModeDescription": "Não é necessária uma conta Cindy. Os dados ficam neste dispositivo; os modelos na nuvem, o acesso entre dispositivos e os serviços do marketplace ficam indisponíveis.",
     "consentStatement": "Li e aceito os <terms>Termos de Serviço</terms> e a <privacy>Política de Privacidade</privacy>",
     "consentDialog": {
-      "title": "Termos e privacidade",
+      "title": "Termos e Política de Privacidade",
       "body": "Para continuar, leia e aceite os <terms>Termos de Serviço</terms> e a <privacy>Política de Privacidade</privacy> da Cindy.",
       "agree": "Aceitar",
       "disagree": "Agora não"
@@ -8708,9 +8744,9 @@
     },
     "sendCode": "Enviar código",
     "completeSignIn": "Concluir início de sessão",
-    "preparing": "A estabelecer ligação para iniciar sessão",
+    "preparing": "A preparar o início de sessão",
     "preparingSubtitle": "A carregar os métodos disponíveis para esta região",
-    "unavailable": "O início de sessão está temporariamente indisponível",
+    "unavailable": "Início de sessão indisponível agora",
     "retry": "Tentar novamente",
     "browserWaiting": "Concluir a verificação no navegador",
     "browserCallback": {
@@ -10838,6 +10874,18 @@
         "reactorFormer": "{{name}} (já não está no grupo)",
         "reactorsUnavailable_one": "Nome indisponível para mais {{count}} membro",
         "reactorsUnavailable_other": "Nomes indisponíveis para mais {{count}} membros",
+        "readStatusSent": "Enviada",
+        "readStatusRead": "Lida",
+        "readersCount_one": "Lida por {{count}}",
+        "readersCount_other": "Lida por {{count}}",
+        "readersView": "Ver quem leu",
+        "readersTooLarge": "O grupo é demasiado grande para listar quem leu",
+        "readersNone": "Ninguém leu",
+        "readersLoading": "A carregar…",
+        "readersFailed": "Não foi possível carregar quem leu",
+        "readersHeading": "Lida",
+        "readersOfTotal": "Lida {{read}}/{{total}}",
+        "readerUnknown": "Membro desconhecido",
         "invite": "Convidar para o grupo",
         "groupCreated": "Conversa de grupo criada",
         "inviteFriends": "Convide amigos para aderirem e trabalharem com o seu colega.",
@@ -10978,10 +11026,22 @@
           "accessToolsTitle": "Ferramentas e informações",
           "accessToolsHint": "Pode usar as ferramentas existentes de {{name}} e as suas informações privadas. Os resultados são visíveis para todos os membros. As aprovações continuam a aplicar-se; revogar o acesso não permite anular ações já concluídas.",
           "capabilitiesRow": "Ferramentas e acesso de {{name}}",
-          "accessMenu": "Permissões neste grupo"
+          "accessMenu": "Permissões neste grupo",
+          "notifications": {
+            "title": "Notificações de mensagens",
+            "all": "Todas as mensagens",
+            "mentions": "Apenas menções",
+            "none": "Desativadas",
+            "allHint": "Receba notificações de mensagens do grupo e de novas respostas nos tópicos que segue.",
+            "mentionsHint": "Receba notificações quando alguém o mencionar, incluindo @todos. As atualizações da divisão do trabalho continuam a ser notificadas.",
+            "noneHint": "Desative todos os alertas do sistema deste grupo. As mensagens não lidas são mantidas.",
+            "saving": "A guardar…",
+            "saveFailed": "Não foi possível guardar as notificações. Tente novamente."
+          }
         },
         "replyCount_many": "{{count}} respostas",
-        "reactorsUnavailable_many": "Nomes indisponíveis para mais {{count}} membros"
+        "reactorsUnavailable_many": "Nomes indisponíveis para mais {{count}} membros",
+        "readersCount_many": "Lida por {{count}}"
       },
       "lifecycle": {
         "dissolve": "Dissolver grupo",
@@ -14553,6 +14613,26 @@
         "archived_many": "{{count}} sessões arquivadas",
         "deleted_many": "{{count}} sessões eliminadas"
       },
+      "newProjectDialog": {
+        "title": "Novo projeto",
+        "description": "Cria uma pasta de projeto e move esta sessão para o novo projeto.",
+        "descriptionMoveFiles": "Cria uma pasta de projeto, move os ficheiros desta sessão para lá e move a sessão para o novo projeto.",
+        "nameLabel": "Nome do projeto",
+        "namePlaceholder": "ex.: my-app",
+        "targetPath": "Será criado {{path}}",
+        "location": "Localização",
+        "locationInferred": "Sugerida com base nos projetos existentes",
+        "locationWillCreate": "Esta pasta ainda não existe e será criada",
+        "changeLocation": "Alterar…",
+        "remember": "Utilizar esta localização para novos projetos",
+        "cancel": "Cancelar",
+        "create": "Criar projeto",
+        "nameTaken": "Já existe uma pasta com este nome",
+        "nameInvalid": "O nome não pode conter \\ / : * ? \" < > | nem terminar com ponto ou espaço",
+        "loadFailed": "Não foi possível carregar a localização do projeto",
+        "failed": "Falha ao criar o projeto",
+        "done": "Projeto criado e sessão movida"
+      },
       "sessionMenu": {
         "moreActions": "Mais ações",
         "rename": "Mudar nome",
@@ -14566,6 +14646,7 @@
         "moveToProject": "Mover tarefa",
         "moveToProjectHeading": "Projetos neste computador",
         "browseProjectFolder": "Escolher pasta do projeto",
+        "newProject": "Novo projeto…",
         "moveToDialogue": "Mover para Conversas",
         "noProjects": "Sem projetos recentes",
         "moveToProjectDone": "Movida para o projeto",
@@ -15971,6 +16052,7 @@
     "agentControlled": "O Agent abriu este ecrã. Certifique-se de que é realmente onde pretende iniciar sessão antes de o preencher.",
     "agentPicture": "Este código provém de uma captura de ecrã feita pelo Agent, pelo que o Cindy não consegue ver o ecrã original nem saber quando terminou. Verifique se conduz ao site onde pretende iniciar sessão e escolha Devolver ao Agent após a leitura do código.",
     "error": {
+      "raise": "Não foi possível abrir a janela. Mude para ela no computador.",
       "decision": "A operação não foi concluída. Tente novamente.",
       "stale": "O ecrã mudou. Use a versão mais recente.",
       "submit": "A sua introdução não foi enviada. Tente novamente."
@@ -16006,6 +16088,9 @@
       "picture": "Mostrar ecrã",
       "backToForm": "Voltar ao formulário",
       "liveView": "Vista em direto",
+      "openWindow": "Abrir janela de início de sessão",
+      "openRemoteDesktop": "Abrir ambiente de trabalho remoto",
+      "useForm": "Usar o formulário",
       "fill": "Preencher",
       "skip": "Ignorar",
       "continue": "Continuar",
@@ -16013,6 +16098,9 @@
       "showPassword": "Mostrar palavra-passe",
       "hidePassword": "Ocultar palavra-passe",
       "scan": "Ler código"
+    },
+    "directSignIn": {
+      "hint": "Inicie sessão diretamente na janela. Ao terminar, tudo continua automaticamente."
     },
     "remoteUnavailable": "Este computador não pode receber dados remotamente. Conclua este passo no computador anfitrião e depois devolva o controlo ao Agent.",
     "unnamedField": "Campo",
@@ -17087,7 +17175,14 @@
     "sectionTitle": "Diretórios",
     "empty": "Ainda não há diretórios de referência",
     "add": "Adicionar diretório…",
-    "addReadOnly": "Adicionar diretório só de leitura…",
+    "back": "Voltar",
+    "addTitle": "Adicionar diretório",
+    "writableHint": "O Agent pode ler e escrever",
+    "writableHintDetail": "O Agent pode ler, criar, modificar e eliminar ficheiros nestes diretórios.",
+    "searchRecent": "Pesquisar diretórios",
+    "noRecent": "Ainda não há diretórios recentes",
+    "noMatchingRecent": "Nenhum diretório correspondente",
+    "addFailed": "Não foi possível adicionar este diretório. Tente novamente ou escolha outra pasta.",
     "atLimit": "Limite atingido ({{max}})",
     "remove": "Remover {{name}}",
     "writableParentConfirmTitle": "Permitir acesso de leitura e escrita a um diretório ascendente?",
@@ -18997,5 +19092,35 @@
     "unavailable": "Esta compilação não tem um destino para carregar relatórios. Abra os ficheiros locais para os partilhar com o apoio técnico.",
     "consent": "Aceite a política de privacidade nas Definições antes de enviar. Os seus ficheiros locais são preservados.",
     "failed": "A operação não foi concluída. Tente novamente ou abra os ficheiros locais."
+  },
+  "attachmentPreview": {
+    "fitWidth": "Ajustar à largura",
+    "fitPage": "Ajustar à página",
+    "pageNumber": "Número da página",
+    "more": "Mais ações",
+    "retry": "Tentar novamente",
+    "image": "Imagem",
+    "video": "Vídeo",
+    "file": "Ficheiro",
+    "close": "Fechar",
+    "reset": "Repor vista",
+    "open": "Abrir pré-visualização",
+    "zoomIn": "Ampliar",
+    "zoomOut": "Reduzir",
+    "fit": "Ajustar à janela",
+    "actualSize": "Tamanho real (1:1)",
+    "save": "Guardar original",
+    "share": "Partilhar",
+    "previous": "Anexo anterior",
+    "next": "Anexo seguinte",
+    "password": "Introduzir palavra-passe do PDF",
+    "find": "Pesquisar no documento",
+    "matches": "{{count}} páginas correspondentes",
+    "previousPage": "Página anterior",
+    "nextPage": "Página seguinte",
+    "source": "Ver código-fonte",
+    "rendered": "Ver documento",
+    "wrap": "Moldar linhas",
+    "lineNumbers": "Números de linha"
   }
 }

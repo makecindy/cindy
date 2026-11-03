@@ -38,6 +38,8 @@ interface McpServerDialogProps {
   initial?: CustomMcpConfig;
   proposal?: McpSetupProposal;
   embedded?: boolean;
+  /** 伙伴对话里打开：新工具在同一对话下一轮生效，不提示新建任务。 */
+  teammate?: boolean;
   /** 已占用的全部 MCP id;新建自动生成 id 时避让。 */
   existingIds?: string[];
   onSaved: (serverId: string) => void;
@@ -75,7 +77,7 @@ function uniqueId(name: string, existing: ReadonlySet<string>): string {
   return `${base}-${i}`;
 }
 
-export function McpServerDialog({ initial, proposal, embedded, existingIds, onSaved, onClose }: McpServerDialogProps) {
+export function McpServerDialog({ initial, proposal, embedded, teammate, existingIds, onSaved, onClose }: McpServerDialogProps) {
   const { t } = useTranslation();
   const editing = !!initial;
 
@@ -206,7 +208,7 @@ export function McpServerDialog({ initial, proposal, embedded, existingIds, onSa
           </div>
           <div className={cn("flex min-h-0 flex-col gap-4 px-4 pb-2 pt-1", !embedded && "overflow-y-auto")}>
             <Description className="text-13 leading-relaxed text-[var(--settings-section-desc)]">
-              {t('settings.mcp.dialog.desc')}
+              {t(teammate ? 'settings.mcp.dialog.teammateDesc' : 'settings.mcp.dialog.desc')}
             </Description>
             <FormField
               id={`${id}-name`}

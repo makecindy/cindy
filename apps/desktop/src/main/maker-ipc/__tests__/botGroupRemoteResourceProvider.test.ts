@@ -96,7 +96,7 @@ const service = {
   continuePlan: vi.fn(),
   retryPlan: vi.fn(),
   editPlanStep: vi.fn(),
-  chatServer: { manage: vi.fn(), mask: vi.fn(), mentions: vi.fn(), ownedBots: vi.fn() },
+  chatServer: { manage: vi.fn(), mask: vi.fn(), mentions: vi.fn(), ownedBots: vi.fn(), readers: vi.fn() },
 };
 
 describe('bot group remote resources', () => {
@@ -344,6 +344,24 @@ describe('bot group remote resources', () => {
     await expect(invoke('mask', {})).rejects.toThrow('Account changed');
   });
 
+  it('hands a phone the read list and the read marks of this computer, and refuses a group without them', async () => {
+    const readers = { messageId: 'm2', eligibleCount: 1, readCount: 0, listed: true, readers: [] };
+    service.chatServer.readers.mockResolvedValue({ ok: true, readers });
+    const read = detail({ serverBacked: true, supportsMessageReaders: true,
+      messages: detail().messages.map((m, index) => index === 0 ? { ...m, isSelf: true, readByOthers: true } : m) });
+    service.getGroup.mockResolvedValue({ ok: true, group: read });
+    const invoke = (input: Record<string, unknown>) => remoteResourceRegistry.invoke(context, {
+      client: client(), collectionId: BOT_GROUP_REMOTE_COLLECTION_ID, resourceRef: ref('g1'), actionId: 'readers', input });
+    expect(await invoke({ messageId: 'm2' })).toMatchObject({ result: { ok: true, readers }, effects: [] });
+    expect(service.chatServer.readers).toHaveBeenCalledWith({ groupId: 'g1', messageId: 'm2' });
+    expect(botGroupRemoteChatData(read)).toMatchObject({ supportsMessageReaders: true, messages: [{ readByOthers: true }, {}] });
+    await expect(invoke({})).rejects.toThrow('UNSUPPORTED_OPERATION');
+    service.chatServer.readers.mockResolvedValue({ ok: false, errorCode: 'GROUP_TOO_LARGE' });
+    await expect(invoke({ messageId: 'm2' })).rejects.toThrow('GROUP_TOO_LARGE');
+    service.chatServer.readers.mockResolvedValue({ ok: false, errorCode: 'MESSAGE_AUTHOR_REQUIRED' });
+    await expect(invoke({ messageId: 'm2' })).rejects.toThrow('MESSAGE_AUTHOR_REQUIRED');
+  });
+
   it('forwards actions to the group service and reports its error code when refused', async () => {
     const send = await remoteResourceRegistry.invoke(context, {
       client: client(), collectionId: BOT_GROUP_REMOTE_COLLECTION_ID, actionId: 'send', resourceRef: ref('g1'),
@@ -359,6 +377,11 @@ describe('bot group remote resources', () => {
       actionId: 'read', resourceRef: ref('g1'), input: { messageId: 'm2' } });
     expect(service.chatServer.manage).toHaveBeenCalledWith({ groupId: 'g1', action: { type: 'read', messageId: 'm2' } });
     expect(read.effects).toEqual([]);
+
+    service.getGroup.mockResolvedValueOnce({ ok: true, group: detail({ serverBacked: true, supportsNotificationSettings: true, notificationMode: 'all' }) });
+    await remoteResourceRegistry.invoke(context, { client: client(), collectionId: BOT_GROUP_REMOTE_COLLECTION_ID,
+      actionId: 'notifications', resourceRef: ref('g1'), input: { mode: 'mentions' } });
+    expect(service.chatServer.manage).toHaveBeenCalledWith({ groupId: 'g1', action: { type: 'notifications', mode: 'mentions' } });
 
     await remoteResourceRegistry.invoke(context, {
       client: client(), collectionId: BOT_GROUP_REMOTE_COLLECTION_ID, actionId: 'plan-continue', resourceRef: ref('g1'),

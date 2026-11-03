@@ -8,6 +8,26 @@
 /* biome-ignore lint/suspicious/noUnknownAtRules: Tailwind directives are expanded by PostCSS. */
 @tailwind utilities;
 
+/* Pin the existing PingFang fallback to its public faces. On macOS, resolving the
+   family name alone can mix PingFangSC-Regular with SFProPingFangSC-Medium, whose
+   glyph metrics shrink on 400 -> 500 (e.g. menu hover). Local PostScript names keep
+   the same family across weights; platforms without PingFang use the next fallback. */
+@font-face {
+  font-family: 'PingFang SC';
+  src: local('PingFangSC-Regular');
+  font-weight: 400;
+}
+@font-face {
+  font-family: 'PingFang SC';
+  src: local('PingFangSC-Medium');
+  font-weight: 500;
+}
+@font-face {
+  font-family: 'PingFang SC';
+  src: local('PingFangSC-Semibold');
+  font-weight: 600;
+}
+
 @layer base {
   /* Static defaults and quota bootstrap aliases: generated/tokens.css. */
   body {

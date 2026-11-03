@@ -34,6 +34,15 @@ function harness() {
 }
 
 describe('GitHub authentication recovery', () => {
+  it('lists connected instances without choosing a same-name installation', async () => {
+    const h = harness();
+    h.state.plugins.push({ ...h.ghost, namespace: 'local', dir: '/tmp/_ns/local/cindy-github' });
+    const result = await h.recover(request);
+    expect(result).toContain('Available plugin instances:');
+    expect(result).toContain('"namespace":null');
+    expect(result).toContain('"namespace":"local"');
+    expect(result).toContain('Select the intended instance explicitly');
+  });
   it('returns an actionable plugin route and an explicit native-Git escape without credentials', async () => {
     const h = harness();
     const result = await h.recover(request);
@@ -59,7 +68,7 @@ describe('GitHub authentication recovery', () => {
     expect(h.connected).not.toHaveBeenCalled();
   });
 
-  it.each(['disabled', 'unavailable', 'unapproved', 'untrusted', 'setup-required', 'missing', 'ambiguous', 'remote', 'no-owner', 'no-workdir', 'no-tools'])
+  it.each(['disabled', 'unavailable', 'unapproved', 'untrusted', 'setup-required', 'missing', 'remote', 'no-owner', 'no-workdir', 'no-tools'])
     ('does not suggest an unusable plugin: %s', async (reason) => {
       const h = harness();
       if (reason === 'disabled') h.state.disabled = true;
@@ -68,7 +77,6 @@ describe('GitHub authentication recovery', () => {
       if (reason === 'untrusted') h.state.trusted = false;
       if (reason === 'setup-required') h.state.ready = false;
       if (reason === 'missing') h.state.plugins = [];
-      if (reason === 'ambiguous') h.state.plugins.push({ ...h.ghost, namespace: 'acme', dir: '/tmp/_ns/acme/cindy-github' });
       if (reason === 'remote') h.state.context.remoteHostId = 'ssh-host';
       if (reason === 'no-owner') h.state.owner = null;
       if (reason === 'no-workdir') h.state.context.workingDir = '';

@@ -185,8 +185,8 @@ describe('namespace downgrade matrix', () => {
     expect(kv().read(keys['public-tool'])).not.toEqual(kv().read(keys['xd-feishu']));
     expectPrivileges('public-tool', null, true, false, false);
     expectPrivileges('manual-tool', null, true, false, false);
-    expectPrivileges('xd-feishu', null, true, true, true);
-    expectPrivileges('cindy-helper', null, true, true, true);
+    expectPrivileges('xd-feishu', null, true, true, false);
+    expectPrivileges('cindy-helper', null, true, false, false);
   });
 
   it('survives an old client editing each class and still restores only confirmed privileges', async () => {
@@ -248,7 +248,7 @@ describe('namespace downgrade matrix', () => {
     await manager.reconcilePendingRootNamespaces(true);
     expect(byId('xd-feishu')).toMatchObject({ namespace: 'xd', namespaceState: 'confirmed', enabled: true });
     expect(manager.readDeliveryNamespace(keys['xd-feishu'])).toBe('xd');
-    expectPrivileges('xd-feishu', 'xd', false, true, true);
+    expectPrivileges('xd-feishu', 'xd', false, true, false);
     expectOwnedData(keys['xd-feishu'], 'kept:xd-feishu');
     expectOwnedData(keys['public-tool'], 'kept:public-tool');
   });
@@ -361,7 +361,7 @@ describe('namespace downgrade matrix', () => {
         sha256: newSha, approvedPackageSha256: newSha,
       },
     });
-    expect(restored).toMatchObject({ brokerEligible: true, hostPrimitiveEligible: true, basis: 'market-organization-current' });
+    expect(restored).toMatchObject({ brokerEligible: true, hostPrimitiveEligible: false, basis: 'market-organization-current' });
     expect(authorizeGhostTokenBroker('xd-feishu', { kind: 'ready', facts: {
       ghostId: 'xd-feishu', namespace: 'xd', builtin: false, installOrigin: 'manual',
       currentOrganization: { organizationId: 'org-xd', orgSlug: 'xd', pluginPrefix: 'xd' },
@@ -373,7 +373,7 @@ describe('namespace downgrade matrix', () => {
     } })).toBe(true);
   });
 
-  it('keeps official cindy plugin broker eligibility after an old client strips namespace', async () => {
+  it('keeps legacy installation evidence without reviving public Broker privileges after downgrade', async () => {
     manager = createManager({
       captureLegacyFirstPartyEligibility: (ghostId) => ghostId === 'cindy-helper',
     });
@@ -410,9 +410,9 @@ describe('namespace downgrade matrix', () => {
       marketRecord: null,
     };
     expect(resolveGhostFirstPartyPrivilege(facts)).toMatchObject({
-      brokerEligible: true, hostPrimitiveEligible: true, basis: 'legacy-existing-install',
+      brokerEligible: false, hostPrimitiveEligible: false, basis: 'denied-unknown-origin',
     });
-    expect(authorizeGhostTokenBroker('cindy-helper', { kind: 'ready', facts })).toBe(true);
-    expect(authorizeGhostHostPrimitive('cindy-helper', { kind: 'ready', facts })).toBe(true);
+    expect(authorizeGhostTokenBroker('cindy-helper', { kind: 'ready', facts })).toBe(false);
+    expect(authorizeGhostHostPrimitive('cindy-helper', { kind: 'ready', facts })).toBe(false);
   });
 });

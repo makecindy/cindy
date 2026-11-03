@@ -1,11 +1,11 @@
-import { app, screen, type BrowserWindow, type Display, type WebContents } from 'electron';
+import { app, type BrowserWindow, type Display, type WebContents } from 'electron';
 
 import { createLogger } from '../logger';
 import { createScreenshotPageWindow } from './pageWindow';
 
 const log = createLogger('region-screenshot:overlays');
 
-/** 隐藏预热的浮层迟迟没挂载时放弃这块屏, 不让按下快捷键后一直没反应。 */
+/** 按需创建的浮层迟迟没挂载时放弃这块屏，不让快捷键一直没反应。 */
 const SHELL_TIMEOUT_MS = 4000;
 /** 浮层 renderer 崩溃后的重建额度: 10 分钟内最多 3 次, 超出后本次运行不再截图。 */
 const CRASH_LIMIT = 3;
@@ -49,14 +49,15 @@ interface Entry extends OverlayWindow {
 }
 
 /**
- * 每块显示器一个全屏框选浮层, 隐藏预热、截图时显示、结束后销毁并重新预热。
+ * 每块显示器一个全屏框选浮层，首次截图按需创建，结束后隐藏复用。
  *
  * 与 §3.1 独立辅助窗口基线的差异 (全局热键 + 置顶系统浮层的平台约束):
  * - 不随主窗口挂父子关系、不进任务栏 / Dock, 置顶在屏保层级; macOS 用不激活应用的面板;
- * - 「就绪」分两段: 预热时页面挂载, 每次截图再等定格画面绘制后才显示
+ * - 用户选择首次使用才创建，不在应用启动或截图结束后预热。
+ * - 「就绪」分两段: 首次页面挂载, 每次截图再等定格画面绘制后才显示
  *   (见 RegionScreenshotSession); 隐藏前由页面清空画面与交互态;
  * - 显示器增减或分辨率变化时按显示器重建, 不尝试在原窗口上迁移。
- * - 透明浮层用后销毁, 避免下次截图继承原生窗口的合成状态; 未使用的预热壳仍可复用。
+ * - 显隐都禁用 Windows Aura 动画，保持透明直到新画面绘制，避免旧帧和透明度残留。
  * 其余安全配置、sender 校验、故障隔离与有界重建照基线执行。
  */
 export class OverlayPool {
@@ -81,18 +82,7 @@ export class OverlayPool {
     return entry && !entry.window.isDestroyed() ? entry : null;
   }
 
-  /** 后台为所有显示器预热浮层; 已存在的只校正位置。 */
-  prewarm(): void {
-    if (this.disabled) return;
-    const displays = screen.getAllDisplays();
-    const ids = new Set(displays.map((d) => d.id));
-    for (const [displayId, entry] of this.byDisplay) {
-      if (!ids.has(displayId)) this.destroy(entry);
-    }
-    for (const display of displays) this.ensure(display);
-  }
-
-  /** 显示器配置变了: 全部销毁, 稍后按新配置预热。 */
+  /** 显示器配置变了: 丢弃旧几何，下次截图再创建。 */
   reset(): void {
     for (const entry of [...this.byDisplay.values()]) this.destroy(entry);
   }
@@ -146,8 +136,17 @@ export class OverlayPool {
     this.retiring.clear();
   }
 
+  /** END 通知页面清空内容；保留挂载的壳，下一次仍须等待新 token 的 PAINTED。 */
+  release(overlay: OverlayWindow): void {
+    const { window } = overlay;
+    if (window.isDestroyed()) return;
+    window.setOpacity(0);
+    hideScreenshotOverlay(window);
+    window.setIgnoreMouseEvents(false);
+  }
+
   /**
-   * 截图结束后销毁用过的透明浮层, 避免下一次截图继承原生窗口的透明度与合成状态。
+   * 未能绘制的浮层不复用，避免下一次截图继续等待失效页面。
    * 先从池中移除, 即使下一次截图立即开始, 也只会取得新窗口。
    */
   retire(overlay: OverlayWindow): void {
@@ -196,7 +195,7 @@ export class OverlayPool {
     });
     window.setAlwaysOnTop(true, 'screen-saver', 1);
     // 页面重新加载 (开发热更新、意外导航) 会丢掉会话状态: 视为这块浮层失效, 让当前会话结束,
-    // 未使用的预热壳等页面重新挂载后继续使用, 已使用的浮层随会话结束销毁。
+    // 结束当前会话，等页面重新挂载后才允许再次使用。
     window.webContents.on('did-start-loading', () => {
       entry.shellReady = false;
       this.onGone?.(entry);

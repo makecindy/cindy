@@ -2075,3 +2075,35 @@ it.each(['../page.html', '/page.html', 'ui/../page.html', 'ui\\page.html', 'con.
     expect(pluginUiPermissionsExpand(manifest, valid)).toBe(true);
   },
 );
+
+it('keeps a liveScreen declaration as a granted capability only in v3', () => {
+  const base = {
+    schemaVersion: GHOST_MANIFEST_SCHEMA_VERSION,
+    minCindyVersion: '0.1.116',
+    id: 'sim',
+    name: 'Simulator',
+    version: '1.0.0',
+    entry: 'main.js',
+    node: { entry: 'node/worker.cjs', protocol: 'json-rpc-stdio' },
+  };
+  const declared = validateGhostManifest({ ...base, liveScreen: true });
+  expect(declared.ok && declared.manifest.liveScreen).toBe(true);
+  const absent = validateGhostManifest(base);
+  expect(absent.ok && absent.manifest).not.toHaveProperty('liveScreen');
+  // Without a node worker the declaration could never run: refuse it at install.
+  const { node: _node, ...withoutNode } = base;
+  expect(validateGhostManifest({ ...withoutNode, liveScreen: true }).ok).toBe(false);
+});
+
+describe('tool approval declaration', () => {
+  it.each(['auto', 'each-call'] as const)('retains %s through protocol normalization', (approval) => {
+    const raw = { ...validManifest, tools: [{ name: 'run', description: 'Run', approval }] };
+    const result = validateGhostManifest(raw);
+    expect(result).toMatchObject({ ok: true, manifest: { tools: raw.tools } });
+    if (result.ok) expect(validateGhostManifest(result.manifest)).toEqual(result);
+  });
+  it('rejects an unknown approval policy', () => {
+    expect(validateGhostManifest({ ...validManifest, tools: [{ name: 'run', description: 'Run', approval: 'bypass' }] }))
+      .toMatchObject({ ok: false });
+  });
+});

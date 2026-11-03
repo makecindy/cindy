@@ -302,25 +302,47 @@ describe('message viewport content virtualization', () => {
     await act(async () => input.dispatchEvent(new KeyboardEvent('keydown', { key: 'a', ctrlKey: true, bubbles: true })));
     expect(host.querySelectorAll('button').length).toBeLessThan(20);
   });
-  it.each([false, true])('exposes offscreen controls before Tab enters from outside (reverse: %s), then releases on exit', async shiftKey => {
+  // BWG3 regression (unit): Tab must reach virtual controls in either direction
+  // without synchronously mounting every row. Earlier tests required 80 mounts.
+  it.each([false, true])('reveals only the next Tab destination (reverse: %s), then releases on exit', async shiftKey => {
     vi.useFakeTimers();
     await act(async () => root.render(<Fixture restore />));
-    const outside = host.appendChild(document.createElement('input'));
+    const outside = document.createElement('input');
+    if (shiftKey) host.append(outside); else host.prepend(outside);
     outside.focus();
     expect(row(0).querySelector('button')).toBeNull();
     await act(async () => {
       outside.dispatchEvent(new KeyboardEvent('keydown', { key: 'Tab', shiftKey, bubbles: true }));
-      // Assert during keydown, before the browser chooses its default target.
-      expect(row(0).querySelector('button')).not.toBeNull();
-      row(0).querySelector('button')!.focus();
+      // jsdom does not move native focus: inspect the destination before
+      // emulating the browser, then traverse into the next virtual row.
+      const first = shiftKey ? 79 : 0;
+      expect(row(first).querySelector('button')).not.toBeNull();
+      row(first).querySelector('button')!.focus();
+      row(first).querySelector('button')!.dispatchEvent(new KeyboardEvent('keydown', { key: 'Tab', shiftKey, bubbles: true }));
+      const second = shiftKey ? 78 : 1;
+      expect(row(second).querySelector('button')).not.toBeNull();
+      row(second).querySelector('button')!.focus();
       vi.runOnlyPendingTimers();
     });
-    expect(host.querySelectorAll('button')).toHaveLength(80);
+    expect(host.querySelectorAll('button').length).toBeLessThan(20);
     await act(async () => { outside.focus(); vi.runOnlyPendingTimers(); });
     expect(host.querySelectorAll('button').length).toBeLessThan(20);
     // The row that was actually used keeps its state; untouched rows can unmount.
-    expect(row(0).querySelector('button')).not.toBeNull();
-    expect(row(1).hasAttribute('data-message-placeholder')).toBe(true);
+    expect(row(shiftKey ? 78 : 1).querySelector('button')).not.toBeNull();
+    expect(row(shiftKey ? 1 : 78).hasAttribute('data-message-placeholder')).toBe(true);
+  });
+  it('does not expand messages for a Tab between unrelated controls', async () => {
+    await act(async () => root.render(<Fixture restore />));
+    const first = document.createElement('input');
+    const second = document.createElement('input');
+    host.append(first, second);
+    first.focus();
+    const before = host.querySelectorAll('button').length;
+    const event = new KeyboardEvent('keydown', { key: 'Tab', bubbles: true, cancelable: true });
+    await act(async () => first.dispatchEvent(event));
+    expect(event.defaultPrevented).toBe(false);
+    expect(host.querySelectorAll('button').length).toBe(before);
+    expect(row(0).querySelector('button')).toBeNull();
   });
   it('releases a prevented external Tab that leaves focus outside the messages', async () => {
     vi.useFakeTimers();

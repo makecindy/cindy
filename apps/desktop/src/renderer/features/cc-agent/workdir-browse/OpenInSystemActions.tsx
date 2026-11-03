@@ -7,17 +7,14 @@ import { toast } from '@/lib/toast';
 import { cn } from '@/lib/utils';
 
 export interface OpenInSystemActionsProps {
-  /** Absolute filesystem path of the file to open. */
+  /** Absolute filesystem path of the file to open or reveal. */
   absPath: string;
-  /** Absolute filesystem path of the file's containing folder. */
-  folderPath: string;
   /** Extra classes applied to the outer button row. */
   className?: string;
 }
 
 export function OpenInSystemActions({
   absPath,
-  folderPath,
   className,
 }: OpenInSystemActionsProps) {
   const { t } = useTranslation();
@@ -35,10 +32,11 @@ export function OpenInSystemActions({
     }
   };
 
-  const onOpenFolder = async () => {
+  // 在访达 / 资源管理器里选中这个文件,而不是只打开所在目录。
+  const onRevealFile = async () => {
     try {
-      const r = await window.electronAPI.openPath(folderPath);
-      if (shouldShowOpenPathError(r)) toast.error(r.error || t('ccAgent.common.openFolderFailed'));
+      const r = await window.electronAPI.showItemInFolder({ filePath: absPath });
+      if (!r.success) toast.error(r.error || t('ccAgent.common.openFolderFailed'));
     } catch (err) {
       toast.error(
         t('ccAgent.common.openFolderFailedWith', {
@@ -54,7 +52,7 @@ export function OpenInSystemActions({
         <ExternalLink size={14} />
         {t('ccAgent.workdirBrowse.unrenderable.openInSystem')}
       </Button>
-      <Button variant="secondary" size="md" compact type="button" onClick={onOpenFolder}>
+      <Button variant="secondary" size="md" compact type="button" onClick={onRevealFile}>
         <FolderOpen size={14} />
         {t('ccAgent.workdirBrowse.unrenderable.revealFolder')}
       </Button>

@@ -28,6 +28,7 @@
  */
 
 import type Database from 'better-sqlite3';
+import { markStartupMilestone } from '../startupTimeline';
 
 import { createBetterSqliteDatabase } from '../localDb/betterSqliteFactory';
 
@@ -169,6 +170,7 @@ export class DeviceLinkOwnershipArbiter {
     this.owner = true;
     this.setStandby(false);
     log.info('became device-link owner (file-lock)');
+    markStartupMilestone('device-link-owner');
     try {
       this.opts.onAcquire();
     } catch (err) {
