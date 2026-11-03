@@ -1109,6 +1109,53 @@ describe('Chat Server result delivery and refresh', () => {
     expect(search.messages).toHaveLength(kind === 'share' ? 0 : 1);
     expect(search).toMatchObject({ hasMore: true, nextCursor: '41' });
   });
+  // #8433 review / message-source.md: quotes must use the original state read
+  // by this request, including the snapshot when pagination excludes the original.
+  // Production adapter + reader, unit; execution-context coverage used another projection.
+  it.each(['page-deleted', 'snapshot-deleted', 'page-edited', 'snapshot-edited', 'missing', 'unknown', 'thread-original'] as const)(
+    'projects quote history/search from the known original (%s)', async state => {
+    fixture.profiles = [{ id: 'local-bot', displayName: 'Bot', avatar: null, status: 'active' }];
+    const members = [{ id: botId, kind: 'bot', state: 'joined' }];
+    const originalId = '70000000-0000-4000-8000-000000000003';
+    const card = buildBotGroupQuoteCard({ messageId: originalId, authorName: 'Old name', authorKind: 'user',
+      excerpt: 'old quote words', attachmentCount: 1, attachmentName: 'old.pdf', sequence: 41 });
+    const base = { deleted: false, createdAt: '2026-11-03T00:00:00Z', threadRootId: null,
+      author: { name: 'Current author', kind: 'human' } };
+    const original = { ...base, id: originalId, seq: '41', deleted: state.endsWith('deleted'),
+      threadRootId: state === 'thread-original' ? '70000000-0000-4000-8000-000000000001' : null,
+      content: [{ type: 'text', text: 'edited quote words' }, { type: 'media', caption: 'current.pdf' }] };
+    fixture.handle.mockImplementation(route => {
+      if (route.endsWith('/snapshot')) return { body: { room: room(roomId), members,
+        messages: state.startsWith('snapshot') || state === 'thread-original' ? [original] : [] } };
+      if (route.endsWith('/members')) return { body: members };
+      if (route.includes('/messages?all=true')) return { body: [
+        { ...base, id: 'quoting-message', seq: '42', content: [{ ...card, schemaRevision: state === 'unknown' ? 99 : 1 }, { type: 'text', text: 'my own words' }] },
+        ...(state.startsWith('page') ? [original] : []),
+      ] };
+      return response(route);
+    });
+    const input = { botId: 'local-bot', groupId: roomId, limit: state.startsWith('page') ? 2 : 1, before: '50' };
+    const page = await service.teammateHistory!(input);
+    const result = page.messages!.find(message => message.id === 'quoting-message');
+    if (state === 'unknown') {
+      expect(result?.text).toContain('old quote words');
+      expect(result).not.toHaveProperty('quote');
+    } else {
+      expect(result?.text).toBe('my own words');
+      expect(result?.quote).toEqual(state.endsWith('deleted')
+      ? { messageId: originalId, deleted: true }
+      : state === 'missing' || state === 'thread-original' ? { messageId: originalId, from: 'Old name', text: 'old quote words',
+          attachmentCount: 1, attachmentName: 'old.pdf', snapshot: true }
+        : { messageId: originalId, from: 'Current author', text: 'edited quote words',
+          attachmentCount: 1, attachmentName: 'current.pdf' });
+    }
+    const search = await service.teammateHistory!({ ...input, query: 'old quote words' });
+    expect(search.messages).toHaveLength(['missing', 'unknown', 'thread-original'].includes(state) ? 1 : 0);
+    expect(search.hasMore).toBe(true);
+    expect(search.nextCursor).toBe(state.startsWith('page') ? '41' : '42');
+    const current = await service.teammateHistory!({ ...input, query: 'edited quote words' });
+    expect(current.messages?.some(message => message.id === 'quoting-message')).toBe(state.endsWith('edited'));
+  });
   it('propagates a companion-actor membership refusal without retrying as the owner', async () => {
     fixture.profiles = [{ id: 'local-bot', displayName: 'Bot', avatar: null, status: 'active' }];
     fixture.handle.mockImplementation(route => route.endsWith('/snapshot')
