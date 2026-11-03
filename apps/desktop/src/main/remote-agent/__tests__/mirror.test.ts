@@ -29,6 +29,7 @@ import { EXEC_SERVER_NOT_FOUND_CODE } from '../host/execServerShortcut';
 import { createRemoteAgentHost, mirrorSegments, type HostedStartInput } from '../host/runHost';
 import { createProviderShareMemberPurger, hostedStartOptions } from '../host/service';
 import { ExecutorWorkspace } from '../executor/workspace';
+import { managedSkillDigest } from '../managedSkillDigest';
 import { MAX_ANCESTOR_LEVELS } from '../wire';
 
 const RG = path.resolve(__dirname, '../../../../../ripgrep-bin', `${process.platform}-${process.arch}`, process.platform === 'win32' ? 'rg.exe' : 'rg');
@@ -453,6 +454,28 @@ describe('collectPersonalConfig', () => {
     const pi = await collectPersonalConfig('pi', [], { env: {}, home, managedSkills });
     expect(pi.personal.managedSkills).toEqual([{ command: 'cindy:pr', dir: '.agents/skills/cindy-pr' }]);
     expect(pi.roots).toEqual([{ relative: '.agents/skills/cindy-pr', local: pr }]);
+  });
+
+  // 新运行端：与它指纹相同的只报名字，其余放进单独的托管额度，不挤占个人配置。
+  it('names managed Skills the agent computer already has and sends the rest outside the personal budget', async () => {
+    const home = path.join(root, 'home');
+    write(path.join(home, '.claude', 'skills', 'mine', 'SKILL.md'), 'mine');
+    const pr = path.join(root, 'bundle', 'pr');
+    write(path.join(pr, 'SKILL.md'), 'pr skill');
+    const learn = path.join(root, 'bundle', 'learn');
+    write(path.join(learn, 'SKILL.md'), 'learn skill');
+    const digest = await managedSkillDigest(pr);
+    const { personal } = await collectPersonalConfig('claude-code', [], {
+      env: {}, home,
+      managedSkills: [{ command: 'cindy:pr', dir: pr }, { command: 'cindy:learn', dir: learn }],
+      agentDigests: { 'cindy:pr': digest!, 'cindy:learn': '0'.repeat(64) },
+    });
+    expect(personal.managedSkills).toEqual([
+      { command: 'cindy:pr', dir: '.claude/skills/cindy-pr', digest, reuse: true },
+      { command: 'cindy:learn', dir: '.claude/skills/cindy-learn', digest: await managedSkillDigest(learn) },
+    ]);
+    expect(decode(personal.files)).toEqual({ '.claude/skills/mine/SKILL.md': 'mine' });
+    expect(decode(personal.managedFiles ?? [])).toEqual({ '.claude/skills/cindy-learn/SKILL.md': 'learn skill' });
   });
 
   it('leaves credential files in personal Skills for later on a shared provider', async () => {

@@ -79,15 +79,21 @@ import {
 import { PROVIDER_GROUP_LOCAL_MEMBER_KEY } from '../../../shared/providerGroup';
 import { isAccountUsageLimitError } from '../../maker-ipc/usageLimitAutoResume';
 import { projectPathText } from '../executor/workspace';
+import { listManagedSkillFiles, managedSkillDigest } from '../managedSkillDigest';
 import {
   MAX_ANCESTOR_LEVELS,
   PROJECT_INSTRUCTION_FILES,
   decodeOpenPayload,
   decodeSendOptions,
   decodeUserMessage,
+  MAX_MANAGED_SKILL_FILES,
+  REMOTE_AGENT_MAX_PERSONAL_FILES,
   managedSkillPluginLayout,
   parseManagedSkillCommand,
   type RemoteAgentOpenPayload,
+  type RemoteAgentWireFile,
+  type RemoteAgentWireManagedSkill,
+  type RemoteAgentWirePersonal,
   type RemoteAgentWireStartOptions,
   type RemoteAgentWireWorkspace,
 } from '../wire';
@@ -195,6 +201,11 @@ export interface OwnerProviderRouteBinding {
 }
 
 export interface RemoteAgentHostDeps {
+  /**
+   * 这台自己的 Cindy 托管 Skill(启用中的；命令名与 SKILL.md 所在目录)。caps 据此报指纹，任务所在电脑报「用你自己那份」
+   * 时据此复制；组所在电脑中转时据此替组内电脑补文件。
+   */
+  managedSkills?(): Promise<Array<{ command: string; dir: string }>>;
   nativeHistory?(scope: string, command: unknown, workingDir: string, assertCurrent: () => void): Promise<unknown>;
   fastPolicy?(controller: string, command: import('@cindy/device-link').RemoteAgentFastPolicy): Promise<unknown>;
   /** Prepare native bytes; retain recovery ownership only for receipted controllers. */
@@ -1373,10 +1384,28 @@ export function createRemoteAgentHost(deps: RemoteAgentHostDeps) {
       await writeNew(path.join(sessionRoot, 'CLAUDE.md'), instructionBytes(Buffer.from(projectText(personal.memory), 'utf8'), sessionRoot));
     }
     // 项目里已有同名文件时以项目为准(只写不存在的)。
-    for (const file of personal.files) {
+    for (const file of [...personal.files, ...(personal.managedFiles ?? [])]) {
       const target = path.join(shadowDir, ...file.path.split('/'));
       if (!inside(target, shadowDir)) continue;
       await writeNew(target, markdownBytes(projectBytes(Buffer.from(file.data, 'base64')), target));
+    }
+    // 任务所在电脑报「与你那份一样」的托管 Skill：复制这台自己的，指纹不再一致(刚更新过)就不带这个 Skill。
+    const reused = personal.managedSkills?.filter((skill) => skill.reuse) ?? [];
+    if (reused.length) {
+      const own = await ownManagedSkills();
+      for (const skill of reused) {
+        const source = own.get(skill.command);
+        const files = source ? await listManagedSkillFiles(source) : null;
+        if (!source || !files || (await managedSkillDigest(source, files)) !== skill.digest) {
+          deps.log?.warn('remote agent: reused managed skill no longer matches; skipping it', { skill: skill.command });
+          continue;
+        }
+        for (const file of files) {
+          const target = path.join(shadowDir, ...skill.dir.split('/'), ...file.relative.split('/'));
+          if (!inside(target, shadowDir)) continue;
+          await writeNew(target, await fsp.readFile(file.local));
+        }
+      }
     }
     // 说明文件里 `@` 导入的文件：workspace 相对影子目录(可落在上级目录的镜像里)，session 相对会话目录
     // (个人说明旁边，不进虚拟工作区)。已有同名文件的不覆盖。
@@ -1831,6 +1860,80 @@ export function createRemoteAgentHost(deps: RemoteAgentHostDeps) {
   // ─── 供应商组：本机是组所在电脑，把受邀者的任务转给组内电脑 ─────────────────
 
   /** 转给组内电脑的打开载荷：已按受邀者复核过；来源换成那台上的供应商，带防转圈标记与受邀者的 relay 键。 */
+  /** 这台自己的托管 Skill：命令名 → SKILL.md 所在目录。列不出来时当作没有。 */
+  async function ownManagedSkills(): Promise<Map<string, string>> {
+    try {
+      return new Map((await deps.managedSkills?.() ?? []).map((skill) => [skill.command, skill.dir]));
+    } catch (error) {
+      deps.log?.warn('remote agent: managed skills unavailable', { error: String(error) });
+      return new Map();
+    }
+  }
+
+  /** caps 里报的指纹。受邀者只看到 Cindy 内置的，不透露这台装了哪些插件。 */
+  async function ownManagedSkillDigests(guest: boolean): Promise<Record<string, string>> {
+    const digests: Record<string, string> = {};
+    for (const [command, dir] of await ownManagedSkills()) {
+      if (guest && !command.startsWith('cindy:')) continue;
+      const digest = await managedSkillDigest(dir);
+      if (digest) digests[command] = digest;
+    }
+    return digests;
+  }
+
+  /**
+   * 组所在电脑中转：受邀者是按这台的 caps 决定哪些托管 Skill 只报名字的。按组内电脑的 caps 重排：它也有同样一份的
+   * 继续只报名字，没有的由这台用自己那份补上文件(指纹与受邀者的一致)；旧版组内电脑不认单独的托管额度，
+   * 文件放回 `files`，放不下的整个不带。
+   */
+  async function adaptManagedSkillsForMember(
+    personal: RemoteAgentWirePersonal,
+    memberDigests: Readonly<Record<string, string>> | undefined,
+  ): Promise<RemoteAgentWirePersonal> {
+    if (!personal.managedSkills) return personal;
+    const own = await ownManagedSkills();
+    const skills: RemoteAgentWireManagedSkill[] = [];
+    const filesBySkill = new Map<string, RemoteAgentWireFile[]>();
+    for (const file of personal.managedFiles ?? []) {
+      const skill = personal.managedSkills.find((item) => file.path.startsWith(`${item.dir}/`));
+      if (skill) filesBySkill.set(skill.dir, [...(filesBySkill.get(skill.dir) ?? []), file]);
+    }
+    for (const skill of personal.managedSkills) {
+      if (!skill.reuse) {
+        skills.push(skill);
+        continue;
+      }
+      if (memberDigests && skill.digest && memberDigests[skill.command] === skill.digest) {
+        skills.push(skill);
+        continue;
+      }
+      const source = own.get(skill.command);
+      const list = source ? await listManagedSkillFiles(source) : null;
+      if (!source || !list || (await managedSkillDigest(source, list)) !== skill.digest) continue;
+      const files: RemoteAgentWireFile[] = [];
+      for (const file of list) {
+        files.push({ path: `${skill.dir}/${file.relative}`, data: (await fsp.readFile(file.local)).toString('base64') });
+      }
+      skills.push({ command: skill.command, dir: skill.dir, ...(skill.digest ? { digest: skill.digest } : {}) });
+      filesBySkill.set(skill.dir, files);
+    }
+    const kept: RemoteAgentWireManagedSkill[] = [];
+    const managedFiles: RemoteAgentWireFile[] = [];
+    const files = [...personal.files];
+    const limit = memberDigests ? MAX_MANAGED_SKILL_FILES : REMOTE_AGENT_MAX_PERSONAL_FILES;
+    const target = memberDigests ? managedFiles : files;
+    for (const skill of skills) {
+      const skillFiles = filesBySkill.get(skill.dir) ?? [];
+      if (target.length + skillFiles.length > limit) continue;
+      target.push(...skillFiles);
+      kept.push(skill);
+    }
+    const next: RemoteAgentWirePersonal = { ...personal, files, managedSkills: kept };
+    delete next.managedFiles;
+    if (managedFiles.length) next.managedFiles = managedFiles;
+    return next;
+  }
+
   function relayedOpenPayload(run: Run, payload: RemoteAgentOpenPayload, member: GroupRelayMember): RemoteAgentOpenPayload {
     // 「需要换一台」只在受邀者与本机之间：组内电脑不认识也不需要。受邀者自己填的转分享键不转发。
     const { acceptsGroupSwitch: _accepts, groupSwitchToken: _token, reshareKey: _reshare, relayModelAccess: _modelAccess, ...rest } = payload;
@@ -2209,7 +2312,10 @@ export function createRemoteAgentHost(deps: RemoteAgentHostDeps) {
         await deps.groupRelay?.bindFastPolicy?.({ group: groupProviderId, deviceId: current.agentDeviceId,
           sessionId: relaySessionIdFor(run.controller, payload.sessionId), relay: relayKeyFor(run.controller) });
         if (run.closing) return;
-        const started = await backend.client.open(run.kind, relayedOpenPayload(run, payload, current));
+        const relayed = relayedOpenPayload(run, payload, current);
+        relayed.personal = await adaptManagedSkillsForMember(relayed.personal, caps.managedSkills?.digests);
+        if (run.closing) return;
+        const started = await backend.client.open(run.kind, relayed);
         if (run.closing) {
           await backend.client.close('close', 'navigation').catch(() => undefined);
           return;
@@ -3089,6 +3195,7 @@ export function createRemoteAgentHost(deps: RemoteAgentHostDeps) {
       }
       case 'caps': {
         const guest = trustOf(controller) === 'guest';
+        const managedSkillDigests = await ownManagedSkillDigests(guest);
         const limits = deps.readLimits?.() ?? DEFAULT_REMOTE_AGENT_LIMITS;
         const caps: RemoteAgentCaps = {
           ...(deps.fastPolicy ? { subscriptionFastPolicy: true as const } : {}),
@@ -3114,6 +3221,7 @@ export function createRemoteAgentHost(deps: RemoteAgentHostDeps) {
           // 转分享的同意只对受邀者(把这里分享的供应商放进自己组的人)有意义。
           ...(guest && deps.reshare && (deps.reshare.canUse?.(controller) ?? true) ? { reshareConsent: true } : {}),
           ...(guest && deps.reshare && (deps.reshare.canUse?.(controller) ?? true) ? { reshareBatch: true } : {}),
+          managedSkills: { digests: managedSkillDigests },
         };
         return caps;
       }

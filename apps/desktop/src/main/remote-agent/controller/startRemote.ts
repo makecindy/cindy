@@ -17,6 +17,7 @@ import path from 'node:path';
 import {
   REMOTE_AGENT_GROUP_SWITCH_STATE_KEY,
   REMOTE_AGENT_RELAY_KEY_PATTERN,
+  type RemoteAgentCaps,
   type RemoteAgentKind,
   type RemoteAgentMethod,
   type RemoteAgentReply,
@@ -91,8 +92,12 @@ export interface StartRemoteAgentDeps {
   collectAncestorFiles?(workingDir: string): Promise<RemoteAgentWireAncestorFile[]>;
   /** 项目各级上级目录里 Codex 要找的名字有没有(对方据此少问)；缺省不带，对方照常逐个来问。 */
   collectAncestorMarkers?(workingDir: string): Promise<RemoteAgentWireAncestorMarkers>;
-  /** 你这台的个人配置；缺省不同步。 */
-  collectPersonal?(kind: RemoteAgentKind, projectFiles: readonly RemoteAgentWireFile[]): Promise<{
+  /**
+   * 你这台的个人配置；缺省不同步。agent：对方 caps 里与托管 Skill 有关的声明(新运行端才有)。
+   */
+  collectPersonal?(kind: RemoteAgentKind, projectFiles: readonly RemoteAgentWireFile[], agent?: {
+    managedSkillDigests?: Readonly<Record<string, string>>;
+  }): Promise<{
     personal: RemoteAgentWirePersonal;
     roots: Array<{ relative: string; local: string }>;
   }>;
@@ -805,6 +810,7 @@ async function prepareAndStartRemoteAgentSession(
   async function buildPayload(
     reconnect: boolean,
     timing: ReturnType<typeof remoteAgentStartupTiming>,
+    caps: RemoteAgentCaps,
   ): Promise<RemoteAgentOpenPayload> {
     // 每次打开都读最新的图片清空代次：让出期间清空过的，连回的新进程按新代次交付。
     const imageDeliveryEpoch = await timing.measure('image-epoch', async () =>
@@ -834,7 +840,8 @@ async function prepareAndStartRemoteAgentSession(
     const collectedPersonal = await timing
       .measure(
         'personal-config',
-        () => (!hostToolsOnly && deps.collectPersonal?.(kind, projectFiles) || Promise.resolve(null)),
+        () => (!hostToolsOnly && deps.collectPersonal?.(kind, projectFiles, caps.managedSkills
+          ? { managedSkillDigests: caps.managedSkills.digests } : undefined) || Promise.resolve(null)),
       )
       .catch(() => null);
     requireOpen();
@@ -919,7 +926,7 @@ async function prepareAndStartRemoteAgentSession(
       deps.pool?.noteIdleReclaimMinutes(caps.idleReclaimMinutes);
       await timing.measure('connection-slot', async () => deps.pool?.beforeOpen(member));
       requireOpen();
-      const payload = await buildPayload(reconnect, timing);
+      const payload = await buildPayload(reconnect, timing, caps);
       requireOpen();
       try {
         const client = await timing.measure('remote-open', () =>

@@ -481,7 +481,7 @@ export function createDeviceAgentStarter(deps: DeviceAgentServiceDeps) {
         : (workingDir) => collectAncestorInstructionFiles(workingDir, collect),
       // Codex 建线程时沿上级目录逐级查找 .git 与插件清单：先把有没有报过去，对方不再逐个经设备互联来问。
       ...(input.agentKind === 'codex' ? { collectAncestorMarkers } : {}),
-      collectPersonal: async (kind, projectFiles) => {
+      collectPersonal: async (kind, projectFiles, agent) => {
         // 与本机任务同一规则：伙伴按授权挑托管 Skill，停用的不带；个人 Skill 只按停用过滤。
         const disabledSkillPaths = [...(deps.disabledSkillPaths?.() ?? [])];
         let managedSkills: LocalManagedSkill[] | undefined;
@@ -501,6 +501,7 @@ export function createDeviceAgentStarter(deps: DeviceAgentServiceDeps) {
           ...collect,
           ...(opts.botRuntimeProfile ? {} : { disabledSkillPaths }),
           ...(managedSkills ? { managedSkills } : {}),
+          ...(managedSkills && agent?.managedSkillDigests ? { agentDigests: agent.managedSkillDigests } : {}),
         });
       },
       collectImports: (imports) => collectInstructionImports(imports, collect),

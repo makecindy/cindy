@@ -36,6 +36,8 @@ import {
 
 export const REMOTE_AGENT_MAX_ATTACHMENT_BYTES = 20 * 1024 * 1024;
 const MAX_PROJECT_FILES = 512;
+/** 个人配置(含旧运行端收到的托管 Skill)的文件数上限：超过时旧运行端拒绝整个打开。 */
+export const REMOTE_AGENT_MAX_PERSONAL_FILES = MAX_PROJECT_FILES;
 const MAX_TEXT = 512 * 1024;
 
 // ─── 通用校验 ────────────────────────────────────────────────────
@@ -176,6 +178,11 @@ export interface RemoteAgentWirePersonal {
    * {@link managedSkillPluginLayout} 的插件目录，保持 `cindy:pr` 这样的命名。缺省时沿用运行端原规则。
    */
   managedSkills?: RemoteAgentWireManagedSkill[];
+  /**
+   * 对方声明了 `caps.managedSkills` 时，托管 Skill 的文件放这里(不占 `files` 的额度)；每个文件都在某个
+   * `managedSkills[].dir` 之下。旧运行端不会收到它。
+   */
+  managedFiles?: RemoteAgentWireFile[];
 }
 
 export interface RemoteAgentWireManagedSkill {
@@ -183,7 +190,14 @@ export interface RemoteAgentWireManagedSkill {
   command: string;
   /** 文件在影子目录里的位置(个人 Skill 目录下的一级，见 {@link managedSkillDir})。 */
   dir: string;
+  /** 内容指纹(见 managedSkillDigest.ts)。 */
+  digest?: string;
+  /** 与对方 `caps.managedSkills.digests` 里的指纹相同：没带文件，对方复制自己那份(指纹仍要一致)。 */
+  reuse?: true;
 }
+
+/** 新运行端单独给托管 Skill 的文件额度。 */
+export const MAX_MANAGED_SKILL_FILES = 2048;
 
 const MANAGED_SKILL_PART = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/;
 
@@ -513,9 +527,21 @@ function decodePersonal(value: unknown): RemoteAgentWirePersonal {
       const valid = parts && isSafeProjectFilePath(item.dir) && item.dir.split('/').length === 3
         && (item.dir.startsWith('.claude/skills/') || item.dir.startsWith('.agents/skills/'));
       if (!valid || seen.has(item.command) || seen.has(item.dir)) return [];
+      const digest = typeof item.digest === 'string' && /^[0-9a-f]{64}$/.test(item.digest) ? item.digest : undefined;
+      // 复用必须带指纹：对方据此确认自己那份与任务所在电脑的一字不差。
+      if (item.reuse === true && !digest) return [];
       seen.add(item.command).add(item.dir);
-      return [{ command: item.command, dir: item.dir }];
+      return [{ command: item.command, dir: item.dir, ...(digest ? { digest } : {}), ...(item.reuse === true ? { reuse: true as const } : {}) }];
     });
+    const managedFiles = Array.isArray(value.managedFiles) ? value.managedFiles : [];
+    if (managedFiles.length > MAX_MANAGED_SKILL_FILES) throw new Error('REMOTE_AGENT_INVALID');
+    const dirs = personal.managedSkills.filter((skill) => !skill.reuse).map((skill) => `${skill.dir}/`);
+    const files = managedFiles.flatMap((item): RemoteAgentWireFile[] => {
+      if (!isRecord(item) || typeof item.path !== 'string' || typeof item.data !== 'string') return [];
+      const filePath = item.path;
+      return isSafeProjectFilePath(filePath) && dirs.some((dir) => filePath.startsWith(dir)) ? [{ path: filePath, data: item.data }] : [];
+    });
+    if (files.length) personal.managedFiles = files;
   }
   return personal;
 }

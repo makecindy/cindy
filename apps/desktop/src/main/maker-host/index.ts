@@ -3190,7 +3190,12 @@ export function getMaker(): Maker {
       },
     });
     // 本机作为「Agent 运行的电脑」：同账号另一台电脑的任务可让 Agent 在这里运行。
-    installRemoteAgentHost({ getMaker: () => getMaker(), userDataDir: app.getPath('userData') });
+    installRemoteAgentHost({
+      getMaker: () => getMaker(),
+      userDataDir: app.getPath('userData'),
+      managedSkills: async () => (await listCindyManagedSkills()).flatMap((skill) =>
+        skill.path ? [{ command: skill.claudeCommandName, dir: path.dirname(skill.path) }] : []),
+    });
     installLocalAgentHost(_maker);
     botRuntimeResourcePreflight = async (opts) => {
       const preflightOpts = { ...opts };
