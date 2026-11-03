@@ -403,3 +403,45 @@ instanceId、generation、outcome（completed/failed/cancelled/interrupted）及
   不含消息、计划、文件或费用；不含对话、伙伴、Worker、隐藏、远程及其他电脑上的任务。未登记或已删除的项目返回 `TARGET_UNAVAILABLE`。
 - `openTask({taskId})`：在主窗口打开该任务；Cindy 未在前台时不抢焦点。只接受 `projectTasks` 能列出的任务，否则返回 `TARGET_UNAVAILABLE`。返回 `{opened:true}`。
 - 只读，不能发送消息、修改、归档或停止任务；需要这些操作请改用 `cindy.tasks` / `cindy.targets` 并声明对应权限。状态变化不推送，插件自行按需刷新。
+
+## 4.11.9 查看伙伴和状态（未发布）
+
+插件要把伙伴画成角色、头像墙或状态面板时，声明 `"agent": { "companions": true }`，在本机 Desktop 逻辑页使用 `cindy.companions`。
+它是一项独立权限（`agent:companions`），覆盖伙伴名单、实时状态、待处理请求摘要与最新一条回复；安装/更新时已确认的不重复询问，否则首次调用复用既有宿主确认。
+它不依赖、也不授予 `agent.tasks` / `targets` / `delegation` / `observe`；旧批准和历史未知字段不授予查看伙伴。拒绝或确认界面不可用时返回 `PERMISSION_DENIED`，不得自动循环重试；用户可在插件详情页点「确认伙伴查看权限」重新允许。
+先检查 `typeof cindy.companions?.list === 'function'`；旧客户端没有此入口时隐藏相关界面，不调用私有 IPC。Mobile 插件页面和没有逻辑页的 mainView 页面拿不到 `cindy.companions`（mainView 经 BroadcastChannel 向本插件逻辑页要数据）。
+
+- `capabilities()`：返回 `{version:1}`。
+- `list()`：返回 `{companions:[...], observedAt}`，包含账号下的全部伙伴，也包括在主人其他电脑上运行的伙伴。每位伙伴 `{id, name, description, home:{isSelf, online, deviceName}, status, activity, interactions, lastReplyAt}`：
+  - `status` 为 `awaiting | error | running | done | unread | idle`，与侧边栏和手机同源。在其他电脑运行的伙伴（`home.isSelf=false`，`deviceName` 为那台电脑）从它的主力电脑读取，内容与在那台电脑上看到的一致；那台电脑离线、关闭远程控制或在本机被禁用时 `home.online=false`、`status='offline'`，只有名字。
+  - 主力电脑是旧版 Cindy 时仍有状态与工作阶段，但没有当前步骤说明、待处理请求与回复。
+  - `activity` 为 `{phase, workingPhase, summary, startedAt, lastActivityAt}`。`phase` 为 `running | needs-interaction | completed | error | idle`（其他电脑连不上时为 `unknown`）。
+    `workingPhase` 只在工作中出现，是公开类别：`thinking` 思考、`replying` 写回复、`reading-file` / `saving-file` / `searching` / `searching-files` / `reading-web` / `testing` / `checking` 等执行工具，`compacting` 整理上下文，`processing` 其他；不含命令、参数、网址或思考原文。`summary` 是宿主写的粗粒度说明。
+  - `interactions` 是伙伴正在等主人处理的请求 `[{ref, kind, title}]`：`title` 为问题或待批准的工具名，其他类型为 null；不含工具输入、计划正文或主人在宿主步骤里输入的值。`ref` 不透明，只能传回 `open`。
+  - `lastReplyAt` 是最新一条完成回复的持久化时间。一轮工作结束（`phase` 由 `running` 变为 `completed` 或 `lastReplyAt` 变化）时读一次 `reply`，即可拿到这一轮的最后一条消息。
+- `avatar({companionId})`：返回 `{src, fallback}`。`src` 为 `data:image/jpeg` 头像或 null（伙伴用表情做头像时）；`fallback` 是可直接画的单个字形。
+- `reply({companionId})`：返回 `{reply:null | {text, createdAt, truncated}}`：伙伴主对话里最新一条可见回复的文字（其他电脑上的伙伴从它的主力电脑读取），最多 8000 字，超出时 `truncated=true`；不含更早的消息、附件、私密内容或子 Agent 输出。回复可能含个人或工作信息，插件不得外传或长期保存。
+- `open({companionId, interactionRef?})`：在主窗口打开伙伴的对话；带 `interactionRef` 时打开该请求所在的任务；其他电脑上的伙伴打开为远程对话。Cindy 未在前台时不抢焦点。返回 `{opened:true}`。请求一律在 Cindy 原生卡片里处理，插件不能代主人批准、回答或拒绝。
+- `watch()` / `unwatch({subscriptionId})`：每插件一个订阅，再次 `watch` 会替换旧订阅。变化时经 `cindy.onHostMessage` 收到 `{type:'companions-changed', subscriptionId, seq}`，不带内容，插件收到后重新 `list`；其他电脑上伙伴的变化也会通知；每插件最快 1 秒一次，订阅期间另有约 5 秒一次的心跳。逻辑页关闭、撤权或卸载后订阅自动结束。
+- 不存在、已归档、不可见，或主力电脑当前连不上（`reply`/`open`）的伙伴返回 `TARGET_UNAVAILABLE`；参数不对返回 `INVALID_PARAMS`；宿主未就绪返回 `HOST_NOT_READY`。只读，不能发消息、改伙伴设置或停止伙伴；派活请改用 `cindy.targets` 并声明对应权限。
+
+```js
+if (typeof cindy.companions?.list === 'function') {
+  const seen = new Map();
+  const render = async () => {
+    const { companions } = await cindy.companions.list();
+    for (const c of companions) {
+      // A run just finished: fetch its last message once.
+      if (c.lastReplyAt && seen.get(c.id) !== c.lastReplyAt) {
+        seen.set(c.id, c.lastReplyAt);
+        const { reply } = await cindy.companions.reply({ companionId: c.id });
+        if (reply) report(c, reply.text);
+      }
+    }
+    draw(companions);
+  };
+  const { subscriptionId } = await cindy.companions.watch();
+  cindy.onHostMessage(msg => { if (msg?.type === 'companions-changed' && msg.subscriptionId === subscriptionId) render(); });
+  await render();
+}
+```

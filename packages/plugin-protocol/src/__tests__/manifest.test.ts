@@ -1969,6 +1969,15 @@ it('validates read-only observe access without a tasks dependency', () => {
   expect(validateGhostManifest({ ...base, agent: { observe: false } }).ok).toBe(false);
 });
 
+// Companion viewing is standalone; a non-boolean value must not install.
+it('validates companion viewing without a tasks dependency', () => {
+  const base = { schemaVersion: 3, minCindyVersion: '0.1.0', id: 'companions-test', name: 'Companions', version: '1.0.0', entry: 'main.js' };
+  const approved = validateGhostManifest({ ...base, agent: { companions: true } });
+  expect(approved.ok && approved.manifest.agent).toEqual({ companions: true });
+  expect(validateGhostManifest({ ...base, agent: { companions: 1 } }).ok).toBe(false);
+  expect(validateGhostManifest({ ...base, agent: { companions: false } }).ok).toBe(false);
+});
+
 describe('package release notes', () => {
   const base = { schemaVersion: 3, minCindyVersion: '0.1.0', id: 'notes-test', name: 'Notes test', version: '1.0.0', entry: 'main.js' };
   it('keeps old packages without notes installable', () => {

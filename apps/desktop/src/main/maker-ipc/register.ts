@@ -52,6 +52,7 @@ import {
   setPluginTaskHandler,
   setPluginTargetAdapter,
   setPluginObserveAdapter,
+  setPluginCompanionAdapter,
   assertPluginTargetQueuedDelivery,
   getPluginTaskSourceSessionId,
   setPluginTaskUninstaller,
@@ -67,6 +68,7 @@ import {
 } from '../cindy-brain/index.js';
 import { listPluginTargetCandidates, resolvePluginTargetSession } from './pluginTargetCandidates.js';
 import { assertPluginObservableTask, listPluginObserveTasks } from './pluginObserveTasks.js';
+import { createPluginCompanionHost } from './pluginCompanionHost.js';
 import { createPluginTargetStore } from './pluginTargetStore.js';
 import { collectPluginAttachmentPayloadTexts, withPluginMessageAttachments } from '../cindy-media/pluginMessageAttachments.js';
 import { isPluginTaskPermissionMode, type PluginTaskRoute, type PluginTaskRequest } from '../../shared/pluginTasks.js';
@@ -89,7 +91,8 @@ import { handleListDevices, defaultDeps as deviceDirectoryDeps } from '../device
 import { configureBotAutonomyHost, getBotAutonomyGlance, noteBotAutonomyInputProjection } from '../bot-autonomy/hub.js';
 import { countMachineRunningTasks } from '../machines/directory.js';
 import { configureLocalMachineActivity, readLocalMachineStatus } from '../machines/localStatus.js';
-import { getHostSourceDevice, getSelfDeviceId, remoteBackgroundInvoke, remoteInvoke as invokeBotPeer } from '../device-link/index.js';
+import { getHostSourceDevice, getSelfDeviceId, onRemotePushChannel, remoteBackgroundInvoke, remoteInvoke as invokeBotPeer } from '../device-link/index.js';
+import { getAppCapabilities } from '../appCapabilities.js';
 import { readDeviceProviderViews, readRemoteProviderRoute } from '../remote-agent/controller/deviceCatalog.js';
 import { checkDeviceRoute } from '../remote-agent/controller/deviceRouteCheck.js';
 import { cancelPendingRemoteStart } from '../remote-agent/controller/startRemote.js';
@@ -1113,6 +1116,8 @@ import {
   ORCA_EXECUTION_DEVICES_CHANNEL,
   ORCA_REMOTE_WORKER_BRIDGE_CHANNEL,
   COMPANION_CLOUD_CAPS_CHANNEL,
+  COMPANION_LIVE_CHANNEL,
+  REMOTE_RESOURCE_CHANGED_CHANNEL,
   MACHINE_STATUS_CHANNEL,
   COMPANION_CLOUD_FLUSH_CHANNEL,
   COMPANION_CLOUD_HAND_OVER_CHANNEL,
@@ -15132,6 +15137,64 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       openMainWindowSession(taskId, { focus: 'if-active' });
     },
   });
+  // cindy.companions: changes reach watching plugins as content-free notices (island activity, companion
+  // homes, pushes from the computers companions run on); subscribed on first use, once the island service exists.
+  let invalidatePluginCompanions: () => void = () => {};
+  let companionChangesSubscribed = false;
+  const subscribeCompanionChanges = () => {
+    const island = getAgentIslandService();
+    if (companionChangesSubscribed || !island) return;
+    companionChangesSubscribed = true;
+    island.subscribeSessionActivity(() => invalidatePluginCompanions());
+    companionHomes.onChange(() => invalidatePluginCompanions());
+    // The sidebar's sessions subscription already brings these from every reachable computer.
+    onRemotePushChannel((deviceId, channel) => {
+      if (channel !== REMOTE_RESOURCE_CHANGED_CHANNEL && channel !== 'local-db:sessions:activity') return;
+      if (companionHomes.snapshot().actors.some(actor => actor.homeDeviceId === deviceId)) invalidatePluginCompanions();
+    });
+  };
+  let companionDevices: { at: number; value: Promise<Array<{ deviceId: string; name: string; online: boolean; reachable: boolean }> | null> } | null = null;
+  const companionHost = createPluginCompanionHost({
+    pending: getPendingInteractionsForSession,
+    openSession: (id, deviceId) => openMainWindowSession(id, { focus: 'if-active', ...(deviceId ? { deviceId } : {}) }),
+    flushMessages: drainPersistQueue,
+    remote: {
+      // The same computers the sidebar reads teammates from: online, remote control on there, allowed here.
+      devices: () => {
+        if (!getAppCapabilities().canUseDeviceLink) return Promise.resolve(null);
+        if (companionDevices && Date.now() - companionDevices.at < 5_000) return companionDevices.value;
+        const value = handleListDevices(deviceDirectoryDeps()).then(({ devices }) => devices.filter(device => !device.isSelf).map(device => ({
+          deviceId: device.deviceId, name: device.name, online: device.online, reachable: device.remoteControlEnabled && device.controlEnabled,
+        })));
+        companionDevices = { at: Date.now(), value };
+        value.catch(() => { if (companionDevices?.value === value) companionDevices = null; });
+        return value;
+      },
+      // Background reads do not show the home computer as being controlled; older homes fall back like the sidebar.
+      invoke: async (deviceId, channel, args) => {
+        let result;
+        try {
+          result = await remoteBackgroundInvoke(deviceId, channel, args);
+        } catch (error) {
+          if (!String((error as { code?: unknown })?.code ?? (error as Error)?.message).includes('UNSUPPORTED_CAPABILITY')) throw error;
+          result = await invokeBotPeer(deviceId, channel, args);
+        }
+        if (!result.ok) throw Object.assign(new Error(result.error.code), { code: result.error.code });
+        return result.result;
+      },
+    },
+  });
+  // Another computer of this account shows companions running here: same view as a plugin here gets.
+  makerSessionRegistry.handle(COMPANION_LIVE_CHANNEL, (_event, raw: unknown) => companionHost.serveRemote(raw));
+  const companionHub = setPluginCompanionAdapter({
+    ...companionHost,
+    list: guard => {
+      settleCompanionOwner();
+      subscribeCompanionChanges();
+      return companionHost.list(guard);
+    },
+  });
+  invalidatePluginCompanions = () => companionHub?.invalidate();
   let pluginTargetReviewReady = false;
   setPluginTargetAdapter({
     prepareInvocation: preparePluginInvocation,

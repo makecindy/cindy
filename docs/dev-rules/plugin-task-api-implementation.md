@@ -359,6 +359,29 @@ DB 中下一条输入的 armed 值为 false 不代表原生执行已退出 Plan�
 - 每次请求固定 owner generation、逻辑页与批准 revision，读取后复核；变化返回 `PERMISSION_DENIED` 并丢弃结果。
   仅本机 Desktop 逻辑页，Mobile 页面返回 `UNSUPPORTED_CAPABILITY`，不新增 device-link 透传。
 
+## 查看伙伴和状态（增量接口，尚未发布）
+
+`cindy.companions` 的作者契约见 `FORGE_GUIDE` §4.11.9。入口 `companions-request` 在 `cindy-brain/index.ts` 守门，
+请求解析与推送合并在 `pluginCompanionSlot.ts`，数据在 `maker-ipc/pluginCompanionHost.ts`。
+- 要求 `agent.companions: true`，单列 `agent:companions`，需 Host receipt 的 `companionsCapabilityApproved`（`hasPluginCompanionsApproval`）。
+  安装/更新只记录实际展示的确认；首次调用经 `requestPluginTaskApproval(..., 'companions')` 复用既有确认，
+  插件详情页对未批准的 `agent.companions` 提供独立确认按钮（`capability:'companions'`），被拒后插件不能自动重弹。
+- 名单与状态复用侧边栏与手机的读模型：`listBotRemoteResourceSources` → `visibleBotRemoteResourceSources`，按 `companionHomes.isHomeHere` 只取本机伙伴，
+  活动来自 `rosterBotActivities`（主任务与在跑的委派），状态经 `resolveTeammateStatus` 投影。
+- 主力电脑在别处的伙伴（`companionHomes.snapshot()` 的 actor）向那台电脑读取 `COMPANION_LIVE_CHANNEL`（`maker:companion-live:read`），
+  对方返回它本机伙伴的同一份插件视图（含 ref→任务、伙伴→对话的映射，后者不交给插件），查看端只覆盖 `home`。
+  设备范围与侧边栏一致：在线、对方开启远程控制、本机未禁用；用 `remoteBackgroundInvoke`（旧版主力电脑不支持后台链接时退回普通 invoke），
+  每台主力电脑 800 ms 内的重复读取共用一次结果，4 秒未答视为连不上。旧版主力电脑返回 `CHANNEL_NOT_ALLOWED` 时退回 teammates 列表，
+  只有状态与工作阶段；连不上时 `status:'offline'`。`open` 以
+  `openMainWindowSession(sessionId, { deviceId })` 打开远程对话。
+- 待处理请求只给 `summarizeInteraction` 的标题与 kind，`ref` 为 `sha256(sessionId\nrequestId)` 前 32 位，不暴露宿主请求 id、工具输入、计划正文或 `compactDetail`；
+  主人在宿主步骤（input handoff）里输入的值不出宿主。`open` 只接受能重新列出的伙伴/请求，以 `openMainWindowSession(..., { focus: 'if-active' })` 打开。
+- 回复读取先 `drainPersistQueue`，按 `clearedAt` 跳过清空前的行，从 `readLatestMirrorRows` 取最新一条 assistant 行，经 `mirrorMessageText(..., { placeholders: false })` 投影，≤8000 字。
+- 推送 `companions-changed` 只带 subscriptionId 与 seq，不带内容；来源为灵动岛 `subscribeSessionActivity`、`companionHomes.onChange`、主力电脑经侧边栏 sessions 订阅推来的 `maker:remote-resources:changed` / `local-db:sessions:activity`（main 经 `onRemotePushChannel` 只看来源与 channel）与 5 秒心跳，每插件合并到最快 1 秒一次。
+  发送失败或批准失效的订阅被丢弃。
+- 每次请求固定 owner generation、逻辑页与批准 revision，每个 await 后复核；变化返回 `PERMISSION_DENIED` 并丢弃结果。
+  仅本机 Desktop 逻辑页，Mobile 页面返回 `UNSUPPORTED_CAPABILITY`，不新增 device-link 透传。
+
 ### 消息图片附件
 
 `tasks.send` 与 `targets.send` 支持 `attachments?: Array<{base64:string,name?:string}>`。

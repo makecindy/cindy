@@ -203,6 +203,11 @@ Library 请求同时绑定迁移代次和安装批准，根解析、排队及开
 - `agent.observe` 是独立能力，不依赖 `agent.tasks`，单列 `agent:observe` 权限并要求 Host receipt 的 `observeCapabilityApproved` 显式批准。
   只读返回已登记本机项目中任务的标题、Agent 类型、归档与状态元数据，并可在主窗口打开其中的任务；不返回消息、计划或文件，也不能发送、修改或停止任务。
   旧 tasks/targets 批准与历史未知字段不授予查看；首次调用复用既有宿主确认。实现见 [只读查看项目任务](plugin-task-api-implementation.md#只读查看项目任务增量接口尚未发布)。
+- `agent.companions` 是独立能力，不依赖 tasks/targets/observe，单列 `agent:companions` 权限并要求 Host receipt 的 `companionsCapabilityApproved` 显式批准。
+  只读返回账号下全部伙伴（含主人其他电脑上的伙伴，从其主力电脑读取）的名单、状态、工作阶段（公开类别）、等待主人处理的请求标题与最新一条回复正文（≤8000 字），
+  并可在主窗口打开伙伴对话或请求所在任务；插件不能代主人回答、批准或拒绝请求，也不能发消息或改伙伴设置。回复正文不进推送、不写日志。
+  口径（产品决定，2026-11-03）：只设这一项通用权限，不为场景单开「思考」等专用权限；思考原文不开放，插件用工作阶段表达「思考中 / 执行工具中」。
+  旧批准与历史未知字段不授予；首次调用复用既有宿主确认。实现见 [查看伙伴和状态](plugin-task-api-implementation.md#查看伙伴和状态增量接口尚未发布)。
 - `agent.hiddenTasks`（后台任务）只在与 `agent.tasks: true` 同时声明时有效：新包缺 tasks 或非布尔
   直接拒装；已安装快照里不成对的历史值原样保留但不授予。它单列为 `agent:hidden-tasks` 权限，
   更新新增即「权限变多」；运行期由 taskSlot 与任务服务按身份卡双重守门。透明性兜底与多端口径见

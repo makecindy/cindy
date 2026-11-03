@@ -51,8 +51,8 @@ async function readVisibleBotSource(botId: string): Promise<BotRemoteResourceSou
   }
 }
 
-/** The canonical conversation and live delegations share the local roster priority. */
-async function rosterBotActivities(sources: readonly BotRemoteResourceSource[]) {
+/** The canonical conversation and live delegations share the local roster priority (also read by plugins' cindy.companions). */
+export async function rosterBotActivities(sources: readonly BotRemoteResourceSource[]) {
   const running = getAgentIslandService()?.getSessionActivitySnapshots() ?? [];
   const bySession = new Map(running.map(activity => [activity.sessionId, activity]));
   const delegated = sources.length && running.length ? await getDbClient().drizzle
