@@ -96,10 +96,13 @@ It follows real transfer progress and disappears once ready;
 cache hits show the original directly. A failed tile shows a retry icon and supports click,
 Enter and Space to retry, preserving the grid's single Tab stop and selected border.
 Expose progress and failure descriptions to assistive technology outside the radio descendants.
-Keep the displayed background while the next official original is loading or decoding;
-reuse already decoded original URLs directly when revisiting a selection. Once ready,
-crossfade the static canvas and its composer copies using opacity and the fast motion
-token, respecting reduced motion. Initial load may use the bundled preview.
+Show the selected official wallpaper's bundled preview immediately while its original
+is loading or decoding (user decision, 2026-11-03, #8591). Download or decode failure
+keeps that selection's preview, not the previous wallpaper. Reuse already decoded
+original URLs directly when revisiting a selection. Crossfade both the preview and
+the ready original on the static canvas and its composer copies using opacity and
+the fast motion token, respecting reduced motion. Custom image replacements still
+retain the previous background until decoding succeeds.
 Reuse the settings download percentage normalization. Browsing the grid or hiding the wallpaper does not
 download originals; only a selected, visible image is requested. Reuse valid cached
 images offline and after upgrades. Do not request CDN assets for IDs absent from the manifest.
