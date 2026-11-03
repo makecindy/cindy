@@ -1,4 +1,13 @@
 {
+  "progress": {
+    "stop": "Parar"
+  },
+  "work": {
+    "queued": "Na fila {{count}}",
+    "active": "Em andamento {{count}}",
+    "expand": "Expandir atividade dos colegas",
+    "collapse": "Recolher atividade dos colegas"
+  },
   "title": "Conversas em grupo",
   "memberSeparator": ", ",
   "memberCount_one": "{{count}} membro",
@@ -191,6 +200,7 @@
     "eyebrow_many": "Plano · {{count}} etapas"
   },
   "speaking": {
+    "queued": "Na fila",
     "stopping": "Parando…",
     "planning": "Dividindo o trabalho…",
     "step": "Trabalhando nisso…"
@@ -263,7 +273,18 @@
       "unavailable": "Não foi possível carregar as configurações do grupo. Tente novamente."
     },
     "allowMentionAllBots": "Permitir @todos os colegas",
-    "allowMentionAllBotsHint": "Só o proprietário do grupo pode alterar. Todos os colegas podem responder; cuidado em grupos grandes. Não afeta a IA que responde em seu nome."
+    "allowMentionAllBotsHint": "Só o proprietário do grupo pode alterar. Todos os colegas podem responder; cuidado em grupos grandes. Não afeta a IA que responde em seu nome.",
+    "notifications": {
+      "title": "Notificações de mensagens",
+      "all": "Todas as mensagens",
+      "mentions": "Apenas menções",
+      "none": "Desativadas",
+      "allHint": "Receba notificações de mensagens do grupo e de novas respostas nos tópicos que você segue.",
+      "mentionsHint": "Receba notificações quando alguém mencionar você, inclusive com @todos. As atualizações da divisão do trabalho continuam gerando avisos.",
+      "noneHint": "Desative todos os alertas do sistema deste grupo. As mensagens não lidas são mantidas.",
+      "saving": "Salvando…",
+      "saveFailed": "Não foi possível salvar as notificações. Tente novamente."
+    }
   },
   "errors": {
     "memberLimit": "Uma conversa em grupo precisa de 2 a 6 colegas",

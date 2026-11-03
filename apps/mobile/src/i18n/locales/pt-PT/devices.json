@@ -747,7 +747,7 @@
     "search": "Pesquisar mensagens",
     "models": "Cadeia de modelos",
     "permissions": "Permissões de operação",
-    "personalSkills": "Skills pessoais",
+    "personalSkills": "Skills",
     "connections": "Skills e ligações referenciadas",
     "save": "Guardar alterações",
     "offline": "Volte a ligar a {{deviceName}} para continuar. As suas alterações foram mantidas.",

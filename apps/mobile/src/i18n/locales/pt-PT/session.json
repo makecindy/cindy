@@ -464,6 +464,7 @@
     "chipArchived": "Arquivadas",
     "titleFallback": "Sessão remota",
     "unnamedTitle": "Sessão sem título",
+    "openSection": "Abrir",
     "renameAction": "Mudar o nome da sessão",
     "copyLinkAction": "Copiar ligação da sessão",
     "unpin": "Desafixar",

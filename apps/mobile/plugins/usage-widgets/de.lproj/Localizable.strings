@@ -3,3 +3,7 @@
 "Computer" = "Computer";
 "Automatic" = "Automatisch";
 "The computer that answered last" = "Der Computer, der zuletzt geantwortet hat";
+"Account" = "Konto";
+"Choose which computer this widget shows, which accounts come first and which to hide. Other accounts, including ones added later, follow in that computer's order." = "Wähle, welchen Computer dieses Widget zeigt, welche Konten zuerst kommen und welche ausgeblendet werden. Andere Konten, auch später hinzugefügte, folgen in der Reihenfolge dieses Computers.";
+"Accounts first" = "Konten zuerst";
+"Hidden accounts" = "Ausgeblendete Konten";

@@ -747,7 +747,7 @@
     "search": "Rechercher dans les messages",
     "models": "Chaîne de modèles",
     "permissions": "Autorisations d'opération",
-    "personalSkills": "Skills personnelles",
+    "personalSkills": "Skills",
     "connections": "Skills et connexions référencées",
     "save": "Enregistrer",
     "offline": "Reconnectez-vous à {{deviceName}} pour continuer. Vos modifications sont conservées.",

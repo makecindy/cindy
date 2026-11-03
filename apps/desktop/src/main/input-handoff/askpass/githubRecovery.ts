@@ -1,7 +1,6 @@
 import type { InstalledGhost } from '../../../shared/ghost.js';
 import { deliveryNamespaceFields, installedGhostStoragePart } from '../../../shared/pluginIdentity.js';
 import {
-  classifyGhostVisibility,
   classifyInstalledGhostVisibility,
   type GhostVisibilityDeps,
 } from '../../cindy-brain/ghostVisibility.js';
@@ -34,26 +33,29 @@ export function createGithubAuthRecovery(deps: GithubAuthRecoveryDeps) {
       if (!owner) return null;
       const context = await deps.sessionContext(request.sessionId);
       if (!context?.workingDir || context.remoteHostId || deps.ownerKey() !== owner) return null;
-      const visible = classifyGhostVisibility('cindy-github', context.workingDir, deps);
-      if (!visible.ok) return null;
-      // Snapshot the installation identity before any asynchronous connection probe.
-      const ghost = structuredClone(visible.ghost);
-      const instanceId = installedGhostStoragePart(ghost);
-      const isCurrent = () => {
-        if (deps.ownerKey() !== owner) return false;
-        const current = classifyInstalledGhostVisibility(ghost, context.workingDir, deps);
-        return current.ok && current.ghost.approval.state === 'approved' &&
-          deps.isTrusted(current.ghost) && deps.setupReady(instanceId);
-      };
-      if (ghost.manifest.kind !== 'chip' ||
-          !['list_tools', 'call_tool'].every((name) => ghost.manifest.tools?.some((tool) => tool.name === name)) ||
-          !isCurrent()) return null;
-      if (!await deps.connected(ghost, isCurrent) || !isCurrent()) return null;
-      const latest = await deps.sessionContext(request.sessionId);
-      if (!latest || latest.remoteHostId || latest.workingDir !== context.workingDir || !isCurrent()) return null;
-      const target = JSON.stringify({ ghost_id: ghost.manifest.id, ...deliveryNamespaceFields(ghost) });
+      const targets: Array<{ ghost_id: string; namespace?: string | null }> = [];
+      for (const candidate of deps.listGhosts()) {
+        // Snapshot the installation identity before any asynchronous connection probe.
+        const ghost = structuredClone(candidate);
+        const instanceId = installedGhostStoragePart(ghost);
+        const isCurrent = () => {
+          if (deps.ownerKey() !== owner) return false;
+          const current = classifyInstalledGhostVisibility(ghost, context.workingDir, deps);
+          return current.ok && current.ghost.approval.state === 'approved' &&
+            deps.isTrusted(current.ghost) && deps.setupReady(instanceId);
+        };
+        if (ghost.manifest.kind !== 'chip' || !ghost.manifest.tools?.length || !isCurrent()) continue;
+        if (!await deps.connected(ghost, isCurrent) || !isCurrent()) continue;
+        const latest = await deps.sessionContext(request.sessionId);
+        if (!latest || latest.remoteHostId || latest.workingDir !== context.workingDir || !isCurrent()) return null;
+        targets.push({ ghost_id: ghost.manifest.id, ...deliveryNamespaceFields(ghost) });
+      }
+      if (targets.length === 0) return null;
+      const route = targets.length === 1
+        ? `Call ghost_info(${JSON.stringify(targets[0])}), inspect its operations, and use the plugin when it supports the requested work. `
+        : `Available plugin instances: ${JSON.stringify(targets)}. Select the intended instance explicitly, then call ghost_info with its exact identity and inspect its operations. `;
       return 'CINDY_AUTH_ALTERNATIVE_AVAILABLE: GitHub is already connected through an available plugin in this task. ' +
-        `Call ghost_info(${target}), inspect its operations, and use the plugin when it supports the requested work. ` +
+        route +
         'Do not ask the user for a GitHub username, password or token to fix this shell-only authentication failure. ' +
         'If the exact operation requires native Git or the user explicitly requested the terminal, retry the command with ' +
         'CINDY_INPUT_HANDOFF_PREFER_TERMINAL=1 to use the existing terminal authentication flow. ' +

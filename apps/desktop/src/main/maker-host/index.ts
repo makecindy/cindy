@@ -91,6 +91,7 @@ import { getMessagesForHistory } from '../localDb/chatHistoryReader.js';
 import { getWorkerLink, updateWorkerStatus, getRemoteOrcaSession, listWorkersByLead, getActiveTeamByLead } from '../localDb/orcaTeamStore.js';
 import { createOrcaRemoteWorkerBridge } from '../maker-ipc/orcaRemoteWorkerBridge.js';
 import { throwIpcError } from '../utils/ipcValidate.js';
+import { makerStartupGate } from './startup-gate.js';
 import { cleanupSessionTempAttachments } from '../maker-ipc/normalizeAttachments.js';
 import { resolveGhostFsSessionSnapshot } from '../maker-ipc/ghostFsSessionSnapshot.js';
 import { HOST_CONFIRM_TIMEOUT_MS } from '../maker-ipc/hostConfirmTiming.js';
@@ -144,6 +145,8 @@ import { handleListDevices, defaultDeps as deviceDirectoryDeps } from '../device
 import { parseProviderShareAgentDeviceId } from '../device-link/providerShareGuest.js';
 import { isProviderShareCredentialConsentSkipped } from '../device-link/providerShareGuestPrefs.js';
 import { t } from '../i18n.js';
+import { MACHINE_STATUS_CHANNEL } from '@cindy/device-link';
+import { invokeDeviceValue } from '../maker-ipc/orcaRemoteWorkers.js';
 import { createHistoryRemoteDeps } from '../mcp-integrations/historyDevices.js';
 import { WorktreePool } from '../worktree/index.js';
 import { getReadyBinaryPath, getCachedBinaryStatus } from '../agent-binaries/index.js';
@@ -379,7 +382,7 @@ import {
 import { getOutboundPathSnapshotFor } from './outbound-proxy-resolver.js';
 import { attachAgentsToMakerMemory, createDesktopMakerMemoryManager } from './maker-memory-host.js';
 import { createMemoryReviewOneShot } from './memory-review-one-shot.js';
-import { prepareExternalCodexSessionForResume, readCodexThreadStorageForArchive } from './codex-local-sessions.js';
+import { prepareExternalCodexSessionForResume } from './codex-local-sessions.js';
 import {
   rehydrateCloseSuppression,
   withRehydrateCloseSuppressed,
@@ -998,8 +1001,7 @@ function broadcastVisionBridgeEvent(
 
 export function getMaker(): Maker {
   if (!_maker) {
-    // splash 已经 prepare 过, 这里只是同步读 cache 路径; 任一缺失说明 bootstrap
-    // 顺序错了, 早抛比 session.start 时再炸更清晰。
+    makerStartupGate.assertComplete();
     // splash 已经 prepare 过, 这里只是同步读 cache 路径; 任一缺失说明 bootstrap
     // 顺序错了, 早抛比 session.start 时再炸更清晰。
     const claudePath = getReadyBinaryPath('claude-code');
@@ -1089,6 +1091,11 @@ export function getMaker(): Maker {
       lspPool: getLspPool(),
       pluginRegistry,
       invokeRemote: remoteInvoke,
+      machineDirectory: {
+        listDevices: async () => (await handleListDevices(deviceDirectoryDeps())).devices,
+        // Reading a status must not put the other computer under control, old versions included.
+        invokeStatus: (deviceId: string) => invokeDeviceValue(remoteBackgroundInvoke, deviceId, MACHINE_STATUS_CHANNEL, []),
+      },
       historyRemote: createHistoryRemoteDeps({
         listDevices: () => handleListDevices(deviceDirectoryDeps()),
         invoke: remoteInvoke,
@@ -2257,7 +2264,7 @@ export function getMaker(): Maker {
         return ownerCodexThreadLocations().prepareResume(threadId, prepareExternalCodexSessionForResume);
       },
       resolveCodexThreadStorage: async (threadId, options) => {
-        if (!getActiveAppSession().dataOwnerId) return options?.readOnly ? readCodexThreadStorageForArchive(threadId) : undefined;
+        if (!getActiveAppSession().dataOwnerId) return options?.readOnly ? readCodexThreadStorageReadOnly(threadId) : undefined;
         const ownerScope = activeOwnerScopeKey();
         const storage = options?.readOnly
           ? await readCodexThreadStorageReadOnly(threadId)
@@ -2918,6 +2925,9 @@ export function getMaker(): Maker {
         makerMemory: () => makerMemoryManager,
         // 插件工具经隧道回到本机：对方 Agent 的插件花名册也按本机真实工作目录给。
         ghostRosterPrompt: (workingDir) => getGhostRosterPrompt({ workingDir }),
+        // 内置与插件带的 Skill 同样以本机为准：说明与它要用的工具、脚本都在本机。
+        managedSkills: listCindyManagedSkills,
+        disabledSkillPaths: readDisabledSkillPaths,
         captureKnownFileBefore,
         noteOpaqueTurnChange,
         // 与审查读 PDF 交付物同一个一次性抽取进程。
@@ -3180,7 +3190,12 @@ export function getMaker(): Maker {
       },
     });
     // 本机作为「Agent 运行的电脑」：同账号另一台电脑的任务可让 Agent 在这里运行。
-    installRemoteAgentHost({ getMaker: () => getMaker(), userDataDir: app.getPath('userData') });
+    installRemoteAgentHost({
+      getMaker: () => getMaker(),
+      userDataDir: app.getPath('userData'),
+      managedSkills: async () => (await listCindyManagedSkills()).flatMap((skill) =>
+        skill.path ? [{ command: skill.claudeCommandName, dir: path.dirname(skill.path) }] : []),
+    });
     installLocalAgentHost(_maker);
     botRuntimeResourcePreflight = async (opts) => {
       const preflightOpts = { ...opts };

@@ -33,6 +33,7 @@ export async function handOffScreenshotToTask(
   image: NativeImage,
   action: RegionScreenshotAiAction,
   ownerScope = activeOwnerScopeKey(),
+  translationLanguage?: import('../../shared/screenshotTranslation').ScreenshotTranslationLanguage,
 ): Promise<void> {
   if (isAppSessionBoundaryPending() || ownerScope !== activeOwnerScopeKey()) return;
   const ownerStamp = getActiveDataOwnerPushStamp();
@@ -49,6 +50,7 @@ export async function handOffScreenshotToTask(
     id: randomUUID(),
     ownerStamp,
     action,
+    ...(action === 'translate' && translationLanguage ? { translationLanguage } : {}),
     url,
     filename,
     bytes: png.byteLength,

@@ -25,8 +25,9 @@ import { MCP_APPS_INVOKE } from '../../shared/mcpApps.js';
 import { currentOauthIdentityScope, trustOauthPeer } from '../plugin-oauth/desktopIdentity.js';
 import { RemotePluginOauthUnsupportedError, resolveOauthPeerIdentity } from '../plugin-oauth/identityResolver.js';
 import { getDeviceId } from '../authManager.js';
+import { markStartupMilestone } from '../startupTimeline.js';
 import { copyPrivateDeviceCode } from '../plugin-oauth/deviceCodeClipboard.js';
-import { PLUGIN_OAUTH_CHANNEL, PLUGIN_OAUTH_LOCAL_CHANNEL, PLUGIN_SECRET_LOCAL_CHANNEL, PLUGIN_CONNECTION_LOCAL_CHANNEL, INPUT_HANDOFF_LOCAL_CHANNEL, INPUT_HANDOFF_REMOTE_LOCAL_CHANNEL, INPUT_HANDOFF_LOCAL_PICTURE_CHANNEL, INPUT_HANDOFF_REMOTE_PICTURE_CHANNEL, INPUT_HANDOFF_REMOTE_PICTURE_ANSWER_CHANNEL } from '@cindy/device-link';
+import { PLUGIN_OAUTH_CHANNEL, PLUGIN_OAUTH_LOCAL_CHANNEL, PLUGIN_SECRET_LOCAL_CHANNEL, PLUGIN_CONNECTION_LOCAL_CHANNEL, INPUT_HANDOFF_LOCAL_CHANNEL, INPUT_HANDOFF_REMOTE_LOCAL_CHANNEL, INPUT_HANDOFF_LOCAL_PICTURE_CHANNEL, INPUT_HANDOFF_LOCAL_RAISE_CHANNEL, INPUT_HANDOFF_REMOTE_PICTURE_CHANNEL, INPUT_HANDOFF_REMOTE_PICTURE_ANSWER_CHANNEL } from '@cindy/device-link';
 import { handleAssistPluginOauth, handleSubmitPluginSecret, handleSubmitPluginConnection, handleSubmitInputHandoff, handleOpenInputHandoffPicture, handleAnswerInputHandoffPicture, type LocalOauthDeps } from '../plugin-oauth/localIpc.js';
 import { LocalDeviceCodeSessions } from '../plugin-oauth/deviceCodeSessions.js';
 import { PLUGIN_OAUTH_DEVICE_CODE_CHANNEL } from '../../shared/pluginOauthDeviceCode.js';
@@ -384,11 +385,37 @@ type DeviceListResult = { devices: DeviceLinkDeviceView[] };
  * 不能进入 reconcile 写回旧名称/空值，也不能把旧列表重新交给 UI。
  */
 let deviceListRequestSequence = 0;
-let latestDeviceListRequest: { sequence: number; promise: Promise<DeviceListResult> } | null = null;
+let latestDeviceListRequest: {
+  sequence: number;
+  promise: Promise<DeviceListResult>;
+  startedAt: number;
+  /** false once settled or once a directory mutation succeeded after it was sent. */
+  joinable: boolean;
+} | null = null;
+
+/** A rename / delete changes the directory: later reads must not join a request sent before it. */
+function invalidateDeviceListCoalescing(): void {
+  if (latestDeviceListRequest) latestDeviceListRequest.joinable = false;
+}
+/**
+ * 启动与重连时 3–4 个 renderer 入口(侧栏、切换栏、设置页、main 自身)在同一拍里各发一次
+ * /devices。在途请求在这个窗口内的后来者直接共用它:目录快照本来就是同一时刻的,
+ * 多发只是多占一次往返和服务端查询。窗口外(或已结束)的请求仍代表新的目录意图,照常新发。
+ */
+const DEVICE_LIST_COALESCE_WINDOW_MS = 300;
+
+/** 仅测试:重置合并窗口状态,避免跨用例共用在途 promise。 */
+export function __resetDeviceListCoalescingForTests(): void {
+  latestDeviceListRequest = null;
+}
 
 export function handleListDevices(
   deps: DeviceLinkIpcDeps,
 ): Promise<DeviceListResult> {
+  const inFlight = latestDeviceListRequest;
+  if (inFlight && inFlight.joinable && Date.now() - inFlight.startedAt < DEVICE_LIST_COALESCE_WINDOW_MS) {
+    return inFlight.promise;
+  }
   const sequence = ++deviceListRequestSequence;
   const directoryRequestSequence = deps.beginControllerDisplayNameDirectoryRefresh();
   const requestEpoch = deps.captureControllerDisplayNameRequestEpoch();
@@ -424,7 +451,12 @@ export function handleListDevices(
       rethrowServerError(err);
     },
   );
-  latestDeviceListRequest = { sequence, promise: request };
+  const entry = { sequence, promise: request, startedAt: Date.now(), joinable: true };
+  latestDeviceListRequest = entry;
+  void request.then(
+    () => { entry.joinable = false; markStartupMilestone('device-directory-first-result'); },
+    () => { entry.joinable = false; },
+  );
   return request;
 }
 
@@ -513,10 +545,12 @@ export async function handleRenameDevice(
     throwIpcError('INVALID_PARAMS', 'name is required');
   }
   try {
-    return await deps.apiFetch<{ deviceId: string; name: string; manualName?: string | null }>(
+    const renamed = await deps.apiFetch<{ deviceId: string; name: string; manualName?: string | null }>(
       `/api/device-link/devices/${encodeURIComponent(deviceId)}`,
       { method: 'PATCH', body: { name: nextName } },
     );
+    invalidateDeviceListCoalescing();
+    return renamed;
   } catch (err) {
     rethrowServerError(err);
   }
@@ -530,10 +564,12 @@ export async function handleDeleteDevice(
     throwIpcError('INVALID_PARAMS', 'deviceId is required');
   }
   try {
-    return await deps.apiFetch<{ deviceId: string; deleted: boolean }>(
+    const deleted = await deps.apiFetch<{ deviceId: string; deleted: boolean }>(
       `/api/device-link/devices/${encodeURIComponent(deviceId)}`,
       { method: 'DELETE' },
     );
+    invalidateDeviceListCoalescing();
+    return deleted;
   } catch (err) {
     rethrowServerError(err);
   }
@@ -625,7 +661,7 @@ export async function handleInvoke(
   if (channel === MCP_APPS_INVOKE) throwIpcError('PERMISSION_DENIED', 'MCP_APP_FRAME_REQUIRED');
   if (channel === PLUGIN_OAUTH_CHANNEL || channel === PLUGIN_SECRET_LOCAL_CHANNEL || channel === PLUGIN_CONNECTION_LOCAL_CHANNEL
     || channel === INPUT_HANDOFF_LOCAL_CHANNEL || channel === INPUT_HANDOFF_REMOTE_LOCAL_CHANNEL
-    || channel === INPUT_HANDOFF_LOCAL_PICTURE_CHANNEL || channel === INPUT_HANDOFF_REMOTE_PICTURE_CHANNEL
+    || channel === INPUT_HANDOFF_LOCAL_PICTURE_CHANNEL || channel === INPUT_HANDOFF_LOCAL_RAISE_CHANNEL || channel === INPUT_HANDOFF_REMOTE_PICTURE_CHANNEL
     || channel === INPUT_HANDOFF_REMOTE_PICTURE_ANSWER_CHANNEL)
     throwIpcError('PERMISSION_DENIED', 'Authorization transport is Host-only');
   let callArgs = Array.isArray(args) ? args : [];

@@ -1619,8 +1619,10 @@ describe('cindy-bridge extension source', () => {
       "enum: ['status', 'notify', 'call', 'reply', 'cancel']",
     );
     expect(CINDY_BRIDGE_EXTENSION_SOURCE).toContain("const CINDY_BOT_MEMORY_TOOL = 'bot_memory'");
+    expect(CINDY_BRIDGE_EXTENSION_SOURCE).toContain('mcpGateway.register(pi, {\n        botMemoryFacade: cfg.botMemoryFacade === true,');
+    // A system Skill the owner switched off keeps its tools out of Pi's direct list too.
     expect(CINDY_BRIDGE_EXTENSION_SOURCE).toContain(
-      'mcpGateway.register(pi, { botMemoryFacade: cfg.botMemoryFacade === true })',
+      "deniedTools: Array.isArray(cfg.deniedTools) ? cfg.deniedTools.filter((name) => typeof name === 'string') : [],",
     );
     expect(CINDY_BRIDGE_EXTENSION_SOURCE).toContain("qualifiedName: 'mcp__' + serverName + '__' + toolName");
     expect(CINDY_BRIDGE_EXTENSION_SOURCE).toContain('private readonly disclosedSchemas');
@@ -2381,6 +2383,44 @@ it('re-surfaces the disclosure set once after compaction instead of editing ever
   handlers.get('session_compact')!({ reason: 'manual' });
   expect(handlers.get('before_agent_start')!({ systemPrompt: 'base' })).toBeUndefined();
   expect(handlers.get('before_agent_start')!({ systemPrompt: 'base' })).toBeUndefined();
+});
+
+it('registers list_machines directly so Pi does not have to find it through the MCP gateway', async () => {
+  const source = CINDY_BRIDGE_EXTENSION_SOURCE;
+  const compiled = ts.transpileModule(
+    source.slice(source.indexOf('const CINDY_MCP_LIST_TOOLS'), source.indexOf('async function connectServer'))
+      + '\n(globalThis as any).Gateway = CindyMcpGateway;',
+    { compilerOptions: { module: ts.ModuleKind.None, target: ts.ScriptTarget.ES2022 } },
+  ).outputText;
+  const context: Record<string, any> = {
+    // 沙箱没有模块系统：bridge 顶部的 node:crypto import 在切片后丢失，
+    // 指纹计算用的 createHash 必须由宿主注入。
+    createHash,
+    recordInput: (value: unknown) => value && typeof value === 'object' ? value : {},
+    mcpContentToPi: (content: unknown) => content,
+  };
+  runInNewContext(compiled, context);
+  const calls: unknown[] = [];
+  const client = { request: async (method: string, params: unknown, signal?: AbortSignal) => {
+    calls.push({ method, params, signal });
+    return { content: [{ type: 'text', text: 'ok' }] };
+  } };
+  const gateway = new context.Gateway();
+  const withoutHost: any[] = [];
+  gateway.add('cindy_helper', client, [{ name: 'list_tools', inputSchema: { type: 'object' } }, { name: 'call_tool', inputSchema: { type: 'object' } }]);
+  gateway.register({ registerTool: (tool: unknown) => withoutHost.push(tool) });
+  expect(withoutHost.map((tool) => tool.name)).not.toContain('list_machines');
+
+  const direct = new context.Gateway();
+  direct.add('cindy_helper', client, [{ name: 'list_machines', inputSchema: { type: 'object' } }]);
+  const tools: any[] = [];
+  direct.register({ registerTool: (tool: unknown) => tools.push(tool) });
+  const tool = tools.find((item) => item.name === 'list_machines');
+  await tool.execute('call-1', {}, new AbortController().signal);
+  expect(calls.at(-1)).toMatchObject({ method: 'tools/call', params: { name: 'list_machines', arguments: {} } });
+  // Ask and Auto judge the real MCP identity, so this auto-approves like the same tool over MCP.
+  expect(direct.resolveHookedCall('list_machines', {}).qualifiedName).toBe('mcp__cindy_helper__list_machines');
+  expect(direct.resolveHookedCall('read', {})).toBeNull();
 });
 
 it('routes Bot shortcuts through the scoped helper entry without exposing them to ordinary Pi tasks', async () => {

@@ -81,7 +81,7 @@ describe('loadGhostFirstPartyFactsLoader', () => {
     expect(loaded).toMatchObject({ kind: 'ready', facts: { namespace: null } });
     if (loaded.kind === 'ready') expect(resolveGhostFirstPartyPrivilege(loaded.facts).brokerEligible).toBe(false);
   });
-  it('gives builtin official plugins broker on a personal identity with no prefix cache', () => {
+  it('does not grant personal-identity Broker or generic Host privileges from builtin origin', () => {
     const factsLoader = loader({
       readInstalledBuiltin: (ghostId) => ghostId === 'xd-feishu' || ghostId === 'xd-atlassian',
       lookupOrganizationPrefix: () => {
@@ -104,9 +104,9 @@ describe('loadGhostFirstPartyFactsLoader', () => {
         approvedPackageSha256: 'a'.repeat(64),
       });
       expect(resolveGhostFirstPartyPrivilege(loaded.facts)).toEqual({
-        brokerEligible: true,
-        hostPrimitiveEligible: true,
-        basis: 'builtin-official',
+        brokerEligible: false,
+        hostPrimitiveEligible: false,
+        basis: 'denied-unknown-origin',
       });
     }
   });
@@ -452,16 +452,16 @@ describe('loadGhostFirstPartyFactsLoader', () => {
     expect(authorizeGhostTokenBroker('acme-tool', installLoad('b'.repeat(64)))).toBe(false);
   });
 
-  it('keeps builtin official plugins unchanged without receipt-origin facts', () => {
+  it('does not grant enterprise Broker from a builtin name without organization facts', () => {
     const loaded = loader({
       readInstalledBuiltin: (ghostId) => ghostId === 'xd-feishu',
     }).load('xd-feishu', 'runtime', PERSONAL);
     expect(loaded.kind).toBe('ready');
     if (loaded.kind !== 'ready') return;
     expect(resolveGhostFirstPartyPrivilege(loaded.facts)).toEqual({
-      brokerEligible: true,
-      hostPrimitiveEligible: true,
-      basis: 'builtin-official',
+      brokerEligible: false,
+      hostPrimitiveEligible: false,
+      basis: 'denied-unknown-origin',
     });
   });
 

@@ -13,9 +13,10 @@ import { inferBotTemplatePresetId } from '../../shared/botTemplatePreset.js';
 import type { CompanionHistoryAttachment, CompanionMaterializeHost, CompanionWriteFence } from './materialize.js';
 import type { CompanionMediaUpload, CompanionMirrorAttachment } from './mirror.js';
 import { readAllRoomMessages, readRoomPage } from './room.js';
+import { companionSkillFileFetch, parseCompanionSkillFiles } from './skillFiles.js';
 import { isTransientAttachmentFailure, type CompanionApi, type CompanionLog } from './types.js';
 import {
-  COMPANION_MEMORY_PREFIX, COMPANION_PROFILE_KEY, COMPANION_ROUTINE_PREFIX, COMPANION_SKILL_PREFIX, COMPANION_TODO_PREFIX,
+  COMPANION_MEMORY_PREFIX, COMPANION_PROFILE_KEY, COMPANION_ROUTINE_PREFIX, COMPANION_SKILL_FILES_PREFIX, COMPANION_SKILL_PREFIX, COMPANION_TODO_PREFIX,
   COMPANION_WORKBENCH_KEY,
 } from './uploader.js';
 
@@ -64,14 +65,19 @@ const RENAME_ATTEMPTS = 50;
  * name that is free or already holds the same content (a rerun); null when it is already there.
  */
 async function mergeTarget(name: string, suffix: string, content: string, read: (name: string) => Promise<string | null>): Promise<string | null> {
+  const slot = await mergeSlot(name, suffix, content, read);
+  return slot.present ? null : slot.name;
+}
+
+async function mergeSlot(name: string, suffix: string, content: string, read: (name: string) => Promise<string | null>): Promise<{ name: string; present: boolean }> {
   const current = await read(name);
-  if (current === null) return name;
-  if (current === content) return null;
+  if (current === null) return { name, present: false };
+  if (current === content) return { name, present: true };
   for (let attempt = 1; attempt <= RENAME_ATTEMPTS; attempt += 1) {
     const target = renamedEntry(name, suffix, attempt);
     const existing = await read(target);
-    if (existing === content) return null;
-    if (existing === null) return target;
+    if (existing === content) return { name: target, present: true };
+    if (existing === null) return { name: target, present: false };
   }
   throw new Error('MERGE_NAME_EXHAUSTED');
 }
@@ -94,7 +100,7 @@ export function mergedTodoId(keepBotId: string, sourceActorId: string, todoId: s
 
 export async function mergeCompanionsInto(input: {
   api: CompanionApi;
-  host: Pick<CompanionMaterializeHost, 'readMemory' | 'restoreMemory' | 'readSkill' | 'saveSkill' | 'applyTodos' | 'applyRoutines' | 'applyWorkbench'>;
+  host: Pick<CompanionMaterializeHost, 'readMemory' | 'restoreMemory' | 'readSkill' | 'saveSkill' | 'readSkillFiles' | 'applySkillFiles' | 'applyTodos' | 'applyRoutines' | 'applyWorkbench'>;
   keep: CompanionMergeActor;
   from: CompanionMergeActor[];
   humanActorId: string;
@@ -137,12 +143,30 @@ export async function mergeCompanionsInto(input: {
       const slug = row.key.slice(COMPANION_SKILL_PREFIX.length);
       const content = text(record(row.value)?.content);
       if (content === undefined) continue;
-      const target = await mergeTarget(slug, suffix, content, name => host.readSkill(keep.externalId, name));
-      if (target === null) continue;
-      if (target !== slug) summary.renamed.push(target);
-      fence.assertCurrent();
-      await host.saveSkill(keep.externalId, target, content, record(row.value)?.enabled !== false, fence);
-      summary.skills += 1;
+      const list = parseCompanionSkillFiles(prefs.find(candidate => candidate.key === `${COMPANION_SKILL_FILES_PREFIX}${slug}`)?.value);
+      // The same skill means the same text and no file that differs. A file missing there is not a
+      // difference: it may be what an interrupted merge has yet to bring.
+      const slot = await mergeSlot(slug, suffix, content, async name => {
+        const current = await host.readSkill(keep.externalId, name);
+        if (current !== content || !list || !host.readSkillFiles) return current;
+        const local = await host.readSkillFiles(keep.externalId, name);
+        const clash = list.files.some(file => local.some(other => (other.path === file.path && (other.sha256 !== file.sha256 || !other.executable !== !file.executable))
+          // A file where the other side has a folder: neither can take the other's place.
+          || other.path.startsWith(`${file.path}/`) || file.path.startsWith(`${other.path}/`)));
+        return clash ? `${current}\0different files` : current;
+      });
+      if (!slot.present) {
+        if (slot.name !== slug) summary.renamed.push(slot.name);
+        fence.assertCurrent();
+        await host.saveSkill(keep.externalId, slot.name, content, record(row.value)?.enabled !== false, fence);
+        summary.skills += 1;
+      }
+      // The kept companion's home sends these to its own room with its next upload.
+      if (list && host.applySkillFiles && input.media) {
+        const fetch = companionSkillFileFetch(await input.roomOf(source), list.files, input.media.download, input.log);
+        const missing = await host.applySkillFiles(keep.externalId, slot.name, list.files, fetch, { removeOthers: false }, fence);
+        if (missing.length) input.log?.warn('Companion skill files not merged', { count: missing.length });
+      }
     }
 
     // Todos and routines get ids of their own in the kept companion (the store also gives a

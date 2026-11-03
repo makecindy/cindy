@@ -54,3 +54,49 @@ export function findRenderItemElement(
     (element) => element.getAttribute('data-render-item-key') === key,
   ) as HTMLElement | undefined;
 }
+
+/** Layout at the last successful restoration, in scroll-content coordinates. */
+export interface RestoredScrollGeometry {
+  anchor: HTMLElement;
+  scrollTop: number;
+  scrollHeight: number;
+  width: number;
+  height: number;
+  anchorTop: number;
+  anchorHeight: number;
+}
+
+export function measureRestoredScrollGeometry(
+  container: HTMLElement,
+  anchor: HTMLElement,
+): RestoredScrollGeometry {
+  const rect = anchor.getBoundingClientRect();
+  return {
+    anchor,
+    scrollTop: container.scrollTop,
+    scrollHeight: container.scrollHeight,
+    width: container.clientWidth,
+    height: container.clientHeight,
+    anchorTop: rect.top - container.getBoundingClientRect().top + container.scrollTop,
+    anchorHeight: rect.height,
+  };
+}
+
+/** Cross-origin frames can chain scrolling without bubbling input events.
+ * Yield only after positioning has settled and without a layout change; native
+ * intrinsic-size corrections still belong to the restoration path. */
+export function isRestoredScrollTakeover(
+  container: HTMLElement,
+  previous: RestoredScrollGeometry | null,
+  settled: boolean,
+  programmatic: boolean,
+): boolean {
+  if (!settled || programmatic || !previous || !container.contains(previous.anchor)) return false;
+  if (Math.abs(container.scrollTop - previous.scrollTop) < 1) return false;
+  const current = measureRestoredScrollGeometry(container, previous.anchor);
+  return current.scrollHeight === previous.scrollHeight
+    && current.width === previous.width
+    && current.height === previous.height
+    && Math.abs(current.anchorTop - previous.anchorTop) < 1
+    && Math.abs(current.anchorHeight - previous.anchorHeight) < 1;
+}

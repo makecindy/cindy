@@ -1025,7 +1025,7 @@
     "saveFileName": "Captura de tela",
     "saveFailed": "Não foi possível salvar a captura de tela",
     "prompt": {
-      "translate": "Reconheça o texto nesta captura de tela e traduza-o para o inglês. Mantenha os parágrafos e as listas originais e retorne apenas a tradução. Se o texto já estiver em inglês, traduza-o para o chinês simplificado.",
+      "translate": "Detecte automaticamente os idiomas na captura de tela e traduza o texto para {{language}}. Mantenha os parágrafos, as listas e as tabelas. Preserve o conteúdo que já estiver no idioma de destino; se houver vários idiomas, traduza apenas os demais. Se todo o texto já estiver no idioma de destino, informe isso brevemente sem traduzi-lo para outro idioma. Nos demais casos, apresente apenas a tradução.",
       "explain": "Explique o que esta captura de tela mostra. Se for um erro, explique a causa e como corrigi-lo. Se for um gráfico, código ou uma interface, explique o que ele mostra e os pontos principais.",
       "extract": "Extraia o texto desta captura de tela exatamente como está escrito, mantendo as quebras de linha, os parágrafos e as listas originais. Apresente tabelas como tabelas Markdown. Retorne apenas o texto extraído."
     },
@@ -1073,6 +1073,12 @@
       "edit": "Editar",
       "autoUnavailable": "A rolagem automática parou. Você pode rolar manualmente na seleção.",
       "autoPermission": "A rolagem automática precisa de permissão de Acessibilidade. Autorize Cindy nos Ajustes do Sistema e tente novamente, ou role manualmente na seleção."
+    },
+    "translation": {
+      "action": "Traduzir para {{language}}",
+      "targetLanguage": "Idioma de destino",
+      "followUi": "Usar o idioma da interface",
+      "saveFailed": "Não foi possível salvar o idioma. Selecione-o novamente."
     }
   },
   "privacyExit": {
@@ -2683,6 +2689,13 @@
       "storage": {
         "dialogueDirectoryTitle": "Espaço de trabalho da conversa",
         "dialogueDirectoryDescription": "Apenas para novas sessões. Os arquivos existentes permanecem onde estão.",
+        "projectsRootTitle": "Local de novos projetos",
+        "projectsRootInferred": "Sugerido",
+        "projectsRootDefault": "Padrão",
+        "projectsRootChoose": "Alterar diretório",
+        "projectsRootReset": "Restaurar local sugerido",
+        "projectsRootDescription": "Onde ficam as pastas de projeto ao criar um projeto a partir de uma sessão. Se não for definido, um local é sugerido com base nos seus projetos existentes.",
+        "projectsRootFailed": "Não foi possível atualizar o local de novos projetos",
         "dialogueDirectoryOpen": "Abrir diretório",
         "dialogueDirectoryChoose": "Alterar diretório",
         "dialogueDirectoryReset": "Restaurar local padrão",
@@ -3675,6 +3688,8 @@
         "simpleSubtitle": "Vários modelos, cobrados por uma única conta."
       },
       "custom": {
+        "nameSearchUnavailable": "Este provedor não está mais disponível. Continue com um endpoint personalizado ou pesquise novamente.",
+        "nameSearchHint": "Você pode manter este nome e continuar com um endpoint personalizado.",
         "tag": "Personalizado",
         "editAria": "Editar configurações da conexão",
         "deleteAria": "Excluir",
@@ -5982,7 +5997,7 @@
           "check": {
             "checking": "Verificando o servidor…",
             "checkingHint": "Conectando ao servidor para verificar o sistema, as portas e os serviços existentes.",
-            "idle": "Depois que você escolher um servidor, o Cindy verifica se é possível fazer a implantação nele.",
+            "idle": "Escolha um servidor para a Cindy verificar se dá para implantar nele.",
             "ready": "Pronto para implantar",
             "blocked": "Não é possível implantar automaticamente",
             "recheck": "Verificar novamente",
@@ -7578,6 +7593,8 @@
         "cancel": "Cancelar",
         "updateNeedsConsent": "Novas permissões precisam de confirmação",
         "targetIdentity": "Instalar para: {{name}}",
+        "localTarget": "Desenvolvimento local",
+        "localOidcUnavailable": "Esta cópia de desenvolvimento não pode usar a identidade da organização. Para testar, instale-a explicitamente na sua organização atual pelo Forge.",
         "personalTarget": "Pessoal",
         "sourceChanged": "Esta atualização muda para uma fonte local. As contas e os dados existentes são arquivados separadamente. Conecte suas contas novamente após atualizar.",
         "otherCopies": "Há {{count}} outras cópias deste plugin. Elas permanecerão instaladas e manterão o estado de ativação atual. Uma cópia separada precisa de suas próprias conexões de conta."
@@ -7661,6 +7678,8 @@
         "nodeResident": "O programa Node pode continuar em execução em segundo plano",
         "nodeResidentDetail": "É executado enquanto o plugin está ativado e para quando ele é desativado, atualizado, desinstalado ou quando a Cindy é encerrada.",
         "tool": "Ferramenta \"{{name}}\"",
+        "toolAutoApprove": "O Agent pode executar a ferramenta \"{{name}}\" sem confirmação",
+        "toolAutoApproveDetail": "Quando o Agent chama esta ferramenta, ela é executada na hora, sem pedir confirmação nem revisar cada chamada.",
         "command": "Comando de conversa ${{command}}",
         "panelLeft": "Painel \"{{title}}\" · exibido na barra lateral",
         "panelTab": "Painel \"{{title}}\" · abre dentro da página Plugins",
@@ -7726,9 +7745,13 @@
         "workspaceDetail": "Quando solicitado, você escolhe a pasta ou vê o caminho completo em um cartão de confirmação antes de decidir; ao processar uma chamada iniciada por você, subpastas dentro do diretório de trabalho da sessão atual são usadas diretamente, sem solicitação adicional. Pastas que já têm uma sessão são reutilizadas, e a sessão criada fica vazia — nada começa a ser executado por conta própria.",
         "sessionContext": "Pode descobrir em qual pasta de projeto a sessão atual está trabalhando",
         "sessionContextDetail": "Compartilha apenas informações de localização (ID da sessão e caminho da pasta do projeto) enquanto trabalha para a sessão atual — nenhum conteúdo de arquivo, e nenhum acesso a arquivos é concedido.",
+        "liveScreen": "Ver e controlar telas de dispositivos no celular",
+        "liveScreenDetail": "Pela área de trabalho remota, seu celular pode mostrar as telas de dispositivos que ele oferece (como simuladores) e enviar toques, botões e texto para elas. Só conecta quando você abre pelo celular e não mostra mais nada deste computador.",
         "preview": "Pode abrir páginas de prévia dos sites abaixo no navegador da barra lateral",
         "previewDetail": "Somente os sites listados abaixo podem ser abertos; cada página aberta é atribuída a este plugin.",
         "browserExtension": "Permite que a extensão de navegador incluída se conecte ao Cindy",
+        "browserNativeHost": "Pode registrar a conexão “{{name}}”",
+        "browserNativeHostDetail": "O programa registrado é executado fora da sandbox e acessa este computador com sua conta e as permissões do sistema.",
         "browserExtensionDetail": "Somente as extensões listadas abaixo podem se conectar, pelo endereço de loopback local; o Cindy encaminha a este plugin as solicitações feitas pela extensão.",
         "browserExtensionPageControlDetail": "Somente as extensões listadas abaixo podem se conectar. A extensão também implementa controle de páginas: com “Meu navegador” selecionado, o Agent pode ler e operar páginas no navegador que você está usando.",
         "nodeChildSpawn": "Seu programa Node pode pedir ao host para iniciar subprocessos declarados no pacote",
@@ -7823,6 +7846,18 @@
         "settingsTitle": "Configurações de {{name}}",
         "settingsUnavailableUntilRestore": "Restaure o plugin para usar esta configuração novamente.",
         "oauthScopeStale": "Esta autorização não inclui as permissões adicionadas recentemente. Reconecte para concedê-las.",
+        "localDevelopment": "Desenvolvimento local",
+        "publicInstall": "Mercado público",
+        "organizationInstall": "Organização: {{name}}",
+        "browserUse": "Usar esta extensão do navegador",
+        "browserActivated": "Extensão do navegador selecionada",
+        "browserActivationFailed": "Não foi possível selecionar. Ative o plugin e confirme a troca de conexão.",
+        "browserSwitchTitle": "Trocar a conexão da extensão?",
+        "browserSwitchMessage": "Usar “{{name}}” nesta conexão?",
+        "browserSwitchDetail": "Instância: {{instance}}\nRegistro: {{host}}\nIsso substitui o registro atual. A extensão se conectará a este plugin.",
+        "portReclaimTitle": "Encerrar o programa que usa a porta de retorno?",
+        "portReclaimMessage": "“{{name}}” precisa da porta {{port}}. Encerrar o programa abaixo?",
+        "portReclaimDetail": "Isso pode interromper o trabalho ou perder dados não salvos. Você pode cancelar e fechar o programa manualmente.",
         "configurationTitle": "Configuração",
         "sidebarEntryTitle": "Item de navegação",
         "showInSidebar": "Mostrar na navegação à esquerda",
@@ -8354,7 +8389,8 @@
       "dialog": {
         "createTitle": "Adicionar servidor MCP",
         "editTitle": "Editar servidor MCP",
-        "desc": "Apenas MCP remoto http / sse. Novas Sessões poderão chamá-lo após salvar; Sessões em andamento não serão afetadas."
+        "desc": "Apenas MCP remoto http / sse. Novas Sessões poderão chamá-lo após salvar; Sessões em andamento não serão afetadas.",
+        "teammateDesc": "Apenas MCP remoto http / sse. Depois de salvar, seu colega o adiciona às ferramentas dele e pode usá-lo a partir da próxima mensagem desta conversa, sem precisar de uma nova Sessão."
       },
       "fields": {
         "name": "Nome de exibição",
@@ -8655,18 +8691,18 @@
     "chooseMethod": "Escolha como entrar",
     "emailCode": "Entrar com um código por e-mail",
     "orgDetected": "{{email}} pertence a \"{{org}}\"",
-    "enterpriseLogin": "Entrar com sua identidade profissional",
+    "enterpriseLogin": "Com sua identidade profissional",
     "enterpriseVia": "Login único via {{name}}",
     "personalLogin": "Entrar com uma conta pessoal",
-    "personalDesc": "Enviar um código de verificação para seu e-mail",
+    "personalDesc": "Receber um código por e-mail",
     "ssoRequired": "Esta organização exige login por SSO",
     "ssoEntry": "Entrar com SSO empresarial",
     "localModeEntry": "Pular login",
     "localModeOpening": "Pulando login…",
     "localModeDescription": "Não é necessário ter uma conta do Cindy. Os dados ficam neste dispositivo; modelos na nuvem, acesso entre dispositivos e serviços do marketplace ficam indisponíveis.",
-    "consentStatement": "Li e concordo com os <terms>Termos de Serviço</terms> e a <privacy>Política de Privacidade</privacy>",
+    "consentStatement": "Aceito os <terms>Termos de Serviço</terms> e a <privacy>Política de Privacidade</privacy>",
     "consentDialog": {
-      "title": "Termos e privacidade",
+      "title": "Termos e Política de Privacidade",
       "body": "Para continuar, leia e aceite os <terms>Termos de Serviço</terms> e a <privacy>Política de Privacidade</privacy> da Cindy.",
       "agree": "Aceitar",
       "disagree": "Agora não"
@@ -8710,7 +8746,7 @@
     "completeSignIn": "Concluir login",
     "preparing": "Conectando ao login",
     "preparingSubtitle": "Carregando os métodos disponíveis para esta região",
-    "unavailable": "O login está temporariamente indisponível",
+    "unavailable": "Login indisponível no momento",
     "retry": "Tentar novamente",
     "browserWaiting": "Conclua a verificação no navegador",
     "browserCallback": {
@@ -10840,6 +10876,18 @@
         "reactorFormer": "{{name}} (não está mais no grupo)",
         "reactorsUnavailable_one": "Nome indisponível para mais {{count}} membro",
         "reactorsUnavailable_other": "Nomes indisponíveis para mais {{count}} membros",
+        "readStatusSent": "Enviada",
+        "readStatusRead": "Lida",
+        "readersCount_one": "Lida por {{count}}",
+        "readersCount_other": "Lida por {{count}}",
+        "readersView": "Ver quem leu",
+        "readersTooLarge": "O grupo é grande demais para listar quem leu",
+        "readersNone": "Ninguém leu",
+        "readersLoading": "Carregando…",
+        "readersFailed": "Não foi possível carregar quem leu",
+        "readersHeading": "Lida",
+        "readersOfTotal": "Lida {{read}}/{{total}}",
+        "readerUnknown": "Membro desconhecido",
         "invite": "Convidar para o grupo",
         "groupCreated": "Conversa em grupo criada",
         "inviteFriends": "Convide amigos para entrar e trabalhar com seu colega.",
@@ -10980,10 +11028,22 @@
           "accessToolsTitle": "Ferramentas e informações",
           "accessToolsHint": "Pode usar as ferramentas existentes de {{name}} e suas informações privadas. Os resultados ficam visíveis para todos os membros. As aprovações continuam sendo exigidas; revogar o acesso não desfaz ações já concluídas.",
           "capabilitiesRow": "Ferramentas e acesso de {{name}}",
-          "accessMenu": "Permissões neste grupo"
+          "accessMenu": "Permissões neste grupo",
+          "notifications": {
+            "title": "Notificações de mensagens",
+            "all": "Todas as mensagens",
+            "mentions": "Apenas menções",
+            "none": "Desativadas",
+            "allHint": "Receba notificações de mensagens do grupo e de novas respostas nos tópicos que você segue.",
+            "mentionsHint": "Receba notificações quando alguém mencionar você, inclusive com @todos. As atualizações da divisão do trabalho continuam gerando avisos.",
+            "noneHint": "Desative todos os alertas do sistema deste grupo. As mensagens não lidas são mantidas.",
+            "saving": "Salvando…",
+            "saveFailed": "Não foi possível salvar as notificações. Tente novamente."
+          }
         },
         "replyCount_many": "{{count}} respostas",
-        "reactorsUnavailable_many": "Nomes indisponíveis para mais {{count}} membros"
+        "reactorsUnavailable_many": "Nomes indisponíveis para mais {{count}} membros",
+        "readersCount_many": "Lida por {{count}}"
       },
       "lifecycle": {
         "dissolve": "Dissolver grupo",
@@ -11048,22 +11108,112 @@
       "skill": "Skills",
       "mcp": "MCP",
       "toolset": "Ferramentas integradas",
-      "unavailable": "Indisponível",
       "empty": "Nenhum recurso correspondente",
-      "accessHint": "Escolha as ferramentas integradas, os servidores MCP e as Skills que este companheiro pode usar. As alterações valem para a próxima solicitação, incluindo solicitações autorizadas de grupos.",
-      "inheritedHint": "Atualmente segue as ferramentas habilitadas neste computador. Desativar um item muda esta lista para uma seleção explícita.",
-      "selectedHint": "Somente os itens selecionados nesta lista são permitidos para este companheiro.",
-      "personalHint": "Uma Skill aprendida por este companheiro, carregada com seu perfil.",
       "unavailableHint": "Indisponível neste computador ou destino de execução. Configure primeiro a conexão ou o acesso ao sistema.",
       "notOnThisComputer": "Indisponível neste computador",
-      "configure": "Abrir configuração",
       "empty_toolset": "Nenhuma ferramenta integrada disponível neste destino de execução.",
       "empty_mcp": "Nenhum servidor MCP personalizado foi adicionado.",
       "empty_skill": "Nenhuma Skill disponível para selecionar.",
       "inputHandoff": {
         "title": "Transferência de controle de entrada",
         "description": "Quando este colega encontrar um login, senha ou código que não consegue digitar, ele poderá pedir que você o digite em qualquer um dos seus dispositivos. Os valores digitados nunca são compartilhados com ele."
-      }
+      },
+      "intro": "Escolha quais Skills, ferramentas e servidores MCP este colega pode usar. As mudanças valem a partir da próxima mensagem.",
+      "alwaysOn": "Sempre ativa",
+      "core": {
+        "group": "Skill principal",
+        "name": "Núcleo do colega",
+        "hint": "Tarefas, outros colegas, modelos, ferramentas e plugins, memória. Atualizado com o Cindy.",
+        "meta": "Comum a todos os colegas · Sempre ativo · Atualizado com o Cindy",
+        "note": "A coordenação que todo colega tem. Não pode ser desativada nem editada. Para mudar o jeito de trabalhar dele, diga no chat e ele guardará isso como Skill própria.",
+        "covers": "Inclui",
+        "raw": "Ver texto original",
+        "items": {
+          "tasks": {
+            "title": "Tarefas",
+            "body": "Decide quando iniciar uma tarefa em segundo plano, controla as que iniciou e traz o resultado para o chat, inclusive nos seus outros computadores."
+          },
+          "teammates": {
+            "title": "Outros colegas",
+            "body": "Manda mensagem a outros colegas ou cria um novo para você."
+          },
+          "models": {
+            "title": "Modelos e ferramentas",
+            "body": "Troca de modelo quando você pede e usa ferramentas e plugins conforme necessário."
+          },
+          "memory": {
+            "title": "Memória",
+            "body": "Lembra suas preferências e seu contexto, confere antes de usar e atualiza quando algo muda."
+          },
+          "self": {
+            "title": "Conhecer a si mesmo",
+            "body": "Sabe o que consegue fazer e ativa ou desativa recursos para você; para Telegram, MCP ou plugins, consulta primeiro a ajuda do Cindy."
+          }
+        }
+      },
+      "system": {
+        "group": "Skills do sistema",
+        "meta": "{{on}} de {{total}} ativas",
+        "pageMeta": "Skill do sistema · Atualizada com o Cindy",
+        "use": "Ativar para este colega",
+        "whenOff": "Ao desativar",
+        "items": {
+          "todo": {
+            "name": "Pendências",
+            "hint": "Anota o que você pede e o que ele percebe, e lembra você no prazo.",
+            "off": "Ele para de registrar, organizar e lembrar pendências. As existentes são mantidas e continuam quando você reativar."
+          },
+          "routine": {
+            "name": "Rotinas",
+            "hint": "Cria e mantém rotinas que rodam periodicamente.",
+            "off": "Ele para de criar ou alterar rotinas. As existentes continuam rodando e podem ser gerenciadas na página Rotinas."
+          },
+          "follow": {
+            "name": "Painel e acompanhamento",
+            "hint": "Acompanha como estão todas as suas tarefas e dá seguimento às que você entrega a ele.",
+            "off": "Ele para de verificar e acompanhar suas tarefas por conta própria. Você ainda pode perguntar no chat."
+          }
+        }
+      },
+      "learned": {
+        "group": "Skills aprendidas",
+        "empty": "Ainda não há Skills aprendidas. O aprendizado noturno transforma em Skills os métodos que se repetem, ou você pode pedir no chat que ele lembre de um.",
+        "meta": "Aprendida · Atualizada em {{date}}",
+        "metaUndated": "Aprendida",
+        "missing": "Esta Skill não existe mais.",
+        "use": "Usar esta Skill",
+        "useHint": "Desativada, a Skill é mantida, mas não é usada.",
+        "edit": "Editar",
+        "delete": "Excluir",
+        "cancel": "Cancelar",
+        "save": "Salvar",
+        "saveFailed": "Não foi possível salvar. Tente novamente mais tarde.",
+        "deleteFailed": "Não foi possível excluir. Tente novamente mais tarde.",
+        "deleteTitle": "Excluir “{{name}}”?",
+        "deleteBody": "O colega deixará de usar esta Skill e o conteúdo não poderá ser recuperado. Se precisar dela depois, peça no chat que ele lembre o método de novo.",
+        "unsavedTitle": "Alterações não salvas",
+        "unsavedDescription": "Sair descartará estas alterações na Skill.",
+        "discard": "Descartar alterações",
+        "continueEditing": "Continuar editando",
+        "descriptionLabel": "Quando usar",
+        "bodyLabel": "Como fazer"
+      },
+      "local": {
+        "group": "Skills deste computador"
+      },
+      "followMeta": "Segue este computador · {{count}}",
+      "selectedMeta": "{{count}} de {{total}} selecionadas",
+      "showRest": "Mostrar mais {{count}}",
+      "showLess": "Mostrar menos",
+      "manage": "Gerenciar",
+      "toolSettings": "Configurações das ferramentas",
+      "notTurnedOn": "Ainda não ativado neste computador",
+      "turnOn": "Ativar",
+      "permissions": "Permissões"
+    },
+    "systemSkills": {
+      "followOffHint": "A Skill do sistema “Painel e acompanhamento” de {{name}} está desativada. Ative-a de novo em Capacidades para usar isto.",
+      "offHint": "A Skill do sistema “{{skill}}” está desativada. Ela volta a rodar quando você a reativar em Capacidades."
     },
     "guided": {
       "title": "Criar um colega",
@@ -14465,6 +14615,26 @@
         "archived_many": "{{count}} sessões arquivadas",
         "deleted_many": "{{count}} sessões excluídas"
       },
+      "newProjectDialog": {
+        "title": "Novo projeto",
+        "description": "Cria uma pasta de projeto e move esta sessão para o novo projeto.",
+        "descriptionMoveFiles": "Cria uma pasta de projeto, move os arquivos desta sessão para ela e move a sessão para o novo projeto.",
+        "nameLabel": "Nome do projeto",
+        "namePlaceholder": "ex.: my-app",
+        "targetPath": "Será criado {{path}}",
+        "location": "Local",
+        "locationInferred": "Sugerido com base nos seus projetos existentes",
+        "locationWillCreate": "Esta pasta ainda não existe e será criada",
+        "changeLocation": "Alterar…",
+        "remember": "Usar este local para novos projetos",
+        "cancel": "Cancelar",
+        "create": "Criar projeto",
+        "nameTaken": "Já existe uma pasta com este nome",
+        "nameInvalid": "O nome não pode conter \\ / : * ? \" < > | nem terminar com ponto ou espaço",
+        "loadFailed": "Não foi possível carregar o local do projeto",
+        "failed": "Falha ao criar o projeto",
+        "done": "Projeto criado e sessão movida"
+      },
       "sessionMenu": {
         "moreActions": "Mais ações",
         "rename": "Renomear",
@@ -14478,6 +14648,7 @@
         "moveToProject": "Mover tarefa",
         "moveToProjectHeading": "Projetos neste computador",
         "browseProjectFolder": "Escolher pasta do projeto",
+        "newProject": "Novo projeto…",
         "moveToDialogue": "Mover para Conversa",
         "noProjects": "Nenhum projeto recente",
         "moveToProjectDone": "Movida para o projeto",
@@ -15883,6 +16054,7 @@
     "agentControlled": "O Agent abriu esta tela. Verifique se é realmente onde você quer entrar antes de preenchê-la.",
     "agentPicture": "Este código vem de uma captura de tela feita pelo Agent, então o Cindy não pode ver a tela original nem saber quando você terminou. Verifique se ele leva ao site em que você pretende entrar e escolha Devolver ao Agent após escanear.",
     "error": {
+      "raise": "Não foi possível abrir a janela. Mude para ela no computador.",
       "decision": "Não deu certo. Tente novamente.",
       "stale": "A tela mudou. Use a versão mais recente.",
       "submit": "Sua entrada não foi enviada. Tente novamente."
@@ -15918,6 +16090,9 @@
       "picture": "Mostrar tela",
       "backToForm": "Voltar ao formulário",
       "liveView": "Visualização ao vivo",
+      "openWindow": "Abrir janela de login",
+      "openRemoteDesktop": "Abrir área de trabalho remota",
+      "useForm": "Usar o formulário",
       "fill": "Preencher",
       "skip": "Pular",
       "continue": "Continuar",
@@ -15925,6 +16100,9 @@
       "showPassword": "Mostrar senha",
       "hidePassword": "Ocultar senha",
       "scan": "Escanear"
+    },
+    "directSignIn": {
+      "hint": "Faça login diretamente na janela. Ao terminar, tudo continua automaticamente."
     },
     "remoteUnavailable": "Este computador não pode receber entrada remotamente. Conclua esta etapa no computador host e devolva o controle ao Agent.",
     "unnamedField": "Campo",
@@ -16999,7 +17177,14 @@
     "sectionTitle": "Diretórios",
     "empty": "Nenhum diretório de referência ainda",
     "add": "Adicionar diretório…",
-    "addReadOnly": "Adicionar diretório somente leitura…",
+    "back": "Voltar",
+    "addTitle": "Adicionar diretório",
+    "writableHint": "O Agent pode ler e gravar",
+    "writableHintDetail": "O Agent pode ler, criar, modificar e excluir arquivos nestes diretórios.",
+    "searchRecent": "Buscar diretórios",
+    "noRecent": "Ainda não há diretórios recentes",
+    "noMatchingRecent": "Nenhum diretório correspondente",
+    "addFailed": "Não foi possível adicionar este diretório. Tente novamente ou escolha outra pasta.",
     "atLimit": "Limite atingido ({{max}})",
     "remove": "Remover {{name}}",
     "writableParentConfirmTitle": "Permitir acesso de leitura e gravação a um diretório pai?",
@@ -18909,5 +19094,35 @@
     "unavailable": "Esta compilação não tem um destino de envio de relatórios. Abra os arquivos locais para compartilhá-los com o suporte.",
     "consent": "Aceite a política de privacidade nas Configurações antes de enviar. Seus arquivos locais serão preservados.",
     "failed": "A operação não foi concluída. Tente novamente ou abra os arquivos locais."
+  },
+  "attachmentPreview": {
+    "fitWidth": "Ajustar à largura",
+    "fitPage": "Ajustar à página",
+    "pageNumber": "Número da página",
+    "more": "Mais ações",
+    "retry": "Tentar novamente",
+    "image": "Imagem",
+    "video": "Vídeo",
+    "file": "Arquivo",
+    "close": "Fechar",
+    "reset": "Redefinir visualização",
+    "open": "Abrir prévia",
+    "zoomIn": "Ampliar",
+    "zoomOut": "Reduzir",
+    "fit": "Ajustar à janela",
+    "actualSize": "Tamanho real (1:1)",
+    "save": "Salvar original",
+    "share": "Compartilhar",
+    "previous": "Anexo anterior",
+    "next": "Próximo anexo",
+    "password": "Digite a senha do PDF",
+    "find": "Buscar no documento",
+    "matches": "{{count}} páginas correspondentes",
+    "previousPage": "Página anterior",
+    "nextPage": "Próxima página",
+    "source": "Ver código-fonte",
+    "rendered": "Ver documento",
+    "wrap": "Quebra de linha",
+    "lineNumbers": "Números de linha"
   }
 }

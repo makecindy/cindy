@@ -742,7 +742,7 @@
     "search": "메시지 검색",
     "models": "모델 후보 목록",
     "permissions": "작업 권한",
-    "personalSkills": "학습한 스킬",
+    "personalSkills": "스킬",
     "connections": "참조 중인 스킬 및 연결",
     "save": "변경 사항 저장",
     "offline": "계속하려면 {{deviceName}}에 다시 연결하세요. 편집 내용은 유지됩니다.",

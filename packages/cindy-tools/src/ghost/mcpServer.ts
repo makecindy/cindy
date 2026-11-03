@@ -9,6 +9,7 @@ import type {
   CindyGhostSetupAssessment,
   CindyGhostSetupPlan,
   CindyGhostsMcpDeps,
+  CindyHostConnectionId,
   CindyMediaCapability,
 } from "../types.js";
 import {
@@ -142,6 +143,7 @@ const D_GHOST_FORGE_GUIDE = [
   "读取内置 cindy-plugin-creator Skill 中的插件编写参考资料，随当前主机版本发布。",
   "创建、修改、调试、打包或发布 Cindy 插件时使用该 Skill；本工具保留按章读取同一份资料的兼容入口。",
   '不传参数返回目录，传 section（章号如 "4.7" 或标题关键词如 "network"）返回单章正文。',
+  'section "pages" 返回 MCP Apps 页面生成手册。',
   "本工具只读文档，不安装或发布插件。",
   "发布前另读 §2 的 releaseNotes、§7.3 个人发布和 §7.4 平台署名。",
 ].join("\n");
@@ -173,9 +175,9 @@ const D_GHOST_FORGE_PACK = [
 ].join("\n");
 
 const D_GHOST_FORGE_INSTALL = [
-  "把当前源码目录重新校验、打包，并立即安装到 Cindy；同 id 已安装时原位更新。",
+  "把当前源码目录重新校验、打包，并立即安装到 Cindy；同 id 的目标实例已安装时原位更新。",
   "只有用户明确要求安装或更新当前插件时才调用。不要因为 scaffold 或 pack 成功就自动调用。",
-  "新装默认个人范围(namespace:null)，不会因登录组织而新建组织副本；已有个人实例优先更新，唯一的旧组织实例原位更新。只有用户明确要求组织安装时传当前组织 namespace，不能从登录身份推断安装归属。",
+  "缺省安装到本地开发副本(namespace:\"local\")，仅更新同 id 的 local 实例，不覆盖个人或组织市场实例。企业身份自测须显式传当前组织 namespace；local 不获得企业 OIDC 或 Broker。不能从登录身份推断安装归属。",
   "首次安装后直接启用；同来源更新保留启用状态、配置、数据与面板位置；换源会隔离旧账号与数据，需要重新连接。",
   "遇到 INSTALL_TARGET_REQUIRED，向用户展示 targets 的身份与版本，让用户选择更新已有实例(target_instance_id)，或另装一份(install_copy:true)。不得替用户默认另装或迁移账号。",
   "dir 传插件源码目录绝对路径(工作目录外走与 pack 相同的会话权限)。成功返回本次真实执行的是 installed 还是 updated；",
@@ -1069,6 +1071,10 @@ export async function handleGhostCall(
   }
 }
 
+const FORGE_GUIDE_PAGES_SECTION = "pages";
+const FORGE_GUIDE_PAGES_HINT =
+  '写 MCP Apps 页面前传 {"section":"pages"} 读《Cindy MCP Apps 页面生成手册》。';
+
 /** ghost_forge_guide 的 handler 主体(导出供单测)。 */
 export async function handleForgeGuide(
   deps: CindyGhostsMcpDeps,
@@ -1079,7 +1085,14 @@ export async function handleForgeGuide(
     // 空串/纯空白与未传等价:与工具描述"不传返回目录"一致
     const section = input?.section?.trim();
     if (!section) {
-      return { content: [{ type: "text", text: buildForgeGuideToc(guide) }] };
+      const toc = buildForgeGuideToc(guide);
+      return {
+        content: [{ type: "text", text: deps.forgePageManual ? `${toc}\n${FORGE_GUIDE_PAGES_HINT}` : toc }],
+      };
+    }
+    // 页面手册是独立文件,自带多个 ## 小节:精确匹配后整份返回,不进分章逻辑
+    if (section === FORGE_GUIDE_PAGES_SECTION && deps.forgePageManual) {
+      return { content: [{ type: "text", text: await deps.forgePageManual() }] };
     }
     const hit = extractForgeGuideSection(guide, section);
     if (hit.ok) {
@@ -1304,14 +1317,16 @@ export function createCindyGhostsMcpServer(
     },
   );
 
+  const hostConnectionIds: readonly CindyHostConnectionId[] = ["grok", "im-telegram", "im-feishu", "im-wecom", "im-dingtalk", "im-discord"];
   if (deps.connectAccount) server.tool(
     "connect_account",
-    "Request an account connection for an installed plugin in the current conversation: kind=plugin and its real ghost_id. The Host presents its supported setup card, including protected manual connection forms, without calling a plugin business tool. Use reauthorize=true when the user asks to reconnect, replace a token, update authorization, or reconfigure an existing connection; saved configuration must not skip that request. Ordinary tasks wait until setup completes or is cancelled; teammate tasks may return a pending card immediately, then the Host resumes them after authorization. Follow the returned status and do not infer provider access from setup readiness. Only if the Host reports no supported setup action, follow the installed plugin's documented login method on the machine running the task. Never request credentials in chat or tool arguments. Built-in Grok login (kind=host, id=grok) remains available only in teammate conversations and does not authorize X or change your model. Do not invent connectors, URLs or credentials.",
+    "Request an account connection for an installed plugin in the current conversation: kind=plugin and its real ghost_id. The Host presents its supported setup card, including protected manual connection forms, without calling a plugin business tool. Use reauthorize=true when the user asks to reconnect, replace a token, update authorization, or reconfigure an existing connection; saved configuration must not skip that request. Ordinary tasks wait until setup completes or is cancelled; teammate tasks may return a pending card immediately, then the Host resumes them after authorization. Follow the returned status and do not infer provider access from setup readiness. Only if the Host reports no supported setup action, follow the installed plugin's documented login method on the machine running the task. Never request credentials in chat or tool arguments. Built-in Grok login (kind=host, id=grok) remains available only in teammate conversations and does not authorize X or change your model. Teammates connect a messaging platform bot to themselves with kind=host, id=im-telegram, im-feishu, im-wecom, im-dingtalk or im-discord; the owner types its credentials on the card on the trusted desktop, never in chat. Do not invent connectors, URLs or credentials.",
     { kind: z.enum(["host", "plugin"]), id: z.string().min(1).max(256), namespace: ghostNamespaceInput, reauthorize: z.boolean().optional().describe("Reopen supported setup for an explicit reconnect, token replacement, authorization update or reconfiguration request, or a known authorization/scope failure") },
     async ({ kind, id, namespace, reauthorize }, extra) => {
-      if (kind === "host" && (id !== "grok" || namespace !== undefined)) return { content: [{ type: "text" as const, text: JSON.stringify({ ok: false, errorCode: "UNSUPPORTED_CONNECTION" }) }], isError: true };
+      const hostId = hostConnectionIds.find((candidate) => candidate === id);
+      if (kind === "host" && (!hostId || namespace !== undefined)) return { content: [{ type: "text" as const, text: JSON.stringify({ ok: false, errorCode: "UNSUPPORTED_CONNECTION" }) }], isError: true };
       try {
-        const result = await deps.connectAccount!(kind === "host" ? { kind, id: "grok", reauthorize } : { kind, id, ...(namespace !== undefined ? { namespace } : {}), reauthorize }, extra.signal);
+        const result = await deps.connectAccount!(kind === "host" ? { kind, id: hostId!, reauthorize } : { kind, id, ...(namespace !== undefined ? { namespace } : {}), reauthorize }, extra.signal);
         return { content: [{ type: "text" as const, text: JSON.stringify(result) }] };
       } catch {
         return { content: [{ type: "text" as const, text: JSON.stringify({ ok: false, errorCode: "CONNECTION_UNAVAILABLE" }) }], isError: true };
@@ -1507,7 +1522,7 @@ export function createCindyGhostsMcpServer(
     {
       dir: z.string().describe("插件源码目录的绝对路径(目录里须有 ghost.json)"),
       target_instance_id: z.string().max(256).optional().describe("用户选择更新的已有实例 ID，来自 INSTALL_TARGET_REQUIRED.targets；不能与 install_copy:true 同用"),
-      namespace: z.string().min(1).max(128).nullable().optional().describe("仅用户明确选择安装范围时传；null 为个人，字符串仅允许当前组织。新装默认个人，更新保留已有实例；不能与 target_instance_id 同用"),
+      namespace: z.string().min(1).max(128).nullable().optional().describe("省略为本地开发副本 local；字符串允许 local 或当前组织 namespace，null 为个人范围(root)。企业 OIDC/Broker 自测须显式传当前组织；不能与 target_instance_id 同用"),
       install_copy: z.boolean().optional().describe("仅用户明确另装一份时传 true；不覆盖或停用其它身份的插件，需要独立连接账号"),
       icon_source: z
         .string()

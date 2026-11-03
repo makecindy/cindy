@@ -61,6 +61,8 @@ export function printHelp(log = console.log) {
   log('    pnpm mobile:sim:start -- --region=cn');
   log('    # 查看当前 Metro 对应的 checkout / branch');
   log('    pnpm mobile:sim:whoami');
+  log('    # 验证后检查 Metro 日志：最近一次打包后的 ERROR 和新 WARN（并行设备加 -- --port 8082）');
+  log('    pnpm mobile:sim:logcheck');
   log('    # macOS：打开唯一已启动设备的 Device Hub / Simulator 窗口（多设备时加 -- --udid <UDID>）');
   log('    pnpm mobile:sim:open');
   log('    # 外部窗口验收：额外检查所选 Xcode 的窗口程序是否运行');

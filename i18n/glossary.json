@@ -81,6 +81,19 @@
       "note": "用户于 2026-09-18 明确指定的存储设置名称，表示未绑定项目的新任务工作目录的分配位置。单个任务的 working directory 仍称工作目录，不改其术语。"
     },
     {
+      "id": "new-project-location",
+      "status": "proposed",
+      "en": "New project location",
+      "translations": {
+        "zh-CN": "新项目存放位置",
+        "zh-TW": "新專案存放位置",
+        "ja": "新規プロジェクトの保存先",
+        "ko": "새 프로젝트 저장 위치"
+      },
+      "checkCase": false,
+      "note": "存储设置名称（#8259）：在任务里「新建项目…」时项目文件夹的上级目录。未设置时按已登记项目最常见的父目录推荐，否则为 ~/Projects。与「对话工作区」（不绑项目任务的工作目录分配位置）是两个设置。"
+    },
+    {
       "id": "cindy-make-history",
       "status": "proposed",
       "en": "Make history",
@@ -1500,6 +1513,24 @@
       "note": "Privacy Policy 是同一份法律文件。繁中设置页与日志上传提示已统一使用「隱私政策」，登录文案曾漂移为「隱私協議」，因此在 zh-TW 中统一为「隱私政策」。禁用项按英文源限定，避免误伤真正指 Agreement 的文案；本次只锁定新增繁中 catalog，不借此改写既有简中口径。"
     },
     {
+      "id": "terms-of-service",
+      "status": "proposed",
+      "en": "Terms of Service",
+      "translations": {
+        "zh-CN": "服务条款",
+        "zh-TW": "服務條款",
+        "ja": "利用規約",
+        "ko": "서비스 이용약관",
+        "es": "Términos del servicio",
+        "fr": "Conditions d'utilisation",
+        "de": "Nutzungsbedingungen",
+        "pt-PT": "Termos de Serviço",
+        "pt-BR": "Termos de Serviço"
+      },
+      "checkCase": false,
+      "note": "与 privacy-policy 成对的法律文件名，取自现有 termsOfServiceLabel 与 login.consentDialog.body。登录协议行与协议弹窗标题是单行槽（DESIGN.md §16.2），带两个全称的句子超出预算，所以这两处只缩写本条（privacy-policy 保持已裁决全称）：协议行 fr「CGU」；弹窗标题 es「Términos」、fr「CGU」、de「Bedingungen」、pt「Termos」（#8188 / #8181）。弹窗正文与设置页仍用全称。待裁决：这些单行槽简称（尤其 fr 用「CGU」还是其他写法）。"
+    },
+    {
       "id": "overview",
       "status": "proposed",
       "en": "Overview",
@@ -2799,6 +2830,32 @@
       "note": "伙伴的内置例行任务：到点（默认每天 3:30，可改每周一 3:30）回看上次之后和主人的对话，整理伙伴自己的记忆与技能（合并、拆分、停用、把反复出现的做法转正为技能），每条改动可撤销；没有新对话时不调用模型（docs/product-rules/bot-routines.md「内置夜间学习」）。英文句中小写 nightly learning，故 checkCase 为 false。只出现过一次、等待再次出现的做法叫「在观察的做法 / approaches being watched」，不叫候选技能。先登记为 proposed，等 UI 走查后再定。"
     },
     {
+      "id": "teammate-core-skill",
+      "status": "proposed",
+      "en": "Core skill",
+      "translations": {
+        "zh-CN": "核心技能",
+        "zh-TW": "核心技能",
+        "ja": "コアスキル",
+        "ko": "핵심 스킬"
+      },
+      "checkCase": false,
+      "note": "伙伴能力页的第一组：所有伙伴相同、常驻、随 Cindy 更新、不能关闭或修改的编排技能（内部名 teammate-guide；docs/product-rules/cindy-bots-runtime.md §6「伙伴技能分层」）。不叫「基础技能」「基座」。先登记为 proposed，等 UI 走查后再定。"
+    },
+    {
+      "id": "teammate-system-skills",
+      "status": "proposed",
+      "en": "System skills",
+      "translations": {
+        "zh-CN": "系统技能",
+        "zh-TW": "系統技能",
+        "ja": "システムスキル",
+        "ko": "시스템 스킬"
+      },
+      "checkCase": false,
+      "note": "伙伴能力页的第二组：待办、例行任务、工作台与跟进，默认开启，主人可按伙伴单独关闭；关闭时提示词、工具与后台动作一起停（同上）。不叫「内置技能」，以免与本机内置技能混淆。先登记为 proposed。"
+    },
+    {
       "id": "group-chat",
       "status": "proposed",
       "en": "Group chat",
@@ -3426,6 +3483,18 @@
       },
       "checkCase": false,
       "note": "伙伴私信仍由接收方任务的持久队列持有，尚未写入接收方消息记录；队列丢弃后会更新为未送达。"
+    },
+    {
+      "id": "message-read",
+      "status": "proposed",
+      "en": "Read",
+      "translations": {
+        "zh-CN": "已读",
+        "zh-TW": "已讀",
+        "ja": "既読",
+        "ko": "읽음"
+      },
+      "note": "群聊里「别的成员已经看过这条消息」的状态（消息气泡下的双勾、「N 人已读」）。与「Read」作动词（读取文件）无关；只用于消息读取状态。"
     }
   ]
 }

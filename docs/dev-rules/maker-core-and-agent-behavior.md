@@ -333,6 +333,10 @@ Claude 回退／编辑重发的目标之前没有可续接的 assistant（首条
 Claude 用本机保存点），再关闭会话；`rewind.commit` 在同一事务里软删目标、清掉
 `sdk_session_id` 并写入隐藏 `context_rebuild`（reason `message-rewind`），把目标之前仍保留的
 可见历史作为交接，下次任意入口发送时注入全新原生会话，没有 user 历史时交接为空。
+Desktop 发送事务遇到必须占据输入开头的原生命令（Claude 的 `/compact`、Learn 调用及
+Pi 的 slash 输入）时保留待发送交接，在下一条可附带上下文的消息中注入；命令被接受
+不代表交接已送达，不消费内存或持久化的交接标记。回归见
+`makerSendTransaction.test.ts` 的 Learn 命令与后续普通消息用例（#8549）。
 查询与 fork 使用同一隔离控制面 host，关闭其写入进程后才发布子线程身份。
 HTTP 回退遇到缺失 `Content-Type` 的成功响应时，只允许从明文 SSE 前缀（可带注释心跳）
 确认事件流并补齐响应头；显式非 SSE 类型、HTML／JSON、空响应与只有心跳的正文不能放行。
@@ -723,8 +727,10 @@ Cindy reviewer 与 Codex native reviewer 使用同一份范围语义，但接入
 Agent developer 指令不会进入原生审批摘要，因此通过线程级 `auto_review.policy` 内联
 Markdown 接入；在创建或恢复线程时预装，不依赖初始权限模式，后续切到 Auto 即可使用。
 不修改用户配置文件，不改 sandbox／审批者，不覆盖用户或项目自定义策略，
-管理员策略仍由原生优先处理。当前覆盖已验证的 Codex 0.145.0、0.153.4、0.156.0 与 0.159.2（后三者默认租户策略一致），完整保留其默认租户
-策略；未知版本保留原生策略，不能拿旧版本策略覆盖新默认。原生行为验证见
+管理员策略仍由原生优先处理。当前覆盖已验证的 Codex 0.145.0、0.153.4、0.156.0、0.159.2 与 0.166.0，完整保留各版本
+默认租户策略；0.159.2 与 0.166.0 的原生 reviewer 请求已于 2026-11-03 抓取，租户策略
+与 0.153.4 逐行一致，因此复用同一文件。未知版本保留原生策略，不能拿旧版本策略覆盖新默认。
+`native-auto-review-policy.test.ts` 同时检查打包 pin 在已核验版本表内，升级运行时不能只改 pin。原生行为验证见
 `agents/codex/native-auto-review-policy.native.test.ts`（`packages/maker-core/src/` 下），
 需显式指定 `CINDY_CODEX_TEST_BINARY`；它使用假模型与假 MCP 验证配置传递和默认策略
 完整性，不代表真实模型判定已通过。Cindy 审批模型案例见 `scripts/eval-auto-approval.mts`。
