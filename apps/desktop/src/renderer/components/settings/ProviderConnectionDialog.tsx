@@ -2720,13 +2720,14 @@ export function ProviderConnectionDialog({
                       </div>
                     ))}
                   </>}
-                    <Button type="button" variant="secondary" className="w-full justify-between [--button-face-bg:transparent]"
+                    <button type="button"
+                      className="flex min-h-8 items-center gap-1 self-start text-13 font-medium text-[var(--settings-section-title)] rounded-full focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]"
                       aria-expanded={manualOpen} aria-controls={fieldId('manual-fields')}
                       onClick={() => setManualOpen(open => !open)}>
+                      <ChevronDown size={14} aria-hidden className={cn('transition-transform', manualOpen && 'rotate-180')} />
                       {t('settings.providers.connection.manualAdd')}
-                      <ChevronDown size={14} aria-hidden className={cn('shrink-0', manualOpen && 'rotate-180')} />
-                    </Button>
-                  {manualOpen && <div id={fieldId('manual-fields')} className="flex flex-col gap-3">
+                    </button>
+                  {manualOpen && <div id={fieldId('manual-fields')} className="flex flex-col gap-3 pl-5">
                   <FormField id={fieldId(`${activeTab}:manualModel`)} label={t(simpleAdding ? 'settings.providers.connection.manualId' : 'settings.providers.connection.manualModel')} error={errorFor(`${activeTab}:manualModel`)}>
                         {(control) => (
                           <SettingsTextInput {...control} surface="ivory" value={manualModel}
@@ -2770,7 +2771,7 @@ export function ProviderConnectionDialog({
               onClick={() => setShowAdvanced(open => !open)}
               aria-expanded={showAdvanced}
               aria-controls={fieldId('advanced-fields')}
-              className="flex min-h-8 items-center gap-1 self-start text-13 font-medium text-[var(--settings-section-title)]"
+              className="flex min-h-8 items-center gap-1 self-start text-13 font-medium text-[var(--settings-section-title)] rounded-full focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]"
             >
               <ChevronDown size={14} aria-hidden className={cn('transition-transform', showAdvanced && 'rotate-180')} />
               {t('settings.providers.custom.advanced.label')}
