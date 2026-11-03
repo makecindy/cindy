@@ -574,7 +574,8 @@
     "renameSubmit": "Rename",
     "confirm": "Rename",
     "cancelRename": "mev rename",
-    "backToMenu": "chegh to Qu' tetlh"
+    "backToMenu": "chegh to Qu' tetlh",
+    "openSection": "poSmoH"
   },
   "messageMenu": {
     "addToChat": "chel to chat",

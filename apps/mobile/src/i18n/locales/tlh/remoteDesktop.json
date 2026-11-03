@@ -189,5 +189,19 @@
   "keyAppWindows": "app windowmey",
   "keySearch": "nej",
   "keyTaskView": "Qu' legh",
-  "keySpace": "space"
+  "keySpace": "space",
+  "deviceMenu": "jan menu",
+  "liveScreenBackground": "backgroundDaq cha'",
+  "liveScreenBackgroundHint": "ghoS joq app mejDI', mach windowDaq jan bej cha'taHqaH.",
+  "orientation": "Orientation",
+  "orientationFollow": "phoneDaq tlha'",
+  "picture": "nagh beQ",
+  "pictureFill": "top",
+  "pictureFit": "rup",
+  "pictureZoom": "tInchoH",
+  "screenNotRunning": "jan mevpu'. De'wI'Daq chu'qa', vaj rarqa'.",
+  "settings": "SeHlaw'",
+  "volume": "wab law'",
+  "zoomDone": "ta'",
+  "zoomHint": "chuy' tInchoH, drag vIHmoH"
 }

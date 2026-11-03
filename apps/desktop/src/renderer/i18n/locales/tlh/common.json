@@ -390,13 +390,20 @@
     "sectionTitle": "mIchmey",
     "empty": "mIch qav tu'be'lu'",
     "add": "mIch chel…",
-    "addReadOnly": "laD-neH mIch chel…",
     "atLimit": "juv Hu' ({{max}})",
     "remove": "{{name}} teq",
     "writableParentConfirmTitle": "nav-a mIch lo' chaw'a'?",
     "writableParentConfirmDescription": "wuwI' mIch — jIH mIch nav-a. AgentvaD laD, chen, choH, teq chaw.\n\nchaw'a'?\n\n{{path}}",
     "parentConfirmAccept": "chaw",
-    "parentConfirmCancel": "mev"
+    "parentConfirmCancel": "mev",
+    "addTitle": "mIch chel",
+    "back": "jer",
+    "noMatchingRecent": "nejbogh mIchmey tu'lu'be'",
+    "noRecent": "qen mIchmey tu'lu'be'",
+    "searchRecent": "mIchmey nej",
+    "writableHint": "Agent laDlaH 'ej ghItlhlaH",
+    "writableHintDetail": "Agent DaqmeyvamDaq paqmey laD, chenmoH, choH 'ej Qaw'laH.",
+    "addFailed": "mIchvam chelQo'lu'. vangqa', joq latlh mIch yIwI'."
   },
   "modelDescriptions": {
     "automaticRouting": "model wuq — providervam.",
@@ -12841,7 +12848,9 @@
         "browserNativeHost": "browser connection “{{name}}” chelmoHlaH",
         "browserNativeHostDetail": "sandbox HurDaq program chelmoH. juHDaq access account 'ej system permission 'oH.",
         "toolAutoApprove": "Agent tool \"{{name}}\" confirmation Hutlh laH",
-        "toolAutoApproveDetail": "Agent toolvam lo'taHvIS — 'opleS joq each call review Hutlh — vang."
+        "toolAutoApproveDetail": "Agent toolvam lo'taHvIS — 'opleS joq each call review Hutlh — vang.",
+        "liveScreen": "phoneDaq jan bejmey DaBej 'ej DaseHlaH",
+        "liveScreenDetail": "remote desktop lo'taHvIS, phoneDaq jan bejmey (simulator lutmey) cha'laH 'ej tlheq, SeHwI' pat, Hol je ngeHlaH. phonevo' poSmoHDI' neH rarlu', 'ej De'wI'Daq latlh Dochmey So'lu'."
       },
       "detail": {
         "enable": "Enable",

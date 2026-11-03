@@ -293,7 +293,9 @@
       "routineEvents": "Routine Events",
       "mcpUi": "Can bej interactive pages in conversations",
       "mcpUiDomains": "Domains the pages can connect to: {{domains}}",
-      "uiPageAccess": "Pages: {{pages}}\nDomains the pages can connect to: {{domains}}\nTools the pages can call: {{tools}}"
+      "uiPageAccess": "Pages: {{pages}}\nDomains the pages can connect to: {{domains}}\nTools the pages can call: {{tools}}",
+      "liveScreen": "phoneDaq jan bejmey DaBej 'ej DaseHlaH",
+      "liveScreenDetail": "remote desktop lo'taHvIS, phoneDaq jan bejmey (simulator lutmey) cha'laH 'ej tlheq, SeHwI' pat, Hol je ngeHlaH. phonevo' poSmoHDI' neH rarlu', 'ej De'wI'Daq latlh Dochmey So'lu'."
     },
     "releaseChanged": "The DuH juv changed. bej the refreshed juv before installing.",
     "settingsUnavailable": "Could not load the Plugin SeHlaw'. chu'qa' SeHlaw' to try again.",
