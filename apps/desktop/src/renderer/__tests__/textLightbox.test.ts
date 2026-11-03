@@ -1,4 +1,3 @@
-import { colorRegistry } from '../themes/color-registry';
 import '../themes/colors';
 /**
  * textLightbox.test.ts
@@ -68,10 +67,12 @@ describe('TextLightbox — F6 close behaviour', () => {
 // ── F3: overlay style parity ────────────────────────────────────────────────
 
 describe('TextLightbox — F3 overlay style', () => {
-  it('overlay background uses the lightbox overlay theme token', () => {
-    // overlay 已迁到主题 token,避免组件内写死 rgba 颜色。
-    expect(source).toContain("background: 'var(--overlay-lightbox)'");
-    for (const mode of ['light', 'dark'] as const) expect(colorRegistry.resolveDefault('overlay-lightbox', mode)).toBe('rgba(0, 0, 0, 0.85)');
+  it('floats the document over the shared preview scrim instead of filling the window', () => {
+    // 遮罩与弹窗共用 .modal-scrim(PreviewScrim),组件内不写遮罩颜色;
+    // 文稿卡片使用公共预览窗几何。
+    expect(source).toContain('<PreviewScrim onClose={handleClose} zIndex={0} />');
+    expect(source).toContain('style={{ ...PREVIEW_PANEL_STYLE, zIndex: 1 }}');
+    expect(source).not.toContain("width: '100vw'");
   });
 });
 
