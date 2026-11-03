@@ -175,6 +175,7 @@ const LEGACY_GHOST_SLOTS = [
   'skill',
   'workspace',
   'ios-simulator',
+  'live-screen',
 ] as const;
 type LegacyGhostSlot = string;
 
@@ -1803,6 +1804,12 @@ export interface GhostManifest {
   workspace?: true;
   /** @deprecated Retirement detection only. No runtime capability is granted. */
   iosSimulator?: true;
+  /**
+   * Device screens the plugin's Node worker serves for viewing on the owner's
+   * phone over remote desktop. Requires `node`; Cindy calls only the fixed
+   * `liveScreen.*` worker methods.
+   */
+  liveScreen?: true;
   /** v3 未知字段为前向兼容原样保留，但 Host 不解释也不授权。 */
   [key: string]: unknown;
 }
@@ -2075,7 +2082,8 @@ export interface GhostPermissionItem {
     | 'preview'
     | 'browser-extension'
     | 'skill'
-    | 'workspace';
+    | 'workspace'
+    | 'live-screen';
   /** i18n key 后缀,消费方拼 `settings.ghosts.perm.<labelKey>`。 */
   labelKey: string;
   /** i18n 插值参数(工具名、指令名、面板标题等)。 */
@@ -2459,6 +2467,15 @@ export function ghostPermissionItems(manifest: GhostManifest): GhostPermissionIt
       kind: 'workspace',
       labelKey: 'workspace',
       detailKey: 'workspaceDetail',
+    });
+  }
+  // live-screen:手机经远程桌面查看并操作插件提供的设备画面。需要 node 才生效。
+  if (manifest.liveScreen === true && manifest.node) {
+    items.push({
+      key: 'live-screen',
+      kind: 'live-screen',
+      labelKey: 'liveScreen',
+      detailKey: 'liveScreenDetail',
     });
   }
   // session-context 槽:派活时可获知当前会话的项目目录位置(路径信息,
@@ -3417,6 +3434,7 @@ const GHOST_MANIFEST_KNOWN_TOP_LEVEL_FIELDS = new Set([
   'pick',
   'workspace',
   'iosSimulator',
+  'liveScreen',
   // Interpreted by Host: ghostBrowserExtensionWithinCap checks it against the reviewed manifest
   // (narrowing is allowed), so it must not also fall under the exact-match rule for unknown fields.
   'browserExtension',
@@ -3433,6 +3451,7 @@ const V3_BOOLEAN_CAPABILITY_FIELDS = [
   'pick',
   'workspace',
   'iosSimulator',
+  'liveScreen',
 ] as const;
 
 const V3_DECLARATION_TO_LEGACY_SLOT = [
@@ -3461,6 +3480,7 @@ const V3_BOOLEAN_TO_LEGACY_SLOT: Record<(typeof V3_BOOLEAN_CAPABILITY_FIELDS)[nu
   pick: 'pick',
   workspace: 'workspace',
   iosSimulator: 'ios-simulator',
+  liveScreen: 'live-screen',
 };
 
 type PreparedGhostManifest = {
@@ -5190,6 +5210,9 @@ function validateGhostManifestInput(value: unknown, preserveHistoricalTasks: boo
   if (slots.includes('node') && node === undefined) {
     return { ok: false, reason: 'slots 声明了 "node" 但缺少 node 工作进程详单' };
   }
+  if (slots.includes('live-screen') && node === undefined) {
+    return { ok: false, reason: 'liveScreen: true 需要同时声明 node 工作进程' };
+  }
 
   // preview 槽详单:与 slots 含 'preview' **严格成对**(有槽必有详单——域名
   // 范围是本能力的全部知情面,不允许"先装后说");域名语法与 network 白名单
@@ -6691,6 +6714,7 @@ function validateGhostManifestInput(value: unknown, preserveHistoricalTasks: boo
       ...(slots.includes('pick') ? { pick: true as const } : {}),
       ...(slots.includes('workspace') ? { workspace: true as const } : {}),
       ...(slots.includes('ios-simulator') ? { iosSimulator: true as const } : {}),
+      ...(slots.includes('live-screen') ? { liveScreen: true as const } : {}),
       ...(setup !== undefined ? { setup } : {}),
       ...(raw.command !== undefined ? { command: raw.command as string } : {}),
       ...(keywords !== undefined ? { keywords } : {}),

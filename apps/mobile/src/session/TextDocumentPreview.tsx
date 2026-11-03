@@ -14,7 +14,7 @@ import { useTranslation } from "react-i18next";
 import { Text, TextInput } from "@/components/AppText";
 import { monoFont, spacing, textStyles, useTheme } from "@/theme";
 import { writeClipboardText } from "@/session/messageActions";
-import { PreviewIconButton } from "./PreviewChrome";
+import { PreviewIconButton, PreviewToolbar } from "./PreviewChrome";
 
 /** Bounded, virtualized source reader. Finding and wrapping never modify the original. */
 export function TextDocumentPreview({
@@ -116,15 +116,9 @@ export function TextDocumentPreview({
     />
   );
   return (
-    <View style={{ flex: 1, backgroundColor: colors.surface }}>
-      <View
-        style={{
-          flexDirection: "row",
-          alignItems: "center",
-          borderBottomWidth: 0.5,
-          borderColor: colors.border,
-        }}
-      >
+    // 底色跟随宿主页面:预览顶栏是透明的浮动按钮,自带底色会在顶栏下方露出一道接缝。
+    <View style={{ flex: 1 }}>
+      <PreviewToolbar>
         <PreviewIconButton
           icon={Search}
           label={t("message.attachmentPreview.find")}
@@ -149,7 +143,7 @@ export function TextDocumentPreview({
             );
           }}
         />
-      </View>
+      </PreviewToolbar>
       {find ? (
         <View
           style={{

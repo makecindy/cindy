@@ -3282,16 +3282,10 @@ struct ExpandedSessionsView: View {
   }
 
   private var sessionListViewportHeight: CGFloat {
-    let reservedHeight = expandedIslandTopPadding
-      + expandedIslandTopBarHeight
-      + expandedIslandBodySpacing
-      + expandedIslandBottomPadding
-    let availableHeight = max(
-      expandedIslandMultiRowSlotHeight,
-      layout.height - reservedHeight
-    )
-    let maxVisibleRowsHeight = CGFloat(expandedIslandMaxVisibleRows) * expandedIslandMultiRowSlotHeight
-    return min(availableHeight, maxVisibleRowsHeight)
+    // Depends only on the row budget: layout.height comes from the measured height of
+    // this very view, so sizing the viewport from it would let a stale, shorter
+    // measurement keep the list short (and only creep taller across re-expansions).
+    CGFloat(expandedIslandMaxVisibleRows) * expandedIslandMultiRowSlotHeight
   }
 
   private var currentMascotState: AgentIslandMascotAnimationState? {
