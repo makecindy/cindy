@@ -191,6 +191,8 @@ export interface DesktopMcpProvidersDeps {
     sessionId: string,
     sessionInstanceId: string | undefined,
   ) => boolean;
+  /** Current live session instance, whether local or SSH-backed. */
+  isCurrentSessionInstance?: (sessionId: string, sessionInstanceId: string) => boolean;
   /** Current live session, including sessions whose agent runs over SSH. */
   isCurrentGrokLoginCaller?: (sessionId: string, sessionInstanceId: string) => boolean;
   /** 把工具结果图片转成文字描述（视觉桥，最佳努力）。缺失 = 不处理。
@@ -504,7 +506,7 @@ export function createDesktopMcpProviders(deps: DesktopMcpProvidersDeps): LiziMc
     avatar: string; sessionId: string; sessionInstanceId?: string;
     workingDir: string | null; remoteHostId: string | null; toolName: string;
   }) => resolveTeammateAvatarInput(input, {
-    isCurrentSession: (sessionId, instanceId) => deps.isCurrentLocalSessionInstance?.(sessionId, instanceId) === true,
+    isCurrentSession: (sessionId, instanceId) => deps.isCurrentSessionInstance?.(sessionId, instanceId) === true,
     authorizePath: (absPath) => authorizeDesktopSessionPath({
       sessionId: input.sessionId, sessionInstanceId: input.sessionInstanceId,
       workingDir: input.workingDir ?? '', path: absPath, toolName: input.toolName, operation: 'read',

@@ -37,4 +37,19 @@ describe('代输入 screenshot read', () => {
     expect(granted.ok && granted.bytes.toString()).toBe('outside');
     expect(authorize).toHaveBeenCalledTimes(2);
   });
+
+  it('accepts a real local WebP only when the avatar reader opts in', async () => {
+    const sharp = (await import('sharp')).default;
+    const task = tempDir();
+    const bytes = await sharp({ create: { width: 1, height: 1, channels: 4,
+      background: { r: 0, g: 0, b: 0, alpha: 1 } } }).webp().toBuffer();
+    writeFileSync(path.join(task, 'avatar.webp'), bytes);
+    const authorize = vi.fn(async () => ({ allowed: true as const }));
+    expect(await readHandoffPicture('avatar.webp', task, authorize)).toMatchObject({ ok: false, errorCode: 'NOT_AN_IMAGE' });
+    expect(await readHandoffPicture('avatar.webp', task, authorize, { allowWebp: true, maxBytes: bytes.length - 1 }))
+      .toMatchObject({ ok: false, errorCode: 'IMAGE_NOT_FOUND' });
+    expect(await readHandoffPicture('avatar.webp', task, authorize, { allowWebp: true, maxBytes: bytes.length }))
+      .toEqual({ ok: true, bytes });
+    expect(authorize).not.toHaveBeenCalled();
+  });
 });

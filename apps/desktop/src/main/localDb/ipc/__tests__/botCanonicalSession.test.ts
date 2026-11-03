@@ -10782,9 +10782,12 @@ describe('Bot self control uses the same profile authority as settings', () => {
       .toMatchObject({ ok: true });
     expect(await invoke('local-db:bots:get', 'bot-1')).toMatchObject({ avatar: '🧑‍💻', avatarColor: 'teal',
       gender: 'female', userContextSource: '用户喜欢简洁回答。' });
-    expect(await service.inspect({ callerSessionId: sessionId })).toMatchObject({ ok: true,
+    const after = await service.inspect({ callerSessionId: sessionId });
+    expect(after).toMatchObject({ ok: true,
       state: { profile: { avatar: '🧑‍💻', avatarColor: 'teal', gender: 'female', userContextSource: '用户喜欢简洁回答。' } } });
-    expect(await service.updateProfile({ callerSessionId: sessionId, expectedVersion: before.state.profile.version,
+    if (!after.ok) throw new Error('Expected updated Bot');
+    expect(after.state.profile.version).toBeGreaterThan(before.state.profile.version);
+    expect(await service.updateProfile({ callerSessionId: sessionId, expectedVersion: after.state.profile.version,
       avatar: '/another/bot/avatar.png' })).toMatchObject({ ok: false });
   });
   it('reads only its own state and patches requested fields without replacing independent configuration', async () => {

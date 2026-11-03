@@ -45,7 +45,8 @@ export async function resolveTeammateAvatarInput(
   } else {
     if (!workingDir || remoteHostId)
       return { ok: false, errorCode: 'PERMISSION_DENIED', message: '远程任务不能读取控制端的本地头像图片' };
-    const picture = await (deps.readPicture ?? readHandoffPicture)(avatar, workingDir, deps.authorizePath);
+    const picture = await (deps.readPicture ?? readHandoffPicture)(avatar, workingDir, deps.authorizePath,
+      { allowWebp: true, maxBytes: BOT_AVATAR_MAX_BYTES });
     if (!picture.ok) return { ok: false, errorCode: picture.errorCode, message: picture.message };
     image = picture.bytes;
   }

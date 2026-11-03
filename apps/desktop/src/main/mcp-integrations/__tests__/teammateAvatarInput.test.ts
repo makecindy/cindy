@@ -38,6 +38,16 @@ describe('teammate avatar input', () => {
     expect(fetchImage).toHaveBeenCalledWith('https://example.com/avatar.png', 5 * 1024 * 1024, undefined, { timeoutMs: 15_000 });
   });
 
+  it('accepts a public HTTPS avatar for a live SSH task without reading its filesystem', async () => {
+    const fetchImage = vi.fn().mockResolvedValue({ buffer: png, mimeType: 'image/png' });
+    const readPicture = vi.fn();
+    expect(await resolveTeammateAvatarInput({ ...baseInput, remoteHostId: 'ssh-1', workingDir: null,
+      avatar: 'https://example.com/avatar.png' }, deps({ fetchImage, readPicture })))
+      .toEqual({ ok: true, avatarImageBase64: png.toString('base64') });
+    expect(fetchImage).toHaveBeenCalledOnce();
+    expect(readPicture).not.toHaveBeenCalled();
+  });
+
   it('rejects untrusted URL schemes and invalid image bytes', async () => {
     const readPicture = vi.fn();
     expect(await resolveTeammateAvatarInput({ ...baseInput, avatar: 'http://example.com/avatar.png' }, deps({ readPicture })))
@@ -58,7 +68,8 @@ describe('teammate avatar input', () => {
     expect(await resolveTeammateAvatarInput({ ...baseInput, avatar: 'avatar.png' }, deps({
       isCurrentSession, readPicture,
     }))).toMatchObject({ ok: false, errorCode: 'PERMISSION_DENIED' });
-    expect(readPicture).toHaveBeenCalledWith('avatar.png', 'C:\\task', expect.any(Function));
+    expect(readPicture).toHaveBeenCalledWith('avatar.png', 'C:\\task', expect.any(Function),
+      { allowWebp: true, maxBytes: 5 * 1024 * 1024 });
   });
 
   it('never reads a controller-local file for a remote task', async () => {
