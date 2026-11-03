@@ -2,7 +2,7 @@ import { createRoot } from 'react-dom/client';
 import { MediaScrubber } from '@/components/ui/media-scrubber';
 import { GhostMailHistory } from './GhostMailHistory';
 import { GhostCardForm } from './GhostCardForm';
-import { readGhostCardForm, readMailCard, mailCardStatus, mailSendRemainingFraction, isLegacyMailCard, readGhostCardFormChange, mergeGhostCardFormValues, trackGhostCardFormDelivery, releaseGhostCardFormDelivery, pendingGhostCardFormDelivery } from '@cindy/maker-shared/ghost-card-form';
+import { readGhostCardForm, readMailCard, mailCardStatus, mailSendRemainingFraction, isLegacyMailCard, readGhostCardFormChange, mergeGhostCardFormValues, trackGhostCardFormDelivery, releaseGhostCardFormDelivery, pendingGhostCardFormDelivery, ghostCardLinkOpensDirectly } from '@cindy/maker-shared/ghost-card-form';
 import { openMailCard } from '@/features/right-sidebar/lib/mailPreview';
 import sliderCss from '@/components/ui/slider.css?inline';
 /**
@@ -299,6 +299,11 @@ function GhostCardCanvas({
   // openExternal。链接文案归意识,跳转链路由宿主独占——与 action/prompt 同一
   // 信任模型。值 = 待确认的 URL。
   const [linkAsk, setLinkAsk] = useState<string | null>(null);
+  const openCardLink = (url: string): void => {
+    void window.electronAPI.openExternal(url).then((res) => {
+      if (!res.success) toast.error(t('chat.ghostCall.linkOpenFailed'));
+    });
+  };
   // 卡内图片右键菜单(复制图片 / 打开所在目录):与 ChatImageView 同款交互。
   // 图片在沙箱 iframe 里,宿主的 React onContextMenu 收不到,由点击桥代挂
   // contextmenu 监听后把 iframe 坐标换算成宿主视口坐标弹这里的菜单。
@@ -664,7 +669,8 @@ function GhostCardCanvas({
       el.setAttribute('role', 'link');
       const activateLink = (): void => {
         iframeRef.current?.blur();
-        setLinkAsk(url);
+        if (ghostCardLinkOpensDirectly(url)) openCardLink(url);
+        else setLinkAsk(url);
       };
       el.addEventListener('click', (e) => {
         e.stopPropagation();
@@ -758,9 +764,7 @@ function GhostCardCanvas({
     const url = linkAsk;
     setLinkAsk(null);
     if (!url) return;
-    void window.electronAPI.openExternal(url).then((res) => {
-      if (!res.success) toast.error(t('chat.ghostCall.linkOpenFailed'));
-    });
+    openCardLink(url);
   };
 
   /** 输入面板发送:非空文字 → 锁源按钮 + 派发带 prompt 的 card-action。 */

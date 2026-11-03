@@ -165,10 +165,12 @@ describe("rich plugin card hints", () => {
     expect(text.split('#9 Fix login')).toHaveLength(2);
     expect(text).toContain('o/r · 草稿');
     expect(text).not.toContain('plugins.openLinkHost');
-    const { Alert } = await import('react-native');
+    // GitHub pages open directly (owner's choice); other addresses still ask first.
+    const { Alert, Linking } = await import('react-native');
     const title = [...container.querySelectorAll('button')].find((button) => button.textContent === '#9 Fix login')!;
     await act(async () => { title.click(); });
-    expect(Alert.alert).toHaveBeenCalledWith('plugins.externalTitle', 'https://github.com/o/r/pull/9', expect.anything());
+    expect(Linking.openURL).toHaveBeenCalledWith('https://github.com/o/r/pull/9');
+    expect(Alert.alert).not.toHaveBeenCalled();
   });
 });
 

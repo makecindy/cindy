@@ -16,6 +16,7 @@ import {
   insertMailImage,
   mailPreviewImages,
   type GhostCardFormField,
+  ghostCardLinkOpensDirectly,
 } from "@cindy/maker-shared/ghost-card-form";
 import {
   AccessibilityInfo,
@@ -473,6 +474,10 @@ function CardControls({
         return;
       }
       if (!["http:", "https:"].includes(url.protocol)) return;
+      if (ghostCardLinkOpensDirectly(url.href)) {
+        void Linking.openURL(url.href).catch(() => setUnknown(true));
+        return;
+      }
       Alert.alert(t("plugins.externalTitle"), url.href, [
         { text: t("plugins.cancel"), style: "cancel" },
         {
