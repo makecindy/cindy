@@ -97,6 +97,18 @@ describe('伙伴飞书扫码授权会话', () => {
     expect(statuses.map((item) => item.status)).not.toContain('success');
   });
 
+  it('ignores a cancel that belongs to another round', async () => {
+    const poll = vi.fn(async () => ({ status: 'pending' as const }));
+    const { started, statuses } = setup(poll);
+    await expect(started).resolves.toMatchObject({ ok: true });
+
+    cancelFeishuConnectionRegistration(999);
+    expect(statuses.map((item) => item.status)).not.toContain('cancelled');
+
+    cancelFeishuConnectionRegistration();
+    expect(statuses.map((item) => item.status)).toContain('cancelled');
+  });
+
   it('drops an old round once a new registration starts', async () => {
     const firstPoll = deferred<FeishuAppRegistrationPoll>();
     const poll = vi.fn(() => firstPoll.promise);

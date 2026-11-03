@@ -39,10 +39,11 @@ interface ActiveSession {
 let nextRunId = 0;
 let active: ActiveSession | null = null;
 
-export function cancelFeishuConnectionRegistration(): void {
+export function cancelFeishuConnectionRegistration(runId?: number): void {
   const cancelled = active;
+  // 旧窗口只允许取消自己那一轮: 不知道 runId 或对不上时不能误杀当前轮次。
+  if (!cancelled || (runId !== undefined && cancelled.id !== runId)) return;
   active = null;
-  if (!cancelled) return;
   cancelled.onStatus({ status: 'cancelled', runId: cancelled.id });
 }
 

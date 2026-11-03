@@ -37,9 +37,10 @@ export function registerBotImFeishuRegistrationIpc(): void {
     assertTrustedAppRendererEvent(event);
     return beginBotImFeishuRegistration(payload);
   });
-  ipcMain.handle('botImConnection:feishu-registration-cancel', (event) => {
+  ipcMain.handle('botImConnection:feishu-registration-cancel', (event, payload) => {
     assertTrustedAppRendererEvent(event);
-    cancelFeishuConnectionRegistration();
+    const runId = (payload as { runId?: unknown } | null)?.runId;
+    cancelFeishuConnectionRegistration(typeof runId === 'number' ? runId : undefined);
     return { ok: true };
   });
 }

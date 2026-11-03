@@ -104,7 +104,9 @@ export function useFeishuBotRegistration(
     activeRunRef.current = null;
     const runId = mainRunIdRef.current;
     mainRunIdRef.current = null;
-    void resolvedTransport.cancel(runId ?? undefined).catch((err: unknown) => {
+    // begin 还没回来时不知道自己的轮次: 这时发全局取消会误杀别的窗口的新授权。
+    if (runId === null) return;
+    void resolvedTransport.cancel(runId).catch((err: unknown) => {
       log.warn('registration cancel failed:', err);
     });
   }, [resolvedTransport]);
@@ -208,10 +210,12 @@ export function useFeishuBotRegistration(
         setPhase('starting');
         setErrorMessage(null);
         setQrDataUrl(null);
-        try {
-          await resolvedTransport.cancel(previousRunId ?? undefined);
-        } catch (err) {
-          log.warn('registration cancel failed:', err);
+        if (previousRunId !== null) {
+          try {
+            await resolvedTransport.cancel(previousRunId);
+          } catch (err) {
+            log.warn('registration cancel failed:', err);
+          }
         }
         if (generationRef.current !== retryGeneration) return;
       }
@@ -271,11 +275,14 @@ export function useFeishuBotRegistration(
 
   const cancelRegistration = useCallback(async () => {
     const runId = ++generationRef.current;
+    const mainRunId = mainRunIdRef.current;
     activeRunRef.current = null;
+    mainRunIdRef.current = null;
     setPhase('cancelled');
     setErrorMessage(null);
+    if (mainRunId === null) return;
     try {
-      await resolvedTransport.cancel(mainRunIdRef.current ?? undefined);
+      await resolvedTransport.cancel(mainRunId);
     } catch (err) {
       if (generationRef.current !== runId) return;
       setPhase('error');

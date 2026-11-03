@@ -745,7 +745,7 @@ function BotChannelAddDialog({
           throw failure;
         }
       },
-      cancel: () => api.feishuRegistrationCancel(),
+      cancel: (runId) => api.feishuRegistrationCancel(runId),
       onStatus: (callback) => api.onFeishuRegistrationStatus(callback),
     };
   }, [api, bot.id, bot.name]);

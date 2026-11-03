@@ -2693,8 +2693,11 @@ contextBridge.exposeInMainWorld('electronAPI', {
       service: 'feishu' | 'lark';
     }): Promise<import('../shared/botImConnection').BotImFeishuRegistrationBeginResult> =>
       ipcRenderer.invoke('botImConnection:feishu-registration-begin', payload),
-    feishuRegistrationCancel: (): Promise<{ ok: true }> =>
-      ipcRenderer.invoke('botImConnection:feishu-registration-cancel'),
+    feishuRegistrationCancel: (runId?: number): Promise<{ ok: true }> =>
+      ipcRenderer.invoke(
+        'botImConnection:feishu-registration-cancel',
+        runId === undefined ? undefined : { runId },
+      ),
     onFeishuRegistrationStatus: (
       listener: (payload: import('../shared/botImConnection').BotImFeishuRegistrationStatus) => void,
     ): (() => void) => {

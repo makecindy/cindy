@@ -2466,7 +2466,7 @@ interface ElectronAPI {
       botId: string;
       service: 'feishu' | 'lark';
     }) => Promise<import('../shared/botImConnection').BotImFeishuRegistrationBeginResult>;
-    feishuRegistrationCancel: () => Promise<{ ok: true }>;
+    feishuRegistrationCancel: (runId?: number) => Promise<{ ok: true }>;
     onFeishuRegistrationStatus: (
       listener: (
         payload: import('../shared/botImConnection').BotImFeishuRegistrationStatus,

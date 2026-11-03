@@ -132,6 +132,37 @@ describe('Feishu bot authorization', () => {
     expect(api.registrationCancel).toHaveBeenCalledWith(7);
   });
 
+  it('does not cancel globally when the panel closes before begin returns a run ID', async () => {
+    const { api } = installApi();
+    let resolveBegin: (value: Awaited<ReturnType<typeof api.registrationBegin>>) => void = () => {};
+    api.registrationBegin.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          resolveBegin = resolve;
+        }),
+    );
+    let view: ReturnType<typeof render>;
+    await act(async () => {
+      view = render(<FeishuBotSection expanded onToggle={() => {}} />);
+    });
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: 'settings.feishuBot.qr.begin' }));
+    });
+    view!.unmount();
+    // 还不知道自己那一轮: 不能发全局取消误杀另一个窗口的新授权。
+    expect(api.registrationCancel).not.toHaveBeenCalled();
+    await act(async () => {
+      resolveBegin({
+        ok: true,
+        verificationUrl: 'https://open.feishu.cn/page/cli?user_code=LATE',
+        userCode: 'LATE',
+        expiresIn: 30,
+        runId: 9,
+      });
+    });
+    expect(api.registrationCancel).not.toHaveBeenCalled();
+  });
+
   it('ignores a previous begin response after cancellation and a new attempt', async () => {
     const { api } = installApi();
     let resolveFirst: (value: Awaited<ReturnType<typeof api.registrationBegin>>) => void = () => {};
