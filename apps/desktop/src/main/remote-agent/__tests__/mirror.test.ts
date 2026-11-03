@@ -30,7 +30,7 @@ import { createRemoteAgentHost, mirrorSegments, type HostedStartInput } from '..
 import { createProviderShareMemberPurger, hostedStartOptions } from '../host/service';
 import { ExecutorWorkspace } from '../executor/workspace';
 import { managedSkillDigest } from '../managedSkillDigest';
-import { MAX_ANCESTOR_LEVELS } from '../wire';
+import { MAX_ANCESTOR_LEVELS, MAX_MANAGED_SKILLS, decodeOpenPayload } from '../wire';
 
 const RG = path.resolve(__dirname, '../../../../../ripgrep-bin', `${process.platform}-${process.arch}`, process.platform === 'win32' ? 'rg.exe' : 'rg');
 
@@ -534,6 +534,31 @@ describe('collectPersonalConfig', () => {
     expect(localOf('.claude/skills/mine/a.md')).toBe(path.join(dirs.mine, 'a.md'));
     // 已停用的不再指向它原来的本机目录，只剩工作区的普通映射。
     expect(localOf('.claude/skills/cindy-learn/x.md')).toBe(path.join(project, '.claude/skills/cindy-learn/x.md'));
+  });
+
+  // 本机里托管的 `cindy:pr` 与个人的 `cindy-pr` 是两个命令：暂存目录撞名时共存，不丢掉托管的；
+  // 条目数不超过线上上限，否则对方拒绝整个打开。
+  it('keeps a managed Skill next to a personal one with the staging name, and caps the entries', async () => {
+    const home = path.join(root, 'home');
+    write(path.join(home, '.claude', 'skills', 'cindy-pr', 'SKILL.md'), 'personal cindy-pr');
+    const pr = path.join(root, 'bundle', 'pr');
+    write(path.join(pr, 'SKILL.md'), 'managed pr');
+    const both = await collectPersonalConfig('claude-code', [], { env: {}, home, managedSkills: [{ command: 'cindy:pr', dir: pr }] });
+    const [managed] = both.personal.managedSkills!;
+    expect(managed.dir).toMatch(/^\.claude\/skills\/cindy-pr-[0-9a-f]{8}$/);
+    expect(decode(both.personal.files)).toEqual({
+      '.claude/skills/cindy-pr/SKILL.md': 'personal cindy-pr',
+      [`${managed.dir}/SKILL.md`]: 'managed pr',
+    });
+    const many = Array.from({ length: MAX_MANAGED_SKILLS + 1 }, (_, index) => {
+      const dir = path.join(root, 'many', `s${index}`);
+      write(path.join(dir, 'SKILL.md'), String(index));
+      return { command: `cindy:s${index}`, dir };
+    });
+    const capped = await collectPersonalConfig('claude-code', [], { env: {}, home: path.join(root, 'nobody'), managedSkills: many, agentDigests: {} });
+    expect(capped.personal.managedSkills).toHaveLength(MAX_MANAGED_SKILLS);
+    expect(decodeOpenPayload({ sessionId: 's1', options: { model: 'm' }, workspace: { workingDir: '/p', platform: 'darwin', shell: 'zsh' }, personal: capped.personal }).personal.managedSkills)
+      .toHaveLength(MAX_MANAGED_SKILLS);
   });
 
   it('leaves credential files in personal Skills for later on a shared provider', async () => {

@@ -198,6 +198,8 @@ export interface RemoteAgentWireManagedSkill {
 
 /** 新运行端单独给托管 Skill 的文件额度。 */
 export const MAX_MANAGED_SKILL_FILES = 2048;
+/** `personal.managedSkills` 的条目上限：超过时接收方拒绝整个打开，收集时就要截断。 */
+export const MAX_MANAGED_SKILLS = 512;
 
 const MANAGED_SKILL_PART = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/;
 
@@ -212,12 +214,12 @@ export function parseManagedSkillCommand(command: string): { plugin: string; ski
 /**
  * 托管 Skill 的文件在影子目录里的位置：Agent 找项目 Skill 的目录下 `<插件>-<Skill>`。名字本身可以含 `-`，
  * 两个命令可能拍平成同一个名字（`a-b:c` 与 `a:b-c`）：名字里有 `-` 时追加整条命令的短哈希，保证不同命令不同目录，
- * 同一条命令每次都得到同一个目录。
+ * 同一条命令每次都得到同一个目录。`forceHash`：普通名字已被项目或个人的同名 Skill 占用时，换成带哈希的目录共存。
  */
-export function managedSkillDir(kind: RemoteAgentKind, command: string): string | null {
+export function managedSkillDir(kind: RemoteAgentKind, command: string, forceHash = false): string | null {
   const parts = parseManagedSkillCommand(command);
   if (!parts) return null;
-  const ambiguous = parts.plugin.includes('-') || parts.skill.includes('-');
+  const ambiguous = forceHash || parts.plugin.includes('-') || parts.skill.includes('-');
   const name = ambiguous
     ? `${parts.plugin}-${parts.skill}-${createHash('sha256').update(command).digest('hex').slice(0, 8)}`
     : `${parts.plugin}-${parts.skill}`;
@@ -527,7 +529,7 @@ function decodePersonal(value: unknown): RemoteAgentWirePersonal {
     if (permissions.allow.length || permissions.deny.length || permissions.ask.length) personal.permissions = permissions;
   }
   if (Array.isArray(value.managedSkills)) {
-    if (value.managedSkills.length > MAX_PROJECT_FILES) throw new Error('REMOTE_AGENT_INVALID');
+    if (value.managedSkills.length > MAX_MANAGED_SKILLS) throw new Error('REMOTE_AGENT_INVALID');
     const seen = new Set<string>();
     personal.managedSkills = value.managedSkills.flatMap((item): RemoteAgentWireManagedSkill[] => {
       if (!isRecord(item) || typeof item.command !== 'string' || typeof item.dir !== 'string') return [];

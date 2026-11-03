@@ -38,6 +38,7 @@ import {
   PROJECT_INSTRUCTION_FILES as TOP_LEVEL_FILES,
   PROJECT_SETTINGS_FILES as SETTINGS_FILES,
   MAX_MANAGED_SKILL_FILES,
+  MAX_MANAGED_SKILLS,
   isSafeProjectFilePath,
   managedSkillDir,
   managedSkillPluginLayout,
@@ -446,7 +447,12 @@ export async function collectPersonalConfig(
     const managedFiles: RemoteAgentWireFile[] = agentDigests ? [] : personal.files;
     const taken = new Set(roots.map(({ relative }) => relative));
     for (const skill of options.managedSkills) {
-      const relative = managedSkillDir(kind, skill.command);
+      // 条目数不能超过线上上限，否则接收方拒绝整个打开。
+      if (personal.managedSkills.length >= MAX_MANAGED_SKILLS) break;
+      // 托管 Skill 在本机是插件命名空间里的 `cindy:pr`，与项目或个人的 `cindy-pr` 是两个不同的命令：暂存目录被占用时
+      // 换成带哈希的目录共存，不丢掉任何一边。
+      let relative = managedSkillDir(kind, skill.command);
+      if (relative && (taken.has(relative) || projectEntries.has(relative))) relative = managedSkillDir(kind, skill.command, true);
       if (!relative || taken.has(relative) || projectEntries.has(relative)) continue;
       let entry: RemoteAgentWireManagedSkill;
       const digest = agentDigests ? await managedSkillDigest(skill.dir) : null;
