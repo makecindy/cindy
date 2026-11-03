@@ -10694,7 +10694,7 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
                     providerGroup: remoteProviderGroup,
                   },
                 }
-                : {}),
+                : { remote: undefined }),
             }}
             activeModelId={modelSheetSelection.model}
             existingSessionRoute
@@ -10774,7 +10774,7 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
                       selectedDeviceId: collab.workerForm.form.agentDeviceId ?? null,
                     },
                   }
-                : {}),
+                : { remote: undefined }),
             }}
             activeModelId={collab.workerForm.form.model?.id ?? ''}
             activePermissionMode=""
