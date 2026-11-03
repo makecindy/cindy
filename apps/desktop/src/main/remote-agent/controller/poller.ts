@@ -56,8 +56,11 @@ interface Entry {
 export function isRetryableLinkError(error: unknown): boolean {
   const code = (error as { code?: unknown })?.code;
   const message = error instanceof Error ? error.message : String(error);
+  // An open device circuit is temporary; keep the existing retry budget while
+  // the transport's single-flight probe determines when the peer is responsive.
   if (typeof code === 'string' && [
-    'PEER_RESET', 'TIMEOUT', 'INVOKE_TIMEOUT', 'BACKPRESSURE', 'DEVICE_OFFLINE', 'LINK_CLOSED', 'LINK_NOT_OPEN', 'NOT_CONNECTED',
+    'PEER_RESET', 'TIMEOUT', 'INVOKE_TIMEOUT', 'BACKPRESSURE', 'DEVICE_OFFLINE', 'DEVICE_UNRESPONSIVE',
+    'LINK_CLOSED', 'LINK_NOT_OPEN', 'NOT_CONNECTED',
   ].includes(code)) {
     return true;
   }
