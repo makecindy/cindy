@@ -16,10 +16,20 @@ import { getSentMessageImagePreview, rememberSentMessageImagePreviews, type GetS
   type SentMessageImagePreviews } from '@/session/sentMessageImagePreviews';
 
 const durableThumbs = vi.hoisted(() => new Map<string, string>());
-vi.mock('@/session/sentAttachmentThumbStore', async (importOriginal) => ({
-  ...(await importOriginal<typeof import('@/session/sentAttachmentThumbStore')>()),
-  getSentAttachmentThumbUri: (ref: string) => durableThumbs.get(ref) ?? null,
-}));
+vi.mock('@/session/sentAttachmentThumbStore', async (importOriginal) => {
+  const original = await importOriginal<typeof import('@/session/sentAttachmentThumbStore')>();
+  return {
+    ...original,
+    getSentAttachmentThumbUri: (ref: string) => durableThumbs.get(ref) ?? null,
+    // overlay 内部闭包引用本模块的 getSentAttachmentThumbUri,上面的 mock 重定向不进去;
+    // 这里用同一最小改写替换 overlay 本体,其真实语义由 sentAttachmentThumbStore.test.ts 覆盖。
+    applySentAttachmentThumbOverlay: (<T extends { kind: string; uri?: string; previewable: boolean }>(item: T) => (
+      item.kind === 'image' && !item.previewable && item.uri && durableThumbs.has(item.uri)
+        ? { ...item, uri: durableThumbs.get(item.uri)!, previewable: true }
+        : item
+    )) as typeof original.applySentAttachmentThumbOverlay,
+  };
+});
 
 function messageItem(key: string, message: Partial<MobileMessageRenderItem & { message: unknown }>['message']): MobileMessageRenderItem {
   return {
@@ -724,5 +734,18 @@ describe('message attachment collection', () => {
     const result = collectMobileMessageAttachmentPayloads(row);
     expect(result).toHaveLength(3);
     expect(result.map((payload) => payload.kind === 'file' ? payload.title : payload.kind === 'media' ? payload.media.url : payload.kind)).toEqual(['file:///photo.png', 'report.pdf', 'clip.mp4']);
+  });
+
+  it('opens a sent image whose only readable copy is the local thumb once, beside its file attachment', () => {
+    durableThumbs.set('cindy-oss-attach://photo', 'file:///documents/sent-attachment-thumbs/photo.jpg');
+    try {
+      const row = messageItem('m-sent', { attachments: [
+        { kind: 'file', name: 'notes.md', path: '/repo/notes.md', previewable: false },
+        { kind: 'image', name: 'photo.png', uri: 'cindy-oss-attach://photo', previewable: false },
+      ] });
+      const result = collectMobileMessageAttachmentPayloads(row);
+      expect(result.map((payload) => payload.kind === 'file' ? payload.title : payload.kind === 'media' ? payload.media.url : payload.kind))
+        .toEqual(['notes.md', 'file:///documents/sent-attachment-thumbs/photo.jpg']);
+    } finally { durableThumbs.clear(); }
   });
 });

@@ -304,12 +304,16 @@ export function collectMobileMessageAttachmentPayloads(
     for (const attachment of message.attachments ?? [])
       payloads.push(
         buildAttachmentPayload(
-          svgAttachmentForDisplay(
-            attachment,
-            workdir,
-            message.key,
-            remoteHostId,
-            sessionId,
+          // 与下方图集条目同口径:已发送图片走本地缩略图 overlay(url 改写为
+          // file://…),否则 URL 不一致会让同一张照片在 pager strip 里出现两页。
+          applySentAttachmentThumbOverlay(
+            svgAttachmentForDisplay(
+              attachment,
+              workdir,
+              message.key,
+              remoteHostId,
+              sessionId,
+            ),
           ),
         ),
       );
