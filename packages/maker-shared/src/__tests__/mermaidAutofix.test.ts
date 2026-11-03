@@ -904,4 +904,29 @@ describe('quotes, complete edges and block headers', () => {
     expect(output).toContain('E --> F');
     expect(output).toContain('Z[label]');
   });
+
+  it('consumes a dotted tip whose source head is glued to the id', () => {
+    // Mobile Mermaid parses `A<.->B` with the head on the source side, so the dots
+    // sit right behind the `<` instead of behind a dash run. The tip is still an
+    // edge, not an asymmetric label opener: otherwise the rest of the graph stays
+    // inside a label and keeps its unicode arrows.
+    for (const tip of ['<.->', '<..->']) {
+      const source = ['flowchart TD', `  A${tip}B; C → D; Z[label]`].join('\n');
+      const output = repairMermaidSource(source);
+      expect(output).toContain(`A${tip}B`);
+      expect(output).toContain('C --> D');
+      expect(output).toContain('Z[label]');
+    }
+  });
+
+  it('reads a dotted edge text that starts with punctuation', () => {
+    // The visible label of `-.=.->` is `=`, which also starts an edge token, so the
+    // glued rule rejects it. The dotted terminator further on the line still says
+    // the run is text, and the arrow behind it is graph syntax again.
+    const source = ['flowchart TD', '  A-.=.->B; C → D; Z[label]'].join('\n');
+    const output = repairMermaidSource(source);
+    expect(output).toContain('A-.=.->B');
+    expect(output).toContain('C --> D');
+    expect(output).toContain('Z[label]');
+  });
 });

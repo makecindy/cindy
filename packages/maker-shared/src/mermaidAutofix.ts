@@ -82,14 +82,19 @@ function isEdgeTipRun(
   prefixes: { dash: Int32Array; dot: Int32Array; eq: Int32Array },
 ): boolean {
   let first = start;
-  if (text[first] === '<') first += 1;
+  let sourceHead = false;
+  if (text[first] === '<') {
+    first += 1;
+    sourceHead = true;
+  }
   const rest = end - first;
   if (rest < 2) return false;
   const { dash, dot, eq } = prefixes;
   if (dash[end] - dash[first] === rest) return true;
   if (eq[end] - eq[first] === rest) return true;
-  if (text[first] !== '-') return false;
   const dots = dot[end] - dot[first];
+  if (sourceHead) return text[end - 1] === '-' && dots === rest - 1;
+  if (text[first] !== '-') return false;
   if (dots === rest - 1) return true;
   return text[end - 1] === '-' && dots === rest - 2;
 }
@@ -426,11 +431,32 @@ function completeEdgeTokenEnd(
   return dashes;
 }
 
+/**
+ * Index just past a dotted terminator (`.`, a dash run, `>`) at or after `from`, or
+ * `-1` when the line carries none. A dotted bare edge text (`A-.label.->B`) closes
+ * on one, which is what tells its visible label apart from the edge token itself.
+ */
+function dottedTerminatorEnd(text: string, from: number): number {
+  const lineEnd = text.indexOf('\n', from) === -1 ? text.length : text.indexOf('\n', from);
+  for (let at = from; at < lineEnd; at += 1) {
+    if (text[at] !== '.') continue;
+    let dashes = at + 1;
+    while (text[dashes] === '-') dashes += 1;
+    if (dashes > at + 1 && text[dashes] === '>') return dashes + 1;
+  }
+  return -1;
+}
+
 function opensBareEdgeText(text: string, i: number): boolean {
   const head = text.slice(i, i + 8);
   if (completeEdgeTokenEnd(text, i, true) > i) return false;
   if (/^(?:-{2,}|={2,}|-\.+)\s/.test(head)) return true;
-  return BARE_EDGE_TEXT_GLUED_RE.test(head);
+  if (BARE_EDGE_TEXT_GLUED_RE.test(head)) return true;
+  // A dotted edge may show an edge punctuation character as its label
+  // (`A-.=.->B` shows `=`), which the glued class above rejects because the same
+  // character also starts a tip. Inside a dotted edge such a label still closes on
+  // a dotted terminator on the same line, which is what separates the two.
+  return text[i] === '-' && text[i + 1] === '.' && dottedTerminatorEnd(text, i + 2) !== -1;
 }
 
 /**
@@ -461,7 +487,10 @@ function skipBareEdgeText(
       continue;
     }
     if (quoted) continue;
-    if (at === from || !PUNCTUATION_RUN_RE.test(text[at - 1])) {
+    // A dotted text may show punctuation as its label (`A-.=.->B` shows `=`), so
+    // its closing tip starts at the `.` even though the character before it is
+    // punctuation as well.
+    if (at === from || !PUNCTUATION_RUN_RE.test(text[at - 1]) || (dottedText && text[at] === '.')) {
       start = at;
       // `A -- foo --- B` ends the text with a plain tip that has no arrow head, and
       // `--o` / `--x` end it with a circle or a cross. Scanning past those would
