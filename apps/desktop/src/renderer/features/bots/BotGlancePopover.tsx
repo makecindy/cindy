@@ -704,13 +704,15 @@ function Activity({ bot, onClose }: { bot: BotChatIdentity; onClose(): void }) {
     .filter(task => task.id !== bot.sessionId && task.orcaRole !== 'worker'
       && (task.status === 'active' || task.status === 'archived')
       && matchesTaskCreators(task, [key], creators))
-    .sort((a, b) => sessionActivityMs(b) - sessionActivityMs(a)).slice(0, OUTPUT_LIMIT), [local, remote, creators, key, bot.sessionId]);
-  const ids = useMemo(() => tasks.map(task => task.id), [tasks]);
+    .sort((a, b) => sessionActivityMs(b) - sessionActivityMs(a)), [local, remote, creators, key, bot.sessionId]);
+  // PR discovery keeps its original budget; activity groups all runs before applying its limit.
+  const prTasks = useMemo(() => tasks.slice(0, OUTPUT_LIMIT), [tasks]);
+  const ids = useMemo(() => prTasks.map(task => task.id), [prTasks]);
   const { registerPrConsumer } = usePrActions();
   useEffect(() => {
-    const stops = tasks.map(task => registerPrConsumer(task.id, task.deviceLinkDeviceId));
+    const stops = prTasks.map(task => registerPrConsumer(task.id, task.deviceLinkDeviceId));
     return () => stops.forEach(stop => stop());
-  }, [tasks, registerPrConsumer]);
+  }, [prTasks, registerPrConsumer]);
   const refs = usePrRefsForSessions(ids);
   const prs = useMemo(() => {
     const unique = new Map<string, SessionPrRef>();

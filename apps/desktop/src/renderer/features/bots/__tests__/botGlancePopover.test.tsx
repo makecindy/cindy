@@ -187,6 +187,40 @@ describe('BotGlanceButton', () => {
     expect(h.navigate).toHaveBeenCalledWith('/bots/bot-1?settings=1&settingsPage=routines');
   });
 
+  // PR #8532 review: 31 fresh runs used to consume the raw 30-session window before
+  // grouping. Exercise the real popover: older tasks must fill it, another rule must
+  // retain its execution time/unread, and the final list (not raw runs) stays capped.
+  it('applies the recent-task limit after grouping runs and preserves older rule activity', async () => {
+    h.routines = [
+      { id: 'busy', name: 'Frequent routine', enabled: true, createdAt: 1 },
+      { id: 'older', name: 'Older routine', enabled: true, createdAt: 2 },
+    ];
+    h.sessions = [
+      ...Array.from({ length: 31 }, (_, i) => ({ id: `run-${i}`, title: `Fresh run ${i}`, status: 'active',
+        updatedAt: new Date(2000 - i).toISOString(), companion: { id: bot.id, role: 'routine', routineId: 'busy' } })),
+      ...Array.from({ length: 29 }, (_, i) => ({ id: `ordinary-${i}`, title: `Ordinary task ${i}`, status: 'active',
+        updatedAt: new Date(1000 - i * 2).toISOString() })),
+      { id: 'older-run', title: 'Older execution', status: 'active', updatedAt: new Date(989).toISOString(),
+        companion: { id: bot.id, role: 'routine', routineId: 'older' } },
+    ];
+    h.scopes = h.sessions.map(task => ({ sessionId: task.id }));
+    h.attention.set('older-run', 'done');
+    // PR output discovery retains its existing 30-raw-session budget.
+    h.refs = [{ sessionId: 'ordinary-0', owner: 'example', repo: 'app', prNumber: 1, lastSeenAt: 1 }];
+    await openGlance();
+    await screen.findByText('Frequent routine');
+    expect(screen.getAllByTestId('bot-glance-task')).toHaveLength(5);
+    fireEvent.click(screen.getByText('bots.glance.showMore'));
+    const titles = screen.getAllByTestId('bot-glance-task').map(row => row.querySelector('[title]')?.getAttribute('title'));
+    expect(titles).toHaveLength(30);
+    expect(titles.slice(0, 3)).toEqual(['Frequent routine', 'Ordinary task 0', 'Ordinary task 1']);
+    expect(titles.indexOf('Older routine')).toBe(titles.indexOf('Ordinary task 5') + 1);
+    expect(screen.getByText('Older routine').closest('button')?.querySelector('[aria-label="bots.glance.unread"]')).not.toBeNull();
+    expect(screen.queryByText('Ordinary task 28')).toBeNull();
+    expect(screen.queryByText('Fresh run 0')).toBeNull();
+    expect(screen.queryByTestId('bot-glance-pr')).toBeNull();
+  });
+
   it('reads remote routines from their computer and keeps the settings link on that computer', async () => {
     h.remoteRoutines.mockResolvedValue([{ id: 'clean', name: 'Remote cleanup', enabled: true, updatedAt: 30 }]);
     await openGlance({ ...bot, deviceId: 'mini' });
