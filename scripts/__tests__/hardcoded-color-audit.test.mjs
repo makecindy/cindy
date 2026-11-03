@@ -67,6 +67,20 @@ test('numeric colour functions need a colour-bearing context; plain strings are 
   ]) assert.deepEqual(matchBareColors(source), values, source);
 });
 
+test('large generated lines are scanned without quadratic prefix copies (#8369)', () => {
+  // The production entry is findBareColors, and the observable contract is
+  // that every literal is still reported. The old implementation copied the
+  // complete source prefix for each match, so this repeated generated line
+  // reliably exceeded the CI budget before the bounded-context fix.
+  const source = 'color:#fff;'.repeat(100_000);
+  const startedAt = performance.now();
+  const hits = findBareColors(source);
+  const elapsedMs = performance.now() - startedAt;
+
+  assert.equal(hits.length, 100_000);
+  assert.ok(elapsedMs < 5_000, `scan took ${Math.round(elapsedMs)}ms`);
+});
+
 test('nested fallback and mixed expressions report each literal at its real location', () => {
   const source = `// PR #4135\nconst a = 'hsl(var(--x,\n  var(--y, #123456)))';\nconst b = 'color-mix(in srgb, var(--x), rgb(1, 2, 3))';`;
   assert.deepEqual(matchBareColors(source), ['#123456', 'rgb(1, 2, 3)']);
