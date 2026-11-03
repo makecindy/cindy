@@ -15379,6 +15379,11 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
   setGhostAgentModelLocationSources({
     listLocations: readWorkerAgentLocations,
     readRemoteViews: (agentDeviceId) => readDeviceProviderViews(remoteBackgroundInvoke, agentDeviceId),
+    readRemoteStatus: async (agentDeviceId, agent) => {
+      const result = await remoteBackgroundInvoke(agentDeviceId, 'maker:agent:status', [agent]);
+      if (!result.ok) throw new Error(result.error?.message ?? 'Remote agent status unavailable');
+      return result.result as { binaryReady?: boolean } | null | undefined;
+    },
   });
   getGhostFsSlot().setSessionSnapshotResolver(async (sessionId, instanceId) =>
     resolveGhostFsSessionSnapshot((id) => getMaker().getSession(id), sessionId, instanceId));

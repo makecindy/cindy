@@ -88,7 +88,7 @@ import {
   projectGhostAgentModels,
   type GhostAgentLocationsReadResult,
 } from './ghostAgentModels.js';
-import { GhostModelPicker, getPluginModelPickerAgents, isPluginModelPickerRouteAvailable, isPluginRouteHarnessInstalled } from './ghostModelPicker.js';
+import { GhostModelPicker, readPluginModelRouteCatalog, getPluginModelPickerAgents, isPluginModelPickerRouteAvailable, isPluginRouteHarnessInstalled, type RemotePluginRouteAgentStatus } from './ghostModelPicker.js';
 import { getDesktopProviderService } from '../maker-host/createDesktopProviderService.js';
 import { PluginDownloadSlot } from './downloadSlot.js';
 import { createDownloader } from '../downloader/index.js';
@@ -2322,14 +2322,17 @@ export function setGhostAgentTurnRunner(runner: GhostAgentTurnRunner | null): vo
 const ghostAgentModelsCache = createGhostAgentModelsCache();
 let listGhostAgentLocations: (() => Promise<GhostAgentLocationsReadResult>) | null = null;
 let readGhostAgentRemoteViews: ((agentDeviceId: string) => Promise<ProviderView[]>) | null = null;
+let readGhostAgentRemoteStatus: RemotePluginRouteAgentStatus | null = null;
 
 /** maker-ipc 注入设备列表与跨设备目录读取；静态 import device-link 会成环。 */
 export function setGhostAgentModelLocationSources(sources: {
   listLocations: () => Promise<GhostAgentLocationsReadResult>;
   readRemoteViews: (agentDeviceId: string) => Promise<ProviderView[]>;
+  readRemoteStatus?: RemotePluginRouteAgentStatus;
 } | null): void {
   listGhostAgentLocations = sources?.listLocations ?? null;
   readGhostAgentRemoteViews = sources?.readRemoteViews ?? null;
+  readGhostAgentRemoteStatus = sources?.readRemoteStatus ?? null;
 }
 
 /** maker-ipc 完成初始化后注入「切到这条可见任务」；保持 cindy-brain 不反向依赖 deepLink。 */
@@ -3113,6 +3116,7 @@ export function resolveGhostControlPointPlugin(point: GhostControlPointId, plugi
  * 插件没回应、不可用或给了用不了的模型，都返回 kept，由界面照常用用户原来的模型。
  */
 export async function routeGhostNewTask(pluginId: string, data: GhostStartTaskPointData): Promise<GhostStartTaskRouteResult> {
+  const owner = activeOwnerScopeKey();
   const ghost = findInstalledGhostByInstanceId(availableGhosts(), pluginId);
   const pluginName = ghost?.manifest.name ?? pluginId;
   // 用 block 作出错哨兵：本节点出错一律保留原模型，这里只为区分「没回应」与「没意见」。
@@ -3121,22 +3125,29 @@ export async function routeGhostNewTask(pluginId: string, data: GhostStartTaskPo
   const result = published
     ? await screenGhostControlPoint('will-start-task', data, { pluginId, onFailure: 'block' })
     : { action: 'block' as const };
-  const views = await getDesktopProviderService({ allowSideEffects: false }).listProviders({ allowSideEffects: false, snapshotOnly: true });
-  const nameOf = (route: GhostModelRoute) => {
+  const localViews = await getDesktopProviderService({ allowSideEffects: false }).listProviders({ allowSideEffects: false, snapshotOnly: true });
+  const catalog = await readPluginModelRouteCatalog(result.action === 'route' ? result.route : {}, {
+    local: async () => localViews, remote: readGhostAgentRemoteViews, localAgents: getPluginModelPickerAgents,
+  }).catch(() => ({ views: [] as ProviderView[], agents: [] as readonly string[] }));
+  const { views, agents } = catalog;
+  const nameOf = (route: GhostModelRoute, catalog = views) => {
     const agent = route.agentKind === 'cc' ? 'claude-code' : route.agentKind;
-    return views.find((view) => view.id === route.providerId)?.models[agent]?.find((m) => m.id === route.model)?.name ?? route.model;
+    return catalog.find((view) => view.id === route.providerId)?.models[agent]?.find((m) => m.id === route.model)?.name ?? route.model;
   };
   const kept = (why: 'no-opinion' | 'failed' | 'unavailable-route'): GhostStartTaskRouteResult =>
-    ({ outcome: 'kept', pluginName, why, modelName: nameOf(data.route) });
+    ({ outcome: 'kept', pluginName, why, modelName: nameOf(data.route, localViews) });
+  if (owner !== activeOwnerScopeKey()) return kept('failed');
   if (result.action === 'block') return kept('failed');
   if (result.action !== 'route') return kept('no-opinion');
-  const agents = getPluginModelPickerAgents();
-  const base = { agentKind: result.route.agentKind, providerId: result.route.providerId, model: result.route.model, fastMode: false as const };
+  const base = { ...result.route, fastMode: false as const };
   const modelName = nameOf(result.route);
-  if (!await isPluginRouteHarnessInstalled(base.agentKind === 'cc' ? 'claude-code' : base.agentKind)) {
+  if (!await isPluginRouteHarnessInstalled(
+    base.agentKind === 'cc' ? 'claude-code' : base.agentKind, base.agentDeviceId, readGhostAgentRemoteStatus,
+  )) {
     log.warn('plugin chose a Harness that is not installed', { pluginId, agentKind: base.agentKind });
     return kept('unavailable-route');
   }
+  if (owner !== activeOwnerScopeKey()) return kept('failed');
   if (result.route.effort && isPluginModelPickerRouteAvailable({ ...base, effort: result.route.effort }, views, agents)) {
     return { outcome: 'routed', pluginName: result.ghostName, route: result.route, modelName, reason: result.reason };
   }
@@ -4061,6 +4072,7 @@ export function getGhostModelPicker(): GhostModelPicker {
       let cleanup = () => {};
       return {
         id: contents.id,
+        supportsRemoteRoutes: true,
         send: (request, cancel) => {
           if (contents.isDestroyed()) return false;
           const navigation = (_event: unknown, _url: string, sameDocument: boolean, mainFrame: boolean) => {
@@ -4084,8 +4096,12 @@ export function getGhostModelPicker(): GhostModelPicker {
       };
     },
     available: async route => {
-      const views = await getDesktopProviderService({ allowSideEffects: false }).listProviders({ allowSideEffects: false, snapshotOnly: true });
-      return isPluginModelPickerRouteAvailable(route, views, getPluginModelPickerAgents());
+      const owner = activeOwnerScopeKey();
+      const { views, agents } = await readPluginModelRouteCatalog(route, {
+        local: () => getDesktopProviderService({ allowSideEffects: false }).listProviders({ allowSideEffects: false, snapshotOnly: true }),
+        remote: readGhostAgentRemoteViews, localAgents: getPluginModelPickerAgents,
+      });
+      return owner === activeOwnerScopeKey() && isPluginModelPickerRouteAvailable(route, views, agents);
     },
   });
 }
@@ -8891,12 +8907,13 @@ export function registerGhostIpc(): void {
       return { ok: false, errorCode: 'NOT_AVAILABLE', message: 'Model runtimes unavailable' };
     }
     const projected = projectGhostAgentModels(views, maker.listAvailableAgents(), getModelVisibilityOverride);
-    if (!projected.ok || !listGhostAgentLocations) return projected;
+    if (!projected.ok) return projected;
+    if (!listGhostAgentLocations) return { ...projected, supportsRemoteRoutes: true };
     const locations = await ghostAgentModelsCache.locations(owner, listGhostAgentLocations);
     if (owner !== activeOwnerScopeKey() || !findGhostForInstanceId(instanceId)?.enabled) {
       return { ok: false, errorCode: 'NOT_AVAILABLE', message: 'Plugin unavailable' };
     }
-    return locations ? { ...projected, locations } : projected;
+    return { ...projected, supportsRemoteRoutes: true, ...(locations ? { locations } : {}) };
   });
   // 面板唤醒电子脑(cindy-ghost://<id>/wake 供片分支):面板零桥,唤醒经它
   // 自己的协议通道进来。只对"已装且唤醒"的意识放行;熔断态不清账(重载 /
