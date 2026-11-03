@@ -2440,6 +2440,37 @@ describe('BotGroupChatView', () => {
       const quoteState = () => screen.getByTestId('bot-group-quote').getAttribute('data-quote-state');
       const push = () => act(async () => { mocks.pushes.forEach((listener) => listener({ groupId: 'g1', change: 'messages' })); });
 
+      it.each([false, true])('keeps jump-to-bottom after a pending quote lookup returns (already paged: %s)', async (alreadyPaged) => {
+        serve(async () => [original]);
+        renderView();
+        await screen.findByTestId('bot-group-quote');
+        if (alreadyPaged) {
+          fireEvent.click(screen.getByRole('button', { name: 'bots.groupChat.timeline.loadEarlier' }));
+          await waitFor(() => expect(quoteState()).toBe('live'));
+        }
+        let finish!: (messages: BotGroupMessageView[]) => void;
+        serve(() => new Promise(resolve => { finish = resolve; }));
+        fireEvent.click(screen.getByTestId('bot-group-quote'));
+        await waitFor(() => expect(finish).toBeTypeOf('function'));
+        const scroll = screen.getByTestId('bot-group-timeline');
+        Object.defineProperties(scroll, {
+          scrollHeight: { configurable: true, value: 2000 }, clientHeight: { configurable: true, value: 500 },
+        });
+        scroll.scrollTop = 200; fireEvent.scroll(scroll);
+        scroll.scrollTo = vi.fn();
+        fireEvent.click(screen.getByRole('button', { name: 'chat.jumpToBottom' }));
+        await act(async () => finish([original]));
+        expect(document.querySelector('[class*="search-match-bg"]')).toBeNull();
+        expect(mocks.toastInfo).not.toHaveBeenCalled();
+        Object.defineProperty(scroll, 'scrollHeight', { configurable: true, value: 3000 });
+        mocks.getBotGroup.mockResolvedValue({ ok: true, group: detail({ messages: [
+          latest, msg({ id: 'arrival', sequence: 51, content: 'New tail after lookup' }),
+        ] }) });
+        await push();
+        await screen.findByText('New tail after lookup');
+        expect(scroll.scrollTop).toBe(3000);
+      });
+
       it('drops a deleted original from the quote on a push, without a click', async () => {
         const user = userEvent.setup();
         let server = [original];

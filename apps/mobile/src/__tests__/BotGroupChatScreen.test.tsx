@@ -2206,6 +2206,28 @@ describe('mobile group threads', () => {
     expect(all('botGroup.row.reply')).toHaveLength(1);
   });
 
+  it('does not auto-page during a thread jump until the user drags again', async () => {
+    h.chat.server = true;
+    h.chat.loadOlder = vi.fn(async () => {});
+    h.chat.loadingOlder = true;
+    const data = threadGroup({ hasMoreBefore: true, messages: [rootMessage(),
+      message('visible', 2, { threadRootId: rootId, serverSequence: '10', isSelf: false }),
+    ] });
+    await render(data, 'ready', rootId, '');
+    const event = { nativeEvent: { contentOffset: { y: 100 }, contentSize: { height: 1200 }, layoutMeasurement: { height: 500 } } };
+    await act(async () => { h.scroll.onScrollBeginDrag(); h.scroll.onScroll(event); });
+    h.chat.loadingOlder = false;
+    await render(data, 'ready', rootId, '');
+    await click('botGroup.jumpToLatest');
+    await act(async () => h.scroll.onScroll(event));
+    expect(h.chat.loadOlder).not.toHaveBeenCalled();
+    h.scrollToEnd.mockClear();
+    await act(async () => h.scroll.onContentSizeChange(390, 1400));
+    expect(h.scrollToEnd).toHaveBeenCalledWith({ animated: false });
+    await act(async () => { h.scroll.onScrollBeginDrag(); h.scroll.onScroll(event); });
+    expect(h.chat.loadOlder).toHaveBeenCalledTimes(1);
+  });
+
   it('loads old replies on upward browsing once and preserves the visible reply, not the changed tail height', async () => {
     h.chat.server = true; let finish!: () => void;
     h.chat.loadOlder = vi.fn(() => new Promise<void>(resolve => { finish = resolve; }));

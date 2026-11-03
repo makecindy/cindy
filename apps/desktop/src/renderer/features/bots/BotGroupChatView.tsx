@@ -287,6 +287,7 @@ function BotGroupChatContent({ groupId, direct }: { groupId: string; direct: boo
     jumpingToBottomRef.current = true;
     stickToBottomRef.current = true;
     setJumpTarget(null);
+    quoteLocateGeneration.current += 1;
     prependAnchorRef.current = null;
     element.scrollTo({ top: element.scrollHeight, behavior: 'smooth' });
   };
@@ -310,6 +311,7 @@ function BotGroupChatContent({ groupId, direct }: { groupId: string; direct: boo
   const [unverifiedOriginals, setUnverifiedOriginals] = useState<ReadonlySet<string>>(NO_IDS);
   const loadingOlderRef = useRef(false);
   const locatingRef = useRef(false);
+  const quoteLocateGeneration = useRef(0);
 
   // Every older-page read belongs to the generation visible when it started. A
   // reset discovered here must also cancel in-flight latest-page/auxiliary reads.
@@ -970,6 +972,7 @@ function BotGroupChatContent({ groupId, direct }: { groupId: string; direct: boo
    */
   const locateQuoted = async (quote: Pick<BotGroupQuoteView, 'messageId' | 'sequence'>) => {
     if (locatingRef.current) return;
+    const generation = quoteLocateGeneration.current;
     const find = (list: readonly BotGroupMessageView[]) => list.find(message => message.id === quote.messageId && !message.threadRootId);
     const settle = (original: BotGroupMessageView | undefined) => {
       if (original && !original.deleted) setJumpTarget(original.id);
@@ -987,7 +990,7 @@ function BotGroupChatContent({ groupId, direct }: { groupId: string; direct: boo
       try {
         // A failed re-read is not a verified original: stay put rather than jump to a stale copy.
         const read = await loadOlder(paged.sequence + 1);
-        if (!read) return;
+        if (!read || generation !== quoteLocateGeneration.current) return;
         const original = find(read.messages);
         if (original) setUnverifiedOriginals((previous) => {
           if (!previous.has(original.id)) return previous;
@@ -1006,7 +1009,7 @@ function BotGroupChatContent({ groupId, direct }: { groupId: string; direct: boo
       let before: number | undefined;
       for (let page = 0; hasMore && page < QUOTE_LOCATE_MAX_PAGES; page += 1) {
         const read = await loadOlder(before);
-        if (!read) return;
+        if (!read || generation !== quoteLocateGeneration.current) return;
         const original = find(read.messages);
         if (original) { settle(original); return; }
         const oldest = read.messages.reduce((min, message) => Math.min(min, message.sequence), Number.POSITIVE_INFINITY);

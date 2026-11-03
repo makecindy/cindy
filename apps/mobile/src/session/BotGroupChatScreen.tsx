@@ -575,7 +575,7 @@ function BotGroupChatContent({ deviceId, deviceName, groupId, messageId, notific
     stickToBottom.current = jumpingToBottom.current || atBottom;
     updateAwayFromBottom(!atBottom);
     acknowledge();
-    if (threadRootId && userScrolled.current && !olderError && contentOffset.y < (messageHeights.current.get(threadRootId) ?? 0) + 160) loadOlderReplies();
+    if (threadRootId && userScrolled.current && !jumpingToBottom.current && !olderError && contentOffset.y < (messageHeights.current.get(threadRootId) ?? 0) + 160) loadOlderReplies();
   };
 
   const title = group?.name ?? (cachedRow ? resolveRemoteText(cachedRow.item.display.title, i18n.language) : '');
