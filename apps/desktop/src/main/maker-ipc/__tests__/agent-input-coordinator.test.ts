@@ -902,6 +902,18 @@ describe('AgentInputCoordinator Orca priority queue transactions', () => {
     expect(h.onOwnerMessage).toHaveBeenCalledTimes(1);
   });
 
+  it('does not take a plugin or a teammate bot for the owner writing', async () => {
+    const h = createHarness();
+    const sid = 'non-owner-message-task';
+    h.coordinator.enqueue(sid, makeItem('plugin-1', 'hi', { sourcePlugin: { pluginId: 'p' } } as never));
+    h.coordinator.enqueue(sid, makeItem('bot-1', 'hi', {
+      botTaskCoordination: { kind: 'handoff' },
+    } as never));
+    expect(h.onOwnerMessage).not.toHaveBeenCalled();
+    h.coordinator.enqueue(sid, makeItem('owner-1', 'hello'));
+    expect(h.onOwnerMessage).toHaveBeenCalledTimes(1);
+  });
+
   it('retains host-stamped sharedTask attribution when the queue drains outside the original invoke', async () => {
     const h = createHarness();
     const sid = 'sharedTask-task';

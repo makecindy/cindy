@@ -18,6 +18,7 @@ import {
 import { buildContinuationDirective, buildFirstTurnDirective } from '../directive';
 import { MAX_CONSECUTIVE_OVERLOAD_TURNS } from '../usageLimit';
 import { publishUiSessionIntervention, resetUiContinuationListenersForTest } from '../../maker-ipc/uiContinuationSignal';
+import { isOwnerOwnMessage } from '../../input-handoff/ownerMessage';
 import { MCP_APP_MESSAGE_GUARD } from '../../mcp-apps/message.js';
 import type {
   AccountLimitInfo,
@@ -68,6 +69,7 @@ function productionSteer(
     shouldPrependMobileClientPromptNote: () => false,
     inputHandoffSteerNote: () => null,
     inputHandoffNoteDelivered: () => {},
+    isOwnerOwnMessage,
     readWireSourceDevice: () => null,
     isDeviceLinkInvoke: () => false,
     assertRemoteInputClearNotInFlight: () => {},

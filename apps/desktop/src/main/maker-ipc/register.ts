@@ -1124,6 +1124,7 @@ import { closeInputHandoffAskpass, initInputHandoffAskpass } from '../input-hand
 import { resolveGithubAuthRecovery } from '../input-handoff/askpass/githubRecoveryHost.js';
 import { onQuit } from '../lifecycle.js';
 import { isInputHandoffDisabledForSession } from '../input-handoff/botPolicy.js';
+import { isOwnerOwnMessage } from '../input-handoff/ownerMessage.js';
 import { createMacHandoffDriver, readPictureQr } from '../input-handoff/macDriver.js';
 import { supportsRemotePluginOauth } from '../plugin-oauth/runtime.js';
 import {
@@ -19418,10 +19419,14 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       ? prependNoteToWireUserMessage(withSteerNote as HandoffWireMessage, steerPlannedNotes['ui-language'])
       : withSteerNote;
     // The owner's message closed a waiting 代输入 card: tell the agent, on this message only.
-    // A shared-task guest or a plugin is not the owner, and this runs outside the context that told them apart at enqueue.
-    const pendingHandoffNote = so[MCP_APP_MESSAGE_GUARD] || so.sharedTaskAuthor || so.sourcePlugin
-      ? null
-      : inputHandoffSteerNote(sessionId, message);
+    // Same owner test as the queue's: this runs outside the context that told a guest apart at enqueue.
+    const pendingHandoffNote = isOwnerOwnMessage({
+      sharedTaskAuthor: so.sharedTaskAuthor,
+      sourcePlugin: so.sourcePlugin,
+      appMessageGuard: so[MCP_APP_MESSAGE_GUARD],
+    })
+      ? inputHandoffSteerNote(sessionId, message)
+      : null;
     // A native command keeps its first characters: it carries no note, and the note is dropped, not kept for later.
     const steerHandoffNote = pendingHandoffNote && shouldPrependMobileClientPromptNote(normalized, sess.agentKind) ? pendingHandoffNote : null;
     if (pendingHandoffNote && !steerHandoffNote) inputHandoffNoteDelivered(sessionId);
@@ -20782,7 +20787,8 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       failPendingSchedulerAutoResume(sessionId);
       publishUiSessionIntervention(sessionId);
     },
-    onOwnerMessage: (sessionId, item) => dismissInputHandoffForOwnerMessage(sessionId, item.persistedContent || item.text),
+    // persistedContent can be a JSON envelope (attachments, pasted ranges): read the text the owner typed.
+    onOwnerMessage: (sessionId, item) => dismissInputHandoffForOwnerMessage(sessionId, extractPlainText(item.persistedContent || item.text)),
     previewQueuedUserTurn: (sessionId, item) => {
       if (item.botTaskCoordination) return;
       notifyAgentIslandUserPrompt(

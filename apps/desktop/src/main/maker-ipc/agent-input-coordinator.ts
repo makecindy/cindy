@@ -7,6 +7,7 @@ import { isBotGroupClientId } from '../../shared/botGroupChat.js';
 import { SchedulerQueuedPreparationError } from './schedulerQueuedPreparation.js';
 import { ProviderGroupUsageLimitError } from '../provider-group/failurePolicy.js';
 import { MCP_APP_MESSAGE_GUARD, isUnrestorableMcpAppMessage, queuedAppMessageGuard, type McpAppMessageGuard } from '../mcp-apps/message.js';
+import { isOwnerOwnMessage } from '../input-handoff/ownerMessage.js';
 /**
  * AgentInputCoordinator — main 侧排队输入事务协调器。
  *
@@ -1964,8 +1965,10 @@ export class AgentInputCoordinator {
       this.deps.onAutomaticEnqueue?.(sessionId, item);
     } else if (!automaticOrigin) {
       this.deps.onUserEnqueue?.(sessionId);
-      // A shared-task guest is not the owner: only the owner's own message closes their card.
-      if (!item.sharedTaskAuthor && !getDeviceLinkInvokeContext()?.sharedTask) this.deps.onOwnerMessage?.(sessionId, item);
+      // Only the owner's own message closes their card, not a guest, a plugin, a teammate bot or an App card.
+      if (isOwnerOwnMessage({ ...item, appMessageGuard: queuedAppMessageGuard(item) }) && !getDeviceLinkInvokeContext()?.sharedTask) {
+        this.deps.onOwnerMessage?.(sessionId, item);
+      }
     }
     if (!schedulerOrigin) {
       // 有用户动作入队(用户自己接手,或自愈的续跑指令本身)→ 撤掉「重新连接中」提示。
