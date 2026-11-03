@@ -11,6 +11,7 @@ import { attachmentPreviewKind } from '@cindy/maker-shared/attachment-preview';
 import { FocusScope } from '@radix-ui/react-focus-scope';
 import { toLocalFileUrl } from '@/lib/localPathResolver';
 import {
+  PREVIEW_PANEL_CLASS,
   PREVIEW_PANEL_STYLE,
   PreviewHeader,
   PreviewFooter,
@@ -141,7 +142,7 @@ export function TextLightbox(props: TextLightboxProps) {
         <>
           <PreviewScrim onClose={props.onClose} />
           <div
-            className="z-[9999] flex items-center justify-center bg-[var(--surface)]"
+            className={cn('z-[9999] flex items-center justify-center', PREVIEW_PANEL_CLASS)}
             style={PREVIEW_PANEL_STYLE}
           >
             <PreviewHeader
@@ -503,7 +504,7 @@ function TextDocumentLightbox({ filePath, fileName, initialLine, triggerRef, onC
         className={cn(
           'cursor-auto flex flex-col pt-16',
           collection && 'pb-16',
-          'bg-[var(--msg-tool-card-bg)]',
+          PREVIEW_PANEL_CLASS,
         )}
         style={{ ...PREVIEW_PANEL_STYLE, zIndex: 1 }}
       >

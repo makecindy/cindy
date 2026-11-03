@@ -39,19 +39,19 @@ export function previewPanelSize(viewport: { width: number; height: number }) {
 }
 
 /**
- * 加在各查看器根节点上,把它从整窗铺满变成浮动预览窗。根节点内部的绝对定位
+ * 与 `PREVIEW_PANEL_CLASS` 一起加在各查看器根节点上,把它从整窗铺满变成浮动预览窗。
+ * 只管几何:圆角、底色、描边、阴影与入场动画由共享的 `.modal-panel` 提供
+ * (DESIGN.md §4 Dialog & Modal),调用处不再自写。根节点内部的绝对定位
  * (顶栏、内容区、底部工具栏)都以预览窗为参照,不需要逐个改写;
  * `--preview-width` / `--preview-height` 供按预览窗尺寸算大小的内容使用。
  */
+export const PREVIEW_PANEL_CLASS = 'modal-panel';
 export const PREVIEW_PANEL_STYLE = {
   position: 'fixed',
   top: PREVIEW_PANEL_MARGIN,
   bottom: PREVIEW_PANEL_MARGIN,
   left: PANEL_SIDE,
   right: PANEL_SIDE,
-  borderRadius: 12,
-  border: '1px solid var(--border-default)',
-  boxShadow: 'var(--shadow-menu)',
   overflow: 'hidden',
   '--preview-width': `min(calc(100vw - ${PREVIEW_PANEL_MARGIN * 2}px), ${PREVIEW_PANEL_MAX_WIDTH}px)`,
   '--preview-height': `calc(100vh - ${PREVIEW_PANEL_MARGIN * 2}px)`,

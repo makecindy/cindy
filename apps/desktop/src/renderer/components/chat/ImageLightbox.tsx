@@ -121,6 +121,7 @@ import {
   useOpeningCollection,
 } from './AttachmentCollection';
 import {
+  PREVIEW_PANEL_CLASS,
   PREVIEW_PANEL_STYLE,
   PreviewHeader,
   PreviewFooter,
@@ -1446,10 +1447,10 @@ function ImageLightboxContent({
     <div
       ref={overlayRef}
       data-lightbox-layer
+      className={PREVIEW_PANEL_CLASS}
       style={{
         ...PREVIEW_PANEL_STYLE,
         zIndex: 9999,
-        background: 'var(--surface)',
         display: 'flex',
         alignItems: 'center',
         justifyContent: 'center',

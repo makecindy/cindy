@@ -1,5 +1,6 @@
 import { usePreviewFocusReturn } from './PreviewChrome';
 import {
+  PREVIEW_PANEL_CLASS,
   PREVIEW_PANEL_STYLE,
   PreviewHeader,
   PreviewFooter,
@@ -242,10 +243,10 @@ export function ModelLightbox({ source, onClose, filename }: ModelLightboxProps)
     <div
       ref={overlayRef}
       data-lightbox-layer
+      className={PREVIEW_PANEL_CLASS}
       style={{
         ...PREVIEW_PANEL_STYLE,
         zIndex: 9999,
-        background: 'var(--surface)',
         display: 'flex',
         alignItems: 'center',
         justifyContent: 'center',

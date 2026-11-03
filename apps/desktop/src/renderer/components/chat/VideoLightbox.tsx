@@ -32,7 +32,7 @@ import {
 } from '@/components/ui/dropdown-menu';
 import { registerMedia } from '@/lib/mediaPlaybackBus';
 import { useVideoContextMenu } from './useVideoContextMenu';
-import { PREVIEW_PANEL_STYLE, PreviewHeader, PreviewFooter, PreviewScrim } from './PreviewChrome';
+import { PREVIEW_PANEL_CLASS, PREVIEW_PANEL_STYLE, PreviewHeader, PreviewFooter, PreviewScrim } from './PreviewChrome';
 import { previewSourceName } from '@cindy/maker-shared/attachment-preview';
 
 interface VideoLightboxProps {
@@ -159,10 +159,10 @@ function VideoLightboxContent({
       }}
     >
     <div
+      className={PREVIEW_PANEL_CLASS}
       style={{
         ...PREVIEW_PANEL_STYLE,
         zIndex: 9999,
-        background: 'var(--surface)',
         display: 'flex',
         alignItems: 'center',
         justifyContent: 'center',

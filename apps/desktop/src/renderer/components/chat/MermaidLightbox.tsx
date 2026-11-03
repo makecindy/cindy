@@ -19,6 +19,7 @@ import { PlaintextEditor } from '@/components/markdown/PlaintextEditor';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { FocusScope } from '@radix-ui/react-focus-scope';
 import {
+  PREVIEW_PANEL_CLASS,
   PREVIEW_PANEL_STYLE,
   PreviewHeader,
   PreviewFooter,
@@ -262,10 +263,10 @@ export function MermaidLightbox({ svg, source, onAnnotate, onClose }: MermaidLig
       ref={overlayRef}
       data-mermaid-lightbox-overlay
       data-lightbox-layer
+      className={PREVIEW_PANEL_CLASS}
       style={{
         ...PREVIEW_PANEL_STYLE,
         zIndex: 9999,
-        background: 'var(--surface)',
         transition: 'opacity 200ms ease',
         opacity: isVisible ? 1 : 0,
         display: 'flex',

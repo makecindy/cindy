@@ -1,4 +1,4 @@
-import { PREVIEW_PANEL_STYLE, PreviewHeader, PreviewButton, PreviewScrim } from './PreviewChrome';
+import { PREVIEW_PANEL_CLASS, PREVIEW_PANEL_STYLE, PreviewHeader, PreviewButton, PreviewScrim } from './PreviewChrome';
 import { DropdownMenuItem } from '@/components/ui/dropdown-menu';
 import { Button } from '@/components/ui/button';
 /**
@@ -300,7 +300,7 @@ export function ToolPayloadLightbox({
       <PreviewScrim onClose={handleClose} zIndex={0} />
       <div
         data-tool-payload-lightbox-card
-        className={cn('cursor-auto flex flex-col pt-16', 'bg-[var(--msg-tool-card-bg)]')}
+        className={cn('cursor-auto flex flex-col pt-16', PREVIEW_PANEL_CLASS)}
         style={{ ...PREVIEW_PANEL_STYLE, zIndex: 1 }}
       >
         <PreviewHeader
