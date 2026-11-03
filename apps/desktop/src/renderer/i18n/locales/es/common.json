@@ -7732,6 +7732,8 @@
         "pickDetail": "Cindy abre un selector del sistema cuando el complemento lo solicita. Tú decides qué compartir; si cancelas, el complemento no recibe nada.",
         "workspace": "Puede solicitar crear una entrada de sesión para una carpeta de proyecto en la barra lateral",
         "workspaceDetail": "Cuando te lo pide, eliges la carpeta tú mismo o ves la ruta completa en una tarjeta de confirmación antes de decidir; Mientras maneja una llamada que usted inició, las subcarpetas dentro del directorio de trabajo de la sesión actual se usan directamente sin un aviso adicional. Las carpetas que ya tienen una sesión se reutilizan y lo que se crea es una sesión vacía: nada comienza a ejecutarse por sí solo.",
+        "sidebarWidget": "Puede mostrar una barra de estado de tareas en la barra lateral",
+        "sidebarWidgetDetail": "Puede mostrar una fila de estado bajo el título Todas las tareas y listar las tareas que elija. Cindy dibuja los títulos y las acciones, y el complemento no puede ver lo que haces en la barra lateral. La fila desaparece al desactivar o desinstalar el complemento.",
         "sessionContext": "Puede saber en qué carpeta de proyecto está trabajando la sesión actual",
         "sessionContextDetail": "Comparte solo datos de ubicación (ID de sesión y ruta de la carpeta del proyecto) mientras funciona para la sesión actual: no se concede contenido de archivos ni acceso a archivos.",
         "preview": "Puede abrir páginas de vista previa de los siguientes sitios en el navegador de la barra lateral",
@@ -7862,7 +7864,8 @@
         "slotFs": "Escritura de archivos",
         "slotLibrary": "Biblioteca persistente",
         "slotSkill": "Habilidades de Agent",
-        "slotWorkspace": "Sesiones del espacio de trabajo"
+        "slotWorkspace": "Sesiones del espacio de trabajo",
+        "slotSidebarWidget": "Barra de estado lateral"
       },
       "commandPaletteTag": "Comando del complemento",
       "commandPaletteSource": {
@@ -14260,6 +14263,7 @@
       "notFound": "Sesión no encontrada"
     },
     "sidebar": {
+      "pluginWidgetSource": "Del complemento «{{name}}»",
       "machineSwitcher": {
         "allMachines": "Todo",
         "localMachine": "Local",

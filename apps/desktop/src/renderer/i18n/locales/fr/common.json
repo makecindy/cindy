@@ -7732,6 +7732,8 @@
         "pickDetail": "Cindy ouvre le sélecteur de fichiers du système à la demande du plugin. Vous choisissez ce que vous partagez ; si vous annulez, le plugin ne reçoit rien.",
         "workspace": "Peut demander à créer une entrée de session pour un dossier de projet dans la barre latérale",
         "workspaceDetail": "Lorsqu'il le demande, soit vous choisissez le dossier vous-même, soit vous voyez le chemin complet sur une carte de confirmation avant de décider ; pendant qu'il traite un appel que vous avez lancé, les sous-dossiers du répertoire de travail de la session en cours sont utilisés directement, sans demande supplémentaire. Les dossiers qui ont déjà une session sont réutilisés, et ce qui est créé est une session vide : rien ne démarre tout seul.",
+        "sidebarWidget": "Peut afficher une barre d’état des tâches dans la barre latérale",
+        "sidebarWidgetDetail": "Il peut afficher une ligne d’état sous le titre Toutes les tâches et lister les tâches choisies. Cindy dessine les titres et les actions ; le plugin ne voit pas ce que vous faites dans la barre latérale. La ligne disparaît lorsque le plugin est désactivé ou désinstallé.",
         "sessionContext": "Peut savoir dans quel dossier de projet travaille la session en cours",
         "sessionContextDetail": "Ne partage que des informations d'emplacement (ID de session et chemin du dossier de projet) pendant qu'il travaille pour la session en cours : aucun contenu de fichier n'est partagé et aucun accès aux fichiers n'est accordé.",
         "preview": "Peut ouvrir des pages d'aperçu des sites ci-dessous dans le navigateur de la barre latérale",
@@ -7862,7 +7864,8 @@
         "slotFs": "Écriture de fichiers",
         "slotLibrary": "Bibliothèque persistante",
         "slotSkill": "Skills de l'Agent",
-        "slotWorkspace": "Sessions d'espace de travail"
+        "slotWorkspace": "Sessions d'espace de travail",
+        "slotSidebarWidget": "Barre d’état latérale"
       },
       "commandPaletteTag": "Commande de plugin",
       "commandPaletteSource": {
@@ -14260,6 +14263,7 @@
       "notFound": "Session introuvable"
     },
     "sidebar": {
+      "pluginWidgetSource": "Du plugin « {{name}} »",
       "machineSwitcher": {
         "allMachines": "Tous",
         "localMachine": "Local",

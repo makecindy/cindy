@@ -7602,6 +7602,8 @@
         "pickDetail": "其发请求时，Cindy 将弹系统选择窗口；择何者、与不与，皆由君亲决，罢之则其一无所得。",
         "workspace": "可请于侧栏为案之卷匣立差事入口",
         "workspaceDetail": "其发请求时，或由君亲择卷匣，或于确认卡上观完整路径后再决；其处置君所发之调用时，当前差事工作目录内之子卷匣可径用，不另确认。卷匣已有差事者径复用之，不重立。所立仅为空差事，不自行运行。",
+        "sidebarWidget": "可于侧栏示任务状态一行",
+        "sidebarWidgetDetail": "其可于「全部任务」题下示状态一行，并列所选任务。行中题名与操作皆由 Cindy 绘之，其不得知君于侧栏之所为；停用或卸载法器，此行即去。",
         "sessionContext": "可知当前差事所用之案卷匣位置",
         "sessionContextDetail": "仅于其为当前差事效力时告以位置(差事编号与案卷匣路径)，不含文件内容，亦不因此得文件访问之权。",
         "preview": "可于右侧栏浏览器中启下列网站之预览页",
@@ -7738,7 +7740,8 @@
         "slotFs": "写卷",
         "slotLibrary": "久藏之库",
         "slotSkill": "Agent 技艺",
-        "slotWorkspace": "工作区差事"
+        "slotWorkspace": "工作区差事",
+        "slotSidebarWidget": "侧栏状态"
       },
       "commandPaletteTag": "法器指令",
       "commandPaletteSource": {
@@ -14062,6 +14065,7 @@
       "notFound": "寻此差事不得"
     },
     "sidebar": {
+      "pluginWidgetSource": "出自法器「{{name}}」",
       "machineSwitcher": {
         "allMachines": "诸机",
         "localMachine": "此机",

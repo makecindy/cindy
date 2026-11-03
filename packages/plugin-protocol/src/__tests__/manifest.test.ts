@@ -931,6 +931,7 @@ describe('Ghost manifest contract', () => {
       sessionContext: true,
       pick: true,
       workspace: true,
+      sidebarWidget: true,
       node: {
         entry: 'node/maker-mcp.cjs',
         entries: ['node/account.cjs', 'node/maker-child.cjs'],
@@ -950,6 +951,7 @@ describe('Ghost manifest contract', () => {
     expect(result.manifest.sessionContext).toBe(true);
     expect(result.manifest.pick).toBe(true);
     expect(result.manifest.workspace).toBe(true);
+    expect(result.manifest.sidebarWidget).toBe(true);
     expect(result.manifest.node).toEqual({
       entry: 'node/maker-mcp.cjs',
       protocol: 'mcp-stdio',

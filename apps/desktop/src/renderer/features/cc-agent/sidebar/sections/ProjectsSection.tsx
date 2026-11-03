@@ -190,6 +190,8 @@ function ShowAllEntriesButton({ count, onClick }: { count: number; onClick: () =
 }
 
 export interface ProjectsSectionProps {
+  /** 范围标题正下方的内容(插件状态条);无列表内容时同样显示。 */
+  belowScopeHeader?: ReactNode;
   unclassified: Session[];
   /** 已经按 filter.projects 过滤后、仅会被渲染的 Project 子集。 */
   projects: ProjectNodeData[];
@@ -296,6 +298,7 @@ export interface ProjectsSectionProps {
 }
 
 export function ProjectsSection({
+  belowScopeHeader,
   unclassified,
   projects,
   dialogues,
@@ -1171,6 +1174,7 @@ export function ProjectsSection({
             : null
         }
       />
+      {belowScopeHeader}
       {hasMainListContent ? (
         <div className="relative flex flex-col gap-1 pt-1 pr-0 pl-3">
           {!deviceGroupingActive &&

@@ -503,6 +503,7 @@ import { GhostWorkspaceSlot, type WorkspaceSessionService } from './workspaceSlo
 import type { GhostTrustRegistry } from './ghostSignature.js';
 import { GhostNotifySlot, sanitizeGhostNoticeText } from './notifySlot.js';
 import { GhostBadgeSlot } from './badgeSlot.js';
+import { GhostSidebarWidgetSlot } from './sidebarWidgetSlot.js';
 import {
   clearGhostUnread,
   loadGhostUnread,
@@ -2206,7 +2207,11 @@ export function getGhostRuntime(): GhostRuntime {
         const storagePart = isValidPluginInstallRelId(id) ? pluginInstallStoragePart(id) : id;
         log.info('ghost runtime state', { id, state });
         if (state !== 'running') disconnectRoutineSource(storagePart);
-        if (['off', 'stopping', 'crashed', 'fused'].includes(state)) pluginDeviceSync.invalidate(storagePart);
+        if (['off', 'stopping', 'crashed', 'fused'].includes(state)) {
+          pluginDeviceSync.invalidate(storagePart);
+          // 插件不在了就没人更新状态条,留着就是过期数字。
+          sidebarWidgetSlotSingleton?.forget(storagePart);
+        }
         // 崩溃/熄灯时把该意识名下的在途工具调用收掉(结构化失败给 agent)。
         getGhostPipeDispatcher().onRuntimeState(storagePart, state);
         if (state !== 'running') {
@@ -3718,6 +3723,19 @@ export function getGhostNotifySlot(): GhostNotifySlot {
 }
 
 let badgeSlotSingleton: GhostBadgeSlot | null = null;
+let sidebarWidgetSlotSingleton: GhostSidebarWidgetSlot | null = null;
+
+/** 侧栏状态条通道(main → 全窗口 renderer),每次推当前 owner 的全量。 */
+export const GHOST_SIDEBAR_WIDGET_CHANNEL = 'ghosts:sidebar-widget';
+
+function getGhostSidebarWidgetSlot(): GhostSidebarWidgetSlot {
+  sidebarWidgetSlotSingleton ??= new GhostSidebarWidgetSlot({
+    getGhost: findGhostForInstanceId,
+    isObserveApproved: (id) => pluginObserveAuthorizationRevision(id) !== null,
+    broadcast: (entries) => sendToTrustedAppWindows(GHOST_SIDEBAR_WIDGET_CHANNEL, { entries }),
+  });
+  return sidebarWidgetSlotSingleton;
+}
 
 /** 意识未读角标通道(main → 全窗口 renderer;插件入口与插件卡上的绿点)。 */
 export const GHOST_BADGE_CHANNEL = 'ghosts:badge';
@@ -9283,6 +9301,7 @@ export function registerGhostIpc(): void {
       // 未读账本按 owner 分文件,换账号后必须整表替换,否则账号 A 的绿点与摘要
       // 会留在账号 B 的插件入口与卡片上(跨账号残留)。
       broadcastGhostUnreadSnapshot();
+      sidebarWidgetSlotSingleton?.reset();
     });
   });
 
@@ -9606,6 +9625,9 @@ export function registerGhostIpc(): void {
     if (type === 'badge') {
       return getGhostBadgeSlot().handleBadge(id, payload);
     }
+    if (type === 'sidebar-widget') {
+      return getGhostSidebarWidgetSlot().handle(id, payload);
+    }
     // confirm-request = 确认弹窗(confirm 槽):资格审/净化/限速/单飞在
     // confirmSlot,往返与超时兜底在 ghostConfirmDialogBridge。invoke 返回值即
     // 结构化结果:ok:true 只代表问到了,答案看 confirmed。
@@ -9880,6 +9902,11 @@ export function registerGhostIpc(): void {
   // 异常炸掉调用点,而未读只是提醒——不可信来源降级成空表即可(codex review)。
   ipcMain.on('ghosts:unread', (event) => {
     event.returnValue = { entries: isTrustedAppRendererEvent(event) ? visibleGhostUnread() : [] };
+  });
+
+  ipcMain.handle('ghosts:sidebar-widgets', (event) => {
+    assertTrustedAppRendererEvent(event);
+    return { entries: sidebarWidgetSlotSingleton?.snapshot() ?? [] };
   });
 
   // 用户侧熄灭未读(打开面板 = 明确已读)。不要求意识仍在装:卸载残留的
