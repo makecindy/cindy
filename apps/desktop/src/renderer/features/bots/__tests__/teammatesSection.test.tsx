@@ -48,7 +48,7 @@ const mocks = vi.hoisted(() => ({
 }));
 vi.mock('../companionCloudStore', () => ({ useCompanionCloud: () => mocks.cloud }));
 
-vi.mock('../useRemoteBots', () => ({ useRemoteBots: () => mocks.remoteBots }));
+vi.mock('../useRemoteBots', () => ({ useRemoteBotOmissions: () => new Set<string>(), useRemoteBots: () => mocks.remoteBots }));
 vi.mock('@/features/device-link/useDeviceLinkDeviceList', () => ({
   useDeviceLinkDeviceList: () => mocks.devices,
 }));

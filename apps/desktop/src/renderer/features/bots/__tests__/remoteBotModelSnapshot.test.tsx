@@ -11,7 +11,7 @@ const h = vi.hoisted(() => ({ invoke: vi.fn() }));
 vi.mock('react-router-dom', () => ({ useLocation: () => ({ search: '', state: null }), Navigate: () => null, useParams: () => ({ deviceId: 'snapshot-host', botId: 'writer' }) }));
 vi.mock('@/features/device-link/useDeviceLinkDeviceList', () => ({ useDeviceLinkDeviceList: () => null }));
 vi.mock('react-i18next', () => ({ useTranslation: () => ({ t: (key: string) => key }) }));
-vi.mock('../useRemoteBots', () => ({
+vi.mock('../useRemoteBots', () => ({ useRemoteBotOmissions: () => new Set<string>(),
   markRemoteBotRead: vi.fn(),
   useRemoteBots: () => [{ id: 'writer', deviceId: 'snapshot-host', deviceName: 'Host', name: 'Writer', sessionId: 'canonical', online: true }],
 }));

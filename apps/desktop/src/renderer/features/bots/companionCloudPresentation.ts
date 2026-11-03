@@ -1,5 +1,5 @@
 import type { CompanionCloudActor, CompanionCloudSnapshot } from '../../../shared/companionCloud';
-import type { RemoteBot } from './remoteBotRoster';
+import { remoteBotKey, type RemoteBot } from './remoteBotRoster';
 
 /**
  * Local copies whose home moved to another computer stay out of the roster and entry choice:
@@ -41,11 +41,14 @@ export function isCloudCompanionRemote(cloud: CompanionCloudSnapshot, bot: Pick<
  * Companions homed on a computer this device never listed (e.g. it was never online
  * here): still reachable as offline remote rows, so the cloud conversation can open.
  */
-export function cloudOnlyRemoteBots(cloud: CompanionCloudSnapshot, remoteBots: readonly RemoteBot[]): RemoteBot[] {
+export function cloudOnlyRemoteBots(cloud: CompanionCloudSnapshot, remoteBots: readonly RemoteBot[], omissions?: ReadonlySet<string>): RemoteBot[] {
   if (!cloud.enabled) return [];
   return cloud.actors.flatMap((actor) => {
     const home = actor.homeDeviceId;
     if (!home || home === cloud.selfDeviceId) return [];
+    // Cloud registration outlives hiding on the home computer. It must not
+    // resurrect an entry that a complete home roster deliberately omitted.
+    if (omissions?.has(remoteBotKey({ deviceId: home, id: actor.externalId }))) return [];
     if (remoteBots.some((bot) => bot.deviceId === home && bot.id === actor.externalId)) return [];
     return [{
       id: actor.externalId,
@@ -69,11 +72,11 @@ export function cloudOnlyRemoteBots(cloud: CompanionCloudSnapshot, remoteBots: r
  * known to be elsewhere (old copies, possibly cached while that computer is offline) are
  * dropped, and companions homed on a computer never listed here get an offline row.
  */
-export function cloudRemoteBots(cloud: CompanionCloudSnapshot, remoteBots: readonly RemoteBot[]): RemoteBot[] {
+export function cloudRemoteBots(cloud: CompanionCloudSnapshot, remoteBots: readonly RemoteBot[], omissions?: ReadonlySet<string>): RemoteBot[] {
   if (!cloud.enabled) return [...remoteBots];
   const homes = new Map(cloud.actors.flatMap((actor) => actor.homeDeviceId ? [[actor.externalId, actor.homeDeviceId] as const] : []));
   const listed = remoteBots.filter((bot) => { const home = homes.get(bot.id); return !home || home === bot.deviceId; });
-  return [...listed, ...cloudOnlyRemoteBots(cloud, listed)];
+  return [...listed, ...cloudOnlyRemoteBots(cloud, listed, omissions)];
 }
 
 export function homeDeviceName(cloud: CompanionCloudSnapshot, botId: string, fallback: string): string {

@@ -58,7 +58,7 @@ vi.mock('@/lib/sessionService', () => ({
 }));
 vi.mock('../BotAvatar', () => ({ BotAvatar: () => <span data-testid="bot-avatar" /> }));
 vi.mock('../botStore', () => ({ useBotProfiles: () => h.local, useBotUnreadCounts: () => ({}) }));
-vi.mock('../useRemoteBots', () => ({ useRemoteBots: () => h.remote, useRemoteCindyIds: () => new Set<string>() }));
+vi.mock('../useRemoteBots', () => ({ useRemoteBotOmissions: () => new Set<string>(), useRemoteBots: () => h.remote, useRemoteCindyIds: () => new Set<string>() }));
 vi.mock('@/features/device-link/refreshRemoteSessions', () => ({ refreshRemoteDeviceSessions: async () => 'done' }));
 vi.mock('@/hooks/useCCSessions', () => ({ useCCSessions: () => ({ sessions: h.sessions }) }));
 vi.mock('@/features/device-link/remoteProjectsStore', () => ({

@@ -20,7 +20,7 @@ export default {
     'src/renderer/features/bots/botStore': {
       partial: `export const useBotProfiles=()=>${data}.case==='new'?[]:[{id:'cindy-default',name:'Cindy',templateId:'cindy',status:'active',sessionId:'chat-1'}];export const useBotUnreadCounts=()=>({});`,
     },
-    'src/renderer/features/bots/useRemoteBots': `export const useRemoteCindyIds=()=>new Set(); export const useRemoteBots=()=>${data}.case==='new'?[]:[
+    'src/renderer/features/bots/useRemoteBots': `export const useRemoteBotOmissions=()=>new Set(); export const useRemoteCindyIds=()=>new Set(); export const useRemoteBots=()=>${data}.case==='new'?[]:[
       {id:'cindy-default',name:'Cindy',deviceId:'mini',deviceName:'Mac-mini',online:true,sessionId:'r1',avatar:'',status:'active'},
       {id:'cindy-default',name:'Cindy',deviceId:'mbp',deviceName:'Chris-MBP-M5',online:false,sessionId:'r2',avatar:'',status:'active'},
       {id:'cindy-default',name:'Cindy',deviceId:'imac',deviceName:'Office iMac',online:false,sessionId:'r3',avatar:'',status:'active'}];`,

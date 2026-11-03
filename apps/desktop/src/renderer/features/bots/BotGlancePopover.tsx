@@ -61,7 +61,7 @@ import {
   useGlanceTodos,
   type GlanceTodoHost,
 } from './botGlanceTodos';
-import { useRemoteBots, useRemoteCindyIds } from './useRemoteBots';
+import { useRemoteBotOmissions, useRemoteBots, useRemoteCindyIds } from './useRemoteBots';
 import { invokeBotSettings } from './remoteBotSettingsClient';
 import { TODO_CHECK_ROUTINE_PREFIX } from '../../../shared/botAutonomy';
 
@@ -284,7 +284,7 @@ function useCindyComputerRows(bot: BotChatIdentity, enabled: boolean): ComputerR
   const navigate = useNavigate();
   const cloud = useCompanionCloud();
   const bots = withoutCloudCompanions(withoutShadowedBots(useBotProfiles(), cloud), cloud);
-  const remoteBots = withoutCloudCompanions(cloudRemoteBots(cloud, useRemoteBots()), cloud);
+  const remoteBots = withoutCloudCompanions(cloudRemoteBots(cloud, useRemoteBots(), useRemoteBotOmissions()), cloud);
   const devices = useDeviceLinkDeviceList();
   const unread = useBotUnreadCounts();
   if (!enabled) return null;

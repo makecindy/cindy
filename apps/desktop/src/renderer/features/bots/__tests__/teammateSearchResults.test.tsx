@@ -7,6 +7,7 @@ import { TeammateSearchResults, useTeammateSearchMatches } from '../TeammateSear
 const mocks = vi.hoisted(() => ({
   profiles: [] as unknown[],
   remoteBots: [] as unknown[],
+  omissions: new Set<string>(),
   groups: [] as unknown[],
   navigate: vi.fn(),
   cloud: { enabled: false, selfDeviceId: null, humanActorId: null, actors: [], demotedBotIds: [] } as import('../../../../shared/companionCloud').CompanionCloudSnapshot,
@@ -15,7 +16,7 @@ const mocks = vi.hoisted(() => ({
 vi.mock('react-i18next', () => ({ useTranslation: () => ({ t: (key: string) => key }) }));
 vi.mock('react-router-dom', () => ({ useNavigate: () => mocks.navigate }));
 vi.mock('../botStore', () => ({ useBotProfiles: () => mocks.profiles }));
-vi.mock('../useRemoteBots', () => ({ useRemoteBots: () => mocks.remoteBots }));
+vi.mock('../useRemoteBots', () => ({ useRemoteBots: () => mocks.remoteBots, useRemoteBotOmissions: () => mocks.omissions }));
 vi.mock('../companionCloudStore', () => ({ useCompanionCloud: () => mocks.cloud }));
 vi.mock('../botGroupStore', () => ({ useBotGroupList: () => ({ groups: mocks.groups }) }));
 vi.mock('../BotAvatar', () => ({ BotAvatar: () => <span data-testid="avatar" /> }));
@@ -25,6 +26,7 @@ function bot(id: string, name: string, extra: Record<string, unknown> = {}) {
 }
 
 beforeEach(() => {
+  mocks.omissions = new Set();
   mocks.cloud = { enabled: false, selfDeviceId: null, humanActorId: null, actors: [], demotedBotIds: [] };
   mocks.profiles = [
     bot('steward', 'PR steward', { skills: ['web-research'] }),
@@ -48,6 +50,18 @@ const names = (query: string) =>
   renderHook(() => useTeammateSearchMatches(query, null)).result.current.map((match) => match.name);
 
 describe('teammates in the sidebar-wide search', () => {
+  // Unit: the search must use the same home visibility evidence as the sidebar;
+  // previous tests covered only local demotion, never an omitted cloud identity.
+  it('does not recreate a home-hidden cloud entry as an offline search result', () => {
+    mocks.remoteBots = [];
+    mocks.cloud = { ...mocks.cloud, enabled: true, selfDeviceId: 'controller', actors: [{
+      id: 'actor', externalId: 'writer', name: 'Cloud writer', avatar: null,
+      homeDeviceId: 'home', homeDevice: null,
+    }] };
+    expect(names('Cloud writer')).toEqual(['Cloud writer']);
+    mocks.omissions = new Set(['home:writer']);
+    expect(names('Cloud writer')).toEqual([]);
+  });
   // Issue #6575 P1: task-ID filtering did not constrain the leading roster hits.
   // Existing global-query tests never lock a dialogue group. Unit regression:
   // one matching local bot, remote bot and group must disappear while locked,

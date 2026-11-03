@@ -37,7 +37,7 @@ import {
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu';
 import { useAgentIslandActivityMap } from '@/state/agentIslandActivity';
-import { useRemoteBots } from './useRemoteBots';
+import { useRemoteBotOmissions, useRemoteBots } from './useRemoteBots';
 import { useCompanionCloud } from './companionCloudStore';
 import { cloudRemoteBots, isCloudCompanionRemote, withoutCloudCompanions, withoutShadowedBots } from './companionCloudPresentation';
 import { useDeviceLinkDeviceList } from '@/features/device-link/useDeviceLinkDeviceList';
@@ -154,8 +154,9 @@ export function TeammatesSection() {
   };
   const cloud = useCompanionCloud();
   const rosterRemoteBots = useRemoteBots();
+  const omissions = useRemoteBotOmissions();
   // One row per companion, on its main computer (offline rows for computers never listed here).
-  const remoteBots = useMemo(() => cloudRemoteBots(cloud, rosterRemoteBots), [rosterRemoteBots, cloud]);
+  const remoteBots = useMemo(() => cloudRemoteBots(cloud, rosterRemoteBots, omissions), [rosterRemoteBots, cloud, omissions]);
   const devices = useDeviceLinkDeviceList();
   const self = devices?.find((device) => device.isSelf);
   const rosterDevices = [

@@ -44,7 +44,7 @@ vi.mock('@/features/bots/botReadState', () => ({
   getBotLastReadAtMap: () => ({}),
   markBotRead: botState.markRead,
 }));
-vi.mock('@/features/bots/useRemoteBots', () => ({ useRemoteBotSync: () => {}, useRemoteBots: () => botState.remote, markRemoteBotRead: botState.markRemoteRead }));
+vi.mock('@/features/bots/useRemoteBots', () => ({ useRemoteBotOmissions: () => new Set<string>(), useRemoteBotSync: () => {}, useRemoteBots: () => botState.remote, markRemoteBotRead: botState.markRemoteRead }));
 vi.mock('@/contexts/AuthContext', () => ({ useAuth: () => ({}) }));
 vi.mock('@/contexts/dataOwnerGeneration', () => ({
   getDataOwnerGeneration: () => state.owner,
