@@ -79,7 +79,16 @@ const resources = {
     },
     aiRename: lzhHansAiRename,
   },
-  tlh: { common: tlhCommon, aiRename: tlhAiRename },
+  tlh: {
+    common: {
+      ...tlhCommon,
+      chatgptAuthRecovery: {
+        ...tlhCommon.chatgptAuthRecovery,
+        devWriteBlocked: "chenmoH copy janvam ChatGPT Hotlh laD-neH lo'taH — OAuth qavbe'chu'meH joq ngItlh choHbe'meH. OAuth testmeH, ghItlh vam yIlo': pnpm restart:desktop:remote -- --isolated-auth --isolated. restart script sandbox bev 'e' ghIq neH writes poSmoH.",
+      },
+    },
+    aiRename: tlhAiRename,
+  },
   en: {
     common: {
       ...enCommon,

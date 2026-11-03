@@ -245,7 +245,7 @@
     "speakingMode": "Speaking order",
     "speakingModeAuto": "Automatic",
     "speakingModeSequential": "One at a poH",
-    "speakingModeAutoNote": "Qo' mentions or @naQ teammates: think simultaneously chu' the first pass, then jang one by one. Mentioned teammates jang in mention order.",
+    "speakingModeAutoNote": "Qo' mentions or @All teammates: think simultaneously chu' the first pass, then jang one by one. Mentioned teammates jang in mention order.",
     "speakingModeSequentialNote": "One teammate speaks at a poH, and each one sees the replies before it.",
     "speakingModeSaveFailed": "Couldn't qon the speaking order. Try again.",
     "setOrganizer": "Make Organizer",
@@ -272,7 +272,7 @@
       "loading": "loSlu' SeHlaw'…",
       "unavailable": "Couldn’t load ghun SeHlaw'. Try again."
     },
-    "allowMentionAllBots": "chaw @naQ teammates",
+    "allowMentionAllBots": "chaw @all teammates",
     "allowMentionAllBotsHint": "Only the ghun owner can choH this. Teammates may naQ jang; use with care in large groups. AI replies chu' your behalf are independent."
   },
   "errors": {
@@ -298,7 +298,7 @@
     "lifecycleUnavailable": "The current server or De'wI' does not support this action yet.",
     "groupDissolved": "This ghun has been dissolved. You can still read the DuH history.",
     "lastOwner": "Transfer ownership or dissolve this ghun before leaving.",
-    "allBotsMentionDisabled": "The ghun owner has not chu'lu' @naQ teammates."
+    "allBotsMentionDisabled": "The ghun owner has not chu'lu' @all teammates."
   },
   "followUp": {
     "next": "plan · ghIq step",

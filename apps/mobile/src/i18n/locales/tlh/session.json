@@ -637,7 +637,7 @@
     "REMOTE_AGENT_GROUP_USAGE_LIMIT": "The DuH accounts for this model have reached their lo' juv. Switch modelmey or taH when the quota resets.",
     "REMOTE_AGENT_GROUP_UNAVAILABLE": "Qo' De'wI' in the provider ghun can run this Qu' right DaH. They may be Web Hur, loSlu', cooling down, or missing this model. Check the ghun chu' this provider’s nov & Sharing page chu' the De'wI'.",
     "REMOTE_DAEMON_CLOSED": "The nov rar dropped, possibly during an choHqa'. This turn has ended. ngeH the QIn again.",
-    "REMOTE_LOCAL_ATTACHMENT_UNSUPPORTED": "local nav/bej' attachments aren't accessible in nov Qu'mey. qem the content directly instead.",
+    "REMOTE_LOCAL_ATTACHMENT_UNSUPPORTED": "local nav/image attachments aren't accessible in nov Qu'mey. qem the content directly instead.",
     "AUTO_REVIEW_UNAVAILABLE": "Auto approve could not reach a decision, so actions that need approval DaH need your confirmation. Switch this Qu' to Full access if you would rather not be interrupted. That mode is higher risk.",
     "AUTO_REVIEW_UNAVAILABLE_WECHAT": "Auto approve could not reach a decision, so actions that need approval DaH need your confirmation. Personal WeChat cannot use Full access. vang this action directly.",
     "AUTO_REVIEW_CONFIRM_UNDELIVERED": "Auto approve was DuHbe', and the confirmation request was not completed. This is not a lo'wI' rejection.",

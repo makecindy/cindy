@@ -299,7 +299,7 @@
     "reloginRiskTitle": "Cindyvo' HotlhtaH'a'?",
     "reloginRiskDescription": "Cindy chu' OpenAI OAuth chenmoH. ChatGPT App ruSbe'be'; system Codex je ngItlh qonlu'chugh — apps Hotlhqa' poQlaH.",
     "reloginRiskConfirm": "Qap 'e' yIchup, taH",
-    "devWriteBlocked": "chenmoHmey janvam ChatGPT Hotlh laD-neH lo'taH — OAuth qavbe'chu'meH joq ngItlh choHbe'meH. OAuth torneH — pagh Seng lo', 'ej XDT_ALLOW_DEV_OAUTH_WRITE=1 chupmoHlu' poQ.",
+    "devWriteBlocked": "chenmoH copy janvam ChatGPT Hotlh laD-neH lo'taH — OAuth qavbe'chu'meH joq ngItlh choHbe'meH. OAuth testmeH, ghItlh vam yIlo': pnpm restart:desktop:remote -- --isolated-auth --isolated. restart script sandbox bev 'e' ghIq neH writes poSmoH.",
     "devReadOnly": "chenmoHDaq — laD neH",
     "checking": "bejlu'taH…",
     "recheck": "qaSpa' yIbej",
@@ -3147,7 +3147,7 @@
       "refresh": "chu'qa'",
       "emptyTitle": "ngeHlu' Qaghmey tu'be'",
       "emptyTitleUnverified": "nIb Qaghmey DaH tu'laHbe'",
-      "startIssueChat": "/Issue je chu' Qu' qav",
+      "startIssueChat": "/issue je chu' Qu' qav",
       "statusUnknown": "ghu' Sovbe'",
       "sourceCindy": "Cindyvo' ngeHlu'",
       "sourceGithub": "GitHub account",
@@ -6357,7 +6357,7 @@
       },
       "MANIFEST_INVALID": {
         "title": "Invalid Skill Package",
-        "message": "Check Skill.md and the package navmey using the paS below, then fix them and publish again."
+        "message": "Check SKILL.md and the package navmey using the paS below, then fix them and publish again."
       },
       "CANCELLED": {
         "title": "Cancelled",
@@ -6401,7 +6401,7 @@
       },
       "SKILL_FILE_TOO_LARGE": {
         "title": "Skill Package Exceeds Limits",
-        "message": "Limits: 32 MiB compressed, 50 MiB unpacked, 2 MiB for Skill.md, and 2000 qon entries. Reduce the package and publish again."
+        "message": "Limits: 32 MiB compressed, 50 MiB unpacked, 2 MiB for SKILL.md, and 2000 qon entries. Reduce the package and publish again."
       },
       "NETWORK_ERROR": {
         "title": "Cannot Connect to Publishing Service",
@@ -8251,7 +8251,7 @@
       "waitingWorkflow": "Workflow loS…",
       "waitingWorkflowProgress": "Workflow loS · {{done}}/{{total}} Agents",
       "turnStart": "{{status}}",
-      "issueTip": "{{name}} — /Issue lo' — buq joq tlhaD ngeH",
+      "issueTip": "{{name}} — /issue lo' — buq joq tlhaD ngeH",
       "runningTool": "{{tool}}mey SengtaH…"
     },
     "remoteSession": {
@@ -9277,10 +9277,10 @@
     "sessionLoading": "Qu' chu'lu'taH",
     "askUserQuestion": {
       "voice": {
-        "hint": "wuq mI' joq pong ja'. latlh wuqmey — tagha' \"wuwI' chupmoH\" ja'.",
-        "freeTextHint": "janglIj ja', bej, tagha' \"wuwI' chupmoH\" ja' — ngeH.",
-        "confirm": "wuwI' bej, tagha' \"wupmoH\" ja' — ngeH; joq \"wuq mev\" ja' — wuqqa'.",
-        "ambiguous": "wuwIjlIj SoSbe'. wa' wuq mI' joq naQ pong ja', joq chupmoH wuq.",
+        "hint": "wuq mI' joq pong ja'. latlh wuqmey — tagha' “confirm selection” ja'.",
+        "freeTextHint": "janglIj ja', bej, tagha' “confirm selection” ja' — ngeH.",
+        "confirm": "wuwI' bej, tagha' “confirm selection” ja' — ngeH; joq “cancel selection” ja' — wuqqa'.",
+        "ambiguous": "wuwIjlIj SoSbe'. wa' wuq mI' joq naQ pong ja', joq “confirm selection”.",
         "unknown": "wuq tu'be'. wa' wuq mI' joq naQ pong ja', joq chupmoH wuq.",
         "cancelled": "jach wuq mevlu'. wa' DichIdaq wuqqa'."
       },
@@ -10043,7 +10043,7 @@
       "openInSidebarFailed": "Hur mIch bejwI'Daq poS Qagh",
       "openInCurrentWindow": "DaH Qorwagh poSmoH",
       "locateProject": "project tu'",
-      "shiftClick": "Shift+tlheq"
+      "shiftClick": "Shift+click"
     },
     "ghostSummon": {
       "directiveLabel": "modelvaD chellu' chut",
@@ -10863,7 +10863,7 @@
     },
     "profileSaveFailed": "Teammate SeHlaw' could not be qonlu'. Qo' choHmey were applied.",
     "modelUnavailable": "{{model}} (currently DuHbe')",
-    "codexAutomaticCompact": "Codex teammates compact Dav chu' their own, and /chu' keeps the current Qu'. Only qav a chu' Qu' when you actually need a clean slate.",
+    "codexAutomaticCompact": "Codex teammates compact Dav chu' their own, and /new keeps the current Qu'. Only qav a chu' Qu' when you actually need a clean slate.",
     "image": "chel bej'",
     "send": "ngeH QIn",
     "roster": {
@@ -11216,7 +11216,7 @@
         "speakingMode": "Speaking order",
         "speakingModeAuto": "Automatic",
         "speakingModeSequential": "One at a poH",
-        "speakingModeAutoNote": "Qo' mentions or @naQ teammates: think simultaneously chu' the first pass, then jang one by one. Mentioned teammates jang in mention order.",
+        "speakingModeAutoNote": "Qo' mentions or @All teammates: think simultaneously chu' the first pass, then jang one by one. Mentioned teammates jang in mention order.",
         "speakingModeSequentialNote": "One teammate speaks at a poH, and each one sees the replies before it.",
         "speakingModeSaveFailed": "Couldn't qon the speaking order. Try again.",
         "setOrganizer": "Make Organizer",
@@ -11231,7 +11231,7 @@
         "projectDirNote": "Teammates work here when they split the work. You can mej it chIch and they’ll use this ghun chat’s own mIch. If you choose a git project, each work split gets a chu' worktree and tlhe', so your own code stays untouched.",
         "autoContinueSaveFailed": "Couldn’t qon step handoffs. Try again.",
         "projectDirSaveFailed": "Couldn’t qon the project mIch. Make sure the mIch still exists, then try again.",
-        "allowMentionAllBots": "chaw @naQ teammates",
+        "allowMentionAllBots": "chaw @all teammates",
         "allowMentionAllBotsHint": "Only the ghun owner can choH this. Teammates may naQ jang; use with care in large groups. AI replies chu' your behalf are independent."
       },
       "errors": {
@@ -11260,7 +11260,7 @@
         "lifecycleUnavailable": "The current server or De'wI' does not support this action yet.",
         "groupDissolved": "This ghun has been dissolved. You can still read the DuH history.",
         "lastOwner": "Transfer ownership or dissolve this ghun before leaving.",
-        "allBotsMentionDisabled": "The ghun owner has not chu'lu' @naQ teammates."
+        "allBotsMentionDisabled": "The ghun owner has not chu'lu' @all teammates."
       },
       "organizer": "Organizer",
       "plan": {
@@ -11853,9 +11853,9 @@
           "createLink": "chenmoH one chu' {{service}} poSmoH Platform",
           "credentialsHint": "After creating the app, nIb its App ID and App Secret from Credentials & Basic Info and enter them here.",
           "stepsLabel": "View setup steps",
-          "stepCreate": "chenmoH a custom app chu' the poSmoH Platform and chel the bot capability. In chawmey, vang that reading direct QInmey (im:QIn.p2p_msg:readonly) and sending QInmey as the app (im:QIn:ngeH_as_bot) are chu'lu'. Receiving ghun @mentions also requires im:QIn.ghun_at_msg:readonly.",
+          "stepCreate": "chenmoH a custom app chu' the poSmoH Platform and chel the bot capability. In chawmey, vang that reading direct QInmey (im:message.p2p_msg:readonly) and sending QInmey as the app (im:message:send_as_bot) are chu'lu'. Receiving ghun @mentions also requires im:message.group_at_msg:readonly.",
           "stepCredentials": "poSmoH Credentials & Basic Info in your app and nIb the App ID and App Secret.",
-          "stepConnect": "Enter the credentials below and click “Connect {{service}}” to establish a rar. In Events & Callbacks chu' the poSmoH Platform, wuq the long rar subscription mode and chel the Receive QIn event (im.QIn.receive_v1). In Callback Configuration, wuq long rar mode and chel the Card action callback (card.action.trigger) so card buttons work. Publish the app juv, wait for approval if poQqu', then ngeH the bot a QIn and click a card pach to verify both work.",
+          "stepConnect": "Enter the credentials below and click “Connect {{service}}” to establish a rar. In Events & Callbacks chu' the poSmoH Platform, wuq the long rar subscription mode and chel the Receive QIn event (im.message.receive_v1). In Callback Configuration, wuq long rar mode and chel the Card action callback (card.action.trigger) so card buttons work. Publish the app juv, wait for approval if poQqu', then ngeH the bot a QIn and click a card pach to verify both work.",
           "confirm": "Connect {{service}}"
         },
         "wecom": {
@@ -13509,7 +13509,7 @@
         "agentProxyModeEnv": "Bring your own Proxy (env vars only)",
         "agentProxyModeEnvDesc": "Provide a Proxy URL reachable from the nov; you maintain the tunnel/reachability",
         "agentProxyAddr": "local Proxy address",
-        "agentProxyHint": "A fixed port chu' the nov 127.0.0.1 is tunneled over a dedicated, Cindy-managed SSH rar chegh to your local Proxy (e.g. Clash chu' 7890). {{appName}} does not provide a Proxy — only the tunnel; the nov Agent's HTTPS_Proxy is pinned to the fixed port and qaSbe' drifts chu' reconnect. Changing this restarts the nov codex daemon once.",
+        "agentProxyHint": "A fixed port chu' the nov 127.0.0.1 is tunneled over a dedicated, Cindy-managed SSH rar chegh to your local Proxy (e.g. Clash chu' 7890). {{appName}} does not provide a Proxy — only the tunnel; the nov Agent's HTTPS_PROXY is pinned to the fixed port and qaSbe' drifts chu' reconnect. Changing this restarts the nov codex daemon once.",
         "agentProxyAddrInvalid": "Expected host:port, e.g. 127.0.0.1:7890",
         "agentProxyRemotePort": "Fixed nov port",
         "agentProxyRemotePortInvalid": "Port must be an integer between 1 and 65535",
@@ -13812,7 +13812,7 @@
       "wecomGroupHint": "lo'lu' for automation completion jachmey. qem a WeCom ghun bot Webhook URL; it is encrypted chu' this jan.",
       "wecomGroupConfiguredHint": "Configured (ngItlh {{maskedKey}}). Turn chu' the master switch, then enable it for each automation as needed.",
       "wecomGroupAria": "Toggle the WeCom ghun jach master switch",
-      "wecomGroupPlaceholder": "https://qyapi.weixin.qq.com/cgi-bin/webhook/ngeH?ngItlh=…",
+      "wecomGroupPlaceholder": "https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=…",
       "wecomGroupSaveAndTest": "qon and tor",
       "wecomGroupSaveSuccess": "Webhook qonlu' and tor QIn sent",
       "wecomGroupSaveFailed": "Could not qon or tor the Webhook",
@@ -15038,7 +15038,7 @@
         "showFormat": "View format guide",
         "hideFormat": "ghup format guide",
         "formatStructure": "The nav contains one JSON object, without Base64, an ngeb He or an extra wrapper. The fields below describe a custom API ngItlh provider. Field names are case-sensitive; JSON does not chaw comments.",
-        "formatIdentity": "poQqu'. Set kind to \"custom\" and pong to the provider pong you want to bej.",
+        "formatIdentity": "poQqu'. Set kind to \"custom\" and name to the provider pong you want to bej.",
         "formatAuth": "poQqu'. In this mI', set method to \"apiKey\" and replace apiKey with the ngItlh from your provider.",
         "formatEndpoint": "poQqu' for each He. protocol accepts \"openai-chat\", \"openai-responses\", \"anthropic-messages\" and \"google-generative-ai\". Set baseUrl to the full HTTP(S) He URL; HTTPS is recommended.",
         "formatTargets": "DuHbe' engine array: \"claude-code\", \"codex\" or \"pi\". Omit it to match engines by protocol, or specify engines explicitly. Claude code also supports OpenAI and Google protocols. The mI' enables only Pi.",
@@ -15052,7 +15052,7 @@
         "fileGuideReviewHint": "ngeb one or latlh providermey. bej the nav first; nothing is qonlu' until you vang.",
         "formatConversion": "Convert exports from other clients to this format first.",
         "downloadBatchExample": "ngeHHa' Batch mI'",
-        "formatBatch": "For a batch, use { \"providermey\": [config1, config2] } with the single-provider structure below for each entry. Maximum 50 entries and 4 MiB naQ. Built-in ngItlh slots and explicit ids must not repeat. If any entry has an invalid structure, Qo' ngeb drafts are created for the nav.",
+        "formatBatch": "For a batch, use { \"providers\": [config1, config2] } with the single-provider structure below for each entry. Maximum 50 entries and 4 MiB naQ. Built-in ngItlh slots and explicit ids must not repeat. If any entry has an invalid structure, Qo' ngeb drafts are created for the nav.",
         "batchTitle": "ngeb providermey ({{count}})",
         "batchNote": "wuq providermey to ngeb together. bej individually to choHqa' an existing rar or authorize. qonlu' entries are kept if another entry fails.",
         "batchImport": "ngeb Selected ({{count}})",
@@ -15228,7 +15228,7 @@
           "modelSupportsImageInputHelp": "Enable only when the model actually accepts visual input. qav a chu' Pi Qu' after qonlu'.",
           "runtimeAdvanced": "Advanced",
           "openaiImages": "Use OpenAI bej'mey API",
-          "openaiImagesHint": "Uses this rar’s address and API ngItlh for /bej'mey/generations and /bej'mey/edits. Enabling it selects this as the provider’s only bej'mey rar. chel missing model IDs manually, then declare their bej' capability in model De'.",
+          "openaiImagesHint": "Uses this rar’s address and API ngItlh for /images/generations and /images/edits. Enabling it selects this as the provider’s only bej'mey rar. chel missing model IDs manually, then declare their bej' capability in model De'.",
           "xaiVideos": "Use xAI-compatible Videos API",
           "xaiVideosHint": "Uses this rar’s address and API ngItlh to submit and poll video Qu'mey. Enabling it selects this as the provider’s only video rar. chel missing model IDs, then declare video capability in model De'.",
           "runtimeSupportsImageGeneration": "Supports bej' generation and editing",
@@ -16028,7 +16028,7 @@
       "disabledNote": "Personal WeChat is loSlu' in this juv by the compatibility policy. qonlu' Qu'mey and SeHlaw' are not removed.",
       "permission": {
         "label": "chaw mode",
-        "hint": "Applies to chu' Dav after /chu'. Risky actions still require confirmation in Cindy Desktop.",
+        "hint": "Applies to chu' Dav after /new. Risky actions still require confirmation in Cindy Desktop.",
         "fullAccessDisabled": "Personal WeChat does not support Full Access yet because actions that cannot be confirmed in WeChat must not run directly.",
         "permissionModeDisabled": "Personal WeChat reH uses Cindy Desktop's confirmation policy, so this chaw mode is DuHbe'."
       },
@@ -16072,7 +16072,7 @@
       },
       "workingDir": {
         "title": "SengtaH He for chu' conversations",
-        "hint": "lo'lu' for the first WeChat conversation and after /chu'. Changing it does not move the current Dav.",
+        "hint": "lo'lu' for the first WeChat conversation and after /new. Changing it does not move the current Dav.",
         "managed": "Use a Cindy-managed He",
         "reset": "Restore qav",
         "unavailable": "The selected He is DuHbe'. chu' conversations temporarily use a Cindy-managed He."
@@ -16565,7 +16565,7 @@
       "title": "Personalization",
       "subtitle": "Custom Prompts",
       "description": "Give your assistants extra instructions and Dav.",
-      "placeholder": "Enter your custom instructions here. They will be appended to the end of the Claude / Codex system prompt.\n\n· Applies only to {{appName}}'s built-in Qu'mey. Existing Qu'mey qon their startup snapshot; choHmey take effect chu' the ghIq chu' Qu'.\n· To enforce this across naQ Claude code Qu'mey (terminal, other IDEs, etc.), configure a SessionStart hook in ~/.claude/SeHlaw'.json (harness-level enforcement).\n· Codex CLI: configure a SessionStart hook in ~/.codex/hooks.json for deterministic injection (same Harnesss mechanism as CC); or use ~/.codex/Agentmey.md (auto-loaded, soft-guidance only).",
+      "placeholder": "Enter your custom instructions here. They will be appended to the end of the Claude / Codex system prompt.\n\n· Applies only to {{appName}}'s built-in Qu'mey. Existing Qu'mey qon their startup snapshot; choHmey take effect chu' the ghIq chu' Qu'.\n· To enforce this across naQ Claude code Qu'mey (terminal, other IDEs, etc.), configure a SessionStart hook in ~/.claude/settings.json (harness-level enforcement).\n· Codex CLI: configure a SessionStart hook in ~/.codex/hooks.json for deterministic injection (same Harnesss mechanism as CC); or use ~/.codex/AGENTS.md (auto-loaded, soft-guidance only).",
       "ariaLabel": "Custom instructions",
       "save": "qon",
       "overLimit": " — over juv",
@@ -17232,7 +17232,7 @@
           "scopeLocalHint": "Accepts rarmey from this De'wI' only. Use it with your own reverse Proxy, tunnel or mesh VPN.",
           "scopeAllHint": "janmey chu' your local Web can connect directly. The rar is not encrypted, so use it only chu' trusted networks. Phones need an https address.",
           "externalUrl": "Address other janmey use",
-          "externalUrlPlaceholder": "e.g. https://relay.mI'.com",
+          "externalUrlPlaceholder": "e.g. https://relay.example.com",
           "externalUrlHintAll": "Included in poS Hemey. If chIch, this computer's local Web address is lo'lu'.",
           "externalUrlHintLocal": "Included in poS Hemey. Enter the public address of your Proxy or tunnel.",
           "suggested": "This computer's addresses:",
@@ -17521,7 +17521,7 @@
           "defaultWorkspaceChip": "qav: {{name}}",
           "defaultWorkspaceAria": "Choose the qav SengtaH He for dispatched Qu'mey",
           "defaultWorkspaceRadioAria": "Set \"{{name}}\" as the qav SengtaH He",
-          "defaultWorkspaceRowHint": "The selected He is the qav SengtaH He: any Telegram DM, ghun or topic conversation that has not picked a project of its own runs its Qu'mey there (conversations that chose one with /juH mIch qon theirs). Mind the chaw mode chu' the selected He’s row — set to Full access, an @mention from any ghun runs with full access inside that qon.",
+          "defaultWorkspaceRowHint": "The selected He is the qav SengtaH He: any Telegram DM, ghun or topic conversation that has not picked a project of its own runs its Qu'mey there (conversations that chose one with /workspace qon theirs). Mind the chaw mode chu' the selected He’s row — set to Full access, an @mention from any ghun runs with full access inside that qon.",
           "legacyDefaultsTitle": "Legacy “chu' conversation” defaults are still in effect",
           "legacyDefaultsDescription": "This jan qonlu' older official-bot defaults that still act as the fallback for Hemey without their own SeHlaw' (official Telegram and X share one nIb). These values are DaH set per He. Restoring defaults clears naQ of the following:",
           "legacyDefaultsRow": {
@@ -17686,7 +17686,7 @@
             "riskPublicBody": "Replies are public and visible to anyone. Use this for public questions and problems, not private matters that could expose your privacy.",
             "riskWorkdirBody": "Every X Qu' runs in the qav SengtaH He set in X rar SeHlaw'. The Agent can read and write navmey there, and its conclusion is posted publicly — if that He points at a private qon, nav contents may become public with it.",
             "withdrawLabel": "To Withdraw a jang",
-            "withdrawBody": "The person who asked can teq the jang by replying “@askmycindy /teq” to it. Include @askmycindy in the jang Hol. Only the public jang is deleted; the local Qu' record is kept.",
+            "withdrawBody": "The person who asked can teq the jang by replying “@askmycindy /delete” to it. Include @askmycindy in the jang Hol. Only the public jang is deleted; the local Qu' record is kept.",
             "ackTitle": "X Is Linked — How It Works and What to Watch For",
             "ackConfirm": "I Understand the Risks"
           },
@@ -17831,15 +17831,15 @@
           "feishu": "chu' Feishu conversations use this Agent and model. Existing Qu'mey switch over chu' their ghIq QIn unless their model was changed manually.",
           "slack": "chu' Slack threads use this Agent and model.",
           "discord": "chu' Discord conversations use this Agent and model. Existing Qu'mey switch over chu' their ghIq QIn unless their model was changed manually.",
-          "wechat": "chu' WeChat conversations use this Agent, model, and chaw mode. Existing Qu'mey switch to this Agent and model chu' their ghIq QIn unless their model was changed manually; ngeH /chu' in an existing chat to lo' the chaw mode.",
+          "wechat": "chu' WeChat conversations use this Agent, model, and chaw mode. Existing Qu'mey switch to this Agent and model chu' their ghIq QIn unless their model was changed manually; ngeH /new in an existing chat to lo' the chaw mode.",
           "telegram": "chu' Telegram conversations use this Agent and model. Existing Qu'mey switch over chu' their ghIq QIn unless their model was changed manually.",
           "dingtalk": "chu' DingTalk conversations use this Agent and model. Existing Qu'mey switch over chu' their ghIq QIn unless their model was changed manually.",
-          "wecom": "chu' WeCom conversations use this Agent, model, and chaw mode. Existing Qu'mey switch to this Agent and model chu' their ghIq QIn unless their model was changed manually; ngeH /chu' in an existing chat to lo' the chaw mode."
+          "wecom": "chu' WeCom conversations use this Agent, model, and chaw mode. Existing Qu'mey switch to this Agent and model chu' their ghIq QIn unless their model was changed manually; ngeH /new in an existing chat to lo' the chaw mode."
         },
         "agentLabel": "Agent",
         "agentUnsupportedOnChannelHint": "{{agent}} cannot handle per-message approvals here. Use Claude code or Codex to process QInmey.",
-        "agentUnsupportedOnChannelModeHint": "After switching Agent, ngeH /chu'; if chaw Issuemey persist, ngeH /chaw.",
-        "permissionModeUnsupportedOnChannelHint": "The current Agent cannot run chu' this chenmey in this chaw mode, so QInmey cannot be processed. ngeH /chaw to choose a supported mode.",
+        "agentUnsupportedOnChannelModeHint": "After switching Agent, ngeH /new; if chaw Issuemey persist, ngeH /permission.",
+        "permissionModeUnsupportedOnChannelHint": "The current Agent cannot run chu' this chenmey in this chaw mode, so QInmey cannot be processed. ngeH /permission to choose a supported mode.",
         "modelLabel": "model Configuration",
         "automatic": "Automatic · Uses an DuH recommended model",
         "fixed": "model pinned",
@@ -17854,7 +17854,7 @@
           "pi": "Pi"
         },
         "groupPermissionLabel": "chaw mode for chu' ghun Qu'mey",
-        "groupPermissionDescription": "chaw mode lo'lu' for every Qu' created in a ghun chat — @bot opening a topic, /chu', and /ctr naQ use it; the chaw mode above applies to direct QInmey only. Defaults to Auto approval. ghun Dav can contain member-controlled content — choosing Full access executes actions without per-step confirmation, so only pick it for groups you trust. choHmey lo' to Qu'mey created afterwards; switch an existing Qu' with /chaw in the ghun."
+        "groupPermissionDescription": "chaw mode lo'lu' for every Qu' created in a ghun chat — @bot opening a topic, /new, and /ctr naQ use it; the chaw mode above applies to direct QInmey only. Defaults to Auto approval. ghun Dav can contain member-controlled content — choosing Full access executes actions without per-step confirmation, so only pick it for groups you trust. choHmey lo' to Qu'mey created afterwards; switch an existing Qu' with /permission in the ghun."
       }
     },
     "shortcuts": {
@@ -18670,7 +18670,7 @@
         "namePlaceholder": "e.g. My toolbox",
         "transport": "Transport",
         "url": "He URL",
-        "urlPlaceholder": "https://mI'.com/mcp",
+        "urlPlaceholder": "https://example.com/mcp",
         "token": "Bearer token (DuHbe')",
         "tokenPlaceholder": "Enter auth token",
         "tokenEditPlaceholder": "mej blank to teq the qonlu' token",

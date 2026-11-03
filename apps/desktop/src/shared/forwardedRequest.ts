@@ -64,7 +64,7 @@ export function readForwardedRequestSource(value: unknown): ForwardedRequestSour
 export function formatForwardedRequest(source: ForwardedRequestSource, supplement: string, locale: SupportedLocale = DEFAULT_LOCALE): string {
   // New UI languages must also reach receivers released before those catalogs.
   // Until the wire negotiates dialect support, emit an existing English envelope.
-  const wireLocale = locale === 'es' || locale === 'fr' || locale === 'de' || locale === 'pt-PT' || locale === 'pt-BR'
+  const wireLocale = locale === 'es' || locale === 'fr' || locale === 'de' || locale === 'pt-PT' || locale === 'pt-BR' || locale === 'tlh'
     ? 'en' : locale;
   return formatReceiptDialect(source, supplement, wireLocale);
 }
