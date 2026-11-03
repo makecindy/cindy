@@ -358,6 +358,7 @@ function replayWireWithSourceNotes(
 function isExternalDispatchOwner(agentMeta: Record<string, unknown> | null | undefined): boolean {
   if (!agentMeta) return false;
   if (agentMeta.hookSource) return true;
+  if (agentMeta.imSource) return true;
   const origin = agentMeta.origin;
   if (!origin || typeof origin !== 'object' || Array.isArray(origin)) return false;
   const kind = (origin as { kind?: unknown }).kind;

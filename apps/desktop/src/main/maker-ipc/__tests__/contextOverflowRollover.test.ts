@@ -22,6 +22,7 @@ import {
   withReplaySourceNotes,
 } from '../contextOverflowRollover';
 import { buildHandoffText } from '../agentHandoff';
+import { createLocalImSource } from '../../../shared/imMessageSource';
 
 function msg(
   role: string,
@@ -1832,6 +1833,23 @@ describe('createContextOverflowRollover', () => {
   it('does not take over an externally owned Pi 413 turn', async () => {
     const deps = makeDeps([msg('user', 'IM message', 'u1')]);
     const rollover = createContextOverflowRollover({ ...deps, hasExternalRecoveryOwner: () => true });
+    await expect(rollover.tryRecover('s1', { message: '413 Request Entity Too Large' })).resolves.toBe(false);
+    expect(deps.closeSession).not.toHaveBeenCalled();
+    expect(deps.commitRebuild).not.toHaveBeenCalled();
+    expect(deps.replayUserMessage).not.toHaveBeenCalled();
+  });
+
+  it('leaves a native IM Pi 413 turn to its channel when no desktop binding exists', async () => {
+    const sourceUser = {
+      ...msg('user', 'IM message', 'u-im'),
+      agentMeta: { imSource: createLocalImSource('telegram', 'IM message') },
+    };
+    const deps = makeDeps([sourceUser]);
+    // A native IM lane has no desktop binding or headless recovery marker.
+    const rollover = createContextOverflowRollover({ ...deps, hasExternalRecoveryOwner: () => false });
+    expect(planContextOverflowRollover([sourceUser])).toMatchObject({
+      action: 'rebuild', skipGenericReplay: true,
+    });
     await expect(rollover.tryRecover('s1', { message: '413 Request Entity Too Large' })).resolves.toBe(false);
     expect(deps.closeSession).not.toHaveBeenCalled();
     expect(deps.commitRebuild).not.toHaveBeenCalled();
