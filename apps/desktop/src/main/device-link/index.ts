@@ -1505,6 +1505,7 @@ function teardownActiveLink(): void {
   stopNetworkWatch = null;
   if (!client || linkTornDown) return;
   linkTornDown = true;
+  invalidateProviderMetadataContinuity();
   controllerDisplayNameRefreshGeneration += 1;
   mobileNotifyGeneration += 1;
   if (relayAuthRecoveryRetryTimer !== null) {
@@ -1542,6 +1543,7 @@ const subscriptionReplayScheduler = createSubscriptionReplayScheduler({
   remoteSubscribe,
   isLinkTornDown: () => linkTornDown,
   isRelayOnline: (deviceId) => client?.connectionFor(deviceId).getStatus() === 'online',
+  hasOfflineDirectPath,
   isDeviceUnresponsive: (deviceId) => responsivenessTracker?.isUnresponsive(deviceId) ?? false,
   getPresenceAvailability: (deviceId) => presenceAvailableByDevice.get(deviceId)
     ?? (presenceOnlineByDevice.get(deviceId) === false ? false : undefined),
