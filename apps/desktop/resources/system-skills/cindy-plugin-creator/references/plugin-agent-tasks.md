@@ -249,7 +249,8 @@ text 与 context 合计不超过 64000；tasks.send 的 text 上限仍为 32768�
 `tasks.capabilities().autoTitle === true` 时，可用 `tasks.create({requestKey, autoTitle:true, route?})`
 新建任务，省略 title；首次消息受理后，Host 复用普通任务自动命名。`targets.send` 仅在
 `target.kind === 'project'` 时可传 `autoTitle:true` 并省略 title。生成期间先显示用户指令的简短占位，
-随后结合指令和附带资料生成标题；不会覆盖人工重命名。autoTitle 与 title 互斥，task/bot
+随后根据用户指令生成标题，不会覆盖人工重命名；附带资料仍交给任务 Agent，不参与自动命名。
+autoTitle 与 title 互斥，task/bot
 目标不接受 autoTitle:true，也不更改已有目标标题。
 
 默认不传 autoTitle 的存量插件保持原有命名：tasks.create 仍须传 title；项目投递缺省采用
