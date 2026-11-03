@@ -1,4 +1,13 @@
 {
+  "progress": {
+    "stop": "止"
+  },
+  "work": {
+    "queued": "待次 {{count}}",
+    "active": "行事中 {{count}}",
+    "expand": "展伙伴所事",
+    "collapse": "斂伙伴所事"
+  },
   "title": "群議",
   "memberSeparator": "、",
   "memberCount_one": "成員 {{count}} 位",
@@ -186,6 +195,7 @@
     "allDone": "皆畢矣"
   },
   "speaking": {
+    "queued": "待次",
     "stopping": "方止…",
     "planning": "方分職…",
     "step": "方為之…"
@@ -258,7 +268,18 @@
       "unavailable": "群之設定讀取未成，請再試"
     },
     "allowMentionAllBots": "許 @所有夥伴",
-    "allowMentionAllBotsHint": "唯群主可改。同僚或皆作覆，大群慎啟之。此開關不涉 AI 代答。"
+    "allowMentionAllBotsHint": "唯群主可改。同僚或皆作覆，大群慎啟之。此開關不涉 AI 代答。",
+    "notifications": {
+      "title": "訊息告知",
+      "all": "凡訊皆告",
+      "mentions": "惟提及吾",
+      "none": "不告",
+      "allHint": "群訊及所關注話題之新答，皆告之。",
+      "mentionsHint": "提及吾或 @全體時告之，分職之進展仍告。",
+      "noneHint": "止本群一切系統告知，未讀之訊仍存。",
+      "saving": "正存之…",
+      "saveFailed": "告知之設未能存，請再試。"
+    }
   },
   "errors": {
     "memberLimit": "一群議須同僚 2–6 位",

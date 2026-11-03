@@ -20,11 +20,12 @@ import type { CompanionArrivalNotice } from './capabilities.js';
 import { materializeCompanion, rebuildPending, type CompanionHistoryAttachment, type CompanionMaterializeHost, type CompanionMaterializeResult, type CompanionRoomDownload } from './materialize.js';
 import { createCompanionMirror, type CompanionMediaUpload, type CompanionMirrorAttachment, type CompanionMirrorCursor, type CompanionMirrorRow } from './mirror.js';
 import { readAllRoomMessages, transcriptPageOf } from './room.js';
+import { resolveCompanionSkillFiles } from './skillFiles.js';
 import { isCindyCompanion, mergeCompanionsInto, readProfileSnapshot } from './merge.js';
 import { importCloudHistory } from './materialize.js';
 import type { CompanionCloudState } from './state.js';
 import { chatRejection, errorCode, isUnreachable, type CompanionApi, type CompanionLog } from './types.js';
-import { COMPANION_PROFILE_KEY, COMPANION_READ_INCOMPLETE, COMPANION_VALUE_TOO_LARGE, createCompanionUploader, isCompanionProfileSnapshot, type CompanionPreferenceValue } from './uploader.js';
+import { COMPANION_PROFILE_KEY, COMPANION_READ_INCOMPLETE, COMPANION_VALUE_TOO_LARGE, canonicalJson, createCompanionUploader, isCompanionProfileSnapshot, type CompanionPreferenceValue } from './uploader.js';
 
 /** Electron/database side of the feature, wired in register.ts. */
 export interface CompanionCloudHost {
@@ -210,7 +211,26 @@ export function startCompanionCloud(input: {
   const backgroundIdentityApi = input.backgroundIdentity?.api ?? input.api;
   const refreshForeground = input.refreshForeground ?? input.refresh;
   const state = input.host.openState(input.endpoint, input.humanActorId, input.current);
-  const uploader = createCompanionUploader({ api: input.api, state, readValues: input.host.readValues, log: input.log,
+  const roomName = (botId: string) => input.bots().find(bot => bot.botId === botId)?.name ?? '';
+  const uploader = createCompanionUploader({ api: input.api, state, log: input.log,
+    readValues: async (botId, actorId) => resolveCompanionSkillFiles(await input.host.readValues(botId), {
+      known: sha256 => state.bot(botId)?.skillFileMedia?.[sha256],
+      gaps: state.bot(botId)?.skillFileGaps ?? {},
+      ...(input.media ? { upload: async file => {
+        const roomId = await mirror.ensureRoom(botId, actorId, roomName(botId));
+        // As the owner: a room file with no message is readable only by whoever uploaded it.
+        const [block] = await input.media!.upload(roomId, `skill-file:${file.sha256}`, [{ id: file.sha256, name: file.name, category: 'file',
+          mimeType: 'application/octet-stream', size: file.size, url: null, path: file.path }], input.humanActorId);
+        if (!block?.mediaId) throw new Error('ATTACHMENT_UNAVAILABLE');
+        return block.mediaId;
+      } } : {}),
+      retain: (media, gaps) => {
+        const known = state.bot(botId);
+        if (canonicalJson([media, gaps]) === canonicalJson([known?.skillFileMedia ?? {}, known?.skillFileGaps ?? {}])) return;
+        state.update(botId, actorId, entry => { entry.skillFileMedia = media; entry.skillFileGaps = gaps; });
+      },
+      ...(input.log ? { log: input.log } : {}),
+    }),
     confirmHome: async (_botId, actorId) => {
       const actors = await input.api<CompanionRuntimeActor[]>('/actors');
       return actors.find(actor => actor.id === actorId)?.homeDeviceId === input.selfDeviceId;

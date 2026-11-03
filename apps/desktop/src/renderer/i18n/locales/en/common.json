@@ -1007,8 +1007,14 @@
     },
     "saveFileName": "Screenshot",
     "saveFailed": "Couldn't save the screenshot",
+    "translation": {
+      "action": "Translate to {{language}}",
+      "targetLanguage": "Translation language",
+      "followUi": "Follow interface language",
+      "saveFailed": "Could not save the language. Select it again to retry."
+    },
     "prompt": {
-      "translate": "Recognize the text in this screenshot and translate it into English. Keep the original paragraphs and lists, and output only the translation. If the text is already in English, translate it into Simplified Chinese.",
+      "translate": "Detect the languages in this screenshot and translate the text into {{language}}. Preserve the original paragraphs, lists and tables. Leave text already in the target language unchanged; for mixed-language content, translate only the other languages. If all text is already in the target language, briefly say so without switching to another language. Otherwise output only the translation.",
       "explain": "Explain what this screenshot shows. If it's an error, explain the cause and how to fix it. If it's a chart, code, or an interface, explain what it shows and the key points.",
       "extract": "Extract the text from this screenshot exactly as written, keeping the original line breaks, paragraphs, and lists. Output tables as Markdown tables. Output only the extracted text."
     },
@@ -3629,6 +3635,8 @@
         "simpleSubtitle": "Multiple models, billed through one account."
       },
       "custom": {
+        "nameSearchUnavailable": "This provider is no longer available. Continue with a custom endpoint or search again.",
+        "nameSearchHint": "You can keep this name and continue with a custom endpoint.",
         "tag": "Custom",
         "editAria": "Edit connection settings",
         "deleteAria": "Delete",
@@ -10799,6 +10807,17 @@
         "copyFailed": "Could not copy. Select the link and copy it manually.",
         "createDescription": "Choose companions, or create the group first and invite people to join.",
         "settings": {
+          "notifications": {
+            "title": "Message notifications",
+            "all": "All messages",
+            "mentions": "Mentions only",
+            "none": "Off",
+            "allHint": "Get notified about group messages and new replies in followed threads.",
+            "mentionsHint": "Get notified when you are mentioned, including @everyone. Work split updates still notify you.",
+            "noneHint": "Turn off all system alerts for this group. Unread messages are kept.",
+            "saving": "Saving…",
+            "saveFailed": "Could not save notification settings. Try again."
+          },
           "name": "Group name",
           "topic": "Topic",
           "description": "Description",
@@ -18848,6 +18867,9 @@
     "failed": "The operation did not finish. Retry or open the local files."
   },
   "attachmentPreview": {
+    "fitWidth": "Fit Width",
+    "fitPage": "Fit Page",
+    "pageNumber": "Page Number",
     "more": "More actions",
     "retry": "Retry",
     "image": "Image",

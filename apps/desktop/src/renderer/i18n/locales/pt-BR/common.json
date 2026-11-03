@@ -1025,7 +1025,7 @@
     "saveFileName": "Captura de tela",
     "saveFailed": "Não foi possível salvar a captura de tela",
     "prompt": {
-      "translate": "Reconheça o texto nesta captura de tela e traduza-o para o inglês. Mantenha os parágrafos e as listas originais e retorne apenas a tradução. Se o texto já estiver em inglês, traduza-o para o chinês simplificado.",
+      "translate": "Detecte automaticamente os idiomas na captura de tela e traduza o texto para {{language}}. Mantenha os parágrafos, as listas e as tabelas. Preserve o conteúdo que já estiver no idioma de destino; se houver vários idiomas, traduza apenas os demais. Se todo o texto já estiver no idioma de destino, informe isso brevemente sem traduzi-lo para outro idioma. Nos demais casos, apresente apenas a tradução.",
       "explain": "Explique o que esta captura de tela mostra. Se for um erro, explique a causa e como corrigi-lo. Se for um gráfico, código ou uma interface, explique o que ele mostra e os pontos principais.",
       "extract": "Extraia o texto desta captura de tela exatamente como está escrito, mantendo as quebras de linha, os parágrafos e as listas originais. Apresente tabelas como tabelas Markdown. Retorne apenas o texto extraído."
     },
@@ -1073,6 +1073,12 @@
       "edit": "Editar",
       "autoUnavailable": "A rolagem automática parou. Você pode rolar manualmente na seleção.",
       "autoPermission": "A rolagem automática precisa de permissão de Acessibilidade. Autorize Cindy nos Ajustes do Sistema e tente novamente, ou role manualmente na seleção."
+    },
+    "translation": {
+      "action": "Traduzir para {{language}}",
+      "targetLanguage": "Idioma de destino",
+      "followUi": "Usar o idioma da interface",
+      "saveFailed": "Não foi possível salvar o idioma. Selecione-o novamente."
     }
   },
   "privacyExit": {
@@ -3675,6 +3681,8 @@
         "simpleSubtitle": "Vários modelos, cobrados por uma única conta."
       },
       "custom": {
+        "nameSearchUnavailable": "Este provedor não está mais disponível. Continue com um endpoint personalizado ou pesquise novamente.",
+        "nameSearchHint": "Você pode manter este nome e continuar com um endpoint personalizado.",
         "tag": "Personalizado",
         "editAria": "Editar configurações da conexão",
         "deleteAria": "Excluir",
@@ -10997,7 +11005,18 @@
           "accessToolsTitle": "Ferramentas e informações",
           "accessToolsHint": "Pode usar as ferramentas existentes de {{name}} e suas informações privadas. Os resultados ficam visíveis para todos os membros. As aprovações continuam sendo exigidas; revogar o acesso não desfaz ações já concluídas.",
           "capabilitiesRow": "Ferramentas e acesso de {{name}}",
-          "accessMenu": "Permissões neste grupo"
+          "accessMenu": "Permissões neste grupo",
+          "notifications": {
+            "title": "Notificações de mensagens",
+            "all": "Todas as mensagens",
+            "mentions": "Apenas menções",
+            "none": "Desativadas",
+            "allHint": "Receba notificações de mensagens do grupo e de novas respostas nos tópicos que você segue.",
+            "mentionsHint": "Receba notificações quando alguém mencionar você, inclusive com @todos. As atualizações da divisão do trabalho continuam gerando avisos.",
+            "noneHint": "Desative todos os alertas do sistema deste grupo. As mensagens não lidas são mantidas.",
+            "saving": "Salvando…",
+            "saveFailed": "Não foi possível salvar as notificações. Tente novamente."
+          }
         },
         "replyCount_many": "{{count}} respostas",
         "reactorsUnavailable_many": "Nomes indisponíveis para mais {{count}} membros"
@@ -19018,6 +19037,9 @@
     "failed": "A operação não foi concluída. Tente novamente ou abra os arquivos locais."
   },
   "attachmentPreview": {
+    "fitWidth": "Ajustar à largura",
+    "fitPage": "Ajustar à página",
+    "pageNumber": "Número da página",
     "more": "Mais ações",
     "retry": "Tentar novamente",
     "image": "Imagem",

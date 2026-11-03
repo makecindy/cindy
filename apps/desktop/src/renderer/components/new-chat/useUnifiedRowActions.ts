@@ -897,7 +897,7 @@ export function useUnifiedRowActions(options: UnifiedRowActionsOptions): Unified
     // ★ 记忆表(providerModelMemory)的既有消费方全部按 **wire id** 存取(会话恢复、
     // device-link 镜像、IM /model)。这里写归一化 id 会造出一份谁也读不到的影子记录,
     // 同时污染那张表。anchor.modelId 只是行身份,不是可以发出去的东西。
-    if (!modelMemory && onConfigure) {
+    if ((!modelMemory || modelMemory.supportsAgent?.(config.agent) === false) && onConfigure) {
       // 第 4 参(preferredEntry)不传 —— 「配置应用」不是一次模型选择,最近使用不在此记录。
       return selectRow(anchor, { ...config, effort }, undefined, undefined, true);
     }
@@ -946,7 +946,7 @@ export function useUnifiedRowActions(options: UnifiedRowActionsOptions): Unified
       return onFastModeChangeLive(enabled);
     }
     // 同上:Fast 槽也按 wire id 存取。
-    if (!modelMemory && onConfigure) {
+    if ((!modelMemory || modelMemory.supportsAgent?.(config.agent) === false) && onConfigure) {
       return selectRow(anchor, { ...config, fast: enabled }, undefined, undefined, true);
     }
     modelMemory?.setFast(

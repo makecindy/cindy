@@ -125,7 +125,7 @@ export function createBotRemoteSettingsResource(deps: BotRemoteSettingsDeps) {
       actions.push({ id, label: copy[operation], fields,
         ...(operation === 'profile' && preparing ? { disabled: true } : {}),
         ...(operation === 'permissions' ? { confirmation: { title: copy.permissions, body: copy.permissionWarning, confirmLabel: copy.save } } : {}) });
-      return { id: operation, primitive: 'form', title: copy[operation], fallbackMarkdown: operation === 'models' ? settings.modelChain.map(route => [route.model, route.providerId, route.harness, route.effort, `Fast: ${route.fastMode}`].filter(Boolean).join(' · ')).join('\n') : copy[operation].fallback, data: { actionId: id, values } };
+      return { id: operation, primitive: 'form', title: copy[operation], fallbackMarkdown: operation === 'models' ? settings.modelChain.map(route => [route.model, route.providerId, route.harness, route.effort, `Fast: ${route.fastMode}`].filter(Boolean).join(' · ')).join('\n') : copy[operation].fallback, data: { actionId: id, values, ...(operation === 'models' ? { acceptsModelSelection: true } : {}) } };
     };
     resource.blocks = [
       form('profile', [{ id: 'name', kind: 'text', label: copy.name, required: true }, { id: 'description', kind: 'multiline', label: copy.description }, { id: 'identity', kind: 'multiline', label: copy.identity }], { name: source.name, description: source.description, identity: settings.identity }),
@@ -231,8 +231,9 @@ export function createBotRemoteSettingsResource(deps: BotRemoteSettingsDeps) {
         if (!Array.isArray(value) || !chain.length || chain.length !== value.length || value.some(route => !['claude', 'codex', 'pi'].includes(route?.harness))) throwIpcError('INVALID_PARAMS', 'Invalid model chain');
       }
       const capabilities: Record<string, unknown> = {};
+      const acceptsModelSelection = 'followsDefault' in input || 'modelChain' in input;
       // Old clients only send primary fields. Absence must preserve the task override.
-      if ('followsDefault' in input || 'modelChain' in input) {
+      if (acceptsModelSelection) {
         capabilities.modelChainOverride = followsDefault ? null : chain;
         capabilities.modelOverride = null;
       }
@@ -251,7 +252,7 @@ export function createBotRemoteSettingsResource(deps: BotRemoteSettingsDeps) {
         if (!inherits && !route) throwIpcError('INVALID_PARAMS', 'Task model required');
         capabilities.taskModelOverride = inherits ? null : route;
       }
-      patch = { capabilities };
+      patch = { capabilities, ...(acceptsModelSelection ? { acceptSavedModelSelectionVersion: grant.version } : {}) };
     }
     if (patch && !Object.keys(patch).length) throwIpcError('INVALID_PARAMS', 'No changed teammate fields');
     if (grant.operation === 'permissions') {
