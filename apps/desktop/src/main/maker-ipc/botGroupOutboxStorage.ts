@@ -28,6 +28,7 @@ let chain = Promise.resolve<unknown>(undefined);
 interface RendererOwner { live: boolean }
 const rendererOwners = new WeakMap<WebContents, RendererOwner>();
 const entryOwners = new Map<string, RendererOwner>();
+const pendingMutations = new Map<string, number>();
 let ownershipAccount: string | null = null;
 
 /** Main-derived incarnation, never a renderer-supplied ID or a persisted lease. */
@@ -54,6 +55,11 @@ function rendererOwner(sender: WebContents): RendererOwner {
 export function accessBotGroupOutbox(input: unknown, sender?: WebContents): Promise<BotGroupOutboxStoredEntry[]> {
   const request = requestSchema.parse(input);
   const renderer = sender ? rendererOwner(sender) : undefined;
+  const identity = request.action === 'put' ? request.entry.input : request.action === 'remove' ? request : null;
+  const mutationKey = identity ? JSON.stringify([request.owner.dataOwnerId, identity.groupId, identity.clientId]) : null;
+  // A queued edit still owns its intent after its renderer dies. Earlier lists
+  // must not claim the row before that already-entered mutation can finish.
+  if (mutationKey) pendingMutations.set(mutationKey, (pendingMutations.get(mutationKey) ?? 0) + 1);
   const operation = async () => {
     const current = () => !isAppSessionBoundaryPending() && getActiveAppSession().dataOwnerId === request.owner.dataOwnerId
       && getActiveAppSession().generation === request.owner.generation;
@@ -83,6 +89,7 @@ export function accessBotGroupOutbox(input: unknown, sender?: WebContents): Prom
         const value = read(path.join(root, name));
         if (!value) return [];
         const key = ownershipKey(value.input.groupId, value.input.clientId);
+        if (pendingMutations.has(key)) return [];
         const held = entryOwners.get(key);
         if (renderer && held?.live && held !== renderer) return [];
         if (renderer) entryOwners.set(key, renderer);
@@ -129,7 +136,12 @@ export function accessBotGroupOutbox(input: unknown, sender?: WebContents): Prom
     }
     return [];
   };
-  const pending = chain.then(operation);
+  const pending = chain.then(operation).finally(() => {
+    if (!mutationKey) return;
+    const remaining = (pendingMutations.get(mutationKey) ?? 1) - 1;
+    if (remaining) pendingMutations.set(mutationKey, remaining);
+    else pendingMutations.delete(mutationKey);
+  });
   chain = pending.catch(() => undefined);
   return pending;
 }

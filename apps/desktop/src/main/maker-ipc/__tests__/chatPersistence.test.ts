@@ -135,8 +135,9 @@ it.each(['render-process-gone', 'destroyed', 'did-navigate'])('restores only orp
 });
 
 // A renderer can die while an accepted put/remove waits behind media pinning.
-// The serialized removal must still tombstone the edited message before recovery.
-it('finishes accepted writes and removals after their renderer crashes', async () => {
+// A recovery list may already be queued before the remove enters. It must not
+// claim the row and reject the edit after the original renderer dies. Unit tier.
+it.each(['before', 'after'])('finishes accepted mutations when recovery is queued %s removal and the renderer crashes', async order => {
   const secondary = new EventEmitter() as unknown as WebContents;
   const main = new EventEmitter() as unknown as WebContents;
   let pinned!: () => void;
@@ -149,12 +150,20 @@ it('finishes accepted writes and removals after their renderer crashes', async (
     files: [{ url: 'cindy-media://blob/held.png' }] };
   const put = accessBotGroupOutbox({ action: 'put', owner: state.owner, entry }, secondary);
   await started;
+  const earlyList = order === 'before' ? accessBotGroupOutbox({ action: 'list', owner: state.owner }, main) : null;
   const remove = accessBotGroupOutbox({ action: 'remove', owner: state.owner, groupId: 'room', clientId: entry.input.clientId }, secondary);
   secondary.emit('render-process-gone');
-  const restored = accessBotGroupOutbox({ action: 'list', owner: state.owner }, main);
+  const restored = earlyList ?? accessBotGroupOutbox({ action: 'list', owner: state.owner }, main);
   pinned();
-  await put;
-  await remove;
-  expect(await restored).toEqual([]);
-  main.emit('destroyed');
+  try {
+    await put;
+    await remove;
+    expect(await restored).toEqual([]);
+    // A completed mutation must not leave a reservation that hides future rows.
+    await accessBotGroupOutbox({ action: 'put', owner: state.owner, entry });
+    expect((await accessBotGroupOutbox({ action: 'list', owner: state.owner }, main)).map(row => row.input.clientId)).toEqual([entry.input.clientId]);
+    await accessBotGroupOutbox({ action: 'remove', owner: state.owner, groupId: 'room', clientId: entry.input.clientId }, main);
+  } finally {
+    main.emit('destroyed');
+  }
 });
