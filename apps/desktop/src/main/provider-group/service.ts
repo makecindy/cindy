@@ -843,10 +843,12 @@ export function createProviderGroupService(deps: ProviderGroupServiceDeps): Prov
       },
       async isKnownDown(providerId, memberKey, model, agentKind) {
         const view = await remote.view(ownerDeviceId, providerId, model, agentKind);
+        if (view.providerContinuity?.stale) return false;
         return view.members.find((m) => m.key === memberKey)?.state === 'cooling';
       },
       async shouldMoveAway(providerId, _config, memberKey, model, agentKind) {
         const view = await withTimeout(remote.view(ownerDeviceId, providerId, model, agentKind), PROVIDER_GROUP_BEFORE_SEND_TIMEOUT_MS);
+        if (view?.providerContinuity?.stale) return null;
         const state = view?.members.find((m) => m.key === memberKey)?.state;
         if (!state) return null;
         if (view?.model !== model && state !== 'offline' && state !== 'unavailable' && state !== 'cooling') return null;
@@ -856,6 +858,7 @@ export function createProviderGroupService(deps: ProviderGroupServiceDeps): Prov
         // 组所在电脑随状态回每台的配额窗口(旧版本不回，就不提议)；只换到它看着「可用」(在线、未满载、未暂停、
         // 不在冷却)且 5 小时配额不紧张的电脑。
         const view = await withTimeout(remote.view(ownerDeviceId, providerId, model, agentKind), PROVIDER_GROUP_BEFORE_SEND_TIMEOUT_MS);
+        if (view?.providerContinuity?.stale) return null;
         const current = view?.members.find((m) => m.key === memberKey);
         if (!view || view.model !== model || !current?.quota || (current.state !== 'available' && current.state !== 'full')) return null;
         const candidates = view.members.flatMap((m) => m.key !== memberKey && !exclude.has(m.key) && m.state === 'available'

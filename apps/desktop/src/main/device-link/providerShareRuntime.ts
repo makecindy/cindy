@@ -91,7 +91,7 @@ import { fetchIdentityCard, providerShareApi, providerShareLinkFor, providerShar
 import { configureProviderShareApprovalWindows } from './providerShareApprovalWindows.js';
 import {
   findReceivedShare,
-  providerShareReceivedRevision,
+  providerShareAccessEpoch,
   getReceivedShares,
   isReceivedSharesReady,
   getReceivedSharesSnapshot,
@@ -1005,14 +1005,13 @@ async function execute(command: ProviderShareCommand, assertCurrent: () => void 
     case 'insights': {
       const assertOwner = captureProviderManagementScope();
       const share = findReceivedShare(command.shareId);
-      const revision = providerShareReceivedRevision();
+      const revision = providerShareAccessEpoch(command.shareId);
       if (!share || share.status !== 'active') throwIpcError('PERMISSION_DENIED', 'Provider share is not available');
-      if (!share.hostOnline) throwIpcError('DEVICE_LINK_DEVICE_OFFLINE', 'Provider share host is offline');
       if (!shareInvoke) throwIpcError('DEVICE_LINK_NOT_CONNECTED', 'Provider share connection is not ready');
       const assertShare = () => {
         assertOwner();
         const latest = findReceivedShare(command.shareId);
-        if (providerShareReceivedRevision() !== revision || !latest || latest.memberId !== share.memberId || latest.status !== 'active' || !latest.hostOnline) {
+        if (providerShareAccessEpoch(command.shareId) !== revision || !latest || latest.memberId !== share.memberId || latest.status !== 'active') {
           throwIpcError('PERMISSION_DENIED', 'Provider share changed');
         }
       };

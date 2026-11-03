@@ -199,12 +199,17 @@ import { localNetworkStore, type NetworkState } from '@/device-link/localNetwork
 
 export interface DeviceLinkConnectionState {
   status: DeviceLinkStatus;
+  /** Per-device status describes the usable data path; signaling remains separately observable. */
+  signalingStatus?: DeviceLinkStatus;
+  usingRetainedDirect?: boolean;
   connectionEpoch: number;
   connectionIssue: DeviceLinkConnectionIssue | null;
 }
 
 export interface DeviceLinkContextValue {
   status: DeviceLinkStatus;
+  signalingStatus?: DeviceLinkStatus;
+  usingRetainedDirect?: boolean;
   /** The official connection used by shared tasks; the primary connection in official mode. */
   sharedTaskConnection?: DeviceLinkConnectionState;
   getConnectionState?(deviceId: string): DeviceLinkConnectionState;
@@ -610,7 +615,7 @@ export function DeviceLinkProvider({ children }: { children: ReactNode }) {
         || backgroundReleaseGenerationRef.current !== releaseGeneration
         || backgroundReleaseInFlightRef.current
         || AppState.currentState !== 'active'
-        || client.connectionFor(deviceId).getStatus() !== 'online'
+        || !canUsePeerData(client, deviceId)
         || revokedDevicesStore.has(deviceId)
         || client.isOutboundExplicitlyClosed(deviceId)
         || rehydrateSuppressedDeviceIds.has(deviceId)
@@ -654,7 +659,7 @@ export function DeviceLinkProvider({ children }: { children: ReactNode }) {
   ): void => {
     const epoch = connectionEpochFor(deviceId);
     const isCurrent = () => clientRef.current === client
-      && client.connectionFor(deviceId).getStatus() === 'online'
+      && canUsePeerData(client, deviceId)
       && connectionEpochFor(deviceId) === epoch
       && remoteSubscribedTopicsRef.current.get(deviceId)?.has('sessions') === true
       && registryRef.current.hasTopic(deviceId, 'sessions')
@@ -768,7 +773,7 @@ export function DeviceLinkProvider({ children }: { children: ReactNode }) {
   ): Promise<PeerRecoveryResult> => {
     if (
       client !== clientRef.current
-      || client.connectionFor(targetDeviceId).getStatus() !== 'online'
+      || !canUsePeerData(client, targetDeviceId)
       || backgroundReleaseInFlightRef.current
     ) {
       return { retry: false };
@@ -815,7 +820,7 @@ export function DeviceLinkProvider({ children }: { children: ReactNode }) {
       isCancelled: () => (
         backgroundReleaseInFlightRef.current
         || client !== clientRef.current
-        || client.connectionFor(targetDeviceId).getStatus() !== 'online'
+        || !canUsePeerData(client, targetDeviceId)
         || revokedDevicesStore.has(targetDeviceId)
         || client.isOutboundExplicitlyClosed(targetDeviceId)
         || !isPresenceEligibleForRemoteRequest(
@@ -915,7 +920,7 @@ export function DeviceLinkProvider({ children }: { children: ReactNode }) {
           ...opts,
           subscriptionIdentity: remoteSubscribedTopicsRef.current.identity(deviceId, sharedTaskTopics(deviceId, ['sessions', `session:${sessionId}`])),
         }, () => client === clientRef.current
-          && client.connectionFor(deviceId).getStatus() === 'online'
+          && canUsePeerData(client, deviceId)
           && connectionEpochFor(deviceId) === epoch
           && backgroundReleaseGenerationRef.current === releaseGeneration
           && !backgroundReleaseInFlightRef.current
@@ -934,7 +939,7 @@ export function DeviceLinkProvider({ children }: { children: ReactNode }) {
     }
     const forcedOpenStillPending = forcedPeerRecoveryIntentRef.current.has(targetDeviceId)
       && client === clientRef.current
-      && client.connectionFor(targetDeviceId).getStatus() === 'online'
+      && canUsePeerData(client, targetDeviceId)
       && !revokedDevicesStore.has(targetDeviceId)
       && hasOutboundPeerRecoveryIntent(client, targetDeviceId)
       && isPresenceEligibleForRemoteRequest(
@@ -965,7 +970,7 @@ export function DeviceLinkProvider({ children }: { children: ReactNode }) {
     if (
       client !== clientRef.current
       || (targetDeviceId
-        ? client.connectionFor(targetDeviceId).getStatus() !== 'online'
+        ? !canUsePeerData(client, targetDeviceId)
         : client.getStatus() !== 'online' && client.crossAccountConnection().getStatus() !== 'online')
       || backgroundReleaseInFlightRef.current
     ) {
@@ -1090,6 +1095,8 @@ export function DeviceLinkProvider({ children }: { children: ReactNode }) {
     const client = new RoutedDeviceLinkClient({
       ...connectionOptions,
       directRuntime: directBridge.runtime,
+      // Existing authenticated foreground paths only; stop/background still releases them.
+      retainDirectPathsOnRelayLoss: true,
       getWsUrl: () => deviceLinkWsUrl(),
       // 自建中转用中转凭证 + CindyRelay,账号 token 绝不发往中转(docs/self-hosted-relay-plan.md §5.2)。
       // 先等本账号的中转设置读完,避免冷启动先连上官方再切走;取 token 期间路由变了就放弃这一轮,
@@ -1123,7 +1130,7 @@ export function DeviceLinkProvider({ children }: { children: ReactNode }) {
     const catalogRefresh = createDeviceCatalogRefresh({
       connectionEpoch: connectionEpochFor,
       canRead: (deviceId) => client === clientRef.current
-        && client.connectionFor(deviceId).getStatus() === 'online'
+        && canUsePeerData(client, deviceId)
         && !backgroundReleaseInFlightRef.current
         && !unresponsiveDevicesStore.has(deviceId)
         && !revokedDevicesStore.has(deviceId)
@@ -1174,12 +1181,14 @@ export function DeviceLinkProvider({ children }: { children: ReactNode }) {
     ])].filter((deviceId) => client.connectionFor(deviceId) === connection);
     const invalidateConnectionPeers = (connection: DeviceLinkClient) => {
       for (const deviceId of connectionPeerIds(connection)) {
+        if (connection.hasOfflineDirectPath(deviceId)) continue;
         catalogRefresh.cancel(deviceId);
         invalidatePeerLinkState(deviceId, openLinkInFlightRef.current,
           remoteSubscribedTopicsRef.current, noteSessionLiveStreamsInterrupted);
         peerRecoverySchedulerRef.current?.cancel(deviceId);
       }
-      if (client.getStatus() !== 'online' && client.crossAccountConnection().getStatus() !== 'online') {
+      if (client.getStatus() !== 'online' && client.crossAccountConnection().getStatus() !== 'online'
+        && !connectionPeerIds(connection).some(deviceId => connection.hasOfflineDirectPath(deviceId))) {
         peerRecoverySchedulerRef.current?.pause();
       }
     };
@@ -1287,16 +1296,19 @@ export function DeviceLinkProvider({ children }: { children: ReactNode }) {
       );
       if (shouldRecover) void rehydrate(deviceId);
     });
+    const retainedOfflinePeers = new Set<string>();
     const applyPresence = (snap: PresenceSnapshot) => {
+      const retained = !snap.online && client.connectionFor(snap.deviceId).hasOfflineDirectPath(snap.deviceId);
+      if (retained) retainedOfflinePeers.add(snap.deviceId); else retainedOfflinePeers.delete(snap.deviceId);
       markPresenceAvailabilityEpoch(presenceAvailabilityEpochsRef.current, snap.deviceId);
       // presence 变化代表目标链路代际变化(offline / remote-disabled / 恢复都一样):
       // 上一代成功 link 不能跨代复用,下一次请求必须重新 link-open 确认。
-      openLinkInFlightRef.current.delete(snap.deviceId);
+      if (!retained) openLinkInFlightRef.current.delete(snap.deviceId);
       setLastPresenceSnapshot(snap);
       setPresenceVersion((n) => n + 1);
       const presence = updatePresenceAvailability(
         presenceAvailableByDeviceRef.current,
-        snap,
+        retained ? { ...snap, online: true, remoteControlEnabled: true } : snap,
         presencePendingRecoveryDeviceIdsRef.current,
       );
       if (presence.available) {
@@ -1358,6 +1370,15 @@ export function DeviceLinkProvider({ children }: { children: ReactNode }) {
       if (presence.recovered) void rehydrate(snap.deviceId);
     };
     const offPresence = client.onPresenceChanged(applyPresence);
+    const offPeerPath = client.onPeerPathChanged(({ deviceId, path }) => {
+      setPresenceVersion(version => version + 1);
+      if (path !== 'relay' || (!retainedOfflinePeers.has(deviceId) && canUsePeerData(client, deviceId))) return;
+      applyPresence({ deviceId, online: false, remoteControlEnabled: true,
+        deviceName: '', platform: '', appVersion: '', busy: false, lastSeenAt: Date.now() });
+      catalogRefresh.cancel(deviceId);
+      invalidatePeerLinkState(deviceId, openLinkInFlightRef.current,
+        remoteSubscribedTopicsRef.current, noteSessionLiveStreamsInterrupted);
+    });
     rosterConsumerRef.current = () => {
       const epoch = connectionEpochRef.current;
       const presenceEpoch = presenceAvailabilityEpochsRef.current.next;
@@ -1667,6 +1688,7 @@ export function DeviceLinkProvider({ children }: { children: ReactNode }) {
       offFrame();
       catalogRefresh.dispose();
       offPresence();
+      offPeerPath();
       offPeerTransportReset();
       offStatus();
       offCrossAccountStatus();
@@ -1832,9 +1854,12 @@ export function DeviceLinkProvider({ children }: { children: ReactNode }) {
     clientRef.current && clientRef.current.crossAccountConnection() !== clientRef.current
       ? crossAccountState : { status, connectionEpoch, connectionIssue }
   ), [crossAccountState, status, connectionEpoch, connectionIssue]);
-  const getConnectionState = useCallback((deviceId: string): DeviceLinkConnectionState => (
-    isSharedTaskPeer(deviceId) ? sharedTaskConnection : { status, connectionEpoch, connectionIssue }
-  ), [sharedTaskConnection, status, connectionEpoch, connectionIssue]);
+  const getConnectionState = useCallback((deviceId: string): DeviceLinkConnectionState => {
+    const state = isSharedTaskPeer(deviceId) ? sharedTaskConnection : { status, connectionEpoch, connectionIssue };
+    const retained = clientRef.current?.connectionFor(deviceId).hasOfflineDirectPath(deviceId) === true
+      && !revokedDevicesStore.has(deviceId) && presenceAvailableByDeviceRef.current.get(deviceId) !== false;
+    return retained ? { ...state, status: 'online', connectionIssue: null, signalingStatus: state.status, usingRetainedDirect: true } : state;
+  }, [sharedTaskConnection, status, connectionEpoch, connectionIssue, presenceVersion]);
 
   const value = useMemo<DeviceLinkContextValue>(() => ({
     beginBackgroundTransition,
@@ -1882,9 +1907,12 @@ export function DeviceLinkProvider({ children }: { children: ReactNode }) {
     subscriptionVersion,
   ]);
 
+  const retainedDirectActive = [...new Set([...registryRef.current.deviceIds(),
+    ...openLinkInFlightRef.current.keys(), ...remoteSubscribedTopicsRef.current.keys()])]
+    .some(deviceId => clientRef.current?.connectionFor(deviceId).hasOfflineDirectPath(deviceId));
   return <DeviceLinkContext.Provider value={value}>
-    <DirectLinkTransport key={`${auth.accountGeneration}:${connectionEpoch}`} bridge={directBridge}
-      owner={`${auth.accountGeneration}:${connectionEpoch}`} enabled={auth.isAuthenticated && status === 'online'} />
+    <DirectLinkTransport key={`${auth.accountGeneration}:${relayRouteGeneration}`} bridge={directBridge}
+      owner={`${auth.accountGeneration}:${relayRouteGeneration}`} enabled={auth.isAuthenticated && (status === 'online' || retainedDirectActive)} />
     {children}
   </DeviceLinkContext.Provider>;
 }
@@ -2227,6 +2255,11 @@ async function rebuildSessionSnapshot(
 // (通常 <1s),又短到连不上时能快速失败、让上层 withTransientRemoteRetry 重试,
 // 而不是把单次 client.invoke park 在退避 gap 里干等十几秒。
 const CONNECT_READY_TIMEOUT_MS = 1_500;
+
+function canUsePeerData(client: DeviceLinkClient, deviceId: string): boolean {
+  const connection = client.connectionFor(deviceId);
+  return connection.getStatus() === 'online' || connection.hasOfflineDirectPath(deviceId);
+}
 
 // 发请求前确保连接就绪:online 直接放行;否则促成立即重连并有界等待上线,
 // 超时抛 NOT_CONNECTED(transient)交由上层重试 —— 把"等整个退避 gap"压成"等一次重连"。

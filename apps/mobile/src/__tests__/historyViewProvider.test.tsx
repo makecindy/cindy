@@ -16,7 +16,10 @@ import {
 import { isHistoryViewUnavailable } from '@cindy/maker-shared/message-window';
 import { DeviceLinkProvider, useDeviceLink, type DeviceLinkContextValue } from '../device-link/DeviceLinkContext';
 // Platform process lifecycle is covered in fileWebViewTermination.test.tsx.
-vi.mock('../device-link/DirectLinkTransport', () => ({ DirectLinkTransport: () => null }));
+const directTransport = vi.hoisted(() => ({ enabled: false, owner: '' }));
+vi.mock('../device-link/DirectLinkTransport', () => ({ DirectLinkTransport: (props: typeof directTransport) => {
+  Object.assign(directTransport, props); return null;
+} }));
 import { useMobileMakerTransport } from '../device-link/useMobileMakerTransport';
 import type { MobileMakerTransport } from '../device-link/mobileMakerTransport';
 import { acquireDeviceSendSlot, resetDeviceResponsivenessTracking, settleDeviceSend, unresponsiveDevicesStore } from '../device-link/unresponsiveDevicesStore';
@@ -78,6 +81,7 @@ const transport = vi.hoisted(() => {
     crossAccountStatusChanged: (status: DeviceLinkStatus) => void = () => {};
     presenceChanged: (snapshot: PresenceSnapshot) => void = () => {};
     peerReset: Parameters<DeviceLinkClient['onPeerTransportReset']>[0] = () => {};
+    peerPath: Parameters<DeviceLinkClient['onPeerPathChanged']>[0] = () => {};
     frame: Parameters<DeviceLinkClient['onFrame']>[0] = () => {};
     openLink = vi.fn<(deviceId: string) => Promise<LinkAcceptPayload>>();
     invoke = vi.fn<DeviceLinkClient['invoke']>(async (_deviceId, _payload, _timeout, options) => {
@@ -102,12 +106,14 @@ const transport = vi.hoisted(() => {
     onStatusChange(listener: Client['statusChanged']) { this.statusChanged = listener; return () => {}; }
     onPresenceChanged(listener: Client['presenceChanged']) { this.presenceChanged = listener; return () => {}; }
     onPeerTransportReset(listener: Client['peerReset']) { this.peerReset = listener; return () => {}; }
+    onPeerPathChanged(listener: Client['peerPath']) { this.peerPath = listener; return () => {}; }
     onConnectionIssue = () => () => {};
     onFrame(listener: Client['frame']) { this.frame = listener; return () => {}; }
     onReliableFrameBeforeLink = () => () => {};
     onSeparateCrossAccountStatus(listener: Client['crossAccountStatusChanged']) { this.crossAccountStatusChanged = listener; return () => {}; }
     onSeparateCrossAccountIssue = () => () => {};
-    hasOfflineDirectPath = () => false;
+    retainedPeers = new Set<string>();
+    hasOfflineDirectPath = (deviceId: string) => this.retainedPeers.has(deviceId);
     crossAccountConnection() { return this.separate ?? this; }
     connectAllNow(...args: unknown[]) { (this.connectNow as (...input: unknown[]) => void)(...args); }
     restartConnections(...args: unknown[]) { (this.restartConnection as (...input: unknown[]) => void)(...args); }
@@ -303,6 +309,53 @@ describe('Provider device roster reads', () => {
     expect(await joined).toEqual({ devices: [offlineDesktop] });
     expect(await fresh).toEqual({ devices: [onlineDesktop] });
     expect(context.getPresenceAvailability('desktop')).toBe(true);
+  });
+});
+
+// Unit: a relay outage must not invalidate the phone's accepted foreground data path.
+// Minimal failure: accepted history link, relay disconnect + offline presence, then a second read.
+describe('Provider retained foreground direct paths', () => {
+  it('keeps accepted history and per-device readiness through relay loss, then ends readiness with the path', async () => {
+    const client = transport.clients[0];
+    client.openLink.mockResolvedValue(accepted(supported));
+    scopedPeer = 'host';
+    await act(async () => { render(); await context.invoke('host', historyChannel); });
+    const transportOwner = directTransport.owner;
+    await act(async () => {
+      client.retainedPeers.add('host');
+      client.status = 'connecting'; client.statusChanged('connecting');
+      client.presenceChanged({ deviceId: 'host', deviceName: 'Host', platform: 'darwin', appVersion: 'test',
+        online: false, remoteControlEnabled: true, busy: false, lastSeenAt: 1 });
+    });
+    expect(scopedContext.status).toBe('online');
+    expect(scopedContext.signalingStatus).toBe('connecting');
+    expect(directTransport).toMatchObject({ enabled: true, owner: transportOwner });
+    expect(context.getPresenceAvailability('host')).toBe(true);
+    await act(async () => { expect(await context.invoke('host', historyChannel)).toBe('history page'); });
+    expect(client.openLink).toHaveBeenCalledTimes(1);
+    expect(client.waitUntilOnline).not.toHaveBeenCalled();
+    await act(async () => { client.retainedPeers.clear(); client.peerPath({ deviceId: 'host', path: 'relay' }); });
+    expect(scopedContext.status).toBe('connecting');
+    expect(context.getPresenceAvailability('host')).toBe(false);
+    expect(directTransport.enabled).toBe(false);
+    expect(client.restartConnection).not.toHaveBeenCalled();
+  });
+
+  it('still obeys an explicit remote-control prohibition while a path was retained', async () => {
+    const client = transport.clients[0];
+    client.openLink.mockResolvedValue(accepted(supported));
+    scopedPeer = 'host';
+    await act(async () => { render(); await context.invoke('host', historyChannel); });
+    await act(async () => {
+      client.retainedPeers.add('host');
+      client.presenceChanged({ deviceId: 'host', deviceName: 'Host', platform: 'darwin', appVersion: 'test',
+        online: true, remoteControlEnabled: false, busy: false, lastSeenAt: 1 });
+    });
+    expect(context.getPresenceAvailability('host')).toBe(false);
+    expect(scopedContext.usingRetainedDirect).not.toBe(true);
+    const sent = client.invoke.mock.calls.length;
+    await expect(context.invoke('host', historyChannel)).rejects.toMatchObject({ code: 'REMOTE_DISABLED' });
+    expect(client.invoke).toHaveBeenCalledTimes(sent);
   });
 });
 

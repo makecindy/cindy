@@ -10,6 +10,7 @@
  */
 import { useEffect, useState } from 'react';
 import { AppState } from 'react-native';
+import { isProviderAccessDeniedError } from '@cindy/device-link';
 
 import type { ProviderView } from '@cindy/model-providers/registry';
 
@@ -114,7 +115,8 @@ export function useDeviceProviders(deviceId?: string, pickerOpen = false): UseDe
     let cancelled = false;
     const unsubscribeError = subscribeDeviceProvidersError(deviceId, (error) => {
       if (cancelled) return;
-      if (isDeviceProvidersUnsupportedError(error)) setPayload(EMPTY_PAYLOAD);
+      if (isDeviceProvidersUnsupportedError(error) || isProviderAccessDeniedError(error)
+        || isDeviceProvidersVisibilityNotReadyError(error)) setPayload(EMPTY_PAYLOAD);
       setReadyFor(null);
       setLoading(false);
       setError(formatRemoteError(error));

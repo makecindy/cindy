@@ -7,6 +7,7 @@
  */
 import { isProviderShareAgentDeviceId, PROVIDER_SHARE_AGENT_DEVICE_PREFIX } from './providerShare.js';
 import type { ProviderManagementRequest, ProviderManagementResult } from './providerManagement';
+import { readProviderMetadataContinuity, type ProviderMetadataContinuity } from '@cindy/device-link';
 
 export const PROVIDER_GROUP_IPC = {
   /** Renderer → Main：全部操作走同一个命令通道。 */
@@ -193,6 +194,7 @@ export interface ProviderGroupReshareSummary {
 }
 
 export interface ProviderGroupView {
+  providerContinuity?: ProviderMetadataContinuity;
   /** Some executors have not confirmed this group's subscription speed policy yet. */
   fastPolicyPending?: boolean;
   providerId: string;
@@ -763,5 +765,6 @@ export function parseProviderGroupRemoteView(raw: unknown, groupProviderId: stri
     }];
   });
   return { providerId: groupProviderId, config, members, ...(model ? { model } : {}),
+    ...(readProviderMetadataContinuity(raw) ? { providerContinuity: readProviderMetadataContinuity(raw) } : {}),
     ...(value.fastPolicyPending === true ? { fastPolicyPending: true } : {}) };
 }

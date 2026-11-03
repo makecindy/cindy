@@ -63,6 +63,8 @@ const transport = vi.hoisted(() => {
     onStatusChange = () => () => {};
     onPresenceChanged = () => () => {};
     onPeerTransportReset = () => () => {};
+    onPeerPathChanged = () => () => {};
+    hasOfflineDirectPath = () => false;
     onConnectionIssue = () => () => {};
     frame: (envelope: Envelope) => void = () => {};
     onFrame(listener: Client['frame']) { this.frame = listener; return () => {}; }

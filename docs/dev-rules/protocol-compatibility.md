@@ -32,6 +32,22 @@ Desktop 和 Mobile 共用 shared parser，仅认可未删除的伙伴作者消�
 但旧应用会恢复旧的参与判定，不能承诺回滚期间保持新语义。Device Link 和自建中转无需适配。
 本地回归与生产部署分别验收，不将代码完成视为线上已生效。
 
+## 供应商目录的短断连续性（2026-11-03）
+
+`maker:provider:list`、对象形式的模型能力查询和同账号组 `view` 回包可附带
+`providerContinuity: { stale, remainingMs }`。它只描述目录信息的新鲜度，不是授权、预算或执行成功证明。
+转发者必须继承剩余期，并扣除本次读取花费的时间；不可在每一跳重新起算 30 分钟。
+Main、Desktop 与 Mobile 的视图缓存均以墙钟或单调时钟任一先到期为准，重复读取和失败不续期。
+
+没有此字段的旧端保留原有视图生命周期；不能在保持旧数组/标量回包形状的同时可靠转交剩余期，
+因此这些回包不进入新的 Main 连续性缓存。授权查询、远程 Agent `caps`、组分配与写操作不缓存。
+明确拒绝、账号/区域/权限代次变化或显式断开作废对应快照；网络、限流和服务暂时不可用才允许回退。
+恢复探测使用实时调用：分享 peer 走其已授权的 Agent 服务，不查询它无权读取的主人任务数据库。
+
+只新增可忽略的业务结果字段，不新增帧类型、relay 权限或服务端依赖；旧客户端仍按原字段读取。
+回归入口为 `metadataContinuity.test.ts`、Main `providerMetadataContinuity.test.ts`、
+`deviceLinkIpc.test.ts`、`responsivenessTracker.test.ts` 与两端模型目录缓存测试。
+
 ## 机器实时状态（2026-11-02）
 
 新增只读 invoke `maker:machine:status`（`packages/device-link/src/machineStatus.ts`），同账号远控可用，不进共享任务访客白名单。

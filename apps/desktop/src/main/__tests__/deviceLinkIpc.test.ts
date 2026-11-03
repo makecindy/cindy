@@ -5,6 +5,14 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
 const capabilities = vi.hoisted(() => ({ canUseDeviceLink: true }));
+const metadataOwner = vi.hoisted(() => ({ key: 'directory-owner-a' }));
+vi.mock('../appSessionState.js', async importOriginal => ({
+  ...await importOriginal<typeof import('../appSessionState.js')>(), activeOwnerScopeKey: () => metadataOwner.key,
+}));
+vi.mock('../clientEndpointsService.js', async importOriginal => ({
+  ...await importOriginal<typeof import('../clientEndpointsService.js')>(),
+  getClientEndpoint: () => 'https://continuity.test.invalid',
+}));
 
 // Transport windows are outside this in-memory IPC handler harness.
 vi.mock('../device-link/filePeer', () => ({
@@ -184,6 +192,7 @@ describe('device-link IPC handlers', () => {
   beforeEach(() => {
     refcountTesting.reset(); // 多窗口订阅引用计数:每个用例独立
     capabilities.canUseDeviceLink = true;
+    metadataOwner.key = 'directory-owner-a';
     __resetDeviceListCoalescingForTests(); // /devices 合并窗口:不让上一用例的在途请求漏到下一个
     vi.restoreAllMocks();
   });
@@ -324,6 +333,45 @@ describe('device-link IPC handlers', () => {
     await expect(second).resolves.toEqual({ devices: [] });
     await handleListDevices(deps);
     expect(apiFetch).toHaveBeenCalledTimes(2);
+  });
+
+  // Review (#8381): a refresh issued right after a rename / delete must not join a list
+  it('listDevices:短断沿用目录但不伪造在线状态，直连仍可用，明确撤权不得回退', async () => {
+    const device = { deviceId: 'dev-1', name: 'Member', online: true, remoteControlEnabled: true };
+    const apiFetch = vi.fn().mockResolvedValueOnce({ devices: [device] })
+      .mockRejectedValueOnce(new ServerApiError('UNAVAILABLE', 503, 'temporarily unavailable'))
+      .mockRejectedValueOnce(new ServerApiError('PERMISSION_DENIED', 403, 'denied'))
+      .mockRejectedValueOnce(new ServerApiError('UNAVAILABLE', 503, 'temporarily unavailable'));
+    const deps = makeDeps({ apiFetch, hasOfflineDirectPath: () => true });
+    await handleListDevices(deps);
+    await expect(handleListDevices(deps)).resolves.toMatchObject({ devices: [{ deviceId: 'dev-1', online: true }] });
+    await expect(handleListDevices(deps)).rejects.toThrow('denied');
+    await expect(handleListDevices(deps)).rejects.toThrow('temporarily unavailable');
+  });
+
+  it.each(['success', 'failure'])('listDevices:账号切换后旧请求的 %s 不得跟随新账号结果', async outcome => {
+    let resolve!: (value: unknown) => void, reject!: (error: unknown) => void;
+    const apiFetch = vi.fn().mockImplementationOnce(() => new Promise((yes, no) => { resolve = yes; reject = no; }))
+      .mockResolvedValue({ devices: [{ deviceId: 'owner-b-only', name: 'B', online: true, remoteControlEnabled: true }] });
+    const deps = makeDeps({ apiFetch });
+    const old = handleListDevices(deps); void old.catch(() => undefined);
+    metadataOwner.key = 'directory-owner-b';
+    expect(await handleListDevices(deps)).toMatchObject({ devices: [{ deviceId: 'owner-b-only' }] });
+    if (outcome === 'success') resolve({ devices: [] }); else reject(new ServerApiError('UNAVAILABLE', 503, 'network down'));
+    await expect(old).rejects.toThrow('account changed');
+    expect(apiFetch).toHaveBeenCalledTimes(2);
+  });
+
+  it('删除设备成功后终止其保留链路，目录里的手机或单纯离线不会被误关闭', async () => {
+    const apiFetch = vi.fn().mockResolvedValueOnce({ devices: [
+      { deviceId: 'phone', name: 'Phone', online: true, remoteControlEnabled: false, platform: 'ios' },
+      { deviceId: 'signaling-offline', name: 'Member', online: false, remoteControlEnabled: true },
+    ] }).mockResolvedValueOnce({ deviceId: 'removed', deleted: true });
+    const closeLink = vi.fn();
+    const deps = makeDeps({ apiFetch, closeLink, hasOfflineDirectPath: () => true });
+    await handleListDevices(deps); expect(closeLink).not.toHaveBeenCalled();
+    await handleDeleteDevice(deps, 'removed');
+    expect(closeLink.mock.calls.map(([deviceId]) => deviceId)).toEqual(['removed']);
   });
 
   // Review (#8381): a refresh issued right after a rename / delete must not join a list

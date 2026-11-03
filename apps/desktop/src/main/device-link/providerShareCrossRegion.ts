@@ -41,6 +41,7 @@ import { serverApiFetch } from '../serverApiClient.js';
 import { throwIpcError } from '../utils/ipcValidate.js';
 import { deviceName } from './deviceName.js';
 import { desktopDirectRuntime } from './directLink.js';
+import { invokeProviderMetadataContinuity } from './providerMetadataContinuity.js';
 import { fetchIdentityCard, rethrowProviderShareError, sha256Hex } from './providerShareApi.js';
 
 const log = createLogger('provider-share:cross-region');
@@ -568,7 +569,18 @@ export async function renewCrossRegionProviderShareLink(peerKey: string): Promis
   });
 }
 
-export async function crossRegionInvoke(peerKey: string, channel: string, args: unknown[], timeoutMs?: number): Promise<InvokeResultPayload> {
+export async function crossRegionInvoke(peerKey: string, channel: string, args: unknown[], timeoutMs?: number,
+  options?: { liveProviderMetadata?: true }): Promise<InvokeResultPayload> {
+  if (options?.liveProviderMetadata) return crossRegionInvokeLive(peerKey, channel, args, timeoutMs);
+  const rt = runtime;
+  const peer = parseProviderSharePeer(peerKey);
+  return invokeProviderMetadataContinuity(peerKey, channel, args,
+    () => crossRegionInvokeLive(peerKey, channel, args, timeoutMs),
+    () => runtime === rt && !!peer && !!stateForShare(peer.shareId)?.shares.some(share =>
+      share.shareId === peer.shareId && share.status === 'active'));
+}
+
+async function crossRegionInvokeLive(peerKey: string, channel: string, args: unknown[], timeoutMs?: number): Promise<InvokeResultPayload> {
   const peer = parseProviderSharePeer(peerKey);
   const state = peer ? stateForShare(peer.shareId) : null;
   const client = state?.client;

@@ -35,7 +35,7 @@ export interface ProviderGroupDirectoryDeps {
   localAppVersion?(): string;
   listDevices(): Promise<readonly DeviceLinkDeviceView[]>;
   /** 那台电脑允许被远程调用的供应商；读不到时抛错(带 `[REMOTE_AGENT_SHARE_*]` 前缀时保留原因)。 */
-  readDeviceProviders(agentDeviceId: string): Promise<ProviderView[]>;
+  readDeviceProviders(agentDeviceId: string, options?: { live: true }): Promise<ProviderView[]>;
   listReceivedShares(): readonly ProviderShareReceived[];
   isMobilePlatform(platform: string | null): boolean;
   /** 本机这个供应商正在运行一轮的任务数(localLoad.ts)；不提供或读不到时为 null。 */
@@ -134,7 +134,8 @@ export function createProviderGroupDirectory(deps: ProviderGroupDirectoryDeps): 
     else if (!shareOfflineSince.has(shareId)) shareOfflineSince.set(shareId, deps.now());
   }
 
-  function readCatalog(agentDeviceId: string): Promise<ProviderView[]> {
+  function readCatalog(agentDeviceId: string, live = false): Promise<ProviderView[]> {
+    if (live) return deps.readDeviceProviders(agentDeviceId, { live: true });
     const now = deps.now();
     const cached = catalogs.get(agentDeviceId);
     if (cached && now - cached.at < (cached.ok ? CATALOG_TTL_MS : CATALOG_FAILURE_TTL_MS)) return cached.promise;
@@ -191,6 +192,7 @@ export function createProviderGroupDirectory(deps: ProviderGroupDirectoryDeps): 
   async function resolveDevice(
     member: ProviderGroupMember,
     deviceList: readonly DeviceLinkDeviceView[] | null,
+    live = false,
   ): Promise<ResolvedProviderGroupMember> {
     const deviceId = member.agentDeviceId!;
     const device = deviceList?.find((d) => d.deviceId === deviceId);
@@ -200,7 +202,7 @@ export function createProviderGroupDirectory(deps: ProviderGroupDirectoryDeps): 
     if (!device || !isControllable(device)) return { member, label, ...version, state: 'offline' };
     let views: ProviderView[];
     try {
-      views = await readCatalog(deviceId);
+      views = await readCatalog(deviceId, live);
     } catch {
       return { member, label, ...version, state: 'offline' };
     }
@@ -211,8 +213,8 @@ export function createProviderGroupDirectory(deps: ProviderGroupDirectoryDeps): 
 
   async function resolveShare(
     member: ProviderGroupMember,
-    /** 不信分享列表里定时刷新的 hostOnline 快照，照样去读那台的目录(等它恢复时用)。 */
-    options?: { readThroughOffline?: boolean },
+    /** Recovery probes must reach the real peer; a display snapshot is not a health proof. */
+    options?: { live: true },
   ): Promise<ResolvedProviderGroupMember> {
     const agentDeviceId = member.agentDeviceId!;
     const shareId = agentDeviceId.slice(PROVIDER_SHARE_AGENT_DEVICE_PREFIX.length);
@@ -224,10 +226,12 @@ export function createProviderGroupDirectory(deps: ProviderGroupDirectoryDeps): 
     const label = ownerName;
     if (share.status === 'paused') return { member, label, ownerName, state: 'unavailable', reason: 'share-paused' };
     noteShareOnline(shareId, share.hostOnline);
-    if (!share.hostOnline && !options?.readThroughOffline) return { member, label, ownerName, state: 'offline' };
+    // Cloud presence describes signaling, not an already authenticated data
+    // path. The shared reader may have a bounded snapshot; execution still
+    // reaches the real target and enforces its current grant.
     let views: ProviderView[];
     try {
-      views = await readCatalog(agentDeviceId);
+      views = await readCatalog(agentDeviceId, options?.live);
     } catch (error) {
       const reason = SHARE_REASON.exec(error instanceof Error ? error.message : '')?.[1];
       if (reason === 'PAUSED') return { member, label, ownerName, state: 'unavailable', reason: 'share-paused' };
@@ -428,13 +432,13 @@ export function createProviderGroupDirectory(deps: ProviderGroupDirectoryDeps): 
         paused: false,
       };
       // 分享来的电脑：hostOnline 是定时刷新的快照，等它恢复时不只看它，直接读那台的目录。
-      if (share) return (await resolveShare(member, { readThroughOffline: true })).state;
+      if (share) return (await resolveShare(member, { live: true })).state;
       devices = null;
       const deviceList = await readDevices().catch(() => null);
       const device = deviceList?.find((d) => d.deviceId === agentDeviceId);
       // 在线却关了远程控制或远程调用：是有意的设置，不是断线，不用等它恢复。
       if (device?.online && !isControllable(device)) return 'unavailable';
-      return (await resolveDevice(member, deviceList)).state;
+      return (await resolveDevice(member, deviceList, true)).state;
     },
 
     memberLabel(member) {

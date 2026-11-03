@@ -32,7 +32,8 @@ import {
 } from '@cindy/maker-core';
 import { parseProviderSharePeer, providerShareHostPeer } from '@cindy/device-link';
 import { createLogger } from '../../logger.js';
-import { findReceivedShare, parseProviderShareAgentDeviceId } from '../../device-link/providerShareGuest.js';
+import { findReceivedShare, parseProviderShareAgentDeviceId, providerShareAccessEpoch,
+  onProviderShareReceivedChanged } from '../../device-link/providerShareGuest.js';
 
 import { credentialGrantFor } from '../executor/credentialGrants';
 import type { ExecutorCaptureHooks } from '../executor/executor';
@@ -52,7 +53,8 @@ import {
 import type { LocalMcpTarget } from './router';
 import { RemoteAgentPoller, RemoteAgentRunClient, remoteAgentInvoker } from './runClient';
 import { registerPendingRemoteStart, startRemoteAgentSession, type PreparedRemoteMcp } from './startRemote';
-import { authorizeSharedTaskHistory, sharedTaskLeaseDeadline, trackLiveSharedTaskTarget } from './providerShareTaskLocation.js';
+import { authorizeSharedTaskHistory, sharedTaskLeaseDeadline, trackLiveSharedTaskTarget,
+  rememberSharedTaskAuthorization, forgetSharedTaskAuthorization } from './providerShareTaskLocation.js';
 
 export interface DeviceAgentServiceDeps {
   readImageDeliveryEpoch?(sessionId: string): Promise<number>;
@@ -202,7 +204,7 @@ export function createDeviceAgentStarter(deps: DeviceAgentServiceDeps) {
   // 闲置多久可以让出按那台主人设置的闲置收回时长(打开前与主动让出前从 caps 读)。
   const pools = new Map<string, RemoteConnectionPool>();
   const directTasks = new Map<string, { target: string; agentKind: AgentKind; model: string;
-    until: number; authorizedUntil: number; leaseDeadline: number; generation?: string }>();
+    until: number; authorizedUntil: number; leaseDeadline: number; wallDeadline: number; renewAt: number; accessEpoch: number; generation?: string }>();
   const poolFor = (deviceId: string): RemoteConnectionPool => {
     let pool = pools.get(deviceId);
     if (!pool) {
@@ -214,7 +216,16 @@ export function createDeviceAgentStarter(deps: DeviceAgentServiceDeps) {
   };
   type StartInput = { agentKind: AgentKind; deviceId: string; options: StartSessionOptions };
   const startAttempt = async (input: StartInput, skipDirect: boolean, attempt: ReturnType<typeof registerPendingRemoteStart>): Promise<AgentSessionHandle> => {
-    const requireCurrent = () => attempt.signal.throwIfAborted();
+    const initialShareId = parseProviderShareAgentDeviceId(input.deviceId);
+    const initialAccessEpoch = initialShareId && findReceivedShare(initialShareId)?.status === 'active'
+      ? providerShareAccessEpoch(initialShareId) : undefined;
+    const requireCurrent = () => {
+      attempt.signal.throwIfAborted();
+      if (initialShareId && initialAccessEpoch !== undefined && (findReceivedShare(initialShareId)?.status !== 'active'
+        || providerShareAccessEpoch(initialShareId) !== initialAccessEpoch)) {
+        throw new Error('[REMOTE_AGENT_UNAVAILABLE] shared provider permission changed during startup');
+      }
+    };
     requireCurrent();
     const opts: StartSessionOptions = { ...input.options };
     // 记忆在本机：对方只用这里给的索引快照，工具读写也回到本机记忆库。
@@ -258,6 +269,7 @@ export function createDeviceAgentStarter(deps: DeviceAgentServiceDeps) {
     let selectedDirectRoute: ReturnType<typeof directTasks.get>;
     const releaseFailedDirectAllocation = async (generation: string | undefined): Promise<void> => {
       if (!sessionId || !generation) return;
+      forgetSharedTaskAuthorization(input.deviceId, sessionId, generation);
       // A late failure from an old open must never revoke a newer allocation.
       try {
         await remoteAgentInvoker(input.deviceId, deps.remoteInvoke)([{
@@ -269,10 +281,6 @@ export function createDeviceAgentStarter(deps: DeviceAgentServiceDeps) {
     };
     if (shareId && opts.resumeSessionId) {
       if (!sessionId) throw new Error('[REMOTE_AGENT_INVALID] shared history requires its task identity');
-      const owner = findReceivedShare(shareId);
-      if (owner?.hostDeviceId) {
-        await deps.renewSharedProviderLink?.(providerShareHostPeer(shareId, owner.hostDeviceId));
-      }
       const allocationStartedAt = Date.now();
       const allocationStartedMonotonic = performance.now();
       requireCurrent();
@@ -283,15 +291,20 @@ export function createDeviceAgentStarter(deps: DeviceAgentServiceDeps) {
       const taskKey = `${shareId}:${sessionId}`;
       directTasks.delete(taskKey);
       if (history.direct) directTasks.set(taskKey, { target, agentKind: input.agentKind, model: opts.model,
-        until: allocationStartedAt + 25 * 60_000, authorizedUntil: allocationStartedAt + 29 * 60_000,
+        accessEpoch: providerShareAccessEpoch(shareId),
+        until: Math.min(allocationStartedAt + 25 * 60_000, history.authorizedUntil ?? Infinity),
+        authorizedUntil: history.authorizedUntil ?? allocationStartedAt + 29 * 60_000,
         leaseDeadline: history.leaseDeadline ?? allocationStartedMonotonic + 30 * 60_000,
+        wallDeadline: history.wallDeadline ?? allocationStartedAt + 30 * 60_000,
+        renewAt: history.renewAt ?? allocationStartedAt + 20 * 60_000,
         ...(history.generation ? { generation: history.generation } : {}) });
       selectedDirectRoute = directTasks.get(taskKey);
     } else if (!skipDirect && shareId && sessionId && !deps.isGroupAssigned?.(sessionId) && !switchToken
       && findReceivedShare(shareId)?.status === 'active') {
       const taskKey = `${shareId}:${sessionId}`;
       const cached = directTasks.get(taskKey);
-      if (cached && cached.until > Date.now() && cached.leaseDeadline > performance.now() && cached.agentKind === input.agentKind && cached.model === opts.model) {
+      if (cached && cached.accessEpoch === providerShareAccessEpoch(shareId) && cached.until > Date.now()
+        && cached.wallDeadline > Date.now() && cached.leaseDeadline > performance.now() && cached.agentKind === input.agentKind && cached.model === opts.model) {
         try {
           // M's grant is memory-only. A process restart can invalidate it even
           // while G's cached route still has time left.
@@ -354,9 +367,12 @@ export function createDeviceAgentStarter(deps: DeviceAgentServiceDeps) {
             for (const [key, route] of directTasks) if (route.until <= Date.now()) directTasks.delete(key);
             if (directTasks.size >= 512) directTasks.delete(directTasks.keys().next().value!);
             directTasks.set(taskKey, { target, agentKind: input.agentKind, model: opts.model,
+              accessEpoch: providerShareAccessEpoch(shareId),
               until: allocationStartedAt + 25 * 60_000,
               authorizedUntil: allocationStartedAt + 29 * 60_000,
               leaseDeadline,
+              wallDeadline: allocationStartedAt + leaseDeadline - allocationStartedMonotonic,
+              renewAt: allocationStartedAt + Math.min(20 * 60_000, (leaseDeadline - allocationStartedMonotonic) * 2 / 3),
               ...(generation ? { generation } : {}) });
             selectedDirectRoute = directTasks.get(taskKey);
           }
@@ -390,22 +406,29 @@ export function createDeviceAgentStarter(deps: DeviceAgentServiceDeps) {
     // Keep this attempt's grant even if another start replaces the task's route cache.
     const openingDirectRoute = selectedDirectRoute;
     let leaseDeadline = openingDirectRoute?.leaseDeadline ?? performance.now();
+    let wallDeadline = openingDirectRoute?.wallDeadline ?? Date.now();
     let expiryTimer: ReturnType<typeof setTimeout> | undefined;
     const startupAbort = attempt;
     let expireLive: (() => void) | undefined;
     function armLeaseExpiry(): void {
       if (expiryTimer) clearTimeout(expiryTimer);
       const expire = () => {
-        if (performance.now() < leaseDeadline) { armLeaseExpiry(); return; }
+        if (Date.now() < wallDeadline && performance.now() < leaseDeadline) { armLeaseExpiry(); return; }
         startupAbort.abort(new Error('[REMOTE_AGENT_EXPIRED] shared task authorization has expired'));
         expireLive?.();
       };
-      const remaining = leaseDeadline - performance.now();
+      const remaining = Math.min(wallDeadline - Date.now(), leaseDeadline - performance.now());
       if (remaining <= 0) { expire(); return; }
       expiryTimer = setTimeout(expire, remaining);
       (expiryTimer as { unref?: () => void }).unref?.();
     }
     if (openingDirectRoute) armLeaseExpiry();
+    const assertLeaseAlive = () => {
+      if (Date.now() >= wallDeadline || performance.now() >= leaseDeadline) {
+        armLeaseExpiry();
+        throw new Error('[REMOTE_AGENT_EXPIRED] shared task authorization has expired');
+      }
+    };
     const webFetch = deps.webFetch && shared ? deps.webFetch : undefined;
     const collect = { skipCredentials: shared };
     let cancelPreparedHandle: (() => void) | undefined;
@@ -572,15 +595,19 @@ export function createDeviceAgentStarter(deps: DeviceAgentServiceDeps) {
       const statusTimer = setInterval(() => report(handle.isTurnRunning?.() === true), 30_000);
       (statusTimer as { unref?: () => void }).unref?.();
       let authorizedUntil = openingDirectRoute?.authorizedUntil ?? Date.now();
+      let authorizedAccessEpoch = initialAccessEpoch ?? providerShareAccessEpoch(shareId);
+      const permissionCurrent = () => findReceivedShare(shareId)?.status === 'active'
+        && providerShareAccessEpoch(shareId) === authorizedAccessEpoch;
+      let offPermissionChange = () => {};
       // The same monotonic budget has been active throughout local preparation and M startup.
-      let nextRenewAt = Math.min(Date.now() + 20 * 60_000, authorizedUntil - 9 * 60_000);
+      let nextRenewAt = openingDirectRoute?.renewAt ?? Date.now();
       // The proxy's model snapshot can lag behind a successful setModel RPC.
       let authorizedModel = handle.model;
       let changingModel = false;
       let renewing = false;
       let stopped = false;
       const clearLiveTarget = trackLiveSharedTaskTarget(sessionId, input.deviceId, target,
-        () => !stopped && Date.now() < authorizedUntil && performance.now() < leaseDeadline);
+        () => !stopped && permissionCurrent() && Date.now() < Math.min(authorizedUntil, wallDeadline) && performance.now() < leaseDeadline);
       let awaitingTurnEnd = false;
       let authorizationTurn = Promise.resolve();
       const serializeAuthorization = <T>(work: () => Promise<T>): Promise<T> => {
@@ -589,11 +616,13 @@ export function createDeviceAgentStarter(deps: DeviceAgentServiceDeps) {
         return result;
       };
       const applyAuthorization = async (model: string, isCurrent: () => boolean = () => true): Promise<void> => {
+        assertLeaseAlive();
         if (stopped || !isCurrent() || performance.now() >= leaseDeadline || !targetDeviceId || !deps.renewSharedProviderLink) {
           throw new Error('[REMOTE_AGENT_UNAVAILABLE] shared executor authorization cannot be renewed');
         }
         const allocationStartedAt = Date.now();
         const allocationStartedMonotonic = performance.now();
+        const allocationAccessEpoch = providerShareAccessEpoch(shareId);
         const value = await remoteAgentInvoker(input.deviceId, deps.remoteInvoke)([{
           op: 'allocate', agentKind: input.agentKind, model, sessionId,
           preferredExecutorDeviceId: targetDeviceId,
@@ -609,24 +638,33 @@ export function createDeviceAgentStarter(deps: DeviceAgentServiceDeps) {
           await releaseFailedDirectAllocation(generation);
           throw new Error('[REMOTE_AGENT_UNAVAILABLE] shared task has closed');
         };
-        if (stopped || !isCurrent() || performance.now() >= leaseDeadline) return releaseStoppedGrant();
+        if (stopped || !isCurrent() || performance.now() >= leaseDeadline
+          || providerShareAccessEpoch(shareId) !== allocationAccessEpoch) return releaseStoppedGrant();
         try { await deps.renewSharedProviderLink(target); }
         catch (error) {
           if (stopped || !isCurrent() || performance.now() >= leaseDeadline) return releaseStoppedGrant();
           throw error;
         }
-        if (stopped || !isCurrent() || performance.now() >= leaseDeadline) return releaseStoppedGrant();
+        if (stopped || !isCurrent() || performance.now() >= leaseDeadline
+          || providerShareAccessEpoch(shareId) !== allocationAccessEpoch) return releaseStoppedGrant();
         const nextLeaseDeadline = sharedTaskLeaseDeadline(value, allocationStartedMonotonic) ?? allocationStartedMonotonic + 30 * 60_000;
         directTasks.set(taskKey, { target, agentKind: input.agentKind, model,
+          accessEpoch: allocationAccessEpoch,
           until: allocationStartedAt + 25 * 60_000,
           authorizedUntil: allocationStartedAt + 29 * 60_000,
           leaseDeadline: nextLeaseDeadline,
+          wallDeadline: allocationStartedAt + nextLeaseDeadline - allocationStartedMonotonic,
+          renewAt: allocationStartedAt + Math.min(20 * 60_000, (nextLeaseDeadline - allocationStartedMonotonic) * 2 / 3),
           ...(typeof row.generation === 'string' && DIRECT_GRANT_ID.test(row.generation)
             ? { generation: row.generation } : {}) });
         authorizedUntil = allocationStartedAt + 29 * 60_000;
+        authorizedAccessEpoch = allocationAccessEpoch;
         leaseDeadline = nextLeaseDeadline;
+        wallDeadline = allocationStartedAt + nextLeaseDeadline - allocationStartedMonotonic;
+        rememberSharedTaskAuthorization(input.deviceId, sessionId, input.agentKind, model,
+          { ...directTasks.get(taskKey)!, direct: true });
         armLeaseExpiry();
-        nextRenewAt = Math.min(Date.now() + 20 * 60_000, authorizedUntil - 9 * 60_000);
+        nextRenewAt = directTasks.get(taskKey)!.renewAt;
       };
       // Poll recovery can run while send is waiting for a terminal. Serialize
       // grants separately from sends, or renewal would deadlock behind that turn.
@@ -638,13 +676,34 @@ export function createDeviceAgentStarter(deps: DeviceAgentServiceDeps) {
       };
       // setModel already owns the grant for its new model until its RPC settles.
       // An outage callback must not replace that grant with the previous model.
+      const confirmExistingExecutor = async (isCurrent: () => boolean): Promise<void> => {
+        assertLeaseAlive();
+        if (stopped || !isCurrent() || Date.now() >= authorizedUntil || performance.now() >= leaseDeadline) {
+          throw new Error('[REMOTE_AGENT_UNAVAILABLE] shared task authorization has expired');
+        }
+        // A transport outage is not a revocation. M still validates this task on
+        // open/poll; caps is a live scoped request, never a cached authorization.
+        try {
+          await RemoteAgentRunClient.caps(remoteAgentInvoker(target, deps.remoteInvoke));
+        } catch {
+          // M may have restarted and lost its memory-only task grant. Only O
+          // can issue a replacement; a failed refresh never extends the old one.
+          if (stopped || !isCurrent() || Date.now() >= authorizedUntil || performance.now() >= leaseDeadline) {
+            throw new Error('[REMOTE_AGENT_UNAVAILABLE] shared task authorization has expired');
+          }
+          await authorizeCurrentExecutor(authorizedModel, isCurrent);
+          await RemoteAgentRunClient.caps(remoteAgentInvoker(target, deps.remoteInvoke));
+        }
+        if (stopped || !isCurrent() || Date.now() >= authorizedUntil || performance.now() >= leaseDeadline) {
+          throw new Error('[REMOTE_AGENT_UNAVAILABLE] shared task authorization has expired');
+        }
+      };
       reconnectAuthorization = isCurrent => changingModel ? Promise.resolve()
-        : authorizeCurrentExecutor(authorizedModel, () => !changingModel && isCurrent());
+        : confirmExistingExecutor(() => !changingModel && isCurrent());
       const direct = liveDirectGuestSessions.get(sessionId);
       if (direct?.identity === directIdentity) direct.probeReconnect = (isCurrent = () => true) => serializeAuthorization(async () => {
         try {
-          await authorizeCurrentExecutor(authorizedModel, isCurrent);
-          await RemoteAgentRunClient.caps(remoteAgentInvoker(target, deps.remoteInvoke));
+          await confirmExistingExecutor(isCurrent);
           return stopped || !isCurrent() ? 'unavailable' : 'ok';
         } catch (error) {
           return !stopped && (isRetryableLinkError(error) || remoteAgentErrorFrom(error).code === 'REMOTE_AGENT_UNAVAILABLE')
@@ -666,6 +725,7 @@ export function createDeviceAgentStarter(deps: DeviceAgentServiceDeps) {
       if (handle.setModel) {
         const setModel = handle.setModel.bind(handle);
         handle.setModel = (model, options) => serializeAuthorization(async () => {
+          assertLeaseAlive();
           const previousModel = authorizedModel;
           if (model === previousModel) return setModel(model, options);
           if (awaitingTurnEnd || handle.isTurnRunning?.() === true || handle.isPreparingUserTurn?.() === true) {
@@ -711,6 +771,7 @@ export function createDeviceAgentStarter(deps: DeviceAgentServiceDeps) {
       const send = handle.send.bind(handle);
       handle.send = (message, options) => serializeAuthorization(async () => {
         if (stopped) throw new Error('[REMOTE_AGENT_UNAVAILABLE] shared task authorization has ended');
+        assertLeaseAlive();
         // A failed background renewal must become a visible error before a
         // later turn uses an expired grant on the old executor.
         if (Date.now() >= authorizedUntil) await authorizeCurrentExecutor(authorizedModel);
@@ -723,6 +784,7 @@ export function createDeviceAgentStarter(deps: DeviceAgentServiceDeps) {
       const close = handle.close.bind(handle);
       const stop = () => {
         stopped = true;
+        offPermissionChange();
         if (cancelPreparedHandle) attempt.signal.removeEventListener('abort', cancelPreparedHandle);
         clearLiveTarget();
         clearDirectIdentity();
@@ -733,13 +795,28 @@ export function createDeviceAgentStarter(deps: DeviceAgentServiceDeps) {
       };
       expireLive = () => {
         if (stopped) return;
+        if (liveDirectGuestSessions.get(sessionId)?.identity === directIdentity) {
+          directTasks.delete(taskKey); forgetSharedTaskAuthorization(input.deviceId, sessionId);
+        }
         stop();
         // Local teardown does not wait for the expired remote route to accept close.
         void close({ reason: 'account-boundary' }).catch((error: unknown) => {
           log.warn('shared provider expired task close notification failed', { error: String(error) });
         });
       };
-      handle.close = async (options) => { stop(); await close(options); };
+      handle.close = async (options) => {
+        if (options?.reason !== 'navigation' && liveDirectGuestSessions.get(sessionId)?.identity === directIdentity) {
+          directTasks.delete(taskKey); forgetSharedTaskAuthorization(input.deviceId, sessionId);
+        }
+        stop(); await close(options);
+      };
+      if (permissionCurrent()) rememberSharedTaskAuthorization(input.deviceId, sessionId, input.agentKind, authorizedModel,
+        { ...directTasks.get(taskKey)!, direct: true });
+      offPermissionChange = onProviderShareReceivedChanged(() => { if (!permissionCurrent()) expireLive?.(); });
+      if (!permissionCurrent()) {
+        expireLive();
+        throw new Error('[REMOTE_AGENT_UNAVAILABLE] shared provider permission changed during startup');
+      }
       if (handle.detach) {
         const detach = handle.detach.bind(handle);
         handle.detach = async (options) => { stop(); await detach(options); };
@@ -749,9 +826,13 @@ export function createDeviceAgentStarter(deps: DeviceAgentServiceDeps) {
       if (nextRenewAt <= Date.now()) {
         try { await serializeAuthorization(() => authorizeCurrentExecutor(authorizedModel)); }
         catch (error) {
-          stop();
-          await close().catch(() => undefined);
-          throw error;
+          if (!stopped && Date.now() < authorizedUntil && performance.now() < leaseDeadline && isRetryableLinkError(error)) {
+            nextRenewAt = Date.now() + 60_000;
+          } else {
+            stop();
+            await close().catch(() => undefined);
+            throw error;
+          }
         }
       }
     }

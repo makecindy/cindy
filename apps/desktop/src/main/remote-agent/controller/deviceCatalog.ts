@@ -16,6 +16,7 @@ type RemoteInvoke = (
   deviceId: string,
   channel: string,
   args: unknown[],
+  options?: { liveProviderMetadata?: true },
 ) => Promise<{ ok: boolean; result?: unknown; error?: { code?: string; message?: string } }>;
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -60,11 +61,14 @@ export function parseDeviceProviderViews(value: unknown): ProviderView[] {
 export async function readDeviceProviderViews(
   invoke: RemoteInvoke,
   deviceId: string,
-  options: { visibleOnly?: boolean; groupMember?: boolean } = {},
+  options: { visibleOnly?: boolean; groupMember?: boolean; live?: boolean } = {},
 ): Promise<ProviderView[]> {
-  const result = await invoke(deviceId, 'maker:provider:list', [
+  const args = [
     { capabilities: [CONTROLLER_CAPABILITY_PROVIDER_LOGO_KINDS_V2] },
-  ]);
+  ];
+  const result = options.live
+    ? await invoke(deviceId, 'maker:provider:list', args, { liveProviderMetadata: true })
+    : await invoke(deviceId, 'maker:provider:list', args);
   if (!result.ok) {
     throw Object.assign(new Error(result.error?.message ?? 'provider list unavailable'), { code: result.error?.code });
   }

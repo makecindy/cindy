@@ -35,7 +35,9 @@ import { hostedStartOptions } from '../host/service';
 import { PROVIDER_SHARE_CREDENTIAL_SESSION_APPROVAL } from '../../../shared/providerShareCredentialConsent';
 import { DEFAULT_REMOTE_AGENT_LIMITS, type RemoteAgentLimits } from '../../../shared/remoteAgentLimits';
 import { installDesktopInteractionHandler } from '../../maker-ipc/interactionRouter';
-import { authorizeSharedTaskExecutor, authorizeSharedTaskHistory, liveSharedTaskTarget } from '../controller/providerShareTaskLocation';
+import { authorizeSharedTaskExecutor, authorizeSharedTaskHistory, liveSharedTaskTarget,
+  forgetSharedTaskAuthorization } from '../controller/providerShareTaskLocation';
+vi.mock('../../clientEndpointsService.js', () => ({ getClientEndpoint: () => 'https://continuity.test.invalid' }));
 
 const payloadCompression = vi.hoisted(() => ({ enabled: false, paused: false, calls: 0, finish: undefined as (() => void) | undefined }));
 // Controlled gzip completion exercises production payload cancellation without compression load or sockets.
@@ -67,9 +69,12 @@ vi.mock('../../device-link/providerShareCrossRegion.js', () => ({
   isCrossRegionProviderShareTarget: () => historyCrossRegion(),
   renewCrossRegionProviderShareLink: (...args: unknown[]) => historyOpenLink(...args),
 }));
+const guestPermission = vi.hoisted(() => ({ epoch: 0, status: 'active', listeners: new Set<() => void>() }));
 vi.mock('../../device-link/providerShareGuest.js', () => ({
   parseProviderShareAgentDeviceId: (device: string) => device.startsWith('share:') ? device.slice(6) : null,
-  findReceivedShare: () => ({ status: 'active' }),
+  findReceivedShare: () => ({ status: guestPermission.status }),
+  providerShareAccessEpoch: () => guestPermission.epoch,
+  onProviderShareReceivedChanged: (listener: () => void) => { guestPermission.listeners.add(listener); return () => { guestPermission.listeners.delete(listener); }; },
 }));
 vi.mock('../../logger.js', () => ({ createLogger: () => historyLogger }));
 // The production starter collects only this fixture's supplied project, never the user's home.
@@ -221,6 +226,7 @@ function makeDeps(host: ReturnType<typeof createRemoteAgentHost>, controller = C
 }
 
 beforeEach(() => {
+  guestPermission.epoch++; guestPermission.status = 'active'; guestPermission.listeners.clear();
   root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'cindy-ra-')));
   project = path.join(root, 'project');
   hostRoot = path.join(root, 'host');
@@ -1394,7 +1400,7 @@ describe('shared startup lease budget', () => {
     const prepare = deferred();
     const allocation = deferred();
     let allocations = 0;
-    const state = { device: 'executor-m' as unknown, duration: 2000 as unknown, delayCaps: 0, ready: false, blockClose: false, blockPrepare: false, blockAllocation: false };
+    const state = { device: 'executor-m' as unknown, duration: 2000 as unknown, delayCaps: 0, ready: false, blockClose: false, blockPrepare: false, blockAllocation: false, ownerOffline: false };
     const emit = (run: Run, value: unknown) => run.onData(Buffer.from(JSON.stringify(value) + '\n'), false);
     const started = (run: Run) => emit(run, { t: 'started', handle: { id: 'sdk-' + run.runId, model: 'm', shadowDir: '', methods: ['setModel'], state: {} } });
     vi.spyOn(RemoteAgentPoller.prototype, 'register').mockImplementation(run => {
@@ -1405,6 +1411,7 @@ describe('shared startup lease budget', () => {
     const remoteInvoke = vi.fn(async (device: string, _channel: string, args: unknown[]) => {
       const request = args[0] as { op: string; sessionId?: string; generation?: string; runId?: string; callId?: string; payload?: { json?: { sessionId: string } } };
       calls.push({ device, ...request });
+      if (device === owner && state.ownerOffline) throw Object.assign(new Error('owner offline'), { code: 'NOT_CONNECTED' });
       if (request.op === 'direct-locate') return { ok: true, result: { deviceId: 'executor-m', agentKind: 'codex' } };
       if (request.op === 'allocate') {
         const grant = ++allocations === 1 ? generation : '22222222-2222-4222-8222-222222222222';
@@ -1449,12 +1456,89 @@ describe('shared startup lease budget', () => {
         options: { sessionId, workingDir: project, model, ...(resumeSessionId ? { resumeSessionId } : {}) } }) };
   }
   beforeEach(() => {
+    for (const id of ['pending', 'history', 'legacy', 'historical', 'sibling']) forgetSharedTaskAuthorization('share:startup-budget', id);
     vi.useFakeTimers({ toFake: ['Date', 'performance', 'setTimeout', 'clearTimeout', 'setInterval', 'clearInterval'] });
   });
   afterEach(() => { vi.restoreAllMocks(); vi.unstubAllGlobals(); vi.useRealTimers(); historyInvoke.mockReset(); historyOpenLink.mockReset(); });
 
   // Unit, F6: terminal cancellation must cross the create -> starter composition boundary.
   // Real starter + startRemote + runClient; native and transport IO use the existing fixture.
+  it('reopens native history on its original M during an O outage without renewing the original grant', async () => {
+    const f = fixture(); f.state.ready = true; f.state.duration = 10 * 60_000;
+    const first = await f.open('historical');
+    await first.close({ reason: 'navigation' });
+    await vi.advanceTimersByTimeAsync(5 * 60_000);
+    f.state.ownerOffline = true;
+    const before = f.calls.length;
+    const resumed = await f.open('historical', f.owner, 'm', 'native-only-on-m');
+    expect(f.calls.slice(before).some(call => call.device === f.owner)).toBe(false);
+    expect(f.calls.filter(call => call.op === 'allocate')).toHaveLength(1);
+    expect(f.calls.filter(call => call.op === 'open').map(call => call.device)).toEqual([f.target, f.target]);
+    await vi.advanceTimersByTimeAsync(5 * 60_000 + 1);
+    expect(liveSharedTaskTarget('historical', f.owner)).toBeNull();
+    expect(f.disposed).toEqual(['historical', 'historical']);
+    await resumed.close();
+  });
+
+  it('ends an already running direct task on a known pause and requires fresh authorization after resume', async () => {
+    const f = fixture(); f.state.ready = true; f.state.duration = 30 * 60_000;
+    const handle = await f.open('historical');
+    guestPermission.status = 'paused'; guestPermission.epoch++;
+    for (const listener of guestPermission.listeners) listener();
+    await flush();
+    expect(liveSharedTaskTarget('historical', f.owner)).toBeNull();
+    expect(f.disposed).toEqual(['historical']);
+    guestPermission.status = 'active'; guestPermission.epoch++; f.state.ownerOffline = true;
+    await expect(f.open('historical', f.owner, 'm', 'native-original')).rejects.toThrow('owner offline');
+    expect(f.calls.filter(call => call.op === 'open')).toHaveLength(1);
+    await handle.close();
+  });
+
+  it.each(['send', 'setModel'] as const)('ends the original grant on wall-clock expiry before %s even if the monotonic clock did not advance', async action => {
+    const f = fixture(); f.state.ready = true;
+    const handle = await f.open('historical');
+    vi.setSystemTime(Date.now() + 2001);
+    await expect(action === 'send' ? handle.send({ type: 'user', content: 'must not run' })
+      : handle.setModel!('other-model')).rejects.toThrow('REMOTE_AGENT_EXPIRED');
+    expect(f.calls.filter(call => call.op === 'allocate')).toHaveLength(1);
+    expect(liveSharedTaskTarget('historical', f.owner)).toBeNull();
+    await handle.close();
+  });
+
+  it('re-authorizes only the original executor when its cached task grant was lost in an M restart', async () => {
+    const f = fixture(); f.state.ready = true; f.state.duration = 60_000;
+    const first = await f.open('historical'); await first.close({ reason: 'navigation' });
+    historyInvoke.mockRejectedValueOnce(Object.assign(new Error('M lost its grant'), { code: 'ACCESS_REVOKED' }));
+    const resumed = await f.open('historical', f.owner, 'm', 'native-only-on-m');
+    expect(f.calls.filter(call => call.op === 'allocate')).toHaveLength(2);
+    expect(f.calls.filter(call => call.op === 'direct-locate')).toHaveLength(0);
+    expect(f.calls.filter(call => call.op === 'open').map(call => call.device)).toEqual([f.target, f.target]);
+    await resumed.close();
+  });
+
+  it('cannot return a cached grant after it was explicitly released while the live M probe was in flight', async () => {
+    const f = fixture(); f.state.ready = true; f.state.duration = 60_000;
+    const first = await f.open('historical'); await first.close({ reason: 'navigation' });
+    const gate = deferred(), invoke = historyInvoke.getMockImplementation()!;
+    historyInvoke.mockImplementationOnce(async (...args: unknown[]) => { await gate.promise; return invoke(...args); });
+    const pending = authorizeSharedTaskHistory(f.owner, 'historical', 'codex', 'm'); void pending.catch(() => undefined);
+    await flush(); forgetSharedTaskAuthorization(f.owner, 'historical'); gate.resolve();
+    await expect(pending).rejects.toThrow('original shared executor authorization');
+    expect(f.calls.filter(call => call.op === 'allocate')).toHaveLength(1);
+  });
+
+  it.each(['model', 'task', 'explicit-link-close', 'wall-expiry'] as const)('never reuses a historical grant across %s during O outage', async boundary => {
+    const f = fixture(); f.state.ready = true; f.state.duration = 30 * 60_000;
+    const first = await f.open('historical'); await first.close({ reason: 'navigation' });
+    f.state.ownerOffline = true;
+    if (boundary === 'explicit-link-close') historyCloseEpoch.mockReturnValue(1);
+    if (boundary === 'wall-expiry') vi.setSystemTime(Date.now() + 30 * 60_000);
+    const before = f.calls.filter(call => call.op === 'open').length;
+    await expect(f.open(boundary === 'task' ? 'unrelated' : 'historical', f.owner,
+      boundary === 'model' ? 'other-model' : 'm', 'native-only-on-m')).rejects.toThrow('owner offline');
+    expect(f.calls.filter(call => call.op === 'open')).toHaveLength(before);
+  });
+
   it.each(['allocate', 'MCP', 'started', 'ordinary'] as const)('cancels the exact creation during %s without late fallback/open', async stage => {
     const f = fixture(), owner = {};
     f.state.blockAllocation = stage === 'allocate';

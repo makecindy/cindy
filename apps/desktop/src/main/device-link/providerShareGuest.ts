@@ -45,6 +45,7 @@ import {
   stopProviderShareCrossRegion,
 } from './providerShareCrossRegion.js';
 import { captureProviderShareGuestPrefsRemoval, pruneProviderShareGuestPrefs } from './providerShareGuestPrefs.js';
+import { invalidateProviderMetadataContinuity } from './providerMetadataContinuity.js';
 
 const log = createLogger('provider-share:guest');
 
@@ -134,9 +135,30 @@ function confirmedRegions(rt: Runtime): Region[] {
   return [...(rt.fetchedAt > 0 ? [getActiveAuthRealm()] : []), ...getConfirmedCrossRegionReceivedRegions()];
 }
 
+let metadataPermissionFingerprint = '';
+const accessEpochs = new Map<string, { fingerprint: string | null; epoch: number }>();
+let accessSequence = 0;
+/** Changes synchronously on a known permission transition, including pause → resume. */
+export function providerShareAccessEpoch(shareId: string): number { return accessEpochs.get(shareId)?.epoch ?? 0; }
 function emitChanged(rt: Runtime): Promise<void> | void {
   if (!current(rt)) return;
   const received = allReceived(rt);
+  const permissionFingerprint = JSON.stringify(received.map(share => [share.shareId, share.memberId,
+    share.providerId, share.hostDeviceId, share.status]));
+  if (permissionFingerprint !== metadataPermissionFingerprint) {
+    metadataPermissionFingerprint = permissionFingerprint;
+    const current = new Map(received.map(share => [share.shareId,
+      JSON.stringify([share.memberId, share.providerId, share.hostDeviceId, share.status])]));
+    for (const id of new Set([...accessEpochs.keys(), ...current.keys()])) {
+      const fingerprint = current.get(id) ?? null, previous = accessEpochs.get(id);
+      if (previous?.fingerprint !== fingerprint) accessEpochs.set(id, { fingerprint, epoch: ++accessSequence });
+    }
+    if (accessEpochs.size > 1024) {
+      accessEpochs.clear();
+      for (const [id, fingerprint] of current) accessEpochs.set(id, { fingerprint, epoch: ++accessSequence });
+    }
+    invalidateProviderMetadataContinuity();
+  }
   const fingerprint = JSON.stringify(received);
   if (fingerprint !== receivedFingerprint) { receivedFingerprint = fingerprint; receivedRevision++; }
   const notified = JSON.stringify([fingerprint, confirmedRegions(rt), isCrossRegionReceivedComplete()]);
@@ -347,7 +369,15 @@ export function isProviderShareRefusal(code: string, message: string): boolean {
  */
 let lastAccessFailureRefreshAt = 0;
 
-export function noteProviderShareAccessFailure(): void {
+export function noteProviderShareAccessFailure(refusedShareId?: string): void {
+  if (refusedShareId) {
+    const previous = accessEpochs.get(refusedShareId);
+    accessEpochs.set(refusedShareId, { fingerprint: previous?.fingerprint ?? null, epoch: ++accessSequence });
+    invalidateProviderMetadataContinuity();
+    for (const listener of receivedListeners) {
+      try { listener(); } catch (error) { log.warn('received share denial listener failed', { error: String(error) }); }
+    }
+  }
   const now = Date.now();
   if (!runtime || now - lastAccessFailureRefreshAt < ACCESS_FAILURE_REFRESH_MS) return;
   lastAccessFailureRefreshAt = now;

@@ -10,7 +10,7 @@
  * 驱逐,作废在途回写)。有缓存先显示,再在后台刷新;某个分享这次读不到目录时沿用上次读到的。
  * 旧版桌面没有该 channel(CHANNEL_NOT_ALLOWED)= 没有分享,静默处理。
  */
-import { parseProviderShareReceivedCatalogs, scrubSharedProvider } from '@cindy/device-link';
+import { parseProviderShareReceivedCatalogs, scrubSharedProvider, readProviderMetadataContinuity, MetadataSnapshotExpiry } from '@cindy/device-link';
 import type { ProviderView } from '@cindy/model-providers/registry';
 
 import {
@@ -132,6 +132,7 @@ export function parseProviderShareCatalogPayload(
     : undefined;
   return orderDeviceProviders({
     providers,
+    ...(readProviderMetadataContinuity(value) ? { providerContinuity: readProviderMetadataContinuity(value) } : {}),
     ...(isStringArray(value.providerOrder) ? { providerOrder: value.providerOrder } : {}),
     ...(overrides !== undefined ? { modelVisibilityOverrides: overrides } : {}),
   });
@@ -161,6 +162,7 @@ export function mergeProviderShareCatalogs(
 ): ProviderShareCatalogEntry[] {
   const before = new Map(previous.map((share) => [share.agentDeviceId, share]));
   return next.map((share) => {
+    if (share.status !== 'active') return { ...share, payload: null };
     if (share.payload) return share;
     const last = before.get(share.agentDeviceId);
     return last?.payload && last.providerId === share.providerId ? { ...share, payload: last.payload } : share;
@@ -169,6 +171,9 @@ export function mergeProviderShareCatalogs(
 
 // 按被控设备隔离;代际同 deviceProvidersCache(驱逐时自增,作废在途回写)。
 const cache = new Map<string, ProviderShareCatalogEntry[]>();
+const expiry = new MetadataSnapshotExpiry();
+const expiryKeys = new Map<string, Set<string>>();
+const expiryKey = (deviceId: string, shareId: string) => JSON.stringify([deviceId, shareId]);
 const inflight = new Map<string, Promise<ProviderShareCatalogEntry[]>>();
 const generations = new Map<string, number>();
 const listeners = new Map<string, Set<(entries: ProviderShareCatalogEntry[]) => void>>();
@@ -177,7 +182,9 @@ const generationOf = (deviceId: string): number => generations.get(deviceId) ?? 
 
 /** 读缓存(同步);undefined = 这台被控电脑还没读到过。 */
 export function getCachedProviderShareCatalogs(deviceId: string): ProviderShareCatalogEntry[] | undefined {
-  return cache.get(deviceId);
+  const entries = cache.get(deviceId);
+  if (!entries?.some(share => !expiry.valid(expiryKey(deviceId, share.shareId)))) return entries;
+  return entries.map(share => expiry.valid(expiryKey(deviceId, share.shareId)) ? share : { ...share, payload: null });
 }
 
 /** 订阅某台被控电脑的新快照。 */
@@ -205,6 +212,7 @@ export function refreshProviderShareCatalogs(
   const pending = inflight.get(deviceId);
   if (pending) return pending;
   const startGeneration = generationOf(deviceId);
+  const requestedAt = { wall: Date.now(), mono: performance.now() };
   const request = Promise.resolve()
     .then(fetcher)
     .then(parseProviderShareCatalogs, (error: unknown) => {
@@ -213,7 +221,23 @@ export function refreshProviderShareCatalogs(
     })
     .then((parsed) => {
       if (generationOf(deviceId) !== startGeneration) return parsed;
-      const merged = mergeProviderShareCatalogs(cache.get(deviceId) ?? [], parsed);
+      const invalid = new Set<string>();
+      for (const share of parsed) {
+        const key = expiryKey(deviceId, share.shareId);
+        if (share.status !== 'active') { expiry.forget(key); invalid.add(share.shareId); }
+        else if (share.payload) {
+          const keys = expiryKeys.get(deviceId) ?? new Set<string>(); keys.add(key); expiryKeys.set(deviceId, keys);
+          if (!expiry.remember(key, share.payload, requestedAt, () => {
+            const entries = cache.get(deviceId);
+            if (!entries) return;
+            const next = entries.map(entry => entry.shareId === share.shareId ? { ...entry, payload: null } : entry);
+            cache.set(deviceId, next);
+            for (const listener of listeners.get(deviceId) ?? []) listener(next);
+          })) invalid.add(share.shareId);
+        }
+      }
+      const previous = (getCachedProviderShareCatalogs(deviceId) ?? []).map(share => invalid.has(share.shareId) ? { ...share, payload: null } : share);
+      const merged = mergeProviderShareCatalogs(previous, parsed.map(share => invalid.has(share.shareId) ? { ...share, payload: null } : share));
       cache.set(deviceId, merged);
       for (const listener of listeners.get(deviceId) ?? []) listener(merged);
       return merged;
@@ -229,6 +253,8 @@ export function refreshProviderShareCatalogs(
 
 /** 被控设备下线 / 撤权时驱逐(只清该设备,并作废在途回写)。 */
 export function evictProviderShareCatalogs(deviceId: string): void {
+  for (const key of expiryKeys.get(deviceId) ?? []) expiry.forget(key);
+  expiryKeys.delete(deviceId);
   cache.delete(deviceId);
   inflight.delete(deviceId);
   generations.set(deviceId, generationOf(deviceId) + 1);
@@ -238,6 +264,7 @@ export function evictProviderShareCatalogs(deviceId: string): void {
 export function clearAllProviderShareCatalogs(): void {
   const ids = new Set([...cache.keys(), ...inflight.keys(), ...generations.keys()]);
   cache.clear();
+  expiry.clear(); expiryKeys.clear();
   inflight.clear();
   for (const id of ids) generations.set(id, generationOf(id) + 1);
 }

@@ -158,6 +158,7 @@ import { getKnownControllerIds } from './subscriptions';
 import { startSharedTaskRuntime, stopSharedTaskRuntime } from './sharedTaskRuntime.js';
 import { startProviderShareRuntime, stopProviderShareRuntime } from './providerShareRuntime.js';
 import { tapRemoteModelCatalogChange } from './broadcast-tap.js';
+import { invokeProviderMetadataContinuity, invalidateProviderMetadataContinuity } from './providerMetadataContinuity.js';
 import {
   isProviderShareRefusal,
   getReceivedShares,
@@ -864,9 +865,9 @@ export function initDeviceLinkService(options: DeviceLinkServiceOptions = {}): v
     // 只有当代 presence 明确为 false 才阻止，且仍叠加 relay/owner/撤权/本机禁用门。
     isProbeEligible: (deviceId) =>
       isDeviceResponsivenessProbeEligible({
-        relayOnline: client?.connectionFor(deviceId).getStatus() === 'online',
+        relayOnline: client?.connectionFor(deviceId).getStatus() === 'online' || client?.hasOfflineDirectPath(deviceId) === true,
         ownsRelay: arbiter?.isOwner() === true,
-        presenceAvailable: presenceAvailableByDevice.get(deviceId),
+        presenceAvailable: client?.hasOfflineDirectPath(deviceId) ? true : presenceAvailableByDevice.get(deviceId),
         revoked: revokedByRemote.has(deviceId),
         locallyDisabled: readDeviceLinkSettings().disabledControlDeviceIds.includes(deviceId),
       }),
@@ -1143,6 +1144,7 @@ export function initDeviceLinkService(options: DeviceLinkServiceOptions = {}): v
       // shutdown/revoked/未知新值)都是永久关闭——必须终止已在进行的重开
       // 循环,否则刚被断开的控制链会被退避重试重新建起。
       routeLinkCloseForReopen(reason, transportTimeoutReopen, env.src);
+      if (reason !== 'transport-timeout') invalidateProviderMetadataContinuity(env.src);
       if (reason === 'revoked') {
         // 撤权后在途请求会陆续超时——那不是「设备无响应」,是访问被收回。清熔断并
         // 作废在途结果(翻代),避免 unresponsive 状态与撤权状态并存(对齐 mobile 语义)。
@@ -1155,6 +1157,7 @@ export function initDeviceLinkService(options: DeviceLinkServiceOptions = {}): v
     }
     if (env.kind !== 'push') return;
     const p = env.payload as PushPayload;
+    if (p?.channel === 'maker:provider:changed' || p?.channel === 'provider-group:changed') invalidateProviderMetadataContinuity(env.src);
     const sharePeer = parseProviderSharePeer(env.src);
     const activeShareHost = sharePeer?.role === 'host' && getReceivedShares().some(share => share.shareId === sharePeer.shareId
       && share.hostDeviceId === sharePeer.deviceId && share.status === 'active');
@@ -1905,6 +1908,7 @@ export async function openRemoteLink(
 
 /** 控制端:解除控制链路 */
 export function closeRemoteLink(deviceId: string): void {
+  invalidateProviderMetadataContinuity(deviceId);
   stopFilePeers(deviceId);
   invalidatePluginOauth(deviceId);
   // 取消义务清单(不变量 6):用户显式断开必须终止该设备**全部** per-device
@@ -1980,6 +1984,20 @@ export async function remoteInvoke(
   args: unknown[],
   options?: { preSend?: () => void; background?: boolean },
 ): Promise<InvokeResultPayload> {
+  const closeEpoch = getRemoteLinkCloseEpoch(deviceId);
+  return invokeProviderMetadataContinuity(deviceId, channel, args,
+    () => remoteInvokeLive(deviceId, channel, args, options), () => {
+      if (closeEpoch !== getRemoteLinkCloseEpoch(deviceId)) return false;
+      try { options?.preSend?.(); assertNotStandby(); assertRemoteControlTargetEnabled(deviceId); return true; }
+      catch { return false; }
+    });
+}
+
+async function remoteInvokeLive(
+  deviceId: string, channel: string, args: unknown[],
+  options?: { preSend?: () => void; background?: boolean; liveProviderMetadata?: true },
+): Promise<InvokeResultPayload> {
+  if (options?.liveProviderMetadata) return remoteInvokeLive(deviceId, channel, args, options);
   options?.preSend?.();
   assertNotStandby();
   assertRemoteControlTargetEnabled(deviceId);
@@ -2073,28 +2091,42 @@ export async function remoteBackgroundInvoke(
   agentDeviceId: string,
   channel: string,
   args: unknown[],
-  options?: { preSend?: () => void },
+  options?: { preSend?: () => void; liveProviderMetadata?: true },
 ): Promise<InvokeResultPayload> {
+  const owner = activeOwnerScopeKey();
+  const current = () => !isAppSessionBoundaryPending() && activeOwnerScopeKey() === owner;
+  const assertCurrent = () => { if (!current()) throw new DeviceLinkError('NOT_CONNECTED', 'remote read account changed'); };
+  assertCurrent();
   options?.preSend?.();
   // 分享来的供应商：任务记录里是 `share:<id>`，换成分享者那台电脑的本地 peer key。
   const deviceId = await resolveRemoteAgentTargetWhenReady(agentDeviceId);
+  assertCurrent();
   options?.preSend?.();
   const shared = deviceId !== agentDeviceId || parseProviderSharePeer(deviceId)?.role === 'host';
   if (!shared) return backgroundInvokeDevice(deviceId, channel, args, options);
+  const peer = parseProviderSharePeer(deviceId);
+  // A delegated M losing a task lease (e.g. after restart) is not proof that
+  // O revoked the whole share. Only the actual owner's denial invalidates G's share generation.
+  const refusedOwnerShare = peer?.role === 'host' && getReceivedShares().some(share =>
+    share.shareId === peer.shareId && share.hostDeviceId === peer.deviceId) ? peer.shareId : undefined;
   try {
     // 跨区域分享：分享者电脑在另一个区域的 relay 上，经那条连接发送。
     const result = isCrossRegionProviderShareTarget(deviceId)
-      ? await crossRegionInvoke(deviceId, channel, args, resolveRemoteInvokeTimeoutMs(channel, args, 'desktop'))
+      ? await crossRegionInvoke(deviceId, channel, args, resolveRemoteInvokeTimeoutMs(channel, args, 'desktop'), options)
       : await backgroundInvokeDevice(deviceId, channel, args, options);
+    assertCurrent();
+    options?.preSend?.();
     if (result.ok) return result;
     if (!isProviderShareRefusal(result.error.code, result.error.message)) return result;
-    noteProviderShareAccessFailure();
+    noteProviderShareAccessFailure(refusedOwnerShare);
     return { ok: false, error: { code: 'IPC_ERROR', message: PROVIDER_SHARE_UNAVAILABLE_MESSAGE } };
   } catch (error) {
-    noteProviderShareAccessFailure();
+    if (!current()) throw error;
     if (error instanceof DeviceLinkError && isProviderShareRefusal(error.code, error.message)) {
+      noteProviderShareAccessFailure(refusedOwnerShare);
       throw Object.assign(new Error(PROVIDER_SHARE_UNAVAILABLE_MESSAGE), { code: error.code });
     }
+    noteProviderShareAccessFailure();
     throw error;
   }
 }
@@ -2108,7 +2140,18 @@ export function providerShareHostInvoke(target: string, channel: string, args: u
   return backgroundInvokeDevice(target, channel, args);
 }
 
-async function backgroundInvokeDevice(deviceId: string, channel: string, args: unknown[], options?: { preSend?: () => void }): Promise<InvokeResultPayload> {
+async function backgroundInvokeDevice(deviceId: string, channel: string, args: unknown[], options?: { preSend?: () => void; liveProviderMetadata?: true }): Promise<InvokeResultPayload> {
+  if (options?.liveProviderMetadata) return backgroundInvokeDeviceLive(deviceId, channel, args, options);
+  const epoch = getRemoteLinkCloseEpoch(deviceId);
+  return invokeProviderMetadataContinuity(deviceId, channel, args,
+    () => backgroundInvokeDeviceLive(deviceId, channel, args, options), () => {
+      if (getRemoteLinkCloseEpoch(deviceId) !== epoch) return false;
+      try { options?.preSend?.(); assertNotStandby(); assertRemoteControlTargetEnabled(deviceId); return true; }
+      catch { return false; }
+    });
+}
+
+async function backgroundInvokeDeviceLive(deviceId: string, channel: string, args: unknown[], options?: { preSend?: () => void }): Promise<InvokeResultPayload> {
   options?.preSend?.();
   if (!client?.isLinkReady(deviceId)) {
     assertBackgroundLinkAccepted(await openRemoteLink(deviceId), {
@@ -2117,7 +2160,7 @@ async function backgroundInvokeDevice(deviceId: string, channel: string, args: u
     });
   }
   // 账号等调用方状态必须穿过建链、上线与排队等待，在实际发送边界复验。
-  return remoteInvoke(deviceId, channel, args, options);
+  return remoteInvokeLive(deviceId, channel, args, options);
 }
 
 /**

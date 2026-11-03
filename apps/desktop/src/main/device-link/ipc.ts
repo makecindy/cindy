@@ -95,6 +95,7 @@ import {
   resolveRemoteAgentTargetWhenReady,
 } from './providerShareGuest.js';
 import { crossRegionInvoke, isCrossRegionProviderShareTarget } from './providerShareCrossRegion.js';
+import { readProviderDirectoryContinuity, invalidateProviderMetadataContinuity } from './providerMetadataContinuity.js';
 import {
   outboundSessionReferencesRequested,
   rewriteOutboundSessionReferences,
@@ -390,6 +391,7 @@ type DeviceListResult = { devices: DeviceLinkDeviceView[] };
  */
 let deviceListRequestSequence = 0;
 let latestDeviceListRequest: {
+  owner: string;
   sequence: number;
   promise: Promise<DeviceListResult>;
   startedAt: number;
@@ -399,6 +401,7 @@ let latestDeviceListRequest: {
 
 /** A rename / delete changes the directory: later reads must not join a request sent before it. */
 function invalidateDeviceListCoalescing(): void {
+  invalidateProviderMetadataContinuity();
   if (latestDeviceListRequest) latestDeviceListRequest.joinable = false;
 }
 /**
@@ -411,32 +414,35 @@ const DEVICE_LIST_COALESCE_WINDOW_MS = 300;
 /** 仅测试:重置合并窗口状态,避免跨用例共用在途 promise。 */
 export function __resetDeviceListCoalescingForTests(): void {
   latestDeviceListRequest = null;
+  invalidateProviderMetadataContinuity();
 }
 
 export function handleListDevices(
   deps: DeviceLinkIpcDeps,
 ): Promise<DeviceListResult> {
+  const owner = activeOwnerScopeKey();
   const inFlight = latestDeviceListRequest;
-  if (inFlight && inFlight.joinable && Date.now() - inFlight.startedAt < DEVICE_LIST_COALESCE_WINDOW_MS) {
+  if (inFlight && inFlight.owner === owner && inFlight.joinable && Date.now() - inFlight.startedAt < DEVICE_LIST_COALESCE_WINDOW_MS) {
     return inFlight.promise;
   }
   const sequence = ++deviceListRequestSequence;
   const directoryRequestSequence = deps.beginControllerDisplayNameDirectoryRefresh();
   const requestEpoch = deps.captureControllerDisplayNameRequestEpoch();
   const presenceRequestEpoch = deps.captureControllerPresenceRequestEpoch();
-  const request = deps.apiFetch<{ devices: DeviceLinkServerDeviceView[] }>(
+  const request = readProviderDirectoryContinuity(() => deps.apiFetch<{ devices: DeviceLinkServerDeviceView[] }>(
     '/api/device-link/devices',
-  ).then(
-    async (result) => {
+  )).then(
+    async ({ value: result, stale }) => {
+      if (activeOwnerScopeKey() !== owner) throw new Error('[DEVICE_LINK_NOT_CONNECTED] device directory account changed');
       let latest = latestDeviceListRequest;
       if (latest && latest.sequence > sequence) return latest.promise;
       const isLatestDirectorySnapshot = deps.isLatestControllerDisplayNameDirectoryRefresh(
         directoryRequestSequence,
       );
-      if (isLatestDirectorySnapshot) {
+      if (isLatestDirectorySnapshot && !stale) {
         deps.applyControllerDisplayNameListSnapshot(result.devices, requestEpoch);
         deps.applyControllerPresenceListSnapshot(result.devices, presenceRequestEpoch);
-      } else {
+      } else if (!stale) {
         await deps.waitForNewerControllerDisplayNameDirectoryRefresh(directoryRequestSequence);
         latest = latestDeviceListRequest;
         if (latest && latest.sequence > sequence) return latest.promise;
@@ -450,16 +456,17 @@ export function handleListDevices(
       );
       return {
         devices: reconciled.devices.map(device => deps.hasOfflineDirectPath?.(device.deviceId)
-          ? { ...device, online: true } : device),
+          ? { ...device, online: true } : stale ? { ...device, online: false } : device),
       };
     },
     (err: unknown) => {
+      if (activeOwnerScopeKey() !== owner) throw new Error('[DEVICE_LINK_NOT_CONNECTED] device directory account changed');
       const latest = latestDeviceListRequest;
       if (latest && latest.sequence > sequence) return latest.promise;
       rethrowServerError(err);
     },
   );
-  const entry = { sequence, promise: request, startedAt: Date.now(), joinable: true };
+  const entry = { owner, sequence, promise: request, startedAt: Date.now(), joinable: true };
   latestDeviceListRequest = entry;
   void request.then(
     () => { entry.joinable = false; markStartupMilestone('device-directory-first-result'); },
@@ -577,6 +584,7 @@ export async function handleDeleteDevice(
       { method: 'DELETE' },
     );
     invalidateDeviceListCoalescing();
+    if (deleted.deleted) handleCloseLink(deps, deviceId);
     return deleted;
   } catch (err) {
     rethrowServerError(err);
@@ -883,19 +891,19 @@ export async function handleProviderShareInvoke(
       err instanceof DeviceLinkError ? err.code : 'THROWN',
       err instanceof Error ? err.message : String(err),
     );
-    if (err instanceof DeviceLinkError && isProviderShareRefusal(err.code, err.message)) refuseProviderShare();
+    if (err instanceof DeviceLinkError && isProviderShareRefusal(err.code, err.message)) refuseProviderShare(parseProviderShareAgentDeviceId(agentDeviceId) ?? undefined);
     rethrowDeviceLinkError(err);
   }
   if (result.ok) return projectProviderShareResult(channel, result.result);
   logProviderShareReadFailure(agentDeviceId, channel, result.error.code, result.error.message);
   // 分享者电脑拒绝了(暂停、关了远程控制或这个供应商的「允许被远程调用」)：分享专属原因。
-  if (isProviderShareRefusal(result.error.code, result.error.message)) refuseProviderShare();
+  if (isProviderShareRefusal(result.error.code, result.error.message)) refuseProviderShare(parseProviderShareAgentDeviceId(agentDeviceId) ?? undefined);
   if (result.error.code === 'IPC_ERROR') throw new Error(result.error.message);
   throwIpcError(DEVICE_LINK_CODE_MAP[result.error.code] ?? 'INTERNAL', result.error.message);
 }
 
-function refuseProviderShare(): never {
-  noteProviderShareAccessFailure();
+function refuseProviderShare(shareId?: string): never {
+  noteProviderShareAccessFailure(shareId);
   throwIpcError('REMOTE_AGENT_SHARE_UNAVAILABLE', 'The shared provider is not available right now');
 }
 

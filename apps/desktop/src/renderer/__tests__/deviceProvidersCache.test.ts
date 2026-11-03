@@ -17,6 +17,24 @@ beforeEach(() => {
   providerCache.evictAllDeviceProviders();
 });
 
+// Unit: a mounted/forwarded catalog must not outlive the Main-owned trust budget.
+it('expires a retained host snapshot without renewing it on cache reads or remounts', async () => {
+  vi.useFakeTimers({ toFake: ['Date', 'performance', 'setTimeout', 'clearTimeout'] });
+  const invoke = vi.fn().mockResolvedValueOnce({ ...result('host'), providerContinuity: { stale: true, remainingMs: 1000 } })
+    .mockRejectedValue(new Error('[DEVICE_LINK_NOT_CONNECTED] offline'));
+  vi.stubGlobal('window', { electronAPI: { deviceLink: { invoke } } });
+  try {
+    await providerCache.prefetchDeviceProviders('host');
+    await vi.advanceTimersByTimeAsync(500);
+    await providerCache.prefetchDeviceProviders('host');
+    expect(invoke).toHaveBeenCalledTimes(1);
+    expect(providerCache.getCachedDeviceProviders('host')?.providers[0].id).toBe('host-xd');
+    await vi.advanceTimersByTimeAsync(501);
+    expect(providerCache.getCachedDeviceProviders('host')).toBeNull();
+    expect(invoke).toHaveBeenCalledTimes(2);
+  } finally { providerCache.evictAllDeviceProviders(); vi.useRealTimers(); vi.unstubAllGlobals(); }
+});
+
 // #8010 unit: the same source can have different access through two task hosts;
 // existing per-device cache tests did not exercise host-mediated reads.
 it('reads through each task host and invalidates only that host without resurrecting late catalogs', async () => {

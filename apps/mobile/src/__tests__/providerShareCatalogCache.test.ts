@@ -45,6 +45,24 @@ const rawShare = (patch: Record<string, unknown> = {}) => ({
 
 afterEach(() => {
   clearAllProviderShareCatalogs();
+  vi.useRealTimers();
+});
+
+// Unit: failed refreshes used to keep re-exporting one share catalog indefinitely.
+it('expires a retained share catalog after its original budget and never revives it from a failed refresh', async () => {
+  vi.useFakeTimers({ toFake: ['Date', 'performance', 'setTimeout', 'clearTimeout'] });
+  const snapshot = rawShare();
+  const first = { ...snapshot, catalog: { ...snapshot.catalog, providerContinuity: { stale: true, remainingMs: 1000 } } };
+  await refreshProviderShareCatalogs('host', async () => ({ shares: [first] }));
+  await vi.advanceTimersByTimeAsync(700);
+  await refreshProviderShareCatalogs('host', async () => ({ shares: [rawShare({ hostOnline: false, catalog: null })] }));
+  expect(getCachedProviderShareCatalogs('host')?.[0].payload?.providers).toHaveLength(1);
+  await vi.advanceTimersByTimeAsync(301);
+  expect(getCachedProviderShareCatalogs('host')?.[0].payload).toBeNull();
+  await refreshProviderShareCatalogs('host', async () => ({ shares: [rawShare({ catalog: null })] }));
+  expect(getCachedProviderShareCatalogs('host')?.[0].payload).toBeNull();
+  await refreshProviderShareCatalogs('host', async () => ({ shares: [rawShare({ status: 'paused' })] }));
+  expect(getCachedProviderShareCatalogs('host')?.[0].payload).toBeNull();
 });
 
 describe('provider share catalog parsing', () => {
