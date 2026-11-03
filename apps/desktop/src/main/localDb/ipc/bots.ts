@@ -1053,6 +1053,8 @@ function canonicalReplyCompleted() {
 /** Visibility shared by the local unread count and remote reply watermark. */
 function canonicalReplyVisibility() {
   return [
+    // Failed Codex sampling output is work history, not an addressed reply.
+    sql`(${messages.agentMeta} IS NULL OR json_extract(${messages.agentMeta}, '$.failedSamplingAttempt') IS NULL)`,
     sql`(${messages.agentMeta} IS NULL OR json_extract(${messages.agentMeta}, '$.assistantPhase') IS NOT 'commentary')`,
     sql`(${messages.agentMeta} IS NULL OR json_extract(${messages.agentMeta}, '$.parentToolUseId') IS NULL)`,
     sql`(${messages.agentMeta} IS NULL OR json_extract(${messages.agentMeta}, '$.parent_tool_use_id') IS NULL)`,

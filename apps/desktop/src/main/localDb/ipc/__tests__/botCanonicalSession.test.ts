@@ -4223,6 +4223,48 @@ describe('Bots list unread projection', () => {
     expect(await unreadFor('bot-1', { 'bot-1': 1500 })).toBe(1);
   });
 
+  it.each([false, true])('does not count failed welcome sampling attempts (running=%s)', async (running) => {
+    const sessionId = await canonicalFor('bot-1');
+    for (let attempt = 1; attempt <= 5; attempt += 1) {
+      insertMessage(sessionId, {
+        id: `failed-opening-${attempt}`, role: 'assistant', content: `你好，我是 Cindy。尝试 ${attempt}`,
+        createdAt: 2000 + attempt,
+        agentMeta: {
+          assistantPhase: 'final_answer', turnCompleted: false, turnCostUsd: 0.01,
+          failedSamplingAttempt: { threadId: 'native-thread', turnId: 'welcome-turn', attempt, itemId: `failed-${attempt}` },
+        },
+      });
+    }
+    insertMessage(sessionId, {
+      id: 'successful-opening', role: 'assistant', content: '你好，我是 Cindy。', createdAt: 3000,
+      agentMeta: { assistantPhase: 'final_answer', turnCompleted: true },
+    });
+    h.getSession.mockReturnValue(running ? { isTurnRunning: () => true, compactSession: vi.fn() } : null);
+    expect(await unreadFor('bot-1', { 'bot-1': 1000 })).toBe(1);
+  });
+
+  it('keeps failed sampling output out of local previews and remote reply watermarks', async () => {
+    const sessionId = await canonicalFor('bot-1');
+    insertMessage(sessionId, {
+      id: 'answer', role: 'assistant', content: 'Accepted reply', createdAt: 2000,
+      agentMeta: { turnCompleted: true },
+    });
+    for (let attempt = 1; attempt <= 105; attempt += 1) {
+      insertMessage(sessionId, {
+        id: `failed-${attempt}`, role: 'assistant', content: 'Incomplete replacement', createdAt: 3000 + attempt,
+        agentMeta: { failedSamplingAttempt: { threadId: 'native-thread', turnId: 'next-turn', attempt, itemId: `failed-${attempt}` } },
+      });
+    }
+    expect(await unreadFor('bot-1', { 'bot-1': 1000 })).toBe(1);
+    expect(await unreadFor('bot-1', { 'bot-1': 2000 })).toBe(0);
+    expect(await invoke('local-db:bots:get', 'bot-1')).toMatchObject({
+      lastMessagePreview: 'Accepted reply', lastMessageAt: 2000,
+    });
+    expect(await getBotRemoteResourceSource('bot-1')).toMatchObject({
+      lastMessagePreview: 'Accepted reply', lastReplyAt: 2000,
+    });
+  });
+
   it('counts only replies that landed after the read position', async () => {
     const sessionId = await canonicalFor('bot-1');
     insertMessage(sessionId, {
