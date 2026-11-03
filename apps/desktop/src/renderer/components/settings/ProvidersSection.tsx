@@ -2,6 +2,7 @@ import { AddSpeechModelsDialog } from './AddSpeechModelsDialog';
 import { providerSpeechSetup } from '../../../shared/speechProviderSetup';
 import { useCodexRateLimits } from '@/hooks/useCodexRateLimits';
 import { SubscriptionFastSetting } from '@/features/provider-share/SubscriptionFastSetting';
+import { SubscriptionCreditsSetting } from '@/features/provider-share/SubscriptionCreditsSetting';
 import { useCodexRateLimitReset } from '@/hooks/useCodexRateLimitReset';
 import { CodexResetCredits } from '../status/CodexResetCredits';
 import { providerWeeklyQuotaSource } from '../new-chat/useProviderWeeklyQuota';
@@ -873,6 +874,7 @@ function DetailHeader({
       >
         {detail && <div className="px-5 pb-4">{detail}</div>}
         {provider?.subscriptionFastPolicy && <div className="px-5 pb-4"><SubscriptionFastSetting key={provider.id} provider={provider} /></div>}
+        {provider?.subscriptionCreditsPolicy && <div className="px-5 pb-4"><SubscriptionCreditsSetting key={provider.id} provider={provider} /></div>}
         {assetModule ??
           (subscription ? (
             <div

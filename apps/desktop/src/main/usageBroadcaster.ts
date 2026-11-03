@@ -580,6 +580,10 @@ export function broadcastCodexAccountAuthStarted(providerId: string): void {
 export function readCodexAccountUsageSnapshot(providerId?: string): Promise<CodexAccountUsagePayload | null> {
   return codexUsageStore(providerId).read();
 }
+/** Request-path reads must not await DB hydration; unknown snapshots stay fail-open. */
+export function peekCodexAccountUsageSnapshot(providerId?: string): CodexAccountUsagePayload | null {
+  return codexUsageStore(providerId).peek();
+}
 
 function createCodexUsageStore(providerId: string) {
   const storageKey = providerId === 'openai' ? 'codex' : `codex:${providerId}`;
@@ -830,7 +834,17 @@ function createCodexUsageStore(providerId: string) {
     return buildCodexAccountUsagePayload();
   }
 
-  return { record: recordCodexAccountUsageSnapshot, clear: clearCodexAccountUsageSnapshot, read: readCodexAccountUsageSnapshot };
+  function peekCodexAccountUsageSnapshot(): CodexAccountUsagePayload | null {
+    resetCodexAccountUsageCacheIfOwnerChanged();
+    return buildCodexAccountUsagePayload();
+  }
+
+  return {
+    record: recordCodexAccountUsageSnapshot,
+    clear: clearCodexAccountUsageSnapshot,
+    read: readCodexAccountUsageSnapshot,
+    peek: peekCodexAccountUsageSnapshot,
+  };
 }
 
 // ── xAI(SuperGrok bridge)限流快照 ─────────────────────────────────────────

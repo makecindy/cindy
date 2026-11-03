@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { isLocalOnlyProviderForAgent, isOpenAiSubscriptionProvider, providerCatalogId, isCustomRoutedProvider, isOrganizationManagedProvider, supportsSubscriptionFastPolicy } from '../provider-identity.js';
+import { isLocalOnlyProviderForAgent, isOpenAiSubscriptionProvider, providerCatalogId, isCustomRoutedProvider, isOrganizationManagedProvider, supportsSubscriptionFastPolicy, supportsSubscriptionCreditsPolicy } from '../provider-identity.js';
 import type { Provider } from '../types.js';
 
 describe('connection identity vs public catalog identity', () => {
@@ -26,6 +26,13 @@ describe('connection identity vs public catalog identity', () => {
     )).toEqual(expected);
     const api = { ...provider, auth: { method: 'apiKey' as const } };
     expect(isLocalOnlyProviderForAgent(api, 'pi')).toBe(false);
+  });
+  it('offers credits controls only for OpenAI subscription connections', () => {
+    expect(supportsSubscriptionCreditsPolicy({ id: 'openai', auth: { method: 'oauth' } })).toBe(true);
+    expect(supportsSubscriptionCreditsPolicy({ id: 'account-1', auth: { method: 'oauth', native: 'codex' } })).toBe(true);
+    expect(supportsSubscriptionCreditsPolicy({ id: 'anthropic', auth: { method: 'oauth' } })).toBe(false);
+    expect(supportsSubscriptionCreditsPolicy({ id: 'openai', auth: { method: 'apiKey' } })).toBe(false);
+    expect(supportsSubscriptionCreditsPolicy(null)).toBe(false);
   });
   it('aliases only native OpenAI subscription metadata', () => {
     for (const provider of [
