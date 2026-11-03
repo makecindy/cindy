@@ -105,6 +105,12 @@ describe('extractAgentIslandPromptText', () => {
     ).toBe('hello');
     expect(extractAgentIslandPromptText({ text: 'hello', images: [], files: [] })).toBe('hello');
   });
+
+  it('hides host-synthesized trigger prompts from the activity preview', () => {
+    const groupTurn = '[UI_ACTION_TRIGGER]You are taking your turn in the group chat.';
+    expect(extractAgentIslandPromptText(groupTurn)).toBeNull();
+    expect(extractAgentIslandPromptText(JSON.stringify({ text: groupTurn, images: [], files: [] }))).toBeNull();
+  });
 });
 
 describe('buildHandoffText', () => {

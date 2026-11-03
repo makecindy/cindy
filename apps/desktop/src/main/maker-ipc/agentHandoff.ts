@@ -20,6 +20,7 @@ import {
   readMessageSourceDevice,
   promptSafeSourceName,
 } from '@cindy/maker-shared/message-source';
+import { isSyntheticTriggerText } from '@cindy/maker-shared/synthetic-trigger';
 
 import { imChannelDisplayName } from '../../shared/imMessageSource.js';
 
@@ -295,8 +296,15 @@ function isStringifyUserContentEnvelope(
     && Array.isArray(record.files);
 }
 
-/** 岛上预览正文:只解开 stringifyUserContent 信封,JSON 原文提示保持原样。 */
+/** 岛上预览正文:只解开 stringifyUserContent 信封,JSON 原文提示保持原样。
+ * 宿主合成的隐藏指令([UI_ACTION_TRIGGER] 前缀:伙伴群聊轮次、任务回执、续跑等)
+ * 不是给人看的输入,不进活动预览——否则会出现在伙伴任务卡、群进度条、侧栏与岛上。 */
 export function extractAgentIslandPromptText(content: unknown): string | null {
+  const text = extractAgentIslandPromptTextRaw(content);
+  return text && !isSyntheticTriggerText(text) ? text : null;
+}
+
+function extractAgentIslandPromptTextRaw(content: unknown): string | null {
   if (typeof content === 'string') {
     const trimmed = content.trim();
     if (!trimmed) return null;
