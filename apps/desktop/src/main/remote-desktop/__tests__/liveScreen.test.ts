@@ -4,6 +4,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
   LiveScreenFramer,
   LiveScreenInputMapper,
+  LiveScreenRetirement,
   LiveScreenSession,
   type LiveScreenSource,
 } from '../liveScreen';
@@ -302,6 +303,56 @@ describe('live screen session', () => {
     await closing;
     expect(plugin.close).toHaveBeenCalledOnce();
     expect(session.close()).toBe(session.close());
+  });
+
+  it('forgets held modifiers when control ends, touching or not', async () => {
+    const url = await serve(() => {});
+    const plugin = source(url);
+    const session = new LiveScreenSession(
+      'sim',
+      'UDID-1',
+      screen,
+      { width: 10, height: 20 },
+      { url, screen: { ...screen, width: 10, height: 20 } },
+      plugin,
+      vi.fn(),
+    );
+    session.input([{ kind: 'key', code: 'ShiftLeft', down: true }]);
+    session.release();
+    session.input([{ kind: 'key', code: 'KeyA', down: true }]);
+    await vi.waitFor(() => expect(plugin.calls.some((call) => call[0] === 'input')).toBe(true));
+    expect(plugin.calls.find((call) => call[0] === 'input')?.[3]).toEqual([
+      { kind: 'key', code: 'KeyA' },
+    ]);
+    session.close();
+  });
+
+  it('keeps every closing session pending, however it ended, until the plugin has closed it', async () => {
+    const url = await serve(() => {});
+    const plugin = source(url);
+    let release!: () => void;
+    vi.mocked(plugin.input).mockImplementationOnce(
+      () => new Promise<void>((resolve) => (release = resolve)),
+    );
+    const session = new LiveScreenSession(
+      'sim',
+      'UDID-1',
+      screen,
+      { width: 10, height: 20 },
+      { url, screen: { ...screen, width: 10, height: 20 } },
+      plugin,
+      vi.fn(),
+    );
+    session.input([{ kind: 'press', button: 'home' }]);
+    const retirement = new LiveScreenRetirement();
+    retirement.retire(session);
+    let settled = false;
+    const done = retirement.settled().then(() => (settled = true));
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(settled).toBe(false);
+    release();
+    await done;
+    expect(plugin.close).toHaveBeenCalledOnce();
   });
 
   it('keeps only the latest position of a moving finger while a send is in flight', async () => {

@@ -82,6 +82,10 @@ export class LiveScreenFramer {
 /** Viewer input for a live screen; desktop pointer kinds have no meaning there. */
 export class LiveScreenInputMapper {
   private held = new Set<string>();
+  /** Forgets held modifiers, as a release does. */
+  reset(): void {
+    this.held.clear();
+  }
   map(events: DesktopInput[]): LiveScreenEvent[] {
     const mapped: LiveScreenEvent[] = [];
     for (const event of events) {
@@ -386,6 +390,8 @@ export class LiveScreenSession {
 
   /** Lifts held contacts when control ends, so nothing stays pressed on the device. */
   release(): void {
+    // Whatever was held when control ended is not held when it resumes.
+    this.mapper.reset();
     if (this.touching) this.input([{ kind: 'release' }]);
   }
 
@@ -410,6 +416,22 @@ export class LiveScreenSession {
     const close = () => this.source.close(this.plugin, this.id).catch(() => {});
     this.closing = this.inputChain.then(close, close);
     return this.closing;
+  }
+}
+
+/**
+ * Every live screen session that is closing, whichever path ended it. The
+ * plugin closes a screen by device id, so no device may be opened again until
+ * all of them are done: a late close would end the new screen.
+ */
+export class LiveScreenRetirement {
+  private pending: Promise<unknown> = Promise.resolve();
+  retire(session: LiveScreenSession | null): void {
+    if (session) this.pending = Promise.all([this.pending, session.close()]);
+  }
+  /** Settles once every retired session has delivered its input and closed. */
+  async settled(): Promise<void> {
+    await this.pending;
   }
 }
 

@@ -96,7 +96,7 @@ import {
 } from './inputHost';
 import { getDeepLinkMainWindow } from '../deepLink';
 import { RemoteDesktopPermissionsService } from './permissions';
-import { LiveScreenSession, type LiveScreenProvider } from './liveScreen';
+import { LiveScreenRetirement, LiveScreenSession, type LiveScreenProvider } from './liveScreen';
 import {
   MAC_ACCESSIBILITY_SETTINGS_URL,
   MAC_SCREEN_RECORDING_SETTINGS_URL,
@@ -269,6 +269,7 @@ const supportsSystemAudio = () =>
 let videoLease: string | null = null;
 /** The plugin screen the current live screen lease shows; null for desktop leases. */
 let liveSession: LiveScreenSession | null = null;
+const liveRetirement = new LiveScreenRetirement();
 function setVideoLease(lease: string | null): void {
   videoLease = lease;
 }
@@ -608,11 +609,10 @@ function liveScreenDeps(): Pick<DesktopControllerDeps, 'liveScreens'> {
         );
         if (!listed) throw new Error('DESKTOP_SCREEN_NOT_FOUND');
         if (listed.state !== 'running') throw new Error('DESKTOP_SCREEN_NOT_RUNNING');
-        // The plugin closes a screen by device id: finish closing the previous
-        // session before opening, or its late close would end the new screen.
         const previous = liveSession;
         liveSession = null;
-        await previous?.close();
+        liveRetirement.retire(previous);
+        await liveRetirement.settled();
         const opened = await source.open(plugin, id);
         const { width, height, ...descriptor } = opened.screen;
         const screen = { plugin, id, name: listed.name, ...descriptor };
@@ -625,6 +625,8 @@ function liveScreenDeps(): Pick<DesktopControllerDeps, 'liveScreens'> {
           source,
           () => {
             if (liveSession === session) liveSession = null;
+            // The session closed itself: it still has to finish before a reopen.
+            liveRetirement.retire(session);
             ended();
           },
         );
@@ -640,7 +642,7 @@ function liveScreenDeps(): Pick<DesktopControllerDeps, 'liveScreens'> {
       close: () => {
         const session = liveSession;
         liveSession = null;
-        void session?.close();
+        liveRetirement.retire(session);
         syncControlledOverlay();
       },
     },

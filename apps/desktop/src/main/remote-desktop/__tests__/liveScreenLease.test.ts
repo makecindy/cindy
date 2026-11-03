@@ -26,7 +26,10 @@ const screen = {
   buttons: [{ id: 'home', icon: 'home' as const, label: 'Home' }],
 };
 
-function harness(screenRecording: 'granted' | 'missing' = 'granted') {
+function harness(
+  screenRecording: 'granted' | 'missing' = 'granted',
+  offered: typeof screen = screen,
+) {
   let ended: (() => void) | null = null;
   let shape: { width: number; height: number } | null = null;
   const watchers = new Set<(next: { width: number; height: number }) => void>();
@@ -35,7 +38,7 @@ function harness(screenRecording: 'granted' | 'missing' = 'granted') {
     open: vi.fn(async (_plugin: string, _id: string, onEnded: () => void) => {
       ended = onEnded;
       return {
-        screen,
+        screen: offered,
         width: 1179,
         height: 2556,
         shape: () => shape,
@@ -138,6 +141,22 @@ describe('live screen leases', () => {
       control: true,
     })) as RemoteDesktopLease;
     expect(() => desktop.controller.input(plain.lease, 1, [touch])).toThrow('INVALID_REQUEST');
+  });
+
+  it('refuses a keyboard the device does not offer, and takes one it does', async () => {
+    const mute = harness('granted', { ...screen, keyboard: false });
+    const { lease } = await mute.start({ control: true });
+    expect(() =>
+      mute.controller.input(lease, 1, [{ kind: 'key', code: 'KeyA', down: true }]),
+    ).toThrow('INVALID_REQUEST');
+    expect(() => mute.controller.input(lease, 2, [{ kind: 'text', text: 'hi' }])).toThrow(
+      'INVALID_REQUEST',
+    );
+    expect(mute.deps.input).not.toHaveBeenCalled();
+    const typing = harness();
+    const open = await typing.start({ control: true });
+    typing.controller.input(open.lease, 1, [{ kind: 'text', text: 'hi' }]);
+    expect(typing.deps.input).toHaveBeenCalledOnce();
   });
 
   it('forwards only buttons and as many fingers as the device offered', async () => {

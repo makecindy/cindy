@@ -79,6 +79,32 @@ export interface DesktopLiveScreen {
 const SCREEN_SHAPE_WAIT_MS = 6000;
 
 /** What a live screen lease may do: nothing that reaches the desktop itself. */
+/**
+ * What a live screen lease refuses from its viewer: desktop pointers, and
+ * anything the device's descriptor did not offer (its buttons, as many fingers
+ * as it takes, a keyboard). The plugin never sees these.
+ */
+function refusedOnLiveScreen(
+  screen: RemoteDesktopLeaseScreen,
+  event: { kind: string } & Record<string, unknown>,
+): boolean {
+  switch (event.kind) {
+    case 'move':
+    case 'button':
+    case 'scroll':
+      return true;
+    case 'press':
+      return !screen.buttons.some((button) => button.id === event.button);
+    case 'touch':
+      return (event.touches as unknown[]).length > screen.maxTouches;
+    case 'key':
+    case 'text':
+      return !screen.keyboard;
+    default:
+      return false;
+  }
+}
+
 const LIVE_SCREEN_OPS = new Set([
   'stop',
   'heartbeat',
@@ -835,15 +861,7 @@ export class RemoteDesktopController {
     // Touches and device buttons mean nothing to the desktop; pointers nothing to a device.
     if (
       request.events.some((event) =>
-        active.screen
-          ? event.kind === 'move' ||
-            event.kind === 'button' ||
-            event.kind === 'scroll' ||
-            // Only what the device offered: its buttons and as many fingers as it takes.
-            (event.kind === 'press' &&
-              !active.screen.buttons.some((button) => button.id === event.button)) ||
-            (event.kind === 'touch' && event.touches.length > active.screen.maxTouches)
-          : isLiveScreenOnlyInput(event),
+        active.screen ? refusedOnLiveScreen(active.screen, event) : isLiveScreenOnlyInput(event),
       )
     )
       throw new Error('INVALID_REQUEST');
