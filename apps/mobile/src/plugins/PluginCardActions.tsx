@@ -47,10 +47,13 @@ import {
 } from "@/auth/authOwnerGeneration";
 import {
   fontWeight,
+  iconSize,
+  iconStroke,
   lineHeight,
   radius,
   spacing,
   typeScale,
+  useTheme,
   useThemedStyles,
   type ThemeColors,
 } from "@/theme";
@@ -60,6 +63,7 @@ import { pickMobileMailAttachment } from "./mobileMailAttachment";
 import { PluginCardRecipients } from "./PluginCardRecipients";
 import { invokePlugin } from "./pluginClient";
 import { FileTypeIcon } from '@/components/FileTypeIcon';
+import { ExternalLink, Github } from 'lucide-react-native';
 import { formatByteSize } from '@cindy/maker-shared/file-preview';
 
 interface Action {
@@ -219,6 +223,7 @@ function CardControls({
 }) {
   const { t } = useTranslation(),
     styles = useThemedStyles(makeStyles);
+  const { colors } = useTheme();
   const history = !!mail?.supersededBy || !!legacyMail;
   // Non-mail cards read like Desktop's: a title (the card's own link when it has one), quiet
   // detail lines, and compact buttons. Mail cards keep their editor layout.
@@ -569,7 +574,13 @@ function CardControls({
               onPress={() => choose(titleLink)}
               style={({ pressed }) => [styles.titleRow, pressed && styles.pressed]}
             >
-              <Text style={styles.cardTitle}>{lines[0]}</Text>
+              {titleHost === "github.com" ? (
+                <Github size={iconSize.md} strokeWidth={iconStroke.thin} color={colors.textSecondary} style={styles.titleMark} />
+              ) : null}
+              <Text style={[styles.cardTitle, styles.titleText, styles.titleLink, { textDecorationColor: colors.textTertiary }]}>{lines[0]}</Text>
+              {titleHost !== "github.com" ? (
+                <ExternalLink size={iconSize.sm} strokeWidth={iconStroke.thin} color={colors.textTertiary} style={styles.titleIcon} />
+              ) : null}
             </Pressable>
           ) : (
             <Text selectable style={styles.cardTitle}>{lines[0]}</Text>
@@ -904,7 +915,13 @@ const makeStyles = (c: ThemeColors) =>
     compactFooter: { gap: spacing.xs },
     cardHeader: { gap: 2 },
     cardTitle: { color: c.textPrimary, fontSize: typeScale.body, lineHeight: lineHeight.body, fontWeight: fontWeight.semibold },
-    titleRow: { alignSelf: "flex-start", maxWidth: "100%" },
+    titleRow: { flexDirection: "row", alignItems: "flex-start", alignSelf: "flex-start", maxWidth: "100%", gap: 6 },
+    titleText: { flexShrink: 1 },
+    // Underline = tappable in chat text (DESIGN.md); GitHub pages carry the GitHub mark, other
+    // addresses a quiet "opens outside the app" mark. Marks are centred on the first line.
+    titleLink: { textDecorationLine: "underline" },
+    titleMark: { marginTop: (lineHeight.body - iconSize.md) / 2 },
+    titleIcon: { marginTop: (lineHeight.body - iconSize.sm) / 2 },
     pressed: { opacity: 0.72 },
     sendButton: { backgroundColor: c.cta },
     quietButton: { backgroundColor: "transparent", paddingHorizontal: spacing.sm },
