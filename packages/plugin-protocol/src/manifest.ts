@@ -213,6 +213,8 @@ export interface GhostToolDecl {
   description: string;
   /** JSON Schema(object)形态的参数声明;可省略(无参工具)。 */
   parameters?: Record<string, unknown>;
+  /** Host approval policy. `auto` requires explicit installation consent. */
+  approval?: 'auto' | 'each-call';
 }
 
 /**
@@ -1899,9 +1901,13 @@ export function validateGhostManifest(value: unknown): ManifestValidation {
           return { ok: false, reason: 'tools[].parameters 必须可序列化' };
         }
       }
+      if (t.approval !== undefined && t.approval !== 'auto' && t.approval !== 'each-call') {
+        return { ok: false, reason: 'tools[].approval 必须是 auto 或 each-call' };
+      }
       tools.push({
         name: t.name,
         description: t.description,
+        ...(t.approval !== undefined ? { approval: t.approval as 'auto' | 'each-call' } : {}),
         ...(t.parameters !== undefined
           ? { parameters: t.parameters as Record<string, unknown> }
           : {}),

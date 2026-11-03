@@ -212,7 +212,6 @@ import { createLogger } from '../logger.js';
 import { throwIpcError } from '../utils/ipcValidate.js';
 import {
   type GhostAppRegion,
-  CINDY_ACCOUNT_GHOST_IDS,
   GHOST_CARD_HEIGHT_DEFAULT,
   GHOST_CARD_HEIGHT_MAX,
   GHOST_CARD_HEIGHT_MIN,
@@ -232,8 +231,7 @@ import {
   ghostAppContextLanguages,
   unreviewedGhostPermissionItems,
   ghostWebviewEntryPaths,
-  isCindyAccountGhostId,
-  isUserInstallReservedGhostId,
+  ghostRequiresCindyAccount,
   isValidGhostId,
   isValidNewGhostId,
   type GhostHostNoticeKey,
@@ -267,6 +265,7 @@ import {
 import { relocateGhostUserDataResources } from './ghostUserDataRelocation.js';
 import {
   GhostManager,
+  canUseGithubHostCredentials,
   type GhostExclusiveMutation,
   isCindyOfficialTrustInfo,
   type GhostHostTrustOverride,
@@ -275,7 +274,6 @@ import {
 } from './GhostManager.js';
 import { exportGhostPackage } from './exportGhostPackage.js';
 import { GhostMutationCoordinator } from './ghostMutationCoordinator.js';
-import { shouldRejectReservedGhostIds } from './reservedGhostIdGate.js';
 import {
   bindForgePackStagingTempDir,
   invalidateForgePackTicketsForOwner,
@@ -307,6 +305,8 @@ import {
   resolvePluginInstanceQuery,
   hasDeliveryNamespace,
   deliveryNamespaceFields,
+  LOCAL_PLUGIN_NAMESPACE,
+  isOrganizationPluginNamespace,
 } from '../../shared/pluginIdentity.js';
 import { LEGACY_SIMULATOR_ID, validSimulatorMigration } from '../../shared/simulatorIdentityMigration.js';
 import type { GhostInstallReceipt } from './ghostInstallReceipt.js';
@@ -528,6 +528,7 @@ import {
   abortAllGhostInstallConsentPrompts,
   assertGhostInstallConsent,
   confirmedTaskCapability,
+  confirmedAutoTools,
   confirmedControlPoints,
   confirmedUiCapability,
   obtainGhostInstallConsent,
@@ -553,7 +554,6 @@ import {
   type GhostFirstPartyFactsPurpose,
 } from './ghostFirstPartyFacts.js';
 import {
-  authorizeGhostHostPrimitive,
   authorizeGhostTokenBroker,
   captureLegacyFirstPartyEligibility,
   isTrustedMivoSecretAlias,
@@ -642,7 +642,7 @@ import {
   removeGhostSecret,
   migrateGhostSecrets,
   removeGhostSecrets,
-  setMivoSecretAliasVerifier,
+  migrateInstalledGhostSecretAliases,
   storeGhostSecret,
 } from '../secrets/providerSecretStore.js';
 import { getActiveCatalog, getXdGatewayModels } from '../maker-host/active-catalog.js';
@@ -666,6 +666,7 @@ import { readModelDisableOverrides } from '../maker-host/model-disable-store.js'
 import { isCatalogMediaModelVisible } from './mediaDisplayVisibility.js';
 import { readProviderOrder } from '../maker-host/provider-order-store.js';
 import { guardedOutboundFetch, outboundFetch } from '../maker-host/outbound-fetch.js';
+import { setGhostToolApprovalResolver } from '../maker-host/mcp-tool-approval-policy.js';
 import { getSharedGhCliTokenSource } from '../git-context/ghCliTokenSource.js';
 import { copyPrivateDeviceCode } from '../plugin-oauth/deviceCodeClipboard.js';
 import { hasCodexOAuthLoginReadOnly } from '../maker-host/codex-oauth-readiness.js';
@@ -1002,7 +1003,7 @@ function getLegacyGhostRecoveryStatusForActiveSession(): LegacyGhostRecoveryStat
     isAppSessionBoundaryPending(),
     {
       reservedCommands: reservedBuiltinCommands,
-      rejectReservedIds: shouldRejectReservedGhostIds(app.isPackaged),
+      rejectReservedIds: app.isPackaged,
     },
   );
 }
@@ -1074,7 +1075,7 @@ async function retryLegacyGhostRecoveryForActiveSession(): Promise<LegacyGhostRe
       if (
         stopped.browserRuntimeRunning &&
         !isResidentBrowserGhost(ghost.manifest) &&
-        isGhostAvailableForActiveSession(ghost.manifest.id) &&
+        isGhostAvailableForActiveSession(installedGhostStoragePart(ghost)) &&
         ghost.enabled
       ) {
         void getGhostRuntime()
@@ -1089,7 +1090,7 @@ async function retryLegacyGhostRecoveryForActiveSession(): Promise<LegacyGhostRe
       if (
         stopped.nodeRuntimeRunning &&
         ghost.manifest.node?.lifecycle !== 'resident' &&
-        isGhostAvailableForActiveSession(ghost.manifest.id) &&
+        isGhostAvailableForActiveSession(installedGhostStoragePart(ghost)) &&
         ghost.enabled
       ) {
         void getGhostNodeRuntimeBroker()
@@ -1119,7 +1120,7 @@ async function retryLegacyGhostRecoveryForActiveSession(): Promise<LegacyGhostRe
         {
           shouldAbort,
           reservedCommands: reservedBuiltinCommands,
-          rejectReservedIds: shouldRejectReservedGhostIds(app.isPackaged),
+          rejectReservedIds: app.isPackaged,
         },
       );
     } catch (error) {
@@ -1208,14 +1209,20 @@ export function isGhostAvailableForActiveSession(id: string): boolean {
   if (isAppSessionBoundaryPending()) return false;
   const identity = parsePluginStoragePart(id) ?? parsePluginInstallRelId(id);
   const ghostId = identity?.ghostId ?? id;
-  return !isCindyAccountGhostId(ghostId) || getAppCapabilities().canUseCindyAccountServices;
+  if (getAppCapabilities().canUseCindyAccountServices) return true;
+  const exact = managerSingleton?.findInstalledInstance(id);
+  if (exact) return !ghostRequiresCindyAccount(exact.manifest);
+  const ghosts = managerSingleton?.list() ?? [];
+  const target = findInstalledGhostByInstanceId(ghosts, id);
+  return target ? !ghostRequiresCindyAccount(target.manifest)
+    : !ghosts.some(ghost => ghost.manifest.id === ghostId && ghostRequiresCindyAccount(ghost.manifest));
 }
 
 function availableGhosts(): InstalledGhost[] {
   if (isAppSessionBoundaryPending()) return [];
-  return getGhostManager()
-    .list()
-    .filter((ghost) => isGhostAvailableForActiveSession(ghost.manifest.id));
+  const accountServices = getAppCapabilities().canUseCindyAccountServices;
+  return getGhostManager().list()
+    .filter(ghost => accountServices || !ghostRequiresCindyAccount(ghost.manifest));
 }
 
 function projectGhostForRenderer(ghost: InstalledGhost): InstalledGhost {
@@ -1266,7 +1273,7 @@ export function findGhostForInstanceId(id: string, namespace?: string | null): I
   if (namespace === undefined) {
     if (isAppSessionBoundaryPending()) return null;
     const ghost = getGhostManager().findInstalledInstance(id);
-    if (ghost) return isGhostAvailableForActiveSession(ghost.manifest.id) ? ghost : null;
+    if (ghost) return isGhostAvailableForActiveSession(installedGhostStoragePart(ghost)) ? ghost : null;
   }
   const resolved = resolvePluginInstanceQuery(availableGhosts(), id, namespace);
   return resolved.status === 'unique' ? resolved.ghost : null;
@@ -1316,18 +1323,11 @@ function requireGhostAvailableForActiveSession(id: string): void {
 /** Stop any account-managed sandbox before an auth/data-owner boundary switch. */
 export function suspendCindyAccountGhosts(): void {
   if (!runtimeSingleton) return;
-  const stopped = new Set<string>();
   for (const ghost of managerSingleton?.list() ?? []) {
-    if (!CINDY_ACCOUNT_GHOST_IDS.has(ghost.manifest.id)) continue;
+    if (!ghostRequiresCindyAccount(ghost.manifest)) continue;
     const key = installedGhostStoragePart(ghost);
     runtimeSingleton.stop(key);
     getGhostNodeRuntimeBroker().stop(key);
-    stopped.add(key);
-  }
-  for (const id of CINDY_ACCOUNT_GHOST_IDS) {
-    if (stopped.has(id)) continue;
-    runtimeSingleton.stop(id);
-    getGhostNodeRuntimeBroker().stop(id);
   }
 }
 
@@ -1763,6 +1763,31 @@ async function reconcileBuiltinGhosts(
         });
       }
     }
+    if (dataOwnerId !== null) {
+      for (const ghost of manager.list()) {
+        const instanceKey = installedGhostStoragePart(ghost);
+        if ((ghost.manifest.id !== 'cindy-web-search' && ghost.manifest.id !== 'xd-mivo') ||
+          instanceKey !== ghost.manifest.id) continue;
+        await withGhostInstallLock(ghost.manifest.id, async () => {
+          const current = manager.findInstalledInstance(instanceKey);
+          if (!current || current.approval.state !== 'approved') return;
+          const loaded = loadGhostFirstPartyFactsForGhost(instanceKey, 'runtime');
+          // The original bare storage key survives namespace confirmation. Fresh file/Forge
+          // root and local copies use qualified keys and are excluded above.
+          const originalSearch = current.manifest.id === 'cindy-web-search' &&
+            (manager.isPendingLegacyNamespace(instanceKey) || current.namespaceState === 'confirmed');
+          const eligible = originalSearch || (loaded.kind === 'ready' && (current.manifest.id === 'xd-mivo'
+            ? isTrustedMivoSecretAlias(loaded.facts, manager.isPendingLegacyNamespace(instanceKey))
+            : manager.readLegacyFirstPartyEligible(instanceKey) || isTrustedPublicMarketPackage(loaded.facts)));
+          try {
+            if (!migrateInstalledGhostSecretAliases({ instanceKey, ghostId: current.manifest.id, eligible })) migrationNeedsRetry = true;
+          } catch {
+            migrationNeedsRetry = true;
+            log.warn('historical plugin credential migration deferred', { instanceKey });
+          }
+        });
+      }
+    }
     const approvalNeedsRetry = await manager.runExclusiveMutation((mutation) =>
       reconcileBuiltinGhostsLocked(reason, dataOwnerId, manager, mutation),
     );
@@ -2056,7 +2081,7 @@ export function getGhostManager(): GhostManager {
       },
       canResumePendingResidentOffline: (ghostId) => getNamespaceMigrationHost().canResumePendingResidentOffline(ghostId),
       onResumePendingResidentOffline: (ghost) => {
-        if (!isGhostAvailableForActiveSession(ghost.manifest.id)) return;
+        if (!isGhostAvailableForActiveSession(installedGhostStoragePart(ghost))) return;
         getNamespaceMigrationHost().rememberOfflineResident(ghost.manifest.id);
         spawnIfResident(ghost, true);
       },
@@ -3598,13 +3623,6 @@ export function loadGhostFirstPartyFactsForGhost(
   );
 }
 
-setMivoSecretAliasVerifier((ghostId) => {
-  const loaded = loadGhostFirstPartyFactsForGhost(ghostId, 'runtime');
-  if (loaded.kind !== 'ready') return false;
-  const pendingLegacy = loaded.facts.namespace === null &&
-    getGhostManager().isPendingLegacyNamespace(ghostId);
-  return isTrustedMivoSecretAlias(loaded.facts, pendingLegacy);
-});
 
 function isGhostTokenBrokerAuthorized(
   ghostId: string,
@@ -3614,16 +3632,6 @@ function isGhostTokenBrokerAuthorized(
   return authorizeGhostTokenBroker(
     ghostId,
     loadGhostFirstPartyFactsForGhost(ghostId, purpose, overrides),
-  );
-}
-
-function isGhostHostPrimitiveAuthorized(
-  ghostId: string,
-  purpose: GhostFirstPartyFactsPurpose = 'runtime',
-): boolean {
-  return authorizeGhostHostPrimitive(
-    ghostId,
-    loadGhostFirstPartyFactsForGhost(ghostId, purpose),
   );
 }
 
@@ -4359,6 +4367,24 @@ export function getGhostBrowserExtensionSlot(): GhostBrowserExtensionSlot {
         if (!app.isPackaged) return true;
         const load = loadGhostFirstPartyFactsForGhost(installedGhostStoragePart(ghost), 'runtime');
         return load.kind === 'ready' && isTrustedPublicMarketPackage(load.facts);
+      },
+      confirmNativeTakeover: async (ghost) => {
+        const parent = getDeepLinkMainWindow();
+        if (!parent || parent.isDestroyed() || !isTrustedAppRendererWindow(parent)) return false;
+        const owner = activeOwnerScopeKey();
+        const instanceId = installedGhostStoragePart(ghost);
+        const approval = ghostInstallApprovalToken(ghost.approval);
+        const decision = await dialog.showMessageBox(parent, {
+          type: 'question', title: t('settings.ghosts.detail.browserSwitchTitle'),
+          message: t('settings.ghosts.detail.browserSwitchMessage').replaceAll('{{name}}', () => ghost.manifest.name),
+          detail: t('settings.ghosts.detail.browserSwitchDetail')
+            .replaceAll('{{instance}}', () => instanceId)
+            .replaceAll('{{host}}', () => ghost.manifest.browserExtension!.nativeHost!.name),
+          buttons: [t('common.confirm'), t('common.cancel')], defaultId: 1, cancelId: 1, noLink: true,
+        });
+        const current = findGhostForInstanceId(instanceId);
+        return decision.response === 0 && activeOwnerScopeKey() === owner && current?.enabled === true &&
+          ghostInstallApprovalToken(current.approval) === approval;
       },
       policyDir: () => ownerScopedUserDataPath('browser-extension'),
       ownerScopeKey: () => activeOwnerScopeKey(),
@@ -6024,10 +6050,24 @@ function getGhostOauthAccountManager(): GhostOauthAccountManager {
         return `${base.replace(/\/+$/, '')}${path}`;
       },
       logger: log,
-      // 钉死回调端口(如 xd-atlassian 的 53682)被外部进程占用时自动查杀
-      // 占用者并重试(2026-07-14 与 Lizi 定案;地址护栏见 portReclaim,
-      // 第一方门控在 manager.connectAccount——第三方意识拿不到回收器)。
-      reclaimPort: (port) => reclaimLoopbackPort(port, log),
+      // 固定回调端口被占用时，主窗口先展示进程，再经确认与身份复核回收。
+      reclaimPort: (port, instanceId, isCurrent) => {
+        const owner = activeOwnerScopeKey();
+        const current = () => isCurrent() && activeOwnerScopeKey() === owner;
+        return reclaimLoopbackPort(port, log, async owners => {
+          const parent = getDeepLinkMainWindow();
+          const ghost = findGhostForInstanceId(instanceId);
+          if (!current() || !parent || parent.isDestroyed() || !isTrustedAppRendererWindow(parent) || !ghost) return false;
+          const decision = await dialog.showMessageBox(parent, {
+            type: 'warning', title: t('settings.ghosts.detail.portReclaimTitle'),
+            message: t('settings.ghosts.detail.portReclaimMessage')
+              .replaceAll('{{name}}', () => ghost.manifest.name).replaceAll('{{port}}', () => String(port)),
+            detail: owners.map(process => `${process.name} (PID ${process.pid})`).join('\n') + '\n\n' + t('settings.ghosts.detail.portReclaimDetail'),
+            buttons: [t('common.confirm'), t('common.cancel')], defaultId: 1, cancelId: 1, noLink: true,
+          });
+          return decision.response === 0 && current();
+        }, current);
+      },
       // 授权成功(新连/同身份重连)→ 主机代言 tips(带意识身份头;账号有
       // 展示标签时报"已连接 xxx",没有时报通用授权成功)。
       onAccountConnected: ({ ghostId, label }) => {
@@ -6061,7 +6101,7 @@ function getGhostOauthAccountManager(): GhostOauthAccountManager {
       },
       withMutationLock: withActiveOwnerGhostOauthMutationLock,
       isTokenBrokerAuthorized: (ghostId) => isGhostTokenBrokerAuthorized(ghostId, 'runtime'),
-      isHostPrimitiveAuthorized: (ghostId) => isGhostHostPrimitiveAuthorized(ghostId, 'runtime'),
+      fetchAvatarHop: (url, init) => guardedOutboundFetch(url, { ...init, credentials: 'omit' }, () => {}),
     });
   }
   return ghostOauthManagerSingleton;
@@ -7086,7 +7126,7 @@ async function withLibrariesHeld<T>(fromId: string, toId: string, run: () => Pro
     },
     restartRuntime: (running) => {
       const ghost = findGhostForInstanceId(toId);
-      if (!ghost?.enabled || !isGhostAvailableForActiveSession(ghost.manifest.id)) return;
+      if (!ghost?.enabled || !isGhostAvailableForActiveSession(installedGhostStoragePart(ghost))) return;
       spawnIfResident(ghost);
       const warn = (error: unknown) => log.warn('plugin restart after library reattach failed', {
         id: toId, error: error instanceof Error ? error.message : String(error),
@@ -7304,32 +7344,14 @@ export function getGhostLibraryBindingStore(): LibraryBindingStore {
   return libraryBindingStoreSingleton;
 }
 
-/**
- * 官方保留前缀守门(docs/dev-rules/plugin-security-and-authoring.md):packaged 版本上,用户装入
- * 通道(install/update/inspect 三个 IPC,即拖入/选文件/forge 转交的共同出口)
- * 对 `cindy-` 前缀 id 一律拒装——抢注同 id 的第三方包会冒充官方身份并
- * 蹭走凭证别名(用户历史填过的机器级 key 被注入攻击者白名单域名)。
- * dev 构建默认豁免:方便 `cindy-` 官方前缀插件在本地迭代;需要复现
- * packaged 行为时可设置 `XDT_GHOST_RESERVED_PREFIX_GATE=1`,此开关只能收紧、不能放宽。
- * 若恢复随包 seed,builtinGhostProvisioner 的内部安装路径不经这些 IPC;不要把本闸套到播种路径。
- */
+/** Member-publisher slugs are host identities; plugin name prefixes grant nothing. */
 function rejectReservedPublisherSlug(id: string): void {
   if (!isReservedConnectionPluginSlug(id)) return;
   throwIpcError('GHOST_ID_RESERVED', `id "${id}" 是主机保留的发布者身份,不可装入`);
 }
 
 function rejectReservedGhostId(id: string): void {
-  // Member-publisher identity slugs are never installable, including market
-  // packages and unpackaged dev builds. Official prefix rejection stays
-  // packaged-only by default so first-party iteration can still reload cindy- plugins.
-  // The hidden dev override can reproduce the packaged gate but can never disable it.
   rejectReservedPublisherSlug(id);
-  if (!shouldRejectReservedGhostIds(app.isPackaged)) return;
-  if (!isUserInstallReservedGhostId(id)) return;
-  throwIpcError(
-    'GHOST_ID_RESERVED',
-    `id "${id}" 使用了官方保留前缀(cindy-),用户通道不可装入`,
-  );
 }
 
 /**
@@ -7341,7 +7363,7 @@ export function rejectReservedGhostIdForCustomMarket(id: string): void {
 }
 
 /**
- * tokenBroker 第一方门控·装入闸。按可信安装事实判定，名称前缀不放行。
+ * tokenBroker 企业凭据·装入闸。按企业绑定的安装事实判定，名称不授予资格。
  * 不区分 dev/packaged:broker 是服务端资产,dev 也不豁免。
  */
 function rejectUnauthorizedTokenBroker(
@@ -7484,6 +7506,7 @@ async function installAndDockLocked(
     uiCapabilityApproved: confirmedUiCapability(opts.consent.decision, installedBefore, opts.consent.manifest),
     delegationCapabilityApproved: confirmedTaskCapability(opts.consent.decision, installedBefore, opts.consent.manifest, 'delegation'),
     approvedControlPoints: confirmedControlPoints(opts.consent.decision, installedBefore, opts.consent.manifest),
+    approvedAutoTools: confirmedAutoTools(opts.consent.decision, installedBefore, opts.consent.manifest),
     observeCapabilityApproved: confirmedTaskCapability(opts.consent.decision, installedBefore, opts.consent.manifest, 'observe'),
     initiallyEnabled: opts.enable ?? false,
     expectedPackageSha256: opts.expectedPackageSha256,
@@ -7549,10 +7572,12 @@ function readLocalGhostUpdateSource(
   } catch {
     throwIpcError('INTERNAL', 'Unable to verify the installed Plugin source');
   }
+  if (previousGhost.namespace === null && marketRecord?.installed && marketRecord.source === 'market')
+    throwIpcError('PRECONDITION_FAILED', '市场版不能被本地开发包覆盖，请安装 local 开发副本');
   const nextOrigin = installOrigin ?? 'manual';
   const decision = classifyGhostLocalUpdateSource({
-    existingSourceChanged: Boolean(marketRecord?.installed) ||
-      (receipt?.installOrigin === 'agent-forge' ? 'agent-forge' : 'manual') !== nextOrigin,
+    existingSourceChanged: Boolean(marketRecord?.installed),
+    nextInstallOrigin: nextOrigin,
     previousApprovedReceipt: receipt,
     inspectedPackage: {
       ghostId: inspected.manifest.id,
@@ -7606,8 +7631,8 @@ async function updateLocalGhostPackageLocked(
     manager.list(), inspected.manifest.id, expectedInstalledInstanceId, expectedInstalledApproval,
   );
   if (!previousGhost) throwIpcError('PRECONDITION_FAILED', '目标插件实例已变化，请刷新后重试');
-  if (installOrigin !== 'agent-forge' && typeof previousGhost.namespace === 'string') {
-    throwIpcError('PRECONDITION_FAILED', '本地文件不能更新企业插件实例，请另装一个 root 实例');
+  if (installOrigin !== 'agent-forge' && isOrganizationPluginNamespace(previousGhost.namespace)) {
+    throwIpcError('PRECONDITION_FAILED', '本地文件不能更新企业插件实例，请安装 local 开发副本');
   }
   const instanceId = installedGhostStoragePart(previousGhost);
   // 锁内按真实包与现读受体复核锁外求得的确认；熄灯之前拒绝，不打断正在用的旧版本。
@@ -7673,6 +7698,7 @@ async function updateLocalGhostPackageLocked(
           uiCapabilityApproved: confirmedUiCapability(consent, previousGhost, inspected.manifest),
           delegationCapabilityApproved: confirmedTaskCapability(consent, previousGhost, inspected.manifest, 'delegation'),
           approvedControlPoints: confirmedControlPoints(consent, previousGhost, inspected.manifest),
+          approvedAutoTools: confirmedAutoTools(consent, previousGhost, inspected.manifest),
           observeCapabilityApproved: confirmedTaskCapability(consent, previousGhost, inspected.manifest, 'observe'),
           expectedPackageSha256,
           expectedInstalledApproval,
@@ -7783,13 +7809,13 @@ export async function installOrUpdateLocalGhostPackageFromForge(
   // 首装与扩权更新先在任务里请用户确认；权限没变多的更新不打扰。
   const consent = await obtainGhostInstallConsent(
     { mode: 'prompt', prompt: expected.consentPrompt, initiator: 'agent', origin: 'forge', trust: inspected.trust.level,
-      force: targetContext.sourceChanged || targetContext.otherCopies > 0,
+      force: targetContext.sourceChanged,
       target: targetContext },
     existingForForge,
     inspected.manifest,
     inspected.packageSha256,
   );
-  const confirmFacts = forgeOidcInstallConfirmFacts(inspected.manifest, forgeNamespace === null ? 'personal' : membershipKind);
+  const confirmFacts = forgeOidcInstallConfirmFacts(inspected.manifest, forgeNamespace === null || forgeNamespace === LOCAL_PLUGIN_NAMESPACE ? 'personal' : membershipKind);
   if (confirmFacts) {
     let confirmed = false;
     try {
@@ -7870,7 +7896,7 @@ export async function installOrUpdateLocalGhostPackageFromForge(
 
 /**
  * Plugin 市场专用装入入口。市场包已由 plugin-server 绑定到稳定 Plugin ID，
- * 因而允许官方保留前缀；本地文件入口仍继续走 rejectReservedGhostId。
+ * 因而允许官方保留前缀；本地与市场入口都只保留发布者身份 slug 校验。
  * tokenBroker 门控、原子换目录、布局停靠与运行时重启保持和本地安装一致。
  */
 export interface MarketGhostPackageCommitEvidence {
@@ -8173,6 +8199,7 @@ async function installOrUpdateMarketGhostPackageLocked(
           uiCapabilityApproved: confirmedUiCapability(expected.consent, installed, inspected.manifest),
           delegationCapabilityApproved: confirmedTaskCapability(expected.consent, installed, inspected.manifest, 'delegation'),
           approvedControlPoints: confirmedControlPoints(expected.consent, installed, inspected.manifest),
+          approvedAutoTools: confirmedAutoTools(expected.consent, installed, inspected.manifest),
           observeCapabilityApproved: confirmedTaskCapability(expected.consent, installed, inspected.manifest, 'observe'),
           expectedPackageSha256: inspected.packageSha256,
           expectedInstalledApproval: expected.expectedInstalledApproval!,
@@ -8542,15 +8569,15 @@ export async function installLocalPluginSharePackage(file: string, options: {
     throwIpcError('GHOST_FILE_INVALID', 'The downloaded package does not match this share');
   rejectReservedGhostId(inspected.manifest.id);
   rejectBrokerWithoutDeclaredRedirectPort(inspected.manifest);
-  const existing = findInstalledGhostForDeliveryTarget(manager.list(), { ghostId: inspected.manifest.id, namespace: null });
+  const existing = findInstalledGhostForDeliveryTarget(manager.list(), { ghostId: inspected.manifest.id, namespace: LOCAL_PLUGIN_NAMESPACE });
   const updateSource = existing ? readLocalGhostUpdateSource(manager, existing, inspected) : undefined;
-  rejectUnauthorizedTokenBroker(inspected.canonicalManifest, updateSource?.authorizationOverrides);
+  rejectUnauthorizedTokenBroker(inspected.canonicalManifest, updateSource?.authorizationOverrides ?? { namespace: LOCAL_PLUGIN_NAMESPACE });
   const approval = existing ? ghostInstallApprovalToken(existing.approval) : undefined;
   const consent = await obtainGhostInstallConsent({ mode: 'prompt',
     prompt: Object.assign((request: Parameters<GhostInstallConsentPrompt>[0]) =>
       options.prompt(existing ? { ...request, purpose: 'share-replace' } : request), options.prompt),
     initiator: 'user', origin: 'local-file', force: Boolean(existing),
-    target: ghostInstallTargetContext(manager.list(), inspected.manifest.id, null, existing, updateSource?.sourceChanged === true) },
+    target: ghostInstallTargetContext(manager.list(), inspected.manifest.id, LOCAL_PLUGIN_NAMESPACE, existing, updateSource?.sourceChanged === true) },
     existing, inspected.manifest, inspected.packageSha256);
   options.assertCurrent();
   const release = beginGhostMutation(owner);
@@ -8558,7 +8585,7 @@ export async function installLocalPluginSharePackage(file: string, options: {
     if (existing) return await withGhostInstallLock(inspected.manifest.id, () => updateLocalGhostPackageLocked(
       manager, file, inspected, options.sha256, approval!, installedGhostStoragePart(existing), consent, undefined,
       () => { options.assertCurrent(); return true; }, updateSource?.sourceChanged, 'stored-release'));
-    return await installAndDock(manager, file, { ghostId: inspected.manifest.id, namespace: null, enable: true,
+    return await installAndDock(manager, file, { ghostId: inspected.manifest.id, namespace: LOCAL_PLUGIN_NAMESPACE, enable: true,
       registrySource: 'manual', manifestSource: 'stored-release', expectedPackageSha256: options.sha256,
       consent: { decision: consent, manifest: inspected.manifest }, beforePackagePlacement: options.assertCurrent });
   } finally { release(); }
@@ -8582,15 +8609,15 @@ async function installRemoteGhostFile(peer: string, attachment: string, target: 
     rejectReservedGhostId(inspected.manifest.id);
     rejectBrokerWithoutDeclaredRedirectPort(inspected.manifest);
     const existing = target ? findInstalledGhostForLocalUpdate(manager.list(), inspected.manifest.id, target, expectedApproval!) :
-      findInstalledGhostForDeliveryTarget(manager.list(), { ghostId: inspected.manifest.id, namespace: null });
+      findInstalledGhostForDeliveryTarget(manager.list(), { ghostId: inspected.manifest.id, namespace: LOCAL_PLUGIN_NAMESPACE });
     if (target && !existing) throwIpcError('PRECONDITION_FAILED', 'Plugin installation changed');
-    if (existing && typeof existing.namespace === 'string') throwIpcError('PRECONDITION_FAILED', 'Use the organization marketplace to update this plugin');
+    if (existing && isOrganizationPluginNamespace(existing.namespace)) throwIpcError('PRECONDITION_FAILED', 'Use the organization marketplace to update this plugin');
     const updateSource = existing ? readLocalGhostUpdateSource(manager, existing, inspected) : undefined;
-    rejectUnauthorizedTokenBroker(inspected.canonicalManifest, updateSource?.authorizationOverrides);
+    rejectUnauthorizedTokenBroker(inspected.canonicalManifest, updateSource?.authorizationOverrides ?? { namespace: LOCAL_PLUGIN_NAMESPACE });
     const token = existing ? ghostInstallApprovalToken(existing.approval) : undefined;
     const consent = await obtainGhostInstallConsent({ mode: 'prompt', prompt, initiator: 'user', origin: 'local-file', trust: inspected.trust.level,
       force: updateSource?.sourceChanged,
-      target: ghostInstallTargetContext(manager.list(), inspected.manifest.id, null, existing, updateSource?.sourceChanged === true) },
+      target: ghostInstallTargetContext(manager.list(), inspected.manifest.id, LOCAL_PLUGIN_NAMESPACE, existing, updateSource?.sourceChanged === true) },
       existing, inspected.manifest, inspected.packageSha256);
     assertCurrent();
     const release = beginGhostMutation(owner);
@@ -8598,7 +8625,7 @@ async function installRemoteGhostFile(peer: string, attachment: string, target: 
       const current = () => { assertCurrent(); return true; };
       if (existing) await withGhostInstallLock(inspected.manifest.id, () => updateLocalGhostPackageLocked(
         manager, file, inspected, inspected.packageSha256, token!, installedGhostStoragePart(existing), consent, undefined, current, updateSource?.sourceChanged));
-      else await installAndDock(manager, file, { ghostId: inspected.manifest.id, namespace: null, enable: true,
+      else await installAndDock(manager, file, { ghostId: inspected.manifest.id, namespace: LOCAL_PLUGIN_NAMESPACE, enable: true,
         expectedPackageSha256: inspected.packageSha256, consent: { decision: consent, manifest: inspected.manifest }, beforePackagePlacement: assertCurrent });
     } finally { release(); }
   } finally { await fs.promises.rm(dir, { recursive: true, force: true }); }
@@ -8618,6 +8645,17 @@ export function registerGhostIpc(): void {
   });
   if (ipcRegistered) return;
   ipcRegistered = true;
+  // 插件工具审批按真实已装实例与 receipt 判定，调用参数里的名字只用来定位。
+  setGhostToolApprovalResolver(({ ghostId, namespace, tool }) => {
+    const ghost = findGhostForInstanceId(ghostId, namespace);
+    if (!ghost || ghost.approval.state !== 'approved') return null;
+    const decl = ghost.manifest.tools?.find((candidate) => candidate.name === tool);
+    if (!decl) return null;
+    const declared = decl.approval === 'each-call'
+      ? 'each-call' as const
+      : decl.approval === 'auto' && ghost.approvedAutoTools?.includes(tool) === true ? 'auto' as const : null;
+    return { declared };
+  });
   const readMail = createMailReader({
     plugins: () => availableGhosts().flatMap(g => {
       if (!g.enabled || g.approval.state !== 'approved' || g.manifest.mail !== true || !g.manifest.mailReader ||
@@ -8941,9 +8979,7 @@ export function registerGhostIpc(): void {
       key: s.key,
       saved: isConnectionSecretReady(s.inject.hosts ?? [], connectionResolution),
     }));
-    const isOfficialCindyGithub =
-      ghost.manifest.id === 'cindy-github' && isCindyOfficialTrustInfo(ghost.trust);
-    const ghCliSecretDecls = isOfficialCindyGithub
+    const ghCliSecretDecls = canUseGithubHostCredentials(ghost)
       ? networkSecretDecls.filter((s) => s.source === 'gh-cli')
       : [];
     const ghCliAvailable =
@@ -9761,6 +9797,16 @@ export function registerGhostIpc(): void {
   );
 
   // The detached sidebar keeps its shell; retirement details always open in a main window.
+  ipcMain.handle('ghosts:activate-browser', async (event, id: unknown) => {
+    assertTrustedAppRendererEvent(event);
+    if (!mainShellWindows().some(window => window.webContents === event.sender))
+      throwIpcError('PERMISSION_DENIED', 'Use the main window to choose a browser plugin');
+    if (typeof id !== 'string' || !isGhostInstanceId(id))
+      throwIpcError('INVALID_PARAMS', 'Invalid plugin instance');
+    requireGhostAvailableForActiveSession(id);
+    return { ok: await getGhostBrowserExtensionSlot().activate(id) };
+  });
+
   ipcMain.handle('ghosts:open-retirement', (event, id: unknown) => {
     assertTrustedAppRendererEvent(event);
     if (typeof id !== 'string' || !isValidGhostId(id))
@@ -10081,7 +10127,7 @@ export function registerGhostIpc(): void {
     }
     rejectReservedGhostId(probe.manifest.id);
     rejectBrokerWithoutDeclaredRedirectPort(probe.manifest);
-    rejectUnauthorizedTokenBroker(probe.manifest);
+    rejectUnauthorizedTokenBroker(probe.manifest, { namespace: LOCAL_PLUGIN_NAMESPACE });
     // 首装一律先在发起安装的窗口里请用户确认插件权限；确认在任何锁与 owner 租约
     // 之外等待，落位前由 installAndDock 在锁内按同一份包复核。
     const consent = await obtainGhostInstallConsent(
@@ -10091,9 +10137,9 @@ export function registerGhostIpc(): void {
         initiator: 'user',
         origin: 'local-file',
         trust: probe.trust.level,
-        target: ghostInstallTargetContext(manager.list(), probe.manifest.id, null, undefined, false),
+        target: ghostInstallTargetContext(manager.list(), probe.manifest.id, LOCAL_PLUGIN_NAMESPACE, undefined, false),
       },
-      findInstalledGhostForDeliveryTarget(manager.list(), { ghostId: probe.manifest.id, namespace: null }),
+      findInstalledGhostForDeliveryTarget(manager.list(), { ghostId: probe.manifest.id, namespace: LOCAL_PLUGIN_NAMESPACE }),
       probe.manifest,
       probe.packageSha256,
     );
@@ -10108,7 +10154,7 @@ export function registerGhostIpc(): void {
           enable,
           expectedPackageSha256,
           consent: { decision: consent, manifest: probe.manifest },
-          namespace: null,
+          namespace: LOCAL_PLUGIN_NAMESPACE,
         }).then((ghost) => {
           try {
             markGhostRecommendationInstalled(installedGhostStoragePart(ghost));
@@ -10167,8 +10213,8 @@ export function registerGhostIpc(): void {
       manager.list(), inspected.manifest.id, expectedInstalledInstanceId, expectedInstalledApproval,
     );
     if (!existingForUpdate) throwIpcError('PRECONDITION_FAILED', '目标插件实例已变化，请刷新后重试');
-    if (typeof existingForUpdate.namespace === 'string') {
-      throwIpcError('PRECONDITION_FAILED', '本地文件不能更新企业插件实例，请另装一个 root 实例');
+    if (isOrganizationPluginNamespace(existingForUpdate.namespace)) {
+      throwIpcError('PRECONDITION_FAILED', '本地文件不能更新企业插件实例，请安装 local 开发副本');
     }
     const updateSource = readLocalGhostUpdateSource(manager, existingForUpdate, inspected);
     rejectUnauthorizedTokenBroker(inspected.canonicalManifest, updateSource.authorizationOverrides);
@@ -11018,7 +11064,7 @@ function broadcastGhostsChanged(
     getGhostBrowserExtensionSlot().reconcile(ghosts);
   }
   const visible = ghosts
-    .filter((ghost) => isGhostAvailableForActiveSession(ghost.manifest.id))
+    .filter((ghost) => isGhostAvailableForActiveSession(installedGhostStoragePart(ghost)))
     .map(projectGhostForRenderer);
   broadcastGhostWindowPush('ghosts:changed', { ghosts: visible });
   notifyMobilePluginsChanged();
