@@ -244,3 +244,15 @@ child.once('error', (error) => {
   process.exit(1);
 });
 child.on('exit', (code) => process.exit(code ?? 0));
+
+// Ctrl-C 会同时发给本进程和 Metro;Node 默认会立即退出本进程,来不及等 Metro 的 exit 清理
+// 归属记录和日志。接管这些信号:转给 Metro,由上面的 exit 回调清理后再退出。
+for (const signal of ['SIGINT', 'SIGTERM', 'SIGHUP']) {
+  process.on(signal, () => {
+    try {
+      child.kill(signal);
+    } catch {
+      // Metro 已经退出时 exit 回调会照常收尾。
+    }
+  });
+}

@@ -34,7 +34,9 @@ describe('native e2e environment', () => {
       pid: 4242,
       once: (event: string, callback: () => void) => { if (event === 'exit') exitCallbacks.push(callback); },
       on: vi.fn(),
+      kill: vi.fn(),
     };
+    const signalHandlers: Record<string, () => void> = {};
     const terminateMetro = vi.fn(async () => true);
     const spawn = vi.fn(() => child);
     const writeMetroOwner = vi.fn(() => {
@@ -49,7 +51,7 @@ describe('native e2e environment', () => {
       DEFAULT_PORT: 8081, portArgs: { port: 8082, passthrough: [] }, portInUse,
       ensureAndroidTarget: vi.fn(), spawn, writeMetroOwner, clearMetroOwner,
       console: { log: vi.fn(), error },
-      process: { env: {}, exit: (code: number) => { throw new Error(`exit:${code}`); } },
+      process: { env: {}, on: (signal: string, handler: () => void) => { signalHandlers[signal] = handler; }, exit: (code: number) => { throw new Error(`exit:${code}`); } },
       resolvePnpmInvocation: () => ({ command: 'pnpm', args: [] }),
       usablePnpmExecPath: () => undefined, existsSync: () => false,
       mobileDir: '/repo/apps/mobile', worktreeRoot: '/repo', buildEnv: {}, region: 'global',
@@ -82,6 +84,9 @@ describe('native e2e environment', () => {
       expect(writeMetroOwner).toHaveBeenCalledWith(8082, expect.objectContaining({ pid: 4242, metroLogPath: '/tmp/cindy-metro-log-x/metro-8082.log' }));
       for (const callback of exitCallbacks) callback();
       expect(clearMetroOwner).toHaveBeenCalledWith(8082, 4242);
+      // Review #8560: Ctrl-C reaches the launcher too; forward it so Metro's exit runs the cleanup above.
+      signalHandlers.SIGINT?.();
+      expect(child.kill).toHaveBeenCalledWith('SIGINT');
       // Review #8560: the raw log may carry credentials, so it goes away with its Metro.
       expect(removeMetroLog).toHaveBeenCalledWith('/tmp/cindy-metro-log-x/metro-8082.log');
     }
