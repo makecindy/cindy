@@ -3,6 +3,7 @@ import { setRoutineResultDispatch } from '../routines/deliveryDispatch.js';
 import { McpSetupBridge } from './mcpSetupBridge.js';
 import type { McpSetupProposal, McpSetupRequest } from '../../shared/mcpSetup.js';
 import { outboundFetch } from '../maker-host/outbound-fetch.js';
+import { measureTraceOperation } from '../performance-trace/measure.js';
 import { assertSessionCreationCurrent, currentSessionCreationSignal } from '../localDb/sessionRuntimeCleanup.js';
 import { pagePermissionGrants } from '../mcp-apps/pagePermissions.js';
 import { setPluginPageToolRunner } from '../mcp-integrations/plugin-app-registry.js';
@@ -630,6 +631,7 @@ import { prepareSharedProjectSkillLinks } from '../maker-host/shared-global-skil
 import {
   activeCindyBuiltInAgentSkills,
   builtInSkillDescriptors,
+  builtInSkillDescriptorsAsync,
 } from '../maker-host/built-in-skills.js';
 import { isCindySkillEnabled, readDisabledSkillPaths, skillActivationKey } from '../skillhub/activationPreferences.js';
 import {
@@ -8401,22 +8403,27 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         };
         const linksChanged = skillParams.remoteHostId
           ? false
-          : await prepareProjectSkillLinksFailSoft(skillParams.workingDir);
+          : await measureTraceOperation('maker:list-agent-skills:project-links',
+            () => prepareProjectSkillLinksFailSoft(skillParams.workingDir));
         if (kind === 'codex' && linksChanged) {
           skillParams.forceReload = true;
         }
-        if (kind === 'codex' && !skillParams.remoteHostId) {
-          await desktopCodexAuthAdapter.ensureGlobalCodexAssets();
-        } else {
-          // Pi scans ~/.agents/skills directly. Refresh the managed projection here so a
-          // Codex-only skill added after Cindy startup is visible without using another agent
-          // or restarting the app first. Claude keeps the same shared-root refresh semantics.
-          await desktopClaudeAuthAdapter.ensureSharedGlobalSkills();
-        }
-        const result = await maker.listAgentSkills(kind, skillParams);
-        // Verify integrity once per request, then reuse that synchronous snapshot
+        await measureTraceOperation('maker:list-agent-skills:global-assets', async () => {
+          if (kind === 'codex' && !skillParams.remoteHostId) {
+            await desktopCodexAuthAdapter.ensureGlobalCodexAssets();
+          } else {
+            // Pi scans ~/.agents/skills directly. Refresh the managed projection here so a
+            // Codex-only skill added after Cindy startup is visible without using another agent
+            // or restarting the app first. Claude keeps the same shared-root refresh semantics.
+            await desktopClaudeAuthAdapter.ensureSharedGlobalSkills();
+          }
+        });
+        const result = await measureTraceOperation('maker:list-agent-skills:scan',
+          () => maker.listAgentSkills(kind, skillParams));
+        // Verify integrity asynchronously once per request, then reuse the snapshot
         // when resolving activation aliases instead of rehashing every Skill.
-        const descriptors = builtInSkillDescriptors(app.getPath('userData'), app.getPath('appData'));
+        const descriptors = await measureTraceOperation('maker:list-agent-skills:identity',
+          () => builtInSkillDescriptorsAsync(app.getPath('userData'), app.getPath('appData')));
         const disabled = new Set(readDisabledSkillPaths(descriptors));
         return {
           success: true,

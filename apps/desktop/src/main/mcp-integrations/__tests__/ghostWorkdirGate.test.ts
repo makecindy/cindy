@@ -187,7 +187,10 @@ const sessionSnapshotMock = vi.fn(async (): Promise<{
   remoteHostId: null,
 }));
 vi.mock('../../cindy-brain/index.js', () => ({
-  getGhostManager: () => ({ list: listMock, readApprovedInstallReceipt: approvedReceiptMock, managedRootDirs: () => [] }),
+  getGhostManager: () => ({ list: listMock,
+    findInstalledInstance: (id: string) => listMock().find(ghost => installedGhostStoragePart(ghost as InstalledGhost) === id),
+    readApprovedInstallReceipt: approvedReceiptMock, managedRootDirs: () => [] }),
+  listInstalledGhostsAsync: async () => listMock(),
   ghostForgeForbiddenRootDirs: () => [],
   listAvailableGhostsForAuthorization: () => listMock(),
   findAvailableGhostForAuthorization: (id: string) =>
