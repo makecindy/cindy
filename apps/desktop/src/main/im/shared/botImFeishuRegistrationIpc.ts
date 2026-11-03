@@ -56,8 +56,8 @@ async function beginBotImFeishuRegistration(
   const service = p.service;
 
   const status = await readBotProfileStatus(botId);
-  if (status === null) return { ok: false, error: 'BOT_NOT_FOUND' };
-  if (status !== 'active') return { ok: false, error: 'BOT_INACTIVE' };
+  if (status === null) throwIpcError('NOT_FOUND', 'BOT_NOT_FOUND');
+  if (status !== 'active') throwIpcError('PRECONDITION_FAILED', 'BOT_INACTIVE: ' + status);
 
   const ownerKey = activeOwnerScopeKey();
   const stillOwner = () => !isAppSessionBoundaryPending() && activeOwnerScopeKey() === ownerKey;

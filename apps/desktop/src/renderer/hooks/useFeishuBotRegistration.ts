@@ -87,6 +87,13 @@ export function useFeishuBotRegistration(
   // 管"这一轮是第几次"——两轮并发时只有两者同时对得上,结果才属于当前界面。
   const mainRunIdRef = useRef<number | null>(null);
 
+  /** 只收拾本界面的状态, 不发全局取消; 用于本轮根本没在 main 侧跑起来的情况。 */
+  const clearLocalRegistration = useCallback(() => {
+    generationRef.current += 1;
+    mainRunIdRef.current = null;
+    activeRunRef.current = null;
+  }, []);
+
   const invalidateRegistration = useCallback(() => {
     generationRef.current += 1;
     mainRunIdRef.current = null;
@@ -134,9 +141,17 @@ export function useFeishuBotRegistration(
       // 旧轮次的结果一律不认: main 侧 runId 与当前轮次对不上,说明这是
       // 用户切换服务或重新发起之前那一轮的收尾,写回界面会打断当前授权。
       if (payload.runId === undefined || payload.runId !== mainRunIdRef.current) return;
-      if (activeRunRef.current === null || payload.status === 'cancelled') return;
+      if (activeRunRef.current === null) return;
       activeRunRef.current = null;
       generationRef.current += 1;
+
+      if (payload.status === 'cancelled') {
+        // 另一窗口开始了新授权, 这一轮被 main 作废: 收起二维码并释放活动轮次,
+        // 关窗时就不会再发全局 cancel 打断对方的新轮次。
+        setPhase('cancelled');
+        setErrorMessage(null);
+        return;
+      }
 
       if (payload.status === 'success') {
         setPhase('success');
@@ -207,7 +222,14 @@ export function useFeishuBotRegistration(
         const result = await resolvedTransport.begin(service);
         if (generationRef.current !== runId) return;
         if (!result.ok || !result.verificationUrl || !result.expiresIn) {
-          invalidateRegistration();
+          // begin 失败时 main 没留下轮次, 只清本地状态; 这里发 cancel 会误杀
+          // 另一窗口已经开始的新授权。
+          clearLocalRegistration();
+          if (result.error === 'CANCELLED') {
+            setPhase('cancelled');
+            setErrorMessage(null);
+            return;
+          }
           setPhase('error');
           setErrorMessage(result.error ?? t('logic.errors.registrationFailed'));
           return;
@@ -230,7 +252,7 @@ export function useFeishuBotRegistration(
         setPhase('qr');
       } catch (err) {
         if (generationRef.current !== runId) return;
-        invalidateRegistration();
+        clearLocalRegistration();
         const msg = err instanceof Error ? err.message : String(err);
         log.error('registration begin failed:', msg);
         setPhase('error');
@@ -239,7 +261,7 @@ export function useFeishuBotRegistration(
     } finally {
       if (beginInFlightRef.current === token) beginInFlightRef.current = null;
     }
-  }, [invalidateRegistration, resolvedTransport, service, t]);
+  }, [clearLocalRegistration, invalidateRegistration, resolvedTransport, service, t]);
 
   const cancelRegistration = useCallback(async () => {
     const runId = ++generationRef.current;

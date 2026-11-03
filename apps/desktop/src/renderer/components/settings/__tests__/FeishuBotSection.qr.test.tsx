@@ -41,7 +41,7 @@ function installApi() {
       listeners.add(listener);
       return () => listeners.delete(listener);
     }),
-    registrationBegin: vi.fn(async () => ({
+    registrationBegin: vi.fn(async (): Promise<FeishuBotRegistrationBeginResult> => ({
       ok: true,
       verificationUrl: 'https://open.feishu.cn/page/cli?user_code=TEST-ONLY',
       userCode: 'TEST-ONLY',
@@ -356,6 +356,38 @@ describe('Feishu bot authorization', () => {
     });
     expect(hook.result.current.phase).toBe('qr');
     expect(hook.result.current.userCode).toBe('NEW');
+  });
+
+  it('collapses its own QR when another window replaces the authorization', async () => {
+    const { api, emit } = installApi();
+    await act(async () => {
+      render(<FeishuBotSection expanded onToggle={() => {}} />);
+    });
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: 'settings.feishuBot.qr.begin' }));
+    });
+    expect(screen.getByAltText('settings.feishuBot.qr.qrAlt')).toBeTruthy();
+    act(() => {
+      // 另一个窗口开始了新授权: main 用 runId 作废这一轮。
+      emit({ status: 'cancelled', runId: 7 });
+    });
+    expect(screen.queryByAltText('settings.feishuBot.qr.qrAlt')).toBeNull();
+    expect(screen.getByRole('button', { name: 'settings.feishuBot.qr.retry' })).toBeTruthy();
+    // 收口只清本地状态, 不能再发全局取消打断替代轮次。
+    expect(api.registrationCancel).not.toHaveBeenCalled();
+  });
+
+  it('does not cancel a replacement round when its own begin was superseded', async () => {
+    const { api } = installApi();
+    api.registrationBegin.mockResolvedValueOnce({ ok: false, error: 'CANCELLED' });
+    await act(async () => {
+      render(<FeishuBotSection expanded onToggle={() => {}} />);
+    });
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: 'settings.feishuBot.qr.begin' }));
+    });
+    expect(screen.getByRole('button', { name: 'settings.feishuBot.qr.retry' })).toBeTruthy();
+    expect(api.registrationCancel).not.toHaveBeenCalled();
   });
 
   it('shows authorization failures and offers a new authorization', async () => {

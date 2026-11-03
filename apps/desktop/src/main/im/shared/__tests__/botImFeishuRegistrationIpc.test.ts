@@ -79,7 +79,7 @@ describe('伙伴飞书扫码授权 IPC', () => {
         {},
         { botId: 'bot-1', service: 'feishu' },
       ),
-    ).resolves.toEqual({ ok: false, error: 'BOT_NOT_FOUND' });
+    ).rejects.toThrow(/BOT_NOT_FOUND/);
     expect(mocks.request).not.toHaveBeenCalled();
   });
 

@@ -730,15 +730,20 @@ function BotChannelAddDialog({
   translateRef.current = t;
   const feishuTransport = useMemo<FeishuBotRegistrationTransport | undefined>(() => {
     if (!api) return undefined;
-    // 伙伴不可用时主进程只回错误码, 换成和手动添加一致的说明。
-    const describeBeginError = (error?: string) =>
-      error === 'BOT_NOT_FOUND' || error === 'BOT_INACTIVE'
-        ? translateRef.current('bots.channels.add.errors.botUnavailable', { name: bot.name })
-        : error;
     return {
       begin: async (next) => {
-        const result = await api.feishuRegistrationBegin({ botId: bot.id, service: next });
-        return result.ok ? result : { ...result, error: describeBeginError(result.error) };
+        try {
+          return await api.feishuRegistrationBegin({ botId: bot.id, service: next });
+        } catch (failure) {
+          // 伙伴删除 / 停用时 main 走标准 IPC 错误; 换成和手动添加一致的说明。
+          const ipc = extractIpcError(failure);
+          if (ipc?.code === 'NOT_FOUND' || (ipc?.message ?? '').includes('BOT_INACTIVE')) {
+            throw new Error(
+              translateRef.current('bots.channels.add.errors.botUnavailable', { name: bot.name }),
+            );
+          }
+          throw failure;
+        }
       },
       cancel: () => api.feishuRegistrationCancel(),
       onStatus: (callback) => api.onFeishuRegistrationStatus(callback),
