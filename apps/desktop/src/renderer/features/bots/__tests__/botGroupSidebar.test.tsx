@@ -577,7 +577,7 @@ describe('collapsed avatar strip mentions', () => {
     expect(marked.querySelectorAll('[data-teammate-status]')).toHaveLength(1);
     const point = marked.querySelector<HTMLElement>('[data-teammate-mention]');
     expect(point?.getAttribute('data-teammate-status')).toBe('running');
-    expect(point?.style.backgroundColor).toBe('var(--status-bar-accent)');
+    expect(point?.querySelector<HTMLElement>(':scope > span')?.style.backgroundColor).toBe('var(--status-bar-accent)');
     // An unread group without an @ keeps only its status dot.
     const plain = screen.getByRole('button', { name: /^读书会 · / });
     expect(plain.getAttribute('aria-label')).not.toContain(mentionLabel);
@@ -591,7 +591,7 @@ describe('collapsed avatar strip mentions', () => {
     collapse();
     const point = screen.getByRole('button', { name: `周末出游 · bots.groupChat.sidebar.title · bots.avatarStatus.done · ${mentionLabel}` })
       .querySelector<HTMLElement>('[data-teammate-mention]');
-    expect(point?.style.backgroundColor).toBe('var(--bot-unread-bg)');
+    expect(point?.querySelector<HTMLElement>(':scope > span')?.style.backgroundColor).toBe('var(--bot-unread-bg)');
   });
 
   it('drops the mark once the mention is no longer unread', async () => {
