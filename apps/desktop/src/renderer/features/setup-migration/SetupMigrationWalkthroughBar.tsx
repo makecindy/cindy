@@ -156,7 +156,7 @@ export function SetupMigrationWalkthroughBar() {
           onClick={stopSetupMigrationWalkthrough}
           aria-label={t('setupMigration.walkthrough.stop')}
           title={t('setupMigration.walkthrough.stop')}
-          className="flex size-7 shrink-0 items-center justify-center rounded-md text-[var(--text-secondary)] hover:bg-[var(--surface-hover)]"
+          className="flex size-7 shrink-0 items-center justify-center rounded-full text-[var(--text-secondary)] hover:bg-[var(--surface-hover)]"
         >
           <X size={14} aria-hidden="true" />
         </button>
