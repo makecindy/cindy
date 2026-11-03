@@ -996,7 +996,7 @@
     "saveFileName": "截图",
     "saveFailed": "不能存截屏",
     "prompt": {
-      "translate": "请辨此截屏中之文字，译为繁体中文，保留原有段落与清单结构，唯输出译文。若原文已是中文，则译为英文。",
+      "translate": "辨图中文字之语，译为{{language}}，仍其段落、条目与表格。已有目标语言者不改；诸语杂陈，仅译其余。若全文已是目标语言，简言告之，勿另译他语；否则仅出译文。",
       "explain": "请释此截屏之内容。若为错误消息，述其原因与解法；若为图表、代码或界面，述其所表何意、要点为何。",
       "extract": "请将此截屏中之文字照原样撷出，保留原有换行、段落与清单；表格以 Markdown 表格输出。唯输出所撷之文字。"
     },
@@ -1044,6 +1044,12 @@
       "edit": "修",
       "autoUnavailable": "自动卷动已止，可于所选范围内手动卷动",
       "autoPermission": "自动卷动须「辅助使用」权限。请于系统设置中许 Cindy 而后再试，亦可于所选范围内手动卷动"
+    },
+    "translation": {
+      "action": "译为{{language}}",
+      "targetLanguage": "译文语言",
+      "followUi": "随界面之语",
+      "saveFailed": "语言未存，请重选。"
     }
   },
   "privacyExit": {
@@ -3824,7 +3830,9 @@
           "modelsBusy": "请先毕方行之模型清单截取或选择，再填入他 Runtime",
           "noCompatibleFields": "他 Runtime 不支持今 Runtime 中可复用之字段",
           "filledToast": "已填入 {{targets}}；各 Runtime 仍各自独立"
-        }
+        },
+        "nameSearchHint": "亦可仍用此名，续设自定端点。",
+        "nameSearchUnavailable": "此供方今不可用，可续设自定端点，或重寻之。"
       },
       "models": {
         "search": "寻模型",
@@ -10844,7 +10852,18 @@
           "accessToolsTitle": "可用工具与数据",
           "accessToolsHint": "可用 {{name}} 已有之工具与君之私人数据，结果全群可见。原有操作审批照常；撤回之后，已成之操作不可撤销。",
           "capabilitiesRow": "{{name}} 之工具与授权",
-          "accessMenu": "于本群之权柄"
+          "accessMenu": "于本群之权柄",
+          "notifications": {
+            "title": "消息告知",
+            "all": "凡讯皆告",
+            "mentions": "惟提及吾",
+            "none": "不告",
+            "allHint": "群讯及所关注话题之新答，皆告之。",
+            "mentionsHint": "提及吾或 @全体时告之，分职之进展仍告。",
+            "noneHint": "止本群一切系统告知，未读之讯仍存。",
+            "saving": "正存之…",
+            "saveFailed": "告知之设未能存，请再试。"
+          }
         }
       },
       "lifecycle": {
@@ -18758,6 +18777,9 @@
     "failed": "操作未毕，请再试或览此机之卷。"
   },
   "attachmentPreview": {
+    "fitWidth": "适宽",
+    "fitPage": "适页",
+    "pageNumber": "页码",
     "more": "更多操作",
     "retry": "重试",
     "image": "图",

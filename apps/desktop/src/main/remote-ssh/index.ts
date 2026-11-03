@@ -45,6 +45,7 @@ import {
   MANAGED_CONFIG_OWNERSHIP_REQUIRED_CODE,
   MANAGED_CONFIG_WRITE_TOKEN_REQUIRED_CODE,
   FileHostKeyStore,
+  hostKeyId,
   RemoteHost,
   type AddHostInput,
   type CodexAuthState,
@@ -355,6 +356,14 @@ export function buildRemotePiQuickTestModelsJson(endpoint: string): string {
 export async function getRemoteSshPoolHydrated(): Promise<ConnectionPool> {
   await ensureHydrated();
   return getPool();
+}
+
+/** 这台主机的密钥是否已经被信任过。只读，不连接，也不会把新密钥记为可信。 */
+export async function isRemoteHostKeyKnown(hostname: string, port: number): Promise<boolean> {
+  // From disk, as the connection will read it: a record removed since the last read must not count.
+  const store = getSharedHostKeyStore();
+  store.reload();
+  return (await store.get(hostKeyId(hostname, port))) !== null;
 }
 
 /**
@@ -901,6 +910,11 @@ function currentRemoteSshListResult(): {
     warningCount: sshConfigWarnings.length,
     diagnostic: sshConfigDiagnostic ? { kind: sshConfigDiagnostic.kind } : null,
   };
+}
+
+/** Why the SSH config could not be read last time; null when it could. */
+export function remoteSshConfigProblem(): string | null {
+  return sshConfigDiagnostic ? `SSH_CONFIG_UNREADABLE:${sshConfigDiagnostic.kind}` : null;
 }
 
 function broadcastStatus(snapshot: HostSnapshot): void {

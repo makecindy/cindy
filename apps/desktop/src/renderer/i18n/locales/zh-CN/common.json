@@ -995,8 +995,14 @@
     },
     "saveFileName": "截图",
     "saveFailed": "未能保存截图",
+    "translation": {
+      "action": "翻译成{{language}}",
+      "targetLanguage": "翻译目标语言",
+      "followUi": "跟随界面语言",
+      "saveFailed": "未能保存语言选择，请重新选择。"
+    },
     "prompt": {
-      "translate": "请识别这张截图中的文字并翻译成简体中文，保留原有的段落和列表结构，只输出译文。如果原文已经是中文，就翻译成英文。",
+      "translate": "自动识别截图中的语言，将文字翻译成{{language}}，保留原有的段落、列表和表格。已经是目标语言的内容保持原样；混合语言内容只翻译其他语言。如果全部文字已是目标语言，简短说明即可，不要改译成其他语言。其余情况只输出译文。",
       "explain": "请解释这张截图的内容。如果是报错，说明原因和解决办法；如果是图表、代码或界面，说明它在表达什么、有哪些要点。",
       "extract": "请把这张截图中的文字原样提取出来，保留原有的换行、段落和列表；表格用 Markdown 表格输出。只输出提取的文字。"
     },
@@ -3588,6 +3594,8 @@
         "simpleSubtitle": "多种模型，统一账户结算。"
       },
       "custom": {
+        "nameSearchUnavailable": "此供应商当前不可用，可继续配置自定义端点或重新搜索。",
+        "nameSearchHint": "也可以保留当前名称，继续配置自定义端点。",
         "tag": "自定义",
         "editAria": "编辑连接设置",
         "deleteAria": "删除",
@@ -10736,6 +10744,17 @@
         "copyFailed": "复制失败，请选中链接手动复制。",
         "createDescription": "伙伴可以选，也可以先建群，再邀请朋友加入。",
         "settings": {
+          "notifications": {
+            "title": "消息通知",
+            "all": "所有消息",
+            "mentions": "仅 @我",
+            "none": "关闭通知",
+            "allHint": "群聊消息和已关注话题的新回复都会提醒",
+            "mentionsHint": "有人 @你或 @所有人时提醒，分工待处理仍会提醒",
+            "noneHint": "关闭本群所有系统提醒，未读消息仍会保留",
+            "saving": "正在保存…",
+            "saveFailed": "未能保存通知设置，请重试"
+          },
           "name": "群名称",
           "topic": "群主题",
           "description": "群简介",
@@ -18758,6 +18777,9 @@
     "failed": "操作未完成，请重试或查看本地文件。"
   },
   "attachmentPreview": {
+    "fitWidth": "适应宽度",
+    "fitPage": "适应页面",
+    "pageNumber": "页码",
     "more": "更多操作",
     "retry": "重试",
     "image": "图片",
