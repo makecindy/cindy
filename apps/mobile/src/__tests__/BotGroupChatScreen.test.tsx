@@ -91,7 +91,7 @@ vi.mock('react-native', () => {
     } },
     BackHandler: { addEventListener: (_event: string, fn: () => boolean) => { h.hardwareBack = fn; return { remove() {} }; } },
     Keyboard: { dismiss: () => {}, isVisible: () => h.keyboardVisible },
-    Animated: { View: box('div'), Value: class { setValue() {} interpolate() { return this; } }, timing: () => ({ start() {}, stop() {} }),
+    Animated: { createAnimatedComponent: (component: any) => component, View: box('div'), Value: class { setValue() {} interpolate() { return this; } }, timing: () => ({ start() {}, stop() {} }),
       loop: () => ({ start() {}, stop() {} }), sequence: () => ({}) },
     Easing: { inOut: () => undefined, ease: undefined, bezier: () => undefined },
   };
@@ -488,6 +488,36 @@ describe('group timeline', () => {
     expect(h.headerFade.at(-1)).toBe(0);
   });
 
+  it('returns from history without new messages and resumes following the tail', async () => {
+    await render();
+    await act(async () => h.scroll.onScroll({ nativeEvent: {
+      contentOffset: { y: 200 }, contentSize: { height: 2000 }, layoutMeasurement: { height: 500 },
+    } }));
+    const jump = byId('botGroup.jumpToLatest') as HTMLButtonElement;
+    expect(jump).not.toBeNull();
+    expect(byId('botGroup.newMessages')).toBeNull();
+    h.scrollToEnd.mockClear();
+    await act(async () => jump.click());
+    expect(h.scrollToEnd).toHaveBeenCalledWith({ animated: true });
+    await act(async () => h.scroll.onScroll({ nativeEvent: {
+      contentOffset: { y: 400 }, contentSize: { height: 2000 }, layoutMeasurement: { height: 500 },
+    } }));
+    h.scrollToEnd.mockClear();
+    await act(async () => h.scroll.onContentSizeChange(400, 2200));
+    expect(h.scrollToEnd).toHaveBeenCalledWith({ animated: false });
+    await act(async () => h.scroll.onScrollBeginDrag());
+    h.scrollToEnd.mockClear();
+    await act(async () => h.scroll.onContentSizeChange(400, 2300));
+    expect(h.scrollToEnd).not.toHaveBeenCalled();
+    await act(async () => h.scroll.onScroll({ nativeEvent: {
+      contentOffset: { y: 1500 }, contentSize: { height: 2000 }, layoutMeasurement: { height: 500 },
+    } }));
+    expect(byId('botGroup.jumpToLatest')).toBeNull();
+    h.scrollToEnd.mockClear();
+    await act(async () => h.scroll.onContentSizeChange(400, 2100));
+    expect(h.scrollToEnd).toHaveBeenCalledWith({ animated: false });
+  });
+
   // #8303: beside the persistent task list the system bar would span both panes,
   // so the wide iOS window uses the in-pane header; narrowing restores the native bar.
   it('uses the in-pane iOS header beside the persistent sidebar and the native bar when narrow', async () => {
@@ -584,13 +614,40 @@ describe('group timeline', () => {
     expect(h.markRead).not.toHaveBeenCalled();
     // The reader stays in history, sees the arrival, and can explicitly return to it.
     const jump = byId('botGroup.newMessages') as HTMLButtonElement;
-    expect(jump.textContent).toContain('count=1');
+    expect(byId('botGroup.newMessageDot')).not.toBeNull();
+    expect(byId('botGroup.jumpToLatest')).toBeNull();
     h.scrollToEnd.mockClear();
     await act(async () => jump.click());
-    expect(h.scrollToEnd).toHaveBeenCalledWith({ animated: false });
+    expect(h.scrollToEnd).toHaveBeenCalledWith({ animated: true });
+    expect(h.markRead).not.toHaveBeenCalled();
+    await act(async () => scroll(500, 3000));
+    expect(byId('botGroup.newMessages')).not.toBeNull();
     expect(h.markRead).not.toHaveBeenCalled();
     await act(async () => scroll(2500, 3000));
     expect(byId('botGroup.newMessages')).toBeNull();
+  });
+
+  it('cancels a delayed notification locate when the reader jumps to the tail', async () => {
+    const data = { ...group(), hasMoreBefore: true };
+    let finish!: () => void;
+    h.chat = { pending: [], ...h.chat, state: { kind: 'ready', group: data },
+      loadOlder: vi.fn(() => new Promise<void>(resolve => { finish = resolve; })) };
+    const props = { deviceId: 'mac', deviceName: 'Mac', groupId: 'g1', messageId: 'old-notification' };
+    await act(async () => root.render(el(BotGroupChatScreen, props)));
+    expect(h.chat.loadOlder).toHaveBeenCalledOnce();
+    await act(async () => h.scroll.onScroll({ nativeEvent: {
+      contentOffset: { y: 200 }, contentSize: { height: 2000 }, layoutMeasurement: { height: 500 },
+    } }));
+    await click('botGroup.jumpToLatest');
+    h.scrollTo.mockClear();
+    h.chat = { ...h.chat, state: { kind: 'ready', group: { ...data, hasMoreBefore: false,
+      messages: [message('old-notification', 0, {}), ...data.messages] } } };
+    await act(async () => { finish(); root.render(el(BotGroupChatScreen, props)); });
+    await act(async () => (byId('botGroup.row.old-notification') as any).nativeLayout({ nativeEvent: { layout: { y: 100, height: 100 } } }));
+    expect(h.scrollTo).not.toHaveBeenCalled();
+    h.scrollToEnd.mockClear();
+    await act(async () => h.scroll.onContentSizeChange(400, 2500));
+    expect(h.scrollToEnd).toHaveBeenCalledWith({ animated: false });
   });
 
   it('notices arrivals after a notification opens history without acknowledging the tail', async () => {
@@ -606,7 +663,7 @@ describe('group timeline', () => {
     h.chat = { pending: [], ...h.chat, state: { kind: 'ready', group: { ...data, messages: [...data.messages, message('arrival', 20, {})] } } };
     await act(async () => root.render(el(BotGroupChatScreen, props)));
     await act(async () => h.scroll.onContentSizeChange(400, 2500));
-    expect(byId('botGroup.newMessages')?.textContent).toContain('count=1');
+    expect(byId('botGroup.newMessageDot')).not.toBeNull();
     expect(h.markRead).not.toHaveBeenCalled();
     expect(h.scrollToEnd).not.toHaveBeenCalled();
   });
@@ -2214,6 +2271,28 @@ describe('mobile group threads', () => {
     await click('botGroup.thread.shared.reply');
     expect(h.replace).toHaveBeenLastCalledWith({ pathname: '/companions/groups/[groupId]', params: { groupId: 'g1', messageId: 'my-share' } });
     expect(all('botGroup.row.reply')).toHaveLength(1);
+  });
+
+  it('does not auto-page during a thread jump until the user drags again', async () => {
+    h.chat.server = true;
+    h.chat.loadOlder = vi.fn(async () => {});
+    h.chat.loadingOlder = true;
+    const data = threadGroup({ hasMoreBefore: true, messages: [rootMessage(),
+      message('visible', 2, { threadRootId: rootId, serverSequence: '10', isSelf: false }),
+    ] });
+    await render(data, 'ready', rootId, '');
+    const event = { nativeEvent: { contentOffset: { y: 100 }, contentSize: { height: 1200 }, layoutMeasurement: { height: 500 } } };
+    await act(async () => { h.scroll.onScrollBeginDrag(); h.scroll.onScroll(event); });
+    h.chat.loadingOlder = false;
+    await render(data, 'ready', rootId, '');
+    await click('botGroup.jumpToLatest');
+    await act(async () => h.scroll.onScroll(event));
+    expect(h.chat.loadOlder).not.toHaveBeenCalled();
+    h.scrollToEnd.mockClear();
+    await act(async () => h.scroll.onContentSizeChange(390, 1400));
+    expect(h.scrollToEnd).toHaveBeenCalledWith({ animated: false });
+    await act(async () => { h.scroll.onScrollBeginDrag(); h.scroll.onScroll(event); });
+    expect(h.chat.loadOlder).toHaveBeenCalledTimes(1);
   });
 
   it('loads old replies on upward browsing once and preserves the visible reply, not the changed tail height', async () => {
