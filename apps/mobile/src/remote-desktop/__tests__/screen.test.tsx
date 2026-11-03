@@ -39,6 +39,14 @@ const storage = vi.hoisted(() => {
     clear: async () => items.clear(),
   };
 });
+vi.mock("@/session/useLiquidGlassAvailable", () => ({
+  useLiquidGlassAvailable: () => false,
+}));
+vi.mock("@/session/BlurBackdrop", () => ({ BlurBackdrop: () => null }));
+vi.mock("expo-glass-effect", async () => ({
+  GlassView: (await import("react-native")).View,
+  GlassContainer: (await import("react-native")).View,
+}));
 vi.mock("@react-native-async-storage/async-storage", () => ({
   default: storage,
 }));
@@ -90,7 +98,8 @@ vi.mock("../useLockOnExitPreference", async (importOriginal) => {
   };
 });
 vi.mock("../usePictureInPicturePreference", () => ({
-  usePictureInPicturePreference: () => {
+  usePictureInPicturePreference: (scope = "desktop") => {
+    fixture.pipScope = scope;
     const [enabled, setEnabled] = useState(fixture.pipEnabled);
     return [
       enabled,
@@ -106,6 +115,7 @@ const fixture = vi.hoisted(() => ({
   nativeMedia: false,
   iosVersion: 26,
   pipEnabled: false,
+  pipScope: "desktop" as string,
   nativeReceive: vi.fn(async (_message: object) => {}),
   nativeInput: vi.fn(async (_message: object) => true),
   nativeRequest: vi.fn(async (_message: object) => true),
@@ -125,6 +135,7 @@ const fixture = vi.hoisted(() => ({
   maybeUnlock: vi.fn(async (_beforeAuthentication?: () => Promise<void>) => {}),
   hostPlatform: "darwin" as string | undefined,
   deviceId: "computer",
+  liveScreen: undefined as string | undefined,
   getHost: (() => undefined) as () => string | undefined,
   platform: "ios",
   keyboardListeners: {} as Record<string, (event: unknown) => void>,
@@ -207,6 +218,20 @@ vi.mock("react-native", async () => {
           : fixture.size,
     },
     useWindowDimensions: () => fixture.size,
+    Animated: {
+      View: view("div"),
+      Value: class {
+        setValue() {}
+      },
+      ValueXY: class {
+        setValue() {}
+        getTranslateTransform() {
+          return [];
+        }
+      },
+      spring: () => ({ start() {} }),
+    },
+    PanResponder: { create: () => ({ panHandlers: {} }) },
     Platform: {
       get Version() {
         return fixture.iosVersion;
@@ -229,6 +254,7 @@ vi.mock("expo-router", () => ({
   useLocalSearchParams: () => ({
     deviceId: fixture.deviceId,
     deviceName: "My Mac",
+    liveScreen: fixture.liveScreen,
   }),
 }));
 vi.mock("@/utils/backGuard", () => ({ goBackGuarded: vi.fn() }));
@@ -296,6 +322,8 @@ vi.mock("@/platform/chrome/NativePullDownMenu", () => ({
     ),
 }));
 vi.mock("lucide-react-native", () => ({
+  Smartphone: () => null,
+  Tablet: () => null,
   ArrowBigUp: () => null,
   ArrowBigUpDash: () => null,
   ArrowRightToLine: () => null,
@@ -338,6 +366,16 @@ vi.mock("lucide-react-native", () => ({
   Keyboard: () => null,
   SlidersHorizontal: () => null,
   X: () => null,
+  // Live screen device buttons.
+  Camera: () => null,
+  Copy: () => null,
+  House: () => null,
+  Lock: () => null,
+  Mic: () => null,
+  Play: () => null,
+  Power: () => null,
+  Vibrate: () => null,
+  Volume1: () => null,
 }));
 vi.mock("@/platform/chrome/NativeSwitch", () => ({
   NativeSwitch: (p: any) =>
@@ -354,6 +392,7 @@ vi.mock("@/theme", async () => {
   return {
     ...tokens,
     monoFont: "Menlo",
+    ThemeOverrideProvider: ({ children }: any) => children,
     useTheme: () => ({
       colors:
         fixture.themeMode === "dark" ? tokens.darkColors : tokens.lightColors,
@@ -463,6 +502,7 @@ beforeEach(async () => {
   fixture.safe = { top: 59, bottom: 34, left: 0, right: 0 };
   fixture.hostPlatform = "darwin";
   fixture.deviceId = "computer";
+  fixture.liveScreen = undefined;
   fixture.securityAutoUnlock = false;
   fixture.securityBusy = false;
   fixture.maybeUnlock.mockReset().mockResolvedValue(undefined);
@@ -6586,5 +6626,192 @@ describe("remote desktop controls", () => {
         "remoteDesktop.hostDisconnected",
       );
     }
+  });
+});
+
+describe("live screen controls", () => {
+  const screen = {
+    plugin: "_root__baguette-simulator",
+    id: "device",
+    name: "Test iPhone",
+    platform: "ios",
+    cornerRadius: 0.1,
+    maxTouches: 2,
+    keyboard: true,
+    buttons: [
+      { id: "home", icon: "home", label: "Home" },
+      { id: "volume-down", icon: "volume-down", label: "Volume Down" },
+      { id: "volume-up", icon: "volume-up", label: "Volume Up" },
+      { id: "orientation-portrait", icon: "rotate-left", label: "Portrait" },
+      { id: "orientation-landscape", icon: "rotate-right", label: "Landscape" },
+      { id: "rotate-left", icon: "rotate-left", label: "Rotate Left" },
+      { id: "rotate-right", icon: "rotate-right", label: "Rotate Right" },
+      { id: "shake", icon: "shake", label: "Shake" },
+    ],
+  };
+  let shape: { width: number; height: number } | null = null;
+  beforeEach(() => {
+    shape = null;
+  });
+  const open = async () => {
+    act(() => root.unmount());
+    fixture.liveScreen = `${screen.plugin}|${screen.id}`;
+    const original = fixture.invoke.getMockImplementation()!;
+    fixture.invoke.mockImplementation(async (...args) => {
+      const result = await original(...args);
+      const op = args[2][0].op;
+      if (op === "capabilities") return { ...result, liveScreens: true };
+      if (op === "heartbeat" && shape) return { controlling: true, shape };
+      if (op === "screenShape") return shape ? { shape } : {};
+      return op === "start" ? { ...result, screen } : result;
+    });
+    root = createRoot(host);
+    act(() => root.render(<RemoteDesktopScreen />));
+    await connect();
+    await act(async () => {});
+  };
+  const control = (testID: string) =>
+    host.querySelector<HTMLElement>(`[data-testid="${testID}"]`);
+  const openPanel = () =>
+    act(() => fixture.views["liveScreen.controls"].onAccessibilityAction());
+  // DOM clicks bubble to the panel's backdrop (native touches do not), which
+  // closes it: open the panel again before each choice.
+  const choose = (label: string) => {
+    if (!control("liveScreen.panel")) openPanel();
+    act(() =>
+      host
+        .querySelector<HTMLButtonElement>(
+          `[aria-label="remoteDesktop.${label}"]`,
+        )!
+        .click(),
+    );
+  };
+
+  it("tells a reloaded viewer again that fingers touch the device", async () => {
+    await open();
+    const before = sent().length;
+    // The viewer page reloads (a crash recovery or a code reload) mid-session.
+    await act(async () => {
+      fixture.message!({ nativeEvent: { data: '{"type":"ready"}' } });
+    });
+    act(() => {
+      fixture.message!({
+        nativeEvent: { data: '{"type":"framePresented","epoch":"lease"}' },
+      });
+    });
+    expect(sent().slice(before)).toContainEqual({
+      type: "deviceTouch",
+      enabled: true,
+      maxTouches: 2,
+    });
+  });
+
+  it("sizes the picture and pauses device touches while zooming", async () => {
+    await open();
+    expect(sent()).toContainEqual({
+      type: "deviceTouch",
+      enabled: true,
+      maxTouches: 2,
+    });
+    openPanel();
+    // Turning, shaking and volume never show as device actions.
+    expect(control("liveScreen.action.home")).not.toBeNull();
+    expect(control("liveScreen.action.shake")).toBeNull();
+    expect(control("liveScreen.action.volume-up")).toBeNull();
+    expect(control("liveScreen.volume-up")).not.toBeNull();
+
+    choose("pictureFill");
+    expect(sent().at(-1)).toEqual({ type: "fill" });
+
+    choose("pictureZoom");
+    expect(sent().slice(-2)).toEqual([
+      { type: "deviceTouch", enabled: false },
+      { type: "mode", mode: "pan" },
+    ]);
+
+    act(() => control("liveScreen.zoomDone")!.click());
+    expect(sent().slice(-2)).toEqual([
+      { type: "deviceTouch", enabled: true, maxTouches: 2 },
+      { type: "mode", mode: "touch" },
+    ]);
+  });
+
+  it("keeps its own settings, apart from the computer's", async () => {
+    await open();
+    openPanel();
+    act(() => control("liveScreen.settings")!.click());
+    expect(control("liveScreen.background")).not.toBeNull();
+    // Nothing of the computer's: view only, small window, sound, display, disconnect.
+    expect(control("liveScreen.viewOnly")).toBeNull();
+    expect(control("remoteDesktop.viewOnly")).toBeNull();
+    expect(control("remoteDesktop.smallWindow")).toBeNull();
+    expect(control("remoteDesktop.sound")).toBeNull();
+    expect(control("remoteDesktop.displaySettings")).toBeNull();
+    expect(control("remoteDesktop.disconnect")).toBeNull();
+    expect(host.textContent).not.toContain("remoteDesktop.resolution");
+    expect(host.textContent).toContain("remoteDesktop.frameRate");
+  });
+
+  it("shows a device in the background by its own choice, not the computer's", async () => {
+    expect(fixture.pipScope).toBe("desktop");
+    await open();
+    expect(fixture.pipScope).toBe("liveScreen");
+  });
+
+  it("turns the device by hand, then follows the phone again", async () => {
+    await open();
+    const presses = () =>
+      sent()
+        .filter((m) => m.type === "events")
+        .flatMap((m) => m.events)
+        .filter((e: any) => e.kind === "press")
+        .map((e: any) => e.button);
+    const press = (testID: string) => {
+      if (!control("liveScreen.panel")) openPanel();
+      act(() => control(testID)!.click());
+    };
+    expect(presses()).toEqual(["orientation-portrait"]);
+
+    press("liveScreen.rotate-right");
+    expect(presses().at(-1)).toBe("rotate-right");
+    expect(sent()).toContainEqual(
+      expect.objectContaining({
+        type: "displayGeometry",
+        width: 1080,
+        height: 1920,
+        restore: true,
+      }),
+    );
+    openPanel();
+    expect(fixture.views["liveScreen.follow"].accessibilityState.checked).toBe(
+      false,
+    );
+
+    // Turned by hand, the device stays put while the phone turns.
+    fixture.size = { width: 844, height: 390 };
+    act(() => root.render(<RemoteDesktopScreen />));
+    expect(presses()).toEqual(["orientation-portrait", "rotate-right"]);
+
+    press("liveScreen.follow");
+    expect(presses().at(-1)).toBe("orientation-landscape");
+  });
+
+  it("lays the picture out at the shape the device reports", async () => {
+    await open();
+    const geometry = () =>
+      sent()
+        .filter((m) => m.type === "displayGeometry")
+        .map((m) => `${m.width}x${m.height}`);
+    if (!control("liveScreen.panel")) openPanel();
+    act(() => control("liveScreen.rotate-right")!.click());
+    expect(geometry().at(-1)).toBe("1920x1080");
+    // The device refused the pose (an App that only stands upright): the
+    // picture follows what it shows, not what was asked for.
+    shape = { width: 1080, height: 1920 };
+    // The host answers the waiting shape request; no heartbeat needed.
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(1100);
+    });
+    expect(geometry().at(-1)).toBe("1080x1920");
   });
 });

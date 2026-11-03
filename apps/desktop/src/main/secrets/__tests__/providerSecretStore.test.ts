@@ -52,7 +52,6 @@ import {
   readGhostSecretStrict,
   readGhostSecretTailFromIo,
   migrateGhostSecrets,
-  setMivoSecretAliasVerifier,
   resolveOwnerScopedSecretStorageKey,
   setProviderSecretsClearedListener,
   UNRECOVERABLE_PROVIDER_CREDENTIAL,
@@ -204,36 +203,29 @@ describe('providerSecrets registry', () => {
     expect(ghostSecretHintStorageKey('_ns__acme__helper', 'token')).toBe(
       'ghost_hint__ns__acme__helper_token',
     );
-    expect(ghostSecretStorageKey('_ns__xd__xd-mivo', 'mivo_api_key', true)).toBe(
+    expect(ghostSecretStorageKey('_ns__xd__xd-mivo', 'mivo_api_key')).toBe(
       'ghost_secret__ns__xd__xd-mivo_mivo_api_key',
     );
-    expect(ghostSecretStorageKey('_ns__xd__xd-mivo', 'mivo_api_key', true)).not.toBe(
-      ghostSecretStorageKey('xd-mivo', 'mivo_api_key', true),
+    expect(ghostSecretStorageKey('_ns__xd__xd-mivo', 'mivo_api_key')).not.toBe(
+      ghostSecretStorageKey('xd-mivo', 'mivo_api_key'),
     );
     expect(ghostSecretStorageKey('_ns__acme__xd-mivo', 'mivo_api_key')).toBe(
       'ghost_secret__ns__acme__xd-mivo_mivo_api_key',
     );
     expect(ghostSecretStorageKey('_ns__acme__xd-mivo', 'mivo_api_key')).not.toBe(
-      ghostSecretStorageKey('xd-mivo', 'mivo_api_key', true),
+      ghostSecretStorageKey('xd-mivo', 'mivo_api_key'),
     );
   });
 
-  it('官方别名:cindy-web-search 的凭证映射到历史 brave/tavily 存储键(老用户零迁移)', () => {
-    // 与「工具密钥」时代同一 .enc 文件:老用户已填 key 对意识立即生效,
-    // lizi_web_search MCP 也照读同一份。
-    expect(ghostSecretStorageKey('cindy-web-search', 'brave_api_key')).toBe(providerSecretStorageKey('brave'));
-    expect(ghostSecretStorageKey('cindy-web-search', 'tavily_api_key')).toBe(providerSecretStorageKey('tavily'));
-    // 别名只对登记过的 (ghostId, key) 生效:同 id 其它 key、其它意识同名 key 都走缺省命名空间。
-    expect(ghostSecretStorageKey('cindy-web-search', 'other_key')).toBe('ghost_secret_cindy-web-search_other_key');
-    expect(ghostSecretStorageKey('third-party', 'brave_api_key')).toBe('ghost_secret_third-party_brave_api_key');
-  });
-
-  it('官方别名:xd-mivo 的 mivo_api_key 映射到历史 mivo 存储键(老用户零迁移)', () => {
-    expect(ghostSecretStorageKey('xd-mivo', 'mivo_api_key', true)).toBe(providerSecretStorageKey('mivo'));
-    expect(ghostSecretStorageKey('xd-mivo', 'mivo_api_key')).not.toBe(providerSecretStorageKey('mivo'));
-    expect(ghostSecretStorageKey('_ns__xd__xd-mivo', 'mivo_api_key')).not.toBe(providerSecretStorageKey('mivo'));
-    expect(ghostSecretStorageKey('xd-mivo', 'other_key')).toBe('ghost_secret_xd-mivo_other_key');
-    expect(ghostSecretStorageKey('third-party', 'mivo_api_key')).toBe('ghost_secret_third-party_mivo_api_key');
+  it('plugin keys do not resolve historical provider aliases', () => {
+    for (const [id, secret, provider] of [
+      ['cindy-web-search', 'brave_api_key', 'brave'],
+      ['cindy-web-search', 'tavily_api_key', 'tavily'],
+      ['xd-mivo', 'mivo_api_key', 'mivo'],
+    ] as const) {
+      expect(ghostSecretStorageKey(id, secret)).toBe(`ghost_secret_${id}_${secret}`);
+      expect(ghostSecretStorageKey(id, secret)).not.toBe(providerSecretStorageKey(provider));
+    }
   });
 
   it('意识凭证尾指纹:键名独立前缀(ghost_hint_)+ 短值不产指纹', () => {
@@ -425,53 +417,12 @@ describe('readGhostSecretTailFromIo(尾指纹读取 + 老键懒回填)', () => {
     expect(io.store.get(ghostSecretHintStorageKey('my-ghost', 'api_key'))).toBe('5678');
   });
 
-  it.each([
-    ['helper', 'api_key'],
-    ['xd-feishu', 'oauth_accounts'],
-    ['_ns__xd__xd-feishu', 'oauth_accounts'],
-    ['_ns__xd__xd-mivo', 'mivo_api_key'],
-    ['xd-mivo', 'oauth_accounts'],
-  ])('reads %s/%s without loading unrelated Mivo install facts', (instanceKey, secretKey) => {
-    const verifier = vi.fn(() => { throw new Error('Mivo install facts unavailable'); });
-    setMivoSecretAliasVerifier(verifier);
-    io.store.set(ghostSecretStorageKey(instanceKey, secretKey), 'fake-secret-value-1234');
-    try {
-      expect(readGhostSecretTailFromIo(io, instanceKey, secretKey)).toBe('1234');
-      expect(verifier).not.toHaveBeenCalled();
-    } finally {
-      setMivoSecretAliasVerifier(null);
-    }
-  });
-
-  it('rechecks Mivo alias eligibility after a successful historical-key read', () => {
-    const verifier = vi.fn(() => true);
-    setMivoSecretAliasVerifier(verifier);
-    io.store.set(ghostSecretStorageKey('xd-mivo', 'mivo_api_key', true), 'fake-mivo-legacy-9999');
-    try {
-      expect(readGhostSecretTailFromIo(io, 'xd-mivo', 'mivo_api_key')).toBe('9999');
-      verifier.mockReturnValue(false);
-      expect(readGhostSecretTailFromIo(io, 'xd-mivo', 'mivo_api_key')).toBeNull();
-    } finally {
-      setMivoSecretAliasVerifier(null);
-    }
-  });
-
-  it('官方别名键(xd-mivo 老用户)同样能懒回填', () => {
-    setMivoSecretAliasVerifier((id) => id === 'xd-mivo');
-    io.store.set(ghostSecretStorageKey('xd-mivo', 'mivo_api_key', true), 'mivo_legacy_key_9999');
-    expect(readGhostSecretTailFromIo(io, 'xd-mivo', 'mivo_api_key')).toBe('9999');
-    expect(io.store.get(ghostSecretHintStorageKey('xd-mivo', 'mivo_api_key'))).toBe('9999');
-    setMivoSecretAliasVerifier(null);
-  });
-
-  it('a name-only Mivo cannot read the historical secret or its cached hint', () => {
-    io.store.set(ghostSecretStorageKey('xd-mivo', 'mivo_api_key', true), 'mivo_legacy_key_9999');
-    io.store.set(ghostSecretHintStorageKey('xd-mivo', 'mivo_api_key'), '9999');
-    setMivoSecretAliasVerifier(null);
+  it('reads only a migrated instance key and never the old provider alias', () => {
+    io.store.set(providerSecretStorageKey('mivo'), 'old-provider-secret-9999');
     expect(readGhostSecretTailFromIo(io, 'xd-mivo', 'mivo_api_key')).toBeNull();
-    setMivoSecretAliasVerifier((id) => id === 'xd-mivo');
-    expect(readGhostSecretTailFromIo(io, 'xd-mivo', 'mivo_api_key')).toBe('9999');
-    setMivoSecretAliasVerifier(null);
+    io.store.set(ghostSecretStorageKey('xd-mivo', 'mivo_api_key'), 'migrated-secret-1234');
+    expect(readGhostSecretTailFromIo(io, 'xd-mivo', 'mivo_api_key')).toBe('1234');
+    expect(readGhostSecretTailFromIo(io, '_ns__local__xd-mivo', 'mivo_api_key')).toBeNull();
   });
 
   it('没存过 / 值太短不产指纹 → null 且不落回填键', () => {

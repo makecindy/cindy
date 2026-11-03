@@ -3,6 +3,7 @@ import { setRoutineResultDispatch } from '../routines/deliveryDispatch.js';
 import { McpSetupBridge } from './mcpSetupBridge.js';
 import type { McpSetupProposal, McpSetupRequest } from '../../shared/mcpSetup.js';
 import { outboundFetch } from '../maker-host/outbound-fetch.js';
+import { measureTraceOperation } from '../performance-trace/measure.js';
 import { assertSessionCreationCurrent, currentSessionCreationSignal } from '../localDb/sessionRuntimeCleanup.js';
 import { pagePermissionGrants } from '../mcp-apps/pagePermissions.js';
 import { setPluginPageToolRunner } from '../mcp-integrations/plugin-app-registry.js';
@@ -225,6 +226,7 @@ import {
   buildUserProvider,
   mergeDiscoveredRuntimeModels,
   findCatalogModel,
+  uniqueRenamedSessionModelId,
   storedCustomProviderId,
   isLocalOnlyProviderForAgent,
   isOrganizationManagedProvider,
@@ -247,6 +249,7 @@ import {
 import { and, asc, desc, eq, gte, inArray, isNull, like, lt, or, sql } from 'drizzle-orm';
 import { applyScheduledModelSelection, createScheduledModelScope, createScheduledModelSelectionResolver, writeScheduledModelBaselineIfProfileCurrent, ScheduledModelSelectionBusyError, type ScheduledModelSelection, type ScheduledModelSelectionLease } from './scheduledModelSelection';
 import { parseScheduledModelBaseline, type ScheduledModelBaseline } from '../../shared/scheduledModelBaseline';
+import { recoverRenamedSessionModelBeforeSend } from './renamedSessionModelRecovery';
 import { recordTurnModelChange, type TurnModelIdentity } from './turnModelChange';
 import { app, BrowserWindow, dialog, ipcMain, shell, type IpcMainInvokeEvent } from 'electron';
 import { accessChatDisplayCache } from './chatDisplayCache.js';
@@ -603,7 +606,7 @@ import {
   sessions,
   schedules,
 } from '../localDb/schema.js';
-import { nextBotModelRoute, normalizeBotModelChain, type BotModelRoute } from '../../shared/botModelChain.js';
+import { botModelRouteIndex, nextBotModelRoute, normalizeBotModelChain, type BotModelRoute } from '../../shared/botModelChain.js';
 import { createBotModelRouteApplier, createBotModelRouteReconciler } from './botModelRouteReconciler.js';
 import {
   cindyAutoRouteToFollow,
@@ -628,13 +631,11 @@ import { prepareSharedProjectSkillLinks } from '../maker-host/shared-global-skil
 import {
   activeCindyBuiltInAgentSkills,
   builtInSkillDescriptors,
+  builtInSkillDescriptorsAsync,
 } from '../maker-host/built-in-skills.js';
 import { isCindySkillEnabled, readDisabledSkillPaths, skillActivationKey } from '../skillhub/activationPreferences.js';
-import {
-  parseDirectLearnInvocation,
-  canGrantUnqualifiedClaudeLearnInvocation,
-  type CindyLearnInvocationGrant,
-} from '../learn-host/invocationGrant.js';
+import { canGrantUnqualifiedClaudeLearnInvocation } from '../learn-host/invocationGrant.js';
+import { createCindyLearnInvocationCapture } from '../learn-host/captureInvocation.js';
 import { ensurePiManagerInstalled } from '../maker-host/pi-manager-client.js';
 import {
   setRemoteCodexLiveTurnChecker,
@@ -1533,7 +1534,7 @@ import {
 } from './autoResumeBookkeeping.js';
 import {
   InterruptedTurnAutoResumeGuard,
-  isAcceptedTurnContinuationOnlyReason,
+  isContinuationOnlyAutoResumeReason,
   isAutoResumeUserMessage,
   isInterruptedTurnError,
   shouldPreserveWaitingContinuationOnlyAutoResume,
@@ -5306,14 +5307,14 @@ let applyPiImModelSelectionHolder: ((
   sessionId: string, model: string, providerId: string | null | undefined,
   previousRoute: { model: string; providerId: string | null } | null,
   options?: { refreshPiConfiguration?: boolean; source?: 'user' | 'agent' },
-) => Promise<{ status: 'applied' | 'deferred'; generation?: number; effectiveProviderId?: string | null }>) | null = null;
+) => Promise<{ status: 'applied' | 'deferred'; generation?: number; effectiveProviderId?: string | null; effectiveModelId?: string }>) | null = null;
 
 /** IM model cards already own the send lock; reuse Desktop's window-safe Pi transaction. */
 export async function applyPiImModelSelectionUnderLock(
   sessionId: string, model: string, providerId: string | null | undefined,
   previousRoute: { model: string; providerId: string | null } | null,
   options?: { refreshPiConfiguration?: boolean; source?: 'user' | 'agent' },
-): Promise<{ status: 'applied' | 'deferred'; generation?: number; effectiveProviderId?: string | null }> {
+): Promise<{ status: 'applied' | 'deferred'; generation?: number; effectiveProviderId?: string | null; effectiveModelId?: string }> {
   if (!applyPiImModelSelectionHolder) throw new Error('Pi model selection is not ready');
   return applyPiImModelSelectionHolder(sessionId, model, providerId, previousRoute, options);
 }
@@ -8081,8 +8082,10 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
           },
         },
       );
-      if (result.ok && isCurrent()) {
+      const afterCommit = async () => {
+        if (!isCurrent()) return;
         // 授权成功后按 agent 自动发现模型（与内置订阅体验统一,用户不必手填模型）:
+        // 事务先接受凭证并清除旧来源，再发现新来源，避免清理删掉刚保存的结果。
         // 发现端点 = 描述符显式声明 ?? 由该 runtime 的 baseUrl 推导（…/v1/models）。
         // 自定义供应商的发现结果 additions-only 持久化进配置（重启后仍在）;内置供应商走
         // 内存 augment（静态目录 first-wins）。任何一步失败都只降级为纯静态,不影响登录结果。
@@ -8161,8 +8164,9 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
           if (provider.source === 'builtin') await retainProviderPresentationAfterAuthChange(providerId);
           if (isCurrent()) broadcastToAllWindows(MAKER_PUSH.PROVIDER_CHANGED, {});
         }
-      }
-      return { ...result, ...(rollbackCredentials ? { rollbackCredentials } : {}) };
+      };
+      return { ...result, ...(rollbackCredentials ? { rollbackCredentials } : {}),
+        ...(result.ok ? { afterCommit } : {}) };
     },
     readCustomProviderKeyForMutation,
     storeCustomProviderKey,
@@ -8399,22 +8403,27 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         };
         const linksChanged = skillParams.remoteHostId
           ? false
-          : await prepareProjectSkillLinksFailSoft(skillParams.workingDir);
+          : await measureTraceOperation('maker:list-agent-skills:project-links',
+            () => prepareProjectSkillLinksFailSoft(skillParams.workingDir));
         if (kind === 'codex' && linksChanged) {
           skillParams.forceReload = true;
         }
-        if (kind === 'codex' && !skillParams.remoteHostId) {
-          await desktopCodexAuthAdapter.ensureGlobalCodexAssets();
-        } else {
-          // Pi scans ~/.agents/skills directly. Refresh the managed projection here so a
-          // Codex-only skill added after Cindy startup is visible without using another agent
-          // or restarting the app first. Claude keeps the same shared-root refresh semantics.
-          await desktopClaudeAuthAdapter.ensureSharedGlobalSkills();
-        }
-        const result = await maker.listAgentSkills(kind, skillParams);
-        // Verify integrity once per request, then reuse that synchronous snapshot
+        await measureTraceOperation('maker:list-agent-skills:global-assets', async () => {
+          if (kind === 'codex' && !skillParams.remoteHostId) {
+            await desktopCodexAuthAdapter.ensureGlobalCodexAssets();
+          } else {
+            // Pi scans ~/.agents/skills directly. Refresh the managed projection here so a
+            // Codex-only skill added after Cindy startup is visible without using another agent
+            // or restarting the app first. Claude keeps the same shared-root refresh semantics.
+            await desktopClaudeAuthAdapter.ensureSharedGlobalSkills();
+          }
+        });
+        const result = await measureTraceOperation('maker:list-agent-skills:scan',
+          () => maker.listAgentSkills(kind, skillParams));
+        // Verify integrity asynchronously once per request, then reuse the snapshot
         // when resolving activation aliases instead of rehashing every Skill.
-        const descriptors = builtInSkillDescriptors(app.getPath('userData'), app.getPath('appData'));
+        const descriptors = await measureTraceOperation('maker:list-agent-skills:identity',
+          () => builtInSkillDescriptorsAsync(app.getPath('userData'), app.getPath('appData')));
         const disabled = new Set(readDisabledSkillPaths(descriptors));
         return {
           success: true,
@@ -12137,6 +12146,9 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     if (override) await scheduledModelScope.begin(sessionId);
     else await scheduledModelScope.restore(sessionId);
   };
+  let recoverRenamedSessionModelOnSend: (sessionId: string) => Promise<void> = async () => {
+    throw new Error('session model recovery is not ready');
+  };
   pendingAgentSwitchApplyHolder = async (sessionId, signal, selection, beforeApply, scheduledModelOverride) => {
     await takeOverLocalAgentVisibleSession(sessionId);
     let stage = 'direct-send:acquire';
@@ -12169,6 +12181,10 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
           bootstrapAfterSwitch: true,
           signal,
         });
+      }
+      if (!deferPendingApply && !selection && !scheduledModelOverride && !signal?.aborted) {
+        stage = 'direct-send:recoverRenamedSessionModel';
+        await recoverRenamedSessionModelOnSend(sessionId);
       }
       // 预算对账的重放：回合中登记的预算重建意图可能被「重选当前模型」清掉，而预算
       // 变更通知只来一次 —— 不在这里补一次，活实例会一直按旧窗口跑（Greptile P1）。
@@ -14139,6 +14155,11 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     const chat = botGroupChatServiceHolder?.chatServer;
     return chat ? chat.followThread(input) : { ok: false, errorCode: 'HOST_NOT_READY' };
   });
+  ipcMain.handle(MAKER_INVOKE.CHAT_SERVER_READERS, async (event, input) => {
+    assertTrustedAppRendererEvent(event);
+    const chat = botGroupChatServiceHolder?.chatServer;
+    return chat ? chat.readers(input) : { ok: false, errorCode: 'HOST_NOT_READY' };
+  });
   ipcMain.handle(MAKER_INVOKE.CHAT_SERVER_REACTORS, async (event, input) => {
     assertTrustedAppRendererEvent(event);
     const chat = botGroupChatServiceHolder?.chatServer;
@@ -15370,6 +15391,11 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
   setGhostAgentModelLocationSources({
     listLocations: readWorkerAgentLocations,
     readRemoteViews: (agentDeviceId) => readDeviceProviderViews(remoteBackgroundInvoke, agentDeviceId),
+    readRemoteStatus: async (agentDeviceId, agent) => {
+      const result = await remoteBackgroundInvoke(agentDeviceId, 'maker:agent:status', [agent]);
+      if (!result.ok) throw new Error(result.error?.message ?? 'Remote agent status unavailable');
+      return result.result as { binaryReady?: boolean } | null | undefined;
+    },
   });
   getGhostFsSlot().setSessionSnapshotResolver(async (sessionId, instanceId) =>
     resolveGhostFsSessionSnapshot((id) => getMaker().getSession(id), sessionId, instanceId));
@@ -16942,6 +16968,8 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     fastExplicit?: boolean;
     /** False only for Agent axis-only patches; model/provider routing stays untouched. */
     routeExplicit?: boolean;
+    /** A send-time ID rename must persist even without a user picker transaction. */
+    persistRenamedSessionModel?: boolean;
   };
   let applySessionRuntimeSelection: (
     sessionId: string,
@@ -16960,6 +16988,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     superseded: boolean;
     generation?: number;
     effectiveProviderId?: string | null;
+    effectiveModelId?: string;
     contextWindowConfirmationRequired?: number;
     contextTokensForConfirmation?: number;
   }> = async () => {
@@ -17425,7 +17454,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     sessionId: string,
     current: SessionRuntimeProfile,
     controlSessionId = sessionId,
-  ): Promise<{ isBot: boolean; candidate: SessionRuntimeProfile | null }> => {
+  ): Promise<{ isBot: boolean; candidate: SessionRuntimeProfile | null; routeLocked?: boolean }> => {
     const [row] = await getDbClient()
       .drizzle.select({
         capabilitiesJson: botProfileVersions.capabilitiesJson,
@@ -17464,7 +17493,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     const routineModel = row.role === 'routine'
       ? await readRoutineLaneModel(row.botId, row.routeKey) : null;
     // An explicit routine choice never falls back to its companion's expensive primary model.
-    if (routineModel) return { isBot: true, candidate: null };
+    if (routineModel) return { isBot: true, candidate: null, routeLocked: true };
     const chain = await readEffectiveBotModelChain(config);
     const toAgentKind = (harness: string): AgentKind =>
       harness === 'codex' ? 'codex' : harness === 'pi' ? 'pi' : 'claude-code';
@@ -17477,14 +17506,17 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     const [controlSession] = controlSessionId === sessionId ? [{ remoteHostId: row.remoteHostId }]
       : await getDbClient().drizzle.select({ remoteHostId: sessions.remoteHostId })
         .from(sessions).where(eq(sessions.id, controlSessionId)).limit(1);
-    const route = nextBotModelRoute(
-      chain,
-      { harness: currentHarness, model: current.model, providerId: current.providerId, agentDeviceId: current.agentDeviceId },
-      control.visitedRoutes,
-      (candidate) => !controlSession?.remoteHostId || candidate.harness === currentHarness,
-    );
+    const currentRoute: Pick<BotModelRoute, 'harness' | 'model' | 'providerId' | 'agentDeviceId'> = {
+      harness: currentHarness, model: current.model, providerId: current.providerId, agentDeviceId: current.agentDeviceId,
+    };
+    const usable = (candidate: BotModelRoute) => !controlSession?.remoteHostId || candidate.harness === currentHarness;
+    const route = nextBotModelRoute(chain, currentRoute, control.visitedRoutes, usable);
+    // No other usable route is configured at all: nothing can be exhausted.
+    const currentIndex = botModelRouteIndex(chain, currentRoute);
+    const routeLocked = !chain.some((candidate, index) => index !== currentIndex && usable(candidate));
     return {
       isBot: true,
+      routeLocked,
       candidate: route
         ? {
             agentKind: toAgentKind(route.harness),
@@ -17595,7 +17627,9 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
             maxHops: 2,
           });
       }
-      if (!candidate) return { session: null, outcome: 'exhausted' };
+      // A Bot with no other route has nothing to exhaust; the caller decides whether
+      // the same route may be retried.
+      if (!candidate) return { session: null, outcome: botFallback.routeLocked ? 'unchanged' : 'exhausted' };
       runtimeSession = maker.getSession(sessionId) ?? null;
       if (runtimeSession) {
         pendingSessionRuntimeFallbackRebuilds.set(runtimeSession, attemptToken);
@@ -18593,66 +18627,25 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     prepareSendUserMessage: (sessionId, message) =>
       prepareUserMessageForAgent(sessionId, message, 'send'),
     materializeDirectSendOssAttachments,
-    captureCindyLearnInvocation: async (session, persistedContent, dispatchedText) => {
-      const invocationText = visibleMessageTextForConversationSearch(
-        'user',
-        typeof persistedContent === 'string' ? persistedContent : JSON.stringify(persistedContent),
-      );
-      const persistedInvocation = parseDirectLearnInvocation(invocationText);
-      const dispatchedInvocation = parseDirectLearnInvocation(dispatchedText);
-      if (
-        !persistedInvocation
-        || !dispatchedInvocation
-        || JSON.stringify(persistedInvocation) !== JSON.stringify(dispatchedInvocation)
-      ) return null;
-      if (
-        session.remoteHostId
-        || maker.getSession(session.id) !== session
-        || (session.getStatus && session.getStatus() !== 'active')
-      ) return null;
-
-      if (session.agentKind === 'claude-code'
-        && !/^\/cindy:learn(?:\s|$)/i.test(dispatchedText.trim())
-        && !await canGrantUnqualifiedClaudeLearnInvocation(session.id)) return null;
-
-      const descriptors = builtInSkillDescriptors(
+    captureCindyLearnInvocation: createCindyLearnInvocationCapture({
+      getSession: (sessionId) => maker.getSession(sessionId),
+      builtInSkillDescriptors: () => builtInSkillDescriptors(
         app.getPath('userData'),
         app.getPath('appData'),
-      );
-      const learnDescriptor = descriptors.find((descriptor) => descriptor.name === 'learn');
-      if (!learnDescriptor || !isCindySkillEnabled(learnDescriptor.absolutePath)) return null;
-
-      const result = session.agentKind === 'claude-code'
-        ? await maker.listAgentRuntimeSkills(session.agentKind, {
+      ),
+      isSkillEnabled: isCindySkillEnabled,
+      canGrantUnqualifiedClaudeInvocation: canGrantUnqualifiedClaudeLearnInvocation,
+      listSkills: (session) => session.agentKind === 'claude-code'
+        ? maker.listAgentRuntimeSkills(session.agentKind, {
           workingDir: session.workDir,
           sessionId: session.id,
           runtimeConfigDir: process.env.CLAUDE_CONFIG_DIR?.trim() || path.join(os.homedir(), '.claude'),
         })
-        : await maker.listAgentSkills(session.agentKind, {
+        : maker.listAgentSkills(session.agentKind, {
           workingDir: session.workDir,
           sessionId: session.id,
-        });
-      if (result.errors?.length || maker.getSession(session.id) !== session) return null;
-      const learnCandidates = activeCindyBuiltInAgentSkills(
-        result.skills,
-        descriptors,
-        isCindySkillEnabled,
-      ).filter((skill) => (skill.name.toLowerCase() === 'learn' || skill.runtimeCommandName === 'cindy:learn')
-        && (!/^\/cindy:learn(?:\s|$)/i.test(dispatchedText.trim())
-          || (skill.builtIn === true && skill.runtimeCommandName === 'cindy:learn')));
-      if (
-        learnCandidates.length !== 1
-        || learnCandidates.some((skill) => skill.builtIn !== true || !skill.path)
-      ) return null;
-
-      const resolvedSkillPath = await fsp.realpath(learnCandidates[0]!.path!);
-      if (maker.getSession(session.id) !== session) return null;
-      return {
-        version: 1,
-        sessionInstanceId: session.instanceId,
-        resolvedSkillPath,
-      } satisfies CindyLearnInvocationGrant;
-    },
+        }),
+    }),
     createDbMessage: createUserMessageDurably,
     rewindPersistedUserMessageAfterClear: (sessionId, clientId) =>
       enqueueDurableWrite(`user-rewind:${sessionId}:${clientId}`, () =>
@@ -18809,6 +18802,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     applyPendingAgentSwitch: async (sessionId, options) => {
       if (!options?.scheduled) await scheduledModelScope.restore(sessionId);
       await applyPendingAgentSwitchIfIdle(agentSwitchDeps, sessionId);
+      if (!options?.scheduled) await recoverRenamedSessionModelOnSend(sessionId);
       // 桌面发送也是「消息真正发出去」的边界：回合中登记、随后被模型选择器取消的预算
       // 重建必须在这里补一次（调用方已持 send 锁）。
       await replayPendingSessionContextWindowBudgetUnderLock(sessionId);
@@ -20405,7 +20399,9 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       item: AgentInputQueuedMessage,
     ) => {
       if (!canRecoverTurn(signals, item) || inputCoordinator.isExecutionPaused(sessionId)) return null;
-      const requireRouteChange = botFallbackInputs.has(item.createOpts) && isBotCandidateUnavailable(signals);
+      const botInput = botFallbackInputs.has(item.createOpts);
+      const requireRouteChange = botInput && isBotCandidateUnavailable(signals);
+      const sameRouteRetryable = isInterruptedTurnError(signals);
       const erroredAt = Date.now();
       const decision = interruptedTurnAutoResumeGuard.onInterruptedTurn(sessionId, erroredAt);
       if (decision.action !== 'resume') {
@@ -20446,7 +20442,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       if (schedulerRunId) {
         beginSchedulerAutoResume(sessionId, schedulerRunId, decision.attemptToken);
       }
-      if (isAcceptedTurnContinuationOnlyReason(signals.reason)) {
+      if (isContinuationOnlyAutoResumeReason(signals.reason)) {
         const runtimeSession = getStableSessionForTurnBoundary(sessionId);
         if (runtimeSession) {
           pendingContinuationOnlyAutoResumeRebuilds.set(runtimeSession, decision.attemptToken);
@@ -20471,7 +20467,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
               );
               fallbackRebuildSession = fallback.session;
               if (!attempt.isCurrent()) return;
-              if (!canResumeAfterRuntimeFallback(requireRouteChange, fallback)) {
+              if (!canResumeAfterRuntimeFallback(requireRouteChange, fallback, sameRouteRetryable)) {
                 interruptedTurnAutoResumeGuard.noteResumeSendFailed(sessionId, decision.attemptToken);
                 autoResumeBookkeeping.finalizeSuppressedError(sessionId, decision.attemptToken, {
                   surfaceBanner: true,
@@ -21020,7 +21016,11 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     return {
       sessionId: entry.sessionId,
       kind: request.kind,
-      ...(request.kind === 'permission' ? { toolName: request.toolName, suggestions: request.suggestions } : {}),
+      ...(request.kind === 'permission' ? {
+        toolName: request.toolName,
+        suggestions: request.suggestions,
+        ...(typeof request.metadata?.hostOwnedConfirmation === 'string' ? { hostOwnedConfirmation: true } : {}),
+      } : {}),
     };
   });
   // An Orca Lead turn that only dispatched work is not the team's completion:
@@ -23255,6 +23255,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     if (typeof sessionId !== 'string' || typeof model !== 'string') {
       throwIpcError('INVALID_PARAMS', 'sessionId + model required');
     }
+    const requestedModelId = model;
     const normalizedWireArgs =
       internalOptions.source === 'user'
         ? normalizeDeviceLinkSetModelWireArgs(
@@ -23342,6 +23343,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     // 后到的 SET_MODEL 才能写 route。否则切换 DB await 恢复后会用旧 provider
     // 覆盖用户刚选的新 route，形成 DB 与进程内路由分叉。
     const applyLocked = async () => {
+      let model = requestedModelId;
       await assertReviewSettingsUnlocked(sessionId, true);
       if (supersededByOwnerBoundary()) {
         return { deferred: false, superseded: true };
@@ -23474,6 +23476,15 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         allowSideEffects: false,
         catalog: getActiveCatalog(),
       });
+      // Existing sessions may retain the old bare ID after the same provider
+      // publishes it with a bridge namespace. Only migrate an unchanged route
+      // when that provider and engine expose exactly one matching replacement.
+      if (routeExplicit && model === runtimeStatus.model && currentProviderId &&
+          guardProviderId === currentProviderId && !sshCodexProviders) {
+        const sourceProvider = runtimeProviders.find(p => p.id === currentProviderId);
+        const replacement = uniqueRenamedSessionModelId(sourceProvider, model, currentAgentKind);
+        if (replacement) model = replacement;
+      }
       const currentSourceId = currentProviderId ?? actualSourceIdForModel(
         runtimeProviders, null, currentModelId, currentAgentKind,
       );
@@ -23680,6 +23691,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
           deferred: true,
           superseded: false,
           generation,
+          effectiveModelId: model,
           effectiveProviderId: effectiveProviderId === undefined
             ? currentProviderId : normalizeSessionProviderId(effectiveProviderId) ?? null,
         };
@@ -24572,6 +24584,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
           result.persistedRoute !== true &&
           (modelWindowRebuilt ||
             (runtimeAgentKind === 'pi' && (runtimeRouteChanged || piConfigurationRefresh)) ||
+            internalOptions.persistRenamedSessionModel === true ||
             (internalOptions.source === 'user' && (isDeviceLinkInvoke() || atomicSelection)))
         ) {
           // device-link 的通用持久化原本发生在 handler 返回、session 锁释放之后；
@@ -24789,6 +24802,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         // to dispatch and cannot be followed by a stale lock-free route write.
         return Object.assign(response, {
           generation,
+          effectiveModelId: model,
           effectiveProviderId: effectiveProviderId === undefined
             ? currentProviderId : normalizeSessionProviderId(effectiveProviderId) ?? null,
         });
@@ -24808,6 +24822,41 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       }
     };
     return internalOptions.sessionLockHeld ? applyLocked() : withSendToSessionLock(sessionId, applyLocked);
+  };
+  recoverRenamedSessionModelOnSend = async (sessionId) => {
+    if (agentSwitchPending.get(sessionId)) return;
+    const [row] = await getDbClient().drizzle.select({
+      status: sessions.status,
+      model: sessions.model,
+      providerId: sessions.providerId,
+      agentKind: sessions.agentKind,
+      remoteHostId: sessions.remoteHostId,
+      agentDeviceId: sessions.agentDeviceId,
+      effort: sessions.effort,
+      fastMode: sessions.fastMode,
+    }).from(sessions).where(eq(sessions.id, sessionId)).limit(1);
+    if (!row || row.status !== 'active' || !row.providerId ||
+        row.remoteHostId || row.agentDeviceId) return;
+    const providers = await getDesktopProviderService().listProviders({
+      allowSideEffects: false,
+      catalog: getActiveCatalog(),
+    });
+    const profiles = await readSessionRuntimeProfiles(sessionId);
+    await recoverRenamedSessionModelBeforeSend({
+      route: { ...row, agentKind: dbToMakerAgentKind(row.agentKind) },
+      effectiveRoute: profiles?.effective ?? null,
+      hasPendingSelection: !!agentSwitchPending.get(sessionId) || !!profiles?.pendingMutation,
+      providers,
+      apply: (model, providerId) => handleSetModel(
+        sessionId, model, providerId, undefined,
+        { effort: row.effort as SessionRuntimeProfile['effort'], fastMode: row.fastMode },
+        {
+          source: 'agent', sessionLockHeld: true, applyingUserSelectionOnSend: true,
+          persistRenamedSessionModel: true,
+          expectedGeneration: getSessionRuntimeControlSnapshot(sessionId).generation,
+        },
+      ),
+    });
   };
   applyPiModelSettingsRefresh = async (sessionId, model, providerId) => {
     const generation = getSessionRuntimeControlSnapshot(sessionId).generation;
@@ -24854,6 +24903,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       status: result.deferred ? 'deferred' : 'applied',
       generation: result.generation,
       effectiveProviderId: result.effectiveProviderId,
+      effectiveModelId: result.effectiveModelId,
     };
   };
   applySessionRuntimeSelection = (sessionId, model, providerId, selection, options) =>

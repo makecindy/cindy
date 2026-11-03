@@ -1330,8 +1330,9 @@ function ModelSelectorContentView({
   /** 正在浏览的就是草稿当前落点的目录 —— 选中态、档位记忆与引擎集合只对它成立。 */
   const browsingSelectedCatalog =
     !remoteAgent || (remoteBrowse?.deviceId ?? null) === remoteAgentDeviceId;
-  const modelMemory =
-    !remoteAgent || browsingSelectedCatalog
+  const modelMemory = preferenceStore?.memoryForLocation
+    ? preferenceStore.memoryForLocation(remoteBrowse?.deviceId ?? null)
+    : !remoteAgent || browsingSelectedCatalog
       ? (preferenceStore?.memory ?? modelMemoryProp)
       : remoteBrowse
         ? remoteAgent.deviceModelMemory?.(remoteBrowse.deviceId)

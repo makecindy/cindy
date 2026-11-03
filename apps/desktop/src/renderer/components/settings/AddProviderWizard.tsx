@@ -405,6 +405,9 @@ export function AddProviderWizard({
          *  cc=1M / codex=272K);完成创建时按所属 runtime 取值,作为供应商事实单独保存。 */
         contextWindows?: Partial<Record<AgentKind, number>>;
         discoveredCosts?: Partial<Record<AgentKind, import("@cindy/model-providers").ModelCost>>;
+        discoveredSources?: Partial<Record<AgentKind, import('@cindy/model-providers').DiscoveredModelSource>>;
+        discoverySnapshotIds?: Partial<Record<AgentKind, string>>;
+        opaqueModelIds?: Partial<Record<AgentKind, true>>;
         discoveredMetadata?: Partial<
           Record<AgentKind, import('@cindy/model-providers').ModelMetadata>
         >;
@@ -870,6 +873,9 @@ export function AddProviderWizard({
             choices.set(model.id, { name: model.name, checked: recommended, recommended,
               agents: [...(existing?.agents ?? []), agent],
               discoveredMetadata: { ...existing?.discoveredMetadata, [agent]: model.discoveredMetadata },
+              discoveredSources: { ...existing?.discoveredSources, [agent]: model.discoveredSource },
+              discoverySnapshotIds: { ...existing?.discoverySnapshotIds, [agent]: model.discoveredSource?.snapshotId },
+              opaqueModelIds: { ...existing?.opaqueModelIds, [agent]: model.opaqueModelId },
               discoveredCosts: { ...existing?.discoveredCosts,
                 [agent]: model.userModelConfig?.discoveredCost ?? model.discoveredCost },
             });
@@ -947,24 +953,8 @@ export function AddProviderWizard({
     if (!editableBaseUrlsValid) return;
     // Curated presets use omission as their legacy default-on; generated catalog additions
     // explicitly default off. Keep the checkbox and recommendation badge consistent.
-    const initial = new Map<
-      string,
-      {
-        name: string;
-        checked: boolean;
-        recommended: boolean;
-        speechReference?: boolean;
-        manualSpeech?: boolean;
-        agents: AgentKind[];
-        contextWindows?: Partial<Record<AgentKind, number>>;
-        discoveredCosts?: Partial<Record<AgentKind, import("@cindy/model-providers").ModelCost>>;
-        discoveredMetadata?: Partial<
-          Record<AgentKind, import('@cindy/model-providers').ModelMetadata>
-        >;
-        routes?: Partial<Record<AgentKind, ProviderModelRouteConfig>>;
-        interfaceIds?: Partial<Record<AgentKind, string>>;
-      }
-    >();
+    const initial: typeof picks = new Map();
+
     for (const agent of agents) {
       for (const m of preset.runtimes[agent]?.models ?? []) {
         const existing = initial.get(m.id);
@@ -977,12 +967,18 @@ export function AddProviderWizard({
           if (m.route && !existing.routes?.[agent]) {
             existing.routes = { ...existing.routes, [agent]: m.route };
           }
+          existing.discoveredSources = { ...existing.discoveredSources, [agent]: m.discoveredSource };
+          existing.discoverySnapshotIds = { ...existing.discoverySnapshotIds, [agent]: m.discoverySnapshotId };
+          existing.opaqueModelIds = { ...existing.opaqueModelIds, [agent]: m.opaqueModelId };
         } else {
           initial.set(m.id, {
             name: m.name,
             checked: m.defaultEnabled !== false,
             recommended: m.defaultEnabled !== false,
             agents: [agent],
+            discoveredSources: { [agent]: m.discoveredSource },
+            discoverySnapshotIds: { [agent]: m.discoverySnapshotId },
+            opaqueModelIds: { [agent]: m.opaqueModelId },
             ...(m.route ? { routes: { [agent]: m.route } } : {}),
           });
         }
@@ -1027,6 +1023,9 @@ export function AddProviderWizard({
         initial.set(m.id, { ...existing, name: m.name, checked: true, recommended: false,
           agents: [...new Set([...(existing?.agents ?? []), agent])],
           discoveredMetadata: { ...existing?.discoveredMetadata, [agent]: m.discoveredMetadata },
+          discoveredSources: { ...existing?.discoveredSources, [agent]: m.discoveredSource },
+          discoverySnapshotIds: { ...existing?.discoverySnapshotIds, [agent]: m.discoverySnapshotId },
+          opaqueModelIds: { ...existing?.opaqueModelIds, [agent]: m.opaqueModelId },
           ...(m.route ? { routes: { ...existing?.routes, [agent]: m.route } } : {}),
         });
       }
@@ -1198,6 +1197,8 @@ export function AddProviderWizard({
               backfillWindow ||
               updateRouting ||
               existing.name !== m.name ||
+              m.discoveredSource || m.discoverySnapshotId || m.opaqueModelId ||
+              existing.discoveredSources?.[agent] || existing.discoverySnapshotIds?.[agent] ||
               m.discoveredCost ||
               m.discoveredMetadata || existing.speechReference
             ) {
@@ -1208,6 +1209,9 @@ export function AddProviderWizard({
                 ...(existing.speechReference && m.discoveredMetadata?.mode && m.discoveredMetadata.mode !== 'audio_speech'
                   ? { checked: false, recommended: false } : {}),
                 name: m.name,
+                discoveredSources: { ...existing.discoveredSources, [agent]: m.discoveredSource },
+                discoverySnapshotIds: { ...existing.discoverySnapshotIds, [agent]: m.discoverySnapshotId },
+                opaqueModelIds: { ...existing.opaqueModelIds, [agent]: m.opaqueModelId || existing.opaqueModelIds?.[agent] },
                 ...(m.discoveredCost ? { discoveredCosts: { ...existing.discoveredCosts, [agent]: m.discoveredCost } } : {}),
                 agents: mergedAgents,
                 discoveredMetadata: {
@@ -1230,6 +1234,9 @@ export function AddProviderWizard({
             confirmedRoutes.add(`${agent}\u0000${m.id}`);
             next.set(m.id, {
               name: m.name,
+              discoveredSources: { [agent]: m.discoveredSource },
+              discoverySnapshotIds: { [agent]: m.discoverySnapshotId },
+              opaqueModelIds: { [agent]: m.opaqueModelId },
               ...(m.discoveredCost ? { discoveredCosts: { [agent]: m.discoveredCost } } : {}),
               checked: false,
               recommended: false,
@@ -1341,6 +1348,9 @@ export function AddProviderWizard({
         contextWindows: v.contextWindows,
         discoveredMetadata: v.discoveredMetadata,
         discoveredCosts: v.discoveredCosts,
+        discoveredSources: v.discoveredSources,
+        discoverySnapshotIds: v.discoverySnapshotIds,
+        opaqueModelIds: v.opaqueModelIds,
         routes: v.routes,
         interfaceIds: v.interfaceIds,
         manualSpeech: v.manualSpeech,
@@ -1395,6 +1405,9 @@ export function AddProviderWizard({
               // explicit opt-in to every compatibility engine carrying the model.
               ...(!m.checked ? { defaultEnabled: false } : {}),
               discoveredMetadata,
+              discoveredSource: m.discoveredSources?.[agent],
+              discoverySnapshotId: m.discoverySnapshotIds?.[agent],
+              opaqueModelId: m.opaqueModelIds?.[agent],
               ...(m.discoveredCosts?.[agent] ? { discoveredCost: m.discoveredCosts[agent] } : {}),
               ...(m.manualSpeech ? { mode: 'audio_speech' as const } : presetModel?.mode ? { mode: presetModel.mode } : {}),
               ...(presetModel?.modalities ? { modalities: { input: [...presetModel.modalities.input], output: [...presetModel.modalities.output] } } : {}),
@@ -1417,7 +1430,8 @@ export function AddProviderWizard({
           const original = detected.config.runtimes[agent]?.models.find(m => m.id === model.id);
           if (!original) return model;
           // These are user fields from the custom draft, not imported preset defaults.
-          const { defaultEnabled: _enabled, discoveredMetadata: _metadata, discoveredCost: _cost, ...explicit } = original;
+          const { defaultEnabled: _enabled, discoveredMetadata: _metadata, discoveredCost: _cost,
+            discoveredSource: _source, discoverySnapshotId: _snapshot, opaqueModelId: _opaque, ...explicit } = original;
           const preserved = { ...model, ...explicit };
           return rt.baseUrl === detected.preset.runtimes[agent]?.baseUrl ? preserved
             : modelsAfterProviderEndpointEdit([preserved], detected.config.runtimes[agent]?.baseUrl, rt.baseUrl)[0];
@@ -2282,6 +2296,9 @@ export function AddProviderWizard({
                         && model.interfaceIds?.[target] ? { interfaceId: model.interfaceIds[target] } : {}),
                         ...selectedModel, id, name: model.name,
                         discoveredMetadata: model.discoveredMetadata?.[target] ?? saved?.discoveredMetadata,
+                        discoveredSource: model.discoveredSources?.[target],
+                        discoverySnapshotId: model.discoverySnapshotIds?.[target],
+                        opaqueModelId: model.opaqueModelIds?.[target] || saved?.opaqueModelId,
                         ...(saved?.route ?? model.routes?.[target] ? { route: saved?.route ?? model.routes?.[target] } : {}),
                       };
                     }) : original.models;
