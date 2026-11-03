@@ -549,6 +549,7 @@ const EXTENDED_INVOKE_CHANNELS: readonly string[] = [
   'maker:goal:set',
   'maker:goal:clear',
   'maker:goal:get-status',
+  'maker:goal:inspect',
   'maker:goal:pause',
   'maker:goal:resume',
   'maker:goal:update',

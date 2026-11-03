@@ -269,6 +269,7 @@ describe('REMOTE_INVOKE_ALLOWLIST', () => {
       'maker:goal:set',
       'maker:goal:clear',
       'maker:goal:get-status',
+      'maker:goal:inspect',
       'maker:goal:pause',
       'maker:goal:resume',
       'maker:goal:update',

@@ -1,5 +1,26 @@
 # 跨端协议兼容
 
+## Agent 目标模式只读查询
+
+新增同账号设备远控 channel `maker:goal:inspect`，入参 `[sessionId]`，返回
+`GoalStatusPayload | null`。只查已保存目标，不运行 `resumeOnOpen`、不恢复任务、
+不启动 Agent；旧 `maker:goal:get-status` 保留页面打开时恢复目标的语义。
+新入口仅接受受信本机页面或同账号远控上下文，不进入共享任务或未配对设备白名单。
+
+Agent 工具使用 `deviceId::sessionId` 指定目标电脑，写操作复用既有
+`maker:goal:set/update/pause/resume/clear`，发送前沿用当前账号及任务行动授权检查。
+先用 inspect 核对绑定并探测支持，再写入、读回；旧端不支持时明确报
+`REMOTE_UNSUPPORTED`，绝不降级成带副作用的旧查询或模拟用户发送消息。
+写请求／后置读取的可信回执缺失时返回 `REMOTE_RESULT_UNKNOWN`，不重放写请求。
+新控制端与被控端都需要包含此改动；旧客户端继续使用原目标页面，行为不变。
+不修改数据库、服务端、Mobile 原生配置或连接恢复策略；故障只影响这次目标操作，
+不重置设备链路，不重启其它任务。实现与回归：`mcp-integrations/sessionGoal.ts`、
+`__tests__/sessionGoal.test.ts`、`maker-ipc/__tests__/goalHandlers.test.ts`。
+
+自建中转复用现有 `invoke` / `invoke-result` 透明转发，不解析 channel 或 goal 内容，
+无需修改中转实现或签名协议；`device-link-relay/src/__tests__/relay.test.ts` 的隧道回归
+通过真实本地 WebSocket 核对新查询及返回值原样送达。任务归属和 goal 权限仍由端点核验。
+
 ## 机器实时状态（2026-11-02）
 
 新增只读 invoke `maker:machine:status`（`packages/device-link/src/machineStatus.ts`），同账号远控可用，不进共享任务访客白名单。

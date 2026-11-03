@@ -858,6 +858,8 @@ describe('teammate turn principal', () => {
     sessionId: 'companion', server: 'cindy_helper' as const, tool, args,
   });
   const ownerTaskWrites = [
+    ...['set', 'update', 'pause', 'clear'].map(action =>
+      helper(`${action}_session_goal`, { session_id: 'owner-task' })),
     helper('send_to_session', { target_session_id: 'owner-task', message: 'Add a requirement' }),
     helper('steer_session', { session_id: 'owner-task', message: 'Change course' }),
     helper('stop_session_turn', { session_id: 'owner-task' }),
@@ -866,6 +868,25 @@ describe('teammate turn principal', () => {
     helper('archive_sessions', { session_ids: ['owner-task'] }),
     helper('set_workbench_task_responsibility', { task_id: 'owner-task', responsible: true }),
   ];
+
+  // Native goal restoration is the same explicit resume risk as a paused task.
+  // Production admission must reject before the effect; owner input uses normal permissions.
+  it('requires the resume decision on an autonomous goal restore without prompting an owner request twice', async () => {
+    const h = desktopFixture('automatic');
+    live(h);
+    h.confirm.mockResolvedValue(false);
+    const request = helper('resume_session_goal', { session_id: 'owner-task' });
+    const effect = vi.fn(async () => 'resumed');
+    const denied = await withToolCallAuthority(h.authorize, request, effect) as { content: Array<{ text: string }> };
+    expect(JSON.parse(denied.content[0].text)).toMatchObject({ ok: false, errorCode: 'USER_CANCELLED' });
+    expect(effect).not.toHaveBeenCalled();
+    expect(h.confirm).toHaveBeenCalledWith('companion', request.tool, request.args,
+      { server: 'cindy_helper', risk: 'resume' });
+    h.confirm.mockClear();
+    h.activeInput.ownerInput = true;
+    expect(await withToolCallAuthority(h.authorize, request, effect)).toBe('resumed');
+    expect(h.confirm).not.toHaveBeenCalled();
+  });
 
   // Ordinary actions retain the autonomous principal and use the existing permission mode.
   it.each(['bypassPermissions', 'auto', 'ask'])('uses ordinary permissions without an extra provenance gate under %s', async mode => {

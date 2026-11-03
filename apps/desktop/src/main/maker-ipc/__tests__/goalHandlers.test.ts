@@ -8,6 +8,9 @@ const mocks = vi.hoisted(() => ({
   resumeOnOpen: vi.fn(),
   resumeGoal: vi.fn(),
   updateGoal: vi.fn(),
+  trusted: true,
+  remote: null as null | { sharedTask?: object },
+  readTask: vi.fn(async () => ({ status: 'active' })),
 }));
 
 vi.mock('electron', () => ({
@@ -19,17 +22,19 @@ vi.mock('electron', () => ({
   },
 }));
 
-vi.mock('../../goal-host/index.js', () => ({
-  getGoalController: () => mocks.controllerAvailable
-    ? {
-        setGoal: mocks.setGoal,
-        getStatus: mocks.getStatus,
-        resumeOnOpen: mocks.resumeOnOpen,
-        resumeGoal: mocks.resumeGoal,
-        updateGoal: mocks.updateGoal,
-      }
-    : null,
-}));
+vi.mock('../../goal-host/index.js', () => {
+  const controller = {
+    setGoal: mocks.setGoal,
+    getStatus: mocks.getStatus,
+    resumeOnOpen: mocks.resumeOnOpen,
+    resumeGoal: mocks.resumeGoal,
+    updateGoal: mocks.updateGoal,
+  };
+  return { getGoalController: () => mocks.controllerAvailable ? controller : null };
+});
+vi.mock('../../device-link/invoke-context.js', () => ({ getDeviceLinkInvokeContext: () => mocks.remote }));
+vi.mock('../../security/trustedAppRenderer.js', () => ({ isTrustedAppRendererEvent: () => mocks.trusted }));
+vi.mock('../../localDb/ipc/sessions.js', () => ({ getSessionRowSnapshot: mocks.readTask }));
 
 vi.mock('../../logger.js', () => ({
   createLogger: () => ({ info: vi.fn(), warn: vi.fn() }),
@@ -62,7 +67,41 @@ describe('goal update IPC errors', () => {
     vi.clearAllMocks();
     mocks.handlers.clear();
     mocks.controllerAvailable = true;
+    mocks.trusted = true;
+    mocks.remote = null;
     registerGoalHandlers();
+  });
+
+  // Agent-user-parity: unlike the UI getter, inspection cannot start a dormant task.
+  // Unit regression through the registered IPC handler; old tests only cover resume-on-open.
+  it('returns active state observationally and rejects an untrusted sender', async () => {
+    mocks.getStatus.mockResolvedValueOnce({ sessionId: 's1', status: 'active' });
+    expect(await handlerFor(MAKER_INVOKE.GOAL_INSPECT)({}, 's1'))
+      .toEqual({ sessionId: 's1', status: 'active' });
+    expect(mocks.resumeOnOpen).not.toHaveBeenCalled();
+    mocks.trusted = false;
+    await expect(handlerFor(MAKER_INVOKE.GOAL_INSPECT)({}, 's1'))
+      .rejects.toMatchObject({ code: 'PERMISSION_DENIED' });
+    expect(mocks.getStatus).toHaveBeenCalledOnce();
+  });
+
+  it('allows the owner device while rejecting a shared-task peer', async () => {
+    mocks.trusted = false;
+    mocks.remote = {};
+    mocks.getStatus.mockResolvedValueOnce(null);
+    expect(await handlerFor(MAKER_INVOKE.GOAL_INSPECT)({}, 's1')).toBeNull();
+    mocks.remote = { sharedTask: {} };
+    await expect(handlerFor(MAKER_INVOKE.GOAL_INSPECT)({}, 's1'))
+      .rejects.toMatchObject({ code: 'PERMISSION_DENIED' });
+    expect(mocks.getStatus).toHaveBeenCalledOnce();
+  });
+
+  it('sanitizes target lookup failures without reading or starting a goal', async () => {
+    mocks.readTask.mockRejectedValueOnce(new Error('sqlite path /private/user-data failed'));
+    await expect(handlerFor(MAKER_INVOKE.GOAL_INSPECT)({}, 's1'))
+      .rejects.toMatchObject({ code: 'INTERNAL', message: expect.stringContaining('failed to inspect target session') });
+    expect(mocks.getStatus).not.toHaveBeenCalled();
+    expect(mocks.resumeOnOpen).not.toHaveBeenCalled();
   });
 
   it('returns INTERNAL when the Goal controller is not ready', async () => {
