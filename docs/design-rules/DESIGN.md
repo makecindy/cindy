@@ -70,12 +70,15 @@ Blend wallpaper with the theme surface, never a fixed black overlay in Light mod
 must not affect text or icons. In-page raised surfaces — composer, message bubbles,
 tool, code and table-header cards, page cards, inputs and selected navigation rows —
 tint the wallpaper with their own token at 72% (Light) / 64% (Dark) instead of covering
-it (user request, 2026-11-03); fill only, no `backdrop-filter`, which would become the
-containing block for the composer's fixed palettes. Floating layers (menus, popovers,
-dialogs, tooltips, floating buttons) and embedded web or editor content keep their
-readable opaque surfaces. Implementation: the in-page glass rule in `globals.css`,
-scoped to page containers and excluding floating roles. Composer scroll masking must
-align with the same wallpaper instead of introducing an opaque footer rectangle.
+it (user request, 2026-11-03). Higher visibility raises that opacity so the artwork
+contributes at most 16% under the surface, keeping the tertiary text tier at the 3:1
+floor over any wallpaper (84% at 100% visibility). Fill only, no `backdrop-filter`, which
+would become the containing block for the composer's fixed palettes. Floating layers
+(menus, popovers, dialogs, tooltips, anything positioned over other content) and embedded
+web or editor content keep their readable opaque surfaces. Implementation: the in-page
+glass rule in `globals.css`, scoped to page containers and excluding floating roles and
+absolute / fixed / sticky surfaces; the floor comes from `useWallpaperBackground`.
+Composer scroll masking must align with the same wallpaper instead of introducing an opaque footer rectangle.
 Built-in SVG wallpapers are decorative assets, not new semantic UI colors.
 Verify actual Light/Dark screenshots across host pages and the expanded tool pane.
 

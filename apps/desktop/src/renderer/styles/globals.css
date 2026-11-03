@@ -2381,15 +2381,18 @@ html[data-wallpaper-active='true'] .wallpaper-composer-fade {
 
 /* In-page raised surfaces tint the wallpaper with their own token instead of
    covering it. Scoped to page containers, so portaled popovers, menus and
-   dialogs (and in-page floating roles) keep their readable surfaces. Fill
-   only: backdrop-filter would become the containing block for the composer's
-   fixed palettes. Keeps base-utility specificity, so hover and state variants
-   still win. Each token needs a fill line and an entry in the target list. */
+   dialogs keep their readable surfaces; in-page floating roles and surfaces
+   positioned over other content (absolute / fixed / sticky) stay opaque too.
+   Higher wallpaper visibility raises the opacity to the contrast floor set by
+   useWallpaperBackground. Fill only: backdrop-filter would become the
+   containing block for the composer's fixed palettes. Keeps base-utility
+   specificity, so hover and state variants still win. Each token needs a fill
+   line and an entry in the target list. */
 html[data-wallpaper-active='true'] {
-  --wallpaper-glass-opacity: 72%;
+  --wallpaper-glass-opacity: max(72%, var(--app-wallpaper-glass-floor, 0%));
 }
 html.dark[data-wallpaper-active='true'] {
-  --wallpaper-glass-opacity: 64%;
+  --wallpaper-glass-opacity: max(64%, var(--app-wallpaper-glass-floor, 0%));
 }
 [class~='bg-[var(--chat-input-bg)]'] { --wallpaper-glass-fill: var(--chat-input-bg); }
 [class~='bg-[var(--msg-user-bg)]'] { --wallpaper-glass-fill: var(--msg-user-bg); }
@@ -2421,6 +2424,7 @@ html.dark[data-wallpaper-active='true'] {
   [class~='bg-[var(--settings-menu-bg-selected)]'],
   .bg-sidebar-item-active
 ):where(:not(
+  .absolute, .fixed, .sticky,
   [role='dialog'], [role='alertdialog'], [role='menu'], [role='listbox'], [role='tooltip'],
   :is([role='dialog'], [role='alertdialog'], [role='menu'], [role='listbox'], [role='tooltip']) *
 )) {
