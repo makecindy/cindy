@@ -1491,6 +1491,7 @@ import {
   usageExhaustionScope,
   isRouteExhaustedForCandidate,
   isCandidateQuotaBlocked,
+  type AccountRoute,
   type UsageExhaustionScope,
   type RuntimeFallbackResult,
 } from './botCandidateRecovery.js';
