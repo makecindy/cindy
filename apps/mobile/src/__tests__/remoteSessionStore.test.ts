@@ -237,6 +237,21 @@ function pending(kind: string, requestId?: string, persistId?: string): PendingI
 describe('remoteSessionStore', () => {
   beforeEach(() => remoteSessionStore.clear());
 
+  it('lists independent teammate lanes, excludes canonical chat and retains attribution after legacy detail reads', () => {
+    const taskTeammate = { id: 'cindy-default', name: 'Cindy' };
+    remoteSessionStore.setDeviceSessions('dev-1', 'Mac', [
+      session('routine', { source: 'bot', companion: { id: 'cindy-default', role: 'routine' }, taskTeammate }),
+      session('channel', { source: 'bot', companion: { id: 'cindy-default', role: 'channel' }, taskTeammate }),
+      session('canonical', { source: 'bot', companion: { id: 'cindy-default', role: 'canonical' } }),
+      session('thread', { source: 'bot' }),
+    ]);
+    expect(remoteSessionStore.getHomeSessions().map(row => row.id).sort()).toEqual(['channel', 'routine']);
+    remoteSessionStore.upsertDeviceSession('dev-1', 'Mac', session('routine', { source: 'bot', status: 'archived' }));
+    expect(remoteSessionStore.getHomeSessions().find(row => row.id === 'routine')).toMatchObject({
+      status: 'archived', companion: { id: 'cindy-default', role: 'routine' }, taskTeammate,
+    });
+  });
+
   it('keeps an edited async question across disconnection but removes it on explicit history clearing', () => {
     remoteSessionStore.setDeviceSessions('dev-1', 'Mac', [session('s1')]);
     const item: PendingInteraction = { persistId: 'p1',
@@ -924,6 +939,34 @@ describe('remoteSessionStore', () => {
     expect(remoteSessionStore.getMessages('s1')).toHaveLength(1);
     expect(remoteSessionStore.getMessages('s1')[0].content).toBe('updated');
     expect(remoteSessionStore.getMessageVersion()).toBeGreaterThan(versionAfterCreate);
+  });
+
+  // #8005, unit: import timestamps can be later than the live copy. The
+  // deletion push must remove that displayed copy without removing live text.
+  // Existing draft/round deletion cases did not cover this import ordering.
+  it('removes a reconciled Codex import copy from the displayed remote history', () => {
+    const importedId = 'codex-import:thread:1';
+    remoteSessionStore.setMessages('s1', [{
+      ...message(importedId, 's1'), content: 'Same answer', createdAt: '2026-06-15T00:00:06.000Z',
+    }]);
+    remoteSessionStore.applyRemotePush('dev-1', 'local-db:messages:created', {
+      sessionId: 's1', message: {
+        ...message('live-answer', 's1'), content: 'Same answer', createdAt: '2026-06-15T00:00:05.000Z',
+      },
+    });
+    expect(remoteSessionStore.getMessages('s1')).toHaveLength(2);
+    remoteSessionStore.applyRemotePush('dev-1', 'local-db:messages:deleted', {
+      sessionId: 's1', clientId: importedId, clientIds: [importedId],
+    });
+    const enriched = 'Same answer\n<oai-mem-citation><citation_entries>MEMORY.md:1[note]</citation_entries></oai-mem-citation>';
+    remoteSessionStore.applyRemotePush('dev-1', 'local-db:messages:created', {
+      sessionId: 's1', message: { ...message('live-answer', 's1'), content: enriched,
+        createdAt: '2026-06-15T00:00:05.000Z', agentMeta: { assistantPhase: 'final_answer', totalCostUsd: 1 } },
+    });
+    expect(remoteSessionStore.getMessages('s1')).toEqual([
+      expect.objectContaining({ clientId: 'live-answer', content: enriched,
+        agentMeta: expect.objectContaining({ assistantPhase: 'final_answer', totalCostUsd: 1 }) }),
+    ]);
   });
 
   it('removes a deleted AI round from the device-link transcript mirror', () => {
@@ -4035,18 +4078,33 @@ describe('remoteSessionStore', () => {
     expect(remoteSessionStore.isSessionMakerTurnRunning('s1')).toBe(false);
   });
 
-  it('keeps terminal prediction eligibility through acknowledgement and clears it for the next run', () => {
+  // Unit, #8147 r4427259022: soft offline must retain the known failure ID;
+  // reconnect restores the projection but does not replay the terminal event.
+  it('keeps terminal prediction eligibility and identity through acknowledgement and reconnect until the next run', () => {
+    remoteSessionStore.setDeviceSessions('dev-1', 'Mac', [session('s1')]);
     pushMakerStatus('s1', { isRunning: true });
     remoteSessionStore.applyRemotePush('dev-1', 'maker:event', {
-      sessionId: 's1', event: { type: 'error', data: { message: 'Failed', isTerminal: true } },
+      sessionId: 's1', persistId: 'failed-row', event: { type: 'error', data: { message: 'Failed', isTerminal: true } },
     });
     expect(remoteSessionStore.getSessionRunStatus('s1').hasTerminalError).toBe(true);
+    expect(remoteSessionStore.getSessionRunStatus('s1').terminalError).toEqual({ clientId: 'failed-row', message: 'Failed' });
     remoteSessionStore.applySessionActivity('dev-1', { sessionId: 's1', phase: 'completed', attention: false });
     expect(remoteSessionStore.getSessionRunStatus('s1').hasTerminalError).toBe(true);
     pushMakerStatus('s1', { isRunning: false });
     expect(remoteSessionStore.getSessionRunStatus('s1').hasTerminalError).toBe(true);
+    expect(remoteSessionStore.getSessionRunStatus('s1').terminalError?.clientId).toBe('failed-row');
+    remoteSessionStore.markDeviceOffline('dev-1');
+    remoteSessionStore.markDeviceOffline('dev-1');
+    expect(remoteSessionStore.getSessionRunStatus('s1').isRunning).toBe(false);
+    remoteSessionStore.setDeviceSessions('dev-1', 'Mac', [session('s1')]);
+    remoteSessionStore.setInputProjection('s1', { ...projection('s1'), error: 'Failed' });
+    pushMakerStatus('s1', { isRunning: false });
+    expect(remoteSessionStore.getSessionRunStatus('s1').terminalError).toEqual({
+      clientId: 'failed-row', message: remoteSessionStore.getInputProjection('s1').error,
+    });
     pushMakerStatus('s1', { isRunning: true });
     expect(remoteSessionStore.getSessionRunStatus('s1').hasTerminalError).toBe(false);
+    expect(remoteSessionStore.getSessionRunStatus('s1').terminalError).toBeNull();
   });
 
   it('recovers a terminal error from activity even without its maker event', () => {

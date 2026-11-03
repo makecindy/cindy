@@ -412,7 +412,7 @@ it('enables both native Claude and Pi while leaving Codex compatibility opt-in',
   expect(modelVisibilityTargets(p, row, false)).toHaveLength(3);
 });
 
-it('enabling an imported Gemini row only enables Pi even when the supplier exposes three APIs', () => {
+it('enabling an imported Gemini row enables every engine whose API the supplier serves', () => {
   const entry = { ...model('google/gemini-3.8-flash'), nativeApi: 'google-generative-ai' as const, defaultEnabled: false };
   const p = { ...provider, agents: ['claude-code', 'codex', 'pi'] as ProviderView['agents'], models: {
     'claude-code': [{ ...entry, api: 'anthropic-messages' as const }],
@@ -420,7 +420,7 @@ it('enabling an imported Gemini row only enables Pi even when the supplier expos
     pi: [{ ...entry, api: 'openai-completions' as const }],
   } };
   const row = buildUnionRows(p)[0]!;
-  expect(modelVisibilityTargets(p, row, true)).toEqual([{ agent: 'pi', modelId: entry.id }]);
+  expect(modelVisibilityTargets(p, row, true)).toHaveLength(3);
   expect(modelVisibilityTargets(p, row, false)).toHaveLength(3);
 });
 

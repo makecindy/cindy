@@ -12,6 +12,7 @@ const h = vi.hoisted(() => ({
   history: new Map<string, string>(),
   sockets: [] as any[],
 }));
+vi.mock('expo-crypto', () => ({ randomUUID: () => 'fixture-generation' }));
 vi.mock('@/auth/AuthContext', () => ({ useAuth: () => h.auth }));
 vi.mock('@react-native-async-storage/async-storage', () => ({ default: {
   getItem: async (key: string) => h.storage.get(key) ?? null,
@@ -31,7 +32,7 @@ vi.mock('@/session/mobileDurableOutbox', async () => {
   return { mobileDurableOutbox: createDurableOutbox(storage) };
 });
 vi.mock('react-native', () => ({ AppState: { currentState: 'active', addEventListener: () => ({ remove() {} }) } }));
-vi.mock('expo-router', async () => { const { useEffect } = await import('react'); return { useFocusEffect: (fn: any) => useEffect(fn, [fn]) }; });
+vi.mock('expo-router', async () => { const { useEffect } = await import('react'); return { useIsFocused: () => true, useFocusEffect: (fn: any) => useEffect(fn, [fn]) }; });
 
 const bases = { cn: 'https://hotfix.cindy.com.cn/cindy', global: 'https://hotfix.cindy.app/cindy' };
 const texts = Object.fromEntries(Object.entries(bases).map(([region, base]) => [region,
@@ -74,9 +75,9 @@ beforeEach(() => {
     if (path.startsWith('/v1/conversations?')) return [room];
     if (path.endsWith('/members')) return [];
     if (path.endsWith('/snapshot')) return { room, members: [], messages: [], cursor: '1' };
-    if ((path.endsWith('/executions') || path.includes('/execution-failures?'))) return [];
+    if ((path.endsWith('/executions') || path.includes('/execution-failures?') || path.endsWith('/plans'))) return [];
     if (path.includes('/messages?')) return [];
-    if (path.includes('/changes?')) return { head: '1' };
+    if (path.includes('/changes?')) return { head: '1', cursor: '1', changes: [], hasMore: false };
     if (options.method === 'POST') return { id: self };
     throw new Error('Unexpected fixture request');
   });

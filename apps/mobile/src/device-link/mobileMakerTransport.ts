@@ -632,7 +632,8 @@ export interface MobileMakerTransport {
   ): Promise<unknown>;
   getSessionEstimatedValue(
     sessionId: string,
-  ): Promise<{ totalValueMoney?: unknown; totalValueUsd?: number }>;
+    options?: { includeBreakdown?: boolean; clientId?: string },
+  ): Promise<{ totalValueMoney?: unknown; totalValueUsd?: number; costBreakdown?: unknown }>;
   /** Codex app-server authoritative windows plus banked reset credits and a bound reset offer. */
   getCodexRateLimits(providerId?: string): Promise<MobileCodexRateLimitsResult>;
   setCodexResetAutoUse(patch: Partial<CodexResetAutoUseSettings> | null, accountKey: string, providerId?: string): Promise<MobileCodexRateLimitsResult>;
@@ -765,7 +766,8 @@ export interface MobileMakerTransport {
   rewindCommit(
     sessionId: string,
     clientId: string,
-    opts?: { allowFileRestore?: boolean },
+    /** requireLatestUser:编辑最后一条消息专用,被控端权威核对目标仍是最新用户消息。 */
+    opts?: { allowFileRestore?: boolean; requireLatestUser?: boolean },
   ): Promise<RemoteSession>;
   deleteMessage(
     sessionId: string,
@@ -1192,7 +1194,7 @@ export function createMobileMakerTransport({
           prepare: () =>
             stage("prepare", () => fetch(!opts?.thumbnail, !opts?.thumbnail), describeResult),
           peer: (metadata) =>
-            metadata.size <= FILE_PEER_MAX_BYTES
+            !isSharedTaskPeer(deviceId) && metadata.size <= FILE_PEER_MAX_BYTES
               ? stage(
                   "direct",
                   () => tryMobilePeerFile(deviceId, url, opts?.signal, trace || undefined,
@@ -1202,7 +1204,9 @@ export function createMobileMakerTransport({
               : Promise.resolve(null),
           fallback: () => {
             try { opts?.onProgress?.(0, 0); } catch { /* Observer only; upload bytes are unavailable. */ }
-            return stage("upload", fallback ?? (() => fetch(false)), describeResult);
+            // Workdir export jobs are same-account only. Shared media fetch
+            // rechecks task access and stages bytes in the shared-task scope.
+            return stage("upload", !isSharedTaskPeer(deviceId) && fallback ? fallback : () => fetch(false), describeResult);
           },
         }),
       (result) => ({
@@ -1356,8 +1360,8 @@ export function createMobileMakerTransport({
         throw new Error("PRECONDITION_FAILED: Account scope unsupported");
       return result;
     },
-    getSessionEstimatedValue: (sessionId) =>
-      call("local-db:messages:estimatedSessionValue", [sessionId]),
+    getSessionEstimatedValue: (sessionId, options) =>
+      call("local-db:messages:estimatedSessionValue", [sessionId, ...(options ? [options] : [])]),
     getCodexRateLimits: async (providerId) => {
       const result = await call<MobileCodexRateLimitsResult>(
         "maker:usage:codex-rate-limits",
@@ -1624,7 +1628,7 @@ export function createMobileMakerTransport({
           workdir,
         });
         assertFileReadActive(signal);
-        if (!caps.fileRead) {
+        if (!caps.fileRead && !isSharedTaskPeer(deviceId)) {
           mobileDebugLog("debug", "files", "file export without direct read", {
             reason: "host-lacks-file-read",
           });

@@ -270,6 +270,14 @@ it.each(['ready', 'unavailable'])('uses the queried dashboard in the settings ca
 });
 
 describe('ProvidersSection — Cindy AI 账户资产模块', () => {
+  it.each(['Cindy AI · 个人', 'Cindy AI · 心动', 'Cindy AI · Example Studio'])(
+    'shows the source name %s in the provider list and detail header', async (name) => {
+      providersState.providers = [{ ...makeXd(), name }];
+      renderSection();
+      expect((await screen.findAllByText(name)).length).toBeGreaterThanOrEqual(2);
+      expect(screen.queryByText('settings.providers.xd.title')).toBeNull();
+    },
+  );
   it('仅免费个人账号在 Cindy AI 名称后显示身份标签', async () => {
     modelAccessState.accountTier = 'free';
     renderSection();

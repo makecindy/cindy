@@ -44,7 +44,7 @@ export function CindyMergeSetting({ bot, className = 'mt-3' }: { bot: { id: stri
     return () => { live = false; };
   }, [cloud.enabled, actorsKey]);
 
-  if (!copies.some((copy) => copy.botId === bot.id)) return null;
+  if (copies.length < 2 || !copies.some((copy) => copy.botId === bot.id)) return null;
   const deviceName = (copy: CompanionCindyCopy) => {
     const actor = cloud.actors.find((candidate) => candidate.externalId === copy.botId);
     if (copy.homeDeviceId && copy.homeDeviceId === cloud.selfDeviceId) return t('bots.cloud.thisComputer');

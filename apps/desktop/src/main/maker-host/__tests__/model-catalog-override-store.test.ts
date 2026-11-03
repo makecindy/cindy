@@ -8,20 +8,22 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 
-import { describe, expect, it, vi } from 'vitest';
+import { afterAll, describe, expect, it, vi } from 'vitest';
 
 const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'model-catalog-overrides-test-'));
-const owner = { current: 'owner-a' };
+const owner = { current: 'owner-a', generation: 1 };
+afterAll(() => fs.rmSync(tmpDir, { recursive: true, force: true }));
 
 vi.mock('electron', () => ({ app: { getPath: () => '/tmp/never-used-here' } }));
 vi.mock('../logger-adapter.js', () => ({
   desktopMakerLogger: { child: () => ({ info: () => {}, warn: () => {}, error: () => {} }) },
 }));
 vi.mock('../../appSessionState.js', () => ({
+  getActiveAppSession: () => ({ generation: owner.generation }),
   ownerScopedUserDataPath: (name: string) => path.join(tmpDir, owner.current, name),
 }));
 
-const { MAX_MODEL_CATALOG_OVERRIDE_FILE_BYTES, readModelCatalogOverrides } =
+const { MAX_MODEL_CATALOG_OVERRIDE_FILE_BYTES, readModelCatalogOverrides, readModelImageInputOverride, writeModelImageInputOverride } =
   await import('../model-catalog-override-store.js');
 
 const patchEntry = { base: { name: 'Renamed' } };
@@ -104,5 +106,52 @@ describe('model-catalog-override-store', () => {
     expect(readModelCatalogOverrides().patches).toEqual({});
     expect(fs.statSync(oversized).size).toBeGreaterThan(MAX_MODEL_CATALOG_OVERRIDE_FILE_BYTES);
     expect(fs.existsSync(oversized)).toBe(true);
+  });
+});
+
+// Unit: the new public writer must preserve sparse user data and false, unlike the former read-only store.
+// Minimal inputs: one model, a malformed sibling, a refresh failure, and a changed account.
+describe('image input edits', () => {
+  const target = { providerId: 'relay', agent: 'pi' as const, modelId: 'model' };
+  const refresh = async () => {};
+  it('persists true and false, resets by deletion, and keeps unrelated and quarantined fields', async () => {
+    owner.current = 'image-edit';
+    const bad = { base: { unknownField: true } };
+    const file = writeOwnerFile({ version: 1, patches: {
+      'relay:model': { base: { name: 'My model' }, perAgent: { codex: { contextWindow: 200_000 } } },
+      'relay:broken': bad,
+    }, additions: { 'xai:extra': { base: { name: 'Extra', contextWindow: 1000, efforts: [], defaultEffort: null } } } });
+    for (const value of [true, false, null]) {
+      await writeModelImageInputOverride([target], value, refresh);
+      expect(readModelImageInputOverride(target)).toBe(value);
+      const raw = JSON.parse(fs.readFileSync(file, 'utf8'));
+      expect(raw.patches['relay:broken']).toEqual(bad);
+      expect(raw.patches['relay:model'].base.name).toBe('My model');
+      expect(raw.patches['relay:model'].perAgent.codex.contextWindow).toBe(200_000);
+      expect(raw.additions['xai:extra']).toBeDefined();
+    }
+    expect(readModelCatalogOverrides().patches['relay:model'].perAgent?.pi).toBeUndefined();
+    owner.current = 'image-other-owner';
+    expect(readModelImageInputOverride(target)).toBeNull();
+    owner.current = 'image-edit';
+    expect(readModelCatalogOverrides().patches['relay:model'].base?.name).toBe('My model');
+  });
+  it('rolls back in the original account if refresh fails after an owner switch', async () => {
+    owner.current = 'image-original';
+    await writeModelImageInputOverride([target], false, refresh);
+    await expect(writeModelImageInputOverride([target], true, async () => {
+      owner.current = 'image-switched'; owner.generation++;
+      throw new Error('refresh failed');
+    })).rejects.toThrow('refresh failed');
+    expect(readModelImageInputOverride(target)).toBeNull();
+    owner.current = 'image-original';
+    expect(readModelImageInputOverride(target)).toBe(false);
+  });
+  it.each([2, '{broken'])('refuses to overwrite unsupported or unreadable data: %s', async (version) => {
+    owner.current = `image-invalid-${version}`;
+    const original = typeof version === 'string' ? version : JSON.stringify({ version, patches: {} });
+    const file = writeOwnerFile(original);
+    await expect(writeModelImageInputOverride([target], true, refresh)).rejects.toThrow();
+    expect(fs.readFileSync(file, 'utf8')).toBe(original);
   });
 });

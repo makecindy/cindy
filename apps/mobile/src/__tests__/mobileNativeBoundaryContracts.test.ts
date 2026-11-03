@@ -31,10 +31,10 @@ it('bounds native export and preserves the hidden document and system share boun
   const route = readFileSync(resolve(process.cwd(), 'app/sessions/[sessionId].tsx'), 'utf8');
   const share = route.indexOf("await sharing.shareAsync(localUri, { mimeType: 'image/png' });");
   const completed = route.indexOf('shareCompleted = true;', share);
-  const inactive = route.indexOf('if (!isShareOperationActive()) return;', share);
   expect(share).toBeGreaterThanOrEqual(0);
   expect(completed).toBeGreaterThan(share);
-  expect(inactive).toBeGreaterThan(completed);
+  // Selection now closes before opening the sheet. File lifetime still follows
+  // the native promise, independent of that UI state.
   expect(route).toContain('if (!shareCompleted && localUri)');
 });
 
@@ -250,7 +250,7 @@ describe('mobile native boundary contracts', () => {
     const viewport = elements.get('session.bottomViewport')!;
     const layer = elements.get('session.bottomLayer')!;
     expect(layer.parent).toBe(viewport);
-    expect(layer.openingElement.getText(source)).toContain('onLayout={handleBottomOverlayLayout}');
+    expect(layer.openingElement.getText(source)).toContain('ref={bottomOverlayRef}');
     expect(viewport.openingElement.getText(source)).toContain('pointerEvents="box-none"');
     for (const component of ['SessionComposerPalette', 'ComposerActivityStatus', 'SessionComposerInput']) {
       expect(viewport.getText(source)).toContain('<' + component);

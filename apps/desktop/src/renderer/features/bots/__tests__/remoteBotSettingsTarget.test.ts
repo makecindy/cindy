@@ -56,6 +56,49 @@ it('applies the host profile after an autosave and sends only what changed', asy
   expect(profiles.get()?.description).toBe('Designer');
 });
 
+it('accepts a same-model choice once through a host that declares the operation', async () => {
+  const { target, profiles } = create([...ALL_OPS, 'profile.acceptModelSelection']);
+  host.invoke.mockResolvedValueOnce(ok({ profile: profile() }));
+  await profiles.load();
+  host.invoke.mockResolvedValueOnce(ok({ profile: profile({ currentVersion: 2 }) }));
+  await target.profile.update('bot-1', { acceptModelSelection: true });
+  expect(sent(1).input).toEqual({ v: 1, op: 'profile.acceptModelSelection', args: { patch: {}, expectedVersion: 1 } });
+  expect(profiles.get()).not.toHaveProperty('acceptModelSelection');
+});
+
+it('rereads a version conflict even when a concurrent refresh was discarded during the first save', async () => {
+  const { target, profiles } = create([...ALL_OPS, 'profile.acceptModelSelection']);
+  host.invoke.mockResolvedValueOnce(ok({ profile: profile() }));
+  await profiles.load();
+  let finish!: (result: unknown) => void;
+  host.invoke.mockReturnValueOnce(new Promise(resolve => { finish = resolve; }));
+  const saving = target.profile.update('bot-1', { acceptModelSelection: true });
+  host.invoke.mockResolvedValueOnce(ok({ profile: profile({ currentVersion: 2 }) }));
+  await profiles.refresh();
+  expect(profiles.get()?.currentVersion).toBe(1);
+  host.invoke.mockResolvedValueOnce(ok({ profile: profile({ currentVersion: 2 }) }));
+  finish(refused('PRECONDITION_FAILED', 'Profile changed'));
+  await expect(saving).rejects.toSatisfy(error => extractIpcError(error)?.code === 'PRECONDITION_FAILED');
+  expect(profiles.get()?.currentVersion).toBe(2);
+  host.invoke.mockResolvedValueOnce(ok({ profile: profile({ currentVersion: 3 }) }));
+  await target.profile.update('bot-1', { acceptModelSelection: true });
+  expect(sent(4).input).toMatchObject({ op: 'profile.acceptModelSelection', args: { expectedVersion: 2 } });
+});
+
+it('keeps actual model changes usable on older hosts but refuses unsupported same-model acceptance', async () => {
+  const { target, profiles } = create();
+  host.invoke.mockResolvedValueOnce(ok({ profile: profile() }));
+  await profiles.load();
+  await expect(target.profile.update('bot-1', { acceptModelSelection: true }))
+    .rejects.toSatisfy(error => extractIpcError(error)?.code === 'UNSUPPORTED_CAPABILITY');
+  expect(host.invoke).toHaveBeenCalledTimes(1);
+  const chain = [{ harness: 'pi' as const, model: 'changed', providerId: null, effort: '', fastMode: false }];
+  host.invoke.mockResolvedValueOnce(ok({ profile: profile({ currentVersion: 2 }) }));
+  await target.profile.update('bot-1', { acceptModelSelection: true, capabilities: { modelChain: chain, modelChainOverride: chain } });
+  expect(sent(1).input.op).toBe('profile.update');
+  expect(sent(1).input.args?.patch).not.toHaveProperty('acceptModelSelection');
+});
+
 it('rolls an optimistic write back and rejects with the host error when the host refuses it', async () => {
   const { target, profiles } = create();
   host.invoke.mockResolvedValueOnce(ok({ profile: profile() }));
@@ -127,6 +170,19 @@ it('does not re-read a deleted teammate after the lifecycle action', async () =>
   expect(host.invoke).toHaveBeenCalledTimes(1);
 });
 
+it('offers routine session modes only to hosts that keep them', async () => {
+  // A host that predates session modes accepts saveWithModel but drops sessionMode.
+  const older = create([...ALL_OPS, 'routines.saveWithModel']);
+  expect(older.target.routineSessionModes).toBe(false);
+  host.invoke.mockResolvedValue(ok([]));
+  await older.target.routines.save('bot-1', { name: 'Digest' } as never, 'r1');
+  expect(sent()).toMatchObject({ input: { op: 'routines.saveWithModel' } });
+  const current = create([...ALL_OPS, 'routines.saveWithModel', 'routines.saveWithSessionMode']);
+  expect(current.target.routineSessionModes).toBe(true);
+  await current.target.routines.save('bot-1', { name: 'Digest', sessionMode: 'fresh' } as never, 'r1');
+  expect(sent(1)).toMatchObject({ input: { op: 'routines.saveWithSessionMode', args: { input: { sessionMode: 'fresh' } } } });
+});
+
 it('runs routines on the teammate computer and tells the page when they change there', async () => {
   const { target, changed } = create();
   host.invoke.mockResolvedValue(ok([]));
@@ -179,4 +235,17 @@ it('starts again from the host profile, not from the old one, when a later part 
     .rejects.toSatisfy((error) => extractIpcError(error)?.code === 'INTERNAL');
   expect(sent(4)).toMatchObject({ input: { op: 'profile.get' } });
   expect(profiles.get()).toMatchObject({ avatarColor: 'blue', identitySource: long, userContextSource: '' });
+});
+
+it('negotiates final delivery and discovers recipients on the teammate computer', async () => {
+  const older = create();
+  expect(older.target.routineDelivery).toBe(false);
+  expect(await older.target.routines.deliveryTargets?.('bot-1')).toEqual([]);
+  const current = create([...ALL_OPS, 'routines.saveWithDelivery', 'routines.deliveryTargets']);
+  host.invoke.mockResolvedValue(ok([]));
+  const delivery = { kind: 'im', targetId: 'host-destination' };
+  await current.target.routines.save('bot-1', { name: 'Digest', delivery } as never, 'r1');
+  expect(sent()).toMatchObject({ resourceRef: { id: 'bot-1' }, input: { op: 'routines.saveWithDelivery', args: { input: { delivery } } } });
+  await current.target.routines.deliveryTargets?.('bot-1');
+  expect(sent(1)).toMatchObject({ resourceRef: { id: 'bot-1' }, input: { op: 'routines.deliveryTargets' } });
 });

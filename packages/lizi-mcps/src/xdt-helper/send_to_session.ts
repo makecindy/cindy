@@ -28,6 +28,8 @@ export type SendToSessionCallback = (params: {
   useWorktree?: boolean;
   /** create 模式可选:新 session 的工作目录覆盖(绝对路径,须已存在;jump 忽略)。#811 */
   workingDir?: string;
+  /** Omitted inherits source membership; null explicitly creates a projectless task. */
+  projectDir?: string | null;
   /** create 模式可选:显式目标 Agent；缺省继承 dispatcher。jump 忽略。 */
   agentKind?: ControlWorkerAgent;
   /** create 模式可选:显式目标模型；缺省继承 dispatcher。jump 忽略。 */
@@ -49,6 +51,9 @@ export type SendToSessionCallback = (params: {
       queuedMessageId?: string;
       /** create + useWorktree 成功时为新 session 的 worktree 绝对路径;其余情况 host 可省略。 */
       worktreePath?: string | null;
+      projectDir?: string | null;
+      workspaceKind?: 'project' | 'dialogue';
+      workingDir?: string;
       model?: string;
       effort?: "minimal" | "low" | "medium" | "high" | "xhigh" | "max" | "ultra" | null;
       fastMode?: boolean | 'ultrafast';
@@ -112,23 +117,24 @@ export interface SendToSessionDeps {
 // 这是 LLM 点进 handoff 类目、看到本工具后的行为说明;选类目阶段的协同规避另见
 // lizi_xdtHelperMcpServer.ts 的 D_LIST_TOOLS(handoff 类目介绍)。
 const DESCRIPTION = [
-  "⚠️【硬规则:发给已有任务时 target_session_id 必传】上层要求把消息发给某个已存在的任务(session / thread)时,必须传 target_session_id;不知道目标 id 就先用 history 类目的 list_sessions 查到再调用,不要省略。只有明确要为某个业务对象新建一个专属任务时才省略该参数——省略不会报错,而是静默新建一个任务、把消息当作首条输入并立刻跑一轮(返回 wake_kind=created + note)。把 created 误当成「已投给既有任务」会凭空多出一个任务并消耗 token。",
+  "【已有任务】发消息必须传 target_session_id；不知道 id 先用 history/list_sessions 查找。只有明确新建任务时才省略 target_session_id。新建时省略 project_path 继承来源归属，传已有项目路径切换项目，传 null 创建不绑项目的任务。",
   "",
   '⚠️【不要用于"开协同 / 多 worker"】本工具 create 模式产出的是普通独立 session,不进入 Orca 协同分组或 Lead 右侧 worker 栏。用户明确要协同 team/worker 时才使用 cindy_orca；外部业务对象(issue / jira / pr)需要独立项目 session 时使用本工具。',
   "",
   "把一条控制层 handoff 消息投递到一个 session。两种模式:",
   "- 传 target_session_id → jump:投递到该既有 session(已关闭会自动 resume),wake_kind 返 resumed / already-active;目标正在跑 turn 时消息进入其输入队列、当前 turn 结束后自动派发,wake_kind 返 queued(无需重试)。",
   "- 目标在另一台电脑:target_session_id 传 deviceId::sessionId(history 类目 list_sessions 用 device 参数查到的 id 就是这个形式),消息经远程控制通道发给那台电脑上的既有任务,对方显示来自本任务。要求对方电脑在线并已开启远程控制;只支持发给既有任务(不能在另一台电脑新建),message_purpose 只能是 user-visible 或省略。",
-  "- 不传 target_session_id → create:为业务对象新建一个专属 session。workingDir / Agent / model / effort / Fast 缺省继承当前 session；可用 agent_kind / model / effort / fast 显式覆盖目标执行配置。host 会在创建前按目标 Agent 的模型能力校验，非法组合结构化失败，不静默换模型。wake_kind 返 created,并回传 target_session_id 供调用方建立绑定。",
+  "- 不传 target_session_id → create:新建任务并发送首条消息，可用 title 指定简短标题。Agent / model / effort / Fast 缺省继承当前任务。返回 wake_kind=created、target_session_id、project_path 与实际 working_dir；后续消息用返回的 id。",
+  "【项目】省略 project_path 时继承来源任务的项目；来源本来不绑项目时，新任务也不绑项目。无法可靠确定来源归属时明确失败，不从新执行目录猜测。也可显式复用 get_current_session_id.project_path；跨项目用 control/list_projects 选择已有项目。传 project_path:null 明确创建不绑项目的任务。临时目录、仓库子目录、worktree 都不会变成新项目。确需新增或恢复项目时，单独调用 create_project。",
   "",
   "【执行配置(仅 create 模式)】agent_kind 可选 claude-code / codex / pi；model 使用宿主模型目录返回的精确 id；effort / fast 按目标模型能力校验。只改 Agent 却留下不属于目标 Agent 的继承模型会返 INVALID_ARGS，不会自动挑列表第一项。跨 Agent/model 时模型来源交给 host 既有默认路由解析。完全不传这些字段时保持原有 dispatcher 继承行为。jump 模式忽略这些字段，不修改既有 session。",
   "",
-  "【working_dir(仅 create 模式)】缺省新 session 继承当前 session 的 workingDir;传 working_dir(绝对路径,目录须已存在)可把新 session 直接落到另一个项目目录——「从项目 A 的对话把任务 handoff 到项目 B 的全新对话」一次调用完成,无需先在 B 里找一个旧对话中转。与 use_worktree 组合时,worktree 的 base git 仓库从 working_dir 解析。路径不是绝对路径 / 不存在 / 不是目录 → 返 INVALID_ARGS(message 带原因)。jump 模式忽略此参数。",
+  "【working_dir(仅 create 模式)】可选执行目录，缺省为选中或继承的项目目录；不绑项目时分配独立的托管目录。可以指定已有仓库、子目录或临时 worktree；必须为存在的绝对目录。它不改变项目归属，也不登记项目。不绑项目且 use_worktree=true 时必须显式指定 working_dir 作为 Git 仓库。jump 模式忽略。",
   "",
-  "【use_worktree(仅 create 模式)】use_worktree=true 时,host 会先从**新 session 的 workingDir**(即 working_dir 覆盖后的目录;未覆盖时为当前 workingDir,此时 session 自己在 worktree 里跑也能正确反推主仓库)解析出 base git 仓库,为新 session 预建一个正规 session worktree(<baseRepo>/.cindy-worktrees/<自动名> + cindy/<自动名> 分支,UI 有徽标,session 关闭时自动 stash 未提交改动后回收),新 session 的 workingDir 即该 worktree 路径,返回里带 worktree_path。历史 xdt/<自动名> 分支仍可恢复与回收。适用:新 session 要改代码 / checkout 分支,不能污染当前工作树时(如 PR 修复跟进)。workingDir 不是 git 仓库 / git 未装 / worktree 创建失败 → 返 WORKTREE_UNAVAILABLE(不静默降级);调用方可视情况去掉该参数重试(新 session 将直接共享当前 workingDir)。jump 模式忽略此参数。",
+  "【use_worktree(仅 create 模式)】use_worktree=true 时,host 会先从**新 session 的 workingDir**(即 working_dir 覆盖后的目录;未覆盖时为选中或继承的项目目录)解析出 base git 仓库,为新 session 预建一个正规 session worktree(<baseRepo>/.cindy-worktrees/<自动名> + cindy/<自动名> 分支,UI 有徽标,session 关闭时自动 stash 未提交改动后回收),新 session 的 workingDir 即该 worktree 路径,返回里带 worktree_path，项目归属保持不变，包括不绑项目的任务。历史 xdt/<自动名> 分支仍可恢复与回收。适用:新 session 要改代码 / checkout 分支,不能污染当前工作树时(如 PR 修复跟进)。workingDir 不是 git 仓库 / git 未装 / worktree 创建失败 → 返 WORKTREE_UNAVAILABLE(不静默降级);调用方可视情况去掉该参数重试(新 session 将直接使用 working_dir 或默认执行目录)。jump 模式忽略此参数。",
   "当前 dispatcher session 不会被本工具关闭或改写,消息投递成功后立即返回。",
   "",
-  "【典型场景】skill 把某个外部业务对象(issue / jira / pr / 任意自定义 key)绑定到一个 session:首次处理时不传 id 让工具新建并拿回 id 写绑定;二次处理同一对象时传 id 把新消息路由回那个 session,保留完整上下文。",
+  "【典型场景】首次处理外部业务对象时，选择已有项目并传 project_path 新建任务，保存返回的 id；再次处理时传 target_session_id 回到原任务。",
   "",
   `【create 边界】create 依赖当前 session 上下文继承配置;未绑定具体 ${BRAND_NAME} session 的 MCP 调用会返 LEAD_NOT_SUPPORTED,skill 应静默回退普通流程。注意:传了 id 但目标不存在会返 NOT_FOUND(绝不自动新建)——只有完全不传 id 才走 create。`,
   "",
@@ -182,13 +188,13 @@ export function registerSendToSessionTool(
             "历史 session 可能是 cuid 或 IM 确定性 id,一律按不透明字符串处理、不校验格式)。" +
             "要发给已有任务时必传(不知道 id 先用 list_sessions 查);提供 → jump 到该既有 session。" +
             "另一台电脑上的任务用 deviceId::sessionId。" +
-            "省略 → create:静默新建一个专属 session 并立刻跑一轮,返回里回传新建 id——仅在明确要新建专属任务时省略。",
+            "省略 → create:新建任务并立刻跑一轮；项目归属由 project_path 指定或继承。",
         ),
       message: z
         .string()
         .min(1)
         .describe(
-          "要发送的消息。伙伴代用户下达任务要求时，宿主另附可核实的用户原话；只补充必要上下文，保留原意和范围，不复述授权、不要求对方回传。普通任务与自动化消息按正文发送。",
+          "要发送的消息。当前输入属于主人请求或已核实转交时，宿主保留同一份用户原话；只补充必要上下文，不扩大范围或要求重复确认。缺少背景先查看来源任务。自主消息、自动化通知和结果回传按正文发送。",
         ),
       message_purpose: z.enum(["coordination", "user-visible"]).optional().describe(
         "委派子任务发给发起伙伴默认 coordination：原始来信隐藏，伙伴处理后的进度和结果可直接正常回复。user-visible 让来信本身可见。其他普通任务默认保持可见；coordination 仅限宿主核实的委派关系，不改变操作权限。正常完成自动回传，无需重发。",
@@ -209,8 +215,11 @@ export function registerSendToSessionTool(
         .string()
         .optional()
         .describe(
-          "仅 create 模式可选:新 session 的工作目录(绝对路径,目录须已存在)。缺省继承当前 session 的 workingDir;用于把任务 handoff 到另一个项目目录的全新对话。不合法返 INVALID_ARGS。jump 模式忽略。",
+          "仅 create 模式可选:执行目录(已有绝对目录)，缺省为选中或继承的项目目录；不绑项目时分配独立托管目录。可使用子目录或临时 worktree；不改变项目归属、不创建项目。jump 忽略。",
         ),
+      project_path: z.string().trim().min(1).max(4096).nullable().optional().describe(
+        "仅 create：省略继承来源任务归属；字符串选择 list_projects 中已有项目；null 明确创建不绑项目的任务。与 working_dir 独立；隐藏或未登记项目不能使用。来源归属不明确时报错。jump 模式忽略。",
+      ),
       agent_kind: z
         .enum(["claude-code", "codex", "pi"])
         .optional()
@@ -244,6 +253,7 @@ export function registerSendToSessionTool(
       title,
       use_worktree,
       working_dir,
+      project_path,
       agent_kind,
       model,
       effort,
@@ -290,6 +300,7 @@ export function registerSendToSessionTool(
         title,
         useWorktree: use_worktree,
         workingDir: working_dir,
+        ...(project_path !== undefined ? { projectDir: project_path } : {}),
         ...(agent_kind !== undefined ? { agentKind: agent_kind } : {}),
         ...(model !== undefined ? { model } : {}),
         ...(effort !== undefined ? { effort } : {}),
@@ -318,6 +329,9 @@ export function registerSendToSessionTool(
         target_last_user_send_at: result.targetLastUserSendAt,
         ...(result.queuedMessageId ? { queued_message_id: result.queuedMessageId } : {}),
         worktree_path: result.worktreePath ?? null,
+        ...(result.projectDir !== undefined ? { project_path: result.projectDir } : {}),
+        ...(result.workspaceKind !== undefined ? { workspace_kind: result.workspaceKind } : {}),
+        ...(result.workingDir !== undefined ? { working_dir: result.workingDir } : {}),
         ...(result.model !== undefined ? { model: result.model } : {}),
         ...(result.effort !== undefined ? { effort: result.effort } : {}),
         ...(result.fastMode !== undefined ? { fast_mode: result.fastMode } : {}),

@@ -18,6 +18,7 @@ import {
   requestRemoteSessionStatus,
   setRemoteReseedImpl,
   setRemoteSessionBootstrapRetryImpl,
+  subscribeRemoteSessionRemoval,
 } from '@/features/device-link/remoteProjectsStore';
 import type { Session } from '@/lib/ccAgent.types';
 
@@ -53,6 +54,64 @@ function mk(id: string, partial: Partial<Session> = {}): Session {
 }
 
 describe('remoteProjectsStore', () => {
+  // Unit, #7469: a two-row snapshot changing one task must not invalidate the
+  // other sidebar row's memo. Existing tests cover whole-snapshot no-ops, not
+  // per-row UI identity or its separation from in-flight detail-read fences.
+  it('reuses unchanged visible rows without reusing authoritative snapshot identities', () => {
+    remoteProjectsStore.setDeviceSessions('host', 'Host', [mk('same'), mk('changed')]);
+    remoteProjectsStore.setDeviceSessions('other', 'Other', [mk('same')]);
+    const before = remoteProjectsStore.getVisibleMergedRemoteSessions();
+    const rawBefore = remoteProjectsStore.getDeviceSessions('host');
+    const read = remoteProjectsStore.captureSessionRead('host', 'same');
+
+    remoteProjectsStore.setDeviceSessions('host', 'Host', [
+      mk('changed', { title: 'Updated title' }), mk('same'),
+    ]);
+
+    const visible = remoteProjectsStore.getVisibleMergedRemoteSessions();
+    expect(visible.map(row => [row.deviceLinkDeviceId, row.id, row.title])).toEqual([
+      ['host', 'changed', 'Updated title'], ['host', 'same', 'same'], ['other', 'same', 'same'],
+    ]);
+    expect(visible[0]).not.toBe(before[1]);
+    expect(visible[1]).toBe(before[0]);
+    expect(visible[2]).toBe(before[2]);
+    expect(remoteProjectsStore.getDeviceSessions('host')[1]).not.toBe(rawBefore[0]);
+    expect(read()).toBe(false);
+    const freshRead = remoteProjectsStore.captureSessionRead('host', 'same');
+    expect(freshRead()).toBe(true);
+    remoteProjectsStore.applyPatch('host', 'same', { lastActivityAt: '2026-01-02T00:00:00.000Z' });
+    expect(freshRead()).toBe(true);
+    expect(freshRead.mergeActivity(mk('same')).lastActivityAt).toBe('2026-01-02T00:00:00.000Z');
+  });
+
+  // Unit, #7469: structural sharing must compare nested payloads too, and must
+  // not resurrect removed rows or hide connection changes behind a UI cache.
+  it('updates nested visible data and retires rows on disconnect, deletion and clear', () => {
+    const row = { ...mk('a'), extraDirs: ['/first'] };
+    remoteProjectsStore.setDeviceSessions('host', 'Host', [row, mk('b')]);
+    const before = remoteProjectsStore.getVisibleMergedRemoteSessions();
+    remoteProjectsStore.setDeviceSessions('host', 'Host', [
+      { ...row, extraDirs: ['/second'] }, mk('b'),
+    ]);
+    const changed = remoteProjectsStore.getVisibleMergedRemoteSessions();
+    expect(changed[0]?.extraDirs).toEqual(['/second']);
+    expect(changed[0]).not.toBe(before[0]);
+    expect(changed[1]).toBe(before[1]);
+    remoteProjectsStore.markDeviceDisconnected('host');
+    expect(remoteProjectsStore.getVisibleMergedRemoteSessions().map(s => s.deviceLinkConnectionStatus))
+      .toEqual(['disconnected', 'disconnected']);
+    remoteProjectsStore.setDeviceSessions('host', 'Renamed host', [row]);
+    expect(remoteProjectsStore.getVisibleMergedRemoteSessions()).toMatchObject([
+      { id: 'a', deviceLinkDeviceName: 'Renamed host', deviceLinkConnectionStatus: 'connected' },
+    ]);
+    remoteProjectsStore.applyPatch('host', 'a', { status: 'deleted' });
+    expect(remoteProjectsStore.getVisibleMergedRemoteSessions()).toEqual([]);
+    remoteProjectsStore.setDeviceSessions('host', 'Host', [row]);
+    expect(remoteProjectsStore.getVisibleMergedRemoteSessions()[0]).not.toBe(before[0]);
+    remoteProjectsStore.clear();
+    expect(remoteProjectsStore.getVisibleMergedRemoteSessions()).toEqual([]);
+  });
+
   it('preserves an activity push while accepting an in-flight detail read', () => {
     const session = mk('handoff');
     remoteProjectsStore.setDeviceSessions('host', 'Host', [session]);
@@ -403,6 +462,22 @@ describe('remoteProjectsStore', () => {
       expect(getSessionDeviceId('s2')).toBe('dev-B');
     });
 
+    it('通知只在意 sessionId 的旁路状态，包含不在任何分片里的会话', () => {
+      const removed: string[] = [];
+      const off = subscribeRemoteSessionRemoval((id) => removed.push(id));
+      remoteProjectsStore.setDeviceSessions('dev-B', 'B', [mk('s1')]);
+
+      remoteProjectsStore.applyPatch('dev-B', 's1', { status: 'deleted' });
+      // 不在任何分片里的会话(分片有界/设备早已移除)也得报:窗口里可能还挂着它的路由。
+      remoteProjectsStore.applyPatch('dev-gone', 's9', { status: 'deleted' });
+      // 非删除的 patch 不是消失。
+      remoteProjectsStore.applyPatch('dev-B', 's2', { status: 'archived' });
+
+      off();
+      remoteProjectsStore.applyPatch('dev-B', 's3', { status: 'deleted' });
+      expect(removed).toEqual(['s1', 's9']);
+    });
+
     it('unpin 后触发 reseed,让仅因 includePinned 补入的旧会话被后续 snapshot 剔除', () => {
       const reseed = vi.fn();
       setRemoteReseedImpl(reseed);
@@ -523,6 +598,22 @@ describe('remoteProjectsStore', () => {
     remoteProjectsStore.markAllDisconnected();
 
     expect(remoteProjectsStore.getArchivedLoadedDeviceIds().size).toBe(0);
+  });
+
+  // PR #8182 / unit: scope invalidation must also fence reads/loading before
+  // their first shard exists, while an independent connection retains authority.
+  it.each(['disconnect', 'clear'] as const)('scopes %s to matching in-flight devices without shards', (operation) => {
+    const primaryEpoch = remoteProjectsStore.nextSnapshotEpoch('primary-pending');
+    const otherEpoch = remoteProjectsStore.nextSnapshotEpoch('other-pending');
+    remoteProjectsStore.markSessionStatusLoading('primary-pending', 'active');
+    remoteProjectsStore.markSessionStatusLoading('other-pending', 'active');
+    const matches = (id: string) => id === 'primary-pending';
+    if (operation === 'disconnect') remoteProjectsStore.markAllDisconnected(matches);
+    else remoteProjectsStore.clear(matches);
+    expect(remoteProjectsStore.isLatestSnapshotEpoch('primary-pending', primaryEpoch)).toBe(false);
+    expect(remoteProjectsStore.isLatestSnapshotEpoch('other-pending', otherEpoch)).toBe(true);
+    expect(remoteProjectsStore.isSessionStatusLoading('primary-pending', 'active')).toBe(false);
+    expect(remoteProjectsStore.isSessionStatusLoading('other-pending', 'active')).toBe(true);
   });
 
   it('setDeviceSessions reconnects a disconnected cached shard', () => {

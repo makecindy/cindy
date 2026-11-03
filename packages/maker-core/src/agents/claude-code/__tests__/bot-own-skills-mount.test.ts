@@ -70,7 +70,6 @@ function createDeps(): AgentDeps {
     binaryPath: process.execPath,
     logger: createNoopLogger(),
     getGhostRosterPrompt: vi.fn(() => 'GLOBAL GHOST ROSTER'),
-    getContactsPromptState: vi.fn(() => 'enabled' as const),
   };
 }
 
@@ -104,6 +103,7 @@ async function startBotSession(input: {
   remote?: boolean;
   ordinary?: boolean;
   localHostOnly?: boolean;
+  hostedGuest?: boolean;
   managed?: boolean;
   disabled?: boolean;
   allowManaged?: boolean;
@@ -135,6 +135,14 @@ async function startBotSession(input: {
     sessionId: 'session-bot-skills',
     model: 'claude-opus-4-6',
     workingDir,
+    ...(input.hostedGuest ? { deviceHosted: {
+      workingDir, platform: process.platform, pathPlatform: process.platform,
+      shell: 'fixture-shell', isGitRepo: false,
+      extraDirs: [], writableDirs: [],
+      tunnelUrl: 'http://127.0.0.1:12345', tunnelToken: 'fixture', mcpServers: ['notebook'],
+      guest: true, guestHome: configDir,
+      guestProvider: { providerId: 'fixture', modelIds: ['claude-opus-4-6'], routeToken: 'fixture' },
+    }, providerId: 'fixture' } : {}),
     ...(input.localHostOnly !== undefined ? {
       [LOCAL_AGENT_CLIENT]: {url:'http://127.0.0.1:12345/mcp/fixture',token:'fixture-token',hostToolsOnly:input.localHostOnly,mcpName:'notebook'},
       makerMemoryEnabled: false,
@@ -192,9 +200,9 @@ async function startBotSession(input: {
 // 最小输入：一个受管技能与独立客户端 MCP；tier unit，无进程或网络。
 // 2026-10-22 维护者裁决：接入保持 Cindy 提示词装配，权限由实际工具面约束。
 // 普通任务对照锁住完整追加段，不复制提示词常量；禁用记忆仍不得带出已有索引。
-it('local client-only sessions expose their own MCP namespace, while native policy retains engine tools', async () => {
+it.each([false, true])('local client-only sessions expose only their own tools (shared=%s)', async (hostedGuest) => {
   const ordinary = await startBotSession({ordinary:true,managed:true});
-  const partner = await startBotSession({ordinary:true,managed:true,localHostOnly:true});
+  const partner = await startBotSession({ordinary:true,managed:true,localHostOnly:true,hostedGuest});
   expect(partner.tools).toEqual([]);
   expect(partner.settingSources).toEqual([]);
   expect(partner.plugins ?? []).toEqual([]);
@@ -204,15 +212,17 @@ it('local client-only sessions expose their own MCP namespace, while native poli
   const prompt = partner.systemPrompt?.append ?? '';
   expect(prompt).toContain('GLOBAL CINDY HOST PROMPT');
   expect(prompt).toContain('CINDY ANSWER DELIVERY FIXTURE');
-  // Existing enabled-but-unregistered Contacts semantics remain unchanged.
-  expect(prompt).not.toContain('Smart Contacts');
-  expect(prompt).toContain('GLOBAL GHOST ROSTER');
+  if (hostedGuest) expect(prompt).not.toContain('GLOBAL GHOST ROSTER');
+  else expect(prompt).toContain('GLOBAL GHOST ROSTER');
   expect(prompt).toContain('GLOBAL USER PROMPT');
   expect(prompt).not.toContain('PRIVATE_MEMORY_INDEX_CANARY');
-  expect(prompt).toBe(ordinary.systemPrompt?.append);
-  const delegated = await startBotSession({ordinary:true,localHostOnly:false});
-  expect(delegated.tools).toBeUndefined();
-  expect(delegated.systemPrompt?.append).toBe(prompt);
+  if (!hostedGuest) expect(prompt).toBe(ordinary.systemPrompt?.append);
+  const delegated = await startBotSession({ordinary:true,localHostOnly:false,hostedGuest});
+  if (hostedGuest) expect(delegated.tools).toContain('WebSearch');
+  else {
+    expect(delegated.tools).toBeUndefined();
+    expect(delegated.systemPrompt?.append).toBe(prompt);
+  }
 });
 
 afterEach(async () => {
@@ -281,7 +291,7 @@ describe('Claude Code mounts the Bot\'s own learned Skills', () => {
     expect(options.plugins).toEqual([{ type: 'local', path: OWN_SKILL_ROOT }]);
   });
 
-  it('keeps global Cindy identity, roster, contacts, and user prompt out of Bot context', async () => {
+  it('keeps global Cindy identity, roster, and user prompt out of Bot context', async () => {
     const options = await startBotSession({});
     const prompt = options.systemPrompt?.append ?? '';
     expect(prompt).toContain('BOT SOUL');
@@ -289,7 +299,6 @@ describe('Claude Code mounts the Bot\'s own learned Skills', () => {
     expect(prompt).not.toContain('GLOBAL CINDY HOST PROMPT');
     expect(prompt).not.toContain('GLOBAL GHOST ROSTER');
     expect(prompt).not.toContain('GLOBAL USER PROMPT');
-    expect(prompt).not.toContain('Smart Contacts');
   });
 });
 

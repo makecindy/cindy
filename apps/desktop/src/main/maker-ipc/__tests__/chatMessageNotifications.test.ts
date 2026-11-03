@@ -1,7 +1,24 @@
 import { afterEach, expect, it, vi } from 'vitest';
-import { createChatMessageNotifications, type ChatNotificationMessage } from '../chatMessageNotifications.js';
+import { createChatMessageNotifications, selectChatAttentionMessage, type ChatNotificationMessage } from '../chatMessageNotifications.js';
 
 afterEach(() => vi.useRealTimers());
+
+// Unit: the same eligibility feeds both alert surfaces; ensure a mention does not get displaced
+// by newer ordinary traffic, and reading/muting its thread reveals the remaining unread message.
+it('selects an unread mention first and falls back to ordinary unread after its read position advances', () => {
+  const ordinary = message('ordinary', { seq: '9007199254740995' });
+  const mention = message('mention', { threadRootId: 'topic', mentions: ['me'] });
+  const snapshot = { room: { name: 'Team' }, messages: [ordinary, mention], reads: [
+    { thread_key: 'main', read_seq: '0', muted: false }, { thread_key: 'topic', read_seq: '0', muted: false },
+  ] };
+  expect(selectChatAttentionMessage(snapshot, 'me')).toBe(mention);
+  snapshot.reads[1].read_seq = mention.seq;
+  expect(selectChatAttentionMessage(snapshot, 'me')).toBe(ordinary);
+  snapshot.reads[1].read_seq = '0'; snapshot.reads[1].muted = true;
+  expect(selectChatAttentionMessage(snapshot, 'me')).toBe(ordinary);
+  snapshot.reads[0].muted = true;
+  expect(selectChatAttentionMessage(snapshot, 'me')).toBeNull();
+});
 const message = (id: string, extra: Partial<ChatNotificationMessage> = {}): ChatNotificationMessage => ({
   id, seq: '9007199254740993', authorId: id, deleted: false, threadRootId: null, ...extra,
 });
@@ -76,5 +93,53 @@ it('recovers a transient snapshot failure and fetches an event outside the lates
   service.enqueue('room', 'older');
   await vi.advanceTimersByTimeAsync(3000);
   expect(notify).toHaveBeenCalledOnce();
+  service.dispose();
+});
+
+// Unit: a read or mute may arrive while the notification's sender presentation is loading.
+// A stale snapshot must neither display a notice nor consume a still-unread message.
+it('rechecks read state when the room changes during notification presentation', async () => {
+  vi.useFakeTimers();
+  let revision = 0;
+  const snapshot = { room: { name: 'Team' }, messages: [message('peer')],
+    reads: [{ thread_key: 'main', read_seq: '0' }] };
+  let finishPresentation!: () => void;
+  const notify = vi.fn();
+  const present = vi.fn(() => new Promise<{ senderName: string; avatar: string; preview: string }>(resolve => {
+    finishPresentation = () => resolve({ senderName: 'Peer', avatar: '', preview: 'Hello' });
+  }));
+  const service = createChatMessageNotifications({ current: () => true, selfId: () => 'me',
+    revision: () => revision, snapshot: async () => snapshot, present, notify });
+  service.enqueue('room', 'peer');
+  await vi.advanceTimersByTimeAsync(1200);
+  expect(present).toHaveBeenCalledOnce();
+  snapshot.reads[0].read_seq = snapshot.messages[0].seq;
+  revision++;
+  finishPresentation();
+  await vi.advanceTimersByTimeAsync(3000);
+  expect(notify).not.toHaveBeenCalled();
+  expect(present).toHaveBeenCalledOnce();
+  service.dispose();
+});
+
+// Unit: the new personal range must affect native alerts only. A merged burst
+// uses one snapshot, filters before sender/media preparation, and never replays.
+it('filters a mentions-only burst without changing the island projection or adding per-message reads', async () => {
+  vi.useFakeTimers();
+  const ordinary = message('ordinary', { seq: '9007199254740994' });
+  const snapshot = { room: { name: 'Team', kind: 'group' }, messages: [ordinary, message('mention', { mentions: ['me'] }), message('my-bot', { mentions: ['bot-owned-by-me'] })],
+    reads: [{ thread_key: 'main', read_seq: '0', notification_scope: 'mentions' as const }] };
+  const read = vi.fn(async () => snapshot), notify = vi.fn();
+  const present = vi.fn(async () => ({ senderName: 'Peer', avatar: '', preview: 'Hello' }));
+  const service = createChatMessageNotifications({ current: () => true, selfId: () => 'me', snapshot: read, present, notify });
+  for (const m of snapshot.messages) service.enqueue('room', m.id);
+  await vi.advanceTimersByTimeAsync(1200);
+  expect(read).toHaveBeenCalledOnce();
+  expect(present).toHaveBeenCalledOnce();
+  expect(notify.mock.calls.map(([event]) => event.messageId)).toEqual(['mention']);
+  expect(selectChatAttentionMessage({ ...snapshot, messages: [ordinary] }, 'me')).toBe(ordinary);
+  service.enqueue('room', ordinary.id);
+  await vi.advanceTimersByTimeAsync(1200);
+  expect(read).toHaveBeenCalledOnce();
   service.dispose();
 });

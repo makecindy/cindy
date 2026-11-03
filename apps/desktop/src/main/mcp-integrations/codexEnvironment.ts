@@ -226,6 +226,15 @@ export function registerCodexMcpThreadContext(
   });
 }
 
+/** Capture only the current bridge generation; confirmation cannot target a replacement. */
+export function prepareCodexMcpToolCancellation(identity: {
+  sessionId: string; sessionInstanceId: string; threadId: string;
+}): () => void {
+  const bridge = activeBridge;
+  const cancel = bridge?.prepareToolCancellation(identity);
+  return () => { if (activeBridge === bridge) cancel?.(); };
+}
+
 export function unregisterCodexMcpThreadContext(
   threadId: string,
   expectedSessionInstanceId?: string,

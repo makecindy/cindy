@@ -104,9 +104,11 @@ describe('Beta channel build capability', () => {
     Object.defineProperty(process, 'arch', { value: originalArch, configurable: true });
   });
 
-  it('allows Linux x64 to use a persisted beta setting', async () => {
+  // Regression: the real persisted-setting reader must honor ARM64 Beta while
+  // retaining a user's explicit opt-out. Temporary userData only; tier: unit.
+  it.each(['x64', 'arm64'])('allows Linux %s to use a persisted beta setting', async (arch) => {
     Object.defineProperty(process, 'platform', { value: 'linux', configurable: true });
-    Object.defineProperty(process, 'arch', { value: 'x64', configurable: true });
+    Object.defineProperty(process, 'arch', { value: arch, configurable: true });
     const store = await loadStore();
     await store.writeEnableBeta(true);
 
@@ -114,13 +116,15 @@ describe('Beta channel build capability', () => {
     expect(store.isBetaChannelEnabled()).toBe(true);
   });
 
-  it('keeps Linux arm64 on the release channel even when disk says beta is on', async () => {
+  it('retains an explicit Linux arm64 opt-out when the organization enables beta', async () => {
     Object.defineProperty(process, 'platform', { value: 'linux', configurable: true });
     Object.defineProperty(process, 'arch', { value: 'arm64', configurable: true });
     const store = await loadStore();
     await store.writeEnableBeta(true);
+    await store.writeEnableBeta(false);
 
-    expect(store.readUpdateChannelSettings().enableBeta).toBe(true);
+    expect(await store.tryEnableUncustomizedBetaAtomic()).toBe(false);
+    expect(store.isEnableBetaUserCustomized()).toBe(true);
     expect(store.isBetaChannelEnabled()).toBe(false);
   });
 

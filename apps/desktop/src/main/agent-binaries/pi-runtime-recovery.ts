@@ -1,14 +1,16 @@
 import type { PrepareResult } from './types.js';
 
-/** Retry delay for an optional Pi runtime that missed the startup network. */
-export const PI_RUNTIME_RECOVERY_RETRY_MS = 30_000;
+/** Timer delays after consecutive optional Pi runtime recovery failures. */
+export const PI_RUNTIME_RECOVERY_RETRY_DELAYS_MS = [30_000, 60_000, 120_000, 300_000] as const;
 
 /** Only errors that may change when connectivity returns are worth retrying. */
 export function isRetryablePiPrepareError(error?: string): boolean {
-  return error === 'manifest_failed'
-    || error === 'NETWORK'
-    || error === 'HTTP_5XX'
-    || error === 'ABORTED';
+  return (
+    error === 'manifest_failed' ||
+    error === 'NETWORK' ||
+    error === 'HTTP_5XX' ||
+    error === 'ABORTED'
+  );
 }
 
 export interface PiRuntimeRecoveryOptions {
@@ -40,12 +42,16 @@ export interface PiRuntimeRecovery {
  * have succeeded. Concurrent focus/timer signals share one prepare promise.
  */
 export function createPiRuntimeRecovery(options: PiRuntimeRecoveryOptions): PiRuntimeRecovery {
-  const retryDelayMs = options.retryDelayMs ?? PI_RUNTIME_RECOVERY_RETRY_MS;
+  const retryDelaysMs: readonly number[] =
+    options.retryDelayMs === undefined
+      ? PI_RUNTIME_RECOVERY_RETRY_DELAYS_MS
+      : [options.retryDelayMs];
   const schedule = options.setTimeout ?? globalThis.setTimeout;
   const cancel = options.clearTimeout ?? globalThis.clearTimeout;
   let disabled = false;
   let disposed = false;
   let retryable = false;
+  let timerFailureCount = 0;
   let retryTimer: ReturnType<typeof globalThis.setTimeout> | null = null;
   let inFlight: Promise<boolean> | null = null;
 
@@ -53,8 +59,15 @@ export function createPiRuntimeRecovery(options: PiRuntimeRecoveryOptions): PiRu
     options.logWarn?.(message, error);
   };
 
+  const cancelRetryTimer = (): void => {
+    if (retryTimer === null) return;
+    cancel(retryTimer);
+    retryTimer = null;
+  };
+
   const scheduleRetry = (): void => {
     if (disposed || !disabled || retryTimer !== null) return;
+    const retryDelayMs = retryDelaysMs[Math.min(timerFailureCount, retryDelaysMs.length - 1)]!;
     retryTimer = schedule(() => {
       retryTimer = null;
       void recovery.retryNow('timer');
@@ -67,10 +80,8 @@ export function createPiRuntimeRecovery(options: PiRuntimeRecoveryOptions): PiRu
     markUnavailable(error) {
       disabled = true;
       retryable = isRetryablePiPrepareError(error);
-      if (!retryable && retryTimer !== null) {
-        cancel(retryTimer);
-        retryTimer = null;
-      }
+      timerFailureCount = 0;
+      if (!retryable) cancelRetryTimer();
       if (error) {
         logWarn(
           retryable
@@ -93,47 +104,63 @@ export function createPiRuntimeRecovery(options: PiRuntimeRecoveryOptions): PiRu
         logWarn('Pi runtime network state probe failed', error);
       }
       if (!online) {
+        if (reason === 'timer') timerFailureCount += 1;
         scheduleRetry();
         return Promise.resolve(false);
       }
 
+      // An immediate trigger supersedes the pending timer without resetting the
+      // consecutive timer-failure backoff. Its result schedules the next timer.
+      if (reason !== 'timer') cancelRetryTimer();
+
       const attempt = (async (): Promise<boolean> => {
         try {
           const result = await options.prepare();
+          if (disposed) return false;
           if (!result.ready || !result.path) {
             logWarn(`Pi runtime recovery prepare failed (${reason})`, result.error);
-            recovery.markUnavailable(result.error);
+            retryable = isRetryablePiPrepareError(result.error);
+            if (reason === 'timer' && retryable) timerFailureCount += 1;
+            if (retryable) scheduleRetry();
+            else cancelRetryTimer();
             return false;
           }
           if (!options.register()) {
+            if (reason === 'timer') timerFailureCount += 1;
             scheduleRetry();
             return false;
           }
           disabled = false;
           retryable = false;
+          timerFailureCount = 0;
+          cancelRetryTimer();
           options.onRegistered();
           return true;
         } catch (error) {
           logWarn(`Pi runtime recovery threw (${reason})`, error);
-          recovery.markUnavailable(error instanceof Error ? error.message : String(error));
+          const message = error instanceof Error ? error.message : String(error);
+          retryable = isRetryablePiPrepareError(message);
+          if (reason === 'timer' && retryable) timerFailureCount += 1;
+          if (retryable) scheduleRetry();
+          else cancelRetryTimer();
           return false;
         }
       })();
       inFlight = attempt;
-      void attempt.then(() => {
-        if (inFlight === attempt) inFlight = null;
-      }, () => {
-        if (inFlight === attempt) inFlight = null;
-      });
+      void attempt.then(
+        () => {
+          if (inFlight === attempt) inFlight = null;
+        },
+        () => {
+          if (inFlight === attempt) inFlight = null;
+        },
+      );
       return attempt;
     },
 
     dispose() {
       disposed = true;
-      if (retryTimer !== null) {
-        cancel(retryTimer);
-        retryTimer = null;
-      }
+      cancelRetryTimer();
     },
 
     isDisabled() {

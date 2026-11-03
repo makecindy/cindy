@@ -177,7 +177,7 @@ export function useBotGroupChat(host: RemoteResourceHostTarget, groupId: string,
     } finally {
       // A refused action usually means the phone's copy is stale (PLAN_CLOSED, PLAN_OPEN): re-read either way.
       // A deleted group is left by the screen instead.
-      if (actionId !== 'delete' && actionId !== 'read' && identityRef.current === identity) reload();
+      if (actionId !== 'delete' && actionId !== 'read' && actionId !== 'mask' && actionId !== 'mask-mentions' && identityRef.current === identity) reload();
     }
   }, [cacheKey, namespace, groupId, host, i18n.language, identity, invoke, openLink, reload, server.acceptListState]);
 
@@ -195,5 +195,5 @@ export function useBotGroupChat(host: RemoteResourceHostTarget, groupId: string,
   // Unknown presence still allows actions; the host answers or the link reports offline.
   const online = status === 'online' && !!host.deviceId && getPresenceAvailability(host.deviceId) !== false;
   return !host.deviceId ? { ...server, server: true } : { state: value, reload, act, online, server: false, listHidden: server.listHidden, loadOlder: undefined, loadingOlder: false, media: undefined, markRead,
-    pending: [], pendingAction: undefined, canQueue: false };
+    uploadAttachment: undefined, pending: [], pendingAction: undefined, canQueue: false, threadMeta: undefined, followThread: undefined, shareToMain: undefined, react: undefined };
 }

@@ -105,6 +105,10 @@ class InMemoryStorage implements ScheduleStorage {
       (r) => r.status === 'running' && (scheduleId === undefined || r.scheduleId === scheduleId),
     );
   }
+  async hasUnfinishedRuns(scheduleId: string): Promise<boolean> {
+    return [...this.runs.values()].some((r) => r.scheduleId === scheduleId &&
+      (r.status === 'running' || r.status === 'interrupted'));
+  }
   // 与真实现相同的 CAS 语义:active 且 nextFireAt 精确匹配才认领(置空),否则 null。
   async claimDueFire(id: string, expectedNextFireAt: number): Promise<Schedule | null> {
     const ex = this.schedules.get(id);
@@ -221,6 +225,26 @@ describe('cindy_scheduler MCP server (in-process smoke)', () => {
     h = await makeHarness();
   });
 
+  // Integration: schema parsing used to strip the Agent location. Follow the real
+  // MCP dispatcher through create/update and verify the saved route and null clear.
+  it('persists shared model selections and clears their location through MCP', async () => {
+    try {
+      const route = { modelAgentKind: 'codex', modelAgentDeviceId: 'shared:owner',
+        model: 'shared-model', providerId: 'remote-provider', fastMode: 'ultrafast' };
+      const result = await h.client.callTool({ name: 'call_tool', arguments: {
+        name: 'schedule_create', args: { ...baseCreate, ...route },
+      } });
+      expect(result.isError).not.toBe(true);
+      const [created] = await h.storage.list();
+      expect(created).toMatchObject(route);
+      const updated = await h.client.callTool({ name: 'call_tool', arguments: {
+        name: 'schedule_update', args: { id: created.id, modelAgentDeviceId: null },
+      } });
+      expect(updated.isError).not.toBe(true);
+      expect(await h.storage.get(created.id)).toMatchObject({ ...route, modelAgentDeviceId: undefined });
+    } finally { await h.cleanup(); }
+  });
+
   it('list_tools without category returns the scheduler category', async () => {
     const result = await h.client.callTool({ name: 'list_tools', arguments: {} });
     const first = (result.content as Array<{ type: string; text: string }>)[0];
@@ -231,7 +255,7 @@ describe('cindy_scheduler MCP server (in-process smoke)', () => {
     expect(payload.ok).toBe(true);
     // 类目概览要在第一步就写明用途与作用范围(本机 / 可跨电脑)。
     expect(payload.categories).toEqual([
-      { name: 'scheduler', tool_count: 11, description: expect.stringMatching(/各自的电脑.*device.*只在本机/) },
+      { name: 'scheduler', tool_count: 11, description: expect.stringMatching(/各自的电脑.*schedule_create.*只在本机/) },
     ]);
     await h.cleanup();
   });

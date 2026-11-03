@@ -2,7 +2,7 @@ import { getMobileAuthOwner, isMobileAuthOwnerCurrent } from '@/auth/authOwnerGe
 import { clearHistoryDisk, historyDiskAuthority, readConversationDisk, writeConversationDisk } from '@/session/remoteHistoryDiskCache';
 import type { ChatMessage } from './chatServerClient';
 
-export interface CachedCloudConversation { roomId: string; messages: ChatMessage[]; before: string | null }
+export interface CachedCloudConversation { roomId: string; messages: ChatMessage[]; before: string | null; historyRevision?: string }
 const namespace = 'cloud-companion';
 let owner = getMobileAuthOwner();
 const pages = new Map<string, CachedCloudConversation>();

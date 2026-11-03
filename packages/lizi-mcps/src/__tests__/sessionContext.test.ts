@@ -171,6 +171,7 @@ function createOrcaDeps(overrides: Partial<OrcaMcpDeps> = {}): OrcaMcpDeps {
       idle_ms: 0,
       restored_from_storage: true,
       result: 'worker output',
+      turnError: null,
     })),
     ...overrides,
   };
@@ -1062,6 +1063,30 @@ describe('dynamic lizi MCP session context', () => {
     });
   });
 
+  // Self-inspection must use live membership, not a sibling worktree's cwd.
+  it('returns current project membership and keeps explicit no-project distinct from lookup failure', async () => {
+    const getSessionProject = vi.fn().mockResolvedValue({
+      projectDir: '/repo', workspaceKind: 'project', remoteHostId: null,
+    });
+    const server = createXdtHelperMcpServer({ getSessionProject }, {
+      agentKind: 'codex', workingDir: '/temporary-worktree', sessionId: 'caller',
+    });
+    const read = async () => parse(await tools(server).call_tool.handler({
+      name: 'get_current_session_id', args: {},
+    }) as never);
+    expect(await read()).toMatchObject({
+      ok: true, session_id: 'caller', project_path: '/repo',
+      working_dir: '/temporary-worktree', workspace_kind: 'project', remote_host_id: null,
+    });
+    expect(getSessionProject).toHaveBeenCalledWith('caller');
+    getSessionProject.mockResolvedValue({ projectDir: null, workspaceKind: 'dialogue', remoteHostId: null });
+    expect(await read()).toMatchObject({ project_path: null, workspace_kind: 'dialogue' });
+    getSessionProject.mockRejectedValue(new Error('storage unavailable'));
+    const unavailable = await read();
+    expect(unavailable).toMatchObject({ ok: true, session_id: 'caller', project_lookup_error: expect.any(String) });
+    expect(unavailable).not.toHaveProperty('project_path');
+  });
+
   // Runtime identity discovery must expose cross-device origin even when no local
   // orcaRole exists (the 2026-10-21 live probe otherwise misidentified the Worker).
   it('returns the execution-device Worker origin from the authoritative context', async () => {
@@ -1859,6 +1884,7 @@ describe('dynamic lizi MCP session context', () => {
         idle_ms: 0,
         restored_from_storage: true,
         result: 'done output',
+        turnError: null,
       })),
     });
     const server = createOrcaMcpServer(deps, {
@@ -1938,4 +1964,21 @@ describe('dynamic lizi MCP session context', () => {
       workerId: 'worker-1',
     });
   });
+});
+
+// Unit / #7253: all harnesses use the same current-task delivery tool; ambient
+// context must win over the server's captured context, and descendants cannot
+// announce their parent's delivery. Existing title tests do not cover this report.
+it.each([['claude-code', false], ['codex', false], ['pi', false], ['claude-code', true], ['codex', true], ['pi', true]] as const)('routes %s delivery only from the current task executor (SSH: %s)', async (agentKind, ssh) => {
+  const report = vi.fn(() => ({ ok: true as const }));
+  const server = createXdtHelperMcpServer({ taskDelivery: { report } }, { agentKind, workingDir: '' });
+  const call = () => tools(server).call_tool.handler({ name: 'report_task_delivery', args: { final_delivery: true } });
+  expect(parse(await call() as never)).toMatchObject({ ok: false, errorCode: 'NO_SESSION_CONTEXT' });
+  const context = { agentKind, workingDir: '/repo', sessionId: 'current', sessionInstanceId: 'runtime-1', ...(ssh ? { remoteHostId: 'ssh-host' } : {}) };
+  expect(parse(await runWithLiziMcpSessionContext(context, call) as never)).toMatchObject({ ok: true, recorded: true });
+  expect(report).toHaveBeenCalledWith('current', true, 'runtime-1');
+  report.mockClear();
+  expect(parse(await runWithLiziMcpSessionContext({ ...context, mcpCallerKind: 'descendant' }, call) as never))
+    .toMatchObject({ ok: false, errorCode: 'CAPABILITY_NOT_AVAILABLE' });
+  expect(report).not.toHaveBeenCalled();
 });

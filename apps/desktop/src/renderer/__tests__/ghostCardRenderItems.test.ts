@@ -54,6 +54,19 @@ function itemsOf(messages: ChatMessage[], snap?: GhostCardSnapshot, sessionId = 
 }
 
 describe('ghost_card · settled 配对', () => {
+  // Unit regression: tool media and cindy-ui independently displayed the same
+  // generated video. The existing Markdown image cases do not cover components.
+  it('prefers a completed rich video over its tool fallback within the same turn', () => {
+    const url = `cindy-media://blobs/${HASH}.mp4`;
+    const body = '```cindy-ui\n' + JSON.stringify({ version: 1, seq: 1, op: 'create', id: 'v', kind: 'video', props: { src: url } }) + '\n```';
+    const tool = [mkGhostCall('video'), mkResult('result', 'tu-video', { xdt_video_urls: [url], xdt_image_urls: [IMG] })];
+    const answer: ChatMessage = { clientId: 'answer', role: 'assistant', content: body };
+    const media = (rows: ChatMessage[]) => itemsOf(rows).flatMap(item => item.type === 'tool_media' ? item.items : []);
+    expect(media([...tool, answer]).map(item => item.url)).toEqual([IMG]);
+    expect(media([...tool, { ...answer, isStreaming: true }])).toHaveLength(2);
+    expect(media([...tool, { clientId: 'next', role: 'user', content: 'again' }, answer])).toHaveLength(2);
+  });
+
   // An unanchored mail push used to flash under an unrelated Gmail schema/read
   // call. Mail waits for its exact tool identity/result, unlike progress cards.
   it('does not guess which in-flight mailbox call owns a mail card', () => {

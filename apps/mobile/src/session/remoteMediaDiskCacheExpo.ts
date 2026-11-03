@@ -29,6 +29,7 @@ async function downloadCancellable(
   target: File,
   signal: AbortSignal,
   maxBytes?: number,
+  onProgress?: (loaded: number, total: number) => void,
 ): Promise<File> {
   const FileSystem = await import("expo-file-system/legacy");
   let rejectStopped: (reason: Error) => void = () => undefined;
@@ -36,6 +37,7 @@ async function downloadCancellable(
     rejectStopped = reject;
   });
   const task = FileSystem.createDownloadResumable(url, target.uri, {}, (progress) => {
+    if (!signal.aborted) onProgress?.(progress.totalBytesWritten, progress.totalBytesExpectedToWrite);
     if (maxBytes !== undefined && progress.totalBytesWritten > maxBytes) {
       rejectStopped(new Error('PREVIEW_TOO_LARGE'));
       void task.cancelAsync().catch(() => undefined);
@@ -69,6 +71,7 @@ async function copyRemoteFile(
   target: File,
   signal?: AbortSignal,
   maxBytes?: number,
+  onProgress?: (loaded: number, total: number) => void,
 ): Promise<File> {
   if (url.startsWith("file://")) {
     const source = new File(url);
@@ -77,6 +80,19 @@ async function copyRemoteFile(
     return target;
   }
   if (url.startsWith("data:")) {
+    // Video data URLs are already playable. Decode their bounded payload in
+    // native IO instead of building another full binary string and JS array.
+    const videoHeader = /^data:video\/[\w.+-]+;base64,/i.exec(url);
+    if (videoHeader) {
+      const base64 = url.slice(videoHeader[0].length);
+      const bytes = Math.floor(base64.length * 3 / 4) - (base64.endsWith('==') ? 2 : base64.endsWith('=') ? 1 : 0);
+      if (bytes > Math.min(maxBytes ?? Infinity, 64 * 1024 * 1024)
+        || base64.length % 4 !== 0 || !/^[A-Za-z0-9+/]*={0,2}$/.test(base64)) throw new Error("INVALID_INLINE_FILE");
+      if (signal?.aborted) throw new Error("DOWNLOAD_CANCELLED");
+      const FileSystem = await import("expo-file-system/legacy");
+      await FileSystem.writeAsStringAsync(target.uri, base64, { encoding: FileSystem.EncodingType.Base64 });
+      return target;
+    }
     const match = /^data:[\w.+-]+\/[\w.+-]+;base64,([A-Za-z0-9+/=]*)$/.exec(
       url,
     );
@@ -85,7 +101,7 @@ async function copyRemoteFile(
     target.write(Uint8Array.from(atob(match[1]), (char) => char.charCodeAt(0)));
     return target;
   }
-  if (signal || maxBytes !== undefined) return downloadCancellable(url, target, signal ?? new AbortController().signal, maxBytes);
+  if (signal || maxBytes !== undefined || onProgress) return downloadCancellable(url, target, signal ?? new AbortController().signal, maxBytes, onProgress);
   return File.downloadFileAsync(url, target, { idempotent: true });
 }
 
@@ -114,6 +130,7 @@ export async function downloadRemoteMediaShareTemp(
   mimeType: string,
   fileName?: string,
   signal?: AbortSignal,
+  onProgress?: (loaded: number, total: number) => void,
 ): Promise<string | null> {
   try {
     if (signal?.aborted) return null;
@@ -132,7 +149,7 @@ export async function downloadRemoteMediaShareTemp(
     } else {
       target = new File(dir, `share-${unique}.${extOfMime(mimeType)}`);
     }
-    const file = await copyRemoteFile(url, target, signal);
+    const file = await copyRemoteFile(url, target, signal, undefined, onProgress);
     // 直连 file:// 复制与 data: 写入无法中途停止:结束后已取消就删掉这份副本。
     if (signal?.aborted) {
       if (file.exists) file.delete();
@@ -181,6 +198,8 @@ export async function withDownloadedRemoteMediaFile<T>(
   maxBytes: number,
   read: (file: File) => Promise<T | null>,
   signal?: AbortSignal,
+  onTooLarge?: () => void,
+  options?: { allowEmpty?: boolean },
 ): Promise<T | null> {
   const dir = new Directory(Paths.cache, SHARE_TMP_DIR_NAME);
   let target: File | null = null;
@@ -191,10 +210,15 @@ export async function withDownloadedRemoteMediaFile<T>(
     target = new File(dir, `res-${unique}.${extOfMime(mimeType)}`);
     const file = await copyRemoteFile(url, target, signal, signal ? maxBytes : undefined);
     const size = file.size ?? 0;
-    if (signal?.aborted || size <= 0 || size > maxBytes) return null;
+    if (signal?.aborted || size < 0 || (size === 0 && !options?.allowEmpty)) return null;
+    if (size > maxBytes) {
+      onTooLarge?.();
+      return null;
+    }
     const result = await read(file);
     return signal?.aborted ? null : result;
-  } catch {
+  } catch (error) {
+    if (error instanceof Error && error.message === 'PREVIEW_TOO_LARGE') onTooLarge?.();
     return null;
   } finally {
     if (url.startsWith('file://')) releasePeerMedia(url);

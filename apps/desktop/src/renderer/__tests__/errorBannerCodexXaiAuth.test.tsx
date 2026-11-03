@@ -9,6 +9,7 @@ const { useCodexRuntimeRouteMock } = vi.hoisted(() => ({
 }));
 
 vi.mock('react-i18next', () => ({
+  initReactI18next: { type: '3rdParty', init: () => undefined },
   useTranslation: () => ({
     i18n: { exists: () => true },
     // 插值参数拼进返回值，让进度类文案能断言实际传入的 attempt/maxAttempts。
@@ -33,6 +34,7 @@ vi.mock('@/hooks/useCodexSessionExpiredPrompt', () => ({
 }));
 
 import { ErrorBanner } from '@/components/chat/ErrorBanner';
+import { ErrorMessageCard } from '@/components/chat/ErrorMessageCard';
 
 afterEach(() => {
   cleanup();
@@ -76,6 +78,50 @@ describe('ErrorBanner Codex xAI auth classification', () => {
 });
 
 describe('ErrorBanner context-overflow retry', () => {
+  // #7951: current translators retain concrete overflow details. The legacy
+  // no-details fallback must not replace that evidence with ciphertext advice.
+  it.each(['live', 'history'])('preserves a remote compact overflow in the %s view', (view) => {
+    const message = 'Error running remote compact task: maximum context length exceeded';
+    render(view === 'live'
+      ? createElement(ErrorBanner, { error: message, errorReason: 'context-overflow', onRetry: vi.fn() })
+      : createElement(ErrorMessageCard, { message, reason: 'context-overflow' }));
+    expect(screen.getByText('chat.errorBanner.contextOverflow')).toBeTruthy();
+    expect(screen.queryByText('chat.errorBanner.remoteCompactEncryptedContent')).toBeNull();
+  });
+  it.each([
+    'Error running remote compact task: invalid_encrypted_content',
+    'Error running remote compact task',
+  ])('corrects a persisted legacy compact error without rewriting history (%s)', (message) => {
+    render(createElement(ErrorMessageCard, {
+      message,
+      reason: 'context-overflow',
+    }));
+    expect(screen.getByText('chat.errorBanner.remoteCompactEncryptedContent')).toBeTruthy();
+    expect(screen.queryByText('chat.errorBanner.contextOverflow')).toBeNull();
+  });
+  // The same compact failure used to show either oversized-input or switch-provider advice.
+  it.each([
+    ['context-overflow', false, 'Error running remote compact task: invalid_encrypted_content'],
+    ['remote-compact-encrypted-content', true, 'Error running remote compact task: invalid_encrypted_content'],
+    ['context-overflow', true, 'Error running remote compact task'],
+  ])(
+    'shows compact recovery guidance for %s (remote=%s)',
+    (errorReason, remote, error) => {
+      const onRetry = vi.fn();
+      render(createElement(ErrorBanner, {
+        error,
+        errorReason,
+        agentKind: 'codex',
+        deviceLinkDeviceId: remote ? 'other-computer' : null,
+        retryText: 'retry-token',
+        onRetry,
+      }));
+      expect(screen.getByText('chat.errorBanner.remoteCompactEncryptedContent')).toBeTruthy();
+      expect(screen.queryByText('chat.errorBanner.contextOverflow')).toBeNull();
+      fireEvent.click(screen.getByTitle('chat.errorBanner.retryTitle'));
+      expect(onRetry).toHaveBeenCalledWith('retry-token');
+    },
+  );
   it('keeps Retry when automatic rollover failed and recovery is still available', () => {
     const onRetry = vi.fn();
     render(

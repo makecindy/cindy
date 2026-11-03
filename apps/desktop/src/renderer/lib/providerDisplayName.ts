@@ -1,5 +1,5 @@
 /**
- * 所有可改名连接优先显示目录中的名称；Cindy AI 保留统一的本地化产品名。
+ * 连接优先显示来源电脑提供的名称；Cindy AI 的名称包含该电脑的个人或企业身份。
  * 缺少目录时才回退内置名称或连接 ID。
  *
  * 从 ModelSelector 提取到这里: 用量历史的任务表也要把 Session.providerId 渲染成人话,
@@ -18,7 +18,11 @@ type TFunc = (key: string) => string;
 
 export function providerDisplayName(provider: Pick<ProviderView, 'id' | 'name'>, t: TFunc): string {
   const key = PROVIDER_TITLE_KEY[provider.id];
-  return provider.id === 'xd' && key ? t(key) : provider.name || (key ? t(key) : provider.id);
+  // The host supplies its account's name, including for another computer or a share.
+  // Older hosts/catalogs only know the technical name; do not infer their account here.
+  return provider.id === 'xd' && !provider.name?.startsWith('Cindy AI · ') && key
+    ? t(key)
+    : provider.name || (key ? t(key) : provider.id);
 }
 
 /**

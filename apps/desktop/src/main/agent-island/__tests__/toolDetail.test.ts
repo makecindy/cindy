@@ -46,7 +46,7 @@ describe('formatIslandToolDetail', () => {
     expect(detail('WebFetch', { url: 'https://example.com/docs' })).toBe('访问 https://example.com/docs');
     expect(detail('TodoWrite', { todos: [] })).toBe('更新待办');
     expect(detail('mcp__lizi_feishu__read_by_url', { url: 'https://example.com' }))
-      .toBe('调用 lizi_feishu · read by url');
+      .toBe('正在调用工具…');
     expect(detail('file_change', {
       changes: [
         { path: '/repo/a.ts', kind: { type: 'update' }, diff: '-a\n+b' },
@@ -91,14 +91,15 @@ describe('formatIslandToolDetail', () => {
     })).toBe('Needs network access to fetch docs');
   });
 
-  it('truncates task descriptions and generic labels to the island cap', () => {
+  it('truncates task descriptions and readable summaries to the island cap', () => {
     const longDescription = 'x'.repeat(120);
     const taskLabel = detail('Task', { description: longDescription, prompt: 'ignored' });
     expect(taskLabel).not.toBeNull();
     expect(taskLabel!.length).toBeLessThanOrEqual(80);
-    expect(detail('SomeUnknownTool', { anything: true })).toBe('调用 SomeUnknownTool');
-    // generic 但 input 有可读细节(DETAIL_KEYS)时,label 后跟细节(对齐面板行)。
-    expect(detail('SomeUnknownTool', { query: 'find usages' })).toBe('调用 SomeUnknownTool · find usages');
+    expect(detail('mcp:server:tool', { toolTitle: longDescription })!.length).toBeLessThanOrEqual(80);
+    expect(detail('SomeUnknownTool', { anything: true })).toBe('正在调用工具…');
+    // A query is tool data, not a reliable description of the current action.
+    expect(detail('SomeUnknownTool', { query: 'find usages' })).toBe('正在调用工具…');
   });
 
   it('prefers codex tool-side questions over tool shape', () => {
@@ -114,7 +115,33 @@ describe('formatIslandToolDetail', () => {
     expect(formatIslandToolDetail('CustomTool', undefined, { wording }, {
       displayName: 'Custom Tool',
     })).toBe('Custom Tool');
-    expect(formatIslandToolDetail('CustomTool', undefined, { wording })).toBeNull();
+    expect(formatIslandToolDetail('CustomTool', undefined, { wording })).toBe('正在调用工具…');
+  });
+
+  // #7474: unit regression through the production formatter. Existing MCP coverage
+  // required internal names and never supplied readable metadata or absent input.
+  it.each([
+    'mcp__lizi_feishu__read_by_url',
+    'mcp:lizi_feishu:read_by_url',
+    'dynamic:tools:read_by_url',
+    'collab:wait',
+    'SomeUnknownTool',
+  ])('prefers readable metadata and a localized fallback for %s', (name) => {
+    const localized = { ...wording, toolCallLabel: () => 'Calling a tool…' };
+    expect(formatIslandToolDetail(name, { toolTitle: '读取飞书文档' }, { wording: localized }))
+      .toBe('读取飞书文档');
+    expect(formatIslandToolDetail(name, {}, { wording: localized }, { description: '读取飞书文档' }))
+      .toBe('读取飞书文档');
+    expect(formatIslandToolDetail(name, {}, { wording: localized })).toBe('Calling a tool…');
+    expect(formatIslandToolDetail(name, null, { wording: localized })).toBe('Calling a tool…');
+  });
+
+  it('keeps tool identity and opaque input detail available for permission prompts', () => {
+    expect(detail('mcp__lizi_feishu__read_by_url', {}, true)).toBe('调用 lizi_feishu · read by url');
+    expect(detail('mcp__lizi_feishu__read_by_url', { toolTitle: '读取飞书文档' }, true))
+      .toBe('调用 lizi_feishu · read by url');
+    expect(detail('SomeUnknownTool', { query: 'find usages' }, true))
+      .toBe('调用 SomeUnknownTool · find usages');
   });
 
   it('routes wording through the injected implementation', () => {

@@ -13,6 +13,11 @@ const snapshot = {
   market: { items: [], customSourceNames: [], unavailableCustomSourceNames: [] },
 };
 describe('remote project response boundaries', () => {
+  it('requires an explicit fixed-share installation capability from the selected Host', () => {
+    expect(parsePluginManagementSnapshot(snapshot).localShares).toBeUndefined();
+    expect(parsePluginManagementSnapshot({ ...snapshot, localShares: true }).localShares).toBe(true);
+    expect(() => parsePluginManagementSnapshot({ ...snapshot, localShares: 'true' })).toThrow('INVALID_RESPONSE');
+  });
   it('distinguishes old Host capability absence from a supported empty project catalogue', () => {
     expect(parsePluginManagementSnapshot(snapshot).projects).toBeUndefined();
     expect(parsePluginManagementSnapshot({ ...snapshot, projects: [] }).projects).toEqual([]);

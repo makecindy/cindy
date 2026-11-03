@@ -378,8 +378,9 @@ export async function resolveProviderShareLink(input: string | ProviderShareInvi
 }
 
 export async function previewProviderShare(link: string | ProviderShareInvitationIntent): Promise<ProviderShareLinkPreview> {
-  requireRuntime();
+  const rt = requireRuntime();
   const { intent, region } = await resolveProviderShareLink(link);
+  if (!current(rt)) throwIpcError('DEVICE_LINK_NOT_CONNECTED', 'Account changed');
   return region ? crossRegionPreview(region, intent.invitation) : providerShareApi.preview(intent.invitation);
 }
 
@@ -424,18 +425,22 @@ function pollRequest(rt: Runtime, requestId: string): void {
 export async function sendProviderShareRequest(link: string | ProviderShareInvitationIntent): Promise<ProviderShareRequestState> {
   const rt = requireRuntime();
   const { intent, region } = await resolveProviderShareLink(link);
+  if (!current(rt)) throwIpcError('DEVICE_LINK_NOT_CONNECTED', 'Account changed');
   const { invitation } = intent;
   let state: ProviderShareRequestState;
   let cross: PendingRequest['cross'] = null;
   let preview: ProviderShareLinkPreview | null;
   if (region) {
     preview = await crossRegionPreview(region, invitation).catch(() => null);
+    if (!current(rt)) throwIpcError('DEVICE_LINK_NOT_CONNECTED', 'Account changed');
     const sent = await crossRegionSendRequest(region, invitation);
     state = sent.state;
     cross = { region, requestToken: sent.requestToken };
   } else {
     preview = await providerShareApi.preview(invitation).catch(() => null);
+    if (!current(rt)) throwIpcError('DEVICE_LINK_NOT_CONNECTED', 'Account changed');
     const card = await fetchIdentityCard('share-request', sha256Hex(invitation));
+    if (!current(rt)) throwIpcError('DEVICE_LINK_NOT_CONNECTED', 'Account changed');
     state = await providerShareApi.sendRequest(invitation, card);
   }
   if (!current(rt)) throwIpcError('DEVICE_LINK_NOT_CONNECTED', 'Account changed');

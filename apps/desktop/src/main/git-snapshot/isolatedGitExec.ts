@@ -11,6 +11,7 @@
 import { promises as fs } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { operationCheckpoint, operationWait } from '../utils/operationBudget';
 
 import {
   gitExec,
@@ -120,7 +121,8 @@ export async function isolatedGitExec(
   cwd?: string,
   opts?: GitExecOpts,
 ): Promise<GitExecResult> {
-  const hooksPath = await getEmptyHooksDir();
+  operationCheckpoint();
+  const hooksPath = await operationWait(getEmptyHooksDir());
   const isolation = snapshotGitIsolationArgs(hooksPath);
   const command = withDisabledExternalDiffHelpers(args);
   if (command[0] === 'config') {

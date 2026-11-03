@@ -58,7 +58,10 @@ vi.mock('../waylandCapture', async (original) => ({
   ...(await original<typeof import('../waylandCapture')>()),
   isWaylandDesktop: () => h.wayland,
 }));
-vi.mock('../linuxInput', () => ({ readLinuxDesktopInputSupport: async () => h.linuxInput }));
+vi.mock('../linuxInput', () => ({
+  readLinuxDesktopInputSupport: async () => h.linuxInput,
+  isX11Desktop: () => process.platform === 'linux' && !h.wayland,
+}));
 vi.mock('../linuxDesktop', () => ({
   supportsLinuxDisplay: () => h.hyprland,
   supportsLinuxLock: () => false,
@@ -1324,4 +1327,29 @@ it('streams only the 代输入 window: native window capture, no screen source, 
   expect(h.nativeFrame).toHaveBeenLastCalledWith('1', true, undefined);
   h.deps.stopVideo();
   expect(h.setWindow).toHaveBeenLastCalledWith(null);
+});
+
+// A successful native XTest probe must be exposed by the real host entry point.
+it('advertises and starts X11 input while retaining the local opt-in', async () => {
+  const platform = process.platform;
+  Object.defineProperty(process, 'platform', { value: 'linux' });
+  try {
+    h.wayland = h.hyprland = false;
+    h.linuxInput = true;
+    const settings = await import('../../device-link/settings-store');
+    const { screen } = await import('electron');
+    vi.spyOn(screen, 'getAllDisplays').mockReturnValue([
+      { id: 1, size: { width: 800, height: 600 }, bounds: { x: 0, y: 0, width: 800, height: 600 } },
+    ] as any);
+    const config = { remoteDesktopEnabled: true, remoteControlEnabled: true };
+    vi.spyOn(settings, 'readDeviceLinkSettings').mockReturnValue(config as any);
+    expect((await h.deps.capabilities()).canControl).toBe(true);
+    h.startInput.mockClear();
+    await h.deps.startInput('1');
+    expect(h.startInput).toHaveBeenCalledExactlyOnceWith('1');
+    config.remoteDesktopEnabled = false;
+    expect((await h.deps.capabilities()).canControl).toBe(false);
+  } finally {
+    Object.defineProperty(process, 'platform', { value: platform });
+  }
 });

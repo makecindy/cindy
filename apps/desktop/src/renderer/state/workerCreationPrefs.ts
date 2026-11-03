@@ -1,3 +1,4 @@
+import { normalizeWorkerCreationSelection, type WorkerCreationSelection } from '../../shared/workerCreationSelection';
 import type { Effort } from '@/lib/userPreferences.types';
 import {
   DEFAULT_ORCA_WORKER_AGENT,
@@ -144,4 +145,12 @@ export function subscribeWorkerCreationPrefs(listener: () => void): () => void {
     window.removeEventListener(CHANGE_EVENT, onCustomChange);
     window.removeEventListener('storage', onStorage);
   };
+}
+
+/** Only the current owner's local, submitted route is eligible for tool defaults. */
+export function readLocalWorkerCreationSelection(owner: string | null): WorkerCreationSelection | null {
+  try {
+    const raw = JSON.parse(window.localStorage.getItem(STORAGE_KEY) ?? 'null');
+    return normalizeWorkerCreationSelection(raw?.modelSelectionByHost?.[JSON.stringify([owner, 'local'])]);
+  } catch { return null; }
 }

@@ -237,6 +237,9 @@ export function buildManagedConfig(options: ManagedBrowserConfigOptions = {}): B
       // routes; --no-startup-window still keeps automation launches unobtrusive.
       extraArgs: [
         '--restore-last-session',
+        // Website cookies are copied without Chrome OAuth identity. Disable
+        // DICE before startup so it cannot turn that mismatch into a logout.
+        ...(useRealProfile ? ['--allow-browser-signin=false'] : []),
         ...(proxyServer ? buildProxyLaunchArgs(proxyServer, route.allowedHostnames) : []),
       ],
       // Two different contracts, so two different policies:

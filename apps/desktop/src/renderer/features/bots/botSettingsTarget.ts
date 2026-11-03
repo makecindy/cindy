@@ -54,6 +54,8 @@ export interface BotSettingsTarget {
   /** Teammates on the same computer: name uniqueness and the follow-up holder's name. */
   useRoster(): ReadonlyArray<{ id: string; name: string; status?: string }>;
   memory: Bots['memory'];
+  /** Core text and learned Skill actions; null when the teammate's computer is too old to offer them. */
+  skills: Bots['skills'] | null;
   history: { search(body: { botId: string; query: string; limit: number }): Promise<ConversationSearchResponse> };
   capabilities: {
     /** `isCurrent` turns false once a newer load superseded this one, so it can stop before its next request. */
@@ -82,6 +84,11 @@ export interface BotSettingsTarget {
   };
   /** Routines of the teammate's computer (`onChanged` fires when they change there). */
   routines: BotRoutinesApi;
+  /** Host accepts a persistent independent model selection for each routine. */
+  routineModels?: boolean;
+  /** Host keeps a routine's session mode (persistent lane or a fresh lane per trigger). */
+  routineSessionModes?: boolean;
+  routineDelivery?: boolean;
   autonomy: {
     useSettings(): BotAutonomySettingsView | null;
     setSchedulerBotId(botId: string | null): Promise<void>;

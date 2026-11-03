@@ -1,4 +1,5 @@
 import { useRemoteModelFavorites } from '@/state/useRemoteModelFavorites';
+import type { ControlledModelFavoriteSource } from '../../../shared/controlledModelCatalog';
 import {
   parseProviderShareFavoriteSource,
   providerShareFavoriteRegionsOf,
@@ -40,6 +41,7 @@ import { useAgentDeviceModelMemoryVersion } from '@/state/agentDeviceModelMemory
 import { useRecentModels, type RecentModelItem } from '@/state/recentModels';
 
 import { flashScrollbar } from '@/lib/scrollbarAutoHide';
+import { stopWheelPropagation } from '@/lib/stopWheelPropagation';
 import { MORPH_CONTENT_RESIZE_EVENT } from '@/components/ui/morph-popover';
 
 import { isProviderShareAgentDeviceId } from '../../../shared/providerShare';
@@ -48,6 +50,7 @@ import { ModelConfigFlyout, type ModelConfigFlyoutState } from './ModelConfigFly
 // ModelSelector 反过来也 import 本文件 —— ESM 循环 import 在这里安全:两边用到的都是
 // **函数声明**(提升),且只在 render 时求值,不在模块求值期互相读值。
 import type { ModelMemoryAccessors } from './ModelSelector';
+import type { ModelPickerPreferenceStore } from './modelPickerPreferences';
 import { UnifiedFlyoutHost } from './UnifiedFlyoutHost';
 import { UnifiedModelRail } from './UnifiedModelRail';
 import { useUnifiedRowActions, withOptimisticConfig } from './useUnifiedRowActions';
@@ -118,6 +121,10 @@ export interface UnifiedSelectedRow {
 }
 
 export interface UnifiedModelPanelProps {
+  /** 「全部」视图且没有搜索词时，列表最上方额外渲染的内容(新任务的「让插件选」)。 */
+  pinnedTop?: ReactNode;
+  /** pinnedTop 当前有内容：搜索只命中它时不显示空结果。 */
+  pinnedTopHasRows?: boolean;
   providers: readonly ProviderView[];
   /**
    * 供应商分组的显示顺序(设置 → 模型供应商的拖动序);缺省 = 目录首见序。
@@ -152,6 +159,7 @@ export interface UnifiedModelPanelProps {
   /** live 选中行的深度实时值(同上)。 */
   selectedEffort?: Effort;
   modelMemory?: ModelMemoryAccessors;
+  preferenceStore?: ModelPickerPreferenceStore;
   /** agent 运行时是否具备 Fast 能力(useAgentCapabilities.hasFastMode)。 */
   agentFastModeCapable: (agent: AgentKind) => boolean;
   /** 价格 / 折扣查询。**modelId 传该引擎的 wire id**(报价表按 wire id 索引)。 */
@@ -324,6 +332,7 @@ export interface UnifiedModelPanelProps {
      * 运行位置编进 providerId(见 state/agentDeviceFavorites)。
      */
     favoritesDeviceId?: string;
+    shareFavoriteSources?: ReadonlyMap<string, ControlledModelFavoriteSource>;
     /** 任务所在电脑自己的设备 id(已知时):收藏里编码成它的条目按普通收藏处理。 */
     homeDeviceId?: string | null;
     /** 在列表里、但目录还在读取或读取失败的电脑:收藏区里它的收藏置灰列出,不丢。 */
@@ -371,6 +380,8 @@ export interface UnifiedModelPanelProps {
  * 可见性 / 排除谓词。本组件**不自己判定候选引擎或能力**,只做合成与呈现。
  */
 export function UnifiedModelPanel({
+  pinnedTop,
+  pinnedTopHasRows = false,
   providers,
   providerOrder,
   agents,
@@ -386,6 +397,7 @@ export function UnifiedModelPanel({
   fastMode = false,
   selectedEffort,
   modelMemory,
+  preferenceStore,
   agentFastModeCapable,
   priceOf,
   providerLabel,
@@ -430,8 +442,9 @@ export function UnifiedModelPanel({
     deviceId,
     storedFavorites,
     remoteSources?.favoritesDeviceId ? remoteFavorites : undefined,
+    remoteSources?.shareFavoriteSources,
   );
-  const sharedFavoriteSources = useProviderShareFavoriteSources();
+  const sharedFavoriteSources = useProviderShareFavoriteSources(remoteSources?.shareFavoriteSources);
   const hasRemoteSources = !!remoteSources;
   const favoritesHomeDeviceId = remoteSources?.homeDeviceId ?? null;
   const agentDeviceFavorites = useAgentDeviceFavorites({
@@ -450,6 +463,7 @@ export function UnifiedModelPanel({
     if (homeFavoriteItems) requestProviderShareFavoriteRegions(providerShareFavoriteRegionsOf(homeFavoriteItems));
   }, [homeFavoriteItems]);
   const favorites = selectionPolicy === 'official' ? NO_FAVORITES
+    : preferenceStore ? preferenceStore.favorites.items
     : isSharedProvider ? sharedFavorites.items
     : remoteSources ? agentDeviceFavorites.items
     : deviceId ? remoteFavorites.items : storedFavorites;
@@ -465,6 +479,7 @@ export function UnifiedModelPanel({
   // (其它窗口的 storage 事件、device-link 推送同样经这两个版本号进来)。远程 Agent 的档位记忆
   // 是另一份 store,版本号并进 memoryVersion。
   const enginePrefsVersion = useModelEnginePrefsVersion();
+  const getEngineOverride = preferenceStore?.engines.get ?? getModelEngineOverride;
   const memoryVersion = useProviderModelMemoryVersion() + useAgentDeviceModelMemoryVersion();
 
   const sessionAgent = sessionEngineFilter?.currentAgent;
@@ -676,7 +691,7 @@ export function UnifiedModelPanel({
       const base = resolveUnifiedRowConfig({
         entry,
         ...(personalized
-          ? { engineOverride: getModelEngineOverride(entry.providerId, entry.modelId) }
+          ? { engineOverride: getEngineOverride(entry.providerId, entry.modelId) }
           : {}),
         // ★ 记忆表按 **wire id** 存取(既有消费方的口径),不是行的归一化身份。
         ...(personalized
@@ -729,6 +744,7 @@ export function UnifiedModelPanel({
       agentFastModeCapable,
       effectiveRail,
       enginePrefsVersion,
+      getEngineOverride,
       fastMode,
       isLiveRow,
       liveEngineAgent,
@@ -772,7 +788,7 @@ export function UnifiedModelPanel({
       return resolveUnifiedRowConfig({
         entry,
         ...(selectionPolicy === 'personalized'
-          ? { engineOverride: getModelEngineOverride(entry.providerId, entry.modelId) }
+          ? { engineOverride: getEngineOverride(entry.providerId, entry.modelId) }
           : {}),
         ...(sessionAgent ? { pinnedEngine: engineOfAgentKind(sessionAgent) } : {}),
         ...(isSelectedModelRow && liveEngineAgent
@@ -783,6 +799,7 @@ export function UnifiedModelPanel({
     [
       activeFavoriteUid,
       enginePrefsVersion,
+      getEngineOverride,
       liveEngineAgent,
       selected.modelId,
       selected.providerId,
@@ -1041,7 +1058,8 @@ export function UnifiedModelPanel({
     optimistic: optimisticConfig,
     runExternal,
   } = useUnifiedRowActions({
-    favoriteStore: isSharedProvider
+    engineStore: preferenceStore?.engines,
+    favoriteStore: preferenceStore ? preferenceStore.favorites.store : isSharedProvider
       ? sharedFavorites.store
       : remoteSources ? agentDeviceFavorites.store : deviceId ? remoteFavorites.store : undefined,
     onFavoriteError: () => toast.error(t('newChat.modelSelector.unified.favoritesSaveFailed')),
@@ -1087,7 +1105,7 @@ export function UnifiedModelPanel({
       resolveUnifiedRowConfig({
         entry,
         ...(selectionPolicy === 'personalized'
-          ? { engineOverride: getModelEngineOverride(entry.providerId, entry.modelId) }
+          ? { engineOverride: getEngineOverride(entry.providerId, entry.modelId) }
           : {}),
         agentFastModeCapable,
         ...(sessionAgent ? { pinnedEngine: engineOfAgentKind(sessionAgent) } : {}),
@@ -1393,6 +1411,9 @@ export function UnifiedModelPanel({
           )}
           // Body height is independent of filtered results; min-h-0 still permits
           // the popover's viewport constraint to shrink this scroll area.
+          // onWheel:模态对话框(添加伙伴 / 伙伴设置等)里 react-remove-scroll 在
+          // document 拦浮层滚轮,不放行的话列表只能靠拖滚动条(原理见 helper 注释)。
+          onWheel={stopWheelPropagation}
           onScroll={() => {
             // 点击打开的配置保持展开；浮层宿主在滚动时重新定位。
             // 程序化对齐不取消在途的选中行定位。
@@ -1455,6 +1476,7 @@ export function UnifiedModelPanel({
             </div>
           )}
           {favoritesListDeviceId && remoteFavorites.error ? <div role="status" className="px-3 py-2 text-13 text-[var(--text-secondary)]">{t(favoritesSyncFailureI18nKey(remoteFavorites.errorCode))}</div> : null}
+          {pinnedTop && effectiveRail.kind === 'all' ? pinnedTop : null}
           {remoteListPending ? (
             remoteSources?.failure ?? (
               <div
@@ -1467,7 +1489,7 @@ export function UnifiedModelPanel({
             )
           ) : catalogNotice ? (
             catalogNotice
-          ) : !hasRows ? (
+          ) : !hasRows && !(pinnedTopHasRows && effectiveRail.kind === 'all') ? (
             <div className="px-3 py-6 text-center text-13 text-[var(--text-tertiary)]">
               {/* 最近 / ★ 视图的空态是引导语,不是「没有匹配」(设计稿 favEmpty;两格常驻后必经)。 */}
               {!query.trim() && effectiveRail.kind === 'favorites'

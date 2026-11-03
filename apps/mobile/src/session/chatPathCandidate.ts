@@ -592,7 +592,12 @@ export interface BareFilePathMatch {
  * 候选 ≠ 点亮:`16/9.0`、`a/b.c` 这类形状达标的误命中同样返回,存在性由远端
  * stat(remotePathVerdict)兜底,解析不到就保持纯文本。
  */
-export function findBareFilePathMatch(input: string, from: number): BareFilePathMatch | null {
+export function findBareFilePathMatch(
+  input: string,
+  from: number,
+  // Optional paragraph-local exec cache, bound to this exact immutable input.
+  search?: (regex: RegExp) => RegExpExecArray | null,
+): BareFilePathMatch | null {
   // 不含任何路径分隔符的文本一定不是带分隔符路径。这条短路在渲染热路径上逐 token
   // 生效(见 messageMarkdown.findNextInlineToken),不能省。
   if (!input.includes('/') && !input.includes('\\')) return null;
@@ -601,7 +606,7 @@ export function findBareFilePathMatch(input: string, from: number): BareFilePath
   const re = new RegExp(BARE_PATH_RE_SOURCE, 'g');
   re.lastIndex = Math.max(0, from);
   let m: RegExpExecArray | null;
-  while ((m = re.exec(input)) !== null) {
+  while ((m = search ? search(re) : re.exec(input)) !== null) {
     const value = m[1];
     if (!looksLikeFilePath(splitChatPathLineSuffix(value).href)) continue;
     const index = m.index + (m[0].length - value.length);

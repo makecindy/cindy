@@ -1,3 +1,4 @@
+import { withAppToolCancellation } from './toolCancellation.js';
 import { randomUUID } from 'node:crypto';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import type {
@@ -16,6 +17,7 @@ import {
   isJSONRPCErrorResponse,
   isJSONRPCRequest,
   isJSONRPCResultResponse,
+  type CallToolRequest,
   type CallToolResult,
   type ClientRequest,
   type ClientNotification,
@@ -237,9 +239,9 @@ export function createAppServerProxy(
     assertCurrent();
     return { tools: tools.filter((tool) => toolVisibleTo(tool, 'model')) };
   });
-  server.server.setRequestHandler(CallToolRequestSchema, async (request, extra) => {
+  const callModelTool = async (request: CallToolRequest, extra: RequestHandlerExtra<ServerRequest, ServerNotification>, discoverySignal: AbortSignal) => {
     const connectionId = registerOnUse();
-    const tool = (await connection.tools(extra.signal)).find(
+    const tool = (await connection.tools(discoverySignal)).find(
       (candidate) => candidate.name === request.params.name,
     );
     extra.signal.throwIfAborted();
@@ -261,6 +263,8 @@ export function createAppServerProxy(
     const clientId = `mcp-app:${randomUUID()}`;
     let record: McpAppRecord | undefined;
     if (uri && sessionId) {
+      const cardTool = { ...tool, _meta: { ...tool._meta } };
+      delete cardTool._meta['cindy/plugin'];
       // Vault and UI persistence failure must not change a tool's actual outcome.
       try {
         record = {
@@ -268,7 +272,7 @@ export function createAppServerProxy(
           serverId: config.id,
           serverRevision: host.serverRevision(config),
           resourceUri: uri,
-          tool,
+          tool: cardTool,
           arguments: request.params.arguments ?? {},
           connectionId,
         } as McpAppRecord;
@@ -321,7 +325,10 @@ export function createAppServerProxy(
     // Card persistence may yield while the owner or server configuration changes.
     assertCurrent();
     return modelToolResult(result);
-  });
+  };
+  server.server.setRequestHandler(CallToolRequestSchema, (request, extra) =>
+    withAppToolCancellation(extra.signal, assertCurrent, signal =>
+      callModelTool(request, { ...extra, signal }, extra.signal)));
   const unlisten = connection.listen((message) => {
     try {
       assertCurrent();

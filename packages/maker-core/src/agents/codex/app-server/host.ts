@@ -87,8 +87,6 @@ const SUBSCRIBED_METHODS = [
   'thread/started',
   'turn/started',
   'turn/completed',
-  'hook/started',
-  'hook/completed',
   'turn/diff/updated',
   'thread/tokenUsage/updated', // Codex usage 走单独通知 (不在 turn/completed 上), 必订
   'item/started',
@@ -136,9 +134,6 @@ function extractThreadId(method: string, params: unknown): string | null {
 }
 
 export interface ThreadEventHandlers {
-  /** Native Hook receipts; decisions still go through the native handler. */
-  hookStarted?: (params: unknown) => void;
-  hookCompleted?: (params: unknown) => void;
   threadStarted?: (params: ThreadStartedNotification['params']) => void;
   descendantThreadStarted?: (params: ThreadStartedNotification['params']) => void;
   /**
@@ -259,7 +254,10 @@ export interface AppServerHostOptions {
    * 本地 codex 用 `createStdioTransport({binaryPath, cwd, env, extraArgs})`,
    * 远端 codex 用 `createSshDaemonTransport({remoteHost, ...})` (P2)。
    */
-  createTransport: () => Transport;
+  createTransport: (modelProvider?: string) => Transport;
+  /** Local proxy hosts can align the process default with their task's provider. */
+  supportsModelProviderSelection?: boolean;
+  defaultModelProviderId?: string;
   logger: Logger;
   /** initialize 时上报的客户端身份 (走 server 日志 / thread metadata)。 */
   clientInfo: ClientInfo;
@@ -347,7 +345,6 @@ interface BufferedNotification {
 export class CodexNativeInitializationStoppedError extends Error {}
 
 export class AppServerHost {
-  private nativeRuntimeVersion: string | null = null;
   private readonly externalAuth: CodexExternalAuthSession | undefined;
   private readonly connectionId = randomUUID();
   private readonly logger: Logger;
@@ -361,6 +358,7 @@ export class AppServerHost {
   private readonly writerCandidates = new WeakSet<AppServerClient>();
   /** 同次 ensureStarted 并发调用共享一个 init Promise (避免重复 spawn)。 */
   private startPromise: Promise<InitializeResponse> | null = null;
+  private modelProvider: string | undefined;
   private nativeInitializationEpoch = 0;
 
   private readonly subscribers = new Map<string, ThreadEventHandlers>();
@@ -420,16 +418,16 @@ export class AppServerHost {
     return this.opts.codexProxyActive === true;
   }
 
+  getDefaultModelProviderId(): string | undefined {
+    return this.opts.defaultModelProviderId;
+  }
+
   isCodexBrowserUseAvailable(): boolean {
     return this.opts.codexBrowserUseAvailable === true;
   }
 
   getCodexBrowserUseVersion(): string | null {
     return this.opts.codexBrowserUseVersion ?? null;
-  }
-
-  getNativeRuntimeVersion(): string | null {
-    return this.nativeRuntimeVersion;
   }
 
   /**
@@ -681,7 +679,7 @@ export class AppServerHost {
     nativeEpoch = this.nativeInitializationEpoch,
   ): Promise<InitializeResponse> {
     const client = new AppServerClient({
-      createTransport: this.opts.createTransport,
+      createTransport: () => this.opts.createTransport(this.modelProvider),
       logger: this.opts.logger,
       onTransportError: (err) => {
         // Keep the shared startPromise while recovering this one pre-protocol
@@ -898,7 +896,6 @@ export class AppServerHost {
       this.logger.warn('retrying exited native SQLite initialization', { attempt: nativeAttempt + 2, maxAttempts: 3 });
       return this.bootstrap(capabilities, nativeAttempt + 1, nativeEpoch);
     }
-    this.nativeRuntimeVersion = resp.userAgent.match(/\/(\d+\.\d+\.\d+)(?:\s|$)/)?.[1] ?? null;
     if (this.opts.requireEphemeralAuth || this.externalAuth) {
       // Requirements can override CLI configuration. Reject before any task RPC
       // or token installation; initialization has already loaded native config.
@@ -986,6 +983,18 @@ export class AppServerHost {
       { threadId },
       { timeoutMs: this.threadUnsubscribeTimeoutMs },
     );
+  }
+
+  async selectModelProvider(modelProvider: string | undefined): Promise<void> {
+    if (!this.opts.supportsModelProviderSelection || this.modelProvider === modelProvider) return;
+    // Native 0.166+ compares the thread provider with the process configuration
+    // on every input. Thread overrides alone no longer select a working route.
+    // Never restart a host while another task still owns a subscription.
+    if (this.subscribers.size > 0) throw new Error('Cannot change Codex provider while threads are subscribed');
+    if (this.client || this.startPromise) {
+      await this.shutdown('Codex task model provider changed', { throwOnTransportError: true });
+    }
+    this.modelProvider = modelProvider;
   }
 
   /**
@@ -1676,8 +1685,6 @@ export class AppServerHost {
       case 'thread/started': fn = handlers.threadStarted as (p: never) => void; break;
       case 'turn/started': fn = handlers.turnStarted as (p: never) => void; break;
       case 'turn/completed': fn = handlers.turnCompleted as (p: never) => void; break;
-      case 'hook/started': fn = handlers.hookStarted as (p: never) => void; break;
-      case 'hook/completed': fn = handlers.hookCompleted as (p: never) => void; break;
       case 'turn/diff/updated': fn = handlers.turnDiffUpdated as (p: never) => void; break;
       case 'thread/tokenUsage/updated': fn = handlers.tokenUsageUpdated as (p: never) => void; break;
       case 'item/started': fn = handlers.itemStarted as (p: never) => void; break;

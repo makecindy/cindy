@@ -35,7 +35,11 @@ describe('sharedTask dispatch scope', () => {
     expect(() => assertSharedTaskInvoke(capture(), payload)).toThrow();
   });
   it('never inherits the full-device allowlist or wildcard subscriptions', () => {
-    for (const channel of ['maker:usage:codex-reset-auto-use', 'maker:create-session', 'maker:set-permission-mode', 'device-link:voice:credential-sync', 'local-db:sessions:list', 'maker:remote-resources:list']) {
+    // #8010: shared-task permission does not grant the owner's complete model catalog.
+    expect(() => assertSharedTaskInvoke(capture(), {
+      channel: 'maker:model-catalog:read', args: [{ op: 'locations' }],
+    })).toThrow('PERMISSION_DENIED');
+    for (const channel of ['git-context:pr-refs:manage', 'maker:usage:codex-reset-auto-use', 'maker:create-session', 'maker:set-permission-mode', 'device-link:voice:credential-sync', 'local-db:sessions:list', 'maker:remote-resources:list']) {
       expect(() => assertSharedTaskInvoke(capture(), { channel, args: ['task'] })).toThrow('PERMISSION_DENIED');
     }
     for (const topics of [['*'], ['sessions'], ['session:other'], ['session:task', 'session:other']]) {
@@ -102,7 +106,7 @@ describe('sharedTask dispatch scope', () => {
       args: ['permission-1', { kind: 'permission', behavior: 'allow', permissionUpdates: [permissionSuggestion] }],
     })).not.toThrow();
   });
-  it.each(['cindy.app.update', 'cindy.app.auto_update'])('keeps the owner-only %s card away from guests', (toolName) => {
+  it.each(['cindy.app.update', 'cindy.app.auto_update', 'ghost_contribution_submit', 'ghost_cancel_plugin_review'])('keeps the owner-only %s card away from guests', (toolName) => {
     setSharedTaskInteractionReader(() => ({ sessionId: 'task', kind: 'permission', toolName }));
     for (const behavior of ['allow', 'deny']) {
       const args = ['app-update-1', { kind: 'permission', behavior }];

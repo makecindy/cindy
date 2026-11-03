@@ -37,9 +37,50 @@ describe('subscription Fast policy wire compatibility', () => {
       expect(() => parseRemoteAgentRequest({ ...command, ...patch })).toThrow();
     }
   });
+  it('preserves only the bounded direct guest task binding', () => {
+    const guest = { shareId: 'share', memberId: 'member', guestDeviceId: 'laptop' };
+    const command = { op: 'fast-policy', group: 'openai', revision: 1, allowFast: false,
+      binding: { sessionId: runId, providerShareGuest: guest } };
+    expect(parseRemoteAgentRequest(command)).toEqual(command);
+    expect(() => parseRemoteAgentRequest({ ...command,
+      binding: { ...command.binding, controllerDeviceId: 'owner' } })).toThrow();
+    expect(() => parseRemoteAgentRequest({ ...command,
+      binding: { ...command.binding, providerShareGuest: { ...guest, shareId: '../share' } } })).toThrow();
+  });
 });
 
 describe('remote agent channel', () => {
+  // Production parser / unit: locating history is scoped by the authenticated
+  // peer, never a guest-supplied share/member/device. Legacy allocate is unchanged.
+  it('parses only the bounded direct-location task and preserves legacy requests', () => {
+    expect(parseRemoteAgentRequest({ op: 'direct-locate', sessionId: runId, memberId: 'other', deviceId: 'other' }))
+      .toEqual({ op: 'direct-locate', sessionId: runId });
+    for (const sessionId of ['', '../task', 'x'.repeat(129)]) {
+      expect(() => parseRemoteAgentRequest({ op: 'direct-locate', sessionId })).toThrow('REMOTE_AGENT_INVALID');
+    }
+    const legacy = { op: 'allocate', agentKind: 'pi', model: 'model', sessionId: runId };
+    expect(parseRemoteAgentRequest(legacy)).toEqual(legacy);
+    expect(() => parseRemoteAgentRequest({ op: 'future-direct-op', sessionId: runId })).toThrow('REMOTE_AGENT_INVALID');
+  });
+
+  // Unit / production parser: after O restarts, dropping this wire field would
+  // silently assign M2 while G's existing task and reliable link still live on M1.
+  it('preserves the current executor when parsing a direct-task renewal', () => {
+    const request = { op: 'allocate', agentKind: 'pi', model: 'model-b',
+      sessionId: runId, preferredExecutorDeviceId: 'executor-1' };
+    expect(parseRemoteAgentRequest(request)).toEqual(request);
+    expect(() => parseRemoteAgentRequest({ ...request, preferredExecutorDeviceId: '' })).toThrow('REMOTE_AGENT_INVALID');
+  });
+
+  it('binds a failed direct-open release to one allocation generation', () => {
+    const release = { op: 'direct-release', sessionId: runId,
+      generation: '11111111-1111-4111-8111-111111111111' };
+    expect(parseRemoteAgentRequest(release)).toEqual(release);
+    expect(() => parseRemoteAgentRequest({ ...release, generation: '../newer' })).toThrow('REMOTE_AGENT_INVALID');
+    expect(() => parseRemoteAgentRequest({ ...release, sessionId: '../other' })).toThrow('REMOTE_AGENT_INVALID');
+    expect(isRemoteAgentReadInvoke(REMOTE_AGENT_CHANNEL, [release])).toBe(false);
+  });
+
   // Shared-model fork wire: old peers must not gain write support by default; task IDs
   // include group-relay IDs, while filesystem roots are never accepted from callers.
   it('validates native fork boundaries and never retries a fork as a read', () => {
@@ -73,6 +114,14 @@ describe('remote agent channel', () => {
     expect(parseRemoteAgentRequest({ op: 'forget', relay, extra: 1 })).toEqual({ op: 'forget', relay });
     expect(() => parseRemoteAgentRequest({ op: 'forget', relay: 'short' })).toThrow('REMOTE_AGENT_INVALID');
     expect(() => parseRemoteAgentRequest({ op: 'forget' })).toThrow('REMOTE_AGENT_INVALID');
+    const directGuest = { shareId: 'share', memberId: 'member', guestDeviceId: 'laptop',
+      forgetId: runId, cleanupEpoch: 1 };
+    expect(parseRemoteAgentRequest({ op: 'forget', directGuest })).toEqual({ op: 'forget', directGuest });
+    expect(() => parseRemoteAgentRequest({ op: 'forget', relay, directGuest })).toThrow('REMOTE_AGENT_INVALID');
+    expect(() => parseRemoteAgentRequest({ op: 'forget', directGuest: { ...directGuest, forgetId: 'short' } }))
+      .toThrow('REMOTE_AGENT_INVALID');
+    expect(() => parseRemoteAgentRequest({ op: 'forget', directGuest: { ...directGuest, cleanupEpoch: -1 } }))
+      .toThrow('REMOTE_AGENT_INVALID');
     const caps = { version: 1, agents: [], maxRuns: 16, uploadChunkBytes: 1024, maxPayloadBytes: 2048 };
     expect(parseRemoteAgentCaps({ ...caps, guestRelay: true }).guestRelay).toBe(true);
     expect(parseRemoteAgentCaps({ ...caps, guestRelay: 'yes' })).not.toHaveProperty('guestRelay');
@@ -225,6 +274,20 @@ describe('remote agent channel', () => {
       .toEqual({ op: 'upload', uploadId: otherId, index: 0, data: 'AAAA' });
   });
 
+  // A delayed usage receipt must identify the exact server grant; a new grant for the same M cannot relabel it.
+  it('requires a grant generation on delegated usage and grant installation', () => {
+    const generation = '11111111-1111-4111-8111-111111111111';
+    const identity = { shareId: 'share-1', memberId: 'member-1', guestDeviceId: 'guest-pc', sessionId: 'task-1' };
+    const grant = { op: 'delegate', action: 'grant', ...identity, providerId: 'openai', model: 'gpt', generation };
+    expect(parseRemoteAgentRequest(grant)).toMatchObject(grant);
+    expect(() => parseRemoteAgentRequest({ ...grant, generation: undefined })).toThrow('REMOTE_AGENT_INVALID');
+    const usage = { op: 'direct-usage', ...identity, agentKind: 'codex', generation,
+      usageId: '22222222-2222-4222-8222-222222222222', samples: [{ model: 'gpt', turns: 1,
+        inputTokens: 7, outputTokens: 3, cacheReadTokens: 0, cacheCreateTokens: 0, sdkCostUsd: 0 }] };
+    expect(parseRemoteAgentRequest(usage)).toMatchObject(usage);
+    expect(() => parseRemoteAgentRequest({ ...usage, generation: undefined })).toThrow('REMOTE_AGENT_INVALID');
+  });
+
   it('rejects malformed identities, unknown methods and oversize payloads', () => {
     const bad: unknown[] = [
       null,
@@ -301,4 +364,18 @@ it('negotiates native image recovery and validates scoped chunk requests', () =>
   for (const patch of [{ offset: -1 }, { offset: 0.5 }, { imageId: '../image.png' }, { sessionId: '' }, { relay: '../unsafe' }]) {
     expect(() => parseRemoteAgentRequest({ op: 'images', sessionId: runId, action: 'read', imageId: 'a'.repeat(64), offset: 0, ...patch })).toThrow('REMOTE_AGENT_INVALID');
   }
+});
+
+
+it('negotiates native-history transfer without making mutations retryable on old peers', () => {
+  const caps = { version: 1, agents: [], maxRuns: 1, uploadChunkBytes: 1024, maxPayloadBytes: 2048 };
+  expect(parseRemoteAgentCaps(caps).nativeHistoryTransfer).toBeUndefined();
+  expect(parseRemoteAgentCaps({ ...caps, nativeHistoryTransfer: true }).nativeHistoryTransfer).toBe(true);
+  expect(parseRemoteAgentCaps({ ...caps, nativeHistoryTransfer: 'yes' }).nativeHistoryTransfer).toBeUndefined();
+  const request = { op: 'native-history', sessionId: 'task', command: { action: 'export', kind: 'codex', nativeId: runId } };
+  expect(parseRemoteAgentRequest({ ...request, workingDir: '/owner' })).toEqual(request);
+  expect(() => parseRemoteAgentRequest({ ...request, sessionId: '../task' })).toThrow('REMOTE_AGENT_INVALID');
+  expect(() => parseRemoteAgentRequest({ ...request, command: null })).toThrow('REMOTE_AGENT_INVALID');
+  expect(isRemoteAgentReadInvoke(REMOTE_AGENT_CHANNEL, [request])).toBe(false);
+  expect(isPeerResetRetryableInvoke(REMOTE_AGENT_CHANNEL, [request])).toBe(false);
 });

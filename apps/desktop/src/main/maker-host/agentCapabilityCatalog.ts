@@ -21,7 +21,7 @@ const TOOL_DESCRIPTION_MAX_CHARS = 300;
 
 const HARNESS_STATE_MESSAGES: Record<Exclude<AgentMcpServerToolsState, 'connected'>, string> = {
   'not-mounted': '当前任务的引擎中没有挂载此服务，通常是任务开始后才添加或修改了它；新建任务后再试。',
-  'no-tools': '引擎已配置此服务，但在当前任务中没有报告任何工具：可能启动时连接失败（地址错误、服务未运行或鉴权失败）、仍在启动，或服务本身没有工具。请在设置中检查该 MCP 的地址与连接状态，修正后新建任务再试。',
+  'no-tools': '当前任务未报告此服务的工具，可能是服务不适用于当前任务、尚未连接完成、连接失败或服务本身没有工具。仅凭空工具列表无法判断连接故障；请先核对服务用途和适用条件。',
   failed: '引擎连接此服务失败。请在设置中检查该 MCP 的地址与连接状态，修正后新建任务再试。',
   'needs-auth': '此服务需要先完成授权，引擎才能取得它的工具。',
   pending: '引擎仍在连接此服务，稍后再查询。',
@@ -33,17 +33,21 @@ export async function readAgentCapabilityCatalog(
   providers: readonly McpProvider[],
   context: McpProviderContext & { remoteHostId?: string | null },
   query: AgentCapabilityQuery,
-  availability: (provider: McpProvider) => string | null = () => null,
+  availability: (provider: McpProvider) => string | null | Promise<string | null> = () => null,
   readHarnessTools?: HarnessMcpToolsReader,
 ) {
   const harness = getHarnessMcpCatalog(context);
-  const declarations = [...providers.filter((provider) => !harness.some((entry) => entry.name === provider.name)).map((provider) => {
+  const declarations = [...await Promise.all(providers.filter((provider) => !harness.some((entry) => entry.name === provider.name)).map(async (provider) => {
     let reason: string | null = null;
     try {
-      const mounted = context.vendorOptions?.[RUNTIME_MCP_NAMES_KEY];
-      reason = Array.isArray(mounted) && !mounted.includes(provider.name)
-        ? 'not-mounted-in-current-runtime' : availability(provider);
-      if (!reason && provider.isEnabled?.(context) === false) reason = 'provider-not-enabled-for-session';
+      // Only the index needs every status. Direct queries must not wait for
+      // unrelated environment reads; unknown queries still return all names.
+      if (!query.server || query.server === provider.name) {
+        const mounted = context.vendorOptions?.[RUNTIME_MCP_NAMES_KEY];
+        reason = Array.isArray(mounted) && !mounted.includes(provider.name)
+          ? 'not-mounted-in-current-runtime' : await availability(provider);
+        if (!reason && provider.isEnabled?.(context) === false) reason = 'provider-not-enabled-for-session';
+      }
     } catch { reason = 'provider-status-unavailable'; }
     return {
       server: provider.name,
@@ -54,7 +58,7 @@ export async function readAgentCapabilityCatalog(
       ...(reason ? { reason } : {}),
       ...(provider.capability?.discovery ? { discovery: provider.capability.discovery } : {}),
     };
-  }), ...harness
+  })), ...harness
     .map((entry) => ({
       server: entry.name, title: entry.title, description: entry.description, source: entry.source,
       status: entry.available ? 'engine-managed' : 'unavailable',

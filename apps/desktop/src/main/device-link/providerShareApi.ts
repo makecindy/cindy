@@ -78,6 +78,68 @@ export const providerShareApi = createProviderShareApi({
   },
 });
 
+/** Only the share's authenticated host device may authorize a same-account executor. */
+export async function grantProviderShareDelegation(input: {
+  shareId: string; memberId: string; guestDeviceId: string; executorDeviceId: string;
+}): Promise<{ expiresAt: number; generation: string }> {
+  const scope = captureScope();
+  const value = await serverApiFetch<{ expiresAt?: unknown; generation?: unknown }>('/api/device-link/provider-shares/delegations', {
+    method: 'POST', body: input,
+    baseUrl: () => {
+      if (!scope.isCurrent()) throw new ProviderShareScopeChangedError();
+      return getClientEndpoint('deviceLinkApiBaseUrl');
+    },
+    timeoutMs: 15_000, cache: 'no-store',
+    logLabel: '/api/device-link/provider-shares/delegations',
+    redactErrorDetails: true, allowedRedactedErrorCodes: ALLOWED_REDACTED_CODES,
+  });
+  if (!Number.isSafeInteger(value.expiresAt) || (value.expiresAt as number) <= Date.now()
+    || typeof value.generation !== 'string' || !/^[0-9a-f-]{36}$/.test(value.generation)) {
+    throw new Error('Provider share delegation was not confirmed');
+  }
+  return { expiresAt: value.expiresAt as number, generation: value.generation };
+}
+
+export async function revokeProviderShareDelegation(input: {
+  shareId: string; memberId: string; guestDeviceId: string; executorDeviceId: string; generation: string;
+}): Promise<void> {
+  const scope = captureScope();
+  await serverApiFetch('/api/device-link/provider-shares/delegations/revoke', {
+    method: 'POST', body: input,
+    baseUrl: () => {
+      if (!scope.isCurrent()) throw new ProviderShareScopeChangedError();
+      return getClientEndpoint('deviceLinkApiBaseUrl');
+    },
+    timeoutMs: 15_000, cache: 'no-store',
+    logLabel: '/api/device-link/provider-shares/delegations/revoke',
+    redactErrorDetails: true, allowedRedactedErrorCodes: ALLOWED_REDACTED_CODES,
+  });
+}
+
+/** M verifies that the server accepted O's delegation before trusting a cross-account guest. */
+export async function checkProviderShareDelegation(input: {
+  shareId: string; memberId: string; guestDeviceId: string; executorDeviceId: string;
+}): Promise<{ active: boolean; ownerDeviceId?: string; expiresAt?: number; generation?: string }> {
+  const scope = captureScope();
+  const value = await serverApiFetch<{ active?: unknown; ownerDeviceId?: unknown;
+    expiresAt?: unknown; generation?: unknown }>(
+    '/api/device-link/provider-shares/delegations/check', {
+      method: 'POST', body: input,
+      baseUrl: () => {
+        if (!scope.isCurrent()) throw new ProviderShareScopeChangedError();
+        return getClientEndpoint('deviceLinkApiBaseUrl');
+      },
+      timeoutMs: 15_000, cache: 'no-store',
+      logLabel: '/api/device-link/provider-shares/delegations/check',
+      redactErrorDetails: true, allowedRedactedErrorCodes: ALLOWED_REDACTED_CODES,
+    });
+  if (value.active !== true || typeof value.ownerDeviceId !== 'string'
+    || typeof value.generation !== 'string' || !/^[0-9a-f-]{36}$/.test(value.generation)
+    || !Number.isSafeInteger(value.expiresAt) || (value.expiresAt as number) <= Date.now()) return { active: false };
+  return { active: true, ownerDeviceId: value.ownerDeviceId,
+    expiresAt: value.expiresAt as number, generation: value.generation };
+}
+
 /**
  * 供应商分享运行时的账号作用域：模式 + 数据所有者，不含代次。同一账号的投影修复会推进代次但不
  * 重连设备互联，不能因此让分享失效；换账号时数据所有者变化，且登出 / 换号会先停掉运行时。

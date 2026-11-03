@@ -139,9 +139,9 @@ export interface ThemeColors {
   statusAccent: string;
   /** 房主皇冠标识金色；与 Desktop --warning-fg 对齐，Light / Dark 均保持醒目。 */
   warningFg: string;
-  /** 账号额度条预警填充（剩余不足 30%）；仅额度图形使用，双模式同值。 */
+  /** 额度黄（剩余不超过 30%，@cindy/maker-shared/quota-level）；仅额度使用，双模式同值。 */
   quotaBarWarn: string;
-  /** 账号额度条紧张填充（剩余不超过 10%）；仅额度图形使用，双模式同值。 */
+  /** 额度红（剩余不超过 10%）#EF4444，与 Desktop --quota-bar-crit、Mac 面板、iPhone 组件同值。 */
   quotaBarCrit: string;
   /** 会话状态点 — 等待用户回复/选择(TapTap 蓝,对齐桌面 --card-status-awaiting 与灵动岛 needs-interaction) */
   statusAwaiting: string;
@@ -157,9 +157,11 @@ export interface ThemeColors {
   permAutoAccent: string;
   /**
    * 伙伴列表未读点(信息蓝 #417CDD,L=D 同值)。对齐桌面 `--bot-unread-bg`(DESIGN.md「Bot Unread Badge」):
-   * 表示 IM 未读语义,只用于伙伴列表行(伙伴与群聊)的未读点,不是 CTA、不是状态色,不得挪作他用。
+   * 表示 IM 未读语义,用于伙伴列表行(伙伴与群聊)及群内话题入口的未读提示,不是 CTA、不是状态色,不得挪作他用。
    */
   botUnread: string;
+  /** 话题内新回复分界线及标签；列表与摘要继续使用 botUnread。 */
+  threadUnreadDivider: string;
   /**
    * PR 已合并图标色(焦点蓝 #417CDD,L=D 同值)。对齐桌面 PR_STATUS_COLOR.merged = `--focus-ring`;
    * 只用于 PR 状态图标,不得挪作他用。其余 PR 状态复用 statusDone / statusError / textTertiary。
@@ -187,6 +189,9 @@ export interface ThemeColors {
    * 注意:侧栏/抽屉毛玻璃底色另有 surfaceTranslucentSidebar(light 近白),不受本 token 影响。
    */
   overlay: string;
+  /** 视频封面播放标记：恒深底与恒白前景，保证任意画面上的对比度。 */
+  mediaPlayBackground: string;
+  mediaPlayForeground: string;
   /** 素雅新建对话 FAB:dark 用柔白 #E6E6E6 而非 cta 近白,避免主入口在深底上过跳 */
   homeListFab: string;
   /** List FAB 描边:light 无描边(transparent),dark 按 301:1073 帧白色 hairline */
@@ -469,12 +474,13 @@ export const lightColors: ThemeColors = {
   statusAccent: '#EA6B17',
   warningFg: '#F3A115',
   quotaBarWarn: '#F3A115',
-  quotaBarCrit: '#D91F37',
+  quotaBarCrit: '#EF4444',
   statusAwaiting: '#19D2C1',
   statusError: '#D91F37',
   statusDone: '#2AAE5B',
   permAutoAccent: '#417CDD',
   botUnread: '#417CDD',
+  threadUnreadDivider: '#D91F37',
   prMerged: '#417CDD',
   errorText: '#0F0F0F',
   destructive: '#f43d3f',
@@ -484,6 +490,8 @@ export const lightColors: ThemeColors = {
   // overlay:遮罩双模式恒深(light 原 0.24 太浅近白;0.50 实机过重,用户定稿 0.35,2026-07-21)。
   // 侧栏/抽屉毛玻璃底色另有 surfaceTranslucentSidebar,不受影响。
   overlay: 'rgba(38, 38, 38, 0.35)',
+  mediaPlayBackground: 'rgba(0, 0, 0, 0.55)',
+  mediaPlayForeground: '#ffffff',
   // homeListFab:反相中性,不染品牌红(lead 裁决 2026-07-17:染红=扩张红名单,超 U8
   // 已批决策表范围;日后要红 FAB 须单独过用户关卡)。light 对齐 textPrimary / cta 近黑 #0F0F0F。
   homeListFab: '#0F0F0F',
@@ -563,12 +571,13 @@ export const darkColors: ThemeColors = {
   statusAccent: '#EA6B17',
   warningFg: '#F3A115',
   quotaBarWarn: '#F3A115',
-  quotaBarCrit: '#D91F37',
+  quotaBarCrit: '#EF4444',
   statusAwaiting: '#19D2C1',
   statusError: '#D91F37',
   statusDone: '#2AAE5B',
   permAutoAccent: '#417CDD',
   botUnread: '#417CDD',
+  threadUnreadDivider: '#FF667A',
   prMerged: '#417CDD',
   errorText: '#EDEDED',
   destructive: '#f43d3f',
@@ -576,6 +585,8 @@ export const darkColors: ThemeColors = {
   sharedTaskConfirmForeground: '#121212',
   errorBorder: '#8A8A8A',
   overlay: 'rgba(0, 0, 0, 0.45)',
+  mediaPlayBackground: 'rgba(0, 0, 0, 0.55)',
+  mediaPlayForeground: '#ffffff',
   // homeListFab:反相中性(lead 裁决,见 lightColors 注释);dark 用 #E6E6E6 柔白(比 cta 略收)。
   homeListFab: '#E6E6E6',
   homeListFabBorder: '#FFFFFF',
@@ -642,6 +653,8 @@ export const typeScale = {
   bodyLarge: 17,
   subtitle: 18,
   title: 20,
+  /** 2026-10-28 approved invitation V9 identity, paired with listTitle (28). */
+  inviteTitle: 22,
   headline: 24,
   largeTitle: 30,
   hero: 40,

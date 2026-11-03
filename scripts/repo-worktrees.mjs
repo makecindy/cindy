@@ -173,12 +173,14 @@ export function classifyWorktree(row) {
   // detached + 干净 = 临时检出(review-pr --detach 等),没有分支可推送/删除,
   // 不据此判断临时检出或个人构建是否仍有使用者。
   if (row.detached) return 'detached clean';
+  // 已有开放 PR 的在途分支仍优先展示为 active PR，upstream 读取失败不能掩盖它。
+  if (row.branch !== 'main' && row.pr?.state === 'OPEN') return 'active PR';
+  if (!row.inBase && row.upstream !== 'none' && row.aheadOfUpstream === null) return 'status unavailable';
   // main 本地领先 upstream(有未 push 的 commit)时不是干净基线,同样按未推送
   // 的活处理,不能藏进最低风险的 main clean。
   if (row.branch === 'main') {
     return (row.aheadOfUpstream ?? 0) > 0 ? 'local unpushed feature' : 'main clean';
   }
-  if (row.pr?.state === 'OPEN') return 'active PR';
   // 新任务的初始 HEAD 同样在基线里,祖先关系不能证明 owning session 已结束。
   if (row.inBase) return 'clean HEAD in base';
   if (row.pr) return `PR ${row.pr.state.toLowerCase()}`;

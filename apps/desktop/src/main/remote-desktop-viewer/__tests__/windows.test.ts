@@ -1,4 +1,5 @@
 import { EventEmitter } from 'node:events';
+import { powerMonitor } from 'electron';
 import { afterEach, expect, it, vi } from 'vitest';
 const fixture = vi.hoisted(() => ({
   windows: [] as any[],
@@ -9,6 +10,7 @@ const fixture = vi.hoisted(() => ({
 }));
 vi.mock('electron', () => ({
   BrowserWindow: { fromWebContents: () => null },
+  powerMonitor: new EventEmitter(),
   screen: { getDisplayMatching: () => ({ workArea: { x: 0, y: 0, width: 1920, height: 1080 } }) },
   clipboard: { readText: () => '', writeText: vi.fn() },
   ipcMain: { handle: (name: string, fn: Function) => fixture.handlers.set(name, fn) },
@@ -115,6 +117,7 @@ import { remoteInvoke } from '../../device-link/index';
 let manager: RemoteDesktopViewerWindows;
 afterEach(() => {
   manager?.reset();
+  powerMonitor.removeAllListeners();
   fixture.windows = [];
   fixture.calls = [];
   fixture.handlers.clear();
@@ -451,4 +454,26 @@ it('keeps the session through native hide/minimize, forwards visibility, and end
   await Promise.resolve();
   expect(call(REMOTE_VIEWER.STATE, win).active).toBe(false);
   expect(fixture.calls.filter((c) => c[2][0].op === 'stop')).toHaveLength(1);
+});
+
+// Unit: physical controller lock/sleep must retire viewer authority before async stop.
+it.each(['lock-screen', 'suspend'])('ends the remote desktop on local %s without automatic resume', async (signal) => {
+  const sender: any = { id: 100 };
+  manager = new RemoteDesktopViewerWindows((value) => value === sender);
+  manager.register();
+  manager.open(sender, { deviceId: 'a', name: 'Computer' });
+  const win = fixture.windows[0];
+  call(REMOTE_VIEWER.READY, win);
+  call(REMOTE_VIEWER.PRESENTED, win);
+  const { generation } = call(REMOTE_VIEWER.STATE, win);
+  vi.mocked(remoteInvoke).mockResolvedValueOnce({ ok: true, result: { lockOnExit: true, idleLock: true } });
+  await call(REMOTE_VIEWER.REQUEST, win, generation, { op: 'capabilities' });
+  await call(REMOTE_VIEWER.REQUEST, win, generation, { op: 'start', displayId: 'screen' });
+  powerMonitor.emit(signal);
+  expect(call(REMOTE_VIEWER.STATE, win).active).toBe(false);
+  await Promise.resolve();
+  await Promise.resolve();
+  expect(fixture.calls.map((args) => args[2][0])).toContainEqual({ op: 'stop', lease: 'lease-a', lockScreen: true });
+  powerMonitor.emit('unlock-screen');
+  expect(call(REMOTE_VIEWER.STATE, win).active).toBe(false);
 });

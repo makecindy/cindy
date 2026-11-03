@@ -50,6 +50,7 @@ vi.mock('../../maker-ipc/register.js', () => ({
   getTaskActionInputState: () => ({ key: 'owner-input', ownerInput: true, boundary: 'runtime-1' }),
   getTaskActionSession: () => undefined,
   confirmTaskAction: vi.fn(async () => true),
+  captureTaskActionPermissionRequest: vi.fn(async () => null),
 }));
 
 vi.mock('@cindy/mcps', () => ({

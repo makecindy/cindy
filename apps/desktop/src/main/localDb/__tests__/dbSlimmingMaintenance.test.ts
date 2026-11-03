@@ -366,7 +366,7 @@ describe('runDbSlimmingMaintenance', () => {
         list_message_count: null,
         context_tokens: 100,
         context_window: 200,
-        cleared_at: null,
+        cleared_at: 2_000,
         summary: 'summary',
         codex_plan_json: '{}',
         codex_history_has_product_prompt: 1,
@@ -386,6 +386,43 @@ describe('runDbSlimmingMaintenance', () => {
         list_message_count: 1,
         cleared_at: 50,
         codex_plan_json: '{}',
+      });
+    } finally {
+      db.close();
+    }
+  });
+
+  it('stamps cleared_at on archived tasks whose history was purged (#3709)', async () => {
+    createCleanupFixture();
+
+    await runDbSlimmingMaintenance({
+      userDataDir: tmpDir,
+      dbFilePath,
+      request: request({ beforeBytes: estimateDbFilesBytes(dbFilePath) }),
+      now: () => 3_000,
+      log,
+    });
+
+    const db = createBetterSqliteDatabase(dbFilePath, { fileMustExist: true });
+    try {
+      // The archived task fell inside the scan window and had its messages purged, so it
+      // must carry cleared_at (and stay archived) for the renderer to show the
+      // "history cleared" placeholder instead of a blank pane.
+      expect(
+        db.prepare("SELECT status, cleared_at FROM sessions WHERE id = 'archived-boundary'").get(),
+      ).toEqual({ status: 'archived', cleared_at: 2_000 });
+      expect(
+        db
+          .prepare("SELECT count(*) AS count FROM messages WHERE session_id = 'archived-boundary'")
+          .get(),
+      ).toEqual({ count: 0 });
+      // Archived tasks outside the window, or without messages, are not stamped.
+      expect(
+        db.prepare("SELECT cleared_at FROM sessions WHERE id = 'archived-new'").get(),
+      ).toEqual({ cleared_at: null });
+      // Active tasks are only touched when includeActiveTasks is set.
+      expect(db.prepare("SELECT cleared_at FROM sessions WHERE id = 'active-old'").get()).toEqual({
+        cleared_at: 50,
       });
     } finally {
       db.close();

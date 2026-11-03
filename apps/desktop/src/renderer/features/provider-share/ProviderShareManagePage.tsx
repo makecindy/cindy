@@ -1,3 +1,4 @@
+import { deviceDisplayName } from '@/lib/deviceName';
 import { ProviderShareVisibilitySection } from './ProviderShareVisibilitySection';
 import { SubscriptionFastSetting } from './SubscriptionFastSetting';
 import { RemoteModelAccessSection, RemoteModelAccessDialog } from './RemoteModelAccessSection';
@@ -375,7 +376,7 @@ export function ProviderShareManagePage({
 
       {deviceId && (
         <p className="mt-2 text-12 leading-[1.5] text-[var(--settings-section-desc)]">
-          {t('providerGroup.management.note', { device: selfDeviceName ?? deviceId })}
+          {t('providerGroup.management.note', { device: deviceDisplayName(deviceId ?? '', selfDeviceName) })}
         </p>
       )}
 

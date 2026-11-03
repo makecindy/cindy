@@ -8,9 +8,12 @@ const h = vi.hoisted(() => ({
   invoke: vi.fn(),
   openLink: vi.fn(async () => undefined),
   inputs: {} as Record<string, any>,
+  focus: vi.fn(),
+  onShow: undefined as undefined | (() => void),
   teammates: { rows: [] as any[], loading: false, failed: false },
   alert: vi.fn(),
   nativeMenu: true,
+  dark: false,
 }));
 
 vi.mock('expo-router', () => ({ Stack: { Toolbar: Object.assign(({ children }: any) => children, {
@@ -41,7 +44,8 @@ vi.mock('react-i18next', async (importOriginal) => ({
 vi.mock('lucide-react-native', () => ({ Plus: () => null, Check: () => null, Users: () => null }));
 vi.mock('@/theme', async () => {
   const tokens = await import('@/theme/tokens');
-  return { ...tokens, useThemedStyles: () => ({}), useTheme: () => ({ colors: {} }) };
+  const colors = () => h.dark ? tokens.darkColors : tokens.lightColors;
+  return { ...tokens, useThemedStyles: (make: any) => make(colors()), useTheme: () => ({ colors: colors() }) };
 });
 vi.mock('@/hooks/useReduceMotion', () => ({ useReduceMotionEnabled: () => true }));
 vi.mock('@/auth/AuthContext', () => ({ useAuth: () => ({ user: { id: 'owner' }, accountGeneration: 1 }) }));
@@ -50,7 +54,7 @@ vi.mock('@/utils/useMinuteNow', () => ({ useMinuteNow: () => 0 }));
 vi.mock('@/session/sessionList', () => ({ formatRemoteSessionSidebarTime: () => '9:41' }));
 vi.mock('@/session/SessionRightSpinner', () => ({ SessionRightSpinner: ({ testID }: any) => el('i', { 'data-testid': testID }) }));
 vi.mock('@/components/AppText', () => ({
-  Text: ({ children, testID }: any) => el('span', { 'data-testid': testID }, children),
+  Text: ({ children, testID, style, accessibilityRole }: any) => el('span', { 'data-testid': testID, role: accessibilityRole, style: { color: style?.color } }, children),
   TextInput: ({ testID, ...props }: any) => { h.inputs[testID] = props; return el('input', { 'data-testid': testID, value: props.value ?? '', readOnly: true }); },
 }));
 vi.mock('@/session/CompanionSettingsRow', () => ({ CompanionSettingsRow: (props: any) => el('button', { 'data-testid': props.testID, onClick: props.onPress }, props.label) }));
@@ -68,10 +72,12 @@ vi.mock('@/platform/chrome/NativePullDownMenu', () => ({
   },
 }));
 vi.mock('@/session/CompanionSheet', () => ({
-  CompanionSheet: ({ visible, children, onClosed, testID }: any) => {
+  CompanionSheet: ({ visible, children, onClosed, onShow, testID, leadingAction, trailingAction }: any) => {
+    h.onShow = onShow;
     const was = useRef(visible);
     useEffect(() => { if (was.current && !visible) onClosed?.(); was.current = visible; }, [visible]);
-    return visible ? el('div', { 'data-testid': testID }, children) : null;
+    const action = (item: any) => item ? el('button', { 'data-testid': item.testID, disabled: item.disabled || item.busy, onClick: item.onPress }, item.label) : null;
+    return visible ? el('div', { 'data-testid': testID }, el('header', null, action(leadingAction), action(trailingAction)), children) : null;
   },
 }));
 vi.mock('@/session/HomeHeaderGlassButton', () => ({
@@ -85,6 +91,8 @@ vi.mock('@/session/BotGroupAvatars', () => ({
   useBotGroupIdentities: () => (botId: string, fallbackName = '') => ({ botId, name: fallbackName || botId }),
 }));
 vi.mock('@/session/useHostTeammates', () => ({ useHostTeammates: () => h.teammates }));
+// This suite exercises host-backed creation; cloud roster behavior is covered by BotGroupCreateSheet.test.tsx.
+vi.mock('@/session/useBotGroupSettingsManagement', () => ({ useCloudGroupCandidates: () => ({ rows: [], loading: false, failed: false }) }));
 vi.mock('@/session/useTeammateRoster', () => ({ TEAMMATE_COLLECTION_ID: 'teammates' }));
 
 import { BotGroupListRow } from '@/session/BotGroupList';
@@ -121,7 +129,7 @@ async function click(id: string) {
 }
 
 beforeEach(() => {
-  vi.clearAllMocks(); h.inputs = {}; h.nativeMenu = true;
+  vi.clearAllMocks(); h.inputs = {}; h.nativeMenu = true; h.dark = false;
   h.teammates = { rows: [teammate('mimi', '咪咪'), teammate('abu', '阿布'), teammate('xiaoman', '小满')], loading: false, failed: false };
   node = document.createElement('div'); root = createRoot(node);
 });
@@ -139,16 +147,16 @@ describe('group row', () => {
     return onPress;
   }
 
-  it('shows member avatars, the host’s localized preview without Markdown, and a working state in the time slot', async () => {
+  it('shows member avatars, the host’s localized preview without Markdown, and a working dot on the avatar', async () => {
     const onPress = await render();
     const fresh = byId('botGroups.item.pc.g-new')!;
     const done = byId('botGroups.item.mac.g-old')!;
     expect(fresh.textContent).toContain('咪咪正在安排…');
     expect(done.textContent).toContain('阿布：写好了');
     expect(done.textContent).not.toContain('**');
-    expect(fresh.querySelector('[data-testid="companion.row.working"]')).not.toBeNull();
-    expect(fresh.querySelector('[data-testid="duo"]')?.getAttribute('data-working')).toBe('true');
-    expect(done.querySelector('[data-testid="companion.row.working"]')).toBeNull();
+    expect(fresh.querySelector('[data-testid="teammate.status.running"]')).not.toBeNull();
+    expect(fresh.querySelector('[data-testid="duo"]')?.getAttribute('data-working')).toBe('false');
+    expect(done.querySelector('[data-testid="teammate.status.running"]')).toBeNull();
     expect(done.textContent).toContain('9:41');
     expect(done.querySelector('[data-testid="duo"]')?.textContent).toBe('咪咪+阿布');
     await click('botGroups.item.mac.g-old');
@@ -160,7 +168,7 @@ describe('group row', () => {
     const offline = byId('botGroups.item.pc.g-new')!;
     expect(offline.disabled).toBe(true);
     expect(offline.textContent).toContain('devices.resources.hostOffline');
-    expect(offline.querySelector('[data-testid="companion.row.working"]')).toBeNull();
+    expect(offline.querySelector('[data-testid="teammate.status.running"]')).toBeNull();
     expect(offline.querySelector('[data-testid="duo"]')?.getAttribute('data-working')).toBe('false');
   });
 });
@@ -175,7 +183,7 @@ describe('create from the home teammate section + menu', () => {
     return onGroupCreated;
   }
 
-  it('offers 新建伙伴 and 新建群聊, creates with 2–6 teammates in list order, then opens it after the sheet closes', async () => {
+  it('offers 新建伙伴 and 新建群聊, creates with teammates in list order, then opens it after the sheet closes', async () => {
     const onGroupCreated = await render();
     const titles = [...node.querySelectorAll('[data-testid^="teammates.createMenu.action."]')].map((entry) => entry.textContent);
     expect(titles).toEqual(['devices.companions.createTeammate', 'groupChat.create.title']);
@@ -183,7 +191,7 @@ describe('create from the home teammate section + menu', () => {
     expect(byId('botGroup.create')).not.toBeNull();
     await click('botGroup.create.submit');
     expect(node.textContent).toContain('groupChat.create.nameRequired');
-    expect(node.textContent).toContain('groupChat.create.minMembers(min=2)');
+    expect(node.textContent).not.toContain('groupChat.create.minMembers');
     expect(h.invoke).not.toHaveBeenCalled();
     await act(async () => { h.inputs['botGroup.create.name'].onChangeText('  官网  '); });
     // Equal timestamps now have a stable identity tie-breaker. Select in the
@@ -207,6 +215,64 @@ describe('create from the home teammate section + menu', () => {
     expect(onGroupCreated).toHaveBeenCalledWith(mac, 'g9');
   });
 
+  // Regression: the real create sheet used to block 0/1 selected bots and render
+  // required-name errors in neutral text. Existing coverage only exercised 2 bots.
+  // Tier: unit (rendered form + outgoing remote-resource request, no network).
+  it.each([0, 1])('creates with %i selected teammates and no minimum-count notice', async (count) => {
+    if (count === 0) h.teammates.rows = [];
+    const onGroupCreated = await render();
+    await click('teammates.createMenu.action.group:mac');
+    expect(node.textContent).not.toContain('groupChat.create.description');
+    expect(node.textContent).not.toContain('groupChat.create.computerNote');
+    expect(node.textContent).not.toContain('groupChat.create.notEnoughBots');
+    await act(async () => { h.inputs['botGroup.create.name'].onChangeText('  官网  '); });
+    if (count) await click('botGroup.create.member.abu');
+    h.invoke.mockResolvedValueOnce({ effects: [
+      { kind: 'navigate', target: { kind: 'resource', ref: { collectionId: 'bot-groups', kind: 'bot-group', id: 'g9' } } },
+    ] });
+    await click('botGroup.create.submit');
+    expect(h.invoke.mock.calls[0]?.[2][0]).toMatchObject({
+      collectionId: 'bot-groups', actionId: 'create', input: { name: '官网', botIds: count ? ['abu'] : [] },
+    });
+    expect(onGroupCreated).toHaveBeenCalledWith(mac, 'g9');
+  });
+
+  it.each([false, true])('shows a red required-name error and clears it after correction (dark=%s)', async (dark) => {
+    h.dark = dark;
+    const { lightColors, darkColors } = await import('@/theme/tokens');
+    await render();
+    await click('teammates.createMenu.action.group:mac');
+    await act(async () => { h.inputs['botGroup.create.name'].onChangeText('   '); });
+    await click('botGroup.create.submit');
+    const error = node.querySelector('[role="alert"]') as HTMLElement;
+    expect(error?.textContent).toBe('groupChat.create.nameRequired');
+    const expected = document.createElement('span');
+    expected.style.color = (dark ? darkColors : lightColors).statusError;
+    expect(error.style.color).toBe(expected.style.color);
+    expect(h.invoke).not.toHaveBeenCalled();
+    await act(async () => { h.inputs['botGroup.create.name'].onChangeText('官网'); });
+    expect(node.querySelector('[role="alert"]')).toBeNull();
+  });
+
+  // #7658: six selected is a cap, not a truncation of the available roster.
+  it('focuses the name and can select a teammate beyond the sixth row', async () => {
+    h.teammates.rows = Array.from({ length: 12 }, (_, index) => teammate(`bot-${index}`, `Bot ${index}`));
+    await render();
+    await click('teammates.createMenu.action.group:mac');
+    h.inputs['botGroup.create.name'].ref.current = { focus: h.focus };
+    expect(h.focus).not.toHaveBeenCalled();
+    h.onShow?.();
+    expect(h.focus).toHaveBeenCalledOnce();
+    expect(node.querySelectorAll('[data-testid^="botGroup.create.member."]')).toHaveLength(12);
+    await click('botGroup.create.member.bot-11');
+    await act(async () => { h.inputs['botGroup.create.name'].onChangeText('More teammates'); });
+    h.invoke.mockResolvedValueOnce({ effects: [
+      { kind: 'navigate', target: { kind: 'resource', ref: { collectionId: 'bot-groups', kind: 'bot-group', id: 'g9' } } },
+    ] });
+    await click('botGroup.create.submit');
+    expect(h.invoke.mock.calls[0]?.[2][0].input.botIds).toEqual(['bot-11']);
+  });
+
   it('shows the host’s reason when it refuses', async () => {
     await render();
     await click('teammates.createMenu.action.group:mac');
@@ -223,7 +289,8 @@ describe('create from the home teammate section + menu', () => {
     const hosts = [...node.querySelectorAll('[data-testid^="teammates.createMenu.action.group:"]')].map((entry) => entry.textContent);
     expect(hosts).toEqual(['PC', 'Mac']);
     await click('teammates.createMenu.action.group:pc');
-    expect(node.textContent).toContain('groupChat.create.computerNote(deviceName=PC)');
+    expect(byId('botGroup.create')).not.toBeNull();
+    expect(node.textContent).not.toContain('groupChat.create.computerNote');
     expect(onGroupCreated).not.toHaveBeenCalled();
   });
 
@@ -235,7 +302,8 @@ describe('create from the home teammate section + menu', () => {
     await click('teammates.createChooser.group.pc');
     // The create sheet opens only after the chooser has closed.
     expect(byId('teammates.createChooser')).toBeNull();
-    expect(node.textContent).toContain('groupChat.create.computerNote(deviceName=PC)');
+    expect(byId('botGroup.create')).not.toBeNull();
+    expect(node.textContent).not.toContain('groupChat.create.computerNote');
   });
 
   it('keeps the single-purpose teammate button when no computer supports group chats', async () => {

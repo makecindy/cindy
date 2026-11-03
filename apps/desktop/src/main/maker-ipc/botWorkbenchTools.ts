@@ -54,7 +54,7 @@ export async function resolveWorkbenchCaller(callerSessionId: string): Promise<W
   if (row.sessionStatus !== 'active' || row.profileStatus !== 'active' || row.linkArchivedAt !== null) {
     return { ok: false, errorCode: 'BOT_SESSION_INACTIVE', message: '伙伴或它的主任务已停用' };
   }
-  if (row.role !== 'canonical' && row.role !== 'thread') {
+  if (row.role !== 'canonical' && row.role !== 'thread' && row.role !== 'routine') {
     return {
       ok: false,
       errorCode: 'BOT_MAIN_TASK_REQUIRED',
@@ -181,7 +181,7 @@ async function resolveBotTaskCreator(callerSessionId: string): Promise<string | 
     .innerJoin(botProfiles, eq(botProfiles.id, botSessionLinks.botId))
     .where(and(
       eq(botSessionLinks.sessionId, callerSessionId),
-      inArray(botSessionLinks.role, ['canonical', 'thread', 'channel', 'group']),
+      inArray(botSessionLinks.role, ['canonical', 'thread', 'channel', 'group', 'routine']),
       isNull(botSessionLinks.archivedAt),
       eq(sessions.source, 'bot'),
       eq(sessions.status, 'active'),

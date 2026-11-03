@@ -1,8 +1,10 @@
+import { historyCompanionJson, parseHistoryCompanion } from './historyCompanion';
 import { normalizeTaskTags } from '@cindy/maker-shared';
 /** Shared database reads for local IPC, remote IPC and internal callers. */
-import { and, desc, eq, inArray, sql, type SQL } from 'drizzle-orm';
+import { and, desc, eq, inArray, isNull, or, sql, type SQL } from 'drizzle-orm';
 import type { DbClient } from './client/DbClient';
 import { sessions } from './schema';
+import { DESKTOP_TASK_LIST_SESSION_SOURCES } from '../../shared/sessionSource';
 import { LIST_PREVIEW_EXTRACT_SQL, LATEST_VISIBLE_PREVIEW_FILTER_SQL } from './sessionListProjection';
 import { sessionToCamel, type SessionRowWithCount } from './mapper';
 import { projectSessionContextWindow, type ContextWindowSession } from '../../shared/sessionContextWindow';
@@ -13,6 +15,20 @@ import { projectSessionContextWindow, type ContextWindowSession } from '../../sh
 // Identifier fragments retain the outer scope in both single-table and joined reads.
 const OUTER_SESSION_ID_SQL = sql`${sql.identifier('sessions')}.${sql.identifier('id')}`;
 const OUTER_SESSION_CLEARED_AT_SQL = sql`${sql.identifier('sessions')}.${sql.identifier('cleared_at')}`;
+
+/** Main task list: exact teammate lanes join ordinary sources; private chat lanes keep their own entry. */
+export function ordinaryTaskListFilter(): SQL | undefined {
+  return and(
+    or(inArray(sessions.source, DESKTOP_TASK_LIST_SESSION_SOURCES),
+      and(eq(sessions.source, 'bot'), sql`EXISTS (
+        SELECT 1 FROM bot_session_links task_link
+        JOIN bot_profiles task_bot ON task_bot.id = task_link.bot_id
+        WHERE task_link.session_id = ${OUTER_SESSION_ID_SQL} AND task_link.role IN ('routine', 'channel')
+          AND task_bot.status <> 'deleting' AND (task_bot.hidden_at IS NULL OR task_bot.hidden_at = 0)
+      )`)),
+    isNull(sessions.hiddenAt),
+  );
+}
 
 /**
  * list / get / update 共用的 messageCount：标量子查询。口径是该会话的全部 messages 行数，
@@ -79,11 +95,13 @@ export interface SessionListRow {
   latestMessageExtract: string | null;
   latestMessageRole: string | null;
   tagsJson?: string;
+  companionJson?: string | null;
 }
 
 function sessionReadSelection() {
   return {
     session: sessions,
+    companionJson: historyCompanionJson(OUTER_SESSION_ID_SQL).as('companion_json'),
     tagsJson:
       sql<string>`(SELECT coalesce(json_group_array(json_object('id',t.id,'name',t.name,'nameCustomized',json(CASE WHEN t.name_customized THEN 'true' ELSE 'false' END),'color',t.color,'favoriteOrder',t.favorite_order,'sortOrder',t.sort_order,'revision',t.revision)), '[]') FROM task_tags t JOIN session_task_tags st ON st.tag_id=t.id WHERE st.session_id=${OUTER_SESSION_ID_SQL})`.as(
         'tags_json',
@@ -96,6 +114,7 @@ function sessionReadSelection() {
 
 export function flattenSessionReadRow(row: SessionListRow): SessionRowWithCount {
   return { ...row.session,
+    companion: parseHistoryCompanion(row.companionJson),
     tags: normalizeTaskTags(JSON.parse(row.tagsJson ?? '[]')), messageCount: row.messageCount,
     latestMessageExtract: row.latestMessageExtract, latestMessageRole: row.latestMessageRole };
 }

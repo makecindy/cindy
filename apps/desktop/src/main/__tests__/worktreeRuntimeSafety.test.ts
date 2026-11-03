@@ -496,9 +496,10 @@ describe('worktree runtime evidence and physical locks', () => {
       const old = new Date(Date.now() - 2 * hourMs);
       await fs.utimes(lease.file, old, old);
       await vi.advanceTimersByTimeAsync(5 * 60_000);
-      let mtimeMs = old.getTime();
-      for (let check = 0; check < 50 && mtimeMs === old.getTime(); check++) mtimeMs = (await fs.stat(lease.file)).mtimeMs;
-      expect(mtimeMs).toBeGreaterThan(Date.now() - 60_000);
+      // Heartbeat writes are asynchronous; a rounded old mtime is not evidence of a refresh.
+      await vi.waitFor(async () => {
+        expect((await fs.stat(lease.file)).mtimeMs).toBeGreaterThan(Date.now() - 60_000);
+      });
       await releaseWorktreeRuntimeLease(lease);
     });
 
