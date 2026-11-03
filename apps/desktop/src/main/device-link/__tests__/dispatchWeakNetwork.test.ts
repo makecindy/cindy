@@ -20,6 +20,10 @@ import {
   DeviceLinkError,
   DEVICE_LINK_CAPABILITY_HISTORY_VIEW_V1,
   DEVICE_LINK_CAPABILITY_BACKGROUND_LINK_V1,
+  CONTROLLER_CAPABILITY_MAKER_EVENT_BATCH_V1,
+  CONTROLLER_CAPABILITY_SESSION_TEXT_SNAPSHOT_V1,
+  MAKER_EVENT_BATCH_CHANNEL,
+  SESSION_SYNC_CHANNEL,
   DL_SUBSCRIBE_CHANNEL,
   INVOKE_TIMEOUT_OVERRIDES_MS,
   PROTOCOL_VERSION,
@@ -79,6 +83,8 @@ import {
   setControllersChangedListener,
   setOrdinaryPeerLinkAcceptedListener,
   setDispatchPresenceOfflineCheck,
+  setSessionTextSnapshotReader,
+  pushSessionActivityToController,
   wireInboundDispatch,
   hasRemoteInvokeWorkForPeer,
 } from '../dispatch';
@@ -147,7 +153,9 @@ class DispatchTestWs {
   }
 
   push(envelope: Envelope): void {
-    this.emit('message', { toString: () => JSON.stringify(envelope) });
+    const deliver = () => this.emit('message', { toString: () => JSON.stringify(envelope) });
+    if (this.relay.asyncDelivery) queueMicrotask(deliver);
+    else deliver();
   }
 
   open(): void {
@@ -160,11 +168,17 @@ class DispatchTestWs {
 }
 
 class DispatchTestRelay {
-  constructor(private readonly asyncDelivery = false) {}
   private readonly sockets = new Map<string, DispatchTestWs>();
   private holdPredicate: ((senderId: string, envelope: Envelope) => boolean) | null = null;
   private readonly held: Array<{ senderId: string; envelope: Envelope }> = [];
   readonly offline = new Set<string>();
+
+  constructor(readonly asyncDelivery = false) {}
+
+  disconnect(deviceId: string): void {
+    this.offline.add(deviceId);
+    this.sockets.get(deviceId)?.close(1006, 'test relay loss');
+  }
 
   makeWebSocket(deviceId: string): DispatchTestWs {
     const socket = new DispatchTestWs(this, deviceId);
@@ -232,7 +246,8 @@ class DispatchTestRelay {
 }
 
 function makeDispatchTestClient(relay: DispatchTestRelay, deviceId: string,
-  options: Pick<ConstructorParameters<typeof DeviceLinkClient>[0], 'directRuntime' | 'isPeerBusy'> = {}): DeviceLinkClient {
+  options: Pick<ConstructorParameters<typeof DeviceLinkClient>[0], 'directRuntime' | 'isPeerBusy' | 'retainDirectPathsOnRelayLoss'> = {}): DeviceLinkClient {
+  const continuity = options.retainDirectPathsOnRelayLoss === true;
   return new DeviceLinkClient({
     ...options,
     getWsUrl: () => 'ws://test/api/device-link/ws',
@@ -246,9 +261,9 @@ function makeDispatchTestClient(relay: DispatchTestRelay, deviceId: string,
     }),
     createWebSocket: () => relay.makeWebSocket(deviceId) as never,
     timing: {
-      reconnectBaseMs: 5,
-      reconnectMaxMs: 20,
-      pingIntervalMs: 60_000,
+      reconnectBaseMs: continuity ? 1_000_000_000 : 5,
+      reconnectMaxMs: continuity ? 1_000_000_000 : 20,
+      pingIntervalMs: continuity ? 1_000_000_000 : 60_000,
       pongMissLimit: 4,
       requestTimeoutMs: 2_000,
     },
@@ -885,6 +900,94 @@ describe('[6] active controller 生命周期与故障半径', () => {
       expect(target.getPeerPath('d-waiting')).toBe('direct');
     } finally { finish?.({ compacted: true }); await pump(); clients.forEach(client => client.stop()); unbind(); invokeRegistry.reset(); }
   });
+  // #8480 P1: the old mock omitted canSendPush and hid its relay-online gate.
+  // Unit: authenticated real clients + production dispatch must deliver activity,
+  // metadata, text batches and congestion-repair snapshots over the retained path.
+  it.each(['activity', 'patch', 'text', 'snapshot'] as const)(
+    'delivers retained group %s through real push admission while relay is offline', async (kind) => {
+      const relay = new DispatchTestRelay(true);
+      const target = makeDispatchTestClient(relay, 'executor', { retainDirectPathsOnRelayLoss: true });
+      const controller = makeDispatchTestClient(relay, 'group-owner', { retainDirectPathsOnRelayLoss: true });
+      const other = makeDispatchTestClient(relay, 'other-owner', { retainDirectPathsOnRelayLoss: true });
+      const delivered: Array<{ channel: string; payload: unknown }> = [];
+      controller.onFrame(env => {
+        if (env.kind === 'push') delivered.push(env.payload as { channel: string; payload: unknown });
+      });
+      const unwire = wireInboundDispatch(target);
+      __testing.setActiveClient(target);
+      const offStatus = target.onStatusChange(status => {
+        if (status !== 'online') deactivateAllControllers('relay-disconnected', 'same-account',
+          id => target.hasOfflineDirectPath(id));
+      });
+      const pump = () => vi.advanceTimersByTimeAsync(1);
+      const handles: Array<ReturnType<DeviceLinkClient['attachDirectPath']>> = [];
+      let hold = false;
+      const held: string[] = [];
+      const capabilities = [CONTROLLER_CAPABILITY_MAKER_EVENT_BATCH_V1, CONTROLLER_CAPABILITY_SESSION_TEXT_SNAPSHOT_V1];
+      try {
+        target.start(); controller.start(); other.start(); await pump();
+        const openings = Promise.all([controller, other].map(c => c.openLink('executor', {
+          controllerName: 'Group', protocolVersion: 1, appVersion: '1',
+        })));
+        await pump(); await openings;
+        const subscribing = Promise.all([controller, other].map(c => c.invoke('executor', {
+          channel: DL_SUBSCRIBE_CHANNEL,
+          args: [{ topics: ['sessions', 'session:s1'], controllerName: 'Group', capabilities }],
+        })));
+        await pump(); await subscribing;
+        handles[0] = target.attachDirectPath('group-owner', {
+          send: text => { if (hold) held.push(text); else queueMicrotask(() => handles[1].receive(text)); },
+          close: () => { handles[0]?.closed(); handles[1]?.closed(); },
+        });
+        handles[1] = controller.attachDirectPath('executor', {
+          send: text => queueMicrotask(() => handles[0].receive(text)),
+          close: () => { handles[0]?.closed(); handles[1]?.closed(); },
+        });
+        pushSessionActivityToController('group-owner', { sessionId: 's1', isTurnRunning: true });
+        await pump();
+        expect(delivered).toContainEqual({ channel: 'local-db:sessions:activity', payload: { sessionId: 's1', isTurnRunning: true } });
+        delivered.length = 0;
+        relay.disconnect('executor');
+        expect(target.hasOfflineDirectPath('group-owner')).toBe(true);
+        expect(subscriptions.getControllersForTopic('sessions')).toEqual(['group-owner']);
+        const delta = { sessionId: 's1', persistId: 'p1', event: {
+          type: 'text', source: 'codex', data: { text: 'retained suffix', isFinal: false },
+        } };
+        const snapshot = { ...delta, event: { ...delta.event, data: {
+          text: 'whole retained prefix', isFinal: false, isFullText: true,
+        } } };
+        setSessionTextSnapshotReader(() => snapshot);
+        if (kind === 'activity') pushSessionActivityToController('group-owner', { sessionId: 's1', isTurnRunning: false });
+        else if (kind === 'patch') tapWindowBroadcast('local-db:sessions:patched', { sessionId: 's1', patch: { title: 'Retained task' } });
+        else {
+          if (kind === 'snapshot') {
+            // Fill the real reliable window; the skipped suffix must be repaired
+            // by a snapshot once ACKs drain it, even without relay recovery.
+            hold = true;
+            for (let i = 0; i < 2 * __testing.sessionActivityWindowSoftCap; i++) target.sendPush('group-owner', 'test:occupy', { i });
+          }
+          tapWindowBroadcast('maker:event', delta);
+          await vi.advanceTimersByTimeAsync(120); // Existing production text-batch window.
+          if (kind === 'snapshot') expect(delivered.some(p => p.channel === MAKER_EVENT_BATCH_CHANNEL)).toBe(false);
+          hold = false;
+          for (const text of held.splice(0)) handles[1].receive(text);
+        }
+        await vi.advanceTimersByTimeAsync(500);
+        const expected = kind === 'activity'
+          ? { channel: 'local-db:sessions:activity', payload: { sessionId: 's1', isTurnRunning: false } }
+          : kind === 'patch' ? { channel: 'local-db:sessions:patched', payload: { sessionId: 's1', patch: { title: 'Retained task' } } }
+            : kind === 'text' ? { channel: MAKER_EVENT_BATCH_CHANNEL, payload: { sessionId: 's1', events: [delta] } }
+              : { channel: SESSION_SYNC_CHANNEL, payload: { ...snapshot, resyncRequired: false } };
+        expect(delivered.filter(p => p.channel === expected.channel)).toEqual([expected]);
+        expect(__testing.sessionActivityStageSize('group-owner')).toBe(0);
+        expect(target.getStatus()).not.toBe('online');
+        expect(target.getReliableSendQueueDepth('group-owner')).toBe(0);
+      } finally {
+        offStatus(); unwire(); target.stop(); controller.stop(); other.stop();
+      }
+    },
+  );
+
   it('真实双 peer 链路中 A 的 DEVICE_OFFLINE 不清 B，B 的在途请求仍能完成', async () => {
     const lost = vi.spyOn(remoteDesktop, 'signalingLost');
     const stop = vi.spyOn(remoteDesktop, 'stop');

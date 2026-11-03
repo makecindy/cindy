@@ -1312,9 +1312,9 @@ export class DeviceLinkClient {
     return !!peer?.reliable && !this.isPeerSendReady(peer);
   }
 
-  /** Mirror admission only: listing-only/legacy peers need no bidirectional link. */
+  /** Mirror admission uses the existing authorized path; reliable peers still need send readiness. */
   canSendPush(dst: string): boolean {
-    if (this.status !== 'online') return false;
+    if (this.status !== 'online' && !this.hasOfflineDirectPath(dst)) return false;
     const peer = this.peerTransport.get(dst);
     return !peer || !peer.reliable || this.isPeerSendReady(peer);
   }
@@ -4813,17 +4813,21 @@ export class DeviceLinkClient {
     ackSeq: number,
     linkRequestId?: string,
   ): boolean {
-    const pendingConfirmation = this.peerTransport.get(dst)?.outboundLinkConfirmationAck;
+    const peer = this.peerTransport.get(dst);
+    // Explicit handshake confirmations remain relay-only. Once data arrives on
+    // the authenticated direct stream, its ordinary cumulative ACK must return
+    // there too; retained handshake retry metadata must not force it onto relay.
+    const direct = !linkRequestId && peer?.lastInboundPath === 'direct'
+      ? this.usableDirectPath(dst)
+      : undefined;
+    const pendingConfirmation = peer?.outboundLinkConfirmationAck;
     const effectiveLinkRequestId = linkRequestId ?? (
-      pendingConfirmation?.streamId === streamId
+      !direct && pendingConfirmation?.streamId === streamId
         ? pendingConfirmation.requestId
         : undefined
     );
     const ack = makeTransportAck(dst, streamId, ackSeq, effectiveLinkRequestId);
     // 累计 ACK 原路返回；链路确认 ACK 属于控制面，始终走 relay。
-    const direct = !effectiveLinkRequestId && this.peerTransport.get(dst)?.lastInboundPath === 'direct'
-      ? this.usableDirectPath(dst)
-      : undefined;
     if (direct) {
       try {
         direct.send(JSON.stringify(ack));

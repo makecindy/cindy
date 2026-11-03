@@ -11634,6 +11634,8 @@ describe('bounded ordinary direct continuity', () => {
       sockets.mock.results.find(r => r.value.ownerId === 'executor')!.value.push(presence('group-owner', false));
       expect(owner.hasOfflineDirectPath('executor')).toBe(true);
       expect(executor.hasOfflineDirectPath('group-owner')).toBe(true);
+      expect(owner.canSendPush('executor')).toBe(true);
+      expect(executor.canSendPush('group-owner')).toBe(true);
       await expect(owner.openLink('executor', { controllerName: 'New offline admission', protocolVersion: 1, appVersion: '1' }))
         .rejects.toMatchObject({ code: 'NOT_CONNECTED' });
       const pending = [owner.invoke('executor', { channel: 'maker:remote-agent:v1', args: [{ op: 'poll', runId: 'group-run' }] }),
@@ -11645,6 +11647,8 @@ describe('bounded ordinary direct continuity', () => {
       expect(sibling.isOpen()).toBe(true);
       expect(owner.getStatus()).not.toBe('online');
       expect(reliableKinds(relay.deliveredTo.get('executor'), 'invoke')).toBe(0);
+      expect(owner.getReliableSendQueueDepth('executor')).toBe(0);
+      expect(executor.getReliableSendQueueDepth('group-owner')).toBe(0);
     } finally { owner.stop(); executor.stop(); other.stop(); vi.useRealTimers(); }
   });
 
@@ -11760,6 +11764,7 @@ describe('bounded ordinary direct continuity', () => {
       await vi.advanceTimersByTimeAsync(10 * 60_000);
       expect(owner.hasOfflineDirectPath('executor')).toBe(false);
       expect(direct.isOpen()).toBe(false);
+      expect(owner.canSendPush('executor')).toBe(false);
       await expect(owner.invoke('executor', { channel: 'maker:remote-agent:v1', args: [{ op: 'poll' }] }))
         .rejects.toMatchObject({ code: 'NOT_CONNECTED' });
     } finally { owner.stop(); executor.stop(); vi.useRealTimers(); }
@@ -11786,6 +11791,7 @@ describe('bounded ordinary direct continuity', () => {
       else direct.handles.left!.closed();
       expect(owner.hasOfflineDirectPath('executor')).toBe(false);
       expect(direct.isOpen()).toBe(false);
+      expect(owner.canSendPush('executor')).toBe(false);
       await vi.advanceTimersByTimeAsync(1);
       expect(executor.getPeerPath('group-owner')).toBe('relay');
     } finally { owner.stop(); executor.stop(); vi.useRealTimers(); }
