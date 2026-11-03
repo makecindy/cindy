@@ -883,6 +883,8 @@ describe('BotGroupChatView', () => {
     for (const button of within(header).getAllByRole('button')) {
       await user.click(trigger);
       const panel = screen.getByRole('complementary');
+      // 键盘模态：pointer 交互之后的程序化焦点不再弹提示（见 tooltip.tsx）。
+      fireEvent.keyDown(document.body, { key: 'Tab' });
       button.focus();
       expect(panel.parentElement?.contains(button)).toBe(false);
       // Header icon buttons with a tooltip: its Escape closes the tooltip first.
