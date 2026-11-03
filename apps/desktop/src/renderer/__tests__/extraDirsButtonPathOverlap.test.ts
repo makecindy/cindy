@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import {
   __extraDirsPathOverlapForTesting,
+  addRecentWritableDir,
   countUserExtraDirs,
   extraDirDisplayLabel,
   LIBRARY_EXTRA_DIR_SLOT_PREFIX,
@@ -124,6 +125,59 @@ describe('pickAndAddExtraDir', () => {
         cancelText: 'cancel',
       },
     });
+    expect(onChange).not.toHaveBeenCalled();
+  });
+});
+
+describe('添加目录二级页的保存与留页依据', () => {
+  // 取消系统选择器时二级页要留着，ChatInput 靠返回值决定关不关面板。
+  it('选择器取消时返回 false 且不保存', async () => {
+    vi.stubGlobal('window', {
+      electronAPI: { dialog: { showOpenDirectory: vi.fn(async () => ({ success: true, path: null })) } },
+    });
+    const onChange = vi.fn();
+    await expect(pickAndAddExtraDir({
+      extraDirs: [],
+      workingDir: '/workspace',
+      writableGrantScope: 'task',
+      onChange,
+      confirm: vi.fn(async () => true),
+      parentDirectoryConfirm: {
+        title: 'title',
+        description: (path) => path,
+        confirmText: 'confirm',
+        cancelText: 'cancel',
+      },
+    })).resolves.toBe(false);
+    expect(onChange).not.toHaveBeenCalled();
+  });
+
+  it('最近目录先由 Main 授权再保存；授权被拒时不保存', async () => {
+    const authorizeRecentWritableDirectory = vi.fn(async () => ({ success: true as const }));
+    vi.stubGlobal('window', { electronAPI: { dialog: { authorizeRecentWritableDirectory } } });
+    const onChange = vi.fn();
+    await addRecentWritableDir({
+      path: 'D:/work/ai-gateway',
+      writableDirs: ['/work/refs'],
+      writableGrantScope: 'task',
+      onChange,
+    });
+    expect(authorizeRecentWritableDirectory).toHaveBeenCalledWith({
+      directory: 'D:/work/ai-gateway',
+      writableGrantScope: 'task',
+    });
+    expect(onChange).toHaveBeenCalledWith(['/work/refs', 'D:/work/ai-gateway']);
+
+    authorizeRecentWritableDirectory.mockRejectedValueOnce(
+      new Error('[WRITABLE_DIRECTORY_AUTHORIZATION_REQUIRED] not recent'),
+    );
+    onChange.mockClear();
+    await expect(addRecentWritableDir({
+      path: '/work/other',
+      writableDirs: [],
+      writableGrantScope: 'task',
+      onChange,
+    })).rejects.toThrow(/AUTHORIZATION_REQUIRED/);
     expect(onChange).not.toHaveBeenCalled();
   });
 });
