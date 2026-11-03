@@ -72,6 +72,7 @@ import { useOwnTopNavScrollableRows, useSidebarCollapsedState } from '../feature
 import { SidebarRailNavigation, SidebarTopNav } from '@/components/sidebar/SidebarTopNav';
 import { SidebarFilterPopover } from './sidebar/SidebarFilterPopover';
 import { MainListScopeHeader } from './sidebar/MainListScopeHeader';
+import { PluginSidebarWidgets } from './sidebar/PluginSidebarWidgets';
 import { SharedTasksSection } from '@/features/device-link/SharedTasksSection';
 import { TeammatesSection } from '@/features/bots/TeammatesSection';
 import { TeammateSearchResults, useTeammateSearchMatches } from '@/features/bots/TeammateSearchResults';
@@ -3963,6 +3964,24 @@ function ExpandedView({
                   remoteDeviceIndex={remoteDeviceIndex}
                   onCreateDialogue={handleCreateDialogue}
                   isCreateDialogueDisabled={dialogueCreatePending}
+                  belowScopeHeader={
+                    <PluginSidebarWidgets
+                      sessions={sidebarSessions}
+                      allKnownProjects={visibleProjectUniverse}
+                      activeSessionId={activeSessionId}
+                      runningSessionIds={displayRunningSessionIds}
+                      attachedSessionIds={attachedSessionIds}
+                      notifications={sidebarNotifications}
+                      selectedSessionIds={selectedSessionIds}
+                      onSessionClick={handleSessionClick}
+                      onAction={handleActionClick}
+                      onRename={handleRename}
+                      onTogglePin={handleTogglePin}
+                      onMoveSession={handleMoveSession}
+                      projectOptions={projectPickerOptions}
+                      onScheduleAction={handleScheduleAction}
+                    />
+                  }
                 />
               </>
             )}

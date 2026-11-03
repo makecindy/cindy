@@ -174,6 +174,7 @@ const LEGACY_GHOST_SLOTS = [
   'preview',
   'skill',
   'workspace',
+  'sidebar-widget',
   'ios-simulator',
 ] as const;
 type LegacyGhostSlot = string;
@@ -1801,6 +1802,8 @@ export interface GhostManifest {
   sessionContext?: true;
   pick?: true;
   workspace?: true;
+  /** 侧栏状态条：插件只交分组和任务 id，由 Host 绘制。 */
+  sidebarWidget?: true;
   /** @deprecated Retirement detection only. No runtime capability is granted. */
   iosSimulator?: true;
   /** v3 未知字段为前向兼容原样保留，但 Host 不解释也不授权。 */
@@ -2001,6 +2004,7 @@ export function ghostContentKeys(manifest: GhostManifest): string[] {
   // skill 是信任面最高的内容(给主 Agent 灌指令),详情页必须如实露出。
   if (manifest.skill) keys.push('slotSkill');
   if (manifest.workspace === true) keys.push('slotWorkspace');
+  if (manifest.sidebarWidget === true) keys.push('slotSidebarWidget');
   return keys;
 }
 
@@ -2075,7 +2079,8 @@ export interface GhostPermissionItem {
     | 'preview'
     | 'browser-extension'
     | 'skill'
-    | 'workspace';
+    | 'workspace'
+    | 'sidebar-widget';
   /** i18n key 后缀,消费方拼 `settings.ghosts.perm.<labelKey>`。 */
   labelKey: string;
   /** i18n 插值参数(工具名、指令名、面板标题等)。 */
@@ -2459,6 +2464,15 @@ export function ghostPermissionItems(manifest: GhostManifest): GhostPermissionIt
       kind: 'workspace',
       labelKey: 'workspace',
       detailKey: 'workspaceDetail',
+    });
+  }
+  // 侧栏状态条是常驻的注意力入口:key 独立,已装插件新增时才会进扩权确认。
+  if (manifest.sidebarWidget === true) {
+    items.push({
+      key: 'sidebar-widget',
+      kind: 'sidebar-widget',
+      labelKey: 'sidebarWidget',
+      detailKey: 'sidebarWidgetDetail',
     });
   }
   // session-context 槽:派活时可获知当前会话的项目目录位置(路径信息,
@@ -3416,6 +3430,7 @@ const GHOST_MANIFEST_KNOWN_TOP_LEVEL_FIELDS = new Set([
   'sessionContext',
   'pick',
   'workspace',
+  'sidebarWidget',
   'iosSimulator',
   // Interpreted by Host: ghostBrowserExtensionWithinCap checks it against the reviewed manifest
   // (narrowing is allowed), so it must not also fall under the exact-match rule for unknown fields.
@@ -3432,6 +3447,7 @@ const V3_BOOLEAN_CAPABILITY_FIELDS = [
   'sessionContext',
   'pick',
   'workspace',
+  'sidebarWidget',
   'iosSimulator',
 ] as const;
 
@@ -3460,6 +3476,7 @@ const V3_BOOLEAN_TO_LEGACY_SLOT: Record<(typeof V3_BOOLEAN_CAPABILITY_FIELDS)[nu
   sessionContext: 'session-context',
   pick: 'pick',
   workspace: 'workspace',
+  sidebarWidget: 'sidebar-widget',
   iosSimulator: 'ios-simulator',
 };
 
@@ -6690,6 +6707,7 @@ function validateGhostManifestInput(value: unknown, preserveHistoricalTasks: boo
       ...(slots.includes('session-context') ? { sessionContext: true as const } : {}),
       ...(slots.includes('pick') ? { pick: true as const } : {}),
       ...(slots.includes('workspace') ? { workspace: true as const } : {}),
+      ...(slots.includes('sidebar-widget') ? { sidebarWidget: true as const } : {}),
       ...(slots.includes('ios-simulator') ? { iosSimulator: true as const } : {}),
       ...(setup !== undefined ? { setup } : {}),
       ...(raw.command !== undefined ? { command: raw.command as string } : {}),
@@ -7866,6 +7884,35 @@ export const GHOST_BADGE_SUMMARY_MAX_CHARS = 80;
  * 状态写入(不像 toast 每条都打扰用户),但仍要挡住死循环刷写。
  */
 export const GHOST_BADGE_MIN_INTERVAL_MS = 500;
+
+/**
+ * 上行:侧栏状态条(sidebarWidget 能力)。插件交分组标签、语义色和任务 id,胶囊和任务行
+ * 全由主机画:任务标题与项目名取自主机自己的任务数据,插件画不出假的任务行,也读不回任何内容。
+ * 需要同时声明 agent.observe:任务 id 只能来自 cindy.observe。groups 为空 = 收起状态条。
+ */
+export const GHOST_SIDEBAR_WIDGET_TONES = ['running', 'done', 'awaiting', 'error'] as const;
+export type GhostSidebarWidgetTone = (typeof GHOST_SIDEBAR_WIDGET_TONES)[number];
+export interface GhostSidebarWidgetGroup {
+  key: string;
+  label: string;
+  tone: GhostSidebarWidgetTone;
+  taskIds: string[];
+}
+export interface GhostPipeSidebarWidget {
+  type: 'sidebar-widget';
+  groups: GhostSidebarWidgetGroup[];
+}
+export type GhostPipeSidebarWidgetResult = { ok: true } | { ok: false; message: string };
+/** 主机推给 renderer 的条目(ghostId 由沙箱绑定,不看载荷自报)。 */
+export interface GhostSidebarWidgetEntry {
+  ghostId: string;
+  groups: GhostSidebarWidgetGroup[];
+}
+export const GHOST_SIDEBAR_WIDGET_MAX_GROUPS = 6;
+export const GHOST_SIDEBAR_WIDGET_LABEL_MAX_CHARS = 16;
+export const GHOST_SIDEBAR_WIDGET_MAX_TASKS_PER_GROUP = 50;
+/** 内容变化的最小间隔;内容没变和收起不受限。 */
+export const GHOST_SIDEBAR_WIDGET_MIN_INTERVAL_MS = 500;
 
 /** 提示正文长度上限(与订阅槽 block reason ≤200 同量级:一眼能读完的量)。 */
 export const GHOST_NOTIFY_MAX_CHARS = 200;

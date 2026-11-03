@@ -7633,6 +7633,8 @@
         "pickDetail": "它发起请求时，Cindy 会弹出系统选择窗口；选哪个、给不给，都由你亲手决定，取消则它什么都拿不到。",
         "workspace": "可请求为项目文件夹在侧边栏创建任务入口",
         "workspaceDetail": "它发起请求时，由你亲手选择文件夹，或在确认卡上看到完整路径后再决定；它正在处理你发起的调用时，当前任务工作目录内的子文件夹可直接使用，不再单独确认。文件夹已有任务时直接复用，不重复创建。创建的只是空任务，不会自动开始运行。",
+        "sidebarWidget": "可在侧边栏显示任务状态条",
+        "sidebarWidgetDetail": "它可以在「全部任务」标题下显示一行状态，并列出它选中的任务。行里的任务标题和操作都由 Cindy 绘制，它读不到你在侧边栏的操作；停用或卸载插件后这一行随即消失。",
         "sessionContext": "可获知当前任务正在使用的项目文件夹位置",
         "sessionContextDetail": "只在它为当前任务干活时告知位置信息(任务编号与项目文件夹路径)，不包含文件内容，也不因此获得文件访问权。",
         "preview": "可在右侧栏浏览器中打开以下网站的预览页面",
@@ -7777,7 +7779,8 @@
         "slotFs": "写文件",
         "slotLibrary": "持久作品库",
         "slotSkill": "Agent 技能",
-        "slotWorkspace": "工作区任务"
+        "slotWorkspace": "工作区任务",
+        "slotSidebarWidget": "侧栏状态条"
       },
       "commandPaletteTag": "插件指令",
       "commandPaletteSource": {
@@ -14099,6 +14102,7 @@
       "notFound": "未找到该任务"
     },
     "sidebar": {
+      "pluginWidgetSource": "来自插件「{{name}}」",
       "machineSwitcher": {
         "allMachines": "所有",
         "localMachine": "本机",

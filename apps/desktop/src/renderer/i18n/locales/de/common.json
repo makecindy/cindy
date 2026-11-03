@@ -7676,6 +7676,8 @@
         "pickDetail": "Cindy öffnet auf Anfrage des Plugins eine Systemauswahl. Du entscheidest, was du teilst. Beim Abbrechen erhält das Plugin nichts.",
         "workspace": "Kann darum bitten, einen Sitzungseintrag für einen Projektordner in der Seitenleiste zu erstellen",
         "workspaceDetail": "Bei einer Anfrage wählst du entweder selbst den Ordner aus oder siehst vor deiner Entscheidung den vollständigen Pfad auf einer Bestätigungskarte. Während es einen von dir gestarteten Aufruf bearbeitet, werden Unterordner im Arbeitsverzeichnis der aktuellen Sitzung direkt ohne zusätzliche Rückfrage verwendet. Ordner, die bereits eine Sitzung haben, werden wiederverwendet. Erstellt wird eine leere Sitzung – nichts startet von selbst.",
+        "sidebarWidget": "Kann in der Seitenleiste eine Aufgaben-Statusleiste anzeigen",
+        "sidebarWidgetDetail": "Es kann unter der Überschrift „Alle Aufgaben“ eine Statuszeile anzeigen und die ausgewählten Aufgaben auflisten. Titel und Aktionen zeichnet Cindy; das Plugin sieht nicht, was du in der Seitenleiste tust. Die Zeile verschwindet, wenn das Plugin deaktiviert oder deinstalliert wird.",
         "sessionContext": "Kann erfahren, in welchem Projektordner die aktuelle Sitzung arbeitet",
         "sessionContextDetail": "Teilt nur Angaben zum Speicherort (Sitzungs-ID und Projektordnerpfad), während es für die aktuelle Sitzung arbeitet – keine Dateiinhalte, und es wird kein Dateizugriff gewährt.",
         "preview": "Kann Vorschauseiten der folgenden Websites im Seitenleistenbrowser öffnen",
@@ -7820,7 +7822,8 @@
         "slotFs": "Dateien schreiben",
         "slotLibrary": "Dauerhafte Bibliothek",
         "slotSkill": "Agent-Skills",
-        "slotWorkspace": "Arbeitsbereichssitzungen"
+        "slotWorkspace": "Arbeitsbereichssitzungen",
+        "slotSidebarWidget": "Statusleiste in der Seitenleiste"
       },
       "commandPaletteTag": "Plugin-Befehl",
       "commandPaletteSource": {
@@ -14165,6 +14168,7 @@
       "notFound": "Sitzung nicht gefunden"
     },
     "sidebar": {
+      "pluginWidgetSource": "Vom Plugin „{{name}}“",
       "machineSwitcher": {
         "allMachines": "Alle",
         "localMachine": "Lokal",

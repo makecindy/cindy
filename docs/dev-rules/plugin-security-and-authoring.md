@@ -168,7 +168,7 @@ Library 请求同时绑定迁移代次和安装批准，根解析、排队及开
   安装提示（`<all_urls>` 可加，`tabGroups` 只能做可选权限）。Agent 操作的页面显示红光边框与「Cindy 正在自动操作此页面」
   标签，保持到最后一次动作后约 20 秒。新增 id 或新增 `pageControl` 视为权限变多，删减视为收权。
 - 无配置的布尔能力只接受字面量 `true`：`notify`、`badge`、`confirm`、`fs`、`library`、
-  `sessionContext`、`pick`、`workspace`。不用就省略，写 `false` 是无效清单。
+  `sessionContext`、`pick`、`workspace`、`sidebarWidget`。不用就省略，写 `false` 是无效清单。
 - `card: {}` 与 `agent: {}` 分别表示基础卡片能力和由真实用户点击触发 Agent 回合；
   其它对象型能力必须至少包含一项真实能力，不能用空对象占位。
 - v3 未识别的顶层字段，以及能力对象中的未知扩展字段、动作和订阅事件，必须原样保留，
@@ -203,6 +203,7 @@ Library 请求同时绑定迁移代次和安装批准，根解析、排队及开
 - `agent.observe` 是独立能力，不依赖 `agent.tasks`，单列 `agent:observe` 权限并要求 Host receipt 的 `observeCapabilityApproved` 显式批准。
   只读返回已登记本机项目中任务的标题、Agent 类型、归档与状态元数据，并可在主窗口打开其中的任务；不返回消息、计划或文件，也不能发送、修改或停止任务。
   旧 tasks/targets 批准与历史未知字段不授予查看；首次调用复用既有宿主确认。实现见 [只读查看项目任务](plugin-task-api-implementation.md#只读查看项目任务增量接口尚未发布)。
+- `sidebarWidget`（未发布）让插件在侧栏「全部任务」标题下显示状态胶囊：插件只交分组标签、枚举色和任务 id，胶囊与任务行由 Host 绘制，标题和操作取自 Host 自己的任务数据，对不上本机任务的 id 不显示、不计数。运行期要求 `agent.observe` 已批准；状态只存内存，插件退出、停用、卸载或换账号时撤下。只在 Desktop 主侧栏显示，不进 device-link 与手机。实现见 `cindy-brain/sidebarWidgetSlot.ts`、`features/cc-agent/sidebar/PluginSidebarWidgets.tsx`。
 - `agent.hiddenTasks`（后台任务）只在与 `agent.tasks: true` 同时声明时有效：新包缺 tasks 或非布尔
   直接拒装；已安装快照里不成对的历史值原样保留但不授予。它单列为 `agent:hidden-tasks` 权限，
   更新新增即「权限变多」；运行期由 taskSlot 与任务服务按身份卡双重守门。透明性兜底与多端口径见

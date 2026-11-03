@@ -763,6 +763,8 @@ const fanOutRemoteSettingsDirectory = createIpcFanOut('device-link:plugin-settin
 const fanOutGhostBadge = createIpcFanOut('ghosts:badge');
 // 未读全量快照(换账号后整表替换;逐条 badge 只表达增量)。
 const fanOutGhostUnreadSnapshot = createIpcFanOut('ghosts:unread-snapshot');
+// 侧栏状态条(sidebarWidget:主机绘制,每次推全量)。
+const fanOutGhostSidebarWidget = createIpcFanOut('ghosts:sidebar-widget');
 // 意识确认弹窗(confirm 槽:renderer 用主机同款 ConfirmDialog 弹,答案回 main)。
 // main 只投单个窗口(不广播),所以这里落地的窗口就是该弹框的唯一归属。
 const fanOutGhostConfirmRequest = createIpcFanOut('ghosts:confirm-request');
@@ -1542,6 +1544,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
     onNotify: fanOutGhostNotify,
     onBadge: fanOutGhostBadge,
     onUnreadSnapshot: fanOutGhostUnreadSnapshot,
+    onSidebarWidget: fanOutGhostSidebarWidget,
+    sidebarWidgets: (): Promise<unknown> => ipcRenderer.invoke('ghosts:sidebar-widgets'),
     onConfirmRequest: fanOutGhostConfirmRequest,
     onModelPickerRequest: fanOutGhostModelPickerRequest,
     onModelPickerDismissed: fanOutGhostModelPickerDismissed,

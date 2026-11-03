@@ -114,6 +114,7 @@ export const LEGACY_GHOST_SLOTS = [
   'preview',
   'skill',
   'workspace',
+  'sidebar-widget',
   'ios-simulator',
 ] as const;
 type LegacyGhostSlot = string;
@@ -1042,6 +1043,7 @@ export interface GhostManifest {
   sessionContext?: true;
   pick?: true;
   workspace?: true;
+  sidebarWidget?: true;
   /** @deprecated Retirement detection only. No runtime capability is granted. */
   iosSimulator?: true;
   /**
@@ -1245,6 +1247,7 @@ const GHOST_MANIFEST_KNOWN_TOP_LEVEL_FIELDS = new Set([
   'sessionContext',
   'pick',
   'workspace',
+  'sidebarWidget',
   'iosSimulator',
 ]);
 
@@ -1258,6 +1261,7 @@ const V3_BOOLEAN_CAPABILITY_FIELDS = [
   'sessionContext',
   'pick',
   'workspace',
+  'sidebarWidget',
   'iosSimulator',
 ] as const;
 
@@ -1286,6 +1290,7 @@ const V3_BOOLEAN_TO_LEGACY_SLOT: Record<(typeof V3_BOOLEAN_CAPABILITY_FIELDS)[nu
   sessionContext: 'session-context',
   pick: 'pick',
   workspace: 'workspace',
+  sidebarWidget: 'sidebar-widget',
   iosSimulator: 'ios-simulator',
 };
 
@@ -3954,6 +3959,9 @@ export function validateGhostManifest(value: unknown): ManifestValidation {
       ...(prepared.schemaVersion === 3 && slots.includes('pick') ? { pick: true as const } : {}),
       ...(prepared.schemaVersion === 3 && slots.includes('workspace')
         ? { workspace: true as const }
+        : {}),
+      ...(prepared.schemaVersion === 3 && slots.includes('sidebar-widget')
+        ? { sidebarWidget: true as const }
         : {}),
       ...(prepared.schemaVersion === 3 && slots.includes('ios-simulator')
         ? { iosSimulator: true as const }

@@ -7633,6 +7633,8 @@
         "pickDetail": "它發起請求時，Cindy 會彈出系統選擇視窗；選哪個、給不給，都由你親手決定，取消則它什麼都拿不到。",
         "workspace": "可請求為專案資料夾在側邊欄建立任務入口",
         "workspaceDetail": "它發起請求時，由你親手選擇資料夾，或在確認卡上看到完整路徑後再決定；它正在處理你發起的呼叫時，當前任務工作目錄內的子資料夾可直接使用，不再單獨確認。資料夾已有任務時直接複用，不重複建立。建立的只是空任務，不會自動開始執行。",
+        "sidebarWidget": "可在側邊欄顯示任務狀態列",
+        "sidebarWidgetDetail": "它可以在「全部任務」標題下顯示一行狀態，並列出它選中的任務。行裡的任務標題和操作都由 Cindy 繪製，它讀不到你在側邊欄的操作；停用或解除安裝插件後這一行隨即消失。",
         "sessionContext": "可獲知當前任務正在使用的專案資料夾位置",
         "sessionContextDetail": "只在它為當前任務幹活時告知位置資訊(任務編號與專案資料夾路徑)，不包含檔案內容，也不因此獲得檔案訪問權。",
         "preview": "可在右側欄瀏覽器中開啟以下網站的預覽頁面",
@@ -7777,7 +7779,8 @@
         "slotFs": "寫檔案",
         "slotLibrary": "持久作品庫",
         "slotSkill": "Agent 技能",
-        "slotWorkspace": "工作區任務"
+        "slotWorkspace": "工作區任務",
+        "slotSidebarWidget": "側邊欄狀態列"
       },
       "commandPaletteTag": "插件指令",
       "commandPaletteSource": {
@@ -14099,6 +14102,7 @@
       "notFound": "未找到該任務"
     },
     "sidebar": {
+      "pluginWidgetSource": "來自插件「{{name}}」",
       "machineSwitcher": {
         "allMachines": "所有",
         "localMachine": "本機",

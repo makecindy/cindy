@@ -26,6 +26,7 @@ const PERMISSION_ICON: Record<GhostPermissionItem['kind'], LucideIcon> = {
   'browser-extension': Puzzle,
   skill: GraduationCap,
   workspace: FolderPlus,
+  'sidebar-widget': PanelLeft,
 };
 
 /**

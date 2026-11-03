@@ -1037,6 +1037,21 @@ describe('ghost · 清单校验', () => {
 });
 
 describe('ghost · Manifest v3 直接能力声明', () => {
+  it('sidebarWidget 只接受 true,单列权限项,旧包新增时算权限变多', () => {
+    const base = { ...goodChipManifest(), schemaVersion: 3, minCindyVersion: '1.2.3' } as Record<string, unknown>;
+    delete base.slots;
+    expect(validateGhostManifest({ ...base, sidebarWidget: false }).ok).toBe(false);
+
+    const before = validateGhostManifest(base);
+    const after = validateGhostManifest({ ...base, sidebarWidget: true });
+    if (!before.ok || !after.ok) throw new Error('manifest should validate');
+    expect(before.manifest.sidebarWidget).toBeUndefined();
+    expect(after.manifest.sidebarWidget).toBe(true);
+    expect(ghostPermissionItems(before.manifest).some((item) => item.key === 'sidebar-widget')).toBe(false);
+    const { added } = diffGhostPermissionItems(before.manifest, after.manifest);
+    expect(added.map((item) => item.key)).toEqual(['sidebar-widget']);
+  });
+
   it('规范化为无 slots 的运行时模型，并保留但不授权未知顶层字段', () => {
     const result = validateGhostManifest({
       schemaVersion: 3,

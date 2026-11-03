@@ -63,7 +63,7 @@ Use for the UI surfaces and interactions the plugin actually exposes; mobile pag
 - [插件移动端页面接入与操作来源（§5.1）](references/plugin-mobile-pages.md)
 - [插件聊天卡片 card（§4.5）](references/plugin-chat-cards.md)
 - [插件设置页与自定义参数 settingsHtml / kv（§4.8）](references/plugin-settings.md)
-- [插件轻提示与未读角标 notify / badge（§4.9）](references/plugin-notifications.md)
+- [插件轻提示、未读角标与侧栏状态条 notify / badge / sidebarWidget（§4.9）](references/plugin-notifications.md)
 - [插件目录选择 pick（§4.14）](references/plugin-directory-picker.md)
 - [插件面板预览 preview（§4.15）](references/plugin-panel-preview.md)
 - [插件随包浏览器扩展 browserExtension（§4.23）](references/plugin-browser-extension.md)

@@ -7676,6 +7676,8 @@
         "pickDetail": "Cindy opens a system picker when the plugin asks. You decide what to share; cancelling gives the plugin nothing.",
         "workspace": "Can ask to create a session entry for a project folder in the sidebar",
         "workspaceDetail": "When it asks, you either pick the folder yourself or see the full path on a confirmation card before deciding; while it is handling a call you started, subfolders inside the current session's working directory are used directly without an extra prompt. Folders that already have a session are reused, and what gets created is an empty session — nothing starts running on its own.",
+        "sidebarWidget": "Can show a task status bar in the sidebar",
+        "sidebarWidgetDetail": "It can show a status row under the All Tasks heading and list the tasks it picks. Cindy draws the task titles and actions in that row, and the plugin cannot see what you do in the sidebar. The row disappears when the plugin is disabled or uninstalled.",
         "sessionContext": "Can learn which project folder the current session is working in",
         "sessionContextDetail": "Shares only location facts (session ID and project folder path) while it works for the current session — no file contents, and no file access is granted.",
         "preview": "Can open preview pages from the sites below in the sidebar browser",
@@ -7820,7 +7822,8 @@
         "slotFs": "File writing",
         "slotLibrary": "Durable library",
         "slotSkill": "Agent skills",
-        "slotWorkspace": "Workspace sessions"
+        "slotWorkspace": "Workspace sessions",
+        "slotSidebarWidget": "Sidebar status bar"
       },
       "commandPaletteTag": "Plugin command",
       "commandPaletteSource": {
@@ -14165,6 +14168,7 @@
       "notFound": "Session not found"
     },
     "sidebar": {
+      "pluginWidgetSource": "From the plugin \"{{name}}\"",
       "machineSwitcher": {
         "allMachines": "All",
         "localMachine": "Local",
