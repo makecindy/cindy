@@ -1,11 +1,14 @@
 // @vitest-environment jsdom
 
+import { transferableAbortController } from 'node:util';
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { createMemoryRouter, MemoryRouter, RouterProvider } from 'react-router-dom';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type { BotGroupSummary } from '../../../../shared/botGroupChat';
 import { BotGroupSettingsDrawer } from '../BotGroupSettingsDrawer';
+
+const nativeAbortController = transferableAbortController();
 
 const mocks = vi.hoisted(() => ({
   groups: [] as BotGroupSummary[],
@@ -80,6 +83,9 @@ function memberRow(name: string): HTMLElement {
 }
 
 beforeEach(() => {
+  // React Router uses Node Request; jsdom's signal fails its Node 25 realm check.
+  vi.stubGlobal('AbortController', nativeAbortController.constructor);
+  vi.stubGlobal('AbortSignal', nativeAbortController.signal.constructor);
   mocks.groups = [group()];
   mocks.updateBotGroup.mockReset().mockResolvedValue({ ok: true });
   mocks.setBotGroupMembers.mockReset().mockResolvedValue({ ok: true });
@@ -93,7 +99,13 @@ beforeEach(() => {
   });
 });
 
-afterEach(cleanup);
+afterEach(() => {
+  try {
+    cleanup();
+  } finally {
+    vi.unstubAllGlobals();
+  }
+});
 
 // Unit regression: the reported inert group-settings scrim (DESIGN.md §4, Dialog & Modal).
 // Existing tests cover mutations, not dismissal through the real drawer and Radix events.
