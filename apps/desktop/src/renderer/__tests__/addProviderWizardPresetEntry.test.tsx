@@ -13,7 +13,8 @@ import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testi
 import React from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { buildUserProvider, BUNDLED_CATALOG, loadCatalogWithSource, parseCatalog, parseModelRegistry, parseModelsListResponse, modelProtocolComparison, type ProviderView } from '@cindy/model-providers';
+import { buildUserProvider, BUNDLED_CATALOG, loadCatalogWithSource, parseCatalog, parseModelRegistry, parseModelsListResponse, modelProtocolComparison, unifiedModelEntries, type AgentKind, type CustomProviderConfig, type ProviderView } from '@cindy/model-providers';
+
 
 const testI18n = vi.hoisted(() => ({ language: 'zh-CN' }));
 vi.mock('react-i18next', () => ({
@@ -345,6 +346,80 @@ afterEach(() => {
   vi.clearAllMocks();
 });
 
+// #8485 unit: the editable vLLM preset can discover Magpie, too. Existing form
+// tests skipped Wizard's per-engine picks and its two final config projections.
+// Minimal failure: a successful source response (or removal) was lost at save.
+describe('Magpie sources through preset discovery', () => {
+  const baseUrl = 'http://127.0.0.1:3425/v1';
+  const source = (agent: AgentKind) => ({ kind: 'magpie' as const, providerId: `supplier-${agent}`, snapshotId: `receipt-${agent}` });
+
+  it('retains full IDs and engine-owned receipts through the editable vLLM entry', async () => {
+    const preset = BUNDLED_CATALOG.presets!.find(p => p.id === 'vllm')!;
+    vi.mocked(window.electronAPI.maker.listProviderPresets).mockResolvedValue({ presets: [preset] });
+    const ids = ['chatgpt/foo', 'foo', 'xai/foo'];
+    vi.mocked(window.electronAPI.maker.fetchProviderModels).mockImplementation(async ({ agent }) => ({ ok: true, models:
+      ids.map(id => ({ id, name: id, discoveredSource: source(agent), discoverySnapshotId: `receipt-${agent}`, opaqueModelId: true })) }));
+    renderWizard('vllm');
+    const endpoint = (await screen.findAllByDisplayValue('http://127.0.0.1:8000/v1'))[0];
+    fireEvent.change(endpoint, { target: { value: baseUrl } });
+    fireEvent.click(screen.getByText('settings.providers.wizard.next'));
+    for (const id of ids) fireEvent.click(await screen.findByText(id));
+    fireEvent.click(screen.getByText('settings.providers.wizard.finish'));
+    await waitFor(() => expect(createCustomProvider).toHaveBeenCalledOnce());
+    const saved = vi.mocked(createCustomProvider).mock.calls[0][0];
+    for (const agent of ['codex', 'pi'] as const) {
+      expect(saved.runtimes[agent]!.baseUrl).toBe(baseUrl);
+      expect(saved.runtimes[agent]!.models).toEqual(ids.map(id => expect.objectContaining({ id,
+        discoveredSource: source(agent), discoverySnapshotId: `receipt-${agent}`, opaqueModelId: true })));
+    }
+    const provider = { ...buildUserProvider(saved), connected: true };
+    const entries = unifiedModelEntries({ providers: [provider] });
+    expect(entries.map(entry => entry.modelId)).toEqual(ids);
+    for (const entry of entries) for (const agent of entry.candidates) {
+      expect(entry.capabilities[agent]!.wireModelId).toBe(entry.modelId);
+      expect(entry.capabilities[agent]!.discoveredSource).toEqual(source(agent));
+    }
+  });
+
+  it.each(['finish', 'return'] as const)('lets refreshed sources replace old draft fields on %s, including successful removal', async action => {
+    const agents = ['codex', 'pi'] as const;
+    const oldSource = { kind: 'magpie' as const, providerId: 'Old source', snapshotId: 'old-receipt' };
+    const config: CustomProviderConfig = { id: 'draft', name: 'Gateway', auth: { method: 'none' }, runtimes: Object.fromEntries(
+      agents.map(agent => [agent, { baseUrl, wireProtocol: 'openai-chat', models: [
+        { id: 'foo', name: 'Foo', opaqueModelId: true, discoveredSource: oldSource, discoverySnapshotId: 'old-receipt' },
+      ] }]),
+    ) };
+    const preset = { id: 'vllm', name: 'vLLM', authMethod: 'none' as const, runtimes: Object.fromEntries(
+      agents.map(agent => [agent, { baseUrl, wireProtocol: 'openai-chat' as const, baseUrlEditable: true, models: [] }]),
+    ) };
+    vi.mocked(window.electronAPI.maker.fetchProviderModels).mockImplementation(async ({ agent }) => ({ ok: true, models: [
+      { id: 'foo', name: 'Foo', discoverySnapshotId: `receipt-${agent}`, ...(agent === 'pi' ? { discoveredSource: source(agent) } : {}) },
+    ] }));
+    const onReturnCustom = vi.fn();
+    render(<AddProviderWizard providers={[]} detected={{ agent: 'pi', apiKey: '', keys: {}, config, preset }}
+      onReturnCustom={onReturnCustom} onClose={vi.fn()} onDone={vi.fn()} onOpenCustomForm={vi.fn()} />);
+    fireEvent.click(await screen.findByText('settings.providers.wizard.next'));
+    const finish = await screen.findByRole('button', { name: 'settings.providers.wizard.finish' });
+    await waitFor(() => expect(finish.hasAttribute('disabled')).toBe(false));
+    if (action === 'finish') {
+      fireEvent.click(finish);
+      await waitFor(() => expect(createCustomProvider).toHaveBeenCalledOnce());
+    } else {
+      fireEvent.click(screen.getByText('settings.providers.wizard.back'));
+      fireEvent.click(screen.getByText('settings.providers.wizard.back'));
+      expect(onReturnCustom).toHaveBeenCalledOnce();
+    }
+    const saved = action === 'finish' ? vi.mocked(createCustomProvider).mock.calls[0][0] : onReturnCustom.mock.calls[0][0].config as CustomProviderConfig;
+    for (const agent of agents) {
+      const model = saved.runtimes[agent]!.models[0];
+      expect(model.id).toBe('foo');
+      expect(model.opaqueModelId).toBe(true);
+      expect(model.discoverySnapshotId).toBe(`receipt-${agent}`);
+      expect(model.discoveredSource).toEqual(agent === 'pi' ? source(agent) : undefined);
+    }
+  });
+});
+
 // Unit reproduction of #8204: use the unchanged bundled DeepSeek preset and
 // original reported model. Keep the current bundled preset as a control; the
 // historical compact preset is a separate fixture, not a claim about live data.
@@ -623,6 +698,7 @@ it.each(['delayed', 'failed'] as const)('waits for a %s catalog before building 
   for (const agent of ['claude-code', 'pi'] as const) {
     expect(saved.runtimes[agent]?.models.map(m => m.id)).toContain('deepseek-v4-flash-vision-exp');
   }
+
 });
 
 describe('AddProviderWizard — preset 直达', () => {

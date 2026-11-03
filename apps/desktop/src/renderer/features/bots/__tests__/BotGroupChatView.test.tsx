@@ -369,6 +369,70 @@ beforeEach(() => {
 afterEach(() => { cleanup(); vi.unstubAllGlobals(); });
 
 describe('BotGroupChatView', () => {
+  it('offers jump to bottom while scrolling down through read history', async () => {
+    mocks.getControlledState.mockResolvedValue({ controlledBy: [{ deviceId: 'studio', name: 'Mac Studio' }] });
+    mocks.getBotGroup.mockResolvedValue({ ok: true, group: detail({ threads: ['t1', 't2'].map(rootId => ({
+      rootId, rootText: rootId, rootAuthorName: 'Bot', rootAuthorBotId: null, replyCount: 1,
+      unread: { count: 1, mentioned: true }, lastReply: null,
+    })) }) });
+    const view = renderView();
+    const scroll = await screen.findByTestId('bot-group-timeline');
+    Object.defineProperties(scroll, {
+      scrollHeight: { configurable: true, value: 2000 },
+      clientHeight: { configurable: true, value: 500 },
+    });
+    fireEvent.click(screen.getByTestId('group-attention-hint'));
+    expect(screen.getByRole('dialog')).toBeTruthy();
+    vi.useFakeTimers();
+    try {
+      scroll.scrollTop = 100; fireEvent.scroll(scroll);
+      expect(screen.queryByRole('dialog')).toBeNull();
+      const jump = screen.getByRole('button', { name: 'chat.jumpToBottom' });
+      expect(jump.parentElement?.className).toContain('opacity-100');
+      const chip = view.container.querySelector('[data-controlled-banner-chip]')!;
+      expect(chip).toBeTruthy();
+      expect(chip.closest('[inert]')).not.toBeNull();
+      act(() => vi.advanceTimersByTime(2000));
+      expect(chip.closest('[inert]')).toBeNull();
+      expect(screen.queryByRole('dialog')).toBeNull();
+      expect(view.container.querySelector('[data-controlled-banner-chip]')).toBe(chip);
+      expect(jump.parentElement?.className).toContain('opacity-0');
+      scroll.scrollTop = 200; fireEvent.scroll(scroll);
+      expect(jump.parentElement?.className).toContain('opacity-100');
+      scroll.scrollTop = 100; fireEvent.scroll(scroll);
+      expect(jump.parentElement?.className).toContain('opacity-0');
+      scroll.scrollTop = 200; fireEvent.scroll(scroll);
+      const scrollTo = vi.fn(); scroll.scrollTo = scrollTo;
+      fireEvent.click(jump);
+      expect(scrollTo).toHaveBeenCalledWith({ top: 2000, behavior: 'smooth' });
+      expect(chip.closest('[inert]')).not.toBeNull();
+      scroll.scrollTop = 400; fireEvent.scroll(scroll);
+      expect(chip.closest('[inert]')).not.toBeNull();
+      scroll.scrollTop = 1500; fireEvent.scroll(scroll);
+      expect(jump.parentElement?.className).toContain('opacity-0');
+    } finally { view.unmount(); vi.useRealTimers(); }
+  });
+
+  it.each([false, true])('tracks a growing tail during a jump unless the user takes over (%s)', async (takeOver) => {
+    renderView();
+    const scroll = await screen.findByTestId('bot-group-timeline');
+    Object.defineProperties(scroll, {
+      scrollHeight: { configurable: true, value: 2000 }, clientHeight: { configurable: true, value: 500 },
+    });
+    scroll.scrollTop = 200; fireEvent.scroll(scroll);
+    scroll.scrollTo = vi.fn();
+    fireEvent.click(screen.getByRole('button', { name: 'chat.jumpToBottom' }));
+    scroll.scrollTop = 400; fireEvent.scroll(scroll);
+    if (takeOver) fireEvent.wheel(scroll, { deltaY: -100 });
+    Object.defineProperty(scroll, 'scrollHeight', { configurable: true, value: 3000 });
+    mocks.getBotGroup.mockResolvedValue({ ok: true, group: detail({ messages: [
+      msg({ id: 'arrival', sequence: 3, content: 'Arrived during jump' }),
+    ] }) });
+    act(() => mocks.pushes.forEach(push => push({ groupId: 'g1', change: 'messages' })));
+    await screen.findByText('Arrived during jump');
+    expect(scroll.scrollTop).toBe(takeOver ? 400 : 3000);
+  });
+
   // Renderer integration: isolated confirmed deltas must not conceal a missing page after reconnect.
   it('keeps a skipped message reachable by pagination after multiple deltas overtake a full page', async () => {
     const page = (from: number, to: number) => Array.from({ length: to - from + 1 }, (_, index) =>
@@ -1269,14 +1333,15 @@ describe('BotGroupChatView', () => {
     const view = renderView();
     await screen.findByRole('textbox');
     const main = view.container.querySelector('main')!;
-    const originalRows = main.childElementCount;
+    const bottomStack = main.querySelector('[data-group-bottom-bubbles]')!;
+    const originalRows = bottomStack.childElementCount;
     expect(main.querySelector('[data-controlled-banner-chip]')).toBeNull();
     act(() => mocks.controlledPush?.({ controllers: [{ deviceId: 'studio', name: 'Mac Studio' }] }));
-    expect(main.childElementCount).toBe(originalRows + 1);
+    expect(bottomStack.childElementCount).toBe(originalRows + 1);
     expect(main.querySelector('[data-controlled-banner-chip]')).toBeTruthy();
     expect(fallback.container.childElementCount).toBe(0);
     act(() => mocks.controlledPush?.({ controllers: [] }));
-    expect(main.childElementCount).toBe(originalRows);
+    expect(bottomStack.childElementCount).toBe(originalRows);
     expect(document.querySelector('[data-controlled-banner-chip]')).toBeNull();
   });
 
@@ -2292,6 +2357,50 @@ describe('BotGroupChatView', () => {
       expect(screen.queryByRole('complementary')).toBeNull();
     });
 
+    it.each(['message', 'content resize', 'viewport resize'] as const)('reveals unread navigation when a located short group grows: %s', async change => {
+      const observed = new Map<Element, ResizeObserverCallback>();
+      vi.stubGlobal('ResizeObserver', class {
+        constructor(private callback: ResizeObserverCallback) {}
+        observe(element: Element) { observed.set(element, this.callback); }
+        disconnect() {}
+      });
+      const messages = [
+        msg({ id: 'original', sequence: 1, content: 'Short original' }),
+        msg({ id: 'quoted', sequence: 2, content: 'Short quote', quote: quoteOf('original') }),
+      ];
+      mocks.getBotGroup.mockResolvedValue({ ok: true, group: detail({ serverBacked: true, messages }) });
+      renderView();
+      const scroll = await screen.findByTestId('bot-group-timeline');
+      let contentHeight = 500;
+      let viewportHeight = 500;
+      Object.defineProperties(scroll, {
+        scrollHeight: { configurable: true, get: () => contentHeight },
+        clientHeight: { configurable: true, get: () => viewportHeight },
+      });
+      scroll.scrollTop = 0;
+      fireEvent.click(await screen.findByTestId('bot-group-quote'));
+      await waitFor(() => expect(document.activeElement?.getAttribute('data-bot-group-message-id')).toBe('original'));
+      const arrived = msg({ id: 'arrival', sequence: 3, authorKind: 'bot', content: 'Unread after locating', createdAt: 2000 });
+      if (change === 'message') contentHeight = 1000;
+      mocks.getBotGroup.mockResolvedValue({ ok: true, group: detail({ serverBacked: true, messages: [...messages, arrived] }) });
+      act(() => mocks.pushes.forEach(push => push({ groupId: 'g1', change: 'messages' })));
+      await screen.findByText('Unread after locating');
+      if (change !== 'message') {
+        expect(document.querySelector('[data-group-bottom-bubbles]')?.hasAttribute('inert')).toBe(false);
+        if (change === 'content resize') contentHeight = 1000;
+        else viewportHeight = 250;
+        const resized = change === 'content resize' ? scroll.firstElementChild! : scroll;
+        act(() => observed.get(resized)!([], {} as ResizeObserver));
+      }
+      expect(screen.getByRole('button', { name: 'chat.newMessageIndicator.aria' }).parentElement?.className).toContain('opacity-100');
+      expect(document.querySelector('[data-group-bottom-bubbles]')?.hasAttribute('inert')).toBe(true);
+      expect(scroll.scrollTop).toBe(0);
+      contentHeight = viewportHeight;
+      act(() => observed.get(scroll)!([], {} as ResizeObserver));
+      expect(document.querySelector('[data-group-bottom-bubbles]')?.hasAttribute('inert')).toBe(false);
+      expect(scroll.scrollTop).toBe(0);
+    });
+
     it('shows a deleted original without its snapshot and never jumps', async () => {
       const base = detail({ serverBacked: true });
       mocks.getBotGroup.mockResolvedValue({ ok: true, group: { ...base, messages: [
@@ -2374,6 +2483,37 @@ describe('BotGroupChatView', () => {
       }
       const quoteState = () => screen.getByTestId('bot-group-quote').getAttribute('data-quote-state');
       const push = () => act(async () => { mocks.pushes.forEach((listener) => listener({ groupId: 'g1', change: 'messages' })); });
+
+      it.each([false, true])('keeps jump-to-bottom after a pending quote lookup returns (already paged: %s)', async (alreadyPaged) => {
+        serve(async () => [original]);
+        renderView();
+        await screen.findByTestId('bot-group-quote');
+        if (alreadyPaged) {
+          fireEvent.click(screen.getByRole('button', { name: 'bots.groupChat.timeline.loadEarlier' }));
+          await waitFor(() => expect(quoteState()).toBe('live'));
+        }
+        let finish!: (messages: BotGroupMessageView[]) => void;
+        serve(() => new Promise(resolve => { finish = resolve; }));
+        fireEvent.click(screen.getByTestId('bot-group-quote'));
+        await waitFor(() => expect(finish).toBeTypeOf('function'));
+        const scroll = screen.getByTestId('bot-group-timeline');
+        Object.defineProperties(scroll, {
+          scrollHeight: { configurable: true, value: 2000 }, clientHeight: { configurable: true, value: 500 },
+        });
+        scroll.scrollTop = 200; fireEvent.scroll(scroll);
+        scroll.scrollTo = vi.fn();
+        fireEvent.click(screen.getByRole('button', { name: 'chat.jumpToBottom' }));
+        await act(async () => finish([original]));
+        expect(document.querySelector('[class*="search-match-bg"]')).toBeNull();
+        expect(mocks.toastInfo).not.toHaveBeenCalled();
+        Object.defineProperty(scroll, 'scrollHeight', { configurable: true, value: 3000 });
+        mocks.getBotGroup.mockResolvedValue({ ok: true, group: detail({ messages: [
+          latest, msg({ id: 'arrival', sequence: 51, content: 'New tail after lookup' }),
+        ] }) });
+        await push();
+        await screen.findByText('New tail after lookup');
+        expect(scroll.scrollTop).toBe(3000);
+      });
 
       it('drops a deleted original from the quote on a push, without a click', async () => {
         const user = userEvent.setup();
@@ -3240,9 +3380,20 @@ it('keeps copy/share in each author row\'s more menu and shares only message con
     act(() => window.dispatchEvent(new Event('focus')));
     expect(getBotLastReadAt(botGroupReadKey('g1'))).toBe(200);
     expect(scroll.scrollTop).toBe(0);
-    expect(screen.getByRole('button', { name: 'chat.newMessageIndicator.aria' })).toBeTruthy();
+    const newMessages = screen.getByRole('button', { name: 'chat.newMessageIndicator.aria' });
+    expect(newMessages).toBeTruthy();
+    const bubbles = document.querySelector('[data-group-bottom-bubbles]')!;
+    expect(bubbles.hasAttribute('inert')).toBe(true);
+    scroll.scrollTo = vi.fn();
+    fireEvent.click(newMessages);
+    scroll.scrollTop = 400; fireEvent.scroll(scroll);
+    // Smooth navigation does not acknowledge unread replies before reaching the tail.
+    expect(getBotLastReadAt(botGroupReadKey('g1'))).toBe(200);
+    expect(newMessages.parentElement?.className).toContain('opacity-100');
+    expect(screen.getByRole('button', { name: 'chat.jumpToBottom' }).parentElement?.className).toContain('opacity-0');
     scroll.scrollTop = 900; fireEvent.scroll(scroll);
     expect(getBotLastReadAt(botGroupReadKey('g1'))).toBe(1200);
+    expect(bubbles.hasAttribute('inert')).toBe(false);
   } finally { focus.mockRestore(); resetBotReadStateForTests(); }
 });
 

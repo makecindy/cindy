@@ -1084,7 +1084,8 @@ export function ProviderConnectionDialog({
     previousDetectionSignatures.current.set(agent, signature);
     if (previousSignature && previousSignature !== signature) {
       setRtSynced(prev => ({ ...prev, [agent]: { ...prev[agent], models: prev[agent].models.map(model => {
-        const { discoveredMetadata: _metadata, discoveredCost: _cost, ...userFields } = model;
+        const { discoveredMetadata: _metadata, discoveredCost: _cost,
+          discoveredSource: _source, discoverySnapshotId: _snapshot, ...userFields } = model;
         return userFields;
       }) } }));
     }
@@ -1133,10 +1134,16 @@ export function ProviderConnectionDialog({
               return fresh ? { ...model,
                 discoveredMetadata: fresh.discoveredMetadata ?? { contextWindow: fresh.contextWindow },
                 discoveredCost: fresh.discoveredCost,
+                discoveredSource: fresh.discoveredSource,
+                discoverySnapshotId: fresh.discoverySnapshotId,
+                opaqueModelId: fresh.opaqueModelId || model.opaqueModelId,
               } : model;
             }),
             ...(first ? catalog.models!.filter(m => !prev[agent].models.some(row => row.id === m.id) && isAgentSelectableModel({ id: m.id, mode: m.discoveredMetadata?.mode })).map(m => ({
               id: m.id, name: m.name, discoveredMetadata: m.discoveredMetadata ?? { contextWindow: m.contextWindow }, discoveredCost: m.discoveredCost,
+              discoveredSource: m.discoveredSource,
+              discoverySnapshotId: m.discoverySnapshotId,
+              opaqueModelId: m.opaqueModelId,
             })) : []),
           ] } }));
         }
@@ -1705,7 +1712,10 @@ export function ProviderConnectionDialog({
             modalities: m.modalities,
             officialDocs: m.officialDocs,
             discoveredMetadata: m.discoveredMetadata,
-          discoveredCost: m.discoveredCost,
+            discoveredCost: m.discoveredCost,
+            discoveredSource: m.discoveredSource,
+            discoverySnapshotId: m.discoverySnapshotId,
+            opaqueModelId: m.opaqueModelId,
             nameExplicit: m.nameExplicit,
             ...(m.interfaceId ? { interfaceId: m.interfaceId } : {}),
           ...(m.api ? { api: m.api } : {}),
@@ -1746,6 +1756,9 @@ export function ProviderConnectionDialog({
               discoveredMetadata: mergeModelMetadata(cur?.discoveredMetadata,
                 m.discoveredMetadata ?? { contextWindow: m.contextWindow }),
               discoveredCost: m.discoveredCost,
+              discoveredSource: m.discoveredSource,
+              discoverySnapshotId: m.discoverySnapshotId,
+              opaqueModelId: m.opaqueModelId || cur?.opaqueModelId,
               mode: cur?.mode,
               nativeApi: cur?.nativeApi,
               modalities: cur?.modalities,
@@ -1842,6 +1855,9 @@ export function ProviderConnectionDialog({
         officialDocs: latest?.officialDocs ?? m.officialDocs,
         discoveredMetadata: m.discoveredMetadata ?? latest?.discoveredMetadata,
         discoveredCost: m.discoveredCost ?? latest?.discoveredCost,
+        discoveredSource: m.discoveredSource,
+        discoverySnapshotId: m.discoverySnapshotId,
+        opaqueModelId: m.opaqueModelId || latest?.opaqueModelId,
         nameExplicit: latest?.nameExplicit ?? m.nameExplicit,
         ...(interfaceId ? { interfaceId } : {}),
         ...(api ? { api } : {}),
@@ -1871,6 +1887,9 @@ export function ProviderConnectionDialog({
           officialDocs: m.officialDocs,
           discoveredMetadata: m.discoveredMetadata,
           discoveredCost: m.discoveredCost,
+          discoveredSource: m.discoveredSource,
+          discoverySnapshotId: m.discoverySnapshotId,
+          opaqueModelId: m.opaqueModelId,
           nameExplicit: m.nameExplicit,
           ...(m.interfaceId ? { interfaceId: m.interfaceId } : {}),
           ...(m.api ? { api: m.api } : {}),
@@ -1992,6 +2011,9 @@ export function ProviderConnectionDialog({
           officialDocs: m.officialDocs,
           discoveredMetadata: m.discoveredMetadata,
           discoveredCost: m.discoveredCost,
+          discoveredSource: m.discoveredSource,
+          discoverySnapshotId: m.discoverySnapshotId,
+          opaqueModelId: m.opaqueModelId,
           nameExplicit: m.nameExplicit,
           ...(m.interfaceId ? { interfaceId: m.interfaceId } : {}),
           ...(m.api ? { api: m.api } : {}),

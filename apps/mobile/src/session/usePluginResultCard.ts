@@ -38,8 +38,13 @@ export function useSessionPluginResource(deviceId: string | undefined, sessionId
     let generation = 0;
     let timer: ReturnType<typeof setTimeout> | undefined;
     let statusTimer: ReturnType<typeof setTimeout> | undefined;
+    let pollsPrStatus = false;
     const id = JSON.stringify([sessionId, callId]);
     let resolvedId = id;
+    const scheduleStatusRefresh = () => {
+      if (statusTimer) clearTimeout(statusTimer);
+      statusTimer = pollsPrStatus && !disposed && AppState.currentState === 'active' ? setTimeout(() => { statusTimer = undefined; void loadAndSchedule(); }, PR_STATUS_REFRESH_MS) : undefined;
+    };
     const load = async () => {
       if (AppState.currentState !== 'active') return;
       const expected = ++generation;
@@ -71,25 +76,26 @@ export function useSessionPluginResource(deviceId: string | undefined, sessionId
         if (valid()) {
           resolvedId = JSON.stringify([sessionId, next]);
           setState({ binding, callId: next, blocks: resource.blocks ?? [], title: typeof resource.display.title === 'string' ? resource.display.title : resource.display.title.fallback, error: kind === 'card' && !resource.blocks?.length });
-          if (statusTimer) clearTimeout(statusTimer);
-          const showsPrStatus = resource.blocks?.some(block => block.primitive === 'plugin-card-actions' &&
+          pollsPrStatus = !!resource.blocks?.some(block => block.primitive === 'plugin-card-actions' &&
             Array.isArray((block.data as { prStatus?: unknown } | undefined)?.prStatus) && ((block.data as { prStatus: unknown[] }).prStatus.length > 0));
-          statusTimer = showsPrStatus ? setTimeout(() => { statusTimer = undefined; void load(); }, PR_STATUS_REFRESH_MS) : undefined;
         }
       } catch (error) {
         const code = error && typeof error === 'object' ? (error as { code?: unknown }).code : undefined;
         const unavailable = /NOT_FOUND|FORBIDDEN|UNAUTHORIZED/.test(String(code ?? '') + String(error));
+        // A card gone for good stops the refresh; a transient failure keeps it going so the next minute retries.
+        if (unavailable) pollsPrStatus = false;
         if (valid()) setState((previous) => ({ binding, ...(!unavailable && previous?.binding === binding ? { callId: previous.callId, blocks: previous.blocks, title: previous.title } : {}), error: true }));
       }
     };
+    const loadAndSchedule = async () => { await load(); scheduleStatusRefresh(); };
     const offPush = onRemoteResourceChanged((source, payload) => {
       if (source !== deviceId || payload.collectionId !== collectionId) return;
       if (payload.resourceRefs?.length && !payload.resourceRefs.some((ref) => ref.kind === kind && (ref.id === id || ref.id === resolvedId))) return;
-      if (!timer) timer = setTimeout(() => { timer = undefined; void load(); }, 200);
+      if (!timer) timer = setTimeout(() => { timer = undefined; void loadAndSchedule(); }, 200);
     });
     const offTopic = startFocusedTopicSubscription({ deviceId, owner: `${collectionId}:${id}:${subscriberId}`, topic: 'sessions', subscribe, unsubscribe });
-    const listener = AppState.addEventListener('change', (next) => { generation += 1; if (next === 'active') void load(); });
-    void load();
+    const listener = AppState.addEventListener('change', (next) => { generation += 1; if (next === 'active') void loadAndSchedule(); });
+    void loadAndSchedule();
     return () => { disposed = true; generation += 1; offPush(); offTopic(); listener.remove(); if (timer) clearTimeout(timer); if (statusTimer) clearTimeout(statusTimer); };
   }, [subscriberId, focused, binding, deviceId, sessionId, callId, collectionId, kind, followMailReplacement, attempt, connectionEpoch, status, invoke, onRemoteResourceChanged, subscribe, unsubscribe]);
   return { callId: state?.binding === binding ? state.callId : undefined, title: state?.binding === binding ? state.title : undefined, blocks: state?.binding === binding ? state.blocks : undefined, error: !deviceId || status !== 'online' || (state?.binding === binding && state.error), retry };

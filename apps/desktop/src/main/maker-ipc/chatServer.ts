@@ -15,7 +15,7 @@ import { t } from '../i18n.js';
 import { readFile as readMedia } from '../cindy-media/blobStore.js';
 import { getAccessToken, refresh } from '../authManager.js';
 import { retryAfterDeadline } from '@cindy/auth-client';
-import { CHAT_INVITATION_PATH, parseChatInvitationToken } from '@cindy/device-link';
+import { parseChatInvitationShareId, parseChatInvitationToken } from '@cindy/device-link';
 import { CURRENT_CINDY_REGION } from '../../shared/brandRegion.js';
 import { existsSync, readFileSync, promises as fsp } from 'node:fs';
 import { MIRROR_ATTACHMENT_MAX_BYTES } from '../companion-cloud/mirror.js';
@@ -23,6 +23,7 @@ import { request as httpRequest } from 'node:http';
 import { request as httpsRequest } from 'node:https';
 import { migrateLocalGroups, type ChatContentBlock } from './chatServerMigration.js';
 import { chatErrorDiagnostic, chatGroupFailure, missingGroupCode } from './chatServerErrors.js';
+import { chatInviteShareBase, createChatInviteShare, notifyChatInviteRevoked, resolveChatInviteShare } from './chatInviteShares.js';
 import { createChatMedia } from './chatServerMedia.js';
 import { mergeChatReplyAttachments } from './chatServerReplyAttachments.js';
 import { prepareChatReplyImages } from './chatServerReplyImages.js';
@@ -2938,26 +2939,11 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
     try { return { ok: true as const, ...await fn() }; }
     catch (error) { return { ok: false as const, errorCode: error instanceof z.ZodError ? 'INVALID_INPUT' : error instanceof Error ? missingGroupCode(error.message) : 'REQUEST_FAILED' }; }
   };
-  // Bare token, cindy://chat-invite/<token> or the public https page link; only the token
-  // reaches this account's own Chat Server. An unreadable link is INVALID_INPUT.
-  const inviteToken = (link: string) => z.string().regex(/^[A-Za-z0-9_-]{43}$/).parse(parseChatInvitationToken(link) ?? '');
-  // Global/CN public pages are verified. Dev keeps the existing scheme until its
-  // public deployment is verified; this does not affect invitation reception.
-  function invitationPage(): URL | null {
-    if (CURRENT_CINDY_REGION === 'dev') return null;
-    const page = new URL(getClientEndpoint('deviceLinkApiBaseUrl'));
-    if (!['http:', 'https:'].includes(page.protocol) || page.username || page.password || page.search || page.hash) {
-      throw new Error('CHAT_ENDPOINT_UNAVAILABLE');
-    }
-    const local = page.hostname === 'localhost' || page.hostname.endsWith('.localhost')
-      || /^127\./.test(page.hostname) || page.hostname === '[::1]' || page.hostname === '0.0.0.0';
-    if (local) return null;
-    if (page.protocol !== 'https:') {
-      throw new Error('CHAT_ENDPOINT_UNAVAILABLE');
-    }
-    page.pathname = page.pathname.replace(/\/+$/, '') + CHAT_INVITATION_PATH;
-    return page;
-  }
+  // Share references resolve only through this edition's configured Share Server.
+  const inviteToken = async (link: string) => {
+    const shareId = parseChatInvitationShareId(link);
+    return z.string().regex(/^[A-Za-z0-9_-]{43}$/).parse(shareId ? await resolveChatInviteShare(shareId) : parseChatInvitationToken(link) ?? '');
+  };
 
   // Null is the server's non-expiring contract; omitted/invalid dates are never
   // treated as permanent links. Older servers keep their dated, single-use links.
@@ -3284,28 +3270,33 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
     }),
     createInvite: input => result(async () => {
       const i = z.object({ groupId: id, clientId: operationId }).parse(input);
-      const page = invitationPage();
+      const actor = managementActor(await groupSnapshot(i.groupId));
+      if (!actor) throw new Error('ROLE_REQUIRED');
+      chatInviteShareBase();
       const invite = inviteResponse(z.object({ token: z.string().regex(/^[A-Za-z0-9_-]{43}$/), ...inviteFields }).refine(validInvite),
-        await api(`/conversations/${i.groupId}/invite-links`, 'POST', { operationId: i.clientId }, managementActor(await groupSnapshot(i.groupId)), false, 200),
+        await api(`/conversations/${i.groupId}/invite-links`, 'POST', { operationId: i.clientId }, actor, false, 200),
       );
-      if (page) page.hash = `${invite.token}?app=${CURRENT_CINDY_REGION === 'cn' ? 'cindycn' : 'cindy'}`;
-      return { link: page?.href ?? `cindy://chat-invite/${invite.token}`, expiresAt: invite.expiresAt, ...(invite.reusable !== undefined ? { reusable: invite.reusable } : {}) };
+      const link = await createChatInviteShare(i.groupId, invite.token, actor);
+      return { link, expiresAt: invite.expiresAt, ...(invite.reusable !== undefined ? { reusable: invite.reusable } : {}) };
     }),
     revokeInvite: input => result(async () => {
       const i = z.object({ groupId: id, link: z.string(), clientId: z.string().uuid() }).strict().parse(input);
-      const token = inviteToken(i.link);
+      const token = await inviteToken(i.link);
       const actor = managementActor(await groupSnapshot(i.groupId));
       if (!actor) throw new Error('ROLE_REQUIRED');
       try {
-        return inviteResponse(z.object({ revoked: z.literal(true) }), await api(`/conversations/${i.groupId}/invite-links/revoke`, 'POST', { token, operationId: i.clientId }, actor, false, 200));
+        const revoked = inviteResponse(z.object({ revoked: z.literal(true) }), await api(`/conversations/${i.groupId}/invite-links/revoke`, 'POST', { token, operationId: i.clientId }, actor, false, 200));
+        const shareId = parseChatInvitationShareId(i.link);
+        if (shareId) await notifyChatInviteRevoked(shareId);
+        return revoked;
       } catch (error) {
         if (error instanceof ChatResponseError && error.status === 404 && ['REQUEST_FAILED', 'NOT_FOUND'].includes(error.message)) throw new Error('INVITE_REVOKE_UNSUPPORTED');
         throw error;
       }
     }),
-    previewInvite: input => result(async () => inviteResponse(invitePreview, await api('/invite-links/preview', 'POST', { token: inviteToken(input.link) }, undefined, false, 200))),
+    previewInvite: input => result(async () => inviteResponse(invitePreview, await api('/invite-links/preview', 'POST', { token: await inviteToken(input.link) }, undefined, false, 200))),
     acceptInvite: input => result(async () => {
-      const room = await api<{ groupId: string }>('/invite-links/accept', 'POST', { token: inviteToken(input.link), operationId: operationId.parse(input.clientId) });
+      const room = await api<{ groupId: string }>('/invite-links/accept', 'POST', { token: await inviteToken(input.link), operationId: operationId.parse(input.clientId) });
       rooms.delete(room.groupId); subscribe(room.groupId); changed(room.groupId); return room;
     }),
   };

@@ -72,6 +72,20 @@ describe('plugin card lifecycle on Mobile', () => {
     await vi.advanceTimersByTimeAsync(120_000);
     expect(h.get).toHaveBeenCalledTimes(3);
   });
+  it('keeps refreshing PR status after one read fails, and stops once the card is gone', async () => {
+    vi.useFakeTimers();
+    const live = { display: { title: 'GitHub' }, blocks: [{ id: 'actions', primitive: 'plugin-card-actions', fallbackMarkdown: '', data: { prStatus: [{ key: 'o/r#1', fallback: [] }] } }] };
+    h.get.mockResolvedValueOnce(live).mockRejectedValueOnce(new Error('network down')).mockResolvedValueOnce(live).mockRejectedValue(Object.assign(new Error('NOT_FOUND'), { code: 'NOT_FOUND' }));
+    await render();
+    await act(async () => { await vi.advanceTimersByTimeAsync(60_000); });
+    expect(h.get).toHaveBeenCalledTimes(2);
+    await act(async () => { await vi.advanceTimersByTimeAsync(60_000); });
+    expect(h.get).toHaveBeenCalledTimes(3);
+    await act(async () => { await vi.advanceTimersByTimeAsync(60_000); });
+    expect(h.get).toHaveBeenCalledTimes(4);
+    await act(async () => { await vi.advanceTimersByTimeAsync(180_000); });
+    expect(h.get).toHaveBeenCalledTimes(4);
+  });
   it('does not poll a card without PR status', async () => {
     vi.useFakeTimers();
     await render();
