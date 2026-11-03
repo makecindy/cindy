@@ -15939,7 +15939,17 @@
   },
   "commandPalette": {
     "viewSkillDetails": "观技艺之详",
-    "projectSkillNotLoaded": "今之 Pi 差事尚未载此案之 Skill，新差事将自试载之"
+    "projectSkillNotLoaded": "今之 Pi 差事尚未载此案之 Skill，新差事将自试载之",
+    "pluginSkillSetup": {
+      "install": "未纳",
+      "enable": "未启"
+    },
+    "pluginSkills": {
+      "pr": {
+        "install": "发 PR、修 CI 与评审、随至合并 · 须先纳 GitHub 法器",
+        "enable": "发 PR、修 CI 与评审、随至合并 · 须先启 GitHub 法器"
+      }
+    }
   },
   "skillhub": {
     "remote": {
@@ -16001,9 +16011,6 @@
       "importFailed": "纳技艺未成"
     },
     "builtIn": {
-      "pr": {
-        "description": "开新分支以始其事，于 GitHub 发 PR，后台修 CI 与审阅之见，至于合并。"
-      },
       "official": "官方",
       "officialDetail": "Cindy 随应用程序附之，并自行维护。",
       "skillCreator": {

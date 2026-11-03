@@ -315,6 +315,46 @@ export function hasUnavailableProjectSkillPreview(commands: UnifiedCommand[]): b
     || (shadowedUnavailableSkillsByCommands.get(commands)?.size ?? 0) > 0;
 }
 
+export interface PluginSkillSetupPaletteEntry {
+  skillName: string;
+  description: string;
+  /** Short row tag, e.g. "needs install". */
+  meta?: string;
+}
+
+const pluginSkillSetupCommands = new WeakMap<UnifiedCommand, string>();
+
+/**
+ * Palette-only rows for plugin Skills whose plugin is not usable yet. They go
+ * after every real command and only when no command of that name exists, so a
+ * real Skill always wins. Keep them out of the decoration roster and dispatch:
+ * they are a setup entry, not a sendable command.
+ */
+export function addPluginSkillSetupCommands(
+  commands: UnifiedCommand[],
+  entries: readonly PluginSkillSetupPaletteEntry[],
+): UnifiedCommand[] {
+  const names = new Set(commands.map((command) => command.name.toLowerCase()));
+  const extra = entries
+    .filter((entry) => !names.has(entry.skillName.toLowerCase()))
+    .map((entry) => {
+      const command: UnifiedCommand = {
+        kind: 'desktop',
+        name: entry.skillName,
+        description: entry.description,
+        ...(entry.meta ? { meta: entry.meta } : {}),
+      };
+      pluginSkillSetupCommands.set(command, entry.skillName);
+      return command;
+    });
+  return extra.length > 0 ? [...commands, ...extra] : commands;
+}
+
+/** The Skill a palette row would set up, or undefined for ordinary commands. */
+export function pluginSkillSetupName(command: UnifiedCommand): string | undefined {
+  return pluginSkillSetupCommands.get(command);
+}
+
 /**
  * 包含过滤(case-insensitive); 精确匹配优先,其次是前缀匹配,最后是普通包含匹配。
  *

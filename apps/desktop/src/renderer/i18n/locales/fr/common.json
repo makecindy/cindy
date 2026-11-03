@@ -16153,7 +16153,17 @@
   },
   "commandPalette": {
     "viewSkillDetails": "Voir les détails du skill",
-    "projectSkillNotLoaded": "Cette tâche Pi n'a pas chargé ce skill de projet. Les nouvelles tâches tenteront de le charger automatiquement."
+    "projectSkillNotLoaded": "Cette tâche Pi n'a pas chargé ce skill de projet. Les nouvelles tâches tenteront de le charger automatiquement.",
+    "pluginSkillSetup": {
+      "install": "Non installé",
+      "enable": "Désactivé"
+    },
+    "pluginSkills": {
+      "pr": {
+        "install": "Ouvre une PR, corrige la CI et les retours de revue, et la suit jusqu’à la fusion · Nécessite d’installer le plugin GitHub",
+        "enable": "Ouvre une PR, corrige la CI et les retours de revue, et la suit jusqu’à la fusion · Nécessite d’activer le plugin GitHub"
+      }
+    }
   },
   "skillhub": {
     "remote": {
@@ -16215,9 +16225,6 @@
       "importFailed": "Échec de l'importation du skill"
     },
     "builtIn": {
-      "pr": {
-        "description": "Démarre le travail sur une nouvelle branche, ouvre une pull request GitHub, puis corrige la CI et les retours de revue en arrière-plan jusqu’à la fusion."
-      },
       "official": "Officiel",
       "officialDetail": "Inclus et maintenu par Cindy.",
       "skillCreator": {

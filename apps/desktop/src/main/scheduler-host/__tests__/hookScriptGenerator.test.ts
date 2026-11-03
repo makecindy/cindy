@@ -22,6 +22,7 @@ import {
   parseGeneratedScriptPath,
   resolveHookScriptPath,
   stabilizeHookCommand,
+  stabilizeManagedSkillLinks,
 } from '../hook-script-generator';
 
 const fakeMaker = {} as Maker;
@@ -121,6 +122,37 @@ describe('hookScriptSlug / parseGeneratedScriptPath / buildHookCommand', () => {
     // 链接已经不在(旧对话照抄失效路径):拒绝落库,而不是存一个永远失败的检查。
     const gone = `node "${path.join(tmpdir(), 'cindy-claude-skills-gone', 'cindy', 'skills', 'pr', 'scripts', 'gate.mjs')}" x`;
     expect(() => stabilizeHookCommand(gone, undefined, () => false, realpath)).toThrow(/temporary Skill link/);
+  });
+
+  // 插件技能的文件在带安装版本号的批准快照里,插件一更新,存下来的快照路径就还在跑旧版脚本。
+  // 落库前换成插件技能的私有投影入口:名字跨版本不变,始终指向当前快照。
+  it('stabilizeHookCommand 把插件技能的快照路径换成跨版本不变的投影入口', () => {
+    const state = path.join(tmpdir(), 'owners', 'o1', 'ghost-install-state');
+    const snapshot = path.join(state, 'skill-snapshots', 'cindy-github', 'rev-1', 'skills', 'pr');
+    const projection = path.join(state, 'agent-skills', 'skills', 'cindy-github--pr');
+    const other = path.join(state, 'agent-skills', 'skills', 'x-manager--x-ops');
+    const claudeLink = path.join(tmpdir(), 'cindy-claude-skills-Q1', 'cindy-plugin-cindy-github', 'skills', 'pr');
+    const realpath = (p: string) => {
+      if (p === claudeLink || p === projection) return snapshot;
+      if (p === other) return path.join(state, 'skill-snapshots', 'x-manager', 'rev-9', 'skills', 'x-ops');
+      throw new Error('ENOENT');
+    };
+    const readdir = (dir: string) => {
+      if (dir === path.join(state, 'agent-skills', 'skills')) return ['x-manager--x-ops', 'cindy-github--pr'];
+      throw new Error('ENOENT');
+    };
+    const gate = path.join(projection, 'scripts', 'gate.mjs');
+    // Claude 看到的是临时链接目录。
+    expect(
+      stabilizeManagedSkillLinks(`node "${path.join(claudeLink, 'scripts', 'gate.mjs')}" x`, realpath, () => false, readdir),
+    ).toBe(`node ${shellQuote(gate)} x`);
+    // Codex / Pi 按技能说明先 realpath,拿到的就是快照路径。
+    expect(
+      stabilizeManagedSkillLinks(`node "${path.join(snapshot, 'scripts', 'gate.mjs')}" x`, realpath, () => false, readdir),
+    ).toBe(`node ${shellQuote(gate)} x`);
+    // 没有投影入口指向它(插件已停用等):保留原路径,不猜测。
+    const stale = path.join(state, 'skill-snapshots', 'cindy-github', 'rev-0', 'skills', 'pr', 'scripts', 'gate.mjs');
+    expect(stabilizeManagedSkillLinks(`node "${stale}" x`, realpath, () => false, readdir)).toBe(`node "${stale}" x`);
   });
 
   it('stabilizeHookCommand 在文件不存在或缺少原 cwd 时明确报错', () => {

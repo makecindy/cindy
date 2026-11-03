@@ -253,8 +253,9 @@ frontmatter `name + description` 的召回作用；`manual.items` 只是插件�
 ## 7. 明确不做的事
 
 - 不新增使用插件的全局路由 Skill；不把插件业务手册铺成全局 Skill。内置
-  `cindy-plugin-creator` 仅负责编写插件，不替代插件业务的渐进发现。新插件使用按需读取的
-  `manual`；存量 Skill 槽处于停止新增、未来整体废弃的兼容期。
+  `cindy-plugin-creator` 仅负责编写插件，不替代插件业务的渐进发现。插件工具的深入用法
+  使用按需读取的 `manual`；需要斜杠命令或本地脚本的完整工作流可用插件 Skill 槽，它装在
+  Cindy 私有目录，随插件启停（见插件编写手册 §4.16）。
 - 不维护排他的 active plugin / active context；插件切换不做上下文替换，规则
   适用范围由 `ghost_id + category` 边界保证。
 - 不引入宿主级 rules_revision / receipt 回执协议。

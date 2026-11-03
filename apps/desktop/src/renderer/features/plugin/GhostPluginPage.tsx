@@ -54,6 +54,7 @@ import { readInstalledGhostsSnapshot, useInstalledGhosts } from '@/cindy-brain/u
 import {
   cancelPendingPluginSuggestion,
   getPendingPluginSuggestion,
+  pendingPluginSuggestionReturnPath,
   readyPendingPluginSuggestion,
   subscribePendingPluginSuggestion,
 } from '@/features/cc-agent/pendingPluginSuggestion';
@@ -523,8 +524,13 @@ function LocalGhostPluginPage({
       )
         return false;
       const ready = readyPendingPluginSuggestion(nonce, dataOwnerId, ghostId);
-      if (!ready) return false;
-      navigate('/cc-agent/new', { state: { pluginSuggestionNonce: ready }, flushSync: true });
+      const pending = getPendingPluginSuggestion();
+      if (!ready || !pending) return false;
+      // Back to where the user asked: the new-task draft or the task they were in.
+      navigate(pendingPluginSuggestionReturnPath(pending), {
+        state: { pluginSuggestionNonce: ready },
+        flushSync: true,
+      });
       return true;
     },
     [dataOwnerId, navigate],

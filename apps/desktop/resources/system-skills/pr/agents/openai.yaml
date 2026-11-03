@@ -1,3 +1,0 @@
-interface:
-  display_name: "PR"
-  short_description: "Start, open and follow a pull request until it is merged"

@@ -16006,7 +16006,17 @@
   },
   "commandPalette": {
     "viewSkillDetails": "View skill details",
-    "projectSkillNotLoaded": "This Pi task hasn't loaded this project Skill. New tasks will automatically try to load it."
+    "projectSkillNotLoaded": "This Pi task hasn't loaded this project Skill. New tasks will automatically try to load it.",
+    "pluginSkillSetup": {
+      "install": "Not installed",
+      "enable": "Disabled"
+    },
+    "pluginSkills": {
+      "pr": {
+        "install": "Open a PR, fix CI and review feedback, and follow it to merge · Requires installing the GitHub plugin",
+        "enable": "Open a PR, fix CI and review feedback, and follow it to merge · Requires enabling the GitHub plugin"
+      }
+    }
   },
   "skillhub": {
     "remote": {
@@ -16078,9 +16088,6 @@
       },
       "pluginCreator": {
         "description": "Create, edit, debug, and package Cindy plugins, or publish them when requested."
-      },
-      "pr": {
-        "description": "Start work on a fresh branch, open a GitHub pull request, then fix CI and review feedback in the background until it is merged."
       }
     },
     "common": {

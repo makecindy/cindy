@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it } from 'vitest';
 import {
   cancelPendingPluginSuggestion,
   getPendingPluginSuggestion,
+  pendingPluginSuggestionReturnPath,
   readyPendingPluginSuggestion,
   startPendingPluginSuggestion,
   takePendingPluginSuggestion,
@@ -57,6 +58,35 @@ describe('installation continuation', () => {
     expect(readyPendingPluginSuggestion(nonce, 'b', 'test')).toBeNull();
     readyPendingPluginSuggestion(nonce, 'a', 'test');
     expect(takePendingPluginSuggestion(nonce, 'a', 'remote')).toBeNull();
+    expect(getPendingPluginSuggestion()).toBeNull();
+  });
+  it('returns to the new-task draft by default and to the requesting task otherwise', () => {
+    expect(pendingPluginSuggestionReturnPath(request)).toBe('/cc-agent/new');
+    const nonce = startPendingPluginSuggestion({
+      ...request,
+      targetKey: '["session","s1"]',
+      returnTo: '/cc-agent/s1',
+      skillName: 'pr',
+      suggestion: { ...request.suggestion, id: 'plugin-skill:test:pr', label: '/pr', prompt: '/pr ' },
+    });
+    expect(readyPendingPluginSuggestion(nonce, 'a', 'test')).toBe(nonce);
+    const ready = getPendingPluginSuggestion()!;
+    expect(pendingPluginSuggestionReturnPath(ready)).toBe('/cc-agent/s1');
+    // The draft target cannot take a request that belongs to a task composer.
+    expect(takePendingPluginSuggestion(nonce, 'a', 'local')).toBeNull();
+  });
+  it('hands a palette Skill request back only to the same owner and task', () => {
+    const nonce = startPendingPluginSuggestion({
+      ...request,
+      targetKey: '["session","s1"]',
+      returnTo: '/cc-agent/s1',
+      skillName: 'pr',
+    });
+    readyPendingPluginSuggestion(nonce, 'a', 'test');
+    expect(takePendingPluginSuggestion(nonce, 'a', '["session","s1"]')).toMatchObject({
+      skillName: 'pr',
+      returnTo: '/cc-agent/s1',
+    });
     expect(getPendingPluginSuggestion()).toBeNull();
   });
 });

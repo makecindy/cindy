@@ -6,6 +6,10 @@ export interface PluginSuggestionRequest {
   ownerId: string;
   targetKey: string;
   workingDir: string | null;
+  /** Route to resume on after setup; omitted = the new-task draft. */
+  returnTo?: string;
+  /** Set when the request came from the `/` palette: resume by filling `/<skillName> `. */
+  skillName?: string;
 }
 export interface PendingPluginSuggestion extends PluginSuggestionRequest {
   nonce: string;
@@ -23,6 +27,10 @@ export const subscribePendingPluginSuggestion = (fn: () => void) => {
   };
 };
 export const getPendingPluginSuggestion = () => pending;
+export const NEW_TASK_PLUGIN_SUGGESTION_RETURN = '/cc-agent/new';
+export function pendingPluginSuggestionReturnPath(request: PluginSuggestionRequest): string {
+  return request.returnTo ?? NEW_TASK_PLUGIN_SUGGESTION_RETURN;
+}
 export function startPendingPluginSuggestion(request: PluginSuggestionRequest): string {
   pending = { ...request, nonce: crypto.randomUUID(), phase: 'setup' };
   publish();

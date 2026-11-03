@@ -16006,7 +16006,17 @@
   },
   "commandPalette": {
     "viewSkillDetails": "Skill-Details anzeigen",
-    "projectSkillNotLoaded": "Diese Pi-Aufgabe hat diesen Projekt-Skill noch nicht geladen. Neue Aufgaben versuchen automatisch, ihn zu laden."
+    "projectSkillNotLoaded": "Diese Pi-Aufgabe hat diesen Projekt-Skill noch nicht geladen. Neue Aufgaben versuchen automatisch, ihn zu laden.",
+    "pluginSkillSetup": {
+      "install": "Nicht installiert",
+      "enable": "Deaktiviert"
+    },
+    "pluginSkills": {
+      "pr": {
+        "install": "PR öffnen, CI und Review-Feedback beheben und bis zum Merge begleiten · Erfordert die Installation des GitHub-Plugins",
+        "enable": "PR öffnen, CI und Review-Feedback beheben und bis zum Merge begleiten · Erfordert die Aktivierung des GitHub-Plugins"
+      }
+    }
   },
   "skillhub": {
     "remote": {
@@ -16068,9 +16078,6 @@
       "importFailed": "Skill konnte nicht importiert werden"
     },
     "builtIn": {
-      "pr": {
-        "description": "Beginnt die Arbeit auf einem neuen Branch, öffnet einen GitHub-Pull-Request und behebt anschließend CI-Fehler und Review-Feedback im Hintergrund, bis er gemergt ist."
-      },
       "official": "Offiziell",
       "officialDetail": "Von Cindy mitgeliefert und gepflegt.",
       "skillCreator": {
