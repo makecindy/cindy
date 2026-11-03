@@ -749,6 +749,19 @@ describe('session runtime control wiring', () => {
     expect(wakeQueue).toBeGreaterThan(normalWakeGuard);
   });
 
+  it('persists a send-time renamed model inside the shared route transaction', () => {
+    const setModel = handlerBody(
+      registerSource,
+      'const handleSetModel = async (',
+      'const recoverRemoteRuntimeAxisPersistence',
+    );
+    expect(setModel).toContain('persistRenamedSessionModel: true');
+    const persistGate = setModel.indexOf('internalOptions.persistRenamedSessionModel === true');
+    const persist = setModel.indexOf('await persistSessionFields(sessionId, patch);', persistGate);
+    expect(persistGate).toBeGreaterThan(-1);
+    expect(persist).toBeGreaterThan(persistGate);
+  });
+
   it('uses current runtime window facts but still requires a verified target before rebuilding', () => {
     const setModel = handlerBody(
       registerSource,

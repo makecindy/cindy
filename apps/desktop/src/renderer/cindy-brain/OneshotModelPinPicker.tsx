@@ -103,6 +103,7 @@ export function OneshotModelPinPicker({
   const vendor = currentAgent === 'claude-code' ? 'cc' : currentAgent;
   const unavailable = !!value && (!current || current.available === false);
   return <ModelSelector
+    localOnlyReason="one-shot-local-request"
     providersOverride={providers}
     modelId={route?.modelId ?? value ?? ''}
     currentProviderId={route?.providerId ?? null}

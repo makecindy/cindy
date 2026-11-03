@@ -115,6 +115,7 @@ export const LEGACY_GHOST_SLOTS = [
   'skill',
   'workspace',
   'ios-simulator',
+  'live-screen',
 ] as const;
 type LegacyGhostSlot = string;
 
@@ -213,6 +214,8 @@ export interface GhostToolDecl {
   description: string;
   /** JSON Schema(object)形态的参数声明;可省略(无参工具)。 */
   parameters?: Record<string, unknown>;
+  /** Host approval policy. `auto` requires explicit installation consent. */
+  approval?: 'auto' | 'each-call';
 }
 
 /**
@@ -1043,6 +1046,12 @@ export interface GhostManifest {
   /** @deprecated Retirement detection only. No runtime capability is granted. */
   iosSimulator?: true;
   /**
+   * Device screens the plugin's Node worker serves for viewing on the owner's
+   * phone over remote desktop. Requires `node`; Cindy calls only the fixed
+   * `liveScreen.*` worker methods.
+   */
+  liveScreen?: true;
+  /**
    * 随包渐进披露手册。它不是能力 slot 或授权项；Host 只把索引投影给模型，
    * 正文经 ghost_manual 按需读取。旧客户端忽略这一可选顶层字段。
    */
@@ -1244,6 +1253,7 @@ const GHOST_MANIFEST_KNOWN_TOP_LEVEL_FIELDS = new Set([
   'pick',
   'workspace',
   'iosSimulator',
+  'liveScreen',
 ]);
 
 const V3_BOOLEAN_CAPABILITY_FIELDS = [
@@ -1257,6 +1267,7 @@ const V3_BOOLEAN_CAPABILITY_FIELDS = [
   'pick',
   'workspace',
   'iosSimulator',
+  'liveScreen',
 ] as const;
 
 const V3_DECLARATION_TO_LEGACY_SLOT = [
@@ -1285,6 +1296,7 @@ const V3_BOOLEAN_TO_LEGACY_SLOT: Record<(typeof V3_BOOLEAN_CAPABILITY_FIELDS)[nu
   pick: 'pick',
   workspace: 'workspace',
   iosSimulator: 'ios-simulator',
+  liveScreen: 'live-screen',
 };
 
 type PreparedGhostManifest = {
@@ -1899,9 +1911,13 @@ export function validateGhostManifest(value: unknown): ManifestValidation {
           return { ok: false, reason: 'tools[].parameters 必须可序列化' };
         }
       }
+      if (t.approval !== undefined && t.approval !== 'auto' && t.approval !== 'each-call') {
+        return { ok: false, reason: 'tools[].approval 必须是 auto 或 each-call' };
+      }
       tools.push({
         name: t.name,
         description: t.description,
+        ...(t.approval !== undefined ? { approval: t.approval as 'auto' | 'each-call' } : {}),
         ...(t.parameters !== undefined
           ? { parameters: t.parameters as Record<string, unknown> }
           : {}),
@@ -3415,6 +3431,9 @@ export function validateGhostManifest(value: unknown): ManifestValidation {
       reason: 'slots 声明了 "node" 但缺少 node 工作进程详单',
     };
   }
+  if (slots.includes('live-screen') && node === undefined) {
+    return { ok: false, reason: 'liveScreen: true 需要同时声明 node 工作进程' };
+  }
   if (node?.secretBindings) {
     for (const binding of node.secretBindings) {
       if (network?.secrets?.some((secret) => secret.key === binding.key)) {
@@ -3951,6 +3970,9 @@ export function validateGhostManifest(value: unknown): ManifestValidation {
         : {}),
       ...(prepared.schemaVersion === 3 && slots.includes('ios-simulator')
         ? { iosSimulator: true as const }
+        : {}),
+      ...(prepared.schemaVersion === 3 && slots.includes('live-screen')
+        ? { liveScreen: true as const }
         : {}),
       ...(manual !== undefined ? { manual } : {}),
       ...(setup !== undefined ? { setup } : {}),

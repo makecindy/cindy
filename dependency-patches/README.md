@@ -11,6 +11,7 @@
 | 依赖 | 用途 |
 | --- | --- |
 | `expo-image-manipulator@57.0.14` | 修复 iOS HDR / 10-bit HEIC 图片在方向归一化时因原生 `CGContext` 参数不兼容而抛出 `ERR_IMAGE_CONTEXT_LOST`；正常方向直接复用原图，其余方向交给 `UIGraphicsImageRenderer`。同类问题与真机验证见 [`tloncorp/tlon-apps#5951`](https://github.com/tloncorp/tlon-apps/pull/5951)，待 Expo 上游提供等价修复后移除。 |
+| `expo-modules-core@57.0.18` | 修复 iOS 偶发闪退（`NSFastEnumerationMutation`，栈在 `-[UIViewController _recursiveUpdateContentOverlayInsetsFromParentIfNecessary]`，无 App 帧）。SwiftUI 宿主视图（`@expo/ui` 的 `Host`）挂上 / 卸下窗口时会同步 `addChild` / `removeFromParent`；而 UIKit 在状态栏或安全区变化时正遍历父控制器的子控制器，若此时有 `unstable_Immediate` 状态提交让 Fabric 当场挂载，子控制器列表就在遍历中被改动。远程桌面叠层渲染在导航栈外，它的 SwiftUI 宿主直接挂在根控制器下，画中画期间一直在。补丁让视图仍同步挂上 / 卸下，控制器的父子关系改到下一轮主线程再同步，并沿用上游对「父控制器视图不包含宿主」时跳过 containment 的判断。同一机制见 [`react-native-screens#4811`](https://github.com/software-mansion/react-native-screens/issues/4811)、[`#4168`](https://github.com/software-mansion/react-native-screens/issues/4168)。改变 iOS 原生指纹，需随冷更发版；升级 expo-modules-core 时核查上游是否已有等价修复。 |
 | `expo-paste-input@0.2.2` | 优化移动端粘贴图片的处理时序，将耗时的解码、压缩和写盘移出 UI 线程，并补充加载中与失败事件。 |
 | `expo-router@57.0.17` | `Stack.Toolbar.Menu` 子菜单透传 `subtitle`，让 iOS 顶栏菜单的一级行在标题下显示当前值（如「任务信息」下显示已选项）。配合下方 `react-native-screens` 补丁生效。 |
 | `harmonyos-sans-sc-webfont-splitted` | 移除依赖按语言全局覆盖 `font-family` 的规则，由 Cindy 自己决定界面字体。 |

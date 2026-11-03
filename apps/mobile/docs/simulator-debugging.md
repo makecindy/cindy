@@ -90,7 +90,7 @@ explicitly leaves visible-window acceptance to a screenshot/manual check. Withou
    机型要求，不能因另一型号已经启动就把它当作目标，也不使用已知被其他任务占用的设备。机型
    和个人选择都没有时可复用唯一已启动设备，否则询问。后续命令保持相同 region、UDID、模拟器
    后端和 mock 开关。
-   Cindy 模拟器经已安装的 `baguette-simulator` 插件操作：先查实时详情和 `devices`，按精确 UDID
+   Cindy 模拟器经已安装的 `cindy-simulator` 插件操作：先查实时详情和 `devices`，按精确 UDID
    操作，只用 `environment` 列出的已安装 runtime，同机型有可复用设备时不重复创建。`auto` 只在
    插件未安装或 `RUNTIME_DISABLED` 时回退系统模拟器；固定 `cindy` 时报告不可用，不替用户重新
    启用插件。Cindy 模拟器的设备全部关机或都被其他任务占用，不是回退理由：通过插件复用或新建
@@ -167,6 +167,8 @@ apply". Treat the following as a contract, not optional steps:
      not read the device's `RCT_jsLocation`, so the label is what proves which
      Metro the app actually used.
   3. The Metro terminal printed a fresh `iOS Bundled …` after your edit.
+  4. After exercising the path, `pnpm mobile:sim:logcheck` passes or its findings
+     are reported. See [Logs](#logs).
 
 ### Tools (use these instead of ad-hoc `lsof`/`PlistBuddy`/deep-link dances)
 
@@ -178,6 +180,7 @@ pnpm mobile:sim:start -- --region=cn # 中国大陆版 JS region；先 rebuild �
 pnpm mobile:sim:whoami     # doctor: booted install + which port = which worktree
 pnpm mobile:sim:whoami -- --region=cn # inspect the cn native app + Metro ownership
 pnpm mobile:sim:rebuild    # install a compatible cached dev app, or build it on a cache miss
+pnpm mobile:sim:logcheck   # errors and new warnings since the latest bundle (--port for others)
 ```
 
 `mobile:sim:start` and `mobile:sim:rebuild` default to `global`; the China
@@ -260,7 +263,7 @@ When `8081` serves another task and you are not authorized to take it over, give
 this task its own device and port instead of waiting or taking over:
 
 1. Use a device no other task is using, in the backend this task already selected:
-   for Cindy's simulator create or reuse one through the `baguette-simulator` plugin;
+   for Cindy's simulator create or reuse one through the `cindy-simulator` plugin;
    only for the system simulator use `xcrun simctl create`. Either set can
    `xcrun simctl clone` a shut-down device to keep its login (for Cindy's, add the
    `--set` below). One device follows one Metro; never repoint a device another task
@@ -466,14 +469,42 @@ errors, auth errors, and Expo runtime warnings:
 pnpm --filter mobile start -- --dev-client --host lan
 ```
 
+`mobile:sim:start` also writes Metro's output to a new private directory under the
+system temp directory for each launch (the path is printed at start and recorded
+with that Metro's port ownership), and deletes it when that Metro exits. The raw
+output can contain credentials, so it never goes into the worktree and is not kept
+after the run. Every simulator verification ends with:
+
+```bash
+pnpm mobile:sim:logcheck   # add -- --port 8082 for a parallel device
+```
+
+It reads only the output after the latest entry bundle, so reload the app and
+exercise the path first.
+
+| Exit | Meaning | Required action |
+| ---- | ------- | --------------- |
+| `0` | No errors. New warnings may be listed. | Include every listed warning in your report. |
+| `1` | An `ERROR` or failed bundle. | Fix it, or report why it is unrelated to your change. Never claim a clean verification. |
+| `2` | Cannot tell: Metro belongs to another worktree or stopped, this launch has no usable log, or nothing bundled. | Fix the setup and rerun. This is not a pass. |
+
+`scripts/sim-logcheck-known-warnings.json` lists warnings we are not fixing now,
+each with a reason. Add an entry only with that reason, and remove it once the
+warning is fixed. Errors cannot be listed. One Metro's log mixes every device
+connected to it, so give each task its own device and port (see
+[Parallel devices](#parallel-devices-another-task-owns-8081)).
+
 Use the simulator system log for native crashes or native auth/session issues:
 
 ```bash
 xcrun simctl spawn booted log stream --style compact --predicate 'process == "Cindy"'
 ```
 
-The in-app "Open debugger to view warnings" banner means a JavaScript warning is
-active. Read Metro before changing UI code.
+React Native shows no per-warning banner here: without a debugger attached, the
+first warning only triggers a fixed "Open debugger to view warnings" banner.
+`src/debug/quietDevLogs.ts` hides that banner because it covers the UI, so a clean
+screen does not mean there are no warnings. Warnings still reach Metro and the
+debugger, and error banners still appear. Read Metro before changing UI code.
 
 For device-link network symptoms, collect:
 
@@ -668,4 +699,5 @@ Run this checklist:
 - Run `pnpm --filter mobile typecheck` when TypeScript changed.
 - Run the narrow relevant test when there is one.
 - Manually touch the exact path that regressed in the simulator.
+- Run `pnpm mobile:sim:logcheck` afterward and report its result.
 - Tell the tester which simulator/device, runtime, and build were used.

@@ -459,7 +459,7 @@ import { cindyGhostSchemePrivilege } from './cindy-brain/runtime/electronSandbox
 import { fetchReleaseNotes, fetchReleaseNotesIndex } from './releaseNotesService';
 import { resolveWorkspacePathCached, resolveWorkspacePathBatchCached } from './pathResolver';
 import { registerLocalDbIpc } from './localDb/ipc/registerAll';
-import { listRecentWorkdirs } from './localDb/ipc/recentWorkdirs';
+import { hasRecentWorkdir, listRecentWorkdirs } from './localDb/ipc/recentWorkdirs';
 import { getActiveCatalog } from './maker-host/active-catalog';
 import { resolveSessionContextWindow } from '../shared/sessionContextWindow';
 import { resumeDeletedPiSubagentCleanup } from './localDb/ipc/sessions';
@@ -607,6 +607,7 @@ import {
   writeLinuxClipboard,
 } from './remote-desktop/linuxClipboardNative';
 import { initHeartbeatService } from './heartbeatService';
+import { markStartupMilestone } from './startupTimeline';
 import { registerRemoteDesktopIpc } from './remote-desktop';
 import { initAnalyticsSettingsService, noteAuthColdStartState } from './analyticsSettingsService';
 import { initLogUploadService, scheduleStartupBackfill } from './log-upload';
@@ -614,7 +615,11 @@ import { initPerformanceTraceService } from './performance-trace';
 import { createOpenLogsMenuItem, openLogsDirectory } from './logSupport';
 import { WindowManualDragController } from './windowManualDrag';
 import { loadWindowsTaskbarNative } from './windowsTaskbarNative';
-import { issueWritableDirectoryPickerGrant } from './maker-ipc/writableDirectoryPickerGrant.js';
+import {
+  issueWritableDirectoryPickerGrant,
+  issueWritableDirectoryRecentGrant,
+  WritableDirectoryPickerGrantError,
+} from './maker-ipc/writableDirectoryPickerGrant.js';
 // 设备互联(跨设备远程控制): relay 连接 host + 开关/设备列表 IPC
 import {
   initDeviceLinkService,
@@ -716,8 +721,12 @@ import {
   registerPiAgentIfAvailable,
   setBotConversationConnectionsReader,
 } from './maker-host/index.js';
-import { createPiRuntimeRecovery } from './agent-binaries/pi-runtime-recovery.js';
+import {
+  createPiRuntimeRecovery,
+  prepareOptionalPiRuntime,
+} from './agent-binaries/pi-runtime-recovery.js';
 import { createDynamicMaker } from './maker-host/dynamic-maker.js';
+import { makerStartupGate } from './maker-host/startup-gate.js';
 import { ensureBundledRipgrepReady } from './maker-host/runtime-configs.js';
 import {
   ensureActiveCatalogLoaded,
@@ -821,6 +830,10 @@ import {
   withSendToSessionLock,
 } from './maker-ipc/register.js';
 import { moveSessionProjectFromHost } from './mcp-integrations/moveSession.js';
+import {
+  createLocalProjectFromTaskHandlers,
+  createProjectsRootSettingsHandlers,
+} from './createProjectFromTaskHost.js';
 import { cleanupActiveReviewArtifactSnapshots } from './reviewer/reviewArtifactSnapshot.js';
 import { MAKER_INVOKE as MAKER_IPC_INVOKE, MAKER_PUSH, MAKER_SEND } from './maker-ipc/channels.js';
 import {
@@ -1159,6 +1172,7 @@ import {
   getGhostBrowserExtensionSlot,
   screenGhostControlPoint,
   resolveGhostControlPointPlugin,
+  getLiveScreenHost,
 } from './cindy-brain/index.js';
 import { setCodexImageAuthBinding } from './cindy-brain/codexImageAuthBinding.js';
 import { configureMailAttachmentHost } from './cindy-brain/mailAttachmentUpload.js';
@@ -1179,9 +1193,9 @@ import { handleIncomingCindyFile } from './cindy-brain/openFileInstall.js';
 import { registerCindyFileAssociation } from './cindy-brain/fileAssociation.js';
 import { runPluginStorageSmoke } from './smoke/pluginStorageSmoke.js';
 import { runComputerUseSmokeIfRequested } from './smoke/computerUseSmoke.js';
-import { setMainClassicalStyle, setMainLocale, t } from './i18n.js';
+import { getResolvedMainLocale, setMainClassicalStyle, setMainLocale, t } from './i18n.js';
 import { isClassicalReplyStyle } from '@cindy/maker-shared/classical-reply';
-import { requireObject, throwIpcError } from './utils/ipcValidate.js';
+import { requireObject, requireString, throwIpcError } from './utils/ipcValidate.js';
 import { pickNativeAtResource } from './nativeAtResourcePicker.js';
 // Scheduler (Phase 3) — 启动单例需要 maker / localDb / mainWindow 都 ready，但
 // splash check-environment / user login (触发 ensureReady) 谁先到不固定。
@@ -3181,6 +3195,8 @@ ipcMain.handle('app-locale:set-classical-style', (_event, style: unknown): { ok:
 
 ipcMain.handle('app-menu:set-locale', (_event, locale: unknown): { ok: true } => {
   const previousLocale = currentApplicationMenuLocale;
+  // Real previous locale (OS fallback before the first sync), not the menu cache that starts null.
+  const previousResolvedLocale = getResolvedMainLocale();
   currentApplicationMenuLocale = resolveApplicationMenuLocale(
     typeof locale === 'string' ? locale : null,
   );
@@ -3197,7 +3213,7 @@ ipcMain.handle('app-menu:set-locale', (_event, locale: unknown): { ok: true } =>
   remoteDesktopViewerWindows.setLocale(currentApplicationMenuLocale);
   rsbWindowController.setLocale(currentApplicationMenuLocale);
   sidebarTabWindowsController.setLocale(currentApplicationMenuLocale);
-  refreshGhostLocalization();
+  refreshGhostLocalization(previousResolvedLocale);
   const mainWindow = mainWindowRef && !mainWindowRef.isDestroyed() ? mainWindowRef : null;
   if (mainWindow) {
     installApplicationMenu(mainWindow, currentApplicationMenuLocale);
@@ -6180,6 +6196,14 @@ const registerIpcHandlers = () => {
           },
         })
         .finally(() => authCredentialRecovery.request());
+      // 启动里程碑记在这里而不是 authManager.initialize() 体内:那个函数会被
+      // authColdStartRecovery 测试按源码抽出单独执行。冷启动门超时先返回时,
+      // 以后台完成的那次登录为准。
+      const markAuthMilestone = (s: authManager.AuthState) => {
+        if (s.isAuthenticated) markStartupMilestone('auth-initialized');
+      };
+      markAuthMilestone(state);
+      void (pendingCompletion as Promise<authManager.AuthState> | null)?.then(markAuthMilestone, () => undefined);
       // Plugin downloads/reconciliation retain their owner-scoped retries, but
       // must not delay AuthContext starting the owner DB or showing the app.
       authManager.requestStableOwnerPostCommit('auth-initialize');
@@ -6450,6 +6474,9 @@ const registerIpcHandlers = () => {
     // (见 anthropic-compat-proxy-host / anthropic-responses-bridge-host),纯内存懒装配,
     // 无独立 server、无启动 / 关停生命周期。
     await ensureAnthropicCompatProxyReady();
+    // Pi has settled before this function is called. Keep early plugin callers
+    // behind the catalog/proxy prerequisites as well as binary preparation.
+    makerStartupGate.complete();
     // codex proxy 两种 spawn 形态(oauth-bearer / env-key)都经它出口,首个 codex session spawn 时
     // 由 prepareCodexExtraSpawnConfig 懒启动(幂等);此处不再按全局开关 eager-start。
     try {
@@ -6779,23 +6806,15 @@ const registerIpcHandlers = () => {
       : undefined;
     resetBeforeSegment('pi', claudeRes.downloaded === true || codexRes.downloaded === true);
 
-    let piInfo: { status: 'passed' | 'failed'; path?: string; error?: string };
-    try {
-      const piRes = await binaryPrepare('pi', {
-        ...stepOptsFor('pi'),
-        broadcastFailure: false,
-        signal: piInstallSignal,
-      });
-      piInfo =
-        piRes.ready && piRes.path
-          ? { status: 'passed' as const, path: piRes.path }
-          : { status: 'failed' as const, error: piRes.error ?? 'pi binary not available' };
-    } catch (err: unknown) {
-      piInfo = {
-        status: 'failed' as const,
-        error: err instanceof Error ? err.message : String(err),
-      };
-    }
+    const piInfo = await prepareOptionalPiRuntime({
+      prepare: () =>
+        binaryPrepare('pi', {
+          ...stepOptsFor('pi'),
+          broadcastFailure: false,
+          signal: piInstallSignal,
+        }),
+      register: registerPiAgentIfAvailable,
+    });
     if (piInfo.status === 'failed') {
       piRuntimeRecovery.markUnavailable(piInfo.error);
       console.warn(
@@ -6803,7 +6822,7 @@ const registerIpcHandlers = () => {
       );
     }
 
-    // 必装 binary 都 ready,现在才能安全构造 Maker 单例并挂 maker:* / 相关 IPC。
+    // Required binaries are ready and the first optional Pi attempt has settled.
     await registerMakerIpcsAfterSplash();
     startBinaryBackgroundUpdates();
 
@@ -7302,6 +7321,33 @@ const registerIpcHandlers = () => {
       return { success: true, path: selectedPath };
     },
   );
+
+  // ── 从最近项目列表添加可写目录：与把它选作任务工作目录同等范围，只认列表里原样保存的路径 ──
+  const recentWritableDirectoryLog = createLogger('writable-directory:recent-grant');
+  ipcMain.handle('dialog:authorize-recent-writable-directory', async (event, input: unknown) => {
+    assertTrustedAppRendererEvent(event);
+    const body = requireObject(input);
+    const directory = requireString(body.directory, 'directory');
+    const writableGrantScope = requireString(body.writableGrantScope, 'writableGrantScope');
+    if (writableGrantScope.length > 128) {
+      throwIpcError('INVALID_PARAMS', 'invalid writable directory grant scope');
+    }
+    try {
+      await issueWritableDirectoryRecentGrant({
+        scopeId: writableGrantScope,
+        senderId: event.sender.id,
+        directory,
+        isRecentProject: (candidate) => hasRecentWorkdir(candidate),
+      });
+    } catch (error) {
+      if (error instanceof WritableDirectoryPickerGrantError) throwIpcError(error.code, error.message);
+      recentWritableDirectoryLog.warn('recent writable directory authorization failed', {
+        error: String(error),
+      });
+      throwIpcError('INTERNAL', 'Writable directory authorization failed');
+    }
+    return { success: true };
+  });
 
   // ── Dialog: 文件选择器(前置检查脚本选取等通用场景;与目录选择器同形) ──
   ipcMain.handle(
@@ -8867,6 +8913,52 @@ const registerIpcHandlers = () => {
       });
     }
 
+    // Projects root and "new project from task": native pickers stay on this computer (not in device-link).
+    const chooseProjectsFolder = async () => {
+      const options: Electron.OpenDialogOptions = {
+        title: t('settings.about.storage.projectsRootChoose'),
+        properties: ['openDirectory', 'createDirectory'],
+      };
+      const ownerWindow = BrowserWindow.getFocusedWindow() ?? mainWindowRef;
+      const result =
+        ownerWindow && !ownerWindow.isDestroyed()
+          ? await dialog.showOpenDialog(ownerWindow, options)
+          : await dialog.showOpenDialog(options);
+      return result.canceled ? null : (result.filePaths[0] ?? null);
+    };
+    const projectsRootHandlers = createProjectsRootSettingsHandlers({ chooseDirectory: chooseProjectsFolder });
+    for (const action of ['get', 'choose', 'reset'] as const) {
+      ipcMain.handle('projects-root:' + action, async (event) => {
+        assertTrustedAppRendererEvent(event);
+        try {
+          return await projectsRootHandlers[action]();
+        } catch (error) {
+          if (isIpcError(error)) throw error;
+          dbClientLog.warn('projects root settings request failed', { action });
+          throwIpcError('INTERNAL', 'projects root settings request failed');
+        }
+      });
+    }
+    const projectFromTaskHandlers = createLocalProjectFromTaskHandlers({
+      isSessionBusy: (id) => isSessionInTurn(id) || isSessionTurnPendingCompletion(id),
+      chooseDirectory: chooseProjectsFolder,
+    });
+    for (const action of ['prepare', 'chooseParent', 'create'] as const) {
+      ipcMain.handle('create-project-from-task:' + action, async (event, input: unknown) => {
+        assertTrustedAppRendererEvent(event);
+        try {
+          return await projectFromTaskHandlers[action](input);
+        } catch (error) {
+          if (isIpcError(error)) throw error;
+          dbClientLog.warn('create project from task failed', {
+            action,
+            code: (error as NodeJS.ErrnoException)?.code,
+          });
+          throwIpcError('INTERNAL', 'create project from task failed');
+        }
+      });
+    }
+
     const localDbMaintenanceHandlers = createLocalDbMaintenanceIpcHandlers({
       captureOwner: () => {
         const ownerId = getActiveAppSession().dataOwnerId;
@@ -9279,6 +9371,7 @@ app.on('ready', async () => {
   if (!(await initClientEndpoints())) {
     return; // 用户在错误框选择退出,app.exit 已调用
   }
+  markStartupMilestone('client-endpoints-ready');
   registerClientEndpointsIpc();
 
   // 网关凭据自动下发:订阅登录态(登录后向 model-access-server 拉 endpoint +
@@ -10010,6 +10103,7 @@ app.on('ready', async () => {
   }
   startupWindowCreationAllowed = true;
   createWindow();
+  markStartupMilestone('main-window-created');
   // The macOS release watcher stays disarmed until a task drag begins. Start
   // its tiny helper after the first window exists so drag latency never pays
   // a dev swiftc compile or process-spawn cost.
@@ -10058,10 +10152,11 @@ app.on('ready', async () => {
   registerProviderGroupRemoteHandler({ onGroupChanged: () => providerGroupReshare.kick('group') });
   registerProviderGroupReshare();
   registerFilePeerIpc();
-  registerRemoteDesktopIpc(isGlobalVoiceInputOverlaySender, {
-    name: getControllerName,
-    revoke: revokeController,
-  });
+  registerRemoteDesktopIpc(
+    isGlobalVoiceInputOverlaySender,
+    { name: getControllerName, revoke: revokeController },
+    getLiveScreenHost,
+  );
   void startupPurgeDrain
     .then(({ purged, pending }) => {
       if (purged > 0 || pending > 0) {
