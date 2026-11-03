@@ -1008,7 +1008,7 @@
     "saveFileName": "Screenshot",
     "saveFailed": "Screenshot konnte nicht gespeichert werden",
     "prompt": {
-      "translate": "Erkenne den Text in diesem Screenshot und übersetze ihn ins Englische. Behalte die ursprünglichen Absätze und Listen bei und gib nur die Übersetzung aus. Wenn der Text bereits auf Englisch ist, übersetze ihn ins vereinfachte Chinesisch.",
+      "translate": "Erkenne die Sprachen im Screenshot automatisch und übersetze den Text ins {{language}}. Behalte Absätze, Listen und Tabellen bei. Inhalte in der Zielsprache bleiben unverändert; bei gemischten Sprachen werden nur die anderen Sprachen übersetzt. Wenn der gesamte Text bereits in der Zielsprache ist, weise kurz darauf hin und wechsle nicht zu einer anderen Sprache. Gib ansonsten nur die Übersetzung aus.",
       "explain": "Erkläre, was dieser Screenshot zeigt. Falls es ein Fehler ist, erkläre die Ursache und wie er sich beheben lässt. Falls es ein Diagramm, Code oder eine Benutzeroberfläche ist, erkläre den Inhalt und die wichtigsten Punkte.",
       "extract": "Extrahiere den Text aus diesem Screenshot exakt wie geschrieben und behalte die ursprünglichen Zeilenumbrüche, Absätze und Listen bei. Gib Tabellen als Markdown-Tabellen aus. Gib nur den extrahierten Text aus."
     },
@@ -1056,6 +1056,12 @@
       "edit": "Bearbeiten",
       "autoUnavailable": "Automatisches Scrollen gestoppt. Du kannst manuell in der Auswahl scrollen.",
       "autoPermission": "Automatisches Scrollen erfordert die Berechtigung für Bedienungshilfen. Erlaube Cindy in den Systemeinstellungen und versuche es erneut oder scrolle manuell in der Auswahl."
+    },
+    "translation": {
+      "action": "Ins {{language}} übersetzen",
+      "targetLanguage": "Zielsprache",
+      "followUi": "Sprache der Oberfläche verwenden",
+      "saveFailed": "Die Sprachauswahl konnte nicht gespeichert werden. Bitte erneut auswählen."
     }
   },
   "privacyExit": {
@@ -2648,6 +2654,13 @@
       "storage": {
         "dialogueDirectoryTitle": "Chat-Arbeitsbereich",
         "dialogueDirectoryDescription": "Nur für neue Sitzungen. Vorhandene Dateien bleiben an ihrem bisherigen Speicherort.",
+        "projectsRootTitle": "Speicherort für neue Projekte",
+        "projectsRootInferred": "Vorgeschlagen",
+        "projectsRootDefault": "Standard",
+        "projectsRootChoose": "Verzeichnis ändern",
+        "projectsRootReset": "Vorgeschlagenen Speicherort wiederherstellen",
+        "projectsRootDescription": "Hier werden Projektordner angelegt, wenn du aus einer Sitzung ein Projekt erstellst. Ohne Einstellung wird ein Ort anhand deiner vorhandenen Projekte vorgeschlagen.",
+        "projectsRootFailed": "Speicherort für neue Projekte konnte nicht aktualisiert werden",
         "dialogueDirectoryOpen": "Verzeichnis öffnen",
         "dialogueDirectoryChoose": "Verzeichnis ändern",
         "dialogueDirectoryReset": "Standardspeicherort wiederherstellen",
@@ -3629,6 +3642,8 @@
         "simpleSubtitle": "Mehrere Modelle, Abrechnung über ein Konto."
       },
       "custom": {
+        "nameSearchUnavailable": "Dieser Anbieter ist nicht mehr verfügbar. Fahre mit einem benutzerdefinierten Endpunkt fort oder suche erneut.",
+        "nameSearchHint": "Du kannst diesen Namen beibehalten und mit einem benutzerdefinierten Endpunkt fortfahren.",
         "tag": "Benutzerdefiniert",
         "editAria": "Verbindungseinstellungen bearbeiten",
         "deleteAria": "Löschen",
@@ -5834,7 +5849,7 @@
         "requests": {
           "item": "{{name}} möchte beitreten",
           "verify": "Kopplungscode",
-          "verifyHint": "Genehmige nur, wenn der Code mit dem auf diesem Gerät übereinstimmt.",
+          "verifyHint": "Genehmige nur, wenn er mit dem Code auf dem anderen Gerät übereinstimmt.",
           "replaces": "Dieses Gerät ist schon einmal beigetreten. Durch die Genehmigung wird sein alter Zugangsnachweis widerrufen.",
           "approve": "Genehmigen",
           "reject": "Ablehnen",
@@ -5856,7 +5871,7 @@
         },
         "confirm": {
           "ownerTitle": "Relay auf diesem Computer stoppen?",
-          "ownerDescription": "Beigetretene Geräte werden getrennt und erhalten die Meldung, dass das Relay gestoppt wurde. Dieser Computer schaltet zurück auf das Cindy-Relais.",
+          "ownerDescription": "Beigetretene Geräte werden getrennt und erhalten die Meldung, dass das Relay gestoppt wurde. Dieser Computer schaltet zurück auf das Cindy-Relay.",
           "memberTitle": "Zurück zum Cindy-Relay wechseln?",
           "memberDescription": "Dieser Computer verlässt „{{name}}“ und nutzt das Cindy-Relay. Um erneut beizutreten, fordere einen neuen Beitrittslink an.",
           "serverTitle": "Zurück zum Cindy-Relay wechseln?",
@@ -5879,7 +5894,7 @@
           "SECURE_STORAGE_UNAVAILABLE": "Der System-Schlüsselbund ist nicht verfügbar, daher können die Relay-Anmeldeinformationen nicht sicher gespeichert werden.",
           "PORT_IN_USE": "Port {{port}} wird bereits verwendet. Wähle einen anderen Port.",
           "START_FAILED": "Das Relay konnte nicht gestartet werden. Versuche einen anderen Port.",
-          "EXTERNAL_URL_REQUIRED": "Gib die Adresse ein, die andere Geräte verwenden, oder stelle „Wer kann sich verbinden“ auf „Beliebiges Netzwerk“.",
+          "EXTERNAL_URL_REQUIRED": "Gib die Adresse ein, die andere Geräte verwenden, oder stelle „Wer kann sich verbinden“ auf „Jedes Netzwerk“.",
           "SSH_FAILED": "Verbindung zum Server nicht möglich. Prüfe seine SSH-Einstellungen unter „Remote“.",
           "SHELL_UNAVAILABLE": "Dieses SSH-Konto kann keine Befehle ausführen (zum Beispiel das git-Konto eines Git-Dienstes) und daher nicht für die Bereitstellung verwendet werden. Wähle einen Server, bei dem du dich mit einer Shell anmelden kannst.",
           "NEEDS_ROOT": "Hierfür ist das root-Konto oder ein Konto erforderlich, das sudo ohne Passwort verwenden kann. Cindy fragt dich nie nach deinem Serverpasswort.",
@@ -5927,7 +5942,7 @@
           "check": {
             "checking": "Server wird geprüft…",
             "checkingHint": "Verbindung zum Server wird hergestellt, um System, Ports und vorhandene Dienste zu prüfen.",
-            "idle": "Nachdem du einen Server ausgewählt hast, prüft Cindy, ob eine Bereitstellung darauf möglich ist.",
+            "idle": "Nach der Serverauswahl prüft Cindy, ob die Bereitstellung möglich ist.",
             "ready": "Bereit zur Bereitstellung",
             "blocked": "Automatische Bereitstellung nicht möglich",
             "recheck": "Erneut prüfen",
@@ -7511,6 +7526,8 @@
         "cancel": "Abbrechen",
         "updateNeedsConsent": "Neue Berechtigungen müssen bestätigt werden",
         "targetIdentity": "Installieren für: {{name}}",
+        "localTarget": "Lokale Entwicklung",
+        "localOidcUnavailable": "Diese Entwicklungskopie kann die Organisationsidentität nicht verwenden. Installiere sie zum Testen über Forge ausdrücklich in deiner aktuellen Organisation.",
         "personalTarget": "Persönlich",
         "sourceChanged": "Dieses Update wechselt zu einer lokalen Quelle. Bestehende Konten und Daten werden separat archiviert. Verbinde deine Konten nach dem Update erneut.",
         "otherCopies": "Es gibt {{count}} weitere Kopien dieses Plugins. Sie bleiben installiert und behalten ihren aktuellen Aktivierungsstatus. Eine separate Kopie benötigt eigene Kontoverbindungen."
@@ -7594,6 +7611,8 @@
         "nodeResident": "Das Node-Programm kann im Hintergrund weiterlaufen",
         "nodeResidentDetail": "Wird ausgeführt, während das Plugin aktiviert ist, und stoppt, wenn es deaktiviert, aktualisiert oder deinstalliert wird oder wenn Cindy beendet wird.",
         "tool": "Tool „{{name}}“",
+        "toolAutoApprove": "Agent darf das Tool „{{name}}“ ohne Bestätigung ausführen",
+        "toolAutoApproveDetail": "Ruft der Agent dieses Tool auf, wird es sofort ausgeführt – ohne Rückfrage oder Prüfung pro Aufruf.",
         "command": "Chatbefehl ${{command}}",
         "panelLeft": "Panel „{{title}}“ · wird in der Seitenleiste angezeigt",
         "panelTab": "Panel „{{title}}“ · wird innerhalb der Seite „Plugins“ geöffnet",
@@ -7662,6 +7681,8 @@
         "preview": "Kann Vorschauseiten der folgenden Websites im Seitenleistenbrowser öffnen",
         "previewDetail": "Nur die unten aufgeführten Websites können geöffnet werden. Jede geöffnete Seite wird diesem Plugin zugeordnet.",
         "browserExtension": "Erlaubt seiner mitgelieferten Browsererweiterung, sich mit Cindy zu verbinden",
+        "browserNativeHost": "Kann die Browserverbindung „{{name}}“ registrieren",
+        "browserNativeHostDetail": "Das registrierte Programm läuft außerhalb der Sandbox und greift mit deinem Benutzerkonto und den Systemberechtigungen lokal zu.",
         "browserExtensionDetail": "Nur die unten aufgeführten Erweiterungen können sich über die lokale Loopback-Adresse verbinden. Cindy leitet die Anfragen der Erweiterung an dieses Plugin weiter.",
         "browserExtensionPageControlDetail": "Nur die unten aufgeführten Erweiterungen können sich verbinden. Die Erweiterung ermöglicht auch die Seitensteuerung: Wenn „Mein Browser“ ausgewählt ist, kann der Agent Seiten in deinem verwendeten Browser lesen und bedienen.",
         "nodeChildSpawn": "Sein Node-Programm kann den Host bitten, deklarierte Unterprozesse aus seinem Paket zu starten",
@@ -7756,6 +7777,18 @@
         "settingsTitle": "Einstellungen für {{name}}",
         "settingsUnavailableUntilRestore": "Stelle das Plugin wieder her, um diese Konfiguration erneut zu verwenden.",
         "oauthScopeStale": "Diese Autorisierung umfasst keine neu hinzugefügten Berechtigungen. Verbinde dich erneut, um sie zu erteilen.",
+        "localDevelopment": "Lokale Entwicklung",
+        "publicInstall": "Öffentlicher Marktplatz",
+        "organizationInstall": "Organisation: {{name}}",
+        "browserUse": "Diese Browsererweiterung verwenden",
+        "browserActivated": "Browsererweiterung ausgewählt",
+        "browserActivationFailed": "Auswahl fehlgeschlagen. Aktiviere das Plugin und bestätige den Verbindungswechsel.",
+        "browserSwitchTitle": "Verbindung der Browsererweiterung wechseln?",
+        "browserSwitchMessage": "„{{name}}“ für diese Verbindung verwenden?",
+        "browserSwitchDetail": "Instanz: {{instance}}\nRegistrierung: {{host}}\nDies ersetzt die aktuelle Registrierung. Die Erweiterung verbindet sich mit diesem Plugin.",
+        "portReclaimTitle": "Programm am Rückruf-Port beenden?",
+        "portReclaimMessage": "„{{name}}“ benötigt Port {{port}}. Das folgende Programm beenden?",
+        "portReclaimDetail": "Dadurch können Arbeit unterbrochen und ungespeicherte Daten verloren gehen. Du kannst abbrechen und das Programm selbst schließen.",
         "configurationTitle": "Konfiguration",
         "sidebarEntryTitle": "Navigationseintrag",
         "showInSidebar": "In der linken Navigation anzeigen",
@@ -8598,9 +8631,9 @@
     "localModeEntry": "Anmeldung überspringen",
     "localModeOpening": "Anmeldung wird übersprungen…",
     "localModeDescription": "Kein Cindy-Konto erforderlich. Die Daten bleiben auf diesem Gerät; Cloud-Modelle, geräteübergreifender Zugriff und Marketplace-Dienste sind nicht verfügbar.",
-    "consentStatement": "Ich habe die <terms>Nutzungsbedingungen</terms> und die <privacy>Datenschutzerklärung</privacy> gelesen und stimme ihnen zu",
+    "consentStatement": "Ich akzeptiere <terms>Nutzungsbedingungen</terms> und <privacy>Datenschutzerklärung</privacy>",
     "consentDialog": {
-      "title": "Nutzungsbedingungen & Datenschutz",
+      "title": "Bedingungen & Datenschutzerklärung",
       "body": "Lies Cindys <terms>Nutzungsbedingungen</terms> und <privacy>Datenschutzerklärung</privacy> und stimme ihnen zu, um fortzufahren.",
       "agree": "Zustimmen",
       "disagree": "Nicht jetzt"
@@ -10749,6 +10782,18 @@
         "reactorFormer": "{{name}} (nicht mehr in der Gruppe)",
         "reactorsUnavailable_one": "Name für {{count}} weiteres Mitglied nicht verfügbar",
         "reactorsUnavailable_other": "Namen für {{count}} weitere Mitglieder nicht verfügbar",
+        "readStatusSent": "Gesendet",
+        "readStatusRead": "Gelesen",
+        "readersCount_one": "Gelesen von {{count}}",
+        "readersCount_other": "Gelesen von {{count}}",
+        "readersView": "Anzeigen, wer es gelesen hat",
+        "readersTooLarge": "Die Gruppe ist zu groß, um anzuzeigen, wer es gelesen hat",
+        "readersNone": "Niemand hat es gelesen",
+        "readersLoading": "Wird geladen …",
+        "readersFailed": "Konnte nicht laden, wer es gelesen hat",
+        "readersHeading": "Gelesen",
+        "readersOfTotal": "Gelesen {{read}}/{{total}}",
+        "readerUnknown": "Unbekanntes Mitglied",
         "invite": "Zur Gruppe einladen",
         "groupCreated": "Gruppenchat erstellt",
         "inviteFriends": "Lade Freunde ein, beizutreten und mit deinem Teammitglied zusammenzuarbeiten.",
@@ -14426,6 +14471,26 @@
           "cancel": "Abbrechen"
         }
       },
+      "newProjectDialog": {
+        "title": "Neues Projekt",
+        "description": "Erstellt einen Projektordner und verschiebt diese Sitzung in das neue Projekt.",
+        "descriptionMoveFiles": "Erstellt einen Projektordner, verschiebt die Dateien dieser Sitzung dorthin und verschiebt die Sitzung in das neue Projekt.",
+        "nameLabel": "Projektname",
+        "namePlaceholder": "z. B. my-app",
+        "targetPath": "Erstellt {{path}}",
+        "location": "Speicherort",
+        "locationInferred": "Vorgeschlagen anhand deiner vorhandenen Projekte",
+        "locationWillCreate": "Dieser Ordner existiert noch nicht und wird erstellt",
+        "changeLocation": "Ändern…",
+        "remember": "Diesen Speicherort für neue Projekte verwenden",
+        "cancel": "Abbrechen",
+        "create": "Projekt erstellen",
+        "nameTaken": "Ein Ordner mit diesem Namen existiert bereits",
+        "nameInvalid": "Der Name darf \\ / : * ? \" < > | nicht enthalten und nicht mit Punkt oder Leerzeichen enden",
+        "loadFailed": "Projektspeicherort konnte nicht geladen werden",
+        "failed": "Projekt konnte nicht erstellt werden",
+        "done": "Projekt erstellt und Sitzung verschoben"
+      },
       "sessionMenu": {
         "moreActions": "Weitere Aktionen",
         "rename": "Umbenennen",
@@ -14439,6 +14504,7 @@
         "moveToProject": "Aufgabe verschieben",
         "moveToProjectHeading": "Projekte auf diesem Computer",
         "browseProjectFolder": "Projektordner auswählen",
+        "newProject": "Neues Projekt…",
         "moveToDialogue": "In Chat verschieben",
         "noProjects": "Keine zuletzt verwendeten Projekte",
         "moveToProjectDone": "In Projekt verschoben",
@@ -15840,6 +15906,7 @@
     "agentControlled": "Der Agent hat diesen Bildschirm geöffnet. Prüfe vor dem Ausfüllen, ob du dich wirklich hier anmelden möchtest.",
     "agentPicture": "Dieser Code stammt aus einem Screenshot des Agent, daher kann Cindy den ursprünglichen Bildschirm nicht sehen oder erkennen, wann du fertig bist. Prüfe, ob er zur gewünschten Anmeldeseite führt, und wähle nach dem Scannen „An Agent zurückgeben“.",
     "error": {
+      "raise": "Das Fenster ließ sich nicht öffnen. Wechsle am Computer dorthin.",
       "decision": "Das hat nicht geklappt. Versuch es erneut.",
       "stale": "Der Bildschirm hat sich geändert. Verwende die neueste Version.",
       "submit": "Deine Eingabe wurde nicht übermittelt. Versuche es erneut."
@@ -15875,6 +15942,9 @@
       "picture": "Bildschirm anzeigen",
       "backToForm": "Zurück zum Formular",
       "liveView": "Live-Ansicht",
+      "openWindow": "Anmeldefenster öffnen",
+      "openRemoteDesktop": "Remote-Desktop öffnen",
+      "useForm": "Stattdessen Formular verwenden",
       "fill": "Ausfüllen",
       "skip": "Überspringen",
       "continue": "Weiter",
@@ -15882,6 +15952,9 @@
       "showPassword": "Passwort anzeigen",
       "hidePassword": "Passwort ausblenden",
       "scan": "Scannen"
+    },
+    "directSignIn": {
+      "hint": "Melde dich direkt im Fenster an. Danach geht es automatisch weiter."
     },
     "remoteUnavailable": "Dieser Computer kann keine Remote-Eingaben empfangen. Schließe diesen Schritt auf dem Host-Computer ab und gib dann an den Agent zurück.",
     "unnamedField": "Feld",
@@ -18841,6 +18914,9 @@
     "failed": "Der Vorgang wurde nicht abgeschlossen. Versuch es erneut oder öffne die lokalen Dateien."
   },
   "attachmentPreview": {
+    "fitWidth": "An Breite anpassen",
+    "fitPage": "An Seite anpassen",
+    "pageNumber": "Seitenzahl",
     "more": "Weitere Aktionen",
     "retry": "Erneut versuchen",
     "image": "Bild",

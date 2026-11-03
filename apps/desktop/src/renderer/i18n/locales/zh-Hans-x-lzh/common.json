@@ -996,7 +996,7 @@
     "saveFileName": "截图",
     "saveFailed": "不能存截屏",
     "prompt": {
-      "translate": "请辨此截屏中之文字，译为繁体中文，保留原有段落与清单结构，唯输出译文。若原文已是中文，则译为英文。",
+      "translate": "辨图中文字之语，译为{{language}}，仍其段落、条目与表格。已有目标语言者不改；诸语杂陈，仅译其余。若全文已是目标语言，简言告之，勿另译他语；否则仅出译文。",
       "explain": "请释此截屏之内容。若为错误消息，述其原因与解法；若为图表、代码或界面，述其所表何意、要点为何。",
       "extract": "请将此截屏中之文字照原样撷出，保留原有换行、段落与清单；表格以 Markdown 表格输出。唯输出所撷之文字。"
     },
@@ -1044,6 +1044,12 @@
       "edit": "修",
       "autoUnavailable": "自动卷动已止，可于所选范围内手动卷动",
       "autoPermission": "自动卷动须「辅助使用」权限。请于系统设置中许 Cindy 而后再试，亦可于所选范围内手动卷动"
+    },
+    "translation": {
+      "action": "译为{{language}}",
+      "targetLanguage": "译文语言",
+      "followUi": "随界面之语",
+      "saveFailed": "语言未存，请重选。"
     }
   },
   "privacyExit": {
@@ -2618,6 +2624,13 @@
       "storage": {
         "dialogueDirectoryTitle": "言谈工作区",
         "dialogueDirectoryDescription": "仅用于新开差事，旧卷仍居原处。",
+        "projectsRootTitle": "新案存放处",
+        "projectsRootInferred": "荐",
+        "projectsRootDefault": "常例",
+        "projectsRootChoose": "易目录",
+        "projectsRootReset": "复荐处",
+        "projectsRootDescription": "于差事中立新案时，案之卷匣置于此。未设则依汝旧案所在荐之。",
+        "projectsRootFailed": "新案存放处更之未成",
         "dialogueDirectoryOpen": "启目录",
         "dialogueDirectoryChoose": "易目录",
         "dialogueDirectoryReset": "复预设处",
@@ -3824,7 +3837,9 @@
           "modelsBusy": "请先毕方行之模型清单截取或选择，再填入他 Runtime",
           "noCompatibleFields": "他 Runtime 不支持今 Runtime 中可复用之字段",
           "filledToast": "已填入 {{targets}}；各 Runtime 仍各自独立"
-        }
+        },
+        "nameSearchHint": "亦可仍用此名，续设自定端点。",
+        "nameSearchUnavailable": "此供方今不可用，可续设自定端点，或重寻之。"
       },
       "models": {
         "search": "寻模型",
@@ -7468,6 +7483,8 @@
         "cancel": "罢",
         "updateNeedsConsent": "新权柄须确认",
         "targetIdentity": "纳于：{{name}}",
+        "localTarget": "本地开发版",
+        "localOidcUnavailable": "此开发副本不得企业身份。欲自测，请以 Forge 明确装入当前企业。",
         "personalTarget": "私",
         "sourceChanged": "此次更新将改为此机来源。旧名籍与数据隔离保留，须重新连接名籍。",
         "otherCopies": "已有同名法器 {{count}} 份；彼等不被覆盖或禁用。另纳之法器须各自连接名籍。"
@@ -7537,6 +7554,8 @@
         "nodeResident": "Node 程序可常驻背后",
         "nodeResidentDetail": "法器激活期间持续运行；禁用、更新、卸除或退出 Cindy 时即阖。",
         "tool": "器「{{name}}」",
+        "toolAutoApprove": "Agent 用器「{{name}}」无须相询",
+        "toolAutoApproveDetail": "Agent 每用此器，即行之，不复逐次相询或审阅。",
         "command": "言谈指令 ${{command}}",
         "panelLeft": "面板「{{title}}」· 现于侧栏",
         "panelTab": "面板「{{title}}」· 于法器页内启之",
@@ -7599,6 +7618,8 @@
         "preview": "可于右侧栏浏览器中启下列网站之预览页",
         "previewDetail": "仅能启下方所列网站；每启一页，皆示为何法器所启。",
         "browserExtension": "可令其自带之浏览器扩充功能连 Cindy",
+        "browserNativeHost": "可注册浏览连接“{{name}}”",
+        "browserNativeHostDetail": "所注册程序行于沙箱之外，依系统账号与授权访问本机。",
         "browserExtensionDetail": "仅下方所列扩充功能可连；连接经此机回环地址，由 Cindy 将扩充功能所发之请求转交此法器。",
         "browserExtensionPageControlDetail": "仅下方所列扩充功能可连。此扩充功能兼行页面控制：择「我的浏览器」后，Agent 可经其读取并操作君正用之浏览器页面。",
         "nodeChildSpawn": "Node 程序可请宿主再启包内已申报之子处理程序",
@@ -7699,6 +7720,18 @@
         "settingsTitle": "{{name}} 之设",
         "settingsUnavailableUntilRestore": "复法器后，此设可续用。",
         "oauthScopeStale": "当前授权未含法器添加之权柄，请重新连接补足。",
+        "localDevelopment": "本地开发版",
+        "publicInstall": "公开市场",
+        "organizationInstall": "企业：{{name}}",
+        "browserUse": "用此浏览扩展",
+        "browserActivated": "已择此扩展",
+        "browserActivationFailed": "未能择此扩展，请启扩展并确认切换。",
+        "browserSwitchTitle": "切换浏览扩展连接？",
+        "browserSwitchMessage": "以“{{name}}”承此连接？",
+        "browserSwitchDetail": "实例：{{instance}}\n注册名：{{host}}\n将替今之注册，扩展转连此扩展。",
+        "portReclaimTitle": "结束占用回调端口之程序？",
+        "portReclaimMessage": "“{{name}}”须用端口 {{port}}，可结束下列程序乎？",
+        "portReclaimDetail": "结束或中断其事、失其未存之数据。亦可取消，自行关闭占用程序。",
         "configurationTitle": "设置",
         "sidebarEntryTitle": "导览入口",
         "showInSidebar": "现于左侧导览",
@@ -10704,6 +10737,18 @@
         "reactorFormer": "{{name}}（已不在群中）",
         "reactorsUnavailable_one": "另有 {{count}} 位成员之信息暂不可得",
         "reactorsUnavailable_other": "另有 {{count}} 位成员之信息暂不可得",
+        "readStatusSent": "已发",
+        "readStatusRead": "已阅",
+        "readersCount_one": "{{count}} 人已阅",
+        "readersCount_other": "{{count}} 人已阅",
+        "readersView": "观谁已阅",
+        "readersTooLarge": "群众过多，不列已阅名单",
+        "readersNone": "无人已阅",
+        "readersLoading": "载入中…",
+        "readersFailed": "未能载入阅者",
+        "readersHeading": "已阅",
+        "readersOfTotal": "已阅 {{read}}/{{total}}",
+        "readerUnknown": "不明成员",
         "invite": "邀入群议",
         "groupCreated": "群议已立",
         "inviteFriends": "邀友同入，共役同僚",
@@ -14360,6 +14405,26 @@
           "cancel": "罢"
         }
       },
+      "newProjectDialog": {
+        "title": "立新案",
+        "description": "立一新案之卷匣，并移此差事入新案。",
+        "descriptionMoveFiles": "立一新案之卷匣，徙此差事之档入内，并移差事入新案。",
+        "nameLabel": "案名",
+        "namePlaceholder": "如 my-app",
+        "targetPath": "将立 {{path}}",
+        "location": "所在",
+        "locationInferred": "依汝旧案所在荐之",
+        "locationWillCreate": "此卷匣尚无，允之即立",
+        "changeLocation": "易…",
+        "remember": "后立新案皆置于此",
+        "cancel": "罢",
+        "create": "立案",
+        "nameTaken": "已有同名卷匣，另择一名",
+        "nameInvalid": "名中不可含 \\ / : * ? \" < > |，亦不可以句点或空格收尾",
+        "loadFailed": "案之所在读之未成",
+        "failed": "立案未成",
+        "done": "新案已立，差事已移入"
+      },
       "sessionMenu": {
         "moreActions": "余者",
         "rename": "易名",
@@ -14373,6 +14438,7 @@
         "moveToProject": "移差事",
         "moveToProjectHeading": "此机之案",
         "browseProjectFolder": "择案之卷匣",
+        "newProject": "立新案…",
         "moveToDialogue": "移至言谈",
         "noProjects": "近无案",
         "moveToProjectDone": "已移至案",
@@ -15773,6 +15839,7 @@
     "agentControlled": "此界面乃 Agent 所启。填写之前，请确认此处确为君欲登录之所。",
     "agentPicture": "此 QR 码出自 Agent 之截屏，Cindy 不见原画面，扫毕亦不自续。请确认其所指之网站确为君欲登录之所，扫毕点「交还 Agent」。",
     "error": {
+      "raise": "窗不能启，请于电脑切至之。",
       "decision": "操作未达，请再试。",
       "stale": "界面已变，请依最新内容操作。",
       "submit": "所输入者未达，请再试。"
@@ -15808,6 +15875,9 @@
       "picture": "观画面",
       "backToForm": "归表单",
       "liveView": "即景",
+      "openWindow": "启登录之窗",
+      "openRemoteDesktop": "启远程桌面",
+      "useForm": "改以表单填写",
       "fill": "填",
       "skip": "略",
       "continue": "续",
@@ -15815,6 +15885,9 @@
       "showPassword": "示密码",
       "hidePassword": "隐密码",
       "scan": "扫码"
+    },
+    "directSignIn": {
+      "hint": "请径于窗中登录，毕则自续。"
     },
     "remoteUnavailable": "此机不能自远方受输入。请于主机之机上完成此步，再交还 Agent。",
     "unnamedField": "书栏",
@@ -18769,6 +18842,9 @@
     "failed": "操作未毕，请再试或览此机之卷。"
   },
   "attachmentPreview": {
+    "fitWidth": "适宽",
+    "fitPage": "适页",
+    "pageNumber": "页码",
     "more": "更多操作",
     "retry": "重试",
     "image": "图",

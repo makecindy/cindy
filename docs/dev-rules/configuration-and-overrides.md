@@ -30,6 +30,12 @@ token）与 [`engineering-conventions.md`](engineering-conventions.md)（i18n）
 
 ## 2. 默认值与用户 override 分离
 
+截图翻译目标默认跟随当前界面语言，目标语言列表独立于界面支持的语言。
+用户在截图或长截图编辑器的 Cindy 菜单中改选语言后，按本机客户端保存显式覆盖；
+选择「跟随界面语言」删除覆盖。菜单展示本次目标，截图交接携带该目标快照，避免
+进入任务时被后续偏好变化改写。实现见 Desktop 的 `shared/screenshotTranslation.ts`
+与 `main/region-screenshot/translationPreferences.ts`。
+
 - 每个配置项都必须能判断是否被用户显式自定义。
 - 运行时以「系统默认值 + 用户 override」合并出有效值；持久化只记录 override 与必要的
   自定义标记，**不把完整默认配置复制进用户配置**。

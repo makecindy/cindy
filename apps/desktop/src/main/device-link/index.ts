@@ -68,6 +68,7 @@ import * as authManager from '../authManager';
 import { remoteCredentialHost } from '../remote-desktop/credentialHost';
 import { activeOwnerScopeKey, getActiveDataOwnerPushStamp, isAppSessionBoundaryPending } from '../appSessionState.js';
 import { createLogger } from '../logger';
+import { markStartupMilestone } from '../startupTimeline';
 import { onQuit } from '../lifecycle';
 import { getCurrentDbClientUserId } from '../localDb/client/current';
 import { isSessionNotificationsMutedSync } from '../localDb/sessionFlagRegistry';
@@ -937,6 +938,7 @@ export function initDeviceLinkService(options: DeviceLinkServiceOptions = {}): v
     }
     broadcast(DEVICE_LINK_PUSH.STATUS_CHANGED, { status });
     if (status === 'online') {
+      markStartupMilestone('device-link-online');
       // 本地 last-known 先同步种入，覆盖 REST 返回前的 link-open 竞态；随后用
       // 当前设备目录刷新，补齐本连接代没有历史 presence 的已在线设备。
       seedControllerDisplayNamesFromLastKnown();

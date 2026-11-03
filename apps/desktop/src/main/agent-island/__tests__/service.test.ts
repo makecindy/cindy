@@ -36,6 +36,27 @@ import type { AgentIslandCompanionIdentity } from '../companionIdentity.js';
 import { setDeepLinkMainWindow, takePendingDeepLink } from '../../deepLink.js';
 import { runDeviceLinkInvokeContext } from '../../device-link/invoke-context.js';
 
+// Keep the real implementation; record each instance so its scheduled publishing
+// cannot outlive a test and run against reset Electron mocks in the next test.
+const serviceInstances = vi.hoisted(() => new Set<AgentIslandService>());
+vi.mock('../service.js', async importOriginal => {
+  const actual = await importOriginal<typeof import('../service.js')>();
+  return {
+    ...actual,
+    AgentIslandService: class extends actual.AgentIslandService {
+      constructor(...args: ConstructorParameters<typeof actual.AgentIslandService>) {
+        super(...args);
+        serviceInstances.add(this);
+      }
+    },
+  };
+});
+
+afterEach(() => {
+  for (const service of serviceInstances) service.resetRuntimeState();
+  serviceInstances.clear();
+});
+
 const REMOTE_DAEMON_CLOSED_REASON = 'remote_daemon_closed';
 
 vi.mock('../../appSessionState', () => ({
@@ -4371,6 +4392,44 @@ describe('AgentIslandService native publishing', () => {
     expect(onSessionActivityChange.mock.calls.at(-1)?.[0]).toEqual([
       expect.objectContaining({ sessionId: 'lead', phase: 'completed', attention: true }),
     ]);
+  });
+
+  // Codex Micro lit only local tasks: other-device tasks the island shows never reached it.
+  it('gives activity consumers the other-device tasks the island shows, without relaying them', async () => {
+    const { AgentIslandService } = await import('../service.js');
+    const publish = vi.fn((_state: AgentIslandDisplayState, _frame: AgentIslandNativeFrame | AgentIslandNativeFrame[]) => true);
+    const onSessionActivityChange = vi.fn();
+    const service = new AgentIslandService({
+      getMainWindow: () => null,
+      nativeHost: { failed: false, publish },
+      onSessionActivityChange,
+    });
+    syncEnabledForTest(service, publish);
+    const remote = {
+      sessionId: 'r1', deviceId: 'd1', deviceName: 'Studio', title: 'Remote task', workingDir: null,
+      workspaceKind: null, agentKind: null, phase: 'running' as const, detail: 'Working',
+    };
+
+    service.handleUserPrompt({ sessionId: 'local', agentKind: 'codex' }, 'Work');
+    service.setDeviceSessions([remote]);
+    expect(onSessionActivityChange.mock.calls.at(-1)?.[0]).toEqual([
+      expect.objectContaining({ sessionId: 'local', phase: 'running' }),
+      expect.objectContaining({ sessionId: 'r1', phase: 'running' }),
+    ]);
+    // The relay payload still carries only this computer's tasks.
+    expect(service.getSessionActivitySnapshots().map((item) => item.sessionId)).toEqual(['local']);
+
+    service.setDeviceSessions([{ ...remote, phase: 'completed' }]);
+    expect(onSessionActivityChange.mock.calls.at(-1)?.[0]).toContainEqual(
+      expect.objectContaining({ sessionId: 'r1', phase: 'completed', attention: true }),
+    );
+
+    // Leaving the sidebar scope or disconnecting drops the task from the consumer too.
+    service.setDeviceSessions([]);
+    expect(onSessionActivityChange.mock.calls.at(-1)?.[0]).toEqual([
+      expect.objectContaining({ sessionId: 'local' }),
+    ]);
+    service.resetRuntimeState();
   });
 
   it.each([

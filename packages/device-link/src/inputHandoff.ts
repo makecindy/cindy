@@ -16,6 +16,8 @@ export const INPUT_HANDOFF_LOCAL_CHANNEL = "input-handoff:submit";
 export const INPUT_HANDOFF_REMOTE_LOCAL_CHANNEL = "plugin-oauth:submit-input";
 /** Trusted Desktop Renderer → Main only: the current step's screenshot on the executing computer. */
 export const INPUT_HANDOFF_LOCAL_PICTURE_CHANNEL = "input-handoff:picture";
+/** Trusted Desktop Renderer → Main only: bring the step's window to the front on the executing computer. */
+export const INPUT_HANDOFF_LOCAL_RAISE_CHANNEL = "input-handoff:raise";
 /**
  * Trusted Desktop IPC pair for a screenshot step of a task on another computer:
  * open receives the sealed picture, answer returns the owner's tap or typing
@@ -178,6 +180,12 @@ export interface InputHandoffSnapshot {
    * allowed on this computer); input there stays inside the window.
    */
   liveView?: true;
+  /**
+   * The step is a sign-in: the owner does it on the window itself, on this
+   * computer or through the live view. `controls` stay for clients that do not
+   * know this, and for devices without a live view.
+   */
+  directSignIn?: true;
   /**
    * The step only shows a sign-in code and a link to open (device-code
    * sign-in). The owner copies the code and opens the link on their own

@@ -760,6 +760,27 @@ describe('author installation projection', () => {
     harness.ghosts[0].publishingSource = { kind: 'unavailable' };
     expect(await localView()).toMatchObject({ localInstallation: { state: 'unavailable' }, localInstanceId: null });
   });
+  // Local authoring + the published instance is a normal state; Main must expose exact choices.
+  it('offers both approved instances without choosing one when local and market copies coexist', async () => {
+    const original = harness.ghosts[0];
+    const market = { ...original, publishingSource: { kind: 'public-market' as const, pluginId: 'canonical-plugin' } };
+    const local = { ...original, instanceKey: '_ns__local__hello', namespace: 'local',
+      dir: path.join(harness.root, 'local'), manifest: { ...original.manifest, version: '1.1.0' } };
+    harness.ghosts = [market, local];
+    const ledger = new PluginMarketLedger(path.join(harness.root, 'plugin-market', 'ledger.v1.json'));
+    ledger.upsertInstallation({ pluginId: 'canonical-plugin', ghostId: 'hello', namespace: null,
+      releaseId: 'release-1', version: '1.0.0', sha256: sha, scope: 'public', organizationId: null,
+      source: 'market', installed: true, updatedAt: at });
+    harness.evidence.mockReturnValue({ packageSha256: sha });
+    expect(await localView()).toMatchObject({ localInstanceId: null, localInstallation: {
+      state: 'unavailable', candidates: [
+        { instanceId: 'hello', version: '1.0.0', origin: 'public' },
+        { instanceId: '_ns__local__hello', version: '1.1.0', origin: 'local' },
+      ],
+    } });
+    expect(harness.snapshot).not.toHaveBeenCalled();
+  });
+
   it('matches public installations using their existing source ledger and approved package', async () => {
     harness.ghosts[0].publishingSource = { kind: 'public-market', pluginId: 'canonical-plugin' };
     const ledger = new PluginMarketLedger(path.join(harness.root, 'plugin-market', 'ledger.v1.json'));

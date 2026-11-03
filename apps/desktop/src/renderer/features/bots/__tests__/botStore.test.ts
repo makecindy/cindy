@@ -18,6 +18,7 @@ import { getCachedProvidersSnapshot } from '@/lib/providersSnapshotStore';
 import { getDataOwnerGeneration, setDataOwnerGeneration } from '@/contexts/dataOwnerGeneration';
 import { getPersistedVendorModel } from '@/state/newMakerDraft';
 import { readCachedBotWelcomeContext } from '../botWelcomeContext';
+import { createIpcError } from '../../../../shared/ipc-errors';
 vi.mock('../botWelcomeContext', () => ({ readCachedBotWelcomeContext: vi.fn() }));
 
 vi.mock('@/state/newMakerDraft', async (importOriginal) => ({
@@ -526,6 +527,36 @@ describe('保存失败只回滚自己那一行', () => {
         next(error);
       };
   }
+
+  it('accepts the saved primary through the existing version check without persisting the intent flag', async () => {
+    const bot = addBotProfile({ name: 'Reselect primary', description: '' });
+    bot.currentVersion = 3;
+    createdIds.push(bot.id);
+    stubDeferredUpdates();
+    const update = vi.fn(async (_input: unknown) => ({ ...bot, currentVersion: 4 }));
+    const api = (globalThis as unknown as { window: { electronAPI: { localDb: { bots: { update: unknown } } } } }).window.electronAPI.localDb.bots;
+    api.update = update;
+    await updateBotProfile(bot.id, { acceptModelSelection: true });
+    expect(update).toHaveBeenCalledWith(expect.objectContaining({ id: bot.id, acceptSavedModelSelectionVersion: 3 }));
+    expect(update.mock.calls[0]?.[0]).not.toHaveProperty('acceptModelSelection');
+    expect(getBotProfiles().find(item => item.id === bot.id)).not.toHaveProperty('acceptModelSelection');
+  });
+
+  it('rereads the local version after model acceptance conflicts so retry does not repeat the stale version', async () => {
+    const bot = addBotProfile({ name: 'Retry primary', description: '' });
+    bot.currentVersion = 1;
+    createdIds.push(bot.id);
+    stubDeferredUpdates();
+    const update = vi.fn(async (_input: unknown) => ({ ...bot, currentVersion: 3 }))
+      .mockRejectedValueOnce(createIpcError('PRECONDITION_FAILED', 'Profile changed'));
+    const get = vi.fn(async () => ({ ...bot, currentVersion: 2 }));
+    Object.assign(window.electronAPI!.localDb!.bots, { update, get });
+    await expect(updateBotProfile(bot.id, { acceptModelSelection: true })).rejects.toMatchObject({ code: 'PRECONDITION_FAILED' });
+    expect(get).toHaveBeenCalledWith(bot.id);
+    expect(getBotProfiles().find(item => item.id === bot.id)?.currentVersion).toBe(2);
+    await updateBotProfile(bot.id, { acceptModelSelection: true });
+    expect(update).toHaveBeenLastCalledWith(expect.objectContaining({ acceptSavedModelSelectionVersion: 2 }));
+  });
 
   it('forwards the editing baseline to Main without adding it to optimistic profile state', async () => {
     const bot = addBotProfile({ name: 'Settings merge', description: '' });
