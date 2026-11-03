@@ -40,3 +40,16 @@ it('drops results when approval changes during the read and maps unknown failure
   expect(await handlePluginObserveRequest(a, { kind: 'project-tasks', project: '/x' }, () => {})).toMatchObject({ ok: false, error: { code: 'HOST_NOT_READY', message: 'HOST_NOT_READY' } });
   expect(await handlePluginObserveRequest(null, { kind: 'project-tasks', project: '/x' }, () => {})).toMatchObject({ ok: false, error: { code: 'HOST_NOT_READY' } });
 });
+
+// Unit: new file operations require a Host-owned scope and sanitize adapter failures.
+it('requires separate file authorization and rejects malformed IDs before opening', async () => {
+  const a = { ...adapter(), taskFiles: vi.fn(async () => ({ files: [], partial: true })), openFile: vi.fn(async () => {}) };
+  const request = { kind: 'task-files', project: '/repo', taskId: 't' };
+  expect(await handlePluginObserveRequest(a, request, () => {})).toMatchObject({ error: { code: 'PERMISSION_DENIED' } });
+  expect(a.taskFiles).not.toHaveBeenCalled();
+  expect(await handlePluginObserveRequest(a, request, () => {}, 'scope')).toEqual({ ok: true, data: { files: [], partial: true } });
+  expect(await handlePluginObserveRequest(a, { ...request, kind: 'open-file', fileId: '../secret' }, () => {}, 'scope')).toMatchObject({ error: { code: 'INVALID_PARAMS' } });
+  expect(a.openFile).not.toHaveBeenCalled();
+  a.openFile = vi.fn(async () => { throw new Error('FILE_UNAVAILABLE'); });
+  expect(await handlePluginObserveRequest(a, { ...request, kind: 'open-file', fileId: 'a'.repeat(64) }, () => {}, 'scope')).toMatchObject({ error: { code: 'FILE_UNAVAILABLE' } });
+});

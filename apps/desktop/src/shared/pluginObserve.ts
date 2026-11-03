@@ -11,3 +11,17 @@ export interface PluginObserveTask {
   /** Unix ms used for sidebar ordering. */
   lastActivityAt: number;
 }
+
+/** Explicit links in persisted final answers; not an inventory of generated files. */
+export interface PluginObserveFile {
+  fileId: string;
+  name: string;
+  referencedAt: number;
+  source: 'final-answer-link';
+  status: 'available' | 'missing' | 'not-local' | 'blocked' | 'unsupported';
+}
+
+export interface PluginObserveFiles {
+  files: PluginObserveFile[];
+  partial: boolean;
+}

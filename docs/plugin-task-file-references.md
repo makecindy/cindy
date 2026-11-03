@@ -1,6 +1,6 @@
-# 插件读取任务最终回复中的文件引用（设计草案）
+# 插件读取任务最终回复中的文件引用
 
-> 状态：待实现，不代表客户端已支持。
+> 状态：代码已实现，尚未发布；不代表正式客户端 0.1.122 已支持。
 > 范围裁决：只读现有明确引用，不新增交付登记，不声称覆盖全部交付物。
 
 ## 问题与已核实的来源
@@ -22,9 +22,9 @@
 - `main/reviewer/reviewEvidence.ts` 读取历史附件时会另行请求原生授权。
   用户入站附件、工具产物和最终回复链接不能互相替代。
 
-## 拟议公开接口
+## 公开接口
 
-名称在实现时与现有作者契约对齐。拟新增 `cindy.observe.taskFiles({project, taskId})`
+新增 `cindy.observe.taskFiles({project, taskId})`
 和 `cindy.observe.openFile({project, taskId, fileId})`。仅本机 Desktop 逻辑页支持，
 手机页面与远端任务明确返回不支持；不增加跨设备透传。
 
@@ -66,3 +66,46 @@
 
 本改动涉及插件基座，须按 `dev-rules/plugin-security-and-authoring.md` 第 5 节取得
 指定维护者在 PR 上明确 Approve，方可合并。提交 PR 不表示正式版本已具备能力。
+
+## 作者调用与结果
+
+清单新增独立能力：
+
+```json
+{"agent":{"observe":true,"observeFiles":true}}
+```
+
+`observeFiles` 必须同时声明 `observe`。文件能力单列 `agent:observeFiles`，批准事实为
+`observeFilesCapabilityApproved`；历史未知字段与旧批准不会授予。首次调用可确认，拒绝后
+通过插件详情页主动重新确认。更新不移除旧插件的其它权限、配置或启用状态。
+
+```js
+if (typeof cindy.observe?.taskFiles !== 'function' ||
+    typeof cindy.observe?.openFile !== 'function') {
+  throw new Error('当前客户端不支持任务文件引用，请升级后使用');
+}
+const result = await cindy.observe.taskFiles({ project, taskId });
+// result: {files: [{fileId, name, referencedAt, source, status}], partial}
+// 在用户点击某个 available 文件时：
+await cindy.observe.openFile({ project, taskId, fileId }); // {opened:true}
+```
+
+`referencedAt` 为来源消息的 Unix 毫秒时间；`source` 固定为 `final-answer-link`。
+`available` 表示当前通过本机路径检查，`missing` 表示文件或真实 worktree 绑定缺失，
+`not-local` 表示 UNC/其他平台等非本机引用，`blocked` 表示路径或文件类型被拒绝，
+`unsupported` 表示暂不解析的 `cindy-media` 引用。结果不含文件内容、完整路径或消息全文。
+
+读取最近最多 200 条未撤回 assistant 消息，每条最多 128,000 字符，超长整条跳过；
+链接最多 4096 字符，返回最多 100 条引用。达到上限时 `partial:true`。同一消息同一 href
+去重，不同消息可重复引用同名文件；插件自行展示、折叠，不按文件名推断唯一性。
+
+标识仅在当前宿主进程和相同批准范围内有效；重启、重新安装、撤权、来源或执行目录变化后
+应重新查询。文件从缺失恢复为可用时同样重新查询。`TARGET_UNAVAILABLE` 表示目标或标识
+失效，`FILE_UNAVAILABLE` 表示文件当前不能打开，`PERMISSION_DENIED` 表示授权不再有效。
+旧客户端或不支持的运行表面应停止调用并提示升级，不调用私有接口或扫描目录代替。
+
+所有软链接（包括中间目录）和硬链接均拒绝。打开通过本机主窗口的侧栏文件浏览器，
+保留原有 dirty guard 和文件服务的路径校验，不调用系统 shell，也不发出跨设备推送。
+成功回执表示已请求宿主展示，不承诺渲染器已完成预览。文件内容是打开时的当前内容；
+本接口不保存交付时快照，也不对文件系统并发修改提供原子快照保证。
+Light/Dark 使用既有语义组件；本次未做运行客户端实机目检。

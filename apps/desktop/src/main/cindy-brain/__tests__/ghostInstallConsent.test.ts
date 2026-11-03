@@ -430,3 +430,16 @@ it('explains that local OIDC declarations do not receive enterprise identity', a
     target: { namespace: 'local', sourceChanged: false, otherCopies: 1 } }, null, next, reviewedDigest);
   expect(prompt).toHaveBeenCalledWith(expect.objectContaining({ target: expect.objectContaining({ organizationIdentityUnavailable: true }) }));
 });
+
+it('records observeFiles consent only when that capability was shown', async () => {
+  const previous = { ...manifest(['api.weather.test']), agent: { observe: true } };
+  const next = { ...previous, agent: { observe: true, observeFiles: true } };
+  const prompt = userPrompt(true);
+  const policy = { mode: 'prompt' as const, prompt, initiator: 'user' as const, origin: 'market' as const };
+  const before = installed(previous);
+  const decision = await obtainGhostInstallConsent(policy, before, next, reviewedDigest);
+  assertGhostInstallConsent(decision, before, next, reviewedDigest);
+  expect(confirmedTaskCapability(decision, before, next, 'observeFiles')).toBe(true);
+  expect(confirmedTaskCapability(decision, before, next, 'targets')).toBeUndefined();
+  expect(confirmedTaskCapability({ mode: 'unprompted' }, before, next, 'observeFiles')).toBeUndefined();
+});

@@ -1,12 +1,14 @@
-import type { PluginObserveTask } from '../../shared/pluginObserve.js';
+import type { PluginObserveTask, PluginObserveFiles } from '../../shared/pluginObserve.js';
 
 export interface PluginObserveAdapter {
+  taskFiles?(project: string, taskId: string, scope: string, guard: () => void): Promise<PluginObserveFiles>;
+  openFile?(project: string, taskId: string, fileId: string, scope: string, guard: () => void): Promise<void>;
   projectTasks(project: string): Promise<PluginObserveTask[]>;
   /** Rejects with TARGET_UNAVAILABLE unless projectTasks could list the task; calls guard right before opening. */
   openTask(taskId: string, guard: () => void): Promise<void>;
 }
 
-const OBSERVE_ERROR_CODES = new Set(['PERMISSION_DENIED', 'HOST_NOT_READY', 'INVALID_PARAMS', 'TARGET_UNAVAILABLE']);
+const OBSERVE_ERROR_CODES = new Set(['PERMISSION_DENIED', 'HOST_NOT_READY', 'INVALID_PARAMS', 'TARGET_UNAVAILABLE', 'FILE_UNAVAILABLE']);
 const MAX_ID_LENGTH = 4096;
 
 const fail = (code: string) => ({ ok: false as const, error: { code, message: code, retryable: false } });
@@ -21,10 +23,28 @@ export async function handlePluginObserveRequest(
   adapter: PluginObserveAdapter | null,
   payload: unknown,
   assertAuthorized: () => void,
+  fileScope?: string,
 ) {
   if (!adapter) return fail('HOST_NOT_READY');
-  const request = payload as { kind?: unknown; project?: unknown; taskId?: unknown } | null;
+  const request = payload as { kind?: unknown; project?: unknown; taskId?: unknown; fileId?: unknown } | null;
   try {
+    if (request?.kind === 'task-files' || request?.kind === 'open-file') {
+      assertAuthorized();
+      if (!fileScope) return fail('PERMISSION_DENIED');
+      const project = idParam(request.project);
+      const taskId = idParam(request.taskId);
+      if (!project || !taskId) return fail('INVALID_PARAMS');
+      if (request.kind === 'task-files') {
+        if (!adapter.taskFiles) return fail('HOST_NOT_READY');
+        const data = await adapter.taskFiles(project, taskId, fileScope, assertAuthorized);
+        assertAuthorized();
+        return { ok: true as const, data };
+      }
+      if (typeof request.fileId !== 'string' || !/^[a-f0-9]{64}$/.test(request.fileId)) return fail('INVALID_PARAMS');
+      if (!adapter.openFile) return fail('HOST_NOT_READY');
+      await adapter.openFile(project, taskId, request.fileId, fileScope, assertAuthorized);
+      return { ok: true as const, data: { opened: true } };
+    }
     if (request?.kind === 'project-tasks') {
       const project = idParam(request.project);
       if (!project) return fail('INVALID_PARAMS');

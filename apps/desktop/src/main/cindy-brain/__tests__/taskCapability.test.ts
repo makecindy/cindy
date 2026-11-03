@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { ensurePluginTaskApproval, hasPluginTaskApproval, hasPluginTargetApproval, hasPluginDelegationApproval, hasPluginObserveApproval, PluginTaskApprovalGate } from '../taskCapability.js';
+import { ensurePluginTaskApproval, hasPluginTaskApproval, hasPluginTargetApproval, hasPluginDelegationApproval, hasPluginObserveApproval, hasPluginObserveFilesApproval, PluginTaskApprovalGate } from '../taskCapability.js';
 import { handlePluginTaskRequest } from '../taskSlot.js';
 import type { InstalledGhost } from '../../../shared/ghost.js';
 
@@ -208,3 +208,27 @@ it.each(['missing-declaration', 'old-receipt', 'deny', 'account-change', 'approv
     expect(hasPluginObserveApproval(ghost)).toBe(false);
   },
 );
+
+// Unit: observe consent promised no files; a new explicit grant is required.
+it.each(['old', 'missing-observe', 'deny', 'account-change', 'approve'] as const)('keeps final-answer files separately approved: %s', async scenario => {
+  const ghost = legacy();
+  ghost.manifest.agent = { observe: true, observeFiles: true };
+  if (scenario !== 'missing-observe') ghost.observeCapabilityApproved = true;
+  let current = true;
+  const approve = vi.fn(async (_id, _revision, isCurrent) => {
+    if (!isCurrent()) return false;
+    ghost.observeFilesCapabilityApproved = true;
+    return true;
+  });
+  const confirm = vi.fn(async facts => {
+    expect(facts.added.map((item: { key: string }) => item.key)).toEqual(['agent:observeFiles']);
+    if (scenario === 'account-change') current = false;
+    return scenario !== 'deny';
+  });
+  expect(hasPluginObserveFilesApproval(ghost)).toBe(false);
+  if (scenario !== 'old') expect(await ensurePluginTaskApproval('p', { getGhost: () => ghost, isCurrent: () => current, confirm, approve }, 'observeFiles')).toBe(scenario === 'approve');
+  expect(hasPluginObserveFilesApproval(ghost)).toBe(scenario === 'approve');
+  if (scenario !== 'approve') expect(approve).not.toHaveBeenCalled();
+  ghost.enabled = false;
+  expect(hasPluginObserveFilesApproval(ghost)).toBe(false);
+});

@@ -2089,3 +2089,11 @@ describe('tool approval declaration', () => {
       .toMatchObject({ ok: false });
   });
 });
+
+it('validates final-answer file observation as an independent addition requiring observe', () => {
+  const base = { schemaVersion: 3, minCindyVersion: '0.1.0', id: 'observe-files', name: 'Files', version: '1.0.0', entry: 'main.js' };
+  const result = validateGhostManifest({ ...base, agent: { observe: true, observeFiles: true } });
+  expect(result.ok && result.manifest.agent).toEqual({ observe: true, observeFiles: true });
+  expect(validateGhostManifest({ ...base, agent: { observeFiles: true } }).ok).toBe(false);
+  expect(validateGhostManifest({ ...base, agent: { observe: true, observeFiles: 'yes' } }).ok).toBe(false);
+});

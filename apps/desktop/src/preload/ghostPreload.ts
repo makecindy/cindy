@@ -80,7 +80,7 @@ contextBridge.exposeInMainWorld('cindy', {
       throw Object.assign(new Error(result?.error?.message ?? 'Target request failed'), { code: result?.error?.code ?? 'HOST_NOT_READY' });
     },
   ])),
-  observe: Object.fromEntries([['projectTasks', 'project-tasks'], ['openTask', 'open-task']].map(([name, kind]) => [name,
+  observe: Object.fromEntries([['projectTasks', 'project-tasks'], ['openTask', 'open-task'], ['taskFiles', 'task-files'], ['openFile', 'open-file']].map(([name, kind]) => [name,
     async (req: Record<string, unknown> = {}): Promise<unknown> => {
       const result = await ipcRenderer.invoke('ghost-pipe:send', { ...req, type: 'observe-request', kind });
       if (result?.ok === true) return result.data;
