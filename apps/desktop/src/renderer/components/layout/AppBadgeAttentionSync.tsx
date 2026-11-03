@@ -17,7 +17,6 @@ import { useOrcaLeadWorkerAttention } from '@/features/cc-agent/lib/orcaLeadWork
 import { useBotProfiles, useBotUnreadCounts } from '@/features/bots/botStore';
 import { useBotGroupList } from '@/features/bots/botGroupStore';
 import { isBotGroupUnread, subscribeBotReadState, getBotLastReadAtMap } from '@/features/bots/botReadState';
-import { startBotGroupOutbox } from '@/features/bots/botGroupOutbox';
 import { useCompanionIslandChats } from '@/features/bots/useCompanionIslandChats';
 import { useRemoteBots } from '@/features/bots/useRemoteBots';
 import { isRemoteBotUnread } from '@/features/bots/remoteBotRoster';
@@ -44,7 +43,6 @@ export function AppBadgeAttentionSync() {
     + groups.filter(group => !group.archived && isBotGroupUnread(group)).length;
   const teammates = localTeammates + remoteBots.filter(isRemoteBotUnread).length;
   const owner = getDataOwnerGeneration();
-  useEffect(() => startBotGroupOutbox(), [owner]);
   const { sessions, isLoading, error } = useCCSessions({ includeArchived: 'active' });
   // all 桶保留已归档目录 ID 用于通知去重；不能让它的历史上限挤掉 active 桶。
   const history = useCCSessions({ includeArchived: 'all' });

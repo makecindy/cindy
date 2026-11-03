@@ -169,12 +169,12 @@ function forgetSaved(groupId: string, clientId: string): void {
   void durable()?.({ action: 'remove', owner: getDataOwnerGeneration(), groupId, clientId }).catch(() => undefined);
 }
 
-/** Main-window lifetime: restore once per owner and retry transport failures in room order. */
-export function startBotGroupOutbox(): () => void {
+/** Every window retries its own sends; only main restores the shared durable queue. */
+export function startBotGroupOutbox({ restoreSavedEntries = true }: { restoreSavedEntries?: boolean } = {}): () => void {
   ensureOwner();
   const owner = getDataOwnerGeneration();
   let stopped = false;
-  let ready = false;
+  let ready = !restoreSavedEntries;
   const current = () => !stopped && isDataOwnerGenerationCurrent(owner);
   const run = async () => {
     if (!current() || !owner.dataOwnerId || !durable()) return;

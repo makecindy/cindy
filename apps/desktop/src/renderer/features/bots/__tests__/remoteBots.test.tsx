@@ -3,6 +3,7 @@ import { act, cleanup, render, renderHook, screen, waitFor } from '@testing-libr
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { AppWindowSync } from '@/components/layout/AppWindowSync';
 vi.mock('@/components/layout/AppBadgeAttentionSync', () => ({ AppBadgeAttentionSync: () => null }));
+vi.mock('../botGroupOutbox', () => ({ startBotGroupOutbox: () => () => {} }));
 vi.mock('../useBotUnreadSync', () => ({ useBotUnreadSync: () => {} }));
 const h = vi.hoisted(() => ({
   owner: 'owner-a',
@@ -24,7 +25,7 @@ vi.mock('@/features/device-link/useDeviceLinkDeviceList', () => ({
   useDeviceLinkDeviceList: () => h.devices,
 }));
 vi.mock('@/lib/remoteDataOwnerPushFence', () => ({ isDeviceLinkRemotePushCurrent: () => true }));
-import { useRemoteBotSync, useRemoteBots, useRemoteCindyIds, markRemoteBotRead } from '../useRemoteBots';
+import { useRemoteBotSync, useRemoteBots, useRemoteCindyIds, markRemoteBotRead, readRemoteBots } from '../useRemoteBots';
 import { parseRemoteCollectionListRequest, REMOTE_RESOURCE_LIST_CHANNEL, REMOTE_RESOURCE_CHANGED_CHANNEL } from '@cindy/device-link';
 import { parseRemoteBots, remoteBotKey, isRemoteBotUnread } from '../remoteBotRoster';
 const host = (deviceId: string, online = true) => ({
@@ -173,6 +174,55 @@ it('keeps cached companions offline on reconnect and preserves device-qualified 
   act(() => markRemoteBotRead('a', 'same-bot', 200));
   expect(isRemoteBotUnread(result.current.find((bot) => bot.deviceId === 'a')!)).toBe(false);
   expect(isRemoteBotUnread(result.current.find((bot) => bot.deviceId === 'b')!)).toBe(true);
+});
+
+// Unit / review4453575198: another renderer writes its read position through
+// shared localStorage. Existing single-window tests never delivered that event.
+it('updates unread consumers from another window and ignores old-owner reads after switching or unmounting', async () => {
+  const withReply = (at: number) => { const value = collection(); Object.assign(value.items[0].display, { lastReplyAt: at }); return value; };
+  h.invoke.mockResolvedValue(withReply(100));
+  const { result, rerender, unmount } = renderHook(useRoster);
+  await waitFor(() => expect(result.current).toHaveLength(2));
+  h.invoke.mockResolvedValue(withReply(200));
+  act(() => h.status({ status: 'online' }));
+  await waitFor(() => expect(result.current.every(isRemoteBotUnread)).toBe(true));
+  const key = 'cindy.remoteBots.v1.' + h.owner;
+  const otherWindow = result.current.map(bot => ({ ...bot, readAt: bot.deviceId === 'a' ? 200 : 100 }));
+  const newValue = JSON.stringify(otherWindow);
+  window.localStorage.setItem(key, newValue);
+  const reads = h.invoke.mock.calls.length;
+  act(() => window.dispatchEvent(new StorageEvent('storage', { key, newValue, storageArea: window.localStorage })));
+  expect(result.current.filter(isRemoteBotUnread).map(bot => bot.deviceId)).toEqual(['b']);
+  expect(readRemoteBots().filter(isRemoteBotUnread).map(bot => bot.deviceId)).toEqual(['b']);
+  expect(h.invoke).toHaveBeenCalledTimes(reads);
+  h.owner = 'other-reader';
+  h.devices = [];
+  rerender();
+  act(() => window.dispatchEvent(new StorageEvent('storage', { key, newValue })));
+  expect(result.current).toEqual([]);
+  unmount();
+  act(() => window.dispatchEvent(new StorageEvent('storage', { key, newValue })));
+  expect(readRemoteBots()).toEqual([]);
+});
+
+it('merges a newer shared read before a stale refresh writes the roster cache', async () => {
+  h.devices = [host('a')];
+  const { result } = renderHook(useRoster);
+  await waitFor(() => expect(result.current).toHaveLength(1));
+  act(() => markRemoteBotRead('a', 'same-bot', 100));
+  const key = 'cindy.remoteBots.v1.' + h.owner;
+  // Other-window read is persisted, but its storage event has not arrived yet.
+  window.localStorage.setItem(key, JSON.stringify(result.current.map(bot => ({ ...bot, readAt: 300 }))));
+  act(() => h.status({ status: 'online' }));
+  await act(async () => {});
+  expect(result.current[0].readAt).toBe(300);
+  expect(JSON.parse(window.localStorage.getItem(key)!)[0].readAt).toBe(300);
+  // A queued older storage event must not rewind the current or saved position.
+  const newValue = JSON.stringify(result.current.map(bot => ({ ...bot, readAt: 200 })));
+  window.localStorage.setItem(key, newValue);
+  act(() => window.dispatchEvent(new StorageEvent('storage', { key, newValue })));
+  expect(result.current[0].readAt).toBe(300);
+  expect(JSON.parse(window.localStorage.getItem(key)!)[0].readAt).toBe(300);
 });
 
 it('does not reinterpret a resource read error as device disconnection', async () => {

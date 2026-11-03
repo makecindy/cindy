@@ -950,6 +950,35 @@ describe('botGroupOutbox', () => {
   });
 });
 
+// Unit regression: secondary windows retry their own sends without restoring another
+// window's persisted queue; existing restart tests only exercised the main window.
+it('retries secondary sends without restoring the shared queue and stops on cleanup', async () => {
+  vi.useFakeTimers();
+  vi.stubGlobal('window', new EventTarget());
+  const requests: string[] = [];
+  mocks.storage = async request => { requests.push(request.action); return []; };
+  mocks.send.mockRejectedValueOnce(new Error('offline')).mockResolvedValue({ ok: true, messageId: 'retried' });
+  mocks.getBotGroup.mockResolvedValue({ ok: true, group: { messages: [] } });
+  const stop = startBotGroupOutbox({ restoreSavedEntries: false });
+  try {
+    await vi.advanceTimersByTimeAsync(0);
+    await enqueueBotGroupSend(draft({ clientId: 'secondary' }));
+    await vi.advanceTimersByTimeAsync(0);
+    expect(getBotGroupOutbox('g1')[0].status).toBe('failed');
+    await vi.advanceTimersByTimeAsync(5_000);
+    expect(mocks.send.mock.calls.map(([input]) => input.clientId)).toEqual(['secondary', 'secondary']);
+    expect(getBotGroupOutbox('g1')[0].status).toBe('sent');
+    expect(requests).not.toContain('list');
+    stop();
+    mocks.send.mockRejectedValueOnce(new Error('offline'));
+    await enqueueBotGroupSend(draft({ clientId: 'after-stop' }));
+    await vi.advanceTimersByTimeAsync(0);
+    const calls = mocks.send.mock.calls.length;
+    await vi.advanceTimersByTimeAsync(10_000);
+    expect(mocks.send).toHaveBeenCalledTimes(calls);
+  } finally { stop(); vi.unstubAllGlobals(); vi.useRealTimers(); }
+});
+
 // Unit regression: a restart between local enqueue and the HTTP response used to lose
 // ownership. The production outbox must save first, then restore the same clientId FIFO.
 it.each(['group', 'direct'] as const)('durably restores %s sends and reconciles both receipt pages without deleting pending entries', async kind => {

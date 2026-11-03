@@ -16,12 +16,39 @@ let owner: string | null = null;
 let snapshot: RemoteBot[] = [];
 let cindyIds = new Set<string>();
 const listeners = new Set<() => void>();
+const readKey = (bot: Pick<RemoteBot, 'deviceId' | 'id'>) => JSON.stringify([bot.deviceId, bot.id]);
+function cachedReadPositions(raw: string | null): Map<string, number> {
+  const positions = new Map<string, number>();
+  try {
+    if (!raw || raw.length > 256 * 1024) return positions;
+    const rows: unknown = JSON.parse(raw);
+    if (!Array.isArray(rows)) return positions;
+    for (const row of rows.slice(0, 200)) {
+      if (!row || typeof row.deviceId !== 'string' || typeof row.id !== 'string'
+        || typeof row.readAt !== 'number' || !Number.isFinite(row.readAt) || row.readAt < 0) continue;
+      const key = readKey(row);
+      positions.set(key, Math.max(positions.get(key) ?? 0, row.readAt));
+    }
+  } catch { /* Missing/corrupt display cache must not affect the live roster. */ }
+  return positions;
+}
+function mergeReadPositions(rows: RemoteBot[], positions: ReadonlyMap<string, number>): RemoteBot[] {
+  return rows.map(bot => {
+    const at = positions.get(readKey(bot));
+    return at !== undefined && at > (bot.readAt ?? -1) ? { ...bot, readAt: at } : bot;
+  });
+}
 const publish = (next: RemoteBot[]) => {
+  // A sibling may have marked a reply read before its storage event arrives.
+  // Every cache writer must merge that position rather than rewind it.
+  let stored: string | null = null;
+  try { if (owner) stored = window.localStorage.getItem(CACHE_PREFIX + owner); } catch { /* unavailable cache */ }
+  next = mergeReadPositions(next, cachedReadPositions(stored));
   next = next.map(bot => cindyIds.has(bot.id) ? { ...bot, templateId: 'cindy' } : bot);
   snapshot = next;
   if (owner) {
     try { const value = JSON.stringify(next.map((bot) => ({ ...bot, online: false })));
-      if (value.length <= 256 * 1024) window.localStorage.setItem(CACHE_PREFIX + owner, value);
+      if (value.length <= 256 * 1024 && value !== stored) window.localStorage.setItem(CACHE_PREFIX + owner, value);
     } catch { /* display cache may be unavailable */ }
   }
   listeners.forEach((fn) => fn());
@@ -63,6 +90,22 @@ export function useRemoteBotSync(): void {
     revokedDevicesStore.subscribe,
     revokedDevicesStore.getSnapshot,
   );
+  useEffect(() => {
+    const requestOwner = isAuthenticated ? dataOwnerId : null;
+    if (!requestOwner) return;
+    const onStorage = (event: StorageEvent) => {
+      if (owner !== requestOwner || event.key !== CACHE_PREFIX + requestOwner || event.newValue === null
+        || (event.storageArea !== null && event.storageArea !== window.localStorage)) return;
+      const positions = cachedReadPositions(event.newValue);
+      // Only read positions cross windows here; stale roster or connection data
+      // must not replace this renderer's live projection. Repair older writes too.
+      if (snapshot.some(bot => { const at = positions.get(readKey(bot)); return at !== undefined && at !== bot.readAt; })) {
+        publish(mergeReadPositions(snapshot, positions));
+      }
+    };
+    window.addEventListener('storage', onStorage);
+    return () => window.removeEventListener('storage', onStorage);
+  }, [dataOwnerId, isAuthenticated]);
   useEffect(() => {
     const nextOwner = isAuthenticated ? (dataOwnerId ?? null) : null;
     if (owner !== nextOwner) {

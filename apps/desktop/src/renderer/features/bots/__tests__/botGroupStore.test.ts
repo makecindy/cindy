@@ -20,6 +20,7 @@ vi.mock('@/contexts/dataOwnerGeneration', () => ({
 vi.mock('@/contexts/AuthContext', () => ({ useAuth: () => ({}) }));
 vi.mock('@/components/layout/AppBadgeAttentionSync', () => ({ AppBadgeAttentionSync: () => null }));
 vi.mock('../useRemoteBots', () => ({ useRemoteBotSync: () => {} }));
+vi.mock('../botGroupOutbox', () => ({ startBotGroupOutbox: () => () => {} }));
 vi.mock('../botStore', () => ({ useBotProfiles: () => bots, refreshBotProfiles: () => {} }));
 vi.mock('@/lib/makerChatStore', () => ({ makerChatStore: {
   subscribeAll: () => () => {}, getRunningSnapshot: () => running,

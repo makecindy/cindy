@@ -36,7 +36,7 @@ const botState = vi.hoisted(() => ({
 vi.mock('@/features/bots/useBotUnreadSync', () => ({ useBotUnreadSync: () => {} }));
 const outbox = vi.hoisted(() => ({ start: vi.fn(), stop: vi.fn() }));
 vi.mock('@/features/bots/botGroupOutbox', () => ({
-  startBotGroupOutbox: () => { outbox.start(); return outbox.stop; },
+  startBotGroupOutbox: (options: unknown) => { outbox.start(options); return outbox.stop; },
 }));
 vi.mock('@/features/bots/botStore', () => ({ useBotProfiles: () => botState.bots, useBotUnreadCounts: () => botState.unread,
   canonicalBotSessionId: (bot: { sessions: { id: string; role?: string; kind?: string }[] }) => bot.sessions.find(session => session.role === 'canonical' || session.kind === 'chat')?.id,
@@ -127,24 +127,25 @@ afterEach(() => {
 });
 
 describe('app badge projection lifecycle', () => {
-  // Unit regression: the real window shell keeps outbox and OS attention in
-  // the main window even though data mirrors now run in secondary windows.
-  it.each([false, true])('keeps outbox, badge and island ownership in the main window (secondary=%s)', secondary => {
+  // Unit regression: the real window shell restores durable sends only in main,
+  // while each window owns retries and only main publishes OS attention.
+  it.each([false, true])('owns local retries in each window and OS attention only in main (secondary=%s)', secondary => {
     window.history.replaceState(null, '', secondary ? '/?secondaryWindow=1' : '/');
     const island = vi.fn().mockResolvedValue({ ok: true });
     vi.stubGlobal('electronAPI', { notificationSetAppAttentionCount: state.publish, agentIsland: {
       setCompanionChats: island, onCompanionChatRead: () => () => {},
     } });
     const view = render(<AppWindowSync />);
-    expect(outbox.start).toHaveBeenCalledTimes(secondary ? 0 : 1);
+    expect(outbox.start).toHaveBeenCalledTimes(1);
+    expect(outbox.start).toHaveBeenLastCalledWith({ restoreSavedEntries: !secondary });
     expect(state.publish).toHaveBeenCalledTimes(secondary ? 0 : 1);
     expect(island).toHaveBeenCalledTimes(secondary ? 0 : 1);
     state.owner = { ...state.owner, generation: state.owner.generation + 1 };
     view.rerender(<AppWindowSync />);
-    expect(outbox.stop).toHaveBeenCalledTimes(secondary ? 0 : 1);
-    expect(outbox.start).toHaveBeenCalledTimes(secondary ? 0 : 2);
+    expect(outbox.stop).toHaveBeenCalledTimes(1);
+    expect(outbox.start).toHaveBeenCalledTimes(2);
     view.unmount();
-    expect(outbox.stop).toHaveBeenCalledTimes(secondary ? 0 : 2);
+    expect(outbox.stop).toHaveBeenCalledTimes(2);
   });
   // Existing Dock tests did not verify the island or its read action. One unread local chat
   // and one offline remote chat must survive task-list loading and use the same read positions (unit).
