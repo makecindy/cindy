@@ -10,11 +10,19 @@
 const fs = require("node:fs");
 const { isMainThread } = require("node:worker_threads");
 
-function discardLog(logPath, fsImpl) {
+// 先清空再删除:目录不允许删文件时,清空后的日志没有启动标识,logcheck 同样判为无法判定。
+// 清空和删除都不需要额外磁盘空间。
+function discardLog(logPath, fsImpl, fd = null) {
+  try {
+    if (fd !== null) fsImpl.ftruncateSync(fd, 0);
+    else fsImpl.truncateSync(logPath, 0);
+  } catch {
+    // 清空失败时仍尝试删除。
+  }
   try {
     fsImpl.unlinkSync(logPath);
   } catch {
-    // 文件本来就不在,或同样删不掉:logcheck 仍会因没有打包记录而无法判定。
+    // 文件本来就不在,或删不掉:已清空的日志也不会被判通过。
   }
 }
 
@@ -38,7 +46,7 @@ function installTee({ logPath, streams, fsImpl = fs, onExit }) {
           );
         } catch {
           broken = true;
-          discardLog(logPath, fsImpl);
+          discardLog(logPath, fsImpl, fd);
         }
       }
       return write.call(stream, chunk, ...rest);

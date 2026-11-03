@@ -198,12 +198,17 @@ describe("incomplete Metro log", () => {
       writeSync: vi.fn(() => {
         throw new Error("ENOSPC");
       }),
-      unlinkSync: vi.fn(),
+      ftruncateSync: vi.fn(),
+      unlinkSync: vi.fn(() => {
+        throw new Error("EPERM");
+      }),
       closeSync: vi.fn(),
     };
     installTee({ logPath: "/logs/metro.log", streams: [stream], fsImpl });
     stream.write("first");
     stream.write("second");
+    // Review #8560: the directory may forbid deleting, so the open file is emptied first.
+    expect(fsImpl.ftruncateSync).toHaveBeenCalledExactlyOnceWith(7, 0);
     expect(fsImpl.unlinkSync).toHaveBeenCalledExactlyOnceWith(
       "/logs/metro.log",
     );
@@ -216,9 +221,14 @@ describe("incomplete Metro log", () => {
       openSync: vi.fn(() => {
         throw new Error("EACCES");
       }),
+      truncateSync: vi.fn(),
       unlinkSync: vi.fn(),
     };
     installTee({ logPath: "/logs/metro.log", streams: [], fsImpl });
+    expect(fsImpl.truncateSync).toHaveBeenCalledExactlyOnceWith(
+      "/logs/metro.log",
+      0,
+    );
     expect(fsImpl.unlinkSync).toHaveBeenCalledExactlyOnceWith(
       "/logs/metro.log",
     );
