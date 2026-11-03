@@ -6397,8 +6397,8 @@ const sessionEventDependencies: SessionEventDependencies = {
   get broadcastToAllWindows() {
     return broadcastToAllWindows;
   },
-  get broadcastCodexImageAsToolResult() {
-    return broadcastCodexImageAsToolResult;
+  get deliverCodexGeneratedImage() {
+    return deliverCodexGeneratedImage;
   },
   get autoResumeBookkeeping() {
     return autoResumeBookkeeping;
@@ -26393,9 +26393,22 @@ const generatedImageDelivery = createGeneratedImageDelivery({
 });
 setGeneratedImageRecovery((sessionId) => generatedImageDelivery.recover(sessionId), () => generatedImageDelivery.reconcile());
 
-async function broadcastCodexImageAsToolResult(sessionId: string, event: AgentEvent): Promise<void> {
-  try { await generatedImageDelivery.deliver(sessionId, event); }
-  catch { log.warn('Codex generated image delivery could not be persisted', { sessionId }); }
+/**
+ * Live delivery of a Codex native generated image. The returned promise resolves
+ * with the tool events published for it (`[]` when none), so the wire listener can
+ * hold the Session stream and hand them to IM / hook listeners before `done`.
+ */
+function deliverCodexGeneratedImage(sessionId: string, event: AgentEvent): Promise<readonly AgentEvent[]> {
+  const warn = () => log.warn('Codex generated image delivery could not be persisted', { sessionId });
+  try {
+    const run = generatedImageDelivery.start(sessionId, event);
+    if (!run) return Promise.resolve([]);
+    run.completion.catch(warn);
+    return run.published;
+  } catch {
+    warn();
+    return Promise.resolve([]);
+  }
 }
 
 function broadcastSyntheticToolEvent(

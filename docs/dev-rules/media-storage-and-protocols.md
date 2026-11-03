@@ -343,6 +343,15 @@ Windows 使用 CF_HDROP，macOS 使用文件 URL 剪贴板，视频／GIF 均按
   清空若发生在引用写入期间，释放会按同一任务的可见消息条件补偿；其它任务或清空后
   新消息仍引用同一图片时保留引用。释放日志保留受管地址，重启可继续未完成的引用清理。
   同一任务并发交付/恢复合并，重复 native 完成事件复用消息 ID 与附件引用。
+- 实时交付在回合结束前送达所有会话订阅方（2026-11-03 Telegram 群的设计稿只发出文字）：
+  wire listener 处理 `image` 事件时调用 `Session.holdEventStream`，交付把 tool_use /
+  tool_result_full / tool_result 推给界面后，Session 再把这三条作为 `hostProjection`
+  事件发给全部监听方，然后才读下一条 provider 事件（通常就是 `done`）。官方 hook、个人
+  IM、伙伴 bot 与插件 tap 因此和普通工具结果一样拿到 `cindy-media://` 地址，消费方不另写
+  分支；wire pipeline 遇到 `hostProjection` 直接跳过，不重复落库或广播。暂停至多
+  `EVENT_STREAM_HOLD_MS`（20 秒）；超时、停止、关闭或拆离立即放行，图片仍在后台交付到
+  界面与恢复流程，但本轮 IM 回复不再带上它。静默定时任务不交付、不暂停；恢复、对账与
+  “重试交付”仍只推界面。
 
 ## 多端与远程
 
@@ -375,7 +384,11 @@ Windows 使用 CF_HDROP，macOS 使用文件 URL 剪贴板，视频／GIF 均按
   与图片共用目标的普通链接也指向保存后的同一图片；外发时这些本地链接降为显示文字，
   并清除对应引用定义，不能把原始路径留在 definition 中。网页链接和代码示例不改写。
   兼容仅限 hostless `xdt-image:///绝对路径` / `xdt-file:///绝对路径` 图片引用；协议读取器
-  不放宽。本机任务归属、账号、清空、编辑及 rewind 在提交时复核，不扫描其它任务目录。
+  不放宽。目标含裸空格的本机图片（如 `![说明](/Users/me/Library/Application Support/a.png)`，
+  CommonMark 不认）由 `shared/bareSpaceLocalImages.ts` 从普通文本节点补认：只认 POSIX／
+  Windows 盘符绝对路径或 hostless `xdt-image:///`、以图片扩展名结尾，不解码、不碰代码；
+  主进程 `taskImageReferences` 与桌面渲染 `remarkBareSpaceLocalImages` 共用，手机端
+  `parseLocalMarkdownDestination` 早已支持。改写回 Markdown 时含空格的地址用 `<…>` 包住。本机任务归属、账号、清空、编辑及 rewind 在提交时复核，不扫描其它任务目录。
   自动导入在首次文件系统访问前拒绝 UNC、WebDAV 和 Windows 设备命名空间；先解码兼容
   图片 URL，再检查路径，不能等 `realpath` 触发网络解析后才判断目录范围。
   确认消息未发布时，新建引用的回滚复用原账号的补偿日志；旧数据库已关闭时保留待补偿 ID，
