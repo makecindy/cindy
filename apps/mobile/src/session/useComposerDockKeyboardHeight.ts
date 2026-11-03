@@ -11,7 +11,10 @@ import {
   useDerivedValue,
   useSharedValue,
 } from "react-native-reanimated";
-import { isDockedKeyboard } from "@/auth/loginKeyboardAvoidance";
+import {
+  iosKeyboardOverlap,
+  loadDockedKeyboardHeights,
+} from "@/session/keyboardOverlap";
 
 /** Keep UI-thread motion, but use the public keyboard frame once it settles.
  * Reanimated 4.5's iOS observer only subscribes to show/hide and can retain an
@@ -24,15 +27,10 @@ export function useComposerDockKeyboardHeight() {
   const settledHeight = useSharedValue(-1);
 
   useLayoutEffect(() => {
-    const overlap = (frame: KeyboardMetrics | undefined) => {
-      if (!frame || frame.screenY === 0) return 0;
-      return isDockedKeyboard(
-        { x: frame.screenX, y: frame.screenY, ...frame },
-        viewport.width,
-      ) && frame.screenY + frame.height >= viewport.height
-        ? Math.max(0, Math.min(frame.height, viewport.height - frame.screenY))
-        : 0;
-    };
+    loadDockedKeyboardHeights();
+    // Same judgement as the composer card, including iOS's impossible frames after PiP.
+    const overlap = (frame: KeyboardMetrics | undefined) =>
+      !frame || frame.screenY === 0 ? 0 : iosKeyboardOverlap(frame, viewport);
     settledHeight.value = Keyboard.isVisible()
       ? overlap(Keyboard.metrics())
       : -1;
