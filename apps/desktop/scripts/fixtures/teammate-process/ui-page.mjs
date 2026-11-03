@@ -14,6 +14,7 @@ export default {
     'artifacts-thread': { about: 'The production topic panel and compact styles retain reply/artifact alignment', viewport: { width: 640, height: 950 } },
     'artifacts-no-avatar': { about: 'No avatar means no additional inset' },
     'artifacts-task': { about: 'Ordinary task layout stays unchanged' },
+    'artifacts-cached': { about: 'Cached cards keep their height while remount stats are pending; confirmation enables them and deletion removes the entire row' },
     'artifacts-missing': { about: 'Missing files leave no empty avatar row' },
   },
   async check(page, ui) {
@@ -37,6 +38,36 @@ export default {
         const origin = await page.locator('.msg-stream-items').evaluate(node => node.getBoundingClientRect().x);
         const box = await sheet.boundingBox();
         assert.ok(Math.abs(box.x - origin) <= 0.5, 'Ordinary task artifacts retain their original column');
+        return;
+      }
+      if (ui.case === 'artifacts-cached') {
+        // PR #8601 P2: card-only seed tests miss the parent hiding cached chips.
+        // Renderer integration tier: remount the real stream with deferred host
+        // stats; assert geometry and disabled state, then resolve each outcome.
+        await page.waitForFunction(() => !document.querySelector('button[title="/repo/deliveries.xlsx"]').disabled);
+        const before = await artifacts.boundingBox();
+        for (const outcome of ['confirm', 'remove']) {
+          const stats = await page.evaluate(() => Number(document.documentElement.dataset.fixtureFileStats));
+          await page.getByTestId('fixture-remount').click();
+          await page.waitForFunction(previous => Number(document.documentElement.dataset.fixtureFileStats) >= previous + 2, stats);
+          const pending = await artifacts.boundingBox();
+          assert.ok(pending, 'Cached pending artifacts remain visible before stat completes');
+          assert.ok(Math.abs(pending.height - before.height) <= 0.5, 'Pending cache retains card height');
+          const replyX = await page.locator('[data-bot-reply-bubble]').evaluate(node => node.getBoundingClientRect().x);
+          assert.ok(Math.abs(pending.x - replyX) <= 0.5, 'Pending cache shares the reply column');
+          console.log(`CACHED_ARTIFACT_LAYOUT ${outcome} ${JSON.stringify({ before, pending, replyX })}`);
+          assert.equal(await sheet.isDisabled(), true, 'Cache is not a fresh existence confirmation');
+          await ui.capture(`pending-${outcome}`);
+          await page.getByTestId(`fixture-${outcome}`).click();
+          if (outcome === 'confirm') {
+            await page.waitForFunction(() => !document.querySelector('button[title="/repo/deliveries.xlsx"]').disabled);
+            assert.equal((await artifacts.boundingBox()).height, before.height);
+          } else {
+            await artifacts.waitFor({ state: 'detached' });
+            const heights = await page.locator('[data-render-item-key="genfiles-ask-artifacts"]').evaluateAll(nodes => nodes.map(node => node.getBoundingClientRect().height));
+            assert.ok(heights.every(height => height === 0), 'Deleted cached files leave no avatar row');
+          }
+        }
         return;
       }
       const related = page.getByRole('button', { name: await ui.t('chat.generatedFiles.relatedFiles', { count: 1 }) });

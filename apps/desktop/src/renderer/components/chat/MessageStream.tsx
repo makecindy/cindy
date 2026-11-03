@@ -6374,6 +6374,14 @@ export function MessageStream({
       ) : undefined,
     [assistantAvatar, simplifiedBotConversation],
   );
+  const renderBotArtifacts = useCallback(
+    (content: ReactNode, renderItemKey?: string) => (
+      <div data-render-item-key={renderItemKey}>
+        {withAssistantAvatar(botReplyColumnSpacer, content)}
+      </div>
+    ),
+    [botReplyColumnSpacer],
+  );
   const workGroupRenderContext = useMemo<WorkGroupRenderContext>(
     () => ({
       workingDir,
@@ -6650,10 +6658,11 @@ export function MessageStream({
                     }
 
                     if (item.type === 'generated_files') {
-                      const card = (
+                      return (
                         <GeneratedFilesCard
                           key={item.key}
-                          renderItemKey={botReplyColumnSpacer ? undefined : item.key}
+                          renderItemKey={item.key}
+                          renderBotArtifacts={botReplyColumnSpacer ? renderBotArtifacts : undefined}
                           files={item.files}
                           turnStartMs={item.turnStartMs}
                           turnEndMs={item.turnEndMs}
@@ -6663,18 +6672,6 @@ export function MessageStream({
                             simplifiedBotConversation ? onGeneratedFilesVisibilityChange : undefined
                           }
                         />
-                      );
-                      if (!botReplyColumnSpacer) return card;
-                      // Keep stat checks mounted, but leave no avatar-sized gap
-                      // while the card has no confirmed visible files.
-                      return (
-                        <div
-                          key={item.key}
-                          data-render-item-key={item.key}
-                          hidden={!visibleGeneratedFileKeys.has(item.key)}
-                        >
-                          {withAssistantAvatar(botReplyColumnSpacer, card)}
-                        </div>
                       );
                     }
 

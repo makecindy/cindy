@@ -46,8 +46,16 @@ const artifactMessages: ChatMessage[] = [
   { ...text('artifact-answer', '交付清单已经整理好。表格按事项列出说明和完成状态，方便你逐项核对。\n\n同时保留了整理脚本，之后有新增记录时可以继续更新。下方是本次生成的表格和相关文件。', 'final_answer'), turnCompleted: true },
 ];
 
+let holdArtifactStats = false;
+const pendingArtifactStats: Array<(missing: boolean) => void> = [];
+function settleArtifactStats(missing: boolean) {
+  holdArtifactStats = false;
+  for (const settle of pendingArtifactStats.splice(0)) settle(missing);
+}
+
 function ArtifactStream({ artifactCase }: { artifactCase: string }) {
-  const stream = <MessageStream workingDir="/repo" historyLoaded messages={artifactMessages}
+  const [generation, setGeneration] = useState(0);
+  const stream = <MessageStream key={generation} workingDir="/repo" historyLoaded messages={artifactMessages}
     assistantAvatar={artifactCase === 'artifacts-task' || artifactCase === 'artifacts-no-avatar' ? undefined : <BotAvatar bot={{ id: 'fixture', name: 'Cindy', avatar: 'cindy://avatar/preset/cindy' }} size="sm" />}
     simplifiedBotConversation={artifactCase !== 'artifacts-task'} contentWidth={720} />;
   if (artifactCase === 'artifacts-thread') return <div className="flex h-screen w-full" data-ui-page-subject>
@@ -56,7 +64,14 @@ function ArtifactStream({ artifactCase }: { artifactCase: string }) {
       <div className="chat-rail-compact flex min-h-0 flex-1 flex-col">{stream}</div>
     </ThreadPanel>
   </div>;
-  return <div className="flex h-screen w-full min-w-0 flex-col bg-[var(--surface)]" data-ui-page-subject>{stream}</div>;
+  return <div className="flex h-screen w-full min-w-0 flex-col bg-[var(--surface)]" data-ui-page-subject>
+    {artifactCase === 'artifacts-cached' && <div className="flex gap-2">
+      <Button data-testid="fixture-remount" onClick={() => { holdArtifactStats = true; setGeneration(value => value + 1); }}>Remount</Button>
+      <Button data-testid="fixture-confirm" onClick={() => settleArtifactStats(false)}>Confirm</Button>
+      <Button data-testid="fixture-remove" onClick={() => settleArtifactStats(true)}>Remove</Button>
+    </div>}
+    {stream}
+  </div>;
 }
 
 function Subject({ done, retry, artifactCase }: { done: boolean; retry: boolean; artifactCase?: string }) {
@@ -75,7 +90,8 @@ void mountPage({
     fsBrowse: { statPath: async () => {
       const root = document.documentElement;
       root.dataset.fixtureFileStats = String(Number(root.dataset.fixtureFileStats ?? 0) + 1);
-      return { kind: ctx.case === 'artifacts-missing' ? 'missing' : 'file', birthtimeMs: Date.now() - 46000, mtimeMs: Date.now() - 46000 };
+      const missing = holdArtifactStats ? await new Promise<boolean>(resolve => pendingArtifactStats.push(resolve)) : ctx.case === 'artifacts-missing';
+      return { kind: missing ? 'missing' : 'file', birthtimeMs: Date.now() - 46000, mtimeMs: Date.now() - 46000 };
     } },
   }),
   render: ctx => <Subject done={ctx.data.done === true} retry={ctx.data.retry === true} artifactCase={ctx.case.startsWith('artifacts-') ? ctx.case : undefined} />,
