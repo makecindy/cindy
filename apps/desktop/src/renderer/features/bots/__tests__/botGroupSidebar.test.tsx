@@ -573,7 +573,7 @@ describe('collapsed avatar strip mentions', () => {
     const view = await renderSidebar();
     collapse();
     // The running point itself carries the @: one indicator, status color kept.
-    const marked = screen.getByRole('button', { name: `周末出游 · bots.groupChat.sidebar.title · bots.avatarStatus.running · ${mentionLabel}` });
+    const marked = screen.getByRole('button', { name: `周末出游 · bots.avatarStatus.running · ${mentionLabel}` });
     expect(marked.querySelectorAll('[data-teammate-status]')).toHaveLength(1);
     const point = marked.querySelector<HTMLElement>('[data-teammate-mention]');
     expect(point?.getAttribute('data-teammate-status')).toBe('running');
@@ -589,7 +589,7 @@ describe('collapsed avatar strip mentions', () => {
     mocks.groups = [group({ serverUnread: { count: 1, mentioned: true } })];
     await renderSidebar();
     collapse();
-    const point = screen.getByRole('button', { name: `周末出游 · bots.groupChat.sidebar.title · bots.avatarStatus.done · ${mentionLabel}` })
+    const point = screen.getByRole('button', { name: `周末出游 · bots.avatarStatus.done · ${mentionLabel}` })
       .querySelector<HTMLElement>('[data-teammate-mention]');
     expect(point?.style.backgroundColor).toBe('var(--bot-unread-bg)');
   });
@@ -598,7 +598,7 @@ describe('collapsed avatar strip mentions', () => {
     mocks.groups = [group({ serverUnread: { count: 0, mentioned: true } })];
     const view = await renderSidebar();
     collapse();
-    expect(screen.getByRole('button', { name: '周末出游 · bots.groupChat.sidebar.title' })).toBeTruthy();
+    expect(screen.getByRole('button', { name: '周末出游' })).toBeTruthy();
     expect(view.container.querySelector('[data-teammate-mention]')).toBeNull();
   });
 
