@@ -248,6 +248,34 @@ describe('Feishu bot authorization', () => {
     expect(api.registrationCancel).not.toHaveBeenCalled();
   });
 
+  it('retires the outstanding run when the user retries after the countdown ended', async () => {
+    vi.useFakeTimers();
+    const { api } = installApi();
+    const hook = renderHook(() => useFeishuBotRegistration());
+    await act(async () => {
+      await hook.result.current.beginRegistration();
+    });
+    act(() => {
+      vi.advanceTimersByTime(30_000);
+    });
+    expect(hook.result.current.phase).toBe('expired');
+    // 轮询未返回时「重新授权」必须真的发起新一轮：作废旧轮次后再 begin。
+    api.registrationBegin.mockResolvedValueOnce({
+      ok: true,
+      verificationUrl: 'https://open.feishu.cn/page/cli?user_code=RETRY',
+      userCode: 'RETRY',
+      expiresIn: 30,
+      runId: 9,
+    });
+    await act(async () => {
+      await hook.result.current.beginRegistration();
+    });
+    expect(api.registrationCancel).toHaveBeenCalledOnce();
+    expect(api.registrationBegin).toHaveBeenCalledTimes(2);
+    expect(hook.result.current.phase).toBe('qr');
+    expect(hook.result.current.userCode).toBe('RETRY');
+  });
+
   it('ignores a result from an earlier round so it cannot interrupt the current one', async () => {
     const { api, emit } = installApi();
     let resolveFirst: (value: Awaited<ReturnType<typeof api.registrationBegin>>) => void = () => {};

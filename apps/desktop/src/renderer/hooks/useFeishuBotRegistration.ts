@@ -143,7 +143,19 @@ export function useFeishuBotRegistration(
   }, [t]);
 
   const beginRegistration = useCallback(async () => {
-    if (activeRunRef.current !== null) return;
+    // 上一轮可能还没收口: 倒计时结束只收起二维码,轮询仍在途。用户这时点
+    // 「重新授权」必须真的能重来,所以显式重试要先作废旧轮次——若直接
+    // return,按钮会点了没反应,而且 main 侧请求没有超时,可能一直等下去。
+    if (activeRunRef.current !== null) {
+      activeRunRef.current = null;
+      mainRunIdRef.current = null;
+      generationRef.current += 1;
+      try {
+        await window.electronAPI.feishuBot.registrationCancel();
+      } catch (err) {
+        log.warn('registration cancel failed:', err);
+      }
+    }
     const runId = ++generationRef.current;
     activeRunRef.current = runId;
     mainRunIdRef.current = null;
