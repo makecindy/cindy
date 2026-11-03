@@ -585,7 +585,7 @@ describe('buildPiNativeProvidersFromConfigs', () => {
 
   // Tier 2: the launch mapper must retain a proxy prefix while removing the
   // inherited /v1 that the Anthropic SDK itself appends; saved routes stay authoritative.
-  it('keeps a proxy prefix for route-free Messages models and preserves a saved same-endpoint route', () => {
+  it('keeps a proxy prefix for Messages without an effective route and preserves matching saved routes', () => {
     const baseUrl = 'https://proxy.example/custom/v1';
     const { providers } = buildPiNativeProvidersFromConfigs([{
       id: 'custom-proxy', name: 'Custom Proxy', auth: { method: 'none' },
@@ -596,6 +596,12 @@ describe('buildPiNativeProvidersFromConfigs', () => {
           { id: 'selected-messages', name: 'Selected Messages',
             api: 'anthropic-messages', piApi: 'anthropic-messages',
             route: { baseUrl, wireProtocol: 'anthropic-messages' } },
+          { id: 'stale-api-route', name: 'Stale API Route',
+            api: 'anthropic-messages', piApi: 'anthropic-messages',
+            route: { baseUrl, wireProtocol: 'openai-responses' } },
+          { id: 'stale-pi-api-route', name: 'Stale Pi API Route',
+            piApi: 'anthropic-messages',
+            route: { baseUrl, wireProtocol: 'openai-responses' } },
         ],
       }) },
     }], () => null);
@@ -606,6 +612,9 @@ describe('buildPiNativeProvidersFromConfigs', () => {
     });
     expect(providers[0].models[1]).toMatchObject({ api: 'anthropic-messages' });
     expect(providers[0].models[1]).not.toHaveProperty('baseUrl');
+    for (const model of providers[0].models.slice(2)) {
+      expect(model).toMatchObject({ api: 'anthropic-messages', baseUrl: 'https://proxy.example/custom' });
+    }
   });
 
   it('removes inherited /v1 for a route-free Anthropic runtime unless it has a custom request path', () => {

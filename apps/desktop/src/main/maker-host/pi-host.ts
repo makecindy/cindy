@@ -1464,21 +1464,26 @@ export function buildPiNativeProvidersFromConfigs(
         const explicitRouteApi = explicitRoute
           ? wireProtocolToPiApi(explicitRoute.wireProtocol)
           : undefined;
+        // resolvePiModelRoute already discards a saved endpoint whose protocol
+        // disagrees with an explicit api/piApi override. Do not let that stale
+        // route block the inherited Anthropic root or regain priority below.
+        const matchingModelRoute = m.route?.wireProtocol === explicitRoute?.wireProtocol
+          ? m.route : undefined;
         // Bundled/official rows may lend capabilities, but never routing. Only an
         // explicit model route or a proven SDK path relationship may override baseUrl.
         // Google's public /v1beta/openai endpoint is one such relationship.
         const nativeGoogleBaseUrl =
           modelApi === 'google-generative-ai' && !m.route?.requestPath && !rt.requestPath
             ? providerBaseUrlForApi(rt.baseUrl, modelApi) : undefined;
-        // Anthropic appends /v1/messages. A route-free model may inherit a /v1
-        // endpoint from either runtime; saved routes remain authoritative even
-        // when they equal the provider endpoint.
+        // Anthropic appends /v1/messages. A model without an effective route may
+        // inherit /v1 from either runtime; matching saved routes remain
+        // authoritative even when they equal the provider endpoint.
         const nativeAnthropicBaseUrl =
           modelApi === 'anthropic-messages' &&
-          authMethod !== 'oauth' && !rt.requestPath && !m.route
+          authMethod !== 'oauth' && !rt.requestPath && !matchingModelRoute
             ? anthropicRootForV1Endpoint(rt.baseUrl) : undefined;
         const modelBaseUrl =
-          nativeAnthropicBaseUrl ?? (m.api && m.route ? m.route.baseUrl :
+          nativeAnthropicBaseUrl ?? (m.api && matchingModelRoute ? matchingModelRoute.baseUrl :
             m.route && explicitRouteApi === modelApi ? explicitRoute?.baseUrl : nativeGoogleBaseUrl);
         // Model-level defaults follow the final endpoint. Putting them on the
         // provider would leak them to a model routed to a different service.
