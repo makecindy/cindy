@@ -110,6 +110,8 @@ export interface BotMessageTransport {
 
 export interface BotDirectMessageServiceDeps {
   transport?: BotMessageTransport;
+  /** Capture the accepted caller input, never model-written claims of approval. */
+  captureRequest?: (sessionId: string, supplement: string) => Promise<CapturedAgentRequest>;
   dispatch: (params: {
     autoReviewUserText?: AgentRequestReceipt;
     targetSessionId: string;
@@ -478,11 +480,15 @@ export function createBotDirectMessageService(deps: BotDirectMessageServiceDeps)
       return failed('INVALID_ARGS', `message 必须为 1-${MAX_MESSAGE_CHARS} 个字符`);
     }
 
-    // A peer conversation is not a delegated owner instruction. Preserve old
-    // verified envelopes when receiving them, but never wrap a new message.
-    const captured: CapturedAgentRequest = { message: rawMessage,
+    const captured: CapturedAgentRequest = remoteSender ? { message: rawMessage,
       autoReviewUserText: { kind: 'agent-request',
-        ...(remoteSender?.requestSource ? { request: remoteSender.requestSource } : {}) } };
+        ...(remoteSender.requestSource ? { request: remoteSender.requestSource } : {}) } }
+      : await deps.captureRequest?.(input.callerSessionId, rawMessage)
+        ?? { message: rawMessage, autoReviewUserText: { kind: 'agent-request' } };
+    // No original words means a normal peer message, including on older peers
+    // whose optional requestSource validator requires a quotation envelope.
+    if (captured.autoReviewUserText.request?.userText === null)
+      captured.autoReviewUserText = { kind: 'agent-request' };
     const message = captured.message;
 
     const caller = remoteSender ? {

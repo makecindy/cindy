@@ -2,7 +2,7 @@
  * 分享的人这边的「需要换一台」(docs/product-rules/provider-groups.md §6.1「谁来执行换电脑 · 分享的人」)。
  *
  * 分享者把分享出来的供应商建成了组时，本机的任务由组所在电脑中转到组内某台电脑运行；本机看不到是哪台。那台
- * 因电脑本身的原因失败时，组所在电脑在事件流里先发来一张一次性凭证(排在那次错误前面)。本机据此自动交接
+ * 因电脑本身的原因失败时，组所在电脑在事件流里先发来一张短期凭证(排在那次错误前面)。本机据此自动交接
  * (新建会话并带上交接上下文)后重新打开，打开时带回凭证，组所在电脑再为它换一台。
  *
  * 只有持有组所在电脑发来的凭证才换：分享被暂停、删除、撤权等是分享本身的问题，不会触发换电脑。
@@ -25,9 +25,9 @@ export interface ProviderGroupGuestSwitch {
   hasOffer(sessionId: string): boolean;
   /** 这次错误要不要换一台：有新鲜的凭证则取走，登记给下一次打开，返回 true。 */
   claim(sessionId: string): boolean;
-  /** 打开任务时带上的凭证(取走即用掉)；没有返回 undefined。 */
+  /** 打开任务时带上的凭证；失败重开可重试，成功打开后由调用方 release。 */
   takeForOpen(sessionId: string): string | undefined;
-  /** 交接没成：作废登记给下一次打开的凭证。 */
+  /** 成功打开、交接取消或用户接手后作废凭证。 */
   release(sessionId: string): void;
   /**
    * 用户亲自接手(发消息、重试、换模型)：作废还没用上的凭证(含交接途中已登记、等重新打开带走的)，
@@ -80,8 +80,11 @@ export function createProviderGroupGuestSwitch(now: () => number = Date.now): Pr
 
     takeForOpen(sessionId) {
       const entry = armed.get(sessionId);
-      armed.delete(sessionId);
-      if (!entry || now() - entry.at > PROVIDER_GROUP_SWITCH_ARMED_TTL_MS) return undefined;
+      if (!entry) return undefined;
+      if (now() - entry.at > PROVIDER_GROUP_SWITCH_ARMED_TTL_MS) {
+        armed.delete(sessionId);
+        return undefined;
+      }
       return entry.token;
     },
 

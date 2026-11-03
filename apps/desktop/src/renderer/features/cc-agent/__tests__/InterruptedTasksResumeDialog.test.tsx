@@ -14,11 +14,13 @@ import { CONTINUE_AFTER_APP_EXIT_PROMPT } from '../../../../shared/interruptedTu
 import { InterruptedTasksResumeDialog } from '../InterruptedTasksResumeDialog';
 
 const sendUiTrigger = vi.hoisted(() => vi.fn(async () => {}));
+// 弹窗按数据所有者缓存加载结果并记「已处理」,每个用例用独立所有者。
+const auth = vi.hoisted(() => ({ dataOwnerId: 'owner-1' }));
 
 vi.mock('react-i18next', () => ({
   useTranslation: () => ({ t: (key: string) => key }),
 }));
-vi.mock('@/contexts/AuthContext', () => ({ useAuth: () => ({ dataOwnerId: 'owner-1' }) }));
+vi.mock('@/contexts/AuthContext', () => ({ useAuth: () => auth }));
 vi.mock('@/lib/scrollbarAutoHide', () => ({ flashScrollbar: () => {} }));
 vi.mock('@/lib/makerChatStore', () => ({ makerChatStore: { sendUiTrigger } }));
 vi.mock('@/lib/toast', () => ({ toast: { error: vi.fn() } }));
@@ -76,5 +78,47 @@ describe('InterruptedTasksResumeDialog', () => {
 
     await waitFor(() => expect(sendUiTrigger).toHaveBeenCalledTimes(1));
     expect(sendUiTrigger).toHaveBeenCalledWith('s-a', CONTINUE_AFTER_APP_EXIT_PROMPT);
+  });
+  it('labels companion tasks with the companion name and still opens when the roster read fails', async () => {
+    const now = Date.now();
+    const botSession = {
+      id: 'bot-s',
+      title: '伙伴主任务',
+      source: 'bot',
+      agentKind: 'cc',
+      workingDir: '/code/workdir-name',
+      workspaceKind: 'project',
+      createdAt: new Date(now).toISOString(),
+    };
+    const candidates = [{ sessionId: 'bot-s', interruptedAt: now - 60_000, activity: null }];
+    const mount = (bots: () => Promise<unknown>) =>
+      Object.assign(window, {
+        electronAPI: {
+          localDb: {
+            bots: { list: bots },
+            sessions: {
+              interruptedResumeCandidates: async () => candidates,
+              getMany: async () => [botSession],
+            },
+          },
+        },
+      });
+
+    auth.dataOwnerId = 'owner-bot-name';
+    mount(async () => [{ name: '小助理', sessions: [{ id: 'bot-s' }] }]);
+    render(<InterruptedTasksResumeDialog />);
+    await screen.findByRole('alertdialog');
+    expect(screen.getByText(/小助理/)).toBeTruthy();
+    expect(screen.queryByText(/workdir-name/)).toBeNull();
+    cleanup();
+
+    auth.dataOwnerId = 'owner-bot-name-fails';
+    mount(async () => {
+      throw new Error('roster unavailable');
+    });
+    render(<InterruptedTasksResumeDialog />);
+    await screen.findByRole('alertdialog');
+    expect(screen.getByText('伙伴主任务')).toBeTruthy();
+    expect(screen.getByText(/workdir-name/)).toBeTruthy();
   });
 });

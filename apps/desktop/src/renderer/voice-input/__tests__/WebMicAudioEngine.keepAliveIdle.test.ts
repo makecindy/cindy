@@ -675,36 +675,18 @@ describe('keep-alive microphone idle window', () => {
     expect(track.stopped).toBe(false);
   });
 
-  it('does not open the microphone when enumeration outlives a power release', async () => {
-    let resolveEnumerate: (value: unknown) => void = () => undefined;
-    vi.stubGlobal('navigator', {
-      mediaDevices: {
-        enumerateDevices: vi.fn(() => new Promise((resolve) => {
-          resolveEnumerate = resolve;
-        })),
-        getUserMedia,
-        addEventListener: vi.fn(),
-      },
-    });
-
-    const engine = new mod.WebMicAudioEngine({
-      workletUrl: WORKLET_URL,
-      keepAlive: false,
-      deviceId: 'specific-device',
-      onInterrupted: vi.fn(),
-    });
-    const starting = engine.start();
-    await vi.advanceTimersByTimeAsync(0);
-    expect(powerCallback).toBeDefined();
-
+  it('opens an exact device without waiting for enumeration and still releases it on lock', async () => {
+    const enumerate = vi.fn(() => new Promise(() => undefined));
+    vi.stubGlobal('navigator', { mediaDevices: { enumerateDevices: enumerate, getUserMedia, addEventListener: vi.fn() } });
+    const engine = new mod.WebMicAudioEngine({ workletUrl: WORKLET_URL, deviceId: 'specific-device' });
+    await engine.start();
+    expect(enumerate).not.toHaveBeenCalled();
+    expect(getUserMedia).toHaveBeenCalledOnce();
+    expect(getUserMedia.mock.calls[0][0].audio.deviceId).toEqual({ exact: 'specific-device' });
     powerCallback?.({ reason: 'screen_locked' });
     await vi.advanceTimersByTimeAsync(0);
-    // Enumeration succeeds *after* the release, reporting the device as present.
-    resolveEnumerate([{ kind: 'audioinput', deviceId: 'specific-device' }]);
-
-    await expect(starting).rejects.toThrow(/disposed/i);
-    // The one-shot event has passed; nothing may reopen the device now.
-    expect(getUserMedia).not.toHaveBeenCalled();
+    expect(track.stopped).toBe(true);
+    expect(getUserMedia).toHaveBeenCalledOnce();
   });
 
   it('does not report an error when a release hits a still-starting capture', async () => {

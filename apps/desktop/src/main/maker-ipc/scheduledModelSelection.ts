@@ -1,8 +1,9 @@
 import type { AgentKind, Effort } from '@cindy/maker-core';
-import { connectedProvidersForAgent, effectiveSourceIdForModel, findCatalogModel, isModelSelectableForNewRoute, type ProviderView } from '@cindy/model-providers';
+import { actualSourceIdForModel, connectedProvidersForAgent, effectiveSourceIdForModel, findCatalogModel, isModelSelectableForNewRoute, type ProviderView } from '@cindy/model-providers';
 import { resolveCompatibleSessionRuntimeEffort } from './sessionRuntimeControl';
 import { parseScheduledModelBaseline, type ScheduledModelBaseline } from '../../shared/scheduledModelBaseline';
 import { throwIpcError } from '../utils/ipcValidate';
+import { isIpcError } from '../../shared/ipc-errors';
 
 /** A saved automation choice, applied only while its target's send lock is held. */
 export interface ScheduledModelSelection {
@@ -35,6 +36,9 @@ export function createScheduledModelScope(deps: {
   createId: () => string;
   ownerEpoch?: () => string;
   prepareBaseline?: (sessionId: string) => Promise<void>;
+  /** Caller holds the send lock; true means the saved companion route was
+   * applied and the exact failed baseline was retired without restoring it. */
+  recoverUnavailableBaseline?: (sessionId: string, expectedBaseline: string) => Promise<boolean>;
 }) {
   const assertOwner = (owner: string | undefined) => {
     if (owner !== deps.ownerEpoch?.()) throw new Error('Account changed during scheduled model selection');
@@ -95,8 +99,19 @@ export function createScheduledModelScope(deps: {
       // A permanent save owns the next selection, including across restart.
       // Keep its old baseline for retries until reconciliation accepts the save.
       if (baseline.pendingBotProfileVersion) return;
-      // Keep the saved choice on failure so the next input retries before dispatch.
-      await deps.apply(sessionId, baseline);
+      try {
+        await deps.apply(sessionId, baseline);
+      } catch (error) {
+        assertOwner(owner);
+        // Only catalog/route validation marks a selection unavailable. Network,
+        // permission and runtime-switch failures must retain the saved choice.
+        if (isIpcError(error) && error.code === 'MODEL_SELECTION_UNAVAILABLE' &&
+          await deps.recoverUnavailableBaseline?.(sessionId, row!.baseline!)) {
+          assertOwner(owner);
+          return;
+        }
+        throw error;
+      }
       assertOwner(owner);
       const written = await deps.write(sessionId, null, row!.profileRevision, row!.baseline);
       assertOwner(owner);
@@ -159,10 +174,18 @@ export function resolveScheduledModelSelection(
   providers: ProviderView[],
 ): ScheduledModelSelection {
   const providerId = selection.providerId ??
-    effectiveSourceIdForModel(providers, null, selection.model, selection.agentKind);
+    // If admission removed every implicit source, retain the existing source only
+    // for rejection classification; the selectable-model check below still applies.
+    effectiveSourceIdForModel(providers, null, selection.model, selection.agentKind) ??
+    actualSourceIdForModel(providers, null, selection.model, selection.agentKind);
   const provider = connectedProvidersForAgent(providers, selection.agentKind)
     .find((candidate) => candidate.id === providerId);
   const model = findCatalogModel(provider, selection.model, selection.agentKind, { exact: true });
+  // Payment admission is not evidence that a saved model has been removed.
+  // Preserve the local guard's error class so restoration cannot replace it.
+  if (model?.availability === 'requires_payment') {
+    throwIpcError('INVALID_PARAMS', `Scheduled model "${selection.model}" requires payment from provider "${providerId ?? 'default'}"`);
+  }
   if (!provider || !model ||
     !isModelSelectableForNewRoute(model, { userProvider: provider.source === 'user' })) {
     throwIpcError('MODEL_SELECTION_UNAVAILABLE', `Scheduled model "${selection.model}" is unavailable from provider "${providerId ?? 'default'}"`);
@@ -178,9 +201,15 @@ export function resolveScheduledModelSelection(
 /** Resolve against the bound execution computer; the runner owns inactive-target recovery. */
 export function createScheduledModelSelectionResolver(deps: {
   readRemoteProviders: (deviceId: string, agent: AgentKind, model: string, providerId: string | null) => Promise<ProviderView[]>;
+  readSshCodexProviders: (hostId: string) => Promise<ProviderView[]>;
   resolveLocalSelection: (selection: ScheduledModelSelection) => Promise<ScheduledModelSelection>;
 }) {
   return async (selection: ScheduledModelSelection, target?: ScheduledModelTarget | null): Promise<ScheduledModelSelection> => {
+    // SSH Codex discovers native models on its host. A controller's catalog
+    // cannot establish that a frozen remote choice is obsolete.
+    if (target?.remoteHostId && selection.agentKind === 'codex') {
+      return resolveScheduledModelSelection(selection, await deps.readSshCodexProviders(target.remoteHostId));
+    }
     const agentDeviceId = selection.agentDeviceId === undefined
       ? target?.agentDeviceId : selection.agentDeviceId;
     if (agentDeviceId && !target?.remoteHostId) {

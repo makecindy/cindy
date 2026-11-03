@@ -54,7 +54,7 @@ it('marks exact failed assistant items, including a live block, without rewritin
     }),
   }), expect.anything());
   expect(createMessage).toHaveBeenCalledWith(sessionId, expect.objectContaining({
-    content: 'Successful opening', agentMeta: null,
+    content: 'Successful opening', agentMeta: { agentMessageId: 'success' },
   }), expect.anything());
   expect(updateMessageContent).not.toHaveBeenCalled();
   expect(broadcastMessageAgentMetaUpdate).toHaveBeenCalledWith(sessionId, first, expect.anything());
@@ -186,6 +186,7 @@ const SUMMARY = 'tool finished';
 
 // 落库走 writeChain microtask,断言前 flush 一个宏任务边界把队列排空。
 const flushWrites = () => new Promise((resolve) => setTimeout(resolve, 0));
+
 const broadcastGuard = () => expect.objectContaining({ shouldBroadcast: expect.any(Function) });
 const terminalSubagentObservation = (taskId: string, parentToolUseId?: string) => ({
   subagentObservation: {
@@ -2041,6 +2042,29 @@ describe('done orphan:残留 buffer 在 turn 末 flush', () => {
 });
 
 describe('thinking persistence', () => {
+  it('drops interrupted thinking at the turn boundary but keeps finalized blocks pending write', async () => {
+    // 回归：turn 中途死掉的思考块(无 final)若留在快照里,历史视图会把它当 live 行
+    // 追加到时间线末尾,「正在工作…」预览被钉死在早已结束的历史思考上。
+    // 旧实现里 resetTurnPersistState 不碰快照,本用例在修复前返回两条而失败。
+    let finishWrite!: () => void;
+    vi.mocked(createMessage).mockImplementationOnce(() => new Promise((resolve) => {
+      finishWrite = () => resolve({} as Awaited<ReturnType<typeof createMessage>>);
+    }));
+    onThinkingEvent(SESSION, { stage: 'start', blockId: 'dead-thought' }, null);
+    onThinkingEvent(SESSION, { stage: 'delta', blockId: 'dead-thought', text: 'streamed, then the attempt died' }, null);
+    onThinkingEvent(SESSION, { stage: 'final', blockId: 'sealed-thought', text: 'complete thought' }, null);
+    resetTurnPersistState(SESSION);
+    expect(getSessionThinkingSnapshots(SESSION)).toEqual([expect.objectContaining({
+      clientId: 'sealed-thought', content: expect.objectContaining({ text: 'complete thought' }),
+    })]);
+    // Drain before resolving: the queued write must consume its pending mock first,
+    // otherwise the module-level writeChain stalls for every later test.
+    await flushWrites();
+    finishWrite();
+    await flushWrites();
+    expect(getSessionThinkingSnapshots(SESSION)).toEqual([]);
+  });
+
   it('keeps final thinking across terminal resets until the queued write succeeds', async () => {
     let finishWrite!: () => void;
     vi.mocked(createMessage).mockImplementationOnce(() => new Promise((resolve) => {
@@ -2078,6 +2102,35 @@ describe('thinking persistence', () => {
     },
   );
 
+  it('keeps a replacement final marker when an older write settles after history cleanup', async () => {
+    // Greptile P2 回归：releaseSnapshot 闭包持旧快照。若按 blockId 无条件删当前标记,
+    // 旧写收口会误删同 blockId 替代快照的 final 标记 → 随后的 turn 终态误删待写快照,
+    // 写失败时也无法按既有契约保留。修复后标记按捕获的快照身份比对。
+    let finishOld!: () => void;
+    let finishNew!: () => void;
+    vi.mocked(createMessage).mockImplementationOnce(() => new Promise((resolve) => {
+      finishOld = () => resolve({} as Awaited<ReturnType<typeof createMessage>>);
+    }));
+    vi.mocked(createMessage).mockImplementationOnce(() => new Promise((resolve) => {
+      finishNew = () => resolve({} as Awaited<ReturnType<typeof createMessage>>);
+    }));
+    onThinkingEvent(SESSION, { stage: 'final', blockId: 'reused', text: 'old' }, null);
+    await flushWrites(); // 旧写已开跑、挂起
+    clearSessionThinkingSnapshots(SESSION);
+    onThinkingEvent(SESSION, { stage: 'delta', blockId: 'reused', text: 'new' }, null);
+    onThinkingEvent(SESSION, { stage: 'final', blockId: 'reused', text: 'new full' }, null);
+    finishOld(); // 旧写收口 → 旧 release 回调跑,不得碰替代快照的标记
+    await flushWrites();
+    expect(getSessionThinkingSnapshots(SESSION)).toEqual([expect.objectContaining({
+      clientId: 'reused', content: expect.objectContaining({ text: 'new full' }),
+    })]);
+    resetTurnPersistState(SESSION);
+    expect(getSessionThinkingSnapshots(SESSION)).toHaveLength(1);
+    finishNew();
+    await flushWrites();
+    expect(getSessionThinkingSnapshots(SESSION)).toEqual([]);
+  });
+
   it('does not let an old write release a replacement snapshot after history cleanup', async () => {
     let finishWrite!: () => void;
     vi.mocked(createMessage).mockImplementationOnce(() => new Promise((resolve) => {
@@ -2110,7 +2163,9 @@ describe('thinking persistence', () => {
     expect(getSessionThinkingSnapshots(SESSION)).toEqual([]);
   });
 
-  it('uses the final event timestamp instead of delayed write time', async () => {
+  it('anchors the row at the thinking start instead of the delayed write time', async () => {
+    // 块结束时才写入,但排序锚点必须是块的真实起点:按写入时刻排,一个跨过最终回复的
+    // 思考块会落到回复之后,渲染层就为它多折出一段「已工作」。
     const finishedAt = Date.parse('2026-06-20T09:10:00.000Z');
     const delayedWriteTime = Date.parse('2026-06-20T09:10:04.000Z');
     const nowSpy = vi.spyOn(Date, 'now');
@@ -2138,7 +2193,7 @@ describe('thinking persistence', () => {
           isRedacted: false,
           finishedAt,
         },
-        createdAt: finishedAt,
+        createdAt: finishedAt - 7_000,
       }),
       broadcastGuard(),
     );
@@ -3621,11 +3676,13 @@ describe('onTurnErrorEvent — terminal error 持久化', () => {
     expect(roles).toEqual(['assistant', 'error']);
   });
 
-  it('error 事件自带的 agentMeta 透传给 flush 边界与 error 行(rewind/fork 锚点不丢)', async () => {
+  it.each([undefined, 'native-item'])('error 事件自带的 agentMeta 透传给 flush 边界与 error 行(rewind/fork 锚点不丢, item=%s)', async (agentMessageId) => {
     // 失败轮只有 error 边界携带 SDK uuid 的场景:在飞 assistant 无自带 meta,
     // 会话级兜底也为空 —— 若不透传,assistant 行以 null meta 落库(greptile P1)。
     const boundaryMeta = { uuid: 'uuid-err-boundary', sdkSessionId: 'sdk-1' };
-    onAssistantTextEvent(SESSION, { text: '写到一半…', isFinal: false }, null);
+    // #8005: retaining a native item ID must not suppress the boundary's SDK
+    // metadata fallback. The prior no-ID fixture could not catch that loss.
+    onAssistantTextEvent(SESSION, { text: '写到一半…', isFinal: false, agentMessageId }, null);
     onTurnErrorEvent(SESSION, { message: 'turn 崩了' }, boundaryMeta as never);
 
     await flushWrites();
@@ -3634,7 +3691,7 @@ describe('onTurnErrorEvent — terminal error 持久化', () => {
       (c) => c[1] as { role: string; agentMeta?: unknown },
     );
     expect(bodies[0].role).toBe('assistant');
-    expect(bodies[0].agentMeta).toMatchObject({ uuid: 'uuid-err-boundary' });
+    expect(bodies[0].agentMeta).toEqual({ ...boundaryMeta, ...(agentMessageId ? { agentMessageId } : {}) });
     expect(bodies[1].role).toBe('error');
     expect(bodies[1].agentMeta).toMatchObject({ uuid: 'uuid-err-boundary' });
   });

@@ -4,6 +4,8 @@ import { loadCatalogWithSource, type ModelRegistry } from '@cindy/model-provider
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
+import { setLocalCatalogOverrides } from '../active-catalog.js';
+import { EMPTY_MODEL_CATALOG_OVERRIDES } from '../model-plane/localCatalogOverrides.js';
 import { configureSessionModelInterfaceStorage, sessionModelInterface } from '../session-model-interface.js';
 import { afterEach, describe, it, expect, vi } from 'vitest';
 
@@ -65,6 +67,47 @@ import { ANTHROPIC_DIRECT_UPSTREAM } from '../claude-gateway-config.js';
 // CODEX_OAUTH_UPSTREAM 不直接 import —— codex-proxy-host.ts 在 import 期触电(app.getPath),
 // 会让本测试在 vitest 无 electron 环境炸。其值稳定(codex-gateway-config.ts),这里以字面量锁定。
 const CODEX_OAUTH_UPSTREAM = 'https://chatgpt.com/backend-api/codex';
+
+// Unit: missing app attribution made Cindy traffic anonymous or credited the
+// underlying harness. Existing auth-route cases did not cover provider identity.
+describe('provider application attribution', () => {
+  it.each([
+    ['https://openrouter.ai/api/v1', 'X-OpenRouter-Title'],
+    ['https://ai-gateway.vercel.sh/v1', 'X-Title'],
+    ['https://router.requesty.ai/v1', 'X-Title'],
+    ['https://router.eu.requesty.ai/v1', 'X-Title'],
+  ])('attributes all harness routes to Cindy at %s', (upstream, title) => {
+    for (const agent of ['claude-code', 'codex', 'pi'] as const) {
+      const routing: RoutingDescriptor = { upstream, authStrategy: 'api-key-header' };
+      expect(buildRouteDecision(routing, null, agent, 'fixture-key')?.headerOverride).toMatchObject({
+        'HTTP-Referer': 'https://cindy.app', [title]: 'Cindy',
+        authorization: 'Bearer fixture-key',
+      });
+      expect(routing.headerOverride).toBeUndefined();
+      expect(buildLocalHandlerHeaders({ providerId: 'fixture', providerSource: 'user', routing,
+        apiKey: 'fixture-key', oauthToken: null }, agent).headers).toMatchObject({ 'HTTP-Referer': 'https://cindy.app', [title]: 'Cindy' });
+    }
+  });
+
+  it('preserves explicit mixed-case and legacy attribution, and header deletion', () => {
+    const headers = { 'http-referer': 'https://custom.example', 'x-TITLE': '', 'x-extra': 'value' };
+    const routing: RoutingDescriptor = { upstream: 'https://openrouter.ai/api/v1', authStrategy: 'oauth-token', headerOverride: headers };
+    const sent = buildRouteDecision(routing, null, 'pi', null, 'fixture-token')!.headerOverride!;
+    expect(sent).toMatchObject(headers);
+    expect(sent['X-OpenRouter-Title']).toBeUndefined();
+    expect(sent['HTTP-Referer']).toBeUndefined();
+    const deleted = buildRouteDecision({ ...routing, headerOverride: {}, headerDelete: ['http-referer', 'x-title'] }, null, 'pi')!;
+    expect(deleted.headerOverride).not.toHaveProperty('HTTP-Referer');
+    expect(deleted.headerOverride).not.toHaveProperty('X-OpenRouter-Title');
+  });
+
+  it.each(['https://openrouter.ai.example/api/v1', 'http://openrouter.ai/api/v1',
+    'https://openrouter.ai:8443/api/v1', 'https://api.anthropic.com', 'http://127.0.0.1:1234/v1'])
+  ('leaves unrelated or custom endpoint %s unchanged', upstream => {
+    expect(buildRouteDecision({ upstream, authStrategy: 'api-key-header' }, null, 'codex', 'fixture-key')?.headerOverride)
+      .toEqual({ authorization: 'Bearer fixture-key' });
+  });
+});
 
 /**
  * no-break 锁定:catalog 描述符经 buildRouteDecision 出来的路由,必须与退役前 decideXxxRoute
@@ -942,7 +985,9 @@ describe('resolveSessionRouteDecision — 自定义供应商(resolve 时注入 k
 
     expect(isUserProviderSession('s-user')).toBe(true);
     expect(resolveSessionRouteDecision('s-user', 'codex', KEY)).toEqual({
-      headerOverride: { authorization: 'Bearer sk-or-123' },
+      headerOverride: { authorization: 'Bearer sk-or-123',
+        'HTTP-Referer': 'https://cindy.app', 'X-OpenRouter-Title': 'Cindy',
+      },
       upstreamOverride: 'https://openrouter.ai/api/v1',
       headerDelete: CODEX_ACCOUNT_HEADER_DELETE,
     });
@@ -1999,9 +2044,24 @@ describe('task interface snapshot', () => {
       configureSessionModelInterfaceStorage(() => directory); // real disk restore
       expect(sessionModelInterface('task', config.id, 'codex', next, registry)).toEqual(first);
       expect(sessionModelInterface('new-task', config.id, 'codex', next, registry)?.api).toBe('openai-completions');
+      // Explicit image edits override pinned metadata, never the saved interface.
+      // Reset removes the override rather than permanently rewriting the snapshot.
+      for (const value of [false, true]) {
+        setLocalCatalogOverrides({ ...EMPTY_MODEL_CATALOG_OVERRIDES, patches: {
+          'snapshot-kimi:k3.1-pro': { perAgent: { codex: { supportsImageInput: value } } },
+        } });
+        configureSessionModelInterfaceStorage(() => directory);
+        const edited = sessionModelInterface('task', config.id, 'codex', next, registry)!;
+        expect(edited.defaults.supportsImageInput).toBe(value);
+        expect(edited.route).toEqual(first.route);
+        expect(edited.api).toBe(first.api);
+      }
+      setLocalCatalogOverrides(EMPTY_MODEL_CATALOG_OVERRIDES);
+      expect(sessionModelInterface('task', config.id, 'codex', next, registry)).toEqual(first);
       registry.interfaceProfiles!.find(p => p.id === first.profileId)!.retired = true;
       expect(() => sessionModelInterface('task', config.id, 'codex', next, registry)).toThrow('MODEL_INTERFACE_RETIRED');
     } finally {
+      setLocalCatalogOverrides(EMPTY_MODEL_CATALOG_OVERRIDES);
       configureSessionModelInterfaceStorage(() => null);
       rmSync(directory, { recursive: true, force: true });
     }

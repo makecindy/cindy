@@ -5,6 +5,16 @@ This inventory applies to Cindy Headless `0.4.3`, based on Cindy upstream commit
 only when the Headless CLI or Harbor adapter can exercise it; vendored source
 alone is not sufficient.
 
+## Runtime pin alignment: 2026-10-30
+
+Example and smoke profiles now follow Claude Code `2.1.312` and Pi `1.4.0`,
+with both production profile locks regenerated. Headless Codex continues to
+follow `tools/codex/latest.json` at `0.159.2`; Desktop's separate
+`tools/codex-package/latest.json` now pins `0.166.0`. This only updates runtime
+version pins, without a broader upstream capability sync or a new Headless release.
+The existing `src/production-profile-parity.test.ts` verifies version alignment
+and that the frozen production profiles load with their committed locks.
+
 ## Upstream integration audit: 2026-10-12
 
 PR #4750 is synchronized with `fa3fc88d37d205ea993a67d85612fa9a5436fae5`
@@ -69,8 +79,8 @@ binary checks run through `package:release`; no live model benchmark is implied.
 
 Pi is connected through its native RPC and `models.json` compatibility layer.
 Headless does not translate Pi traffic through Claude Code. The bundled Pi
-version is `0.85.1`; its complete runtime directory is required because the
-standalone executable depends on sibling themes and native assets.
+version follows `tools/pi/latest.json`; its complete runtime directory is required
+because the standalone executable depends on sibling themes and native assets.
 
 ## Present in Maker Core but not exposed by the Headless CLI
 

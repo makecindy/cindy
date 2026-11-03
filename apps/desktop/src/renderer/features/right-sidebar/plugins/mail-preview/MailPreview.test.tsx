@@ -111,6 +111,25 @@ it.each(['inactive', 'hidden'])('does not mark a restored %s tab read until it i
 });
 afterEach(() => { cleanup(); vi.clearAllMocks(); vi.unstubAllGlobals(); h.owner = 1; });
 
+// Unit regression: existing tests start with a resolved device. During sidebar
+// restoration undefined (unresolved) becomes null (local); JSON array keys used
+// to collapse those states, leaving the real reader on loading indefinitely.
+it('loads a restored mail when its device resolves and hides it while unresolved', async () => {
+  h.read.mockResolvedValue({ message: mail('Restored mail') });
+  const state = { url: 'https://mail.example/a' };
+  const unresolved = { ...ctx, deviceLinkDeviceId: undefined };
+  const view = render(<MailPreviewBody state={state} ctx={unresolved} />);
+  await act(async () => {});
+  expect(h.read).not.toHaveBeenCalled();
+  view.rerender(<MailPreviewBody state={state} ctx={ctx} />);
+  await act(async () => {});
+  expect(screen.getByText('Restored mail')).toBeTruthy();
+  expect(h.read).toHaveBeenCalledExactlyOnceWith('a', state.url, true, null, true, undefined);
+  view.rerender(<MailPreviewBody state={state} ctx={unresolved} />);
+  expect(screen.queryByText('Restored mail')).toBeNull();
+  expect(screen.getByText('mailReader.loading')).toBeTruthy();
+});
+
 // Restored tabs (or plugin removal after a click) previously misreported a
 // missing reader as a mailbox failure. Unit: expose the original URL, no retry loop.
 it.each([

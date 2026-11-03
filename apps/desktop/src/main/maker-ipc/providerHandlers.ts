@@ -1,3 +1,6 @@
+import { bindModelSourceSnapshot, acceptsModelSourceSnapshot, modelSourceRequestSignature, issueModelSourceSnapshot } from '../maker-host/model-source-snapshots.js';
+import { buildModelsFetchRequest } from '../maker-host/provider-model-fetch.js';
+import { getProviderRouteCredentialRevision } from '../maker-host/provider-route.js';
 import { appendSpeechModels, missingSpeechReference } from '../../shared/speechProviderSetup.js';
 import { setProviderPresentation, retainProviderPresentationAfterAuthChange } from '../maker-host/provider-presentation-store.js';
 import type { DeploymentDetectionResult } from '../../shared/providerDetection.js';
@@ -77,6 +80,7 @@ import {
   deleteCustomProvider,
   getCustomProvider,
   updateCustomProvider,
+  updateCustomProviderIfUnchanged,
   validateCustomProviderConfig,
 } from '../maker-host/custom-provider-store.js';
 import {
@@ -96,7 +100,9 @@ import {
   cancelProviderImport,
   finishProviderImportConfirm,
   previewProviderImport,
+  createProviderImportDraftsFromFile,
 } from '../provider-import/providerImport.js';
+import { readProviderImportFile } from '../provider-import/providerImportFile.js';
 import {
   builtinApiKeyStore,
   builtinApiKeyPresentationId,
@@ -332,13 +338,15 @@ export interface ProviderHandlerDeps {
   /** 目录 presets 段（生产 = () => getActiveCatalog().presets ?? []）。 */
   listPresets(): ProviderPreset[];
   /** Current Registry and presets for classifying freshly discovered custom models. */
-  getModelCatalog(): Pick<Catalog, 'modelRegistry' | 'presets'>;
+  getModelCatalog(): Pick<Catalog, 'modelRegistry' | 'presets'> & Partial<Pick<Catalog, 'providers'>>;
   /** 测试连接（生产 = testProviderConnection；单测注入 stub 不联网）。 */
   testConnection(input: ProviderTestInput, signal?: AbortSignal): Promise<ProviderTestResult>;
   /** 账户余额查询（生产 = readProviderAccountUsage；单测注入 stub 不联网）。 */
   accountUsage(input: ProviderAccountUsageRequest): Promise<ProviderAccountUsageResult>;
   /** 获取模型列表（生产 = fetchProviderModels；单测注入 stub 不联网）。 */
   fetchModels(spec: ProviderModelsFetchSpec): Promise<ProviderModelsFetchResult>;
+  /** Main's native file picker; no renderer-supplied paths or file contents. */
+  selectProviderImportFile?(event: unknown): Promise<string | null>;
   detectProvider?(spec: ProviderModelsFetchSpec, signal: AbortSignal): Promise<DeploymentDetectionResult>;
   /** 内置四家的模型真源刷新；生产按 providerId 分派到既有 discovery 机制。 */
   refreshBuiltinModels(providerId: BuiltinRefreshableProviderId): Promise<void>;
@@ -481,6 +489,8 @@ export interface ProviderHandlerDeps {
    */
   readCodexContextWindowInfo?(target: ModelPriceOverrideTarget, sessionId?: string): Promise<CodexContextWindowInfo | null>;
   readModelContextLimit?(target: ModelPriceOverrideTarget): ModelContextLimitView;
+  readModelImageInputOverride?(target: ModelPriceOverrideTarget): boolean | null;
+  writeModelImageInputOverride?(targets: readonly ModelPriceOverrideTarget[], value: boolean | null): Promise<void>;
   validateModelContextLimit?(targets: readonly ModelPriceOverrideTarget[], limit: number): Promise<void>;
   writeModelContextLimit?(targets: readonly ModelPriceOverrideTarget[], limit: number | null): void | Promise<void>;
   readModelCompaction?(target: ModelPriceOverrideTarget): { pct: number; isCustomized: boolean };
@@ -651,6 +661,54 @@ export function registerProviderHandlers(
   registry: IpcHandlerRegistry,
   deps: ProviderHandlerDeps,
 ): void {
+  const modelDiscoveryRequests = new Map<string, symbol>();
+  // The dispatch revision is intentionally Codex-specific for config-only edits.
+  // Keep a discovery-only stamp for other runtimes, including edit-away/edit-back.
+  const modelSourceConfigGenerations = new Map<string, symbol>();
+  const sanitizeModelSources = (
+    config: CustomProviderConfig, previous: CustomProviderConfig | null,
+    keys: Record<string, string>, headers: CustomProviderHeaderSecrets,
+    credentialAgents: ReadonlySet<string> = new Set(),
+  ): CustomProviderConfig => ({ ...config, runtimes: Object.fromEntries(
+    Object.entries(config.runtimes).map(([agent, runtime]) => {
+      if (!runtime) return [agent, runtime];
+      const prior = previous?.runtimes[agent as AgentKind];
+      const context = (r: typeof runtime, auth: typeof config.auth) =>
+        JSON.stringify([r.baseUrl, r.modelsUrl, r.wireProtocol, r.requestPath, r.headers,
+          auth?.method === 'apiKey' || !auth ? null : auth]);
+      const sameContext = !!prior && !credentialAgents.has(agent)
+        && context(prior, previous?.auth) === context(runtime, config.auth);
+      let signature: string | undefined;
+      if (runtime.models.some(model => model.discoverySnapshotId || model.discoveredSource?.snapshotId)
+        && (!previous || config.auth?.method !== 'oauth')) {
+        try {
+          const storedKey = previous ? deps.readCustomProviderKeyForMutation(config.id, agent as AgentKind) : null;
+          const storedHeaders = previous ? deps.readCustomProviderHeadersForMutation(config.id, agent as AgentKind) : null;
+          const request = buildModelsFetchRequest({ agent: agent as AgentKind,
+            baseUrl: runtime.baseUrl, modelsUrl: runtime.modelsUrl,
+            wireProtocol: runtime.wireProtocol, authMethod: config.auth?.method ?? 'apiKey',
+            apiKey: keys[agent] ?? (typeof storedKey === 'string' ? storedKey : undefined),
+            // Saving replaces the complete secret header map; omitted old keys
+            // must not authenticate a receipt for a different outbound identity.
+            headers: { ...runtime.headers, ...(headers[agent as AgentKind]
+              ?? (typeof storedHeaders === 'object' ? storedHeaders : {})) },
+          });
+          signature = modelSourceRequestSignature(request.url, request.init);
+        } catch { /* A source without provable discovery context is omitted. */ }
+      }
+      return [agent, { ...runtime, models: runtime.models.map(model => {
+        const old = sameContext ? prior?.models.find(m => m.id === model.id)?.discoveredSource : undefined;
+        const source = model.discoveredSource;
+        // A receipt proves the submitted context even when credentials changed.
+        // OAuth has no reconstructed signature, so retain its saved-context gate.
+        const accepted = (signature !== undefined || (sameContext && !!previous && config.auth?.method === 'oauth'))
+          && acceptsModelSourceSnapshot(model.id, source, config.id, agent as AgentKind, signature, model.discoverySnapshotId ?? source?.snapshotId);
+        const { discoveredSource: _source, ...rest } = model;
+        // A stale renderer cannot restore a source invalidated by another edit/request.
+        return { ...rest, ...((accepted ? source : old) ? { discoveredSource: accepted ? source : old } : {}) };
+      }) }];
+    }),
+  ) });
   const oauthMutationGeneration = new Map<string, symbol>();
   const acceptingOAuthGenerations = new Set<symbol>();
   const beginOAuthMutation = (providerId: string): symbol => {
@@ -1267,6 +1325,32 @@ export function registerProviderHandlers(
 
   const providerImportScope = (): { dataOwnerId: string | null; generation: number } =>
     captureProviderOwnerSession() ?? { dataOwnerId: null, generation: 0 };
+
+  registry.handle(MAKER_INVOKE.PROVIDER_IMPORT_FILE, async (event, ...args: unknown[]) => {
+    assertTrustedProviderMutationSender(event);
+    if (args.length) throwIpcError('INVALID_PARAMS', 'file import takes no arguments');
+    if (!deps.selectProviderImportFile) throwIpcError('INTERNAL', 'file picker unavailable');
+    const owner = providerImportScope();
+    let filePath: string | null;
+    try {
+      filePath = await deps.selectProviderImportFile(event);
+    } catch {
+      throwIpcError('PROVIDER_IMPORT_FILE_READ_FAILED', 'could not select provider import file');
+    }
+    if (!filePath) return null;
+    assertTrustedProviderMutationSender(event);
+    assertProviderMutationOwner(owner);
+    const bytes = await readProviderImportFile(filePath);
+    assertTrustedProviderMutationSender(event);
+    assertProviderMutationOwner(owner);
+    try {
+      const ids = createProviderImportDraftsFromFile(bytes, owner);
+      return ids.length === 1 ? ids[0] : ids;
+    } catch {
+      // JSON/schema errors may quote arbitrary secret-bearing input, including field names.
+      throwIpcError('PROVIDER_IMPORT_FILE_INVALID', 'invalid provider import configuration');
+    }
+  });
 
   registry.handle(
     MAKER_INVOKE.PROVIDER_IMPORT_PREVIEW,
@@ -1912,6 +1996,37 @@ export function registerProviderHandlers(
     return { read: deps.readModelContextLimit, write: deps.writeModelContextLimit };
   };
 
+  const readImageInputTargets = (targets: ModelPriceOverrideTarget[]) => {
+    if (!deps.readModelImageInputOverride) throwIpcError('INTERNAL', 'model image input override unavailable');
+    const values = targets.map((target) => deps.readModelImageInputOverride!(target));
+    return { value: values[0]!, mixed: values.some((value) => value !== values[0]) };
+  };
+  registry.handle(MAKER_INVOKE.MODEL_IMAGE_INPUT_GET, async (event, input: unknown) => {
+    assertTrustedProviderMutationSender(event);
+    return readImageInputTargets(parseContextTargets(input));
+  });
+  registry.handle(MAKER_INVOKE.MODEL_IMAGE_INPUT_SET, async (event, input: unknown, value: unknown, ownerInput: unknown) => {
+    assertTrustedProviderMutationSender(event);
+    assertContextOwner(ownerInput);
+    const targets = parseContextTargets(input);
+    if (value !== null && typeof value !== 'boolean') throwIpcError('INVALID_PARAMS', 'image input must be boolean or null');
+    if (!deps.writeModelImageInputOverride) throwIpcError('INTERNAL', 'model image input override unavailable');
+    if (deps.isOrganizationManagedProviderId(targets[0]!.providerId)) {
+      throwIpcError('PERMISSION_DENIED', 'Model capabilities are managed by your organization');
+    }
+    const owner = captureProviderOwnerSession();
+    // Metadata does not mutate credentials or transport. Holding the provider
+    // route gate here would make Pi's refresh preview reject its own provider.
+    return enqueuePriceMutation(async () => {
+      if (value !== null) for (const target of targets) await requirePriceTargetModel(target);
+      assertProviderMutationOwner(owner, 'active account changed before setting image input');
+      await deps.writeModelImageInputOverride!(targets, value as boolean | null);
+      assertProviderMutationOwner(owner, 'active account changed after setting image input');
+      deps.broadcastChanged();
+      return readImageInputTargets(targets);
+    });
+  });
+
   registry.handle(MAKER_INVOKE.MODEL_CONTEXT_LIMIT_GET, async (event, input: unknown) => {
     assertTrustedProviderMutationSender(event);
     const targets = parseContextTargets(input);
@@ -2060,6 +2175,7 @@ export function registerProviderHandlers(
       }
       // 前面的异步存在性查询期间可能换号；写 key/header 前复核。
       assertProviderMutationOwner(ownerAtIngress);
+      separated.config = sanitizeModelSources(separated.config, null, keys, separated.headers);
       const targetCodexConfigSignature =
         deps.codexCustomProviderConfigSignature?.(separated.config) ?? '';
       const preparation = await prepareCodexCustomProviderChange(
@@ -2101,6 +2217,23 @@ export function registerProviderHandlers(
     });
   }
   registry.handle(MAKER_INVOKE.PROVIDER_CUSTOM_CREATE, createProviderFromInput);
+
+  /** Credential identity changes invalidate labels before an optional re-discovery. */
+  async function clearCredentialModelSources(providerId: string, isCurrent: () => boolean): Promise<void> {
+    const runtimeId = runtimeCustomProviderId(providerId);
+    const source = (deps.getModelCatalog().providers ?? []).find(provider => provider.id === runtimeId);
+    if (!source || !Object.values(source.models ?? {}).some(models => models?.some(model => model.discoveredSource))) return;
+    const previous = await getCustomProvider(storedCustomProviderId(providerId));
+    if (!previous || !isCurrent()) return;
+    const next = { ...previous, runtimes: Object.fromEntries(Object.entries(previous.runtimes).map(([agent, runtime]) => [
+      agent, runtime && { ...runtime, models: runtime.models.map(({ discoveredSource: _source, ...model }) => model) },
+    ])) };
+    if (!await updateCustomProviderIfUnchanged(previous.id, previous, next)) {
+      if (isCurrent()) throwIpcError('INTERNAL', 'provider changed while invalidating model sources');
+      return;
+    }
+    if (isCurrent()) await deps.refreshCatalog();
+  }
 
   async function updateProviderFromInput(
     event: unknown,
@@ -2191,6 +2324,8 @@ export function registerProviderHandlers(
           config.id,
           planProviderHeaderMutations(config, separated.headers, 'update', previous),
         );
+        separated.config = sanitizeModelSources(separated.config, previous, keys, separated.headers,
+          new Set([...keyMutations, ...headerMutations].map(mutation => mutation.agent)));
         const codexCredentialGenerationChanged =
           keyMutations.some((mutation) => mutation.agent === 'codex') ||
           headerMutations.some((mutation) => mutation.agent === 'codex') ||
@@ -2262,6 +2397,7 @@ export function registerProviderHandlers(
           throwIpcError('NOT_FOUND', `custom provider '${config.id}' not found`);
         }
         assertProviderMutationOwner(ownerAtIngress);
+        modelSourceConfigGenerations.set(config.id, Symbol(config.id));
         await afterChange(
           codexHostPrepared,
           codexHostChangeRequired ? commitRouteMutation : undefined,
@@ -2417,11 +2553,12 @@ export function registerProviderHandlers(
   // 只读：目录 presets 段（创建对话框「从模板创建」消费）。
   registry.handle(
     MAKER_INVOKE.PROVIDER_PRESETS_LIST,
-    async (): Promise<{ presets: ProviderPreset[] }> => ({ presets: deps.listPresets() }),
+    async () => ({ presets: deps.listPresets(), modelRegistry: deps.getModelCatalog().modelRegistry }),
   );
 
   // 账户余额查询：查询型结构化返回（同 test-connection 例外条款）；仅网络/上游失败在结果 error 里，不抛。
-  registry.handle(MAKER_INVOKE.PROVIDER_ACCOUNT_USAGE, async (_event, input: unknown) => {
+  registry.handle(MAKER_INVOKE.PROVIDER_ACCOUNT_USAGE, async (event, input: unknown) => {
+    assertTrustedProviderMutationSender(event);
     const parsed = parseAccountUsageInput(input);
     if (!parsed) throwIpcError('INVALID_PARAMS', 'invalid account-usage input');
     return deps.accountUsage(parsed);
@@ -2541,7 +2678,30 @@ export function registerProviderHandlers(
         }
       }
     }
-    return deps.fetchModels(parsed);
+    const owner = captureProviderOwnerSession();
+    const id = parsed.savedProviderId ? storedCustomProviderId(parsed.savedProviderId) : null;
+    const requestKey = `${id ?? parsed.baseUrl}::${parsed.agent}`;
+    const generation = Symbol(requestKey);
+    modelDiscoveryRequests.set(requestKey, generation);
+    const revision = id ? getProviderRouteCredentialRevision(id) : 0;
+    const configGeneration = id ? modelSourceConfigGenerations.get(id) : undefined;
+    const current = () => providerMutationOwnerMatches(owner)
+      && modelDiscoveryRequests.get(requestKey) === generation
+      && (!id || (getProviderRouteCredentialRevision(id) === revision
+        && modelSourceConfigGenerations.get(id) === configGeneration));
+    let result = await deps.fetchModels(parsed);
+    const knownGateway = id && (deps.getModelCatalog().providers ?? []).some(provider =>
+      provider.id === runtimeCustomProviderId(id) && Object.values(provider.models).some(models =>
+        models?.some(model => model.opaqueModelId || model.discoveredSource)));
+    if (knownGateway && result.ok && result.models && !result.models.some(model => model.discoverySnapshotId)) {
+      const request = buildModelsFetchRequest(parsed);
+      result = { ...result, models: issueModelSourceSnapshot(
+        result.models.map(model => ({ ...model, opaqueModelId: true as const })), parsed.agent,
+        modelSourceRequestSignature(request.url, request.init), true) };
+    }
+    if (!current() || (id && providerConfigMutationCounts.has(id))) return { ok: false, code: 'UNKNOWN', detail: 'model discovery context changed' };
+    bindModelSourceSnapshot(result.models, id ?? undefined, current);
+    return result;
   });
 
   // 本机 CLI 扫描：查询型；任何失败降级空数组（检测建议是增强,不是功能依赖,
@@ -2675,6 +2835,7 @@ export function registerProviderHandlers(
               }
             }
             finishRouteMutation.commit?.();
+            await clearCredentialModelSources(id, isCurrent);
             try {
               await result.afterCommit?.();
             } catch {
@@ -2734,6 +2895,7 @@ export function registerProviderHandlers(
         // Configuration and stable route ID remain available for reconnect. Publish even when
         // a later catalog refresh fails: the disconnected credential must never be reused.
         commitRouteMutation();
+        await clearCredentialModelSources(id, () => providerMutationOwnerMatches(owner));
         await afterChange(preparation.prepared, commitRouteMutation);
         return { ok: true };
       } finally {
@@ -2782,6 +2944,7 @@ export function registerProviderHandlers(
             }
             throw err;
           }
+          await clearCredentialModelSources(id, () => providerMutationOwnerMatches(ownerAtIngress));
           await afterChange(codexHostPrepared, commitRouteMutation);
           return { ok: true };
         } catch (err) {

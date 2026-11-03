@@ -1,7 +1,8 @@
 import { EventEmitter } from 'node:events';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { DesktopCaptureWindow } from '../captureWindow';
-import { denyAppDesktopCapture } from '../capturePermissions';
+import { denyAppDesktopCapture, markPlaybackFullscreenWindow } from '../capturePermissions';
+import { isCaptureWindowWebContents } from '../captureWindowRegistry';
 import { buildContentSecurityPolicy } from '../../security/csp';
 
 const fake = vi.hoisted(() => ({
@@ -30,6 +31,7 @@ vi.mock('electron', () => ({
       mainFrame: { url: '', parent: null },
       isDestroyed: () => this.destroyed,
       setWindowOpenHandler: vi.fn(),
+      setWebRTCIPHandlingPolicy: vi.fn(),
     });
     constructor(public options: any) {
       fake.windows.push(this);
@@ -100,7 +102,12 @@ it('only admits the registered top frame and kills the whole process on stop', a
     },
   });
   expect(win.webContents.setWindowOpenHandler.mock.calls[0][0]()).toEqual({ action: 'deny' });
+  expect(win.webContents.setWebRTCIPHandlingPolicy).not.toHaveBeenCalled();
+  expect(isCaptureWindowWebContents(win.webContents)).toBe(true);
   owner.dispose();
+  // Unit regression: native gone may reach app after local destroyed cleanup.
+  // Keep this factory's identity so a capture crash cannot tear down device-link.
+  expect(isCaptureWindowWebContents(win.webContents)).toBe(true);
   expect(win.destroyed).toBe(true);
   expect(owner.contents).toBeNull();
   expect(() => owner.assertSender(valid)).toThrow('PERMISSION_DENIED');
@@ -222,6 +229,43 @@ it('denies app display/legacy capture while preserving physical microphone and c
   expect(reply).toHaveBeenLastCalledWith({});
 });
 
+// User regression: the recording preview's native fullscreen button did nothing.
+// Existing permission cases only cover app/voice owners, not playback-only windows.
+// Minimal input: registered preview top frame requests fullscreen; both production
+// handlers must allow it without granting capture or trusting a foreign frame. Tier: unit.
+it('grants registered playback windows only user-initiated fullscreen', () => {
+  const ses = {
+    setDisplayMediaRequestHandler: vi.fn(),
+    setPermissionCheckHandler: vi.fn(),
+    setPermissionRequestHandler: vi.fn(),
+  };
+  const preview = { kind: 'preview', mainFrame: { url: 'file:///app/index.html' }, isDestroyed: () => false };
+  const details = { isMainFrame: true, requestingUrl: preview.mainFrame.url };
+  denyAppDesktopCapture(ses as any);
+  const check = ses.setPermissionCheckHandler.mock.calls[0][0];
+  const request = ses.setPermissionRequestHandler.mock.calls[0][0];
+  const assertPermission = (owner: unknown, permission: string, requestDetails: unknown, allowed: boolean) => {
+    expect(check(owner, permission, '', requestDetails)).toBe(allowed);
+    const reply = vi.fn();
+    request(owner, permission, reply, requestDetails);
+    expect(reply).toHaveBeenCalledWith(allowed);
+  };
+  assertPermission(preview, 'fullscreen', details, false);
+  markPlaybackFullscreenWindow(preview as any);
+  assertPermission(preview, 'fullscreen', details, true);
+  for (const permission of ['media', 'display-capture', 'clipboard-sanitized-write', 'automatic-fullscreen']) {
+    assertPermission(preview, permission, { ...details, mediaType: 'audio', mediaTypes: ['audio'] }, false);
+  }
+  assertPermission({ ...preview }, 'fullscreen', details, false);
+  assertPermission(preview, 'fullscreen', { ...details, isMainFrame: false }, false);
+  assertPermission(preview, 'fullscreen', { ...details, requestingUrl: 'https://foreign.example/' }, false);
+  preview.mainFrame.url = 'https://foreign.example/';
+  assertPermission(preview, 'fullscreen', { ...details, requestingUrl: preview.mainFrame.url }, false);
+  preview.mainFrame.url = details.requestingUrl;
+  preview.isDestroyed = () => true;
+  assertPermission(preview, 'fullscreen', details, false);
+});
+
 it('capture CSP forbids arbitrary network, application frames and inline/eval scripts', () => {
   const csp = buildContentSecurityPolicy({
     isDev: false,
@@ -237,6 +281,16 @@ it.each(['files', 'direct'] as const)('keeps %s transport separate and denies ca
   const owner = new DesktopCaptureWindow(vi.fn(), mode);
   const ready = owner.start();
   const win = fake.windows[0], ses = fake.sessions[0];
+  expect(isCaptureWindowWebContents(win.webContents)).toBe(true);
+  // Unit regression: routed private networks cannot resolve Chromium's default
+  // mDNS candidates. Exercise the real window factory: opt in only the direct
+  // data window, before navigation, without granting media or changing files/video.
+  // Actual ICE and byte transfer are covered by provider-share-direct-smoke.mjs.
+  if (mode === 'direct') {
+    expect(win.webContents.setWebRTCIPHandlingPolicy).toHaveBeenCalledExactlyOnceWith('default_public_and_private_interfaces');
+    expect(win.webContents.setWebRTCIPHandlingPolicy.mock.invocationCallOrder[0])
+      .toBeLessThan(win.loadURL.mock.invocationCallOrder[0]);
+  } else expect(win.webContents.setWebRTCIPHandlingPolicy).not.toHaveBeenCalled();
   expect(win.webContents.mainFrame.url).toBe(`http://localhost:9988/index.html?mode=${mode}`);
   owner.registered(event(win));
   await ready;

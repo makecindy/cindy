@@ -244,6 +244,7 @@ const syncOn = async (clipboardSync: RemoteDesktopViewerApi['clipboardSync']) =>
       clipboardSync,
       preferences: async () => ({
         audio: true,
+        idleTimeoutMinutes: 5,
         privacyScreen: false,
         hostMute: false,
         clipboardSync: true,
@@ -346,6 +347,7 @@ it('a display switch that drops and regains control without a reconnect drops th
       clipboardSync,
       preferences: async () => ({
         audio: true,
+        idleTimeoutMinutes: 5,
         privacyScreen: false,
         hostMute: false,
         clipboardSync: true,
@@ -698,6 +700,21 @@ it('requests window content sized for the actual desktop plus toolbar', async ()
   expect(resize).toHaveBeenCalledWith(1, 1280, 780);
 });
 
+it('sizes the actual-size window without the fullscreen system inset on the toolbar', async () => {
+  // A revealed fullscreen toolbar is 60px of controls plus a 42px menu bar/titlebar inset.
+  const toolbar = {
+    style: { getPropertyValue: () => '42px' },
+    getBoundingClientRect: () => ({ height: 102 }),
+  };
+  const { api } = await fixture(undefined, false, {
+    root: { parentElement: { querySelector: () => toolbar } } as never,
+  });
+  present();
+  const resize = vi.spyOn(api, 'resize');
+  controller.actualSize();
+  expect(resize).toHaveBeenCalledWith(1, 1280, 780);
+});
+
 it('passes actual logical geometry to rendering and reacquires control after fitting', async () => {
   const f = await fixture();
   const original = f.api.request;
@@ -1032,4 +1049,11 @@ it('waits for auto-unlock to finish before reapplying a remembered resolution', 
   });
   await vi.advanceTimersByTimeAsync(0);
   expect(f.resolution).toHaveBeenCalledExactlyOnceWith('4k');
+});
+
+// GX102/X11: an unsupported backend must not ask users to re-enable permissions.
+it('distinguishes unsupported host input from missing permission', async () => {
+  await fixture(undefined, false, { caps: { canControl: false } });
+  await vi.advanceTimersByTimeAsync(0);
+  expect(snapshot).toMatchObject({ ready: false, controlling: false, error: 'inputUnsupported' });
 });

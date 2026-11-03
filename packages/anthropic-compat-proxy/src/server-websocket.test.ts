@@ -1,4 +1,4 @@
-import { ClientRequest, createServer, type IncomingMessage } from 'node:http';
+import { createServer, globalAgent, type IncomingMessage } from 'node:http';
 import { connect, Socket } from 'node:net';
 import type { Duplex } from 'node:stream';
 import { afterEach, describe, expect, it, vi } from 'vitest';
@@ -27,6 +27,21 @@ afterEach(async () => {
   sockets.clear();
   while (cleanups.length) await cleanups.pop()!();
 });
+
+// Exercise the production deadline without a 15-second real wait. Real HTTP,
+// DNS-pending sockets and callbacks still run; only expiry is triggered manually.
+function captureHandshakeDeadlines() {
+  const timers = vi.spyOn(globalThis, 'setTimeout');
+  cleanups.push(() => {
+    for (let i = 0; i < timers.mock.calls.length; i += 1) {
+      if (timers.mock.calls[i][1] === 15_000) clearTimeout(timers.mock.results[i].value);
+    }
+    timers.mockRestore();
+  });
+  return () => timers.mock.calls.flatMap(([callback, delay], i) => delay === 15_000
+    ? [{ fire: callback as () => void, timer: timers.mock.results[i].value }]
+    : []);
+}
 
 function upgradeRequest(
   path: string,
@@ -293,21 +308,24 @@ describe('anthropic-compat-proxy websocket upgrades', () => {
     expect(upstream.received.join('')).toContain('PING');
   });
 
-  it('uses a short timeout for the websocket handshake', async () => {
-    const setTimeoutSpy = vi.spyOn(ClientRequest.prototype, 'setTimeout');
+  it('removes the handshake deadline after 101 and ignores a late expiry callback', async () => {
+    const deadlines = captureHandshakeDeadlines();
+    const cleared = vi.spyOn(globalThis, 'clearTimeout');
     try {
       const upstream = await startUpgradeUpstream();
       proxy = await createAnthropicCompatProxy({
-        upstream: 'http://unused.invalid',
-        transformRequest: [],
+        upstream: 'http://unused.invalid', transformRequest: [],
         resolveWebSocketUpstream: () => upstream.url,
       });
-
       const response = await openUpgrade(proxy.url);
       expect(response.head).toContain('HTTP/1.1 101 Switching Protocols');
-      expect(setTimeoutSpy.mock.calls.some(([timeout]) => timeout === 15_000)).toBe(true);
+      expect(deadlines()).toHaveLength(1);
+      expect(cleared).toHaveBeenCalledWith(deadlines()[0].timer);
+      deadlines()[0].fire();
+      response.socket.write('PING');
+      expect(await waitForSocketText(response.socket, response.rest, 'PONG')).toContain('PONG');
     } finally {
-      setTimeoutSpy.mockRestore();
+      cleared.mockRestore();
     }
   });
 
@@ -529,41 +547,108 @@ describe('anthropic-compat-proxy websocket upgrades', () => {
     );
   });
 
-  it('returns 504 instead of falling back when the websocket handshake times out', async () => {
+  it('bounds a websocket handshake even when DNS never completes', async () => {
+    const deadlines = captureHandshakeDeadlines();
+    const originalCreateConnection = globalAgent.createConnection;
+    let pendingSocket: Socket | undefined;
+    const createConnection = vi.spyOn(globalAgent, 'createConnection').mockImplementationOnce(options => {
+      // Real ClientRequest/socket, but no external DNS or network fault timing.
+      const socket = originalCreateConnection.call(globalAgent, { ...options, lookup: () => {} });
+      if (!(socket instanceof Socket)) throw new Error('fixture requires a real pending socket');
+      pendingSocket = socket;
+      sockets.add(socket);
+      return socket;
+    });
+    try {
+      const upstream = await startUpgradeUpstream();
+      proxy = await createAnthropicCompatProxy({
+        upstream: 'http://unused.invalid', transformRequest: [],
+        resolveWebSocketUpstream: ({ url }) => url === '/stall' ? 'http://pending-lookup.invalid' : upstream.url,
+      });
+      const failed = readUpgradeFailure(proxy.url, '/stall');
+      await vi.waitFor(() => expect(pendingSocket?.connecting).toBe(true));
+      expect(deadlines(), 'the handshake deadline must run before the socket connects').toHaveLength(1);
+      const healthy = await openUpgrade(proxy.url);
+      deadlines()[0].fire();
+      expect(await failed).toBe('HTTP/1.1 504 Gateway Timeout\r\nConnection: close\r\n\r\n');
+      expect(pendingSocket?.destroyed).toBe(true);
+      healthy.socket.write('PING');
+      expect(await waitForSocketText(healthy.socket, healthy.rest, 'PONG')).toContain('PONG');
+      expect(deadlines()).toHaveLength(2);
+    } finally {
+      createConnection.mockRestore();
+    }
+  });
+
+  it('returns 504 when partial response headers never complete the handshake', async () => {
+    const deadlines = captureHandshakeDeadlines();
     const upstream = createServer();
+    let handshakeStarted = false;
+    const upstreamErrors: Error[] = [];
+    let upstreamClosed: Promise<void> | undefined;
     upstream.on('upgrade', (_req, socket) => {
       sockets.add(socket);
-      // Intentionally leave the handshake pending. The ClientRequest timeout spy below
-      // fires the production timeout callback without making this test wait 15 seconds.
+      // The deadline destroys the proxy's request. Windows may reset this raw
+      // fixture socket (#7683); collect errors until close so other failures
+      // still fail the test instead of escaping into the next test.
+      upstreamClosed = new Promise<void>((resolve) => socket.once('close', resolve));
+      socket.on('error', (error) => upstreamErrors.push(error));
+      socket.once('end', () => socket.end());
+      socket.resume();
+      // Network activity cannot renew the phase deadline indefinitely.
+      socket.write('HTTP/1.1 101 Switching Protocols\r\nX-Partial: waiting\r\n');
+      handshakeStarted = true;
     });
     const port = await listenOnAvailableLoopbackPort(upstream);
-    cleanups.push(() => new Promise<void>((resolve) => {
-      upstream.closeAllConnections();
-      upstream.close(() => resolve());
-    }));
-    const setTimeoutSpy = vi.spyOn(ClientRequest.prototype, 'setTimeout');
-    setTimeoutSpy.mockImplementation(function (
-      this: ClientRequest,
-      msecs: number,
-      callback?: () => void,
-    ): ClientRequest {
-      if (msecs === 15_000 && callback) queueMicrotask(callback);
-      return this;
+    cleanups.push(() => new Promise<void>((resolve) => upstream.close(() => resolve())));
+    proxy = await createAnthropicCompatProxy({
+      upstream: 'http://unused.invalid', transformRequest: [],
+      resolveWebSocketUpstream: () => `http://127.0.0.1:${port}`,
     });
+    const failed = readUpgradeFailure(proxy.url);
+    await vi.waitFor(() => expect(handshakeStarted).toBe(true));
+    expect(deadlines()).toHaveLength(1);
+    deadlines()[0].fire();
+    expect(await failed).toBe('HTTP/1.1 504 Gateway Timeout\r\nConnection: close\r\n\r\n');
+    await upstreamClosed;
+    for (const error of upstreamErrors) expect(error).toMatchObject({ code: 'ECONNRESET' });
+  });
 
+  it('clears a FIN-cancelled handshake deadline without starting another request', async () => {
+    const deadlines = captureHandshakeDeadlines();
+    const cleared = vi.spyOn(globalThis, 'clearTimeout');
+    const upstream = createServer();
+    let requestCount = 0;
+    let upstreamEnded = false;
+    upstream.on('upgrade', (_req, socket) => {
+      sockets.add(socket);
+      requestCount += 1;
+      socket.once('end', () => { upstreamEnded = true; socket.end(); });
+      socket.resume();
+    });
+    const port = await listenOnAvailableLoopbackPort(upstream);
+    cleanups.push(() => new Promise<void>((resolve) => upstream.close(() => resolve())));
     try {
       proxy = await createAnthropicCompatProxy({
-        upstream: 'http://unused.invalid',
-        transformRequest: [],
+        upstream: 'http://unused.invalid', transformRequest: [],
         resolveWebSocketUpstream: () => `http://127.0.0.1:${port}`,
       });
-
-      const response = await readUpgradeFailure(proxy.url);
-      expect(response).toBe(
-        'HTTP/1.1 504 Gateway Timeout\r\nConnection: close\r\n\r\n',
-      );
+      const endpoint = new URL(proxy.url);
+      const client = connect(Number(endpoint.port), endpoint.hostname);
+      sockets.add(client);
+      await new Promise<void>(resolve => client.once('connect', resolve));
+      client.write(upgradeRequest('/v1/responses', endpoint.host));
+      await vi.waitFor(() => expect(requestCount).toBe(1));
+      expect(deadlines()).toHaveLength(1);
+      const deadline = deadlines()[0];
+      client.end();
+      await vi.waitFor(() => expect(cleared).toHaveBeenCalledWith(deadline.timer));
+      await vi.waitFor(() => expect(upstreamEnded).toBe(true));
+      deadline.fire();
+      expect(requestCount).toBe(1);
+      expect(deadlines()).toHaveLength(1);
     } finally {
-      setTimeoutSpy.mockRestore();
+      cleared.mockRestore();
     }
   });
 

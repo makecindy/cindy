@@ -100,9 +100,13 @@ export class TodoError extends Error {
     super(message);
   }
 }
-const text = (s: unknown, max: number, required = false): string => {
-  if (typeof s !== 'string' || (required && !s.trim()) || s.length > max)
-    throw new TodoError('INVALID_INPUT');
+// Field-level reason after the stable code, so a caller (often a model) can fix
+// the input instead of retrying blind. The code stays first for existing matches.
+const invalidInput = (reason: string) => new TodoError('INVALID_INPUT', `INVALID_INPUT: ${reason}`);
+const text = (s: unknown, max: number, required: boolean, field: string): string => {
+  if (typeof s !== 'string') throw invalidInput(`${field} must be a string`);
+  if (required && !s.trim()) throw invalidInput(`${field} is required`);
+  if (s.length > max) throw invalidInput(`${field} must be at most ${max} characters`);
   return s.trim();
 };
 export function validateTodoTimestamp(s: unknown): string {
@@ -145,8 +149,8 @@ export function validateTodoDeadline(d: TodoDeadline | null): void {
   )
     throw new TodoError('INVALID_INPUT');
   if (d.observedAt !== undefined) iso(d.observedAt);
-  if (d.sourceId !== undefined) text(d.sourceId, 512, true);
-  if (d.quote !== undefined) text(d.quote, 2000);
+  if (d.sourceId !== undefined) text(d.sourceId, 512, true, 'deadline.sourceId');
+  if (d.quote !== undefined) text(d.quote, 2000, false, 'deadline.quote');
 }
 export function todoLocalDate(now: Date, zone: string): string {
   const parts = new Intl.DateTimeFormat('en', {
@@ -223,6 +227,18 @@ export function todoDue(t: TeammateTodo, now = new Date()): boolean {
     ? todoLocalDate(new Date(d.at!), d.timeZone) === todoLocalDate(now, d.timeZone)
     : d.date === todoLocalDate(now, d.timeZone);
 }
+/** Glance shows only open, visible affairs with a real deadline within seven days (including overdue).
+ * Suggestions and unconfirmed candidates never manufacture urgency. Clearing a deadline hides it.
+ */
+export function todoDueSoon(t: TeammateTodo, now = new Date()): boolean {
+  if (t.status !== 'open' || !todoVisible(t, now)) return false;
+  const deadline = effectiveTodoDeadline(t);
+  if (!deadline) return false;
+  if (deadline.kind === 'instant') return Date.parse(deadline.at!) <= now.getTime() + 7 * 86_400_000;
+  const horizon = new Date(todoLocalDate(now, deadline.timeZone) + 'T00:00:00Z');
+  horizon.setUTCDate(horizon.getUTCDate() + 7);
+  return deadline.date <= horizon.toISOString().slice(0, 10);
+}
 export function todoDateLabel(t: TeammateTodo, locale: string, now = new Date()): string {
   const d = effectiveTodoDeadline(t);
   const dateString = d?.date ?? t.deadlineCandidate?.value.date ?? t.suggestedDate;
@@ -296,7 +312,7 @@ export function preflightTodoEvents(
   }));
 }
 export function normalizeTodoKey(key: unknown): string {
-  return text(key, 512, true);
+  return text(key, 512, true, 'key');
 }
 export function applyTodoPatch(
   state: TodoState,
@@ -305,16 +321,30 @@ export function applyTodoPatch(
   now = new Date(),
 ): TeammateTodo {
   if (!patch || typeof patch !== 'object' || Array.isArray(patch))
-    throw new TodoError('INVALID_INPUT');
-  const key = patch.key === undefined ? undefined : normalizeTodoKey(patch.key);
+    throw invalidInput('patch must be an object');
+  // Without an id a blank key can only mean a new Todo; leave it to the creation
+  // check below so every missing field is reported together.
+  const blankKey = !patch.id && typeof patch.key === 'string' && !patch.key.trim();
+  const key = patch.key === undefined || blankKey ? undefined : normalizeTodoKey(patch.key);
   const old = patch.id
     ? state.items.find((t) => t.id === patch.id)
-    : state.items.find((t) => t.key === key);
+    : key === undefined
+      ? undefined
+      : state.items.find((t) => t.key === key);
   if (patch.id && !old) throw new TodoError('NOT_FOUND');
   if (old && key !== undefined && key !== old.key) throw new TodoError('KEY_MISMATCH');
   if (old && patch.expectedRevision !== old.revision) throw new TodoError('CONFLICT');
   if (!old && patch.expectedRevision !== undefined) throw new TodoError('CONFLICT');
   if (!old && state.items.length >= 10000) throw new TodoError('CAPACITY_REACHED'); // reject, never evict history
+  if (!old) {
+    const missing = (['key', 'title', 'outcome'] as const).filter(
+      (field) => typeof patch[field] !== 'string' || !String(patch[field]).trim(),
+    );
+    if (missing.length > 0)
+      throw invalidInput(
+        `a new Todo needs key, title and outcome (the expected result or done criteria); missing or empty: ${missing.join(', ')}. To update an existing Todo, pass its id and expectedRevision`,
+      );
+  }
   const t: TeammateTodo = old
     ? structuredClone(old)
     : {
@@ -345,24 +375,31 @@ export function applyTodoPatch(
         patch[field],
         field === 'title' ? 300 : 4000,
         field === 'title' || field === 'outcome',
+        field,
       );
-  if (!t.title || !t.outcome) throw new TodoError('INVALID_INPUT');
+  if (!t.title || !t.outcome) {
+    const missing = [!t.title && 'title', !t.outcome && 'outcome'].filter(Boolean).join(' and ');
+    throw invalidInput(
+      `a Todo needs title and outcome (the expected result or done criteria); missing ${missing}`,
+    );
+  }
   if (patch.origin !== undefined) {
-    if (!['assigned', 'discovered'].includes(patch.origin)) throw new TodoError('INVALID_INPUT');
+    if (!['assigned', 'discovered'].includes(patch.origin))
+      throw invalidInput("origin must be 'assigned' or 'discovered'");
     t.origin = patch.origin;
   }
   if (patch.next !== undefined) {
     if (patch.next !== null) {
-      text(patch.next.label, 100, true);
-      text(patch.next.instruction, 4000, true);
+      text(patch.next.label, 100, true, 'next.label');
+      text(patch.next.instruction, 4000, true, 'next.instruction');
       if (!['advance', 'view', 'decide'].includes(patch.next.kind))
-        throw new TodoError('INVALID_INPUT');
+        throw invalidInput("next.kind must be 'advance', 'view' or 'decide'");
     }
     if (JSON.stringify(t.next) !== JSON.stringify(patch.next)) t.action = null;
     t.next = patch.next
       ? {
-          label: text(patch.next.label, 100, true),
-          instruction: text(patch.next.instruction, 4000, true),
+          label: text(patch.next.label, 100, true, 'next.label'),
+          instruction: text(patch.next.instruction, 4000, true, 'next.instruction'),
           kind: patch.next.kind,
         }
       : null;
@@ -374,13 +411,13 @@ export function applyTodoPatch(
     for (const s of patch.sources) {
       if (!s || !['conversation', 'mail', 'feishu', 'github', 'community', 'task'].includes(s.kind))
         throw new TodoError('INVALID_INPUT');
-      text(s.id, 512, true);
-      text(s.label, 300, true);
-      if (s.ref !== undefined) text(s.ref, 2000);
+      text(s.id, 512, true, 'sources[].id');
+      text(s.label, 300, true, 'sources[].label');
+      if (s.ref !== undefined) text(s.ref, 2000, false, 'sources[].ref');
       if (s.ref && !/^https:\/\/[^\s]+$/.test(s.ref)) throw new TodoError('INVALID_REFERENCE');
       if (s.version !== undefined && (!Number.isSafeInteger(s.version) || s.version < 0))
         throw new TodoError('INVALID_INPUT');
-      if (s.project !== undefined) text(s.project, 4096, true);
+      if (s.project !== undefined) text(s.project, 4096, true, 'sources[].project');
       if (s.observedAt !== undefined) iso(s.observedAt);
       const previous = merged.get(s.kind + ':' + s.id);
       if (!previous || (s.version ?? 0) >= (previous.version ?? 0))
@@ -403,8 +440,8 @@ export function applyTodoPatch(
     const merged = new Map(t.associations.map((a) => [a.kind + ':' + a.id, a]));
     for (const a of patch.associations) {
       if (!['task', 'pr'].includes(a.kind)) throw new TodoError('INVALID_INPUT');
-      text(a.id, 512, true);
-      text(a.label, 300, true);
+      text(a.id, 512, true, 'associations[].id');
+      text(a.label, 300, true, 'associations[].label');
       merged.set(a.kind + ':' + a.id, {
         kind: a.kind,
         id: a.id,
@@ -440,7 +477,7 @@ export function applyTodoPatch(
       )
         throw new TodoError('INVALID_INPUT');
       validateTodoDeadline(patch.deadlineCandidate.value);
-      text(patch.deadlineCandidate.reason, 2000, true);
+      text(patch.deadlineCandidate.reason, 2000, true, 'deadlineCandidate.reason');
     }
     t.deadlineCandidate = patch.deadlineCandidate;
   }
@@ -464,8 +501,9 @@ export function applyTodoPatch(
   switch (patch.operation) {
     case 'complete': {
       if (!patch.completion) throw new TodoError('COMPLETION_EVIDENCE_REQUIRED');
-      text(patch.completion.summary, 4000, true);
-      if (patch.completion.ref !== undefined) text(patch.completion.ref, 2000);
+      text(patch.completion.summary, 4000, true, 'completion.summary');
+      if (patch.completion.ref !== undefined)
+        text(patch.completion.ref, 2000, false, 'completion.ref');
       t.history.push({ ...patch.completion, at: now.toISOString() });
       t.status = 'done';
       t.decision = null;
@@ -599,7 +637,11 @@ export function queryTodoItems(items: TeammateTodo[], q: TodoListQuery = {}, now
 
 /** Public transcript copy; the model-only delivery carries the stable affair id separately. */
 export function todoActionText(title: string, step: string, locale = 'en'): string {
-  const prefix = locale.startsWith('zh-TW')
+  const prefix = locale === 'zh-Hant-x-lzh'
+    ? '續'
+    : locale === 'zh-Hans-x-lzh'
+    ? '续'
+    : locale.startsWith('zh-TW')
     ? '繼續'
     : locale.startsWith('zh')
       ? '继续'
@@ -607,6 +649,6 @@ export function todoActionText(title: string, step: string, locale = 'en'): stri
         ? '続ける'
         : locale.startsWith('ko')
           ? '계속'
-          : 'Continue';
+          : ({ es: 'Continuar', fr: 'Continuer', de: 'Fortsetzen', pt: 'Continuar' } as Record<string, string>)[locale.split('-')[0]] ?? 'Continue';
   return `${prefix} “${title}”: ${step}`;
 }

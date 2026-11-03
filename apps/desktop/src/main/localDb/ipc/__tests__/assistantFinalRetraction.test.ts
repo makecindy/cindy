@@ -33,11 +33,8 @@ vi.mock('../../../logger', () => ({
 vi.mock('../../../logger.js', () => ({
   createLogger: () => ({ debug: vi.fn(), info: vi.fn(), warn: h.warn, error: vi.fn() }),
 }));
-vi.mock('../../../maker-host/codex-local-sessions', () => ({
-  importExternalCodexMessagesForSession: vi.fn(async () => undefined),
-}));
-vi.mock('../../../maker-host/claude-local-sessions', () => ({
-  importExternalClaudeCodeMessagesForSession: vi.fn(async () => undefined),
+vi.mock('../../../session-import/legacy', () => ({
+  adoptLegacySessionBeforeOpen: vi.fn(async () => undefined),
 }));
 vi.mock('../../../embedders/chat-history-embedder', () => ({
   onMessageCreated: vi.fn(async () => undefined),
@@ -67,6 +64,7 @@ function setupDb(): void {
       list_preview TEXT,
       list_preview_role TEXT,
       list_message_count INTEGER,
+      source TEXT NOT NULL DEFAULT 'desktop',
       status TEXT NOT NULL DEFAULT 'active'
     );
     CREATE TABLE messages (
@@ -96,6 +94,9 @@ function setupDb(): void {
       id TEXT PRIMARY KEY, session_id TEXT NOT NULL, owner TEXT NOT NULL,
       repo TEXT NOT NULL, pr_number INTEGER NOT NULL, url TEXT NOT NULL,
       first_seen_at INTEGER NOT NULL, last_seen_at INTEGER NOT NULL,
+      pinned INTEGER NOT NULL DEFAULT 0, priority INTEGER NOT NULL DEFAULT 0,
+      manually_added INTEGER NOT NULL DEFAULT 0, removed_at INTEGER,
+      association_source TEXT NOT NULL DEFAULT 'legacy', association_origin TEXT,
       UNIQUE(session_id, owner, repo, pr_number)
     );
   `);
@@ -166,15 +167,19 @@ it('keeps a row changed while the exact-row rollback was being queued', async ()
 
 
 it('removes the withdrawn draft PR reference but retains a surviving message reference', async () => {
-  onAssistantTextEvent('s1', { text: 'https://github.com/o/r/pull/1', agentMessageId: 'keep' }, null);
-  flushAssistantBlock('s1');
-  onAssistantTextEvent('s1', { text: 'https://github.com/o/r/pull/2', agentMessageId: 'withdraw' }, null);
-  flushAssistantBlock('s1');
-  await drainPersistQueue();
-  expect((await prRefsStore.listPrRefs('s1')).map((ref) => ref.prNumber).sort()).toEqual([1, 2]);
-  onAssistantTextEvent('s1', { text: '', agentMessageId: 'withdraw', isFinal: true, isFullText: true }, null);
-  await drainPersistQueue();
-  expect((await prRefsStore.listPrRefs('s1')).map((ref) => ref.prNumber)).toEqual([1]);
+  const hook = vi.spyOn(prRefsStore, 'recordPrRefsForMessage');
+  try {
+    onAssistantTextEvent('s1', { text: 'https://github.com/o/r/pull/1', agentMessageId: 'keep' }, null);
+    flushAssistantBlock('s1');
+    onAssistantTextEvent('s1', { text: 'https://github.com/o/r/pull/2', agentMessageId: 'withdraw' }, null);
+    flushAssistantBlock('s1');
+    await drainPersistQueue();
+    await Promise.all(hook.mock.results.map(result => result.value));
+    expect((await prRefsStore.listPrRefs('s1')).map((ref) => ref.prNumber).sort()).toEqual([1, 2]);
+    onAssistantTextEvent('s1', { text: '', agentMessageId: 'withdraw', isFinal: true, isFullText: true }, null);
+    await drainPersistQueue();
+    expect((await prRefsStore.listPrRefs('s1')).map((ref) => ref.prNumber)).toEqual([1]);
+  } finally { hook.mockRestore(); }
 });
 
 it('orders retraction cleanup after the original asynchronous PR publication hook', async () => {
@@ -499,7 +504,7 @@ it.each(['correction', 'retraction'])('preserves concurrent new-message PR refs 
   let paused = false;
   const spy = vi.spyOn(db, 'select').mockImplementation((fields) => {
     const query = select(fields);
-    if (!fields || Object.keys(fields).sort().join(',') !== 'content,createdAt') return query;
+    if (fields) return query;
     const from = query.from.bind(query);
     vi.spyOn(query, 'from').mockImplementation((table) => {
       const builder = from(table);
@@ -520,8 +525,9 @@ it.each(['correction', 'retraction'])('preserves concurrent new-message PR refs 
     await createMessage('s1', { clientId: 'new-user', role: 'user', content: 'https://github.com/o/r/pull/2' });
     const newMessagePrWrite = hook.mock.results.at(-1)!.value;
     // A blocked recompute in s1 must not block another task's publication.
-    await prRefsStore.recordPrRefsForMessage({ sessionId: 's2', role: 'user',
-      content: 'https://github.com/o/r/pull/3', createdAt: Date.now() });
+    h.sqlite!.prepare("INSERT INTO sessions (id) VALUES ('s2')").run();
+    const otherMessage = await createMessage('s2', { clientId: 'other-task', role: 'user', content: 'https://github.com/o/r/pull/3' });
+    await prRefsStore.recordPrRefsForMessage(otherMessage);
     expect((await prRefsStore.listPrRefs('s2')).map(ref => ref.prNumber)).toEqual([3]);
     // Let a non-serialized publication finish; a correctly queued hook waits
     // for the recompute. Do not await that hook while holding its predecessor.
@@ -539,10 +545,59 @@ it('releases the PR write queue after a failed publication', async () => {
     throw new Error('simulated PR write failure');
   });
   try {
-    await prRefsStore.recordPrRefsForMessage({ sessionId: 's1', role: 'user',
-      content: 'https://github.com/o/r/pull/1', createdAt: Date.now() });
-    await prRefsStore.recordPrRefsForMessage({ sessionId: 's1', role: 'user',
-      content: 'https://github.com/o/r/pull/2', createdAt: Date.now() });
+    for (const n of [1, 2]) {
+      h.sqlite!.prepare('INSERT INTO messages (id, client_id, session_id, role, content, created_at) VALUES (?, ?, ?, ?, ?, ?)')
+        .run(`queue-${n}`, `queue-${n}`, 's1', 'user', JSON.stringify(`https://github.com/o/r/pull/${n}`), n);
+      await prRefsStore.recordPrRefsForMessage({ id: `queue-${n}`, sessionId: 's1', role: 'user',
+        content: `https://github.com/o/r/pull/${n}`, createdAt: n });
+    }
     expect((await prRefsStore.listPrRefs('s1')).map(ref => ref.prNumber)).toEqual([2]);
   } finally { insert.mockRestore(); }
+});
+
+// Ordinary plugin/IPC edits must update associations, including a delayed create hook.
+it.each(['user', 'assistant'] as const)('reconciles PRs after an ordinary %s rewrite with pending creation', async (role) => {
+  let release!: () => void;
+  const pending = new Promise<void>(resolve => { release = resolve; });
+  const original = prRefsStore.recordPrRefsForMessage;
+  const hook = vi.spyOn(prRefsStore, 'recordPrRefsForMessage').mockImplementationOnce(async msg => {
+    await pending; await original(msg);
+  });
+  try {
+    await createMessage('s1', { clientId: 'ordinary-edit', role, content: 'https://github.com/o/r/pull/81' });
+    const update = updateMessageContent('s1', 'ordinary-edit', 'https://github.com/o/r/pull/82');
+    release(); await update; await hook.mock.results[0].value;
+    expect((await prRefsStore.listPrRefs('s1')).map(r => r.prNumber)).toEqual([82]);
+  } finally { release(); hook.mockRestore(); }
+});
+
+// A pending manual GitHub check must not hold the PR lock needed by the global
+// broadcaster FIFO. Observe another task's committed row before releasing it.
+it.each(['correction', 'retraction'] as const)('persists another task during PR verification and final %s', async mode => {
+  let release!: () => void, entered!: () => void;
+  const gate = new Promise<void>(resolve => { release = resolve; });
+  const verifying = new Promise<void>(resolve => { entered = resolve; });
+  onAssistantTextEvent('s1', { text: 'Original draft', agentMessageId: 'pending-check' }, null);
+  flushAssistantBlock('s1'); await drainPersistQueue();
+  h.sqlite!.prepare("INSERT INTO sessions (id) VALUES ('s2')").run();
+  const attaching = prRefsStore.managePrRefs('s1',
+    { action: 'add', url: 'https://github.com/o/r/pull/99' }, async () => { entered(); await gate; });
+  await verifying;
+  let drained: Promise<void> | undefined;
+  try {
+    onAssistantTextEvent('s1', { text: mode === 'retraction' ? '' : 'Corrected draft',
+      agentMessageId: 'pending-check', isFinal: true, isFullText: true }, null);
+    onAssistantTextEvent('s2', { text: 'Other task reply', agentMessageId: 'other-task-check',
+      isFinal: true, isFullText: true }, null);
+    drained = drainPersistQueue();
+    const completion = await Promise.race([
+      drained.then(() => 'settled'),
+      new Promise<string>(resolve => setImmediate(() => resolve('blocked'))),
+    ]);
+    expect(completion).toBe('settled');
+    expect(h.sqlite!.prepare("SELECT content FROM messages WHERE session_id='s2'").get())
+      .toEqual({ content: 'Other task reply' });
+  } finally {
+    release(); await attaching; await drained; clearSessionPersistState('s2');
+  }
 });

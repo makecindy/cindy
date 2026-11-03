@@ -65,6 +65,35 @@ function withUiLanguageNote(content: string): string {
 function withUiLanguageUserMessage(content: string): { type: 'user'; content: string } {
   return { type: 'user', content: withUiLanguageNote(content) };
 }
+
+describe('local application task takeover', () => {
+  // #7631 review P0. Runtime tests do not cover the ordinary send transaction.
+  // Minimal regression (unit): a live external Session must be retired before
+  // selecting the send target; failed handoff must never dispatch Cindy input.
+  it.each([false, true])('does not reuse the external runtime (handoff fails=%s)', async (fails) => {
+    const { deps, session } = createDeps();
+    const replacement = createSession();
+    let live: typeof session | undefined = session;
+    deps.getSession = () => live;
+    deps.bootstrapSession = vi.fn(async () => {
+      live = replacement;
+      return { session: replacement, didInjectOrcaInstructions: false, didInjectProjectContext: false };
+    });
+    deps.prepareExternalInput = async () => {
+      if (fails) throw new Error('handoff unavailable');
+      live = undefined;
+    };
+    const send = createMakerSendTransaction(deps).sendToAgentAccepted(
+      'session-1', 'private Cindy input', { id: 'session-1', agentKind: 'codex', workingDir: '/repo' },
+    );
+    if (fails) await expect(send).rejects.toThrow('handoff unavailable');
+    else {
+      await send;
+      expect(replacement.send).toHaveBeenCalledOnce();
+    }
+    expect(session.send).not.toHaveBeenCalled();
+  });
+});
 describe('MCP App next-turn context', () => {
   it('keeps ordinary user intent when validating App context without a replacement intent', async () => {
     const assertCurrent = vi.fn(async () => {});
@@ -553,6 +582,9 @@ describe('maker SEND transaction', () => {
       ...item,
       fromDeviceLinkClient: true,
     }, false)).not.toHaveProperty('fromDeviceLinkClient');
+    // A remote controller must not skip the executing computer's plugin message hooks.
+    expect(stampTrustedDeviceLinkQueuedOrigin({ ...item, bypassGhostHooks: true }, true))
+      .not.toHaveProperty('bypassGhostHooks');
   });
 
   it('rejects invalid sessionId before touching transaction dependencies', async () => {
@@ -721,45 +753,71 @@ describe('maker SEND transaction', () => {
     );
   });
 
-  it('forwards the exact Learn pin to Claude for provider-boundary expansion', async () => {
-    const grant = {
-      version: 1 as const,
-      sessionInstanceId: 'session-instance-1',
-      resolvedSkillPath: '/system-skills/v10/learn/SKILL.md',
-    };
-    const captureCindyLearnInvocation = vi.fn(async () => grant);
-    const claudeSession = createSession({ agentKind: 'claude-code' });
-    const { deps } = createDeps({
-      getSession: vi.fn(() => claudeSession),
-      captureCindyLearnInvocation,
-    });
+  // #8549 (unit): provider dispatch must retain the direct command and pin.
+  // Review found the missing state: a fresh engine-switch handoff preceding
+  // /cindy:learn. Keep it pending until an accepted ordinary message delivers it.
+  const learnDispatchCases = (['claude-code', 'pi'] as const).flatMap((agentKind) =>
+    ['/learn release flow', '/skill:learn release flow', '/cindy:learn'].flatMap((command) =>
+      [false, true].map((hasHandoff) => ({ agentKind, command, hasHandoff })),
+    ),
+  );
+  it.each(learnDispatchCases)(
+    'forwards the exact Learn pin and command: $agentKind $command handoff=$hasHandoff', async ({ agentKind, command, hasHandoff }) => {
+      const grant = {
+        version: 1 as const,
+        sessionInstanceId: 'session-instance-1',
+        resolvedSkillPath: '/system-skills/v10/learn/SKILL.md',
+      };
+      const captureCindyLearnInvocation = vi.fn<NonNullable<MakerSendTransactionDeps['captureCindyLearnInvocation']>>(async () => grant);
+      const learnSession = createSession({ agentKind });
+      let handoff = hasHandoff ? 'HANDOFF-TEXT' : null;
+      const consumePendingHandoff = vi.fn(() => { handoff = null; });
+      const { deps } = createDeps({
+        getSession: vi.fn(() => learnSession),
+        captureCindyLearnInvocation,
+        peekPendingHandoff: vi.fn(async () => handoff),
+        consumePendingHandoff,
+      });
+      const transaction = createMakerSendTransaction(deps);
 
-    await createMakerSendTransaction(deps).sendToAgentAccepted(
-      'session-1',
-      { type: 'user', content: '/learn release flow' },
-      undefined,
-      {
-        persistUserMessage: {
-          clientId: 'claude-learn-1',
-          content: '/learn release flow',
+      await transaction.sendToAgentAccepted(
+        'session-1',
+        { type: 'user', content: command },
+        undefined,
+        {
+          persistUserMessage: {
+            clientId: 'claude-learn-1',
+            content: command,
+          },
         },
-      },
-    );
+      );
 
-    expect(captureCindyLearnInvocation).toHaveBeenCalledTimes(1);
-    const sendOptions = vi.mocked(claudeSession.send).mock.calls[0]?.[1];
-    expect(sendOptions?.[PINNED_SKILL_INVOCATION]).toEqual({
-      name: 'learn',
-      path: grant.resolvedSkillPath,
-    });
-    expect(deps.createDbMessage).toHaveBeenCalledWith(
-      'session-1',
-      expect.objectContaining({
-        agentMeta: expect.objectContaining({ cindyLearnInvocation: grant }),
-      }),
-      undefined,
-    );
-  });
+      expect(captureCindyLearnInvocation).toHaveBeenCalledTimes(1);
+      expect(vi.mocked(learnSession.send).mock.calls[0]?.[0]).toEqual({
+        type: 'user', content: command,
+      });
+      const sendOptions = vi.mocked(learnSession.send).mock.calls[0]?.[1];
+      expect(sendOptions?.[PINNED_SKILL_INVOCATION]).toEqual({
+        name: 'learn',
+        path: grant.resolvedSkillPath,
+      });
+      expect(deps.createDbMessage).toHaveBeenCalledWith(
+        'session-1',
+        expect.objectContaining({
+          agentMeta: expect.objectContaining({ cindyLearnInvocation: grant }),
+        }),
+        undefined,
+      );
+      expect(consumePendingHandoff).not.toHaveBeenCalled();
+
+      captureCindyLearnInvocation.mockResolvedValue(null);
+      await transaction.sendToAgentAccepted('session-1', { type: 'user', content: 'Continue' });
+      expect(vi.mocked(learnSession.send).mock.calls[1]?.[0]).toEqual(
+        withUiLanguageUserMessage(`${hasHandoff ? 'HANDOFF-TEXT\n\n' : ''}Continue`),
+      );
+      expect(consumePendingHandoff).toHaveBeenCalledTimes(hasHandoff ? 1 : 0);
+    },
+  );
 
   it('restamps a trusted local queue edit for the existing Desktop command route', async () => {
     const { deps, session } = createDeps();
@@ -3475,6 +3533,41 @@ describe('Cindy Make task note', () => {
     expect(vi.mocked(session.send).mock.calls[2][0]).toContain(note);
   });
 
+  it('tells the agent the owner\'s message closed its input handoff card, on that message only and without saving it', async () => {
+    const session = createSession({ agentKind: 'codex' });
+    let note: string | null = '[Card closed]';
+    const { deps } = createDeps({
+      getSession: () => session,
+      readInputHandoffOwnerNote: () => note,
+      inputHandoffOwnerNoteDelivered: () => { note = null; },
+    });
+    const transaction = createMakerSendTransaction(deps);
+    await transaction.sendToAgentAccepted('session-1', 'Signed in', undefined, {
+      persistUserMessage: { clientId: 'owner-1', content: 'Signed in' },
+    });
+    expect(vi.mocked(session.send).mock.calls[0][0]).toContain('[Card closed]');
+    expect(vi.mocked(deps.createDbMessage).mock.calls[0][1].content).toBe('Signed in');
+    expect(note).toBeNull();
+    await transaction.sendToAgentAccepted('session-1', 'Continue');
+    expect(vi.mocked(session.send).mock.calls[1][0]).not.toContain('[Card closed]');
+  });
+
+  it('drops the input handoff note for a native command instead of keeping it for the next message', async () => {
+    const session = createSession({ agentKind: 'pi' });
+    let note: string | null = '[Card closed]';
+    const { deps } = createDeps({
+      getSession: () => session,
+      readInputHandoffOwnerNote: () => note,
+      inputHandoffOwnerNoteDelivered: () => { note = null; },
+    });
+    const transaction = createMakerSendTransaction(deps);
+    await transaction.sendToAgentAccepted('session-1', '/skill:review');
+    expect(vi.mocked(session.send).mock.calls[0][0]).toBe('/skill:review');
+    expect(note).toBeNull();
+    await transaction.sendToAgentAccepted('session-1', 'Continue');
+    expect(vi.mocked(session.send).mock.calls[1][0]).not.toContain('[Card closed]');
+  });
+
   it('does not decorate native commands or ordinary fork messages with side-chat instructions', async () => {
     const session = createSession({ agentKind: 'claude-code' });
     const readTaskSource = vi.fn(async () => 'side-chat');
@@ -3551,6 +3644,34 @@ describe('session-agent-switch handoff injection', () => {
     expect(stored?.agentMeta?.autoReviewUserText).toBe(` ${request}`);
     expect(restoreAutoReviewUserIntent([{ clientId: queued.clientId, role: 'user', content,
       agentMeta: stored!.agentMeta as Record<string, unknown> }])).toBe(request);
+  });
+
+  // #7424 / unit: the trusted queue and accepted transaction must persist the exact pasted owner request.
+  // Adjacent reference tests did not cover paste ranges; the minimal old failure stamps '' for text + ranges.
+  it.each([false, true])('preserves pasted authorization through queue and persistence (deviceLink=%s)', async deviceLink => {
+    const text = '允许本地修改和测试，但不要 push、不要发布。';
+    const content = { text, pastedTextRanges: [{ start: 0, end: text.length }] };
+    const queued = stampTrustedDesktopQueuedOrigin({ clientId: 'pasted-request', text,
+      persistedContent: content, files: [],
+    } as unknown as AgentInputQueuedMessage, deviceLink);
+    expect(queued.autoReviewUserText).toBe(text);
+    const { deps, session } = createDeps();
+    await createMakerSendTransaction(deps).sendToAgentAccepted('session-1', text, undefined, {
+      [AUTO_REVIEW_SOURCE_CONTENT]: queued.autoReviewUserText,
+      persistUserMessage: { clientId: queued.clientId, content, delivery: 'turn' },
+    });
+    expect(vi.mocked(session.send).mock.lastCall?.[1]?.[AUTO_REVIEW_USER_INTENT]).toBe(text);
+    expect(vi.mocked(deps.createDbMessage).mock.lastCall?.[1].agentMeta?.autoReviewUserText).toBe(text);
+  });
+
+  it.each([false, true])('rejects pasted authorization when persisted and wire text diverge (deviceLink=%s)', deviceLink => {
+    const persisted = { text: '允许 push。', pastedTextRanges: [{ start: 0, end: 6 }] };
+    for (const persistedContent of [persisted, JSON.stringify(persisted)]) {
+      const queued = stampTrustedDesktopQueuedOrigin({ clientId: 'pasted-mismatch', text: '不要 push。',
+        persistedContent, files: [],
+      } as unknown as AgentInputQueuedMessage, deviceLink);
+      expect(queued.autoReviewUserText).toBe('');
+    }
   });
 
   // unit: a forwarded quote must survive persistence without becoming permission.
@@ -4336,6 +4457,7 @@ describe('session-agent-switch handoff injection', () => {
         scheduledModelScope: { restore: vi.fn(async () => undefined) },
         // UI-origin cross-engine preparation can return without clearing the intent.
         applyPendingAgentSwitchIfIdle: vi.fn(async () => undefined),
+        recoverRenamedSessionModelOnSend: vi.fn(async () => undefined),
         agentSwitchDeps: {}, agentSwitchPending: pending,
         getSessionRowSnapshotStrict: vi.fn(async () => ({ orcaRole, orcaRemoteLead })),
         parseOrcaRemoteLead,

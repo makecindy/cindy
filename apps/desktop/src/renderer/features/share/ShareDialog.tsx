@@ -12,7 +12,7 @@ import { copyPngBlobToClipboard, svgToPngBlob } from '@/lib/rasterizeToImage';
 import { blobToDataUrl } from '@/lib/annotationBurnIn';
 import { toast } from '@/lib/toast';
 import { extractIpcError } from '@/utils/ipcError';
-import type { ShareContent, ShareOptions } from '../../../shared/share';
+import type { ShareContent, ShareOptions, SharePreparation } from '../../../shared/share';
 
 /** Manual link + image output, independent of the business and future platform SDKs. */
 export function ShareDialog({
@@ -20,17 +20,28 @@ export function ShareDialog({
   onClose,
   restoreFocus,
   allowAttribution = false,
+  confirmation,
+  onPreparingChange,
+  loadingLabel,
+  recipientHint,
 }: {
-  load: (options: ShareOptions) => Promise<ShareContent>;
+  load: (options: ShareOptions, uploadConfirmed: boolean) => Promise<SharePreparation>;
   onClose: () => void;
   restoreFocus?: () => void;
   allowAttribution?: boolean;
+  confirmation?: { message: string; label: string };
+  onPreparingChange?: (preparing: boolean) => void;
+  loadingLabel?: string;
+  recipientHint?: string;
 }) {
   const { t } = useTranslation();
+  const changedErrorKey = confirmation ? 'sharing.localChanged' : 'settings.ghosts.remote.changed';
   const linkId = useId();
   const attributionId = useId();
   const contentRef = useRef<HTMLDivElement | null>(null);
   const [includeAttribution, setIncludeAttribution] = useState(allowAttribution);
+  const [confirmationRequired, setConfirmationRequired] = useState(false);
+  const [uploadConfirmed, setUploadConfirmed] = useState(false);
   const close = () => {
     alive.current = false;
     generation.current += 1;
@@ -42,19 +53,31 @@ export function ShareDialog({
   const [errorKey, setErrorKey] = useState<string | null>(null);
   const [revision, setRevision] = useState(0);
   const [busy, setBusy] = useState<'link' | 'copy' | 'save' | null>(null);
+  const preparing = !!confirmation && loading && !confirmationRequired && !uploadConfirmed && !content && !errorKey;
   const alive = useRef(false);
   const busyRef = useRef(false);
   const generation = useRef(0);
   useEffect(() => {
+    onPreparingChange?.(preparing);
+    return () => onPreparingChange?.(false);
+  }, [onPreparingChange, preparing]);
+  useEffect(() => {
+    if (confirmationRequired && !uploadConfirmed) return;
     alive.current = true;
     const current = ++generation.current;
     setLoading(true);
     setErrorKey(null);
     busyRef.current = true;
     setBusy(null);
-    void load({ includeAttribution: allowAttribution && includeAttribution })
+    void load({ includeAttribution: allowAttribution && includeAttribution }, uploadConfirmed)
       .then(async (value) => {
         if (!alive.current || generation.current !== current) return;
+        if ('confirmationRequired' in value) {
+          setConfirmationRequired(true);
+          setLoading(false);
+          busyRef.current = false;
+          return;
+        }
         const imageUrl = `data:image/svg+xml;charset=utf-8,${encodeURIComponent(value.imageSvg)}`;
         const image = new Image();
         image.src = imageUrl;
@@ -77,9 +100,11 @@ export function ShareDialog({
         setErrorKey(
           code === 'SHARE_NOT_CONFIGURED'
             ? 'sharing.notConfigured'
-            : code === 'SHARE_UNAVAILABLE'
-              ? 'sharing.unavailable'
-              : 'sharing.loadFailed',
+            : code === 'PRECONDITION_FAILED'
+              ? changedErrorKey
+              : code === 'SHARE_UNAVAILABLE'
+                ? 'sharing.unavailable'
+                : 'sharing.loadFailed',
         );
         setLoading(false);
         busyRef.current = false;
@@ -88,7 +113,7 @@ export function ShareDialog({
       alive.current = false;
       generation.current += 1;
     };
-  }, [load, revision, allowAttribution, includeAttribution]);
+  }, [load, revision, allowAttribution, includeAttribution, confirmationRequired, uploadConfirmed, changedErrorKey]);
 
   const run = async (action: 'link' | 'copy' | 'save') => {
     if (!content || loading || errorKey || busyRef.current) return;
@@ -133,7 +158,7 @@ export function ShareDialog({
   };
   return (
     <Dialog.Root
-      open
+      open={!preparing}
       onOpenChange={(open) => {
         if (!open) close();
       }}
@@ -173,7 +198,7 @@ export function ShareDialog({
                 <X size={16} aria-hidden />
               </Button>
             </Tip>
-            {allowAttribution ? (
+            {allowAttribution && !confirmationRequired ? (
               <div className="mt-4 flex items-center justify-between gap-4">
                 <label htmlFor={attributionId} className="text-13 text-[var(--text-secondary)]">
                   {t('sharing.includeAttribution')}
@@ -191,7 +216,16 @@ export function ShareDialog({
                 />
               </div>
             ) : null}
-            {errorKey ? (
+            {confirmationRequired && confirmation ? (
+              <div className="mt-5">
+                <p className="text-13 leading-relaxed text-[var(--text-secondary)]">{confirmation.message}</p>
+                <Button variant="cta" className="mt-4" onClick={() => {
+                  setConfirmationRequired(false);
+                  setUploadConfirmed(true);
+                }}>{confirmation.label}</Button>
+              </div>
+            ) : null}
+            {!confirmationRequired && errorKey ? (
               <div role="alert" className="mt-5 text-13">
                 <p>{t(errorKey)}</p>
                 {errorKey === 'sharing.loadFailed' ? (
@@ -205,7 +239,7 @@ export function ShareDialog({
                 ) : null}
               </div>
             ) : null}
-            {content || !errorKey ? (
+            {!confirmationRequired && (content || !errorKey) ? (
               <>
                 <div
                   aria-busy={loading || undefined}
@@ -227,7 +261,7 @@ export function ShareDialog({
                       className="absolute inset-0 flex items-center justify-center gap-2 text-13"
                     >
                       <Spinner size={16} />
-                      {t('sharing.loading')}
+                      {loadingLabel ?? t('sharing.loading')}
                     </div>
                   )}
                 </div>
@@ -291,7 +325,7 @@ export function ShareDialog({
                   </div>
                 </div>
                 <p className="mt-3 text-12 leading-relaxed text-[var(--text-tertiary)]">
-                  {t('sharing.recipientHint')}
+                  {recipientHint ?? t('sharing.recipientHint')}
                 </p>
               </>
             ) : null}

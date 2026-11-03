@@ -1,3 +1,5 @@
+import type { BotGroupProcessRef } from './botGroupProcess.js';
+export * from './botGroupProcess.js';
 /**
  * Bot group chat wire contract shared by Desktop main, preload and renderer.
  * Product rules: docs/product-rules/bot-group-chat.md.
@@ -48,6 +50,7 @@ export type BotGroupMemberStatus = 'active' | 'paused' | 'error' | 'archived' | 
 export const BOT_GROUP_RUNTIME_FAILURE_CODES = [
   'IMAGE_INPUT_UNSUPPORTED', 'MODEL_UNAVAILABLE', 'AUTH_REQUIRED', 'RATE_LIMITED', 'UPSTREAM_OVERLOADED',
   'QUOTA_EXCEEDED', 'NETWORK_ERROR', 'RUNTIME_TIMEOUT', 'RUNTIME_ERROR',
+  'REMOTE_DEVICE_LIMIT', 'REMOTE_TOTAL_LIMIT',
 ] as const;
 export type BotGroupRuntimeFailureCode = typeof BOT_GROUP_RUNTIME_FAILURE_CODES[number];
 export function isBotGroupRuntimeFailureCode(value: unknown): value is BotGroupRuntimeFailureCode {
@@ -113,7 +116,10 @@ export function readImportedBotGroupRuntimeFailureCode(message: {
 }
 
 export interface BotGroupMention {
+  /** Broadcast to human members; personal AI replies retain the human's identity. */
   all: boolean;
+  /** Independent companion broadcast, subject to the group's owner-controlled setting. */
+  allBots?: boolean;
   botIds: string[];
 }
 
@@ -144,6 +150,10 @@ export interface BotGroupMemberView {
 }
 
 export interface BotGroupMessageView {
+  /** Owner-only process reads use the existing task permission; this is only a public locator. */
+  process?: BotGroupProcessRef;
+  /** Server-stamped identity at send time; rebinding never rewrites history. */
+  maskAttribution?: { self: ChatMaskIdentity; companion: ChatMaskIdentity; sourceMessageId: string };
   /** Server tombstone; it cannot anchor a runtime failure notice. */
   deleted?: boolean;
   isSelf?: boolean;
@@ -184,6 +194,11 @@ export interface BotGroupMessageView {
   threadUnread?: BotGroupThreadUnread;
   /** A main-chat message that re-posts an existing thread reply by reference. */
   threadShare?: BotGroupThreadShareView;
+  /**
+   * Your own message in a group whose server reports read receipts: another human member has
+   * read it (the double check). Omitted otherwise; never set on other people's messages.
+   */
+  readByOthers?: boolean;
 }
 
 /** Unread replies of one Thread; `mentioned` when one of them names this reader. */
@@ -300,6 +315,10 @@ export interface BotGroupThreadShareView {
   attachments: BotGroupAttachment[];
   createdAt: number | null;
   edited: boolean;
+  /** The same thread summary shown under a thread root in the main timeline. */
+  replyCount?: number;
+  threadPreview?: BotGroupThreadPreview;
+  threadUnread?: BotGroupThreadUnread;
   /** Cache version this view was checked at; compare with `BotGroupDetail.threadShareVersion`. */
   version?: number;
 }
@@ -373,6 +392,8 @@ export interface BotGroupPlanStepView {
 
 export interface BotGroupPlanView {
   id: string;
+  /** Direct Chat Server snapshot revision; absent on legacy computer projections. */
+  revision?: number;
   status: BotGroupPlanStatus;
   organizerBotId: string;
   organizerName: string;
@@ -450,7 +471,16 @@ export interface BotGroupRoundView {
   othersActive?: boolean;
 }
 
+export type ChatGroupNotificationMode = 'all' | 'mentions' | 'none';
+
 export interface BotGroupSummary {
+  /** Execution snapshot already included by server-backed group summaries; absent on older hosts. */
+  round?: BotGroupRoundView;
+  /** Owner-controlled companion broadcast; absent on old servers/hosts. */
+  supportsMentionAudiences?: boolean;
+  allowMentionAllBots?: boolean;
+  /** Public roster state, optional for older hosts. */
+  teammateActivity?: { phase: string };
   /** Explicit direct-message landing; group management remains unavailable. */
   conversationKind?: 'direct' | 'group';
   serverBacked?: boolean;
@@ -462,6 +492,8 @@ export interface BotGroupSummary {
   supportsGroupLeave?: boolean;
   supportsListRemoval?: boolean;
   supportsMemberAvatar?: boolean;
+  supportsNotificationSettings?: boolean;
+  notificationMode?: ChatGroupNotificationMode;
   dissolvedAt?: string | null;
   archived?: boolean;
   migrationPending?: boolean;
@@ -522,6 +554,12 @@ export interface BotGroupDetail extends BotGroupSummary {
   reactionRevisions?: Record<string, number>;
   /** Oldest first. */
   messages: BotGroupMessageView[];
+  /**
+   * The server reports who has read a message (bot-group-chat.md「消息已读」): own messages show
+   * a single or double check, and the read list can be opened. Not `supportsReadReceipts`, which is
+   * about a phone reporting its own reading through this computer.
+   */
+  supportsMessageReaders?: boolean;
   /** Authorized current failures, independent of message pagination. Local/older hosts omit this. */
   executionFailures?: BotGroupExecutionFailureView[];
   /** Current state of shares the reader listed in `shownShares`, keyed by the share's message ID. */
@@ -556,10 +594,13 @@ export type BotGroupErrorCode =
   | 'LAST_OWNER'
   | 'INVALID_PARAMS'
   | 'REVISION_CONFLICT'
+  | 'STOP_OWNERSHIP_UNKNOWN'
+  | 'NOTHING_TO_STOP'
   | 'NOT_FOUND'
   | 'MEMBER_LIMIT'
   | 'MEMBER_UNAVAILABLE'
   | 'MENTION_UNAVAILABLE'
+  | 'ALL_BOTS_MENTION_DISABLED'
   | 'HOST_NOT_READY'
   /** An explicit 安排分工 while a plan is running or waiting. */
   | 'PLAN_OPEN'
@@ -587,6 +628,7 @@ export interface BotGroupCreateInput {
 }
 
 export interface BotGroupUpdateInput {
+  allowMentionAllBots?: boolean;
   groupId: string;
   /** Optional optimistic precondition for server-backed settings. */
   expectedRevision?: number;
@@ -656,6 +698,10 @@ export type BotGroupChange = 'created' | 'updated' | 'deleted' | 'messages' | 'r
 export interface BotGroupChangedPayload {
   groupId: string;
   change: BotGroupChange;
+  /** Authenticated message deltas can render before the slower room metadata refresh. */
+  messages?: BotGroupMessageView[];
+  /** Only apply deltas to an already displayed projection of the same generation. */
+  historyRevision?: string;
   /** Personal state, only emitted after an authoritative account-scoped reply/event. */
   listState?: { hidden: boolean; revision: number };
 }
@@ -695,6 +741,10 @@ export const BOT_GROUP_MEMBER_LINK_REL = 'member';
 export type BotGroupRemoteActionId =
   | 'create'
   | 'read'
+  | 'notifications'
+  | 'mask'
+  | 'mask-mentions'
+  | 'readers'
   | 'send'
   | 'continue'
   | 'stop'
@@ -720,6 +770,7 @@ export interface BotGroupRemoteChatData extends BotGroupDetail {
   projectDirName: string | null;
   /** Host forwards a measured main-timeline read to the chat server. Older hosts omit it. */
   supportsReadReceipts?: boolean;
+  supportsPersonalMask?: boolean;
   /**
    * The computer accepts attachments on `send` (absent on older computers, which would
    * drop them). Attachment `path`s are always null here.
@@ -745,12 +796,12 @@ export function isBotGroupClientId(clientId: string | null | undefined): boolean
 }
 
 /** The server chooses the grant. Different grants never reuse private model context. */
-export interface ChatLaneAccess { mode: 'owner' | 'chat' | 'tools'; revision: number }
+export interface ChatLaneAccess { mode: 'owner' | 'chat' | 'tools'; revision: number; maskOwnerId?: string }
 export function chatGroupLaneRouteKey(groupId: string, access: ChatLaneAccess): string {
-  return `group:${groupId}:access:${access.mode}:${access.revision}`;
+  return `group:${groupId}:access:${access.mode}:${access.revision}${access.maskOwnerId ? `:mask:${access.maskOwnerId}` : ''}`;
 }
 export function isChatOnlyGroupLane(routeKey: string | null | undefined): boolean {
-  return /^group:[^:]+:access:chat:[1-9][0-9]*(?::plan:[^:]+|:thread:[^:]+|:talk:[^:]+)?$/.test(routeKey ?? '');
+  return /^group:[^:]+:access:chat:[1-9][0-9]*(?::mask:[^:]+)?(?::plan:[^:]+|:thread:[^:]+|:talk:[^:]+|:personal-digest)?$/.test(routeKey ?? '');
 }
 
 /**
@@ -771,13 +822,13 @@ export function chatGroupThreadRouteKey(groupId: string, access: ChatLaneAccess,
 
 /** Group and Thread root of a Thread lane route key, or null for other routes. */
 export function parseBotGroupThreadRouteKey(routeKey: string | null | undefined): { groupId: string; threadRootId: string } | null {
-  const match = typeof routeKey === 'string' ? /^group:([^:]+):access:(?:owner|tools|chat):[1-9][0-9]*:thread:([^:]+)$/.exec(routeKey) : null;
+  const match = typeof routeKey === 'string' ? /^group:([^:]+):access:(?:owner|tools|chat):[1-9][0-9]*(?::mask:[^:]+)?:thread:([^:]+)$/.exec(routeKey) : null;
   return match ? { groupId: match[1]!, threadRootId: match[2]! } : null;
 }
 
 /** The group lane a Thread or queue lane belongs to; both work in the same place as their group lane. */
 export function groupLaneOfRouteKey(routeKey: string): string {
-  return routeKey.replace(/:(?:thread|talk):[^:]+$/, '');
+  return routeKey.replace(/:(?:(?:thread|talk):[^:]+|personal-digest)$/, '');
 }
 
 export function botGroupLaneRouteKey(groupId: string): string {
@@ -808,8 +859,42 @@ export function parseBotGroupPlanRouteKey(routeKey: string | null | undefined): 
 
 /** Named, credential-free Desktop chat capabilities. Older/local-only hosts omit them. */
 export type ChatServerResult<T> = ({ ok: true } & T) | { ok: false; errorCode: string };
+export interface ChatMaskIdentity { id: string; name: string; avatarUrl: string | null }
+export interface ChatMaskSettings {
+  access?: 'chat' | 'tools';
+  companionId: string | null; enabled: boolean; trigger: 'scheduled' | 'manual' | 'always';
+  start: string; end: string; timeZone: string; resumeMinutes: number; collectTodos: boolean; digest: 'daily' | 'manual';
+}
+export interface ChatMaskState {
+  homeDeviceId?: string | null;
+  defaultCompanionId?: string | null;
+  toolAccessSupported?: boolean;
+  settings: ChatMaskSettings; revision: number; status: 'unbound' | 'off' | 'offline' | 'paused' | 'waiting' | 'enabled';
+  manualRunning: boolean; self: ChatMaskIdentity; companions: ChatMaskIdentity[];
+  digestStatus?: 'idle' | 'queued' | 'running' | 'done' | 'failed' | 'cancelled' | 'empty';
+}
+export type ChatMaskAction = { type: 'save'; expectedRevision: number; settings: ChatMaskSettings }
+  | { type: 'participate' | 'resume' | 'stop' | 'digest' };
+export interface ChatMaskMention {
+  messageId: string; sequence: string; threadRootId?: string; authorName: string; text: string;
+  reply?: { companion: ChatMaskIdentity; text: string };
+}
 /** One reacting actor. `name` is null when the group has no member record for it. */
 export interface ChatReactor { actorId: string; name: string | null; isSelf: boolean; formerMember: boolean }
+/** One member on a message's read list; `readAt` is null when the server knows the read but not its time. */
+export interface BotGroupMessageReader { actorId: string; name: string | null; readAt: number | null; formerMember: boolean }
+/** Who has read one message of a group (bot-group-chat.md「消息已读」). Only the readers are listed, never who has not. */
+export interface BotGroupMessageReaders {
+  messageId: string;
+  /** Human members other than the author who can see the message. */
+  eligibleCount: number;
+  /** How many of them have read it; matches `readers` when the list is given. */
+  readCount: number;
+  /** False in a very large group: only the two counts are given and `readers` is empty. */
+  listed: boolean;
+  /** In the order the server gives (who read first); a read without a time comes last. */
+  readers: BotGroupMessageReader[];
+}
 export interface ChatInvitePreview {
   groupId: string; name: string; inviterName: string; expiresAt: string | null; joined: boolean;
   /** Omitted by old servers, whose links remain dated and single-use. */
@@ -817,7 +902,8 @@ export interface ChatInvitePreview {
 }
 export type ChatGroupAction =
   | { type: 'read'; messageId: string; conversationKind?: 'direct' }
-  | { type: 'update'; name: string; topic: string; description: string; expectedRevision: number; responseMode?: BotGroupReplyMode; speakingMode?: BotGroupSpeakingMode }
+  | { type: 'notifications'; mode: ChatGroupNotificationMode }
+  | { type: 'update'; name: string; topic: string; description: string; expectedRevision: number; responseMode?: BotGroupReplyMode; speakingMode?: BotGroupSpeakingMode; allowMentionAllBots?: boolean }
   | { type: 'nickname'; actorId: string; nickname: string | null }
   | { type: 'avatar'; actorId: string; avatar: { type: 'keep' | 'reset' } | { type: 'set'; data: Uint8Array; mimeType: string } }
   | { type: 'member'; actorId: string; action: 'invite' | 'leave' | 'remove' | 'ban' | 'unban' | 'role'; role?: 'admin' | 'member' }
@@ -827,11 +913,13 @@ export type ChatGroupAction =
   | { type: 'hide' }
   | { type: 'archive'; archived: boolean; expectedRevision: number };
 export interface ChatServerApi {
+  mask?(input: { groupId: string; action?: ChatMaskAction; operationId?: string }): Promise<ChatServerResult<{ state: ChatMaskState }>>;
+  mentions?(input: { groupId: string; before?: string; readIds?: string[]; operationId?: string }): Promise<ChatServerResult<{ mentions: ChatMaskMention[]; hasMore: boolean }>>;
   manage(input: { groupId: string; action: ChatGroupAction }): Promise<ChatServerResult<{ listState?: { conversationId: string; hidden: boolean; revision: number } }>>;
-  /** `botId` is the local teammate id behind each Chat Server actor. */
-  ownedBots(): Promise<ChatServerResult<{ bots: Array<{ actorId: string; botId?: string; name: string }> }>>;
+  /** Owned companions across devices. `botId` is the stable external id, not a local-install guarantee. */
+  ownedBots(): Promise<ChatServerResult<{ bots: Array<{ actorId: string; botId?: string; name: string; avatar?: string | null; homeDeviceId?: string | null }> }>>;
   refreshProfile(): Promise<ChatServerResult<Record<never, never>>>;
-  status(): Promise<{ enabled: boolean; connected: boolean }>;
+  status(): Promise<{ enabled: boolean; connected: boolean; personalMask?: boolean }>;
   /**
    * `markRead` (latest page only): the reader is looking at the Thread, so its server read state
    * moves to the newest reply read here; `readBefore` is where it stood before this read.
@@ -853,13 +941,18 @@ export interface ChatServerApi {
    * the server saved. Only the reader's own choice ever follows a Thread.
    */
   followThread(input: { groupId: string; rootId: string; following: boolean }): Promise<ChatServerResult<{ following: boolean }>>;
-  reply(input: { groupId: string; rootId: string; text: string; clientId: string; mentions: BotGroupMention }): Promise<ChatServerResult<{ messageId: string }>>;
+  reply(input: { groupId: string; rootId: string; text: string; clientId: string; mentions: BotGroupMention; attachments?: BotGroupAttachmentInput[] }): Promise<ChatServerResult<{ messageId: string }>>;
   /**
    * Re-post a thread reply to the main chat as the current user. Repeating it for the same
    * reply returns the existing share (`alreadyShared`); it never starts a companion round.
    */
   shareToMain(input: { groupId: string; messageId: string }): Promise<ChatServerResult<{ messageId: string | null; alreadyShared: boolean }>>;
   react(input: { groupId: string; messageId: string; emoji: string; present: boolean }): Promise<ChatServerResult<Record<never, never>>>;
+  /**
+   * Read-only: who has read a message. Answers `GROUP_TOO_LARGE` when the group has too many
+   * members to list. Only servers that report `messageReaders` answer.
+   */
+  readers(input: { groupId: string; messageId: string }): Promise<ChatServerResult<{ readers: BotGroupMessageReaders }>>;
   /** Read-only: who added one emoji to a message. Names use the group member projection. */
   reactors(input: { groupId: string; messageId: string; emoji: string }): Promise<ChatServerResult<{ reactors: ChatReactor[] }>>;
   createInvite(input: { groupId: string; clientId: string }): Promise<ChatServerResult<{ link: string; expiresAt: string | null; reusable?: boolean }>>;

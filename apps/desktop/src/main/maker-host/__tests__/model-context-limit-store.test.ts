@@ -2,7 +2,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 
-import { afterAll, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { BUNDLED_CATALOG } from '@cindy/model-providers';
 
 const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'cindy-model-context-limit-'));
@@ -89,7 +89,15 @@ describe('model context limit store', () => {
 
   // PR #7460 deletion P1, unit: existing write/reset tests did not cover removing
   // every model of one connection, including off-catalog models and rollback.
+  // Windows CI #7300: successive atomic writes can share an mtime. Keep real
+  // disk writes but fix their timestamps to expose stale deletion/rollback caches.
   it('clears only the exact provider compaction policies and restores after deletion failure', async () => {
+    const rename = fs.renameSync;
+    const timestamp = new Date('2026-01-01T00:00:00Z');
+    vi.spyOn(fs, 'renameSync').mockImplementation((source, target) => {
+      rename(source, target);
+      if (target === PREFS) fs.utimesSync(target, timestamp, timestamp);
+    });
     const providerId = 'custom:quote"connection';
     const target = { providerId, modelId: 'gpt' };
     const retired = { providerId, modelId: 'retired' };
@@ -99,20 +107,7 @@ describe('model context limit store', () => {
     await save([target, retired], 65);
     await save([other], 80);
     writeModelContextLimit('codex', providerId, 'gpt', 272_000);
-    // Windows CI: the staged write can land within the cached store's mtime
-    // granularity. Pin the mtime back so the stale-cache case is deterministic.
-    let pinned = 1_700_000_000;
-    const withSameMtime = <T>(write: () => T): T => {
-      // Cache the file under an exact whole-second mtime, write, then put that
-      // same mtime back: the cached store sees no change, as on Windows.
-      pinned += 10;
-      fs.utimesSync(PREFS, pinned, pinned);
-      readModelCompactionPct(providerId, 'gpt');
-      const result = write();
-      fs.utimesSync(PREFS, pinned, pinned);
-      return result;
-    };
-    const restore = withSameMtime(() => stageProviderModelCompactionClear(providerId));
+    const restore = stageProviderModelCompactionClear(providerId);
     expect(readModelCompactionPct(providerId, 'gpt')).toBeNull();
     expect(readModelCompactionPct(providerId, 'retired')).toBeNull();
     expect(readModelCompactionPct(other.providerId, 'gpt')).toBe(80);
@@ -120,7 +115,8 @@ describe('model context limit store', () => {
     expect(stageProviderModelCompactionClear(providerId)()).toBe(true);
     await save([other], 70);
     expect(readModelCompactionPct(other.providerId, 'gpt')).toBe(70);
-    expect(withSameMtime(restore)).toBe(true);
+    expect(readModelCompactionPct(providerId, 'gpt')).toBeNull();
+    expect(restore()).toBe(true);
     expect(readModelCompactionPct(providerId, 'gpt')).toBe(65);
     expect(readModelCompactionPct(providerId, 'retired')).toBe(65);
     expect(readModelCompactionPct(other.providerId, 'gpt')).toBe(70);
@@ -320,6 +316,8 @@ describe('model context limit store', () => {
     expect(fs.existsSync(PREFS)).toBe(false);
   });
 });
+
+afterEach(() => vi.restoreAllMocks());
 
 afterAll(() => fs.rmSync(tempRoot, { recursive: true, force: true }));
 

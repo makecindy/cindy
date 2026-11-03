@@ -119,7 +119,11 @@ const mobileGuardInclude = [
   'src/auth/__tests__/xdOrgBetaWiring.test.ts',
   // CSP must be applied at the WebView and download call sites, not only in its helper.
   'src/__tests__/htmlPreviewCsp.test.ts',
+  // Whole-repo static scan of text colours (five neutral tiers, placeholders); reads production sources.
+  'src/__tests__/textColorDiscipline.test.ts',
   'src/auth/__tests__/loginHandoffState.test.ts',
+  // DESIGN.md §16.2 copy budget: catalog strings against the login layout constants.
+  'src/auth/__tests__/loginConsentCopyBudget.test.ts',
   'src/__tests__/accountDeletion.test.ts',
   'src/__tests__/androidSessionInteractionParity.test.tsx',
   'src/__tests__/chatQuoteCrossDevice.test.ts',
@@ -179,6 +183,8 @@ const desktopGuardInclude = [
   'src/renderer/__tests__/xUsageGuideRiskContrast.test.ts',
   'src/main/__tests__/authHostedCallback.contract.test.ts',
   'src/main/__tests__/loginScenarioHarness.contract.test.ts',
+  // DESIGN.md §16.2 copy budget: locale catalogs against the login layout tokens.
+  'src/renderer/components/login/__tests__/loginConsentCopyBudget.test.ts',
   'src/main/__tests__/officialProfileMigrationPolicy.contract.test.ts',
   'src/renderer/__tests__/authContextRace.contract.test.ts',
   'src/main/__tests__/mobileClientPromptNote.contract.test.ts',
@@ -279,6 +285,8 @@ const desktopGuardInclude = [
   'src/renderer/__tests__/makerExperimentalThemeContract.test.ts',
   'src/renderer/__tests__/iconButtonTooltips.test.ts',
   'src/renderer/__tests__/modalSurfaceContract.test.ts',
+  // Existing project-picker source assertions enforce cross-file routing/design contracts.
+  'src/renderer/__tests__/newMakerProjectPicker.test.ts',
   'src/renderer/__tests__/orcaWorkflowRoute.test.ts',
   'src/renderer/__tests__/projectsSidebarSection.test.ts',
   'src/renderer/__tests__/remoteWorkerCreationContext.test.ts',
@@ -514,6 +522,7 @@ export default {
     requiredUnitWorkspace('@cindy/browser-control-runtime', 'packages/browser-control-runtime'),
     requiredUnitWorkspace('cindy-tools', 'packages/cindy-tools'),
     requiredUnitWorkspace('@cindy/device-link', 'packages/device-link'),
+    requiredUnitWorkspace('@cindy/device-link-relay', 'packages/device-link-relay'),
     noCollectableWorkspace('@cindy/embedding-client', 'packages/embedding-client'),
     requiredUnitWorkspace('@cindy/file-browser-core', 'packages/file-browser-core'),
     noCollectableWorkspace('@cindy/github-client', 'packages/github-client'),

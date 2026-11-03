@@ -53,6 +53,7 @@ vi.mock('@/config/env', () => ({
   loadMobileEndpointsForRealm: mocks.loadMobileEndpointsForRealm,
   getMobileEndpointForRealm: (realm: 'cn' | 'global') =>
     envState.endpointByRealm[realm],
+  setDeviceLinkApiBaseOverride: () => {},
 }));
 
 vi.mock('@/config/devServerEnvironment', () => ({
@@ -65,6 +66,7 @@ import {
   syncPushRegistration,
   unregisterPushTokenBestEffort,
 } from '@/notifications/pushNotifications';
+import { setActiveSelfHostedRelay } from '@/device-link/selfHostedRelayRouting';
 
 const REGISTERED_KEY = 'cindy.push.registered';
 const PENDING_KEY = 'cindy.push.pendingUnregister';
@@ -157,6 +159,25 @@ describe('push notification realm routing', () => {
       'revocationToken',
     );
     expect(readStoredRealms(REGISTERED_KEY)).toEqual(['global']);
+  });
+
+  // 自建中转不转发系统推送(docs/self-hosted-relay-plan.md §5.3、§7):不在官方 device-link 登记 token
+  // (伙伴消息的 Chat Server 登记不受影响),关闭时仍向官方地址注销以前的登记。
+  it('自建中转下不登记 device-link 推送,注销仍发往官方地址', async () => {
+    setActiveSelfHostedRelay({ relayId: 'relay-1', name: 'Home', baseUrl: 'https://relay.home.example', credential: 'relay-credential', signing: null });
+    try {
+      const apiFetch = vi.fn().mockResolvedValue({});
+      await expect(syncPushRegistration({ enabled: true, apiFetch })).resolves.toBe('registered');
+      expect(apiFetch.mock.calls.map(([path, opts]) => `${opts.method} ${path}`)).toEqual(['PUT /v1/push-token']);
+      apiFetch.mockClear();
+      await expect(syncPushRegistration({ enabled: false, apiFetch })).resolves.toBe('unregistered');
+      expect(apiFetch).toHaveBeenCalledWith('/api/device-link/push-token', expect.objectContaining({
+        baseUrl: 'https://relay.cn.example',
+        method: 'DELETE',
+      }));
+    } finally {
+      setActiveSelfHostedRelay(null);
+    }
   });
 
   it('dev 构建复用 cn 推送构建线向开发环境注册', async () => {

@@ -266,6 +266,8 @@ export interface IMMessageEvent {
    * 不支持引用语义的渠道恒 undefined。
    */
   replyContext?: {
+    /** Original message ID, distinct from the current trigger message. */
+    messageId?: string;
     author: string;
     text: string;
     isBot?: boolean;

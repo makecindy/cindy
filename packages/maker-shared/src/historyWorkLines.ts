@@ -22,8 +22,15 @@ export const HISTORY_WORK_LINE_LIMIT = 5;
 export const HISTORY_WORK_LINE_TEXT_CHARS = 160;
 /** UTF-8 budget for the whole window, so one patch stays a small push. */
 export const HISTORY_WORK_LINES_MAX_BYTES = 6 * 1024;
-/** Each line fits its share of the window, so five lines always fit together. */
-export const HISTORY_WORK_LINE_MAX_BYTES = Math.floor(HISTORY_WORK_LINES_MAX_BYTES / HISTORY_WORK_LINE_LIMIT);
+/**
+ * Each line fits its share of the window, so five lines always fit together. The share
+ * reserves the JSON array framing (`[`, `]` and one comma between neighbours): a line may
+ * spend its whole share, so without the reservation five maximal lines overflow the window
+ * and the guard below would drop the oldest line.
+ */
+export const HISTORY_WORK_LINE_MAX_BYTES = Math.floor(
+  (HISTORY_WORK_LINES_MAX_BYTES - (HISTORY_WORK_LINE_LIMIT + 1)) / HISTORY_WORK_LINE_LIMIT,
+);
 /** Descriptor reductions tried in order until the whole line fits its byte share. */
 const DESCRIPTOR_LIMITS = [
   { text: 300, items: 20 },
@@ -190,3 +197,4 @@ export function projectHistoryWorkLines(
   while (lines.length > 0 && utf8Length(JSON.stringify(lines)) > HISTORY_WORK_LINES_MAX_BYTES) lines.shift();
   return lines;
 }
+

@@ -1,3 +1,6 @@
+import { withSpeechApiPresets } from '../../../shared/speechProviderSetup';
+import { ProviderNameSearch } from './ProviderNameSearch';
+import { providerSearchChoices, type ProviderSearchTarget } from './providerSearch';
 import { useDialogExit } from '@/hooks/useDialogExit';
 import { WINDOW_DRAG_STYLE, WINDOW_NO_DRAG_STYLE } from '@/components/layout/windowDrag';
 import { providerEndpointBindings, canonicalProviderEndpoint, BUNDLED_CATALOG, mergeModelMetadata } from '@cindy/model-providers';
@@ -15,6 +18,7 @@ let detectionRequestSequence = 0;
 
 import * as Dialog from '@radix-ui/react-dialog';
 import {
+  useMemo,
   useCallback,
   useEffect,
   useLayoutEffect,
@@ -181,6 +185,9 @@ interface ProviderConnectionDialogProps {
   initial?: CustomProviderConfig;
   /** Effective modes from the same connection's active catalog, separate from editable overrides. */
   catalogModels?: ProviderView['models'];
+  providers?: ProviderView[];
+  suspended?: boolean;
+  onSelectProvider?: (target: ProviderSearchTarget) => void;
   /** 已占用的全部 provider id（内置 anthropic/openai/xd + 全部自定义）；新建时自动生成 id 时避让，防撞内置保留 id。 */
   existingIds?: string[];
   /** Stable fallback for transitions whose immediate opener unmounts before this dialog mounts. */
@@ -205,6 +212,7 @@ interface ModelPickerState {
 }
 type DialogChildLayer =
   | { kind: 'preset-menu' }
+  | { kind: 'provider-search' }
   | { kind: 'model-picker'; value: ModelPickerState }
   | null;
 interface HeaderRow {
@@ -297,6 +305,24 @@ function emptyRuntime(agent: DialogAgentKind): RuntimeFields {
     piCatalogProviderId: undefined,
     supportsImageGeneration: false,
   };
+}
+
+/**
+ * 这个 runtime 上是否存在「保存时会悄悄丢掉」的协议选择。
+ *
+ * 未填写 baseUrl 的 runtime 会被保存逻辑整段跳过（视为未配置）。对打开时就没有端点的
+ * runtime，跳过等于丢掉用户刚点选的协议——按钮已高亮、保存返回成功、重开却回到默认。
+ * 这种草稿必须报错拦下。
+ *
+ * 但清空 baseUrl 也是用户移除一个已配置 runtime 的方式；此时丢弃是用户的意图，不能拦。
+ * 两者的分界是打开时该 runtime 有没有端点。
+ */
+function runtimeHasUnsavedProtocolChoice(
+  agent: DialogAgentKind,
+  runtime: RuntimeFields,
+  hadConfiguredEndpoint: boolean,
+): boolean {
+  return !hadConfiguredEndpoint && runtime.wireProtocol !== defaultWireFor(agent);
 }
 
 function initRuntimes(initial?: CustomProviderConfig): Record<DialogAgentKind, RuntimeFields> {
@@ -448,6 +474,9 @@ export function ProviderConnectionDialog({
   onDetected,
   initial,
   catalogModels,
+  providers = [],
+  suspended = false,
+  onSelectProvider,
   existingIds,
   returnFocusRef,
   focusAgent,
@@ -456,6 +485,8 @@ export function ProviderConnectionDialog({
 }: ProviderConnectionDialogProps) {
   const { t, i18n } = useTranslation();
   const dialog = useDialogExit(returnFocusRef);
+  const suspendedRef = useRef(suspended);
+  useLayoutEffect(() => { suspendedRef.current = suspended; }, [suspended]);
   const onClose = useCallback(() => dialog.close(notifyClosed), [dialog.close, notifyClosed]);
   const onSaved = useCallback(() => dialog.close(notifySaved), [dialog.close, notifySaved]);
   const editing = !!initial;
@@ -482,6 +513,8 @@ export function ProviderConnectionDialog({
   }, []);
   const reportFieldError = useCallback(
     (key: string, message: string) => {
+      if (key.includes(':manualModel') || key.endsWith(':add-model')) setManualOpen(true);
+      if (key.includes(':header:') || key.endsWith(':requestPath') || key.endsWith(':wireProtocol')) setShowAdvanced(true);
       setFieldError({ id: `${formId}-${key}`, message });
     },
     [formId],
@@ -584,6 +617,7 @@ export function ProviderConnectionDialog({
   // 拉取成功后的勾选弹层：行集合 = 拉取结果 ∪ 表单已填（后者默认勾选、保留用户显示名）。
   const [runtimeFill, setRuntimeFill] = useState<RuntimeFillDialogState | null>(null);
   const picker = childLayer?.kind === 'model-picker' ? childLayer.value : null;
+  const providerChoices = useMemo(() => providerSearchChoices(providers, sortPresetsForRegion(withSpeechApiPresets(presets), CURRENT_CINDY_REGION), i18n.language, t('settings.providers.local.title'), t('settings.providers.llamacpp.title'), OFFICIAL_API_PRESETS), [providers, presets, i18n.language, t]);
   const presetMenuOpen = childLayer?.kind === 'preset-menu';
   const [keyHydrationReady, setKeyHydrationReady] = useState(!editing);
   const [keyHydrationFailed, setKeyHydrationFailed] = useState<Record<DialogAgentKind, boolean>>({
@@ -716,6 +750,7 @@ export function ProviderConnectionDialog({
   }, []);
 
   useEffect(() => {
+    if (suspended) return;
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.key !== 'Escape') return;
       // IME 候选窗的 Escape 是组合输入控制，不是弹层关闭意图。
@@ -740,7 +775,7 @@ export function ProviderConnectionDialog({
     };
     window.addEventListener('keydown', onKeyDown, { capture: true });
     return () => window.removeEventListener('keydown', onKeyDown, true);
-  }, [dismissImageGenerationHelp, dismissTopmostLayer, showImageGenerationHelp]);
+  }, [dismissImageGenerationHelp, dismissTopmostLayer, showImageGenerationHelp, suspended]);
 
   // 最新 runtime 表单状态镜像：拉取响应到达时据此构建弹层行/预勾选，而不是用请求发出时的
   // 闭包快照——在途期间被用户删除的行不得复活。镜像在每个 setRt updater 内**同步**更新
@@ -1049,7 +1084,8 @@ export function ProviderConnectionDialog({
     previousDetectionSignatures.current.set(agent, signature);
     if (previousSignature && previousSignature !== signature) {
       setRtSynced(prev => ({ ...prev, [agent]: { ...prev[agent], models: prev[agent].models.map(model => {
-        const { discoveredMetadata: _metadata, discoveredCost: _cost, ...userFields } = model;
+        const { discoveredMetadata: _metadata, discoveredCost: _cost,
+          discoveredSource: _source, discoverySnapshotId: _snapshot, ...userFields } = model;
         return userFields;
       }) } }));
     }
@@ -1098,10 +1134,16 @@ export function ProviderConnectionDialog({
               return fresh ? { ...model,
                 discoveredMetadata: fresh.discoveredMetadata ?? { contextWindow: fresh.contextWindow },
                 discoveredCost: fresh.discoveredCost,
+                discoveredSource: fresh.discoveredSource,
+                discoverySnapshotId: fresh.discoverySnapshotId,
+                opaqueModelId: fresh.opaqueModelId || model.opaqueModelId,
               } : model;
             }),
             ...(first ? catalog.models!.filter(m => !prev[agent].models.some(row => row.id === m.id) && isAgentSelectableModel({ id: m.id, mode: m.discoveredMetadata?.mode })).map(m => ({
               id: m.id, name: m.name, discoveredMetadata: m.discoveredMetadata ?? { contextWindow: m.contextWindow }, discoveredCost: m.discoveredCost,
+              discoveredSource: m.discoveredSource,
+              discoverySnapshotId: m.discoverySnapshotId,
+              opaqueModelId: m.opaqueModelId,
             })) : []),
           ] } }));
         }
@@ -1670,7 +1712,10 @@ export function ProviderConnectionDialog({
             modalities: m.modalities,
             officialDocs: m.officialDocs,
             discoveredMetadata: m.discoveredMetadata,
-          discoveredCost: m.discoveredCost,
+            discoveredCost: m.discoveredCost,
+            discoveredSource: m.discoveredSource,
+            discoverySnapshotId: m.discoverySnapshotId,
+            opaqueModelId: m.opaqueModelId,
             nameExplicit: m.nameExplicit,
             ...(m.interfaceId ? { interfaceId: m.interfaceId } : {}),
           ...(m.api ? { api: m.api } : {}),
@@ -1711,6 +1756,9 @@ export function ProviderConnectionDialog({
               discoveredMetadata: mergeModelMetadata(cur?.discoveredMetadata,
                 m.discoveredMetadata ?? { contextWindow: m.contextWindow }),
               discoveredCost: m.discoveredCost,
+              discoveredSource: m.discoveredSource,
+              discoverySnapshotId: m.discoverySnapshotId,
+              opaqueModelId: m.opaqueModelId || cur?.opaqueModelId,
               mode: cur?.mode,
               nativeApi: cur?.nativeApi,
               modalities: cur?.modalities,
@@ -1807,6 +1855,9 @@ export function ProviderConnectionDialog({
         officialDocs: latest?.officialDocs ?? m.officialDocs,
         discoveredMetadata: m.discoveredMetadata ?? latest?.discoveredMetadata,
         discoveredCost: m.discoveredCost ?? latest?.discoveredCost,
+        discoveredSource: m.discoveredSource,
+        discoverySnapshotId: m.discoverySnapshotId,
+        opaqueModelId: m.opaqueModelId || latest?.opaqueModelId,
         nameExplicit: latest?.nameExplicit ?? m.nameExplicit,
         ...(interfaceId ? { interfaceId } : {}),
         ...(api ? { api } : {}),
@@ -1836,6 +1887,9 @@ export function ProviderConnectionDialog({
           officialDocs: m.officialDocs,
           discoveredMetadata: m.discoveredMetadata,
           discoveredCost: m.discoveredCost,
+          discoveredSource: m.discoveredSource,
+          discoverySnapshotId: m.discoverySnapshotId,
+          opaqueModelId: m.opaqueModelId,
           nameExplicit: m.nameExplicit,
           ...(m.interfaceId ? { interfaceId: m.interfaceId } : {}),
           ...(m.api ? { api: m.api } : {}),
@@ -1906,9 +1960,25 @@ export function ProviderConnectionDialog({
     const keys: RuntimeKeys = {};
     for (const a of VISIBLE_AGENTS) {
       const rf = rt[a];
+      // 上游规则：pi 目录预选时，仍跟随默认连接、未独立配置的 runtime 整段跳过。
       if (simpleAdding && activeTab === 'pi' && !rt.pi.catalogPresetId && a !== 'pi'
         && (!draft?.config.runtimes[a] || followsDefaultConnection(a, rf, rt.pi))) continue;
-      if (!rf.baseUrl.trim()) continue; // 该 runtime 未配置
+      if (!rf.baseUrl.trim()) {
+        // 未配置的 runtime 整段跳过。但用户若已在这里选过协议，跳过即静默丢弃该选择；
+        // 要求补全基础 URL，让「改了协议却没保存上」变成一个看得见的错误。
+        if (
+          runtimeHasUnsavedProtocolChoice(
+            a,
+            rf,
+            Boolean(initial?.runtimes[a]?.baseUrl.trim()),
+          )
+        ) {
+          setActiveTab(a);
+          reportFieldError(`${a}:baseUrl`, t('settings.providers.custom.errors.baseUrlRequired'));
+          return;
+        }
+        continue; // 该 runtime 未配置
+      }
       try {
         const u = new URL(rf.baseUrl.trim());
         if (u.protocol !== 'http:' && u.protocol !== 'https:') {
@@ -1941,6 +2011,9 @@ export function ProviderConnectionDialog({
           officialDocs: m.officialDocs,
           discoveredMetadata: m.discoveredMetadata,
           discoveredCost: m.discoveredCost,
+          discoveredSource: m.discoveredSource,
+          discoverySnapshotId: m.discoverySnapshotId,
+          opaqueModelId: m.opaqueModelId,
           nameExplicit: m.nameExplicit,
           ...(m.interfaceId ? { interfaceId: m.interfaceId } : {}),
           ...(m.api ? { api: m.api } : {}),
@@ -2297,6 +2370,8 @@ export function ProviderConnectionDialog({
     );
   };
 
+  if (suspended) return null;
+
   return (
     <Dialog.Root open={dialog.open} onOpenChange={(open) => { if (!open) dismissTopmostLayer(); }}>
       <Dialog.Portal>
@@ -2315,7 +2390,7 @@ export function ProviderConnectionDialog({
           event.preventDefault();
           dialogPanelRef.current?.querySelector<HTMLInputElement>('input')?.focus();
         }}
-        onCloseAutoFocus={dialog.onCloseAutoFocus}
+        onCloseAutoFocus={event => { if (suspendedRef.current) event.preventDefault(); else dialog.onCloseAutoFocus(event); }}
         onEscapeKeyDown={(event) => {
           // The existing window-capture owner handles child layers and IME first.
           event.preventDefault();
@@ -2406,6 +2481,15 @@ export function ProviderConnectionDialog({
               reserveFeedback
             >
               {(control) => (
+                !editing && onSelectProvider ? (
+                  <ProviderNameSearch {...control} surface="ivory" value={name} onChange={setName}
+                    placeholder={t('settings.providers.custom.fields.namePlaceholder')}
+                    choices={providerChoices} disabled={saving} open={!saving && childLayer?.kind === 'provider-search'}
+                    onOpenChange={open => setChildLayer(current => open
+                      ? (current?.kind === 'model-picker' ? current : { kind: 'provider-search' })
+                      : current?.kind === 'provider-search' ? null : current)}
+                    onSelect={target => { if (!savingRef.current) onSelectProvider(target); }} />
+                ) : (
                 <SettingsTextInput
                   {...control}
                   surface="ivory"
@@ -2414,6 +2498,7 @@ export function ProviderConnectionDialog({
                   onChange={setName}
                   placeholder={t('settings.providers.custom.fields.namePlaceholder')}
                 />
+                )
               )}
             </FormField>
           </div>
@@ -2547,60 +2632,6 @@ export function ProviderConnectionDialog({
               border: '1px solid var(--settings-theme-card-border)',
             }}
           >
-            {(editing || !onDetected) && !templateBound && (
-              <div className="flex flex-col gap-[7px]">
-                <FieldLabel>{t('settings.providers.custom.fields.wireProtocol')}</FieldLabel>
-                <div className="flex flex-wrap gap-1.5">
-                  {CUSTOM_PROVIDER_CODEX_WIRE_PROTOCOLS.map((option) => (
-                    <button
-                      key={option.value}
-                      aria-pressed={f.wireProtocol === option.value}
-                      type="button"
-                      onClick={() => changeWireProtocol(activeTab, option.value)}
-                      className={cn(
-                        'rounded-full border px-3 py-1.5 text-12 font-medium transition-colors',
-                        f.wireProtocol === option.value
-                          ? 'border-[var(--settings-input-border-focus)] text-[var(--settings-section-title)]'
-                          : 'border-[var(--settings-input-border)] text-[var(--text-secondary)] hover:bg-[var(--surface-hover)]',
-                      )}
-                      style={
-                        f.wireProtocol === option.value
-                          ? { backgroundColor: 'var(--surface-elevated)' }
-                          : undefined
-                      }
-                    >
-                      {t(
-                        activeTab !== 'codex' && option.value !== 'google-generative-ai'
-                          ? `settings.providers.custom.wireProtocol.pi${
-                              option.value === 'anthropic-messages'
-                                ? 'Anthropic'
-                                : option.value === 'openai-responses'
-                                  ? 'Responses'
-                                  : 'Chat'
-                            }`
-                          : option.labelKey,
-                      )}
-                    </button>
-                  ))}
-                </div>
-                {activeTab !== 'claude-code' && (
-                <span className="text-12 leading-snug text-[var(--text-tertiary)]">
-                  {t(
-                    activeTab === 'pi' && f.wireProtocol !== 'google-generative-ai'
-                      ? `settings.providers.custom.wireProtocol.pi${
-                          f.wireProtocol === 'anthropic-messages'
-                            ? 'AnthropicHelp'
-                            : f.wireProtocol === 'openai-chat'
-                              ? 'ChatHelp'
-                              : 'ResponsesHelp'
-                        }`
-                      : customProviderCodexWireProtocolOption(f.wireProtocol).helpKey,
-                  )}
-                </span>
-                )}
-              </div>
-            )}
-
             {/* 基础 URL */}
             <div className="flex flex-col gap-[7px]">
               <FormField
@@ -2634,33 +2665,6 @@ export function ProviderConnectionDialog({
                 )}
               </FormField>
             </div>
-
-            {/* 精确推理路径：给非标准兼容端点使用；留空仍按所选协议推导。 */}
-            {(editing || !onDetected) && !templateBound && activeTab !== 'pi' && f.wireProtocol !== 'google-generative-ai' && (
-              <div className="flex flex-col gap-[7px]">
-                <FormField
-                  id={fieldId(`${activeTab}:requestPath`)}
-                  label={t('settings.providers.custom.fields.requestPath')}
-                  error={errorFor(`${activeTab}:requestPath`)}
-                  hint={t('settings.providers.custom.fields.requestPathHelp')}
-                  reserveFeedback
-                >
-                  {(control) => (
-                    <SettingsTextInput
-                      {...control}
-                      surface="ivory"
-                      value={f.requestPath}
-                      onChange={(v) => patch(activeTab, (x) => ({ ...x, requestPath: v }))}
-                      placeholder={
-                        f.wireProtocol === 'anthropic-messages'
-                          ? '/v1/messages'
-                          : customProviderCodexWireProtocolOption(f.wireProtocol).defaultRequestPath
-                      }
-                    />
-                  )}
-                </FormField>
-              </div>
-            )}
 
             {/* API 密钥（OAuth 形态隐藏——鉴权走 Runner 的 Bearer，不收集 key） */}
             {(simpleAdding || authMode === 'apiKey') && (
@@ -2719,29 +2723,6 @@ export function ProviderConnectionDialog({
               </div>}
             </div>
           )}
-            {/* OAuth 形态:模型清单授权成功后自动发现（与内置订阅统一）,模型 / 请求头
-                收进默认折叠的「高级配置」——普通用户不需要看到这些字段。 */}
-            {authMode === 'oauth' && (
-              <div className="flex flex-col gap-1.5">
-                <span className="text-12 leading-snug text-[var(--text-tertiary)]">
-                  {t('settings.providers.custom.authMode.modelsAutoNote')}
-                </span>
-                <button
-                  type="button"
-                  onClick={() => setShowAdvanced((v) => !v)}
-                  className="flex items-center gap-1 self-start py-0.5 text-13 font-medium text-[var(--settings-section-title)]"
-                >
-                  <ChevronDown
-                    size={14}
-                    className={cn('transition-transform', showAdvanced && 'rotate-180')}
-                  />
-                  {t('settings.providers.custom.advanced.label')}
-                </button>
-              </div>
-            )}
-
-            {(authMode !== 'oauth' || showAdvanced) && (
-              <>
                 <div className="flex flex-col gap-2 text-13 text-[var(--text-secondary)]">
                   <span>{t('settings.providers.connection.modelCount', { count: f.models.filter((model) => model.id.trim()).length })}</span>
                   {!simpleAdding && <span className="text-12">{t('settings.providers.connection.modelsAutomatic')}</span>}
@@ -2760,14 +2741,15 @@ export function ProviderConnectionDialog({
                         </Button>
                       </div>
                     ))}
-                    <Button type="button" variant="secondary" className="w-full justify-between [--button-face-bg:transparent]"
+                  </>}
+                    <button type="button"
+                      className="flex min-h-8 items-center gap-1 self-start text-13 font-medium text-[var(--settings-section-title)] rounded-full focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]"
                       aria-expanded={manualOpen} aria-controls={fieldId('manual-fields')}
                       onClick={() => setManualOpen(open => !open)}>
+                      <ChevronDown size={14} aria-hidden className={cn('transition-transform', manualOpen && 'rotate-180')} />
                       {t('settings.providers.connection.manualAdd')}
-                      <ChevronDown size={14} aria-hidden className={cn('shrink-0', manualOpen && 'rotate-180')} />
-                    </Button>
-                  </>}
-                  {(!simpleAdding || manualOpen) && <div id={fieldId('manual-fields')} className="flex flex-col gap-3">
+                    </button>
+                  {manualOpen && <div id={fieldId('manual-fields')} className="flex flex-col gap-3 pl-5">
                   <FormField id={fieldId(`${activeTab}:manualModel`)} label={t(simpleAdding ? 'settings.providers.connection.manualId' : 'settings.providers.connection.manualModel')} error={errorFor(`${activeTab}:manualModel`)}>
                         {(control) => (
                           <SettingsTextInput {...control} surface="ivory" value={manualModel}
@@ -2805,6 +2787,99 @@ export function ProviderConnectionDialog({
                   }}>{t('settings.providers.custom.fields.addModel')}</Button>
                   </div>}
                 </div>
+
+            <button
+              type="button"
+              onClick={() => setShowAdvanced(open => !open)}
+              aria-expanded={showAdvanced}
+              aria-controls={fieldId('advanced-fields')}
+              className="flex min-h-8 items-center gap-1 self-start text-13 font-medium text-[var(--settings-section-title)] rounded-full focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]"
+            >
+              <ChevronDown size={14} aria-hidden className={cn('transition-transform', showAdvanced && 'rotate-180')} />
+              {t('settings.providers.custom.advanced.label')}
+            </button>
+            {showAdvanced && (
+              <div id={fieldId('advanced-fields')} className="flex flex-col gap-4">
+            {(editing || !onDetected) && !templateBound && (
+              <div className="flex flex-col gap-[7px]">
+                <FieldLabel>{t('settings.providers.custom.fields.wireProtocol')}</FieldLabel>
+                <div className="flex flex-wrap gap-1.5">
+                  {CUSTOM_PROVIDER_CODEX_WIRE_PROTOCOLS.map((option) => (
+                    <button
+                      key={option.value}
+                      aria-pressed={f.wireProtocol === option.value}
+                      type="button"
+                      onClick={() => changeWireProtocol(activeTab, option.value)}
+                      className={cn(
+                        'rounded-full border px-3 py-1.5 text-12 font-medium transition-colors',
+                        f.wireProtocol === option.value
+                          ? 'border-[var(--settings-input-border-focus)] text-[var(--settings-section-title)]'
+                          : 'border-[var(--settings-input-border)] text-[var(--text-secondary)] hover:bg-[var(--surface-hover)]',
+                      )}
+                      style={
+                        f.wireProtocol === option.value
+                          ? { backgroundColor: 'var(--surface-elevated)' }
+                          : undefined
+                      }
+                    >
+                      {t(
+                        activeTab !== 'codex' && option.value !== 'google-generative-ai'
+                          ? `settings.providers.custom.wireProtocol.pi${
+                              option.value === 'anthropic-messages'
+                                ? 'Anthropic'
+                                : option.value === 'openai-responses'
+                                  ? 'Responses'
+                                  : 'Chat'
+                            }`
+                          : option.labelKey,
+                      )}
+                    </button>
+                  ))}
+                </div>
+                {activeTab !== 'claude-code' && (
+                <span className="text-12 leading-snug text-[var(--text-tertiary)]">
+                  {t(
+                    activeTab === 'pi' && f.wireProtocol !== 'google-generative-ai'
+                      ? `settings.providers.custom.wireProtocol.pi${
+                          f.wireProtocol === 'anthropic-messages'
+                            ? 'AnthropicHelp'
+                            : f.wireProtocol === 'openai-chat'
+                              ? 'ChatHelp'
+                              : 'ResponsesHelp'
+                        }`
+                      : customProviderCodexWireProtocolOption(f.wireProtocol).helpKey,
+                  )}
+                </span>
+                )}
+              </div>
+            )}
+
+            {/* 精确推理路径：给非标准兼容端点使用；留空仍按所选协议推导。 */}
+            {(editing || !onDetected) && !templateBound && activeTab !== 'pi' && f.wireProtocol !== 'google-generative-ai' && (
+              <div className="flex flex-col gap-[7px]">
+                <FormField
+                  id={fieldId(`${activeTab}:requestPath`)}
+                  label={t('settings.providers.custom.fields.requestPath')}
+                  error={errorFor(`${activeTab}:requestPath`)}
+                  hint={t('settings.providers.custom.fields.requestPathHelp')}
+                  reserveFeedback
+                >
+                  {(control) => (
+                    <SettingsTextInput
+                      {...control}
+                      surface="ivory"
+                      value={f.requestPath}
+                      onChange={(v) => patch(activeTab, (x) => ({ ...x, requestPath: v }))}
+                      placeholder={
+                        f.wireProtocol === 'anthropic-messages'
+                          ? '/v1/messages'
+                          : customProviderCodexWireProtocolOption(f.wireProtocol).defaultRequestPath
+                      }
+                    />
+                  )}
+                </FormField>
+              </div>
+            )}
 
                 {/* 请求头（可选） */}
                 <div className={cn('flex flex-col gap-3', simpleAdding && 'border-t border-[var(--border-default)] pt-4')}>
@@ -3129,7 +3204,7 @@ export function ProviderConnectionDialog({
                     )}
                   </div>
                 )}
-              </>
+              </div>
             )}
 
                 {/* 预设模板（仅新建态、有预设时显示）：下拉选择，选中即预填 baseUrl / 模型清单，

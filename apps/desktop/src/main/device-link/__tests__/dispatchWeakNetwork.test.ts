@@ -17,6 +17,7 @@ import {
   SHARED_TASK_CAPABILITY,
   DeviceLinkError,
   DEVICE_LINK_CAPABILITY_HISTORY_VIEW_V1,
+  DEVICE_LINK_CAPABILITY_BACKGROUND_LINK_V1,
   DL_SUBSCRIBE_CHANNEL,
   INVOKE_TIMEOUT_OVERRIDES_MS,
   PROTOCOL_VERSION,
@@ -52,6 +53,8 @@ vi.mock('../../logger', async (importOriginal) => ({
 vi.mock('../settings-store', () => ({
   readDeviceLinkSettings: () => deviceLinkSettings.value,
 }));
+// Observe dispatch's teardown calls without loading the unrelated desktop runtime.
+vi.mock('../../remote-desktop', () => ({ remoteDesktop: { stop: vi.fn(), signalingLost: vi.fn() } }));
 const sharedTask = vi.hoisted(() => ({ refresh: vi.fn(), capture: vi.fn() }));
 vi.mock('../sharedTaskDispatch.js', async (original) => ({
   ...await original<typeof import('../sharedTaskDispatch.js')>(),
@@ -75,6 +78,7 @@ import {
   wireInboundDispatch,
 } from '../dispatch';
 import * as subscriptions from '../subscriptions';
+import { tapWindowBroadcast, tapRemoteModelCatalogChange } from '../broadcast-tap';
 import { remoteDesktop } from '../../remote-desktop';
 
 function mkClient(
@@ -253,6 +257,49 @@ afterEach(() => {
 });
 
 describe('[1] link-accept 发送失败的有限重试', () => {
+  const backgroundOpen = {
+    controllerName: 'background catalog reader', protocolVersion: PROTOCOL_VERSION, appVersion: '1.0.0',
+    capabilities: [DEVICE_LINK_CAPABILITY_BACKGROUND_LINK_V1],
+  };
+  // #8028 r4429989407 / unit: C sends empty catalog invalidations to B's
+  // already-accepted background link, without sessions/control subscriptions.
+  it.each(['maker:provider:changed', 'maker:agents:changed'])('notifies background catalog readers of %s without controlling C', async channel => {
+    const client = mkClient();
+    __testing.setActiveClient(client as never);
+    __testing.handleLinkOpen(client as never, 'host-b', 'open-b', backgroundOpen);
+    __testing.handleLinkOpen(client as never, 'host-d', 'open-d', backgroundOpen);
+    expect(__testing.getActiveControllers()).toEqual([]);
+    expect(subscriptions.getControllersForTopic('sessions')).toEqual([]);
+    tapWindowBroadcast(channel, { privateSourceDetails: 'must not leave C' });
+    expect(client.sendPush.mock.calls).toEqual([
+      ['host-b', channel, {}], ['host-d', channel, {}],
+    ]);
+    client.sendPush.mockClear();
+    deviceLinkSettings.value.revokedControllers = ['host-b'];
+    tapWindowBroadcast(channel, {});
+    expect(client.sendPush.mock.calls).toEqual([['host-d', channel, {}]]);
+    client.sendPush.mockClear();
+    handleControllerOffline('host-d');
+    tapWindowBroadcast(channel, {});
+    expect(client.sendPush).not.toHaveBeenCalled();
+  });
+
+  it('forwards C invalidation through B once, without source payloads or a C control subscription', () => {
+    const client = mkClient();
+    __testing.setActiveClient(client as never);
+    __testing.handleLinkOpen(client as never, 'controller-a', 'open-a', undefined);
+    __testing.handleLinkOpen(client as never, 'source-c', 'open-c', backgroundOpen);
+    client.sendPush.mockClear();
+    tapRemoteModelCatalogChange('source-c', 'maker:provider:changed', false);
+    expect(client.sendPush.mock.calls).toEqual([['controller-a', 'maker:model-catalog:changed', {}]]);
+    expect(__testing.getActiveControllers().map(controller => controller.deviceId)).toEqual(['controller-a']);
+    client.sendPush.mockClear();
+    tapRemoteModelCatalogChange('source-c', 'maker:model-catalog:changed', false);
+    tapRemoteModelCatalogChange('source-c', 'maker:agents:changed', true);
+    tapRemoteModelCatalogChange(sharedTaskGuestPeer('task', 'guest', 'pc'), 'maker:agents:changed', false);
+    expect(client.sendPush).not.toHaveBeenCalled();
+  });
+
   it('notifies only the successfully accepted ordinary peer after a failed inbound open', () => {
     const accepted = vi.fn();
     setOrdinaryPeerLinkAcceptedListener(accepted);
@@ -830,6 +877,21 @@ describe('[6] active controller 生命周期与故障半径', () => {
     expect(__testing.controllerSupports('ctrl-a', 'cap-a')).toBe(true);
     expect(__testing.controllerSupports('ctrl-b', 'cap-b')).toBe(true);
     expect(changes.at(-1)).toEqual({ active: [], updateRelaunch: [] });
+  });
+
+  // 故障半径:走自建中转时访客在官方连接上,自建中转断开不能让访客静默收不到推送(反之亦然)。
+  it('跨账号控制端在独立连接上时,一条连接断开只清这条连接上的控制端', () => {
+    const guest = sharedTaskGuestPeer('task-a', 'member-a', 'guest-device');
+    const activeIds = () => __testing.getActiveControllers().map((controller) => controller.deviceId);
+    subscriptions.subscribe('ctrl-a', ['session:a'], 'A', []);
+    subscriptions.subscribe(guest, ['session:b'], 'Guest', []);
+
+    deactivateAllControllers('relay-disconnected', 'same-account');
+    expect(activeIds()).toEqual([guest]);
+
+    subscriptions.subscribe('ctrl-a', ['session:a'], 'A', []);
+    deactivateAllControllers('cross-account-relay-disconnected', 'cross-account');
+    expect(activeIds()).toEqual(['ctrl-a']);
   });
 
   it('旧 connection epoch 的 offline 事件不能清掉新 link-open 的 active controller', () => {

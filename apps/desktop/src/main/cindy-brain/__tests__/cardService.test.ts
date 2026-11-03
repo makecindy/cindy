@@ -424,10 +424,12 @@ describe('withCardToken(令牌注入纯函数)', () => {
     const { svc } = makeService();
     svc.registerCall('c1', {
       ghostId: 'g1',
+      tool: 'open_view',
       toolUseId: null,
       sessionId: 's1',
       remoteHostId: 'ssh-host-1',
     });
+    // tool 供 networkSlot 判断是否自动带 MCP Apps 手册头。
     expect(svc.inFlightCallInfoOf('c1')).toEqual({
       ghostId: 'g1',
       sessionId: 's1',
@@ -435,6 +437,7 @@ describe('withCardToken(令牌注入纯函数)', () => {
       scriptWorkdir: null,
       scriptWritePath: null,
       channel: 'session',
+      tool: 'open_view',
     });
     // 交卷后:宽限窗内 callInfoOf 仍可查(卡片供片语义),但在途凭证必须失效。
     svc.finalizeCall('c1');

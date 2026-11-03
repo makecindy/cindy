@@ -18,6 +18,7 @@ import {
   requestRemoteSessionStatus,
   setRemoteReseedImpl,
   setRemoteSessionBootstrapRetryImpl,
+  subscribeRemoteSessionRemoval,
 } from '@/features/device-link/remoteProjectsStore';
 import type { Session } from '@/lib/ccAgent.types';
 
@@ -461,6 +462,22 @@ describe('remoteProjectsStore', () => {
       expect(getSessionDeviceId('s2')).toBe('dev-B');
     });
 
+    it('通知只在意 sessionId 的旁路状态，包含不在任何分片里的会话', () => {
+      const removed: string[] = [];
+      const off = subscribeRemoteSessionRemoval((id) => removed.push(id));
+      remoteProjectsStore.setDeviceSessions('dev-B', 'B', [mk('s1')]);
+
+      remoteProjectsStore.applyPatch('dev-B', 's1', { status: 'deleted' });
+      // 不在任何分片里的会话(分片有界/设备早已移除)也得报:窗口里可能还挂着它的路由。
+      remoteProjectsStore.applyPatch('dev-gone', 's9', { status: 'deleted' });
+      // 非删除的 patch 不是消失。
+      remoteProjectsStore.applyPatch('dev-B', 's2', { status: 'archived' });
+
+      off();
+      remoteProjectsStore.applyPatch('dev-B', 's3', { status: 'deleted' });
+      expect(removed).toEqual(['s1', 's9']);
+    });
+
     it('unpin 后触发 reseed,让仅因 includePinned 补入的旧会话被后续 snapshot 剔除', () => {
       const reseed = vi.fn();
       setRemoteReseedImpl(reseed);
@@ -581,6 +598,22 @@ describe('remoteProjectsStore', () => {
     remoteProjectsStore.markAllDisconnected();
 
     expect(remoteProjectsStore.getArchivedLoadedDeviceIds().size).toBe(0);
+  });
+
+  // PR #8182 / unit: scope invalidation must also fence reads/loading before
+  // their first shard exists, while an independent connection retains authority.
+  it.each(['disconnect', 'clear'] as const)('scopes %s to matching in-flight devices without shards', (operation) => {
+    const primaryEpoch = remoteProjectsStore.nextSnapshotEpoch('primary-pending');
+    const otherEpoch = remoteProjectsStore.nextSnapshotEpoch('other-pending');
+    remoteProjectsStore.markSessionStatusLoading('primary-pending', 'active');
+    remoteProjectsStore.markSessionStatusLoading('other-pending', 'active');
+    const matches = (id: string) => id === 'primary-pending';
+    if (operation === 'disconnect') remoteProjectsStore.markAllDisconnected(matches);
+    else remoteProjectsStore.clear(matches);
+    expect(remoteProjectsStore.isLatestSnapshotEpoch('primary-pending', primaryEpoch)).toBe(false);
+    expect(remoteProjectsStore.isLatestSnapshotEpoch('other-pending', otherEpoch)).toBe(true);
+    expect(remoteProjectsStore.isSessionStatusLoading('primary-pending', 'active')).toBe(false);
+    expect(remoteProjectsStore.isSessionStatusLoading('other-pending', 'active')).toBe(true);
   });
 
   it('setDeviceSessions reconnects a disconnected cached shard', () => {

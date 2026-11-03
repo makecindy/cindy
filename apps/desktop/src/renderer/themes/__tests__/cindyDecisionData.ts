@@ -309,9 +309,9 @@ export const CINDY_EXPECTED_VALUES: Record<string, { light: string; dark: string
   'settings-theme-auto-dark': { light: '#181818', dark: '#181818' },
   'sidebar-action-icon': { light: '0.0 0.0% 0.0% / 0.44', dark: '0.0 0.0% 100.0% / 0.40' }, // 用户裁决 2026-10-22 墨水透明度(决策表 §9);沿革: 2026-08 §9 更新、E1D 侧栏层级 #9A9DA3/#6F6F6F
   'cmd-palette-item-meta': { light: 'rgba(0, 0, 0, 0.56)', dark: 'rgba(255, 255, 255, 0.55)' }, // 用户裁决 2026-10-22 墨水透明度(决策表 §9);沿革: 2026-08 §9 更新、E1D 侧栏二级暗灰
-  'sidebar-item-active-foreground': { light: '#FCFCFC', dark: '#151515' }, // 2026-08 §9 更新;沿革: 用户二次改稿 2026-07-20:反相胶囊浅字/深字(同 accent-pure-cta-fg)
+  'sidebar-item-active-foreground': { light: '#292A2C', dark: '#EEEEEE' }, // 调参 2026-10-29（#7838）：柔化选中态，文字与 CTA 独立。
   'sidebar-item-active-border': { light: 'transparent', dark: 'transparent' }, // 用户三次改稿 2026-07-20:去描边
-  'sidebar-item-active': { light: '214.3 5.5% 24.9%', dark: '0.0 0.0% 93.3%' }, // 用户二次改稿 2026-07-20:反相胶囊 #3C3F43/#EEEEEE(同 accent-cta-bg)
+  'sidebar-item-active': { light: '214.3 6.0% 99.0%', dark: '214.3 5.5% 24.9%' }, // 调参 2026-10-29（#7838）：近白浅色选中底保留运行橙 ≥3:1，CTA 不变。
   'splash-bg': { light: '60.0 16.1% 93.9%', dark: '0 0% 9.4%' },
   'splash-text': { light: '0.0 0.0% 0.0% / 0.56', dark: '0.0 0.0% 100.0% / 0.55' }, // 用户裁决 2026-10-22 墨水透明度(决策表 §9)
   'splash-text-destructive': { light: '0.0 0.0% 10.2%', dark: '0.0 0.0% 100.0%' },

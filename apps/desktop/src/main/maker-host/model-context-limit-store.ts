@@ -147,7 +147,6 @@ export function readModelCompactionPct(providerId: string, modelId: string): num
   return readPrefs().compactionPcts?.[JSON.stringify([providerId, modelId])] ?? null;
 }
 
-/** Participate in the existing provider deletion transaction, including rollback. */
 /**
  * A separate owner-pinned store wrote the shared prefs file. The module store's
  * mtime guard can miss that write when both land within the filesystem's mtime
@@ -157,6 +156,7 @@ function dropCachedStore(): void {
   store = createStore(() => ownerScopedUserDataPath('model-context-limit-prefs.json'));
 }
 
+/** Participate in the existing provider deletion transaction, including rollback. */
 export function stageProviderModelCompactionClear(providerId: string): () => boolean {
   const filePath = ownerScopedUserDataPath('model-context-limit-prefs.json');
   const ownerStore = createStore(() => filePath);
@@ -171,11 +171,12 @@ export function stageProviderModelCompactionClear(providerId: string): () => boo
   dropCachedStore();
   return () => {
     try {
-      ownerStore.invalidateIfChanged();
-      const current = { ...ownerStore.read().compactionPcts };
+      // Reload the pinned owner's file even when intervening writes share its mtime.
+      const rollbackStore = createStore(() => filePath);
+      const current = { ...rollbackStore.read().compactionPcts };
       // Restore only removed entries; do not overwrite a newer external edit.
       for (const [key, value] of Object.entries(removed)) current[key] ??= value;
-      ownerStore.writePatch({ compactionPcts: current });
+      rollbackStore.writePatch({ compactionPcts: current });
       dropCachedStore();
       return true;
     } catch (error) {
