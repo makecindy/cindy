@@ -156,6 +156,9 @@ function parseHmac(value: Json): WebhookHmacSignature | null {
     if (typeof source.header === 'string' && HEADER.test(source.header)) parsedSource = { header: source.header };
   }
   if (!parsedSource) return null;
+  // 时间戳必须进签名，否则把旧请求的时间戳改成当前时间就能绕过过期检查。
+  const signed = 'param' in parsedSource ? `param:${parsedSource.param}` : `header:${parsedSource.header}`;
+  if (!tokens.includes(signed)) return null;
   return { ...signature, timestamp: { source: parsedSource, unit, toleranceSec: toleranceSec as number } };
 }
 

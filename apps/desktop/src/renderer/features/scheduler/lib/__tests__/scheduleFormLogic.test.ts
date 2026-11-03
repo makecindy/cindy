@@ -348,6 +348,21 @@ describe('buildScheduleInput webhook trigger', () => {
     [{ webhookPreset: 'from-a-newer-version' }, undefined],
     [{ webhookPreset: 'custom', webhookFormat: '{"version":1,"signature":null,"fields":{}}' }, { preset: 'custom', format: { version: 1, signature: null, fields: {} } }],
     [{ webhookPreset: 'custom', webhookFormat: '{"version":1}' }, undefined],
+    // The timestamp must be signed, otherwise an old request with a fresh timestamp passes.
+    [
+      {
+        webhookPreset: 'custom',
+        webhookFormat: JSON.stringify({
+          version: 1,
+          signature: {
+            type: 'hmac', algorithm: 'sha256', header: 'x-sig', encoding: 'hex', payload: '{body}', secret: 'text',
+            timestamp: { source: { header: 'x-ts' }, unit: 's', toleranceSec: 300 },
+          },
+          fields: {},
+        }),
+      },
+      undefined,
+    ],
   ])('sender %j', (fields, source) => {
     const trigger = buildScheduleInput(makeForm({ webhookEnabled: true, ...fields })).webhookTrigger;
     expect(trigger).toEqual({ events: [], ...(source ? { source } : {}) });
