@@ -115,6 +115,9 @@ Claude Code 的 `upstream-idle-watchdog.test.ts` 与 desktop 的 `tool-loop-revi
   `sessionInstanceId`、`turnAttemptToken`、`turnScope`，只发给监听方，不进 turn 控制、
   工具循环计数与看门狗；终态事件会被丢弃，暂停不能结束 turn。发起暂停的宿主负责
   落库和推界面，wire pipeline 跳过 `hostProjection`。
+- 发送栅栏：接受暂停起到循环读到下一条 provider 事件（通常是 `done`）为止，`isTurnRunning()`
+  恒为 true。provider 可能已把 handle 置 idle、`done` 还排在后面，没有栅栏时这段窗口内的
+  `send()` 会提前开出 N+1 轮并抢走 N 的 origin / generation。abort／close／detach 一并清除。
 - 最长 `EVENT_STREAM_HOLD_MS`（20 秒，`SessionOptions.eventStreamHoldMs` 可注入）；超时只放行，
   不重试。`abort()`／`close()`／`detach()` 立即放行并丢弃未发出的 followUps——手动 Stop 的
   复核宽限（15 秒）短于暂停上限，不能让 `done` 卡在暂停后面。

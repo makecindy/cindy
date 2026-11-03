@@ -59,6 +59,13 @@ describe('extractRenderedMarkdownImageTargets', () => {
     ).toEqual([local]);
   });
 
+  it('applies the same source-span rules as IM delivery to bare-space images', () => {
+    const local = '/tmp/my shot.png';
+    expect(extractRenderedMarkdownImageTargets(`Design &amp; preview: ![pic](${local})`)).toEqual([local]);
+    expect(extractRenderedMarkdownImageTargets(`\\![example](${local})`)).toEqual([]);
+    expect(extractRenderedMarkdownImageTargets(`*note* then ![pic](${local}) &lt;done&gt;`)).toEqual([local]);
+  });
+
   it('reuses completed-message results and invalidates them when content changes', () => {
     const cache: MarkdownImageTargetCache = new Map();
     const first = extractCachedRenderedMarkdownImageTargets(

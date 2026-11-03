@@ -51,11 +51,13 @@ export function taskImageReferences(text: string): TaskImageReference[] {
     if (parent?.type === 'link' || parent?.type === 'linkReference') return;
     const start = node.position?.start.offset;
     const end = node.position?.end.offset;
-    // Escapes or entities shift offsets; leave such text untouched.
-    if (start === undefined || end === undefined || text.slice(start, end) !== node.value) return;
-    for (const image of findBareSpaceLocalImages(node.value)) {
+    if (start === undefined || end === undefined) return;
+    // Scan the source span, not the decoded value: entities (`&amp;`) elsewhere in
+    // the node must not hide an image, and an escaped `\![` must stay literal.
+    const source = text.slice(start, end);
+    for (const image of findBareSpaceLocalImages(source)) {
       images.push({
-        raw: node.value.slice(image.start, image.end),
+        raw: source.slice(image.start, image.end),
         url: image.url,
         alt: image.alt,
         title: image.title,

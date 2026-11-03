@@ -778,6 +778,17 @@ describe('Markdown image contract', () => {
     );
   });
 
+  it('keys bare-space recovery to the source: entities elsewhere do not hide it, escapes keep it literal', () => {
+    const local = '/tmp/my shot.png';
+    const withEntity = `Design &amp; preview: ![pic](${local})`;
+    const [entityRef] = taskImageReferences(withEntity);
+    expect(entityRef.url).toBe(local);
+    expect(withEntity.slice(entityRef.start, entityRef.end)).toBe(`![pic](${local})`);
+    expect(taskImageReferences(`\\![example](${local})`)).toEqual([]);
+    // An escaped backslash does not escape the image.
+    expect(taskImageReferences(`\\\\![pic](${local})`).map(ref => ref.url)).toEqual([local]);
+  });
+
   it.each([
     ['relative path', '![a](docs/my shot.png)'],
     ['non-image file', '![a](/tmp/my report.pdf)'],

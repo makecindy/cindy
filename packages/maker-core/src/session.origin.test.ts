@@ -2071,6 +2071,36 @@ describe('Session host event-stream hold', () => {
     await session.close();
   });
 
+  it('keeps send admission fenced until the held turn done is consumed', async () => {
+    const h = createControllableHandle();
+    const session = makeHoldSession(h.handle);
+    const pending = deferred<readonly AgentEvent[]>();
+    const seen: AgentEvent[] = [];
+    session.onEvent((event) => {
+      seen.push(event);
+      if (event.type === 'image') session.holdEventStream(pending.promise);
+    });
+
+    await session.send('draw it');
+    // The provider already finished: its handle is idle with done queued behind the image.
+    h.queue(imageEvent);
+    h.queue({ type: 'done', data: {} });
+    h.setTurnRunning(false);
+    await flush();
+    expect(seen.map((event) => event.type)).toEqual(['image']);
+
+    expect(session.isTurnRunning()).toBe(true);
+    await expect(session.send('too early')).rejects.toMatchObject({ code: 'SESSION_RUNNING' });
+
+    pending.resolve(followUps);
+    await flush();
+    await flush();
+    expect(seen.map((event) => event.type)).toEqual(['image', 'tool_use', 'tool_result_full', 'tool_result', 'done']);
+    expect(session.isTurnRunning()).toBe(false);
+    await expect(session.send('next turn')).resolves.toEqual({ accepted: true });
+    await session.close();
+  });
+
   it('refuses holds outside a current non-terminal provider event', async () => {
     const h = createControllableHandle();
     const session = makeHoldSession(h.handle);

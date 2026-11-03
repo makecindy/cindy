@@ -580,6 +580,13 @@ export class Session {
   } | null = null;
   /** Ends an in-progress hold early (stop / teardown) without fanning out its follow-ups. */
   private releaseEventStreamHoldWait: (() => void) | null = null;
+  /**
+   * Fences send admission from the moment a hold is accepted until the loop has
+   * read the event that follows it. The provider may already have marked its
+   * handle idle with `done` queued; without the fence a send could start turn
+   * N+1 before N's terminal is consumed and steal its origin / generation.
+   */
+  private eventStreamHoldFence = false;
   private readonly eventStreamHoldMs: number;
   /** The blocked next() that was pending when the current send entered handle.send. */
   private inFlightSendOwnsBlockedWait = false;
@@ -2261,6 +2268,7 @@ export class Session {
   isTurnRunning(): boolean {
     return (
       this.sendReservation !== null ||
+      this.eventStreamHoldFence ||
       this.hostTurnLeases.size > 0 ||
       this.permissionModeChangesInFlight > 0 ||
       this.isHandleTurnRunning()
@@ -2344,6 +2352,7 @@ export class Session {
     const source = this.holdableFanOutEvent;
     if (!source || this.pendingEventStreamHold || this.terminationStarted) return false;
     this.pendingEventStreamHold = { source, followUps };
+    this.eventStreamHoldFence = true;
     return true;
   }
 
@@ -3484,6 +3493,7 @@ export class Session {
 
   /** Stop / teardown never waits on a host hold, whether or not draining has begun. */
   private releaseEventStreamHold(): void {
+    this.eventStreamHoldFence = false;
     if (this.releaseEventStreamHoldWait) this.releaseEventStreamHoldWait();
     else this.pendingEventStreamHold = null;
   }
@@ -3565,6 +3575,9 @@ export class Session {
           result = await iterator.next();
         } finally {
           this.eventLoopAwaiting = false;
+          // The event after a hold (normally the provider's done) is read: from
+          // here it is fanned out under the ordinary admission rules.
+          this.eventStreamHoldFence = false;
         }
         if (result.done) break;
         const event = result.value;
