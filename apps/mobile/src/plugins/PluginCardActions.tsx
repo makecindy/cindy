@@ -856,7 +856,7 @@ function PrStatusRow({ slot }: { slot: PrStatusSlot }) {
             <View key={key} style={styles.statusItem}>
               <Icon size={iconSize.xs} strokeWidth={iconStroke.regular}
                 color={failed ? colors.statusError : key === "checksPassed" ? colors.statusDone : colors.textSecondary} />
-              <Text style={[styles.note, failed && styles.statusBadText]}>
+              <Text style={styles.note}>
                 <Text style={styles.statusCount}>{count}</Text> {t(`plugins.prStatus.${key}`)}
               </Text>
             </View>
@@ -968,7 +968,7 @@ const makeStyles = (c: ThemeColors) =>
     statusItem: { flexDirection: "row", alignItems: "center", gap: spacing.xs },
     statusDot: { width: 7, height: 7, borderRadius: radius.pill },
     statusGoodText: { color: c.statusDone },
-    statusBadText: { color: c.statusError },
+    statusBadText: { color: c.errorText },
     statusAccentText: { color: c.statusAccent },
     statusCount: { fontWeight: fontWeight.medium, fontVariant: ["tabular-nums"] },
     dotGood: { backgroundColor: c.statusDone },
