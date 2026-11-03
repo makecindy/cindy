@@ -471,13 +471,12 @@ describe('Codex device-hosted guest sessions', () => {
     // Codex 功能按白名单：名单外的(本机开着的、关着的、Codex 新增的)都写 false；名单内的、已移除的、
     // 关着的旧开关不动。功能清单逐页取完。
     expect(config).toMatchObject({
-      'features.image_generation': false,
       'features.in_app_local_automation': false,
       'features.network_proxy': false,
       'features.future_local_tool': false,
     });
-    // shell 快照由执行环境在受邀者电脑上生成，保持开启。
-    for (const key of ['features.shell_tool', 'features.view_image', 'features.shell_snapshot', 'features.item_ids', 'features.web_search_request']) {
+    // #8544: 生图参考图与 shell 快照均由受邀者的执行环境读取，不能因跨账号分享关闭。
+    for (const key of ['features.image_generation', 'features.shell_tool', 'features.view_image', 'features.shell_snapshot', 'features.item_ids', 'features.web_search_request']) {
       expect(config[key]).toBeUndefined();
     }
     expect(fixture.request.mock.calls.filter(([method]) => method === Method.ExperimentalFeatureList)

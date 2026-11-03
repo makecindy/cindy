@@ -71,10 +71,12 @@ export const CODEX_DEVICE_HOSTED_GUEST_THREAD_CONFIG: Readonly<Record<string, un
  *
  * 留下的：命令、补丁与看图(经执行环境在受邀者电脑上执行)，shell 快照(由执行环境在受邀者电脑上
  * 按受邀者自己的 shell 配置生成，关掉会让命令缺少 .zshrc 等设置的 PATH)，子代理，技能搜索，等待，
- * 审批与提问，目标与 Fast，以及连接、鉴权、上下文压缩本身需要的。生图不在内：它能按本机路径读参考图。
+ * 审批与提问，目标与 Fast，以及连接、鉴权、上下文压缩本身需要的。生图也保留：当前 Codex 通过所选执行环境
+ * 读取参考图，托管线程只选择受邀者的 exec-server；不回退读取分享者本机路径(真实运行时回归见 native test)。
  */
 export const CODEX_DEVICE_HOSTED_GUEST_KEPT_FEATURES: ReadonlySet<string> = new Set([
   'shell_tool', 'unified_exec', 'unified_exec_tty', 'write_stdin_approval', 'view_image', 'shell_snapshot',
+  'image_generation',
   'multi_agent', 'multi_agent_v2', 'skill_search', 'sleep_tool', 'mentions_v2',
   'guardian_approval', 'guardian_reuse_parent_compaction', 'auth_elicitation', 'tool_call_mcp_elicitation',
   'goals', 'fast_mode',

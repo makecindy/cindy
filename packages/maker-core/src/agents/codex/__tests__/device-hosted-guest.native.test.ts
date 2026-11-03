@@ -14,8 +14,10 @@ import net from 'node:net';
 import { realpathSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
+import { pathToFileURL } from 'node:url';
 
 import { describe, expect, it } from 'vitest';
+import WebSocket, { WebSocketServer } from 'ws';
 
 import type { Logger } from '../../../interfaces/logger.js';
 import type { DeviceHostedSession } from '../../base-agent.js';
@@ -49,8 +51,9 @@ async function listFiles(dir: string): Promise<string[]> {
 
 describe.skipIf(!binaryPath)('Codex device-hosted guest with a real app-server', () => {
   // 本机应用复用真实 app-server 夹具；历史 hhh namespace 验证 v1 兼容，不读取用户凭据。
-  it.each([true, false, 'local-host-only', 'local-native', 'hosted-client-only'] as const)('keeps this computer\'s Codex home out of the session (guest: %s)', async (variant) => {
-    const guest = variant === true;
+  it.each([true, false, 'local-host-only', 'local-native', 'hosted-client-only', 'guest-image'] as const)('keeps this computer\'s Codex home out of the session (guest: %s)', async (variant) => {
+    const imageCase = variant === 'guest-image';
+    const guest = variant === true || imageCase;
     const localHostOnly = variant === 'local-host-only' || variant === 'hosted-client-only';
     const localClient = localHostOnly || variant === 'local-native';
     const root = realpathSync.native(await mkdtemp(path.join(tmpdir(), 'cindy-codex-guest-native-')));
@@ -76,12 +79,33 @@ describe.skipIf(!binaryPath)('Codex device-hosted guest with a real app-server',
     await mkdir(projectSkill, { recursive: true });
     await writeFile(path.join(projectSkill, 'SKILL.md'), '---\nname: project-native\ndescription: PROJECT_NATIVE_SKILL_CANARY\n---\nA project skill for the explicitly selected workspace.');
 
+    // #8544 / provider-sharing §9.5: use the real start/send/fork entries and
+    // native image tool. A separate exec-server connection must read the input;
+    // a path that exists only on the provider host must never fall back locally.
+    const png = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4nGP4z8DwHwAFAAH/iZk9HQAAAABJRU5ErkJggg==';
+    const taskImage = path.join(taskDir, 'reference.png');
+    const hostImage = path.join(hostHome, 'private.png');
+    if (imageCase) {
+      await writeFile(taskImage, Buffer.from(png, 'base64'));
+      await writeFile(hostImage, Buffer.from(png, 'base64'));
+    }
+    const imageRequests: Array<{ path: string; body: string }> = [];
+    const imageEvents: unknown[] = [];
+    const remoteImageReads: string[] = [];
+
     const bodies: string[] = [];
     let hostToolCalls = 0;
     const server: Server = createServer((req, res) => {
       let body = '';
       req.on('data', (chunk) => { body += chunk; });
       req.on('end', () => {
+        if (imageCase && req.url?.includes('/images/')) {
+          imageRequests.push({ path: req.url, body });
+          res.writeHead(200, { 'content-type': 'application/json' }).end(JSON.stringify({
+            created: 1, background: 'opaque', data: [{ b64_json: png }],
+          }));
+          return;
+        }
         if (req.url?.includes('/mcp')) {
           if (req.method !== 'POST') { res.writeHead(405).end(); return; }
           const rpc=JSON.parse(body);
@@ -92,7 +116,14 @@ describe.skipIf(!binaryPath)('Codex device-hosted guest with a real app-server',
         }
         if (!req.url?.includes('/responses')) { res.writeHead(404).end('{}'); return; }
         bodies.push(body);
-        const item = localHostOnly && bodies.length === 1
+        const imageArgs = imageCase ? [
+          { prompt: 'Draw a blue circle.' },
+          { prompt: 'Make the circle red.', referenced_image_paths: [taskImage] },
+          { prompt: 'Edit the unavailable reference.', referenced_image_paths: [hostImage] },
+        ][bodies.length - 1] : undefined;
+        const item = imageArgs
+          ? { type: 'function_call', id: `image-${bodies.length}`, call_id: `image-${bodies.length}`, namespace: 'image_gen', name: 'imagegen', arguments: JSON.stringify(imageArgs), status: 'completed' }
+          : localHostOnly && bodies.length === 1
           ? { type: 'function_call', id: 'fc-1', call_id: 'call-1', namespace: 'mcp__hhh', name: 'echo', arguments: '{}', status: 'completed' }
           : { type: 'message', id: 'msg-1', role: 'assistant', status: 'completed', content: [{ type: 'output_text', text: 'DONE', annotations: [] }] };
         const events = [
@@ -114,6 +145,42 @@ describe.skipIf(!binaryPath)('Codex device-hosted guest with a real app-server',
     });
     await mkdir(path.join(root, 'task-codex-home'), { recursive: true });
     await new Promise((resolve) => setTimeout(resolve, 1_000));
+
+    let tunnelPort = port;
+    let imageRelay: WebSocketServer | undefined;
+    const relaySockets = new Set<WebSocket>();
+    if (imageCase) {
+      imageRelay = new WebSocketServer({ host: '127.0.0.1', port: 0 });
+      await new Promise<void>(resolve => imageRelay!.once('listening', resolve));
+      tunnelPort = (imageRelay.address() as net.AddressInfo).port;
+      imageRelay.on('connection', socket => {
+        const executor = new WebSocket(`ws://127.0.0.1:${port}`);
+        relaySockets.add(socket);
+        relaySockets.add(executor);
+        const pending: string[] = [];
+        executor.on('open', () => { for (const frame of pending.splice(0)) executor.send(frame); });
+        socket.on('message', data => {
+          const frame = JSON.parse(data.toString());
+          if (frame.method === 'fs/readFile' && [taskImage, hostImage].some(file => frame.params?.path === pathToFileURL(file).href)) {
+            remoteImageReads.push(frame.params.path);
+            // The fixture processes share one OS; the task computer does not
+            // have the provider's private file. Return the real executor's
+            // missing-file error instead of fabricating an RPC failure shape.
+            if (frame.params.path === pathToFileURL(hostImage).href) {
+              frame.params.path = pathToFileURL(path.join(taskDir, 'missing.png')).href;
+            }
+          }
+          const serialized = JSON.stringify(frame);
+          if (executor.readyState === WebSocket.OPEN) executor.send(serialized);
+          else pending.push(serialized);
+        });
+        executor.on('message', data => { if (socket.readyState === WebSocket.OPEN) socket.send(data.toString()); });
+        socket.on('close', () => executor.close());
+        executor.on('close', () => socket.close());
+        executor.on('error', () => socket.close());
+        socket.on('error', () => executor.close());
+      });
+    }
 
     const spawnContexts: Array<{ accountHostKey?: string; runtimeCodexHome?: string; deviceHostedGuestProviderId?: string }> = [];
     const registeredRoutes: Array<{ threadId: string; text: string; smartSubagentRoutes?: unknown; subagentRoute?: unknown }> = [];
@@ -137,6 +204,7 @@ describe.skipIf(!binaryPath)('Codex device-hosted guest with a real app-server',
         extraArgs: [
           '-c', 'model_provider="fixture"',
           '-c', `model_providers.fixture={ name = "Fixture", base_url = "${endpoint}", wire_api = "responses", requires_openai_auth = false, request_max_retries = 0, supports_websockets = false }`,
+          ...(imageCase ? ['-c', 'model_providers.fixture.http_headers={ "x-openai-actor-authorization" = "fixture-image-extension" }'] : []),
           '-c', 'check_for_update_on_startup=false',
           '-c', 'analytics.enabled=false',
           // Provider defaults must stay excluded after native rewind/fork too.
@@ -172,7 +240,7 @@ describe.skipIf(!binaryPath)('Codex device-hosted guest with a real app-server',
       platform: process.platform,
       shell: process.platform === 'win32' ? 'powershell' : 'zsh',
       isGitRepo: false,
-      tunnelUrl: `http://127.0.0.1:${port}`,
+      tunnelUrl: `http://127.0.0.1:${tunnelPort}`,
       tunnelToken: 'unused',
       mcpServers: [],
       mirrorRoot: path.join(sessionRoot, 'fs'),
@@ -200,11 +268,23 @@ describe.skipIf(!binaryPath)('Codex device-hosted guest with a real app-server',
       const done = (async () => {
         for await (const event of handle.events()) {
           if (event.type === 'error') throw new Error(JSON.stringify(event));
+          if (event.type === 'image') imageEvents.push(event.data);
           if (event.type === 'done') return;
         }
       })();
       await handle.send({ type: 'user', content: 'hello' }, { throwOnStartFailure: true });
       await done;
+      if (imageCase) {
+        expect(JSON.stringify(JSON.parse(bodies[0]).tools)).toContain('image_gen');
+        expect(imageRequests.map(request => request.path)).toEqual(['/v1/images/generations', '/v1/images/edits']);
+        expect(imageRequests[1].body).toContain('data:image/png;base64,');
+        expect(remoteImageReads).toEqual([pathToFileURL(taskImage).href, pathToFileURL(hostImage).href]);
+        expect(imageEvents).toHaveLength(2);
+        expect(imageEvents).toEqual(expect.arrayContaining([
+          expect.objectContaining({ kind: 'generation', status: 'completed', data: png }),
+        ]));
+        expect(bodies.at(-1)).toContain('unable to read referenced image');
+      }
       // 按这个线程向 Codex 查功能状态：受邀者线程里白名单之外的功能都是关着的；同账号线程里有开着的。
       const hosts = (agent as unknown as { hosts: Map<string, { request: (method: string, params: unknown) => Promise<unknown> }> }).hosts;
       const threadHost = [...hosts].find(([key]) => key.startsWith('local-guest:') === guest)?.[1];
@@ -304,6 +384,7 @@ describe.skipIf(!binaryPath)('Codex device-hosted guest with a real app-server',
         ));
         expect(afterRewindFeatures.filter(feature => feature.enabled && feature.stage !== 'removed'
           && !CODEX_DEVICE_HOSTED_GUEST_KEPT_FEATURES.has(feature.name)).map(feature => feature.name)).toEqual([]);
+        if (imageCase) expect(afterRewindFeatures.find(feature => feature.name === 'image_generation')?.enabled).toBe(true);
         expect(bodies.join('')).not.toContain('private_canary');
       }
       await handle.close();
@@ -353,6 +434,8 @@ describe.skipIf(!binaryPath)('Codex device-hosted guest with a real app-server',
       }
     } finally {
       await agent.dispose();
+      for (const socket of relaySockets) socket.terminate();
+      if (imageRelay) await new Promise<void>(resolve => imageRelay!.close(() => resolve()));
       execServer.kill();
       await new Promise<void>((resolve) => server.close(() => resolve()));
       await rm(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 });
