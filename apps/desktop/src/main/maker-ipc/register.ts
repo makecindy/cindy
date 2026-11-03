@@ -21043,7 +21043,11 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     return {
       sessionId: entry.sessionId,
       kind: request.kind,
-      ...(request.kind === 'permission' ? { toolName: request.toolName, suggestions: request.suggestions } : {}),
+      ...(request.kind === 'permission' ? {
+        toolName: request.toolName,
+        suggestions: request.suggestions,
+        ...(typeof request.metadata?.hostOwnedConfirmation === 'string' ? { hostOwnedConfirmation: true } : {}),
+      } : {}),
     };
   });
   // An Orca Lead turn that only dispatched work is not the team's completion:
