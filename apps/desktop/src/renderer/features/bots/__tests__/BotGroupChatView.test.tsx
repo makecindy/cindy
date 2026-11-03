@@ -371,15 +371,22 @@ afterEach(() => { cleanup(); vi.unstubAllGlobals(); });
 describe('BotGroupChatView', () => {
   it('offers jump to bottom while scrolling down through read history', async () => {
     mocks.getControlledState.mockResolvedValue({ controlledBy: [{ deviceId: 'studio', name: 'Mac Studio' }] });
+    mocks.getBotGroup.mockResolvedValue({ ok: true, group: detail({ threads: ['t1', 't2'].map(rootId => ({
+      rootId, rootText: rootId, rootAuthorName: 'Bot', rootAuthorBotId: null, replyCount: 1,
+      unread: { count: 1, mentioned: true }, lastReply: null,
+    })) }) });
     const view = renderView();
     const scroll = await screen.findByTestId('bot-group-timeline');
     Object.defineProperties(scroll, {
       scrollHeight: { configurable: true, value: 2000 },
       clientHeight: { configurable: true, value: 500 },
     });
+    fireEvent.click(screen.getByTestId('group-attention-hint'));
+    expect(screen.getByRole('dialog')).toBeTruthy();
     vi.useFakeTimers();
     try {
       scroll.scrollTop = 100; fireEvent.scroll(scroll);
+      expect(screen.queryByRole('dialog')).toBeNull();
       const jump = screen.getByRole('button', { name: 'chat.jumpToBottom' });
       expect(jump.parentElement?.className).toContain('opacity-100');
       const chip = view.container.querySelector('[data-controlled-banner-chip]')!;
@@ -387,6 +394,7 @@ describe('BotGroupChatView', () => {
       expect(chip.closest('[inert]')).not.toBeNull();
       act(() => vi.advanceTimersByTime(2000));
       expect(chip.closest('[inert]')).toBeNull();
+      expect(screen.queryByRole('dialog')).toBeNull();
       expect(view.container.querySelector('[data-controlled-banner-chip]')).toBe(chip);
       expect(jump.parentElement?.className).toContain('opacity-0');
       scroll.scrollTop = 200; fireEvent.scroll(scroll);
@@ -403,6 +411,26 @@ describe('BotGroupChatView', () => {
       scroll.scrollTop = 1500; fireEvent.scroll(scroll);
       expect(jump.parentElement?.className).toContain('opacity-0');
     } finally { view.unmount(); vi.useRealTimers(); }
+  });
+
+  it.each([false, true])('tracks a growing tail during a jump unless the user takes over (%s)', async (takeOver) => {
+    renderView();
+    const scroll = await screen.findByTestId('bot-group-timeline');
+    Object.defineProperties(scroll, {
+      scrollHeight: { configurable: true, value: 2000 }, clientHeight: { configurable: true, value: 500 },
+    });
+    scroll.scrollTop = 200; fireEvent.scroll(scroll);
+    scroll.scrollTo = vi.fn();
+    fireEvent.click(screen.getByRole('button', { name: 'chat.jumpToBottom' }));
+    scroll.scrollTop = 400; fireEvent.scroll(scroll);
+    if (takeOver) fireEvent.wheel(scroll, { deltaY: -100 });
+    Object.defineProperty(scroll, 'scrollHeight', { configurable: true, value: 3000 });
+    mocks.getBotGroup.mockResolvedValue({ ok: true, group: detail({ messages: [
+      msg({ id: 'arrival', sequence: 3, content: 'Arrived during jump' }),
+    ] }) });
+    act(() => mocks.pushes.forEach(push => push({ groupId: 'g1', change: 'messages' })));
+    await screen.findByText('Arrived during jump');
+    expect(scroll.scrollTop).toBe(takeOver ? 400 : 3000);
   });
 
   // Renderer integration: isolated confirmed deltas must not conceal a missing page after reconnect.

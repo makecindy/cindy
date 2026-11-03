@@ -276,6 +276,7 @@ function BotGroupChatContent({ groupId, direct }: { groupId: string; direct: boo
   const scrollRef = useRef<HTMLDivElement>(null);
   const contentRef = useRef<HTMLDivElement>(null);
   const stickToBottomRef = useRef(true);
+  const jumpingToBottomRef = useRef(false);
   const [nearBottom, setNearBottom] = useState(true);
   const previousScrollTop = useRef(0);
   const jumpDown = useJumpToBottomVisibility();
@@ -283,8 +284,16 @@ function BotGroupChatContent({ groupId, direct }: { groupId: string; direct: boo
   const jumpToBottom = () => {
     const element = scrollRef.current;
     if (!element) return;
+    jumpingToBottomRef.current = true;
     stickToBottomRef.current = true;
+    setJumpTarget(null);
+    prependAnchorRef.current = null;
     element.scrollTo({ top: element.scrollHeight, behavior: 'smooth' });
+  };
+  const interruptJumpToBottom = () => {
+    jumpingToBottomRef.current = false;
+    const element = scrollRef.current;
+    if (element) stickToBottomRef.current = element.scrollHeight - element.scrollTop - element.clientHeight < STICK_TO_BOTTOM_PX;
   };
   const [seenThrough, setSeenThrough] = useState<string | null>(null);
   const readOwner = useRef(getDataOwnerGeneration());
@@ -784,6 +793,7 @@ function BotGroupChatContent({ groupId, direct }: { groupId: string; direct: boo
   const revealMainMessage = useCallback((messageId: string) => {
     const target = findThreadMessageElement(contentRef.current, messageId);
     if (!target) return false;
+    jumpingToBottomRef.current = false;
     stickToBottomRef.current = false;
     flashThreadTarget(target);
     return true;
@@ -1016,6 +1026,7 @@ function BotGroupChatContent({ groupId, direct }: { groupId: string; direct: boo
       .find(element => element.dataset.botGroupMessageId === jumpTarget);
     if (!target) return;
     setJumpTarget(null);
+    jumpingToBottomRef.current = false;
     stickToBottomRef.current = false;
     target.scrollIntoView?.({ block: 'center' });
     target.focus({ preventScroll: true });
@@ -1154,6 +1165,7 @@ function BotGroupChatContent({ groupId, direct }: { groupId: string; direct: boo
   useEffect(() => {
     if (state.kind !== 'ready' || !notificationTarget || handledNotification.current === location.key) return;
     handledNotification.current = location.key;
+    jumpingToBottomRef.current = false;
     stickToBottomRef.current = false;
     if (notificationTarget.threadRootId) onOpenThread(notificationTarget.threadRootId, notificationTarget.messageId);
     else void locateNotification.current({ messageId: notificationTarget.messageId, sequence: null });
@@ -1311,13 +1323,21 @@ function BotGroupChatContent({ groupId, direct }: { groupId: string; direct: boo
       <div
         ref={scrollRef}
         data-testid="bot-group-timeline"
+        onWheel={interruptJumpToBottom}
+        onTouchStart={interruptJumpToBottom}
+        onPointerDown={interruptJumpToBottom}
+        onKeyDown={event => {
+          if (['ArrowUp', 'ArrowDown', 'PageUp', 'PageDown', 'Home', 'End', ' '].includes(event.key)) interruptJumpToBottom();
+        }}
         onScroll={(event) => {
           const element = event.currentTarget;
-          stickToBottomRef.current = element.scrollHeight - element.scrollTop - element.clientHeight < STICK_TO_BOTTOM_PX;
-          setNearBottom(stickToBottomRef.current);
-          jumpDown.onScroll(element.scrollTop - previousScrollTop.current, stickToBottomRef.current);
+          const atBottom = element.scrollHeight - element.scrollTop - element.clientHeight < STICK_TO_BOTTOM_PX;
+          if (atBottom) jumpingToBottomRef.current = false;
+          stickToBottomRef.current = jumpingToBottomRef.current || atBottom;
+          setNearBottom(atBottom);
+          jumpDown.onScroll(element.scrollTop - previousScrollTop.current, atBottom);
           previousScrollTop.current = element.scrollTop;
-          if (stickToBottomRef.current) acknowledgeSoon();
+          if (atBottom) acknowledgeSoon();
         }}
         className="min-h-0 flex-1 overflow-y-auto px-5 pb-4 pt-4"
       >
@@ -1449,7 +1469,7 @@ function BotGroupChatContent({ groupId, direct }: { groupId: string; direct: boo
             // Floats over the bottom of the timeline, at the column's right edge (bot-group-chat.md §10).
             <div className="relative h-0 shrink-0 px-5">
               <div className="pointer-events-none relative mx-auto h-0 w-full max-w-[760px] px-2">
-                <BotGroupThreadHint key={group.id} threads={group.threads ?? []} members={group.members} openRootId={threadRootId}
+                <BotGroupThreadHint suppressed={messageNavigationVisible} key={group.id} threads={group.threads ?? []} members={group.members} openRootId={threadRootId}
                   onOpen={rootId => onOpenThread(rootId)} mentions={personalMask?.unreadMentions} onLocateMention={locateMention}
                   onReadMentions={personalMask ? () => personalMask.markMentionsRead() : undefined} saving={personalMask?.saving} />
               </div>

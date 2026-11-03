@@ -12,6 +12,7 @@ export function MessageListActionButton({
   onPress,
   style,
   testID,
+  hitSlop,
 }: {
   accessibilityLabel: string;
   children: ReactNode;
@@ -19,6 +20,7 @@ export function MessageListActionButton({
   onPress?: () => void;
   style?: StyleProp<ViewStyle>;
   testID?: string;
+  hitSlop?: number;
 }) {
   const interactionDisabled = disabled || !onPress;
   // Animate only when reduced motion is explicitly disabled.
@@ -61,6 +63,7 @@ export function MessageListActionButton({
         interactionDisabled && styles.disabled,
       ]}
       testID={testID}
+      hitSlop={hitSlop}
     >
       {children}
     </AnimatedPressable>

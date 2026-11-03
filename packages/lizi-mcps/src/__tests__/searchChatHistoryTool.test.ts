@@ -241,3 +241,74 @@ describe('search_chat_history tool', () => {
     expect(parse(res)).toMatchObject({ ok: false, errorCode: 'INTERNAL' });
   });
 });
+
+describe('search_chat_history cloud companion rooms', () => {
+  const room = { teammateId: 'bot_a', teammateName: 'Cindy', messageId: 'm1', role: 'assistant' as const, text: 'brew', createdAt: 2_000 };
+  const call = async (input: Record<string, unknown>, opts: { session?: string; scoped?: boolean } = {}) => {
+    const searchCompanionRooms = vi.fn(async () => ({ hits: [room], failed: [{ teammateId: 'bot_b', teammateName: 'Vela', code: 'TIMEOUT' }], incomplete: true }));
+    const registry = new XdtHelperToolRegistry();
+    registerSearchChatHistoryTool(registry, {
+      history: {
+        searchChatHistory: async () => ({ ok: true, result: makeResult() }),
+        searchCompanionRooms,
+        ...(opts.scoped ? { resolveSessionScope: async () => ({ ok: true as const, sessionIds: ['own'] }) } : {}),
+      } as unknown as XdtHelperHistoryDeps,
+      getSessionContext: () => (opts.session === undefined ? undefined : { sessionId: opts.session } as never),
+    });
+    const result = await registry.call('search_chat_history', { query: ' brew ', ...input });
+    return { payload: JSON.parse((result.content[0] as { text: string }).text), searchCompanionRooms };
+  };
+
+  it('adds what companions on other computers said, and says which rooms it could not read', async () => {
+    const { payload, searchCompanionRooms } = await call({ teammate_id: 'bot_a', from: '1970-01-01T00:00:01.000Z' }, { session: 's1' });
+    expect(searchCompanionRooms).toHaveBeenCalledWith({ query: 'brew', callerSessionId: 's1', teammateId: 'bot_a',
+      roles: ['user', 'assistant'], fromMs: 1_000, toMs: null });
+    expect(payload.cloud_incomplete).toBe(true);
+    expect(payload.cloud_hits.map((hit: { messageId: string }) => hit.messageId)).toEqual(['m1']);
+    expect(payload.cloud_hits[0].createdAt).toBe('1970-01-01T00:00:02.000Z');
+    expect(payload.cloud_failed).toEqual([{ teammateId: 'bot_b', teammateName: 'Vela', code: 'TIMEOUT' }]);
+  });
+
+  it('keeps long room messages to one page and says where to continue', async () => {
+    const long = (id: string, createdAt: number) => ({ ...room, messageId: id, text: 'x'.repeat(30_000), createdAt });
+    let parts = [long('a', 9_000), long('b', 8_000), long('c', 7_000), long('d', 6_000)];
+    const registry = new XdtHelperToolRegistry();
+    registerSearchChatHistoryTool(registry, {
+      history: {
+        searchChatHistory: async () => ({ ok: true, result: makeResult() }),
+        searchCompanionRooms: async () => ({ hits: parts, failed: [], incomplete: false }),
+      } as unknown as XdtHelperHistoryDeps,
+      getSessionContext: () => ({ sessionId: 's1' }) as never,
+    });
+    const result = await registry.call('search_chat_history', { query: 'brew' });
+    const payload = JSON.parse((result.content[0] as { text: string }).text);
+    expect(payload.cloud_hits.map((hit: { messageId: string }) => hit.messageId)).toEqual(['a', 'b']);
+    expect(payload.cloud_incomplete).toBe(true);
+    expect(payload.cloud_continue_to).toBe(new Date(8_000).toISOString());
+
+    // The parts of one long message share a time, and continuing by time would skip the rest of them.
+    parts = [long('p1', 9_000), long('p2', 9_000), long('p3', 9_000), long('later', 8_000)];
+    const split = JSON.parse(((await registry.call('search_chat_history', { query: 'brew' })).content[0] as { text: string }).text);
+    expect(split.cloud_hits.map((hit: { messageId: string }) => hit.messageId)).toEqual(['p1', 'p2', 'p3']);
+    expect(split.cloud_continue_to).toBe(new Date(9_000).toISOString());
+
+    const short = (id: string, createdAt: number) => ({ ...room, messageId: id, createdAt });
+    parts = [short('n1', 9_000), short('n2', 9_000), short('n3', 9_000), short('older', 8_000)];
+    const counted = JSON.parse(((await registry.call('search_chat_history', { query: 'brew', limit: 2 })).content[0] as { text: string }).text);
+    expect(counted.cloud_hits.map((hit: { messageId: string }) => hit.messageId)).toEqual(['n1', 'n2', 'n3']);
+    expect(counted.cloud_continue_to).toBe(new Date(9_000).toISOString());
+  });
+
+  it('stays local for a remote query, a scoped caller, later pages and filters the room cannot honor', async () => {
+    for (const [input, opts] of [
+      [{}, {}],
+      [{}, { session: 's1', scoped: true }],
+      [{ cursor: Buffer.from(JSON.stringify({ o: 10 }), 'utf8').toString('base64url') }, { session: 's1' }],
+      [{ workdir: '/w' }, { session: 's1' }],
+    ] as const) {
+      const { payload, searchCompanionRooms } = await call(input, opts);
+      expect(searchCompanionRooms).not.toHaveBeenCalled();
+      expect(payload.cloud_hits).toBeUndefined();
+    }
+  });
+});

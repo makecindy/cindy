@@ -883,7 +883,7 @@ describe('统一面板 · 会话内形态', () => {
     expect(within(screen.getByRole('listbox')).getByText('Opus 5')).toBeTruthy();
     expect(screen.queryByRole('button', { name: /^仅 / })).toBeNull();
     fireEvent.click(screen.getByRole('button', { name: 'Cindy AI' }));
-    rerender(React.createElement(ModelSelectorContent, { ...props, sessionEngineFilter }));
+    rerender(React.createElement(ModelSelectorContent, { remoteAgent: undefined, ...props, sessionEngineFilter }));
     expect(screen.getByRole('button', { name: '全部' }).getAttribute('aria-pressed')).toBe('true');
     expect(within(screen.getByRole('listbox')).getByText('Opus 5')).toBeTruthy();
   });
@@ -3262,6 +3262,7 @@ describe('统一面板 · 新会话选中直通', () => {
     const uid = addModelFavorite({ providerId: 'xd', modelId: 'gpt-5.5', agent: 'codex' });
     const { unmount } = render(
       React.createElement(ModelSelectorContent, {
+        remoteAgent: undefined,
         modelId: 'gpt-5.5',
         // 选中的收藏 = 草稿正在跑它的副本(2026-08-19 review P2 的完整配置校验):
         // 引擎对齐副本(vendorKey codex),深度对齐副本解析值(无显式档 → codex 目录默认 high)。
@@ -3283,6 +3284,7 @@ describe('统一面板 · 新会话选中直通', () => {
     // 锚点在当前 owner 的收藏里查无此条(删除 / 切账号)→ 不许两头落空。
     render(
       React.createElement(ModelSelectorContent, {
+        remoteAgent: undefined,
         modelId: 'gpt-5.5',
         effort: 'medium',
         onModelChange: vi.fn(),
@@ -3309,6 +3311,7 @@ describe('统一面板 · 新会话选中直通', () => {
     });
     render(
       React.createElement(ModelSelectorContent, {
+        remoteAgent: undefined,
         modelId: 'gpt-5.5',
         vendorKey: 'cc',
         effort: 'low',
@@ -4484,7 +4487,7 @@ describe('harness configuration keeps the model menu open', () => {
     }));
     function Picker() {
       const [pendingTarget, setPendingTarget] = React.useState<'claude-code' | undefined>();
-      return <ModelSelector
+      return <ModelSelector remoteAgent={undefined}
         modelId="gpt-5.5" effort="high" vendorKey="codex"
         currentProviderId="xd" onModelChange={vi.fn()} onEffortChange={vi.fn()}
         sessionEngineFilter={{
@@ -4540,7 +4543,7 @@ describe('外层 ModelSelector · 取消当前选中的收藏先应用默认配�
     const onSessionFavoriteAnchorChange = vi.fn();
     function Picker() {
       return (
-        <ModelSelector
+        <ModelSelector remoteAgent={undefined}
           modelId="gpt-5.5"
           effort="low"
           fastMode={false}

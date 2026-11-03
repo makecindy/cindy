@@ -43,15 +43,19 @@ export default {
       assert.deepEqual(await timeline.boundingBox(), initialTimeline, 'navigation must not resize the timeline');
       assert.deepEqual(await composer.boundingBox(), initialComposer, 'navigation must not move the composer');
     };
-    await page.mouse.move(initialTimeline.x + initialTimeline.width / 2, initialTimeline.y + initialTimeline.height / 2);
+    await page.mouse.move(initialTimeline.x + 24, initialTimeline.y + initialTimeline.height / 2);
     await page.mouse.wheel(0, -1000);
     await page.waitForFunction(() => {
       const el = document.querySelector('[data-testid="bot-group-timeline"]');
       return el.scrollHeight - el.scrollTop - el.clientHeight > 500;
     });
+    await page.getByTestId('group-attention-hint').click();
+    await page.getByRole('dialog').waitFor();
+    await page.mouse.move(initialTimeline.x + 24, initialTimeline.y + initialTimeline.height / 2);
     await page.mouse.wheel(0, 150);
     const jump = page.getByRole('button', { name: await ui.t('chat.jumpToBottom'), exact: true });
     await page.waitForFunction(() => document.querySelector('[data-group-bottom-bubbles]').hasAttribute('inert'));
+    assert.equal(await page.getByRole('dialog').count(), 0, 'open topic portal also yields to navigation');
     assert.equal(await hint.isVisible(), false, 'topic yields to navigation');
     if (ui.data.controlled) assert.equal(await banner.isVisible(), false, 'connection bubble also yields');
     assert.equal(await bubbles.getAttribute('inert'), '', 'hidden bubble actions cannot receive input');
@@ -64,12 +68,14 @@ export default {
     await page.mouse.wheel(0, 80);
     await page.waitForFunction(() => document.querySelector('[data-group-bottom-bubbles]').hasAttribute('inert'));
     await jump.click();
+    await timeline.evaluate(el => { el.querySelector('article:last-of-type').style.minHeight = '500px'; });
     await page.waitForFunction(() => {
       const el = document.querySelector('[data-testid="bot-group-timeline"]');
       return el.scrollHeight - el.scrollTop - el.clientHeight < 2;
     });
     await hint.waitFor({ state: 'visible' });
     if (ui.data.controlled) assert.equal(await banner.isVisible(), true, 'connection bubble returns at the tail');
+    await timeline.evaluate(el => { el.querySelector('article:last-of-type').style.minHeight = ''; });
     await sameGeometry();
     await ui.capture('returned-to-bottom');
   },

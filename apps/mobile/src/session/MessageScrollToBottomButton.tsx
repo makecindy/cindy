@@ -2,7 +2,7 @@ import { StyleSheet, View, type StyleProp, type ViewStyle } from 'react-native';
 import { ChevronDown } from 'lucide-react-native';
 import { useTranslation } from 'react-i18next';
 import { iconStroke, useTheme, useThemedStyles, type ThemeColors } from '@/theme';
-import { iconSize, radius } from '@/theme/tokens';
+import { iconSize, radius, spacing } from '@/theme/tokens';
 import { MessageListActionButton } from './MessageListActionButton';
 
 export const SCROLL_TO_BOTTOM_FAB_SIZE = 36;
@@ -19,7 +19,7 @@ export function MessageScrollToBottomButton({ hasNewMessages, onPress, style, te
   const styles = useThemedStyles(makeStyles);
   return <MessageListActionButton
     accessibilityLabel={t(hasNewMessages ? 'message.renderer.newMessagesToBottom' : 'message.renderer.jumpToBottom')}
-    onPress={onPress} style={[styles.button, style]} testID={testID}>
+    onPress={onPress} hitSlop={spacing.xs} style={[styles.button, style]} testID={testID}>
     <ChevronDown color={colors.textSecondary} size={iconSize.action} strokeWidth={iconStroke.regular} />
     {hasNewMessages ? <View style={styles.dot} testID={dotTestID} /> : null}
   </MessageListActionButton>;
