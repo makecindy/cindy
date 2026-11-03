@@ -783,6 +783,23 @@ describe('custom-provider-store CRUD (per-runtime)', () => {
     expect((await getCustomProvider('openrouter'))?.name).toBe('Edited in another window');
   });
 
+  it('conditionally updates legacy Pi rows with a materialized default protocol without losing concurrent edits', async () => {
+    mountDb();
+    const legacy: CustomProviderConfig = { id: 'legacy-pi', name: 'Legacy Pi', runtimes: {
+      pi: { baseUrl: 'https://pi.example.test/v1', models: [{ id: 'old', name: 'Old' }] },
+    } };
+    await createCustomProvider(legacy);
+    const snapshot = (await getCustomProvider(legacy.id))!;
+    expect(snapshot.runtimes.pi!.wireProtocol).toBe('openai-chat');
+    const next = structuredClone(snapshot);
+    next.runtimes.pi!.models.push({ id: 'new', name: 'New' });
+    expect(await updateCustomProviderIfUnchanged(legacy.id, snapshot, next)).toBe(true);
+    const edited = { ...next, name: 'Saved elsewhere' };
+    await updateCustomProvider(legacy.id, edited);
+    expect(await updateCustomProviderIfUnchanged(legacy.id, next, snapshot)).toBe(false);
+    expect(await getCustomProvider(legacy.id)).toEqual(edited);
+  });
+
   it('recovers malformed stored updated_at values in both update paths', async () => {
     mountDb();
     const rows = [

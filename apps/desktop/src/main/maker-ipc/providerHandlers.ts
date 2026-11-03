@@ -82,6 +82,7 @@ import {
   getCustomProvider,
   listCustomProviders,
   updateCustomProvider,
+  updateCustomProviderIfUnchanged,
   validateCustomProviderConfig,
 } from '../maker-host/custom-provider-store.js';
 import {
@@ -2382,7 +2383,15 @@ export function registerProviderHandlers(
               throwIpcError('INTERNAL', 'failed to remove existing OAuth credentials');
             }
           }
-          updated = await updateCustomProvider(config.id, separated.config);
+          if (options.discovery) {
+            // A second Main sharing this profile has its own queue. Do not let a
+            // late discovery overwrite settings saved while Host preparation awaited.
+            const saved = await updateCustomProviderIfUnchanged(config.id, previous, separated.config);
+            if (!saved) throwIpcError('INVALID_PARAMS', 'provider discovery expired; refresh the connection again');
+            updated = separated.config;
+          } else {
+            updated = await updateCustomProvider(config.id, separated.config);
+          }
           assertProviderMutationOwner(ownerAtIngress);
         } catch (err) {
           // 若 DB 写入 await 期间换号，不能把 A 的凭证补偿写入 B。

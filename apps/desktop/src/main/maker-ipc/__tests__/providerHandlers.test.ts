@@ -5566,6 +5566,35 @@ describe('saved custom model discovery', () => {
     expect(f.deps.finalizeCodexCustomProviderHostChange).not.toHaveBeenCalled();
     expect(f.deps.broadcastChanged).not.toHaveBeenCalled();
   });
+  it('preserves another instance save while background discovery awaits Host preparation', async () => {
+    let entered!: () => void;
+    let release!: () => void;
+    const preparing = new Promise<void>(resolve => { entered = resolve; });
+    const gate = new Promise<void>(resolve => { release = resolve; });
+    const config = imageProviderConfig('daily-shared-profile');
+    const f = await setup(config, {
+      codexCustomProviderConfigSignature: config => JSON.stringify(config.runtimes.codex?.models),
+      prepareCodexCustomProviderHostChange: vi.fn(async () => { entered(); await gate; }),
+    });
+    // Separate registries have independent mutation queues, as two Main processes do.
+    // Both use the real shared SQLite store; only the Host reservation is paused.
+    const other = new IpcHarness();
+    registerProviderHandlers(other, makeDeps({ currentOwnerSession: () => f.owner }));
+    const refreshing = f.service.run();
+    await preparing;
+    const latest = structuredClone(config);
+    latest.name = 'Saved in another instance';
+    latest.runtimes.codex!.models[0].name = 'My explicit model name';
+    latest.runtimes.codex!.models[0].nameExplicit = true;
+    try {
+      await other.invoke(MAKER_INVOKE.PROVIDER_CUSTOM_UPDATE, latest, {});
+    } finally { release(); }
+    await refreshing;
+    expect(await getCustomProvider(config.id)).toEqual(latest);
+    expect(f.deps.finalizeCodexCustomProviderHostChange).not.toHaveBeenCalled();
+    expect(f.deps.broadcastChanged).not.toHaveBeenCalled();
+    expect(f.deps.cancelCodexCustomProviderHostChange).toHaveBeenCalledOnce();
+  });
   it('keeps saved query and discovery writes behind the trusted sender guard', async () => {
     const f = await setup(undefined, { assertTrustedSender: () => throwIpcError('PERMISSION_DENIED', 'untrusted') });
     await expect(f.query()).rejects.toThrow(/PERMISSION_DENIED/);

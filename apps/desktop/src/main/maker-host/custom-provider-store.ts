@@ -1035,12 +1035,15 @@ export async function updateCustomProviderIfUnchanged(
   const db = getDbClient().drizzle;
   const existing = await db.select().from(customProviders).where(eq(customProviders.id, id)).get();
   if (!existing) return false;
+  // Read projections materialize legacy defaults (for example Pi's absent protocol).
+  // Compare equivalent normalized projections, then guard the write with the raw row version.
+  const currentConfig = normalizeConfig(rowToConfig(existing));
   const expectedRuntimes = JSON.stringify(expectedConfig.runtimes);
   const expectedAuth = expectedConfig.auth ? JSON.stringify(expectedConfig.auth) : null;
   if (
-    existing.name !== expectedConfig.name ||
-    existing.runtimes !== expectedRuntimes ||
-    existing.auth !== expectedAuth
+    currentConfig.name !== expectedConfig.name ||
+    JSON.stringify(currentConfig.runtimes) !== expectedRuntimes ||
+    (currentConfig.auth ? JSON.stringify(currentConfig.auth) : null) !== expectedAuth
   )
     return false;
   const result = await db
