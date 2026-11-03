@@ -103,5 +103,5 @@ export function useTaskLiveScreens(
       clearTimeout(timer);
     };
   }, [active, online, deviceId, sessionId, key, invoke]);
-  return active && state.key === key ? state.screens : [];
+  return active && online && state.key === key ? state.screens : [];
 }

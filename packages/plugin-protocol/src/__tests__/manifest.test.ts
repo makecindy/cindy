@@ -2094,3 +2094,16 @@ it('keeps a liveScreen declaration as a granted capability only in v3', () => {
   const { node: _node, ...withoutNode } = base;
   expect(validateGhostManifest({ ...withoutNode, liveScreen: true }).ok).toBe(false);
 });
+
+describe('tool approval declaration', () => {
+  it.each(['auto', 'each-call'] as const)('retains %s through protocol normalization', (approval) => {
+    const raw = { ...validManifest, tools: [{ name: 'run', description: 'Run', approval }] };
+    const result = validateGhostManifest(raw);
+    expect(result).toMatchObject({ ok: true, manifest: { tools: raw.tools } });
+    if (result.ok) expect(validateGhostManifest(result.manifest)).toEqual(result);
+  });
+  it('rejects an unknown approval policy', () => {
+    expect(validateGhostManifest({ ...validManifest, tools: [{ name: 'run', description: 'Run', approval: 'bypass' }] }))
+      .toMatchObject({ ok: false });
+  });
+});

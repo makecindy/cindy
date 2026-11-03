@@ -259,6 +259,7 @@ export {
   normalizeModelIdForClassification,
   catalogModelIdCandidates,
   findCatalogModel,
+  uniqueRenamedSessionModelId,
   resolveWireModelId,
   candidateAgentsForModel,
   nativeAgentForProviderModel,

@@ -64,8 +64,11 @@ function parseModelRoute(value: unknown): GhostModelRoute | undefined {
   const model = text(r.model);
   const providerId = text(r.providerId);
   if (!agentKind || !model || !providerId) return undefined;
+  // A malformed explicit location must never become a local route.
+  const agentDeviceId = text(r.agentDeviceId);
+  if (r.agentDeviceId !== undefined && (!agentDeviceId || agentDeviceId.length > 128)) return undefined;
   const effort = text(r.effort);
-  return { agentKind, model, providerId, ...(effort ? { effort } : {}) };
+  return { agentKind, model, providerId, ...(agentDeviceId ? { agentDeviceId } : {}), ...(effort ? { effort } : {}) };
 }
 
 /** block 理由展示上限(超长截断,防意识用理由塞小作文)。 */

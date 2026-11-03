@@ -50,6 +50,17 @@ vi.mock('react-i18next', async (importOriginal) => ({
 }));
 
 vi.mock('@/lib/scrollbarAutoHide', () => ({ flashScrollbar: vi.fn() }));
+const pluginLocations = vi.hoisted(() => ({ devices: [] as { deviceId: string; name: string }[] }));
+vi.mock('@/hooks/useModelRouteDevices', () => ({
+  useModelRouteDevices: ({ leadAgentDeviceId }: { leadAgentDeviceId?: string | null }) => ({
+    devices: pluginLocations.devices,
+    leadAgentDeviceId: leadAgentDeviceId ?? null,
+  }),
+}));
+vi.mock('@/hooks/useAvailableAgents', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/hooks/useAvailableAgents')>()),
+  useModelPickerAgents: () => ['claude-code'],
+}));
 
 vi.mock('@/hooks/useAgentCapabilities', () => ({
   evictDeviceCapabilities: vi.fn(),
@@ -149,6 +160,7 @@ vi.mock('@/hooks/useRemoteClaudeSubscriptionUsage', () => ({
 }));
 
 import { ModelSelectorContent } from '@/components/new-chat/ModelSelector';
+import { PluginModelPickerDialog } from '@/cindy-brain/PluginModelPickerHost';
 import { __resetForTest as resetEnginePrefs } from '@/state/modelEnginePrefs';
 import {
   __resetForTest as resetFavorites,
@@ -412,6 +424,55 @@ describe('被控电脑上的任务:收藏读写被控电脑那一份', () => {
     await act(async () => {});
     expect(invoke).toHaveBeenCalledWith('device-b', MODEL_FAVORITES_GET, []);
     expect(within(favoritesGroup()).getByText('B Model')).toBeTruthy();
+  });
+});
+
+// PR #8460 / unit: request-local favorites previously bypassed source projections.
+// Ordinary persisted favorites did not cover that branch. Mount the real plugin dialog,
+// star a remote model, revisit an aggregate view and confirm its execution location.
+describe('插件临时收藏保留执行来源', () => {
+  it.each([
+    { source: 'device', rail: 'all', namesake: true },
+    { source: 'device', rail: 'favorites', namesake: false },
+    { source: 'share', rail: 'all', namesake: true },
+    { source: 'share', rail: 'favorites', namesake: false },
+  ])('$source / $rail / local namesake=$namesake', async ({ source, rail, namesake }) => {
+    setDataOwnerGeneration('recipient', 1);
+    setModelFavoritesOwner('recipient');
+    const share = {
+      shareId: 'temporary', memberId: 'member-temporary', providerId: 'a-local', providerLabel: 'A Local',
+      hostDeviceId: 'host', deviceName: 'Host', status: 'active' as const, hostOnline: true, hostCapable: true,
+      owner: { displayName: 'Shared', avatarUrl: null, region: 'global' as const },
+    };
+    reconcileProviderShareFavorites({
+      received: source === 'share' ? [share] : [], confirmedRegions: ['global'],
+      ownerStamp: { dataOwnerId: 'recipient', ownerGeneration: 1 },
+    });
+    const deviceId = source === 'share' ? 'share:temporary' : 'device-temporary';
+    const modelId = namesake ? 'a-model' : 'remote-only';
+    pluginLocations.devices = [{ deviceId, name: 'Temporary source' }];
+    catalogs.byDevice[deviceId] = [{
+      ...(catalogs.local[0] as object), remoteInvocationEnabled: true,
+      models: { 'claude-code': [{ id: modelId, name: 'Temporary Remote Model', efforts: ['low', 'high'], defaultEffort: 'high' }] },
+    }];
+    const baseline = listModelFavorites();
+    const onAnswer = vi.fn(async () => ({ handled: true, accepted: true }));
+    const { unmount } = render(<PluginModelPickerDialog request={{
+      requestId: 'temporary-favorite', ghostId: 'plugin', ghostName: 'Plugin', allowRemote: true,
+      expiresAt: Date.now() + 90_000,
+      initial: { agentKind: 'cc', providerId: 'a-local', model: 'a-model', effort: 'high', fastMode: false },
+    }} onAnswer={onAnswer} />);
+    await act(async () => fireEvent.click(document.querySelector(`[data-rail-item="remote:${deviceId}:a-local"]`)!));
+    await act(async () => fireEvent.click(within(rowOf(list(), 'Temporary Remote Model')).getByRole('button', { name: '收藏' })));
+    await act(async () => fireEvent.click(document.querySelector(`[data-rail-item="${rail}"]`)!));
+    await act(async () => fireEvent.click(rowOf(favoritesGroup(), 'Temporary Remote Model')));
+    await act(async () => fireEvent.click(screen.getByRole('button', { name: 'settings.ghosts.modelPicker.useConfiguration' })));
+    expect(onAnswer).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({
+      agentDeviceId: deviceId, providerId: 'a-local', model: modelId, agentKind: 'cc',
+    }));
+    unmount();
+    expect(listModelFavorites()).toEqual(baseline);
+    expect(invoke.mock.calls.some(([, channel]) => channel === MODEL_FAVORITES_APPLY)).toBe(false);
   });
 });
 

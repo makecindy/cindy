@@ -3874,6 +3874,7 @@ export function NewMakerDraftRoute() {
             : null;
           if (pluginModelAtSend && !isCurrentDataOwner()) return;
           const routedTo = pluginRoute?.outcome === 'routed' ? pluginRoute.route : null;
+          const routeAgentDeviceId = routedTo ? routedTo.agentDeviceId : effectiveAgentDeviceId;
           const persistedAgentKind = routedTo?.agentKind ?? sendBaseRoute.persistedAgentKind;
           const authVendor = persistedAgentKind;
           const capabilityAgentKind = dbToMakerAgentKind(persistedAgentKind);
@@ -3885,8 +3886,11 @@ export function NewMakerDraftRoute() {
           // device-link:远程草稿就绪态以被控端为准(传 deviceId 走隧道查被控端 maker:agent:status);
           // 本地草稿 effectiveDeviceLinkDeviceId 为 undefined → 仍走控制端本机就绪检查(行为不变)。
           // Agent 在另一台电脑运行时同样查那台的 Agent 登录(订阅 / 供应商都用那台的)。
+          // 目录键也可能包含任务电脑的中继；插件未改选时原样保留，改选后仍经同一目录宿主。
           const { proceed } = await vendorAuthGate.checkAndConfirm(authVendor, {
-            deviceId: catalogDeviceId,
+            deviceId: routedTo
+              ? modelCatalogKey(routeAgentDeviceId ?? effectiveDeviceLinkDeviceId, controlledModelRoute.catalogHostDeviceId)
+              : catalogDeviceId,
           });
           if (isDeviceLinkDraft && !isCurrentDataOwner()) return;
           if (!proceed) return;
@@ -4132,7 +4136,7 @@ export function NewMakerDraftRoute() {
               deviceProviders: agentCatalogProviders,
               capabilityAgentKind,
               // Agent 在另一台电脑运行:被控电脑把它记进任务,模型与来源属于那台的目录。
-              agentDeviceId: effectiveAgentDeviceId,
+              agentDeviceId: routeAgentDeviceId,
             });
             let created: { sessionId?: string; workDir?: string } | null = null;
             const remoteSessionId =
@@ -4434,7 +4438,7 @@ export function NewMakerDraftRoute() {
               extraDirs: effectiveExtraDirs,
               writableDirs: effectiveWritableDirs,
               remoteHostId: effectiveRemoteHostId ?? undefined,
-              ...(effectiveAgentDeviceId ? { agentDeviceId: effectiveAgentDeviceId } : {}),
+              ...(routeAgentDeviceId ? { agentDeviceId: routeAgentDeviceId } : {}),
               providerId,
             });
             if (!newSession) {
@@ -4707,7 +4711,7 @@ export function NewMakerDraftRoute() {
             workspaceKind: workingDir ? 'project' : 'dialogue',
             remoteHostId: workingDir ? (effectiveRemoteHostId ?? undefined) : undefined,
             // Agent 在另一台电脑运行:任务与文件仍在本机,只记下运行 Agent 的电脑。
-            ...(effectiveAgentDeviceId ? { agentDeviceId: effectiveAgentDeviceId } : {}),
+            ...(routeAgentDeviceId ? { agentDeviceId: routeAgentDeviceId } : {}),
             // extraDirs 是 vendor 无关字段；Claude 与 Codex 都按只读引用目录透传。
             extraDirs: effectiveExtraDirs,
             writableDirs: effectiveWritableDirs,
@@ -5137,6 +5141,7 @@ export function NewMakerDraftRoute() {
           : null;
         if (goalPluginModel && !isCurrentDataOwner()) return;
         const routedTo = pluginRoute?.outcome === 'routed' ? pluginRoute.route : null;
+        const routeAgentDeviceId = routedTo ? routedTo.agentDeviceId : effectiveAgentDeviceId;
         const persistedAgentKind = routedTo?.agentKind ?? goalBaseRoute.persistedAgentKind;
         const authVendor = persistedAgentKind;
         const capabilityAgentKind = dbToMakerAgentKind(persistedAgentKind);
@@ -5145,7 +5150,9 @@ export function NewMakerDraftRoute() {
         const chatInitialProviderId = routedTo ? routedTo.providerId : goalBaseRoute.providerId;
         const effectiveFastMode = routedTo ? false : goalBaseRoute.effectiveFastMode;
         const { proceed } = await vendorAuthGate.checkAndConfirm(authVendor, {
-          deviceId: catalogDeviceId,
+          deviceId: routedTo
+            ? modelCatalogKey(routeAgentDeviceId ?? effectiveDeviceLinkDeviceId, controlledModelRoute.catalogHostDeviceId)
+            : catalogDeviceId,
         });
         if (!proceed) return; // 用户取消授权:弹窗关闭即可,不算错误。
         if (isDeviceLinkDraft) {
@@ -5272,7 +5279,7 @@ export function NewMakerDraftRoute() {
             },
             deviceProviders: agentCatalogProviders,
             capabilityAgentKind,
-            agentDeviceId: effectiveAgentDeviceId,
+            agentDeviceId: routeAgentDeviceId,
           });
           let created: { sessionId?: string; workDir?: string } | null = null;
           const remoteSessionId = await (
@@ -5488,7 +5495,7 @@ export function NewMakerDraftRoute() {
           workingDir: goalWorkingDir,
           workspaceKind: goalWorkingDir ? 'project' : 'dialogue',
           remoteHostId: goalWorkingDir ? (effectiveRemoteHostId ?? undefined) : undefined,
-          ...(effectiveAgentDeviceId ? { agentDeviceId: effectiveAgentDeviceId } : {}),
+          ...(routeAgentDeviceId ? { agentDeviceId: routeAgentDeviceId } : {}),
           extraDirs: effectiveExtraDirs,
           writableDirs: effectiveWritableDirs,
           providerId: chatInitialProviderId ?? null,
