@@ -25,7 +25,10 @@ function parseChatBody(raw) {
   const prompt = body.prompt;
   if (typeof prompt !== 'string' || prompt.trim() === '') throw new BadRequest('prompt is required');
   if (prompt.length > MAX_PROMPT_CHARS) throw new BadRequest('prompt is too long');
-  const allowed = new Set(['prompt', 'sessionId', 'workDir', 'model', 'title']);
+  if (body.agentKind !== undefined && body.agentKind !== 'claude-code' && body.agentKind !== 'codex') {
+    throw new BadRequest('unsupported_agent');
+  }
+  const allowed = new Set(['prompt', 'sessionId', 'workDir', 'model', 'title', 'agentKind']);
   for (const key of Object.keys(body)) {
     if (!allowed.has(key)) throw new BadRequest(`unknown field: ${key}`);
   }
@@ -85,11 +88,13 @@ export function createChatHandler(deps) {
     let session;
     let unsubscribe = () => {};
     try {
+      const stored = deps.readSession ? await deps.readSession(sessionId) : null;
       session = deps.maker.getSession(sessionId) ?? await deps.maker.createSession({
-        agentKind: 'claude-code',
-        sessionId,
-        workingDir: workDir,
-        model: typeof payload.model === 'string' ? payload.model : deps.defaultModel,
+        agentKind: stored?.agentKind === 'codex' || payload.agentKind === 'codex' ? 'codex' : 'claude-code',
+        id: sessionId,
+        workingDir: stored?.workingDir || workDir,
+        model: stored?.model || (typeof payload.model === 'string' ? payload.model : deps.defaultModel),
+        providerId: stored?.providerId ?? undefined,
         title: typeof payload.title === 'string' ? payload.title : undefined,
       });
       write({ type: 'session', sessionId: session.id });
@@ -115,6 +120,7 @@ export function createChatHandler(deps) {
         response.end();
         return;
       }
+      deps.onSessionSent?.(sessionId);
       await done;
       unsubscribe();
       response.write('event: end\ndata: {}\n\n');

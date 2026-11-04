@@ -8,7 +8,7 @@
  */
 
 const CACHE_MS = 5 * 60_000;
-const GATEWAY_PROVIDER_ID = 'cindy-gateway';
+const GATEWAY_PROVIDER_ID = 'xd';
 
 let cached = null;
 
@@ -20,7 +20,7 @@ async function fetchChatModels(gateway) {
   const body = await response.json();
   return (body?.data ?? [])
     .filter((model) => model?.mode === 'chat' && typeof model.id === 'string')
-    .map((model) => ({ id: model.id, name: model.id }));
+    .map((model) => ({ id: model.id, name: model.id, efforts: [], defaultEffort: null, contextWindow: 0 }));
 }
 
 /**
@@ -50,10 +50,15 @@ export async function listProviders(options) {
       id: GATEWAY_PROVIDER_ID,
       name: 'Cindy Gateway',
       source: 'builtin',
-      agents: ['claude-code'],
-      auth: { method: 'api-key' },
-      access: { kind: 'gateway' },
-      models: { 'claude-code': cached.models },
+      agents: ['claude-code', 'codex'],
+      auth: { method: 'managed' },
+      // Host-managed key lane (the gateway credential lives on this machine).
+      access: { kind: 'managed' },
+      routing: {
+        'claude-code': { upstream: 'https://xd-gateway.invalid', authStrategy: 'gateway-key' },
+        codex: { upstream: 'https://xd-gateway.invalid/v1', authStrategy: 'gateway-key', supportsResponsesCustomTools: false },
+      },
+      models: { 'claude-code': cached.models, codex: cached.models },
       connected: true,
     }],
   };

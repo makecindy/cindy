@@ -26,6 +26,24 @@
     return text ? JSON.parse(text) : null;
   }
 
+  /**
+   * Frozen singletons for the channels the host answers with a constant.
+   * Several renderer stores compare snapshots by identity; a fresh object per
+   * read makes React re-render forever (#185).
+   */
+  const STATIC = Object.freeze({
+    remoteDesktopState: Object.freeze({ status: 'unavailable' }),
+    ghosts: Object.freeze({ ghosts: [] }),
+    ghostRecommendations: Object.freeze({ items: [] }),
+    layout: Object.freeze({ layout: null }),
+    sidebarSettings: Object.freeze({ pinned: [], hidden: [], order: [] }),
+    pluginRuns: Object.freeze({ runs: [] }),
+    emptyList: Object.freeze([]),
+    memorySettings: Object.freeze({ maker: true, claudeCode: true, codex: true, pi: true }),
+    gitSafetyOff: Object.freeze({ mode: 'off' }),
+    claimDenied: Object.freeze({ claimed: false }),
+  });
+
   // Channel table: electronAPI paths the host actually implements.
   const routes = {
     // Host-side telemetry sink: the browser already logs to its console.
@@ -48,6 +66,7 @@
         sessionId: typeof sessionId === 'string' ? sessionId : undefined,
         workDir: createOpts?.workingDir,
         model: createOpts?.model,
+        agentKind: createOpts?.agentKind === 'codex' ? 'codex' : 'claude-code',
       };
       const response = await fetch('/chat', {
         method: 'POST',
@@ -79,6 +98,8 @@
       return { accepted: true };
     },
     'maker.listProviders': () => rpc('/providers'),
+    'maker.usage.getModelPricing': () => rpc('/usage/model-pricing'),
+    'maker.usage.getReferenceModelPricing': () => rpc('/usage/reference-model-pricing'),
     'modelAccess.getStatus': () => rpc('/model-access'),
     'modelAccess.retry': () => rpc('/model-access'),
     // The host has no provider-sharing service: report "not ready" in the real
@@ -104,22 +125,26 @@
     'maker.getCapabilities': (args) => {
       window.__cindyCapsCalls = window.__cindyCapsCalls ?? [];
       window.__cindyCapsCalls.push(args?.[0] ?? null);
-      if (String(args?.[0]) !== 'claude-code') {
-        // Only the Claude agent is wired in the host today.
-        return Promise.reject(new Error(`Agent '${String(args?.[0])}' is not registered`));
-      }
       return rpc('/capabilities', { agentKind: args?.[0] ?? null });
     },
-    'maker.syncModelVisibility': (args) => {
-      window.__cindyVisibilityCalls = window.__cindyVisibilityCalls ?? [];
-      window.__cindyVisibilityCalls.push({ owner: args?.[0] ?? null, generation: args?.[1] ?? null, size: Object.keys(args?.[2] ?? {}).length });
-      return null;
-    },
-    'ghosts.listPickerModels': () => [],
-    'maker.memoryGetSettings': () => ({ maker: true, claudeCode: true, codex: true, pi: true }),
-    'maker.memoryPreserveLegacyMakerDisabled': () => ({ maker: true, claudeCode: true, codex: true, pi: true }),
-    'maker.gitSafetyGet': () => ({ mode: 'off' }),
-    'maker.gitSafetySet': () => ({ mode: 'off' }),
+    'maker.listAvailableAgents': () => rpc('/agents'),
+    'maker.discardProvisionalSession': (args) => rpc('/sessions/discard', { sessionId: args?.[0] }),
+    'maker.commitProvisionalSession': (args) => rpc('/sessions/commit', { sessionId: args?.[0] }),
+    'maker.claimLegacyModelVisibilityOwner': () => ({
+      dataOwnerId: window.__cindyBoot?.auth?.ownerId ?? null,
+      ownerGeneration: 1,
+      canWriteOwnerScoped: Boolean(window.__cindyBoot?.auth?.ownerId),
+      claimed: false,
+      claimedByOtherOwner: false,
+      canInitialize: false,
+      profileOrigin: 'existing',
+    }),
+    'maker.syncModelVisibility': () => undefined,
+    'ghosts.listPickerModels': () => STATIC.emptyList,
+    'maker.memoryGetSettings': () => STATIC.memorySettings,
+    'maker.memoryPreserveLegacyMakerDisabled': () => STATIC.memorySettings,
+    'maker.gitSafetyGet': () => STATIC.gitSafetyOff,
+    'maker.gitSafetySet': () => STATIC.gitSafetyOff,
     // The host already opened and migrated the owner database before serving.
     'localDb.ensureReady': () => ({ ready: true }),
     'authInitialize': () => {
@@ -135,6 +160,7 @@
         deviceId: boot.deviceId ?? 'host',
         hasAccountDeletionReceipt: false,
         accountDeletionRestored: false,
+        credentialStoreUnavailable: false,
       };
     },
     'checkEnvironment': () => {
@@ -150,14 +176,14 @@
         platform: 'linux',
       };
     },
-    'localThemes.listSync': () => [],
+    'localThemes.listSync': () => STATIC.emptyList,
     'authHasPersistedSessionHintSync': () => Boolean(window.__cindyBoot?.auth?.user),
     'appearanceSettings.getSync': () => window.__cindyBoot?.appearance ?? {},
     'appearanceSettings.get': () => Promise.resolve(window.__cindyBoot?.appearance ?? {}),
     'getAnalyticsSettings': () => ({ allowed: false }),
     'voiceInput.setGlobalShortcut': () => ({ ok: false }),
-    'worktreeListAll': () => [],
-    'localDb.bots.list': () => [],
+    'worktreeListAll': () => STATIC.emptyList,
+    'localDb.bots.list': () => STATIC.emptyList,
     'localDb.bots.getModelChainSettings': () => ({ chain: [] }),
     'maker.silentEncryptedRetryGet': () => ({ enabled: true }),
     'maker.chatEmbeddingGet': () => ({ enabled: false }),
@@ -171,13 +197,12 @@
     'modelFavoritesHost.changed': () => () => {},
     'gitContext.listAllPrRefs': () => [],
     'layout.getStateSync': () => ({ layout: window.__cindyBoot?.layout ?? null }),
-    'ghosts.listSync': () => ({ ghosts: [] }),
-    'ghosts.recommendationsSync': () => ({ items: [] }),
-    'sidebarSettings.loadSnapshot': () => ({ pinned: [], hidden: [], order: [] }),
-    'maker.listActive': () => [],
-    'remoteDesktop.state': () => ({ status: 'unavailable' }),
-    'sidebarSettings.claimLegacyRendererOwner': () => ({ claimed: false }),
-    'maker.claimLegacyModelVisibilityOwner': () => ({ claimed: false }),
+    'ghosts.listSync': () => STATIC.ghosts,
+    'ghosts.recommendationsSync': () => STATIC.ghostRecommendations,
+    'sidebarSettings.loadSnapshot': () => STATIC.sidebarSettings,
+    'maker.listActive': () => STATIC.emptyList,
+    'remoteDesktop.state': () => STATIC.remoteDesktopState,
+    'sidebarSettings.claimLegacyRendererOwner': () => STATIC.claimDenied,
     'setUpdateRelaunchTheme': () => undefined,
     'theme.applyVibrancy': () => undefined,
     'syncWorkerCreationPrefs': () => undefined,
@@ -186,6 +211,8 @@
     'syncProviderModelMemory': () => undefined,
     'setClassicalReplyStyle': () => undefined,
     'setApplicationMenuLocale': () => undefined,
+    'localDb.sessions.create': (args) => rpc('/sessions/create', args?.[0] ?? {}),
+    'localDb.sessions.get': (args) => rpc('/sessions/get', { sessionId: args?.[0] }),
     'localDb.sessions.list': () => rpc('/sessions/list'),
     'localDb.sessions.messages': async (args) => rpc('/sessions/messages', args),
     'pluginMarket.listInstalled': () => rpc('/plugins/list'),
@@ -221,11 +248,21 @@
     }
   }
 
+  /**
+   * React's useSyncExternalStore compares snapshots by identity. A shim that
+   * builds a fresh array on every call never settles, so sync reads keep the
+   * first value they produced for the same channel and arguments.
+   */
+  const syncSnapshots = new Map();
+
   function makeNode(path) {
     const node = function shimCall(...args) {
       window.__cindyCalls?.push(path);
       const handler = routes[path];
       if (!handler) return unsupported(path);
+      const sync = SYNC_CHANNEL.test(path) || path === 'maker.claimLegacyModelVisibilityOwner';
+      const cacheKey = sync ? `${path}\u0000${JSON.stringify(args)}` : null;
+      if (cacheKey !== null && syncSnapshots.has(cacheKey)) return syncSnapshots.get(cacheKey);
       let value;
       try {
         value = handler(args);
@@ -234,8 +271,9 @@
         (window.__cindyRpcFailures ??= []).push({ path, error: String(error && error.message ? error.message : error) });
         throw error;
       }
+      if (cacheKey !== null) syncSnapshots.set(cacheKey, value);
       // Mirror the preload: sync channels return values, the rest are promises.
-      return SYNC_CHANNEL.test(path) ? value : Promise.resolve(value);
+      return sync ? value : Promise.resolve(value);
     };
     return new Proxy(node, {
       get(_target, prop) {

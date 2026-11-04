@@ -104,6 +104,10 @@ export function createHostServer(deps) {
         }));
         if (url.pathname === '/api/me') { send(response, 200, await deps.me()); return; }
         if (url.pathname === '/api/sessions/list') { send(response, 200, { sessions: await deps.listSessions() }); return; }
+        if (url.pathname === '/api/sessions/create') { send(response, 201, await deps.createSession(body)); return; }
+        if (url.pathname === '/api/sessions/get') { send(response, 200, await deps.getSession(String(body.sessionId ?? ''))); return; }
+        if (url.pathname === '/api/sessions/discard') { send(response, 200, await deps.discardProvisionalSession(String(body.sessionId ?? ''))); return; }
+        if (url.pathname === '/api/sessions/commit') { send(response, 200, await deps.commitProvisionalSession(String(body.sessionId ?? ''))); return; }
         if (url.pathname === '/api/sessions/messages') {
           send(response, 200, { messages: await deps.history(String(body.sessionId ?? ''), Number(body.limit ?? 200)) });
           return;
@@ -111,11 +115,16 @@ export function createHostServer(deps) {
         if (url.pathname === '/api/plugins/list') { send(response, 200, deps.listPlugins()); return; }
         if (url.pathname === '/api/providers') { send(response, 200, await deps.providers()); return; }
         if (url.pathname === '/api/model-access') { send(response, 200, deps.modelAccess()); return; }
+        if (url.pathname === '/api/usage/model-pricing') { send(response, 200, await deps.modelPricing()); return; }
+        if (url.pathname === '/api/usage/reference-model-pricing') { send(response, 200, deps.referenceModelPricing()); return; }
+        if (url.pathname === '/api/agents') { send(response, 200, deps.agents()); return; }
         if (url.pathname === '/api/capabilities') {
           try {
-            send(response, 200, deps.capabilities(String(body.agentKind ?? '')));
+            send(response, 200, await deps.capabilities(String(body.agentKind ?? '')));
           } catch (error) {
-            send(response, 404, { error: 'agent_not_registered', message: error instanceof Error ? error.message : String(error) });
+            const agentKind = String(body.agentKind ?? '');
+            const message = error instanceof Error ? error.message : String(error);
+            send(response, 404, { error: 'agent_not_registered', message: agentKind === 'pi' ? "Agent 'pi' is not registered" : message });
           }
           return;
         }

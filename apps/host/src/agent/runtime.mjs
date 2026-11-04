@@ -76,7 +76,7 @@ export function createClaudeGatewayAuth(gateway) {
  * adapter additionally covers gateway keys and account switching; converging the
  * two is tracked as host/auth TODO.
  */
-export function createCodexLocalCliAuth() {
+export function createCodexLocalCliAuth(gateway) {
   return {
     async getState() {
       return { authenticated: true, authSource: 'oauth', identity: 'Codex CLI login' };
@@ -88,7 +88,7 @@ export function createCodexLocalCliAuth() {
       throw new Error('sign out with the Codex CLI; the host does not manage its credentials');
     },
     async getAuthEnv() {
-      return {};
+      return gateway?.credential ? { XDT_CODEX_API_KEY: gateway.credential } : {};
     },
   };
 }
@@ -102,7 +102,7 @@ export function createHostAgentGraph(options) {
   });
   const codex = options.codexBinaryPath
     ? new CodexAgent({
-        auth: createCodexLocalCliAuth(),
+        auth: createCodexLocalCliAuth(options.gateway),
         runtimeConfig: {},
         binaryPath: options.codexBinaryPath,
         logger: LOGGER,
