@@ -143,6 +143,27 @@ describe('browserCommentPreload command protocol', () => {
 
     const blocker = latestOverlayShadow?.querySelector<HTMLElement>('.blocker');
     expect(blocker).not.toBeNull();
+    vi.spyOn(target, 'getBoundingClientRect').mockReturnValue({
+      x: 10,
+      y: 20,
+      left: 10,
+      top: 20,
+      right: 80,
+      bottom: 48,
+      width: 70,
+      height: 28,
+      toJSON() {
+        return {};
+      },
+    } as DOMRect);
+    blocker?.dispatchEvent(
+      new MouseEvent('mousemove', { bubbles: true, clientX: 20, clientY: 30 }),
+    );
+    const hoverChip = latestOverlayShadow?.querySelector<HTMLElement>('.hover-chip');
+    expect(hoverChip?.style.display).toBe('flex');
+    expect(hoverChip?.textContent).toContain('button');
+    expect(hoverChip?.textContent).toContain('Save');
+
     blocker?.dispatchEvent(
       new MouseEvent('click', { bubbles: true, clientX: 20, clientY: 30 }),
     );
@@ -166,5 +187,27 @@ describe('browserCommentPreload command protocol', () => {
     expect(latestOverlayShadow?.querySelector<HTMLElement>('.drag-rect')?.style.display).toBe(
       'none',
     );
+    expect(latestOverlayShadow?.querySelector<HTMLElement>('.hover-chip')?.style.display).toBe(
+      'none',
+    );
+  });
+
+  it('uses a comment cursor and switches to crosshair only while Shift is held', async () => {
+    await loadPreload();
+    dispatchCommand(BROWSER_COMMENT_ENTER_MODE_CHANNEL, {
+      requestId: 'enter-cursor',
+      payload: { markerNumber: 1 },
+    });
+    await expectCommandResult('enter-cursor', true);
+
+    const blocker = latestOverlayShadow?.querySelector<HTMLElement>('.blocker');
+    expect(blocker?.classList.contains('is-region')).toBe(false);
+    expect(blocker?.classList.contains('is-pending')).toBe(false);
+
+    window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Shift', shiftKey: true }));
+    expect(blocker?.classList.contains('is-region')).toBe(true);
+
+    window.dispatchEvent(new KeyboardEvent('keyup', { key: 'Shift' }));
+    expect(blocker?.classList.contains('is-region')).toBe(false);
   });
 });

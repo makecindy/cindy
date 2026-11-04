@@ -576,6 +576,13 @@ export function BrowserTabBody({ state, ctx, active, shellVisible }: BrowserTabB
           comment.pendingTarget && (
             <BrowserCommentPopover
               anchor={comment.pendingTarget.point}
+              target={{
+                kind: comment.pendingTarget.kind,
+                markerNumber: comment.pendingTarget.markerNumber,
+                targetTag: comment.pendingTarget.targetTag,
+                targetLabel: comment.pendingTarget.targetLabel,
+                selectedText: comment.pendingTarget.selectedText,
+              }}
               submitting={comment.mode !== 'pending'}
               designBaseline={comment.pendingTarget.designBaseline}
               editorDraft={comment.editorDraft}
