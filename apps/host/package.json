@@ -8,13 +8,14 @@
   },
   "scripts": {
     "start": "node --import tsx src/main.ts",
-    "test": "node --test \"src/**/*.test.mjs\""
+    "test": "node --import tsx --test \"src/**/*.test.mjs\""
   },
   "devDependencies": {
     "tsx": "^4.19.0"
   },
   "dependencies": {
     "@cindy/maker-core": "workspace:*",
-    "better-sqlite3": "^12.9.0"
+    "better-sqlite3": "^12.9.0",
+    "@cindy/auth-client": "workspace:*"
   }
 }

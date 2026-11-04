@@ -78,3 +78,19 @@ test('payload produced here decodes with the measured Desktop parameters', () =>
     'x',
   );
 });
+
+test('projects an adopted Desktop login without exposing the refresh token', async () => {
+  const { projectAdoptedSession } = await import('./session.mjs');
+  const { AUTH_SESSION_KEY } = await import('../../../desktop/src/main/authCredentialKeys.ts');
+
+  const records = new Map([[AUTH_SESSION_KEY, JSON.stringify({ version: 1, realm: 'cn', refreshToken: 'r' })]]);
+  const state = projectAdoptedSession({ read: (key) => records.get(key) ?? null });
+  assert.deepEqual(state, { authenticated: true, realm: 'cn' });
+  assert.equal(JSON.stringify(state).includes('refreshToken'), false);
+
+  assert.deepEqual(projectAdoptedSession({ read: () => null }), { authenticated: false, realm: null });
+  assert.deepEqual(
+    projectAdoptedSession({ read: () => JSON.stringify({ version: 1, realm: 'global' }) }),
+    { authenticated: false, realm: null },
+  );
+});

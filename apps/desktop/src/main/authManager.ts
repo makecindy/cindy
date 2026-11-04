@@ -53,6 +53,16 @@ import { BRAND_IDENTITY } from '@cindy/maker-shared/brand-identity';
 import * as canaryFlagStore from './canaryFlagStore';
 import { decodeAccessTokenOrgSlug } from './authTokenClaims';
 import { AuthRefreshBackoff } from './authRefreshBackoff';
+import {
+  ACCOUNT_DELETION_RECEIPT_KEY,
+  AUTH_ACCOUNT_LOGOUT_TOMBSTONES_KEY,
+  AUTH_ACCOUNT_VAULT_KEY,
+  AUTH_SESSION_KEY,
+  LEGACY_ACCOUNT_REFRESH_TOKEN_KEY,
+  LEGACY_REFRESH_TOKEN_KEY,
+  LEGACY_RESOURCE_REFRESH_TOKEN_KEY,
+  PERSISTED_AUTH_CREDENTIAL_KEYS,
+} from './authCredentialKeys';
 import { getProviderSecretStore } from './secrets/providerSecretStore.js';
 import {
   runRefreshWithReplacementRetry,
@@ -203,20 +213,14 @@ const AUTH_REGION: AuthRegion =
 function authServerUrl(realm: AuthRegion = activeAuthRealm): string {
   return getClientEndpointForRealm(realm, 'authApiBaseUrl');
 }
-const AUTH_SESSION_KEY = 'cindy_auth_session_v1';
-const AUTH_ACCOUNT_VAULT_KEY = 'cindy_auth_accounts_v1';
 const AUTH_ACCOUNT_VAULT_LOCK_FILE = '.cindy-auth-accounts-v1.lock';
-const AUTH_ACCOUNT_LOGOUT_TOMBSTONES_KEY = 'cindy_auth_account_logout_tombstones_v1';
 // The aggregate vault stays readable by v1 clients for explicit-login
 // compatibility. Per-membership logout tombstones live in a separate key that
 // older clients never read or rewrite, so their Passport sync cannot resurrect
 // an account explicitly logged out by a newer client.
 const AUTH_ACCOUNT_VAULT_VERSION = 2 as const;
 const AUTH_ACCOUNT_LOGOUT_TOMBSTONES_VERSION = 1 as const;
-const LEGACY_RESOURCE_REFRESH_TOKEN_KEY = 'cindy_auth_refresh_token';
-const ACCOUNT_DELETION_RECEIPT_KEY = 'cindy_auth_account_deletion_receipt';
-const LEGACY_ACCOUNT_REFRESH_TOKEN_KEY = 'cindy_auth_account_refresh_token';
-const LEGACY_REFRESH_TOKEN_KEY = 'refresh_token';
+
 const DEFAULT_MODEL = 'claude-sonnet-4-6';
 const DEFAULT_EFFORT = 'medium';
 
@@ -640,14 +644,7 @@ function readSafe(key: string): string | null {
 // logout tombstones. Only definite absence permits the fresh-profile login UI;
 // checking filenames does not probe the encryption backend or decrypt anything.
 function hasPotentiallyPersistedAuthCredentials(): boolean {
-  return [
-    AUTH_SESSION_KEY,
-    AUTH_ACCOUNT_VAULT_KEY,
-    AUTH_ACCOUNT_LOGOUT_TOMBSTONES_KEY,
-    LEGACY_RESOURCE_REFRESH_TOKEN_KEY,
-    LEGACY_ACCOUNT_REFRESH_TOKEN_KEY,
-    LEGACY_REFRESH_TOKEN_KEY,
-  ].some((key) =>
+  return PERSISTED_AUTH_CREDENTIAL_KEYS.some((key) =>
     ['', '.bak'].some((suffix) => {
       try {
         fs.accessSync(path.join(SAFE_STORAGE_DIR(), `${key}.enc${suffix}`), fs.constants.F_OK);

@@ -8,6 +8,7 @@ import { readCachedBinaryStatus } from '../../desktop/src/main/agent-binaries/bi
 import { openOwnerDatabase, OwnerDatabaseError } from '../../desktop/src/main/localDb/startupCore.js';
 import { resolveHostDataDir, resolveHostRegion } from './profile-path.mjs';
 import { acquireHostRuntimeLease, type HostRuntimeLease } from './runtime-lock.js';
+import { readAdoptedSessionState } from './credentials/session.mjs';
 
 const PORT = 3456;
 /** Repo layout: apps/host/src → apps/desktop/{drizzle,native}. */
@@ -48,6 +49,8 @@ let activeOwner: string | null = null;
 let closeStorage: (() => Promise<void>) | null = null;
 let sessionStorage: OwnerSessionStorage | null = null;
 let runtimeLease: HostRuntimeLease | null = null;
+/** Non-secret projection of the adopted Desktop login; never tokens. */
+let account: { authenticated: boolean; realm: string | null; error?: string } = { authenticated: false, realm: null };
 
 /**
  * Initialize storage for a known owner. Login/OAuth is a later stage; until
@@ -111,6 +114,7 @@ const server = createServer(async (request, response) => {
       region: resolveHostRegion(),
       dataDir: resolveHostDataDir(),
       runtime,
+      account,
       harness: harnessStatus(),
       sessions,
     }));
@@ -127,6 +131,18 @@ server.on('error', (error) => {
 
 server.listen(PORT, '127.0.0.1', () => {
   console.log(`cindy-host listening on http://127.0.0.1:${PORT}`);
+  void readAdoptedSessionState({
+    userDataDir: resolveHostDataDir(),
+    keyringApplication: process.env.CINDY_HOST_KEYRING_APPLICATION?.trim() || undefined,
+  }).then((state) => {
+    account = state;
+  }).catch((error: unknown) => {
+    account = {
+      authenticated: false,
+      realm: null,
+      error: error instanceof Error ? error.message : String(error),
+    };
+  });
   const owner = process.env.CINDY_HOST_OWNER?.trim();
   if (!owner) return;
   void ensureRuntime(owner).catch((error: unknown) => {

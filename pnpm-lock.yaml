@@ -654,6 +654,9 @@ importers:
 
   apps/host:
     dependencies:
+      '@cindy/auth-client':
+        specifier: workspace:*
+        version: link:../../packages/auth-client
       '@cindy/maker-core':
         specifier: workspace:*
         version: link:../../packages/maker-core
@@ -15066,9 +15069,7 @@ snapshots:
       metro-runtime: 0.84.5
     transitivePeerDependencies:
       - '@babel/core'
-      - bufferutil
       - supports-color
-      - utf-8-validate
 
   '@react-native/normalize-colors@0.74.89': {}
 
