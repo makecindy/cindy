@@ -70,6 +70,8 @@ vi.mock('../lib/rsbBrowserBridge', async () => {
 });
 
 import { RightSidebarShell } from '../RightSidebarShell';
+import { TabGroupHostProvider } from '../tabGroupHost';
+import { PaneAtWindowLeftProvider, PaneAtWindowTopProvider } from '@/layout/panePlacement';
 import '../plugins/plugin-task';
 import { BrowserTabBody } from '../plugins/web-browser/BrowserTabBody';
 import type { WebBrowserState } from '../plugins/web-browser';
@@ -1423,6 +1425,70 @@ describe('RightSidebarShell empty state', () => {
       (spacer.style as CSSStyleDeclaration & { WebkitAppRegion: string }).WebkitAppRegion,
     ).toBe('no-drag');
   });
+
+  // #8662: a top-left tool pane also owns overflow beside an expanded sidebar.
+  it.each([
+    [220, true, true, false, 34],
+    [280, true, true, false, 0],
+    [220, false, true, false, 0],
+    [220, true, false, false, 0],
+    [220, true, true, true, 0],
+  ])(
+    'reserves expanded-sidebar overflow only at the window corner (%s,%s,%s,%s)',
+    async (sidebarWidth, atLeft, atTop, fullscreen, expected) => {
+      installElectronApi(tabsIpc, fullscreen);
+      Object.assign(window.electronAPI, {
+        appearanceSettings: { getSync: () => ({ windowZoom: 0.6 }) },
+      });
+      render(
+        createElement(
+          TabGroupHostProvider,
+          {
+            value: {
+              sessionId: 's1',
+              workdir: '/tmp/repo',
+              remoteHostId: null,
+              isMac: true,
+              sidebarCollapsed: false,
+              hasRailChromeActions: false,
+              sidebarWidth,
+            },
+          },
+          createElement(
+            PaneAtWindowLeftProvider,
+            { value: atLeft },
+            createElement(
+              PaneAtWindowTopProvider,
+              { value: atTop },
+              createElement(RightSidebarShell, {
+                sessionId: 's1',
+                workdir: '/tmp/repo',
+                remoteHostId: null,
+                isMac: true,
+                unifiedTopbar: true,
+                // Both old special-case flags are false in the reported layout.
+                reserveLeftChromeActions: false,
+                railChromeActionsHitHole: false,
+              }),
+            ),
+          ),
+        ),
+      );
+      await waitFor(() => {
+        const spacer = screen.queryByTestId('right-sidebar-rail-chrome-actions-spacer');
+        if (!expected) {
+          expect(spacer).toBeNull();
+          return;
+        }
+        expect(spacer?.style.width).toBe(`${expected}px`);
+        const hole = screen.getByTestId('right-sidebar-rail-chrome-actions-hit-hole');
+        expect(hole.style.width).toBe(`${expected}px`);
+        expect(
+          (hole.style as CSSStyleDeclaration & { WebkitAppRegion: string }).WebkitAppRegion,
+        ).toBe('no-drag');
+      });
+    },
+  );
 
   it('does not reserve rail ChromeActions space in fullscreen', async () => {
     installElectronApi(tabsIpc, true);

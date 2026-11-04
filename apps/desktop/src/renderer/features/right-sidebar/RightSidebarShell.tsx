@@ -37,6 +37,8 @@ import { toast } from '@/lib/toast';
 import { mapIpcErrorToI18nKey } from '@/utils/ipcError';
 import { useAppShortcut } from '@/hooks/useAppShortcut';
 import { useMacFullscreen } from '@/hooks/useMacFullscreen';
+import { usePaneAtWindowLeft, usePaneAtWindowTop } from '@/layout/panePlacement';
+import { useTabGroupHost } from './tabGroupHost';
 import { RightSidebarDetach } from '@/components/layout/RightSidebarDetach';
 import { RightSidebarMaximize } from '@/components/layout/RightSidebarMaximize';
 import { RightSidebarToggle } from '@/components/layout/RightSidebarToggle';
@@ -246,11 +248,26 @@ export function RightSidebarShell({
     unifiedTopbar && reserveLeftChromeActions
       ? chromeActionsLeft + CHROME_ACTIONS_GEOMETRY.clusterWidth
       : 0;
-  // rail 邻位时浮动 ChromeActions 从工具面板左缘开始。命中洞保持 absolute
-  // 对齐窗口坐标；另加正常流中的 spacer，把 TabStrip 推到按钮簇之后。
-  const railChromeActionsSpacerWidth =
-    unifiedTopbar && !isFullscreen && railChromeActionsHitHole
-      ? chromeActionsHitHoleWidth(CHROME_ACTIONS_GEOMETRY.macTrafficLightLeft, trafficLightInset)
+  // 首个顶部面板既可能是 right-tabs，也可能是其它边页签组。统一使用布局树
+  // 给出的角落归属和宿主侧栏宽度，不再只按 rail/完全收起两个特例判断溢出。
+  const host = useTabGroupHost();
+  const atWindowLeft = usePaneAtWindowLeft();
+  const atWindowTop = usePaneAtWindowTop();
+  const expandedSidebarEdge =
+    isMac &&
+    atWindowLeft &&
+    atWindowTop &&
+    host &&
+    !host.sidebarCollapsed &&
+    !host.hasRailChromeActions
+      ? host.sidebarWidth
+      : undefined;
+  const paneLeftEdge =
+    expandedSidebarEdge ??
+    (railChromeActionsHitHole ? CHROME_ACTIONS_GEOMETRY.macTrafficLightLeft : undefined);
+  const overflowChromeActionsSpacerWidth =
+    unifiedTopbar && !isFullscreen && paneLeftEdge !== undefined
+      ? chromeActionsHitHoleWidth(paneLeftEdge, trafficLightInset)
       : 0;
   const { t } = useTranslation();
   const installedGhosts = useInstalledGhosts();
@@ -887,34 +904,34 @@ export function RightSidebarShell({
           // 是不透明灰,导致顶栏与面板体两种底色打架;其他 family 两 token 同为 surface,零变化)。
           className={`relative flex shrink-0 flex-none items-center border-b border-[var(--border-default)] bg-[var(--panel-bg)] px-2 ${
             // 空间不足时换行，保留原生安全区和所有面板操作。
-            railChromeActionsSpacerWidth > 0 || leftChromeActionsSpacerWidth > 0
+            overflowChromeActionsSpacerWidth > 0 || leftChromeActionsSpacerWidth > 0
               ? 'min-h-[46px] flex-wrap'
               : 'h-[46px]'
           }`}
           style={{ WebkitAppRegion: 'drag' } as React.CSSProperties}
         >
           {topbarLeading}
-          {!isFullscreen && railChromeActionsHitHole && (
+          {overflowChromeActionsSpacerWidth > 0 && (
             <div
               aria-hidden
               data-testid="right-sidebar-rail-chrome-actions-hit-hole"
               className="absolute left-0 top-0 h-full"
               style={
                 {
-                  width: railChromeActionsSpacerWidth,
+                  width: overflowChromeActionsSpacerWidth,
                   WebkitAppRegion: 'no-drag',
                 } as React.CSSProperties
               }
             />
           )}
-          {railChromeActionsSpacerWidth > 0 && (
+          {overflowChromeActionsSpacerWidth > 0 && (
             <div
               aria-hidden
               data-testid="right-sidebar-rail-chrome-actions-spacer"
               className="h-[46px] shrink-0"
               style={
                 {
-                  width: railChromeActionsSpacerWidth,
+                  width: overflowChromeActionsSpacerWidth,
                   WebkitAppRegion: 'no-drag',
                 } as React.CSSProperties
               }
