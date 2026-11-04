@@ -12,9 +12,87 @@ import {
   type PrRemoteState,
 } from '../git-context/prStatusService';
 import type { GhCliTokenReadResult } from '../git-context/ghCliTokenSource';
+import { fetchPrSummary, summarizeChecks } from '../git-context/prSummary';
+import type { GithubClient } from '@cindy/github-client';
 
 const Q = { owner: 'makecindy', repo: 'cindy', prNumber: 85 };
 const TOKEN_OK = async (): Promise<GhCliTokenReadResult> => ({ ok: true, token: 'ghp_x' });
+
+// Production summary + cache entry points. New counts must cover both GitHub APIs,
+// truncated and unavailable results, absent from the prior four-state tests.
+// Minimal inputs are one failed commit status and an incomplete thread page (unit).
+describe('PR summary', () => {
+  it('counts current rollup check runs and commit statuses once, without passing skipped checks', () => {
+    expect(summarizeChecks({ totalCount: 5,
+      checkRunCountsByState: [{ state: 'SUCCESS', count: 2 }, { state: 'SKIPPED', count: 1 }, { state: 'IN_PROGRESS', count: 1 }],
+      statusContextCountsByState: [{ state: 'FAILURE', count: 1 }],
+    })).toEqual({ total: 5, passed: 2, skipped: 1, pending: 1, failed: 1 });
+    expect(summarizeChecks({ totalCount: 1, checkRunCountsByState: null, statusContextCountsByState: [] })).toBeNull();
+    expect(summarizeChecks({ totalCount: 1, checkRunCountsByState: [{ state: 'FUTURE_STATE', count: 1 }], statusContextCountsByState: [] })).toBeNull();
+  });
+
+  // Bug: #8476's head reported failed=1 because a concurrency-cancelled duplicate of a job that
+  // later passed stayed in GitHub's rollup counts; AI tools and automation read it as a CI failure.
+  // Minimal input: the same workflow job cancelled, then rerun successfully (unit). Workflow display
+  // names are not unique, so a same-named job of another workflow (or one without an id) stays separate;
+  // same-named jobs of one execution (one check suite, e.g. fixed-name matrix shards) all count.
+  it('counts only the newest run of the same workflow job, and keeps counts when nodes are incomplete', () => {
+    const run = (databaseId: number, conclusion: string, workflowId: number | null = 7, suiteId = databaseId) => ({ __typename: 'CheckRun', databaseId, name: 'check:basis',
+      status: 'COMPLETED', conclusion, checkSuite: { databaseId: suiteId, app: { slug: 'github-actions' }, workflowRun: { workflow: { databaseId: workflowId } } } });
+    const rollup = (nodes: ReturnType<typeof run>[], hasNextPage = false) => ({
+      totalCount: nodes.length + 1,
+      checkRunCountsByState: ['SUCCESS', 'CANCELLED', 'FAILURE'].map(state => ({ state, count: nodes.filter(n => n.conclusion === state).length })),
+      statusContextCountsByState: [{ state: 'SUCCESS', count: 1 }],
+      nodes: [...nodes, { __typename: 'StatusContext' }],
+      pageInfo: { hasNextPage },
+    });
+    expect(summarizeChecks(rollup([run(1, 'CANCELLED'), run(2, 'SUCCESS')])))
+      .toEqual({ total: 2, passed: 2, failed: 0, pending: 0, skipped: 0 });
+    expect(summarizeChecks(rollup([run(2, 'FAILURE'), run(1, 'SUCCESS')])))
+      .toEqual({ total: 2, passed: 1, failed: 1, pending: 0, skipped: 0 });
+    expect(summarizeChecks(rollup([run(1, 'CANCELLED'), run(2, 'SUCCESS')], true)))
+      .toMatchObject({ total: 3, failed: 1 });
+    expect(summarizeChecks(rollup([run(1, 'FAILURE', 7), run(2, 'SUCCESS', 8)])))
+      .toMatchObject({ total: 3, failed: 1 });
+    expect(summarizeChecks(rollup([run(1, 'FAILURE', null), run(2, 'SUCCESS', null)])))
+      .toMatchObject({ total: 3, failed: 1 });
+    expect(summarizeChecks(rollup([run(1, 'FAILURE', 7, 5), run(2, 'SUCCESS', 7, 5)])))
+      .toMatchObject({ total: 3, failed: 1 });
+    expect(summarizeChecks(rollup([run(1, 'CANCELLED', 7, 4), run(2, 'FAILURE', 7, 5), run(3, 'SUCCESS', 7, 5)])))
+      .toMatchObject({ total: 3, passed: 2, failed: 1 });
+  });
+
+  it('keeps one GraphQL request and reports truncated reviews as unknown', async () => {
+    const pr = { headRefOid: 'head', commits: { nodes: [{ commit: { oid: 'head', statusCheckRollup: null } }] },
+      reviewThreads: { nodes: [{ isResolved: false }], pageInfo: { hasNextPage: true } } };
+    const graphql = vi.fn().mockResolvedValue({ repository: { pullRequest: pr } });
+    expect(await fetchPrSummary({ graphql } as unknown as GithubClient, Q)).toEqual({ headOid: 'head', reviewDecision: null, unresolved: null, checks: { total: 0, passed: 0, failed: 0, pending: 0, skipped: 0 } });
+    expect(graphql).toHaveBeenCalledTimes(1);
+    pr.reviewThreads.pageInfo.hasNextPage = false;
+    expect(await fetchPrSummary({ graphql } as unknown as GithubClient, Q)).toMatchObject({ unresolved: 1 });
+    expect(graphql).toHaveBeenCalledTimes(2);
+  });
+
+  it('does not turn missing PR data or a changed head into zero/all passing', async () => {
+    const graphql = vi.fn().mockResolvedValue({ repository: { pullRequest: null } });
+    expect(await fetchPrSummary({ graphql } as unknown as GithubClient, Q)).toEqual({ headOid: null, unresolved: null, checks: null });
+    graphql.mockResolvedValue({ repository: { pullRequest: { headRefOid: 'new', commits: { nodes: [{ commit: { oid: 'old', statusCheckRollup: null } }] }, reviewThreads: { nodes: [], pageInfo: { hasNextPage: false } } } } });
+    expect(await fetchPrSummary({ graphql } as unknown as GithubClient, Q)).toMatchObject({ unresolved: 0, checks: null });
+  });
+
+  it('returns refreshed counts on the first expired UI request while sharing in-flight work', async () => {
+    let now = 0;
+    const fetchPr = vi.fn().mockResolvedValue(remote({ checks: { total: 1, passed: 0, failed: 0, pending: 1, skipped: 0 } }));
+    const svc = new PrStatusService({ readToken: TOKEN_OK, fetchPr, staleTtlMs: 0, now: () => now });
+    await svc.getStatuses([Q]);
+    now = 90_000;
+    fetchPr.mockResolvedValue(remote({ checks: { total: 1, passed: 1, failed: 0, pending: 0, skipped: 0 } }));
+    const [first, second] = await Promise.all([svc.getStatuses([Q]), svc.getStatuses([Q])]);
+    expect(first[0]).toMatchObject({ checks: { passed: 1, pending: 0 } });
+    expect(second).toEqual(first);
+    expect(fetchPr).toHaveBeenCalledTimes(2);
+  });
+});
 
 function remote(partial: Partial<PrRemoteState>): PrRemoteState {
   return {

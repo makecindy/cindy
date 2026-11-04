@@ -40,4 +40,4 @@ ghost_forge_pack 校验并生成 .cindy 产物；需要发布时改用 publish i
 Cindy 会默认把自身版本写进这份具体插件的 `minCindyVersion`；在开发版或预发布版中制作时，
 调用 scaffold 必须明确传入插件实际依赖的首个 Cindy 正式版本。
 
-四种模板都可叠加 `withUi:true`，生成不需要构建的 MCP Apps 页面与原工具 handler，见[§4.23](plugin-interactive-pages.md)。该选项可在开发构建使用已发布的页面能力下限；不声明时版本推导规则不变。
+需要工具结果中的交互页面，见[§4.23 编写指南与示例](plugin-interactive-pages.md)。

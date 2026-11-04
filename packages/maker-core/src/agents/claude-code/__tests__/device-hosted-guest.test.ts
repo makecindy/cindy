@@ -18,7 +18,6 @@ import {
 } from '../../base-agent.js';
 import type { AuthAdapter } from '../../../interfaces/auth-adapter.js';
 import type { Logger } from '../../../interfaces/logger.js';
-import { CONTACTS_RULES_DISABLED } from '../../../contacts/system-prompt.js';
 import { DEVICE_HOSTED_GUEST_CLAUDE_TOOLS } from '../../shared/device-hosted.js';
 
 const sdkMock = vi.hoisted(() => ({
@@ -134,7 +133,14 @@ const HOST_MODELS = ['shared/model-a', 'shared/model-b', 'other/model-c'].map((i
 
 async function startHostedSession(
   guest: boolean,
-  overrides: { guestProvider?: DeviceHostedGuestProvider | null; providerId?: string; local?: boolean } = {},
+  overrides: {
+    guestProvider?: DeviceHostedGuestProvider | null;
+    providerId?: string;
+    local?: boolean;
+    ghostRosterSnapshot?: string;
+    mcpServers?: string[];
+    controllerManagedSkills?: { claudePluginRoots: string[] };
+  } = {},
 ): Promise<{ options: CapturedOptions; sessionRoot: string }> {
   const configDir = await makeTempDir();
   process.env.CLAUDE_CONFIG_DIR = configDir;
@@ -169,7 +175,6 @@ async function startHostedSession(
     binaryPath: process.execPath,
     logger: createNoopLogger(),
     getGhostRosterPrompt: () => GHOST_ROSTER,
-    getContactsPromptState: () => 'disabled',
     getManagedSkills: async () => [{
       kind: 'agent-skill',
       name: 'learn',
@@ -188,10 +193,11 @@ async function startHostedSession(
     isGitRepo: false,
     tunnelUrl: 'http://127.0.0.1:4000/t/tok/',
     tunnelToken: 'tok',
-    mcpServers: [],
+    mcpServers: overrides.mcpServers ?? [],
     mirrorRoot,
     ...(guest ? { guest: true } : {}),
     ...(guest && overrides.guestProvider !== null ? { guestProvider: overrides.guestProvider ?? GUEST_PROVIDER } : {}),
+    ...(overrides.controllerManagedSkills ? { controllerManagedSkills: overrides.controllerManagedSkills } : {}),
   };
   const handle = await new ClaudeCodeAgent(deps).startSession({
     sessionId: 'hosted-session',
@@ -199,6 +205,7 @@ async function startHostedSession(
     providerId: overrides.providerId ?? 'shared-provider',
     workingDir,
     permissionMode: 'acceptEdits',
+    ...(overrides.ghostRosterSnapshot !== undefined ? { ghostRosterSnapshot: overrides.ghostRosterSnapshot } : {}),
     ...(overrides.local ? {} : { deviceHosted }),
   });
   liveHandles.push(handle);
@@ -233,9 +240,35 @@ describe('Claude Code device-hosted guest sessions', () => {
     const parentClaudeMd = path.join(path.dirname(sessionRoot), 'CLAUDE.md').split(path.sep).join('/');
     expect(options.settings?.claudeMdExcludes).toContain(parentClaudeMd);
     expect(options.plugins).toBeUndefined();
-    // 不带本机的插件清单与通讯录说明(system prompt 改动已经维护者确认)。
+    // 不带本机的插件清单(system prompt 改动已经维护者确认)。
     expect(options.systemPrompt?.append).not.toContain(GHOST_ROSTER);
-    expect(options.systemPrompt?.append).not.toContain(CONTACTS_RULES_DISABLED);
+  });
+
+  // 插件工具经隧道回到任务所在电脑：花名册用那台带来的快照，本机的仍不进来；那台没提供插件工具就不注入。
+  it('injects the task computer roster instead of this computer roster when its plugin tools are tunnelled', async () => {
+    const ownerRoster = 'TASK COMPUTER GHOST ROSTER';
+    for (const guest of [true, false]) {
+      const { options } = await startHostedSession(guest, { ghostRosterSnapshot: ownerRoster, mcpServers: ['cindy'] });
+      expect(options.systemPrompt?.append).toContain(ownerRoster);
+      expect(options.systemPrompt?.append).not.toContain(GHOST_ROSTER);
+    }
+    const { options } = await startHostedSession(true, { ghostRosterSnapshot: ownerRoster, mcpServers: [] });
+    expect(options.systemPrompt?.append).not.toContain(ownerRoster);
+    // 任务所在电脑没有可召回的插件(空快照)：同账号也不能退回本机的花名册。
+    const empty = await startHostedSession(false, { ghostRosterSnapshot: '', mcpServers: ['cindy'] });
+    expect(empty.options.systemPrompt?.append).not.toContain(GHOST_ROSTER);
+  });
+
+  // 内置与插件带的 Skill 以任务所在电脑为准(工具与脚本都在那台)：挂它带来的插件目录，本机的不加载；受邀者也一样。
+  it('mounts the task computer managed skills instead of this computer ones', async () => {
+    for (const guest of [true, false]) {
+      const shadow = await makeTempDir();
+      const root = path.join(shadow, '.cindy', 'managed-skills', 'cindy');
+      const { options } = await startHostedSession(guest, { controllerManagedSkills: { claudePluginRoots: [root] } });
+      expect(options.plugins).toEqual([{ type: 'local', path: root }]);
+      // 插件目录属于影子目录，随任务清理；这里提前删掉，好让公共收尾只核对本机临时挂载的插件。
+      await fs.rm(path.join(shadow, '.cindy'), { recursive: true, force: true });
+    }
   });
 
   it('routes only through the shared provider: route token, shared models, no host subagent model', async () => {
@@ -284,7 +317,6 @@ describe('Claude Code device-hosted guest sessions', () => {
     expect(await preToolUseDenial(options, 'Agent', { description: 'd', prompt: 'p', isolation: 'worktree' })).toBeNull();
     expect(options.plugins?.length).toBe(1);
     expect(options.systemPrompt?.append).toContain(GHOST_ROSTER);
-    expect(options.systemPrompt?.append).toContain(CONTACTS_RULES_DISABLED);
     expect(options.env?.ANTHROPIC_CUSTOM_HEADERS).toBeUndefined();
     expect(options.settings?.env).toBeUndefined();
     expect(options.settings?.availableModels).toEqual(['shared/model-a', 'shared/model-b', 'other/model-c']);

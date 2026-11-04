@@ -25,6 +25,7 @@
  * Renderer 可调用。它由业务 dispatch 拦截,绝不放行通用 UI / shell IPC。
  */
 import { FILE_PEER_CHANNEL } from './filePeer.js';
+import { MACHINE_STATUS_CHANNEL } from './machineStatus.js';
 import { PROVIDER_GROUP_REMOTE_CHANNEL } from './providerGroup.js';
 import { REMOTE_AGENT_CHANNEL } from './remoteAgent.js';
 import {
@@ -99,6 +100,13 @@ export const DL_SESSION_REFERENCE_CAPABILITY_CHANNEL =
  * (无入方向媒体支持 → 控制端回退媒体占位)。
  */
 export const DL_MEDIA_FETCH_CHANNEL = 'device-link:media:fetch';
+
+/**
+ * iPhone 桌面小组件的余量与每日用量快照(控制端 → 被控端,只读)。
+ * 被控端 dispatch 拦截执行，返回菜单栏面板已算好的同一份数据（已按「隐藏个人信息」打码，
+ * 不含凭证）。老被控端不识别时回 CHANNEL_NOT_ALLOWED，手机端提示需要更新电脑上的 Cindy。
+ */
+export const DL_USAGE_WIDGET_SNAPSHOT_CHANNEL = 'device-link:usage-widget:snapshot:v1';
 
 /**
  * Legacy 出方向语音转写 channel(控制端 → 被控端):早期方案里手机端录音后先经 server
@@ -307,6 +315,7 @@ const CORE_INVOKE_CHANNELS: readonly string[] = [
   // 供应商分享(只读):被控电脑收到的、别人分享给它的供应商目录(经被控电脑代读，手机读不到
   // 另一个账号的电脑)。只回显示用字段，供手机模型列表的远程供应商区域使用。
   'maker:provider-share:received-catalogs', // PROVIDER_SHARE_RECEIVED_CATALOGS_CHANNEL
+  'maker:model-catalog:read', // Same-account task-host discovery + fixed read-only catalog/readiness operations.
   // Git safety 设置(只读):远程 Codex Rewind 入口必须按被控端是否会创建 safety snapshot
   // 决定显隐。SET/RESET 不放行,控制端不能改被控端全局偏好。
   'maker:git-safety:get',
@@ -314,7 +323,9 @@ const CORE_INVOKE_CHANNELS: readonly string[] = [
   // 因为控制端本地没有远端 session 的 DB、工作目录或 gh 登录态。
   'git-context:get-for-session',
   'git-context:pr-refs:list',
+  'git-context:pr-refs:manage',
   'git-context:pr-status',
+  'git-context:github-read',
   // —— 通用远程资源面——
   // 固定的 manifest / list / get / invoke 入口。业务模块只在被控端 provider
   // registry 注册资源与动作，后续新增模块或动作不再扩张 device-link channel 表。
@@ -437,6 +448,7 @@ const EXTENDED_INVOKE_CHANNELS: readonly string[] = [
   'agent-island:completion-action',
   // —— Project automation ——
   'maker:project-automation:reconcile',
+  'maker:project-automation:pending-imports',
   'maker:project-automation:list-consents',
   'maker:project-automation:revoke-consent',
   'maker:project-automation:upsert-schedule',
@@ -471,6 +483,9 @@ const EXTENDED_INVOKE_CHANNELS: readonly string[] = [
   ORCA_EXECUTION_DEVICES_CHANNEL,
   // 云端伙伴：交出伙伴前探测目标电脑是否支持接手(只读常量，无 sender 依赖、无本机 UI 副作用)。
   // 老版本无 handler → CHANNEL_NOT_ALLOWED，交出方拒绝该目标。
+  // 这台电脑此刻的资源情况(只读，真相在被控端，无 sender 依赖、无 UI 副作用)。不进 sharedTask 访客白名单；
+  // 老版本无 handler → CHANNEL_NOT_ALLOWED，控制端显示需要更新。
+  MACHINE_STATUS_CHANNEL,
   COMPANION_CLOUD_CAPS_CHANNEL,
   // 云端伙伴：在任一台电脑上更换伙伴的主力电脑。只读读取主力电脑视角的可接手电脑，以及请主力电脑
   // 交出伙伴(写)。准入同本机伙伴设置的「主力电脑」一行：同账号 + 主力电脑开启远程控制时控制端本就
@@ -548,6 +563,8 @@ const EXTENDED_INVOKE_CHANNELS: readonly string[] = [
   'maker:usage:codex-rate-limits',
   'maker:usage:codex-rate-limit-reset',
   'maker:usage:codex-reset-auto-use',
+  // 桌面小组件快照（只读，被控端 dispatch 拦截；准入同上方用量只读通道）。
+  DL_USAGE_WIDGET_SNAPSHOT_CHANNEL,
   // Claude 订阅账号余量快照(只读,cached-first):控制端远程会话状态栏 chip 显示
   // 被控端订阅的 5h/周/分模型窗口剩余(数据真相在被控端 —— turn 在被控端消耗其
   // 订阅额度)。快照只含利用率百分比、reset 时间与账号归属指纹(单向 scrypt 哈希,
@@ -764,6 +781,7 @@ export const PUSH_FORWARD_ALLOWLIST: ReadonlySet<string> = new Set([
   'maker:history-work-patch',
   // Device-level runtime Agent roster changes; controllers refresh their local availability cache.
   'maker:agents:changed',
+  'maker:model-catalog:changed',
   // Host-owned resource provider 的通用失效通知；payload 只含 collection/ref/revision。
   REMOTE_RESOURCE_CHANGED_CHANNEL,
   'maker:status-changed',

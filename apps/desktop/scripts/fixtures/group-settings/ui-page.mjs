@@ -124,6 +124,10 @@ export default {
       await back.waitFor();
       const dissolve = await row(page, await ui.t('bots.groupChat.lifecycle.dissolve'));
       assert.equal(await dissolve.count(), role === 'owner' ? 1 : 0, 'only the owner dissolves');
+      if (role === 'owner') {
+        await dialog.getByRole('switch', { name: await ui.t('bots.groupChat.settings.allowMentionAllBots'), exact: true }).waitFor();
+        await dialog.getByText(await ui.t('bots.groupChat.settings.allowMentionAllBotsHint'), { exact: true }).waitFor();
+      }
       await ui.capture('manage');
       await back.click();
       await edit.click();

@@ -209,7 +209,8 @@ export async function fetchGhostSettings(ghost: InstalledGhost, pathname: string
   const args = { ghostId: id, pathname: path, method, readBodyText: async () => body ?? '', isCurrent, confirmConnection };
   const handler = path === '/secrets' || path.startsWith('/secrets/') ? ghostSecretsHandler
     : path === '/oauth' || path.startsWith('/oauth/') ? ghostOauthHandler
-    : path === '/connections' || path.startsWith('/connections/') ? ghostConnectionsHandler : null;
+    : path === '/connections' || path.startsWith('/connections/') ? ghostConnectionsHandler
+    : path === '/models' ? ghostModelsHandler : null;
   let result: { status: number; body?: string };
   if (handler) result = await handler(args);
   else if (path === '/kv' && ghostKvStore) result = await handleGhostKvRequest({
@@ -311,6 +312,12 @@ type GhostSecretsProtocolHandler = (args: {
 }) => Promise<{ status: number; body?: string }>;
 
 let ghostSecretsHandler: GhostSecretsProtocolHandler | null = null;
+let ghostModelsHandler: GhostSecretsProtocolHandler | null = null;
+
+/** /models：插件发布它提供给模型选择器的模型(index.ts 注入，形态同 /secrets)。 */
+export function setGhostModelsHandler(handler: GhostSecretsProtocolHandler): void {
+  ghostModelsHandler = handler;
+}
 
 export function setGhostSecretsHandler(handler: GhostSecretsProtocolHandler): void {
   ghostSecretsHandler = handler;
@@ -587,7 +594,7 @@ function registerGhostProtocol(
         } catch { return new Response(null, { status: 400, headers }); }
         // Page authors cannot choose a different phone or impersonate a logic request.
         if (!options || typeof options !== 'object' || Array.isArray(options) ||
-            Object.keys(options).some(key => key !== 'initial')) return new Response(null, { status: 400, headers });
+            Object.keys(options).some(key => !['initial', 'allowRemote'].includes(key))) return new Response(null, { status: 400, headers });
         const result = await ghostModelPickerProvider(storagePart, options, isRegistrationCurrent, request.signal);
         if (!isRegistrationCurrent()) return new Response(null, { status: 403, headers });
         return new Response(JSON.stringify(result), { status: 200, headers });
@@ -670,6 +677,23 @@ function registerGhostProtocol(
             ...(out.body !== undefined
               ? { 'Content-Type': 'application/json; charset=utf-8' }
               : {}),
+            'Cache-Control': 'no-cache',
+          },
+        });
+      }
+      if (url.pathname === '/models') {
+        if (!ghostModelsHandler) return new Response(null, { status: 503 });
+        const out = await ghostModelsHandler({
+          ghostId: storagePart,
+          method: request.method,
+          pathname: url.pathname,
+          readBodyText: () => readBoundedBodyText(request),
+          isCurrent: isRegistrationCurrent,
+        });
+        return new Response(out.body ?? null, {
+          status: out.status,
+          headers: {
+            ...(out.body !== undefined ? { 'Content-Type': 'application/json; charset=utf-8' } : {}),
             'Cache-Control': 'no-cache',
           },
         });

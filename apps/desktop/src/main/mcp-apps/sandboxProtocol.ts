@@ -1,3 +1,4 @@
+import { withHostAppSdk } from '@cindy/maker-shared/mcp-app-sdk';
 import { app, protocol, session, type WebContents, type WebFrameMain } from 'electron';
 import { randomUUID } from 'node:crypto';
 import { getCurrentDbClientSnapshot } from '../localDb/client/current.js';
@@ -5,6 +6,7 @@ import { appCsp, MCP_APPS_MAX_BYTES } from './protocol.js';
 import {
   mcpAppSandboxDocument,
   mcpAppFrameUrlAllowed,
+  HOST_APP_SDK_PATH,
   type McpAppDocument,
 } from '../../shared/mcpApps.js';
 import { mcpAppDirectSandboxDocument } from './sandboxBridge.js';
@@ -23,7 +25,7 @@ export function setMcpAppCallerCleanup(cleanup?: (caller: string) => Promise<voi
 const documents = new Map<
   string,
   {
-    fileKey: string; document: McpAppDocument; owner: object | null; caller?: string;
+    html: string; fileKey: string; document: McpAppDocument; owner: object | null; caller?: string;
     dispose?: () => void;
     bridge?: { key: string; frame?: WebFrameMain; invoke(input: unknown): Promise<unknown> };
   }
@@ -59,6 +61,7 @@ export function supplyMcpAppDocument(
   dispose?: () => void,
 ): void {
   documents.set(document.viewId, {
+    html: withHostAppSdk(document.html, 'cindy-mcp-app://' + document.viewId + '-view' + HOST_APP_SDK_PATH),
     fileKey: randomUUID(), document, owner: getCurrentDbClientSnapshot(), caller, dispose,
     bridge: invoke ? { key: randomUUID(), invoke } : undefined,
   });
@@ -230,6 +233,14 @@ export function registerMcpAppProtocol(): void {
     const doc = entry?.document;
     if (!doc || entry?.owner !== getCurrentDbClientSnapshot())
       return new Response(null, { status: 404 });
+    if (url.hostname === `${id}-view` && url.pathname === HOST_APP_SDK_PATH &&
+        request.method === 'GET' && !url.search && !url.hash && doc.sdk) {
+      return new Response(doc.sdk.source, { headers: {
+        'Content-Type': 'text/javascript; charset=utf-8',
+        'Cache-Control': 'no-store',
+        'X-Content-Type-Options': 'nosniff',
+      } });
+    }
     if (url.hostname === `${id}-view` && url.pathname.startsWith('/__cindy/files/')) {
       if (!fileReader || request.headers.get(frameHeader) !== entry.fileKey || url.search || url.hash)
         return new Response(null, { status: 404 });
@@ -264,7 +275,7 @@ export function registerMcpAppProtocol(): void {
       ? entry.bridge
         ? mcpAppDirectSandboxDocument(resourceUrl, `cindy-mcp-app://${id}/bridge`)
         : mcpAppSandboxDocument('', resourceUrl)
-      : doc.html, {
+      : entry.html, {
       headers: {
         'Content-Type': 'text/html; charset=utf-8',
         'Cache-Control': 'no-store',

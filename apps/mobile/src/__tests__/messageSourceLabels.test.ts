@@ -98,7 +98,7 @@ describe("device source label", () => {
 });
 
 describe("sender labels", () => {
-  it.each(['en', 'zh-CN', 'zh-TW', 'ja', 'ko'])(
+  it.each(['en', 'zh-CN', 'zh-TW', 'ja', 'ko', "es", "fr", "de", "pt-PT", "pt-BR"])(
     'keeps the MCP server name and ID visible in %s',
     async (language) => {
       await i18n.changeLanguage(language);

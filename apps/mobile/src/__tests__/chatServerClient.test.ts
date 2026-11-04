@@ -5,7 +5,7 @@ import { botGroupNewMessageCount } from '@cindy/maker-shared/botGroupPresentatio
 import { createChatHistory, type ChatHistoryState } from '@cindy/maker-shared/chat-history';
 import { chatGroupView, chatRoomRow, chatReadAt, createChatServerClient, type ChatMessage, type ChatPage, type ChatRoom, type ChatSnapshot } from '@/chat/chatServerClient';
 import type { ChatHistory } from '@cindy/maker-shared/chat-history';
-import { botGroupQuoteFromMessage, resolveBotGroupQuote, buildBotGroupQuoteCard, buildBotGroupTaskCard } from '@cindy/maker-shared/botGroupChat';
+import { botGroupQuoteFromMessage, resolveBotGroupQuote, buildBotGroupQuoteCard, buildBotGroupTaskCard, botGroupProcessCard } from '@cindy/maker-shared/botGroupChat';
 import { orderedBotGroups } from '@/session/botGroupRemote';
 const id = (n: number) => `00000000-0000-4000-8000-${String(n).padStart(12, '0')}`;
 const room = (n = 1, state = 'joined'): ChatRoom => ({ id: id(n), name: 'Discussion', kind: 'group', state, archived: false,
@@ -16,6 +16,115 @@ const message = (n: number): ChatMessage => ({ id: id(n), seq: String(9007199254
 const snapshot = (): ChatSnapshot => ({ room: room(), cursor: '9007199254741099', messages: [], members: [
   { id: id(10), kind: 'human', name: 'Other member', state: 'joined', ownerActorId: id(10), ownerName: '', avatar: null, role: 'member' },
 ] });
+
+// #5759, unit: the real direct client must retain human-authored plan cards, refresh
+// their server state and use revision/actor authorization. Existing tests only covered
+// ordinary messages and stop-all; the minimal regression is one cindy.plan message.
+describe('direct group plans', () => {
+  const plan = () => ({ id: id(40), revision: 3, source_message_id: id(20), request_text: 'Build it',
+    organizer_id: id(12), creator_id: id(10), status: 'proposed', current_step: null,
+    steps: [{ position: 0, botId: id(12), botName: 'Builder', task: 'Build', status: 'pending' },
+      { position: 1, botId: id(13), botName: 'Reviewer', task: 'Review', status: 'pending' }],
+    kind: 'work', created_at: '2026-10-09', updated_at: '2026-10-09' });
+  const card = () => ({ ...message(21), content: [{ type: 'card', namespace: 'cindy.plan', schemaRevision: 1,
+    data: { planId: id(40) }, fallback: '1. Builder: Build 2. Reviewer: Review' }] });
+  function fixture() {
+    const state = { plan: plan(), snapshot: snapshot() };
+    const request = vi.fn(async (path: string, method = 'GET') => {
+      if (path === '/me') return { actor: { id: id(10), kind: 'human' } };
+      if (path.endsWith('/snapshot')) return state.snapshot;
+      if (path.includes('/messages?')) return [card()];
+      if (path.includes('/plans') && method === 'GET') return [state.plan];
+      if (method === 'POST') return { ok: true };
+      return [];
+    });
+    return { state, request, client: createChatServerClient(request as any) };
+  }
+  it('projects the card and refreshes cancellation without a new message', async () => {
+    const { client, state } = fixture();
+    const first = chatGroupView(await client.load(id(1)), id(10));
+    expect(first.messages[0]).toMatchObject({ kind: 'plan', planId: id(40), authorKind: 'user' });
+    expect(first.plans[0]).toMatchObject({ status: 'proposed', canManage: true, workDir: null, steps: [{ task: 'Build' }, { task: 'Review' }] });
+    expect(first.openPlan).toMatchObject({ id: id(40), status: 'proposed' });
+    state.plan = { ...state.plan, status: 'dismissed', revision: 4 };
+    const reopened = chatGroupView(await client.load(id(1)), id(10));
+    expect(reopened.plans[0].status).toBe('dismissed');
+    expect(reopened.openPlan).toBeNull();
+  });
+  it('uses the displayed revision and the owned manager actor, including waiting dismissal', async () => {
+    const { client, state, request } = fixture();
+    state.plan = { ...state.plan, status: 'waiting', creator_id: id(99) };
+    state.snapshot.members.push({ ...state.snapshot.members[0], id: id(12), kind: 'bot', role: 'admin', ownerActorId: id(10) });
+    const page = await client.load(id(1));
+    expect(chatGroupView(page, id(10)).plans[0].canManage).toBe(true);
+    const controller = new AbortController();
+    await client.actPlan(id(1), page.plans![0], { action: 'dismiss' }, 'operation-plan-dismiss', () => true, controller.signal);
+    expect(request).toHaveBeenLastCalledWith(`/conversations/${id(1)}/plans/${id(40)}`, 'POST',
+      { operationId: 'operation-plan-dismiss', expectedRevision: 3, action: 'stop' }, id(12), controller.signal);
+  });
+  it('refuses another member’s plan and rejects a lost manager role before writing', async () => {
+    const { client, state, request } = fixture();
+    state.plan.creator_id = id(99);
+    const page = await client.load(id(1));
+    expect(chatGroupView(page, id(10)).plans[0].canManage).toBe(false);
+    state.snapshot = { ...state.snapshot, members: state.snapshot.members.map(member => ({ ...member, role: 'admin' })) };
+    const manageable = await client.load(id(1));
+    expect(chatGroupView(manageable, id(10)).plans[0].canManage).toBe(true);
+    state.snapshot = snapshot();
+    await expect(client.actPlan(id(1), manageable.plans![0], { action: 'start' }, 'operation-plan-start')).rejects.toThrow('ROLE_REQUIRED');
+    expect(request.mock.calls.some(([, method]) => method === 'POST')).toBe(false);
+  });
+  it.each([
+    ['start', 'proposed', 'pending'], ['dismiss', 'proposed', 'pending'],
+    ['continue', 'waiting', 'done'], ['retry', 'waiting', 'failed'],
+  ])('submits %s with revision protection and preserves a server conflict', async (action, status, stepStatus) => {
+    const { client, state, request } = fixture();
+    Object.assign(state.plan, { status, current_step: status === 'waiting' ? 0 : null });
+    state.plan.steps[0].status = stepStatus;
+    const page = await client.load(id(1));
+    const original = request.getMockImplementation()!;
+    request.mockImplementation((path, method) => method === 'POST'
+      ? Promise.reject(Object.assign(new Error('REVISION_CONFLICT'), { status: 409 })) : original(path, method));
+    await expect(client.actPlan(id(1), page.plans![0], { action: action as any }, 'operation-plan-conflict')).rejects.toThrow('REVISION_CONFLICT');
+    expect(request).toHaveBeenLastCalledWith(`/conversations/${id(1)}/plans/${id(40)}`, 'POST',
+      { operationId: 'operation-plan-conflict', expectedRevision: 3, action }, undefined, undefined);
+  });
+  it('keeps unsupported plan cards distinct from own messages without hiding access errors', async () => {
+    const { client, request } = fixture();
+    const original = request.getMockImplementation()!;
+    request.mockImplementation((path, method) => path.includes('/plans')
+      ? Promise.reject(Object.assign(new Error('NOT_FOUND'), { status: 404, code: 'NOT_FOUND' })) : original(path, method));
+    const view = chatGroupView(await client.load(id(1)), id(10));
+    expect(view.messages[0]).toMatchObject({ kind: 'plan', planId: id(40), content: '1. Builder: Build 2. Reviewer: Review' });
+    expect(view.plans).toEqual([]);
+    request.mockImplementation((path, method) => path.includes('/plans')
+      ? Promise.reject(Object.assign(new Error('FORBIDDEN'), { status: 403 })) : original(path, method));
+    await expect(client.load(id(1))).rejects.toThrow('FORBIDDEN');
+  });
+  it('reads historical plans for cards newly loaded by pagination', async () => {
+    const { client, state, request } = fixture();
+    const first = await client.load(id(1));
+    const original = request.getMockImplementation()!;
+    const older = { ...card(), id: id(19), seq: '19', content: [{ ...card().content[0], data: { planId: id(41) } }] };
+    request.mockImplementation((path, method) => path.includes('/messages?') ? Promise.resolve([older]) : original(path, method));
+    state.plan = { ...state.plan, id: id(41), status: 'done' };
+    const next = await client.older(id(1), { ...first, before: '21' });
+    expect(request).toHaveBeenCalledWith(`/conversations/${id(1)}/plans?ids=${id(40)},${id(41)}`);
+    expect(chatGroupView(next, id(10)).plans[0]).toMatchObject({ id: id(41), status: 'done' });
+  });
+  it('reassigns only eligible work steps and refuses talk-plan edits', async () => {
+    const { client, state, request } = fixture();
+    Object.assign(state.plan, { status: 'waiting', current_step: 0 });
+    state.plan.steps[0].status = 'failed';
+    state.snapshot.members.push({ ...state.snapshot.members[0], id: id(14), kind: 'bot' });
+    const page = await client.load(id(1));
+    await client.actPlan(id(1), page.plans![0], { action: 'reassign', position: 0, botId: id(14) }, 'reassign');
+    expect(request).toHaveBeenLastCalledWith(`/conversations/${id(1)}/plans/${id(40)}`, 'POST',
+      { action: 'reassign', position: 0, botId: id(14), expectedRevision: 3, operationId: 'reassign' }, undefined, undefined);
+    await expect(client.actPlan(id(1), { ...page.plans![0], kind: 'talk' }, { action: 'remove', position: 0 }, 'remove')).rejects.toThrow('PLAN_CLOSED');
+    expect(request.mock.calls.filter(([, method]) => method === 'POST')).toHaveLength(1);
+  });
+});
 
 describe('group list activity', () => {
   it('refreshes pending execution state without a new message and tolerates an older server', async () => {
@@ -90,6 +199,7 @@ it('retains fresh executions when cached history changes during load', async () 
     if (path === '/me') return { actor: { id: id(11), kind: 'human' } };
     if (path.endsWith('/executions')) return [{ id: id(++reads === 1 ? 30 : 31), bot_id: id(12), status: 'stopping', epoch: 1, source_message_id: id(20) }];
     if (path.includes('/execution-failures?')) return [];
+    if (path.endsWith('/plans')) return [];
     throw new Error(path);
   });
   const client = createChatServerClient(request as any, undefined, async () => stored as unknown as ChatHistory);
@@ -236,6 +346,7 @@ describe('direct Chat Server client', () => {
     let status = 'failed';
     const request = vi.fn().mockImplementation(async (path: string) => {
       if (path.endsWith('/snapshot')) return snapshot();
+      if (path.endsWith('/plans')) return [];
       if (path.includes('/execution-failures?')) {
         const ids = new URLSearchParams(path.split('?')[1]).get('sourceIds')!.split(',');
         return ids.includes(id(1)) ? [{ id: id(500), source_message_id: id(1), bot_id: id(10), epoch: 1, status,
@@ -297,6 +408,7 @@ describe('direct Chat Server client', () => {
     let status = 'failed';
     const request = vi.fn();
     request.mockImplementation(async (path: string) => path.endsWith('/snapshot') ? snapshot()
+      : path.endsWith('/plans') ? []
       : path.includes('/execution-failures?') ? [{ id: id(30), source_message_id: source.id, bot_id: id(10), epoch: 1, status, failure_code }]
       : [source]);
     const client = createChatServerClient(request);
@@ -332,9 +444,9 @@ describe('direct Chat Server client', () => {
     const source = message(20);
     const request = vi.fn().mockResolvedValueOnce(snapshot()).mockResolvedValueOnce([source]).mockResolvedValueOnce([])
       .mockRejectedValueOnce(Object.assign(new Error('NOT_FOUND'), { status: 404 }))
-      .mockResolvedValueOnce([{ id: id(30), source_message_id: source.id, bot_id: id(10), epoch: 1, status: 'failed', failure_code: 'AUTH_REQUIRED' }]);
+      .mockResolvedValueOnce([{ id: id(30), source_message_id: source.id, bot_id: id(10), epoch: 1, status: 'failed', failure_code: 'AUTH_REQUIRED' }]).mockResolvedValueOnce([]);
     const page = await createChatServerClient(request).load(id(1));
-    expect(request.mock.calls.at(-1)?.[0]).toBe(`/conversations/${id(1)}/executions`);
+    expect(request.mock.calls.at(-2)?.[0]).toBe(`/conversations/${id(1)}/executions`);
     expect(chatGroupView(page, id(11)).messages[1].runtimeFailureCode).toBe('AUTH_REQUIRED');
   });
   it('surfaces execution read denial or malformed success through the existing load error path', async () => {
@@ -370,13 +482,13 @@ describe('direct Chat Server client', () => {
   });
   it('opens and paginates main history, preserving exact sequence cursors and author identity', async () => {
     const messages = Array.from({ length: 100 }, (_, n) => message(200 - n));
-    const request = vi.fn().mockResolvedValueOnce(snapshot()).mockResolvedValueOnce(messages).mockResolvedValueOnce([]).mockResolvedValueOnce([])
-      .mockResolvedValueOnce([message(100)]).mockResolvedValueOnce([]).mockResolvedValueOnce([]);
+    const request = vi.fn().mockResolvedValueOnce(snapshot()).mockResolvedValueOnce(messages).mockResolvedValueOnce([]).mockResolvedValueOnce([]).mockResolvedValueOnce([])
+      .mockResolvedValueOnce([message(100)]).mockResolvedValueOnce([]).mockResolvedValueOnce([]).mockResolvedValueOnce([]);
     const client = createChatServerClient(request);
     const page = await client.load(id(1));
     expect(page.before).toBe(messages.at(-1)!.seq);
     const older = await client.older(id(1), page);
-    expect(request.mock.calls[4][0]).toBe(`/conversations/${id(1)}/messages?limit=100&before=${messages.at(-1)!.seq}`);
+    expect(request).toHaveBeenCalledWith(`/conversations/${id(1)}/messages?limit=100&before=${messages.at(-1)!.seq}`);
     expect(older.before).toBeNull();
     const view = chatGroupView(older, id(11));
     expect(view.messages).toHaveLength(101);
@@ -414,6 +526,30 @@ describe('direct Chat Server client', () => {
       operationId: 'same-operation', content: [{ type: 'text', text: 'hello' }], mentions: [id(3)],
     });
     expect(request.mock.calls[0]).toEqual(request.mock.calls[1]);
+  });
+  // Unit: broadcasts must override an implicit quoted companion and retain their wire audience.
+  it.each([true, false])('keeps human broadcasts directed with server capability=%s', async supported => {
+    const original = { ...message(20), authorId: id(12), author: { kind: 'bot', name: 'Companion' } };
+    const member = { ...snapshot().members[0], id: id(12), kind: 'bot', state: 'joined' };
+    const request = vi.fn(async (path: string, method?: string) => {
+      if (path === '/me') return { actor: { id: id(11), kind: 'human' }, capabilities: supported ? { groupMentionAudiences: 1 } : {} };
+      if (method === 'POST') return { id: id(21) };
+      return path.endsWith('/members') ? [member] : original;
+    });
+    const client = createChatServerClient(request as any);
+    const input = { clientId: 'broadcast', text: '@Everyone', mentions: { all: true, botIds: [] }, quote: { messageId: id(20) } };
+    await client.send(id(1), input);
+    const posted = request.mock.calls.at(-1) as unknown as [string, string, Record<string, unknown>];
+    expect(posted[2].mentions).toEqual(supported ? [] : [id(11)]);
+    expect(posted[2].mentionAudience).toBe(supported ? 'humans' : undefined);
+    const bots = { ...input, clientId: 'bots', mentions: { all: false, allBots: true, botIds: [] } };
+    if (supported) {
+      await client.send(id(1), bots);
+      expect((request.mock.calls.at(-1) as unknown as [string, string, Record<string, unknown>])[2]).toMatchObject({ mentionAudience: 'bots', mentions: [] });
+    } else {
+      await expect(client.send(id(1), bots)).rejects.toThrow('ALL_BOTS_MENTION_DISABLED');
+      expect(request.mock.calls.filter(([, method]) => method === 'POST')).toHaveLength(1);
+    }
   });
   // Product rule: quoting a present companion addresses that companion; a deleted
   // original must not send a stale quote or silently lose the user's reply.
@@ -469,7 +605,7 @@ describe('direct Chat Server client', () => {
   it('reauthorizes and replaces loaded older history on refresh instead of retaining deleted text', async () => {
     const recent = Array.from({ length: 100 }, (_, n) => message(200 - n));
     const request = vi.fn().mockResolvedValueOnce(snapshot()).mockResolvedValueOnce(recent)
-      .mockResolvedValueOnce([{ ...message(100), content: [{ type: 'text', text: 'edited' }] }]).mockResolvedValueOnce([]).mockResolvedValueOnce([]).mockResolvedValueOnce([]);
+      .mockResolvedValueOnce([{ ...message(100), content: [{ type: 'text', text: 'edited' }] }]).mockResolvedValueOnce([]).mockResolvedValueOnce([]).mockResolvedValueOnce([]).mockResolvedValueOnce([]);
     const page = await createChatServerClient(request).load(id(1), message(100).seq);
     expect(chatGroupView(page, id(10)).messages[0].content).toBe('edited');
     expect(request.mock.calls[2][0]).toContain(`before=${message(101).seq}`);
@@ -582,6 +718,21 @@ it('reads Cindy preset identity without inferring from names and retains known I
   expect(request.mock.calls.every(call => call[0] === '/preferences' && call[1] === 'GET')).toBe(true);
 });
 
+// Unit: group and thread projections retain the optional process locator while
+// old messages, human-authored cards and deleted replies keep their prior behavior.
+it('keeps process metadata out of the reply and preview, and exposes it only for a bot', () => {
+  const ref = { groupId: id(1), executionId: id(40), sessionId: 'lane', clientId: 'source' };
+  const reply = { ...message(20), author: { kind: 'bot' as const, name: 'Cindy' },
+    threadRootId: id(15), content: [{ type: 'text', text: 'Result' }, botGroupProcessCard(ref)] };
+  const page = { snapshot: snapshot(), messages: [reply], before: null } as ChatPage;
+  const [view] = chatGroupView(page, id(11)).messages;
+  expect(view).toMatchObject({ content: 'Result', process: ref, threadRootId: id(15) });
+  expect(chatRoomRow(room(), { ...snapshot(), messages: [reply] }, id(11)).item.display.preview).toBe('Result');
+  for (const changed of [{ ...reply, author: { kind: 'human' as const, name: 'Other' } }, { ...reply, deleted: true }]) {
+    expect(chatGroupView({ ...page, messages: [changed] }, id(11)).messages[0]?.process).toBeUndefined();
+  }
+});
+
 // Unit: invitation contract (bot-group-chat §10). Existing client tests covered joined rooms only.
 // A pre-join link must POST just its token to this account's server, never fetch members or accept implicitly.
 describe('invitation preview and explicit acceptance', () => {
@@ -591,7 +742,7 @@ describe('invitation preview and explicit acceptance', () => {
     const request = vi.fn().mockResolvedValueOnce({ ...preview, avatar: 'https://images.example.invalid/group.png', memberCount: 8 })
       .mockResolvedValueOnce(preview).mockResolvedValueOnce({ ...preview, memberCount: -1 });
     const client = createChatServerClient(request);
-    expect(await client.previewInvite(`https://untrusted.example/chat-invite/join#${token}`)).toMatchObject({ memberCount: 8, avatar: 'https://images.example.invalid/group.png' });
+    expect(await client.previewInvite(`cindy://chat-invite/${token}`)).toMatchObject({ memberCount: 8, avatar: 'https://images.example.invalid/group.png' });
     expect(request).toHaveBeenCalledExactlyOnceWith('/invite-links/preview', 'POST', { token }, undefined, undefined);
     expect((await client.previewInvite(token)).memberCount).toBeUndefined();
     expect((await client.previewInvite(token)).memberCount).toBeUndefined();

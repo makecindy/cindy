@@ -326,7 +326,6 @@ undefined；不支持时明确报错，远程流程不能回退到在执行设�
 stdout 的 RPC 结果、通知、模型回复或错误；业务状态返回固定摘要。此卡片不改变 Host 的
 network setup/readiness，不能拿 CLI 的登录结果冒充宿主凭据配置已完成。
 
-
 交互页面不依赖 Node，见[交互页面 MCP Apps（§4.23）](plugin-interactive-pages.md)。
 
 ### 4.12.6 Node 短期鉴权票据上传（未发布）

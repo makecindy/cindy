@@ -18,6 +18,7 @@ import { REGION_CAPTURE_CHANNEL as LIVE, type RegionCaptureMode } from '../share
 exposeScreenshotPageElectronApi();
 
 contextBridge.exposeInMainWorld('regionScreenshot', {
+  setTranslationLanguage: (token: string, value: import('../shared/screenshotTranslation').ScreenshotTranslationPreference): Promise<boolean> => ipcRenderer.invoke(C.SET_TRANSLATION_LANGUAGE, token, value),
   recordingControls: (token: string, expanded: boolean, point?: { x: number; y: number }, dragging = false) => ipcRenderer.invoke(LIVE.CONTROLS, token, expanded, point, dragging),
   previewRecording: (token: string, bytes: Uint8Array, format: 'webm' | 'gif') => ipcRenderer.invoke(LIVE.PREVIEW, token, bytes, format),
   autoScroll: (token: string, enabled: boolean) => ipcRenderer.invoke(LIVE.AUTO_SCROLL, token, enabled),
@@ -30,6 +31,9 @@ contextBridge.exposeInMainWorld('regionScreenshot', {
   onBegin: (callback: (payload: RegionScreenshotBegin) => void): (() => void) =>
     onPayload(C.BEGIN, callback),
   onEnd: (callback: () => void): (() => void) => onPayload(C.END, callback),
+  onLocaleChanged: (callback: (payload: { token: string; locale: string }) => void) => onPayload(C.LOCALE_CHANGED, callback),
+  onTranslationLanguageChanged: (callback: (payload: { token: string; preference: import('../shared/screenshotTranslation').ScreenshotTranslationPreference }) => void): (() => void) =>
+    onPayload(C.TRANSLATION_LANGUAGE_CHANGED, callback),
   onClear: (callback: () => void): (() => void) => onPayload(C.CLEAR, callback),
   painted: (token: string): void => ipcRenderer.send(C.PAINTED, token),
   focused: (token: string): void => ipcRenderer.send(C.FOCUSED, token),

@@ -3,6 +3,7 @@ import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 const mock = vi.hoisted(() => ({
   scope: 'owner-a',
   followUpEvents: vi.fn<(botId: string, events: RoutineRun['events']) => RoutineRun['events'] | null>((_id, events) => events),
+  skillsOff: [] as string[],
   boundaryPending: false,
   schedulerReady: true,
   dbReady: true,
@@ -33,7 +34,7 @@ const mock = vi.hoisted(() => ({
 vi.mock('../../bot-autonomy/hub.js', () => ({ currentFollowUpEvents: async (botId: string, input: RoutineRun['events']) => {
   const events = mock.followUpEvents(botId, input);
   return events === null ? null : { events, canDispatch: () => mock.followUpEvents(botId, input)?.length === events.length };
-} }));
+}, botSystemSkillsOff: async () => mock.skillsOff }));
 vi.mock('../../appSessionState.js', () => ({
   activeOwnerScopeKey: () => mock.scope,
   getActiveAppSession: () => ({ dataOwnerId: mock.scope }),
@@ -69,6 +70,7 @@ import { handleRoutineRequest } from '../../cindy-brain/routineSlot.js';
 import type { InstalledGhost } from '../../../shared/ghost.js';
 import { companionHomes } from '../../companion-cloud/homes.js';
 import { admitTaskAction, assertTaskActionCurrent, hasTaskActionAuthorization } from '../../maker-ipc/taskActionAuthorization.js';
+import { setMainLocale } from '../../i18n.js';
 beforeEach(() => { mock.readProfiles.mockImplementation(async () => mock.profiles); });
 beforeEach(() => configureRoutineHost({
   getBot: mock.getBot, ensureRoutineSession: mock.ensureRoutineSession,
@@ -82,6 +84,7 @@ afterEach(async () => {
   await stopRoutines();
   vi.clearAllMocks();
   mock.followUpEvents.mockImplementation((_id, events) => events);
+  mock.skillsOff = [];
   mock.scope = 'owner-a';
   mock.boundaryPending = false;
   mock.schedulerReady = true;
@@ -222,17 +225,118 @@ it('deletes a fresh lane deferred before dispatch', async () => {
   expect(mock.deleteRoutineSession).toHaveBeenCalledWith(expect.stringMatching(new RegExp(`^lane-${routine.id}:`)));
 });
 
-it('turns the teammate\'s weekday todo check on and off as one built-in routine', async () => {
-  // 近况里的「每天帮我查一次」：打开建内置例行任务，关掉只暂停，再打开复用同一条，不重复建。
+it('keeps the owner\'s edits when the daily todo check is turned off and on again', async () => {
+  // 近况「每天帮我查一次」：打开按默认内容建一条普通例行任务；改过的指令在关掉再打开后保留，删掉后再打开才重建。
   expect(await routineTools.todoCheckEnabled('bot')).toBe(false);
   expect(await routineTools.setTodoCheck('bot', true)).toBe(true);
   const [routine] = await routineTools.list('bot');
-  expect(routine).toMatchObject({ builtin: 'todo-check', enabled: true, silentWhenIdle: true,
-    triggers: [{ kind: 'cron', expression: '0 9 * * 1-5' }] });
+  expect(routine).toMatchObject({ enabled: true, silentWhenIdle: true, triggers: [{ kind: 'cron', expression: '0 9 * * 1-5' }] });
+  expect(routine!.builtin).toBeUndefined();
+  await routineTools.save('bot', { ...routine!, prompt: 'Only check Feishu for release blockers' }, routine!.id);
   expect(await routineTools.setTodoCheck('bot', false)).toBe(false);
+  expect(await routineTools.setTodoCheck('bot', true)).toBe(true);
+  expect((await routineTools.list('bot')).map(row => [row.id, row.enabled, row.prompt]))
+    .toEqual([[routine!.id, true, 'Only check Feishu for release blockers']]);
+  await routineTools.remove('bot', routine!.id);
   expect(await routineTools.todoCheckEnabled('bot')).toBe(false);
   expect(await routineTools.setTodoCheck('bot', true)).toBe(true);
-  expect((await routineTools.list('bot')).map(row => [row.id, row.enabled])).toEqual([[routine.id, true]]);
+  expect((await routineTools.list('bot'))[0]?.prompt).toBe(routine!.prompt);
+});
+
+it('turns a legacy built-in todo check into an editable routine, keeping its choices and history', async () => {
+  setMainLocale('en');
+  const legacyPrompt = '看看我已连接的邮箱、飞书等来源里，上次检查之后有没有需要我以后处理的新事项，有就按待办规则记下来。只用已经授权的来源，没连接的不要说查过；没有新待办就不用提醒我。';
+  const modelOverride = { agentKind: 'codex' as const, model: 'gpt-5.5', providerId: 'openai' };
+  const routine = await routineTools.createOnce('bot', { name: '每天查待办', prompt: legacyPrompt, enabled: true, silentWhenIdle: true,
+    modelOverride, triggers: [{ id: 'weekday-morning', kind: 'cron', expression: '0 9 * * 1-5', timezone: 'Asia/Shanghai' }] }, 'builtin-todo-check-bot');
+  await routineTools.runNow('bot', routine.id);
+  await vi.waitFor(async () => expect((await routineTools.history('bot', routine.id))[0]?.status).toBe('success'));
+  const saved = structuredClone(mock.save.mock.calls.at(-1)![0]) as RoutineState;
+  Object.assign(saved.routines[0]!, { builtin: 'todo-check', builtinVersion: 1 });
+  await stopRoutines();
+  mock.load.mockResolvedValue(saved);
+  mock.profiles = [{ id: 'bot', status: 'active' }];
+  await vi.waitFor(async () => expect((await routineTools.list('bot'))[0]?.name).toBe('Daily todo check'));
+  const [migrated] = await routineTools.list('bot');
+  // 迁移不是编辑：revision 不变，升级前排队的批次仍然有效。
+  expect(migrated).toMatchObject({ id: routine.id, enabled: true, modelOverride, revision: saved.routines[0]!.revision,
+    prompt: expect.stringContaining('connected sources') });
+  expect(migrated!.builtin).toBeUndefined();
+  expect(migrated!.builtinVersion).toBeUndefined();
+  expect(await routineTools.history('bot', routine.id)).toHaveLength(1);
+  // 迁移只做一次：之后主人保存的名称即使与旧默认值相同，重启也不再改写。
+  await routineTools.save('bot', { ...migrated!, name: '每天查待办', prompt: 'Edited after upgrade' }, routine.id);
+  const edited = structuredClone(mock.save.mock.calls.at(-1)![0]) as RoutineState;
+  await stopRoutines();
+  mock.load.mockResolvedValue(edited);
+  expect((await routineTools.list('bot'))[0]).toMatchObject({ name: '每天查待办', prompt: 'Edited after upgrade' });
+});
+
+// Rule (control points, 2026-10-31): only a routine that chose a plugin asks it, with the routine's
+// failure setting, and a skip/stop happens before the lane task is created or the model is called.
+// Existing cases cover only shell pre-run hooks.
+it('asks the routine\'s chosen plugin before any lane or model dispatch', async () => {
+  const screenControlPoint = vi.fn()
+    .mockResolvedValueOnce({ action: 'skip', ghostId: 'jev', ghostName: 'Jev', reason: 'nothing new', failure: false })
+    .mockResolvedValueOnce({ action: 'block', ghostId: 'jev', ghostName: 'Jev', reason: 'off hours', failure: false });
+  let laterInstalled = false;
+  const resolvePreRunPlugin = vi.fn((_point: string, id: string) => {
+    if (id === 'later' && !laterInstalled) throw new Error('The pre-run check plugin is not installed');
+    return id.endsWith('@instance') ? id : `${id}@instance`;
+  });
+  configureRoutineHost({
+    getBot: mock.getBot, ensureRoutineSession: mock.ensureRoutineSession, getScheduler: () => mock.scheduler,
+    getScheduleStorage: () => mock.storage, screenControlPoint, resolvePreRunPlugin,
+  });
+  const plain = await routineTools.save('bot', { name: 'Plain', prompt: 'Check', enabled: false,
+    triggers: [{ id: 'tick', kind: 'interval', intervalMs: 60000 }] });
+  // Saved paused before the plugin is installed, then enabled after: the id becomes the instance id.
+  const paused = await routineTools.save('bot', { name: 'Paused', prompt: 'Check', enabled: false,
+    triggers: [{ id: 'tick', kind: 'interval', intervalMs: 60000 }], preRunPlugin: { pluginId: 'later', onFailure: 'skip' } });
+  expect(paused.preRunPlugin?.pluginId).toBe('later');
+  laterInstalled = true;
+  const enabled = await routineTools.save('bot', { name: 'Paused', prompt: 'Check', enabled: true,
+    triggers: [{ id: 'tick', kind: 'interval', intervalMs: 60000 }], preRunPlugin: paused.preRunPlugin }, paused.id);
+  expect(enabled.preRunPlugin?.pluginId).toBe('later@instance');
+  await routineTools.remove('bot', paused.id);
+  const routine = await routineTools.save('bot', { name: 'Review', prompt: 'Check', enabled: true,
+    triggers: [{ id: 'tick', kind: 'interval', intervalMs: 60000 }],
+    preRunPlugin: { pluginId: 'jev', onFailure: 'skip' } });
+  expect(routine.preRunPlugin).toEqual({ pluginId: 'jev@instance', onFailure: 'skip' });
+  await routineTools.runNow('bot', routine.id);
+  await vi.waitFor(async () => expect((await routineTools.history('bot', routine.id))[0]?.status).toBe('skipped'));
+  expect(screenControlPoint).toHaveBeenCalledWith('will-routine-run', expect.objectContaining({
+    routineId: routine.id, botId: 'bot', name: 'Review', prompt: 'Check', builtin: null, events: [],
+  }), { pluginId: 'jev@instance', onFailure: 'skip' });
+  await routineTools.runNow('bot', routine.id);
+  await vi.waitFor(async () => expect((await routineTools.history('bot', routine.id))[0]).toMatchObject({
+    status: 'failed', error: expect.stringContaining('off hours'),
+  }));
+  expect(mock.ensureRoutineSession).not.toHaveBeenCalled();
+  expect(mock.scheduler.runNow).not.toHaveBeenCalled();
+  expect(screenControlPoint).toHaveBeenCalledTimes(2);
+  expect(plain.preRunPlugin).toBeUndefined();
+});
+
+// cindy-bots-runtime.md §6「伙伴技能分层」: turning off a system Skill stops its background work with its prompt and tools.
+// Before this, a manual or scheduled run of the built-in follow-up / daily todo check still reached the model.
+// The owner's own routines keep running, and the check can still be turned off but not on.
+it('skips follow-up and daily todo check runs while their system Skill is off, and refuses turning the check on', async () => {
+  const engine = await getRoutineEngine();
+  expect(await routineTools.setTodoCheck('bot', true)).toBe(true);
+  const [todoCheck] = await routineTools.list('bot');
+  const followUp = await engine.ensureBuiltin('bot', 'follow-up', { name: 'Follow up', prompt: 'Follow', enabled: true,
+    triggers: [{ id: 'tick', kind: 'interval', intervalMs: 60000 }] }, 'builtin-follow-up-bot');
+  const custom = await routineTools.save('bot', { name: 'Review', prompt: 'Check', enabled: true,
+    triggers: [{ id: 'tick', kind: 'interval', intervalMs: 60000 }] });
+  if (!todoCheck || !followUp) throw new Error('Routines were not created');
+  mock.skillsOff = ['follow', 'todo'];
+  await expect(routineTools.setTodoCheck('bot', true)).rejects.toMatchObject({ code: 'SYSTEM_SKILL_OFF' });
+  for (const id of [todoCheck.id, followUp.id, custom.id]) await routineTools.runNow('bot', id);
+  await vi.waitFor(async () => expect(await Promise.all([todoCheck.id, followUp.id, custom.id]
+    .map(async id => (await routineTools.history('bot', id))[0]?.status))).toEqual(['skipped', 'skipped', 'success']));
+  expect(mock.scheduler.runNow).toHaveBeenCalledOnce();
+  expect(await routineTools.setTodoCheck('bot', false)).toBe(false);
 });
 
 it('skips a demoted teammate\'s routine while its home is another computer, keeping the rule', async () => {
@@ -360,6 +464,144 @@ it('disables a previously exhausted import without dispatching, while ordinary m
   expect(mock.scheduler.runNow).not.toHaveBeenCalled();
   expect(mock.storage.insert).not.toHaveBeenCalled();
 });
+it('disables a one-shot reminder after it fires and is delivered, leaving no pending time', async () => {
+  vi.useFakeTimers();
+  await getRoutineEngine();
+  const routine = await routineTools.save('bot', {
+    name: 'Once', prompt: 'Remind me', enabled: true,
+    triggers: [{ id: 'once', kind: 'once', at: Date.now() + 2_000 }],
+  });
+  for (let i = 0; i < 10 && (await routineTools.list('bot'))[0]!.enabled; i++) await vi.advanceTimersByTimeAsync(1_000);
+  expect((await routineTools.list('bot'))[0]!.enabled).toBe(false);
+  expect((await routineTools.history('bot', routine.id))[0]!.status).toBe('success');
+  expect(mock.scheduler.runNow).toHaveBeenCalledOnce();
+  expect(mock.save.mock.calls.at(-1)![0].next).toEqual({});
+});
+
+it('keeps a one-shot reminder enabled when it is run by hand before its time', async () => {
+  const routine = await routineTools.save('bot', {
+    name: 'Once', prompt: 'Remind me', enabled: true,
+    triggers: [{ id: 'once', kind: 'once', at: Date.now() + 3_600_000 }],
+  });
+  await routineTools.runNow('bot', routine.id);
+  await vi.waitFor(async () => expect((await routineTools.history('bot', routine.id))[0]!.status).toBe('success'));
+  expect((await routineTools.list('bot'))[0]!.enabled).toBe(true);
+});
+
+it('keeps a one-shot reminder enabled when its fire fails, so the time is not lost', async () => {
+  vi.useFakeTimers();
+  await getRoutineEngine();
+  mock.scheduler.runNow.mockRejectedValueOnce(new Error('boom'));
+  const routine = await routineTools.save('bot', {
+    name: 'Once', prompt: 'Remind me', enabled: true,
+    triggers: [{ id: 'once', kind: 'once', at: Date.now() + 2_000 }],
+  });
+  for (let i = 0; i < 5; i++) await vi.advanceTimersByTimeAsync(1_000);
+  expect((await routineTools.history('bot', routine.id))[0]!.status).toBe('failed');
+  expect((await routineTools.list('bot'))[0]!.enabled).toBe(true);
+});
+
+it('keeps a one-shot reminder enabled when its delivery fails', async () => {
+  vi.useFakeTimers();
+  await getRoutineEngine();
+  mock.deliverResult.mockRejectedValueOnce(new Error('offline'));
+  const routine = await routineTools.save('bot', {
+    name: 'Once', prompt: 'Remind me', enabled: true,
+    triggers: [{ id: 'once', kind: 'once', at: Date.now() + 2_000 }],
+  });
+  for (let i = 0; i < 5; i++) await vi.advanceTimersByTimeAsync(1_000);
+  const [run] = await routineTools.history('bot', routine.id);
+  expect(run!.status).toBe('success');
+  expect(run!.delivery?.status).toBe('failed');
+  expect((await routineTools.list('bot'))[0]!.enabled).toBe(true);
+});
+
+it('keeps a second one-shot queued behind a running fire, then runs it before disabling', async () => {
+  vi.useFakeTimers();
+  await getRoutineEngine();
+  let finishFirst!: () => void;
+  mock.scheduler.runNow.mockImplementationOnce(() => new Promise(resolve => { finishFirst = () => resolve({ runId: 'execution' }); }));
+  const routine = await routineTools.save('bot', {
+    name: 'Two reminders', prompt: 'Remind me', enabled: true,
+    triggers: [
+      { id: 'first', kind: 'once', at: Date.now() + 1_000 },
+      { id: 'second', kind: 'once', at: Date.now() + 3_000 },
+    ],
+  });
+  await vi.advanceTimersByTimeAsync(1_000);
+  await vi.advanceTimersByTimeAsync(2_000);
+  finishFirst();
+  for (let i = 0; i < 10 && (await routineTools.list('bot'))[0]!.enabled; i++) await vi.advanceTimersByTimeAsync(1_000);
+  const history = await routineTools.history('bot', routine.id);
+  expect(history.map(run => run.status)).toEqual(['success', 'success']);
+  expect(mock.scheduler.runNow).toHaveBeenCalledTimes(2);
+  expect((await routineTools.list('bot'))[0]!.enabled).toBe(false);
+});
+
+it('disables a one-shot imported direct reminder after its fire succeeds', async () => {
+  vi.useFakeTimers();
+  configureRoutineHost({
+    getBot: mock.getBot, ensureRoutineSession: mock.ensureRoutineSession, getScheduler: () => mock.scheduler, getScheduleStorage: () => mock.storage,
+    prepareImportedAutomation: async (_root, _routine, runId) => ({ runId, prompt: '', direct: 'Reminder' }),
+    finishImportedAutomation: vi.fn(async () => false),
+  });
+  await getRoutineEngine();
+  const routine = await routineTools.save('bot', {
+    name: 'Imported once', prompt: 'Remind me', enabled: true,
+    triggers: [{ id: 'once', kind: 'once', at: Date.now() + 2_000 }],
+  });
+  for (let i = 0; i < 10 && (await routineTools.list('bot'))[0]!.enabled; i++) await vi.advanceTimersByTimeAsync(1_000);
+  expect((await routineTools.history('bot', routine.id))[0]!.status).toBe('success');
+  expect((await routineTools.list('bot'))[0]!.enabled).toBe(false);
+  expect(mock.scheduler.runNow).not.toHaveBeenCalled();
+});
+
+it('disables a one-shot that already fired before the fix when the engine starts', async () => {
+  const engine = await getRoutineEngine();
+  const routine = await engine.put('bot', {
+    name: 'Once', prompt: 'Remind me', enabled: true,
+    triggers: [{ id: 'once', kind: 'once', at: Date.now() + 60_000 }],
+  });
+  const saved = structuredClone(mock.save.mock.calls.at(-1)![0]) as RoutineState;
+  saved.next = {};
+  saved.runs = [{ id: 'fired', routineId: routine.id, revision: routine.revision, triggerIds: ['once'], events: [], status: 'success', createdAt: 1, finishedAt: 2 }];
+  await stopRoutines();
+  mock.load.mockResolvedValue(saved);
+  mock.profiles = [{ id: 'bot', status: 'active' }];
+  const restored = await getRoutineEngine();
+  expect(restored.list('bot')[0]!.enabled).toBe(false);
+  expect(mock.save.mock.calls.at(-1)![0].routines[0]!.enabled).toBe(false);
+});
+
+it('leaves an unfired, never-run or last-failed one-shot enabled when the engine starts', async () => {
+  const engine = await getRoutineEngine();
+  const unfired = await engine.put('bot', {
+    name: 'Unfired', prompt: 'Remind me', enabled: true,
+    triggers: [{ id: 'once', kind: 'once', at: Date.now() + 60_000 }],
+  });
+  const neverRun = await engine.put('bot', {
+    name: 'Never run', prompt: 'Remind me', enabled: true,
+    triggers: [{ id: 'once', kind: 'once', at: Date.now() + 60_000 }],
+  });
+  const lastFailed = await engine.put('bot', {
+    name: 'Last failed', prompt: 'Remind me', enabled: true,
+    triggers: [{ id: 'once', kind: 'once', at: Date.now() + 60_000 }],
+  });
+  const saved = structuredClone(mock.save.mock.calls.at(-1)![0]) as RoutineState;
+  delete saved.next[`${neverRun.id}:once`];
+  delete saved.next[`${lastFailed.id}:once`];
+  saved.runs = [
+    { id: 'early', routineId: unfired.id, revision: unfired.revision, triggerIds: ['manual'], events: [], status: 'success', createdAt: 1, finishedAt: 2 },
+    { id: 'older-success', routineId: lastFailed.id, revision: lastFailed.revision, triggerIds: ['once'], events: [], status: 'success', createdAt: 3, finishedAt: 4 },
+    { id: 'later-failure', routineId: lastFailed.id, revision: lastFailed.revision, triggerIds: ['once'], events: [], status: 'failed', createdAt: 5, finishedAt: 6 },
+  ];
+  await stopRoutines();
+  mock.load.mockResolvedValue(saved);
+  mock.profiles = [{ id: 'bot', status: 'active' }];
+  const restored = await getRoutineEngine();
+  expect(restored.list('bot').map(routine => routine.enabled)).toEqual([true, true, true]);
+});
+
 it('keeps an unclassified teammate reminder audible when quiet is omitted', async () => {
   const reminder = await routineTools.save('bot', {
     name: 'Reminder', prompt: 'Remind me to rest', enabled: true,

@@ -222,6 +222,7 @@ import { applyPiBotSkillPolicy } from './bot-skill-policy.js';
 import { resolveAllowedManagedSkills, snapshotManagedSkillGrants } from '../shared/managed-skill-policy.js';
 import {
   DEVICE_HOSTED_PI_ENV,
+  deviceHostedGhostRoster,
   deviceHostedGuestSessionRoot,
   deviceHostedPiEnvValue,
   deviceHostedPiMcpBridge,
@@ -417,6 +418,8 @@ function assertRemotePiContextProfileAvailable(
 const PI_IMAGE_INPUT_UNSUPPORTED_CODE = 'PI_IMAGE_INPUT_UNSUPPORTED';
 /** 手动压缩 = 一次完整 LLM 摘要调用(大上下文 + 网关排队),远超默认 30s RPC 超时。 */
 const PI_COMPACT_TIMEOUT_MS = 600_000;
+/** Pi may spend over 30s restoring a large session during startup; keep this absolute and local to resume. */
+const PI_RESUME_TIMEOUT_MS = 60_000;
 /** prompt 接受前可能自动压缩，同样必须覆盖一次完整摘要调用。 */
 const PI_PROMPT_ACCEPTANCE_TIMEOUT_MS = PI_COMPACT_TIMEOUT_MS;
 const PI_PROMPT_ACCEPTANCE_PROGRESS_EVENTS = new Set([
@@ -3865,10 +3868,13 @@ export class PiAgent extends BaseAgent {
 
     // 追加而非替换:pi 默认 prompt(工具用法/工程约定)原样保留,只追加 host 产品段
     // 与用户段。前缀稳定(默认 prompt 静态),易变内容禁止进入(缓存规则 3.1)。
-    // 受邀者(另一个账号)的托管会话不带本机的插件清单。
-    const ghostRosterPrompt = reviewMode || opts.botRuntimeProfile || hostedGuest
+    // 设备托管(含受邀者)用任务所在电脑给的花名册：插件工具经隧道在那台，本机装的插件不进这个任务。
+    const localGhostRoster = () => this.deps.getGhostRosterPrompt?.({ workingDir: opts.workingDir }) ?? '';
+    const ghostRosterPrompt = reviewMode || opts.botRuntimeProfile
       ? ''
-      : (this.deps.getGhostRosterPrompt?.({ workingDir: opts.workingDir }) ?? '');
+      : hosted
+        ? deviceHostedGhostRoster(hosted, opts.ghostRosterSnapshot, localGhostRoster)
+        : localGhostRoster();
     const appendSections = [
       reviewMode ? undefined : this.deps.runtimeConfig.answerDeliveryPrompt?.trim(),
       reviewMode ? undefined : opts.botProfilePrompt?.trim(),
@@ -4068,7 +4074,8 @@ export class PiAgent extends BaseAgent {
     try {
       const managedSkillGrants = snapshotManagedSkillGrants(opts.botRuntimeProfile?.skillPolicy);
       // 受邀者不带本机安装的托管技能(属于本机用户与其组织)。
-      const managedSkills = opts.remoteHostId || reviewMode || hostedGuest || opts[LOCAL_AGENT_CLIENT]?.hostToolsOnly ? [] : await this.deps.getManagedSkills?.() ?? [];
+      // 任务所在电脑提供了托管技能时，它们已作为项目技能放在影子目录，本机的不再加载。
+      const managedSkills = opts.remoteHostId || reviewMode || hostedGuest || hosted?.controllerManagedSkills || opts[LOCAL_AGENT_CLIENT]?.hostToolsOnly ? [] : await this.deps.getManagedSkills?.() ?? [];
       const managedDisabledPaths = snapshotDisabledSkillLaunch(opts.remoteHostId || reviewMode || hostedGuest ? [] : this.deps.getDisabledSkillPaths?.() ?? []);
       const managedSourceIdentities = new Set(managedSkills.flatMap((skill) =>
         skill.path ? [canonicalSkillPath(skill.path)] : []));
@@ -6546,7 +6553,7 @@ export class PiAgent extends BaseAgent {
           const switched = await proc.request({
             type: 'switch_session',
             sessionPath: opts.resumeSessionId,
-          });
+          }, { timeoutMs: PI_RESUME_TIMEOUT_MS });
           if (!switched.success) {
             // 轮 25 CRITICAL:switch 失败也允许 fallback(同文件缺失理由)——
             // CAS 结果不作门禁, fresh 比卡死强。CAS 仍执行清 DB 残留。
@@ -7850,7 +7857,7 @@ export class PiAgent extends BaseAgent {
                   const result = await requestPiCompact();
                   rejectIfCancelled(sendOpts, 'send');
                   if (result.noop) {
-                    throw new Error('Pi cannot compact the request rejected with HTTP 413');
+                    throw new Error('Pi cannot compact the request rejected with a body size limit');
                   }
                 } catch (error) {
                   rejectIfCancelled(sendOpts, 'send');

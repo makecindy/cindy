@@ -139,8 +139,8 @@ export function createChatOutboxDelivery(deps: {
           const [members, self] = await Promise.all([client.members(room), client.me()]); guard();
           const joined = members.filter(member => member.state === 'joined');
           if (input.mentions.botIds.some(id => !joined.some(member => member.id === id))) throw new Error('MENTION_UNAVAILABLE');
-          const recipients = input.mentions.all ? joined.map(member => member.id) : input.mentions.botIds;
-          input = { ...input, mentions: { all: false, botIds: [...new Set(recipients.filter(id => id !== self))] } };
+          const recipients = [...input.mentions.botIds, ...joined.filter(member => (input.mentions.all && member.kind === 'human') || (input.mentions.allBots && member.kind === 'bot')).map(member => member.id)];
+          input = { ...input, mentions: { ...input.mentions, botIds: [...new Set(recipients.filter(id => id !== self))] } };
         }
         row = await store.update(row, { state: 'sending', error: undefined,
           ...(row.chat!.body ? { enqueueStarted: true } : {}) }); guard();
@@ -159,7 +159,7 @@ export function createChatOutboxDelivery(deps: {
           ? chatAccessLost(error) ? 'CONVERSATION_NOT_FOUND' : 'THREAD_SHARE_FAILED'
           : error instanceof Error ? error.message : 'CHAT_SEND_FAILED';
         const refused = (status !== undefined && status >= 400 && status < 500 && ![401, 408, 429].includes(status))
-          || ['MENTION_UNAVAILABLE', 'QUOTE_UNAVAILABLE'].includes(message);
+          || ['MENTION_UNAVAILABLE', 'QUOTE_UNAVAILABLE', 'ALL_BOTS_MENTION_DISABLED'].includes(message);
         blocked.add(room);
         try {
           await store.update(row, { state: refused ? 'failed' : 'queued', error: message,

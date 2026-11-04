@@ -49,6 +49,9 @@ export const BOT_GROUP_SETTINGS_PAGE_PARAM = 'groupSettingsPage';
 
 /** Specific error copy when main names a cause the user can act on. */
 export function botGroupErrorKey(errorCode: BotGroupErrorCode | null | undefined, fallback: string): string {
+  if (errorCode === 'STOP_OWNERSHIP_UNKNOWN') return 'bots.groupChat.errors.stopOwnershipUnknown';
+  if (errorCode === 'REVISION_CONFLICT') return 'bots.groupChat.errors.revisionConflict';
+  if (errorCode === 'NOTHING_TO_STOP') return 'bots.groupChat.errors.nothingToStop';
   const variant = botGroupErrorVariant(errorCode);
   return variant ? `bots.groupChat.errors.${variant}` : fallback;
 }

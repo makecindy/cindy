@@ -955,18 +955,16 @@ export function RightSidebarShell({
             style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties}
           >
             {handleDetachActiveTab && (
-              <RightSidebarDetach size="toolbar" onDetach={handleDetachActiveTab} />
+              <RightSidebarDetach onDetach={handleDetachActiveTab} />
             )}
             {onMaximize && (
               <RightSidebarMaximize
-                size="toolbar"
                 onMaximize={onMaximize}
                 isMaximized={isMaximized}
               />
             )}
             {onCloseSidebar && (
               <RightSidebarToggle
-                size="toolbar"
                 collapsed={false}
                 onToggle={onCloseSidebar}
                 side={panelSide}

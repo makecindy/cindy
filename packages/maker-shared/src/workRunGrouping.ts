@@ -324,3 +324,47 @@ function groupAnsweredTurn<TItem, TChild extends TItem>(
   flushRun();
   return out;
 }
+
+
+/** Teammate-only presentation: join progress and activity under one stable disclosure.
+ * Keep opaque history groups intact so their existing lazy loaders remain authoritative.
+ * Replies, interactive cards, real user rows and history gaps are never swallowed.
+ */
+export function groupTeammateProcess<T extends { key: string }>(
+  items: readonly T[],
+  adapter: {
+    isProgress(item: T): boolean;
+    isRecovery(item: T): boolean;
+    children(item: T): readonly T[] | undefined;
+    start(item: T): number | null;
+    end(item: T): number | null;
+    streaming(item: T): boolean;
+    create(children: T[], key: string, streaming: boolean, start: number | null, end: number | null): T;
+  },
+): T[] {
+  const result: T[] = [];
+  let pending: T[] = [];
+  let previousEnd: number | null = null;
+  let anchor: string | undefined;
+  // The history placeholder keeps its outer key when children arrive. Deriving the
+  // journal key from loaded descendants would close the very disclosure that loaded them.
+  const firstKey = (item: T): string => item.key.replace(/^work-(?:summary-)?/, '').replace(/^(?:msg|thinking|tools)-/, '');
+  const flush = () => {
+    if (!pending.length) return;
+    const starts = pending.map(adapter.start).filter((v): v is number => v !== null);
+    const ends = pending.map(adapter.end).filter((v): v is number => v !== null);
+    result.push(adapter.create(pending, `work-journal-${anchor ?? firstKey(pending[0]!)}`,
+      pending.some(adapter.streaming), starts.length ? Math.min(...starts) : null, ends.length ? Math.max(...ends) : null));
+    pending = [];
+  };
+  for (const item of items) {
+    const start = adapter.start(item);
+    if (previousEnd !== null && start !== null && start - previousEnd > HISTORY_GAP_SPLIT_MS) { flush(); anchor = undefined; }
+    if (adapter.children(item) || adapter.isProgress(item) || adapter.isRecovery(item)) pending.push(item);
+    else { flush(); result.push(item); anchor = item.key; }
+    const end = adapter.end(item);
+    if (end !== null) previousEnd = previousEnd === null ? end : Math.max(previousEnd, end);
+  }
+  flush();
+  return result;
+}

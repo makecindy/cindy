@@ -54,6 +54,20 @@ allowlist、重试或 relay 生命周期；手机端完整保留“主机 + 路�
 实现与回归：`device-link/remote-workdir-guard.ts`、`device-link/dispatch.ts`、
 `maker-ipc/register.ts` 与 `__tests__/deviceLinkHostDispatch.test.ts`（均相对 Desktop main）。
 
+## 远程供应商任务导出
+
+远程供应商任务的消息保存在发起任务的电脑，允许从任务菜单导出 `.cshare`，
+保留对话记录与本机可用媒体，沿用 `db-only` 提示说明导入后无法无缝续聊。
+原生转录在运行 Agent 的电脑上，不查找本机同名文件，也不保留不可恢复的原生会话 ID，
+包括历史 Agent 切换记录里的停泊 ID；切换记录的展示与交接内容仍保留。
+协同包包含这类 Worker 时同样不能标为完整。完整任务迁移仍要求原生历史。
+
+此路径复用本机导出 IPC 与文件选择，不新增跨设备协议。SSH 工作区与设备互联镜像任务
+仍不提供本机导出，手机端没有该本机文件导出入口；不能把它们当成远程供应商任务。
+实现见 [sessionShareExport.ts](../../apps/desktop/src/main/session-share/sessionShareExport.ts)，
+回归见 [导出测试](../../apps/desktop/src/main/session-share/__tests__/sessionShareExport.test.ts)
+与 [菜单测试](../../apps/desktop/src/renderer/features/cc-agent/sidebar/__tests__/SessionCard.visual.test.ts)。
+
 ## 远程任务存档的即时反馈
 
 桌面与手机的远程任务列表在点击存档后立即乐观移走任务行，不能等待远程预检或写入
@@ -186,9 +200,13 @@ relay 以 close 1013 `inbound backpressure` 主动断连，此时任何「立即
   (invoke / invoke-result / push)及普通累计 ACK。可靠层按 seq 去重、按序交付，
   同一条消息经两条路径各到一次也只执行一次。
 - **授权**：直连帧的来源取自通道绑定的设备，不信任帧内 `src`；被控端照常逐条复验
-  被控开关、撤权名单与 allowlist。共享任务、供应商分享等跨账号范围不走直连，逐帧
-  授权仍由 relay 执行。relay 报告对端离线(含被移出账号)、链路被关闭或撤权、客户端
-  停止时立即撤下直连。ACK 原路返回，单向失效时发送端不会被困在直连上。
+  被控开关、撤权名单与 allowlist。共享任务不走本段同账号直连；供应商分享遵循其
+  独立短期许可合同，不能混用本段保留窗口。Desktop 对已完成认证与可靠握手的同账号数据通道，遇到本端
+  relay 断线或对端离线通知时保留最多 30 分钟；不以信令离线认定数据通道死亡。
+  此窗口同时受墙钟与单调时钟约束，重复离线通知、重连失败和业务流量均不续期。
+  不能离线建链或扩大权限；本地逐请求授权照常核验，显式关闭、撤权、停止、设备移除、
+  鉴权拒绝和数据通道故障立即清理。仅服务端掌握的撤销在信令不可达时可能延迟获知，
+  最迟按窗口到期结束。ACK 原路返回，单向失效时发送端不会被困在直连上。
 - **故障半径三问**：① 故障层级是单个 peer 的直连通道(通道关闭、写入失败、发送缓冲
   在一个可靠重试基准期内没有下降，或已发出的帧过了自适应 ACK 基准期仍未确认)；直连
   判活不乘 relay 的大消息字节退避，单条大结果也能及时回退；缓冲仍有进展时
@@ -205,8 +223,19 @@ relay 以 close 1013 `inbound backpressure` 主动断连，此时任何「立即
   复用同一条数据路径。手机退后台、WebView 崩溃、账号/区域切换立即释放旧通道。
 - **兼容**：双方都声明 `direct-link-v1` 才尝试。信令以既有 relay push 承载，绑定两端
   当前 stream；旧端、平台尚未就绪或协商失败均继续使用 relay。每对设备只有字典序较小的
-  deviceId 发起 offer，失败按 5–60 秒退避；最多 16 个 peer，单次协商 15 秒。
-  relay 断线仍复位链路，直连暂不独立维持；不新增服务端依赖或 Mobile 原生依赖/配置。
+  deviceId 发起 offer，失败按 5–60 秒退避；单次协商 15 秒。桌面共享数据进程预算 64，
+  同账号设备与分享各预留 8；手机维持 16。满额继续 relay、释放后按公平队列补建；
+  候选、等待 offer、失败重试与压力下空闲回收的边界见
+  [`protocol-compatibility.md`](protocol-compatibility.md#device-link-局域网优先直连)。
+  组内两端 Desktop 均更新才可跨信令断线维持数据通道；Mobile 与未启用保留的旧端沿用
+  原有断线复位。仅保留 RPC 数据通道，不承诺独立文件或远程桌面通道存活。
+  不新增服务端依赖、wire 字段或 Mobile 原生依赖/配置。
+- **容量恢复的故障半径三问**：① 单 peer 的直连准入满额／协商失败；② 仅该 peer 排队、
+  释放直连资源并改用既有 relay，不重开控制 link、不重连共享 socket、不改任务分配或授权；
+  只有无在途工作且长期无活动的通道才可在容量压力下让位；③ `directRuntimeBridge.test.ts`
+  覆盖共享预算、分类公平、迟到 offer、撤权与回收，`client.test.ts` 验证满额期间请求仍只执行
+  一次、名额释放后自动升级且不新建 socket。真实浏览器 `--capacity` 同时验证第 65 个等待者
+  补建时其余 63 条通道不被替换；自建 relay 互通验证签名、加入与重连不受影响。
 - **验证**：`client.test.ts` 的自动协商矩阵覆盖新旧端、平台不可用、远程 Agent 调用和两个
   控制端隔离回退；`directRuntimeBridge.test.ts` 覆盖桥接背压、迟到事件与流代次；
   `scripts/direct-link-smoke.mjs <Chrome路径>` 运行真实 WebRTC 与手机静态 runtime，验证

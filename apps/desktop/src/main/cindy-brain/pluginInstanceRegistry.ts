@@ -17,6 +17,7 @@ import {
   pluginInstallStoragePart,
   parsePluginInstallRelId,
   hasDeliveryNamespace,
+  LOCAL_PLUGIN_NAMESPACE,
 } from '../../shared/pluginIdentity.js';
 import { isValidGhostId } from '../../shared/ghost.js';
 import { simulatorPreviousStoragePart, validSimulatorMigration } from '../../shared/simulatorIdentityMigration.js';
@@ -383,6 +384,7 @@ export function findReusableInstance(
   registry: PluginInstanceRegistry,
   query: { ghostId: string; namespace: string | null; pluginId?: string | null; source?: PluginInstanceSource },
 ): PluginInstanceRecord | null {
+  if (query.namespace === LOCAL_PLUGIN_NAMESPACE && (query.source === 'market' || query.pluginId)) return null;
   const matches = Object.values(registry.instances).filter((record) => {
     if (record.active || record.ghostId !== query.ghostId) return false;
     if (record.namespaceState === 'pending') {
@@ -393,6 +395,9 @@ export function findReusableInstance(
   const sameSource = (record: PluginInstanceRecord): boolean => {
     if (!query.source) return true;
     if (record.source === query.source) return true;
+    if (query.namespace === LOCAL_PLUGIN_NAMESPACE &&
+      (record.source === 'manual' || record.source === 'agent-forge') &&
+      (query.source === 'manual' || query.source === 'agent-forge')) return true;
     // A pre-receipt directory is not a different product source.
     return query.source === 'manual' && record.source === 'legacy';
   };

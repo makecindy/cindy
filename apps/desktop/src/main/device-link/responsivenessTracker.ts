@@ -192,7 +192,7 @@ export interface ResponsivenessTrackerDeps {
   /** 首次业务超时后的 peer 级恢复；由 Desktop 接入 openRemoteLink 去重。 */
   recoverLink?: (deviceId: string) => Promise<unknown>;
   /** Verify shared relay activity before attributing a timeout to one device. */
-  confirmRelayForTimeout?: () => boolean;
+  confirmRelayForTimeout?: (deviceId: string) => boolean;
   /** 时钟注入(测试用;默认 Date.now)。 */
   now?: () => number;
   log?: TrackerLogger;
@@ -321,7 +321,7 @@ export function createResponsivenessTracker(
         isBreakerObservedError(err)
         || (wasProbe && channel !== DEVICE_RESPONSIVENESS_PROBE_CHANNEL)
         || (classifyDeviceSendFailure(err) === 'timeout' && (
-          lifecycleEpochs.get(deviceId) !== lifecycleEpoch || deps.confirmRelayForTimeout?.() === false
+          lifecycleEpochs.get(deviceId) !== lifecycleEpoch || deps.confirmRelayForTimeout?.(deviceId) === false
         ))
           ? 'inconclusive'
           : classifyDeviceSendFailure(err);
@@ -365,7 +365,7 @@ export function createResponsivenessTracker(
           (err) => {
             const classified = classifyDeviceSendFailure(err);
             const outcome = classified === 'timeout' && (
-              lifecycleEpochs.get(deviceId) !== lifecycleEpoch || deps.confirmRelayForTimeout?.() === false
+              lifecycleEpochs.get(deviceId) !== lifecycleEpoch || deps.confirmRelayForTimeout?.(deviceId) === false
             )
               ? 'inconclusive' : classified;
             settle(deviceId, slot, outcome, false);

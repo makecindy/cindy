@@ -7,6 +7,10 @@ export const TRACE_OPERATIONS = new Set([
   'local-db:messages:list',
   'local-db:messages:view',
   'maker:list-agent-skills',
+  'maker:list-agent-skills:project-links',
+  'maker:list-agent-skills:global-assets',
+  'maker:list-agent-skills:scan',
+  'maker:list-agent-skills:identity',
   'maker:list-customizations',
 ]);
 let observer: ((event: PerformanceTraceEvent) => void) | null = null;

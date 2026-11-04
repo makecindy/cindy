@@ -6,6 +6,32 @@ import { createXdtHelperMcpServer } from "../lizi_xdtHelperMcpServer.js";
 
 const TARGET_SESSION_ID = "11111111-1111-4111-8111-111111111111";
 
+// Unit, real MCP wire: three harness contexts discover one shared capability.
+// A read must never dispatch an association write; shared guests cannot use it.
+it('exposes GitHub to all harnesses without implicit association', async () => {
+  for (const agentKind of ['codex', 'claude-code', 'pi'] as const) {
+    let restricted = false;
+    const call = vi.fn(async () => ({ ok: true, state: 'open', head_sha: 'abc' }));
+    const server = createXdtHelperMcpServer({ github: { call }, resolveSurface: async () => restricted ? 'restricted' : 'default' },
+      { agentKind, workingDir: '/fixture', sessionId: 'current' });
+    const [ct, st] = InMemoryTransport.createLinkedPair();
+    const client = new Client({ name: 'github-read-test', version: '1' });
+    await Promise.all([server.connect(st), client.connect(ct)]);
+    try {
+      const overview = parsePayload(await client.callTool({ name: 'list_tools', arguments: {} }));
+      expect(overview.categories).toEqual(expect.arrayContaining([expect.objectContaining({ name: 'github' })]));
+      const tools = parsePayload(await client.callTool({ name: 'list_tools', arguments: { category: 'github' } }));
+      expect(tools.tools).toEqual(expect.arrayContaining([expect.objectContaining({ name: 'get_pr_status' }), expect.objectContaining({ name: 'manage_session_prs' })]));
+      const result = parsePayload(await client.callTool({ name: 'call_tool', arguments: { name: 'get_pr_status', args: { pr: { repo: 'o/r', number: 1 } } } }));
+      expect(result).toMatchObject({ ok: true, head_sha: 'abc' });
+      expect(call).toHaveBeenCalledExactlyOnceWith('current', 'get_pr_status', { pr: { repo: 'o/r', number: 1 } });
+      restricted = true;
+      expect(parsePayload(await client.callTool({ name: 'call_tool', arguments: { name: 'get_pr_status', args: { pr: { repo: 'o/r', number: 1 } } } }))).toMatchObject({ ok: false });
+      expect(call).toHaveBeenCalledTimes(1);
+    } finally { await client.close(); await server.close(); }
+  }
+});
+
 function parsePayload(result: unknown): Record<string, unknown> {
   const content = (
     result as { content?: Array<{ type: string; text?: string }> }
@@ -18,6 +44,50 @@ function parsePayload(result: unknown): Record<string, unknown> {
 }
 
 describe("cindy_helper MCP server", () => {
+  // Rule (cindy-bots-runtime.md §6「伙伴技能分层」, 2026-11-01): a system Skill the owner turned off loses its
+  // tools and its text together. Unit: the live switch hides and denies the todo tools for every
+  // entry (category list, call_tool, direct tool) while other teammate tools keep working.
+  it('denies the tools and the text of a system Skill the teammate turned off', async () => {
+    let off: string[] = ['todo'];
+    const todos = vi.fn(async () => ({ ok: true as const, items: [] }));
+    const server = createXdtHelperMcpServer({
+      resolveSurface: async () => 'bot-main',
+      resolveSystemSkillsOff: async () => off,
+      botWorkbench: {
+        todos,
+        get: async () => ({ ok: true as const, workbench: {} as never }),
+        read: async () => ({ ok: false as const, errorCode: 'NOT_FOUND', message: 'none' }),
+        continueTask: async () => ({ ok: false as const, errorCode: 'NOT_FOUND', message: 'none' }),
+      },
+      botCapabilities: {
+        list: async () => ({ ok: true as const, capabilities: [] }),
+        select: async () => ({ ok: true as const, effective: 'next-turn' as const, joined: true }),
+      },
+    }, { agentKind: 'claude-code', workingDir: '/repo', sessionId: 'teammate-task' });
+    const client = new Client({ name: 'system-skill-test', version: '1' });
+    const [ct, st] = InMemoryTransport.createLinkedPair();
+    await Promise.all([server.connect(st), client.connect(ct)]);
+    const call = async (name: string, args: Record<string, unknown> = {}) =>
+      parsePayload(await client.callTool({ name: 'call_tool', arguments: { name, args } }));
+    try {
+      const listed = parsePayload(await client.callTool({ name: 'list_tools', arguments: { category: 'bots' } }));
+      const names = (listed.tools as Array<{ name: string }>).map((tool) => tool.name);
+      expect(names).not.toContain('list_teammate_todos');
+      expect(names).toContain('get_workbench');
+      expect(await call('list_teammate_todos')).toMatchObject({ ok: false, errorCode: 'CAPABILITY_NOT_AVAILABLE' });
+      expect(parsePayload(await client.callTool({ name: 'list_teammate_todos', arguments: {} })))
+        .toMatchObject({ ok: false, errorCode: 'CAPABILITY_NOT_AVAILABLE' });
+      expect(todos).not.toHaveBeenCalled();
+      expect(await call('read_teammate_skill', { name: 'todo' })).toMatchObject({ ok: false, errorCode: 'SYSTEM_SKILL_OFF' });
+      expect(await call('read_teammate_skill', { name: 'routine' })).toMatchObject({ ok: true, kind: 'system', name: 'routine' });
+      expect(await call('read_teammate_skill', { name: 'tasks' })).toMatchObject({ ok: true, kind: 'core' });
+      // Turning it back on needs no new session: the next call reads the live switch.
+      off = [];
+      expect(await call('list_teammate_todos')).toMatchObject({ ok: true });
+      expect(todos).toHaveBeenCalledOnce();
+    } finally { await client.close(); await server.close(); }
+  });
+
   // The agent never found input handoff behind list_tools(auth) (2026-10-30).
   // Unit: a fresh client sees it in tools/list, with the window/title arguments,
   // before its first call; the old name stays callable for saved calls but unlisted.
@@ -1370,5 +1440,143 @@ it.each(['claude-code', 'codex', 'pi'] as const)('opens MCP Settings through the
     request.mockClear();
     await client.callTool({ name: 'call_tool', arguments: { name: 'request_mcp_setup', args: { url: 'https://example.test/mcp?token=test-invalid-token' } } });
     expect(request).not.toHaveBeenCalled();
+  } finally { await client.close(); await server.close(); }
+});
+
+// Unit, real MCP wire: ordinary tasks could not discover app defaults/settings.
+// Cover all harnesses, schema failure without writes, and live visitor denial.
+it('discovers native app settings in all three harnesses and rejects invalid or guest writes', async () => {
+  for (const agentKind of ['codex', 'claude-code', 'pi'] as const) {
+    let restricted = false;
+    const settings = vi.fn(async () => ({ section: 'appearance', state: { uiSize: 16 } }));
+    const models = vi.fn(async () => ({ scope: 'local', providers: [] }));
+    const defaults = vi.fn(async () => ({ ok: true as const, current: null, available: [] }));
+    const server = createXdtHelperMcpServer({ appSettings: { call: settings }, modelSettings: { call: models },
+      appModels: { models: defaults }, resolveSurface: async () => restricted ? 'restricted' : 'default' },
+      { agentKind, workingDir: '/fixture', sessionId: 'settings-owner' });
+    const [ct, st] = InMemoryTransport.createLinkedPair();
+    const client = new Client({ name: 'settings-test', version: '1' });
+    await Promise.all([server.connect(st), client.connect(ct)]);
+    try {
+      const overview = parsePayload(await client.callTool({ name: 'list_tools', arguments: {} }));
+      expect(overview.categories).toEqual(expect.arrayContaining([expect.objectContaining({ name: 'settings' })]));
+      const catalog = parsePayload(await client.callTool({ name: 'list_tools', arguments: { category: 'settings' } }));
+      expect(catalog.tools).toEqual(expect.arrayContaining(['list_app_settings', 'get_app_default_model', 'list_model_providers', 'set_model_configuration']
+        .map(name => expect.objectContaining({ name }))));
+      const call = (name: string, args = {}) => client.callTool({ name: 'call_tool', arguments: { name, args } });
+      expect(parsePayload(await call('get_app_default_model'))).toMatchObject({ ok: true, available: [] });
+      expect(defaults).toHaveBeenCalledExactlyOnceWith({ callerSessionId: 'settings-owner' });
+      expect(parsePayload(await call('get_app_settings', { section: 'appearance' }))).toMatchObject({ ok: true, state: { uiSize: 16 } });
+      const invalid = await call('set_model_configuration', { target: { providerId: 'p', agent: 'pi', modelId: 'm' },
+        change: { setting: 'contextLimit', value: -1 } });
+      expect(invalid.isError).toBe(true);
+      expect(models).not.toHaveBeenCalled();
+      restricted = true;
+      expect(parsePayload(await call('update_app_settings', { section: 'appearance', patch: { uiSize: 17 } })).ok).toBe(false);
+      expect(settings).toHaveBeenCalledTimes(1);
+    } finally { await client.close(); await server.close(); }
+  }
+});
+
+// Regression: settings discovery was buried behind a second-level tool. Unit,
+// real MCP transport: a fresh client follows returned calls, reads the exact
+// schema without executing it, then saves through the original authorized tool.
+it.each(['default', 'bot-main'] as const)('discovers controls from the root and executes their returned binding in %s', async surface => {
+  for (const agentKind of ['codex', 'claude-code', 'pi'] as const) {
+    let restricted = false;
+    const settings = vi.fn(async (input: { operation: string; patch?: Record<string, unknown> }) => ({ state: input.patch ?? { uiSize: 16 } }));
+    const server = createXdtHelperMcpServer({ appSettings: { call: settings },
+      resolveSurface: async () => restricted ? 'restricted' : surface },
+      { agentKind, workingDir: '/fixture', sessionId: 'owner' });
+    const [ct, st] = InMemoryTransport.createLinkedPair();
+    const client = new Client({ name: 'control-discovery-test', version: '1' });
+    await Promise.all([server.connect(st), client.connect(ct)]);
+    const follow = (binding: any) => client.callTool({ name: binding.tool, arguments: binding.args });
+    try {
+      const root = (await client.listTools()).tools.find(tool => tool.name === 'list_tools')!;
+      expect(root.inputSchema.properties).toHaveProperty('query');
+      const search = parsePayload(await client.callTool({ name: root.name, arguments: { query: '修改壁纸' } }));
+      const item = (search.items as any[]).find(item => item.key === 'appearance.wallpaper');
+      expect(item.availability).toBe('available');
+      const detail = parsePayload(await follow(item.next)).control as any;
+      const write = detail.operations.find((op: any) => op.name === 'update_app_settings');
+      expect(write.call.args.args).toEqual({ section: 'appearance' });
+      const schema = (parsePayload(await follow(write.describe)).control as any).operations[0];
+      expect(schema).toMatchObject({ schemaComplete: true, inputSchema: { required: ['section', 'patch'] } });
+      // Preferences has per-field writes only; appearance still offers reset.
+      // Follow the actual catalog contract, including explicit operation lookup.
+      expect(detail.operations.map((op: any) => op.name)).toContain('reset_app_settings');
+      const preferences = parsePayload(await client.callTool({ name: root.name, arguments: { key: 'application.preferences' } })).control as any;
+      expect(preferences.operations.map((op: any) => op.name)).toEqual(['get_app_settings', 'update_app_settings']);
+      expect(parsePayload(await client.callTool({ name: 'call_tool', arguments: { name: 'get_capabilities', args: { scope: 'control', key: 'application.preferences', operation: 'reset_app_settings' } } })))
+        .toMatchObject({ ok: false, errorCode: 'UNKNOWN_OPERATION' });
+      expect(settings).not.toHaveBeenCalled();
+      expect(parsePayload(await follow({ ...write.call, args: { ...write.call.args, args: { ...write.call.args.args, patch: { uiSize: 17 } } } })))
+        .toMatchObject({ ok: true, state: { uiSize: 17 } });
+      expect(settings).toHaveBeenCalledExactlyOnceWith({ callerSessionId: 'owner', operation: 'update', section: 'appearance', patch: { uiSize: 17 } });
+      restricted = true;
+      expect(parsePayload(await client.callTool({ name: 'list_tools', arguments: { query: '壁纸' } }))).toMatchObject({ ok: false });
+      expect(parsePayload(await follow(write.describe))).toMatchObject({ ok: false });
+      expect(parsePayload(await follow(write.call))).toMatchObject({ ok: false });
+      expect(settings).toHaveBeenCalledTimes(1);
+    } finally { await client.close(); await server.close(); }
+  }
+});
+
+// Unit: distinguish an unexposed control from an available one, and keep a
+// cursor tied to its query. Neither a bad key nor a bad cursor starts a write.
+it('keeps the control directory compact and reports gaps and invalid continuations', async () => {
+  const rename = vi.fn(async (input: { sessionId: string; title: string }) => ({ ok: true as const, ...input }));
+  const server = createXdtHelperMcpServer({ setCurrentSessionTitle: rename }, { agentKind: 'codex', workingDir: '/fixture', sessionId: 'owner' });
+  const [ct, st] = InMemoryTransport.createLinkedPair();
+  const client = new Client({ name: 'control-pagination-test', version: '1' });
+  await Promise.all([server.connect(st), client.connect(ct)]);
+  const read = async (args = {}) => parsePayload(await client.callTool({ name: 'call_tool', arguments: { name: 'get_capabilities', args: { scope: 'control', ...args } } }));
+  try {
+    const root = await read();
+    expect((root.domains as unknown[]).length).toBe(14);
+    expect(JSON.stringify(root).length).toBeLessThan(2500);
+    expect(await read({ key: 'mobile.preferences' })).toMatchObject({ control: { availability: 'not_exposed', operations: [] } });
+    expect(await read({ key: 'teammates.profile' })).toMatchObject({ control: { availability: 'unavailable_in_context', operations: [] } });
+    expect(await read({ key: 'native.set_current_session_title' })).toMatchObject({ control: { operations: [expect.objectContaining({ name: 'set_current_session_title' })] } });
+    expect(rename).not.toHaveBeenCalled();
+    expect(await read({ key: 'missing' })).toMatchObject({ ok: false, errorCode: 'UNKNOWN_CONTROL' });
+    const page = await read({ toolQuery: '模型' });
+    expect(page.complete).toBe(false);
+    const next = await read({ toolQuery: '模型', cursor: page.nextCursor });
+    expect((next.items as any[]).every(item => !(page.items as any[]).some(first => first.key === item.key))).toBe(true);
+    expect(await read({ toolQuery: '壁纸', cursor: page.nextCursor })).toMatchObject({ ok: false, errorCode: 'INVALID_CURSOR' });
+    expect(await read({ key: 'appearance.wallpaper', operation: 'schedule_run_now' })).toMatchObject({ ok: false, errorCode: 'UNKNOWN_OPERATION' });
+  } finally { await client.close(); await server.close(); }
+});
+
+// Unit: Pi management is one device-local native operation. Discovery and
+// checks never install; malformed versions and remote callers cannot mutate it.
+it('routes Pi version checks and exact-version installs to the managed runtime', async () => {
+  let remoteHostId: string | undefined;
+  const call = vi.fn(async () => ({ currentVersion: '1.4.0' }));
+  const server = createXdtHelperMcpServer({ piRuntime: { call } }, {
+    agentKind: 'pi', workingDir: '/fixture', sessionId: 'owner',
+    getSessionContext: () => ({ agentKind: 'pi', workingDir: '/fixture', sessionId: 'owner', remoteHostId }),
+  });
+  const client = new Client({ name: 'pi-control-test', version: '1' });
+  const [ct, st] = InMemoryTransport.createLinkedPair();
+  await Promise.all([server.connect(st), client.connect(ct)]);
+  const invoke = async (name: string, args = {}) => parsePayload(await client.callTool({ name: 'call_tool', arguments: { name, args } }));
+  try {
+    expect(parsePayload(await client.callTool({ name: 'list_tools', arguments: { query: '更新 pi' } })))
+      .toMatchObject({ items: expect.arrayContaining([expect.objectContaining({ key: 'runtimes.pi', availability: 'available' })]) });
+    expect(call).not.toHaveBeenCalled();
+    expect(await invoke('get_pi_runtime', { check: true })).toMatchObject({ ok: true, currentVersion: '1.4.0' });
+    expect(call).toHaveBeenLastCalledWith('owner', { check: true });
+    expect(await invoke('update_pi_runtime', { source: 'upstream', version: 'latest' })).toMatchObject({ ok: false });
+    expect(call).toHaveBeenCalledTimes(1);
+    expect(await invoke('update_pi_runtime', { source: 'upstream', version: '1.4.0' })).toMatchObject({ ok: true });
+    expect(call).toHaveBeenLastCalledWith('owner', { install: { source: 'upstream', version: '1.4.0' } });
+    remoteHostId = 'ssh-target';
+    expect(parsePayload(await client.callTool({ name: 'list_tools', arguments: { key: 'runtimes.pi' } })))
+      .toMatchObject({ control: { availability: 'requires_local_task', operations: [] } });
+    expect(await invoke('update_pi_runtime', { source: 'upstream', version: '1.4.0' })).toMatchObject({ ok: false });
+    expect(call).toHaveBeenCalledTimes(2);
   } finally { await client.close(); await server.close(); }
 });

@@ -6,6 +6,7 @@ import type { Editor } from '@tiptap/react';
 import type { ProviderView } from '@cindy/model-providers';
 import { sharedTaskHostPeer } from '@cindy/device-link';
 import { sshNativeCodexProvider, sshModel } from '@/features/cc-agent/__tests__/sshModelFixtures';
+import { useSshCodexDraftSelection } from '@/features/cc-agent/useSshCodexDraftSelection';
 import { ChatInput } from '../ChatInput';
 import * as providerMemory from '@/state/providerModelMemory';
 import * as draftMemory from '@/state/newMakerDraft';
@@ -21,9 +22,12 @@ import {
 } from '@/lib/promptRecommendationStore';
 
 const h = vi.hoisted(() => ({ t: (key: string) => key, confirm: vi.fn(), editor: null as Editor | null, listening: false, stop: vi.fn().mockResolvedValue(undefined),
+  cancel: vi.fn().mockResolvedValue(undefined),
   setModel: vi.fn(), selectModel: undefined as undefined | ((id: string) => Promise<void | boolean>), selectEffort: undefined as string | null | undefined, remoteProviders: [] as ProviderView[],
   localProviders: [] as ProviderView[],
   remoteStatus: 'ready' as 'ready' | 'loading' | 'error',
+  sshCatalogHosts: [] as (string | null)[],
+  sshCodex: undefined as undefined | { status: string; refresh: () => void },
   platform: 'darwin',
   processing: null as 'submitting' | 'refining' | null,
 }));
@@ -51,12 +55,16 @@ vi.mock('@/components/sidebar/SortableList', () => ({
     </div>
   ),
 }));
-vi.mock('../ModelSelector', async (original) => ({ ...await original<typeof import('../ModelSelector')>(), ModelSelector: ({ modelId, onModelChange, disabled, effort }: { modelId: string; onModelChange: typeof h.selectModel; disabled?: boolean; effort?: string | null }) => {
+vi.mock('../ModelSelector', async (original) => ({ ...await original<typeof import('../ModelSelector')>(), ModelSelector: ({ modelId, onModelChange, disabled, effort, sshCodex }: { modelId: string; onModelChange: typeof h.selectModel; disabled?: boolean; effort?: string | null; sshCodex?: typeof h.sshCodex }) => {
+  h.sshCodex = sshCodex;
   h.selectModel = onModelChange;
   h.selectEffort = effort;
   return <button data-testid="model-selector" disabled={disabled}>{modelId}</button>;
 } }));
-vi.mock('@/hooks/useSshCodexProviders', () => ({ useSshCodexProviders: () => ({ providers: h.remoteProviders, status: h.remoteStatus, refresh: () => {} }) }));
+vi.mock('@/hooks/useSshCodexProviders', () => ({ useSshCodexProviders: (hostId?: string | null) => {
+  h.sshCatalogHosts.push(hostId ?? null);
+  return { providers: hostId ? h.remoteProviders : [], status: hostId ? h.remoteStatus : 'loading', refresh: () => {} };
+} }));
 vi.mock('../ExtraDirsButton', () => ({ ExtraDirsButton: () => null }));
 vi.mock('../PermissionSelector', () => ({ PermissionSelector: () => <span data-testid="permission-selector" /> }));
 vi.mock('../NewGoalDialog', () => ({ NewGoalDialog: () => null }));
@@ -67,7 +75,7 @@ vi.mock('@/voice-input/VoiceInputPointerHintLayer', () => ({ VoiceInputPointerHi
 vi.mock('@/voice-input/VoiceInputStatusNotice', () => ({ VoiceInputStatusNotice: () => null }));
 vi.mock('@/voice-input/useVoiceInput', () => ({ useVoiceInput: (editor: Editor | null) => {
   h.editor = editor;
-  return { state: h.processing ?? (h.listening ? 'listening' : 'idle'), isListening: h.listening, isBusy: h.listening || h.processing !== null, draftText: '', start: vi.fn(), stop: h.stop, cancel: vi.fn() };
+  return { state: h.processing ?? (h.listening ? 'listening' : 'idle'), isListening: h.listening, isBusy: h.listening || h.processing !== null, draftText: '', start: vi.fn(), stop: h.stop, cancel: h.cancel };
 } }));
 vi.mock('@/hooks/useProviders', () => ({ useProviders: () => ({ providers: h.localProviders, loading: false }) }));
 vi.mock('@/hooks/useDeviceProviders', () => ({ useDeviceProviders: () => ({ providers: [], loading: false, unsupported: false }) }));
@@ -102,14 +110,37 @@ const attachments: ComponentProps<typeof ChatInput>['attachmentState'] = {
   pendingFileMentionsVersion: 0, consumePendingFileMentions: () => [],
   removeFile: noOp, updateFile: noOp, discardFiles: noOp, clearFiles: noOp, restoreFiles: (files) => [...files],
 };
-beforeEach(() => { h.platform = 'darwin'; h.listening = false; h.processing = null; h.stop.mockClear(); h.selectEffort = undefined; window.electronAPI = api; vi.stubGlobal('ResizeObserver', class { observe() {} unobserve() {} disconnect() {} }); });
-afterEach(() => { cleanup(); clearDraft('queue-shortcut'); clearPromptRecommendationSession('queue-shortcut'); h.remoteProviders = []; h.localProviders = []; h.remoteStatus = 'ready'; h.setModel.mockReset(); h.confirm.mockReset(); vi.unstubAllGlobals(); vi.restoreAllMocks(); });
+beforeEach(() => { h.platform = 'darwin'; h.listening = false; h.processing = null; h.stop.mockClear(); h.cancel.mockClear(); h.selectEffort = undefined; window.electronAPI = api; vi.stubGlobal('ResizeObserver', class { observe() {} unobserve() {} disconnect() {} }); });
+afterEach(() => { cleanup(); clearDraft('queue-shortcut'); clearPromptRecommendationSession('queue-shortcut'); h.remoteProviders = []; h.localProviders = []; h.remoteStatus = 'ready'; h.sshCatalogHosts = []; h.sshCodex = undefined; h.setModel.mockReset(); h.confirm.mockReset(); vi.unstubAllGlobals(); vi.restoreAllMocks(); });
 
 const props = {
   sessionId: 'loading-test', initialWorkingDir: '/workspace', runtimeAgentKind: 'codex' as const,
   vendorKey: 'codex' as const, deviceLinkDeviceId: 'test-host', attachmentState: attachments,
   hideRuntimeControls: true, showFolderPicker: false, disableAutofocus: true,
 };
+
+// #8232, unit: the real composer Escape listener must not cancel a covered
+// voice draft. Existing voice cases cover sending, not foreground previews.
+it.each(['listening', 'submitting', 'refining'] as const)('preserves %s voice input while a Markdown preview owns Escape', async state => {
+  h.listening = state === 'listening';
+  h.processing = state === 'listening' ? null : state;
+  render(<ChatInput {...props} onSend={vi.fn()} />);
+  const preview = document.createElement('section');
+  preview.dataset.textLightboxSearchHost = '';
+  const paragraph = document.createElement('p');
+  paragraph.textContent = 'Foreground document';
+  preview.append(paragraph);
+  document.body.append(preview);
+  try {
+    fireEvent.keyDown(paragraph, { key: 'Escape' });
+    expect(h.cancel).not.toHaveBeenCalled();
+    preview.remove();
+    fireEvent.keyDown(document.body, { key: 'Escape' });
+    expect(h.cancel).toHaveBeenCalledTimes(1);
+  } finally {
+    preview.remove();
+  }
+});
 
 it.each(['removed-source', 'removed-model'])('sends the first message through host baseline recovery (%s)', async (reason) => {
   h.localProviders = reason === 'removed-model'
@@ -444,6 +475,77 @@ it.each(['draft', 'other-provider'] as const)('does not exempt a hidden SSH mode
     fireEvent.keyDown(view.container.querySelector('[contenteditable]')!, { key: 'Enter', code: 'Enter' });
   });
   expect(onSend).not.toHaveBeenCalled();
+});
+
+// #8413: main rejects any non-native SSH Codex source with LAZY_CREATE_FAILED, even
+// when the host lists the same model id as a controller gateway does.
+it.each([
+  ['xd', false], ['openai', true],
+] as const)('SSH Codex draft with source %s can send: %s', async (providerId, sends) => {
+  h.remoteProviders = [sshNativeCodexProvider([sshModel('shared')])];
+  const onSend = vi.fn().mockResolvedValue(true);
+  const view = render(<ChatInput {...props} sessionId={undefined} deviceLinkDeviceId={null} remoteHostId="builder"
+    initialModel="shared" initialProviderId={providerId} initialEffort="low" onSend={onSend} />);
+  await waitFor(() => expect(view.container.querySelector('[contenteditable]')).not.toBeNull());
+  await act(async () => { h.editor!.commands.setContent('<p>Start remote work</p>'); });
+  const send = screen.getByRole('button', { name: 'newChat.sendButton.send' }) as HTMLButtonElement;
+  expect(send.disabled).toBe(!sends);
+  await act(async () => {
+    fireEvent.keyDown(view.container.querySelector('[contenteditable]')!, { key: 'Enter', code: 'Enter' });
+  });
+  if (!sends) return expect(onSend).not.toHaveBeenCalled();
+  await waitFor(() => expect(onSend).toHaveBeenCalledTimes(1));
+  expect(onSend.mock.calls[0][6]).toEqual(expect.objectContaining({ providerId: 'openai' }));
+});
+
+// Reading the host Codex catalog installs Codex there first, so a Claude Code / Pi draft
+// must not trigger it until the picker asks; once read it stays for engine switches.
+it('reads the SSH Codex catalog only after the picker asks when another engine is current', async () => {
+  h.remoteProviders = [sshNativeCodexProvider([sshModel('remote-codex')])];
+  const view = render(<ChatInput {...props} sessionId={undefined} runtimeAgentKind="claude-code" vendorKey="cc"
+    deviceLinkDeviceId={null} remoteHostId="builder" hideRuntimeControls={false}
+    initialModel="claude-opus-5" initialEffort="low" onSend={vi.fn()} />);
+  await waitFor(() => expect(h.sshCodex?.status).toBe('idle'));
+  expect(h.sshCatalogHosts.every((host) => host === null)).toBe(true);
+  await act(async () => { h.sshCodex!.refresh(); });
+  await waitFor(() => expect(h.sshCodex?.status).toBe('ready'));
+  expect(h.sshCatalogHosts.at(-1)).toBe('builder');
+  await act(async () => {
+    view.rerender(<ChatInput {...props} sessionId={undefined} runtimeAgentKind="pi" vendorKey="pi"
+      deviceLinkDeviceId={null} remoteHostId="builder" hideRuntimeControls={false}
+      initialModel="deepseek-v4" initialEffort="low" onSend={vi.fn()} />);
+  });
+  expect(h.sshCodex?.status).toBe('ready');
+});
+
+// #8413 review regression, unit: the picker used to retry only the composer's
+// independent catalog, leaving the parent draft unable to resolve the selected model.
+it('shares picker retry with the draft selection and sends the recovered host model', async () => {
+  h.remoteStatus = 'error'; // An independent composer read must not participate.
+  const onSend = vi.fn().mockResolvedValue(true);
+  const remote = [sshNativeCodexProvider([sshModel('recovered-model')])];
+  function Draft() {
+    const [ready, setReady] = useState(false);
+    const catalog = ready ? remote : [];
+    const { selection } = useSshCodexDraftSelection('builder', catalog);
+    return <ChatInput {...props} sessionId={undefined} deviceLinkDeviceId={null} remoteHostId="builder"
+      hideRuntimeControls={false} initialModel={selection?.model ?? ''}
+      initialProviderId="openai" initialEffort={selection?.effort ?? null} onSend={onSend}
+      sshCodexCatalogOverride={{ providers: catalog, status: ready ? 'ready' : 'error', refresh: () => setReady(true) }} />;
+  }
+  const view = render(<Draft />);
+  await waitFor(() => expect(h.sshCodex?.status).toBe('error'));
+  await act(async () => { h.editor!.commands.setContent('<p>Retry remote work</p>'); });
+  expect((screen.getByRole('button', { name: 'newChat.sendButton.send' }) as HTMLButtonElement).disabled).toBe(true);
+  await act(async () => { h.sshCodex!.refresh(); });
+  await waitFor(() => expect(h.sshCodex?.status).toBe('ready'));
+  expect(h.sshCatalogHosts.every((host) => host === null)).toBe(true);
+  await act(async () => {
+    fireEvent.keyDown(view.container.querySelector('[contenteditable]')!, { key: 'Enter', code: 'Enter' });
+  });
+  await waitFor(() => expect(onSend).toHaveBeenCalledTimes(1));
+  expect(onSend.mock.calls[0][1]).toBe('recovered-model');
+  expect(onSend.mock.calls[0][6]).toEqual(expect.objectContaining({ providerId: 'openai' }));
 });
 
 it.each(['button', 'Enter', 'voice'] as const)(

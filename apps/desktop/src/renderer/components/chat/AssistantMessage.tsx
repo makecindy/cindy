@@ -67,7 +67,8 @@ import { buildSessionMessageDeepLink } from '@/lib/deepLink';
 import { getStickySessionDeviceId } from '@/features/device-link/stickySessionOrigin';
 import { insertSessionLinkIntoComposer } from '@/lib/composerActionsBus';
 import { MarkdownRenderer } from './MarkdownRenderer';
-import { BubbleHoverToolbar, MessageActionBar } from './MessageActionBar';
+import { handleAssistantCopy } from '@/lib/assistantSelectionCopy';
+import { MessageActionBar } from './MessageActionBar';
 import { shareSelectionStore } from './shareSelectionStore';
 import { useForkAtMessage } from './useForkAtMessage';
 import { useDeleteMessage } from './useDeleteMessage';
@@ -352,6 +353,8 @@ export const AssistantMessage = memo(function AssistantMessage({
 
   const actionBar = !isStreaming && showActionBar ? (
     <MessageActionBar
+      sessionId={currentSessionId}
+      clientId={messageClientId}
       createdAt={createdAt}
       copyText={richAnswerText(content)}
       copyLinkText={messageDeepLink}
@@ -361,7 +364,7 @@ export const AssistantMessage = memo(function AssistantMessage({
       readAloudMessage={simplifiedBotConversation && !ghostReplyPending && currentSessionId && messageClientId
         ? { sessionId: currentSessionId, messageId: messageClientId }
         : undefined}
-      compact={botBubble}
+      companionFooter={botBubble}
       replyAction={dmThread && botBubble ? {
         onClick: dmThread.open,
         label: dmThread.thread
@@ -387,6 +390,7 @@ export const AssistantMessage = memo(function AssistantMessage({
       className={cn('flex w-full flex-col items-start gap-1.5', botBubble && 'group/message')}
       onMouseEnter={() => setHovered(true)}
       onMouseLeave={() => setHovered(false)}
+      onCopy={handleAssistantCopy}
     >
       <ChatBubble
         bare={!botBubble}
@@ -475,8 +479,8 @@ export const AssistantMessage = memo(function AssistantMessage({
             })}
           </div>
         )}
-        {botBubble && actionBar && <BubbleHoverToolbar side="right">{actionBar}</BubbleHoverToolbar>}
       </ChatBubble>
+      {botBubble && actionBar}
       {dmThread?.thread && !isStreaming ? (
         <BotDmThreadPreview thread={dmThread.thread} bot={dmThread.bot} unread={dmThread.unread} onOpen={dmThread.open} />
       ) : null}
@@ -491,7 +495,7 @@ export const AssistantMessage = memo(function AssistantMessage({
       ) : null}
       {/* Streaming → bar not mounted at all (V1.2 验收 "流式期间不挂载");
           非 turn 收尾正文(showActionBar=false)同样不挂,消息流保持紧凑。
-          伙伴私聊的气泡把操作栏挂在气泡右侧(BubbleHoverToolbar),这里不再另起一行。 */}
+          伙伴私聊的操作栏已紧跟气泡显示；普通任务保持原位置。 */}
       {!botBubble && actionBar}
     </div>
   );

@@ -19,7 +19,7 @@ export function usePluginResultCard(deviceId: string | undefined, sessionId: str
 }
 
 export function useSessionPluginResource(deviceId: string | undefined, sessionId: string, callId: string, collectionId: string, kind: string, followMailReplacement = false) {
-  const { invoke, connectionEpoch, status, onRemoteResourceChanged, subscribe, unsubscribe } = useDeviceLink();
+  const { invoke, connectionEpoch, status, onRemoteResourceChanged, subscribe, unsubscribe } = useDeviceLink(deviceId);
   const { accountGeneration } = useAuth();
   const focused = useIsFocused();
   const subscriberId = useId();

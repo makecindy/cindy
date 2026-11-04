@@ -23,6 +23,7 @@ import { getReadyBinaryPath } from '../agent-binaries/index.js';
 import { createLogger } from '../logger.js';
 import { resolveDesktopOutboundProxy } from './outbound-proxy-resolver.js';
 import { ensureClaudeCliProxyBridge } from './claude-cli-proxy-bridge.js';
+import { readClaudeCliStatusInWorker } from './claudeCliStatusWorkerClient.js';
 import {
   isClaudeCliLoginStatusFresh,
   peekClaudeCliLoginStatus,
@@ -211,17 +212,15 @@ export function refreshClaudeCliLoginStatus(options?: { force?: boolean }): Prom
   }
   const flight = (async () => {
     try {
-      const result = await runCli(['auth', 'status', '--json'], {
+      const stdout = await readClaudeCliStatusInWorker({
+        binary: cliBinaryPath()!,
         env: await cliEnv({ network: false }),
         timeoutMs: STATUS_TIMEOUT_MS,
       });
-      const status = parseClaudeCliLoginStatus(result.stdout);
+      const status = parseClaudeCliLoginStatus(stdout);
       if (!status) {
         lastStatusFailureAt = Date.now();
-        log.warn('claude auth status returned an unexpected payload', {
-          code: result.code,
-          reason: result.reason ?? null,
-        });
+        log.warn('claude auth status returned an unexpected payload');
         return statusFallback();
       }
       lastStatusFailureAt = null;
