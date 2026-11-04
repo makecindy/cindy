@@ -22,10 +22,10 @@ import { memo, useCallback, useEffect, useRef, useState } from 'react';
 import {
   ChevronDown,
   ChevronRight,
+  CirclePlus,
   EllipsisVertical,
   Folder,
   FolderOpen,
-  SquarePen,
 } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 
@@ -572,7 +572,7 @@ const ProjectHeader = memo(function ProjectHeader({
                   disabled={projectWritesBlocked}
                   onClick={handleCreateInProject}
                 >
-                  <SquarePen size={14} strokeWidth={2} />
+                  <CirclePlus size={14} strokeWidth={2} />
                 </ProjectAction>
               </div>
             </div>
@@ -721,7 +721,7 @@ const ProjectHeader = memo(function ProjectHeader({
 interface ProjectActionProps {
   label: string;
   /** 事件参数可选 —— More 按钮用 e.currentTarget 拿 BoundingRect 锚定菜单位置,
-   *  其它直接动作按钮(SquarePen)忽略事件即可。 */
+   *  其它直接动作按钮(CirclePlus)忽略事件即可。 */
   onClick: (e: React.MouseEvent<HTMLButtonElement>) => void;
   disabled?: boolean;
   children: React.ReactNode;

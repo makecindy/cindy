@@ -41,10 +41,10 @@ import {
   ChevronRight,
   ChevronsDownUp,
   ChevronsUpDown,
+  CirclePlus,
   Hammer,
   MessagesSquare,
   MonitorSmartphone,
-  SquarePen,
 } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 
@@ -285,7 +285,7 @@ export interface ProjectsSectionProps {
    */
   remoteDeviceIndex?: ReadonlyMap<string, { name: string; online: boolean }> | null;
   /**
-   * 「对话」组行右侧的新建入口(与项目行 SquarePen 等位):新建不绑项目的对话任务。
+   * 「对话」组行右侧的新建入口(与项目行 CirclePlus 等位):新建不绑项目的对话任务。
    * 按设备分组时对话组隶属于某个设备段,这里显式给出该段的设备作为创建目标
    * (null = 本机段),不再让上层按当前机器作用域猜(2026-08-12 用户裁决);
    * 不分组时不传,沿用上层的作用域推断。
@@ -1466,7 +1466,7 @@ export function SessionGroupNode({
   /** 新建按钮的 tooltip / aria 文案。省略 = 「新任务」。 */
   createLabel?: string;
   /**
-   * 组头右侧的新建入口(与项目行 SquarePen 等位):新建不绑项目的对话任务。
+   * 组头右侧的新建入口(与项目行 CirclePlus 等位):新建不绑项目的对话任务。
    * 目标设备由父层按所在设备段决定(闭包传入),本组件不关心。
    */
   onCreateDialogue?: () => void;
@@ -1567,7 +1567,7 @@ export function SessionGroupNode({
           </div>
         )}
         {/* 悬浮工具组:与 ProjectNode Header 同款——常态隐藏,hover 整行淡入。
-            新建(SquarePen)与项目行等位，右键菜单独立于新建与折叠操作。 */}
+            新建(CirclePlus)与项目行等位，右键菜单独立于新建与折叠操作。 */}
         {onCreateDialogue && (
           <div
             className={cn(
@@ -1593,7 +1593,7 @@ export function SessionGroupNode({
                   'disabled:cursor-not-allowed disabled:opacity-50 disabled:hover:bg-transparent',
                 )}
               >
-                <SquarePen size={14} strokeWidth={2} />
+                <CirclePlus size={14} strokeWidth={2} />
               </button>
             </Tip>
           </div>
