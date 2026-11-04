@@ -188,7 +188,8 @@ export function ContentHeader({
           }
         />
       )}
-      {/* 折叠态占位 spacer：真实按钮在 MainLayout 的 ChromeActions 浮层里
+      {/* 折叠及窄侧栏展开态共用占位，展开时只让出按钮超出侧栏的部分。
+          真实按钮在 MainLayout 的 ChromeActions 浮层里
           （钉死左上角、不随折叠重建的常驻实例）。本 spacer 以与侧栏宽度动画
           相同的时长/缓动伸缩，把标题平滑推到浮动按钮右侧（项目规则 8）。
           簇宽 + 8 = 折叠 / 菜单 / 后退 / 前进四个 28px 按钮 + 与标题间隙 8，
@@ -198,12 +199,15 @@ export function ContentHeader({
           否则浮层按钮点击会被窗口拖拽吞掉。 */}
       <div
         aria-hidden
+        data-testid="content-header-chrome-actions-spacer"
         className="h-full shrink-0 overflow-hidden transition-[max-width] duration-[250ms] ease-[cubic-bezier(0.4,0,0.2,1)]"
         style={
           {
             WebkitAppRegion: 'no-drag',
-            width: CHROME_ACTIONS_GEOMETRY.clusterWidth + 8,
-            maxWidth: showCollapsedActions ? CHROME_ACTIONS_GEOMETRY.clusterWidth + 8 : 0,
+            width: Math.max(CHROME_ACTIONS_GEOMETRY.clusterWidth + 8, chromeActionsHitHole),
+            maxWidth: showCollapsedActions
+              ? CHROME_ACTIONS_GEOMETRY.clusterWidth + 8
+              : chromeActionsHitHole,
           } as React.CSSProperties
         }
       />

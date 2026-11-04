@@ -885,7 +885,12 @@ export function RightSidebarShell({
           // bg 走 --panel-bg 与下方 TabBar / Body 同源(2026-07-21 用户裁决:CINDY 下
           // globals.css 会把 .bg-[var(--panel-bg)] 统一映射到玻璃底,原 bg-content-area
           // 是不透明灰,导致顶栏与面板体两种底色打架;其他 family 两 token 同为 surface,零变化)。
-          className="relative flex h-[46px] shrink-0 flex-none items-center border-b border-[var(--border-default)] bg-[var(--panel-bg)] px-2"
+          className={`relative flex shrink-0 flex-none items-center border-b border-[var(--border-default)] bg-[var(--panel-bg)] px-2 ${
+            // 空间不足时换行，保留原生安全区和所有面板操作。
+            railChromeActionsSpacerWidth > 0 || leftChromeActionsSpacerWidth > 0
+              ? 'min-h-[46px] flex-wrap'
+              : 'h-[46px]'
+          }`}
           style={{ WebkitAppRegion: 'drag' } as React.CSSProperties}
         >
           {topbarLeading}
@@ -906,7 +911,7 @@ export function RightSidebarShell({
             <div
               aria-hidden
               data-testid="right-sidebar-rail-chrome-actions-spacer"
-              className="h-full shrink-0"
+              className="h-[46px] shrink-0"
               style={
                 {
                   width: railChromeActionsSpacerWidth,
@@ -919,7 +924,7 @@ export function RightSidebarShell({
             <div
               aria-hidden
               data-testid="right-sidebar-left-chrome-actions-spacer"
-              className="h-full shrink-0"
+              className="h-[46px] shrink-0"
               style={
                 {
                   width: leftChromeActionsSpacerWidth,
@@ -951,13 +956,14 @@ export function RightSidebarShell({
             onMoveTab={soloMode ? undefined : handleMoveTab}
             onGlobalTabSelected={soloMode ? handleGlobalTabSelected : undefined}
             pillVariant="chip"
+            className="h-[46px] min-w-7"
             addButtonWrapperClassName="h-[30px]"
           />
           {/* 面板自属控件始终跟随面板：detach → maximize → 收起。固定唤起入口只在
               面板收起或分离时存在；展开态不渲染无效的 show 按钮，也不预留空位。 */}
           <div
             data-testid="right-sidebar-topbar-actions"
-            className="flex h-full shrink-0 items-center gap-0.5"
+            className="ml-auto flex h-[46px] shrink-0 items-center gap-0.5"
             style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties}
           >
             {handleDetachActiveTab && (

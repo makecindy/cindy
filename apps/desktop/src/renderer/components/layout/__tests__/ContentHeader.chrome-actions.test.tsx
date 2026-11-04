@@ -39,6 +39,29 @@ describe('ContentHeader rail ChromeActions hit hole', () => {
     expect(hitHole.parentElement?.style.paddingLeft).toBe('156px');
   });
 
+  // Review #8662: the hit hole alone does not move a title in normal flow.
+  it.each([[130, 220, 34], [156, 220, 60], [130, 280, 0]])(
+    'reserves the actual expanded-header overflow (inset=%s, sidebar=%s)',
+    (inset, sidebarWidth, overflow) => {
+      chrome.trafficLightInset = inset;
+      const { container } = render(
+        <FeatureSidebarSlotProvider isCollapsed={false}>
+          <ContentHeader
+            sidebarVisible
+            showCollapsedActions={false}
+            isSidebarRail={false}
+            sidebarWidth={sidebarWidth}
+            rightSidebarAvailable={false}
+            hidden={false}
+          />
+        </FeatureSidebarSlotProvider>,
+      );
+      const spacer = container.querySelector('header > .overflow-hidden') as HTMLElement;
+      expect(spacer.style.maxWidth).toBe(`${overflow}px`);
+      expect(Number.parseFloat(spacer.style.width)).toBeGreaterThanOrEqual(overflow);
+    },
+  );
+
   it('keeps the macOS rail-edge ChromeActions area outside the window drag region', () => {
     render(
       <FeatureSidebarSlotProvider isCollapsed>
