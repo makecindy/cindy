@@ -1,12 +1,12 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-const fixture = vi.hoisted(() => ({ download: vi.fn(), packaged: true, urls: [] as string[], wsUrls: [] as string[], exists: vi.fn(), config: '', inviteBase: 'https://relay.example.test', region: 'global' as 'global' | 'cn' | 'dev', handle: vi.fn(), refresh: vi.fn(async () => true), profiles: [] as unknown[], sockets: [] as import('ws').WebSocket[] }));
-vi.mock('../../authManager.js', () => ({ getAccessToken: () => 'isolated-test-token', refresh: fixture.refresh }));
-vi.mock('../../clientEndpointsService.js', () => ({ getClientEndpoint: (key: string) => key === 'deviceLinkApiBaseUrl' ? fixture.inviteBase : 'https://chat.cindy.app' }));
+const fixture = vi.hoisted(() => ({ share: vi.fn(), ownerGeneration: 1, download: vi.fn(), packaged: true, urls: [] as string[], wsUrls: [] as string[], exists: vi.fn(), config: '', inviteBase: 'https://relay.example.test', region: 'global' as 'global' | 'cn' | 'dev', handle: vi.fn(), refresh: vi.fn(async () => true), profiles: [] as unknown[], sockets: [] as import('ws').WebSocket[] }));
+vi.mock('../../authManager.js', () => ({ getAccessToken: () => 'isolated-test-token', refresh: fixture.refresh, getActiveAuthRealm: () => fixture.region === 'global' ? 'global' : 'cn', getAuthState: () => ({ ownerGeneration: fixture.ownerGeneration, user: { id: 'fixture-owner' }, mode: 'personal' }) }));
+vi.mock('../../clientEndpointsService.js', () => ({ getClientEndpoint: (key: string) => key === 'shareBaseUrl' ? fixture.inviteBase : 'https://chat.cindy.app', getBuildClientEndpoint: () => fixture.inviteBase }));
 vi.mock('../../../shared/brandRegion.js', () => ({ get CURRENT_CINDY_REGION() { return fixture.region; } }));
 vi.mock('../chatServerMedia.js', () => ({ createChatMedia: () => ({ upload: vi.fn(async () => []), download: fixture.download }) }));
 vi.mock('../chatServerWorkspaces.js', () => ({ chatServerWorkspaces: () => ({ read: () => null, save: vi.fn() }) }));
 vi.mock('../chatMigrationReceipts.js', () => ({ chatMigrationReceipts: () => ({ read: () => null, save: vi.fn() }) }));
-vi.mock('electron', () => ({ app: { get isPackaged() { return fixture.packaged; }, getPath: () => '/isolated' } }));
+vi.mock('electron', () => ({ net: { fetch: fixture.share }, app: { get isPackaged() { return fixture.packaged; }, getPath: () => '/isolated' } }));
 vi.mock('node:fs', () => ({ existsSync: fixture.exists, readFileSync: () => fixture.config || '{"baseUrl":"https://example.com","token":"test"}' }));
 vi.mock('../botGroupChatService.js', () => ({ readPersistedReplyText: vi.fn() }));
 vi.mock('../../localDb/client/current.js', () => ({ getDbClient: () => ({ drizzle: {
@@ -49,12 +49,16 @@ describe('Chat Server invitation contract', () => {
   const selfId = '30000000-0000-4000-8000-000000000001';
   const token = 'a'.repeat(43);
   const link = `cindy://chat-invite/${token}`;
+  const shareId = 's'.repeat(32);
+  const shareLink = `https://relay.example.test/chat-invite/${shareId}`;
   const clientId = '40000000-0000-4000-8000-000000000001';
   let service: BotGroupChatService;
   let expiresAt: unknown;
   let reusable: boolean | undefined;
   let members: unknown[];
   beforeEach(() => {
+    fixture.ownerGeneration = 1;
+    fixture.share.mockImplementation(async (url: string) => url.endsWith('/api/shares') ? Response.json({ schemaVersion: 1, kind: 'chat-invite', includeAttribution: true, shareId, url: `${fixture.inviteBase.replace(/\/+$/, '')}/chat-invite/${shareId}` }) : url.endsWith('/token') ? Response.json({ token }) : Response.json({ revoked: true }));
     fixture.packaged = true; fixture.profiles = []; fixture.sockets = [];
     fixture.inviteBase = 'https://relay.example.test'; fixture.region = 'global';
     expiresAt = null; reusable = true;
@@ -72,47 +76,59 @@ describe('Chat Server invitation contract', () => {
   afterEach(() => { service.dispose(); vi.clearAllMocks(); });
   it.each([[null, true], ['2026-10-10T12:00:00.000Z', false], ['2026-10-10T12:00:00.000Z', undefined]] as const)('preserves expiry %s / reusable %s across creation and preview', async (value, reuse) => {
     expiresAt = value; reusable = reuse;
-    expect(await service.chatServer!.createInvite({ groupId, clientId })).toEqual({ ok: true, link: `https://relay.example.test/chat-invite/join#${token}?app=cindy`, expiresAt, ...(reusable !== undefined ? { reusable } : {}) });
+    expect(await service.chatServer!.createInvite({ groupId, clientId })).toEqual({ ok: true, link: shareLink, expiresAt, ...(reusable !== undefined ? { reusable } : {}) });
     expect(await service.chatServer!.previewInvite({ link })).toEqual({ ok: true, groupId, name: 'Group', inviterName: 'Host', expiresAt, ...(reusable !== undefined ? { reusable } : {}), joined: false });
     expect(fixture.handle).toHaveBeenCalledWith(`/conversations/${groupId}/invite-links`, 'POST', { operationId: clientId }, expect.objectContaining({ 'X-Chat-Actor': selfId }));
   });
-  // Unit regression: real createInvite must return a browser-shareable link, not the old
-  // scheme-only result. Existing expiry tests never checked regional mobile handoff or
-  // round-tripping the generated URL through preview. No real HTTP or accounts are used.
-  it.each([['global', 'cindy'], ['cn', 'cindycn']] as const)(
-    'creates a public invitation with the %s build hint and previews it on the current account', async (region, scheme) => {
-      fixture.region = region; fixture.inviteBase = 'https://relay.example.test/dl/';
-      const created = await service.chatServer!.createInvite({ groupId, clientId });
-      expect(created).toMatchObject({ ok: true, link: `https://relay.example.test/dl/chat-invite/join#${token}?app=${scheme}` });
-      if (!created.ok) throw new Error('Expected invitation');
-      const page = new URL(created.link);
-      expect(page.search).toBe(''); expect(page.username).toBe('');
-      expect(page.pathname).not.toContain(token);
-      fixture.urls.length = 0;
-      expect((await service.chatServer!.previewInvite({ link: created.link })).ok).toBe(true);
-      expect(fixture.handle).toHaveBeenCalledWith('/invite-links/preview', 'POST', { token }, expect.anything());
-      expect(await service.chatServer!.revokeInvite({ groupId, link: created.link, clientId })).toEqual({ ok: true, revoked: true });
-      expect(fixture.handle).toHaveBeenCalledWith(`/conversations/${groupId}/invite-links/revoke`, 'POST', { token, operationId: clientId }, expect.anything());
-      expect(fixture.urls.every(url => url.startsWith('https://chat.cindy.app/') && !url.includes(token))).toBe(true);
-    },
-  );
-  it.each(['https://dev-relay.example.test', ''])('retains the legacy dev output without requiring a public page (%s)', async base => {
-    fixture.region = 'dev'; fixture.inviteBase = base;
-    expect(await service.chatServer!.createInvite({ groupId, clientId })).toMatchObject({ ok: true, link });
+  // D1/D3/D5/D7/D10: real service + share helper, fake transport only. Unit tier.
+  // Covers the new identity/binding boundary missing from the existing Chat-only tests.
+  it.each(['global', 'cn', 'dev'] as const)('creates an opaque share link for %s and keeps its management actor', async region => {
+    fixture.region = region;
+    const created = await service.chatServer!.createInvite({ groupId, clientId });
+    expect(created).toMatchObject({ ok: true, link: shareLink });
+    const call = fixture.share.mock.calls.find(([url]) => url.endsWith('/api/shares'))!;
+    expect(JSON.parse(call[1].body)).toMatchObject({ kind: 'chat-invite', reference: groupId, token, actorId: selfId, includeAttribution: true, region: region === 'global' ? 'global' : 'cn' });
+    expect(call[1].redirect).toBe('error');
+    expect(new Headers(call[1].headers).get('authorization')).toBe('Bearer isolated-test-token');
+    expect(shareLink).not.toContain(token);
+    expect((await service.chatServer!.previewInvite({ link: shareLink })).ok).toBe(true);
+    expect(await service.chatServer!.revokeInvite({ groupId, link: shareLink, clientId })).toEqual({ ok: true, revoked: true });
+    expect(fixture.share.mock.calls.some(([url]) => url === `https://relay.example.test/api/chat-invites/${shareId}/revoked`)).toBe(true);
   });
-  it.each(['http://localhost:3018', 'http://127.0.0.1:3018', 'https://[::1]:3018'])(
-    'does not share a recipient-unreachable local page (%s)', async base => {
-      fixture.inviteBase = base;
-      expect(await service.chatServer!.createInvite({ groupId, clientId })).toMatchObject({ ok: true, link });
-    },
-  );
   it.each(['', 'not-a-url', 'http://relay.example.test', 'https://user:fixture@relay.example.test', 'https://relay.example.test?key=fixture', 'https://relay.example.test#fixture'])(
-    'does not disguise a missing or invalid public endpoint as a successful scheme fallback (%s)', async base => {
+    'rejects an invalid share endpoint before generating an invite (%s)', async base => {
       fixture.inviteBase = base;
       expect((await service.chatServer!.createInvite({ groupId, clientId })).ok).toBe(false);
       expect(fixture.handle.mock.calls.some(([route]) => route.endsWith('/invite-links'))).toBe(false);
     },
   );
+  it('uses the selected owned companion for both invitation generation and sharing', async () => {
+    const companion = '20000000-0000-4000-8000-000000000001';
+    members = [{ id: companion, ownerActorId: selfId, state: 'joined', role: 'admin' }];
+    expect(await service.chatServer!.createInvite({ groupId, clientId })).toMatchObject({ ok: true, link: shareLink });
+    expect(fixture.handle).toHaveBeenCalledWith(`/conversations/${groupId}/invite-links`, 'POST', { operationId: clientId }, expect.objectContaining({ 'X-Chat-Actor': companion }));
+    expect(JSON.parse(fixture.share.mock.calls[0][1].body).actorId).toBe(companion);
+  });
+  it('retries creation using the same operationId after sharing fails, without returning a native-link fallback', async () => {
+    fixture.share.mockResolvedValueOnce(new Response(null, { status: 503 }));
+    expect((await service.chatServer!.createInvite({ groupId, clientId })).ok).toBe(false);
+    expect(await service.chatServer!.createInvite({ groupId, clientId })).toMatchObject({ ok: true, link: shareLink });
+    const calls = fixture.handle.mock.calls.filter(([route]) => route.endsWith('/invite-links'));
+    expect(calls).toHaveLength(2); expect(calls[0]).toEqual(calls[1]);
+  });
+  it.each(['https://other.example.test/chat-invite/' + 's'.repeat(32), 'cindy://chat-invite/' + 'a'.repeat(43)])('rejects an untrusted sharing result %s', async url => {
+    fixture.share.mockResolvedValueOnce(Response.json({ schemaVersion: 1, kind: 'chat-invite', shareId, includeAttribution: true, url }));
+    expect((await service.chatServer!.createInvite({ groupId, clientId })).ok).toBe(false);
+  });
+  it('ignores stale sharing responses after an account change', async () => {
+    fixture.share.mockImplementationOnce(async () => { fixture.ownerGeneration++; return Response.json({ schemaVersion: 1, kind: 'chat-invite', shareId, includeAttribution: true, url: shareLink }); });
+    expect(await service.chatServer!.createInvite({ groupId, clientId })).toEqual({ ok: false, errorCode: 'OWNER_CHANGED' });
+  });
+  it('does not undo revocation when notifying the share service fails twice', async () => {
+    fixture.share.mockImplementation(async (url: string) => url.endsWith('/token') ? Response.json({ token }) : new Response(null, { status: 503 }));
+    expect(await service.chatServer!.revokeInvite({ groupId, link: shareLink, clientId })).toEqual({ ok: true, revoked: true });
+    expect(fixture.share.mock.calls.filter(([url]) => url.endsWith('/revoked'))).toHaveLength(2);
+  });
   it('continues to preview a bare token as well as the legacy scheme', async () => {
     expect((await service.chatServer!.previewInvite({ link: token })).ok).toBe(true);
     expect((await service.chatServer!.previewInvite({ link })).ok).toBe(true);
@@ -127,8 +143,8 @@ describe('Chat Server invitation contract', () => {
     reusable = flag;
     expect(await service.chatServer!.createInvite({ groupId, clientId })).toEqual({ ok: false, errorCode: 'CHAT_RESPONSE_INVALID' });
   });
-  it('previews and accepts the public page link through this account’s own Chat Server with only the token', async () => {
-    const page = `https://device-link.other-region.example/chat-invite/join#${token}?app=cindycn`;
+  it('previews and accepts the opaque share link through this account’s own Chat Server with only the token', async () => {
+    const page = `https://other-region.example/chat-invite/${shareId}`;
     fixture.urls.length = 0;
     expect((await service.chatServer!.previewInvite({ link: `邀请你加入群聊：${page}` })).ok).toBe(true);
     const accepted = vi.fn(() => ({ body: { groupId } }));
@@ -139,6 +155,7 @@ describe('Chat Server invitation contract', () => {
     expect(fixture.handle).toHaveBeenCalledWith('/invite-links/accept', 'POST', { token, operationId: clientId }, expect.anything());
     // The link's host is never a request target, and the token never enters a URL.
     expect(fixture.urls.every(url => url.startsWith('https://chat.cindy.app/'))).toBe(true);
+    expect(fixture.share.mock.calls.every(([url]) => url.startsWith('https://relay.example.test/'))).toBe(true);
     expect(fixture.urls.some(url => url.includes(token))).toBe(false);
   });
   it.each([

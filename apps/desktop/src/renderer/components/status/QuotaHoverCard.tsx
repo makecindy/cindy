@@ -566,7 +566,8 @@ export function QuotaHoverCard({
           </>
         ) : null}
 
-        {children}
+        {/* 附加内容（如费用明细的长说明）不参与 w-max 卡片的宽度计算，只填满已有宽度并换行。 */}
+        {children ? <div className="w-0 min-w-full">{children}</div> : null}
 
         {sessionUsage ? (
           <>

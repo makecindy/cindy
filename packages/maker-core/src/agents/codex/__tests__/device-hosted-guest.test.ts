@@ -130,6 +130,8 @@ interface Fixture {
   ghostRosterSnapshot?: string;
   /** 经隧道的 Cindy MCP；默认只有通讯录。 */
   mcpServers?: string[];
+  /** 任务所在电脑带来了自己的托管 Skill。 */
+  controllerManagedSkills?: boolean;
 }
 
 /** app-server 的功能清单，分两页返回。 */
@@ -171,6 +173,7 @@ async function startHosted(fixture: Fixture) {
   const systemSkill = path.join(codexHome, 'skills', '.system', 'imagegen', 'SKILL.md');
   const pluginSkill = path.join(codexHome, 'plugins', 'cache', 'personal', 'secret-plugin', '1.0.0', 'skills', 's', 'SKILL.md');
   const guestSkill = path.join(workingDir, '.agents', 'skills', 'guest', 'SKILL.md');
+  const hostManagedSkill = path.join(codexHome, 'skills', 'cindy-cindy%3Alearn', 'SKILL.md');
 
   const getGhostRosterPrompt = vi.fn(() => GHOST_ROSTER);
   const getDisabledSkillPaths = vi.fn(() => [hostSkill]);
@@ -196,6 +199,9 @@ async function startHosted(fixture: Fixture) {
     logger: noopLogger(),
     getGhostRosterPrompt,
     getDisabledSkillPaths,
+    getManagedSkills: async () => [{
+      kind: 'agent-skill', name: 'learn', path: hostManagedSkill, source: 'skill', enabled: true, claudeCommandName: 'cindy:learn',
+    }],
     prepareCodexSkills,
     prepareCodexResumeSession,
     resolveCodexThreadStorage,
@@ -318,6 +324,7 @@ async function startHosted(fixture: Fixture) {
     ...(fixture.guest ? { guest: true, guestProvider: SHARED_PROVIDER } : {}),
     ...(guestHome ? { guestHome } : {}),
     ...(fixture.linkActivity ? { linkActivity: fixture.linkActivity } : {}),
+    ...(fixture.controllerManagedSkills ? { controllerManagedSkills: { claudePluginRoots: [] } } : {}),
   };
   const started = agent.startSession({
     sessionId: 'hosted-session',
@@ -332,7 +339,7 @@ async function startHosted(fixture: Fixture) {
   return {
     started, request, getHost, getGhostRosterPrompt, getDisabledSkillPaths,
     prepareCodexSkills, prepareCodexResumeSession, resolveCodexThreadStorage, recordCodexThreadLocation,
-    hostSkill, systemSkill, pluginSkill, guestSkill, guestHome, codexHome, agent, workingDir,
+    hostSkill, systemSkill, pluginSkill, guestSkill, hostManagedSkill, guestHome, codexHome, agent, workingDir,
   };
 }
 
@@ -509,6 +516,19 @@ describe('Codex device-hosted guest sessions', () => {
     expect(instructions).not.toContain(GHOST_ROSTER);
     expect(fixture.getGhostRosterPrompt).not.toHaveBeenCalled();
     await handle.close();
+  });
+
+  // 任务所在电脑带来的托管 Skill 作为项目 Skill 加载；共用 CODEX_HOME 里本机的那份对这个线程停用，不重复出现。
+  it('turns off this computer managed skills when the task computer brings its own', async () => {
+    for (const controllerManagedSkills of [true, false]) {
+      const fixture = await startHosted({ guest: false, controllerManagedSkills });
+      const handle = await fixture.started;
+      const config = threadParams(fixture.request, Method.ThreadStart).config as Record<string, unknown>;
+      const disabled = (config['skills.config'] as Array<{ path: string; enabled: boolean }> | undefined ?? [])
+        .filter((entry) => !entry.enabled).map((entry) => entry.path);
+      expect(disabled.some((entry) => entry.includes('cindy-cindy%3Alearn'))).toBe(controllerManagedSkills);
+      await handle.close();
+    }
   });
 
   it('keeps same-account hosted sessions unchanged', async () => {

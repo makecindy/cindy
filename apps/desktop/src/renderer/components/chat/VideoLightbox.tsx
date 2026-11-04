@@ -15,7 +15,8 @@ import { AttachmentCollectionPreview, useOpeningCollection } from './AttachmentC
  *   - Right-click (xdt-video:// only): 复制视频 / 打开视频所在目录。复制走
  *     OS 原生文件剪贴板(Win/Mac),粘贴出来是文件本体而不是字节流。
  *   - <video controls autoPlay loop preload="auto"> — autoplay is fine because
- *     the user explicitly clicked the cover to open the lightbox.
+ *     the user explicitly clicked the cover to open the lightbox. Audio
+ *     previews do not loop, and unmounting always pauses the element.
  */
 
 import { useCallback, useEffect, useRef, useState } from 'react';
@@ -32,7 +33,7 @@ import {
 } from '@/components/ui/dropdown-menu';
 import { registerMedia } from '@/lib/mediaPlaybackBus';
 import { useVideoContextMenu } from './useVideoContextMenu';
-import { PreviewHeader, PreviewFooter } from './PreviewChrome';
+import { PREVIEW_PANEL_CLASS, PREVIEW_PANEL_STYLE, PreviewHeader, PreviewFooter, PreviewScrim } from './PreviewChrome';
 import { previewSourceName } from '@cindy/maker-shared/attachment-preview';
 
 interface VideoLightboxProps {
@@ -83,10 +84,16 @@ function VideoLightboxContent({
 
   // 全局媒体互斥:lightbox autoPlay 起播时 bus 会自动 pause 其它正在
   // 播放的 audio/video;反过来,其它媒体起播时也会 pause 这里的视频。
+  // 合集预览关闭或切换时会直接卸载本组件而不经过 handleClose,卸载时
+  // 显式 pause,避免脱离 DOM 的媒体在后台继续发声。
   useEffect(() => {
     const el = videoRef.current;
     if (!el) return;
-    return registerMedia(el);
+    const unregister = registerMedia(el);
+    return () => {
+      unregister();
+      el.pause();
+    };
   }, []);
 
   useEffect(() => {
@@ -141,6 +148,13 @@ function VideoLightboxContent({
     // 暂停 / 方向键 seek 立即可用);卸载时 FocusScope 默认把焦点还给打开
     // 前的元素(ChatVideoView 键盘路径 = 预览触发器,与 onClose 里的显式
     // 恢复指向同一元素)。
+    <>
+    <PreviewScrim
+      onClose={() => {
+        if (performance.now() - lastMenuCloseAt.current < 150) return;
+        handleClose();
+      }}
+    />
     <FocusScope
       onUnmountAutoFocus={restorePreviewFocus}
       asChild
@@ -152,11 +166,10 @@ function VideoLightboxContent({
       }}
     >
     <div
+      className={PREVIEW_PANEL_CLASS}
       style={{
-        position: 'fixed',
-        inset: 0,
+        ...PREVIEW_PANEL_STYLE,
         zIndex: 9999,
-        background: 'var(--surface)',
         display: 'flex',
         alignItems: 'center',
         justifyContent: 'center',
@@ -218,7 +231,7 @@ function VideoLightboxContent({
         src={src}
         controls
         autoPlay
-        loop
+        loop={kind !== 'audio'}
         preload="metadata"
           playsInline
           onLoadedMetadata={() => {
@@ -228,9 +241,9 @@ function VideoLightboxContent({
         // (jsdom 只认带 tabindex 的元素可聚焦,焦点进入 lightbox 的断言依赖它)。
         tabIndex={0}
         style={{
-            width: kind === 'audio' ? 'min(640px, 90vw)' : 'calc(100vw - 80px)',
-            maxWidth: 'calc(100vw - 80px)',
-          maxHeight: 'calc(100vh - 160px)',
+            width: kind === 'audio' ? 'min(640px, calc(var(--preview-width) - 80px))' : 'calc(var(--preview-width) - 80px)',
+            maxWidth: 'calc(var(--preview-width) - 80px)',
+          maxHeight: 'calc(var(--preview-height) - 160px)',
           objectFit: 'contain',
           cursor: 'default',
           position: 'relative',
@@ -314,6 +327,7 @@ function VideoLightboxContent({
       ) : null}
     </div>
     </FocusScope>
+    </>
   );
 
   return createPortal(overlay, document.body);

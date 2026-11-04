@@ -26,6 +26,25 @@ export default {
     'src/renderer/features/bots/BotDeleteDialog': 'export const BotDeleteDialog=()=>null;',
   },
   cases: {
+    'group-types': {
+      about: 'Group and private rows retain their original avatars without type markers; running/unread @ points remain',
+      data: {
+        profiles: profiles.slice(0, 2).map((bot, index) => ({ ...bot, lastMessageAt: Date.now() - (index + 5) * 60000, lastMessagePreview: ['设计稿已更新', '收到，继续整理'][index], avatar: `cindy://avatar/preset/${['cindy', 'dash'][index]}` })),
+        remoteBots: [], route: '/bots/groups/type-1',
+        groups: [1, 2].map((count, index) => ({
+          id: `type-${count}`, name: ['单伙伴群', '周末出游'][index],
+          replyMode: 'all', speakingMode: 'auto',
+          members: ['cindy', 'dash', 'lizi'].slice(0, count).map((preset, memberIndex) => ({
+            botId: `member-${memberIndex}`, name: ['Cindy', 'Writer', 'Researcher'][memberIndex],
+            avatar: `cindy://avatar/preset/${preset}`, avatarColor: 'violet', status: 'active',
+          })),
+          speakingBotIds: index === 0 ? ['member-0'] : [], organizerBotId: 'member-0', projectDir: null,
+          lastMessage: { authorKind: 'user', authorName: 'Alice', preview: ['看看这个设计', '周六一起出发', '分享一本好书'][index], createdAt: Date.now() - index },
+          planningBotId: null, openPlan: null, createdAt: 1, updatedAt: Date.now() - index,
+          serverUnread: { count: 2, mentioned: index < 2 },
+        })),
+      },
+    },
     'group-avatars': {
       about: 'Collapsed one-to-five-member groups keep their composition and corner-dot space',
       data: { profiles: [], remoteBots: [], route: '/bots/groups/group-2', groups: [1, 2, 3, 4, 5].map(count => ({
@@ -108,6 +127,22 @@ export default {
     },
   },
   async check(page, ui) {
+    if (ui.case === 'group-types') {
+      const section = page.locator('[data-sidebar-section="teammates"]');
+      assert.equal(await section.locator('[data-bot-group-id]').count(), 2);
+      assert.equal(await section.getByText('Cindy', { exact: true }).count(), 1);
+      assert.equal(await section.getByText('Writer', { exact: true }).count(), 1);
+      assert.equal(await section.getByText('单伙伴群', { exact: true }).count(), 1);
+      const expandedTypeMarks = await section.locator('[data-bot-group-id] svg.lucide-users').count();
+      await ui.capture('expanded-group-private');
+      await page.getByRole('button', { name: await ui.t('bots.title'), exact: true }).click();
+      await section.locator('[data-bot-group-id]').first().waitFor({ state: 'hidden' });
+      assert.equal(await section.locator('[data-teammate-mention]').count(), 2);
+      await ui.capture('collapsed-group-private');
+      assert.equal(expandedTypeMarks, 0, 'expanded groups have no extra type icon');
+      assert.equal(await section.locator('button:has(svg.lucide-users):visible').count(), 0, 'collapsed avatars have no extra type badge');
+      return;
+    }
     if (ui.case === 'group-avatars') {
       await ui.capture('expanded-groups');
       await page.getByRole('button', { name: await ui.t('bots.title'), exact: true }).click();

@@ -2,6 +2,12 @@
   "progress": {
     "stop": "止"
   },
+  "work": {
+    "queued": "待次 {{count}}",
+    "active": "行事中 {{count}}",
+    "expand": "展伙伴所事",
+    "collapse": "斂伙伴所事"
+  },
   "title": "群議",
   "memberSeparator": "、",
   "memberCount_one": "成員 {{count}} 位",
@@ -155,7 +161,12 @@
         "details": "請再遣訊；若仍未成，請察記錄並回報其事。"
       }
     },
-    "runtimeFailureSetupHint": "如須調模型或設定，請於同僚所屬之機上為之。"
+    "runtimeFailureSetupHint": "如須調模型或設定，請於同僚所屬之機上為之。",
+    "capability": {
+      "GROUP_AUTHORIZATION_REQUIRED": "{{name}} 的工具呼叫未執行：群內授權已失效或不允許此操作。請由夥伴主人在目前群組重新發起。",
+      "GROUP_AUTHORIZATION_UNAVAILABLE": "暫時無法核驗 {{name}} 的群聊授權，這次工具呼叫未執行。請在連線恢復後重試。",
+      "ATTACHMENTS_UNAVAILABLE": "部分附件未交給 {{name}}（下載失敗或數量限制）。請重新傳送這次需要的附件。"
+    }
   },
   "plan": {
     "intro_one": "此事分 {{count}} 步，吾如是分職：",
@@ -189,6 +200,7 @@
     "allDone": "皆畢矣"
   },
   "speaking": {
+    "queued": "待次",
     "stopping": "方止…",
     "planning": "方分職…",
     "step": "方為之…"

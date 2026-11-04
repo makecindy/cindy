@@ -155,7 +155,12 @@
         "details": "请重新发送消息；如果仍失败，请查看日志并反馈问题。"
       }
     },
-    "runtimeFailureSetupHint": "如需调整模型或设置，请在伙伴所属电脑上处理。"
+    "runtimeFailureSetupHint": "如需调整模型或设置，请在伙伴所属电脑上处理。",
+    "capability": {
+      "GROUP_AUTHORIZATION_REQUIRED": "{{name}} 的工具调用未执行：群内授权已失效或不允许此操作。请由伙伴主人在当前群重新发起。",
+      "GROUP_AUTHORIZATION_UNAVAILABLE": "暂时无法核验 {{name}} 的群聊授权，这次工具调用未执行。请在连接恢复后重试。",
+      "ATTACHMENTS_UNAVAILABLE": "部分附件未交给 {{name}}（下载失败或数量限制）。请重新发送本次需要的附件。"
+    }
   },
   "plan": {
     "intro_one": "这件事分 {{count}} 步，我这样分工：",
@@ -189,9 +194,16 @@
     "allDone": "都做完了"
   },
   "speaking": {
+    "queued": "排队中",
     "stopping": "正在停止…",
     "planning": "正在安排…",
     "step": "正在做…"
+  },
+  "work": {
+    "queued": "排队 {{count}}",
+    "active": "进行中 {{count}}",
+    "expand": "展开伙伴动态",
+    "collapse": "收起伙伴动态"
   },
   "task": {
     "state": {

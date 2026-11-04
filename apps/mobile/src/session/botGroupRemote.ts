@@ -13,6 +13,7 @@ import {
   BOT_GROUP_REMOTE_COLLECTION_ID,
   BOT_GROUP_REMOTE_RESOURCE_KIND,
   isBotGroupRuntimeFailureCode,
+  isBotGroupCapabilityNoticeCode,
   parseBotGroupQuoteView,
   parseBotGroupTaskCardView,
   parseBotGroupProcessRef,
@@ -247,6 +248,8 @@ function parseMessage(value: unknown): BotGroupMessageView | null {
     mentions: parseMentions(record.mentions),
     noticeCode,
     ...(isBotGroupRuntimeFailureCode(record.runtimeFailureCode) ? { runtimeFailureCode: record.runtimeFailureCode } : {}),
+    ...(kind === 'notice' && authorKind === 'bot' && record.deleted !== true && isBotGroupCapabilityNoticeCode(record.capabilityNoticeCode)
+      ? { capabilityNoticeCode: record.capabilityNoticeCode } : {}),
     planId: optionalId(record.planId),
     files: stringList(record.files, MAX_FILES, 1_024),
     // Older computers send no attachments.

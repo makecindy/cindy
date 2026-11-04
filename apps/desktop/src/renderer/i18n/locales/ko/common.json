@@ -1907,6 +1907,8 @@
       "add": {
         "title": "원격 머신 추가",
         "alias": "별칭",
+        "aliasHint": "영문자, 숫자, . _ @ : - 기호로 1~128자를 입력하세요. 한글 등의 이름은 표시 이름에 입력하세요.",
+        "aliasInvalid": "별칭에 지원하지 않는 문자가 있거나 128자를 초과했습니다. 위 규칙에 맞게 수정하세요.",
         "displayName": "표시 이름",
         "displayNamePlaceholder": "선택 사항, Cindy에서만 표시",
         "hostname": "호스트명",
@@ -2624,6 +2626,13 @@
       "storage": {
         "dialogueDirectoryTitle": "대화 작업 공간",
         "dialogueDirectoryDescription": "새 세션에만 적용됩니다. 기존 파일은 원래 위치에 유지됩니다.",
+        "projectsRootTitle": "새 프로젝트 저장 위치",
+        "projectsRootInferred": "추천",
+        "projectsRootDefault": "기본",
+        "projectsRootChoose": "폴더 변경",
+        "projectsRootReset": "추천 위치로 복원",
+        "projectsRootDescription": "세션에서 프로젝트를 만들 때 프로젝트 폴더가 이곳에 생성됩니다. 설정하지 않으면 기존 프로젝트 위치를 바탕으로 추천합니다.",
+        "projectsRootFailed": "새 프로젝트 저장 위치를 업데이트하지 못했습니다",
         "dialogueDirectoryOpen": "폴더 열기",
         "dialogueDirectoryChoose": "폴더 변경",
         "dialogueDirectoryReset": "기본 위치로 복원",
@@ -7476,6 +7485,8 @@
         "cancel": "취소",
         "updateNeedsConsent": "새 권한 확인 필요",
         "targetIdentity": "설치 대상: {{name}}",
+        "localTarget": "로컬 개발 버전",
+        "localOidcUnavailable": "이 개발 사본은 조직 인증을 사용할 수 없습니다. 테스트하려면 Forge에서 현재 조직을 명시하여 설치하세요.",
         "personalTarget": "개인",
         "sourceChanged": "이 업데이트는 로컬 소스로 전환합니다. 기존 계정과 데이터는 별도로 보관됩니다. 업데이트 후 계정을 다시 연결하세요.",
         "otherCopies": "같은 이름의 플러그인이 {{count}}개 더 있습니다. 덮어쓰거나 비활성화하지 않습니다. 별도 사본에는 독립적인 계정 연결이 필요합니다."
@@ -7545,6 +7556,9 @@
         "agentObserve": "로컬 프로젝트의 세션 목록과 상태를 볼 수 있음",
         "agentObserveDetail": "등록된 로컬 프로젝트에 있는 세션의 제목, Agent 종류, 보관 여부와 상태(실행 중, 확인 필요, 최근 활동 시간)를 확인하고 메인 창에서 세션을 열 수 있습니다. 메시지, 계획, 파일을 읽거나 메시지를 보내거나 세션을 변경할 수는 없습니다.",
         "agentObserveRequest": "세션 보기 권한 확인",
+        "agentCompanions": "동료와 동료의 상태, 최근 대화를 볼 수 있음",
+        "agentCompanionsDetail": "모든 동료(다른 컴퓨터에서 실행 중인 동료 포함)의 이름, 설명, 아바타와 상태(작업 중, 처리 대기, 대기 중, 오프라인), 하고 있는 작업의 종류(생각 중, 도구 실행 중 등), 처리를 기다리는 요청의 내용(질문, 실행할 명령, 계획 — 대화에 보이는 것과 같음), 메인 대화의 최근 내용(내 메시지와 동료의 답장 최대 50개, 도구 실행 과정 제외)을 확인하고 메인 창에서 동료의 대화를 열 수 있습니다. 메시지 전달 권한도 있으면 플러그인에서 입력한 답을 동료에게 전달할 수 있습니다(질문 답변, 요청 거절, 계획 의견). 실행 허용은 Cindy 자체 확인 창에서 직접 눌러야 합니다. 파일, 도구 실행 과정, 생각 내용은 읽을 수 없습니다.",
+        "agentCompanionsRequest": "동료 보기 권한 확인",
         "agentHiddenTasks": "세션 목록에 표시되지 않는 백그라운드 세션을 만들 수 있음",
         "agentHiddenTasksDetail": "이 플러그인이 만든 세션을 세션 목록, 검색, 알림에 표시하지 않을 수 있습니다. 플러그인 상세의 「백그라운드 세션」에서 언제든지 확인하고 열거나 세션 목록에 표시할 수 있으며, 플러그인을 제거하면 다시 표시됩니다.",
         "agentErrand": "작업을 만들고 실행하며 결과를 읽을 수 있습니다",
@@ -7559,6 +7573,8 @@
         "nodeResident": "Node 프로그램을 백그라운드에서 계속 실행할 수 있음",
         "nodeResidentDetail": "플러그인이 활성화된 동안 실행되며 비활성화, 업데이트, 제거 또는 Cindy 종료 시 중지됩니다.",
         "tool": "도구 \"{{name}}\"",
+        "toolAutoApprove": "Agent가 확인 없이 도구 \"{{name}}\" 실행",
+        "toolAutoApproveDetail": "Agent가 이 도구를 호출하면 호출마다 확인하거나 검토하지 않고 바로 실행합니다.",
         "command": "채팅 명령 ${{command}}",
         "panelLeft": "패널 \"{{title}}\" · 사이드바에 표시",
         "panelTab": "패널 \"{{title}}\" · 플러그인 페이지에서 열기",
@@ -7624,9 +7640,13 @@
         "workspaceDetail": "요청 시 직접 폴더를 선택하거나 확인 카드에서 전체 경로를 본 뒤 허용 여부를 결정합니다. 사용자가 시작한 호출을 처리하는 동안에는 현재 세션 작업 디렉터리 안의 하위 폴더는 추가 확인 없이 사용됩니다. 이미 세션이 있는 폴더는 재사용되어 중복 생성되지 않습니다. 만들어지는 것은 빈 세션뿐이며 스스로 작업을 시작하지 않습니다.",
         "sessionContext": "현재 세션이 사용 중인 프로젝트 폴더 위치를 알 수 있습니다",
         "sessionContextDetail": "현재 세션을 위해 작동할 때만 위치 정보(세션 ID와 프로젝트 폴더 경로)를 전달합니다. 파일 내용은 포함되지 않으며 파일 접근 권한도 부여되지 않습니다.",
+        "liveScreen": "휴대폰에서 기기 화면 보기 및 조작",
+        "liveScreenDetail": "원격 데스크톱을 통해 휴대폰에서 이 플러그인이 제공하는 기기 화면(시뮬레이터 등)을 보고 터치, 버튼, 텍스트 입력으로 조작할 수 있습니다. 휴대폰에서 열 때만 연결되며 이 컴퓨터의 다른 내용은 보여 주지 않습니다.",
         "preview": "아래 사이트의 미리보기 페이지를 사이드바 브라우저에서 열 수 있습니다",
         "previewDetail": "아래에 나열된 사이트만 열 수 있으며, 페이지를 열 때마다 어떤 플러그인이 열었는지 표시됩니다.",
         "browserExtension": "함께 제공되는 브라우저 확장을 Cindy에 연결할 수 있습니다",
+        "browserNativeHost": "브라우저 연결 “{{name}}” 등록 가능",
+        "browserNativeHostDetail": "등록된 프로그램은 샌드박스 밖에서 실행되며 사용자 계정과 시스템 권한으로 로컬에 접근합니다.",
         "browserExtensionDetail": "아래에 나열된 확장만 연결할 수 있으며, 연결은 로컬 루프백 주소를 통해 이루어집니다. 확장이 보낸 요청은 Cindy가 이 플러그인에 전달합니다.",
         "browserExtensionPageControlDetail": "아래에 나열된 확장만 연결할 수 있습니다. 이 확장은 페이지 제어도 구현하므로 「내 브라우저」를 선택하면 에이전트가 사용 중인 브라우저의 페이지를 읽고 조작할 수 있습니다.",
         "nodeChildSpawn": "Node 프로그램이 패키지에 신고된 하위 프로세스 시작을 호스트에 요청할 수 있습니다",
@@ -7721,6 +7741,18 @@
         "settingsTitle": "{{name}} 설정",
         "settingsUnavailableUntilRestore": "이 설정을 다시 사용하려면 플러그인을 복원하세요.",
         "oauthScopeStale": "현재 인증에 새로 추가된 권한이 포함되어 있지 않습니다. 다시 연결해 권한을 받으세요.",
+        "localDevelopment": "로컬 개발 버전",
+        "publicInstall": "공개 마켓",
+        "organizationInstall": "조직: {{name}}",
+        "browserUse": "이 브라우저 확장 사용",
+        "browserActivated": "브라우저 확장을 선택했습니다",
+        "browserActivationFailed": "선택하지 못했습니다. 플러그인을 활성화하고 연결 전환을 확인하세요.",
+        "browserSwitchTitle": "브라우저 확장 연결을 전환할까요?",
+        "browserSwitchMessage": "이 연결에 “{{name}}”을 사용할까요?",
+        "browserSwitchDetail": "인스턴스: {{instance}}\n등록 이름: {{host}}\n현재 등록을 바꾸고 확장을 이 플러그인에 연결합니다.",
+        "portReclaimTitle": "콜백 포트를 사용 중인 프로그램을 종료할까요?",
+        "portReclaimMessage": "“{{name}}”에 포트 {{port}}이(가) 필요합니다. 다음 프로그램을 종료할까요?",
+        "portReclaimDetail": "작업이 중단되거나 저장하지 않은 데이터가 손실될 수 있습니다. 취소 후 직접 프로그램을 닫을 수도 있습니다.",
         "configurationTitle": "설정",
         "sidebarEntryTitle": "내비게이션 항목",
         "showInSidebar": "왼쪽 내비게이션에 표시",
@@ -10191,6 +10223,7 @@
       "continueEditing": "계속 편집"
     },
     "profileSaveFailed": "동료 설정을 저장하지 못했습니다. 변경 사항은 적용되지 않았습니다.",
+    "profileSaveOffline": "동료가 있는 컴퓨터에 연결할 수 없습니다. 다시 연결한 후 저장해 주세요.",
     "modelLabel": "모델",
     "modelUnavailable": "{{model}}(현재 사용할 수 없음)",
     "codexAutomaticCompact": "Codex 파트너는 스스로 맥락을 압축하고 /new 를 써도 지금 작업이 유지됩니다. 정말 새로 시작해야 할 때만 새 작업을 여세요.",
@@ -10521,6 +10554,11 @@
           "NETWORK_ERROR": "{{name}}이(가) 답변하지 못했습니다. 네트워크 연결에 실패했습니다.\n네트워크나 프록시를 확인한 뒤 메시지를 다시 보내세요.",
           "RUNTIME_TIMEOUT": "{{name}}의 답변 시간이 초과되었습니다.\n메시지를 다시 보내거나 다른 사용 가능한 모델을 선택하세요.",
           "RUNTIME_ERROR": "{{name}}이(가) 이번에는 답변하지 못했습니다.\n메시지를 다시 보내세요. 계속 실패하면 로그를 확인하고 문제를 신고하세요."
+        },
+        "capability": {
+          "GROUP_AUTHORIZATION_REQUIRED": "{{name}}의 도구가 실행되지 않았습니다. 그룹 권한이 만료되었거나 이 작업을 허용하지 않습니다. 동료 소유자가 이 그룹에서 다시 요청해 주세요.",
+          "GROUP_AUTHORIZATION_UNAVAILABLE": "{{name}}의 그룹 권한을 확인할 수 없어 도구가 실행되지 않았습니다. 연결이 복구되면 다시 시도해 주세요.",
+          "ATTACHMENTS_UNAVAILABLE": "다운로드 실패 또는 첨부 개수 제한으로 일부 첨부 파일이 {{name}}에게 전달되지 않았습니다. 이번 요청에 필요한 파일을 다시 보내 주세요."
         }
       },
       "settings": {
@@ -10712,6 +10750,18 @@
         "reactorFormer": "{{name}}(현재 그룹에 없음)",
         "reactorsUnavailable_one": "외 {{count}}명의 멤버 정보를 표시할 수 없습니다",
         "reactorsUnavailable_other": "외 {{count}}명의 멤버 정보를 표시할 수 없습니다",
+        "readStatusSent": "전송됨",
+        "readStatusRead": "읽음",
+        "readersCount_one": "{{count}}명이 읽음",
+        "readersCount_other": "{{count}}명이 읽음",
+        "readersView": "읽음 보기",
+        "readersTooLarge": "멤버가 너무 많아 읽음 목록을 표시할 수 없어요",
+        "readersNone": "읽은 사람 없음",
+        "readersLoading": "불러오는 중…",
+        "readersFailed": "읽음 목록을 불러올 수 없어요",
+        "readersHeading": "읽음",
+        "readersOfTotal": "{{read}}/{{total}}명 읽음",
+        "readerUnknown": "알 수 없는 멤버",
         "invite": "그룹에 초대",
         "groupCreated": "그룹 채팅이 생성되었습니다",
         "inviteFriends": "친구를 초대해 함께 파트너를 사용해 보세요",
@@ -10951,7 +11001,7 @@
         "items": {
           "tasks": {
             "title": "작업",
-            "body": "언제 백그라운드 작업을 시작할지 판단하고, 직접 시작한 작업을 제어해 결과를 채팅으로 가져옵니다. 다른 컴퓨터에서도 일할 수 있습니다."
+            "body": "제어할 수 있는 작업과 사용 가능한 컴퓨터를 파악하고, 요청에 따라 작업을 배정하고 진행 상황과 결과를 전달합니다. 다른 컴퓨터에서 작업하기 전에 지원 범위를 확인합니다."
           },
           "teammates": {
             "title": "다른 팀원",
@@ -10966,8 +11016,8 @@
             "body": "취향과 배경을 기억하고, 쓰기 전에 확인하며 바뀌면 업데이트합니다."
           },
           "self": {
-            "title": "자기 이해",
-            "body": "자기 기능을 알고 켜고 끄는 일을 돕습니다. Telegram 추가, MCP 설정, 플러그인 같은 Cindy 사용법은 먼저 도움말을 확인합니다."
+            "title": "Cindy 이해 및 설정",
+            "body": "Cindy의 기능과 사용법을 알고, 요청에 따라 설정을 확인하거나 변경합니다. 직접 입력하거나 확인해야 할 때는 작업 안에서 요청합니다."
           }
         }
       },
@@ -13652,7 +13702,7 @@
       "REMOTE_PROVIDER_UPDATING": "이 모델 제공자의 자격 증명을 업데이트하는 중입니다. 잠시 후 다시 시도하세요.",
       "REMOTE_WORKDIR_UNAVAILABLE": "원격 작업 디렉터리를 지금 사용할 수 없습니다. 그 컴퓨터에 폴더가 아직 있는지 확인한 뒤 다시 시도하세요.",
       "REMOTE_OPTIMISTIC_SESSION_STATE_UNAVAILABLE": "컴퓨터에서 이 메시지가 이미 전송됐는지 아직 확인할 수 없습니다. 잠시 후 다시 시도하고, 같은 메시지를 중복으로 보내지 마세요.",
-      "REMOTE_AGENT_UNAVAILABLE": "Agent를 실행하는 컴퓨터에 연결할 수 없습니다. 그 컴퓨터가 온라인이고 원격 제어를 허용하는지 확인한 뒤 다시 시도하세요.",
+      "REMOTE_AGENT_UNAVAILABLE": "Agent를 실행하는 컴퓨터와의 연결이 끊어졌습니다. 다시 시도하세요. 계속 반복되면 그 컴퓨터가 온라인이고 원격 제어를 허용하는지 확인하세요.",
       "REMOTE_AGENT_PEER_TOO_OLD": "상대 컴퓨터의 Cindy 버전이 오래되어 이 작업을 지원하지 않습니다. 먼저 그 컴퓨터에서 Cindy를 업데이트하세요.",
       "REMOTE_AGENT_EXPIRED": "이 세션은 Agent를 실행하는 컴퓨터에서 이미 종료되었습니다. 다시 보내 주세요.",
       "REMOTE_AGENT_NOT_FOUND": "이 세션은 Agent를 실행하는 컴퓨터에서 이미 종료되었습니다. 다시 보내 주세요.",
@@ -13761,6 +13811,18 @@
       "cancelTitle": "대기를 중단하고 이 메시지를 삭제"
     },
     "ghostCall": {
+      "prStatus": {
+        "threadsNone": "처리할 리뷰 의견 없음",
+        "mergeReady": "병합 가능",
+        "mergeConflict": "충돌 있음",
+        "mergeBehind": "기준 브랜치 동기화 필요",
+        "mergeApproval": "승인 대기 중",
+        "mergeChanges": "수정 요청됨",
+        "mergeWaiting": "병합 대기 중",
+        "merged": "병합됨",
+        "closed": "닫힘",
+        "draft": "초안"
+      },
       "verb": "플러그인 호출",
       "cardRunning": "플러그인이 그리는 중",
       "cardDone": "완료",
@@ -13774,6 +13836,7 @@
       "collapseFields": "접기",
       "formSyncFailed": "카드 변경 사항이 동기화되지 않았습니다. 연결을 확인한 후 편집을 계속하세요. 메시지는 전송되지 않았습니다.",
       "linkOpenFailed": "링크를 열지 못했습니다",
+      "modelSelectFailed": "모델을 바꾸지 못했습니다. 다시 선택하세요.",
       "mailPreview": "메일 미리보기",
       "mailEnlarge": "확대 보기",
       "mailInsertImage": "본문에 삽입",
@@ -14368,6 +14431,26 @@
           "cancel": "취소"
         }
       },
+      "newProjectDialog": {
+        "title": "새 프로젝트",
+        "description": "프로젝트 폴더를 만들고 이 세션을 새 프로젝트로 옮깁니다.",
+        "descriptionMoveFiles": "프로젝트 폴더를 만들어 이 세션의 파일을 옮기고, 세션을 새 프로젝트로 옮깁니다.",
+        "nameLabel": "프로젝트 이름",
+        "namePlaceholder": "예: my-app",
+        "targetPath": "{{path}} 폴더를 만듭니다",
+        "location": "위치",
+        "locationInferred": "기존 프로젝트를 바탕으로 추천한 위치입니다",
+        "locationWillCreate": "아직 없는 폴더라 새로 만듭니다",
+        "changeLocation": "변경…",
+        "remember": "앞으로 새 프로젝트를 이 위치에 만들기",
+        "cancel": "취소",
+        "create": "프로젝트 만들기",
+        "nameTaken": "같은 이름의 폴더가 이미 있습니다",
+        "nameInvalid": "이름에 \\ / : * ? \" < > |를 쓸 수 없으며, 마침표나 공백으로 끝날 수 없습니다",
+        "loadFailed": "프로젝트 위치를 불러오지 못했습니다",
+        "failed": "프로젝트를 만들지 못했습니다",
+        "done": "프로젝트를 만들고 세션을 옮겼습니다"
+      },
       "sessionMenu": {
         "moreActions": "더 보기",
         "rename": "이름 변경",
@@ -14381,6 +14464,7 @@
         "moveToProject": "작업 이동",
         "moveToProjectHeading": "현재 컴퓨터의 프로젝트",
         "browseProjectFolder": "프로젝트 폴더 선택",
+        "newProject": "새 프로젝트…",
         "moveToDialogue": "대화로 이동",
         "noProjects": "최근 프로젝트 없음",
         "moveToProjectDone": "프로젝트로 이동했습니다",
@@ -15781,6 +15865,7 @@
     "agentControlled": "이 화면은 Agent가 열었습니다. 입력하기 전에 실제로 로그인하려는 곳인지 확인하세요.",
     "agentPicture": "이 코드는 Agent가 찍은 스크린샷에서 가져온 것이라 Cindy는 원래 화면을 볼 수 없고, 스캔해도 자동으로 계속하지 않습니다. 로그인하려는 사이트로 연결되는지 확인하고, 스캔한 뒤 \"Agent에게 넘기기\"를 누르세요.",
     "error": {
+      "raise": "창을 열 수 없습니다. 컴퓨터에서 해당 창으로 전환하세요.",
       "decision": "요청이 전달되지 않았습니다. 다시 시도하세요.",
       "stale": "화면이 바뀌었습니다. 최신 내용으로 진행하세요.",
       "submit": "입력이 전달되지 않았습니다. 다시 시도하세요."
@@ -15816,6 +15901,9 @@
       "picture": "화면 보기",
       "backToForm": "양식으로 돌아가기",
       "liveView": "실시간 화면",
+      "openWindow": "로그인 창 열기",
+      "openRemoteDesktop": "원격 데스크톱 열기",
+      "useForm": "양식으로 입력",
       "fill": "입력",
       "skip": "건너뛰기",
       "continue": "계속",
@@ -15823,6 +15911,9 @@
       "showPassword": "암호 표시",
       "hidePassword": "암호 숨기기",
       "scan": "스캔"
+    },
+    "directSignIn": {
+      "hint": "창에서 직접 로그인하세요. 완료되면 자동으로 계속됩니다."
     },
     "remoteUnavailable": "이 컴퓨터는 원격으로 입력을 받을 수 없습니다. 호스트 컴퓨터에서 이 단계를 완료한 뒤 Agent에게 넘기세요.",
     "unnamedField": "입력란",
@@ -15891,7 +15982,17 @@
   },
   "commandPalette": {
     "viewSkillDetails": "스킬 상세 보기",
-    "projectSkillNotLoaded": "현재 Pi 작업에는 이 프로젝트 Skill이 아직 로드되지 않았습니다. 새 작업에서는 자동으로 로드를 시도합니다."
+    "projectSkillNotLoaded": "현재 Pi 작업에는 이 프로젝트 Skill이 아직 로드되지 않았습니다. 새 작업에서는 자동으로 로드를 시도합니다.",
+    "pluginSkillSetup": {
+      "install": "미설치",
+      "enable": "비활성"
+    },
+    "pluginSkills": {
+      "pr": {
+        "install": "PR을 올리고 CI와 리뷰 피드백을 고쳐 병합까지 챙깁니다 · GitHub 플러그인을 설치해야 합니다",
+        "enable": "PR을 올리고 CI와 리뷰 피드백을 고쳐 병합까지 챙깁니다 · GitHub 플러그인을 활성화해야 합니다"
+      }
+    }
   },
   "skillhub": {
     "remote": {
@@ -16879,7 +16980,14 @@
     "sectionTitle": "디렉터리",
     "empty": "아직 참조 디렉터리가 없습니다",
     "add": "디렉터리 추가…",
-    "addReadOnly": "읽기 전용 디렉터리 추가…",
+    "back": "뒤로",
+    "addTitle": "디렉터리 추가",
+    "writableHint": "Agent가 읽고 쓸 수 있음",
+    "writableHintDetail": "Agent가 이 디렉터리의 파일을 읽고, 만들고, 수정하고, 삭제할 수 있습니다.",
+    "searchRecent": "디렉터리 검색",
+    "noRecent": "최근 사용한 디렉터리가 없습니다",
+    "noMatchingRecent": "일치하는 디렉터리가 없습니다",
+    "addFailed": "이 디렉터리를 추가하지 못했습니다. 다시 시도하거나 다른 폴더를 선택하세요.",
     "atLimit": "최대 {{max}}개 도달",
     "remove": "{{name}} 제거",
     "writableParentConfirmTitle": "상위 디렉터리 읽기·쓰기를 허용할까요?",
@@ -18588,6 +18696,21 @@
     "autoDetail": "Cindy가 주 작업과 Worker 동작을 자동 심사합니다. 확인이 필요하거나 거부된 동작은 일시 중지됩니다. 전체 접근 권한이 아니며 다른 작업의 전역 권한은 변경하지 않습니다.",
     "autoTaskDetail": "Cindy가 주 작업과 Worker 동작을 자동 심사합니다. 확인이 필요하거나 거부된 동작은 일시 중지됩니다. 전체 접근 권한이 아닙니다. 현재 세션의 권한만 변경하며 플러그인 기본 설정은 변경하지 않습니다."
   },
+  "pluginCompanionAnswer": {
+    "title": "허용 확인",
+    "planMessage": "{{companion}}이(가) 이 계획대로 작업을 시작하게 할까요?",
+    "permissionMessage": {
+      "command": "{{companion}}이(가) 이 명령을 실행하도록 허용할까요?",
+      "file-read": "{{companion}}이(가) 이 파일들을 읽도록 허용할까요?",
+      "file-write": "{{companion}}이(가) 이 파일들을 수정하도록 허용할까요?",
+      "browser": "{{companion}}이(가) 브라우저에서 이 단계를 실행하도록 허용할까요?",
+      "plugin": "{{companion}}이(가) “{{tool}}”을(를) 사용하도록 허용할까요?",
+      "tool": "{{companion}}이(가) {{tool}}을(를) 사용하도록 허용할까요?"
+    },
+    "source": "플러그인 “{{plugin}}”에서 허용을 선택해 {{appName}}이(가) 여기서 한 번 더 확인합니다. 허용하면 동료가 작업을 계속합니다.",
+    "allow": "허용",
+    "cancel": "취소"
+  },
   "groupTools": {
     "authorizationRequired": "그룹 권한이 만료되었거나 이 작업이 허용되지 않습니다. 파트너 소유자가 이 그룹에서 다시 요청해 주세요.",
     "localPeersOnly": "그룹에서는 이 기기의 같은 계정에 있는 파트너에게만 메시지를 보낼 수 있습니다.",
@@ -18777,6 +18900,9 @@
     "failed": "작업이 완료되지 않았습니다. 다시 시도하거나 로컬 파일을 확인하세요."
   },
   "attachmentPreview": {
+    "fitWidth": "너비에 맞추기",
+    "fitPage": "페이지에 맞추기",
+    "pageNumber": "페이지 번호",
     "more": "추가 작업",
     "retry": "다시 시도",
     "image": "이미지",

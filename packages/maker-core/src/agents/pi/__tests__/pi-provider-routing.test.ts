@@ -7027,7 +7027,7 @@ describe("Pi provider-aware model routing", () => {
     await handle.close();
   });
 
-  it.each(['413', 'settings-changed', 'other-error', 'compaction-413', 'compaction-timeout', 'compaction-error', 'compaction-cancelled', 'cancelled-after-compaction', 'nothing-to-compact', 'cancelled-navigation', 'new-window', 'output'])(
+  it.each(['413', 'gateway-400', 'settings-changed', 'other-error', 'compaction-413', 'compaction-timeout', 'compaction-error', 'compaction-cancelled', 'cancelled-after-compaction', 'nothing-to-compact', 'cancelled-navigation', 'new-window', 'output'])(
     'prepares an identity-bound Pi retry without duplicating accepted input: %s', async mode => {
       let navigated = false;
       const controller = new AbortController();
@@ -7042,7 +7042,9 @@ describe("Pi provider-aware model routing", () => {
               { entry: { id: 'failure', parentId: 'accepted', type: 'message', message: {
                 role: 'assistant', stopReason: 'error',
                 content: mode === 'output' ? [{ type: 'toolCall', name: 'bash' }] : [],
-                errorMessage: mode === 'other-error' ? 'network error' : '413 length limit exceeded',
+                errorMessage: mode === 'other-error' ? 'network error'
+                : mode === 'gateway-400' ? '400 {"error":{"message":"Exceeded limit on max bytes to request body : 16777216","type":"BadRequest.TooLarge"}}'
+                : '413 length limit exceeded',
               } }, children: mode === 'settings-changed' ? [{
                 entry: { id: 'model', parentId: 'failure', type: 'model_change', provider: 'native-a', modelId: 'local-model' },
                 children: [{ entry: { id: 'effort', parentId: 'model', type: 'thinking_level_change', thinkingLevel: 'high' }, children: [] }],
@@ -7090,7 +7092,7 @@ describe("Pi provider-aware model routing", () => {
       else await promise;
       expect(captured.requests.filter(r => r.type === 'prompt' && r.message === 'same input')).toHaveLength(blocked ? 0 : 1);
       expect(captured.requests.filter(r => r.type === 'compact')).toHaveLength(
-        needsRollover || cancelled || ['413', 'settings-changed'].includes(mode) ? 1 : 0,
+        needsRollover || cancelled || ['413', 'gateway-400', 'settings-changed'].includes(mode) ? 1 : 0,
       );
       expect(handle.getUsageSnapshot?.().needsRollover === true).toBe(
         needsRollover,

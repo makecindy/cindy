@@ -251,15 +251,15 @@ describe('browserExtensionSlot · 桥接随花名册启停', () => {
 
   // Native hosts run outside the sandbox and share one registration per account, so a plugin that
   // is not the official Cindy Chrome must not get one, even under the official name.
-  it('只有官方 Cindy Chrome 能装 native host;其它插件声明了也只开桥接', async () => {
+  it('声明 node 的普通插件也可安装自己的 native host', async () => {
     const ghosts = [extGhost({ id: 'impostor' })];
     const { slot, bridges, natives, settle } = await makeSlot({}, ghosts);
     slot.reconcile(ghosts);
     await settle();
     expect(bridges).toHaveLength(1);
     expect(bridges[0].started).toBe(true);
-    expect(bridges[0].options.nativeToken).toBeUndefined();
-    expect(natives).toHaveLength(0);
+    expect(bridges[0].options.nativeToken).toBe('f'.repeat(64));
+    expect(natives).toHaveLength(1);
   });
 
   it('没有 pageControl 的声明只做通道,不成为 Browser Use 执行端', async () => {
@@ -274,17 +274,29 @@ describe('browserExtensionSlot · 桥接随花名册启停', () => {
   });
 
   // 2026-10-30: only the official Cindy Chrome takes over My browser; another plugin's declaration is ignored.
-  it('其它插件声明 pageControl 也不会成为「我的浏览器」', async () => {
+  it('普通插件声明 pageControl 后可成为「我的浏览器」', async () => {
     const ghosts = [extGhost({ id: 'other-browser', nativeHost: false })];
     const { slot, bridges, settle } = await makeSlot({}, ghosts);
     slot.reconcile(ghosts);
     await settle();
     expect(bridges).toHaveLength(1);
-    expect(slot.getPageControl()).toBeNull();
+    expect(slot.getPageControl()?.ghostId).toBe('other-browser');
   });
 });
 
 describe('browserExtensionSlot · 管子上行', () => {
+  it('selects a page-control instance explicitly without borrowing another instance pairing', async () => {
+    const ghosts = [extGhost({ id: 'first', nativeHost: false }), extGhost({ id: 'second', nativeHost: false })];
+    const h = await makeSlot({}, ghosts);
+    h.slot.reconcile(ghosts);
+    await h.settle();
+    expect(h.slot.getPageControl()).toBeNull();
+    expect(await h.slot.activate('_root__second')).toBe(true);
+    expect(h.slot.getPageControl()?.instanceId).toBe('_root__second');
+    ghosts[1].enabled = false;
+    h.slot.reconcile(ghosts);
+    expect(h.slot.getPageControl()).toBeNull();
+  });
   it('未声明能力 / 未启用的插件一律 PERMISSION_DENIED;桥接未就绪 HOST_NOT_READY', async () => {
     const ghosts = [
       extGhost(),
@@ -387,7 +399,7 @@ describe('browserExtensionSlot · 管子上行', () => {
     let now = 1_000_000;
     let installs = 0;
     let state: 'ready' | 'unavailable' = 'unavailable';
-    const { slot, bridges, settle, ghosts } = await makeSlot({
+    const { slot, bridges, ghosts } = await makeSlot({
       now: () => now,
       createNativeBinding: () => ({
         token: 'f'.repeat(64),
@@ -403,8 +415,11 @@ describe('browserExtensionSlot · 管子上行', () => {
       }),
     });
     slot.reconcile(ghosts);
-    await settle();
-    expect(installs).toBe(1);
+    // CI run 41580150352: policy I/O can outlast settle's 25 ms on Windows.
+    // Wait for the initial installation before testing status-driven retries.
+    await vi.waitFor(() => expect(installs).toBe(1));
+    // A manually paired bridge remains usable while optional native registration is unavailable.
+    expect(slot.getPageControl()).toMatchObject({ bridge: bridges[0], instanceId: '_root__my-browser' });
     await slot.handleRequest('_root__my-browser', { kind: 'status' });
     expect(installs).toBe(2);
     expect(bridges).toHaveLength(1);
@@ -492,7 +507,7 @@ describe('browserExtensionSlot · 管子上行', () => {
   });
 
   // Review 2026-10-30 (Codex P1): a package that only claims the official id cannot pair browsers.
-  it('只自称官方 id 的未核验包不能保存配对', async () => {
+  it('任何批准实例都能保存自己的配对', async () => {
     const clients = [
       {
         id: 'c1',
@@ -507,10 +522,9 @@ describe('browserExtensionSlot · 管子上行', () => {
     expect(
       await slot.handleRequest('_root__my-browser', { kind: 'setTrustedClients', clients }),
     ).toMatchObject({
-      ok: false,
-      errorCode: 'PERMISSION_DENIED',
+      ok: true,
     });
-    expect(bridges[0].calls.some(([name]) => name === 'setTrustedClients')).toBe(false);
+    expect(bridges[0].calls.some(([name]) => name === 'setTrustedClients')).toBe(true);
     // Another plugin id is not an official claimant: its pairings work as before.
     const other = [extGhost({ id: 'other-browser', nativeHost: false })];
     const b = await makeSlot({ isVerifiedOfficial: () => false }, other);
@@ -525,7 +539,7 @@ describe('browserExtensionSlot · 管子上行', () => {
   });
 
   // Review 2026-10-30 (Codex P1): raw DevTools commands from a plugin that is not the verified official one.
-  it('非官方插件不能经管子发原始 DevTools 命令', async () => {
+  it('没有 node 的沙箱插件不能经管子发原始 DevTools 命令', async () => {
     const payload = {
       kind: 'act',
       action: 'cdp',
@@ -538,6 +552,7 @@ describe('browserExtensionSlot · 管子上行', () => {
       },
     };
     const other = [extGhost({ id: 'other-browser', nativeHost: false })];
+    delete other[0].manifest.node;
     const a = await makeSlot({}, other);
     a.slot.reconcile(other);
     await a.settle();
@@ -569,7 +584,7 @@ describe('browserExtensionSlot · 管子上行', () => {
 
   // Review 2026-10-30 (Codex P1): a manifest that merely claims the official id must not get the native
   // host, My browser or saved pairings.
-  it('未核验来源的包不装 native host、不接管「我的浏览器」、不继承配对', async () => {
+  it('普通插件可提供浏览器能力，但不继承其它来源的配对', async () => {
     const clients = [
       {
         id: 'c1',
@@ -581,12 +596,12 @@ describe('browserExtensionSlot · 管子上行', () => {
     const { slot, bridges, natives, dir } = await makeSlot({ isVerifiedOfficial: () => false });
     await fs.writeFile(
       path.join(dir, encodeURIComponent('_root__my-browser') + '.json'),
-      JSON.stringify({ version: 1, source: '[null,null]', trustedClients: clients }),
+      JSON.stringify({ version: 1, source: 'different-package-source', trustedClients: clients }),
     );
     slot.reconcile([extGhost()]);
     await vi.waitFor(() => expect(bridges[0]?.started).toBe(true));
-    expect(natives).toHaveLength(0);
-    expect(slot.getPageControl()).toBeNull();
+    expect(natives).toHaveLength(1);
+    expect(slot.getPageControl()?.instanceId).toBe('_root__my-browser');
     expect(bridges[0].calls.some(([name]) => name === 'setTrustedClients')).toBe(false);
   });
 

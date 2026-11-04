@@ -17,7 +17,7 @@
  *     读入现有内容随 prompt 提交,并**覆写同一路径**(命令不变,复用无感)。
  */
 
-import { mkdirSync, readFileSync, writeFileSync, existsSync } from 'node:fs';
+import { mkdirSync, readFileSync, readdirSync, writeFileSync, existsSync, realpathSync } from 'node:fs';
 import path from 'node:path';
 
 import type { AgentKind, Maker } from '@cindy/maker-core';
@@ -272,6 +272,85 @@ function parseSingleFileHookCommand(command: string): ParsedSingleFileHookComman
   return null;
 }
 
+/** Per-process link folder through which Claude Code sees Cindy-managed Skills (maker-core prepareManagedSkillPlugins). */
+const MANAGED_SKILL_LINK_SEGMENT = /^cindy-claude-skills-/;
+
+/**
+ * A plugin Skill's files live in an approved snapshot whose path carries the install revision, so a hook
+ * saved with that path keeps running the old version after the plugin updates. The plugin's private
+ * projection entry (`<state root>/agent-skills/skills/<plugin>--<skill>`, skillSlot.ts) keeps its name
+ * across updates and always points at the current snapshot; use it when one points at this path.
+ */
+function pluginSkillProjectionPath(
+  resolved: string,
+  realpath: (filePath: string) => string,
+  readdir: (dirPath: string) => string[],
+): string {
+  const segments = resolved.split(/[\\/]/);
+  const at = segments.lastIndexOf('skill-snapshots');
+  if (at < 1) return resolved;
+  const projectionRoot = path.join(segments.slice(0, at).join(path.sep) || path.sep, 'agent-skills', 'skills');
+  let entries: string[];
+  try {
+    entries = readdir(projectionRoot);
+  } catch {
+    return resolved;
+  }
+  for (const entry of entries) {
+    const entryPath = path.join(projectionRoot, entry);
+    let target: string;
+    try {
+      target = realpath(entryPath);
+    } catch {
+      continue;
+    }
+    if (resolved === target) return entryPath;
+    if (resolved.startsWith(target + path.sep)) return path.join(entryPath, resolved.slice(target.length + 1));
+  }
+  return resolved;
+}
+
+/**
+ * A Skill's own check script reached through that per-process link folder disappears when Cindy restarts,
+ * so every later run would fail closed. Persist the Skill's real location instead, through the shared
+ * bundle's `.active` entry or the plugin Skill's projection entry when that exists, so the hook also
+ * survives Cindy and plugin updates.
+ */
+export function stabilizeManagedSkillLinks(
+  command: string,
+  realpath: (filePath: string) => string = realpathSync,
+  exists: (filePath: string) => boolean = existsSync,
+  readdir: (dirPath: string) => string[] = (dirPath) => readdirSync(dirPath),
+): string {
+  // A bare word ends at whitespace or a shell operator, so `…/gate.mjs&&exit 0` keeps `&&exit` out of the path.
+  return command.replace(/"([^"]*)"|'([^']*)'|([^\s;&|<>()]+)/g, (token, doubled?: string, single?: string, bare?: string) => {
+    const value = doubled ?? single ?? bare ?? '';
+    const segments = value.split(/[\\/]/);
+    const at = segments.findIndex((segment) => MANAGED_SKILL_LINK_SEGMENT.test(segment));
+    // <link folder>/<plugin>/skills/<skill>/...: the <skill> entry is the link to the real Skill directory.
+    if (at < 0 || segments.length < at + 5 || segments[at + 2] !== 'skills') {
+      // Already the real snapshot path (Codex and Pi agents resolve their Skill directory first).
+      if (!path.isAbsolute(value) || !segments.includes('skill-snapshots')) return token;
+      const stable = pluginSkillProjectionPath(value, realpath, readdir);
+      return stable === value ? token : shellQuotePath(stable);
+    }
+    const linkRoot = segments.slice(0, at + 4).join(path.sep);
+    let skillDir: string;
+    try {
+      skillDir = realpath(linkRoot);
+    } catch {
+      throw new Error(
+        `invalid pre-run hook configuration: ${value} is a temporary Skill link that no longer exists; use the Skill's installed directory instead`,
+      );
+    }
+    const rest = segments.slice(at + 4);
+    const resolved = path.join(skillDir, ...rest);
+    const active = path.join(skillDir.replace(/([\\/])\.versions[\\/][^\\/]+(?=[\\/]|$)/, '$1.active'), ...rest);
+    if (active !== resolved && exists(active)) return shellQuotePath(active);
+    return shellQuotePath(pluginSkillProjectionPath(resolved, realpath, readdir));
+  });
+}
+
 /**
  * Make a supported single-file hook command independent from its execution cwd.
  * Arbitrary shell commands (for example `pnpm check`) intentionally stay cwd-relative.
@@ -280,7 +359,9 @@ export function stabilizeHookCommand(
   command: string,
   workingDir?: string,
   exists: (filePath: string) => boolean = existsSync,
+  realpath: (filePath: string) => string = realpathSync,
 ): string {
+  command = stabilizeManagedSkillLinks(command, realpath, exists);
   const parsed = parseSingleFileHookCommand(command);
   if (!parsed) return command;
   const extension = path.extname(parsed.scriptPath).toLowerCase();

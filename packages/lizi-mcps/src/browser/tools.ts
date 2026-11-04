@@ -232,7 +232,7 @@ async function detectLoginWall(runtime: BrowserControlRuntime, profile: unknown,
     if (!checked.ok || (found?.password !== true && found?.code !== true)) return null;
     return {
       fields: [found.password === true ? 'password' : null, found.code === true ? 'one-time-code' : null].filter(Boolean),
-      hint: 'This page asks for a password or verification code. Do not type it yourself: call ask_owner with kind="fill" and this browser window as target so the owner completes the sign-in from their phone or another computer, then continue when it ends.',
+      hint: 'This page asks for a password or verification code. Do not type it yourself: call ask_owner with kind="fill" and this browser window as target (the browser\'s name as app and this page\'s title as window_title; a minimized window is brought back) so the owner completes the sign-in from their phone or another computer, then continue when it ends.',
     };
   } catch {
     return null;

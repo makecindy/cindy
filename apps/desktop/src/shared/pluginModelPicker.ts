@@ -1,12 +1,13 @@
-import type { PluginTaskRoute } from './pluginTasks.js';
-import type { PluginModelPickerRequest } from '@cindy/device-link';
+import type { PluginModelPickerRequest, PluginModelSelection } from '@cindy/device-link';
+export type PluginModelPickerRoute = PluginModelSelection;
 export {
   isPluginModelSelection as isPluginModelPickerRoute,
   type PluginModelPickerRequest,
 } from '@cindy/device-link';
 
 export interface PluginModelPickerOptions {
-  initial?: PluginTaskRoute;
+  allowRemote?: boolean;
+  initial?: PluginModelPickerRoute;
   /** Host-issued origin; never use the most recently active phone. */
   mobilePageId?: string;
 }
@@ -17,7 +18,7 @@ export interface PluginModelPickerPresentation extends PluginModelPickerRequest 
 }
 
 export type PluginModelPickerResult =
-  | { ok: true; route: PluginTaskRoute }
+  | { ok: true; route: PluginModelPickerRoute }
   | {
       ok: false;
       errorCode:
