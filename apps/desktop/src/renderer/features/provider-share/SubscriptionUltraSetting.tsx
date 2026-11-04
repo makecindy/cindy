@@ -15,7 +15,7 @@ import {
 } from '@/components/settings/settingsRowClasses';
 import { providerShareManagementCommand } from '../provider-group/providerManagement';
 
-/** Provider/account control for the Ultra reasoning tier. Default off. */
+/** Provider/account control for the Ultra reasoning tier. Default on. */
 export function SubscriptionUltraSetting({
   provider,
   deviceId,
@@ -25,7 +25,7 @@ export function SubscriptionUltraSetting({
 }) {
   const { t } = useTranslation();
   const [allowUltra, setAllowUltra] = useState(
-    provider.subscriptionUltraPolicy?.allowUltra === true,
+    provider.subscriptionUltraPolicy?.allowUltra !== false,
   );
   const [busy, setBusy] = useState(false);
   const saving = useRef(false);
@@ -42,7 +42,7 @@ export function SubscriptionUltraSetting({
   }, [provider.id, deviceId]);
 
   useEffect(() => {
-    setAllowUltra(provider.subscriptionUltraPolicy?.allowUltra === true);
+    setAllowUltra(provider.subscriptionUltraPolicy?.allowUltra !== false);
   }, [provider.id, deviceId, provider.subscriptionUltraPolicy?.allowUltra]);
 
   if (!provider.subscriptionUltraPolicy) return null;

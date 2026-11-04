@@ -7,7 +7,7 @@ interface Settings {
   providers: Record<string, boolean> | null;
 }
 
-/** Sparse per-account opt-ins for the Ultra reasoning tier. Default is off. */
+/** Sparse per-account opt-outs for the Ultra reasoning tier. Default is on. */
 export function createProviderUltraPolicyStore(options: {
   filePath(): string;
   scopeKey(): string;
@@ -44,7 +44,8 @@ export function createProviderUltraPolicyStore(options: {
     allows(providerId: string): boolean {
       store.invalidateIfChanged();
       const providers = store.read().providers;
-      return providers !== null && providers[providerId] === true;
+      // Absent or unreadable settings preserve the historical behavior: Ultra stays available.
+      return providers === null || providers[providerId] !== false;
     },
     async set(providerId: string, allowUltra: boolean, assertCurrent: () => void): Promise<void> {
       await store.updateAtomic(({ value }) => {
