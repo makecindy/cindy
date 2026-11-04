@@ -425,6 +425,16 @@ export interface OrcaWorkerCreationService {
     onCreated?: (assertCreatedCurrent: () => Promise<void>) => void): Promise<OrcaWorkerCreationResult>;
 }
 
+function duplicateWorkerLabel(label: string): Extract<OrcaWorkerCreationResult, { ok: false }> {
+  return {
+    ok: false,
+    errorCode: 'DUPLICATE_LABEL',
+    message: `label "${label}" already used in this team. Labels remain reserved after archiving. ` +
+      'Read get_workspace_info.reserved_labels for their owners and task statuses; ' +
+      'to create a new Worker, keep the role and choose a new label.',
+  };
+}
+
 function toInternalFailure(err: unknown): Extract<OrcaWorkerCreationResult, { ok: false }> {
   if (isCredentialModeSwitchBusyError(err)) {
     return {
@@ -920,7 +930,7 @@ export function createOrcaWorkerCreationService(deps: OrcaWorkerCreationDeps): O
     }
     if (!reservation.ok) {
       if (reservation.errorCode === 'DUPLICATE_LABEL') {
-        return { ok: false, errorCode: 'DUPLICATE_LABEL', message: `label "${label}" already used in this team` };
+        return duplicateWorkerLabel(label);
       }
       if (reservation.errorCode === 'WORKER_CREATION_IN_PROGRESS') {
         return { ok: false, errorCode: 'WORKER_CREATION_IN_PROGRESS', message: `label "${label}" is currently being created` };
@@ -998,7 +1008,7 @@ export function createOrcaWorkerCreationService(deps: OrcaWorkerCreationDeps): O
       } catch (err) {
         await discard();
         if (isWorkerLabelConstraintError(err)) {
-          return { ok: false, errorCode: 'DUPLICATE_LABEL', message: `label "${label}" already used in this team` };
+          return duplicateWorkerLabel(label);
         }
         return toInternalFailure(err);
       }
@@ -1052,7 +1062,7 @@ export function createOrcaWorkerCreationService(deps: OrcaWorkerCreationDeps): O
     > {
     const existing = await deps.listWorkersByLead(leadSessionId);
     if (existing.some((worker) => worker.label?.toLowerCase() === label)) {
-      return { ok: false, errorCode: 'DUPLICATE_LABEL', message: `label "${label}" already used in this team` };
+      return duplicateWorkerLabel(label);
     }
 
     await assertCurrent?.();
@@ -1570,7 +1580,7 @@ export function createOrcaWorkerCreationService(deps: OrcaWorkerCreationDeps): O
     }
     if (!reservation.ok) {
       if (reservation.errorCode === 'DUPLICATE_LABEL') {
-        return { ok: false, errorCode: 'DUPLICATE_LABEL', message: `label "${label.value}" already used in this team` };
+        return duplicateWorkerLabel(label.value);
       }
       if (reservation.errorCode === 'WORKER_CREATION_IN_PROGRESS') {
         return { ok: false, errorCode: 'WORKER_CREATION_IN_PROGRESS', message: `label "${label.value}" is currently being created` };
@@ -1680,7 +1690,7 @@ export function createOrcaWorkerCreationService(deps: OrcaWorkerCreationDeps): O
       } catch (err) {
         await cleanupBootstrappedWorkerSession(workerSession.id);
         if (isWorkerLabelConstraintError(err)) {
-          return { ok: false, errorCode: 'DUPLICATE_LABEL', message: `label "${label.value}" already used in this team` };
+          return duplicateWorkerLabel(label.value);
         }
         return toInternalFailure(err);
       }

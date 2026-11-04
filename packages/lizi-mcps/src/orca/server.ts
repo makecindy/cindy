@@ -302,6 +302,14 @@ export interface OrcaWorkspaceInfo {
   } | null;
   ui_capacity: number;
   worker_count: number;
+  /** Persisted label owners, including archived/deleted tasks; absent on older hosts. */
+  reserved_labels?: Array<{
+    label: string | null;
+    worker_id: string;
+    session_id: string;
+    role: string;
+    session_status: string | null;
+  }>;
   workers: Array<{
     worker_id: string;
     session_id: string;
@@ -453,6 +461,7 @@ function registerOrcaDiagnosticTools(
         ui_capacity: result.ui_capacity,
         worker_count: result.worker_count,
         workers: result.workers,
+        ...(result.reserved_labels ? { reserved_labels: result.reserved_labels } : {}),
         ...(result.execution_devices ? { execution_devices: result.execution_devices } : {}),
       });
     },

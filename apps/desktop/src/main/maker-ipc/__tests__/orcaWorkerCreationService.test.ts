@@ -781,6 +781,49 @@ describe('OrcaWorkerCreationService', () => {
     expect(deps.dispatchWorkerTask).not.toHaveBeenCalled();
   });
 
+  // Regression: zero visible Workers used to produce an unexplained DUPLICATE_LABEL
+  // for an archived label. Unit tier: exercise the real creation service's reservation
+  // failure and retry; existing active-label/concurrency cases do not cover recovery.
+  it.each([undefined, 'other-computer'])('recreates with a new label after an archived label conflicts on %s', async executionDeviceId => {
+    const { deps, service } = createDeps({
+      reserveWorkerCreation: vi.fn(async ({ label }) => label === 'reviewer'
+        ? { ok: false as const, errorCode: 'DUPLICATE_LABEL' as const }
+        : { ok: true as const, occupiedSlotsBefore: 0 }),
+      openRemoteWorker: vi.fn(async () => ({
+        ok: true as const, proxySessionId: 'new-proxy', remoteSessionId: 'new-remote',
+        proxySession: {
+          title: 'Worker', agentKind: 'codex', model: 'gpt-5.5', effort: null,
+          permissionMode: 'auto', fastMode: false,
+        },
+        agent: 'codex' as const, model: 'gpt-5.5', workingDir: '/remote/repo',
+      })),
+      recordRemoteWorker: vi.fn(), discardRemoteWorker: vi.fn(),
+    });
+    const result = await service.createWorker({
+      leadSessionId: 'lead-1', role: 'reviewer', agent: 'codex', label: 'reviewer', executionDeviceId,
+    });
+    expect(result).toMatchObject({
+      ok: false, errorCode: 'DUPLICATE_LABEL',
+      message: expect.stringMatching(/archiv.*get_workspace_info.*reserved_labels.*new label/i),
+    });
+    expect(deps.bootstrapSession).not.toHaveBeenCalled();
+    expect(deps.openRemoteWorker).not.toHaveBeenCalled();
+    expect(deps.addOrUpdateWorker).not.toHaveBeenCalled();
+    expect(deps.dispatchWorkerTask).not.toHaveBeenCalled();
+
+    const replacement = await service.createWorker({
+      leadSessionId: 'lead-1', role: 'reviewer', agent: 'codex', label: 'reviewer-3', executionDeviceId,
+    });
+    expect(replacement).toMatchObject({
+      ok: true, teamId: 'team-1',
+      workerSessionId: executionDeviceId ? 'new-proxy' : WORKER_SESSION_ID,
+      resolved: { role: 'reviewer', label: 'reviewer-3' },
+    });
+    expect(executionDeviceId ? deps.recordRemoteWorker : deps.addOrUpdateWorker)
+      .toHaveBeenCalledWith(expect.objectContaining({ teamId: 'team-1', role: 'reviewer', label: 'reviewer-3' }));
+    expect(deps.dispatchWorkerTask).not.toHaveBeenCalled();
+  });
+
   it('rejects labels outside the shared worker label contract before reading worker slots', async () => {
     for (const label of ['bad label', '中文', 'x'.repeat(33)]) {
       const { deps, service } = createDeps();
