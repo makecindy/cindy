@@ -2032,8 +2032,11 @@ export function createProviderGroupService(deps: ProviderGroupServiceDeps): Prov
       const { agentDeviceId, providerId } = currentRoute;
       // 离线的先现读一次(状态可能刚恢复)；看着能用、但这次要重新打开那台电脑上的会话时也不信缓存，现读一次：
       // 连不上的话要到打开会话时才报错。
+      // 「那台用不了」同样现读一次：目录会沿用最近验证过的快照(最长 30 分钟)供展示与新任务分配，
+      // 缓存的可用/忙闲不能单独把正在运行的任务换走(provider-groups.md 短暂失联一节)，要换先实时确认。
       const checkFresh = Boolean(agentDeviceId && providerId)
-        && (reason === 'offline' || (reason === null && deps.hasLiveSession?.(sessionId) === false));
+        && (reason === 'offline' || reason === 'unavailable'
+          || (reason === null && deps.hasLiveSession?.(sessionId) === false));
       if (checkFresh) {
         const fresh = (await untilAborted(
           withTimeout(deps.directory.probe(agentDeviceId!, providerId!), PROVIDER_GROUP_PROBE_TIMEOUT_MS),

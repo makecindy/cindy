@@ -11062,10 +11062,15 @@ describe('automatic LAN connection through platform bridges', () => {
   // The old tests cover failed RTC sessions, not a rejected capacity admission.
   it('serves a full peer over relay then upgrades it when a slot is released, with anonymous reasons', async () => {
     vi.useFakeTimers();
-    const relay = new MemoryRelay(true), rtc = new MemoryDirectRuntime(), logs: string[] = [];
+    const relay = new MemoryRelay(true), rtc = new MemoryDirectRuntime();
+    let reportCapacity!: (line: string) => void;
+    const capacityDiagnostic = new Promise<string>(resolve => { reportCapacity = resolve; });
     const sockets = vi.spyOn(relay, 'makeWebSocket');
     const host = makeRelayClient(relay, 'a-host', undefined, { directRuntime: rtc.createRuntime({ maxPeers: 1 }),
-      logger: { debug() {}, info: (...args) => logs.push(args.join(' ')), warn() {}, error() {} } });
+      logger: { debug() {}, info: (...args) => {
+        const line = args.join(' ');
+        if (line.includes('reason=capacity-full')) reportCapacity(line);
+      }, warn() {}, error() {} } });
     const first = makeRelayClient(relay, 'b-first', undefined, { directRuntime: rtc.createRuntime() });
     const second = makeRelayClient(relay, 'c-second', undefined, { directRuntime: rtc.createRuntime() });
     const pump = () => relay.settle(async () => { await vi.advanceTimersByTimeAsync(1); });
@@ -11090,9 +11095,10 @@ describe('automatic LAN connection through platform bridges', () => {
       expect(second.isLinkReady('a-host')).toBe(true);
       expect(sockets).toHaveBeenCalledTimes(socketCount);
       expect(executions).toBe(1);
-      // WebCrypto runs outside fake timers; await this diagnostic's actual hash.
-      for (let i = 0; i < 30 && !logs.some(s => s.includes('reason=capacity-full')); i++) await new Promise(r => setImmediate(r));
-      const diagnostic = logs.find(s => s.includes('reason=capacity-full'));
+      // WebCrypto runs outside fake timers. Await its actual completion rather
+      // than setImmediate, which is frozen here and can strand a slow digest.
+      // CI regression: a timeout's late finally also reset the next test's timers.
+      const diagnostic = await capacityDiagnostic;
       expect(diagnostic).toMatch(/peerHash=[0-9a-f]{16} kind=device active=1 limit=1 queued=1/);
       expect(diagnostic).not.toContain('c-second');
     } finally { host.stop(); first.stop(); second.stop(); vi.useRealTimers(); }
