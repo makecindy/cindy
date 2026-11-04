@@ -103,7 +103,8 @@ export function createHostServer(deps) {
           request.on('end', () => resolve(raw || '{}'));
         }));
         if (url.pathname === '/api/me') { send(response, 200, await deps.me()); return; }
-        if (url.pathname === '/api/sessions/list') { send(response, 200, { sessions: await deps.listSessions() }); return; }
+        // The preload contract for `localDb.sessions.list()` is a bare array.
+        if (url.pathname === '/api/sessions/list') { send(response, 200, await deps.listSessions()); return; }
         if (url.pathname === '/api/sessions/create') { send(response, 201, await deps.createSession(body)); return; }
         if (url.pathname === '/api/sessions/get') { send(response, 200, await deps.getSession(String(body.sessionId ?? ''))); return; }
         if (url.pathname === '/api/sessions/discard') { send(response, 200, await deps.discardProvisionalSession(String(body.sessionId ?? ''))); return; }
