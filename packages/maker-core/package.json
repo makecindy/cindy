@@ -20,6 +20,14 @@
     "./claude-cli-login-status": {
       "import": "./src/agents/claude-code/cli-login-status.ts",
       "default": "./src/agents/claude-code/cli-login-status.ts"
+    },
+    "./agents/claude-code": {
+      "import": "./src/agents/claude-code/index.ts",
+      "default": "./src/agents/claude-code/index.ts"
+    },
+    "./maker": {
+      "import": "./src/maker.ts",
+      "default": "./src/maker.ts"
     }
   },
   "scripts": {

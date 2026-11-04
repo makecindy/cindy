@@ -33,6 +33,15 @@ export function createHostServer(deps) {
         return;
       }
 
+      if (request.method === 'POST' && url.pathname === '/chat') {
+        if (!isAuthorized(request.headers.authorization, deps.token)) {
+          send(response, 401, { error: 'unauthorized' }, { 'www-authenticate': 'Bearer' });
+          return;
+        }
+        await deps.chat(request, response);
+        return;
+      }
+
       if ((request.method === 'GET' && (url.pathname === '/sessions' || url.pathname === '/me' || url.pathname === '/plugins'))
         || (request.method === 'POST' && url.pathname === '/logout')) {
         if (!isAuthorized(request.headers.authorization, deps.token)) {

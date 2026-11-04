@@ -525,6 +525,11 @@ import {
   freezeSessionActiveTurnMarkers,
 } from './localDb/sessionActiveTurn';
 import { configureMigrationRuntime } from './localDb/migrationRuntime';
+import { configureLocalDbHostUi } from './localDb/hostUi';
+import { configureUiText } from './uiText';
+import { runPendingDbSlimmingAtStartup } from './localDb/dbSlimmingStartup';
+import { shouldShowNativeFatalDialog } from './localDb/fatalDialogPolicy';
+import { loadSqliteVec } from './localDb/sqliteVecLoader';
 import { getDrizzleDir, resolveDesktopDrizzleDir } from './localDb/migrate';
 import {
   configureSqliteVecExtPath,
@@ -1702,6 +1707,61 @@ configureMigrationRuntime({
   isPackaged: app.isPackaged,
 });
 configureSqliteVecExtPath(resolveDesktopSqliteVecExtPath(app.isPackaged));
+// Database startup reaches the user through these ports; the Node host installs
+// headless equivalents instead of importing Electron.
+configureUiText((key, fallback) => {
+  const localized = t(key);
+  return localized === key ? fallback : localized;
+});
+configureLocalDbHostUi({
+  isPackaged: () => app.isPackaged,
+  reportFatal: (title, detail, code) => {
+    if (!shouldShowNativeFatalDialog(code)) {
+      console.error(JSON.stringify({ event: 'localDb.fatal.rendererOwned', code, title, detail }));
+      return;
+    }
+    try {
+      dialog.showMessageBoxSync({
+        type: 'error',
+        title,
+        message: title,
+        detail: `${detail}\n\n请重启应用，或在系统资源管理器中打开数据目录手动处理。`,
+        buttons: ['好的'],
+        defaultId: 0,
+      });
+    } catch (error) {
+      console.error('showFatalDialog failed', error);
+    }
+  },
+  broadcast: (channel, payload) => {
+    for (const win of BrowserWindow.getAllWindows()) {
+      if (win.isDestroyed()) continue;
+      try {
+        win.webContents.send(channel, payload);
+      } catch {
+        /* destroyed renderer */
+      }
+    }
+  },
+  exitApp: (code) => app.exit(code),
+  showMessageBoxSync: (options) => dialog.showMessageBoxSync({
+    type: 'warning',
+    title: '本地 DB schema 仍有残留不一致',
+    message: '反射自愈无法修复以下不一致(改类型 / 删列 / 缺 NOT NULL 列等):',
+    detail: '选「Nuke 重建」会把当前 DB 改名为 .bak.nuke-<时间>(永久保留)；选「忽略继续」会带着不一致启动。',
+    buttons: options.buttons,
+    defaultId: options.defaultId ?? 0,
+    cancelId: options.cancelId ?? 1,
+  }),
+  showInfo: (title, message) => {
+    dialog.showMessageBoxSync({ type: 'info', title, message, buttons: ['好的'] });
+  },
+  runStartupSlimming: (args) => runPendingDbSlimmingAtStartup({
+    ...args,
+    loadVectorExtension: (maintenanceDb) => loadSqliteVec(maintenanceDb).loaded,
+    log: console as never,
+  }),
+});
 const authBoundaryLog = createLogger('auth-boundary');
 // 镜像缓存清理失败会把 MirrorCachePurgeError 的 root/remaining 本地缓存路径写进日志,单独一个
 // 子 scope,好让日志上报的来源白名单把它排除掉(auth-boundary 根只留不带路径的服务停止诊断)。

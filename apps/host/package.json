@@ -8,8 +8,8 @@
     "cindy-host-login": "./src/main.ts"
   },
   "scripts": {
-    "start": "node --import tsx src/main.ts",
-    "test": "node --import tsx --test \"src/**/*.test.mjs\""
+    "start": "node --import tsx --import ./src/loaders/register-raw.mjs src/main.ts",
+    "test": "node --import tsx --import ./src/loaders/register-raw.mjs --test \"src/**/*.test.mjs\""
   },
   "devDependencies": {
     "tsx": "^4.19.0"

@@ -9,6 +9,7 @@ import { resolveHostDataDir, resolveHostRegion } from './profile-path.mjs';
 import { acquireHostRuntimeLease, type HostRuntimeLease } from './runtime-lock.js';
 import { readAdoptedSessionState } from './credentials/session.mjs';
 import { configureHostOwner, readClaudeSubscriptionState } from './agent/claude-auth.mjs';
+import { createHostAgentGraph } from './agent/runtime.mjs';
 import { runLoginCommand } from './login-cli.mjs';
 import { readOrCreateApiToken } from './api-token.mjs';
 import { CindyAuthClient } from '@cindy/auth-client';
@@ -19,6 +20,7 @@ import { listInstalledPlugins } from './plugins.mjs';
 import { listActiveSessions } from './sessions.mjs';
 import { createPreparedLinuxCredentialStore } from './credentials/store.mjs';
 import { createHostServer } from './server.mjs';
+import { createChatHandler } from './chat.mjs';
 
 const command = process.argv[2];
 if (command === 'login') {
@@ -40,6 +42,7 @@ interface RuntimeState {
   state: 'uninitialized' | 'ready' | 'error' | 'blocked';
   owner: string | null;
   storage: 'unopened' | 'ready' | 'error';
+  agents?: string[];
   detail?: string;
 }
 
@@ -89,6 +92,8 @@ let sessionStorage: OwnerSessionStorage | null = null;
 let runtimeLease: HostRuntimeLease | null = null;
 /** Claude subscription state read once per boot; never on the health path. */
 let claudeState: Record<string, unknown> | null = null;
+/** Real maker-core agents registered in this process. */
+let agentGraph: { maker: unknown; agents: string[] } | null = null;
 /** Non-secret projection of the adopted Desktop login; never tokens. */
 let account: { authenticated: boolean; realm: string | null; error?: string } = { authenticated: false, realm: null };
 
@@ -140,6 +145,13 @@ async function ensureRuntime(ownerId: string): Promise<void> {
 
   const claudeBinary = harnessBinaryPath('claude-code');
   if (claudeBinary) {
+    agentGraph = createHostAgentGraph({
+      binaryPath: claudeBinary,
+      storage: sessionStorage,
+    });
+    runtime.agents = agentGraph.agents;
+  }
+  if (claudeBinary) {
     void readClaudeSubscriptionState({ binary: claudeBinary, env: { PATH: process.env.PATH } })
       .then((state) => { claudeState = state; })
       .catch((error: unknown) => {
@@ -160,6 +172,7 @@ const server = createHostServer({
     account,
     harness: harnessStatus(),
     claude: claudeState,
+    maker: agentGraph ? { agents: agentGraph.agents } : null,
     sessions: sessionStorage ? (await listActiveSessions(sessionStorage)).length : null,
   }),
   me: async () => ({ owner: runtime.owner, authenticated: account.authenticated, realm: account.realm }),
@@ -187,6 +200,14 @@ const server = createHostServer({
     return result;
   },
   listSessions: async () => (sessionStorage ? listActiveSessions(sessionStorage) : []),
+  chat: createChatHandler({
+    get maker() {
+      if (!agentGraph) throw new Error('agent runtime is not ready');
+      return agentGraph.maker;
+    },
+    defaultWorkDir: resolveHostDataDir(),
+    defaultModel: process.env.CINDY_HOST_MODEL?.trim() || 'claude-sonnet-4-6',
+  }),
   listPlugins: () => (runtime.owner
     ? listInstalledPlugins(resolveHostDataDir(), runtime.owner)
     : { plugins: [], namespace: 'canonical', legacyNamespacePresent: false }),
