@@ -5,11 +5,12 @@
 //!   默认全速，另有让路配置。第一版让路在模拟里过关，公网下载却是 5.6 / 0.1，所以用例里有往返 12 毫秒的窄线路和两段确认一次的 TCP；
 //!   公网 Wi-Fi 上还掉到过 15 Mbit/s，所以有短暂断网的用例。分线路门槛按同一条线路上两条 TCP 互相抢的结果定。
 //!   2026-11-03 发现后加入的连接会一直超发，见 `late_joiners_do_not_keep_overshooting`；共享模拟器从这时起在流开始时才建连接，和真实设备一样。
+//!   2026-11-04 四条连接挤 3 毫秒的队列丢 27%：队列比排队判断的余量还浅，被挤掉的包都算成了随机丢包，见 `hidden_queue_is_not_read_as_random_loss`。
 //! - 现有覆盖缺口：`reliability.rs` 和 `streams.rs` 都只有一对端点，碰不到多个发送方抢瓶颈。
 //! - 最小失败输入：固定场景写在各用例里，瓶颈带 0.5 毫秒抖动，用固定种子。
 //! - tier：Rust integration，虚拟时间，无真实网络；TCP 对手是 `sim/src/share.rs` 里的 CUBIC 和 Reno 模型，不是真实 TCP 栈。
 //!   上传方向公网上 TCP 占优、这里略偏向我们，模型还没覆盖真实上传线路，分线路的最终判断看 `sim/share-public.py`。
-//! - 实测耗时：2026-11-03，本机 2.8 秒。场景固定，不随 `AGENT_NET_SEEDS` 变。
+//! - 实测耗时：2026-11-04，Windows 本机 2.5 秒（不含编译）。场景固定，不随 `AGENT_NET_SEEDS` 变。
 //! - 测试本身的有效性由 `sim/mutants.py` 验证：注入已知 bug，这里必须变红。
 
 use agent_net_core::{BandwidthShare, Config, RecoveryPolicy};
@@ -75,6 +76,40 @@ fn misread_loss_stays_bounded_on_shallow_queues() {
     assert!(result.loss <= 0.2, "丢包 {:.1}%", result.loss * 100.0);
     let result = share(&bottleneck(100_000_000, 12_000, 0.25), &[flow(agent(), 0, 0), flow(agent(), 0, 0)], 20, 5);
     assert!(result.loss <= 0.1, "往返 12ms：丢包 {:.1}%", result.loss * 100.0);
+}
+
+/// 队列浅到排满了往返时间也涨不过排队判断的余量（3 毫秒对 4 毫秒）时，靠往返时间认不出排队。几条连接挤在一起，
+/// 被挤掉的包被当成随机丢包，各自按估高的丢包率多发，多发的又被挤掉，估多少就丢多少，能一直维持下去。
+/// 现在比同一个探测周期里巡航和降速的丢包率：随机丢包和速率无关，被挤掉的包跟着速率涨。
+/// 认出来以后收回随机丢包的补偿，降速时丢的包也不再算进随机丢包率，送到的照样算，估高的值才降得下来。
+/// 最后一行守着另一头：线路真有随机丢包时清理不能清过头，否则限速判断把随机丢包当成撞上限速，一路压低速率。
+#[test]
+fn hidden_queue_is_not_read_as_random_loss() {
+    let flows: Vec<Flow> = (0..4).map(|index| flow(agent(), index * 200_000, 0)).collect();
+    let shallow = bottleneck(100_000_000, 12_000, 0.25);
+    let rows = [
+        // 2026-11-04：修之前丢 24.5%、公平指数 0.75，现在 5.9%、0.98。
+        ("100M 12ms 3 毫秒队列", shallow.clone(), 1, 0.10, 0.9, 0.0),
+        // 1 毫秒定时器：修之前丢 13.6%，现在 5.9%；降速时丢的包照样算进随机丢包率的话是 12.8%。
+        ("100M 12ms 3 毫秒队列 1 毫秒定时器", shallow, 1_000, 0.10, 0.0, 0.0),
+        // 修之前利用率 0.94、公平指数 0.75，现在 0.92、0.78。补偿收回后一直不放开时利用率 0.84；
+        // 限速判断的门槛按清理后的估计算时公平指数 0.55，有一条被压到 0.9 Mbit/s。
+        ("20M 40ms 一倍队列 随机丢 10%", LinkProfile { loss: 0.10, ..bottleneck(20_000_000, 40_000, 1.0) }, 1, 1.0, 0.7, 0.9),
+    ];
+    for (name, link, timer_us, max_loss, min_fairness, min_utilization) in rows {
+        let result = run_shared_with_timer(&link, &flows, 20_000_000, 5_000_000, 1, timer_us);
+        assert!(result.loss <= max_loss, "{name}: 丢包 {:.1}%", result.loss * 100.0);
+        assert!(jain_index(&result.rates) >= min_fairness, "{name}: {:?}", result.rates);
+        assert!(result.utilization >= min_utilization, "{name}: 利用率 {:.2}", result.utilization);
+    }
+}
+
+/// 令牌桶攒满令牌时一下放行一串，周期和周期之间的丢包率差得很远。比巡航和降速的丢包率时，标准误要按周期之间实际差多少放大，
+/// 只按每个包独立算的话会把这种起伏当成看不出的排队：1 毫秒定时器下单条连接的丢包从 2.35% 涨到 4.0%（修之前也是 2.35%）。
+#[test]
+fn bursty_limiter_is_not_read_as_a_hidden_queue() {
+    let result = run_shared_with_timer(&limiter(708_000, 45_000, 600_000), &[flow(agent(), 0, 0)], 30_000_000, 10_000_000, 1, 1_000);
+    assert!(result.loss <= 0.03, "丢包 {:.2}%", result.loss * 100.0);
 }
 
 /// 真机的定时器有粒度：迟到的时间作废的话，每次醒来只能发一个包，速度锁死在“一个包除以定时器精度”，

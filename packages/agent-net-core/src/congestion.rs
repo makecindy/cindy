@@ -131,6 +131,32 @@ const SATURATED_MAX_RANDOM_LOSS_PPM: u32 = 200_000;
 const CALM_SAMPLE_WINDOW: u32 = 512;
 /// 样本少于这么多时按这么多算，刚开始一两个丢包不会把估计值推得很高。
 const CALM_SAMPLE_FLOOR: u32 = 64;
+/// 巡航时比降速时平均多丢这么多（再加两倍标准误），说明丢包跟着速率涨，巡航已经超过线路容量。
+/// 真的随机丢包和速率无关，单条连接在随机丢 3%～10% 的路径上两者只差 0.4～0.8 个百分点；
+/// 几条连接挤一个看不出排队的浅队列时差 3～6 个百分点。
+const OVERFLOW_EXCESS_PPM: i64 = 15_000;
+/// 两个阶段的包按探测周期累计，旧的计数逐个周期打折，大约这么久以前的结果淡出。
+/// 按包数累计是因为一个周期的降速阶段只有一个往返，包很少，单看一个周期噪声太大。
+/// 按时间而不是按周期数淡出：往返 40 毫秒时 32 个周期就是十秒，开头几条连接一起启动时挤掉的包要记十几秒。
+const OVERFLOW_MEMORY_US: u64 = 3_000_000;
+/// 一个探测周期大约这么多个最小往返。
+const CYCLE_RTTS: u64 = PROBE_CYCLE.len() as u64;
+/// 每个周期至少打 31/32 折，最多打对折。
+const OVERFLOW_DECAY_MAX: u64 = 32;
+const OVERFLOW_DECAY_MIN: u64 = 2;
+/// 计数放大这么多倍存，打折时小数不会被舍掉。
+const OVERFLOW_SCALE: u64 = 1024;
+/// 周期之间的差别比按包独立算的波动大多少，按这个权重平滑（1/16）。突发丢包只落在某几个周期里，
+/// 周期之间差得远，标准误跟着放大，不会被当成丢包跟着速率涨。
+const OVERFLOW_DISPERSION_SMOOTHING: i64 = 16;
+/// 至少比过这么多个周期才下结论。
+const OVERFLOW_MIN_CYCLES: u32 = 8;
+/// 一个周期里降速和巡航阶段的包至少有这么多个有了结果，这个周期才拿来比。
+const OVERFLOW_MIN_CALM_PACKETS: u32 = 4;
+const OVERFLOW_MIN_CRUISE_PACKETS: u32 = 16;
+/// 丢包跟着速率涨时，补偿每轮收回四分之一；不涨了大约这么久才完全放开。
+const COMPENSATION_CUT: u64 = 750;
+const COMPENSATION_RESTORE_US: u64 = 3_000_000;
 /// 看最近这么多轮的平均送达速率。要盖过排空阶段：排空时发得慢，送达速率本来就低。
 const DELIVERY_ROUNDS: usize = 4;
 /// 窗口不大时，刚进巡航的那个降速阶段不当低速样本：节奏还按启动时测到的带宽打折，配额或令牌桶刚放行完突发时，
@@ -150,6 +176,16 @@ const PROBE_MIN_PACKETS: u64 = 8;
 const PROBE_LOSS_RTTS: u64 = 2;
 /// 启动刚结束时最近两轮丢包率都低于这个值，才跳过第一个降速阶段。
 const SKIP_CALM_MAX_LOSS_PPM: u64 = 100_000;
+
+/// 一个探测周期里降速和巡航阶段发的包：几个有了结果、其中丢了几个。
+#[derive(Clone, Copy, Default)]
+struct PhaseTally {
+    cycle: u32,
+    calm_packets: u32,
+    calm_losses: u32,
+    cruise_packets: u32,
+    cruise_losses: u32,
+}
 
 #[derive(Clone, Copy, PartialEq)]
 enum Mode {
@@ -234,6 +270,23 @@ pub(crate) struct Bbr {
     calm_entry_queue_us: u64,
     /// 上一次降速开始时队列就在排：队列是别的流排的。见 `queue_is_foreign`。
     foreign_queue: bool,
+    /// 第几个探测周期，每次进入巡航或开始降速时加一。见 `compare_phases`。
+    phase_cycle: u32,
+    /// 最近两个周期里降速和巡航阶段发的包的结果。
+    phase_tallies: [PhaseTally; 2],
+    /// 按周期打折累计的降速和巡航阶段的包数、丢包数，放大 `OVERFLOW_SCALE` 倍。
+    compare_calm_packets: u64,
+    compare_calm_losses: u64,
+    compare_cruise_packets: u64,
+    compare_cruise_losses: u64,
+    /// 每个周期“巡航丢包率减降速丢包率”偏离平均值的平方，和按包独立算的方差，各自平滑，单位是百万分之一的平方。
+    observed_variance: i64,
+    expected_variance: i64,
+    compared_cycles: u32,
+    /// 丢包跟着速率涨：巡航已经超过线路容量。
+    overflowing: bool,
+    /// 随机丢包的补偿用上几成，千分比。丢包跟着速率涨时逐轮收回，不涨了再慢慢放开。
+    compensation: u64,
     /// 让路模式：一个分片的大小，0 表示全速。
     fair_packet: u64,
     fair_cwnd: u64,
@@ -337,6 +390,17 @@ impl Bbr {
             calm_watch: false,
             calm_entry_queue_us: 0,
             foreign_queue: false,
+            phase_cycle: 0,
+            phase_tallies: [PhaseTally::default(); 2],
+            compare_calm_packets: 0,
+            compare_calm_losses: 0,
+            compare_cruise_packets: 0,
+            compare_cruise_losses: 0,
+            observed_variance: 0,
+            expected_variance: 0,
+            compared_cycles: 0,
+            overflowing: false,
+            compensation: 1000,
             fair_packet: 0,
             fair_cwnd: 0,
             fair_w_max: 0,
@@ -376,7 +440,7 @@ impl Bbr {
     /// 丢 30% 时每轮只剩 70%，再怎么探测也追不回来。这里换算回路径真正承载的速率。
     fn path_rate(&self) -> u64 {
         let limit = if self.saturated_rounds >= SATURATED_ROUNDS { SATURATED_MAX_RANDOM_LOSS_PPM } else { MAX_RANDOM_LOSS_PPM };
-        let kept = 1_000_000 - self.random_loss_ppm.min(limit) as u64;
+        let kept = 1_000_000 - self.random_loss_ppm.min(limit) as u64 * self.compensation / 1000;
         let rate = self.btl_bw.saturating_mul(1_000_000) / kept;
         if self.rate_cap > 0 { rate.min(self.rate_cap) } else { rate }
     }
@@ -702,8 +766,96 @@ impl Bbr {
     /// 瓶颈在排队时也不算：队列可能是别的流排的，我们降速也挡不住丢包。这种丢包当成随机丢包的话，
     /// 大家都按丢包率多发，发得越多丢得越多，几条流一起就是拥塞崩溃。
     /// 压低队列时除外：那时的基准往返时间取最近几轮，抖动一点就算排队，样本攒不够，真正的随机丢包率测不出来。
+    /// 队列浅到往返时间看不出来、但丢包跟着速率涨时同样不算，见 [`Self::compare_phases`]。
     pub(crate) fn trusts_calm_samples(&self) -> bool {
-        self.fair_packet == 0 && (self.rate_cap == 0 || self.rate_cap_confirmed) && (self.low_queue || !self.queue_is_building())
+        self.fair_packet == 0 && (self.rate_cap == 0 || self.rate_cap_confirmed) && (self.low_queue || !self.queue_is_building()) && !self.overflowing
+    }
+
+    /// 正在巡航，按带宽估计全速发。
+    pub(crate) fn is_cruising(&self) -> bool {
+        self.mode == Mode::ProbeBw && PROBE_CYCLE[self.cycle_index] == 1000 && !self.sends_below_capacity()
+    }
+
+    /// 当前是第几个探测周期。发包时记下来，结果回来时按周期配对比较。
+    pub(crate) fn phase_cycle(&self) -> u32 {
+        self.phase_cycle
+    }
+
+    /// 第 `cycle` 个周期的降速（`calm`）或巡航阶段发出的一个包有了结果。
+    pub(crate) fn on_phase_outcome(&mut self, cycle: u32, calm: bool, lost: bool) {
+        let Some(tally) = self.phase_tally(cycle) else { return };
+        if calm {
+            tally.calm_packets += 1;
+            tally.calm_losses += lost as u32;
+        } else {
+            tally.cruise_packets += 1;
+            tally.cruise_losses += lost as u32;
+        }
+    }
+
+    /// 之前算作丢失的包其实只是来晚了。那个周期已经比完了就不管：差一个包改变不了结论。
+    pub(crate) fn undo_phase_loss(&mut self, cycle: u32, calm: bool) {
+        if let Some(tally) = self.phase_tallies.iter_mut().find(|tally| tally.cycle == cycle) {
+            if calm {
+                tally.calm_losses = tally.calm_losses.saturating_sub(1);
+            } else {
+                tally.cruise_losses = tally.cruise_losses.saturating_sub(1);
+            }
+        }
+    }
+
+    /// 这个周期的计数。比手上两个周期都新时，旧的那个周期的结果都回来了，拿去比，空出来给它；
+    /// 比两个都旧就是隔了一整个周期才判出来的结果，不要了。
+    fn phase_tally(&mut self, cycle: u32) -> Option<&mut PhaseTally> {
+        if let Some(index) = self.phase_tallies.iter().position(|tally| tally.cycle == cycle) {
+            return Some(&mut self.phase_tallies[index]);
+        }
+        let oldest = if self.phase_tallies[0].cycle <= self.phase_tallies[1].cycle { 0 } else { 1 };
+        if cycle < self.phase_tallies[oldest].cycle {
+            return None;
+        }
+        let finished = core::mem::replace(&mut self.phase_tallies[oldest], PhaseTally { cycle, ..PhaseTally::default() });
+        self.compare_phases(finished);
+        Some(&mut self.phase_tallies[oldest])
+    }
+
+    /// 比一个周期里巡航和降速的丢包率，更新“丢包是不是跟着速率涨”的判断。
+    ///
+    /// 队列浅到排满了往返时间也涨不过判断余量时，靠往返时间认不出排队，被挤掉的包就会被当成随机丢包。
+    /// 几条连接一起这样，各自按估高的丢包率多发，多发的部分又被挤掉，估多少就丢多少，能一直维持下去。
+    /// 随机丢包和速率无关，降速时也一样丢；挤掉的包跟着速率走，巡航比降速多发三分之一，就多丢一截。
+    /// 一个周期的降速和巡航碰上的是同一段路况，按周期累计，只拿同时有两个阶段结果的周期比。
+    fn compare_phases(&mut self, tally: PhaseTally) {
+        if tally.calm_packets < OVERFLOW_MIN_CALM_PACKETS || tally.cruise_packets < OVERFLOW_MIN_CRUISE_PACKETS {
+            return;
+        }
+        let divisor = (OVERFLOW_MEMORY_US / (CYCLE_RTTS * self.min_rtt_us).max(1)).clamp(OVERFLOW_DECAY_MIN, OVERFLOW_DECAY_MAX);
+        let decay = |value: u64| value - value / divisor;
+        self.compare_calm_packets = decay(self.compare_calm_packets) + tally.calm_packets as u64 * OVERFLOW_SCALE;
+        self.compare_calm_losses = decay(self.compare_calm_losses) + tally.calm_losses as u64 * OVERFLOW_SCALE;
+        self.compare_cruise_packets = decay(self.compare_cruise_packets) + tally.cruise_packets as u64 * OVERFLOW_SCALE;
+        self.compare_cruise_losses = decay(self.compare_cruise_losses) + tally.cruise_losses as u64 * OVERFLOW_SCALE;
+        let rate = |losses: u64, packets: u64| (losses * 1_000_000 / packets.max(1)) as i64;
+        let excess = rate(self.compare_cruise_losses, self.compare_cruise_packets) - rate(self.compare_calm_losses, self.compare_calm_packets);
+        let pooled = rate(self.compare_calm_losses + self.compare_cruise_losses, self.compare_calm_packets + self.compare_cruise_packets);
+        let spread = pooled * (1_000_000 - pooled.min(1_000_000));
+        // 这个周期自己的差别偏离平均值多少，和每个包各自独立丢的话该偏多少。
+        let cycle_excess = rate(tally.cruise_losses as u64, tally.cruise_packets as u64) - rate(tally.calm_losses as u64, tally.calm_packets as u64);
+        let cycle_expected = spread / tally.calm_packets as i64 + spread / tally.cruise_packets as i64;
+        let deviation = cycle_excess - excess;
+        if self.compared_cycles == 0 {
+            self.observed_variance = cycle_expected;
+            self.expected_variance = cycle_expected;
+        } else {
+            self.observed_variance += (deviation * deviation - self.observed_variance) / OVERFLOW_DISPERSION_SMOOTHING;
+            self.expected_variance += (cycle_expected - self.expected_variance) / OVERFLOW_DISPERSION_SMOOTHING;
+        }
+        self.compared_cycles = self.compared_cycles.saturating_add(1);
+        // 累计计数按包独立算的方差，乘上实际比独立时大几倍（至少 1 倍）。
+        let independent = spread * OVERFLOW_SCALE as i64 / self.compare_calm_packets.max(1) as i64 + spread * OVERFLOW_SCALE as i64 / self.compare_cruise_packets.max(1) as i64;
+        let dispersion = (self.observed_variance.saturating_mul(1000) / self.expected_variance.max(1)).max(1000);
+        let standard_error = isqrt((independent / 1000).saturating_mul(dispersion).max(0) as u64) as i64;
+        self.overflowing = self.compared_cycles >= OVERFLOW_MIN_CYCLES && excess > OVERFLOW_EXCESS_PPM + 2 * standard_error;
     }
 
     /// `trusted` 是发送时 [`Self::trusts_calm_samples`] 的结果。
@@ -732,8 +884,11 @@ impl Bbr {
         self.update_random_loss();
     }
 
+    /// 丢包跟着速率涨时随机丢包率正在去掉被挤掉的包，可能低过真实值，拿它当门槛会把随机丢包当成撞上限速。
+    /// 这时门槛至少按降速阶段实际的丢包率算：限速器上降速时几乎不丢，门槛不变；共享瓶颈上降速时照样有随机丢包。
     fn excess_loss_threshold(&self) -> u64 {
-        let p = self.random_loss_ppm as u64;
+        let calm = self.compare_calm_losses * 1_000_000 / self.compare_calm_packets.max(1);
+        let p = if self.overflowing { (self.random_loss_ppm as u64).max(calm) } else { self.random_loss_ppm as u64 };
         let samples = self.calm_samples.max(1) as u64;
         let standard_error = isqrt(p * (1_000_000 - p.min(1_000_000)) / samples);
         p + p / 4 + EXCESS_LOSS_PPM + 2 * standard_error
@@ -1023,6 +1178,14 @@ impl Bbr {
             self.fair_round_lost = 0;
             // 空闲或被对端窗口卡住时也不老化：否则停一会儿，旧的带宽估计就被挤掉了。
             self.saturated_rounds = if sample.app_limited { 0 } else { self.saturated_rounds.saturating_add(1) };
+            // 补偿把多发的部分算成会被随机丢掉的。丢包跟着速率涨时多发的其实是被挤掉的，补偿越多挤掉越多，要尽快收回。
+            // 放开要慢：几条连接同时放开又会挤回去。认出排队期间估高的随机丢包率已经清掉一部分，慢慢放开时补偿也小得多。
+            if self.overflowing {
+                self.compensation = self.compensation * COMPENSATION_CUT / 1000;
+            } else {
+                let step = (1000 * self.min_rtt_us / COMPENSATION_RESTORE_US).max(1);
+                self.compensation = (self.compensation + step).min(1000);
+            }
             if !sample.app_limited && (!outage || self.outage_rounds > OUTAGE_HOLD_ROUNDS) {
                 self.round += 1;
                 self.bw_samples[self.round % BW_WINDOW_ROUNDS] = 0;
@@ -1163,11 +1326,13 @@ impl Bbr {
 
     /// 队列在排，而且上一次降速开始时就在排：是别的流排的。巡航时发现排队会主动降速，自己排的队到降速阶段开始前已经排空了。
     /// 2026-11-03 试过再看降速期间队列有没有回落，对比矩阵和共享矩阵里结果几乎一样，没留。
+    /// 丢包跟着速率涨时也按这样算：降速时丢的包分不清是随机丢的还是被挤掉的，送到的照样算，估高的随机丢包率才降得下来。
     pub(crate) fn queue_is_foreign(&self) -> bool {
-        self.foreign_queue && self.queue_is_building()
+        (self.foreign_queue && self.queue_is_building()) || self.overflowing
     }
 
     fn start_calm_watch(&mut self) {
+        self.phase_cycle += 1;
         let floor = self.last_round_min_rtt_us;
         self.calm_entry_queue_us = if floor == u64::MAX { 0 } else { floor.saturating_sub(self.base_rtt()) };
         self.calm_watch = true;
@@ -1214,6 +1379,8 @@ impl Bbr {
         self.cycle_index = if self.small_window() && self.window_limited && calm_rounds { 2 } else { 1 };
         if PROBE_CYCLE[self.cycle_index] < 1000 {
             self.start_calm_watch();
+        } else {
+            self.phase_cycle += 1;
         }
         self.cycle_started = now_us;
     }
@@ -1244,6 +1411,14 @@ impl Bbr {
             self.full_bw_rounds = 0;
             self.filled_pipe = false;
             self.mode = Mode::Startup;
+            // 换了路径，旧瓶颈上“丢包跟着速率涨”的结论不再适用。
+            self.compare_calm_packets = 0;
+            self.compare_calm_losses = 0;
+            self.compare_cruise_packets = 0;
+            self.compare_cruise_losses = 0;
+            self.compared_cycles = 0;
+            self.overflowing = false;
+            self.compensation = 1000;
         }
     }
 }

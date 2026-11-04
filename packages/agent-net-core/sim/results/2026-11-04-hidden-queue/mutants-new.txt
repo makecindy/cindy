@@ -1,0 +1,8 @@
+caught    共享：看不出的排队里补偿不收回  hidden_queue_is_not_read_as_random_loss, result:
+caught    共享：看不出的排队里补偿立刻放开  hidden_queue_is_not_read_as_random_loss, result:
+caught    共享：看不出的排队里降速丢包照常算  hidden_queue_is_not_read_as_random_loss, result:
+caught    共享：看不出的排队里限速门槛按清理后的估计算  hidden_queue_is_not_read_as_random_loss, result:
+caught    共享：看不出的排队按周期数淡出  bursty_limiter_is_not_read_as_a_hidden_queue, hidden_queue_is_not_read_as_random_loss, res
+caught    共享：看不出的排队不看周期之间的差别  bursty_limiter_is_not_read_as_a_hidden_queue, result:
+exit 0
+caught    排着的队都当成别人的  own_queue_does_not_hide_random_loss, result:

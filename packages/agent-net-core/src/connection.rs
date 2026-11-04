@@ -303,12 +303,31 @@ struct SentPacket {
     calm_foreign: bool,
     /// 发送时正处在加速探测阶段。
     probing: bool,
+    /// 发送时正在巡航。和同一个探测周期里降速阶段的包比丢包率，看丢包是不是跟着速率涨。
+    cruising: bool,
+    /// 发送时是第几个探测周期。
+    cycle: u32,
     app_idle: bool,
     // 发送时的送达进度，确认到达时用来计算实际送达速率。
     delivered: u64,
     delivered_at: u64,
     first_sent_at: u64,
     app_limited: bool,
+}
+
+impl SentPacket {
+    /// 满负荷发送时，这个包是降速阶段（`true`）还是巡航阶段（`false`）发的。应用没数据时发的不算：那时速率是应用定的。
+    fn compared_phase(&self) -> Option<bool> {
+        if self.app_idle {
+            None
+        } else if self.below_capacity {
+            Some(true)
+        } else if self.cruising {
+            Some(false)
+        } else {
+            None
+        }
+    }
 }
 
 struct PendingParity {
@@ -1286,6 +1305,9 @@ impl Connection {
             if lost.packet.below_capacity && lost.packet.calm_trusted {
                 self.congestion.undo_calm_loss();
             }
+            if let Some(calm) = lost.packet.compared_phase() {
+                self.congestion.undo_phase_loss(lost.packet.cycle, calm);
+            }
             let late = now_us.saturating_sub(lost.declared_at);
             self.reorder_delay_us = self.reorder_delay_us.max(late + late / 4).min(self.rtt.srtt_us());
             let limit = (self.config.send_window as u64 / 2).max(self.config.reorder_threshold);
@@ -1314,6 +1336,9 @@ impl Connection {
         self.lost_run_ppm -= self.lost_run_ppm / LOST_RUN_DECAY_PACKETS;
         if packet.below_capacity {
             self.congestion.on_calm_outcome(lost, packet.calm_trusted, packet.calm_foreign);
+        }
+        if let Some(calm) = packet.compared_phase() {
+            self.congestion.on_phase_outcome(packet.cycle, calm, lost);
         }
         if packet.probing {
             self.congestion.on_probe_outcome(lost);
@@ -2169,6 +2194,8 @@ impl Connection {
                 calm_trusted: self.congestion.trusts_calm_samples(),
                 calm_foreign: self.congestion.queue_is_foreign(),
                 probing: self.congestion.is_probing_up(),
+                cruising: self.congestion.is_cruising(),
+                cycle: self.congestion.phase_cycle(),
                 app_idle,
                 delivered: self.delivered,
                 delivered_at: self.delivered_at,
