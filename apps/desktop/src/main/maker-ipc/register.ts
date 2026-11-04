@@ -17672,12 +17672,16 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         toAgentKind(route.harness),
       );
     };
+    // A group entrance represents all of its members, not this computer's account.
+    // The existing switch/start transaction selects and validates the actual member.
+    const isLocalGroup = (route: AccountRoute) => !route.agentDeviceId
+      && readProviderGroup(resolveDefaultProvider(route) ?? '') !== null;
     // Ask each configured fallback for its own model quota before choosing it.
     // shortcut: only routes using this computer's login are read; remote-device candidates keep the static rule.
     const liveLimits = new Map<string, { limited: boolean } | null | undefined>();
     const candidateBuckets = new Map<string, Record<string, import('@cindy/maker-shared/codex-usage-buckets').BucketSnapshotLike> | null>();
     if (!row.remoteHostId) {
-      await Promise.all(chain.filter((candidate) => !candidate.agentDeviceId).map(async (candidate) => {
+      await Promise.all(chain.filter((candidate) => !candidate.agentDeviceId && !isLocalGroup(candidate)).map(async (candidate) => {
         const key = botModelRouteRuntimeKey(candidate);
         const providerId = resolveDefaultProvider(candidate);
         liveLimits.set(key, await readAccountUsageLimit(
@@ -17703,7 +17707,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         quotaPool: family === 'codex' ? route.harness === 'codex' ? 'codex' : 'wham' : null,
       };
     };
-    const isBlocked = (candidate: BotModelRoute) => isCandidateQuotaBlocked(
+    const isBlocked = (candidate: BotModelRoute) => !isLocalGroup(candidate) && isCandidateQuotaBlocked(
       withQuotaPool(candidate),
       withQuotaPool(currentRoute),
       scope,

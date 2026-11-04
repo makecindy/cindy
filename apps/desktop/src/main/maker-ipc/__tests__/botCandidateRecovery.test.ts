@@ -439,9 +439,11 @@ describe('quota fallback review regressions (#8811)', () => {
     const readLimit = vi.fn(async (_kind: string, _provider: string, _model: string, purpose?: string) =>
       purpose === 'admission' ? undefined : { limited: true });
     let chain: BotModelRoute[] = [];
+    let groupEnabled = false;
     const readRemoteViews = vi.fn(async () => [{ id: 'work-remote-only', auth: { native: 'codex' } }]);
     const remoteInvoke = vi.fn(async () => ({ ok: false }));
     const deps = {
+      readProviderGroup: (id: string) => groupEnabled && id === 'anthropic' ? { members: [{ key: 'other-computer' }] } : null,
       getDbClient: () => ({ drizzle: { select: () => query } }),
       botProfileVersions: {}, botSessionLinks: {}, sessions: {},
       and: () => null, eq: () => null, isNull: () => null, inArray: () => null,
@@ -479,7 +481,15 @@ describe('quota fallback review regressions (#8811)', () => {
     chain = [shadow, { ...shadow, harness: 'pi' }];
     readRemoteViews.mockRejectedValueOnce(new Error('remote offline'));
     expect((await select('s', { ...remoteCurrent, providerId: shadow.providerId }, 's', 'bucket')).candidate).toBeNull();
-
+    const groupRoute = { harness: 'claude' as const, model: 'claude-sonnet-5', providerId: 'anthropic', effort: '', fastMode: false as const };
+    chain = [remote, groupRoute];
+    groupEnabled = true;
+    readLimit.mockClear();
+    readLimit.mockImplementation(async () => ({ limited: true }));
+    expect((await select('s', remoteCurrent, 's', 'bucket')).candidate).toMatchObject({ providerId: 'anthropic', agentKind: 'claude-code' });
+    expect(readLimit).not.toHaveBeenCalledWith('claude-code', 'anthropic', 'claude-sonnet-5', 'admission');
+    groupEnabled = false;
+    expect((await select('s', remoteCurrent, 's', 'bucket')).candidate).toBeNull();
   });
 
   it('does not apply ChatGPT model buckets to a Codex custom bridge with free model quota', () => {
