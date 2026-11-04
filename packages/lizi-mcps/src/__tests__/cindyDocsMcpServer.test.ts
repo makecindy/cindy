@@ -1186,19 +1186,43 @@ describe('read_sheet', () => {
       sheets: [{ name: 'IdleTest', header: ['val'], rows: [[42]] }],
       outPath: 'idle.xlsx',
     });
-    const first = await callTool(client, 'read_sheet', { path: 'idle.xlsx' });
-    expect(first.ok).toBe(true);
-    expect(_testHooks.getActiveWorker()).not.toBeNull();
 
-    // 模拟空闲超时触发 terminateActiveWorker
-    _testHooks.terminateActiveWorker();
-    expect(_testHooks.getActiveWorker()).toBeNull();
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    try {
+      const first = await callTool(client, 'read_sheet', { path: 'idle.xlsx' });
+      expect(first.ok).toBe(true);
+      expect(_testHooks.getActiveWorker()).not.toBeNull();
+      expect(_testHooks.getWorkerIdleTimer()).toBeDefined();
 
-    // 空闲回收后读取新工作簿应透明重建 worker
-    const second = await callTool(client, 'read_sheet', { path: 'idle.xlsx' });
-    expect(second.ok).toBe(true);
-    expect(second.rows).toEqual([['val'], [42]]);
-    expect(_testHooks.getActiveWorker()).not.toBeNull();
+      // 推进 15 秒空闲计时器触发自动回收
+      vi.advanceTimersByTime(15_000);
+      expect(_testHooks.getActiveWorker()).toBeNull();
+      expect(_testHooks.getWorkerIdleTimer()).toBeUndefined();
+
+      // 空闲回收后读取新工作簿应透明重建 worker
+      const second = await callTool(client, 'read_sheet', { path: 'idle.xlsx' });
+      expect(second.ok).toBe(true);
+      expect(second.rows).toEqual([['val'], [42]]);
+      expect(_testHooks.getActiveWorker()).not.toBeNull();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('超出排队上限时在分配缓冲区前拒绝并返回 READ_TIMEOUT', async () => {
+    const client = await connect();
+    await callTool(client, 'make_xlsx', {
+      sheets: [{ name: 'QueueTest', header: ['val'], rows: [[1]] }],
+      outPath: 'queue.xlsx',
+    });
+    _testHooks.setQueuedXlsxTasks(_testHooks.MAX_QUEUED_XLSX_TASKS);
+    try {
+      const result = await callTool(client, 'read_sheet', { path: 'queue.xlsx' });
+      expect(result.errorCode).toBe('READ_TIMEOUT');
+      expect((result.data as Record<string, string>).hint).toContain('排队解析');
+    } finally {
+      _testHooks.setQueuedXlsxTasks(0);
+    }
   });
 });
 

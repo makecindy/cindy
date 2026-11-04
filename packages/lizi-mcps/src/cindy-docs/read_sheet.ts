@@ -256,6 +256,8 @@ function normalizeCell(value) {
 } }));
 `;
 
+const MAX_QUEUED_XLSX_TASKS = 4;
+let queuedXlsxTasks = 0;
 let activeWorker: Worker | null = null;
 let workerIdleTimer: NodeJS.Timeout | undefined;
 let nextTaskId = 0;
@@ -265,6 +267,11 @@ export const _testHooks = {
   getActiveWorker: () => activeWorker,
   terminateActiveWorker: () => terminateActiveWorker(),
   getWorkerIdleTimer: () => workerIdleTimer,
+  getQueuedXlsxTasks: () => queuedXlsxTasks,
+  setQueuedXlsxTasks: (count: number) => {
+    queuedXlsxTasks = count;
+  },
+  MAX_QUEUED_XLSX_TASKS,
 };
 
 function terminateActiveWorker(): void {
@@ -294,13 +301,14 @@ function getActiveWorker(): Worker {
   return activeWorker;
 }
 
-function readXlsxInWorker(
+function executeXlsxInWorker(
   archive: Buffer,
   sheetSelector: string | number | undefined,
   startRow: number,
   maxRows: number,
   startColumn: number,
   maxColumns: number,
+  timeoutMs: number,
 ): Promise<SheetRead> {
   // readInputFileWithinLimit 使用独占 ArrayBuffer；转移所有权可避免在主进程
   // 与 worker 间再复制一份最多 32 MB 的工作簿。
@@ -312,19 +320,7 @@ function readXlsxInWorker(
   );
   const taskId = ++nextTaskId;
 
-  const startTime = Date.now();
-  const run = (): Promise<SheetRead> => new Promise((resolve, reject) => {
-    const elapsed = Date.now() - startTime;
-    const remainingTimeoutMs = XLSX_READ_TIMEOUT_MS - elapsed;
-    if (remainingTimeoutMs <= 0) {
-      reject(new DocsPathError(
-        'READ_TIMEOUT',
-        `读取工作簿超时(${XLSX_READ_TIMEOUT_MS}ms)`,
-        '这个工作簿解析时间过长,为保护 Cindy 已终止读取。请先拆分或重新保存文件。',
-      ));
-      return;
-    }
-
+  return new Promise((resolve, reject) => {
     if (workerIdleTimer) {
       clearTimeout(workerIdleTimer);
       workerIdleTimer = undefined;
@@ -362,7 +358,7 @@ function readXlsxInWorker(
         `读取工作簿超时(${XLSX_READ_TIMEOUT_MS}ms)`,
         '这个工作簿解析时间过长,为保护 Cindy 已终止读取。请先拆分或重新保存文件。',
       )), true);
-    }, remainingTimeoutMs);
+    }, timeoutMs);
 
     const onMessage = (message: { id: number; error?: { code?: string; message?: string; hint?: string; available?: string[] } } & SheetRead) => {
       if (message.id !== taskId) return;
@@ -412,10 +408,6 @@ function readXlsxInWorker(
       [archiveBuffer],
     );
   });
-
-  const queued = workerQueue.then(run, run);
-  workerQueue = queued.then(() => {}, () => {});
-  return queued;
 }
 
 async function readXlsx(
@@ -428,14 +420,63 @@ async function readXlsx(
   maxColumns: number,
   readOptions?: ReturnType<typeof docsReadOptions>,
 ): Promise<SheetRead> {
-  const archive = await readInputFileWithinLimit(
-    root,
-    absPath,
-    MAX_XLSX_BYTES,
-    xlsxTooLarge,
-    readOptions,
-  );
-  return readXlsxInWorker(archive, sheetSelector, startRow, maxRows, startColumn, maxColumns);
+  // 入队前限制并发等待任务数，并在分配 32 MB 缓冲区前拒绝，防止突发请求导致主进程 OOM
+  if (queuedXlsxTasks >= MAX_QUEUED_XLSX_TASKS) {
+    throw new DocsPathError(
+      'READ_TIMEOUT',
+      `读取工作簿排队超时(${XLSX_READ_TIMEOUT_MS}ms)`,
+      '当前有过多工作簿正在排队解析，为保护 Cindy 已拒绝新任务。请稍后再试。',
+    );
+  }
+  queuedXlsxTasks++;
+  const startTime = Date.now();
+
+  const run = async (): Promise<SheetRead> => {
+    const elapsed = Date.now() - startTime;
+    const remainingTimeoutMs = XLSX_READ_TIMEOUT_MS - elapsed;
+    if (remainingTimeoutMs <= 0) {
+      throw new DocsPathError(
+        'READ_TIMEOUT',
+        `读取工作簿超时(${XLSX_READ_TIMEOUT_MS}ms)`,
+        '这个工作簿解析时间过长,为保护 Cindy 已终止读取。请先拆分或重新保存文件。',
+      );
+    }
+
+    // 在出队获得执行槽后再读取并分配工作簿 Buffer，避免多个排队任务同时在主进程中堆积内存
+    const archive = await readInputFileWithinLimit(
+      root,
+      absPath,
+      MAX_XLSX_BYTES,
+      xlsxTooLarge,
+      readOptions,
+    );
+
+    const elapsedAfterRead = Date.now() - startTime;
+    const remainingAfterReadMs = XLSX_READ_TIMEOUT_MS - elapsedAfterRead;
+    if (remainingAfterReadMs <= 0) {
+      throw new DocsPathError(
+        'READ_TIMEOUT',
+        `读取工作簿超时(${XLSX_READ_TIMEOUT_MS}ms)`,
+        '这个工作簿解析时间过长,为保护 Cindy 已终止读取。请先拆分或重新保存文件。',
+      );
+    }
+
+    return executeXlsxInWorker(
+      archive,
+      sheetSelector,
+      startRow,
+      maxRows,
+      startColumn,
+      maxColumns,
+      remainingAfterReadMs,
+    );
+  };
+
+  const queued = workerQueue.then(run, run);
+  workerQueue = queued.then(() => {}, () => {});
+  return queued.finally(() => {
+    queuedXlsxTasks--;
+  });
 }
 
 async function readTextTable(
