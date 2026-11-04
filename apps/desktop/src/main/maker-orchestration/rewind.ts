@@ -164,7 +164,7 @@ interface RewindContext {
   targetMessageId: string;
   targetClientId: string;
   /** 当前 agent kind；Claude checkpoint 与 conversation-tree rollback 机制不同。 */
-  agentKind: 'claude-code' | 'codex' | 'pi';
+  agentKind: 'claude-code' | 'codex' | 'pi' | 'zcode';
   /**
    * prior assistant uuid——Claude SDK resumeSessionAt 用。Claude 缺省表示目标之前没有
    * 可续接的回复(首条消息、之前的轮次都被停掉等),改为换全新原生会话。

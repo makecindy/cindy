@@ -24,6 +24,7 @@ vi.mock('../../appSessionState.js', () => ({
 
 import {
   bindNativeProviderAuth,
+  captureNativeProviderAuthorizationEpoch,
   claimDetectedNativeProviderAuth,
   getNativeProviderAuthSource,
   isNativeProviderAuthBound,
@@ -56,6 +57,33 @@ afterEach(() => {
 });
 
 describe('native provider auth legacy binding', () => {
+  it('keeps the ZCode authorization epoch stable across unrelated provider writes but replaces it on reconnect', () => {
+    bindNativeProviderAuth('zcode-native', { sharedSystem: true });
+    const initial = captureNativeProviderAuthorizationEpoch('zcode-native');
+    expect(initial).not.toBeNull();
+    bindNativeProviderAuth('anthropic', { sharedSystem: true });
+    expect(captureNativeProviderAuthorizationEpoch('zcode-native')).toBe(initial);
+    unbindNativeProviderAuth('zcode-native', { revoked: true });
+    expect(captureNativeProviderAuthorizationEpoch('zcode-native')).toBeNull();
+    bindNativeProviderAuth('zcode-native', { sharedSystem: true });
+    expect(captureNativeProviderAuthorizationEpoch('zcode-native')).not.toBe(initial);
+  });
+  // ZCode is an explicitly connected native account: reuse and revocation belong
+  // to the current Cindy owner, while the original CLI credentials stay external.
+  it('keeps ZCode authorization with its owner across account switches and revocation', () => {
+    expect(isNativeProviderAuthBound('zcode-native')).toBe(false);
+    bindNativeProviderAuth('zcode-native', { sharedSystem: true });
+    expect(isNativeProviderAuthBound('zcode-native')).toBe(true);
+    session.dataOwnerId = 'owner-b';
+    expect(isNativeProviderAuthBound('zcode-native')).toBe(false);
+    session.dataOwnerId = 'owner-a';
+    expect(isNativeProviderAuthBound('zcode-native')).toBe(true);
+    unbindNativeProviderAuth('zcode-native', { revoked: true });
+    expect(isNativeProviderAuthBound('zcode-native')).toBe(false);
+    expect(isNativeProviderAuthRevoked('zcode-native')).toBe(true);
+    bindNativeProviderAuth('zcode-native', { sharedSystem: true });
+    expect(isNativeProviderAuthBound('zcode-native')).toBe(true);
+  });
   it('persists only the rejected digest and retains it across disconnect and unrelated binding writes', async () => {
     const digest = 'a'.repeat(64);
     bindNativeProviderAuth('anthropic', { sharedSystem: true });

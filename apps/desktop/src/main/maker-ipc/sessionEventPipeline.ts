@@ -24,6 +24,7 @@ import {
   recordSessionPiTurnUsage,
   type RecordSessionPiTurnUsageDeps,
 } from './sessionPiTurnUsage.js';
+import { recordSessionZCodeTurnUsage } from './zcodeTurnUsage.js';
 
 export type SessionEventDependencies = PrepareSessionEventDeps &
   PersistSessionStreamEventDeps &
@@ -68,5 +69,6 @@ export function handleSessionEvent(
   );
   recordSessionCodexTurnUsage(deps, session, event, terminal.turnAssistantPersistId);
   recordSessionPiTurnUsage(deps, session, event, terminal.turnAssistantPersistId);
+  recordSessionZCodeTurnUsage(deps, session, event);
   deps.recordProviderPartyUsage?.(session, event);
 }

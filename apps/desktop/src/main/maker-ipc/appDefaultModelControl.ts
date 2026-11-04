@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { effectiveSourceIdForModel, isModelVisible, type ProviderView } from '@cindy/model-providers';
 import type { resolveNewMakerDefaultTuple } from '../../shared/newMakerDefaultTuple.js';
-import type { BotModelRoute } from '../../shared/botModelChain.js';
+import type { AppDefaultModelRoute } from '../../shared/appDefaultModelSelection.js';
 import { sameModelRoute, type AppDefaultModelSelection } from '../../shared/appDefaultModelSelection.js';
 import { activeOwnerScopeKey, getActiveDataOwnerPushStamp, isAppSessionBoundaryPending } from '../appSessionState.js';
 import { getDesktopProviderService } from '../maker-host/createDesktopProviderService.js';
@@ -18,8 +18,8 @@ export function configureAppDefaultModelSelection(dispatch: typeof dispatchSelec
 /** Validate exactly the requested model; recommendations belong to default
  * selection, never to admission of an explicit task or teammate route. */
 function resolveAvailableLocalRoute(
-  args: Parameters<typeof resolveNewMakerDefaultTuple>[0] & { preferredRoute?: BotModelRoute | null },
-): BotModelRoute | null {
+  args: Parameters<typeof resolveNewMakerDefaultTuple>[0] & { preferredRoute?: AppDefaultModelRoute | null },
+): AppDefaultModelRoute | null {
   const preferred = args.preferredRoute;
   // Remote routes are validated against their own authorized catalog below.
   if (!preferred || preferred.agentDeviceId || args.providersLoading || !args.availableAgentsLoaded) return null;
@@ -34,18 +34,18 @@ function resolveAvailableLocalRoute(
 
 export function availableAppDefaultModels(input: {
   providers: readonly ProviderView[];
-  currentRoute?: BotModelRoute | null;
-  tuning?: (agent: 'claude-code' | 'codex' | 'pi', providerId: string, model: string) => { effort?: string; fastMode?: boolean | 'ultrafast' };
-  availableAgents: ReadonlySet<'cc' | 'codex' | 'pi'>;
+  currentRoute?: AppDefaultModelRoute | null;
+  tuning?: (agent: 'claude-code' | 'codex' | 'pi' | 'zcode', providerId: string, model: string) => { effort?: string; fastMode?: boolean | 'ultrafast' };
+  availableAgents: ReadonlySet<'cc' | 'codex' | 'pi' | 'zcode'>;
   enabled: NonNullable<Parameters<typeof resolveAvailableLocalRoute>[0]['isModelEnabled']>;
 }) {
   const current = resolveAvailableLocalRoute({ providers: input.providers, providersLoading: false,
     availableAgents: input.availableAgents, availableAgentsLoaded: true,
     preferredRoute: input.currentRoute ?? undefined, isModelEnabled: input.enabled });
-  return input.providers.flatMap(provider => (['claude-code', 'codex', 'pi'] as const).flatMap(agent =>
+  return input.providers.flatMap(provider => (['claude-code', 'codex', 'pi', 'zcode'] as const).flatMap(agent =>
     (provider.models[agent] ?? []).flatMap(model => {
       const remembered = input.tuning?.(agent, provider.id, model.id);
-      const route: BotModelRoute = { harness: agent === 'claude-code' ? 'claude' : agent,
+      const route: AppDefaultModelRoute = { harness: agent === 'claude-code' ? 'claude' : agent,
         providerId: provider.id, model: model.id,
         effort: model.defaultEffort && model.efforts.includes(model.defaultEffort) ? model.defaultEffort : '',
         fastMode: false };
@@ -99,7 +99,7 @@ export interface TaskModelSelection {
 }
 
 /** Resolve one per-task selection from the live catalog; never mutate picker/default preferences. */
-export async function resolveTaskModelSelection(selection: TaskModelSelection): Promise<BotModelRoute> {
+export async function resolveTaskModelSelection(selection: TaskModelSelection): Promise<AppDefaultModelRoute> {
   const { available } = await inspectAppDefaultModel();
   const option = available.find(entry => entry.id === selection.id);
   if (!option) throw new Error('任务模型已不可用，请重新查询可用模型');
@@ -116,11 +116,12 @@ export async function resolveTaskModelSelection(selection: TaskModelSelection): 
 }
 
 /** Resolve legacy implicit sources using the ordinary default policy, without persisting changes. */
-export async function resolveAvailableTaskModels(routes: readonly BotModelRoute[]): Promise<Array<BotModelRoute | null>> {
+export async function resolveAvailableTaskModels(routes: readonly AppDefaultModelRoute[]): Promise<Array<AppDefaultModelRoute | null>> {
   const owner = activeOwnerScopeKey();
   const local = routes.some(route => !route.agentDeviceId) ? await readSelection() : null;
   return Promise.all(routes.map(async route => {
     if (route.agentDeviceId) {
+      if (route.harness === 'zcode') return null;
       const { readRemoteProviderRoute } = await import('../remote-agent/controller/deviceCatalog.js');
       // An unavailable saved source must leave the form open for reselection.
       // Owner changes still invalidate the whole read, including failed requests.
@@ -152,7 +153,7 @@ export async function resolveAvailableTaskModels(routes: readonly BotModelRoute[
 }
 
 /** Check a saved full route without changing the application or teammate's primary model. */
-export async function validateTaskModel(route: BotModelRoute): Promise<boolean> {
+export async function validateTaskModel(route: AppDefaultModelRoute): Promise<boolean> {
   return !!(await resolveAvailableTaskModels([route]))[0];
 }
 

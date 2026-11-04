@@ -4471,6 +4471,11 @@
         "custom": "Continue com definições personalizadas. Pode obter modelos ou adicioná-los manualmente.",
         "configure": "Configurar fornecedor",
         "keepCustom": "Continuar com definições personalizadas"
+      },
+      "zcode": {
+        "managed": "Faça a gestão da sua conta e do projeto da sua equipa no ZCode. Ao estabelecer a ligação, esta conta Cindy poderá usar essa sessão. Desligar não termina a sessão no ZCode.",
+        "connect": "Ligar ZCode",
+        "changeFailed": "Não foi possível ligar ao ZCode. Verifique se pode usar o projeto de equipa selecionado no ZCode e tente novamente."
       }
     },
     "experimental": {
@@ -13143,7 +13148,9 @@
       "remoteCompactEncryptedContent": "A compactação do contexto falhou porque o modelo não conseguiu ler o histórico encriptado. A continuação automática não foi concluída. Tenta novamente para tentar recuperar.",
       "contextOverflow": "Esta mensagem, por si só, excede a janela de contexto do modelo, pelo que o Cindy não a pode continuar numa nova sessão do Agent. Encurte a entrada ou remova um anexo grande e tente novamente.",
       "attachmentAccessDeniedTitle": "O Cindy não consegue ler o anexo de origem; a mensagem não foi enviada.",
-      "attachmentAccessDeniedRecovery": "Guarde uma cópia em Transferências ou noutra pasta acessível, remova o anexo original e adicione a cópia através do botão de anexos antes de voltar a enviar."
+      "attachmentAccessDeniedRecovery": "Guarde uma cópia em Transferências ou noutra pasta acessível, remova o anexo original e adicione a cópia através do botão de anexos antes de voltar a enviar.",
+      "zcodeScopeChanged": "A conta ou o projeto de equipa do ZCode mudou. Volte à conta e ao projeto usados originalmente nesta tarefa e tente novamente.",
+      "zcodeScopeUnavailable": "Não foi possível verificar a conta e o projeto de equipa deste histórico do ZCode. Inicie uma nova tarefa."
     },
     "backgroundActivity": {
       "status": "Subtarefas em segundo plano em execução, ainda a consumir utilização do modelo…",
@@ -17007,7 +17014,11 @@
       "remoteCodexNoSourceDescription": "\"{{device}}\" não tem nenhuma fonte de modelos ligada para o Codex, pelo que não é possível iniciar sessões a partir daqui. Abra {{appName}} nesse dispositivo, inicie sessão na OpenAI ou ligue outra fonte em Definições → Fornecedores e tente novamente.",
       "remoteCcNoSourceTitle": "Nenhuma fonte do Claude ligada no dispositivo remoto",
       "remoteCcNoSourceDescription": "\"{{device}}\" não tem nenhuma fonte de modelos Claude ligada, pelo que não é possível iniciar sessões a partir daqui. Abra {{appName}} nesse dispositivo, ligue uma fonte em Definições → Fornecedores e tente novamente.",
-      "gotIt": "Compreendido"
+      "gotIt": "Compreendido",
+      "zcodeTextOnly": "O ZCode só aceita texto de momento. Cole o conteúdo do ficheiro na sua mensagem.",
+      "zcodeUserPromptUnsupported": "O ZCode ainda não suporta as instruções personalizadas do Cindy. Apague-as em Personalização antes de usar o ZCode.",
+      "zcodeNotReadyTitle": "O ZCode ainda não está pronto",
+      "zcodeNotReadyDescription": "Instale o ZCode e inicie sessão com o Coding Plan da sua equipa. Depois, ligue o ZCode no Cindy em Definições → Fornecedores."
     },
     "fileTypes": {
       "fileEmpty": "O ficheiro está vazio",

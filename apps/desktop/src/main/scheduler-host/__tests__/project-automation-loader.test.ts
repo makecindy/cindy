@@ -20,7 +20,13 @@ const workingDir = 'C:\\project';
 // tests did not distinguish repository discovery from an explicit editor save.
 // A valid file, with or without a hook, must create nothing before confirmation.
 describe('project automation import approval', () => {
-  it.each([undefined, { command: 'node check.mjs' }])('requires the reviewed file snapshot before importing %j', async (preRunHook) => {
+  // PR #8022: native engine/model selections must survive actual save and reload,
+  // while the repository import still requires approval of the current snapshot.
+  it.each([
+    { preRunHook: undefined, native: false },
+    { preRunHook: { command: 'node check.mjs' }, native: false },
+    { preRunHook: undefined, native: true },
+  ])('requires the reviewed file snapshot before importing %j', async ({ preRunHook, native }) => {
     const dir = await fs.mkdtemp(path.join(tmpdir(), 'cindy-import-approval-'));
     try {
       const stored: Schedule[] = [];
@@ -50,7 +56,7 @@ describe('project automation import approval', () => {
       const file = path.join(dir, ...PROJECT_AUTOMATION_REL_SEGMENTS);
       await fs.mkdir(path.dirname(file), { recursive: true });
       const write = (config: ProjectScheduleConfig) => fs.writeFile(file, JSON.stringify({ version: 1, schedules: [config] }));
-      const config = projectConfig({ preRunHook });
+      const config = projectConfig({ preRunHook, ...(native ? { agentKind: 'zcode' as const, modelAgentKind: 'zcode' as const, model: 'zcode:native/model', providerId: 'zcode-native' } : {}) });
       await write(config);
       const first = await loader.reconcile(dir);
       expect(first.pendingImport?.schedules).toEqual([config]);
@@ -62,12 +68,14 @@ describe('project automation import approval', () => {
       expect(await loader.reconcile(dir, stale.pendingImport!.configHash)).toMatchObject({ inserted: 1 });
       expect(stored[0].prompt).toBe('changed while the confirmation is open');
       expect(stored[0].preRunHook).toEqual(preRunHook);
+      expect(stored[0].agentKind).toBe(config.agentKind ?? 'claude-code');
+      expect(stored[0].modelAgentKind).toBe(config.modelAgentKind);
       expect((await loader.reconcile(dir)).pendingImport).toBeUndefined();
       expect(create).toHaveBeenCalledTimes(1);
 
       // A direct editor save must not authorize a different file-defined change.
       await write({ ...config, prompt: 'unapproved repository update' });
-      await loader.upsertSchedule(dir, projectConfig({ id: 'mine', prompt: 'explicit save', preRunHook }));
+      await loader.upsertSchedule(dir, { ...config, id: 'mine', prompt: 'explicit save' });
       expect(stored).toHaveLength(2);
       expect(stored[0].prompt).toBe('changed while the confirmation is open');
       expect(update).not.toHaveBeenCalled();

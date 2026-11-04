@@ -185,8 +185,8 @@ export function PluginTaskPrefs({
             <ModelSelector
               localOnlyReason={showTaskRows ? 'plugin-task-local-route' : 'one-shot-local-request'}
               disabled={saving || disabled}
-              unifiedAgents={pickerAgents}
-              onUnifiedSelect={({ engine, providerId, modelId, effort, fast }) =>
+              unifiedAgents={(pickerAgents ?? ['claude-code', 'codex', 'pi']).filter((agent) => agent !== 'zcode')}
+              onUnifiedSelect={({ engine, providerId, modelId, effort, fast }) => engine === 'zcode' ? false :
                 save({
                   ...config,
                   agentKind: engine,

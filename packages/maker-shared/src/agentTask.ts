@@ -138,7 +138,7 @@ export function normalizeWorkflowProgressEntries(
 }
 
 export interface AgentTaskUpdate {
-  provider: 'claude-code' | 'codex' | 'pi';
+  provider: 'claude-code' | 'codex' | 'pi' | 'zcode';
   taskId: string;
   parentToolUseId?: string;
   status: AgentTaskStatus;
@@ -333,7 +333,7 @@ export const PI_SUBAGENT_TOOL_NAME = 'subagent';
  */
 export function normalizeAgentTaskUpdate(
   data: unknown,
-  source?: 'claude-code' | 'codex' | 'pi',
+  source?: 'claude-code' | 'codex' | 'pi' | 'zcode',
 ): AgentTaskUpdate | null {
   if (!data || typeof data !== 'object') return null;
   const raw = data as Record<string, unknown>;
@@ -430,7 +430,7 @@ export function isSameAgentTaskAlias(left: AgentTaskUpdate, right: AgentTaskUpda
 export function applyAgentTaskUpdateEvent(
   prevMap: ReadonlyMap<string, AgentTaskUpdate> | undefined,
   data: unknown,
-  source: 'claude-code' | 'codex' | 'pi' | undefined,
+  source: 'claude-code' | 'codex' | 'pi' | 'zcode' | undefined,
   nowIso: string,
 ): Map<string, AgentTaskUpdate> | null {
   const update = normalizeAgentTaskUpdate(data, source);
@@ -485,7 +485,7 @@ export function findAgentTaskUpdate(
  */
 export interface AgentTaskCardModel {
   status: AgentTaskStatus;
-  provider: 'claude-code' | 'codex' | 'pi';
+  provider: 'claude-code' | 'codex' | 'pi' | 'zcode';
   /** Best title, or null when nothing usable was found (caller supplies its own fallback). */
   title: string | null;
   description?: string;
@@ -588,7 +588,7 @@ export function buildAgentTaskCardModel(input: {
   // callers (AgentTaskCard / listSessionTasks). With no tool name (history
   // replay of a legacy update card) fall back to the provider heuristic below,
   // matching AgentTaskCard's claudeProtocolResult.
-  const providerFallback: 'claude-code' | 'codex' | 'pi' =
+  const providerFallback: 'claude-code' | 'codex' | 'pi' | 'zcode' =
     update?.provider
     ?? (toolName?.startsWith('collab:')
       ? 'codex'

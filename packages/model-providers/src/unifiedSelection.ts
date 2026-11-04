@@ -78,7 +78,7 @@ import type { AgentKind, CatalogModel, Effort, PiModelApi, Provider } from './ty
  * apps/desktop/src/renderer/lib/providerModels.ts)一致,也与 user-provider.ts 的
  * `AGENT_ORDER` 一致 —— 三处同序不是巧合:cc 是覆盖面最广的运行时,pi 是通用兜底。
  */
-export const UNIFIED_AGENT_PRIORITY: readonly AgentKind[] = ['claude-code', 'codex', 'pi'];
+export const UNIFIED_AGENT_PRIORITY: readonly AgentKind[] = ['claude-code', 'codex', 'pi', 'zcode'];
 
 /**
  * 已有协议或原生底座暂不可用时，保留历史兼容回落序。

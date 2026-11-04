@@ -6,7 +6,7 @@ import path from 'node:path';
 
 export const NATIVE_HISTORY_CHUNK_BYTES = 512 * 1024;
 const TTL_MS = 10 * 60_000;
-type Kind = 'claude-code' | 'codex' | 'pi';
+type Kind = 'claude-code' | 'codex' | 'pi' | 'zcode';
 export interface NativeHistoryManifest {
   kind: Kind;
   nativeId: string;

@@ -22,13 +22,14 @@ import { effectiveSourceIdForModel, movedCindyAutoSourceId, type ProviderView } 
 import { reconcileEffortForModel, type ProviderModelRow } from './providerModelSections';
 import type { RemoteSession } from './types';
 
-export type NewSessionAgentKind = 'claude-code' | 'codex' | 'pi';
+export type NewSessionAgentKind = 'claude-code' | 'codex' | 'pi' | 'zcode';
 export type NewSessionWorkspaceKind = 'project' | 'dialogue';
 
 export const NEW_SESSION_AGENT_OPTIONS: readonly { kind: NewSessionAgentKind; label: string }[] = [
   { kind: 'claude-code', label: 'Claude' },
   { kind: 'codex', label: 'Codex' },
   { kind: 'pi', label: 'Pi' },
+  { kind: 'zcode', label: 'ZCode' },
 ];
 
 /**
@@ -179,7 +180,7 @@ export function parseNewSessionDeviceOptions(
 }
 
 export function normalizeNewSessionAgentKind(value: unknown): NewSessionAgentKind | null {
-  return value === 'claude-code' || value === 'codex' || value === 'pi' ? value : null;
+  return value === 'claude-code' || value === 'codex' || value === 'pi' || value === 'zcode' ? value : null;
 }
 
 export function pickNewSessionDefaultDevice(input: {
@@ -213,8 +214,8 @@ export const DEFAULT_NEW_SESSION_DRAFT: NewSessionDraft = {
 };
 
 /** 新建交互式会话的权限种子默认；三个 agent 都保留 Auto-review。 */
-export function defaultPermissionModeForNewSessionAgent(_agentKind: NewSessionAgentKind): string {
-  return 'auto';
+export function defaultPermissionModeForNewSessionAgent(agentKind: NewSessionAgentKind): string {
+  return agentKind === 'zcode' ? 'ask' : 'auto';
 }
 
 export function withAgentDefaults(
@@ -229,7 +230,7 @@ export function withAgentDefaults(
     permissionMode: defaultPermissionModeForNewSessionAgent(agentKind),
     // 换 agent → 来源选择作废(各 agent 的供应商集不同),回到默认路由由被控端定。
     providerId: null,
-    fastMode: agentKind === 'claude-code' ? false : draft.fastMode,
+    fastMode: agentKind === 'claude-code' || agentKind === 'zcode' ? false : draft.fastMode,
   };
 }
 
@@ -266,7 +267,7 @@ export function summarizeNewSessionDraft(
   content: NewSessionDraftContentState = {},
 ): NewSessionDraftSummary {
   const validationMessage = validateNewSessionDraft(draft, content);
-  const agentLabel = draft.agentKind === 'codex' ? 'Codex' : draft.agentKind === 'pi' ? 'Pi' : 'Claude';
+  const agentLabel = draft.agentKind === 'codex' ? 'Codex' : draft.agentKind === 'pi' ? 'Pi' : draft.agentKind === 'zcode' ? 'ZCode' : 'Claude';
   const model = draft.model.trim() || i18n.t('session.new.noModelSelected');
   const effort = draft.effort.trim();
   const workspaceLabel = draft.workspaceKind === 'dialogue'
@@ -428,7 +429,7 @@ type NewSessionDefaultModel = {
   id: string;
   efforts: readonly string[];
   defaultEffort: string | null;
-  newSessionDefault?: readonly ('claude-code' | 'codex' | 'pi')[];
+  newSessionDefault?: readonly ('claude-code' | 'codex' | 'pi' | 'zcode')[];
 };
 
 function isNewSessionDefaultForAgent(

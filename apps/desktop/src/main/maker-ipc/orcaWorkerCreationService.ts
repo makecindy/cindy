@@ -133,7 +133,10 @@ export interface OrcaWorkerProviderRoutingContext {
   remoteCodexModels?: OrcaWorkerModelCapabilities[];
   /** 远端目录的 worker 默认值(缺省时沿用 SSH Codex 的默认规则)。 */
   remoteWorkerDefaults?: (lead: OrcaLeadSessionSnapshot, agent: AgentKind) => OrcaWorkerDefaultsSnapshot;
-  availability: Record<AgentKind, OrcaWorkerProviderSnapshot[]>;
+  /** Also used by ordinary Session admission. A native route is optional here;
+   * worker creation still rejects it before allocating resources. */
+  availability: Record<Exclude<AgentKind, 'zcode'>, OrcaWorkerProviderSnapshot[]>
+    & Partial<Record<'zcode', OrcaWorkerProviderSnapshot[]>>;
   resolveDefaultProviderIdForModel(agent: AgentKind, model: string): string | null;
 }
 
@@ -670,7 +673,7 @@ export function budgetModelRequiresApiKeyMessage(model: string): string {
 
 /** agent 的人类可读名,用于 preflight 失败信息。 */
 function agentDisplayName(agent: AgentKind): string {
-  return agent === 'codex' ? 'Codex' : agent === 'pi' ? 'Pi' : 'Claude Code';
+  return agent === 'codex' ? 'Codex' : agent === 'pi' ? 'Pi' : agent === 'zcode' ? 'ZCode' : 'Claude Code';
 }
 
 /**
@@ -689,7 +692,7 @@ function agentConsumesExplicitFast(agent: AgentKind): boolean {
  */
 export function buildNoProviderMessage(
   agent: AgentKind,
-  availability: Record<AgentKind, OrcaWorkerProviderSnapshot[]>,
+  availability: OrcaWorkerProviderRoutingContext['availability'],
 ): string {
   const base = `${agentDisplayName(agent)} 当前没有可用的模型供应商(provider)。请在「设置 → 模型供应商」连接一个支持 ${agentDisplayName(agent)} 的供应商后重试`;
   const others = (['claude-code', 'codex', 'pi'] as AgentKind[]).filter(
@@ -697,7 +700,7 @@ export function buildNoProviderMessage(
   );
   if (others.length === 0) return `${base}。`;
   const suggestion = others
-    .map((a) => `${agentDisplayName(a)}(已连接:${availability[a].map((provider) => provider.name).join(' / ')})`)
+    .map((a) => `${agentDisplayName(a)}(已连接:${(availability[a] ?? []).map((provider) => provider.name).join(' / ')})`)
     .join('、');
   return `${base},或改用已连接供应商的 agent 创建 worker(可用:${suggestion})。`;
 }
@@ -1009,6 +1012,7 @@ export function createOrcaWorkerCreationService(deps: OrcaWorkerCreationDeps): O
   }
 
   async function createWorker(params: OrcaWorkerCreateRequest, assertCurrent?: () => Promise<void>): Promise<OrcaWorkerCreationResult> {
+    if (params.agent === 'zcode') return { ok: false, errorCode: 'UNSUPPORTED_CAPABILITY', message: 'ZCode does not support Orca workers' };
     const team = await deps.getActiveTeamByLead(params.leadSessionId);
     if (!team) {
       return { ok: false, errorCode: 'NOT_FOUND', message: 'no active team for this lead' };
@@ -1049,6 +1053,7 @@ export function createOrcaWorkerCreationService(deps: OrcaWorkerCreationDeps): O
 
   async function createWorkerInTeam(request: Omit<OrcaWorkerCreateInTeamParams, 'agent'> & OrcaWorkerCreateRequest,
     assertCurrent?: () => Promise<void>, onCreated?: (guard: () => Promise<void>) => void): Promise<OrcaWorkerCreationResult> {
+    if (request.agent === 'zcode') return { ok: false, errorCode: 'UNSUPPORTED_CAPABILITY', message: 'ZCode does not support Orca workers' };
     if (!request.useCreationPrefs && request.agent) {
       return createResolvedWorkerInTeam({ ...request, agent: request.agent }, assertCurrent, onCreated);
     }

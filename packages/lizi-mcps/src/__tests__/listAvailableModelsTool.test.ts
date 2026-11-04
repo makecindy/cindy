@@ -11,6 +11,18 @@ function parse(result: XdtHelperToolResult) {
 }
 
 describe('list_available_models tool', () => {
+  it('exposes the native ZCode model and its provider when explicitly queried', async () => {
+    const listAvailableModels = vi.fn(async () => ({ ok: true as const, zcode: [{
+      id: 'native-example', label: 'Example Team Model',
+      providers: [{ id: 'zcode-native', name: 'ZCode' }], defaultProviderId: 'zcode-native',
+    }] }));
+    const registry = new XdtHelperToolRegistry();
+    registerListAvailableModelsTool(registry, { listAvailableModels });
+    const result = parse(await registry.call('list_available_models', { agent: 'zcode', agent_device_id: 'local' }));
+    expect(result.zcode).toEqual([{ id: 'native-example', label: 'Example Team Model', tier: 'standard',
+      providers: [{ provider_id: 'zcode-native', provider_name: 'ZCode' }], default_provider_id: 'zcode-native' }]);
+    expect(listAvailableModels).toHaveBeenCalledWith({ agent: 'zcode', agentDeviceId: null });
+  });
   // Unit: choosing a remote Worker must discover from its work host rather
   // than the Lead's model computer; unsupported peers retain their error code.
   it('forwards independent work and model locations and preserves version errors', async () => {

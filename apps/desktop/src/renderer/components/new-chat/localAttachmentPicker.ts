@@ -17,6 +17,7 @@ export function canUseLocalAttachmentPicker({
   remoteHostId,
   deviceLinkDeviceId,
 }: LocalAttachmentPickerContext): boolean {
+  if (runtimeAgentKind === 'zcode') return false;
   if (remoteHostId) return false;
   if (deviceLinkDeviceId) return true;
   if (sessionId && !runtimeAgentKind) return false;

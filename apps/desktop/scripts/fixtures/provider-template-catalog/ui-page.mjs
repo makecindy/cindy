@@ -14,6 +14,7 @@ export default {
     assert.deepEqual(await page.evaluate(() => window.templateIds), presets.map(p => p.id));
     const item = cases.find(c => c.id === ui.case) ?? cases[0];
     const retained = item.id === 'wizard-deepseek-retained';
+    const declaredInventory = ['moonshot-kimi-cn', 'moonshot-kimi-global', 'agnes'].includes(item.providerId);
     const preset = retained ? retainedPreset : presets.find(p => p.id === item.providerId);
     if (item.kind === 'address') {
       await page.getByPlaceholder(await ui.t('settings.providers.custom.fields.namePlaceholder')).fill(`Review ${item.providerId}`);
@@ -54,6 +55,17 @@ export default {
     if (retained) {
       selectedModelId = 'deepseek-v4-flash-vision-exp';
       await page.getByText('DeepSeek V4 Flash Vision Exp', { exact: true }).click();
+    } else if (item.kind === 'wizard' && declaredInventory) {
+      // These shared discovery endpoints cannot prove cross-protocol ownership
+      // of an arbitrary ID. Exercise a declared common inventory member instead.
+      const runtimes = Object.values(preset.runtimes);
+      const model = runtimes[0].models.find(candidate =>
+        runtimes.every(runtime => runtime.models.some(row => row.id === candidate.id))
+        && runtimes.some(runtime => runtime.models.some(row => row.id === candidate.id && row.defaultEnabled !== false)));
+      assert.ok(model, 'strict template has a default-on member shared by its runtimes');
+      selectedModelId = model.id;
+      const row = page.getByText(model.name, { exact: true });
+      await row.click(); await row.click(); // Toggle through the real picker and restore the selected member.
     } else if (item.kind === 'wizard' && preset.id === 'opencode-go') {
       // Go retains its curated plan members; arbitrary discovered IDs are not plan models.
       const model = preset.runtimes.pi.models.find(m => Object.values(preset.runtimes).every(rt => rt.models.some(row => row.id === m.id)));
@@ -78,6 +90,12 @@ export default {
         if (handed.wireProtocol) assert.equal(runtime.wireProtocol, handed.wireProtocol);
       }
       assert.ok(runtime.models.some(m => m.id === selectedModelId), `missing selected model ${agent}`);
+      if (item.kind === 'wizard' && declaredInventory) {
+        assert.notEqual(runtime.models.find(model => model.id === selectedModelId).defaultEnabled, false, `declared selected model is disabled in ${agent}`);
+      }
+      if (item.kind === 'wizard' && declaredInventory && (preset.id === 'agnes' || agent !== 'claude-code')) {
+        assert.ok(!runtime.models.some(model => model.id === 'ui-catalog-probe'), `undeclared discovery ID leaked into ${agent}`);
+      }
     }
     assert.ok(Object.keys(saved.runtimes).length);
   },

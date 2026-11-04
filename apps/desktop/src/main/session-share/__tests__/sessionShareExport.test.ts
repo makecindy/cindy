@@ -199,6 +199,16 @@ describe('exportSessionShare', () => {
     rmSync(tmpRoot, { recursive: true, force: true });
   });
 
+  // PR #8022: a native ZCode history needs its owner/project receipt and cannot
+  // use the Claude/Codex/Pi transcript migration format. Reject before writing.
+  it('rejects ZCode history before creating a share file', async () => {
+    sessionRowRef.row = { ...baseSession(), agentKind: 'zcode' };
+    const targetPath = path.join(tmpRoot, 'unsupported-zcode.xdtshare');
+    await expect(exportSessionShare({ sessionId: 'xdt-session-1', targetPath }))
+      .rejects.toMatchObject({ code: 'PRECONDITION_FAILED' });
+    await expect(fsp.stat(targetPath)).rejects.toMatchObject({ code: 'ENOENT' });
+  });
+
   it('cc full export: transcripts + media + manifest roundtrip (encrypted)', async () => {
     const target = path.join(tmpRoot, 'out-full.xdtshare');
     const outcome = await exportSessionShare({

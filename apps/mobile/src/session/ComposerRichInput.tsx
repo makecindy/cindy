@@ -58,9 +58,10 @@ export interface ComposerRichInputProps {
   onChangeDocument(document: ComposerDocument): void;
   onFocus?: () => void;
   onHeightChange?: (height: number) => void;
-  onPasteImages?: (uris: string[]) => void;
-  onPasteImagesLoadFailed?: () => void;
-  onPasteImagesLoading?: (count: number) => void;
+  /** iOS 写盘可乱序完成；可选批次 id 将 loading 与最终回调关联。 */
+  onPasteImages?: (uris: string[], batchId?: string) => void;
+  onPasteImagesLoadFailed?: (batchId?: string) => void;
+  onPasteImagesLoading?: (count: number, batchId?: string) => void;
   opticalPadding?: boolean;
   placeholder: string;
   resolveSessionLinkLabel?: (href: string) => Promise<ResolvedSessionLinkSemantic | null>;

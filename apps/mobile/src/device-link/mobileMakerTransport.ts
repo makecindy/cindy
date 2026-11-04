@@ -105,7 +105,7 @@ export interface SendOptions {
 }
 
 export interface CreateSessionOptions {
-  agentKind: "claude-code" | "codex" | "pi";
+  agentKind: "claude-code" | "codex" | "pi" | "zcode";
   /**
    * 控制端预生成的 sessionId(新建会话乐观管线用):被控端 readCreateSessionOpts
    * 自手机远控首版(2026-06-21)起透传 body.id,maker-core createSession 对
@@ -137,7 +137,7 @@ export interface CreateSessionResult {
   usedProjectContext?: boolean;
 }
 
-export type MobileAgentKind = "claude-code" | "codex" | "pi";
+export type MobileAgentKind = "claude-code" | "codex" | "pi" | "zcode";
 
 /**
  * 订阅家族 → 被控端余量快照 channel。ChatGPT 走 Codex 自有控制面

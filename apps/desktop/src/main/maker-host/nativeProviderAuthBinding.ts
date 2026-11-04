@@ -30,8 +30,11 @@ const NATIVE_PROVIDER_IDS = [
   'anthropic',
   'openai',
   'xai',
+  'zcode-native',
 ] as const satisfies readonly NativeProviderId[];
 type BindingFile = Partial<Record<NativeProviderId, string>> & {
+  /** Per-provider grant identity; unrelated account writes must not retire a ZCode session. */
+  authorizationEpochs?: Partial<Record<NativeProviderId, string>>;
   legacyClaimOwner?: string;
   legacyClaimToken?: string;
   /**
@@ -496,6 +499,14 @@ export function captureNativeProviderAuthorizationGeneration(provider: NativePro
   }
 }
 
+/** Stable for one explicit grant; revocation/reconnection replaces it. No credential bytes are hashed. */
+export function captureNativeProviderAuthorizationEpoch(provider: NativeProviderId): string | null {
+  if (!isNativeProviderAuthBound(provider)) return null;
+  const read = readBindingsOrFail();
+  const epoch = read.ok ? read.bindings.authorizationEpochs?.[provider] : undefined;
+  return typeof epoch === 'string' && /^[a-f0-9-]{36}$/.test(epoch) ? epoch : null;
+}
+
 /** Whether an explicit durable revocation currently suppresses this provider credential. */
 export function isNativeProviderAuthRevoked(provider: NativeProviderId): boolean {
   const read = readBindingsOrFail();
@@ -539,6 +550,7 @@ export function bindNativeProviderAuth(
       // 记下「这是用户自己在 Cindy 里授权的」——继承类文案据此不再对它成立。
       writeBindings({
         ...bindings,
+        ...(provider === 'zcode-native' ? { authorizationEpochs: { ...bindings.authorizationEpochs, [provider]: randomUUID() } } : {}),
         selfAuthorized: { ...bindings.selfAuthorized, [provider]: opts?.sharedSystem ? undefined : owner },
         sources: {
           ...bindings.sources,
@@ -575,6 +587,7 @@ export function bindNativeProviderAuth(
     }
     writeBindings({
       ...salvaged,
+      ...(provider === 'zcode-native' ? { authorizationEpochs: { ...salvaged.authorizationEpochs, [provider]: randomUUID() } } : {}),
       revoked: suppressed,
       selfAuthorized: { ...salvaged.selfAuthorized, [provider]: opts?.sharedSystem ? undefined : owner },
       sources: {
@@ -797,6 +810,11 @@ export function unbindNativeProviderAuth(
     )
       return;
     delete bindings[provider];
+    if (bindings.authorizationEpochs?.[provider]) {
+      const epochs = { ...bindings.authorizationEpochs };
+      delete epochs[provider];
+      bindings.authorizationEpochs = epochs;
+    }
     // 授权来路随绑定一起作废:登出之后这份凭证若还在本机,它对 Cindy 就重新是「外部已有的
     // 凭证」，继承语义（及其文案）重新成立。
     if (hadSelfAuthorized) {

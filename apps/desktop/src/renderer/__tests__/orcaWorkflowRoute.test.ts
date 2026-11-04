@@ -194,7 +194,7 @@ describe('OrcaWorkflowRoute source invariants', () => {
     expect(sessionViewSource).toContain('onDisabledActivate: collabPolicy.unavailable');
     expect(sessionViewSource).toContain('void collabPolicy.refresh().then((policy) => {');
     expect(sessionViewSource).toContain('if (policy.enabled && !policy.unavailable) {');
-    expect(chatInputSource).toContain('if (collaboration) {');
+    expect(chatInputSource).toContain("if (collaboration && currentModelAgentKind !== 'zcode') {");
     expect(chatInputSource).toContain('!!collaboration.onDisabledActivate');
   });
 
@@ -293,7 +293,7 @@ describe('OrcaWorkflowRoute source invariants', () => {
     expect(sessionViewSource).toContain('label: createWorkerLabel(form.role, [])');
     expect(sessionViewSource).toContain('model: form.model');
     expect(sessionViewSource).toContain('delegateTask: form.initialTask || undefined');
-    expect(chatInputSource).toContain('if (collaboration) {');
+    expect(chatInputSource).toContain("if (collaboration && currentModelAgentKind !== 'zcode') {");
     expect(chatInputSource).toContain('collaboration.onOpenDetails();');
   });
 

@@ -6,11 +6,52 @@ import { checkModelRoute } from '../model-route-guard.js';
 import { createProviderService, type ConnectionReadOptions } from '../provider-service.js';
 import { cindyAiAccountName, cindyAiAccountLogoKind } from '../../../shared/cindyAiPresentation.js';
 import type { XdOrgIdentity } from '../../../shared/xdOrg.js';
+import { connectNativeAgentForOwner } from '../native-agent-state.js';
 
 /** 注入内置 bundled 目录作为「当前生效目录」(桌面端真实注入的是 active-catalog 的 getActiveCatalog)。 */
 const bundledCatalog = () => BUNDLED_CATALOG;
 
 describe('createProviderService', () => {
+  it('does not authorize a changed owner after pending discovery and rejects unsuccessful native connections', async () => {
+    let current = true;
+    const authorize = vi.fn();
+    const refresh = vi.fn(async () => ({ connected: false, errorReason: 'ZCODE_TEAM_UNAVAILABLE' }));
+    const assertCurrent = () => { if (!current) throw new Error('owner changed'); };
+    await expect(connectNativeAgentForOwner({ assertCurrent, authorize, refresh,
+      waitForDiscovery: async () => { current = false; },
+    })).rejects.toThrow('owner changed');
+    expect(authorize).not.toHaveBeenCalled();
+    expect(refresh).not.toHaveBeenCalled();
+    current = true;
+    await expect(connectNativeAgentForOwner({ assertCurrent, authorize, refresh,
+      waitForDiscovery: async () => {},
+    })).rejects.toThrow('ZCODE_TEAM_UNAVAILABLE');
+    refresh.mockResolvedValue({ connected: true, errorReason: '' });
+    await expect(connectNativeAgentForOwner({ assertCurrent, authorize, refresh,
+      waitForDiscovery: async () => {},
+    })).resolves.toBeUndefined();
+  });
+  // Native-runtime contract: a discovered CLI is not proof of account access.
+  // Existing HTTP-provider cases cannot exercise a provider with no HTTP route.
+  it('offers native models only while the runtime reports a connected account', async () => {
+    let connected = false;
+    const svc = createProviderService({
+      getCatalog: () => ({ ...BUNDLED_CATALOG, providers: [{
+        id: 'zcode-native', name: 'ZCode', source: 'builtin', nativeAgent: 'zcode',
+        agents: ['zcode'], auth: { method: 'managed' }, routing: {},
+        models: { zcode: [{ id: 'native-model', name: 'Native model', mode: 'chat',
+          contextWindow: 128000, efforts: [], defaultEffort: null }] },
+      }] }),
+      connection: { xd: () => false, anthropic: () => false, openai: () => false, xai: () => false },
+      nativeAgentConnected: () => connected,
+    });
+    expect(connectedProvidersForAgent(await svc.listProviders(), 'zcode')).toEqual([]);
+    connected = true;
+    const available = connectedProvidersForAgent(await svc.listProviders(), 'zcode');
+    expect(available.map(provider => provider.models.zcode?.[0]?.id)).toEqual(['native-model']);
+    connected = false;
+    expect(connectedProvidersForAgent(await svc.listProviders(), 'zcode')).toEqual([]);
+  });
   it('projects the live membership name without changing routes, models or custom names', async () => {
     let user: XdOrgIdentity | null = { membershipKind: 'personal', orgName: null, orgSlug: null };
     const labels: Record<string, string> = {

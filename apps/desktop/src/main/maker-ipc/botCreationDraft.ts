@@ -89,7 +89,7 @@ export async function generateBotCreationDraft(
     await waitForModelVisibilityMirror();
     const providers = await getDesktopProviderService().listProviders({ allowSideEffects: false });
     assertOwner();
-    const assertEnabled = (selection: { agentKind: 'claude-code' | 'codex' | 'pi'; providerId: string; model: string }) => {
+    const assertEnabled = (selection: { agentKind: 'claude-code' | 'codex' | 'pi' | 'zcode'; providerId: string; model: string }) => {
       const provider = providers.find(p => p.id === selection.providerId);
       const model = provider?.models[selection.agentKind]?.find(m => m.id === selection.model);
       if (!model || !isModelVisible(getModelVisibilityOverride(selection.agentKind, selection.providerId, selection.model), model.defaultEnabled))

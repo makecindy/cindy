@@ -16,6 +16,14 @@ import {
 import type { MobileAgentCapabilities } from '@/session/agentCapabilities';
 
 describe('mobile session Agent switch contract', () => {
+  // The fourth engine must survive persisted/remote task projection. Earlier
+  // cases covered only Claude, Codex and Pi. Unit tier, no device or account.
+  it('preserves a ZCode task identity and requires an explicit switching capability', () => {
+    expect(sessionAgentKind({ agentKind: 'zcode' })).toBe('zcode');
+    expect(mobileAgentLabel('zcode')).toBe('ZCode');
+    expect(mobileAgentVendor('zcode')).toBe('zcode');
+    expect(supportsMobileSessionAgentSwitch({ remoteHostId: null }, null)).toBe(false);
+  });
   it('normalizes only the public pending intent fields', () => {
     expect(normalizeSessionAgentSwitchIntent({
       targetAgentKind: 'codex',

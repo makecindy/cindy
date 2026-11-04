@@ -62,7 +62,7 @@ export interface GhostErrandRunnerDeps {
     ghostId: string;
     shouldContinue?: () => boolean;
     title: string | null;
-    agentKind?: 'cc' | 'codex' | 'pi';
+    agentKind?: 'cc' | 'codex' | 'pi' | 'zcode';
     model?: string;
     effort?: string;
     fastMode?: boolean | 'ultrafast';

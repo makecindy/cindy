@@ -4375,6 +4375,11 @@
         "custom": "續自訂之設，可取模型清單或親增之。",
         "configure": "往設之",
         "keepCustom": "續自訂"
+      },
+      "zcode": {
+        "managed": "帳號與團隊專案請在 ZCode 中管理。連接後，此 Cindy 帳號即可沿用該登入；斷開不會登出 ZCode。",
+        "connect": "連接 ZCode",
+        "changeFailed": "未能連接 ZCode。請確認所選團隊專案在 ZCode 中可用，再試。"
       }
     },
     "experimental": {
@@ -12999,7 +13004,9 @@
       "remoteCompactEncryptedContent": "整理上下文未成：模型不能讀舊事中之加密內容。自動接續未竟，可再試以復之。",
       "contextOverflow": "此訊本身已逾模型上下文之限，不能於今之 Agent 中自動換窗續行。請縮短所輸，或去過大附件，再試。",
       "attachmentAccessDeniedTitle": "Cindy 不能讀來源附件，訊未遣出。",
-      "attachmentAccessDeniedRecovery": "請將卷另存至「下載」或他可存取之卷匣，移除原附件，再以附件鈕加入副本後遣之。"
+      "attachmentAccessDeniedRecovery": "請將卷另存至「下載」或他可存取之卷匣，移除原附件，再以附件鈕加入副本後遣之。",
+      "zcodeScopeChanged": "ZCode 帳號或團隊專案已變更。請切回此差事原用的帳號與專案，再試。",
+      "zcodeScopeUnavailable": "此份 ZCode 歷史所屬帳號與團隊專案未能核實。請另開差事。"
     },
     "backgroundActivity": {
       "status": "後臺子差事方行，模型耗用未止…",
@@ -16780,7 +16787,11 @@
       "remoteCodexNoSourceDescription": "遠端裝置「{{device}}」尚未連 Codex 可用之模型來源，無從於此新開並行差事。請於該裝置開 {{appName}}，於「規制 → 模型供方」登入 OpenAI 或連他源，再試之。",
       "remoteCcNoSourceTitle": "遠方之機 Claude 暫無可用之源",
       "remoteCcNoSourceDescription": "遠端裝置「{{device}}」尚未連可用之 Claude 模型來源，無從於此新開並行差事。請於該裝置開 {{appName}}，於「規制 → 模型供方」連源，再試之。",
-      "gotIt": "知矣"
+      "gotIt": "知矣",
+      "zcodeTextOnly": "ZCode 目前僅收文字。請將卷中內容貼入訊中。",
+      "zcodeUserPromptUnsupported": "ZCode 尚不支援 Cindy 自訂指令。使用前，請先於「個性」清除此等指令。",
+      "zcodeNotReadyTitle": "ZCode 尚未就緒",
+      "zcodeNotReadyDescription": "請先安裝 ZCode，登入團隊 Coding Plan，再於 Cindy「規制 → 模型供方」連接 ZCode。"
     },
     "fileTypes": {
       "fileEmpty": "此卷空空",

@@ -114,6 +114,7 @@ describe('runtime harness selection', () => {
       },
       readConfiguredCandidate: async (callerSessionId, current, childSessionId) => {
         expect([callerSessionId, childSessionId]).toEqual(['bot-main', 's1']);
+        if (current.agentKind === 'zcode') return { candidate: null };
         const route = nextBotModelRoute([
           { harness: 'claude', model: 'claude-fable-5', providerId: 'old-provider', effort: 'high', fastMode: false },
           { harness: 'codex', model: 'gpt-6-astra', providerId: 'openai', effort: '', fastMode: false },

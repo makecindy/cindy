@@ -1,4 +1,5 @@
 {
+  "zcodeTextOnly": "ZCode currently accepts text only. Paste the file contents into your message.",
   "githubPrs": {
     "title": "Manage PR Links",
     "hint": "Up to 3 in the header; pinned PRs appear first",

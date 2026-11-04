@@ -1486,7 +1486,7 @@ describe('Shared create project picker', () => {
     // The single add entry grants write access only through the local Main picker;
     // legacy read-only directories retain their independent removal callback.
     expect(chatInputSource).toMatch(
-      /if \(onWritableDirsChange && writableGrantScope && !remoteHostId && deviceLinkDeviceId === null\)/,
+      /if \(currentModelAgentKind !== 'zcode' && onWritableDirsChange && writableGrantScope && !remoteHostId && deviceLinkDeviceId === null\)/,
     );
     const directoryAction = chatInputSource.slice(
       chatInputSource.indexOf("id: 'add-extra-dir'"),
@@ -1506,10 +1506,11 @@ describe('Shared create project picker', () => {
     expect(directoryHandlers.match(/onChange: onWritableDirsChange/g)).toHaveLength(2);
     expect(chatInputSource).not.toContain("id: 'add-writable-dir'");
     expect(chatInputSource).toMatch(
-      /hasReferenceDirs=\{\s*!settingsLocked\s*&&\s*\(onExtraDirsChange !== undefined \|\| onWritableDirsChange !== undefined\)\s*\}/,
+      /hasReferenceDirs=\{\s*!settingsLocked\s*&&\s*vendorKey !== 'zcode'\s*&&\s*\(onExtraDirsChange !== undefined \|\| onWritableDirsChange !== undefined\)\s*\}/,
     );
   });
 
+  // ZCode's text-only boundary must also exclude this local-grant entry.
   // Writable-directory selection uses the controller's native picker. SSH and device-link
   // workspaces both execute on another filesystem, so a local absolute path must never be
   // offered as a remote writable root. Existing remote grants remain visible/removable when
@@ -1534,7 +1535,7 @@ describe('Shared create project picker', () => {
     expect(chatInputSource).toMatch(/&&\s*writableGrantScope/);
     expect(chatInputSource).toMatch(/&&\s*!remoteHostId/);
     expect(chatInputSource).toMatch(/&&\s*deviceLinkDeviceId === null/);
-    expect(chatInputSource).toContain('!settingsLocked && onWritableDirsChange');
+    expect(chatInputSource).toContain("!settingsLocked && vendorKey !== 'zcode' && onWritableDirsChange");
     expect(chatInputSource).toContain('void onWritableDirRemove(path);');
     expect(chatInputSource).toContain('(writableDirs ?? []).filter((item) => item !== path)');
     expect(ccAgentSessionViewSource).toContain(

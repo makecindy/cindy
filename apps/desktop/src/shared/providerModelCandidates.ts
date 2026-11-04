@@ -45,6 +45,7 @@ export function presetModelCandidate(
   sourceRoute = runtimeRoute,
   requireDeclaration = false,
 ): ProviderRuntimeModelConfig | undefined {
+  if (agent === 'zcode') return undefined;
   if (preset.runtimes[agent]?.models.some(candidate => candidate.id === model.id)) return model;
   const matches = registry?.schemaVersion === 6 ? registry.models.flatMap(entry => entry.routes
     .filter(route => route.providerId === preset.id && route.modelId === model.id)

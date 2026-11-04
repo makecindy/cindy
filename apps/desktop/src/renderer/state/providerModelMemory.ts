@@ -91,7 +91,7 @@ function agentOfSlotKey(key: string): AgentKind | undefined {
   const sep = key.indexOf(':');
   if (sep <= 0) return undefined;
   const agent = key.slice(0, sep);
-  return agent === 'claude-code' || agent === 'codex' || agent === 'pi' ? agent : undefined;
+  return agent === 'claude-code' || agent === 'codex' || agent === 'pi' || agent === 'zcode' ? agent : undefined;
 }
 
 /**

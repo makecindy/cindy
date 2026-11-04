@@ -1,6 +1,14 @@
 import { mountPage } from '../../ui-page/harness';
 import { MailHtmlPreview } from '../../../src/renderer/components/chat/MailHtmlPreview';
 
+// Browser-generated ResizeObserver ErrorEvents are not reliably forwarded as
+// Playwright pageerror after readiness. Keep a page-owned regression receipt.
+const mailResizeObserverErrors: string[] = [];
+Object.assign(window, { __mailResizeObserverErrors: mailResizeObserverErrors });
+window.addEventListener('error', event => {
+  if (event.message.includes('ResizeObserver loop')) mailResizeObserverErrors.push(event.message);
+});
+
 // Structural reproduction of an indented HTML ticket, without private mail data.
 const ticket = `<html><head><style>
 body{margin:0;background:white;font-family:Arial,sans-serif}

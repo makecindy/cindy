@@ -36,7 +36,7 @@ const log = createLogger('provisional-draft-task');
 /** 建任务的参数：与新建页发送时传给 createSession 的同一组字段。 */
 export interface ProvisionalDraftCreateArgs {
   id: string;
-  agentKind: 'cc' | 'codex' | 'pi';
+  agentKind: 'cc' | 'codex' | 'pi' | 'zcode';
   model: string;
   effort: string;
   permissionMode: string;

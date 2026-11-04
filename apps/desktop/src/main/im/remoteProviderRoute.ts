@@ -14,11 +14,12 @@ export async function readImRemoteAutomaticDefaults<T extends ImDefaultSettings>
     providerId?: string | null;
   },
 ): Promise<T | null> {
+  if (options.agentKind === 'zcode') return null;
   const { remoteBackgroundInvoke } = await import('../device-link');
   const providers = await readDeviceProviderViews(remoteBackgroundInvoke, options.agentDeviceId, {
     visibleOnly: true,
   });
-  const resolved = resolveAutomaticImSettings(settings, providers, options);
+  const resolved = resolveAutomaticImSettings(settings, providers, { ...options, agentKind: options.agentKind });
   if (!resolved) return null;
   return {
     ...resolved,
@@ -37,6 +38,7 @@ export async function readImRemotePermissionModes(
   agentDeviceId: string,
   agentKind: AgentKind,
 ): Promise<string[]> {
+  if (agentKind === 'zcode') throw new Error('ZCode does not support remote IM defaults');
   const { remoteBackgroundInvoke } = await import('../device-link');
   const response = await remoteBackgroundInvoke(agentDeviceId, 'maker:get-capabilities', [
     agentKind,

@@ -77,17 +77,18 @@ describe('remote catalog refresh scheduling', () => {
     vi.stubGlobal('window', { electronAPI: { deviceLink: { invoke } } });
     const refresh = refreshRemoteCatalogSnapshot;
     const first = refresh('old');
-    await vi.waitFor(() => expect(invoke).toHaveBeenCalledTimes(4));
+    await vi.waitFor(() => expect(invoke).toHaveBeenCalledTimes(5));
     const obsolete = refresh('old');
     await refresh('healthy');
-    expect(invoke).toHaveBeenCalledTimes(8);
+    expect(invoke).toHaveBeenCalledTimes(10);
+    expect(capabilities.getCachedCapabilities('zcode', 'healthy')?.availableModels).toEqual([]);
     providers.evictDeviceProviders('old');
     hold = false;
     await refresh('old');
-    expect(invoke).toHaveBeenCalledTimes(12);
+    expect(invoke).toHaveBeenCalledTimes(15);
     old.resolve();
     await Promise.all([first, obsolete]);
-    expect(invoke).toHaveBeenCalledTimes(12);
+    expect(invoke).toHaveBeenCalledTimes(15);
   });
 
   it.each([false, true])(
@@ -119,17 +120,17 @@ describe('remote catalog refresh scheduling', () => {
       const events = vi.fn();
       capabilities.subscribeDeviceCapabilities('test', 'codex', events);
       const initial = refreshRemoteCatalogSnapshot('test');
-      await vi.waitFor(() => expect(invoke).toHaveBeenCalledTimes(4));
+      await vi.waitFor(() => expect(invoke).toHaveBeenCalledTimes(5));
       revision = 'new';
       const burst = Array.from({ length: 20 }, () => refreshRemoteCatalogSnapshot('test'));
-      expect(invoke).toHaveBeenCalledTimes(4);
+      expect(invoke).toHaveBeenCalledTimes(5);
       if (disconnect) {
         providers.evictDeviceProviders('test');
         capabilities.evictDeviceCapabilities('test');
       }
       first.resolve();
       await Promise.all([initial, ...burst]);
-      expect(invoke).toHaveBeenCalledTimes(disconnect ? 4 : 8);
+      expect(invoke).toHaveBeenCalledTimes(disconnect ? 5 : 10);
       const ready = events.mock.calls
         .map(([event]) => event)
         .filter((event) => event.status === 'ready');
@@ -137,7 +138,7 @@ describe('remote catalog refresh scheduling', () => {
       if (!disconnect) expect(ready[0].capabilities.availableModels[0].id).toBe('new');
       // The completed coordinator does not cache results or suppress a later refresh.
       await refreshRemoteCatalogSnapshot('test');
-      expect(invoke).toHaveBeenCalledTimes(disconnect ? 8 : 12);
+      expect(invoke).toHaveBeenCalledTimes(disconnect ? 10 : 15);
     },
   );
 });

@@ -26,7 +26,7 @@ type Resolution =
       routing?: OrcaWorkerProviderRoutingContext;
     }
   | Extract<OrcaWorkerCreationResult, { ok: false }>;
-const agents: AgentKind[] = ['claude-code', 'codex', 'pi'];
+const agents: Exclude<AgentKind, 'zcode'>[] = ['claude-code', 'codex', 'pi'];
 const invalid = (message: string): Resolution => ({
   ok: false,
   errorCode: 'INVALID_PARAMS',

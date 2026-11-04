@@ -89,7 +89,7 @@ describe('粘贴接线源码断言(防重构掉线)', () => {
       // 粘贴已迁入 useMobileLocalAttachments 乐观管线,页面经 hook 解构别名接线。
       expect(source, page).toContain('addPastedImages: addPastedImageAttachments');
       // 已有任务的页面在粘贴时还会顺带预热 Agent,所以只锁住最终交给 hook 的那一步。
-      expect(source, page).toMatch(/onPasteImages=\{\(uris\) => [\s\S]{0,80}?void addPastedImageAttachments\(uris\)/);
+      expect(source, page).toMatch(/onPasteImages=\{\(uris, batchId(?:\?: string)?\) => [\s\S]{0,80}?void addPastedImageAttachments\(uris, batchId\)/);
     }
   });
 
@@ -122,22 +122,8 @@ describe('粘贴接线源码断言(防重构掉线)', () => {
     expect(source).toContain('flushPastePlaceholderWaiters();');
   });
 
-  it('占位卡有超时兜底、计入附件限额、兑现按 FIFO 批次出列(hook 内闭环)', () => {
-    const source = read('src/session/useMobileLocalAttachments.ts');
-    expect(source).toContain('PASTE_PLACEHOLDER_TIMEOUT_MS');
-    // 限额:占位并入统一的在途占坑真源(getPendingSlotCount = 上传中 + 占位),
-    // beginPick 与对外暴露的 getPendingUploadCount 同源(review P2:直接入队
-    // 路径不能绕过占位占坑)。
-    expect(source).toContain('const getPendingSlotCount = () => controller.pendingCount() + getPastePlaceholderTotal();');
-    expect(source).toContain('- getPendingSlotCount()');
-    expect(source).toContain('getPendingUploadCount: () => (isAttachmentScopeActive() ? getPendingSlotCount() : 0),');
-    // 批次 FIFO(review P2):兑现 / 失败只出列最早一批,并发粘贴时第一批完成
-    // 不清掉第二批还在原生处理中的占位;addPastedImages 进限额检查前先出列
-    // 本批(防双扣)。
-    expect(source).toContain('const pastePlaceholderBatchesRef = useRef<number[]>([]);');
-    expect(source).toContain('pastePlaceholderBatchesRef.current.shift();');
-    expect(source).toContain('shiftPastePlaceholderBatch();');
-  });
+  // FIFO、附件限额与超时兜底已由 useMobileLocalAttachmentsAbandon.test.tsx
+  // 调用真实 hook 验证，不再锁定批次 ref 的内部表示。
 
   it('composer 草稿作废时同步清上传队列、粘贴占位与等待者', () => {
     const source = read('src/session/useMobileLocalAttachments.ts');

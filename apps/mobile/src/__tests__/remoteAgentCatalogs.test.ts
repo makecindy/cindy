@@ -70,6 +70,7 @@ describe('remote Agent catalogs', () => {
       { id: 'allowed', remoteInvocationEnabled: true },
       { id: 'closed', remoteInvocationEnabled: false },
       { id: 'legacy' },
+      { id: 'native', nativeAgent: 'zcode', remoteInvocationEnabled: true },
     ] as unknown as ProviderView[];
     expect(remoteAgentProviders(providers).map((provider) => provider.id)).toEqual(['allowed']);
   });

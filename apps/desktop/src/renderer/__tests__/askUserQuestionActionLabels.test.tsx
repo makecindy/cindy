@@ -76,6 +76,17 @@ describe('AskUserQuestionPrompt action labels', () => {
     fireEvent.click(link);
     await waitFor(() => expect(document.querySelector('[data-text-lightbox-card]')).not.toBeNull());
     vi.useFakeTimers();
+    const preview = document.querySelector<HTMLElement>('[data-text-lightbox-overlay]')!;
+    const tooltip = document.querySelector('[role="tooltip"]');
+    if (tooltip && preview.querySelector(`[aria-describedby~="${tooltip.id}"]`)) {
+      // Mount autofocus can open the header tooltip; that foreground surface
+      // gets its Escape before the document or the covered question card.
+      fireEvent.keyDown(link, { key: 'Escape' });
+      act(() => vi.advanceTimersByTime(200));
+      expect(document.contains(preview)).toBe(true);
+      expect(document.querySelector('[role="tooltip"]')).toBeNull();
+      expect(onAnswer).not.toHaveBeenCalled();
+    }
     fireEvent.keyDown(link, { key: 'Escape' });
     expect(onAnswer).not.toHaveBeenCalled();
     fireEvent.keyDown(link, { key: '1' });

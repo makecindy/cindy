@@ -686,7 +686,7 @@ describe('deriveAvailableModels — dynamic-first catalog contract', () => {
     ).toBeNull();
   });
 
-  it('runtime refresh replaces both agent model lists in place so existing sessions keep the live reference', () => {
+  it('runtime refresh keeps each registered agent model list independent and preserves live references', () => {
     const claudeModels: ModelDescriptor[] = [
       {
         id: 'stale-claude',
@@ -708,24 +708,37 @@ describe('deriveAvailableModels — dynamic-first catalog contract', () => {
     const piModels: ModelDescriptor[] = [
       { id: 'stale-pi', displayName: 'Stale', contextWindow: 1, efforts: [], defaultEffort: null },
     ];
+    const zcodeModels: ModelDescriptor[] = [
+      { id: 'stale-zcode', displayName: 'Stale', contextWindow: 1, efforts: [], defaultEffort: null },
+    ];
     const claudeRef = claudeModels;
     const codexRef = codexModels;
     const piRef = piModels;
+    const zcodeRef = zcodeModels;
     const target = {
-      getCapabilities(agent: 'claude-code' | 'codex' | 'pi') {
+      getCapabilities(agent: 'claude-code' | 'codex' | 'pi' | 'zcode') {
+        if (agent === 'zcode') return { availableModels: zcodeModels };
         if (agent === 'pi') return { availableModels: piModels };
         return { availableModels: agent === 'claude-code' ? claudeModels : codexModels };
       },
     };
+    const catalog = injectedCatalog();
+    catalog.providers.push({
+      id: 'zcode-native', name: 'ZCode', source: 'builtin', nativeAgent: 'zcode', agents: ['zcode'],
+      auth: { method: 'managed' }, routing: {}, models: { zcode: [model('native-model')] },
+    });
 
-    refreshCatalogDerivedModels(target, injectedCatalog());
+    refreshCatalogDerivedModels(target, catalog);
 
     expect(claudeModels).toBe(claudeRef);
     expect(codexModels).toBe(codexRef);
     expect(piModels).toBe(piRef);
-    expect(claudeModels).toEqual(deriveAvailableModels(injectedCatalog(), 'claude-code'));
-    expect(codexModels).toEqual(deriveAvailableModels(injectedCatalog(), 'codex'));
-    expect(piModels).toEqual(deriveAvailableModels(injectedCatalog(), 'pi'));
+    expect(zcodeModels).toBe(zcodeRef);
+    expect(claudeModels).toEqual(deriveAvailableModels(catalog, 'claude-code'));
+    expect(codexModels).toEqual(deriveAvailableModels(catalog, 'codex'));
+    expect(piModels).toEqual(deriveAvailableModels(catalog, 'pi'));
+    expect(zcodeModels).toEqual(deriveAvailableModels(catalog, 'zcode'));
+    expect(zcodeModels.map(({ id }) => id)).toEqual(['native-model']);
   });
 });
 

@@ -684,7 +684,7 @@ function NewRemoteSessionContent({ creatingRef }: { creatingRef: { current: bool
   }), [draft.workingDir, draft.workspaceKind]);
   // 旧被控电脑不支持给 Worker 选 Agent 位置：首个 Worker 只能从被控电脑的目录里选，与任务的
   // Agent 在另一台电脑运行对不上，两者仍互斥。
-  const collabEligible = isOrcaCollabEligible(collabTarget)
+  const collabEligible = draft.agentKind !== 'zcode' && isOrcaCollabEligible(collabTarget)
     && (remoteAgentPick === null || workerAgentLocationSupported);
   // 换设备 / 换工作区后,草稿里的协同设置属于旧目标:丢弃,避免在新目标上静默开启。
   // 按草稿武装时的目标比对(而不是「目标一变就清」):返回编辑恢复草稿时目标与草稿一起回填,
@@ -696,7 +696,7 @@ function NewRemoteSessionContent({ creatingRef }: { creatingRef: { current: bool
   }, [collabTargetKey]);
   // 读入口状态;重连后重读:断线时读失败会落成「不可用」,不能让表单一直卡住。
   useEffect(() => {
-    if (!contextSheetOpen || !collabEligible || !selectedDeviceId) return undefined;
+    if (!contextSheetOpen || !collabEligible || !selectedDeviceId || draft.agentKind === 'zcode') return undefined;
     let cancelled = false;
     setCollabEntryStatus('loading');
     void readOrcaCollabEntryStatus(maker, collabTarget, draft.agentKind)
@@ -909,6 +909,7 @@ function NewRemoteSessionContent({ creatingRef }: { creatingRef: { current: bool
     getUploadedAttachmentId,
     releaseUploadedSources,
   } = useMobileLocalAttachments({
+    pasteImagesDisabledReason: draft.agentKind === 'zcode' ? t('session.zcodeTextOnly') : null,
     getAccessToken: () => auth.getAccessToken(),
     getAttachmentCount: () => attachmentsRef.current.length,
     onUploaded: (rawAttachment, candidate) => {
@@ -2009,7 +2010,7 @@ function NewRemoteSessionContent({ creatingRef }: { creatingRef: { current: bool
         setAvailableAgentKinds(
           new Set(
             (Array.isArray(agents) ? agents : []).filter(
-              (a): a is NewSessionAgentKind => a === 'claude-code' || a === 'codex' || a === 'pi',
+              (a): a is NewSessionAgentKind => a === 'claude-code' || a === 'codex' || a === 'pi' || a === 'zcode',
             ),
           ),
         );
@@ -5624,7 +5625,7 @@ function NewRemoteSessionContent({ creatingRef }: { creatingRef: { current: bool
                   onSelectionChange={(event) => changeNewSessionVoiceSelection(voiceSelectionInput, event.nativeEvent.selection)}
                   onContentSizeChange={handleFirstMessageInputContentSizeChange}
                   onFocus={() => setFirstMessageInputFocused(true)}
-                  onPasteImages={(uris) => void addPastedImageAttachments(uris)}
+                  onPasteImages={(uris, batchId?: string) => { void addPastedImageAttachments(uris, batchId); }}
                   onPasteImagesLoading={beginPastePlaceholders}
                   onPasteImagesLoadFailed={failPastePlaceholders}
 
@@ -5760,7 +5761,7 @@ function NewRemoteSessionContent({ creatingRef }: { creatingRef: { current: bool
         {contextSheetView === 'main' ? (
           <>
 
-            <ContextSheetGroup label={Platform.OS === 'ios' && contextSheetMediaLibraryEnabled ? '' : t('session.common.groupAdd')}>
+            {draft.agentKind !== 'zcode' && <ContextSheetGroup label={Platform.OS === 'ios' && contextSheetMediaLibraryEnabled ? '' : t('session.common.groupAdd')}>
               <ContextSheetRow
                 disabled={creating}
                 icon={<Image color={colors.textPrimary} size={iconSize.lg} strokeWidth={iconStroke.regular} />}
@@ -5785,7 +5786,7 @@ function NewRemoteSessionContent({ creatingRef }: { creatingRef: { current: bool
                 dismissBeforePress
                   testID="newSession.contextSheetFileRow"
               />
-            </ContextSheetGroup>
+            </ContextSheetGroup>}
 <ContextSheetGroup label={t('session.common.groupMode')}>
               {planModeSupported ? (
                 // 点击即切换计划模式并关面板(产品决策,不做开关);已开启时显示 ✓,再点退出。

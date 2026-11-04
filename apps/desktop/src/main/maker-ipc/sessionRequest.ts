@@ -71,7 +71,7 @@ export interface ReadCreateSessionOptsDeps {
 }
 
 function readAgentKind(value: unknown): AgentKind {
-  if (value === 'claude-code' || value === 'codex' || value === 'pi') return value;
+  if (value === 'claude-code' || value === 'codex' || value === 'pi' || value === 'zcode') return value;
   throwIpcError('INVALID_PARAMS', 'agentKind required');
 }
 
@@ -121,6 +121,9 @@ export function readCreateSessionOpts(
     throwIpcError('INVALID_PARAMS', 'extraDirs must not contain Host-owned library slots');
   }
   const agentKind = readAgentKind(body.agentKind);
+  if (agentKind === 'zcode' && (body.remoteHostId || body.agentDeviceId || body.orcaRole)) {
+    throwIpcError('INVALID_PARAMS', 'ZCode supports local tasks without Orca only');
+  }
   const model = requireString(body.model, 'model');
   const workspaceKind = readWorkspaceKind(body.workspaceKind);
   const explicitWorkingDir = readExplicitWorkingDir(body.workingDir);

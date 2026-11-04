@@ -815,5 +815,6 @@
     "uploadsPending": "Es werden noch Anhänge hochgeladen. Warte, bis der Upload abgeschlossen ist, und bearbeite die Nachricht dann.",
     "rollbackHint": "Beim Senden werden Änderungen an {{count}} Datei(en) aus dem letzten Durchgang rückgängig gemacht",
     "conversationOnlyHint": "Beim Senden werden Projektdateien nicht wiederhergestellt; bisherige Dateiänderungen bleiben erhalten"
-  }
+  },
+  "zcodeTextOnly": "ZCode unterstützt derzeit nur Texteingaben. Füge den Inhalt der Datei in deine Nachricht ein."
 }

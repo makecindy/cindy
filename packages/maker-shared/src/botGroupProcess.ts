@@ -92,7 +92,13 @@ export function projectBotGroupProcess(messages: readonly BotGroupProcessMessage
   const items: BotGroupProcessChild[] = [];
   // Pi and legacy providers do not label commentary. Subsequent work proves that
   // their earlier text is a stage note; an unsealed active tail remains visible.
-  const lastWork = visible.findLastIndex(row => ['assistant', 'thinking', 'tool_use', 'tool_result'].includes(row.role));
+  let lastWork = -1;
+  for (let index = visible.length - 1; index >= 0; index--) {
+    if (['assistant', 'thinking', 'tool_use', 'tool_result'].includes(visible[index]!.role)) {
+      lastWork = index;
+      break;
+    }
+  }
   for (const [index, row] of visible.entries()) {
     const key = row.clientId;
     if (row.role === 'thinking') items.push({ kind: 'thinking', key, message: { clientId: key, content: '' } });

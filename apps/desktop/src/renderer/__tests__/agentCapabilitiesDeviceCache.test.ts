@@ -85,6 +85,7 @@ describe('useAgentCapabilities deviceId-aware cache', () => {
     expect(getCapabilities).toHaveBeenCalledWith('claude-code');
     expect(getCapabilities).toHaveBeenCalledWith('codex');
     expect(getCapabilities).toHaveBeenCalledWith('pi');
+    expect(getCapabilities).toHaveBeenCalledWith('zcode');
     expect(invoke).not.toHaveBeenCalled();
     expect(mod.getCachedCapabilities('claude-code')?.availableModels[0].displayName).toBe(
       'local:claude-code',
@@ -110,9 +111,9 @@ describe('useAgentCapabilities deviceId-aware cache', () => {
   it('本机目录快照在可选 Pi 不可用时仍返回 Claude Code 与 Codex 能力', async () => {
     const { getCapabilities } = stubElectron();
     getCapabilities.mockImplementation(async (agent: string) => {
-      if (agent === 'pi')
+      if (agent === 'pi' || agent === 'zcode')
         throw new Error(
-          "[MAKER_NOT_FOUND] Agent 'pi' is not registered (available: claude-code, codex)",
+          `[MAKER_NOT_FOUND] Agent '${agent}' is not registered (available: claude-code, codex)`,
         );
       return caps(`local:${agent}`);
     });
@@ -123,6 +124,7 @@ describe('useAgentCapabilities deviceId-aware cache', () => {
       ['codex', caps('local:codex')],
     ]);
     expect(getCapabilities).toHaveBeenCalledWith('pi');
+    expect(getCapabilities).toHaveBeenCalledWith('zcode');
   });
 
   it('本机目录快照在核心 agent 不可用时仍拒绝提交部分能力', async () => {
@@ -545,8 +547,8 @@ describe('useAgentCapabilities deviceId-aware cache', () => {
       mod.prefetchDeviceCapabilities('dev-1'),
       mod.prefetchDeviceCapabilities('dev-1'),
     ]);
-    // cc + codex + pi 各一次 = 3 次,而非 6 次
-    expect(invoke).toHaveBeenCalledTimes(3);
+    // Each registered engine is fetched once even when two consumers prefetch.
+    expect(invoke).toHaveBeenCalledTimes(4);
   });
 
   it('驱逐:evict 只清该设备,本地与其它设备保留', async () => {
@@ -644,15 +646,10 @@ describe('useAgentCapabilities deviceId-aware cache', () => {
     const stale = mod.prefetchDeviceCapabilities('dev-1');
     mod.evictDeviceCapabilities('dev-1');
     const fresh = mod.prefetchDeviceCapabilities('dev-1');
-    // 每轮按 ALL_AGENT_KINDS 顺序 push 三个 resolver(cc/codex/pi):
-    // 第一轮(stale)= [0][1][2],第二轮(fresh)= [3][4][5]。
-    resolvers[3](caps('fresh:claude'));
-    resolvers[4](caps('fresh:codex'));
-    resolvers[5](caps('fresh:pi'));
+    // Complete the fresh batch first, including the newly available engine.
+    resolvers.slice(4).forEach((resolve, index) => resolve(caps(['fresh:claude', 'fresh:codex', 'fresh:pi', 'fresh:zcode'][index])));
     await fresh;
-    resolvers[0](caps('stale:claude'));
-    resolvers[1](caps('stale:codex'));
-    resolvers[2](caps('stale:pi'));
+    resolvers.slice(0, 4).forEach((resolve) => resolve(caps('stale')));
     await stale;
 
     expect(claudeListener).toHaveBeenNthCalledWith(1, { status: 'loading' });

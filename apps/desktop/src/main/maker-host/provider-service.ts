@@ -81,6 +81,8 @@ export interface ProviderServiceDeps {
   getCatalog: () => Catalog;
   /** 连接状态判定器。 */
   connection: ProviderConnectionReaders;
+  /** Native runtimes own their login. Discovery alone must never imply authenticated access. */
+  nativeAgentConnected?: (providerId: string) => boolean;
   /**
    * 通用 OAuth 供应商（目录 auth.oauth 描述符驱动、非内置 bespoke 四家）的连接态判定
    * （生产 = generic-oauth 的 hasGenericOAuthLogin）。缺省 = 一律未连接。
@@ -156,6 +158,10 @@ export function createProviderService(deps: ProviderServiceDeps): ProviderServic
     const catalog = opts?.getCatalog?.() ?? opts?.catalog ?? deps.getCatalog();
     const connected: ConnectionState = { xd, anthropic, openai, xai };
     for (const p of catalog.providers) {
+      if (p.nativeAgent) {
+        connected[p.id] = deps.nativeAgentConnected?.(p.id) ?? false;
+        continue;
+      }
       // 无鉴权供应商无需任何登录或密钥：只要目录声明有效，就可立即参与模型选择。
       // 该规则与 source 无关，覆盖远端目录下发的 built-in/self-hosted 条目。
       if (p.auth.method === 'none') {

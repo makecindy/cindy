@@ -113,7 +113,7 @@ function isChatModel(model: CatalogModel, provider: Provider): boolean {
   return isModelSelectableForNewRoute(model, { userProvider: provider.source === 'user' });
 }
 
-const AGENT_LABEL: Record<AgentKind, string> = {
+const AGENT_LABEL: Record<Exclude<AgentKind, 'zcode'>, string> = {
   codex: 'Codex',
   'claude-code': 'Claude Code',
   pi: 'Pi',
@@ -206,7 +206,7 @@ export function buildTextOneshotPinOptions(
   hasCredential?: OneshotCredentialProbe,
   purpose: 'plugin' | 'auxiliary' = 'plugin',
 ): TextOneshotPinOption[] {
-  const entries: { provider: Provider; agentKind: AgentKind; model: CatalogModel; direct: boolean }[] = [];
+  const entries: { provider: Provider; agentKind: Exclude<AgentKind, 'zcode'>; model: CatalogModel; direct: boolean }[] = [];
   const seenRoutes = new Set<string>();
   for (const provider of orderedProviders(catalog, providerOrder)) {
     if (isProviderDisabled(overrides, provider.id)) continue;
@@ -215,6 +215,7 @@ export function buildTextOneshotPinOptions(
     const direct = purpose === 'auxiliary' && usesDirectTextRoute(provider);
     const agents: readonly AgentKind[] = direct ? ['codex', 'claude-code', 'pi'] : ONESHOT_ROUTE_AGENTS;
     for (const agentKind of agents) {
+      if (agentKind === 'zcode') continue;
       if (!direct && !isRoutableForOneshot(provider, agentKind)) continue;
       if (hasCredential && !hasCredential(provider, agentKind)) continue;
       for (const model of displayOrderedModels(provider.models[agentKind] ?? [])) {

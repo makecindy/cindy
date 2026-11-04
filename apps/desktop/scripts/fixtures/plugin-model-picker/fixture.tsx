@@ -41,6 +41,12 @@ commitProvidersSnapshot(beginProvidersRefresh(), snapshot);
 void mountPage({
   host: {
     safeStorageRead: async () => null,
+    deviceLink: {
+      listDevices: async () => ({ devices: [] }),
+      onPresenceChanged: subscription('fixture-device-presence'),
+      onControlTargetChanged: subscription('fixture-control-target'),
+    },
+
     maker: {
       listProviders: async () => snapshot,
       listAvailableAgents: async () => ['codex'],

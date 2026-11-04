@@ -364,7 +364,7 @@ export async function resolveRouteCopyCapabilities(
  * 默认模型上:只查来源级 suspended 会漏掉「恰好停用了这一个模型」的 override
  * (PR #744 review 第十五轮)。
  */
-const DEFAULT_ONESHOT_MODEL: Record<AgentKind, string> = {
+const DEFAULT_ONESHOT_MODEL: Record<Exclude<AgentKind, 'zcode'>, string> = {
   'claude-code': 'claude-haiku-4-5',
   codex: 'gpt-5.4-mini',
   // pi oneShot 未实现(BaseAgent 默认抛 NotSupported);占位与 claude 同款网关小模型。
@@ -381,6 +381,7 @@ export async function isAgentOneShotRouteDisabled(
   agent: AgentKind,
   model?: string,
 ): Promise<boolean> {
+  if (agent === 'zcode') return true;
   if (model) {
     // reroute 同样视为不可发:one-shot 无法携带显式 providerId,实际派发仍会落在
     // 被停用的隐式默认来源上 —— 只有 pass 才允许(PR #744 review 第五轮)。

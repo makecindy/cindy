@@ -9,7 +9,7 @@ import { formatRemoteMoney, resolveSessionTotalMoney } from './remoteMoney';
  *   - 显示 = 文字(单行)/ 列表(带预览行);
  *   - 任务信息复选,行内渲染顺序 = 勾选先后。
  */
-export type HomeVendorFilter = 'all' | 'cc' | 'codex' | 'pi';
+export type HomeVendorFilter = 'all' | 'cc' | 'codex' | 'pi' | 'zcode';
 export type HomeLastActivityFilter = '1d' | '3d' | '7d' | '30d' | 'all';
 /** 'all' = 不筛选;数组 = 只看这些项目(含对话占位键)。 */
 export type HomeProjectFilter = 'all' | readonly string[];
@@ -25,7 +25,7 @@ export type HomeTaskInfoField = 'time' | 'pr' | 'tokens' | 'cost';
 /** 项目筛选里「对话」的占位键;与真实项目 key 不会撞(项目 key 带设备 / 路径前缀)。 */
 export const HOME_DIALOGUE_FILTER_KEY = 'dialogue';
 
-export const HOME_VENDOR_FILTERS: readonly HomeVendorFilter[] = ['all', 'cc', 'codex', 'pi'];
+export const HOME_VENDOR_FILTERS: readonly HomeVendorFilter[] = ['all', 'cc', 'codex', 'pi', 'zcode'];
 export const HOME_LAST_ACTIVITY_FILTERS: readonly HomeLastActivityFilter[] = ['1d', '3d', '7d', '30d', 'all'];
 /** 本表顺序 = 菜单里复选项的排列顺序(固定),与桌面一致。 */
 export const HOME_TASK_INFO_FIELDS: readonly HomeTaskInfoField[] = ['time', 'pr', 'tokens', 'cost'];

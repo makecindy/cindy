@@ -185,6 +185,49 @@ it('routes both HTML and plain-text enlargement to the shared mail panel', () =>
     disabled={false} onChange={change} onEnlarge={enlarge} expanded />);
   expect(screen.queryByRole('button', { name: 'chat.ghostCall.mailEnlarge' })).toBeNull();
 });
+// PR #8022: resizing the observed iframe synchronously during delivery emitted
+// a native ResizeObserver loop ErrorEvent. Exercise the real preview's height
+// update and unmount with an explicitly controlled animation frame (unit tier).
+it('defers iframe width fitting outside observer delivery and cancels a pending fit on unmount', () => {
+  const observers = new Map<Element, ResizeObserverCallback>();
+  vi.stubGlobal('ResizeObserver', class {
+    targets: Element[] = [];
+    constructor(private callback: ResizeObserverCallback) {}
+    observe(target: Element) { this.targets.push(target); observers.set(target, this.callback); }
+    disconnect() { this.targets.forEach(target => observers.delete(target)); }
+  });
+  let sequence = 0;
+  const frames = new Map<number, FrameRequestCallback>();
+  const request = vi.fn((callback: FrameRequestCallback) => { frames.set(++sequence, callback); return sequence; });
+  const cancel = vi.fn((id: number) => { frames.delete(id); });
+  vi.stubGlobal('requestAnimationFrame', request);
+  vi.stubGlobal('cancelAnimationFrame', cancel);
+  const view = render(<MailHtmlPreview value="<p>Long mail</p>" reading />);
+  const frame = screen.getByTitle('chat.ghostCall.mailPreview') as HTMLIFrameElement;
+  const doc = frame.contentDocument!;
+  doc.open(); doc.write(frame.srcdoc); doc.close(); fireEvent.load(frame);
+  const previousHeight = frame.style.height;
+  Object.defineProperty(doc.body, 'scrollHeight', { get: () => 1500 });
+  Object.defineProperty(doc.documentElement, 'scrollHeight', { get: () => 1540 });
+  const resize = (width: number) => observers.get(frame)!([
+    { target: frame, contentRect: new DOMRectReadOnly(0, 0, width, 0),
+      borderBoxSize: [], contentBoxSize: [], devicePixelContentBoxSize: [] },
+  ], {} as ResizeObserver);
+  resize(320);
+  resize(300);
+  expect(frame.style.height).toBe(previousHeight);
+  expect(request).toHaveBeenCalledTimes(1);
+  const [id, fit] = [...frames.entries()][0];
+  frames.delete(id);
+  act(() => fit(0));
+  expect(parseInt(frame.style.height)).toBeGreaterThanOrEqual(1540);
+  resize(280);
+  const pending = sequence;
+  view.unmount();
+  expect(cancel).toHaveBeenCalledWith(pending);
+  expect(frames.size).toBe(0);
+});
+
 // The sidebar previously inherited the compose card's 440px cap and left most
 // of the reader empty. Body/font reflow and root margins were not covered by
 // the image-load test, leaving a second scrolling viewport (unit regression).

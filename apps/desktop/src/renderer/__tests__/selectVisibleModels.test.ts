@@ -17,6 +17,7 @@ import {
   filterChatBridgedCodexProviders,
   isLocalOnlyProviderForAgent,
   isDeviceModelVisible,
+  resolveVisibleModelAgentKind,
   selectVisibleModels,
 } from '@/lib/providerModels';
 import type { AgentKind, ProviderView } from '@cindy/model-providers';
@@ -67,6 +68,22 @@ function codexProvider(id: string, modelIds: string[], wireProtocol: 'openai-res
 const ids = (ms: ModelDescriptor[]): string[] => ms.map((m) => m.id);
 
 describe('selectVisibleModels — device-link「以被控端为准」', () => {
+  // ZCode is a native route: its provider has no HTTP routing descriptor. Existing
+  // cases only covered the three proxy-backed engines. Unit tier; the minimal
+  // input is one native-only model and one unrelated Claude model.
+  it('keeps native ZCode models and their engine identity without an HTTP route', () => {
+    const native = { ...provider('zcode-native', 'zcode', ['team-model']), nativeAgent: 'zcode' as const, routing: {} };
+    const providers = [provider('other', 'claude-code', ['claude-only']), native];
+    expect(ids(selectVisibleModels({ agentKind: 'zcode', deviceId: undefined, providers, deviceCcModels: [], deviceCodexModels: [] }))).toEqual(['team-model']);
+    expect(resolveVisibleModelAgentKind({ modelId: 'team-model', agentKind: null, providers, ccModels: [], codexModels: [] })).toBe('zcode');
+  });
+
+  it('reads ZCode models from the controlled computer without substituting local models', () => {
+    expect(ids(selectVisibleModels({
+      agentKind: 'zcode', deviceId: 'controlled', providers: [provider('zcode-native', 'zcode', ['local-model'])],
+      deviceCcModels: [devModel('claude-only')], deviceCodexModels: [], deviceZcodeModels: [devModel('remote-team-model')],
+    }))).toEqual(['remote-team-model']);
+  });
   it('deviceId 非空:用被控端 caps,完全忽略本地 providers(含本地独有模型)', () => {
     const out = selectVisibleModels({
       agentKind: 'claude-code',

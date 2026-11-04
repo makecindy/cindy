@@ -185,7 +185,7 @@ function subscriptionQuote(
 
 function modelRow(
   day: string,
-  agentKind: 'claude-code' | 'codex' | 'pi',
+  agentKind: 'claude-code' | 'codex' | 'pi' | 'zcode',
   model: string,
   money: RegionalMoney,
   tokens: {
@@ -337,6 +337,20 @@ describe('getSubscriptionValuePriceFor', () => {
 });
 
 describe('readUsageHistoryWith', () => {
+  // Stored native and Claude rows can have the same model ID; aggregation must
+  // retain their execution identities in both totals and daily chart segments.
+  it('keeps ZCode and Claude usage separate for the same model name', async () => {
+    const result = await readUsageHistoryWith(makeDeps({ getModelUsageSince: async () => [
+      modelRow(TODAY, 'zcode', 'same-model', actual(0), { inputTokens: 11 }),
+      modelRow(TODAY, 'claude-code', 'same-model', actual(0), { inputTokens: 22 }),
+    ] }));
+    expect(result.models.map(row => [row.agentKind, row.inputTokens]).sort()).toEqual([
+      ['claude-code', 22], ['zcode', 11],
+    ]);
+    expect(result.modelDaily.map(row => [row.agentKind, row.tokens]).sort()).toEqual([
+      ['claude-code', 22], ['zcode', 11],
+    ]);
+  });
   it('keeps media fees in actual totals and model detail without inventing chat tokens', async () => {
     const money = actual(1.25);
     const result = await readUsageHistoryWith(makeDeps({

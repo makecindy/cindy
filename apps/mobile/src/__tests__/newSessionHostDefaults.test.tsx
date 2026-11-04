@@ -95,8 +95,8 @@ const defaults = (model: string) => ({ worktreeEnabled: false, model, providerId
 
 // A new-task page can be left before optional engines finish. Its successful
 // engine and explicit model choice must already be available on the next visit.
-it.each(['codex', 'pi', 'claude-code'] as const)('settles and caches %s without waiting for unrelated engines', async (agent) => {
-  const others = (['codex', 'pi', 'claude-code'] as const).filter((kind) => kind !== agent);
+it.each(['codex', 'pi', 'claude-code', 'zcode'] as const)('settles and caches %s without waiting for unrelated engines', async (agent) => {
+  const others = (['codex', 'pi', 'claude-code', 'zcode'] as const).filter((kind) => kind !== agent);
   const first = mount('desktop', agent, undefined, agent, others);
   let waited = false;
   await act(async () => { void first.state.wait('desktop', agent).then(() => { waited = true; }); });
@@ -116,7 +116,7 @@ it.each(['codex', 'pi', 'claude-code'] as const)('settles and caches %s without 
   for (const other of others) expect(getNewSessionHostDefaults('desktop')?.byAgent[other]).toBeUndefined();
 });
 
-it.each(['codex', 'pi', 'claude-code'] as const)('keeps a first-visit manual %s choice even when all reads are pending', async (agent) => {
+it.each(['codex', 'pi', 'claude-code', 'zcode'] as const)('keeps a first-visit manual %s choice even when all reads are pending', async (agent) => {
   const first = mount('desktop', agent);
   act(() => first.state.choose(true));
   expect(getNewSessionHostDefaults('desktop')?.byAgent[agent]?.model).toBe('chosen');
@@ -158,7 +158,7 @@ it('reopens with cached defaults immediately and refreshes the next visit in the
   await act(async () => {});
 });
 
-it.each(['codex', 'pi', 'claude-code'] as const)('preserves a manual %s choice while refreshing the other engines', async (agent) => {
+it.each(['codex', 'pi', 'claude-code', 'zcode'] as const)('preserves a manual %s choice while refreshing the other engines', async (agent) => {
   const first = mount();
   await act(async () => first.read.resolve(defaults('first')));
   const second = mount('desktop', agent);
@@ -166,7 +166,7 @@ it.each(['codex', 'pi', 'claude-code'] as const)('preserves a manual %s choice w
   await act(async () => second.read.resolve(defaults('old-response')));
   expect(second.state.runtimeFor(agent)?.model).toBe('chosen');
   expect(second.state.draft.model).toBe('chosen');
-  for (const other of ['codex', 'pi', 'claude-code'] as const) {
+  for (const other of ['codex', 'pi', 'claude-code', 'zcode'] as const) {
     if (other === agent) continue;
     expect(second.state.runtimeFor(other)?.model).toBe('old-response');
     expect(getNewSessionHostDefaults('desktop')?.byAgent[other]?.model).toBe('old-response');
@@ -222,17 +222,21 @@ it('drops cached and in-flight defaults when the account changes', async () => {
   await act(async () => {});
 });
 
-it('caches a confirmed empty default but retries an unready host without discarding old defaults', async () => {
+// PR #8022: all four engine defaults are read on each attempt. An empty ZCode
+// result must be retained as confirmed, just like the original engines.
+it.each(['codex', 'zcode'] as const)('caches a confirmed empty %s default but retries an unready host without discarding old defaults', async (agent) => {
   vi.useFakeTimers();
-  const first = mount();
+  const first = mount('desktop', agent);
   await act(async () => first.read.resolve({ worktreeEnabled: false }));
-  const second = mount();
+  const second = mount('desktop', agent);
   expect(second.state.settled).toBe(true);
   expect(second.state.runtime).toBeNull();
   await act(async () => second.read.resolve({}));
   await act(async () => { await vi.advanceTimersByTimeAsync(3_000); });
-  expect(second.bindings.maker.getNewMakerDefaults).toHaveBeenCalledTimes(9);
-  expect(mount().state.settled).toBe(true);
+  expect(second.bindings.maker.getNewMakerDefaults).toHaveBeenCalledTimes(12);
+  expect(second.bindings.maker.getNewMakerDefaults.mock.calls.filter(([kind]) => kind === 'zcode')).toHaveLength(3);
+  expect(getNewSessionHostDefaults('desktop')?.byAgent[agent]).toBeNull();
+  expect(mount('desktop', agent).state.settled).toBe(true);
   await act(async () => {});
 });
 

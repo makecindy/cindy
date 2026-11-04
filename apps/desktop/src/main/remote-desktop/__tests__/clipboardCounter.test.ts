@@ -12,6 +12,7 @@ function fixture(binary = async () => '/fake/helper') {
   Object.defineProperty(process, 'platform', { value: 'darwin' });
   vi.useFakeTimers();
   const children: Array<ChildProcessWithoutNullStreams> = [];
+  const writes: string[] = [];
   const launch = vi.fn(() => {
     const child = Object.assign(new EventEmitter(), {
       stdin: new PassThrough(),
@@ -19,11 +20,12 @@ function fixture(binary = async () => '/fake/helper') {
       stderr: new PassThrough(),
       kill: vi.fn(() => true),
     }) as unknown as ChildProcessWithoutNullStreams;
+    child.stdin.on('data', (chunk: Buffer) => writes.push(chunk.toString()));
     children.push(child);
     return child;
   });
   const counter = new ClipboardCounter(binary, launch);
-  return { counter, launch, children };
+  return { counter, launch, children, writes };
 }
 afterEach(() => {
   vi.useRealTimers();
@@ -46,12 +48,14 @@ it('keeps Linux selection versions and failures on the existing Wayland adapter'
 });
 
 it('reuses one process but queries fresh counters, including concurrent portable reads', async () => {
-  const { counter, children, launch } = fixture();
+  const { counter, children, launch, writes } = fixture();
   const first = counter.read();
   const second = counter.read(true);
   await vi.advanceTimersByTimeAsync(0);
   const child = children[0];
-  expect((child.stdin as PassThrough).read()?.toString()).toBe('1 0\n2 1\n');
+  // The pipe is a byte stream: Node versions can split concurrent writes into
+  // different chunks. Assert the complete protocol instead of one read boundary.
+  expect(writes.join('')).toBe('1 0\n2 1\n');
   child.stdout.emit('data', '1 10\n2 11\n');
   expect(await first).toBe('10');
   expect(await second).toBe('11');

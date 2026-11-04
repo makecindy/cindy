@@ -1,6 +1,6 @@
 interface LocalSkillRouteEntry {
   id: string;
-  engine: 'claude-code' | 'codex' | 'pi';
+  engine: 'claude-code' | 'codex' | 'pi' | 'zcode';
   kind: SkillhubKind;
   scope: SkillhubScope;
   name: string;

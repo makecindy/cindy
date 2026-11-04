@@ -62,7 +62,7 @@ export interface ContextWindowBudgetChipProps {
   model: string;
   /** 路由来源；用来查实际报价（网关实价优先，其余用参考价）。 */
   providerId?: string | null;
-  agentKind: 'cc' | 'codex' | 'pi';
+  agentKind: 'cc' | 'codex' | 'pi' | 'zcode';
   /**
    * 该任务实际路由的一份目录（renderer 侧的 `providers`）：
    * 默认窗口与「上限档」都按**路由**解析，不用 availableModels 扁平表

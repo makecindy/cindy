@@ -1,6 +1,7 @@
 import path from 'node:path';
-import { resolveAgentCredentialMode, type AgentKind } from '@cindy/maker-core';
+import { resolveAgentCredentialMode, type AgentKind as MakerAgentKind } from '@cindy/maker-core';
 import { describe, expect, it, vi } from 'vitest';
+type AgentKind = Exclude<MakerAgentKind, 'zcode'>;
 
 import {
   buildNoProviderMessage,
@@ -245,6 +246,17 @@ describe('Worker running on another device (execution device)', () => {
       leadSessionId: 'lead-1', role: 'dev', label: 'a', agent: 'codex', executionDeviceId: 'mac-mini',
     });
     expect(result).toMatchObject({ ok: false, errorCode: 'INVALID_PARAMS' });
+  });
+
+  // ZCode catalog entries are also consumed by ordinary-task admission. Their
+  // presence must not enable unsupported Orca creation or allocate a workspace.
+  it('rejects ZCode workers before team lookup or session bootstrap', async () => {
+    const { deps, service } = createDeps();
+    await expect(service.createWorker({
+      leadSessionId: 'lead-1', role: 'dev', label: 'native', agent: 'zcode',
+    })).resolves.toMatchObject({ ok: false, errorCode: 'UNSUPPORTED_CAPABILITY' });
+    expect(deps.getActiveTeamByLead).not.toHaveBeenCalled();
+    expect(deps.bootstrapSession).not.toHaveBeenCalled();
   });
 });
 
@@ -525,7 +537,7 @@ function providerRoutingContext(
   return {
     availability,
     resolveDefaultProviderIdForModel: (agent, model) => (
-      availability[agent].find((provider) => provider.models.includes(model))?.id ?? null
+      (agent !== 'zcode' ? availability[agent] : []).find((provider) => provider.models.includes(model))?.id ?? null
     ),
   };
 }

@@ -9,7 +9,7 @@ export function defaultBotModelChain(
   args: Parameters<typeof resolveNewMakerDefaultTuple>[0],
 ): BotModelRoute[] {
   const primary = resolveNewMakerDefaultTuple(args);
-  return primary ? [{
+  return primary && primary.vendor !== 'zcode' ? [{
     harness: primary.vendor === 'cc' ? 'claude' : primary.vendor,
     providerId: primary.providerId,
     model: primary.model,

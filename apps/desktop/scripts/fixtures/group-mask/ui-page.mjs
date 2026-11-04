@@ -73,23 +73,26 @@ export default {
       await page.locator('[data-testid=group-mask-status][data-status=enabled]').waitFor();
       assert.equal(await input.inputValue(), '我来处理。');
       await ui.capture('returned-and-resumed');
-      // A human returning must cancel the queued stand-in reply, including after resumption.
-      await page.clock.install();
-      await page.getByRole('button', { name: '模拟 @ 我', exact: true }).click();
+      // Deliver the queued completion after resumption, when the canceled reply would otherwise appear.
+      const mention = page.getByRole('button', { name: '模拟 @ 我', exact: true });
+      const completeStandInReplies = page.getByRole('button', { name: '完成模拟代答', exact: true });
+      const standInReplies = page.locator('[data-bot-group-message-id^="stand-in-"]');
+      await mention.click();
       await input.fill('我已回来，马上确认。');
       await page.locator('[data-testid=group-mask-status][data-status=paused]').waitFor();
-      await page.clock.runFor(1500);
-      assert.equal(await page.locator('[data-bot-group-message-id^="stand-in-"]').count(), 0);
       await page.getByRole('button', { name: '模拟离开 15 分钟', exact: true }).click();
       await page.locator('[data-testid=group-mask-status][data-status=enabled]').waitFor();
-      await page.getByRole('button', { name: '模拟 @ 我', exact: true }).click();
-      await page.clock.runFor(1500);
-      await page.locator('[data-bot-group-message-id^="stand-in-"]').waitFor();
-      assert.equal(await page.locator('[data-bot-group-message-id^="stand-in-"]').count(), 1);
+      await completeStandInReplies.click();
+      await mention.click();
+      // The rendered second mention confirms the transcript has caught up with the first completion.
+      await page.locator('[data-bot-group-message-id^="incoming-"]').nth(1).waitFor();
+      assert.equal(await standInReplies.count(), 0);
+      await completeStandInReplies.click();
+      await standInReplies.waitFor();
+      assert.equal(await standInReplies.count(), 1);
       // Attribution is a content-sized tooltip, not a settings-sized popover.
       const avatar = page.locator('[data-bot-group-message-id^="stand-in-"] button[aria-label]').filter({ has: page.locator('span[aria-hidden]') }).last();
       await avatar.hover();
-      await page.clock.runFor(600);
       const tooltip = page.getByRole('tooltip');
       await tooltip.waitFor();
       assert.equal((await tooltip.textContent()).trim(), await avatar.getAttribute('aria-label'));
@@ -100,7 +103,7 @@ export default {
       assert.equal(await avatar.getAttribute('title'), null, 'avoid duplicate native tooltip');
       await ui.capture('attribution-tooltip');
       await page.mouse.move(0, 0);
-      await page.clock.runFor(200);
+      await tooltip.waitFor({ state: 'hidden' });
       // The same member state and message attribution also appear inside a topic.
       await page.locator('[data-thread-preview=question]').click();
       const reply = page.getByRole('textbox', { name: await ui.t('bots.groupChat.server.replyPlaceholder'), exact: true });

@@ -27,10 +27,17 @@ describe('Orca provider routing snapshot wiring', () => {
     expect(wiring).toContain('providerService: getDesktopProviderService()');
     expect(wiring).toContain('getCatalog: getActiveCatalog');
     expect(routingSource).toContain('waitForDiscovery: true');
-    expect(registerSource).toContain('getProviderRoutingContext: async (agent, remoteHostId, agentDeviceId) => agentDeviceId && !remoteHostId');
-    // lead 的 Agent 在另一台电脑运行时按那台的目录；其余与原来一致。
-    expect(registerSource).toContain("deviceWorkerRoutingContext(await readDeviceProviderViews(remoteBackgroundInvoke, agentDeviceId), agent ?? 'claude-code')");
-    expect(registerSource).toContain('sshCodexWorkerRoutingContext(await readSshCodexModelList({ id: remoteHostId }, listSshCodexProviders))');
+    // Protocol guard: remote workers must read the execution host's catalog,
+    // while SSH keeps its own catalog. Allow earlier unsupported-engine checks.
+    // Native-engine admission itself is exercised by orcaWorkerCreationService tests.
+    const routeStart = registerSource.indexOf('getProviderRoutingContext: async (agent, remoteHostId, agentDeviceId) =>');
+    const routeEnd = registerSource.indexOf('isSelfDeviceId:', routeStart);
+    expect(routeStart).toBeGreaterThanOrEqual(0);
+    expect(routeEnd).toBeGreaterThan(routeStart);
+    const routeWiring = registerSource.slice(routeStart, routeEnd);
+    expect(routeWiring).toContain('agentDeviceId && !remoteHostId');
+    expect(routeWiring).toContain("deviceWorkerRoutingContext(await readDeviceProviderViews(remoteBackgroundInvoke, agentDeviceId), agent ?? 'claude-code')");
+    expect(routeWiring).toContain('sshCodexWorkerRoutingContext(await readSshCodexModelList({ id: remoteHostId }, listSshCodexProviders))');
   });
 
   it('resumes an idle parent with the stored provider so Bot completions can wake it', () => {

@@ -820,5 +820,6 @@
     "uploadsPending": "Ainda há anexos sendo enviados. Aguarde a conclusão antes de editar a mensagem.",
     "rollbackHint": "O envio desfará alterações em {{count}} arquivo(s) do último turno",
     "conversationOnlyHint": "O envio não restaurará os arquivos do projeto; as alterações anteriores nos arquivos serão mantidas"
-  }
+  },
+  "zcodeTextOnly": "O ZCode aceita apenas texto por enquanto. Cole o conteúdo do arquivo na sua mensagem."
 }

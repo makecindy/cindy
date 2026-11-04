@@ -94,6 +94,7 @@ const AGENT_LABEL: Record<AgentKind, string> = {
   'claude-code': 'Claude Code',
   codex: 'Codex',
   pi: 'Pi',
+  zcode: 'ZCode',
 };
 
 /**
@@ -484,6 +485,7 @@ export function UnifiedModelList({
   const [advancedRow, setAdvancedRow] = useState<UnionModelRow | null>(null);
   const [advancedOpen, setAdvancedOpen] = useState(false);
   const openAdvanced = (row: UnionModelRow) => {
+    if (provider.nativeAgent === 'zcode') return;
     setAdvancedRow(row);
     setAdvancedOpen(true);
   };
@@ -898,7 +900,7 @@ export function UnifiedModelList({
    * 全部搬进抽屉,一项能力都没减。换掉的理由是那个菜单只有一个真入口值得点开 ——
    * 多一层点击只是把配置藏起来,而抽屉本身就是配置该去的地方。
    */
-  const rowAdvancedButton = (row: UnionModelRow) => (
+  const rowAdvancedButton = (row: UnionModelRow) => provider.nativeAgent === 'zcode' ? null : (
     <Tip text={t('settings.providers.models.advanced.open')}>
       <button
         type="button"
@@ -1010,7 +1012,7 @@ export function UnifiedModelList({
           );
         })()}
         {provider.id === MANAGED_OLLAMA_PROVIDER_ID && <LocalPackagingTag libraryName={row.id} />}
-        {capNote && (
+        {capNote && provider.nativeAgent !== 'zcode' && (
           <Tip text={capNote}>
             <button
               type="button"

@@ -39,7 +39,7 @@ function remoteOrcaHistoryIdentity(raw: unknown): { orcaRemoteLead?: OrcaRemoteL
 // ── Types ───────────────────────────────────────────────────────────────────
 
 export type HistoryOrder = 'asc' | 'desc';
-export type HistoryAgentKind = 'cc' | 'codex' | 'pi';
+export type HistoryAgentKind = 'cc' | 'codex' | 'pi' | 'zcode';
 
 export interface HistoryCursor {
   createdAt: number; // unix ms

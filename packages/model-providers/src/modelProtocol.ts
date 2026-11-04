@@ -35,7 +35,7 @@ export function modelProtocolComparison(
     ? declaredApis[0] : null : reference ? [reference] : null;
   const protocolOf = (api: string | null | undefined) => compatibilityProtocol(api) ?? api ?? null;
   const harnessApi = (agent: AgentKind, api: PiModelApi | null): PiModelApi | null =>
-    agent === 'pi' ? api : agent === 'codex' ? 'openai-responses' : 'anthropic-messages';
+    agent === 'pi' || agent === 'zcode' ? api : agent === 'codex' ? 'openai-responses' : 'anthropic-messages';
   /** Compatibility mode means Cindy's local conversion only; any API the upstream offers is used as is. */
   const pathFor = (agent: AgentKind, api: PiModelApi | null | undefined): 'direct' | 'local' | 'unknown' => {
     if (!api) return 'unknown';
