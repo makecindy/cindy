@@ -54,11 +54,7 @@ import { appendFileSync, chmodSync, existsSync, mkdirSync, readdirSync, renameSy
 import { homedir } from "node:os";
 import { basename, dirname, isAbsolute, join, resolve } from "node:path";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
-import {
-  estimateTokens as estimateMessageTokens,
-  // [thunder 已注释] generateSummaryWithUsage 只被 session_before_compact 用。
-  // generateSummaryWithUsage,
-} from "@earendil-works/pi-coding-agent";
+import { estimateTokens as estimateMessageTokens } from "@earendil-works/pi-coding-agent";
 
 // ---------------------------------------------------------------------------
 // plan.js — verbatim from dsh-live-compact 1.0.1 (plain JS, no deps)
@@ -69,20 +65,27 @@ const KEEP_BUDGET = 8000;
 // 1.0.5: 备份按容量轮换(默认 128MB),写满后删最老的腾到上限的 80%,当前这刀的文件不删。
 // 仍按会话分目录(本仓有意与上游平铺目录不同):A 会话的卡片在 B 会话里不存在,
 // 分目录天然就做到「只淘汰本会话」,不用靠文件名里的会话标记。
-const SHADOW_MAX_SESSIONS = Number(process.env.SPINE_SHADOW_MAX_SESSIONS || 20);
+// 所有 SPINE_* 旋钮都必须校验:传错(非数字/负值)时回落到默认,不能让 NaN 进入删除判定。
+function positiveInt(raw: string | undefined, fallback: number): number {
+  const value = Number(raw);
+  return Number.isFinite(value) && value >= 1 ? Math.floor(value) : fallback;
+}
 
-function shadowMaxBytes(env: NodeJS.ProcessEnv = process.env): number {
-  const bytes = Number(env.SPINE_SHADOW_MAX_BYTES);
+const SHADOW_MAX_SESSIONS = positiveInt(process.env.SPINE_SHADOW_MAX_SESSIONS, 20);
+// 只回收「超过保留数且 7 天未动」的会话影子目录:按个数硬删会把还在用的会话清掉。
+const SHADOW_SESSION_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000;
+
+function shadowMaxBytes(): number {
+  const bytes = Number(process.env.SPINE_SHADOW_MAX_BYTES);
   if (Number.isFinite(bytes) && bytes > 0) return Math.floor(bytes);
-  const mb = Number(env.SPINE_SHADOW_MB);
+  const mb = Number(process.env.SPINE_SHADOW_MB);
   if (Number.isFinite(mb) && mb > 0) return Math.floor(mb * 1024 * 1024);
   return 128 * 1024 * 1024;
 }
 // spine.log 是纯 append,长会话会一直涨。按大小轮转,保留 N 个备份,总占用 ≤ (N+1)×上限。
-const SPINE_LOG_MAX_BYTES = Number(process.env.SPINE_LOG_MAX_BYTES || 1024 * 1024);
-const SPINE_LOG_KEEP = Number(process.env.SPINE_LOG_KEEP || 3);
+const SPINE_LOG_MAX_BYTES = positiveInt(process.env.SPINE_LOG_MAX_BYTES, 1024 * 1024);
+const SPINE_LOG_KEEP = positiveInt(process.env.SPINE_LOG_KEEP, 3);
 const RAIL_TOKENS = 32000;
-const TRUNK_SCOPE = "dynamic-v1";
 const LINE_TEST = 240;
 const CODE = /^(?:diff --git|index [0-9a-f]{4,}|@@ |--- |\+\+\+ |def |class |function |fn |pub |impl |import |export |#include |package |const |let |var |async |return |Traceback\b|Error:|Exception:|panic!|FAILED\b|PASS\b)|^\s+at \S+|^(?:\$ |> )?(?:git|cargo|npm|bun|python3|pip|curl|make) /;
 const PATH = /^[~./\w-]+\.(?:py|js|ts|tsx|go|rs|java|c|h|cc|cpp|md|json|yml|yaml)(?::\d+)?$/;
@@ -124,24 +127,11 @@ function repeatedNames(text: any) {
   return new Set([...counts].filter(([, count]: any) => count >= 2).map(([token]: any) => token));
 }
 
-// [死代码,已注释] 原仓 DSH 的模型压缩路由;本仓切割直接用 buildCard verdict,不经过这里。
-// function compactionRoute(plan: any) {
-//   const chars = Math.max(1, plan?.chars || 0);
-//   const uncovered = plan?.uncovered?.length || 0;
-//   const proseRatio = uncovered / chars;
-//   if (uncovered >= 20000 && proseRatio >= 0.5) return "wait-80";
-//   if (uncovered < 20000 && proseRatio < 0.2) return "local";
-//   return "wait-80";
-// }
-
 function planText(text: any) {
   const covered: any[] = [];
-  const uncovered: any[] = [];
   let fence: any = null;
-  let codeLines = 0;
   const flushFence = () => {
     if (!fence) return;
-    codeLines += fence.length;
     const body = fence.join("\n");
     covered.push(body.length > 1200 ? `${fence[0]}\n… ${fence.length} code lines …\n${fence.at(-1)}` : body);
     fence = null;
@@ -158,13 +148,10 @@ function planText(text: any) {
       continue;
     }
     if (!trimmed || isPadding(trimmed)) continue;
-    if (probe(trimmed)) {
-      codeLines += 1;
-      covered.push(trimmed.length > 300 ? `${trimmed.slice(0, 180)} …` : trimmed);
-    } else uncovered.push(trimmed);
+    if (probe(trimmed)) covered.push(trimmed.length > 300 ? `${trimmed.slice(0, 180)} …` : trimmed);
   }
   flushFence();
-  return { covered, uncovered: uncovered.join("\n"), codeLines };
+  return { covered };
 }
 
 // 1.0.3: 思考块不进正文。pi 的 thinking 块没有 .text,但兼容层/第三方 provider
@@ -232,9 +219,6 @@ function roleForLine(line: string, spans: SpanPiece[] | null): string {
   return "other";
 }
 
-function hardItems(text: any, spans: SpanPiece[] | null = null) {
-  return attributedLines(text, spans).map((item) => item.line);
-}
 
 // ---------------------------------------------------------------------------
 // 1.0.4: 短工具结果留在摘要里。整段留下(≤12 行且 ≤512 字),更长的只留一行提示,
@@ -358,6 +342,8 @@ function isSmallTool(span: SpanPiece): boolean {
 /** 1.0.5: 备份写成功之后卡片才指向它;没有省略就不把路径塞给模型。 */
 export function attachBackupHint(card: any, shadowFile?: string) {
   if (!card?.needsBackup || !shadowFile) return card;
+  // 同一份卡片被重放(重试/二次进入)时不能再拼一次路径,否则提示会重复叠在正文里。
+  if (card.shadowFile === shadowFile) return card;
   return {
     ...card,
     shadowFile,
@@ -420,131 +406,15 @@ export function buildCard(spanText: any, liveText: any = "", budget: number = KE
     .join("\n");
   return {
     ok,
-    scope: TRUNK_SCOPE,
-    hardLines: hard.map((item) => item.line),
     hardCount: hard.length,
     omittedHard,
     deferred,
     missing: missing.map((item) => item.line),
-    uncovered: split.uncovered,
-    keptChars: used,
     text,
-    needsBackup: tools.needsBackup,
+    // 预算丢掉的 covered 行只存在于备份里:needsBackup 必须为真,卡片才会给出路径。
+    needsBackup: tools.needsBackup || deferred > 0,
   };
 }
-
-// [死代码,已注释] 原仓 DSH 的模型压缩路由;本仓切割直接用 buildCard verdict,不经过这里。
-// function planMessages(messages: any[]) {
-//   const covered: any[] = [];
-//   const uncovered: any[] = [];
-//   const shortUsers: any[] = [];
-//   let chars = 0;
-//   let codeLines = 0;
-//   for (const message of messages) {
-//     const text = messageText(message);
-//     chars += text.length;
-//     const role = message?.role ?? message?.message?.role;
-//     if (role === "user" && text.length > 0 && text.length <= 280 && !text.startsWith(MARK)) {
-//       shortUsers.push(text.trim());
-//       continue;
-//     }
-//     const split = planText(text);
-//     covered.push(...split.covered);
-//     codeLines += split.codeLines;
-//     if (split.uncovered) uncovered.push(split.uncovered);
-//   }
-//   const unique = [...new Set(covered)];
-//   const kept: any[] = [];
-//   let used = 0;
-//   let omitted = 0;
-//   for (const line of unique) {
-//     if (used + line.length > KEEP_BUDGET) {
-//       omitted += 1;
-//       continue;
-//     }
-//     kept.push(line);
-//     used += line.length;
-//   }
-//   const prose = uncovered.join("\n");
-//   const joined = (messages || []).map(messageText).join("\n");
-//   const card = buildCard(joined, shortUsers.join("\n"));
-//   return {
-//     chars,
-//     codeLines,
-//     keptChars: card.keptChars,
-//     omitted,
-//     omittedHard: card.omittedHard,
-//     deferred: card.deferred,
-//     verdict: card.verdict,
-//     hardLines: card.hardLines,
-//     needsModel: compactionRoute({ chars, uncovered: prose }) !== "local",
-//     route: compactionRoute({ chars, uncovered: prose }),
-//     uncovered: prose,
-//     text: [
-//       card.text,
-//       `Shadowed characters: ${chars}. Regex kept lines: ${kept.length}. Omitted over budget: ${omitted}.`,
-//       "Short user messages:",
-//       ...(shortUsers.length === 0 ? ["- (none)"] : shortUsers.map((line) => `- ${line}`)),
-//     ].join("\n"),
-//   };
-// }
-
-// ---------------------------------------------------------------------------
-// thunder.js — verbatim from dsh-live-compact 1.0.1
-// ---------------------------------------------------------------------------
-
-// [thunder 已按审计注释] 阈压缩触发的 send-less 摘要路径,默认 SPINE_THUNDER!=1 永不执行且从未实测。恢复时同时恢复下面 session_before_compact handler、state.lastPrefix 与 generateSummaryWithUsage import。
-// const PROSE_TOKEN_CAP = 32000;
-
-// function sharedPrefixLength(previous: any, next: any) {
-//   if (!previous || !next) return 0;
-//   const limit = Math.min(previous.length, next.length);
-//   let index = 0;
-//   const step = 64;
-//   while (index + step <= limit && previous.slice(index, index + step) === next.slice(index, index + step)) index += step;
-//   while (index < limit && previous[index] === next[index]) index += 1;
-//   return index;
-// }
-
-// function decideThunder({ previous, next, modelKind, prefixTokens, attachMaxTokens = 80000 }: any) {
-//   if (!previous || !next) return "send-less";
-//   const shared = sharedPrefixLength(previous, next);
-//   const ratio = shared / Math.max(previous.length, 1);
-//   if (ratio < 0.9) return "send-less";
-//   if (modelKind === "27b" && (prefixTokens || 0) > attachMaxTokens) return "send-less";
-//   return "attach";
-// }
-
-// function estimateProseTokens(text: any) {
-//   const cjk = (String(text).match(/[\u4e00-\u9fff]/g) || []).length;
-//   return Math.ceil(cjk / 1.5 + (String(text).length - cjk) / 4);
-// }
-
-// function buildSendLess({ taskLine, uncovered, facts, proseTokens = PROSE_TOKEN_CAP }: any) {
-//   const kept = (facts || []).filter(Boolean);
-//   let prose = uncovered || "";
-//   if (estimateProseTokens(prose) > proseTokens) {
-//     let low = 0;
-//     let high = prose.length;
-//     while (low < high) {
-//       const mid = Math.ceil((low + high) / 2);
-//       if (estimateProseTokens(prose.slice(0, mid)) <= proseTokens) low = mid;
-//       else high = mid - 1;
-//     }
-//     prose = prose.slice(0, low);
-//   }
-//   return [
-//     taskLine || "Continue the current task.",
-//     "Facts already copied locally:",
-//     ...(kept.length ? kept.map((fact: any) => `- ${fact}`) : ["- (none)"]),
-//     "Uncovered prose to summarize:",
-//     prose || "(none)",
-//   ].join("\n");
-// }
-
-// ---------------------------------------------------------------------------
-// index.js — DSH engine ported onto the pi extension API
-// ---------------------------------------------------------------------------
 
 const SUMMARY_OPEN_TAG = "<compacted-summary>";
 const SUMMARY_CLOSE_TAG = "</compacted-summary>";
@@ -557,7 +427,6 @@ const MAX_TAIL = 2200;
 const parsedMinPressure = Number(process.env.SPINE_MIN_TOKENS || 20000);
 // 非法环境值回退默认:NaN 会让门槛恒 false(功能静默关闭),负数/0 会让每次 settle 都动刀。
 const MIN_PRESSURE = Number.isFinite(parsedMinPressure) && parsedMinPressure > 0 ? parsedMinPressure : 20000;
-const MAX_TRACKED_SESSIONS = 64;
 const DEFAULT_KEY = "__default__";
 const SPINE_CUSTOM_TYPE = "pi-live-compact";
 
@@ -577,18 +446,13 @@ interface SpineEntry {
   calls: string[];
   /** Tool call ids answered by this entry (toolResult.toolCallId). */
   results: string[];
-  // [死字段,已注释] 赋值后从未被读取。
-  // source: any;
 }
 
 interface SpineState {
   key: string;
-  // [thunder 已注释] 前缀快照只服务 decideThunder 的 attach 判据;注释后不再每刀拼接整个前缀。
-  // lastPrefix: string;
-  // lastPrefixTokens: number;
 }
 
-// 与原仓 eventText 一致:只取正文块。toolCall 参数不进 span/live/hardItems——
+// 与原仓 eventText 一致:只取正文块。toolCall 参数不进 span/live——
 // 一次 write 的整文件参数就能顶穿卡片预算,让这类轮次必然切割失败。
 function messageText(message: any): string {
   const content = message?.content ?? message?.message?.content;
@@ -631,6 +495,13 @@ const REDACT_RULES: Array<[RegExp, string]> = [
   [/(?<![A-Za-z0-9])Bearer\s+[A-Za-z0-9._-]{16,}/gi, "Bearer [REDACTED]"],
   [/(?<![A-Za-z0-9])sk-[A-Za-z0-9_-]{16,}/g, "[REDACTED]"],
   [/(?<![A-Za-z0-9])(?:gh[pousr]_[A-Za-z0-9]{20,}|xox[abps]-[A-Za-z0-9-]{10,})/g, "[REDACTED]"],
+  // 云厂商固定前缀凭证:AWS AK/ASIA、Google AIza、Stripe sk-live-prefix。
+  [/(?<![A-Za-z0-9])(?:AKIA|ASIA)[A-Z0-9]{16}/g, "[REDACTED]"],
+  [/(?<![A-Za-z0-9])AIza[0-9A-Za-z_-]{35}/g, "[REDACTED]"],
+  // 连接串里内嵌的密码:postgres://user:pass@host → 只打码密码段。
+  [/([a-z][a-z0-9+.-]*:\/\/[^:/\s@]+:)([^@\s/]{4,})(@)/gi, "$1[REDACTED]$3"],
+  // PEM 私钥整块(含 OPENSSH 与 RSA/EC)。
+  [/-----BEGIN [A-Z ]*PRIVATE KEY-----[\s\S]*?-----END [A-Z ]*PRIVATE KEY-----/g, "[REDACTED PRIVATE KEY]"],
 ];
 export function redactSecrets(text: string): string {
   let out = text;
@@ -679,8 +550,6 @@ function shadowSections(entry: SpineEntry): string {
   return parts.join("\n\n");
 }
 
-const stateBySession = new Map<string, SpineState>();
-
 function sessionKey(ctx: any): string {
   try {
     const id = ctx.sessionManager?.getSessionId?.();
@@ -691,28 +560,23 @@ function sessionKey(ctx: any): string {
 }
 
 function stateFor(ctx: any): SpineState {
-  const key = sessionKey(ctx);
-  let state = stateBySession.get(key);
-  if (state) {
-    stateBySession.delete(key);
-    stateBySession.set(key, state);
-    return state;
-  }
-  state = { key };
-  stateBySession.set(key, state);
-  if (stateBySession.size > MAX_TRACKED_SESSIONS) {
-    for (const [oldKey, old] of stateBySession) {
-      if (stateBySession.size <= MAX_TRACKED_SESSIONS) break;
-      if (oldKey === key) continue;
-      stateBySession.delete(oldKey);
-    }
-  }
-  return state;
+  // SpineState 现在只有 key(前缀快照随 thunder 一起注释掉了),Map 缓存没有可缓存的东西。
+  return { key: sessionKey(ctx) };
 }
 
 /** 实例级根:dev / packaged 各一份,跨会话稳定(原仓对应 DSH_HOME)。 */
-function spineRoot(): string {
-  if (process.env.SPINE_SHADOW_DIR) return process.env.SPINE_SHADOW_DIR;
+let rootWarned = false;
+
+export function spineRoot(): string {
+  const override = process.env.SPINE_SHADOW_DIR;
+  if (override) {
+    // 相对路径会按 pi 的 cwd(用户仓库)解析,把明文备份写进 git 工作树;只认绝对路径。
+    if (isAbsolute(override)) return override;
+    if (!rootWarned) {
+      rootWarned = true;
+      console.error(`[pi-live-compact] SPINE_SHADOW_DIR is not absolute (${override}); falling back to the default root`);
+    }
+  }
   // 原仓用 DSH_HOME(实例级);pi 的对应物是 PI_CODING_AGENT_DIR,但它是每会话的
   // <agentHome>/run-tmp/<hash>,会话结束就清 —— 放那里卡片里的路径会变成死链。
   // 取它的祖父目录(agentHome),既按实例隔离,又跨会话稳定。
@@ -739,25 +603,12 @@ function shadowName(key: string): string {
   return `${Date.now()}-${tag}-${randomBytes(4).toString("hex")}.txt`;
 }
 
-/**
- * 1.0.5 容量轮换:写之前先腾地方。incoming 本身超上限就照写(单独警告一次),
- * 否则删最老的文件直到「已用 + incoming ≤ 上限的 80%」。当前这刀要写的文件不删。
- * 删不掉就返回 ok=false —— 调用方据此放弃这一刀,不去指向一个写不进去的备份。
- */
-export function rotateShadow(options: {
-  dir: string;
-  incomingBytes: number;
-  protectPath?: string;
-  cap?: number;
-}) {
-  const cap = options.cap ?? shadowMaxBytes();
-  const protect = options.protectPath ? resolve(options.protectPath) : "";
-  let files: Array<{ path: string; size: number; mtimeMs: number }> = [];
+function listShadowFiles(dir: string): Array<{ path: string; size: number; mtimeMs: number }> {
   try {
-    files = readdirSync(options.dir)
+    return readdirSync(dir)
       .filter((name) => name.endsWith(".txt"))
       .map((name) => {
-        const full = join(options.dir, name);
+        const full = join(dir, name);
         try {
           const stat = statSync(full);
           return stat.isFile() ? { path: full, size: stat.size, mtimeMs: stat.mtimeMs } : null;
@@ -767,36 +618,54 @@ export function rotateShadow(options: {
       })
       .filter((item): item is { path: string; size: number; mtimeMs: number } => item !== null);
   } catch {
-    files = [];
+    return [];
   }
+}
+
+/**
+ * 容量轮换:新备份已经写好之后再调,所以 protectPath 指向的是一份真实存在的文件。
+ * 单份就超上限时直接拒绝(返回 oversize) —— 删光旧备份也装不下,不如让调用方放弃这一刀。
+ * 删不掉的单个文件跳过继续删下一个;只有最终仍装不下才算失败。
+ */
+export function rotateShadow(options: {
+  dir: string;
+  incomingBytes: number;
+  protectPath?: string;
+  cap?: number;
+}) {
+  const cap = options.cap ?? shadowMaxBytes();
+  const protect = options.protectPath ? resolve(options.protectPath) : "";
+  const files = listShadowFiles(options.dir);
   let used = files.reduce((sum, file) => sum + file.size, 0);
-  const low = Math.floor(cap * 0.8);
-  const oversize = options.incomingBytes > cap;
-  if (!oversize && used + options.incomingBytes <= cap) {
+  if (options.incomingBytes > cap) {
+    return { ok: false, deleted: 0, freed: 0, used, cap, oversize: true };
+  }
+  if (used + options.incomingBytes <= cap) {
     return { ok: true, deleted: 0, freed: 0, used, cap, oversize: false };
   }
+  const low = Math.floor(cap * 0.8);
   let deleted = 0;
   let freed = 0;
-  let failed = false;
   const candidates = files.filter((file) => file.path !== protect).sort((left, right) => left.mtimeMs - right.mtimeMs);
   for (const file of candidates) {
-    if (!oversize && used + options.incomingBytes <= low) break;
+    if (used + options.incomingBytes <= low) break;
     try {
       unlinkSync(file.path);
     } catch {
-      failed = true;
-      break;
+      continue;
     }
     used -= file.size;
     freed += file.size;
     deleted += 1;
   }
-  return { ok: !failed && (oversize || used + options.incomingBytes <= cap), deleted, freed, used, cap, oversize };
+  return { ok: used + options.incomingBytes <= cap, deleted, freed, used, cap, oversize: false };
 }
 
 /** Keep only the newest SHADOW_MAX_SESSIONS session directories. */
-function pruneShadowSessions(root: string): void {
+export function pruneShadowSessions(root: string): void {
   try {
+    // 只回收「超出保留数且 7 天没动过」的会话目录:按个数硬删会把还在用的会话清掉。
+    const cutoff = Date.now() - SHADOW_SESSION_MAX_AGE_MS;
     const dirs = readdirSync(root)
       .map((name) => {
         const full = join(root, name);
@@ -809,7 +678,7 @@ function pruneShadowSessions(root: string): void {
       })
       .filter((item): item is { full: string; mtime: number } => item !== null)
       .sort((left, right) => right.mtime - left.mtime);
-    dirs.slice(Math.max(1, SHADOW_MAX_SESSIONS)).forEach((item) => {
+    dirs.slice(SHADOW_MAX_SESSIONS).filter((item) => item.mtime < cutoff).forEach((item) => {
       try {
         rmSync(item.full, { recursive: true, force: true });
       } catch {}
@@ -852,27 +721,35 @@ function tightenShadow(dir: string): void {
 function saveShadow(state: SpineState, dir: string, file: string, body: string): void {
   const id = state.key || DEFAULT_KEY;
   const incoming = Buffer.byteLength(body);
+  // 先写成功再轮换:任何一步失败最多多出一份新备份,绝不丢旧备份。
+  const temp = `${file}.tmp`;
+  try {
+    writeFileSync(temp, body, { mode: 0o600 });
+    chmodSync(temp, 0o600);
+    renameSync(temp, file);
+  } catch (error) {
+    try {
+      unlinkSync(temp);
+    } catch {}
+    logLine(state, `spine shadow write failed: ${(error as Error)?.message ?? error}; 这一刀不切`);
+    throw new Error("spine: shadow backup was not written");
+  }
   const rotation = rotateShadow({ dir, incomingBytes: incoming, protectPath: file });
   if (!rotation.ok) {
+    // 轮换没腾出空间(或单份就超上限):撤掉刚写的这份,旧备份原样保留。
+    try {
+      unlinkSync(file);
+    } catch {}
     // 同一次会话只警告一次:每轮都刷一遍会把日志刷满。
     if (!shadowWarned.has(id)) {
       shadowWarned.add(id);
-      logLine(state, `spine shadow full: used=${rotation.used} cap=${rotation.cap}; 删不掉旧备份,这一刀不切`);
+      logLine(state, `spine shadow full: used=${rotation.used} cap=${rotation.cap} oversize=${rotation.oversize}; 这一刀不切`);
     }
-    throw new Error("spine: shadow backup is full; leaving the span");
+    throw new Error(rotation.oversize ? "spine: shadow backup is larger than the cap" : "spine: shadow backup is full; leaving the span");
   }
   if (rotation.deleted > 0) {
     logLine(state, `spine shadow rotate: 删除 ${rotation.deleted} 个文件,腾出 ${rotation.freed} 字节,用量 ${rotation.used + incoming}/${rotation.cap}`);
   }
-  if (rotation.oversize && !shadowWarned.has(`oversize:${id}`)) {
-    shadowWarned.add(`oversize:${id}`);
-    logLine(state, `spine shadow oversize: 这一份备份超过上限 ${rotation.cap},已写下`);
-  }
-  writeFileSync(file, body, { mode: 0o600 });
-  try {
-    chmodSync(file, 0o600);
-  } catch {}
-  if (!existsSync(file)) throw new Error("spine: shadow backup was not written");
 }
 
 function logLine(state: SpineState, message: string) {
@@ -1112,13 +989,12 @@ export default function (pi: ExtensionAPI) {
     try {
       const spanEntries = entries.slice(chunk.start, chunk.end + 1);
       const shadow = shadowDirectory(state.key);
-      mkdirSync(shadow, { recursive: true, mode: 0o700 });
-      tightenShadow(shadow);
       // 备份带角色标记与思考原文(1.0.3),工具调用参数也留着供本地恢复。
       const body = redactSecrets(spanEntries.map((entry) => shadowSections(entry)).join("\n\n"));
       const file = join(shadow, shadowName(state.key));
 
-      const card = attachBackupHint(chunk.card, file);
+      // 卡片正文会一直留在上下文里(小工具结果是整段原样进卡片),脱敏必须在这一侧也做。
+      const card = attachBackupHint({ ...chunk.card, text: redactSecrets(chunk.card.text) }, file);
       const summaryBlock = { type: "text", text: card.text };
       const content = [
         { type: "text", text: `${CHECKPOINT_PREAMBLE}\n\n${SUMMARY_OPEN_TAG}` },
@@ -1126,11 +1002,15 @@ export default function (pi: ExtensionAPI) {
         { type: "text", text: SUMMARY_CLOSE_TAG },
       ];
       framedTokens = estimateTokens({ role: "user", content, timestamp: Date.now() });
-      if (typeof framedTokens === "number" && framedTokens >= chunk.tokens) {
+      // 算不出卡片大小时不能默认它更小:NaN 比较恒 false,漏过去会白写一份备份。
+      if (!Number.isFinite(framedTokens) || (framedTokens as number) >= chunk.tokens) {
         // 先判定再落盘:被拒的切割不留孤儿 shadow 文件。
         throw new Error(`summary is not smaller than the shadowed content (${framedTokens} >= ${chunk.tokens})`);
       }
       // 卡片已经指向 file,所以备份必须先写成功(1.0.5);写不进去就不切。
+      // 判定通过才建目录并落盘:被拒的切割不留空目录(空目录会占会话回收额度)。
+      mkdirSync(shadow, { recursive: true, mode: 0o700 });
+      tightenShadow(shadow);
       saveShadow(state, shadow, file, body);
       pruneShadowSessions(join(spineRoot(), "shadow"));
 
@@ -1171,88 +1051,7 @@ export default function (pi: ExtensionAPI) {
       return undefined;
     }
     if (drafts.length === 0) return undefined;
-    // [thunder 已注释] 前缀快照只服务 decideThunder;注释后每刀不再拼接整个前缀(O(n))。
-    // 原仓 rememberPrefix 在 commitSelectedSpan 之后:前缀是「切割后」的形态,
-    // 下一轮 sharedPrefixLength 才会接近全匹配(attach)。写成切割前的全文会让
-    // 切割后首轮 ratio 掉到 0.9 以下,误判 send-less。
-//     state.lastPrefix = [
-//       ...entries.slice(0, chunk.start).filter((entry) => entry.role !== "system").map((entry) => entry.text),
-//       chunk.card.text,
-//       ...entries.slice(chunk.end + 1).map((entry) => entry.text),
-//     ].join("\n");
-//     state.lastPrefixTokens = Math.max(0, before - chunk.tokens + (framedTokens ?? 0));
-    // Runner REPLACES the draft list with whatever a handler returns; preserve
-    // drafts proposed by earlier handlers (e.g. Cindy's subagent extension).
     return { entries: [...(event.entries ?? []), ...drafts] };
   });
 
-  // [thunder 已按审计注释] 默认 SPINE_THUNDER!=1 永不执行,且从未实测;保留原文便于恢复。
-//   // Thunder path: only when the stock threshold compaction fires.
-//   pi.on("session_before_compact", async (event: any, ctx: any) => {
-//     if (process.env.SPINE_THUNDER !== "1") return undefined;
-//     const state = stateFor(ctx);
-//     const { preparation, customInstructions, signal } = event;
-//     const messages = [...(preparation?.messagesToSummarize ?? []), ...(preparation?.turnPrefixMessages ?? [])];
-//     if (!ctx.model) {
-//       logLine(state, "thunder skipped: no active model; leaving the gate to default compaction");
-//       return undefined;
-//     }
-//     let joined: string;
-//     try {
-//       // 必须与 state.lastPrefix 同构(原仓 summarize 里 joined === input.messages.map(messageText))。
-//       // 用 serializeConversation 会得到完全不同的格式,sharedPrefixLength 恒为 0 → 永远 send-less。
-//       joined = messages.map((message: any) => messageText(message)).join("\n");
-//     } catch (error) {
-//       logLine(state, `thunder serialize failed: ${error instanceof Error ? error.message : String(error)}`);
-//       return undefined;
-//     }
-//     const mode = decideThunder({
-//       previous: state.lastPrefix || "",
-//       next: joined,
-//       modelKind: process.env.SPINE_THUNDER_MODEL === "27b" ? "27b" : "flash",
-//       prefixTokens: state.lastPrefixTokens || 0,
-//     });
-//     logLine(state, `thunder mode=${mode} prefixTokens=${state.lastPrefixTokens} spanChars=${joined.length}`);
-//     if (mode === "attach") return undefined;
-
-//     const users = messages.filter((message: any) => (message?.role ?? message?.message?.role) === "user");
-//     const taskLine = messageText(users.at(-1) || messages.at(-1)).slice(0, 500);
-//     const trunk = buildCard(joined, "");
-//     const facts = [...new Set([...(trunk.hardLines || []), ...(trunk.missing || [])])];
-//     const slim = buildSendLess({ taskLine, uncovered: trunk.uncovered, facts });
-//     const slimMessages = [{ role: "user", content: [{ type: "text", text: slim }], timestamp: Date.now() }];
-
-//     try {
-//       const auth = await ctx.modelRegistry?.getApiKeyAndHeaders?.(ctx.model);
-//       if (!auth?.ok) {
-//         logLine(state, "thunder skipped: auth unavailable; leaving the gate to default compaction");
-//         return undefined;
-//       }
-//       const { text, usage } = await generateSummaryWithUsage(
-//         slimMessages,
-//         ctx.model,
-//         preparation?.settings?.reserveTokens,
-//         auth.apiKey,
-//         auth.headers,
-//         signal,
-//         customInstructions,
-//         preparation?.previousSummary,
-//         ctx.thinkingLevel,
-//       );
-//       logLine(state, `thunder send-less summary ok usage=${usage?.totalTokens ?? "?"}`);
-//       return {
-//         compaction: {
-//           summary: text,
-//           firstKeptEntryId: preparation.firstKeptEntryId,
-//           tokensBefore: preparation.tokensBefore,
-//           usage,
-//           details: { liveCompact: "thunder-send-less" },
-//         },
-//       };
-//     } catch (error) {
-//       logLine(state, `thunder send-less failed: ${error instanceof Error ? error.message : String(error)}`);
-//       // Fall back to pi's default compaction.
-//       return undefined;
-//     }
-//   });
 }

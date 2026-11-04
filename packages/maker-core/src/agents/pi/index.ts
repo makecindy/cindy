@@ -1787,6 +1787,16 @@ export function buildPiSettingsJsonContent(
   }, null, 2) + '\n';
 }
 
+/** 比较 --extension 路径去重用:win32 上反斜杠/大小写不同也会指向同一个文件。 */
+function normalizeExtensionPath(value: string): string {
+  try {
+    const resolved = path.resolve(value);
+    return process.platform === 'win32' ? resolved.toLowerCase() : resolved;
+  } catch {
+    return value;
+  }
+}
+
 export class PiAgent extends BaseAgent {
   readonly kind: AgentKind = 'pi';
   readonly capabilities: Capabilities;
@@ -4181,7 +4191,8 @@ export class PiAgent extends BaseAgent {
             .split(';')
             .map((candidate) => candidate.trim())
             // 开关已经注入同一路径时不再重复 --extension(重复注册会跑两遍 hook)。
-            .filter((candidate) => candidate && candidate !== liveCompactExtensionPath)
+            // 必须按规范化绝对路径比较:这里拿到的是用户手写的原始串(可能是反斜杠/盘符大小写不同)。
+            .filter((candidate) => candidate && normalizeExtensionPath(candidate) !== normalizeExtensionPath(liveCompactExtensionPath))
             .flatMap((extensionPath) => ['--extension', extensionPath])),
         ...(loadProjectResourcesInPlace
           ? piProjectResourceCliArgs(projectResourceCli)
@@ -5719,6 +5730,11 @@ export class PiAgent extends BaseAgent {
         ...(proxySessionToken !== undefined ? { [PI_SESSION_TOKEN_ENV]: proxySessionToken } : {}),
         [PI_SECRET_ENV_NAMES_ENV]: JSON.stringify(piSecretEnvNames),
         PI_CODING_AGENT_DIR: configHome,
+        // 影子原文根目录显式交给扩展:设置页(存储/清理)按 <agentHome>/compaction-spine 统计,
+        // 扩展若自己推导就可能漂移,导致「统计恒 0 / 清理假成功」。
+        ...(liveCompactEnabled && !remote
+          ? { SPINE_SHADOW_DIR: joinRemotePosixPath(agentHome, 'compaction-spine') }
+          : {}),
         [PI_BASH_PACKAGE_HOME_ENV]: bashPackageHome,
         CINDY_PI_PERMISSION_FILE: permissionFile,
         ...(hosted ? { [DEVICE_HOSTED_PI_ENV]: deviceHostedPiEnvValue(hosted) } : {}),

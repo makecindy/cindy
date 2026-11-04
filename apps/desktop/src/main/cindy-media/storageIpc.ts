@@ -72,7 +72,6 @@ export interface StorageStatsResult {
   fixedCaches: {
     legacyImages: FixedDirectoryStats;
     chatAttachments: FixedDirectoryStats;
-    spine: FixedDirectoryStats;
   };
   deadDirs: legacyDeadDirs.DeadDirStatus[];
 }
@@ -246,12 +245,13 @@ export function createStorageIpcHandlers(deps: StorageIpcDeps) {
 
     async stats(): Promise<StorageStatsResult> {
       try {
-        const [blobs, deadDirs, legacyImages, chatAttachments, spine, remoteMedia] = await Promise.all([
+        // 影子原文不进这里:存储页不展示它(实验功能行用 spineStats 单独取),而全树遍历
+        // 一旦在此抛错会把整页统计拖成 success:false。
+        const [blobs, deadDirs, legacyImages, chatAttachments, remoteMedia] = await Promise.all([
           ledger.getStorageStats(deps.db),
           legacyDeadDirs.scanDeadDirs(deps.legacyRootDir),
           deps.getLegacyImagesDirStats?.() ?? Promise.resolve({ bytes: 0, fileCount: 0 }),
           deps.getChatAttachmentsDirStats?.() ?? Promise.resolve({ bytes: 0, fileCount: 0 }),
-          deps.getSpineDirStats?.() ?? Promise.resolve({ bytes: 0, fileCount: 0 }),
           ledger.listCacheBlobsByLru(deps.db, REMOTE_MEDIA_INTEGRATION),
         ]);
         return {
@@ -259,7 +259,7 @@ export function createStorageIpcHandlers(deps: StorageIpcDeps) {
           blobs,
           remoteMedia: { bytes: remoteMedia.reduce((sum, row) => sum + row.bytes, 0), fileCount: remoteMedia.length },
           legacy: { bytes: 0, fileCount: 0 },
-          fixedCaches: { legacyImages, chatAttachments, spine },
+          fixedCaches: { legacyImages, chatAttachments },
           deadDirs,
         };
       } catch (err) {
@@ -273,7 +273,6 @@ export function createStorageIpcHandlers(deps: StorageIpcDeps) {
           fixedCaches: {
             legacyImages: { bytes: 0, fileCount: 0 },
             chatAttachments: { bytes: 0, fileCount: 0 },
-            spine: { bytes: 0, fileCount: 0 },
           },
           deadDirs: [],
         };

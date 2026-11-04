@@ -204,14 +204,14 @@ function cloneAllowedSettings(values: unknown): Readonly<PiProjectSettingsValues
 
   const reserveTokens = compaction.reserveTokens;
   const keepRecentTokens = compaction.keepRecentTokens;
-  // 信任边界:项目 settings 是不可信内容。下界 1(0 与生成侧 Math.max(1,…) 口径冲突,会让切模
-  // 恒判「需全新运行时」);上界同 model-context-limit-store 的量级防线,防不可信仓库把保留量
-  // 写到天文数字让自动压缩永不触发。
-  const plausible = (tokens: unknown): tokens is number =>
-    typeof tokens === 'number' && Number.isSafeInteger(tokens) && tokens >= 1 && tokens <= 100_000_000;
+  // 信任边界:项目 settings 是不可信内容,上界防不可信仓库把保留量写到天文数字让自动压缩永不触发。
+  // 下界按字段分开:reserveTokens 由本仓生成侧 Math.max(1,…) 产出,0 会让切模恒判「需全新运行时」;
+  // keepRecentTokens 不来自生成侧,pi 的契约是「非负安全整数」(settings.md),0 合法,不能拒。
+  const plausible = (tokens: unknown, min: number): tokens is number =>
+    typeof tokens === 'number' && Number.isSafeInteger(tokens) && tokens >= min && tokens <= 100_000_000;
   if (
-    (reserveTokens !== undefined && !plausible(reserveTokens)) ||
-    (keepRecentTokens !== undefined && !plausible(keepRecentTokens))
+    (reserveTokens !== undefined && !plausible(reserveTokens, 1)) ||
+    (keepRecentTokens !== undefined && !plausible(keepRecentTokens, 0))
   ) return null;
   const clone = {
     ...(reserveTokens === undefined ? {} : { reserveTokens }),

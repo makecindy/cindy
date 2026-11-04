@@ -16,6 +16,7 @@
  */
 
 import { app } from 'electron';
+import fs from 'node:fs';
 import path from 'node:path';
 
 import { desktopMakerLogger } from './logger-adapter.js';
@@ -59,6 +60,18 @@ export function readLiveCompactSettings(): LiveCompactSettings {
 
 export function writeLiveCompactEnabled(enabled: boolean): void {
   store.invalidateIfChanged();
-  store.writePatch({ enabled });
+  try {
+    store.writePatch({ enabled });
+  } catch (error) {
+    // 共享 helper 的 preserveUnreadableFile 契约会拒写坏文件,结果开关永远打不开也关不上。
+    // 把坏文件改名留档再写一次:开关恢复可用,原始内容仍旧在磁盘上可查。
+    if (!/unreadable/i.test(String((error as Error)?.message ?? ''))) throw error;
+    const file = path.join(app.getPath('userData'), 'live-compact-settings.json');
+    const parked = `${file}.unreadable-${Date.now()}`;
+    fs.renameSync(file, parked);
+    log.warn('live compact setting file was unreadable; parked and rewritten', { parked });
+    store.invalidateIfChanged();
+    store.writePatch({ enabled });
+  }
   log.info('live compact setting written', { enabled });
 }

@@ -55,7 +55,6 @@ function storageApi() {
       fixedCaches: {
         legacyImages: { bytes: 0, fileCount: 0 },
         chatAttachments: { bytes: 0, fileCount: 0 },
-        spine: { bytes: 0, fileCount: 0 },
       },
       deadDirs: [],
     })),
@@ -263,7 +262,6 @@ describe('StorageManagementCard fixed cache directories', () => {
       fixedCaches: {
         legacyImages: { bytes: 0, fileCount: 0 },
         chatAttachments: { bytes: 0, fileCount: 0 },
-        spine: { bytes: 0, fileCount: 0 },
       },
       deadDirs: [],
     });
@@ -279,7 +277,6 @@ describe('StorageManagementCard fixed cache directories', () => {
       fixedCaches: {
         legacyImages: { bytes: 0, fileCount: 0 },
         chatAttachments: { bytes: 0, fileCount: 0 },
-        spine: { bytes: 0, fileCount: 0 },
       },
       deadDirs: [],
     });
@@ -344,7 +341,6 @@ describe('StorageManagementCard fixed cache directories', () => {
       fixedCaches: {
         legacyImages: { bytes: 2 * 1024 ** 3, fileCount: 2 },
         chatAttachments: { bytes: 3 * 1024 ** 3, fileCount: 3 },
-        spine: { bytes: 0, fileCount: 0 },
       },
       deadDirs: [],
     });

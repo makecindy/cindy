@@ -49,6 +49,22 @@ describe('live compact settings', () => {
     expect(fs.readFileSync(file, 'utf8')).toBe('{ not json');
   });
 
+  it('rewrites a corrupt file instead of locking the toggle forever', async () => {
+    const file = makeRoot();
+    fs.writeFileSync(file, '{ not json');
+    // reset-modules: 读入的缓存决定 readStatus,必须让本用例拿到自己那份损坏文件。
+    vi.resetModules();
+    const store = await import('../live-compact-store.js');
+
+    // 坏文件拒写是共享 helper 的既定契约;开关必须能自救,否则用户永远关不掉也打不开。
+    store.writeLiveCompactEnabled(true);
+    expect(store.readLiveCompactSettings().enabled).toBe(true);
+
+    const parked = fs.readdirSync(path.dirname(file)).filter((name) => name.includes('.unreadable-'));
+    expect(parked).toHaveLength(1);
+    expect(fs.readFileSync(path.join(path.dirname(file), parked[0]), 'utf8')).toBe('{ not json');
+  });
+
   it('picks up a hand-edited file on the next read', async () => {
     const file = makeRoot();
     const store = await import('../live-compact-store.js');

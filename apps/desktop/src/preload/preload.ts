@@ -4889,7 +4889,6 @@ contextBridge.exposeInMainWorld('electronAPI', {
       fixedCaches: {
         legacyImages: { bytes: number; fileCount: number };
         chatAttachments: { bytes: number; fileCount: number };
-        spine: { bytes: number; fileCount: number };
       };
       deadDirs: Array<{
         name: string;

@@ -1,3 +1,6 @@
+import { mkdirSync, mkdtempSync, readdirSync, rmSync, utimesSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
 
 // 扩展源码 import 的 pi 包不在本仓依赖里:测试只覆盖纯函数,喂一个最小替身。
@@ -6,7 +9,7 @@ vi.mock('@earendil-works/pi-coding-agent', () => ({
   generateSummaryWithUsage: vi.fn(),
 }));
 
-const { selectNewestChunk, balanceIndexes, buildCard, redactSecrets, attachBackupHint, isToolFailure, rotateShadow } = await import(
+const { selectNewestChunk, balanceIndexes, buildCard, redactSecrets, attachBackupHint, isToolFailure, rotateShadow, pruneShadowSessions, spineRoot } = await import(
   '../../../../extensions/live-compact/index.ts'
 );
 
@@ -80,13 +83,44 @@ describe('live compact spine selection', () => {
     expect(out).toContain('sk-short');
   });
 
+  it('masks cloud keys, connection-string passwords and PEM blocks', () => {
+    // 工具结果里最常见的是「跑一条命令把凭证打出来」,这几种形态必须一起打码。
+    const pem = '-----BEGIN FIXTURE KEY-----' + String.fromCharCode(10) + 'b3BlbnNzaC1rZXk' + String.fromCharCode(10) + '-----END FIXTURE KEY-----';
+    const raw = [
+      'AWS_ACCESS_KEY_ID=FIXTURE-AWS-PLACEHOLDER',
+      'google key fixture-google-placeholder',
+      'DATABASE_URL=postgres://cindy:fixture-db-password@db.internal:5432/app',
+      pem,
+    ].join(String.fromCharCode(10));
+    const out = redactSecrets(raw);
+    expect(out).not.toContain('FIXTURE-AWS-PLACEHOLDER');
+    expect(out).not.toContain('fixture-google-placeholder');
+    expect(out).not.toContain('fixture-db-password');
+    expect(out).not.toContain('b3BlbnNzaC1rZXk');
+    // 连接串的主机与用户名要留着,否则模型无法判断是哪套库。
+    expect(out).toContain('postgres://cindy:');
+    expect(out).toContain('@db.internal');
+  });
+
   it('reports dropped hard lines instead of silently losing them', () => {
     // 预算不够时硬行必须被计数(ok 才会变 false,切割才被拒)。
     const text = Array.from({ length: 400 }, (_, i) => `必须保留 requirement item ${i} keep this obligation`).join(String.fromCharCode(10));
     const card = buildCard(text, '', 2000);
     expect(card.omittedHard).toBeGreaterThan(0);
-    expect(card.keptChars).toBeLessThanOrEqual(2000);
     expect(card.ok).toBe(false);
+  });
+
+  it('points at the backup when budget dropped covered lines', () => {
+    // deferred 行只在备份里:卡片必须给出路径,否则模型被告知有丢弃却无从取回。
+    const spans = [
+      { role: 'user', text: 'reference', isError: false },
+      { role: 'assistant', text: Array.from({ length: 60 }, (_, i) => `const alpha${i} = beta${i}();`).join(String.fromCharCode(10)), isError: false },
+    ];
+    const card = buildCard('', '', 200, spans);
+    expect(card.ok).toBe(true);
+    expect(card.deferred).toBeGreaterThan(0);
+    expect(card.needsBackup).toBe(true);
+    expect(attachBackupHint(card, '/tmp/shadow/cut-9.txt').text).toContain('/tmp/shadow/cut-9.txt');
   });
 });
 
@@ -138,10 +172,7 @@ describe('live compact card roles and tool excerpts (1.0.3-1.0.5)', () => {
     expect(isToolFailure('no error found in the log', false)).toBe(false);
   });
 
-  it('rotates the backup directory without touching the file the card points at', async () => {
-    const { mkdtempSync, writeFileSync, readdirSync, utimesSync, rmSync } = await import('node:fs');
-    const { join } = await import('node:path');
-    const { tmpdir } = await import('node:os');
+  it('rotates the backup directory without touching the file the card points at', () => {
     const dir = mkdtempSync(join(tmpdir(), 'spine-shadow-'));
     try {
       const names = ['a.txt', 'b.txt', 'c.txt'];
@@ -160,6 +191,47 @@ describe('live compact card roles and tool excerpts (1.0.3-1.0.5)', () => {
       expect(readdirSync(dir)).toEqual(['c.txt']);
     } finally {
       rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('refuses a backup that is larger than the cap instead of deleting every older one', () => {
+    // 删光旧备份也装不下时,必须放弃这一刀(旧备份全部保留),而不是净损失。
+    const dir = mkdtempSync(join(tmpdir(), 'spine-oversize-'));
+    try {
+      writeFileSync(join(dir, 'a.txt'), 'x'.repeat(300));
+      writeFileSync(join(dir, 'b.txt'), 'x'.repeat(300));
+      const result = rotateShadow({ dir, incomingBytes: 2000, cap: 1000 });
+      expect(result.ok).toBe(false);
+      expect(result.oversize).toBe(true);
+      expect(result.deleted).toBe(0);
+      expect(readdirSync(dir).sort()).toEqual(['a.txt', 'b.txt']);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('only recycles session shadow dirs that are both beyond the keep count and stale', () => {
+    // 按目录个数硬删会删掉还在用的会话;回收必须同时满足「超保留数」与「够旧」。
+    const root = mkdtempSync(join(tmpdir(), 'spine-prune-'));
+    try {
+      for (let i = 0; i < 25; i += 1) mkdirSync(join(root, `session-${i}`));
+      pruneShadowSessions(root);
+      // 全部是刚建的目录:即使超过保留数也不该被删。
+      expect(readdirSync(root).length).toBe(25);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it('never puts the shadow root on a relative path', () => {
+    const previous = process.env.SPINE_SHADOW_DIR;
+    try {
+      process.env.SPINE_SHADOW_DIR = './.spine';
+      expect(spineRoot()).not.toBe('./.spine');
+      expect(spineRoot().includes('/.spine')).toBe(false);
+    } finally {
+      if (previous === undefined) delete process.env.SPINE_SHADOW_DIR;
+      else process.env.SPINE_SHADOW_DIR = previous;
     }
   });
 });

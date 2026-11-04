@@ -1039,8 +1039,6 @@ function devEnvEntries(env) {
     // CINDY_PI_EXTRA_EXTENSIONS / SPINE_* 仅本地会话生效:远端 daemon 加载不了本机路径,
     // pi-host 消费端对 remoteHostId 直接跳过;远端模式下这些变量不会进 pi 子进程。
     ['CINDY_PI_EXTRA_EXTENSIONS', env.CINDY_PI_EXTRA_EXTENSIONS],
-    ['SPINE_THUNDER', env.SPINE_THUNDER],
-    ['SPINE_THUNDER_MODEL', env.SPINE_THUNDER_MODEL],
     ['SPINE_MIN_TOKENS', env.SPINE_MIN_TOKENS],
     ['SPINE_SHADOW_DIR', env.SPINE_SHADOW_DIR],
   ];
