@@ -1092,6 +1092,40 @@ describe('daemon restarted outside MCP bootstrap', () => {
       bridgeInstanceId: 'bridge-1',
     })).toBe(true);
   });
+
+  it('invalidates an ensure that completes while the kill script is still running', async () => {
+    let killing = false;
+    let ensureDuringKill: Promise<unknown> | null = null;
+    const deps = {
+      ensureBridgeStarted: async () => ({ port: 38080, serverNames: SERVERS, bridgeInstanceId: 'bridge-1' }),
+      hasLiveTurnOnHost: () => false,
+    };
+    const host = {
+      id: 'host-kill-overlap',
+      exec: async (cmd: string) => {
+        if (cmd.includes('pkill') && !killing) {
+          killing = true;
+          // A session start runs a full ensure (bootstrap + fingerprint) before pkill lands.
+          ensureDuringKill = ensureRemoteCodexMcpBridge(host, deps);
+          await ensureDuringKill;
+        }
+        return { exitCode: 0, stdout: cmd.includes('config.toml') ? '' : 'ok', stderr: '' };
+      },
+      ensureRemoteForward: async (spec: { localHost: string; localPort: number; preferredRemotePort?: number }) => ({
+        remotePort: spec.preferredRemotePort ?? 47928,
+        close: async () => {},
+      }),
+    } as unknown as RemoteHost;
+    expect((await ensureRemoteCodexMcpBridge(host, deps)).ok).toBe(true);
+    expect(await killRemoteCodexDaemon(host)).toEqual({ ok: true });
+    expect(ensureDuringKill).not.toBeNull();
+    expect(hasPendingRemoteMcpDrift('host-kill-overlap', {
+      collabEnabled: true,
+      makerMemoryEnabled: false,
+      token: 'test-persistent-token',
+      bridgeInstanceId: 'bridge-1',
+    })).toBe(true);
+  });
 });
 
 describe('daemon bootstrap env parity (codex-connector R18 P1)', () => {
