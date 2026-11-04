@@ -282,6 +282,8 @@ Small interactive chips (button backgrounds, tag pills, avatar fills, selected-n
 
 ### Semantic & Accent
 
+**Mobile group mention text** — 用户 2026-11-04 要求群聊 `@点名` 样式对齐 PC；专用 `groupMentionText` 采用 CINDY Light／Dark `msg-link` 的对应色（Mobile 数值正本 `apps/mobile/src/theme/tokens.ts`），只用于群聊已识别点名，不用于普通链接、状态或其他文字。仅着色，不另加下划线、底色或字重；身份入口与边界见 §14.5、`bot-group-chat.md`。
+
 Toast loading is neutral: use the shared 16×16 Spinner in `--text-secondary`, with polite status semantics. Keep it visible until the operation settles and explicitly dismiss it; only failures use the error variant.
 
 The grayscale rule is near-absolute. The following are the **only** sanctioned non-gray colors in the system — each tightly scoped to a specific surface. New semantic colors must not be introduced without being recorded here first.
@@ -1517,10 +1519,10 @@ HTML 不提供复制文件、在文件列表中定位或选择应用。无侧边
    vs `https://` 前缀)。
 3. **聊天正文不使用 `--msg-link`。** 该 token 是主题契约(10 个内置主题各自定义,
    solarized 绿 / monokai 黄 / eclipse 青,用户导入 VS Code 主题时 `linkColor` 也映射到
-   它),而移动端根本没有链接色概念。要满足规则 1+2 的「两端统一」,聊天正文必须退出这个
+   它),而移动端普通链接没有独立链接色。要满足规则 1+2 的「两端统一」,聊天正文必须退出这个
    token,统一为**正文色 + 常显下划线**。token 本身保留(其它界面仍在用),只是不进
    markdown 正文与用户消息气泡。例外:伙伴群聊里的 `@成员` 点名不是链接,按产品裁决
-   (2026-10-20)用 `--msg-link` 着色、悬停出成员卡,见 `bot-group-chat.md`。
+   (2026-10-20)用 `--msg-link` 着色、悬停出成员卡。2026-11-04 用户要求手机点名样式与 PC 对齐：Mobile 专用 `groupMentionText` 对应 CINDY Light／Dark 的 `msg-link`；只改字色，不额外加下划线、底色或字重，保留作者原有 Markdown 强调。广播及歧义点名可着色，但只有能唯一确定成员的点名提供身份入口；普通链接规则不变，见 `bot-group-chat.md`。
 4. **候选判定:反引号不等于路径。** 行内 code 只接受真正的路径形状——带分隔符 / 绝对路径,
    或裸文件名;**不得**用「含斜杠或有个点后缀」兜底。显式 markdown 链接与正文裸路径不受此
    限(前者作者已声明,后者词法本就要求带分隔符)。

@@ -411,7 +411,7 @@ describe('group timeline', () => {
     await render(topic ? data : parseBotGroupChatData(data)!, 'ready', topic ? 'topic-root' : undefined, topic ? '' : 'mac');
     const mention = [...node.querySelectorAll('span')].find(span => span.textContent === '@咪咪')!;
     expect(mention).toBeDefined();
-    expect(JSON.parse(mention.getAttribute('data-style')!).textDecorationLine).toBe('underline');
+    expect(JSON.parse(mention.getAttribute('data-style')!).textDecorationLine).toBeUndefined();
     const tapMention = async () => act(async () => {
       const touch = new Event('touchstart', { bubbles: true });
       Object.defineProperties(touch, { pageX: { value: 108 }, pageY: { value: 246 } });
@@ -421,7 +421,7 @@ describe('group timeline', () => {
     expect(JSON.parse(byId('mentionPopover')!.getAttribute('data-position')!)).toMatchObject({ x: 108, y: 184 });
     expect(byId('botGroup.mention.identity')?.textContent).toContain('Cindy');
     expect(byId('botGroup.mention.identity')?.textContent).toContain('王悦 的伙伴');
-    expect(byId('botGroup.mention.identity')?.textContent).not.toContain('咪咪 (王悦)');
+    expect(byId('botGroup.mention.identity')?.textContent).toContain('咪咪 (王悦)');
     expect(byId('botGroup.mention.identity')?.textContent).toContain('已暂停');
     expect(byId('botGroup.mention.identity')?.textContent).not.toContain('groupChat.');
     expect(h.chat.act).not.toHaveBeenCalled();

@@ -36,13 +36,12 @@ function useMentionTouchContext(context?: BotGroupMentionContext) {
   };
 }
 
-function renderMentionText(text: string, styles: Styles, context?: BotGroupMentionContext, emphasize = false, labels = context?.labels, textStyle?: StyleProp<TextStyle>): ReactNode {
+function renderMentionText(text: string, styles: Styles, context?: BotGroupMentionContext, labels = context?.labels, textStyle?: StyleProp<TextStyle>): ReactNode {
   if (!labels) return text;
   const Span = Platform.OS === 'ios' ? MarkdownSelectableSpan : Text;
   return splitBotGroupMentionSegments(text, labels).map((segment, index) => {
     const member = segment.mention && context ? botGroupMentionMember(segment.text, context) : undefined;
-    const linkStyle = member && (StyleSheet.flatten(textStyle)?.textDecorationLine === 'line-through' ? styles.mentionStruckLink : styles.mentionLink);
-    return <Span key={index} style={[textStyle, segment.mention && emphasize && styles.mention, linkStyle]}
+    return <Span key={index} style={[textStyle, segment.mention && styles.mention]}
       accessibilityRole={member ? 'link' : undefined}
       onPress={member ? event => { event.stopPropagation(); context?.onPress(member); } : undefined}>{segment.text}</Span>;
   });
@@ -60,7 +59,7 @@ function renderInlines(inlines: readonly MobileMarkdownInline[], styles: Styles,
     // Keep formatting on each actual text run when splitting it around a mention.
     // Code and existing links retain their original hierarchy and are never identity targets.
     return <Span key={index} style={textStyle}>{inline.type === 'code' || inline.type === 'link' || inline.type === 'image'
-      ? text : renderMentionText(text, styles, context, false, context?.labels, textStyle)}</Span>;
+      ? text : renderMentionText(text, styles, context, context?.labels, textStyle)}</Span>;
   });
 }
 
@@ -143,7 +142,7 @@ export function BotGroupUserText({ content, mentionLabels, mentionContext }: { c
   const styles = useThemedStyles(makeStyles);
   const touch = useMentionTouchContext(mentionContext);
   return <View onTouchStart={touch.onTouchStart}><MarkdownSelectableText selectable style={styles.text}>
-    {renderMentionText(content, styles, touch.context, true, mentionLabels)}
+    {renderMentionText(content, styles, touch.context, mentionLabels)}
   </MarkdownSelectableText></View>;
 }
 
@@ -173,9 +172,6 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
     paddingHorizontal: spacing.sm, paddingVertical: spacing.xs },
   tableText: { color: colors.textPrimary, fontSize: typeScale.bodySmall, lineHeight: lineHeight.bodySmall },
   tableHeaderText: { color: colors.textSecondary, fontWeight: fontWeight.medium },
-  // Match desktop's text-only mention highlight without a chip fill.
-  mention: { fontWeight: fontWeight.medium },
-  // Mobile message clickability (DESIGN §14.5): inherit text color; only add an underline.
-  mentionLink: { textDecorationLine: 'underline' },
-  mentionStruckLink: { textDecorationLine: 'underline line-through' },
+  // Same as PC @ ranges: link color only; preserve authored weight and decorations.
+  mention: { color: colors.groupMentionText },
 });

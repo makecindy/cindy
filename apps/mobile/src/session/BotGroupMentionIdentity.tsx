@@ -7,7 +7,7 @@ import { useTheme } from '@/theme';
 import { BotGroupAvatar } from './BotGroupAvatars';
 import { botGroupMemberAvatar } from './botGroupRemote';
 import { BotGroupMentionPopover } from './BotGroupMentionPopover';
-import type { BotGroupMentionPoint } from './botGroupMentions';
+import { botGroupMentionDisplayName, type BotGroupMentionPoint } from './botGroupMentions';
 
 /** Read only the current group's public roster; never open a companion's private profile. */
 export function BotGroupMentionIdentity({ member, anchor, deviceId, onClose }: {
@@ -43,7 +43,7 @@ export function BotGroupMentionIdentity({ member, anchor, deviceId, onClose }: {
   return <View ref={surface} collapsable={false} pointerEvents="box-none" style={StyleSheet.absoluteFill}>
     {member && anchor && position?.anchor === anchor ? <BotGroupMentionPopover
       position={position} width={position.width} onClose={onClose}
-      name={member.name}
+      name={botGroupMentionDisplayName(member)}
       displayName={member.nickname && member.displayName && member.nickname !== member.displayName ? member.displayName : undefined}
       caption={[role, status].filter(Boolean).join(' · ')}
       avatar={<BotGroupAvatar deviceId={deviceId} online identity={{ botId: member.botId, name: member.name,
