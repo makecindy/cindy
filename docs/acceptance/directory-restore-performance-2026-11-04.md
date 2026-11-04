@@ -1,8 +1,10 @@
 # 目录恢复限并发：当前版本性能对照（2026-11-04）
 
-基线：`cd6c1b8dd23661fb8b1d0d9fc3d34cf7a19327dd`。仅保留 `useFileTree` 的目录恢复限并发及其回归测试；watcher 分片实现及新增测试已撤回，旧事件风暴报告移至本地实验归档。本轮未提交或推送。
+基线：`cd6c1b8dd23661fb8b1d0d9fc3d34cf7a19327dd`。仅保留 `useFileTree` 的目录恢复限并发及其回归测试；watcher 分片实现及新增测试已撤回，旧事件风暴报告移至本地实验归档。本报告记录提交前的轻量实验。
 
 ## 结论
+
+后续已补充 [完整 Desktop 界面对照](directory-restore-full-ui-2026-11-04.md)：200 目录的根目录可见帧提前约 23%–24%，但全部恢复帧没有稳定提速（浅色快 2.2%，深色慢 2.9%）。下面的 21% 不能表述为完整界面整体提速。
 
 当前版本仍有明确的数据恢复收益。恢复 200 个展开目录时，总耗时中位数降低约 21%，根目录就绪时间降低约 84%，主进程最大 timer 延迟降低约 88%；并发峰值从 201 降到 8。恢复 50 个目录时也有改善，0 个展开目录的对照基本持平。
 
@@ -42,7 +44,7 @@
 
 - 定向测试：`useFileTree.test.tsx` 31 条、恢复基线后的 `watcher.test.ts` 15 条，共 46 条通过，Vitest 总耗时 4.71 秒。
 - Desktop 类型检查通过；`check:test-hygiene`、`check:dev-docs` 和 `git diff --check` 均通过。
-- 本轮未重复完整界面视觉验收；此前的界面检查不计为本轮当前版本验证。
+- 此轻量实验未包含完整界面视觉验收；后续补测见上方完整 Desktop 界面对照，不混用两组指标。
 - macOS、SSH、device-link 网络及原问题现场未实测。
 - [机器可读结果](directory-restore-performance-2026-11-04.json)保留全部样本、汇总、基线提交、生产源码 SHA-256 和测量边界。
 - 本地复跑入口：`node tmp/issue8422/restore-current.mjs`。脚本、构建产物和日志位于 Git 忽略的 `tmp/issue8422/`，不随提交保留；脚本依赖该目录既有 `main.ts`、`renderer.tsx` 及 `build/baseline-final/` 的 preload/HTML。仓内 JSON 是本轮可移交的脱敏证据，不能将本地脚本视为仓内通用基准设施。
