@@ -2483,7 +2483,8 @@ it('routes Bot shortcuts through the scoped helper entry without exposing them t
       expect(model.required).toEqual(['agentKind', 'model']);
       expect(model.properties.fastMode.anyOf).toContainEqual({ type: 'string', enum: ['ultrafast'] });
       // #8784: Gemini rejects empty enum values with 400, so the effort enum
-      // must not carry the '' unset sentinel; omitting effort means unset.
+      // must not carry the '' unset sentinel; omitting effort leaves it
+      // unspecified ('' stays expressible via the MCP/Zod path).
       expect(model.properties.effort.enum).not.toContain('');
       const variants = tool.parameters.properties.triggers.items.anyOf;
       const interval = variants.find((item: any) => item.properties.kind.enum.includes('interval'));
