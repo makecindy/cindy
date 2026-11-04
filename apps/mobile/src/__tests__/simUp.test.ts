@@ -46,6 +46,7 @@ function setup(overrides: Record<string, unknown> = {}) {
     listDevices: vi.fn(() => [device("A", "Shutdown")]),
     hasApp: vi.fn(() => true),
     readJsLocation: vi.fn(() => null),
+    isPortListening: vi.fn(() => false),
     setJsLocation: vi.fn(),
     boot: vi.fn(async () => {}),
     launch: vi.fn(),
@@ -404,6 +405,7 @@ describe("selectSimUpDevice", () => {
       deviceName: null,
       hasApp: () => true,
       readJsLocation: () => null,
+      isPortListening: () => false,
       ...options,
     });
 
@@ -439,6 +441,28 @@ describe("selectSimUpDevice", () => {
           !["GAME", "EMPTY"].includes(candidate.udid),
       }).device?.udid,
     ).toBe("IDLE");
+  });
+
+  // Review of #8738: a device pointed at a port outside the scanned 8081-8086 range
+  // looked idle, so a lone candidate would have been repointed and relaunched.
+  it("treats a device on an unscanned port with a listener as busy", () => {
+    const devices = [device("BUSY", "Booted"), device("IDLE", "Shutdown")];
+    const isPortListening = vi.fn((port: number) => port === 8100);
+    const result = select(devices, {
+      readJsLocation: (candidate: { udid: string }) =>
+        candidate.udid === "BUSY" ? "localhost:8100" : null,
+      isPortListening,
+    });
+    expect(result.device?.udid).toBe("IDLE");
+    expect(isPortListening).toHaveBeenCalledWith(8100);
+  });
+
+  it("uses a booted device whose port has no listener", () => {
+    expect(
+      select([device("A", "Booted")], {
+        readJsLocation: () => "localhost:8100",
+      }).device?.udid,
+    ).toBe("A");
   });
 
   // Regression 2026-11-04: picking the most recently used device took another project's

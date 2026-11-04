@@ -61,7 +61,7 @@ function isOwnMetro(metro) {
  */
 export function selectSimUpDevice(
   devices,
-  { bundleId, metros, deviceName, hasApp, readJsLocation },
+  { bundleId, metros, deviceName, hasApp, readJsLocation, isPortListening },
 ) {
   const iPhones = devices.filter(
     (device) =>
@@ -80,11 +80,11 @@ export function selectSimUpDevice(
       if (deviceName) free.push(device);
       continue;
     }
-    const metro = metroByPort.get(
-      metroPortOfJsLocation(readJsLocation(device, bundleId)),
-    );
+    const port = metroPortOfJsLocation(readJsLocation(device, bundleId));
+    const metro = metroByPort.get(port);
     if (metro && isOwnMetro(metro)) return { device, choices: [] };
-    if (!metro) free.push(device);
+    // 扫描范围之外的端口也可能有别的任务在用:没扫到不等于空闲,要探测设备实际指向的端口。
+    if (!metro && !isPortListening(port)) free.push(device);
   }
   const shutdown = named.filter((device) => device.state === "Shutdown");
   if (deviceName)
@@ -165,6 +165,7 @@ function resolveDevice(options, deps, metros) {
     hasApp: deps.hasApp,
     readJsLocation: (candidate) =>
       deps.readJsLocation(deviceSet, candidate.udid, bundleId),
+    isPortListening: deps.isPortListening,
   });
   if (device) return { device, deviceSet };
   if (choices.length > 1) {

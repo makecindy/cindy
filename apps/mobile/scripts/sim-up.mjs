@@ -222,6 +222,8 @@ function logTail(path) {
 /** Metro must outlive this command, so it runs detached; its own log is kept by sim-start. */
 async function startMetro({ port, takeover, region, mock }) {
   const path = runFile(`sim-start-${port}.log`);
+  // 重启或接管时旧 Metro 在新 Metro 就绪前仍会应答 /status,所以以归属记录换了新进程为准。
+  const previousPid = readMetroOwner(port)?.pid ?? null;
   const fd = openSync(path, "a");
   const args = [
     join(scriptsDir, "sim-start.mjs"),
@@ -252,7 +254,16 @@ async function startMetro({ port, takeover, region, mock }) {
       const response = await fetch(`http://127.0.0.1:${port}/status`, {
         signal: AbortSignal.timeout(2_000),
       });
-      if ((await response.text()).includes("packager-status:running")) {
+      const owner = readMetroOwner(port);
+      const replaced =
+        owner?.pid !== undefined &&
+        owner.pid !== previousPid &&
+        typeof owner.metroLogPath === "string" &&
+        existsSync(owner.metroLogPath);
+      if (
+        replaced &&
+        (await response.text()).includes("packager-status:running")
+      ) {
         // Metro keeps writing here, duplicating its own log; unlinking frees it when Metro exits.
         rmSync(path, { force: true });
         return;
@@ -448,6 +459,11 @@ try {
       listDevices,
       hasApp,
       readJsLocation,
+      // 探测失败按有人在用处理,宁可多问一次也不打断别的任务。
+      isPortListening: (port) => {
+        const listeners = inspectMetroListeners([port]);
+        return !listeners.healthy || Boolean(listeners.pids[port]);
+      },
       setJsLocation,
       boot: bootDevice,
       launch: (deviceSet, udid, bundleId) => {
