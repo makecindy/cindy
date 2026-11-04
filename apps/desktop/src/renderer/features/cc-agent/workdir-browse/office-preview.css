@@ -1,0 +1,59 @@
+/* Document content uses the host's Light/Dark palette, never source styles. */
+.office-preview {
+  font-size: 14px;
+  line-height: 1.6;
+}
+.office-preview p,
+.office-preview ul,
+.office-preview ol {
+  margin-block: 0.75em;
+}
+.office-preview ul {
+  list-style: disc;
+  padding-inline-start: 1.5em;
+}
+.office-preview ol {
+  list-style: decimal;
+  padding-inline-start: 1.5em;
+}
+.office-preview h1,
+.office-preview h2,
+.office-preview h3,
+.office-preview h4,
+.office-preview h5,
+.office-preview h6 {
+  font-weight: 500;
+  margin-block: 1em 0.5em;
+}
+.office-preview h1 {
+  font-size: 24px;
+}
+.office-preview h2 {
+  font-size: 18px;
+}
+.office-preview h3 {
+  font-size: 16px;
+}
+.office-preview img {
+  max-width: 100%;
+  height: auto;
+}
+.office-preview table {
+  border-collapse: collapse;
+}
+.office-preview td,
+.office-preview th {
+  border: 1px solid var(--border-default);
+  padding: 6px 10px;
+}
+.office-preview th {
+  background: var(--surface-elevated);
+  font-weight: 500;
+}
+.office-preview-word {
+  overflow-wrap: anywhere;
+}
+.office-preview-sheet td {
+  white-space: pre-wrap;
+  min-width: 64px;
+}

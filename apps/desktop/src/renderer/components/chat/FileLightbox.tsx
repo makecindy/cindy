@@ -11,6 +11,7 @@ import { FileBodyView } from '@/features/cc-agent/workdir-browse/FileBodyView';
 import { useFileContent } from '@/features/cc-agent/workdir-browse/hooks/useFileContent';
 import { isImagePath } from '@/features/cc-agent/workdir-browse/lib/imageExt';
 import { isPdfPath } from '@/features/cc-agent/workdir-browse/lib/pdfExt';
+import { isOfficePreviewSupported } from '@/lib/officePreview';
 import { toLocalFileUrl } from '@/lib/localPathResolver';
 import { fetchChatFileToCache } from '@/lib/remoteFileOpen';
 import { isRemoteFileOrigin } from '@/lib/sessionFileOrigin';
@@ -107,7 +108,8 @@ export function FileLightbox({
   const unrenderable =
     content.kind === 'binary' &&
     !isImagePath(content.stat.relPath) &&
-    !isPdfPath(content.stat.relPath);
+    !isPdfPath(content.stat.relPath) &&
+    !isOfficePreviewSupported(content.stat.relPath);
   if (local && kind === 'image')
     return (
       <ImageLightbox

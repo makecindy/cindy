@@ -2,9 +2,32 @@ import { useState } from 'react';
 import { mountPage, subscription } from '../../ui-page/harness';
 import { TextLightbox } from '../../../src/renderer/components/chat/TextLightbox';
 import { ImageLightbox } from '../../../src/renderer/components/chat/ImageLightbox';
+import JSZip from 'jszip';
+import * as XLSX from 'xlsx';
 
 const ZIP = '/fixture/2026-11-03-八张信用卡发票与核对清单.zip';
 const MARKDOWN = '/fixture/2026-11-03-发票核对说明.md';
+const WORD = '/fixture/示例文档.docx';
+const EXCEL = '/fixture/示例库存.xlsx';
+
+/** Synthetic Office bytes exercise the real browser parsers, not mocked HTML. */
+async function officeBytes(filePath: string): Promise<Uint8Array> {
+  if (filePath.endsWith('.xlsx')) {
+    const workbook = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(workbook, XLSX.utils.aoa_to_sheet([
+      ['名称', '数量', '备注'], ['示例扳手', 3, '纯虚构数据'], ['示例螺钉', 120, '仅供界面验证'],
+    ]), '汇总');
+    XLSX.utils.book_append_sheet(workbook, XLSX.utils.aoa_to_sheet([
+      ['项目', '说明'], ['第二工作表', '可切换阅读，不修改原件'],
+    ]), '明细');
+    return new Uint8Array(XLSX.write(workbook, { type: 'array', bookType: 'xlsx' }));
+  }
+  const zip = new JSZip();
+  zip.file('[Content_Types].xml', '<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/></Types>');
+  zip.file('_rels/.rels', '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="word/document.xml"/></Relationships>');
+  zip.file('word/document.xml', '<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body><w:p><w:r><w:t>Word 示例阅读</w:t></w:r></w:p><w:p><w:r><w:t>这是一份虚构文档，不包含任何个人信息。</w:t></w:r></w:p><w:p><w:r><w:t>只读预览保留正文，可以选择与复制；关闭后回到原界面。</w:t></w:r></w:p></w:body></w:document>');
+  return zip.generateAsync({ type: 'uint8array' });
+}
 
 const markdown = [
   '# 发票核对说明',
@@ -53,12 +76,13 @@ function Conversation() {
   );
 }
 
-function Fixture({ kind }: { kind: 'zip' | 'markdown' | 'image' }) {
+function Fixture({ kind }: { kind: 'zip' | 'markdown' | 'image' | 'word' | 'excel' }) {
   const [open, setOpen] = useState(true);
   const [image] = useState(sampleImage);
   return (
     <>
       <Conversation />
+      {open && (kind === 'word' || kind === 'excel') && <TextLightbox filePath={kind === 'word' ? WORD : EXCEL} onClose={() => setOpen(false)} />}
       {open && kind === 'zip' && <TextLightbox filePath={ZIP} onClose={() => setOpen(false)} />}
       {open && kind === 'markdown' && (
         <TextLightbox filePath={MARKDOWN} onClose={() => setOpen(false)} />
@@ -84,12 +108,16 @@ mountPage({
       onEvent: subscription('file-browser'),
     },
     readTextFilePreview: async () => ({ success: true, data: markdown, size: markdown.length }),
+    readFileBytes: async ({ filePath }: { filePath: string }) => {
+      const bytes = await officeBytes(filePath);
+      return { bytes, size: bytes.byteLength };
+    },
     showItemInFolder: async () => ({ success: true }),
     openPath: async () => '',
   }),
   render: (ctx) => (
     <Fixture
-      kind={ctx.case === 'markdown' ? 'markdown' : ctx.case === 'image' ? 'image' : 'zip'}
+      kind={ctx.case === 'word' ? 'word' : ctx.case === 'excel' ? 'excel' : ctx.case === 'markdown' ? 'markdown' : ctx.case === 'image' ? 'image' : 'zip'}
     />
   ),
 });
