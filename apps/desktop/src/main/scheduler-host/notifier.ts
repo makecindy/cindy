@@ -18,6 +18,7 @@ import type { Logger } from '@cindy/maker-scheduler';
 
 import { stripTrailingPathSeparators } from '../../shared/pathText';
 import { showDesktopSessionEvent } from '../notificationService';
+import { isSessionNotificationsMutedSync } from '../localDb/sessionFlagRegistry';
 import { getMobileNotifyGeneration, sendMobileSessionNotify } from '../device-link';
 import type { WecomGroupNotificationPublisher } from '../wecomGroupNotification';
 
@@ -51,8 +52,12 @@ export class DesktopNotifier implements Notifier {
       }
     }
     if (getMobileNotifyGeneration() !== generation) return;
+    // 「消息免打扰」任务不再发个人提醒。wecomGroup 是共享群通知,不跟个人静音走;
+    // 手机通道在 sendMobileSessionNotify 内另有同一道门,覆盖不走这里的调用方。
+    const muted = run.sessionId ? isSessionNotificationsMutedSync(run.sessionId) : false;
     if (
       schedule.notify.desktop &&
+      !muted &&
       this.deps.shouldNotifyDesktop() &&
       (!this.deps.isAgentIslandEnabled() || (run.status === 'failed' && !run.sessionId))
     ) {
@@ -62,7 +67,7 @@ export class DesktopNotifier implements Notifier {
         this.deps.logger.warn?.('desktop notify failed', err);
       }
     }
-    if (schedule.notify.feishu) {
+    if (schedule.notify.feishu && !muted) {
       try {
         await this.notifyFeishu(schedule, run);
       } catch (err) {

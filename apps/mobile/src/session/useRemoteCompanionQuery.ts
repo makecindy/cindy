@@ -37,6 +37,7 @@ export function useRemoteCompanionQuery<T>(
     binding: string;
     value: T | null;
     error: boolean;
+    cause?: unknown;
   }>({ identity, binding, value: null, error: false });
   const [revision, setRevision] = useState(0);
   const refresh = useCallback(() => setRevision((n) => n + 1), []);
@@ -122,13 +123,14 @@ export function useRemoteCompanionQuery<T>(
               });
             }
           })
-          .catch(() => {
+          .catch((cause: unknown) => {
             if (!disposed && generation === expected && currentBinding.current === binding)
               setState((previous) => ({
                 identity,
                 binding,
                 value: previous.identity === identity ? previous.value : null,
                 error: true,
+                cause,
               }));
           });
       };
@@ -191,6 +193,7 @@ export function useRemoteCompanionQuery<T>(
   return {
     value: options.enabled !== false && state.identity === identity ? state.value : null,
     error: state.identity === identity && (state.error || state.binding !== binding),
+    cause: state.identity === identity && state.binding === binding ? state.cause : undefined,
     online,
     refresh,
   };

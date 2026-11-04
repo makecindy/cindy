@@ -8,8 +8,27 @@ function socket(): MockSocket {
     send: vi.fn(), close: vi.fn(() => ws.onclose?.({} as CloseEvent)) } as ChatSocket & { send: ReturnType<typeof vi.fn>; close: ReturnType<typeof vi.fn> };
   sockets.push(ws); return ws;
 }
-const receive = async (ws: ChatSocket, data: unknown) => { ws.onmessage?.({ data: JSON.stringify(data) } as MessageEvent); await Promise.resolve(); await Promise.resolve(); };
+const receive = async (ws: ChatSocket, data: unknown) => {
+  ws.onmessage?.({ data: JSON.stringify(data) } as MessageEvent);
+  // Frames now await persistence and run in order before acknowledgement.
+  for (let tick = 0; tick < 8; tick++) await Promise.resolve();
+};
 let stop = () => {};
+it('acknowledges only after the changed projection is persisted and closes on a failed write', async () => {
+  let finish!: () => void;
+  const changed = vi.fn(() => new Promise<void>(resolve => { finish = resolve; }));
+  stop = subscribeChatServer({ baseUrl: 'https://chat.example.invalid', token: async () => 'fixture', current: () => true,
+    socket, ready: async () => ({ scope: `actor:${actorId}`, cursor: '0' }), changed, unavailable: vi.fn() });
+  await Promise.resolve(); const ws = sockets[0];
+  await receive(ws, { type: 'ready', actorId }); ws.send.mockClear();
+  await receive(ws, { type: 'changes', scope: `actor:${actorId}`, cursor: '1', changes: [] });
+  expect(ws.send).not.toHaveBeenCalled();
+  finish(); for (let tick = 0; tick < 8; tick++) await Promise.resolve();
+  expect(ws.send).toHaveBeenLastCalledWith(JSON.stringify({ type: 'ack', scope: `actor:${actorId}`, cursor: '1' }));
+  changed.mockRejectedValueOnce(new Error('storage full')); ws.send.mockClear();
+  await receive(ws, { type: 'changes', scope: `actor:${actorId}`, cursor: '2', changes: [] });
+  expect(ws.send).not.toHaveBeenCalled(); expect(ws.close).toHaveBeenCalled();
+});
 it('waits for reset state before resubscribing and ignores completion after disposal', async () => {
   let finish!: () => void;
   const reset = vi.fn(() => new Promise<void>(resolve => { finish = resolve; }));
@@ -68,4 +87,21 @@ it('subscribes focused history and the human account scope together, forwarding 
   const changes = [{ type: 'conversation.list.changed', data: { conversationId: actorId, hidden: true, revision: 3 } }];
   await receive(ws, { type: 'changes', scope: `actor:${actorId}`, cursor: '11', changes });
   expect(changed).toHaveBeenCalledWith(changes);
+});
+
+// Chat Server work.available (cindy-server#1151) only wakes computer companions. Each
+// changed() reloads the list and re-downloads every visible room snapshot on the phone.
+it('acknowledges owner work hints without reloading, but still reloads mixed batches', async () => {
+  const changed = vi.fn();
+  stop = subscribeChatServer({ baseUrl: 'https://chat.example.invalid', token: async () => 'fixture', current: () => true,
+    socket, ready: async () => ({ scope: `actor:${actorId}`, cursor: '0' }), changed, unavailable: vi.fn() });
+  await Promise.resolve(); const ws = sockets[0];
+  await receive(ws, { type: 'ready', actorId });
+  const hint = { type: 'work.available', entityId: actorId, data: { work: [{ botId: actorId, conversationId: actorId }] } };
+  await receive(ws, { type: 'changes', scope: `actor:${actorId}`, cursor: '1', changes: [hint] });
+  expect(changed).not.toHaveBeenCalled();
+  expect(ws.send).toHaveBeenLastCalledWith(JSON.stringify({ type: 'ack', scope: `actor:${actorId}`, cursor: '1' }));
+  const mixed = [hint, { type: 'notice.created', entityId: actorId, data: {} }];
+  await receive(ws, { type: 'changes', scope: `actor:${actorId}`, cursor: '2', changes: mixed });
+  expect(changed).toHaveBeenCalledWith(mixed);
 });

@@ -1,4 +1,6 @@
+import { deviceDisplayName } from '@/lib/deviceName';
 import { ProviderShareVisibilitySection } from './ProviderShareVisibilitySection';
+import { SubscriptionFastSetting } from './SubscriptionFastSetting';
 import { RemoteModelAccessSection, RemoteModelAccessDialog } from './RemoteModelAccessSection';
 import { RemoteAgentLimitsSection } from './RemoteAgentLimitsSection';
 /**
@@ -374,7 +376,7 @@ export function ProviderShareManagePage({
 
       {deviceId && (
         <p className="mt-2 text-12 leading-[1.5] text-[var(--settings-section-desc)]">
-          {t('providerGroup.management.note', { device: selfDeviceName ?? deviceId })}
+          {t('providerGroup.management.note', { device: deviceDisplayName(deviceId ?? '', selfDeviceName) })}
         </p>
       )}
 
@@ -506,10 +508,12 @@ export function ProviderShareManagePage({
         </section>
       )}
 
+      {providerForApproval?.subscriptionFastPolicy && <SubscriptionFastSetting provider={providerForApproval} deviceId={deviceId} />}
       <RemoteModelAccessSection key={`models:${deviceId ?? 'local'}:${providerId}`} providerId={providerId} deviceId={deviceId} />
 
       <ProviderGroupSection
         providerId={providerId} providerName={providerName} deviceId={deviceId} deviceName={deviceName}
+        fastPolicySupported={Boolean(providerForApproval?.subscriptionFastPolicy)}
         initialConfig={initialGroup} remoteProvider={remoteProvider} onConfigChange={setRemoteGroup}
       />
 

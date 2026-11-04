@@ -24,10 +24,9 @@ const vitestBin = (...args) => ({ type: 'packageBin', bin: 'vitest', args });
 // which a worker cannot see because `process.env` there is a thread-local copy
 // while `os.homedir()` reads the real environment through libuv.
 //
-// Node 24+ opts desktop out of threads: the suite segfaults during native-addon
-// finalization on macOS as well as Windows, even without the webstorage
-// execArgv. Older Node 22 macOS runs stay on threads to avoid process churn;
-// Windows has no launchservicesd, so it stays on forks regardless of version.
+// macOS and Windows opt desktop out of threads: native-addon finalization can
+// segfault even on Node 22 without the webstorage execArgv. Node 24+ also uses
+// forks on other platforms; older Linux runs retain threads.
 //
 // Keep every opt-out listed in the pool regression test, and keep the list
 // short: at 1330 of this tier's 1845 files, desktop alone decides whether the
@@ -41,7 +40,7 @@ export function desktopUnitPool(
   webstorageEnabled = nodeWebstorageEnabled(),
 ) {
   const nodeMajor = Number.parseInt(nodeVersion, 10);
-  return webstorageEnabled || platform === 'win32' || nodeMajor >= 24 ? 'forks' : 'threads';
+  return webstorageEnabled || platform === 'darwin' || platform === 'win32' || nodeMajor >= 24 ? 'forks' : 'threads';
 }
 
 /**
@@ -97,6 +96,9 @@ const makerPiManagerIntegrationInclude = [
 ];
 const desktopE2eInclude = [
   'src/main/maker-host/__tests__/*.e2e.test.ts',
+  // Guest fork through a provider group with a real Claude Code; skipped without apps/claude-code-bin.
+  'src/main/remote-agent/__tests__/groupRelayClaudeFork.e2e.test.ts',
+  'src/main/remote-agent/__tests__/startupProbe.e2e.test.ts',
 ];
 const mobileGuardInclude = [
   // Swift/delegate authorization, recording lifecycle, and native clipping are cross-runtime contracts.
@@ -116,7 +118,11 @@ const mobileGuardInclude = [
   'src/auth/__tests__/xdOrgBetaWiring.test.ts',
   // CSP must be applied at the WebView and download call sites, not only in its helper.
   'src/__tests__/htmlPreviewCsp.test.ts',
+  // Whole-repo static scan of text colours (five neutral tiers, placeholders); reads production sources.
+  'src/__tests__/textColorDiscipline.test.ts',
   'src/auth/__tests__/loginHandoffState.test.ts',
+  // DESIGN.md §16.2 copy budget: catalog strings against the login layout constants.
+  'src/auth/__tests__/loginConsentCopyBudget.test.ts',
   'src/__tests__/accountDeletion.test.ts',
   'src/__tests__/androidSessionInteractionParity.test.tsx',
   'src/__tests__/chatQuoteCrossDevice.test.ts',
@@ -149,12 +155,16 @@ const mobileGuardInclude = [
 // in the explicit guard tier. Keeping an exact allowlist makes it impossible
 // for a new source scan to silently become part of the ordinary unit gate.
 const desktopGuardInclude = [
+  // Cross-file host/engine prompt ownership and remote-authorization isolation.
+  'src/main/plugin-oauth/__tests__/runtimePrompt.test.ts',
   // Cross-hook voice stop/refine ownership and composer hydration race wiring.
   'src/renderer/__tests__/voiceInputEnterToSend.test.ts',
   'src/renderer/__tests__/sessionAgentSwitchRemoteRouting.contract.test.ts',
   'src/main/__tests__/deviceLinkVoiceCredentialBootstrap.test.ts',
   'src/main/__tests__/discordExternalization.test.ts',
   'src/main/__tests__/sessionRuntimeControlWiring.test.ts',
+  // Orca queued acceptance must keep using delivery-scoped authority, not the round guard.
+  'src/main/maker-ipc/__tests__/orcaDeliveryWiring.contract.test.ts',
   'src/main/localDb/ipc/__tests__/sessionCreatedBroadcast.test.ts',
   'src/renderer/__tests__/promptRecommendationBadge.test.ts',
   'src/renderer/__tests__/sessionHeaderMenuParity.test.ts',
@@ -172,6 +182,8 @@ const desktopGuardInclude = [
   'src/renderer/__tests__/xUsageGuideRiskContrast.test.ts',
   'src/main/__tests__/authHostedCallback.contract.test.ts',
   'src/main/__tests__/loginScenarioHarness.contract.test.ts',
+  // DESIGN.md §16.2 copy budget: locale catalogs against the login layout tokens.
+  'src/renderer/components/login/__tests__/loginConsentCopyBudget.test.ts',
   'src/main/__tests__/officialProfileMigrationPolicy.contract.test.ts',
   'src/renderer/__tests__/authContextRace.contract.test.ts',
   'src/main/__tests__/mobileClientPromptNote.contract.test.ts',
@@ -272,6 +284,8 @@ const desktopGuardInclude = [
   'src/renderer/__tests__/makerExperimentalThemeContract.test.ts',
   'src/renderer/__tests__/iconButtonTooltips.test.ts',
   'src/renderer/__tests__/modalSurfaceContract.test.ts',
+  // Existing project-picker source assertions enforce cross-file routing/design contracts.
+  'src/renderer/__tests__/newMakerProjectPicker.test.ts',
   'src/renderer/__tests__/orcaWorkflowRoute.test.ts',
   'src/renderer/__tests__/projectsSidebarSection.test.ts',
   'src/renderer/__tests__/remoteWorkerCreationContext.test.ts',
@@ -334,13 +348,9 @@ export default {
           // It runs exclusively so these workers never overlap outer workspaces.
           // The pool follows the webstorage flag, because the flag cannot
           // coexist with worker threads — see scripts/shared/node-webstorage.mjs
-          // for the crash it causes and the measurements. On Node 22, which is
-          // what local dev and CI run, the flag is a no-op, so this suite's 1330
-          // files take threads and stop spawning a process each. On a
-          // webstorage-enabled Node the flag wins and the suite stays on forks.
-          // win32 stays on forks unconditionally — threads segfaults there and
-          // the churn threads exists to avoid is macOS-only (see the pool note
-          // at the top of this file).
+          // for the crash it causes and the measurements. Node 22 Linux keeps
+          // threads; macOS and Windows use process isolation because native
+          // finalization can crash threads even without the webstorage flag.
           command: unitVitestCommand(
             desktopUnitWorkerCount(),
             desktopUnitPool(),
@@ -507,6 +517,7 @@ export default {
     requiredUnitWorkspace('@cindy/browser-control-runtime', 'packages/browser-control-runtime'),
     requiredUnitWorkspace('cindy-tools', 'packages/cindy-tools'),
     requiredUnitWorkspace('@cindy/device-link', 'packages/device-link'),
+    requiredUnitWorkspace('@cindy/device-link-relay', 'packages/device-link-relay'),
     noCollectableWorkspace('@cindy/embedding-client', 'packages/embedding-client'),
     requiredUnitWorkspace('@cindy/file-browser-core', 'packages/file-browser-core'),
     noCollectableWorkspace('@cindy/github-client', 'packages/github-client'),

@@ -308,6 +308,13 @@ export function createBotWorkbenchAccess(deps: BotWorkbenchAccessDeps) {
       return read(caller.botId, params.taskId);
     },
 
+    /** Whether this task is handed to the caller (the same scope `continueTask` enforces). */
+    async canContinue(params: { callerSessionId: string; taskId: string }): Promise<boolean> {
+      const caller = await deps.resolveCaller(params.callerSessionId);
+      if (!caller.ok) return false;
+      return (await authorize(caller.botId, params.taskId, 'continue', true)).ok;
+    },
+
     async continueTask(params: { callerSessionId: string; taskId: string; message: string }) {
       const message = params.message.trim();
       if (!message || message.length > WORKBENCH_TOOL_MAX_MESSAGE_CHARS) {

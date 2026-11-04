@@ -429,7 +429,10 @@ test("compareWithBaseline only lets counts stay or shrink", () => {
 
 	// Exercise the real CLI in its own Git repository. A same-PR JSON edit must
 	// not become trusted merely because it was committed or --update was used.
-	const root = fs.mkdtempSync(path.join(os.tmpdir(), "cindy-hygiene-ratchet-"));
+	// Node resolves ESM entry points through symlinks; macOS os.tmpdir() may use
+	// /var while import.meta.url uses /private/var. Match the real CLI path so
+	// its main guard runs rather than silently exiting before creating a baseline.
+	const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "cindy-hygiene-ratchet-")));
 	const baselinePath = path.join(root, "scripts", "test-hygiene-baseline.json");
 	const testPath = path.join(root, "apps", "sample", "sample.test.ts");
 	const relativeTestPath = "apps/sample/sample.test.ts";
@@ -457,6 +460,9 @@ test("compareWithBaseline only lets counts stay or shrink", () => {
 		git("update-ref", "refs/remotes/origin/main", firstIntroduction);
 		const bootstrap = cli(["--update"]);
 		assert.equal(bootstrap.status, 0, output(bootstrap));
+		assert.match(output(bootstrap), /baseline updated: 1 files/);
+		assert.deepEqual(JSON.parse(fs.readFileSync(baselinePath, "utf8")).files,
+			{ [relativeTestPath]: { sourceReads: 1 } });
 		assert.equal(cli().status, 0);
 		const trusted = commit();
 		git("update-ref", "refs/remotes/origin/main", trusted);

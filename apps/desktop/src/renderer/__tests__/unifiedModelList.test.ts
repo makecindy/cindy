@@ -412,7 +412,7 @@ it('enables both native Claude and Pi while leaving Codex compatibility opt-in',
   expect(modelVisibilityTargets(p, row, false)).toHaveLength(3);
 });
 
-it('enabling an imported Gemini row only enables Pi even when the supplier exposes three APIs', () => {
+it('enabling an imported Gemini row enables every engine whose API the supplier serves', () => {
   const entry = { ...model('google/gemini-3.8-flash'), nativeApi: 'google-generative-ai' as const, defaultEnabled: false };
   const p = { ...provider, agents: ['claude-code', 'codex', 'pi'] as ProviderView['agents'], models: {
     'claude-code': [{ ...entry, api: 'anthropic-messages' as const }],
@@ -420,6 +420,18 @@ it('enabling an imported Gemini row only enables Pi even when the supplier expos
     pi: [{ ...entry, api: 'openai-completions' as const }],
   } };
   const row = buildUnionRows(p)[0]!;
-  expect(modelVisibilityTargets(p, row, true)).toEqual([{ agent: 'pi', modelId: entry.id }]);
+  expect(modelVisibilityTargets(p, row, true)).toHaveLength(3);
   expect(modelVisibilityTargets(p, row, false)).toHaveLength(3);
+});
+
+// Unit: settings must retain a decision filter/group, not fold it into chat or other.
+// Existing audio cases did not cover evaluation; these three modes also lock Console parity.
+it('groups and filters decision, OCR and image editing as distinct management kinds', () => {
+  const p = { ...provider, agents: ['codex'], models: { codex: [
+    { ...model('jev'), mode: 'evaluation' }, { ...model('ocr'), mode: 'ocr' }, { ...model('edit'), mode: 'image_edit' },
+  ] } } as ProviderView;
+  const rows = buildUnionRows(p);
+  expect(rows.map(row => managementKindOfRow(row, true))).toEqual(['decision', 'other', 'image']);
+  expect(rows.every(row => isCapabilityRow(row, true))).toBe(true);
+  expect(groupModelsForManagement(rows, 'model', row => managementKindOfRow(row, true)).map(group => group.key)).toEqual(['image', 'decision', 'other']);
 });

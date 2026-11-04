@@ -1,3 +1,5 @@
+import { issueModelSourceSnapshot, modelSourceRequestSignature } from './model-source-snapshots.js';
+import { resolveCopilotAccountUrl } from './copilot-account-url.js';
 import { collectModelDiscoveryPages } from './model-discovery-pages.js';
 import type { DiscoveredModel } from '@cindy/model-providers';
 /**
@@ -37,6 +39,8 @@ const INVALID_DISCOVERY_URL = 'model discovery requires HTTP(S) URLs without emb
 
 /** 一次「获取模型列表」的完整参数（表单值内存透传，不落盘）。 */
 export interface ProviderModelsFetchSpec {
+  /** Add-flow callers distinguish an empty directory from an invalid response. */
+  allowEmpty?: boolean;
   agent: AgentKind;
   /** 上游 wire protocol；用于区分 Codex 原生 OpenAI 与 Anthropic Messages 桥。 */
   wireProtocol?: ProviderWireProtocol;
@@ -97,16 +101,22 @@ export async function fetchSavedOAuthProviderModels(
   if (!isCurrent()) return { ok: false, code: 'AUTH_INVALID' };
   const token = readCachedGenericOAuthAccessToken(storageProviderId, oauth);
   if (!token) return { ok: false, code: 'AUTH_INVALID' };
+  const modelsUrl = route.modelsUrl ?? oauth.modelsDiscoveryUrl;
   const result = await fetchProviderModels({
     agent,
-    baseUrl: route.upstream,
-    modelsUrl: route.modelsUrl ?? oauth.modelsDiscoveryUrl,
+    baseUrl: resolveCopilotAccountUrl(route.upstream, token),
+    modelsUrl: modelsUrl ? resolveCopilotAccountUrl(modelsUrl, token) : modelsUrl,
     wireProtocol: route.wireProtocol,
     authMethod: 'oauth',
     apiKey: token,
     headers,
     redirect: 'error',
-  }, fetchImpl);
+  }, async (url, init) => {
+    // Pagination and the separate speech catalog may run after the first reply.
+    // Revoke the captured credentials before another request if ownership changed.
+    if (!isCurrent()) throw new Error('Provider model refresh is no longer current');
+    return fetchImpl(url, init);
+  });
   return isCurrent() ? result : { ok: false, code: 'AUTH_INVALID' };
 }
 
@@ -318,7 +328,7 @@ export async function fetchProviderModels(
     if (!page.ok) { await page.body?.cancel(); throw new Error('catalog page failed'); }
     return JSON.parse(await readLimitedBody(page, spec.responseByteLimit ?? 8 * 1024 * 1024));
   });
-  if (!models || models.length === 0) {
+  if (!models || (models.length === 0 && !spec.allowEmpty)) {
     // 端点 200 但响应不是可识别的模型列表（或为空）——按「模型不存在」类引导用户手填。
     return {
       ok: false,
@@ -327,5 +337,5 @@ export async function fetchProviderModels(
       detail: 'no models found in response',
     };
   }
-  return { ok: true, models };
+  return { ok: true, models: issueModelSourceSnapshot(models, spec.agent, modelSourceRequestSignature(url, init)) };
 }

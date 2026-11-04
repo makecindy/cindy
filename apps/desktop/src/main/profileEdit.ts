@@ -234,6 +234,13 @@ export function getProfileEditState(deps: ProfileEditDeps): ProfileEditState {
  */
 export async function chooseAvatarFile(deps: ProfileEditDeps): Promise<ChooseAvatarResult> {
   requireUserId(deps);
+  return chooseAvatarSource(deps);
+}
+
+/** Local image preparation shared by account and Bot editors; never reads or updates a profile. */
+export async function chooseAvatarSource(
+  deps: Pick<ProfileEditDeps, 'showAvatarOpenDialog' | 'readFile' | 'toSdrAvatar'>,
+): Promise<ChooseAvatarResult> {
   const filePath = await deps.showAvatarOpenDialog();
   if (!filePath) return { canceled: true };
   const mime = avatarMimeForPath(filePath);

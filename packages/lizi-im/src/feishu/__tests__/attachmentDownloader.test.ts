@@ -101,6 +101,15 @@ const pdfRef: AttachmentRef = { kind: 'file', fileKey: 'file_1', fileName: 'repo
 const videoRef: AttachmentRef = { kind: 'file', fileKey: 'file_v', fileName: 'demo.mp4', video: true };
 
 describe('downloadAttachments: 图片 → 媒体总仓', () => {
+  // Unit regression: forwarded images must use the child message resource endpoint.
+  it('downloads a merged child image using its own message ID', async () => {
+    wireHost({ media: makeMedia(), files: makeFiles() });
+    const { client, get } = makeClient(PNG_BYTES, 'image/png');
+    const result = await downloadAttachments(client, 'om_envelope', [{ ...imageRef, messageId: 'om_child' }]);
+    expect(get).toHaveBeenCalledWith({ path: { message_id: 'om_child', file_key: 'img_1' }, params: { type: 'image' } });
+    expect(result.attachments[0]?.kind).toBe('image');
+  });
+
   it('png 下载一次入 cacheImage, url 透传', async () => {
     const media = makeMedia();
     wireHost({ media, files: makeFiles() });

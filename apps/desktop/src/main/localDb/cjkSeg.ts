@@ -155,36 +155,39 @@ export function buildSnippetFromContent(content: unknown, queryTokens: readonly 
   if (!raw) return '';
   const text = takeCodePoints(raw, SNIPPET_SOURCE_MAX_CHARS);
 
-  const aligned = cjkSegAligned(text);
-  if (!aligned || aligned.segChars.length === 0) return fallbackSnippet(text);
-  const { segChars, segToOrig } = aligned;
-  const foldedSeg = segChars.map((ch) => ch.toLowerCase());
-
   // 把每个查询 token 的分词形态在码点数组里定位成 [segStart, segEnd) 区间，
   // 再经 segToOrig 映回原文码点区间（跳过 -1 的插入空格位）。
   // 查找全程用码点下标，不能用 String.indexOf / .length（那是 UTF-16 单元）。
-  const spans: Array<{ start: number; end: number }> = [];
-  for (const token of queryTokens) {
-    const needle = cjkSeg(token);
-    if (!needle || needle.length === 0) continue;
-    const needleChars = [...needle];
-    const foldedNeedle = needleChars.map((ch) => ch.toLowerCase());
-    let from = 0;
-    for (;;) {
-      const at = indexOfCodePoints(foldedSeg, foldedNeedle, from);
-      if (at < 0) break;
-      from = at + needleChars.length;
-      const first = segToOrig[at]!;
-      const last = segToOrig[at + needleChars.length - 1]!;
-      if (first < 0 || last < 0) continue;
-      const start = Math.min(first, last);
-      const end = Math.max(first, last) + 1;
-      spans.push({ start, end });
+  const asciiSpans = findAsciiSnippetSpans(text, queryTokens);
+  const spans: Array<{ start: number; end: number }> = asciiSpans ?? [];
+  if (!asciiSpans) {
+    const aligned = cjkSegAligned(text);
+    if (!aligned || aligned.segChars.length === 0) return fallbackSnippet(text);
+    const { segChars, segToOrig } = aligned;
+    const foldedSeg = segChars.map((ch) => ch.toLowerCase());
+
+    for (const token of queryTokens) {
+      const needle = cjkSeg(token);
+      if (!needle || needle.length === 0) continue;
+      const needleChars = [...needle];
+      const foldedNeedle = needleChars.map((ch) => ch.toLowerCase());
+      let from = 0;
+      for (;;) {
+        const at = indexOfCodePoints(foldedSeg, foldedNeedle, from);
+        if (at < 0) break;
+        from = at + needleChars.length;
+        const first = segToOrig[at]!;
+        const last = segToOrig[at + needleChars.length - 1]!;
+        if (first < 0 || last < 0) continue;
+        const start = Math.min(first, last);
+        const end = Math.max(first, last) + 1;
+        spans.push({ start, end });
+      }
     }
   }
 
-  const origChars = [...text];
   if (spans.length === 0) return fallbackSnippet(text);
+  const origChars = [...text];
 
   spans.sort((a, b) => a.start - b.start || a.end - b.end);
   const merged: Array<{ start: number; end: number }> = [];
@@ -224,10 +227,45 @@ export function buildSnippetFromContent(content: unknown, queryTokens: readonly 
   return out;
 
   function fallbackSnippet(t: string): string {
-    const chars = [...t];
+    const chars = [...takeCodePoints(t, SNIPPET_CONTEXT_CHARS * 2 + 1)];
     if (chars.length <= SNIPPET_CONTEXT_CHARS * 2) return escapeSnippetText(t);
     return `${escapeSnippetText(chars.slice(0, SNIPPET_CONTEXT_CHARS).join(''))}…`;
   }
+}
+
+/** ASCII 码点与 UTF-16 单元一一对应，可以直接使用原生字符串搜索而不改变坐标。 */
+function findAsciiSnippetSpans(
+  text: string,
+  queryTokens: readonly string[],
+): Array<{ start: number; end: number }> | null {
+  if (
+    !isAscii(text) ||
+    !queryTokens.every((token) => typeof token === 'string' && isAscii(token))
+  ) {
+    return null;
+  }
+  const foldedText = text.toLowerCase();
+  const spans: Array<{ start: number; end: number }> = [];
+  for (const token of queryTokens) {
+    if (token.length === 0) continue;
+    const foldedNeedle = token.toLowerCase();
+    let from = 0;
+    for (;;) {
+      const at = foldedText.indexOf(foldedNeedle, from);
+      if (at < 0) break;
+      const end = at + token.length;
+      spans.push({ start: at, end });
+      from = end;
+    }
+  }
+  return spans;
+}
+
+function isAscii(text: string): boolean {
+  for (let index = 0; index < text.length; index += 1) {
+    if (text.charCodeAt(index) > 0x7f) return false;
+  }
+  return true;
 }
 
 /**
@@ -243,10 +281,13 @@ function escapeSnippetText(text: string): string {
 }
 
 function takeCodePoints(text: string, max: number): string {
-  const chars: string[] = [];
+  if (text.length <= max) return text;
+  let codePoints = 0;
+  let codeUnits = 0;
   for (const ch of text) {
-    if (chars.length >= max) return chars.join('');
-    chars.push(ch);
+    if (codePoints >= max) return text.slice(0, codeUnits);
+    codePoints += 1;
+    codeUnits += ch.length;
   }
   return text;
 }

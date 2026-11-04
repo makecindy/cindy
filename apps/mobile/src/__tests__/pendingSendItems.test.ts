@@ -313,6 +313,8 @@ describe('buildPendingSendItems', () => {
       queue: [queued('same')],
       presentationByClientId: new Map([['same', {
         actions: {
+          moveUp: { disabled: true, disabledReason: null, targetIndex: null },
+          moveDown: { disabled: true, disabledReason: null, targetIndex: null },
           remove: { disabled: false, disabledReason: null },
           edit: { disabled: false, disabledReason: null },
           steer: { disabled: false, disabledReason: null },
@@ -432,6 +434,8 @@ describe('pending_send 渲染接线', () => {
       queue: [queued('selected')],
       presentationByClientId: new Map([['selected', {
         actions: {
+          moveUp: { disabled: true, disabledReason: null, targetIndex: null },
+          moveDown: { disabled: true, disabledReason: null, targetIndex: null },
           remove: { disabled: false, disabledReason: null },
           edit: { disabled: false, disabledReason: null },
           steer: { disabled: false, disabledReason: null },

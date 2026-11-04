@@ -4,13 +4,17 @@
 
 #### 作者流程(recon → 发现 → 抽取 → 验证 → 沉淀)
 
-1. **侦察**:先 `action: "siteguide"` + `site` 看有没有现成指南/配方;没有就 `navigate` 到目标页 + **scoped `snapshot`**(带 `selector` 收窄)摸清结构,`action: "requests"`(带**具体** `filter`)看页面发了哪些 XHR/fetch。
+1. **复用当前证据**:先看自动返回的配方候选，必要时 `siteguide` + `site`。从当前任务已成功的步骤整理，不重读整段历史、不再探索已知结构。`recipeHelp` 的 observations 只有历史操作形状和次数，不包含脚本、选择器或业务内容，不能据此编造可执行步骤。缺证据时才 scoped `snapshot` / 具体 filter 的 `requests`。
 2. **优先发现接口**:很多列表/详情背后是 JSON API。找到接口 URL 后,把可变部分(关键词、页码、subreddit 等)抽成 `inputs` 变量,URL 里用 `{{var}}` 占位。**读 GET JSON 接口最稳的姿势:`navigate` 到该 URL,再 `extract` `{ fields: { body: "body" } }` 读回 JSON**(不要用 responseBody 来读历史响应,它是"等下一个匹配响应")。
 3. **鉴权**:判断是否需要登录。需要就在 siteguide 的 `auth` 字段写清楚,并在配方里把登录态相关步骤设 `optional: true` 做探测;真正登录由用户在持久浏览器里完成一次。
 4. **抽取**:扒 DOM 字段用 `extract`——**先 scoped `snapshot` 确认选择器在页面上真实存在再写**(别凭空猜选择器、别把属性拼进选择器)。`fields` 的 string 是纯 CSS 选择器(取 textContent),取属性用 `{selector, attr}`,取链接用 `{selector, type:"href"}`。列表用 `from` + `multiple`。
 5. **交互步**:`click` / `type` / `select` 直接写**稳定 CSS `selector`**(运行时由 act 解析,不写死 snapshot ref,跨会话不腐烂)。`type` 配 `submit: true` 提交表单。
 6. **验证**:用 `action:"recipe", site, recipeDraft, inputs` 当场试跑。交互和读取步骤须有 `guard:{url,selector?,text?}`：完整 URL 精确匹配，标准 CSS selector 须唯一可见匹配，可选 text 精确匹配（去首尾空格）。URL 应包含账号/项目身份；同 URL 多账号时用页面账号元素校验。最后一步须带 `expect:{minCount?,requiredFields?,equals?}`，用 `as` 和 `output:"{{变量}}"` 返回经过验证的结果。expect 检查每条记录的顶层字段，equals 的字符串可插值。guard/expect 不可 optional。
-7. **沉淀**:`action: "saveRecipe"`,传 `site`(站点 host)+ `recipeDraft`(配方对象)+ 可选 `siteGuideDraft`。只能保存本任务中刚试跑成功的同一份 draft 和 site；改动内容必须重新验证。不要提供宿主管理的 validation 字段。每站可保存多个 id。
+7. **沉淀**:`action: "saveRecipe"`,传 `site` + `recipeDraft` + 可选 `siteGuideDraft`。通常保存本任务中刚试跑成功的同一份 draft、site 和 profile；不要提供宿主管理的 validation 字段。新流程声明 `access:"read"` 且仅含 `navigate`、无 `fn` 的 `wait`、`extract`、`requests`、`responseBody` 时，可加 `deferValidation:true`，不重新跑当前任务，先存 candidate。下一次真实任务显式执行且 guard/expect 全部通过时返回 `verified:true`，仅保留本任务验证凭证，不自动改写配方文件；需要启用时，在同一任务用相同 site、profile 和 recipeDraft 调用普通 `saveRecipe` 转为 active，无需再次试跑。交互、`evaluate`、脚本或 adapter 不能凭 read 标签延后验证，须在当次真实操作中验证；不为测试重放写操作。候选不能覆盖已有配方。每站可保存多个 id。
+
+尚未启用的 candidate 执行成功或失败都不自动回写磁盘：成功留下本任务凭证，失败暂停本任务并允许单轮修订；若保留为候选，下个任务仍须验证。已启用或旧配方继续沿用失败持久暂停机制。显式保存仍按原规则后写优先，不是跨任务版本合并。
+
+验证用少量组合输入覆盖变化的参数、数量和空结果；优先使用下一次真实需求，不穷举、不承诺未测能力。active 仅证明已执行的检查通过，不代表所有输入都测试过。账号/项目的页面身份必须进入 guard，不能仅靠 profile 或站点名称推断登录身份。参数化所有业务值，不保存实际查询、用户资料、密码或令牌；普通记录只用于判断是否重复，不自动上传或转成内置配方。
 
 #### 取数策略(先判断站点属于哪种,再选 step)
 

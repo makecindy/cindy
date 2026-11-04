@@ -16,7 +16,7 @@ import React from 'react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 // The shared-quota rail observes auth; this component fixture has no auth host.
-vi.mock('@/contexts/AuthContext', () => ({ useOptionalAuthUser: () => null }));
+vi.mock('@/contexts/AuthContext', () => ({ useOptionalAuthUser: () => null, useOptionalAuthDeviceId: () => null }));
 
 vi.mock('react-i18next', async (importOriginal) => ({
   ...(await importOriginal<typeof import('react-i18next')>()),
@@ -341,11 +341,11 @@ describe('model selector display identity during switches', () => {
     const gateway = { ...provider, id: 'xd', models: { codex: [{ id: 'gpt-6', name: 'Gateway GPT' }] } };
     providersRef.providers = [gateway, provider];
     const implicit = { ...props, currentProviderId: null, actualRoute };
-    const { rerender } = render(<ModelSelector {...implicit} switching />);
+    const { rerender } = render(<ModelSelector remoteAgent={undefined} {...implicit} switching />);
     expect(trigger().textContent).toContain('GPT-6');
     expect(trigger().textContent).not.toContain('Gateway GPT');
     providersRef.providers = [gateway, { ...provider, connected: false }];
-    rerender(<ModelSelector {...implicit} />);
+    rerender(<ModelSelector remoteAgent={undefined} {...implicit} />);
     expect(trigger().textContent).toContain('Gateway GPT');
   });
 
@@ -353,13 +353,13 @@ describe('model selector display identity during switches', () => {
     const gateway = { ...provider, id: 'xd', models: { codex: [{ id: 'gpt-6', name: 'Gateway GPT' }] } };
     const disabled = { ...provider, models: { codex: [{ id: 'gpt-6', name: 'Saved GPT', disabled: true }] } };
     providersRef.providers = [gateway, disabled];
-    render(<ModelSelector {...props} currentProviderId={null} actualRoute={actualRoute} />);
+    render(<ModelSelector remoteAgent={undefined} {...props} currentProviderId={null} actualRoute={actualRoute} />);
     expect(trigger().textContent).toContain(actualRoute ? 'Saved GPT' : 'Gateway GPT');
   });
 
   it('resolves an implicit current model in the pending tooltip', () => {
     providersRef.providers = [provider];
-    render(<ModelSelector {...props} currentProviderId={null}
+    render(<ModelSelector remoteAgent={undefined} {...props} currentProviderId={null}
       agentIdentity={{ vendorKey: 'codex', state: 'pending' }}
       currentSelection={{ agentKind: 'codex', model: props.modelId, providerId: null, effort: 'high', fastMode: false }} />);
     expect(trigger().title).toContain('Codex · GPT-6 · OpenAI');
@@ -371,7 +371,7 @@ describe('model selector display identity during switches', () => {
       { ...provider, models: { codex: [{ id: 'glm-5.2', name: 'Standard GLM' }] } },
       { ...provider, id: 'xd', name: 'Gateway', models: { codex: [{ id: 'glm-5.2[1m]', name: 'GLM 1M' }] } },
     ];
-    render(<ModelSelector {...props} modelId="glm-5.2[1m]" currentProviderId={null} actualRoute={actualRoute}
+    render(<ModelSelector remoteAgent={undefined} {...props} modelId="glm-5.2[1m]" currentProviderId={null} actualRoute={actualRoute}
       agentIdentity={{ vendorKey: 'codex', state: 'pending' }}
       currentSelection={{ agentKind: 'codex', model: 'glm-5.2[1m]', providerId: null, effort: 'high', fastMode: false }} />);
     expect(trigger().textContent).toContain('GLM 1M');
@@ -382,26 +382,26 @@ describe('model selector display identity during switches', () => {
 
   it('resolves a wire alias immediately, including while the switch is in flight', () => {
     providersRef.providers = [provider];
-    const { rerender } = render(<ModelSelector {...props} switching />);
+    const { rerender } = render(<ModelSelector remoteAgent={undefined} {...props} switching />);
     expect(trigger().textContent).toContain('GPT-6');
     expect(trigger().getAttribute('aria-label')).not.toContain(props.modelId);
-    rerender(<ModelSelector {...props} switching={false} />);
+    rerender(<ModelSelector remoteAgent={undefined} {...props} switching={false} />);
     expect(trigger().textContent).toContain('GPT-6');
   });
 
   it('retains the selected name when discovery loses the catalog, then accepts updated names', () => {
     providersRef.providers = [provider];
-    const { rerender } = render(<ModelSelector {...props} switching />);
+    const { rerender } = render(<ModelSelector remoteAgent={undefined} {...props} switching />);
     providersRef.providers = [];
-    rerender(<ModelSelector {...props} switching sourceDisconnected />);
+    rerender(<ModelSelector remoteAgent={undefined} {...props} switching sourceDisconnected />);
     expect(trigger().textContent).toContain('GPT-6');
     expect(trigger().textContent).not.toContain(props.modelId);
     // A failed switch/refresh must not leave the wire ID behind once in-flight ends.
-    rerender(<ModelSelector {...props} sourceDisconnected />);
+    rerender(<ModelSelector remoteAgent={undefined} {...props} sourceDisconnected />);
     expect(trigger().textContent).toContain('GPT-6');
     expect(trigger().textContent).toContain('已断开');
     providersRef.providers = [{ ...provider, models: { codex: [{ id: 'gpt-6', name: 'Custom GPT label' }] } }];
-    rerender(<ModelSelector {...props} />);
+    rerender(<ModelSelector remoteAgent={undefined} {...props} />);
     expect(trigger().textContent).toContain('Custom GPT label');
   });
 
@@ -412,17 +412,17 @@ describe('model selector display identity during switches', () => {
     { deviceId: 'another-device' },
   ])('does not reuse the previous name across a selection boundary: %j', (change) => {
     providersRef.providers = [provider];
-    const { rerender } = render(<ModelSelector {...props} />);
+    const { rerender } = render(<ModelSelector remoteAgent={undefined} {...props} />);
     expect(trigger().textContent).toContain('GPT-6');
     providersRef.providers = [];
-    rerender(<ModelSelector {...props} {...change} />);
+    rerender(<ModelSelector remoteAgent={undefined} {...props} {...change} />);
     expect(trigger().textContent).not.toContain('GPT-6');
     expect(trigger().textContent).not.toContain(change.modelId ?? props.modelId);
   });
 
   it.each([false, true])('distinguishes an unknown saved model from an empty selection (disconnected=%s)', (sourceDisconnected) => {
     providersRef.providers = [];
-    render(<ModelSelector {...props} sourceDisconnected={sourceDisconnected} />);
+    render(<ModelSelector remoteAgent={undefined} {...props} sourceDisconnected={sourceDisconnected} />);
     expect(trigger().textContent).toContain('模型信息暂不可用');
     expect(trigger().textContent).not.toContain('选择模型');
     expect(trigger().textContent).not.toContain(props.modelId);
@@ -433,53 +433,53 @@ describe('model selector display identity during switches', () => {
   it('shows loading for a selected model until its catalog arrives, and keeps the name through refresh', () => {
     providersRef.providers = [];
     providersRef.loading = true;
-    const { rerender } = render(<ModelSelector {...props} />);
+    const { rerender } = render(<ModelSelector remoteAgent={undefined} {...props} />);
     expect(trigger().textContent).toContain('正在读取模型…');
     providersRef.providers = [provider];
     providersRef.loading = false;
-    rerender(<ModelSelector {...props} />);
+    rerender(<ModelSelector remoteAgent={undefined} {...props} />);
     expect(trigger().textContent).toContain('GPT-6');
     providersRef.providers = [];
     providersRef.loading = true;
-    rerender(<ModelSelector {...props} />);
+    rerender(<ModelSelector remoteAgent={undefined} {...props} />);
     expect(trigger().textContent).toContain('GPT-6');
     expect(trigger().textContent).not.toContain('正在读取模型…');
   });
 
   it('still prompts for a model when there is no selection', () => {
-    render(<ModelSelector {...props} modelId="" />);
+    render(<ModelSelector remoteAgent={undefined} {...props} modelId="" />);
     expect(trigger().textContent).toContain('选择模型');
   });
 
   it('settles a failed first catalog load, then recovers through retry without clearing the selection', () => {
     providersRef.providers = [];
     providersRef.loading = true;
-    const { rerender } = render(<ModelSelector {...props} />);
+    const { rerender } = render(<ModelSelector remoteAgent={undefined} {...props} />);
     expect(trigger().textContent).toContain('正在读取模型…');
 
     providersRef.loadFailed = true;
-    rerender(<ModelSelector {...props} />);
+    rerender(<ModelSelector remoteAgent={undefined} {...props} />);
     expect(trigger().textContent).toContain('模型信息暂不可用');
     expect(trigger().textContent).not.toContain('正在读取模型…');
     expect(trigger().textContent).not.toContain('选择模型');
 
     providersRef.loadFailed = false;
-    rerender(<ModelSelector {...props} />);
+    rerender(<ModelSelector remoteAgent={undefined} {...props} />);
     expect(trigger().textContent).toContain('正在读取模型…');
     providersRef.providers = [provider];
     providersRef.loading = false;
-    rerender(<ModelSelector {...props} />);
+    rerender(<ModelSelector remoteAgent={undefined} {...props} />);
     expect(trigger().textContent).toContain('GPT-6');
 
     providersRef.providers = [];
     providersRef.loadFailed = true;
-    rerender(<ModelSelector {...props} />);
+    rerender(<ModelSelector remoteAgent={undefined} {...props} />);
     expect(trigger().textContent).toContain('GPT-6');
   });
 
   it('preserves an explicitly supplied diagnostic label', () => {
     providersRef.providers = [];
-    render(<ModelSelector {...props} unknownModelLabel={() => 'Unavailable saved model'} sourceDisconnected />);
+    render(<ModelSelector remoteAgent={undefined} {...props} unknownModelLabel={() => 'Unavailable saved model'} sourceDisconnected />);
     expect(trigger().textContent).toContain('Unavailable saved model');
   });
 
@@ -490,9 +490,9 @@ describe('model selector display identity during switches', () => {
       agentIdentity: { vendorKey: 'codex' as const, state: 'pending' as const },
       currentSelection: { agentKind: 'codex' as const, model: 'chatgpt/missing', providerId: 'openai', effort: 'high', fastMode: false },
     };
-    const { rerender } = render(<ModelSelector {...pendingProps} />);
+    const { rerender } = render(<ModelSelector remoteAgent={undefined} {...pendingProps} />);
     providersRef.providers = [];
-    rerender(<ModelSelector {...pendingProps} />);
+    rerender(<ModelSelector remoteAgent={undefined} {...pendingProps} />);
     for (const attribute of ['title', 'aria-label']) {
       expect(trigger().getAttribute(attribute)).toContain('GPT-6');
       expect(trigger().getAttribute(attribute)).toContain('选择模型');

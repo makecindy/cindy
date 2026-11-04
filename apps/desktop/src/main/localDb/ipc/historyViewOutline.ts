@@ -112,13 +112,32 @@ export function resetCommandArtifactCache(): void {
  * tool result, a background completion). The outline already reads every body, so length
  * and tail add CPU but no IO; grouping revisions hash it, and it never reaches the wire.
  * A rewrite with the same length and the same last 24 characters is not detected.
+ * Keep that character-length contract: byte length would miss edits whose UTF-8 byte
+ * count stays constant while their character count changes. A 96-byte suffix covers
+ * the maximum UTF-8 span of the legacy 24-character suffix; hex keeps a truncated
+ * leading code point opaque but comparable. Embedded NUL needs the legacy path because
+ * SQLite text functions deliberately stop there.
  */
 export function historyOutlineContentStamp(): SQL<string> {
-  return sql<string>`length(${messages.content}) || ':' || substr(${messages.content}, -24)`;
+  return sql<string>`CASE
+    WHEN typeof(${messages.content}) <> 'text'
+      OR instr(CAST(${messages.content} AS BLOB), x'00') > 0
+      THEN length(${messages.content}) || ':' || substr(${messages.content}, -24)
+    ELSE length(${messages.content}) || ':' || hex(
+      substr(CAST(${messages.content} AS BLOB), -96))
+    END`;
 }
 
 /** File content/patches never cross the outline query; commands yield only paths on the wire. */
 export function withHistoryArtifacts<T extends HistoryMessageSource>(row: T): T & Pick<HistoryMessageSource, 'historyArtifacts'> {
+  // SDK routing/usage bookkeeping is repeated on thousands of hidden child rows.
+  // It has no grouping meaning, but used to exhaust the scan's byte budget before
+  // reaching their Agent header. Full bodies and metadata still come from hydrate.
+  if (row.agentMeta) {
+    const { uuid: _uuid, sdkSessionId: _sdkSessionId, requestId: _requestId,
+      replyToClientId: _replyToClientId, usage: _usage, ...agentMeta } = row.agentMeta as Record<string, unknown>;
+    row = { ...row, agentMeta };
+  }
   if (row.role !== 'tool_use') return row;
   const tool = parseMessageToolUse(row);
   const descriptor = describeToolUse(tool.toolName, tool.input);

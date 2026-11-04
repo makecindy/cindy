@@ -49,11 +49,33 @@ describe('provider voice catalogs', () => {
       voices: [],
     });
     // A known vendor prefix alone must not invent compatibility for new versions.
-    for (const modelId of ['elevenlabs/eleven_v4', 'minimax/speech-3.0-hd', 'speech-2.8-hd']) {
+    for (const modelId of [
+      'elevenlabs/eleven_v4',
+      'minimax/speech-3.0-hd',
+      'speech-2.8-hd',
+      'qwen/qwen-audio-3.1-tts-flash',
+      'qwen/qwen-audio-3.2-tts-plus',
+    ]) {
       expect(
         await loadSpeechVoices(connection('openai'), modelId, fetcher, () => {}, 'xd'),
       ).toEqual({ source: 'manual', voices: [] });
     }
+    expect(fetcher).not.toHaveBeenCalled();
+  });
+
+  // Unit: the newly admitted Gateway Qwen model needs its own verified references.
+  // Existing OpenAI/native Alibaba cases did not cover this namespaced Gateway route.
+  it('offers Qwen 3.1 Plus references only on its Gateway route without requesting a voice API', async () => {
+    const fetcher = vi.fn();
+    const modelId = 'qwen/qwen-audio-3.1-tts-plus';
+    const result = await loadSpeechVoices(connection('openai'), modelId, fetcher, () => {}, 'xd');
+    expect(result.source).toBe('reference');
+    expect(result.voices).toHaveLength(4);
+    expect(result.voices[0]).toMatchObject({ id: 'longanlingxin_v3.1' });
+    expect(await loadSpeechVoices(connection('openai'), modelId, fetcher, () => {}, 'custom')).toEqual({
+      source: 'manual',
+      voices: [],
+    });
     expect(fetcher).not.toHaveBeenCalled();
   });
 

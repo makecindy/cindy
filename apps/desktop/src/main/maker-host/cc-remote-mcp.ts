@@ -210,7 +210,7 @@ export async function buildCcRemoteHttpMcpServers(
     collabEnabled:
       (deps.isCollabEnabled?.() ?? true) && isFrozenBuiltinPluginAllowed(vendorOptions, 'collab'),
     memoryEnabled: args.makerMemoryEnabled === true,
-    botHelperEnabled: args.botSession === true && !!args.sessionInstanceId
+    botHelperEnabled: !!args.sessionInstanceId
       && isFrozenBuiltinPluginAllowed(vendorOptions, 'xdt_helper'),
   });
   if (names.length === 0) {

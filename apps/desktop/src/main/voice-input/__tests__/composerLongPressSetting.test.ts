@@ -65,9 +65,9 @@ afterEach(() => {
 });
 
 describe('长按输入框语音输入开关 —— 只持久化用户 override', () => {
-  it('默认关闭;无关设置保存不会把默认值记成用户选择', () => {
+  it('默认开启;无关设置保存不会把默认值记成用户选择', () => {
     writeSettingsFile({ dictionaryEntries: [] });
-    expect(voiceInputDataStore.getSettings().composerLongPressEnabled).toBe(false);
+    expect(voiceInputDataStore.getSettings().composerLongPressEnabled).toBe(true);
 
     voiceInputDataStore.updateSettings({ language: 'zh-CN' });
     expect(readPersistedSettings().composerLongPressEnabledOverride).toBeUndefined();
@@ -91,20 +91,22 @@ describe('长按输入框语音输入开关 —— 只持久化用户 override',
     voiceInputDataStore.updateSettings({ composerLongPressEnabled: false });
     expect(readPersistedSettings().composerLongPressEnabledOverride).toBe(false);
     expect(readPersistedSettings().composerLongPressEnabled).toBeUndefined();
+    resetStoreCaches();
+    expect(voiceInputDataStore.getSettings().composerLongPressEnabled).toBe(false);
   });
 
   it('传 null 恢复默认:删除 override,重新跟随版本默认值', () => {
     writeSettingsFile({ dictionaryEntries: [] });
     voiceInputDataStore.updateSettings({ composerLongPressEnabled: true });
     const next = voiceInputDataStore.updateSettings({ composerLongPressEnabled: null });
-    expect(next.composerLongPressEnabled).toBe(false);
+    expect(next.composerLongPressEnabled).toBe(true);
     expect(readPersistedSettings().composerLongPressEnabledOverride).toBeUndefined();
     expect(readPersistedSettings().composerLongPressEnabled).toBeUndefined();
   });
 
   it('配置里残留的有效值不会被当成用户选择', () => {
     // 有效值只是写盘时的投影;没有 override 就一律跟随默认值。
-    writeSettingsFile({ dictionaryEntries: [], composerLongPressEnabled: true });
-    expect(voiceInputDataStore.getSettings().composerLongPressEnabled).toBe(false);
+    writeSettingsFile({ dictionaryEntries: [], composerLongPressEnabled: false });
+    expect(voiceInputDataStore.getSettings().composerLongPressEnabled).toBe(true);
   });
 });

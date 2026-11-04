@@ -4,8 +4,8 @@ import { createRoot } from 'react-dom/client';
 import { beforeEach, expect, it, vi } from 'vitest';
 
 const h = vi.hoisted(() => ({
-  push: vi.fn(), markRead: vi.fn(), list: vi.fn(), setMode: vi.fn(), homeMode: 'tasks',
-  hydrated: true, focused: true, dismiss: vi.fn(), dismissTo: vi.fn(), reset: vi.fn(), routes: [] as Array<{ name: string; params?: unknown }>,
+  push: vi.fn(), markRead: vi.fn(), list: vi.fn(),
+  focused: true, dismiss: vi.fn(), dismissTo: vi.fn(), reset: vi.fn(), routes: [] as Array<{ name: string; params?: unknown }>,
   params: { collectionId: 'tools', targets: JSON.stringify([{ deviceId: 'mac', deviceName: 'My Mac' }]) },
   translation: { t: (key: string) => key, i18n: { language: 'en' } },
   link: { connectionEpoch: 1, status: 'online', presenceVersion: 1, getPresenceAvailability: () => true, openLink: vi.fn(async () => {}), invoke: vi.fn(), onRemoteResourceChanged: vi.fn((_listener: (deviceId: string, payload: { collectionId: string }) => void) => () => {}), subscribe: vi.fn(), unsubscribe: vi.fn() },
@@ -29,7 +29,7 @@ vi.mock('expo-router', async () => {
   const { useEffect } = await import('react');
   return { Redirect: ({ href }: { href: string }) => <output data-target>{href}</output>, useIsFocused: () => h.focused, useFocusEffect: (effect: () => void | (() => void)) => useEffect(effect, [effect]), useLocalSearchParams: () => h.params, useRouter: () => ({ dismiss: h.dismiss, dismissTo: h.dismissTo }), useNavigation: () => ({ reset: h.reset, getState: () => ({ index: h.routes.length - 1, routes: h.routes }) }) };
 });
-vi.mock('@/session/useHomeMode', () => ({ useHomeMode: () => ({ hydrated: h.hydrated, mode: h.homeMode, setMode: h.setMode }) }));
+vi.mock('@/session/useHomeMode', () => ({ useHomeMode: () => ({ hydrated: true }) }));
 vi.mock('react-i18next', () => ({ useTranslation: () => h.translation }));
 vi.mock('@/i18n', () => ({ i18n: { t: (key: string) => key } }));
 vi.mock('react-native-safe-area-context', () => ({ SafeAreaView: 'div' }));
@@ -53,6 +53,7 @@ vi.mock('@/utils/useGuardedPush', () => ({ useGuardedPush: () => h.push }));
 vi.mock('@/device-link/focusedTopicSubscription', () => ({ startFocusedTopicSubscription: () => () => {} }));
 vi.mock('@/device-link/remoteResourceAvailability', async (original) => ({ ...await original<typeof import('@/device-link/remoteResourceAvailability')>(), isRemoteResourceHostOnline: () => true, readRemoteCollectionCache: () => [], writeRemoteCollectionCache: () => {} }));
 vi.mock('@/device-link/remoteResourceCache', () => ({
+  peekRemoteResourceSnapshot: () => null,
   cacheRemoteResourceItems: vi.fn(), readRemoteResourceSnapshot: async () => ({ items: {} }),
   isRemoteResourceUnread: () => true, markRemoteResourceRead: h.markRead,
   subscribeRemoteResourceCache: () => () => {}, remoteResourceCacheRevision: () => 0,
@@ -64,7 +65,7 @@ vi.mock('@/device-link/remoteResources', async (original) => ({
 import RemoteCollectionScreen from '../../app/resources/[collectionId]';
 import { StackRouter, StackActions } from 'expo-router/build/react-navigation/routers/StackRouter';
 Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
-beforeEach(() => { vi.clearAllMocks(); h.hydrated = true; h.focused = true; h.routes = []; });
+beforeEach(() => { vi.clearAllMocks(); h.focused = true; h.routes = []; });
 
 it('does not migrate a hidden legacy route underneath an active task', async () => {
   h.params.collectionId = 'teammates'; h.focused = false;
@@ -72,7 +73,6 @@ it('does not migrate a hidden legacy route underneath an active task', async () 
   const root = createRoot(document.createElement('div'));
   try {
     await act(async () => root.render(createElement(RemoteCollectionScreen)));
-    expect(h.setMode).not.toHaveBeenCalled();
     expect(h.reset).not.toHaveBeenCalled();
     expect(h.dismiss).not.toHaveBeenCalled();
     expect(h.dismissTo).not.toHaveBeenCalled();
@@ -81,7 +81,6 @@ it('does not migrate a hidden legacy route underneath an active task', async () 
 
 it.each(['index', 'devices/index'])('migrates the retired collection by returning to the existing %s without duplicating home', async name => {
   h.params.collectionId = 'teammates';
-  h.hydrated = false;
   const router = StackRouter({ initialRouteName: name });
   const options = { routeNames: [name, 'resources/[collectionId]'], routeParamList: {}, routeGetIdList: {}, routeKeyChanges: [] };
   let state = router.getInitialState(options);
@@ -93,12 +92,6 @@ it.each(['index', 'devices/index'])('migrates the retired collection by returnin
   const root = createRoot(container);
   try {
     await act(async () => root.render(createElement(RemoteCollectionScreen)));
-    expect(container.querySelector('[data-target]')).toBeNull();
-    expect(h.setMode).not.toHaveBeenCalled();
-    expect(h.dismiss).not.toHaveBeenCalled();
-    h.hydrated = true;
-    await act(async () => root.render(createElement(RemoteCollectionScreen)));
-    expect(h.setMode).toHaveBeenCalledWith('teammates');
     expect(h.dismiss).toHaveBeenCalledExactlyOnceWith(1);
     expect(h.dismissTo).not.toHaveBeenCalled();
     expect(state.routes).toEqual([home]);
@@ -107,7 +100,6 @@ it.each(['index', 'devices/index'])('migrates the retired collection by returnin
     expect(h.list).not.toHaveBeenCalled();
   } finally {
     h.params.collectionId = 'tools';
-    h.homeMode = 'tasks';
     act(() => root.unmount());
   }
 });

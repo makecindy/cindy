@@ -11,11 +11,15 @@ export function readMainEntryRoute(ownerId: string | null): '/bots' | '/cc-agent
   return readSidebarOwnerStorage(KEY, ownerId) === 'bots' ? '/bots' : '/cc-agent';
 }
 
-export function rememberMainEntry(ownerId: string | null, pathname: string): void {
-  const entry = pathname === '/bots' || pathname.startsWith('/bots/')
-    ? 'bots'
+export function mainEntryRouteForPath(pathname: string): '/bots' | '/cc-agent' | null {
+  return pathname === '/bots' || pathname.startsWith('/bots/')
+    ? '/bots'
     : pathname === '/cc-agent' || pathname.startsWith('/cc-agent/')
-      ? 'tasks'
+      ? '/cc-agent'
       : null;
-  if (entry) writeSidebarOwnerStorage(KEY, ownerId, entry);
+}
+
+export function rememberMainEntry(ownerId: string | null, pathname: string): void {
+  const route = mainEntryRouteForPath(pathname);
+  if (route) writeSidebarOwnerStorage(KEY, ownerId, route === '/bots' ? 'bots' : 'tasks');
 }

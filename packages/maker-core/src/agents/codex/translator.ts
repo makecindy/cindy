@@ -48,7 +48,7 @@ import {
   CONTEXT_OVERFLOW_REASON,
   isContextOverflowErrorMessage,
 } from '../shared/context-overflow-error.js';
-import { isRemoteCompactEncryptedContentError } from '../shared/remote-compact-encrypted-error.js';
+import { isRemoteCompactEncryptedContentError, REMOTE_COMPACT_ENCRYPTED_CONTENT_REASON } from '../shared/remote-compact-encrypted-error.js';
 import { commandExecutionDisplayInput, type CommandExecutionDisplayInput } from './command-display.js';
 import { annotateSandboxInitFailure } from './sandbox-init-failure.js';
 import { codexErrorInfoTag } from './app-server/protocol.js';
@@ -93,6 +93,8 @@ export interface CodexRuntimeState {
   generationDurationMs: number;
   /** Model time sampled with the latest accepted output usage. */
   generationOutputDurationMs: number;
+  /** Native-turn output for speed, independent of the billing ledger lifecycle. */
+  generationOutputTokens: number;
   generationTurnId: string | null;
   /** False when a tool boundary is incomplete/out of order; unreliable TPS is omitted. */
   generationTimingReliable: boolean;
@@ -142,6 +144,7 @@ export function newCodexRuntimeState(): CodexRuntimeState {
     generationPendingToolIds: new Set(),
     generationDurationMs: 0,
     generationOutputDurationMs: 0,
+    generationOutputTokens: 0,
     generationTurnId: null,
     generationTimingReliable: true,
     generationHeartbeatAt: null,
@@ -190,13 +193,15 @@ function startCodexGenerationHeartbeat(rt: CodexRuntimeState): void {
 }
 
 /** Reset per-turn model-generation timing; turn wall-clock is tracked separately by the host. */
-export function resetCodexGenerationTiming(rt: CodexRuntimeState): void {
+export function resetCodexGenerationTiming(rt: CodexRuntimeState, preserveSpeed = false): void {
   stopCodexGenerationHeartbeat(rt);
-  rt.tokenSpeed.reset();
+  if (preserveSpeed) rt.tokenSpeed.startSegment();
+  else rt.tokenSpeed.reset();
   rt.generationStartedAt = null;
   rt.generationPendingToolIds.clear();
   rt.generationDurationMs = 0;
   rt.generationOutputDurationMs = 0;
+  rt.generationOutputTokens = 0;
   rt.generationTurnId = null;
   rt.generationTimingReliable = true;
 }
@@ -221,7 +226,7 @@ export function beginCodexGenerationTurn(
   startedAt = Date.now(),
 ): void {
   if (rt.generationTurnId !== turnId) {
-    resetCodexGenerationTiming(rt);
+    resetCodexGenerationTiming(rt, true);
     rt.generationTurnId = turnId;
   }
   if (rt.generationStartedAt === null && rt.generationPendingToolIds.size === 0) {
@@ -354,6 +359,8 @@ interface TranslatorLog {
 export interface CodexTranslateContext {
   rt: CodexRuntimeState;
   log: TranslatorLog;
+  /** Host denial paired by thread, turn and item; never inferred from empty output. */
+  approvalDenialReason?: string;
   /** A failed sample cannot remain the adapter's successful final-text fallback. */
   onSamplingAttemptFailed?: () => void;
   /**
@@ -457,7 +464,28 @@ export function translateItemNotification(
     SAMPLING_ACCEPTED_TOOL_TYPES.has(itemType)) {
     // Tool results prove earlier generation was accepted. Its commentary and
     // side effects must not be invalidated by a later sampling request failing.
-    ctx.rt.samplingSegments.delete(JSON.stringify([notification.threadId, notification.turnId]));
+    const key = JSON.stringify([notification.threadId, notification.turnId]);
+    const accepted = ctx.rt.samplingSegments.get(key);
+    if (accepted?.itemIds.size) {
+      // Extend an existing result, rather than sending an extra status frame:
+      // older clients interpret a status without isRunning as an idle boundary.
+      const target = queue;
+      const agentMessageIds = [...accepted.itemIds];
+      let attached = false;
+      queue = {
+        ...target,
+        get pending() { return target.pending; },
+        push(event) {
+          if (!attached && (event.type === 'tool_result_full' || event.type === 'tool_result')) {
+            attached = true;
+            return target.push({ ...event, data: { ...(event.data as Record<string, unknown>),
+              assistantSamplingAccepted: { agentMessageIds } } });
+          }
+          return target.push(event);
+        },
+      };
+    }
+    ctx.rt.samplingSegments.delete(key);
   }
   noteCodexGenerationBoundary(
     ctx.rt,
@@ -585,29 +613,33 @@ export function classifyCodexError(error: {
   const errorStatus =
     signals.errorStatus ?? (hasMissingBearer || hasAuthErrorMarker ? 401 : undefined);
   const errorInfoTag = codexErrorInfoTag(error?.codexErrorInfo);
-  const isCapacityError =
-    parseOverloadError(message, signals.errorStatus, errorInfoTag)?.kind === 'capacity';
+  const overload = parseOverloadError(message, signals.errorStatus, errorInfoTag);
+  const isCapacityError = overload?.kind === 'capacity';
+  // 过载文案常顺带一句 rate limit exceeded（如 Kimi 的 `rate limit exceeded: The
+  // engine is currently overloaded`）。那是容量问题，不是账号用量上限：保留
+  // usageLimit 会让续跑判定拒掉这一轮，也让限额自动继续误接管。
+  const usageLimit = signals.usageLimit && overload === null;
   const additionalDetails =
     typeof error?.additionalDetails === 'string' ? error.additionalDetails : '';
   const compactClassifyText = additionalDetails ? `${message}\n${additionalDetails}` : message;
   const reason = isCapacityError
     ? UPSTREAM_OVERLOAD_REASON
-    : errorInfoTag === 'contextWindowExceeded' ||
-        isContextOverflowErrorMessage(message) ||
-        isRemoteCompactEncryptedContentError(compactClassifyText)
-      ? CONTEXT_OVERFLOW_REASON
-      : undefined;
+    : isRemoteCompactEncryptedContentError(compactClassifyText)
+      ? REMOTE_COMPACT_ENCRYPTED_CONTENT_REASON
+      : errorInfoTag === 'contextWindowExceeded' || isContextOverflowErrorMessage(message)
+        ? CONTEXT_OVERFLOW_REASON
+        : undefined;
   return {
     message,
     ...(errorStatus !== undefined ? { errorStatus } : {}),
     ...(errorInfoTag !== undefined ? { errorInfoTag } : {}),
-    usageLimit: signals.usageLimit,
+    usageLimit,
     isCapacityError,
     ...(reason ? { reason } : {}),
     data: {
       message,
       ...(errorStatus !== undefined ? { errorStatus } : {}),
-      ...(signals.usageLimit ? { usageLimit: true } : {}),
+      ...(usageLimit ? { usageLimit: true } : {}),
       ...(errorInfoTag !== undefined ? { codexErrorInfo: errorInfoTag } : {}),
       ...(reason ? { reason } : {}),
     },
@@ -697,14 +729,8 @@ export function translateErrorNotification(
   // 时 tryTakeOverOverload 返回 null, 落回下面的终止错误路径。
   // 过载分类在函数入口已完成，避免同一判据在两处漂移。
   const overloadReason = isCapacityError ? { reason: UPSTREAM_OVERLOAD_REASON } : {};
-  // 上下文超限同样带稳定 reason key(#1429): 原样重试必然再撞同一个 4xx, renderer 靠
-  // 它隐藏 Retry 并给出压缩 / 新开会话入口。结构化 contextWindowExceeded 优先，
-  // 文案匹配仅兼容旧版 app-server；与 capacity 互斥时 overload 优先 —— 它还驱动
-  // 退避重投接管，语义更具体。
-  const contextOverflowReason =
-    !isCapacityError && classified.reason === CONTEXT_OVERFLOW_REASON
-      ? { reason: CONTEXT_OVERFLOW_REASON }
-      : {};
+  // safeErrorData retains the classifier's distinct overflow/compact reasons.
+  // Both can trigger host rollover, but only overflow proves a token-limit failure.
   if (!params.willRetry && isCapacityError) {
     const progress = ctx.tryTakeOverOverload?.();
     if (progress) {
@@ -749,7 +775,6 @@ export function translateErrorNotification(
     data: {
       ...safeErrorData,
       ...overloadReason,
-      ...contextOverflowReason,
       isTerminal: !params.willRetry,
       willRetry: params.willRetry,
     },
@@ -1505,7 +1530,14 @@ function handleCommandExecution(
       // #3793:bwrap 沙箱初始化失败(命令从未执行)时追加宿主归因标注,
       // 模型不再盲目重试,用户在工具卡里能看到原因。健康与普通失败路径原样。
       fullText: annotateSandboxInitFailure(
-        stripTerminalControlSequences(item.aggregatedOutput ?? ''),
+        [
+          ...(isError && ctx.approvalDenialReason ? [ctx.approvalDenialReason] : []),
+          stripTerminalControlSequences(item.aggregatedOutput ?? ''),
+        ].filter(Boolean).join('\n\n') || (isError
+          ? item.status === 'declined'
+            ? 'Command execution was declined. No rejection reason was provided.'
+            : 'Command execution failed without output.'
+          : ''),
         isError,
         item.command,
       ),
@@ -1770,7 +1802,6 @@ function handleFileChange(
   ctx: CodexTranslateContext,
 ): void {
   if (phase !== 'completed') return;
-  void ctx;
   queue.push({
     type: 'tool_use',
     data: {
@@ -1784,7 +1815,10 @@ function handleFileChange(
   const summary = item.changes.map((c) => `${c.kind.type} ${c.path}`).join('\n');
   queue.push({
     type: 'tool_result_full',
-    data: { toolUseId: item.id, fullText: summary, isError },
+    data: { toolUseId: item.id, fullText: [
+      ...(isError && ctx.approvalDenialReason ? [ctx.approvalDenialReason] : []),
+      summary,
+    ].filter(Boolean).join('\n\n') || (isError ? 'File change failed without a reported reason.' : ''), isError },
     source: 'codex',
   });
   queue.push({

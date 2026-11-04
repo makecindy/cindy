@@ -863,6 +863,21 @@ describe('custom-provider-store CRUD (per-runtime)', () => {
     expect(got?.runtimes.codex?.headers).toBeUndefined();
   });
 
+  it('persists automatic and explicit interface choices without derived API snapshots', async () => {
+    mountDb();
+    await createCustomProvider({ ...valid, runtimes: { codex: { ...valid.runtimes.codex!, models: [
+      { id: 'automatic', name: 'Automatic', interfaceId: 'auto' },
+      { id: 'explicit', name: 'Explicit', interfaceId: 'vendor-responses' },
+    ] } } });
+    const stored = await getCustomProvider(valid.id);
+    expect(stored?.runtimes.codex?.models).toEqual([
+      { id: 'automatic', name: 'Automatic', interfaceId: 'auto' },
+      { id: 'explicit', name: 'Explicit', interfaceId: 'vendor-responses' },
+    ]);
+    await updateCustomProvider(valid.id, { ...stored!, name: 'Renamed' });
+    expect((await getCustomProvider(valid.id))?.runtimes).toEqual(stored?.runtimes);
+  });
+
   it('round-trips explicit true and false Pi image-input capabilities', async () => {
     mountDb();
     await createCustomProvider({
@@ -1811,5 +1826,42 @@ describe('imported capability persistence', () => {
     const stored = await getCustomProvider('all-fields');
     for (const agent of ['claude-code', 'codex', 'pi'] as const)
       expect(stored?.runtimes[agent]?.models[0]).toEqual(model);
+  });
+});
+
+describe('Magpie source snapshot persistence and endpoint invalidation', () => {
+  const magpieConfig = (): CustomProviderConfig => ({ id: 'magpie-source', name: 'Magpie', auth: { method: 'none' },
+    runtimes: { pi: { wireProtocol: 'openai-chat', baseUrl: 'http://127.0.0.1:3425/v1', modelsUrl: 'http://127.0.0.1:3425/v1/models',
+      models: [{ id: 'a/gpt-5.5', name: 'GPT', discoveredSource: { kind: 'magpie', providerId: 'A', label: 'GPT · Supplier A', discoveredName: 'GPT' } }] } } });
+  it('retains connection-local sources through real normalization, DB reload and catalog projection', async () => {
+    mountDb();
+    const config = magpieConfig();
+    expect(validateCustomProviderConfig(config).ok).toBe(true);
+    await createCustomProvider(config);
+    const restored = (await getCustomProvider(config.id))!;
+    expect(restored.runtimes.pi!.models[0].discoveredSource).toEqual(config.runtimes.pi!.models[0].discoveredSource);
+    expect(buildUserProvider(restored).models.pi![0].discoveredSource).toEqual(config.runtimes.pi!.models[0].discoveredSource);
+    await updateCustomProvider(config.id, { ...restored, name: 'Renamed connection' });
+    expect((await getCustomProvider(config.id))!.runtimes.pi!.models[0].discoveredSource?.providerId).toBe('A');
+  });
+  it.each(['baseUrl', 'modelsUrl'] as const)('invalidates the source on a %s edit before any new discovery succeeds', async field => {
+    mountDb();
+    const config = magpieConfig();
+    await createCustomProvider(config);
+    const runtime = { ...config.runtimes.pi!, [field]: 'http://127.0.0.1:9999/v1/models' };
+    await updateCustomProvider(config.id, { ...config, runtimes: { pi: runtime } });
+    expect((await getCustomProvider(config.id))!.runtimes.pi!.models[0].discoveredSource).toBeUndefined();
+  });
+  it('invalidates the source when a single model is routed to another endpoint', async () => {
+    mountDb();
+    const config = magpieConfig();
+    await createCustomProvider(config);
+    const runtime = config.runtimes.pi!;
+    await updateCustomProvider(config.id, { ...config, runtimes: { pi: {
+      ...runtime, models: runtime.models.map(model => ({ ...model, route: {
+        baseUrl: 'http://127.0.0.1:9999/v1', wireProtocol: 'openai-chat' as const,
+      } })),
+    } } });
+    expect((await getCustomProvider(config.id))!.runtimes.pi!.models[0].discoveredSource).toBeUndefined();
   });
 });

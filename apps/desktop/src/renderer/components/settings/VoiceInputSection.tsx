@@ -13,7 +13,6 @@ import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover
 import { Switch } from '@/components/ui/switch';
 import { Tip } from '@/components/ui/tooltip';
 import { useAuth } from '@/contexts/AuthContext';
-import { SUPPORTED_LOCALES } from '@/i18n';
 import { createLogger } from '@/lib/logger';
 import { SegmentedControl } from '@/components/ui/segmented-control';
 import { cn } from '@/lib/utils';
@@ -33,6 +32,7 @@ import {
   type VoiceInputDictionaryEntrySource,
   type VoiceInputLanguage,
 } from '@/hooks/useVoiceInputSettings';
+import { VOICE_INPUT_EXTRA_LANGUAGES } from '../../../shared/voiceInputData';
 import { getComposerSendShortcutPreference } from '@/hooks/useComposerSendShortcutPreference';
 import { useVoiceInputModelSelection } from '@/hooks/useVoiceInputModelSelection';
 import { useVoiceInputUsageStats } from '@/hooks/useVoiceInputUsageStats';
@@ -79,7 +79,14 @@ import {
 import type { VoiceInputConnectionTestFailureReason } from '../../../shared/voiceInputConnectionTest';
 
 const log = createLogger('VoiceInputSection');
-const LANGUAGE_OPTIONS: ReadonlyArray<VoiceInputLanguage> = ['auto', ...SUPPORTED_LOCALES];
+// Recognition-language availability is independent of UI localization.
+// Keep the established languages plus the dictation languages added upstream.
+const LANGUAGE_OPTIONS: ReadonlyArray<VoiceInputLanguage> = [
+  'auto', 'zh-CN', 'zh-TW', 'en', 'ja', 'ko',
+  ...VOICE_INPUT_EXTRA_LANGUAGES,
+];
+const isExtraVoiceInputLanguage = (language: VoiceInputLanguage): boolean =>
+  (VOICE_INPUT_EXTRA_LANGUAGES as readonly string[]).includes(language);
 const AUTO_MICROPHONE_VALUE = '__auto__';
 const DICTIONARY_FILTERS = ['all', 'automatic', 'manual'] as const;
 
@@ -1038,8 +1045,6 @@ export function VoiceInputSection() {
     setMuteSystemAudio,
     setPlayInteractionSound,
     setFastActivationEnabled,
-    setComposerLongPressEnabled,
-    resetComposerLongPressEnabled,
     setRefinementEnabled,
     setRefinementInstructions,
     setAutoDictionaryEnabled,
@@ -1737,7 +1742,9 @@ export function VoiceInputSection() {
         label:
           language === 'auto'
             ? t('settings.voiceInput.language.options.auto')
-            : t(`settings.language.options.${language}`),
+            : isExtraVoiceInputLanguage(language)
+              ? t(`settings.voiceInput.language.options.${language}`)
+              : t(`settings.language.options.${language}`),
         description: t(`settings.voiceInput.language.optionDescriptions.${language}`),
       })),
     [t],
@@ -2693,36 +2700,6 @@ export function VoiceInputSection() {
             onCheckedChange={setFastActivationEnabled}
             aria-label={t('settings.voiceInput.fastActivation.ariaLabel')}
           />
-        </div>
-
-        <div className="flex items-center justify-between gap-5 border-t border-[var(--settings-theme-card-border)] pt-4">
-          <div className="flex min-w-0 flex-col gap-1">
-            <p id="settings-search-settings-voiceInput-composerLongPress-label"
-              className="text-13 font-medium text-[var(--settings-section-title)]"
-              style={{ letterSpacing: '0.12px' }}
-            >
-              {t('settings.voiceInput.composerLongPress.label')}
-            </p>
-            <p className="text-12 leading-[1.4] text-[var(--text-secondary)]">
-              {t('settings.voiceInput.composerLongPress.hint')}
-            </p>
-          </div>
-
-          <div className="flex shrink-0 items-center gap-2">
-            <DefaultOverrideControls
-              isCustomized={settings.composerLongPressEnabledOverride != null}
-              onReset={() => {
-                void resetComposerLongPressEnabled().then((ok) => {
-                  if (ok) toast.success(t('settings.defaults.restored'));
-                });
-              }}
-            />
-            <Switch
-              checked={settings.composerLongPressEnabled}
-              onCheckedChange={setComposerLongPressEnabled}
-              aria-label={t('settings.voiceInput.composerLongPress.ariaLabel')}
-            />
-          </div>
         </div>
 
         <div className="flex items-center justify-between gap-5 border-t border-[var(--settings-theme-card-border)] pt-4">

@@ -27,6 +27,7 @@ import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
 import { z } from 'zod';
 
+import { createXdtHelperMcpServer } from '../../../../../lizi-mcps/src/lizi_xdtHelperMcpServer.js';
 import { createWorkerSpecSchema } from '../../../../../lizi-mcps/src/xdt-helper/create_worker.js';
 
 import { PiAgent } from '../index.js';
@@ -37,7 +38,7 @@ import type { Logger } from '../../../interfaces/logger.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = path.resolve(__dirname, '../../../../../..');
-const PI_BINARY = path.join(
+const PI_BINARY = process.env.CINDY_PI_MCP_TEST_BINARY || path.join(
   REPO_ROOT,
   'apps',
   'pi-bin',
@@ -113,6 +114,37 @@ function anthropicToolTurn(
   );
 }
 
+function anthropicParallelToolTurn(
+  sequence: number,
+  calls: Array<{ name: string; input: Record<string, unknown> }>,
+): string {
+  const blocks = calls.map((call, index) =>
+    sseEvent('content_block_start', {
+      type: 'content_block_start', index,
+      content_block: { type: 'tool_use', id: `toolu_${sequence}_${index}`, name: call.name, input: {} },
+    }) +
+    sseEvent('content_block_delta', {
+      type: 'content_block_delta', index,
+      delta: { type: 'input_json_delta', partial_json: JSON.stringify(call.input) },
+    }) +
+    sseEvent('content_block_stop', { type: 'content_block_stop', index }),
+  ).join('');
+  return (
+    sseEvent('message_start', {
+      type: 'message_start',
+      message: {
+        id: `msg_${sequence}`, type: 'message', role: 'assistant', model: 'pi-test-model',
+        content: [], stop_reason: null, usage: { input_tokens: 20, output_tokens: 0 },
+      },
+    }) +
+    blocks +
+    sseEvent('message_delta', {
+      type: 'message_delta', delta: { stop_reason: 'tool_use', stop_sequence: null }, usage: { output_tokens: 5 },
+    }) +
+    sseEvent('message_stop', { type: 'message_stop' })
+  );
+}
+
 function anthropicTextTurn(sequence: number, text: string): string {
   return (
     sseEvent('message_start', {
@@ -153,6 +185,42 @@ function latestToolResultContent(request: Record<string, unknown>): string {
 
 function scriptedAnthropicTurn(requestBody: string): string {
   const toolResultCount = countToolResults(requestBody);
+  if (requestBody.includes('discover Cindy controls')) {
+    const call = (tool: string, args: Record<string, unknown>) => ({ name: 'cindy_mcp_call_tool', input: { server: 'cindy_helper', tool, args } });
+    const calls = [
+      { name: 'cindy_mcp_list_tools', input: { server: 'cindy_helper', tool: 'list_tools' } },
+      call('list_tools', { query: '壁纸' }),
+      call('list_tools', { key: 'appearance.wallpaper' }),
+      { name: 'cindy_mcp_list_tools', input: { server: 'cindy_helper', tool: 'call_tool' } },
+      call('call_tool', { name: 'get_capabilities', args: { scope: 'control', key: 'appearance.wallpaper', operation: 'update_app_settings' } }),
+      call('call_tool', { name: 'update_app_settings', args: { section: 'appearance', patch: { uiSize: 17 } } }),
+      call('call_tool', { name: 'get_app_settings', args: { section: 'appearance' } }),
+    ];
+    const step = calls[toolResultCount];
+    return step ? anthropicToolTurn(toolResultCount + 1, step.name, step.input) : anthropicTextTurn(8, 'Controls verified');
+  }
+  if (requestBody.includes('verify MCP structured result')) {
+    const scenario = requestBody.includes('structured failure') ? 'failure'
+      : requestBody.includes('rich failure') ? 'rich-failure' : 'success';
+    const calls = [
+      { name: 'cindy_mcp_list_tools', input: { server: 'cindy_workspace', tool: 'result_payload' } },
+      { name: 'cindy_mcp_call_tool', input: { server: 'cindy_workspace', tool: 'result_payload', args: { scenario } } },
+    ];
+    const call = calls[toolResultCount];
+    return call ? anthropicToolTurn(toolResultCount + 1, call.name, call.input)
+      : anthropicTextTurn(3, 'Result received');
+  }
+  if (requestBody.includes('recover MCP transport')) {
+    const calls = [
+      { name: 'cindy_mcp_list_tools', input: { server: 'recovery', tool: 'echo' } },
+      { name: 'cindy_mcp_call_tool', input: { server: 'recovery', tool: 'echo', args: { text: 'write' } } },
+      { name: 'cindy_mcp_list_tools', input: { server: 'recovery', tool: 'echo' } },
+      { name: 'cindy_mcp_call_tool', input: { server: 'recovery', tool: 'echo', args: { text: 'inspect' } } },
+    ];
+    const call = calls[toolResultCount];
+    return call ? anthropicToolTurn(toolResultCount + 1, call.name, call.input)
+      : anthropicTextTurn(5, 'Recovery complete');
+  }
   if (requestBody.includes('local host tool isolation')) {
     const calls = [
       { name: 'cindy_mcp_list_tools', input: {} },
@@ -284,6 +352,18 @@ function scriptedAnthropicTurn(requestBody: string): string {
       ? anthropicToolTurn(1, 'cindy_mcp_list_tools', {})
       : anthropicTextTurn(2, 'unavailable servers reported');
   }
+  if (requestBody.includes('parallel uninspected double call')) {
+    // 同一轮 message 里并行发两个未披露调用：pi 会先依次跑完两个 tool_call hook
+    // （都看到未披露 → 都跳过权限），再依次执行两个 execute。回归 zqchris 指出的
+    // TOCTOU 口子：第二个 execute 不能因为「此时已披露」就在没问过用户的情况下执行。
+    if (toolResultCount === 0) {
+      return anthropicParallelToolTurn(1, [
+        { name: 'cindy_mcp_call_tool', input: { server: 'cindy_echo', tool: 'echo', args: { text: 'parallel-a' } } },
+        { name: 'cindy_mcp_call_tool', input: { server: 'cindy_echo', tool: 'echo', args: { text: 'parallel-b' } } },
+      ]);
+    }
+    return anthropicTextTurn(2, 'both parallel calls were gated safely');
+  }
   if (requestBody.includes('call without schema inspection')) {
     if (toolResultCount === 0) {
       return anthropicToolTurn(1, 'cindy_mcp_call_tool', {
@@ -346,6 +426,8 @@ describe.skipIf(!piAvailable)('PiAgent × cindy-bridge (real pi + MCP bridge + p
   const REMOTE_ERROR_CANARY = 'remote-error-body-secret-canary';
   let agentHome = '';
   const orcaCalls: Array<Record<string, unknown>> = [];
+  const controlCalls: Array<Record<string, unknown>> = [];
+  let controlSize = 16;
   const echoCalls: Array<{ text: unknown }> = [];
   const statusCalls: Array<Record<string, never>> = [];
   const sumCalls: Array<{ values: number[] }> = [];
@@ -365,6 +447,10 @@ describe.skipIf(!piAvailable)('PiAgent × cindy-bridge (real pi + MCP bridge + p
   const modelRequestBodies: string[] = [];
   const modelRequests: Array<Record<string, unknown>> = [];
   const opaqueTurnCaptures: Array<{ sessionId: string; provider: string; cwd: string }> = [];
+  let recoveryMode: 'disconnect' | 'expired' | 'sse-eof' = 'disconnect';
+  let recoveryWrites = 0;
+  const recoveryCalls: string[] = [];
+  const recoveryHandshakes: Array<string | string[] | undefined> = [];
 
   beforeAll(async () => {
     agentHome = mkdtempSync(path.join(tmpdir(), 'pi-mcp-int-'));
@@ -385,6 +471,38 @@ describe.skipIf(!piAvailable)('PiAgent × cindy-bridge (real pi + MCP bridge + p
     mcpHttp = createServer(async (req: IncomingMessage, res: ServerResponse) => {
       seenMcpUrls.push(req.url ?? '');
       const auth = req.headers.authorization ?? '';
+      if (req.url?.includes('/recovery')) {
+        if (auth !== `Bearer ${MCP_TOKEN}`) { res.writeHead(401).end(); return; }
+        const body = JSON.parse(await readBody(req));
+        if (body.id === undefined) { res.writeHead(202).end(); return; }
+        let result: unknown = {};
+        if (body.method === 'initialize') {
+          recoveryHandshakes.push(req.headers['mcp-session-id']);
+          res.setHeader('mcp-session-id', 'session-' + recoveryHandshakes.length);
+          result = { protocolVersion: '2025-03-26', capabilities: { tools: {} }, serverInfo: { name: 'recovery', version: '1' } };
+        } else if (body.method === 'tools/list') {
+          result = { tools: [{ name: 'echo', description: 'Recovery fixture', inputSchema: {
+            type: 'object', properties: { text: { type: 'string' } }, required: ['text'],
+          } }] };
+        } else if (body.method === 'tools/call') {
+          recoveryCalls.push(body.params.arguments.text);
+          if (body.params.arguments.text === 'write') {
+            if (recoveryMode === 'expired') { res.writeHead(404).end(); return; }
+            recoveryWrites++;
+            if (recoveryMode === 'sse-eof') {
+              res.writeHead(200, { 'content-type': 'text/event-stream' });
+              res.end('data: {"method":"notifications/progress"}\n\n');
+              return;
+            }
+            res.destroy();
+            return;
+          }
+          result = { content: [{ type: 'text', text: 'writes=' + recoveryWrites }] };
+        }
+        res.writeHead(200, { 'content-type': 'application/json' });
+        res.end(JSON.stringify({ jsonrpc: '2.0', id: body.id, result }));
+        return;
+      }
       const apiKey = Array.isArray(req.headers['x-api-key'])
         ? req.headers['x-api-key'][0]
         : req.headers['x-api-key'];
@@ -554,6 +672,19 @@ describe.skipIf(!piAvailable)('PiAgent × cindy-bridge (real pi + MCP bridge + p
         res.writeHead(401).end('unauthorized');
         return;
       }
+      if (req.url?.includes('/controls')) {
+        const server = createXdtHelperMcpServer({ appSettings: { call: async input => {
+          controlCalls.push(input);
+          if (input.operation === 'update') controlSize = Number(input.patch?.uiSize);
+          return { state: { uiSize: controlSize } };
+        } } }, { agentKind: 'pi', workingDir: '/fixture', sessionId: 'control-owner' });
+        const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: undefined });
+        res.on('close', () => { void transport.close(); void server.close(); });
+        await server.connect(transport);
+        const body = await readBody(req);
+        await transport.handleRequest(req, res, body ? JSON.parse(body) : undefined);
+        return;
+      }
       const isOrca = req.url?.includes('/orca') ?? false;
       const isWorkspace = req.url?.includes('/workspace') ?? false;
       const isContacts = req.url?.includes('/contacts') ?? false;
@@ -582,6 +713,19 @@ describe.skipIf(!piAvailable)('PiAgent × cindy-bridge (real pi + MCP bridge + p
           })}]};
         });
       } else if (isWorkspace) {
+        server.registerTool('result_payload', {
+          description: 'Return structured workspace data', inputSchema: { scenario: z.enum(['success', 'failure', 'rich-failure']) },
+        }, async ({ scenario }) => ({
+          content: scenario === 'rich-failure' ? [
+            { type: 'text' as const, text: 'Screenshot of the failing input' },
+            { type: 'image' as const, mimeType: 'image/png',
+              data: 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aifoAAAAASUVORK5CYII=' },
+            { type: 'text' as const, text: 'Correct the highlighted field' },
+          ] : [],
+          structuredContent: { status: scenario, resultCanary: 'MCP_STRUCTURED_MODEL_CANARY' },
+          ...(scenario !== 'success' ? { isError: true } : {}),
+          _meta: { privateCanary: 'MCP_CLIENT_ONLY_CANARY' },
+        }));
         server.registerTool(
           'status',
           { description: 'Read the workspace status', inputSchema: {} },
@@ -723,7 +867,7 @@ describe.skipIf(!piAvailable)('PiAgent × cindy-bridge (real pi + MCP bridge + p
 
   function buildDeps(
     bridgeMode:
-        | 'local' | 'orca' | 'local-multi' | 'bot-memory' | 'remote' | 'remote-sse' | 'remote-paginated' | 'remote-failures' = 'local',
+        | 'controls' | 'local' | 'orca' | 'local-multi' | 'bot-memory' | 'remote' | 'remote-sse' | 'remote-paginated' | 'remote-failures' | 'recovery' = 'local',
     logger: Logger = noopLogger,
   ): AgentDeps {
     return {
@@ -757,6 +901,12 @@ describe.skipIf(!piAvailable)('PiAgent × cindy-bridge (real pi + MCP bridge + p
       // `?session=` —— 既验 PiAgent.startSession 把 opts.sessionId 透传进 ctx,
       // 又让假 server 能观察到真 pi 是否原样转发该 query(见 seenMcpUrls 断言)。
       preparePiExtraSpawnConfig: async (_providers, ctx): Promise<PiExtraSpawnConfig> => {
+        if (bridgeMode === 'controls') return {
+          mcpBridge: { token: MCP_TOKEN, servers: [{ name: 'cindy_helper', url: mcpUrl + '/controls' }] },
+        };
+        if (bridgeMode === 'recovery') {
+          return { mcpBridge: { token: MCP_TOKEN, servers: [{ name: 'recovery', url: mcpUrl + '/recovery' }] } };
+        }
         if (bridgeMode === 'remote') {
           return {
             mcpBridge: {
@@ -924,9 +1074,12 @@ describe.skipIf(!piAvailable)('PiAgent × cindy-bridge (real pi + MCP bridge + p
     permissionMode: 'ask' | 'bypassPermissions',
     resolver: (req: InteractionRequest) => Promise<InteractionDecision>,
     bridgeMode:
-        | 'local' | 'orca' | 'local-multi' | 'bot-memory' | 'remote' | 'remote-sse' | 'remote-paginated' = 'local',
+        | 'controls' | 'local' | 'orca' | 'local-multi' | 'bot-memory' | 'remote' | 'remote-sse' | 'remote-paginated' | 'recovery' = 'local',
     prompt = 'call the echo tool',
     localHostOnly: boolean | 'native' = false,
+    // 披露记录按 sessionId 落盘，所以要真正走到「首次未披露」必须给独立会话；
+    // 否则同文件前序用例已落盘的披露会让首次调用直接执行，掩盖门的行为。
+    sessionId = `mcp-itest-${permissionMode}`,
   ): Promise<{
     events: AgentEvent[];
     permissionAsked: boolean;
@@ -941,7 +1094,7 @@ describe.skipIf(!piAvailable)('PiAgent × cindy-bridge (real pi + MCP bridge + p
     let permissionAsked = false;
     try {
       handle = await agent.startSession({
-        sessionId: `mcp-itest-${permissionMode}`,
+        sessionId,
         workingDir: cwd,
         model: 'pi-test-model',
         permissionMode,
@@ -976,6 +1129,46 @@ describe.skipIf(!piAvailable)('PiAgent × cindy-bridge (real pi + MCP bridge + p
       rmSync(cwd, { recursive: true, force: true });
     }
   }
+
+  // Integration: the real Pi binary must traverse both discovery layers with
+  // the production helper schemas. Scripted model only; no claim of model choice quality.
+  it('discovers and calls Cindy controls through the real Pi gateway', { timeout: 90_000 }, async () => {
+    controlCalls.length = 0; controlSize = 16;
+    const approvals: string[] = [];
+    const { requests, events } = await runOneTurn('ask', async request => {
+      if (request.kind === 'permission') approvals.push(request.toolName);
+      return { kind: 'permission', behavior: 'allow' };
+    }, 'controls', 'discover Cindy controls', false, 'controls-first-use');
+    const firstSchema = JSON.parse(latestToolResultContent(requests[1]));
+    expect(firstSchema.tools[0].inputSchema.properties).toHaveProperty('query');
+    const search = JSON.parse(latestToolResultContent(requests[2]));
+    expect(search.items).toContainEqual(expect.objectContaining({ key: 'appearance.wallpaper', availability: 'available' }));
+    expect(controlCalls).toEqual([
+      { callerSessionId: 'control-owner', operation: 'update', section: 'appearance', patch: { uiSize: 17 } },
+      { callerSessionId: 'control-owner', operation: 'get', section: 'appearance' },
+    ]);
+    expect(latestToolResultContent(requests.at(-1)!)).toContain('17');
+    expect(approvals).toContain('mcp__cindy_helper__call_tool');
+    expect(events.some(event => event.type === 'text' && (event.data as { text?: string }).text?.includes('Controls verified'))).toBe(true);
+  });
+
+  it.each(['disconnect', 'expired', 'sse-eof'] as const)('recovers MCP %s through real Pi without replaying a write', { timeout: 90_000 }, async (mode) => {
+    recoveryMode = mode;
+    recoveryWrites = 0;
+    recoveryCalls.length = 0;
+    recoveryHandshakes.length = 0;
+    const approvals: string[] = [];
+    const { requestBodies } = await runOneTurn('ask', async (req) => {
+      if (req.kind === 'permission') approvals.push(req.toolName);
+      return { kind: 'permission', behavior: 'allow' };
+    }, 'recovery', 'recover MCP transport', false, 'recovery-' + mode);
+    expect(recoveryCalls).toEqual(['write', 'inspect']);
+    expect(recoveryHandshakes).toEqual([undefined, undefined]);
+    expect(recoveryWrites).toBe(mode === 'expired' ? 0 : 1);
+    expect(approvals.filter(name => name === 'mcp__recovery__echo')).toHaveLength(2);
+    expect(requestBodies.at(-1)).toContain('not replayed');
+    expect(requestBodies.at(-1)).toContain('writes=' + recoveryWrites);
+  });
 
   // PR2 integration: Pi has no private Worker schema. Exercise the real shared schema through
   // tools/list, schema disclosure, approval identity, tools/call, and the resulting model input.
@@ -1084,6 +1277,45 @@ describe.skipIf(!piAvailable)('PiAgent × cindy-bridge (real pi + MCP bridge + p
         .map((d) => d.text)
         .join('');
       expect(finalText).toContain('ECHO[hello-pi]');
+    },
+  );
+
+  it.each(['success', 'failure', 'rich-failure'] as const)(
+    'preserves MCP structured %s data in the real Pi model request',
+    { timeout: 90_000 },
+    async (scenario) => {
+      const { requests, events } = await runOneTurn('bypassPermissions',
+        async () => ({ kind: 'permission', behavior: 'allow' }), 'local-multi',
+        'verify MCP structured result ' + (scenario === 'failure' ? 'structured failure'
+          : scenario === 'rich-failure' ? 'rich failure' : 'success'));
+      expect(requests).toHaveLength(3);
+      const messages = requests.at(-1)!.messages as Array<{ content: Array<Record<string, unknown>> }>;
+      const result = messages.flatMap(message => message.content).filter(block => block.type === 'tool_result').at(-1)!;
+      expect(JSON.stringify(result.content)).toContain('MCP_STRUCTURED_MODEL_CANARY');
+      expect(Boolean(result.is_error)).toBe(scenario !== 'success');
+      const toolResult = events.filter(event => event.type === 'tool_result_full').at(-1)!;
+      expect((toolResult.data as { isError: boolean }).isError).toBe(scenario !== 'success');
+      if (scenario === 'rich-failure') {
+        if (Array.isArray(result.content)) {
+          const blocks = result.content as Array<Record<string, unknown>>;
+          expect(blocks.map(block => block.type)).toEqual(['text', 'image', 'text', 'text']);
+          expect(blocks[0].text).toBe('Screenshot of the failing input');
+          expect(blocks[1].source).toMatchObject({ type: 'base64', media_type: 'image/png' });
+          expect(blocks[2].text).toBe('Correct the highlighted field');
+        } else {
+          // Pi 1.4 moves images after tool results in the same user message.
+          // Assert the actual image still reaches the model, not just a marker.
+          expect(result.content).toContain('Screenshot of the failing input');
+          expect(result.content).toContain('Correct the highlighted field');
+          const containing = messages.find(message => message.content.includes(result))!;
+          const images = containing.content.slice(containing.content.indexOf(result) + 1)
+            .filter(block => block.type === 'image');
+          expect(images).toHaveLength(1);
+          expect(images[0].source).toMatchObject({ type: 'base64', media_type: 'image/png',
+            data: 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aifoAAAAASUVORK5CYII=' });
+        }
+      }
+      expect(JSON.stringify(requests)).not.toContain('MCP_CLIENT_ONLY_CANARY');
     },
   );
 
@@ -1457,18 +1689,20 @@ describe.skipIf(!piAvailable)('PiAgent × cindy-bridge (real pi + MCP bridge + p
   );
 
   it(
-    'known tools cannot execute or prompt until their exact input schema has been inspected',
+    'an uninspected tool call is blocked once, then executes once on the re-send',
     { timeout: 90_000 },
     async () => {
       echoCalls.length = 0;
       opaqueTurnCaptures.length = 0;
       let permissionCount = 0;
+      const sessionId = 'mcp-itest-uninspected-first-call';
       const { permissionAsked, requestBodies } = await runOneTurn(
         'ask',
         async (req) => {
           permissionCount += 1;
           expect(req.kind).toBe('permission');
           if (req.kind === 'permission') {
+            // 首次调用即便未 inspect 也要按完整 gateway 工具身份过权限（分类只认解析成功）。
             expect(req.toolName).toBe('mcp__cindy_echo__echo');
             expect(req.input).toEqual({ text: 'hello-pi' });
           }
@@ -1476,24 +1710,96 @@ describe.skipIf(!piAvailable)('PiAgent × cindy-bridge (real pi + MCP bridge + p
         },
         'local',
         'call without schema inspection',
+        // localHostOnly 占位：本用例只要会话隔离，不要 local host 工具配置。
+        false,
+        sessionId,
       );
 
       expect(permissionAsked).toBe(true);
+      // 剧本：首次盲调在权限询问**之前**就被披露门拦下（不弹权限框、不执行工具，只回
+      // 一条指名路标的错误），模型照路标补 list_tools 后重发；重发时已披露，正常过一次
+      // 权限门才真正落到 MCP。
       expect(permissionCount).toBe(1);
       expect(echoCalls).toEqual([{ text: 'hello-pi' }]);
-      expect(requestBodies[1]).toContain('Inspect this tool before execution');
-      expect(requestBodies[2]).toContain('inputSchema');
-      await waitFor(() => opaqueTurnCaptures.length === 1);
+      expect(requestBodies.some((body) => body.includes('Inspect this tool before execution'))).toBe(true);
+      // 披露记录已按当前 schema 写入，模型随后补的 list_tools 仍返回 schema。
+      expect(requestBodies.some((body) => body.includes('inputSchema'))).toBe(true);
+      await waitFor(() => opaqueTurnCaptures.length >= 1);
+      expect(opaqueTurnCaptures[0]).toMatchObject({
+        sessionId,
+        provider: 'pi',
+      });
     },
   );
 
   it(
-    'direct remote HTTP: uses env-backed bearer/custom headers instead of the localhost bridge token',
+    'parallel uninspected calls are both gated: neither asks permission nor executes',
     { timeout: 90_000 },
     async () => {
       echoCalls.length = 0;
+      opaqueTurnCaptures.length = 0;
+      let permissionCount = 0;
+      const sessionId = 'mcp-itest-parallel-uninspected';
+      const { requestBodies } = await runOneTurn(
+        'ask',
+        async (req) => {
+          // TOCTOU 回归：两个 hook 都看到未披露、都跳过权限；第二个 execute 不得
+          // 因为「此时已披露」而在没问过用户的情况下直接执行。
+          permissionCount += 1;
+          return { kind: 'permission', behavior: 'allow' };
+        },
+        'local',
+        'parallel uninspected double call',
+        false,
+        sessionId,
+      );
+
+      expect(permissionCount).toBe(0);
+      expect(echoCalls).toEqual([]);
+      // 两次 execute 都回同一条指名路标的错误。
+      const signposts = requestBodies.filter((body) => body.includes('Inspect this tool before execution'));
+      expect(signposts.length).toBeGreaterThanOrEqual(1);
+      await waitFor(() => opaqueTurnCaptures.length >= 1);
+    },
+  );
+
+  // #7632 integration regression: PiAgent.startSession -> real Pi -> authenticated IPv6 MCP
+  // must bypass HTTP_PROXY. The previous real-Pi test covered only 127.0.0.1; an empty
+  // inherited NO_PROXY plus http://[::1] is the minimal case that could leak credentials
+  // after removing the bracketed token from Pi's automatic NO_PROXY additions.
+  for (const loopbackHost of ['127.0.0.1', '::1'] as const) {
+    it(
+      `direct remote HTTP on ${loopbackHost}: keeps authenticated MCP traffic out of HTTP_PROXY`,
+      { timeout: 90_000 },
+      async (context) => {
+      echoCalls.length = 0;
       seenMcpUrls.length = 0;
       seenRemoteHeaders.length = 0;
+      const previousMcpUrl = mcpUrl;
+      const ipv6Mcp = loopbackHost === '::1'
+        ? createServer((req, res) => { mcpHttp.emit('request', req, res); })
+        : undefined;
+      if (ipv6Mcp) {
+        try {
+          await new Promise<void>((resolve, reject) => {
+            ipv6Mcp.once('error', reject);
+            ipv6Mcp.listen(0, '::1', () => {
+              ipv6Mcp.off('error', reject);
+              resolve();
+            });
+          });
+        } catch (error) {
+          // IPv6 loopback is optional on CI hosts; other bind failures remain test failures.
+          if (['EAFNOSUPPORT', 'EADDRNOTAVAIL', 'EPROTONOSUPPORT'].includes((error as NodeJS.ErrnoException).code ?? '')) {
+            context.skip();
+            return;
+          }
+          throw error;
+        }
+        const address = ipv6Mcp.address();
+        if (typeof address !== 'object' || !address) throw new Error('IPv6 MCP did not listen');
+        mcpUrl = `http://[::1]:${address.port}/mcp`;
+      }
       let proxyHits = 0;
       const proxy = createServer((_req, res) => {
         proxyHits += 1;
@@ -1520,11 +1826,13 @@ describe.skipIf(!piAvailable)('PiAgent × cindy-bridge (real pi + MCP bridge + p
           'remote',
         );
       } finally {
+        mcpUrl = previousMcpUrl;
         for (const name of Object.keys(previous)) delete process.env[name];
         for (const [name, value] of Object.entries(previous)) {
           if (value !== undefined) process.env[name] = value;
         }
         await new Promise<void>((resolve) => proxy.close(() => resolve()));
+        if (ipv6Mcp) await new Promise<void>((resolve) => ipv6Mcp.close(() => resolve()));
       }
 
       expect(turn).toBeDefined();
@@ -1545,7 +1853,8 @@ describe.skipIf(!piAvailable)('PiAgent × cindy-bridge (real pi + MCP bridge + p
         .join('');
       expect(finalText).toContain('ECHO[hello-pi]');
     },
-  );
+    );
+  }
 
   it(
     'persistent SSE: registers on the matching event without waiting for stream close, then uses the long tool timeout',

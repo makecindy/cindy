@@ -142,6 +142,7 @@ type ArmedDetachedVoiceDraft = {
   storageKey: string;
   previousVoiceText: string;
   token: ComposerDraftDiscardToken;
+  onSettled?: () => void;
 };
 
 let armedDetachedVoiceDraft: ArmedDetachedVoiceDraft | null = null;
@@ -173,11 +174,13 @@ export function persistDetachedVoiceToDraft(
 export function armDetachedVoiceDraftPersist(
   storageKey: string,
   previousVoiceText: string,
+  onSettled?: () => void,
 ): void {
   armedDetachedVoiceDraft = {
     storageKey,
     previousVoiceText,
     token: captureDraftDiscardToken(storageKey),
+    onSettled,
   };
   if (previousVoiceText) {
     persistDetachedVoiceToDraft(
@@ -197,7 +200,7 @@ export function hasArmedDetachedVoiceDraft(storageKey?: string): boolean {
 
 export function settleArmedDetachedVoiceDraft(nextVoiceText: string): void {
   if (!armedDetachedVoiceDraft) return;
-  const { storageKey, previousVoiceText, token } = armedDetachedVoiceDraft;
+  const { storageKey, previousVoiceText, token, onSettled } = armedDetachedVoiceDraft;
   armedDetachedVoiceDraft = null;
   persistDetachedVoiceToDraft(
     storageKey,
@@ -205,6 +208,9 @@ export function settleArmedDetachedVoiceDraft(nextVoiceText: string): void {
     nextVoiceText,
     token,
   );
+  // Empty recognition does not write a draft, but still ends its owning task's
+  // voice protection. Notify only after persistence and only for this draft.
+  if (isDraftDiscardTokenCurrent(token)) onSettled?.();
 }
 
 export function clearArmedDetachedVoiceDraft(): void {

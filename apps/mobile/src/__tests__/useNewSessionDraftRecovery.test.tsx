@@ -1,8 +1,6 @@
 // @vitest-environment jsdom
+import { markNewSessionIncomingShare } from '@/session/newSessionForm';
 import { act, useState } from 'react';
-import { readFileSync } from 'node:fs';
-import { resolve } from 'node:path';
-import ts from 'typescript';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { getMobileAuthOwner, setMobileAuthOwner } from '@/auth/authOwnerGeneration';
@@ -313,33 +311,16 @@ it.each(['edited', 'cleared', 'failed'] as const)('keeps the edit claim through 
   }
 });
 
-// Execute the page's real latch against delayed durable recovery. A global
-// share must not make this composer own input destined for another screen.
-const newPage = ts.createSourceFile('new.tsx', readFileSync(resolve(process.cwd(), 'app/sessions/new.tsx'), 'utf8'),
-  ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
-let shareLatchSource = '';
-function findShareLatch(node: ts.Node) {
-  if (ts.isIfStatement(node) && ts.isExpressionStatement(node.thenStatement)
-    && ts.isBinaryExpression(node.thenStatement.expression)
-    && node.thenStatement.expression.left.getText(newPage) === 'incomingShareReceivedRef.current') {
-    shareLatchSource = node.getText(newPage);
-  }
-  ts.forEachChild(node, findShareLatch);
-}
-findShareLatch(newPage);
-if (!shareLatchSource) throw new Error('Missing new-task share ownership latch');
-const applyShareLatch = new Function('incomingShareBatch', 'incomingShareReceivedRef',
-  ts.transpileModule(shareLatchSource, { compilerOptions: { target: ts.ScriptTarget.ES2022 } }).outputText);
-
+// Unit: a share for another screen must not claim this form or suppress recovery.
 it.each([undefined, 'device/task', 'companion/task', 'new'])(
   'only protects the new-task draft for its selected share destination: %s', async destination => {
     const received = { current: false };
     resume.hasInput = () => received.current;
     await renderBlank();
-    applyShareLatch({ id: 'share' }, received);
-    if (destination) applyShareLatch({ id: 'share', destination }, received);
+    markNewSessionIncomingShare({}, received);
+    if (destination) markNewSessionIncomingShare({ destination }, received);
     // Cancellation or successful handoff removes the global batch.
-    applyShareLatch(null, received);
+    markNewSessionIncomingShare(null, received);
     await act(async () => ready());
     await notify();
     expect(container.textContent).toBe(destination === 'new' ? '' : 'device/task');

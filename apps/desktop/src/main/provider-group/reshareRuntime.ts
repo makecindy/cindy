@@ -9,6 +9,7 @@ import { REMOTE_AGENT_CHANNEL, parseRemoteAgentCaps } from '@cindy/device-link';
 
 import { activeOwnerScopeKey } from '../appSessionState.js';
 import { PROVIDER_GROUP_IPC } from '../../shared/providerGroup.js';
+import { PROVIDER_SHARE_AGENT_DEVICE_PREFIX } from '../../shared/providerShare.js';
 import { tapWindowBroadcast } from '../device-link/broadcast-tap.js';
 import { broadcast, remoteBackgroundInvoke } from '../device-link/index.js';
 import {
@@ -45,13 +46,21 @@ function reshareForActiveOwner(): ProviderGroupReshare {
     if (!isCurrent()) throw new Error('The account changed');
     const reply = await remoteBackgroundInvoke(agentDeviceId, REMOTE_AGENT_CHANNEL, [request]);
     if (!isCurrent()) throw new Error('The account changed');
-    if (!reply.ok) throw new Error(reply.error.message || reply.error.code);
+    if (!reply.ok) throw Object.assign(new Error(reply.error.message || reply.error.code), { code: reply.error.code });
     return reply.result;
   };
   const reshare = createProviderGroupReshare({
     listGroups: () => (isCurrent() ? listProviderGroups() : {}),
     ownedShares: () => (isCurrent() ? getProviderShareHostLoadedSnapshot() : null),
     pendingCleanups: () => (isCurrent() ? listProviderGroupReshareCleanups() : {}),
+    shareAvailability: (agentDeviceId) => {
+      if (!isCurrent() || !agentDeviceId.startsWith(PROVIDER_SHARE_AGENT_DEVICE_PREFIX)) return 'unknown';
+      const shareId = agentDeviceId.slice(PROVIDER_SHARE_AGENT_DEVICE_PREFIX.length);
+      const share = getReceivedShares().find((item) => item.shareId === shareId);
+      if (share) return share.status === 'paused' ? 'paused' : share.hostOnline ? 'online' : 'offline';
+      const confirmed = getConfirmedReceivedShareIds();
+      return confirmed && !confirmed.has(shareId) ? 'removed' : 'unknown';
+    },
     completeCleanup: async (agentDeviceId, token) => {
       if (!isCurrent()) throw new Error('The account changed');
       await completeProviderGroupReshareCleanup(agentDeviceId, token);

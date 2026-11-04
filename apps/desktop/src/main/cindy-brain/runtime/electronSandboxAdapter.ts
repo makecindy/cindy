@@ -20,7 +20,7 @@ import {
 import { getActiveAppSession, type ActiveAppSession } from '../../appSessionState.js';
 import { ownerScopedGhostPartition, ownerScopedGhostPartitionForInstalledGhost } from '../ghostWebviewPartition.js';
 import { installedGhostStoragePart } from '../../../shared/pluginIdentity.js';
-import { GHOST_BOOT_PATH, GHOST_MAIL_SDK_PATH, ghostBootHtml, ghostFileMime, resolveGhostFilePath } from './ghostFiles.js';
+import { GHOST_BOOT_PATH, GHOST_MAIL_SDK_PATH, ghostBootHtml, ghostFileMime, mediaTypeForLibraryPath, resolveGhostFilePath } from './ghostFiles.js';
 import mailComposeRuntimeSource from './mailComposeRuntime.js?raw';
 import { handleGhostKvRequest, readBoundedBodyText } from './ghostKvEndpoint.js';
 import { resolveHashRef as resolveBlobHashRef } from '../../cindy-media/blobStore.js';
@@ -209,7 +209,8 @@ export async function fetchGhostSettings(ghost: InstalledGhost, pathname: string
   const args = { ghostId: id, pathname: path, method, readBodyText: async () => body ?? '', isCurrent, confirmConnection };
   const handler = path === '/secrets' || path.startsWith('/secrets/') ? ghostSecretsHandler
     : path === '/oauth' || path.startsWith('/oauth/') ? ghostOauthHandler
-    : path === '/connections' || path.startsWith('/connections/') ? ghostConnectionsHandler : null;
+    : path === '/connections' || path.startsWith('/connections/') ? ghostConnectionsHandler
+    : path === '/models' ? ghostModelsHandler : null;
   let result: { status: number; body?: string };
   if (handler) result = await handler(args);
   else if (path === '/kv' && ghostKvStore) result = await handleGhostKvRequest({
@@ -269,9 +270,13 @@ export function setGhostMediaModelsProvider(
   ghostMediaModelsProvider = provider;
 }
 
-let ghostAgentModelsProvider: ((ghostId: string) => Promise<GhostAgentModelsResult>) | null = null;
+let ghostAgentModelsProvider: ((ghostId: string, agentDeviceId?: string) => Promise<GhostAgentModelsResult>) | null = null;
+let ghostModelPickerProvider: ((id: string, options: unknown, current: () => boolean, signal: AbortSignal) => Promise<import('../../../shared/pluginModelPicker.js').PluginModelPickerResult>) | null = null;
+export function setGhostModelPickerProvider(provider: NonNullable<typeof ghostModelPickerProvider>): void {
+  ghostModelPickerProvider = provider;
+}
 export function setGhostAgentModelsProvider(
-  provider: (ghostId: string) => Promise<GhostAgentModelsResult>,
+  provider: (ghostId: string, agentDeviceId?: string) => Promise<GhostAgentModelsResult>,
 ): void {
   ghostAgentModelsProvider = provider;
 }
@@ -307,6 +312,12 @@ type GhostSecretsProtocolHandler = (args: {
 }) => Promise<{ status: number; body?: string }>;
 
 let ghostSecretsHandler: GhostSecretsProtocolHandler | null = null;
+let ghostModelsHandler: GhostSecretsProtocolHandler | null = null;
+
+/** /models：插件发布它提供给模型选择器的模型(index.ts 注入，形态同 /secrets)。 */
+export function setGhostModelsHandler(handler: GhostSecretsProtocolHandler): void {
+  ghostModelsHandler = handler;
+}
 
 export function setGhostSecretsHandler(handler: GhostSecretsProtocolHandler): void {
   ghostSecretsHandler = handler;
@@ -570,13 +581,43 @@ function registerGhostProtocol(
           },
         });
       }
+      if (url.pathname === '/model-picker') {
+        const headers = { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store' };
+        if (request.method !== 'POST') return new Response(null, { status: 405, headers });
+        if (url.search) return new Response(null, { status: 400, headers });
+        if (!ghostModelPickerProvider) return new Response(null, { status: 503, headers });
+        let options: unknown;
+        try {
+          const body = await readBoundedBodyText(request);
+          if (body.length > 4096) return new Response(null, { status: 400, headers });
+          options = JSON.parse(body || '{}');
+        } catch { return new Response(null, { status: 400, headers }); }
+        // Page authors cannot choose a different phone or impersonate a logic request.
+        if (!options || typeof options !== 'object' || Array.isArray(options) ||
+            Object.keys(options).some(key => !['initial', 'allowRemote'].includes(key))) return new Response(null, { status: 400, headers });
+        const result = await ghostModelPickerProvider(storagePart, options, isRegistrationCurrent, request.signal);
+        if (!isRegistrationCurrent()) return new Response(null, { status: 403, headers });
+        return new Response(JSON.stringify(result), { status: 200, headers });
+      }
       if (url.pathname === '/agent-models') {
         const headers = { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store' };
         if (request.method !== 'GET') return new Response(null, { status: 405, headers });
-        if (url.search) return new Response(null, { status: 400, headers });
+        const keys = [...url.searchParams.keys()];
+        const ids = url.searchParams.getAll('agent_device_id');
+        let agentDeviceId: string | undefined;
+        if (keys.length > 0) {
+          if (keys.length !== 1 || keys[0] !== 'agent_device_id' || ids.length !== 1) {
+            return new Response(null, { status: 400, headers });
+          }
+          const id = ids[0];
+          if (!id || id.length > 128) return new Response(null, { status: 400, headers });
+          agentDeviceId = id;
+        }
         if (!ghostAgentModelsProvider) return new Response(null, { status: 503, headers });
         try {
-          const result = await ghostAgentModelsProvider(storagePart);
+          const result = agentDeviceId === undefined
+            ? await ghostAgentModelsProvider(storagePart)
+            : await ghostAgentModelsProvider(storagePart, agentDeviceId);
           if (!isGhostProtocolOwnerActive(owner)) return new Response(null, { status: 403, headers });
           return new Response(JSON.stringify(result), {
             status: result.ok ? 200 : result.errorCode === 'PERMISSION_DENIED' ? 403 : 503,
@@ -636,6 +677,23 @@ function registerGhostProtocol(
             ...(out.body !== undefined
               ? { 'Content-Type': 'application/json; charset=utf-8' }
               : {}),
+            'Cache-Control': 'no-cache',
+          },
+        });
+      }
+      if (url.pathname === '/models') {
+        if (!ghostModelsHandler) return new Response(null, { status: 503 });
+        const out = await ghostModelsHandler({
+          ghostId: storagePart,
+          method: request.method,
+          pathname: url.pathname,
+          readBodyText: () => readBoundedBodyText(request),
+          isCurrent: isRegistrationCurrent,
+        });
+        return new Response(out.body ?? null, {
+          status: out.status,
+          headers: {
+            ...(out.body !== undefined ? { 'Content-Type': 'application/json; charset=utf-8' } : {}),
             'Cache-Control': 'no-cache',
           },
         });
@@ -866,30 +924,6 @@ async function serveGhostLibraryFile(ghostId: string, relPath: string, rangeHead
   }
 }
 
-/** library 投影的 MIME 按扩展名粗判(面板展示用;嗅探不做,宿主只供已存文件)。 */
-function mediaTypeForLibraryPath(relPath: string): string {
-  const ext = relPath.slice(relPath.lastIndexOf('.')).toLowerCase();
-  switch (ext) {
-    case '.png': return 'image/png';
-    case '.jpg':
-    case '.jpeg': return 'image/jpeg';
-    case '.gif': return 'image/gif';
-    case '.webp': return 'image/webp';
-    case '.svg': return 'image/svg+xml';
-    case '.mp4': return 'video/mp4';
-    case '.webm': return 'video/webm';
-    case '.mov': return 'video/quicktime';
-    case '.mp3': return 'audio/mpeg';
-    case '.wav': return 'audio/wav';
-    case '.ogg': return 'audio/ogg';
-    case '.m4a': return 'audio/mp4';
-    case '.pdf': return 'application/pdf';
-    case '.json': return 'application/json; charset=utf-8';
-    case '.txt': return 'text/plain; charset=utf-8';
-    default: return 'application/octet-stream';
-  }
-}
-
 /** 画廊清单响应:[{src, caption}](新的在前;账本不可用时回空数组不报错)。 */
 async function serveGhostGallery(storagePart: string, protocolHost: string): Promise<Response> {
   let items: Awaited<ReturnType<typeof listGhostGalleryFromLedger>> = [];
@@ -911,6 +945,10 @@ async function serveGhostGallery(storagePart: string, protocolHost: string): Pro
 
 class ElectronSandboxHandle implements SandboxHandle {
   private win: BrowserWindow | null;
+  // 建窗时记下:窗口可能先于 destroy() 被外部销毁(更新重启的 forceQuit 会逐个
+  // destroy 全部 BrowserWindow),那时再读 win.webContents 会抛 Object has been
+  // destroyed,打断 destroyAll 让后续沙箱与 Node runtime 都收不掉。
+  private readonly logicWebContentsId: number;
   private goneCb: ((details: { reason: string }) => void) | null = null;
   private destroyed = false;
 
@@ -937,8 +975,9 @@ class ElectronSandboxHandle implements SandboxHandle {
         devTools: !ghostSandboxDevToolsDisabled,
       },
     });
-    ghostWebContentsIds.add(this.win.webContents.id);
-    logicWebContentsToGhost.set(this.win.webContents.id, installedGhostStoragePart(ghost));
+    this.logicWebContentsId = this.win.webContents.id;
+    ghostWebContentsIds.add(this.logicWebContentsId);
+    logicWebContentsToGhost.set(this.logicWebContentsId, installedGhostStoragePart(ghost));
     this.win.webContents.on('render-process-gone', (_event, details) => {
       if (this.destroyed) return;
       // 延迟一拍再收尸:不在 Chromium 事件分发中途销毁窗口(重入风险)。
@@ -959,10 +998,8 @@ class ElectronSandboxHandle implements SandboxHandle {
     this.destroyed = true;
     const win = this.win;
     this.win = null;
-    if (win) {
-      logicWebContentsToGhost.delete(win.webContents.id);
-      if (!win.isDestroyed()) win.destroy();
-    }
+    logicWebContentsToGhost.delete(this.logicWebContentsId);
+    if (win && !win.isDestroyed()) win.destroy();
   }
 
   crashForTest(): void {

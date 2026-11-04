@@ -396,28 +396,6 @@ export function useSessionAttentionKind(sessionId: string): AttentionKind | unde
   );
 }
 
-/** Hook —— 一组 session 聚合后的 urgent attention kind(严重度优先:error > awaiting)。
- *  给"组头聚合子行状态"的场景用(如自动化分组头角标着色):快照是 primitive
- *  (kind 字符串或 undefined),组外会话的 attention 变化、以及组内不改变聚合结果的
- *  变化都不会触发重渲染。逐行组件用 useSessionAttentionKind,聚合组件用这个,
- *  都别退回整张 Map 的 useSessionAttentionKinds。
- *  注:'done' 不参与聚合(返回 undefined)——完成未读的绿点由未读计数路径表达,
- *  本 hook 只回答"组里有没有需要处理的 error / awaiting"。 */
-export function useSessionsAttentionUrgentKind(
-  sessionIds: readonly string[],
-): 'error' | 'awaiting' | undefined {
-  const getSnapshot = (): 'error' | 'awaiting' | undefined => {
-    let hasAwaiting = false;
-    for (const id of sessionIds) {
-      const kind = attentionMap.get(id);
-      if (kind === 'error') return 'error';
-      if (kind === 'awaiting') hasAwaiting = true;
-    }
-    return hasAwaiting ? 'awaiting' : undefined;
-  };
-  return useSyncExternalStore(subscribeSessionAttention, getSnapshot, getSnapshot);
-}
-
 /** Hook —— 一组 session 的 sessionId → kind 子映射(组外会话不进结果)。
  *  给"折叠容器要按同一份判据汇总整组、且需要知道**是哪几条**"的场景用
  *  (定时任务分组头:汇总红点 + 收起态把告警行提上来,见
@@ -426,7 +404,7 @@ export function useSessionsAttentionUrgentKind(
  *  按值比较,再由 useMemo 派生出引用稳定的 Map —— 组外会话的 attention 变化、
  *  以及组内不改变本组 kind 的变化都不会触发重渲染。直接返回新 Map 会让**任何**
  *  会话的 attention 变化重渲染全部消费组件,等同退回 useSessionAttentionKinds。
- *  只回答"是什么 kind"的聚合场景仍用更省的 useSessionsAttentionUrgentKind。 */
+ */
 export function useSessionsAttentionKindMap(
   sessionIds: readonly string[],
 ): ReadonlyMap<string, AttentionKind> {

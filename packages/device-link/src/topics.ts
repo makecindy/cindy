@@ -54,6 +54,8 @@ export function parseFsWatchTopic(topic: string): string | null {
 export type SessionActivityPhase = 'running' | 'needs-interaction' | 'completed' | 'error';
 
 export interface SessionActivityPayload {
+  /** Optional display-text marker; absent/unknown uses legacy Markdown recovery. */
+  summaryFormat?: 'plain-text';
   /** Optional owner-issued completion identity. Old hosts omit it; never infer one. */
   completionToken?: string;
   /** Completion notification policy only; activity/attention remains unchanged.
@@ -174,6 +176,7 @@ const ACCOUNT_CHANNELS: ReadonlySet<string> = new Set([
   'maker:provider:changed',
   // runtime Agent roster is a device-level snapshot; controllers refresh after this push.
   'maker:agents:changed',
+  'maker:model-catalog:changed',
   // 模块中立的资源集合失效通知；控制端已有 sessions 常驻订阅可直接接收，
   // 不为每个新模块扩张一档 topic。
   REMOTE_RESOURCE_CHANGED_CHANNEL,
@@ -193,6 +196,8 @@ const ACCOUNT_CHANNELS: ReadonlySet<string> = new Set([
   'learn:event',
   // 被控端项目手动顺序变化:无 sessionId,并入 sessions topic 随设备列表订阅到达。
   'sidebar-settings:project-order-changed',
+  // Project aliases invalidate a device-level display snapshot, without a sessionId.
+  'local-db:project-aliases:changed',
   // Claude 订阅账号余量快照(账号级,无 sessionId):控制端打开远程订阅会话时 chip
   // 据此实时刷新;并入 sessions topic 随设备列表订阅到达,低频(签名去抖 + 节流)。
   'usage:claude-subscription-changed',

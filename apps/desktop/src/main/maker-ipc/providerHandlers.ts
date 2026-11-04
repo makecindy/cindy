@@ -1,5 +1,9 @@
-import { appendSpeechModels } from '../../shared/speechProviderSetup.js';
+import { bindModelSourceSnapshot, acceptsModelSourceSnapshot, modelSourceRequestSignature, issueModelSourceSnapshot } from '../maker-host/model-source-snapshots.js';
+import { buildModelsFetchRequest } from '../maker-host/provider-model-fetch.js';
+import { getProviderRouteCredentialRevision } from '../maker-host/provider-route.js';
+import { appendSpeechModels, missingSpeechReference } from '../../shared/speechProviderSetup.js';
 import { setProviderPresentation, retainProviderPresentationAfterAuthChange } from '../maker-host/provider-presentation-store.js';
+import type { DeploymentDetectionResult } from '../../shared/providerDetection.js';
 import { pruneProviderGroupBindings } from '../provider-group/bindings.js';
 import { writeProviderGroup } from '../provider-group/store.js';
 /**
@@ -28,6 +32,7 @@ import {
   runtimeCustomProviderId,
   storedCustomProviderId,
   type AgentKind,
+  type Catalog,
   type CustomProviderConfig,
   type ProviderModelDiscoveryFailure,
   type ProviderPreset,
@@ -75,6 +80,7 @@ import {
   deleteCustomProvider,
   getCustomProvider,
   updateCustomProvider,
+  updateCustomProviderIfUnchanged,
   validateCustomProviderConfig,
 } from '../maker-host/custom-provider-store.js';
 import {
@@ -94,7 +100,9 @@ import {
   cancelProviderImport,
   finishProviderImportConfirm,
   previewProviderImport,
+  createProviderImportDraftsFromFile,
 } from '../provider-import/providerImport.js';
+import { readProviderImportFile } from '../provider-import/providerImportFile.js';
 import {
   builtinApiKeyStore,
   builtinApiKeyPresentationId,
@@ -104,6 +112,10 @@ import type {
   ProviderModelsFetchResult,
   ProviderModelsFetchSpec,
 } from '../maker-host/provider-model-fetch.js';
+import type {
+  ProviderAccountUsageRequest,
+  ProviderAccountUsageResult,
+} from '../../shared/providerAccountUsage.js';
 import { MAKER_INVOKE, MAKER_PUSH } from './channels.js';
 import type { IpcHandlerRegistry } from './ipcHandlerRegistry.js';
 
@@ -196,19 +208,25 @@ function parseCustomProviderUpdateOptions(input: unknown): CustomProviderUpdateO
   if (input === undefined) return {};
   if (!input || typeof input !== 'object' || Array.isArray(input)) return null;
   const entries = Object.entries(input as Record<string, unknown>);
-  if (entries.some(([key]) => key !== 'source' && key !== 'codexImageGenerationRestartPolicy' && key !== 'appendSpeechModelsOnly'))
+  if (entries.some(([key]) => key !== 'source' && key !== 'codexImageGenerationRestartPolicy' && key !== 'appendSpeechModelsOnly' && key !== 'speechReferenceRefreshAgents'))
     return null;
   const source = (input as Record<string, unknown>).source;
   if (source !== undefined && source !== 'manual-settings') return null;
   const policy = (input as Record<string, unknown>).codexImageGenerationRestartPolicy;
   const append = (input as Record<string, unknown>).appendSpeechModelsOnly;
+  const refreshAgents = (input as Record<string, unknown>).speechReferenceRefreshAgents;
+  if (refreshAgents !== undefined && (!Array.isArray(refreshAgents) ||
+    refreshAgents.length === 0 || refreshAgents.length > VALID_AGENTS.length ||
+    refreshAgents.some(agent => !VALID_AGENTS.includes(agent)) ||
+    new Set(refreshAgents).size !== refreshAgents.length)) return null;
   if (append !== undefined && append !== true) return null;
   if (policy !== undefined && policy !== 'interrupt') return null;
-  if (append && (source || policy)) return null;
+  if (append && (source || policy || refreshAgents)) return null;
   return {
     ...(source === 'manual-settings' ? { source } : {}),
     ...(policy ? { codexImageGenerationRestartPolicy: policy } : {}),
     ...(append ? { appendSpeechModelsOnly: true as const } : {}),
+    ...(refreshAgents ? { speechReferenceRefreshAgents: refreshAgents as AgentKind[] } : {}),
   };
 }
 
@@ -275,7 +293,7 @@ export interface ProviderHandlerDeps {
    * 服务 device-link（合成 event）与可能不受信的渲染上下文，所以默认纯读，只有确认 sender
    * 是本机主页面时才放行副作用（PR #548 review）。
    */
-  listProviders(opts?: { allowSideEffects?: boolean }): Promise<ProviderView[]>;
+  listProviders(opts?: { allowSideEffects?: boolean; snapshotOnly?: boolean }): Promise<ProviderView[]>;
   /** Synchronous catalog ownership check; injected to keep this IPC module free of Host cycles. */
   isOrganizationManagedProviderId(providerId: string): boolean;
   /**
@@ -319,10 +337,17 @@ export interface ProviderHandlerDeps {
   getProviderOrder(): string[];
   /** 目录 presets 段（生产 = () => getActiveCatalog().presets ?? []）。 */
   listPresets(): ProviderPreset[];
+  /** Current Registry and presets for classifying freshly discovered custom models. */
+  getModelCatalog(): Pick<Catalog, 'modelRegistry' | 'presets'> & Partial<Pick<Catalog, 'providers'>>;
   /** 测试连接（生产 = testProviderConnection；单测注入 stub 不联网）。 */
-  testConnection(input: ProviderTestInput): Promise<ProviderTestResult>;
+  testConnection(input: ProviderTestInput, signal?: AbortSignal): Promise<ProviderTestResult>;
+  /** 账户余额查询（生产 = readProviderAccountUsage；单测注入 stub 不联网）。 */
+  accountUsage(input: ProviderAccountUsageRequest): Promise<ProviderAccountUsageResult>;
   /** 获取模型列表（生产 = fetchProviderModels；单测注入 stub 不联网）。 */
   fetchModels(spec: ProviderModelsFetchSpec): Promise<ProviderModelsFetchResult>;
+  /** Main's native file picker; no renderer-supplied paths or file contents. */
+  selectProviderImportFile?(event: unknown): Promise<string | null>;
+  detectProvider?(spec: ProviderModelsFetchSpec, signal: AbortSignal): Promise<DeploymentDetectionResult>;
   /** 内置四家的模型真源刷新；生产按 providerId 分派到既有 discovery 机制。 */
   refreshBuiltinModels(providerId: BuiltinRefreshableProviderId): Promise<void>;
   /** Renderer 自动刷新提示；Main 侧负责静默失败、冷却和跨窗口去重。 */
@@ -464,25 +489,54 @@ export interface ProviderHandlerDeps {
    */
   readCodexContextWindowInfo?(target: ModelPriceOverrideTarget, sessionId?: string): Promise<CodexContextWindowInfo | null>;
   readModelContextLimit?(target: ModelPriceOverrideTarget): ModelContextLimitView;
+  readModelImageInputOverride?(target: ModelPriceOverrideTarget): boolean | null;
+  writeModelImageInputOverride?(targets: readonly ModelPriceOverrideTarget[], value: boolean | null): Promise<void>;
   validateModelContextLimit?(targets: readonly ModelPriceOverrideTarget[], limit: number): Promise<void>;
   writeModelContextLimit?(targets: readonly ModelPriceOverrideTarget[], limit: number | null): void | Promise<void>;
+  readModelCompaction?(target: ModelPriceOverrideTarget): { pct: number; isCustomized: boolean };
+  writeModelCompaction?(targets: readonly ModelPriceOverrideTarget[], pct: number | null): Promise<void>;
+  stageClearProviderModelCompaction?(providerId: string): () => boolean;
 }
 
 /** 上下文上限的读回视图(与写入返回同形，UI 一次拿齐当前值与是否自定义)。 */
 export interface ModelContextLimitView {
+  compaction?: import('../../shared/modelContextLimit').ModelContextLimitView['compaction'];
   mixed?: boolean;
   limit: number | null;
   isCustomized: boolean;
+}
+
+/** 校验 PROVIDER_ACCOUNT_USAGE 入参形状（确定性代码校验，非法直接 INVALID_PARAMS）。 */
+function parseAccountUsageInput(input: unknown): ProviderAccountUsageRequest | null {
+  if (!input || typeof input !== 'object') return null;
+  const i = input as Record<string, unknown>;
+  if (typeof i.providerId !== 'string' || i.providerId.length === 0) return null;
+  if (i.forceRefresh !== undefined && typeof i.forceRefresh !== 'boolean') return null;
+  if (
+    i.agent !== undefined
+    && (typeof i.agent !== 'string' || !(VALID_AGENTS as readonly string[]).includes(i.agent))
+  ) {
+    return null;
+  }
+  return {
+    providerId: i.providerId,
+    forceRefresh: i.forceRefresh ?? undefined,
+    agent: i.agent as AgentKind | undefined,
+  };
 }
 
 /** 校验 PROVIDER_TEST_CONNECTION 入参形状（确定性代码校验，非法直接 INVALID_PARAMS）。 */
 function parseTestInput(input: unknown): ProviderTestInput | null {
   if (!input || typeof input !== 'object') return null;
   const i = input as Record<string, unknown>;
+  if (i.requestId !== undefined && (typeof i.requestId !== 'string' || !/^[a-zA-Z0-9_-]{1,100}$/.test(i.requestId))) return null;
+  if (i.strategy !== undefined && i.strategy !== 'auto') return null;
+  const options = { ...(i.requestId ? { requestId: i.requestId as string } : {}), ...(i.strategy === 'auto' ? { strategy: 'auto' as const } : {}) };
+  if (i.strategy === 'auto' && (!i.requestId || i.kind !== 'adhoc')) return null;
   if (i.kind === 'saved') {
     if (typeof i.providerId !== 'string' || i.providerId.length === 0) return null;
     if (typeof i.agent !== 'string' || !VALID_AGENTS.includes(i.agent)) return null;
-    return { kind: 'saved', providerId: i.providerId, agent: i.agent as AgentKind };
+    return { kind: 'saved', providerId: i.providerId, agent: i.agent as AgentKind, ...options };
   }
   if (i.kind === 'adhoc') {
     const s = i.spec;
@@ -491,10 +545,10 @@ function parseTestInput(input: unknown): ProviderTestInput | null {
     if (typeof spec.agent !== 'string' || !VALID_AGENTS.includes(spec.agent)) return null;
     if (typeof spec.authMethod !== 'string' || !VALID_ADHOC_AUTH_METHODS.includes(spec.authMethod))
       return null;
-    if (typeof spec.baseUrl !== 'string' || spec.baseUrl.length === 0) return null;
+    if (typeof spec.baseUrl !== 'string' || spec.baseUrl.length === 0 || spec.baseUrl.length > 4096) return null;
     try {
       const u = new URL(spec.baseUrl);
-      if (u.protocol !== 'http:' && u.protocol !== 'https:') return null;
+      if ((u.protocol !== 'http:' && u.protocol !== 'https:') || u.username || u.password) return null;
     } catch {
       return null;
     }
@@ -517,8 +571,12 @@ function parseTestInput(input: unknown): ProviderTestInput | null {
     if (spec.api !== undefined && (typeof spec.api !== 'string' || !(PI_MODEL_APIS as readonly string[]).includes(spec.api))) return null;
     if (spec.catalogPresetId !== undefined && typeof spec.catalogPresetId !== 'string') return null;
     if (spec.requestPath !== undefined && !isProviderRequestPath(spec.requestPath)) return null;
+    if ((typeof spec.apiKey === 'string' && spec.apiKey.length > 16384) || (spec.modelId as string).length > 1024
+      || Object.keys(spec.headers ?? {}).length > 64
+      || Object.entries(spec.headers ?? {}).some(([k, v]) => k.length > 256 || (v as string).length > 16384)) return null;
+    if (i.strategy === 'auto' && (spec.agent !== 'pi' || spec.catalogPresetId || spec.api || spec.requestPath || spec.authMethod === 'oauth')) return null;
     return {
-      kind: 'adhoc',
+      kind: 'adhoc', ...options,
       spec: {
         agent: spec.agent as AgentKind,
         baseUrl: spec.baseUrl,
@@ -540,6 +598,8 @@ function parseTestInput(input: unknown): ProviderTestInput | null {
 function parseModelsFetchInput(input: unknown): ProviderModelsFetchSpec | null {
   if (!input || typeof input !== 'object') return null;
   const spec = input as Record<string, unknown>;
+  if (spec.allowEmpty !== undefined && typeof spec.allowEmpty !== 'boolean') return null;
+  if (spec.redirect !== undefined && spec.redirect !== 'error') return null;
   if (typeof spec.agent !== 'string' || !VALID_AGENTS.includes(spec.agent)) return null;
   if (typeof spec.authMethod !== 'string' || !VALID_ADHOC_AUTH_METHODS.includes(spec.authMethod))
     return null;
@@ -586,6 +646,8 @@ function parseModelsFetchInput(input: unknown): ProviderModelsFetchSpec | null {
     baseUrl: spec.baseUrl,
     authMethod: spec.authMethod as ProviderModelsFetchSpec['authMethod'],
     modelsUrl: (spec.modelsUrl as string | null | undefined) ?? null,
+    ...(spec.allowEmpty === true ? { allowEmpty: true } : {}),
+    ...(spec.redirect === 'error' ? { redirect: 'error' as const } : {}),
     apiKey: (spec.apiKey as string | null | undefined) ?? null,
     headers: spec.headers as Record<string, string> | undefined,
     ...(typeof spec.savedProviderId === 'string' ? { savedProviderId: spec.savedProviderId } : {}),
@@ -598,7 +660,55 @@ function parseModelsFetchInput(input: unknown): ProviderModelsFetchSpec | null {
 export function registerProviderHandlers(
   registry: IpcHandlerRegistry,
   deps: ProviderHandlerDeps,
-): void {
+) {
+  const modelDiscoveryRequests = new Map<string, symbol>();
+  // The dispatch revision is intentionally Codex-specific for config-only edits.
+  // Keep a discovery-only stamp for other runtimes, including edit-away/edit-back.
+  const modelSourceConfigGenerations = new Map<string, symbol>();
+  const sanitizeModelSources = (
+    config: CustomProviderConfig, previous: CustomProviderConfig | null,
+    keys: Record<string, string>, headers: CustomProviderHeaderSecrets,
+    credentialAgents: ReadonlySet<string> = new Set(),
+  ): CustomProviderConfig => ({ ...config, runtimes: Object.fromEntries(
+    Object.entries(config.runtimes).map(([agent, runtime]) => {
+      if (!runtime) return [agent, runtime];
+      const prior = previous?.runtimes[agent as AgentKind];
+      const context = (r: typeof runtime, auth: typeof config.auth) =>
+        JSON.stringify([r.baseUrl, r.modelsUrl, r.wireProtocol, r.requestPath, r.headers,
+          auth?.method === 'apiKey' || !auth ? null : auth]);
+      const sameContext = !!prior && !credentialAgents.has(agent)
+        && context(prior, previous?.auth) === context(runtime, config.auth);
+      let signature: string | undefined;
+      if (runtime.models.some(model => model.discoverySnapshotId || model.discoveredSource?.snapshotId)
+        && (!previous || config.auth?.method !== 'oauth')) {
+        try {
+          const storedKey = previous ? deps.readCustomProviderKeyForMutation(config.id, agent as AgentKind) : null;
+          const storedHeaders = previous ? deps.readCustomProviderHeadersForMutation(config.id, agent as AgentKind) : null;
+          const request = buildModelsFetchRequest({ agent: agent as AgentKind,
+            baseUrl: runtime.baseUrl, modelsUrl: runtime.modelsUrl,
+            wireProtocol: runtime.wireProtocol, authMethod: config.auth?.method ?? 'apiKey',
+            apiKey: keys[agent] ?? (typeof storedKey === 'string' ? storedKey : undefined),
+            // Saving replaces the complete secret header map; omitted old keys
+            // must not authenticate a receipt for a different outbound identity.
+            headers: { ...runtime.headers, ...(headers[agent as AgentKind]
+              ?? (typeof storedHeaders === 'object' ? storedHeaders : {})) },
+          });
+          signature = modelSourceRequestSignature(request.url, request.init);
+        } catch { /* A source without provable discovery context is omitted. */ }
+      }
+      return [agent, { ...runtime, models: runtime.models.map(model => {
+        const old = sameContext ? prior?.models.find(m => m.id === model.id)?.discoveredSource : undefined;
+        const source = model.discoveredSource;
+        // A receipt proves the submitted context even when credentials changed.
+        // OAuth has no reconstructed signature, so retain its saved-context gate.
+        const accepted = (signature !== undefined || (sameContext && !!previous && config.auth?.method === 'oauth'))
+          && acceptsModelSourceSnapshot(model.id, source, config.id, agent as AgentKind, signature, model.discoverySnapshotId ?? source?.snapshotId);
+        const { discoveredSource: _source, ...rest } = model;
+        // A stale renderer cannot restore a source invalidated by another edit/request.
+        return { ...rest, ...((accepted ? source : old) ? { discoveredSource: accepted ? source : old } : {}) };
+      }) }];
+    }),
+  ) });
   const oauthMutationGeneration = new Map<string, symbol>();
   const acceptingOAuthGenerations = new Set<symbol>();
   const beginOAuthMutation = (providerId: string): symbol => {
@@ -1073,11 +1183,7 @@ export function registerProviderHandlers(
   };
 
   // 只读聚合：远端还需等待当前账号的模型开关就绪；失败不可伪装为全部关闭。
-  registry.handle(
-    MAKER_INVOKE.PROVIDER_LIST,
-    async (
-      event,
-    ): Promise<{
+  const modelSettingsList = async (trusted: boolean = false): Promise<{
       dataOwnerId: string | null;
       ownerGeneration: number;
       providers: ProviderView[];
@@ -1088,7 +1194,6 @@ export function registerProviderHandlers(
       // event)和可能不受信的渲染上下文,它们只该拿到只读快照(PR #548 review)。
       const ownerAtIngress = captureProviderOwnerSession();
       const dataOwnerId = ownerAtIngress?.dataOwnerId ?? null;
-      const trusted = deps.isTrustedSender?.(event) === true;
       const providers = await deps.listProviders({
         allowSideEffects: trusted,
       });
@@ -1134,8 +1239,10 @@ export function registerProviderHandlers(
         providerOrder,
         modelVisibilityOverrides,
       };
-    },
-  );
+    };
+  registry.handle(MAKER_INVOKE.PROVIDER_LIST, async (event) => {
+    return modelSettingsList(deps.isTrustedSender?.(event) === true);
+  });
 
   registry.handle(
     MAKER_INVOKE.PROVIDER_MODELS_REFRESH,
@@ -1215,6 +1322,32 @@ export function registerProviderHandlers(
 
   const providerImportScope = (): { dataOwnerId: string | null; generation: number } =>
     captureProviderOwnerSession() ?? { dataOwnerId: null, generation: 0 };
+
+  registry.handle(MAKER_INVOKE.PROVIDER_IMPORT_FILE, async (event, ...args: unknown[]) => {
+    assertTrustedProviderMutationSender(event);
+    if (args.length) throwIpcError('INVALID_PARAMS', 'file import takes no arguments');
+    if (!deps.selectProviderImportFile) throwIpcError('INTERNAL', 'file picker unavailable');
+    const owner = providerImportScope();
+    let filePath: string | null;
+    try {
+      filePath = await deps.selectProviderImportFile(event);
+    } catch {
+      throwIpcError('PROVIDER_IMPORT_FILE_READ_FAILED', 'could not select provider import file');
+    }
+    if (!filePath) return null;
+    assertTrustedProviderMutationSender(event);
+    assertProviderMutationOwner(owner);
+    const bytes = await readProviderImportFile(filePath);
+    assertTrustedProviderMutationSender(event);
+    assertProviderMutationOwner(owner);
+    try {
+      const ids = createProviderImportDraftsFromFile(bytes, owner);
+      return ids.length === 1 ? ids[0] : ids;
+    } catch {
+      // JSON/schema errors may quote arbitrary secret-bearing input, including field names.
+      throwIpcError('PROVIDER_IMPORT_FILE_INVALID', 'invalid provider import configuration');
+    }
+  });
 
   registry.handle(
     MAKER_INVOKE.PROVIDER_IMPORT_PREVIEW,
@@ -1402,8 +1535,7 @@ export function registerProviderHandlers(
 
   // 供应商显示顺序是 owner-scoped 设置。Renderer 只提交当前左栏可见项；store 会
   // 保留曾出现但当前隐藏的项，并把第一次出现的项追加到末尾。
-  registry.handle(MAKER_INVOKE.PROVIDER_PRESENTATION_SET, async (event, input: unknown) => {
-    assertTrustedProviderMutationSender(event);
+  const modelSettingsPresentation = async (input: unknown) => {
     if (!input || typeof input !== 'object' || Array.isArray(input)) throwIpcError('INVALID_PARAMS', 'Invalid presentation');
     const value = input as Record<string, unknown>;
     if (typeof value.ownerGeneration !== 'number' || !Number.isSafeInteger(value.ownerGeneration) || (value.dataOwnerId !== null && typeof value.dataOwnerId !== 'string')) {
@@ -1445,10 +1577,13 @@ export function registerProviderHandlers(
     }
     assertRequestedProviderOwner(value.dataOwnerId as string | null, value.ownerGeneration);
     deps.broadcastChanged();
+  };
+  registry.handle(MAKER_INVOKE.PROVIDER_PRESENTATION_SET, async (event, input: unknown) => {
+    assertTrustedProviderMutationSender(event);
+    return modelSettingsPresentation(input);
   });
 
-  registry.handle(MAKER_INVOKE.PROVIDER_ORDER_SET, (event, input: unknown) => {
-    assertTrustedProviderMutationSender(event);
+  const modelSettingsOrder = (input: unknown) => {
     if (!input || typeof input !== 'object' || Array.isArray(input)) {
       throwIpcError('INVALID_PARAMS', 'invalid provider order input');
     }
@@ -1490,6 +1625,10 @@ export function registerProviderHandlers(
       throwIpcError('INTERNAL', 'failed to persist provider order');
     }
     return { ok: true };
+  };
+  registry.handle(MAKER_INVOKE.PROVIDER_ORDER_SET, (event, input: unknown) => {
+    assertTrustedProviderMutationSender(event);
+    return modelSettingsOrder(input);
   });
 
   // 「模型 / 供应商停用」override 写入。设置类写操作:仅本机主页面可调(device-link
@@ -1520,8 +1659,7 @@ export function registerProviderHandlers(
     );
     return result;
   };
-  registry.handle(MAKER_INVOKE.MODEL_DISABLE_SET, async (event, input: unknown) => {
-    assertTrustedProviderMutationSender(event);
+  const modelSettingsVisibility = async (input: unknown) => {
     if (!input || typeof input !== 'object') throwIpcError('INVALID_PARAMS', 'invalid input');
     const i = input as Record<string, unknown>;
     if (
@@ -1628,6 +1766,10 @@ export function registerProviderHandlers(
       return { ok: true };
     };
     return enqueueDisableWrite(run);
+  };
+  registry.handle(MAKER_INVOKE.MODEL_DISABLE_SET, async (event, input: unknown) => {
+    assertTrustedProviderMutationSender(event);
+    return modelSettingsVisibility(input);
   });
 
   registry.handle(MAKER_INVOKE.PROVIDER_REMOTE_ACCESS_SET, async (event, input: unknown) => {
@@ -1736,17 +1878,17 @@ export function registerProviderHandlers(
     return result;
   };
 
-  registry.handle(MAKER_INVOKE.MODEL_PRICE_OVERRIDE_GET, async (event, input: unknown) => {
-    assertTrustedProviderMutationSender(event);
+  const modelSettingsGetPrice = async (input: unknown) => {
     const target = parsePriceTarget(input);
     await requirePriceTargetModel(target);
     return deps.readModelPriceOverride(target);
+  };
+  registry.handle(MAKER_INVOKE.MODEL_PRICE_OVERRIDE_GET, async (event, input: unknown) => {
+    assertTrustedProviderMutationSender(event);
+    return modelSettingsGetPrice(input);
   });
 
-  registry.handle(
-    MAKER_INVOKE.MODEL_PRICE_OVERRIDE_SET,
-    async (event, targetInput: unknown, quoteInput: unknown) => {
-      assertTrustedProviderMutationSender(event);
+  const modelSettingsSetPrice = async (targetInput: unknown, quoteInput: unknown) => {
       const target = parsePriceTarget(targetInput);
       const desired = parseDesiredPrice(quoteInput);
       if (target.providerId === 'xd') {
@@ -1781,11 +1923,13 @@ export function registerProviderHandlers(
           return deps.readModelPriceOverride(target);
         }),
       );
-    },
-  );
-
-  registry.handle(MAKER_INVOKE.MODEL_PRICE_OVERRIDE_RESET, async (event, input: unknown) => {
+    };
+  registry.handle(MAKER_INVOKE.MODEL_PRICE_OVERRIDE_SET, async (event, targetInput: unknown, quoteInput: unknown) => {
     assertTrustedProviderMutationSender(event);
+    return modelSettingsSetPrice(targetInput, quoteInput);
+  });
+
+  const modelSettingsResetPrice = async (input: unknown) => {
     const target = parsePriceTarget(input);
     if (deps.isOrganizationManagedProviderId(target.providerId)) {
       throwIpcError('PERMISSION_DENIED', 'Enterprise pricing is managed by your organization');
@@ -1812,6 +1956,10 @@ export function registerProviderHandlers(
         return deps.readModelPriceOverride(target);
       }),
     );
+  };
+  registry.handle(MAKER_INVOKE.MODEL_PRICE_OVERRIDE_RESET, async (event, input: unknown) => {
+    assertTrustedProviderMutationSender(event);
+    return modelSettingsResetPrice(input);
   });
 
   // ── 单模型上下文上限 ────────────────────────────────────────────────────────
@@ -1842,7 +1990,9 @@ export function registerProviderHandlers(
   const readContextTargets = (targets: ModelPriceOverrideTarget[]): ModelContextLimitView => {
     const { read } = requireContextLimitDeps();
     const views = targets.map(read);
+    const policy = deps.readModelCompaction?.(targets[0]!);
     return {
+      ...(policy ? { compaction: policy } : {}),
       limit: views.find((v) => v.limit !== null)?.limit ?? null,
       isCustomized: views.some((v) => v.isCustomized),
       mixed: views.some((v) => v.limit !== views[0]!.limit),
@@ -1858,8 +2008,44 @@ export function registerProviderHandlers(
     return { read: deps.readModelContextLimit, write: deps.writeModelContextLimit };
   };
 
-  registry.handle(MAKER_INVOKE.MODEL_CONTEXT_LIMIT_GET, async (event, input: unknown) => {
+  const readImageInputTargets = (targets: ModelPriceOverrideTarget[]) => {
+    if (!deps.readModelImageInputOverride) throwIpcError('INTERNAL', 'model image input override unavailable');
+    const values = targets.map((target) => deps.readModelImageInputOverride!(target));
+    return { value: values[0]!, mixed: values.some((value) => value !== values[0]) };
+  };
+  const modelSettingsGetImageInput = async (input: unknown) => {
+    return readImageInputTargets(parseContextTargets(input));
+  };
+  registry.handle(MAKER_INVOKE.MODEL_IMAGE_INPUT_GET, async (event, input: unknown) => {
     assertTrustedProviderMutationSender(event);
+    return modelSettingsGetImageInput(input);
+  });
+  const modelSettingsSetImageInput = async (input: unknown, value: unknown, ownerInput: unknown) => {
+    assertContextOwner(ownerInput);
+    const targets = parseContextTargets(input);
+    if (value !== null && typeof value !== 'boolean') throwIpcError('INVALID_PARAMS', 'image input must be boolean or null');
+    if (!deps.writeModelImageInputOverride) throwIpcError('INTERNAL', 'model image input override unavailable');
+    if (deps.isOrganizationManagedProviderId(targets[0]!.providerId)) {
+      throwIpcError('PERMISSION_DENIED', 'Model capabilities are managed by your organization');
+    }
+    const owner = captureProviderOwnerSession();
+    // Metadata does not mutate credentials or transport. Holding the provider
+    // route gate here would make Pi's refresh preview reject its own provider.
+    return enqueuePriceMutation(async () => {
+      if (value !== null) for (const target of targets) await requirePriceTargetModel(target);
+      assertProviderMutationOwner(owner, 'active account changed before setting image input');
+      await deps.writeModelImageInputOverride!(targets, value as boolean | null);
+      assertProviderMutationOwner(owner, 'active account changed after setting image input');
+      deps.broadcastChanged();
+      return readImageInputTargets(targets);
+    });
+  };
+  registry.handle(MAKER_INVOKE.MODEL_IMAGE_INPUT_SET, async (event, input: unknown, value: unknown, ownerInput: unknown) => {
+    assertTrustedProviderMutationSender(event);
+    return modelSettingsSetImageInput(input, value, ownerInput);
+  });
+
+  const modelSettingsGetContext = async (input: unknown) => {
     const targets = parseContextTargets(input);
     // 读不做目录成员校验:目录漂移后 UI 仍要能显示并清掉指向已下架 id 的陈旧 override。
     const view = readContextTargets(targets);
@@ -1871,12 +2057,35 @@ export function registerProviderHandlers(
       return { ...view, codexContext: await deps.readCodexContextWindowInfo?.(targets[0]!, sessionId as string | undefined) ?? null };
     }
     return view;
+  };
+  registry.handle(MAKER_INVOKE.MODEL_CONTEXT_LIMIT_GET, async (event, input: unknown) => {
+    assertTrustedProviderMutationSender(event);
+    return modelSettingsGetContext(input);
   });
 
-  registry.handle(
-    MAKER_INVOKE.MODEL_CONTEXT_LIMIT_SET,
-    async (event, targetInput: unknown, limitInput: unknown, ownerInput: unknown) => {
-      assertTrustedProviderMutationSender(event);
+  const modelSettingsSetCompaction = async (input: unknown, pctInput: unknown, ownerInput: unknown) => {
+      assertContextOwner(ownerInput);
+      const targets = parseContextTargets(input);
+      if (pctInput !== null && (typeof pctInput !== 'number' || !Number.isInteger(pctInput) || pctInput < 50 || pctInput > 90)) {
+        throwIpcError('INVALID_PARAMS', 'compaction percentage must be 50–90 or null');
+      }
+      if (!deps.writeModelCompaction) throwIpcError('INTERNAL', 'model compaction settings unavailable');
+      const ownerAtIngress = captureProviderOwnerSession();
+      return withProviderConfigMutation(targets[0]!.providerId, () => enqueuePriceMutation(async () => {
+        if (pctInput !== null) for (const target of targets) await requirePriceTargetModel(target);
+        assertProviderMutationOwner(ownerAtIngress, 'active account changed before setting compaction');
+        await deps.writeModelCompaction!(targets, pctInput as number | null);
+        assertProviderMutationOwner(ownerAtIngress, 'active account changed after setting compaction');
+        deps.broadcastChanged();
+        return readContextTargets(targets);
+      }));
+    };
+  registry.handle(MAKER_INVOKE.MODEL_COMPACTION_SET, async (event, input: unknown, pctInput: unknown, ownerInput: unknown) => {
+    assertTrustedProviderMutationSender(event);
+    return modelSettingsSetCompaction(input, pctInput, ownerInput);
+  });
+
+  const modelSettingsSetContext = async (targetInput: unknown, limitInput: unknown, ownerInput: unknown) => {
       assertContextOwner(ownerInput);
       const targets = parseContextTargets(targetInput);
       const target = targets[0]!;
@@ -1915,13 +2124,13 @@ export function registerProviderHandlers(
           return readContextTargets(targets);
         }),
       );
-    },
-  );
+    };
+  registry.handle(MAKER_INVOKE.MODEL_CONTEXT_LIMIT_SET, async (event, targetInput: unknown, limitInput: unknown, ownerInput: unknown) => {
+    assertTrustedProviderMutationSender(event);
+    return modelSettingsSetContext(targetInput, limitInput, ownerInput);
+  });
 
-  registry.handle(
-    MAKER_INVOKE.MODEL_CONTEXT_LIMIT_RESET,
-    async (event, input: unknown, ownerInput: unknown) => {
-      assertTrustedProviderMutationSender(event);
+  const modelSettingsResetContext = async (input: unknown, ownerInput: unknown) => {
       assertContextOwner(ownerInput);
       const targets = parseContextTargets(input);
       const target = targets[0]!;
@@ -1947,8 +2156,11 @@ export function registerProviderHandlers(
           return readContextTargets(targets);
         }),
       );
-    },
-  );
+    };
+  registry.handle(MAKER_INVOKE.MODEL_CONTEXT_LIMIT_RESET, async (event, input: unknown, ownerInput: unknown) => {
+    assertTrustedProviderMutationSender(event);
+    return modelSettingsResetContext(input, ownerInput);
+  });
 
   // One mutation implementation for manual forms and confirmed secret-bearing imports.
   async function createProviderFromInput(
@@ -1984,6 +2196,7 @@ export function registerProviderHandlers(
       }
       // 前面的异步存在性查询期间可能换号；写 key/header 前复核。
       assertProviderMutationOwner(ownerAtIngress);
+      separated.config = sanitizeModelSources(separated.config, null, keys, separated.headers);
       const targetCodexConfigSignature =
         deps.codexCustomProviderConfigSignature?.(separated.config) ?? '';
       const preparation = await prepareCodexCustomProviderChange(
@@ -2026,6 +2239,23 @@ export function registerProviderHandlers(
   }
   registry.handle(MAKER_INVOKE.PROVIDER_CUSTOM_CREATE, createProviderFromInput);
 
+  /** Credential identity changes invalidate labels before an optional re-discovery. */
+  async function clearCredentialModelSources(providerId: string, isCurrent: () => boolean): Promise<void> {
+    const runtimeId = runtimeCustomProviderId(providerId);
+    const source = (deps.getModelCatalog().providers ?? []).find(provider => provider.id === runtimeId);
+    if (!source || !Object.values(source.models ?? {}).some(models => models?.some(model => model.discoveredSource))) return;
+    const previous = await getCustomProvider(storedCustomProviderId(providerId));
+    if (!previous || !isCurrent()) return;
+    const next = { ...previous, runtimes: Object.fromEntries(Object.entries(previous.runtimes).map(([agent, runtime]) => [
+      agent, runtime && { ...runtime, models: runtime.models.map(({ discoveredSource: _source, ...model }) => model) },
+    ])) };
+    if (!await updateCustomProviderIfUnchanged(previous.id, previous, next)) {
+      if (isCurrent()) throwIpcError('INTERNAL', 'provider changed while invalidating model sources');
+      return;
+    }
+    if (isCurrent()) await deps.refreshCatalog();
+  }
+
   async function updateProviderFromInput(
     event: unknown,
     input: unknown,
@@ -2055,6 +2285,7 @@ export function registerProviderHandlers(
     return withProviderConfigMutation(config.id, async (commitRouteMutation) => {
       let generation: symbol | null = null;
       let codexHostPrepared = false;
+      let speechReferenceAdded = false;
       try {
         // per-provider 队列等待结束后才读取该 owner 的 DB / secrets。
         assertProviderMutationOwner(ownerAtIngress);
@@ -2074,6 +2305,22 @@ export function registerProviderHandlers(
           const latestValidation = validateCustomProviderConfig(config, { allowLegacyXai: true });
           if (!latestValidation.ok) throwIpcError(latestValidation.code, latestValidation.message);
           separated = splitCustomProviderHeaders(config);
+        }
+        if (options.speechReferenceRefreshAgents) {
+          const providers = await deps.listProviders({ allowSideEffects: false, snapshotOnly: true });
+          assertProviderMutationOwner(ownerAtIngress);
+          const provider = providers.find(p => p.id === runtimeCustomProviderId(config.id));
+          const reference = provider && missingSpeechReference(
+            provider, config, new Set(options.speechReferenceRefreshAgents), deps.getModelCatalog(),
+          );
+          if (reference) {
+            config = structuredClone(config);
+            config.runtimes[reference.agent]!.models.push(reference.model);
+            const validation = validateCustomProviderConfig(config, { allowLegacyXai: true });
+            if (!validation.ok) throwIpcError(validation.code, validation.message);
+            separated = splitCustomProviderHeaders(config);
+            speechReferenceAdded = true;
+          }
         }
         // 即便 OAuth 描述符没变，runtime / model 编辑也必须让旧登录尾部的自动发现失效，
         // 否则旧 endpoint 的迟到结果可能合并进刚保存的新配置。
@@ -2098,6 +2345,8 @@ export function registerProviderHandlers(
           config.id,
           planProviderHeaderMutations(config, separated.headers, 'update', previous),
         );
+        separated.config = sanitizeModelSources(separated.config, previous, keys, separated.headers,
+          new Set([...keyMutations, ...headerMutations].map(mutation => mutation.agent)));
         const codexCredentialGenerationChanged =
           keyMutations.some((mutation) => mutation.agent === 'codex') ||
           headerMutations.some((mutation) => mutation.agent === 'codex') ||
@@ -2169,12 +2418,13 @@ export function registerProviderHandlers(
           throwIpcError('NOT_FOUND', `custom provider '${config.id}' not found`);
         }
         assertProviderMutationOwner(ownerAtIngress);
+        modelSourceConfigGenerations.set(config.id, Symbol(config.id));
         await afterChange(
           codexHostPrepared,
           codexHostChangeRequired ? commitRouteMutation : undefined,
         );
         assertProviderMutationOwner(ownerAtIngress);
-        return { ok: true };
+        return { ok: true, ...(speechReferenceAdded ? { speechReferenceAdded: true as const } : {}) };
       } finally {
         if (codexHostPrepared) deps.cancelCodexCustomProviderHostChange?.();
         if (generation !== null) finishOAuthMutation(config.id, generation);
@@ -2228,6 +2478,7 @@ export function registerProviderHandlers(
           let restoreOAuthCredentials: (() => boolean) | null = null;
           let restoreDisableOverrides: (() => boolean) | null = null;
           let restorePriceOverrides: (() => boolean) | null = null;
+          let restoreCompactionOverrides: (() => boolean) | null = null;
           // 整个删除事务(清 override → 删凭证 → 删配置 → 刷目录)在 disable 写队列**内**
           // 执行,持队列直到 afterChange 刷完 active-catalog:只把清理入队的话,清理落盘
           // 后队列即释放,「删除完成前」的窗口里并发 MODEL_DISABLE_SET 仍能从未刷新的
@@ -2259,6 +2510,8 @@ export function registerProviderHandlers(
                 deps.stageClearProviderDisableOverrides?.(runtimeProviderId) ?? null;
               restorePriceOverrides =
                 deps.stageClearProviderModelPriceOverrides?.(runtimeProviderId) ?? null;
+              restoreCompactionOverrides =
+                deps.stageClearProviderModelCompaction?.(runtimeProviderId) ?? null;
               assertProviderMutationOwner(ownerAtIngress);
               restoreOAuthCredentials = deps.removeOAuthCredentials(providerId);
               if (!restoreOAuthCredentials) {
@@ -2271,9 +2524,10 @@ export function registerProviderHandlers(
               assertProviderMutationOwner(ownerAtIngress);
               const overridesRestored = !restoreDisableOverrides || restoreDisableOverrides();
               const pricesRestored = !restorePriceOverrides || restorePriceOverrides();
+              const compactionRestored = !restoreCompactionOverrides || restoreCompactionOverrides();
               const oauthRestored = !restoreOAuthCredentials || restoreOAuthCredentials();
               const credentialsRestored = restoreProviderCredentials(providerId, credentialSnapshots);
-              if (!oauthRestored || !credentialsRestored || !overridesRestored || !pricesRestored) {
+              if (!oauthRestored || !credentialsRestored || !overridesRestored || !pricesRestored || !compactionRestored) {
                 commitRouteMutation();
                 throwIpcError(
                   'INTERNAL',
@@ -2320,23 +2574,91 @@ export function registerProviderHandlers(
   // 只读：目录 presets 段（创建对话框「从模板创建」消费）。
   registry.handle(
     MAKER_INVOKE.PROVIDER_PRESETS_LIST,
-    async (): Promise<{ presets: ProviderPreset[] }> => ({ presets: deps.listPresets() }),
+    async () => ({ presets: deps.listPresets(), modelRegistry: deps.getModelCatalog().modelRegistry }),
   );
+
+  // 账户余额查询：查询型结构化返回（同 test-connection 例外条款）；仅网络/上游失败在结果 error 里，不抛。
+  registry.handle(MAKER_INVOKE.PROVIDER_ACCOUNT_USAGE, async (event, input: unknown) => {
+    assertTrustedProviderMutationSender(event);
+    const parsed = parseAccountUsageInput(input);
+    if (!parsed) throwIpcError('INVALID_PARAMS', 'invalid account-usage input');
+    return deps.accountUsage(parsed);
+  });
 
   // 测试连接：查询型结构化返回（规则 13 例外条款——renderer 需要 code 渲染分类文案）。
   // 入参非法 / saved 解析失败（供应商不存在等）仍走 throwIpcError。
-  registry.handle(MAKER_INVOKE.PROVIDER_TEST_CONNECTION, async (_event, input: unknown) => {
+  const connectionTests = new Map<ProviderOAuthRendererSender, { id: string; controller: AbortController }>();
+  registry.handle(MAKER_INVOKE.PROVIDER_TEST_CONNECTION, async (event, input: unknown) => {
+    assertTrustedProviderMutationSender(event);
+    const sender = providerOAuthRendererSender(event);
+    const value = input as Record<string, unknown> | null;
+    if (value?.kind === 'cancel') {
+      if (!sender || typeof value.requestId !== 'string' || !/^[a-zA-Z0-9_-]{1,100}$/.test(value.requestId)) throwIpcError('INVALID_PARAMS', 'invalid test cancellation');
+      const previous = connectionTests.get(sender);
+      if (previous?.id === value.requestId) previous.controller.abort();
+      return { ok: false, latencyMs: 0, decision: 'cancelled' };
+    }
     const parsed = parseTestInput(input);
     if (!parsed) throwIpcError('INVALID_PARAMS', 'invalid test-connection input');
+    // Old callers retain their single-test contract; new operations are owned by the sender.
+    if (!parsed.requestId) {
+      try { return await deps.testConnection(parsed); }
+      catch { throwIpcError('INVALID_PARAMS', 'invalid saved provider connection'); }
+    }
+    if (!sender) throwIpcError('INVALID_PARAMS', 'missing test owner');
+    if (connectionTests.has(sender)) throwIpcError('PRECONDITION_FAILED', 'connection test already running');
+    const controller = new AbortController();
+    const operation = { id: parsed.requestId, controller };
+    connectionTests.set(sender, operation);
+    const owner = captureProviderOwnerSession();
+    const abort = () => controller.abort();
+    sender.once?.('destroyed', abort);
     try {
-      return await deps.testConnection(parsed);
-    } catch (err) {
-      // resolveSavedProbeSpec 的解析错误（provider 不存在 / 无该 runtime）→ INVALID_PARAMS。
-      throwIpcError('INVALID_PARAMS', err instanceof Error ? err.message : String(err));
+      const result = await deps.testConnection(parsed, controller.signal);
+      if (controller.signal.aborted || !providerMutationOwnerMatches(owner)) return { ok: false, latencyMs: 0, decision: 'cancelled' };
+      return result;
+    } catch { throwIpcError('INVALID_PARAMS', 'invalid provider connection test'); }
+    finally {
+      sender.removeListener?.('destroyed', abort);
+      if (connectionTests.get(sender) === operation) connectionTests.delete(sender);
     }
   });
 
   // 获取模型列表：查询型结构化返回（同上例外条款）；仅网络/上游失败在结果 code 里，不抛。
+  // Like provider creation, detection is local trusted settings only. Never expose keys via relay.
+  const detections = new Map<ProviderOAuthRendererSender, { id: string; controller: AbortController }>();
+  registry.handle(MAKER_INVOKE.PROVIDER_DETECT, async (event, input: unknown) => {
+    assertTrustedProviderMutationSender(event);
+    const sender = providerOAuthRendererSender(event);
+    if (!sender || !input || typeof input !== 'object') throwIpcError('INVALID_PARAMS', 'invalid detection input');
+    const value = input as Record<string, unknown>;
+    if (typeof value.requestId !== 'string' || !/^[a-zA-Z0-9_-]{1,100}$/.test(value.requestId)) throwIpcError('INVALID_PARAMS', 'invalid detection id');
+    const previous = detections.get(sender);
+    if (value.cancel === true) {
+      if (previous?.id === value.requestId) previous.controller.abort();
+      return { candidates: [], reason: 'insufficient_evidence' };
+    }
+    const parsed = parseModelsFetchInput(value);
+    if (!parsed || parsed.savedProviderId || parsed.authMethod === 'oauth' || parsed.baseUrl.length > 4096
+      || (parsed.apiKey?.length ?? 0) > 16384 || Object.entries(parsed.headers ?? {}).some(([k,v]) => k.length > 256 || v.length > 16384)
+      || Object.keys(parsed.headers ?? {}).length > 64) throwIpcError('INVALID_PARAMS', 'invalid detection input');
+    previous?.controller.abort();
+    const controller = new AbortController();
+    const operation = { id: value.requestId, controller };
+    detections.set(sender, operation);
+    const owner = captureProviderOwnerSession();
+    const abort = () => controller.abort();
+    sender.once?.('destroyed', abort);
+    try {
+      const result = await deps.detectProvider?.(parsed, controller.signal);
+      if (controller.signal.aborted || !providerMutationOwnerMatches(owner)) return { candidates: [], reason: 'insufficient_evidence' };
+      return result ?? { candidates: [], reason: 'insufficient_evidence' };
+    } finally {
+      sender.removeListener?.('destroyed', abort);
+      if (detections.get(sender) === operation) detections.delete(sender);
+    }
+  });
+
   registry.handle(MAKER_INVOKE.PROVIDER_MODELS_FETCH, async (event, input: unknown) => {
     // 这条查询会把 renderer 提供的 API key / 自定义 headers 带到目标 endpoint；
     // 与重新发现一样，必须先确认调用方是 Cindy 自有顶层页面，避免 WebView / 子 frame
@@ -2377,7 +2699,30 @@ export function registerProviderHandlers(
         }
       }
     }
-    return deps.fetchModels(parsed);
+    const owner = captureProviderOwnerSession();
+    const id = parsed.savedProviderId ? storedCustomProviderId(parsed.savedProviderId) : null;
+    const requestKey = `${id ?? parsed.baseUrl}::${parsed.agent}`;
+    const generation = Symbol(requestKey);
+    modelDiscoveryRequests.set(requestKey, generation);
+    const revision = id ? getProviderRouteCredentialRevision(id) : 0;
+    const configGeneration = id ? modelSourceConfigGenerations.get(id) : undefined;
+    const current = () => providerMutationOwnerMatches(owner)
+      && modelDiscoveryRequests.get(requestKey) === generation
+      && (!id || (getProviderRouteCredentialRevision(id) === revision
+        && modelSourceConfigGenerations.get(id) === configGeneration));
+    let result = await deps.fetchModels(parsed);
+    const knownGateway = id && (deps.getModelCatalog().providers ?? []).some(provider =>
+      provider.id === runtimeCustomProviderId(id) && Object.values(provider.models).some(models =>
+        models?.some(model => model.opaqueModelId || model.discoveredSource)));
+    if (knownGateway && result.ok && result.models && !result.models.some(model => model.discoverySnapshotId)) {
+      const request = buildModelsFetchRequest(parsed);
+      result = { ...result, models: issueModelSourceSnapshot(
+        result.models.map(model => ({ ...model, opaqueModelId: true as const })), parsed.agent,
+        modelSourceRequestSignature(request.url, request.init), true) };
+    }
+    if (!current() || (id && providerConfigMutationCounts.has(id))) return { ok: false, code: 'UNKNOWN', detail: 'model discovery context changed' };
+    bindModelSourceSnapshot(result.models, id ?? undefined, current);
+    return result;
   });
 
   // 本机 CLI 扫描：查询型；任何失败降级空数组（检测建议是增强,不是功能依赖,
@@ -2400,7 +2745,7 @@ export function registerProviderHandlers(
   // **不**在这里广播:发现流程自己已经收口了两条路径 —— 成功经 active-catalog 的
   // markChanged、失败经 setAnthropicDiscoveryFailureListener,重复广播只会让 renderer 白
   // refetch 一次。
-  registry.handle(MAKER_INVOKE.PROVIDER_MODELS_REDISCOVER, async (event, input: unknown) => {
+  const modelSettingsRediscover = async (input: unknown) => {
     // sender 归属校验:这条通道会用订阅凭证发起真实上游请求并重启退避,不该被子 frame /
     // WebView 触发。经 deps 注入(生产 = assertTrustedAppRendererEvent),既保住本文件
     // 「不依赖 Electron、可用内存 registry 直测」的设计,又不让新通道继承既有缺口。
@@ -2408,7 +2753,6 @@ export function registerProviderHandlers(
     // 守卫缺席按拒绝处理:可选依赖用 `?.()` 调用时,漏接线会静默退化成「无守卫」,而这种
     // 退化没有任何编译期或运行期信号。宁可在接线回归时把功能打死,也不要让它悄悄敞开
     // (PR #548 review)。
-    assertTrustedProviderMutationSender(event);
     const providerId = requireProviderId(input);
     let failure: ProviderModelDiscoveryFailure | null;
     try {
@@ -2429,6 +2773,10 @@ export function registerProviderHandlers(
     const failureView = { ...failure };
     delete failureView.detail;
     return { ok: false, failure: failureView };
+  };
+  registry.handle(MAKER_INVOKE.PROVIDER_MODELS_REDISCOVER, async (event, input: unknown) => {
+    assertTrustedProviderMutationSender(event);
+    return modelSettingsRediscover(input);
   });
 
   // 通用 OAuth 登录 / 登出 / 取消。login 是查询型返回（{ok, reason}——取消/超时是正常流程
@@ -2465,6 +2813,7 @@ export function registerProviderHandlers(
       const ownerAtIngress = captureProviderOwnerSession();
       const finishRouteMutation = deps.beginRouteMutation(id);
       const generation = beginOAuthMutation(id);
+      const isCurrent = () => isOAuthMutationCurrent(id, generation) && providerMutationOwnerMatches(ownerAtIngress);
       let owner: ProviderOAuthOwner | null = null;
       let codexHostPrepared = false;
       try {
@@ -2477,25 +2826,23 @@ export function registerProviderHandlers(
           ownerAtIngress,
         );
         codexHostPrepared = preparation.prepared;
-        const result = await deps.oauthLogin(id, () => isOAuthMutationCurrent(id, generation), (url) => {
+        const result = await deps.oauthLogin(id, isCurrent, (url) => {
           // Only the initiating local renderer gets this ephemeral authorization URL.
-          if (!ownerId || !sender || !isOAuthMutationCurrent(id, generation) ||
-              !providerMutationOwnerMatches(ownerAtIngress)) return;
+          if (!ownerId || !sender || !isCurrent()) return;
           try {
             sender.send?.(MAKER_PUSH.PROVIDER_OAUTH_PROGRESS, {
               providerId: id, ownerId, phase: 'browser-url', url,
             });
           } catch { /* A closed renderer must not interrupt credential cleanup. */ }
         }, method, (code) => {
-          if (!ownerId || !sender || !isOAuthMutationCurrent(id, generation) ||
-              !providerMutationOwnerMatches(ownerAtIngress)) return;
+          if (!ownerId || !sender || !isCurrent()) return;
           try {
             sender.send?.(MAKER_PUSH.PROVIDER_OAUTH_PROGRESS, {
               providerId: id, phase: 'device-code', ...code,
             });
           } catch { /* The login still runs if its initiating window closes. */ }
         });
-        if (isOAuthMutationCurrent(id, generation)) {
+        if (isCurrent()) {
           if (result.ok) {
             if (result.commitAccountCapabilities) {
               // Credentials are installed: close cancellation before committing their
@@ -2512,6 +2859,7 @@ export function registerProviderHandlers(
               }
             }
             finishRouteMutation.commit?.();
+            await clearCredentialModelSources(id, isCurrent);
             try {
               await result.afterCommit?.();
             } catch {
@@ -2571,6 +2919,7 @@ export function registerProviderHandlers(
         // Configuration and stable route ID remain available for reconnect. Publish even when
         // a later catalog refresh fails: the disconnected credential must never be reused.
         commitRouteMutation();
+        await clearCredentialModelSources(id, () => providerMutationOwnerMatches(owner));
         await afterChange(preparation.prepared, commitRouteMutation);
         return { ok: true };
       } finally {
@@ -2619,6 +2968,7 @@ export function registerProviderHandlers(
             }
             throw err;
           }
+          await clearCredentialModelSources(id, () => providerMutationOwnerMatches(ownerAtIngress));
           await afterChange(codexHostPrepared, commitRouteMutation);
           return { ok: true };
         } catch (err) {
@@ -2663,4 +3013,8 @@ export function registerProviderHandlers(
       }
     },
   );
+  return { list: modelSettingsList, presentation: modelSettingsPresentation, order: modelSettingsOrder, visibility: modelSettingsVisibility, getPrice: modelSettingsGetPrice, setPrice: modelSettingsSetPrice, resetPrice: modelSettingsResetPrice, getImageInput: modelSettingsGetImageInput, setImageInput: modelSettingsSetImageInput, getContext: modelSettingsGetContext, setCompaction: modelSettingsSetCompaction, setContext: modelSettingsSetContext, resetContext: modelSettingsResetContext, rediscover: modelSettingsRediscover,
+    owner: () => { const owner = captureProviderOwnerSession(); return { dataOwnerId: owner?.dataOwnerId ?? null, ownerGeneration: owner?.generation ?? 0 }; },
+  };
+
 }

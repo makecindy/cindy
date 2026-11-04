@@ -2,26 +2,34 @@
 import { act, createElement } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
-import { RichAnswer } from '@/session/RichAnswer';
+import { RichAnswer, snapshotRichAnswerValues } from '@/session/RichAnswer';
 import { SessionQuickSendProvider } from '@/session/SessionQuickSendContext';
+import { buildConversationShareHtml } from '@/session/conversationShareWebViewHtml';
+import { buildConversationShareSvgLayout } from '@/session/conversationShareSvgLayout';
+import { lightColors } from '@/theme/tokens';
+import { InlineVideoPlayer } from '@/session/InlineVideoPlayer';
 
 vi.mock('react-native', () => ({
   View: ({ children }: any) => <div>{children}</div>,
   Pressable: ({ children, onPress, disabled }: any) => <button disabled={disabled} onClick={onPress}>{children}</button>,
   Switch: () => null,
   StyleSheet: { create: (styles: unknown) => styles },
-  AppState: { addEventListener: () => ({ remove() {} }) },
+  AppState: { currentState: 'active', addEventListener: () => ({ remove() {} }) },
+  ActivityIndicator: () => null,
 }));
+vi.mock('expo-router', () => ({ useIsFocused: () => true }));
+vi.mock('@/session/NativeVideoPlayer', () => ({ NativeVideoPlayer: ({ url }: any) => <video src={url} /> }));
 vi.mock('@/components/AppText', () => ({
   Text: ({ children }: any) => <span>{children}</span>,
   TextInput: ({ value, onChangeText, accessibilityLabel }: any) =>
     <input aria-label={accessibilityLabel} value={value} onChange={event => onChangeText(event.target.value)} />,
 }));
 vi.mock('@react-native-async-storage/async-storage', () => ({ default: { getItem: async () => null, setItem: async () => undefined } }));
-vi.mock('lucide-react-native', () => Object.fromEntries(['Mail', 'CalendarDays', 'Folder', 'ChartColumn', 'Check', 'Info', 'Clock', 'MapPin', 'Coffee', 'Image', 'Users', 'Star'].map(name => [name, () => null])));
+vi.mock('lucide-react-native', () => Object.fromEntries(['Mail', 'CalendarDays', 'Folder', 'ChartColumn', 'Check', 'Info', 'Clock', 'MapPin', 'Coffee', 'Image', 'Users', 'Star', 'Play'].map(name => [name, () => null])));
 vi.mock('react-native-svg', () => Object.fromEntries(['default', 'Path', 'Rect', 'Ellipse', 'Polygon', 'Polyline', 'Line', 'Circle', 'Text'].map(name => [name, () => null])));
 vi.mock('@/auth/AuthContext', () => ({ useAuth: () => ({ user: { id: 'mobile-rich-test' } }) }));
 vi.mock('react-i18next', () => ({ useTranslation: () => ({ t: (key: string) => key }) }));
+vi.mock('@/i18n', () => ({ i18n: { t: (key: string) => key } }));
 vi.mock('@/theme', () => ({
   useTheme: () => ({ colors: {} }),
   useThemedStyles: () => ({ text: {}, heading: {}, caption: {}, iconTitle: {}, statValue: {}, buttonText: {}, input: {} }),
@@ -40,6 +48,44 @@ async function render(stateKey: string, sender: ((text: string) => Promise<boole
   await act(async () => root.render(createElement(SessionQuickSendProvider, { value: sender },
     createElement(RichAnswer, { source, stateKey, complete, renderMarkdown: text => text }))));
 }
+
+// Unit #8085: hidden children stay mounted to retain controls. Exercise the real
+// renderer and video cover so only visible branches fetch, and hiding cancels IO.
+it('prepares videos only in visible tabs/details, including nested layout containers', async () => {
+  const nodes = [
+    { id: 'tabs', kind: 'tabs' },
+    { id: 'first', kind: 'stack', parent: 'tabs', props: { label: 'First' } },
+    { id: 'second', kind: 'stack', parent: 'tabs', props: { label: 'Second' } },
+    { id: 'first-video', kind: 'video', parent: 'first' },
+    { id: 'nested', kind: 'details', parent: 'second', props: { label: 'Nested', default: true } },
+    { id: 'row', kind: 'row', parent: 'nested' },
+    { id: 'second-video', kind: 'video', parent: 'row' },
+    { id: 'more', kind: 'details', props: { label: 'More' } },
+    { id: 'pending-video', kind: 'video', parent: 'more' },
+  ];
+  const source = nodes.map((node, index) => JSON.stringify({ version: 1, seq: index + 1, op: 'create', ...node,
+    props: node.kind === 'video' ? { src: `cindy-media://blobs/${node.id}.mp4` } : node.props,
+  })).join('\n');
+  const resolve = vi.fn((media: { url: string }, _options?: { signal?: AbortSignal }) => media.url.includes('pending-video')
+    ? new Promise<any>(() => {})
+    : Promise.resolve({ url: `https://media.test/${media.url.split('/').at(-1)}`, mimeType: 'video/mp4', previewable: true }));
+  await act(async () => root.render(createElement(RichAnswer, { source, stateKey: 'media-visibility', complete: true,
+    renderMarkdown: text => text,
+    renderMedia: (node, visible) => createElement(InlineVideoPlayer, { url: String(node.props.src), label: node.id, width: 300, visible: visible ?? true, resolve, onOpen() {} }),
+  })));
+  const fetched = () => resolve.mock.calls.map(([media]) => media.url.split('/').at(-1));
+  expect(fetched()).toEqual(['first-video.mp4']);
+  const press = async (label: string) => act(async () => [...container.querySelectorAll('button')].find(button => button.textContent === label)!.click());
+  await press('More');
+  expect(fetched()).toEqual(['first-video.mp4', 'pending-video.mp4']);
+  const pendingSignal = resolve.mock.calls.at(-1)![1]?.signal;
+  await press('More');
+  expect(pendingSignal?.aborted).toBe(true);
+  await press('Second');
+  expect(fetched()).toEqual(['first-video.mp4', 'pending-video.mp4', 'second-video.mp4']);
+  await press('First');
+  expect(fetched()).toHaveLength(3); // Already prepared covers retain their local state.
+});
 
 // Tier 1: native rich controls previously only changed local values. Exercise the
 // production renderer's explicit send, failure/retry and virtualized receipt;
@@ -67,4 +113,74 @@ it('keeps incomplete and read-only answers from sending', async () => {
   await render('readonly', null);
   expect(container.querySelector('button')!.disabled).toBe(true);
   expect(send).not.toHaveBeenCalled();
+});
+
+// Unit regression: route ids used to miss the live memory entry when file origin was null.
+// Edit the production control, then read its real memory through both export builders.
+it.each([null, { deviceId: 'desktop', sessionId: 'task' }])(
+  'exports edited controls using the live file origin %j', async (origin) => {
+    const messageKey = origin ? 'scoped-share' : 'originless-share';
+    // This is the stateKey supplied by MessageRenderer, including the rich part offset.
+    const stateKey = `${origin?.deviceId ?? ''}:${origin?.sessionId ?? ''}:${messageKey}:1`;
+    await render(stateKey, null);
+    const input = container.querySelector('input')!;
+    await act(async () => {
+      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')!.set!.call(input, 'Suzhou');
+      input.dispatchEvent(new Event('input', { bubbles: true }));
+    });
+    const body = `\n\`\`\`cindy-ui\n${source}\n\`\`\``;
+    const scope = { userId: 'mobile-rich-test', origin, messageKey };
+    const richValues = snapshotRichAnswerValues(body, scope);
+    expect(richValues[1]?.name).toBe('Suzhou');
+    expect(snapshotRichAnswerValues(body, { ...scope, userId: 'other-account' })[1]).toEqual({});
+    const messages = [{ clientId: messageKey, kind: 'assistant' as const, body, richValues }];
+    const colors = {
+      ...lightColors, background: lightColors.surface,
+      codeSurface: lightColors.chatCodeSurface, inlineCode: lightColors.chatInlineCodeText,
+      syntax: {},
+    };
+    const html = buildConversationShareHtml({ selectedMessages: messages, allShareableIds: [messageKey], colors, contentWidth: 390 });
+    const layout = buildConversationShareSvgLayout({ messages, allShareableIds: [messageKey], colors, width: 390 });
+    const text = layout.bubbles.flatMap(b => b.textBlocks.flatMap(block => block.lines)).join('\n');
+    for (const output of [html, text]) {
+      expect(output).toContain('Suzhou');
+      expect(output).not.toContain('Hangzhou');
+    }
+    expect(input.value).toBe('Suzhou');
+  },
+);
+
+// Tier 1: a completed-looking partial snapshot used to poison the mounted parser.
+// The same answer must recover on its final snapshot without leaving/reopening it.
+it('replaces the incomplete notice with the late full answer without remounting', async () => {
+  const full = JSON.stringify({ version: 1, seq: 1, op: 'create', id: 'answer', kind: 'markdown', props: { text: 'Complete findings' } });
+  const renderSnapshot = async (snapshot: string) => {
+    await act(async () => root.render(createElement(SessionQuickSendProvider, { value: null },
+      createElement(RichAnswer, { source: snapshot, stateKey: 'late-final', complete: true, renderMarkdown: text => text }))));
+  };
+  await renderSnapshot(full.slice(0, -6));
+  expect(container.textContent).toContain('message.richAnswer.incomplete');
+  await renderSnapshot(full);
+  expect(container.textContent).toContain('Complete findings');
+  expect(container.textContent).not.toContain('message.richAnswer.incomplete');
+});
+
+// Tier 1: malformed later suffixes must not erase text already on screen.
+it('keeps committed text visible while malformed suffixes grow without remounting', async () => {
+  const full = JSON.stringify({ version: 1, seq: 1, op: 'create', id: 'answer', kind: 'markdown', props: { text: 'Readable findings' } });
+  for (const suffix of ['', '{', '{"seq":', '{"seq":2']) {
+    await act(async () => root.render(createElement(SessionQuickSendProvider, { value: null },
+      createElement(RichAnswer, { source: full + suffix, stateKey: 'malformed-tail', complete: true, renderMarkdown: text => text }))));
+    expect(container.textContent).toContain('Readable findings');
+    if (suffix) expect(container.textContent).toContain('message.richAnswer.incomplete');
+  }
+  const prefix = full + '{"seq":2' + String.fromCharCode(10);
+  const later = JSON.stringify({ seq: 2, op: 'create', id: 'later', kind: 'markdown', props: { text: 'Later findings' } });
+  for (const tail of [later.slice(0, -6), later]) {
+    await act(async () => root.render(createElement(SessionQuickSendProvider, { value: null },
+      createElement(RichAnswer, { source: prefix + tail, stateKey: 'malformed-tail', complete: true, renderMarkdown: text => text }))));
+    expect(container.textContent).toContain('Readable findings');
+    expect(container.textContent).toContain('message.richAnswer.incomplete');
+  }
+  expect(container.textContent).toContain('Later findings');
 });

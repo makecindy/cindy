@@ -5,9 +5,10 @@ import {
   type SpeechConnection,
 } from './speechProtocols.js';
 import { SpeechError } from './speechError.js';
+import { MAX_ENCODED_SPEECH_BYTES, type SpeechAudioResult } from '../../shared/voiceConversation.js';
 export type { SpeechConnection } from './speechProtocols.js';
 export type SpeechDiagnostic = {
-  stage: 'request' | 'headers' | 'first_pcm' | 'complete' | 'cancelled' | 'error';
+  stage: 'request' | 'headers' | 'first_pcm' | 'first_encoded' | 'complete' | 'cancelled' | 'error';
   requestId: string;
   protocol: SpeechConnection['protocol'];
   elapsedMs: number;
@@ -15,7 +16,7 @@ export type SpeechDiagnostic = {
   httpStatus?: number;
   code?: SpeechError['code'] | 'headers_timeout' | 'read_timeout';
 };
-/** PCM speech transport with provider adapters. Reads are pulled by playback for bounded buffering. */
+/** Provider speech transport: pull-driven PCM or a bounded, complete MP3 segment. */
 export class SpeechSynthesisSession {
   private epoch = 0;
   private controller: AbortController | null = null;
@@ -43,13 +44,14 @@ export class SpeechSynthesisSession {
     voice: string;
     text: string;
     speed?: number;
-  }): Promise<{ sampleRate: number }> {
+  }): Promise<SpeechAudioResult> {
     this.cancel();
     const epoch = this.epoch;
     this.deps.assertCurrent();
     const connection = this.deps.connection();
     const texts = speechTextSegments(input.text, connection.protocol);
     const requests = texts.map((text) => speechRequest(connection, { ...input, text }));
+    const encoded = requests[0].format === 'mp3';
     const adapter = speechAdapter(connection.protocol);
     const controller = new AbortController();
     this.controller = controller;
@@ -93,9 +95,10 @@ export class SpeechSynthesisSession {
           ?.split(';')[0]
           ?.trim()
           .toLowerCase();
-        if (!contentType || !adapter.contentTypes.includes(contentType))
+        const contentTypes = encoded ? ['audio/mpeg'] : adapter.contentTypes;
+        if (!contentType || !contentTypes.includes(contentType))
           throw new SpeechError('format');
-        return adapter.pcm(response.body);
+        return encoded ? response.body : adapter.pcm(response.body);
       } catch (error) {
         if (response?.body && !response.body.locked)
           void response.body.cancel().catch(() => undefined);
@@ -118,9 +121,36 @@ export class SpeechSynthesisSession {
         void first.cancel().catch(() => undefined);
         throw new SpeechError('cancelled');
       }
-      this.reader = sequentialPcm(first, requests.length, open, () => {
+      this.reader = sequentialAudio(first, requests.length, open, () => {
         if (epoch === this.epoch) this.diagnostic?.('error', { code: 'read_timeout' });
-      }).getReader();
+      }, !encoded).getReader();
+      if (encoded) {
+        // Finish this sentence during the existing one-segment lookahead. MP3
+        // decoding needs the complete segment, never an unbounded full reply.
+        const reader = this.reader;
+        const chunks: Uint8Array[] = [];
+        for (;;) {
+          const { value, done } = await reader.read();
+          this.deps.assertCurrent();
+          if (epoch !== this.epoch || controller.signal.aborted) throw new SpeechError('cancelled');
+          if (value?.byteLength) {
+            this.totalBytes += value.byteLength;
+            if (this.totalBytes > MAX_ENCODED_SPEECH_BYTES) throw new SpeechError('format');
+            if (!chunks.length) this.diagnostic?.('first_encoded');
+            chunks.push(value);
+          }
+          if (done) break;
+        }
+        const data = new Uint8Array(this.totalBytes);
+        let offset = 0;
+        for (const chunk of chunks) { data.set(chunk, offset); offset += chunk.byteLength; }
+        reader.releaseLock();
+        this.reader = null;
+        this.requestId = null;
+        this.diagnostic?.('complete');
+        this.diagnostic = undefined;
+        return { format: 'mp3', data: data.buffer };
+      }
       return { sampleRate: 24_000 };
     } catch (error) {
       if (epoch === this.epoch) {
@@ -195,20 +225,21 @@ export class SpeechSynthesisSession {
   }
 }
 
-/** Open the next segment only after the current PCM is consumed. Cancelling a
+/** Open the next segment only after the current audio is consumed. Cancelling a
  * preview/call aborts its fetch and prevents any remaining billable requests. */
-function sequentialPcm(
+function sequentialAudio(
   first: ReadableStream<Uint8Array>,
   count: number,
   open: (index: number) => Promise<ReadableStream<Uint8Array>>,
   onReadTimeout: () => void,
+  pcm: boolean,
 ): ReadableStream<Uint8Array> {
   let reader = first.getReader();
   let index = 0;
   let bytes = 0;
   let cancelled = false;
-  // Only PCM reads consume this deadline. Opening a later segment has its own
-  // headers deadline, and its first PCM read starts a fresh 15-second budget.
+  // Only body reads consume this deadline. Opening a later segment has its own
+  // headers deadline, and its first body read starts a fresh 15-second budget.
   const read = async () => {
     let timer: ReturnType<typeof setTimeout> | undefined;
     try {
@@ -237,7 +268,7 @@ function sequentialPcm(
               controller.enqueue(result.value);
               return;
             }
-            if (bytes === 0 || bytes % 2 !== 0) throw new SpeechError('format');
+            if (bytes === 0 || (pcm && bytes % 2 !== 0)) throw new SpeechError('format');
             reader.releaseLock();
             if (++index === count) {
               controller.close();

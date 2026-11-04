@@ -1,4 +1,4 @@
-import type { AndroidInstallPhase } from './androidInstallController';
+import { androidUpdateDismissAction, type AndroidInstallPhase } from './androidInstallController';
 
 /** What the single Android update card shows for each installer phase. No React/native imports. */
 export interface AndroidUpdatePresentation {
@@ -15,7 +15,7 @@ export interface AndroidUpdatePresentation {
 }
 
 export function presentAndroidUpdate(phase: AndroidInstallPhase, progress: number | null): AndroidUpdatePresentation {
-  const base: AndroidUpdatePresentation = { note: null, progress: null, ready: false, primary: null, dismiss: 'later', browser: false };
+  const base: AndroidUpdatePresentation = { note: null, progress: null, ready: false, primary: null, dismiss: androidUpdateDismissAction(phase), browser: false };
   switch (phase) {
     case 'offer':
       return { ...base, primary: { label: 'updateNow', busy: false } };
@@ -26,9 +26,9 @@ export function presentAndroidUpdate(phase: AndroidInstallPhase, progress: numbe
     case 'permission-denied':
       return { ...base, note: 'denied', primary: { label: 'grantAgain', busy: false }, browser: true };
     case 'downloading':
-      return { ...base, progress: { value: progress, label: 'downloading' }, dismiss: 'cancel' };
+      return { ...base, progress: { value: progress, label: 'downloading' } };
     case 'installing':
-      return { ...base, progress: { value: 1, label: 'installing' }, dismiss: 'cancel' };
+      return { ...base, progress: { value: 1, label: 'installing' } };
     case 'ready':
       return { ...base, ready: true, primary: { label: 'install', busy: false }, browser: true };
     case 'error':

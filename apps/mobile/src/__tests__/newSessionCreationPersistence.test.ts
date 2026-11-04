@@ -1,9 +1,11 @@
-import { readFileSync } from 'node:fs';
-import { resolve } from 'node:path';
-import ts from 'typescript';
+import type { Dispatch, SetStateAction } from 'react';
+import { prepareNewSessionCreation, newSessionCreationPreparationServices } from '@/session/prepareNewSessionCreation';
+import type { NewSessionDraft } from '@/session/newSession';
+import type { WorktreeCreateRequest } from '@/session/newSessionWorktree';
+import { newSessionAttachment, newSessionDraft } from './fixtures/newSession';
 import { beforeEach, expect, it, vi } from 'vitest';
 import { getMobileAuthOwner, setMobileAuthOwner } from '../auth/authOwnerGeneration';
-import type { MobileMakerTransport } from '../device-link/mobileMakerTransport';
+import type { MobileMakerTransport, MobileWorktreeCreateResult } from '../device-link/mobileMakerTransport';
 import type { DurableOutboxRecord } from '../session/durableOutbox';
 import type { MobileLocalAttachmentUploadCandidate } from '../session/mobileLocalAttachmentUpload';
 import { retainOutboxFile, durableOutboxUploadUri, removeRetainedOutboxFiles } from '../session/durableOutboxFiles';
@@ -55,26 +57,13 @@ import { listPendingPrecreatedWorktrees, recoverPendingPrecreatedWorktrees, regi
 import { completePrecreatedWorktreeRecovery } from '../session/completePrecreatedWorktreeRecovery';
 import { appendNewSessionEditComposer, findNewSessionEditDraft, withNewSessionCreationRemoval } from '../session/newSessionCreation';
 
-// Run the page's actual recovery -> durable save -> worktree creation statements.
-// Extract AST nodes, as in newSessionWorktreeSync, so ordering is tested without
-// duplicating the production pipeline or mounting unrelated native UI modules.
-const source = ts.createSourceFile('new.tsx', readFileSync(resolve(process.cwd(), 'app/sessions/new.tsx'), 'utf8'),
-  ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
-let statements: readonly ts.Statement[] | undefined;
-function visit(node: ts.Node) {
-  if (ts.isBlock(node) && node.statements.some((s) => ts.isVariableStatement(s)
-    && s.declarationList.declarations.some((d) => d.name.getText(source) === 'previousRecovery'))) {
-    const start = node.statements.findIndex((s) => ts.isVariableStatement(s)
-      && s.declarationList.declarations.some((d) => d.name.getText(source) === 'previousRecovery'));
-    const end = node.statements.findIndex((s) => ts.isBlock(s)
-      && s.getText(source).includes('resolveSubmitGuardCatalog'));
-    if (end < start) throw new Error('Missing page creation persistence boundary');
-    statements = node.statements.slice(start, end);
-  }
-  ts.forEachChild(node, visit);
+// Unit: call the production submission boundary with real durable storage and file retention.
+// Creation-recovery rules require bytes to survive reservation failures, lost replies,
+// deletion and resubmission; source fragments previously hid parser and type mismatches.
+function worktreeCreatedResult(request: WorktreeCreateRequest): MobileWorktreeCreateResult {
+  return { ok: true, meta: { ...request, path: '/repo/.cindy-worktrees/new', branch: 'cindy/new',
+    createdAt: '2026-10-23T00:00:00.000Z' } };
 }
-visit(source);
-if (!statements) throw new Error('Missing page creation pipeline');
 
 beforeEach(async () => {
   setMobileAuthOwner(null);
@@ -93,46 +82,47 @@ beforeEach(async () => {
 
 function harness(previous: DurableOutboxRecord | null = null) {
   let sequence = 0;
-  const draft = { agentKind: 'codex', workspaceKind: 'project', workingDir: '/repo', model: 'model',
-    providerId: null, effort: 'high', permissionMode: 'ask', fastMode: false, firstMessage: 'keep my input' };
+  const draft = newSessionDraft({ agentKind: 'codex', workspaceKind: 'project', workingDir: '/repo', model: 'model',
+    providerId: null, effort: 'high', permissionMode: 'ask', fastMode: false, firstMessage: 'keep my input' });
   const bindings = {
     effectiveDraft: { ...draft, ...previous?.creation?.draft },
     outboxRecoveryRef: { current: previous },
     getCurrentMobileOutboxRecords, mobileDurableOutbox, outboxCreationRetryIdentity, buildOutboxItem,
     selectedDeviceId: 'pc', selectedDeviceName: 'PC', authOwnerAtCreate: getMobileAuthOwner(),
     worktreeAccountId: 'alice', creatingWorktree: true,
-    worktreeIntent: { applicable: true, enabled: true, eligibility: { status: 'eligible', baseRepo: '/repo' }, sourceBranch: 'main' },
+    worktreeIntent: { applicable: true, enabled: true, eligibility: { status: 'eligible' as const, baseRepo: '/repo', sourceBranch: 'main' }, sourceBranch: 'main',
+      target: { deviceId: 'pc', workingDir: '/repo' }, branchPreferenceKey: 'pc/repo', branchPreferenceSyncKey: 'generation' },
     isCurrentOwner: () => true, ensureDeviceAlive: () => true, isWorktreeCreateIntentCurrent: () => true,
     createNewSessionId: () => `session-${++sequence}`, createOutboxClientId: () => 'message',
     runtimeOptions: { permissionOptions: [] }, prePlanPermissionModeRef: { current: null },
     planModeCapability: false, planModeDraftOn: false,
     holdNewSessionCreationDraft, holdPrecreatedWorktreeRegistration: () => () => {},
-    sendAttachments: [{ id: 'photo', path: 'oss://photo', name: 'photo.png', ext: 'png', size: 3, category: 'image', mimeType: 'image/png' }],
+    sendAttachments: [newSessionAttachment()],
     attachmentPreviews: {}, getUploadedSource: (_id: string): MobileLocalAttachmentUploadCandidate | undefined => ({ uri: 'file:///photo.png', name: 'photo.png', size: 3, kind: 'image' }),
     persistNewSessionCreationDraft,
     removeRetainedOutboxFiles, releaseUploadedSources: vi.fn(),
     outboxAttachmentNeedsLocalBytes: () => true,
     registerPendingPrecreatedWorktree: vi.fn(async (..._args: Parameters<typeof registerPendingPrecreatedWorktree>) => true), forgetPendingPrecreatedWorktree: vi.fn(),
-    buildWorktreeCreateRequest: (input: unknown) => input,
-    parseWorktreeCreateResult: (input: unknown) => input,
     maker: { getSession: vi.fn(async () => null), worktree: {
       suggestName: vi.fn(async () => ({ name: 'new' })),
-      create: vi.fn(async (): Promise<unknown> => ({ ok: true, meta: { path: '/repo/.cindy-worktrees/new' } })),
+      create: vi.fn(async (request: WorktreeCreateRequest): Promise<MobileWorktreeCreateResult> => worktreeCreatedResult(request)),
+      discardPrecreated: vi.fn(async () => ({ discarded: true as const })),
     } },
-    t: (key: string) => key, setError: vi.fn(), setDraft: vi.fn(),
-    formatRemoteError: (error: Error) => error.message,
-    formatWorktreeCreateFailure: () => 'worktree failed',
+    t: (key: string) => key, setError: vi.fn(), setDraft: vi.fn<Dispatch<SetStateAction<NewSessionDraft>>>(),
+    resolveWorktreeCreateErrorKey: () => 'session.new.worktreeDetectFailed',
   };
-  const compiled = ts.transpileModule(`async function run(bindings) {
-    let { ${Object.keys(bindings).join(', ')} } = bindings;
-    let releaseDurableCreation, releasePrecreatedRegistration;
+  const run = async () => {
+    const releases: Array<() => void> = [];
     try {
-      ${statements!.map((node) => node.getText(source)).join('\n')}
-      return { effectiveDraft, sessionId };
-    } finally { releaseDurableCreation?.(); releasePrecreatedRegistration?.(); }
-  }`, { compilerOptions: { target: ts.ScriptTarget.ES2022 } }).outputText;
-  const run = new Function(`${compiled}; return run;`)() as (input: typeof bindings) => Promise<unknown>;
-  return { bindings, run: () => run(bindings) };
+      return await prepareNewSessionCreation({
+        ...bindings, onHoldDurableCreation: release => releases.push(release),
+        onHoldPrecreatedRegistration: release => releases.push(release),
+      }, { ...newSessionCreationPreparationServices, ...bindings });
+    } finally {
+      for (const release of releases.reverse()) release();
+    }
+  };
+  return { bindings, run };
 }
 
 it.each(['reservation-fails', 'create-rejected', 'reply-lost', 'leaves-during-create'] as const)(
@@ -146,7 +136,7 @@ it.each(['reservation-fails', 'create-rejected', 'reply-lost', 'leaves-during-cr
     h.bindings.createNewSessionId = () => 'replacement-session';
     h.bindings.effectiveDraft.firstMessage = 'updated input before retry';
     if (scenario === 'reservation-fails') h.bindings.registerPendingPrecreatedWorktree.mockResolvedValueOnce(false);
-    else if (scenario === 'create-rejected') h.bindings.maker.worktree.create.mockResolvedValueOnce({ ok: false, error: {} });
+    else if (scenario === 'create-rejected') h.bindings.maker.worktree.create.mockResolvedValueOnce({ ok: false, error: { kind: 'failure', message: 'worktree failed' } });
     else if (scenario === 'reply-lost') {
       h.bindings.registerPendingPrecreatedWorktree.mockImplementation(registerPendingPrecreatedWorktree);
       h.bindings.maker.worktree.create.mockRejectedValueOnce(new Error('reply lost'));
@@ -156,7 +146,7 @@ it.each(['reservation-fails', 'create-rejected', 'reply-lost', 'leaves-during-cr
         expect(getNewSessionCreationTask('replacement-session')).toBeNull();
         expect(hasLiveNewSessionCreation('replacement-session')).toBe(true);
         expect(remoteSessionStore.getSessions()).toEqual([]);
-        return { ok: false, error: {} };
+        return { ok: false, error: { kind: 'failure', message: 'worktree failed' } };
       });
     }
     await h.run();
@@ -311,9 +301,9 @@ it('does not reserve or dispatch a worktree if saving its draft fails', async ()
 
 it('keeps the original durable input when patching the successful worktree path fails', async () => {
   const h = harness();
-  h.bindings.maker.worktree.create.mockImplementationOnce(async () => {
+  h.bindings.maker.worktree.create.mockImplementationOnce(async (request) => {
     disk.fail = true;
-    return { ok: true, meta: { path: '/repo/.cindy-worktrees/new' } };
+    return worktreeCreatedResult(request);
   });
   await expect(h.run()).rejects.toThrow('disk unavailable');
   disk.fail = false;
@@ -334,7 +324,8 @@ it.each([true, false])('reprobes a restored directory instead of submitting old 
   h.bindings.creatingWorktree = false;
   expect(await h.run()).toBeUndefined();
   expect(h.bindings.setDraft).toHaveBeenCalledOnce();
-  const restored = h.bindings.setDraft.mock.calls[0][0](h.bindings.effectiveDraft);
+  const update = h.bindings.setDraft.mock.calls[0][0];
+  const restored = typeof update === 'function' ? update(h.bindings.effectiveDraft) : update;
   expect(restored).toMatchObject({ workingDir: '/repo', firstMessage: 'keep my input' });
   expect(h.bindings.maker.getSession).not.toHaveBeenCalled();
   expect(h.bindings.maker.worktree.create).not.toHaveBeenCalled();
@@ -408,7 +399,7 @@ it('preserves a directory explicitly selected by the user while cancellation com
   await h.run();
   expect(h.bindings.setDraft).not.toHaveBeenCalled();
   expect(h.bindings.maker.worktree.create).toHaveBeenCalledWith(expect.objectContaining({
-    eligibility: expect.objectContaining({ baseRepo: '/other-repo' }),
+    baseRepo: '/other-repo',
   }));
   expect(getCurrentMobileOutboxRecords()[0].creation?.originalWorkingDir).toBe('/other-repo');
 });

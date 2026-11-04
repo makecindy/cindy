@@ -34,6 +34,8 @@ describe('mirrorMessageText', () => {
     ['a delegated continuation', user('continue', { agentMeta: JSON.stringify({ autoReviewUserText: { kind: 'delegated-continuation' } }) })],
     ['private coordination replies', reply('internal', { agentMeta: JSON.stringify({ botPrivateReply: true }) })],
     ['progress commentary', reply('checking files', { agentMeta: JSON.stringify({ assistantPhase: 'commentary' }) })],
+    ['unconfirmed sampling output', reply('pending answer', { agentMeta: JSON.stringify({ samplingAttemptPending: true }) })],
+    ['failed sampling output', reply('partial answer', { agentMeta: JSON.stringify({ failedSamplingAttempt: { threadId: 't', turnId: 'u', attempt: 1, itemId: 'i' } }) })],
     ['sub-agent output', reply('sub result', { agentMeta: JSON.stringify({ parentToolUseId: 'toolu_1' }) })],
     ['sub-agent output (snake case)', reply('sub result', { agentMeta: JSON.stringify({ parent_tool_use_id: 'toolu_1' }) })],
     ['Claude sub-agent output (parentUuid)', reply('sub result', { agentMeta: JSON.stringify({ parentUuid: 'toolu_subagent' }) })],
@@ -83,7 +85,8 @@ describe('splitMirrorText', () => {
   });
 });
 
-function setup(rows: CompanionMirrorRow[], failImport?: (call: number) => boolean, uploadMedia?: Parameters<typeof createCompanionMirror>[0]['uploadMedia']) {
+function setup(rows: CompanionMirrorRow[], failImport?: (call: number) => boolean, uploadMedia?: Parameters<typeof createCompanionMirror>[0]['uploadMedia'],
+  replyAttachments?: Parameters<typeof createCompanionMirror>[0]['replyAttachments']) {
   let imports = 0;
   const { api, calls } = fakeApi((route, method) => {
     if (route === '/conversations' && method === 'POST') return { id: ROOM };
@@ -104,6 +107,7 @@ function setup(rows: CompanionMirrorRow[], failImport?: (call: number) => boolea
       .sort((a, b) => a.createdAt - b.createdAt || a.id.localeCompare(b.id)).slice(0, limit),
     latestRows: async (_sessionId, limit) => [...rows].reverse().slice(0, limit),
     ...(uploadMedia ? { uploadMedia } : {}),
+    ...(replyAttachments ? { replyAttachments } : {}),
   });
   const imported = () => calls.filter(call => call.route.endsWith('/import'))
     .map(call => (call.data as { messages: Array<{ sourceId: string; authorId: string; content: Array<{ type?: string; text: string; mediaId?: string }> }> }).messages);
@@ -127,6 +131,79 @@ describe('companion conversation mirror', () => {
     await t.mirror.syncBot('bot', 'actor', 'Mia');
     expect(t.calls.filter(call => call.route === '/conversations')).toHaveLength(1);
     expect(t.imported()[1]!.map(m => m.content[0]!.text)).toEqual(['again']);
+  });
+
+  it('does not mirror failed sampling attempts as replies', async () => {
+    const failed = reply('partial answer', { agentMeta: JSON.stringify({ failedSamplingAttempt: { threadId: 't', turnId: 'u', attempt: 1, itemId: 'i' } }) });
+    const rows = [user('hi'), failed, reply('done')];
+    const t = setup(rows);
+    await t.mirror.syncBot('bot', 'actor', 'Mia');
+    expect(t.imported()[0]!.map(m => m.content[0]!.text)).toEqual(['hi', 'done']);
+    await t.mirror.syncBot('bot', 'actor', 'Mia');
+    expect(t.imported().flat().map(m => m.content[0]!.text)).toEqual(['hi', 'done']);
+  });
+
+  it.each([false, true])('defers only pending sampling text with an existing cursor=%s', async (existing) => {
+    const rows = [user('hi'), reply('previous reply')];
+    const t = setup(rows);
+    if (existing) await t.mirror.syncBot('bot', 'actor', 'Mia');
+    const pending = reply('unconfirmed opening', { agentMeta: JSON.stringify({ samplingAttemptPending: { runtimeId: 'live' } }), samplingRuntimeId: 'live' });
+    rows.push(pending, user('another input'), reply('normal reply from another engine'));
+    await t.mirror.syncBot('bot', 'actor', 'Mia');
+    expect(t.imported().flat().map(message => message.content[0]!.text)).toEqual([
+      'hi', 'previous reply', 'another input', 'normal reply from another engine',
+    ]);
+    expect(t.state.bot('bot')?.mirror?.id).toBe(rows[1]!.id);
+    // A late failure arrives outside the ordinary ten-minute trailing scan.
+    pending.agentMeta = JSON.stringify({ samplingAttemptPending: false,
+      failedSamplingAttempt: { threadId: 't', turnId: 'u', attempt: 1, itemId: 'i' } });
+    rows.push(reply('accepted retry', { createdAt: pending.createdAt + 11 * 60_000 }));
+    await t.mirror.syncBot('bot', 'actor', 'Mia', { drain: true });
+    expect(t.imported().flat().map(message => message.content[0]!.text)).toEqual([
+      'hi', 'previous reply', 'another input', 'normal reply from another engine', 'accepted retry',
+    ]);
+    expect(t.state.bot('bot')?.mirror?.id).toBe(rows.at(-1)!.id);
+  });
+
+  it('revisits an accepted item after the trailing window and prevents an incomplete hand-over', async () => {
+    const pending = reply('accepted later', { agentMeta: JSON.stringify({ samplingAttemptPending: true }) });
+    const rows = [pending, user('still sending input', { createdAt: pending.createdAt + 11 * 60_000 })];
+    const t = setup(rows);
+    await t.mirror.syncBot('bot', 'actor', 'Mia');
+    expect(t.imported().flat().map(message => message.content[0]!.text)).toEqual(['still sending input']);
+    await expect(t.mirror.syncBot('bot', 'actor', 'Mia', { drain: true })).rejects.toThrow('COMPANION_STILL_CHANGING');
+    pending.agentMeta = JSON.stringify({ samplingAttemptPending: false });
+    await t.mirror.syncBot('bot', 'actor', 'Mia', { drain: true });
+    expect(t.imported().flat().map(message => message.content[0]!.text)).toEqual(['still sending input', 'accepted later']);
+    await t.mirror.syncBot('bot', 'actor', 'Mia');
+    expect(t.imported().flat()).toHaveLength(2);
+  });
+
+  it('keeps the history backfill before a pending item that first fell outside the latest 200', async () => {
+    const pending = reply('old pending answer', { agentMeta: JSON.stringify({ samplingAttemptPending: true }) });
+    const rows = [pending, ...Array.from({ length: 260 }, (_, index) => user(`input-${index}`, { createdAt: pending.createdAt + 11 * 60_000 + index }))];
+    const t = setup(rows);
+    await t.mirror.syncBot('bot', 'actor', 'Mia');
+    await t.mirror.syncBot('bot', 'actor', 'Mia');
+    expect(t.state.bot('bot')?.backfill).not.toMatchObject({ done: true });
+    expect(t.imported().flat()).toHaveLength(260);
+    pending.agentMeta = JSON.stringify({ samplingAttemptPending: false });
+    await t.mirror.syncBot('bot', 'actor', 'Mia', { drain: true });
+    expect(t.imported().flat()).toHaveLength(261);
+    expect(t.imported().flat().filter(message => message.content[0]!.text === 'old pending answer')).toHaveLength(1);
+    expect(t.state.bot('bot')?.backfill).toMatchObject({ done: true });
+  });
+
+  it.each([null, 'new-runtime'])('does not promote or block on an orphaned pending item after runtime retirement (%s)', async samplingRuntimeId => {
+    const pending = reply('unconfirmed before shutdown', { agentMeta: JSON.stringify({
+      samplingAttemptPending: samplingRuntimeId === null ? true : { runtimeId: 'old-runtime' },
+    }), samplingRuntimeId });
+    const rows = [pending, user('new input'), reply('new successful reply')];
+    const t = setup(rows);
+    await t.mirror.syncBot('bot', 'actor', 'Mia', { drain: true });
+    expect(t.imported().flat().map(message => message.content[0]!.text)).toEqual(['new input', 'new successful reply']);
+    expect(t.state.bot('bot')?.mirror?.id).toBe(rows[2]!.id);
+    expect(pending.content).toContain('unconfirmed before shutdown');
   });
 
   it('backfills only the latest 200 eligible messages on the first run', async () => {
@@ -181,6 +258,56 @@ describe('companion conversation mirror', () => {
     online = true;
     await t.mirror.syncBot('bot', 'actor', 'Mia');
     expect(t.imported()[0]![0]!.content).toEqual([{ type: 'text', text: 'look' }, { type: 'media', mediaId: 'm-2', caption: 'a.pdf' }]);
+  });
+
+  describe('files a reply refers to', () => {
+    const report = { id: '', name: 'report.docx', category: 'file' as const, mimeType: 'application/octet-stream', size: 10, url: null, path: '/work/documents/report.docx' };
+    const upload = () => vi.fn(async (_room: string, _source: string, files: Array<{ name: string }>) =>
+      [{ type: 'media', mediaId: 'm-r', caption: files[0]!.name }]);
+
+    it('sends them with the reply: the text stays, the files ride as media blocks', async () => {
+      const answer = reply('做好了 documents/report.docx');
+      const find = vi.fn(async (_bot: string, _session: string, found: CompanionMirrorRow, text: string) => {
+        expect(text).toBe('做好了 documents/report.docx');
+        return [{ ...report, id: `${found.id}:reply:0` }];
+      });
+      const send = upload();
+      const t = setup([user('做个报告'), answer], undefined, send, find);
+      await t.mirror.syncBot('bot', 'actor', 'Mia');
+      expect(find).toHaveBeenCalledTimes(1);
+      expect(send).toHaveBeenCalledWith(ROOM, expect.stringContaining(answer.id), [expect.objectContaining({ path: '/work/documents/report.docx' })], 'actor');
+      expect(t.imported()[0]![1]!.content).toEqual([{ type: 'text', text: '做好了 documents/report.docx' }, { type: 'media', mediaId: 'm-r', caption: 'report.docx' }]);
+    });
+
+    it('does not look at replies that are not visible, or when files cannot be uploaded', async () => {
+      const find = vi.fn(async () => [report]);
+      const hidden = reply('internal documents/report.docx', { agentMeta: JSON.stringify({ botPrivateReply: true }) });
+      const t = setup([user('hi'), hidden], undefined, upload(), find);
+      await t.mirror.syncBot('bot', 'actor', 'Mia');
+      expect(find).not.toHaveBeenCalled();
+      const noUpload = setup([reply('documents/report.docx')], undefined, undefined, find);
+      await noUpload.mirror.syncBot('bot', 'actor', 'Mia');
+      expect(find).not.toHaveBeenCalled();
+      expect(noUpload.imported()[0]![0]!.content).toEqual([{ type: 'text', text: 'documents/report.docx' }]);
+    });
+
+    it('keeps the reply text only for a file that never uploads, and retries one that may still go up', async () => {
+      const answer = reply('see documents/report.docx');
+      const find = async () => [{ ...report, id: `${answer.id}:reply:0` }];
+      const gone = setup([answer], undefined, vi.fn(async () => { throw new Error('ATTACHMENT_UNAVAILABLE'); }), find);
+      await gone.mirror.syncBot('bot', 'actor', 'Mia');
+      // No placeholder is invented for a reply: the text is exactly what the companion said.
+      expect(gone.imported()[0]![0]!.content).toEqual([{ type: 'text', text: 'see documents/report.docx' }]);
+      const offline = setup([answer], undefined, vi.fn(async () => { throw Object.assign(new Error('MEDIA_UPLOAD_FAILED'), { status: 503 }); }), find);
+      await expect(offline.mirror.syncBot('bot', 'actor', 'Mia')).rejects.toThrow('MEDIA_UPLOAD_FAILED');
+      expect(offline.imported()).toEqual([]);
+    });
+
+    it('does not stop mirroring when the files cannot be listed', async () => {
+      const t = setup([reply('hello')], undefined, upload(), vi.fn(async () => { throw new Error('EACCES'); }));
+      await t.mirror.syncBot('bot', 'actor', 'Mia');
+      expect(t.imported()[0]![0]!.content).toEqual([{ type: 'text', text: 'hello' }]);
+    });
   });
 
   it('uploads the older history on later passes, oldest first, without re-sending', async () => {

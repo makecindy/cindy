@@ -2,7 +2,8 @@ import path from 'node:path';
 import Database from 'better-sqlite3';
 import { drizzle } from 'drizzle-orm/better-sqlite3';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { listSessionsForHistory } from '../chatHistoryReader';
+import { getMessagesForHistory, listSessionsForHistory } from '../chatHistoryReader';
+import { XdtHelperToolRegistry, registerGetChatHistoryTool, registerSearchChatHistoryTool, historyPayload } from '@cindy/mcps';
 import { searchChatHistoryHybrid } from '../chatHistorySearch';
 import { readRemoteBotSessionAccessBatch } from '../ipc/botRemoteSessionAccess';
 import { setChatEmbeddingEnabled } from '../../embedders/chat-history-embedder';
@@ -44,13 +45,13 @@ describe.each(modes)('%s remote history visibility', (mode) => {
     db.exec(`
     CREATE TABLE sessions (id TEXT PRIMARY KEY, title TEXT DEFAULT '', working_dir TEXT,
       agent_kind TEXT DEFAULT 'codex', workspace_kind TEXT DEFAULT 'project', model TEXT DEFAULT '',
-      status TEXT DEFAULT 'active', source TEXT DEFAULT 'desktop', orca_role TEXT,
+      status TEXT DEFAULT 'active', source TEXT DEFAULT 'desktop', orca_role TEXT, orca_remote_lead TEXT,
       parent_session_id TEXT, created_at INTEGER, updated_at INTEGER, user_send_at INTEGER, hidden_at INTEGER);
     CREATE TABLE messages (id TEXT PRIMARY KEY, client_id TEXT, session_id TEXT, role TEXT,
       content TEXT, tool_use_id TEXT, agent_meta TEXT, agent_kind TEXT, created_at INTEGER, rewind_at INTEGER);
     CREATE VIRTUAL TABLE messages_fts USING fts5(message_id UNINDEXED, content);
     CREATE TABLE bot_profiles (id TEXT PRIMARY KEY, hidden_at INTEGER, status TEXT);
-    CREATE TABLE bot_session_links (session_id TEXT PRIMARY KEY, bot_id TEXT);
+    CREATE TABLE bot_session_links (session_id TEXT PRIMARY KEY, bot_id TEXT, role TEXT DEFAULT 'canonical', route_key TEXT);
     CREATE TABLE embedding_jobs (source_id TEXT);
     CREATE TABLE chat_messages_vec_v1 (distance REAL);
     INSERT INTO bot_profiles VALUES ('visible', NULL, 'active'), ('zero', 0, 'active'),
@@ -71,7 +72,7 @@ describe.each(modes)('%s remote history visibility', (mode) => {
         'INSERT INTO sessions (id, source, created_at, updated_at) VALUES (?, ?, ?, ?)',
       ).run(id, id === 'ordinary' ? 'desktop' : 'bot', i + 1, i + 1);
       if (id !== 'orphan' && id !== 'ordinary')
-        db.prepare('INSERT INTO bot_session_links VALUES (?, ?)').run(id, bot);
+        db.prepare('INSERT INTO bot_session_links (session_id, bot_id) VALUES (?, ?)').run(id, bot);
       db.prepare(
         "INSERT INTO messages (id, client_id, session_id, role, content, created_at) VALUES (?, ?, ?, 'user', ?, ?)",
       ).run(id, id, id, JSON.stringify('needle'), i + 1);
@@ -158,6 +159,159 @@ describe.each(modes)('%s remote history visibility', (mode) => {
     await assertRemoteBotInvocationAllowed([request], channel);
     return projectRemoteSessionResult(channel, result);
   };
+
+  // Real SQLite + public tool cursor: byte budgeting must not skip same-ms
+  // records or truncate a large individual message. Unit, no artificial waits.
+  it.each(['asc', 'desc'] as const)('pages complete UTF-8 messages without losing rowid ties (%s)', async (order) => {
+    const ids = ['budget-z', 'budget-a', 'budget-m', 'budget-b'];
+    const texts = ['中'.repeat(18000), '文'.repeat(18000), '大'.repeat(30000), 'last'];
+    for (let i = 0; i < ids.length; i++) {
+      db.prepare("INSERT INTO messages (id, session_id, role, content, created_at) VALUES (?, 'ordinary', 'user', ?, 1000)")
+        .run(ids[i], JSON.stringify(texts[i]));
+    }
+    const registry = new XdtHelperToolRegistry();
+    registerGetChatHistoryTool(registry, { history: {
+      listWorkdirs: vi.fn(), listSessions: vi.fn(), searchChatHistory: vi.fn(),
+      getMessages: async args => ({ ok: true, page: await getMessagesForHistory(args) }),
+    } });
+    const collected: Array<{ id: string; content: unknown }> = [];
+    let cursor: string | undefined;
+    for (let i = 0; i < 5; i++) {
+      const page = historyPayload(await registry.call('get_chat_history', {
+        session_ids: ['ordinary'], from: '1970-01-01T00:00:01.000Z', limit: 100, order, ...(cursor ? { cursor } : {}),
+      })) as any;
+      expect(page.messages.length).toBeGreaterThan(0);
+      if (Buffer.byteLength(JSON.stringify(page.messages), 'utf8') > 64 * 1024) {
+        expect(page.messages).toHaveLength(1);
+      }
+      collected.push(...page.messages);
+      if (!page.hasMore) { expect(page.nextCursor).toBeNull(); break; }
+      expect(page.nextCursor).not.toBe(cursor);
+      cursor = page.nextCursor;
+    }
+    const expected = ids.map((id, i) => ({ id, content: texts[i] }));
+    if (order === 'desc') expected.reverse();
+    expect(collected.map(({ id, content }) => ({ id, content }))).toEqual(expected);
+  });
+
+  it('advances the activity cursor at the last byte-bounded session through the remote tool entry', async () => {
+    db.prepare("UPDATE sessions SET title=?, updated_at=1000 WHERE id IN ('ordinary', 'visible', 'zero')")
+      .run('标题'.repeat(6000));
+    const ids: string[] = [];
+    let cursor: string | undefined;
+    for (let i = 0; i < 3; i++) {
+      const page = await invokeHistory('list_sessions', { limit: 100, time_field: 'activity', order: 'asc',
+        ...(cursor ? { cursor } : {}) }) as any;
+      expect(page.sessions).toHaveLength(1);
+      ids.push(page.sessions[0].id);
+      expect(page.sessions[0].title).toBe('标题'.repeat(6000));
+      cursor = page.nextCursor;
+      expect(page.hasMore).toBe(i < 2);
+    }
+    expect(ids).toEqual(['ordinary', 'visible', 'zero']);
+  });
+
+  // r4411387401/r4411387386: real MCP entry must budget while reading, whereas
+  // fixed-page internal consumers keep their original complete hit count (unit/SQLite).
+  it.each([0, 2])('continues tool search at the consumed candidate without hydrating the remaining page (radius=%s)', async (radius) => {
+    setChatEmbeddingEnabled(false);
+    const text = 'budgetneedle ' + '文'.repeat(18000);
+    const ids = ['budget-z', 'budget-a', 'budget-m'];
+    for (const id of ids) {
+      db.prepare("INSERT INTO messages (id, session_id, role, content, created_at) VALUES (?, 'ordinary', 'user', ?, 1000)")
+        .run(id, JSON.stringify(text));
+      db.prepare('INSERT INTO messages_fts VALUES (?, ?)').run(id, 'budgetneedle');
+    }
+    const found: string[] = [];
+    const registry = new XdtHelperToolRegistry();
+    registerSearchChatHistoryTool(registry, { history: {
+      listWorkdirs: vi.fn(), listSessions: vi.fn(), getMessages: vi.fn(),
+      searchChatHistory: async args => ({ ok: true, result: await searchChatHistoryHybrid(args) }),
+    } });
+    let cursor: string | undefined;
+    for (let i = 0; i < 3; i++) {
+      const queries = vi.spyOn(state.client, 'query');
+      const page = historyPayload(await registry.call('search_chat_history', {
+        query: 'budgetneedle', limit: 10, context_radius: radius, ...(cursor ? { cursor } : {}),
+      })) as any;
+      const contextQueries = queries.mock.calls.filter(([sql]) => String(sql).includes('_anchorOrder'));
+      queries.mockRestore();
+      expect(page.hits).toHaveLength(1);
+      expect(page.hits[0].context.find((row: any) => row.isHit).content).toBe(text);
+      if (radius === 2) {
+        expect(contextQueries).toHaveLength(1);
+        const contextParams = (contextQueries[0][1] ?? []) as unknown[];
+        expect(new Set(contextParams.filter((value): value is string =>
+          typeof value === 'string' && ids.includes(value),
+        )).size).toBe(1);
+      }
+      found.push(page.hits[0].messageId);
+      expect(page.hasMore).toBe(i < 2);
+      if (page.nextCursor !== null) { expect(page.nextCursor).not.toBe(cursor); cursor = page.nextCursor; }
+    }
+    expect(found.sort()).toEqual(ids.sort());
+    const internal = await searchChatHistoryHybrid({ ...searchArgs, query: 'budgetneedle', limit: 10, contextRadius: radius });
+    expect(internal.hits.map(hit => hit.messageId).sort()).toEqual(ids.sort());
+    expect(internal.hasMore).toBe(false);
+  });
+
+  // Regression: old-created, recently active chats were lost by workdir/creation
+  // filters; known ownership must include archived channels/topics without claiming
+  // unrelated legacy Telegram records. Unit: real readers + MCP/remote handler + SQLite.
+  it('finds old active teammate conversations and keeps legacy source separate', async () => {
+    db.exec(`
+      UPDATE sessions SET created_at=1, updated_at=1000, status='archived' WHERE id='visible';
+      UPDATE bot_session_links SET role='channel', route_key='im:telegram:123:g:456:t:789' WHERE session_id='visible';
+      UPDATE sessions SET source='telegram', created_at=1, updated_at=1000 WHERE id='ordinary';
+    `);
+    const created = await invokeHistory('list_sessions', { teammate_id: 'visible', from: '1970-01-01T00:00:00.900Z' });
+    expect(created).toMatchObject({ ok: true, sessions: [] });
+    const active = await invokeHistory('list_sessions', {
+      teammate_id: 'visible', time_field: 'activity', from: '1970-01-01T00:00:00.900Z', limit: 1,
+    });
+    expect(active).toMatchObject({ ok: true, sessions: [{ id: 'visible', status: 'archived',
+      companion: { id: 'visible', role: 'channel', channel: 'telegram' } }] });
+    const own = await invokeHistory('search_chat_history', { query: 'needle', teammate_id: 'visible' });
+    expect(own).toMatchObject({ ok: true, hits: [{ sessionId: 'visible', context: [{ content: 'needle' }] }] });
+    expect((own as any).hits).toHaveLength(1);
+    const legacy = await invokeHistory('search_chat_history', { query: 'needle', source: 'telegram' });
+    expect(legacy).toMatchObject({ ok: true, sessions: { ordinary: { source: 'telegram', companion: null } } });
+    expect((legacy as any).hits.map((hit: any) => hit.sessionId)).toEqual(['ordinary']);
+  });
+
+  // #6779: local semantic-only hits were starved by 300 closer vectors from other
+  // teammates before the 250-candidate KNN limit. Exercise the production engine
+  // with both real SQLite joins and native vec0; no FTS hit can mask the failure.
+  it.each([{ teammateId: 'visible' }, { source: 'telegram' }])(
+    'filters local vector candidates before limiting: %j', async (filter) => {
+      db.prepare("UPDATE sessions SET source='telegram' WHERE id='visible'").run();
+      const result = await searchChatHistoryHybrid({
+        ...searchArgs, remoteVisibleOnly: false, query: 'semantic-only', ...filter,
+      });
+      expect(result.vectorUsed).toBe(true);
+      expect(result.hits.map(hit => hit.sessionId)).toEqual(['visible']);
+      expect(result.hits[0]).toMatchObject({ vectorRank: 1, context: [{ content: 'needle' }] });
+      expect(result.hits[0].ftsRank).toBeNull();
+    },
+  );
+
+  // Activity cursor must use the same clock as ordering, including userSendAt and ties.
+  it('paginates activity ties and preserves the existing scope intersection', async () => {
+    db.exec(`
+      UPDATE sessions SET created_at=1, updated_at=2, user_send_at=1000 WHERE id IN ('visible', 'zero');
+      UPDATE bot_session_links SET bot_id='visible', role='thread' WHERE session_id='zero';
+    `);
+    const args = { teammate_id: 'visible', time_field: 'activity', limit: 1 };
+    const first = await invokeHistory('list_sessions', args) as any;
+    const second = await invokeHistory('list_sessions', { ...args, cursor: first.nextCursor }) as any;
+    expect([first.sessions[0].id, second.sessions[0].id]).toEqual(['zero', 'visible']);
+    expect(second.hasMore).toBe(false);
+    expect(first.sessions[0]).toMatchObject({ lastActivityAt: '1970-01-01T00:00:01.000Z', companion: { role: 'thread' } });
+    const restricted = await listSessionsForHistory({ ...listArgs, teammateId: 'visible', sessionIds: ['ordinary'] });
+    expect(restricted.items).toEqual([]);
+    const search = await searchChatHistoryHybrid({ ...searchArgs, teammateId: 'visible', sessionIds: ['ordinary'] });
+    expect(search.hits).toEqual([]);
+  });
 
   it('paginates the visible list without hidden rows consuming slots or cursors', async () => {
     const first = await listSessionsForHistory(listArgs);

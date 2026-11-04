@@ -1,4 +1,5 @@
 import { useRemoteModelFavorites } from '@/state/useRemoteModelFavorites';
+import type { ControlledModelFavoriteSource } from '../../../shared/controlledModelCatalog';
 import {
   parseProviderShareFavoriteSource,
   providerShareFavoriteRegionsOf,
@@ -33,11 +34,14 @@ import { cn } from '@/lib/utils';
 import { modelPriceDiscountLabelValues, type ModelPricePresentation } from '@/lib/modelPriceFormat';
 import type { Effort } from '@/lib/userPreferences.types';
 import { getModelEngineOverride, useModelEnginePrefsVersion } from '@/state/modelEnginePrefs';
+import { modelConfigCopyIdentity, type ModelConfigCopy } from '@/state/modelConfigCopy';
 import { useModelFavorites, type ModelFavoriteItem } from '@/state/modelFavorites';
 import { useProviderModelMemoryVersion } from '@/state/providerModelMemory';
 import { useAgentDeviceModelMemoryVersion } from '@/state/agentDeviceModelMemory';
+import { useRecentModels, type RecentModelItem } from '@/state/recentModels';
 
 import { flashScrollbar } from '@/lib/scrollbarAutoHide';
+import { stopWheelPropagation } from '@/lib/stopWheelPropagation';
 import { MORPH_CONTENT_RESIZE_EVENT } from '@/components/ui/morph-popover';
 
 import { isProviderShareAgentDeviceId } from '../../../shared/providerShare';
@@ -46,6 +50,7 @@ import { ModelConfigFlyout, type ModelConfigFlyoutState } from './ModelConfigFly
 // ModelSelector 反过来也 import 本文件 —— ESM 循环 import 在这里安全:两边用到的都是
 // **函数声明**(提升),且只在 render 时求值,不在模块求值期互相读值。
 import type { ModelMemoryAccessors } from './ModelSelector';
+import type { ModelPickerPreferenceStore } from './modelPickerPreferences';
 import { UnifiedFlyoutHost } from './UnifiedFlyoutHost';
 import { UnifiedModelRail } from './UnifiedModelRail';
 import { useUnifiedRowActions, withOptimisticConfig } from './useUnifiedRowActions';
@@ -70,10 +75,12 @@ import {
   buildUnifiedListSections,
   buildUnifiedRail,
   computeSelectedRowScrollTop,
+  enginePreferenceModelIds,
   priceTierOf,
   railItemKey,
   resolveFavoriteRowConfig,
   resolveUnifiedRowConfig,
+  resolveStoredModelEntry,
   sameAnchor,
   unavailableFavoriteEntry,
   type ForeignFavoriteRow,
@@ -95,6 +102,7 @@ const RAIL_ALL: UnifiedRailFilter = { kind: 'all' };
 /** 定宽 sizer 的行不接交互。 */
 const noop = (): void => {};
 const NO_FAVORITES: readonly ModelFavoriteItem[] = [];
+const NO_RECENT: readonly RecentModelItem[] = [];
 const NO_PROVIDERS: readonly ProviderView[] = [];
 
 export interface UnifiedSelectedRow {
@@ -115,6 +123,10 @@ export interface UnifiedSelectedRow {
 }
 
 export interface UnifiedModelPanelProps {
+  /** 「全部」视图且没有搜索词时，列表最上方额外渲染的内容(新任务的「让插件选」)。 */
+  pinnedTop?: ReactNode;
+  /** pinnedTop 当前有内容：搜索只命中它时不显示空结果。 */
+  pinnedTopHasRows?: boolean;
   providers: readonly ProviderView[];
   /**
    * 供应商分组的显示顺序(设置 → 模型供应商的拖动序);缺省 = 目录首见序。
@@ -149,6 +161,7 @@ export interface UnifiedModelPanelProps {
   /** live 选中行的深度实时值(同上)。 */
   selectedEffort?: Effort;
   modelMemory?: ModelMemoryAccessors;
+  preferenceStore?: ModelPickerPreferenceStore;
   /** agent 运行时是否具备 Fast 能力(useAgentCapabilities.hasFastMode)。 */
   agentFastModeCapable: (agent: AgentKind) => boolean;
   /** 价格 / 折扣查询。**modelId 传该引擎的 wire id**(报价表按 wire id 索引)。 */
@@ -176,6 +189,14 @@ export interface UnifiedModelPanelProps {
   onPaymentRequired?: () => void;
   /** false = 只选模型,不出配置浮层(设置类入口的 configurationEnabled)。 */
   configurationEnabled?: boolean;
+  /**
+   * 选择真的应用成功后,把该模型记进「最近使用」(见 state/recentModels 的语义边界)。
+   * **默认关**:统一面板被对话之外的入口(定时任务 / IM 默认 / Bot / Hook / Worker /
+   * 子代理 / 设置页)共用,那些入口的选择是配置动作,不是「用这个模型跑过活」。只有
+   * 对话侧的两个入口(ChatInput 的新任务草稿与会话内)显式开启,且远程(SSH /
+   * device-link)不传 —— 被控端目录的模型写进本机列表只会得到一行永远不可路由的记录。
+   */
+  recordRecentUsage?: boolean;
   isRouteDisabled?: (providerId: string, modelId: string, agent: AgentKind) => boolean;
   /**
    * official = 模型优先的受限入口。忽略全局引擎偏好、模型记忆和收藏配置，
@@ -313,6 +334,7 @@ export interface UnifiedModelPanelProps {
      * 运行位置编进 providerId(见 state/agentDeviceFavorites)。
      */
     favoritesDeviceId?: string;
+    shareFavoriteSources?: ReadonlyMap<string, ControlledModelFavoriteSource>;
     /** 任务所在电脑自己的设备 id(已知时):收藏里编码成它的条目按普通收藏处理。 */
     homeDeviceId?: string | null;
     /** 在列表里、但目录还在读取或读取失败的电脑:收藏区里它的收藏置灰列出,不丢。 */
@@ -360,6 +382,8 @@ export interface UnifiedModelPanelProps {
  * 可见性 / 排除谓词。本组件**不自己判定候选引擎或能力**,只做合成与呈现。
  */
 export function UnifiedModelPanel({
+  pinnedTop,
+  pinnedTopHasRows = false,
   providers,
   providerOrder,
   agents,
@@ -375,6 +399,7 @@ export function UnifiedModelPanel({
   fastMode = false,
   selectedEffort,
   modelMemory,
+  preferenceStore,
   agentFastModeCapable,
   priceOf,
   providerLabel,
@@ -389,6 +414,7 @@ export function UnifiedModelPanel({
   paymentRequiredUnlockLabel,
   onPaymentRequired,
   configurationEnabled = true,
+  recordRecentUsage = false,
   selectionPolicy = 'personalized',
   deviceId,
   isRouteDisabled,
@@ -414,20 +440,22 @@ export function UnifiedModelPanel({
     ? remoteSources.favoritesDeviceId
     : isSharedProvider ? undefined : deviceId;
   const remoteFavorites = useRemoteModelFavorites(favoritesListDeviceId);
+  // Request-local drafts still pass through the normal execution-source projections.
   const sharedFavorites = useProviderShareFavorites(
     deviceId,
     storedFavorites,
-    remoteSources?.favoritesDeviceId ? remoteFavorites : undefined,
+    preferenceStore?.favorites ?? (remoteSources?.favoritesDeviceId ? remoteFavorites : undefined),
+    remoteSources?.shareFavoriteSources,
   );
-  const sharedFavoriteSources = useProviderShareFavoriteSources();
+  const sharedFavoriteSources = useProviderShareFavoriteSources(remoteSources?.shareFavoriteSources);
   const hasRemoteSources = !!remoteSources;
   const favoritesHomeDeviceId = remoteSources?.homeDeviceId ?? null;
   const agentDeviceFavorites = useAgentDeviceFavorites({
     deviceId: remoteSources?.active && !isSharedProvider ? deviceId : undefined,
     homeDeviceId: favoritesHomeDeviceId,
-    home: remoteSources?.favoritesDeviceId
+    home: preferenceStore?.favorites ?? (remoteSources?.favoritesDeviceId
       ? remoteFavorites
-      : { items: storedFavorites, store: LOCAL_MODEL_FAVORITE_STORE },
+      : { items: storedFavorites, store: LOCAL_MODEL_FAVORITE_STORE }),
   });
   useEffect(() => {
     if (isSharedProvider || hasRemoteSources) ensureProviderShareReceivedStarted();
@@ -440,11 +468,21 @@ export function UnifiedModelPanel({
   const favorites = selectionPolicy === 'official' ? NO_FAVORITES
     : isSharedProvider ? sharedFavorites.items
     : remoteSources ? agentDeviceFavorites.items
+    : preferenceStore ? preferenceStore.favorites.items
     : deviceId ? remoteFavorites.items : storedFavorites;
+  const storedRecentModels = useRecentModels();
+  // official 入口(设置页 / create-agent)刻意不展示「最近」:那里的选择动作不记录(见
+  // `recordRecentUsage`)也不该被个人流水影响 —— 与收藏区同一条策略门。
+  // 远程目录(device-link 任务 / 远程 Agent 浏览另一台 / 分享供应商)同样不展示:
+  // 记录没有设备字段,本机流水拿到被控端目录会把同 provider+modelId 的条目解析成
+  // 远端快捷方式(点去另一台跑、点星改远端收藏)。收藏有远端仹本可同步,最近没有,
+  // 所以直接隐藏而非换数据源(2026-10-17 review P1)。
+  const recentModels = selectionPolicy === 'official' || deviceId ? NO_RECENT : storedRecentModels;
   // 引擎 override / 深度 / Fast 三份 store 的版本号:任一变化都要重算行三元组与浮层
   // (其它窗口的 storage 事件、device-link 推送同样经这两个版本号进来)。远程 Agent 的档位记忆
   // 是另一份 store,版本号并进 memoryVersion。
   const enginePrefsVersion = useModelEnginePrefsVersion();
+  const getEngineOverride = preferenceStore?.engines.get ?? getModelEngineOverride;
   const memoryVersion = useProviderModelMemoryVersion() + useAgentDeviceModelMemoryVersion();
 
   const sessionAgent = sessionEngineFilter?.currentAgent;
@@ -599,10 +637,7 @@ export function UnifiedModelPanel({
   const activeFavoriteUid = useMemo(() => {
     const item = favorites.find((favorite) => favorite.uid === selectedFavoriteUid);
     if (!item) return null;
-    const entry = entries.find(
-      (candidate) =>
-        candidate.providerId === item.providerId && entryMatchesModelId(candidate, item.modelId),
-    );
+    const entry = resolveStoredModelEntry(entries, item.providerId, item.modelId);
     return entry &&
       favoriteMatchesSelection({
         entry,
@@ -633,14 +668,15 @@ export function UnifiedModelPanel({
   const configOf = useCallback(
     (
       entry: UnifiedModelEntry,
-      favorite?: ModelFavoriteItem,
+      /** 配置副本条目(收藏 / 最近)—— 只读它自存的引擎 / 深度 / Fast。 */
+      copy?: ModelConfigCopy,
       // 定宽 sizer 量的是「全部」视图,必须按那条轨解析,不能继承当前 effectiveRail
       // (否则兼容行被钉成 π 后量到更窄的三元组,切「全部」再弹宽)。
       railForConfig: UnifiedRailFilter = effectiveRail,
     ): UnifiedRowConfig => {
-      // 收藏条目只读它自己存的副本(规格 §1.5),不掺模型默认与记忆。
-      if (favorite) {
-        return resolveFavoriteRowConfig({ entry, item: favorite, agentFastModeCapable });
+      // 收藏 / 最近条目只读它自己存的副本(规格 §1.5),不掺模型默认与记忆。
+      if (copy) {
+        return resolveFavoriteRowConfig({ entry, item: copy, agentFastModeCapable });
       }
       // 两个版本号只作重算触发器:store 是模块级单例,值本身不进依赖。
       void enginePrefsVersion;
@@ -655,7 +691,7 @@ export function UnifiedModelPanel({
       const base = resolveUnifiedRowConfig({
         entry,
         ...(personalized
-          ? { engineOverride: getModelEngineOverride(entry.providerId, entry.modelId) }
+          ? { engineOverride: enginePreferenceModelIds(entry).map(id => getEngineOverride(entry.providerId, id)).find(value => value !== undefined) }
           : {}),
         // ★ 记忆表按 **wire id** 存取(既有消费方的口径),不是行的归一化身份。
         ...(personalized
@@ -708,6 +744,7 @@ export function UnifiedModelPanel({
       agentFastModeCapable,
       effectiveRail,
       enginePrefsVersion,
+      getEngineOverride,
       fastMode,
       isLiveRow,
       liveEngineAgent,
@@ -738,7 +775,7 @@ export function UnifiedModelPanel({
    * configOf 把显示/点选钉在轨引擎,这里不钉 —— 否则排序键全变成当前轨,优先/兼容段塌掉。
    */
   const effectiveEngineOf = useCallback(
-    (entry: UnifiedModelEntry, favorite?: ModelFavoriteItem): UnifiedEngine => {
+    (entry: UnifiedModelEntry, favorite?: ModelConfigCopy): UnifiedEngine => {
       if (favorite) {
         // 收藏行引擎 = 副本自存引擎(掉出候选回落推荐)。不传 agentFastModeCapable:
         // 它只影响 fast/fastCapable,不影响 engine。
@@ -751,7 +788,7 @@ export function UnifiedModelPanel({
       return resolveUnifiedRowConfig({
         entry,
         ...(selectionPolicy === 'personalized'
-          ? { engineOverride: getModelEngineOverride(entry.providerId, entry.modelId) }
+          ? { engineOverride: enginePreferenceModelIds(entry).map(id => getEngineOverride(entry.providerId, id)).find(value => value !== undefined) }
           : {}),
         ...(sessionAgent ? { pinnedEngine: engineOfAgentKind(sessionAgent) } : {}),
         ...(isSelectedModelRow && liveEngineAgent
@@ -762,6 +799,7 @@ export function UnifiedModelPanel({
     [
       activeFavoriteUid,
       enginePrefsVersion,
+      getEngineOverride,
       liveEngineAgent,
       selected.modelId,
       selected.providerId,
@@ -792,9 +830,7 @@ export function UnifiedModelPanel({
       const group = deviceFavoriteGroups?.find((candidate) => candidate.deviceId === source.deviceId);
       if (group) {
         const ofProvider = group.entries.filter((candidate) => candidate.providerId === source.providerId);
-        const entry =
-          ofProvider.find((candidate) => candidate.modelId === item.modelId) ??
-          ofProvider.find((candidate) => entryMatchesModelId(candidate, item.modelId));
+        const entry = resolveStoredModelEntry(ofProvider, source.providerId, item.modelId);
         return entry ? { entry, favorite, agentDeviceId: source.deviceId } : null;
       }
       return unavailableDeviceIds?.includes(source.deviceId)
@@ -813,6 +849,7 @@ export function UnifiedModelPanel({
       buildUnifiedListSections({
         entries,
         favorites,
+        recentModels,
         ...(resolveDeviceFavorite ? { resolveForeignFavorite: resolveDeviceFavorite } : {}),
         query,
         matchesQuery: (entry, q) => matchesModelName({
@@ -825,7 +862,7 @@ export function UnifiedModelPanel({
           ? { recommendation: { agent: liveEngineAgent, ...selected } }
           : {}),
       }),
-    [entries, favorites, resolveDeviceFavorite, query, effectiveRail, effectiveEngineOf, providerOrder, t, scope, liveEngineAgent, selected.modelId, selected.providerId],
+    [entries, favorites, recentModels, resolveDeviceFavorite, query, effectiveRail, effectiveEngineOf, providerOrder, t, scope, liveEngineAgent, selected.modelId, selected.providerId],
   );
 
   // 打开或切视图时，把模型本体的当前行对齐到可视高度 35% 处；收藏可以滚出顶部。
@@ -958,13 +995,40 @@ export function UnifiedModelPanel({
   const isSelectedRow = useCallback(
     (anchor: UnifiedAnchor, entry: UnifiedModelEntry): boolean => {
       if (anchor.kind === 'fav') return false;
+      // 最近行 = 配置副本:选中态按**整份配置**核对(同模型不同档位各占一行,不能都打上
+      // 选中底色)。与收藏锚点同一条判据,只是没有 uid、以副本身份为锚点。
+      if (anchor.kind === 'recent') {
+        const item = recentModels.find(
+          (candidate) => modelConfigCopyIdentity(candidate) === anchor.key,
+        );
+        return (
+          !!item &&
+          favoriteMatchesSelection({
+            entry,
+            item,
+            selected,
+            agent: liveEngineAgent,
+            effort: selectedEffort,
+            fast: fastMode,
+            agentFastModeCapable,
+          })
+        );
+      }
       // 会话 / 草稿存的是 wire id;按「行 id 或任一引擎 wire id 命中」解析(合并行契约)。
       return (
         entryMatchesModelId(entry, selected.modelId) &&
         (selected.providerId === null || selected.providerId === anchor.providerId)
       );
     },
-    [selected.modelId, selected.providerId],
+    [
+      agentFastModeCapable,
+      fastMode,
+      liveEngineAgent,
+      recentModels,
+      selected.modelId,
+      selected.providerId,
+      selectedEffort,
+    ],
   );
 
   /** ☆ 点亮 0.7s 后恢复(规格 §1.5:源头行不持有收藏态,只给一次动作反馈)。 */
@@ -992,11 +1056,13 @@ export function UnifiedModelPanel({
     optimistic: optimisticConfig,
     runExternal,
   } = useUnifiedRowActions({
+    engineStore: preferenceStore?.engines,
     favoriteStore: isSharedProvider
       ? sharedFavorites.store
-      : remoteSources ? agentDeviceFavorites.store : deviceId ? remoteFavorites.store : undefined,
+      : remoteSources ? agentDeviceFavorites.store : preferenceStore ? preferenceStore.favorites.store : deviceId ? remoteFavorites.store : undefined,
     onFavoriteError: () => toast.error(t('newChat.modelSelector.unified.favoritesSaveFailed')),
     interactionDisabled,
+    recordRecentUsage,
     isLiveRow,
     // 两笔实时写入(深度 + Fast)里第二笔失败时回滚第一笔用的原值,以及收藏 live 判定
     // 要比的实时深度 / Fast —— 与 configOf 里「选中行读 live 值」取的是同一个格子。
@@ -1025,9 +1091,9 @@ export function UnifiedModelPanel({
     // 「按这份收藏副本解析该行」——与收藏行渲染(configOf 的 favorite 分支)走**同一个**
     // resolveFavoriteRowConfig:编辑选中收藏的引擎时,新引擎的 wire id / 档位回落 / Fast
     // 能力必须与编辑完之后行上显示的那一份逐字一致(详见 useUnifiedRowActions)。
-    // uid 在这里无意义(解析只看配置),给空串占位。
+    // uid 在这里无意义(解析只看配置),配置副本类型直接兼容收藏条目。
     resolveFavoriteConfig: (entry, favorite) =>
-      resolveFavoriteRowConfig({ entry, item: { uid: '', ...favorite }, agentFastModeCapable }),
+      resolveFavoriteRowConfig({ entry, item: favorite, agentFastModeCapable }),
     // 「该行没有收藏语境时的默认配置」:引擎 = 推荐 ⊕ 用户 override ⊕ 会话 pinned(与
     // configOf 的模型行分支同一套合成,少给一路就会算出一个用户从没见过的引擎),
     // **刻意不传 memoryEffort / memoryFast** —— 回落的是「该模型的默认」,不是用户上次在
@@ -1037,7 +1103,7 @@ export function UnifiedModelPanel({
       resolveUnifiedRowConfig({
         entry,
         ...(selectionPolicy === 'personalized'
-          ? { engineOverride: getModelEngineOverride(entry.providerId, entry.modelId) }
+          ? { engineOverride: enginePreferenceModelIds(entry).map(id => getEngineOverride(entry.providerId, id)).find(value => value !== undefined) }
           : {}),
         agentFastModeCapable,
         ...(sessionAgent ? { pinnedEngine: engineOfAgentKind(sessionAgent) } : {}),
@@ -1088,13 +1154,15 @@ export function UnifiedModelPanel({
   };
 
   /**
-   * 小节标题:收藏 / 供应商分组(Chris 2026-08-13 裁决:按供应商,不按模型家族;
-   * 组名与模型设置页同一套 providerLabel)。
+   * 小节标题:收藏 / 最近 / 推荐 / 供应商分组(Chris 2026-08-13 裁决:按供应商,
+   * 不按模型家族;组名与模型设置页同一套 providerLabel)。
    */
   const sectionLabel = (section: (typeof sections)[number]): string =>
     section.kind === 'favorites'
       ? t('newChat.modelSelector.unified.favoritesGroup')
-      : section.kind === 'recommended'
+      : section.kind === 'recent'
+        ? t('newChat.modelSelector.unified.recentGroup')
+        : section.kind === 'recommended'
         ? t('newChat.modelSelector.unified.recommended')
       : section.group
         ? providerHeading(section.group.providerId)
@@ -1102,6 +1170,16 @@ export function UnifiedModelPanel({
 
   const rows = sections.flatMap((section) => section.rows);
   const hasRows = rows.length > 0;
+
+  /**
+   * 行 L2 显示 provider 来源而不是模型描述(2026-09-16 实测裁决)。
+   * 收藏 / 最近 / 全部三个视图一致:它们都是「跨来源的快捷清单」,行上必须说清
+   * 这一条是哪家供的(同名模型跨来源价格不同);单来源视图(供应商轨)不需要重复来源。
+   */
+  const showsSourceRow =
+    effectiveRail.kind === 'all' ||
+    effectiveRail.kind === 'recent' ||
+    effectiveRail.kind === 'favorites';
 
   /**
    * 行内价格的派生(设计稿 v4 定稿 F 样式):付费行显示 $ 档串,折扣行亮段按
@@ -1272,6 +1350,7 @@ export function UnifiedModelPanel({
         ? buildUnifiedListSections({
             entries,
             favorites,
+            recentModels,
             ...(resolveDeviceFavorite ? { resolveForeignFavorite: resolveDeviceFavorite } : {}),
             query: '',
             rail: RAIL_ALL,
@@ -1279,7 +1358,7 @@ export function UnifiedModelPanel({
             providerOrder,
           })
         : [],
-    [widthSizerActive, entries, favorites, resolveDeviceFavorite, effectiveEngineOf, providerOrder],
+    [widthSizerActive, entries, favorites, recentModels, resolveDeviceFavorite, effectiveEngineOf, providerOrder],
   );
 
   const panelContent = (
@@ -1330,6 +1409,9 @@ export function UnifiedModelPanel({
           )}
           // Body height is independent of filtered results; min-h-0 still permits
           // the popover's viewport constraint to shrink this scroll area.
+          // onWheel:模态对话框(添加伙伴 / 伙伴设置等)里 react-remove-scroll 在
+          // document 拦浮层滚轮,不放行的话列表只能靠拖滚动条(原理见 helper 注释)。
+          onWheel={stopWheelPropagation}
           onScroll={() => {
             // 点击打开的配置保持展开；浮层宿主在滚动时重新定位。
             // 程序化对齐不取消在途的选中行定位。
@@ -1392,6 +1474,7 @@ export function UnifiedModelPanel({
             </div>
           )}
           {favoritesListDeviceId && remoteFavorites.error ? <div role="status" className="px-3 py-2 text-13 text-[var(--text-secondary)]">{t(favoritesSyncFailureI18nKey(remoteFavorites.errorCode))}</div> : null}
+          {pinnedTop && effectiveRail.kind === 'all' ? pinnedTop : null}
           {remoteListPending ? (
             remoteSources?.failure ?? (
               <div
@@ -1404,12 +1487,14 @@ export function UnifiedModelPanel({
             )
           ) : catalogNotice ? (
             catalogNotice
-          ) : !hasRows ? (
+          ) : !hasRows && !(pinnedTopHasRows && effectiveRail.kind === 'all') ? (
             <div className="px-3 py-6 text-center text-13 text-[var(--text-tertiary)]">
-              {/* ★ 视图的空态是引导语,不是「没有匹配」(设计稿 favEmpty;★ 常驻后必经)。 */}
-              {effectiveRail.kind === 'favorites' && !query.trim()
+              {/* 最近 / ★ 视图的空态是引导语,不是「没有匹配」(设计稿 favEmpty;两格常驻后必经)。 */}
+              {!query.trim() && effectiveRail.kind === 'favorites'
                 ? t('newChat.modelSelector.unified.favoritesEmpty')
-                : t('newChat.modelSelector.search.noResults')}
+                : !query.trim() && effectiveRail.kind === 'recent'
+                  ? t('newChat.modelSelector.unified.recentEmpty')
+                  : t('newChat.modelSelector.search.noResults')}
             </div>
           ) : (
             sections.map((section) => (
@@ -1431,27 +1516,61 @@ export function UnifiedModelPanel({
                   if (row.agentDeviceId) return renderDeviceFavoriteRow(row, false);
                   const config = withOptimisticConfig(
                     row.anchor,
-                    configOf(row.entry, row.favorite),
+                    configOf(row.entry, row.favorite ?? row.recent),
                     optimisticConfig,
                   );
                   const key = anchorKey(row.anchor);
                   const priceDisplay = priceDisplayOf(row.entry, config);
+                  /**
+                   * 最近行按**解析后的整份配置**匹配收藏(2026-09-16 裁决:最近也是配置副本):
+                   * 同一来源 + 同一模型下,引擎 / 深度 / Fast 解析后一致就点亮星标;
+                   * 点星把它存进收藏 / 从收藏里移除。
+                   * 前两维(来源 + 模型)必须先圈定(2026-09-16 review P0):只看三元组的话,
+                   * 另一个型号的收藏只要引擎 / 深度 / Fast 巧合一致就会被误命中,点星删掉的是
+                   * 用户根本没点的那条收藏。三元组用**解析值**而不是存储字面量比:两边都可能是
+                   * 「跟随推荐」的缺省字段 —— 按字面量会比出「一边有 effort、一边没有」的假不匹配。
+                   */
+                  const matchingFavorite = row.recent
+                    ? favorites.find((favorite) => {
+                        if (favorite.providerId !== row.entry.providerId) return false;
+                        if (resolveStoredModelEntry(entries, favorite.providerId, favorite.modelId) !== row.entry) return false;
+                        const favoriteConfig = resolveFavoriteRowConfig({
+                          entry: row.entry,
+                          item: favorite,
+                          agentFastModeCapable,
+                        });
+                        return (
+                          favoriteConfig.engine === config.engine &&
+                          favoriteConfig.effort === config.effort &&
+                          favoriteConfig.fast === config.fast
+                        );
+                      })
+                    : undefined;
+                  const recentRow = !!row.recent;
+                  // 最近行本身不持有收藏态:命中的收藏就是它的星标与**选中锚点**
+                  // (点击=按这份副本配置应用,同收藏副本语义 —— 带上 uid,锚点/星标才一致)。
+                  const starredFavorite = row.favorite ?? matchingFavorite;
                   return (
                     <UnifiedModelRow
                       key={key}
                       entry={row.entry}
                       anchor={row.anchor}
                       config={config}
-                      {...(effectiveRail.kind === 'all' || effectiveRail.kind === 'favorites'
+                      {...(showsSourceRow
                         ? { sourceLabel: aggregateSourceLabel(row.entry.providerId) }
                         : {})}
                       selected={isSelectedRow(row.anchor, row.entry)}
                       active={sameAnchor(flyAnchor, row.anchor)}
-                      isFavoriteRow={!!row.favorite}
+                      isFavoriteRow={!!starredFavorite}
                       justFavorited={justFavorited === key}
                       {...(priceDisplay ? { priceDisplay } : {})}
 
                       configurationEnabled={configurationEnabled}
+                      // 最近行是只读的配置副本(流水账):不在这一页改配置,也没有配置浮层
+                      // (引擎 / 深度 / Fast 由记录时的选择决定,改配置走模型行或收藏)。
+                      // 不出配置浮层的行(最近行只读副本、设置类入口)一律 customizable=false：
+                      // 按钮、← 快捷键与右键浮层都由这一个闸门收掉，不宣告存在却无响应。
+                      customizable={configurationEnabled && !recentRow}
                       interactionDisabled={
                         interactionDisabled ||
                         actionPending ||
@@ -1467,15 +1586,31 @@ export function UnifiedModelPanel({
                       {...(onPaymentRequired ? { onPaymentRequired } : {})}
                       effortLabelOf={effortLabelOf}
                       providers={providers}
-                      onReveal={revealFlyout}
-                      onRevealForKeyboard={revealFlyoutForKeyboard}
-                      onSelect={() => selectRow(row.anchor, config, row.favorite)}
+                      onReveal={recentRow ? noop : revealFlyout}
+                      onRevealForKeyboard={recentRow ? noop : revealFlyoutForKeyboard}
+                      onSelect={() =>
+                        // 星标行的点击与收藏行同构:带上命中的那条收藏,选中态才不只停在「配置像」上。
+                        selectRow(row.anchor, config, starredFavorite, row.entry)
+                      }
                       onStar={
                         selectionPolicy === 'personalized'
-                          ? () =>
-                              row.favorite
-                                ? removeFavorite(row.anchor, row.entry)
-                                : addFavorite(row.anchor, config)
+                          ? recentRow
+                            ? () =>
+                                matchingFavorite
+                                  ? removeFavorite(
+                                      {
+                                        kind: 'fav',
+                                        uid: matchingFavorite.uid,
+                                        providerId: matchingFavorite.providerId,
+                                        modelId: matchingFavorite.modelId,
+                                      },
+                                      row.entry,
+                                    )
+                                  : addFavorite(row.anchor, config)
+                            : () =>
+                                row.favorite
+                                  ? removeFavorite(row.anchor, row.entry)
+                                  : addFavorite(row.anchor, config)
                           : undefined
                       }
                     />
@@ -1508,7 +1643,7 @@ export function UnifiedModelPanel({
                 </div>
                 {section.rows.map((row) => {
                   if (row.agentDeviceId) return renderDeviceFavoriteRow(row, true);
-                  const config = configOf(row.entry, row.favorite, RAIL_ALL);
+                  const config = configOf(row.entry, row.favorite ?? row.recent, RAIL_ALL);
                   const priceDisplay = priceDisplayOf(row.entry, config);
                   return (
                     <UnifiedModelRow
@@ -1559,7 +1694,7 @@ export function UnifiedModelPanel({
             // 深度 / Fast 写入在途时显示目标值,松手即停在新档(见 withOptimisticConfig)。
             const config = withOptimisticConfig(
               target.anchor,
-              configOf(target.entry, target.favorite),
+              configOf(target.entry, target.favorite ?? target.recent),
               optimisticConfig,
             );
             const state: ModelConfigFlyoutState = target.favorite

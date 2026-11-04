@@ -43,6 +43,11 @@ export {
   type SetSessionsStatusResult,
   type RemoteSessionsStatusResult,
 } from './archive_sessions.js';
+export {
+  registerSessionImportTools,
+  type SessionImportCallbacks,
+  type SessionImportDeps,
+} from './session_import.js';
 // multi-worker Phase 1 control tools
 export {
   registerStartTeamTool,
@@ -107,6 +112,10 @@ export {
   registerArchiveWorkerTool,
   type ArchiveWorkerDeps,
 } from './archive_worker.js';
+export {
+  registerUpdateWorkerTool,
+  type UpdateWorkerDeps,
+} from './update_worker.js';
 export {
   registerListAvailableModelsTool,
   type ListAvailableModelsDeps,
@@ -220,6 +229,7 @@ export type {
   HistoryPage,
   HistoryWorkdir,
   HistorySession,
+  HistoryCompanion,
   HistoryMessage,
   ListWorkdirsArgs,
   ListSessionsArgs,

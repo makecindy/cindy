@@ -25,13 +25,15 @@ export type GhostVisibilityResult =
   | { ok: true; ghost: InstalledGhost }
   | {
       ok: false;
-      errorCode: 'GHOST_NOT_FOUND' | 'GHOST_ASLEEP' | 'GHOST_DISABLED_IN_WORKDIR' | 'GHOST_RETIRED' | 'GHOST_AMBIGUOUS';
+      errorCode: 'GHOST_NOT_FOUND' | 'GHOST_NAMESPACE_MISMATCH' | 'GHOST_ASLEEP' | 'GHOST_DISABLED_IN_WORKDIR' | 'GHOST_RETIRED' | 'GHOST_AMBIGUOUS';
       message: string;
       candidates?: Array<{ ghostId: string; namespace: string | null }>;
     };
 
 export interface GhostVisibilityDeps {
   listGhosts: () => InstalledGhost[];
+  /** Fresh exact-instance lookup, never a completed authorization cache. */
+  findInstalledInstance?: (instanceKey: string) => InstalledGhost | undefined;
   isAvailableForActiveSession: (ghostId: string) => boolean;
   isDisabledForWorkdir: (ghostId: string, workdir: string | null) => boolean;
 }
@@ -56,6 +58,29 @@ export function classifyGhostVisibility(
           : { status: 'missing' as const };
       })();
   if (resolved.status === 'missing') {
+    // The outgoing owner projection can remain installed during account teardown.
+    // Match discovery's active-session gate before disclosing recovery identities.
+    const sameName = namespace === undefined ? [] : listed.filter((ghost) =>
+      ghost.manifest.id === ghostId && deps.isAvailableForActiveSession(installedGhostStoragePart(ghost)),
+    );
+    if (sameName.length > 0) {
+      // A model may quote JSON null as the valid organization slug "null".
+      // Preserve exact addressing: explain the mismatch, never redirect a call
+      // or change the namespace of a pending legacy installation.
+      const targets = sameName.map((ghost) => ({
+        ghost_id: ghost.manifest.id,
+        ...deliveryNamespaceFields(ghost),
+      }));
+      return {
+        ok: false,
+        errorCode: 'GHOST_NAMESPACE_MISMATCH',
+        message: `插件已安装，但 namespace=${JSON.stringify(namespace)} 未匹配该插件的安装身份。` +
+          'JSON null（不带引号）表示 root；字符串 "null" 表示名为 null 的企业，两者不同。' +
+          `已安装身份：${JSON.stringify(targets)}。` +
+          '请核对目标后按对应身份原样传参，保留 namespace 的类型；身份未提供 namespace 时省略该字段。' +
+          '不要原样重试错误参数，也不要自动改选其他实例。',
+      };
+    }
     return {
       ok: false,
       errorCode: 'GHOST_NOT_FOUND',
@@ -117,7 +142,10 @@ export function classifyInstalledGhostVisibility(
   deps: GhostVisibilityDeps,
 ): GhostVisibilityResult {
   const identity = installedGhostLogicalIdentity(target);
-  const ghost = findInstalledGhostByInstanceId(deps.listGhosts(), installedGhostStoragePart(target));
+  const key = installedGhostStoragePart(target);
+  const ghost = deps.findInstalledInstance
+    ? deps.findInstalledInstance(key)
+    : findInstalledGhostByInstanceId(deps.listGhosts(), key);
   if (!ghost || ghost.manifest.id !== identity.ghostId ||
       installedGhostLogicalIdentity(ghost).namespace !== identity.namespace ||
       ghost.dir !== target.dir ||

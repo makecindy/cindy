@@ -1,3 +1,5 @@
+import { createHash } from 'node:crypto';
+
 import type {
   RemoteCollectionItem,
   RemoteLocalizedText,
@@ -12,6 +14,8 @@ import { isManagedBotAvatarUrl } from '../../../shared/botAvatarValue.js';
 
 export const TEAMMATES_REMOTE_COLLECTION_ID = 'teammates';
 export const BOT_REMOTE_RESOURCE_KIND = 'bot';
+/** Link to an open task this teammate looks after; controllers draw the follow mark from it. */
+export const BOT_FOLLOWING_LINK_REL = 'following';
 
 export const TEAMMATES_TITLE: RemoteLocalizedText = {
   fallback: 'Teammates',
@@ -20,42 +24,42 @@ export const TEAMMATES_TITLE: RemoteLocalizedText = {
     'zh-TW': '所有夥伴',
     ja: 'すべてのチームメイト',
     ko: '모든 팀원',
-  },
+    "es":"Compañeros","fr":"Coéquipiers","de":"Teammitglieder","pt-PT":"Colegas de equipa","pt-BR":"Colegas de equipe","zh-Hant-x-lzh":"諸同僚","zh-Hans-x-lzh":"诸同僚"},
 };
 
 const STATUS_COPY: Readonly<Record<string, RemoteResourceStatus>> = {
   active: {
     label: {
       fallback: 'Available',
-      translations: { 'zh-CN': '可用', 'zh-TW': '可用', ja: '利用可能', ko: '사용 가능' },
+      translations: { 'zh-CN': '可用', 'zh-TW': '可用', ja: '利用可能', ko: '사용 가능' , "es":"Disponible","fr":"Disponible","de":"Verfügbar","pt-PT":"Disponível","pt-BR":"Disponível","zh-Hant-x-lzh":"可用","zh-Hans-x-lzh":"可用"},
     },
     tone: 'positive',
   },
   paused: {
     label: {
       fallback: 'Paused',
-      translations: { 'zh-CN': '已暂停', 'zh-TW': '已暫停', ja: '一時停止中', ko: '일시 중지됨' },
+      translations: { 'zh-CN': '已暂停', 'zh-TW': '已暫停', ja: '一時停止中', ko: '일시 중지됨' , "es":"En pausa","fr":"En pause","de":"Pausiert","pt-PT":"Em pausa","pt-BR":"Pausado","zh-Hant-x-lzh":"已暫停","zh-Hans-x-lzh":"已暂停"},
     },
     tone: 'neutral',
   },
   archived: {
     label: {
       fallback: 'Archived',
-      translations: { 'zh-CN': '已归档', 'zh-TW': '已封存', ja: 'アーカイブ済み', ko: '보관됨' },
+      translations: { 'zh-CN': '已归档', 'zh-TW': '已封存', ja: 'アーカイブ済み', ko: '보관됨' , "es":"Archivado","fr":"Archivé","de":"Archiviert","pt-PT":"Arquivado","pt-BR":"Arquivado","zh-Hant-x-lzh":"已封存","zh-Hans-x-lzh":"已归档"},
     },
     tone: 'neutral',
   },
   error: {
     label: {
       fallback: 'Needs attention',
-      translations: { 'zh-CN': '需要关注', 'zh-TW': '需要注意', ja: '確認が必要', ko: '확인 필요' },
+      translations: { 'zh-CN': '需要关注', 'zh-TW': '需要注意', ja: '確認が必要', ko: '확인 필요' , "es":"Requiere atención","fr":"Attention requise","de":"Handlungsbedarf","pt-PT":"Requer atenção","pt-BR":"Precisa de atenção","zh-Hant-x-lzh":"需留意","zh-Hans-x-lzh":"需留意"},
     },
     tone: 'critical',
   },
   deleting: {
     label: {
       fallback: 'Deleting',
-      translations: { 'zh-CN': '删除中', 'zh-TW': '刪除中', ja: '削除中', ko: '삭제 중' },
+      translations: { 'zh-CN': '删除中', 'zh-TW': '刪除中', ja: '削除中', ko: '삭제 중' , "es":"Eliminando","fr":"Suppression en cours","de":"Wird gelöscht","pt-PT":"A eliminar","pt-BR":"Excluindo","zh-Hant-x-lzh":"方刪","zh-Hans-x-lzh":"方删"},
     },
     tone: 'neutral',
   },
@@ -68,7 +72,7 @@ const ATTENTION_COPY: RemoteLocalizedText = {
     'zh-TW': '需要注意',
     ja: '確認が必要',
     ko: '확인 필요',
-  },
+    "es":"Requiere atención","fr":"Attention requise","de":"Handlungsbedarf","pt-PT":"Requer atenção","pt-BR":"Precisa de atenção","zh-Hant-x-lzh":"需留意","zh-Hans-x-lzh":"需留意"},
 };
 
 function resourceRef(id: string) {
@@ -91,7 +95,14 @@ function sourceRevision(source: BotRemoteResourceSource): string {
     source.activityAt,
     source.canonicalSessionId ?? '',
     source.needsAttention ? 1 : 0,
+    followingDigest(source.followingSessionIds ?? []),
   ].join(':');
+}
+
+/** Short stand-in for the followed task list, so revisions stay small however many tasks. */
+function followingDigest(sessionIds: readonly string[]): string {
+  if (!sessionIds.length) return '';
+  return createHash('sha256').update(sessionIds.join('\n')).digest('hex').slice(0, 16);
 }
 
 export function botRemoteCollectionItemFromSource(
@@ -105,6 +116,8 @@ export function botRemoteCollectionItemFromSource(
     ref: resourceRef(source.id),
     display: {
       title: source.name,
+      teammateActivity: { phase: source.needsAttention ? 'error'
+        : source.lastMessageRole === 'assistant' && source.lastMessageAt === source.lastReplyAt ? 'completed' : 'idle' },
       lastReplyAt: source.lastReplyAt ?? 0,
       ...(source.description ? { subtitle: source.description } : {}),
       ...(source.lastMessagePreview ? { preview: source.lastMessagePreview } : {}),
@@ -126,12 +139,15 @@ export function botRemoteCollectionItemFromSource(
         ? { badges: [{ accessibilityLabel: ATTENTION_COPY, tone: 'warning' as const }] }
         : {}),
     },
-    links: source.canonicalSessionId
-      ? [{
-          rel: 'conversation',
-          target: { kind: 'session', sessionId: source.canonicalSessionId },
-        }]
-      : [],
+    links: [
+      ...(source.canonicalSessionId
+        ? [{ rel: 'conversation', target: { kind: 'session' as const, sessionId: source.canonicalSessionId } }]
+        : []),
+      ...(source.followingSessionIds ?? []).map((sessionId) => ({
+        rel: BOT_FOLLOWING_LINK_REL,
+        target: { kind: 'session' as const, sessionId },
+      })),
+    ],
     revision: sourceRevision(source),
   };
 }

@@ -1,5 +1,7 @@
 import { isChatOnlyGroupLane } from '../../shared/botGroupChat.js';
 import { buildTeammateGuide as buildBotCapabilityContextPrompt } from './teammateGuide.js';
+import { BOT_DENIED_TOOLS_VENDOR_KEY, readBotSystemSkillsOff } from '../../shared/botSystemSkills.js';
+import { teammateDeniedTools } from '@cindy/mcps';
 import { and, desc, eq, inArray } from 'drizzle-orm';
 import { buildBotMemoryScopeKey } from '@cindy/maker-core';
 import { createHash, randomUUID } from 'node:crypto';
@@ -28,6 +30,7 @@ import { PROVIDER_NAME_TO_PLUGIN_ID } from '../maker-host/plugins/builtin-plugin
 import { normalizeBotToolCapabilities } from '../../shared/botCapabilitySelection.js';
 import { BOT_BASELINE_PLUGIN_IDS } from '../maker-host/plugins/types.js';
 import { BOT_IM_CHANNELS_VENDOR_KEY, type BotImChannel } from '../../shared/botImConnection.js';
+import businessOwnershipPrompt from '../maker-host/business-ownership-prompt.md?raw';
 
 const log = createLogger('maker-ipc:bot-profile-runtime');
 
@@ -43,7 +46,7 @@ interface BotSkillCatalogItem {
 
 interface BotMcpCatalogItem {
   name: string;
-  source: 'builtin' | 'custom';
+  source: 'builtin' | 'custom' | 'harness';
   available?: boolean;
   generation?: string;
 }
@@ -295,6 +298,7 @@ export function buildBotProfileContextPrompt(displayName: string): string {
     `Active Cindy Bot profile: ${name}.`,
     'Your name is the active profile name; your personality, role, and relationship with the user come from the current SOUL and user profile. Keep them consistent across replies, context compaction, restarts, and model changes. Do not reverse who is the boss or invent a relationship from habitual forms of address. Correct earlier replies that conflict with the current profile instead of treating them as identity facts.',
     'The user is talking to this named teammate inside Cindy. Pi, Claude Code, and Codex are execution engines, not your personal identity or the user-facing application. Their native coding instructions describe how to use tools; they do not replace your profile. If asked about the engine or model, distinguish it from your identity and only state runtime facts you can verify.',
+    businessOwnershipPrompt.trim(),
     'Use available host tools for model changes and verify their results before claiming a change. Connecting a new model or signing in to a provider is managed in Cindy settings. Do not present terminal-only slash commands such as /login or /model as commands available in this chat or assume the user is in a Pi terminal. When the exact Cindy entry is unknown, say so rather than inventing steps. When the user asks about a native CLI, explain which instructions belong to that terminal. This distinction does not restrict native tools, Pi package management, extensions, or self-repair.',
   ].join('\n');
 }
@@ -434,7 +438,7 @@ export function resolveBotMcpReferences(input: {
 }): { resolved: string[]; unavailable: string[] } {
   const available = new Set(
     input.catalog
-      .filter((item) => item.source === 'custom' && item.available !== false)
+      .filter((item) => item.source !== 'builtin' && item.available !== false)
       .map((item) => item.name),
   );
   if (input.mode === 'inherit') {
@@ -506,10 +510,10 @@ export async function hydrateBotProfileRuntime(
   // Group lanes, IM channel lanes and private-chat topics are long-lived like the
   // canonical Chat and share its Profile/Home. Channel lanes and topics are
   // full-profile lanes (not chat-only).
-  if (!row || !['canonical', 'delegation', 'group', 'channel', 'thread'].includes(row.role)) return null;
+  if (!row || !['canonical', 'delegation', 'group', 'channel', 'thread', 'routine'].includes(row.role)) return null;
   // A private-chat topic is the owner's own conversation, so it carries the main
   // Chat's owner-private abilities (cindy-bots-runtime.md「私聊话题」).
-  const ownerChat = row.role === 'canonical' || row.role === 'thread';
+  const ownerChat = row.role === 'canonical' || row.role === 'thread' || row.role === 'routine';
   const [profile] = await db
     .select()
     .from(botProfiles)
@@ -872,6 +876,11 @@ export async function hydrateBotProfileRuntime(
   // 三层装配(见 botSystemPrompt.ts):身份与「你会做什么」进稳定段,会话控制等
   // 进上下文段,技能索引与记忆快照进易变段并排在最后。能力说明按**这个伙伴
   // 实际挂载到的 toolset** 注入 —— 挂了 docs 才讲怎么做文件,没挂的一个字不提。
+  const systemSkillsOff = readBotSystemSkillsOff(config.systemSkillsOff);
+  // Calls are denied live by the helper; Pi also leaves these direct tools out of its listing.
+  if (systemSkillsOff.length > 0) {
+    opts.vendorOptions = { ...(opts.vendorOptions ?? {}), [BOT_DENIED_TOOLS_VENDOR_KEY]: [...teammateDeniedTools(systemSkillsOff)] };
+  }
   const promptCapabilities: BotPromptCapabilitySignals = {
     toolsets: resolvedToolsets,
     memoryEnabled: memoryEngineEnabled && config.memory !== false,
@@ -879,7 +888,8 @@ export async function hydrateBotProfileRuntime(
     // the essential helper. It is not the generic Orca/team-worker surface and
     // therefore must not depend on optional toolset inheritance.
     partnerActionsEnabled: row.role === 'canonical' && helperAvailable,
-    routinesEnabled: ownerChat && helperAvailable && !opts.remoteHostId,
+    routinesEnabled: ownerChat && helperAvailable && !opts.remoteHostId && !systemSkillsOff.includes('routine'),
+    followEnabled: !systemSkillsOff.includes('follow'),
     botCreationEnabled: ownerChat && helperAvailable,
     // Skill management is available before the first Skill exists. An empty
     // index must not hide the instructions for learning the first reusable method.
@@ -952,6 +962,7 @@ export async function hydrateBotProfileRuntime(
       ...(ownerChat
         ? [buildBotCapabilityContextPrompt({ helperAvailable, cindyAvailable,
           ownSkillsEnabled: promptCapabilities.ownSkillsEnabled,
+          systemSkillsOff,
           // Same local canonical boundary as isBotAuthorizationSession; remote Pi still has plugins.
           pluginAuthorizationCardsEnabled: opts.remoteHostId == null })]
         : []),
@@ -1124,7 +1135,7 @@ export async function hydrateBotProfileRuntime(
     : null;
   // Canonical Chats, private-chat topics, group lanes and IM channel lanes follow
   // Profile updates; delegation children stay frozen.
-  const followsProfile = row.role === 'canonical' || row.role === 'thread' || row.role === 'group' || row.role === 'channel';
+  const followsProfile = row.role === 'canonical' || row.role === 'thread' || row.role === 'routine' || row.role === 'group' || row.role === 'channel';
   const runtimeEpochChanged = followsProfile && previousSnapshot !== undefined
     ? previousSnapshot.profileVersion !== row.profileVersion
       || previousRuntimeEpoch?.sha256 !== runtimeEpochSha256

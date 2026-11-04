@@ -211,6 +211,22 @@ describe('mcp:custom:* CRUD handlers', () => {
     expect(deps.invalidateCodex).toHaveBeenCalledOnce();
   });
 
+  // P1 integration: both production write handlers reject the engine-owned id
+  // before storing or refreshing it; the config validator is not mocked.
+  it('rejects native Apps collisions on create and update before side effects', async () => {
+    mountDb();
+    const harness = new IpcHarness();
+    const deps = makeDeps();
+    registerMcpHandlers(harness, deps);
+    for (const channel of [MAKER_INVOKE.MCP_CUSTOM_CREATE, MAKER_INVOKE.MCP_CUSTOM_UPDATE]) {
+      await expect(harness.invoke(channel, { ...validConfig, id: 'codex_apps' })).rejects.toThrow(/reserved/);
+    }
+    expect(await listCustomMcpServers()).toEqual([]);
+    expect(deps.refreshProviders).not.toHaveBeenCalled();
+    expect(deps.broadcastChanged).not.toHaveBeenCalled();
+    expect(deps.invalidateCodex).not.toHaveBeenCalled();
+  });
+
   it('a failing invalidateCodex does not fail the CRUD (best-effort)', async () => {
     mountDb();
     const harness = new IpcHarness();

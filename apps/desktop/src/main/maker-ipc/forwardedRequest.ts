@@ -24,13 +24,29 @@ export function requestSourceFromInput(sessionId: string, input: RequestInputEvi
   return { userText: null };
 }
 
-/** Only companion task instructions opt in. Accepted input wins over queued text; model labels are not evidence. */
+/**
+ * IM turns call Session.send directly, without an accepted coordinator input. The lane's
+ * per-turn lease names the owner's persisted message (stamped by the IM runner after the
+ * row was written); only an owner requester supplies original words.
+ */
+export async function ownerChannelInputEvidence(
+  lane: { requesterIsOwner: boolean; inputClientId?: string } | null,
+  readUserText: (clientId: string) => Promise<string | null>,
+): Promise<RequestInputEvidence | null> {
+  if (!lane?.requesterIsOwner || !lane.inputClientId) return null;
+  const text = await readUserText(lane.inputClientId);
+  return text?.trim() ? { clientId: lane.inputClientId, authoredText: text } : null;
+}
+
+/** Host request handoffs opt in. Accepted input wins over queued text; model labels are not evidence. */
 export async function captureAgentRequest(
   sessionId: string,
   supplement: string,
   active: RequestInputEvidence | null,
   readLatestInput: () => Promise<AutoReviewHistoryMessage[]>,
   preserveUserRequest = false,
+  /** The host admitted this call as the owner's request or its accepted continuation. */
+  ownerVerified = false,
 ): Promise<CapturedAgentRequest> {
   if (!preserveUserRequest) return { message: supplement, autoReviewUserText: { kind: 'agent-request' } };
   let source: ForwardedRequestSource;
@@ -50,8 +66,14 @@ export async function captureAgentRequest(
       ...(delegated ? { delegatedRequest: delegated } : {}),
     }) : { userText: null };
   }
-  return { message: formatForwardedRequest(source, supplement),
-    autoReviewUserText: { kind: 'agent-request', request: source } };
+  // An accepted relay still names the same owner request. Only the current
+  // input can carry that evidence; a historical fallback cannot revive it.
+  const request: ForwardedRequestSource = { ...source };
+  delete request.ownerVerified;
+  if ((ownerVerified || active?.delegatedRequest?.ownerVerified === true) && request.userText !== null)
+    request.ownerVerified = true;
+  return { message: formatForwardedRequest(request, supplement),
+    autoReviewUserText: { kind: 'agent-request', request } };
 }
 
 /** Quote only a real owner request. Missing-source envelopes remain readable through the shared legacy validator. */

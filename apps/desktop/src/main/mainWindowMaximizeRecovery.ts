@@ -161,6 +161,10 @@ export function installMainWindowNativeRestoreIntent(
   win.webContents.on('before-input-event', onBeforeInputEvent);
 
   return (): void => {
+    // The caller unhooks from the window's 'closed' event, when the native window is already
+    // gone: its listeners and message hook died with it, and calling into it throws
+    // "Object has been destroyed" (seen as an uncaughtException during update relaunch).
+    if (win.isDestroyed()) return;
     win.removeListener('will-move', onWillMove);
     win.removeListener('will-resize', onWillResize);
     win.unhookWindowMessage(WM_SYSCOMMAND);

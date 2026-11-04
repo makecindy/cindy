@@ -15,14 +15,17 @@ const DRAWER_CLOSE_VELOCITY = -800;
 
 /** Container only: Home owns every list row, search, group, menu and subscription. */
 export function SessionListDrawer({ currentSessionId, persistent = false, newSessionInSystemBar = false,
-  onClose, onClosed, onSelectSession, runNavigation, newSessionActionRef, open, width,
+  onClose, onClosed, onSelectSession, runNavigation, newSessionActionRef, open, width, topInset,
 }: {
   currentSessionId: string;
+  /** Overrides the safe-area top where the task bar sits inside the status area (Duo). */
+  topInset?: number;
   persistent?: boolean;
   newSessionInSystemBar?: boolean;
   onClose(): void;
   onClosed?(): void;
-  onSelectSession(item: RemoteSessionListItem): void;
+  /** Without an override, Home uses its normal navigation and task history. */
+  onSelectSession?(item: RemoteSessionListItem): void;
   runNavigation(action: () => void): void;
   newSessionActionRef?: MutableRefObject<(() => void) | null>;
   open: boolean;
@@ -199,9 +202,12 @@ export function SessionListDrawer({ currentSessionId, persistent = false, newSes
         onPress={onClose} style={styles.scrimPressable} testID="sessionDrawer.scrim" />
     </Animated.View> : null}
     <GestureDetector gesture={panGesture}>
-      <Animated.View style={[styles.panel, { paddingLeft: insets.left, paddingTop: insets.top, width: panelWidth },
+      <Animated.View style={[styles.panel, { paddingLeft: insets.left, paddingTop: topInset ?? insets.top, width: panelWidth },
         !persistent && panelStyle]} testID="sessionDrawer.panel">
-        <View ref={homeContentRef} style={styles.content}>
+        {/* The host keeps the first navigation intent. Stop all list input during exit so a
+            second selection cannot change preferences while its route is discarded. */}
+        <View ref={homeContentRef} style={styles.content} pointerEvents={open ? 'auto' : 'none'}
+          accessibilityElementsHidden={!open} importantForAccessibility={open ? 'auto' : 'no-hide-descendants'}>
           <MobileHome newSessionActionRef={newSessionActionRef} width={width} currentSessionId={currentSessionId}
             newSessionInSystemBar={newSessionInSystemBar} newSessionInHeader={!persistent}
             onSelectSession={onSelectSession} runNavigation={runNavigation} />

@@ -125,17 +125,17 @@ describe('历史窗口空洞 — 跨空洞不合并工作组', () => {
     expect(groupContains(beforeGap[0], 't2')).toBe(false);
   });
 
-  it.each([false, true])('伙伴投影保留空洞前答复，只有仍在运行的一轮露出工作过程，active=%s', (streaming) => {
+  it.each([false, true])('伙伴投影保留空洞两侧的正文与独立工作组，active=%s', (streaming) => {
     const { items } = buildRenderItems(gapMessages());
     const projected = simplifyBotRenderItems(groupWorkRuns(items, streaming), streaming);
     const prose = projected.flatMap((item) => item.type === 'message' && item.message.role === 'assistant'
       ? [item.message.clientId] : []);
-    expect(prose).toEqual(streaming ? ['a1'] : ['a1', 'a2']);
+    expect(prose).toEqual(['a1', 'a2']);
     const groups = workGroups(projected);
-    // 空洞前那一轮已做完，工作过程随之离开（cindy-bots-runtime.md，2026-10-20「做完了，去掉」）；
-    // 运行中的空洞后一轮仍露出自己的工作组，且不吞进空洞前的动作。
-    expect(groups.some((group) => groupContains(group, 't1'))).toBe(false);
-    expect(groups.some((group) => groupContains(group, 't2'))).toBe(streaming);
+    // 完成的过程仍可展开，但不能跨空洞合并两轮动作。
+    expect(groups.some((group) => groupContains(group, 't1'))).toBe(true);
+    expect(groups.some((group) => groupContains(group, 't2'))).toBe(true);
+    expect(groups.some((group) => groupContains(group, 't1') && groupContains(group, 't2'))).toBe(false);
     expect(projected.some(item => item.type === 'tool_segment')).toBe(false);
   });
 
@@ -233,8 +233,8 @@ describe('历史窗口空洞 — 长任务不被误判', () => {
     const projected = simplifyBotRenderItems(grouped, false);
     expect(projected.flatMap((item) => item.type === 'message' && item.message.role === 'assistant'
       ? [item.message.clientId] : [])).toEqual(['a1']);
-    // 伙伴的这一轮已做完：工作过程整块离开，进度文字也不外露，只留最终答复。
-    expect(workGroups(projected)).toEqual([]);
+    // 完成后进度文字进入可展开过程，最终答复留在外面。
+    expect(workGroups(projected)).toEqual(groups);
   });
 });
 

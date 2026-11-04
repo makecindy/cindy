@@ -29,7 +29,7 @@ import { describeAgentAuthError } from '@/device-link/remoteStatus';
 import type { InputProjection } from '@/session/types';
 import type { ErrorDiagnosisSource } from '@/session/errorDiagnosisPrompt';
 import { inputProjectionErrorI18nKey } from '@/session/inputProjectionError';
-import { localizeAgentError, localizeUnclassifiedAgentError, requiresAgentErrorConfigurationChange } from '@/session/agentErrorI18n';
+import { describeNonRetryableAgentError, localizeAgentError, localizeUnclassifiedAgentError, requiresAgentErrorConfigurationChange } from '@/session/agentErrorI18n';
 import {
   fontWeight,
   iconSize,
@@ -49,6 +49,8 @@ export interface InlineQueueSectionProps {
   readOnlyReason?: string | null;
   onResume(): void;
   onRetryError(): void;
+  /** 无重发记录时，沿用隐藏续跑指令；有记录仍优先按原记录重试。 */
+  onContinueAfterError?(): void;
   onClearError(): void;
   /** 取消账号限额重置后的自动继续(只在投影带 usageLimitWait 时出现)。 */
   onCancelUsageLimitWait?(): void;
@@ -64,6 +66,7 @@ export function InlineQueueSection({
   readOnlyReason,
   onResume,
   onRetryError,
+  onContinueAfterError,
   onClearError,
   onCancelUsageLimitWait,
   onDiagnose,
@@ -81,12 +84,16 @@ export function InlineQueueSection({
   const controlsDisabled = busy || !!readOnlyReason;
   const errorDisabledReason = readOnlyReason
     || (busy ? t('message.queuePresentation.row.busy') : null);
-  const retryable = !requiresAgentErrorConfigurationChange(projection.error ?? '');
+  // Keep token-based retries on their existing path; hidden continuation uses
+  // the same exclusions as the persisted-tail continuation action.
+  const retryable = !requiresAgentErrorConfigurationChange(projection.error ?? '')
+    && (!!projection.errorRetryText || describeNonRetryableAgentError(projection.error ?? '', projection.errorReason) === null);
   const retryDisabledReason = errorDisabledReason
-    || (!projection.errorRetryText ? t('message.queue.noRetryContent') : null);
+    || (!projection.errorRetryText && !onContinueAfterError ? t('message.queue.noRetryContent') : null);
   const localizedAgentError = localizeAgentError(
     projection.errorReason,
     projection.toolLoop ?? null,
+    projection.error ?? '',
   );
   const projectionErrorKey = projection.error
     ? inputProjectionErrorI18nKey(projection.error)
@@ -129,7 +136,7 @@ export function InlineQueueSection({
               busy={busy}
               hint={retryDisabledReason ?? undefined}
               label={t('message.queue.retrySend')}
-              onPress={onRetryError}
+              onPress={projection.errorRetryText ? onRetryError : (onContinueAfterError ?? onRetryError)}
               testID="queue.inline.retryButton"
             /> : null}
             {onRecoverHistory ? <ReadableHistoryRecovery onRecover={onRecoverHistory} busy={busy} disabled={controlsDisabled} /> : null}

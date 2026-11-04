@@ -402,8 +402,11 @@ describe('跨实现一致性 — IM cardBuilders vs hook composeInteractionCard'
 
     // 两侧都渲染 toolName 与入参摘要, 但上限不同(600 单行 vs 800 pretty) —— 渲染差异
     expect(hook.card.body).toContain('Bash');
+    expect(hook.card.body).toContain('echo ');
     expect(hook.card.body.length).toBeLessThan(800);
-    expect(im.body).toContain('command');
+    // Shell calls show the command itself, not its JSON envelope.
+    expect(im.body).toContain('echo ');
+    expect(im.body).not.toContain('"command"');
     expect(im.body!.length).toBeLessThan(1000);
     expect(im.body).not.toContain('自动审批没完成');
   });
@@ -415,11 +418,26 @@ describe('跨实现一致性 — IM cardBuilders vs hook composeInteractionCard'
       metadata: { autoReviewUnavailable: true },
     });
     expect(im.body).toContain('自动审批没完成，请确认要不要允许这次操作。');
-    expect(im.body).toContain('command');
+    expect(im.body).toContain('echo ');
     expect(im.buttons.map((b) => b.id)).toEqual([
       'permission:allow:once',
       'permission:deny',
     ]);
+  });
+
+  it('AI ask 的富卡片写明审阅原因，且只能允许这一次', () => {
+    const request = {
+      ...PERMISSION_RICH,
+      requestId: 'req-perm-ask',
+      metadata: { autoReviewReason: '这会删除所有 iOS 模拟器，你只让我排查键盘问题。' },
+    };
+    const im = cards.buildPermissionCard(request);
+    expect(im.body).toContain('自动审批需要你决定：这会删除所有 iOS 模拟器，你只让我排查键盘问题。');
+    expect(im.buttons.map((b) => b.id)).toEqual(['permission:allow:once', 'permission:deny']);
+    const hook = composeInteractionCard(request);
+    expect(hook?.card.body).toContain('自动审批需要你决定：');
+    expect(hook?.card.buttons.map((b) => b.id)).toEqual(['perm:allow', 'perm:deny']);
+    expect(hook?.decisions.has('perm:always')).toBe(false);
   });
 
   it('安全默认: IM cancelPending 与 hook defaultDecision 同形(只有 reason 由渠道给)', async () => {
@@ -536,4 +554,13 @@ describe('多题/多选打勾卡(仅提供 ui.cards.ask.multi 的渠道, 目前�
     expect(optionButtons[0].label).toBe('1·A');
     expect(spec.body).not.toContain(ui.cards.ask.noOptionsHint);
   });
+});
+
+// unit: same page request must offer the same scope in IM and Desktop.
+// Minimum input is one permission with Main-owned once/session metadata.
+it.each(['once', 'session'])('IM page permission scope %s preserves the existing answer contract', scope => {
+  const request: PermissionRequest = { ...PERMISSION_RICH, metadata: { mcpApp: { scope } },
+    suggestions: scope === 'session' ? [{ destination: 'session' }] : undefined };
+  const card = cards.buildPermissionCard(request);
+  expect(card.buttons?.some(button => button.id === 'permission:allow:always')).toBe(scope === 'session');
 });

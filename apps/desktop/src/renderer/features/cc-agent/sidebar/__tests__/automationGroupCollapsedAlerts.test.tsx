@@ -19,6 +19,10 @@ import { act, cleanup, fireEvent, render, screen } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type { Session } from '@/lib/ccAgent.types';
+import type {
+  AutomationScheduleAction,
+  AutomationSessionGroup,
+} from '../../lib/automationSidebarGrouping';
 import { addSessionAttention, clearSessionAttention } from '@/lib/sessionAttentionStore';
 import {
   applyRemoteSessionActivity,
@@ -57,8 +61,16 @@ vi.mock('@/components/ui/tooltip', () => ({
 vi.mock('@/components/ui/dropdown-menu', () => ({
   DropdownMenu: ({ children }: { children: React.ReactNode }) => children,
   DropdownMenuTrigger: ({ children }: { children: React.ReactNode }) => children,
-  DropdownMenuContent: () => null,
-  DropdownMenuItem: () => null,
+  DropdownMenuContent: ({ children }: { children: React.ReactNode }) => children,
+  DropdownMenuItem: ({
+    children,
+    onSelect,
+    disabled,
+  }: {
+    children: React.ReactNode;
+    onSelect?: () => void;
+    disabled?: boolean;
+  }) => createElement('button', { role: 'menuitem', onClick: onSelect, disabled }, children),
   DropdownMenuSeparator: () => null,
 }));
 
@@ -117,12 +129,16 @@ function GroupHarness({
   urgentSessionIds,
   initialCollapsed,
   onSessionClick = noop,
+  onScheduleAction = noop,
+  deviceLinkDeviceId,
 }: {
   sessions: Session[];
   notifications: string[];
   urgentSessionIds: ReadonlySet<string>;
   initialCollapsed: boolean;
   onSessionClick?: (sessionId: string) => void;
+  onScheduleAction?: (group: AutomationSessionGroup, action: AutomationScheduleAction) => void;
+  deviceLinkDeviceId?: string;
 }) {
   const [collapsed, setCollapsed] = useState(initialCollapsed);
   return createElement(SessionAttentionUrgencyProvider, {
@@ -132,6 +148,7 @@ function GroupHarness({
         id: 'schedule:sched-1',
         scheduleId: 'sched-1',
         scheduleStatus: 'active',
+        deviceLinkDeviceId,
         title: '产品决策巡检',
         sessions,
         attentionSessionIds: notifications,
@@ -145,7 +162,7 @@ function GroupHarness({
       onAction: noop,
       onRename: noop,
       onTogglePin: noop,
-      onScheduleAction: noop,
+      onScheduleAction,
     }),
   });
 }
@@ -190,6 +207,47 @@ beforeEach(() => {
 });
 
 describe('AutomationSessionGroupItem — 收起态的未处理告警', () => {
+  // Feature regression (unit): the actual group menu must dispatch all members,
+  // even while collapsed. Existing alert tests do not exercise menu actions.
+  // Minimal input: two hidden runs; remote and archived-only groups cannot archive.
+  // Standalone validation: Vitest 2.71s, tests 159ms (2026-10-27).
+  it.each(['local', 'remote', 'archived'] as const)(
+    'offers bulk archive only for active local groups (%s)',
+    (kind) => {
+      const onScheduleAction = vi.fn();
+      const sessions = RUNS.slice(0, 2).map((run) => ({
+        ...run,
+        status: kind === 'archived' ? ('archived' as const) : ('active' as const),
+      }));
+      const { container } = render(
+        createElement(GroupHarness, {
+          sessions,
+          notifications: [],
+          urgentSessionIds: new Set<string>(),
+          initialCollapsed: true,
+          onScheduleAction,
+          deviceLinkDeviceId: kind === 'remote' ? 'other-computer' : undefined,
+        }),
+      );
+      expect(childRunIds(container)).toEqual([]);
+      const menuItem = screen.queryByRole('menuitem', {
+        name: 'ccAgent.sidebar.projectAction.archivedAll',
+      });
+      if (kind === 'remote') {
+        expect(menuItem).toBeNull();
+      } else {
+        expect(menuItem).not.toBeNull();
+        fireEvent.click(menuItem!);
+        if (kind === 'archived') expect(onScheduleAction).not.toHaveBeenCalled();
+        else
+          expect(onScheduleAction).toHaveBeenCalledWith(
+            expect.objectContaining({ sessions }),
+            'archive-all',
+          );
+      }
+    },
+  );
+
   it('无告警时收起就是收起:组头不点状态、不渲染子行', () => {
     const { container } = renderGroup();
     expect(childRunIds(container)).toEqual([]);

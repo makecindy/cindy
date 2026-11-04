@@ -34,6 +34,7 @@ export type GhostSetupEnsureResult =
         | 'TIMEOUT'
         | 'INTERNAL'
         | 'GHOST_NOT_FOUND'
+        | 'GHOST_NAMESPACE_MISMATCH'
         | 'GHOST_RETIRED'
         | 'GHOST_ASLEEP'
         | 'GHOST_DISABLED_IN_WORKDIR'
@@ -49,6 +50,7 @@ export type GhostSetupTargetValidation =
       ok: false;
       errorCode:
         | 'GHOST_NOT_FOUND'
+        | 'GHOST_NAMESPACE_MISMATCH'
         | 'GHOST_RETIRED'
         | 'GHOST_ASLEEP'
         | 'GHOST_DISABLED_IN_WORKDIR'
@@ -115,6 +117,7 @@ export interface GhostSetupCoordinatorDeps {
   timeoutMs?: number;
   terminalGraceMs?: number;
   timeoutMessage?: () => string;
+  cancelledMessage?: () => string;
   createRequestId?: () => string;
   logger?: {
     warn: (message: string, context?: Record<string, unknown>) => void;
@@ -161,7 +164,7 @@ export class GhostSetupCoordinator {
 
   async ensureReady(request: GhostSetupEnsureRequest): Promise<GhostSetupEnsureResult> {
     const cancelled = (): GhostSetupEnsureResult => ({
-      ok: false, errorCode: 'SETUP_CANCELLED', message: 'Plugin setup was cancelled; no plugin operation was executed.',
+      ok: false, errorCode: 'SETUP_CANCELLED', message: this.cancelledMessage(),
     });
     if (request.signal?.aborted) return cancelled();
     const expectedTarget = this.deps.getTargetToken?.(request.ghostId);
@@ -496,7 +499,7 @@ export class GhostSetupCoordinator {
             {
               ok: false,
               errorCode: 'SETUP_CANCELLED',
-              message: '用户取消了插件设置，本次调用未执行。',
+              message: this.cancelledMessage(),
             },
             'cancelled',
             command.cleanupReason ? 0 : undefined,
@@ -627,6 +630,10 @@ export class GhostSetupCoordinator {
         );
       }, this.deps.timeoutMs ?? DEFAULT_SETUP_TIMEOUT_MS);
     });
+  }
+
+  private cancelledMessage(): string {
+    return this.deps.cancelledMessage?.() ?? 'Plugin setup was cancelled; this call was not run.';
   }
 
   private internalFailure(message: string, error: unknown): GhostSetupEnsureResult {

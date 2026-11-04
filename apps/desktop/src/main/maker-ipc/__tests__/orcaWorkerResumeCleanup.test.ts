@@ -76,6 +76,11 @@ describe('resumeOrcaWorkerSessionIfMissing runtime cleanup', () => {
       permissionModeOrAsk: (value: unknown) => value,
       directoryGrantsForRuntime: () => ({}),
       ensureRemoteReadyForSessionStart: async () => undefined,
+      // 本 PR 在 worker 唤醒路径补了任务级窗口预算注入（register.ts 的
+      // applySessionContextWindowBudgetToCreateOpts）；切片执行时它作为自由变量
+      // 出现，必须注入，否则 ReferenceError 盖住被测的失败出口语义。
+      getActiveCatalog: () => undefined,
+      applySessionContextWindowBudgetToCreateOpts: async () => undefined,
       bootstrapSession,
       markOrcaRoleIfNeeded,
       log: { info: vi.fn(), warn: vi.fn() },

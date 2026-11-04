@@ -95,6 +95,7 @@ interface WorkGroupRenderItem {
    *  动作段展开后直接显示思考 / 工具行;外层展开后显示 assistant 文字和
    *  仍保持折叠的内层动作段。tool_media 不参与合并,继续留在组外可见。 */
   type: 'work_group';
+  teammateJournal?: boolean;
   key: string;
   children: WorkGroupChildItem[];
   deferred?: import('@cindy/maker-shared/message-window').DeferredHistoryWork;
@@ -531,6 +532,7 @@ export function groupWorkRuns(items: RenderItem[], isSessionStreaming: boolean):
     isUserBoundary: (item) => item.type === 'message' && item.message.role === 'user' && !isSteerUserRow(item.message),
     isContinuationBoundary: (item) => item.type === 'message' && isContinuationMessage(item.message),
     isAnswer: isAssistantAnswerCandidate,
+    canPrependToAnswer: (item) => item.type !== 'message' || item.message.assistantPhase !== 'commentary',
     isSealedAnswer: (item) => item.type === 'message' && isCompletedAssistantMessage(item.message),
     isCompactBoundary: isCompactBoundaryItem,
     isActivity: isWorkActivityItem,

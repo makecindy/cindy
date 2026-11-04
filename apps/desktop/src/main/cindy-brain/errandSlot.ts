@@ -459,7 +459,8 @@ export class GhostErrandSlot {
     return 'background';
   }
 
-  private consumeUserGesture(ghostId: string): boolean {
+  /** Host 槽共用一次性手势；消费后不能再用于派活或任务页跳转。 */
+  consumeUserGesture(ghostId: string): boolean {
     const expiresAt = this.userGestures.get(ghostId);
     if (expiresAt === undefined) return false;
     this.userGestures.delete(ghostId);

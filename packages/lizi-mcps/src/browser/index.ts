@@ -7,3 +7,4 @@ export * from './tools.js';
 // user-recipe layer (parseRecipes/parseSiteGuides) without deep-importing.
 // loadRecipes()'s import.meta.glob only runs when called, so this is import-safe.
 export * from './recipe-loader.js';
+export * from './experience.js';

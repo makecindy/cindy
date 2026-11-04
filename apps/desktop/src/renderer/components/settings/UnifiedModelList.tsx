@@ -88,6 +88,7 @@ import {
   resolveModelIconKind,
 } from '@cindy/model-providers';
 import type { AgentKind, CatalogModel, ProviderView } from '@cindy/model-providers';
+import { modelCompactionTarget } from '../../../shared/modelContextLimit';
 
 const AGENT_LABEL: Record<AgentKind, string> = {
   'claude-code': 'Claude Code',
@@ -117,6 +118,7 @@ const CAPABILITY_CATEGORIES = new Set<ModelCategory>([
   'stt',
   'realtime',
   'embedding',
+  'decision',
   'compression',
   'other',
 ]);
@@ -174,10 +176,7 @@ export interface UnionModelRow {
  * 否则并集出现两行、各自被误标单端。
  */
 function canonicalModelKey(provider: ProviderView, agent: AgentKind, id: string): string {
-  for (const prefix of provider.routing[agent]?.modelPrefixes ?? []) {
-    if (id.startsWith(prefix)) return id.slice(prefix.length);
-  }
-  return id;
+  return modelCompactionTarget(provider, agent, id).modelId;
 }
 
 /** 构建并集(导出供单测):行序 = 第一个 agent 的目录序,后续 agent 独占模型追加其后;
@@ -937,7 +936,7 @@ export function UnifiedModelList({
         : explicitIcon === 'codex'
           ? 'openai'
           : explicitIcon === 'cindy'
-            ? 'xd'
+            ? 'cindy'
             : brand?.logoKind;
     const paymentRequired = isRowPaymentRequired(row);
     // 能力注记:多 agent 供应商里缺少任一通道就标(单 agent 供应商头部已说明);
@@ -969,7 +968,7 @@ export function UnifiedModelList({
             <ProviderLogoMark
               providerId={provider.id}
               routing={provider.routing}
-              {...(logoKind ? { logoKind } : {})}
+              logoKind={logoKind ?? provider.logoKind}
               size={19}
             />
           ) : (
@@ -1095,9 +1094,6 @@ export function UnifiedModelList({
                 )}
               </p>
             </div>
-            {onAddSpeechModels && <Button variant="secondary" onClick={onAddSpeechModels}>
-              {t('settings.providers.speechSetup.add')}
-            </Button>}
             {onRefresh && (
               <button
                 type="button"
@@ -1115,7 +1111,7 @@ export function UnifiedModelList({
                 <Spinner icon={RefreshCw} size={14} spinning={refreshing} />
               </button>
             )}
-            {unionRows.length > 0 && (
+            {(unionRows.length > 0 || onAddSpeechModels) && (
               <DropdownMenu>
                 <DropdownMenuTrigger asChild>
                   <Button variant="secondary" size="sm" compact type="button" className="shrink-0">
@@ -1124,44 +1120,54 @@ export function UnifiedModelList({
                   </Button>
                 </DropdownMenuTrigger>
                 <DropdownMenuContent align="end">
-                  <DropdownMenuLabel>
-                    {t('settings.providers.models.manage.arrange')}
-                  </DropdownMenuLabel>
-                  <DropdownMenuRadioGroup
-                    value={managementView}
-                    onValueChange={(value) => {
-                      if (value === 'brand' || value === 'model') setManagementView(value);
-                    }}
-                  >
-                    <DropdownMenuRadioItem value="brand">
-                      {t('settings.providers.models.manage.byBrand')}
-                    </DropdownMenuRadioItem>
-                    <DropdownMenuRadioItem value="model">
-                      {t('settings.providers.models.manage.byName')}
-                    </DropdownMenuRadioItem>
-                  </DropdownMenuRadioGroup>
-                  <DropdownMenuSeparator />
-                  <DropdownMenuLabel>
-                    {t('settings.providers.models.manage.selection')}
-                  </DropdownMenuLabel>
-                  <DropdownMenuItem
-                    disabled={!visibilityWriteAvailable || selectedCount === writableRows.length}
-                    onSelect={() => handleBulk('show')}
-                  >
-                    {t('settings.providers.models.manage.showAll')}
-                  </DropdownMenuItem>
-                  <DropdownMenuItem
-                    disabled={!visibilityWriteAvailable || selectedCount === 0}
-                    onSelect={() => handleBulk('hide')}
-                  >
-                    {t('settings.providers.models.manage.hideAll')}
-                  </DropdownMenuItem>
-                  <DropdownMenuItem
-                    disabled={!visibilityWriteAvailable}
-                    onSelect={() => handleBulk('reset')}
-                  >
-                    {t('settings.providers.models.manage.reset')}
-                  </DropdownMenuItem>
+                  {onAddSpeechModels && (
+                    <DropdownMenuItem onSelect={onAddSpeechModels}>
+                      {t('settings.providers.speechSetup.add')}
+                    </DropdownMenuItem>
+                  )}
+                  {unionRows.length > 0 && (
+                    <>
+                      {onAddSpeechModels && <DropdownMenuSeparator />}
+                      <DropdownMenuLabel>
+                        {t('settings.providers.models.manage.arrange')}
+                      </DropdownMenuLabel>
+                      <DropdownMenuRadioGroup
+                        value={managementView}
+                        onValueChange={(value) => {
+                          if (value === 'brand' || value === 'model') setManagementView(value);
+                        }}
+                      >
+                        <DropdownMenuRadioItem value="brand">
+                          {t('settings.providers.models.manage.byBrand')}
+                        </DropdownMenuRadioItem>
+                        <DropdownMenuRadioItem value="model">
+                          {t('settings.providers.models.manage.byName')}
+                        </DropdownMenuRadioItem>
+                      </DropdownMenuRadioGroup>
+                      <DropdownMenuSeparator />
+                      <DropdownMenuLabel>
+                        {t('settings.providers.models.manage.selection')}
+                      </DropdownMenuLabel>
+                      <DropdownMenuItem
+                        disabled={!visibilityWriteAvailable || selectedCount === writableRows.length}
+                        onSelect={() => handleBulk('show')}
+                      >
+                        {t('settings.providers.models.manage.showAll')}
+                      </DropdownMenuItem>
+                      <DropdownMenuItem
+                        disabled={!visibilityWriteAvailable || selectedCount === 0}
+                        onSelect={() => handleBulk('hide')}
+                      >
+                        {t('settings.providers.models.manage.hideAll')}
+                      </DropdownMenuItem>
+                      <DropdownMenuItem
+                        disabled={!visibilityWriteAvailable}
+                        onSelect={() => handleBulk('reset')}
+                      >
+                        {t('settings.providers.models.manage.reset')}
+                      </DropdownMenuItem>
+                    </>
+                  )}
                 </DropdownMenuContent>
               </DropdownMenu>
             )}

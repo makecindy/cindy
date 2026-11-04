@@ -4,12 +4,14 @@ import type { ReactNode } from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { ProviderView } from '@cindy/model-providers';
 import { toast } from '@/lib/toast';
+import { setDataOwnerGeneration } from '@/contexts/dataOwnerGeneration';
 
 import type { ProviderGroupConfig } from '../../../../shared/providerGroup';
 import type { ProviderOwnUsageView, ProviderShareOwnerState, ProviderUsageHistoryView } from '../../../../shared/providerShare';
 import { __testing as localGroupsTesting } from '../../provider-group/useLocalProviderGroups';
 import { ProviderShareVisibilitySection } from '../ProviderShareVisibilitySection';
 import { ProviderShareManagePage } from '../ProviderShareManagePage';
+import { SubscriptionFastSetting } from '../SubscriptionFastSetting';
 import {
   getProviderSharePendingRequests,
   getProviderSharePendingReshares,
@@ -239,6 +241,46 @@ beforeEach(() => {
 });
 
 afterEach(() => cleanup());
+
+// Review R12: real setting + management IPC adapter, using this page's host
+// fixture. Prior page cases do not interleave a catalog push with save failure.
+// Unit tier: defer the IPC, refresh allowFast, then reject; the warning must
+// survive value refresh while identity/owner/unmount boundaries still discard it.
+describe('SubscriptionFastSetting save feedback', () => {
+  const subscription = (id = 'openai', allowFast = true) => ({
+    id, subscriptionFastPolicy: { allowFast },
+  } as ProviderView);
+
+  it('keeps the native failure warning after the committed catalog value arrives', async () => {
+    vi.mocked(toast.error).mockClear();
+    let reject!: (error: Error) => void;
+    command.mockImplementationOnce(() => new Promise((_resolve, fail) => { reject = fail; }));
+    const view = render(<SubscriptionFastSetting provider={subscription()} />);
+    expect(screen.getByRole('switch').getAttribute('aria-checked')).toBe('true');
+    fireEvent.click(screen.getByRole('switch'));
+    expect(command).toHaveBeenCalledWith({ action: 'set-fast-policy', providerId: 'openai', allowFast: false });
+    view.rerender(<SubscriptionFastSetting provider={subscription('openai', false)} />);
+    await act(async () => { reject(new Error('native busy')); });
+    expect(screen.getByRole('switch').getAttribute('aria-checked')).toBe('false');
+    expect(vi.mocked(toast.error)).toHaveBeenCalledExactlyOnceWith('subscriptionFastPolicy.saveFailed');
+    expect((screen.getByRole('switch') as HTMLButtonElement).disabled).toBe(false);
+  });
+
+  it.each(['provider', 'device', 'owner', 'unmount'])('discards a late failure across the %s boundary', async boundary => {
+    vi.mocked(toast.error).mockClear();
+    setDataOwnerGeneration('fast-owner-a');
+    let reject!: (error: Error) => void;
+    command.mockImplementationOnce(() => new Promise((_resolve, fail) => { reject = fail; }));
+    const view = render(<SubscriptionFastSetting provider={subscription()} />);
+    fireEvent.click(screen.getByRole('switch'));
+    if (boundary === 'provider') view.rerender(<SubscriptionFastSetting provider={subscription('anthropic')} />);
+    if (boundary === 'device') view.rerender(<SubscriptionFastSetting provider={subscription()} deviceId="other-computer" />);
+    if (boundary === 'owner') setDataOwnerGeneration('fast-owner-b');
+    if (boundary === 'unmount') view.unmount();
+    await act(async () => { reject(new Error('old native busy')); });
+    expect(vi.mocked(toast.error)).not.toHaveBeenCalled();
+  });
+});
 
 /** 「你自己」一行先出来；分享的人等分享读到后才有。 */
 async function findMemberRow(memberId = 'mem-1'): Promise<HTMLElement> {

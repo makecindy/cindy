@@ -14,6 +14,8 @@ import type { MonitoredAgentKind } from './agent-scan.js';
 interface Registration {
   kind: MonitoredAgentKind;
   role: AgentProcessRole;
+  /** 承载的宿主 session id；Codex 共享服务与未知归属为 null。 */
+  sessionId: string | null;
   instanceId: string;
   identity: symbol;
 }
@@ -23,6 +25,7 @@ const registrations = new Map<number, Registration>();
 export interface AgentProcessRegistration {
   kind: MonitoredAgentKind;
   role: AgentProcessRole;
+  sessionId: string | null;
   instanceId: string;
 }
 
@@ -30,9 +33,16 @@ export function registerAgentProcess(
   pid: number,
   kind: MonitoredAgentKind,
   role: AgentProcessRole,
+  sessionId?: string | null,
 ): () => void {
   const identity = Symbol(`${kind}-process-${pid}`);
-  registrations.set(pid, { kind, role, instanceId: randomUUID(), identity });
+  registrations.set(pid, {
+    kind,
+    role,
+    sessionId: sessionId ?? null,
+    instanceId: randomUUID(),
+    identity,
+  });
   let disposed = false;
   return () => {
     if (disposed) return;
@@ -52,6 +62,7 @@ export function resolveAgentProcessRegistration(pid: number): AgentProcessRegist
   return {
     kind: registration.kind,
     role: registration.role,
+    sessionId: registration.sessionId,
     instanceId: registration.instanceId,
   };
 }

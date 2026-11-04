@@ -19,7 +19,7 @@ const today = todoLocalDate(new Date(), zone);
 const friday = new Date(Date.now() + 3 * 86_400_000).toISOString().slice(0, 10);
 
 function items(caseName: string): TeammateTodo[] {
-  if (caseName === 'new') return [];
+  if (caseName === 'new' || caseName === 'activity' || caseName === 'routines') return [];
   return [
     todo('t1', 'Reply to MagicLizi about the release date 回 MagicLizi 的邮件，确认发版时间', 'mail', 'MagicLizi', {
       sourceDeadline: { kind: 'date', date: today, timeZone: zone },
@@ -48,6 +48,13 @@ mountPage({
       },
     } } },
     maker: { onBotWorkbenchChanged: subscription('todos') },
+    routines: {
+      list: async () => ctx.case === 'routines' ? [
+        { id: 'cleanup', botId: 'cindy-default', name: '磁盘低空间自动清理', enabled: true, updatedAt: Date.now(), triggers: [], prompt: '', revision: 1, createdAt: 1 },
+        { id: 'issues', botId: 'cindy-default', name: '跟进 issue 和 bug', enabled: false, updatedAt: Date.now() - 1, triggers: [], prompt: '', revision: 1, createdAt: 1 },
+      ] : [],
+      onChanged: subscription('routines'),
+    },
     deviceLink: { invoke: forbid('deviceLink.invoke'), onRemotePush: subscription('remote') },
     openPath: forbid('openPath'),
   }),
@@ -56,7 +63,7 @@ mountPage({
       <BotSessionContentHeaderRegistration
         bot={ctx.case === 'new'
           ? { id: 'bot-new', name: '葫芦', sessionId: 'chat-new', canonicalChat: true }
-          : { id: 'cindy-default', name: 'Cindy', templateId: 'cindy', sessionId: 'chat-1', canonicalChat: true }}
+          : { id: 'cindy-default', name: 'Cindy', avatar: 'cindy://avatar/preset/cindy', templateId: 'cindy', sessionId: 'chat-1', canonicalChat: true }}
       />
       <div className="min-h-0 flex-1 p-6" data-ui-page-subject />
     </AppFrame>

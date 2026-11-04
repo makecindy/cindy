@@ -1,3 +1,4 @@
+import { discoveredMagpieSource } from './modelSource.js';
 import {
   pickModelMetadata,
   type DiscoveredModel,
@@ -47,6 +48,7 @@ export function parseModelsListResponse(
     return null;
   })();
   if (!list) return null;
+  const magpieCatalog = list.some(item => !!item && typeof item === "object" && !!discoveredMagpieSource(item as Record<string, unknown>));
   const out: DiscoveredModel[] = [];
   const seen = new Set<string>();
   for (const item of list) {
@@ -169,6 +171,11 @@ export function parseModelsListResponse(
     const elevenLabsMode = record.model_id === id && typeof record.can_do_text_to_speech === 'boolean'
       ? record.can_do_text_to_speech ? 'audio_speech' : 'other'
       : undefined;
+    // OpenRouter separates TTS (`speech`) from audio-capable chat (`audio`).
+    // This is its catalog contract, not a generic inference from model names.
+    const openRouterSpeech = sourceUrl !== undefined && isOpenRouterModelsUrl(sourceUrl)
+      && Array.isArray(architecture?.output_modalities)
+      && architecture.output_modalities.includes('speech');
     const discoveredMetadata = { ...pickModelMetadata(record), ...pickModelMetadata({
       nativeApi: record.nativeApi !== undefined ? record.nativeApi : record.native_api,
       ...([rec?.display_name, rec?.name, google?.displayName].some(
@@ -176,7 +183,7 @@ export function parseModelsListResponse(
       )
         ? { name }
         : {}),
-      mode: record.mode ?? info.mode ?? elevenLabsMode ??
+      mode: record.mode ?? info.mode ?? elevenLabsMode ?? (openRouterSpeech ? 'audio_speech' : undefined) ??
         (isVercel && record.type === 'language' ? 'chat' : isVercel ? record.type : undefined),
       modalities,
       officialDocs: record.officialDocs,
@@ -232,9 +239,11 @@ export function parseModelsListResponse(
       discoveredMetadata.contextWindowMax < discoveredMetadata.contextWindow) {
       delete discoveredMetadata.contextWindowMax;
     }
-    // OpenRouter and Vercel document USD per token. Never apply these units to arbitrary proxies.
+    // OpenRouter speech pricing is per character or generated second, not per token.
+    // Do not project it into the chat cost fields. Other OpenRouter/Vercel entries
+    // document USD per token; never apply those units to arbitrary proxies.
     const prices =
-      sourceUrl && (isOpenRouterModelsUrl(sourceUrl) || (isVercel && record.type === 'language'))
+      sourceUrl && !openRouterSpeech && (isOpenRouterModelsUrl(sourceUrl) || (isVercel && record.type === 'language'))
         ? (record.pricing as Record<string, unknown> | undefined)
         : undefined;
     const discoveredCost = Object.fromEntries(
@@ -257,8 +266,11 @@ export function parseModelsListResponse(
         return Number.isFinite(amount) && amount >= 0 ? [[target, amount]] : [];
       }),
     );
+    const discoveredSource = discoveredMagpieSource(record);
     out.push({
       id,
+      ...(discoveredSource ? { discoveredSource } : {}),
+      ...(magpieCatalog ? { opaqueModelId: true as const } : {}),
       ...(Array.isArray(serviceTiers) || Array.isArray(additionalSpeedTiers)
         ? { supportsUltrafastMode: declaredSpeedTiers.includes('ultrafast') } : {}),
       discoveredMetadata,

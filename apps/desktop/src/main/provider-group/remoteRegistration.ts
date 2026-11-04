@@ -22,9 +22,11 @@ import {
 import { readProviderGroup } from './store.js';
 import { isProviderManagementRequest } from '../../shared/providerManagement.js';
 import { handleProviderManagementRequest } from './management.js';
+import { bindGroupFastPolicy } from './fastPolicyRuntime.js';
 
 export function registerProviderGroupRemoteHandler(options: { onGroupChanged?: (providerId: string) => void } = {}): void {
   const deps: ProviderGroupRemoteHandlerDeps = {
+    bindFastPolicy: bindGroupFastPolicy,
     scope: getProviderGroupOwnerScope,
     readGroup: readProviderGroup,
     isRemoteAllowed: isRemoteProviderInvocationAllowed,

@@ -10,7 +10,6 @@ import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 
 import { SegmentedControl } from '@/components/ui/segmented-control';
-import { ContactsAutoRegisterHint } from './ContactsAutoRegisterHint';
 import { cn } from '@/lib/utils';
 import type {
   TelegramHookBehavior,
@@ -610,7 +609,6 @@ export function TelegramGroupActivationSettings({
           onRetry={() => setReloadToken((value) => value + 1)}
         />
       )}
-      <ContactsAutoRegisterHint root={root + '.groups'} />
       {groups.length === 0 ? (
         <div className="text-12 text-[var(--settings-section-desc)]">
           {t(`${root}.groups.empty`)}

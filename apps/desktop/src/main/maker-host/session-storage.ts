@@ -13,6 +13,7 @@
 import { and, eq, inArray, ne } from 'drizzle-orm';
 
 import { dbToMakerAgentKind, makerToDbAgentKind } from '../../shared/agentKindConversion.js';
+import { pruneSessionContextWindowBudget } from './session-context-budget-store.js';
 
 import type {
   AgentKind,
@@ -54,6 +55,7 @@ function rowToMeta(row: SessionRow): SessionMeta {
     title: row.title,
     model: row.model,
     workspaceKind: row.workspaceKind,
+    projectDir: row.projectDir,
     effort: row.effort,
     permissionMode: row.permissionMode,
     fastMode: row.fastMode,
@@ -78,6 +80,7 @@ export class DesktopSessionStorage implements SessionStorage {
       title: meta.title,
       workingDir,
       workspaceKind: normalizeWorkspaceKind(meta.workspaceKind),
+      projectDir: normalizeWorkingDirForStorage(meta.projectDir),
       model: meta.model,
       effort: meta.effort ?? 'high',
       permissionMode: meta.permissionMode ?? 'ask',
@@ -157,6 +160,15 @@ export class DesktopSessionStorage implements SessionStorage {
   async delete(id: string): Promise<void> {
     const db = getDbClient().drizzle;
     await db.delete(sessions).where(eq(sessions.id, id));
+    // 任务行已消失，偏好文件里的档位条目也就没有意义了（软删除保留行，故不在这里清理）。
+    try {
+      pruneSessionContextWindowBudget(id);
+    } catch (error) {
+      console.warn('[session-storage] pruning context window budget failed', {
+        sessionId: id,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
   }
 }
 

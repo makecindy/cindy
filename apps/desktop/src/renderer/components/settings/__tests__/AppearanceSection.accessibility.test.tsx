@@ -29,14 +29,20 @@ vi.mock('@/hooks/useFontSettings', async (importOriginal) => ({
     codeFamily: '',
     uiSize: 14,
     codeSize: 14,
+    terminalFamily: '',
+    terminalSize: 13,
     setUiFamily: vi.fn(),
     setCodeFamily: vi.fn(),
     setUiSize: vi.fn(),
     setCodeSize: vi.fn(),
+    setTerminalFamily: vi.fn(),
+    setTerminalSize: vi.fn(),
     resetUiFamily: vi.fn(),
     resetCodeFamily: vi.fn(),
     resetUiSize: vi.fn(),
     resetCodeSize: vi.fn(),
+    resetTerminalFamily: vi.fn(),
+    resetTerminalSize: vi.fn(),
   }),
 }));
 
@@ -97,7 +103,7 @@ vi.mock('../FontFamilyPicker', () => ({ FontFamilyPicker: () => null }));
 vi.mock('../LayoutResetControl', () => ({ LayoutResetControl: () => null }));
 
 describe('AppearanceSection accessibility', () => {
-  it('labels the UI and code font-size number inputs', () => {
+  it('labels the UI, code and terminal font-size number inputs', () => {
     render(<AppearanceSection />);
     const visibility = screen.getByRole('slider', {
       name: 'settings.appearance.wallpaper.visibilityLabel',
@@ -141,6 +147,9 @@ describe('AppearanceSection accessibility', () => {
     ).toBeTruthy();
     expect(
       screen.getByRole('spinbutton', { name: 'settings.appearance.font.codeSize.label' }),
+    ).toBeTruthy();
+    expect(
+      screen.getByRole('spinbutton', { name: 'settings.appearance.font.terminalSize.label' }),
     ).toBeTruthy();
   });
 

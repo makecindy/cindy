@@ -25,6 +25,8 @@ import { useTranslation } from 'react-i18next';
 import { Spinner } from '@/components/ui/spinner';
 import type { TabKindHostContext } from '../../types';
 import { getOrCreateXterm, type XtermEntry } from './lib/xtermPool';
+import { createTerminalFontController } from './lib/terminalFont';
+import { useTerminalFontSettings } from './lib/useTerminalFontSettings';
 import type {
   TerminalDataEvent,
   TerminalExitEvent,
@@ -74,9 +76,13 @@ function RemoteTerminalUnavailable() {
 function LocalTerminalTabBody({ state, ctx, active, shellVisible = true }: Props) {
   const { tabId, workdir, patchState } = ctx;
   const { t } = useTranslation();
+  const { terminalFamily, terminalSize } = useTerminalFontSettings();
 
   const slotRef = useRef<HTMLDivElement>(null);
   const entryRef = useRef<XtermEntry | null>(null);
+  const fontControllerRef = useRef<ReturnType<typeof createTerminalFontController> | null>(null);
+  const activeRef = useRef(active);
+  activeRef.current = active;
   /** xterm onData 的 disposer,unmount 时解订阅避免内存泄漏。 */
   const onDataDisposerRef = useRef<{ dispose(): void } | null>(null);
   /** 标记本组件实例是否还活着,异步 callback 里检查。 */
@@ -126,12 +132,19 @@ function LocalTerminalTabBody({ state, ctx, active, shellVisible = true }: Props
       patchState({ exited: ex.exit });
     });
 
-    // 折叠侧栏时 FitAddon 会把 0 宽折成极窄尺寸；不要把它写进
-    // lastSize 或下发给 PTY，恢复可见后由 active effect 再同步。
-    if (shellVisibleRef.current) fitNow(entry);
+    fontControllerRef.current = createTerminalFontController(
+      entry.terminal,
+      () => activeRef.current !== false && shellVisibleRef.current && hasSize(slot),
+      () => fitAndPushSize(entry, tabId, slot),
+    );
+
+    // 折叠侧栏或隐藏页签时保留最后可用尺寸，恢复可见后再测量。
+    if (activeRef.current !== false && shellVisibleRef.current) fitNow(entry, slot);
 
     return () => {
       aliveRef.current = false;
+      fontControllerRef.current?.dispose();
+      fontControllerRef.current = null;
       onDataDisposerRef.current?.dispose();
       onDataDisposerRef.current = null;
       offData();
@@ -139,6 +152,11 @@ function LocalTerminalTabBody({ state, ctx, active, shellVisible = true }: Props
       // xterm 实例和 PTY 都保活,这里仅 detach DOM 不 dispose
     };
   }, [tabId, patchState]);
+
+  // Font changes are independent from the DOM/PTY lifecycle and never focus the terminal.
+  useEffect(() => {
+    fontControllerRef.current?.update({ terminalFamily, terminalSize });
+  }, [terminalFamily, terminalSize, tabId, patchState]);
 
   // ─── 2. PTY 创建 / 跨窗口 re-attach ───
   // 两种进入条件:
@@ -168,6 +186,13 @@ function LocalTerminalTabBody({ state, ctx, active, shellVisible = true }: Props
       .then((result) => {
         if (cancelled || !aliveRef.current) return;
         entry.ptyAttached = true;
+        // A font can finish loading while create is in flight. Ensure the PTY
+        // receives the final dimensions even if the earlier resize arrived too soon.
+        if (entry.lastSize.cols !== cols || entry.lastSize.rows !== rows) {
+          void window.electronAPI.terminal
+            .resize(tabId, entry.lastSize.cols, entry.lastSize.rows)
+            .catch(() => undefined);
+        }
         // re-attach 路径不重复 patchState —— 持久化字段没变,写一遍只是无谓 IPC。
         if (!isReattach) {
           patchState({
@@ -194,8 +219,8 @@ function LocalTerminalTabBody({ state, ctx, active, shellVisible = true }: Props
     if (!slot) return;
     const ro = new ResizeObserver(() => {
       const entry = entryRef.current;
-      if (!entry || !aliveRef.current || !shellVisibleRef.current) return;
-      fitAndPushSize(entry, tabId);
+      if (!entry || !aliveRef.current || !shellVisibleRef.current || activeRef.current === false || !hasSize(slot)) return;
+      if (!fontControllerRef.current?.flush()) fitAndPushSize(entry, tabId, slot);
     });
     ro.observe(slot);
     return () => ro.disconnect();
@@ -207,21 +232,33 @@ function LocalTerminalTabBody({ state, ctx, active, shellVisible = true }: Props
     const entry = entryRef.current;
     if (!entry) return;
     // 切到本 tab 时 fit 一下,因为后台 tab 的 layout 可能没跟上侧栏宽度变化
-    requestAnimationFrame(() => {
-      if (!aliveRef.current || !entryRef.current || !shellVisibleRef.current) return;
-      fitAndPushSize(entryRef.current, tabId);
-      entryRef.current.terminal.focus();
+    const frame = requestAnimationFrame(() => {
+      const slot = slotRef.current;
+      if (!aliveRef.current || entryRef.current !== entry || !shellVisibleRef.current || activeRef.current === false || !slot || !hasSize(slot)) return;
+      if (!fontControllerRef.current?.flush()) fitAndPushSize(entry, tabId, slot);
+      entry.terminal.focus();
     });
+    return () => cancelAnimationFrame(frame);
   }, [active, shellVisible, tabId]);
 
   // ─── 5. Restart 按钮 handler ───
   const onRestart = useCallback(async () => {
     if (restarting) return;
+    const entry = entryRef.current;
     setRestarting(true);
     setRuntimeError(null);
     try {
       const result = await window.electronAPI.terminal.restart(tabId);
       if (!aliveRef.current) return;
+      // The exited PTY ignored font-driven resizes. Restart uses its old grid,
+      // so resend the latest usable size even when the renderer has not changed.
+      // Do not measure a hidden or collapsed panel just to synchronize restart.
+      if (entry && entryRef.current === entry) {
+        const { cols, rows } = entry.lastSize;
+        if (Number.isFinite(cols) && Number.isFinite(rows) && cols > 0 && rows > 0) {
+          void window.electronAPI.terminal.resize(tabId, cols, rows).catch(() => undefined);
+        }
+      }
       patchState({
         created: true,
         shellId: result.shellId,
@@ -263,7 +300,12 @@ function LocalTerminalTabBody({ state, ctx, active, shellVisible = true }: Props
 
 // ───────── helpers ─────────
 
-function fitNow(entry: XtermEntry): void {
+function hasSize(slot: HTMLElement): boolean {
+  return slot.clientWidth > 0 && slot.clientHeight > 0;
+}
+
+function fitNow(entry: XtermEntry, slot: HTMLElement): void {
+  if (!hasSize(slot)) return;
   try {
     entry.fitAddon.fit();
     entry.lastSize = { cols: entry.terminal.cols, rows: entry.terminal.rows };
@@ -272,7 +314,8 @@ function fitNow(entry: XtermEntry): void {
   }
 }
 
-function fitAndPushSize(entry: XtermEntry, tabId: string): void {
+function fitAndPushSize(entry: XtermEntry, tabId: string, slot: HTMLElement): void {
+  if (!hasSize(slot)) return;
   try {
     entry.fitAddon.fit();
   } catch {
@@ -283,6 +326,8 @@ function fitAndPushSize(entry: XtermEntry, tabId: string): void {
   if (!Number.isFinite(cols) || !Number.isFinite(rows) || cols < 1 || rows < 1) return;
   if (cols === entry.lastSize.cols && rows === entry.lastSize.rows) return;
   entry.lastSize = { cols, rows };
+  // create/reattach will reconcile these dimensions once it has an owner.
+  if (!entry.ptyAttached) return;
   void window.electronAPI.terminal.resize(tabId, cols, rows).catch(() => {
     /* 已 disposed 的 session 静默忽略 */
   });

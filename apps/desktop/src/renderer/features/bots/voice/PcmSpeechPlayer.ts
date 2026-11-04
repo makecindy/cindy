@@ -1,3 +1,5 @@
+import { MAX_ENCODED_SPEECH_BYTES, type EncodedSpeechAudio } from '@/../shared/voiceConversation';
+
 /** PCM may cross arbitrary HTTP chunk boundaries, including the middle of a 16-bit sample. */
 export class Pcm16Decoder {
   private carry: number | undefined;
@@ -20,7 +22,7 @@ export class Pcm16Decoder {
 export interface SpeechPlayer {
   play(
     read: () => Promise<{ pcm: ArrayBuffer; done: boolean }>,
-    sampleRate: number,
+    audio: number | EncodedSpeechAudio,
     onStarted?: () => void,
   ): Promise<void>;
   pause(): void;
@@ -48,26 +50,51 @@ export class PcmSpeechPlayer implements SpeechPlayer {
 
   async play(
     read: () => Promise<{ pcm: ArrayBuffer; done: boolean }>,
-    sampleRate: number,
+    audio: number | EncodedSpeechAudio,
     onStarted?: () => void,
   ): Promise<void> {
     this.cancel();
     const generation = this.generation;
     const decoder = new Pcm16Decoder();
+    let sampleRate: number;
+    let decoded: Float32Array<ArrayBuffer> | undefined;
+    if (typeof audio === 'number') {
+      sampleRate = audio;
+    } else {
+      if (audio.format !== 'mp3' || !audio.data.byteLength || audio.data.byteLength > MAX_ENCODED_SPEECH_BYTES)
+        throw new Error('Invalid speech audio');
+      await this.waitUntilRunning(generation);
+      // decodeAudioData resamples to this AudioContext. Use its actual rate,
+      // rather than interpreting compressed bytes (or 44.1 kHz audio) as 24 kHz PCM.
+      const buffer = await this.context.decodeAudioData(audio.data.slice(0));
+      await this.waitUntilRunning(generation);
+      if (!Number.isFinite(buffer.duration) || buffer.duration <= 0 || buffer.duration > 600
+        || buffer.numberOfChannels < 1 || buffer.numberOfChannels > 2)
+        throw new Error('Invalid speech audio');
+      sampleRate = buffer.sampleRate;
+      decoded = buffer.getChannelData(0);
+      if (buffer.numberOfChannels === 2) {
+        const right = buffer.getChannelData(1);
+        const mono = new Float32Array(buffer.length);
+        for (let i = 0; i < mono.length; i++) mono[i] = (decoded[i] + right[i]) / 2;
+        decoded = mono;
+      }
+    }
     let nextAt = this.context.currentTime;
     let started = false;
     this.updateContext();
     for (;;) {
       await this.waitUntilRunning(generation);
-      const chunk = await read();
+      const chunk = decoded ? null : await read();
       await this.waitUntilRunning(generation);
-      const samples = decoder.decode(chunk.pcm);
-      for (let offset = 0; offset < samples.length; offset += 2_400) {
+      const samples = decoded ?? decoder.decode(chunk!.pcm);
+      const partLength = Math.round(sampleRate / 10);
+      for (let offset = 0; offset < samples.length; offset += partLength) {
         while (nextAt - this.context.currentTime > 0.3) {
           await new Promise((resolve) => setTimeout(resolve, 25));
           await this.waitUntilRunning(generation);
         }
-        const part = samples.subarray(offset, offset + 2_400);
+        const part = samples.subarray(offset, offset + partLength);
         const buffer = this.context.createBuffer(1, part.length, sampleRate);
         buffer.copyToChannel(part, 0);
         const source = this.context.createBufferSource();
@@ -98,7 +125,7 @@ export class PcmSpeechPlayer implements SpeechPlayer {
         }
         nextAt += part.length / sampleRate;
       }
-      if (chunk.done) break;
+      if (decoded || chunk?.done) break;
     }
     decoder.finish();
     while (nextAt > this.context.currentTime) {

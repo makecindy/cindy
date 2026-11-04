@@ -12,6 +12,7 @@ import { isDeviceLinkInvoke, runDeviceLinkInvokeContext } from '../../device-lin
 import {
   createWorkerWorktree,
   resolveWorkerWorktreeSource,
+  resolveWorkerWorktreeSourceSelection,
   getWorkerOwnedWorktree,
   probeWorkerProject,
   readWorkerProjectContext,
@@ -495,38 +496,52 @@ describe('Worker worktree subproject directory', () => {
       const checkout = new Promise<void>((resolve) => {
         finishCheckout = resolve;
       });
-      vi.mocked(awaitBackgroundCheckout).mockReset().mockReturnValue(checkout);
+      let signalCheckoutStarted!: () => void;
+      const checkoutStarted = new Promise<void>((resolve) => { signalCheckoutStarted = resolve; });
+      vi.mocked(awaitBackgroundCheckout).mockReset().mockImplementation(() => {
+        signalCheckoutStarted();
+        return checkout;
+      });
       const source = scenario === 'root' ? alias : path.join(alias, relative);
       let settled = false;
       const result = createWorkerWorktree(sessionId, source, 'main').then((value) => {
         settled = true;
         return value;
       });
-      if (scenario === 'root') {
-        expect(await result).toBe(target);
-        expect(awaitBackgroundCheckout).not.toHaveBeenCalled();
+      try {
+        if (scenario === 'root') {
+          expect(await result).toBe(target);
+          expect(awaitBackgroundCheckout).not.toHaveBeenCalled();
+          return;
+        }
+        // Windows CI can spend >1s in the real Git probe. Await the actual
+        // boundary (or an early result/failure), not vi.waitFor's 1s deadline.
+        await Promise.race([checkoutStarted, result]);
+        expect(awaitBackgroundCheckout).toHaveBeenCalledWith(sessionId);
+        expect(settled).toBe(false);
+        if (present) {
+          mkdirSync(subproject, { recursive: true });
+          writeFileSync(path.join(subproject, 'AGENTS.md'), 'Checked out rules');
+        }
+        if (scenario === 'external-symlink') {
+          const external = path.join(fixture, 'outside-checkout');
+          mkdirSync(external);
+          mkdirSync(path.dirname(subproject), { recursive: true });
+          symlinkSync(external, subproject, process.platform === 'win32' ? 'junction' : 'dir');
+        }
         finishCheckout();
-        return;
+        expect(await result).toBe(present ? subproject : target);
+        if (scenario === 'missing' || scenario === 'external-symlink')
+          expect(createLogger('test').warn).toHaveBeenCalledWith(
+            'Worker subproject is unavailable within the new worktree; using its root',
+            { sessionId },
+          );
+      } finally {
+        // A failed assertion must not leave a task using the next case's mocks
+        // or the fixture after afterAll removes it.
+        finishCheckout();
+        await result.catch(() => {});
       }
-      await vi.waitFor(() => expect(awaitBackgroundCheckout).toHaveBeenCalledWith(sessionId));
-      expect(settled).toBe(false);
-      if (present) {
-        mkdirSync(subproject, { recursive: true });
-        writeFileSync(path.join(subproject, 'AGENTS.md'), 'Checked out rules');
-      }
-      if (scenario === 'external-symlink') {
-        const external = path.join(fixture, 'outside-checkout');
-        mkdirSync(external);
-        mkdirSync(path.dirname(subproject), { recursive: true });
-        symlinkSync(external, subproject, process.platform === 'win32' ? 'junction' : 'dir');
-      }
-      finishCheckout();
-      expect(await result).toBe(present ? subproject : target);
-      if (scenario === 'missing' || scenario === 'external-symlink')
-        expect(createLogger('test').warn).toHaveBeenCalledWith(
-          'Worker subproject is unavailable within the new worktree; using its root',
-          { sessionId },
-        );
     },
   );
 });
@@ -565,6 +580,38 @@ describe('Worker worktree source resolution', () => {
     await expect(resolveWorkerWorktreeSource('/repo', source, probe)).rejects.toThrow('source_branch');
     expect(probe).not.toHaveBeenCalled();
   });
+  // Defaults parity: previous source tests did not read repository preferences.
+  // Real resolver, injected read/probe; invalid remembered refs must fall back, explicit refs must fail.
+  // PR #7933 P2 (unit): a different subdirectory/checkout of the same repo must keep its HEAD.
+  // Previously only identical directories bypassed the repository preference.
+  it.each(['valid', 'missing', 'read-failed', 'same', 'same-subdir', 'same-worktree', 'same-main', 'explicit'])(
+    'resolves remembered source: %s', async scenario => {
+      const read = vi.fn(() => {
+        if (scenario === 'read-failed') throw new Error('store unavailable');
+        return { baseRepo: '/repo', sourceBranch: 'release', revision: 1 };
+      });
+      const sameRepo = scenario.startsWith('same');
+      const directory = scenario === 'same-subdir' ? '/repo/apps/api'
+        : scenario === 'same-worktree' ? '/repo/.cindy-worktrees/other' : '/repo';
+      const leadDirectory = scenario === 'same' ? directory
+        : scenario === 'same-subdir' ? '/repo/apps/web'
+        : scenario === 'same-worktree' ? '/repo'
+        : scenario === 'same-main' ? '/repo/.cindy-worktrees/lead' : '/lead';
+      const probe = async (dir: string) => ({ ...target, directory: dir,
+        baseRepo: dir === '/lead' ? '/lead' : dir === leadDirectory ? '/repo/' : '/repo' });
+      await vi.mocked(gitExec).withImplementation(async () => {
+        if (scenario === 'missing') throw new Error('not found');
+        return {stdout: 'abc', stderr: ''};
+      }, async () => {
+        const result = await resolveWorkerWorktreeSourceSelection(directory, scenario === 'explicit' ? 'picked' : undefined,
+          probe, leadDirectory, read);
+        expect(result.sourceBranch).toBe(scenario === 'valid' ? 'release' : scenario === 'explicit' ? 'picked' : 'main');
+        if (scenario === 'missing' || scenario === 'read-failed') expect(result.fallbackReason).toContain('current checkout');
+        if (sameRepo || scenario === 'explicit') expect(read).not.toHaveBeenCalled();
+        else expect(read).toHaveBeenCalledWith('/repo');
+      });
+    },
+  );
   it('projects only metadata registered under the Worker session, not a directory spelling', () => {
     vi.mocked(getForSession).mockReturnValueOnce({path: '/checkout', branch: 'cindy/new', baseRepo: '/repo'} as never).mockReturnValueOnce(null);
     expect(getWorkerOwnedWorktree('owned')).toEqual({path: '/checkout', branch: 'cindy/new'});

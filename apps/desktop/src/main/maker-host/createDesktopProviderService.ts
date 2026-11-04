@@ -1,4 +1,5 @@
 import { readProviderPresentation } from './provider-presentation-store.js';
+import { projectSubscriptionFastPolicy } from './subscription-fast-policy.js';
 import { filterLegacyGptContextProfiles } from './legacy-context-profiles.js';
 import { subscriptionAccountState, isXaiSubscriptionProviderId, resetSubscriptionAccountCaches } from './subscription-account-auth.js';
 /**
@@ -130,6 +131,7 @@ import {
 } from './model-discovery/openai-media.js';
 import { clearXaiMediaModels } from './model-discovery/xai-media.js';
 import { getAuthState } from '../authManager.js';
+import { getCindyAiProviderName, getCindyAiProviderLogoKind } from '../cindyAiProviderName.js';
 import { getActiveAppSession } from '../appSessionState.js';
 import { filterProviderCatalogForAccount } from './provider-access-policy.js';
 import { getAppCapabilities } from '../appCapabilities.js';
@@ -1005,7 +1007,17 @@ export function getDesktopProviderService(options: { allowSideEffects?: boolean 
   }
   if (singleton) return singleton;
   singleton = createProviderService({
-    getProviderPresentation: readProviderPresentation,
+    projectProvider: projectSubscriptionFastPolicy,
+    getProviderPresentation: (providerId) => {
+      const presentation = readProviderPresentation(providerId);
+      if (providerId !== 'xd') return presentation;
+      // Read on every snapshot, including remote reads; never capture the first login.
+      return {
+        ...presentation,
+        name: getCindyAiProviderName(),
+        logoKind: getCindyAiProviderLogoKind(),
+      };
+    },
     getCatalog: getDesktopSelectableCatalog,
     connection: {
       xd: () => getAppCapabilities().canUseCindyGateway && readClaudeApiKey() != null,

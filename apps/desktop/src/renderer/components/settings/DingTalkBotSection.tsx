@@ -1,4 +1,5 @@
 import { Button } from '@/components/ui/button';
+import { ImConnectionError, ImReconnectButton } from './ImConnectionRecovery';
 import { useCallback, useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Check, ChevronDown, ChevronRight, Eye, EyeOff, Loader2, Trash2 } from 'lucide-react';
@@ -171,9 +172,10 @@ export function DingTalkBotSection({
                 {bot.validationError}
               </span>
             ) : bot.status.kind === 'error' ? (
-              <span className="text-[var(--settings-error-text)]" role="alert">
-                {t('settings.dingtalkBot.errorHint')}
-              </span>
+              <ImConnectionError
+                message={t('settings.dingtalkBot.errorHint')}
+                details={bot.status.reason}
+              />
             ) : (
               <span className="text-[var(--settings-source-meta)]">
                 {t('settings.dingtalkBot.formHint')}
@@ -182,20 +184,15 @@ export function DingTalkBotSection({
           </div>
           <div className="flex gap-2">
             {bot.hasSecret && !bot.appSecret.trim() ? (
-              <Button
+              <ImReconnectButton
                 variant="cta"
                 size="lg"
                 loading={bot.isSaving}
-                type="button"
-                onClick={() => void bot.reconnect()}
-                disabled={bot.isSaving}
+                onReconnect={bot.reconnect}
                 className="flex-1"
               >
-                {bot.isSaving && (
-                  <Loader2 size={14} className="animate-spin motion-reduce:animate-none" />
-                )}
                 {t('settings.dingtalkBot.reconnect')}
-              </Button>
+              </ImReconnectButton>
             ) : (
               <Button
                 variant="cta"

@@ -25,6 +25,7 @@ import {
 } from '@cindy/maker-core';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
+import { managedSkillDigest } from '../managedSkillDigest';
 import { createRemoteAgentHost, hostSessionIdFor, type HostedStartInput } from '../host/runHost';
 import { TunnelLinkActivity } from '../host/linkActivity';
 import * as runTunnel from '../host/tunnel';
@@ -64,6 +65,7 @@ function makeHost(
     bindGuestProviderRoute?: false | Parameters<typeof createRemoteAgentHost>[0]['bindGuestProviderRoute'];
     /** 会话是否正在运行一轮(缺省不提供，同旧 Agent)。 */
     isTurnRunning?: (input: HostedStartInput) => boolean;
+    managedSkills?: Parameters<typeof createRemoteAgentHost>[0]['managedSkills'];
   } = {},
 ) {
   const bindGuestProviderRoute = options.bindGuestProviderRoute === false
@@ -124,6 +126,7 @@ function makeHost(
     ...(options.recordGuestUsage ? { recordGuestUsage: options.recordGuestUsage } : {}),
     ...(options.recordOwnerUsage ? { recordOwnerUsage: options.recordOwnerUsage } : {}),
     ...(bindGuestProviderRoute ? { bindGuestProviderRoute } : {}),
+    ...(options.managedSkills ? { managedSkills: options.managedSkills } : {}),
     captureOwner: () => 'owner',
     isOwnerCurrent: () => options.ownerCurrent?.() ?? true,
     runsRoot,
@@ -291,6 +294,91 @@ describe('imported instruction files', () => {
 });
 
 describe('guest agents', () => {
+  // 受邀者只看到 Cindy 内置 Skill 的指纹(不透露这台装了哪些插件)；报「与你那份一样」的复制这台自己的，
+  // 指纹对不上的不带。
+  // 不变量：同一份内容，复用提供者自己那份与受邀者传输过来，落到任务里的结果逐字节相同——复用不能成为绕过
+  // Markdown 检查与落地改写的入口(`!` 预执行、越界 `@` 导入、带 hooks 的文件)。
+  it.each([
+    ['a Skill with shell syntax, outside imports and a hooked reference', {
+      'SKILL.md': '---\nname: pr\n---\nRun !`whoami` and read @~/.ssh/config',
+      'references/hooked.md': '---\nname: h\nhooks: {}\n---\n',
+      'references/ok.md': 'Hello',
+      'run.mjs': 'console.log(1)',
+    }],
+    ['a Skill whose entry declares hooks', { 'SKILL.md': '---\nname: pr\nhooks: {}\n---\nBody', 'run.mjs': 'console.log(1)' }],
+  ])('lands %s the same whether the guest reuses it or sends it', async (_label, content) => {
+    const own = path.join(root, 'own', 'pr');
+    for (const [file, data] of Object.entries(content)) {
+      fs.mkdirSync(path.dirname(path.join(own, file)), { recursive: true });
+      fs.writeFileSync(path.join(own, file), data);
+    }
+    const digest = await managedSkillDigest(own);
+    const started: Started[] = [];
+    const host = makeHost(started, { managedSkills: async () => [{ command: 'cindy:pr', dir: own }] });
+    const dir = '.claude/skills/cindy-pr';
+    const open = async (runId: string, task: string, personal: Record<string, unknown>) => {
+      await host.handle(GUEST, { op: 'open', runId, agentKind: 'claude-code', payload: { json: openPayload(task, { personal }) } });
+      await waitForStarted(host, GUEST, runId);
+      const skill = path.join(shadowDir(GUEST, task), '.cindy', 'managed-skills', 'cindy', 'skills', 'pr');
+      return fs.existsSync(skill)
+        ? Object.fromEntries((fs.readdirSync(skill, { recursive: true }) as string[]).filter((f) => fs.statSync(path.join(skill, f)).isFile())
+            .map((f) => [f, fs.readFileSync(path.join(skill, f), 'utf8')]))
+        : null;
+    };
+    const reused = await open(RUN_1, 'task-1', { files: [], managedSkills: [{ command: 'cindy:pr', dir, digest, reuse: true }] });
+    const sent = await open(RUN_2, 'task-2', {
+      files: [],
+      managedSkills: [{ command: 'cindy:pr', dir, digest }],
+      managedFiles: Object.entries(content).map(([file, data]) => ({ path: `${dir}/${file}`, data: b64(data) })),
+    });
+    expect(reused).toEqual(sent);
+    // 检查确实生效了：没有留下带 hooks 的文件，也没有原样的 `!` 预执行与越界 `@`。
+    expect(JSON.stringify(reused)).not.toContain('hooks: {}');
+    if (reused) {
+      expect(reused['SKILL.md']).not.toMatch(/!`whoami`/);
+      // 越界的 `@` 导入改成代码样式，不再是导入。
+      expect(reused['SKILL.md']).toContain('`@~/.ssh/config`');
+    }
+    host.dispose();
+  });
+
+  it('reuses only matching built-in managed skills for a guest', async () => {
+    const write = (dir: string, text: string) => {
+      fs.mkdirSync(dir, { recursive: true });
+      fs.writeFileSync(path.join(dir, 'SKILL.md'), text);
+      return dir;
+    };
+    const pr = write(path.join(root, 'own', 'pr'), 'own pr');
+    const learn = write(path.join(root, 'own', 'learn'), 'own learn');
+    const secret = write(path.join(root, 'own', 'secret'), 'plugin');
+    const started: Started[] = [];
+    const host = makeHost(started, { managedSkills: async () => [
+      { command: 'cindy:pr', dir: pr }, { command: 'cindy:learn', dir: learn }, { command: 'cindy-plugin-x:secret', dir: secret },
+    ] });
+    const digest = await managedSkillDigest(pr);
+    const guestCaps = await host.handle(GUEST, { op: 'caps' }) as { managedSkills: { digests: Record<string, string> } };
+    const ownerCaps = await host.handle(OWNER, { op: 'caps' }) as { managedSkills: { digests: Record<string, string> } };
+    expect(Object.keys(guestCaps.managedSkills.digests).sort()).toEqual(['cindy:learn', 'cindy:pr']);
+    expect(Object.keys(ownerCaps.managedSkills.digests)).toContain('cindy-plugin-x:secret');
+    await host.handle(GUEST, {
+      op: 'open', runId: RUN_1, agentKind: 'claude-code',
+      payload: { json: openPayload('task-1', { personal: { files: [], managedSkills: [
+        { command: 'cindy:pr', dir: '.claude/skills/cindy-pr', digest, reuse: true },
+        { command: 'cindy:learn', dir: '.claude/skills/cindy-learn', digest: '0'.repeat(64), reuse: true },
+        // 受邀者点名提供者装的插件 Skill(指纹它是知道不了的，但不能因此靠猜就复制进它的任务)。
+        { command: 'cindy-plugin-x:secret', dir: '.claude/skills/cindy-plugin-x-secret-00000000', digest: await managedSkillDigest(secret), reuse: true },
+      ] } }) },
+    });
+    await waitForStarted(host, GUEST, RUN_1);
+    const plugin = path.join(shadowDir(GUEST, 'task-1'), '.cindy', 'managed-skills', 'cindy');
+    expect(started[0].input.controllerManagedSkills).toEqual({ claudePluginRoots: [plugin] });
+    expect(fs.readFileSync(path.join(plugin, 'skills', 'pr', 'SKILL.md'), 'utf8')).toBe('own pr');
+    expect(fs.existsSync(path.join(plugin, 'skills', 'learn'))).toBe(false);
+    expect(fs.existsSync(path.join(shadowDir(GUEST, 'task-1'), '.cindy', 'managed-skills', 'cindy-plugin-x'))).toBe(false);
+    expect(JSON.stringify(fs.readdirSync(sessionRoot(GUEST, 'task-1'), { recursive: true }))).not.toContain('secret');
+    host.dispose();
+  });
+
   it('offers every isolated agent to a guest, the same as same-account', async () => {
     const host = makeHost([]);
     const guestCaps = await host.handle(GUEST, { op: 'caps' }) as { agents: Array<{ kind: string; available: boolean }> };
@@ -455,15 +543,12 @@ describe('shared-model native fork', () => {
     if (controller === GUEST) await expect(host.handle(controller, request)).rejects.toThrow('REMOTE_AGENT_INVALID');
     expect(forkHosted).not.toHaveBeenCalled();
     await host.handle(controller, { op: 'open', runId: RUN_1, agentKind, payload: { json: openPayload('task-1') } });
-    await vi.waitFor(async () => {
-      const poll = await host.handle(controller, { op: 'poll', runs: [{ runId: RUN_1, cursor: 0 }], waitMs: 0 });
-      expect(JSON.stringify(poll)).not.toContain('"runs":[]');
-      expect(started).toHaveLength(1);
-      if (controller === GUEST) {
-        const index = JSON.parse(fs.readFileSync(path.join(runsRoot, 'guest-sessions.json'), 'utf8'));
-        expect(JSON.stringify(index)).toContain('native-source');
-      }
-    });
+    await waitForStarted(host, controller, RUN_1);
+    expect(started).toHaveLength(1);
+    if (controller === GUEST) {
+      const index = JSON.parse(fs.readFileSync(path.join(runsRoot, 'guest-sessions.json'), 'utf8'));
+      expect(JSON.stringify(index)).toContain('native-source');
+    }
     await expect(host.handle(controller, { ...request, model: 'claude-sonnet' })).rejects.toThrow('REMOTE_AGENT_PROVIDER_NOT_ALLOWED');
     expect(forkHosted).not.toHaveBeenCalled();
     await expect(host.handle(controller, request)).resolves.toEqual({ newSdkSessionId: 'native-child-1', uuidMap: [['a', 'b']] });
@@ -473,6 +558,8 @@ describe('shared-model native fork', () => {
     }));
     await host.handle(controller, { op: 'close', runId: RUN_1, mode: 'close', reason: 'navigation' });
     host.dispose();
+    // Windows CI ENOTEMPTY: dispose starts asynchronous removal; do not race afterEach's root cleanup.
+    await vi.waitFor(() => expect(fs.existsSync(sessionRoot(controller, 'task-1'))).toBe(false), { timeout: 10_000 });
     const restarted = makeHost([], { forkHosted, modelAllowed });
     try {
       await expect(restarted.handle(controller, { ...request, sourceSessionId: 'task-2', sourceSdkSessionId: 'native-child-1', newSessionId: 'task-3' }))
@@ -480,15 +567,17 @@ describe('shared-model native fork', () => {
       await restarted.handle(controller, { op: 'open', runId: RUN_2, agentKind, payload: { json: openPayload('task-3', {
         options: { model: 'claude-opus', resumeSessionId: 'native-child-2' },
       }) } });
-      await vi.waitFor(async () => {
-        const poll = await restarted.handle(controller, { op: 'poll', runs: [{ runId: RUN_2, cursor: 0 }], waitMs: 0 }) as { runs: Array<{ data?: string }> };
-        expect(Buffer.from(poll.runs[0]?.data ?? '', 'base64').toString('utf8')).toContain('"previousMirrorRoots":' + JSON.stringify([
-          path.join(sessionRoot(controller, 'task-1'), 'fs'), path.join(sessionRoot(controller, 'task-2'), 'fs'),
-        ]));
-      });
+      await waitForStarted(restarted, controller, RUN_2);
+      const poll = await restarted.handle(controller, { op: 'poll', runs: [{ runId: RUN_2, cursor: 0 }], waitMs: 0 }) as { runs: Array<{ data?: string }> };
+      expect(Buffer.from(poll.runs[0]?.data ?? '', 'base64').toString('utf8')).toContain('"previousMirrorRoots":' + JSON.stringify([
+        path.join(sessionRoot(controller, 'task-1'), 'fs'), path.join(sessionRoot(controller, 'task-2'), 'fs'),
+      ]));
       await restarted.handle(controller, { op: 'close', runId: RUN_2, mode: 'close', reason: 'navigation' });
       await expect(restarted.handle(controller, { ...request, relay: 'a'.repeat(32) })).rejects.toThrow('REMOTE_AGENT_INVALID');
-    } finally { restarted.dispose(); }
+    } finally {
+      restarted.dispose();
+      await vi.waitFor(() => expect(fs.existsSync(sessionRoot(controller, 'task-3'))).toBe(false), { timeout: 10_000 });
+    }
   });
 
   it.each(['account', 'provider', 'model'])('does not disclose a completed fork after %s access changes', async (revoked) => {
@@ -600,9 +689,12 @@ describe('guest provider access and usage', () => {
     const started: Started[] = [];
     const host = makeHost(started, { bindGuestProviderRoute: bind });
     await host.handle(GUEST, { op: 'open', runId: RUN_1, agentKind: 'claude-code', payload: { json: openPayload('task-1') } });
-    await vi.waitFor(() => expect(currents).toHaveLength(1));
+    await vi.waitFor(() => expect(currents).toHaveLength(1), { timeout: 10_000 });
     await host.handle(GUEST, { op: 'open', runId: RUN_2, agentKind: 'claude-code', payload: { json: openPayload('task-1') } });
-    await vi.waitFor(() => expect(started).toHaveLength(1));
+    // Windows CI run 40667219234 exceeded the default 1s disk-preparation wait.
+    // Observe RUN_2's completed handshake before checking that RUN_1 stays stale.
+    await waitForStarted(host, GUEST, RUN_2);
+    expect(started).toHaveLength(1);
     expect(currents[0]!()).toBe(false);
     openGate();
     await new Promise((resolve) => setTimeout(resolve, 20));
@@ -643,9 +735,9 @@ describe('guest provider access and usage', () => {
       samples: [{ model: 'claude-opus', turns: 1, inputTokens: 12, outputTokens: 3, cacheReadTokens: 0, cacheCreateTokens: 0, sdkCostUsd: 0.02 }],
     };
     expect(recordGuestUsage).toHaveBeenCalledTimes(1);
-    expect(recordGuestUsage).toHaveBeenCalledWith(GUEST, usage);
+    expect(recordGuestUsage).toHaveBeenCalledWith(GUEST, usage, 'task-1');
     expect(recordOwnerUsage).toHaveBeenCalledTimes(1);
-    expect(recordOwnerUsage).toHaveBeenCalledWith(OWNER, usage);
+    expect(recordOwnerUsage).toHaveBeenCalledWith(OWNER, usage, 'task-2');
     expect(host.activeControllers().sort()).toEqual([GUEST, OWNER].sort());
     host.dispose();
   });
@@ -768,9 +860,11 @@ describe('#6479 bounded resume projection', () => {
       });
       try {
         await host.handle(controller, { op: 'open', runId: RUN_1, agentKind: 'pi', payload: { json: payload() } });
-        await vi.waitFor(() => expect(started).toHaveLength(1));
+        // CI: open acknowledges before shadow setup/registration completes. Wait for the public handshake.
+        await waitForStarted(host, controller, RUN_1);
+        expect(started).toHaveLength(1);
         if (controller === GUEST) {
-          await vi.waitFor(() => expect(fs.readFileSync(path.join(runsRoot, 'guest-sessions.json'), 'utf8')).toContain(JSON.stringify(nativeId)));
+          expect(fs.readFileSync(path.join(runsRoot, 'guest-sessions.json'), 'utf8')).toContain(JSON.stringify(nativeId));
         }
         await host.handle(controller, { op: 'close', runId: RUN_1, mode: 'close', reason: 'navigation' });
         if (controller === GUEST) {
@@ -780,7 +874,8 @@ describe('#6479 bounded resume projection', () => {
           expect(started).toHaveLength(1);
         }
         await host.handle(controller, { op: 'open', runId: RUN_2, agentKind: 'pi', payload: { json: payload(nativeId) } });
-        await vi.waitFor(() => expect(started).toHaveLength(2));
+        await waitForStarted(host, controller, RUN_2);
+        expect(started).toHaveLength(2);
         const resumed = started[1].input;
         expect.soft(resumed.options.userPrompt).toBe(`Read ${path.join(resumed.shadowDir, 'note.md')}`);
         expect.soft(resumed.personalInstructions).toBe(`Read ${path.join(resumed.shadowDir, 'note.md')}`);
@@ -796,7 +891,9 @@ describe('#6479 bounded resume projection', () => {
           await host.handle(controller, { op: 'close', runId: RUN_2, mode: 'close', reason: 'navigation' });
         } finally {
           host.dispose();
-          tunnelSpy.mockRestore();
+          try {
+            await vi.waitFor(() => expect(fs.existsSync(sessionRoot(controller, 'task-6479'))).toBe(false), { timeout: 10_000 });
+          } finally { tunnelSpy.mockRestore(); }
         }
       }
     });

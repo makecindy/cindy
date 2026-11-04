@@ -48,7 +48,7 @@ parentSessionId、runDir 和全部 child/session/agent 身份，并确认所有�
 
 | 环节 | 原有缺口 | 本次实现 |
 | --- | --- | --- |
-| 能力发现 | 角色名在工具说明里，模型难以系统查询 | `capabilities` 返回角色、工具、可选型号与并发限制 |
+| 能力发现 | 角色名在工具说明里，模型难以系统查询 | `capabilities` 返回角色、工具、可选型号（含各自可用的 provider）与并发限制 |
 | 启动 | runId 仅在 details，模型收到笼统启动回执 | 文本回执带 runId/taskId |
 | 控制 | 模型只能针对整个 run；写入邮箱就宣称成功 | `childId` 定向，等待 runner receipt，拒绝与不确定分别报告 |
 | 等待 | 只能反复 get | `wait` 最长 60 秒，超时不终止子代理 |

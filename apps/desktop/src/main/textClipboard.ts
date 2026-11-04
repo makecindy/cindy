@@ -13,10 +13,10 @@ interface TextClipboardDependencies {
 
 const issuedClipboardText = new Map<string, number>();
 
-/** Record a share link Main just created, so copy only accepts that payload. */
-export function rememberIssuedClipboardText(text: string, expiresAt: string): void {
-  const expiresAtMs = Date.parse(expiresAt);
-  if (!text || !Number.isFinite(expiresAtMs)) return;
+/** Record Main-issued text; non-expiring public links stay valid for this process. */
+export function rememberIssuedClipboardText(text: string, expiresAt?: string): void {
+  const expiresAtMs = expiresAt === undefined ? Number.POSITIVE_INFINITY : Date.parse(expiresAt);
+  if (!text || Number.isNaN(expiresAtMs)) return;
   issuedClipboardText.set(text, expiresAtMs);
 }
 

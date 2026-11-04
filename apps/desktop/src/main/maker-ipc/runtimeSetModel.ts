@@ -26,7 +26,7 @@ interface RuntimeSetModelSession {
   model: string;
   setModel: (
     model: string,
-    opts?: { providerId?: string | null; effort?: Effort; thinkingEnabled?: boolean },
+    opts?: { providerId?: string | null; effort?: Effort; contextWindowBudget?: number | null; thinkingEnabled?: boolean },
   ) => Promise<void>;
   requiresModelSwitchRebuild?: (
     model: string,
@@ -34,7 +34,7 @@ interface RuntimeSetModelSession {
   ) => boolean | Promise<boolean>;
   previewModelSwitch?: (
     model: string,
-    opts?: { providerId?: string | null },
+    opts?: { providerId?: string | null; contextWindowBudget?: number | null },
   ) => Promise<{
     action: 'hot' | 'refresh' | 'rebuild' | 'unavailable';
     targetContextWindow: number | null;
@@ -78,6 +78,11 @@ export interface ApplyRuntimeSetModelChangeInput {
    * 形态相同，也必须沿用 credential-switch 的 idle close / busy defer 边界。
    */
   forceSessionRebuild?: boolean;
+  /**
+   * 任务级工作上下文预算：host 已按**目标路由**重新收敛（含目录上限与模型级上限）。
+   * 只在会话已有显式预算且目标路由变化时下发；缺席 = 引擎保持当前预算。
+   */
+  contextWindowBudget?: number | null;
   /** Re-evaluate the current Pi descriptor, including immutable spawn inputs. */
   refreshPiConfiguration?: boolean;
   /** Fail closed before an otherwise-required runtime replacement mutates route state. */
@@ -217,8 +222,16 @@ export async function applyRuntimeSetModelChange(
   // that its native session needs replacement.
   const piRouteChanged = sess?.agentKind === 'pi' &&
     (sess.model !== model || currentProviderId !== nextProviderId);
+  // 预算必须与下面 setModel 拿到的**同一份**目标值：外层预演决定要不要重建，而
+  // switchModel 会先把预算写成新值再预演。用旧预算就会判「可热切」，内层按新预算
+  // 发现保留量不匹配便抛错，宿主此时已错过重建分支 —— 首次发送必失败（Greptile P1）。
   const piPreview = piRouteChanged || (sess?.agentKind === 'pi' && input.refreshPiConfiguration === true)
-    ? await sess.previewModelSwitch?.(model, { providerId: nextProviderId })
+    ? await sess.previewModelSwitch?.(model, {
+        providerId: nextProviderId,
+        ...(typeof input.contextWindowBudget === 'number'
+          ? { contextWindowBudget: input.contextWindowBudget }
+          : {}),
+      })
     : undefined;
   if ((piRouteChanged || (sess?.agentKind === 'pi' && input.refreshPiConfiguration === true)) && !piPreview) {
     throw new Error('Pi model switch preview is unavailable; runtime selection was not changed');
@@ -451,6 +464,9 @@ export async function applyRuntimeSetModelChange(
         ? { providerId: nextProviderId }
         : {}),
       ...(effort !== undefined ? { effort } : {}),
+      ...(input.contextWindowBudget !== undefined
+        ? { contextWindowBudget: input.contextWindowBudget }
+        : {}),
       ...(input.thinkingEnabled !== undefined ? { thinkingEnabled: input.thinkingEnabled } : {}),
     });
   } catch (err) {

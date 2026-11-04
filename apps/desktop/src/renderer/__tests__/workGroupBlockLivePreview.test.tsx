@@ -191,24 +191,30 @@ describe('failed sampling work-group disclosure (#6351)', () => {
         message('intro', 'assistant', 'Accepted introduction'),
         message('final', 'assistant', 'Successful welcome', { turnCompleted: true })];
       view.rerender(samplingTimeline(completed, false));
-      // The same failed group retains its explicit audit expansion. Accepted
-      // multi-message prose is outside it and remains visible when it closes.
-      expect(screen.getByTestId('work-f1').textContent).toContain('First failed welcome');
-      expect(screen.getByTestId('work-f1').textContent).not.toContain('Successful welcome');
-      fireEvent.click(screen.getByTestId('work-f1').querySelector('button')!);
+      // Explicit commentary joins the completed summary; the inner failed group
+      // retains its audit expansion when that new outer summary is opened.
+      const completedWork = screen.getByTestId(ending === 'same-turn success' ? 'work-summary-f1' : 'work-f1');
+      if (ending === 'same-turn success') fireEvent.click(completedWork.querySelector('button')!);
+      expect(completedWork.textContent).toContain('First failed welcome');
+      expect(completedWork.textContent).not.toContain('Successful welcome');
+      fireEvent.click(completedWork.querySelector('button')!);
       expect(screen.queryByText('First failed welcome')).toBeNull();
       expect(screen.queryByText('Second failed welcome')).toBeNull();
-      expect(screen.getByText('Accepted commentary')).toBeTruthy();
+      expect(screen.queryByText('Accepted commentary')).toBeNull();
       expect(screen.getByText('Accepted introduction')).toBeTruthy();
       expect(screen.getByText('Successful welcome')).toBeTruthy();
       if (ending === 'stopped then manual recovery') {
         expect(screen.getByText('Reply stopped')).toBeTruthy();
         expect(screen.getByText('Continue')).toBeTruthy();
       }
-      fireEvent.click(screen.getByTestId('work-f1').querySelector('button')!);
+      fireEvent.click(completedWork.querySelector('button')!);
       expect(screen.getByText('First failed welcome')).toBeTruthy();
       expect(screen.getByText('Second failed welcome')).toBeTruthy();
       expect(screen.getByText('Successful welcome')).toBeTruthy();
+      if (ending === 'stopped then manual recovery') {
+        fireEvent.click(screen.getByTestId('work-summary-commentary').querySelector('button')!);
+      }
+      expect(screen.getByText('Accepted commentary')).toBeTruthy();
     });
 
   it('keeps equal failed prose on each side of steering independently auditable', () => {
@@ -222,15 +228,18 @@ describe('failed sampling work-group disclosure (#6351)', () => {
     ], false));
     expect(screen.queryAllByText('Repeated failed welcome')).toHaveLength(0);
     expect(screen.getByText('Include the new direction')).toBeTruthy();
-    expect(screen.getByText('Accepted commentary')).toBeTruthy();
+    expect(screen.queryByText('Accepted commentary')).toBeNull();
     expect(screen.getByText('Successful steered welcome')).toBeTruthy();
     const first = screen.getByTestId('work-f1');
-    const second = screen.getByTestId('work-f2');
+    const second = screen.getByTestId('work-summary-f2');
+    fireEvent.click(second.querySelector('button')!);
+    expect(screen.getByText('Accepted commentary')).toBeTruthy();
     fireEvent.click(first.querySelector('button')!);
     expect(screen.getAllByText('Repeated failed welcome')).toHaveLength(1);
     expect(first.textContent).toContain('Repeated failed welcome');
     expect(second.textContent).not.toContain('Repeated failed welcome');
-    fireEvent.click(second.querySelector('button')!);
+    // The summary's second disclosure is the independently retained failed sample.
+    fireEvent.click(second.querySelectorAll('button')[1]);
     expect(screen.getAllByText('Repeated failed welcome')).toHaveLength(2);
     fireEvent.click(first.querySelector('button')!);
     expect(screen.getAllByText('Repeated failed welcome')).toHaveLength(1);
@@ -271,8 +280,10 @@ describe('WorkGroupBlock — running latest-five preview', () => {
   });
 
   it('rebinds visible detail interest when the Host changes without changing the group key', () => {
-    const first = vi.fn();
-    const second = vi.fn();
+    const firstRelease = vi.fn();
+    const secondRelease = vi.fn();
+    const first = vi.fn(() => firstRelease);
+    const second = vi.fn(() => secondRelease);
     const deferred = (owner: object, setVisible: typeof first) => ({ owner, key: 'range',
       expanded: false, loading: false, failed: false, toggle: vi.fn(), retry: vi.fn(), setVisible });
     const props = { blockId: 'work:same-key', isStreaming: true,
@@ -282,15 +293,17 @@ describe('WorkGroupBlock — running latest-five preview', () => {
     expect(screen.getAllByTestId('direct-tool')).toHaveLength(5);
     clickGroup('chat.workGroup.working');
     expect(first).toHaveBeenLastCalledWith(true, true);
+    expect(firstRelease).toHaveBeenCalledTimes(1);
     rerender(createElement(WorkGroupBlock, { ...props, deferred: deferred({}, second) }));
-    expect(first).toHaveBeenLastCalledWith(false, false);
+    expect(firstRelease).toHaveBeenCalledTimes(2);
     expect(second).toHaveBeenLastCalledWith(true, true);
     unmount();
-    expect(second).toHaveBeenLastCalledWith(false, false);
+    expect(secondRelease).toHaveBeenCalledOnce();
   });
 
   it('keeps an outer summary independent from inner detail visibility and remembers the inner toggle', async () => {
-    const setVisible = vi.fn();
+    const release = vi.fn();
+    const setVisible = vi.fn(() => release);
     const child: WorkGroupChild = { kind: 'group', key: 'inner', blockId: 'work:inner', durationMs: 1000,
       isStreaming: false, childItems: [tools('tools', [mkTool('inside')])],
       deferred: { owner: {}, key: 'range', expanded: false, loading: false, failed: false, toggle: vi.fn(), retry: vi.fn(), setVisible } };
@@ -298,14 +311,15 @@ describe('WorkGroupBlock — running latest-five preview', () => {
       childItems: [rendered('progress', 'Checking'), child] }));
     expect(setVisible).not.toHaveBeenCalled();
     clickGroup('chat.workGroup.worked:3s');
-    expect(setVisible).toHaveBeenLastCalledWith(false, false);
+    expect(setVisible).toHaveBeenLastCalledWith(false, true);
     expect(screen.queryByTestId('direct-tool')).toBeNull();
     clickGroup('chat.workGroup.worked:1s');
-    expect(setVisible).toHaveBeenLastCalledWith(true, false);
+    expect(setVisible).toHaveBeenLastCalledWith(true, true);
     clickGroup('chat.workGroup.worked:3s');
-    await waitFor(() => expect(setVisible).toHaveBeenLastCalledWith(false, false));
+    await waitFor(() => expect(release).toHaveBeenCalledTimes(2));
     clickGroup('chat.workGroup.worked:3s');
-    await waitFor(() => expect(setVisible).toHaveBeenLastCalledWith(true, false));
+    await waitFor(() => expect(setVisible).toHaveBeenCalledTimes(3));
+    expect(setVisible).toHaveBeenLastCalledWith(true, true);
   });
 
   it('keeps the latest five tools/reasoning rows in chronological order and drops empty thinking', async () => {
@@ -761,7 +775,7 @@ describe('WorkGroupBlock — Host-projected running lines', () => {
   });
   const placeholder = thinking({ ...mkThinking('placeholder', ''), thinkingRedacted: true });
 
-  it('renders Host lines without asking for the detail preview, and a line opens the group', () => {
+  it('renders Host lines, and a line opens the group', () => {
     const remote = deferred([
       { kind: 'tool', key: 'c1', toolName: 'exec', status: 'done',
         descriptor: { kind: 'command', toolName: 'exec', command: 'pnpm test', intent: { action: 'test' } } },
@@ -770,12 +784,12 @@ describe('WorkGroupBlock — Host-projected running lines', () => {
     const { container } = render(createElement(WorkGroupBlock, {
       blockId: 'work:remote', isStreaming: true, childItems: [placeholder], deferred: remote,
     }));
-    expect(remote.setVisible).toHaveBeenLastCalledWith(false, false);
+    expect(remote.setVisible).toHaveBeenLastCalledWith(false, true);
     expect(container.querySelector('[data-live-work-preview]')).not.toBeNull();
     expect(screen.getByTestId('direct-tool').getAttribute('data-descriptor')).toBe('command');
     expect(screen.getByText('Checking the failing case')).toBeTruthy();
     fireEvent.click(screen.getByTestId('direct-tool'));
-    expect(remote.setVisible).toHaveBeenLastCalledWith(true, false);
+    expect(remote.setVisible).toHaveBeenLastCalledWith(true, true);
   });
 
   it('keeps the Host lines on screen after expanding until detail rows arrive', () => {

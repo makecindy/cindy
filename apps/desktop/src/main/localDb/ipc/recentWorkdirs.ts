@@ -149,6 +149,7 @@ export async function listRecentWorkdirs(client: DbClient = getDbClient()) {
   const sessionRows = await db
     .selectDistinct({
       workingDir: sessions.workingDir,
+      projectDir: sessions.projectDir,
       agentKind: sessions.agentKind,
     })
     .from(sessions)
@@ -163,7 +164,7 @@ export async function listRecentWorkdirs(client: DbClient = getDbClient()) {
   const knownKindsByPath = new Map<string, Set<string>>();
   for (const session of sessionRows) {
     if (!session.workingDir) continue;
-    const identity = recentWorkdirProjectIdentity(session.workingDir, process.platform);
+    const identity = recentWorkdirProjectIdentity(session.projectDir ?? session.workingDir, process.platform);
     if (!identity) continue;
     const kinds = knownKindsByPath.get(identity) ?? new Set<string>();
     kinds.add(session.agentKind ?? 'cc');
@@ -181,6 +182,24 @@ export async function listRecentWorkdirs(client: DbClient = getDbClient()) {
       knownAgentKinds: Array.from((identity && knownKindsByPath.get(identity)) ?? []).sort(),
     };
   });
+}
+
+/**
+ * 路径是否原样存在于最近项目列表。用于给「添加目录」发可写授权：只认存储形态的精确匹配，
+ * 不做大小写 / 软链接放宽，非存储形态的写法一律当不在列表里。
+ */
+export async function hasRecentWorkdir(
+  rawPath: string,
+  client: DbClient = getDbClient(),
+): Promise<boolean> {
+  const normalized = normalizeRecentWorkdirPath(rawPath);
+  if (!normalized || normalized !== rawPath) return false;
+  const rows = await client.drizzle
+    .select({ path: recentWorkdirs.path })
+    .from(recentWorkdirs)
+    .where(eq(recentWorkdirs.path, normalized))
+    .limit(1);
+  return rows.length > 0;
 }
 
 export function registerRecentWorkdirsIpc(): void {

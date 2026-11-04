@@ -3,7 +3,7 @@ import { importedProcessEnvironment, runImportedProcess, redactEnvironmentValues
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { CallToolRequestSchema, ListToolsRequestSchema, type Tool } from '@modelcontextprotocol/sdk/types.js';
 import type { McpProvider } from '@cindy/maker-core';
-import { resolveLiziMcpSessionContext } from '@cindy/mcps';
+import { resolveLiziMcpSessionContext, type LiziMcpSessionContext } from '@cindy/mcps';
 import { readCompanionSessionDiscovery, readCompanionSessionEnvironment, readCompanionSessionScope } from './runtime.js';
 import { IMPORTED_TOOL_LIMIT, listImportedTools, withImportedConnection } from './connections.js';
 import { fingerprint } from './files.js';
@@ -13,10 +13,22 @@ import { withImportedSkillResources } from './skillResources.js';
 
 export const COMPANION_CONNECTIONS_MCP_NAME = 'companion_connections';
 
+/** Discovery checks the same caller scope as tools/list without opening connections. */
+export async function readCompanionConnectionsAvailability(context: LiziMcpSessionContext): Promise<string | null> {
+  const session = resolveLiziMcpSessionContext(context);
+  const scope = session.sessionId ? await readCompanionSessionDiscovery(session.sessionId) : undefined;
+  return scope ? null : 'not-applicable-without-companion-environment';
+}
+
 /** The shared bridge recovers the caller for every operation, including tools/list. */
 export function createCompanionConnectionsProvider(): McpProvider {
   return {
     name: COMPANION_CONNECTIONS_MCP_NAME,
+    capability: {
+      title: '伙伴环境连接',
+      description: '仅适用于当前任务关联有效伙伴且该伙伴已保存环境的情况，用于访问该环境的命令和连接；不提供创建、邀请伙伴或群分工的通用入口。当前任务不适用时无需修复连接或新建任务。',
+      source: 'custom',
+    },
     toClaudeSdkConfig(context) {
       const server = new McpServer({ name: COMPANION_CONNECTIONS_MCP_NAME, version: '1.0.0' }, { capabilities: { tools: {} } });
       const resolve = async <T>(read: (sessionId: string) => Promise<T>) => {

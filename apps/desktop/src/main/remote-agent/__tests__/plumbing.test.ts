@@ -3,7 +3,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 
-import { MAIN_OWNED_SEND_CONTEXT, type InteractionDecision } from '@cindy/maker-core';
+import { LOCAL_AGENT_CLIENT, MAIN_OWNED_SEND_CONTEXT, type InteractionDecision } from '@cindy/maker-core';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -22,9 +22,20 @@ import { handleExecMcpRequest } from '../executor/ccMcp';
 import { ExecutorWorkspace } from '../executor/workspace';
 import { createRunTunnel } from '../host/tunnel';
 import { PROVIDER_SHARE_CREDENTIAL_SESSION_APPROVAL } from '../../../shared/providerShareCredentialConsent';
-import { decodeOpenPayload, decodeSendOptions, encodeSendOptions, isSafeProjectFilePath } from '../wire';
+import { decodeOpenPayload, decodeStartOptions, encodeStartOptions, decodeSendOptions, encodeSendOptions, isSafeProjectFilePath } from '../wire';
 
 let root: string;
+
+it('encodes only application isolation, never its private URL, token, path or target', () => {
+  const encoded = encodeStartOptions({ sessionId: 'client', workingDir: '/workspace', model: 'm', [LOCAL_AGENT_CLIENT]: {
+    url: 'http://127.0.0.1:12345/private', token: 'private-token', storageDirectory: '/private-history', agentDeviceId: 'share:private', mcpName: 'hhh', hostToolsOnly: true,
+  } });
+  expect(decodeStartOptions(JSON.parse(JSON.stringify(encoded)))).toEqual(encoded);
+  expect(JSON.stringify(encoded)).not.toMatch(/private|127\.0\.0\.1/);
+  for (const patch of [{ storageKey: '../escape' }, { mcpName: 'cindy_exec' }, { hostToolsOnly: 'false' }]) {
+    expect(() => decodeStartOptions({ ...encoded, localApplication: { ...encoded.localApplication, ...patch } })).toThrow('REMOTE_AGENT_INVALID');
+  }
+});
 
 beforeEach(() => {
   root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'cindy-ra-plumbing-')));
@@ -353,8 +364,82 @@ describe('tunnel', () => {
 });
 
 describe('remote AgentSessionHandle close', () => {
-  it('propagates a DEVICE_LINK close failure after disposing local resources', async () => {
+  // #6921 unit: the production handle must distinguish remote notification failure
+  // from local cleanup failure. The navigation-only test below missed this boundary.
+  // Minimal inputs: a pending/rejected close and an onClosed cleanup still in flight.
+  // Deferred promises exercise ordering without sleeps or real Agent processes.
+  it.each(['close', 'detach'] as const)('releases local resources before account-boundary %s notification settles', async (mode) => {
+    let failRemote!: (error: Error) => void;
+    const remote = new Promise<void>((_resolve, reject) => { failRemote = reject; });
+    const close = vi.fn(() => remote);
+    const dispose = vi.fn(async () => undefined);
+    const warn = vi.fn();
+    const controller = createRemoteAgentHandle({
+      client: { close } as unknown as RemoteAgentRunClient,
+      started: { id: 'pi-1', agentKind: 'pi', model: 'm', shadowDir: '', methods: [], state: {} },
+      workspace: new ExecutorWorkspace({ workingDir: root }),
+      recordApproval: () => undefined, newId: () => 'req', dispose, log: { warn },
+    });
+    const closing = controller.handle[mode]!({ reason: 'account-boundary' });
+    const outcome = Promise.allSettled([closing]);
+    const remoteError = new Error('[DEVICE_LINK_NOT_CONNECTED] provider sharing is not ready');
+    try {
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      expect(close).toHaveBeenCalledWith(mode, 'account-boundary');
+      expect(dispose).toHaveBeenCalledOnce();
+      // Local event consumers can finish while the remote notification is pending.
+      expect(await controller.handle.events()[Symbol.asyncIterator]().next()).toMatchObject({ done: true });
+      failRemote(remoteError);
+      expect(await outcome).toEqual([{ status: 'fulfilled', value: undefined }]);
+      expect(warn).toHaveBeenCalledWith(expect.any(String), { error: String(remoteError) });
+    } finally {
+      failRemote(remoteError);
+      await outcome;
+    }
+  });
+
+  it.each(['resolve', 'reject'] as const)('shares onClosed cleanup and its %s result across close and detach', async (result) => {
+    let finish!: () => void;
+    let fail!: (error: Error) => void;
+    const cleanup = new Promise<void>((resolve, reject) => { finish = resolve; fail = reject; });
+    const dispose = vi.fn(() => cleanup);
+    const controller = createRemoteAgentHandle({
+      client: { close: async () => undefined } as unknown as RemoteAgentRunClient,
+      started: { id: 'pi-1', agentKind: 'pi', model: 'm', shadowDir: '', methods: [], state: {} },
+      workspace: new ExecutorWorkspace({ workingDir: root }),
+      recordApproval: () => undefined, newId: () => 'req', dispose, log: { warn: vi.fn() },
+    });
+    controller.onClosed('closed');
+    let settled = false;
+    const pending = Promise.allSettled([
+      controller.handle.close({ reason: 'account-boundary' }),
+      controller.handle.detach!({ reason: 'account-boundary' }),
+    ]).then((outcomes) => { settled = true; return outcomes; });
+    const localError = new Error('local executor did not stop');
+    try {
+      // Let already-resolved remote calls settle; the local gate must still block both callers.
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      expect(settled).toBe(false);
+      expect(dispose).toHaveBeenCalledOnce();
+      if (result === 'reject') fail(localError);
+      else finish();
+      const expected = result === 'reject'
+        ? { status: 'rejected', reason: localError }
+        : { status: 'fulfilled', value: undefined };
+      expect(await pending).toEqual([expected, expected]);
+      expect(await Promise.allSettled([controller.handle.close({ reason: 'account-boundary' })])).toEqual([expected]);
+      expect(dispose).toHaveBeenCalledOnce();
+    } finally {
+      finish();
+      await pending;
+    }
+  });
+
+  // Offline Stop must retire the local handle even when the provider cannot
+  // acknowledge close; real Session recovery is covered by connectionPool.
+  it('finishes local close when the offline provider cannot acknowledge it', async () => {
     let disposed = 0;
+    const warn = vi.fn();
     const client = {
       async close() {
         throw Object.assign(new Error('[REMOTE_AGENT_UNAVAILABLE] [DEVICE_LINK_DEVICE_OFFLINE] target offline'), {
@@ -369,9 +454,14 @@ describe('remote AgentSessionHandle close', () => {
       recordApproval: () => undefined,
       newId: () => 'req',
       dispose: async () => { disposed += 1; },
+      log: { warn },
     });
-    await expect(controller.handle.close({ reason: 'navigation' })).rejects.toThrow(/DEVICE_LINK_DEVICE_OFFLINE/);
+    await expect(controller.handle.close({ reason: 'navigation' })).resolves.toBeUndefined();
     expect(disposed).toBe(1);
+    expect(warn).toHaveBeenCalledWith('remote agent: close notification failed', {
+      reason: 'navigation', error: expect.stringContaining('DEVICE_LINK_DEVICE_OFFLINE'),
+    });
+    expect(await controller.handle.events()[Symbol.asyncIterator]().next()).toMatchObject({ done: true });
   });
 });
 

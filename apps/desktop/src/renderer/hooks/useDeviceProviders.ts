@@ -12,6 +12,8 @@
  * 调用方(ModelSelector)回退到基于 capabilities 的扁平列表(`selectVisibleModels`)。
  */
 import { useEffect, useState } from 'react';
+import { invokeModelCatalog } from '@/lib/invokeModelCatalog';
+import { parseModelCatalogKey } from '../../shared/controlledModelCatalog';
 
 import { CONTROLLER_CAPABILITY_PROVIDER_LOGO_KINDS_V2 } from '@cindy/device-link';
 import type { ProviderView } from '@cindy/model-providers';
@@ -46,6 +48,9 @@ export interface DeviceProvidersPayload {
 
 const EMPTY_PAYLOAD: DeviceProvidersPayload = { providers: [] };
 const cache = new Map<string, DeviceProvidersPayload>();
+// Retained across a policy refresh failure; discarded on disconnect/owner
+// eviction. Otherwise a failed refresh loses the identity needed to retry it.
+const subscriptionFetchedAt = new Map<string, number>();
 const inflight = new Map<string, Promise<DeviceProvidersPayload>>();
 const deviceGen = new Map<string, number>();
 export type DeviceProvidersEvent =
@@ -215,7 +220,7 @@ async function fetchDeviceProviders(deviceId: string): Promise<DeviceProvidersPa
   const request = async (): Promise<DeviceProvidersPayload> => {
     for (let attempt = 0; ; attempt++) {
       try {
-        return await dl.invoke(deviceId, 'maker:provider:list', [
+        return await invokeModelCatalog(dl, deviceId, 'maker:provider:list', [
           { capabilities: [CONTROLLER_CAPABILITY_PROVIDER_LOGO_KINDS_V2] },
         ]) as DeviceProvidersPayload;
       } catch (error) {
@@ -230,6 +235,9 @@ async function fetchDeviceProviders(deviceId: string): Promise<DeviceProvidersPa
       const payload = parseDeviceProvidersPayload(res);
       if (isCurrent()) {
         cache.set(deviceId, payload);
+        if (deviceId.startsWith('share:') && payload.providers.some(provider => !!provider.subscriptionFastPolicy))
+          subscriptionFetchedAt.set(deviceId, Date.now());
+        else subscriptionFetchedAt.delete(deviceId);
         inflight.delete(deviceId);
         notifyDeviceProviders(deviceId, { status: 'ready', ...payload });
       }
@@ -398,9 +406,32 @@ export async function prefetchDeviceProviders(deviceId: string): Promise<void> {
   }
 }
 
+/** Refresh mounted task-host catalogs after that host's discovery has recovered. */
+export function evictControlledDeviceProviders(taskDeviceId: string): void {
+  for (const key of new Set([...cache.keys(), ...inflight.keys(), ...listeners.keys()])) {
+    if (parseModelCatalogKey(key)?.taskDeviceId === taskDeviceId) evictDeviceProviders(key);
+  }
+}
+
+export function refreshControlledDeviceProviders(taskDeviceId: string): void {
+  for (const key of listeners.keys()) {
+    if (parseModelCatalogKey(key)?.taskDeviceId === taskDeviceId) void prefetchDeviceProviders(key);
+  }
+}
+
 /** device-link:被控设备下线 / 断链时驱逐其供应商缓存(只清该设备的 key + 代际自增)。 */
 export function getCachedDeviceProviders(deviceId: string): DeviceProvidersPayload | null {
   return cache.get(deviceId) ?? null;
+}
+
+/** Only subscription shares opt into freshness polling; custom API catalogs keep their existing lifetime. */
+export function hasSubscriptionShareCatalog(deviceId: string): boolean {
+  return subscriptionFetchedAt.has(deviceId);
+}
+
+export function isSubscriptionShareCatalogStale(deviceId: string, now = Date.now()): boolean {
+  return hasSubscriptionShareCatalog(deviceId)
+    && now - (subscriptionFetchedAt.get(deviceId) ?? 0) >= 60_000;
 }
 
 export function isDeviceProvidersGenerationCurrent(deviceId: string, generation: number): boolean {
@@ -411,7 +442,14 @@ export function evictDeviceProviders(
   deviceId: string,
   options?: { retainDisplaySnapshot?: boolean },
 ): number {
+  for (const key of new Set([...cache.keys(), ...inflight.keys(), ...listeners.keys()])) {
+    const route = parseModelCatalogKey(key);
+    if (route && (route.taskDeviceId === deviceId || route.agentDeviceId === deviceId)) {
+      evictDeviceProviders(key, options);
+    }
+  }
   cache.delete(deviceId);
+  if (!options?.retainDisplaySnapshot) subscriptionFetchedAt.delete(deviceId);
   inflight.delete(deviceId);
   deviceGen.set(deviceId, (deviceGen.get(deviceId) ?? 0) + 1);
   notifyDeviceProviders(deviceId, {

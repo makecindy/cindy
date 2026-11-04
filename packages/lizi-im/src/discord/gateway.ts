@@ -53,7 +53,7 @@ export function mapDiscordCloseCodeToStatus(code: number): IMStatus {
   if (code === 4004) {
     return { kind: 'error', reason: 'Discord authentication failed: invalid bot token' };
   }
-  if (code === 4014) {
+  if (code === 4013 || code === 4014) {
     return { kind: 'error', reason: 'Discord gateway rejected configured intents' };
   }
   return { kind: 'connecting' };
@@ -64,7 +64,7 @@ export function mapDiscordLoginErrorToStatus(error: unknown): IMStatus {
   if (code === 'TokenInvalid' || code === 4004) {
     return { kind: 'error', reason: 'Discord authentication failed: invalid bot token' };
   }
-  if (code === 'DisallowedIntents' || code === 4014) {
+  if (code === 'InvalidIntents' || code === 'DisallowedIntents' || code === 4013 || code === 4014) {
     return { kind: 'error', reason: 'Discord gateway rejected configured intents' };
   }
   return { kind: 'error', reason: errorMessage(error) };

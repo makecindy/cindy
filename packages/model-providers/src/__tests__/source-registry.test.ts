@@ -116,7 +116,8 @@ describe("resolveCatalogUrl", () => {
       region: "cn",
       registryMedia: "1",
       registryLocalRuntimes: "1",
-      registrySchemaVersion: "5",
+      registryRecommendedAgents: "1",
+      registrySchemaVersion: "6",
     });
   });
 
@@ -125,7 +126,7 @@ describe("resolveCatalogUrl", () => {
     const readCache = vi.fn().mockResolvedValue(null);
     const writeCache = vi.fn();
     await loadCatalog(cfg, {
-      fetchText: vi.fn().mockResolvedValue(JSON.stringify(MINIMAL)),
+      fetchText: vi.fn().mockResolvedValue(JSON.stringify({ ...MINIMAL, modelRegistry: BUNDLED_CATALOG.modelRegistry })),
       readCache,
       writeCache,
     });
@@ -135,7 +136,7 @@ describe("resolveCatalogUrl", () => {
       expect.any(String),
     );
     expect(readCache).not.toHaveBeenCalledWith(
-      "https://model-access.example.com/api/model-catalog/catalog?registrySchemaVersion=5",
+      "https://model-access.example.com/api/model-catalog/catalog?registrySchemaVersion=6",
     );
   });
   it("prefers explicit url", () => {
@@ -147,7 +148,7 @@ describe("resolveCatalogUrl", () => {
     expect(
       resolveCatalogUrl({ baseUrl: "https://model-access.example.com/" }),
     ).toBe(
-      "https://model-access.example.com/api/model-catalog/catalog?registrySchemaVersion=5&registryMedia=1&registryLocalRuntimes=1",
+      "https://model-access.example.com/api/model-catalog/catalog?registrySchemaVersion=6&registryMedia=1&registryLocalRuntimes=1&registryRecommendedAgents=1",
     );
   });
   it("builds the migration OSS fallback URL", () => {
@@ -1074,7 +1075,7 @@ describe("loadCatalog", () => {
     );
     expect(fetchText).toHaveBeenNthCalledWith(
       1,
-      "https://model-access.example.com/api/model-catalog/catalog?registrySchemaVersion=5&registryMedia=1&registryLocalRuntimes=1",
+      "https://model-access.example.com/api/model-catalog/catalog?registrySchemaVersion=6&registryMedia=1&registryLocalRuntimes=1&registryRecommendedAgents=1",
       15_000,
     );
     expect(fetchText).toHaveBeenNthCalledWith(
@@ -1134,7 +1135,7 @@ describe("loadCatalog", () => {
     );
     expect(fetchText).toHaveBeenNthCalledWith(
       1,
-      "https://model-access.example.com/api/model-catalog/catalog?registrySchemaVersion=5&registryMedia=1&registryLocalRuntimes=1",
+      "https://model-access.example.com/api/model-catalog/catalog?registrySchemaVersion=6&registryMedia=1&registryLocalRuntimes=1&registryRecommendedAgents=1",
       15_000,
     );
     expect(fetchText).toHaveBeenNthCalledWith(
@@ -1192,7 +1193,7 @@ describe("loadCatalog", () => {
     );
     expect(fetchText).toHaveBeenNthCalledWith(
       1,
-      "https://model-access.example.com/api/model-catalog/catalog?registrySchemaVersion=5&registryMedia=1&registryLocalRuntimes=1",
+      "https://model-access.example.com/api/model-catalog/catalog?registrySchemaVersion=6&registryMedia=1&registryLocalRuntimes=1&registryRecommendedAgents=1",
       15_000,
     );
     expect(fetchText).toHaveBeenNthCalledWith(
@@ -1221,7 +1222,7 @@ describe("loadCatalog", () => {
     );
     expect(fetchText).toHaveBeenCalledTimes(1);
     expect(fetchText).toHaveBeenCalledWith(
-      "https://model-access.example.com/api/model-catalog/catalog?registrySchemaVersion=5&registryMedia=1&registryLocalRuntimes=1",
+      "https://model-access.example.com/api/model-catalog/catalog?registrySchemaVersion=6&registryMedia=1&registryLocalRuntimes=1&registryRecommendedAgents=1",
       15_000,
     );
     expect(cat.version).toBe(BUNDLED_CATALOG.version);
@@ -1740,4 +1741,49 @@ describe("server-delivered local models", () => {
       snapshot.modelRegistry.localModels,
     );
   });
+});
+
+// Tier: integration. Same loader instance/unchanged code accepts data-only updates;
+// schema negotiation uses one deadline and never blends two profile revisions.
+describe('V6 negotiation', () => {
+  it('retries a frozen unknown-version response as V5 once and caches the actual variant', async () => {
+    const old = { ...MINIMAL, modelRegistry: { schemaVersion: 5, updatedAt: '2099-01-01T00:00:00.000Z', models: [] } };
+    let clock = 0;
+    const fetchText = vi.fn(async (url: string) => { clock += 7; return JSON.stringify(url.includes('Version=6') ? MINIMAL : old); });
+    const writeCache = vi.fn(async () => {});
+    const result = await loadCatalogWithSource({ baseUrl: 'https://models.example', now: () => clock, remoteBudgetMs: 100 }, { fetchText, writeCache });
+    expect(fetchText).toHaveBeenCalledTimes(2);
+    expect(fetchText).toHaveBeenNthCalledWith(2, expect.stringContaining('registrySchemaVersion=5'), 93);
+    expect(result.catalog.modelRegistry?.schemaVersion).toBe(5);
+    expect(writeCache).toHaveBeenCalledWith(expect.stringContaining('registrySchemaVersion=5'), expect.any(String));
+  });
+});
+
+it('keeps the accepted complete V6 snapshot when an old server answers with its V5 projection', async () => {
+  const { projectRegistryV5 } = await import('../modelInterfaceContract.js');
+  const current = { ...MINIMAL, modelRegistry: structuredClone(BUNDLED_CATALOG.modelRegistry!) };
+  current.modelRegistry.updatedAt = '2099-01-01T00:00:00.000Z';
+  const legacy = { ...current, modelRegistry: projectRegistryV5(current.modelRegistry) };
+  const writeCache = vi.fn(async () => {});
+  const result = await loadCatalogWithSource({ baseUrl: 'https://models.example' }, {
+    fetchText: async () => JSON.stringify(legacy),
+    readCache: async url => url.includes('Version=6') ? JSON.stringify(current) : null,
+    writeCache,
+  });
+  expect(result.catalog.modelRegistry).toEqual(current.modelRegistry);
+  expect(result.capabilityEvidence).toBe('fallback');
+  expect(writeCache).toHaveBeenCalledWith(expect.stringContaining('Version=6'), expect.any(String));
+});
+
+// Upgrading adds `registryRecommendedAgents=1`; an offline first start must still use the
+// V6 snapshot cached under the previous URL instead of dropping to the bundled catalog.
+it('falls back offline to the V6 snapshot cached before the recommendation capability', async () => {
+  const cached = { ...MINIMAL, modelRegistry: { ...structuredClone(BUNDLED_CATALOG.modelRegistry!), updatedAt: '2099-02-01T00:00:00.000Z' } };
+  const previous = 'https://models.example/api/model-catalog/catalog?registrySchemaVersion=6&registryMedia=1&registryLocalRuntimes=1';
+  const result = await loadCatalogWithSource({ baseUrl: 'https://models.example' }, {
+    fetchText: async () => { throw new Error('offline'); },
+    readCache: async url => url === previous ? JSON.stringify(cached) : null,
+  });
+  expect(result.source).toBe('cache');
+  expect(result.catalog.modelRegistry?.updatedAt).toBe('2099-02-01T00:00:00.000Z');
 });

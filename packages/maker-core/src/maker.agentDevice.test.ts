@@ -77,6 +77,31 @@ function localAgent(): BaseAgent & { startSession: ReturnType<typeof vi.fn> } {
 }
 
 describe('Maker: agent on another computer', () => {
+  it('starts local and hosted tasks as standard after relaxation when the task has not re-enabled Fast', async () => {
+    const agent = localAgent();
+    const policy = {
+      isAllowed: () => true,
+      isRequestAllowed: () => false,
+      subscribe: () => () => {},
+    };
+    const maker = new Maker({
+      agents: { pi: agent }, storage: storage(), logger,
+      lifecycleHooks: { prepareStartOptions: (_id, opts) => { opts.fastModePolicy = policy; } },
+    });
+    await maker.createSession({ id: 'task-standard', agentKind: 'pi', workingDir: '/repo', model: 'm', fastMode: true });
+    expect(agent.startSession.mock.lastCall?.[0].fastMode).toBe(false);
+    const hosted = await maker.startHostedAgentSession('pi', {
+      workingDir: '/shadow', model: 'm', fastMode: true, fastModePolicy: policy,
+      deviceHosted: {
+        workingDir: '/repo', extraDirs: [], writableDirs: [], platform: 'darwin', shell: 'zsh', isGitRepo: false,
+        tunnelUrl: 'http://127.0.0.1:1', tunnelToken: 't', mcpServers: [],
+      },
+    });
+    expect(agent.startSession.mock.lastCall?.[0].fastMode).toBe(false);
+    await hosted.close();
+    await maker.shutdown();
+  });
+
   it('starts the agent through the device starter and records the computer on the task', async () => {
     const store = storage();
     const agent = localAgent();

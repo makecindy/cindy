@@ -172,6 +172,11 @@ export function LocalDbGate() {
       <LocalDbFatalScreen
         code={decision.code}
         message={decision.message}
+        onRetry={() => {
+          retryCountRef.current = 0;
+          setDecision({ phase: 'checking' });
+          setRetryNonce((n) => n + 1);
+        }}
         onBackToLogin={() => {
           const leave = mode === 'local' ? exitLocalMode() : logout();
           void leave.then(

@@ -7,7 +7,7 @@
  *  - stage 缩放与两档插值/两档外策略 = U-8a 裁决「照 demo」——
  *    docs/cindy-login-hifi.html `phoneLayout()`(wave3.5 内层修正 2026-07-19,
  *    347:2884 / 358:434 实测 inner 几何)与 stage 解析(designHeight clamp [600,1800]);
- *  - 面板内组件几何 = figma-component-spec §4/§5.1,与桌面
+ *  - 面板内组件几何 = DESIGN.md §16 几何表,与桌面
  *    apps/desktop/src/renderer/components/login/loginDesignTokens.ts 同源对齐;
  *  - 倒计时 = DESIGN §16.4(60s 与服务端冷却一致,保留绝对 deadline 显示数学)。
  */

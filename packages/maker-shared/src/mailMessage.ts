@@ -61,6 +61,8 @@ export interface MailMessage {
   bodyText: string;
   bodyHtml: string;
   attachments: MailAttachmentItem[];
+  /** Optional exact-email contact photos. Older providers/clients may omit/ignore these. */
+  participantPhotos?: { email: string; url: string }[];
   /** Optional, chronological metadata only. Bodies are read on explicit expansion. */
   conversation?: MailConversation;
   conversationUnavailable?: boolean;
@@ -109,11 +111,27 @@ export function parseMailMessage(value: unknown): MailMessage | null {
   const attachments = parseMailAttachmentItems(JSON.stringify(p.attachments));
   if (!attachments) return null;
   const conversation = parseConversation(p.conversation, p.messageId as string);
+  const participantPhotos = Array.isArray(p.participantPhotos) ? p.participantPhotos.slice(0, 64).flatMap(photo => {
+    if (!photo || typeof photo.email !== 'string' || photo.email.length > 320 ||
+        mailParticipantEmail(photo.email) !== photo.email || typeof photo.url !== 'string' || photo.url.length > 2048) return [];
+    try {
+      const url = new URL(photo.url);
+      if (url.protocol !== 'https:' || url.username || url.password || url.port) return [];
+      return [{ email: photo.email, url: url.href }];
+    } catch { return []; }
+  }) : [];
   return { ...Object.fromEntries(Object.keys(limits).map(k => [k, p[k]])), attachments,
+    ...(participantPhotos.length ? { participantPhotos } : {}),
     ...(p.markReadFailed === true ? { markReadFailed: true } : {}),
     ...(conversation ? { conversation } : {}),
     ...(p.conversationUnavailable === true || (p.conversation !== undefined && !conversation) ? { conversationUnavailable: true } : {}),
   } as unknown as MailMessage;
+}
+
+/** Conservative display lookup: never infer an email from a person's name. */
+export function mailParticipantEmail(address: string): string | undefined {
+  const email = (/<([^<>]+)>\s*$/.exec(address)?.[1] || address).trim().toLowerCase();
+  return email.length <= 320 && /^[a-z0-9.!#$%&'*+/=?^_`{|}~-]+@[a-z0-9](?:[a-z0-9.-]*[a-z0-9])?\.[a-z]{2,63}$/.test(email) ? email : undefined;
 }
 /** Reuse the compose card's HTML, recipients, CID and attachment renderers, with no actions. */
 export function mailMessageFields(mail: MailMessage, label: (key: string) => string): GhostCardFormField[] {

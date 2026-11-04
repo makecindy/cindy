@@ -162,7 +162,7 @@ function fixture() {
     assertCompanion: vi.fn(async () => {}),
     models: vi.fn(() => [{ id: 'tts', name: 'Speech' }]),
     createProvider: vi.fn(async () => provider),
-    createAudioGate: vi.fn<() => AudioGate | undefined>(() => undefined),
+    createAudioGate: vi.fn<(onFiltered: () => void) => AudioGate | undefined>(() => undefined),
     connection: vi.fn<() => SpeechConnection>(() => ({
       baseUrl: 'https://gateway.test/v1',
       protocol: 'openai' as const,
@@ -390,6 +390,24 @@ describe('local companion call ownership', () => {
     service.interrupt(1, selection.callId);
     await expect(service.readSpeech(1, selection.callId, 'two')).rejects.toThrow();
     await expect(service.readSpeech(1, selection.callId, 'three')).rejects.toThrow();
+  });
+
+  // Unit regression: MP3 completes during start/prefetch rather than readSpeech.
+  // Retaining those slots would make the third sentence fail as a full queue.
+  it('releases completed MP3 prefetch slots without requiring a PCM read', async () => {
+    const { service, deps } = fixture();
+    const modelId = 'minimax/speech-2.8-turbo';
+    deps.models.mockReturnValue([{ id: modelId, name: 'MiniMax speech' }]);
+    deps.connection.mockReturnValue({ baseUrl: 'https://openrouter.ai/api/v1', protocol: 'openai', headers: {} });
+    deps.fetch.mockImplementation(async () => new Response(new Uint8Array([0xff, 0xfb, 1]), {
+      headers: { 'Content-Type': 'audio/mpeg' },
+    }));
+    await service.start(1, { ...selection, modelId });
+    const ready = await Promise.all(['one', 'two'].map(id => service.speak(1, selection.callId, id, id, true)));
+    expect(ready).toEqual(Array.from({ length: 2 }, () => ({ format: 'mp3', data: new Uint8Array([0xff, 0xfb, 1]).buffer })));
+    await expect(service.speak(1, selection.callId, 'three', 'three', true)).resolves.toHaveProperty('format', 'mp3');
+    expect(deps.fetch).toHaveBeenCalledTimes(3);
+    await expect(service.readSpeech(1, selection.callId, 'three')).rejects.toThrow('cancelled');
   });
 
   it('cancels pending lookahead headers and prevents their late audio from joining a new reply', async () => {
@@ -631,9 +649,10 @@ describe('input-only mute', () => {
   // Real call service/input; a held gate callback models delayed inference.
   // Existing mute tests only delayed ASR, so they missed pre-ASR voiceprint work.
   // Unit, in-memory: a 200ms held voice must not revive a muted/ended/other-owner
-  // call, interrupt TTS, or reach the new microphone's ASR after unmute.
+  // call, interrupt TTS, or reach the new microphone's ASR after unmute. Its
+  // late "ignored another voice" notice is fenced the same way.
   it.each(['mute', 'end', 'owner'] as const)(
-    'fences delayed filtered audio on %s and rereads filter availability on unmute',
+    'fences delayed filtered audio and its notice on %s and rereads filter availability on unmute',
     async (action) => {
       const { service, deps, provider } = fixture();
       let release!: AudioGateEmit;
@@ -645,17 +664,27 @@ describe('input-only mute', () => {
         finish: vi.fn(async () => {}),
         abort: vi.fn(),
       };
-      deps.createAudioGate.mockReturnValueOnce(audioGate);
+      let filtered!: () => void;
+      deps.createAudioGate.mockImplementationOnce((onFiltered) => {
+        filtered = onFiltered;
+        return audioGate;
+      });
       await service.start(1, selection);
       await service.speak(1, selection.callId, 'reply', 'keep reading');
       const voice = new Int16Array(3_200).fill(2_000).buffer;
       service.audio(1, selection.callId, voice);
       expect(provider.appendAudio).not.toHaveBeenCalled();
+      filtered();
+      expect(deps.emit).toHaveBeenCalledWith(1, expect.objectContaining({
+        callId: selection.callId,
+        event: { type: 'speaker-filtered' },
+      }));
       if (action === 'mute') await service.setInputMuted(1, selection.callId, true);
       else if (action === 'end') await service.end(1, selection.callId);
       else deps.owner.mockReturnValue('owner-b');
       deps.emit.mockClear();
       release(voice);
+      filtered();
       expect(provider.appendAudio).not.toHaveBeenCalled();
       expect(deps.emit).not.toHaveBeenCalled();
       expect(audioGate.finish).not.toHaveBeenCalled();

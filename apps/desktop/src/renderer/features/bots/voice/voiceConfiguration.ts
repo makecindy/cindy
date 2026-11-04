@@ -33,7 +33,7 @@ export function resolveVoiceConfiguration(
     selectedModel?.protocol ??
     ((selectedModel?.providerId ?? 'xd') === 'xd' ? 'openai' : undefined);
   const resolvedSpeed = selectedModel
-    ? resolveSpeechSpeed(selectedModel.id, protocol, speed)
+    ? resolveSpeechSpeed(selectedModel.id, protocol, speed, selectedModel.speedRange)
     : undefined;
   const selection = selectedModel
     ? normalizeVoiceConversationSelection({
@@ -52,7 +52,7 @@ export function resolveVoiceConfiguration(
     selectedVoice,
     protocol,
     selection,
-    speedRange: selectedModel ? speechSpeedRange(selectedModel.id, protocol) : null,
+    speedRange: selectedModel ? speechSpeedRange(selectedModel.id, protocol, selectedModel.speedRange) : null,
     speed: resolvedSpeed,
     speedAdjusted: speed !== undefined && speed !== resolvedSpeed,
   };

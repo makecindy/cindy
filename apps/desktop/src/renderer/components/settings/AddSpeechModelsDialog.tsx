@@ -77,7 +77,7 @@ export function AddSpeechModelsDialog({
     let cancelled = false;
     mounted.current = true;
     void (async () => {
-      if (!target || target.needsApiKey) return;
+      if (!target) return;
       const runtime = config.runtimes[target.agent];
       if (!runtime) return;
       try {
@@ -142,7 +142,7 @@ export function AddSpeechModelsDialog({
     if (!savingRef.current) dialog.close(onClose);
   };
   const save = async () => {
-    if (savingRef.current || !target || target.needsApiKey || selected.length === 0) return;
+    if (savingRef.current || !target || selected.length === 0) return;
     const runtime = config.runtimes[target.agent];
     if (!runtime) return;
     savingRef.current = true;

@@ -26,8 +26,8 @@ describe('batch DB visibility', () => {
     const select = vi.spyOn(h.db!, 'select');
     const ids = ['ordinary','visible','hidden','archived','orphan','missing','visible'];
     const result = await readRemoteBotSessionAccessBatch(ids, 'session');
-    expect(Object.fromEntries(result)).toEqual({ ordinary: 'ordinary', visible: 'visible', hidden: 'hidden',
-      archived: 'hidden', orphan: 'hidden', missing: 'missing' });
+    expect(Object.fromEntries(result)).toEqual({ ordinary: 'ordinary', visible: 'visible', hidden: 'background',
+      archived: 'background', orphan: 'background', missing: 'missing' });
     expect(select).toHaveBeenCalledTimes(1);
     for (const id of ids) expect(await readRemoteBotSessionAccess(id)).toBe(result.get(id));
     expect(Object.fromEntries(await readRemoteBotSessionAccessBatch(['v','h','a','no'], 'bot')))

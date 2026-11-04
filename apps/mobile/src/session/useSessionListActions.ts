@@ -4,7 +4,10 @@ import { useTranslation } from 'react-i18next';
 import { projectDraftSessionTitle } from '@cindy/maker-shared/session-title';
 import { useDeviceLink } from '@/device-link/DeviceLinkContext';
 import { humanizeRemoteError } from '@/device-link/remoteStatus';
-import { isExplicitRemoteNotFoundError } from '@/session/newSessionWorktree';
+import { isExplicitRemoteNotFoundError, isWorktreeChannelNotAllowedError } from '@/session/newSessionWorktree';
+import { createMobileMakerTransport } from '@/device-link/mobileMakerTransport';
+import { markSessionScheduleRunsRead } from '@/session/scheduleRunRead';
+import { sessionMayHaveScheduleRuns } from '@/session/scheduleIndex';
 import type { SessionMetaPatch } from '@/device-link/mobileMakerTransport';
 import {
   remoteSessionStore,
@@ -255,12 +258,52 @@ export function useSessionListActions(options?: {
     setActionSheetSession(session);
   }, []);
 
+  const markSessionRead = useCallback((session: RemoteSession) => {
+    const devices = resolveSessionWriteDevices(session.id, session, preferredRpcDeviceId);
+    if (!devices) {
+      Alert.alert(t('devices.list.alert.actionFailed'), t('devices.list.error.sessionDeviceNotFound'));
+      return;
+    }
+    const activityAtSwipe = remoteSessionStore.getSessionLiveActivity(session.id);
+    const runAtSwipe = remoteSessionStore.getSessionRunStatus(session.id);
+    const superseded = new Error('RECEIPT_SUPERSEDED');
+    const isCurrent = () => remoteSessionStore.getSessionLiveActivity(session.id) === activityAtSwipe
+      && remoteSessionStore.getSessionRunStatus(session.id) === runAtSwipe;
+    const maker = createMobileMakerTransport({
+      deviceId: devices.rpcDeviceId,
+      invoke: (deviceId, channel, args) => channel !== 'notification:clear-session-attention'
+        && channel !== 'maker:schedule:mark-run-read'
+        ? invoke(deviceId, channel, args)
+        : invoke(deviceId, channel, args, { preSend: () => {
+          // Recheck after reconnect/backpressure. A new run invalidates even an identical completion label.
+          if (!isCurrent()) throw superseded;
+        } }),
+    });
+    const scheduleRead = sessionMayHaveScheduleRuns(devices.rpcDeviceId, session.id, session.source)
+      ? markSessionScheduleRunsRead(maker, session.id, devices.rpcDeviceId, isCurrent).catch((err: unknown) => {
+        if (!isCurrent()) throw superseded;
+        throw err;
+      }) : Promise.resolve();
+    // Clear attention last: its normal relay echo must not invalidate this gesture's schedule reads.
+    // A schedule lookup failure still permits the independent attention write, and remains reportable.
+    const attentionRead = scheduleRead.catch(() => undefined)
+      .then(() => maker.clearSessionAttention(session.id, 'explicit')).catch((err: unknown) => {
+        // Older Hosts lack this channel; schedule-read has already been attempted.
+        if (err !== superseded && !isWorktreeChannelNotAllowedError(err)) throw err;
+      });
+    void Promise.all([scheduleRead, attentionRead]).catch((err: unknown) => {
+      if (err === superseded) return;
+      Alert.alert(t('devices.list.alert.actionFailed'), humanizeRemoteError(err));
+    });
+  }, [invoke, preferredRpcDeviceId, t]);
+
   const sessionSwipeControls = useMemo<SessionSwipeControls>(() => ({
+    onMarkRead: markSessionRead,
     onArchive: archiveSession,
     onShowOptions: showSessionOptions,
     onTogglePin: toggleSessionPinned,
     registry: swipeRegistry,
-  }), [archiveSession, showSessionOptions, swipeRegistry, toggleSessionPinned]);
+  }), [archiveSession, markSessionRead, showSessionOptions, swipeRegistry, toggleSessionPinned]);
 
   return {
     patchSession,

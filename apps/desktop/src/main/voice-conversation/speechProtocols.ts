@@ -39,7 +39,7 @@ export function speechRequest(connection: SpeechConnection, input: SpeechInput):
     base.hash
   )
     throw new SpeechError('unavailable');
-  if (!isSpeechSpeedSupported(input.modelId, connection.protocol, input.speed))
+  if (!isSpeechSpeedSupported(input.modelId, connection.protocol, input.speed, connection.speedRange))
     throw new SpeechError('unavailable');
   return speechAdapter(connection.protocol).request(connection.baseUrl.replace(/\/+$/, ''), input);
 }

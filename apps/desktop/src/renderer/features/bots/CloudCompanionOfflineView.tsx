@@ -13,7 +13,7 @@ import { Spinner } from '@/components/ui/spinner';
 import { getDataOwnerGeneration, isDataOwnerGenerationCurrent } from '@/contexts/dataOwnerGeneration';
 import { useDeviceLinkDeviceList } from '@/features/device-link/useDeviceLinkDeviceList';
 import { toast } from '@/lib/toast';
-import type { CompanionTranscriptMessage } from '../../../shared/companionCloud';
+import type { CompanionTranscriptMessage, CompanionTranscriptPage } from '../../../shared/companionCloud';
 import type { BotGroupAttachment } from '../../../shared/botGroupChat';
 import { BotAvatar } from './BotAvatar';
 import { BotGroupMessageAttachments } from './BotGroupMessageAttachments';
@@ -29,8 +29,8 @@ export interface CloudCompanionOfflineViewProps {
   avatarColor?: string | null;
   /** Home computer name; empty when this device never saw it. */
   deviceName: string;
-  /** The home is online but does not allow remote control from here. */
-  reachable?: boolean;
+  /** The home is online but has not opened remote control; otherwise it is simply not reachable. */
+  controlOff?: boolean;
 }
 
 type TakeOverState =
@@ -39,15 +39,22 @@ type TakeOverState =
   | { kind: 'conflict'; device: string }
   | { kind: 'error'; key: string };
 
-export function CloudCompanionOfflineView({ botId, deviceId, name, avatar, avatarColor, deviceName, reachable = false }: CloudCompanionOfflineViewProps) {
+let transcriptOwner = getDataOwnerGeneration();
+const transcriptPages = new Map<string, CompanionTranscriptPage>();
+export function CloudCompanionOfflineView(props: CloudCompanionOfflineViewProps) {
+  const owner = getDataOwnerGeneration();
+  if (!owner.dataOwnerId || !isDataOwnerGenerationCurrent(transcriptOwner)) { transcriptOwner = owner; transcriptPages.clear(); }
+  return <CloudCompanionOfflineContent key={JSON.stringify([owner, props.botId, props.deviceId])} {...props} />;
+}
+function CloudCompanionOfflineContent({ botId, deviceId, name, avatar, avatarColor, deviceName, controlOff = false }: CloudCompanionOfflineViewProps) {
   const { t } = useTranslation();
   const navigate = useNavigate();
   const devices = useDeviceLinkDeviceList();
   const device = deviceName.trim() || t('bots.cloud.unknownDevice');
   const identity = useMemo<BotChatIdentity>(() => ({ id: botId, deviceId, deviceName: device, name, avatar, avatarColor, sessionId: null }),
     [botId, deviceId, device, name, avatar, avatarColor]);
-  const [messages, setMessages] = useState<CompanionTranscriptMessage[]>([]);
-  const [nextBefore, setNextBefore] = useState<string | undefined>();
+  const [messages, setMessages] = useState<CompanionTranscriptMessage[]>(() => transcriptPages.get(botId)?.messages ?? []);
+  const [nextBefore, setNextBefore] = useState<string | undefined>(() => transcriptPages.get(botId)?.nextBefore);
   const [loading, setLoading] = useState(true);
   const [loadFailed, setLoadFailed] = useState(false);
   const [state, setState] = useState<TakeOverState>({ kind: 'idle' });
@@ -55,6 +62,10 @@ export function CloudCompanionOfflineView({ botId, deviceId, name, avatar, avata
   const anchor = useRef<{ height: number; top: number } | null>(null);
   const stickToBottom = useRef(true);
   const loadingRef = useRef(false);
+  const revision = useRef(0);
+  const alive = useRef(true);
+  const latest = useRef({ messages, nextBefore }); latest.current = { messages, nextBefore };
+  useEffect(() => { alive.current = true; return () => { alive.current = false; }; }, []);
 
   const load = useCallback(async (before?: string) => {
     const api = companionCloudApi();
@@ -65,12 +76,30 @@ export function CloudCompanionOfflineView({ botId, deviceId, name, avatar, avata
     const owner = getDataOwnerGeneration();
     try {
       const page = await api.getCompanionTranscript(botId, before);
-      if (!isDataOwnerGenerationCurrent(owner)) return;
+      while (!before && page.nextBefore && page.messages.length < latest.current.messages.length) {
+        if (!alive.current || !isDataOwnerGenerationCurrent(owner)) return;
+        const cursor = page.nextBefore;
+        const older = await api.getCompanionTranscript(botId, cursor);
+        const ids = new Set(page.messages.map(row => row.id));
+        page.messages = [...older.messages.filter(row => !ids.has(row.id)), ...page.messages];
+        page.nextBefore = older.nextBefore;
+        if (page.nextBefore === cursor) throw new Error('INVALID_CHAT_PAGE');
+      }
+      if (!alive.current || !isDataOwnerGenerationCurrent(owner)) return;
+      revision.current++;
       if (before && scroller.current) anchor.current = { height: scroller.current.scrollHeight, top: scroller.current.scrollTop };
-      setMessages((current) => before ? [...page.messages.filter((m) => !current.some((c) => c.id === m.id)), ...current] : page.messages);
-      setNextBefore(page.nextBefore);
-    } catch {
-      if (isDataOwnerGenerationCurrent(owner)) setLoadFailed(true);
+      const next = { messages: before ? [...page.messages.filter(m => !latest.current.messages.some(c => c.id === m.id)), ...latest.current.messages] : page.messages,
+        nextBefore: page.nextBefore };
+      transcriptPages.set(botId, next);
+      void api.chatDisplayCache?.({ action: 'write', key: `companion:${botId}`, owner, value: next }).catch(() => undefined);
+      setMessages(next.messages); setNextBefore(next.nextBefore);
+    } catch (error) {
+      if (alive.current && isDataOwnerGenerationCurrent(owner)) {
+        if (/FORBIDDEN|PERMISSION_DENIED/.test(String(error))) {
+          revision.current++; transcriptPages.delete(botId); setMessages([]); setNextBefore(undefined);
+        }
+        setLoadFailed(true);
+      }
     } finally {
       loadingRef.current = false;
       setLoading(false);
@@ -78,11 +107,17 @@ export function CloudCompanionOfflineView({ botId, deviceId, name, avatar, avata
   }, [botId]);
 
   useEffect(() => {
-    setMessages([]);
-    setNextBefore(undefined);
+    const owner = getDataOwnerGeneration();
+    const version = revision.current;
+    void companionCloudApi()?.chatDisplayCache?.({ action: 'read', key: `companion:${botId}`, owner }).then(value => {
+      const page = value as CompanionTranscriptPage | null;
+      if (!alive.current || !isDataOwnerGenerationCurrent(owner) || revision.current !== version
+        || !page || !Array.isArray(page.messages) || !page.messages.every(row => row && typeof row.id === 'string' && typeof row.text === 'string' && Number.isFinite(row.createdAt))) return;
+      transcriptPages.set(botId, page); setMessages(page.messages); setNextBefore(page.nextBefore);
+    }).catch(() => undefined);
     stickToBottom.current = true;
     void load();
-  }, [load]);
+  }, [botId, load]);
 
   useLayoutEffect(() => {
     const node = scroller.current;
@@ -136,7 +171,7 @@ export function CloudCompanionOfflineView({ botId, deviceId, name, avatar, avata
         <BotAvatar bot={identity} size="sm" />
         <div className="min-w-0 flex-1">
           <p className="text-14 font-medium text-[var(--text-primary)]">
-            {t(reachable ? 'bots.cloud.homeUnreachable' : 'bots.cloud.homeOffline', { device })}
+            {t(controlOff ? 'bots.cloud.homeControlOff' : 'bots.cloud.homeOffline', { device })}
           </p>
           <p className="mt-0.5 text-12 text-[var(--text-secondary)]">
             {state.kind === 'running' ? t('bots.cloud.takingOver', { name })

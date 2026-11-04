@@ -51,6 +51,11 @@ export class BackendRouter implements BrowserBackend {
     return this.current.kind;
   }
 
+  /** Identity only, for invalidating evidence owned by the outgoing backend. */
+  getBackendIdentity(): object {
+    return this.current;
+  }
+
   /** Verify the active backend's real control path when it exposes a probe. */
   async probeActiveControl(options?: { ensureHost?: boolean }): Promise<void> {
     await this.current.probeControl?.(options);

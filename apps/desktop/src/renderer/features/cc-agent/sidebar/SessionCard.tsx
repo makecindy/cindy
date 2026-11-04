@@ -1,5 +1,6 @@
 import { SessionTaskMenu } from './SessionTaskMenu';
 import { isSharedTaskPeer } from '@cindy/device-link';
+import { getSessionListActivityAt } from '@cindy/maker-shared/session-activity';
 import { TaskTagMenuSection, TaskTagEditor, TaskTagDots } from '@/features/task-tags/TaskTags';
 import { Button } from '@/components/ui/button';
 /**
@@ -204,7 +205,7 @@ export const SessionCard = withSidebarNavigation<SessionCardProps>(function Sess
   const rightStatusKind = resolveSidebarRightStatus(sessionActivity);
   const isPinned = session.pinnedAt != null;
   const isEmpty = isEmptyDraftSession(session);
-  const activityIso = session.updatedAt;
+  const activityIso = getSessionListActivityAt(session);
   const remoteIconKind = session.deviceLinkDeviceId
     ? 'device-link'
     : session.remoteHostId
@@ -515,6 +516,9 @@ export const SessionCard = withSidebarNavigation<SessionCardProps>(function Sess
   const handleMoveToProjectBrowse = useCallback(() => {
     onMoveSession?.(session.id, { kind: 'browseProject' });
   }, [onMoveSession, session.id]);
+  const handleMoveToNewProject = useCallback(() => {
+    onMoveSession?.(session.id, { kind: 'newProject' });
+  }, [onMoveSession, session.id]);
   const handleMoveToDialogue = useCallback(() => {
     onMoveSession?.(session.id, { kind: 'dialogue' });
   }, [onMoveSession, session.id]);
@@ -557,9 +561,7 @@ export const SessionCard = withSidebarNavigation<SessionCardProps>(function Sess
     !isEmpty &&
     !session.remoteHostId &&
     session.orcaRole !== 'worker' &&
-    !session.deviceLinkDeviceId &&
-    // Agent 在另一台电脑运行：转录在那台，本机打包不全。
-    !session.agentDeviceId;
+    !session.deviceLinkDeviceId;
 
   const exportShareMenuItem = canExportShare ? (
     <DropdownMenuItem onSelect={handleExportShareSelect} className={MENU_ITEM_CLASS}>
@@ -579,10 +581,11 @@ export const SessionCard = withSidebarNavigation<SessionCardProps>(function Sess
   const moveToProjectSubmenu = canMoveToProject ? (
     <SessionProjectMoveSubmenu
       projectOptions={projectOptions}
-      currentWorkingDir={session.workspaceKind === 'project' ? session.workingDir : null}
+      currentSession={session}
       isDialogue={session.workspaceKind === 'dialogue'}
       onSelectProject={handleMoveToProjectSelect}
       onBrowseProject={handleMoveToProjectBrowse}
+      onNewProject={handleMoveToNewProject}
       onMoveToDialogue={handleMoveToDialogue}
     />
   ) : null;
@@ -890,7 +893,9 @@ export const SessionCard = withSidebarNavigation<SessionCardProps>(function Sess
                 ? isActive
                   ? 'text-[var(--sidebar-item-active-foreground)] font-medium'
                   : 'text-[var(--card-status-awaiting)] font-medium'
-                : 'text-[var(--text-secondary)]',
+                : isActive
+                  ? 'text-[color-mix(in_srgb,currentColor_80%,transparent)]'
+                  : 'text-[var(--text-secondary)]',
             )}
             style={{ height: '1.45em' }}
           >
@@ -1064,7 +1069,9 @@ export const SessionCard = withSidebarNavigation<SessionCardProps>(function Sess
               className={cn(
                 'mt-[4px] text-11 leading-[1.4]',
                 '[display:-webkit-box] [-webkit-box-orient:vertical] overflow-hidden',
-                'text-[var(--text-secondary)]',
+                isActive
+                  ? 'text-[color-mix(in_srgb,currentColor_80%,transparent)]'
+                  : 'text-[var(--text-secondary)]',
               )}
               style={{ WebkitLineClamp: cardPreviewLineClamp }}
             >

@@ -61,3 +61,7 @@ export function getBotGroupStepNotificationBody(event: {
     .replaceAll('{{name}}', () => event.botName)
     .replaceAll('{{task}}', () => event.task);
 }
+
+export function getNotificationImageLabel(): string {
+  return t('settings.notifications.chat.image');
+}

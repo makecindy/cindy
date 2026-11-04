@@ -21,6 +21,7 @@
     "allowOnceConfirm": "确认允许一次",
     "highRisk": "高风险",
     "autoReviewUnavailable": "自动审批没完成，请确认要不要允许这次操作。",
+    "autoReviewReason": "自动审批需要你决定：{{reason}}",
     "fullAccessConfirm": {
       "title": "开启完全访问？",
       "description": "完全访问会关闭工作区沙箱并跳过常规审批。{{appName}} 可以修改工作区外的文件、执行联网命令且不再询问；内置高风险操作仍会要求确认。",
@@ -260,6 +261,7 @@
       "embedded-frame": "输入框位于嵌入的其他网站中，请确认来源可信。"
     },
     "agentControlled": "这个界面由 Agent 打开。填写前请确认它确实是你要登录的地方。",
+    "agentPicture": "这张二维码来自 Agent 的截图，Cindy 看不到原来的画面，扫完也不会自动继续。请确认它指向的网站是你要登录的地方，扫完点「交还给 Agent」。",
     "error": {
       "decision": "操作没有送达，请重试。",
       "stale": "界面已经变化，请按最新内容操作。",
@@ -297,6 +299,8 @@
       "picture": "看画面",
       "backToForm": "回到表单",
       "liveView": "实时画面",
+      "openRemoteDesktop": "打开远程桌面",
+      "useForm": "改用表单填写",
       "fill": "填写",
       "skip": "跳过",
       "continue": "继续",
@@ -304,6 +308,9 @@
       "showPassword": "显示密码",
       "hidePassword": "隐藏密码",
       "scan": "扫码"
+    },
+    "directSignIn": {
+      "hint": "请直接在窗口里登录，完成后会自动继续。"
     },
     "remoteUnavailable": "这台电脑不能从远程接收输入。请在宿主电脑上完成这一步，再交还给 Agent。",
     "unnamedField": "输入框",
@@ -384,7 +391,12 @@
       "allowTitle": "允许后电脑端会继续执行",
       "tool": "工具：{{tool}}",
       "title": "允许使用 {{tool}}？",
-      "risk": "这个命令可能修改系统、仓库或外部服务状态。允许前请确认你信任当前任务和命令内容。"
+      "risk": "这个命令可能修改系统、仓库或外部服务状态。允许前请确认你信任当前任务和命令内容。",
+      "titleCommand": "允许运行这条命令？",
+      "titleFileRead": "允许读取文件？",
+      "titleFileWrite": "允许修改文件？",
+      "titleBrowser": "允许浏览器执行这一步？",
+      "titlePlugin": "允许使用插件「{{plugin}}」？"
     },
     "ask": {
       "progress": "第 {{current}}/{{total}} 个问题",

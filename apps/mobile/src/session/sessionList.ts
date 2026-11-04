@@ -1,6 +1,7 @@
 import { i18n } from '@/i18n';
 import { formatPresentationDate } from '@/i18n/dateFormatters';
 import { mobilePresentationLocalizer } from '@/i18n/presentationLocalizer';
+import { memoizedTranslation } from '@/i18n/translationMemo';
 import {
   buildRemoteSessionCardPreview as buildRemoteSessionCardPreviewShared,
   buildRemoteSessionListContext as buildRemoteSessionListContextShared,
@@ -18,18 +19,9 @@ export * from '@cindy/maker-shared/session-list';
 
 type ListTranslator = (key: string, values?: Record<string, string | number>) => string;
 
-/** Scoped to one synchronous list build: repeated status/count labels only run
- * through i18next once, with no stale strings after locale/resource changes. */
+/** Status, count and time labels repeat across rows and list rebuilds. */
 export function createSessionListTranslator(): ListTranslator {
-  const labels = new Map<string, string>();
-  return (key, values) => {
-    const cacheKey = JSON.stringify([key, values]);
-    const previous = labels.get(cacheKey);
-    if (previous !== undefined) return previous;
-    const label = i18n.t(key, values);
-    labels.set(cacheKey, label);
-    return label;
-  };
+  return memoizedTranslation;
 }
 
 export function buildRemoteSessionSections(

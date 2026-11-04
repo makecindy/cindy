@@ -22,7 +22,7 @@ import { hasEmbeddedImPrompt } from './userMessageDisplayText';
  * F-MSG-DOC: document paths rendered inline as @path chips in text content
  */
 
-import { CHAT_BODY_CLASS } from './chatChrome';
+import { ChatBubble, CHAT_BUBBLE_COLUMN_CLASS } from './ChatBubble';
 import { useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
 import {
   Bot,
@@ -86,7 +86,7 @@ import { quoteSegmentsToComposerDocument } from '@/lib/composerQuoteDocument';
 import { ChatImageView } from './ChatImageView';
 import { TextLightbox } from './TextLightbox';
 import { ToolPayloadLightbox } from './ToolPayloadLightbox';
-import { BubbleHoverToolbar, MessageActionBar } from './MessageActionBar';
+import { MessageActionBar } from './MessageActionBar';
 import { shareSelectionStore } from './shareSelectionStore';
 import { ErrorMessageCard } from './ErrorMessageCard';
 import { useForkAtMessage, textToTiptapDoc } from './useForkAtMessage';
@@ -1186,13 +1186,12 @@ export function UserMessage({
     [sessionId, draftBody, quoteDraftDocument, images, files],
   );
 
-  // 第一条 user 消息没有可作为锚点的 prior assistant uuid → 后端必抛
-  // NO_PRIOR_ASSISTANT。直接藏掉按钮，避免无效点击。
-  // 同时按 capabilities.rewind.supported gate；文件恢复能力由实际 Git 保存点决定。
+  // 第一条消息同样可回退：Codex / Pi 回到原生线程开头，Claude 目标之前没有可续接的
+  // 回复时换全新原生会话(见 main 侧 commitRewindAtMessage)。
+  // 按 capabilities.rewind.supported gate；文件恢复能力由实际 Git 保存点决定。
   const canRewind =
     !sharedGuest &&
     Boolean(sessionId && messageClientId) &&
-    !isFirstUserMessage &&
     rewindSupported &&
     !orcaCommunication &&
     !hasEmbeddedImPrompt(hookSource);
@@ -1200,8 +1199,8 @@ export function UserMessage({
   // ── edit-last-message ──────────────────────────────────────────────────
   // 编辑 = rewind 到本条 + 用编辑后的文本立即重发(见 UserMessageEditBox)。
   // 只在最后一条 user 消息开放;能力门控与 Rewind 完全一致(编辑走同一条
-  // commit 链路,rewind 不可用则编辑必然也不可用),首条消息同样因缺
-  // prior assistant 锚点而隐藏。进入编辑态零副作用,取消原样恢复。
+  // commit 链路,rewind 不可用则编辑必然也不可用),首条消息同样可编辑。
+  // 进入编辑态零副作用,取消原样恢复。
   const [editing, setEditing] = useState(false);
   // 被意识钩子拦下的消息(订阅槽①):从未落库、无 turn 可 rewind,编辑走
   // 普通重发(onCommitOverride),故可编辑条件与 rewind 无关——只要有
@@ -1278,7 +1277,7 @@ export function UserMessage({
 
   const attachmentsInBubble =
     simplifiedBotConversation && !editing && !orcaCommunication && !hookSource && (hasImages || hasFiles);
-  // 伙伴私聊：操作栏挂在气泡左侧、悬停浮出（与群聊同一 BubbleHoverToolbar）；没有气泡时仍在下方。
+  // 伙伴私聊：常用操作始终在气泡下方，保留群聊原图标与菜单。
   const bubbleActions = simplifiedBotConversation && !editing && !orcaCommunication && !hookSource
     && Boolean(inlineQuoteCount > 0 || displayBubbleBody.trim() || ghostChipDisplay || attachmentsInBubble);
   // 私聊话题：只有本机伙伴主对话里、主人自己发的消息能开话题（cindy-bots-runtime.md「私聊话题」）。
@@ -1296,7 +1295,7 @@ export function UserMessage({
       align={hookSource ? 'left' : 'right'}
       hovered={hovered}
       simplifiedBotConversation={simplifiedBotConversation}
-      compact={bubbleActions}
+      companionFooter={bubbleActions}
       replyAction={dmThread && bubbleActions ? {
         onClick: dmThread.open,
         label: dmThread.thread
@@ -1387,7 +1386,7 @@ export function UserMessage({
               : // 伙伴私聊与群聊同一气泡上限（bot-group-chat.md §5）。
                 // 左侧留出贴边操作栏的位置。
                 simplifiedBotConversation
-                ? 'max-w-[min(720px,calc(100%-96px))] items-end'
+                ? cn(CHAT_BUBBLE_COLUMN_CLASS, 'items-end')
                 : 'max-w-[488px] items-end',
         )}
       >
@@ -1550,25 +1549,14 @@ export function UserMessage({
             取消合并形态)。气泡在有标注、有引用或有正文任一时渲染——$指令
             无余文时气泡只剩标注行。 */}
                 {(inlineQuoteCount > 0 || displayBubbleBody.trim() || ghostChipDisplay || attachmentsInBubble) && (
-                  <div
+                  <ChatBubble
+                    speaker="user"
                     // 只剩插件标注行的气泡:分享图会剥掉标注,整泡一起去掉,不留空壳。
                     // 伙伴私聊里附件也在气泡内,有附件就不是空壳。
                     {...(inlineQuoteCount === 0 && !displayBubbleBody.trim() && !attachmentsInBubble
                       ? { [SHARE_SOURCE_ATTR]: '' }
                       : {})}
-                    className={cn(
-                      // overflow-wrap:anywhere（不是 break-words）才能让超长无空格序列
-                      // 在任意字符处断行，并把内容的 min-content 缩小到一个字符宽。
-                      // min-w-0 解除 flex item 默认的 min-width:auto，否则父容器的
-                      // max-w-[488px] 会被超长 token 顶穿。两者缺一不可。
-                      'relative min-w-0 max-w-full rounded-xl',
-                      'border border-[var(--msg-user-border)]',
-                      'bg-[var(--msg-user-bg)]',
-                      'px-4 py-3',
-                      CHAT_BODY_CLASS,
-                      'text-[var(--msg-user-text)]',
-                      'select-text',
-                    )}
+                    className="select-text"
                   >
                     {ghostChipDisplay && (
                       /* ghost-summon-chip:标注行(法阵 + 意识名 + 状态 + 展开
@@ -1775,8 +1763,7 @@ export function UserMessage({
                         {fileAttachmentNodes}
                       </div>
                     )}
-                    {bubbleActions && <BubbleHoverToolbar side="left">{messageActions}</BubbleHoverToolbar>}
-                  </div>
+                  </ChatBubble>
                 )}
                 {/* ghost-summon-pill:未兑现的软提示保持低调胶囊,留在气泡下方
             (chip 标注行形态见气泡内部;提示原文仍可点开查看)。 */}
@@ -1800,7 +1787,7 @@ export function UserMessage({
                 {/* message-actions V1.2: hover-revealed bar below the bubble,
                 right-aligned, order [time][copy][fork][edit][undo][more]。被拦消息只保留
             编辑和链接复制,fork/rewind/delete 对未发消息无意义。 */}
-                {!bubbleActions && messageActions}
+                {messageActions}
                 {dmThread?.thread ? (
                   <BotDmThreadPreview align="right" thread={dmThread.thread} bot={dmThread.bot}
                     unread={dmThread.unread} onOpen={dmThread.open} />

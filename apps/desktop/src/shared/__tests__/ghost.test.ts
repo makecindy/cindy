@@ -10,7 +10,9 @@ import {
   deriveGhostSessionContext,
   diffGhostPermissionItems,
   ghostAppContextLocale,
+  ghostAppContextLanguages,
   ghostContentKeys,
+  ghostRequiresCindyAccount,
   ghostExternalLinkUrls,
   ghostLocalePathFor,
   ghostNetworkAuthorizationWithinCap,
@@ -19,6 +21,7 @@ import {
   ghostSettingsUiWithinCap,
   ghostSubscribeAuthorizationWithinCap,
   ghostToolParametersWithinCap,
+  ghostBrowserExtensionWithinCap,
   ghostUnknownV3FieldsWithinCap,
   ghostNetworkHostMatches,
   ghostPanelKind,
@@ -35,9 +38,6 @@ import {
   isValidGhostId,
   isValidNewGhostId,
   isOfficialGhostId,
-  isUserInstallReservedGhostId,
-  isBrokerEligibleGhostId,
-  isFirstPartyHostPrivilegeGhostId,
   isValidGhostNetworkHostPattern,
   parseGhostPartition,
   resolveGhostManifestLocale,
@@ -61,6 +61,25 @@ function goodManifest(): Record<string, unknown> {
     panel: { title: 'Hello', html: 'panel.html', minWidth: 240, defaultFraction: 0.18 },
   };
 }
+
+// The account gate follows declared services, not the author's chosen name (unit).
+describe('plugin account service requirements', () => {
+  it('keeps direct and BYOK plugins usable regardless of the name', () => {
+    for (const id of ['cindy-art', 'xd-feishu', 'ordinary']) {
+      const parsed = validateGhostManifest({ ...goodManifest(), id });
+      if (!parsed.ok) throw new Error(parsed.reason);
+      expect(ghostRequiresCindyAccount(parsed.manifest)).toBe(false);
+    }
+    expect(ghostRequiresCindyAccount({ cindy: { search: ['web'] } })).toBe(false);
+  });
+  it('requires account services for enterprise credentials and hosted media', () => {
+    expect(ghostRequiresCindyAccount({ cindy: { image: ['generate'] } })).toBe(true);
+    expect(ghostRequiresCindyAccount({ network: { hosts: ['api.example.test'], secrets: [{
+      key: 'identity', label: 'Identity', source: 'oidc-token',
+      inject: { header: 'Authorization', format: 'Bearer {value}', hosts: ['api.example.test'] },
+    }] } })).toBe(true);
+  });
+});
 
 /** 一份全绿的芯片型清单基底。 */
 function goodChipManifest(): Record<string, unknown> {
@@ -315,7 +334,7 @@ describe('ghost · 清单校验', () => {
     expect(validateGhostManifest({ ...goodManifest(), author: 42 }).ok).toBe(false);
   });
 
-  it('locales 只接受插件协议四种语言、安全 JSON 路径且必须提供英文', () => {
+  it('locales 接受十种语言、安全 JSON 路径且必须提供英文', () => {
     const valid = validateGhostManifest({
       ...goodManifest(),
       locales: {
@@ -343,7 +362,7 @@ describe('ghost · 清单校验', () => {
     expect(
       validateGhostManifest({
         ...goodManifest(),
-        locales: { en: 'locales/en.json', fr: 'locales/fr.json' },
+        locales: { en: 'locales/en.json', it: 'locales/it.json' },
       }).ok,
     ).toBe(false);
     expect(
@@ -369,7 +388,7 @@ describe('ghost · 清单校验', () => {
         ...goodManifest(),
         locales: { en: 'locales/en.json', 'zh-TW': 'locales/zh-TW.json' },
       }).ok,
-    ).toBe(false);
+    ).toBe(true);
   });
 
   it('无 manual 时保持 origin/main 的 locale 路径兼容语义', () => {
@@ -548,17 +567,31 @@ describe('ghost · 清单校验', () => {
   it('locale 选择完全跟随宿主，插件不支持或宿主值未知时固定回退英文', () => {
     const parsed = validateGhostManifest({
       ...goodManifest(),
-      locales: { en: 'locales/en.json', ja: 'locales/ja.json' },
+      locales: { en: 'locales/en.json', ja: 'locales/ja.json', fr: 'locales/fr.json', 'zh-TW': 'locales/zh-TW.json' },
     });
     expect(parsed.ok).toBe(true);
     if (!parsed.ok) return;
     expect(ghostLocalePathFor(parsed.manifest, 'ja')).toBe('locales/ja.json');
     expect(ghostLocalePathFor(parsed.manifest, 'zh-CN')).toBe('locales/en.json');
-    expect(ghostLocalePathFor(parsed.manifest, 'zh-TW')).toBe('locales/en.json');
+    expect(ghostLocalePathFor(parsed.manifest, 'zh-TW')).toBe('locales/zh-TW.json');
+    expect(ghostLocalePathFor(parsed.manifest, 'zh-Hant-x-lzh')).toBe('locales/zh-TW.json');
+    // No simplified Chinese resource: its classical edition still falls back to English.
+    expect(ghostLocalePathFor(parsed.manifest, 'zh-Hans-x-lzh')).toBe('locales/en.json');
+    expect(ghostLocalePathFor(parsed.manifest, 'fr')).toBe('locales/fr.json');
     expect(ghostLocalePathFor(parsed.manifest, 'fr-FR')).toBe('locales/en.json');
     expect(withGhostResolvedLocale(parsed.manifest, 'ko').resolvedLocale).toBe('ko');
     expect(withGhostResolvedLocale(parsed.manifest, 'zh-TW').resolvedLocale).toBe('zh-TW');
     expect(withGhostResolvedLocale(parsed.manifest, 'fr-FR').resolvedLocale).toBe('en');
+  });
+
+  // PR #8210: both plugin context transports must resolve classical UI locales to authored resources.
+  // Unit: the production context builder preserves the legacy field while exposing a modern uiLocale.
+  it.each([
+    ['zh-Hant-x-lzh', 'zh-TW'],
+    ['zh-Hans-x-lzh', 'zh-CN'],
+    ['fr', 'fr'],
+  ] as const)('maps plugin context %s to %s without changing the legacy locale', (locale, uiLocale) => {
+    expect(ghostAppContextLanguages(locale)).toEqual({ locale: 'en', uiLocale });
   });
 
   it('app-context locale 保持插件协议旧四语，新增宿主语言固定回退英文', () => {
@@ -2914,12 +2947,9 @@ describe('ghost · 官方保留 id 前缀', () => {
     ];
     const predicates = [
       isOfficialGhostId,
-      isBrokerEligibleGhostId,
-      isFirstPartyHostPrivilegeGhostId,
-    ];
+            ];
     // 期望值写死,避免用任一被测谓词或同一前缀表反推 expected 后让错误实现自证正确。
     for (const [id, expected] of cases) {
-      expect(isUserInstallReservedGhostId(id)).toBe(id === 'cindy-art');
       for (const predicate of predicates) {
         expect(predicate(id), `${predicate.name}(${JSON.stringify(id)})`).toBe(expected);
       }
@@ -3139,7 +3169,7 @@ describe('ghost · network 详单校验', () => {
     if (!r.ok) expect(r.reason).toContain('source');
   });
 
-  it('secrets.source:gh-cli 仅允许官方 GitHub 插件的固定 GitHub API 注入形态', () => {
+  it('secrets.source:gh-cli 对所有插件开放，仍固定 GitHub API 注入形态', () => {
     const valid = validateGhostManifest({
       ...goodManifest(),
       id: 'cindy-github',
@@ -3164,6 +3194,7 @@ describe('ghost · network 详单校验', () => {
     });
     expect(valid.ok, valid.ok ? '' : valid.reason).toBe(true);
     if (valid.ok) {
+      expect(validateNormalizedGhostManifest({ ...valid.manifest, id: 'github-helper' }).ok).toBe(true);
       const item = ghostPermissionItems(valid.manifest).find(
         (entry) => entry.key === 'network:secret:github_pat',
       );
@@ -3203,7 +3234,6 @@ describe('ghost · network 详单校验', () => {
     }
 
     for (const fixture of [
-      { id: 'github-helper' },
       { header: 'X-GitHub-Token' },
       { format: 'token {value}' },
       { hosts: undefined },
@@ -4974,5 +5004,145 @@ describe('ghostPermissionProjectionFingerprint', () => {
     expect(ghostPermissionProjectionFingerprint(a.manifest)).toBe(
       ghostPermissionProjectionFingerprint(b.manifest),
     );
+  });
+});
+
+describe('ghost · browserExtension 槽(2026-10-27 浏览器扩展经宿主桥接连接)', () => {
+  const base = {
+    schemaVersion: 3, minCindyVersion: '0.1.0', id: 'ext-ghost', name: 'Ext Ghost', version: '1.0.0', entry: 'main.js',
+  };
+  const chromeId = 'a'.repeat(32);
+  const edgeId = 'b'.repeat(32);
+  const good = {
+    protocol: 'cindy-browser-extension/3',
+    extensionIds: [chromeId, edgeId],
+    nativeHost: { name: 'com.example.browser', binary: 'native-host/bin' },
+    pageControl: true,
+  };
+  const withNeeds = (browserExtension: unknown) => validateGhostManifest({ ...base, browserExtension });
+
+  it('协议、扩展 id、native host 与 pageControl 都按合同校验;未知扩展字段原样保留', () => {
+    const ok = withNeeds({ ...good, future: { mode: 1 } });
+    expect(ok.ok, JSON.stringify(ok)).toBe(true);
+    if (!ok.ok) return;
+    expect(ok.manifest.browserExtension).toEqual({ ...good, future: { mode: 1 } });
+    expect(validateGhostManifest(ok.manifest)).toEqual(ok);
+    // 没有 native host、没有 pageControl 也是合法的纯通道声明。
+    expect(withNeeds({ protocol: good.protocol, extensionIds: [chromeId] }).ok).toBe(true);
+    for (const bad of [
+      'string',
+      {},
+      { ...good, protocol: 'cindy-browser-extension/4' },
+      { ...good, extensionIds: [] },
+      { ...good, extensionIds: ['not-an-id'] },
+      { ...good, extensionIds: ['A'.repeat(32)] },
+      { ...good, extensionIds: [chromeId, chromeId] },
+      { ...good, extensionIds: Array.from({ length: 9 }, (_, i) => String.fromCharCode(97 + i).repeat(32)) },
+      { ...good, nativeHost: 'com.example.browser' },
+      { ...good, nativeHost: { name: 'Com.Example', binary: 'native-host/bin' } },
+      { ...good, nativeHost: { name: 'com.example.browser', binary: '../outside' } },
+      { ...good, pageControl: false },
+      { ...good, pageControl: 'yes' },
+      { ...good, pageControlReplaces: { tools: 'browser_read' } },
+      { ...good, pageControlReplaces: { tools: ['bad name'] } },
+      { ...good, pageControlReplaces: { tools: ['browser_read'], manual: 'browser' } },
+      { protocol: good.protocol, extensionIds: [chromeId], pageControlReplaces: { tools: ['browser_read'] } },
+    ]) {
+      expect(withNeeds(bad).ok, JSON.stringify(bad)).toBe(false);
+    }
+  });
+
+  // Review 2026-10-29 (Greptile P2): browserExtension was missing from the known top-level fields, so
+  // the full install check demanded the real package match the market manifest exactly and refused a
+  // package that only narrows what was reviewed, although the cap check accepts it.
+  it('完整安装检查接受只收窄浏览器扩展声明的真实包,仍拒绝扩权', () => {
+    const reviewed = withNeeds(good);
+    const narrowed = withNeeds({ protocol: good.protocol, extensionIds: [chromeId] });
+    const expanded = withNeeds({ ...good, extensionIds: [chromeId, edgeId, 'c'.repeat(32)] });
+    if (!reviewed.ok || !narrowed.ok || !expanded.ok) throw new Error('fixture');
+    expect(ghostUnknownV3FieldsWithinCap(reviewed.manifest, narrowed.manifest)).toBe(true);
+    expect(ghostBrowserExtensionWithinCap(reviewed.manifest, expanded.manifest)).toBe(false);
+  });
+
+  // Review 2026-10-30 (Codex P1): an undeclared nested member must not slip through the cap unreviewed.
+  it('浏览器扩展声明里未识别的嵌套成员须与已审清单一致', () => {
+    const reviewed = withNeeds(good);
+    const withUnknown = withNeeds({ ...good, futureCapability: { enabled: true } });
+    const sameUnknown = withNeeds({ ...good, futureCapability: { enabled: true } });
+    if (!reviewed.ok || !withUnknown.ok || !sameUnknown.ok) throw new Error('fixture');
+    expect(ghostBrowserExtensionWithinCap(reviewed.manifest, withUnknown.manifest)).toBe(false);
+    expect(ghostBrowserExtensionWithinCap(withUnknown.manifest, sameUnknown.manifest)).toBe(true);
+  });
+
+  // Review 2026-10-30 (Codex P1): the same holds for members nested inside nativeHost.
+  it('nativeHost 里未识别的成员也须与已审清单一致', () => {
+    const reviewed = withNeeds(good);
+    const nativeHost = { name: 'com.example.browser', binary: 'native-host/bin' };
+    const withUnknown = withNeeds({ ...good, nativeHost: { ...nativeHost, futureCapability: true } });
+    if (!reviewed.ok || !withUnknown.ok) throw new Error('fixture');
+    expect(ghostBrowserExtensionWithinCap(reviewed.manifest, withUnknown.manifest)).toBe(false);
+    expect(ghostBrowserExtensionWithinCap(withUnknown.manifest, withUnknown.manifest)).toBe(true);
+  });
+
+  it('pageControlReplaces 列出被「我的浏览器」取代的插件工具与手册,须与 pageControl 同时声明', () => {
+    const replaces = { tools: ['browser_read', 'browser_act'], manual: ['browser'] };
+    const ok = withNeeds({ ...good, pageControlReplaces: replaces });
+    expect(ok.ok, JSON.stringify(ok)).toBe(true);
+    if (!ok.ok) return;
+    expect(ok.manifest.browserExtension?.pageControlReplaces).toEqual(replaces);
+    expect(validateGhostManifest(ok.manifest)).toEqual(ok);
+    expect(withNeeds({ ...good, pageControlReplaces: { tools: [] } }).ok).toBe(true);
+  });
+
+  it('装入前展示为一项权限;页面控制用单独说明;id 子集与去掉页面控制是收权,新增 id 是扩权', () => {
+    const reviewed = withNeeds(good);
+    expect(reviewed.ok).toBe(true);
+    if (!reviewed.ok) return;
+    expect(ghostPermissionItems(reviewed.manifest)).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          key: 'browser-extension', kind: 'browser-extension', labelKey: 'browserExtension',
+          detailKey: 'browserExtensionPageControlDetail', detail: `${chromeId}\n${edgeId}`,
+        }),
+      ]),
+    );
+    const channelOnly = withNeeds({ protocol: good.protocol, extensionIds: [chromeId] });
+    if (!channelOnly.ok) throw new Error('fixture');
+    expect(ghostPermissionItems(channelOnly.manifest)).toEqual(
+      expect.arrayContaining([expect.objectContaining({ key: 'browser-extension', detailKey: 'browserExtensionDetail' })]),
+    );
+    expect(unreviewedGhostPermissionItems(reviewed.manifest, undefined, channelOnly.manifest)).toEqual([]);
+    const expanded = withNeeds({ ...good, extensionIds: [chromeId, edgeId, 'c'.repeat(32)] });
+    if (!expanded.ok) throw new Error('fixture');
+    expect(unreviewedGhostPermissionItems(reviewed.manifest, undefined, expanded.manifest).map((item) => item.key)).toEqual(['browser-extension']);
+    const controlAdded = withNeeds({ ...good });
+    if (!controlAdded.ok) throw new Error('fixture');
+    expect(unreviewedGhostPermissionItems(channelOnly.manifest, undefined, controlAdded.manifest).map((item) => item.key))
+      .toEqual(['browser-extension', 'browser-native-host:com.example.browser']);
+    // 既有安装基线已批准页面控制时,市场清单收窄也不算扩权。
+    expect(unreviewedGhostPermissionItems(channelOnly.manifest, reviewed.manifest, controlAdded.manifest)).toEqual([]);
+  });
+});
+
+describe('liveScreen declaration', () => {
+  const base = {
+    schemaVersion: 3,
+    minCindyVersion: '0.1.116',
+    id: 'sim',
+    name: 'Simulator',
+    version: '1.0.0',
+    entry: 'main.js',
+  };
+  const node = { entry: 'node/worker.cjs', protocol: 'json-rpc-stdio' };
+  it('is listed in plugin details, and refused without the node worker it needs to run', () => {
+    const withNode = validateGhostManifest({ ...base, node, liveScreen: true });
+    expect(withNode.ok).toBe(true);
+    if (!withNode.ok) return;
+    expect(withNode.manifest.liveScreen).toBe(true);
+    expect(ghostPermissionItems(withNode.manifest)).toContainEqual(
+      expect.objectContaining({ key: 'live-screen', kind: 'live-screen', labelKey: 'liveScreen', detailKey: 'liveScreenDetail' }),
+    );
+    const alone = validateGhostManifest({ ...base, liveScreen: true });
+    expect(alone.ok).toBe(false);
   });
 });

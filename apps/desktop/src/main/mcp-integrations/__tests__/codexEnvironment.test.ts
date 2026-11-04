@@ -1,3 +1,6 @@
+import { createLiziMcpProviders } from '@cindy/mcps';
+import { Client } from '@modelcontextprotocol/sdk/client/index.js';
+import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 
@@ -39,18 +42,6 @@ function testProvider(): McpProvider {
       type: 'sdk',
       name: 'cindy_test',
       instance: new McpServer({ name: 'cindy_test', version: '1.0.0' }),
-    }),
-  };
-}
-
-function slackProvider(isBound: () => boolean): McpProvider {
-  return {
-    name: 'cindy_slack',
-    isEnabled: isBound,
-    toClaudeSdkConfig: () => ({
-      type: 'sdk',
-      name: 'cindy_slack',
-      instance: new McpServer({ name: 'cindy_slack', version: '1.0.0' }),
     }),
   };
 }
@@ -435,24 +426,32 @@ describe('codexEnvironment', () => {
     );
   });
 
-  it('Slack 在 bridge 启动后完成绑定时，清缓存会按最新 provider gate 重建', async () => {
+  it('keeps the existing Slack gateway callable across binding changes without restarting the shared host', async () => {
     let bound = false;
-    const providers = [testProvider(), slackProvider(() => bound)];
-    const logger = noopLogger();
-
-    const beforeBind = await getCodexExtraSpawnConfig({ mcpProviders: providers, logger });
-    expect(beforeBind.extraArgs.some((arg) => arg.startsWith('mcp_servers.cindy_slack.'))).toBe(false);
-
-    // Codex 的 provider 集合冻结在首个 cached spawn config；仅改变绑定态还不会出现。
-    bound = true;
-    const stillFrozen = await getCodexExtraSpawnConfig({ mcpProviders: providers, logger });
-    expect(stillFrozen).toBe(beforeBind);
-    expect(stillFrozen.extraArgs.some((arg) => arg.startsWith('mcp_servers.cindy_slack.'))).toBe(false);
-
-    // hook-control 收到 bound gate 翻转后会走同一失效出口，再次构建即可看到工具。
-    await shutdownCodexEnvironment();
-    const afterBind = await getCodexExtraSpawnConfig({ mcpProviders: providers, logger });
-    expect(afterBind.extraArgs.some((arg) => arg.startsWith('mcp_servers.cindy_slack.'))).toBe(true);
+    const providers = createLiziMcpProviders({ slackHook: { getBridge: () => ({
+      availability: () => ({ connected: true, bound, serverSupportsTools: true }),
+      callTool: async () => ({ ok: true as const, result: { bound } }),
+    }) } });
+    const config = await getCodexExtraSpawnConfig({ mcpProviders: providers, logger: noopLogger() });
+    registerCodexMcpThreadContext('slack-thread', {
+      agentKind: 'codex', workingDir: '/workspace', sessionId: 'slack-session', sessionInstanceId: 'slack-instance',
+    });
+    const url = new URL(config.buildSessionMcpConfig!('slack-instance')['mcp_servers.cindy_slack.url'] as string);
+    const client = new Client({ name: 'slack-recovery', version: '1' });
+    await client.connect(new StreamableHTTPClientTransport(url, {
+      requestInit: { headers: { Authorization: `Bearer ${config.bridge!.token}` } },
+    }));
+    try {
+      for (const next of [false, true, false]) {
+        bound = next;
+        const result = await client.callTool({ name: 'slack_status', arguments: {}, _meta: { threadId: 'slack-thread' } });
+        expect(JSON.parse((result.content as Array<{ text: string }>)[0]!.text)).toMatchObject({ bound });
+        expect(await getCodexExtraSpawnConfig({ mcpProviders: providers, logger: noopLogger() })).toBe(config);
+      }
+    } finally {
+      await client.close();
+      unregisterCodexMcpThreadContext('slack-thread');
+    }
   });
 
   it('serializes remote HTTP custom headers as env_http_headers -c overrides (no bridge)', async () => {

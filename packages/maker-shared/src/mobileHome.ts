@@ -1,3 +1,4 @@
+import { getSessionListActivityAt } from './sessionActivity.js';
 import {
   compareSessionListStrings,
   groupAutomationListItems,
@@ -13,8 +14,12 @@ import {
 import type { PresentationLocalizer } from './presentationLocalization.js';
 import { stripTrailingPathSeparators } from './pathText.js';
 import { normalizeProjectOrderPath } from './projectOrderSync.js';
-import { collapseWorktreeDirForGrouping } from './worktreePaths.js';
+import { collapseWorktreeDirForGrouping, sessionProjectDirectory } from './worktreePaths.js';
 import { CINDY_MAKE_ENABLED, isCindyMakeSource } from './cindyMakeFeature.js';
+import { resolveProjectAliasForSessions, type ProjectAliasDisplayIndex } from './projectAliasSync.js';
+export { remoteProjectAlias, remoteProjectAliasKey, parseHostProjectAliases,
+  PROJECT_ALIASES_LIST_CHANNEL, PROJECT_ALIASES_CHANGED_CHANNEL } from './projectAliases.js';
+export type { RemoteProjectAliasIndex } from './projectAliases.js';
 
 export const MOBILE_HOME_ALL_DEVICES = 'all';
 
@@ -118,6 +123,7 @@ export interface MobileHomePresentation {
 }
 
 export interface MobileHomeOptions {
+  projectAliases?: ProjectAliasDisplayIndex;
   devices?: readonly MobileHomeDeviceLike[];
   messagePreviewIndex?: ReadonlyMap<string, string>;
   liveActivityIndex?: ReadonlyMap<string, RemoteSessionLiveActivity>;
@@ -137,6 +143,7 @@ export interface MobileHomeOptions {
 }
 
 export function buildMobileHomePresentation({
+  projectAliases,
   devices = [],
   messagePreviewIndex,
   liveActivityIndex,
@@ -176,6 +183,7 @@ export function buildMobileHomePresentation({
       pendingInteractionIndex,
       scheduleIndex,
       unnamedLabel,
+      projectAliases,
     ))
     .sort(compareSessionsByStatusThenActivityDesc);
   const items = filteredSessions.map((session) => toRemoteSessionListItem(
@@ -214,6 +222,8 @@ export function buildMobileHomePresentation({
       localizer,
     ),
     devices,
+    normalizedSessions,
+    projectAliases,
   );
   const overview = summarizeHomeOverview(normalizedSessions, projects, pendingInteractionIndex, normalizedSelectedDeviceId);
   const primaryDevice = pickPrimaryDevice(deviceFilters, normalizedSelectedDeviceId);
@@ -334,7 +344,21 @@ function pickPrimaryDevice(
 function buildProjectGroups(
   items: readonly RemoteSessionListItem[],
   devices: readonly MobileHomeDeviceLike[],
+  allSessions: readonly MobileHomeSessionLike[],
+  projectAliases?: ProjectAliasDisplayIndex,
 ): MobileHomeProjectGroup[] {
+  // Hidden and pinned members still define the project's identity. Filtering only
+  // changes the displayed rows, never which host/local-or-SSH name belongs to it.
+  const projectMembers = new Map<string, MobileHomeSessionLike[]>();
+  if (projectAliases) {
+    for (const session of allSessions) {
+      if (session.status === 'deleted' || isDialogueSession(session)) continue;
+      const key = projectGroupKey(session);
+      const members = projectMembers.get(key) ?? [];
+      members.push(session);
+      projectMembers.set(key, members);
+    }
+  }
   const deviceNames = new Map(devices.map((device) => [device.deviceId, device.name]));
   const grouped = new Map<string, RemoteSessionListItem[]>();
   for (const item of items) {
@@ -351,7 +375,7 @@ function buildProjectGroups(
       const firstSession = first.session as MobileHomeSessionLike;
       const deviceId = sessionDeviceKey(firstSession) ?? null;
       const cindyMake = isCindyMakeSession(firstSession);
-      const workingDir = cindyMake ? '' : normalizeProjectWorkingDir(firstSession.workingDir);
+      const workingDir = cindyMake ? '' : normalizeProjectWorkingDir(sessionProjectDirectory(firstSession));
       const deviceName = firstSession.deviceLinkDeviceName
         ?? (deviceId ? deviceNames.get(deviceId) : null)
         ?? '未知电脑';
@@ -369,7 +393,10 @@ function buildProjectGroups(
         sessionCount: group.reduce((sum, item) => sum + (item.automationGroup?.sessionCount ?? 1), 0),
         sessions: group,
         subtitle: [deviceName, workingDir].filter(Boolean).join(' · '),
-        title: cindyMake ? 'Cindy Make' : projectTitle(workingDir),
+        title: cindyMake ? 'Cindy Make' : resolveProjectAliasForSessions(
+          projectMembers.get(key) ?? [],
+          projectAliases,
+        ) ?? projectTitle(workingDir),
         workingDir,
       };
     })
@@ -380,7 +407,7 @@ function projectGroupKey(session: RemoteSessionListSessionLike): string {
   // 分组用 canonicalDeviceId(设备归并结果),只补空值兜底 + workingDir 归一化(去尾斜杠 / Windows 大小写)。
   const deviceId = sessionDeviceKey(session as MobileHomeSessionLike)?.trim() || '__unknown_device__';
   if (isCindyMakeSession(session)) return `cindy-make:${encodeURIComponent(deviceId)}`;
-  return `device:${encodeURIComponent(deviceId)}:${normalizePathKey(session.workingDir ?? '__unknown_project__')}`;
+  return `device:${encodeURIComponent(deviceId)}:${normalizePathKey(sessionProjectDirectory(session) ?? '__unknown_project__')}`;
 }
 
 /**
@@ -535,10 +562,12 @@ function matchesSearchQuery(
   pendingInteractionIndex: ReadonlyMap<string, number> | undefined,
   scheduleIndex: ReadonlyMap<string, RemoteSessionScheduleInfo> | undefined,
   unnamedLabel: string | undefined,
+  projectAliases?: ProjectAliasDisplayIndex,
 ): boolean {
   if (!query) return true;
   const scheduleInfo = scheduleIndex?.get(session.id) ?? fallbackScheduleInfo(session);
   const haystack = [
+    resolveProjectAliasForSessions([session], projectAliases),
     // 与首页行展示同源到函数级(同 sessionList 的 matchesSearchQuery):行上显示的就是
     // remoteSessionDisplayTitle 的结果,haystack 直接调同一个函数。放原始哨兵会让
     // 「搜得到的」与「看得到的」错位 —— 两个方向都错(见 sessionList 那条注释)。
@@ -645,10 +674,11 @@ function isWindowsStylePath(value: string): boolean {
  * 过滤的结果和首页分组一致。调用方需自行确保 deviceId 维度已对齐(同一台设备内比较)。
  */
 export function sessionMatchesProjectDir(
-  sessionWorkingDir: string | null | undefined,
+  session: string | null | undefined | { workingDir: string | null; projectDir?: string | null },
   projectWorkingDir: string | null | undefined,
 ): boolean {
-  return normalizePathKey(sessionWorkingDir ?? '__unknown_project__')
+  const directory = typeof session === 'object' && session !== null ? sessionProjectDirectory(session) : session;
+  return normalizePathKey(directory ?? '__unknown_project__')
     === normalizePathKey(projectWorkingDir ?? '__unknown_project__');
 }
 
@@ -659,7 +689,7 @@ function projectTitle(workingDir: string): string {
 }
 
 function lastActivityTime(session: RemoteSessionListSessionLike): string {
-  return session.userSendAt ?? session.updatedAt ?? session.createdAt;
+  return getSessionListActivityAt(session) ?? session.createdAt;
 }
 
 function mobileHomeEmptyState({
