@@ -167,6 +167,23 @@ describe('settings discoverability regressions', () => {
     }
   });
 
+  // Unit regression (#8481): the local service hint was visible but unsearchable.
+  // Option visibility coverage above does not exercise the row's description.
+  it.each(['local', 'cloud'] as const)('indexes only the visible voice service hint in %s mode', (mode) => {
+    const documents = buildSettingsSearchDocuments(searchI18n.t, TAB_IDS, { ...searchContext, mode });
+    for (const lng of ['zh-CN', 'en']) {
+      for (const hint of ['localHint', 'hint']) {
+        const query = searchI18n.t(`settings.voiceInput.serviceSource.${hint}`, { lng });
+        const result = searchSettings(documents, query).find(({ entry }) => entry.id === 'voiceInput.serviceSource');
+        if ((hint === 'localHint') === (mode === 'local')) {
+          expect(result?.entry.targetId).toBe('settings-voice-serviceSource');
+        } else {
+          expect(result).toBeUndefined();
+        }
+      }
+    }
+  });
+
   it('respects platform capabilities and requires every Chinese search word', () => {
     const documents = buildSettingsSearchDocuments(searchI18n.t, TAB_IDS, {
       ...searchContext, mode: 'local', supportsBetaUpdateChannel: false,

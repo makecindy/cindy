@@ -143,6 +143,8 @@ export const voiceInputSettings = defineSettings({
     fallbackTargetId: 'settings-panel-voice-input',
     titleKey: 'settings.voiceInput.serviceSource.label',
     descriptionKey: 'settings.voiceInput.serviceSource.hint',
+    descriptionKeyForContext: ({ mode }) => mode === 'local'
+      ? 'settings.voiceInput.serviceSource.localHint' : undefined,
     sectionKey: 'settings.tabs.voiceInput',
     options: [
       {
