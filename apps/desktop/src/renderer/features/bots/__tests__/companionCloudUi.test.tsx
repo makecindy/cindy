@@ -390,6 +390,32 @@ describe('companionCloudStore', () => {
       avatarColor: 'violet', description: '', preview: '', activityAt: 0, sessionId: null, online: false, connectionKnown: true }])).toEqual([]);
     restarted.unmount();
   });
+
+  it('waits for cached identities before accepting a startup cloud push', async () => {
+    const { renderHook } = await import('@testing-library/react');
+    resetCompanionCloudStoreForTests();
+    const cached = snapshot('laptop');
+    let finishCacheRead!: (value: unknown) => void;
+    const writes: unknown[] = [];
+    maker.chatDisplayCache.mockImplementation(((request: { action: string; key: string; value?: unknown }) => {
+      if (request.action === 'read' && request.key === 'cloud-homes') return new Promise(resolve => { finishCacheRead = resolve; });
+      if (request.action === 'write' && request.key === 'cloud-homes') writes.push(request.value);
+      return Promise.resolve(null);
+    }) as never);
+    let push: (next: CompanionCloudSnapshot, ownerStamp?: unknown) => void = () => undefined;
+    maker.onCompanionCloudChanged.mockImplementation(((listener: typeof push) => { push = listener; return () => undefined; }) as never);
+    const current = { ...snapshot('laptop'), actors: [] };
+    const { result, unmount } = renderHook(() => useCompanionCloud());
+    await act(async () => { await Promise.resolve(); });
+    expect(push).toBeDefined();
+
+    act(() => push(current));
+    await act(async () => { finishCacheRead(cached); });
+    await waitFor(() => expect(result.current.actors).toEqual([]));
+    expect(getRetiredCompanionBotIds().has('mia')).toBe(true);
+    expect(writes.at(-1)).toMatchObject({ retiredBotIds: ['mia'] });
+    unmount();
+  });
 });
 
 describe('CompanionShadowBanner', () => {

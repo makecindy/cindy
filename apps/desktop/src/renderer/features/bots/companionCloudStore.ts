@@ -109,8 +109,14 @@ function start(): () => void {
       unsubscribePush = api.onCompanionCloudChanged((next, ownerStamp) => {
         if (!isDataOwnerPushCurrent(ownerStamp)) return;
         ensureOwner();
-        pushes += 1;
-        accept(next);
+        const requestOwner = owner;
+        const requestPushes = ++pushes;
+        // A startup push can arrive before the persisted homes snapshot. Hydrate first so
+        // this authoritative roster can detect actors removed while this device was offline.
+        void hydrate().then(() => {
+          if (!isDataOwnerGenerationCurrent(requestOwner) || pushes !== requestPushes) return;
+          accept(next);
+        });
       });
     }
     refreshCompanionCloud();
