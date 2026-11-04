@@ -18802,8 +18802,8 @@
     "previewFailed": "無法顯示圖片預覽，仍可複製連結"
   },
   "subscriptionUltraPolicy": {
-    "label": "允許使用 Ultra",
-    "providerHint": "開啟後，支援 Ultra 的模型會在對話的推理強度選項中顯示 Ultra；關閉後 Ultra 隱藏，Max、High 等檔位不受影響。",
+    "label": "允許使用「極致」推理強度",
+    "providerHint": "開啟後，支援此推理強度的模型會在對話的推理強度選項中顯示「極致」；關閉後「極致」隱藏，其他推理檔位不受影響。",
     "saveFailed": "儲存失敗，請重試。"
   },
   "subscriptionFastPolicy": {

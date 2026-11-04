@@ -18875,7 +18875,7 @@
   },
   "subscriptionUltraPolicy": {
     "label": "Ultra zulassen",
-    "providerHint": "Wenn aktiviert, zeigen Ultra-fähige Modelle Ultra in der Auswahl der Denkintensität. Wenn deaktiviert, wird Ultra ausgeblendet; Max und High bleiben verfügbar.",
+    "providerHint": "Wenn aktiviert, zeigen Modelle, die Ultra unterstützen, Ultra in der Auswahl der Denkintensität. Wenn deaktiviert, wird Ultra ausgeblendet; andere Stufen bleiben verfügbar.",
     "saveFailed": "Speichern fehlgeschlagen. Bitte erneut versuchen."
   },
   "subscriptionFastPolicy": {

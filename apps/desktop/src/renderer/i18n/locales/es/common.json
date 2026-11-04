@@ -19046,7 +19046,7 @@
   },
   "subscriptionUltraPolicy": {
     "label": "Permitir Ultra",
-    "providerHint": "Si está activado, los modelos compatibles con Ultra lo muestran en la intensidad de razonamiento. Si está desactivado, Ultra se oculta y Max y High siguen disponibles.",
+    "providerHint": "Si está activado, los modelos compatibles muestran Ultra en la intensidad de razonamiento. Si está desactivado, Ultra se oculta y los demás niveles siguen disponibles.",
     "saveFailed": "No se pudo guardar. Inténtalo de nuevo."
   },
   "subscriptionFastPolicy": {

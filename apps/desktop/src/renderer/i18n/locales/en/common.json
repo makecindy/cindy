@@ -18875,7 +18875,7 @@
   },
   "subscriptionUltraPolicy": {
     "label": "Allow Ultra",
-    "providerHint": "When on, models that support Ultra show it in the reasoning effort picker. When off, Ultra is hidden and other levels such as Max and High stay available.",
+    "providerHint": "When on, models that support Ultra show it in the reasoning effort picker. When off, Ultra is hidden and other levels stay available.",
     "saveFailed": "Couldn't save. Try again."
   },
   "subscriptionFastPolicy": {

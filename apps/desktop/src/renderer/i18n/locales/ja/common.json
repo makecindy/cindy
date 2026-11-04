@@ -18802,8 +18802,8 @@
     "previewFailed": "画像のプレビューを表示できません。リンクはコピーできます。"
   },
   "subscriptionUltraPolicy": {
-    "label": "Ultra を許可",
-    "providerHint": "オンにすると、Ultra 対応モデルの推論強度に Ultra が表示されます。オフにすると Ultra は非表示になり、Max や High はそのまま使えます。",
+    "label": "究極を許可",
+    "providerHint": "オンにすると、この推論強度に対応するモデルの推論強度の選択肢に「究極」が表示されます。オフにすると「究極」は非表示になり、ほかの強度はそのまま使えます。",
     "saveFailed": "保存に失敗しました。もう一度お試しください。"
   },
   "subscriptionFastPolicy": {

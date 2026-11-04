@@ -19046,7 +19046,7 @@
   },
   "subscriptionUltraPolicy": {
     "label": "Autoriser Ultra",
-    "providerHint": "Lorsque cette option est activée, les modèles compatibles affichent Ultra dans l'intensité de raisonnement. Sinon, Ultra est masqué et Max/High restent disponibles.",
+    "providerHint": "Lorsque cette option est activée, les modèles compatibles affichent Ultra dans l'intensité de raisonnement. Sinon, Ultra est masqué et les autres niveaux restent disponibles.",
     "saveFailed": "Échec de l'enregistrement. Réessayez."
   },
   "subscriptionFastPolicy": {

@@ -18802,8 +18802,8 @@
     "previewFailed": "無法示圖之先覽，仍可錄連結"
   },
   "subscriptionUltraPolicy": {
-    "label": "允許使用 Ultra",
-    "providerHint": "開啟後，支援 Ultra 之模型見於對話推理強度選項；闔之則 Ultra 隱，Max、High 諸檔如故。",
+    "label": "許用窮極",
+    "providerHint": "啟之則支援此推理強度之模型，於對話推理強度選項中見此檔；闔之則窮極隱，餘檔如故。",
     "saveFailed": "儲存失敗，請重試。"
   },
   "subscriptionFastPolicy": {

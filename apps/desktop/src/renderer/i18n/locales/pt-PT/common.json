@@ -19046,7 +19046,7 @@
   },
   "subscriptionUltraPolicy": {
     "label": "Permitir Ultra",
-    "providerHint": "Quando ativado, os modelos compatíveis mostram Ultra na intensidade de raciocínio. Quando desativado, Ultra fica oculto e Max/High continuam disponíveis.",
+    "providerHint": "Quando ativado, os modelos compatíveis mostram Ultra na intensidade de raciocínio. Quando desativado, Ultra fica oculto e os restantes níveis continuam disponíveis.",
     "saveFailed": "Não foi possível guardar. Tente novamente."
   },
   "subscriptionFastPolicy": {
