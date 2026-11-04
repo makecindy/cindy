@@ -3,7 +3,7 @@ import ts from 'typescript';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { AuthRefreshBackoff } from '../authRefreshBackoff';
 import { AuthApiError, retryAfterDeadline } from '@cindy/auth-client';
-import { runRefreshWithReplacementRetry } from '../authRefreshFailure';
+import { RuntimeRefreshConfirmation, runRefreshWithReplacementRetry } from '../authRefreshFailure';
 import {
   awaitWithStartupTimeout,
   resolveColdStartTimeoutRecovery,
@@ -52,6 +52,7 @@ const LEGACY_REFRESH_TOKEN_KEY = 'legacy', LEGACY_ACCOUNT_REFRESH_TOKEN_KEY = 'l
 const REFRESH_TOKEN_REPLACEMENT_RETRY_LIMIT = 2;
 const COLD_START_REFRESH_TOKEN_REPLACEMENT_RECHECK_DELAYS_MS = [100, 250];
 const RUNTIME_REFRESH_TOKEN_REPLACEMENT_RECHECK_DELAYS_MS = [250, 1000];
+const runtimeRefreshConfirmation = new RuntimeRefreshConfirmation(() => Date.now());
 const credentialStoreHealth = { unavailable: false, noteRecovered() {} };
 const coldStartTimeoutFallbacks = new ColdStartAuthFallbackRegistry();
 const snapshotAuthState = () => ({ isAuthenticated: !!accessToken, user: currentUser });
@@ -149,6 +150,7 @@ function setup(random = 0) {
     isOwnerChangeShellPending: () => false,
     ownerChangeShellGate: { isPending: () => false },
     sealedLoginFlowCommitDepths: new Set(),
+    RuntimeRefreshConfirmation,
     runRefreshWithReplacementRetry,
     loginPreparingErrorState,
     requestAuthRefresh: request,
