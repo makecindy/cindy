@@ -127,6 +127,63 @@ describe('useFileTree refresh scheduling', () => {
     }
   });
 
+  // Focus recovery calls the public refresh while remote reads are outstanding.
+  // Unit gap: queued restores must not start twice, while reads begun before
+  // focus still need fresh data. Nine folders leave one queued after root settles.
+  it.each([false, true])('shares the restore budget with focus refresh and unmount=%s', async (leave) => {
+    const folders: DirEntry[] = Array.from({ length: 9 }, (_, i) => ({
+      name: `pkg${i}`, relPath: `pkg${i}`, type: 'directory', size: 0, mtimeMs: 1,
+    }));
+    mocks.loadExpandedSet.mockReturnValue(new Set(folders.map((e) => e.relPath)));
+    const pending: Array<{ path: string; phase: number; request: Deferred<readonly DirEntry[]> }> = [];
+    let phase = 0;
+    let active = 0;
+    let peak = 0;
+    mocks.listDir.mockImplementation(({ relPath }: { relPath: string }) => {
+      const request = deferred<readonly DirEntry[]>();
+      pending.push({ path: relPath, phase, request });
+      peak = Math.max(peak, ++active);
+      return request.promise.finally(() => { active--; });
+    });
+    const view = renderHook(() => useFileTree({ workdir: `/focus-restore-${leave}`, remoteHostId: 'test-remote' }));
+    await act(async () => { pending[0].request.resolve(folders); });
+    expect(pending).toHaveLength(9);
+    phase = 1;
+    let refreshed!: Promise<void[]>;
+    act(() => {
+      refreshed = Promise.all([view.result.current.refresh(), view.result.current.refresh()]);
+    });
+    expect(peak).toBeLessThanOrEqual(8);
+    expect(pending).toHaveLength(9);
+    if (leave) view.unmount();
+    for (let i = 1; i < pending.length; i++) {
+      await act(async () => {
+        const item = pending[i];
+        const entry: DirEntry = {
+          name: `phase-${item.phase}.md`, relPath: `${item.path ? item.path + '/' : ''}phase-${item.phase}.md`,
+          type: 'file', size: 1, mtimeMs: item.phase,
+        };
+        item.request.resolve(item.path === '' ? [...folders, entry] : [entry]);
+      });
+    }
+    await act(async () => { await refreshed; });
+    expect(peak).toBeLessThanOrEqual(8);
+    expect(active).toBe(0);
+    expect(pending.filter((p) => p.path === '')).toHaveLength(leave ? 1 : 2);
+    expect(pending.filter((p) => p.path === 'pkg8')).toHaveLength(leave ? 0 : 1);
+    if (!leave) {
+      expect(pending).toHaveLength(19);
+      expect(view.result.current.entries.size).toBe(10);
+      for (const folder of folders) {
+        expect(view.result.current.entries.get(folder.relPath)?.[0].name).toBe('phase-1.md');
+      }
+      expect(view.result.current.entries.get('')?.at(-1)?.name).toBe('phase-1.md');
+      expect(view.result.current.loadingPaths.size).toBe(0);
+      expect(view.result.current.initialLoading).toBe(false);
+      view.unmount();
+    }
+  });
+
   it('limits a directory refresh to one trailing scan during a watcher storm', async () => {
     const entries: readonly DirEntry[] = [
       { name: 'src', relPath: 'src', type: 'directory', size: 0, mtimeMs: 1 },

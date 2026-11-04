@@ -240,7 +240,15 @@ interface FileTreeStore {
   refCount: number;
   /** Invalidates queued restoration work when the final consumer leaves. */
   restoreGeneration: number;
+  /** Full refreshes during restoration share its workers and pending paths. */
+  restoreQueue: DirectoryRestoreQueue | null;
   listeners: Set<() => void>;
+}
+
+interface DirectoryRestoreQueue {
+  paths: string[];
+  pending: Set<string>;
+  promise: Promise<void>;
 }
 
 interface DirectoryRefresh {
@@ -488,6 +496,7 @@ function getOrCreateStore(opts: Required<UseFileTreeOptions>): FileTreeStore {
     watcherOff: null,
     refCount: 0,
     restoreGeneration: 0,
+    restoreQueue: null,
     listeners: new Set(),
   };
   // 继承来的展开集合要按**（可能已过滤的）**树剪一次：剪枝那条路径挂在 fetch
@@ -724,6 +733,8 @@ async function initStore(store: FileTreeStore): Promise<void> {
     : inheritedExpanded.filter((p) => !store.snapshot.entries.has(p));
   invalidateBorrowedCollapsedEntries(store);
   const paths = [...new Set([ROOT_KEY, ...restored, ...refetchInherited])];
+  const queue: DirectoryRestoreQueue = { paths, pending: new Set(paths), promise: Promise.resolve() };
+  store.restoreQueue = queue;
   // Publish queued loading paths together. Otherwise every newly freed slot
   // introduces another synchronous store notification/render during restoration.
   store.snapshot = {
@@ -732,12 +743,16 @@ async function initStore(store: FileTreeStore): Promise<void> {
   };
   emit(store);
   let next = 0;
-  await Promise.all(Array.from({ length: Math.min(RESTORE_CONCURRENCY, paths.length) }, async () => {
+  queue.promise = Promise.all(Array.from({ length: Math.min(RESTORE_CONCURRENCY, paths.length) }, async () => {
     while (next < paths.length && store.restoreGeneration === generation) {
-      await fetchDir(store, paths[next++]);
+      const path = paths[next++];
+      queue.pending.delete(path);
+      await fetchDir(store, path);
     }
-  }));
+  })).then(() => undefined);
+  await queue.promise;
   if (store.restoreGeneration !== generation) return;
+  store.restoreQueue = null;
   store.snapshot = { ...store.snapshot, initialLoading: false };
   emit(store);
 }
@@ -770,6 +785,7 @@ function invalidateBorrowedCollapsedEntries(store: FileTreeStore): void {
 /** 最后一个订阅者离开:停 watcher、从 stores 表移除。store 对象被回收。 */
 function disposeStore(store: FileTreeStore): void {
   store.restoreGeneration++;
+  store.restoreQueue = null;
   if (store.eventFlushTimer) clearTimeout(store.eventFlushTimer);
   store.eventFlushTimer = null;
   store.pendingEventParents.clear();
@@ -829,6 +845,32 @@ async function refresh(store: FileTreeStore): Promise<void> {
     ...store.snapshot.entries.keys(),
     ...store.snapshot.expanded,
   ]);
+  const queue = store.restoreQueue;
+  if (queue) {
+    const running: Promise<void>[] = [];
+    const added: string[] = [];
+    for (const path of targets) {
+      // A queued read has not observed the filesystem yet; it already covers
+      // this refresh. In-flight reads still need the normal trailing scan.
+      if (queue.pending.has(path)) continue;
+      if (store.inFlight.has(path)) {
+        running.push(fetchDir(store, path));
+      } else {
+        queue.paths.push(path);
+        queue.pending.add(path);
+        added.push(path);
+      }
+    }
+    if (added.length > 0) {
+      store.snapshot = {
+        ...store.snapshot,
+        loadingPaths: new Set([...store.snapshot.loadingPaths, ...added]),
+      };
+      emit(store);
+    }
+    await Promise.all([queue.promise, ...running]);
+    return;
+  }
   await Promise.all([...targets].map((p) => fetchDir(store, p)));
 }
 
