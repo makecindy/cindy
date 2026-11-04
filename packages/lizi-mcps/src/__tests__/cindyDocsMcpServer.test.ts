@@ -45,7 +45,7 @@ import {
 } from '../cindy-docs/make_pptx.js';
 import { DocsPathError, readInputFileWithinLimit, resolveSessionRoot, prepareOutputPath } from '../cindy-docs/_paths.js';
 import { RENDER_PDF_MAX_HTML_BYTES } from '../cindy-docs/render_pdf.js';
-import { MAX_XLSX_ZIP_ENTRIES } from '../cindy-docs/read_sheet.js';
+import { MAX_XLSX_ZIP_ENTRIES, _testHooks } from '../cindy-docs/read_sheet.js';
 import type {
   DocsMcpDeps,
   DocsMcpSessionCtx,
@@ -930,6 +930,13 @@ describe('read_sheet', () => {
     expect((await callTool(client, 'read_sheet', { path: 'r.xlsx', sheet: 9 })).errorCode).toBe(
       'SHEET_NOT_FOUND',
     );
+
+    // 验证 worker 在连续读取和 SHEET_NOT_FOUND 后被复用
+    const workerInstance = _testHooks.getActiveWorker();
+    expect(workerInstance).not.toBeNull();
+    const second = await callTool(client, 'read_sheet', { path: 'r.xlsx' });
+    expect(second.ok).toBe(true);
+    expect(_testHooks.getActiveWorker()).toBe(workerInstance);
   });
 
   it('读 csv / tsv,引号与跨行字段保真', async () => {
@@ -1140,6 +1147,17 @@ describe('read_sheet', () => {
     });
     expect(entries.errorCode).toBe('FILE_TOO_LARGE');
     expect((entries.data as Record<string, string>).hint).toContain('ZIP 条目');
+
+    // FILE_TOO_LARGE 或异常错误后 worker 应被终止，并在下一次正常读取时重新创建
+    expect(_testHooks.getActiveWorker()).toBeNull();
+    await callTool(client, 'make_xlsx', {
+      sheets: [{ name: 'Recovered', header: ['id'], rows: [[123]] }],
+      outPath: 'recovered.xlsx',
+    });
+    const recovered = await callTool(client, 'read_sheet', { path: 'recovered.xlsx' });
+    expect(recovered.ok).toBe(true);
+    expect(recovered.sheet).toBe('Recovered');
+    expect(_testHooks.getActiveWorker()).not.toBeNull();
   });
 
   it('.xls 与未知扩展名给出可执行的降级指引', async () => {
@@ -1160,6 +1178,27 @@ describe('read_sheet', () => {
     expect((await callTool(client, 'read_sheet', { path: 'ghost.csv' })).errorCode).toBe(
       'NOT_A_FILE',
     );
+  });
+
+  it('空闲回收后再次读取正常工作', async () => {
+    const client = await connect();
+    await callTool(client, 'make_xlsx', {
+      sheets: [{ name: 'IdleTest', header: ['val'], rows: [[42]] }],
+      outPath: 'idle.xlsx',
+    });
+    const first = await callTool(client, 'read_sheet', { path: 'idle.xlsx' });
+    expect(first.ok).toBe(true);
+    expect(_testHooks.getActiveWorker()).not.toBeNull();
+
+    // 模拟空闲超时触发 terminateActiveWorker
+    _testHooks.terminateActiveWorker();
+    expect(_testHooks.getActiveWorker()).toBeNull();
+
+    // 空闲回收后读取新工作簿应透明重建 worker
+    const second = await callTool(client, 'read_sheet', { path: 'idle.xlsx' });
+    expect(second.ok).toBe(true);
+    expect(second.rows).toEqual([['val'], [42]]);
+    expect(_testHooks.getActiveWorker()).not.toBeNull();
   });
 });
 
