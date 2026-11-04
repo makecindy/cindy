@@ -3,7 +3,7 @@ import { forwardedRequestDisplayText } from '@cindy/maker-shared/message-source'
 import { formatDuration } from '@cindy/maker-shared/message-render';
 import { parseMcpAppHistory } from '@cindy/maker-shared/mcp-apps';
 import { collectPluginInvocations, type PluginInvocation } from './pluginInvocations';
-import { extractPayloadToolResultFiles, extractPayloadToolCardIds, type PayloadToolFile } from '@cindy/maker-shared/payload-summary';
+import { extractPayloadToolResultFiles, extractPayloadToolCardIds, extractPayloadTurnEndCardIds, type PayloadToolFile } from '@cindy/maker-shared/payload-summary';
 import { placeBotTaskCardsAfterIntroduction, readBotCollaborationMeta, type BotCollaborationMeta } from '@cindy/maker-shared/botCollaboration';
 import { readBotDirectMessageMeta, type BotDirectMessageMeta } from '@cindy/maker-shared/botDirectMessage';
 import type { RemoteMessage, RemoteMessageRole } from '@/session/types';
@@ -116,6 +116,7 @@ export interface NormalizedRemoteMessage {
   media?: NormalizedToolMedia[];
   files?: PayloadToolFile[];
   cardIds?: string[];
+  turnEndCardIds?: string[];
   pluginInvocations?: PluginInvocation[];
   diff?: NormalizedToolDiff;
   align: 'user' | 'agent';
@@ -366,6 +367,7 @@ export function normalizeRemoteMessages(
         media: extractToolResultMedia(secondaryBody ?? ''),
         files: extractPayloadToolResultFiles(secondaryBody ?? ''),
         cardIds: extractPayloadToolCardIds(secondaryBody ?? ''),
+        turnEndCardIds: extractPayloadTurnEndCardIds(secondaryBody ?? ''),
         diff: tool.diff,
         align: 'agent',
         createdAt: message.createdAt,

@@ -31,6 +31,9 @@ const GHOST_THEME_TOKENS = [
   '--error-bg',
   '--error-border',
   '--error-fg',
+  // 宿主填写插件卡片 PR 状态位时,与标题栏 PR 汇总同色(通过 / 未解决评论)。
+  '--status-success',
+  '--status-bar-accent',
   '--focus-ring',
   // 滚动条(globals.css 统一规范同源色):意识面板照主机同款画 thumb。
   '--msg-scrollbar',

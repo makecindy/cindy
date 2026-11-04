@@ -7666,6 +7666,9 @@
         "agentObserve": "Peut voir la liste et l'état des sessions des projets locaux",
         "agentObserveDetail": "Peut voir le titre, le type d'Agent, l'archivage et l'état (en cours, action requise, dernière activité) des sessions des projets locaux enregistrés, et ouvrir une session dans la fenêtre principale. Ne peut pas lire les messages, les plans ni les fichiers, ni envoyer de messages ou modifier les sessions.",
         "agentObserveRequest": "Vérifier l'autorisation de voir les sessions",
+        "agentCompanions": "Peut voir les coéquipiers, leur état et leur conversation récente",
+        "agentCompanionsDetail": "Peut voir tous les coéquipiers, y compris ceux qui s'exécutent sur vos autres ordinateurs : nom, description, avatar, état (au travail, en attente de votre réponse, inactif, hors ligne), le type d'étape en cours (réflexion, exécution d'un outil, etc.), les demandes qui vous attendent telles que leurs cartes les affichent (questions, commandes à exécuter, plans) et la conversation récente de leur discussion principale (jusqu’à 50 de vos messages et de leurs réponses, sans les étapes d’outils) ; et ouvrir la conversation d'un coéquipier dans la fenêtre principale. Avec aussi l'autorisation de remettre des messages, il peut transmettre les réponses que vous donnez dans le plugin : répondre aux questions, refuser des demandes et commenter des plans. Pour autoriser une étape, vous cliquez toujours dans la confirmation propre à Cindy. Ne peut pas lire les fichiers, les étapes d’outils ni les réflexions.",
+        "agentCompanionsRequest": "Vérifier l'autorisation de voir les coéquipiers",
         "agentHiddenTasks": "Peut créer des tâches en arrière-plan masquées de la liste des tâches",
         "agentHiddenTasksDetail": "Les tâches créées par ce plugin peuvent ne pas apparaître dans la liste des tâches, la recherche et les notifications. Vous pouvez toujours les voir, les ouvrir ou les afficher dans la liste des tâches depuis Tâches en arrière-plan sur la page de ce plugin ; désinstaller le plugin les fait réapparaître.",
         "agentErrand": "Créer des tâches, effectuer du travail et lire les résultats",
@@ -10680,6 +10683,11 @@
           "NETWORK_ERROR": "{{name}} n'a pas pu répondre : échec de la connexion réseau.\nVérifiez votre réseau ou votre proxy, puis renvoyez votre message.",
           "RUNTIME_TIMEOUT": "{{name}} n'a pas répondu avant l'expiration du délai.\nRenvoyez votre message, ou choisissez un autre modèle disponible.",
           "RUNTIME_ERROR": "{{name}} n'a pas pu répondre cette fois.\nRenvoyez votre message. Si l'échec persiste, consultez les journaux et signalez le problème."
+        },
+        "capability": {
+          "GROUP_AUTHORIZATION_REQUIRED": "{{name}} n’a pas pu exécuter cet outil : l’autorisation du groupe a expiré ou ne permet pas cette action. Le propriétaire du coéquipier peut renouveler la demande dans ce groupe.",
+          "GROUP_AUTHORIZATION_UNAVAILABLE": "L’autorisation de groupe de {{name}} n’a pas pu être vérifiée ; cet outil n’a donc pas été exécuté. Réessayez une fois la connexion rétablie.",
+          "ATTACHMENTS_UNAVAILABLE": "Certaines pièces jointes n’ont pas été transmises à {{name}} en raison d’un échec de téléchargement ou de la limite de pièces jointes. Renvoyez celles nécessaires à cette demande."
         }
       },
       "settings": {
@@ -10749,7 +10757,8 @@
         "lifecycleUnavailable": "Le serveur ou l'ordinateur actuel ne prend pas encore en charge cette action.",
         "groupDissolved": "Ce groupe a été dissous. Vous pouvez toujours lire l'historique disponible.",
         "lastOwner": "Transférez la propriété ou dissolvez ce groupe avant de le quitter.",
-        "allBotsMentionDisabled": "Le propriétaire du groupe n’a pas encore activé @Tous les coéquipiers."
+        "allBotsMentionDisabled": "Le propriétaire du groupe n’a pas encore activé @Tous les coéquipiers.",
+        "turnAlreadyStarted": "Ce coéquipier a déjà commencé et ne peut plus être ignoré"
       },
       "organizer": "Organisateur",
       "plan": {
@@ -10782,7 +10791,17 @@
         "allTurns_other": "Les {{count}} coéquipiers",
         "foldTurns": "Afficher moins",
         "intro_many": "Cela prend {{count}} étapes. Voici qui fait quoi :",
-        "allTurns_many": "Les {{count}} coéquipiers"
+        "allTurns_many": "Les {{count}} coéquipiers",
+        "stepQueued": "En attente de démarrage",
+        "stepExecuting": "En cours",
+        "stepSkipped": "Ignoré",
+        "skippingTurn": "Passage en cours…",
+        "queueWaiting": "En attente de la suite",
+        "skipTurnLabel": "Passer {{name}}",
+        "queueEnded": "Tour terminé",
+        "talkTitle": "Écouter chacun à son tour",
+        "talkPending": "Non commencé",
+        "skipTurn": "Passer"
       },
       "speaking": {
         "planning": "Répartition du travail…"
@@ -13835,7 +13854,7 @@
       "REMOTE_PROVIDER_UPDATING": "Les identifiants de ce fournisseur de modèles sont en cours de mise à jour. Réessayez dans un instant.",
       "REMOTE_WORKDIR_UNAVAILABLE": "Le répertoire de travail distant est indisponible. Vérifiez que le dossier existe toujours sur cet ordinateur, puis réessayez.",
       "REMOTE_OPTIMISTIC_SESSION_STATE_UNAVAILABLE": "L'ordinateur ne peut pas encore confirmer si ce message a été envoyé. Patientez un instant et réessayez. N'envoyez pas deux fois le même message.",
-      "REMOTE_AGENT_UNAVAILABLE": "Impossible de joindre l'ordinateur qui exécute l'Agent. Assurez-vous qu'il est en ligne et autorise le contrôle à distance, puis réessayez.",
+      "REMOTE_AGENT_UNAVAILABLE": "La connexion avec l'ordinateur qui exécute l'Agent a été interrompue. Réessayez. Si cela se reproduit, assurez-vous qu'il est en ligne et autorise le contrôle à distance.",
       "REMOTE_AGENT_PEER_TOO_OLD": "La version de Cindy sur l'autre ordinateur est trop ancienne pour cette action. Mettez d'abord Cindy à jour sur cet ordinateur.",
       "REMOTE_AGENT_EXPIRED": "Cette session est déjà terminée sur l'ordinateur qui exécute l'Agent. Renvoyez votre message.",
       "REMOTE_AGENT_NOT_FOUND": "Cette session est déjà terminée sur l'ordinateur qui exécute l'Agent. Renvoyez votre message.",
@@ -13962,6 +13981,18 @@
       "cancelTitle": "Arrêter d'attendre et supprimer ce message"
     },
     "ghostCall": {
+      "prStatus": {
+        "threadsNone": "Aucun fil de revue ouvert",
+        "mergeReady": "Prête à fusionner",
+        "mergeConflict": "Conflits à résoudre",
+        "mergeBehind": "En retard sur la branche de base",
+        "mergeApproval": "En attente d’approbation",
+        "mergeChanges": "Modifications demandées",
+        "mergeWaiting": "En attente de fusion",
+        "merged": "Fusionnée",
+        "closed": "Fermée",
+        "draft": "Brouillon"
+      },
       "verb": "Plugin utilisé",
       "cardRunning": "Le plugin dessine",
       "cardDone": "Terminé",
@@ -13975,6 +14006,7 @@
       "collapseFields": "Réduire",
       "formSyncFailed": "Les modifications de la carte n'ont pas été synchronisées. Vérifiez la connexion et continuez la modification ; le message n'a pas été envoyé.",
       "linkOpenFailed": "Impossible d'ouvrir le lien",
+      "modelSelectFailed": "Le modèle n'a pas été changé. Choisissez-le à nouveau.",
       "mailPreview": "Aperçu de l'e-mail",
       "mailEnlarge": "Agrandir l'aperçu",
       "mailInsertImage": "Insérer dans le message",
@@ -16176,7 +16208,17 @@
   },
   "commandPalette": {
     "viewSkillDetails": "Voir les détails du skill",
-    "projectSkillNotLoaded": "Cette tâche Pi n'a pas chargé ce skill de projet. Les nouvelles tâches tenteront de le charger automatiquement."
+    "projectSkillNotLoaded": "Cette tâche Pi n'a pas chargé ce skill de projet. Les nouvelles tâches tenteront de le charger automatiquement.",
+    "pluginSkillSetup": {
+      "install": "Non installé",
+      "enable": "Désactivé"
+    },
+    "pluginSkills": {
+      "pr": {
+        "install": "Ouvre une PR, corrige la CI et les retours de revue, et la suit jusqu’à la fusion · Nécessite d’installer le plugin GitHub",
+        "enable": "Ouvre une PR, corrige la CI et les retours de revue, et la suit jusqu’à la fusion · Nécessite d’activer le plugin GitHub"
+      }
+    }
   },
   "skillhub": {
     "remote": {
@@ -18907,6 +18949,21 @@
     "taskDetail": "Les modifications sont autorisées uniquement pour la session en cours. Un répertoire de travail distinct n'est pas un bac à sable système ; les commandes restent soumises aux vérifications d'autorisation de Cindy. Vous pouvez changer ce réglage dans le menu des autorisations de la session.",
     "allow": "Autoriser et continuer",
     "cancel": "Pas maintenant"
+  },
+  "pluginCompanionAnswer": {
+    "title": "Confirmer l'autorisation",
+    "planMessage": "Laisser {{companion}} commencer à travailler selon ce plan ?",
+    "permissionMessage": {
+      "command": "Autoriser {{companion}} à exécuter cette commande ?",
+      "file-read": "Autoriser {{companion}} à lire ces fichiers ?",
+      "file-write": "Autoriser {{companion}} à modifier ces fichiers ?",
+      "browser": "Autoriser {{companion}} à effectuer cette étape dans le navigateur ?",
+      "plugin": "Autoriser {{companion}} à utiliser « {{tool}} » ?",
+      "tool": "Autoriser {{companion}} à utiliser {{tool}} ?"
+    },
+    "source": "Vous avez choisi Autoriser dans le plugin « {{plugin}} ». {{appName}} vous le redemande ici ; ensuite, le coéquipier continue.",
+    "allow": "Autoriser",
+    "cancel": "Annuler"
   },
   "groupTools": {
     "authorizationRequired": "L'autorisation du groupe a expiré ou ne permet pas cette action. Demandez au propriétaire du coéquipier de faire une nouvelle demande dans ce groupe.",

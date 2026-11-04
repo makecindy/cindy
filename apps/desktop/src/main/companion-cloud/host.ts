@@ -315,6 +315,14 @@ export async function readMirrorRowsAfter(sessionId: string, cursor: CompanionMi
     .orderBy(asc(messages.createdAt), asc(messages.id)).limit(limit);
 }
 
+/** Rows older than `cursor`, newest first: walking a conversation back a page at a time. */
+export async function readMirrorRowsBefore(sessionId: string, cursor: CompanionMirrorCursor, limit: number): Promise<CompanionMirrorRow[]> {
+  return getDbClient().drizzle.select(mirrorColumns).from(messages)
+    .where(and(visibleRows(sessionId), or(lt(messages.createdAt, cursor.createdAt),
+      and(eq(messages.createdAt, cursor.createdAt), lt(messages.id, cursor.id)))))
+    .orderBy(desc(messages.createdAt), desc(messages.id)).limit(limit);
+}
+
 export async function readLatestMirrorRows(sessionId: string, limit: number,
   options: { excludeClientIdPrefix?: string } = {}): Promise<CompanionMirrorRow[]> {
   const prefix = options.excludeClientIdPrefix;

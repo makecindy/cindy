@@ -7599,6 +7599,9 @@
         "agentObserve": "Kann Liste und Status der Sitzungen lokaler Projekte sehen",
         "agentObserveDetail": "Kann Titel, Agent-Typ, Archivstatus und Status (läuft, Handlung nötig, letzte Aktivität) der Sitzungen registrierter lokaler Projekte sehen und eine Sitzung im Hauptfenster öffnen. Kann keine Nachrichten, Pläne oder Dateien lesen und weder Nachrichten senden noch Sitzungen ändern.",
         "agentObserveRequest": "Berechtigung zum Anzeigen von Sitzungen prüfen",
+        "agentCompanions": "Kann Teammitglieder, ihren Status und die letzten Nachrichten sehen",
+        "agentCompanionsDetail": "Kann alle Teammitglieder sehen, auch die auf deinen anderen Computern: Name, Beschreibung, Avatar, Status (arbeitet, wartet auf dich, inaktiv, offline), die Art des aktuellen Schritts (etwa Nachdenken oder ein Tool ausführen), die Anfragen, die auf dich warten, so wie ihre Karten sie zeigen (Fragen, auszuführende Befehle, Pläne), und die letzten Nachrichten im Hauptchat (bis zu 50 deiner Nachrichten und ihrer Antworten, ohne Tool-Schritte); außerdem die Unterhaltung eines Teammitglieds im Hauptfenster öffnen. Mit der Berechtigung zum Zustellen von Nachrichten kann es deine im Plugin gegebenen Antworten weitergeben: Fragen beantworten, Anfragen ablehnen und Feedback zu Plänen geben. Zum Erlauben eines Schritts klickst du weiterhin in Cindys eigener Bestätigung. Kann keine Dateien, Tool-Schritte oder Gedankengänge lesen.",
+        "agentCompanionsRequest": "Berechtigung zum Anzeigen von Teammitgliedern prüfen",
         "agentHiddenTasks": "Kann Hintergrundaufgaben erstellen, die in der Aufgabenliste ausgeblendet sind",
         "agentHiddenTasksDetail": "Von diesem Plugin erstellte Aufgaben können in der Aufgabenliste, der Suche und den Benachrichtigungen ausgeblendet bleiben. Unter „Hintergrundaufgaben“ auf der Seite dieses Plugins kannst du sie jederzeit ansehen, öffnen oder in der Aufgabenliste einblenden; bei der Deinstallation des Plugins werden sie wieder eingeblendet.",
         "agentErrand": "Aufgaben erstellen, Arbeiten ausführen und Ergebnisse lesen",
@@ -10596,6 +10599,11 @@
           "NETWORK_ERROR": "{{name}} konnte nicht antworten: Die Netzwerkverbindung ist fehlgeschlagen.\nPrüfe dein Netzwerk oder deinen Proxy und sende deine Nachricht erneut.",
           "RUNTIME_TIMEOUT": "{{name}} hat nicht innerhalb des Zeitlimits geantwortet.\nSende deine Nachricht erneut oder wähle ein anderes verfügbares Modell.",
           "RUNTIME_ERROR": "{{name}} konnte diesmal nicht antworten.\nSende deine Nachricht erneut. Falls es weiterhin nicht klappt, prüfe die Protokolle und melde das Problem."
+        },
+        "capability": {
+          "GROUP_AUTHORIZATION_REQUIRED": "{{name}} konnte dieses Werkzeug nicht ausführen: Die Gruppenberechtigung ist abgelaufen oder erlaubt diese Aktion nicht. Der Besitzer des Teammitglieds kann die Anfrage in dieser Gruppe erneut stellen.",
+          "GROUP_AUTHORIZATION_UNAVAILABLE": "Die Gruppenberechtigung für {{name}} konnte nicht überprüft werden. Dieses Werkzeug wurde daher nicht ausgeführt. Versuche es erneut, sobald die Verbindung wiederhergestellt ist.",
+          "ATTACHMENTS_UNAVAILABLE": "Einige Anhänge wurden {{name}} wegen eines Downloadfehlers oder der maximalen Anzahl an Anhängen nicht übermittelt. Sende die für diese Anfrage benötigten Anhänge erneut."
         }
       },
       "settings": {
@@ -10665,7 +10673,8 @@
         "lifecycleUnavailable": "Der aktuelle Server oder Computer unterstützt diese Aktion noch nicht.",
         "groupDissolved": "Diese Gruppe wurde aufgelöst. Du kannst den verfügbaren Verlauf weiterhin lesen.",
         "lastOwner": "Übertrage die Inhaberschaft oder löse diese Gruppe auf, bevor du sie verlässt.",
-        "allBotsMentionDisabled": "Der Gruppeninhaber hat @Alle Teammitglieder noch nicht aktiviert."
+        "allBotsMentionDisabled": "Der Gruppeninhaber hat @Alle Teammitglieder noch nicht aktiviert.",
+        "turnAlreadyStarted": "Dieser Teamkollege hat bereits begonnen und kann nicht übersprungen werden"
       },
       "organizer": "Organisator",
       "plan": {
@@ -10696,7 +10705,17 @@
         "stepSpoken": "Fertig",
         "allTurns_one": "Alle {{count}} Teammitglied",
         "allTurns_other": "Alle {{count}} Teammitglieder",
-        "foldTurns": "Weniger anzeigen"
+        "foldTurns": "Weniger anzeigen",
+        "stepQueued": "Wartet auf Start",
+        "stepExecuting": "Wird ausgeführt",
+        "stepSkipped": "Übersprungen",
+        "skippingTurn": "Wird übersprungen…",
+        "queueWaiting": "Wartet auf Fortsetzen",
+        "skipTurnLabel": "Überspringen {{name}}",
+        "queueEnded": "Runde beendet",
+        "talkTitle": "Nacheinander zu Wort kommen",
+        "talkPending": "Nicht gestartet",
+        "skipTurn": "Überspringen"
       },
       "speaking": {
         "planning": "Arbeit wird aufgeteilt…"
@@ -13716,7 +13735,7 @@
       "REMOTE_PROVIDER_UPDATING": "Die Zugangsdaten dieses Modellanbieters werden aktualisiert. Versuch es gleich erneut.",
       "REMOTE_WORKDIR_UNAVAILABLE": "Das Remote-Arbeitsverzeichnis ist nicht verfügbar. Prüfe, ob der Ordner auf diesem Computer noch existiert, und versuch es erneut.",
       "REMOTE_OPTIMISTIC_SESSION_STATE_UNAVAILABLE": "Der Computer kann noch nicht bestätigen, ob diese Nachricht gesendet wurde. Warte kurz und versuch es erneut. Sende dieselbe Nachricht nicht zweimal.",
-      "REMOTE_AGENT_UNAVAILABLE": "Der Computer, auf dem der Agent läuft, ist nicht erreichbar. Stelle sicher, dass er online ist und Fernsteuerung erlaubt, und versuch es erneut.",
+      "REMOTE_AGENT_UNAVAILABLE": "Die Verbindung zum Computer, auf dem der Agent läuft, wurde unterbrochen. Versuch es erneut. Wenn das öfter passiert, stelle sicher, dass er online ist und Fernsteuerung erlaubt.",
       "REMOTE_AGENT_PEER_TOO_OLD": "Cindy auf dem anderen Computer ist für diese Aktion zu alt. Aktualisiere Cindy dort zuerst.",
       "REMOTE_AGENT_EXPIRED": "Diese Sitzung wurde auf dem Computer, auf dem der Agent läuft, bereits beendet. Sende deine Nachricht erneut.",
       "REMOTE_AGENT_NOT_FOUND": "Diese Sitzung wurde auf dem Computer, auf dem der Agent läuft, bereits beendet. Sende deine Nachricht erneut.",
@@ -13834,6 +13853,18 @@
       "cancelTitle": "Warten beenden und diese Nachricht entfernen"
     },
     "ghostCall": {
+      "prStatus": {
+        "threadsNone": "Keine offenen Review-Threads",
+        "mergeReady": "Bereit zum Mergen",
+        "mergeConflict": "Hat Konflikte",
+        "mergeBehind": "Hinter dem Basis-Branch",
+        "mergeApproval": "Wartet auf Freigabe",
+        "mergeChanges": "Änderungen angefordert",
+        "mergeWaiting": "Wartet auf Merge",
+        "merged": "Gemergt",
+        "closed": "Geschlossen",
+        "draft": "Entwurf"
+      },
       "verb": "Plugin verwendet",
       "cardRunning": "Plugin zeichnet",
       "cardDone": "Fertig",
@@ -13847,6 +13878,7 @@
       "collapseFields": "Einklappen",
       "formSyncFailed": "Kartenänderungen wurden nicht synchronisiert. Prüfe die Verbindung und bearbeite weiter; die Nachricht wurde nicht gesendet.",
       "linkOpenFailed": "Link konnte nicht geöffnet werden",
+      "modelSelectFailed": "Das Modell wurde nicht geändert. Bitte erneut auswählen.",
       "mailPreview": "E-Mail-Vorschau",
       "mailEnlarge": "Vorschau vergrößern",
       "mailInsertImage": "In Nachricht einfügen",
@@ -16028,7 +16060,17 @@
   },
   "commandPalette": {
     "viewSkillDetails": "Skill-Details anzeigen",
-    "projectSkillNotLoaded": "Diese Pi-Aufgabe hat diesen Projekt-Skill noch nicht geladen. Neue Aufgaben versuchen automatisch, ihn zu laden."
+    "projectSkillNotLoaded": "Diese Pi-Aufgabe hat diesen Projekt-Skill noch nicht geladen. Neue Aufgaben versuchen automatisch, ihn zu laden.",
+    "pluginSkillSetup": {
+      "install": "Nicht installiert",
+      "enable": "Deaktiviert"
+    },
+    "pluginSkills": {
+      "pr": {
+        "install": "PR öffnen, CI und Review-Feedback beheben und bis zum Merge begleiten · Erfordert die Installation des GitHub-Plugins",
+        "enable": "PR öffnen, CI und Review-Feedback beheben und bis zum Merge begleiten · Erfordert die Aktivierung des GitHub-Plugins"
+      }
+    }
   },
   "skillhub": {
     "remote": {
@@ -18736,6 +18778,21 @@
     "taskDetail": "Damit werden Bearbeitungen nur für die aktuelle Sitzung erlaubt. Ein separates Arbeitsverzeichnis ist keine System-Sandbox; Befehle unterliegen weiterhin den Berechtigungsprüfungen von Cindy. Du kannst dies im Berechtigungsmenü der Sitzung ändern.",
     "allow": "Erlauben und fortfahren",
     "cancel": "Nicht jetzt"
+  },
+  "pluginCompanionAnswer": {
+    "title": "Erlauben bestätigen",
+    "planMessage": "Soll {{companion}} mit diesem Plan beginnen?",
+    "permissionMessage": {
+      "command": "{{companion}} erlauben, diesen Befehl auszuführen?",
+      "file-read": "{{companion}} erlauben, diese Dateien zu lesen?",
+      "file-write": "{{companion}} erlauben, diese Dateien zu ändern?",
+      "browser": "{{companion}} erlauben, diesen Browserschritt auszuführen?",
+      "plugin": "{{companion}} erlauben, „{{tool}}“ zu verwenden?",
+      "tool": "{{companion}} erlauben, {{tool}} zu verwenden?"
+    },
+    "source": "Du hast im Plugin „{{plugin}}“ „Erlauben“ gewählt. {{appName}} fragt hier noch einmal nach; danach arbeitet das Teammitglied weiter.",
+    "allow": "Erlauben",
+    "cancel": "Abbrechen"
   },
   "groupTools": {
     "authorizationRequired": "Die Gruppenautorisierung ist abgelaufen oder erlaubt diese Aktion nicht. Bitte den Besitzer des Teammitglieds, eine neue Anfrage in dieser Gruppe zu stellen.",
