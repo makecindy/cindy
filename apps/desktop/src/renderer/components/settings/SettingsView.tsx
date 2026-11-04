@@ -90,6 +90,7 @@ import { canAccessBillingSettings } from './billingVisibility';
 import { canAccessUsageSettings } from './usageVisibility';
 import { UsageHistorySection } from './usage/UsageHistorySection';
 import { CURRENT_CINDY_REGION } from '../../../shared/brandRegion';
+import { useVoiceInputModelSelection } from '@/hooks/useVoiceInputModelSelection';
 
 const DEFAULT_SETTINGS_MENU_WIDTH = 260;
 
@@ -98,6 +99,13 @@ interface SettingsOutletContext {
 }
 
 export function SettingsView() {
+  const { mode, dataOwnerId } = useAuth();
+  // Share one live voice selection with search and the page; discard it on account changes.
+  return <SettingsViewContent key={`${mode}:${dataOwnerId ?? 'none'}`} />;
+}
+
+function SettingsViewContent() {
+  const voiceModelSelection = useVoiceInputModelSelection();
   const navigate = useNavigate();
   const outletContext = useOutletContext<SettingsOutletContext | null>();
   const [searchParams, setSearchParams] = useSearchParams();
@@ -268,7 +276,11 @@ export function SettingsView() {
     membershipKind: user?.membershipKind ?? null,
     platform: window.electronAPI?.platform ?? '',
     supportsBetaUpdateChannel: window.electronAPI?.supportsBetaUpdateChannel,
-  }), [mode, user?.membershipKind]);
+    voiceInput: voiceModelSelection.ready && voiceModelSelection.selection ? {
+      serviceMode: voiceModelSelection.selection.serviceMode,
+      asrProvider: voiceModelSelection.selection.asrProvider,
+    } : undefined,
+  }), [mode, user?.membershipKind, voiceModelSelection.ready, voiceModelSelection.selection]);
   const requestedEntry = resolveSettingsSearchEntry(activeTab, searchParams.get('section'));
   const searchEntry = piExtensionsPanelOpen || (requestedEntry?.isVisible && !requestedEntry.isVisible(searchContext))
     ? null : requestedEntry;
@@ -581,7 +593,7 @@ export function SettingsView() {
                 aria-labelledby="settings-tab-voice-input"
               >
                 <section aria-label={t(voiceInputSettings.voiceInput.sectionKey)}>
-                  <VoiceInputSection key={`voice-input:${mode}:${dataOwnerId ?? 'none'}`} />
+                  <VoiceInputSection key={`voice-input:${mode}:${dataOwnerId ?? 'none'}`} modelSelection={voiceModelSelection} />
                 </section>
               </div>
             )}

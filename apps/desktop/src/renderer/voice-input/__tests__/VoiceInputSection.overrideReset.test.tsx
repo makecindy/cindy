@@ -5,7 +5,8 @@ import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-li
 import { MemoryRouter } from 'react-router-dom';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { VoiceInputSection } from '../../components/settings/VoiceInputSection';
+import { VoiceInputSection as VoiceInputSectionComponent } from '../../components/settings/VoiceInputSection';
+import { useVoiceInputModelSelection } from '@/hooks/useVoiceInputModelSelection';
 import { voiceInputSettings } from '../../components/settings/VoiceInputSection.settings-search';
 import { toast } from '@/lib/toast';
 import { getDefaultVoiceInputSettings, type VoiceInputSettings } from '../../../shared/voiceInputData';
@@ -28,6 +29,9 @@ vi.mock('@/hooks/useVoiceInputModelSelection', () => ({
 }));
 
 const defaults = getDefaultVoiceInputSettings('win32');
+function VoiceInputSection() {
+  return <VoiceInputSectionComponent modelSelection={useVoiceInputModelSelection()} />;
+}
 const restoreLabel = 'settings.defaults.restore';
 let settings: VoiceInputSettings;
 const updateSettings = vi.fn();

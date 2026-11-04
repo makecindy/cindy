@@ -3,15 +3,16 @@
  * 再按一次才退出设置。各分区内容与本测试无关，统一替换为空壳。
  * @vitest-environment jsdom
  */
-import { act, fireEvent, render, screen } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { MemoryRouter, Route, Routes, useLocation } from 'react-router-dom';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { DiffPanelShell } from '@/components/diff-panel/DiffPanelShell';
 import { SettingsView } from '../SettingsView';
+import type { useVoiceInputModelSelection } from '@/hooks/useVoiceInputModelSelection';
 
 vi.mock('react-i18next', () => ({
-  useTranslation: () => ({ t: (key: string) => key }),
+  useTranslation: () => ({ t: (key: string) => key === 'settings.voiceInput.serviceSource.customAsr.websocketUrl.label' ? 'WebSocket URL' : key }),
 }));
 vi.mock('@/contexts/AuthContext', () => ({
   useAuth: () => ({ mode: 'local', dataOwnerId: null, user: null }),
@@ -22,7 +23,14 @@ vi.mock('@/lib/useCindyVersions', () => ({
 
 const { Stub } = vi.hoisted(() => ({ Stub: () => null }));
 vi.mock('../UserProfileCard', () => ({ UserProfileCard: Stub }));
-vi.mock('../VoiceInputSection', () => ({ VoiceInputSection: Stub }));
+vi.mock('../VoiceInputSection', () => ({
+  VoiceInputSection: ({ modelSelection }: { modelSelection: ReturnType<typeof useVoiceInputModelSelection> }) => (
+    <>
+      <button onClick={() => void modelSelection.setAsrProvider('openai')}>Use preset ASR</button>
+      <button onClick={() => void modelSelection.setAsrProvider('custom-realtime-asr')}>Use custom ASR</button>
+    </>
+  ),
+}));
 vi.mock('../AppearanceSection', () => ({ AppearanceSection: Stub }));
 vi.mock('../SubagentModelSection', () => ({ SubagentModelSection: Stub }));
 vi.mock('../AuxiliaryModelSection', () => ({ AuxiliaryModelSection: Stub }));
@@ -63,7 +71,6 @@ vi.mock('../SettingsCatalogPanel', () => ({ SettingsCatalogPanel: Stub }));
 vi.mock('@/features/billing/BillingPage', () => ({ BillingSettingsSection: Stub }));
 vi.mock('@/features/bots/BotsGlobalSettingsSection', () => ({ BotsGlobalSettingsSection: Stub }));
 vi.mock('../usage/UsageHistorySection', () => ({ UsageHistorySection: Stub }));
-vi.mock('../SettingsSidebarNav', () => ({ SettingsSidebarNav: Stub }));
 vi.mock('../ImBotSection', () => ({
   ImBotSection: Stub,
   isImBotSettingsGroup: (value: unknown) => value === 'cindy' || value === 'personal',
@@ -115,7 +122,14 @@ function pressEscape() {
 const location = () => screen.getByTestId('location').textContent;
 
 beforeEach(() => {
-  vi.stubGlobal('electronAPI', { platform: 'darwin', appVersion: '1.0.0' });
+  vi.stubGlobal('matchMedia', () => ({ matches: true, addEventListener() {}, removeEventListener() {} }));
+  vi.stubGlobal('ResizeObserver', class {
+    observe() {}
+    disconnect() {}
+  });
+  vi.stubGlobal('electronAPI', { platform: 'darwin', appVersion: '1.0.0', voiceInput: {
+    getModelSelection: vi.fn(async () => ({ selection: { serviceMode: 'cindy', asrProvider: 'openai' } })),
+  } });
   // jsdom 没有元素滚动；设置页切分区时会把内容列滚回顶部。
   Element.prototype.scrollTo = () => {};
 });
@@ -125,6 +139,36 @@ afterEach(() => {
 });
 
 describe('SettingsView Escape', () => {
+  // Unit wiring regression (#8481): search must load voice selection before the
+  // voice page mounts and immediately follow edits from that same page instance.
+  // Keep the real selection hook/search/router; only IPC and section controls are fixtures.
+  it('updates custom ASR search results after loading and changing the voice selection', async () => {
+    let resolveSelection!: (value: unknown) => void;
+    const getSelection = vi.fn(() => new Promise((resolve) => { resolveSelection = resolve; }));
+    const setSelection = vi.fn(async ({ asrProvider }: { asrProvider: string }) => ({
+      selection: { serviceMode: 'cindy', asrProvider },
+    }));
+    Object.assign(window.electronAPI.voiceInput, { getModelSelection: getSelection, setModelSelection: setSelection });
+    renderSettings('/settings');
+    const search = screen.getByRole('combobox', { name: 'settings.search.ariaLabel' });
+    const query = 'WebSocket URL';
+    const result = () => screen.queryByRole('option', { name: /^WebSocket URL/ });
+    fireEvent.change(search, { target: { value: query } });
+    expect(result()).toBeNull();
+    await act(async () => resolveSelection({ selection: { serviceMode: 'cindy', asrProvider: 'custom-realtime-asr' } }));
+    expect(result()).not.toBeNull();
+    fireEvent.click(result()!);
+    expect(location()).toContain('tab=voice-input');
+    expect(location()).toContain('section=voiceInput.customAsrWebsocketUrl');
+    fireEvent.change(search, { target: { value: query } });
+    fireEvent.click(screen.getByRole('button', { name: 'Use preset ASR' }));
+    await waitFor(() => expect(result()).toBeNull());
+    fireEvent.click(screen.getByRole('button', { name: 'Use custom ASR' }));
+    await waitFor(() => expect(result()).not.toBeNull());
+    expect(getSelection).toHaveBeenCalledTimes(1);
+    expect(setSelection).toHaveBeenCalledTimes(2);
+  });
+
   it('returns from the Pi extensions page to General before leaving Settings', () => {
     renderSettings('/settings?openPanel=pi-extensions');
     expect(screen.getByText('PI packages')).toBeTruthy();

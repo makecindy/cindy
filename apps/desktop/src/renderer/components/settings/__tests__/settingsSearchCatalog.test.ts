@@ -39,9 +39,34 @@ const searchI18n = createInstance();
 await searchI18n.init({ lng: 'zh-CN', fallbackLng: 'en', resources: {
   'zh-CN': { translation: zhCN }, en: { translation: en },
 } });
-const searchContext = { platform: 'win32', region: 'cn', mode: 'cloud', membershipKind: 'personal' } as const;
+const searchContext = { platform: 'win32', region: 'cn', mode: 'cloud', membershipKind: 'personal',
+  voiceInput: { serviceMode: 'byok', asrProvider: 'custom-realtime-asr' },
+} as const;
 
 describe('settings discoverability regressions', () => {
+  // Unit regression (#8481): an unloaded, managed, or non-custom ASR selection
+  // exposed unmounted fields. Existing title tests only covered visible fields.
+  it.each([
+    ['cloud', undefined, false, false],
+    ['cloud', { serviceMode: 'cindy', asrProvider: 'custom-realtime-asr' }, false, false],
+    ['cloud', { serviceMode: 'byok', asrProvider: 'openai' }, true, false],
+    ['cloud', { serviceMode: 'byok', asrProvider: 'custom-realtime-asr' }, true, true],
+    ['local', { serviceMode: 'cindy', asrProvider: 'custom-realtime-asr' }, true, true],
+    ['local', { serviceMode: 'cindy', asrProvider: 'openai' }, true, false],
+  ] as const)('matches mounted ASR fields for %s / %j', (mode, voiceInput, byokVisible, customVisible) => {
+    const documents = buildSettingsSearchDocuments(searchI18n.t, TAB_IDS, { ...searchContext, mode, voiceInput });
+    for (const lng of ['zh-CN', 'en']) {
+      for (const field of ['protocol', 'websocketUrl', 'model', 'apiKey']) {
+        const query = searchI18n.t(`settings.voiceInput.serviceSource.customAsr.${field}.label`, { lng });
+        const matches = searchSettings(documents, query);
+        const id = `voiceInput.customAsr${field[0].toUpperCase()}${field.slice(1)}`;
+        expect(matches.some(({ entry }) => entry.id === id)).toBe(customVisible);
+      }
+    }
+    expect(documents.some(({ entry }) => entry.id === 'voiceInput.asr')).toBe(byokVisible);
+    expect(documents.some(({ entry }) => entry.id === 'voiceInput.serviceSource')).toBe(true);
+  });
+
   it.each([
     ['LSP', 'general.lsp'],
     ['Beta', 'general.betaChannel'],

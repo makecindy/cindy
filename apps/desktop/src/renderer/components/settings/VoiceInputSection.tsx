@@ -34,7 +34,7 @@ import {
   type VoiceInputLanguage,
 } from '@/hooks/useVoiceInputSettings';
 import { getComposerSendShortcutPreference } from '@/hooks/useComposerSendShortcutPreference';
-import { useVoiceInputModelSelection } from '@/hooks/useVoiceInputModelSelection';
+import type { useVoiceInputModelSelection } from '@/hooks/useVoiceInputModelSelection';
 import { useVoiceInputUsageStats } from '@/hooks/useVoiceInputUsageStats';
 import { useVoiceInputHistory } from '@/hooks/useVoiceInputHistory';
 import { getAppShortcutCombos, getAppShortcutOverrides } from '@/lib/appShortcutStore';
@@ -375,7 +375,11 @@ function VoiceInputInlineSettingRow({
  * credential-readiness notice; the reset action clears the user override so
  * the selection re-follows the product default (never a snapshot).
  */
-function VoiceInputServiceSourceCard() {
+interface VoiceInputSectionProps {
+  modelSelection: ReturnType<typeof useVoiceInputModelSelection>;
+}
+
+function VoiceInputServiceSourceCard({ modelSelection }: VoiceInputSectionProps) {
   const { t } = useTranslation();
   const customAsrUrlErrorId = useId();
   const { mode: appMode } = useAuth();
@@ -392,7 +396,7 @@ function VoiceInputServiceSourceCard() {
     saveCustomAsr,
     clearCustomAsrApiKey,
     resetToDefault,
-  } = useVoiceInputModelSelection();
+  } = modelSelection;
   const [customAsrProtocol, setCustomAsrProtocol] = useState<'openai-realtime' | 'qwen-realtime'>('openai-realtime');
   const [customAsrWebsocketUrl, setCustomAsrWebsocketUrl] = useState('');
   const [customAsrModel, setCustomAsrModel] = useState('');
@@ -1010,7 +1014,7 @@ function VoiceInputCollapsibleTextarea({
   );
 }
 
-export function VoiceInputSection() {
+export function VoiceInputSection({ modelSelection }: VoiceInputSectionProps) {
   const { entry: searchEntry, activation } = useSettingsSearchNavigation();
   const { t, i18n } = useTranslation();
   const supportsGlobalShortcutSetting = window.electronAPI.platform !== 'linux';
@@ -1937,7 +1941,7 @@ export function VoiceInputSection() {
         </p>
       </div>
 
-      <VoiceInputServiceSourceCard />
+      <VoiceInputServiceSourceCard modelSelection={modelSelection} />
 
       <VoiceInputCard title={t('settings.voiceInput.sections.basics')}>
         <VoiceInputInlineSettingRow

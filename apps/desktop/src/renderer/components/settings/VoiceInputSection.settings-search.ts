@@ -1,6 +1,11 @@
 import { TAB_LABEL_KEY } from '@/lib/tabLabels';
 import { VOICE_INPUT_EXTRA_LANGUAGES } from '../../../shared/voiceInputData';
-import { defineSettings, type SettingsSearchModule } from './settingsSearchTypes';
+import { defineSettings, type SettingsSearchContext, type SettingsSearchModule } from './settingsSearchTypes';
+
+const isByokVisible = ({ mode, voiceInput }: SettingsSearchContext) =>
+  Boolean(voiceInput && (mode === 'local' || voiceInput.serviceMode === 'byok'));
+const isCustomAsrVisible = (context: SettingsSearchContext) =>
+  isByokVisible(context) && context.voiceInput?.asrProvider === 'custom-realtime-asr';
 
 /** Static search metadata owned by this settings module; no component mounting or IPC. */
 export const voiceInputSettings = defineSettings({
@@ -154,6 +159,7 @@ export const voiceInputSettings = defineSettings({
     ],
   },
   asr: {
+    isVisible: isByokVisible,
     id: 'voiceInput.asr',
     tab: 'voice-input',
     targetId: 'settings-voice-asr',
@@ -163,6 +169,7 @@ export const voiceInputSettings = defineSettings({
     sectionKey: 'settings.tabs.voiceInput',
   },
   customAsrProtocol: {
+    isVisible: isCustomAsrVisible,
     id: 'voiceInput.customAsrProtocol',
     tab: 'voice-input',
     targetId: 'settings-voice-customAsrProtocol',
@@ -182,6 +189,7 @@ export const voiceInputSettings = defineSettings({
     ],
   },
   customAsrWebsocketUrl: {
+    isVisible: isCustomAsrVisible,
     id: 'voiceInput.customAsrWebsocketUrl',
     tab: 'voice-input',
     targetId: 'settings-voice-customAsrWebsocketUrl',
@@ -191,6 +199,7 @@ export const voiceInputSettings = defineSettings({
     sectionKey: 'settings.tabs.voiceInput',
   },
   customAsrModel: {
+    isVisible: isCustomAsrVisible,
     id: 'voiceInput.customAsrModel',
     tab: 'voice-input',
     targetId: 'settings-voice-customAsrModel',
@@ -200,6 +209,7 @@ export const voiceInputSettings = defineSettings({
     sectionKey: 'settings.tabs.voiceInput',
   },
   customAsrApiKey: {
+    isVisible: isCustomAsrVisible,
     id: 'voiceInput.customAsrApiKey',
     tab: 'voice-input',
     targetId: 'settings-voice-customAsrApiKey',
