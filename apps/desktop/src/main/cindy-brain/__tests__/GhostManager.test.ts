@@ -610,6 +610,27 @@ describe('GhostManager · 存量插件一次性迁移(§5 升级无感)', () => 
     expect(result).not.toHaveProperty('ghost.observeCapabilityApproved');
   });
 
+  it('approves companions on its own and keeps it only while the same instance still declares it', async () => {
+    const manifest = { ...goodManifest(), slots: ['tool', 'agent'], agent: { companions: true } };
+    const pkg = await makeCindy('companions.cindy', manifest, { 'main.js': '// plugin' });
+    await manager.install(pkg, { observeCapabilityApproved: true });
+    const selected = manager.list()[0]!;
+    if (selected.approval.state !== 'approved') throw new Error('fixture not approved');
+    const id = installedGhostStoragePart(selected);
+    expect(selected).not.toHaveProperty('companionsCapabilityApproved');
+    expect(await manager.approveTaskCapability(id, selected.approval.revision, () => true, 'observe')).toBe(false);
+    expect(await manager.approveTaskCapability(id, selected.approval.revision, () => false, 'companions')).toBe(false);
+    expect(await manager.approveTaskCapability(id, selected.approval.revision, () => true, 'companions')).toBe(true);
+    expect(manager.list()[0]).toHaveProperty('companionsCapabilityApproved', true);
+    const update = await makeCindy('companions-update.cindy', { ...manifest, version: '1.0.1' }, { 'main.js': '// update' });
+    const updated = await manager.update(update, { expectedInstalledApproval: ghostInstallApprovalToken(manager.list()[0]!.approval) });
+    expect(updated).toHaveProperty('ghost.companionsCapabilityApproved', true);
+    if (!('ghost' in updated)) throw new Error('fixture update failed');
+    const removed = await makeCindy('companions-removed.cindy', { ...manifest, version: '1.0.2', agent: { errand: true } }, { 'main.js': '// update' });
+    const result = await manager.update(removed, { expectedInstalledApproval: ghostInstallApprovalToken(updated.ghost.approval) });
+    expect(result).not.toHaveProperty('ghost.companionsCapabilityApproved');
+  });
+
   it.each(['future', { future: true }, ['future'], null, false])('keeps historical unknown tasks %j enabled without task approval', async (tasks) => {
     await writeLegacyInstall('hello', {...goodManifest(), slots:['tool','agent'], agent:{tasks}});
     await manager.migrateLegacyApprovalsOnce();

@@ -1,7 +1,7 @@
 {
   "version": "6",
   "dialect": "sqlite",
-  "id": "e4715aa7-9fdf-4ed7-9718-294d9d0c039b",
+  "id": "9a05fb14-28fe-41b3-87f9-0f40c0ba4b01",
   "prevId": "0a5842f4-01f1-4c5f-8bdc-305aea300d37",
   "tables": {
     "account_usage_snapshots": {
@@ -4945,14 +4945,6 @@
           "autoincrement": false,
           "default": false
         },
-        "program_change_gate": {
-          "name": "program_change_gate",
-          "type": "integer",
-          "primaryKey": false,
-          "notNull": true,
-          "autoincrement": false,
-          "default": false
-        },
         "pre_run_hook_command": {
           "name": "pre_run_hook_command",
           "type": "text",
@@ -5380,6 +5372,22 @@
           "notNull": true,
           "autoincrement": false
         },
+        "provider": {
+          "name": "provider",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false,
+          "default": "'github'"
+        },
+        "host": {
+          "name": "host",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false,
+          "default": "'github.com'"
+        },
         "owner": {
           "name": "owner",
           "type": "text",
@@ -5474,6 +5482,8 @@
           "name": "uniq_session_pr_refs",
           "columns": [
             "session_id",
+            "provider",
+            "host",
             "owner",
             "repo",
             "pr_number"

@@ -270,6 +270,17 @@ describe('cindy_scheduler MCP server (in-process smoke)', () => {
     } finally { await h.cleanup(); }
   });
 
+  // Unit: schema lookup is read-only even for destructive scheduler operations.
+  it('describes a nested operation without creating or changing a schedule', async () => {
+    try {
+      const result = await h.client.callTool({ name: 'list_tools', arguments: { name: 'schedule_create' } });
+      const metadata = JSON.parse((result.content as Array<{ text: string }>)[0].text);
+      expect(metadata).toMatchObject({ ok: true, tool: { name: 'schedule_create', inputSchema: { type: 'object' } } });
+      expect(metadata.tool.inputSchema.properties).toHaveProperty('timezone');
+      expect(await h.storage.list()).toEqual([]);
+    } finally { await h.cleanup(); }
+  });
+
   it('list_tools(category=scheduler) lists all 11 tools by name', async () => {
     const result = await h.client.callTool({
       name: 'list_tools',

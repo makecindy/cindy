@@ -102,6 +102,44 @@ describe('tooltip window deactivation', () => {
     await waitFor(() => expect(onOpenChange.mock.calls.length).toBeGreaterThan(1));
   });
 
+});
+
+describe('tooltip focus modality', () => {
+  afterEach(cleanup);
+
+  it('does not open on focus handed back after a pointer-dismissed menu', async () => {
+    // 菜单用鼠标点空白关闭时会把焦点还给触发按钮，此时指针不在按钮上；Radix 的
+    // focus-open 不能借这次焦点把提示弹出来（弹出来也没有 pointerleave 能收掉）。
+    render(
+      <Tip text="tip" delay={0}>
+        <button type="button">more</button>
+      </Tip>,
+    );
+
+    fireEvent.pointerDown(document.body);
+    fireEvent.focus(screen.getByRole('button'));
+    await act(() => new Promise((resolve) => setTimeout(resolve, 30)));
+
+    expect(screen.queryByRole('tooltip')).toBeNull();
+  });
+
+  it('still opens on keyboard focus', async () => {
+    render(
+      <Tip text="tip" delay={0}>
+        <button type="button">more</button>
+      </Tip>,
+    );
+
+    fireEvent.keyDown(document.body, { key: 'Tab' });
+    fireEvent.focus(screen.getByRole('button'));
+
+    expect(await screen.findByRole('tooltip')).not.toBeNull();
+  });
+});
+
+describe('tooltip close requests', () => {
+  afterEach(cleanup);
+
   it('forwards close requests only, never Radix open requests', async () => {
     // 行的 onPointerOver / onFocusCapture 谓词独占打开逻辑(行内动作按钮上不弹行级浮层),
     // Radix Trigger 的打开请求不得写回受控调用方。

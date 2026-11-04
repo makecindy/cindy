@@ -1,5 +1,52 @@
 # Cindy Design System
 
+## 阅读路由
+
+本文件是 Cindy 视觉规则的入口，不需要通读。本节只指路，不写参数；每个参数只在对应章节保留一份。
+
+所有界面改动先读本节、§1 和 §7，再按下表读与任务相关的部分。
+
+| 要做的事 | 优先复用 | 规则位置 |
+| --- | --- | --- |
+| 文字按钮 | `components/ui/button.tsx` 的 `Button` | §4 Buttons |
+| 只有图标的按钮 | 标题栏 `ChromeIconButton`、侧栏 `SidebarIconButton`；其他位置暂无通用组件 | §14.6 |
+| 输入框 | `components/ui/input.tsx` 的 `Input` / `Textarea`；已有设置页输入用 `SettingsTextInput` | §4 Inputs & Forms |
+| 表单字段的标签、说明和错误 | `components/ui/form-field.tsx` 的 `FormField` | §4 Inputs & Forms |
+| 单选下拉 | `components/ui/select.tsx` 的 `Select` / `SelectParts` | §4 Select & Dropdown |
+| 菜单 | `components/ui/dropdown-menu.tsx`；自带外壳的菜单复用 `menu-row.tsx` | §4 Select & Dropdown |
+| 浮层 | `components/ui/popover.tsx`；输入框工具栏用 `MorphPopover` | §4 Select & Dropdown、[容器形变](./container-transform.md) |
+| 悬停提示 | `components/ui/tooltip.tsx` 的 `Tip` | §14.6 |
+| 确认弹窗 | `useConfirmDialog`、`ConfirmDialog` | §4 Dialog & Modal |
+| 其他弹窗 | 暂无通用组件：Radix Dialog 加 `.modal-scrim` / `.modal-panel`，结构参考 `confirm-dialog.tsx` | §4 Dialog & Modal |
+| 分段切换 | `components/ui/segmented-control.tsx` 的 `SegmentedControl` | §4 Desktop segmented controls |
+| 开关、滑杆 | `Switch`、`Slider`、`EffortSlider` | §15.17、§15.18 |
+| 加载中 | `components/ui/spinner.tsx` 的 `Spinner` | §14.4 |
+| 错误与通知 | `ErrorNotice`；短通知用 `lib/toast.ts` | §4 Error notices、§4 Toast |
+| 展开收起 | `components/ui/collapse.tsx` 的 `Collapse` | §14.4 |
+| 聊天内容 | `chatChrome.ts`、`activityRowChrome.ts` | §4 Desktop chat and operation authorization |
+| 设置页分区和行 | 暂无通用组件 | §4 Desktop settings rows |
+| 选颜色 | 语义 Token，不写色值 | §10 Token Selection Rules for New UI、§2 |
+| 亮暗模式 | 语义 Token | §10 Light / Dark Dual-Mode Delivery Gate |
+| 圆角与点击区域 | 上述组件的默认值 | §5 Border Radius Scale、[治理合同](./design-governance.md) §13 |
+| 字号、字重、行高 | Tailwind 字号档位 | §3 |
+| 动效 | Motion Token | §14.4 |
+| 界面文案 | i18n 键 | §11、[术语表](../../i18n/GLOSSARY.md) |
+| 修改 Token、主题或标准组件 | 现有生成链路 | [治理合同](./design-governance.md)、[Token README](../../packages/design-tokens/README.md) |
+
+只在改动对应功能时才读下面的专题：
+
+| 专题 | 文件 |
+| --- | --- |
+| 登录、注册与回调页（§16） | [login-flow.md](./login-flow.md) |
+| 聊天正文的链接与可点性（§14.5） | [message-link-clickability.md](./message-link-clickability.md) |
+| 输入框工具栏的容器形变 | [container-transform.md](./container-transform.md) |
+| 应用壁纸 | [wallpaper.md](./wallpaper.md) |
+| macOS 菜单栏额度面板 | [macos-menu-bar-quota.md](./macos-menu-bar-quota.md) |
+| 附件预览 | [attachment-preview.md](./attachment-preview.md) |
+| 用量历史图表 | [usage-history-charts.md](./usage-history-charts.md) |
+| iOS 原生界面 | [ios-native-design.md](./ios-native-design.md) |
+| 手机端界面 | [手机设计指南](../../apps/mobile/docs/mobile-design-guide.md) |
+
 ## 1. Visual Theme & Atmosphere
 
 设计以[产品原则](../product-rules/core-product-principles.md)的品质要求为前提：理解是否自然、
@@ -61,185 +108,7 @@ The interface is built from a three-tier layer system that applies symmetrically
 
 ### Optional application wallpaper (user decision, 2026-10-01)
 
-An explicitly selected Desktop wallpaper replaces the flat page canvas across
-the whole host application: title bar, navigation, messages, tool-pane chrome,
-settings and other host pages share continuous viewport-aligned artwork. This
-opt-in setting supersedes the CINDY sidebar-only backdrop treatment while active;
-disabling it restores the original theme without modifying theme files or tokens.
-Blend wallpaper with the theme surface, never a fixed black overlay in Light mode. Image opacity
-must not affect text or icons. Elevated controls, menus, dialogs and embedded web
-or editor content keep their readable surfaces. Composer scroll masking must
-align with the same wallpaper instead of introducing an opaque footer rectangle.
-Built-in SVG wallpapers are decorative assets, not new semantic UI colors.
-Verify actual Light/Dark screenshots across host pages and the expanded tool pane.
-
-The built-in picker lists 13 artworks (user curation, 2026-10-17): the Cindy group —
-Whisper, Night Glance, Scarlet Stroll, Neon Silhouette, Prism Shards — followed by
-Night Launch, Silent Orbits, Dune Dawn, Planet Dawn, Indigo Folds, Dune Sphere,
-Ocean Clouds and Rose Quartz. All five Cindy wallpapers offer Static / Dynamic; their
-1920×1080, 24fps, 10-second loops keep the source composition as first and last frame.
-The other eight are stills. All official originals are metadata-free WebP/MP4 delivered
-on demand from the CDN (user decision, 2026-10-17); only lightweight thumbnails and the
-three legacy scene previews ship with the app.
-Window Companion, Future Atelier and Dream Wander are retired from the picker
-(`RETIRED_WALLPAPER_IDS`, 2026-10-17). Their manifest entries and CDN objects stay, so a
-saved selection keeps its still and motion; while one is in use it appears selected right
-after None with its Static / Dynamic choice, and it disappears once the user switches away.
-Removing a catalog choice never rewrites appearance preferences or deletes CDN objects.
-All official images share the existing on-demand downloader, verified cache reuse,
-and preview fallback; only manifest entries with video metadata offer motion. Download progress appears
-as a 3px bottom track inside the selected thumbnail (user choice, 2026-10-19), with no visible
-percentage or separate row. Its transform interpolates the precise byte ratio over
-the base motion tier, linearly for this transfer indicator to avoid restarting an
-ease-in/out on every progress sample; reduced motion updates immediately.
-It follows real transfer progress and disappears once ready;
-cache hits show the original directly. A failed tile shows a retry icon and supports click,
-Enter and Space to retry, preserving the grid's single Tab stop and selected border.
-Expose progress and failure descriptions to assistive technology outside the radio descendants.
-Keep the displayed background while the next official original is loading or decoding;
-reuse already decoded original URLs directly when revisiting a selection. Once ready,
-crossfade the static canvas and its composer copies using opacity and the fast motion
-token, respecting reduced motion. Initial load may use the bundled preview.
-Reuse the settings download percentage normalization. Browsing the grid or hiding the wallpaper does not
-download originals; only a selected, visible image is requested. Reuse valid cached
-images offline and after upgrades. Do not request CDN assets for IDs absent from the manifest.
-Earlier unreleased artwork (including Blue Gaze, Amber Light and the 2026-10-16 batch
-trimmed on 2026-10-17) is not shipped and needs no compatibility.
-The new artwork uses the existing continuous cover fit, theme-derived visibility
-and blur controls. None remains the default and restores the theme canvas.
-While a window's opaque in-app wallpaper canvas is active, disable its covered
-native macOS Vibrancy / Windows backdrop material. Restore the theme's native
-material when that canvas is removed. Use actual per-window canvas state rather
-than the saved selection; pending replacements may retain the previous canvas.
-The visibility veil (including 0%) remains opaque to the desktop. Wallpaper blur
-and in-app overlay blur keep their existing behavior.
-The picker remains an inline compact grid (user choice, 2026-10-15): use
-container-width-driven columns with a 6rem minimum, 8px grid gaps, 16:9 previews,
-and a 4px gap before each readable name. At the standard 1280px window width this
-shows eight columns; narrower windows naturally show fewer. Keep direct click-to-apply
-selection, the existing selected/focus treatment, and full names in accessible labels
-and hover/focus tooltips when the visible label is truncated.
-The grid has one Tab entry, using the selected visible tile or the first tile for
-a hidden saved selection. Arrow keys move focus and selection with wrapping; Home /
-End reach the first / last tile. An empty Custom tile only receives focus during
-arrow navigation; Enter / Space explicitly opens the file picker.
-Custom wallpaper is available through Choose Wallpaper, Replace Wallpaper and Remove Wallpaper
-in the same section (user addition, 2026-10-01; video support, 2026-10-05). Accept local PNG/JPEG/WebP up to
-20 MB and 40 megapixels, store a metadata-free static image up to 3840 pixels
-in the managed media store. Also accept local MP4 videos up to 100 MB, preserving their bytes;
-H.264 is recommended for playback compatibility. Wallpaper selection and the custom media reference
-are shared within the Desktop profile, just like theme preferences (user decision,
-2026-10-02). Import, replacement, removal and recycling are client-wide as well:
-no account database, account-bound operation guard or pre-release owner migration.
-The media store's client wallpaper scope isolates its bytes from chat attachments;
-switching accounts (or signing out) keeps the same wallpaper. Font-only utility renderers never receive
-custom media URLs.
-Detached sidebar and plugin-panel host chrome use the same wallpaper provider;
-embedded plugin webviews retain their own surfaces and permission boundary.
-Cancellation and import failures retain the existing media. Switching to a built-in
-or None keeps the imported media available; Remove Wallpaper forgets it. Custom imagery
-shares the continuous cover-fit canvas and readability veil. Custom MP4 exposes the existing
-Static / Dynamic choice: Static and reduced motion show a paused frame; Dynamic loops silently
-and pauses when hidden/minimized. Playback failure releases the decoder, leaves the theme surface
-visible and shows an actionable error in wallpaper settings. The custom video tile uses a film icon
-instead of opening a second decoder for a thumbnail.
-Wallpaper Visibility ranges from 0% (hidden) to 100% (fully visible), in 1% steps
-(user decision, 2026-10-05). Static images use the theme-surface veil with opacity equal to
-100% minus visibility. Video uses visibility directly as the video element's opacity over
-an opaque theme-surface backing, without a separate translucent veil; this avoids the
-observed Windows HDR brightness shift when P3 content changes the output composition.
-The video wrapper's opacity is reserved for loading/exit crossfades. Visibility never fades
-text or controls: they keep their token colors (including the translucent text tiers of §2)
-and no element opacity is layered on top. Release video playback at 0%. Blend-mode controls
-remain out of scope.
-Optional Wallpaper Blur (user addition, 2026-10-06) ranges from 0 (off, default) to 20
-in whole steps, applying a CSS-pixel radius only to the wallpaper image/video. No UI,
-theme backing, or text is blurred; video opacity remains on the video itself. At zero,
-retain the existing filter-free rendering path. Overscan the artwork by three radii
-and clip the video at the viewport to avoid transparent edges; static and video crops
-must match. For blurred static scenes, reuse the moving-scene message fade instead
-of repainting a sharp wallpaper behind the composer. Persist only explicit overrides;
-Reset removes the blur override. Reuse the settings Slider with a localized accessible
-label and hint, disable it for None, and explain the additional GPU cost for video.
-Dragging previews blur locally; only a committed pointer/keyboard value is saved and
-broadcast. Cancelled gestures or leaving settings discard the preview.
-Existing preferences without an explicit visibility override keep the previous Light/Dark veil
-mapping and display its equivalent visibility. The unchanged soft default is 37% visible in
-Light and 27% in Dark. Adjusting the slider saves literal visibility, shared across themes;
-Reset removes that override and restores the theme-dependent default. Do not rewrite old
-preferences just because they were read or a theme changed.
-Remove the previous arrow, standalone portrait, gradient and paper
-options and assets. Retired saved selections normalize to None; unrelated theme
-and font preferences remain unchanged. All three scenes use the same cover fit,
-so do not expose a fit selector that cannot affect them.
-
-The scene-led Cindy wallpaper alternatives (2026-10-01) place the recognizable
-character and black cat in three distinct illustrated environments: a sunny
-window, a futuristic atelier and a floating garden above clouds. Preserve each
-landscape as one viewport-sized, cover-fitted canvas behind navigation, chat and
-tools. Do not confine the scene to chat, fade its edges into a separate backdrop,
-or reposition/scale it when sidebars open: that splits the app into disconnected
-pieces (user correction, 2026-10-01). Only window resizing changes the crop.
-These curated scenes use a lighter theme-derived
-veil than arbitrary photos, with a stronger Dark veil to preserve reading
-contrast. Validate real long messages, not only empty chat views.
-
-The three approved scenes also offer an explicit Static / Dynamic choice (2026-10-01).
-Static remains the default. Dynamic uses a silent, subtly moving loop with a fixed
-camera, preserving the same composition and full-window crop. Camera position,
-viewing angle and field of view must stay constant throughout the entire loop,
-including Dream Wander and Future Atelier (user correction, 2026-10-02). No pans,
-tilts, dolly movement, zooms or perspective drift; matching first and last frames
-alone is insufficient. Built-in static artwork
-uses 3584×2240 WebP. The three official scenes use bundled 640×400 previews and
-download the full WebP or 2304×1440 MP4 on demand (2026-10-15 decision), with no
-resolution switching on window resize. Only the previews enter the Renderer bundle.
-The motion approved on 2026-10-02 is preserved frame for frame at its original
-24fps. The 2304×1440 delivery is Real-ESRGAN anime-video super-resolution
-of the approved 1214×758 sources, not native 2K generation; do not regenerate,
-retime or reverse the accepted motion while preparing higher-resolution assets.
-Download only selected, visible assets and request video only for active dynamic
-mode without reduced motion. Verify byte length and SHA-256 before placing assets
-in the existing client-wallpaper media scope. Valid cached content is reused across
-restarts, upgrades and accounts without another download; failures retain the preview
-and permit retry. The download and cache contract is defined in
-[`media-storage-and-protocols.md`](../dev-rules/media-storage-and-protocols.md).
-Decode one local video
-per window, suspend playback while hidden/minimized, and use the original still for
-reduced motion or playback failure. Static / Dynamic switches crossfade the video
-over the retained high-resolution still using base/ease-move (200ms), starting
-only after playback is ready. Switching back to Static releases the video after
-the fade; rapid toggles reverse it without adding a decoder. Reduced motion
-bypasses the transition and releases the video immediately.
-For moving scenes, fade the message layer above the composer instead of painting a
-static duplicate of the wallpaper over it. Check the loop seam and actual Light/Dark
-chat readability, including collapsed sidebars and resized windows.
-
-Environment motion must be clearly perceptible rather than concentrated on the
-character (user correction, 2026-10-01). Animate existing foliage, curtains and
-leaf shadows in the sunny scene; rain, plants and reflections in the atelier;
-clouds, grasses, vines and waterfalls in the floating garden. Keep architecture
-and the camera stationary. Prefer several slow, independent environmental rhythms
-with restrained character movement; verify foliage crops and loop transitions,
-including after the Light/Dark readability veil is applied.
-For the floating garden, keep the environmental amplitude restrained: tiny leaf
-and vine-tip movement, slow cloud-edge drift and fine downward water flow. Avoid
-large drifting petals, rolling cloud banks and whole flowerbeds sweeping across
-the view (user correction, 2026-10-01). Demonstrate motion in recordings of the real
-chat interface with messages, composer and pane chrome, not only isolated artwork.
-In the sunny window scene, keep the curtain close to its resting drape: small,
-slow folds rather than large billows across the window. Nearby leaves and light
-shadows should move gently without competing with messages (user correction,
-2026-10-01).
-The window scene needs infrequent, natural blinking and coherent whole-scene
-motion (user corrections, 2026-10-01). Judge hair, face, eyes, cat, curtains and
-foliage together at normal playback speed. Do not retime an isolated eye patch
-against a differently moving face or reverse hair motion to manufacture a loop.
-Keep the blink gentle and the environment moving at a steady pace: never speed
-up the entire frame to shorten a blink, which also accelerates curtains, hair and
-shadows (user correction, 2026-10-02). Avoid mid-blink reopening, alternating-frame
-holds and doubled eyelid outlines. Decoder frame counts alone do not establish natural
-motion; inspect the complete action and loop boundary before accepting an asset.
+正文已移至 [wallpaper.md](./wallpaper.md)，规范效力不变。
 
 ### Task tag identity colors
 
@@ -247,11 +116,7 @@ motion; inspect the complete action and loop boundary before accepting an asset.
 
 ### Personal message bubble colors (Mobile, 2026-10-12)
 
-手机版设置提供「我的消息气泡颜色」:默认继续跟随现有主题,另有初稿、晨光、灵感、梦境、夜猫、项圈六个预设和自定义颜色。名称取自 Cindy 自身的设定(创作的一天、黑猫与红项圈),不使用公司名或游戏 IP;各语言意译,不逐字翻译。此项是用户主动选择的个性化例外,只作用于确认是自己发出的消息气泡(会话、待发送与伙伴群聊)和设置预览,不染色 Agent 回复、系统卡片或页面背景。共享任务里所有 user 消息都右对齐,因此按归属而不是对齐判断:访客消息只有作者账号是当前账号才染,房主消息只在不是以访客身份查看时染;归属只用于展示,不作权限依据。偏好仅保存在本机;选「默认」即删除 override。桌面端暂未提供。
-
-颜色由 packages/maker-shared/src/userBubbleAppearance.ts 在运行期按 light/dark 生成背景、前景与描边,属于治理合同 §3.4 的运行时派生值,消费者只用该结果,不把用户输入直接拼进样式。预设柔化较强;自定义色着色更明显。着色强度会自动收敛到气泡内实际出现的文字(正文、次要文字、弱提示、行内代码)都不低于 4.5:1、派生前景不低于 7:1;已满足的颜色不降低。项圈取品牌红色相,只用柔化后的浅红调,不直接使用品牌红。
-
-iOS 使用原生 Form 二级页:顶部是与真实气泡同款的预览,预设与「自定义颜色」同在一个 inline Picker 勾选列表;选中自定义才在其下展开一条彩虹色带(仅选色相,外形对齐系统滑块)。iOS 没有比系统 ColorPicker 更轻的自由选色组件,系统取色面板因功能过多不采用。拖动时只更新本页预览,松手才保存;保存失败的提示提供「重试」。Android 沿用设置页内的面板实现。
+正文已移至 [手机设计指南 §9](../../apps/mobile/docs/mobile-design-guide.md#9-从根规范迁入的手机规则)，规范效力不变。
 
 ### Chip & Button Neutrals
 
@@ -280,7 +145,7 @@ Toast loading is neutral: use the shared 16×16 Spinner in `--text-secondary`, w
 The grayscale rule is near-absolute. The following are the **only** sanctioned non-gray colors in the system — each tightly scoped to a specific surface. New semantic colors must not be introduced without being recorded here first.
 
 - **Focus Blue** (`#417CDD` at 50%; tokens `--focus-ring` / `--focus-ring-soft`): the keyboard-accessibility focus ring, finalized 2026-07-17 (replaces Tailwind's default `#3b82f6`). Keep it out of mouse-only interaction: controls show it on `:focus-visible`, not on click. Text inputs are the approved exception — a focused text field always matches `:focus-visible`, so the generic `Input` shows the soft ring `--focus-ring-soft` whenever focused, while settings and composer inputs use their own focus-border aliases (§4 Inputs).
-- **Thinking / Warning Orange** (`#EA6B17`, finalized 2026-07-17, replaces the frozen `#FF6600`): the shared warning-accent family, identical in both modes. Sanctioned consumers only — the ChatView Running Status Bar (sparkles icon + status text, e.g. `Spelunking...`, no background fill), running-state breathing icons in the sidebar, the collaboration-mode menu row's ON state, the plan-approve icon, the Full Access permission highlight, the settings integration warning, and the workflow agent status strip's running cells (8×8px filled squares in the background-tasks panel detail and the workflow chat card, registered 2026-07-28 — running-state semantics, same family as the sidebar breathing icons; the done/failed/queued cells stay on their own semantic tokens: `--card-status-done` / `--error-fg` / `--surface-chip`), and the sidebar task-info PR unresolved corner dot (registered 2026-08-17 — same `--status-bar-accent` as the session-header unresolved count; static, no breathing), and the filter reminder dot (registered 2026-10-20 — a static 6px/6pt dot at the top-right corner of a filter or view-settings button, meaning "this list is not the default active view": the search filter button while any narrowing filter is applied, and the sidebar organize button / Mobile home `⋯` display-settings button while viewing archived tasks; same `--status-bar-accent` / `statusAccent`, no breathing, no text; Desktop shares one `FilterReminderDot` component and Mobile one `FilterReminderDot` component so size, offset and color live in one place; it is purely visual, so the button's accessible name or state must carry the same information; sort and grouping changes and the "all" status do not light it), and the Bot group chat speaking row (registered 2026-09-27 — sparkles icon + status text for the teammate currently taking its turn, the same running semantics and `--status-bar-accent` as the ChatView Running Status Bar; no background fill), and the running step of a Bot group chat 分工 plan card and the group's sidebar 「正在做 / 正在安排」 preview (registered 2026-09-27 — icon + status word of the one step in progress, same running semantics and `--status-bar-accent`; no background fill; done / pending / failed steps stay neutral) (see the §10 exemption table and §15 for the full token list: `--warning-accent` and its follower tokens). A consumer that introduces no new token — one that reads `--warning-accent` or an existing follower directly, like this strip — is registered by this list alone; a consumer needing a NEW token must be registered in the §10 exemption table first.
+- **Thinking / Warning Orange** (`#EA6B17`, finalized 2026-07-17, replaces the frozen `#FF6600`): the shared warning-accent family, identical in both modes. Sanctioned consumers only — the ChatView Running Status Bar (sparkles icon + status text, e.g. `Spelunking...`, no background fill), running-state breathing icons in the sidebar, the collaboration-mode menu row's ON state, the plan-approve icon, the Full Access permission highlight, the settings integration warning, and the workflow agent status strip's running cells (8×8px filled squares in the background-tasks panel detail and the workflow chat card, registered 2026-07-28 — running-state semantics, same family as the sidebar breathing icons; the done/failed/queued cells stay on their own semantic tokens: `--card-status-done` / `--error-fg` / `--surface-chip`), and the sidebar task-info PR unresolved corner dot (registered 2026-08-17 — same `--status-bar-accent` as the session-header unresolved count; static, no breathing), and the filter reminder dot (registered 2026-10-20 — a static 6px/6pt dot at the top-right corner of a filter or view-settings button, meaning "this list is not the default active view": the search filter button while any narrowing filter is applied, and the sidebar organize button / Mobile home `⋯` display-settings button while viewing archived tasks; same `--status-bar-accent` / `statusAccent`, no breathing, no text; Desktop shares one `FilterReminderDot` component and Mobile one `FilterReminderDot` component so size, offset and color live in one place; it is purely visual, so the button's accessible name or state must carry the same information; sort and grouping changes and the "all" status do not light it), and the Bot group chat speaking row (registered 2026-09-27 — sparkles icon + status text for the teammate currently taking its turn, the same running semantics and `--status-bar-accent` as the ChatView Running Status Bar; no background fill), and the running step of a Bot group chat 分工 plan card and the group's sidebar 「正在做 / 正在安排」 preview (registered 2026-09-27 — icon + status word of the one step in progress, same running semantics and `--status-bar-accent`; no background fill; done / pending / failed steps stay neutral), and the Desktop Bot delegation card status dot (registered 2026-11-04 — starting/running use `--warning-accent` with `session-status-breathing`; waiting/completed/failed use `--card-status-awaiting` / `--card-status-done` / `--card-status-error`, while cancelled/unknown stay neutral; see [Desktop delegation status](./desktop-bot-delegation-status.md)) (see the §10 exemption table and §15 for the full token list: `--warning-accent` and its follower tokens). A consumer that introduces no new token — one that reads `--warning-accent` or an existing follower directly, like this strip — is registered by this list alone; a consumer needing a NEW token must be registered in the §10 exemption table first.
 
 > **Additional narrowly-scoped exceptions** (documented in their respective component specs, do NOT generalize as system semantic colors):
 >
@@ -663,25 +528,7 @@ The usage heatmap, daily-token bars and their separate interaction indicators fo
 
 ### macOS menu bar quota panel (owner-approved v6 prototype, 2026-10-11)
 
-Icon refinement reference (2026-10-18, macOS AppKit rendering; enlarged and actual 18pt size):
-[Light/Dark before and after](assets/menubar-icon-refinement.png).
-
-- Remote control uses the same active-controller set as the in-app connection indicator. Its menu-bar dot uses a brighter orange (`#FF9F0A`, owner correction, 2026-10-25). The 5pt dot sits near the icon's upper-left corner, centered at (4.5pt, 4.5pt), with a 0.75pt transparent rim, without widening the 18pt icon or moving the unread count. Release builds light it only for active controllers and clear it when the last one leaves; development builds temporarily keep it visible for visual tuning. The number uses 13pt regular monospaced digits with a thin space after the icon. The native menu item and its settings preview use the same artwork (owner request, 2026-10-25).
-- When the remote-control dot is visible, the main panel explains it directly below the wordmark: a neutral computer symbol with the same orange dot, “Remote control active”, and the active devices' names, joined by middle dots (owner request, 2026-10-26). Names update on connection, disconnection and rename even while usage collection is pending; two visible lines keep the strip compact, with the full list available on hover and to accessibility. The entire row opens Settings → Remote control through the existing main-window navigation, with a quiet chevron and hover fill. This status strip stays above the scrolling quota content, shares the panel's warm neutrals and translucent backdrop, and ends with the existing inset hairline. Development preview without a real controller keeps the generic explanation rather than inventing a device name, including on the sign-in panel. Both appearances and all five languages share this layout.
-- A native status item (`NSStatusItem`) and panel rendered by the Swift helper in `apps/desktop/native/menubar/`, not an HTML window. Main builds every sentence and value; the helper renders, animates and formats only times that tick while the panel is open. Available on macOS 14+ and toggled in Settings → Window behavior (default on).
-- The panel uses the system popover material (`NSVisualEffectView`, `.popover`) with a 0.5pt hairline edge, so it follows the desktop wallpaper and Light/Dark automatically. Over the material it lays a warm tint (Light `#F8F7F3` at 50%, Dark `#1A1918` at 54%; owner corrections, 2026-10-16: 72%/74% was noticeably more solid than the plain material, 22%/26% let busy wallpapers wash out gray text and made the tiles read as pasted-on boxes) and a faint Heart Orange glow in the top-left corner, so the panel reads in Cindy's warm neutrals instead of the cool system gray (owner-approved B2 direction, 2026-10-16). Because the panel is translucent, every neutral — text, outlines, hairlines, tiles, the glass wells, the liquid and neutral ring arcs — is Cindy's warm black `#26221C` (Light) or warm white `#F2EFE9` (Dark) at an opacity, never a fixed gray, so its contrast tracks whatever shows through instead of drifting (owner decision, 2026-10-16): primary text 92% / 94%, secondary 60% / 62%, tertiary 42% / 42%, outlines 14% / 13%, hairlines 8% / 7%, faint fills and ring tracks 5% / 5%; tiles are white 45% / warm white 5%; wells white 70%→50% / warm white 7%→2.5%. Solid colors are reserved for state (warning, error), brand (logo red), Agent/harness identity (including the Codex blue and Claude orange detail rings, kept by owner decision 2026-10-16) and the primary pill fill (`#1F1E1C` / `#F2EFE9`), which must read at full contrast. Native SwiftUI controls (segmented `Picker`, `Toggle`, Swift Charts) are used as-is; their system geometry is not restyled to Web tokens. A segmented control is used only where its labels fit in every language (see below).
-- The menu bar icon uses a fixed Light/Dark image pair with template tinting disabled (owner-approved hair and earring refinement, 2026-10-18). Its silhouette stays flat and 100% opaque: pure black in Light, pure white in Dark. Four irregular, tapered hair strands add gray detail over that silhouette (`#BDBDBD` in Light / `#686868` in Dark, at 58%, 48%, 36% and 52%); these are tonal overlays, not transparent cutouts or whole-character shading. The `>` earring cutout is larger and shifted slightly left. The native status button's effective appearance selects the image, since the wallpaper can make the menu bar differ from the app; the settings preview uses the same pair. These fixed grays belong only to this native brand asset. Provider/harness logos remain template images (monochrome, tinted by the system). Brand red (logo red `#F70121`) appears only in the Cindy wordmark, a fixed Light/Dark image pair, and in the logo's `>` mark that leads the footer "Open Cindy" pill (owner request, 2026-10-16); it is never used for state.
-- Status colors are fixed native values shared by both appearances and follow the shared quota rule (owner decision 2026-10-31, replacing "15% / used up"): yellow `#F3A115` (30% or less left) and red `#EF4444` (10% or less left). Agent/harness fills reuse the identity colors of the §2 Usage History registration: `--engine-badge-cc` `#D97757` (with two lighter steps for Claude's session/per-model rings), `--engine-badge-codex` `#7A9DFF` and `--usage-model-1` teal for Pi; neutral ink fills carry no state.
-- Usage tubes are glass wells holding a translucent liquid instead of solid paint (owner correction, 2026-10-16: the opaque gray read as dirty): one flat tone with no gradient — warm black `#26221C` at 46% (Light) or warm white `#F2EFE9` at 72% (Dark) — so the well shows through and each appearance stays clean; deliberately lower contrast than the text so seven full tubes do not read as hard black or white bars. Neutral ring arcs (Grok, a balance) use the same warm black 42% / warm white 80%; a yellow or red liquid is flat `#F3A115` / `#EF4444` with a still glow under the tube. The recommended tube gets a 1pt secondary-gray outline (owner decision, 2026-10-16: the earlier 1.5pt ink outline read as a selection or an error once the liquid was softened) and nothing else — no halo and no logo tile before the headline (owner decision, 2026-10-16: the headline already names the source). The warning glow does not animate. The liquid's top corners are softly rounded (4pt, less for a very low level) so the surface does not read as a hard flat line (owner request, 2026-11-01): on the Mac panel the corner follows the surface while it ripples or sloshes, and the iPhone and Android widgets use the same 4pt. A 7pt warning dot precedes the second headline line when that line is about sources running low or resetting (main sends `headlineAlert`).
-- Numbers use Barlow Condensed (OFL, shipped next to the helper): tube values and their % sign (the sign at about 60% of the value, same baseline), reset times, task amounts and shares, the task total, the month total, the detail ring value, and the usage page total and harness amounts. The detail page's fact-card values ("62,500", "周四 14:13") stay in the system font (owner correction, 2026-10-16): they are content, often mixing words, not metrics. Only pure numbers take Barlow (digits, money and % signs, and unit letters straight after a digit: "53", "$31.17", "12.5k", "98%"); any string that mixes in Chinese or words ("15天12时后重置", "周四 14:13", "5d 11h") stays entirely in the system font, because a condensed face beside Chinese reads uneven (owner correction, 2026-10-16). Two-line rows align the amount to the title's baseline and the share to the meta line's. If the font files are missing the helper falls back to a smaller system font.
-- Separators inside the panel are a single 0.5pt hairline in the soft `line` color (Light `#26221C` at 8%, Dark white at 7%); a system `Divider` is not used because it draws its own darker separator under any overlay (owner correction, 2026-10-16).
-- Copy is truthful: Cindy does not switch accounts automatically and has no default account per service, so the headline recommends the source with the most room ("{{name}} has the most left.") instead of claiming which one is in use.
-- Every subscription tube shows its weekly window: value, fill, countdown, the headline and low warnings all read it, so accounts compare on one scale and a 5-hour window that has not started (no reset time yet) never blanks the countdown (owner decision, 2026-10-31). An exhausted 5-hour window is therefore visible only in the detail page, which still lists every window. Accounts without a weekly window fall back to their tightest window.
-- Size and density (owner request, 2026-10-12: lighter on small laptops, verified in every language): every page is 320–368pt wide by tube count, with a 20pt panel radius and 14pt tile radius. The panel never takes more than 86% of the screen's visible height; longer content scrolls between the fixed header and footer. When the visible height is under 1000pt (13–14" laptops at default scaling), the panel opens in a short layout: 82pt tubes instead of 104pt, 160pt rings instead of 188pt, and two task rows instead of three.
-- The usage page (owner-approved redesign, 2026-10-12) shares the panel width and slides in like a detail page instead of widening into a dashboard. Top to bottom it shows: back, title and a 7/30/90-day switch; one total with two caption lines (period, scope and value basis; daily average, paid and tokens); a 100pt stacked chart labeled only with its first day and Today, where hovering a day swaps the total for that day's amount and harness split; a thin harness bar with share and amount per harness; the top five models or today's tasks; and the value note. There is no amount/tokens switch and no scope switch: the scope follows Settings, and the caption names it.
-- Every row must fit in the longest supported language. A segmented control is used only where all its labels fit on one row in every language. The four menu bar text options are a two-column chip grid. Other controls fall back instead of overflowing: the usage-scope picker moves under its title. Screenshots for review cover English, Simplified and Traditional Chinese, Japanese and Korean, in Light and Dark.
-- Keep the main panel's original order: model quota first, tasks second, then the usage chart (owner correction, 2026-10-26). The task section uses three quiet text tabs: Unread, In progress and Today's usage. These are deliberately frameless, with no filled segment track; ink emphasis and a short underline identify selection. Each keeps a 28pt hit height and native keyboard/selected accessibility. Opening with attention selects Unread; otherwise it restores the last manually selected non-unread tab for this helper lifetime. Before any manual choice, prefer In progress when work exists, otherwise Today's usage. Updates never switch an already-open panel, including when the last unread item clears. Opening or switching tabs never acknowledges messages.
-- Unread and In progress reuse the island's full candidate projection before current-card clipping, including remote tasks and restored companion chats. Unread counts the exact attention candidates; In progress includes running and waiting-for-input tasks. Preserve the island's candidate order: waiting items come first in In progress, then the latest user/scheduler prompt; agent output and tool progress never reorder running rows (owner correction, 2026-10-27). Rows show identity, a single-line message/status preview with tail truncation, and time; no full-content hover tooltip (owner correction, 2026-10-27). Privacy mode masks both identity and preview. Clicking uses the island's existing device-aware navigation and read acknowledgement. Two rows on short screens, otherwise three, with an in-place All tasks / Collapse action; usage keeps its existing money ranking and usage-page link.
+正文已移至 [macos-menu-bar-quota.md](./macos-menu-bar-quota.md)，规范效力不变。
 
 ### Desktop chat and operation authorization (DS-9, 2026-09-11)
 
@@ -810,40 +657,11 @@ without clearing the list or splitting Cindy by computer.
 
 ### Mobile task home teammate section (owner-approved “A+B”, 2026-10-24)
 
-The task home opens with a “Teammates” section above shared tasks, Pinned and projects. Its header uses the project/Pinned header geometry (56pt, 22 chevron + 20 icon + 16/28 title + 13 count) and a trailing 20pt “+” whose 44pt target ends on the 16pt right edge. Expanded, it shows 78pt teammate rows (teammates and groups mixed by activity), previewing three; the “Show all N” / “Show less” row is 48pt, 15/20 secondary text aligned to the rows’ text column (72pt). Collapsed, it shows the existing avatar strip by default; disabling avatars keeps only the 56pt header and its small create action, with no empty body. The existing home display menu (···) has a “Teammates” submenu whose “Show avatars when collapsed” item controls the horizontally scrolling strip: 36pt avatars in 48pt touch cells, 8pt gap, 16pt side insets, 12/18 names (primary + medium when unread), one 10pt solid status dot in a 2pt surface ring anchored 1pt beyond the bottom-right edge, and a dashed 36pt create circle in the same 48pt touch cell last. Phones scroll instead of the Desktop +N. Desktop, iOS and Android use the same 36px/pt collapsed portrait and 44px/pt list portrait (owner correction, 2026-10-31). Keep collapsed touch targets at least 48px/pt: the portrait has 6px/pt space on each side for the bottom-right dot. Anchor the dot to the portrait, not the touch target; keep the selection plate independent of portrait sizing. The Desktop +N circle and Mobile create circle follow the collapsed portrait size; group portraits scale within the same 36px/pt frame (two-member portraits use 26px/pt images). Status-dot size and meaning are unchanged. A pending decision (cyan) takes priority over error/offline (red), running (orange), completed unread (green), and ordinary unread (blue); idle has no dot. The overflow entry aggregates the highest-priority hidden state. Completion requires a real result and a local unread receipt; selection alone never clears a pending decision. Roster avatars have no online dot or working ring; unread counts remain separate. Teammate selection uses the quiet theme surface with normal sidebar text (never the task sidebar’s inverse fill); Desktop collapsed selection is a 56px quiet-surface plate behind the avatar with the governed 12px container radius (the expanded selected row's fill and radius), not an outline, so stacked group avatars are not cut (owner decision, 2026-10-30; replaces the 1px tertiary circular outline). Selection does not replace or recolor the activity dot. Phones navigate to the full-screen chat and retain their native press feedback, without a persistent selected home row. The avatar preference is an explicit account-scoped override, default on for new and existing users without writing an override, preserving explicit off choices and independent of the remembered fold state; changing it while expanded takes effect on the next collapse. When avatars are hidden, existing attention and bot/group unread (including threads) appear as a small header dot with an accessible status and no fabricated count. New messages never expand the section or enable avatars; header taps only expand/collapse. Both states swap with the list’s 225ms disclosure; reduced motion switches instantly. Every language must fit the header and names without widening; long names truncate to one line within the cell.
-
-There is one mobile home, as on Desktop (owner decision, 2026-10-24): no separate teammate home, no Tasks/Teammates switch in the drawer and no Teammates entry in the title scope menu. Home search keeps the section and lists every matching teammate and group as expanded rows, without the fold toggle or create entries; with no match the section is absent. Clearing search restores the saved display choice. Teammate unread shows on the section's rows, enabled strip cells, or compact header, not as a count on a mode switch. Implementation and regression coverage: `apps/mobile/src/session/HomeTeammatesSection.tsx`, `homeChromeMenus.ts`, and `src/__tests__/HomeTeammatesSection.test.tsx`.
+正文已移至 [手机设计指南 §9](../../apps/mobile/docs/mobile-design-guide.md#9-从根规范迁入的手机规则)，规范效力不变。
 
 ### Mobile iOS navigation chrome / iPhone Duo
 
-- The home menu artwork is the narrow 20pt glyph centered in a transparent 26pt canvas, with semantic template tint in both modes; do not use an empty Stack.Toolbar.Badge (the current header bridge creates a large string badge). Duo uses the same template. The menu carries no attention dot: it only marked tasks needing attention from the retired teammate home.
-
-- The home takes its iOS navigation container, menu control and centered-title width from HomeStackHeader (2026-10-13). The bar's measured-height blur is drawn once by the home route behind the bar. The home menu uses the slightly narrower three-line template in assets/navigation/menu.svg (owner refinement, 2026-10-13); only artwork changes, not button geometry or hit targets. System toolbars own ordinary menu/create/action geometry, with the existing Duo top-left exception. Task scope titles retain their long-name toolbar avoidance. Android retains its existing fallback; chat, secondary-page and sheet headers are not claimed migrated.
-
-- Teammate and group chat headers (`ChatIdentityHeader`) keep their left-aligned identity (mark, name, one subtitle line) next to back (owner decision, 2026-10-13). Back is the task header's system `chevron.backward` (`NativeChromeBackButton`). The trailing to-do and settings actions stay **two separate glass circles** with their existing Lucide artwork (18pt); only their stroke rises to `CHAT_HEADER_GLYPH_STROKE` (`iconStroke.medium`, about 1.65pt) so they read level with back — do not group them into one capsule or swap their artwork. On iOS the header floats on the same feathered `SessionHeaderNativeBlur` as the task header and content scrolls beneath it; an opaque header band is not allowed because its hard bottom edge reads as a divider. Because the two-line identity runs to the header's lower edge, chat headers keep the whole header over solid blur and feather only below it (`CHAT_HEADER_BLUR_FADE_INSIDE = 0`); single-line task and home bars keep the default 24pt inside feather. All iOS header blurs are progressive (owner request, 2026-10-13, to approach the softer system scroll edge on Settings): three equal layers (`HEADER_BLUR_LAYER_INTENSITY`) start fading together and finish at one third, two thirds and the end of the fade, which reaches `HEADER_BLUR_FADE_OUTSIDE` (24pt) past the chrome edge, so the blur thins toward content instead of one layer cross-fading into a double image. The composer's bottom blur keeps its single 55 layer. Android keeps its existing header.
-
-- Teammate rows share the task list typography: 18pt medium (500) titles with 28pt line height, 15pt regular previews with 26pt line height, and 13pt metadata with 22pt line height.
-
-- Wide Home and task-sidebar presentations share one native list instance in `ResidentHomeListProvider`, outside route lifetimes. Route slots supply layout and callbacks; do not key the host by task/route or restore a cached offset over its live scroll position. Collapse/expand its bounds, keep native headers outside its touch area, and pause hidden row subscriptions. Narrow screens retain their route-local list.
-
-- Home's main menu is a top-left affordance, including when Duo moves native toolbar actions into the right rail. Host this home-only exception in the native header's left custom view with its shared background hidden, never in an absolute screen-content overlay under the transparent navigation bar; remote-desktop and display actions remain native toolbar items.
-- Custom iOS home/sidebar icon buttons and standalone back buttons share `NativeChromeButton` (SwiftUI Button with native glass style). Preserve existing icon artwork inside the native label; do not substitute a React Native Pressable with a separate GlassView for this button family.
-- Mobile glass button styles are configured in `platform/chrome/nativeGlassButtonStyle.ios.ts`: neutral circles, text/primary actions and grouped toolbar material share that entry. Home floating new-task and share-cancel actions use the same native button path; text buttons retain intrinsic label sizing. Keep light/dark semantic colors and native disabled/activation behavior. Non-iOS retains the React Native fallback.
-- Login actions use `LoginNativeButton.ios.tsx` with the same shared glass styling. SwiftUI owns activation, disabled state and loading indicators; existing brand artwork can remain inside RNHostView labels. The login stage retains its design-coordinate frames and scaling, while text actions use native borderless buttons. This supersedes the hand-painted button feedback in the login skin on iOS only; inputs, consent checkbox, inline legal links and non-iOS controls retain their existing implementations.
-- The home main menu remains a left-edge drawer on every platform and window shape, using `HomeChromeDrawer.tsx` (iOS uses FullWindowOverlay above the native header; Android uses a transparent Modal window, because wide layouts mount the resident home list and connection notices in root layers that an in-route overlay cannot cover). Preserve backdrop dismissal, swipe-left dismissal and the drawer's close lifecycle. Native glass button unification must not replace this navigation drawer with a bottom sheet. Device-scope/display pull-downs keep their existing system UIMenu path and native toolbar menus; their custom panels are fallback code, not a reason to replace working native menus. System navigation/toolbars remain native container-owned.
-- Standalone custom navigation controls use a 44pt visible circle and 44pt hit frame (`navigationChrome.target`), with 20pt artwork (`iconSize.action`) centered inside. Apply the native interactive glass effect after the explicit frame on a borderless SwiftUI Button; do not add `controlSize(large)` or another glass/padding layer. System toolbar items retain native sizing and positioning: never replace them with `Toolbar.View` to enforce this custom-control rule, because that breaks Duo's vertical adaptation.
-- Prefer the native navigation container for page back/close and toolbar actions. On Duo, let the system adapt navigation to the shared status/toolbar region; only the detail column gets the vertical bar in a split view. Sidebar-local menus stay in the sidebar.
-- Floating page chrome that a native bar cannot host (file preview's close, title capsule and menu) takes its edges from `floatingTopRow`: in Duo portrait it shares the status row and ends before the status area, the same way the native bar does; beside a vertical bar its close and menu become native toolbar items and the title keeps a top margin instead of touching the screen edge. Chrome inside a Modal stays fully in the Modal and never writes the host route's bar. Full-screen Modal controls add the side safe insets, which hold the landscape notch or Duo's vertical bar (2026-10-29).
-- Full-screen custom overlays (remote desktop) keep back and tools on the right in both Duo landscape rotations, centered on one rail below the system status area. Back comes before tools. Respect safe areas and reserved folds; do not mirror the rail from a video orientation event.
-- Portrait tabletop remote desktop on iPhone Duo defaults to the Macintosh II-inspired case and functional keyboard (owner request, 2026-10-24). The lower-pane appearance rail accepts left/right swipes and an accessible tap to cycle directionally through classic, slim classic, full-screen retro, Macintosh II, PowerBook 170, ThinkPad 701C and modern (wrapping at either end), retaining the choice for this viewer. Slim and full-screen variants maximize the viewport and use a nearly full-width keyboard and invisible palmrest pointer surface; retain the original classic as a comparison. Switching between any two appearances releases held input. Pointer gestures cover the entire palmrest below the keys, independently of the much smaller visible touchpad, trackball or buttons; never extend this region over the keyboard or appearance rail. Use photorealistic classic Macintosh-inspired hardware artwork: textured ivory plastic, a deep CRT recess, a floppy slot and beveled keycaps (owner refinement, 2026-10-24). Hardware artwork keeps each model’s material in Light/Dark mode, with Light text tokens on ivory keycaps and Dark text tokens on graphite keycaps. Macintosh II and PowerBook retain their rainbow Apple badge; ThinkPad retains its black material and red TrackPoint. These are space-adapted homages, not mechanically exact replicas; surrounding app chrome follows the active theme. Fit the live viewer within the screen opening. Do not substitute flat CSS/vector panels for the physical material. Keep the live viewer and lease mounted across switches. Unfolded/landscape layouts and system keyboard panels retain their ordinary appearance. Implementation: `apps/mobile/src/remote-desktop/FoldDesktopSkin.tsx` and `RemoteDesktopScreen.tsx`.
-- Duo retro hardware draws the upper display case and lower keyboard deck edge-to-edge across their respective physical halves, meeting at the fold center. Scale the original artwork itself; never fill unsafe strips with a separate texture, tiled background or substitute image. Only the live screen, keyboard and interactive controls respect safe regions and toolbar clearance (owner correction, 2026-10-24).
-- Android foldables share the same adaptive pane and portrait tabletop remote-desktop layouts, including the keyboard, touchpad and appearance selector (owner request, 2026-10-24). Use Jetpack WindowManager's separating folds/hinges in local dp; a zero-thickness crease is valid. Flat continuous screens return to ordinary responsive layout, while a physical hinge stays reserved. Preserve Android's own safe areas, navigation appearance and keyboard-driven window resize; do not emulate iOS vertical system bars or infer a fold from a device name or aspect ratio. Unsupported devices and older packages retain the responsive fallback.
-- Retain the first three appearances (classic, slim classic, full-screen retro), but apply the same space optimization to all three: enlarged host-aspect screen openings, nearly full-width keys, shared beveled spacebar and bounded legends. This supersedes keeping the classic layout unchanged as a comparison. Reserve the lower safe area and toolbar before allocating keyboard height; a short lower pane scrolls the keys rather than pushing the palmrest outside the screen (owner refinement, 2026-10-24).
-- Floating back/menu controls use the shared `navigationChrome.target` size; grouped actions use the same target breadth, without an extra outer padding ring. Use native Liquid Glass (regular for app navigation; clear over immersive remote desktop imagery), circle for a single icon and capsule for a group; do not tint neutral glass with opaque surface colors. Use semantic foregrounds and the existing non-glass fallback in both themes.
-- Clear glass over remote imagery follows the navigation theme: dark icons in Light and light icons in Dark. A localized light/dark backing inside the control outline protects contrast, with a matching translucent selected-state fill. Keep the material clear and the desktop outside the controls unchanged. This explicit two-mode palette is Cindy’s design choice; Clear material does not provide automatic foreground adaptation.
-- The mobile in-app HTML browser's floating controls sit over arbitrary page content. They keep regular glass and add the translucent `navigationChrome.pageTint` theme tint (70%, never opaque). Untinted regular glass adapts to the page behind it. Over a light page in Dark mode it turned light under light icons. The tint keeps the control polarity aligned with the app theme. The user approved this design on 2026-10-11.
-- These are Cindy's shared component rules, not a claim that Apple's status glyph is an app button or that Apple mandates our precise size. Content actions and keyboard accessories retain their own hierarchy.
-- References: [Designing for iPhone Duo](https://developer.apple.com/design/human-interface-guidelines/designing-for-iphone-duo), [Raise the bar with iPhone Duo](https://developer.apple.com/videos/play/tech-talks/111462/), [Design for iPhone Duo](https://developer.apple.com/videos/play/tech-talks/111466/).
+正文已移至 [ios-native-design.md §8](./ios-native-design.md#8-mobile-ios-navigation-chrome--iphone-duo)，规范效力不变。
 
 ### Whitespace Philosophy
 
@@ -1380,16 +1198,10 @@ Only the two registered chart members inside Usage History may enlarge their non
 
 #### Exception category: container transform (chip lifts off and grows)
 
-- The second sanctioned motion class (added 2026-07-21, revised 2026-07-22), exclusively for composer-toolbar controls whose trigger chip anchors the panel (permission selector / model selector / the + menu):
-  - **Definition**: the panel does not simply appear over the trigger — it morphs from the trigger chip's exact geometry (position / size / pill radius / pill fill), growing while **translating away as a whole**, docking on the chip's opening side with a 6px gap; closing reverses back into the chip. **The trigger chip stays visible and interactive throughout** — clicking the chip while the panel is open closes it (preserving the "tap again in place to dismiss" muscle memory). An "in-place replacement" variant (chip hidden, panel occupying its spot) was tried and retired — it loses toggle-to-close and complicates timing; do not regress to it. **Both open and close must fade as a whole, coupled with the translation** (if the frames where panel and chip overlap were opaque, the chip content would flash-hide — fade in while lifting, dissolve while shrinking back); positionless pure fade-in/out is forbidden.
-  - **Parameters**: **220ms** (symmetric open/close; tightened from 300ms, finalized 2026-07-22), easing `cubic-bezier(0.3, 0.9, 0.25, 1)` (fast start, long settle); menu rows may stagger fade-in ≤20ms/row. This is an **explicit exception** to the ≤150ms baseline, confined to this category — it must not leak into other transitions. While morphing, the panel content must not scroll (a flashing scrollbar squeezes row width and jitters row ends); enable scrolling only after the animation completes.
-  - **Radius interpolation**: the morph's starting radius is half the chip height (e.g. 30px chip → 15px), **never 9999px** (interpolating 9999→12 balloons the mid-frames); the end value is the container 12px.
-  - **Implementation red lines**: (a) must degrade to a hard cut under `prefers-reduced-motion`; (b) temporarily disable transitions while measuring target geometry (otherwise `offsetHeight` at frame 0 of a width transition lays out at the old width and measures a false height when text wraps); (c) as a one-shot open/close animation it is exempt from the "persistent animations are compositor-only" red line (`docs/dev-rules/engineering-conventions.md` §7), but must still hold 300ms without dropped frames on low-end Windows, verified on hardware; (d) focus / Esc / outside-click / focus-return semantics are identical to §14.2 — morphing exempts nothing in a11y.
-  - **Scope boundary**: only "trigger grows into panel" controls. Ordinary Dialog / ConfirmDialog / Toast / lightbox do not qualify (no chip anchor — they keep their current motion). The narrow variant (button-width expansion) is allowed only for **information-bearing expansion** (e.g. the recording red dot + timer, ≤240ms); purely decorative hover label reveal (e.g. + expanding the word "Add") was evaluated and removed — do not re-add.
-- **Composer toolbar: two chrome tiers, one set shared between in-session and the create dialog (finalized 2026-07-22)**:
-  - **Morphing-dropdown tier (+/permission/model)**: bare at rest (`border border-transparent bg-transparent`); the pill outline appears only on hover (`hover:border-[var(--border-default)]` + `composer-pill-bg`); selected/danger tiers tint the text only, never the fill.
-  - **Persistent-tool tier (voice/send)**: permanent outline / solid CTA (voice: `composer-pill-bg` + `border-default`, hover `model-trigger-hover`, recording state `surface-chip` fill + red-dot timer expansion; send: `send-btn-*` neutral-inverse solid).
-  - **In-session (default) and the create dialog (create-agent) must match verbatim**: the five shared controls (+/permission/model/voice/send) no longer fork styles by `visualVariant`; `create-agent-control-*` / `create-agent-send-*` must not be used for these five controls (legacy segmented token IDs remain for theme compatibility; the top mode/project/branch pills retain their existing roles). Changing any control's chrome changes both surfaces. Verify this at the real component boundary when the shared controls change.
+- The second sanctioned motion class: see [container-transform.md](./container-transform.md); this category's parameters and composer toolbar tiers live there.
+
+#### Other sanctioned motion classes
+
 - **Quota-reset confetti** — the third sanctioned motion class (approved 2026-07-23), **only** for the status-bar usage chip’s full-quota reveal (updated by user decision, 2026-09-12):
   - **Definition**: the first observation of 100% remaining quota throws confetti once from the full window segment, including the first visit. Deduplicate by provider across task switches and component remounts. After that first burst, the quota must drop below 100% and return to 100% before another burst. Remaining at 100% never replays, even across scheduled cycles. Reset deadlines do not participate in this decision; official extra resets follow the same rule. Snapshot update timestamps only reject stale task data. The percentage roll keeps its own reset detection.
   - **Form** (finalized over four/five review rounds, 2026-07-23): **true parabolic toss + vanish on landing** — all particles launch simultaneously from the segment center in a ~**100° fan** (±50° of straight up) at equal speed, **constant horizontal velocity + constant vertical gravity** (decelerating up, accelerating down past the apex), so perceived speed is consistent from burst to fall; wider-angle particles fly lower arcs, travel farther, land earlier — the scatter comes from physics, not scripting. The final stretch before the ground line ends in a **short fade**: landing is fine, but lingering after landing ("corpsing") or vanishing without a fade is forbidden; the ground line jitters randomly so landing points don't queue up.
@@ -1408,12 +1220,7 @@ Only the two registered chart members inside Usage History may enlarge their non
   - **Definition**: the active theme's official Light/Dark Cindy wordmark sits centered in the empty message viewport at 35% opacity; after a 200ms delayed-reveal threshold, one narrow neutral highlight traverses the wordmark shape. The PNG alpha channel is the mask, so motion is confined to the glyphs and never paints a panel/background. This is functional loading feedback for a measured long switch, not a decorative brand loop: ordinary sessions complete before the reveal threshold and never show it; the mark unmounts immediately when the message tree mounts.
   - **Parameters / performance**: highlight cycle 1.6s, `cubic-bezier(0.4, 0, 0.2, 1)`, HTML pseudo-element `transform: translateX(-120% → 350%)` only (compositor-only). The neutral gradient is the narrow §2 exception registered under “Gradient System”; it may use only `transparent` and `--text-primary`, never brand red or a component-authored chromatic value. `prefers-reduced-motion` removes both the reveal and sheen animations and shows a static wordmark; `[data-app-hidden='true']` pauses the infinite sheen via `animation-play-state` while the window is hidden.
   - **Scope boundary**: session-switch deferred-loading overlay only. No reuse for startup, streaming, tool execution, message generation, dialogs, cards, sidebars, empty states, or static branding. The standard `animate-spinner` remains the default loader everywhere else. Implementation: `components/branding/BrandLoadingMark.tsx`, `MessageStream.tsx`, and `.brand-loading-mark*` in `globals.css`.
-- **Mobile new-task morph(移动端新建按钮形变)** — the seventh sanctioned motion class (approved 2026-09-29), **only** for the iOS home floating new-task button and the composer pill it becomes (`apps/mobile/modules/cindy-composer-morph`):
-  - **Definition**: on touch-down the 55pt round button stretches horizontally, in place, into the equal-height composer pill (it does not play the button's own press). A stand-in glass grows over the old screen while the new-task page mounts; once the page is ready the real composer glass takes over with the stand-in's current velocity, so the trajectory is continuous and nothing is swapped at the end. Sliding off before release springs back into the button and does not navigate. Later, a tap on the pill opens it upward into the full composer card and then focuses the input; the keyboard follows (per-frame keyboard follow is layout, not motion, and has no easing).
-  - **Parameters**: button → pill uses an underdamped spring, stiffness **305**, damping ratio **0.67** (response ≈ 0.36s), one visible overshoot of ≈ 14pt on a phone pill, kept inside the 16pt screen inset; the stand-in, the real glass and the slide-off return share this spring. Pill → card uses a critically damped spring, stiffness **320**, damping ratio **1** (no overshoot), so the card is open before the keyboard starts rising. Both springs take their duration from physics; the nominal `UIViewPropertyAnimator` durations in code are ignored. Handoff fades: the old-screen snapshot clears in 0.16s ease-out, the stand-in reveals over 0.18s ease-out and dissolves over 0.22s ease-in-out after a 0.06s delay, and the composer controls fade in over 0.24s ease-out after a 0.1s delay. Native focus is requested 0.05s after the card starts opening.
-  - **Timing guards (not motion)**: a 1.6s native timeout ends a morph whose target never appears; the new-task page restores its normal push animation on `transitionEnd`, with a 1600ms fallback; the JS fallback focus (320ms) and focus-release grace (400ms) in `useComposerPillOpen.ts` only cover a missing native view or refused focus.
-  - **Degradation**: under Reduce Motion neither the morph nor the pill opening plays — the page and card land directly in place. Without the native module (non-iOS or older binaries) the JS path navigates and focuses without a morph.
-  - **Scope boundary**: this button and pill only. Its overshoot must not leak into other buttons, sheets or navigation; other mobile transitions stay on the tokens above. Implementation: `CindyComposerMorphModule.swift`, `ComposerMorphSource.ios.tsx`, `ComposerFrame.ios.tsx`, `useComposerPillOpen.ts`; geometry in `composerGeometry.ts`, behavior notes in `apps/mobile/docs/navigation-and-composer.md`.
+- **Mobile new-task morph(移动端新建按钮形变)** — the seventh sanctioned motion class: see [手机设计指南 §9](../../apps/mobile/docs/mobile-design-guide.md#9-从根规范迁入的手机规则).
 - **Bot Market detail entrance(Bot Market 详情入场错峰)** — the eighth sanctioned motion class (approved 2026-10-16), **only** for the Bot Market detail page (`BotMarketDialog` / `BotMarketModules`):
   - **Definition**: when a teammate's detail opens, its segments — identity block, capability strip, then each module that has data (skills, knowledge and memory, work tools, routines) — fade in and rise 6px one after another, so the page reads as content arriving in reading order. This is a one-shot entrance for the opened detail; it does not replay on scroll, expand/collapse, or data refresh.
   - **Parameters**: each segment `--motion-base` / `--motion-ease-out`, opacity 0→1 and `translateY(6px→0)`; adjacent segments start **30ms** apart via `--rise-index` (`animation-delay: calc(var(--rise-index) * 30ms)`); at most **6** segments (the index is clamped at 5). `transform` / `opacity` only. This is an explicit exception to the rule that stagger is limited to the composer-container rows (≤20ms/row) and must not leak elsewhere.
@@ -1423,354 +1230,7 @@ Only the two registered chart members inside Usage History may enlarge their non
 
 ### 14.5 聊天正文的可点性信号(Clickability in message bodies)
 
-**桌面消息链接的操作（2026-10-16）**：用户消息与 AI 消息共用同一套点击与右键语义。
-任务链接右键提供「在当前窗口打开」「在新窗口打开」「复制链接」；Shift+点击、⌘/Ctrl+点击和
-中键点击均在新窗口打开，保留来源电脑与消息锚点，不切换原窗口或分屏 pane。
-嵌入式任务内容不拥有宿主路由，任务链接直接开新窗口，其菜单不提供当前窗口跳转。
-
-网页普通点击沿用用户的内置／系统浏览器偏好；上述修饰键和中键临时使用系统浏览器，
-不修改偏好。文件链接普通点击沿用预览／审查等原行为，修饰键和中键交给默认应用，
-HTML 则交给系统浏览器；远程文件复用现有下载缓存／HTML 预览通道，不读取本机同名路径。
-安全降级附件仍只允许另存，不因快捷键扩大打开能力。远程文件若命中已有危险扩展名规则，
-快捷打开改为下载到本地，菜单省略默认应用打开。项目链接提供「定位到项目」与
-复制链接菜单；嵌入式项目引用只保留复制菜单，不带按钮语义、手形指针或下划线，
-仍可聚焦并用 Shift+F10／菜单键打开菜单。文内标题和媒体链接保留各自定位／预览动作，并可复制链接。
-
-菜单按对象精简并平铺，不使用「更多」或「打开方式」子菜单。HTML 的标准菜单为
-「在侧边栏打开」「在浏览器打开」「查看源代码」／「在文件夹中显示」「复制路径」；
-远程文件将「在文件夹中显示」替换为「下载到本地」，两者只占同一位置。
-HTML 不提供复制文件、在文件列表中定位或选择应用。无侧边栏上下文时省略该打开项。
-普通文件保留文件列表定位、默认应用打开／本地定位或远程下载、复制、复制路径；
-仅带有效行号的文件引用额外提供「复制位置」。不把「复制」「复制位置」扩成长文案。
-网页只保留在侧边栏打开、在浏览器打开／复制链接；文内链接保留打开与复制链接。
-任务新窗口、外部浏览器和默认应用动作右侧标注 Shift+点击，提示不增加菜单项。
-无任务上下文的网页链接仍可右键复制和交给系统浏览器，只省略不可用的侧边栏项。
-键盘聚焦后 Enter 激活；Shift+Enter 保留 Shift+点击语义，Shift+F10／菜单键打开链接菜单，
-关闭菜单后焦点回到原链接。所有菜单复用语义主题组件，同时支持 Light／Dark。
-这组窗口与鼠标快捷键仅属于桌面端，不向手机增加无效的新窗口入口。
-实现见 `components/chat/linkInteraction.ts`、`useLinkContextMenu.tsx`、`useOpenWithMenu.tsx`
-与 `useFileChipContextMenu.tsx`（均位于 Desktop renderer）。
-
-> 拍板 2026-07-30。起因:用户问「哪些是链接可以点、哪些不是，现在是不是看得不够清楚？」
-> 排查结论是**两个独立缺陷叠在一起**,且方向相反——加强可点信号会放大误判,所以两者必须
-> 一起修。本节是聊天正文(消息气泡 + 文件阅读器)可点性的权威口径。
-
-**缺陷一:装饰被两种正交语义共用。** 「等宽 + 底色」既表示「这是代码/路径」(排版语义),
-又被指望表示「这个能点」(交互语义),读者无法从外观反推可点性。实测数值:改前桌面可点的
-`FileTargetChip` 用实色底(1.26:1),不可点的 markdown 行内 code 用半透明底(light
-1.11~1.13:1 / **dark 1.26~1.28:1**)——深色模式下两者几乎相同,只能靠 hover 与指针形状
-区分,等于「必须拿鼠标扫一遍才知道哪个能点」;移动端无 hover 无指针,该信号直接不存在。
-
-**缺陷二:普通行内 code 会被误判成可点。** 行内 code 的候选判定曾挂一条宽松兜底
-(桌面 `classifyMarkdownHref` / 移动 `looksLikeLocalHref`:含分隔符**或**有个点后缀即算
-本地路径)。那是**显式 markdown 链接**的口径——作者写了 `[x](y)` 就是主动声明;反引号只
-表示「这是代码」,不表示「这是路径」。实测 29 个真实行内 code 样本有 **21 个**成为路径候选
-(`and/or`、`text/plain`、`A/B`、`n/a`、`1.2`、`array.map`、`console.log` …)。
-
-#### 规则
-
-1. **下划线常显 = 可点,且是唯一的交互信号。** markdown 里粗体占了字重、斜体占了倾斜、
-   行内 code 占了等宽+底色,**下划线是唯一没被排版语义占用的通道**,故专留给交互语义。
-   反过来:**没有下划线的一律不可点**。底色/等宽从此只表示排版含义,不再兼职表达可点
-   (所以可点的路径 chip 与不可点的行内 code **共用同一个底色 token** —— 它们本来就是
-   同一种排版物,差别只在那条下划线)。hover 变色与 `cursor:pointer` 降为**辅助**反馈,
-   不再是主信号:静止状态下就必须能判断。
-
-   **「唯一」是字面意思:可点态相对不可点态,只能多一条下划线,不得另外改文字颜色、
-   字重或字体。** 差异越单一,「有横线 = 能点」越可信;叠三个信号反而让读者无法归纳出
-   规则。参照 GitHub(2026-07-31 核对其 `github-markdown.css`):`.markdown-body code`
-   **刻意不定义 `color`**、纯靠继承,`.markdown-body a` 也只有 `text-decoration`、
-   没有 `font-weight`;可点与不可点的行内 code 差别就是那条横线。
-   落地推论两条:
-   - 移动端 `markdownPathChip` **只写 `textDecorationLine: 'underline'`**。它总是叠在
-     `markdownInlineCode` 之后,于是自然继承行内 code 的压暗档 —— 压暗是「这是代码」的
-     排版语义,继承它才对。(2026-07-30 首版曾在此钉 `textPrimary + medium`,那是下划线
-     还不是主信号时的补偿,信号收敛后即为冗余,已移除。)
-   - **正文裸写的路径点亮后保持正文字体,只加下划线 —— 两端同口径**(2026-07-31 实机
-     走查后拍板)。它的未点亮态是普通正文,若点亮就套等宽,同一句里点亮的 `src/a.ts`
-     与未点亮的 `src/b.ts` 会在**字体、底色、下划线三处齐变**,跳变无法向用户解释。
-     两端都必须**按来源 + label 形态分三档**(判定口径同源:桌面
-     `shouldRenderCodeReferenceLabel`、移动 `chatPathLabelReadsAsFileReference`):
-
-     | 来源                          | label            | 点亮后                         |
-     | ----------------------------- | ---------------- | ------------------------------ |
-     | 正文裸写的路径                | (无独立 label)   | 正文字体 + 下划线,**不套等宽** |
-     | 作者手写 `[README.md](path)`  | 读起来是文件引用 | 等宽 chip + 下划线             |
-     | 作者手写 `[看这份规则](path)` | 散文             | 正文字体 + 下划线              |
-     - 桌面端:`remarkLocalPathLinks` 给切出的 link 节点打 `data-bare-path` 标记
-       (走 mdast `data.hProperties`),`MarkdownTargetLink` 见到它就跳过
-       `shouldRenderCodeReferenceLabel`、直接走 `ResolvedLocalLink`。
-     - 移动端:`matchBareFilePathLink` 在 link inline 上带 `bare: true`,
-       `LinkPathChipSpan` 据此决定 chipStyle 是否含 `markdownInlineCode`;非 bare 时
-       再过一遍 label 形态判定。**不得无条件去掉 `markdownInlineCode`** —— 那会把
-       作者手写的文件名链接一起降级(2026-07-31 PR #1144 review 实捉)。
-     - 作者手写的文件名链接保留 chip 是刻意的:那是作者的排版意图,与桌面一致。
-
-2. **外链与本地文件不做外观区分**,只表达「可点」;去哪由文本自身可读性承担(斜杠路径
-   vs `https://` 前缀)。
-3. **聊天正文不使用 `--msg-link`。** 该 token 是主题契约(10 个内置主题各自定义,
-   solarized 绿 / monokai 黄 / eclipse 青,用户导入 VS Code 主题时 `linkColor` 也映射到
-   它),而移动端根本没有链接色概念。要满足规则 1+2 的「两端统一」,聊天正文必须退出这个
-   token,统一为**正文色 + 常显下划线**。token 本身保留(其它界面仍在用),只是不进
-   markdown 正文与用户消息气泡。例外:伙伴群聊里的 `@成员` 点名不是链接,按产品裁决
-   (2026-10-20)用 `--msg-link` 着色、悬停出成员卡,见 `bot-group-chat.md`。
-4. **候选判定:反引号不等于路径。** 行内 code 只接受真正的路径形状——带分隔符 / 绝对路径,
-   或裸文件名;**不得**用「含斜杠或有个点后缀」兜底。显式 markdown 链接与正文裸路径不受此
-   限(前者作者已声明,后者词法本就要求带分隔符)。
-5. **自动识别路径的点亮门槛按形态分级。** 显式 Markdown 文件链接（`[查看报告](路径)`）
-   在桌面和手机聊天中保留点击入口，不因尚未验证、文件缺失或断线退化为普通文字；点击时
-   通过原有文件访问通道打开或说明失败，保留复制目标的操作，不绕过权限、不猜搬迁位置。
-   已解析文件仍沿用原有预览与文件菜单。没有文件访问上下文或不允许特权链接的内容面不因此
-   获得文件访问能力。以下形态门槛仅适用于正文自动识别路径和行内 code。
-   适用于任何存在「无法判定」中间态的链路:移动端
-   全部会话、以及桌面的**远程会话**(两者的 `fs:stat` 都会回 `unknown`)。桌面**本机**
-   会话不适用 —— 那边走真实存在性检查,解析不到一律纯文本,没有中间态。
-
-   判据是「形状是否明确是路径」,精确定义为 **绝对路径 ∨ 尾斜杠目录 ∨(分隔符 **且** 带
-   扩展名)**。其中「绝对路径」= POSIX `/…` ∨ Windows 盘符 ∨ `file://`,**不要求扩展名**,
-   由判据自己正面识别(`ABSOLUTE_PATH_SHAPE_RE`),后两档才落到 `looksLikeFilePath`:
-
-   > ⚠️ **不要把整个判据写成 `!looksLikeFilePath(href)`。** 那个谓词有两条排除项是为
-   > 别的用途写的 —— `URL_SCHEME_RE` 是为「别把 `https://` 当本地路径」、POSIX 分支要求
-   > 扩展名是为「别让无扩展名引用触发 TextLightbox」。照抄就会连带继承这些与歧义判定
-   > 无关的排除,把**最明确的形态判成最可疑的**:`file:///Users/me/a.md` 与 `/etc/hosts`、
-   > `/usr/bin/node` 都曾因此被判歧义、断链时退化成纯文本。两者是同一根因的两个分支
-   > (前者检查点自查发现,后者 PR #1144 review 实捉)。**复用谓词前先看它的排除项是为
-   > 什么写的。**
-   >
-   > 已知取舍:以 `/` 开头、不以 `/` 结尾的正则字面量(`/\d+/g`)与 POSIX 绝对路径形状
-   > 无法区分,会跟着进乐观点亮档。刻意接受 —— 只影响断链这一个降级态(链路正常时
-   > stat 回 `nonfile` → 纯文本),而代价的另一边是开发对话里最常见的那批绝对路径在断链
-   > 时全部不点亮,那个错更醒目也更常见;要为它收紧就得在词法层区分正则与路径,又回到
-   > 规则 4 「靠形状排除必然连真的一起砍」的老问题。两端都有用例把它钉成**显式已知项**。
-
-   | 形状                       | 例                                                                | `unknown`(链路断)时                          |
-   | -------------------------- | ----------------------------------------------------------------- | -------------------------------------------- |
-   | 绝对路径(**含无扩展名**)   | `/abs/a.png`、`/etc/hosts`、`C:\Windows\System32`、`file:///a.md` | **乐观点亮**(不因断链把整条消息的 chip 全灭) |
-   | 尾斜杠目录 / 分隔符+扩展名 | `src/x/`、`src/App.tsx`                                           | 同上                                         |
-   | 无分隔符裸名               | `package.json`、`array.map`                                       | 必须远端明确回 `file` / `directory`          |
-   | 有分隔符但无扩展名         | `src/components`、`and/or`                                        | 同上                                         |
-
-   > ⚠️ **「带分隔符」本身不足以乐观点亮**,必须**同时带扩展名**。`src/components` 与
-   > `and/or` / `n/a` / `read/write` / `text/plain` 词法**完全同形**,词法层分不开;只按
-   > 「带分隔符」放行,链路一抖它们就会一起变成可点假链接,正是本规则要防的缺陷。代价是
-   > 离线时 `src/components` 这类无扩展名目录引用不点亮 —— 这是刻意取舍:宁可少点亮一个
-   > 真目录,不可多点亮一片假链接。**「可点」的视觉信号一旦不可信,加强它只会让误判更醒目。**
-   > (本条曾只写「带分隔符」,措辞不精确,导致 review 出现一条要求放宽、一条要求收紧的
-   > 矛盾反馈;2026-07-31 已按实现精确化。)
-
-#### 正文裸路径的边界规格(两端同形)
-
-正文裸路径走的是「在散文里用**正向正则**定位」,而不是「按空白切 token 再剥边」——
-后者在中文里不成立(`改了src/App.tsx,然后呢` 整句是一个 token)。代价是必须自己保证
-**命中独占它所在的路径 token**:不许从中段起,也不许把紧跟的字符截断。
-
-PR #1144 的第 8、11、12、14 轮 review 各捉到这条规格的一个缺口(扩展名长度 / 右边界
-字符 / 空格中段 / `( ) # %` 等未支持字符 + 行号后缀)。**逐个补字符类注定一轮补一个**,
-故收敛成一条判据(两端 `startsMidPathToken` + `endsMidPathToken`,逐字同形):
-
-| 侧  | 判据                                                                                                               |
-| --- | ------------------------------------------------------------------------------------------------------------------ |
-| 左  | 命中点前是同一 run 内的字符时,只有**白名单**字符可以紧邻路径:开括号 / 引号 / 冒号 / 列表分隔符 / `>`。其余一律拒绝 |
-| 左  | 命中点前是空白时,看空白前那个 run:含分隔符**且不以扩展名收尾** → 拒绝(只跨空格/制表符,不跨换行)                    |
-| 右  | 命中之后紧跟 token 字符 → 拒绝;`.` 与 `:` 本身放过(句末标点),但**跳过整串 `.`/`:` 之后仍跟 token 字符**时同样拒绝  |
-
-关键收益:`( ) # % [ ] =` 之类**不需要枚举** —— 白名单之外一律拒绝,以后出现别的未支持
-字符自动覆盖,不必再来一轮。
-
-> ⚠️ 左侧必须用**白名单**,不能用黑名单。第 14 轮曾用「run 前缀已含分隔符」的黑名单,它
-> 隐含假设「未支持字符出现在首个分隔符之后」,于是 `foo(bar)/src/index.ts`(括号在第一个
-> `/` 之前)绕过去、还切出个绝对路径 `/src/index.ts`。白名单让未知字符**默认拒绝**,与本节
-> 「宁可少点亮」同向。`>` 在表里是因为字面 HTML 的元素内容按既有口径仍识别
-> (`<div>src/App.tsx</div>`);`=` 刻意不在表里 —— `--config=src/a.json` 因此不点亮,换取
-> `docs/a=b/c.md` 不切出错误前缀 `b/c.md`。
->
-> ⚠️ 右侧的标点检查必须**跳过整串**,不能只看紧邻一个字符。这一处被连续挖了三轮
-> (`src/a.ts:12345678` → `:12.5` → `:12..5`),每轮多一层嵌套:只看一个字符时
-> `:12..5`、`:12::foo`、`:12:.:foo` 都会因为第二个标点不是 token 字符而绕过去。跳整串是
-> 为了把「再多一个标点」这条路一次封掉;句末连写的省略号(`src/a.ts...`)仍保住 —— 跳完
-> 之后没有 token 字符。
-
-两处刻意的例外,改动它们会让真实用法退化,均有用例钉住:
-
-- **`.` 与 `:` 不进右边界字符类**:句末英文句点(`见 src/a.ts.`)与句末冒号
-  (`见 src/a.ts:`)是最常见的紧随字符;把 `.` 加进去会让整条失配(SEG 含 `.`,回溯救
-  不回来)。
-- **「不以扩展名收尾」不能省**:少了它,`src/a.ts src/b.ts`(空格相邻的两条真路径)
-  第二条会被当成「被空格截断的后半段」连坐掉。
-
-已知误伤(显式取舍):散文里紧挨着一个「含分隔符、无扩展名」的片段时会被连坐,如
-`见 /etc src/a.ts`。少点亮一条、文本仍可读,方向与本节规则 5 的「宁可少点亮一个真目录,
-不可多点亮一片假链接」一致。
-
-#### 落点
-
-| 端         | 位置                                                                                                                                                                                                                                                     |
-| ---------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| 桌面       | `MarkdownRenderer.tsx` 的 `MARKDOWN_LINK_CLASS` / `FileTargetChip`;`UserMessage.tsx` + `UserMessageUrlLink.tsx`;候选判定在 `lib/markdownTarget.ts`                                                                                                       |
-| 移动       | `MessageRenderer.tsx` 的 `markdownLink` / `markdownPathChip` / `sessionLinkChipText` 与 `ChatPathChipSpan` 的点亮门槛;候选判定在 `session/chatPathCandidate.ts`                                                                                          |
-| 文件阅读器 | `session/selectableMarkdownHtml.ts`。**该面只有 http(s) 真的可点**,故规则在这里的落地是反过来的:只有 `a` 带下划线,`.xdt-image-chip` / `.xdt-session-chip` 一律不带下划线也不带 `cursor: pointer`,非 http(s) 目标(本地路径 / 会话深链 / mailto)不出 `<a>` |
-
-> **文件阅读器为什么反过来**:`MarkdownFileReader.interceptNavigation` 只把 http(s) 交给
-> `Linking.openURL`、其余导航一律 `return false`,且该 WebView **没有任何 postMessage
-> bridge**,所以 chip 类元素的点击也无处可去。给点不动的元素加下划线,等于在刚建立的
-> 「有下划线 = 可点」信号上立刻造反例 —— 反而比不加更糟。要让该面的路径 / 会话引用真
-> 可点,得先给它接上导航与 bridge,那是另一个功能。(2026-07-31 PR #1144 review 实捉:
-> 初版给会话 chip 加了下划线,且图片 chip 本就带着下划线与 pointer。)
-
-#### 不变量清单与对称路径(收敛检查点,2026-07-31)
-
-PR #1144 的两轮 review 各捉到一个**同族**缺陷:「有下划线却点不动」。根因不是某一处写错,
-而是**「加不加下划线」与「有没有点击行为」在各分支独立决定** —— 判据分散必然漂移。故把
-不变量写死，并要求判据单点化:
-
-> **下划线 ⇔ 可点,双向成立。** 可点的一定有下划线;有下划线的一定可点。
-
-对称路径必须逐条成立(任何新增可点 inline 都要回到这张表核一遍):
-
-> ⚠️ 这张表必须**从代码 grep 出来**,不能凭记忆填。2026-07-31 第一版检查点的桌面几行就是
-> 凭记忆写的,漏掉了「远程会话 unknown 乐观点亮」与「引用 chip 无下划线」两条,下一轮
-> review 又各捉到一个。
-
-| 面                      | 元素                                        | 可点?                                  | 下划线                                      |
-| ----------------------- | ------------------------------------------- | -------------------------------------- | ------------------------------------------- |
-| 桌面聊天正文            | 外链 / anchor / 本地图片 URL                | ✅                                     | ✅ `MARKDOWN_LINK_CLASS`                    |
-| 桌面聊天正文            | 已解析本地文件(chip / 散文 label)           | ✅                                     | ✅                                          |
-| 桌面聊天正文            | 未解析的显式文件链接                         | ✅（点击重验，失败提示）                 | ✅                                          |
-| 桌面聊天正文            | 未解析的自动识别路径、行内 code              | ❌                                     | ❌                                          |
-| 桌面聊天正文            | **远程**会话里 stat 回 `unknown` 的引用     | 仅非歧义形状                           | 由 `isAmbiguousPathShape` 门槛裁决          |
-| 桌面聊天正文 / 用户气泡 | 会话 / 项目深链 chip(`InlineReferenceChip`) | 取决于是否注入 onClick | **与 `interactive` 同源**                   |
-| 桌面用户气泡            | URL / 图片路径                              | ✅                                     | ✅（改前只有 hover 下划线）                 |
-| 手机聊天正文            | 外链 / 图片 chip / 会话 chip                | 取决于 handler 是否注入                | **与 handler 同源**(`clickableInlineStyle`) |
-| 手机聊天正文            | 路径 chip                                   | 显式链接保留，其余取决于远端 verdict    | 由 `ChatPathChipSpan.lit` 单点裁决          |
-| 手机文件阅读器          | http(s)                                     | ✅                                     | ✅                                          |
-| 手机文件阅读器          | 会话 chip / 图片 chip / 本地路径 / mailto   | ❌（无 bridge、只放行 http(s)）        | ❌                                          |
-
-**正文文件类型图标（2026-09-22）**：桌面正文中已解析的文件链接与行内文件引用，文字前增加
-14px 共享 `FileTypeIcon`，按解析后的目标路径分类，继承文字颜色。图标只表达文件类型，
-不可独立聚焦，也不进入可访问名称；下划线仍表达可点性。保留原有文字换行、复制、点击与
-右键行为。目录、未解析路径、外链和纯图片链接不加文件类型图标。
-
-**颜色也归这条不变量管**:可点性由下划线表达,所以链接**不得写死颜色**,必须继承所在
-上下文 —— 表头(`markdownTableHeaderCell` 用 `textSecondary`)、引用块等非正文色上下文里
-写死正文色,会让链接相对周围文本除下划线之外还变色。移动端 `markdownLink` 与阅读器的
-`a` 都已去掉显式 `color`。
-
-**判据单点化**:移动端所有可点 inline 一律经 `clickableInlineStyle(styles, onPress, …)`
-取样式 —— 它按 `onPress` 是否存在决定给不给 `markdownLink`,于是结构上无法造出
-「有下划线却点不动」。**不要在 case 分支里直接写 `styles.markdownLink`**;路径 chip 不走
-这里,它的可点性由 `ChatPathChipSpan` 的 `lit` 单点裁决(同样是一个判据)。源码级守卫见
-`chatPathCandidate.test.ts` →「markdownLink 只能经 clickableInlineStyle 取用」。
-
-#### 第二次检查点(2026-07-31,第 5 轮):`unknown` 的生命周期与门槛的来源无关性
-
-第 5 轮 review 又出现同族缺陷,故按止损规则再做一次检查点。这轮的三条都不是「某处写错」,
-而是上一条不变量**没写完整**:它只约束了「谁该有下划线」,没约束「凭什么判定可点」的两个
-前提。补两条:
-
-> **不变量 A:`unknown` 不是结论,只是「这一次没问到」。** 它不得与 `file` / `directory` /
-> `nonfile` 同层缓存,必须能自愈重验;「已缓存」的判据只能是「有确定结论」。
-
-`unknown` 一旦被当成终态缓存,叠上规则 5 的歧义门槛就会**永久**把真实路径钉死在纯文本上:
-peek 有值 → 调用方跳过重验 → 链路恢复后也不再问。两端一律「确定态无 TTL 缓存 + `unknown`
-落 30s 负缓存且不进 peek」:
-
-| 端                                  | 确定态                | `unknown`                          |
-| ----------------------------------- | --------------------- | ---------------------------------- |
-| 桌面 `lib/remoteFileOpen.ts`        | `verdictCache`,无 TTL | `unknownUntil`,30s,**不进 `peek`** |
-| 移动 `session/remotePathVerdict.ts` | `verdictCache`,无 TTL | `unknownUntil`,30s,**不进 `peek`** |
-
-代价是断链期间乐观点亮的引用每次重挂会先画一帧纯文本。刻意取舍:让「peek 有值」严格等价于
-「有确定结论」,「把 unknown 当结论」在结构上不可表达,比省一帧重绘值钱。
-(桌面侧曾把 `unknown` 写进 `verdictCache`,PR #1144 review 实捉。)
-
-> **「自愈」必须真的会发生 —— TTL 到期本身不是事件。** 没有任何 React 依赖会因 TTL 过期而
-> 变,所以只靠「重挂时重验」等于把恢复条件寄托在用户行为上:一条渲染完就一直挂着不动的
-> 消息(桌面长视图、移动端短转录都不会被回收)在链路恢复后会**永远**停在纯文本。故由 verdict
-> 缓存模块把到期翻译成一次通知:**一个**模块级定时器对齐「最早的负缓存到期时刻」(不是每个
-> 引用挂一个表 —— 一条消息几十个引用就是几十个定时器),没有 unknown 待期时**零定时器、不
-> 轮询**;到期清掉过期条目后发**一次**通知(不是每 key 一次),消费方重跑验证,已有确定结论的
-> 在 peek 处早退,于是实际重发 stat 的只有仍是 unknown 的那批,节奏就是 TTL 本身。
-> 两端出口同名:`subscribeRemotePathVerdictStale`。
->
-> 消费方接线有一处易错:**`staleGen` 递增不得清掉已有结论** —— 它只表示「该重验了」,不表示
-> 「旧结论失效了」。跟着清会让已乐观点亮的引用每 30s 闪一下(点亮 → 纯文本 → 点亮)。故清
-> 旧结论的 effect 只依赖 target / workdir / streaming,验证的 effect 才额外依赖 `staleGen`。
-> (第 5 轮把缓存改对了,却漏了「谁来触发重验」这一半,第 8 轮 review 实捉。)
->
-> **重验结论必须无条件覆盖旧结论,不许按 verdict 早返回。** 有了 TTL 到期重验之后,凭空多出
-> 一条状态迁移:「先按 `unknown` 乐观点亮 → 链路恢复后确认 `nonfile`」。`if (verdict ===
-'nonfile') return;` 这种早返回写法漏掉它,不存在的路径会一直带着下划线可点。桌面已把判据
-> 抽成纯函数 `decideRemoteLit(verdict, href, originalHref)` —— **每个 verdict 都有返回值,
-> 没有「什么都不做」这个分支**,调用方拿结果无条件 `setAsyncResolved`,于是「忘了撤销」在结构
-> 上不可表达;sync / async 两条分支共用它,判据也随之单点化。
->
-> ⚠️ 这条在两端的**代码量不同,不能互相推断**:移动端 `ChatPathChipSpan` 存的是 **verdict
-> 本身**,新结论直接覆盖;桌面存的是**由 verdict 派生出的 resolved target**,派生值必须显式
-> 撤销。「移动端是对的」不能作为「桌面也对」的依据。(第 9 轮 review 实捉。)
-
-> **不变量 C(第 10 轮止损重构):点亮态是 verdict 缓存的纯派生,渲染层不得自己存结论。**
->
-> 第 8、9、10 三轮 review 各捉到一条缺口,根因是同一个:**组件自己存了一份结论,而真值在一个
-> 可变的模块缓存里,组件只在自己的依赖变化时去看一眼**。于是每出现一条新的状态迁移就漏一条:
->
-> | 轮次 | 漏掉的那条边                                               |
-> | ---- | ---------------------------------------------------------- |
-> | 8    | TTL 到期没有通道通知(长挂载视图永远停在纯文本)             |
-> | 9    | 派生值没跟着新结论被覆盖(确认 `nonfile` 后仍点亮)          |
-> | 10   | **另一个挂载点**写入的确定态传不过来(同一路径出现在多处时) |
->
-> 逐条补边补不完 —— 每补一条,下一条新迁移又会漏。故按硬止损线做结构收敛:
->
-> - **缓存按 key 通知任何变化**(确定态落库 **+** unknown 负缓存到期),出口两端同名
->   `subscribeRemotePathVerdictChange(listener: (key) => void)`。按 key 而非全量广播:一屏几十个
->   引用各自订阅,广播会让首屏 N 次 stat 引发 N×N 次重渲染。
-> - **渲染读 `peekRemotePathVerdictForRender`**(确定态优先,否则 TTL 未过期的负缓存回
->   `'unknown'`)。这个出口存在的唯一理由就是让「断链期间的乐观点亮」也成为缓存的派生 ——
->   普通 `peek` 刻意不返回 `unknown`(不变量 A),那份状态以前只能存在组件里,而那就是第二个
->   真值来源的由来。判定「要不要重验」仍用普通 `peek`,两个出口分工写在各自 JSDoc 里。
-> - **消费方单一 state + 一个纯派生函数**,所有触发点(挂载 / 依赖变化 / 缓存通知 / 验证完成)
->   都调它并无条件覆盖。桌面的 `syncResolved(useMemo) ?? asyncResolved(useState)` 双源已删除,
->   源码级守卫钉住它不许回来;验证回调**不看返回值**,只重新派生。
->
-> 收益是任何一条新迁移都只有一个地方需要改对。代价是渲染态多依赖一次订阅,可接受。
->
-> ⚠️ **通知必须驱动「重验」,不只是「重绘」。** 订阅回调里只 `setState(重新派生)` 是不够的:
-> 派生函数通常是 `[ctx, target]` 的稳定 `useCallback`,通知**不改变验证副作用的任何依赖**,
-> 那个副作用就不会重跑 → 再也不发 stat。TTL 到期时负缓存已被删、又没有确定态,ForRender
-> 回 `undefined`,于是引用只完成**降级成纯文本**、没完成**重验**,挂载期间永不自愈 ——
-> 比重构前(一直乐观点亮)更糟。故订阅回调递增一个 `cacheGen`,并把它放进验证副作用的依赖
-> 数组;两端都要有。(第 10 轮重构只做对了桌面那一半,第 11 轮 review 实捉;这类 bug 的形状
-> 是「依赖数组漏了触发源」,没有类型保护,故两端各有源码级守卫。)
-
-> **不变量 B（2026-10-27 更新）:显式链接保留作者声明的点击入口，自动识别引用仍需验证。**
-
-`[配置](package.json)` 的下划线表示可以尝试打开，不承诺文件仍然存在。文件移动、删除或
-暂时不可达时，点击后给出可理解的反馈。正文路径与行内 code 仍按原有形态门槛判断，避免
-把 `array.map` 等普通文本变成假链接。两端以来源标记区分，不放宽路径分类或文件访问权限。
-
-| 候选来源           | 桌面入口                      | 移动入口                          | 走门槛?                                    |
-| ------------------ | ----------------------------- | --------------------------------- | ------------------------------------------ |
-| 行内 code          | `classifyInlineCodeTarget`    | `classifyInlineCodePathCandidate` | ✅                                         |
-| 显式 markdown 链接 | `classifyMarkdownLinkTarget`  | `classifyChatPathLinkTarget`      | 不以存在性决定可点；实际访问仍校验          |
-| 正文裸写路径       | `remarkLocalPathLinks` → 同上 | `matchBareFilePathLink` → 同上    | ✅(词法强制带扩展名 → 恒非歧义,实际无影响) |
-| 尾斜杠目录         | 回看 `originalHref` → 非歧义  | 同左                              | ✅                                         |
-| `file://` 绝对路径 | 单列为非歧义                  | 同左                              | ✅                                         |
-
-> `file://` 必须在判据里**单列**:`looksLikeFilePath` 会被 `URL_SCHEME_RE` 挡掉而回 `false`
-> (那条排除是为「别把 `https://` 当本地路径」服务的),照抄它会把最明确的形态判成最可疑的。
-> 这条是检查点自查 grep 出来的,不是 reviewer 提的 —— 也说明「表要从代码 grep」这条有用。
-
-**给守卫测试的一条元规则**:守卫要钉**不变量**,不能钉**调用点个数**。本轮就有一条第 3 轮写的
-守卫要求歧义判据「至少出现 2 处(sync + async 各一)」,而收敛后它只该有 1 处 —— 那条守卫在
-反向阻止判据单点化。计数式断言只在「必须存在」时用,不要用它表达「必须重复」。
-
-契约测试:`apps/mobile/src/__tests__/chatPathCandidate.test.ts`(候选精度 + 分级门槛 + 门槛
-来源无关性)、`apps/mobile/src/__tests__/selectableMarkdownHtml.test.ts`(阅读器点不动的元素
-一律无下划线无 pointer)、`apps/desktop/src/renderer/__tests__/markdownTarget.test.ts`
-(行内 code 不收宽松兜底)、`apps/desktop/src/renderer/__tests__/remotePathVerdictCache.test.ts`
-(不变量 A,含三种错误修法各自的反例)、
-`apps/desktop/src/renderer/__tests__/chatClickabilitySignal.test.ts`(源码级守卫)。
+正文已移至 [message-link-clickability.md](./message-link-clickability.md)，规范效力不变。
 
 ### 14.6 Icon-only Controls and Tooltips
 
@@ -2077,285 +1537,9 @@ and media position (`ui/media-scrubber`, seconds in/out). Native media controls 
 
 ## 16. Login Flow (登录链路)
 
-> 本节是登录全链路的设计系统规范，也是登录域唯一的现行规则来源：色值以 §16.1 色板表（由 `packages/design-tokens` 生成）为准，几何以 §16.2 常量表与 `loginDesignTokens.ts` / `loginSkinLayout.ts` 为准。[`token-decision-table.md`](./token-decision-table.md) 保留为 token / 尺寸的决策记录。原 `figma-component-spec.md`（Figma 组件逐态读取记录）已于 2026-10-23 移除：其现行值均已并入本节与代码常量，后续改版未再回写；代码注释里的 `figma §N` 指它的章节，可在 git 历史（移除前的提交 `70b32d7578`）查阅，Figma nodeId 仍直接写在注释里。`DESIGN-login`（逐屏规格）、`flow-map`（状态机）、`fidelity-matrix`（保真度验收矩阵）仍为设计阶段工作文件，不入仓库。
->
-> **交付状态**：亮色与深色均已落地，深色字标 / slogan 资产随模式切换，组件经 `--login-overlay-*` 消费 hover / pressed 叠层。2026-10-27 起面板、控件、描边、主按钮与叠层并入 CINDY 主界面墨水口径（§16.1 / §16.5），原「部分叠层仍为 2026-07-24 改判前旧值」的缺口随之关闭。两模式均受 §10「Light / Dark 双模式交付门槛」约束。
->
-> 本节独立于 §1–§15 默认皮肤与 CINDY 皮肤族——登录页是独立白底 / 深底反色体系，**不消费编辑器主题的 `--surface` / `--text-*` 等 slot**，只走本节定义的 `--login-*` token（文字、面板、控件、描边与主按钮的**值**与 CINDY 皮肤主界面相同，见 §16.1，但仍是独立 token，扩展主题改主界面颜色不会影响登录页）（light / dark 二态已注册于 `apps/desktop/src/renderer/themes/colors.ts`；见 §10）。`--login-*` 随基础 light / dark **二态**切换，但**不跟随具体扩展主题**（登录页只认 light / dark 模式；首次亮、后续跟随见 §16.5）。
+正文已移至 [login-flow.md](./login-flow.md)，规范效力不变。
 
-### 16.1 视觉风格
-
-登录页的颜色与 CINDY 皮肤主界面同一口径（亮色黑墨水 / 深色白墨水），但仍是独立 token 族，不跟随扩展主题：
-
-- **面板、控件、描边与主按钮走主界面墨水口径（2026-10-27 用户裁决）**：面板 = 主界面卡片面 `surface-elevated`（亮 `#FDFDF8` / 暗 `#1F1F1F`，深色取卡片档 = 方案 A）；输入框、方式行、返回钮、协议弹窗「不同意」钮与协议单选底 = 墨水填充 `surface-chip`（黑 5% / 白 6%，叠在面板上）；所有描边 = 墨水线 `border-default`（黑 8% / 白 10%）；聚焦 / 已填描边 = 正文档；主按钮、第三方圆钮、「同意」钮与单选选中 = 主界面反相 CTA（`#3C3F43` 底 `#FCFCFC` 字 / `#EEEEEE` 底 `#151515` 字，不另描边）；重发链接 = 正文档，hover 说明档、pressed 强调档；禁用主按钮 = 墨水填充 + 占位档文字（不叠白、不另描边）。原「墨黑–米白反色」实色（`#FBFBFB` / `#312F2F` 面板、`#EEEEEE` / `#2C2A2A` 控件、`#2A2828` 主按钮等）退役。对应关系由 `loginInkLadder.test.ts` 逐项守护，改主界面对应角色时登录页必须同步。
-- **文字走墨水阶梯（2026-10-23 用户裁决）**：标题、输入已填字、副标题 / 倒计时 / 「跳过登录」、空态占位，以及回调页标题与正文，与主界面同用 §15.16 的墨水档——亮色黑、深色白加透明度：标题与已填字 = 正文档 88% / 82%，副标题与回调正文 = 次要档 56% / 55%，占位 = 占位档 32% / 30%。不再为登录页单独挑灰（原双模同值 `#6F6F6F` 在深色面板上只有约 2.6:1，已退役）。改主界面墨水档时登录页同步改，由 `loginInkLadder.test.ts` 守护。主按钮字随主界面反相 CTA 前景取实色。Mobile 登录皮暂保留原实色，另行收拢。
-- **品牌红 `#DF0C27` 在登录画布内只用于区域徽标（旧称 Global pill，见 §16.3）与字标红元素等品牌 accent，跨模式不变**；画布外仅有 §15.10 登记的 Mobile Beta 渠道状态徽标例外。**禁止作页面背景**（wave4 改判，见 `token-decision-table §3` 对 `#df0c27` 的语义判定），不渗入面板内部（呼应 §15.10 红色边界）。画布底走 `--login-bg-base`（亮 `#F2F2ED` / 深 `#181818`，与 CINDY 皮肤页底同值，固定不随扩展主题），红只经 `--login-brand-accent` 消费。错误红 `#D91F37` 同样跨模式不变（语义豁免，呼应 §10 豁免族）。
-- **`--login-*` 调色板双态值** —— 注册于 `apps/desktop/src/renderer/themes/colors.ts`，下表由 `packages/design-tokens` 生成：
-
-<!-- BEGIN GENERATED DS-8: login-colors -->
-| token | light | dark | 核验源 |
-| --- | --- | --- | --- |
-| `--login-panel-bg` | `#FDFDF8` | `#1F1F1F` | 同 CINDY 主界面卡片 `surface-elevated`（2026-10-27 并入墨水口径；暗色取卡片档 = 方案 A） |
-| `--login-panel-border` | `rgba(0, 0, 0, 0.08)` | `rgba(255, 255, 255, 0.10)` | 墨水线 黑 8% / 白 10%（同主界面 `border-default`） |
-| `--login-control-bg`（输入框底） | `rgba(0, 0, 0, 0.05)` | `rgba(255, 255, 255, 0.06)` | 墨水填充 黑 5% / 白 6%（同主界面 `surface-chip`，叠在面板上） |
-| `--login-action-control-bg`（方式行 / 返回钮底） | `rgba(0, 0, 0, 0.05)` | `rgba(255, 255, 255, 0.06)` | 与输入框同档（2026-10-27 起不再分化） |
-| `--login-back-border`（返回钮描边） | `rgba(0, 0, 0, 0.08)` | `rgba(255, 255, 255, 0.10)` | 墨水线 黑 8% / 白 10% |
-| `--login-control-border` | `rgba(0, 0, 0, 0.08)` | `rgba(255, 255, 255, 0.10)` | 墨水线 黑 8% / 白 10%（同主界面 `border-default`） |
-| `--login-control-border-active`（focus / filled） | `rgba(0, 0, 0, 0.88)` | `rgba(255, 255, 255, 0.82)` | 墨水正文档 黑 88% / 白 82% |
-| `--login-control-text`（输入填充字，Bold） | `rgba(0, 0, 0, 0.88)` | `rgba(255, 255, 255, 0.82)` | 墨水正文档 黑 88% / 白 82%（2026-10-23 并入墨水阶梯，同主界面 `text-primary`） |
-| `--login-control-placeholder`（空态字） | `rgba(0, 0, 0, 0.32)` | `rgba(255, 255, 255, 0.30)` | 墨水占位档 黑 32% / 白 30%（2026-10-23 并入墨水阶梯，同主界面 `text-placeholder`） |
-| `--login-title-text` | `rgba(0, 0, 0, 0.88)` | `rgba(255, 255, 255, 0.82)` | 墨水正文档 黑 88% / 白 82%（2026-10-23 并入墨水阶梯） |
-| `--login-secondary-text`（副标题 / 倒计时） | `rgba(0, 0, 0, 0.56)` | `rgba(255, 255, 255, 0.55)` | 墨水次要档 黑 56% / 白 55%（2026-10-23 并入墨水阶梯，同主界面 `text-secondary`；原双模同值 `#6F6F6F` 退役） |
-| `--login-primary-button-bg` | `#3C3F43` | `#EEEEEE` | 同主界面反相 CTA `accent-cta-bg-pure` |
-| `--login-primary-button-border` | `#3C3F43` | `#EEEEEE` | 与底同色（不另描边） |
-| `--login-primary-button-text`（Bold） | `#FCFCFC` | `#151515` | 同主界面 `accent-pure-cta-fg` |
-| `--login-link-text`（重发链接） | `rgba(0, 0, 0, 0.88)` | `rgba(255, 255, 255, 0.82)` | 墨水正文档 黑 88% / 白 82% |
-| `--login-link-hover` | `rgba(0, 0, 0, 0.70)` | `rgba(255, 255, 255, 0.66)` | 墨水说明档 黑 70% / 白 66% |
-| `--login-link-pressed` | `rgba(0, 0, 0, 0.95)` | `rgba(255, 255, 255, 1.00)` | 墨水强调档 黑 95% / 白 100% |
-| `--login-disabled-button-overlay`（已退役） | `rgba(0, 0, 0, 0.00)` | `rgba(255, 255, 255, 0.00)` | 已退役（2026-10-27）：禁用主按钮改为控件底 + 占位字，不再叠层；ID 与透明默认值保留，仅为兼容旧版导出的本地主题，组件不再消费 |
-| `--login-splash-progress-track` / `--login-splash-progress-fill` | `rgba(0, 0, 0, 0.10)` / `rgba(0, 0, 0, 0.88)` | `rgba(255, 255, 255, 0.13)` / `rgba(255, 255, 255, 0.82)` | 轨 = 墨水弱档 黑 10% / 白 13%；填充 = 墨水正文档 |
-| `--login-loading-ring-track`（loading 环轨道） | `rgba(0, 0, 0, 0.10)` | `rgba(255, 255, 255, 0.13)` | 墨水弱档 黑 10% / 白 13%；登录页 LoginLoadingRing 与 Splash 转圈环共用（Splash 侧自暗色实现 PR 起由字面 rgba 收敛至本 token） |
-| `--login-error-fg` | `#D91F37` | `#D91F37` | 语义豁免不变 |
-| `--login-bg-base`（画布底） | `#F2F2ED` | `#181818` | 2026-10-01 对齐 CINDY 皮肤页底（cindy-light / cindy-dark 的 `surface`，#2571 色阶改版值），登录前后背景同色；仍为固定值、不随扩展主题。两模式纯平定稿——暗色帧的双红晕层（532:588/589）曾按 1:1 几何落地，2026-07-24 实机走查拍板去除（亮色撤渐变=PR#104 拍板，两条决策相互独立） |
-<!-- END GENERATED DS-8: login-colors -->
-
-品牌保护项 `--login-brand-accent` / `--login-brand-accent-pressed` 仍按原决定保留 `#DF0C27` / `#A61629`，两模式相同；尚未接管，不由本表生成。上表已接管行从 DTCG 自动生成，核验源说明保留原批准依据。
-
-余下 token（`-control-border-disabled` / `-inverted-button-border` / `-callback-*` 等）的现行双态值以 `colors.ts` 为准，决策理由见 `token-decision-table §3`；深色反相机制与 3 处组件改动见 §16.5。
-
-- **社交圆钮深色 = 白圆**：与主按钮共用 `--login-primary-button-bg / -border`，深色自动反相为白圆 `#EEEEEE` + 白边，**圆内图标保持品牌色**（Google 彩 / WeChat 绿 / SSO），非反相（figma `white apple/google/wechat/SSO` symbol 核验）。
-
-### 16.2 设计规则
-
-**Desktop 登录成功回调页当前覆盖（2026-09-02）**：成功态移除「回到 Cindy」按钮，卡片收紧为 **560×500** 的内容流布局，并在底部显示本地化 3 秒倒计时；倒计时结束先移除倒计时文字，再调用 `window.close()`。失败 / Warning 保留原 **680×680** 卡片与返回操作。该条是当前产品 UX 对旧 Figma 成功态回调帧（680×680 + CTA）的明确覆盖，现行客户端实现以本条与代码测试为准。
-
-**Token 体系**：`--login-*` 注册于 `apps/desktop/src/renderer/themes/colors.ts`（值由 `packages/design-tokens` 生成，见 §16.1）。组件经 `LOGIN_COLORS`（桌面 `loginDesignTokens.ts`）/ `loginColors`（手机 `theme/tokens.ts`）单点消费。**禁止硬编码 hex pair**（呼应 §10）——Desktop renderer 里新增的字面颜色由 `hardcoded-color-audit` 在 CI 阻断；Mobile 侧该脚本只报告，由 Mobile 自身的 token 守卫测试阻断（范围见 `design-governance.md` §8）。`--login-*` 随基础 **light / dark 二态**切换（对齐 `callback-*` 族与 §15 CINDY 皮肤族的双态做法），但**不跟随具体扩展主题**——登录页只认 light / dark 模式，扩展主题不 override `--login-*`（首次亮、后续跟随上次模式见 §16.5）。
-
-**几何 / 布局常量**：固化在两个常量文件，数值权威 = 下表与常量文件本身（决策理由见 `token-decision-table §4`），不按截图目测补值。
-
-| 常量 | 值 | 引用 |
-|---|---|---|
-| 登录整体组 | 680×**620**（面板 500 + gap 40 + 圆钮行 80）——2026-07-27 面板增高改版，原 560 作废 | figma §5.1（新稿 `700:783`） |
-| 面板 | 680×**500**，r36，`--login-panel-bg` + inset 1px `--login-panel-border` —— 2026-07-27 改版，原 440 作废；增的 60 = 面板内新增的「跳过登录」槽，**面板内其余元素 y 坐标一律不动**。面板高度对登录全步骤恒定（步骤间不得跳变）；**Splash 借用同款面板时保持 440**（无该入口，见 §16.3 `LoginPanel`） | figma §4 / §5.1（新稿 `700:791` / `705:886` / `705:1062`） |
-| 输入框 / 主按钮 | 540×80，r40，@(70, 158 / 300) | figma §4.1 / §4.3 |
-| SSO 最近组织候选层 | 与输入框同宽同 x，顶边恒为输入框底 + 8；作为浮层覆盖后续 hint / 主按钮，不参与文档流。最大高度收在当前端登录面板内并自行滚动（桌面面板 500、手机面板 440），不得再定位到面板下方。候选层与输入框必须处于同一登录组坐标系，随桌面窗口 placement、phone 短/长屏、pad surface scale 与手机键盘避让整体移动，不另写按设备尺寸分支 | 2026-08-22 小屏实机修正 |
-| 方式行 | 540×100，r60，@(70, 158 / 278)，左图标 24@(27,37)，右图标 @(490,40) | figma §4.9 |
-| 返回钮 | 60×60，r40，@(20,20) | figma §4.6 |
-| 重发 / Text_link 槽 | 540×50，20px，@(70,238) | figma §4.7 |
-| 错误文本 | 680×50，20px，@(0,380)，`--login-error-fg` —— 槽顶不随面板增高移动；槽底 430 与下方「跳过登录」槽**首尾相接（间距 0）**，两者同时可见互不重叠（文案视觉间距 ≈30） | figma §4.8（新稿 `705:1067`） |
-| 「跳过登录」文字按钮槽 | 680×60，@(0,430)（槽底 490，距面板底 10 = 新稿下内边距）；文字 24px Regular + 下划线、`--login-secondary-text`，相对 680 水平居中、槽内垂直居中。**680×60 只是布局容器、本身不可点**，命中区 = 当前语言实际文字渲染宽度 + 左右各扩（桌面 30 / 移动 50 设计px）、高度占满 60 槽 —— 详见 §16.3「登录文字按钮」 | figma 新稿 `705:1068`（文本 `705:1069`）/ `700:910` + 2026-07-27 拍板 |
-| 第三方圆钮行 | y=**540**（面板底 500 + gap 40；2026-07-27 随面板增高由 480 顺移 60），80×80，r50，icon 48，gap 70。**行内不再有游客圆钮**（CN = Apple + SSO 两颗 / Global = Apple + Google + SSO 三颗，`count` 按 provider 动态） | figma §4.5（新稿 `700:796` / `705:1070`） |
-| 协议同意行 | 680×40，@(0,**642**)（= 组底 620 下方 22；2026-07-27 随面板增高由 582 顺移 60，行底 682 溢出组底 62） | figma 新稿 `700:807` / `705:1075` |
-| 标题 / 副标题 | 标题 y=31 h=38 32 Bold；副标题 x=70 y=75 w=540 20 Regular ≤2 行顶对齐（2026-07-24 拍板：宽度对齐控件列，原 figma 单行几何 599@41 作废） | figma §5.1 + 2026-07-24 拍板 |
-
-桌面 `loginDesignTokens.ts`（1819×2098 画布）、手机 `loginSkinLayout.ts`（750 设计 px，键名用 `font` / `radius` 避开 typography 守护扫描）。两端面板内坐标同源同值，手机由外层统一 `transform` 缩放。
-
-**平台差异**：桌面 = Web renderer（Electron，Win / Mac 同套）；手机 = React Native（iOS / Android，含 phone / pad-portrait / pad-landscape）。两端同几何参数源、同 token 语义（手机 `loginColors` 与桌面 `LOGIN_COLORS` 同名）；色值自 2026-10-23 / 10-27 起桌面已并入墨水口径，手机登录皮暂保留原实色、另行收拢，在此之前两端色值不同。实现宿主也不同（RN 用 `StyleSheet` + `Animated`，桌面用 CSS + Tailwind）。
-
-**移动端 stage 几何（2026-07-27 换品牌簇基准；2026-07-29 修正：功能区落位同步取新稿标注值）**：手机的**品牌簇**（立绘 / SLOGAN / 字标）**与功能区落位 `loginY` 一并取新稿逐字段值**——两者是同一份稿的两半，必须同源。短屏 / 长屏两档之间仍走既有线性插值体系（`loginSkinLayout.resolveLoginStage`），**不另造缩放规则**。下表为设计单位（750 设计px 基准），消费时一律 × `surface.scale`（设计单位 ≠ 物理 pt，见 §16.4「几何」条）：
-
-| 档                       | 立绘                 | SLOGAN（可见图形框）          | 字标（图像框）           | 登录组顶 `loginY`                                                                                                                                                     | 溯源                                                                     |
-| ------------------------ | -------------------- | ----------------------------- | ------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------ |
-| 短屏 `designHeight=1334` | 599×720 @(75,**60**) | 254.01×72.8 @(462.55,408.37)  | 335×115 @(208,487)       | **622**（新稿标注值；字标底 602 → 面板顶间距 **20** = 稿内值。组高 560 + 协议行溢出 62 → 内容底 1244，底部留白 90，比稿内 30 多 60，见下「面板 500→440 的 60 去向」） | 品牌簇 + `loginY` 同源 = 新稿 `705:915`（Log_in 组 @(35,622)）+ 避脸拍板 |
-| 长屏 `designHeight=1624` | 750×902 @(0,106)     | 269.66×77.29 @(444.9,**568**) | 387×132.18 @(182,669.17) | **827**（新稿标注值；字标底 801.35 → 间距 **25.65** = 稿内值。内容底 1449，底部留白 175，比稿内 115 多 60，同上）                                                     | 品牌簇 + `loginY` 同源 = 新稿 `705:799`（Log_in 组 @(35,827)）+ 避脸拍板 |
-
-- **面板 500→440 少掉的 60 去向（2026-07-29 审图拍板「方案 B」）**：新稿手机帧的面板是 **500 高**（含面板内「跳过登录」栏），而手机端已按产品决定剥离该入口、面板回 **440**、组回 **560**。少掉的 60 必须有个去处，两个候选经实机比例图审图：
-  - **方案 B（采纳）**：`loginY` 取稿值 622 / 827，60 全部落到**底部留白**（90 / 175，比稿内多 60）。品牌簇的稿内顶部构图与间距完全保真。
-  - **方案 A（未采纳）**：品牌簇整体下移 60（`loginY` 682 / 887），字标↔面板与底部留白**双双**回到稿值（20/30、25.65/115），代价是品牌簇整体比稿位低 60（叠加避脸上移后立绘顶 120 / 166）。
-  - ⚠️ **禁止只改一半**：`loginY` 与品牌簇取自同一份稿，任一侧单独回退会让字标↔面板出现稿内不存在的间距（2026-07-28 实例：品牌簇换新稿、`loginY` 留 main 的 694 / 933 → 间距变 **92 / 131.65**，实机肉眼可见一条空白）。该组合已由 `loginSkinLayout.test.ts` 的「间距上界不变式」钉死（等于稿值，不是「小于面板顶」）。
-
-- **SLOGAN 避脸（2026-07-27 用户审 demo 两次拍板）**：新稿原值下 SLOGAN 压在立绘脸上（像素级实测：立绘脸部 skin 连通域 x402..552 / y315..475，SLOGAN 资产 ink 5244px，双方按各自 `contain` 折算到 stage 求交 —— 长屏原值 `y=536.68` 时 ink ∩ 脸 = 290px、短屏 = 91px、中段 dh≈1400 最高 113px）。两档分别处理：
-  - **长屏**：SLOGAN 下移 31.32（inner `y` 536.68 → **568**，容器 y 514 → 545.32；x / 宽高不动），底 645.29 距字标框顶 669.17 留 **23.88 ≈ 24 设计px** —— 24px 是这一档的**硬上限**，再下移即撞字标。
-  - **短屏**：SLOGAN 在本档没有下移余量（底 481.17 距字标顶 487 仅 5.83），改为**立绘整体上移 27**（`y` 87 → **60**）。改后 dh ≤1450 全段 ink ∩ 脸 = **0**；dh 1500..1624 残留 3..9px（仅下巴尖，由长屏档自身落位 + 上面那条 24px 上限共同决定）。
-  - **边界核对**：立绘资产不透明内容起于 y=86（上方为透明留白），短屏 `contain` 缩放 720/902 → 可见发顶 = 60 + 86×0.79823 = **128.65**，仍在 Status Bar 下沿（115.67）之下 12.98，**不侵入状态栏、无顶部裁切**；底部可见内容止于资产 y=696 且是淡出渐隐（alpha 69→21），上移后尾部由「藏在面板下 20.6」变成「露出面板上 6.4」——长屏本来就露 25，同款观感，无硬切边。
-
-- **短屏以下（dh<1334）**：视觉区（立绘 / slogan / 字标）继续按 `v=max(0.25,(dh-600)/734)` 以 (375,0) 为锚连续压缩；功能区 680×**560** 不缩放、按**紧凑底距 18** 锚定底部并**钳到短屏档落位**：`loginY = min(622, max(0, dh-640))`。
-  - **为什么是钳制、不是把锚常量改成 `dh-712`**：短屏档那 90 的底距是「面板 500→440 少掉 60 落到底部」的产物，只属于 dh≥1334；窄屏空间本就不足，若在那里也保留这 60，面板会上移压住被 `v` 压缩后的字标 —— 2026-07-29 review 实算：`dh-712` 会让 **dh∈[712,1222) 全段字标被不透明面板盖住**（dh=1000 压 40 设计px）。钳制式在 dh→1334⁻ 自然收敛到 622（边界连续），窄屏行为与 main 逐值一致。
-  - **既定代价**：dh<822 时 stage 高度已不足以同时容纳压缩后的品牌簇与不缩放的功能区，字标与面板仍会交叠（dh=800 压 4、dh=700 压 90.5）——同一公式同一取值，**main 既有行为**，属「功能区优先」的取舍（Split View 320pt 窄窗等极端形态）。
-  - **钳制自身的代价**：`loginY` 的斜率在 dh=1262 处由 1 变 0（值连续、斜率不连续）——dh∈[1262,1334) 面板定在 622 不再随屏高上移，底部留白由 18 涨到 90。该窗口仅 ≈37 物理px（@scale 0.52），离散的旋转 / 分屏切换基本撞不到，只有连续拖拽调窗（Android 分屏拖拽）可能感知到「面板定住」。
-  - 守护：`loginSkinLayout.test.ts` 的「锚常量连续性不变式」（dh=1334 上下不跳变）+「间距不变式（短屏以下分支）」（dh∈[850,1334) 采样点面板顶不得压到字标底；最紧点在 dh=850，间距 4.96）。
-- **2026-07-24「视觉 + 功能区整体上移 40 设计px」拍板已被本次新稿取代**（其产物 `loginY` 694 / 933 作废）：两档落位改取新稿自带的标注值（622 / 827），不再由「组底 + 底距」反推。**但 dh<1334 段仍沿用该拍板的紧凑底距 18（`dh-640`）**，只是额外钳到 622——理由见上条。
-- **pad 两档（竖 744×1133 / 横 1180×820）本轮不动，但换稿时必须与 `loginY` 同批改**：pad 没有 figma 新稿帧，品牌簇与 `loginY` 目前都还是同一套 wave3 推导值，因此内部自洽 —— 字标底↔面板顶间距 **竖 14.84 / 横 33.88**（已由 `loginSkinLayout.test.ts`「pad 同源性不变式」钉住）。⚠️ **将来给 pad 换新稿基准时，品牌簇与 `loginY` 必须同批处理**：只改一半会原样重演 2026-07-29 那次 phone 侧的漂移（品牌簇换稿、`loginY` 留旧 → 间距变成稿内不存在的 92 / 131.65，实机可见空白）。换稿时上述不变式会先红，届时同步更新钉值并在本节记录依据。
-- **~~pad 竖屏（stage 744×1133）为推导值，无 figma 源~~〔整段已作废 2026-07-28：面板不再增高，pad 竖屏几何与 `splashOffset` 全部保持 main 原值（`loginY` 621 / `splashOffset` 158），无需上移、无推导值〕**：新稿没有 pad 帧。面板增高后组底会从 1114.94 推到 1162.59 > stage 1133、触发安全区抬升压住字标，故把品牌簇与登录组**一起上移 60 × 0.794117 = 47.647 设计px**（`loginY` 621→573.353，立绘 / slogan / 字标同量上移；`splashOffset` 158→206 保持 splash 期簇位不变），三条不变量 = ① 组底仍落 1114.94、② 字标框底↔面板顶间距仍 14.84、③ splash 期簇位不变。**该值为推导，非设计源；用户 2026-07-27 接受推导，竖屏几何待设计侧回看确认**。pad 横屏（1180×820）组底 774.95 仍在 stage 内，几何原值不动。
-
-**~~键盘停靠锚 = error 槽底（2026-07-27 拍板，移动端）~~〔已作废 2026-07-28：手机端跳过登录整体剥离，停靠锚仍为面板底，见本节末勘误〕**：停靠贴附锚由**面板底**改为**面板内 y=430（error 槽底）**——面板 440→500 后若继续用面板底，每次停靠会比改版前多顶 60 设计px（短屏更容易触发 clamped-fallback、把品牌层与标题挤掉）。**取舍**：键盘弹起时「跳过登录」槽（430..490）允许被遮挡——它不是输入链路的必需元素，收起键盘即可见；停靠引擎本身（10px 贴附 + safe-top 上限 + clamped-fallback 兜底）与悬浮相交判定锚（输入框 ∪ 主按钮）均不变。
-
-**交互态**：hover（仅桌面）/ pressed（双端）/ disabled / loading 五态。态叠层挂伪元素（桌面 `::after`）/ overlay View（手机），文字与图标在叠层之上（`relative z-[1]`），**叠层不压文字**；全部叠层走 `--login-overlay-*` light / dark 二态 token，组件内禁止新增字面 rgba 叠层。取值口径见 §16.5 第 1 条。
-
-**常驻动画 compositor-only**：spinner / loading 环动画挂 HTML（桌面）/ `Animated.View`（手机）外层 wrapper，SVG 图形保持静态（呼应 §14.4）；`prefers-reduced-motion` 直落静止。面板入场 handoff 动画是 §14.4 容器形变的窄变体（双端冻结 420ms 升起 + 渐显，`LOGIN_HANDOFF_TIMINGS.panelMs` / `panelInMs`）。
-
-**Apple「Sign in with Apple」按钮**：iOS HIG 硬性要求使用 Apple 官方按钮样式，**不可皮肤化**——iOS 上 Apple 槽位保持原生 `ASAuthorizationAppleIDButton`，不套 `LoginSocialButton` 皮。这是合规底线，非视觉遗漏。其余社交圆钮（Google / WeChat / SSO）正常上皮。
-
-**i18n**：登录文案走 `react-i18next`（桌面 `common.json` `login.*` 节）/ `loginMessages`（手机），5 语对齐 `zh-CN` / `zh-TW` / `en` / `ja` / `ko`。5 语全部翻准，不留空（空 key 静默回退英文）。
-
-**多语言长文本与翻译长度预算（2026-07-24 拍板）**：
-
-- **原则：登录链路里截断与省略号不可作为可见结果**。登录面板是 680×500 冻结几何（2026-07-27 改版后值）、槽位不撑高，长文案没有退路——所以约束加在**文案侧**：所有 `login.*` 文案（含 agent 代写 / 补翻的五语文本）必须言简意赅、按槽位长度预算写作。线上出现可见省略号 = 该语言文案超预算 = **文案 bug（P1，修文案，不改布局）**。
-- **长度预算自检**（写 / 翻文案时逐语言过一遍）：估宽公式——汉字 / 假名 / 谚文 ≈ 1×字号 px，拉丁字母 / 数字 / 空格 ≈ 0.5×字号 px；估宽 ≤ 槽宽 × 0.95 才算过。常用槽预算：
-
-  | 槽                                 | 宽×字号                                                                                                                                                                                                                                                                                        |         ≈汉字上限 |     ≈拉丁字符上限 |
-  | ---------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------: | ----------------: |
-  | 标题                               | 680 @32 Bold（徽标变体为 inline 组：标题 shrink-to-fit + 2px 间隔 + 区域徽标，徽标宽随文案自适应，按现役最宽的 `Dev`（实测 51.7，非本表估宽公式的 46——公式是文案自检用的保守估算，徽标宽度以实测为准）算可用宽 680−54=626；v3 2026-07-27，原「固定 70px 徽标」几何随 Global 徽标撤除一并作废） | 20（徽标变体 18） | 40（徽标变体 37） |
-  | 副标题（≤2 行，2026-07-24 拍板）   | 540 @20 × 2 行                                                                                                                                                                                                                                                                                 |                50 |               102 |
-  | Text_link / hint / 倒计时          | 540 @20                                                                                                                                                                                                                                                                                        |                25 |                51 |
-  | 「跳过登录」文字按钮（2026-07-27） | 620 @24（= 槽 680 − 双侧 30 命中区扩张；移动端命中区扩 50 时可用宽 580）                                                                                                                                                                                                                       |     24（移动 22） |     49（移动 45） |
-  | 主按钮 CTA                         | 448 @24 Bold（540 − 双侧 46 padding）                                                                                                                                                                                                                                                          |                17 |                35 |
-  | 方式行标题 / 副题                  | 409 @24 / @20                                                                                                                                                                                                                                                                                  |           16 / 19 |           32 / 38 |
-
-- **agent 翻译硬约束**：为 `login.*` 生成或修改任何语言文案时，必须按上表逐语言自检；超预算就换更短表述（ja / ko 往往比 zh 长，优先压缩语序与敬语冗余），**禁止**靠布局手段（缩字号 / 加折行 / 依赖截断）吸收超长文案。
-- **折行与对齐机制分级**：
-  1. **单行槽**（标题 / 链接 / 倒计时 / CTA / 方式行文字）：`nowrap + ellipsis` 仅作**防御性兜底**（防极端 locale 炸版），不是设计许可——见原则条。标题类顶对齐 + 显式 `lineHeight = 槽高`（防继承行高被 overflow 裁 descender，MT-7 教训）。
-  2. **说明 / 提示类**（**副标题**、输入框 hint、错误文本、游客模式说明）：允许折行但 **≤2 行 + 行数 clamp**，**顶对齐、槽高 = 行高 × 最大行数、折行只向下伸展**；禁止「固定小槽 + flex 垂直居中」——那会让超行文本上下双向外溢压到相邻控件（2026-07-24 Enterprise SSO hint 压输入框实拍事故即此模式）。副标题原属单行槽，2026-07-24 拍板改判入本级（禁省略号、完整展示，几何 540@70 对齐控件列，双端已落码）。
-  3. **弹窗族例外**（迁移弹窗等独立弹窗）：卡片 flex column 允许文本撑高、按钮钉底、pill 圆角跟随——仅弹窗族，不适用登录面板。
-
-### 16.3 组件定义
-
-桌面 `apps/desktop/src/renderer/components/login/LoginControls.tsx`（11 组件），手机 `apps/mobile/src/components/LoginSkinControls.tsx`（13 组件）。两端同名组件同参数源。逐组件契约（逐参数值以组件常量与 §16.2 几何表为准）：
-
-| 组件                                               | 端      | 用途                                                                                                           | 关键 props                                                                        | token / 几何                                                                                                                                                                                                                                                                                   |
-| -------------------------------------------------- | ------- | -------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `LoginPanel`                                       | 双      | 白面板容器                                                                                                     | `children`, `testId`, `height?`（**桌面，仅 Splash 使用**）                       | 680×**500** r36 `--login-panel-bg` + inset 1px border；桌面由 `LoginStage` 承载缩放。`height` 默认 = 面板 500 且登录侧一律用默认值；**Splash 五帧传 440**（无「跳过登录」入口、设计稿未改版，跟随 500 会在启动态凭空多出 50 CSS px 空白；两者不同 stage、不同缩放，拆开不破坏 handoff 连续性） |
-| `LoginStage`                                       | 桌面    | 1819×2098 画布「面板宿主」层，等比缩放 + z 序                                                                  | `children`, `ssoOrgGroupY`, `groupStyle`                                          | 登录组 @(570, 1229 / 1227) 680×**620**；品牌层在 `LoginBrandStage`                                                                                                                                                                                                                             |
-| `LoginTitleBlock`                                  | 双      | 标题 + 副标题                                                                                                  | `title`, `subtitle`, `regionPill?`（桌面）                                        | 标题 y=31 h=38 32 Bold `--login-title-text`；副标题 @(70,75) 540 宽 ≤2 行顶对齐 20 Regular `--login-secondary-text`（2026-07-24 拍板，原 599×23 单行作废）。区域徽标见下方专条                                                                                                                 |
-| `LoginInput` / `LoginSkinInput`                    | 桌 / 手 | 通用输入框                                                                                                     | `value`, `onChange`, `placeholder`, `center?`, `error?`, `prefix?`                | @(70,158) 540×80 r40 `--login-control-bg`；边 placeholder→active；`center`=验证码居中变体                                                                                                                                                                                                      |
-| `LoginSkinPhoneInput`                              | 手机    | 手机号 + 固定国家码前缀                                                                                        | `prefix`, …                                                                       | 同 `LoginSkinInput` 几何，前缀不可点                                                                                                                                                                                                                                                           |
-| `LoginPrimaryButton`                               | 双      | 主按钮（五态）                                                                                                 | `label / children`, `onClick / onPress`, `disabled`, `loading / busy`             | @(70,300) 540×80 r40 `--login-primary-button-bg / -border / -text`；disabled 白 70% 叠层 + 边 `--login-control-border-disabled` + 文字 opacity 0.8；loading spinner 24@(487,27)                                                                                                                |
-| `LoginSocialRow`                                   | 双      | 第三方圆钮行                                                                                                   | `children`, `count`                                                               | y=**540** 行内水平居中，80×80 gap 70；`count` 随 provider 动态（**不含游客圆钮**，2026-07-27 起该入口改为面板内文字按钮）                                                                                                                                                                      |
-| `LoginSocialButton`                                | 双      | 第三方 / SSO 圆钮                                                                                              | `label`, `onClick`, `children`, `isLoading / busy`                                | 80×80 r50 `--login-primary-button-bg / -border`；icon 48 居中；仅 normal + hover（桌面）+ pressed，**无 disabled / loading 视觉态**                                                                                                                                                            |
-| `LoginSocialGlyph`                                 | 手机    | 社交图标矢量（Apple / Google / WeChat / SSO；**apple 分支仅非 iOS 场景**——iOS 走官方按钮不进圆钮行，见 §16.2） | 内部                                                                              | Google / WeChat 品牌色不变；Apple / SSO 单色随圆钮底反相（暗色白圆上 `#2A2828`）                                                                                                                                                                                                               |
-| `LoginBackButton`                                  | 双      | 返回                                                                                                           | `label`, `onClick`, `disabled`                                                    | @(20,20) 60×60 r40 `--login-action-control-bg` / `--login-back-border`；chevron 24                                                                                                                                                                                                             |
-| `LoginTextLink`（桌）/ `LoginTextLinkSlot`（手）   | 桌 / 手 | 重发链接 / 提示文案（**文字链接**，不承载「跳过登录」）                                                        | `variant`（link / countdown，桌）, `tone`, `children`                             | @(70,238) 540×50 20；link 变体 `--login-link-text` 下划线可点、hover / pressed 变色；countdown 变体（桌面）`--login-secondary-text`（墨水次要档 黑 56% / 白 55%）不可点；手机 `LoginTextLinkSlot` / 倒计时暂保留 `controlPlaceholder` 实色，另行收拢                                                                                                                                                     |
-| `LoginSkipEntry`（桌）/ `LoginSkipLoginLink`（手） | 桌 / 手 | 「跳过登录」入口（**文字按钮**，与上一行的文字链接是两种组件）                                                 | 桌：`children`, `onClick`, `disabled`, `testId`；手：`label`, `onPress`, `testID` | 槽 @(0,430) 680×60，文字 24 Regular + 下划线、`--login-secondary-text`（桌面：墨水次要档 黑 56% / 白 55%；手机端该入口已剥离，见 §16.5 勘误），**hover / pressed 不变色**；命中区 = 文字实宽 + 左右各扩（桌 30 / 手 50 设计px）、高占满 60 槽，容器不可点 —— 逐条口径见下方「登录文字按钮」                                                               |
-| `LoginResendCountdown`                             | 手机    | 验证码重发（倒计时 / 重发二态）                                                                                | `deadline`, `countdownTemplate`, `resendLabel`, `onResend`                        | @(70,238)；`deadline=null` → 常驻可点无倒计时（SSO 验证码屏用）                                                                                                                                                                                                                                |
-| `LoginMethodRow`                                   | 双      | 方式选择行（企业 / 个人）                                                                                      | `top`, `title`, `subtitle`, `icon`(enterprise / person), `onClick`                | 540×100 r60 `--login-action-control-bg` / `--login-control-border`；左图标 24@(27,37) / person 18×20@(30,39)；右 share 18@(490,40)；文字 @(67) 垂直居中                                                                                                                                        |
-| `LoginErrorText`                                   | 双      | 错误提示                                                                                                       | `children`                                                                        | @(0,380) 680×50 20 `--login-error-fg`                                                                                                                                                                                                                                                          |
-| `LoginLoadingRing`                                 | 双      | 大 loading 环（浏览器 / 准备态）                                                                               | `y`, `label`                                                                      | 64×64 @(308, 158 / 193)；轨道 `--login-loading-ring-track`，内弧 `--login-primary-button-bg`（Splash 转圈环 64×64@(308,188) 同轨道 token，内弧为 `--login-secondary-text`）                                                                                                                    |
-
-**登录文字按钮（新组件类别，2026-07-27 拍板）**：登录域现在有**两种**纯文字操作组件，语义与视觉都不通用，**不得互相复用**：
-
-|                 | **文字链接**（`LoginTextLink` / `LoginTextLinkSlot`）      | **文字按钮**（`LoginSkipEntry` / `LoginSkipLoginLink`）                                                                                                                                                         |
-| --------------- | ---------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| 语义            | 链接：跳转 / 重试 / 次要说明（重发验证码、sso-org 帮助行） | 按钮：触发一次产品级动作（跳过登录 → 进入本地模式）                                                                                                                                                             |
-| 色              | `--login-link-text` 族（墨水正文档） | `--login-secondary-text`（墨水次要档 黑 56% / 白 55%，零新增 token；手机端无此入口，见 §16.5 勘误）                                                                                                                                      |
-| hover / pressed | 变色（`--login-link-hover` / `-pressed`）                  | **不变色**——只靠下划线常显 + 指针形状（桌面 `cursor:pointer`）给反馈                                                                                                                                            |
-| 字号 / 槽       | 20，槽 540×50 @(70,238)                                    | 24，槽 680×60 @(0,430)                                                                                                                                                                                          |
-| 命中区          | 槽内整块                                                   | **文字实宽 + 左右各扩**（桌面 30 / 移动 50 设计px），高度占满 60 槽；680×60 容器只做居中定位、自身不可点（桌面 `pointer-events:none` + 内层 button `auto`；移动 `pointerEvents="box-none"` + 内层 `Pressable`） |
-
-- **为什么命中区随语言自适应**：文字实际渲染宽度按语言不同（zh「跳过登录」96 设计px vs en `Skip Sign-In` 更宽），固定宽热区会在某些语言下偏窄或越界；扩张量固定、宽度 shrink-to-fit，热区随语言同步。
-- **为什么放大 bounds 而不是用 hitSlop**：RN 的 `hitSlop` 不越父 View 边界（Android 界外触摸不派发），与协议 radio 同一套仓内约定（§16.4 hitSlop clamp 契约）。移动端命中区高度占满 60 槽（phone ~0.5 缩放 ≈30pt，与返回钮 60 设计px 同档），向上不侵入主按钮下沿、向下不越面板底。
-- **防御性截断**：内层按钮 `maxWidth = 680` + `nowrap` + `ellipsis`（移动 `numberOfLines={1}`）仅为防极端 locale 把两侧撑出面板 `overflow:hidden` 被静默裁掉，**不是设计许可**——线上出现可见省略号 = 该语言文案超预算 = 文案 bug（P1，改文案不改布局，见 §16.2 长度预算表「跳过登录」行）。
-- **focus ring**：当前与登录域其它按钮一致（未单独实现 focus 可见环），随登录域 focus 态统一处理时一并补。
-
-**区域徽标（`LoginTitleBlock` 的 `regionPill`，桌面；figma §4.10 胶囊 h30 r40，2026-07-27 改判）**：标题右侧品牌红胶囊，`--login-brand-accent` 底 + `--login-inverted-button-border` 白字 16 Bold，inline 组内 gap 2、垂直居中于 38 行框。
-
-- **挂哪些区域**：`cn` → `CN`；`dev` → `Dev`；**`global` 不挂**。这是产品叙事的硬规则而非视觉遗漏——Cindy 是「天生全球」的产品，默认版本不给自己贴标签自证是全球版，只有为特定法规单独构建的版本才被标注（不对称命名）。旧实现给 global 挂 `Global` 徽标，读出来反而是「存在一个本土主场版、这是它的出口型号」，与叙事相反。**给 global 恢复徽标即回退该决策，不得回退。**
-- **为什么 cn / dev 仍标**：两者连的都不是 global 端点（cn 走国内端点、dev 走独立 dev 端点），登录页是用户确认自己连向哪个后端的位置；dev 另有并存场景——`CindyDev` 保持独立可执行名，可与正式包同机共存。⚠️ **不要把 cn 的理由写成「区分同机双装的 cn / global」**：2026-07-26 起两者可执行名同为 `Cindy`、安装目录与快捷方式同名互抢，该双装场景已**明确放弃支持**（见 `packages/maker-shared/src/brandIdentity.ts` 的 `executableNameByRegion` doc）。
-- **宽度自适应**：由 `REGION_PILL.paddingX`（11）撑开，不再固定 70px——70 是为 `Global` 一词量身定的，`CN` / `Dev` 在固定宽里会留大片空白。11 由原几何反推（(70 − `Global` 6 拉丁字符 @16 Bold ≈ 48) / 2），保住 figma 的左右留白密度。
-- **文案不翻译**：五语同文的区域代号（承袭旧 `login.globalRegion` 的做法），但仍走 i18n（`login.regionPill.*`），以便日后改判为「中国大陆版」这类可译文案时不必回改组件。
-- **手机端无此变体**：`apps/mobile` 的 `LoginTitleBlock` 不接 `regionPill`（移动端未做区域徽标）。
-
-**组件库新增（2026-07-24 登记；协议 UI 已随 consent PR 落地，游客圆钮方案已由上述「跳过登录」文字按钮取代）**：
-
-- **协议勾选 radio**（figma `radiobutton 600:627`，四态双模式）：24×24 命中区，圈 20×20 r9 + 2px 描边，选中为**对勾**（非圆点）。未选 = 墨水填充底 + 次要档描边，选中 = 主按钮反相实底 + 主按钮字色对勾（2026-10-27 墨水口径，见 §16.1）——选中反色与登录黑白反色体系同构。用于登录页 `服务条款` 协议行。
-- **服务条款弹窗小按钮**（figma `light_button_*` / `Dark_button_*` 四母版，`602:846/863/1297/1311`）：260×80 r40 文字 Bold 24；强调钮（同意）= 主按钮反相 CTA，普通钮（不同意）= 墨水填充 + 墨水线 + 正文档文字（2026-10-27 墨水口径）。hover / pressed 见 §16.5 第 1 条。
-- 既有组件扩容：`SSO 登录_企业` 与 `back` 均扩为含 Dark 三态的六态集（值已并入 §16.1 `--login-action-control-bg` / `--login-back-border` 口径），`white_button` 增 loading 五态。
-
-### 16.4 登录链路逐屏
-
-验证码重发倒计时统一为 **60 秒**，与服务端单目标冷却一致；Figma 中的 42 秒仅是倒计时过程示例。只有发码请求成功才开始或重置倒计时，短信登录的 `429 / RATE_LIMITED` 显示「操作过于频繁」错误，不视为已发送。桌面端与移动端均使用绝对截止时间，休眠恢复后按剩余时间校正。实现见[桌面倒计时](../../apps/desktop/src/renderer/components/login/useResendCountdown.ts)与[移动端倒计时](../../apps/mobile/src/auth/loginSkinLayout.ts)。
-
-登录状态机权威 = `packages/auth-client` 源码（`AuthFlowState` / `LoginOutcome` 判别联合；`flow-map` 为辅助导航，个别 UI 段落滞后于区域定形态改版）。共享 step ∈ {`identifier`, `method-choice`, `verification-code`, `sso-verification`, `browser-redirect`, `account-selection`, `binding`, `completed`, `error`}（`sso-org` **不是**共享 step，是 `identifier` 下的页面局部 `ssoOrgMode` 子视图）；其中 `account-selection` / `binding` / `sso-verification` / `completed` 由服务端 `LoginOutcome.status`（`ok` / `select_account` / `binding_required` / `sso_verification_required`）分支决定，**不是固定步骤**——任意 outcome 调用都可能命中。逐屏职责与关键组件（逐屏坐标 / 文案见 `DESIGN-login §3` 国区 / `§4` 国际区 / `§5` 移动）：
-
-| 屏（step）                                        | 职责                                                                                                                                                                                                                 | 关键组件                                                                                                                                                                                                                                                                                                                                                                    |
-| ------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `identifier`                                      | 输入手机号 / 邮箱（国区 phone / 国际区 email），含 social 圆钮行（Apple / Google / SSO，**无游客圆钮**）+ SSO 入口 + 协议同意行；**面板内常驻「跳过登录」入口**（2026-07-27 起，**仅桌面**；手机端 2026-07-28 剥离） | `LoginInput` / `LoginSkinPhoneInput` + `LoginPrimaryButton` + `LoginSocialRow` + `LoginConsentRow` + `LoginSkipEntry` / `LoginSkipLoginLink`                                                                                                                                                                                                                                |
-| `method-choice`                                   | 存在真正选择时：企业 SSO / 个人邮箱验证码，或多条 SSO 连接。探测结果只剩唯一 SSO 或唯一邮箱验证码时不展示本屏——前者投影 `browser-redirect`，后者直接发码进入 `verification-code`（跨区确认窗随 step 离开一并关掉）   | `LoginMethodRow`×2（top 158 / 278）+ `LoginTitleBlock`（`chooseMethod`）                                                                                                                                                                                                                                                                                                    |
-| `verification-code`                               | 输入 6 位验证码，60s 重发倒计时                                                                                                                                                                                      | `LoginInput`(center) / `CodeInput` + `LoginTextLink` / `LoginResendCountdown` + `LoginPrimaryButton`                                                                                                                                                                                                                                                                        |
-| `sso-verification`                                | SSO 登录后验证企业联系方式，两子态（`codeRequested` false = 只发码 / true = 输码 + 常驻重发，**无倒计时**）                                                                                                          | `LoginPrimaryButton`(sendCode) → `LoginInput`(center) + `LoginPrimaryButton`(completeSignIn / signIn) + `LoginTextLink` / `LoginResendCountdown`(deadline=null)                                                                                                                                                                                                             |
-| `sso-org`（`identifier` 局部子视图，非共享 step） | 输入企业 ID / 组织 slug / 已验证域名跳转 SSO（`ssoOrgMode`）                                                                                                                                                         | `LoginInput` + `LoginPrimaryButton` + `LoginTextLinkSlot`（ssoOrgHint）                                                                                                                                                                                                                                                                                                     |
-| `account-selection`                               | 服务端返回 ≥2 membership，用户选一个                                                                                                                                                                                 | account row + `LoginTitleBlock`（`chooseAccount`）                                                                                                                                                                                                                                                                                                                          |
-| `binding`                                         | 身份未绑 membership，补绑 phone / email（`codeRequested` 两子态；**无重发钮**，桌面 harness 锁定）                                                                                                                   | `LoginInput` / `LoginSkinPhoneInput` → `LoginInput`(center) + `LoginPrimaryButton`                                                                                                                                                                                                                                                                                          |
-| `account-deletion`（状态浮层）                    | 账号删除**状态展示**（发起流程在 Settings 的 `AccountDeletionSection`；登录页仅在存在删除回执时以**根层浮层气泡**展示 status，非主状态机 step；详见下方「注销状态浮层气泡」）                                        | `AccountDeletionStatusPanel`（**登录皮容器外**的根层浮层，非面板内）                                                                                                                                                                                                                                                                                                        |
-| `browser-redirect`                                | 社交 / SSO 跳浏览器验证，等待回调                                                                                                                                                                                    | `LoginLoadingRing` + Desktop `LoginBackButton`（`cancel-browser`；Mobile 保留原取消入口）+ `LoginTitleBlock`                                                                                                                                                                                                                                                                      |
-| `completed` / `error`                             | 登录成功 / 失败（含 browser 回调终态页）；`error` 步桌面另有面板下方 footer 的「跳过登录」**逃生入口**（登录服务不可用时仍能进未登录状态，与面板内入口同口径**过协议门**——2026-07-29 拍板；重试连接登录服务期间不禁用，只在切换到未登录状态的过程中禁用）                          | 成功无面板（进主界面）；error = `LoginBackButton`（仅桌面：普通登录网络错误取消当前等待，使用已取得的配置返回入口；配置尚未取得时显示「继续登录／跳过登录」的离线入口，不自动联网；添加账号则关闭流程）+ `LoginTitleBlock` + `LoginPrimaryButton`（重试）+ `LoginErrorText` + footer「跳过登录」按钮（桌面）；browser 回调页 `oauthResultPage`（系统浏览器独立 HTML，main 侧内联常量,色值与 `--login-callback-*` token 同源——renderer CSS var 不可达,改值需两处同步） |
-
-**~~配置错误屏同样承载「跳过登录」逃生入口（移动端）~~〔已作废 2026-07-28：手机端整体剥离，配置错误屏无该入口〕**：`getMobileConfigIssues()` 命中（如 auth base URL 非法）时面板切到 config 提示态，该面板内仍渲染同一个 `LoginSkipLoginLink`（同槽 @(0,430)、同 handler、同 in-flight 门）——跳过登录不发任何网络请求，配置坏掉时恰恰最需要这个入口。
-
-**协议门（consent gate）过门点与豁免（2026-07-29 更新）**：`identifier` 屏的协议同意行是一道**发起前拦截**——未勾选时点过门入口先弹服务条款 / 隐私协议弹窗，同意后续接原动作；同意即写入统计采集同意。
-
-|                                | 入口                                                                                                                                                                                                  |
-| ------------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **过门**（个人链路一律先同意） | 手机号提交、邮箱提交（含仅查方式的 discover）、`method-choice` 个人行发码、社交圆钮（Apple / Google / 未来微信）、**「跳过登录」**（面板内常驻入口 + 桌面 `error` 步 footer 逃生口）——2026-07-29 拍板 |
-| **豁免**                       | 显式企业 SSO 入口（SSO 圆钮、组织标识提交、`method-choice` sso 行）                                                                                                                                   |
-
-「跳过登录」过门的口径（2026-07-29 拍板，**推翻 07-27 的免门结论**）：不登录账号也是在使用 Cindy 客户端，因此与个人账号登录同口径——未勾选时先弹协议弹窗，同意后才进未登录状态，并写入统计采集同意（是否真的上报另由 main 侧闸决定：`analyticsSettingsService` 对本地会话一律 `!isLocalMode()` 不放行）。协议 UI（radio 四态、弹窗小按钮）与企业 SSO 豁免均不变。
-
-> **实现约束（合规，勿改顺序）**：这条链路上「同意记录」必须落在 `auth:enter-local` **之后**，与其它过门点（放行时刻即落）不同。原因是 `acceptPrivacyConsent` 的 IPC handler 会同步广播 `allowed = isAnalyticsAllowed() && !isLocalMode()`——提前落同意时 `isLocalMode()` 尚为 false，广播出的 `allowed:true` 会让 renderer 的 TapDB 当场 `initSdk()` 并发出 `device_login`，等 `enter-local` 完成再广播 `allowed:false` 已经晚了，「未登录态不上报」在正式包上就被破了一个窗口。落码为 `requireConsent(action, { deferConsentPersist: true })` + `openLocalMode` 自己在会话切换后落同意；顺序由 `LoginPage.consent.test.tsx` 的 `invocationCallOrder` 断言锁住（面板内入口与 `error` 步逃生口、勾选与弹窗两条路径都覆盖）。
->
-> 同一条合规约束还要求**切换窗口内不接任何新动作**：`auth:enter-local` 的 handler 要 await `waitForSessionInvalidation()` 与 `teardownAuthAccountBoundary()`，这段窗口里 `isLoading` 仍为 false、协议弹窗已关且 radio 已勾选，邮箱 / 社交等入口仍可点——它们走「放行即落同意」分支，会在 main 还没转成 local 时再次广播 `allowed:true`。收口点是 `requireConsent` 顶部的 `localModePendingRef` guard（豁免协议门的企业 SSO 入口与 `error` 步 `reset` 另行自挡，因为它们绕过 `requireConsent`）。用**行为层 guard 而不是给每个控件加 disabled**：窗口通常只有几十毫秒，全量 disabled 会换来一次可见闪变（规则 7：无视觉跳变），而行为 guard 已杜绝 persist 与派发。guard 读 ref 而非 state——点击可能落在 `setState` 与 re-render 之间，那时闭包里的 state 还是旧值。
-
-**协议同意行整行热区（2026-07-29 拍板）**：命中区由 radio 的 24px 圈体扩到**整行 680×40**——点声明文字或行内空白都等于点 radio。例外两类：行内「服务条款」/「隐私协议」链接各自 `stopPropagation`（只开链接、不切勾选态），radio 自身也 `stopPropagation`（否则冒泡到行容器二次 toggle，净效果为点不动）。行容器不加 `role` / `tabIndex`：radio 仍是唯一无障碍交互点（`role="checkbox"` + `aria-labelledby` 指向声明文字），整行点击只是鼠标增强；整行 `select-none`，避免连点选中文字盖住勾选反馈。
-
-**注销状态浮层气泡（figma 678:1075「注销状态」组件集，2026-07-26 定形）**：账号注销状态**不在登录面板内**，而是登录屏根容器的 absolute 浮层——历史实现曾把它放在登录皮容器（`LoginStage`）的文档流首子位置，被 `absolute; top:0` 的不透明登录面板 100% 覆盖（`pending` / `processing` / `completed` 三态全中，修复前证据见 `docs/design-previews/deletion-banner-repro/`）；**改回面板内即重现该缺陷，不得回退**。
-
-- **层级与布局**:不占布局流、不推挤下方内容,**允许盖住立绘与字标**(设计意图,figma iPhone 帧即压立绘 91px);桌面 `z-30`(低于顶部拖拽条 `z-40`、协议弹窗 `z-50`),移动端靠渲染序位于登录组之后、协议弹窗之前。几何按设计单位 × 登录组同一缩放系数(见下「几何」),不随键盘位移。
-- **显隐**：跟随面板入场——opacity 复用登录组同一入场动画值，入场完成前不可见且不可点击（桌面 `panelHidden` / 移动端 `handoffPhase === 'done'` 门控 `pointerEvents`），避免冷启动带注销回执时气泡先于登录 UI 出现在 splash 上。协议弹窗打开时，Android 需与登录组同步 `importantForAccessibility="no-hide-descendants"`（`accessibilityViewIsModal` 仅 iOS 生效，否则 TalkBack 可穿透读到状态文案并激活「我知道了」）。
-- **几何(设计单位,与登录组同缩放)**:气泡的每一个几何值都是**设计画布单位**,渲染时乘以与登录组相同的缩放系数——不是物理 px。桌面画布 1819×2098 是 2x 稿,系数 = `PANEL_FIXED_SCALE`(0.5);移动端为各 stage 的 `surface.scale`(phone = 屏宽/750,pad 见 `resolveLoginSurface`)。**2026-07-26 修正**:初版把设计单位当物理 px 直接落码,气泡在屏幕上宽了整一倍(与面板 340 并列时达 670),已按下列换算纠正。
-  - 桌面:宽 670、距窗口顶 72(顶对齐固定)→ 屏幕 **335 / 36 CSS px**,与登录面板 680×0.5=340 基本同宽(设计稿即 670 vs 680);水平窗口居中;窄窗时可视宽钳制 ≤ `100vw − 24`。
-  - phone(stage 750):宽 670 @x=40 → 屏幕 `670 × 屏宽/750`(393pt 屏 ≈ 351pt,左右边距各 ≈21);top 取 safe-area 顶(设计 y=116 即状态栏下沿,间距 0)。
-  - pad 横屏(stage 1180×820):宽 556 = `WORD_MARK` 框宽(figma 679:1201 x=607 w=556,与字标同宽)、x=607(中心 885 与登录组中心 884.8 同轴)、top 72(底边 163 距字标框顶 177 留 14);均 × `surface.scale`。
-  - pad 竖屏(stage 744×1133):宽 504(字标框宽按可见图形等比反算 269.51 × 556/297.32)、水平居中于字标轴、top 72;均 × `surface.scale`。`left` 钳制在屏内。
-  - 高度**由内容撑开**,禁止固定高。
-- **视觉(同为设计单位)**:圆角 22、四边 padding 20、**不透明底**(浮层压立绘必须不透明,不靠阴影 / 模糊);描边保持 1 物理 px 细线(不随缩放,否则小系数下会消失);无图标、无阴影、无动效。标题与正文同为 20 / 行高 23 / Regular 400、全部居中(长文案居中换行),仅以颜色区分层级(标题 `--login-control-text` / 正文 `--login-secondary-text`);标题↔正文 5、正文↔「我知道了」22、**「我知道了」↔气泡底固定 20**(= 下 padding,文案拉长该距不变)。内部几何由组件子元素坐标反算自洽:figma 678:1074 标题 text @(20,20) h=23、正文 @(20,48) h=23,无钮变体总高 91 = 20+23+5+23+20。
-- **「我知道了」**(仅 `completed` 态):下划线文字链(非按钮)。热区按端处理——桌面用上下各 11 设计单位 padding + 等量负 margin 抵消视觉(缩放后约 22 CSS px 高,鼠标指针足够);触摸端 hitSlop **按气泡内可用空间钳制**:上 = min(18, 正文↔链接间距×scale)、下 = min(18, 下 padding×scale)、左右 20 物理 pt——RN 的 hitSlop 不会越过父 View 边界,写大了是虚标。**不设未缩放的 44pt 绝对下限**:整个登录系统按 stage 缩放(320pt 窗口下登录主按钮本身仅 ≈34pt 高),孤立保 44 必须打破「正文↔链接 22 / 底距 20 恒定」的拍板视觉;热区随系统同步缩放、在边界内取最大。
-- **颜色**：底 `--login-deletion-bubble-bg`（同登录面板 `#FDFDF8` / `#1F1F1F`）、描边 `--login-deletion-bubble-border`（墨水线 黑 8% / 白 10%），均为**固定亮 / 暗二值**——与 §16.2「`--login-*` 只分 light / dark、不随扩展主题」一致，**不得**改用 `var(--surface)` / `var(--chat-input-*)` 等会被扩展主题 override 的 alias（同 `--login-bg-base` 的改判先例）。移动端色板暂保留原值（#FFFFFF / #1F1F1E），随手机登录皮另行收拢。
-- **状态与文案**：`pending`（预计删除日期 + 重新登录可取消）/ `processing`（等待期结束、正在删除）/ `completed`（已删除 + 「我知道了」）三态；`cancelled` 在轮询侧拦截、不渲染气泡（改为登录后的一次性「注销已取消」提示）。五语言（zh-CN / zh-TW / en / ja / ko）× light / dark 全覆盖。
-
-桌面登录恢复：准备态、错误态及离线入口的返回与「跳过登录」不因登录方式请求仍在等待而禁用；重试仍单次执行。凭证存储错误保留原有的检查与帮助流程，不绕过存储恢复限制。返回使旧请求失效，迟到结果不得覆盖新入口；「跳过登录」保留协议同意门与先切换本地会话、再保存同意的顺序。等待登录方式期间打开的跳过协议弹窗，在方式加载完成后仍可同意续接；登录完成、进入其他登录步骤或凭证存储故障仍取消续接。切换本地模式失败时保留可用表单，无表单的准备态进入可重试错误页，旧请求不得重新覆盖页面或解除新请求的等待。覆盖见 `LoginPage.initialization.test.tsx`、`LoginPage.consent.test.tsx`、`AuthContextInitializeCatch.test.tsx` 与 `authLoginBack.test.ts`。
-
-### 16.5 深色模式与主题跟随
-
-> 深色受 §10「Light / Dark 双模式交付门槛」约束，是**必须交付**的另一模式，非可选愿景。已落地：token dark 槽位、overlay token、深色资产切换及主题跟随均已实现；2026-10-27 起两模式色值取 CINDY 主界面墨水口径（§16.1）。机制如下。
-
-**深色 = 主界面深色墨水口径**：面板取主界面深色卡片面，控件、描边与文字为白墨水，主按钮与社交圆钮反相白；几何 / 布局 / props / 状态机 / i18n **零改动**——只换色值。
-
-**大部分组件纯 token 驱动**（由 §16.1 双态表的 dark 值驱动，组件不动）：`LoginPanel` / `LoginInput` / `LoginPrimaryButton`（底 / 边 / 字 + spinner）/ `LoginSocialButton`（随主按钮 token 自动反相白圆）/ `LoginBackButton` / `LoginTitleBlock` / `LoginTextLink` / `LoginMethodRow` / `LoginErrorText` / `LoginLoadingRing`。
-
-**3 处非纯 token、需组件改动**：
-
-1. **hover / pressed 叠层二态（2026-10-27 用户裁决，取代 2026-07-24 Figma「叠白变亮」口径与其状态矩阵）**：叠层一律走 `--login-overlay-*` light / dark 二态 token，挂在内容之下，不压文字与图标。
-   - **墨水填充控件**（输入框、方式行、返回钮、协议弹窗「不同意」钮）：叠同色墨水加深一档——hover 叠黑 3% / 白 4%，与控件底合成约等于主界面「选中」档 8% / 10%；pressed 叠黑 5% / 白 7%，合成约等于「弱」档 10% / 13%。亮色变深、深色变亮，与主界面菜单 / 列表反馈同向。
-   - **反相主按钮与第三方圆钮**（主按钮、「同意」钮、Google / WeChat / SSO 圆钮、回调页 CTA）：叠黑——亮色 hover 20% / pressed 40%（`#3C3F43` → 约 `#303236`，对齐主界面 `accent-hover` `#2E3237`），深色 hover 5% / pressed 10%（`#EEEEEE` → `#E2E2E2` / `#D6D6D6`）。
-   - **Apple 圆钮**底色由 Apple 规范决定（亮黑 / 暗白），亮色黑圆叠黑没有反馈，故单独走 `--login-overlay-apple-*`：亮色叠白 8% / 14%，深色叠黑 5% / 10%。
-   - **disabled**：主按钮禁用 = 墨水填充 + 占位档文字，描边透明、不叠层；原「深底叠白 70%」退役；`--login-disabled-button-overlay` 保留 ID 与透明默认值（治理合同 §4：旧 Token ID 不删除），组件不再消费。
-   - **旧本地主题**：旧版「导出当前主题」会把当时所有 `login-*` 值写进本地副本，加载时优先于新默认值，升级后这些副本的登录页仍是旧样子（旧面板 / 画布 / 文字色与新色混在一起，禁用主按钮与可用态几乎相同）。`local-themes-normalize` 在**加载期**把「等于该主题模式历史默认值」的 `login-*` override 丢掉（对照表 `themes/loginLegacyDefaults.json`，取自冻结快照 `desktop-color-defaults.json` 自 2026-09-02 建档起的全部 git 历史，每个 token 出现过的旧值都在内，不逐代手补）。只比对本模式的槽位（深色主题里有意用的亮色历史值不丢），只处理确认是旧快照的主题（其中至少 10 个 `login-*` 值同时等于该模式的历史值；手写稀疏主题、或新建副本里零星几个被有意设成历史值的 override 保留），只改内存、不改写磁盘、幂等。建档之前的更早版本不在表内。
-   - **回调页**（`oauthResultPage`，系统浏览器打开，拿不到 renderer token，用内联常量）：页面底、卡片、描边与 CTA 同上取值，CTA 叠层改挂 `background-image`，不压文字。
-2. **`--login-bg-base` 前提变更**：画布底原为「跨主题恒定白 `#EDEDED`」，深色为 `#1F1F1E`（figma 532:585 帧实测）——即 `--login-*` 从「跨主题恒定」改为「随 light / dark 二态」（见 §16.2）。〔2026-10-01〕两态改为与 CINDY 皮肤页底同值 `#F2F2ED` / `#181818`，登录前后背景不再变色；仍为固定值，不随扩展主题。
-3. **`LoginBrandStage` 资产按模式切**：深色画布用**登录专用**白字版字标 / slogan 资产（`assets/login/wordmark-dark*.png` / `slogan-dark*.png`，源自 figma 532:585 `CINDY_Standard_White` 与 SLOGAN `#FBFBFB`，已随暗色实现 PR 新增；**不是** §15.7 的新页横版 `cindy-logo-dark.png`——落位与尺寸不同）；立绘两模式同资产。
-
-**disabled 态**：主按钮 disabled = 墨水填充（`--login-disabled-button-bg`，黑 5% / 白 6%）+ 占位档文字（`--login-disabled-button-text`，黑 32% / 白 30%），描边透明（`--login-control-border-disabled`）、不叠层；与可用态的反相实底拉开明显差距，一眼可辨不可点（2026-10-27 用户裁决；不沿用主界面 Button 的整体 60% 透明度，因为登录页首屏主按钮默认即为禁用态）。
-
-**双模式门槛覆盖**：深色须覆盖亮色全部态——控件 default / hover(桌) / focus / filled / active / pressed / disabled / loading / error，全部 11 屏，桌面 Win / Mac + 手机 iOS / Android（phone / pad）。色值以 §16.1 为准（桌面取 CINDY 主界面墨水口径）。桌面组件的亮 / 深与 hover / pressed 用 `pnpm ui:check --page login-skin --case all --theme all` 截图核对（改动时加 `--compare` 出改前 / 改后）；它覆盖真实组件，不覆盖登录画布缩放与品牌层。
-
-**主题跟随（产品逻辑）**：用户**首次**打开 Cindy → **亮色**登录界面（默认）；**第二次起** → 登录界面跟随用户上一次使用的 **light / dark 模式**（登录页只认 light / dark，不随具体扩展主题，见 §16.2）。这需要持久化「上次登录模式」+ 首次默认逻辑，超出纯 token 补范围，是一段状态逻辑。**已落地**：`apps/desktop/src/renderer/hooks/useTheme.ts` 持久化首启标记（`login.firstLaunchLightShown`），bootstrap 阶段由 `initLoginFirstLaunchLightGate` 对真首启整个登录前会话按亮色解析，登录页卸载时经 `endLoginFirstLaunchLightGate` 结束并恢复存储主题，不改用户的 theme 偏好。
-
-**决策记录（2026-07-23 已定）**：(1) `--login-*`「跨主题恒定 → light / dark 二态」前提变更 + 新增 `--login-overlay-*` 二态 token——**已采纳**；(2) 深色落点 = **跟随编辑器 light / dark mode** + 上述主题跟随逻辑——**已采纳**；(3) 立绘 / 社交图标深色版——已核验（立绘两模式同资产，社交深色白圆 + 品牌色图标，见 §16.1）；本节原 ※推导值（splash 进度条 / 链接 hover / pressed）已经 Figma 组件库核验确认，§16.1 表已回填目标值。**（2026-07-24 增补）画布渐变定稿**：暗色帧红晕层（532:588/589）按 1:1 几何落地后，经实机走查拍板去除——两模式画布纯平（亮色撤渐变 = PR#104 拍板，两条决策相互独立、结论一致）；`--login-bg-gradient-*` token 保留 override 锚、值恒 `none`，红晕如需恢复须以该走查结论为基线重新与设计确认。**（2026-07-24 增补）组件库状态扩充**：hover 统一「叠白变亮」改判（本节 (1) 已按新口径改写，旧「白底钮 hover 叠黑 5%」作废）；新增协议勾选 radio 与服务条款弹窗小按钮目标规格（见 §16.3 尾注）；`SSO 登录_企业` / `back` Dark 三态、`white_button` loading 五态入库（逐态值见 §16.5 状态矩阵）。~~游客登录（跳过登录）样式为独立实现任务，不在本节展开~~〔**已回收（2026-07-27）**：该规格缺口已由本次改版关闭——入口定形为面板内「跳过登录」**文字按钮**（新组件类别，规格见 §16.3「登录文字按钮」；几何见 §16.2 表），游客圆钮方案与其图标资产一并退役〕。**（2026-07-24 增补·二）多语言长文本口径**：登录链路禁止以截断 / 省略号作为可见结果，文案侧按槽位长度预算约束（含 agent 翻译硬约束），说明类文本折行 ≤2 行 + 顶对齐 + 只向下伸展——规则全文见 §16.2「多语言长文本与翻译长度预算」。同日二次拍板：**副标题改判入说明类**（禁省略号、完整展示 ≤2 行，几何 540@70 对齐控件列，原 figma 单行 599@41 作废），双端已落码（桌面 `LoginTitleBlock` + 手机 `LOGIN_SUBTITLE`）。
-
-**决策记录（2026-07-27 登录改版，拍板人 = 用户；依据 = figma 新稿 `705:915` / `705:799` / `700:783`）**：(1) **面板 440→500、登录组 560→620**，增的 60 全部给面板内新增的「跳过登录」槽（430..490），面板内其余元素坐标不动；圆钮行 480→540、协议行 582→642 随组顺移；error 槽回到 680×50 @380 与跳过槽首尾相接。(2) **游客圆钮退役 → 面板内「跳过登录」文字按钮**（新组件类别，见 §16.3），图标资产删除；圆钮行 `count` 动态。(3) **跳过登录 / 本地模式免协议门**（推翻 2026-07-24「个人登录一律先同意、含游客」），且不写统计同意；其它入口协议门不变（见 §16.4）。(4) **手机端新增跳过入口与无账号通路**（推翻 2026-07-24「手机 / pad 必须有账号、不加游客登录」）。(5) 移动端**键盘停靠锚改为 error 槽底**，键盘态允许遮挡跳过槽（见 §16.2）。(6) 手机短屏 / 长屏几何整档换新稿基准，短屏以下锚常量 `dh-640`→`dh-712`；**pad 竖屏为推导值（无 figma 源，用户接受推导，待设计回看）**。(7) **Splash 面板不跟随 500，保持 440**（拆出独立常量）。逐条落点见 §16.2 / §16.3 / §16.4 与 `design-decision-log.md`「2026-07-27」条。
-
-> **⚠ 勘误（2026-07-28，拍板人 = 用户）：「跳过登录」仅桌面端落地，手机端整体剥离。**
-> 上条 2026-07-27 决策记录的 (4)(5)(6) 与本节所有涉及**手机 / 移动 / 双端**的「跳过登录」
-> 落地口径**一并作废**：手机端在 main 基线上从来没有游客 / 无账号功能，且 2026-07-24
-> 产品拍板「手机 / pad 为远程连接客户端、必须有账号、不加游客登录」**仍然有效**（原判它被
-> 07-27 推翻，经复核该推翻缺产品侧确认）。因此手机端本轮只保留**纯视觉改版**（品牌簇换新稿
-> 基准 + 避脸方案），功能与几何回到 main 等价：**面板仍 440、登录组仍 560、圆钮行仍 480、
-> 协议行仍 582、error 槽仍 680×60 @380、无「跳过登录」槽、键盘停靠锚仍是面板底、
-> 无配置错误屏逃生入口、无 `LoginSkipLoginLink` 组件与 `skipLogin` 文案 key**。
-> 本节表格里的 **500 / 620 / 540 / 642 / error 50 / 跳过槽 430..490 与命中区扩张 30**
-> 均只对**桌面**成立；一切标注「移动 50」「双端」「手机端」的跳过登录口径读作**未落地**。
-> **(6) 需拆开读**〔2026-07-29 二次修正〕：手机短屏 / 长屏的**品牌簇**（立绘 / SLOGAN / 字标）新稿基准与避脸落值**保留生效**；同条的**功能区落位**（`loginY` **622 / 827**）在 2026-07-28 曾随跳过登录剥离一并退回 main 原值（694 / 933），但那会与已换新稿的品牌簇拼出稿内不存在的 92 / 131.65 间距（实机可见空白），**2026-07-29 审图后恢复为新稿标注值**（方案 B，60 落到底部留白；详见上方 §16.2「面板 500→440 少掉的 60 去向」）。dh<1334 段**不采用**该条曾写过的 `dh-712`，而是「紧凑底距 18 + 钳到 622」（`dh-712` 会压盖窄屏字标，见 §16.2 对应条目）。**pad 竖屏推导值**（`loginY` 573.353 / `splashOffset` 206）仍然**作废**、保持 main 原值 621 / 158——pad 无 figma 新稿帧，其品牌簇也未换新稿基准，内部自洽，不受本次修正影响。
-> 手机端保持无游客 / 无账号行为不变。详见
-> [`design-decision-log.md`](./design-decision-log.md)「2026-07-28」条。
+§16.1 视觉风格、§16.2 设计规则、§16.3 组件定义、§16.4 登录链路逐屏与 §16.5 深色模式与主题跟随都在该文件，编号不变。
 
 ## 流式正文与可组合组件（2026-10-18）
 

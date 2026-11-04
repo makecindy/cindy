@@ -203,6 +203,16 @@ Library 请求同时绑定迁移代次和安装批准，根解析、排队及开
 - `agent.observe` 是独立能力，不依赖 `agent.tasks`，单列 `agent:observe` 权限并要求 Host receipt 的 `observeCapabilityApproved` 显式批准。
   只读返回已登记本机项目中任务的标题、Agent 类型、归档与状态元数据，并可在主窗口打开其中的任务；不返回消息、计划或文件，也不能发送、修改或停止任务。
   旧 tasks/targets 批准与历史未知字段不授予查看；首次调用复用既有宿主确认。实现见 [只读查看项目任务](plugin-task-api-implementation.md#只读查看项目任务增量接口尚未发布)。
+- `agent.companions` 是独立能力，不依赖 tasks/targets/observe，单列 `agent:companions` 权限并要求 Host receipt 的 `companionsCapabilityApproved` 显式批准。
+  只读返回账号下全部伙伴（含主人其他电脑上的伙伴，从其主力电脑读取）的名单、状态、工作阶段（公开类别）、等待主人处理的请求标题、最新一条回复正文（≤8000 字）
+  与最近对话（≤50 条主人消息和伙伴回复，同云端镜像的 `mirrorMessageText` 投影，不含工具过程、进度说明、思考与子 Agent 输出；产品决定 2026-11-04），
+  并可在主窗口打开伙伴对话或请求所在任务；`interaction` 按对话卡片的内容给出单条请求（工具输入与手机端同样脱敏，代输入的值不出宿主）。回复正文与请求内容不进推送、不写日志。
+  口径（产品决定，2026-11-03）：只设这一项通用权限，不为场景单开「思考」等专用权限；思考原文不开放，插件用工作阶段表达「思考中 / 执行工具中」。
+  作答（产品决定，2026-11-03）：同时获准 `agent.targets` 的插件可以把主人在插件页面里给的回答交给伙伴——回答提问、拒绝工具、拒绝计划或提意见，等同投递主人的话，直接生效；
+  「允许」（工具执行、按计划开工）不信任插件页面，必须由 Host 原生确认框（`dialog.showMessageBox`）展示真实请求、主人在框内点允许才生效，确认前快照请求、确认后重读核对未变；
+  框里必须能完整展示主人允许的全部操作（评审决定，2026-11-04）：整条命令或读取路径、≤1200 字的命令或计划、参数短到摘要不截断的工具调用才可经插件允许（`allowHere`）；写文件只显示位置不显示内容，与更长的请求一样返回 `ALLOW_IN_CINDY`，插件引导主人 `open` 到 Cindy 里允许；
+  Cindy 自己的确认（`hostOwnedConfirmation`、owner-only 工具、桌面独占确认、代输入）只能在 Cindy 里处理，插件只能 `open`。不能改写工具输入，也不能授予「本会话一直允许」。
+  旧批准与历史未知字段不授予；首次调用复用既有宿主确认。实现见 [查看伙伴和状态](plugin-task-api-implementation.md#查看伙伴和状态增量接口尚未发布)。
 - `agent.hiddenTasks`（后台任务）只在与 `agent.tasks: true` 同时声明时有效：新包缺 tasks 或非布尔
   直接拒装；已安装快照里不成对的历史值原样保留但不授予。它单列为 `agent:hidden-tasks` 权限，
   更新新增即「权限变多」；运行期由 taskSlot 与任务服务按身份卡双重守门。透明性兜底与多端口径见
@@ -288,8 +298,9 @@ Library 请求同时绑定迁移代次和安装批准，根解析、排队及开
 
 - 首次安装只来自明确依据：用户导入本地 `.cindy`、明确要求当前 Agent 调用
   `ghost_forge_install`、用户点击某个市场条目的安装、当前 Agent 按用户请求与既有操作授权
-  调用 `ghost_market_install` 安装选定的缺失插件，或服务端为当前 owner 下发
-  `defaultInstall`。安装成功默认启用。
+  调用 `ghost_market_install` 安装选定的缺失插件，用户在「迁移助理」中选择并确认的
+  市场插件（[新电脑设置](../product-rules/new-device-setup-migration.md)），或服务端为当前
+  owner 下发 `defaultInstall`。安装成功默认启用。
 - **安装／更新确认**（`shared/ghostInstallConsent.ts` 判据，`main/cindy-brain/ghostInstallConsent.ts`
   两段式实现）：
   - 判据：「权限」与插件详情页权限区同口径，即 `ghostPermissionItems` 中除 Agent 工具外的
@@ -314,6 +325,11 @@ Library 请求同时绑定迁移代次和安装批准，根解析、排队及开
     租约内捕获 owner 并传入装入入口，等锁结束后若账号已切换则拒绝取租约。每条装入路径都
     必须显式交出确认策略（`prompt`／`automatic`／`exempt`）或锁外求得的结论，签名上必填，
     新增路径无法漏掉。
+  - 「迁移助理」仍走 `prompt` 策略与上面的两段式：迁移窗口展示 Main 按这台电脑市场
+    release 的 manifest 算出的确认事实（`evaluateGhostInstallConsent`），用户一次确认整批；
+    安装时 prompt 只在真实包算出的事实与用户确认的事实一致时回答「已确认」，否则回落到发起窗口
+    的普通逐个确认。批准只来自同一窗口、同一账号的计划，Renderer 只能选择计划内的条目，不能
+    提交事实；锁内复核与包摘要绑定不变。不新增批准记录或豁免策略，存量插件影响：无。
   - 服务端 `defaultInstall` 插件（首装、组织默认接管与之后的自动更新）按下发方决定，
     策略为 `exempt`，不向用户确认。豁免只绑当前用户对该条目的默认下发资格：目录标
     `defaultInstall` 且该用户没有仍生效的 default-install opt-out。只有用户显式卸载写

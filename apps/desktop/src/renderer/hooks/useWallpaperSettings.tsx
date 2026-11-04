@@ -119,7 +119,6 @@ export function WallpaperSettingsProvider({ children }: { children: ReactNode })
         : getBuiltinWallpaperBackground(settings.wallpaperId);
   useWallpaperBackground({
     background,
-    pending: imageAsset.loading || imageAsset.failed,
     visibility,
     blur: blurPreview ?? settings.wallpaperBlur ?? 0,
     reducedMotion,

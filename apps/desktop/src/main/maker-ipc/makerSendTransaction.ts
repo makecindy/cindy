@@ -277,10 +277,9 @@ type MakerSendOptions = {
   /** Host-owned per-turn lifecycle correlation; maker-core stamps it on AgentEvent. */
   turnAttemptToken?: number;
   /**
-   * Direct Continue fallback only: acknowledge the interrupted marker on the
-   * executor after vendor dispatch is irreversible. The executor must own the
-   * timestamp so device-link controller/controlled clock skew cannot corrupt
-   * active_turn_started_at > last_turn_ended_at ordering.
+   * Legacy Continue hint retained for older controllers. Every accepted send now
+   * acknowledges the old interrupted marker on the executor, including ordinary
+   * input; controllers must never supply the acknowledgement timestamp.
    */
   ackInterruptedTurnOnDispatch?: boolean;
   signal?: AbortSignal;
@@ -1849,9 +1848,7 @@ export function createMakerSendTransaction(deps: MakerSendTransactionDeps): Make
         // Capture on the executor immediately before vendor code. sess.send may
         // synchronously publish the continuation's new started marker before it
         // resolves, so the old-turn ack must use this strictly earlier value.
-        const interruptedAckAt = so.ackInterruptedTurnOnDispatch
-          ? Math.max(0, Date.now() - 1)
-          : null;
+        const interruptedAckAt = Math.max(0, Date.now() - 1);
         const retryTranscriptUserEntryId = sess.agentKind === 'pi' && so.retryUserClientId
           ? await deps.readPiUserEntry?.(sessionId, so.retryUserClientId)
           : undefined;
@@ -2071,7 +2068,10 @@ export function createMakerSendTransaction(deps: MakerSendTransactionDeps): Make
           await rewindPersistedUserMessageAfterClearIfStale();
           await cleanupRejectedMaterialization();
         }
-        if (sendResult.accepted && interruptedAckAt !== null) {
+        // Ordinary input (queued, direct, or remote) also replaces the previous
+        // interruption. onAccepted alone is insufficient: dispatch can still be
+        // cancelled before the vendor actually starts.
+        if (sendResult.accepted) {
           try {
             await deps.ackInterruptedTurnDispatched?.(sessionId, interruptedAckAt);
           } catch (err) {
