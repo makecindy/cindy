@@ -261,6 +261,12 @@ let workerIdleTimer: NodeJS.Timeout | undefined;
 let nextTaskId = 0;
 let workerQueue: Promise<unknown> = Promise.resolve();
 
+export const _testHooks = {
+  getActiveWorker: () => activeWorker,
+  terminateActiveWorker: () => terminateActiveWorker(),
+  getWorkerIdleTimer: () => workerIdleTimer,
+};
+
 function terminateActiveWorker(): void {
   if (workerIdleTimer) {
     clearTimeout(workerIdleTimer);
@@ -306,7 +312,19 @@ function readXlsxInWorker(
   );
   const taskId = ++nextTaskId;
 
+  const startTime = Date.now();
   const run = (): Promise<SheetRead> => new Promise((resolve, reject) => {
+    const elapsed = Date.now() - startTime;
+    const remainingTimeoutMs = XLSX_READ_TIMEOUT_MS - elapsed;
+    if (remainingTimeoutMs <= 0) {
+      reject(new DocsPathError(
+        'READ_TIMEOUT',
+        `读取工作簿超时(${XLSX_READ_TIMEOUT_MS}ms)`,
+        '这个工作簿解析时间过长,为保护 Cindy 已终止读取。请先拆分或重新保存文件。',
+      ));
+      return;
+    }
+
     if (workerIdleTimer) {
       clearTimeout(workerIdleTimer);
       workerIdleTimer = undefined;
@@ -344,7 +362,7 @@ function readXlsxInWorker(
         `读取工作簿超时(${XLSX_READ_TIMEOUT_MS}ms)`,
         '这个工作簿解析时间过长,为保护 Cindy 已终止读取。请先拆分或重新保存文件。',
       )), true);
-    }, XLSX_READ_TIMEOUT_MS);
+    }, remainingTimeoutMs);
 
     const onMessage = (message: { id: number; error?: { code?: string; message?: string; hint?: string; available?: string[] } } & SheetRead) => {
       if (message.id !== taskId) return;
@@ -396,7 +414,7 @@ function readXlsxInWorker(
   });
 
   const queued = workerQueue.then(run, run);
-  workerQueue = queued.catch(() => {});
+  workerQueue = queued.then(() => {}, () => {});
   return queued;
 }
 
