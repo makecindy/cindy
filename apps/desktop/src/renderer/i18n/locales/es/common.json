@@ -10342,6 +10342,7 @@
       "continueEditing": "Seguir editando"
     },
     "profileSaveFailed": "No se pudo guardar la configuración del compañero. No se aplicó ningún cambio.",
+    "profileSaveOffline": "No se puede conectar con el ordenador del compañero. Restablece la conexión y vuelve a guardar.",
     "modelLabel": "Modelo",
     "modelUnavailable": "{{model}} (no disponible actualmente)",
     "codexAutomaticCompact": "Los compañeros de Codex compactan el contexto por su cuenta, y /new conserva la tarea actual. Inicia una nueva tarea solo cuando realmente necesites empezar de cero.",
