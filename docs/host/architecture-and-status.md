@@ -92,7 +92,7 @@ flowchart LR
 | 项 | 状态 | 证据/缺口 |
 | --- | --- | --- |
 | 插件列表（`GET /plugins`） | 部分 | 只读 canonical owner 命名空间（`owners/<sha20(owner)>/ghost-install-state/plugin-instances.v2.json` + 包内 `ghost.json`），并如实返回 `legacyNamespacePresent`；**不猜** legacy 原始 owner-id 目录的权威性，迁移仍归 Desktop 的独占认领流程。实测空 profile 返回 `{"plugins":[],"namespace":"canonical","legacyNamespacePresent":false}`。批准/启用状态与运行时态尚未投影。 |
-| 本地 API（阶段 3 起步） | 部分 | loopback `127.0.0.1:3456`；`/health` 公开，`/sessions`、`/me` 需 `<dataDir>/host-api-token`（0600）的 `Authorization: Bearer`。实测 401/200 分流正确。`POST /logout` 撤销服务端会话并清除共享本地记录（服务端失败也清本地，Desktop 同步登出）。`/chat`、`/plugins`、SSE 流式尚未实现。 |
+| 本地 API（阶段 3 起步） | 部分 | loopback `127.0.0.1:3456`；`/health` 公开，`/sessions`、`/me` 需 `<dataDir>/host-api-token`（0600）的 `Authorization: Bearer`。实测 401/200 分流正确。`/sessions` 只投影 `status='active'` 的任务（逐行读产品状态，归档/删除不冒充进行中）。`POST /logout` 撤销服务端会话并清除共享本地记录（服务端失败也清本地，Desktop 同步登出）。`/chat`、`/plugins`、SSE 流式尚未实现。 |
 | `cindy-host` Node 进程与 `GET /health` | 部分 | `apps/host/src/main.ts` 绑定 `127.0.0.1:3456`；`CINDY_HOST_OWNER` 存在时先取 profile Runtime 租约再打开真实 owner 库。实测：持锁进程存在时第二个 Host 报告 `blocked` 且不碰数据库。 |
 | 真实 Maker/Agent Runtime | 未实现 | 当前 `getMaker()` 生产装配仍在 Electron Main；不能把空 Maker、评测 Runner 或 API key adapter 冒充生产 Runtime。需先抽出共享 factory 与单 Runtime 所有权门。 |
 | 现有 session/message SQLite 与历史恢复 | 部分 | Host 执行了全部迁移（临时 profile 实测 145 条 migration / 87 张表），并通过 `OwnerSessionStorage` 创建与重读同一条任务；重启 Host 后 `/health` 仍报告 `sessions: 1`。消息写入、Tool 结果、Desktop 同库并发互斥尚未验证。 |

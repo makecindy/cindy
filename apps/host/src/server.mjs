@@ -51,17 +51,7 @@ export function createHostServer(deps) {
           send(response, 200, await deps.logout());
           return;
         }
-        const sessions = await deps.listSessions();
-        send(response, 200, {
-          sessions: sessions.map((session) => ({
-            id: session.id,
-            title: session.title,
-            agentKind: session.agentKind,
-            model: session.model,
-            workDir: session.workDir,
-            updatedAt: session.updatedAt,
-          })),
-        });
+        send(response, 200, { sessions: await deps.listSessions() });
         return;
       }
 

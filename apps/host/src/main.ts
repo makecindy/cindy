@@ -15,6 +15,7 @@ import { createRequire } from 'node:module';
 import { readAuthEndpoints } from './auth/endpoints.mjs';
 import { logoutHostSession } from './auth/logout.mjs';
 import { listInstalledPlugins } from './plugins.mjs';
+import { listActiveSessions } from './sessions.mjs';
 import { createPreparedLinuxCredentialStore } from './credentials/store.mjs';
 import { createHostServer } from './server.mjs';
 
@@ -128,7 +129,7 @@ const server = createHostServer({
     runtime,
     account,
     harness: harnessStatus(),
-    sessions: sessionStorage ? (await sessionStorage.list()).length : null,
+    sessions: sessionStorage ? (await listActiveSessions(sessionStorage)).length : null,
   }),
   me: async () => ({ owner: runtime.owner, authenticated: account.authenticated, realm: account.realm }),
   logout: async () => {
@@ -154,7 +155,7 @@ const server = createHostServer({
     account = { authenticated: false, realm: null };
     return result;
   },
-  listSessions: async () => (sessionStorage ? sessionStorage.list() : []),
+  listSessions: async () => (sessionStorage ? listActiveSessions(sessionStorage) : []),
   listPlugins: () => (runtime.owner
     ? listInstalledPlugins(resolveHostDataDir(), runtime.owner)
     : { plugins: [], namespace: 'canonical', legacyNamespacePresent: false }),
