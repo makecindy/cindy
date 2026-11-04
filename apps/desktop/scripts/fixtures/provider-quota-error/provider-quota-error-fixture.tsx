@@ -9,8 +9,8 @@ void mountPage({
       {ctx.case === 'tail'
         ? <ErrorTailErrorBanner errorText={error} agentKind="cc" providerId="custom" errorSourceProviderId="custom"
             onContinue={() => {}} onDismiss={() => {}} />
-        : <ErrorBanner error={error} agentKind="cc" providerId="custom"
-            errorSourceProviderId={ctx.case === 'unknown-source' ? undefined : 'custom'}
+        : <ErrorBanner error={error} agentKind="cc" providerId={ctx.case === 'gateway' ? 'xd' : 'custom'}
+            errorSourceProviderId={ctx.case === 'unknown-source' ? undefined : ctx.case === 'gateway' ? 'xd' : 'custom'}
             onRetry={() => {}} retryText="original input" onViewBalance={() => {}} />}
     </div>
   ),
