@@ -61,7 +61,12 @@ type Region = 'cn' | 'global';
 
 export interface ProviderShareGuestEvents {
   catalogChanged?(agentDeviceId: string): void;
-  changed(received: readonly ProviderShareReceived[]): void;
+  /**
+   * Every poll. `changed` is false when the list and its confirmation are the same as
+   * the previous call: local windows still re-check stale catalogs, but controllers
+   * need no model catalog push.
+   */
+  changed(received: readonly ProviderShareReceived[], changed: boolean): void;
   /** 发出的申请有了结果(同意、拒绝、过期、撤回)。 */
   settled(state: ProviderShareRequestState, preview: ProviderShareLinkPreview | null): void;
 }
@@ -97,10 +102,10 @@ let runtime: Runtime | null = null;
 let receivedRevision = 0;
 let receivedFingerprint = '';
 /**
- * What the outward `changed` event last carried: the list plus whether it is confirmed.
- * The list is polled every minute; an unchanged poll must not emit it, because each
- * one is also pushed to every controlling computer as a model catalog change and makes
- * them re-read capabilities and agent rosters. Local cleanup still runs every poll.
+ * What the last `changed` event carried: the list plus whether it is confirmed. The
+ * list is polled every minute; the event still fires every poll (local cleanup and
+ * stale-catalog checks rely on it) but says whether anything changed, so the model
+ * catalog push to every controlling computer is only sent on a real change.
  */
 let notifiedFingerprint = '';
 /** 用于只读分享投影的在途校验；暂停后恢复也不能复用旧回包。 */
@@ -139,12 +144,9 @@ function emitChanged(rt: Runtime): Promise<void> | void {
   const pruning = pruneProviderShareGuestPrefs(new Set(received.map((share) => share.shareId)), confirmedRegions(rt));
   const notify = () => {
     if (!current(rt)) return;
-    // Pref and provider-group cleanup above and below retry on every poll; only the
-    // outward event is skipped when nothing it carries has changed.
-    if (notified !== notifiedFingerprint) {
-      notifiedFingerprint = notified;
-      rt.events.changed(received);
-    }
+    const changed = notified !== notifiedFingerprint;
+    notifiedFingerprint = notified;
+    rt.events.changed(received, changed);
     for (const listener of receivedListeners) {
       try {
         listener();
