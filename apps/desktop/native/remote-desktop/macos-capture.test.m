@@ -199,20 +199,20 @@ static void testFirstDisplayQueryDoesNotHang(const char *self) {
     exit(1);
   }
   // A prompt return through the display-validation path is what this test
-  // guards; the concrete exit code varies by OS/TCC state: 2 = unknown
-  // display id rejected (CGDisplayIsOnline is falsy on macOS 13.x), 3 = the
-  // display check passes (truthy on newer macOS) but TCC screen-recording
-  // access is denied, 4 = both pass but the probe's minimal argv lacks
-  // capture configuration so argument validation returns. All prove the
-  // query returned without hanging.
-  if (WIFEXITED(status) && WEXITSTATUS(status) >= 2 && WEXITSTATUS(status) <= 4) {
+  // guards; the concrete exit code varies by OS/TCC state but is always 2
+  // or 3: 2 = invalid display id rejected (CGDisplayIsOnline is falsy on
+  // macOS 13.x; on newer macOS where it is truthy, the pixel-size check
+  // still rejects the id), 3 = the display check passes but TCC
+  // screen-recording access is denied. Both prove the query returned
+  // without hanging.
+  if (WIFEXITED(status) && (WEXITSTATUS(status) == 2 || WEXITSTATUS(status) == 3)) {
     puts("PASS first display query: fresh process exits promptly (no SkyLight hang)");
     return;
   }
   if (WIFSIGNALED(status))
     fprintf(stderr, "FAIL first display query: probe died by signal %d\n", WTERMSIG(status));
   else if (WIFEXITED(status))
-    fprintf(stderr, "FAIL first display query: probe exited %d, want 2-4\n", WEXITSTATUS(status));
+    fprintf(stderr, "FAIL first display query: probe exited %d, want 2 or 3\n", WEXITSTATUS(status));
   else
     fprintf(stderr, "FAIL first display query: unexpected probe status %d\n", status);
   exit(1);
@@ -222,9 +222,10 @@ int main(int argc, const char *argv[]) {
   if (argc == 2 && strcmp(argv[1], "--display-probe") == 0) {
     // Unknown display id: must return promptly through the production
     // display-validation path without hanging, exactly as a failed
-    // connection attempt does. Exit 2 (CGDisplayIsOnline rejects the id),
-    // 3 (TCC screen-capture denied) or 4 (argument validation) all prove
-    // the path returned promptly.
+    // connection attempt does. Exit 2 (the id is rejected: by
+    // CGDisplayIsOnline on macOS 13.x, by the pixel-size check on newer
+    // macOS) or 3 (TCC screen-capture denied) both prove the path
+    // returned promptly.
     const char *probe[] = {"macos-capture", "123456789", NULL};
     return captureHelperMain(2, probe);
   }
