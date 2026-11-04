@@ -6,7 +6,8 @@
  * pi 进程启动时加载一次,与 LSP Beta 开关同一口径。
  *
  * 文件: <userData>/live-compact-settings.json
- *   { "enabled": true }      // 关闭时该键等于默认值,会被省略
+ *   { "enabled": true }
+ * 关闭时该键等于默认值,会被省略 —— 文件可能不存在,读出来仍是 false(等价于默认)。
  *
  * 默认 false —— 实验性功能,全新装包用户不打开,行为与没有该扩展时一致。
  *
