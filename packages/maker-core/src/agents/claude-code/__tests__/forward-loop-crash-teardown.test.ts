@@ -11,7 +11,10 @@
  * 覆盖:
  *  - turn 进行中流崩溃 → error(sdk_stream_crashed) + status Done + done 收尾,
  *    事件流结束, 后续 send 报 input queue closed
- *  - turn 已被 translator 正常收尾后流崩溃（事故原型）→ 不双发 done, 事件流结束
+ *  - turn 已被 translator 正常收尾后流崩溃（事故原型）→ 不双发 done,
+ *    空闲态崩溃不再上报终态错误 (#8831)
+ *  - 成功轮次完成后进程被外部强杀（#8831 退出时 reap-claude-children 原型）
+ *    → 无终态错误、无额外 done, 只回收死句柄
  *  - 流自然结束（U2 远端 daemon 突死路径）→ 行为回归不变（helper 重构等价性）
  */
 import { promises as fs } from 'node:fs';
@@ -269,12 +272,47 @@ describe('ClaudeCodeAgent forward loop crash teardown', () => {
     expect(doneEvents).toHaveLength(1);
     expect((doneEvents[0]?.data as { reason?: string }).reason).not.toBe('sdk_stream_crashed');
 
-    // 崩溃本身仍要结构化上报。
+    // 轮次已收尾后进程死亡不再有终态错误上报（#8831: 空闲会话被强杀时派发
+    // sdk_stream_crashed 会落伪造的 role:'error' 记录, 重启误读成「上轮未完成」）。
+    // 轮次自身的失败事件由 translator 在 result 阶段已派发, 不随崩溃重复。
     expect(
       events.some((e) => e.type === 'error' && (e.data as { reason?: string }).reason === 'sdk_stream_crashed'),
-    ).toBe(true);
+    ).toBe(false);
 
     // handle 死透, 不再吞消息。
+    await expect(handle.send({ type: 'user', content: 'follow-up' })).rejects.toThrow(/input queue is closed/i);
+  });
+
+  it('idle process kill after a completed turn emits no terminal error (#8831)', async () => {
+    const { handle, stream, events, collected } = await startCrashableSession();
+
+    await handle.send({ type: 'user', content: 'hello' });
+
+    // #8831 事故原型: 轮次正常完成后 claude.exe 驻留; 退出 Cindy 时
+    // reap-claude-children 把空闲进程 taskkill, SDK 流抛错。
+    stream.emit({
+      type: 'result',
+      is_error: false,
+      subtype: 'success',
+      result: 'ok',
+      stop_reason: 'end_turn',
+      total_cost_usd: 0,
+      usage: { input_tokens: 0, output_tokens: 0 },
+    });
+    await vi.waitFor(() => {
+      expect(handle.isTurnRunning?.()).toBe(false);
+    });
+    stream.fail(new Error('Claude Code process exited with code 1'));
+    await withTimeout(collected, 'event stream should end after idle kill teardown');
+
+    // 没有任何轮次可被终结: 不得派发终态错误(否则落库成伪造的「上轮失败」记录)。
+    expect(events.filter((e) => e.type === 'error')).toHaveLength(0);
+    const doneEvents = events.filter((e) => e.type === 'done');
+    expect(doneEvents).toHaveLength(1);
+    expect((doneEvents[0]?.data as { reason?: string }).reason).not.toBe('sdk_stream_crashed');
+
+    // handle 死透: 事件流已结束, 后续 send 立刻失败而不是进黑洞排队。
+    expect(handle.isTurnRunning?.()).toBe(false);
     await expect(handle.send({ type: 'user', content: 'follow-up' })).rejects.toThrow(/input queue is closed/i);
   });
 
