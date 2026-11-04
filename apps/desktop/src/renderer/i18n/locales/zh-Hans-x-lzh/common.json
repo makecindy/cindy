@@ -4422,7 +4422,7 @@
     "liveCompact": {
       "cell": {
         "title": "边做边压 · Live Compact",
-        "description": "每轮既毕，取已成之一段对谈，压为一纸本地之卡：模型仍见其要，及全文所在之径，故上下文增之也缓。此乃试用之能，唯新创之务乃效，其压法异于 pi 原生之自压。",
+        "description": "每轮既毕，取已成之一段对谈，压为一纸本地之卡：模型仍见其要，及全文所在之径，故上下文增之也缓。此乃试用之能，唯新创之务乃效，其压法异于 Pi 原生之自压。",
         "sourceLabel": "原仓：MerkyorLynn/dsh-live-compact"
       },
       "toast": {

@@ -1,7 +1,7 @@
 /**
  * LiveCompactCell — Settings → 实验功能区块下的「边做边压 Live Compact」一行。
  *
- * 开关决定**新会话**是否加载内置的 live-compact pi 扩展:
+ * 开关决定**新任务**是否加载内置的 Live Compact pi 扩展:
  *   - 关闭(默认): 不写扩展、不 --extension,行为与没有该扩展时完全一致。
  *   - 开启: maker-core 把扩展写进会话 internal-extensions,每轮结束时把已完成的
  *     一段对话压成一张本地卡片(要点 + 完整原文的本地路径),上下文涨得更慢。
