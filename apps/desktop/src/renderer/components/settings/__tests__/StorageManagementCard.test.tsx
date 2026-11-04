@@ -45,6 +45,8 @@ function storageApi() {
     openLegacyImagesDir: vi.fn(async () => ({ opened: true })),
     clearLegacyImagesDir: vi.fn(async () => ({ cleared: true })),
     openChatAttachmentsDir: vi.fn(async () => ({ opened: true })),
+    openSpineDir: vi.fn(async () => ({ opened: true })),
+    clearSpineDir: vi.fn(async () => ({ cleared: true })),
     clearChatAttachmentsDir: vi.fn(async () => ({ cleared: true })),
     stats: vi.fn(async (): Promise<StorageStatsResult> => ({
       success: true,
@@ -53,6 +55,7 @@ function storageApi() {
       fixedCaches: {
         legacyImages: { bytes: 0, fileCount: 0 },
         chatAttachments: { bytes: 0, fileCount: 0 },
+        spine: { bytes: 0, fileCount: 0 },
       },
       deadDirs: [],
     })),
@@ -260,6 +263,7 @@ describe('StorageManagementCard fixed cache directories', () => {
       fixedCaches: {
         legacyImages: { bytes: 0, fileCount: 0 },
         chatAttachments: { bytes: 0, fileCount: 0 },
+        spine: { bytes: 0, fileCount: 0 },
       },
       deadDirs: [],
     });
@@ -275,6 +279,7 @@ describe('StorageManagementCard fixed cache directories', () => {
       fixedCaches: {
         legacyImages: { bytes: 0, fileCount: 0 },
         chatAttachments: { bytes: 0, fileCount: 0 },
+        spine: { bytes: 0, fileCount: 0 },
       },
       deadDirs: [],
     });
@@ -339,6 +344,7 @@ describe('StorageManagementCard fixed cache directories', () => {
       fixedCaches: {
         legacyImages: { bytes: 2 * 1024 ** 3, fileCount: 2 },
         chatAttachments: { bytes: 3 * 1024 ** 3, fileCount: 3 },
+        spine: { bytes: 0, fileCount: 0 },
       },
       deadDirs: [],
     });

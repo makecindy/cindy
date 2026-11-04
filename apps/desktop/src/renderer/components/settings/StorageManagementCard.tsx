@@ -4,7 +4,8 @@
  * 组成:
  *   1. 占用总览(挂载时异步拉一次;数据在本地,拿到前不渲染 loading 骨架,
  *      规则 7:先拿数据再刷新显示);
- *   2. 两个固定缓存目录:打开目录或经破坏性确认后整目录清理;
+ *   2. 三个固定缓存目录(图片缓存 / 消息附件 / 边做边压影子原文):打开目录或经
+ *      破坏性确认后整目录清理;
  *   3. 媒体总仓清理:扫描(报数)→ 明细确认 → 执行 → 结果。发起扫描/清理时把
  *      composerDraftStore 全部草稿附件 URL 随参带给 main——草稿图是合法的
  *      零引用 blob,main 读不到 renderer 内存,不带就会被当垃圾清掉;
@@ -140,6 +141,32 @@ export function StorageManagementCard() {
       }
     } catch {
       toast.error(t('settings.about.storage.chatAttachmentsOpenFailed'));
+    }
+  };
+
+  const handleOpenSpineDir = async () => {
+    try {
+      const result = await window.electronAPI.cindyMediaStorage.openSpineDir();
+      if (!result.opened) {
+        toast.info(t('settings.about.storage.spineDirectoryMissing'));
+      }
+    } catch {
+      toast.error(t('settings.about.storage.spineOpenFailed'));
+    }
+  };
+
+  const handleClearSpineDir = async () => {
+    if (directoryCleanupBusyRef.current) return;
+    directoryCleanupBusyRef.current = true;
+    try {
+      const result = await window.electronAPI.cindyMediaStorage.clearSpineDir();
+      if (!result.cleared) return;
+      toast.success(t('settings.about.storage.spineCleared'));
+      void refreshStats();
+    } catch {
+      toast.error(t('settings.about.storage.spineClearFailed'));
+    } finally {
+      directoryCleanupBusyRef.current = false;
     }
   };
 
@@ -411,6 +438,26 @@ export function StorageManagementCard() {
             </CardButton>
             <CardButton onClick={handleClearChatAttachmentsDir}>
               {t('settings.about.storage.chatAttachmentsClearButton')}
+            </CardButton>
+          </div>
+        </div>
+        <div aria-hidden className="h-px w-full bg-[var(--settings-theme-card-border)]" />
+        <div className="flex items-center justify-between gap-3 px-[18px] py-4">
+          <div className="flex min-w-0 flex-col gap-1">
+            <span className="text-13 text-[var(--settings-section-sublabel)]">
+              {t('settings.about.storage.spineLabel')}
+              {' · '}{stats ? formatBytes(stats.fixedCaches.spine.bytes) : t('settings.about.storage.unknown')}
+            </span>
+            <p className="text-12 leading-[1.4] text-[var(--text-secondary)]">
+              {t('settings.about.storage.spineDescription')}
+            </p>
+          </div>
+          <div className="flex shrink-0 items-center gap-2">
+            <CardButton onClick={handleOpenSpineDir}>
+              {t('settings.about.storage.spineOpenButton')}
+            </CardButton>
+            <CardButton onClick={handleClearSpineDir}>
+              {t('settings.about.storage.spineClearButton')}
             </CardButton>
           </div>
         </div>

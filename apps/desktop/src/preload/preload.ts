@@ -4871,6 +4871,12 @@ contextBridge.exposeInMainWorld('electronAPI', {
     clearChatAttachmentsDir: (): Promise<{ cleared: boolean }> =>
       ipcRenderer.invoke('cindy-media:chat-attachments-clear'),
 
+    openSpineDir: (): Promise<{ opened: boolean }> =>
+      ipcRenderer.invoke('cindy-media:spine-open-dir'),
+
+    clearSpineDir: (): Promise<{ cleared: boolean }> =>
+      ipcRenderer.invoke('cindy-media:spine-clear'),
+
     stats: (): Promise<{
       success: boolean;
       error?: string;
@@ -4880,6 +4886,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
       fixedCaches: {
         legacyImages: { bytes: number; fileCount: number };
         chatAttachments: { bytes: number; fileCount: number };
+        spine: { bytes: number; fileCount: number };
       };
       deadDirs: Array<{
         name: string;

@@ -8819,6 +8819,7 @@ const registerIpcHandlers = () => {
       registerWindowDraftUrls(event.sender, urls);
     });
 
+    const spineDir = path.join(app.getPath('userData'), 'pi-agent-home', 'compaction-spine');
     const storageHandlers = createStorageIpcHandlers({
       clearRemoteMediaMemory: clearLocalEntries,
       getQueueScanTexts: collectAgentInputQueueScanTexts,
@@ -8840,6 +8841,11 @@ const registerIpcHandlers = () => {
         !getActiveAppSession().dataOwnerId || isAppSessionBoundaryPending()
           ? Promise.resolve({ bytes: 0, fileCount: 0 })
           : withActiveChatAttachmentRoot((rootDir) => getFixedDirectoryStats(rootDir)),
+      // 「边做边压」扩展把被切走的原文写在这里(spine.log + shadow/)。目录不存在时
+      // 报数为 0、清理为无操作,无需先判断开关状态。
+      openSpineDir: () => openFixedDirectory(spineDir),
+      clearSpineDir: () => clearFixedDirectory(spineDir),
+      getSpineDirStats: () => getFixedDirectoryStats(spineDir),
     });
     registerLocalAgentConfirmationIpc(() => mainWindowRef);
     ipcMain.handle('local-agent:connections', (event) => {
@@ -8922,6 +8928,23 @@ const registerIpcHandlers = () => {
           );
         }
         await storageHandlers.clearChatAttachmentsDir();
+        return { cleared: true };
+      }),
+    );
+    ipcMain.handle('cindy-media:spine-open-dir', (event) => {
+      assertTrustedAppRendererEvent(event);
+      return storageHandlers.openSpineDir();
+    });
+    ipcMain.handle('cindy-media:spine-clear', (event) =>
+      runFixedDirectoryIpcAction('spine-clear', async () => {
+        assertTrustedAppRendererEvent(event);
+        const confirmed = await confirmFixedDirectoryClear(event, {
+          title: t('settings.about.storage.spineClearConfirmTitle'),
+          message: t('settings.about.storage.spineClearConfirmDescription'),
+          confirmButton: t('settings.about.storage.spineClearConfirmButton'),
+        });
+        if (!confirmed) return { cleared: false };
+        await storageHandlers.clearSpineDir();
         return { cleared: true };
       }),
     );

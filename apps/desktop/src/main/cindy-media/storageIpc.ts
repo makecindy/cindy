@@ -56,6 +56,10 @@ export interface StorageIpcDeps {
   clearChatAttachmentsDir?: () => Promise<void>;
   getLegacyImagesDirStats?: () => Promise<FixedDirectoryStats>;
   getChatAttachmentsDirStats?: () => Promise<FixedDirectoryStats>;
+  /** 「边做边压」的影子原文目录(pi 扩展 compaction-spine)。 */
+  openSpineDir?: () => Promise<boolean>;
+  clearSpineDir?: () => Promise<void>;
+  getSpineDirStats?: () => Promise<FixedDirectoryStats>;
   clearRemoteMediaMemory?: () => void;
 }
 
@@ -68,6 +72,7 @@ export interface StorageStatsResult {
   fixedCaches: {
     legacyImages: FixedDirectoryStats;
     chatAttachments: FixedDirectoryStats;
+    spine: FixedDirectoryStats;
   };
   deadDirs: legacyDeadDirs.DeadDirStatus[];
 }
@@ -206,13 +211,42 @@ export function createStorageIpcHandlers(deps: StorageIpcDeps) {
       }
     },
 
+    async openSpineDir(): Promise<{ opened: boolean }> {
+      if (!deps.openSpineDir) {
+        throwIpcError('INTERNAL', 'spine directory opener is unavailable');
+      }
+      try {
+        return { opened: await deps.openSpineDir() };
+      } catch (err) {
+        log.warn('open spine directory failed', {
+          error: err instanceof Error ? err.message : String(err),
+        });
+        throwIpcError('INTERNAL', 'failed to open spine directory');
+      }
+    },
+
+    async clearSpineDir(): Promise<void> {
+      if (!deps.clearSpineDir) {
+        throwIpcError('INTERNAL', 'spine directory cleaner is unavailable');
+      }
+      try {
+        await deps.clearSpineDir();
+      } catch (err) {
+        log.warn('clear spine directory failed', {
+          error: err instanceof Error ? err.message : String(err),
+        });
+        throwIpcError('INTERNAL', 'failed to clear spine directory');
+      }
+    },
+
     async stats(): Promise<StorageStatsResult> {
       try {
-        const [blobs, deadDirs, legacyImages, chatAttachments, remoteMedia] = await Promise.all([
+        const [blobs, deadDirs, legacyImages, chatAttachments, spine, remoteMedia] = await Promise.all([
           ledger.getStorageStats(deps.db),
           legacyDeadDirs.scanDeadDirs(deps.legacyRootDir),
           deps.getLegacyImagesDirStats?.() ?? Promise.resolve({ bytes: 0, fileCount: 0 }),
           deps.getChatAttachmentsDirStats?.() ?? Promise.resolve({ bytes: 0, fileCount: 0 }),
+          deps.getSpineDirStats?.() ?? Promise.resolve({ bytes: 0, fileCount: 0 }),
           ledger.listCacheBlobsByLru(deps.db, REMOTE_MEDIA_INTEGRATION),
         ]);
         return {
@@ -220,7 +254,7 @@ export function createStorageIpcHandlers(deps: StorageIpcDeps) {
           blobs,
           remoteMedia: { bytes: remoteMedia.reduce((sum, row) => sum + row.bytes, 0), fileCount: remoteMedia.length },
           legacy: { bytes: 0, fileCount: 0 },
-          fixedCaches: { legacyImages, chatAttachments },
+          fixedCaches: { legacyImages, chatAttachments, spine },
           deadDirs,
         };
       } catch (err) {
@@ -234,6 +268,7 @@ export function createStorageIpcHandlers(deps: StorageIpcDeps) {
           fixedCaches: {
             legacyImages: { bytes: 0, fileCount: 0 },
             chatAttachments: { bytes: 0, fileCount: 0 },
+            spine: { bytes: 0, fileCount: 0 },
           },
           deadDirs: [],
         };

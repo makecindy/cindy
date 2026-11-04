@@ -4008,6 +4008,8 @@ interface ElectronAPI {
     clearLegacyImagesDir: () => Promise<{ cleared: boolean }>;
     openChatAttachmentsDir: () => Promise<{ opened: boolean }>;
     clearChatAttachmentsDir: () => Promise<{ cleared: boolean }>;
+    openSpineDir: () => Promise<{ opened: boolean }>;
+    clearSpineDir: () => Promise<{ cleared: boolean }>;
     stats: () => Promise<{
       success: boolean;
       error?: string;
@@ -4017,6 +4019,7 @@ interface ElectronAPI {
       fixedCaches: {
         legacyImages: { bytes: number; fileCount: number };
         chatAttachments: { bytes: number; fileCount: number };
+        spine: { bytes: number; fileCount: number };
       };
       deadDirs: Array<{
         name: string;
