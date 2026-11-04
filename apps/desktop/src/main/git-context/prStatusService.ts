@@ -72,6 +72,7 @@ export interface PrStatusServiceDeps {
   readGitlabToken?: (host: string) => Promise<GlabTokenResult>;
   fetchGitlab?: (token: string, q: PrStatusQuery) => Promise<PrRemoteState>;
   rejectGitlabToken?: (host: string) => void;
+  invalidateGitlabTokenFailures?: () => void;
   fetchPr: (token: string, q: PrStatusQuery) => Promise<PrRemoteState>;
   /** 缓存 TTL,默认 60s。测试可注小值。 */
   cacheTtlMs?: number;
@@ -120,6 +121,21 @@ export class PrStatusService {
     this.generation += 1;
     this.cache.clear();
     this.inFlight.clear();
+  }
+
+  invalidateGitlabAuthFailures(): void {
+    this.deps.invalidateGitlabTokenFailures?.();
+    // Auth failures are normally uncached. Keep focus invalidation scoped to them
+    // without changing the generation or abandoning any in-flight request.
+    for (const [key, { result }] of this.cache) {
+      if (
+        result.provider === 'gitlab' &&
+        !result.ok &&
+        (result.reason === 'glab-missing' || result.reason === 'glab-not-logged-in')
+      ) {
+        this.cache.delete(key);
+      }
+    }
   }
 
   constructor(deps: PrStatusServiceDeps) {

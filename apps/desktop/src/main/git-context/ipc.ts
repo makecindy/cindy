@@ -199,14 +199,14 @@ export function registerGitContextIpc(): void {
     readGitlabToken: (host) => glabCliTokenSource.readTokenDetailed(host),
     fetchGitlab: (token, query) => fetchGitlabMr(token, query, outboundFetch),
     rejectGitlabToken: (host) => glabCliTokenSource.rejectToken(host),
+    invalidateGitlabTokenFailures: () => glabCliTokenSource.invalidateNegativeCache(),
     scope: githubReadScope,
     fetchPr: fetchPrRemote,
     // The renderer keeps its last value while awaiting fresh counts; no delayed second tick.
     staleTtlMs: 0,
   });
   app.on('browser-window-focus', () => {
-    glabCliTokenSource.invalidate();
-    prStatusService?.invalidate();
+    prStatusService?.invalidateGitlabAuthFailures();
   });
   githubReadService = createGithubReadService(prStatusService);
   setGithubReadRuntime({ read: readGithub, manage: manageGithubPrs });

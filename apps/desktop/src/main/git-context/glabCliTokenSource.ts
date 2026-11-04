@@ -46,6 +46,11 @@ export function createGlabCliTokenSource(
   };
   return {
     invalidate,
+    invalidateNegativeCache() {
+      for (const [host, entry] of cache) {
+        if (!entry.result.ok) cache.delete(host);
+      }
+    },
     rejectToken(host: string) {
       cache.set(host.toLowerCase(), {
         result: { ok: false, reason: 'glab-not-logged-in' },

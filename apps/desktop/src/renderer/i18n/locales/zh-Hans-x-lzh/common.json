@@ -14730,7 +14730,7 @@
           }
         },
         "gitlab": {
-          "missing": "未见 GitLab CLI (glab)，故无 MR 状态。装 glab 并登录乃可见。",
+          "missing": "未见 GitLab CLI（glab），故无 MR 状态。装 glab 并登录乃可见。",
           "notLoggedIn": "本机 glab 未登录 {{host}}，故无 MR 状态。于终端行 glab auth login，登录乃可见。",
           "unsupported": "此机尚不支持 GitLab MR 状态",
           "openAria": "于浏览器开 MR !{{number}}",

@@ -14730,7 +14730,7 @@
           }
         },
         "gitlab": {
-          "missing": "GitLab CLI (glab) が見つかりません。glab をインストールしてログインすると MR の状態を表示できます。",
+          "missing": "GitLab CLI（glab）が見つかりません。glab をインストールしてログインすると MR の状態を表示できます。",
           "notLoggedIn": "このコンピューターの glab は {{host}} に未ログインです。ターミナルで glab auth login を実行してログインすると MR の状態を表示できます。",
           "unsupported": "このコンピューターは GitLab MR の状態表示に未対応です",
           "openAria": "MR !{{number}} をブラウザーで開く",

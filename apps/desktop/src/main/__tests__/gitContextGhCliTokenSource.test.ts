@@ -237,8 +237,9 @@ describe('GitLab CLI credentials', () => {
     });
     signedIn = true;
     expect((await source.readTokenDetailed('two.example.com')).ok).toBe(false);
-    source.invalidate();
+    source.invalidateNegativeCache();
     expect((await source.readTokenDetailed('two.example.com')).ok).toBe(true);
+    expect((await source.readTokenDetailed('one.example.com')).ok).toBe(true);
     expect(exec.mock.calls.map((call) => call[1])).toEqual([
       ['config', 'get', 'token', '--host', 'one.example.com'],
       ['config', 'get', 'token', '--host', 'two.example.com'],
@@ -249,7 +250,10 @@ describe('GitLab CLI credentials', () => {
       ok: false,
       reason: 'glab-not-logged-in',
     });
+    source.invalidateNegativeCache();
+    expect((await source.readTokenDetailed('two.example.com')).ok).toBe(true);
     expect((await source.readTokenDetailed('one.example.com')).ok).toBe(true);
+    expect(exec).toHaveBeenCalledTimes(4);
   });
   it.each([
     ['ENOENT', 'glab-missing'],

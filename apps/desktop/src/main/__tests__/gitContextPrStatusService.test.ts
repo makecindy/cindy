@@ -1,3 +1,4 @@
+import { createGlabCliTokenSource } from '../git-context/glabCliTokenSource';
 import { fetchGitlabMr } from '../git-context/gitlabPrSummary';
 import { remotePrStatuses } from '@cindy/maker-shared';
 /**
@@ -442,6 +443,75 @@ describe('GitLab MR status', () => {
     expect(reject).toHaveBeenCalledWith(q.host);
     expect(github).not.toHaveBeenCalled();
     expect(filterPrStatusQueriesForRefs([{ ...q, host: 'other.example.com' }, Q], [q])).toEqual([]);
+  });
+  // Unit regression: the focus handler used full invalidation, discarding successful
+  // GitHub/GitLab caches and in-flight reads. Existing auth tests never crossed a
+  // window focus. One cached PR, one pending PR and two MR hosts expose the loss.
+  it('on window focus retries GitLab login failures without refetching successes or discarding in-flight reads', async () => {
+    let signedIn = false;
+    const healthy = { ...q, host: 'healthy.example.com' };
+    const exec = vi.fn(
+      (
+        _file: string,
+        args: string[],
+        _options: unknown,
+        callback: (error: Error | null, stdout: string) => void,
+      ) => callback(null, args.at(-1) === healthy.host || signedIn ? 'fake-token' : ''),
+    );
+    const tokens = createGlabCliTokenSource({
+      exec: exec as unknown as typeof import('node:child_process').execFile,
+      now: () => 0,
+    });
+    let finish!: (value: PrRemoteState) => void;
+    let started!: () => void;
+    const pending = new Promise<PrRemoteState>((resolve) => {
+      finish = resolve;
+    });
+    const fetching = new Promise<void>((resolve) => {
+      started = resolve;
+    });
+    const next = { ...Q, prNumber: 86 };
+    const fetchPr = vi.fn(async (_token: string, query: typeof Q) => {
+      if (query.prNumber === next.prNumber) {
+        started();
+        return pending;
+      }
+      return remote({});
+    });
+    const fetchGitlab = vi.fn(async () => remote({}));
+    const service = new PrStatusService({
+      readToken: TOKEN_OK,
+      fetchPr,
+      readGitlabToken: (host) => tokens.readTokenDetailed(host),
+      invalidateGitlabTokenFailures: () => tokens.invalidateNegativeCache(),
+      fetchGitlab,
+      now: () => 0,
+    });
+    expect(await service.getStatuses([Q, q, healthy])).toMatchObject([
+      { ok: true },
+      { ok: false, reason: 'glab-not-logged-in' },
+      { ok: true },
+    ]);
+    signedIn = true;
+    expect((await service.getStatuses([q]))[0]).toMatchObject({ ok: false });
+    const inFlight = service.getStatuses([next]);
+    await fetching;
+    service.invalidateGitlabAuthFailures();
+    expect(await service.getStatuses([Q, q, healthy])).toMatchObject([
+      { ok: true },
+      { ok: true },
+      { ok: true },
+    ]);
+    expect(fetchPr).toHaveBeenCalledTimes(2);
+    expect(fetchGitlab).toHaveBeenCalledTimes(2);
+    await tokens.readTokenDetailed(healthy.host);
+    expect(exec).toHaveBeenCalledTimes(3);
+    const joined = service.getStatuses([next]);
+    finish(remote({ title: 'in flight' }));
+    expect(await inFlight).toMatchObject([{ ok: true, title: 'in flight' }]);
+    expect(await joined).toEqual(await inFlight);
+    expect(await service.getStatuses([next])).toEqual(await inFlight);
+    expect(fetchPr).toHaveBeenCalledTimes(2);
   });
   it('keeps legacy hosts from receiving MR queries on their GitHub channel', async () => {
     const invoke = vi.fn().mockImplementation(async (channel: string) => {
