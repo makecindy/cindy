@@ -29,6 +29,29 @@ export default {
         }
       }
       await ui.capture('ordinary-provider-rows');
+      const addFavorite = await ui.t('newChat.modelSelector.unified.addFavorite');
+      const removeFavorite = await ui.t('newChat.modelSelector.unified.removeFavorite');
+      for (let i = 0; i < 2; i++) {
+        const row = rows.nth(i);
+        const other = rows.nth(1 - i);
+        await row.click();
+        if (await row.getAttribute('data-model-selected') !== 'true' ||
+          await other.getAttribute('data-model-selected') === 'true') {
+          throw Error('Selection leaked between providers sharing a model ID');
+        }
+        await row.hover();
+        await row.getByRole('button', { name: addFavorite, exact: true }).click();
+        if (await row.getByRole('button', { name: removeFavorite, exact: true }).count() !== 1 ||
+          await other.getByRole('button', { name: removeFavorite, exact: true }).count() !== 0) {
+          throw Error('Favorite leaked between providers sharing a model ID');
+        }
+        if (await row.getAttribute('data-model-selected') !== 'true') throw Error('Favorite changed selection');
+        await ui.capture('ordinary-provider-state-' + i);
+        await row.getByRole('button', { name: removeFavorite, exact: true }).click();
+        if (await rows.getByRole('button', { name: removeFavorite, exact: true }).count() !== 0) {
+          throw Error('Favorite did not clear independently');
+        }
+      }
       return;
     }
     if (await rows.count() !== 3) throw Error('Gateway routes merged');
