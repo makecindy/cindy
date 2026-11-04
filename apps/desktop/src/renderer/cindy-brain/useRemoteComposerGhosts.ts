@@ -30,17 +30,50 @@ const CATALOG_SOFT_REFRESH_MS = 60_000;
 const MAX_CACHED_CATALOGS = 8;
 
 const catalogs = new Map<string, { ghosts: GhostComposerEntry[]; at: number }>();
-const inflight = new Map<string, Promise<GhostComposerEntry[]>>();
+const inflight = new Map<string, { generation: number; request: Promise<GhostComposerEntry[]> }>();
+/** Bumped by a host plugin change; reads started before it neither return nor cache. */
+const deviceGenerations = new Map<string, number>();
+const invalidationListeners = new Set<(deviceId: string) => void>();
+let invalidationInstalled = false;
+const STALE_CATALOG = new Error('Stale remote plugin catalog');
+
+/**
+ * One listener for the cache's lifetime, not per composer: a copy kept after its
+ * composer unmounted must still be dropped when that computer's plugins change.
+ */
+function ensureInvalidationListener(): void {
+  if (invalidationInstalled) return;
+  const subscribe = window.electronAPI.deviceLink.onRemotePush;
+  if (!subscribe) return;
+  invalidationInstalled = true;
+  subscribe((push, stamp) => {
+    if (
+      push.channel !== REMOTE_RESOURCE_CHANGED_CHANNEL ||
+      !isDeviceLinkRemotePushCurrent(push, stamp) ||
+      (push.payload as { collectionId?: unknown } | null)?.collectionId !== PLUGIN_COLLECTION
+    )
+      return;
+    deviceGenerations.set(push.deviceId, (deviceGenerations.get(push.deviceId) ?? 0) + 1);
+    // Every directory's copy for this device is stale.
+    for (const cachedKey of [...catalogs.keys()]) {
+      if ((JSON.parse(cachedKey) as unknown[])[2] === push.deviceId) catalogs.delete(cachedKey);
+    }
+    for (const listener of invalidationListeners) listener(push.deviceId);
+  });
+}
 
 function loadCatalog(key: string, deviceId: string, workingDir: string | null | undefined) {
+  const generation = deviceGenerations.get(deviceId) ?? 0;
   const pending = inflight.get(key);
-  if (pending) return pending;
+  if (pending?.generation === generation) return pending.request;
   const capturedOwner = getDataOwnerGeneration();
   const request = window.electronAPI.deviceLink
     .invoke(deviceId, GHOST_COMPOSER_LIST_CHANNEL, workingDir ? [workingDir] : [])
     .then((raw) => {
       const result = ghostComposerListSchema.safeParse(raw);
       if (!result.success) throw new Error('Invalid remote plugin catalog');
+      // A plugin change after this read started: a newer read replaces it.
+      if ((deviceGenerations.get(deviceId) ?? 0) !== generation) throw STALE_CATALOG;
       if (isDataOwnerGenerationCurrent(capturedOwner)) {
         catalogs.delete(key);
         catalogs.set(key, { ghosts: result.data, at: Date.now() });
@@ -48,8 +81,10 @@ function loadCatalog(key: string, deviceId: string, workingDir: string | null | 
       }
       return result.data;
     })
-    .finally(() => inflight.delete(key));
-  inflight.set(key, request);
+    .finally(() => {
+      if (inflight.get(key)?.request === request) inflight.delete(key);
+    });
+  inflight.set(key, { generation, request });
   return request;
 }
 
@@ -84,20 +119,14 @@ export function useRemoteComposerGhosts(
 
   useEffect(() => {
     if (!deviceId || isSharedTaskPeer(deviceId)) return undefined;
-    return window.electronAPI.deviceLink.onRemotePush?.((push, stamp) => {
-      if (
-        push.deviceId === deviceId &&
-        push.channel === REMOTE_RESOURCE_CHANGED_CHANNEL &&
-        isDeviceLinkRemotePushCurrent(push, stamp) &&
-        (push.payload as { collectionId?: unknown } | null)?.collectionId === PLUGIN_COLLECTION
-      ) {
-        // Every directory's copy for this device is stale.
-        for (const cachedKey of [...catalogs.keys()]) {
-          if ((JSON.parse(cachedKey) as unknown[])[2] === deviceId) catalogs.delete(cachedKey);
-        }
-        reload();
-      }
-    });
+    ensureInvalidationListener();
+    const listener = (changed: string) => {
+      if (changed === deviceId) reload();
+    };
+    invalidationListeners.add(listener);
+    return () => {
+      invalidationListeners.delete(listener);
+    };
   }, [deviceId, reload]);
 
   const lastKey = useRef<string | null>(null);
@@ -121,7 +150,9 @@ export function useRemoteComposerGhosts(
       .then((ghosts) => {
         if (current()) setSnapshot({ key, ghosts, failed: false });
       })
-      .catch(() => {
+      .catch((error: unknown) => {
+        // The plugin change that made it stale already started a fresh read.
+        if (error === STALE_CATALOG) return;
         // Old hosts may reject the channel. Never substitute the controller's catalog.
         if (current()) setSnapshot({ key, ghosts: EMPTY, failed: true });
       });
