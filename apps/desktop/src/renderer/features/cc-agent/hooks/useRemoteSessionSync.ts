@@ -21,7 +21,7 @@ import { isSharedTaskPeer } from '@cindy/device-link';
 
 import { createLogger } from '@/lib/logger';
 import { makerChatStore } from '@/lib/makerChatStore';
-import { isSessionTurnRunningFor } from '@/lib/makerTransport';
+import { getSessionTurnActiveOn } from '@/lib/makerTransport';
 import { remoteProjectsStore } from '@/features/device-link/remoteProjectsStore';
 import { refreshRemoteDeviceSessions } from '@/features/device-link/refreshRemoteSessions';
 import { createRemoteContentRecovery, type RemoteContentRecoveryState } from './remoteContentRecovery';
@@ -84,6 +84,8 @@ export interface RemoteSyncEngine {
    * 解决:切走期间 done 丢失 → 切回后永久卡 Generating(需等 90s 看门狗才恢复)的问题。
    */
   reconcileOnMount(): void;
+  /** Subscription and history recovered; verify a possibly missed turn completion. */
+  handleContentRecovered(): void;
   /** WS 重连到 online:重建订阅 + 安排对账。 */
   handleOnline(): void;
   /** presence 变化:本会话设备且 online → 重建订阅 + 对账;否则忽略。 */
@@ -236,7 +238,8 @@ export function createRemoteSessionSyncEngine(
   /**
    * 「本地仍 isRunning,但被控端可能早已跑完」的一次性核实与收尾。
    *
-   * 两个触发时点共用(都是「本机与被控端可能已错过 done 帧」的边沿):
+   * 以下触发时点共用(都是「本机与被控端可能已错过 done 帧」的边沿):
+   *  - 内容恢复完成:订阅与历史已恢复,但运行态仍可能停留在断线前;
    *  - mount:切回一个 turn 期间被退订过的远程会话;
    *  - 熔断恢复:熔断 open 期间订阅与消息拉取全被快速失败挡掉,done 帧可能丢了。
    *
@@ -289,6 +292,7 @@ export function createRemoteSessionSyncEngine(
       prevRunning = running;
     },
     reconcileOnMount,
+    handleContentRecovered: verifyAndSettleRunningTurn,
     handleOnline() {
       subscribeHeavy();
       scheduleReconcile();
@@ -386,7 +390,10 @@ export function useRemoteSessionSync(
       subscribe: () => window.electronAPI.deviceLink.subscribe(deviceId, [`session:${sessionId}`]),
       reconcile: () => makerChatStore.reconcileRemoteMessages(sessionId, { freshHistory: true }),
       changed: (state) => setContent({ sessionId, deviceId, state }),
-      completed: (elapsedMs) => log.info('remote content recovered', { elapsedMs }),
+      completed: (elapsedMs) => {
+        log.info('remote content recovered', { elapsedMs });
+        engine.handleContentRecovered();
+      },
       phaseCompleted: (phase, elapsedMs) => log.debug('remote recovery phase completed', { phase, elapsedMs }),
     });
     // 每个 (sessionId, deviceId) 绑定一个 engine;getTarget 返回本 effect 的常量,
@@ -415,7 +422,7 @@ export function useRemoteSessionSync(
         getLastEventAt: (s) => makerChatStore.getLastInboundEventAt(s),
         isRunningNow: (s) => makerChatStore.getSnapshot(s).agentStatus.isRunning,
         queryTurnRunning: async (s) => {
-          return isSessionTurnRunningFor(s);
+          return getSessionTurnActiveOn(s, deviceId);
         },
         finalize: (s) => {
           makerChatStore.finalizeStuckRemoteTurn(s);

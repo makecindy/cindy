@@ -207,6 +207,26 @@ function setupWatchdog(overrides: Partial<RemoteSyncEngineDeps> = {}) {
 }
 
 describe('createRemoteSessionSyncEngine — stall 看门狗', () => {
+  // A replay can refresh lastEventAt while its terminal event is missing. Recovery
+  // must consult the host rather than waiting for another 90 seconds of silence.
+  it.each([false, true, 'unreachable'] as const)('checks host turn state after content recovery: %s', async (hostState) => {
+    const { engine, deps } = setupWatchdog({
+      getLastEventAt: () => 0,
+      queryTurnRunning: vi.fn(async () => {
+        if (hostState === 'unreachable') throw new Error('offline');
+        return hostState;
+      }),
+    });
+    engine.startWatchdog();
+    engine.handleContentRecovered();
+    engine.handleContentRecovered();
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(deps.queryTurnRunning).toHaveBeenCalledTimes(1);
+    expect(deps.finalize).toHaveBeenCalledTimes(hostState === false ? 1 : 0);
+    expect(deps.reconcileForce).toHaveBeenCalledTimes(hostState === false ? 1 : 0);
+    engine.dispose();
+  });
+
   it('lastEventAt 新鲜(静默 < 阈值)→ 不触发恢复', async () => {
     const { engine, deps, setNow } = setupWatchdog();
     engine.startWatchdog(); // watchdogStartedAt = 0

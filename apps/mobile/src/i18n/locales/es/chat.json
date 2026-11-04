@@ -163,6 +163,9 @@
     "workDetails": "Detalles del trabajo"
   },
   "teammateProcess": {
+    "retry": "Reintentar",
+    "empty": "No hay detalles del proceso para esta respuesta",
+    "unavailable": "No se pudieron cargar los detalles del proceso",
     "record": "Actividad",
     "operations": "Registro de actividad",
     "elapsed": "Lleva {{duration}} trabajando",
