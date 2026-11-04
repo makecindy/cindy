@@ -5,6 +5,7 @@
  * 归属校验、reason 截断;turn 翻译器状态机与 usage 归一化;activity 边界配对与轮次来源过滤。
  */
 
+import fs from 'node:fs';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import {
@@ -35,10 +36,11 @@ import {
 } from '../../../shared/ghost';
 import { installedGhostStoragePart } from '../../../shared/pluginIdentity.js';
 import { createGhostProductionCallbacks } from './ghostProductionCallbacksFixture.js';
+import { GhostNotificationIndex } from '../ghostNotificationIndex.js';
 
 const createSessionNotification = createGhostProductionCallbacks<{
   notifyGhostSessionEvent(
-    kind: 'switched',
+    kind: 'created' | 'archived' | 'switched',
     data: { sessionId: string },
     claim: () => Promise<boolean>,
     releaseRaw: (resetPrimary?: boolean) => void,
@@ -339,6 +341,37 @@ const TURN_DATA = { sessionId: 's1', agent: 'claude-code' };
 // synchronous scan, and must not reuse another owner's pending discovery.
 // Existing fan-out tests only exercise synchronous discovery / wake boundaries.
 describe('asynchronous notification discovery', () => {
+  // Unit performance regression: when recursive watching is unavailable, the
+  // real index scans on each read. Preflight and delivery must share one read
+  // for each lifecycle event, while the next event must still discover afresh.
+  it.each(['created', 'archived', 'switched'] as const)('scans once per %s event without filesystem watchers', async (kind) => {
+    const watch = vi.spyOn(fs, 'watch').mockImplementation(() => { throw new Error('watch unavailable'); });
+    const subscriber = ghost('a', { topics: ['session'] });
+    const scan = vi.fn(async () => [subscriber]);
+    const index = new GhostNotificationIndex({ roots: () => [process.cwd()], scan });
+    try {
+      const { gw, sent, running } = makeGateway({ listGhostsAsync: () => index.read() });
+      running.add('a');
+      const { notifyGhostSessionEvent } = createSessionNotification({
+        ghostOwnerScope: { capture: () => 1, isCurrent: () => true, isStable: () => true },
+        getGhostSubscriptionGateway: () => gw,
+        isGhostEligibleSession: async () => ({ outcome: 'eligible' }),
+      });
+      notifyGhostSessionEvent(kind, { sessionId: 'A' }, async () => true, () => {});
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      expect(watch).toHaveBeenCalled();
+      expect(sent).toHaveLength(1);
+      expect(scan).toHaveBeenCalledTimes(1);
+      notifyGhostSessionEvent(kind, { sessionId: 'B' }, async () => true, () => {});
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      expect(sent).toHaveLength(2);
+      expect(scan).toHaveBeenCalledTimes(2);
+    } finally {
+      index.dispose();
+      watch.mockRestore();
+    }
+  });
+
   // Unit regression: an unreadable discovery root must not reserve a failed
   // focus, either when the same raw focus retries or when the user returns.
   it.each([false, true])('recovers after discovery fails (retry same focus: %s)', async (retrySameFocus) => {
@@ -427,8 +460,30 @@ describe('asynchronous notification discovery', () => {
       ghost('idle', { topics: ['session'] }), ghost('off', { topics: ['turn'] }, false),
       ghost('hooks', { hooks: ['will-user-message'] }),
     ] });
-    await expect(gw.hasSubscribers('session')).resolves.toBe(true);
-    await expect(gw.hasSubscribers('turn')).resolves.toBe(false);
+    await expect(gw.preparePublish('session')).resolves.toEqual(expect.any(Function));
+    await expect(gw.preparePublish('turn')).resolves.toBeNull();
+    expect(deps.wake).not.toHaveBeenCalled();
+  });
+
+  // Prepared candidates are discovery hints, never cached authorization.
+  it.each(['approval', 'disabled', 'topic', 'owner'] as const)('rechecks %s after preparing an event', async (change) => {
+    let owner = 1;
+    const candidate = { ...ghost('a', { topics: ['session'] }), approval: { state: 'approved' as const, revision: 'old' } };
+    let live = candidate;
+    const { gw, sent, running, deps } = makeGateway({
+      listGhostsAsync: async () => [candidate],
+      findGhostForDelivery: () => live,
+      ownerScope: { capture: () => owner, isCurrent: stamp => stamp === owner, isStable: () => true },
+    });
+    running.add('a');
+    const publish = await gw.preparePublish('session');
+    expect(publish).not.toBeNull();
+    if (change === 'approval') live = { ...candidate, approval: { state: 'approved', revision: 'new' } };
+    if (change === 'disabled') live = { ...candidate, enabled: false };
+    if (change === 'topic') live = { ...candidate, manifest: { ...candidate.manifest, subscribe: { topics: ['turn'] } } };
+    if (change === 'owner') owner++;
+    publish?.('did-session-switched', { sessionId: 'A' });
+    expect(sent).toHaveLength(0);
     expect(deps.wake).not.toHaveBeenCalled();
   });
 

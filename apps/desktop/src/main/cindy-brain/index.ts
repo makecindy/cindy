@@ -3407,16 +3407,16 @@ export function notifyGhostSessionEvent(
   void (async () => {
     try {
       const owner = ghostOwnerScope.capture();
-      let hasSubscribers: boolean;
+      let publishSessionEvent: Awaited<ReturnType<GhostSubscriptionGateway['preparePublish']>>;
       try {
-        hasSubscribers = await getGhostSubscriptionGateway().hasSubscribers('session');
+        publishSessionEvent = await getGhostSubscriptionGateway().preparePublish('session');
       } catch {
         // Discovery did not establish a delivery target. Release both markers:
         // the same focus may retry, and returning to the previous focus is new.
         onRetry(true);
         return;
       }
-      if (!hasSubscribers) {
+      if (!publishSessionEvent) {
         // Even without listeners, advance the focus tracker's deduplication state.
         // Otherwise disabling at A, visiting B, then enabling and returning to A
         // suppresses a real switch. The claim retains generation/Lead rechecks;
@@ -3445,8 +3445,7 @@ export function notifyGhostSessionEvent(
       // switched 在异步归一、资格查询完成后再确认一次焦点代次；确认与去重在同一步完成。
       if (!(await shouldPublish())) return;
       if (!ghostOwnerScope.isCurrent(owner) || !ghostOwnerScope.isStable(owner)) return;
-      getGhostSubscriptionGateway().publish(
-        'session',
+      publishSessionEvent(
         kind === 'created'
           ? 'did-session-created'
           : kind === 'archived'

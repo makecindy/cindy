@@ -220,15 +220,21 @@ export class GhostSubscriptionGateway {
 
   constructor(private readonly deps: GhostSubscriptionGatewayDeps) {}
 
-  /** Cheap when the Host's discovery index is ready; unknown is resolved, never assumed empty. */
-  async hasSubscribers(topic: GhostSubscribeTopic): Promise<boolean> {
+  /** Discover once for one event; the returned sender still checks live approvals and owner. */
+  async preparePublish(topic: GhostSubscribeTopic): Promise<
+    ((name: GhostDidEventName, data: GhostDidEventData) => void) | null
+  > {
     const owner = this.captureOwnerScope();
-    if (!this.ownerScopeUsable(owner)) return false;
+    if (!this.ownerScopeUsable(owner)) return null;
     const ghosts = this.deps.listGhostsAsync
       ? await this.deps.listGhostsAsync()
       : this.deps.listGhosts();
-    return this.ownerScopeUsable(owner) && ghosts.some(ghost =>
-      ghost.enabled && ghost.manifest.subscribe?.topics?.includes(topic));
+    if (!this.ownerScopeUsable(owner) || !ghosts.some(ghost =>
+      ghost.enabled && ghost.manifest.subscribe?.topics?.includes(topic))) return null;
+    return (name, data) => {
+      if (!this.ownerScopeUsable(owner)) return;
+      this.publishTo(ghosts, topic, name, data);
+    };
   }
 
   /* ── did- 旁听 ─────────────────────────────────────────────────────── */
