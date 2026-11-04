@@ -6,13 +6,14 @@ import { createDbClientForHandle } from '../../desktop/src/main/localDb/client/c
 import { OwnerSessionStorage } from '../../desktop/src/main/localDb/sessionStorageAdapter.js';
 import { openOwnerDatabase, OwnerDatabaseError } from '../../desktop/src/main/localDb/startupCore.js';
 import { resolveHostDataDir, resolveHostRegion } from './profile-path.mjs';
+import { acquireHostRuntimeLease, type HostRuntimeLease } from './runtime-lock.js';
 
 const PORT = 3456;
 /** Repo layout: apps/host/src → apps/desktop/{drizzle,native}. */
 const desktopRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../desktop');
 
 interface RuntimeState {
-  state: 'uninitialized' | 'ready' | 'error';
+  state: 'uninitialized' | 'ready' | 'error' | 'blocked';
   owner: string | null;
   storage: 'unopened' | 'ready' | 'error';
   detail?: string;
@@ -22,6 +23,7 @@ const runtime: RuntimeState = { state: 'uninitialized', owner: null, storage: 'u
 let activeOwner: string | null = null;
 let closeStorage: (() => Promise<void>) | null = null;
 let sessionStorage: OwnerSessionStorage | null = null;
+let runtimeLease: HostRuntimeLease | null = null;
 
 /**
  * Initialize storage for a known owner. Login/OAuth is a later stage; until
@@ -33,6 +35,16 @@ async function ensureRuntime(ownerId: string): Promise<void> {
     if (activeOwner === ownerId) return;
     throw new Error('owner switch is not supported while the host is running');
   }
+  const lease = acquireHostRuntimeLease(resolveHostDataDir(), ownerId);
+  if (!lease.held) {
+    runtime.state = 'blocked';
+    runtime.owner = ownerId;
+    runtime.storage = 'unopened';
+    runtime.detail = `runtime lease unavailable (${lease.reason}): another cindy-host owns this profile`;
+    throw new OwnerDatabaseError('DB_SCHEMA_LOCKED', runtime.detail);
+  }
+  runtimeLease = lease;
+
   const vecFile = process.platform === 'win32'
     ? 'vec0.dll'
     : process.platform === 'darwin' ? 'vec0.dylib' : 'vec0.so';
@@ -93,8 +105,14 @@ server.listen(PORT, '127.0.0.1', () => {
   const owner = process.env.CINDY_HOST_OWNER?.trim();
   if (!owner) return;
   void ensureRuntime(owner).catch((error: unknown) => {
-    runtime.state = 'error';
-    runtime.storage = 'error';
+    if (runtime.state === 'blocked') {
+      // A blocked host never opened storage; reporting 'error' would wrongly
+      // imply the profile database failed.
+      runtime.storage = 'unopened';
+    } else {
+      runtime.state = 'error';
+      runtime.storage = 'error';
+    }
     runtime.owner = owner;
     runtime.detail = error instanceof OwnerDatabaseError
       ? `${error.code}: ${error.message}`

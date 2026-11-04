@@ -12,5 +12,9 @@
   },
   "devDependencies": {
     "tsx": "^4.19.0"
+  },
+  "dependencies": {
+    "@cindy/maker-core": "workspace:*",
+    "better-sqlite3": "^12.9.0"
   }
 }

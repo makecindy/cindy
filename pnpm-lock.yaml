@@ -653,6 +653,13 @@ importers:
         version: 3.2.7(@types/debug@4.1.13)(@types/node@25.9.5)(jiti@1.21.7)(jsdom@29.1.1(@noble/hashes@1.8.0))(lightningcss@1.33.0)(terser@5.49.0)(tsx@4.23.1)(yaml@2.9.0)
 
   apps/host:
+    dependencies:
+      '@cindy/maker-core':
+        specifier: workspace:*
+        version: link:../../packages/maker-core
+      better-sqlite3:
+        specifier: ^12.9.0
+        version: 12.11.1
     devDependencies:
       tsx:
         specifier: ^4.19.0
@@ -15059,7 +15066,9 @@ snapshots:
       metro-runtime: 0.84.5
     transitivePeerDependencies:
       - '@babel/core'
+      - bufferutil
       - supports-color
+      - utf-8-validate
 
   '@react-native/normalize-colors@0.74.89': {}
 
