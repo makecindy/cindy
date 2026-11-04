@@ -152,7 +152,6 @@
     'ghosts.listSync': () => ({ ghosts: [] }),
     'ghosts.recommendationsSync': () => ({ items: [] }),
     'sidebarSettings.loadSnapshot': () => ({ pinned: [], hidden: [], order: [] }),
-    'maker.getCapabilities': () => ({ agents: ['claude-code'], models: [] }),
     'maker.listActive': () => [],
     'remoteDesktop.state': () => ({ status: 'unavailable' }),
     'sidebarSettings.claimLegacyRendererOwner': () => ({ claimed: false }),
