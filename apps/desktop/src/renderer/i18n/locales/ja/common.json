@@ -18801,6 +18801,11 @@
     "saveImageFailed": "画像を保存できません。もう一度保存してください。",
     "previewFailed": "画像のプレビューを表示できません。リンクはコピーできます。"
   },
+  "subscriptionUltraPolicy": {
+    "label": "Ultra を許可",
+    "providerHint": "オンにすると、Ultra 対応モデルの推論強度に Ultra が表示されます。オフにすると Ultra は非表示になり、Max や High はそのまま使えます。",
+    "saveFailed": "保存に失敗しました。もう一度お試しください。"
+  },
   "subscriptionFastPolicy": {
     "label": "Fast を許可",
     "providerHint": "オフにすると、このサブスクリプションの自分用・共有タスクは通常速度になります。Ultrafast も対象です。",

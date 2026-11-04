@@ -1,5 +1,6 @@
 import { readProviderPresentation } from './provider-presentation-store.js';
 import { projectSubscriptionFastPolicy } from './subscription-fast-policy.js';
+import { projectSubscriptionUltraPolicy } from './subscription-ultra-policy.js';
 import { filterLegacyGptContextProfiles } from './legacy-context-profiles.js';
 import { subscriptionAccountState, isXaiSubscriptionProviderId, resetSubscriptionAccountCaches } from './subscription-account-auth.js';
 /**
@@ -1007,7 +1008,8 @@ export function getDesktopProviderService(options: { allowSideEffects?: boolean 
   }
   if (singleton) return singleton;
   singleton = createProviderService({
-    projectProvider: projectSubscriptionFastPolicy,
+    projectProvider: (provider) =>
+      projectSubscriptionUltraPolicy(projectSubscriptionFastPolicy(provider)),
     getProviderPresentation: (providerId) => {
       const presentation = readProviderPresentation(providerId);
       if (providerId !== 'xd') return presentation;

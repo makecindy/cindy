@@ -19044,6 +19044,11 @@
     "saveImageFailed": "No se pudo guardar la imagen. Intenta guardarla de nuevo.",
     "previewFailed": "No se pudo mostrar la vista previa de la imagen. Aún puedes copiar el enlace."
   },
+  "subscriptionUltraPolicy": {
+    "label": "Permitir Ultra",
+    "providerHint": "Si está activado, los modelos compatibles con Ultra lo muestran en la intensidad de razonamiento. Si está desactivado, Ultra se oculta y Max y High siguen disponibles.",
+    "saveFailed": "No se pudo guardar. Inténtalo de nuevo."
+  },
   "subscriptionFastPolicy": {
     "label": "Permitir Fast",
     "providerHint": "Si se desactiva, esta cuenta de suscripción usa la velocidad estándar para tus tareas propias y compartidas, incluidas las de Ultrafast.",
