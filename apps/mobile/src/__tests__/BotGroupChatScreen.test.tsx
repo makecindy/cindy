@@ -4,9 +4,11 @@ import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { BOT_GROUP_RUNTIME_FAILURE_CODES, type BotGroupRemoteChatData } from '@cindy/maker-shared/botGroupChat';
 import { shareSelectionStore } from '@/session/shareSelectionStore';
+import { i18n } from '@/i18n';
 
 const h = vi.hoisted(() => ({
   processRead: vi.fn(),
+  translate: null as null | ((key: string, options?: Record<string, unknown>) => string),
   chat: null as any, pngExport: vi.fn(async () => 'encoded'), sharedImage: vi.fn(async () => {}), exported: [] as any[],
   management: null as any,
   openTeammate: vi.fn(),
@@ -121,7 +123,7 @@ vi.mock('@/session/SessionHeaderNativeControls', () => ({ SessionHeaderNativeBlu
 vi.mock('react-i18next', async (importOriginal) => ({
   ...await importOriginal<typeof import('react-i18next')>(),
   useTranslation: () => ({
-    t: (key: string, options?: Record<string, unknown>) => options
+    t: (key: string, options?: Record<string, unknown>) => h.translate ? h.translate(key, options) : options
       ? `${key}(${Object.entries(options).map(([name, value]) => `${name}=${String(value)}`).join(',')})`
       : key,
     i18n: { language: 'zh-CN' },
@@ -357,6 +359,7 @@ async function render(data: BotGroupRemoteChatData | null = group(), kind: 'read
 }
 
 beforeEach(() => {
+  h.translate = null;
   h.nativeMenus = true;
   shareSelectionStore.exit();
   h.management = null;
@@ -385,6 +388,9 @@ describe('group timeline', () => {
   // A01 / unit: real screen -> sent mention -> public identity -> close. Existing
   // composer tests never exercised sent-text taps; minimal failure is @咪咪.
   it.each([[true, false], [false, false], [true, true]])('opens the named member from sent text (own=%s, topic=%s) and returns to the message', async (own, topic) => {
+    // Native acceptance found the owner caption leaking its translation key.
+    // Use the production catalog here so the complete sheet text is observable.
+    h.translate = (key, options) => i18n.t(key, { ...options, lng: 'zh-CN' });
     const data = group({ serverBacked: true, messages: [message('mention', 1, {
       authorKind: 'user', isSelf: own, content: '@咪咪 看看这段正文', mentions: { all: false, botIds: ['mimi'] }, threadRootId: topic ? 'topic-root' : undefined,
     })] });
@@ -400,7 +406,9 @@ describe('group timeline', () => {
     expect(JSON.parse(mention.getAttribute('data-style')!).textDecorationLine).toBe('underline');
     await act(async () => mention.click());
     expect(byId('botGroup.mention.identity')?.textContent).toContain('Cindy');
-    expect(byId('botGroup.mention.identity')?.textContent).toContain('groupChat.memberStatus.paused');
+    expect(byId('botGroup.mention.identity')?.textContent).toContain('王悦 的伙伴');
+    expect(byId('botGroup.mention.identity')?.textContent).toContain('已暂停');
+    expect(byId('botGroup.mention.identity')?.textContent).not.toContain('groupChat.');
     expect(h.chat.act).not.toHaveBeenCalled();
     await click('botGroup.mention.identity.close');
     expect(byId('botGroup.mention.identity')).toBeNull();

@@ -17,7 +17,7 @@ export function BotGroupMentionIdentity({ member, deviceId, onClose }: {
   const styles = useThemedStyles(makeStyles);
   const bot = member && (member.actorKind === 'bot' || (!member.actorKind && !member.role));
   const role = member ? bot
-    ? member.ownerName ? t('groupChat.server.settings.companionOf', { name: member.ownerName }) : null
+    ? member.ownerName ? t('groupChat.groupSettings.companionOf', { name: member.ownerName }) : null
     : t(`groupChat.settings.roles.${member.role ?? 'member'}`) : null;
   const status = !member || member.status === 'active' ? null
     : t(`groupChat.memberStatus.${member.status === 'paused' ? 'paused' : 'unavailable'}`);
