@@ -193,6 +193,39 @@ it.each([
 });
 
 
+// #6015: real drawer must disable reset for an untouched generated interface.
+// Existing V6 cases use hand-written IDs without preset snapshots. Minimal unit
+// input is one OpenRouter preset model; IPC stays in memory (no supplier call).
+it('does not offer a protocol-changing reset for a generated preset interface', async () => {
+  const preset = BUNDLED_CATALOG.presets!.find(item => item.id === 'openrouter')!;
+  const runtime = preset.runtimes.pi!;
+  const original = runtime.models.find(item => item.id === 'anthropic/claude-opus-4.7')!;
+  const config: CustomProviderConfig = { id: 'generated-interface', name: 'Fixture', runtimes: { pi: {
+    ...structuredClone(runtime), catalogPresetId: preset.id, models: [structuredClone(original)],
+  } } };
+  const provider = { ...buildUserProvider(config, { presets: [preset] }), connected: true } as ProviderView;
+  const model = provider.models.pi![0]!;
+  const previousAPI = window.electronAPI;
+  const update = vi.fn();
+  Object.defineProperty(window, 'electronAPI', { configurable: true, value: { maker: { updateCustomProvider: update } } });
+  try {
+    render(<ModelAdvancedDrawer provider={provider}
+      row={{ id: model.id, name: model.name, avail: ['pi'], byAgent: { pi: model } }}
+      open onOpenChange={vi.fn()} pricePresentationOf={() => null}
+      onDisable={vi.fn()} disabled={false} paymentRequired={false} />);
+    fireEvent.keyDown(screen.getByRole('button', { name: 'Pi · settings.providers.custom.fields.wireProtocol' }), { key: 'ArrowDown' });
+    const restore = await screen.findByRole('menuitem', { name: 'settings.providers.models.advanced.protocol.restoreRoute' });
+    expect(restore.getAttribute('aria-disabled')).toBe('true');
+    fireEvent.click(restore);
+    expect(update).not.toHaveBeenCalled();
+    expect(screen.getByText('settings.providers.models.advanced.protocol.sourceCatalog')).toBeTruthy();
+    expect(modelProtocolComparison(provider, { pi: model }).forAgent('pi')?.outbound).toBe('anthropic-messages');
+  } finally {
+    cleanup();
+    Object.defineProperty(window, 'electronAPI', { configurable: true, value: previousAPI });
+  }
+});
+
 // Main's V6 interface picker and #6015's reset/source labels must agree after merging.
 it.each([
   { interfaceId: 'auto', source: 'catalog', api: 'openai-responses' },

@@ -317,6 +317,31 @@ describe('preset protocol provenance (#6015)', () => {
     for (const item of models) expect(modelProtocolComparison(provider, { pi: item }).forAgent('pi'))
       .toMatchObject({ source: 'catalog', customized: false });
   });
+  // #6015 review: buildUserProvider must not offer a destructive reset for an
+  // untouched V6 preset. Earlier snapshot cases had no interfaceId. Minimal
+  // unit input: one saved preset model; also protect a different explicit ID.
+  it.each(['openrouter', 'vercel-ai-gateway'])('preserves generated interface provenance for %s', presetId => {
+    const current = BUNDLED_CATALOG.presets!.find(item => item.id === presetId)!;
+    const runtime = current.runtimes.pi!;
+    const original = runtime.models.find(item => item.id === 'anthropic/claude-opus-4.7')!;
+    expect(original.interfaceId).toBeTruthy();
+    expect(original.interfaceId).not.toBe('auto');
+    const value: CustomProviderConfig = { id: 'interface-snapshot', name: 'Fixture', runtimes: { pi: {
+      ...structuredClone(runtime), catalogPresetId: current.id, models: [structuredClone(original)],
+    } } };
+    const before = structuredClone(value);
+    const result = project(value, [current]);
+    expect(result.protocol).toMatchObject({ source: 'catalog', customized: false, outbound: 'anthropic-messages' });
+    expect(result.model.userModelConfig).toEqual(original);
+    expect(value).toEqual(before);
+    const alternative = result.model.availableInterfaces!.find(item => item.profileId !== original.interfaceId)!;
+    expect(alternative).toBeDefined();
+    value.runtimes.pi!.models[0]!.interfaceId = alternative.profileId;
+    expect(project(value, [current]).protocol).toMatchObject({ source: 'model', customized: true });
+    expect(project(before, []).protocol).toMatchObject({ source: 'model', customized: true });
+    before.runtimes.pi!.baseUrl = 'https://detached.example.test';
+    expect(project(before, [current]).protocol).toMatchObject({ source: 'model', customized: true });
+  });
 });
 
 

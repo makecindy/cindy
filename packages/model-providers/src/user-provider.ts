@@ -665,12 +665,13 @@ export function buildUserProvider(
         ...(nativeApi !== undefined ? { nativeApi } : {}),
         // Projection is not a user edit. Save only the original configuration.
         userModelConfig: structuredClone(storedModel),
-        // applyPreset snapshots protocol fields into storage. Their presence is
-        // not evidence of a user edit while they match this bound preset. Keep
-        // storage intact; only the displayed provenance uses this comparison.
+        // applyPreset snapshots protocol fields, including generated V6 interface
+        // IDs. Their presence is not evidence of a user edit while they match this
+        // bound preset. Keep storage intact; only displayed provenance compares it.
         // A maintained correction owns the effective route even when the saved
         // legacy Chat snapshot differs from the current preset (or it is absent).
-        protocolCustomized: Boolean(storedModel.interfaceId && storedModel.interfaceId !== 'auto') || (!catalogInterfaceApplied && Boolean(
+        protocolCustomized: Boolean(storedModel.interfaceId && storedModel.interfaceId !== 'auto' &&
+          storedModel.interfaceId !== presetModel?.interfaceId) || (!catalogInterfaceApplied && Boolean(
           (storedModel.api && storedModel.api !== presetModel?.api) ||
           (storedModel.piApi && storedModel.piApi !== presetModel?.piApi) ||
           (storedModel.route && (
