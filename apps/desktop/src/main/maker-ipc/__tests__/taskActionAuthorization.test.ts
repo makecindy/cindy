@@ -968,6 +968,24 @@ describe('teammate turn principal', () => {
     },
   );
 
+  // An owner's off switch for memory or a system Skill must not be undone by a Host-started turn.
+  it('asks the owner before an automatic turn turns a feature back on', async () => {
+    const h = desktopFixture('automatic');
+    live(h);
+    const set = (tool: string, args: Record<string, unknown>) =>
+      withToolCallAuthority(h.authorize, helper(tool, args), async () => 'changed');
+    expect(await set('set_teammate_capability', { kind: 'feature', id: 'todo', joined: false })).toBe('changed');
+    expect(await set('set_teammate_capability', { kind: 'skill', id: 'notes', joined: true })).toBe('changed');
+    expect(h.confirm).not.toHaveBeenCalled();
+    expect(await set('set_bot_capability', { kind: 'feature', id: 'todo', joined: true })).toBe('changed');
+    expect(h.confirm).toHaveBeenCalledTimes(1);
+    h.confirm.mockResolvedValueOnce(false);
+    expect(JSON.stringify(await set('set_teammate_capability', { kind: 'feature', id: 'memory', joined: true }))).toContain('USER_CANCELLED');
+    h.activeInput.ownerInput = true;
+    expect(await set('set_teammate_capability', { kind: 'feature', id: 'todo', joined: true })).toBe('changed');
+    expect(h.confirm).toHaveBeenCalledTimes(2);
+  });
+
   it('uses ordinary task permission for remote create on a non-teammate task', async () => {
     const h = desktopFixture('automatic');
     live(h);

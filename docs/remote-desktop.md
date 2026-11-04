@@ -1122,11 +1122,19 @@ the settings page's "remove service" action, which asks for administrator
 consent. A leftover registration is inert — the service is demand-start and
 exits with the Cindy process it was authorized for.
 
-Both helpers import `VCRUNTIME140.dll` and the UCRT api-sets, as the shipped
-helpers already did before staging; the UCRT is part of Windows, and
-`VCRUNTIME140.dll` comes from the Visual C++ redistributable, which setup does
-not install. Where it is missing the service cannot start, which surfaces as the
-`service-ready` step rather than silently.
+Both Windows helpers and the Main-only Node-API transport statically link the
+MSVC C runtime through `native/remote-desktop/.cargo/config.toml`. Packaging and
+source-mode builds explicitly load this configuration, and source-mode cache
+invalidation includes it. Neither the uninstaller nor the protected service
+bootstrap requires a machine-wide Visual C++ redistributable installation.
+Check the two EXEs and the `.node` artifact's PE imports and Electron loading
+when changing this build configuration.
+
+This applies to newly built versions. An older installed version still runs
+its own uninstaller during replacement; recovery for those versions is outside
+this change. On a clean Windows machine without the VC++ runtime, release
+validation must cover a fresh install, replacement of this fixed version, and
+direct uninstall, both with and without a registered remote desktop service.
 
 #### Authorization and validation
 

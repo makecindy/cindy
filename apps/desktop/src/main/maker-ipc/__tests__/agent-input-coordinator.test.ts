@@ -116,6 +116,13 @@ describe('task action dispatch authorization', () => {
     expect(h.sendToAgent.mock.calls[0]![3].persistUserMessage?.clientId).toBe('owner');
     expect(h.onDiscardedQueuedMessage).toHaveBeenCalledWith(sid, expect.objectContaining({ clientId: 'automatic' }));
     expect(h.onUndispatchedUserTurn).not.toHaveBeenCalled();
+    expect(mocks.logger.info).toHaveBeenCalledWith(
+      'discarding revoked task action input before dispatch',
+      expect.objectContaining({
+        sessionId: sid, clientId: 'automatic', stage: 'pre-check',
+        errorCode: mode === 'restored' ? 'TASK_ACTION_AUTHORIZATION_REQUIRED' : 'TASK_ACTION_AUTHORIZATION_EXPIRED',
+      }),
+    );
     expect(h.coordinator.getProjection(sid)).toMatchObject({ error: null, pendingQueue: [] });
   });
 
@@ -129,6 +136,7 @@ describe('task action dispatch authorization', () => {
     { name: 'a failed pre-check', call: 1, error: 'failed', outcome: 'retained' },
     { name: 'a failed re-check before persistence', call: 2, error: 'failed', outcome: 'retained' },
     { name: 'a revocation before persistence', call: 2, error: 'revoked', outcome: 'discarded' },
+    { name: 'a group revocation before persistence', call: 2, error: 'group-revoked', outcome: 'discarded' },
     { name: 'a revocation after persistence', call: 3, error: 'revoked', outcome: 'delivered' },
   ] as const)('$name is $outcome', async ({ call, error, outcome }) => {
     const h = createHarness(), sid = `task-action-judged-${call}-${error}`;
@@ -146,6 +154,8 @@ describe('task action dispatch authorization', () => {
     const queued = makeItem('automatic', 'Continue');
     bindTaskActionInput(sid, queued, async () => {
       if (++calls !== call) return;
+      if (error === 'group-revoked')
+        throw Object.assign(new Error('private message body must not reach logs'), { code: 'GROUP_AUTHORIZATION_REQUIRED' });
       throw error === 'revoked'
         ? new Error('TASK_ACTION_AUTHORIZATION_EXPIRED')
         : Object.assign(new Error('verification unavailable'), { code: 'GROUP_AUTHORIZATION_UNAVAILABLE' });
@@ -163,11 +173,22 @@ describe('task action dispatch authorization', () => {
       await vi.waitFor(() => expect(h.onDiscardedQueuedMessage).toHaveBeenCalledOnce());
       expect(dispatched).not.toHaveBeenCalled();
       expect(h.coordinator.getProjection(sid)).toMatchObject({ error: null, recovery: null, pendingQueue: [] });
+      // #8516: a revocation at the second guard used to discard without a reason log.
+      // This production coordinator unit case also ensures arbitrary group error text stays private.
+      const errorCode = error === 'group-revoked' ? 'GROUP_AUTHORIZATION_REQUIRED' : 'TASK_ACTION_AUTHORIZATION_EXPIRED';
+      expect(mocks.logger.info).toHaveBeenCalledWith(
+        'discarding revoked task action input before dispatch',
+        { sessionId: sid, clientId: 'automatic', stage: 'before-persistence', reason: errorCode, errorCode },
+      );
     } else {
       await vi.waitFor(() => expect(h.coordinator.getProjection(sid).recovery).toEqual({ kind: 'queue-head', clientId: 'automatic' }));
       expect(dispatched).not.toHaveBeenCalled();
       expect(h.onDiscardedQueuedMessage).not.toHaveBeenCalled();
       expect(h.coordinator.getProjection(sid).pendingQueue).toHaveLength(1);
+    }
+    if (outcome !== 'discarded') {
+      expect(mocks.logger.info.mock.calls.filter(([event]) =>
+        event === 'discarding revoked task action input before dispatch')).toHaveLength(0);
     }
     // No outcome may leave a persisted user row with a failed reply behind.
     expect(h.onUndispatchedUserTurn).not.toHaveBeenCalled();
@@ -891,6 +912,29 @@ describe('AgentInputCoordinator Orca priority queue transactions', () => {
     expect(row?.agentMeta).toMatchObject({ sourceDevice, sourcePlugin: { pluginId: 'gh-1' }, origin });
   });
 
+  it('tells the host the owner wrote, but not when a shared-task guest did or the input is automatic', async () => {
+    const h = createHarness();
+    const sid = 'owner-message-task';
+    h.coordinator.enqueue(sid, makeItem('owner-1', 'hello'));
+    expect(h.onOwnerMessage).toHaveBeenCalledTimes(1);
+    h.coordinator.enqueue(sid, makeItem('guest-1', 'hi', {
+      sharedTaskAuthor: { sharedTaskId: 's', sessionId: sid, memberId: 'm', accountId: 'g', displayName: 'Guest' },
+    }));
+    expect(h.onOwnerMessage).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not take a plugin or a teammate bot for the owner writing', async () => {
+    const h = createHarness();
+    const sid = 'non-owner-message-task';
+    h.coordinator.enqueue(sid, makeItem('plugin-1', 'hi', { sourcePlugin: { pluginId: 'p' } } as never));
+    h.coordinator.enqueue(sid, makeItem('bot-1', 'hi', {
+      botTaskCoordination: { kind: 'handoff' },
+    } as never));
+    expect(h.onOwnerMessage).not.toHaveBeenCalled();
+    h.coordinator.enqueue(sid, makeItem('owner-1', 'hello'));
+    expect(h.onOwnerMessage).toHaveBeenCalledTimes(1);
+  });
+
   it('retains host-stamped sharedTask attribution when the queue drains outside the original invoke', async () => {
     const h = createHarness();
     const sid = 'sharedTask-task';
@@ -1603,6 +1647,7 @@ function createHarness(opts?: {
     NonNullable<AgentInputCoordinatorDeps['onAutomaticEnqueue']>
   >(() => {});
   const onUserEnqueue = vi.fn<NonNullable<AgentInputCoordinatorDeps['onUserEnqueue']>>(() => {});
+  const onOwnerMessage = vi.fn<NonNullable<AgentInputCoordinatorDeps['onOwnerMessage']>>(() => {});
   const previewQueuedUserTurn = vi.fn<
     NonNullable<AgentInputCoordinatorDeps['previewQueuedUserTurn']>
   >(() => {});
@@ -1631,6 +1676,7 @@ function createHarness(opts?: {
     onUserAction,
     onAutomaticEnqueue,
     onUserEnqueue,
+    onOwnerMessage,
     previewQueuedUserTurn,
     onDiscardedQueuedMessage,
     onRejectedUserTurn,
@@ -1733,6 +1779,7 @@ function createHarness(opts?: {
     onUserAction,
     onAutomaticEnqueue,
     onUserEnqueue,
+    onOwnerMessage,
     previewQueuedUserTurn,
     onDiscardedQueuedMessage,
     onRejectedUserTurn,
@@ -12180,7 +12227,7 @@ describe('AgentInputCoordinator scheduler 排队心跳(review 反馈回归)', ()
       });
       h.coordinator.enqueue(sid, makeItem('scheduled-row', 'heartbeat', { origin: schedOrigin }));
       await flush();
-      expect(h.rewindPersistedUserMessageAfterClear).toHaveBeenCalledExactlyOnceWith(sid, 'scheduled-row');
+      expect(h.rewindPersistedUserMessageAfterClear).toHaveBeenCalledExactlyOnceWith(sid, 'scheduled-row', { discard: true });
       expect(h.persistTerminalSendError).not.toHaveBeenCalled();
       expect(latestProjection(h.projections).error).toBeNull();
       expect(latestProjection(h.projections).recovery).toBeNull();
@@ -13764,6 +13811,80 @@ describe('AgentInputCoordinator 中断自动续跑', () => {
       }),
     );
     expect(mocks.touchUserSendInDb).toHaveBeenCalledTimes(1);
+  });
+
+  // Group requests are hidden from engine-switch handoff. A CONTINUE-only retry
+  // must identify the interrupted request and retain its files (2026-11-03 incident, unit).
+  it('keeps a hidden group request and its image in continuation-only recovery', async () => {
+    const h = createHarness();
+    const sid = 'group-request-recovery';
+    const takeover = { ...TAKEOVER_INFO, reason: 'codex_reconnect_stalled' };
+    h.setResumableTurnErrorTakeover(takeover);
+    h.setHasAssistantProgressAfter(async () => false);
+    const text = '[UI_ACTION_TRIGGER]Group request: <untrusted-data>{"currentRequest":{"text":"这张图是什么？"}}</untrusted-data>';
+    const original = makeItem('bot-group:room:execution:bot', text, {
+      agentOmitsTriggerPrefix: true,
+      files: [{ id: 'picture', name: 'picture.png', path: '/test/picture.png', ext: '.png', category: 'image', mimeType: 'image/png', size: 128 }],
+    });
+    original.chatMessage.content = `${text}\n恢复背景：此前已讨论图片所在的房间。`;
+    await failAfterDispatch(h, sid, original);
+    await expect(h.coordinator.autoRetryLastError(sid, takeover.sessionTotal)).resolves.toBe('resumed');
+    await flush();
+    const resumed = h.onDispatchedUserTurn.mock.calls[1]?.[1];
+    expect(resumed).toMatchObject({ autoResume: true, retrySourceClientId: original.clientId, files: original.files });
+    expect(resumed.text).toContain('这张图是什么？');
+    expect(resumed.text).toContain('此前已讨论图片所在的房间');
+    expect(resumed.text).toContain(CONTINUE_AFTER_ERROR_PROMPT);
+    expect(h.supersedeRetriedUserTurn).not.toHaveBeenCalled();
+  });
+
+  it.each([false, true])('restores stored group background on retry with assistant progress=%s', async hasProgress => {
+    const h = createHarness();
+    const sid = 'group-delta-retry';
+    h.setHasAssistantProgressAfter(async () => hasProgress);
+    const full = '[UI_ACTION_TRIGGER]原背景：项目叫 Aurora。当前问题：叫什么？';
+    const original = makeItem('chat-only-transport-id', '[UI_ACTION_TRIGGER]当前问题：叫什么？', {
+      retrySourceClientId: 'bot-group:room:execution:bot', toolsDisabled: true,
+      persistedContent: JSON.stringify({ text: full, images: [] }),
+    });
+    original.chatMessage.content = full;
+    await failAfterDispatch(h, sid, original);
+    await h.coordinator.retryLastError(sid);
+    await flush();
+    const resumed = h.onDispatchedUserTurn.mock.calls[1]?.[1];
+    expect(resumed.text).toContain('原背景：项目叫 Aurora');
+    expect(resumed.text).toContain('当前问题：叫什么？');
+    expect(resumed.toolsDisabled).toBe(true);
+    expect(resumed.retrySourceClientId).toBe(original.retrySourceClientId);
+  });
+
+  // Review regression: repeated group continuations retained the prior checkpoint
+  // before appending a fresh one. Exercise two real error/retry dispatches (unit).
+  it('replaces the previous group checkpoint on repeated recovery', async () => {
+    let summary = 'first durable progress';
+    const h = createHarness({ getRecoveryContextSnapshot: async () => ({
+      contextTokens: 150_000, contextWindow: 200_000, progressCount: 1,
+      recentProgress: [{ role: 'assistant', summary }],
+    }) });
+    const sid = 'group-repeated-checkpoint';
+    h.setHasAssistantProgressAfter(async () => true);
+    await failAfterDispatch(h, sid, makeItem('bot-group:room:execution:bot', '[UI_ACTION_TRIGGER]当前问题：图片是什么？'));
+    await h.coordinator.retryLastError(sid);
+    await flush();
+    expect(h.onDispatchedUserTurn.mock.calls[1]?.[1].text).toContain(summary);
+    summary = 'latest durable progress';
+    h.setRunning(false);
+    h.coordinator.onTurnEvent(sid, 'error', truncationMessage, truncationSignals);
+    await flush();
+    await h.coordinator.retryLastError(sid);
+    await flush();
+    const resumed = h.onDispatchedUserTurn.mock.calls[2]?.[1];
+    expect(resumed.text).toContain('当前问题：图片是什么？');
+    expect(resumed.text).toContain(CONTINUE_AFTER_ERROR_PROMPT);
+    expect(resumed.text.match(/\[CINDY_RECOVERY_CHECKPOINT v1\]/g)).toHaveLength(1);
+    expect(resumed.text).toContain(summary);
+    expect(resumed.text).not.toContain('first durable progress');
+    expect(resumed.recoveryCheckpoint?.attempt).toBe(2);
   });
 
   it('host 接管时不设 error、只置 autoResumePending(红横幅留给最终失败)', async () => {

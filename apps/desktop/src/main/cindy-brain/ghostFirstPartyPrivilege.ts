@@ -1,36 +1,9 @@
 /**
- * Host-side first-party privilege resolver.
- *
- * Collects "where this installed plugin came from" into a structured
- * conclusion. Callers decide whether to refuse install or only withhold
- * privileges; this module does not refuse loading.
- *
- * Call sites must not treat `cindy-` / `filo-` / `xd-` names as privileges.
- * Official plugins still qualify through builtin seed or trusted public market
- * facts; enterprise broker qualifies through current-organization market facts.
- *
- * Input priority: first evaluable of
- *   1. approved builtin resource, or a captured legacy qualification
- *   2. explicit agent-forge install + current organization prefix
- *   3. reserved Cindy public resources or current organization server packages
- *      in the plugin-market ledger (source + scope + organizationId + Release sha256)
- *      paired with the approved receipt packageSha256
- *   4. neither → fail-closed, no privilege
- *
- * Discriminator is the combination of `source` and `scope`, not `scope`
- * alone. Custom / git market rows write `scope: 'public'` as a placeholder
- * (`plugin-market/service.ts`); that is not a trust statement. Server-market
- * public is only trusted when `source === 'market'`.
- *
- * A matching official prefix is never a security proof by itself. Cindy public
- * resources require exact approved server-market package evidence; historical
- * XD/Filo names require a captured qualification from a real old public install.
- *
- * `facts.builtin` is id-based, not byte-based: it means "this id is on the
- * bundled seed roster" (`listBuiltinSeedIds` / directory name), not "these
- * bytes came from the bundled seed". Byte-level guarantees live in
- * provisioning content matching and `approveTrustedBundledInstall`. A trusted
- * source resource must additionally match the approved identity and content hash.
+ * Enterprise Broker authorization from approved installation facts.
+ * Names, bundled origin and public-market origin grant no generic Host capability.
+ * Current-organization market and explicit Forge installs retain their existing
+ * enterprise checks. Historical source helpers below are used only for approved
+ * package compatibility and one-time credential-alias migration.
  */
 import type { PluginScope } from '@cindy/plugin-protocol';
 
@@ -38,11 +11,7 @@ import { GHOST_OFFICIAL_ID_PREFIX, isOfficialGhostId } from '../../shared/ghost.
 
 const PACKAGE_SHA256_RE = /^[a-f0-9]{64}$/;
 
-/**
- * Ghost ids that share Host credential aliases (`GHOST_SECRET_STORAGE_ALIASES`).
- * A local package impersonating these ids must never receive first-party
- * privilege. Keep this list in sync with `shared/providerSecrets.ts`.
- */
+/** Historical alias owners, retained only for migration and compatibility evidence. */
 export const FIRST_PARTY_ALIAS_GHOST_IDS = Object.freeze(['cindy-web-search', 'xd-mivo'] as const);
 
 export type GhostFirstPartyBasis =
@@ -227,27 +196,17 @@ export function isTrustedPublicMarketPackage(facts: GhostFirstPartyFacts): boole
 }
 
 export function resolveGhostFirstPartyPrivilege(facts: GhostFirstPartyFacts): GhostFirstPartyPrivilege {
-  if (facts.builtin && facts.trustedSource?.kind === 'builtin-official' &&
-      hasTrustedFirstPartySource(facts)) {
-    return allow('builtin-official', true);
-  }
-
-  if (facts.installOrigin === 'manual' && isTrustedPublicCindyResource(facts)) {
-    return allow('market-public', true);
-  }
-
-  if ((FIRST_PARTY_ALIAS_GHOST_IDS as readonly string[]).includes(facts.ghostId)) {
-    return deny('denied-alias');
-  }
+  if (facts.namespace === 'local') return deny('denied-unknown-origin');
 
   if (facts.namespace === null && facts.installOrigin === 'manual' &&
-      facts.legacyFirstPartyEligible === true && isOfficialGhostId(facts.ghostId) &&
+      facts.legacyFirstPartyEligible === true && facts.currentOrganization?.pluginPrefix != null &&
+      facts.ghostId.startsWith(facts.currentOrganization.pluginPrefix + '-') && isOfficialGhostId(facts.ghostId) &&
       (facts.marketRecord === null || (facts.marketRecord.installed &&
         facts.marketRecord.source === 'market' && facts.marketRecord.scope === 'public' &&
         facts.marketRecord.organizationId === null &&
         PACKAGE_SHA256_RE.test(facts.marketRecord.sha256) &&
         facts.marketRecord.sha256 === facts.marketRecord.approvedPackageSha256))) {
-    return allow('legacy-existing-install', true);
+    return allow('legacy-existing-install', false);
   }
 
   // 企业作者的显式 Forge 自测资格来自本次安装来源与当前组织身份，和市场账本
@@ -274,11 +233,6 @@ export function resolveGhostFirstPartyPrivilege(facts: GhostFirstPartyFacts): Gh
       // decided above from origin + current organization, before this market branch.
       return deny('denied-unknown-origin');
     }
-    if (record.scope === 'public' && record.source === 'market') {
-      return isTrustedPublicCindyResource(facts)
-        ? allow('market-public', true)
-        : deny('denied-unknown-origin');
-    }
     if (record.scope === 'organization') {
       // Same discipline as the public branch: scope is only meaningful together
       // with source. `legacy-adopted` rows are synthesized after a successful
@@ -303,12 +257,7 @@ export function resolveGhostFirstPartyPrivilege(facts: GhostFirstPartyFacts): Gh
       if (!marketInstallationMatchesApprovedPackage(record, organization)) {
         return deny('denied-unknown-origin');
       }
-      const legacyXd = facts.namespace === null && facts.legacyPendingNamespace === true &&
-        (organization?.orgSlug === 'xd' ||
-          (organization?.orgSlug == null && organization?.pluginPrefix === 'xd'));
-      const namespacedXd = facts.namespace === 'xd' &&
-        (organization?.orgSlug == null || organization.orgSlug === 'xd');
-      return allow('market-organization-current', namespacedXd || legacyXd);
+      return allow('market-organization-current', false);
     }
     return deny('denied-unknown-origin');
   }

@@ -1,4 +1,13 @@
 {
+  "progress": {
+    "stop": "Arrêter"
+  },
+  "work": {
+    "queued": "En attente {{count}}",
+    "active": "En cours {{count}}",
+    "expand": "Développer l’activité des coéquipiers",
+    "collapse": "Réduire l’activité des coéquipiers"
+  },
   "title": "Conversations de groupe",
   "memberSeparator": ", ",
   "memberCount_one": "{{count}} membre",
@@ -155,7 +164,12 @@
         "details": "Renvoyez votre message. Si l'échec persiste, consultez les journaux et signalez le problème."
       }
     },
-    "runtimeFailureSetupHint": "Pour changer le modèle ou les paramètres, utilisez l'ordinateur sur lequel ce coéquipier s'exécute."
+    "runtimeFailureSetupHint": "Pour changer le modèle ou les paramètres, utilisez l'ordinateur sur lequel ce coéquipier s'exécute.",
+    "capability": {
+      "GROUP_AUTHORIZATION_REQUIRED": "{{name}} n’a pas pu exécuter cet outil : l’autorisation du groupe a expiré ou ne permet pas cette action. Le propriétaire du coéquipier peut renouveler la demande dans ce groupe.",
+      "GROUP_AUTHORIZATION_UNAVAILABLE": "L’autorisation de groupe de {{name}} n’a pas pu être vérifiée ; cet outil n’a donc pas été exécuté. Réessayez une fois la connexion rétablie.",
+      "ATTACHMENTS_UNAVAILABLE": "Certaines pièces jointes n’ont pas été transmises à {{name}} en raison d’un échec de téléchargement ou de la limite de pièces jointes. Renvoyez celles nécessaires à cette demande."
+    }
   },
   "plan": {
     "intro_one": "Cela prend {{count}} étape. Voici qui s'en charge :",
@@ -191,6 +205,7 @@
     "eyebrow_many": "Plan · {{count}} étapes"
   },
   "speaking": {
+    "queued": "En attente",
     "stopping": "Arrêt en cours…",
     "planning": "Répartition du travail…",
     "step": "Travail en cours…"
@@ -263,7 +278,18 @@
       "unavailable": "Impossible de charger les paramètres du groupe. Réessayez."
     },
     "allowMentionAllBots": "Autoriser @tous les coéquipiers",
-    "allowMentionAllBotsHint": "Seul le propriétaire du groupe peut le modifier. Tous les coéquipiers peuvent répondre : prudence en grand groupe. Sans effet sur l’IA qui répond pour vous."
+    "allowMentionAllBotsHint": "Seul le propriétaire du groupe peut le modifier. Tous les coéquipiers peuvent répondre : prudence en grand groupe. Sans effet sur l’IA qui répond pour vous.",
+    "notifications": {
+      "title": "Notifications de messages",
+      "all": "Tous les messages",
+      "mentions": "Mentions uniquement",
+      "none": "Désactivées",
+      "allHint": "Recevez des notifications pour les messages du groupe et les nouvelles réponses dans les fils suivis.",
+      "mentionsHint": "Recevez une notification lorsque vous êtes mentionné, y compris avec @tout le monde. Les mises à jour des répartitions du travail restent signalées.",
+      "noneHint": "Désactivez toutes les alertes système de ce groupe. Les messages non lus sont conservés.",
+      "saving": "Enregistrement…",
+      "saveFailed": "Impossible d’enregistrer les notifications. Réessayez."
+    }
   },
   "errors": {
     "memberLimit": "Une conversation de groupe nécessite de 2 à 6 coéquipiers",

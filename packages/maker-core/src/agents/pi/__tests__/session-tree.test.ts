@@ -103,6 +103,23 @@ describe('pi session tree adapter', () => {
       .toThrow('no failed response');
   });
 
+  // #8383: a gateway that enforces a request-body byte limit answers HTTP 400
+  // (BadRequest.TooLarge), not 413. requestTooLarge decides whether a user retry compacts
+  // before resending; missing it resends the same image history and the task stops at
+  // "Could not complete the reply". Existing cases cover only the 413 and buffer wordings.
+  // Each spelling is a separate row so dropping either alternative fails that row alone;
+  // the transport-failure row keeps the boundary from widening. The combined production
+  // payload is covered end-to-end by the gateway-400 mode in pi-provider-routing.test.ts.
+  it.each([
+    { spelling: 'the BadRequest.TooLarge error type', errorMessage: '400 {"error":{"message":"Bad Request","type":"BadRequest.TooLarge"}}', requestTooLarge: true },
+    { spelling: 'the max-bytes request-body wording', errorMessage: '400 {"error":{"message":"Exceeded limit on max bytes to request body : 16777216"}}', requestTooLarge: true },
+    { spelling: 'an unrelated transport failure', errorMessage: 'upstream returned 502 Bad Gateway', requestTooLarge: false },
+  ])('scores $spelling as requestTooLarge=$requestTooLarge', ({ errorMessage, requestTooLarge }) => {
+    expect(piRetryBranch(retryTree([{
+      type: 'message', message: { role: 'assistant', stopReason: 'error', content: [], errorMessage },
+    }]), '0')).toEqual({ parentId: null, requestTooLarge });
+  });
+
   it('still protects a context edit that replaces message content', () => {
     expect(() => piRetryBranch(retryTree([
       emptyFailure,

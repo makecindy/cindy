@@ -1,4 +1,4 @@
-import { pickModelMetadata, MODEL_METADATA_FIELDS } from '@cindy/model-providers';
+import { pickModelMetadata, MODEL_METADATA_FIELDS, validDiscoveredModelSource } from '@cindy/model-providers';
 import {
   mergeDiscoveredRuntimeModels,
   validModelMetadata,
@@ -255,6 +255,8 @@ function validateRuntime(agent: string, rt: unknown): ValidationResult {
       Object.entries(mm.discoveredCost).some(([key, value]) =>
         !['input', 'output', 'cacheRead', 'cacheWrite'].includes(key) || typeof value !== 'number' || !Number.isFinite(value) || value < 0)
     )) return invalid(`runtime '${agent}' discoveredCost invalid`);
+    if (mm.opaqueModelId !== undefined && mm.opaqueModelId !== true) return invalid(`runtime '${agent}' opaqueModelId invalid`);
+    if (mm.discoveredSource !== undefined && !validDiscoveredModelSource(mm.discoveredSource)) return invalid(`runtime '${agent}' discoveredSource invalid`);
     if (mm.discoveredMetadata !== undefined && !validModelMetadata(mm.discoveredMetadata))
       return invalid(`runtime '${agent}' discoveredMetadata invalid`);
     if (mm.supportsUltrafastMode !== undefined && typeof mm.supportsUltrafastMode !== 'boolean')
@@ -598,6 +600,8 @@ function normalizeRuntime(
       name: m.name.trim(),
       ...pickModelMetadata({ ...m, name: m.name.trim() }),
       ...(m.discoveredMetadata ? { discoveredMetadata: m.discoveredMetadata } : {}),
+      ...(m.opaqueModelId === true ? { opaqueModelId: true as const } : {}),
+      ...(validDiscoveredModelSource(m.discoveredSource) ? { discoveredSource: m.discoveredSource } : {}),
       ...(typeof m.supportsUltrafastMode === 'boolean'
         ? { supportsUltrafastMode: m.supportsUltrafastMode } : {}),
       ...(m.discoveredCost ? { discoveredCost: m.discoveredCost } : {}),
@@ -722,8 +726,18 @@ function invalidateEditedProviderMetadata(
     const before = previous.runtimes[agent];
     const after = next.runtimes[agent];
     if (!before || !after) continue;
+    const context = (runtime: CustomProviderRuntimeConfig, auth: CustomProviderConfig['auth']) =>
+      JSON.stringify([runtime.baseUrl, runtime.modelsUrl, runtime.headers, runtime.wireProtocol, runtime.requestPath,
+        auth?.method === 'apiKey' || !auth ? null : auth]);
+    if (context(before, previous.auth) !== context(after, next.auth)) {
+      after.models = after.models.map(({ discoveredSource: _source, ...model }) => model);
+    }
     after.models = after.models.map(model => {
       const old = before.models.find(row => row.id === model.id);
+      if (old && routeKey(before, old) !== routeKey(after, model) && model.discoveredSource) {
+        const { discoveredSource: _source, ...rest } = model;
+        model = rest;
+      }
       if (!old?.discoveredCost || routeKey(before, old) === routeKey(after, model) ||
           JSON.stringify(old.discoveredCost) !== JSON.stringify(model.discoveredCost)) return model;
       const copy = { ...model };
@@ -851,6 +865,8 @@ function parseRuntimes(raw: string): Partial<Record<AgentKind, CustomProviderRun
                 ? { discoveredCost: Object.fromEntries(Object.entries(m.discoveredCost).filter(([key, value]) =>
                   ['input', 'output', 'cacheRead', 'cacheWrite'].includes(key) && typeof value === 'number' && Number.isFinite(value) && value >= 0)) }
                 : {}),
+              ...(m.opaqueModelId === true ? { opaqueModelId: true as const } : {}),
+              ...(validDiscoveredModelSource(m.discoveredSource) ? { discoveredSource: m.discoveredSource } : {}),
               ...(validModelMetadata(m.discoveredMetadata)
                 ? { discoveredMetadata: m.discoveredMetadata }
                 : {}),

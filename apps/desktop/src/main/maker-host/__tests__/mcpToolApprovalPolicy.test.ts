@@ -1,11 +1,13 @@
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it } from 'vitest';
 import { ORCA_TASK_ACTION_TOOLS } from '../../maker-ipc/taskActionAuthorization.js';
 
 import {
   getDesktopClaudeReadOnlyAllowedTools,
   getDesktopMcpToolApprovalPolicy,
+  setGhostToolApprovalResolver,
 } from '../mcp-tool-approval-policy.js';
 
+afterEach(() => setGhostToolApprovalResolver(null));
 
 describe('desktop Claude read-only allowlist', () => {
   it('allows only explicitly reviewed read-only tools', () => {
@@ -61,7 +63,6 @@ describe('desktop Claude read-only allowlist', () => {
       'mcp__cindy_docs__read_sheet',
       'mcp__cindy_docs__inspect_pdf',
       'mcp__cindy_memory__list_tools',
-      'mcp__cindy_contacts__list_tools',
       'mcp__cindy_slack__slack_status',
       'mcp__cindy_telegram_bot__get_chat',
       'mcp__cindy_feishu_bot__get_chat',
@@ -89,6 +90,26 @@ describe('desktop Claude read-only allowlist', () => {
 });
 
 describe('desktop MCP approval policy', () => {
+  // Contract: names never grant approval. Existing Art/contacts cases lacked local and
+  // unverified instances; unit test exercises the policy used by all three harnesses.
+  it('uses the resolved instance approval and fails closed on ambiguous or unverified names', () => {
+    const call = (ghostId: string, namespace?: string | null) => getDesktopMcpToolApprovalPolicy({
+      serverName: 'cindy', toolName: 'ghost_call',
+      toolParams: { ghost_id: ghostId, namespace, tool: 'read' },
+    });
+    for (const ghostId of ['cindy-art', 'cindy-contacts', 'ordinary']) {
+      expect(call(ghostId)).toBe('prompt');
+      setGhostToolApprovalResolver(({ ghostId: id, namespace }) => namespace === undefined ? null : {
+        ghostId: id, declared: namespace === 'approved' ? 'auto' : namespace === 'strict' ? 'each-call' : null,
+        verifiedPublicMarket: false,
+      });
+      expect(call(ghostId, 'local')).toBe('prompt');
+      expect(call(ghostId, 'approved')).toBe('auto-approve');
+      expect(call(ghostId, 'strict')).toBe('prompt-each-time');
+      expect(call(ghostId)).toBe('prompt');
+      setGhostToolApprovalResolver(null);
+    }
+  });
   // #6826 security review 4354459321, unit: the shared policy must route each
   // recipe invocation through normal session approval, including read-labelled
   // recipes overridden by the user layer. Existing tests trusted the whole server.
@@ -172,25 +193,33 @@ describe('desktop MCP approval policy', () => {
     expect(getDesktopMcpToolApprovalPolicy({ serverName: 'third_party', toolName: 'read_data' })).toBe('prompt');
   });
 
-  it('keeps known safe contacts calls trusted', () => {
-    expect(
+  // 插件通用审批契约：即使是经验证的市场实例，缺省声明也不按工具名推断读写权限。
+  // 最小回归输入为已验证的旧通讯录只读调用；旧兼容名单会错误免审（unit）。
+  it('uses normal session approval for undeclared contacts tools, regardless of market source', () => {
+    setGhostToolApprovalResolver(({ ghostId, namespace }) => ghostId === 'cindy-contacts' && namespace !== 'local'
+      ? { ghostId, declared: null, verifiedPublicMarket: true } : null);
+    const call = (tool: string, args: unknown = {}) =>
       getDesktopMcpToolApprovalPolicy({
-        serverName: 'cindy_contacts',
-        toolParams: { name: 'contacts_search', args: { query: 'Carol' } },
-      }),
-    ).toBe('auto-approve');
-  });
-
-  it('prompts each time for destructive and malformed contacts calls', () => {
-    expect(
-      getDesktopMcpToolApprovalPolicy({
-        serverName: 'cindy_contacts',
-        toolParams: { name: 'contacts_merge', args: { target_id: 'a', source_id: 'b' } },
-      }),
-    ).toBe('prompt-each-time');
-    expect(getDesktopMcpToolApprovalPolicy({ serverName: 'cindy_contacts' })).toBe(
-      'prompt-each-time',
-    );
+        serverName: 'cindy',
+        toolName: 'ghost_call',
+        toolParams: { ghost_id: 'cindy-contacts', tool, args },
+      });
+    for (const tool of ['find', 'get', 'list', 'stats', 'find_duplicates']) {
+      expect(call(tool, { query: 'Carol', id: 'c1' }), `${tool} must use normal session approval`).toBe('prompt');
+    }
+    expect(call('groups', { action: 'list' })).toBe('prompt');
+    expect(call('groups', JSON.stringify({ action: 'list' }))).toBe('prompt');
+    for (const action of ['create', 'rename', 'delete', undefined]) {
+      expect(call('groups', { action, name: 'x' })).toBe('prompt');
+    }
+    for (const tool of ['save', 'save_many', 'record', 'log_event', 'relate', 'organize', 'merge', 'delete', 'import_macos', 'maintenance']) {
+      expect(call(tool), `${tool} must use normal session approval`).toBe('prompt');
+    }
+    // Codex elicitation 可能省略外层 toolName，仍按内层 ghost_id 判定。
+    expect(getDesktopMcpToolApprovalPolicy({
+      serverName: 'cindy',
+      toolParams: { ghost_id: 'cindy-contacts', tool: 'delete', args: { id: 'c1', confirm: true } },
+    })).toBe('prompt');
   });
 
   // cindy_docs 是渐进披露 server:对外只有 list_tools / call_tool。read_sheet 与
@@ -278,7 +307,9 @@ describe('desktop MCP approval policy', () => {
     );
   });
 
-  it('auto-approves first-party Cindy Art media ghost_call tools without prompting', () => {
+  it('uses normal session approval for undeclared Art tools, regardless of market source', () => {
+    setGhostToolApprovalResolver(({ ghostId, tool }) => ghostId === 'cindy-art' && tool !== 'unknown_tool'
+      ? { ghostId, declared: null, verifiedPublicMarket: true } : null);
     for (const tool of ['gen_image', 'edit_image', 'gen_video', 'edit_video']) {
       expect(
         getDesktopMcpToolApprovalPolicy({
@@ -286,8 +317,8 @@ describe('desktop MCP approval policy', () => {
           toolName: 'ghost_call',
           toolParams: { ghost_id: 'cindy-art', tool, args: { prompt: 'a cat' } },
         }),
-        `${tool} should be auto-approved`,
-      ).toBe('auto-approve');
+        `${tool} must use normal session approval`,
+      ).toBe('prompt');
     }
 
     // Codex elicitation 可能省略外层 toolName，仍按内层 ghost_id / tool 判定。
@@ -296,7 +327,7 @@ describe('desktop MCP approval policy', () => {
         serverName: 'cindy',
         toolParams: { ghost_id: 'cindy-art', tool: 'gen_image', args: { prompt: 'a cat' } },
       }),
-    ).toBe('auto-approve');
+    ).toBe('prompt');
     expect(
       getDesktopMcpToolApprovalPolicy({
         serverName: 'cindy',
@@ -307,7 +338,7 @@ describe('desktop MCP approval policy', () => {
           args: { prompt: 'a cat' },
         }),
       }),
-    ).toBe('auto-approve');
+    ).toBe('prompt');
 
     // 其它插件、未知工具、缺内层身份仍 fail closed。
     expect(
@@ -402,6 +433,15 @@ describe('helper task workspace and SkillHub publication authorization', () => {
       'prompt-each-time',
     );
     expect(getDesktopClaudeReadOnlyAllowedTools()).not.toContain('mcp__cindy_helper__call_tool');
+  });
+
+  // Creating a task worktree writes a branch and directory into the repository; it must
+  // take the task's permission flow rather than the trusted helper server's silent pass.
+  it('reviews creating a task worktree like other repository writes', () => {
+    for (const args of [{}, { repo_dir: '/repo' }]) {
+      expect(policy('call_tool', { name: 'create_task_worktree', args })).toBe('prompt-each-time');
+      expect(policy(undefined, { name: 'create_task_worktree', args })).toBe('prompt-each-time');
+    }
   });
 
   it('lets the task permission mode decide moving a teammate to another computer, but not reading its home', () => {

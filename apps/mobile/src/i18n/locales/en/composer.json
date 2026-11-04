@@ -119,6 +119,9 @@
     "unavailable": "Cannot receive shares yet",
     "noCompanions": "No companions yet",
     "noTasks": "No tasks yet",
-    "retry": "Could not load everything. Tap to retry."
+    "retry": "Could not load everything. Tap to retry.",
+    "noMatches": "No matching destinations",
+    "clearSearch": "Clear search",
+    "loadingDevices": "Loading computers…"
   }
 }

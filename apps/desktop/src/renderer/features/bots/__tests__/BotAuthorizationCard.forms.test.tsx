@@ -9,6 +9,7 @@ import { sanitizeBotAuthorizationMetaForRemote } from '../../../../main/cindy-br
 import {
   readBotAuthorizationCard,
   type BotAuthorizationCard,
+  type BotAuthorizationTarget,
 } from '../../../../shared/botAuthorization';
 import type { GhostSetupAllowedAction } from '../../../../shared/ghost';
 import { remoteProjectsStore } from '@/features/device-link/remoteProjectsStore';
@@ -64,7 +65,12 @@ afterEach(async () => {
   for (const service of services.splice(0)) await service.dispose();
 });
 
-async function hostCard(action: GhostSetupAllowedAction, remote: boolean) {
+const imTarget: BotAuthorizationTarget = { kind: 'host', id: 'im-telegram' };
+async function hostCard(
+  action: GhostSetupAllowedAction,
+  remote: boolean,
+  target: BotAuthorizationTarget = { kind: 'plugin', id: 'plugin' },
+) {
   const stored = new Map<string, BotAuthorizationCard>();
   const adapter: BotAuthorizationAdapter = {
     identity: { id: 'plugin', name: 'Plugin' },
@@ -107,7 +113,7 @@ async function hostCard(action: GhostSetupAllowedAction, remote: boolean) {
     openExternal: vi.fn(async () => {}),
   });
   services.push(service);
-  await service.request('session', { kind: 'plugin', id: 'plugin' });
+  await service.request('session', target);
   const card = [...stored.values()][0]!;
   if (!remote) return card;
   remoteProjectsStore.pinSessionOrigin('owner-device', 'session');
@@ -116,10 +122,14 @@ async function hostCard(action: GhostSetupAllowedAction, remote: boolean) {
   )!;
 }
 
-it.each([false, true])(
-  'does not accept secret input on remote Bot cards (unexpected capability=%s)',
-  async (extra) => {
-    const card = await hostCard(secret, true);
+it.each([
+  [false, undefined],
+  [true, undefined],
+  [false, imTarget],
+])(
+  'does not accept secret input on remote Bot cards (unexpected capability=%s, target=%o)',
+  async (extra, target) => {
+    const card = await hostCard(secret, true, target);
     expect(card.snapshot).not.toHaveProperty('remoteSecret');
     const snapshot = { ...card.snapshot, ...(extra ? { remoteSecret: true } : {}) };
     render(<BotAuthorizationCardView sessionId="session" data={{ ...card, snapshot }} />);
@@ -160,8 +170,8 @@ it.each([false, true])(
   },
 );
 
-it('keeps local Bot secrets on the private local submit path', async () => {
-  const card = await hostCard(secret, false);
+it.each([undefined, imTarget])('keeps local Bot secrets on the private local submit path (target=%o)', async (target) => {
+  const card = await hostCard(secret, false, target);
   render(<BotAuthorizationCardView sessionId="session" data={{ ...card }} />);
   const input = screen.getByPlaceholderText('API key') as HTMLInputElement;
   expect(input.disabled).toBe(false);

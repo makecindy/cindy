@@ -5,13 +5,15 @@
  *  - 本机 Cindy 工具：与本机 Pi 任务同一套 MCP 桥身份登记(按任务、按实例)，对方的工具请求经
  *    隧道转发到这里；外部 HTTP MCP 也从本机发出；
  *  - 执行器：文件与命令在本机执行，写入前交给「每轮改动对比」抓取改前内容；
- *  - 项目说明快照与记忆索引快照(记忆在本机，对方不读它自己的记忆库)。
+ *  - 项目说明快照与记忆索引快照(记忆在本机，对方不读它自己的记忆库)；
+ *  - 插件花名册快照(插件工具在本机，对方不看它自己装了什么)。
  */
 import { randomUUID } from 'node:crypto';
 import fsp from 'node:fs/promises';
 import path from 'node:path';
 
 import type {
+  AgentDeps,
   AgentEvent,
   AgentKind,
   AgentSessionHandle,
@@ -22,7 +24,12 @@ import type {
   PiExtraSpawnConfigContext,
   StartSessionOptions,
 } from '@cindy/maker-core';
-import { LOCAL_AGENT_CLIENT, resolveMemoryScopeKey } from '@cindy/maker-core';
+import {
+  LOCAL_AGENT_CLIENT,
+  resolveAllowedManagedSkills,
+  resolveMemoryScopeKey,
+  snapshotManagedSkillGrants,
+} from '@cindy/maker-core';
 import { parseProviderSharePeer, providerShareHostPeer } from '@cindy/device-link';
 import { createLogger } from '../../logger.js';
 import { findReceivedShare, parseProviderShareAgentDeviceId } from '../../device-link/providerShareGuest.js';
@@ -40,6 +47,7 @@ import {
   collectInstructionImports,
   collectPersonalConfig,
   collectProjectInstructionFiles,
+  type LocalManagedSkill,
 } from './projectFiles';
 import type { LocalMcpTarget } from './router';
 import { RemoteAgentPoller, RemoteAgentRunClient, remoteAgentInvoker } from './runClient';
@@ -62,6 +70,12 @@ export interface DeviceAgentServiceDeps {
     ctx: PiExtraSpawnConfigContext,
   ): Promise<PiExtraSpawnConfig | null>;
   makerMemory(): MakerMemoryManager | undefined;
+  /** 本机按真实工作目录生成的插件花名册段(与本机任务同一份 formatter 与过滤)。 */
+  ghostRosterPrompt?(workingDir: string): string;
+  /** 本机的 Cindy 托管 Skill(内置与插件带的，与本机任务同一来源)：对方 Agent 用它们，不用对方自己的。 */
+  managedSkills?: AgentDeps['getManagedSkills'];
+  /** 本机停用的 Skill(与本机任务同一份偏好)。 */
+  disabledSkillPaths?(): readonly string[];
   captureKnownFileBefore(input: { sessionId: string; provider: 'claude-code' | 'pi'; cwd: string; targetPath: string }): Promise<void>;
   noteOpaqueTurnChange(input: { sessionId: string; provider: 'claude-code' | 'pi'; cwd: string }): void;
   /** 改写来自对方的事件(如 Claude Code 的 Cindy 工具名换回自带工具名)。 */
@@ -218,6 +232,15 @@ export function createDeviceAgentStarter(deps: DeviceAgentServiceDeps) {
           log.warn('remote agent: memory index unavailable; starting without it', { error: String(error) });
           opts.makerMemoryIndexSnapshot = '';
         }
+      }
+    }
+    // 插件工具同样经隧道回到本机：花名册也按本机真实工作目录现算一次(会话内恒定)。
+    // 外部应用只开放它自己的工具，伙伴另有发现规则，都不带。
+    if (opts.ghostRosterSnapshot === undefined && deps.ghostRosterPrompt && !opts[LOCAL_AGENT_CLIENT] && !opts.botRuntimeProfile) {
+      try {
+        opts.ghostRosterSnapshot = deps.ghostRosterPrompt(opts.workingDir);
+      } catch (error) {
+        log.warn('remote agent: plugin roster unavailable; starting without it', { error: String(error) });
       }
     }
     requireCurrent();
@@ -458,7 +481,29 @@ export function createDeviceAgentStarter(deps: DeviceAgentServiceDeps) {
         : (workingDir) => collectAncestorInstructionFiles(workingDir, collect),
       // Codex 建线程时沿上级目录逐级查找 .git 与插件清单：先把有没有报过去，对方不再逐个经设备互联来问。
       ...(input.agentKind === 'codex' ? { collectAncestorMarkers } : {}),
-      collectPersonal: (kind, projectFiles) => collectPersonalConfig(kind, projectFiles, collect),
+      collectPersonal: async (kind, projectFiles, agent) => {
+        // 与本机任务同一规则：伙伴按授权挑托管 Skill，停用的不带；个人 Skill 只按停用过滤。
+        const disabledSkillPaths = [...(deps.disabledSkillPaths?.() ?? [])];
+        let managedSkills: LocalManagedSkill[] | undefined;
+        if (deps.managedSkills) {
+          try {
+            managedSkills = resolveAllowedManagedSkills(
+              await deps.managedSkills(),
+              snapshotManagedSkillGrants(opts.botRuntimeProfile?.skillPolicy),
+              disabledSkillPaths,
+            ).flatMap((skill) => skill.path ? [{ command: skill.claudeCommandName, dir: path.dirname(skill.path) }] : []);
+          } catch (error) {
+            // 列不出来时不声明，对方沿用它自己的托管 Skill。
+            log.warn('remote agent: managed skills unavailable; the agent computer keeps its own', { error: String(error) });
+          }
+        }
+        return collectPersonalConfig(kind, projectFiles, {
+          ...collect,
+          ...(opts.botRuntimeProfile ? {} : { disabledSkillPaths }),
+          ...(managedSkills ? { managedSkills } : {}),
+          ...(managedSkills && agent?.managedSkillDigests ? { agentDigests: agent.managedSkillDigests } : {}),
+        });
+      },
       collectImports: (imports) => collectInstructionImports(imports, collect),
       isGitRepo,
       ...(deps.extractPdfText ? { extractPdfText: deps.extractPdfText } : {}),

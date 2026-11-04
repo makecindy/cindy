@@ -49,7 +49,9 @@ export type XdtHelperToolCategory =
   | 'handoff'
   | 'skills'
   | 'app_update'
-  | 'bots';
+  | 'bots'
+  | 'github'
+  | 'settings';
 
 export type XdtHelperToolContentBlock =
   | { type: 'text'; text: string }

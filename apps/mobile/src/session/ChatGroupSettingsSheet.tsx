@@ -34,6 +34,7 @@ import { BOT_GROUP_TEAMMATES_COLLECTION_ID, botGroupMemberAvatar } from './botGr
 import { CompanionSheet } from './CompanionSheet';
 import { FileBrowserSegmentedControl } from './FileBrowserSegmentedControl';
 import { GroupMaskAvatar } from './GroupMaskControls';
+import { GroupNotificationSettings } from './GroupNotificationSettings';
 import { pickGroupAvatar } from './groupAvatarPicker';
 import { ActionInfoRow, SettingsGroup, SettingsSwitchRow } from './SettingsGroupRows';
 import { useHostTeammates } from './useHostTeammates';
@@ -285,6 +286,10 @@ export function ChatGroupSettingsSheet({ visible, group, host, identityFor, onli
                 : <RowIcon><Reply size={iconSize.md} color={colors.textSecondary} /></RowIcon>}
               label={t('groupChat.mask.title')} value={t(`groupChat.mask.status.${mask!.state!.status}`)} accessibilityLabel={t('groupChat.mask.title')} onPress={onMask} /> : null}
           </SettingsGroup> : null}
+          {!dissolved && me?.actorId && group.supportsNotificationSettings && group.notificationMode ? <GroupNotificationSettings key={scope}
+            title={direct || maskRow ? undefined : k('me')} mode={group.notificationMode}
+            disabled={!visible || !online || archived || busy || (direct && !management.ready)}
+            save={mode => management ? management.act('notifications', { mode }) : act('notifications', { mode })} /> : null}
           {direct && !dissolved && !archived && ownBots.length ? <SettingsGroup title={k('myTeammates')} footer={k('myTeammatesCaption')} testID="botGroup.settings.myTeammates">
             {ownBots.map(member => <ActionInfoRow key={member.actorId} lead={avatar(identityOf(member))} label={member.name}
               value={k(member.status === 'paused' ? 'paused' : ACCESS_LABEL[member.guestAccess ?? 'chat'])} accessibilityLabel={member.name}

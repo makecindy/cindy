@@ -1,4 +1,5 @@
-import { randomUUID } from 'node:crypto';
+import { readGithub } from '../git-context/githubReadRuntime';
+import { createHash, randomUUID } from 'node:crypto';
 import { isAbsolute } from 'node:path';
 
 import type { Schedule, ScriptCapability } from '@cindy/maker-scheduler';
@@ -195,13 +196,14 @@ const SCRIPT_METHOD_CATALOG: ReadonlyArray<{
   params: string;
   description: string;
 }> = [
+  ...(['get_pr_status', 'get_pr_changes', 'get_pr_details'] as const).map(name => ({ method: `github.${name}`, capability: 'github.read' as const, params: '{pr:{url}|{repo,number},freshness?,kind?,after?,limit?,item?}', description: '读取与界面共用的 GitHub 状态/变化/详情；不关联任务、不启动监听，读取不确认投递' })),
   { method: 'host.capabilities', capability: null, params: '{}', description: '自省:返回协议版本、本任务已授予的能力、可用方法目录' },
   { method: 'jira.get', capability: 'jira.read', params: '{issue_key, fields?, out_file?}', description: '按 key 读单条 Jira issue(out_file = 结果落盘到工作目录的相对路径)' },
   { method: 'jira.search_jql', capability: 'jira.read', params: '{jql, fields?, max_results?≤100, next_page_token?, out_file?}', description: 'JQL 搜索(大结果集用 next_page_token 分页,或 out_file 落盘后自行读回)' },
   { method: 'jira.add_comment', capability: 'jira.comment', params: '{issue_key, body_text | body_adf}', description: '向 Jira issue 添加评论;body_text 纯文本与 body_adf(ADF 文档对象,支持 @mention)恰好二选一' },
   { method: 'feishu.recent_chats', capability: 'feishu.read', params: '{count?≤50}', description: '按活跃时间倒序列最近飞书会话' },
   { method: 'feishu.recent_messages', capability: 'feishu.read', params: '{chat_id, count?≤50, start_time?}', description: '拉指定飞书会话最近消息(新→旧,start_time 增量)' },
-  { method: 'sessions.dispatch', capability: 'sessions.dispatch', params: '{message, title?, target_session_id?}', description: '创建或唤醒 Cindy 会话并投递消息' },
+  { method: 'sessions.dispatch', capability: 'sessions.dispatch', params: '{message, title?, target_session_id?, idempotency_key?}', description: '创建或唤醒 Cindy 会话并投递消息' },
 ];
 
 /**
@@ -280,6 +282,13 @@ export class SchedulerScriptCapabilityBroker implements ScriptCapabilityBroker {
             available: entry.capability === null || granted.has(entry.capability),
           })),
         };
+      case 'github.get_pr_status':
+      case 'github.get_pr_changes':
+      case 'github.get_pr_details': {
+        requireCapability(granted, 'github.read');
+        if (params.device && params.device !== 'local') fail('INVALID_ARGS', 'Scripts read GitHub on their execution computer');
+        return readGithub(request.method.slice(7) as 'get_pr_status' | 'get_pr_changes' | 'get_pr_details', params);
+      }
       case 'jira.get': {
         requireCapability(granted, 'jira.read');
         const fields = optionalStringArray(params, 'fields');
@@ -404,6 +413,11 @@ export class SchedulerScriptCapabilityBroker implements ScriptCapabilityBroker {
         }
         const targetSessionId = schedule.targetSessionId ?? requestedTarget;
         const message = requireString(params, 'message');
+        const deliveryKey = params.idempotency_key;
+        if (deliveryKey !== undefined && (typeof deliveryKey !== 'string' || !deliveryKey.trim() || deliveryKey.length > 512 || !targetSessionId))
+          fail('INVALID_ARGS', 'idempotency_key requires a target and 1–512 characters');
+        const deliveryClientId = typeof deliveryKey === 'string'
+          ? `schedule-delivery:${createHash('sha256').update(JSON.stringify([schedule.id, targetSessionId, deliveryKey])).digest('hex')}` : undefined;
         // Bound owners are restored once at fire admission. A later archive must
         // not be undone by the same run. Unbound scripts first choose their target here.
         if (targetSessionId && !schedule.targetSessionId) {
@@ -416,6 +430,7 @@ export class SchedulerScriptCapabilityBroker implements ScriptCapabilityBroker {
         }
         const result = await service.sendToSession({
           targetSessionId,
+          deliveryClientId,
           message,
           title: typeof params.title === 'string' ? params.title : undefined,
           useWorktree: false,
@@ -427,6 +442,7 @@ export class SchedulerScriptCapabilityBroker implements ScriptCapabilityBroker {
         if (!result.ok) fail(result.errorCode, result.message);
         return {
           target_session_id: result.targetSessionId,
+          ...(deliveryClientId ? { delivery_id: deliveryClientId } : {}),
           agent_kind: result.agentKind,
           wake_kind: result.wakeKind,
           target_title: result.targetTitle,

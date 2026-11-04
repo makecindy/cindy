@@ -1,26 +1,23 @@
 # Cindy Design System
 
-> Heritage note: this visual language was originally derived from an external
-> minimalist reference (2025). It has since evolved into Cindy's own system —
-> no external site or product is a reference for new design decisions.
-
 ## 1. Visual Theme & Atmosphere
 
-Cindy's interface is radical minimalism applied to an AI-agent workbench — a quiet, near-monochrome canvas where the user's content and the agent's output are the only things that demand attention. The design philosophy mirrors the product: strip away everything unnecessary until only the essential tool remains. This is the digital equivalent of a Dieter Rams object — every pixel earns its place, and the absence of decoration IS the design.
+设计以[产品原则](../product-rules/core-product-principles.md)的品质要求为前提：理解是否自然、
+操作是否顺手、反馈是否及时、工作能否连贯完成，每一处为用户省下的理解、等待与返工都值得投入。
 
-The default theme lives almost entirely in grayscale. Chromatic color is reserved for a small, explicitly sanctioned set of semantic signals (status, diff, focus — see §2); everything else is shades between near-black and near-white. Long working sessions stay calm, and color means something whenever it does appear.
+界面把注意力留给用户内容与 Agent 成果，围绕清楚的工作目的组织，强调状态、结果和下一步
+动作。视觉语言早期（2025）参考过外部极简设计，现已是 Cindy 自己的体系；新的视觉选择从
+工作需要出发，不以外部产品为依据。
 
-What makes this system distinctive is the combination of a single geometric sans-serif (Inter) with a pill-first geometry (ordinary action frames default to pills; registered shapes and contained content are assigned separately under §5). The clean letterforms + rounded buttons + rounded containers create a cohesive "softness language" that makes a developer-oriented tool feel approachable and friendly rather than intimidating. This is minimalism with warmth — not cold Swiss-style grid minimalism, but the kind where the edges are literally softened.
+灰度构成安静的底色，彩色只表达已登记的语义（§2）。层次由背景差异与 1px 边界建立，基础
+语言不用阴影，窄例外由 §10 的 Token 约束。工作区不放吉祥物或装饰插画，品牌图像只出现在
+§15.7 / §16 允许的品牌界面。
 
-**Key Characteristics:**
+Inter 是标题与正文共用的唯一无衬线字体，配柔和几何让强大的工具容易接近。普通操作框默认
+胶囊，内容容器与已登记形状按角色处理，圆角分类统一见 §5。
 
-- Near-monochrome default theme; chromatic color only via the sanctioned semantic set (§2), always consumed through tokens (§10)
-- Inter as the single sans family, carrying both display headlines and body text
-- Tight border-radius system (§5): 0px / 2px (registered data marks) / 4px (keyboard keycaps) / 8px (inner controls) / 12px (containers) / 9999px (pill frames)
-- Zero shadows in the base language — depth comes from background color shifts and 1px borders (narrow token-gated exceptions live in §10)
-- Ordinary action frames default to pills; registered shapes (keycaps and data marks) and contained content are handled as separate visible layers. Apply §5 Step 1 before the Step 2 control tiers, including the inner-control tier for textareas.
-- No mascots or decorative artwork in the working UI — brand imagery appears only on sanctioned brand surfaces (see §15.7 / §16)
-- Extreme content restraint — each surface presents one clear idea
+颜色经语义 Token 表达，同一角色在 Light 与 Dark 下都成立。复用组件让一致的设计自然延续。
+排版、几何与状态的精确约定在后续章节。
 
 ### 1.1 New-task home content (user decision, 2026-09-06)
 
@@ -70,9 +67,21 @@ settings and other host pages share continuous viewport-aligned artwork. This
 opt-in setting supersedes the CINDY sidebar-only backdrop treatment while active;
 disabling it restores the original theme without modifying theme files or tokens.
 Blend wallpaper with the theme surface, never a fixed black overlay in Light mode. Image opacity
-must not affect text or icons. Elevated controls, menus, dialogs and embedded web
-or editor content keep their readable surfaces. Composer scroll masking must
-align with the same wallpaper instead of introducing an opaque footer rectangle.
+must not affect text or icons. In-page raised surfaces — composer, message bubbles,
+tool and table-header cards, page cards, inputs and the selected sidebar row —
+tint the wallpaper with their own token at 72% (Light) / 64% (Dark) instead of covering
+it (user request, 2026-11-03), in the CINDY themes only: their translucent-ink text keeps its
+contrast on any wallpaper, while other built-in themes use fixed text colors calibrated
+against solid surfaces and keep them opaque. Higher visibility raises that opacity so the artwork
+contributes at most 16% under the surface, keeping the tertiary text tier at the 3:1
+floor over any wallpaper (84% at 100% visibility). Fill only, no `backdrop-filter`, which
+would become the containing block for the composer's fixed palettes. Floating layers
+(menus, popovers, dialogs, tooltips, anything positioned over other content), any surface holding
+syntax-highlighted code, such as code blocks and diffs (the fixed syntax palette needs a solid surface, §15.4), and embedded
+web or editor content keep their readable opaque surfaces. Implementation: the in-page
+glass rule in `globals.css`, scoped to page containers and excluding floating roles and
+absolute / fixed / sticky surfaces; the floor comes from `useWallpaperBackground`.
+Composer scroll masking must align with the same wallpaper instead of introducing an opaque footer rectangle.
 Built-in SVG wallpapers are decorative assets, not new semantic UI colors.
 Verify actual Light/Dark screenshots across host pages and the expanded tool pane.
 
@@ -99,10 +108,13 @@ It follows real transfer progress and disappears once ready;
 cache hits show the original directly. A failed tile shows a retry icon and supports click,
 Enter and Space to retry, preserving the grid's single Tab stop and selected border.
 Expose progress and failure descriptions to assistive technology outside the radio descendants.
-Keep the displayed background while the next official original is loading or decoding;
-reuse already decoded original URLs directly when revisiting a selection. Once ready,
-crossfade the static canvas and its composer copies using opacity and the fast motion
-token, respecting reduced motion. Initial load may use the bundled preview.
+Show the selected official wallpaper's bundled preview immediately while its original
+is loading or decoding (user decision, 2026-11-03, #8591). Download or decode failure
+keeps that selection's preview, not the previous wallpaper. Reuse already decoded
+original URLs directly when revisiting a selection. Crossfade both the preview and
+the ready original on the static canvas and its composer copies using opacity and
+the fast motion token, respecting reduced motion. Custom image replacements still
+retain the previous background until decoding succeeds.
 Reuse the settings download percentage normalization. Browsing the grid or hiding the wallpaper does not
 download originals; only a selected, visible image is requested. Reuse valid cached
 images offline and after upgrades. Do not request CDN assets for IDs absent from the manifest.
@@ -138,7 +150,11 @@ The media store's client wallpaper scope isolates its bytes from chat attachment
 switching accounts (or signing out) keeps the same wallpaper. Font-only utility renderers never receive
 custom media URLs.
 Detached sidebar and plugin-panel host chrome use the same wallpaper provider;
-embedded plugin webviews retain their own surfaces and permission boundary.
+plugin main-view documents share the host canvas while wallpaper is active, including
+when docked or detached. Only their html/body background color becomes transparent;
+theme surface tokens, controls, author background images, regular panels and settings
+webviews retain their own surfaces. Disabling wallpaper restores the page background
+without reloading the plugin. All webviews retain their permission boundary.
 Cancellation and import failures retain the existing media. Switching to a built-in
 or None keeps the imported media available; Remove Wallpaper forgets it. Custom imagery
 shares the continuous cover-fit canvas and readability veil. Custom MP4 exposes the existing
@@ -283,7 +299,7 @@ Toast loading is neutral: use the shared 16×16 Spinner in `--text-secondary`, w
 The grayscale rule is near-absolute. The following are the **only** sanctioned non-gray colors in the system — each tightly scoped to a specific surface. New semantic colors must not be introduced without being recorded here first.
 
 - **Focus Blue** (`#417CDD` at 50%; tokens `--focus-ring` / `--focus-ring-soft`): the keyboard-accessibility focus ring, finalized 2026-07-17 (replaces Tailwind's default `#3b82f6`). Keep it out of mouse-only interaction: controls show it on `:focus-visible`, not on click. Text inputs are the approved exception — a focused text field always matches `:focus-visible`, so the generic `Input` shows the soft ring `--focus-ring-soft` whenever focused, while settings and composer inputs use their own focus-border aliases (§4 Inputs).
-- **Thinking / Warning Orange** (`#EA6B17`, finalized 2026-07-17, replaces the frozen `#FF6600`): the shared warning-accent family, identical in both modes. Sanctioned consumers only — the ChatView Running Status Bar (sparkles icon + status text, e.g. `Spelunking...`, no background fill), running-state breathing icons in the sidebar, the collaboration-mode menu row's ON state, the plan-approve icon, the Full Access permission highlight, the settings integration warning, and the workflow agent status strip's running cells (8×8px filled squares in the background-tasks panel detail and the workflow chat card, registered 2026-07-28 — running-state semantics, same family as the sidebar breathing icons; the done/failed/queued cells stay on their own semantic tokens: `--card-status-done` / `--error-fg` / `--surface-chip`), and the sidebar task-info PR unresolved corner dot (registered 2026-08-17 — same `--status-bar-accent` as the session-header unresolved count; static, no breathing), and the filter reminder dot (registered 2026-10-20 — a static 6px/6pt dot at the top-right corner of a filter or view-settings button, meaning "this list is not the default active view": the search filter button while any narrowing filter is applied, and the sidebar organize button / Mobile home `⋯` display-settings button while viewing archived tasks; same `--status-bar-accent` / `statusAccent`, no breathing, no text; Desktop shares one `FilterReminderDot` component and Mobile one `FilterReminderDot` component so size, offset and color live in one place; it is purely visual, so the button's accessible name or state must carry the same information; sort and grouping changes and the "all" status do not light it), and the Bot group chat speaking row (registered 2026-09-27 — sparkles icon + status text for the teammate currently taking its turn, the same running semantics and `--status-bar-accent` as the ChatView Running Status Bar; no background fill), and the running step of a Bot group chat 分工 plan card and the group's sidebar 「正在做 / 正在安排」 preview (registered 2026-09-27 — icon + status word of the one step in progress, same running semantics and `--status-bar-accent`; no background fill; done / pending / failed steps stay neutral) (see the §10 exemption table and §15 for the full token list: `--warning-accent` and its follower tokens). A consumer that introduces no new token — one that reads `--warning-accent` or an existing follower directly, like this strip — is registered by this list alone; a consumer needing a NEW token must be registered in the §10 exemption table first.
+- **Thinking / Warning Orange** (`#EA6B17`, finalized 2026-07-17, replaces the frozen `#FF6600`): the shared warning-accent family, identical in both modes. Sanctioned consumers only — the ChatView Running Status Bar (sparkles icon + status text, e.g. `Spelunking...`, no background fill), running-state breathing icons in the sidebar, the collaboration-mode menu row's ON state, the plan-approve icon, the Full Access permission highlight, the settings integration warning, and the workflow agent status strip's running cells (8×8px filled squares in the background-tasks panel detail and the workflow chat card, registered 2026-07-28 — running-state semantics, same family as the sidebar breathing icons; the done/failed/queued cells stay on their own semantic tokens: `--card-status-done` / `--error-fg` / `--surface-chip`), and the sidebar task-info PR unresolved corner dot (registered 2026-08-17 — same `--status-bar-accent` as the session-header unresolved count; static, no breathing), and the filter reminder dot (registered 2026-10-20 — a static 6px/6pt dot at the top-right corner of a filter or view-settings button, meaning "this list is not the default active view": the search filter button while any narrowing filter is applied, and the sidebar organize button / Mobile home `⋯` display-settings button while viewing archived tasks; same `--status-bar-accent` / `statusAccent`, no breathing, no text; Desktop shares one `FilterReminderDot` component and Mobile one `FilterReminderDot` component so size, offset and color live in one place; it is purely visual, so the button's accessible name or state must carry the same information; sort and grouping changes and the "all" status do not light it), and the Bot group chat speaking row (registered 2026-09-27 — sparkles icon + status text for the teammate currently taking its turn, the same running semantics and `--status-bar-accent` as the ChatView Running Status Bar; no background fill), and the running step of a Bot group chat 分工 plan card and the group's sidebar 「正在做 / 正在安排」 preview (registered 2026-09-27 — icon + status word of the one step in progress, same running semantics and `--status-bar-accent`; no background fill; done / pending / failed steps stay neutral), and the Desktop Bot delegation card status dot (registered 2026-11-04 — starting/running use `--warning-accent` with `session-status-breathing`; waiting/completed/failed use `--card-status-awaiting` / `--card-status-done` / `--card-status-error`, while cancelled/unknown stay neutral; see [Desktop delegation status](./desktop-bot-delegation-status.md)) (see the §10 exemption table and §15 for the full token list: `--warning-accent` and its follower tokens). A consumer that introduces no new token — one that reads `--warning-accent` or an existing follower directly, like this strip — is registered by this list alone; a consumer needing a NEW token must be registered in the §10 exemption table first.
 
 > **Additional narrowly-scoped exceptions** (documented in their respective component specs, do NOT generalize as system semantic colors):
 >
@@ -519,6 +535,19 @@ recovery content may fill the explanation slot without replacing the header layo
 Identity, state, action semantics and pending implementation are defined in
 [供应商设置](../product-rules/provider-settings.md). This contract does not declare existing headers migrated.
 
+### Provider dialog disclosures
+
+In Desktop `ProviderConnectionDialog`, Manual add model and Advanced connection settings are
+registered frameless text disclosures (user-approved lightweight indentation layout, 2026-11-03).
+Stack the sections vertically with aligned left chevrons, existing 13px/500 settings section title
+color and a minimum 32px hit height. Resting, hover and pressed states retain no fill or border
+and do not change label color or geometry. Keyboard focus independently uses a 2px semantic
+`--focus-ring` with a pill outline; this does not introduce a resting button frame. The left
+chevron rotates with the expanded state. Indent the expanded manual form by 20px, retaining
+vertical fields and existing shared inputs, select and Add button. Light and Dark use existing
+semantic theme tokens. This registration covers only these two disclosures; other provider
+actions retain their shared Button treatment. Model and connection logic remain unchanged.
+
 ### Teammate model settings
 
 The existing model page groups the primary model and task model by purpose. Both use the shared
@@ -527,6 +556,23 @@ stays folded; the task model is a single route. Task settings start in “Inheri
 provide a compact restore action after an explicit selection. Desktop separates the two groups with
 the semantic border token; mobile uses the existing grouped spacing and inheritance switch.
 Reuse themed controls for Light/Dark; this contract does not claim runtime visual verification.
+
+### Teammate capability page (owner-approved r2, 2026-11-01)
+
+The teammate's Capabilities page follows the Memory page's grouped list: a quiet 12px/500 group
+heading with a tabular count or summary (`1 of 3 on`, `Following this computer · 11`), then one
+12px-radius card per group with 13px/500 names, one-line 12px descriptions (full text on hover)
+and inset dividers. Groups in order: Core skill (always on, opens a read-only page with a
+plain-language summary and the original text folded), System skills (switch per item; the page
+explains what turning it off stops), Learned skills (switch; the page shows the content with Edit
+and Delete), Skills on this computer, Built-in tools, MCP, Permissions (Input Handoff). A group
+shows at most four rows, enabled first and unavailable last; the rest unfold under "Show N more"
+with the shared grid `0fr ↔ 1fr` motion. Configuration lives in one heading link per group
+(Manage / Tool settings) instead of a button on every row; an unavailable tool says so in its
+note line with a "Turn on" link. Rows that open a page carry a trailing chevron and keep the switch
+as a separate control. Light and Dark use the existing tokens; prototype and screenshots live in
+the design archive for Cindy-伙伴能力页重设计-2026-11-01. Product rules: cindy-bots-runtime.md §6
+「伙伴技能分层」.
 
 ### Inputs & Forms
 
@@ -598,7 +644,7 @@ Reference implementation: `apps/desktop/src/renderer/components/ui/confirm-dialo
 
 **Cindy Make preflight exception (owner decision, 2026-09-20):** this progress dialog uses a top-right × instead of a footer Cancel. The header stays visible while the report scrolls. The ×, Esc and scrim all open the same confirmation, with live copy distinguishing environment preparation, source preparation, upstream search and finished checks. Explain that stopping shared preparation also stops its Settings projection and that prepared resources are kept. Creating the build session temporarily disables dismissal. This exception supersedes the general closing-affordance rule below only for `CindyMakePreflightDialog`; the request form keeps its existing footer.
 
-- **Overlay** (blur added 2026-10-04): every modal scrim — Radix `Dialog.Overlay` / `AlertDialog.Overlay`, hand-built scrims and the Radix side drawers — uses the shared `.modal-scrim` class (`styles/globals.css`): `--overlay-modal` (Light `rgba(0,0,0,0.5)` / Dark `rgba(0,0,0,0.7)`) plus a 4px `backdrop-filter` blur of whatever is behind; on Windows (`html[data-platform='win32']`) there is no blur, the same reason as the opaque Windows menus (§15.12). Never write a scrim colour, `bg-black/…`, `backdrop-blur-*` or an inline background at the call site; to change depth or blur, change the token or the class, never one component. Not dialogs and therefore not covered: the lighter whole-window closing dim in `WindowControls.tsx`, the tap-to-close drawer scrims in `DiffPanelShell.tsx`, lightboxes (`--overlay-lightbox`), the login brand canvas (§16) and the transparent click blocker behind anchored plugin-card prompts.
+- **Overlay** (blur added 2026-10-04): every modal scrim — Radix `Dialog.Overlay` / `AlertDialog.Overlay`, hand-built scrims and the Radix side drawers — uses the shared `.modal-scrim` class (`styles/globals.css`): `--overlay-modal` (Light `rgba(0,0,0,0.5)` / Dark `rgba(0,0,0,0.7)`) plus a 4px `backdrop-filter` blur of whatever is behind; on Windows (`html[data-platform='win32']`) there is no blur, the same reason as the opaque Windows menus (§15.12). Desktop attachment previews float over the same `.modal-scrim` (2026-11-03, see [attachment-preview.md](attachment-preview.md)); unlike dialogs, a click on their scrim closes the preview. Never write a scrim colour, `bg-black/…`, `backdrop-blur-*` or an inline background at the call site; to change depth or blur, change the token or the class, never one component. Not dialogs and therefore not covered: the lighter whole-window closing dim in `WindowControls.tsx`, the tap-to-close drawer scrims in `DiffPanelShell.tsx`, the login brand canvas (§16) and the transparent click blocker behind anchored plugin-card prompts.
 - **Tooltips opened inside the modal** (2026-09-08, DS-6 review fix): the shared `Tip` portals its content to `document.body` on the default `z-[60]` layer — **below** the `z-[10000]` modal overlay, so an unraised tooltip is covered by its own dialog. Any `Tip` whose trigger lives inside a modal must raise its content above the host dialog: pass `contentClassName="z-[10001]"` to `Tip`, and `secretTipContentClassName="z-[10001]"` on `Input` for the password reveal button (both DS-6 forms do). This mirrors the existing `z-[10001]` popover/dropdown convention inside `z-[10000]` dialogs.
 - **Container**: every centered modal panel uses the shared `.modal-panel` class — 12px radius, `--confirm-bg` Card fill, 1px Board (`--border-default`) outline and the registered floating-layer shadow `--shadow-menu` — the same shadow as menu panels (2026-10-04 unification; user ruling the same day). Bot dialogs share this panel; the Bot zero-shadow rule covers in-page Bot surfaces, not modal panels. Call sites never add their own radius, background, border colour or shadow, nor glass `--cmd-palette-bg`; they set only width, position, padding (16px `p-4` by default) and layout. Radix side drawers keep their own edge-anchored panel and share only the scrim. Guard: `__tests__/modalSurfaceContract.test.ts`. Width: confirm/notice dialogs ≈ 400px (`max-w-[400px]`); dialogs with inputs/forms may widen to ≈ 460px and shrink with the viewport (`min(460px, 100vw-32px)`). The DS-6 multi-runtime provider and MCP forms use 600px with the same 16px viewport gutters and a scrollable body capped within 88vh.
 - **Title / description**: `--confirm-title` / `--confirm-desc`, medium weight.
@@ -645,7 +691,7 @@ Icon refinement reference (2026-10-18, macOS AppKit rendering; enlarged and actu
 - The panel uses the system popover material (`NSVisualEffectView`, `.popover`) with a 0.5pt hairline edge, so it follows the desktop wallpaper and Light/Dark automatically. Over the material it lays a warm tint (Light `#F8F7F3` at 50%, Dark `#1A1918` at 54%; owner corrections, 2026-10-16: 72%/74% was noticeably more solid than the plain material, 22%/26% let busy wallpapers wash out gray text and made the tiles read as pasted-on boxes) and a faint Heart Orange glow in the top-left corner, so the panel reads in Cindy's warm neutrals instead of the cool system gray (owner-approved B2 direction, 2026-10-16). Because the panel is translucent, every neutral — text, outlines, hairlines, tiles, the glass wells, the liquid and neutral ring arcs — is Cindy's warm black `#26221C` (Light) or warm white `#F2EFE9` (Dark) at an opacity, never a fixed gray, so its contrast tracks whatever shows through instead of drifting (owner decision, 2026-10-16): primary text 92% / 94%, secondary 60% / 62%, tertiary 42% / 42%, outlines 14% / 13%, hairlines 8% / 7%, faint fills and ring tracks 5% / 5%; tiles are white 45% / warm white 5%; wells white 70%→50% / warm white 7%→2.5%. Solid colors are reserved for state (warning, error), brand (logo red), Agent/harness identity (including the Codex blue and Claude orange detail rings, kept by owner decision 2026-10-16) and the primary pill fill (`#1F1E1C` / `#F2EFE9`), which must read at full contrast. Native SwiftUI controls (segmented `Picker`, `Toggle`, Swift Charts) are used as-is; their system geometry is not restyled to Web tokens. A segmented control is used only where its labels fit in every language (see below).
 - The menu bar icon uses a fixed Light/Dark image pair with template tinting disabled (owner-approved hair and earring refinement, 2026-10-18). Its silhouette stays flat and 100% opaque: pure black in Light, pure white in Dark. Four irregular, tapered hair strands add gray detail over that silhouette (`#BDBDBD` in Light / `#686868` in Dark, at 58%, 48%, 36% and 52%); these are tonal overlays, not transparent cutouts or whole-character shading. The `>` earring cutout is larger and shifted slightly left. The native status button's effective appearance selects the image, since the wallpaper can make the menu bar differ from the app; the settings preview uses the same pair. These fixed grays belong only to this native brand asset. Provider/harness logos remain template images (monochrome, tinted by the system). Brand red (logo red `#F70121`) appears only in the Cindy wordmark, a fixed Light/Dark image pair, and in the logo's `>` mark that leads the footer "Open Cindy" pill (owner request, 2026-10-16); it is never used for state.
 - Status colors are fixed native values shared by both appearances and follow the shared quota rule (owner decision 2026-10-31, replacing "15% / used up"): yellow `#F3A115` (30% or less left) and red `#EF4444` (10% or less left). Agent/harness fills reuse the identity colors of the §2 Usage History registration: `--engine-badge-cc` `#D97757` (with two lighter steps for Claude's session/per-model rings), `--engine-badge-codex` `#7A9DFF` and `--usage-model-1` teal for Pi; neutral ink fills carry no state.
-- Usage tubes are glass wells holding a translucent liquid instead of solid paint (owner correction, 2026-10-16: the opaque gray read as dirty): one flat tone with no gradient — warm black `#26221C` at 46% (Light) or warm white `#F2EFE9` at 72% (Dark) — so the well shows through and each appearance stays clean; deliberately lower contrast than the text so seven full tubes do not read as hard black or white bars. Neutral ring arcs (Grok, a balance) use the same warm black 42% / warm white 80%; a yellow or red liquid is flat `#F3A115` / `#EF4444` with a still glow under the tube. The recommended tube gets a 1pt secondary-gray outline (owner decision, 2026-10-16: the earlier 1.5pt ink outline read as a selection or an error once the liquid was softened) and nothing else — no halo and no logo tile before the headline (owner decision, 2026-10-16: the headline already names the source). The warning glow does not animate. A 7pt warning dot precedes the second headline line when that line is about sources running low or resetting (main sends `headlineAlert`).
+- Usage tubes are glass wells holding a translucent liquid instead of solid paint (owner correction, 2026-10-16: the opaque gray read as dirty): one flat tone with no gradient — warm black `#26221C` at 46% (Light) or warm white `#F2EFE9` at 72% (Dark) — so the well shows through and each appearance stays clean; deliberately lower contrast than the text so seven full tubes do not read as hard black or white bars. Neutral ring arcs (Grok, a balance) use the same warm black 42% / warm white 80%; a yellow or red liquid is flat `#F3A115` / `#EF4444` with a still glow under the tube. The recommended tube gets a 1pt secondary-gray outline (owner decision, 2026-10-16: the earlier 1.5pt ink outline read as a selection or an error once the liquid was softened) and nothing else — no halo and no logo tile before the headline (owner decision, 2026-10-16: the headline already names the source). The warning glow does not animate. The liquid's top corners are softly rounded (4pt, less for a very low level) so the surface does not read as a hard flat line (owner request, 2026-11-01): on the Mac panel the corner follows the surface while it ripples or sloshes, and the iPhone and Android widgets use the same 4pt. A 7pt warning dot precedes the second headline line when that line is about sources running low or resetting (main sends `headlineAlert`).
 - Numbers use Barlow Condensed (OFL, shipped next to the helper): tube values and their % sign (the sign at about 60% of the value, same baseline), reset times, task amounts and shares, the task total, the month total, the detail ring value, and the usage page total and harness amounts. The detail page's fact-card values ("62,500", "周四 14:13") stay in the system font (owner correction, 2026-10-16): they are content, often mixing words, not metrics. Only pure numbers take Barlow (digits, money and % signs, and unit letters straight after a digit: "53", "$31.17", "12.5k", "98%"); any string that mixes in Chinese or words ("15天12时后重置", "周四 14:13", "5d 11h") stays entirely in the system font, because a condensed face beside Chinese reads uneven (owner correction, 2026-10-16). Two-line rows align the amount to the title's baseline and the share to the meta line's. If the font files are missing the helper falls back to a smaller system font.
 - Separators inside the panel are a single 0.5pt hairline in the soft `line` color (Light `#26221C` at 8%, Dark white at 7%); a system `Divider` is not used because it draws its own darker separator under any overlay (owner correction, 2026-10-16).
 - Copy is truthful: Cindy does not switch accounts automatically and has no default account per service, so the headline recommends the source with the most room ("{{name}} has the most left.") instead of claiming which one is in use.
@@ -906,6 +952,8 @@ Making something clickable never moves a layer between Step 1 and Step 2.
 *New tiers and new registered shapes both enter only through adjudication — neither is added by a reviewer's reading of this section.*
 
 *Governed corner-radius values are **0px and 2px** for registered data marks, **4px** for keycaps, **8px** for inner controls, **12px** for containers, and **9999px** for pill frames. No 3px / 6px / 10px, and no arbitrary values. A layer with no frame to round needs no assignment; "no assignment" is not an additional radius value. **Intrinsic content and mark geometry remain outside this corner-radius inventory** — a scatter dot's circle, a pie sector's arc, a map outline are shapes of the mark itself. Existing non-keycap `rounded-[4px]` usages remain registered debt; bare `rounded` and `rounded-sm` substitute for nothing.*
+
+*Guard (2026-10-30): in Desktop renderer code, an added line whose radius resolves outside this inventory — `rounded-md` (6px), `rounded-2xl` / `rounded-3xl`, arbitrary values such as `rounded-[6px]` / `rounded-[10px]`, or a literal `border-radius` / `borderRadius` — fails `pnpm check:design-colors`. Intrinsic content geometry (an icon mask, an illustration shape) is declared with a `design: intrinsic-geometry — <reason>` comment on that line or just above and is then reported for review instead. Existing occurrences are debt, migrated page by page as visible changes; see [`design-governance.md` §8](./design-governance.md).*
 
 
 ## 6. Depth & Elevation
@@ -2335,3 +2383,12 @@ and media position (`ui/media-scrubber`, seconds in/out). Native media controls 
 ### 伙伴私聊消息下操作（2026-10-29）
 
 常用操作固定在消息下方，复用现有群聊图标、引用预览与输入组件。桌面32px按钮、4px间隔、14px图标；手机44pt热区、不额外插空，左右消息的操作图形对齐对应正文边缘。复制/回复/更多常显，现有朗读与编辑能力保留；创建话题与分享图片放更多。已有话题沿用头像、回复数及最后回复时间/未读提示入口，不另造数字徽章。群聊操作及主对话914px宽度规则不变，手机正文直接选字不受操作栏影响。沿用语义色与原菜单开合、焦点和按压状态；五语及明暗模式均不得溢出。
+
+### 伙伴内部通讯入口（2026-11-01）
+
+伙伴间收发只留一行次级文字「发给 X」／「收到 X」，复用原小头像与双向箭头的单行胶囊入口，
+入口与「处理记录」及助手正文共用左对齐轴，不用两侧伸展分隔线把入口推到中间；
+11px 字号、28px 最小点击高度，颜色走现有语义 token，键盘焦点可见。
+不铺两行摘要、不另放展开/完整对话按钮。点击直接打开原只读往来页，返回原主任务位置。
+长名字在可用宽度内省略，完整标签保留在可访问名称和悬停提示。手机沿用已有触摸热区。
+内部往来不制造用户未读；执行与提醒边界见 `cindy-bots-runtime.md` §6.1。

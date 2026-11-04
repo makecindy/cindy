@@ -12,7 +12,7 @@ export async function handoffFixture() {
     { name: 'confirm_import', description: 'Upload the confirmed file',
       parameters: { type: 'object', properties: { file: { type: 'string' } } } },
   ];
-  const manifest = { schemaVersion: 3, minCindyVersion: '0.1.123-beta', id: 'handoff-import', name: 'Handoff import',
+  const manifest = { schemaVersion: 3, minCindyVersion: '0.1.122-beta', id: 'handoff-import', name: 'Handoff import',
     version: '1.0.0', kind: 'chip', entry: 'main.js', network: { hosts: [new URL(HANDOFF_UPLOAD_URL).hostname] }, tools,
     mcpApps: { ui: { resources: [{ uri: 'ui://import', file: 'ui/import.html' }],
       tools: { open_import: { resourceUri: 'ui://import' }, confirm_import: { visibility: ['app'] } } } } };

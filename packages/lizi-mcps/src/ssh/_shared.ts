@@ -51,6 +51,8 @@ export type SshErrorCode =
   | 'PLUGIN_DISABLED'
   | 'HOST_ALREADY_EXISTS'
   | 'INVALID_ARGS'
+  | 'SSH_CONFIG_OWNERSHIP_REQUIRED'
+  | 'PRECONDITION_FAILED'
   | 'SSH_CONFIG_RELOAD_REQUIRED'
   | 'SSH_CONFIG_WRITE_FAILED'
   | 'INTERNAL';
@@ -88,6 +90,7 @@ export function hostBrief(
 ): Record<string, unknown> {
   return {
     id: s.config.id,
+    ...(s.config.displayName !== undefined ? { displayName: s.config.displayName } : {}),
     hostname: s.config.hostname,
     port: s.config.port,
     user: s.config.user,

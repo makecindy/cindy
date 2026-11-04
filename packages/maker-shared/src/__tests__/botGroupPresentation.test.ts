@@ -63,6 +63,23 @@ it('counts only new messages from other people and companions below the observed
   ], '9007199254740992')).toBe(1);
 });
 
+// #8443 P2 / unit: delayed capability notices need the same return-to-tail
+// affordance in both clients; ordinary notices must not inflate the count.
+it.each([undefined, 'root'])('counts delayed capability notices in their lane (%s)', threadRootId => {
+  const notice = { id: 'capability', sequence: 11, kind: 'notice', authorKind: 'bot',
+    capabilityNoticeCode: 'GROUP_AUTHORIZATION_REQUIRED', threadRootId } as BotGroupMessageView;
+  expect(botGroupNewMessageCount([notice, notice], 10, threadRootId)).toBe(1);
+  expect(botGroupNewMessageCount([notice], 11, threadRootId)).toBe(0);
+  expect(botGroupNewMessageCount([notice], null, threadRootId)).toBe(0);
+  const excluded = [
+    { ...notice, deleted: true }, { ...notice, isSelf: true },
+    { ...notice, authorKind: 'system' }, { ...notice, authorKind: 'user', isSelf: false },
+    { ...notice, capabilityNoticeCode: undefined }, { ...notice, capabilityNoticeCode: 'UNKNOWN' },
+    { ...notice, threadRootId: threadRootId ? undefined : 'other' },
+  ] as BotGroupMessageView[];
+  expect(botGroupNewMessageCount(excluded, 10, threadRootId)).toBe(0);
+});
+
 describe('server group membership affordances', () => {
   const self = { actorId: 'self', isSelf: true, isOwned: true, role: 'member' } as BotGroupMemberView;
   const ownBot = { actorId: 'own-bot', actorKind: 'bot', isOwned: true, role: 'owner' } as BotGroupMemberView;

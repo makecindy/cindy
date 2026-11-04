@@ -393,9 +393,6 @@ export interface SchedulerHookScriptService {
  *  - searchSessions: 历史对话 FTS5 检索. 数据在 desktop SQLite (messages 表 + messages_fts
  *    虚拟表), maker-core 不可达 — 必须 host 注入。可选: host 没接 messages_fts 时
  *    缺省, session_search tool 注册时跳过。
- *
- * 依赖 @cindy/maker-core 的类型与少量 runtime 实现(ContactsError / import 管道 /
- * vCard 序列化, workspace dep 已声明), 依赖方向仍单向 @cindy/mcps → maker-core。
  */
 export interface MemoryMcpDeps {
   withAccountDataAccess?: import('./account-data-access.js').AccountDataAccess;
@@ -429,6 +426,7 @@ export interface LspMcpDeps {
 /** ConnectionPool.list() 返回的单主机快照子集。 */
 export interface SshHostSnapshotLike {
   config: {
+    displayName?: string;
     /** SSH alias（= ~/.ssh/config 的 Host 指令），也是 pool 的主键。 */
     id: string;
     hostname: string;
@@ -511,53 +509,14 @@ export interface SshMcpDeps {
   ensureReady(id: string): Promise<void>;
   /** 设置页同一添加流程：写入本机 SSH 配置并刷新连接池；失败以 `[CODE] message` 抛出。 */
   addHost(input: SshAddHostInput): Promise<void>;
+  /** Same settings mutations. Optional for older hosts. */
+  updateHost?(input: { id: string } & Partial<Omit<SshAddHostInput, 'id'>>): Promise<SshHostSnapshotLike>;
+  removeHost?(id: string): Promise<void>;
+  listHosts?(): Promise<SshHostSnapshotLike[]>;
   /** 设置页「重新读取 ~/.ssh/config」。读取失败时返回诊断类别，连接池保持上次成功的结果。 */
   reloadConfig(): Promise<{ diagnostic: string | null; warningCount: number }>;
   /** Host-owned synchronous boundary redactor. It must not retain its inputs. */
   redactSensitiveText(snapshot: SshHostSnapshotLike, text: string): string;
-  logger?: LiziMcpLogger;
-}
-
-/**
- * cindy_contacts(智能通讯录)MCP server 工厂参数。
- *
- * 与 memory 的差异: 通讯录是全局单库(人不属于 workdir)，调用上下文仅供 Host
- * 核验账号数据访问边界。开关由 host 设置层注入 isEnabled — provider 注册门控 +
- * withContacts 工具级双重拦截(Codex host 长生命周期下 server 可能已 spawn,
- * 运行期关闭靠工具级拦截兜底, 跟 memory 的 MAKER_MEMORY_NOT_READY 同模式)。
- *
- * 依赖 @cindy/maker-core 的类型与少量 runtime 实现(ContactsError / import 管道 /
- * vCard 序列化, workspace dep 已声明), 依赖方向仍单向 @cindy/mcps → maker-core。
- */
-export interface ContactsMcpDeps {
-  withAccountDataAccess?: import('./account-data-access.js').AccountDataAccess;
-  getSessionContext?: () => LiziMcpSessionContext;
-  getManager(): import('@cindy/maker-core').MakerContactsManager;
-  /** host 设置层的功能开关. 缺省视为常开(测试/独立复用场景) */
-  isEnabled?: () => boolean;
-  /**
-   * 系统通讯录只读拉取(macOS 由 host 注入 JXA 读取器; 其它平台缺省)。
-   * 缺省时 contacts_import_system 工具不注册(跟 memory 的 session_search 同模式)。
-   */
-  readSystemContacts?: () => Promise<import('@cindy/maker-core').ImportContactRecord[]>;
-  /**
-   * 系统通讯录回写(macOS host 注入)。缺省时 contacts_export_system 不注册。
-   * 语义: 只增/改结构化字段, 系统侧永不删除。
-   */
-  writeSystemContacts?: (
-    items: import('@cindy/maker-core').SystemContactWriteItem[],
-  ) => Promise<import('@cindy/maker-core').SystemContactWriteResult[]>;
-  /**
-   * 系统通讯录回写的单批上限(host 侧 writeSystemContacts 一次能接收的最大条数)。
-   * 只接受 1..200 的整数, 缺省 200(host 硬限制);非法值/超限回退 200。
-   * 测试注入小值可省去大量建卡开销, 仍能验证分批边界。
-   */
-  systemWriteBatchSize?: number;
-  /**
-   * write/manage 类工具成功后的变更通知(host 注入, 用于广播 renderer 刷新)。
-   * MCP 直写同进程 store 不经 IPC 层, 没有这个回调 UI 就收不到 agent 侧变更。
-   */
-  onMutated?: () => void;
   logger?: LiziMcpLogger;
 }
 
@@ -619,7 +578,6 @@ export type LiziMcpId =
   | 'cindy_scheduler'
   | 'cindy_ssh'
   | 'cindy_memory'
-  | 'cindy_contacts'
   | 'cindy_helper'
   | 'cindy_orca'
   | 'cindy_docs'

@@ -49,6 +49,7 @@ export const HomeNativeStackHeader = memo(function HomeNativeStackHeader({
   showRemoteGuide,
   syncing = false,
   keepMenuTopLeft = false,
+  statusRowReserve = 0,
   title,
   titleA11y,
 }: {
@@ -67,6 +68,8 @@ export const HomeNativeStackHeader = memo(function HomeNativeStackHeader({
   showRemoteGuide: boolean;
   syncing?: boolean;
   keepMenuTopLeft?: boolean;
+  /** Trailing width the bar leaves to a shared status row (Duo portrait), see sharedStatusRowTrailingReserve. */
+  statusRowReserve?: number;
   title: string;
   titleA11y: string;
 }) {
@@ -88,19 +91,27 @@ export const HomeNativeStackHeader = memo(function HomeNativeStackHeader({
   // a longer one takes the gap, right-aligned, and grows into the spare room
   // beside the menu before it ellipsizes. Mirrored margins add UIKit's title
   // clearance, otherwise iOS 26 shifts the title toward the leading edge.
+  // When the bar shares the status row (Duo portrait) the trailing items sit
+  // left of the status area: the gap loses that width and the mirrored margins
+  // lose it on both sides, so the sides are asymmetric even with one item.
+  // A wide status area (a Live Activity) can push the trailing items past the
+  // bar's center; the mirrored width then bottoms out and every name takes
+  // the gap, since a centered title would sit under the items.
   const trailingItems = showRemoteGuide ? 0 : onOpenRemoteDesktop ? 2 : 1;
-  const mirroredWidth = centeredHomeTitleWidth(barWidth, trailingItems);
+  const reserve = Math.max(0, statusRowReserve);
+  const mirroredWidth = centeredHomeTitleWidth(barWidth - reserve * 2, trailingItems);
   const gapWidth = Math.max(navigationChrome.target, Math.min(360,
-    barWidth - navigationChrome.target * (1 + trailingItems) - spacing.lg * 4 - spacing.xs));
+    barWidth - reserve - navigationChrome.target * (1 + trailingItems) - spacing.lg * 4 - spacing.xs));
+  const asymmetric = trailingItems > 1 || (trailingItems > 0 && reserve > 0);
   const [naturalWidth, setNaturalWidth] = useState<number | null>(null);
   // One delayed visibility for the glyph and its measured footprint, so a short
   // sync that never shows the glyph never moves the title either.
   const syncVisible = useDelayedConnectionNotice(syncing);
-  const pinnedTrailing = trailingItems > 1
+  const pinnedTrailing = asymmetric
     && naturalWidth != null
     && naturalWidth > mirroredWidth - spacing.xs * 2;
   const titleWidth = showRemoteGuide ? Math.min(220, mirroredWidth)
-    : trailingItems > 1 && !pinnedTrailing ? mirroredWidth : gapWidth;
+    : asymmetric && !pinnedTrailing ? mirroredWidth : gapWidth;
 
   if (!usesNativeStackHeader()) return null;
 

@@ -1,4 +1,7 @@
 {
+  "progress": {
+    "stop": "停止"
+  },
   "title": "群聊",
   "memberSeparator": "、",
   "memberCount_one": "{{count}} 位成员",
@@ -152,7 +155,12 @@
         "details": "请重新发送消息；如果仍失败，请查看日志并反馈问题。"
       }
     },
-    "runtimeFailureSetupHint": "如需调整模型或设置，请在伙伴所属电脑上处理。"
+    "runtimeFailureSetupHint": "如需调整模型或设置，请在伙伴所属电脑上处理。",
+    "capability": {
+      "GROUP_AUTHORIZATION_REQUIRED": "{{name}} 的工具调用未执行：群内授权已失效或不允许此操作。请由伙伴主人在当前群重新发起。",
+      "GROUP_AUTHORIZATION_UNAVAILABLE": "暂时无法核验 {{name}} 的群聊授权，这次工具调用未执行。请在连接恢复后重试。",
+      "ATTACHMENTS_UNAVAILABLE": "部分附件未交给 {{name}}（下载失败或数量限制）。请重新发送本次需要的附件。"
+    }
   },
   "plan": {
     "intro_one": "这件事分 {{count}} 步，我这样分工：",
@@ -186,9 +194,16 @@
     "allDone": "都做完了"
   },
   "speaking": {
+    "queued": "排队中",
     "stopping": "正在停止…",
     "planning": "正在安排…",
     "step": "正在做…"
+  },
+  "work": {
+    "queued": "排队 {{count}}",
+    "active": "进行中 {{count}}",
+    "expand": "展开伙伴动态",
+    "collapse": "收起伙伴动态"
   },
   "task": {
     "state": {
@@ -207,6 +222,17 @@
     "untitled": "附件"
   },
   "settings": {
+    "notifications": {
+      "title": "消息通知",
+      "all": "所有消息",
+      "mentions": "仅 @我",
+      "none": "关闭通知",
+      "allHint": "群聊消息和已关注话题的新回复都会提醒",
+      "mentionsHint": "有人 @你或 @所有人时提醒，分工待处理仍会提醒",
+      "noneHint": "关闭本群所有系统提醒，未读消息仍会保留",
+      "saving": "正在保存…",
+      "saveFailed": "未能保存通知设置，请重试"
+    },
     "open": "群设置",
     "title": "群设置",
     "members": "成员",

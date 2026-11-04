@@ -1,3 +1,4 @@
+import { discoveredMagpieSource } from './modelSource.js';
 import {
   pickModelMetadata,
   type DiscoveredModel,
@@ -47,6 +48,7 @@ export function parseModelsListResponse(
     return null;
   })();
   if (!list) return null;
+  const magpieCatalog = list.some(item => !!item && typeof item === "object" && !!discoveredMagpieSource(item as Record<string, unknown>));
   const out: DiscoveredModel[] = [];
   const seen = new Set<string>();
   for (const item of list) {
@@ -264,8 +266,11 @@ export function parseModelsListResponse(
         return Number.isFinite(amount) && amount >= 0 ? [[target, amount]] : [];
       }),
     );
+    const discoveredSource = discoveredMagpieSource(record);
     out.push({
       id,
+      ...(discoveredSource ? { discoveredSource } : {}),
+      ...(magpieCatalog ? { opaqueModelId: true as const } : {}),
       ...(Array.isArray(serviceTiers) || Array.isArray(additionalSpeedTiers)
         ? { supportsUltrafastMode: declaredSpeedTiers.includes('ultrafast') } : {}),
       discoveredMetadata,

@@ -332,7 +332,7 @@ describe('mobile session composer desktop-first surface', () => {
     expect(composerInputSource).toContain('<MobileComposerInputRow');
     expect(composerInputSource).toContain('<ComposerRichInput');
     expect(composerInputSource).toContain('document={composerDocument}');
-    expect(composerInputSource).toContain('inputElement={(');
+    expect(composerInputSource).toMatch(/inputElement=\{\s*\(?\s*<ComposerRichInput/);
     expect(source).toContain("import { MOBILE_VISUAL_MOCK_ENABLED } from '@/config/env';");
     expect(source).toContain("const visualFocusComposer = MOBILE_VISUAL_MOCK_ENABLED && readRouteParam(params.visualFocusComposer) === '1';");
     expect(source).toContain("const visualOpenSearch = MOBILE_VISUAL_MOCK_ENABLED && readRouteParam(params.visualOpenSearch) === '1';");

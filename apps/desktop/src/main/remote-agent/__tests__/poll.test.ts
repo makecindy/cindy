@@ -413,6 +413,29 @@ describe('multiplexed poll', () => {
     expect(sink.done).toBe(true);
   });
 
+  // Regression: an open circuit breaker (after a short network wobble) used to end the
+  // remote turn at once instead of waiting inside the outage window.
+  it('keeps polling through an open device circuit and resumes once it closes', async () => {
+    vi.useFakeTimers();
+    const sink = collector(randomUUID());
+    let circuitOpen = true;
+    const { remoteAgentInvoker } = await import('../controller/runClient');
+    const poller = new RemoteAgentPoller(remoteAgentInvoker('d', async () => {
+      if (circuitOpen) {
+        throw Object.assign(new Error('target device d is unresponsive (circuit open)'), { code: 'DEVICE_UNRESPONSIVE' });
+      }
+      return { ok: true, result: { runs: [{ runId: sink.run.runId, cursor: 2, data: Buffer.from('ok').toString('base64'), done: true }] } };
+    }));
+    poller.register(sink.run);
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(sink.lost).toBeNull();
+    circuitOpen = false;
+    await vi.advanceTimersByTimeAsync(5_000);
+    expect(sink.lost).toBeNull();
+    expect(sink.text()).toBe('ok');
+    expect(sink.done).toBe(true);
+  });
+
   it('slows down when the other computer keeps answering immediately with nothing new', async () => {
     vi.useFakeTimers();
     let polls = 0;

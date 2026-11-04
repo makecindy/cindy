@@ -1132,6 +1132,7 @@ export async function commitMessageDeletion(
       error: cleanup.reason instanceof Error ? cleanup.reason.message : String(cleanup.reason),
     });
   }
+
   void recomputePrRefsForSession(sessionId).catch(() => undefined);
 
   // sessions:patched 的消费者只做 shallow merge，不会主动重拉。删除后同步带出 canonical
@@ -1302,6 +1303,7 @@ export function broadcastMessageDeleted(
 export async function rewindPersistedUserMessageAfterClear(
   sessionId: string,
   clientId: string,
+  options?: { discard?: boolean },
 ): Promise<void> {
   const ownerScope = captureOwnerBroadcastScope();
   if (!isOwnerBroadcastScopeCurrent(ownerScope)) return;
@@ -1327,6 +1329,7 @@ export async function rewindPersistedUserMessageAfterClear(
     sessionId,
     clientId,
     rewoundAt,
+    ...(options?.discard ? { discard: true } : {}),
   });
   if (!isOwnerBroadcastScopeCurrent(ownerScope)) return;
   if (updated.changes === 0) return;
@@ -1364,6 +1367,14 @@ export async function rewindPersistedUserMessageAfterClear(
   void recomputePrRefsForSession(sessionId).catch(() => undefined);
 }
 
+export async function purgeRewoundSchedulerPrompts(
+  limit = 100,
+  cursor = 0,
+): Promise<{ deleted: number; sessionIds: string[]; cursor: number | null }> {
+  const ownerScope = captureOwnerBroadcastScope();
+  if (!isOwnerBroadcastScopeCurrent(ownerScope)) return { deleted: 0, sessionIds: [], cursor: null };
+  return getDbClient().tx('message.purgeRewoundSchedulerPrompts', { limit, cursor });
+}
 export async function dismissErrorMessage(
   sessionId: string,
   clientId: string,
@@ -1647,6 +1658,10 @@ export async function updateMessageContent(
   // The correction already committed: settle its original publication even if
   // clear/owner changed or another deletion removed the row during readback.
   if (original) await reconcileAssistantDerivedState(original, dbClient, isCurrent, ownerScope, false);
+  else if (row && (row.role === 'user' || row.role === 'assistant')) {
+    await pendingPrRefWrites.get(dbClient)?.get(row.id);
+    if (isCurrent()) await recomputePrRefsForSession(sessionId, { dbClient, isCurrent });
+  }
   return row ? messageToCamel(row) : null;
 }
 
@@ -2115,7 +2130,9 @@ export async function patchMessageAgentMetaWithResult(
   // 损坏的 JSON 以 {} 为底重建(补丁字段仍写入,旧字段无法挽救)。
   const previous = parseAgentMetaRecord(rows[0].agentMeta) ?? {};
   const next = { ...previous, ...patch };
-  await updateAgentMeta(sessionId, clientId, JSON.stringify(next));
+  // Keep the read and write on the same owner even if login changes across await.
+  await db.update(messages).set({ agentMeta: JSON.stringify(next) })
+    .where(and(eq(messages.sessionId, sessionId), eq(messages.clientId, clientId)));
   return { previous, next };
 }
 

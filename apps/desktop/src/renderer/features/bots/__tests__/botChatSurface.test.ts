@@ -56,8 +56,9 @@ describe('消息流的头像挂载', () => {
   it('只有 assistant 分支挂头像', () => {
     expect(messageStream).toContain('return withAssistantAvatar(\n        assistantAvatar,');
     // Assistant text shows the avatar; task and teammate-message cards plus the
-    // work fold reserve the same space invisibly. User messages bypass it.
-    expect(messageStream.match(/withAssistantAvatar\(/g)?.length).toBe(4);
+    // work fold and generated artifacts reserve the same space invisibly.
+    // User messages bypass it; fixture geometry covers pending/empty artifacts.
+    expect(messageStream.match(/withAssistantAvatar\(/g)?.length).toBe(5);
     expect(messageStream).toMatch(/simplifiedBotConversation\s*&&\s*\(message\.systemCardType === 'bot-session-task'\s*\|\|\s*message\.systemCardType === 'bot-session-task-result'\s*\|\|\s*message\.systemCardType === 'bot-session-task-message'\s*\|\|\s*message\.systemCardType === 'bot-direct-message'\)\s*\? withAssistantAvatar\(/);
     expect(messageStream).toMatch(/<span aria-hidden="true" className="invisible">\s*\{assistantAvatar\}\s*<\/span>/);
     expect(messageStream).toContain('{replyColumnSpacer ? withAssistantAvatar(replyColumnSpacer, block) : block}');
@@ -67,7 +68,7 @@ describe('消息流的头像挂载', () => {
 describe('伙伴输入框只保留对话动作', () => {
   it('语音对话入口接入输入框，并传递可用与通话状态', () => {
     expect(sessionView).toContain('onStartVoiceConversation={voiceModeAvailable ? startVoiceMode : undefined}');
-    expect(sessionView).toContain('voiceConversationDisabled={voiceModeBlocked}');
+    expect(sessionView).toContain('voiceConversationDisabled={voiceModeBlocked || voiceCall.open}');
     expect(sessionView).toContain('voiceConversationActive={voiceModeOpen}');
     const voiceGate = sessionView.match(/const voiceModeBlocked = Boolean\([\s\S]*?\);/)?.[0];
     expect(voiceGate).toContain('pendingInputHandoff');

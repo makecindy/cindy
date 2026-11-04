@@ -110,6 +110,12 @@ Mobile 只对 `UI_MOCK_SHOWCASE_PROJECTS` 中的展示项目启用这套文件�
 
 ## 数据边界
 
+手机 B2B 回归入口（仅 `--mock`）：
+`cindy://sessions/visual-teammate-b2b?deviceId=cindy-visual-mock-mac&resourceCollectionId=teammates&resourceKind=bot&resourceId=visual-bot-b2b`。
+该合成场景按收件、处理工具、发件、主人后续回复排列，内部助手正文 `B2B-INTERNAL-HIDDEN` 必须不可见；
+收发入口与处理记录沿正文左侧对齐，入口可打开两条完整往来并返回。用于 iOS/Android 真实界面及交互验收，
+不代表已验证真实设备同步或 APNs/FCM 送达。
+
 - 模拟数据只用于开发与界面验收，不进安装包逻辑，不上传，不触发真实 Agent。
 - 不在模拟数据里放真实姓名、邮箱、路径或聊天内容；要用真实数据预览手机界面时用
   `apps/mobile/scripts/export-realdata-visual-snapshot.mjs`，它导出的是敏感数据，按脚本

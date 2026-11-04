@@ -22,6 +22,7 @@ import type { OpenDialogOptions } from 'electron';
 import { and, desc, eq, gt, inArray, isNull, ne, or, sql } from 'drizzle-orm';
 
 import { getDbClient, tryGetDbClient } from '../client/current';
+import { flushAssistantSamplingMetadata } from '../../messagePersistBroadcaster.js';
 import { notifyAgentIslandCompanionChanged } from '../agentIslandSessionPatch.js';
 import type {
   BotsReparentDelegationsResult,
@@ -236,6 +237,7 @@ import { coordinateBotModelSelection } from '../../maker-ipc/botModelSelectionCo
 import { searchConversations } from '../conversationSearch.js';
 import { registerBotAutonomyIpc } from '../../bot-autonomy/ipc.js';
 import { signalBotAutonomyBotsChanged } from '../../bot-autonomy/botsChangedSignal.js';
+import { readBotSystemSkillsOff } from '../../../shared/botSystemSkills.js';
 import {
   BOT_FAILURE_REASONS,
   isBotFailureAttentionWorthy,
@@ -789,6 +791,8 @@ export async function listBotDmThreads(botId: string, rootSessionId: string): Pr
     const root = parseBotDmThreadRouteKey(link.routeKey);
     if (!root || root.rootSessionId !== rootSessionId) continue;
     owner.assertCurrent();
+    await flushAssistantSamplingMetadata(link.sessionId);
+    owner.assertCurrent();
     const running = getMakerIfReady()?.getSession(link.sessionId)?.isTurnRunning?.() === true;
     const rows = await db
       .select({ role: messages.role, content: messages.content, createdAt: messages.createdAt })
@@ -1052,6 +1056,10 @@ function canonicalReplyCompleted() {
 /** Visibility shared by the local unread count and remote reply watermark. */
 function canonicalReplyVisibility() {
   return [
+    // Failed Codex sampling output is work history, not an addressed reply.
+    sql`(${messages.agentMeta} IS NULL OR json_extract(${messages.agentMeta}, '$.failedSamplingAttempt') IS NULL)`,
+    // Unconfirmed output remains work history after its native runtime closes.
+    sql`(${messages.agentMeta} IS NULL OR COALESCE(json_extract(${messages.agentMeta}, '$.samplingAttemptPending'), 0) = 0)`,
     sql`(${messages.agentMeta} IS NULL OR json_extract(${messages.agentMeta}, '$.assistantPhase') IS NOT 'commentary')`,
     sql`(${messages.agentMeta} IS NULL OR json_extract(${messages.agentMeta}, '$.parentToolUseId') IS NULL)`,
     sql`(${messages.agentMeta} IS NULL OR json_extract(${messages.agentMeta}, '$.parent_tool_use_id') IS NULL)`,
@@ -1252,6 +1260,9 @@ async function readProfile(
     )
     .limit(1);
   const canonicalClearedAt = byId.get(canonicalSessionId ?? '')?.clearedAt ?? null;
+  owner.assertCurrent();
+  if (canonicalSessionId) await flushAssistantSamplingMetadata(canonicalSessionId);
+  owner.assertCurrent();
   const latestMessage = await readCanonicalChatPreview(db, canonicalSessionId, canonicalClearedAt);
   const unreadCount = await countCanonicalUnread(
     db,
@@ -1361,6 +1372,9 @@ async function readProfile(
       // back from here, so an explicit choice must survive a reload. Absent keeps the defaults.
       ...(config.inputHandoff === false ? { inputHandoff: false } : {}),
       ...(config.allowSchedulerFollow === true ? { allowSchedulerFollow: true } : {}),
+      // Absent = every system Skill on (shared/botSystemSkills.ts).
+      ...(readBotSystemSkillsOff(config.systemSkillsOff).length
+        ? { systemSkillsOff: readBotSystemSkillsOff(config.systemSkillsOff) } : {}),
     },
     sessions: links.flatMap((link) => {
       const row = byId.get(link.sessionId);
@@ -1558,6 +1572,9 @@ async function readBotRemoteResourceSource(
   const [canonical] = canonicalSessionId ? await db
     .select({ clearedAt: sessions.clearedAt, updatedAt: sessions.updatedAt })
     .from(sessions).where(eq(sessions.id, canonicalSessionId)).limit(1) : [];
+  owner.assertCurrent();
+  if (canonicalSessionId) await flushAssistantSamplingMetadata(canonicalSessionId);
+  owner.assertCurrent();
   const latest = await readCanonicalChatPreview(db, canonicalSessionId, canonical?.clearedAt ?? null);
   const [version] = await db.select({ capabilitiesJson: botProfileVersions.capabilitiesJson })
     .from(botProfileVersions).where(and(eq(botProfileVersions.botId, botId), eq(botProfileVersions.version, profile.currentVersion))).limit(1);
@@ -1675,6 +1692,8 @@ export async function getBotRemoteSettingsSource(botId: string) {
     skills: strings(config.skills),
     connections: strings(config.mcpServers),
     toolsets: strings(config.toolsets),
+    // Absent = every system Skill on (shared/botSystemSkills.ts).
+    ...(readBotSystemSkillsOff(config.systemSkillsOff).length ? { systemSkillsOff: readBotSystemSkillsOff(config.systemSkillsOff) } : {}),
   };
 }
 

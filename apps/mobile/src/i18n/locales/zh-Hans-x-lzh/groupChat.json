@@ -1,4 +1,13 @@
 {
+  "progress": {
+    "stop": "止"
+  },
+  "work": {
+    "queued": "待次 {{count}}",
+    "active": "行事中 {{count}}",
+    "expand": "展伙伴所事",
+    "collapse": "敛伙伴所事"
+  },
   "title": "群议",
   "memberSeparator": "、",
   "memberCount_one": "成员 {{count}} 位",
@@ -152,7 +161,12 @@
         "details": "请再遣讯；若仍未成，请察记录并回报其事。"
       }
     },
-    "runtimeFailureSetupHint": "如须调模型或设置，请于同僚所属之机上为之。"
+    "runtimeFailureSetupHint": "如须调模型或设置，请于同僚所属之机上为之。",
+    "capability": {
+      "GROUP_AUTHORIZATION_REQUIRED": "{{name}} 的工具调用未执行：群内授权已失效或不允许此操作。请由伙伴主人在当前群重新发起。",
+      "GROUP_AUTHORIZATION_UNAVAILABLE": "暂时无法核验 {{name}} 的群聊授权，这次工具调用未执行。请在连接恢复后重试。",
+      "ATTACHMENTS_UNAVAILABLE": "部分附件未交给 {{name}}（下载失败或数量限制）。请重新发送本次需要的附件。"
+    }
   },
   "plan": {
     "intro_one": "此事分 {{count}} 步，吾如是分职：",
@@ -186,6 +200,7 @@
     "allDone": "皆毕矣"
   },
   "speaking": {
+    "queued": "待次",
     "stopping": "方止…",
     "planning": "方分职…",
     "step": "方为之…"
@@ -258,7 +273,18 @@
       "unavailable": "群之设置读取未成，请再试"
     },
     "allowMentionAllBots": "许 @所有伙伴",
-    "allowMentionAllBotsHint": "唯群主可改。同僚或皆作覆，大群慎启之。此开关不涉 AI 代答。"
+    "allowMentionAllBotsHint": "唯群主可改。同僚或皆作覆，大群慎启之。此开关不涉 AI 代答。",
+    "notifications": {
+      "title": "消息告知",
+      "all": "凡讯皆告",
+      "mentions": "惟提及吾",
+      "none": "不告",
+      "allHint": "群讯及所关注话题之新答，皆告之。",
+      "mentionsHint": "提及吾或 @全体时告之，分职之进展仍告。",
+      "noneHint": "止本群一切系统告知，未读之讯仍存。",
+      "saving": "正存之…",
+      "saveFailed": "告知之设未能存，请再试。"
+    }
   },
   "errors": {
     "memberLimit": "一群议须同僚 2–6 位",

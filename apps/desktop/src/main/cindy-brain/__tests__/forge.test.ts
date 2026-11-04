@@ -15,6 +15,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import { resolveCanonicalSessionPath } from '@cindy/mcps';
+import { handleForgeGuide, type CindyGhostsMcpDeps } from 'cindy-tools';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   GHOST_MANIFEST_SUMMARY_MAX_CHARS,
@@ -26,6 +27,7 @@ import {
 
 import {
   FORGE_GUIDE,
+  FORGE_PAGE_MANUAL,
   // 本测试文件用同名本地包装器(注入 sessionWorkdir / writeScaffold 门参)遮蔽,
   // 故 raw 函数以别名导入;main 的 packGhostDirToFile 无包装器,直接导入。
   packGhostDir as packGhostDirRaw,
@@ -43,6 +45,7 @@ import {
 import { sameForgeScaffoldParentIdentity } from '../forgeScaffoldIdentity';
 import { GHOST_SIGNATURE_FILE, signGhostPackage } from '../ghostSignature';
 import { GHOST_INSTALL_MANIFEST_MAX_BYTES } from '../../../shared/ghost';
+import { PLUGIN_PAGE_MANUAL_SKILL_PATH } from '../../../shared/pluginPageManual.mjs';
 
 const canSymlink = (() => {
   const probeDir = fs.mkdtempSync(path.join(os.tmpdir(), 'cindy-forge-symlink-probe-'));
@@ -1752,6 +1755,33 @@ describe('scaffoldGhostDir', () => {
 });
 
 describe('FORGE_GUIDE', () => {
+  // 协议:ghost_forge_guide 按章号精确取章,章号重复时只能取到靠前的一章。
+  // 历史 bug:随包浏览器扩展与交互页面都编号 4.23,section "4.23" 返回的是浏览器扩展。
+  it('keeps chapter numbers unique so ghost_forge_guide reaches every chapter by number', async () => {
+    const numbers = FORGE_GUIDE.split('\n')
+      .map((line) => line.match(/^## ([0-9]+(?:\.[0-9]+)*)\.?(?:\s|$)/)?.[1])
+      .filter((n): n is string => n !== undefined);
+    expect(numbers.filter((n, i) => numbers.indexOf(n) !== i)).toEqual([]);
+    const deps = {
+      forgeGuide: async () => FORGE_GUIDE,
+      forgePageManual: async () => FORGE_PAGE_MANUAL,
+    } as unknown as CindyGhostsMcpDeps;
+    const read = async (section: string) => (await handleForgeGuide(deps, { section })).content[0].text;
+    expect(await read('4.23')).toMatch(/^## 4\.23 交互页面 MCP Apps/);
+    expect(await read('4.24')).toMatch(/^## 4\.24 随包浏览器扩展/);
+    expect(await read('pages')).toBe(FORGE_PAGE_MANUAL);
+  });
+
+  // 协议:ghost_forge_guide section "pages" 返回的手册与 MCP Apps 请求头按 sha256 公布的
+  // 是同一份文件;两者分叉时模型读到的手册与 CDN 上的版本对不上。
+  it('serves the same page manual bytes that the MCP Apps manual header hashes', () => {
+    const here = path.dirname(fileURLToPath(import.meta.url));
+    const shipped = fs.readFileSync(
+      path.resolve(here, '../../../../resources/system-skills', PLUGIN_PAGE_MANUAL_SKILL_PATH),
+    );
+    expect(Buffer.from(FORGE_PAGE_MANUAL, 'utf8').equals(shipped)).toBe(true);
+  });
+
   it('documents plugin-level defaults independently of Host authorization', () => {
     expect(FORGE_GUIDE).toContain('"showTaskPreferences": false');
     expect(FORGE_GUIDE).toContain('"showTaskPreferences": true');
@@ -1857,22 +1887,23 @@ describe('FORGE_GUIDE', () => {
     expect(FORGE_GUIDE).not.toContain('只有大手册才拆深层文件');
   });
 
-  it('skill 迁移精确映射召回元数据、正文与容器目录', () => {
+  it('skill 章节写明它是正式能力、与 Manual 的分工和长期使用的脚本路径', () => {
     const skillSection = FORGE_GUIDE.slice(
       FORGE_GUIDE.indexOf('## 4.16 捆绑 Agent Skills(skill 能力)'),
       FORGE_GUIDE.indexOf('## 4.17'),
     );
     for (const marker of [
-      '迁移时按职责映射,不是按篇幅搬运',
-      'Skill frontmatter 的 `name + description` 所承担的身份/召回作用',
-      '对标系统提示词区\n  插件花名册的身份与 `recall`',
-      '`manual.items` 只是插件容器级一级目录,不对标 Skill frontmatter',
-      '`MANUAL.md` 与深层 Markdown 承接 Skill 正文、references',
-      '只经 `ghost_manual` tool-result 按需进入上下文',
-      '当前已停止新增,未来计划全部废弃',
+      '装了插件才有这些技能,不装就完全不出现',
+      '按职责选,不按篇幅选',
+      '需要斜杠命令入口(`/<name>`)',
+      '经 `ghost_manual` 读取,不占技能列表',
+      '斜杠菜单里显示的就是 `name`',
+      '跨插件版本不变的入口(路径含 `/agent-skills/skills/`)',
+      '不受插件沙箱约束',
     ]) {
       expect(skillSection).toContain(marker);
     }
+    expect(skillSection).not.toContain('停止新增');
   });
 
   it('Manual-only 插件可发现，已下线 Host 能力不再宣传', () => {
@@ -1898,7 +1929,7 @@ describe('FORGE_GUIDE', () => {
       'Cindy 先发布',
       '确认首个支持它的**正式版本号**',
       '`minCindyVersion` 设为不低于\n该正式版本',
-      '移除\n`skill.items` 的迁移版本也必须设置上述 `minCindyVersion`',
+      '把存量\n`skill.items` 改成 Manual 的版本也必须设置上述 `minCindyVersion`',
       '服务端还要保留上一份带 Skill 的历史 release',
       '旧客户端能通过历史版本回退',
     ];

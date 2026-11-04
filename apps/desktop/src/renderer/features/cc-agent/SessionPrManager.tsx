@@ -28,7 +28,7 @@ const PR_MANAGER_STATUS_LIMIT = 20;
 
 function statusCandidates(rows: SessionPrRef[]): SessionPrRef[] {
   return rows
-    .filter((row) => row.removedAt == null)
+    .filter((row) => row.removedAt == null && row.associationSource !== 'legacy')
     .sort((a, b) => Number(Boolean(b.pinned)) - Number(Boolean(a.pinned)))
     .slice(0, PR_MANAGER_STATUS_LIMIT);
 }
@@ -110,7 +110,7 @@ export function SessionPrManager({
   }, [rows, busy]);
 
   const fetchStatuses = async (result: SessionPrRef[], gen: number) => {
-    const activeIds = new Set(result.filter((row) => row.removedAt == null).map((row) => row.id));
+    const activeIds = new Set(result.filter((row) => row.removedAt == null && row.associationSource !== 'legacy').map((row) => row.id));
     for (const id of requestedStatusIds.current.keys()) {
       if (!activeIds.has(id)) requestedStatusIds.current.delete(id);
     }
@@ -233,9 +233,10 @@ export function SessionPrManager({
     }
   };
 
-  const active = rows?.filter((r) => r.removedAt == null) ?? [];
+  const active = rows?.filter((r) => r.removedAt == null && r.associationSource !== 'legacy') ?? [];
   const statusCandidateIds = new Set(statusCandidates(active).map((row) => row.id));
   const removed = rows?.filter((r) => r.removedAt != null) ?? [];
+  const legacy = rows?.filter(r => r.removedAt == null && r.associationSource === 'legacy') ?? [];
   const pinned = active.filter((r) => r.pinned).length;
   const reorder = (ids: string[], focusId?: string) => {
     if (busy || requestBusy.current) return;
@@ -427,6 +428,12 @@ export function SessionPrManager({
               <p className="py-2 text-xs text-[var(--text-secondary)]">
                 {t('ccAgent.gitContext.pr.manage.empty')}
               </p>
+            )}
+            {legacy.length > 0 && (
+              <details className="mt-2 text-xs text-[var(--text-secondary)]">
+                <summary className="cursor-pointer">{t('ccAgent.gitContext.pr.manage.legacy', { count: legacy.length })}</summary>
+                {legacy.map(ref => renderRow(ref, true))}
+              </details>
             )}
             {removed.length > 0 && (
               <details className="mt-2 text-xs text-[var(--text-secondary)]">

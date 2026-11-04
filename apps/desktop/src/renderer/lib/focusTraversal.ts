@@ -15,7 +15,10 @@
  * 文档序的可 Tab 元素（可见性判据与 Radix FocusScope 的 getTabbableCandidates 同源）。
  * `scope` 限定扫描子树：卡内边缘判定只扫卡片子树（小），只有真要出卡时才扫全文档。
  */
-function collectTabbables(scope: Document | HTMLElement): HTMLElement[] {
+export function collectTabbables(
+  scope: Document | HTMLElement,
+  additionalCandidate?: (element: HTMLElement) => boolean,
+): HTMLElement[] {
   const nodes: HTMLElement[] = [];
   const walkerRoot = scope instanceof Document ? (scope.documentElement ?? scope.body) : scope;
   if (!walkerRoot) return nodes;
@@ -24,10 +27,10 @@ function collectTabbables(scope: Document | HTMLElement): HTMLElement[] {
     acceptNode: (node) => {
       const element = node as HTMLElement;
       const isHiddenInput = element instanceof HTMLInputElement && element.type === 'hidden';
-      if (element.hasAttribute('disabled') || element.hidden || isHiddenInput) {
+      if (element.hasAttribute('disabled') || element.hidden || isHiddenInput || element.closest('[inert]')) {
         return NodeFilter.FILTER_SKIP;
       }
-      return element.tabIndex >= 0 ? NodeFilter.FILTER_ACCEPT : NodeFilter.FILTER_SKIP;
+      return element.tabIndex >= 0 || additionalCandidate?.(element) ? NodeFilter.FILTER_ACCEPT : NodeFilter.FILTER_SKIP;
     },
   });
   while (walker.nextNode()) nodes.push(walker.currentNode as HTMLElement);

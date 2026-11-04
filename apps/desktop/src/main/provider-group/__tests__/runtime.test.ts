@@ -1,6 +1,7 @@
 /**
  * 运行期单例按账号隔离：换账号后冷却、目录缓存不沿用上一个账号的。
  */
+import type { ProviderShareReceived } from '@cindy/device-link';
 import type { ProviderView } from '@cindy/model-providers';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { normalizeProviderGroupConfig, type ProviderGroupConfig } from '../../../shared/providerGroup.js';
@@ -13,11 +14,12 @@ const io = vi.hoisted(() => ({
   devices: vi.fn(),
   catalog: vi.fn(),
   invoke: vi.fn(),
+  shares: vi.fn(() => [] as readonly ProviderShareReceived[]),
   group: vi.fn(() => null as ProviderGroupConfig | null),
 }));
 
 vi.mock('../../appSessionState.js', () => ({ activeOwnerScopeKey: () => owner }));
-vi.mock('../../device-link/providerShareGuest.js', () => ({ getReceivedShares: vi.fn(() => []) }));
+vi.mock('../../device-link/providerShareGuest.js', () => ({ getReceivedShares: io.shares }));
 vi.mock('../../device-link/ipc.js', () => ({ handleListDevices: io.devices, defaultDeps: vi.fn() }));
 vi.mock('../../device-link/index.js', () => ({ remoteBackgroundInvoke: io.invoke }));
 vi.mock('../../device-link/controllerPlatform.js', () => ({ isMobilePlatform: () => false }));
@@ -32,6 +34,9 @@ vi.mock('../coolingStore.js', () => ({ readProviderGroupCooling: () => ({}), wri
 
 const { getProviderGroupDirectory, getProviderGroupOwnerScope, getProviderGroupRouter, setProviderGroupClaudeUsageReader, setProviderGroupCodexUsageReader,
   getProviderGroupApplicationLoad, setProviderGroupApplicationLoadListener } = await import('../runtime.js');
+const { readDeviceProviderViews } = await vi.importActual<typeof import('../../remote-agent/controller/deviceCatalog.js')>(
+  '../../remote-agent/controller/deviceCatalog.js',
+);
 
 afterEach(() => { setProviderGroupClaudeUsageReader(null); setProviderGroupCodexUsageReader(null); io.group.mockReset(); vi.useRealTimers(); });
 
@@ -68,6 +73,29 @@ describe('provider group runtime', () => {
     expect(changed).toHaveBeenCalledExactlyOnceWith('second');
     expect(getProviderGroupApplicationLoad().runningProviders()).toEqual(['q']);
     setProviderGroupApplicationLoadListener(() => {});
+  });
+  // Unit / provider-sharing.md §5.1 (2026-11-02): resolveMembers must reject a signed-out shared computer,
+  // where groupAssigned tasks run directly. Existing quota fixtures mock the catalog and miss guest projection.
+  // Minimal regression: connected:false + groupSize:3 on an active share; exercise the real catalog reader.
+  it.each([
+    [false, { state: 'unavailable', reason: 'disconnected' }],
+    [true, { state: 'ok', view: { connected: true } }],
+  ] as const)('judges a shared member by its own connection state (%s)', async (connected, expected) => {
+    owner = `member-state-owner-${connected}`;
+    io.catalog.mockImplementationOnce(readDeviceProviderViews);
+    io.invoke.mockResolvedValueOnce({ ok: true, result: { providers: [{
+      id: 'anthropic', name: 'Anthropic', agents: ['claude-code'], models: { 'claude-code': [] },
+      connected, remoteInvocationEnabled: true, groupSize: 3,
+    }] } });
+    io.shares.mockReturnValueOnce([{
+      shareId: 's1', memberId: 'm1', providerId: 'anthropic', providerLabel: 'Anthropic',
+      hostDeviceId: 'host', deviceName: 'Cindy', owner: { displayName: 'Owner', avatarUrl: null, region: 'global' },
+      status: 'active', hostOnline: true, hostCapable: true,
+    }]);
+    const config = normalizeProviderGroupConfig({ members: [
+      { kind: 'share', agentDeviceId: 'share:s1', providerId: 'anthropic' },
+    ] }, 'anthropic')!;
+    expect(await getProviderGroupDirectory().resolveMembers('anthropic', config)).toMatchObject([expected]);
   });
   it('keeps the affected model through the runtime facade', () => {
     owner = 'model-cooldown-owner';
