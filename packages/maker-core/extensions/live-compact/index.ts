@@ -46,7 +46,8 @@ import { basename, dirname, isAbsolute, join } from "node:path";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import {
   estimateTokens as estimateMessageTokens,
-  generateSummaryWithUsage,
+  // [thunder 已注释] generateSummaryWithUsage 只被 session_before_compact 用。
+  // generateSummaryWithUsage,
 } from "@earendil-works/pi-coding-agent";
 
 // ---------------------------------------------------------------------------
@@ -106,14 +107,15 @@ function repeatedNames(text: any) {
   return new Set([...counts].filter(([, count]: any) => count >= 2).map(([token]: any) => token));
 }
 
-function compactionRoute(plan: any) {
-  const chars = Math.max(1, plan?.chars || 0);
-  const uncovered = plan?.uncovered?.length || 0;
-  const proseRatio = uncovered / chars;
-  if (uncovered >= 20000 && proseRatio >= 0.5) return "wait-80";
-  if (uncovered < 20000 && proseRatio < 0.2) return "local";
-  return "wait-80";
-}
+// [死代码,已注释] 原仓 DSH 的模型压缩路由;本仓切割直接用 buildCard verdict,不经过这里。
+// function compactionRoute(plan: any) {
+//   const chars = Math.max(1, plan?.chars || 0);
+//   const uncovered = plan?.uncovered?.length || 0;
+//   const proseRatio = uncovered / chars;
+//   if (uncovered >= 20000 && proseRatio >= 0.5) return "wait-80";
+//   if (uncovered < 20000 && proseRatio < 0.2) return "local";
+//   return "wait-80";
+// }
 
 function planText(text: any) {
   const covered: any[] = [];
@@ -173,7 +175,7 @@ function cardBudgetFor(span: string): number {
   return Math.min(Math.max(KEEP_BUDGET, Math.ceil(span.length * 0.9)), RAIL_TOKENS);
 }
 
-function buildCard(spanText: any, liveText: any = "", budget: number = KEEP_BUDGET) {
+export function buildCard(spanText: any, liveText: any = "", budget: number = KEEP_BUDGET) {
   const span = String(spanText || "");
   const live = String(liveText || "");
   const hard = hardItems(span);
@@ -224,112 +226,114 @@ function buildCard(spanText: any, liveText: any = "", budget: number = KEEP_BUDG
   };
 }
 
-function planMessages(messages: any[]) {
-  const covered: any[] = [];
-  const uncovered: any[] = [];
-  const shortUsers: any[] = [];
-  let chars = 0;
-  let codeLines = 0;
-  for (const message of messages) {
-    const text = messageText(message);
-    chars += text.length;
-    const role = message?.role ?? message?.message?.role;
-    if (role === "user" && text.length > 0 && text.length <= 280 && !text.startsWith(MARK)) {
-      shortUsers.push(text.trim());
-      continue;
-    }
-    const split = planText(text);
-    covered.push(...split.covered);
-    codeLines += split.codeLines;
-    if (split.uncovered) uncovered.push(split.uncovered);
-  }
-  const unique = [...new Set(covered)];
-  const kept: any[] = [];
-  let used = 0;
-  let omitted = 0;
-  for (const line of unique) {
-    if (used + line.length > KEEP_BUDGET) {
-      omitted += 1;
-      continue;
-    }
-    kept.push(line);
-    used += line.length;
-  }
-  const prose = uncovered.join("\n");
-  const joined = (messages || []).map(messageText).join("\n");
-  const card = buildCard(joined, shortUsers.join("\n"));
-  return {
-    chars,
-    codeLines,
-    keptChars: card.keptChars,
-    omitted,
-    omittedHard: card.omittedHard,
-    deferred: card.deferred,
-    verdict: card.verdict,
-    hardLines: card.hardLines,
-    needsModel: compactionRoute({ chars, uncovered: prose }) !== "local",
-    route: compactionRoute({ chars, uncovered: prose }),
-    uncovered: prose,
-    text: [
-      card.text,
-      `Shadowed characters: ${chars}. Regex kept lines: ${kept.length}. Omitted over budget: ${omitted}.`,
-      "Short user messages:",
-      ...(shortUsers.length === 0 ? ["- (none)"] : shortUsers.map((line) => `- ${line}`)),
-    ].join("\n"),
-  };
-}
+// [死代码,已注释] 原仓 DSH 的模型压缩路由;本仓切割直接用 buildCard verdict,不经过这里。
+// function planMessages(messages: any[]) {
+//   const covered: any[] = [];
+//   const uncovered: any[] = [];
+//   const shortUsers: any[] = [];
+//   let chars = 0;
+//   let codeLines = 0;
+//   for (const message of messages) {
+//     const text = messageText(message);
+//     chars += text.length;
+//     const role = message?.role ?? message?.message?.role;
+//     if (role === "user" && text.length > 0 && text.length <= 280 && !text.startsWith(MARK)) {
+//       shortUsers.push(text.trim());
+//       continue;
+//     }
+//     const split = planText(text);
+//     covered.push(...split.covered);
+//     codeLines += split.codeLines;
+//     if (split.uncovered) uncovered.push(split.uncovered);
+//   }
+//   const unique = [...new Set(covered)];
+//   const kept: any[] = [];
+//   let used = 0;
+//   let omitted = 0;
+//   for (const line of unique) {
+//     if (used + line.length > KEEP_BUDGET) {
+//       omitted += 1;
+//       continue;
+//     }
+//     kept.push(line);
+//     used += line.length;
+//   }
+//   const prose = uncovered.join("\n");
+//   const joined = (messages || []).map(messageText).join("\n");
+//   const card = buildCard(joined, shortUsers.join("\n"));
+//   return {
+//     chars,
+//     codeLines,
+//     keptChars: card.keptChars,
+//     omitted,
+//     omittedHard: card.omittedHard,
+//     deferred: card.deferred,
+//     verdict: card.verdict,
+//     hardLines: card.hardLines,
+//     needsModel: compactionRoute({ chars, uncovered: prose }) !== "local",
+//     route: compactionRoute({ chars, uncovered: prose }),
+//     uncovered: prose,
+//     text: [
+//       card.text,
+//       `Shadowed characters: ${chars}. Regex kept lines: ${kept.length}. Omitted over budget: ${omitted}.`,
+//       "Short user messages:",
+//       ...(shortUsers.length === 0 ? ["- (none)"] : shortUsers.map((line) => `- ${line}`)),
+//     ].join("\n"),
+//   };
+// }
 
 // ---------------------------------------------------------------------------
 // thunder.js — verbatim from dsh-live-compact 1.0.1
 // ---------------------------------------------------------------------------
 
-const PROSE_TOKEN_CAP = 32000;
+// [thunder 已按审计注释] 阈压缩触发的 send-less 摘要路径,默认 SPINE_THUNDER!=1 永不执行且从未实测。恢复时同时恢复下面 session_before_compact handler、state.lastPrefix 与 generateSummaryWithUsage import。
+// const PROSE_TOKEN_CAP = 32000;
 
-function sharedPrefixLength(previous: any, next: any) {
-  if (!previous || !next) return 0;
-  const limit = Math.min(previous.length, next.length);
-  let index = 0;
-  const step = 64;
-  while (index + step <= limit && previous.slice(index, index + step) === next.slice(index, index + step)) index += step;
-  while (index < limit && previous[index] === next[index]) index += 1;
-  return index;
-}
+// function sharedPrefixLength(previous: any, next: any) {
+//   if (!previous || !next) return 0;
+//   const limit = Math.min(previous.length, next.length);
+//   let index = 0;
+//   const step = 64;
+//   while (index + step <= limit && previous.slice(index, index + step) === next.slice(index, index + step)) index += step;
+//   while (index < limit && previous[index] === next[index]) index += 1;
+//   return index;
+// }
 
-function decideThunder({ previous, next, modelKind, prefixTokens, attachMaxTokens = 80000 }: any) {
-  if (!previous || !next) return "send-less";
-  const shared = sharedPrefixLength(previous, next);
-  const ratio = shared / Math.max(previous.length, 1);
-  if (ratio < 0.9) return "send-less";
-  if (modelKind === "27b" && (prefixTokens || 0) > attachMaxTokens) return "send-less";
-  return "attach";
-}
+// function decideThunder({ previous, next, modelKind, prefixTokens, attachMaxTokens = 80000 }: any) {
+//   if (!previous || !next) return "send-less";
+//   const shared = sharedPrefixLength(previous, next);
+//   const ratio = shared / Math.max(previous.length, 1);
+//   if (ratio < 0.9) return "send-less";
+//   if (modelKind === "27b" && (prefixTokens || 0) > attachMaxTokens) return "send-less";
+//   return "attach";
+// }
 
-function estimateProseTokens(text: any) {
-  const cjk = (String(text).match(/[\u4e00-\u9fff]/g) || []).length;
-  return Math.ceil(cjk / 1.5 + (String(text).length - cjk) / 4);
-}
+// function estimateProseTokens(text: any) {
+//   const cjk = (String(text).match(/[\u4e00-\u9fff]/g) || []).length;
+//   return Math.ceil(cjk / 1.5 + (String(text).length - cjk) / 4);
+// }
 
-function buildSendLess({ taskLine, uncovered, facts, proseTokens = PROSE_TOKEN_CAP }: any) {
-  const kept = (facts || []).filter(Boolean);
-  let prose = uncovered || "";
-  if (estimateProseTokens(prose) > proseTokens) {
-    let low = 0;
-    let high = prose.length;
-    while (low < high) {
-      const mid = Math.ceil((low + high) / 2);
-      if (estimateProseTokens(prose.slice(0, mid)) <= proseTokens) low = mid;
-      else high = mid - 1;
-    }
-    prose = prose.slice(0, low);
-  }
-  return [
-    taskLine || "Continue the current task.",
-    "Facts already copied locally:",
-    ...(kept.length ? kept.map((fact: any) => `- ${fact}`) : ["- (none)"]),
-    "Uncovered prose to summarize:",
-    prose || "(none)",
-  ].join("\n");
-}
+// function buildSendLess({ taskLine, uncovered, facts, proseTokens = PROSE_TOKEN_CAP }: any) {
+//   const kept = (facts || []).filter(Boolean);
+//   let prose = uncovered || "";
+//   if (estimateProseTokens(prose) > proseTokens) {
+//     let low = 0;
+//     let high = prose.length;
+//     while (low < high) {
+//       const mid = Math.ceil((low + high) / 2);
+//       if (estimateProseTokens(prose.slice(0, mid)) <= proseTokens) low = mid;
+//       else high = mid - 1;
+//     }
+//     prose = prose.slice(0, low);
+//   }
+//   return [
+//     taskLine || "Continue the current task.",
+//     "Facts already copied locally:",
+//     ...(kept.length ? kept.map((fact: any) => `- ${fact}`) : ["- (none)"]),
+//     "Uncovered prose to summarize:",
+//     prose || "(none)",
+//   ].join("\n");
+// }
 
 // ---------------------------------------------------------------------------
 // index.js — DSH engine ported onto the pi extension API
@@ -362,13 +366,15 @@ interface SpineEntry {
   calls: string[];
   /** Tool call ids answered by this entry (toolResult.toolCallId). */
   results: string[];
-  source: any;
+  // [死字段,已注释] 赋值后从未被读取。
+  // source: any;
 }
 
 interface SpineState {
   key: string;
-  lastPrefix: string;
-  lastPrefixTokens: number;
+  // [thunder 已注释] 前缀快照只服务 decideThunder 的 attach 判据;注释后不再每刀拼接整个前缀。
+  // lastPrefix: string;
+  // lastPrefixTokens: number;
 }
 
 // 与原仓 eventText 一致:只取 text 块。toolCall 参数不进 span/live/hardItems——
@@ -396,13 +402,29 @@ function budgetText(message: any): string {
 }
 
 // pi 的 estimateTokens 是 ceil(chars/4),对中文低估约 4 倍(原仓 tokenMeter 用真实计价,
-// thunder.js 也用 CJK 感知估算,仓内有先例)。英文保持 pi 原值不动,只给 CJK 补差额:
+// 原仓 thunder.js 也用 CJK 感知估算,仓内有先例)。英文保持 pi 原值不动,只给 CJK 补差额:
 // 每 4 个汉字 pi 记 1 token,真实约 1.5 字符/token,补 (1/1.5 - 1/4) ≈ 0.4167。
+// 注意:这条对卡片本身同样生效 —— 中文卡片 token 被抬高,更容易撞上
+// `framedTokens >= chunk.tokens` 被拒。中文场景有意偏保守。
 const CJK_TOKEN_RE = /[\u4e00-\u9fff]/g;
 function estimateTokens(message: any): number {
   const base = estimateMessageTokens(message);
   const cjk = (budgetText(message).match(CJK_TOKEN_RE) || []).length;
   return base + Math.ceil(cjk * (2 / 3 - 1 / 4));
+}
+
+// shadow 会落盘成 .txt,而 toolResult 里可能含 `export KEY=sk-...` 这类命令;
+// 写入前对常见凭证形态打码 —— 卡片里的路径是给模型 read 的,读到打码版比读到明文密钥安全。
+const REDACT_RULES: Array<[RegExp, string]> = [
+  [/((?:api[_-]?key|access[_-]?token|secret|password|passwd|client[_-]?secret)\s*[=:]\s*)(["'`]?)([^\s"'`]{8,})/gi, "$1$2[REDACTED]"],
+  [/(?<![A-Za-z0-9])Bearer\s+[A-Za-z0-9._-]{16,}/gi, "Bearer [REDACTED]"],
+  [/(?<![A-Za-z0-9])sk-[A-Za-z0-9_-]{16,}/g, "[REDACTED]"],
+  [/(?<![A-Za-z0-9])(?:gh[pousr]_[A-Za-z0-9]{20,}|xox[abps]-[A-Za-z0-9-]{10,})/g, "[REDACTED]"],
+];
+export function redactSecrets(text: string): string {
+  let out = text;
+  for (const [pattern, replacement] of REDACT_RULES) out = out.replace(pattern, replacement);
+  return out;
 }
 
 // shadow 是本地恢复用的完整副本,调用参数(命令、路径、写入内容)必须留下。
@@ -441,7 +463,7 @@ function stateFor(ctx: any): SpineState {
     stateBySession.set(key, state);
     return state;
   }
-  state = { key, lastPrefix: "", lastPrefixTokens: 0 };
+  state = { key };
   stateBySession.set(key, state);
   if (stateBySession.size > MAX_TRACKED_SESSIONS) {
     for (const [oldKey, old] of stateBySession) {
@@ -487,7 +509,7 @@ function shadowName(key: string, length: number): string {
  * Both limits apply; a file is deleted when either is exceeded. Best-effort:
  * a file that vanished between readdir and unlink is ignored.
  */
-function pruneShadow(dir: string): void {
+export function pruneShadow(dir: string): void {
   try {
     const entries = readdirSync(dir)
       .filter((name) => name.endsWith(".txt"))
@@ -615,7 +637,6 @@ function spineEntries(contextEntries: any[]): SpineEntry[] {
       est,
       calls,
       results,
-      source: projected?.sourceEntry,
     });
   }
   return entries;
@@ -644,7 +665,7 @@ function cutOk(fn: () => boolean): boolean {
  * both internally balanced (every issued call answered within the same range), the
  * span [i..j] cannot separate a call from its result in either direction.
  */
-function balanceIndexes(entries: SpineEntry[]) {
+export function balanceIndexes(entries: SpineEntry[]) {
   const prefixBalanced: boolean[] = new Array(entries.length).fill(false);
   const suffixBalanced: boolean[] = new Array(entries.length).fill(false);
   const open = new Set<string>();
@@ -671,7 +692,7 @@ function describeEntries(entries: SpineEntry[]): string {
     .join(' ');
 }
 
-function selectNewestChunk(entries: SpineEntry[], diag?: (why: string) => void) {
+export function selectNewestChunk(entries: SpineEntry[], diag?: (why: string) => void) {
   const warn = (why: string) => { diag?.(why); return null; };
   const nodes = entries.map((_, index) => index);
   if (nodes.length === 0) return warn('empty');
@@ -777,7 +798,11 @@ export default function (pi: ExtensionAPI) {
       logLine(state, "spine cut skipped: span contains an entry without id");
       return undefined;
     }
-    if (chunk.after > MAX_TAIL && totalTokens < URGENT_TOKENS) return undefined;
+    if (chunk.after > MAX_TAIL && totalTokens < URGENT_TOKENS) {
+      // 尾部太大且总量不急:本轮放弃。留痕,否则「上下文涨了却没切」查不出原因。
+      logLine(state, `spine skip: after=${chunk.after}>MAX_TAIL and total=${totalTokens}<URGENT span=${chunk.start}..${chunk.end}`);
+      return undefined;
+    }
 
     const before = totalTokens;
     const started = Date.now();
@@ -788,11 +813,11 @@ export default function (pi: ExtensionAPI) {
       const spanEntries = entries.slice(chunk.start, chunk.end + 1);
       const shadow = shadowDirectory(state.key);
       mkdirSync(shadow, { recursive: true });
-      const joined = spanEntries.map((entry) => entry.shadowText).join("\n\n");
+      const joined = redactSecrets(spanEntries.map((entry) => entry.shadowText).join("\n\n"));
       const file = join(shadow, shadowName(state.key, joined.length));
 
       const card = chunk.card;
-      const summaryBlock = { type: "text", text: `${card.text}\nFull shadowed text: ${file}` };
+      const summaryBlock = { type: "text", text: `${card.text}\nShadowed text (common secrets masked): ${file}` };
       const content = [
         { type: "text", text: `${CHECKPOINT_PREAMBLE}\n\n${SUMMARY_OPEN_TAG}` },
         summaryBlock,
@@ -829,6 +854,7 @@ export default function (pi: ExtensionAPI) {
       ];
 
       const estimatedAfter = before - chunk.tokens + (typeof framedTokens === "number" ? framedTokens : 0);
+      // 二次防御:上面 framedTokens >= chunk.tokens 已 throw,这里只在 est 口径意外变化时兜底。
       reduced = estimatedAfter < before;
       // est.: pi 扩展拿不到切割后的实测 token,这里只是 before - chunk + framed 的推算。
       logLine(state, `spine cut ${Date.now() - started}ms ${before} -> est.${estimatedAfter} chunk=${chunk.tokens} span=${chunk.start}..${chunk.end}/${entries.length}`);
@@ -843,86 +869,88 @@ export default function (pi: ExtensionAPI) {
       return undefined;
     }
     if (drafts.length === 0) return undefined;
+    // [thunder 已注释] 前缀快照只服务 decideThunder;注释后每刀不再拼接整个前缀(O(n))。
     // 原仓 rememberPrefix 在 commitSelectedSpan 之后:前缀是「切割后」的形态,
     // 下一轮 sharedPrefixLength 才会接近全匹配(attach)。写成切割前的全文会让
     // 切割后首轮 ratio 掉到 0.9 以下,误判 send-less。
-    state.lastPrefix = [
-      ...entries.slice(0, chunk.start).filter((entry) => entry.role !== "system").map((entry) => entry.text),
-      chunk.card.text,
-      ...entries.slice(chunk.end + 1).map((entry) => entry.text),
-    ].join("\n");
-    state.lastPrefixTokens = Math.max(0, before - chunk.tokens + (framedTokens ?? 0));
+//     state.lastPrefix = [
+//       ...entries.slice(0, chunk.start).filter((entry) => entry.role !== "system").map((entry) => entry.text),
+//       chunk.card.text,
+//       ...entries.slice(chunk.end + 1).map((entry) => entry.text),
+//     ].join("\n");
+//     state.lastPrefixTokens = Math.max(0, before - chunk.tokens + (framedTokens ?? 0));
     // Runner REPLACES the draft list with whatever a handler returns; preserve
     // drafts proposed by earlier handlers (e.g. Cindy's subagent extension).
     return { entries: [...(event.entries ?? []), ...drafts] };
   });
 
-  // Thunder path: only when the stock threshold compaction fires.
-  pi.on("session_before_compact", async (event: any, ctx: any) => {
-    if (process.env.SPINE_THUNDER !== "1") return undefined;
-    const state = stateFor(ctx);
-    const { preparation, customInstructions, signal } = event;
-    const messages = [...(preparation?.messagesToSummarize ?? []), ...(preparation?.turnPrefixMessages ?? [])];
-    if (!ctx.model) {
-      logLine(state, "thunder skipped: no active model; leaving the gate to default compaction");
-      return undefined;
-    }
-    let joined: string;
-    try {
-      // 必须与 state.lastPrefix 同构(原仓 summarize 里 joined === input.messages.map(messageText))。
-      // 用 serializeConversation 会得到完全不同的格式,sharedPrefixLength 恒为 0 → 永远 send-less。
-      joined = messages.map((message: any) => messageText(message)).join("\n");
-    } catch (error) {
-      logLine(state, `thunder serialize failed: ${error instanceof Error ? error.message : String(error)}`);
-      return undefined;
-    }
-    const mode = decideThunder({
-      previous: state.lastPrefix || "",
-      next: joined,
-      modelKind: process.env.SPINE_THUNDER_MODEL === "27b" ? "27b" : "flash",
-      prefixTokens: state.lastPrefixTokens || 0,
-    });
-    logLine(state, `thunder mode=${mode} prefixTokens=${state.lastPrefixTokens} spanChars=${joined.length}`);
-    if (mode === "attach") return undefined;
+  // [thunder 已按审计注释] 默认 SPINE_THUNDER!=1 永不执行,且从未实测;保留原文便于恢复。
+//   // Thunder path: only when the stock threshold compaction fires.
+//   pi.on("session_before_compact", async (event: any, ctx: any) => {
+//     if (process.env.SPINE_THUNDER !== "1") return undefined;
+//     const state = stateFor(ctx);
+//     const { preparation, customInstructions, signal } = event;
+//     const messages = [...(preparation?.messagesToSummarize ?? []), ...(preparation?.turnPrefixMessages ?? [])];
+//     if (!ctx.model) {
+//       logLine(state, "thunder skipped: no active model; leaving the gate to default compaction");
+//       return undefined;
+//     }
+//     let joined: string;
+//     try {
+//       // 必须与 state.lastPrefix 同构(原仓 summarize 里 joined === input.messages.map(messageText))。
+//       // 用 serializeConversation 会得到完全不同的格式,sharedPrefixLength 恒为 0 → 永远 send-less。
+//       joined = messages.map((message: any) => messageText(message)).join("\n");
+//     } catch (error) {
+//       logLine(state, `thunder serialize failed: ${error instanceof Error ? error.message : String(error)}`);
+//       return undefined;
+//     }
+//     const mode = decideThunder({
+//       previous: state.lastPrefix || "",
+//       next: joined,
+//       modelKind: process.env.SPINE_THUNDER_MODEL === "27b" ? "27b" : "flash",
+//       prefixTokens: state.lastPrefixTokens || 0,
+//     });
+//     logLine(state, `thunder mode=${mode} prefixTokens=${state.lastPrefixTokens} spanChars=${joined.length}`);
+//     if (mode === "attach") return undefined;
 
-    const users = messages.filter((message: any) => (message?.role ?? message?.message?.role) === "user");
-    const taskLine = messageText(users.at(-1) || messages.at(-1)).slice(0, 500);
-    const trunk = buildCard(joined, "");
-    const facts = [...new Set([...(trunk.hardLines || []), ...(trunk.missing || [])])];
-    const slim = buildSendLess({ taskLine, uncovered: trunk.uncovered, facts });
-    const slimMessages = [{ role: "user", content: [{ type: "text", text: slim }], timestamp: Date.now() }];
+//     const users = messages.filter((message: any) => (message?.role ?? message?.message?.role) === "user");
+//     const taskLine = messageText(users.at(-1) || messages.at(-1)).slice(0, 500);
+//     const trunk = buildCard(joined, "");
+//     const facts = [...new Set([...(trunk.hardLines || []), ...(trunk.missing || [])])];
+//     const slim = buildSendLess({ taskLine, uncovered: trunk.uncovered, facts });
+//     const slimMessages = [{ role: "user", content: [{ type: "text", text: slim }], timestamp: Date.now() }];
 
-    try {
-      const auth = await ctx.modelRegistry?.getApiKeyAndHeaders?.(ctx.model);
-      if (!auth?.ok) {
-        logLine(state, "thunder skipped: auth unavailable; leaving the gate to default compaction");
-        return undefined;
-      }
-      const { text, usage } = await generateSummaryWithUsage(
-        slimMessages,
-        ctx.model,
-        preparation?.settings?.reserveTokens,
-        auth.apiKey,
-        auth.headers,
-        signal,
-        customInstructions,
-        preparation?.previousSummary,
-        ctx.thinkingLevel,
-      );
-      logLine(state, `thunder send-less summary ok usage=${usage?.totalTokens ?? "?"}`);
-      return {
-        compaction: {
-          summary: text,
-          firstKeptEntryId: preparation.firstKeptEntryId,
-          tokensBefore: preparation.tokensBefore,
-          usage,
-          details: { liveCompact: "thunder-send-less" },
-        },
-      };
-    } catch (error) {
-      logLine(state, `thunder send-less failed: ${error instanceof Error ? error.message : String(error)}`);
-      // Fall back to pi's default compaction.
-      return undefined;
-    }
-  });
+//     try {
+//       const auth = await ctx.modelRegistry?.getApiKeyAndHeaders?.(ctx.model);
+//       if (!auth?.ok) {
+//         logLine(state, "thunder skipped: auth unavailable; leaving the gate to default compaction");
+//         return undefined;
+//       }
+//       const { text, usage } = await generateSummaryWithUsage(
+//         slimMessages,
+//         ctx.model,
+//         preparation?.settings?.reserveTokens,
+//         auth.apiKey,
+//         auth.headers,
+//         signal,
+//         customInstructions,
+//         preparation?.previousSummary,
+//         ctx.thinkingLevel,
+//       );
+//       logLine(state, `thunder send-less summary ok usage=${usage?.totalTokens ?? "?"}`);
+//       return {
+//         compaction: {
+//           summary: text,
+//           firstKeptEntryId: preparation.firstKeptEntryId,
+//           tokensBefore: preparation.tokensBefore,
+//           usage,
+//           details: { liveCompact: "thunder-send-less" },
+//         },
+//       };
+//     } catch (error) {
+//       logLine(state, `thunder send-less failed: ${error instanceof Error ? error.message : String(error)}`);
+//       // Fall back to pi's default compaction.
+//       return undefined;
+//     }
+//   });
 }

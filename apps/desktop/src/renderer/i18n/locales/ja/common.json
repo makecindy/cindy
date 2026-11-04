@@ -4428,7 +4428,8 @@
       "toast": {
         "enabled": "有効にしました。新しいタスクで反映されます",
         "disabled": "無効にしました。新しいタスクで反映されます",
-        "toggleFailed": "Live Compact の設定を切り替えられませんでした"
+        "toggleFailed": "Live Compact の設定を切り替えられませんでした",
+        "readFailed": "Live Compact の設定を読み取れませんでした"
       },
       "openFailed": "リンクを開けませんでした",
       "toggleAria": "Live Compact"

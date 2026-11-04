@@ -49,6 +49,19 @@ describe('live compact settings', () => {
     expect(fs.readFileSync(file, 'utf8')).toBe('{ not json');
   });
 
+  it('picks up a hand-edited file on the next read', async () => {
+    const file = makeRoot();
+    const store = await import('../live-compact-store.js');
+    expect(store.readLiveCompactSettings().enabled).toBe(false);
+
+    fs.writeFileSync(file, JSON.stringify({ enabled: true }));
+    // 显式把 mtime 推后:同一毫秒内的读改写会让 mtime 守卫失效。
+    const future = (Date.now() + 5000) / 1000;
+    fs.utimesSync(file, future, future);
+
+    expect(store.readLiveCompactSettings().enabled).toBe(true);
+  });
+
   it('ignores a non-boolean enabled value', async () => {
     const file = makeRoot();
     fs.writeFileSync(file, JSON.stringify({ enabled: 'yes' }));

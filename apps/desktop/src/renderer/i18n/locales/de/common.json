@@ -4471,7 +4471,8 @@
       "toast": {
         "enabled": "Aktiviert – wirkt in neuen Tasks",
         "disabled": "Deaktiviert – wirkt in neuen Tasks",
-        "toggleFailed": "Live-Compact-Einstellung konnte nicht geändert werden"
+        "toggleFailed": "Live-Compact-Einstellung konnte nicht geändert werden",
+        "readFailed": "Live-Compact-Einstellung konnte nicht gelesen werden"
       },
       "openFailed": "Link konnte nicht geöffnet werden",
       "toggleAria": "Live Compact"

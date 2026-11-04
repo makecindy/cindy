@@ -4428,7 +4428,8 @@
       "toast": {
         "enabled": "已開啟，新建任務後生效",
         "disabled": "已關閉，新建任務後生效",
-        "toggleFailed": "切換邊做邊壓開關失敗"
+        "toggleFailed": "切換邊做邊壓開關失敗",
+        "readFailed": "讀取邊做邊壓開關失敗"
       },
       "openFailed": "開啟連結失敗",
       "toggleAria": "邊做邊壓 Live Compact"

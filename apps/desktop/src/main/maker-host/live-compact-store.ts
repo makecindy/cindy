@@ -6,16 +6,19 @@
  * pi 进程启动时加载一次,与 LSP Beta 开关同一口径。
  *
  * 文件: <userData>/live-compact-settings.json
- *   { "enabled": false }
+ *   { "enabled": true }      // 关闭时该键等于默认值,会被省略
  *
  * 默认 false —— 实验性功能,全新装包用户不打开,行为与没有该扩展时一致。
+ *
+ * 走仓内通用的 createOverrideSettingsFile:与 compaction-settings-store 同一口径的
+ * 损坏文件保留、大小上限与 mtime 失效重读(手改文件下次读取生效)。
  */
 
 import { app } from 'electron';
-import fs from 'node:fs';
 import path from 'node:path';
 
 import { desktopMakerLogger } from './logger-adapter.js';
+import { createOverrideSettingsFile } from './override-settings-file.js';
 
 const log = desktopMakerLogger.child('live-compact-store');
 
@@ -27,10 +30,6 @@ const DEFAULTS: LiveCompactSettings = {
   enabled: false,
 };
 
-function settingsFilePath(): string {
-  return path.join(app.getPath('userData'), 'live-compact-settings.json');
-}
-
 function normalize(raw: unknown): LiveCompactSettings {
   if (!raw || typeof raw !== 'object') return { ...DEFAULTS };
   const r = raw as Record<string, unknown>;
@@ -39,36 +38,26 @@ function normalize(raw: unknown): LiveCompactSettings {
   };
 }
 
-let cached: LiveCompactSettings | null = null;
+const store = createOverrideSettingsFile<LiveCompactSettings>({
+  filePath: () => path.join(app.getPath('userData'), 'live-compact-settings.json'),
+  defaults: DEFAULTS,
+  normalize,
+  log,
+  label: 'live-compact',
+  // 与 model-context-limit-store / compaction-settings-store 同一契约:
+  // 无界 JSON 不直接读入 main;损坏文件保留待查,不静默删除。
+  maxBytes: 1_048_576,
+  preserveUnreadableFile: true,
+});
 
 export function readLiveCompactSettings(): LiveCompactSettings {
-  if (cached) return cached;
-  const file = settingsFilePath();
-  try {
-    if (fs.existsSync(file)) {
-      const text = fs.readFileSync(file, 'utf-8');
-      const parsed = JSON.parse(text);
-      cached = normalize(parsed);
-      log.info('live compact settings loaded', { ...cached, path: file });
-      return cached;
-    }
-  } catch (err) {
-    log.warn('live-compact-settings.json read failed → falling back to defaults', {
-      error: err instanceof Error ? err.message : String(err),
-      path: file,
-    });
-    // 损坏文件留在原处待查,不静默删除:盘上那份是用户唯一的现场。
-  }
-  cached = { ...DEFAULTS };
-  return cached;
+  // 手改文件也要生效:读前比对 mtime。
+  store.invalidateIfChanged();
+  return store.read();
 }
 
 export function writeLiveCompactEnabled(enabled: boolean): void {
-  const next: LiveCompactSettings = { ...readLiveCompactSettings(), enabled };
-  const file = settingsFilePath();
-  const tmp = `${file}.tmp`;
-  fs.writeFileSync(tmp, JSON.stringify(next, null, 2), 'utf-8');
-  fs.renameSync(tmp, file);
-  cached = next;
+  store.invalidateIfChanged();
+  store.writePatch({ enabled });
   log.info('live compact setting written', { enabled });
 }

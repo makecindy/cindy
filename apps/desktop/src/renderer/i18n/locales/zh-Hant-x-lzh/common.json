@@ -4428,7 +4428,8 @@
       "toast": {
         "enabled": "既啟矣，新創之務乃效",
         "disabled": "既閉矣，新創之務乃效",
-        "toggleFailed": "啟閉邊做邊壓之開關，未成"
+        "toggleFailed": "啟閉邊做邊壓之開關，未成",
+        "readFailed": "讀取邊做邊壓之開關，未成"
       },
       "openFailed": "啟其鏈，未成",
       "toggleAria": "邊做邊壓 Live Compact"

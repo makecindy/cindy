@@ -28,6 +28,8 @@ export function LiveCompactCell() {
   const { t } = useTranslation();
   const [enabled, setEnabled] = useState(false);
   const [pending, setPending] = useState(false);
+  // 首屏拉取期间禁用:避免「读到之前一律显示关闭」误导用户动手点。
+  const [loading, setLoading] = useState(true);
 
   // main 是唯一真源(设置文件);renderer 每次挂载时拉一次。
   useEffect(() => {
@@ -38,12 +40,15 @@ export function LiveCompactCell() {
         if (!cancelled) setEnabled(state.enabled);
       } catch (err) {
         log.warn('liveCompactGet failed', err);
+        if (!cancelled) toast.error(t('settings.liveCompact.toast.readFailed'));
+      } finally {
+        if (!cancelled) setLoading(false);
       }
     })();
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [t]);
 
   const handleToggle = useCallback(
     async (next: boolean) => {
@@ -104,7 +109,7 @@ export function LiveCompactCell() {
 
         <Switch
           checked={enabled}
-          disabled={pending}
+          disabled={pending || loading}
           onCheckedChange={(v) => void handleToggle(v)}
           aria-label={t('settings.liveCompact.toggleAria')}
         />

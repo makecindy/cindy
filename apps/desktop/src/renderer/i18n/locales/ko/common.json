@@ -4428,7 +4428,8 @@
       "toast": {
         "enabled": "켜짐 — 새 작업에서 적용됩니다",
         "disabled": "꺼짐 — 새 작업에서 적용됩니다",
-        "toggleFailed": "Live Compact 설정을 전환하지 못했습니다"
+        "toggleFailed": "Live Compact 설정을 전환하지 못했습니다",
+        "readFailed": "Live Compact 설정을 읽지 못했습니다"
       },
       "openFailed": "링크를 열지 못했습니다",
       "toggleAria": "Live Compact"

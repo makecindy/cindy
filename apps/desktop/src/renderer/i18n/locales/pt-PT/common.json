@@ -4524,7 +4524,8 @@
       "toast": {
         "enabled": "Ativado — aplica-se a tarefas novas",
         "disabled": "Desativado — aplica-se a tarefas novas",
-        "toggleFailed": "Não foi possível alterar a opção Live Compact"
+        "toggleFailed": "Não foi possível alterar a opção Live Compact",
+        "readFailed": "Não foi possível ler a opção Live Compact"
       },
       "openFailed": "Não foi possível abrir a ligação",
       "toggleAria": "Live Compact"
