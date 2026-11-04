@@ -4518,7 +4518,7 @@
     "liveCompact": {
       "cell": {
         "title": "Live Compact · Beta",
-        "description": "Al final de cada turno pliega un tramo ya cerrado de la conversación en una tarjeta local: el modelo conserva los puntos clave y una ruta al texto completo, y el contexto crece más despacio. Experimental: solo se aplica a tareas nuevas y la compactación difiere de la nativa.",
+        "description": "Al final de cada turno pliega un tramo cerrado de la conversación en una tarjeta local: el modelo conserva los puntos clave y una ruta al texto completo, y el contexto crece más despacio. Solo tareas nuevas de Pi; la estrategia difiere de la nativa.",
         "sourceLabel": "Origen: MerkyorLynn/dsh-live-compact"
       },
       "toast": {
@@ -4531,6 +4531,7 @@
       "toggleAria": "Live Compact",
       "shadow": {
         "label": "Texto de sombra",
+        "description": "Texto recortado; borrarlo rompe resúmenes antiguos.",
         "openButton": "Abrir directorio",
         "clearButton": "Borrar",
         "directoryMissing": "No se encontró el directorio de sombra de Live Compact",

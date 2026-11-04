@@ -4422,7 +4422,7 @@
     "liveCompact": {
       "cell": {
         "title": "邊做邊壓 · Live Compact",
-        "description": "每輪既畢，取已成之一段對談，壓為一紙本地之卡：模型仍見其要，及全文所在之徑，故上下文增之也緩。此乃試用之能，唯新創之務乃效，其壓法異於 Pi 原生之自壓。",
+        "description": "每輪既畢，取已成之一段對談，壓為一紙本地之卡：模型仍見其要，及全文所在之徑，故上下文增之也緩。唯新創之 Pi 務乃效，其法異於 Pi 原生之自壓。",
         "sourceLabel": "原倉：MerkyorLynn/dsh-live-compact"
       },
       "toast": {
@@ -4435,6 +4435,7 @@
       "toggleAria": "邊做邊壓 Live Compact",
       "shadow": {
         "label": "影子原文",
+        "description": "所削原文存於此，清之則舊摘要不復展其文。",
         "openButton": "啟其所",
         "clearButton": "清",
         "directoryMissing": "未得邊做邊壓之影子原文所",

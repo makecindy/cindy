@@ -4422,7 +4422,7 @@
     "liveCompact": {
       "cell": {
         "title": "Live Compact · Beta",
-        "description": "매 턴이 끝날 때 이미 완료된 대화 구간을 로컬 카드로 접습니다. 모델은 핵심 요점과 전체 원문 경로를 유지하므로 컨텍스트가 더 천천히 늘어납니다. 실험적 기능: 새 작업에만 적용되며 압축 방식은 기본 자동 압축과 다릅니다.",
+        "description": "매 턴이 끝날 때 완료된 대화 구간을 로컬 카드로 접습니다. 모델은 요점과 전체 원문 경로를 유지하므로 컨텍스트가 천천히 늘어납니다. 새 Pi 작업에만 적용되며 방식은 기본 압축과 다릅니다.",
         "sourceLabel": "원본: MerkyorLynn/dsh-live-compact"
       },
       "toast": {
@@ -4435,6 +4435,7 @@
       "toggleAria": "Live Compact",
       "shadow": {
         "label": "섀도 원문",
+        "description": "잘라낸 원문. 정리하면 오래된 요약은 열 수 없음.",
         "openButton": "디렉터리 열기",
         "clearButton": "정리",
         "directoryMissing": "Live Compact 섀도 원문 디렉터리를 찾을 수 없습니다",

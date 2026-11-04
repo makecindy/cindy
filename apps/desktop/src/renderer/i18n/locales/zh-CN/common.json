@@ -4422,7 +4422,7 @@
     "liveCompact": {
       "cell": {
         "title": "边做边压 · Live Compact",
-        "description": "每轮结束时把已完成的一段对话压成一张本地卡片：模型仍能看到要点和完整原文的本地路径，上下文涨得更慢。实验功能，只对新建任务生效，压缩策略与 Pi 原生自动压缩不同。",
+        "description": "每轮结束时把已完成的一段对话压成本地卡片：模型仍能看到要点与原文路径，上下文增长更慢。只对新建的 Pi 任务生效，策略与 Pi 原生压缩不同。",
         "sourceLabel": "原仓：MerkyorLynn/dsh-live-compact"
       },
       "toast": {
@@ -4435,6 +4435,7 @@
       "toggleAria": "边做边压 Live Compact",
       "shadow": {
         "label": "影子原文",
+        "description": "被压缩段落的原文存于此，清理后旧摘要将无法再展开。",
         "openButton": "打开目录",
         "clearButton": "清理",
         "directoryMissing": "没有找到边做边压的影子原文目录",

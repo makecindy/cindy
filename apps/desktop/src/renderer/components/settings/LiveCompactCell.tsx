@@ -139,16 +139,16 @@ export function LiveCompactCell() {
             {t('settings.liveCompact.cell.title')}
           </p>
           <p className="text-12 leading-[1.4] text-[var(--text-secondary)]">
-            {t('settings.liveCompact.cell.description')}
+            {t('settings.liveCompact.cell.description')}{' '}
+            <button
+              className="inline text-inherit underline decoration-dotted underline-offset-2 transition-colors hover:text-[var(--text-primary)] focus-visible:rounded-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-[var(--focus-ring-soft)]"
+              onClick={() => void handleOpenUpstream()}
+              title={UPSTREAM_URL}
+              type="button"
+            >
+              {t('settings.liveCompact.cell.sourceLabel')}
+            </button>
           </p>
-          <button
-            className="self-start text-12 text-[var(--text-secondary)] underline decoration-dotted underline-offset-2 transition-colors hover:text-[var(--text-primary)] focus-visible:rounded-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-[var(--focus-ring-soft)]"
-            onClick={() => void handleOpenUpstream()}
-            title={UPSTREAM_URL}
-            type="button"
-          >
-            {t('settings.liveCompact.cell.sourceLabel')}
-          </button>
         </div>
 
         <Switch
@@ -159,27 +159,43 @@ export function LiveCompactCell() {
         />
       </div>
 
-      <div className="flex items-center justify-between gap-3 border-t border-[var(--settings-theme-card-border)] pt-3">
-        <span className="text-12 text-[var(--text-secondary)]">
-          {t('settings.liveCompact.shadow.label')}
-          {' · '}
-          {shadowBytes === null ? t('settings.about.storage.unknown') : formatBytes(shadowBytes)}
-        </span>
-        <div className="flex shrink-0 items-center gap-2">
-          <Button variant="secondary" size="sm" compact type="button" onClick={() => void handleOpenShadowDir()}>
-            {t('settings.liveCompact.shadow.openButton')}
-          </Button>
-          <Button
-            variant="secondary"
-            size="sm"
-            compact
-            type="button"
-            onClick={() => void handleClearShadow()}
-            disabled={shadowBusy}
-            aria-busy={shadowBusy || undefined}
-          >
-            {t('settings.liveCompact.shadow.clearButton')}
-          </Button>
+      {/* 子项:分隔线左右都缩进、内容左缩进,视觉上从属于上面的开关而不是并列的第二栏;
+          字号与其它行一致,从属关系只靠缩进表达。 */}
+      <div className="mt-3">
+        <div aria-hidden className="mx-4 h-px bg-[var(--settings-theme-card-border)]" />
+        <div className="mt-3 flex items-center justify-between gap-3 pl-4">
+          <div className="flex min-w-0 flex-col gap-1">
+            <span className="text-12 text-[var(--text-secondary)]">
+              {t('settings.liveCompact.shadow.label')}
+              {' · '}
+              {shadowBytes === null ? t('settings.about.storage.unknown') : formatBytes(shadowBytes)}
+            </span>
+            <p className="text-12 leading-[1.4] text-[var(--text-secondary)]">
+              {t('settings.liveCompact.shadow.description')}
+            </p>
+          </div>
+          <div className="flex shrink-0 items-center gap-2">
+            <Button
+              variant="secondary"
+              size="sm"
+              compact
+              type="button"
+              onClick={() => void handleOpenShadowDir()}
+            >
+              {t('settings.liveCompact.shadow.openButton')}
+            </Button>
+            <Button
+              variant="secondary"
+              size="sm"
+              compact
+              type="button"
+              onClick={() => void handleClearShadow()}
+              disabled={shadowBusy}
+              aria-busy={shadowBusy || undefined}
+            >
+              {t('settings.liveCompact.shadow.clearButton')}
+            </Button>
+          </div>
         </div>
       </div>
     </div>

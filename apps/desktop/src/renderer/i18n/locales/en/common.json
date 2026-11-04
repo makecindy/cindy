@@ -4465,7 +4465,7 @@
     "liveCompact": {
       "cell": {
         "title": "Live Compact · Beta",
-        "description": "At the end of each turn, folds a completed stretch of the conversation into a local card. The model keeps the key points plus a path to the full text, so context grows more slowly. Experimental: applies to new tasks only, and compaction differs from the native strategy.",
+        "description": "Folds each completed stretch of conversation into a local card at turn end: the model keeps the gist plus a path to the full text, so context grows more slowly. New Pi tasks only; the strategy differs from native compaction.",
         "sourceLabel": "Upstream: MerkyorLynn/dsh-live-compact"
       },
       "toast": {
@@ -4478,6 +4478,7 @@
       "toggleAria": "Live Compact",
       "shadow": {
         "label": "Shadow text",
+        "description": "Cut-out text lives here; clearing breaks old summaries.",
         "openButton": "Open directory",
         "clearButton": "Clear",
         "directoryMissing": "The Live Compact shadow directory was not found",

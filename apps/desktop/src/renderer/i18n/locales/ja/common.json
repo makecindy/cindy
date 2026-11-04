@@ -4422,7 +4422,7 @@
     "liveCompact": {
       "cell": {
         "title": "Live Compact · Beta",
-        "description": "各ターンの終わりに、完了した会話の区間をローカルカードへ畳み込みます。モデルは要点と原文へのパスを保持するため、コンテキストの増加が緩やかになります。実験的機能: 新しいタスクにのみ適用され、圧縮方式はネイティブの自動圧縮とは異なります。",
+        "description": "各ターンの終わりに、完了した会話の区間をローカルカードへ畳み込みます。モデルは要点と原文へのパスを保つため、コンテキストの増加が緩やかになります。新しい Pi タスクにのみ適用され、方式はネイティブ圧縮と異なります。",
         "sourceLabel": "上流: MerkyorLynn/dsh-live-compact"
       },
       "toast": {
@@ -4435,6 +4435,7 @@
       "toggleAria": "Live Compact",
       "shadow": {
         "label": "シャドー原文",
+        "description": "切り出した原文。消去すると古い要約は展開不可。",
         "openButton": "ディレクトリを開く",
         "clearButton": "消去",
         "directoryMissing": "Live Compact のシャドー原文ディレクトリが見つかりません",

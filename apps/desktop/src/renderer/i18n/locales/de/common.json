@@ -4465,7 +4465,7 @@
     "liveCompact": {
       "cell": {
         "title": "Live Compact · Beta",
-        "description": "Faltet am Ende jeder Runde einen abgeschlossenen Gesprächsabschnitt in eine lokale Karte: Das Modell behält die Kernpunkte und einen Pfad zum vollständigen Text, der Kontext wächst langsamer. Experimentell: gilt nur für neue Tasks, und die Kompaktierung unterscheidet sich von der nativen.",
+        "description": "Faltet am Ende jeder Runde einen abgeschlossenen Gesprächsabschnitt in eine lokale Karte: Das Modell behält Kernpunkte und einen Pfad zum Volltext, der Kontext wächst langsamer. Nur neue Pi-Tasks; die Strategie weicht von der nativen ab.",
         "sourceLabel": "Ursprung: MerkyorLynn/dsh-live-compact"
       },
       "toast": {
@@ -4478,6 +4478,7 @@
       "toggleAria": "Live Compact",
       "shadow": {
         "label": "Schattentext",
+        "description": "Ausschnitt-Text; Leeren bricht alte Zusammenfassungen.",
         "openButton": "Verzeichnis öffnen",
         "clearButton": "Leeren",
         "directoryMissing": "Das Live-Compact-Schattenverzeichnis wurde nicht gefunden",
