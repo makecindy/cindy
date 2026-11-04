@@ -144,7 +144,11 @@ export interface GhostInstallReceipt {
    */
   approvedAutoTools?: string[];
   observeCapabilityApproved?: true;
+<<<<<<< HEAD
   observeFilesCapabilityApproved?: true;
+=======
+  companionsCapabilityApproved?: true;
+>>>>>>> upstream/main
   schemaVersion: typeof RECEIPT_SCHEMA_VERSION;
   id: string;
   /** Missing is a pre-namespace receipt. null is root; a string is an organization. */
@@ -1311,7 +1315,11 @@ export function createGhostInstallReceipt(input: {
   approvedControlPoints?: readonly string[];
   approvedAutoTools?: readonly string[];
   observeCapabilityApproved?: true;
+<<<<<<< HEAD
   observeFilesCapabilityApproved?: true;
+=======
+  companionsCapabilityApproved?: true;
+>>>>>>> upstream/main
   manifest: GhostManifest;
   localeResources: Record<string, GhostManifestLocaleResource>;
   enabled: boolean;
@@ -1350,7 +1358,11 @@ export function createGhostInstallReceipt(input: {
     ...approvedControlPointsField(input.approvedControlPoints, input.manifest),
     ...approvedAutoToolsField(input.approvedAutoTools, input.manifest),
     ...(input.observeCapabilityApproved === true ? { observeCapabilityApproved: true as const } : {}),
+<<<<<<< HEAD
     ...(input.observeFilesCapabilityApproved === true ? { observeFilesCapabilityApproved: true as const } : {}),
+=======
+    ...(input.companionsCapabilityApproved === true ? { companionsCapabilityApproved: true as const } : {}),
+>>>>>>> upstream/main
     ...(input.packageSha256 ? { packageSha256: input.packageSha256 } : {}),
     ...(input.iconDataUrl ? { iconDataUrl: input.iconDataUrl } : {}),
     ...(input.installOrigin !== undefined ? { installOrigin: input.installOrigin } : {}),
@@ -1570,7 +1582,11 @@ function validateReceipt(
       ...approvedControlPointsField(value.approvedControlPoints, manifestResult.manifest),
       ...approvedAutoToolsField(value.approvedAutoTools, manifestResult.manifest),
       ...(value.observeCapabilityApproved === true ? { observeCapabilityApproved: true as const } : {}),
+<<<<<<< HEAD
       ...(value.observeFilesCapabilityApproved === true ? { observeFilesCapabilityApproved: true as const } : {}),
+=======
+      ...(value.companionsCapabilityApproved === true ? { companionsCapabilityApproved: true as const } : {}),
+>>>>>>> upstream/main
       ...(typeof value.packageSha256 === 'string' ? { packageSha256: value.packageSha256 } : {}),
       ...(typeof value.iconDataUrl === 'string' ? { iconDataUrl: value.iconDataUrl } : {}),
       ...(installOrigin !== undefined ? { installOrigin } : {}),

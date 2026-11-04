@@ -231,6 +231,14 @@ function reconcile(found: Map<string, number>, debt: Map<string, number>, fix: s
 }
 
 describe('text color discipline', () => {
+  // Guard regression: encoded document assets contain long word runs. Restarting
+  // the named-style matcher at every character exhausted CI's normal 5s budget.
+  // Keep scanning the whole input and still report the text token after the asset.
+  it('scans text colors after a long encoded asset within the normal guard deadline', () => {
+    const source = `const asset = "${'A'.repeat(160_000)}";\nconst ink = colors.border;\n<Text style={{ color: ink }} />`;
+    expect(scanTextColors(source)).toEqual([{ where: 'inline', token: 'border' }]);
+  });
+
   it('scans style arrays, conditional branches, bare theme paths and named styles used on <Text>', () => {
     const tokens = (src: string) => scanTextColors(src).map((f) => f.token);
     expect(tokens('<Text style={[styles.label, { color: colors.border }]} />')).toEqual(['border']);

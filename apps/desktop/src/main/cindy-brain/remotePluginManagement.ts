@@ -121,7 +121,11 @@ export function projectManagedGhost(g: InstalledGhost): InstalledGhost {
     targetCapabilityApproved: g.targetCapabilityApproved,
     delegationCapabilityApproved: g.delegationCapabilityApproved,
     observeCapabilityApproved: g.observeCapabilityApproved,
+<<<<<<< HEAD
     observeFilesCapabilityApproved: g.observeFilesCapabilityApproved,
+=======
+    companionsCapabilityApproved: g.companionsCapabilityApproved,
+>>>>>>> upstream/main
     oauthScopeStale: g.oauthScopeStale,
     oauthAuthorizationExpired: g.oauthAuthorizationExpired,
   };

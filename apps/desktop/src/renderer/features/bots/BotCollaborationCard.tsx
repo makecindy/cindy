@@ -20,7 +20,6 @@ import {
 } from '@/components/chat/ChatSessionFileContext';
 import { MarkdownRenderer } from '@/components/chat/MarkdownRenderer';
 import { SessionQuickSendProvider } from '@/components/chat/SessionQuickSendContext';
-import { Spinner } from '@/components/ui/spinner';
 import { getDataOwnerGeneration, isDataOwnerGenerationCurrent } from '@/contexts/dataOwnerGeneration';
 import { usePrActions, usePrRefsForSession, usePrStatuses } from '@/contexts/PrRefsContext';
 import { PR_STATUS_COLOR, PR_STATUS_ICON } from '@/features/cc-agent/gitContextPrVisuals';
@@ -142,16 +141,16 @@ function Chip({
 
 function StatusGlyph({ state }: { state: CardState }) {
   if (state === 'starting' || state === 'running') {
-    return <Spinner size={12} className="shrink-0 text-[var(--status-bar-accent)]" aria-hidden="true" />;
+    return <span className="size-2 shrink-0 rounded-full bg-[var(--warning-accent)] session-status-breathing" aria-hidden="true" />;
   }
   return (
     <span
       aria-hidden="true"
       className={cn(
         'size-[7px] shrink-0 rounded-full',
-        state === 'waiting' && 'bg-[var(--status-info)]',
-        state === 'completed' && 'bg-[var(--status-success)]',
-        state === 'failed' && 'bg-[var(--error-fg)]',
+        state === 'waiting' && 'bg-[var(--card-status-awaiting)]',
+        state === 'completed' && 'bg-[var(--card-status-done)]',
+        state === 'failed' && 'bg-[var(--card-status-error)]',
         (state === 'cancelled' || state === 'unknown') && 'bg-[var(--text-tertiary)]',
       )}
     />

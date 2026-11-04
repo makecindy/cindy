@@ -65,7 +65,14 @@ export function RemoteDesktopToolbar(props: ComponentProps<typeof Toolbar>) {
   const { t } = useTranslation();
   const groupStyle = useNativeGlassGroupStyle("clear");
   const glass = useLiquidGlassAvailable();
-  const allActions = [
+  const allActions: Array<{
+    key: string;
+    Icon: typeof Keyboard;
+    onPress(): void;
+    disabled: boolean;
+    selected: boolean;
+    label?: string;
+  }> = [
     {
       key: props.onWorkspaceLeft ? "workspaceLeft" : "allWindows",
       Icon: props.onWorkspaceLeft ? WorkspaceLeftIcon : AllWindowsIcon,
@@ -107,9 +114,24 @@ export function RemoteDesktopToolbar(props: ComponentProps<typeof Toolbar>) {
     },
   ];
   // 代输入 window view: no desktop to navigate, so only keyboard and settings.
-  const actions = props.windowOnly
-    ? allActions.filter(({ key }) => key === "keyboard" || key === "operations")
-    : allActions;
+  const device = props.device;
+  const actions = device
+    ? [
+        ...device.buttons.map((button) => ({
+          key: button.key,
+          Icon: button.icon,
+          onPress: button.press,
+          disabled: !props.canControl,
+          selected: false,
+          label: button.label,
+        })),
+        ...allActions.filter(
+          ({ key }) => (key === "keyboard" && device.keyboard) || key === "operations",
+        ),
+      ]
+    : props.windowOnly
+      ? allActions.filter(({ key }) => key === "keyboard" || key === "operations")
+      : allActions;
   const length = target * actions.length + inset * 2;
   const Stack = props.landscape ? VStack : HStack;
   return (
@@ -131,7 +153,7 @@ export function RemoteDesktopToolbar(props: ComponentProps<typeof Toolbar>) {
         ]}
       >
         {(props.landscape ? [...actions].reverse() : actions).map(
-          ({ key, Icon, onPress, disabled: unavailable, selected }) => (
+          ({ key, Icon, onPress, disabled: unavailable, selected, label }) => (
             <Button
               key={key}
               onPress={onPress}
@@ -144,7 +166,7 @@ export function RemoteDesktopToolbar(props: ComponentProps<typeof Toolbar>) {
                   ? [background(glass ? clearPalette.selected : colors.surfaceChip, shapes.circle())]
                   : []),
                 accessibilityElement("ignore"),
-                accessibilityLabel(t(`remoteDesktop.${key}`)),
+                accessibilityLabel(label ?? t(`remoteDesktop.${key}`)),
                 accessibilityAddTraits(
                   selected ? ["isButton", "isSelected"] : ["isButton"],
                 ),

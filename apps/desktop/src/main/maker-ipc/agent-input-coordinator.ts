@@ -2,7 +2,7 @@ import { FORWARDED_REQUEST_RECEIPT, verifiedOwnerRequestText, type ForwardedRequ
 import { AUTO_REVIEW_SOURCE_CONTENT, AUTO_REVIEW_USER_INTENT } from '@cindy/maker-core';
 import { getDeviceLinkInvokeContext } from '../device-link/invoke-context.js';
 import { assertSharedTaskQueueMutation } from './sharedTaskInput.js';
-import { assertTaskActionCurrent, combineInputGuards, hasTaskActionAuthorization, isTaskActionRevoked, taskActionInputGuard, TASK_ACTION_INPUT_GUARD } from './taskActionAuthorization.js';
+import { assertTaskActionCurrent, combineInputGuards, hasTaskActionAuthorization, taskActionRevocationCode, taskActionInputGuard, TASK_ACTION_INPUT_GUARD } from './taskActionAuthorization.js';
 import { isBotGroupClientId } from '../../shared/botGroupChat.js';
 import { SchedulerQueuedPreparationError } from './schedulerQueuedPreparation.js';
 import { ProviderGroupUsageLimitError } from '../provider-group/failurePolicy.js';
@@ -3289,7 +3289,27 @@ export class AgentInputCoordinator {
     const continuationOnly = providerRestart || Boolean(
       opts?.auto && isContinuationOnlyAutoResumeReason(previousAutoResumeInfo?.reason),
     );
-    let continueText = CONTINUE_AFTER_ERROR_PROMPT;
+    // Group inputs are hidden in the transcript and omitted by engine handoff.
+    // Carry the actual interrupted request as context, even on CONTINUE-only
+    // recovery; a bare "continue" can otherwise answer an unrelated old turn.
+    const groupRecovery = recovery.kind === 'active-turn'
+      && isBotGroupClientId(recovery.item.retrySourceClientId ?? recovery.item.clientId);
+    const groupRecoveryText = groupRecovery && recovery.kind === 'active-turn'
+      && typeof recovery.item.chatMessage.content === 'string'
+      ? recovery.item.chatMessage.content : recovery.kind === 'active-turn' ? recovery.item.text : '';
+    let continueText = groupRecovery && recovery.kind === 'active-turn'
+      ? recovery.item.originalSyntheticTrigger === 'continue'
+        ? groupRecoveryText
+        : `${groupRecoveryText}\n\n${CONTINUE_AFTER_ERROR_PROMPT}`
+      : CONTINUE_AFTER_ERROR_PROMPT;
+    if (groupRecovery && recovery.kind === 'active-turn' && recovery.item.recoveryCheckpoint) {
+      // Remove only the host-authored suffix, preserving any marker inside the
+      // original request. A fresh snapshot below replaces this stale progress.
+      const previousCheckpoint = appendRecoveryCheckpointPrompt('', recovery.item.recoveryCheckpoint);
+      if (previousCheckpoint && continueText.endsWith(previousCheckpoint)) {
+        continueText = continueText.slice(0, -previousCheckpoint.length);
+      }
+    }
     if (providerRestart) {
       continueText += '\n\n[Host recovery] The provider process stopped or restarted during the previous turn.'
         + (automatic ? ' Cindy is automatically continuing the interrupted task in the original conversation.'
@@ -3399,8 +3419,9 @@ export class AgentInputCoordinator {
           // 人工 Retry 是新的真人介入周期，不能继承上一轮隐藏自动消息的标记；自动路径
           // 则把展示信息随消息落库，成为「已重新连接」活动行的 param 位与展开详情。
           autoResumeInfo: automatic ? (automaticResumeInfo ?? undefined) : undefined,
-          // 附件 / mention 属于原始消息,已在失败 turn 里送达过模型,续跑指令不重带。
-          files: undefined,
+          // Ordinary retries keep files in their native history. Hidden group inputs
+          // may be absent after handoff, so retain their files with the request.
+          files: groupRecovery ? recovery.item.files : undefined,
           mentions: undefined,
           // retry-supersede 只属于零产出克隆重发。续跑分支的原消息是真实历史,
           // 不取代;展开继承的旧值若留着,落库后会把本轮"有产出失败"的 error 行
@@ -3438,6 +3459,7 @@ export class AgentInputCoordinator {
     const previousToolLoop = state.toolLoop;
     const previousStickyError = state.stickyError;
     let retryItem = recovery.kind === 'active-turn' ? recovery.item : null;
+    if (retryItem && groupRecovery) retryItem = { ...retryItem, text: groupRecoveryText };
     if (
       !continueItem &&
       retryItem &&
@@ -5089,6 +5111,16 @@ export class AgentInputCoordinator {
 
     let appMessageGuardRejected = false;
     const taskActionGuard = taskActionInputGuard(sessionId, head);
+    const logTaskActionRevocation = (error: unknown, stage: 'pre-check' | 'before-persistence'): boolean => {
+      const errorCode = taskActionRevocationCode(error);
+      if (!errorCode) return false;
+      // The guard may fail again immediately before persistence. Both exits need
+      // the same diagnostic; only host-defined codes, never arbitrary error text.
+      log.info('discarding revoked task action input before dispatch', {
+        sessionId, clientId: head.clientId, reason: errorCode, errorCode, stage,
+      });
+      return true;
+    };
     try {
       if (taskActionGuard) {
         // A revoked task action settles before screening, persistence or a vendor
@@ -5099,10 +5131,7 @@ export class AgentInputCoordinator {
         const rejection = await taskActionGuard().then(() => null, (error: unknown) => ({ error }));
         if (!this.isActiveTurnCurrent(sessionId, active)) return;
         if (rejection) {
-          if (!isTaskActionRevoked(rejection.error)) throw rejection.error;
-          log.info('discarding revoked task action input before dispatch', {
-            sessionId, clientId: head.clientId, reason: errorMessage(rejection.error),
-          });
+          if (!logTaskActionRevocation(rejection.error, 'pre-check')) throw rejection.error;
           this.discardRevokedAppInput(sessionId, active, head);
           return;
         }
@@ -5190,7 +5219,7 @@ export class AgentInputCoordinator {
             await taskActionGuard?.();
           } catch (error) {
             // Only a proven revocation discards; a failed check keeps the message retryable.
-            if (isTaskActionRevoked(error)) appMessageGuardRejected = true;
+            if (logTaskActionRevocation(error, 'before-persistence')) appMessageGuardRejected = true;
             throw error;
           }
         } } : {}),

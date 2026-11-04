@@ -3,6 +3,7 @@ import { createElement, act } from 'react';
 import { createRoot } from 'react-dom/client';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { UnifiedModelPickerSheet } from '@/session/UnifiedModelPickerSheet';
+import { resolveStoredModelEntry } from '@cindy/model-providers';
 vi.mock('expo-crypto', () => ({ randomUUID: () => 'test-uuid' }));
 const test = vi.hoisted(() => ({ view: null as any, favoritesReady:true, quotas:{} as any, syncError:null as unknown, prefs: {favorites:[],engines:{}} as any, save: vi.fn(), entries: [] as any[],
   // 按传入的目录派生(供应商组用例:每台电脑的供应商各有自己的行与正在用的来源);缺省用上面的固定值。
@@ -788,4 +789,55 @@ it('selects remote Pi using its catalog when the controlled host has no Pi binar
   await act(async () => test.view.onSelect(remote));
   expect(onSelect).toHaveBeenCalledWith(expect.objectContaining({ agent: 'pi', modelId: 'pi-model', fast: true }),
     { deviceId: studioCatalog.deviceId });
+});
+
+// #8485 unit: Desktop and Mobile share the host's favorites. Gateway shortcuts
+// need exact stored identities, while selecting them still sends the wire ID.
+// Existing picker cases only covered non-gateway aliases and missed collisions.
+function gatewayEntries() {
+  return ['chatgpt/foo', 'foo'].map(id => ({ ...test.entries[0], modelId: id,
+    displayName: id, enginePreferenceId: JSON.stringify(['magpie-route', id]),
+    legacyEnginePreferenceId: undefined,
+    capabilities: { codex: { ...test.entries[0].capabilities.codex, wireModelId: id } },
+    candidates: ['codex'], recommended: 'codex', nativeAgent: 'codex' }));
+}
+it.each([false, true])('restores Desktop gateway favorites and selects the exact wire route (remote=%s)', async remote => {
+  test.entries = gatewayEntries();
+  const providerId = remote ? studioSource : 'account';
+  const modelId = test.entries[0].enginePreferenceId;
+  test.prefs.favorites = [{ uid: 'gateway', providerId, modelId, agent: 'codex', effort: 'medium', fast: false }];
+  const { onSelect } = remote ? await mountRemote(null) : await mount();
+  const favorite = test.view.groups.find((group:any) => group.key === 'favorites')?.rows[0];
+  expect(favorite?.entry.modelId).toBe('chatgpt/foo');
+  await act(async () => test.view.onSelect(favorite));
+  expect(onSelect).toHaveBeenCalledWith(expect.objectContaining({ modelId: 'chatgpt/foo' }),
+    { deviceId: remote ? studioCatalog.deviceId : null });
+});
+it.each([false, true])('keeps ambiguous legacy gateway favorites stored without restoring or starring a different route (remote=%s)', async remote => {
+  test.entries = gatewayEntries();
+  const original = { uid: 'legacy', providerId: remote ? studioSource : 'account', modelId: 'foo', agent: 'codex', effort: 'medium', fast: false };
+  test.prefs.favorites = [original];
+  if (remote) await mountRemote(null); else await mount();
+  expect(test.view.groups.some((group:any) => group.key === 'favorites')).toBe(false);
+  const bare = test.view.groups.flatMap((group:any) => group.rows).find((row:any) => row.entry.modelId === 'foo' && !!row.remoteDevice === remote);
+  await act(async () => test.view.onOptions(bare));
+  expect(test.view.options.isFavorite).toBe(false);
+  expect(test.prefs.favorites).toEqual([original]);
+});
+it('saves and edits a Mobile gateway shortcut without downgrading its exact stored identity', async () => {
+  test.entries = gatewayEntries();
+  await mount();
+  const bare = test.view.groups.flatMap((group:any) => group.rows).find((row:any) => row.entry.modelId === 'foo');
+  await act(async () => test.view.onOptions(bare));
+  await act(async () => test.view.options.onFavorite());
+  expect(test.prefs.favorites[0].modelId).toBe('["magpie-route","foo"]');
+  const copy = JSON.parse(JSON.stringify(test.prefs.favorites[0]));
+  expect(resolveStoredModelEntry(test.entries, copy.providerId, copy.modelId)?.modelId).toBe('foo');
+  expect(test.view.options.isFavorite).toBe(true);
+  const favorite = test.view.groups.find((group:any) => group.key === 'favorites').rows[0];
+  await act(async () => test.view.onOptions(favorite));
+  await act(async () => test.view.options.onEditFavorite());
+  await act(async () => test.view.options.onChange({ ...test.view.options.row.config, effort: 'high' }));
+  await act(async () => test.view.options.onSaveEdit());
+  expect(test.prefs.favorites[0]).toMatchObject({ modelId: '["magpie-route","foo"]', effort: 'high' });
 });

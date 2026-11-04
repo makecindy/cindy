@@ -37,8 +37,26 @@ export function hasPluginDelegationApproval(ghost: InstalledGhost | null | undef
   return hasPluginTargetApproval(ghost) && ghost?.manifest.agent?.delegation === true && ghost.delegationCapabilityApproved === true;
 }
 
+<<<<<<< HEAD
 export function pluginCapabilityApproval(capability: 'tasks' | 'targets' | 'delegation' | 'observe' | 'observeFiles'): (ghost: InstalledGhost | null | undefined) => boolean {
   return capability === 'observeFiles' ? hasPluginObserveFilesApproval : capability === 'observe' ? hasPluginObserveApproval : capability === 'delegation' ? hasPluginDelegationApproval : capability === 'targets' ? hasPluginTargetApproval : hasPluginTaskApproval;
+=======
+export type PluginTaskCapability = 'tasks' | 'targets' | 'delegation' | 'observe' | 'companions';
+
+export function pluginCapabilityApproval(capability: PluginTaskCapability): (ghost: InstalledGhost | null | undefined) => boolean {
+  return capability === 'companions' ? hasPluginCompanionsApproval : capability === 'observe' ? hasPluginObserveApproval
+    : capability === 'delegation' ? hasPluginDelegationApproval : capability === 'targets' ? hasPluginTargetApproval : hasPluginTaskApproval;
+}
+
+/** Reading companions is independent of task creation, so it does not require tasks approval. */
+export function hasPluginCompanionsApproval(ghost: InstalledGhost | null | undefined): boolean {
+  return (
+    ghost?.enabled === true &&
+    ghost.manifest.agent?.companions === true &&
+    ghost.approval?.state === 'approved' &&
+    ghost.companionsCapabilityApproved === true
+  );
+>>>>>>> upstream/main
 }
 
 /** Read-only observation is independent of task creation, so it does not require tasks approval. */
@@ -64,14 +82,22 @@ export async function ensurePluginTaskApproval(
     confirm(facts: GhostInstallConsentFacts): Promise<boolean>;
     approve(id: string, revision: string, isCurrent: () => boolean): Promise<boolean>;
   },
+<<<<<<< HEAD
   capability: 'tasks' | 'targets' | 'delegation' | 'observe' | 'observeFiles' = 'tasks',
+=======
+  capability: PluginTaskCapability = 'tasks',
+>>>>>>> upstream/main
 ): Promise<boolean> {
   const ghost = deps.getGhost(id);
   if (!deps.isCurrent()) return false;
   if (pluginCapabilityApproval(capability)(ghost)) return true;
   if (
     !ghost?.enabled ||
+<<<<<<< HEAD
     ((capability === 'observe' || capability === 'observeFiles') ? ghost.manifest.agent?.observe !== true : ghost.manifest.agent?.tasks !== true) ||
+=======
+    (capability === 'observe' || capability === 'companions' ? ghost.manifest.agent?.[capability] !== true : ghost.manifest.agent?.tasks !== true) ||
+>>>>>>> upstream/main
     ghost.approval?.state !== 'approved' ||
     (capability === 'observeFiles' && (!hasPluginObserveApproval(ghost) || ghost.manifest.agent?.observeFiles !== true)) ||
     (capability === 'targets' && (!hasPluginTaskApproval(ghost) || ghost.manifest.agent?.targets !== true)) ||

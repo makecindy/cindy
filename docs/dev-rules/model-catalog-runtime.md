@@ -125,7 +125,7 @@ Server 目录；不改 Gateway 的价格、成员、上下文与可用性。
 
 ### 模型简介本地化
 
-Desktop 模型选择器、旧入口的配置浮层及设置详情在展示简介时统一使用
+旧入口的配置浮层及设置详情在展示简介时统一使用
 `renderer/lib/modelDescriptions.ts` 解析本地简介，文案放在五语 `common.json` 的
 `modelDescriptions`。只写简短用途，不从文案推导能力、协议、价格、窗口或默认档位。
 
@@ -137,13 +137,26 @@ Desktop 模型选择器、旧入口的配置浮层及设置详情在展示简介
 费用符号、折扣和免费标签统一使用中性色，保留原价档位的符号个数、折扣明暗与百分比标签。
 整行不换行，长来源名称省略；额度段最多占行宽 70%，过长时省略，
 给来源保留可见空间，悬停仍可查看完整来源与额度状态。远程目录不读取本机账号余量，改读被控端用量镜像
-（与会话用量 chip 共用同一缓存与推送，口径同 `useProviderWeeklyQuota.ts`）；任务所在电脑自己的 Cindy AI
-及单供应商分栏继续展示本地简介。分享来的、同账号其他电脑上的 Cindy AI 以及外来收藏不属于这一例外，
+（与会话用量 chip 共用同一缓存与推送，口径同 `useProviderWeeklyQuota.ts`）；统一模型选择器中原有的
+简介行改为供应商名称，但仍用本地简介是否存在来决定该行显隐，原单行型号不新增第二行。
+分享来的、同账号其他电脑上的 Cindy AI 以及外来收藏保留来源行，
 与其他供应商一样展示来源（如 `Cindy AI · 来自 Magi 的分享`、`Cindy AI · 工作室 Mac`，#6110）；是否属于
 本机目录由 `UnifiedModelPanel` 判断，可见行与定宽测量行共用同一判断，`UnifiedModelRow` 收到来源即展示。
 实现见 `renderer/components/new-chat/ModelSourceDetails.tsx` 和 `UnifiedModelRow.tsx`，行为覆盖见
 `renderer/__tests__/modelSourceDetails.test.tsx`、`unifiedModelPanelRendering.test.tsx` 及
 `remoteAgentDeviceFavoritesPanel.test.tsx`。
+
+Magpie 的 `magpie_label` / `owned_by` 作为连接内、完整 wire 模型 ID 下的发现来源，
+只替换上述既有第二行中的供应商名称，不重复加 Magpie 前缀；账号、电脑、分享及余量信息保留。
+完整模型 ID 不参与 bridge 前缀归一化；端点或授权上下文改变时清除旧来源，迟到刷新不得恢复。
+收藏与最近记录复用带命名空间的路由身份存储，实际调用仍用完整 wire ID；旧的归一化记录
+只有目录证明唯一时才恢复，歧义记录保留但不展示、不猜测绑定。旧客户端不识别新存储身份时
+不显示该快捷方式，既有字段与协议不变。替换密钥或请求头后，新发现收据按提交的新上下文验证，
+不能因为旧上下文已失效而丢弃有效的新来源。
+重启后，缺少当前 Main 发现标记的持久化来源仅从目录展示投影移除，保留原始配置和完整 ID，
+直到正常发现成功；这也覆盖凭证已写入、配置尚未提交时进程中断的情况。
+实现及回归见 `modelSource.ts`、`model-source-snapshots.ts` 和
+`renderer/__tests__/magpieModelSourceRow.test.tsx`。
 
 同系列不同接入路径复用用途说明；特殊长上下文版本保留单独的费用提醒。
 媒体用途优先尊重明确的类型字段，不能因厂商分组是 GPT 就介绍成编程模型。
