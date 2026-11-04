@@ -1,6 +1,5 @@
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { createServer } from 'node:http';
 
 import { createDbClientForHandle } from '../../desktop/src/main/localDb/client/createDbClientForHandle.js';
 import { OwnerSessionStorage } from '../../desktop/src/main/localDb/sessionStorageAdapter.js';
@@ -10,6 +9,8 @@ import { resolveHostDataDir, resolveHostRegion } from './profile-path.mjs';
 import { acquireHostRuntimeLease, type HostRuntimeLease } from './runtime-lock.js';
 import { readAdoptedSessionState } from './credentials/session.mjs';
 import { runLoginCommand } from './login-cli.mjs';
+import { readOrCreateApiToken } from './api-token.mjs';
+import { createHostServer } from './server.mjs';
 
 const command = process.argv[2];
 if (command === 'login') {
@@ -110,31 +111,21 @@ async function ensureRuntime(ownerId: string): Promise<void> {
   delete runtime.detail;
 }
 
-const server = createServer(async (request, response) => {
-  if (request.method === 'GET' && request.url === '/health') {
-    let sessions: number | null = null;
-    if (sessionStorage) {
-      try {
-        sessions = (await sessionStorage.list()).length;
-      } catch {
-        sessions = null;
-      }
-    }
-    response.writeHead(200, { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' });
-    response.end(JSON.stringify({
-      status: 'ok',
-      service: 'cindy-host',
-      region: resolveHostRegion(),
-      dataDir: resolveHostDataDir(),
-      runtime,
-      account,
-      harness: harnessStatus(),
-      sessions,
-    }));
-    return;
-  }
-  response.writeHead(404, { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' });
-  response.end(JSON.stringify({ error: 'not_found' }));
+const apiToken = readOrCreateApiToken(resolveHostDataDir());
+const server = createHostServer({
+  token: apiToken,
+  probe: async () => ({
+    status: 'ok',
+    service: 'cindy-host',
+    region: resolveHostRegion(),
+    dataDir: resolveHostDataDir(),
+    runtime,
+    account,
+    harness: harnessStatus(),
+    sessions: sessionStorage ? (await sessionStorage.list()).length : null,
+  }),
+  me: async () => ({ owner: runtime.owner, authenticated: account.authenticated, realm: account.realm }),
+  listSessions: async () => (sessionStorage ? sessionStorage.list() : []),
 });
 
 server.on('error', (error) => {
