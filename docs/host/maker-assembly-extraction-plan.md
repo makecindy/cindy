@@ -38,6 +38,10 @@
 
 `apps/desktop/src/main/userDataPath.ts`：profile 根改由启动时注入（Desktop 在 `index.ts` 安装 Electron 值），`agent-resource-settings-store` 不再 import `electron`。测试改为 `configureUserDataDir()`，7/7 通过；Desktop typecheck 通过。
 
+## 第三个切片
+
+`apps/desktop/src/main/ownerContext.ts`：owner 根解析与 generation 从 `appSessionState`（Electron）抽成可注入上下文；`appSessionState` 反向委托给它。五个设置存储（`session-context-budget`、`model-context-limit`、`model-catalog-override`、`model-disable`、`compaction-settings`）不再 import `electron`，它们的测试改为 mock `ownerContext`。Desktop typecheck 通过；四个受影响测试 5+9+5+6 全过（`sessionContextBudgetStore` 中 1 例为基线既有失败）。
+
 ## 每步验证
 
 - `pnpm --filter desktop run typecheck`（约 7 分钟，改动后必跑）。

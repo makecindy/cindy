@@ -8,7 +8,8 @@
 import { app } from 'electron';
 import fs from 'node:fs';
 import path from 'node:path';
-import { dataOwnerStorageKey, ownerScopedPath } from './dataOwnerPath.js';
+import { dataOwnerStorageKey } from './dataOwnerPath.js';
+import { configureOwnerContext, ownerScopedPath } from './ownerContext.js';
 
 import { createLogger } from './logger.js';
 import { createOverrideSettingsFile } from './maker-host/override-settings-file.js';
@@ -34,15 +35,19 @@ export { dataOwnerStorageKey };
  * Callers must not silently fall back to the shared userData root: doing so
  * would make signed-out startup or an account switch cross-contaminate data.
  */
+configureOwnerContext({
+  read: () => ({
+    dataOwnerId: getActiveAppSession().dataOwnerId,
+    generation: getActiveAppSession().generation,
+  }),
+  // Some services register before authentication settles. Give them an
+  // ephemeral process namespace so they can initialize without ever
+  // reading or writing a real owner's private state.
+  fallbackBaseDir: () => path.join(app.getPath('temp'), 'cindy-no-session', String(process.pid)),
+});
+
 export function ownerScopedUserDataPath(...parts: string[]): string {
-  const ownerId = getActiveAppSession().dataOwnerId;
-  if (!ownerId) {
-    // Some services register before authentication settles. Give them an
-    // ephemeral process namespace so they can initialize without ever
-    // reading or writing a real owner's private state.
-    return path.join(app.getPath('temp'), 'cindy-no-session', String(process.pid), ...parts);
-  }
-  return ownerScopedPath(app.getPath('userData'), ownerId, ...parts);
+  return ownerScopedPath(...parts);
 }
 
 interface PersistedAppSessionSettings {

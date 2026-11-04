@@ -18,9 +18,10 @@ vi.mock('electron', () => ({ app: { getPath: () => '/tmp/never-used-here' } }));
 vi.mock('../logger-adapter.js', () => ({
   desktopMakerLogger: { child: () => ({ info: () => {}, warn: () => {}, error: () => {} }) },
 }));
-vi.mock('../../appSessionState.js', () => ({
-  getActiveAppSession: () => ({ generation: owner.generation }),
-  ownerScopedUserDataPath: (name: string) => path.join(tmpDir, owner.current, name),
+vi.mock('../../ownerContext.js', () => ({
+  ownerScopedPath: (name: string) => path.join(tmpDir, owner.current, name),
+  ownerGeneration: () => owner.generation,
+  hasCommittedOwner: () => true,
 }));
 
 const { MAX_MODEL_CATALOG_OVERRIDE_FILE_BYTES, readModelCatalogOverrides, readModelImageInputOverride, writeModelImageInputOverride } =
