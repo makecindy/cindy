@@ -146,18 +146,25 @@ export function createCheckoutService(listActivity: () => Promise<CheckoutActivi
     }
     if (!blocked && target && occupied.includes(localBranch(target))) blocked = 'occupied';
     let carryAllowed = true;
+    let ignoredCollision: CheckoutStatus['ignoredCollision'];
     if (target) {
       const targetRef = target.startsWith('refs/remotes/origin/') ? target : `refs/heads/${target}`;
       const commit = await optional(repo, 'rev-parse', '--verify', `${targetRef}^{commit}`);
       if (!commit) blocked ??= 'missing';
-      else if (files.length) {
+      else {
+        if (files.length) {
+          try {
+            // Git's two-tree merge accounts for index contents, working files and
+            // untracked collisions, including staged content matching the target.
+            await gitExec(['read-tree', '-m', '-u', '-n', 'HEAD', commit], repo, readOpts);
+          } catch {
+            // A failed or indeterminate dry-run must not enable the carry action.
+            carryAllowed = false;
+          }
+        }
         try {
-          // Git's two-tree merge accounts for index contents, working files and
-          // untracked collisions. In particular, staged content already matching
-          // the target is safe even though the same path changed between branches.
-          await gitExec(['read-tree', '-m', '-u', '-n', 'HEAD', commit], repo, readOpts);
-          // read-tree permits ignored files to be overwritten, unlike our switch
-          // --no-overwrite-ignore. Keep that additional protection in the preview.
+          // Ignored collisions are absent from porcelain, and read-tree permits
+          // overwriting them. Check independently, even in an otherwise clean tree.
           const ignored = (
             await gitExec(
               ['ls-files', '--others', '--ignored', '--exclude-standard', '--directory', '-z'],
@@ -174,13 +181,18 @@ export function createCheckoutService(listActivity: () => Promise<CheckoutActivi
             ).stdout
               .split('\0')
               .filter(Boolean);
-            carryAllowed = !ignored.some((a) =>
+            const collisions = ignored.filter((a) =>
               changes.some((b) => a === b || a.startsWith(`${b}/`) || b.startsWith(`${a}/`)),
             );
+            if (collisions.length) {
+              ignoredCollision = { branch: localBranch(target), paths: collisions };
+              carryAllowed = false;
+              blocked ??= 'conflict';
+            }
           }
         } catch {
-          // A failed or indeterminate dry-run must not enable the carry action.
           carryAllowed = false;
+          blocked ??= 'git';
         }
       }
     }
@@ -204,6 +216,7 @@ export function createCheckoutService(listActivity: () => Promise<CheckoutActivi
       occupied,
       blocked,
       carryAllowed,
+      ...(ignoredCollision ? { ignoredCollision } : {}),
       stashes: (await stashes(repo)).filter((s) => s.branch === current),
     };
   }

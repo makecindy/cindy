@@ -14633,6 +14633,7 @@
         "occupied": "Déjà ouverte dans un autre worktree",
         "changed": "La branche ou les modifications ont changé. Vérifiez le dossier. Vous ne pouvez annuler que si vous êtes encore sur la branche de destination.",
         "conflict": "Ces modifications sont en conflit avec la branche de destination. Mettez-les de côté ou utilisez worktree.",
+        "ignored": "Passer à {{branch}} écraserait des fichiers ou dossiers locaux ignorés par Git, dont {{file}} ({{count}} au total). Le changement a été arrêté.",
         "dirty": "De nouvelles modifications non validées sont présentes. Traitez-les avant de restaurer.",
         "diverged": "Les branches locale et distante ont divergé. Résolvez ce problème avant de changer.",
         "missing": "La branche choisie n’existe plus. Actualisez la liste.",

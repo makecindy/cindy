@@ -58,7 +58,7 @@ import {
 import { useBranchSync } from '@/hooks/useBranchSync';
 import { resolveBranchPick } from './branchPick';
 import { useCheckout } from '@/hooks/useCheckout';
-import { CheckoutFeedback, UseWorktreeButton } from './CheckoutFeedback';
+import { CheckoutError, CheckoutFeedback, UseWorktreeButton } from './CheckoutFeedback';
 import type { ReactNode } from 'react';
 import { useBranches, useDetectCwd, useSuggestName } from '@/hooks/useWorktreeQueries';
 import { getProjectPickerDisplayName } from '@/hooks/useProjectPickerOptions';
@@ -337,7 +337,11 @@ export function WorktreeChipsRow({
         menuHeader={
           !effectiveWorktreeEnabled && (
             <div className="max-w-[320px] space-y-2 px-3 py-2 text-12 text-muted-foreground">
-              {menuStatus?.blocked && <p>{t(`newChat.checkout.errors.${menuStatus.blocked}`)}</p>}
+              {menuStatus?.blocked && (
+                <p>
+                  <CheckoutError code={menuStatus.blocked} status={menuStatus} />
+                </p>
+              )}
               {!!menuStatus?.sessions.length && !menuStatus.blocked && (
                 <p>
                   {t('newChat.checkout.idleSessions', {

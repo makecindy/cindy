@@ -14633,6 +14633,7 @@
         "occupied": "Já está aberto noutro worktree",
         "changed": "O ramo ou as alterações mudaram. Verifique o diretório. Só pode anular enquanto estiver no ramo de destino.",
         "conflict": "Estas alterações entram em conflito com o ramo de destino. Guarde-as primeiro ou use worktree.",
+        "ignored": "Mudar para {{branch}} substituiria ficheiros ou pastas locais ignorados pelo Git, incluindo {{file}} ({{count}} no total). A mudança foi interrompida.",
         "dirty": "Há novas alterações por submeter. Trate-as antes de restaurar.",
         "diverged": "Os ramos local e remoto divergiram. Resolva a situação antes de mudar.",
         "missing": "O ramo selecionado já não existe. Atualize a lista.",

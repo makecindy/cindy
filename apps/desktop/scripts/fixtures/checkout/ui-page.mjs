@@ -11,6 +11,7 @@ export default {
     idle: { about: 'Idle sessions are named without blocking branch choices' },
     dirty: { about: 'Scrollable dirty file list with fixed actions and worktree alternative' },
     conflict: { about: 'Carry option disabled for overlapping changes' },
+    ignored: { about: 'Clean checkout names ignored files that prevent switching' },
   },
   async ready(page) {
     await page.getByTestId('create-agent-branch-chip').filter({ hasText: 'main' }).waitFor();
@@ -19,7 +20,15 @@ export default {
     assert.equal(await page.getByTestId('create-agent-branch-chip').innerText(), 'main');
     await page.getByTestId('create-agent-branch-chip').click();
     await page.getByRole('option', { name: /^feature/ }).waitFor();
-    if (['dirty', 'conflict'].includes(ui.case)) {
+    if (ui.case === 'ignored') {
+      await page.getByRole('option', { name: 'feature', exact: true }).click();
+      const feedback = page.getByRole('status');
+      await feedback.waitFor();
+      assert.match(await feedback.innerText(), /private\/collision/);
+      assert.match(await feedback.innerText(), /feature/);
+      assert.equal(await page.getByRole('dialog').count(), 0);
+      assert.equal(await page.getByTestId('create-agent-branch-chip').innerText(), 'main');
+    } else if (['dirty', 'conflict'].includes(ui.case)) {
       await page.getByRole('option', { name: 'feature', exact: true }).click();
       await page.getByRole('dialog').waitFor();
       const carry = page.getByRole('button', {

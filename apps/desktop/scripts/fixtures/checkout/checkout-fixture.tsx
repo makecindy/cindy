@@ -47,7 +47,7 @@ void mountPage({
       blocked: 'no-remote',
     }),
     worktreeSyncBranch: forbid('worktreeSyncBranch'),
-    worktreeCheckout: async (req: { action: string }) => {
+    worktreeCheckout: async (req: { action: string; branch?: string }) => {
       if (req.action !== 'status') return forbid('checkout mutation')();
       return {
         status: {
@@ -64,6 +64,13 @@ void mountPage({
           carryAllowed: ctx.case !== 'conflict',
           stashes: [],
           ...(ctx.case === 'busy' ? { blocked: 'busy' } : {}),
+          ...(ctx.case === 'ignored' && req.branch === 'feature'
+            ? {
+                blocked: 'conflict',
+                carryAllowed: false,
+                ignoredCollision: { branch: 'feature', paths: ['private/collision', 'other-file'] },
+              }
+            : {}),
         },
       };
     },

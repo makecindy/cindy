@@ -23,6 +23,8 @@ export interface CheckoutStatus {
   occupied: string[];
   blocked?: CheckoutBlock;
   carryAllowed: boolean;
+  /** Optional detail for conflict; old peers can still use the generic block reason. */
+  ignoredCollision?: { branch: string; paths: string[] };
   stashes: Array<{ id: string; branch: string }>;
 }
 export interface CheckoutReceipt {

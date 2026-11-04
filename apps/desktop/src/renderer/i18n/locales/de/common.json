@@ -14511,6 +14511,7 @@
         "occupied": "Bereits in einem anderen worktree geöffnet",
         "changed": "Der Branch oder die Änderungen haben sich geändert. Prüfe das Verzeichnis. Rückgängig ist nur möglich, solange du auf dem Zielbranch bleibst.",
         "conflict": "Diese Änderungen kollidieren mit dem Zielbranch. Speichere sie zwischen oder verwende worktree.",
+        "ignored": "Beim Wechsel zu {{branch}} würden von Git ignorierte lokale Dateien oder Ordner überschrieben, darunter {{file}} (insgesamt {{count}}). Der Wechsel wurde gestoppt.",
         "dirty": "Es gibt neue, nicht committete Änderungen. Bearbeite sie vor der Wiederherstellung.",
         "diverged": "Lokaler und entfernter Branch sind auseinandergegangen. Kläre dies vor dem Wechsel.",
         "missing": "Der ausgewählte Branch existiert nicht mehr. Aktualisiere die Liste.",

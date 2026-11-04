@@ -2,7 +2,7 @@
  * Existing branchSync tests only update refs, never switch the directory or restore a named stash.
  * Minimal inputs: two branches, dirty/staged/untracked files, an occupied checkout and a running task.
  * Tier: git-integration, real Git with disposable repositories only.
- * Measured standalone: 7.18s wall / 6.80s test execution; subprocess I/O stays outside unit.
+ * Measured standalone: 6.66s wall / 6.29s test execution; subprocess I/O stays outside unit.
  */
 import fs from 'node:fs';
 import os from 'node:os';
@@ -110,7 +110,7 @@ it('blocks overlapping changes and repository operations before checkout', async
 });
 // Regression: path overlap is insufficient when the index already matches the target.
 // Exercise the production preflight and switch; snapshots also prove the preview is read-only.
-it.each(['matching-index', 'untracked-collision', 'ignored-collision'])(
+it.each(['matching-index', 'untracked-collision', 'ignored-collision', 'ignored-only'])(
   'predicts carry using Git without changing the index or files: %s',
   async (scenario) => {
     const f = fixture();
@@ -125,8 +125,8 @@ it.each(['matching-index', 'untracked-collision', 'ignored-collision'])(
       git(f.repo, 'add', 'base');
     } else {
       fs.writeFileSync(path.join(f.repo, 'new-file'), 'user\n');
-      fs.writeFileSync(path.join(f.repo, 'unrelated'), 'keep\n');
-      if (scenario === 'ignored-collision')
+      if (scenario !== 'ignored-only') fs.writeFileSync(path.join(f.repo, 'unrelated'), 'keep\n');
+      if (scenario === 'ignored-collision' || scenario === 'ignored-only')
         fs.appendFileSync(path.join(f.repo, '.git', 'info', 'exclude'), '\nnew-file\n');
     }
     const index = fs.readFileSync(path.join(f.repo, '.git', 'index'));
@@ -135,6 +135,11 @@ it.each(['matching-index', 'untracked-collision', 'ignored-collision'])(
     expect(fs.readFileSync(path.join(f.repo, '.git', 'index'))).toEqual(index);
     expect(fs.readFileSync(path.join(f.repo, 'base'))).toEqual(bytes);
     expect(before.carryAllowed).toBe(scenario === 'matching-index');
+    if (scenario === 'ignored-only') {
+      expect(before.files).toEqual([]);
+      expect(before.blocked).toBe('conflict');
+      expect(before.ignoredCollision).toEqual({ branch: 'feature', paths: ['new-file'] });
+    }
     const result = await f.service.switch(
       f.repo,
       'feature',
@@ -150,6 +155,7 @@ it.each(['matching-index', 'untracked-collision', 'ignored-collision'])(
     } else {
       expect(result.blocked).toBe('conflict');
       expect(result.status.current).toBe('main');
+      expect(git(f.repo, 'stash', 'list')).toBe('');
       expect(fs.readFileSync(path.join(f.repo, 'new-file'), 'utf8')).toBe('user\n');
     }
   },

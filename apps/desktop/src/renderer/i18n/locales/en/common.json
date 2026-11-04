@@ -14511,6 +14511,7 @@
         "occupied": "Already open in another worktree",
         "changed": "The branch or changes have changed. Check the directory before trying again. Undo is only available while still on the branch you switched to.",
         "conflict": "These changes overlap with the target branch and cannot be brought along. Save them first or use worktree.",
+        "ignored": "Switching to {{branch}} would overwrite Git-ignored local files or folders, including {{file}} ({{count}} in total). The switch was stopped.",
         "dirty": "There are new uncommitted changes. Handle them before restoring.",
         "diverged": "The local and remote branches have diverged. Resolve them before switching.",
         "missing": "The selected branch no longer exists. Refresh the list.",

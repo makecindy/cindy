@@ -439,6 +439,37 @@ it('lets the user cancel dirty checkout or choose worktree without any Git mutat
   expect(branchButton().textContent).toBe('feature');
   expect(checkout.mock.calls.every(([req]) => req.action === 'status')).toBe(true);
 });
+// A clean porcelain status can still hide ignored files that the target would overwrite.
+it('explains ignored-only collisions before any checkout or stash request', async () => {
+  const checkout = setupCheckout();
+  checkout.mockImplementation(async (req) => ({
+    status: {
+      ...checkoutStatus,
+      ...(req.branch === 'feature'
+        ? {
+            blocked: 'conflict',
+            carryAllowed: false,
+            ignoredCollision: { branch: 'feature', paths: ['private/collision', 'other-file'] },
+          }
+        : {}),
+    },
+  }));
+  render(<CheckoutRow />);
+  await waitFor(() => expect(branchButton().textContent).toBe('main'));
+  await act(async () => {
+    fireEvent.click(branchButton());
+  });
+  await act(async () => {
+    fireEvent.click(await screen.findByRole('option', { name: 'feature' }));
+  });
+  const explanation = screen.getByRole('status').textContent;
+  expect(explanation).toContain('feature');
+  expect(explanation).toContain('private/collision');
+  expect(explanation).toContain('"count":2');
+  expect(screen.queryByRole('dialog')).toBeNull();
+  expect(checkout.mock.calls.every(([req]) => req.action === 'status')).toBe(true);
+  expect(branchButton().textContent).toBe('main');
+});
 it('keeps an old execution host read-only and never invokes the new channel', async () => {
   const checkout = setupCheckout(false);
   render(<CheckoutRow />);

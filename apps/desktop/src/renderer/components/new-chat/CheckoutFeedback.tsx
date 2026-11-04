@@ -2,6 +2,7 @@ import * as Dialog from '@radix-ui/react-dialog';
 import { useTranslation } from 'react-i18next';
 import { Button } from '@/components/ui/button';
 import type { useCheckout } from '@/hooks/useCheckout';
+import type { CheckoutStatus } from '../../../shared/worktreeCheckout';
 
 /** Every explicit worktree alternative uses the checkbox's existing preference callback. */
 export function UseWorktreeButton({
@@ -16,6 +17,23 @@ export function UseWorktreeButton({
     <Button size="sm" variant="secondary" disabled={disabled} onClick={onClick}>
       {t('newChat.checkout.useWorktree')}
     </Button>
+  );
+}
+
+/** The same conflict detail appears in feedback, the dialog and the branch menu. */
+export function CheckoutError({ code, status }: { code: string; status?: CheckoutStatus }) {
+  const { t } = useTranslation();
+  const collision = code === 'conflict' ? status?.ignoredCollision : undefined;
+  return (
+    <span className="break-words">
+      {collision
+        ? t('newChat.checkout.errors.ignored', {
+            branch: collision.branch,
+            file: collision.paths[0],
+            count: collision.paths.length,
+          })
+        : t(`newChat.checkout.errors.${code}`)}
+    </span>
   );
 }
 
@@ -38,7 +56,11 @@ export function CheckoutFeedback({
     <>
       {checkout.error || checkout.worktreeNotice || receipt || status?.stashes.length ? (
         <div role="status" className="mt-2 space-y-1 break-words text-12 text-muted-foreground">
-          {checkout.error && <p>{t(`newChat.checkout.errors.${checkout.error}`)}</p>}
+          {checkout.error && (
+            <p>
+              <CheckoutError code={checkout.error} status={status} />
+            </p>
+          )}
           {checkout.worktreeNotice && <p>{t('newChat.checkout.worktreeDefault')}</p>}
           {receipt && (
             <div>
@@ -109,14 +131,14 @@ export function CheckoutFeedback({
                   </li>
                 ))}
               </ul>
-              {!dialog?.status.carryAllowed && (
+              {!dialog?.status.carryAllowed && !dialog?.status.ignoredCollision && (
                 <p className="mt-2 text-muted-foreground">
                   {t('newChat.checkout.errors.conflict')}
                 </p>
               )}
               {checkout.error && (
                 <p className="mt-2 text-muted-foreground">
-                  {t(`newChat.checkout.errors.${checkout.error}`)}
+                  <CheckoutError code={checkout.error} status={status} />
                 </p>
               )}
               {onUseWorktree && (
