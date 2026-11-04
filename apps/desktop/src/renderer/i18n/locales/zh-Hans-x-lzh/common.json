@@ -7542,6 +7542,9 @@
         "agentObserve": "可观此机案中差事之目与其状",
         "agentObserveDetail": "可观已登记之此机案中差事之题、Agent 之类、归档与否及其状（方行、待理、近动之时），并于主窗启某差事。不能读讯、谋划与文件，亦不能遣讯或改差事。",
         "agentObserveRequest": "确认观差事之权柄",
+        "agentCompanions": "可观同僚、其状与近谈",
+        "agentCompanionsDetail": "可观诸同僚（含行于君他机者）之名、简介、像与其状（方行、待君理、闲、离线），各同僚所行何类之事（如思虑、施器），待君理之请之文（问、将行之令、策，与对谈所见同），及其主对谈之近语（至多五十条，君之言与同僚之复，不含施器之程），并于主窗启同僚之对谈。兼得遣讯之许者，可将君于法器所予之答转致同僚：答问、却请、议策；许其行事，仍须君于 Cindy 自有之确框亲点。不能读卷，亦不见施器之程与思虑之文。",
+        "agentCompanionsRequest": "确认观同僚之权柄",
         "agentHiddenTasks": "可立不见于差事录之背后差事",
         "agentHiddenTasksDetail": "本法器所立之差事，可不现于差事录、搜索与告中。君可随时于法器详情之「背后差事」中观之、启之，或令显于差事录；卸除法器时，此等差事将复显示。",
         "agentErrand": "可立差事、行事并读结果",
@@ -10551,6 +10554,11 @@
           "NETWORK_ERROR": "{{name}}不能回复：网络连接未成。\n请察网络或 Proxy，再遣之。",
           "RUNTIME_TIMEOUT": "{{name}}此番回复逾时。\n请再遣讯，或择他可用模型。",
           "RUNTIME_ERROR": "{{name}}此番未能回复。\n请再遣讯；若仍未成，请察记录并回报其事。"
+        },
+        "capability": {
+          "GROUP_AUTHORIZATION_REQUIRED": "{{name}} 的工具调用未执行：群内授权已失效或不允许此操作。请由伙伴主人在当前群重新发起。",
+          "GROUP_AUTHORIZATION_UNAVAILABLE": "暂时无法核验 {{name}} 的群聊授权，这次工具调用未执行。请在连接恢复后重试。",
+          "ATTACHMENTS_UNAVAILABLE": "部分附件未交给 {{name}}（下载失败或数量限制）。请重新发送本次需要的附件。"
         }
       },
       "settings": {
@@ -13687,7 +13695,7 @@
       "REMOTE_PROVIDER_UPDATING": "此模型供方之凭证方更新。请稍后再试。",
       "REMOTE_WORKDIR_UNAVAILABLE": "远程工作目录今不可用。请确认彼机上之目录犹在，然后再试。",
       "REMOTE_OPTIMISTIC_SESSION_STATE_UNAVAILABLE": "机端暂不能确知此讯已遣否。请稍后再试，勿重遣同一讯。",
-      "REMOTE_AGENT_UNAVAILABLE": "暂不能连行 Agent 之机。请确认彼机在线且许远程控制，然后再试。",
+      "REMOTE_AGENT_UNAVAILABLE": "与行 Agent 之机断连。请再试；若屡见，再确认彼机在线且许远程控制。",
       "REMOTE_AGENT_PEER_TOO_OLD": "彼机之 Cindy 版本过旧，暂不支持此举。请先于彼机更新 Cindy。",
       "REMOTE_AGENT_EXPIRED": "此差事于行 Agent 之机上已终。请再遣。",
       "REMOTE_AGENT_NOT_FOUND": "此差事于行 Agent 之机上已终。请再遣。",
@@ -13796,6 +13804,18 @@
       "cancelTitle": "罢候并除此讯"
     },
     "ghostCall": {
+      "prStatus": {
+        "threadsNone": "无待理之意见",
+        "mergeReady": "可合并",
+        "mergeConflict": "有冲突",
+        "mergeBehind": "须同步目标分支",
+        "mergeApproval": "待批",
+        "mergeChanges": "须修改",
+        "mergeWaiting": "待合并",
+        "merged": "已合并",
+        "closed": "已闭",
+        "draft": "草稿"
+      },
       "verb": "呼法器",
       "cardRunning": "法器绘制",
       "cardDone": "已毕",
@@ -13809,6 +13829,7 @@
       "collapseFields": "收",
       "formSyncFailed": "卡之修改尚未同步，请察连接后续修；讯尚未遣。",
       "linkOpenFailed": "链接未能启",
+      "modelSelectFailed": "模型未易，请复择",
       "mailPreview": "邮件先览",
       "mailEnlarge": "放大览",
       "mailInsertImage": "插入文中",
@@ -15963,7 +15984,17 @@
   },
   "commandPalette": {
     "viewSkillDetails": "观技艺之详",
-    "projectSkillNotLoaded": "今之 Pi 差事尚未载此案之 Skill，新差事将自试载之"
+    "projectSkillNotLoaded": "今之 Pi 差事尚未载此案之 Skill，新差事将自试载之",
+    "pluginSkillSetup": {
+      "install": "未纳",
+      "enable": "未启"
+    },
+    "pluginSkills": {
+      "pr": {
+        "install": "发 PR、修 CI 与评审、随至合并 · 须先纳 GitHub 法器",
+        "enable": "发 PR、修 CI 与评审、随至合并 · 须先启 GitHub 法器"
+      }
+    }
   },
   "skillhub": {
     "remote": {
@@ -18666,6 +18697,21 @@
     "autoMessage": "许「{{name}}」用 Auto 自动审批乎？",
     "autoDetail": "主差事与 Worker 之操作，将交 Cindy 自动审批。需人工确认或遭拒时仍会暂停；此非完全访问。此择存于法器 AI 规制，不改他差事之全域权柄。",
     "autoTaskDetail": "主差事与 Worker 之操作，将交 Cindy 自动审批。需人工确认或遭拒时仍会暂停；此非完全访问。仅改目前差事之权柄，不改法器预设规制。"
+  },
+  "pluginCompanionAnswer": {
+    "title": "确许",
+    "planMessage": "令{{companion}}依此策而行乎？",
+    "permissionMessage": {
+      "command": "许{{companion}}行此令乎？",
+      "file-read": "许{{companion}}读此诸卷乎？",
+      "file-write": "许{{companion}}改此诸卷乎？",
+      "browser": "许{{companion}}于览器行此一步乎？",
+      "plugin": "许{{companion}}用「{{tool}}」乎？",
+      "tool": "许{{companion}}用 {{tool}} 乎？"
+    },
+    "source": "君于法器「{{plugin}}」择许，{{appName}} 于此再询之；许之则同僚续行。",
+    "allow": "许",
+    "cancel": "罢"
   },
   "groupTools": {
     "authorizationRequired": "群授权已失效或不许此操作，请由同僚之主于本群重新发起。",

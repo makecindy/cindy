@@ -20,6 +20,14 @@ import {
 import { CongestionSendBudget } from './congestionSendBudget.js';
 import { PUSH_FORWARD_ALLOWLIST, REMOTE_INVOKE_ALLOWLIST } from './allowlist.js';
 import {
+  BACKLOG_WARN_BYTES,
+  BACKLOG_WARN_MESSAGES,
+  BacklogWarnLimiter,
+  backlogLabel,
+  isBacklogChannel,
+  summarizeBacklog,
+} from './transportBacklog.js';
+import {
   PROTOCOL_VERSION,
   MAX_FRAME_BYTES,
   SERVER_CAPABILITY_NOTIFY,
@@ -644,6 +652,8 @@ interface PendingReliableMessage {
     | 'direct-buffer';
   /** 最近一次物理写出走的路径；直连失效时据此把仍未确认的帧改走 relay。 */
   path?: DeviceLinkPeerPath;
+  /** Backlog label (kind + allowlisted channel), diagnostics only; see transportBacklog.ts. */
+  diagChannel?: string;
 }
 
 type ReliableSendPhase = 'down' | 'awaiting-confirm' | 'ready';
@@ -1251,6 +1261,7 @@ export class DeviceLinkClient {
     this.messageReuse.clear();
     this.invokeResultCache.clear();
     this.inboundInvokeTransfer.clear();
+    this.inboundInvokeChannels.clear();
     if (this.stopped) return;
     this.stopped = true;
     this.directDiagnostics.clear();
@@ -3466,6 +3477,30 @@ export class DeviceLinkClient {
   private readonly messageReuse = new SessionMessageReuse();
   private readonly invokeResultCache: InvokeResultCache;
   private readonly inboundInvokeTransfer = new InboundInvokeTransferOptions();
+  /** Channel of each recent inbound invoke, so a queued reply can be labelled. Diagnostics only. */
+  private readonly inboundInvokeChannels = new Map<string, string>();
+  private readonly backlogWarnings = new BacklogWarnLimiter();
+
+  private rememberInboundInvokeChannel(env: Envelope): void {
+    const channel = (env.payload as { channel?: unknown } | undefined)?.channel;
+    // Peer-supplied text: keep only registered channels and normal-length ids, so
+    // retained bytes stay bounded. Anything else is labelled result:unknown anyway.
+    if (!isBacklogChannel(channel) || !env.src || !env.id || env.id.length > 128) return;
+    const key = `${env.src}\u0000${env.id}`;
+    this.inboundInvokeChannels.delete(key);
+    this.inboundInvokeChannels.set(key, channel);
+    while (this.inboundInvokeChannels.size > 512) {
+      this.inboundInvokeChannels.delete(this.inboundInvokeChannels.keys().next().value!);
+    }
+  }
+
+  /** Name what fills a peer's reliable queue; rate-limited, never changes sending. */
+  private warnSendBacklog(dst: string, peer: PeerTransportState, reason: 'high' | 'full'): void {
+    if (reason === 'high' && peer.pending.size < BACKLOG_WARN_MESSAGES && peer.pendingBytes < BACKLOG_WARN_BYTES) return;
+    // "full" keeps its own window: a recent "high" warning must not hide the overflow.
+    if (!this.backlogWarnings.shouldWarn(`${reason}\u0000${dst}`, this.monotonicNow())) return;
+    this.log.warn(summarizeBacklog(dst, this.peerTransport, reason));
+  }
 
   private emitFrame(env: Envelope): boolean | Promise<boolean> {
     if (env.kind === 'push' && (env.payload as { channel?: string })?.channel === DIRECT_LINK_SIGNAL) {
@@ -3476,6 +3511,7 @@ export class DeviceLinkClient {
       return true;
     }
     if (env.src) this.directNegotiator?.activity(env.src);
+    if (env.kind === 'invoke') this.rememberInboundInvokeChannel(env);
     if (env.kind === 'invoke' && env.src && env.id && !isScopedPeer(env.src)) {
       this.inboundInvokeTransfer.record(env.src, env.id, env.payload);
     }
@@ -3687,6 +3723,7 @@ export class DeviceLinkClient {
       }
     }
     if (!hasPendingCapacity()) {
+      this.warnSendBacklog(env.dst, peer, 'full');
       throw new DeviceLinkError(
         'BACKPRESSURE',
         `reliable transport buffer is full for peer ${env.dst.slice(0, 8)}`,
@@ -3706,10 +3743,15 @@ export class DeviceLinkClient {
       lastBlockedBy: willSendNow ? undefined : !this.isPeerSendReady(peer) ? 'link'
         : this.isOutsideReceiveWindow(peer, seq) ? 'receive-window'
         : this.shouldHoldRecoverySend(peer, additionalFrames) ? 'recovery-ack' : 'relay-budget',
+      diagChannel: backlogLabel(
+        routedEnv,
+        routedEnv.kind === 'invoke-result' && env.id ? this.inboundInvokeChannels.get(`${env.dst}\u0000${env.id}`) : undefined,
+      ),
     };
     peer.pending.set(seq, pending);
     peer.pendingBytes += reservedBytes;
     peer.nextSeq = seq + 1;
+    this.warnSendBacklog(env.dst, peer, 'high');
     if (willSendNow) {
       try {
         const sentFrames = this.sendReliableFrames(peer, pending);

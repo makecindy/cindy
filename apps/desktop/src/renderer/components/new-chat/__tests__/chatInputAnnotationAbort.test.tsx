@@ -98,7 +98,8 @@ vi.mock('../AtMentionPanel', () => ({ AtMentionPanel: (props: ComponentProps<typ
   ) : null;
 } }));
 vi.mock('@/lib/atResourceService', async (original) => ({ ...await original<typeof import('@/lib/atResourceService')>(), scanAtResources: h.scan }));
-vi.mock('../SlashCommandPalette', () => ({ SlashCommandPalette: ({ query }: { query: string }) => <div data-testid="test-slash-palette" data-query={query} /> }));
+vi.mock('../SlashCommandPalette', () => ({ SlashCommandPalette: ({ query, commands }: { query: string; commands: { name: string }[] }) =>
+  <div data-testid="test-slash-palette" data-query={query} data-commands={commands.map(command => command.name).join(',')} /> }));
 vi.mock('@/voice-input/VoiceInputPointerHintLayer', () => ({ VoiceInputPointerHintLayer: ({ children }: { children: import('react').ReactNode }) => <>{children}</> }));
 vi.mock('@/voice-input/VoiceInputStatusNotice', () => ({ VoiceInputStatusNotice: () => null }));
 vi.mock('@/voice-input/useVoiceInput', () => ({ useVoiceInput: (editor: Editor | null) => {
@@ -651,6 +652,26 @@ it.each(['Enter', 'Tab'])('consumes %s for an empty slash result without sending
   expect(view.props.onSend).not.toHaveBeenCalled();
   expect(h.editor!.getText()).toBe(text);
   expect(screen.queryByTestId('test-slash-palette')).toBeNull();
+});
+
+// A plugin Skill whose plugin is missing is offered in `/`, but choosing it hands
+// off to the install flow: it must not insert `/pr`, send, or keep the typed query.
+it('hands a plugin Skill setup row to its owner instead of inserting it', async () => {
+  const onSelect = vi.fn();
+  const view = renderComposer({ sessionId: 'slash-plugin-setup', pluginSkillSetup: {
+    entries: [{ skillName: 'pr', description: 'needs GitHub', meta: 'not installed' }], onSelect } });
+  await waitFor(() => expect(h.editor).not.toBeNull());
+  await act(async () => {
+    h.editor!.commands.setContent('<p>/p</p>');
+    h.editor!.commands.setTextSelection(3);
+  });
+  await waitFor(() => expect(screen.getByTestId('test-slash-palette').getAttribute('data-commands')).toBe('pr'));
+  expect(screen.getByTestId('test-slash-palette').getAttribute('data-query')).toBe('p');
+  await act(async () => { fireEvent.keyDown(h.editor!.view.dom, { key: 'Enter', code: 'Enter' }); });
+  expect(onSelect).toHaveBeenCalledTimes(1);
+  expect(onSelect).toHaveBeenCalledWith('pr');
+  expect(view.props.onSend).not.toHaveBeenCalled();
+  expect(h.editor!.getText()).toBe('');
 });
 
 // PR #6196 / pendingFolderMention: the hook-only drag test proves enqueueing,

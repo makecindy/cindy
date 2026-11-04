@@ -2,12 +2,13 @@
  * 首页任务搜索条。对齐桌面 SidebarInlineSearch 展开态:
  * 圆角 pill、左侧放大镜、占位「搜索标题或内容…」、有字时清空、右侧筛选钮。
  */
-import { Search, SlidersHorizontal, X } from "lucide-react-native";
-import { Pressable, StyleSheet, View } from "react-native";
+import { LoaderCircle, Search, SlidersHorizontal, X } from "lucide-react-native";
+import { ActivityIndicator, Pressable, StyleSheet, View } from "react-native";
 import { useTranslation } from "react-i18next";
 import { TextInput } from "@/components/AppText";
 import { FilterReminderDot } from "@/components/FilterReminderDot";
 import { mobileInteractionStyles } from "@/components/mobileInteractionStyles";
+import { useReduceMotionEnabled } from "@/hooks/useReduceMotion";
 import {
   NativePullDownMenu,
   type NativePullDownAction,
@@ -32,6 +33,7 @@ export function HomeSearchBar({
   onOpenFilter,
   padded = true,
   query,
+  searching = false,
   testIDs,
 }: {
   autoFocus: boolean;
@@ -44,6 +46,7 @@ export function HomeSearchBar({
   onOpenFilter(): void;
   padded?: boolean;
   query: string;
+  searching?: boolean;
   testIDs?: {
     clear?: string;
     filter?: string;
@@ -54,6 +57,7 @@ export function HomeSearchBar({
   const styles = useThemedStyles(makeStyles);
   const { colors } = useTheme();
   const { t } = useTranslation();
+  const reduceMotion = useReduceMotionEnabled();
   const trimmed = query.trim();
   const nativeFilter = Boolean(filterActions && onFilterAction);
   const filterButton = (
@@ -80,11 +84,27 @@ export function HomeSearchBar({
       testID={testIDs?.row ?? "home.searchRow"}
     >
       <View style={styles.pill}>
-        <Search
-          color={colors.textSecondary}
-          size={iconSize.md}
-          strokeWidth={iconStroke.regular}
-        />
+        {searching ? (
+          <View
+            accessible
+            accessibilityLabel={t("devices.resources.loading")}
+            accessibilityRole="progressbar"
+            accessibilityState={{ busy: true }}
+            style={{ width: iconSize.md, height: iconSize.md }}
+          >
+            {reduceMotion !== false ? (
+              <LoaderCircle color={colors.textSecondary} size={iconSize.md} strokeWidth={iconStroke.regular} />
+            ) : (
+              <ActivityIndicator color={colors.textSecondary} size="small" style={{ width: iconSize.md, height: iconSize.md }} />
+            )}
+          </View>
+        ) : (
+          <Search
+            color={colors.textSecondary}
+            size={iconSize.md}
+            strokeWidth={iconStroke.regular}
+          />
+        )}
         <TextInput
           accessibilityLabel={t("devices.list.search.placeholder")}
           autoCapitalize="none"
