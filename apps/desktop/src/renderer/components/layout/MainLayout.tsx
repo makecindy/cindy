@@ -1552,7 +1552,13 @@ export function MainLayout() {
           navigate('/issues');
           return true;
         case 'openFolder':
-          navigate('/cc-agent/new', { state: makeFolderPickerNewMakerRouteState() });
+          // 打开文件夹同样是新建任务：沿用当前任务的模型(创建页只在同一台任务电脑上套用)。
+          navigate('/cc-agent/new', {
+            state: withCurrentTaskModelInheritance(
+              makeFolderPickerNewMakerRouteState(),
+              currentPathRef.current.split('?')[0],
+            ),
+          });
           return true;
         case 'navigateBack':
           navigate(-1);

@@ -41,6 +41,7 @@ vi.mock('@/features/device-link/remoteProjectsStore', () => ({
 
 import { __resetStickySessionOriginForTest } from '@/features/device-link/stickySessionOrigin';
 import { makeGenericNewMakerRouteState } from '@/features/cc-agent/lib/genericNewMakerRouteState';
+import { publishComposerOptimisticSelection } from '@/lib/composerOptimisticSelection';
 import {
   consumeNewMakerDialogueTargetRequest,
   consumeNewMakerModelInheritanceRequest,
@@ -282,6 +283,33 @@ describe('new task inherits the current task model', () => {
       taskDeviceId: 'computer-a',
       remoteHostId: null,
     });
+  });
+
+  it('carries the optimistic remote switch the composer shows before the mirror catches up', () => {
+    origins.set('task-a', 'computer-a');
+    remoteSessions.set('computer-a', [{ id: 'task-a', ...opus }]);
+    const optimistic = {
+      model: 'claude-sonnet-4',
+      providerId: 'xd',
+      effort: 'low' as const,
+      fastMode: true,
+    };
+    const unpublish = publishComposerOptimisticSelection('task-a', optimistic);
+    expect(
+      readNewMakerModelInheritanceRequest(makeGenericNewMakerRouteState('/cc-agent/task-a')),
+    ).toMatchObject({ vendor: 'cc', ...optimistic, taskDeviceId: 'computer-a' });
+    // 新登记覆盖后，旧登记的撤销不能误删新的那份。
+    const newer = { ...optimistic, model: 'claude-haiku-4' };
+    const unpublishNewer = publishComposerOptimisticSelection('task-a', newer);
+    unpublish();
+    expect(
+      readNewMakerModelInheritanceRequest(makeGenericNewMakerRouteState('/cc-agent/task-a')),
+    ).toMatchObject({ model: 'claude-haiku-4' });
+    // 回流后撤销：回到镜像里的模型。
+    unpublishNewer();
+    expect(
+      readNewMakerModelInheritanceRequest(makeGenericNewMakerRouteState('/cc-agent/task-a')),
+    ).toMatchObject({ model: 'claude-opus-4', providerId: 'anthropic', effort: 'high' });
   });
 
   it('tags an SSH task with its host and ignores controller-local switch intents', () => {

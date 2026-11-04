@@ -177,11 +177,11 @@ export function nextNewMakerModelInheritanceStep(
   if (!request.remoteHostId && request.agentDeviceId !== (page.draft.agentDeviceId ?? null)) {
     return { kind: 'switch-agent-device', agentDeviceId: request.agentDeviceId };
   }
+  // 目录播种完才判引擎可用：换电脑后的头几帧里引擎清单可能还没换成目标电脑的。
+  if (page.usesDeviceCatalog && !page.deviceCatalogSeeded) return { kind: 'wait' };
   if (page.availableAgentsLoaded && !page.vendorAvailable) return { kind: 'skip' };
   if (page.usesDeviceCatalog) {
-    if (!page.deviceCatalogSeeded) return { kind: 'wait' };
-    if (page.deviceSelectionTouched) return { kind: 'skip' };
-    return { kind: 'apply' };
+    return page.deviceSelectionTouched ? { kind: 'skip' } : { kind: 'apply' };
   }
   const localCatalogTarget =
     !request.agentDeviceId &&

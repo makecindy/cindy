@@ -6,6 +6,7 @@ import { findBotProfileForSession } from '@/features/bots/botSessionOwners';
 import { getStickySessionDeviceId } from '@/features/device-link/stickySessionOrigin';
 import { remoteProjectsStore } from '@/features/device-link/remoteProjectsStore';
 import { readAgentSwitchIntent } from '@/lib/agentSwitchIntentReader';
+import { readComposerOptimisticSelection } from '@/lib/composerOptimisticSelection';
 import type { Session } from '@/lib/ccAgent.types';
 import { resolveComposerModelSelection } from '@/components/new-chat/composerModelSelection';
 import { dbToMakerAgentKind, makerToDbAgentKind } from '../../../../shared/agentKindConversion';
@@ -58,8 +59,8 @@ function resolveCurrentTaskDevice(pathname: string): string | null | undefined {
 let modelInheritanceRequestSequence = 0;
 
 /**
- * 当前任务此刻显示的模型(与任务输入框同一份口径:待生效的切换意图 > 运行中的 pending >
- * 实际生效值)。Bot 任务的模型链另有规则，不参与继承。
+ * 当前任务此刻显示的模型(与任务输入框同一份口径:待生效的切换意图 > 远程乐观切换 >
+ * 运行中的 pending > 实际生效值)。Bot 任务的模型链另有规则，不参与继承。
  */
 function resolveCurrentTaskModel(pathname: string): NewMakerModelInheritanceRequest | undefined {
   const sessionId = resolveCurrentTaskSessionId(pathname);
@@ -85,6 +86,8 @@ function resolveCurrentTaskModel(pathname: string): NewMakerModelInheritanceRequ
     effective: session.runtimeEffective,
     pending: session.runtimePending,
     intent,
+    // 远程任务刚切模型、被控端还没回流时，输入框乐观显示的那一份(本机任务恒无)。
+    optimistic: readComposerOptimisticSelection(sessionId),
   });
   if (!display.model) return undefined;
   const agentDeviceId = remoteHostId

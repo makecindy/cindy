@@ -3336,7 +3336,8 @@ export function NewMakerDraftRoute() {
     const request = modelInheritanceRequest;
     if (!request || handledModelInheritanceRequestRef.current === request.requestId) return;
     // 目标电脑请求先落地：它改草稿的任务电脑并单独替换 history state;下一帧再判同机。
-    if (dialogueTargetRequest) return;
+    // 文件夹选择请求同理：两边都按当前 history state 剔除自己，同一帧里替换会把对方带回来。
+    if (dialogueTargetRequest || folderPickerRequest) return;
     const step = nextNewMakerModelInheritanceStep(request, {
       draft: getDraft(),
       sendInFlight: sendInFlightRef.current,
@@ -3417,6 +3418,7 @@ export function NewMakerDraftRoute() {
   }, [
     modelInheritanceRequest,
     dialogueTargetRequest,
+    folderPickerRequest,
     draft.deviceLinkDeviceId,
     draft.remoteHostId,
     draft.agentDeviceId,

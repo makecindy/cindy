@@ -73,12 +73,7 @@ describe('通用「新建」保留 newMakerDraft 选择', () => {
 
   it('显式「新建对话」入口仍清空 workingDir,但由创建页集中迁移目标', () => {
     const block = extractHandlerBlock(sidebarUpperSource, 'handleCreateDialogue');
-    // 2026-08-12 起 handler 接受可选的显式设备目标(按设备分组时对话组给出所属设备);
-    // 未给时仍按当前机器作用域推断,route state 由统一的 target 变量组装。
-    // 新建对话同样沿用当前任务的模型(创建页只在同一台任务电脑上套用)。
-    expect(block).toMatch(
-      /state: withCurrentTaskModelInheritance\(\s*makeDialogueNewMakerRouteState\(target\),\s*location\.pathname,?\s*\)/,
-    );
+    // route state 的组装(含沿用当前任务模型)由 dialogueSidebarSection.test.ts 守护。
     expect(block).toContain('target = selectedDialogueDeviceResolution.target;');
     expect(block).toContain("selectedDialogueDeviceResolution.status === 'pending'");
     expect(block).not.toContain('resetDraftWorkspaceTargets');

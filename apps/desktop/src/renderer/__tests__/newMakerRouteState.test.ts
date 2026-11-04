@@ -245,6 +245,25 @@ describe('new maker model inheritance step', () => {
     ).toEqual({ kind: 'apply' });
   });
 
+  it('does not judge the Harness by a roster that may still belong to the previous computer', () => {
+    // 本机没有 Pi、任务用 B 上的 Pi:换到 B 后、B 的目录播种前不能按清单判 Pi 不可用。
+    const request = { ...localRequest, vendor: 'pi' as const, agentDeviceId: 'b' };
+    const switched = {
+      ...page,
+      draft: { ...page.draft, agentDeviceId: 'b' },
+      usesDeviceCatalog: true,
+      vendorAvailable: false,
+    };
+    expect(nextNewMakerModelInheritanceStep(request, switched)).toEqual({ kind: 'wait' });
+    expect(
+      nextNewMakerModelInheritanceStep(request, {
+        ...switched,
+        deviceCatalogSeeded: true,
+        vendorAvailable: true,
+      }),
+    ).toEqual({ kind: 'apply' });
+  });
+
   it('switches back to the task computer before applying a local-catalog model', () => {
     const fromB = { ...page, draft: { ...page.draft, agentDeviceId: 'b' }, usesDeviceCatalog: true };
     expect(nextNewMakerModelInheritanceStep(localRequest, fromB)).toEqual({
