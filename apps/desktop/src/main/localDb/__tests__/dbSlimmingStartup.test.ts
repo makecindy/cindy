@@ -75,6 +75,9 @@ function writeAutoCleanupSettings(overrides: Record<string, unknown> = {}): void
   fs.writeFileSync(
     path.join(tmpDir, DB_AUTO_CLEANUP_SETTINGS_FILE_NAME),
     JSON.stringify({
+      // Automatic runs ship disabled until the Settings card can turn them off;
+      // these cases exercise the enabled path explicitly.
+      enabled: true,
       retentionDays: 30,
       minMessageCount: 1,
       minEstimatedMessageBytes: 1,
@@ -87,8 +90,12 @@ function writeAutoCleanupSettings(overrides: Record<string, unknown> = {}): void
 /**
  * Both tasks sit past the 30-day retention window and share the exact cutoff, so
  * only `targetStatuses` can keep the archived one alive.
+ *
+ * `deletedMessageCount` exists so a case can clear the shipped 1,000-message
+ * threshold; otherwise "nothing happened" could not tell a disabled setting
+ * apart from a history that was simply too small to be worth cleaning.
  */
-function createAutoCleanupFixture(): void {
+function createAutoCleanupFixture(options: { deletedMessageCount?: number } = {}): void {
   const db = createBetterSqliteDatabase(dbFilePath);
   db.exec(`
     CREATE TABLE sessions (id TEXT PRIMARY KEY, status TEXT NOT NULL, updated_at INTEGER NOT NULL);
@@ -100,22 +107,21 @@ function createAutoCleanupFixture(): void {
     );
   `);
   const expiredAt = AUTO_NOW - RETENTION_MS - 1;
-  for (const [id, status] of [
-    ['deleted-old', 'deleted'],
-    ['archived-old', 'archived'],
-  ] as const) {
-    db.prepare('INSERT INTO sessions (id, status, updated_at) VALUES (?, ?, ?)').run(
-      id,
-      status,
-      expiredAt,
-    );
-    db.prepare('INSERT INTO messages (id, session_id, role, content) VALUES (?, ?, ?, ?)').run(
-      `message-${id}`,
-      id,
-      'user',
-      'expired history',
-    );
-  }
+  const insertSession = db.prepare(
+    'INSERT INTO sessions (id, status, updated_at) VALUES (?, ?, ?)',
+  );
+  const insertMessage = db.prepare(
+    'INSERT INTO messages (id, session_id, role, content) VALUES (?, ?, ?, ?)',
+  );
+  insertSession.run('deleted-old', 'deleted', expiredAt);
+  insertSession.run('archived-old', 'archived', expiredAt);
+  db.transaction(() => {
+    const deletedMessageCount = options.deletedMessageCount ?? 1;
+    for (let index = 0; index < deletedMessageCount; index += 1) {
+      insertMessage.run(`message-deleted-old-${index}`, 'deleted-old', 'user', 'expired history');
+    }
+    insertMessage.run('message-archived-old', 'archived-old', 'user', 'expired history');
+  })();
   db.close();
 }
 
@@ -583,7 +589,8 @@ describe('runPendingDbSlimmingAtStartup', () => {
     const db = createBetterSqliteDatabase(dbFilePath, { fileMustExist: true });
     try {
       // Session rows survive; only the expired deleted task lost its history.
-      expect(db.prepare('SELECT id FROM messages ORDER BY id').all()).toEqual([
+      expect(db.prepare('SELECT COUNT(*) AS count FROM messages').get()).toEqual({ count: 1 });
+      expect(db.prepare('SELECT id FROM messages').all()).toEqual([
         { id: 'message-archived-old' },
       ]);
       expect(db.prepare('SELECT id, status FROM sessions ORDER BY id').all()).toEqual([
@@ -612,6 +619,33 @@ describe('runPendingDbSlimmingAtStartup', () => {
       }),
     ).resolves.toEqual({ handled: false, originalDatabaseReady: true });
     expect(secondRun).not.toHaveBeenCalled();
+  });
+
+  it('does not purge anything before the setting is switched on', async () => {
+    // No settings file at all: the shipped default must stay inert, because the
+    // switch that turns this off again ships in a later PR. The fixture clears
+    // the 1,000-message threshold, so only `enabled: false` can keep this quiet.
+    createAutoCleanupFixture({ deletedMessageCount: 1_000 });
+    const runMaintenance = vi.fn();
+
+    const outcome = await runPendingDbSlimmingAtStartup({
+      userDataDir: tmpDir,
+      dbFilePath,
+      ownerId: 'owner-1',
+      leaseKind: 'writer',
+      loadVectorExtension: vi.fn(() => true),
+      log,
+      now: () => AUTO_NOW,
+      runMaintenance,
+    });
+
+    expect(outcome).toEqual({ handled: false, originalDatabaseReady: true });
+    expect(runMaintenance).not.toHaveBeenCalled();
+    expect(readDbSlimmingRequest(tmpDir)).toBeNull();
+    expect(readDbAutoCleanupSettings(tmpDir, log)).toMatchObject({
+      enabled: false,
+      lastAutoRunAt: null,
+    });
   });
 
   it('does not synthesize an automatic request while a reader lease is held', async () => {

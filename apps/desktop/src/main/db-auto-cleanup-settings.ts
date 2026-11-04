@@ -53,7 +53,12 @@ export interface DbAutoCleanupSettingsLog {
 }
 
 const DEFAULTS: DbAutoCleanupSettings = {
-  enabled: true,
+  // Shipped off. Automatic runs delete user history without a confirmation step,
+  // so they must not start before the Settings card can turn them off again.
+  // The card lands in the follow-up PR; that PR flips this to `true` together
+  // with the visible switch. Until then the mechanism is reachable only by
+  // writing this file, which is exactly the intended rollout order.
+  enabled: false,
   retentionDays: DB_AUTO_CLEANUP_DEFAULT_RETENTION_DAYS,
   minMessageCount: DB_AUTO_CLEANUP_DEFAULT_MIN_MESSAGE_COUNT,
   minEstimatedMessageBytes: DB_AUTO_CLEANUP_DEFAULT_MIN_ESTIMATED_MESSAGE_BYTES,
