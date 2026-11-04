@@ -190,6 +190,7 @@ export function createVisualMockDeviceLinkContext(): DeviceLinkContextValue {
     connectionIssue: null,
     presenceVersion: 1,
     connectionEpoch: 1,
+    rosterVersion: 0,
     getSubscriptionIdentity: () => 1,
     lastPresenceSnapshot: {
       deviceId,

@@ -277,6 +277,7 @@ export interface RemoteAgentHostDeps {
    * 组内电脑运行，本机中转。不提供 = 受邀者的任务一律在本机运行(现有接线)。
    */
   groupRelay?: RemoteAgentGroupRelayDeps;
+  groupContinuity?(): boolean;
   /** Group owner chooses an executor; executor accepts a bounded grant from its authenticated owner peer. */
   directGuestExecution?: {
     ownerScope(): string;
@@ -3240,6 +3241,7 @@ export function createRemoteAgentHost(deps: RemoteAgentHostDeps) {
           ...(deps.providerAccess && deps.bindGuestProviderRoute ? { guestRelay: true } : {}),
           ...(deps.directGuestExecution && deps.providerAccess && deps.bindGuestProviderRoute
             ? { directGuestExecution: true } : {}),
+          ...(!guest && deps.groupContinuity?.() ? { groupContinuity: true as const } : {}),
           ...(deps.providerAccess && deps.bindGuestProviderRoute ? { relayModelAccess: true } : {}),
           // 转分享的同意只对受邀者(把这里分享的供应商放进自己组的人)有意义。
           ...(guest && deps.reshare && (deps.reshare.canUse?.(controller) ?? true) ? { reshareConsent: true } : {}),
