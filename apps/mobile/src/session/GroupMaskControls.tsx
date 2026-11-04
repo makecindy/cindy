@@ -73,10 +73,9 @@ export function GroupMaskSettingsSheet({ visible, mask, onClose, onClosed }: { v
                 else setTimes(old => ({ ...old, [field]: settings[field] })); }} />
           </View>)}
         </View> : null}
-        {pick(t(key('resumeAfter')), String(settings.resumeMinutes), [...new Set([5, 15, 30, 60, settings.resumeMinutes])].sort((a,b) => a-b).map(n => ({ id: String(n), title: t(key('minutes'), { count: n }) })), value => mask.update({ resumeMinutes: Number(value) }))}
         {settings.enabled && settings.companionId ? <MainWindowActionButton action={{
-          label: t(key(state.status === 'enabled' ? 'takeover' : settings.trigger === 'manual' ? 'startManual' : 'resume')),
-          disabled: mask.saving, onPress: () => mask.perform(state.status === 'enabled' ? 'participate' : 'resume'),
+          label: t(key(settings.trigger === 'always' ? 'stop' : state.status === 'enabled' ? 'takeover' : settings.trigger === 'manual' ? 'startManual' : 'resume')),
+          disabled: mask.saving, onPress: () => settings.trigger === 'always' ? mask.update({ enabled: false }) : mask.perform(state.status === 'enabled' ? 'participate' : 'resume'),
         }} /> : null}
         {settings.trigger === 'manual' && state.manualRunning ? <MainWindowActionButton action={{ label: t(key('stop')), disabled: mask.saving, onPress: () => mask.perform('stop') }} /> : null}
         {toggle(t(key('todos')), settings.collectTodos, collectTodos => mask.update({ collectTodos }), !settings.companionId)}

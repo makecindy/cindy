@@ -69,7 +69,8 @@
       "@expo/cli@57.0.25": "dependency-patches/@expo__cli@57.0.25.patch",
       "react-native-screens@4.26.2": "dependency-patches/react-native-screens@4.26.2.patch",
       "expo-router@57.0.17": "dependency-patches/expo-router@57.0.17.patch",
-      "react-native-gesture-handler@2.32.0": "dependency-patches/react-native-gesture-handler@2.32.0.patch"
+      "react-native-gesture-handler@2.32.0": "dependency-patches/react-native-gesture-handler@2.32.0.patch",
+      "expo-modules-core@57.0.18": "dependency-patches/expo-modules-core@57.0.18.patch"
     },
     "allowUnusedPatches": true
   },
@@ -80,6 +81,7 @@
     "mobile:sim:start": "node scripts/ensure-deps.mjs --workspace-only && node apps/mobile/scripts/sim-start.mjs",
     "mobile:sim:start:cn": "node scripts/ensure-deps.mjs --workspace-only && node apps/mobile/scripts/sim-start.mjs --region=cn",
     "mobile:sim:whoami": "node scripts/ensure-deps.mjs --workspace-only && node apps/mobile/scripts/sim-whoami.mjs",
+    "mobile:sim:logcheck": "node scripts/ensure-deps.mjs --workspace-only && node apps/mobile/scripts/sim-logcheck.mjs",
     "mobile:sim:open": "node scripts/ensure-deps.mjs --workspace-only && node apps/mobile/scripts/sim-open.mjs",
     "sync:mobile-rich-content-assets": "node apps/mobile/scripts/sync-rich-content-assets.mjs",
     "mobile:release:check": "node apps/mobile/scripts/release-with-env.mjs check",

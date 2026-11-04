@@ -56,8 +56,9 @@ describe('消息流的头像挂载', () => {
   it('只有 assistant 分支挂头像', () => {
     expect(messageStream).toContain('return withAssistantAvatar(\n        assistantAvatar,');
     // Assistant text shows the avatar; task and teammate-message cards plus the
-    // work fold reserve the same space invisibly. User messages bypass it.
-    expect(messageStream.match(/withAssistantAvatar\(/g)?.length).toBe(4);
+    // work fold and generated artifacts reserve the same space invisibly.
+    // User messages bypass it; fixture geometry covers pending/empty artifacts.
+    expect(messageStream.match(/withAssistantAvatar\(/g)?.length).toBe(5);
     expect(messageStream).toMatch(/simplifiedBotConversation\s*&&\s*\(message\.systemCardType === 'bot-session-task'\s*\|\|\s*message\.systemCardType === 'bot-session-task-result'\s*\|\|\s*message\.systemCardType === 'bot-session-task-message'\s*\|\|\s*message\.systemCardType === 'bot-direct-message'\)\s*\? withAssistantAvatar\(/);
     expect(messageStream).toMatch(/<span aria-hidden="true" className="invisible">\s*\{assistantAvatar\}\s*<\/span>/);
     expect(messageStream).toContain('{replyColumnSpacer ? withAssistantAvatar(replyColumnSpacer, block) : block}');

@@ -13,6 +13,7 @@ import fsp from 'node:fs/promises';
 import path from 'node:path';
 
 import type {
+  AgentDeps,
   AgentEvent,
   AgentKind,
   AgentSessionHandle,
@@ -23,7 +24,12 @@ import type {
   PiExtraSpawnConfigContext,
   StartSessionOptions,
 } from '@cindy/maker-core';
-import { LOCAL_AGENT_CLIENT, resolveMemoryScopeKey } from '@cindy/maker-core';
+import {
+  LOCAL_AGENT_CLIENT,
+  resolveAllowedManagedSkills,
+  resolveMemoryScopeKey,
+  snapshotManagedSkillGrants,
+} from '@cindy/maker-core';
 import { parseProviderSharePeer, providerShareHostPeer } from '@cindy/device-link';
 import { createLogger } from '../../logger.js';
 import { findReceivedShare, parseProviderShareAgentDeviceId } from '../../device-link/providerShareGuest.js';
@@ -41,6 +47,7 @@ import {
   collectInstructionImports,
   collectPersonalConfig,
   collectProjectInstructionFiles,
+  type LocalManagedSkill,
 } from './projectFiles';
 import type { LocalMcpTarget } from './router';
 import { RemoteAgentPoller, RemoteAgentRunClient, remoteAgentInvoker } from './runClient';
@@ -65,6 +72,10 @@ export interface DeviceAgentServiceDeps {
   makerMemory(): MakerMemoryManager | undefined;
   /** 本机按真实工作目录生成的插件花名册段(与本机任务同一份 formatter 与过滤)。 */
   ghostRosterPrompt?(workingDir: string): string;
+  /** 本机的 Cindy 托管 Skill(内置与插件带的，与本机任务同一来源)：对方 Agent 用它们，不用对方自己的。 */
+  managedSkills?: AgentDeps['getManagedSkills'];
+  /** 本机停用的 Skill(与本机任务同一份偏好)。 */
+  disabledSkillPaths?(): readonly string[];
   captureKnownFileBefore(input: { sessionId: string; provider: 'claude-code' | 'pi'; cwd: string; targetPath: string }): Promise<void>;
   noteOpaqueTurnChange(input: { sessionId: string; provider: 'claude-code' | 'pi'; cwd: string }): void;
   /** 改写来自对方的事件(如 Claude Code 的 Cindy 工具名换回自带工具名)。 */
@@ -470,7 +481,29 @@ export function createDeviceAgentStarter(deps: DeviceAgentServiceDeps) {
         : (workingDir) => collectAncestorInstructionFiles(workingDir, collect),
       // Codex 建线程时沿上级目录逐级查找 .git 与插件清单：先把有没有报过去，对方不再逐个经设备互联来问。
       ...(input.agentKind === 'codex' ? { collectAncestorMarkers } : {}),
-      collectPersonal: (kind, projectFiles) => collectPersonalConfig(kind, projectFiles, collect),
+      collectPersonal: async (kind, projectFiles, agent) => {
+        // 与本机任务同一规则：伙伴按授权挑托管 Skill，停用的不带；个人 Skill 只按停用过滤。
+        const disabledSkillPaths = [...(deps.disabledSkillPaths?.() ?? [])];
+        let managedSkills: LocalManagedSkill[] | undefined;
+        if (deps.managedSkills) {
+          try {
+            managedSkills = resolveAllowedManagedSkills(
+              await deps.managedSkills(),
+              snapshotManagedSkillGrants(opts.botRuntimeProfile?.skillPolicy),
+              disabledSkillPaths,
+            ).flatMap((skill) => skill.path ? [{ command: skill.claudeCommandName, dir: path.dirname(skill.path) }] : []);
+          } catch (error) {
+            // 列不出来时不声明，对方沿用它自己的托管 Skill。
+            log.warn('remote agent: managed skills unavailable; the agent computer keeps its own', { error: String(error) });
+          }
+        }
+        return collectPersonalConfig(kind, projectFiles, {
+          ...collect,
+          ...(opts.botRuntimeProfile ? {} : { disabledSkillPaths }),
+          ...(managedSkills ? { managedSkills } : {}),
+          ...(managedSkills && agent?.managedSkillDigests ? { agentDigests: agent.managedSkillDigests } : {}),
+        });
+      },
       collectImports: (imports) => collectInstructionImports(imports, collect),
       isGitRepo,
       ...(deps.extractPdfText ? { extractPdfText: deps.extractPdfText } : {}),
