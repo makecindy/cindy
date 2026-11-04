@@ -16,7 +16,7 @@ import { toast } from '@/lib/toast';
 
 import { GHOST_SCHEME, ghostInstallApprovalToken, type InstalledGhost } from '../../shared/ghost';
 import { installedGhostStoragePart, installedGhostWebviewPartitionClaim } from '../../shared/pluginIdentity';
-import { createGhostThemeInjector, observeHostTheme } from './ghostPanelTheme';
+import { buildGhostMainViewThemeCss, createGhostThemeInjector, observeHostTheme } from './ghostPanelTheme';
 import {
   clearGhostUnread,
   useElementVisible,
@@ -202,6 +202,7 @@ export function GhostWebviewBody({
   ghost,
   html,
   query,
+  wallpaperCanvas = false,
   onHostNode,
 }: {
   ghost: Pick<InstalledGhost, 'manifest' | 'dir' | 'namespace'> & Partial<Pick<InstalledGhost, 'approval'>>;
@@ -211,6 +212,8 @@ export function GhostWebviewBody({
    * 都只按 pathname 判定,查询串只给页面自己读。
    */
   query?: string;
+  /** Main-view pages share the host canvas, including when docked or detached. */
+  wallpaperCanvas?: boolean;
   onHostNode?: (node: HTMLDivElement | null) => void;
 }): ReactNode {
   const { manifest } = ghost;
@@ -266,7 +269,7 @@ export function GhostWebviewBody({
     let themeTimer: ReturnType<typeof setTimeout> | null = null;
     // 状态机见 createGhostThemeInjector:换肤误触发去重、dom-ready(含拖动
     // 换位触发的 Electron 整页重载)无条件重灌,规则都封在里面(带单测)。
-    const injector = createGhostThemeInjector(webview);
+    const injector = createGhostThemeInjector(webview, wallpaperCanvas ? buildGhostMainViewThemeCss : undefined);
     // 突发属性变动(换肤瞬间多个属性接连翻动)合并成一次注入。
     const scheduleInjectTheme = () => {
       if (themeTimer !== null) return;
@@ -341,7 +344,7 @@ export function GhostWebviewBody({
     };
     // version 入依赖:原位更新换版后 webview 重挂载,面板立刻跑新代码
     // (供片协议直读安装目录,不重挂会一直渲染旧版缓存的页面)。
-  }, [crashed, generation, librarySwapping, instanceId, approvalToken, partitionClaim, manifest.id, manifest.version, manifest.resolvedLocale, html, query]);
+  }, [crashed, generation, librarySwapping, instanceId, approvalToken, partitionClaim, manifest.id, manifest.version, manifest.resolvedLocale, html, query, wallpaperCanvas]);
 
   if (crashed) {
     return (
