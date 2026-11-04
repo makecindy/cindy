@@ -47,7 +47,7 @@ Orca 是 Cindy Desktop 内的多 agent 协同能力：一个 **Lead session** �
 
 - Orca Team 仍严格绑定单个 Lead session，不支持跨 Lead 共享 worker。
 - Worker focused 切换是“单 worker pane 替换”，不是多 worker 并排。
-- Worker archive 后 UI 内没有 unarchive 入口；DB 记录保留，用户需要新建 worker 继续。
+- Worker archive 后协同 UI 内没有 unarchive 入口；DB 记录与标签占用保留，重新创建需使用新 label，role 可保持相同。Agent 可通过 `get_workspace_info.reserved_labels` 查到历史占名；普通任务取消归档仍保留原 Worker 身份。
 - workflow_run / CC Workflow 编排还未纳入当前实现。
 - side_chat 尚未登记为 side activity 对象，也未挂进 pane；PR #107 只是 fork 数据动作。
 - device-link 协同的 Lead / Worker / team 全部在被控端进程内编排，控制端只按 session 来源经隧道路由（`makerTransport` 的 `makerApiFor` / `orcaWorkflowsFor` / `subscribeOrcaWorkerChanged`，channel 见 `packages/device-link/src/allowlist.ts` 的 Orca 段）。collab 开关同样查被控端（`maker:plugins:get-state` 经 `pluginEnableStateFor`）：项目读取被控端项目级策略，对话读取被控端用户级/全局级策略。控制端本机状态不能代表被控端真相。老被控端没有该 channel 时回 `CHANNEL_NOT_ALLOWED`，控制端 fail-closed 置灰入口并提示设备版本过旧，而不是放行到 `enableOrca` 才撞错。
@@ -129,6 +129,18 @@ PR #101 之后，Orca 的 main 侧业务由独立 service 承接，`register.ts`
 21. `read_worker`（只读诊断）
 
 批量创建必须走一次 `create_workers` 调用，不能让 Lead 并行或连续发多个独立 `create_worker`。批量工具按输入顺序复用同一个 `OrcaLifecycleService.createWorker` 原语；首次收到 `WORKER_LIMIT_HARD_EXCEEDED` 或批次级 `HOST_NOT_READY` 后不再调用 host，剩余项稳定标为 `skipped`。返回值必须包含请求数、实际尝试数、成功数、失败数、跳过数、总未创建数、数量闸快照、代码确定生成的 `user_report`，以及逐项真实 worker/session 或失败终态，供 Lead 如实向用户收口；`success_count + failure_count + skipped_count` 必须等于 `request_count`，其中 `not_created_count = failure_count + skipped_count`。单个 `create_worker` 继续作为兼容入口，并返回相同的结构化 hard-limit 快照。
+
+归档释放 Worker 名额，但不释放 team 内的 label：`workers` / `worker_count` 只投影活动任务，
+`get_workspace_info.reserved_labels` 则列出当前 active team 的持久标签及其 `worker_id`、
+`session_id`、`role`、`session_status`（含 archived / deleted；历史任务行缺失时为 null）。
+因此活动 Worker 为 0 不代表标签可复用。该字段仅用于发现占名，不将归档 Worker 当作可派发目标，
+不唤醒 runtime、不读历史正文；旧宿主缺少该字段时保持缺省，不能解释为空。
+`create_worker` / `create_workers` 的 `DUPLICATE_LABEL` 说明归档仍占名，并指向此字段：
+用户要求重新创建时保持 role、换未使用的 label，无需覆盖旧 Worker 或更换 team。
+创建中的临时预约不在持久标签列表内；可用性仍由原子 reservation 与唯一索引最终判定。
+实现见 `orcaTeamStore.ts` 的 `listWorkerLabelsByTeam`、`orcaDiagnostics.ts`、
+`orcaWorkerCreationService.ts` 与 `packages/lizi-mcps/src/orca/server.ts`；回归见对应 store、
+diagnostics、creation service 测试及 `packages/lizi-mcps/src/__tests__/sessionContext.test.ts`。
 
 排队消息控制 6 工具让 Lead 在消息被 worker 消费前管理自己发出的排队消息：`send_to_worker` / `create_worker`（initial_task）在 `wakeKind='queued'` 时回传 `queued_message_id`（coordinator 队列内的 clientId），Lead 可据此查看工作态和完整队列、整条改写、撤回、原子合并连续的 Lead 消息、转为插话或调整顺序。`get_worker_queue_status` / `steer_queued_message` / `move_queued_message` 省略 `worker_id` 时作用于调用方自己的队列（Lead 忙时 Worker 回报排在这里）。实现走 `OrcaTeamService.listWorkerQueuedMessages / updateWorkerQueuedMessage / cancelWorkerQueuedMessage / mergeWorkerQueuedMessages / steerWorkerQueuedMessage / moveWorkerQueuedMessage`，语义约束见「协同运行时行为契约 · 消息派发与 auto-bridge」第 1b、6–9 条。
 

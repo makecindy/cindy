@@ -1836,9 +1836,14 @@ describe('dynamic lizi MCP session context', () => {
   });
 
   it('routes cindy_orca diagnostic tools through the current lead session context', async () => {
+    // Unit regression: the host can report historical label owners, but the MCP
+    // projection used to drop them. Existing active-worker assertions missed this.
+    const reservedLabels = [{ label: 'reviewer', role: 'reviewer', worker_id: 'old-worker',
+      session_id: 'old-session', session_status: 'archived' }];
     const deps = createOrcaDeps({
       getWorkspaceInfo: vi.fn(async () => ({
         ok: true as const,
+        reserved_labels: reservedLabels,
         workflow: {
           workflow_id: 'team-1',
           lead_session_id: 'codex-lead-session',
@@ -1917,6 +1922,7 @@ describe('dynamic lizi MCP session context', () => {
           },
           ui_capacity: 1,
           worker_count: 1,
+          reserved_labels: reservedLabels,
           workers: [{
             worker_id: 'worker-1',
             session_id: 'worker-session-1',

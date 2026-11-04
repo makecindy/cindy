@@ -1,6 +1,7 @@
 import type { WorkerOwnedWorktree } from '../../shared/orca-worker-project';
 import type { AgentKind } from '@cindy/maker-core';
 import { redactSensitiveText } from '@cindy/maker-shared/error-redaction';
+import type { OrcaWorkerLabelRecord } from '../localDb/orcaTeamStore.js';
 
 export interface OrcaDiagnosticTeamSnapshot {
   id: string;
@@ -117,6 +118,7 @@ function redactTurnErrorSummary(summary: OrcaTurnErrorSummary): OrcaTurnErrorSum
 export interface OrcaDiagnosticsDeps {
   readActiveTeam(leadSessionId: string): Promise<OrcaDiagnosticTeamSnapshot | null>;
   listWorkersByLead(leadSessionId: string): Promise<OrcaDiagnosticWorkerSnapshot[]>;
+  listWorkerLabelsByTeam(teamId: string): Promise<OrcaWorkerLabelRecord[]>;
   getSessionStatus(sessionId: string): string;
   getWorkerFlowStatus(sessionId: string): Promise<{
     isWorking: boolean;
@@ -219,6 +221,14 @@ export async function getOrcaWorkspaceInfoReadOnly(
   ui_capacity: number;
   worker_count: number;
   workers: OrcaWorkerSummary[];
+  /** All persisted label owners; archived/deleted tasks stay out of workers and worker_count. */
+  reserved_labels: {
+    label: string | null;
+    worker_id: string;
+    session_id: string;
+    role: string;
+    session_status: string | null;
+  }[];
 }>> {
   const active = await deps.readActiveTeam(leadSessionId);
   if (!active) {
@@ -228,9 +238,13 @@ export async function getOrcaWorkspaceInfoReadOnly(
       ui_capacity: 1,
       worker_count: 0,
       workers: [],
+      reserved_labels: [],
     };
   }
-  const workers = await readDiagnosticWorkers(deps, leadSessionId);
+  const [workers, labels] = await Promise.all([
+    readDiagnosticWorkers(deps, leadSessionId),
+    deps.listWorkerLabelsByTeam(active.id),
+  ]);
   return {
     ok: true,
     workflow: {
@@ -241,6 +255,13 @@ export async function getOrcaWorkspaceInfoReadOnly(
     ui_capacity: 1,
     worker_count: workers.length,
     workers,
+    reserved_labels: labels.map((entry) => ({
+      label: entry.label,
+      worker_id: entry.workerId,
+      session_id: entry.sessionId,
+      role: entry.role,
+      session_status: entry.sessionStatus,
+    })),
   };
 }
 

@@ -8,6 +8,8 @@ import { tx as runInprocTx } from '../worker/opHandlers/tx.js';
 import { setSessionRouteLockImplementation } from '../sessionRouteLock.js';
 import { setSessionRuntimeCleanup } from '../sessionRuntimeCleanup.js';
 import * as schema from '../schema.js';
+import * as orcaTeamStore from '../orcaTeamStore.js';
+import { getOrcaWorkspaceInfoReadOnly } from '../../maker-ipc/orcaDiagnostics.js';
 
 const h = vi.hoisted(() => ({
   tapWindowBroadcast: vi.fn(),
@@ -51,6 +53,73 @@ describe('orcaTeamStore', () => {
     }
     rawDb?.close();
     rawDb = null;
+  });
+
+  // Regression: archived label owners were absent from workspace diagnostics, so a
+  // Lead with zero Workers could not plan a replacement. Existing archive tests only
+  // checked status/broadcasts. Unit tier, real in-memory SQLite + production store and
+  // diagnostic: archive two reviewers, discover occupied labels, recreate, then restore.
+  it('discovers archived labels and recreates without changing the original Worker identities', async () => {
+    const client = createTestDbClient();
+    setCurrentDbClient(client, 'test-user');
+    await seedOrcaWorkers(client);
+    await client.exec("UPDATE orca_workers SET label = 'reviewer', role = 'reviewer' WHERE id = 'worker-1'");
+    await client.exec("UPDATE orca_workers SET label = 'reviewer-2', role = 'reviewer' WHERE id = 'worker-2'");
+    await client.exec("UPDATE sessions SET sdk_session_id = 'original-history' WHERE id = 'worker-session-1'");
+    const originalLink = await orcaTeamStore.getWorkerLink({ workerId: 'worker-1' });
+    const diagnosticDeps = {
+      readActiveTeam: orcaTeamStore.getActiveTeamByLead,
+      listWorkersByLead: orcaTeamStore.listWorkersByLead,
+      listWorkerLabelsByTeam: orcaTeamStore.listWorkerLabelsByTeam,
+      getSessionStatus: () => 'not_running',
+      getWorkerFlowStatus: vi.fn(async () => ({ isWorking: false, willQueue: false, queuedCount: 0, queuePaused: false })),
+      readLatestAssistantMessage: vi.fn(async () => ''),
+    };
+
+    await orcaTeamStore.archiveWorkersByTeam('team-1');
+    const workspace = await getOrcaWorkspaceInfoReadOnly(diagnosticDeps, 'lead-session-1');
+    expect(workspace).toMatchObject({
+      worker_count: 0, workers: [],
+      reserved_labels: [
+        { worker_id: 'worker-1', session_id: 'worker-session-1', label: 'reviewer', session_status: 'archived' },
+        { worker_id: 'worker-2', session_id: 'worker-session-2', label: 'reviewer-2', session_status: 'archived' },
+      ],
+    });
+    expect(diagnosticDeps.getWorkerFlowStatus).not.toHaveBeenCalled();
+    await expect(orcaTeamStore.reserveWorkerCreation({
+      reservationId: 'duplicate', teamId: 'team-1', label: 'REVIEWER', hardLimit: 1, leaseMs: 60_000,
+    })).resolves.toEqual({ ok: false, errorCode: 'DUPLICATE_LABEL' });
+
+    // The old Workers free slots, but their labels remain reserved. The next unused
+    // label can be admitted once even when two callers request it concurrently.
+    const reservations = await Promise.all(['new-1', 'new-2'].map(reservationId =>
+      orcaTeamStore.reserveWorkerCreation({
+        reservationId, teamId: 'team-1', label: 'reviewer-3', hardLimit: 1, leaseMs: 60_000,
+      })));
+    expect(reservations).toEqual([
+      { ok: true, occupiedSlotsBefore: 0 }, { ok: false, errorCode: 'WORKER_CREATION_IN_PROGRESS' },
+    ]);
+    await client.exec('INSERT INTO sessions (id, created_at, updated_at) VALUES (?, ?, ?)', ['new-session', 1, 1]);
+    await orcaTeamStore.addOrUpdateWorker({
+      id: 'new-worker', teamId: 'team-1', sessionId: 'new-session', label: 'reviewer-3', role: 'reviewer',
+    });
+    await orcaTeamStore.releaseWorkerCreationReservation('new-1');
+    await expect(orcaTeamStore.reserveWorkerCreation({
+      reservationId: 'active-duplicate', teamId: 'team-1', label: 'REVIEWER-3', hardLimit: 5, leaseMs: 60_000,
+    })).resolves.toEqual({ ok: false, errorCode: 'DUPLICATE_LABEL' });
+
+    // Simulate the ordinary unarchive status transition. Old IDs and the native
+    // history reference must still resolve to the old Worker, never its replacement.
+    await client.exec("UPDATE sessions SET status = 'active' WHERE id = 'worker-session-1'");
+    expect(await orcaTeamStore.getWorkerLink({ workerId: 'worker-1' })).toEqual(originalLink);
+    expect(await client.queryOne('SELECT sdk_session_id FROM sessions WHERE id = ?', ['worker-session-1']))
+      .toEqual({ sdk_session_id: 'original-history' });
+    expect((await orcaTeamStore.listWorkersByLead('lead-session-1')).map(worker => ({
+      id: worker.id, sessionId: worker.sessionId, label: worker.label,
+    }))).toEqual([
+      { id: 'new-worker', sessionId: 'new-session', label: 'reviewer-3' },
+      { id: 'worker-1', sessionId: 'worker-session-1', label: 'reviewer' },
+    ]);
   });
 
   // F6-B, integration: real SQLite role writes stay in their captured owner.
