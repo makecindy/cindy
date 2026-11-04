@@ -47,17 +47,24 @@ export function useSessionSwitchFocusIntent(
   // 切换时仍按着的 Enter / 空格会继续产生重复 keydown；武装之后的重复只可能来自这种
   // 延续的按键（新按下的键第一下 repeat 为 false，已经撤销了意图），不算用户新的操作，
   // 否则确认卡晚一点重建出来时就拿不到焦点。
+  // 读屏等辅助技术「激活」一个控件时，可能只派发一次可信的 click，前面没有 pointerdown /
+  // keydown，所以也监听可信 click。代码里的 .click()（isTrusted=false）不是用户操作，不撤销。
   useEffect(() => {
     if (!armed) return;
     const disarm = () => setArmedFor(null);
     const disarmOnKey = (e: KeyboardEvent) => {
       if (!e.repeat) disarm();
     };
+    const disarmOnClick = (e: MouseEvent) => {
+      if (e.isTrusted) disarm();
+    };
     window.addEventListener('pointerdown', disarm, true);
     window.addEventListener('keydown', disarmOnKey, true);
+    window.addEventListener('click', disarmOnClick, true);
     return () => {
       window.removeEventListener('pointerdown', disarm, true);
       window.removeEventListener('keydown', disarmOnKey, true);
+      window.removeEventListener('click', disarmOnClick, true);
     };
   }, [armed]);
 

@@ -1,10 +1,13 @@
 // @vitest-environment jsdom
 import { act, cleanup, fireEvent, renderHook } from '@testing-library/react';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { useSessionSwitchFocusIntent } from '../useSessionSwitchFocusIntent';
 
-afterEach(cleanup);
+afterEach(() => {
+  cleanup();
+  vi.restoreAllMocks();
+});
 
 function setup(initial: { sessionId: string | undefined; enabled: boolean }) {
   return renderHook(
@@ -53,6 +56,24 @@ describe('useSessionSwitchFocusIntent', () => {
     act(() => fireEvent.keyDown(window, { key: ' ', repeat: true }));
     expect(result.current.armed).toBe(true);
     act(() => fireEvent.keyDown(window, { key: 'Enter' }));
+    expect(result.current.armed).toBe(false);
+  });
+
+  // 读屏等辅助技术激活控件时只发一次可信 click，没有 pointerdown / keydown。jsdom 造不出
+  // isTrusted=true 的事件，所以取到真实挂上的 click 监听，直接按可信与否各调一次。
+  it('辅助技术的可信 click 撤销意图，代码里的 .click() 不撤销', () => {
+    const add = vi.spyOn(window, 'addEventListener');
+    const { result } = setup({ sessionId: 'a', enabled: true });
+    const clickListener = add.mock.calls.find(([type]) => type === 'click')?.[1] as
+      | ((e: Pick<MouseEvent, 'isTrusted'>) => void)
+      | undefined;
+    expect(clickListener).toBeTypeOf('function');
+
+    act(() => fireEvent.click(document.body));
+    expect(result.current.armed).toBe(true);
+    act(() => clickListener?.({ isTrusted: false }));
+    expect(result.current.armed).toBe(true);
+    act(() => clickListener?.({ isTrusted: true }));
     expect(result.current.armed).toBe(false);
   });
 
