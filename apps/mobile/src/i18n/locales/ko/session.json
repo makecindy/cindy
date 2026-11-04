@@ -224,7 +224,25 @@
       },
       "context": {
         "title": "컨텍스트 사용량",
-        "unavailable": "컨텍스트 데이터 없음"
+        "unavailable": "컨텍스트 데이터 없음",
+        "estimate": {
+          "title": "텍스트 추정치",
+          "delivery": "답변 표시",
+          "host": "Cindy 지침",
+          "plugins": "플러그인 목록",
+          "memoryRules": "메모리 지침",
+          "memoryIndex": "메모리 색인",
+          "profile": "팀원 프로필",
+          "user": "사용자 지침",
+          "directories": "추가 디렉터리",
+          "native": "Pi 지침",
+          "skills": "스킬 목록",
+          "project": "프로젝트 지침",
+          "tools": "도구 정의",
+          "messages": "대화 본문",
+          "other": "기타 지침",
+          "note": "현재 텍스트의 대략적인 추정치이며 모델의 토큰화 결과가 아닙니다. 이미지와 공급업체 형식의 추가 사용량은 제외되므로 합계가 Pi 총량과 일치하지 않습니다."
+        }
       },
       "rateLimit": {
         "plan": "요금제",

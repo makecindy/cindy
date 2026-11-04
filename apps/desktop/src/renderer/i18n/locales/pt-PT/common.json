@@ -13566,6 +13566,24 @@
           "autocompactBuffer": "Reserva de compactação automática",
           "compactBuffer": "Reserva de compactação",
           "freeSpace": "Espaço livre"
+        },
+        "estimate": {
+          "title": "Estimativas de texto",
+          "delivery": "Apresentação das respostas",
+          "host": "Instruções da Cindy",
+          "plugins": "Catálogo de plugins",
+          "memoryRules": "Instruções de memória",
+          "memoryIndex": "Índice de memória",
+          "profile": "Perfil do colega",
+          "user": "Instruções do utilizador",
+          "directories": "Diretórios adicionais",
+          "native": "Instruções do Pi",
+          "skills": "Catálogo de Skills",
+          "project": "Instruções do projeto",
+          "tools": "Definições das ferramentas",
+          "messages": "Texto da conversa",
+          "other": "Outras instruções",
+          "note": "Estimativa do texto atual, sem a tokenização do modelo. Exclui imagens e formatação do fornecedor; a soma difere do total nativo."
         }
       },
       "compact": {

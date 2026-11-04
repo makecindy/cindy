@@ -240,7 +240,25 @@
       },
       "context": {
         "title": "Kontextnutzung",
-        "unavailable": "Keine Kontextdaten"
+        "unavailable": "Keine Kontextdaten",
+        "estimate": {
+          "title": "Textschätzungen",
+          "delivery": "Antwortdarstellung",
+          "host": "Cindy-Anweisungen",
+          "plugins": "Plugin-Katalog",
+          "memoryRules": "Speicheranweisungen",
+          "memoryIndex": "Speicherindex",
+          "profile": "Teammitglied-Profil",
+          "user": "Benutzeranweisungen",
+          "directories": "Zusätzliche Verzeichnisse",
+          "native": "Pi-Anweisungen",
+          "skills": "Skill-Katalog",
+          "project": "Projektanweisungen",
+          "tools": "Werkzeugdefinitionen",
+          "messages": "Gesprächstext",
+          "other": "Weitere Anweisungen",
+          "note": "Schätzung des aktuellen Texts, keine Modell-Tokenisierung. Ohne Bilder und Anbieterformatierung; die Summe weicht vom nativen Gesamtwert ab."
+        }
       },
       "rateLimit": {
         "plan": "Plan",

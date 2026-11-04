@@ -1,5 +1,12 @@
 # 跨端协议兼容
 
+## Pi 上下文来源估算（2026-11-05，未发布）
+
+`maker:get-context-usage` 沿用原通道，仅增加可选 `textEstimate`：
+`{method:"text-heuristic",items:[{source,tokens}]}`。它是文字粗估，独立于原生总量；
+Desktop 与 Mobile 明确标注估算和排除项。旧端忽略可选字段，新端收到缺字段或未知 method
+时只显示原有总量，不要求双端同时升级。返回值不含模型上下文正文或工具定义正文。
+
 ## 群内能力提示（非执行终态）
 
 复用现有通用 card 消息合同，新增 `cindy.capability-notice` / `schemaRevision: 1`：data 只带固定 code（`GROUP_AUTHORIZATION_REQUIRED`、`GROUP_AUTHORIZATION_UNAVAILABLE`、`ATTACHMENTS_UNAVAILABLE`），fallback 为执行电脑本地化的完整可读提示。以伙伴 actor 发往原主群或话题；同执行 ID、epoch、类别复用同一稳定幂等 ID，并按既有消息 POST 合同放入 `operationId`（不发送本地 `clientId` 字段）；投递重试不创建执行、不结算模型轮次。

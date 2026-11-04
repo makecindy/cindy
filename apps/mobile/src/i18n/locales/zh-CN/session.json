@@ -224,7 +224,25 @@
       },
       "context": {
         "title": "上下文用量",
-        "unavailable": "暂无上下文数据"
+        "unavailable": "暂无上下文数据",
+        "estimate": {
+          "title": "文本估算",
+          "delivery": "答案交付",
+          "host": "Cindy 规则",
+          "plugins": "插件目录",
+          "memoryRules": "记忆规则",
+          "memoryIndex": "记忆索引",
+          "profile": "伙伴资料",
+          "user": "用户指令",
+          "directories": "附加目录",
+          "native": "Pi 原生规则",
+          "skills": "技能目录",
+          "project": "项目指令",
+          "tools": "工具定义",
+          "messages": "对话正文",
+          "other": "其他指令",
+          "note": "按当前文本粗估，并非模型分词结果。不含图片与供应商格式开销，分项之和不等于原生总量。"
+        }
       },
       "rateLimit": {
         "plan": "套餐",

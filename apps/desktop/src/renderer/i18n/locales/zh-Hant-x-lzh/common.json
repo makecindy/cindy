@@ -13416,6 +13416,24 @@
           "autocompactBuffer": "自動壓縮緩衝",
           "compactBuffer": "壓縮緩衝",
           "freeSpace": "餘地"
+        },
+        "estimate": {
+          "title": "文字估數",
+          "delivery": "答覆呈式",
+          "host": "Cindy 規約",
+          "plugins": "法器目錄",
+          "memoryRules": "記憶規約",
+          "memoryIndex": "記憶索引",
+          "profile": "同伴資料",
+          "user": "主人指令",
+          "directories": "附加目錄",
+          "native": "Pi 原生規約",
+          "skills": "技藝目錄",
+          "project": "專案指令",
+          "tools": "工具定義",
+          "messages": "交談正文",
+          "other": "其餘指令",
+          "note": "依當前文字粗估，非模型分詞之數。不計圖片與供方格式耗用，分項之和不等於原生總數。"
         }
       },
       "compact": {
