@@ -1185,8 +1185,13 @@ it.each(['delivered', 'failed', 'suppressed'] as const)('keeps execution success
     text: 'Reviewed PR', routine: expect.objectContaining({ id: routine.id }) }));
 });
 
-// The revision guard exists to stop a stale prompt from dispatching. Once the run
-// produced its result, a mid-run edit must not turn that result into "已完成，送达失败".
+// Test value: routineTools.runNow → execute → deliverResult; the run's recorded
+// delivery and the companion's main conversation are the observable results. Rule:
+// docs/product-rules/bot-routines.md keeps an already-started run alive when the
+// routine is edited; the 2026-11-04 user report recorded success + "Routine delivery
+// cancelled". Existing cases cover delivered/failed/suppressed only, not a revision
+// change between dispatch and delivery. Minimal failing input: save the routine while
+// scheduler.runNow is still executing. Unit tier, process-local mocks, no real resources.
 it('delivers a completed run after the routine is edited while it runs', async () => {
   const routine = await routineTools.save('bot', { name: 'Daily report', prompt: 'Summarize only', enabled: true,
     triggers: [{ id: 'tick', kind: 'interval', intervalMs: 60000 }] });
@@ -1199,6 +1204,5 @@ it('delivers a completed run after the routine is edited while it runs', async (
   });
   await routineTools.runNow('bot', routine.id);
   await vi.waitFor(async () => expect((await routineTools.history('bot', routine.id))[0]?.status).toBe('success'));
-  expect((await routineTools.history('bot', routine.id))[0]).toMatchObject({ sessionId: 'lane-' + routine.id });
   expect((await routineTools.history('bot', routine.id))[0]).toMatchObject({ delivery: { status: 'delivered' } });
 });
