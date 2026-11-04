@@ -3177,7 +3177,12 @@ async function terminalResultProcessIdentities(
  * any status flush. It is NOT exit evidence on its own — the run may still be
  * alive — so it only supplies the same process identities the terminal receipt
  * supplies, and the same independent OS inventory must confirm every one of
- * them is gone. Only runs launched after the identity file existed can recover
+ * them is gone. The child session IDs come from the identity file's pinned
+ * launch list, never from the launch config alone: the config is
+ * same-user-writable and its path is visible in the runner parent's argv, so
+ * a worker could rewrite it after launch to hide a live (resumed) child. A
+ * pinned list that is missing, or that disagrees with the config, fails
+ * closed. Only runs launched after the identity file existed can recover
  * this way; older corrupt records still block. Keep the file untouched, including
  * the corrupt status, for diagnosis.
  */
@@ -3205,11 +3210,21 @@ async function runnerIdentityProcessIdentities(
     // another run cannot point back into this one.
     const containedPrefix = path.resolve(runDir) + path.sep;
     if (!path.resolve(identity.runnerScript).startsWith(containedPrefix)) return null;
-    const sessionIds = config.tasks.map((task) => task.sessionId);
-    if (sessionIds.some((sessionId) => typeof sessionId !== 'string' || !sessionId)) return null;
+    const pinned = identity.sessionIds;
+    if (!Array.isArray(pinned) || pinned.length === 0
+      || pinned.some((sessionId) => typeof sessionId !== 'string' || !sessionId)) return null;
+    // Child IDs are exit evidence only as pinned in the write-once identity
+    // published at startup, before any Pi child existed. The launch config
+    // is same-user-writable and its path is visible in the runner parent's
+    // argv, so a worker could rewrite it after launch to hide a live
+    // (resumed) child; a pinned list that disagrees with the config fails
+    // closed instead of trusting the config.
+    const configSessionIds = config.tasks.map((task) => task.sessionId);
+    if (configSessionIds.length !== pinned.length
+      || configSessionIds.some((sessionId, index) => sessionId !== pinned[index])) return null;
     // The runner argv carries the UUID in its script path; every Pi child
     // carries --session-id, including children surviving a runner exit.
-    return [runId, ...sessionIds];
+    return [runId, ...pinned];
   } catch {
     // Bounded reads reject missing, corrupt, oversized and linked artifacts.
     return null;

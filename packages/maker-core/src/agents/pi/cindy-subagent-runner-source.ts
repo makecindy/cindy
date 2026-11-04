@@ -25,7 +25,11 @@
  * any status flush (#8736): if `status.json` is later unreadable and no
  * `result.json` was ever written, the host may still prove the run's
  * processes are gone from that identity plus the launch config, under the
- * same OS-inventory check. The file alone is never exit evidence.
+ * same OS-inventory check. The file alone is never exit evidence. The
+ * identity also pins the launch config's child session IDs, read before any
+ * Pi child exists: recovery trusts only the pinned list, and a pinned list
+ * that disagrees with the launch config fails closed, so a later rewrite of
+ * the same-user-writable config cannot hide a live (resumed) child.
  */
 
 import { createPiCacheInputTracker } from './cache-input.js';
@@ -276,6 +280,12 @@ function main() {
         runnerPid: process.pid,
         runnerScript: runnerScriptPath,
         startedAt: startedAt,
+        // Pin the launch config's child session IDs here, before any Pi
+        // child exists: recovery must not read them back from the
+        // same-user-writable config.json, whose path is visible in this
+        // runner's argv. A non-string sessionId pins as '' so recovery
+        // fails closed instead of trusting a forged value.
+        sessionIds: config.tasks.map((task) => typeof task.sessionId === 'string' ? task.sessionId : ''),
       });
     }
   } catch (_) {}

@@ -1689,6 +1689,7 @@ describe('PI durable subagent run store', () => {
         const identity: Record<string, unknown> = {
           version: 1, runId, runnerInstanceId: 'runner-1',
           runnerPid: 4242, runnerScript: path.join(dir, 'runner.cjs'), startedAt: 100,
+          sessionIds: ['native-1'],
         };
         mutate?.({ identity, config }, dir);
         await writeFile(path.join(dir, 'config.json'), JSON.stringify(config));
@@ -1738,6 +1739,8 @@ describe('PI durable subagent run store', () => {
         ['a config detached from its run directory', ({ config }, dir) => { config.runDir = path.dirname(dir); }],
         ['a missing start time', ({ identity }) => { delete identity.startedAt; }],
         ['a missing runner pid', ({ identity }) => { delete identity.runnerPid; }],
+        ['a missing pinned session list', ({ identity }) => { delete identity.sessionIds; }],
+        ['an empty pinned session id', ({ identity }) => { identity.sessionIds = ['']; }],
       ];
       it.each(refusalMutations)('refuses a runner identity for %s', async (_label, mutate) => {
         const { agentHome } = await identityHome(async () => {}, mutate);
@@ -1818,11 +1821,12 @@ describe('PI durable subagent run store', () => {
       // UUID in its command line; it must block both boundary entries until
       // it disappears, even though every other identity is gone.
       it('blocks on an orphan child session even when the runner UUID is gone', async () => {
-        const { agentHome, root } = await identityHome(async () => {}, ({ config }) => {
+        const { agentHome, root } = await identityHome(async () => {}, ({ config, identity }) => {
           config.tasks = [
             { childId: 'child-1', sessionId: 'native-1', agent: 'scout' },
             { childId: 'child-2', sessionId: 'native-2', agent: 'scout' },
           ];
+          identity.sessionIds = ['native-1', 'native-2'];
         });
         childProcess.spawnSync.mockImplementation(() => ({ status: 0, stdout: inventory(['pi --mode rpc --session-id native-2']) }));
         await expect(stopAllPiSubagentRunsForExit(agentHome, 0, { killUnresponsiveRunners: true }))
@@ -1833,6 +1837,35 @@ describe('PI durable subagent run store', () => {
         await expect(stopAllPiSubagentRunsForExit(agentHome, 0)).resolves.toBe(true);
         await expect(stopPiSubagentRunsForAccountBoundary(root, { timeoutMs: 0 }))
           .resolves.toBe(true);
+      });
+
+      // Codex review on #8802: resume reuses the source sessionId, so a
+      // live resumed child carries no new run UUID. The child IDs used as
+      // exit evidence must be pinned in the write-once runner identity at
+      // startup, not read back from config.json: a worker with the bash
+      // tool can learn the config path from its runner parent's argv and
+      // rewrite the same-user-writable config.json after launch. These
+      // fixtures write a config that disagrees with the pinned identity,
+      // simulating such a post-launch rewrite.
+      it('blocks when config.json is rewritten to hide a live pinned child session', async () => {
+        const { agentHome, root } = await identityHome(async () => {}, ({ config }) => {
+          config.tasks = [{ childId: 'child-1', sessionId: 'dead-native', agent: 'scout' }];
+        });
+        childProcess.spawnSync.mockImplementation(() => ({ status: 0, stdout: inventory(['pi --mode rpc --session-id native-1']) }));
+        await expect(stopAllPiSubagentRunsForExit(agentHome, 0, { killUnresponsiveRunners: true }))
+          .resolves.toBe(false);
+        await expect(stopPiSubagentRunsForAccountBoundary(root, { timeoutMs: 0 }))
+          .resolves.toBe(false);
+      });
+
+      it('blocks when the pinned child list disagrees with config.json even with an empty inventory', async () => {
+        const { agentHome, root } = await identityHome(async () => {}, ({ config }) => {
+          config.tasks = [{ childId: 'child-1', sessionId: 'dead-native', agent: 'scout' }];
+        });
+        await expect(stopAllPiSubagentRunsForExit(agentHome, 0, { killUnresponsiveRunners: true }))
+          .resolves.toBe(false);
+        await expect(stopPiSubagentRunsForAccountBoundary(root, { timeoutMs: 0 }))
+          .resolves.toBe(false);
       });
     });
   });

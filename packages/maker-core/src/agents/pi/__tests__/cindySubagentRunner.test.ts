@@ -690,6 +690,8 @@ describe('Cindy durable PI Subagent runner', () => {
     });
     expect(Number.isSafeInteger(identity.runnerPid) && identity.runnerPid > 0).toBe(true);
     expect(identity.startedAt).toBe(status.startedAt);
+    const runnerConfig = JSON.parse(await readFile(path.join(fixture.runDir, 'config.json'), 'utf8'));
+    expect(identity.sessionIds).toEqual(runnerConfig.tasks.map((task: any) => task.sessionId));
     const identityBefore = await readFile(path.join(fixture.runDir, 'runner-identity.json'));
     await rm(path.join(fixture.runDir, 'result.json'));
     await writeFile(path.join(fixture.runDir, 'status.json'), Buffer.alloc(72_506));
