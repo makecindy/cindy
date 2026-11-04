@@ -24,6 +24,7 @@ import {
   BACKLOG_WARN_MESSAGES,
   BacklogWarnLimiter,
   backlogLabel,
+  isBacklogChannel,
   summarizeBacklog,
 } from './transportBacklog.js';
 import {
@@ -3482,7 +3483,9 @@ export class DeviceLinkClient {
 
   private rememberInboundInvokeChannel(env: Envelope): void {
     const channel = (env.payload as { channel?: unknown } | undefined)?.channel;
-    if (typeof channel !== 'string' || !env.src || !env.id) return;
+    // Peer-supplied text: keep only registered channels and normal-length ids, so
+    // retained bytes stay bounded. Anything else is labelled result:unknown anyway.
+    if (!isBacklogChannel(channel) || !env.src || !env.id || env.id.length > 128) return;
     const key = `${env.src}\u0000${env.id}`;
     this.inboundInvokeChannels.delete(key);
     this.inboundInvokeChannels.set(key, channel);

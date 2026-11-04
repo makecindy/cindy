@@ -35,11 +35,14 @@ export interface BacklogPeer {
   pendingBytes: number;
 }
 
-function knownChannel(channel: unknown): string {
+/** Registered channel names only; anything else is logged (and remembered) as unknown. */
+export function isBacklogChannel(channel: unknown): channel is string {
   return typeof channel === 'string'
-    && (REMOTE_INVOKE_ALLOWLIST.has(channel) || PUSH_FORWARD_ALLOWLIST.has(channel))
-    ? channel
-    : 'unknown';
+    && (REMOTE_INVOKE_ALLOWLIST.has(channel) || PUSH_FORWARD_ALLOWLIST.has(channel));
+}
+
+function knownChannel(channel: unknown): string {
+  return isBacklogChannel(channel) ? channel : 'unknown';
 }
 
 /**

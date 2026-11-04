@@ -7460,7 +7460,13 @@ describe('DeviceLinkClient', () => {
         expect(high).toContain('result:unknown=1/');
         expect(high).not.toContain('not-a-registered-channel');
         expect(high).toMatch(/otherPeers=1\/\d+KiB \[ctrl-2=3\/\d+KiB\]/);
-        for (let i = 0; i < MAX_TRANSPORT_PENDING_MESSAGES - BACKLOG_WARN_MESSAGES; i++) {
+        // PR #8759 review: peer-supplied text is not retained. Unknown channels and
+        // oversized ids are never remembered, only registered channels with normal ids.
+        reply('ctrl-1', 'x'.repeat(4096), 'local-db:messages:view', []);
+        const remembered = [...h.client['inboundInvokeChannels']].flat().join('');
+        expect(remembered).not.toContain('not-a-registered-channel');
+        expect(remembered).not.toContain('x'.repeat(4096));
+        for (let i = 0; i < MAX_TRANSPORT_PENDING_MESSAGES - BACKLOG_WARN_MESSAGES - 1; i++) {
           reply('ctrl-1', `fill-${i}`, 'local-db:messages:view', []);
         }
         expect(backlog()).toHaveLength(1);
