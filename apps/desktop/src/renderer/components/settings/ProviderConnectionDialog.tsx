@@ -1558,7 +1558,7 @@ export function ProviderConnectionDialog({
     );
     const originalModel = draft?.config.runtimes[agent]?.models.find(model => model.id.trim() === firstModel);
     const automatic = simpleAdding && agent === 'pi' && !rf.catalogPresetId && !rf.requestPath
-      && !originalModel?.api && !originalModel?.piApi && !originalModel?.route;
+      && !originalModel?.api && !originalModel?.piApi && !originalModel?.route && !firstModelConfig?.route;
     const cancellable = simpleAdding && agent === 'pi' && !rf.catalogPresetId
       && (!probeRoute.api || ['openai-completions', 'openai-responses', 'anthropic-messages', 'google-generative-ai'].includes(probeRoute.api));
     const requestId = cancellable ? 'connection-' + Date.now() + '-' + (++detectionRequestSequence) : undefined;
@@ -1605,8 +1605,10 @@ export function ProviderConnectionDialog({
         const api = selected.wireProtocol === 'openai-chat' ? 'openai-completions' as const : selected.wireProtocol;
         setRtSynced(previous => ({ ...previous, [agent]: { ...previous[agent],
           baseUrl: selected.baseUrl, modelRouteBaseUrl: selected.baseUrl, wireProtocol: selected.wireProtocol, requestPath: '',
+          // The selected endpoint is already on the runtime. A duplicate model route
+          // would look user-authored after refresh and block a later Messages switch.
           models: previous[agent].models.map(model => model.id.trim() === firstModel
-            ? { ...model, api, piApi: api, route: { baseUrl: selected.baseUrl, wireProtocol: selected.wireProtocol } } : model),
+            ? { ...model, api, piApi: api } : model),
         } }));
       }
       setTest((prev) => ({
