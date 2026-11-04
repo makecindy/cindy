@@ -372,14 +372,11 @@ export default {
         },
         integration: {
           status: 'manual',
-          reason: 'Local Agent protocol tests use real sockets and authorization stores; date grouping requires a process-local native timezone.',
+          reason: 'Local application Agent protocol tests open real loopback sockets and temporary authorization stores.',
           execution: 'exclusive',
           coverage: 'allowlist',
-          command: vitestBin('run', '--pool=forks', '--maxWorkers=2'),
-          include: [
-            'src/main/local-agent/__tests__/*.integration.test.ts',
-            'src/renderer/__tests__/dateSessionGrouping.integration.test.ts',
-          ],
+          command: vitestBin('run', '--maxWorkers=2'),
+          include: ['src/main/local-agent/__tests__/*.integration.test.ts'],
         },
         'git-integration': {
           status: 'manual',

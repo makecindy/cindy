@@ -4,8 +4,9 @@ import { groupSessionsByActivityDate } from '@/features/cc-agent/lib/dateSession
 import type { Session } from '@/lib/ccAgent.types';
 
 // PR #7261: native Date must observe the real 23-hour day, which changing TZ in
-// a worker thread cannot guarantee. Run this integration file with --pool=forks
-// outside the unit shards; a one-file pool cannot be split into four shards.
+// a worker thread cannot guarantee. Run explicitly outside the unit shards:
+// pnpm --filter desktop exec vitest run src/renderer/__tests__/dateSessionGrouping.integration.test.ts --pool=forks --maxWorkers=1
+// This standalone regression is not registered in the default CI or tier runner.
 it('keeps yesterday distinct across the 23-hour DST start day', () => {
   const previousTZ = process.env.TZ;
   process.env.TZ = 'America/Los_Angeles';
