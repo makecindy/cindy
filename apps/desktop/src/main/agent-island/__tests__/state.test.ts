@@ -42,6 +42,64 @@ import {
   type AgentIslandCompanionChatProjection,
 } from '../state.js';
 
+// Unit: the user requested compact reminders with unchanged manual list access.
+// Existing tests only cover automatic cards. One terminal event / interaction is
+// enough to expose an unintended expansion, missing unread entry, or endless pulse.
+describe('subtle island reminders', () => {
+  it.each(['completed', 'error', 'needs-interaction'] as const)('keeps %s compact, then opens the full list on click', (phase) => {
+    const state = createAgentIslandState();
+    state.subtleReminders = true;
+    applyAgentIslandEvent(state, { sessionId: 'running' }, statusEvent(true, 'Working'), 900);
+    const meta = { sessionId: 'new' };
+    if (phase === 'needs-interaction') {
+      applyAgentIslandInteractionRequest(state, meta, permissionRequest('p'), 1_000);
+    } else {
+      applyAgentIslandEvent(state, meta, phase === 'completed' ? doneEvent() : terminalErrorEvent('Failed'), 1_000);
+    }
+    const compact = buildAgentIslandDisplayState(state, 1_100);
+    expect(compact).toMatchObject({ mode: 'compact', displaySurface: 'collapsed', compactReminder: { phase, until: 4_000 } });
+    expect(compact.pillSnapshot.attentionCount).toBe(1);
+
+    requestAgentIslandManualExpand(state, 7);
+    const expanded = buildAgentIslandDisplayState(state, 1_200);
+    expect(expanded).toMatchObject({ mode: 'expanded', displaySurface: 'sessionList', expandedDisplayId: 7 });
+    expect(expanded.sessions.map(session => session.sessionId).sort()).toEqual(['new', 'running']);
+    expect(expanded.compactReminder).toBeUndefined();
+    requestAgentIslandManualCollapse(state, 2_500);
+
+    const settled = buildAgentIslandDisplayState(state, 4_100);
+    expect(settled.mode).toBe('compact');
+    expect(settled.compactReminder).toBeUndefined();
+    expect(settled.pillSnapshot.attentionCount).toBe(1);
+
+  });
+
+  it('continues showing new completion hints while another task awaits input', () => {
+    const state = createAgentIslandState();
+    state.subtleReminders = true;
+    applyAgentIslandInteractionRequest(state, { sessionId: 'waiting' }, permissionRequest('p'), 1_000);
+    applyAgentIslandEvent(state, { sessionId: 'one' }, doneEvent(), 5_000);
+    applyAgentIslandEvent(state, { sessionId: 'two' }, doneEvent(), 5_100);
+    expect(buildAgentIslandDisplayState(state, 5_200).compactReminder?.phase).toBe('completed');
+    const next = buildAgentIslandDisplayState(state, 8_100);
+    expect(next).toMatchObject({ mode: 'compact', compactReminder: { phase: 'completed', until: 11_100 } });
+    expect(next.pillSnapshot.attentionCount).toBe(3);
+  });
+
+  it.each(['visible', 'muted'] as const)('does not pulse for a %s task', (suppression) => {
+    const state = createAgentIslandState();
+    state.subtleReminders = true;
+    if (suppression === 'visible') {
+      setAgentIslandAppFocused(state, true, 900);
+      setAgentIslandVisibleSession(state, 'task', 900);
+    } else {
+      setAgentIslandSessionDisplaySuppressed(state, 'task', true);
+    }
+    applyAgentIslandEvent(state, { sessionId: 'task' }, doneEvent(), 1_000);
+    expect(buildAgentIslandDisplayState(state, 1_100).compactReminder).toBeUndefined();
+  });
+});
+
 // Unit regression: the menu re-sorted the island overview on every output event.
 // Existing island ordering tests did not exercise the menu adapter. Two running
 // tasks with an older task emitting newer output are the minimal failure input.

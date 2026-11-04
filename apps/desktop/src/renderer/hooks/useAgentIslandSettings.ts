@@ -31,6 +31,7 @@ const STORAGE_KEY = 'notifications.agentIslandEnabled';
 const SOUND_STORAGE_KEY = 'notifications.agentIslandSoundSettings';
 const MASCOT_SKIN_STORAGE_KEY = 'notifications.agentIslandMascotSkin';
 const DISPLAY_TARGET_STORAGE_KEY = 'notifications.agentIslandDisplayTarget';
+const SUBTLE_REMINDERS_STORAGE_KEY = 'notifications.agentIslandSubtleReminders';
 const DEFAULT_ENABLED = false;
 
 const log = createLogger('AgentIslandSettings');
@@ -81,6 +82,40 @@ export function getAgentIslandEnabled(): boolean {
     // localStorage 不可用——退回默认。
   }
   return DEFAULT_ENABLED;
+}
+
+export function getAgentIslandSubtleReminders(): boolean {
+  try {
+    return localStorage.getItem(SUBTLE_REMINDERS_STORAGE_KEY) === 'true';
+  } catch {
+    return false;
+  }
+}
+
+async function applyAgentIslandSubtleRemindersToMain(enabled: boolean): Promise<boolean> {
+  if (!isAgentIslandSupported()) return false;
+  const apply = window.electronAPI?.agentIsland?.setSubtleReminders;
+  if (typeof apply !== 'function') return false;
+  try {
+    await apply(enabled);
+    return true;
+  } catch (err) {
+    log.warn('agent island setSubtleReminders failed', err);
+    return false;
+  }
+}
+
+export async function setAgentIslandSubtleReminders(next: boolean): Promise<boolean> {
+  const previous = getAgentIslandSubtleReminders();
+  if (!await applyAgentIslandSubtleRemindersToMain(next)) return false;
+  try {
+    localStorage.setItem(SUBTLE_REMINDERS_STORAGE_KEY, String(next));
+  } catch {
+    await applyAgentIslandSubtleRemindersToMain(previous);
+    return false;
+  }
+  notifySubscribers();
+  return true;
 }
 
 export function getAgentIslandSoundSettings(): AgentIslandSoundSettings {
@@ -250,6 +285,7 @@ export function syncAgentIslandEnabledToMain(): void {
   if (!isAgentIslandSupported()) return;
   void (async () => {
     await Promise.all([
+      applyAgentIslandSubtleRemindersToMain(getAgentIslandSubtleReminders()),
       applyAgentIslandSoundSettingsToMain(getAgentIslandSoundSettings()),
       applyAgentIslandMascotSkinToMain(getAgentIslandMascotSkin()),
       applyAgentIslandDisplayTargetToMain(getAgentIslandDisplayTarget()),
@@ -358,6 +394,8 @@ export function previewAgentIslandSound(sound: AgentIslandSoundChoice): void {
 export function useAgentIslandSettings(): {
   enabled: boolean;
   setEnabled: (next: boolean) => void;
+  subtleReminders: boolean;
+  setSubtleReminders: (next: boolean) => Promise<boolean>;
   soundSettings: AgentIslandSoundSettings;
   soundCustomized: boolean;
   mascotSkin: AgentIslandMascotSkin;
@@ -373,6 +411,7 @@ export function useAgentIslandSettings(): {
   supported: boolean;
 } {
   const [enabled, setEnabledState] = useState<boolean>(getAgentIslandEnabled);
+  const [subtleReminders, setSubtleRemindersState] = useState(getAgentIslandSubtleReminders);
   const [soundSettings, setSoundSettingsState] = useState<AgentIslandSoundSettings>(getAgentIslandSoundSettings);
   const [soundCustomized, setSoundCustomizedState] = useState<boolean>(isAgentIslandSoundSettingsCustomized);
   const [mascotSkin, setMascotSkinState] = useState<AgentIslandMascotSkin>(getAgentIslandMascotSkin);
@@ -463,6 +502,7 @@ export function useAgentIslandSettings(): {
   useEffect(() => {
     const onChange = () => {
       setEnabledState(getAgentIslandEnabled());
+      setSubtleRemindersState(getAgentIslandSubtleReminders());
       setSoundSettingsState(getAgentIslandSoundSettings());
       setSoundCustomizedState(isAgentIslandSoundSettingsCustomized());
       setMascotSkinState(getAgentIslandMascotSkin());
@@ -479,6 +519,8 @@ export function useAgentIslandSettings(): {
   return {
     enabled,
     setEnabled,
+    subtleReminders,
+    setSubtleReminders: setAgentIslandSubtleReminders,
     soundSettings,
     soundCustomized,
     mascotSkin,

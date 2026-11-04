@@ -2378,6 +2378,9 @@
     "agentIsland": {
       "title": "Isla Agent",
       "unsupported": "La isla Agent requiere macOS 14 o posterior.",
+      "subtleRemindersLabel": "Avisos discretos",
+      "subtleRemindersHint": "Cuando haya mensajes nuevos, solicitudes de respuesta o errores, el icono cambia en lugar de mostrar una tarjeta de notificación debajo de la isla. Haz clic en la isla para ver la lista completa de tareas.",
+      "subtleRemindersFailed": "No se han podido guardar los ajustes de avisos. Inténtalo de nuevo.",
       "enableLabel": "Mostrar isla Agent",
       "enableHint": "Muestra las tareas en ejecución, que necesitan respuesta y completadas no leídas en la parte superior de la pantalla. Habilitar suprime las notificaciones equivalentes del sistema para evitar alertas dobles.",
       "enableAria": "Alternar isla Agent",

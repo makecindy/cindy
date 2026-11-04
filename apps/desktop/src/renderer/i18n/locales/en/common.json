@@ -2343,6 +2343,9 @@
     "agentIsland": {
       "title": "Agent Island",
       "unsupported": "Agent Island requires macOS 14 or later.",
+      "subtleRemindersLabel": "Subtle reminders",
+      "subtleRemindersHint": "For new messages, requests for input, or errors, show changes in the icon instead of a notification card below the island. Click the island to view the full task list.",
+      "subtleRemindersFailed": "Could not save reminder settings. Please try again.",
       "enableLabel": "Show Agent Island",
       "enableHint": "Shows running, needs-reply, and unread completed tasks at the top of the display. Enabling suppresses the equivalent system notifications to avoid double alerts.",
       "enableAria": "Toggle Agent Island",

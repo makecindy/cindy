@@ -10,6 +10,8 @@ import {
 import {
   getAgentIslandDisplayTarget,
   getAgentIslandEnabled,
+  getAgentIslandSubtleReminders,
+  setAgentIslandSubtleReminders,
   getAgentIslandSoundSettings,
   isAgentIslandSoundSettingsCustomized,
   isAgentIslandSupported,
@@ -44,6 +46,24 @@ describe('agent island settings', () => {
     localStorage.clear();
     Reflect.deleteProperty(window, 'electronAPI');
     vi.restoreAllMocks();
+  });
+
+  // Unit: new local preference; existing tests do not cover its persistence or
+  // bootstrap delivery. A saved true value must reach main before the island opens.
+  it('persists subtle reminders only after main accepts them and restores them before enabling', async () => {
+    const setSubtleReminders = vi.fn(async () => ({ ok: true as const }));
+    const setEnabled = vi.fn(async () => ({ ok: true as const }));
+    installElectronApi({ setSubtleReminders, setEnabled });
+    expect(getAgentIslandSubtleReminders()).toBe(false);
+    await expect(setAgentIslandSubtleReminders(true)).resolves.toBe(true);
+    expect(getAgentIslandSubtleReminders()).toBe(true);
+    syncAgentIslandEnabledToMain();
+    await vi.waitFor(() => expect(setEnabled).toHaveBeenCalled());
+    expect(setSubtleReminders).toHaveBeenLastCalledWith(true);
+    expect(setSubtleReminders.mock.invocationCallOrder.at(-1)).toBeLessThan(setEnabled.mock.invocationCallOrder[0]);
+    setSubtleReminders.mockRejectedValueOnce(new Error('unavailable'));
+    await expect(setAgentIslandSubtleReminders(false)).resolves.toBe(false);
+    expect(getAgentIslandSubtleReminders()).toBe(true);
   });
 
   it('does not persist a disabled state when the preload API is stale', async () => {

@@ -733,6 +733,8 @@ export interface AgentIslandDisplayState {
   sessions: AgentIslandSessionSnapshot[];
   totalCount: number;
   measuredContentHeight: number;
+  /** Local presentation only; absent on older hosts. Never relayed as task activity. */
+  compactReminder?: { phase: AgentIslandSessionPhase; until: number };
   strings: AgentIslandStrings;
   soundSettings: AgentIslandSoundSettings;
   mascotSkin: AgentIslandMascotSkin;
@@ -799,6 +801,7 @@ export const AGENT_ISLAND_CONSUME_ENTRY_ALERT_CHANNEL = 'agent-island:consume-en
 export const AGENT_ISLAND_SET_ENABLED_CHANNEL = 'agent-island:set-enabled';
 export const AGENT_ISLAND_SET_SOUND_SETTINGS_CHANNEL = 'agent-island:set-sound-settings';
 export const AGENT_ISLAND_SET_MASCOT_SKIN_CHANNEL = 'agent-island:set-mascot-skin';
+export const AGENT_ISLAND_SET_SUBTLE_REMINDERS_CHANNEL = 'agent-island:set-subtle-reminders';
 export const AGENT_ISLAND_SET_DISPLAY_TARGET_CHANNEL = 'agent-island:set-display-target';
 export const AGENT_ISLAND_GET_DISPLAY_OPTIONS_CHANNEL = 'agent-island:get-display-options';
 export const AGENT_ISLAND_PREVIEW_SOUND_CHANNEL = 'agent-island:preview-sound';

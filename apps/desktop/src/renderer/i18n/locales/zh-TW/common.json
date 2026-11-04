@@ -2313,6 +2313,9 @@
     "agentIsland": {
       "title": "靈動島",
       "unsupported": "靈動島需要 macOS 14 或更高版本。",
+      "subtleRemindersLabel": "輕提醒",
+      "subtleRemindersHint": "有新訊息、待回覆事項或錯誤時，不向下彈出通知卡片，透過圖示變化提示。點擊靈動島可查看完整任務清單。",
+      "subtleRemindersFailed": "無法儲存提醒設定，請重試。",
       "enableLabel": "顯示靈動島",
       "enableHint": "在螢幕頂部顯示正在執行、待互動和未讀完成的任務。啟用後會抑制同類系統通知，避免重複打擾。",
       "enableAria": "切換靈動島",

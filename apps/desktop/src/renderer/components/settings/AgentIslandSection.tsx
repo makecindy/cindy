@@ -187,6 +187,8 @@ export function AgentIslandSection() {
   const {
     enabled,
     setEnabled,
+    subtleReminders,
+    setSubtleReminders,
     soundSettings,
     soundCustomized,
     mascotSkin,
@@ -204,6 +206,15 @@ export function AgentIslandSection() {
   const { t } = useTranslation();
   const [animationSteps, setAnimationSteps] = useState<MascotAnimationSteps>(DEFAULT_MASCOT_ANIMATION_STEPS);
   const [soundResetPending, setSoundResetPending] = useState(false);
+  const [subtleRemindersPending, setSubtleRemindersPending] = useState(false);
+  const handleSubtleRemindersChange = async (next: boolean) => {
+    setSubtleRemindersPending(true);
+    try {
+      if (!await setSubtleReminders(next)) toast.error(t('settings.agentIsland.subtleRemindersFailed'));
+    } finally {
+      setSubtleRemindersPending(false);
+    }
+  };
   const displayOptionLabels = useMemo(() => {
     return new Map(displayOptions.map((option) => {
       const resolution = `${Math.round(option.bounds.width)} x ${Math.round(option.bounds.height)}`;
@@ -290,6 +301,22 @@ export function AgentIslandSection() {
 
       {enabled && (
         <>
+          <SettingsCard className="flex items-center justify-between gap-3">
+            <div className="flex min-w-0 flex-col gap-1">
+              <p id="settings-search-settings-agentIsland-subtleRemindersLabel" className="text-13 font-medium text-[var(--settings-section-sublabel)]">
+                {t('settings.agentIsland.subtleRemindersLabel')}
+              </p>
+              <p className="text-12 leading-[1.4] text-[var(--text-secondary)]">
+                {t('settings.agentIsland.subtleRemindersHint')}
+              </p>
+            </div>
+            <Switch
+              checked={subtleReminders}
+              disabled={subtleRemindersPending}
+              onCheckedChange={handleSubtleRemindersChange}
+              aria-label={t('settings.agentIsland.subtleRemindersLabel')}
+            />
+          </SettingsCard>
           <SettingsCard className="flex flex-col gap-3">
             <div className="flex min-w-0 flex-col gap-1">
               <p id="settings-search-settings-agentIsland-displayLabel" className="text-13 font-medium text-[var(--settings-section-sublabel)]">

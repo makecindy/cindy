@@ -16,6 +16,7 @@ import {
   AGENT_ISLAND_PREVIEW_SOUND_CHANNEL,
   AGENT_ISLAND_SET_DISPLAY_TARGET_CHANNEL,
   AGENT_ISLAND_SET_MASCOT_SKIN_CHANNEL,
+  AGENT_ISLAND_SET_SUBTLE_REMINDERS_CHANNEL,
   AGENT_ISLAND_SET_REMOTE_SESSIONS_CHANNEL,
   AGENT_ISLAND_SET_COMPANION_CHATS_CHANNEL,
   AGENT_ISLAND_READ_COMPANION_CHAT_CHANNEL,
@@ -3271,6 +3272,27 @@ describe('AgentIslandService native publishing', () => {
       path: '/tmp/agent-island.wav',
       name: 'agent-island.wav',
     });
+  });
+
+  // Unit: new presentation IPC must reject bad senders/values and deliver compact
+  // reminders to the native host; previous settings tests do not exercise this path.
+  it('accepts subtle reminders only from the app and preserves automatic cards when disabled', async () => {
+    const { AgentIslandService } = await import('../service.js');
+    const publish = vi.fn((state: AgentIslandDisplayState) => { void state; return true; });
+    const service = new AgentIslandService({ getMainWindow: () => null,
+      nativeHost: { failed: false, publish } });
+    syncEnabledForTest(service, publish);
+    service.registerIpc();
+    const set = registeredIpcHandler(AGENT_ISLAND_SET_SUBTLE_REMINDERS_CHANNEL);
+    expect(() => set({}, 'true')).toThrow('INVALID_PARAMS');
+    mocks.assertTrustedAppRendererEvent.mockImplementationOnce(() => { throw new Error('[PERMISSION_DENIED] Untrusted renderer'); });
+    expect(() => set({}, true)).toThrow('PERMISSION_DENIED');
+    set({}, true);
+    service.handleAgentEvent({ sessionId: 'subtle' }, doneEvent());
+    expect(publish.mock.calls.at(-1)?.[0]).toMatchObject({ mode: 'compact', compactReminder: { phase: 'completed' } });
+    set({}, false);
+    expect(publish.mock.calls.at(-1)?.[0]).toMatchObject({ mode: 'expanded', displaySurface: 'completionCard' });
+    expect(publish.mock.calls.at(-1)?.[0].compactReminder).toBeUndefined();
   });
 
   it('publishes the selected mascot skin through native state', async () => {
