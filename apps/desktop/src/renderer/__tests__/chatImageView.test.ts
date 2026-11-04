@@ -318,6 +318,8 @@ describe('ChatImageView', () => {
     expect(screen.getByAltText('local.png').getAttribute('src')).toBe('xdt-image://images/near.png');
     expect(observers).toHaveLength(1);
     expect(observers[0].options?.root).toBe(scroller);
+    // Three viewport heights of the scroller, in pixels (rootMargin % would follow its width).
+    expect(observers[0].options?.rootMargin).toBe('2700px 0px');
     // Sharing before the user scrolled there still includes the image.
     expect(prepareShareMessageClone(container)?.querySelector('img[alt="far.png"]')?.getAttribute('src')).toBe(remote);
 

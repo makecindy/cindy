@@ -11,11 +11,11 @@ import { REMOTE_MEDIA_SCHEME } from '@/../shared/remoteMediaUrl';
 
 /**
  * How far outside the scroll viewport an image from another computer starts
- * loading: three viewport heights above and below. Generous on purpose, so
+ * loading, in viewport heights above and below. Generous on purpose, so
  * switching back to a task or scrolling normally finds images already there;
  * only images far away wait instead of all competing for the device link.
  */
-const REMOTE_PRELOAD_MARGIN = '300% 0px';
+const REMOTE_PRELOAD_VIEWPORTS = 3;
 
 /** Keep a visible frame until the browser has received and decoded the image. */
 export function ChatLoadingImage(props: ComponentProps<'img'>) {
@@ -23,7 +23,7 @@ export function ChatLoadingImage(props: ComponentProps<'img'>) {
   return <ImageLoad key={props.src} {...props} />;
 }
 
-/** The nearest ancestor that actually scrolls vertically; the margin is relative to it. */
+/** The nearest ancestor that actually scrolls vertically; the margin follows its height. */
 function scrollRootOf(element: HTMLElement): HTMLElement | null {
   for (let node = element.parentElement; node; node = node.parentElement) {
     const { overflowY } = getComputedStyle(node);
@@ -48,13 +48,16 @@ function useNearScrollViewport(defer: boolean) {
       setNear(true);
       return;
     }
+    const root = scrollRootOf(placeholder);
+    // rootMargin percentages resolve against the root's width, so use pixels.
+    const preload = Math.round(REMOTE_PRELOAD_VIEWPORTS * (root?.clientHeight ?? window.innerHeight));
     const observer = new IntersectionObserver(
       (entries) => {
         if (!entries.some((entry) => entry.isIntersecting)) return;
         observer.disconnect();
         setNear(true);
       },
-      { root: scrollRootOf(placeholder), rootMargin: REMOTE_PRELOAD_MARGIN },
+      { root, rootMargin: `${preload}px 0px` },
     );
     observer.observe(placeholder);
     return () => observer.disconnect();
