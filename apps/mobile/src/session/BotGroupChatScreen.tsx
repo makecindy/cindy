@@ -99,6 +99,8 @@ import { BotGroupMessageAttachments } from './BotGroupMessageAttachments';
 import { MessageListVisibilityContext, useScrollViewMessageVisibility } from './messageListVisibility';
 import { BotGroupTaskCard } from './BotGroupTaskCard';
 import { BotGroupMarkdownText, BotGroupUserText } from './BotGroupMessageText';
+import { BotGroupMentionIdentity } from './BotGroupMentionIdentity';
+import { botGroupMentionDisplayName, type BotGroupMentionContext } from './botGroupMentions';
 import { BotGroupQuote } from './BotGroupQuote';
 import {
   BOT_GROUP_COMPACT_HIT_SLOP,
@@ -877,7 +879,11 @@ export function BotGroupTimeline({
   const timeGroups = collectBotMessageTimeGroups(messages.map((message) => ({ clientId: message.id, createdAt: message.createdAt })));
   const allLabel = t('groupChat.mention.all');
   const allBotsLabel = t('groupChat.mention.allBots');
-  const mentionLabels = useMemo(() => [allLabel, allBotsLabel, ...group.members.map((member) => member.name)], [allLabel, allBotsLabel, group.members]);
+  const mentionLabels = useMemo(() => [allLabel, allBotsLabel, ...group.members.flatMap(member =>
+    [member.name, botGroupMentionDisplayName(member), member.nickname || member.displayName || member.name])], [allLabel, allBotsLabel, group.members]);
+  const [mentioned, setMentioned] = useState<{ groupId: string; botId: string } | null>(null);
+  const mentionedMember = mentioned?.groupId === group.id ? group.members.find(member => member.botId === mentioned.botId) ?? null : null;
+  useEffect(() => { if (mentioned && !mentionedMember) setMentioned(null); }, [mentioned, mentionedMember]);
   const running = !threadRootId && group.round.status === 'running';
   const memberById = new Map(group.members.map((member) => [member.botId, member]));
   const pendingFor = (planId: string | null) => planId && planPending?.planId === planId ? planPending.action : null;
@@ -944,6 +950,8 @@ export function BotGroupTimeline({
           quoteDisplay={message.quote ? resolveBotGroupQuote(message.quote, messages) : undefined}
           onLocateQuote={message.quote && onLocateMessage ? () => onLocateMessage(message.quote!.messageId) : undefined}
           members={group.members} deviceId={deviceId} online={online} identityFor={identityFor} mentionLabels={mentionLabels}
+          mentionContext={{ members: group.members, mentions: message.mentions, serverBacked: !!group.serverBacked,
+            allLabel, labels: mentionLabels, onPress: member => setMentioned({ groupId: group.id, botId: member.botId }) }}
           resolveMedia={resolveMedia} resolveServerMedia={resolveServerMedia}
           canContinue={message.id === continueId} continuing={continuing} onContinue={onContinue}
           plan={message.planId ? planById.get(message.planId) : undefined}
@@ -969,6 +977,7 @@ export function BotGroupTimeline({
 
       </View>;
     })}
+    <BotGroupMentionIdentity member={mentionedMember} deviceId={deviceId} onClose={() => setMentioned(null)} />
     {!threadRootId && !group.archived && !group.dissolvedAt && openPlan && openPlan.canManage !== false && followUp ? <View style={styles.indented}>
       <BotGroupPlanFollowUpRow followUp={followUp} identityFor={identityFor} deviceId={deviceId} online={online}
         stepNumber={openPlan.steps.indexOf(followUp.kind === 'continue' ? followUp.next : followUp.failed) + 1} stepTotal={openPlan.steps.length}
@@ -981,7 +990,7 @@ export function BotGroupTimeline({
 }
 
 function BotGroupTimelineItem({
-  groupId, message, footer, topic = false, isRoot = false, onRetrySource, continued = false, quoteDisplay, onLocateQuote, member, members, deviceId, online, identityFor, mentionLabels, resolveMedia, resolveServerMedia, canContinue, continuing, onContinue,
+  groupId, message, footer, topic = false, isRoot = false, onRetrySource, continued = false, quoteDisplay, onLocateQuote, member, members, deviceId, online, identityFor, mentionLabels, mentionContext, resolveMedia, resolveServerMedia, canContinue, continuing, onContinue,
   plan, planActionable, planReassignable, planPending, onPlanAction, onEditStep,
 }: {
   groupId: string;
@@ -1000,6 +1009,7 @@ function BotGroupTimelineItem({
   online: boolean;
   identityFor: BotGroupIdentityLookup;
   mentionLabels: readonly string[];
+  mentionContext: BotGroupMentionContext;
   resolveMedia: ResolveRemoteMediaFn;
   resolveServerMedia?: (id: string, signal?: AbortSignal) => Promise<BotGroupAttachment>;
   canContinue: boolean;
@@ -1063,7 +1073,7 @@ function BotGroupTimelineItem({
             {quoteDisplay ? <View style={styles.userQuote}>
               <BotGroupQuote display={quoteDisplay} onPress={onLocateQuote} />
             </View> : null}
-            {content.trim() ? <BotGroupUserText content={content} mentionLabels={mentionLabels} /> : null}
+            {content.trim() ? <BotGroupUserText content={content} mentionLabels={mentionLabels} mentionContext={mentionContext} /> : null}
           </View> : null}
         </View>
         {shareFooter}{footer}
@@ -1108,7 +1118,7 @@ function BotGroupTimelineItem({
           <View style={styles.botMessageContent}>
             {renderAttachments('left')}
             {message.threadShare && !authoredShare ? <BotGroupThreadShare onRetry={onRetrySource} share={message.threadShare} resolveMedia={resolveMedia} resolveServerMedia={resolveServerMedia} />
-              : content.trim() ? <BotGroupMarkdownText content={content} authorKind={message.authorKind} /> : null}
+              : content.trim() ? <BotGroupMarkdownText content={content} authorKind={message.authorKind} mentionContext={mentionContext} /> : null}
           </View>
           <BotGroupHandoffFiles files={message.files} />
           {shareFooter}

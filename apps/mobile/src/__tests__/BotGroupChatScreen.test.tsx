@@ -57,7 +57,8 @@ vi.mock('@/session/ConversationShareWebView', () => ({ cleanupConversationShareP
 vi.mock('expo-sharing', () => ({ shareAsync: h.sharedImage }));
 vi.mock('expo-clipboard', () => ({ setStringAsync: vi.fn(async () => {}) }));
 vi.mock('react-native-uitextview', () => ({
-  UITextView: ({ children, testID }: any) => el('span', { 'data-testid': testID }, children),
+  UITextView: ({ children, testID, onPress, style }: any) => el('span', { 'data-testid': testID, onClick: onPress,
+    'data-style': JSON.stringify(Object.assign({}, ...[style].flat(Infinity).filter(Boolean))) }, children),
 }));
 vi.mock('expo-modules-core', () => ({ requireOptionalNativeModule: () => null }));
 vi.mock('expo-file-system', () => ({ Directory: class {}, File: class {}, Paths: { cache: 'file:///test-cache' } }));
@@ -181,6 +182,7 @@ vi.mock('@/session/CompanionSheet', () => ({
     const was = useRef(visible);
     useEffect(() => { if (was.current && !visible) onClosed?.(); was.current = visible; }, [visible]);
     return visible ? el('div', { 'data-testid': testID, 'data-prevent-dismiss': String(!!preventDismiss) },
+      el('button', { 'data-testid': `${testID}.close`, onClick: onClose }, 'Close'),
       onBack ? el('button', { 'data-testid': `${testID}.back`, onClick: onBack }) : null,
       trailingAction ? el('button', { 'data-testid': trailingAction.testID, disabled: trailingAction.disabled || trailingAction.busy, onClick: trailingAction.onPress }, trailingAction.label) : null,
       children, footer) : null;
@@ -380,6 +382,31 @@ beforeEach(() => {
 afterEach(async () => { await act(async () => root.unmount()); vi.useRealTimers(); });
 
 describe('group timeline', () => {
+  // A01 / unit: real screen -> sent mention -> public identity -> close. Existing
+  // composer tests never exercised sent-text taps; minimal failure is @咪咪.
+  it.each([[true, false], [false, false], [true, true]])('opens the named member from sent text (own=%s, topic=%s) and returns to the message', async (own, topic) => {
+    const data = group({ serverBacked: true, messages: [message('mention', 1, {
+      authorKind: 'user', isSelf: own, content: '@咪咪 看看这段正文', mentions: { all: false, botIds: ['mimi'] }, threadRootId: topic ? 'topic-root' : undefined,
+    })] });
+    data.members[0] = { ...data.members[0]!, actorKind: 'bot', ownerName: '王悦', nickname: '咪咪', displayName: 'Cindy', status: 'paused' };
+    if (topic) {
+      data.messages.unshift(message('topic-root', 0, { content: '话题根消息' }));
+      h.chat = { ...h.chat, server: true };
+    }
+    // Topics are supported by the direct Chat Server route; the computer projection intentionally rejects them.
+    await render(topic ? data : parseBotGroupChatData(data)!, 'ready', topic ? 'topic-root' : undefined, topic ? '' : 'mac');
+    const mention = [...node.querySelectorAll('span')].find(span => span.textContent === '@咪咪')!;
+    expect(mention).toBeDefined();
+    expect(JSON.parse(mention.getAttribute('data-style')!).textDecorationLine).toBe('underline');
+    await act(async () => mention.click());
+    expect(byId('botGroup.mention.identity')?.textContent).toContain('Cindy');
+    expect(byId('botGroup.mention.identity')?.textContent).toContain('groupChat.memberStatus.paused');
+    expect(h.chat.act).not.toHaveBeenCalled();
+    await click('botGroup.mention.identity.close');
+    expect(byId('botGroup.mention.identity')).toBeNull();
+    expect(node.textContent).toContain('@咪咪 看看这段正文');
+  });
+
   it('shows a 引用回复 block from the loaded original, and only the author once it is deleted', async () => {
     // Server message ids are UUIDs; the parser rejects a quote that points at anything else.
     const originalId = '11111111-1111-4111-8111-111111111111';

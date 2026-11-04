@@ -8,10 +8,10 @@ vi.mock('react-native', async () => {
   const React = await import('react');
   const flat = (style: unknown): Record<string, unknown> =>
     Object.assign({}, ...[style].flat(Infinity).filter(Boolean));
-  const host = (tag: string) => ({ children, style, horizontal, onLayout, testID, selectable }: any) => {
+  const host = (tag: string) => ({ children, style, horizontal, onLayout, testID, selectable, onPress }: any) => {
     React.useEffect(() => { onLayout?.({ nativeEvent: { layout: { width: 280 } } }); }, [onLayout]);
     return React.createElement(tag, { 'data-style': JSON.stringify(flat(style)),
-      'data-horizontal': horizontal, 'data-testid': testID, 'data-selectable': selectable }, children);
+      'data-horizontal': horizontal, 'data-testid': testID, 'data-selectable': selectable, onClick: onPress }, children);
   };
   return {
     View: host('div'),
@@ -26,9 +26,9 @@ vi.mock('@/components/AppText', async () => ({ Text: (await import('react-native
 vi.mock('react-native-uitextview', async () => {
   const React = await import('react');
   const { StyleSheet } = await import('react-native');
-  return { UITextView: ({ children, uiTextView, selectable, style }: any) => React.createElement('span', {
+  return { UITextView: ({ children, uiTextView, selectable, style, onPress }: any) => React.createElement('span', {
     'data-uitextview': uiTextView ? 'root' : 'span', 'data-selectable': selectable,
-    'data-style': JSON.stringify(StyleSheet.flatten(style) ?? {}),
+    'data-style': JSON.stringify(StyleSheet.flatten(style) ?? {}), onClick: onPress,
   }, children) };
 });
 vi.mock('@/session/SelectionMenuText', async () => ({ SelectionMenuText: (await import('react-native')).Text }));
@@ -178,4 +178,50 @@ it.each(['ios', 'android'])('uses system partial-selection text for formatted gr
   } finally {
     Platform.OS = 'ios';
   }
+});
+
+// A01 / unit: production sent body must resolve ids before exposing a touch action.
+// Existing selection tests cover carriers only. Minimal failure: @Ann with one
+// explicit id; namesakes, broadcasts and email/code must never open the wrong person.
+it.each(['ios', 'android'])('keeps mention identity and text boundaries on %s', async platform => {
+  const { Platform } = await import('react-native');
+  Platform.OS = platform as typeof Platform.OS;
+  const member = (botId: string, name: string) => ({ botId, name, avatar: '', avatarColor: '', status: 'active' as const });
+  const ann = member('ann-1', 'Ann');
+  const other = member('ann-2', 'Ann');
+  const reserved = member('all', '所有人');
+  const onPress = vi.fn();
+  const context = { members: [ann, other, reserved], mentions: { all: false, botIds: ['ann-1'] },
+    serverBacked: false, allLabel: '所有人', labels: ['Ann', '所有人', '所有伙伴'], onPress };
+  const renderBody = async (content: string, changes = {}) => {
+    await act(async () => root.render(createElement(BotGroupUserText, {
+      content, mentionLabels: context.labels, mentionContext: { ...context, ...changes },
+    })));
+  };
+  const links = () => [...node.querySelectorAll('span')].filter(span => JSON.parse(span.getAttribute('data-style') ?? '{}').textDecorationLine === 'underline');
+  try {
+    await renderBody('@Ann mail@Ann.test @Anna @Unknown 正文');
+    expect(links().map(span => span.textContent)).toEqual(['@Ann']);
+    await act(async () => links()[0]!.click());
+    expect(onPress).toHaveBeenLastCalledWith(ann);
+    expect(node.textContent).toBe('@Ann mail@Ann.test @Anna @Unknown 正文');
+    await renderBody('@Ann', { mentions: { all: false, botIds: ['ann-1', 'ann-2'] } });
+    expect(links()).toHaveLength(0);
+    await renderBody('@Ann', { serverBacked: true, mentions: { all: false, botIds: [] } });
+    expect(links()).toHaveLength(0); // Server fallback still refuses namesakes.
+    await renderBody('@Ann', { members: [ann], serverBacked: true, mentions: { all: false, botIds: [] } });
+    expect(links()).toHaveLength(1);
+    await renderBody('@Ann', { members: [] });
+    expect(links()).toHaveLength(0); // Departed/unknown target.
+    await renderBody('@所有人 @所有伙伴', { mentions: { all: true, allBots: true, botIds: [] } });
+    expect(links()).toHaveLength(0);
+    await renderBody('@所有人', { mentions: { all: false, botIds: ['all'] } });
+    expect(links()).toHaveLength(1); // Explicitly picked namesake is a person, as on PC.
+    await act(async () => root.render(createElement(BotGroupMarkdownText, {
+      content: '**@Ann** `@Ann` [website](https://example.test)\n\n~~~text\n@Ann\n~~~', mentionContext: context,
+    })));
+    expect(links().map(span => span.textContent)).toEqual(['@Ann']);
+    expect(JSON.parse(links()[0]!.getAttribute('data-style')!).fontWeight).toBe('600');
+    expect(styleOf('website').textDecorationLine).toBeUndefined();
+  } finally { Platform.OS = 'ios'; }
 });
