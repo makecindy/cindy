@@ -8,6 +8,23 @@ import { REMOTE_AGENT_CHANNEL, PROVIDER_GROUP_REMOTE_CHANNEL, type Envelope, typ
 const identity = vi.hoisted(() => ({ owner: 'owner-a:1', endpoint: 'https://a.invalid', pending: false }));
 vi.mock('../../appSessionState.js', () => ({ activeOwnerScopeKey: () => identity.owner, isAppSessionBoundaryPending: () => identity.pending }));
 vi.mock('../../clientEndpointsService.js', () => ({ getClientEndpoint: () => identity.endpoint }));
+// Load only the real SDK submodules this Main metadata chain uses. The SDK root
+// index also assembles client/routedClient/direct/remoteDesktop runtime that these
+// tests never execute; this facade keeps reader/error/constants real.
+vi.mock('@cindy/device-link', async () => {
+  const [metadata, group, remoteAgent] = await Promise.all([
+    import('../../../../../../packages/device-link/src/metadataContinuity.js'),
+    import('../../../../../../packages/device-link/src/providerGroup.js'),
+    import('../../../../../../packages/device-link/src/remoteAgent.js'),
+  ]);
+  return {
+    MetadataContinuityReader: metadata.MetadataContinuityReader,
+    readProviderMetadataContinuity: metadata.readProviderMetadataContinuity,
+    isProviderAccessDeniedError: metadata.isProviderAccessDeniedError,
+    PROVIDER_GROUP_REMOTE_CHANNEL: group.PROVIDER_GROUP_REMOTE_CHANNEL,
+    REMOTE_AGENT_CHANNEL: remoteAgent.REMOTE_AGENT_CHANNEL,
+  };
+});
 import { invokeProviderMetadataContinuity as read, invalidateProviderMetadataContinuity as invalidate,
   invalidateProviderDirectoryContinuity, isTemporaryProviderMetadataFailure,
   readProviderDirectoryContinuity, captureProviderMetadataContinuityScope, onProviderDirectoryDenied, onProviderMetadataDenied,

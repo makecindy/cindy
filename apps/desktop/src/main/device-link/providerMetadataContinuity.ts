@@ -293,6 +293,18 @@ function isDeniedError(error: unknown): boolean {
   return isProviderAccessDeniedError(error) || status === 401 || status === 403;
 }
 
+/** A single directory resource reached its own budget; this is not a target permission event. */
+class ProviderMetadataBudgetExpiredError extends Error {
+  readonly code = 'MODEL_VISIBILITY_NOT_READY';
+  constructor() {
+    super('[MODEL_VISIBILITY_NOT_READY] Provider directory snapshot expired');
+    this.name = 'ProviderMetadataBudgetExpiredError';
+  }
+}
+function isProviderMetadataBudgetExpired(error: unknown): boolean {
+  return error instanceof ProviderMetadataBudgetExpiredError;
+}
+
 function notifyTargetDenial(target: string, resource: string): void {
   const duplicate = denialMarked(target, resource);
   fenceTarget(target);
@@ -435,9 +447,9 @@ export async function invokeProviderMetadataContinuity(
           requestedAt.mono + forwarded.remainingMs - performance.now(),
         );
         if (remainingMs <= 0) {
-          invalidateProviderMetadataContinuity(target, { keepDenialNotifications: true });
-          throw Object.assign(new Error('[MODEL_VISIBILITY_NOT_READY] Provider directory snapshot expired'),
-            { code: 'MODEL_VISIBILITY_NOT_READY' });
+          // Fence local live-read siblings, but do not advance a registered target's permission epoch.
+          invalidateLiveFences(target);
+          throw new ProviderMetadataBudgetExpiredError();
         }
         if (!forwarded.stale) clearDenialMark(target, resource, channel, value);
         return { ...result, result: { ...value, providerContinuity: {
@@ -468,7 +480,7 @@ export async function invokeProviderMetadataContinuity(
         }
         const forwarded = readProviderMetadataContinuity(result.result);
         if (forwarded && forwarded.remainingMs <= 0) {
-          throw Object.assign(new Error('[MODEL_VISIBILITY_NOT_READY] Provider directory snapshot expired'), { code: 'MODEL_VISIBILITY_NOT_READY' });
+          throw new ProviderMetadataBudgetExpiredError();
         }
         return result.result;
       } catch (error) {
@@ -494,7 +506,8 @@ export async function invokeProviderMetadataContinuity(
         || (value as { providerContinuity?: { stale?: unknown } }).providerContinuity?.stale === true,
       remainingMs: result.remainingMs } } : value };
   } catch (error) {
-    if (capturedScope.current() && !isTemporaryProviderMetadataFailure(error)) {
+    if (capturedScope.current() && !isProviderMetadataBudgetExpired(error)
+      && !isTemporaryProviderMetadataFailure(error)) {
       invalidateProviderMetadataContinuity(target, { keepDenialNotifications: true });
     }
     if (failure) return failure;

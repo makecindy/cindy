@@ -11,6 +11,7 @@ import type { DeviceLinkDeviceView } from '../../../shared/deviceLinkIpc';
 import {
   normalizeProviderGroupConfig,
   parseProviderGroupRemoteRequest,
+  parseProviderGroupRemoteView,
   parseProviderGroupRemoteSessionGroup,
   providerGroupUsageRowsForWire,
   PROVIDER_GROUP_REMOTE_MAX_USAGE_ROWS,
@@ -33,7 +34,7 @@ import {
 } from '../remoteHandler';
 import { createProviderGroupDirectory, type ProviderGroupDirectory } from '../directory';
 import { readDeviceProviderCatalog } from '../../remote-agent/controller/deviceCatalog';
-import { invokeProviderMetadataContinuity } from '../../device-link/providerMetadataContinuity';
+import { captureProviderMetadataContinuityScope, invokeProviderMetadataContinuity } from '../../device-link/providerMetadataContinuity';
 import {
   createProviderGroupRouter,
   PROVIDER_GROUP_DEFAULT_COOLDOWN_MS,
@@ -41,6 +42,8 @@ import {
   type ProviderGroupPickInput,
   type ProviderGroupRouter,
 } from '../router';
+import { createGroupContinuityClient } from '../continuityClient';
+import { createGroupContinuityExecutor } from '../continuityExecutor';
 
 vi.mock('../../clientEndpointsService.js', () => ({ getClientEndpoint: () => 'https://fixture.invalid' }));
 
@@ -65,6 +68,7 @@ vi.mock('@cindy/device-link', async () => {
     PROVIDER_RUNNING_TURNS_FIELD: group.PROVIDER_RUNNING_TURNS_FIELD,
     encodeReliableFrames: transport.encodeReliableFrames,
     isProviderAccessDeniedError: metadata.isProviderAccessDeniedError,
+    isScopedPeer: protocol.isScopedPeer,
     readProviderMetadataContinuity: metadata.readProviderMetadataContinuity,
     readProviderRunningTurns: group.readProviderRunningTurns,
     readProviderShareGuestRunning: share.readProviderShareGuestRunning,
@@ -795,5 +799,167 @@ describe('sharedProviderGroupSize', () => {
     };
     // 本机 + Mini(两个账号) + Kai 的那台(两个分享) = 3 台。
     expect(sharedProviderGroupSize({ readGroup: () => config, isRemoteAllowed: () => true }, 'anthropic')).toBe(3);
+  });
+});
+
+
+describe('O1 directory budget expiry stays resource-local', () => {
+  function o1Provider(): ProviderView {
+    return { id: 'openai', name: 'OpenAI', agents: ['codex'], connected: true,
+      remoteInvocationEnabled: true, models: { codex: [] }, routing: { codex: {} } } as unknown as ProviderView;
+  }
+
+  function o1Member(agentDeviceId: string) {
+    return { key: 'device:' + agentDeviceId + ':openai', kind: 'device' as const,
+      agentDeviceId, providerId: 'openai' };
+  }
+
+  function o1Config(...ids: string[]): ProviderGroupConfig {
+    return normalizeProviderGroupConfig({ strategy: 'least', autoSwitch: true, allowFast: false,
+      members: ids.map(id => ({ kind: 'device', agentDeviceId: id, providerId: 'openai' })) }, 'openai')!;
+  }
+
+  function o1Device(agentDeviceId: string): DeviceLinkDeviceView {
+    return { deviceId: agentDeviceId, name: agentDeviceId, platform: 'darwin', appVersion: '1.0.0',
+      lastSeenAt: null, online: true, busy: false, remoteControlEnabled: true, controlEnabled: true, isSelf: false };
+  }
+
+  function o1Directory(a: string, b: string, config: ProviderGroupConfig) {
+    const clock = { wall: 0, mono: 0 };
+    const now = () => clock.wall;
+    const mono = () => clock.mono;
+    const reads = new Map<string, number>();
+    const transport = vi.fn(async (deviceId: string, channel: string) => {
+      if (channel !== 'maker:provider:list') throw new Error('unexpected channel ' + channel);
+      reads.set(deviceId, (reads.get(deviceId) ?? 0) + 1);
+      const remainingMs = deviceId === a ? 1_000 : 2_000;
+      return { ok: true as const, result: { providers: [o1Provider()],
+        providerContinuity: { stale: false, remainingMs } } };
+    });
+    const directoryInvoke = (deviceId: string, channel: string, args: unknown[]) =>
+      invokeProviderMetadataContinuity(deviceId, channel, args, () => transport(deviceId, channel), () => true);
+    const directory = createProviderGroupDirectory({
+      listLocalProviders: async () => [], localDeviceName: () => 'O', localAppVersion: () => '1.0.0',
+      listDevices: async () => [o1Device(a), o1Device(b)],
+      readDeviceProviders: async () => { throw new Error('array reader should not be used'); },
+      readDeviceProviderCatalog: (agentDeviceId, options) => readDeviceProviderCatalog(
+        directoryInvoke, agentDeviceId, { groupMember: true, ...options }),
+      listReceivedShares: () => [], isMobilePlatform: () => false, now, mono,
+    });
+    const router = createProviderGroupRouter({ directory, readGroup: () => config,
+      listBindings: () => ({}), isTurnRunning: () => false, now, random: () => 0 });
+    const externalLoad = createProviderGroupExternalLoad({ now });
+    const view = async () => handleProviderGroupRemote({ scope: () => ({ router, externalLoad, isCurrent: () => true }),
+      readGroup: () => config, isRemoteAllowed: () => true, now,
+      replaceReportedUsage: () => undefined, sessionGroup: async () => null }, 'C', { action: 'view', providerId: 'openai' });
+    return { clock, reads, directory, view };
+  }
+
+  async function o1Client(owner: string, executor: string, config: ProviderGroupConfig) {
+    const grant = { id: 'grant-' + executor, group: 'openai', controller: 'C', providerId: 'openai',
+      agentKind: 'codex' as const, model: 'model', fastPolicyRequired: false, remainingMs: 1_500 };
+    const m = createGroupContinuityExecutor({
+      capture: (origin, controller) => {
+        const o = captureProviderMetadataContinuityScope(origin);
+        const c = captureProviderMetadataContinuityScope(controller);
+        return () => o() && c();
+      },
+      inspect: async () => ({ running: 0, fastPolicyRequired: false }),
+      bindFast: async () => undefined, wall: () => 0, mono: () => 0,
+    });
+    const ack = await m.handle(owner, { action: 'continuity-prepare', grant });
+    if (!('remainingMs' in ack)) throw new Error('fixture prepare did not ack');
+    let ownerMayRespond = true;
+    let ownerOnline = true;
+    const inspectAdmit = vi.fn<ProviderGroupRemoteInvoke>(async (_deviceId, channel, args, options) => {
+      options?.preSend?.();
+      if (channel !== PROVIDER_GROUP_REMOTE_CHANNEL) throw new Error('unexpected channel');
+      return { ok: true, result: await m.handle('C', args[0]) };
+    });
+    const pick = createGroupContinuityClient({
+      livePick: async () => {
+        if (!ownerOnline) throw Object.assign(new Error('[NOT_CONNECTED] owner offline'), { code: 'NOT_CONNECTED' });
+        return { kind: 'member', member: o1Member(executor), label: executor,
+          continuity: { id: ack.id, remainingMs: ack.remainingMs, config } };
+      },
+      invoke: inspectAdmit,
+      capture: (ownerDeviceId, executorDeviceId) => {
+        const ownerScope = captureProviderMetadataContinuityScope(ownerDeviceId);
+        const executorScope = executorDeviceId ? captureProviderMetadataContinuityScope(executorDeviceId) : () => false;
+        return () => ownerScope() && executorScope();
+      },
+      scopeKey: () => 'o1-scope:' + owner,
+      ownerMayRespond: () => ownerMayRespond,
+      retryable: error => (error as { code?: string }).code === 'NOT_CONNECTED',
+      wall: () => 0, mono: () => 0,
+    });
+    const input = { providerId: 'openai', agentKind: 'codex' as const, model: 'model', exclude: [] as string[] };
+    return { pick, inspectAdmit, config, owner, executor, grant,
+      setOwnerMayRespond: (value: boolean) => { ownerMayRespond = value; },
+      setOwnerOnline: (value: boolean) => { ownerOnline = value; },
+      task: (sessionId: string) => pick.pick(owner, { ...input, sessionId, allowOffline: true }) };
+  }
+
+  function o1PositiveBudget(entry: { providerContinuity?: { stale?: boolean; remainingMs?: number } } | undefined) {
+    return entry?.providerContinuity?.stale === false && (entry.providerContinuity.remainingMs ?? 0) > 900;
+  }
+
+  it('expires A without invalidating O or the healthy B ACK and offline fallback', async () => {
+    const A = 'o1-a', B = 'o1-b', O = 'o1-o', D = 'o1-d';
+    const config = o1Config(A, B);
+    const f = o1Directory(A, B, config);
+    await f.directory.resolveMembers('openai', config);
+    const first = await f.directory.resolveMembers('openai', config);
+    expect(f.reads.get(A)).toBe(1); expect(f.reads.get(B)).toBe(1);
+    expect(o1PositiveBudget(first.find(x => x.member.agentDeviceId === A))).toBe(true);
+    expect(o1PositiveBudget(first.find(x => x.member.agentDeviceId === B))).toBe(true);
+
+    f.clock.wall = 1_001; f.clock.mono = 1_001;
+    const second = await f.directory.resolveMembers('openai', config);
+    expect(f.reads.get(A)).toBe(1); expect(f.reads.get(B)).toBe(1);
+    expect(second.find(x => x.member.agentDeviceId === A)?.providerContinuity)
+      .toMatchObject({ stale: true, remainingMs: 0 });
+    expect(o1PositiveBudget(second.find(x => x.member.agentDeviceId === B))).toBe(true);
+
+    const view = parseProviderGroupRemoteView(await f.view(), 'openai');
+    expect(view.providerContinuity).toEqual({ stale: true, remainingMs: 0 });
+    const oScope = captureProviderMetadataContinuityScope(O);
+    const bScope = captureProviderMetadataContinuityScope(B);
+    const dScope = captureProviderMetadataContinuityScope(D);
+    expect(oScope()).toBe(true); expect(bScope()).toBe(true); expect(dScope()).toBe(true);
+
+    const c = await o1Client(O, B, config);
+    await c.task('ack');
+    expect(c.pick.readConfig(O, 'openai')).toEqual(config);
+    c.setOwnerMayRespond(false); c.setOwnerOnline(false);
+    await expect(c.task('fallback-before')).resolves.toMatchObject({ kind: 'member', member: { agentDeviceId: B } });
+    const before = c.inspectAdmit.mock.calls.length;
+
+    await expect(invokeProviderMetadataContinuity(O, PROVIDER_GROUP_REMOTE_CHANNEL,
+      [{ action: 'view', providerId: 'openai' }], async () => ({ ok: true, result: view })))
+      .rejects.toThrow('MODEL_VISIBILITY_NOT_READY');
+    expect(oScope()).toBe(true);
+    expect(bScope()).toBe(true); expect(dScope()).toBe(true);
+    expect(c.pick.readConfig(O, 'openai')).toEqual(config);
+    await expect(c.task('fallback-after')).resolves.toMatchObject({ kind: 'member', member: { agentDeviceId: B } });
+    expect(c.inspectAdmit.mock.calls.length).toBe(before + 2);
+  });
+
+  it('still fences O and its ACK for an explicit permission denial, leaving neighbours independent', async () => {
+    const B = 'o1-b2', O = 'o1-o2', D = 'o1-d2';
+    const config = o1Config(B);
+    const c = await o1Client(O, B, config);
+    await c.task('ack');
+    const oScope = captureProviderMetadataContinuityScope(O);
+    const bScope = captureProviderMetadataContinuityScope(B);
+    const dScope = captureProviderMetadataContinuityScope(D);
+    expect(oScope()).toBe(true); expect(bScope()).toBe(true); expect(dScope()).toBe(true);
+    await expect(invokeProviderMetadataContinuity(O, PROVIDER_GROUP_REMOTE_CHANNEL,
+      [{ action: 'view', providerId: 'openai' }], async () => ({ ok: false,
+        error: { code: 'ACCESS_REVOKED', message: 'revoked' } })))
+      .resolves.toMatchObject({ ok: false, error: { code: 'ACCESS_REVOKED' } });
+    expect(oScope()).toBe(false);
+    expect(bScope()).toBe(true); expect(dScope()).toBe(true);
+    expect(c.pick.readConfig(O, 'openai')).toBeNull();
   });
 });

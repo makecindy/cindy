@@ -10,6 +10,23 @@ import { createGroupContinuityClient } from '../continuityClient.js';
 import { ProviderGroupLocalCapacityError } from '../localCapacity.js';
 import type { ProviderGroupRemoteClient, ProviderGroupRemoteInvoke } from '../remoteClient.js';
 
+vi.mock('@cindy/device-link', async () => {
+  const [protocol, metadata, group] = await Promise.all([
+    import('../../../../../../packages/device-link/src/protocol.js'),
+    import('../../../../../../packages/device-link/src/metadataContinuity.js'),
+    import('../../../../../../packages/device-link/src/providerGroup.js'),
+  ]);
+  return {
+    isProviderAccessDeniedError: metadata.isProviderAccessDeniedError,
+    readProviderMetadataContinuity: metadata.readProviderMetadataContinuity,
+    PROVIDER_METADATA_TRUST_MS: metadata.PROVIDER_METADATA_TRUST_MS,
+    isScopedPeer: protocol.isScopedPeer,
+    PROVIDER_GROUP_REMOTE_CHANNEL: group.PROVIDER_GROUP_REMOTE_CHANNEL,
+    providerShareGuestPeer: protocol.providerShareGuestPeer,
+  };
+});
+
+
 function fixture(options: { withLocal?: boolean } = {}) {
   const clock = { wall: 0, mono: 0, current: true, generation: 0, ownerOnline: true, allowed: true, running: 0 };
   const bind = vi.fn(async (_origin: string, _grant: GroupContinuityGrant, _task: string, current: () => boolean) => {
