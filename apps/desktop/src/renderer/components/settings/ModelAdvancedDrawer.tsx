@@ -343,7 +343,7 @@ export function ModelAdvancedDrawer({
         (runtime.wireProtocol === 'openai-chat' || runtime.wireProtocol === 'openai-responses' ||
           runtime.wireProtocol === 'anthropic-messages' || runtime.wireProtocol === 'google-generative-ai') &&
         (api === 'anthropic-messages' ||
-          ((api === 'openai-completions' || api === 'openai-responses') &&
+          ((api === 'openai-completions' || api === 'openai-responses' || api === 'google-generative-ai') &&
             providerBaseUrlForApi(runtime.baseUrl, api) === runtime.baseUrl));
       if (!inheritPiEndpoint) {
         model.route = {
