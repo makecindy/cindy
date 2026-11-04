@@ -62,6 +62,8 @@ export const WORKLOUDER_CODEX_ACTION_CHANNEL = 'worklouder-codex:action';
 export const WORKLOUDER_CODEX_PREVIEW_INPUT_CHANNEL = 'worklouder-codex:preview-input';
 
 export const WORKLOUDER_CODEX_AGENT_SLOT_COUNT = 6;
+/** Maximum number of tasks accepted by the Work Louder task-list IPC. */
+export const WORKLOUDER_CODEX_TASK_OPTION_LIMIT = 100;
 
 export const WORKLOUDER_CODEX_AUTO_DIM_OPTIONS = [
   'off',

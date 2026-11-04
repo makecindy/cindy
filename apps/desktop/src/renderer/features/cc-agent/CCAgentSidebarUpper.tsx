@@ -66,7 +66,6 @@ import {
   matchesKeyboardEvent,
   SWITCH_SESSION_SHORTCUT_IDS,
 } from '../../../shared/appShortcuts';
-import { WORKLOUDER_CODEX_AGENT_SLOT_COUNT } from '../../../shared/workLouderCodex';
 import { setSessionOrdinalBadges } from './sidebar/sessionOrdinalBadges';
 import { useOwnTopNavScrollableRows, useSidebarCollapsedState } from '../feature-context';
 import { SidebarRailNavigation, SidebarTopNav } from '@/components/sidebar/SidebarTopNav';
@@ -238,6 +237,7 @@ import {
 } from '@/components/sidebar/SidebarIconButton';
 import { RailNav } from './sidebar/RailNav';
 import { aggregateSessionLamps, remoteLampOf } from './lib/sessionLampAggregation';
+import { buildWorkLouderCodexPublishedTasks } from './lib/workLouderCodexTaskPublish';
 import {
   panelHasBlockingOverlay,
   panelHasEditingFocus,
@@ -665,32 +665,13 @@ export function CCAgentSidebarUpper() {
   const sidebarRootRef = useRef<HTMLDivElement>(null);
   const publishSidebarTasks = useCallback(() => {
     if (isSecondaryWindow()) return;
-    const renderedIds = getVisibleSidebarSessionIds();
-    const sidebarOrder = new Map(renderedIds.map((id, index) => [id, index] as const));
     // 空可见列表也要上报:换机器、折叠或搜索把可见行清掉时,侧栏映射必须让位,
     // 否则 AG 键还会打开上一份已经看不见的任务。完整活动表仍要带上,最近发送
     // / 优先 / 自定义不能被折叠裁掉。
-    const catalogSessions = sessionsWithRemote.filter((session) => session.status === 'active');
-    const catalogSessionIds = new Set(catalogSessions.map((session) => session.id));
-    const visibleProjection = visibleSessionsWithRemote
-      .filter((session) => !catalogSessionIds.has(session.id))
-      .slice(0, WORKLOUDER_CODEX_AGENT_SLOT_COUNT);
-    const remainingCatalogSlots = Math.max(0, 100 - visibleProjection.length);
-    const tasks = [...visibleProjection, ...catalogSessions.slice(0, remainingCatalogSlots)].map(
-      (session) => {
-        const pinnedAtMs = session.pinnedAt ? Date.parse(session.pinnedAt) : Number.NaN;
-        const userSendAtMs = session.userSendAt ? Date.parse(session.userSendAt) : Number.NaN;
-        const order = sidebarOrder.get(session.id);
-        const isActiveCatalog = session.status === 'active';
-        return {
-          id: session.id,
-          title: session.title ?? null,
-          pinnedAt: Number.isFinite(pinnedAtMs) ? pinnedAtMs : null,
-          userSendAt: Number.isFinite(userSendAtMs) ? userSendAtMs : null,
-          ...(order === undefined ? {} : { sidebarOrder: order }),
-          ...(isActiveCatalog ? {} : { catalogEligible: false }),
-        };
-      },
+    const tasks = buildWorkLouderCodexPublishedTasks(
+      sessionsWithRemote,
+      visibleSessionsWithRemote,
+      getVisibleSidebarSessionIds(),
     );
     // 侧栏会因为各种无关状态重算;内容没变就不打扰主进程。
     const key = JSON.stringify(tasks);

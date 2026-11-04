@@ -105,15 +105,7 @@ describe('ChatInput session switch focus contract', () => {
     );
     expect(newMakerDraftRouteSource).toContain('readNewMakerFolderPickerRequest(location.state)');
     expect(newMakerDraftRouteSource).toContain('setFolderPickerOpen(true)');
-    expect(sidebarUpperSource).toContain(
-      "const catalogSessions = sessionsWithRemote.filter((session) => session.status === 'active');",
-    );
-    expect(sidebarUpperSource).toContain('catalogEligible: false');
-    expect(sidebarUpperSource).toContain(
-      'const remainingCatalogSlots = Math.max(0, 100 - visibleProjection.length);',
-    );
-    expect(sidebarUpperSource).toContain('WORKLOUDER_CODEX_AGENT_SLOT_COUNT');
-    expect(sidebarUpperSource).toContain('.slice(0, WORKLOUDER_CODEX_AGENT_SLOT_COUNT)');
+    expect(sidebarUpperSource).toContain('buildWorkLouderCodexPublishedTasks(');
     expect(sidebarUpperSource).not.toContain(
       '[...visibleSessionsWithRemote, ...remoteProjectSessions]',
     );
