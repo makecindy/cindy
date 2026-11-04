@@ -97,6 +97,7 @@ function Fixture() {
   const [loading, setLoading] = useState(ctx.case === 'loading');
   const [owner, setOwner] = useState(false);
   const pending = useRef<Partial<GroupMaskSettings> | null>(null);
+  const pendingStandInReplies = useRef<Array<() => void>>([]);
   const timers = useRef<ReturnType<typeof setTimeout>[]>([]);
   const generation = useRef(0), startedAt = useRef(Date.now());
   const [attributions, setAttributions] = useState<GroupMaskPresentation['attributions']>({ answer: { self, companion: companions[0] }, 'reply-1': { self, companion: companions[0] } });
@@ -140,14 +141,17 @@ function Fixture() {
     if (status !== 'enabled') return;
     const ticket = generation.current;
     const companion = companions.find(c => c.id === settings.companionId)!;
-    timers.current.push(setTimeout(() => {
+    pendingStandInReplies.current.push(() => {
       if (ticket !== generation.current || liveStatus.current !== 'enabled') return;
       const answer = message(`stand-in-${++counter}`, 'self', '我已记下这个问题。具体时间还需要本人确认，确认后再回复。', counter);
       setAttributions(previous => ({ ...previous, [answer.id]: { self, companion } }));
       group.messages = [...group.messages, answer]; changed();
       setUnreadMentions(previous => previous.map(entry => entry.messageId === row.id
         ? { ...entry, reply: { companion, text: answer.content } } : entry));
-    }, 1200));
+    });
+  };
+  const completeStandInReplies = () => {
+    for (const reply of pendingStandInReplies.current.splice(0)) reply();
   };
   const value: GroupMaskPresentation = { groupId, self, companions, settings, status, saving, loading, error, update: save,
     retry: () => save(pending.current ?? {}, true), participate,
@@ -159,6 +163,7 @@ function Fixture() {
       <div className="flex shrink-0 flex-wrap items-center gap-x-4 gap-y-1 border-b border-[var(--border-default)] px-4 py-2 text-12 text-[var(--text-secondary)]" data-testid="mask-preview-controls">
         <span>测试版 · 示例群，不发送真实消息</span>
         <button type="button" onClick={request}>模拟 @ 我</button>
+        <button type="button" onClick={completeStandInReplies}>完成模拟代答</button>
         <button type="button" onClick={advance}>模拟离开 {settings.resumeMinutes} 分钟</button>
         <button type="button" onClick={() => setOnline(v => !v)}>{online ? '模拟离线' : '恢复在线'}</button>
         <button type="button" onClick={() => { const next = !owner; setOwner(next); group = { ...group, members: group.members.map(m => m.botId === 'self' ? { ...m, role: next ? 'owner' : 'member' } : m) }; changed(); }}>{owner ? '群主视角' : '普通成员视角'}</button>
