@@ -123,7 +123,7 @@ vi.mock('@/components/new-chat/ModelSelector', () => ({
     onUnifiedSelect: (selection: unknown) => void;
   }) => <>{onNavigateToProviders && <button type="button" onClick={onNavigateToProviders}>connect-source</button>}<button data-testid="current-model" onClick={() => onEffortChange('high')}>{modelId}</button>{(['pi', 'codex'] as const).filter((engine) => unifiedAgents.includes(engine)).map((engine) => (
     <button key={engine} data-testid={engine === 'pi' ? 'model-selector' : 'codex-model-selector'} onClick={() => onUnifiedSelect({ engine, providerId: 'custom', modelId: 'custom-model', effort: 'high', fast: false })}>select-{engine}-model</button>
-  ))}</>,
+  ))}<button data-testid="remote-model-selector" onClick={() => onUnifiedSelect({ engine: 'codex', providerId: 'custom', modelId: 'custom-model', effort: 'high', fast: false, agentDevice: { deviceId: 'share:one' } })}>select-remote-model</button></>,
 }));
 vi.mock('@/hooks/useAvailableAgents', async () => {
   const { useSyncExternalStore } = await import('react');
@@ -159,6 +159,9 @@ vi.mock('../voice/CompanionVoiceSettings', () => ({
 }));
 
 import { BotsHomeView, BotSettings } from '../BotsHomeView';
+import { readBotSettingsPatch } from '../../../../main/localDb/ipc/botRemoteSettingsOps';
+import { normalizeBotProfileModelChain } from '../../../../shared/botModelChain';
+import { createIpcError } from '../../../../shared/ipc-errors';
 import { ConfirmDialogProvider } from '@/components/ui/confirm-dialog-provider';
 
 function capabilities(overrides: Partial<BotCapabilities> = {}): BotCapabilities {
@@ -527,6 +530,55 @@ describe('Bot settings profile consolidation', () => {
     expect(task.getByTestId('current-model').textContent).toBe('claude-x');
   });
 
+  // Unit regression: edit the actual form, pass its patch through the host's real
+  // admission/normalization, and reopen the saved profile. Picker-only tests missed
+  // the extra primary mirror rejected by the remote settings field contract.
+  it.each([0, 1])('saves route %i to a remote supplier and back, preserving the other route on reopen', async (index) => {
+    vi.useFakeTimers();
+    const primary: BotModelRoute = { harness: 'codex', model: 'primary', providerId: 'custom', effort: 'high', fastMode: false };
+    const fallback = { ...primary, model: 'backup' };
+    let saved = capabilities({ ...primary, modelChain: [primary, fallback], modelChainOverride: [primary, fallback] });
+    mocks.updateBotProfile.mockImplementation(async (_id, input) => {
+      const { acceptModelSelection: _action, ...patch } = input;
+      readBotSettingsPatch(patch);
+      saved = normalizeBotProfileModelChain({ ...saved, ...patch.capabilities as object }) as unknown as BotCapabilities;
+      return { ...bot({ capabilities: saved }), currentVersion: 2 };
+    });
+    const view = renderSettings({ capabilities: saved });
+    fireEvent.click(screen.getByText('bots.settingsTabs.model'));
+    fireEvent.click(within(screen.getByTestId('bot-primary-model-controls')).getAllByTestId('remote-model-selector')[index]!);
+    await act(async () => { await vi.runOnlyPendingTimersAsync(); });
+    expect(screen.queryByRole('alert')).toBeNull();
+    expect(saved.modelChain[index]).toMatchObject({ agentDeviceId: 'share:one', model: 'custom-model' });
+    expect(saved.modelChain[1 - index]).toEqual(index === 0 ? fallback : primary);
+    expect(saved.agentDeviceId ?? null).toBe(index === 0 ? 'share:one' : null);
+    view.unmount();
+    const reopened = renderSettings({ capabilities: saved });
+    fireEvent.click(screen.getByText('bots.settingsTabs.model'));
+    expect(within(screen.getByTestId('bot-primary-model-controls')).getAllByTestId('current-model')[index]!.textContent).toBe('custom-model');
+    fireEvent.click(within(screen.getByTestId('bot-primary-model-controls')).getAllByTestId('codex-model-selector')[index]!);
+    await act(async () => { await vi.runOnlyPendingTimersAsync(); });
+    expect(screen.queryByRole('alert')).toBeNull();
+    expect(saved.modelChain[index]?.agentDeviceId).toBeUndefined();
+    expect(saved.agentDeviceId ?? null).toBeNull();
+    expect(saved.modelChain[1 - index]).toEqual(index === 0 ? fallback : primary);
+    reopened.unmount();
+  });
+
+  it('clears the remote primary mirror when restoring local defaults', async () => {
+    vi.useFakeTimers();
+    const local: BotModelRoute = { harness: 'codex', model: 'default', providerId: 'custom', effort: 'high', fastMode: false };
+    const remote = { ...local, agentDeviceId: 'device-two' };
+    mocks.defaultModelChain = [local];
+    renderSettings({ capabilities: capabilities({ ...remote, modelChain: [remote], modelChainOverride: [remote] }) });
+    fireEvent.click(screen.getByText('bots.settingsTabs.model'));
+    fireEvent.click(screen.getByText('bots.model.restoreDefault'));
+    await act(async () => { await vi.runOnlyPendingTimersAsync(); });
+    expect(mocks.updateBotProfile).toHaveBeenLastCalledWith('bot-1', expect.objectContaining({
+      capabilities: expect.objectContaining({ agentDeviceId: null, modelChainOverride: null, modelChain: [local] }),
+    }));
+  });
+
   it('submits an explicit primary selection even when the configured route is unchanged', async () => {
     const primary: BotModelRoute = { harness: 'pi', model: 'custom-model', providerId: 'custom', effort: 'high', fastMode: false };
     const chain = [primary];
@@ -537,6 +589,30 @@ describe('Bot settings profile consolidation', () => {
     await waitFor(() => expect(mocks.updateBotProfile).toHaveBeenCalledWith('bot-1', expect.objectContaining({
       acceptModelSelection: true,
     })));
+  });
+
+  // Unit regression: the autosave previously discarded every cause, so an invalid
+  // field and an offline host were indistinguishable. Exercise the real hook/UI.
+  it.each([
+    [createIpcError('INVALID_PARAMS', 'capabilities has an unsupported field'), 'ipcError.INVALID_PARAMS'],
+    [createIpcError('INVALID_PARAMS', 'Model route unavailable'), 'ipcError.MODEL_SELECTION_UNAVAILABLE'],
+    [createIpcError('DEVICE_LINK_DEVICE_OFFLINE', 'offline'), 'bots.profileSaveOffline'],
+    // Relay/link disconnects use a different IPC code from a known offline device.
+    [createIpcError('DEVICE_LINK_NOT_CONNECTED', 'link not open'), 'bots.profileSaveOffline'],
+    [createIpcError('DEVICE_LINK_TIMEOUT', 'timeout'), 'bots.remoteSettings.saveFailed'],
+    [new Error('/private/profile.db failed'), 'bots.profileSaveFailed'],
+  ])('shows a safe save failure reason and clears it after retry: %s', async (error, key) => {
+    vi.useFakeTimers();
+    mocks.updateBotProfile.mockRejectedValueOnce(error);
+    renderSettings({ capabilities: capabilities({ modelChainOverride: capabilities().modelChain }) });
+    fireEvent.click(screen.getByText('bots.settingsTabs.model'));
+    fireEvent.click(within(screen.getByTestId('bot-primary-model-controls')).getByTestId('remote-model-selector'));
+    await act(async () => { await vi.runOnlyPendingTimersAsync(); });
+    expect(screen.getByRole('alert').textContent).toContain(key);
+    expect(screen.getByRole('alert').textContent).not.toContain('/private');
+    await act(async () => { fireEvent.click(screen.getByText('bots.autosave.retry')); });
+    expect(screen.queryByRole('alert')).toBeNull();
+    expect(mocks.updateBotProfile).toHaveBeenCalledTimes(2);
   });
 
   it('keeps a same-model choice through a failed save and a newer host profile', async () => {

@@ -2,7 +2,8 @@
 import { act, createElement as el, useEffect, useImperativeHandle, useRef, useState } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { BOT_GROUP_RUNTIME_FAILURE_CODES, type BotGroupRemoteChatData } from '@cindy/maker-shared/botGroupChat';
+import { buildBotGroupCapabilityNotice, BOT_GROUP_RUNTIME_FAILURE_CODES, type BotGroupRemoteChatData } from '@cindy/maker-shared/botGroupChat';
+import { chatGroupView, chatRoomRow, createChatServerClient, type ChatMessage, type ChatPage } from '@/chat/chatServerClient';
 import { shareSelectionStore } from '@/session/shareSelectionStore';
 
 const h = vi.hoisted(() => ({
@@ -129,7 +130,7 @@ vi.mock('react-i18next', async (importOriginal) => ({
 vi.mock('expo-crypto', () => ({ randomUUID: () => `uuid-${++h.uuid}` }));
 vi.mock('lucide-react-native', () => Object.fromEntries(
   ['Copy', 'Share', 'ArrowUpRight', 'CornerDownRight', 'Circle', 'Bell', 'ChevronLeft', 'Settings2', 'Plus', 'Square', 'Users', 'X', 'Check', 'CircleAlert', 'CircleCheck', 'CircleDashed', 'FileText', 'Sparkles', 'Folder', 'Camera', 'Image',
-    'Layers', 'ListChecks', 'ListTodo', 'Ellipsis', 'ChevronRight', 'ChevronDown', 'Reply', 'SlidersHorizontal', 'UserPlus']
+    'Minus', 'ChevronUp', 'CircleMinus', 'Layers', 'ListChecks', 'ListTodo', 'Ellipsis', 'ChevronRight', 'ChevronDown', 'Reply', 'SlidersHorizontal', 'UserPlus']
     .map((name) => [name, () => null]),
 ));
 vi.mock('@/theme', async () => ({
@@ -486,6 +487,47 @@ describe('group timeline', () => {
     expect(h.headerBlur.at(-1)).toBe(72);
     // The two-line identity stays over solid blur; the feather starts at the header's lower edge.
     expect(h.headerFade.at(-1)).toBe(0);
+  });
+
+  // #8443: exercise the production projection, measured viewport and read client.
+  // A late capability notice must clear the unread count in both main and followed threads.
+  it.each([false, true])('acknowledges a displayed capability notice only at the measured tail (thread=%s)', async thread => {
+    vi.useFakeTimers();
+    const id = (n: number) => `00000000-0000-4000-8000-${String(n).padStart(12, '0')}`;
+    const roomId = id(1), selfId = id(2), botId = id(3), rootId = id(4), noticeId = id(5);
+    const rootMessage: ChatMessage = { id: rootId, seq: '1', authorId: botId, author: { kind: 'bot', name: 'Bot' },
+      origin: 'bot', createdAt: '2026-11-03T00:00:00Z', deleted: false, threadRootId: null,
+      content: [{ type: 'text', text: 'Earlier reply' }] };
+    const notice: ChatMessage = { ...rootMessage, id: noticeId, seq: '2', threadRootId: thread ? rootId : null,
+      content: [buildBotGroupCapabilityNotice('ATTACHMENTS_UNAVAILABLE', 'Attachment unavailable')] };
+    const page: ChatPage = { threadRootId: thread ? rootId : undefined, before: null, messages: [rootMessage, notice],
+      snapshot: { room: { id: roomId, name: 'Group', kind: 'group', state: 'joined', archived: false,
+        revision: 1, created_at: '2026-11-03', updated_at: '2026-11-03', response_mode: 'all', speaking_mode: 'auto' },
+        members: [], cursor: '2', messages: [rootMessage, notice], reads: [
+          { thread_key: 'main', read_seq: '1' }, ...(thread ? [{ thread_key: rootId, read_seq: '1', following: true }] : []),
+        ] } };
+    const unread = () => chatRoomRow(page.snapshot.room, page.snapshot, selfId).chatUnread?.count;
+    expect(unread()).toBe(1);
+    const request = vi.fn().mockResolvedValue({ readSeq: '2' });
+    const client = createChatServerClient(request);
+    h.chat = { ...h.chat, server: true, markRead: (ids: string[]) => client.markRead(roomId, page, ids),
+      state: { kind: 'ready', group: chatGroupView(page, selfId) } };
+    await act(async () => root.render(el(BotGroupChatScreen, { deviceId: '', deviceName: '', groupId: roomId,
+      threadRootId: page.threadRootId })));
+    expect(node.textContent).toContain('groupChat.notice.capability.ATTACHMENTS_UNAVAILABLE');
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(32);
+      h.scroll.onLayout({ nativeEvent: { layout: { height: 500 } } });
+      h.scroll.onContentSizeChange(400, 2000);
+    });
+    expect(request).not.toHaveBeenCalled();
+    expect(unread()).toBe(1);
+    await act(async () => h.scroll.onScroll({ nativeEvent: { contentOffset: { y: 1500 },
+      contentSize: { height: 2000 }, layoutMeasurement: { height: 500 } } }));
+    expect(request).toHaveBeenCalledWith(`/conversations/${roomId}/read`, 'POST', {
+      operationId: `read-${thread ? rootId : 'main'}:2`, readSeq: '2', ...(thread ? { threadRootId: rootId } : {}),
+    });
+    expect(unread()).toBe(0);
   });
 
   it('returns from history without new messages and resumes following the tail', async () => {
@@ -941,6 +983,33 @@ describe('group timeline', () => {
     expect(byId('botGroup.message.plan')?.textContent).not.toContain('groupChat.plan.stepRunning');
     expect(byId('botGroup.message.plan')?.textContent).toContain('groupChat.plan.stepDone');
     expect(byId('botGroup.plan.start')).toBeNull();
+  });
+
+  // The real card folds the queue, sends future positions without an execution, and protects running turns (unit).
+  it('folds a talk queue and sends the exact queued turn when skipping', async () => {
+    const data = group();
+    data.openPlan = { id: 'p1', status: 'running', currentStep: 1, stepCount: 6, currentBotName: '阿布', currentStepStatus: 'running' };
+    const plan = { ...data.plans[0]!, kind: 'talk' as const, status: 'running' as const, currentStep: 1, canManage: true, supportsPendingSkip: true,
+      steps: Array.from({ length: 6 }, (_, position) => ({ ...data.plans[0]!.steps[position === 0 ? 0 : 1]!, position,
+        status: position === 0 ? 'done' as const : position === 1 ? 'running' as const : 'pending' as const,
+        ...(position === 1 ? { executionId: 'queued-turn', executionStatus: 'queued' as const } : {}),
+      })),
+    };
+    data.plans[0] = plan;
+    await render(data);
+    const card = byId('botGroup.plan')!;
+    expect(card.textContent).toContain('groupChat.plan.talkTitle');
+    expect(card.textContent).not.toContain('groupChat.plan.intro');
+    expect(card.querySelectorAll('[data-testid="botGroup.plan.step"]')).toHaveLength(3);
+    await click('botGroup.plan.fold');
+    expect(card.querySelectorAll('[data-testid="botGroup.plan.step"]')).toHaveLength(6);
+    await click('botGroup.plan.skipTurn');
+    expect(h.chat.act).toHaveBeenLastCalledWith('plan-edit', { planId: 'p1', position: 1, action: 'skip', executionId: 'queued-turn' });
+    data.plans[0] = { ...plan, steps: plan.steps.map(step => step.position === 1 ? { ...step, executionStatus: 'running' } : step) };
+    await render(data);
+    expect(card.querySelectorAll('[data-testid="botGroup.plan.step"]')[1]?.querySelector('[data-testid="botGroup.plan.skipTurn"]')).toBeNull();
+    await click('botGroup.plan.skipTurn');
+    expect(h.chat.act).toHaveBeenLastCalledWith('plan-edit', { planId: 'p1', position: 2, action: 'skip', executionId: undefined });
   });
 
   it('shows one row per speaker with its lane session', async () => {

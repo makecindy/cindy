@@ -131,6 +131,7 @@ const SUMMARY_QUERY = `query($owner: String!, $repo: String!, $number: Int!) {
   repository(owner: $owner, name: $repo) {
     pullRequest(number: $number) {
       headRefOid
+      mergeStateStatus
       reviewDecision
       reviewThreads(first: 100) { nodes { isResolved } pageInfo { hasNextPage } }
       commits(last: 1) { nodes { commit { oid statusCheckRollup {
@@ -149,6 +150,7 @@ interface SummaryResponse {
   repository: {
     pullRequest: {
       headRefOid: string;
+      mergeStateStatus?: string | null;
       reviewDecision?: string | null;
       reviewThreads: { nodes: { isResolved: boolean }[]; pageInfo: { hasNextPage: boolean } };
       commits?: {
@@ -164,9 +166,10 @@ export async function fetchPrSummary(
   q: PrStatusQuery,
 ): Promise<{
   headOid: string | null;
-  reviewDecision?: string | null;
   unresolved: number | null;
   checks: PrChecksSummary | null;
+  mergeState: string | null;
+  reviewDecision: string | null;
 }> {
   const data = await client.graphql<SummaryResponse>(SUMMARY_QUERY, {
     owner: q.owner,
@@ -174,7 +177,7 @@ export async function fetchPrSummary(
     number: q.prNumber,
   });
   const pr = data.repository?.pullRequest;
-  if (!pr) return { headOid: null, unresolved: null, checks: null };
+  if (!pr) return { headOid: null, unresolved: null, checks: null, mergeState: null, reviewDecision: null };
   const commit = pr.commits?.nodes[0]?.commit;
   const checks =
     commit?.oid === pr.headRefOid
@@ -187,5 +190,11 @@ export async function fetchPrSummary(
   const unresolved = pr.reviewThreads.pageInfo.hasNextPage
     ? null
     : pr.reviewThreads.nodes.filter((n) => !n.isResolved).length;
-  return { headOid: pr.headRefOid, unresolved, checks, reviewDecision: pr.reviewDecision ?? null };
+  return {
+    headOid: pr.headRefOid,
+    unresolved,
+    checks,
+    mergeState: pr.mergeStateStatus ?? null,
+    reviewDecision: pr.reviewDecision ?? null,
+  };
 }

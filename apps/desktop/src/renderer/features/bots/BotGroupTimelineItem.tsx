@@ -21,6 +21,7 @@ import { botGroupBodyParts } from '@cindy/maker-shared/botGroupPresentation';
 import { memo, useEffect, useState, useLayoutEffect, useRef, type PointerEvent as ReactPointerEvent, type ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
 import { CircleAlert, CornerDownRight, RefreshCcw } from 'lucide-react';
+import { BotGroupCapabilityNotice } from './BotGroupCapabilityNotice';
 import { BotGroupThreadPreview, BotGroupThreadShareQuote, botGroupThreadShareLabel } from './BotGroupThreadViews';
 import { toast } from '@/lib/toast';
 import { editBotGroupSend, retryBotGroupSend, type BotGroupOutboxEntry } from './botGroupOutbox';
@@ -41,7 +42,7 @@ import type {
   BotGroupQuoteDisplay,
   BotGroupQuoteView,
 } from '../../../shared/botGroupChat';
-import { isBotGroupRuntimeFailureCode } from '../../../shared/botGroupChat';
+import { isBotGroupCapabilityNoticeCode, isBotGroupRuntimeFailureCode } from '../../../shared/botGroupChat';
 import { GroupMaskMessageAvatar } from './GroupMaskControls';
 import { useGroupMask, maskIdentity } from './groupMaskPresentation';
 import { BotAvatar } from './BotAvatar';
@@ -333,7 +334,7 @@ export interface BotGroupTimelineItemProps {
   planDoneAt?: ReadonlyMap<number, number>;
   onPlanAction?: (action: 'start' | 'dismiss', planId: string) => void;
   readOnly?: boolean;
-  onEditStep?: (planId: string, step: BotGroupPlanStepView, action: 'reassign' | 'remove', botId?: string) => void;
+  onEditStep?: (planId: string, step: BotGroupPlanStepView, action: 'reassign' | 'remove' | 'skip', botId?: string) => void;
   /** Present on the open 分工 card for whoever may press 继续 (§7.4). */
   onPlanAutoContinue?: (planId: string, on: boolean) => void;
 }
@@ -408,6 +409,9 @@ function BotGroupTimelineItemImpl(props: BotGroupTimelineItemProps) {
   }
   if (message.kind === 'notice' || message.authorKind === 'system') {
     const name = message.authorName.trim() || authorName;
+    if (isBotGroupCapabilityNoticeCode(message.capabilityNoticeCode)) return <Row {...rowProps} block="system">
+      <BotGroupCapabilityNotice name={name} code={message.capabilityNoticeCode} />
+    </Row>;
     if (isBotGroupRuntimeFailureCode(message.runtimeFailureCode)) {
       return (
         <Row {...rowProps} block="system">
@@ -529,12 +533,13 @@ function BotGroupTimelineItemImpl(props: BotGroupTimelineItemProps) {
       <Row {...rowProps} block="author">
         <div className="flex min-w-0 gap-2.5">
           <span aria-hidden className="w-7 shrink-0" />
-          <div data-testid="bot-group-arrangement" className={cn('min-w-0', CHAT_BUBBLE_COLUMN_CLASS)}>
-            <div className="w-fit min-w-0 max-w-full">
+          <div data-testid="bot-group-arrangement" className={cn('w-full min-w-0', CHAT_BUBBLE_COLUMN_CLASS)}>
+            <div className="w-full min-w-0 max-w-full">
               <BotGroupPlanCard
                 plan={props.plan}
                 members={members}
                 actionable={false}
+                readOnly={props.readOnly}
                 // Only the creator, an owner or an admin may change who speaks next.
                 reassignable={(props.planReassignable ?? false) && props.plan.canManage !== false}
                 pending={props.planPending ?? null}

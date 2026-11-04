@@ -2782,6 +2782,18 @@
       }
     },
     {
+      "id": "migration-assistant",
+      "status": "proposed",
+      "en": "Migration Assistant",
+      "translations": {
+        "zh-CN": "迁移助理",
+        "zh-TW": "遷移助理",
+        "ja": "移行アシスタント",
+        "ko": "마이그레이션 지원"
+      },
+      "note": "新电脑从同账号的其他电脑复制插件、技能与设置的功能名（设置 → 通用），用户 2026-10-20 定名「迁移助理」。ja / ko 参照系统同类功能的常见叫法；登记为 proposed，待术语评审。"
+    },
+    {
       "id": "withdraw-reply",
       "status": "proposed",
       "en": "withdraw (a reply)",
@@ -2993,7 +3005,7 @@
         "ja": "マニュアル",
         "ko": "매뉴얼"
       },
-      "note": "插件随包提供、由 ghost_manual 按需读取的渐进披露长文资料。它不是权限项，也不等同于已停止新增的 Agent Skill；先登记为 proposed，待插件作者与用户实际使用后再固化。"
+      "note": "插件随包提供、由 ghost_manual 按需读取的渐进披露长文资料。它不是权限项，也不等同于插件随包的 Agent Skill；先登记为 proposed，待插件作者与用户实际使用后再固化。"
     },
     {
       "id": "vision-bridge",
