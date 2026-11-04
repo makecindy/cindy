@@ -3,7 +3,7 @@ import test from 'node:test';
 
 import { createChatHandler } from './chat.mjs';
 
-function fakeSession(events, sendResult = { ok: true }) {
+function fakeSession(events, sendResult = { accepted: true }) {
   const listeners = new Set();
   return {
     id: 's1',

@@ -13,6 +13,7 @@ import { acquireHostRuntimeLease, type HostRuntimeLease } from './runtime-lock.j
 import { readAdoptedSessionState } from './credentials/session.mjs';
 import { configureHostOwner, readClaudeSubscriptionState } from './agent/claude-auth.mjs';
 import { createHostAgentGraph } from './agent/runtime.mjs';
+import { readGatewayCredentials } from './agent/gateway.mjs';
 import { runLoginCommand } from './login-cli.mjs';
 import { readOrCreateApiToken } from './api-token.mjs';
 import { CindyAuthClient } from '@cindy/auth-client';
@@ -46,6 +47,7 @@ interface RuntimeState {
   owner: string | null;
   storage: 'unopened' | 'ready' | 'error';
   agents?: string[];
+  agentLane?: string;
   detail?: string;
 }
 
@@ -151,11 +153,23 @@ async function ensureRuntime(ownerId: string): Promise<void> {
 
   const claudeBinary = harnessBinaryPath('claude-code');
   if (claudeBinary) {
+    // Prefer the already-authorised Cindy gateway key; fall back to the CLI's own
+    // subscription login. Both lanes share the same agent class and storage.
+    const gateway = await readGatewayCredentials({
+      userDataDir: dataDir,
+      ownerId,
+      // The Desktop namespace key can be supplied directly when the caller only
+      // knows the profile's owner hash (as the existing data directories show).
+      ownerKey: process.env.CINDY_HOST_OWNER_KEY?.trim() || undefined,
+      keyringApplication: process.env.CINDY_HOST_KEYRING_APPLICATION?.trim() || undefined,
+    }).catch(() => null);
     agentGraph = createHostAgentGraph({
       binaryPath: claudeBinary,
       storage: sessionStorage,
+      gateway,
     });
     runtime.agents = agentGraph.agents;
+    runtime.agentLane = gateway ? 'gateway-key' : 'claude-subscription';
   }
   if (claudeBinary) {
     void readClaudeSubscriptionState({ binary: claudeBinary, env: { PATH: process.env.PATH } })

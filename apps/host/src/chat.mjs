@@ -107,7 +107,9 @@ export function createChatHandler(deps) {
       });
 
       const result = await session.send(payload.prompt);
-      if (!result || result.ok !== true) {
+      // Session accepts with `{ accepted: true }`; anything else means the turn
+      // never started and the client must see that instead of an empty stream.
+      if (!result || result.accepted !== true) {
         write({ type: 'error', reason: 'send_rejected', detail: result ?? null });
         unsubscribe();
         response.end();

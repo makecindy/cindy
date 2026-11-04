@@ -51,10 +51,28 @@ export function createClaudeSubscriptionAuth() {
 /**
  * @param {{binaryPath: string, storage: unknown, makerMemory?: unknown}} options
  */
+/** Gateway-key lane: the key is injected as ANTHROPIC_API_KEY for the CLI spawn. */
+export function createClaudeGatewayAuth(gateway) {
+  return {
+    async getState() {
+      return { authenticated: true, authSource: 'api-key', identity: 'Cindy gateway' };
+    },
+    async triggerLogin() {
+      throw new Error('the Cindy gateway key is managed by the Desktop settings');
+    },
+    async logout() {
+      throw new Error('the Cindy gateway key is managed by the Desktop settings');
+    },
+    async getAuthEnv() {
+      return { ANTHROPIC_API_KEY: gateway.credential };
+    },
+  };
+}
+
 export function createHostAgentGraph(options) {
   const agent = new ClaudeCodeAgent({
-    auth: createClaudeSubscriptionAuth(),
-    runtimeConfig: {},
+    auth: options.gateway ? createClaudeGatewayAuth(options.gateway) : createClaudeSubscriptionAuth(),
+    runtimeConfig: options.gateway ? { endpoint: options.gateway.endpoint } : {},
     binaryPath: options.binaryPath,
     logger: LOGGER,
   });

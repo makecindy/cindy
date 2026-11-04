@@ -92,7 +92,7 @@ flowchart LR
 | 项 | 状态 | 证据/缺口 |
 | --- | --- | --- |
 | 插件列表（`GET /plugins`） | 部分 | 只读 canonical owner 命名空间（`owners/<sha20(owner)>/ghost-install-state/plugin-instances.v2.json` + 包内 `ghost.json`），并如实返回 `legacyNamespacePresent`；**不猜** legacy 原始 owner-id 目录的权威性，迁移仍归 Desktop 的独占认领流程。实测空 profile 返回 `{"plugins":[],"namespace":"canonical","legacyNamespacePresent":false}`。批准/启用状态与运行时态尚未投影。 |
-| `POST /chat`（SSE） | 部分 | 认证后把 `Session.onEvent` 原样转发为 SSE，终止于产品终态；实测未登录 CLI 时流式返回 `not_connected`（真实 Runtime 拒绝，不是假成功）。真实订阅登录下的完整回合未实测。 |
+| `POST /chat`（SSE） | 已验证（网关 lane） | 认证后把 `Session.onEvent` 原样转发为 SSE。真实回合实测：复用本机 `safe-storage` 的 Cindy 网关 key + `model-access-credentials.json` 的 endpoint，Claude Code CLI 真实运行并返回 `text:"OK"`，随后 `done`。模型必须属于账号可用清单（本机为 `anthropic/claude-sonnet-5-5`）；默认模型会返回 `user_model_access_denied`（真实上游拒绝）。 |
 | 历史消息 API | 部分 | `GET /sessions/:id/messages` 复用 `chatHistoryReader`（与 Desktop 同一条读取路径），Bearer 保护；实测空会话返回 `{"messages":[]}`。 |
 | 本地 API（阶段 3 起步） | 部分 | loopback `127.0.0.1:3456`；`/health` 公开，`/sessions`、`/me` 需 `<dataDir>/host-api-token`（0600）的 `Authorization: Bearer`。实测 401/200 分流正确。`/sessions` 只投影 `status='active'` 的任务（逐行读产品状态，归档/删除不冒充进行中）。`POST /logout` 撤销服务端会话并清除共享本地记录（服务端失败也清本地，Desktop 同步登出）。`/chat`、`/plugins`、SSE 流式尚未实现。 |
 | `cindy-host` Node 进程与 `GET /health` | 部分 | `apps/host/src/main.ts` 绑定 `127.0.0.1:3456`；`CINDY_HOST_OWNER` 存在时先取 profile Runtime 租约再打开真实 owner 库。实测：持锁进程存在时第二个 Host 报告 `blocked` 且不碰数据库。 |
