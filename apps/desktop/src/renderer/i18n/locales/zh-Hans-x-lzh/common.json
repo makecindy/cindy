@@ -1907,6 +1907,8 @@
       "add": {
         "title": "增一台远方之机",
         "alias": "别号",
+        "aliasHint": "限 1–128 字元，惟英文字母、数字及 . _ @ : - 可用；中文名请填于「显示之名」。",
+        "aliasInvalid": "别名含不支持字元，或逾 128 字元，请依上例改之。",
         "displayName": "显示之名",
         "displayNamePlaceholder": "可不填，仅于 Cindy 中显",
         "hostname": "主机名",

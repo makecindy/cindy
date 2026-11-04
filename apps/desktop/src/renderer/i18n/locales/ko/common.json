@@ -1907,6 +1907,8 @@
       "add": {
         "title": "원격 머신 추가",
         "alias": "별칭",
+        "aliasHint": "영문자, 숫자, . _ @ : - 기호로 1~128자를 입력하세요. 한글 등의 이름은 표시 이름에 입력하세요.",
+        "aliasInvalid": "별칭에 지원하지 않는 문자가 있거나 128자를 초과했습니다. 위 규칙에 맞게 수정하세요.",
         "displayName": "표시 이름",
         "displayNamePlaceholder": "선택 사항, Cindy에서만 표시",
         "hostname": "호스트명",

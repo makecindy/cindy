@@ -1937,6 +1937,8 @@
       "add": {
         "title": "Remote-Rechner hinzufügen",
         "alias": "Alias",
+        "aliasHint": "Verwende 1–128 Zeichen: englische Buchstaben, Ziffern oder . _ @ : -. Für andere Zeichen nutze den Anzeigenamen.",
+        "aliasInvalid": "Der Alias enthält nicht unterstützte Zeichen oder ist länger als 128 Zeichen. Beachte die Regeln oben.",
         "displayName": "Anzeigename",
         "displayNamePlaceholder": "Optionaler Name, der in Cindy angezeigt wird",
         "hostname": "Hostname",
