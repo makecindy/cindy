@@ -109,6 +109,7 @@ export function createHostServer(deps) {
           return;
         }
         if (url.pathname === '/api/plugins/list') { send(response, 200, deps.listPlugins()); return; }
+        if (url.pathname === '/api/providers') { send(response, 200, await deps.providers()); return; }
         send(response, 404, { error: 'not_found' });
         return;
       }

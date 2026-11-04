@@ -19,6 +19,7 @@ import { readAdoptedSessionState } from './credentials/session.mjs';
 import { configureHostOwner, readClaudeSubscriptionState } from './agent/claude-auth.mjs';
 import { createHostAgentGraph } from './agent/runtime.mjs';
 import { readGatewayCredentials } from './agent/gateway.mjs';
+import { listProviders } from './agent/providers.mjs';
 import { runLoginCommand } from './login-cli.mjs';
 import { readOrCreateApiToken } from './api-token.mjs';
 import { CindyAuthClient } from '@cindy/auth-client';
@@ -104,6 +105,7 @@ let runtimeLease: HostRuntimeLease | null = null;
 let claudeState: Record<string, unknown> | null = null;
 /** Real maker-core agents registered in this process. */
 let agentGraph: { maker: unknown; agents: string[] } | null = null;
+let gatewayCredentials: { endpoint: string; credential: string } | null = null;
 /** Non-secret projection of the adopted Desktop login; never tokens. */
 let account: { authenticated: boolean; realm: string | null; error?: string } = { authenticated: false, realm: null };
 
@@ -175,6 +177,7 @@ async function ensureRuntime(ownerId: string): Promise<void> {
     });
     runtime.agents = agentGraph.agents;
     runtime.agentLane = gateway ? 'gateway-key' : 'claude-subscription';
+    gatewayCredentials = gateway;
   }
   if (claudeBinary) {
     void readClaudeSubscriptionState({ binary: claudeBinary, env: { PATH: process.env.PATH } })
@@ -250,6 +253,7 @@ const server = createHostServer({
     defaultWorkDir: resolveHostDataDir(),
     defaultModel: process.env.CINDY_HOST_MODEL?.trim() || 'claude-sonnet-4-6',
   }),
+  providers: () => listProviders({ gateway: gatewayCredentials }),
   history: async (sessionId: string, limit: number) => {
     const { getMessagesForHistory } = await import('../../desktop/src/main/localDb/chatHistoryReader.ts');
     const page = await getMessagesForHistory({

@@ -78,6 +78,8 @@
       })();
       return { accepted: true };
     },
+    'maker.listProviders': () => rpc('/providers'),
+    'ghosts.listPickerModels': () => [],
     'maker.memoryGetSettings': () => ({ maker: true, claudeCode: true, codex: true, pi: true }),
     'maker.memoryPreserveLegacyMakerDisabled': () => ({ maker: true, claudeCode: true, codex: true, pi: true }),
     'maker.gitSafetyGet': () => ({ mode: 'off' }),
