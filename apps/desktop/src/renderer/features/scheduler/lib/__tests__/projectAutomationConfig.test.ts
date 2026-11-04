@@ -94,6 +94,23 @@ describe('project automation providerId serialization', () => {
   });
 });
 
+describe('project automation program change gate serialization', () => {
+  // PR #8285 review: promoting a gated check rebuilt it from the project file, which
+  // had no gate field, so the check started the model again on every run.
+  it('keeps the gate through promotion and form edits, and omits it when off', () => {
+    const gated = { id: 's1', name: 'n', prompt: 'p', cronExpr: '0 9 * * *', silentWhenIdle: true,
+      programChangeGate: true } as Schedule;
+    expect(JSON.parse(JSON.stringify(scheduleToProjectConfig(gated, 'daily')))).toMatchObject({
+      silentWhenIdle: true, programChangeGate: true });
+    expect(JSON.parse(JSON.stringify(formToProjectConfig(makeForm({ silentWhenIdle: true }), 'daily', true))))
+      .toMatchObject({ programChangeGate: true });
+    expect(JSON.parse(JSON.stringify(scheduleToProjectConfig({ ...gated, programChangeGate: false }, 'daily'))))
+      .not.toHaveProperty('programChangeGate');
+    expect(JSON.parse(JSON.stringify(formToProjectConfig(makeForm(), 'daily'))))
+      .not.toHaveProperty('programChangeGate');
+  });
+});
+
 describe('project automation explicit Harness serialization', () => {
   it('preserves the selection through JSON and omits its marker when following', () => {
     const form = makeForm({ agentKind: 'pi', modelAgentKind: 'pi', model: 'test-model',
