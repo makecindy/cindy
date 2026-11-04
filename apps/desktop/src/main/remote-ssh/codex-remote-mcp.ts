@@ -179,6 +179,17 @@ function clearHostAppliedFingerprint(hostId: string): void {
   writePortPrefs(next);
 }
 
+/**
+ * The remote daemon was stopped outside an MCP bootstrap (auth sync, proxy
+ * reconcile, install). Whatever restarts it next (transport startDaemon) does
+ * not carry LIZI_MCP_TOKEN, so the applied record no longer describes the
+ * daemon env. Drop it: the next session start / live send sees drift and
+ * re-bootstraps with the token instead of trusting a dead daemon's env.
+ */
+export function forgetRemoteCodexMcpDaemonEnv(hostId: string): void {
+  clearHostAppliedFingerprint(hostId);
+}
+
 /** host 被删时清理端口记录 (registerRemoteSshIpc 的 remove 路径调用)。 */
 export function removeRemoteMcpForwardPref(hostId: string): void {
   const current = readPortPrefs();
