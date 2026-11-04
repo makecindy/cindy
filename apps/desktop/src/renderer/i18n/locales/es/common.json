@@ -3962,7 +3962,7 @@
         "disabledGroup": "Desactivado",
         "enableAllModels": "Habilitar todo",
         "priceOverride": {
-          "menu": "Editar estimación de precio API",
+          "referenceDetails": "Detalles del precio de referencia",
           "title": "Precio estimado de {{model}} API",
           "description": "Se utiliza únicamente para estimar el uso en su propio API o ruta de suscripción. Esto no cambia la factura del proveedor.",
           "currency": "Moneda",
@@ -3973,6 +3973,7 @@
           "unit": "Precio por 1 millón de tokens. Deje los campos de caché en blanco cuando no se facturen por separado.",
           "registryDate": "Referencia actualizada {{date}}",
           "conflict": "El precio de referencia remota cambió. Su estimación local todavía está en uso; revisarlo o restablecerlo a la nueva referencia.",
+          "resetShort": "Restablecer",
           "reset": "Restablecer a la referencia actual",
           "resetDone": "Restaurado el precio de referencia actual.",
           "save": "Guardar",

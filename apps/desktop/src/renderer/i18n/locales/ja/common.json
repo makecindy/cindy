@@ -3869,7 +3869,7 @@
         "disabledGroup": "無効",
         "enableAllModels": "すべて有効にする",
         "priceOverride": {
-          "menu": "API 料金見積もりを編集",
+          "referenceDetails": "参考価格の詳細",
           "title": "{{model}} の API 料金見積もり",
           "description": "自分の API またはサブスクリプション経路の使用量見積もりにのみ使われ、プロバイダーの実際の請求は変わりません。",
           "currency": "通貨",
@@ -3880,6 +3880,7 @@
           "unit": "100 万トークンあたりの料金。キャッシュが個別課金されない場合は空欄にしてください。",
           "registryDate": "参考料金の更新日 {{date}}",
           "conflict": "リモートの参考料金が更新されました。ローカル見積もりは引き続き優先されます。確認するか新しい参考料金に戻してください。",
+          "resetShort": "リセット",
           "reset": "現在の参考料金に戻す",
           "resetDone": "現在の参考料金に戻しました",
           "save": "保存",

@@ -3869,7 +3869,7 @@
         "disabledGroup": "비활성화됨",
         "enableAllModels": "모두 활성화",
         "priceOverride": {
-          "menu": "API 가격 추정치 편집",
+          "referenceDetails": "참고 가격 상세",
           "title": "{{model}} API 가격 추정치",
           "description": "내 API 또는 구독 경로의 사용량을 추정할 때만 사용되며 제공자의 실제 청구 금액은 변경하지 않습니다.",
           "currency": "통화",
@@ -3880,6 +3880,7 @@
           "unit": "100만 토큰당 가격입니다. 캐시가 별도로 과금되지 않으면 비워 두세요.",
           "registryDate": "참고 가격 업데이트 {{date}}",
           "conflict": "원격 참고 가격이 변경되었습니다. 로컬 추정치는 계속 우선 적용됩니다. 검토하거나 새 참고 가격으로 재설정하세요.",
+          "resetShort": "초기화",
           "reset": "현재 참고 가격으로 재설정",
           "resetDone": "현재 참고 가격으로 복원했습니다",
           "save": "저장",

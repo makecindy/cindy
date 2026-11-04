@@ -2,8 +2,10 @@ export default {
   name: 'model-advanced', entry:'./model-advanced-fixture.tsx',
   viewport:{width:1000,height:800},
   real:'ModelAdvancedDrawer, buildUnionRows, bundled per-engine reasoning metadata, preference writes, themes and translations',
-  notCovered:'Account entitlement and live model calls; host context result and speed availability are fixture inputs',
+  notCovered:'Account entitlement and live model calls; host context, speed availability and price read/write responses are in-memory fixture inputs; no real persistence or billing',
   cases:{
+    pricing:{about:'Inline token prices, invalid required values revert, zero saves, reset restores reference'},
+    'pricing-narrow':{about:'Inline token pricing at 320px width',viewport:{width:320,height:800}},
     default:{about:'GPT-6 Astra with Codex Ultrafast entitlement'},
     narrow:{about:'Model compaction at phone width', viewport:{width:320,height:800}},
     sol:{about:'GPT-6.1 Sol with Codex Ultrafast entitlement'},
@@ -12,6 +14,31 @@ export default {
     'owner-repair':{about:'Same-owner generation change recovers an in-flight image capability save'},
   },
   async check(page,ui) {
+    if (ui.case.startsWith('pricing')) {
+      const input = page.locator('[data-model-price-input]').first();
+      await input.waitFor();
+      await page.waitForFunction(() => document.querySelector('[data-model-price-input]')?.value === '2');
+      const pricing = input.locator('xpath=ancestor::section[1]');
+      await pricing.scrollIntoViewIfNeeded();
+      await ui.capture('pricing-reference', { locator: pricing });
+      await input.fill('');
+      await input.press('Enter');
+      await page.waitForFunction(() => document.querySelector('[data-model-price-input]')?.value === '2');
+      await ui.capture('pricing-invalid-restored', { locator: pricing });
+      await input.fill('0');
+      await input.press('Enter');
+      const reset = pricing.getByRole('button', { name: await ui.t('settings.providers.models.priceOverride.resetShort'), exact: true });
+      await page.waitForFunction(() => document.querySelector('section[aria-busy]')?.getAttribute('aria-busy') === 'false');
+      if (await reset.isDisabled()) throw Error('Valid zero did not enable reset');
+      await input.fill('8');
+      await input.press('Escape');
+      if (await input.inputValue() !== '0') throw Error('Escape did not restore the saved zero');
+      await ui.capture('pricing-custom-zero', { locator: pricing });
+      await reset.click();
+      await page.waitForFunction(() => document.querySelector('[data-model-price-input]')?.value === '2');
+      await ui.capture('pricing-reset', { locator: pricing });
+      return;
+    }
     const ultra=page.getByRole('radio',{name:await ui.t('effortLevels.ultra'),exact:true});
     await ultra.waitFor();
     const clipped=await ultra.evaluate(el=>{

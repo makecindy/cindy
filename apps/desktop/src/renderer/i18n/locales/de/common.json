@@ -3911,7 +3911,7 @@
         "disabledGroup": "Deaktiviert",
         "enableAllModels": "Alle aktivieren",
         "priceOverride": {
-          "menu": "API-Preisschätzung bearbeiten",
+          "referenceDetails": "Details zum Referenzpreis",
           "title": "API-Preisschätzung für {{model}}",
           "description": "Dient nur zur Schätzung der Nutzung über deine eigene API oder dein Abonnement. Die Rechnung des Anbieters wird dadurch nicht geändert.",
           "currency": "Währung",
@@ -3922,6 +3922,7 @@
           "unit": "Preis pro 1 Mio. Tokens. Cache-Felder leer lassen, wenn sie nicht separat abgerechnet werden.",
           "registryDate": "Referenz aktualisiert am {{date}}",
           "conflict": "Der entfernte Referenzpreis hat sich geändert. Deine lokale Schätzung wird weiterhin verwendet; prüfe sie oder setze sie auf den neuen Referenzpreis zurück.",
+          "resetShort": "Zurücksetzen",
           "reset": "Auf aktuelle Referenz zurücksetzen",
           "resetDone": "Aktueller Referenzpreis wiederhergestellt",
           "save": "Speichern",

@@ -3962,7 +3962,7 @@
         "disabledGroup": "Désactivés",
         "enableAllModels": "Tout activer",
         "priceOverride": {
-          "menu": "Modifier l'estimation du prix API",
+          "referenceDetails": "Détails du prix de référence",
           "title": "Estimation du prix API de {{model}}",
           "description": "Sert uniquement à estimer la consommation sur votre propre API ou route d'abonnement. Cela ne modifie pas la facture du fournisseur.",
           "currency": "Devise",
@@ -3973,6 +3973,7 @@
           "unit": "Prix pour 1 M de jetons. Laissez les champs de cache vides s'ils ne sont pas facturés séparément.",
           "registryDate": "Référence mise à jour le {{date}}",
           "conflict": "Le prix de référence distant a changé. Votre estimation locale reste utilisée ; vérifiez-la ou réinitialisez-la avec la nouvelle référence.",
+          "resetShort": "Réinitialiser",
           "reset": "Réinitialiser avec la référence actuelle",
           "resetDone": "Prix de référence actuel restauré",
           "save": "Enregistrer",

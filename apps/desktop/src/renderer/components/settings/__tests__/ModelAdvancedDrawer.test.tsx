@@ -8,6 +8,10 @@ const mocks = vi.hoisted(() => ({
   setLimit: vi.fn(async () => {}),
   reset: vi.fn(async () => {}),
   target: vi.fn(),
+  price: vi.fn(),
+  priceProbe: false,
+  priceDeferredProbe: false,
+  deferredBlur: vi.fn(),
   imageTarget: vi.fn(),
   imageSet: vi.fn(async () => {}),
   limit: null as number | null,
@@ -51,7 +55,8 @@ vi.mock('@/state/providerModelMemory', () => ({
   setProviderModelEffort: vi.fn(),
   clearProviderModelEffort: vi.fn(),
 }));
-vi.mock('../ModelPriceOverrideDialog', () => ({ ModelPriceOverrideDialog: () => null }));
+vi.mock('../ModelPriceOverrideDialog', () => ({ ModelPriceOverrideDialog: (props: { initialAgent: 'codex' | 'claude-code' | 'pi'; referenceDetails?: React.ReactNode | ((agent: 'codex' | 'claude-code' | 'pi') => React.ReactNode) }) => { mocks.price(props); return mocks.priceDeferredProbe ? <button aria-label="price deferred probe" data-model-price-deferred-action onBlur={mocks.deferredBlur}>Reset</button> : mocks.priceProbe ? <input aria-label="price escape probe" data-model-price-input /> : typeof props.referenceDetails === 'function' ? props.referenceDetails(props.initialAgent) : props.referenceDetails ?? null; } }));
+import { MANAGED_OLLAMA_PROVIDER_ID } from '../../../../shared/localModelRuntime';
 import { ModelAdvancedDrawer } from '../ModelAdvancedDrawer';
 import { setModelVisibility } from '@/state/modelVisibilityPrefs';
 import { setProviderModelEffort, getProviderModelEffort, clearProviderModelEffort } from '@/state/providerModelMemory';
@@ -106,6 +111,8 @@ afterEach(cleanup);
 beforeEach(() => {
   vi.clearAllMocks();
   mocks.limit = null;
+  mocks.priceProbe = false;
+  mocks.priceDeferredProbe = false;
   vi.mocked(getProviderModelEffort).mockReset();
 });
 
@@ -1088,4 +1095,95 @@ it('does not label an unverified working default as the upstream capacity', () =
   expect(screen.getByText('settings.providers.models.advanced.catalogMissing')).toBeTruthy();
   fireEvent.blur(input);
   expect(mocks.setLimit).toHaveBeenLastCalledWith(1_000_000);
+});
+
+
+it('uses the inline price editor for the displayed model without the old modal entry', () => {
+  render(drawer());
+  expect(mocks.price).toHaveBeenCalledWith(expect.objectContaining({
+    presentation: 'inline', initialAgent: 'codex', open: true,
+    provider: expect.objectContaining({ id: 'openai' }),
+    row: expect.objectContaining({ id: 'gpt-6' }),
+  }));
+  expect(screen.queryByText('settings.providers.models.priceOverride.menu')).toBeNull();
+});
+
+it('keeps XD and payment-locked model prices read-only', () => {
+  const ui = render(drawer(model, model.defaultEffort, model.efforts, { ...provider, id: 'xd' }));
+  expect(mocks.price).not.toHaveBeenCalled();
+  ui.unmount();
+  const enterprise = render(drawer(model, model.defaultEffort, model.efforts, { ...provider, id: 'enterprise', source: 'organization' }));
+  expect(mocks.price).not.toHaveBeenCalled();
+  enterprise.unmount();
+  const row = { id: model.id, name: model.name, avail: ['codex'] as const, byAgent: { codex: model } };
+  render(<ModelAdvancedDrawer provider={provider} row={{ ...row, avail: [...row.avail] }}
+    open onOpenChange={vi.fn()} pricePresentationOf={() => null} onDisable={vi.fn()}
+    disabled={false} paymentRequired />);
+  expect(mocks.price).not.toHaveBeenCalled();
+});
+
+
+it('does not close the outer dialog when Escape originates from an inline price input', () => {
+  mocks.priceProbe = true;
+  render(drawer());
+  const input = screen.getByLabelText('price escape probe');
+  input.focus();
+  expect(fireEvent.keyDown(input, { key: 'Escape' })).toBe(false);
+  expect(screen.getByRole('dialog')).toBeTruthy();
+});
+
+
+it('keeps the drawer mounted while a price mutation is pending', () => {
+  const close = vi.fn();
+  const ui = drawer();
+  render({ ...ui, props: { ...ui.props, onOpenChange: close } });
+  const pending = mocks.price.mock.lastCall![0].onPendingChange;
+  pending(true);
+  fireEvent.click(screen.getByRole('button', { name: 'settings.providers.models.advanced.close' }));
+  expect(close).not.toHaveBeenCalled();
+  pending(false);
+  fireEvent.click(screen.getByRole('button', { name: 'settings.providers.models.advanced.close' }));
+  expect(close).toHaveBeenCalledWith(false);
+});
+
+it.each(['disable', 'delete'] as const)('keeps the drawer mounted when %s is clicked during a price mutation', (action) => {
+  const onDisable = vi.fn();
+  const onDeleteLocal = vi.fn();
+  const ui = drawer();
+  render({ ...ui, props: { ...ui.props, provider: { ...provider, id: MANAGED_OLLAMA_PROVIDER_ID }, onDisable, onDeleteLocal } });
+  const pending = mocks.price.mock.lastCall![0].onPendingChange;
+  const button = screen.getByRole('button', { name: action === 'disable'
+    ? 'settings.providers.models.disableModel' : 'settings.providers.local.deleteModel' });
+  pending(true);
+  fireEvent.click(button);
+  expect(onDisable).not.toHaveBeenCalled();
+  expect(onDeleteLocal).not.toHaveBeenCalled();
+  pending(false);
+  fireEvent.click(button);
+  expect(action === 'disable' ? onDisable : onDeleteLocal).toHaveBeenCalledWith(ui.props.row);
+});
+
+it('derives reference price details from the selected engine model', () => {
+  const first = { ...model, costDiscount: 0.8 };
+  const second = { ...model, id: 'other-engine-model', costDiscount: 0.5 };
+  const price = vi.fn(() => null);
+  render(<ModelAdvancedDrawer provider={provider}
+    row={{ id: model.id, name: model.name, avail: ['codex', 'claude-code'], byAgent: { codex: first, 'claude-code': second } }}
+    open onOpenChange={vi.fn()} pricePresentationOf={price} onDisable={vi.fn()} disabled={false} paymentRequired={false} />);
+  const details = mocks.price.mock.lastCall![0].referenceDetails;
+  const ui = render(details('claude-code'));
+  expect(price).toHaveBeenLastCalledWith('claude-code', second);
+  expect(ui.container.textContent).toContain('↓50%');
+  expect(ui.container.textContent).not.toContain('↓20%');
+});
+
+
+it('flushes deferred blur before Escape can dismiss the drawer', () => {
+  mocks.priceDeferredProbe = true;
+  render(drawer());
+  const button = screen.getByLabelText('price deferred probe');
+  button.focus();
+  expect(fireEvent.keyDown(button, { key: 'Escape' })).toBe(false);
+  expect(mocks.deferredBlur).toHaveBeenCalledOnce();
+  expect(screen.getByRole('dialog')).toBeTruthy();
 });

@@ -2,7 +2,24 @@ import { mountPage, subscription } from '../../ui-page/harness';
 import { ModelAdvancedDrawer } from '../../../src/renderer/components/settings/ModelAdvancedDrawer';
 import { buildUnionRows } from '../../../src/renderer/components/settings/UnifiedModelList';
 import { BUNDLED_CATALOG, resolveModelMetadata, type CatalogModel, type ProviderView } from '@cindy/model-providers';
+import type { ModelPriceOverrideDesiredQuote, ModelPriceOverrideTarget, ModelPriceOverrideView } from '../../../src/shared/modelPriceOverride';
 import { setDataOwnerGeneration } from '../../../src/renderer/contexts/dataOwnerGeneration';
+
+
+const referenceQuote = { providerId: 'openai', modelId: 'gpt-6.1-sol', currency: 'USD' as const,
+  source: 'provider-reference' as const, approximate: false,
+  inputPerMtok: 2, outputPerMtok: 10, cacheReadPerMtok: 0.1, cacheCreatePerMtok: 2.5 };
+const priceOverrides = new Map<string, ModelPriceOverrideDesiredQuote>();
+const priceKey = (target: ModelPriceOverrideTarget) => `${target.agent}:${target.modelId}`;
+const priceView = (target: ModelPriceOverrideTarget): ModelPriceOverrideView => {
+  const override = priceOverrides.get(priceKey(target)) ?? null;
+  const reference = { ...referenceQuote, modelId: target.modelId };
+  return { target, editable: true, reference, override,
+    effective: override ? { ...reference, ...override,
+      cacheReadPerMtok: override.cacheReadPerMtok ?? undefined,
+      cacheCreatePerMtok: override.cacheCreatePerMtok ?? undefined } : reference,
+    conflict: false, registryUpdatedAt: '2026-10-31', allowedCurrencies: ['USD'] };
+};
 
 let imageInput: boolean | null = null;
 let finishOldImageSave: (() => void) | null = null;
@@ -26,6 +43,15 @@ void mountPage({
         queueMicrotask(() => finishOldImageSave?.());
       }),
       maker: {
+    getModelPriceOverride: async (target: ModelPriceOverrideTarget) => priceView(target),
+    setModelPriceOverride: async (target: ModelPriceOverrideTarget, quote: ModelPriceOverrideDesiredQuote) => {
+      priceOverrides.set(priceKey(target), quote);
+      return priceView(target);
+    },
+    resetModelPriceOverride: async (target: ModelPriceOverrideTarget) => {
+      priceOverrides.delete(priceKey(target));
+      return priceView(target);
+    },
     getModelImageInputOverride: async () => ({ value: imageInput, mixed: false }),
     setModelImageInputOverride: async (_target: unknown, value: boolean | null) => {
       imageInput = value;
@@ -45,7 +71,7 @@ void mountPage({
     } };
   },
   render: ctx => {
-    const id = ctx.case === 'sol' ? 'gpt-6.1-sol' : ctx.case === 'legacy-sol' ? 'gpt-6-sol' : 'gpt-6-astra';
+    const id = ['sol', 'pricing', 'pricing-narrow'].includes(ctx.case) ? 'gpt-6.1-sol' : ctx.case === 'legacy-sol' ? 'gpt-6-sol' : 'gpt-6-astra';
     const models = Object.fromEntries((['codex', 'claude-code', 'pi'] as const).map(agent => {
       const meta = resolveModelMetadata(BUNDLED_CATALOG.modelRegistry, 'openai', id, undefined, undefined, agent);
       const model: CatalogModel = {
