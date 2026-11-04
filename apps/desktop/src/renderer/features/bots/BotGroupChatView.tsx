@@ -1029,11 +1029,18 @@ function BotGroupChatContent({ groupId, direct }: { groupId: string; direct: boo
     if (!jumpTarget) return;
     const target = [...(contentRef.current?.querySelectorAll<HTMLElement>('[data-bot-group-message-id]') ?? [])]
       .find(element => element.dataset.botGroupMessageId === jumpTarget);
-    if (!target) return;
+    const scroller = scrollRef.current;
+    if (!target || !scroller) return;
     setJumpTarget(null);
     jumpingToBottomRef.current = false;
     stickToBottomRef.current = false;
-    target.scrollIntoView?.({ block: 'center' });
+    // scrollIntoView also scrolls clipped ancestors, pulling the composer upward
+    // when a recent message cannot be centered within the timeline itself.
+    const targetRect = target.getBoundingClientRect();
+    const scrollRect = scroller.getBoundingClientRect();
+    const centeredTop = scroller.scrollTop + targetRect.top - scrollRect.top - scroller.clientTop
+      + (targetRect.height - scroller.clientHeight) / 2;
+    scroller.scrollTop = Math.max(0, Math.min(centeredTop, scroller.scrollHeight - scroller.clientHeight));
     target.focus({ preventScroll: true });
     setHighlightId(jumpTarget);
     readLocatedMention(jumpTarget, target);
