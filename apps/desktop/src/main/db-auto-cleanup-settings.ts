@@ -1,6 +1,12 @@
 import path from 'node:path';
 
-import type { DbSlimmingArchiveAge } from '../shared/localDbMaintenance';
+import {
+  DB_AUTO_CLEANUP_RETENTION_DAYS_OPTIONS,
+  type DbAutoCleanupRetentionDays,
+  type DbAutoCleanupSettingsPatch,
+  type DbAutoCleanupSettingsView,
+  type DbSlimmingArchiveAge,
+} from '../shared/localDbMaintenance';
 import {
   createOverrideSettingsFile,
 } from './maker-host/override-settings-file.js';
@@ -14,9 +20,6 @@ export const DB_AUTO_CLEANUP_SETTINGS_FILE_NAME = 'db-auto-cleanup-settings.json
  * unreadable on the next startup. The purge cutoff always comes from
  * `retentionDays`; the enum value only labels the request and its result.
  */
-export const DB_AUTO_CLEANUP_RETENTION_DAYS_OPTIONS = [7, 30, 90, 180] as const;
-export type DbAutoCleanupRetentionDays = (typeof DB_AUTO_CLEANUP_RETENTION_DAYS_OPTIONS)[number];
-
 const RETENTION_DAYS_TO_ARCHIVE_AGE: Record<DbAutoCleanupRetentionDays, DbSlimmingArchiveAge> = {
   7: '7-days',
   30: 1,
@@ -53,12 +56,7 @@ export interface DbAutoCleanupSettingsLog {
 }
 
 const DEFAULTS: DbAutoCleanupSettings = {
-  // Shipped off. Automatic runs delete user history without a confirmation step,
-  // so they must not start before the Settings card can turn them off again.
-  // The card lands in the follow-up PR; that PR flips this to `true` together
-  // with the visible switch. Until then the mechanism is reachable only by
-  // writing this file, which is exactly the intended rollout order.
-  enabled: false,
+  enabled: true,
   retentionDays: DB_AUTO_CLEANUP_DEFAULT_RETENTION_DAYS,
   minMessageCount: DB_AUTO_CLEANUP_DEFAULT_MIN_MESSAGE_COUNT,
   minEstimatedMessageBytes: DB_AUTO_CLEANUP_DEFAULT_MIN_ESTIMATED_MESSAGE_BYTES,
@@ -145,12 +143,61 @@ export function readDbAutoCleanupSettings(
   return createStore(userDataDir, log).read();
 }
 
+/** Renderer projection: only the two fields the Settings card can edit. */
+export function readDbAutoCleanupSettingsView(
+  userDataDir: string,
+  log: DbAutoCleanupSettingsLog,
+): DbAutoCleanupSettingsView {
+  const settings = readDbAutoCleanupSettings(userDataDir, log);
+  return { enabled: settings.enabled, retentionDays: settings.retentionDays };
+}
+
+/**
+ * Validates an IPC payload. Unknown keys are dropped rather than rejected, so a
+ * newer renderer cannot brick an older main process with a field it ignores.
+ */
+export function parseDbAutoCleanupSettingsPatch(
+  raw: unknown,
+): { patch: DbAutoCleanupSettingsPatch } | { error: string } {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) {
+    return { error: 'database auto cleanup settings payload required' };
+  }
+  const value = raw as Record<string, unknown>;
+  const patch: DbAutoCleanupSettingsPatch = {};
+  if (value.enabled !== undefined) {
+    if (typeof value.enabled !== 'boolean') return { error: 'enabled must be a boolean' };
+    patch.enabled = value.enabled;
+  }
+  if (value.retentionDays !== undefined) {
+    if (!isRetentionDays(value.retentionDays)) {
+      return {
+        error: `retentionDays must be one of ${DB_AUTO_CLEANUP_RETENTION_DAYS_OPTIONS.join(', ')}`,
+      };
+    }
+    patch.retentionDays = value.retentionDays;
+  }
+  if (Object.keys(patch).length === 0) return { error: 'at least one setting is required' };
+  return { patch };
+}
+
+/** Cross-process locked write: the renderer can save while another instance runs. */
+export async function writeDbAutoCleanupSettingsPatch(
+  userDataDir: string,
+  patch: DbAutoCleanupSettingsPatch,
+  log: DbAutoCleanupSettingsLog,
+): Promise<DbAutoCleanupSettingsView> {
+  const store = createStore(userDataDir, log);
+  await store.writePatchAtomic(patch);
+  return readDbAutoCleanupSettingsView(userDataDir, log);
+}
+
 /**
  * Best-effort cooldown stamp. It is written synchronously on purpose: the caller
- * already holds this database's exclusive startup writer lease, nothing else
- * writes the file yet, and startup must not wait on a cross-process lock. Losing
- * the stamp only delays the next automatic run — the volume threshold and the
- * empty target set still keep it from repeating.
+ * already holds this database's exclusive startup writer lease and the renderer
+ * shell has not mounted yet, so no renderer save can be in flight; startup must
+ * not wait on a cross-process lock. Losing the stamp only delays the next
+ * automatic run — the volume threshold and the empty target set still keep it
+ * from repeating.
  */
 export function recordDbAutoCleanupRun(
   userDataDir: string,
@@ -169,6 +216,7 @@ export function recordDbAutoCleanupRun(
 export const __testing = {
   DEFAULTS,
   normalize,
+  parseDbAutoCleanupSettingsPatch,
   MIN_MESSAGE_COUNT,
   MAX_MESSAGE_COUNT,
   MIN_COOLDOWN_DAYS,

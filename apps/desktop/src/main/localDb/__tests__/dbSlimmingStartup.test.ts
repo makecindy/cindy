@@ -621,10 +621,11 @@ describe('runPendingDbSlimmingAtStartup', () => {
     expect(secondRun).not.toHaveBeenCalled();
   });
 
-  it('does not purge anything before the setting is switched on', async () => {
-    // No settings file at all: the shipped default must stay inert, because the
-    // switch that turns this off again ships in a later PR. The fixture clears
-    // the 1,000-message threshold, so only `enabled: false` can keep this quiet.
+  it('does not purge anything when automatic cleanup is switched off', async () => {
+    // The settings card is the only way a user can turn this off, so an explicit
+    // `enabled: false` has to keep the whole path inert. The fixture clears the
+    // 1,000-message threshold, so only the switch can keep this quiet.
+    writeAutoCleanupSettings({ enabled: false });
     createAutoCleanupFixture({ deletedMessageCount: 1_000 });
     const runMaintenance = vi.fn();
 
