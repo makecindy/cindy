@@ -59,6 +59,7 @@ import {
 import { ExecServerRelay } from './execServerRelay';
 import { createReverseHttpRouter, type LocalMcpTarget } from './router';
 import { RemoteAgentPoller, RemoteAgentRunClient, type RemoteAgentInvoke } from './runClient';
+import { isSharedTaskAuthorizationDenied } from './poller';
 
 export interface PreparedRemoteMcp {
   /** 本任务可用的本机 MCP 服务(名字 → 带本任务身份的地址与请求头)。 */
@@ -70,7 +71,9 @@ export interface StartRemoteAgentDeps {
   /** Cancellation for this startup attempt only; never cancels other starts of the task. */
   startupSignal?: AbortSignal;
   /** A direct share must renew the original executor's grant before reopening. */
-  reconnectAuthorization?(isCurrent: () => boolean): Promise<void>;
+  reconnectAuthorization?(isCurrent: () => boolean, options?: { force?: boolean }): Promise<void>;
+  /** Background renewal is allowed only while M has confirmed the current grant. */
+  onTaskGrantRenewable?(renewable: boolean): void;
   readImageDeliveryEpoch?(sessionId: string): Promise<number>;
   invoke: RemoteAgentInvoke;
   /** 这台电脑的共享拉取器(同一台电脑上的任务共用一个 poll)；缺省时本任务单独一个。 */
@@ -505,6 +508,8 @@ async function prepareAndStartRemoteAgentSession(
   let lastActivity = Date.now();
   let releasing: Promise<void> | null = null;
   let reconnecting: Promise<RemoteAgentRunClient> | null = null;
+  /** O issued a replacement grant that M has not confirmed yet; do not issue another. */
+  let taskGrantReissued = false;
   const touch = () => {
     lastActivity = Date.now();
   };
@@ -708,6 +713,7 @@ async function prepareAndStartRemoteAgentSession(
           return;
         }
         active = null;
+        deps.onTaskGrantRenewable?.(false);
         // 对方按闲置收回了它的 Agent 进程(它只收回不忙的任务)：与连接池让出名额一样，本机部分与对话都留着，
         // 要它干活时带原来的会话 id 连回。
         // 'aborted' is only a legacy-host compatibility fallback: old hosts used it
@@ -1004,19 +1010,27 @@ async function prepareAndStartRemoteAgentSession(
       await releasing.catch(() => undefined);
     }
     linkState = 'connecting';
+    deps.onTaskGrantRenewable?.(false);
     let attempt: Promise<RemoteAgentRunClient> | null = null;
     attempt = (async () => {
-      try {
-        await deps.reconnectAuthorization?.(() => stateNow() !== 'closed');
+      const connectOnce = async (skipAuthorization = false): Promise<RemoteAgentRunClient> => {
+        if (!skipAuthorization) await deps.reconnectAuthorization?.(() => stateNow() !== 'closed');
         requireOpen();
         const client = await connect(true, (started) => {
           controller?.onReconnected(started);
         });
+        // M's task-scoped open is the confirmation that the current grant is
+        // usable. A later independent M restart may ask O for a new one again.
+        if (stateNow() === 'connected' && activeNow() === client) {
+          taskGrantReissued = false;
+          deps.onTaskGrantRenewable?.(true);
+        }
         touch();
         deps.log?.info('remote agent reconnected', { kind, runId: client.runId });
         try {
           await reapply(client);
         } catch (error) {
+          deps.onTaskGrantRenewable?.(false);
           // 补发失败：关掉这次开的进程、还回名额，保持已让出；待补发的内容都还在，下次调用重新连回再补。
           if (stateNow() === 'connected' && activeNow() === client) {
             linkState = 'releasing';
@@ -1025,6 +1039,25 @@ async function prepareAndStartRemoteAgentSession(
           throw error;
         }
         if (stateNow() !== 'connected' || activeNow() !== client) throw new Error('[REMOTE_AGENT_EXPIRED] The task has ended on this computer.');
+        return client;
+      };
+      try {
+        const connectWithRecovery = async (): Promise<RemoteAgentRunClient> => {
+          try {
+            return await connectOnce();
+          } catch (error) {
+            if (stateNow() === 'closed' || !deps.reconnectAuthorization
+              || taskGrantReissued || !isSharedTaskAuthorizationDenied(error)) throw error;
+            // M restarted and lost its in-memory task grant. Only O can reissue
+            // that grant, and only for the original M; never migrate native history.
+            // Mark the replacement only after O actually resolves: O being
+            // unreachable must not permanently suppress a later retry.
+            await deps.reconnectAuthorization(() => stateNow() !== 'closed', { force: true });
+            taskGrantReissued = true;
+            return await connectOnce(true);
+          }
+        };
+        const client = await connectWithRecovery();
         restartResumeRequired = false;
         return client;
       } catch (error) {

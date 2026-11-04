@@ -134,6 +134,25 @@ afterEach(() => { act(() => root?.unmount()); root = undefined; vi.unstubAllGlob
 // #5759, unit: exercise the actual direct hook/client, not the remote-resource
 // mock. A human-signed proposal previously rendered as text and rejected plan-start.
 // The blur cases retain the original group in the navigation stack while its snapshot is pending.
+it('sends a future skip from the mobile hook without requiring a nonexistent execution', async () => {
+  const planId = '00000000-0000-4000-8000-000000000040';
+  const plan = { id: planId, revision: 2, creator_id: self, organizer_id: self, source_message_id: self,
+    request_text: 'Talk', kind: 'talk', status: 'running', current_step: 0, supportsPendingSkip: true,
+    activeExecution: { id: self, status: 'running' }, created_at: '2026-10-09', updated_at: '2026-10-09',
+    steps: [0, 1].map(position => ({ position, botId: self, botName: 'Bot', task: '', status: position === 0 ? 'running' : 'pending' })) };
+  const writes: unknown[] = [];
+  const original = h.auth.apiFetch.getMockImplementation()!;
+  h.auth.apiFetch.mockImplementation(async (path, options) => {
+    if (path.includes('/plans') && options.method === 'POST') { writes.push(options.body); return { ok: true }; }
+    if (path.includes('/plans')) return [plan];
+    return original(path, options);
+  });
+  showChat = true; await render();
+  await act(async () => { await chat.act('plan-edit', { planId, expectedRevision: 2, action: 'skip', position: 1 }); });
+  expect(writes).toEqual([expect.objectContaining({ expectedRevision: 2, action: 'skip', position: 1 })]);
+  expect(writes[0]).not.toHaveProperty('executionId');
+});
+
 it.each(['receipt', 'leave', 'unmount', 'blur', 'refocus', 'blur-before-submit'])('handles a direct plan action across %s without a duplicate or stale write', async transition => {
   const planId = '00000000-0000-4000-8000-000000000040';
   let plan = { id: planId, revision: 2, creator_id: self, organizer_id: self, source_message_id: self,

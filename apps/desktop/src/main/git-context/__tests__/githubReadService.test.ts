@@ -84,6 +84,8 @@ describe('shared GitHub read protocol', () => {
     for (const value of [
       12,
       { number: 12 },
+      { repo: 'group/project', number: 12, provider: 'gitlab', host: 'git.example.com' },
+      { url: 'https://git.example.com/group/project/-/merge_requests/12' },
       { url: 'https://github.com.evil.test/o/r/pull/12' },
       { url: 'https://user@github.com/o/r/pull/12' },
     ])
