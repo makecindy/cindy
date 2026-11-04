@@ -76,7 +76,7 @@
   },
   "scripts": {
     "h": "node scripts/help.mjs",
-    "start-host": "node apps/host/src/cli.mjs",
+    "start-host": "node --import tsx apps/host/src/main.ts",
     "mobile:xcode": "node apps/mobile/scripts/open-ios-xcode.mjs",
     "mobile:sim:rebuild": "node scripts/ensure-deps.mjs --workspace-only && node apps/mobile/scripts/sim-rebuild.mjs",
     "mobile:sim:start": "node scripts/ensure-deps.mjs --workspace-only && node apps/mobile/scripts/sim-start.mjs",

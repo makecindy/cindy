@@ -524,8 +524,13 @@ import {
   beginSessionTurnEndedSuppression,
   freezeSessionActiveTurnMarkers,
 } from './localDb/sessionActiveTurn';
-import { getDrizzleDir } from './localDb/migrate';
-import { resolveSqliteVecExtPath } from './localDb/sqliteVecLoader';
+import { configureMigrationRuntime } from './localDb/migrationRuntime';
+import { getDrizzleDir, resolveDesktopDrizzleDir } from './localDb/migrate';
+import {
+  configureSqliteVecExtPath,
+  resolveDesktopSqliteVecExtPath,
+  resolveSqliteVecExtPath,
+} from './localDb/sqliteVecLoader';
 import {
   startEmbeddingHost,
   stopEmbeddingHost,
@@ -1683,8 +1688,20 @@ import {
   setCcDebugTailingEnabled,
   type LogLevel,
 } from './logger.js';
-initLogger();
+// Idempotent: index.ts already initialized the logger with its Electron facts.
+initLogger({
+  isPackaged: app.isPackaged,
+  userDataDir: app.getPath('userData'),
+  version: app.getVersion(),
+});
 const dbClientLog = createLogger('DbClient');
+// Storage paths are host facts: install them once so localDb never needs to
+// import Electron for packaged/dev layout questions.
+configureMigrationRuntime({
+  drizzleDir: resolveDesktopDrizzleDir(app.isPackaged),
+  isPackaged: app.isPackaged,
+});
+configureSqliteVecExtPath(resolveDesktopSqliteVecExtPath(app.isPackaged));
 const authBoundaryLog = createLogger('auth-boundary');
 // 镜像缓存清理失败会把 MirrorCachePurgeError 的 root/remaining 本地缓存路径写进日志,单独一个
 // 子 scope,好让日志上报的来源白名单把它排除掉(auth-boundary 根只留不带路径的服务停止诊断)。

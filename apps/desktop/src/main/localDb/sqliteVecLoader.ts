@@ -15,7 +15,6 @@
 import type Database from 'better-sqlite3';
 import path from 'node:path';
 import fs from 'node:fs';
-import { app } from 'electron';
 
 import { createLogger } from '../logger';
 
@@ -42,18 +41,42 @@ function libFilename(): string {
 }
 
 /**
+ * 解析 vec0 扩展库绝对路径（Desktop 默认布局）。
+ *
+ * dev:  __dirname = <repo>/apps/desktop/.vite/build → ../../native/sqlite-vec/
+ * prod: process.resourcesPath/app.asar.unpacked/native/sqlite-vec/
+ */
+export function resolveDesktopSqliteVecExtPath(isPackaged: boolean): string {
+  const relPath = path.join('native', 'sqlite-vec', platformDir(), libFilename());
+  if (isPackaged) {
+    return path.join(process.resourcesPath, 'app.asar.unpacked', relPath);
+  }
+  return path.resolve(__dirname, '..', '..', relPath);
+}
+
+let configuredExtPath: string | null = null;
+
+/**
+ * Install the host's sqlite-vec location once at startup. Desktop passes its
+ * packaged/dev layout; the Node host passes the checkout or install path.
+ */
+export function configureSqliteVecExtPath(extPath: string): void {
+  configuredExtPath = extPath;
+}
+
+/**
  * 解析 vec0 扩展库绝对路径。
  *
  * dev:  __dirname = <repo>/apps/desktop/.vite/build → ../../native/sqlite-vec/
  * prod: process.resourcesPath/app.asar.unpacked/native/sqlite-vec/
  */
 export function resolveSqliteVecExtPath(): string {
-  const relPath = path.join('native', 'sqlite-vec', platformDir(), libFilename());
-  if (app.isPackaged) {
-    return path.join(process.resourcesPath, 'app.asar.unpacked', relPath);
+  if (!configuredExtPath) {
+    throw new Error(
+      'sqlite-vec extension path is not configured; call configureSqliteVecExtPath() during startup',
+    );
   }
-  // dev: __dirname 指向 .vite/build/，上跳两级到 apps/desktop/
-  return path.resolve(__dirname, '..', '..', relPath);
+  return configuredExtPath;
 }
 
 /**

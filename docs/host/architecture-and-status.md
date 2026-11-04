@@ -56,7 +56,7 @@ flowchart LR
 | OAuth / Cindy 账号 | `apps/desktop/src/main/authManager.ts`；协议状态机在 `packages/auth-client`；loopback/hosted callback 辅助逻辑在 `authLoopbackCallback.ts`、`authHostedCallback.ts` | `authManager.ts` 直接依赖 `BrowserWindow`、Electron `net`、`safeStorage`、`shell`、`powerMonitor` 及 Desktop 生命周期/IPC。OAuth 必须抽出平台无关 owner/token 操作，沿用现凭据库，不复制 token 文件。 |
 | Harness | Agent 实现位于 `packages/maker-core/src/agents/claude-code/`、`codex/`、`pi/`；安装与版本准备在 `apps/desktop/src/main/agent-binaries/` 与 `tools/` | Agent 类可由 Node 构造；生产可执行文件准备器直接读取 Electron `app.getPath('userData')`，Codex 启动器和代理配置也在 Main。Host 需要复用同一受校验二进制与用户数据路径。 |
 | Plugin | Plugin/意识运行时在 `apps/desktop/src/main/cindy-brain/`；Plugin OAuth 在 `main/plugin-oauth/`；Maker MCP/插件能力由 `maker-host/index.ts` 装配 | 执行、审批、存储与登录边界在 Main。UI/IPC 入口不能作为 Host Runtime；抽取必须遵守插件存量兼容要求，已安装与已批准插件升级后无需重装或重批。 |
-| Local Storage | `apps/desktop/src/main/localDb/`、`apps/desktop/drizzle/`；userData 路径来自 Electron `app.getPath('userData')`；凭据由 `authManager.ts` 与现有 Secret Store 管理 | `localDb/index.ts` 的 `ensureReady` 依赖 Electron `app`、`dialog`、`BrowserWindow` 并负责 migration/schema lease。Host 必须使用同一 profile/DB 与 migration/lease 契约；不能建平行库，也不能绕过单写者租约。 |
+| Local Storage | `apps/desktop/src/main/localDb/`、`apps/desktop/drizzle/`；凭据由 `authManager.ts` 与现有 Secret Store 管理 | Host 走 `localDb/startupCore.ts`：同一 `<userData>/cindy-<owner>.db`、同一 schema lease、同一 `runMigrations`、同一 CJK/vec 初始化。Desktop 的 `ensureReady` 仍负责对话框、瘦身 worker 与 dev drift 修复；两处收敛为待办，但不会同时写入同一 profile。 |
 | Mobile Device Link | `packages/device-link` 协议；Desktop Main 的 `apps/desktop/src/main/device-link/` 与 Mobile 调用端 | 迁移期间保持现状可用；未来通过 Host API 接入，完成互通证据前不能移除。 |
 
 ## 生产 Maker 抽取边界
@@ -82,9 +82,9 @@ flowchart LR
 
 | 项 | 状态 | 证据/缺口 |
 | --- | --- | --- |
-| `cindy-host` Node 进程与 `GET /health` | 部分 | `apps/host/src/cli.mjs` 仅启动 loopback HTTP 健康端点；响应明确标记 Runtime `not_initialized`。 |
+| `cindy-host` Node 进程与 `GET /health` | 部分 | `apps/host/src/main.ts` 绑定 `127.0.0.1:3456`；`CINDY_HOST_OWNER` 存在时打开真实 owner 库。响应如实报告 `runtime.state` / `storage`。 |
 | 真实 Maker/Agent Runtime | 未实现 | 当前 `getMaker()` 生产装配仍在 Electron Main；不能把空 Maker、评测 Runner 或 API key adapter 冒充生产 Runtime。需先抽出共享 factory 与单 Runtime 所有权门。 |
-| 现有 session/message SQLite 与历史恢复 | 未实现 | 需要 Host 接管现有 DB 初始化和唯一写者租约；不使用 `apps/cindy-headless` 的独立表。 |
+| 现有 session/message SQLite 与历史恢复 | 部分 | Host 执行了全部迁移（临时 profile 实测 145 条 migration / 87 张表），并通过 `OwnerSessionStorage` 创建与重读同一条任务；重启 Host 后 `/health` 仍报告 `sessions: 1`。消息写入、Tool 结果、Desktop 同库并发互斥尚未验证。 |
 | Cindy OAuth 与凭据持久化 | 未实现 | 当前入口仍被 Electron APIs 包围；后续必须复用原 OAuth 及存储。 |
 | Claude Code / Codex / Pi Harness | 部分可独立 | `maker-core` agent 实现无 Electron；生产二进制准备、认证、代理、目录和 MCP 注入尚未迁出。 |
 | Plugin 执行与状态 | 未实现 | `cindy-brain`/plugin manager 依赖 Main 宿主接口与 Electron IPC；存量 plugin 向下兼容是阻断条件。 |
@@ -96,7 +96,15 @@ flowchart LR
 
 ## 阶段 1 Host shell
 
-`pnpm start-host` 与 package bin `cindy-host` 启动不导入 Electron 的 Node 进程，默认仅绑定 `127.0.0.1:3456`。当前端点是分析阶段的进程壳，不会假报 Runtime 已启动；Host Runtime 的实现必须在解决唯一 Runtime、数据写者与既有登录存储边界后启用。
+`pnpm start-host` 启动不导入 Electron 的 Node 进程（`node --import tsx`，后续需要打包成独立产物），默认绑定 `127.0.0.1:3456`。
+
+- 未设置 `CINDY_HOST_OWNER` 时只报告 `runtime.state = uninitialized`，不猜账号、不建库。
+- 设置 owner 后走 `localDb/startupCore.ts` 打开该 owner 的真实 Desktop 数据库：schema lease → 迁移 → CJK/vec → 返回共享 `DbClient`。
+- Host 尚未拥有 OAuth，因此 owner 目前必须由外部显式给出（后续阶段 2 取代）。
+
+尚未迁移、明确记为 TODO 的 Desktop-only 步骤：数据库瘦身 worker、dev 反射式 drift 修复/nuke、对话框与 renderer 广播、`initializeCodexHistoryPromptState`、对话工作区修复、Orca 悬空 Lead 对账、周期 `PRAGMA optimize`。
+
+`localDb/index.ts` 的 `ensureReady` 与 `startupCore.ts` 目前共享 lease/migration/CJK/vec 原语但保留两处编排；在 Electron 去核心化（阶段 5）前必须收敛为同一实现。
 
 ## 明确排除的参考实现
 

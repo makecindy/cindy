@@ -4,9 +4,13 @@
   "private": true,
   "type": "module",
   "bin": {
-    "cindy-host": "./src/cli.mjs"
+    "cindy-host": "./src/main.ts"
   },
   "scripts": {
-    "start": "node src/cli.mjs"
+    "start": "node --import tsx src/main.ts",
+    "test": "node --import tsx --test src/*.test.mjs"
+  },
+  "devDependencies": {
+    "tsx": "^4.19.0"
   }
 }

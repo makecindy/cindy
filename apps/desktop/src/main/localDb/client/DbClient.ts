@@ -1,19 +1,16 @@
 import type { BetterSQLite3Database } from 'drizzle-orm/better-sqlite3';
-import Database from 'better-sqlite3';
 
 import { createLogger } from '../../logger.js';
 import { ensureReady, getDrizzle, getRawDb } from '../index.js';
 import type * as schema from '../schema.js';
-import { isSqliteVecAvailable } from '../sqliteVecLoader.js';
 import { DbErrorBoundary } from './DbErrorBoundary.js';
 import type { DbTransport } from './DbTransport.js';
 import { UtilityProcessTransport } from './UtilityProcessTransport.js';
 import { WorkerThreadTransport } from './WorkerThreadTransport.js';
 import { createDrizzleProxy } from './drizzleProxy.js';
 import type { DbTxArgsByName, DbTxName, DbTxResultByName } from './tx/types.js';
-import { tx as runInprocTx } from '../worker/opHandlers/tx.js';
 import type { LocalWorktreeReference } from '../worker/worktreeReferences.js';
-import { readLocalWorktreeReferences } from '../worker/worktreeReferences.js';
+import { createDbClientForHandle } from './createDbClientForHandle.js';
 
 export interface DbClient {
   /** Optional only for legacy transports; callers must preserve on absence. */
@@ -114,6 +111,17 @@ export async function createDbClient(opts: CreateDbClientOptions = {}): Promise<
   return client;
 }
 
+/**
+ * Wrap the already-open Desktop connection. A Node host uses its own
+ * connection with `createDbClientForHandle` and never reaches into this
+ * module's singleton.
+ */
+export function createInprocDbClientAfterReady(
+  opts: Pick<CreateDbClientOptions, 'nativeBinding'> = {},
+): DbClient {
+  return createInprocClient(opts);
+}
+
 export async function createInprocDbClient(opts: CreateDbClientOptions = {}): Promise<DbClient> {
   if (opts.userId) {
     const ready = await ensureReady(opts.userId);
@@ -122,26 +130,23 @@ export async function createInprocDbClient(opts: CreateDbClientOptions = {}): Pr
     }
   }
 
-  return {
-    readLocalWorktreeReferences: async () =>
-      readLocalWorktreeReferences(getRawDb(), Database, opts.nativeBinding),
-    query: async <T = unknown>(sql: string, params: unknown[] = []) =>
-      getRawDb().prepare(sql).all(...params) as T[],
-    queryOne: async <T = unknown>(sql: string, params: unknown[] = []) =>
-      getRawDb().prepare(sql).get(...params) as T | undefined,
-    exec: async (sql, params = []) => getRawDb().prepare(sql).run(...params),
-    tx: async (name: string, args: unknown) =>
-      runInprocTx(getRawDb(), { name, args }) as never,
+  return createInprocClient(opts);
+}
+
+function createInprocClient(
+  opts: Pick<CreateDbClientOptions, 'nativeBinding'>,
+): DbClient {
+  // Lazy getters keep the legacy handle resolution (and its readiness error)
+  // identical to the previous inline implementation.
+  return createDbClientForHandle({
+    get db() {
+      return getRawDb();
+    },
     get drizzle() {
       return getDrizzle();
     },
-    get vecAvailable() {
-      return isSqliteVecAvailable();
-    },
-    dispose: async () => {
-      // The legacy in-proc handle is owned by the existing localDb lifecycle.
-    },
-  };
+    nativeBinding: opts.nativeBinding,
+  });
 }
 
 function resolveTransportKind(explicit?: DbTransportKind): DbTransportKind {

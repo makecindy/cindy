@@ -54,7 +54,13 @@ prepareCindyVersionStartup();
 // 进程级默认值,兜住 main 里所有不走自建 dispatcher 的 fetch / net.connect。
 setDefaultAutoSelectFamilyAttemptTimeout(2500);
 
-initLogger();
+// Logger 不再直接 import electron：宿主事实由调用方注入，Node 的 cindy-host
+// 因此能加载同一份日志与依赖它的 storage 模块。
+initLogger({
+  isPackaged: app.isPackaged,
+  userDataDir: app.getPath('userData'),
+  version: app.getVersion(),
+});
 const log = createLogger('fix-path');
 log.debug(`[fix-path] before PATH=${process.env.PATH ?? ''}`);
 fixPath();
