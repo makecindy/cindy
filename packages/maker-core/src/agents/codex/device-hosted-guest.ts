@@ -13,6 +13,7 @@
  */
 import { promises as fs } from 'node:fs';
 import path from 'node:path';
+import { codexUserAgentAtLeast } from './version-gates.js';
 
 const SPAWN_MODEL_OVERRIDES_KEY = 'features.multi_agent_v2.expose_spawn_agent_model_overrides';
 
@@ -71,7 +72,8 @@ export const CODEX_DEVICE_HOSTED_GUEST_THREAD_CONFIG: Readonly<Record<string, un
  *
  * 留下的：命令、补丁与看图(经执行环境在受邀者电脑上执行)，shell 快照(由执行环境在受邀者电脑上
  * 按受邀者自己的 shell 配置生成，关掉会让命令缺少 .zshrc 等设置的 PATH)，子代理，技能搜索，等待，
- * 审批与提问，目标与 Fast，以及连接、鉴权、上下文压缩本身需要的。生图不在内：它能按本机路径读参考图。
+ * 审批与提问，目标与 Fast，以及连接、鉴权、上下文压缩本身需要的。
+ * 生图另按运行时版本与执行环境开放，不能让没有远程执行环境的历史复制进程取得它。
  */
 export const CODEX_DEVICE_HOSTED_GUEST_KEPT_FEATURES: ReadonlySet<string> = new Set([
   'shell_tool', 'unified_exec', 'unified_exec_tty', 'write_stdin_approval', 'view_image', 'shell_snapshot',
@@ -117,10 +119,19 @@ export async function listCodexFeatures(
  * 受邀者线程的功能关闭项：名单外的功能都写 false(不论现在是否开着，项目配置也打不开)。
  * 已移除的开关不再起作用，跳过；已弃用的开关可能映射到别的配置，只关现在开着的。
  */
-export function codexGuestFeatureOverrides(features: readonly CodexFeatureState[]): Record<string, false> {
+export function codexGuestFeatureOverrides(
+  features: readonly CodexFeatureState[],
+  environment?: { userAgent?: string; remoteExecution: boolean },
+): Record<string, false> {
   const out: Record<string, false> = {};
   for (const feature of features) {
     if (CODEX_DEVICE_HOSTED_GUEST_KEPT_FEATURES.has(feature.name)) continue;
+    // Verified with the pinned 0.159.2 runtime: the image extension reads explicit
+    // references through ToolEnvironment.file_system + its sandbox, not LOCAL_FS.
+    // Leave the provider's feature setting intact; this never forces image support
+    // on or bypasses its image-model grant at the outbound proxy (#7677).
+    if (feature.name === 'image_generation' && environment?.remoteExecution
+      && codexUserAgentAtLeast(environment.userAgent, [0, 159, 2])) continue;
     if (feature.stage === 'removed') continue;
     if (feature.stage === 'deprecated' && !feature.enabled) continue;
     out[`features.${feature.name}`] = false;
