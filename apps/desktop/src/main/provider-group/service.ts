@@ -828,7 +828,9 @@ export function createProviderGroupService(deps: ProviderGroupServiceDeps): Prov
     const self = () => deps.localDeviceId?.() ?? null;
     const source: GroupSource = {
       ownerDeviceId,
-      readGroup: (providerId, options) => remote.readGroup(ownerDeviceId, providerId, options),
+      readGroup: (providerId, options) => options === undefined
+        ? remote.readGroup(ownerDeviceId, providerId)
+        : remote.readGroup(ownerDeviceId, providerId, options),
       readSnapshotGroup: (providerId) => remote.readSnapshotGroup?.(ownerDeviceId, providerId) ?? Promise.resolve(null),
       async pick({ sessionId, providerId, config, agentKind, model, exclude, quotaRebalance, allowOffline }) {
         const pick = await remote.pick(ownerDeviceId, {
@@ -1737,6 +1739,7 @@ export function createProviderGroupService(deps: ProviderGroupServiceDeps): Prov
         let config = await withTimeout(source.readGroup(existingBinding.providerId), PROVIDER_GROUP_ADOPT_TIMEOUT_MS)
           .catch(() => undefined);
         const hasRun = Boolean(row.sdkSessionId || (await deps.hasAssistantHistory(sessionId)));
+        let configFromSnapshot = false;
         if (config === undefined && !hasRun && mayReopenElsewhere(sessionId)) {
           // A task with a binding but no SDK/assistant history has never
           // completed a first start. It is still a new-task start retry, so
@@ -1745,7 +1748,17 @@ export function createProviderGroupService(deps: ProviderGroupServiceDeps): Prov
           const snapshot = source.readSnapshotGroup
             ? await source.readSnapshotGroup(existingBinding.providerId).catch(() => null)
             : null;
-          if (snapshot) config = snapshot;
+          if (snapshot) { config = snapshot; configFromSnapshot = true; }
+        }
+        if (configFromSnapshot && config) {
+          const located = await locatedMemberKey(source, existingBinding.providerId, row);
+          if (located !== null && located === existingBinding.memberKey
+            && !config.members.some(member => member.key === located)) {
+            // The snapshot predates this live-picked member; it cannot prove
+            // the member was removed. Keep the binding and use the existing
+            // pending adoption boundary instead of releasing it.
+            config = undefined;
+          }
         }
         if (config === undefined) {
           if (!mayReopenElsewhere(sessionId)) return null;

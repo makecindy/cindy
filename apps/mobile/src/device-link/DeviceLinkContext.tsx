@@ -1335,13 +1335,22 @@ export function DeviceLinkProvider({ children }: { children: ReactNode }) {
       // 不能再借旧 verdict 清理当前代状态。明确关闭不是连接判定，必须保留到
       // 该目标再次收到 online + enabled 的权威 presence 才能恢复。
       for (const deviceId of staleUnavailableDeviceIds) {
-        if (!isScopedPeer(deviceId)
-          && presenceUnavailableVerdictsRef.current.get(deviceId)?.kind === 'disabled') {
-          presenceAvailableByDeviceRef.current.set(deviceId, false);
-          presencePendingRecoveryDeviceIdsRef.current.delete(deviceId);
-          continue;
-        }
-        presenceUnavailableVerdictsRef.current.delete(deviceId);
+        const keepDisabled = !isScopedPeer(deviceId)
+          && presenceUnavailableVerdictsRef.current.get(deviceId)?.kind === 'disabled';
+        // Keep the explicit refusal across the new connection generation, but
+        // publish the availability mutation through the same helper as every
+        // other transport-side transition. A direct ref write here would leave
+        // mounted consumers without the version bump that makes the refusal
+        // visible.
+        publishPresenceAvailabilityMutation(deviceId, (availabilityByDevice) => {
+          if (keepDisabled) {
+            availabilityByDevice.set(deviceId, false);
+            presencePendingRecoveryDeviceIdsRef.current.delete(deviceId);
+          } else {
+            availabilityByDevice.delete(deviceId);
+          }
+        });
+        if (!keepDisabled) presenceUnavailableVerdictsRef.current.delete(deviceId);
       }
       for (const deviceId of staleUnavailableDeviceIds) {
         extendPresenceWipeTimerFloor(
@@ -1484,13 +1493,19 @@ export function DeviceLinkProvider({ children }: { children: ReactNode }) {
       const presenceEpoch = presenceAvailabilityEpochsRef.current.next;
       const responseEpoch = remoteResponseEvidenceEpochs.next;
       return (devices) => {
-        if (clientRef.current !== client || connectionEpochRef.current !== epoch || client.getStatus() !== 'online') return;
+        // A fresh roster row is current permission/control evidence even while
+        // signaling is reconnecting. Stale rows never reach this consumer, and
+        // explicit stop/teardown remains fenced by the client/epoch checks.
+        if (clientRef.current !== client || connectionEpochRef.current !== epoch || client.getStatus() === 'stopped') return;
         for (const device of devices) {
           if (device.isSelf
             || (presenceAvailabilityEpochsRef.current.byDevice.get(device.deviceId) ?? 0) > presenceEpoch) continue;
           // An authoritative online row is fresh permission evidence; an offline
           // row is only a directory projection and never clears the local gate.
-          if (device.online && device.remoteControlEnabled) client.noteRemoteControlEnabled(device.deviceId);
+          if (device.online) {
+            if (device.remoteControlEnabled) client.noteRemoteControlEnabled(device.deviceId);
+            else client.noteRemoteControlDisabled(device.deviceId);
+          }
           const available = device.online && device.remoteControlEnabled;
           const disabled = device.online && !device.remoteControlEnabled;
           const wasDisabled = presenceUnavailableVerdictsRef.current.get(device.deviceId)?.kind === 'disabled';

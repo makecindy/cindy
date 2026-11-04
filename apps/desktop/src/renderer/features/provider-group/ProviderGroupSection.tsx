@@ -90,9 +90,13 @@ export function ProviderGroupSection({ providerId, providerName, deviceId, devic
   useEffect(() => {
     if (group.view) onConfigChange?.(group.view.config);
   }, [group.view, onConfigChange]);
+  // A failed or stale source may still provide navigation/config, but its running/cooling/
+  // quota values are not live status. Hiding the rows' status keeps the old snapshot from
+  // masquerading as current, matching RemoteProviderGroupMembers and SharedProviderGroupStatus.
+  const statusStale = group.failed || group.view?.providerContinuity?.stale === true;
   const statuses = useMemo(
-    () => new Map((group.view?.members ?? []).map((status) => [status.key, status])),
-    [group.view],
+    () => new Map((statusStale ? [] : group.view?.members ?? []).map((status) => [status.key, status])),
+    [group.view, statusStale],
   );
 
   const save = useCallback(

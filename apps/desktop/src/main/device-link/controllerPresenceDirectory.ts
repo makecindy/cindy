@@ -136,6 +136,8 @@ export function applyControllerPresenceDirectorySnapshot(options: {
   onPeerControlDisabled?: (deviceId: string) => void;
   /** Raw directory evidence, separate from any retained display projection. */
   onPeerControlEvidence?: (deviceId: string, evidence: ControllerPresenceEvidence) => void;
+  /** False while local signaling is unavailable: report control evidence, do not promote presence. */
+  updatePresenceState?: boolean;
 }): void {
   for (const device of options.devices) {
     if (typeof device.deviceId !== 'string' || !device.deviceId.trim()) continue;
@@ -157,6 +159,7 @@ export function applyControllerPresenceDirectorySnapshot(options: {
     else if (control === false) options.onPeerControlDisabled?.(deviceId);
     options.onPeerControlEvidence?.(deviceId, { online: device.online === true,
       ...(control === undefined ? {} : { enabled: control }) });
+    if (options.updatePresenceState === false) continue;
     if (hasRealtimePresence(options.freshness, deviceId)) continue;
 
     const wasOnline = options.getOnline(deviceId);

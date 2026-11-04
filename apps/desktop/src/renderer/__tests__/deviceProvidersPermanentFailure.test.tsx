@@ -822,6 +822,36 @@ describe('provider share catalog identity changes', () => {
     }
   });
 
+  it('keeps a changed healthy neighbor catalog when another region expires', async () => {
+    const f = await mountSharePicker();
+    const cnShare: ProviderShareReceived = { ...receivedShare({ shareId: 'cn-share' }),
+      owner: { ...receivedShare().owner, region: 'cn' } };
+    vi.useFakeTimers({ toFake: ['Date', 'performance', 'setTimeout', 'clearTimeout'] });
+    try {
+      const confirmedAt = Date.now();
+      f.setSnapshot(receivedSnapshot([receivedShare(), cnShare], ['global', 'cn'], true, {
+        global: regionBudget('global-neighbor-1', 60_000, confirmedAt),
+        cn: regionBudget('cn-neighbor-1', 60_000, confirmedAt),
+      }));
+      await act(async () => { f.push([]); await Promise.resolve(); await Promise.resolve(); });
+      expect(f.latest().providers).toHaveLength(1);
+
+      // The global share is still active and only its presence changed. The cn
+      // budget is already zero in this projection, so expiring cn must retire
+      // only cn's catalog, not the healthy global neighbor.
+      f.setSnapshot(receivedSnapshot([{ ...receivedShare(), hostOnline: false }, cnShare], ['global', 'cn'], true, {
+        global: regionBudget('global-neighbor-2', 60_000, Date.now()),
+        cn: regionBudget('cn-neighbor-2', 0, Date.now()),
+      }));
+      await act(async () => { f.push([]); await Promise.resolve(); await Promise.resolve(); });
+      await flushMounted();
+      expect(f.store.result.current.received.map(share => share.shareId)).toEqual(['a']);
+      expect(f.latest().providers).toHaveLength(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('restores a region after its old window expires when a new confirmation arrives', async () => {
     const f = await mountSharePicker();
     vi.useFakeTimers({ toFake: ['Date', 'performance', 'setTimeout', 'clearTimeout'] });
@@ -1069,5 +1099,52 @@ describe('provider share catalog identity changes', () => {
     await act(() => f.resolveInitial([receivedShare()]));
     await act(async () => { await Promise.resolve(); await Promise.resolve(); });
     expect(f.store.result.current.received).toEqual([]);
+  });
+});
+
+describe('agent capability cache hits', () => {
+  it('clears inherited loading state when the capability cache hits', async () => {
+    const invoke = vi.fn(async (deviceId: string, channel: string) => {
+      if (channel !== 'maker:get-capabilities') throw new Error('unexpected ' + channel);
+      if (deviceId === 'pending') return new Promise<never>(() => undefined);
+      return { ...capabilities, availableModels: [
+        { ...capabilities.availableModels[0], displayName: 'cached' },
+      ] };
+    });
+    Object.defineProperty(window, 'electronAPI', {
+      configurable: true,
+      value: { deviceLink: { invoke } },
+    });
+    let entry: MountedRoot | undefined;
+    try {
+      // Fill the real cache without going through a mounted hook.
+      await prefetchDeviceCapabilities('cached');
+
+      let latest: ReturnType<typeof useAgentCapabilities> | undefined;
+      function Probe({ deviceId }: { deviceId: string }) {
+        latest = useAgentCapabilities('codex', deviceId);
+        return null;
+      }
+
+      // A pending target leaves the hook with inherited loading=true.
+      const mounted = await renderElement(createElement(Probe, { deviceId: 'pending' }));
+      entry = mounted;
+      await flushMounted();
+      expect(latest?.loading).toBe(true);
+      expect(latest?.capabilities).toBeNull();
+
+      // Switching to a cached target must take the cache-hit branch, clear
+      // inherited loading/error, and expose the cached capabilities.
+      await act(async () => {
+        mounted.root.render(createElement(Probe, { deviceId: 'cached' }));
+      });
+      await flushMounted();
+      expect(latest?.loading).toBe(false);
+      expect(latest?.error).toBeNull();
+      expect(latest?.capabilities?.availableModels[0]?.displayName).toBe('cached');
+    } finally {
+      if (entry) await unmountElement(entry);
+      await act(async () => { evictAllRemoteCapabilities(); });
+    }
   });
 });

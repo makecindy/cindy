@@ -178,8 +178,15 @@ export function createGroupContinuityRuntime(readRunning: () => Promise<Readonly
     const currentScope = capture(controller, member.agentDeviceId, group);
     const controlGeneration = member.agentDeviceId === getSelfDeviceId()
       ? remoteControlAccessGeneration() : undefined;
+    // A controller revocation observed by dispatch or the settings poll must
+    // fence an in-flight caps/prepare even when the explicit link-close epoch
+    // has not advanced yet; otherwise a late grant could outlive the revocation
+    // on M, which only knows its own permission list.
+    const controllerAccess = deviceAccessGeneration(controller);
+    const controllerAllowed = () => isControllerAccessAllowed(controller);
     const attemptGeneration = generation(group);
-    const current = () => currentScope() && attemptGeneration === generation(group)
+    const current = () => controllerAllowed() && controllerAccess === deviceAccessGeneration(controller)
+      && currentScope() && attemptGeneration === generation(group)
       && (controlGeneration === undefined || controlGeneration === remoteControlAccessGeneration())
       && fingerprint === JSON.stringify(readProviderGroup(group))
       && isRemoteProviderInvocationAllowed(group);

@@ -61,7 +61,26 @@ vi.mock('../GroupMemberQuota', async (importOriginal) => ({
     </div>
   ),
 }));
-
+// Display-only leaves for this settings-page test: the icons are SVG drawing only and
+// have no assertions here; Tip keeps its children (and therefore the real button props,
+// labels and events) while dropping the Radix hover machinery. AuthContext is not mounted
+// by this test; the real useOptionalAuthDeviceId returns null outside AuthProvider, so the
+// same null boundary is supplied explicitly without loading the auth application graph.
+vi.mock('@/components/ui/tooltip', () => ({
+  Tip: ({ children }: { children?: ReactNode }) => <>{children}</>,
+}));
+vi.mock('lucide-react', () => ({
+  Monitor: () => null,
+  ChevronRight: () => null,
+  MoreHorizontal: () => null,
+  CircleMinus: () => null,
+  Check: () => null,
+  ChevronDown: () => null,
+  ChevronUp: () => null,
+  X: () => null,
+  LoaderCircle: () => null,
+}));
+vi.mock('@/contexts/AuthContext', () => ({ useOptionalAuthDeviceId: () => null }));
 const LOCAL = { key: 'local', kind: 'local' as const, agentDeviceId: null, providerId: 'anthropic', limit: 4, weight: 1, paused: false };
 const MINI = {
   key: 'device:mini:anthropic-1a2b3c4d',
@@ -78,6 +97,7 @@ let stored: ProviderGroupConfig | null = null;
 /** 按 member key 覆盖「正在运行」的台数；不设时本机 1、其余 0。 */
 let running: Record<string, number> | null = null;
 const command = vi.fn();
+const changed = vi.hoisted(() => ({ listener: null as null | ((event: { providerId?: string }) => void) }));
 
 function viewOf(config: ProviderGroupConfig | null): ProviderGroupView {
   return {
@@ -105,6 +125,7 @@ beforeEach(() => {
   localGroupsTesting.reset();
   groupViewTesting.reset();
   confirmSpy.mockClear();
+  changed.listener = null;
   command.mockReset();
   vi.mocked(toast.error).mockClear();
   command.mockImplementation(async (cmd: { action: string; config?: ProviderGroupConfig; expectedConfig?: ProviderGroupConfig | null }) => {
@@ -129,7 +150,10 @@ beforeEach(() => {
     }
     throw new Error(`unexpected ${cmd.action}`);
   });
-  Object.assign(window, { electronAPI: { providerGroup: { command, onChanged: () => () => undefined } } });
+  Object.assign(window, { electronAPI: { providerGroup: { command, onChanged: (listener: (event: { providerId?: string }) => void) => {
+    changed.listener = listener;
+    return () => { if (changed.listener === listener) changed.listener = null; };
+  } } } });
 });
 
 afterEach(() => cleanup());
@@ -586,5 +610,32 @@ describe('memberStatusText', () => {
     // 周上限：10 月 15 日才恢复，不能只写 16:00。
     expect(memberStatusText(t, cooling(new Date(2026, 9, 15, 16, 0).getTime()), 'en-US', now))
       .toBe('providerGroup.member.status.coolingUntil:{"time":"Oct 15 16:00"}');
+  });
+});
+
+describe('ProviderGroupSection status source', () => {
+  it('does not present a stale source as live member status', async () => {
+    stored = { strategy: 'least', autoSwitch: true, members: [LOCAL, MINI] };
+    const stale = viewOf(stored);
+    stale.providerContinuity = { stale: true, remainingMs: 60_000 };
+    command.mockImplementation(async (cmd: { action: string }) => cmd.action === 'get' ? stale : { anthropic: stored });
+    render(<ProviderGroupSection providerId="anthropic" providerName="Anthropic" />);
+    const rows = await screen.findAllByTestId('provider-group-member');
+    expect(rows.every((row) => row.getAttribute('data-member-state') === 'loading')).toBe(true);
+    expect(screen.queryByText('providerGroup.member.runningCount:{"count":1}')).toBeNull();
+  });
+
+  it('drops live member status after a failed reload', async () => {
+    stored = { strategy: 'least', autoSwitch: true, members: [LOCAL, MINI] };
+    render(<ProviderGroupSection providerId="anthropic" providerName="Anthropic" />);
+    await screen.findByText('providerGroup.member.runningCount:{"count":1}');
+    command.mockImplementation(async (cmd: { action: string }) => {
+      if (cmd.action === 'list') return { anthropic: stored };
+      if (cmd.action === 'get') throw new Error('directory unavailable');
+      throw new Error(`unexpected ${cmd.action}`);
+    });
+    await act(async () => { changed.listener?.({ providerId: 'anthropic' }); });
+    await waitFor(() => expect(screen.queryByText('providerGroup.member.runningCount:{"count":1}')).toBeNull());
+    expect(screen.getAllByTestId('provider-group-member').every((row) => row.getAttribute('data-member-state') === 'loading')).toBe(true);
   });
 });

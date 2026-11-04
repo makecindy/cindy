@@ -90,6 +90,7 @@ const transport = vi.hoisted(() => {
     frame: Parameters<DeviceLinkClient['onFrame']>[0] = () => {};
     openLink = vi.fn<(deviceId: string) => Promise<LinkAcceptPayload>>();
     noteRemoteControlEnabled = vi.fn();
+    noteRemoteControlDisabled = vi.fn();
     invoke = vi.fn<DeviceLinkClient['invoke']>(async (_deviceId, _payload, _timeout, options) => {
       options?.preSend?.();
       return { ok: true, result: 'history page' };
@@ -637,6 +638,67 @@ describe('Provider retained foreground direct paths', () => {
     await act(async () => { expect(await context.invoke('host', historyChannel)).toBe('history page'); });
   });
 
+  it('uses fresh enabled roster evidence while signaling is connecting', async () => {
+    const client = transport.clients[0];
+    client.openLink.mockResolvedValue(accepted(supported));
+    scopedPeer = 'host';
+    await act(async () => { render(); await context.invoke('host', historyChannel); });
+    client.retainedPeers.add('host');
+    client.retainedPeers.add('neighbor');
+    await act(async () => {
+      client.status = 'connecting'; client.statusChanged('connecting');
+      client.presenceChanged({ deviceId: 'host', deviceName: 'Host', platform: 'darwin', appVersion: 'test',
+        online: true, remoteControlEnabled: false, busy: false, lastSeenAt: 1 });
+      client.presenceChanged({ deviceId: 'neighbor', deviceName: 'Neighbor', platform: 'darwin', appVersion: 'test',
+        online: true, remoteControlEnabled: true, busy: false, lastSeenAt: 1 });
+    });
+    expect(context.getPresenceAvailability('host')).toBe(false);
+    expect(context.getPresenceAvailability('neighbor')).toBe(true);
+    client.noteRemoteControlEnabled.mockClear();
+    const row = (deviceId: string, online: boolean, remoteControlEnabled: boolean) => ({ deviceId,
+      name: deviceId, platform: 'darwin', appVersion: 'test', online, remoteControlEnabled, busy: false,
+      lastSeenAt: new Date(1).toISOString(), isSelf: false });
+    auth.apiFetch.mockResolvedValueOnce({ devices: [row('host', true, true), row('neighbor', true, true)] });
+    let snapshot!: { devices: DeviceView[] };
+    await act(async () => { snapshot = await context.readDeviceList({ fresh: true }); });
+    expect(snapshot.devices.find(device => device.deviceId === 'host')).toMatchObject({
+      online: true, remoteControlEnabled: true });
+    expect(context.getPresenceAvailability('host')).toBe(true);
+    expect(client.noteRemoteControlEnabled).toHaveBeenCalledWith('host');
+    expect(scopedContext.status).toBe('online');
+    expect(scopedContext.signalingStatus).toBe('connecting');
+    expect(scopedContext.usingRetainedDirect).toBe(true);
+    expect(context.getPresenceAvailability('neighbor')).toBe(true);
+    await act(async () => { expect(await context.invoke('host', historyChannel)).toBe('history page'); });
+  });
+
+  it('uses fresh disabled roster evidence while connecting and isolates the target', async () => {
+    const client = transport.clients[0];
+    client.openLink.mockResolvedValue(accepted(supported));
+    scopedPeer = 'host';
+    await act(async () => { render(); await context.invoke('host', historyChannel); });
+    client.retainedPeers.add('host');
+    client.retainedPeers.add('neighbor');
+    await act(async () => {
+      client.status = 'connecting'; client.statusChanged('connecting');
+      client.presenceChanged({ deviceId: 'host', deviceName: 'Host', platform: 'darwin', appVersion: 'test',
+        online: true, remoteControlEnabled: true, busy: false, lastSeenAt: 1 });
+      client.presenceChanged({ deviceId: 'neighbor', deviceName: 'Neighbor', platform: 'darwin', appVersion: 'test',
+        online: true, remoteControlEnabled: true, busy: false, lastSeenAt: 1 });
+    });
+    expect(context.getPresenceAvailability('host')).toBe(true);
+    const row = (deviceId: string, online: boolean, remoteControlEnabled: boolean) => ({ deviceId,
+      name: deviceId, platform: 'darwin', appVersion: 'test', online, remoteControlEnabled, busy: false,
+      lastSeenAt: new Date(1).toISOString(), isSelf: false });
+    auth.apiFetch.mockResolvedValueOnce({ devices: [row('host', true, false), row('neighbor', true, true)] });
+    await act(async () => { await context.readDeviceList({ fresh: true }); });
+    expect(context.getPresenceAvailability('host')).toBe(false);
+    expect(context.getPresenceAvailability('neighbor')).toBe(true);
+    expect(scopedContext.status).toBe('connecting');
+    const sent = client.invoke.mock.calls.length;
+    await expect(context.invoke('host', historyChannel)).rejects.toMatchObject({ code: 'REMOTE_DISABLED' });
+    expect(client.invoke).toHaveBeenCalledTimes(sent);
+  });
   it('treats a fresh online REST row as positive control evidence', async () => {
     const client = transport.clients[0];
     client.openLink.mockResolvedValue(accepted(supported));

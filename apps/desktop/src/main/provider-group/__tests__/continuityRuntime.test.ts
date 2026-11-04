@@ -553,6 +553,34 @@ describe('group continuity Main wiring', () => {
       vi.useRealTimers();
     }
   });
+  it('fences an in-flight prepare when the controller is revoked before M is prepared', async () => {
+    const f = fixture();
+    const normal = io.invoke.getMockImplementation()!;
+    let release!: () => void;
+    let entered!: () => void;
+    const started = new Promise<void>(resolve => { entered = resolve; });
+    io.invoke.mockImplementation(async (target, channel, args, options) => {
+      if (channel === REMOTE_AGENT_CHANNEL && (args[0] as { op?: unknown })?.op === 'caps' && !release) {
+        return new Promise(resolve => {
+          release = () => resolve({ ok: true, result: { version: 1,
+            agents: [{ kind: 'codex', available: true }], maxRuns: 16, uploadChunkBytes: 1024, maxPayloadBytes: 2048,
+            groupContinuity: true } });
+          entered();
+        });
+      }
+      return normal(target, channel, args, options);
+    });
+    const first = f.prepare();
+    await started;
+    io.revokedControllers = ['C'];
+    bumpDeviceAccessGeneration('C');
+    release();
+    await expect(first).resolves.toBeUndefined();
+    expect(io.invoke.mock.calls.filter(call => call[2][0]?.action === 'continuity-prepare')).toHaveLength(0);
+    io.revokedControllers = [];
+    noteControllerAccessAllowed('C');
+    await expect(f.prepare()).resolves.toBeDefined();
+  });
   it('revokes acknowledged contexts after a group configuration change', async () => {
     const f = fixture(), grant = await f.prepare(); expect(grant).toBeDefined();
     io.group = { ...(io.group as object), autoSwitch: false }; io.changed!('openai');

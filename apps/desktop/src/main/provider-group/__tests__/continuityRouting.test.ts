@@ -425,6 +425,38 @@ describe('same-account group continuity routing', () => {
     expect(f.bind).not.toHaveBeenCalled();
   });
 
+  // Test value
+  // - Production entry: createGroupContinuityClient.pick (provider-group/service.ts
+  //   assignFromRemoteGroup / resolveSwitchTarget consume its result kind).
+  // - Rule: an authoritative owner answer that no member is available, or that the group is
+  //   gone, must reach the caller as that result. Retiring the routes it prepared is local state,
+  //   not a caller account/link change.
+  // - Gap: the refusal cases above cover thrown errors and a warm member pick, but not the
+  //   successful `none`/`unavailable` returns whose remember() advances this flight's own epoch.
+  // - Minimal failing input: warm one prepared member, then return {kind:'unavailable'}; the
+  //   post-flight scope check observed its own epoch advance and threw ACCESS_REVOKED.
+  // - Tier: unit (real client/executor; transport and clock only).
+  it('returns its own authoritative none/unavailable answer instead of a scope error', async () => {
+    const f = fixture();
+    await f.pick('warm');
+    f.livePick.mockResolvedValueOnce({ kind: 'unavailable', usageLimit: { resetAtMs: 5_000_000 } });
+    const [first, joined] = await Promise.all([f.pick('no-member'), f.pick('no-member')]);
+    expect(first).toEqual({ kind: 'unavailable', usageLimit: { resetAtMs: 5_000_000 } });
+    expect(joined).toEqual(first);
+    // The authoritative answer retired the prepared route; an owner outage cannot admit it now.
+    f.clock.ownerOnline = false;
+    await expect(f.pick('after-unavailable')).rejects.toThrow('owner offline');
+    expect(f.bind).not.toHaveBeenCalled();
+
+    f.clock.ownerOnline = true;
+    await f.pick('warm-again');
+    f.livePick.mockResolvedValueOnce({ kind: 'none' });
+    await expect(f.pick('group-gone')).resolves.toEqual({ kind: 'none' });
+    f.clock.ownerOnline = false;
+    await expect(f.pick('after-none')).rejects.toThrow('owner offline');
+    expect(f.bind).not.toHaveBeenCalled();
+  });
+
   it('fences revoked and in-flight contexts and keeps repeated preparation at its original deadline', async () => {
     const f = fixture(); await f.pick();
     f.clock.wall = f.clock.mono = 1000;

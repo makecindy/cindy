@@ -300,11 +300,15 @@ export function applyControllerPresenceListSnapshot(
   requestEpoch: number,
 ): Map<string, ControllerPresenceEvidence> {
   const evidence = new Map<string, ControllerPresenceEvidence>();
-  if (linkTornDown || client?.getStatus() !== 'online') return evidence;
+  if (linkTornDown || !client || client.getStatus() === 'stopped') return evidence;
+  const signalingOnline = client.getStatus() === 'online';
   applyControllerPresenceDirectorySnapshot({
     devices,
     requestEpoch,
     selfDeviceId: client.getSelfDeviceId(),
+    // A fresh REST row is permission evidence even while signaling is reconnecting;
+    // stale rows never reach this adapter, and explicit stop/teardown is above.
+    updatePresenceState: signalingOnline,
     freshness: controllerPresenceFreshness,
     getOnline: (deviceId) => presenceOnlineByDevice.get(deviceId),
     setOnline: (deviceId, online) => presenceOnlineByDevice.set(deviceId, online || hasOfflineDirectPath(deviceId)),

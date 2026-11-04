@@ -239,18 +239,18 @@ function expireRegionRetention(): void {
   }
   const previous = receivedSnapshot.received;
   const next = previous.filter(share => !expired.has(share.owner.region));
-  if (next.length !== previous.length) setReceived(next, { clearEmpty: true, retireCatalogs: true });
+  if (next.length !== previous.length) setReceived(next, { clearEmpty: true });
   armRegionRetentionTimer();
 }
 
 function invalidateShareCatalogs(
   previous: readonly ProviderShareReceived[],
   next: readonly ProviderShareReceived[],
-  options?: { clearEmpty?: boolean; skipCatalogs?: boolean; retireCatalogs?: boolean },
+  options?: { clearEmpty?: boolean; skipCatalogs?: boolean; retireShareIds?: ReadonlySet<string> },
 ): void {
   // 旧 Main 把临时不可达也投影成空列表；调用方只有在确认区域完整时
   // 才允许用空列表撤权，否则必须保留上一份有界显示。
-  if (next.length === 0 && !options?.clearEmpty && !options?.retireCatalogs) return;
+  if (next.length === 0 && !options?.clearEmpty && !options?.retireShareIds?.size) return;
   // An owner transition retires all previous rows at once; do not run a second
   // per-target refresh against the new owner.
   if (options?.skipCatalogs) return;
@@ -264,7 +264,7 @@ function invalidateShareCatalogs(
     // 暂停、成员/供应商/区域/主机身份变化是明确换了一代许可：
     // 即使刷新失败或卡住，也不能继续显示旧目录。
     const mustClear = revokedById.has(shareId) || after?.status !== 'active';
-    if (options?.retireCatalogs) void refreshRemoteCatalogSnapshot(deviceId, revokedCatalog, { retireOnly: true }).catch(() => undefined);
+    if (options?.retireShareIds?.has(shareId)) void refreshRemoteCatalogSnapshot(deviceId, revokedCatalog, { retireOnly: true }).catch(() => undefined);
     else void refreshRemoteCatalogSnapshot(deviceId, mustClear ? revokedCatalog : undefined)
       .catch(() => undefined);
   }
@@ -285,21 +285,30 @@ function invalidateShareCatalogs(
 
 function setReceived(
   next: readonly ProviderShareReceived[],
-  options?: { clearEmpty?: boolean; skipCatalogs?: boolean; retireCatalogs?: boolean; ownerId?: string | null; ownerGeneration?: number; loaded?: boolean },
+  options?: { clearEmpty?: boolean; skipCatalogs?: boolean; ownerId?: string | null; ownerGeneration?: number; loaded?: boolean },
 ): void {
   const previous = receivedSnapshot.received;
-  const filtered = next.filter(share => retentionLive(share.owner.region));
+  const expiredShareIds = new Set<string>();
+  const filtered = next.filter(share => {
+    if (retentionLive(share.owner.region)) return true;
+    expiredShareIds.add(share.shareId);
+    return false;
+  });
   // A stale row can already be absent from next (for example while a partial
   // neighbor-only projection is applied); it still must retire its catalog.
-  const expiredRows = filtered.length !== next.length
-    || previous.some(share => !retentionLive(share.owner.region));
+  // Do not turn one expired region into a blanket retirement of changed,
+  // healthy neighbours in the same snapshot.
+  for (const share of previous) {
+    if (!retentionLive(share.owner.region)) expiredShareIds.add(share.shareId);
+  }
   receivedOwnerId = options?.ownerId !== undefined ? options.ownerId : getDataOwnerGeneration().dataOwnerId;
   receivedOwnerGeneration = options?.ownerGeneration ?? getDataOwnerGeneration().generation;
   receivedSnapshot = { received: filtered, loaded: options?.loaded ?? true };
   expiredReadSource = null;
   expiredReadSnapshot = null;
   expiredReadKey = '';
-  invalidateShareCatalogs(previous, filtered, expiredRows ? { ...options, retireCatalogs: true } : options);
+  invalidateShareCatalogs(previous, filtered, expiredShareIds.size > 0
+    ? { ...options, retireShareIds: expiredShareIds } : options);
   for (const listener of receivedSubscribers) listener();
 }
 
@@ -396,7 +405,7 @@ function applyReceivedSnapshotBudget(snapshot: ProviderShareReceivedSnapshot, re
   const previous = receivedSnapshot.received;
   const next = previous.filter(share => retentionLive(share.owner.region));
   if (next.length !== previous.length) {
-    setReceived(next, { clearEmpty: true, retireCatalogs: true,
+    setReceived(next, { clearEmpty: true,
       ownerId: snapshot.ownerStamp.dataOwnerId, loaded: receivedSnapshot.loaded });
   } else {
     armRegionRetentionTimer();

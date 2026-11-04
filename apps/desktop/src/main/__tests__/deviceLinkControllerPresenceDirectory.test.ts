@@ -1,3 +1,6 @@
+import { readFileSync } from 'node:fs';
+import { resolve } from 'node:path';
+import ts from 'typescript';
 import { describe, expect, it, vi } from 'vitest';
 
 import {
@@ -414,5 +417,94 @@ describe('controller presence directory snapshot', () => {
 
     expect(h.onlineByDevice.get('peer-desktop')).toBe(true);
     expect(h.exchanged).toHaveBeenCalledWith('peer-desktop', 'darwin');
+  });
+});
+
+
+// Execute the actual Main presence-list adapter with injected module bindings.
+// This keeps the index.ts early return and callback wiring in the test instead
+// of reimplementing the adapter as a pure helper copy.
+function createPresenceListAdapter(status: 'connecting' | 'online' | 'stopped', tornDown = false) {
+  const source = ts.createSourceFile('index.ts', readFileSync(resolve(process.cwd(), 'src/main/device-link/index.ts'), 'utf8'), ts.ScriptTarget.Latest, true);
+  const declaration = source.statements.find((node): node is ts.FunctionDeclaration =>
+    ts.isFunctionDeclaration(node) && node.name?.text === 'applyControllerPresenceListSnapshot');
+  if (!declaration?.body) throw new Error('applyControllerPresenceListSnapshot not found');
+  const compiled = ts.transpileModule('function applyPresenceList(devices, requestEpoch) ' + declaration.body.getText(source), {
+    compilerOptions: { target: ts.ScriptTarget.ES2022 },
+  }).outputText;
+  const freshness = createControllerPresenceFreshnessTracker();
+  const online = new Map<string, boolean>();
+  const available = new Map<string, boolean>();
+  const disabled = new Set<string>();
+  const retire = vi.fn();
+  const client = { getStatus: () => status, getSelfDeviceId: () => 'self-device',
+    noteRemoteControlEnabled: vi.fn(), noteRemoteControlDisabled: vi.fn() };
+  const apply = new Function(
+    'client', 'linkTornDown', 'applyControllerPresenceDirectorySnapshot', 'controllerPresenceFreshness',
+    'presenceOnlineByDevice', 'presenceAvailableByDevice', 'presenceControlDisabledByDevice',
+    'hasOfflineDirectPath', 'setControllerPlatform', 'presenceNameByDevice', 'isDeviceRevoked',
+    'isMobilePlatform', 'shouldExchangeDictionaryWith', 'handleMobilePeerOnline',
+    'handleDesktopPeerOnline', 'replayActiveSubscriptions', 'retireControlOffRetention',
+    compiled + '\nreturn applyPresenceList;',
+  )(client, tornDown, applyControllerPresenceDirectorySnapshot, freshness, online, available, disabled,
+    () => false, vi.fn(), new Map(), () => false, (platform: string | null) => platform === 'ios' || platform === 'android',
+    () => false, vi.fn(), vi.fn(), vi.fn(), retire) as (devices: unknown[], requestEpoch: number) => Map<string, { online: boolean; enabled?: boolean }>;
+  return { apply, client, online, available, disabled, retire, freshness };
+}
+
+describe('Main presence-list control evidence', () => {
+  const row = (deviceId: string, online: boolean, remoteControlEnabled: boolean) => ({
+    deviceId, name: deviceId, online, remoteControlEnabled, platform: 'darwin', isSelf: false,
+  });
+
+  it('applies fresh enabled evidence while signaling is connecting', () => {
+    const h = createPresenceListAdapter('connecting');
+    h.available.set('host', false);
+    h.disabled.add('host');
+    const evidence = h.apply([row('host', true, true)], 0);
+    expect(evidence.get('host')).toEqual({ online: true, enabled: true });
+    expect(h.client.noteRemoteControlEnabled).toHaveBeenCalledWith('host');
+    expect(h.disabled.has('host')).toBe(false);
+    expect(h.available.get('host')).toBe(true);
+    expect(h.retire).not.toHaveBeenCalled();
+  });
+
+  it('retires only the fresh disabled target while connecting', () => {
+    const h = createPresenceListAdapter('connecting');
+    h.available.set('host', true);
+    h.available.set('neighbor', true);
+    const evidence = h.apply([row('host', true, false), row('neighbor', true, true)], 0);
+    expect(evidence.get('host')).toEqual({ online: true, enabled: false });
+    expect(evidence.get('neighbor')).toEqual({ online: true, enabled: true });
+    expect(h.client.noteRemoteControlDisabled).toHaveBeenCalledWith('host');
+    expect(h.disabled.has('host')).toBe(true);
+    expect(h.available.get('host')).toBe(false);
+    expect(h.retire).toHaveBeenCalledTimes(1);
+    expect(h.retire).toHaveBeenCalledWith('host');
+    expect(h.available.get('neighbor')).toBe(true);
+    expect(h.disabled.has('neighbor')).toBe(false);
+  });
+
+  it('keeps stopped/teardown and newer-WS gates ahead of raw evidence', () => {
+    const stopped = createPresenceListAdapter('stopped');
+    expect(stopped.apply([row('host', true, true)], 0).size).toBe(0);
+    expect(stopped.client.noteRemoteControlEnabled).not.toHaveBeenCalled();
+    const tornDown = createPresenceListAdapter('connecting', true);
+    expect(tornDown.apply([row('host', true, true)], 0).size).toBe(0);
+    expect(tornDown.client.noteRemoteControlEnabled).not.toHaveBeenCalled();
+    const newerPresence = createPresenceListAdapter('connecting');
+    markControllerPresenceFresh(newerPresence.freshness, 'host');
+    expect(newerPresence.apply([row('host', true, true)], 0).size).toBe(0);
+    expect(newerPresence.client.noteRemoteControlEnabled).not.toHaveBeenCalled();
+  });
+
+  it('does not treat an offline masked row as evidence', () => {
+    const h = createPresenceListAdapter('connecting');
+    const evidence = h.apply([row('host', false, false)], 0);
+    expect(evidence.get('host')).toEqual({ online: false });
+    expect(h.client.noteRemoteControlEnabled).not.toHaveBeenCalled();
+    expect(h.client.noteRemoteControlDisabled).not.toHaveBeenCalled();
+    expect(h.retire).not.toHaveBeenCalled();
+    expect(h.disabled.has('host')).toBe(false);
   });
 });

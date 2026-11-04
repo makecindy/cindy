@@ -289,6 +289,12 @@ export function createGroupContinuityClient(deps: {
       const scopeEpoch = epochFor(localScope, owner, input.providerId);
       const current = () => ownerCurrent() && scopeKey() === localScope
         && peekEpoch(localScope, owner, input.providerId) === scopeEpoch;
+      // remember() retires this group's rows on an authoritative non-member answer
+      // (none/unavailable), which advances this flight's own epoch. That is not a
+      // caller account/link change, so return the owner's answer. A writable member
+      // still requires the full generation check.
+      const currentResult = (result: ProviderGroupRemotePick) => ownerCurrent()
+        && scopeKey() === localScope && (result.kind === 'member' ? current() : true);
       // A task can be opened twice before the binding is persisted. Coalesce an
       // identical in-flight pick so one task cannot reserve two executors. The
       // caller's own scope is checked again after sharing the result.
@@ -297,7 +303,7 @@ export function createGroupContinuityClient(deps: {
       const flight = sessionFlights.get(key);
       if (flight?.current()) {
         const result = await flight.promise;
-        if (!current()) throw new Error('[ACCESS_REVOKED] Group owner scope changed while waiting');
+        if (!currentResult(result)) throw new Error('[ACCESS_REVOKED] Group owner scope changed while waiting');
         return result;
       }
       if (flight) sessionFlights.delete(key);
@@ -314,7 +320,7 @@ export function createGroupContinuityClient(deps: {
         const result = await work;
         // A deletion/reset can land between remember()/admission and this continuation.
         // Never hand a writable member back after the captured generation ended.
-        if (!current()) throw new Error('[ACCESS_REVOKED] Group owner scope changed before returning');
+        if (!currentResult(result)) throw new Error('[ACCESS_REVOKED] Group owner scope changed before returning');
         return result;
       } finally { if (sessionFlights.get(key) === entry) sessionFlights.delete(key); }
     },

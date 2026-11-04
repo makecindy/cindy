@@ -222,10 +222,11 @@ export function createProviderGroupRouter(deps: ProviderGroupRouterDeps): Provid
       && isModelSelectableForNewRoute(found, { userProvider: resolved.view.source === 'user' });
   }
 
-  /** 能接这个模型的任务：提供模型、不在冷却、配额没用完。 */
+  /** 能接这个模型的任务：提供模型、不在冷却、配额没用完，且目录预算尚未到期。 */
   function usableFor(input: Pick<ProviderGroupPickInput, 'providerId' | 'agentKind' | 'model'>) {
     return (r: ResolvedProviderGroupMember) =>
-      offersModel(r, input.agentKind, input.model) && coolingUntil(input.providerId, r.member.key, input.model) === null
+      (r.providerContinuity === undefined || r.providerContinuity.remainingMs > 0)
+      && offersModel(r, input.agentKind, input.model) && coolingUntil(input.providerId, r.member.key, input.model) === null
       && !providerGroupMemberUsageState(r, input.model, deps.now(), input.agentKind).limited;
   }
 

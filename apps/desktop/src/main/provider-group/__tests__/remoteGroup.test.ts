@@ -294,6 +294,52 @@ describe('assigning through a group on another computer', () => {
     expect(h.remote.pick).toHaveBeenLastCalledWith(OWNER, expect.objectContaining({ allowOffline: true }));
   });
 
+  // Test value
+  // - Production entry: createProviderGroupService.assignBeforeStart via the real service.
+  // - Rule: a cached snapshot is not proof of explicit member removal; keep the binding and
+  //   use the existing pending/adoption boundary when the snapshot predates a live-picked member.
+  // - Gap: existing snapshot cases contain the bound member; none covers a newer live-picked
+  //   legacy/no-continuity member absent from an older acknowledged snapshot.
+  // - Minimal failing input: a never-run task gets a live pick to STUDIO without continuity,
+  //   then the owner is unavailable and an older snapshot without STUDIO is read.
+  // - Tier: unit (real service; transport/directory doubles only).
+  it('keeps a never-run binding when an older snapshot cannot prove the live-picked member was removed', async () => {
+    const older = { strategy: 'least' as const, autoSwitch: true,
+      members: [OWNER_LOCAL, SELF, SHARED] };
+    const h = harness({ live: false });
+    expect(await h.service.assignBeforeStart(START)).toMatchObject({ member: { key: STUDIO.key },
+      route: { agentDeviceId: STUDIO.agentDeviceId, providerId: STUDIO.providerId } });
+    h.remote.readGroup.mockResolvedValue(undefined);
+    h.remote.readSnapshotGroup.mockResolvedValueOnce(older);
+
+    const context = await h.service.assignBeforeStart(START);
+
+    expect(h.bindings.get('s1')).toMatchObject({ providerId: 'anthropic',
+      memberKey: STUDIO.key, groupDeviceId: OWNER });
+    expect(h.deps.markReleased).not.toHaveBeenCalled();
+    expect(context).toMatchObject({ groupProviderId: 'anthropic', groupDeviceId: OWNER,
+      pendingGroupAdoption: true, member: { key: STUDIO.key },
+      route: { agentDeviceId: STUDIO.agentDeviceId, providerId: STUDIO.providerId } });
+    expect(context?.offlineRouting).toBeUndefined();
+  });
+
+  it('still treats a fresh null or live member removal as authoritative', async () => {
+    const older = { strategy: 'least' as const, autoSwitch: true,
+      members: [OWNER_LOCAL, SELF, SHARED] };
+    const row = { agentDeviceId: STUDIO.agentDeviceId, providerId: STUDIO.providerId };
+    const gone = harness({ config: null, live: false, row });
+    gone.bindings.set('s1', { providerId: 'anthropic', memberKey: STUDIO.key, groupDeviceId: OWNER, at: 1 });
+    expect(await gone.service.assignBeforeStart(START)).toBeNull();
+    expect(gone.bindings.has('s1')).toBe(false);
+    expect(gone.deps.markReleased).toHaveBeenCalled();
+
+    const removed = harness({ config: older, live: false, row });
+    removed.bindings.set('s1', { providerId: 'anthropic', memberKey: STUDIO.key, groupDeviceId: OWNER, at: 1 });
+    expect(await removed.service.assignBeforeStart(START)).toBeNull();
+    expect(removed.bindings.has('s1')).toBe(false);
+    expect(removed.deps.markReleased).toHaveBeenCalled();
+  });
+
   it('does not use a prepared config for an already-run task', async () => {
     const h = harness({ row: { sdkSessionId: 'native-1' }, live: false });
     h.bindings.set('s1', { providerId: 'anthropic', memberKey: OWNER_LOCAL.key, groupDeviceId: OWNER, at: 1 });
