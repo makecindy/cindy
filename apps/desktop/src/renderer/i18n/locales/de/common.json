@@ -5065,7 +5065,7 @@
     },
     "auxiliaryModels": {
       "title": "Hilfsmodelle",
-      "description": "Wird für automatische Aufgabentitel und KI-Umbenennung, Prompt-Vorschläge im Eingabefeld, Hilfe, Zusammenfassungen angehefteter Aufgaben, IM-/Feishu-Titel und Gruppenkontextprüfungen, Skripte geplanter Aufgaben, Plugin-Schnellfragen mit „Standard folgen“ und BYOK-Sprachnachbearbeitung verwendet.、die Prompt-Verbesserung im Eingabefeld。",
+      "description": "Wird für automatische Aufgabentitel und KI-Umbenennung, Prompt-Vorschläge im Eingabefeld, Hilfe, Zusammenfassungen angehefteter Aufgaben, IM-/Feishu-Titel und Gruppenkontextprüfungen, Skripte geplanter Aufgaben, Plugin-Schnellfragen mit „Standard folgen“ und BYOK-Sprachnachbearbeitung verwendet, sowie die Prompt-Verbesserung im Eingabefeld.",
       "automatic": "Automatische Empfehlung",
       "customize": "Benutzerdefiniert",
       "preferred": {
@@ -12682,7 +12682,11 @@
       "undo": "Verbesserung rückgängig machen",
       "success": "Prompt verbessert",
       "working": "Verbesserung…",
-      "failed": "Der Prompt konnte nicht verbessert werden"
+      "failed": "Der Prompt konnte nicht verbessert werden",
+      "stale": "Der Entwurf hat sich geändert, die Verbesserung wurde nicht angewendet",
+      "undoUnavailable": "Der Inhalt hat sich geändert, Rückgängig ist nicht möglich",
+      "unsupported": "Dieser Entwurf enthält @-Erwähnungen oder Zitate und kann noch nicht verbessert werden",
+      "locked": "Die Eingabe ist derzeit nicht bearbeitbar"
     }
   },
   "onboarding": {

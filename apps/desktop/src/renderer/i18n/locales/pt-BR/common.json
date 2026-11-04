@@ -5120,7 +5120,7 @@
     },
     "auxiliaryModels": {
       "title": "Modelos auxiliares",
-      "description": "Usado para nomear tarefas automaticamente e renomeá-las com IA, sugestões de prompts no editor, Ajuda, resumos de tarefas fixadas, títulos de IM / Feishu e verificações de contexto de grupo, scripts de tarefas agendadas, perguntas e respostas rápidas de plugins com “seguir padrão” e refinamento de voz BYOK.、a ação de melhorar o prompt na caixa de entrada。",
+      "description": "Usado para nomear tarefas automaticamente e renomeá-las com IA, sugestões de prompts no editor, Ajuda, resumos de tarefas fixadas, títulos de IM / Feishu e verificações de contexto de grupo, scripts de tarefas agendadas, perguntas e respostas rápidas de plugins com “seguir padrão” e refinamento de voz BYOK, e a ação de melhorar o prompt na caixa de entrada.",
       "automatic": "Recomendação automática",
       "customize": "Personalizado",
       "preferred": {
@@ -12784,7 +12784,11 @@
       "undo": "Desfazer a melhoria",
       "success": "Prompt melhorado",
       "working": "Melhorando…",
-      "failed": "Não foi possível melhorar o prompt"
+      "failed": "Não foi possível melhorar o prompt",
+      "stale": "O rascunho mudou, por isso a melhoria não foi aplicada",
+      "undoUnavailable": "O conteúdo mudou, não é possível desfazer",
+      "unsupported": "Este rascunho contém menções ou citações, que ainda não podem ser melhorados",
+      "locked": "A caixa de entrada não pode ser editada agora"
     }
   },
   "onboarding": {

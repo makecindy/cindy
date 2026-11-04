@@ -10080,6 +10080,12 @@ export function ChatInput({
                   ))}
                 {/* 伙伴的模型链在设置中统一管理，并由宿主自动 fallback。对话输入框不再
                     暴露单次任务的模型切换，避免会话态覆盖伙伴长期配置。 */}
+                <ComposerEnhancePromptButton
+                  editor={editor}
+                  draftKey={storageKey}
+                  disabled={composerEditorLocked || settingsLocked || sharedGuest}
+                  disabledReason={t('newChat.composerEnhance.locked')}
+                />
                 {!hideRuntimeControls ? (
                 <div
                   data-session-model-slot={sessionId ? '' : undefined}
@@ -10095,12 +10101,6 @@ export function ChatInput({
                             : 'min-w-0')
                     : useNarrowToolbar ? 'min-w-0 shrink' : undefined}
                 >
-                  {!sessionModelLoading && (
-                    <ComposerEnhancePromptButton
-                      editor={editor}
-                      disabled={composerEditorLocked || settingsLocked || sharedGuest}
-                    />
-                  )}
                   {!sessionModelLoading && <ModelSelector
                     sshCodex={sshCodexCatalog}
                     // 选中态一律是会话 / 草稿持有的 **wire model id**(sessions.model 或

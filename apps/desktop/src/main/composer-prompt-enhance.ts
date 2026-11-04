@@ -1,5 +1,8 @@
 import { throwIpcError } from './utils/ipcValidate.js';
-import { COMPOSER_ENHANCE_MAX_INPUT_CHARS } from '../shared/composerPromptEnhance.js';
+import {
+  COMPOSER_ENHANCE_MAX_INPUT_CHARS,
+  looksTruncated,
+} from '../shared/composerPromptEnhance.js';
 import type { UtilityTextResult } from '../shared/utilityTextResult.js';
 
 /**
@@ -7,30 +10,38 @@ import type { UtilityTextResult } from '../shared/utilityTextResult.js';
  *
  * Kept in English on purpose: it is model-facing instructions rather than
  * user-facing copy, so it is not part of the localized string catalogue.
+ * The wording stays domain-neutral on purpose — the composer is used for far
+ * more than coding work.
  */
 export const COMPOSER_ENHANCE_SYSTEM_PROMPT = [
-  'You rewrite a draft prompt into a stronger, more explicit prompt for an AI coding agent.',
+  'You rewrite a draft request into a stronger, more explicit request for an AI assistant.',
   'Rules:',
   "- Preserve the author's intent, their language, and every concrete detail they wrote.",
   '- Add only the structure the draft already implies: an explicit goal, a concrete scope, the constraints, and what "done" looks like.',
-  '- Never invent facts, file names, APIs, numbers, or requirements that the draft does not mention.',
+  '- Never invent facts, names, numbers, or requirements that the draft does not mention.',
   '- Never answer the request. You only rewrite the request.',
-  "- Never drop an instruction the author wrote, even when it looks redundant.",
+  '- Never drop an instruction the author wrote, even when it looks redundant.',
 ].join('\n');
 
-/** Output shape: the rewritten prompt only, no commentary around it. */
+/** Output shape: the rewritten request only, no commentary around it. */
 export const COMPOSER_ENHANCE_RESPONSE_INSTRUCTIONS =
-  'Reply with the rewritten prompt only. No preamble, no commentary, no markdown code fences.';
+  'Reply with the rewritten request only. No preamble, no commentary, no markdown code fences.';
 
-/** Output budget: a rewritten prompt is prose, not a document. */
-export const COMPOSER_ENHANCE_MAX_OUTPUT_TOKENS = 1024;
+/**
+ * Output budget.
+ *
+ * Sized against COMPOSER_ENHANCE_MAX_INPUT_CHARS so a rewrite of the longest
+ * accepted draft still fits: a rewrite may expand the draft, so the budget
+ * leaves room instead of silently truncating the answer.
+ */
+export const COMPOSER_ENHANCE_MAX_OUTPUT_TOKENS = 2048;
 
-/** Wall-clock budget for one rewrite. */
+/** Per-candidate budget handed to the utility-model chain. */
 export const COMPOSER_ENHANCE_TIMEOUT_MS = 60_000;
 
 /** Wraps the author's draft in the instruction the utility model receives. */
 export function buildEnhancePrompt(userText: string): string {
-  return ['Rewrite the following draft prompt.', '', '<draft>', userText, '</draft>'].join('\n');
+  return ['Rewrite the following draft request.', '', '<draft>', userText, '</draft>'].join('\n');
 }
 
 /** Options forwarded to the utility-model call. */
@@ -92,6 +103,9 @@ export async function enhanceComposerPrompt(
   const enhanced = result.text.trim();
   if (!enhanced) {
     throwIpcError('INTERNAL', 'The enhancement model returned an empty prompt');
+  }
+  if (looksTruncated(enhanced)) {
+    throwIpcError('INTERNAL', 'The enhanced prompt was cut off; try a shorter draft');
   }
   return { text: enhanced, model: `${result.providerId}/${result.model}` };
 }

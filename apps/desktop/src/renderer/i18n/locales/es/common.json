@@ -5120,7 +5120,7 @@
     },
     "auxiliaryModels": {
       "title": "Modelos auxiliares",
-      "description": "Se usan para nombrar tareas automáticamente y renombrarlas con IA, sugerir instrucciones en el cuadro de texto, ofrecer ayuda, resumir tareas fijadas, generar títulos de IM / Feishu y comprobar el contexto de grupos, crear scripts de tareas programadas, responder preguntas rápidas de complementos con la opción «usar el modelo predeterminado» y mejorar el texto dictado mediante BYOK.、la acción de mejorar el prompt del cuadro de entrada。",
+      "description": "Se usan para nombrar tareas automáticamente y renombrarlas con IA, sugerir instrucciones en el cuadro de texto, ofrecer ayuda, resumir tareas fijadas, generar títulos de IM / Feishu y comprobar el contexto de grupos, crear scripts de tareas programadas, responder preguntas rápidas de complementos con la opción «usar el modelo predeterminado» y mejorar el texto dictado mediante BYOK, y la acción de mejorar el prompt del cuadro de entrada.",
       "automatic": "Recomendación automática",
       "customize": "Personalizado",
       "preferred": {
@@ -12784,7 +12784,11 @@
       "undo": "Deshacer la mejora",
       "success": "Prompt mejorado",
       "working": "Mejorando…",
-      "failed": "No se pudo mejorar el prompt"
+      "failed": "No se pudo mejorar el prompt",
+      "stale": "El borrador cambió, así que no se aplicó la mejora",
+      "undoUnavailable": "El contenido cambió, no se puede deshacer",
+      "unsupported": "Este borrador contiene menciones o citas, que aún no se pueden mejorar",
+      "locked": "El cuadro de entrada no se puede editar ahora"
     }
   },
   "onboarding": {

@@ -12,13 +12,27 @@ export const COMPOSER_ENHANCE_PROMPT_CHANNEL = 'composer:enhance-prompt';
  * Upper bound for the draft prompt the renderer may send.
  *
  * The rewrite is a single utility-model call, so an unbounded payload would
- * only buy a slower, more expensive round trip.
+ * only buy a slower, more expensive round trip. The bound is small enough
+ * that the rewritten prompt still fits in one response (see
+ * COMPOSER_ENHANCE_MAX_OUTPUT_TOKENS).
  */
-export const COMPOSER_ENHANCE_MAX_INPUT_CHARS = 20_000;
+export const COMPOSER_ENHANCE_MAX_INPUT_CHARS = 4_000;
 
 /** Successful rewrite: the new prompt text and the route that produced it. */
 export type ComposerEnhancePromptSuccess = {
-  ok: true;
   text: string;
   model: string;
 };
+
+/**
+ * True when a rewrite looks cut off mid-structure.
+ *
+ * The utility-model route does not expose the provider's finish reason, so a
+ * rewrite that ends inside an unclosed fence is the one truncation shape we
+ * can detect reliably; applying it would drop the tail of the prompt.
+ */
+export function looksTruncated(text: string): boolean {
+  const fences = text.match(/```/g);
+  if (!fences) return false;
+  return fences.length % 2 === 1;
+}
