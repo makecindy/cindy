@@ -28,6 +28,7 @@ import { fileURLToPath } from 'node:url';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 
 import { PiAgent } from '../index.js';
+import { ANSWER_DELIVERY_PROMPT, PI_ANSWER_DELIVERY_PROMPT } from '@cindy/maker-shared/rich-answer-guide';
 import { PiRpcProcess } from '../rpc-client.js';
 import * as sessionJsonlScan from '../session-jsonl-scan.js';
 import { providerCatalogForPi, BUNDLED_CATALOG } from '@cindy/model-providers';
@@ -658,6 +659,40 @@ describe.skipIf(!piAvailable)('PiAgent integration (real pi binary + fake gatewa
       }
     },
   );
+
+  // Real Pi request comparison: shortening host instructions must leave native
+  // tools/project rules intact, and getContextUsage must inspect the same runtime.
+  it('keeps native capabilities with on-demand answer instructions and exposes context sources', { timeout: 30_000 }, async () => {
+    const cwd = mkdtempSync(path.join(tmpdir(), 'pi-context-int-'));
+    writeFileSync(path.join(cwd, 'AGENTS.md'), 'Project context verification marker.');
+    const requests: Array<{ system: Array<{ text: string }>; tools: unknown }> = [];
+    try {
+      for (const answerDeliveryPrompt of [ANSWER_DELIVERY_PROMPT, PI_ANSWER_DELIVERY_PROMPT]) {
+        const deps = buildDeps();
+        deps.runtimeConfig = { ...deps.runtimeConfig, answerDeliveryPrompt };
+        const handle = await new PiAgent(deps).startSession({ sessionId: `context-${requests.length}`, workingDir: cwd, model: 'pi-test-model' });
+        try {
+          const settled = (async () => { for await (const event of handle.events()) if (event.type === 'done') break; })();
+          await handle.send({ type: 'user', content: 'ping' });
+          await settled;
+          requests.push(JSON.parse(seenRequests.at(-1)!.body));
+          const usage = await handle.getContextUsage!();
+          expect(usage?.textEstimate?.items).toEqual(expect.arrayContaining([
+            expect.objectContaining({ source: 'delivery', tokens: expect.any(Number) }),
+            expect.objectContaining({ source: 'project', tokens: expect.any(Number) }),
+            expect.objectContaining({ source: 'tools', tokens: expect.any(Number) }),
+          ]));
+          expect(usage?.categories).toEqual([]);
+          expect(usage?.totalTokens).toBeGreaterThan(0);
+        } finally { await handle.close(); }
+      }
+      expect(requests[1].tools).toEqual(requests[0].tools);
+      const systemText = (request: typeof requests[number]) => request.system.map(block => block.text).join('\n');
+      expect(systemText(requests[1])).toContain('Project context verification marker.');
+      expect(systemText(requests[1])).toContain('rich-answers');
+      expect(systemText(requests[0]).length - systemText(requests[1]).length).toBeGreaterThan(5_000);
+    } finally { rmSync(cwd, { recursive: true, force: true }); }
+  });
 
   it(
     'keeps the target runtime after a context-window settings reload',

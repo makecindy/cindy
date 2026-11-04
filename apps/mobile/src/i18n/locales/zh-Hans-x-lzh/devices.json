@@ -703,7 +703,15 @@
       "running": "方作",
       "done": "已毕",
       "unread": "未阅"
-    }
+    },
+    "viewMr": "观 MR",
+    "viewPrMr": "观 PR",
+    "mrCount": "MR {{count}} 个",
+    "prMrCount": "PR {{count}} 个",
+    "mrCount_one": "MR {{count}} 个",
+    "prMrCount_one": "PR {{count}} 个",
+    "mrCount_other": "MR {{count}} 个",
+    "prMrCount_other": "PR {{count}} 个"
   },
   "companionProfile": {
     "avatar": "肖像",

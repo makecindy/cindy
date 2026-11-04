@@ -121,7 +121,7 @@ import {
 } from '../providerShareCrossRegion';
 import { providerShareHostPeer } from '@cindy/device-link';
 import { sha256Hex } from '../providerShareApi';
-import { captureProviderShareGroupRecovery, getReceivedSharesSnapshot, isReceivedSharesReady, previewProviderShare, refreshReceivedShares, resolveRemoteAgentTargetWhenReady, sendProviderShareRequest, startProviderShareGuest, stopProviderShareGuest } from '../providerShareGuest';
+import { captureProviderShareGroupRecovery, getConfirmedReceivedShareIds, getReceivedSharesSnapshot, onProviderShareReceivedChanged, isReceivedSharesReady, previewProviderShare, refreshReceivedShares, resolveRemoteAgentTargetWhenReady, sendProviderShareRequest, startProviderShareGuest, stopProviderShareGuest } from '../providerShareGuest';
 import { createProviderGroupRemoteClient } from '../../provider-group/remoteClient';
 
 const share = {
@@ -216,11 +216,59 @@ describe('cross-region provider share', () => {
     // The snapshot precedes async marker persistence, client startup and the
     // changed event. Join automatic discovery without issuing another request.
     await waitForCrossRegionReceived();
-    expect(changed).toHaveBeenLastCalledWith(expect.arrayContaining([expect.objectContaining({ shareId: 'share-x' })]));
+    expect(changed).toHaveBeenLastCalledWith(expect.arrayContaining([expect.objectContaining({ shareId: 'share-x' })]), true);
     expect(state.calls.map(call => call.path)).toEqual(['/api/device-link/provider-shares/x/session']);
     expect(state.calls[0].opts).toMatchObject({ token: null, baseUrl: peer === 'global' ? PEER : LOCAL, skipSessionInvalidation: true });
     expect(state.clients).toHaveLength(1);
     expect(Object.values(__testing.readMarkers())).toEqual([[peer]]);
+  });
+
+  // 2026-11-04: the received list is polled every minute and every poll notified,
+  // even when nothing changed. Each notification is pushed to every controlling
+  // computer as a model catalog change, so they re-read capabilities every minute.
+  it('flags the change only when the list or its confirmation changes, keeping the event and local cleanup every poll', async () => {
+    const event = vi.fn();
+    const changed = { mock: { get calls() { return event.mock.calls.filter((call) => call[1] === true); } } };
+    // Provider-group cleanup relies on every poll to retry a failed removal (PR #8814 review).
+    const groupCleanup = vi.fn();
+    const offCleanup = onProviderShareReceivedChanged(groupCleanup);
+    try {
+      startProviderShareGuest({ changed: event, settled: vi.fn() });
+      await vi.waitFor(() => expect(changed.mock.calls).toHaveLength(1));
+      await refreshReceivedShares('poll');
+      await refreshReceivedShares('poll');
+      // Local windows still hear every poll; only the change flag is withheld.
+      expect(event).toHaveBeenCalledTimes(3);
+      expect(changed.mock.calls).toHaveLength(1);
+      expect(groupCleanup).toHaveBeenCalledTimes(3);
+      state.localHasGroupShare = true;
+      await refreshReceivedShares('poll');
+      expect(changed.mock.calls).toHaveLength(2);
+      expect(changed.mock.calls[1][0]).toHaveLength(2);
+    } finally {
+      offCleanup();
+      stopProviderShareGuest();
+    }
+  });
+
+  // PR #8814 review: with the list unchanged, the other region confirming its (empty)
+  // membership still changes what listeners may trust and must be emitted once.
+  it('flags a change once when only the cross-region confirmation completes', async () => {
+    const event = vi.fn();
+    const flagged = () => event.mock.calls.filter((call) => call[1] === true);
+    const peer = deferred<unknown>();
+    state.responses.set('/session', peer.promise);
+    startProviderShareGuest({ changed: event, settled: vi.fn() }, { userDataDir: dir });
+    const crossRegion = refreshProviderShareCrossRegion('global');
+    await vi.waitFor(() => expect(flagged()).toHaveLength(1));
+    expect(getConfirmedReceivedShareIds()).toBeNull();
+    peer.resolve({ credential: CREDENTIAL, expiresAt: new Date(Date.now() + 86_400_000).toISOString(), shares: [] });
+    await crossRegion;
+    await vi.waitFor(() => expect(flagged()).toHaveLength(2));
+    expect(flagged()[1][0]).toHaveLength(1);
+    expect(getConfirmedReceivedShareIds()).not.toBeNull();
+    await refreshReceivedShares('poll');
+    expect(flagged()).toHaveLength(2);
   });
 
   it('automatically discovers a first share accepted on another computer after an empty startup', async () => {
@@ -293,7 +341,7 @@ describe('cross-region provider share', () => {
     await expect(action === 'preview' ? previewProviderShare(invitation) : sendProviderShareRequest(invitation))
       .rejects.toBe(memberError);
     expect(getReceivedSharesSnapshot().received.map((item) => item.shareId)).toEqual(['share-local', 'share-x']);
-    expect(changed).toHaveBeenLastCalledWith(expect.arrayContaining([expect.objectContaining({ shareId: 'share-x' })]));
+    expect(changed).toHaveBeenLastCalledWith(expect.arrayContaining([expect.objectContaining({ shareId: 'share-x' })]), true);
     expect(Object.values(__testing.readMarkers())).toEqual([['global']]);
     expect(state.calls.map((call) => call.path.replace('/api/device-link/provider-shares/x', '')))
       .toEqual(action === 'preview' ? ['/preview', '/session'] : ['/preview', '/requests', '/session']);

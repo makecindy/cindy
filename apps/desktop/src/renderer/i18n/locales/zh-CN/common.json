@@ -1024,11 +1024,19 @@
       "copied": "已复制",
       "copyFailed": "复制失败，可以重试或保存文件。",
       "scrollHint": "在选区内向上或向下滚动，也可点击自动滚动",
-      "recordHint": "在预览上绘制标注，标注会进入录像。不录制声音",
+      "recordHint": "在预览上绘制标注，标注会进入录像。",
       "format": "格式",
       "videoFormat": "视频 (WebM)",
-      "prepareHint": "点击开始后倒计时 3 秒，不录制声音。",
+      "prepareHint": "点击开始后倒计时 3 秒。",
       "countdown": "{{count}} 秒后开始录制",
+      "systemAudio": "扬声器",
+      "microphone": "麦克风",
+      "audioHint": "选择声源后开始录制，可同时开启",
+      "preparingAudio": "正在准备声音…",
+      "systemAudioFailed": "无法录入扬声器声音，请检查系统权限或关闭此声源",
+      "microphoneFailed": "无法使用麦克风，请检查权限和输入设备或关闭此声源",
+      "audioFailed": "无法开始录音，请检查设备或关闭声音后录制",
+      "audioInterrupted": "声音已中断，请结束录制以保存已录内容",
       "countdownHint": "即将开始，按 Esc 取消。",
       "annotate": "标注",
       "finishing": "正在完成…",
@@ -6026,8 +6034,10 @@
       "accessRevokedByPeer": "访问权限已被撤销，需对方在选项中恢复",
       "deviceControlToggleAria": "切换是否控制 {{name}}",
       "myDevices": {
-        "controlIt": "我控制它",
-        "allowInbound": "允许它控制本机",
+        "iCan": "我可以",
+        "itCan": "它可以",
+        "controlIt": "控制它",
+        "controlThisDevice": "控制本机",
         "allowInboundAria": "切换是否允许 {{name}} 控制本机",
         "peerControlOff": "对方未允许远程控制",
         "masterOffHint": "需先开启上方总开关",
@@ -13417,6 +13427,24 @@
           "autocompactBuffer": "自动压缩缓冲",
           "compactBuffer": "压缩缓冲",
           "freeSpace": "剩余可用"
+        },
+        "estimate": {
+          "title": "文本估算",
+          "delivery": "答案交付",
+          "host": "Cindy 规则",
+          "plugins": "插件目录",
+          "memoryRules": "记忆规则",
+          "memoryIndex": "记忆索引",
+          "profile": "伙伴资料",
+          "user": "用户指令",
+          "directories": "附加目录",
+          "native": "Pi 原生规则",
+          "skills": "技能目录",
+          "project": "项目指令",
+          "tools": "工具定义",
+          "messages": "对话正文",
+          "other": "其他指令",
+          "note": "按当前文本粗估，并非模型分词结果。不含图片与供应商格式开销，分项之和不等于原生总量。"
         }
       },
       "compact": {
@@ -14706,7 +14734,7 @@
         "manage": {
           "title": "管理 PR 链接",
           "hint": "顶栏最多显示 3 个，固定的 PR 优先显示",
-          "empty": "粘贴 GitHub PR 链接即可添加",
+          "empty": "粘贴 GitHub PR 或 GitLab MR 链接即可添加",
           "removed": "已移除 {{count}} 个",
           "legacy": "未确认的历史引用：{{count}}",
           "addLabel": "添加 PR 链接",
@@ -14717,17 +14745,26 @@
           "unpin": "取消固定",
           "pinLimit": "最多固定 3 个 PR",
           "reorderHint": "按 Alt+↑/↓ 在已固定或未固定组内调整顺序。",
-          "dragHandle": "拖动排序 {{repo}} #{{number}}",
+          "dragHandle": "拖动排序 {{repo}} {{numberLabel}}",
           "remove": "移除 PR",
           "errors": {
             "duplicate": "此 PR 已关联；已移除的链接可在列表中恢复",
             "notFound": "找不到此 PR，或没有访问权限",
-            "invalidUrl": "请输入有效的 GitHub PR 链接",
+            "invalidUrl": "请输入有效的 GitHub PR 或 GitLab MR 链接",
             "reorderFailed": "顺序没有保存，请重试",
-            "verifyFailed": "无法验证 PR，请检查 GitHub 登录与访问权限",
+            "verifyFailed": "无法验证 PR，请检查 GitHub 或 GitLab 登录与访问权限",
             "unsupported": "这台电脑的版本暂不支持管理 PR 链接",
             "failed": "无法更新 PR 链接"
           }
+        },
+        "gitlab": {
+          "missing": "未检测到 GitLab CLI（glab），看不到 MR 状态。安装 glab 并登录后即可显示。",
+          "notLoggedIn": "本机 glab 尚未登录 {{host}}，看不到 MR 状态。在终端运行 glab auth login 登录后即可显示。",
+          "unsupported": "此电脑暂不支持 GitLab MR 状态",
+          "openAria": "在浏览器中打开 MR !{{number}}",
+          "summaryAria": "MR !{{number}} 汇总",
+          "urlPlaceholder": "GitHub PR 或 GitLab MR 链接",
+          "notFound": "MR 不存在，或当前账号无权限查看"
         }
       }
     },
