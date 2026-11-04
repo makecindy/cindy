@@ -58,10 +58,20 @@ export default {
       return row.bottom > view.top && row.top < view.bottom;
     }), true, 'the located message must remain visible');
     // The @ entry shares its locator with quoted-message navigation.
-    await timeline.evaluate(element => { element.scrollTop = 0; });
-    await page.getByTestId('bot-group-quote').click();
+    const original = page.locator('[data-bot-group-message-id="question"]');
+    const originalVisible = () => original.evaluate(element => {
+      const row = element.getBoundingClientRect();
+      const view = element.closest('[data-testid="bot-group-timeline"]').getBoundingClientRect();
+      return row.bottom > view.top && row.top < view.bottom;
+    });
+    await timeline.evaluate(element => { element.scrollTop = element.scrollHeight; });
+    if (ui.data.history) assert.equal(await originalVisible(), false, 'the original must start outside the timeline viewport');
+    // Playwright's click would scroll this quote (beside the original) into view
+    // before invoking the locator, concealing a broken application scroll.
+    await page.getByTestId('bot-group-quote').evaluate(element => element.click());
     await page.waitForFunction(() => document.activeElement?.getAttribute('data-bot-group-message-id') === 'question');
     await sameGeometry();
+    assert.equal(await originalVisible(), true, 'the quoted original must become visible');
     await ui.capture('quoted-message-located');
   },
 };
