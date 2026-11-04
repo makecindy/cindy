@@ -438,6 +438,7 @@ let arbiter: DeviceLinkOwnershipArbiter | null = null;
 let observedAuthRealm: ReturnType<typeof authManager.getActiveAuthRealm> | null = null;
 let authRealmReconnectGeneration = 0;
 let unsubscribeAuthState: (() => void) | null = null;
+let unsubscribeAccessTokenRefresh: (() => void) | null = null;
 /** 按 userId 缓存文件锁;换账号或登出时释放 */
 let ownershipFileLock: { lockPath: string; lock: OwnershipLock } | null = null;
 
@@ -626,10 +627,12 @@ let relayAuthRecoveryRetryTimer: ReturnType<typeof setTimeout> | null = null;
 /**
  * relay 明确拒绝鉴权(401 / TOKEN_EXPIRED)时的自救:getToken 在内存 access token
  * 未清时不会触发 refresh,会一直拿过期 token 重连死循环(日志里刷 401 而用户无感知)。
- * 这里主动 refresh 一次:成功则下一轮重连拿到新 token 自愈;确定性失效则由
+ * 这里主动 refresh 一次:成功通知会立即用新 token 重连(也覆盖延迟重试);确定性失效则由
  * refresh 路径自己走会话过期出口(清会话 + 弹重登),auth 监听随后会停掉本服务。
+ * 只有 issue 刚转为 auth-failed 的那次调用算新的 401 证据;节流窗后的延迟自救只复查
+ * issue 仍在,断网期间 issue 不会被清除,不能把旧 401 当成新证据去提前快速续期。
  */
-function recoverFromRelayAuthFailure(crossAccount = false): void {
+function recoverFromRelayAuthFailure(crossAccount = false, freshRejection = true): void {
   // 自建中转拒绝的是中转凭证,与 Cindy 账号无关:不刷新、不轮换账号 token。
   // 界面经 connection issue 提示「已被移出中转」,由用户重新加入或切回官方。
   // 跨账号连接始终走官方中转,用的是账号 token。
@@ -645,31 +648,34 @@ function recoverFromRelayAuthFailure(crossAccount = false): void {
         relayAuthRecoveryRetryTimer = null;
         // 延迟期间可能已自愈(issue 清除),避免一次多余的 token 轮换。
         if (connection()?.getConnectionIssue()?.kind !== 'auth-failed') return;
-        recoverFromRelayAuthFailure(crossAccount);
+        recoverFromRelayAuthFailure(crossAccount, false);
       }, RELAY_AUTH_RECOVERY_MIN_INTERVAL_MS - elapsed);
       relayAuthRecoveryRetryTimer.unref?.();
     }
     return;
   }
   lastRelayAuthRecoveryAt = now;
-  const recoveryClient = client;
-  const recoveryScope = activeOwnerScopeKey();
   void authManager
     // A relay 401 proves reachability; an interface-change hint does not.
-    .refresh({ networkRecovered: true })
-    .then((ok) => {
-      // refresh 在途期间持有权可能已被另一个共享 userData 实例夺走
-      // (onDemote → teardownActiveLink 已停掉 client):此时 connectNow 会把
-      // 已停的 client 拉活、绕过仲裁重连,重新制造双连接 / last-wins 互踢。
-      // 重连前重新确认本实例仍是持有者。
-      if (ok && client === recoveryClient && activeOwnerScopeKey() === recoveryScope
-        && !linkTornDown && !isAppSessionBoundaryPending() && arbiter?.isOwner()) {
-        connection()?.connectNow('relay-auth-recovered');
-      }
-    })
+    .refresh({ serverRejectedToken: freshRejection })
     .catch((err) => {
       log.warn('relay auth recovery refresh threw (non-fatal)', err);
     });
+}
+
+/** Only revive currently owned, officially authenticated connections rejected with 401. */
+function reconnectAfterAccessTokenRefresh(): void {
+  // Read the live client synchronously: no captured client/owner may survive a
+  // teardown, account transition or ownership demotion while refresh was pending.
+  if (!client || linkTornDown || isAppSessionBoundaryPending() || !arbiter?.isOwner()) return;
+  if (!activeSelfHostedRelay() && client.getConnectionIssue()?.kind === 'auth-failed') {
+    client.connectNow('relay-auth-recovered');
+  }
+  const crossAccount = client.crossAccountConnection();
+  // Without a separate official route, crossAccountConnection() returns client itself.
+  if (crossAccount !== client && crossAccount?.getConnectionIssue()?.kind === 'auth-failed') {
+    crossAccount.connectNow('relay-auth-recovered');
+  }
 }
 
 function buildDeviceInfo(): DeviceInfo {
@@ -1321,10 +1327,13 @@ export function initDeviceLinkService(options: DeviceLinkServiceOptions = {}): v
     observedAuthRealm = nextRealm;
     syncWithAuthState(state.isAuthenticated, realmChanged);
   });
+  unsubscribeAccessTokenRefresh = authManager.onAccessTokenRefreshed(reconnectAfterAccessTokenRefresh);
   onQuit('device-link', () => {
     authRealmReconnectGeneration += 1;
     unsubscribeAuthState?.();
     unsubscribeAuthState = null;
+    unsubscribeAccessTokenRefresh?.();
+    unsubscribeAccessTokenRefresh = null;
     observedAuthRealm = null;
     if (busyTimer) {
       clearInterval(busyTimer);
