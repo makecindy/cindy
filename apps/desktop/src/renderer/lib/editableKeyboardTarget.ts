@@ -51,6 +51,24 @@ export function isInsideKeyboardLayer(target: Element): boolean {
 }
 
 /**
+ * 焦点所在的浮层是否正在关闭：Radix 把关闭中的内容标成 data-state="closed"，等退场动画
+ * 播完才卸载，卸载后再把焦点还给触发器。这段时间里焦点还在浮层内，但浮层已经
+ * 不再持有键盘。Popper 包装层本身没有 data-state，看它的直接子节点（Content）。
+ */
+export function isInsideClosingKeyboardLayer(target: Element): boolean {
+  for (let layer = target.closest(LAYER_SELECTOR); layer; layer = layer.parentElement?.closest(LAYER_SELECTOR) ?? null) {
+    if (layer.getAttribute('data-state') === 'closed') return true;
+    if (
+      layer.hasAttribute('data-radix-popper-content-wrapper') &&
+      layer.querySelector(':scope > [data-state="closed"]')
+    ) {
+      return true;
+    }
+  }
+  return false;
+}
+
+/**
  * 焦点是否落在「别处的控件」上：可编辑控件、按钮 / 链接等自带键盘语义的控件，
  * 或菜单 / 弹层 / 对话框。调用方已确认焦点不在自己的卡片里时，用它判断按键是否属于那里。
  */

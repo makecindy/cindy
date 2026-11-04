@@ -10,7 +10,7 @@
 import { act, cleanup, fireEvent, render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { useState } from 'react';
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type { PendingPermission } from '@/lib/makerChatStore';
 import { PROVIDER_SHARE_CREDENTIAL_SESSION_APPROVAL } from '../../../../shared/providerShareCredentialConsent';
@@ -38,6 +38,7 @@ import { PermissionPrompt } from '../PermissionPrompt';
 import { InteractionPromptHost } from '@/components/interaction-portal';
 import { setSlotElement } from '@/components/interaction-portal/store';
 import { useSessionSwitchFocusIntent } from '@/features/cc-agent/useSessionSwitchFocusIntent';
+import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
 
 afterEach(cleanup);
 
@@ -335,6 +336,91 @@ describe('PermissionPrompt 经交互卡 portal 切换路由', () => {
 
     act(() => setSlotElement(null));
 
+    expect(document.activeElement).toBe(screen.getByRole('button', { name: /allowOnce/ }));
+  });
+});
+
+// 收起侧栏的搜索弹层里选中一个等授权的任务：同一事件里关闭弹层并切换。真实的 Radix
+// Popover 要等退场动画播完才卸载，这期间焦点还在弹层里的结果上；卸载后焦点还给搜索按钮。
+// 意图必须撑过这段时间，焦点最终落到「允许一次」，而不是停在搜索按钮上。
+describe('PermissionPrompt 经搜索弹层切换任务', () => {
+  // jsdom 不播动画。按 data-state 给出 popover.tsx 的 float-in / float-out 动画名，
+  // Radix Presence 就会像真实环境那样等 animationend 才卸载内容（做法同
+  // MyPluginsPage.test.tsx）。jsdom 也没有 CSS.escape，动画名都是普通标识符。
+  beforeEach(() => {
+    vi.stubGlobal('CSS', { escape: (value: string) => value });
+    const computedStyle = window.getComputedStyle.bind(window);
+    vi.spyOn(window, 'getComputedStyle').mockImplementation((element) => {
+      const style = computedStyle(element);
+      if (element.hasAttribute('data-state')) {
+        Object.defineProperty(style, 'animationName', {
+          get: () => (element.getAttribute('data-state') === 'closed' ? 'float-out' : 'float-in'),
+        });
+      }
+      return style;
+    });
+  });
+  afterEach(() => {
+    vi.restoreAllMocks();
+    vi.unstubAllGlobals();
+  });
+
+  function SearchSwitch() {
+    const [open, setOpen] = useState(false);
+    const [taskId, setTaskId] = useState('task-a');
+    const intent = useSessionSwitchFocusIntent(taskId, true);
+    return (
+      <>
+        <Popover open={open} onOpenChange={setOpen}>
+          <PopoverTrigger>search</PopoverTrigger>
+          <PopoverContent data-testid="search-popover">
+            <button
+              type="button"
+              onClick={() => {
+                setOpen(false);
+                setTaskId('task-b');
+              }}
+            >
+              result
+            </button>
+          </PopoverContent>
+        </Popover>
+        {taskId === 'task-b' ? (
+          <PermissionPrompt
+            permission={permission()}
+            onRespond={vi.fn()}
+            autoFocus={intent.armed}
+            onAutoFocusHandled={intent.consume}
+          />
+        ) : null}
+      </>
+    );
+  }
+
+  it('弹层退场期间保留意图，焦点归还后落到「允许一次」', async () => {
+    render(<SearchSwitch />);
+    // 像真实收起侧栏那样从搜索按钮打开，Radix 关闭后把焦点还给它。
+    const trigger = screen.getByRole('button', { name: 'search' });
+    act(() => trigger.focus());
+    act(() => trigger.click());
+    const result = screen.getByRole('button', { name: 'result' });
+    act(() => result.focus());
+    // 不经 pointer / 键盘事件触发（那些本身会撤销意图），只看关闭 + 切换的时序。
+    act(() => result.click());
+    const popover = screen.getByTestId('search-popover');
+    expect(popover.getAttribute('data-state')).toBe('closed');
+    expect(document.activeElement).toBe(result);
+
+    const end = new Event('animationend', { bubbles: true });
+    Object.defineProperty(end, 'animationName', { value: 'float-out' });
+    act(() => {
+      fireEvent(popover, end);
+    });
+
+    expect(result.isConnected).toBe(false);
+    // Radix 在卸载后的下一个 tick 把焦点还给搜索按钮。
+    await act(() => new Promise((resolve) => setTimeout(resolve, 0)));
+    expect(document.activeElement).not.toBe(trigger);
     expect(document.activeElement).toBe(screen.getByRole('button', { name: /allowOnce/ }));
   });
 });

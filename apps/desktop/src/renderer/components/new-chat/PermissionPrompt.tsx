@@ -17,14 +17,19 @@
  * (Enter / Space / Tab) acts on this card directly.
  */
 
-import { useCallback, useEffect, useMemo, useRef } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { describePermissionAction, type PermissionActionSummary } from '@cindy/maker-shared/interaction';
 
 import { BotAvatar } from '@/features/bots/BotAvatar';
 import type { BotChatIdentity } from '@/features/bots/BotSessionContentHeader';
 
-import { isEditableKeyboardTarget, isInsideKeyboardLayer, shouldCardShortcutYield } from '@/lib/editableKeyboardTarget';
+import {
+  isEditableKeyboardTarget,
+  isInsideClosingKeyboardLayer,
+  isInsideKeyboardLayer,
+  shouldCardShortcutYield,
+} from '@/lib/editableKeyboardTarget';
 import { cn } from '@/lib/utils';
 import { Tip } from '@/components/ui/tooltip';
 import { Button } from '@/components/ui/button';
@@ -150,6 +155,8 @@ export function PermissionPrompt({
   const cardRef = useRef<HTMLDivElement>(null);
   const allowOnceRef = useRef<HTMLButtonElement>(null);
   const heldKeyGuardRef = useRef<(() => void) | null>(null);
+  // Bumped when focus moves while the switch focus waits for a closing popover.
+  const [focusSettleCount, setFocusSettleCount] = useState(0);
   const { toolName, input, title, displayName, description, suggestions, autoReviewUnavailable,
     autoReviewReason, submitting, submissionFailed } = permission;
   const isMediaDownload = toolName === 'cindy.media.download';
@@ -260,6 +267,14 @@ export function PermissionPrompt({
       !cardRef.current?.contains(active) &&
       (isEditableKeyboardTarget(active) || isInsideKeyboardLayer(active));
     if (keyboardOwnedElsewhere) {
+      if (isInsideClosingKeyboardLayer(active)) {
+        // Choosing a search result closes its popover and navigates in one event. The
+        // popover keeps focus through its exit animation, then hands it back to its
+        // trigger. Keep the request and look again once focus settles.
+        const retry = () => setFocusSettleCount((n) => n + 1);
+        document.addEventListener('focusin', retry, true);
+        return () => document.removeEventListener('focusin', retry, true);
+      }
       // The user is typing or in a menu elsewhere: leave focus there for this switch.
       onAutoFocusHandled?.();
       return;
@@ -273,7 +288,7 @@ export function PermissionPrompt({
     heldKeyGuardRef.current?.();
     heldKeyGuardRef.current = swallowHeldActivationKeys();
     onAutoFocusHandled?.();
-  }, [autoFocus, onAutoFocusHandled, submitting]);
+  }, [autoFocus, onAutoFocusHandled, submitting, focusSettleCount]);
 
   useEffect(() => () => heldKeyGuardRef.current?.(), []);
 
