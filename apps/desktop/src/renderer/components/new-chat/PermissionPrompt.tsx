@@ -11,6 +11,10 @@
  *   Enter       → Allow once
  *   Ctrl+Enter  → Always allow for session
  *   Esc         → Deny
+ *
+ * `autoFocus`: the host passes it right after the user switches to this task,
+ * so focus moves off the sidebar row onto 「Allow once」 and the keyboard
+ * (Enter / Space / Tab) acts on this card directly.
  */
 
 import { useCallback, useEffect, useMemo, useRef } from 'react';
@@ -20,7 +24,7 @@ import { describePermissionAction, type PermissionActionSummary } from '@cindy/m
 import { BotAvatar } from '@/features/bots/BotAvatar';
 import type { BotChatIdentity } from '@/features/bots/BotSessionContentHeader';
 
-import { shouldCardShortcutYield } from '@/lib/editableKeyboardTarget';
+import { isEditableKeyboardTarget, isInsideKeyboardLayer, shouldCardShortcutYield } from '@/lib/editableKeyboardTarget';
 import { cn } from '@/lib/utils';
 import { Tip } from '@/components/ui/tooltip';
 import { Button } from '@/components/ui/button';
@@ -36,6 +40,13 @@ interface PermissionPromptProps {
   permission: PendingPermission;
   companion?: BotChatIdentity | null;
   onRespond: (result: CCAgentPermissionResult) => void;
+  /**
+   * Move focus to 「Allow once」 once the card can take it. Called back through
+   * `onAutoFocusHandled` so the host only does this once per task switch.
+   * Focus stays put when it is in a text field, menu or dialog elsewhere.
+   */
+  autoFocus?: boolean;
+  onAutoFocusHandled?: () => void;
 }
 
 // ---------------------------------------------------------------------------
@@ -90,9 +101,16 @@ const allowActionClass = cn(
 // Component
 // ---------------------------------------------------------------------------
 
-export function PermissionPrompt({ permission, onRespond, companion }: PermissionPromptProps) {
+export function PermissionPrompt({
+  permission,
+  onRespond,
+  companion,
+  autoFocus = false,
+  onAutoFocusHandled,
+}: PermissionPromptProps) {
   const { t } = useTranslation();
   const cardRef = useRef<HTMLDivElement>(null);
+  const allowOnceRef = useRef<HTMLButtonElement>(null);
   const { toolName, input, title, displayName, description, suggestions, autoReviewUnavailable,
     autoReviewReason, submitting, submissionFailed } = permission;
   const isMediaDownload = toolName === 'cindy.media.download';
@@ -189,6 +207,22 @@ export function PermissionPrompt({ permission, onRespond, companion }: Permissio
     window.addEventListener('keydown', handler);
     return () => window.removeEventListener('keydown', handler);
   }, [handleAllowOnce, handleAlwaysAllow, handleDeny]);
+
+  // ── Focus on task switch ──
+
+  useEffect(() => {
+    // Disabled buttons cannot take focus; keep the request until submission settles.
+    if (!autoFocus || submitting) return;
+    const button = allowOnceRef.current;
+    if (!button) return;
+    const active = document.activeElement;
+    const keyboardOwnedElsewhere =
+      active instanceof Element &&
+      !cardRef.current?.contains(active) &&
+      (isEditableKeyboardTarget(active) || isInsideKeyboardLayer(active));
+    if (!keyboardOwnedElsewhere) button.focus({ preventScroll: true });
+    onAutoFocusHandled?.();
+  }, [autoFocus, onAutoFocusHandled, submitting]);
 
   // ── Render ──
 
@@ -312,6 +346,7 @@ export function PermissionPrompt({ permission, onRespond, companion }: Permissio
 
         {/* Allow once (primary) */}
         <Button
+          ref={allowOnceRef}
           pressFeedback={false}
           variant="secondary"
           size="lg"

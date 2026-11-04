@@ -45,6 +45,11 @@ const LAYER_SELECTOR = [
   '[data-radix-popper-content-wrapper]',
 ].join(',');
 
+/** 焦点是否在菜单 / 下拉列表 / 弹层 / 对话框里：这些浮层自己持有键盘，别处不该把焦点抢走。 */
+export function isInsideKeyboardLayer(target: Element): boolean {
+  return target.closest(LAYER_SELECTOR) !== null;
+}
+
 /**
  * 焦点是否落在「别处的控件」上：可编辑控件、按钮 / 链接等自带键盘语义的控件，
  * 或菜单 / 弹层 / 对话框。调用方已确认焦点不在自己的卡片里时，用它判断按键是否属于那里。

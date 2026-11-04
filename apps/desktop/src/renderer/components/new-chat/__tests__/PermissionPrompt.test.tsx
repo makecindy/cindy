@@ -228,3 +228,75 @@ describe('PermissionPrompt 的插件安装确认', () => {
     expect(screen.queryByRole('button', { name: /alwaysAllow/ })).toBeNull();
   });
 });
+
+describe('PermissionPrompt 切换任务后聚焦「允许一次」', () => {
+  it('autoFocus 时把焦点从侧栏行移到「允许一次」，回车即允许一次', () => {
+    const sidebarRow = document.createElement('div');
+    sidebarRow.tabIndex = 0;
+    document.body.append(sidebarRow);
+    sidebarRow.focus();
+    const onRespond = vi.fn();
+    const onAutoFocusHandled = vi.fn();
+    render(
+      <PermissionPrompt
+        permission={permission()}
+        onRespond={onRespond}
+        autoFocus
+        onAutoFocusHandled={onAutoFocusHandled}
+      />,
+    );
+    const allowOnce = screen.getByRole('button', { name: /allowOnce/ });
+    expect(document.activeElement).toBe(allowOnce);
+    expect(onAutoFocusHandled).toHaveBeenCalledTimes(1);
+    fireEvent.click(allowOnce);
+    expect(onRespond).toHaveBeenCalledWith({ behavior: 'allow' });
+    sidebarRow.remove();
+  });
+
+  it('不传 autoFocus 时不动焦点', () => {
+    render(<PermissionPrompt permission={permission()} onRespond={vi.fn()} />);
+    expect(document.activeElement).toBe(document.body);
+  });
+
+  it('焦点在别处的输入框或菜单里时不抢焦点，但仍消费意图', () => {
+    const search = document.createElement('input');
+    document.body.append(search);
+    search.focus();
+    const onAutoFocusHandled = vi.fn();
+    render(
+      <PermissionPrompt
+        permission={permission()}
+        onRespond={vi.fn()}
+        autoFocus
+        onAutoFocusHandled={onAutoFocusHandled}
+      />,
+    );
+    expect(document.activeElement).toBe(search);
+    expect(onAutoFocusHandled).toHaveBeenCalledTimes(1);
+    search.remove();
+  });
+
+  it('提交中按钮不可聚焦时先保留意图，提交结束后再聚焦', () => {
+    const onAutoFocusHandled = vi.fn();
+    const request = permission();
+    const { rerender } = render(
+      <PermissionPrompt
+        permission={{ ...request, submitting: true }}
+        onRespond={vi.fn()}
+        autoFocus
+        onAutoFocusHandled={onAutoFocusHandled}
+      />,
+    );
+    expect(onAutoFocusHandled).not.toHaveBeenCalled();
+    rerender(
+      <PermissionPrompt
+        permission={{ ...request, submitting: false, submissionFailed: true }}
+        onRespond={vi.fn()}
+        autoFocus
+        onAutoFocusHandled={onAutoFocusHandled}
+      />,
+    );
+    expect(document.activeElement).toBe(screen.getByRole('button', { name: /allowOnce/ }));
+    expect(onAutoFocusHandled).toHaveBeenCalledTimes(1);
+  });
+});
