@@ -428,9 +428,11 @@ export function startProviderShareRuntime(broadcast: Broadcast, options: { invok
       emit(DEVICE_LINK_PUSH.REMOTE_PUSH, { deviceId, channel: 'maker:provider:changed', payload: {} });
       notifyControlledModelCatalogChanged();
     },
-    changed(received) {
+    changed(received, changed) {
+      // Local windows re-check stale subscription catalogs on every poll.
       emit(PROVIDER_SHARE_IPC.RECEIVED_CHANGED, received);
-      notifyControlledModelCatalogChanged();
+      // Pushed to every controlling computer; they re-read capabilities and rosters.
+      if (changed) notifyControlledModelCatalogChanged();
     },
     settled(state, preview) {
       emit(PROVIDER_SHARE_IPC.SETTLED, { state, preview });

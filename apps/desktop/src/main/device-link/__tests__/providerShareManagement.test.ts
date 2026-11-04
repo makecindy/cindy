@@ -123,6 +123,7 @@ import { startProviderShareHost } from '../providerShareHost';
 import { startProviderShareGuest } from '../providerShareGuest';
 import { setBroadcastTapListener } from '../broadcast-tap';
 import { CONTROLLED_MODEL_CATALOG_CHANGED } from '../../../shared/controlledModelCatalog';
+import { PROVIDER_SHARE_IPC } from '../../../shared/providerShare';
 import { createProviderShareUsageStore } from '../providerShareUsageStore';
 import { revokeProviderShareControllers } from '../dispatch';
 
@@ -191,11 +192,26 @@ it.each(['catalog', 'received', 'stop'] as const)('forwards %s invalidation to r
   setBroadcastTapListener(remote);
   const events = vi.mocked(startProviderShareGuest).mock.lastCall![0];
   if (trigger === 'catalog') events.catalogChanged!('share:b-only');
-  else if (trigger === 'received') events.changed([]);
+  else if (trigger === 'received') events.changed([], true);
   else stopProviderShareRuntime();
   expect(local).toHaveBeenCalledWith(CONTROLLED_MODEL_CATALOG_CHANGED, {});
   expect(remote).toHaveBeenCalledWith(CONTROLLED_MODEL_CATALOG_CHANGED, {},
     { dataOwnerId: 'owner-a', ownerGeneration: 1 });
+});
+
+// 2026-11-04 (PR #8814): the received list is polled every minute. An unchanged poll
+// still refreshes local windows (stale subscription catalogs are re-checked there) but
+// must not push a model catalog change to every controlling computer.
+it('refreshes local windows but does not push a catalog change for an unchanged received poll', () => {
+  const local = vi.fn();
+  const remote = vi.fn();
+  startProviderShareRuntime(local);
+  setBroadcastTapListener(remote);
+  const events = vi.mocked(startProviderShareGuest).mock.lastCall![0];
+  events.changed([], false);
+  expect(local).toHaveBeenCalledWith(PROVIDER_SHARE_IPC.RECEIVED_CHANGED, []);
+  expect(local).not.toHaveBeenCalledWith(CONTROLLED_MODEL_CATALOG_CHANGED, {});
+  expect(remote).not.toHaveBeenCalledWith(CONTROLLED_MODEL_CATALOG_CHANGED, {}, expect.anything());
 });
 
 /* Deleting a member must use the live host callback and retain offline M until it ACKs. tier: unit. */
