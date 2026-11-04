@@ -258,7 +258,7 @@ function VoiceInputSelect<T extends string>({
           'max-h-[360px] overflow-y-auto',
         )}
       >
-        <div className="flex flex-col gap-1" role="listbox" aria-label={ariaLabel}>
+        <div data-setting-id={settingId} className="flex flex-col gap-1" role="listbox" aria-label={ariaLabel}>
           {options.map((option) => {
             const selected = option.value === value;
             return (

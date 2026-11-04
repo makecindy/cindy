@@ -36,12 +36,26 @@ const controls = new Set([
   "FontFamilyPicker",
   "VoiceInputSelect",
   "PillSelect",
+  "BehaviorRow",
 ]);
 // These application controls do not spread DOM props by contract. Check their
 // implementation as well as every caller, including aliases and same-file controls.
 const customControls = new Set([
-  "SegmentedControl", "FontFamilyPicker", "BotModelChainEditor", "VoiceInputSelect", "PillSelect", "Select",
+  "SegmentedControl", "FontFamilyPicker", "BotModelChainEditor", "VoiceInputSelect", "PillSelect", "Select", "BehaviorRow",
 ]);
+const interactiveRoles = new Set([
+  "button", "checkbox", "radio", "switch", "combobox", "listbox", "option",
+  "textbox", "searchbox", "slider", "spinbutton", "menuitem", "menuitemcheckbox",
+  "menuitemradio", "tab", "treeitem",
+]);
+function hasInteractiveRole(node) {
+  if (!/^[a-z]/.test(node.tagName.getText())) return false;
+  return node.attributes.properties.some(attribute => {
+    if (!ts.isJsxAttribute(attribute) || attribute.name.getText() !== "role" || !attribute.initializer) return false;
+    const value = ts.isJsxExpression(attribute.initializer) ? attribute.initializer.expression : attribute.initializer;
+    return value && ts.isStringLiteral(value) && value.text.split(/\s+/).some(role => interactiveRoles.has(role));
+  });
+}
 const parse = (source) =>
   ts.createSourceFile(
     "settings.tsx",
@@ -74,7 +88,7 @@ function forwardsIdToDom(source, name) {
       if (!ts.isJsxOpeningElement(node) && !ts.isJsxSelfClosingElement(node)) return;
       const tag = node.tagName.getText(file);
       // Intrinsic elements and the existing DOM-prop-forwarding UI primitives.
-      if (!/^[a-z]/.test(tag) && tag !== "Button" && tag !== "Select.Trigger") return;
+      if (!/^[a-z]/.test(tag) && tag !== "Button" && tag !== "Switch" && tag !== "Select.Trigger") return;
       if (node.attributes.properties.some(attribute => ts.isJsxAttribute(attribute) &&
         attribute.name.getText(file) === "data-setting-id" && attribute.initializer &&
         ts.isJsxExpression(attribute.initializer) && attribute.initializer.expression &&
@@ -162,7 +176,7 @@ export function inspectSettingsControls(
     walk(ast, (node) => {
       if (
         (ts.isJsxOpeningElement(node) || ts.isJsxSelfClosingElement(node)) &&
-        aliases.has(node.tagName.getText(ast))
+        (aliases.has(node.tagName.getText(ast)) || hasInteractiveRole(node))
       )
         found.push(node);
     });

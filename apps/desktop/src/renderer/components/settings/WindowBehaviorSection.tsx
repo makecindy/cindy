@@ -1,4 +1,3 @@
-import { generalSettings } from './GeneralSettings.settings-search';
 import { windowBehaviorSettings } from './WindowBehaviorSection.settings-search';
 /**
  * WindowBehaviorSection — 「应用行为」section:本机相关的应用级开关。
@@ -47,6 +46,7 @@ type DesktopCloseBehavior = LinuxCloseBehavior | WindowsCloseBehavior;
 /** 一行开关:左侧标签 + 说明(+ 可选补充说明行),右侧开关。 */
 function BehaviorRow({
   id,
+  'data-setting-id': settingId,
   label,
   hint,
   note,
@@ -56,6 +56,7 @@ function BehaviorRow({
   disabled,
 }: {
   id?: string;
+  'data-setting-id': string;
   label: string;
   hint: string;
   note?: ReactNode;
@@ -76,7 +77,7 @@ function BehaviorRow({
         {note}
       </div>
 
-      <Switch data-setting-id={generalSettings.windowBehavior.id}
+      <Switch data-setting-id={settingId}
         checked={checked}
         onCheckedChange={onCheckedChange}
         aria-label={ariaLabel}
@@ -144,6 +145,7 @@ export function WindowBehaviorSection() {
       node: (
         <BehaviorRow
           id={windowBehaviorSettings.devicesKeepAwake.targetId}
+          data-setting-id={windowBehaviorSettings.devicesKeepAwake.id}
           label={t(windowBehaviorSettings.devicesKeepAwake.titleKey)}
           hint={t(windowBehaviorSettings.devicesKeepAwake.descriptionKey)}
           checked={keepAwake}
@@ -160,6 +162,7 @@ export function WindowBehaviorSection() {
       node: (
         <BehaviorRow
           id={windowBehaviorSettings.loginItemLabel.targetId}
+          data-setting-id={windowBehaviorSettings.loginItemLabel.id}
           label={t(windowBehaviorSettings.loginItemLabel.titleKey)}
           hint={t(windowBehaviorSettings.loginItemLabel.descriptionKey)}
           checked={Boolean(loginItem.state?.enabled || loginItem.state?.requiresApproval)}
@@ -191,6 +194,7 @@ export function WindowBehaviorSection() {
       node: (
         <BehaviorRow
           id={windowBehaviorSettings.menubarLabel.targetId}
+          data-setting-id={windowBehaviorSettings.menubarLabel.id}
           label={t(windowBehaviorSettings.menubarLabel.titleKey)}
           hint={t(windowBehaviorSettings.menubarLabel.descriptionKey)}
           checked={menubar.state?.enabled === true}
@@ -239,6 +243,7 @@ export function WindowBehaviorSection() {
       node: (
         <BehaviorRow
           id={windowBehaviorSettings.swallowActivationClickLabel.targetId}
+          data-setting-id={windowBehaviorSettings.swallowActivationClickLabel.id}
           label={t(windowBehaviorSettings.swallowActivationClickLabel.titleKey)}
           hint={t(windowBehaviorSettings.swallowActivationClickLabel.descriptionKey)}
           note={

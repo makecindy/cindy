@@ -59,7 +59,7 @@ export function ProviderNameSearch({ choices, open, onOpenChange, onSelect, ...i
         onCloseAutoFocus={event => event.preventDefault()}
         onInteractOutside={event => { if (inputRef.current?.contains(event.target as Node)) event.preventDefault(); }}
         className="z-[10001] flex max-h-[min(280px,var(--radix-popover-content-available-height))] flex-col w-[var(--radix-popover-trigger-width)] overflow-hidden p-2">
-        <div className="min-h-0 overflow-y-auto" role="listbox" id={id} aria-label={input['aria-label'] ?? input.ariaLabel ?? input.placeholder}>
+        <div data-setting-id={providersSettings.addProvider.id} className="min-h-0 overflow-y-auto" role="listbox" id={id} aria-label={input['aria-label'] ?? input.ariaLabel ?? input.placeholder}>
           {hits.map((result, index) => (
             <ProviderRow key={result.key} id={`${id}-${index}`} role="option" tabIndex={-1}
               icon={cardIcon({ providerId: result.id, name: result.name })}

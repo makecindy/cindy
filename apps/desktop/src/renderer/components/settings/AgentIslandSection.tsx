@@ -455,6 +455,7 @@ function AgentIslandSkinRow({
   return (
     <div
       role="button"
+      data-setting-id={agentIslandSettings.skinLabel.id}
       tabIndex={0}
       onClick={() => onSelect(skin)}
       onKeyDown={handleRowKeyDown}

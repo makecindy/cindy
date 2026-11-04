@@ -19,7 +19,7 @@ return <Switch {...item.controlProps} checked={true} />; }`;
 
 describe("settings search coverage gate", () => {
   it("rejects custom controls that discard or replace a registered caller ID", () => {
-    for (const name of ['SegmentedControl', 'FontFamilyPicker', 'BotModelChainEditor', 'PillSelect', 'Select']) {
+    for (const name of ['SegmentedControl', 'FontFamilyPicker', 'BotModelChainEditor', 'PillSelect', 'Select', 'BehaviorRow']) {
       const page = `${imports}\nconst page = <${name} data-setting-id={settings.enabled.id} />;`;
       const discarded = `function ${name}({ value }) { return <div />; }`;
       const replaced = `function ${name}({ 'data-setting-id': settingId }) { return <button data-setting-id={settings.other.id} />; }`;
@@ -28,6 +28,25 @@ describe("settings search coverage gate", () => {
       assert.ok(inspectSettingsControls(page + replaced, '', registered).length > 0, name);
       assert.deepEqual(inspectSettingsControls(page + forwarded, '', registered), []);
     }
+  });
+  // PR #8481: role-based selectors escaped the migrated-file contract. Exercise
+  // the real checker with the smallest unbound role control (unit tier).
+  it("checks intrinsic interactive roles without treating status text as a control", () => {
+    for (const role of ['button', 'checkbox', 'radio', 'switch', 'combobox', 'textbox', 'slider', 'spinbutton', 'option']) {
+      for (const roleAttribute of [`role="${role}"`, `role={'${role}'}`]) {
+        const unbound = `${imports}\nconst page = <div ${roleAttribute} />;`;
+        assert.equal(inspectSettingsControls(unbound, unbound, registered).length, 1, roleAttribute);
+        assert.deepEqual(inspectSettingsControls(unbound.replace(' />', ' data-setting-id={settings.enabled.id} />'), '', registered), []);
+      }
+    }
+    assert.deepEqual(inspectSettingsControls(`${imports}\nconst page = <div role="status" />;`, '', registered), []);
+    assert.deepEqual(inspectSettingsControls('<div role="button" data-settings-search-action="Preview the next animation" />'), []);
+  });
+  it("requires each reusable behavior row caller to supply its registered ID", () => {
+    const wrapper = `function BehaviorRow({ 'data-setting-id': settingId }) { return <Switch data-setting-id={settingId} />; }`;
+    const source = `${imports}\n${wrapper}\nconst page = <BehaviorRow data-setting-id={settings.enabled.id} />;`;
+    assert.deepEqual(inspectSettingsControls(source, '', registered), []);
+    assert.equal(inspectSettingsControls(source.replace('data-setting-id={settings.enabled.id}', ''), '', registered).length, 1);
   });
   it("checks imported custom-control implementations even through aliases", () => {
     const page = `${imports}\nimport { SegmentedControl as Choice } from './Choice';
