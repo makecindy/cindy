@@ -394,7 +394,7 @@ describe('group timeline', () => {
     const data = group({ serverBacked: true, messages: [message('mention', 1, {
       authorKind: 'user', isSelf: own, content: '@咪咪 看看这段正文', mentions: { all: false, botIds: ['mimi'] }, threadRootId: topic ? 'topic-root' : undefined,
     })] });
-    data.members[0] = { ...data.members[0]!, actorKind: 'bot', ownerName: '王悦', nickname: '咪咪', displayName: 'Cindy', status: 'paused' };
+    data.members[0] = { ...data.members[0]!, actorKind: 'bot', ownerName: '王悦', isOwned: false, nickname: '咪咪', displayName: 'Cindy', status: 'paused' };
     if (topic) {
       data.messages.unshift(message('topic-root', 0, { content: '话题根消息' }));
       h.chat = { ...h.chat, server: true };
@@ -407,6 +407,7 @@ describe('group timeline', () => {
     await act(async () => mention.click());
     expect(byId('botGroup.mention.identity')?.textContent).toContain('Cindy');
     expect(byId('botGroup.mention.identity')?.textContent).toContain('王悦 的伙伴');
+    expect(byId('botGroup.mention.identity')?.textContent).not.toContain('咪咪 (王悦)');
     expect(byId('botGroup.mention.identity')?.textContent).toContain('已暂停');
     expect(byId('botGroup.mention.identity')?.textContent).not.toContain('groupChat.');
     expect(h.chat.act).not.toHaveBeenCalled();

@@ -1,4 +1,4 @@
-import { iconSize } from '@/theme';
+import { iconSize, spacing } from '@/theme';
 import { useState } from 'react';
 import { Host } from "@expo/ui";
 import {
@@ -68,6 +68,7 @@ export function ComposerSheet({
   nativeHeader,
   nativeRoot,
   preventDismiss = false,
+  fitToContents = false,
 }: ComposerSheetProps) {
   const { mode, colors } = useTheme();
   const { t } = useTranslation();
@@ -79,6 +80,9 @@ export function ComposerSheet({
   // The hosted RN tree keeps its first detent's layout, so a pinned footer is pushed below a
   // medium sheet or under the home indicator after resizing. Such sheets always open large.
   const largeOnly = landscape || (!!contentScrolls && !!footer);
+  // Keep the opted-in native fit mode stable across rotation; swapping its
+  // presented content tree mid-sheet can leave the native presentation blank.
+  const contentSized = fitToContents;
   const editModeModifiers = nativeEditMode === undefined
     ? []
     : [environment('editMode', nativeEditMode ? 'active' : 'inactive')];
@@ -90,6 +94,7 @@ export function ComposerSheet({
       style={{ position: "absolute" }}
     >
       <BottomSheet
+        fitToContents={contentSized}
         isPresented={visible}
         onIsPresentedChange={(open) => {
           if (!open && visible) onClose();
@@ -98,7 +103,7 @@ export function ComposerSheet({
       >
         <Group
           modifiers={[
-            presentationDetents(largeOnly ? ["large"] : ["medium", "large"], { selection: largeOnly ? "large" : "medium" }),
+            ...(!contentSized ? [presentationDetents(largeOnly ? ["large"] : ["medium", "large"], { selection: largeOnly ? "large" : "medium" })] : []),
             presentationDragIndicator("visible"),
             interactiveDismissDisabled(preventDismiss),
           ]}
@@ -106,7 +111,7 @@ export function ComposerSheet({
           <VStack
             spacing={0}
             modifiers={[
-              frame({ maxWidth: Infinity, maxHeight: Infinity }),
+              frame({ maxWidth: Infinity, ...(!contentSized ? { maxHeight: Infinity } : {}) }),
               containerRelativeFrame({ axes: 'horizontal' }),
               onGeometryChange(size => { if (size.width > 0) setSheetWidth(size.width); }),
             ]}
@@ -145,7 +150,13 @@ export function ComposerSheet({
                 </View>
               </RNHostView>
             ) : null}
-            {nativeContent && nativeRoot ? (
+            {contentSized ? (
+              <CompanionNativeContent>
+                <View testID={testID} style={{ padding: spacing.xl }}>
+                  {children}
+                </View>
+              </CompanionNativeContent>
+            ) : nativeContent && nativeRoot ? (
               <ZStack
                 modifiers={[frame({ maxWidth: Infinity, maxHeight: Infinity })]}
               >
