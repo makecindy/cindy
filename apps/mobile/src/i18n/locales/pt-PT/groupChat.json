@@ -164,7 +164,12 @@
         "details": "Volte a enviar a mensagem. Se continuar a falhar, verifique os registos e comunique o problema."
       }
     },
-    "runtimeFailureSetupHint": "Para alterar o modelo ou as definições, utilize o computador onde este colega é executado."
+    "runtimeFailureSetupHint": "Para alterar o modelo ou as definições, utilize o computador onde este colega é executado.",
+    "capability": {
+      "GROUP_AUTHORIZATION_REQUIRED": "{{name}} não pôde executar a ferramenta: a autorização do grupo expirou ou não permite esta ação. O proprietário do colega pode repetir o pedido neste grupo.",
+      "GROUP_AUTHORIZATION_UNAVAILABLE": "Não foi possível verificar a autorização de grupo de {{name}}, pelo que a ferramenta não foi executada. Tente novamente quando a ligação for restabelecida.",
+      "ATTACHMENTS_UNAVAILABLE": "Alguns anexos não foram entregues a {{name}} devido a uma falha na transferência ou ao limite de anexos. Reenvie os anexos necessários para este pedido."
+    }
   },
   "plan": {
     "intro_one": "É necessário {{count}} passo. Eis quem o executa:",

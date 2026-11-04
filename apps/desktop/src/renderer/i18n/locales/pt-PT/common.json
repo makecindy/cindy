@@ -1972,6 +1972,8 @@
       "add": {
         "title": "Adicionar uma máquina remota",
         "alias": "Alias",
+        "aliasHint": "Usa 1 a 128 caracteres: letras inglesas, números ou . _ @ : -. Para outros caracteres, usa Nome apresentado.",
+        "aliasInvalid": "O alias contém caracteres não suportados ou excede 128 caracteres. Segue as regras acima.",
         "displayName": "Nome apresentado",
         "displayNamePlaceholder": "Nome opcional apresentado na Cindy",
         "hostname": "Nome do anfitrião",
@@ -10678,6 +10680,11 @@
           "NETWORK_ERROR": "{{name}} não conseguiu responder: a ligação de rede falhou.\nVerifique a rede ou o proxy e volte a enviar a mensagem.",
           "RUNTIME_TIMEOUT": "{{name}} não respondeu dentro do tempo limite.\nVolte a enviar a mensagem ou escolha outro modelo disponível.",
           "RUNTIME_ERROR": "{{name}} não conseguiu responder desta vez.\nVolte a enviar a mensagem. Se continuar a falhar, consulte os registos e comunique o problema."
+        },
+        "capability": {
+          "GROUP_AUTHORIZATION_REQUIRED": "{{name}} não pôde executar a ferramenta: a autorização do grupo expirou ou não permite esta ação. O proprietário do colega pode repetir o pedido neste grupo.",
+          "GROUP_AUTHORIZATION_UNAVAILABLE": "Não foi possível verificar a autorização de grupo de {{name}}, pelo que a ferramenta não foi executada. Tente novamente quando a ligação for restabelecida.",
+          "ATTACHMENTS_UNAVAILABLE": "Alguns anexos não foram entregues a {{name}} devido a uma falha na transferência ou ao limite de anexos. Reenvie os anexos necessários para este pedido."
         }
       },
       "settings": {
@@ -11130,7 +11137,7 @@
         "items": {
           "tasks": {
             "title": "Tarefas",
-            "body": "Decide quando iniciar uma tarefa em segundo plano, controla as que iniciou e traz o resultado para o chat, incluindo nos teus outros computadores."
+            "body": "Conhece as tarefas que pode controlar e os computadores disponíveis. Organiza e acompanha tarefas a teu pedido, traz os resultados e verifica as operações suportadas antes de trabalhar noutro computador."
           },
           "teammates": {
             "title": "Outros colegas",
@@ -11145,8 +11152,8 @@
             "body": "Lembra-se das tuas preferências e do teu contexto, confirma antes de usar e atualiza quando algo muda."
           },
           "self": {
-            "title": "Conhecer-se",
-            "body": "Sabe o que consegue fazer e ativa ou desativa funcionalidades por ti; para Telegram, MCP ou plugins, consulta primeiro a ajuda do Cindy."
+            "title": "Conhecer e configurar o Cindy",
+            "body": "Conhece as funções e a utilização do Cindy e consulta ou altera definições a teu pedido. Pede-te na tarefa que preenchas ou confirmes o que for necessário."
           }
         }
       },
@@ -13833,7 +13840,7 @@
       "REMOTE_PROVIDER_UPDATING": "As credenciais deste fornecedor de modelos estão a ser atualizadas. Tenta novamente dentro de instantes.",
       "REMOTE_WORKDIR_UNAVAILABLE": "O diretório de trabalho remoto está indisponível. Verifica se a pasta ainda existe nesse computador e tenta novamente.",
       "REMOTE_OPTIMISTIC_SESSION_STATE_UNAVAILABLE": "O computador ainda não consegue confirmar se esta mensagem foi enviada. Aguarda um momento e tenta novamente. Não envies a mesma mensagem duas vezes.",
-      "REMOTE_AGENT_UNAVAILABLE": "Não é possível contactar o computador que executa o Agent. Certifica-te de que está online e permite o controlo remoto e tenta novamente.",
+      "REMOTE_AGENT_UNAVAILABLE": "A ligação ao computador que executa o Agent foi interrompida. Tenta novamente. Se continuar a acontecer, certifica-te de que está online e permite o controlo remoto.",
       "REMOTE_AGENT_PEER_TOO_OLD": "A versão do Cindy no outro computador é demasiado antiga para esta ação. Atualize primeiro o Cindy nesse computador.",
       "REMOTE_AGENT_EXPIRED": "Esta sessão já terminou no computador que executa o Agent. Envia a tua mensagem novamente.",
       "REMOTE_AGENT_NOT_FOUND": "Esta sessão já terminou no computador que executa o Agent. Envia a tua mensagem novamente.",
@@ -13960,6 +13967,18 @@
       "cancelTitle": "Parar de esperar e remover esta mensagem"
     },
     "ghostCall": {
+      "prStatus": {
+        "threadsNone": "Nenhum tópico de revisão aberto",
+        "mergeReady": "Pronta para integrar",
+        "mergeConflict": "Tem conflitos",
+        "mergeBehind": "Atrás do ramo base",
+        "mergeApproval": "A aguardar aprovação",
+        "mergeChanges": "Alterações pedidas",
+        "mergeWaiting": "A aguardar integração",
+        "merged": "Integrada",
+        "closed": "Fechada",
+        "draft": "Rascunho"
+      },
       "verb": "Plugin utilizado",
       "cardRunning": "O plugin está a desenhar",
       "cardDone": "Concluído",
@@ -13973,6 +13992,7 @@
       "collapseFields": "Recolher",
       "formSyncFailed": "As alterações ao cartão não foram sincronizadas. Verifique a ligação e continue a editar; a mensagem não foi enviada.",
       "linkOpenFailed": "Não foi possível abrir a ligação",
+      "modelSelectFailed": "O modelo não foi alterado. Escolha novamente.",
       "mailPreview": "Pré-visualização do email",
       "mailEnlarge": "Ampliar pré-visualização",
       "mailInsertImage": "Inserir na mensagem",
@@ -16174,7 +16194,17 @@
   },
   "commandPalette": {
     "viewSkillDetails": "Ver detalhes da Skill",
-    "projectSkillNotLoaded": "Esta tarefa Pi não carregou esta Skill do projeto. As novas tarefas tentarão carregá-la automaticamente."
+    "projectSkillNotLoaded": "Esta tarefa Pi não carregou esta Skill do projeto. As novas tarefas tentarão carregá-la automaticamente.",
+    "pluginSkillSetup": {
+      "install": "Não instalado",
+      "enable": "Desativado"
+    },
+    "pluginSkills": {
+      "pr": {
+        "install": "Abre um PR, corrige a CI e o feedback de revisão e acompanha até ser integrado · Requer instalar o plugin do GitHub",
+        "enable": "Abre um PR, corrige a CI e o feedback de revisão e acompanha até ser integrado · Requer ativar o plugin do GitHub"
+      }
+    }
   },
   "skillhub": {
     "remote": {

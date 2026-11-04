@@ -118,19 +118,12 @@ export function registerAppearanceSettingsIpc(): void {
 
   ipcMain.handle('appearance-settings:set-patch', async (event, rawPatch: unknown) => {
     assertTrustedAppRendererEvent(event);
-    const patch = parsePatch(rawPatch);
-    const settings = await writeAppearanceSettingsPatch(patch);
-    applyAppearanceToWindows(settings);
-    broadcast(settings);
-    return settings;
+    return updateAppearanceFromSettings(rawPatch);
   });
 
   ipcMain.handle('appearance-settings:reset', async (event) => {
     assertTrustedAppRendererEvent(event);
-    const settings = await resetAppearanceSettings();
-    applyAppearanceToWindows(settings);
-    broadcast(settings);
-    return settings;
+    return resetAppearanceFromSettings();
   });
 }
 
@@ -315,3 +308,17 @@ function parseNumber(
 }
 
 export const __testing = { parsePatch };
+
+/** UI and Agent edits share validation, persistence, live windows and broadcasts. */
+export async function updateAppearanceFromSettings(rawPatch: unknown) {
+  const settings = await writeAppearanceSettingsPatch(parsePatch(rawPatch));
+  applyAppearanceToWindows(settings);
+  broadcast(settings);
+  return settings;
+}
+export async function resetAppearanceFromSettings() {
+  const settings = await resetAppearanceSettings();
+  applyAppearanceToWindows(settings);
+  broadcast(settings);
+  return settings;
+}

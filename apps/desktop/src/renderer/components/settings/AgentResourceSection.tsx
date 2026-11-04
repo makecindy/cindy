@@ -1,3 +1,4 @@
+import { useAppSettingsRevision } from '@/hooks/useAppSettingsRevision';
 /**
  * AgentResourceSection — Agent 资源占用设置(命令并发上限/进程优先级/工具链限核)。
  *
@@ -89,6 +90,7 @@ function matchPreset(s: Pick<Wire, SettingKey>): PresetId | null {
 }
 
 export function AgentResourceSection() {
+  const settingsRevision = useAppSettingsRevision('agent-resources');
   const { t } = useTranslation();
   const [settings, setSettings] = useState<Wire | null>(null);
   // 预设三键写入的 in-flight 闸:防并发点击交错出"杂交档位"落盘。
@@ -129,7 +131,7 @@ export function AgentResourceSection() {
           },
         });
       });
-  }, []);
+  }, [settingsRevision]);
 
   const activePreset = useMemo(() => (settings ? matchPreset(settings) : null), [settings]);
 

@@ -1907,6 +1907,8 @@
       "add": {
         "title": "新增一臺遠端機器",
         "alias": "別名",
+        "aliasHint": "1–128 個字元，僅限英文字母、數字及 . _ @ : -；中文名稱請填寫在「顯示名稱」。",
+        "aliasInvalid": "別名包含不支援的字元或超過 128 個字元，請依上述規則修改。",
         "displayName": "顯示名稱",
         "displayNamePlaceholder": "選填，僅在 Cindy 中顯示",
         "hostname": "主機名",
@@ -10549,6 +10551,11 @@
           "NETWORK_ERROR": "{{name}}無法回覆：網路連線失敗。\n請檢查網路或 Proxy 後重新傳送。",
           "RUNTIME_TIMEOUT": "{{name}}本次回覆逾時。\n請重新傳送訊息，或選擇其他可用模型。",
           "RUNTIME_ERROR": "{{name}}這次未能回覆。\n請重新傳送訊息；若仍失敗，請查看記錄並回報問題。"
+        },
+        "capability": {
+          "GROUP_AUTHORIZATION_REQUIRED": "{{name}} 的工具呼叫未執行：群內授權已失效或不允許此操作。請由夥伴主人在目前群組重新發起。",
+          "GROUP_AUTHORIZATION_UNAVAILABLE": "暫時無法核驗 {{name}} 的群聊授權，這次工具呼叫未執行。請在連線恢復後重試。",
+          "ATTACHMENTS_UNAVAILABLE": "部分附件未交給 {{name}}（下載失敗或數量限制）。請重新傳送這次需要的附件。"
         }
       },
       "settings": {
@@ -10991,7 +10998,7 @@
         "items": {
           "tasks": {
             "title": "任務",
-            "body": "判斷何時開背景任務，控制自己開的任務，把結果帶回對話；也能到你的其他電腦上工作。"
+            "body": "了解目前可控制的任務和可用電腦，依你的要求安排、跟進任務，把結果帶回；跨電腦操作前查詢實際支援範圍。"
           },
           "teammates": {
             "title": "聯絡夥伴",
@@ -11006,8 +11013,8 @@
             "body": "記住你的偏好和背景，使用前先查、有變化就更新。"
           },
           "self": {
-            "title": "了解自己",
-            "body": "知道自己有哪些功能並幫你開關；Cindy 的用法（加 Telegram、設定 MCP、裝插件）先查說明再動手。"
+            "title": "了解與設定 Cindy",
+            "body": "了解 Cindy 的功能和用法，依你的要求查詢、調整設定；需要你填寫或確認時，在任務中交給你完成。"
           }
         }
       },
@@ -13691,7 +13698,7 @@
       "REMOTE_PROVIDER_UPDATING": "這個模型供應商的憑證正在更新。請稍後再試。",
       "REMOTE_WORKDIR_UNAVAILABLE": "遠端工作目錄現在無法使用。請確認那台電腦上的目錄還在，然後重試。",
       "REMOTE_OPTIMISTIC_SESSION_STATE_UNAVAILABLE": "電腦端暫時無法確認這則訊息是否已經送出。請稍後再試，不要重複傳送同一則。",
-      "REMOTE_AGENT_UNAVAILABLE": "暫時連不上執行 Agent 的電腦。確認那臺電腦在線並允許遠端控制後重試。",
+      "REMOTE_AGENT_UNAVAILABLE": "和執行 Agent 的電腦斷開了連線。請重試；如果反覆出現，再確認那臺電腦在線並允許遠端控制。",
       "REMOTE_AGENT_PEER_TOO_OLD": "那臺電腦上的 Cindy 版本過舊，暫不支援此操作。請先在那臺電腦上更新 Cindy。",
       "REMOTE_AGENT_EXPIRED": "這個任務在執行 Agent 的電腦上已經結束。請重新傳送。",
       "REMOTE_AGENT_NOT_FOUND": "這個任務在執行 Agent 的電腦上已經結束。請重新傳送。",
@@ -13800,6 +13807,18 @@
       "cancelTitle": "取消等待並移除這條訊息"
     },
     "ghostCall": {
+      "prStatus": {
+        "threadsNone": "沒有待處理意見",
+        "mergeReady": "可以合併",
+        "mergeConflict": "有衝突",
+        "mergeBehind": "需要同步目標分支",
+        "mergeApproval": "等待核准",
+        "mergeChanges": "需要修改",
+        "mergeWaiting": "等待合併",
+        "merged": "已合併",
+        "closed": "已關閉",
+        "draft": "草稿"
+      },
       "verb": "呼叫插件",
       "cardRunning": "插件繪製中",
       "cardDone": "已完成",
@@ -13813,6 +13832,7 @@
       "collapseFields": "收起",
       "formSyncFailed": "卡片修改尚未同步，請檢查連線後繼續編輯；訊息尚未傳送。",
       "linkOpenFailed": "連結開啟失敗",
+      "modelSelectFailed": "模型沒有換成，請重新選擇",
       "mailPreview": "郵件預覽",
       "mailEnlarge": "放大檢視",
       "mailInsertImage": "插入內文",
@@ -15959,7 +15979,17 @@
   },
   "commandPalette": {
     "viewSkillDetails": "查看技能詳情",
-    "projectSkillNotLoaded": "目前的 Pi 任務尚未載入此專案 Skill，新任務會自動嘗試載入"
+    "projectSkillNotLoaded": "目前的 Pi 任務尚未載入此專案 Skill，新任務會自動嘗試載入",
+    "pluginSkillSetup": {
+      "install": "未安裝",
+      "enable": "未啟用"
+    },
+    "pluginSkills": {
+      "pr": {
+        "install": "發 PR、修 CI 和審查、跟進到合併 · 需要安裝 GitHub 插件",
+        "enable": "發 PR、修 CI 和審查、跟進到合併 · 需要啟用 GitHub 插件"
+      }
+    }
   },
   "skillhub": {
     "remote": {

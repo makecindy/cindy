@@ -663,7 +663,7 @@
     "REMOTE_PROVIDER_UPDATING": "Las credenciales de este proveedor de modelo se están actualizando. Inténtalo de nuevo en un momento.",
     "REMOTE_WORKDIR_UNAVAILABLE": "El directorio de trabajo remoto no está disponible. Verifique que la carpeta aún exista en esa computadora y vuelva a intentarlo.",
     "REMOTE_OPTIMISTIC_SESSION_STATE_UNAVAILABLE": "La computadora aún no puede confirmar si se envió este mensaje. Espere un momento y vuelva a intentarlo. No envíes el mismo mensaje dos veces.",
-    "REMOTE_AGENT_UNAVAILABLE": "No se puede acceder a la computadora que ejecuta el Agent. Asegúrate de que esté en línea y permita el control remoto, luego inténtalo nuevamente.",
+    "REMOTE_AGENT_UNAVAILABLE": "Se perdió la conexión con la computadora que ejecuta el Agent. Inténtalo de nuevo. Si sigue pasando, asegúrate de que esté en línea y permita el control remoto.",
     "REMOTE_AGENT_PEER_TOO_OLD": "Cindy en la otra computadora es demasiado antiguo para ejecutar Agent en esta. Actualice Cindy allí primero.",
     "REMOTE_AGENT_EXPIRED": "Esta sesión ya finalizó en la computadora que ejecuta Agent. Envía tu mensaje nuevamente.",
     "REMOTE_AGENT_NOT_FOUND": "Esta sesión ya finalizó en la computadora que ejecuta Agent. Envía tu mensaje nuevamente.",

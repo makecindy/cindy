@@ -220,10 +220,12 @@ import {
 import { useInstalledGhosts } from '@/cindy-brain/useInstalledGhosts';
 import { installedGhostStoragePart } from '../../../shared/pluginIdentity.js';
 import {
+  getPendingPluginSuggestion,
   startPendingPluginSuggestion,
   takePendingPluginSuggestion,
   type PluginSuggestionRequest,
 } from './pendingPluginSuggestion';
+import { pluginSetupRoute, usePluginSkillSetup } from './pluginSkillSetup';
 import { filterGhostsForWorkdir, useWorkdirDisabledGhostIds } from '@/cindy-brain/ghostWorkdirFilter';
 import type { Effort, PermissionMode } from '@/lib/userPreferences.types';
 import {
@@ -5817,24 +5819,14 @@ export function NewMakerDraftRoute() {
         const usable =
           ghost && usableGhosts.includes(ghost);
         if (!usable) {
-          let route: string;
-          if (ghost) {
-            route = `/plugins?ghost=${encodeURIComponent(installedGhostStoragePart(ghost))}`;
-          } else {
-            const market = await window.electronAPI.pluginMarket.snapshot();
-            if (!stillCurrent() || readPluginRecommendationSnapshot().ownerId !== request.ownerId)
-              return;
-            const matches = market.items.filter(
-              (item) => item.ghostId === suggestion.pluginId && item.installState !== 'conflict',
-            );
-            // Do not silently choose between competing publishers/sources with the same id.
-            if (matches.length !== 1) {
-              toast.info(t('newChat.pluginSuggestions.unavailable'));
-              return;
-            }
-            route = `/plugins?market=${encodeURIComponent(matches[0].pluginId)}`;
+          const route = await pluginSetupRoute(ghost, suggestion.pluginId ?? '');
+          if (!stillCurrent() || readPluginRecommendationSnapshot().ownerId !== request.ownerId)
+            return;
+          // Do not silently choose between competing publishers/sources with the same id.
+          if (!route) {
+            toast.info(t('newChat.pluginSuggestions.unavailable'));
+            return;
           }
-          if (!stillCurrent()) return;
           const nonce = startPendingPluginSuggestion(request);
           navigate(`${route}&recommendation=${encodeURIComponent(nonce)}`);
           return;
@@ -5884,10 +5876,24 @@ export function NewMakerDraftRoute() {
   useEffect(() => {
     const nonce = (location.state as { pluginSuggestionNonce?: unknown } | null)
       ?.pluginSuggestionNonce;
-    if (typeof nonce !== 'string') return;
+    // `/` palette Skill setups resume through usePluginSkillSetup below.
+    if (typeof nonce !== 'string' || getPendingPluginSuggestion()?.skillName) return;
     const request = takePendingPluginSuggestion(nonce, dataOwnerId, pluginSuggestionTargetKey);
     if (request) void runPluginSuggestion(request);
   }, [dataOwnerId, location.state, pluginSuggestionTargetKey, runPluginSuggestion]);
+
+  const canFillComposer = useCallback(
+    () => !sendInFlightRef.current && !composerMutationLockedRef.current,
+    [],
+  );
+  const pluginSkillSetup = usePluginSkillSetup({
+    enabled: !isRemoteProjectDraft && !isDeviceLinkDraft,
+    ownerId: dataOwnerId,
+    workingDir: effectiveWorkingDir,
+    targetKey: pluginSuggestionTargetKey,
+    draftKey: NEW_MAKER_DRAFT_KEY,
+    canFill: canFillComposer,
+  });
 
   // 注意:不要给 ChatInput 加 key 强制 remount。ChatInput 内部 activeModel /
   // activeEffort / activePermissionMode 都是每次 render 直接从 props 派生
@@ -6144,6 +6150,7 @@ export function NewMakerDraftRoute() {
                     initialProviderId={chatInitialProviderId}
                     planModeEnabled={effectivePlanMode}
                     onPlanModeChange={handlePlanModeChange}
+                    pluginSkillSetup={pluginSkillSetup}
                     fastMode={effectiveFastMode}
                     onFastModeChange={handleFastModeChange}
                     onWorkingDirChange={handleWorkingDirChange}

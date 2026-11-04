@@ -55,6 +55,10 @@ export class SshToolRegistry {
     this.tools.set(def.name, def as unknown as SshToolDef);
   }
 
+  get(name: string): SshToolDef | undefined {
+    return this.tools.get(name);
+  }
+
   list(category?: SshToolCategory): SshToolSummary[] {
     const all: SshToolSummary[] = [];
     for (const t of this.tools.values()) {

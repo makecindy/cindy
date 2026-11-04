@@ -1,3 +1,4 @@
+import { useAppSettingsRevision } from '@/hooks/useAppSettingsRevision';
 /**
  * MemorySection — Settings → Personalization 下的 Memory 控制面板。
  * ---------------------------------------------------------------------------
@@ -66,6 +67,7 @@ interface MemorySlotState {
 const INITIAL: MemorySlotState = { enabled: undefined, pending: false };
 
 export function MemorySection() {
+  const settingsRevision = useAppSettingsRevision('memory');
   const { confirm } = useConfirmDialog();
   const { t } = useTranslation();
   // Maker Memory 启用时，下方 Claude Code / Codex 运行时的原生 toggle 强制 disable + 视觉变灰。
@@ -122,7 +124,7 @@ export function MemorySection() {
     return () => {
       window.removeEventListener('focus', onFocus);
     };
-  }, [reloadSlots]);
+  }, [reloadSlots, settingsRevision]);
 
   const handleResetSettings = useCallback(async () => {
     setMakerTogglePending(true);
