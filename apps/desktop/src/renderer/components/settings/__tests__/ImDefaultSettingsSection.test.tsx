@@ -67,10 +67,19 @@ vi.mock('@/hooks/useAvailableAgents', () => ({
   useModelPickerAgents: () => ['claude-code', 'codex', 'pi'],
 }));
 
+vi.mock('@/hooks/useModelRouteDevices', () => ({
+  useModelRouteDevices: () => ({
+    leadAgentDeviceId: null,
+    devices: [{ deviceId: 'studio', name: 'Studio' }, { deviceId: 'share:s1', name: 'From Magi' }],
+  }),
+}));
+
 vi.mock('@/components/new-chat/ModelSelector', () => ({
-  ModelSelector: ({ onUnifiedSelect, fastModeConfigurable }: {
+  ModelSelector: ({ onUnifiedSelect, fastModeConfigurable, remoteAgent }: {
     onUnifiedSelect: (selection: object) => void; fastModeConfigurable: boolean;
+    remoteAgent?: { devices: readonly { deviceId: string }[] };
   }) => <>
+    <span data-testid="route-devices">{remoteAgent?.devices.map(device => device.deviceId).join(',')}</span>
     <button data-testid="select-codex" data-fast-configurable={String(fastModeConfigurable)}
       onClick={() => onUnifiedSelect({ engine: 'codex', modelId: 'gpt-5.5', providerId: 'xd', effort: 'low', fast: false })}>Select Codex</button>
     <button data-testid="select-shared" onClick={() => onUnifiedSelect({ engine: 'codex', modelId: 'owner-model', providerId: 'owner-provider', effort: 'high', agentDevice: { deviceId: 'share:owner', name: 'Owner' } })}>Select shared</button>
@@ -157,6 +166,11 @@ describe('ImDefaultSettingsSection Pi channel warning', () => {
     await waitFor(() => expect(save).toHaveBeenCalledTimes(2));
     expect(save.mock.calls[1]?.[0]).toMatchObject({ agentKind: 'codex', agents: { codex: { model: 'gpt-5.5' } } });
   });
+  it('lists same-account computers and received shares through the common route candidates', async () => {
+    render(<ImDefaultSettingsSection channel="telegram" />);
+    expect((await screen.findByTestId('route-devices')).textContent).toBe('studio,share:s1');
+  });
+
   it('saves a shared model and its location together without local catalog membership', async () => {
     const save = vi.fn(async () => defaults('codex'));
     window.electronAPI.maker.imDefaultSettingsSet = save;

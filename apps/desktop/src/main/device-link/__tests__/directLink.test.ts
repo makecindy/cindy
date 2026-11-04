@@ -56,6 +56,32 @@ it('does not create a late session after the authenticated owner was suspended d
   expect(fake.commands).toHaveLength(0);
 });
 
+// Capacity regression, unit tier: the lazy Desktop adapter must expose one shared
+// pool and claim a released slot synchronously when an admission callback runs.
+// The shared-package bridge tests cannot catch a wrapper dropping those hooks.
+it('uses the desktop budget and synchronously claims a released native slot', async () => {
+  const before = fake.starts, sessions = [];
+  let replacement: ReturnType<typeof desktopDirectRuntime.create> | undefined;
+  let opening: Promise<string> | undefined;
+  let cancel: (() => void) | undefined;
+  try {
+    for (let i = 0; i < 64; i++) {
+      const session = desktopDirectRuntime.create(`capacity-${i}`, events(), { kind: i < 8 ? 'device' : 'share' });
+      sessions.push(session); await session.offer();
+    }
+    expect(fake.starts).toBe(before + 1);
+    expect(() => desktopDirectRuntime.create('overflow', events(), { kind: 'share' })).toThrow('DIRECT_CAPACITY_FULL');
+    cancel = desktopDirectRuntime.capacity!.wait('share', () => {
+      replacement = desktopDirectRuntime.create('replacement', events(), { kind: 'share' });
+      opening = replacement.offer();
+    });
+    sessions[8].close();
+    await Promise.resolve();
+    expect(desktopDirectRuntime.capacity!.snapshot()).toMatchObject({ active: 64, queued: 0 });
+    await expect(opening).resolves.toBe('fixture-sdp');
+  } finally { cancel?.(); replacement?.close(); sessions.forEach(session => session.close()); }
+});
+
 it('releases active paths after a renderer crash and bounds automatic process restarts', async () => {
   vi.useFakeTimers();
   const observer = events(), session = desktopDirectRuntime.create('one', observer);

@@ -447,6 +447,7 @@
     "chipArchived": "보관됨",
     "titleFallback": "원격 세션",
     "unnamedTitle": "이름 없는 세션",
+    "openSection": "열기",
     "renameAction": "세션 이름 변경",
     "copyLinkAction": "세션 링크 복사",
     "unpin": "고정 해제",

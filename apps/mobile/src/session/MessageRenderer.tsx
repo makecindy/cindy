@@ -130,8 +130,8 @@ import {
 } from '@cindy/maker-shared/chat-quotes';
 import { formatCompactTokens } from '@cindy/maker-shared/usage-format';
 import { QuoteCapsule } from '@/session/QuoteCapsule';
-import { useReduceMotionEnabled } from '@/hooks/useReduceMotion';
-import { motionDuration, motionEasing } from '@/theme/tokens';
+import { MessageListActionButton } from './MessageListActionButton';
+import { MessageScrollToBottomButton, SCROLL_TO_BOTTOM_FAB_SIZE } from './MessageScrollToBottomButton';
 import { mobileAgentLabelFromUnknown } from '@/session/sessionAgentSwitch';
 import {
   NativePullDownMenu,
@@ -528,8 +528,6 @@ interface MobileHistoryPrependTransaction {
   userHandoffPending: boolean;
   verifyDeadlineAt: number;
 }
-// 「跳到底部」浮标直径:比 composer 里的语音按钮(28)大一档但不压过它,Telegram 同款层级感。
-const SCROLL_TO_BOTTOM_FAB_SIZE = 36;
 const stylesStatic = StyleSheet.create({
   compactActivityIndicator: {
     alignItems: 'center',
@@ -2974,19 +2972,10 @@ export function MessageRenderer({
         </View>
       ) : null}
       {hasNewMessages || showJumpToLatest ? (
-        // 跳到底部浮标(Telegram 风):右下角半透明圆形 chevron,弱存在感;
-        // 有未读新消息时不换样式,只在圆标右上角加一颗 CTA 色小圆点提示。
-        <MessageListActionButton
-          accessibilityLabel={hasNewMessages ? t('message.renderer.newMessagesToBottom') : t('message.renderer.jumpToBottom')}
-          onPress={scrollToBottom}
-          style={[styles.scrollToBottomFab, { bottom: floatingBottomOffset, right: scrollToBottomFabRight }]}
+        <MessageScrollToBottomButton hasNewMessages={hasNewMessages} onPress={scrollToBottom}
+          style={{ position: 'absolute', bottom: floatingBottomOffset, right: scrollToBottomFabRight }}
           testID={hasNewMessages ? 'message.newMessageButton' : 'message.jumpToLatestButton'}
-        >
-          <ChevronDown color={colors.textSecondary} size={iconSize.action} strokeWidth={iconStroke.regular} />
-          {hasNewMessages ? (
-                      <View style={styles.scrollToBottomDot} testID="message.newMessageDot" />
-                    ) : null}
-        </MessageListActionButton>
+          dotTestID="message.newMessageDot" />
       ) : null}
                 <PreviewCollectionContext.Provider
                   value={
@@ -3468,75 +3457,6 @@ function SyncingMessages() {
       <ActivityIndicator color={colors.textTertiary} size="small" />
       <Text style={styles.syncingTitle}>{t('message.renderer.syncing')}</Text>
     </View>
-  );
-}
-
-const AnimatedPressable = Animated.createAnimatedComponent(Pressable);
-
-function MessageListActionButton({
-  accessibilityLabel,
-  children,
-  disabled = false,
-  onPress,
-  style,
-  testID,
-}: {
-  accessibilityLabel: string;
-  children: ReactNode;
-  disabled?: boolean;
-  onPress?: () => void;
-  style?: StyleProp<ViewStyle>;
-  testID?: string;
-}) {
-  const styles = useThemedStyles(makeStyles);
-  const interactionDisabled = disabled || !onPress;
-  // mount 入场:150ms 淡入 + 0.92→1 轻缩放(浮标条件挂载,此前瞬间硬现)。
-  // 单 Value 同驱 opacity/scale,native driver 一次性动画;reduce-motion
-  // (含 null 未知态)从 1 起步不播。消失走 unmount 直接卸,不做 exit。
-  const reduceMotionEnabled = useReduceMotionEnabled();
-  const appear = useRef(new Animated.Value(reduceMotionEnabled === false ? 0 : 1)).current;
-  useEffect(() => {
-    if (reduceMotionEnabled !== false) {
-      appear.setValue(1);
-      return;
-    }
-    Animated.timing(appear, {
-      duration: motionDuration.fast,
-      easing: Easing.bezier(...motionEasing.out),
-      isInteraction: false,
-      toValue: 1,
-      useNativeDriver: true,
-    }).start();
-    // 仅 mount 播一次:reduceMotionEnabled 运行中翻转不重放入场。
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
-  const appearStyle = {
-    opacity: appear,
-    transform: [{ scale: appear.interpolate({ inputRange: [0, 1], outputRange: [0.92, 1] }) }],
-  };
-  // pressed 用受控 state 而非函数型 style:createAnimatedComponent 只解析
-  // 静态 props 里的 AnimatedNode,函数型 style 的返回值不会被解析,
-  // Animated.Value 会以原始对象漏进底层 View 的 style(非法 prop)。
-  const [pressed, setPressed] = useState(false);
-  return (
-    <AnimatedPressable
-      accessibilityLabel={accessibilityLabel}
-      accessibilityRole="button"
-      accessibilityState={{ disabled: interactionDisabled }}
-      disabled={interactionDisabled}
-      onPress={interactionDisabled ? undefined : onPress}
-      onPressIn={() => setPressed(true)}
-      onPressOut={() => setPressed(false)}
-      style={[
-        style,
-        appearStyle,
-        pressed && !interactionDisabled && styles.pressed,
-        interactionDisabled && styles.disabled,
-      ]}
-      testID={testID}
-    >
-      {children}
-    </AnimatedPressable>
   );
 }
 
@@ -9849,27 +9769,6 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
   },
   pressed: { opacity: 0.72 },
   disabled: { opacity: 0.42 },
-  scrollToBottomFab: {
-    alignItems: 'center',
-    backgroundColor: colors.surfaceTranslucent,
-    borderColor: colors.borderTranslucent,
-    borderRadius: radius.pill,
-    borderWidth: StyleSheet.hairlineWidth,
-    height: SCROLL_TO_BOTTOM_FAB_SIZE,
-    justifyContent: 'center',
-    position: 'absolute',
-    width: SCROLL_TO_BOTTOM_FAB_SIZE,
-    zIndex: 20,
-  },
-  scrollToBottomDot: {
-    backgroundColor: colors.cta,
-    borderRadius: radius.pill,
-    height: 8,
-    position: 'absolute',
-    right: 3,
-    top: 3,
-    width: 8,
-  },
 
   forkOriginRow: {
     alignItems: 'center',

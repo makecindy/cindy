@@ -1333,7 +1333,7 @@ function CachedFileBody({
             </>
           )}
         </div>
-        <OpenInSystemActions absPath={cachePath} folderPath={cacheDir} className="shrink-0" />
+        <OpenInSystemActions absPath={cachePath} className="shrink-0" />
       </div>
     );
   }
