@@ -98,6 +98,7 @@ flowchart LR
 | 现有 session/message SQLite 与历史恢复 | 部分 | Host 执行了全部迁移（临时 profile 实测 145 条 migration / 87 张表），并通过 `OwnerSessionStorage` 创建与重读同一条任务；重启 Host 后 `/health` 仍报告 `sessions: 1`。消息写入、Tool 结果、Desktop 同库并发互斥尚未验证。 |
 | Cindy 登录（`cindy-host login`） | 部分 | 复用 Desktop 的 authorize URL、PKCE、托管回调轮询与 session 记录；实测已生成与 Desktop 同形的 authorize URL 并完成对真实 auth 服务的 `getProviders`。**用户交互后的 code 兑换尚未实测**。 | 
 | Cindy OAuth 与凭据持久化 | 部分 | 凭据层已实现：Host 直接读写 Desktop 现有 `safeStorage` 密文（Chromium OSCrypt v11），并已采用现有登录态（实测 `/health` 报告 `account.authenticated=true`、`realm=global`，未新建登录、未触碰数据库）。双向兼容：Desktop 密文可被 Host 解密，Host 写入的密文可被 Electron 解出。OAuth 登录与令牌续期流程仍未迁出。 |
+| Claude 订阅判定（Host） | 部分 | Host 通过共享模块读出「CLI 是否订阅登录 + Cindy 是否获准使用」：真实 profile 与临时 profile 均实测返回 `{"cliLoggedIn":false,"allowed":false,"connected":false}`（本机 CLI 非订阅登录）。判定来源与 Desktop 同源，未读取或复制任何 Anthropic 凭证。 |
 | Claude Code / Codex / Pi Harness | 部分 | 二进制就绪查询已抽成 `agent-binaries/binaryStatus.ts`，Desktop 与 Host 共用同一判定；实测 Host `/health` 对三种 Harness 均报告可用。Agent 启动所需的认证适配、代理、目录与 MCP 注入尚未迁出。 |
 | Plugin 执行与状态 | 未实现 | `cindy-brain`/plugin manager 依赖 Main 宿主接口与 Electron IPC；存量 plugin 向下兼容是阻断条件。 |
 | Web / `cindy-web` | 未实现 | 后续接 renderer 现有 UI 与 i18n；不得重写页面/交互。 |

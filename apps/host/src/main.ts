@@ -8,6 +8,7 @@ import { openOwnerDatabase, OwnerDatabaseError } from '../../desktop/src/main/lo
 import { resolveHostDataDir, resolveHostRegion } from './profile-path.mjs';
 import { acquireHostRuntimeLease, type HostRuntimeLease } from './runtime-lock.js';
 import { readAdoptedSessionState } from './credentials/session.mjs';
+import { configureHostOwner, readClaudeSubscriptionState } from './agent/claude-auth.mjs';
 import { runLoginCommand } from './login-cli.mjs';
 import { readOrCreateApiToken } from './api-token.mjs';
 import { CindyAuthClient } from '@cindy/auth-client';
@@ -44,6 +45,22 @@ interface RuntimeState {
 
 const runtime: RuntimeState = { state: 'uninitialized', owner: null, storage: 'unopened' };
 
+/** Resolved dev checkout binary for one harness, or null when absent. */
+function harnessBinaryPath(kind: 'claude-code' | 'codex' | 'pi'): string | null {
+  const layout = kind === 'claude-code'
+    ? { dir: 'claude-code-bin', file: 'claude' }
+    : kind === 'codex'
+      ? { dir: 'codex-package-bin', file: path.join('bin', 'codex') }
+      : { dir: 'pi-bin', file: 'pi' };
+  const status = readCachedBinaryStatus({
+    kind,
+    isPackaged: false,
+    userDataDir: resolveHostDataDir(),
+    devCandidates: [path.join(desktopRoot, '..', layout.dir, platformKey, layout.file)],
+  });
+  return status.binaryPath ?? null;
+}
+
 /** Dev checkout binaries, in the same order the Desktop dev lookup uses. */
 const HARNESS_KINDS = ['claude-code', 'codex', 'pi'] as const;
 const platformKey = `${process.platform}-${process.arch}`;
@@ -70,6 +87,8 @@ let activeOwner: string | null = null;
 let closeStorage: (() => Promise<void>) | null = null;
 let sessionStorage: OwnerSessionStorage | null = null;
 let runtimeLease: HostRuntimeLease | null = null;
+/** Claude subscription state read once per boot; never on the health path. */
+let claudeState: Record<string, unknown> | null = null;
 /** Non-secret projection of the adopted Desktop login; never tokens. */
 let account: { authenticated: boolean; realm: string | null; error?: string } = { authenticated: false, realm: null };
 
@@ -83,7 +102,9 @@ async function ensureRuntime(ownerId: string): Promise<void> {
     if (activeOwner === ownerId) return;
     throw new Error('owner switch is not supported while the host is running');
   }
-  const lease = acquireHostRuntimeLease(resolveHostDataDir(), ownerId);
+  const dataDir = resolveHostDataDir();
+  configureHostOwner({ userDataDir: dataDir, ownerId });
+  const lease = acquireHostRuntimeLease(dataDir, ownerId);
   if (!lease.held) {
     runtime.state = 'blocked';
     runtime.owner = ownerId;
@@ -97,7 +118,7 @@ async function ensureRuntime(ownerId: string): Promise<void> {
     ? 'vec0.dll'
     : process.platform === 'darwin' ? 'vec0.dylib' : 'vec0.so';
   const opened = await openOwnerDatabase({
-    userDataDir: resolveHostDataDir(),
+    userDataDir: dataDir,
     ownerId,
     isPackaged: false,
     drizzleDir: process.env.CINDY_HOST_DRIZZLE_DIR?.trim() || path.join(desktopRoot, 'drizzle'),
@@ -116,6 +137,15 @@ async function ensureRuntime(ownerId: string): Promise<void> {
   runtime.owner = ownerId;
   runtime.storage = 'ready';
   delete runtime.detail;
+
+  const claudeBinary = harnessBinaryPath('claude-code');
+  if (claudeBinary) {
+    void readClaudeSubscriptionState({ binary: claudeBinary, env: { PATH: process.env.PATH } })
+      .then((state) => { claudeState = state; })
+      .catch((error: unknown) => {
+        claudeState = { error: error instanceof Error ? error.message : String(error) };
+      });
+  }
 }
 
 const apiToken = readOrCreateApiToken(resolveHostDataDir());
@@ -129,6 +159,7 @@ const server = createHostServer({
     runtime,
     account,
     harness: harnessStatus(),
+    claude: claudeState,
     sessions: sessionStorage ? (await listActiveSessions(sessionStorage)).length : null,
   }),
   me: async () => ({ owner: runtime.owner, authenticated: account.authenticated, realm: account.realm }),
