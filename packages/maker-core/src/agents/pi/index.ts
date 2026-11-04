@@ -7851,18 +7851,19 @@ export class PiAgent extends BaseAgent {
               }
               rejectIfCancelled(sendOpts, 'send');
               if (branch.requestTooLarge) {
-                // A user-requested retry after a byte-limit rejection gets one native
+                // A user-requested retry after a rejection that proves the request itself is
+                // too big (byte limit, or too many images for the provider) gets one native
                 // compaction attempt. Never invent a provider byte/token threshold.
                 try {
                   const result = await requestPiCompact();
                   rejectIfCancelled(sendOpts, 'send');
                   if (result.noop) {
-                    throw new Error('Pi cannot compact the request rejected with a body size limit');
+                    throw new Error('Pi cannot compact the request rejected for request size');
                   }
                 } catch (error) {
                   rejectIfCancelled(sendOpts, 'send');
-                  // The original failed response already proved a byte-limit
-                  // rejection. Any non-cancelled compaction failure leaves that
+                  // The original failed response already proved the request was too big.
+                  // Any non-cancelled compaction failure leaves that
                   // recovery incomplete, even if its own error is a timeout.
                   if (!opts.remoteHostId) {
                     nativeAutoCompactNeedsRollover = true;
