@@ -11,6 +11,7 @@ import {
   type WebhookFormat,
 } from '@cindy/maker-scheduler';
 import WebSocket, { type ClientOptions } from 'ws';
+import type { WebhookAccountOverview } from '../../../shared/webhookAccount';
 
 const CLOSE_TOKEN_EXPIRED = 4401;
 const CLOSE_ACCOUNT_SUSPENDED = 4403;
@@ -30,12 +31,16 @@ export interface RemoteEndpointView {
   hasSecret: boolean;
   status: 'active' | 'suspended';
   lastReceivedAt: string | null;
+  scheduleName?: string | null;
+  deviceName?: string | null;
 }
 
 /** 本机希望服务器上的地址是什么样。format 为 null 表示本机认不出发送方，保留服务器上的格式。 */
 interface WantedEndpoint {
   events: readonly string[];
   format: WebhookFormat | null;
+  scheduleName: string;
+  deviceName?: string;
 }
 
 export interface RemoteWebhookBatch {
@@ -45,7 +50,7 @@ export interface RemoteWebhookBatch {
   omitted: number;
 }
 
-export type RemoteEndpointProblem = 'limit' | 'failed';
+export type RemoteEndpointProblem = 'limit' | 'failed' | 'released';
 
 /** 账号今天的 Webhook 接收次数已用完。 */
 export interface RemoteWebhookQuota {
@@ -68,6 +73,8 @@ export interface ScheduleWebhookRemoteDeps {
   /** 每个恢复时刻只通知一次；重连时服务器重发不会重复触发。 */
   onQuotaExhausted?(quota: RemoteWebhookQuota): void;
   logger: { warn?: (message: string, meta?: Record<string, unknown>) => void };
+  deviceName?(): string;
+  onReleased?(scheduleId: string): Promise<void>;
 }
 
 class RemoteRequestError extends Error {
@@ -124,6 +131,8 @@ export class ScheduleWebhookRemote {
   private readonly views = new Map<string, RemoteEndpointView>();
   private readonly problems = new Map<string, RemoteEndpointProblem>();
   private loaded = false;
+  private generation = 0;
+  private readonly releases = new Map<string, string>();
   private running = false;
   private suspended = false;
   private exhausted: RemoteWebhookQuota | null = null;
@@ -143,7 +152,11 @@ export class ScheduleWebhookRemote {
     const wanted = new Map<string, WantedEndpoint>();
     for (const schedule of schedules) {
       const trigger = schedule.webhookTrigger;
-      if (trigger) wanted.set(schedule.id, { events: trigger.events ?? [], format: resolveScheduleWebhookFormat(trigger.source) });
+      if (trigger) wanted.set(schedule.id, {
+        events: trigger.events ?? [], format: resolveScheduleWebhookFormat(trigger.source),
+        scheduleName: schedule.name.replace(/[\u0000-\u001f\u007f]/g, ' ').slice(0, 200),
+        deviceName: this.deps.deviceName?.().replace(/[\u0000-\u001f\u007f]/g, ' ').slice(0, 200),
+      });
     }
     this.wanted = wanted;
     this.running = true;
@@ -152,12 +165,14 @@ export class ScheduleWebhookRemote {
 
   /** 退出登录或换账号：断开连接、丢弃账号相关的缓存，任务配置不动。 */
   pause(): void {
+    this.generation += 1;
     this.running = false;
     this.loaded = false;
     this.suspended = false;
     this.exhausted = null;
     this.views.clear();
     this.problems.clear();
+    this.releases.clear();
     this.clearTimers();
     this.closeSocket();
     this.deps.onChanged?.();
@@ -172,6 +187,10 @@ export class ScheduleWebhookRemote {
     return this.connected;
   }
 
+  canDeliver(scheduleId: string): boolean {
+    return this.running && this.loaded && this.views.has(scheduleId) && !this.releases.has(scheduleId);
+  }
+
   view(scheduleId: string): RemoteEndpointView | undefined {
     return this.views.get(scheduleId);
   }
@@ -182,6 +201,48 @@ export class ScheduleWebhookRemote {
 
   isSuspended(): boolean {
     return this.suspended;
+  }
+
+  async accountOverview(): Promise<WebhookAccountOverview> {
+    try {
+      return await this.request('GET', '/account/endpoints');
+    } catch (error) {
+      if (error instanceof RemoteRequestError && error.status === 404) throw new Error('WEBHOOK_MANAGEMENT_UNAVAILABLE');
+      throw error;
+    }
+  }
+
+  async releaseEndpoint(id: string): Promise<void> {
+    await this.enqueue(async () => {
+      await this.request('DELETE', `/account/endpoints/${encodeURIComponent(id)}`);
+      this.loaded = false;
+      await this.reconcile();
+    });
+  }
+
+  async restoreEndpoint(scheduleId: string): Promise<void> {
+    await this.enqueue(async () => {
+      const generation = this.generation;
+      this.loaded = false;
+      await this.reconcile();
+      if (generation !== this.generation) throw new Error('WEBHOOK_ACCOUNT_CHANGED');
+      const releaseId = this.releases.get(scheduleId);
+      const wanted = this.wanted.get(scheduleId);
+      if (!releaseId || !wanted?.format) throw new Error('WEBHOOK_RESTORE_UNAVAILABLE');
+      const view = await this.request<RemoteEndpointView>('POST', `/endpoints/by-schedule/${encodeURIComponent(scheduleId)}/restore`, {
+        releaseId, events: wanted.events, format: wanted.format,
+      });
+      this.releases.delete(scheduleId);
+      this.problems.delete(scheduleId);
+      this.views.set(scheduleId, view);
+      await this.reconcile();
+      this.deps.onChanged?.();
+    });
+  }
+
+  /** 打开详情、回到窗口或服务器通知时读取最新状态；不增加常驻轮询。 */
+  async refresh(): Promise<void> {
+    await this.enqueue(async () => { this.loaded = false; await this.reconcile(); });
   }
 
   /** 服务器不发恢复通知，到了恢复时刻自然失效。 */
@@ -214,28 +275,58 @@ export class ScheduleWebhookRemote {
   }
 
   private enqueueReconcile(): Promise<void> {
-    const run = this.work.then(() => this.reconcile());
+    return this.enqueue(() => this.reconcile());
+  }
+
+  private enqueue(operation: () => Promise<void>): Promise<void> {
+    const generation = this.generation;
+    const run = this.work.then(() => {
+      if (generation !== this.generation) throw new Error('WEBHOOK_ACCOUNT_CHANGED');
+      return operation();
+    });
     this.work = run.catch(() => undefined);
     return run;
   }
 
   private async reconcile(): Promise<void> {
-    if (!this.running || !this.deps.baseUrl() || !(await this.deps.getAccessToken())) return;
+    const generation = this.generation;
     try {
+      if (!this.running || !this.deps.baseUrl() || !(await this.deps.getAccessToken()) || generation !== this.generation) return;
       if (!this.loaded) {
         const { endpoints } = await this.request<{ endpoints: RemoteEndpointView[] }>('GET', '/endpoints');
+        // 老服务没有释放记录接口，沿用原有接收能力。
+        const result = await this.request<{ released: { scheduleId: string; releaseId: string }[] }>('GET', '/endpoints/released')
+          .catch((error: unknown) => {
+            if (error instanceof RemoteRequestError && error.status === 404) return { released: [] };
+            throw error;
+          });
+        if (generation !== this.generation) return;
+        this.releases.clear();
+        for (const [id, problem] of this.problems) if (problem === 'released') this.problems.delete(id);
+        for (const release of result.released) {
+          if (generation !== this.generation) return;
+          this.releases.set(release.scheduleId, release.releaseId);
+          this.problems.set(release.scheduleId, 'released');
+          await this.deps.onReleased?.(release.scheduleId);
+        }
+        if (generation !== this.generation) return;
         this.views.clear();
         for (const endpoint of endpoints) this.views.set(endpoint.scheduleId, endpoint);
         this.loaded = true;
       }
       for (const [scheduleId, wanted] of this.wanted) {
+        if (generation !== this.generation) return;
+        if (this.releases.has(scheduleId)) continue;
         const view = this.views.get(scheduleId);
-        if (view && sameEvents(view.events, wanted.events) && (wanted.format === null || sameFormat(view.format, wanted.format))) {
+        if (view && sameEvents(view.events, wanted.events) && (wanted.format === null || sameFormat(view.format, wanted.format))
+          && (view.scheduleName === undefined || view.scheduleName === wanted.scheduleName)
+          && (view.deviceName === undefined || view.deviceName === (wanted.deviceName ?? null))) {
           continue;
         }
         await this.upsert(scheduleId, wanted);
       }
       for (const [scheduleId, view] of this.views) {
+        if (generation !== this.generation) return;
         if (this.wanted.has(scheduleId)) continue;
         await this.request('DELETE', `/endpoints/${view.id}`);
         this.views.delete(scheduleId);
@@ -243,6 +334,7 @@ export class ScheduleWebhookRemote {
       }
       this.suspended = false;
     } catch (error) {
+      if (generation !== this.generation) return;
       if (error instanceof RemoteRequestError && error.code === 'WEBHOOK_ACCOUNT_SUSPENDED') this.suspended = true;
       this.deps.logger.warn?.('[schedule-webhook] sync failed', { error: String(error) });
       this.scheduleRetry();
@@ -251,7 +343,7 @@ export class ScheduleWebhookRemote {
     this.updateConnection();
   }
 
-  private async upsert(scheduleId: string, { events, format }: WantedEndpoint): Promise<void> {
+  private async upsert(scheduleId: string, { events, format, scheduleName, deviceName }: WantedEndpoint): Promise<void> {
     // 本机认不出发送方时沿用服务器上的格式；新建时没有可沿用的，只能报错。
     const effective = format ?? this.views.get(scheduleId)?.format ?? null;
     if (!effective) {
@@ -262,19 +354,24 @@ export class ScheduleWebhookRemote {
       const view = await this.request<RemoteEndpointView>('PUT', `/endpoints/by-schedule/${encodeURIComponent(scheduleId)}`, {
         events,
         format: effective,
+        scheduleName,
+        ...(deviceName !== undefined ? { deviceName } : {}),
       });
       this.views.set(scheduleId, view);
       this.problems.delete(scheduleId);
     } catch (error) {
       if (!(error instanceof RemoteRequestError) || error.status >= 500 || error.status === 403) throw error;
       // 这一个任务的问题，不挡住其他任务。
-      this.problems.set(scheduleId, error.code === 'WEBHOOK_ENDPOINT_LIMIT' ? 'limit' : 'failed');
+      this.problems.set(scheduleId, error.code === 'WEBHOOK_ENDPOINT_LIMIT' ? 'limit'
+        : error.code === 'WEBHOOK_ENDPOINT_RELEASED' ? 'released' : 'failed');
     }
   }
 
   private async request<T>(method: string, path: string, body?: unknown): Promise<T> {
+    const generation = this.generation;
     const send = async (): Promise<Response> => {
       const token = await this.deps.getAccessToken();
+      if (generation !== this.generation) throw new Error('WEBHOOK_ACCOUNT_CHANGED');
       if (!token) throw new RemoteRequestError(401, 'SIGNED_OUT');
       return this.deps.fetch(`${this.deps.baseUrl()}/api/v1${path}`, {
         method,
@@ -286,12 +383,17 @@ export class ScheduleWebhookRemote {
       });
     };
     let response = await send();
+    if (generation !== this.generation) throw new Error('WEBHOOK_ACCOUNT_CHANGED');
     if (response.status === 401 && (await this.deps.refreshAccessToken())) response = await send();
+    if (generation !== this.generation) throw new Error('WEBHOOK_ACCOUNT_CHANGED');
     if (!response.ok) {
       const parsed = (await response.json().catch(() => null)) as { error?: { code?: string } } | null;
+      if (generation !== this.generation) throw new Error('WEBHOOK_ACCOUNT_CHANGED');
       throw new RemoteRequestError(response.status, parsed?.error?.code);
     }
-    return (response.status === 204 ? undefined : await response.json()) as T;
+    const result = response.status === 204 ? undefined : await response.json();
+    if (generation !== this.generation) throw new Error('WEBHOOK_ACCOUNT_CHANGED');
+    return result as T;
   }
 
   private scheduleRetry(): void {
@@ -312,12 +414,13 @@ export class ScheduleWebhookRemote {
   private async connect(): Promise<void> {
     if (this.socket || this.connecting || this.reconnectTimer || !this.deps.baseUrl()) return;
     this.connecting = true;
+    const generation = this.generation;
     try {
       const token = await this.deps.getAccessToken();
-      if (!token || !this.running) return;
+      if (!token || !this.running || generation !== this.generation) return;
       const url = `${this.deps.baseUrl().replace(/^http/, 'ws')}/ws`;
       const options = await this.deps.socketOptions(url);
-      if (!this.running) return;
+      if (!this.running || generation !== this.generation) return;
       this.open(url, token, options);
     } catch (error) {
       this.deps.logger.warn?.('[schedule-webhook] connect failed', { error: String(error) });
@@ -388,6 +491,7 @@ export class ScheduleWebhookRemote {
   }
 
   private onFrame(socket: WebSocket, raw: string): void {
+    if (this.socket !== socket) return;
     let frame: Record<string, unknown>;
     try {
       frame = JSON.parse(raw) as Record<string, unknown>;
@@ -398,7 +502,12 @@ export class ScheduleWebhookRemote {
       this.attempt = 0;
       this.refreshedAfterRejection = false;
       this.connected = true;
+      void this.refresh().catch(() => undefined);
       this.deps.onChanged?.();
+      return;
+    }
+    if (frame.type === 'endpoints-changed') {
+      void this.refresh().catch(() => undefined);
       return;
     }
     if (frame.type === 'quota') {

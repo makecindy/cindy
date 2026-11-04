@@ -2,11 +2,10 @@ import { ErrorNotice } from '@/components/ui/error-notice';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import * as Dialog from '@radix-ui/react-dialog';
-import { Check, FolderOpen, Info, Play, Sparkles, X } from 'lucide-react';
+import { Check, ChevronDown, FolderOpen, Info, Play, Sparkles, X } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 
 import { SegmentedControl } from '@/components/ui/segmented-control';
-import { Switch } from '@/components/ui/switch';
 import {
   DEFAULT_SCHEDULE_WEBHOOK_PRESET,
   resolveScheduleWebhookFormat,
@@ -21,6 +20,9 @@ import { extractIpcError } from '@/utils/ipcError';
 import { parseAgentErrorCode } from '@cindy/maker-shared/error-redaction';
 import { Tip } from '@/components/ui/tooltip';
 import { Button } from '@/components/ui/button';
+import { Collapse } from '@/components/ui/collapse';
+import { FormField } from '@/components/ui/form-field';
+import { Input } from '@/components/ui/input';
 import { useAgentCapabilities } from '@/hooks/useAgentCapabilities';
 import { useProviders } from '@/hooks/useProviders';
 import { useDeviceProviders } from '@/hooks/useDeviceProviders';
@@ -35,6 +37,7 @@ import type { Schedule, CreateScheduleInput, ScheduleTemplate, UpdateScheduleInp
 import { applyTemplateParams } from '@cindy/maker-scheduler/template-engine';
 import { ScriptCapabilityMultiSelect } from './ScriptCapabilityMultiSelect';
 import { WebhookSourceFields } from './WebhookSourceFields';
+import { WebhookAccountManager } from './WebhookAccountManager';
 
 import {
   getScheduleDefaultRoute,
@@ -201,6 +204,7 @@ export function ScheduleFormDialog({
   > | null>(null);
   // 前置检查「AI 生成」内联面板:用户描述需求 → 生成脚本落盘 → 命令自动回填。
   const [hookGenOpen, setHookGenOpen] = useState(false);
+  const [runOptionsOpen, setRunOptionsOpen] = useState(false);
   const [hookGenDesc, setHookGenDesc] = useState('');
   const [hookGenerating, setHookGenerating] = useState(false);
   const [hookGenPath, setHookGenPath] = useState<string | null>(null);
@@ -254,7 +258,10 @@ export function ScheduleFormDialog({
   const setPreRunPluginId = useCallback((pluginId: string) => setField('preRunPluginId', pluginId), [setField]);
   const submitLabel = isEdit
     ? t('scheduler.editor.promptDialog.save')
-    : t('scheduler.editor.promptDialog.create');
+    : t(form.webhookEnabled ? 'scheduler.editor.webhook.createAndConnect' : 'scheduler.editor.promptDialog.create');
+  // UI 三选一；manual 仅表示不启用定时，已有组合配置在未切换触发方式时原样保留。
+  const triggerMode = form.webhookEnabled ? 'webhook' : form.manual ? 'manually' : 'automatic';
+  const webhookSettingsVisible = !isProjectAutomationMode && webhookReceiverReady && form.webhookEnabled;
 
   const initialId = initial?.id;
   useEffect(() => {
@@ -268,6 +275,7 @@ export function ScheduleFormDialog({
     setHookDragOver(false);
     setHookTestResult(null);
     setHookGenOpen(false);
+    setRunOptionsOpen(Boolean(initial?.preRunHook || initial?.targetSessionId || initial?.persistentSession));
     setHookGenDesc('');
     setHookGenerating(false);
     setHookGenPath(null);
@@ -649,7 +657,8 @@ export function ScheduleFormDialog({
           onEscapeKeyDown={(e) => submitting && e.preventDefault()}
           className={cn(
             'modal-panel fixed left-1/2 top-1/2 z-[10000] -translate-x-1/2 -translate-y-1/2',
-            'flex max-h-[88vh] w-[760px] flex-col overflow-hidden',
+            // 切换触发方式只替换内部配置，弹窗与触发选择器不随内容高度重新居中。
+            'flex h-[min(800px,88vh)] w-[760px] flex-col overflow-hidden',
           )}
           style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties}
         >
@@ -708,39 +717,29 @@ export function ScheduleFormDialog({
           </header>
 
           {!isEdit && !isProjectAutomationMode && mode === 'gallery' ? (
-            // 固定高度对齐表单模式"默认(未勾前置检查)"的常态内容高,空白/模板两个 tab 来回切不跳变。
-            // 546 = pt18 + 名称块68(label16+gap8+input44) + gap18 + 计划行34 + gap18 + 运行会话行34
-            //     + gap18 + 前置检查行34 + gap18 + 提示词块264(label16+gap8+编辑框240) + pb22。
-            // 表单新增/删除常驻区块时需同步更新此值;前置检查勾选等临时展开态与画廊的高度差属预期。
-            <div className="h-[546px] min-h-0 overflow-y-auto px-6 pt-[18px] pb-[22px]">
+            // 模板与表单共用固定的可用空间，只在内部滚动。
+            <div className="min-h-0 flex-1 overflow-y-auto [scrollbar-gutter:stable] px-6 pt-[18px] pb-[22px]">
               <TemplateGallery onSelect={applyTemplateToForm} selectedId={selectedTemplate?.id} />
             </div>
           ) : (
-          // overflow-y-auto:内容超过弹窗 max-h 时整体滚动;
+          // 内部滚动并预留滚动条位置，触发方式切换不改变控件的横向位置；
           // 提示词编辑框是固定高度,不会被可展开区块挤压。
-          <div className="flex min-h-0 flex-1 flex-col gap-[18px] overflow-y-auto pt-[18px] pr-6 pb-[22px] pl-6">
+          <div className="flex min-h-0 flex-1 flex-col gap-4 overflow-y-auto [scrollbar-gutter:stable] px-6 pb-6 pt-4">
             {submitError && (
               <ErrorNotice
                 message={t(`chat.remoteError.${parseAgentErrorCode(submitError)?.code}`)}
                 details={submitError}
               />
             )}
-            <div className="flex flex-col gap-2">
-              <label className="text-xs leading-[1.33] text-[var(--cmd-palette-item-meta)] dark:text-[var(--settings-section-desc)]">{t('scheduler.editor.fields.title')}</label>
-              <div className="flex h-11 items-center rounded-full border border-[var(--settings-input-border)] bg-[var(--settings-input-bg)] px-4">
-                <input
-                  type="text"
+            <FormField label={t('scheduler.editor.fields.title')}>
+              {(control) => <Input
+                  {...control}
                   value={form.name}
-                  onChange={(e) => setField('name', e.target.value)}
+                  onChange={(value) => setField('name', value)}
                   placeholder={t('scheduler.editor.promptDialog.namePlaceholder')}
-                  className={cn(
-                    'w-full bg-transparent text-sm font-normal outline-none',
-                    'text-[var(--settings-input-text)] placeholder-[var(--settings-input-placeholder)]',
-                    'select-text',
-                  )}
-                />
-              </div>
-            </div>
+                  surface="ivory"
+                />}
+            </FormField>
 
             {selectedTemplate?.parameters && selectedTemplate.parameters.length > 0 && (
               <TemplateParamForm
@@ -755,8 +754,8 @@ export function ScheduleFormDialog({
                 executionMode/scriptConfig 字段,展示切换器会让 script 配置被静默丢弃
                 ——该形态下隐藏,项目自动化对 script 模式的支持另行迭代。 */}
             {!isProjectAutomationMode && (
-            <div className="flex items-center gap-2.5">
-              <span className="text-xs leading-[1.33] text-[var(--cmd-palette-item-meta)] dark:text-[var(--settings-section-desc)]">
+            <div className="flex flex-wrap items-center gap-3">
+              <span className="min-w-16 text-13 text-[var(--text-secondary)]">
                 {t('scheduler.editor.executionMode.label')}
               </span>
               <SegmentedControl
@@ -834,27 +833,27 @@ export function ScheduleFormDialog({
               </div>
             )}
 
-            <div className="flex items-center gap-2.5">
-              <span className="text-xs leading-[1.33] text-[var(--cmd-palette-item-meta)] dark:text-[var(--settings-section-desc)]">{t('scheduler.editor.fields.schedule')}</span>
-              {/* 自动/手动 pill：把原先"勾一次才出现 Manually"的隐藏路径显式化。
-                  自动 → manual=false,显示 cron chip + Once;手动 → manual=true,cron 保留占位值不参与调度。 */}
+            <div className="flex flex-wrap items-center gap-3">
+              <span className="min-w-16 text-13 text-[var(--text-secondary)]">{t('scheduler.editor.trigger.label')}</span>
               <SegmentedControl
-                aria-label={t('scheduler.editor.fields.schedule')}
-                value={form.manual ? 'manually' : 'automatic'}
+                aria-label={t('scheduler.editor.trigger.label')}
+                value={triggerMode}
                 height={34}
                 onValueChange={(mode) => {
-                  const isManual = mode === 'manually';
-                  if (form.manual === isManual) return;
-                  setField('manual', isManual);
-                  setField('recurring', !isManual);
+                  if (mode === triggerMode) return;
+                  setField('webhookEnabled', mode === 'webhook');
+                  setField('manual', mode !== 'automatic');
+                  setField('recurring', mode !== 'manually');
                 }}
-                options={(['automatic', 'manually'] as const).map((mode) => ({
-                  value: mode,
-                  label: t(`scheduler.editor.fields.${mode}`),
-                }))}
+                options={[
+                  { value: 'automatic', label: t('scheduler.editor.trigger.timed') },
+                  { value: 'manually', label: t('scheduler.editor.fields.manually') },
+                  ...(!isProjectAutomationMode && (webhookReceiverReady || form.webhookEnabled)
+                    ? [{ value: 'webhook', label: t('scheduler.cell.tagWebhook'), disabled: !webhookReceiverReady }]
+                    : []),
+                ]}
               />
-              {/* 自动模式:cron chip + 一次(recurring 反向)。手动模式:两者全部隐藏——cron 占位值仍在 form 里,提交合法。 */}
-              {!form.manual && (
+              {triggerMode === 'automatic' && (
                 <>
                   <ScheduleChip
                     cronExpr={form.cronExpr}
@@ -905,70 +904,43 @@ export function ScheduleFormDialog({
               )}
             </div>
 
-            {/* 项目自动化写入仓库文件，接收地址和密钥不能进仓库，所以不提供。
-                没有 Cindy 账号时隐藏；已有配置保持不变，登录后恢复接收。 */}
-            {!isProjectAutomationMode && webhookReceiverReady && (
-              <div className="flex flex-col gap-2">
-                <div className="flex items-center justify-between gap-3">
-                  <div className="flex min-w-0 flex-col gap-0.5">
-                    <span className="text-13 leading-none text-[var(--settings-btn-secondary-text)]">
-                      {t('scheduler.editor.webhook.label')}
-                    </span>
-                    <span className="text-xs text-[var(--cmd-palette-item-meta)] dark:text-[var(--settings-section-desc)]">
-                      {t('scheduler.editor.webhook.description')}
-                    </span>
-                  </div>
-                  <Switch
-                    aria-label={t('scheduler.editor.webhook.label')}
-                    checked={form.webhookEnabled ?? false}
-                    onCheckedChange={(enabled) => {
-                      setField('webhookEnabled', enabled);
-                      // 定时的一次性任务会被一次事件用完，开启时回到循环。
-                      if (enabled && !form.manual) setField('recurring', true);
-                    }}
-                  />
-                </div>
-                {form.webhookEnabled && (
-                  <>
-                    <input
-                      value={form.webhookEvents ?? ''}
-                      onChange={(e) => setField('webhookEvents', e.target.value)}
-                      placeholder={t('scheduler.editor.webhook.eventsPlaceholder')}
-                      aria-label={t('scheduler.editor.webhook.eventsLabel')}
-                      className="h-10 rounded-full border border-[var(--settings-input-border)] bg-transparent px-4 text-sm text-[var(--settings-input-text)] outline-none"
-                    />
-                    <span className="text-xs text-[var(--cmd-palette-item-meta)] dark:text-[var(--settings-section-desc)]">
-                      {t('scheduler.editor.webhook.eventsHint')}
-                    </span>
-                    <span className="text-xs text-[var(--cmd-palette-item-meta)] dark:text-[var(--settings-section-desc)]">
-                      {t('scheduler.editor.webhook.quotaHint')}
-                    </span>
-                    <WebhookSourceFields
-                      preset={form.webhookPreset ?? DEFAULT_SCHEDULE_WEBHOOK_PRESET}
-                      signed={form.webhookSigned !== false}
-                      formatText={form.webhookFormat ?? ''}
-                      onPresetChange={(value) => {
-                        // 切到自定义时，用当前预设的格式作为起点，避免从空白开始写。
-                        if (value === 'custom' && !form.webhookFormat?.trim()) {
-                          const current = form.webhookPreset ?? DEFAULT_SCHEDULE_WEBHOOK_PRESET;
-                          const format = resolveScheduleWebhookFormat(
-                            scheduleWebhookPreset(current)
-                              ? { preset: current as ScheduleWebhookPresetId, signed: form.webhookSigned !== false }
-                              : undefined,
-                          );
-                          setField('webhookFormat', JSON.stringify(format, null, 2));
-                        }
-                        setField('webhookPreset', value);
-                      }}
-                      onSignedChange={(value) => setField('webhookSigned', value)}
-                      onFormatChange={(value) => setField('webhookFormat', value)}
-                    />
-                  </>
-                )}
-              </div>
+            {/* 项目配置不保存接收地址；未登录时保留已配置的触发方式。 */}
+            {webhookSettingsVisible && <WebhookAccountManager allowOpenSchedule={false} />}
+            {webhookSettingsVisible && (
+                <WebhookSourceFields
+                  preset={form.webhookPreset ?? DEFAULT_SCHEDULE_WEBHOOK_PRESET}
+                  signed={form.webhookSigned !== false}
+                  formatText={form.webhookFormat ?? ''}
+                  events={form.webhookEvents ?? ''}
+                  onEventsChange={(value) => setField('webhookEvents', value)}
+                  footerAction={!isScriptMode && (
+                    <Button variant="secondary" tone="quiet" compact size="sm" aria-expanded={runOptionsOpen} onClick={() => setRunOptionsOpen(!runOptionsOpen)}>
+                      {t('scheduler.editor.runSettings')}
+                      <ChevronDown size={14} aria-hidden className={cn('transition-transform', runOptionsOpen && 'rotate-180')} />
+                    </Button>
+                  )}
+                  onPresetChange={(value) => {
+                    // 切到自定义时，用当前预设的格式作为起点，避免从空白开始写。
+                    if (value === 'custom' && !form.webhookFormat?.trim()) {
+                      const current = form.webhookPreset ?? DEFAULT_SCHEDULE_WEBHOOK_PRESET;
+                      const format = resolveScheduleWebhookFormat(
+                        scheduleWebhookPreset(current)
+                          ? { preset: current as ScheduleWebhookPresetId, signed: form.webhookSigned !== false }
+                          : undefined,
+                      );
+                      setField('webhookFormat', JSON.stringify(format, null, 2));
+                    }
+                    setField('webhookPreset', value);
+                  }}
+                  onSignedChange={(value) => setField('webhookSigned', value)}
+                  onFormatChange={(value) => setField('webhookFormat', value)}
+                />
             )}
 
             {!isScriptMode && (
+              // 触发方式切换直接呈现目标布局；只有同一 Webhook 表单内的设置开关播放折叠动画。
+              <Collapse key={webhookSettingsVisible ? 'webhook' : 'standard'} open={!webhookSettingsVisible || runOptionsOpen}>
+              <div className="flex flex-col gap-4">
             <div className="flex flex-col gap-2.5">
             <div className="flex flex-wrap items-center gap-2.5">
               {/* "运行会话"三态:合并了旧 persistentSession 开关与手绑会话两个概念。
@@ -1152,12 +1124,10 @@ export function ScheduleFormDialog({
               />
             )}
             </div>
-            )}
 
             {/* 前置检查(Pre-run Hook):触发时先执行脚本,exit 0 放行 / exit 2 跳过本轮
                 (不启动 agent、零 token);报错 / 超时会阻止本轮并记录失败。
                 仅 agent 模式展示——script 模式任务本体就是脚本,再叠一层脚本闸门是套娃。 */}
-            {!isScriptMode && (
             <div className="flex flex-col gap-2">
               <div className="flex flex-wrap items-center gap-2.5">
                 <span className="text-13 leading-none text-[var(--settings-btn-secondary-text)]">
@@ -1453,6 +1423,8 @@ export function ScheduleFormDialog({
                 </>
               )}
             </div>
+              </div>
+              </Collapse>
             )}
 
               {/* 项目自动化(.cindy/automations/schedules.json)的 config schema 尚无

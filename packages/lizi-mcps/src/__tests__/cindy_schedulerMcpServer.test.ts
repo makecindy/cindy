@@ -43,7 +43,7 @@ import { registerScheduleSilenceCurrentRunTool } from '../scheduler/silenceCurre
 import { registerScheduleCreateTool } from '../scheduler/create.js';
 import { registerScheduleUpdateTool } from '../scheduler/update.js';
 import { registerScheduleSetPreRunHookTool } from '../scheduler/setPreRunHook.js';
-import type { LiziMcpSessionContext } from '../types.js';
+import type { LiziMcpSessionContext, SchedulerMcpDeps } from '../types.js';
 
 // ── In-memory ScheduleStorage / Runner / Clock (same shape as Phase 1 tests) ──
 
@@ -158,6 +158,7 @@ interface Harness {
 
 async function makeHarness(opts?: {
   schedulerNotReady?: boolean;
+  webhookManagement?: SchedulerMcpDeps['webhookManagement'];
 }): Promise<Harness> {
   const storage = new InMemoryStorage();
   const clock = new FakeClock();
@@ -172,6 +173,7 @@ async function makeHarness(opts?: {
   // to compute nextFireAt for any pre-existing actives (none here).
 
   const server = createSchedulerMcpServer({
+    webhookManagement: opts?.webhookManagement,
     getScheduler: () => {
       if (opts?.schedulerNotReady) {
         throw new Error('scheduler not started');
@@ -223,6 +225,28 @@ describe('cindy_scheduler MCP server (in-process smoke)', () => {
 
   beforeEach(async () => {
     h = await makeHarness();
+  });
+
+  // Unit integration: account management must be discoverable and reachable through
+  // the public MCP dispatcher, including an endpoint belonging to an offline device.
+  it('discovers account Webhook management and dispatches validated list/release/restore calls', async () => {
+    await h.cleanup();
+    const service = { list: vi.fn(async () => ({ used: 1, limit: 10, endpoints: [{ id: 'whk_old', deviceId: 'offline' }] })),
+      release: vi.fn(async (_id: string) => {}), restore: vi.fn(async (_id: string) => {}) };
+    h = await makeHarness({ webhookManagement: service });
+    try {
+      const discovered = await h.client.callTool({ name: 'list_tools', arguments: { category: 'scheduler' } });
+      expect(JSON.stringify(discovered.content)).toContain('schedule_webhook_release');
+      const list = await h.client.callTool({ name: 'call_tool', arguments: { name: 'schedule_webhook_list', args: {} } });
+      expect(JSON.stringify(list.content)).toContain('offline');
+      const bad = await h.client.callTool({ name: 'call_tool', arguments: { name: 'schedule_webhook_release', args: { id: '../secret' } } });
+      expect(bad.isError).toBe(true);
+      expect(service.release).not.toHaveBeenCalled();
+      await h.client.callTool({ name: 'call_tool', arguments: { name: 'schedule_webhook_release', args: { id: 'whk_old' } } });
+      expect(service.release).toHaveBeenCalledWith('whk_old');
+      await h.client.callTool({ name: 'call_tool', arguments: { name: 'schedule_webhook_restore', args: { id: 's1' } } });
+      expect(service.restore).toHaveBeenCalledWith('s1');
+    } finally { await h.cleanup(); }
   });
 
   // Integration: schema parsing used to strip the Agent location. Follow the real

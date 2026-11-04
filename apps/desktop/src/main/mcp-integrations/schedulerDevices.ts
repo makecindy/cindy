@@ -18,6 +18,7 @@ const CHANNELS: Record<SchedulerRemoteOp, string> = {
   resume: 'maker:schedule:resume',
   delete: 'maker:schedule:delete',
   'run-now': 'maker:schedule:run-now',
+  'webhook-restore': 'maker:schedule:webhook-restore',
 };
 
 /** 远程失败说明。只陈述事实；旧版本对方不认识的请求明确说不支持。 */
@@ -40,6 +41,7 @@ const WRITE_OPS: ReadonlySet<SchedulerRemoteOp> = new Set([
   'resume',
   'delete',
   'run-now',
+  'webhook-restore',
 ]);
 
 /**

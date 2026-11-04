@@ -442,6 +442,10 @@ const EXTENDED_INVOKE_CHANNELS: readonly string[] = [
   // address; both stay on the computer that runs the schedule.
   'maker:schedule:webhook-status',
   'maker:schedule:webhook-receiver',
+  // 同账号查看和释放云端地址；不携带密钥、不执行任务，不要求旧设备在线。
+  'maker:schedule:webhook-account',
+  'maker:schedule:webhook-release',
+  'maker:schedule:webhook-restore',
   // —— 会话未读已读回执(控制端真实展示会话内容后,把被控端的会话未读态清掉)——
   // 准入:会话粒度状态操作(与 mark-run-read 同类),无 event.sender 依赖、无 shell/UI
   // 副作用;语义在被控端执行才正确(灵动岛 / Dock 角标 / 侧栏红绿点的未读真相都在被控端

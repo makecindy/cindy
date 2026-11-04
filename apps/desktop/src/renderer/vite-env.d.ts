@@ -7282,7 +7282,7 @@ interface ElectronAPI {
         received: number;
         ignored: number;
         connected?: boolean;
-        problem?: 'limit' | 'failed' | 'suspended' | 'quota';
+        problem?: 'limit' | 'failed' | 'suspended' | 'quota' | 'released';
         quotaLimit?: number;
         quotaResetAt?: number;
       } | null>;
@@ -7290,6 +7290,9 @@ interface ElectronAPI {
       setWebhookSecret: (id: string, secret?: string) => Promise<{ secret?: string }>;
       /** 换一个新的接收地址,旧地址立即失效。仅任务所在电脑可用。 */
       rotateWebhookUrl: (id: string) => Promise<{ url: string }>;
+      webhookAccount: () => Promise<import('../shared/webhookAccount').WebhookAccountOverview>;
+      releaseWebhookEndpoint: (id: string) => Promise<void>;
+      restoreWebhookEndpoint: (id: string) => Promise<void>;
       /** script 任务能力选择器:各能力的运行时可用性(依赖意识的装入/唤醒态)。 */
       scriptCapabilityStatus: () => Promise<{
         statuses: Array<{

@@ -26,6 +26,18 @@
 
 ## 自动化任务 Webhook 触发（2026-11-02）
 
+账号地址管理（2026-11-04）纯增同账号 invoke `maker:schedule:webhook-account`、
+`maker:schedule:webhook-release`、`maker:schedule:webhook-restore`；共享任务和供应商访客不放行。
+新控制端遇到旧宿主的未知通道按不可用处理，不伪造空清单。既有密钥与地址轮换接口仍仅本机。
+官方和自建中转沿用通用 invoke，无帧或鉴权变化；白名单校验与同账号控制授权保持不变。
+
+REST 纯增 `/account/endpoints` 清单及按 ID 释放、设备范围 `/endpoints/released` 和
+`/endpoints/by-schedule/:scheduleId/restore`。设备清单可选增加名称，旧客户端忽略；旧服务返回
+404 时新客户端沿用原接收行为、账号管理提示等待更新。`webhook-status.problem` 纯增 `released`，
+WS 纯增 `endpoints-changed` 失效通知，旧客户端忽略。释放必须先部署服务端新增迁移与接口；
+数据库插入触发器阻止旧服务副本自动重建，不能通过回滚历史迁移撤销。恢复使用最新 releaseId，
+并发旧恢复不能撤销后一次释放。账号删除同时清理释放记录。
+
 `Schedule` 新增可选字段 `webhookTrigger`，`ScheduleRun` 新增可选字段 `triggerSource`，对应追加列
 `schedules.webhook_trigger` 与 `schedule_runs.trigger_source`（migration 0144）。沿用既有
 `maker:schedule:create/update/get` 通道：缺 key 表示不修改，`null` 清空，旧客户端整表单保存不会清掉配置。

@@ -48,6 +48,7 @@ vi.mock('@radix-ui/react-dialog', () => {
 });
 vi.mock('@/components/ui/tooltip', () => ({ Tip: ({ children }: { children?: ReactNode }) => children }));
 vi.mock('../TemplateGallery', () => ({ TemplateGallery: () => null }));
+vi.mock('../WebhookAccountManager', () => ({ WebhookAccountManager: () => null }));
 vi.mock('../TemplateParamForm', () => ({ TemplateParamForm: () => null }));
 vi.mock('../BoundSessionCard', () => ({ BoundSessionCard: () => null }));
 vi.mock('../ScheduleChips', () => ({
@@ -99,7 +100,9 @@ beforeEach(() => {
   state.references.clear();
   state.loading = false;
   localStorage.clear();
-  vi.stubGlobal('electronAPI', { maker: { schedule: { webhookReceiver: async () => 'cloud' } } });
+  vi.stubGlobal('electronAPI', { maker: { schedule: {
+    webhookReceiver: async () => 'cloud', scriptCapabilityStatus: async () => ({ statuses: [] }),
+  } } });
 });
 afterEach(cleanup);
 afterEach(() => vi.unstubAllGlobals());
@@ -120,12 +123,12 @@ it('sends the explicit local Harness and location when generating a bound hook',
   })));
 });
 
-// Using a Webhook requires a Cindy account: the switch stays hidden while signed out, and a
-// saved trigger must survive editing the task so that receiving resumes after signing in.
-it('hides the Webhook switch without a Cindy account and keeps the saved trigger', async () => {
+// A saved Webhook remains visible but cannot be configured while signed out.
+// Saving unrelated fields must preserve it so receiving resumes after signing in.
+it('keeps the saved Webhook trigger while signed out', async () => {
   vi.stubGlobal('electronAPI', { maker: { schedule: { webhookReceiver: async () => 'signed-out' } } });
   const form = mount(schedule({ webhookTrigger: { endpointId: 'endpoint', events: ['check_suite'] } }));
-  await waitFor(() => expect(screen.queryByRole('switch', { name: 'scheduler.editor.webhook.label' })).toBeNull());
+  expect(screen.getByRole('radio', { name: 'scheduler.cell.tagWebhook' }).hasAttribute('disabled')).toBe(true);
   form.save();
   // 没有保存过发送方的任务按默认的 GitHub 写回，接收行为不变。
   await waitFor(() => expect(form.onSubmit).toHaveBeenCalledWith(expect.objectContaining({
@@ -133,9 +136,83 @@ it('hides the Webhook switch without a Cindy account and keeps the saved trigger
   }), true));
 });
 
-it('shows the Webhook switch once this computer can receive events', async () => {
-  mount(schedule());
-  await waitFor(() => expect(screen.getByRole('switch', { name: 'scheduler.editor.webhook.label' })).toBeTruthy());
+// 2026-11-04 product decision, unit/jsdom: Webhook and timed triggering are separate
+// choices. Exercise the real form in both execution modes; saving an existing
+// trigger alone cannot catch the removed combined-trigger UI or mode switching.
+it.each(['agent', 'script'] as const)('keeps Webhook and timed triggering separate for %s execution', async (executionMode) => {
+  const form = mount(schedule({ executionMode,
+    ...(executionMode === 'script' ? { workspaceKind: 'project' as const, workingDir: '/test-project', scriptConfig: { command: 'node check.cjs', capabilities: [] } } : {}),
+  }));
+  fireEvent.click(await screen.findByRole('radio', { name: 'scheduler.cell.tagWebhook' }));
+  form.save();
+  await waitFor(() => expect(form.onSubmit).toHaveBeenLastCalledWith(expect.objectContaining({
+    manual: true, webhookTrigger: expect.objectContaining({ source: { preset: 'github' } }), executionMode,
+  }), true));
+  fireEvent.click(screen.getByRole('button', { name: 'routines.advancedSettings' }));
+  expect(screen.queryByRole('switch', { name: 'scheduler.editor.webhook.timedFallback' })).toBeNull();
+  fireEvent.click(screen.getByRole('radio', { name: 'scheduler.editor.trigger.timed' }));
+  form.save();
+  await waitFor(() => expect(form.onSubmit).toHaveBeenLastCalledWith(expect.objectContaining({
+    manual: false, recurring: true, cronExpr: '0 9 * * *', webhookTrigger: null,
+  }), true));
+  fireEvent.click(screen.getByRole('radio', { name: 'scheduler.editor.fields.manually' }));
+  form.save();
+  await waitFor(() => expect(form.onSubmit).toHaveBeenLastCalledWith(expect.objectContaining({
+    manual: true, webhookTrigger: null,
+  }), true));
+});
+
+it('preserves both triggers when editing an existing timed Webhook', async () => {
+  const form = mount(schedule({ webhookTrigger: { endpointId: 'existing', events: ['issues.opened'], source: { preset: 'github' } } }));
+  await screen.findByRole('button', { name: 'routines.advancedSettings' });
+  expect(screen.getByRole('radio', { name: 'scheduler.cell.tagWebhook' }).getAttribute('aria-checked')).toBe('true');
+  form.save();
+  await waitFor(() => expect(form.onSubmit).toHaveBeenCalledWith(expect.objectContaining({
+    manual: false, recurring: true, cronExpr: '0 9 * * *', webhookTrigger: { events: ['issues.opened'], source: { preset: 'github' } },
+  }), true));
+});
+
+// Event picker, unit/jsdom: real form submission must retain filters outside the
+// suggestion catalog and serialize a clicked action. Prior cases only saved
+// existing text; a catalog-only picker could silently drop the unknown filter.
+// Standalone Windows run including the 14 dialog cases: 4.76s Vitest, 832ms tests.
+it('selects an event by label while preserving an unlisted saved filter', async () => {
+  const picker = 'scheduler.editor.webhook.eventPicker';
+  const form = mount(schedule({ manual: true, webhookTrigger: {
+    endpointId: 'existing', events: ['issues.opened', 'future_event.changed'], source: { preset: 'github' },
+  } }));
+  fireEvent.click(await screen.findByRole('button', { name: `${picker}.choose` }));
+  fireEvent.change(screen.getByRole('textbox', { name: `${picker}.search` }), { target: { value: 'pull_request.closed' } });
+  fireEvent.click(screen.getByRole('checkbox', { name: `${picker}.groups.pullRequests · ${picker}.actions.closed` }));
+  fireEvent.click(screen.getByRole('button', { name: `${picker}.apply` }));
+  form.save();
+  await waitFor(() => expect(form.onSubmit).toHaveBeenCalledWith(expect.objectContaining({
+    webhookTrigger: { events: ['issues.opened', 'future_event.changed', 'pull_request.closed'], source: { preset: 'github' } },
+  }), true));
+});
+
+// Removing the last tag must not broaden receiving to all events implicitly.
+// The minimal failure is a saved one-event filter; cancel retains it, and only
+// the explicit All choice serializes an empty list (the scheduler's all contract).
+it('requires an explicit all-events choice before clearing the last filter', async () => {
+  const picker = 'scheduler.editor.webhook.eventPicker';
+  const form = mount(schedule({ manual: true, webhookTrigger: {
+    endpointId: 'existing', events: ['issues.opened'], source: { preset: 'github' },
+  } }));
+  fireEvent.click(await screen.findByRole('button', { name: `${picker}.remove` }));
+  expect(screen.getByRole('button', { name: `${picker}.apply` }).hasAttribute('disabled')).toBe(true);
+  fireEvent.click(screen.getByRole('button', { name: `${picker}.cancel` }));
+  form.save();
+  await waitFor(() => expect(form.onSubmit).toHaveBeenLastCalledWith(expect.objectContaining({
+    webhookTrigger: { events: ['issues.opened'], source: { preset: 'github' } },
+  }), true));
+  fireEvent.click(screen.getByRole('button', { name: `${picker}.choose` }));
+  fireEvent.click(screen.getByRole('checkbox', { name: `${picker}.all` }));
+  fireEvent.click(screen.getByRole('button', { name: `${picker}.apply` }));
+  form.save();
+  await waitFor(() => expect(form.onSubmit).toHaveBeenLastCalledWith(expect.objectContaining({
+    webhookTrigger: { events: [], source: { preset: 'github' } },
+  }), true));
 });
 
 it('saves a selected remote-only model against its own catalog', async () => {

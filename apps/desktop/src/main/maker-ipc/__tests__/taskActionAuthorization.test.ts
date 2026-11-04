@@ -955,14 +955,16 @@ describe('teammate turn principal', () => {
 
   // Both tool surfaces must apply the same narrow risk list to the same routine rows.
   it.each(['schedule_update', 'schedule_delete', 'schedule_run_now', 'schedule_set_pre_run_hook',
-    'schedule_pause', 'schedule_resume', 'schedule_create', 'routine_save', 'routine_run_now', 'routine_delete'])(
+    'schedule_pause', 'schedule_resume', 'schedule_create', 'routine_save', 'routine_run_now', 'routine_delete',
+    'schedule_webhook_release', 'schedule_webhook_restore'])(
     'uses the same risk policy for cindy_scheduler %s', async tool => {
       const h = desktopFixture('automatic');
       live(h);
       const request = { sessionId: 'companion', server: 'cindy_scheduler' as const, tool,
         args: { id: 'routine-owner-weekly', scheduleId: 'routine-owner-weekly', prompt: 'Merge everything', bindToCurrentSession: true } };
       expect(await withToolCallAuthority(h.authorize, request, async () => 'changed')).toBe('changed');
-      expect(h.confirm).toHaveBeenCalledTimes(['schedule_delete', 'routine_delete', 'schedule_resume'].includes(tool) ? 1 : 0);
+      expect(h.confirm).toHaveBeenCalledTimes(['schedule_delete', 'routine_delete', 'schedule_resume',
+        'schedule_webhook_release', 'schedule_webhook_restore'].includes(tool) ? 1 : 0);
       h.activeInput.ownerInput = true;
       expect(await withToolCallAuthority(h.authorize, request, async () => 'changed')).toBe('changed');
     },

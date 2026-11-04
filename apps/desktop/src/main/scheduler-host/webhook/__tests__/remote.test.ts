@@ -27,6 +27,7 @@ vi.mock('../../../appSessionState.js', () => ({
 vi.mock('../../../plugin-oauth/identityStore.js', () => ({ oauthSecureStorageAvailable: () => true }));
 
 import { ScheduleWebhookHost } from '../index';
+import { ScheduleWebhookRemote } from '../remote';
 
 class FakeScheduler extends EventEmitter {
   schedules: Schedule[] = [];
@@ -39,6 +40,7 @@ class FakeScheduler extends EventEmitter {
 const schedule = (id: string, events?: string[], source?: ScheduleWebhookSource) =>
   ({
     id,
+    name: id,
     status: 'active',
     webhookTrigger: { endpointId: `local-${id}`, ...(events ? { events } : {}), ...(source ? { source } : {}) },
   }) as Schedule;
@@ -60,6 +62,8 @@ interface FakeEndpoint {
 
 /** 与 webhook-server 合同相同的最小实现。 */
 class FakeServer {
+  readonly releases = new Map<string, string>();
+  accountManagement = false;
   readonly requests: string[] = [];
   readonly endpoints = new Map<string, FakeEndpoint>();
   readonly frames: Record<string, unknown>[] = [];
@@ -121,9 +125,30 @@ class FakeServer {
       const body = () => JSON.parse(Buffer.concat(chunks).toString() || '{}') as Record<string, unknown>;
       const byId = (id: string) => [...this.endpoints.values()].find((row) => row.id === id);
       const remove = route.match(/^DELETE \/api\/v1\/endpoints\/(.+)$/);
+      if (this.accountManagement) {
+        if (route === 'GET /api/v1/account/endpoints') return reply(200, { limit: 10, used: this.endpoints.size, endpoints: [...this.endpoints.values()] });
+        if (route === 'GET /api/v1/endpoints/released') return reply(200, { released: [...this.releases].map(([scheduleId, releaseId]) => ({ scheduleId, releaseId })) });
+        const release = route.match(/^DELETE \/api\/v1\/account\/endpoints\/(.+)$/);
+        if (release) {
+          const endpoint = byId(release[1]);
+          if (endpoint) { this.endpoints.delete(endpoint.scheduleId); this.releases.set(endpoint.scheduleId, 'release-1'); }
+          return reply(204);
+        }
+        const restore = route.match(/^POST \/api\/v1\/endpoints\/by-schedule\/(.+)\/restore$/);
+        if (restore) {
+          const scheduleId = restore[1];
+          if (body().releaseId !== this.releases.get(scheduleId)) return reply(409, { error: { code: 'WEBHOOK_ENDPOINT_RELEASED' } });
+          this.releases.delete(scheduleId);
+          const endpoint: FakeEndpoint = { id: 'whk_restored', url: 'https://webhook.test/hooks/whk_restored', scheduleId,
+            events: body().events as string[], format: body().format, hasSecret: false, status: 'active', lastReceivedAt: null };
+          this.endpoints.set(scheduleId, endpoint);
+          return reply(201, endpoint);
+        }
+      }
       if (route === 'GET /api/v1/endpoints') return reply(200, { endpoints: [...this.endpoints.values()] });
       if (upsert?.[1]) {
         const scheduleId = upsert[1];
+        if (this.releases.has(scheduleId)) return reply(409, { error: { code: 'WEBHOOK_ENDPOINT_RELEASED' } });
         const { events, format } = body() as { events: string[]; format: unknown };
         const existing = this.endpoints.get(scheduleId);
         if (!existing && this.endpoints.size >= this.endpointLimit) return reply(409, { error: { code: 'WEBHOOK_ENDPOINT_LIMIT' } });
@@ -166,6 +191,26 @@ class FakeServer {
 }
 
 const event = (deliveryId: string, name = 'pull_request') => ({ deliveryId, event: name, receivedAt: 1 });
+
+// Unit: late reads and queued mutations must remain bound to the original account.
+// This race is not exercised by the ordinary connected-server lifecycle tests.
+it('换账号后拒绝迟到清单和未发送的旧释放操作', async () => {
+  let finish!: (response: Response) => void;
+  const request = vi.fn(() => new Promise<Response>((resolve) => { finish = resolve; }));
+  const remote = new ScheduleWebhookRemote({ baseUrl: () => 'https://webhook.test',
+    getAccessToken: async () => 'test-token', refreshAccessToken: async () => false,
+    fetch: request, socketOptions: async () => ({}), onBatch: async () => {}, logger: {} });
+  const read = remote.accountOverview();
+  await vi.waitFor(() => expect(request).toHaveBeenCalledOnce());
+  const release = remote.releaseEndpoint('whk_old');
+  const rejectedRelease = expect(release).rejects.toThrow('WEBHOOK_ACCOUNT_CHANGED');
+  const rejectedRead = expect(read).rejects.toThrow('WEBHOOK_ACCOUNT_CHANGED');
+  remote.pause();
+  finish(new Response(JSON.stringify({ used: 1, limit: 10, endpoints: [] })));
+  await rejectedRead;
+  await rejectedRelease;
+  expect(request).toHaveBeenCalledOnce();
+});
 
 describe('ScheduleWebhookHost 服务器通道', () => {
   let scheduler: FakeScheduler;
@@ -225,6 +270,34 @@ describe('ScheduleWebhookHost 服务器通道', () => {
     expect(server.endpoints.get('s1')?.secret).toBe(secret);
     expect(host.status(schedule('s1'))?.hasSecret).toBe(true);
     expect(fs.existsSync(path.join(dirs.root, 'schedule-webhooks', 'secrets'))).toBe(false);
+  });
+
+  // Account release is authoritative even while the local schedule stays enabled.
+  // A normal reconnect must not recreate it; only explicit restore receives a new URL.
+  it('账号释放后刷新清单并阻止重建，明确重新连接才生成新地址', async () => {
+    server.accountManagement = true;
+    await start([schedule('s1')]);
+    await vi.waitFor(() => expect(host.status(schedule('s1'))?.connected).toBe(true));
+    expect(await host.accountOverview()).toMatchObject({ used: 1, limit: 10 });
+    server.push({ batchId: 'release-batch', endpointId: 'whk-s1', scheduleId: 's1', events: [event('pending')], omitted: 0 });
+    await vi.waitFor(() => expect(server.frames).toContainEqual({ type: 'ack', batchId: 'release-batch' }));
+    await host.releaseEndpoint('whk-s1');
+    const saved = JSON.parse(fs.readFileSync(path.join(dirs.root, 'schedule-webhooks', 'state.json'), 'utf8'));
+    expect(saved.endpoints.s1).toBeUndefined();
+    expect(host.status(schedule('s1'))).toMatchObject({ problem: 'released', hasSecret: false });
+    expect(host.status(schedule('s1'))?.url).toBeUndefined();
+    await host.refreshStatus();
+    expect(server.endpoints.size).toBe(0);
+    expect(await host.accountOverview()).toMatchObject({ used: 0 });
+    await host.restoreEndpoint(schedule('s1'));
+    expect(host.status(schedule('s1'))).toMatchObject({ url: 'https://webhook.test/hooks/whk_restored', hasSecret: false });
+    expect(host.status(schedule('s1'))?.problem).toBeUndefined();
+  });
+
+  it('旧服务明确提示账号管理未部署，原接收能力继续工作', async () => {
+    await start([schedule('s1')]);
+    await expect(host.accountOverview()).rejects.toThrow('WEBHOOK_MANAGEMENT_UNAVAILABLE');
+    expect(host.status(schedule('s1'))?.url).toBeTruthy();
   });
 
   it('未登录时不发任何请求也不连接，配置保留；登录后恢复', async () => {

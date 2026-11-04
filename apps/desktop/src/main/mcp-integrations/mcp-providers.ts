@@ -648,6 +648,27 @@ export function createDesktopMcpProviders(deps: DesktopMcpProvidersDeps): LiziMc
       // 仅 description 生成模式需要,tool-call 时才解引用。
       webhookStatus: (schedule) => getScheduleWebhookHost()?.status(schedule) ?? null,
       webhookReceiver: scheduleWebhookReceiver,
+      webhookManagement: {
+        list: async () => {
+          const host = getScheduleWebhookHost();
+          if (!host) throw new Error('scheduler not started');
+          return host.accountOverview();
+        },
+        release: async (id) => {
+          const host = getScheduleWebhookHost();
+          if (!host) throw new Error('scheduler not started');
+          await assertTaskActionCurrent();
+          await host.releaseEndpoint(id);
+        },
+        restore: async (id) => {
+          const host = getScheduleWebhookHost();
+          const schedule = await getScheduler().get(id);
+          if (!host) throw new Error('scheduler not started');
+          if (!schedule) throw new Error('Schedule not found');
+          await assertTaskActionCurrent();
+          await host.restoreEndpoint(schedule);
+        },
+      },
       hookScript: {
         isSessionAgentOnOtherDevice: async (sessionId) => {
           const row = await getSessionRowSnapshot(sessionId);

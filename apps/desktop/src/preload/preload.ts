@@ -8388,7 +8388,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
         received: number;
         ignored: number;
         connected?: boolean;
-        problem?: 'limit' | 'failed' | 'suspended' | 'quota';
+        problem?: 'limit' | 'failed' | 'suspended' | 'quota' | 'released';
         quotaLimit?: number;
         quotaResetAt?: number;
       } | null> => ipcRenderer.invoke('maker:schedule:webhook-status', id),
@@ -8398,6 +8398,12 @@ contextBridge.exposeInMainWorld('electronAPI', {
       /** 换一个新的接收地址,旧地址立即失效。仅任务所在电脑可用。 */
       rotateWebhookUrl: (id: string): Promise<{ url: string }> =>
         ipcRenderer.invoke('maker:schedule:webhook-rotate-url', id),
+      webhookAccount: (): Promise<import('../shared/webhookAccount').WebhookAccountOverview> =>
+        ipcRenderer.invoke('maker:schedule:webhook-account'),
+      releaseWebhookEndpoint: (id: string): Promise<void> =>
+        ipcRenderer.invoke('maker:schedule:webhook-release', id),
+      restoreWebhookEndpoint: (id: string): Promise<void> =>
+        ipcRenderer.invoke('maker:schedule:webhook-restore', id),
       /** script 任务能力选择器:各能力的运行时可用性(依赖意识的装入/唤醒态)。 */
       scriptCapabilityStatus: (): Promise<{
         statuses: Array<{

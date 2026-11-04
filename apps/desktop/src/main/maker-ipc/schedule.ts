@@ -744,11 +744,41 @@ export function registerScheduleHandlers(getMaker?: () => Maker | null): void {
     const scheduleId = requireString(id, 'id');
     return withScheduler(async ({ scheduler }) => {
       const schedule = await scheduler.get(scheduleId);
+      await getScheduleWebhookHost()?.refreshStatus();
       return schedule ? getScheduleWebhookHost()?.status(schedule) ?? null : null;
     });
   });
 
   ipcMain.handle(MAKER_INVOKE.SCHEDULE_WEBHOOK_RECEIVER, async () => scheduleWebhookReceiver());
+
+  const manageWebhooks = async <T>(run: (host: ScheduleWebhookHost) => Promise<T>): Promise<T> => {
+    const host = getScheduleWebhookHost();
+    if (!host) throwIpcError('INTERNAL', 'WEBHOOK_MANAGEMENT_UNAVAILABLE');
+    try {
+      return await run(host);
+    } catch (error) {
+      const code = error && typeof error === 'object' && 'code' in error ? error.code : undefined;
+      const message = error instanceof Error ? error.message : '';
+      const known = ['WEBHOOK_ENDPOINT_LIMIT', 'WEBHOOK_ENDPOINT_RELEASED', 'WEBHOOK_ACCOUNT_REQUIRED',
+        'WEBHOOK_MANAGEMENT_UNAVAILABLE', 'WEBHOOK_ACCOUNT_CHANGED'];
+      throwIpcError('INTERNAL', typeof code === 'string' && known.includes(code) ? code
+        : known.includes(message) ? message : 'WEBHOOK_MANAGEMENT_FAILED');
+    }
+  };
+  ipcMain.handle(MAKER_INVOKE.SCHEDULE_WEBHOOK_ACCOUNT, () => manageWebhooks((host) => host.accountOverview()));
+  ipcMain.handle(MAKER_INVOKE.SCHEDULE_WEBHOOK_RELEASE, (_e, id: unknown) => {
+    const endpointId = requireString(id, 'id');
+    if (!/^whk_[A-Za-z0-9_-]{1,128}$/.test(endpointId)) throwIpcError('INVALID_PARAMS', 'Invalid endpoint id');
+    return manageWebhooks((host) => host.releaseEndpoint(endpointId));
+  });
+  ipcMain.handle(MAKER_INVOKE.SCHEDULE_WEBHOOK_RESTORE, (_e, id: unknown) => {
+    const scheduleId = requireString(id, 'id');
+    return withScheduler(async ({ scheduler }) => {
+      const schedule = await scheduler.get(scheduleId);
+      if (!schedule) throwIpcError('NOT_FOUND', 'Schedule not found');
+      return manageWebhooks((host) => host.restoreEndpoint(schedule));
+    });
+  });
 
   /** 地址和密钥只在任务所在电脑管理；两个通道都不在 Device Link 白名单内。 */
   const withWebhookHost = <T>(id: unknown, run: (host: ScheduleWebhookHost, schedule: Schedule) => Promise<T>) => {

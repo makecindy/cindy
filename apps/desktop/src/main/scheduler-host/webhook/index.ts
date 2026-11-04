@@ -63,7 +63,7 @@ export interface ScheduleWebhookStatus {
   ignored: number;
   /** 这台电脑到服务器的长连接是否在线。 */
   connected?: boolean;
-  problem?: 'limit' | 'failed' | 'suspended' | 'quota';
+  problem?: 'limit' | 'failed' | 'suspended' | 'quota' | 'released';
   /** 今天的 Webhook 接收次数已用完时才有。 */
   quotaLimit?: number;
   quotaResetAt?: number;
@@ -154,6 +154,7 @@ export class ScheduleWebhookHost {
       ? new ScheduleWebhookRemote({
           ...options.remote,
           onBatch: (batch) => this.acceptBatch(batch),
+          onReleased: (id) => this.queue.forget(id),
           ...(options.onStatusChanged ? { onChanged: options.onStatusChanged } : {}),
           ...(options.onQuotaExhausted ? { onQuotaExhausted: options.onQuotaExhausted } : {}),
         })
@@ -163,7 +164,16 @@ export class ScheduleWebhookHost {
       save: async (state) => writeAtomically(dataPath('state.json'), JSON.stringify(state)),
       getSchedule: (id) => scheduler.get(id),
       isBusy: (id) => scheduler.getInflightCount(id) > 0,
-      fire: (id, webhook) => scheduler.runNow(id, { deferToCaller: true, webhook }),
+      fire: async (id, webhook) => {
+        if (this.remote && !this.options.local) {
+          // Offline disk backlog must observe account release before starting a new run.
+          await this.remote.refresh();
+          if (this.remote.problem(id) === 'released') return {};
+          if (!this.remote.canDeliver(id)) return { deferred: true };
+        }
+        if (this.stopped) return { deferred: true };
+        return scheduler.runNow(id, { deferToCaller: true, webhook });
+      },
       now: () => Date.now(),
       onError: (message, detail) => logger.warn?.(`[schedule-webhook] ${message}`, detail),
     });
@@ -221,9 +231,36 @@ export class ScheduleWebhookHost {
   }
 
   /** 登录状态变化：登录后恢复接收，退出后暂停，任务配置都不动。 */
-  authChanged(): void {
+  authChanged(ownerChanged = false): void {
     if (this.options.local || this.stopped) return;
+    if (ownerChanged) this.remote?.pause();
     this.onChanged();
+  }
+
+  async accountOverview() {
+    if (this.receiver() !== 'cloud' || !this.remote) throw new Error('WEBHOOK_ACCOUNT_REQUIRED');
+    const schedules = await this.scheduler.list();
+    const overview = await this.remote.accountOverview();
+    return { ...overview, endpoints: overview.endpoints.map((endpoint) => ({
+      ...endpoint,
+      scheduleName: endpoint.currentDevice
+        ? schedules.find((schedule) => schedule.id === endpoint.scheduleId)?.name ?? endpoint.scheduleName
+        : endpoint.scheduleName,
+    })) };
+  }
+
+  async releaseEndpoint(id: string): Promise<void> {
+    if (this.receiver() !== 'cloud' || !this.remote) throw new Error('WEBHOOK_ACCOUNT_REQUIRED');
+    await this.remote.releaseEndpoint(id);
+  }
+
+  async restoreEndpoint(schedule: Schedule): Promise<void> {
+    if (!schedule.webhookTrigger || this.receiver() !== 'cloud' || !this.remote) throw new Error('WEBHOOK_ACCOUNT_REQUIRED');
+    await this.remote.restoreEndpoint(schedule.id);
+  }
+
+  async refreshStatus(): Promise<void> {
+    if (this.receiver() === 'cloud') await this.remote?.refresh();
   }
 
   status(schedule: Schedule): ScheduleWebhookStatus | null {
@@ -246,6 +283,7 @@ export class ScheduleWebhookHost {
     const quota = this.remote.quota();
     const problem = this.remote.isSuspended() || view?.status === 'suspended'
       ? 'suspended'
+      : this.remote.problem(schedule.id) === 'released' ? 'released'
       : quota ? 'quota' : this.remote.problem(schedule.id);
     return {
       receiver,
@@ -342,6 +380,7 @@ export class ScheduleWebhookHost {
 
   /** 服务器已验签并筛选过；这里按当前配置再筛一次，配置可能刚改过。 */
   private async acceptBatch(batch: RemoteWebhookBatch): Promise<void> {
+    if (this.remote?.problem(batch.scheduleId) === 'released') return;
     const schedule = [...this.byEndpoint.values()].find((candidate) => candidate.id === batch.scheduleId);
     if (!schedule?.webhookTrigger) return;
     let queued = false;

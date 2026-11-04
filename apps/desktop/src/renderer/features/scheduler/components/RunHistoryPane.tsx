@@ -300,23 +300,24 @@ export function RunHistoryPane({
         </div>
       </header>
 
-      {/* Recent runs label —— 跟下面的列表区一起挂载/卸载，避免数字 0→N 跳变。
-          count 与逐 run 卡片数量一致；持续会话也不再按 sessionId 折叠。 */}
-      {s.webhookTrigger && <WebhookTriggerPanel schedule={s} />}
+      {/* 连接引导与执行结果一起滚动，较小窗口仍能看完密钥和测试步骤。 */}
+      <div className="min-h-0 flex-1 overflow-y-auto px-6 pb-6">
+        {s.webhookTrigger && <WebhookTriggerPanel key={s.id} schedule={s} />}
 
-      {hasLoaded && (
-        <div className="px-6 pb-2 pt-4 text-10 font-medium tracking-[0.6px] text-[var(--cmd-palette-item-meta)]">
-          {t('scheduler.detail.recentRuns', { count: runs.length })}
-        </div>
-      )}
+        {hasLoaded && (
+          <div className="pb-3 pt-5 text-13 font-medium text-[var(--text-primary)]">
+            {t('scheduler.detail.recentRuns', { count: runs.length })}
+          </div>
+        )}
 
       {/* Run list 容器：始终挂载占位（保持滚动区高度），内容仅在 hasLoaded 后渲染 */}
-      <div className="min-h-0 flex-1 overflow-y-auto px-6 pb-6">
         {hasLoaded &&
           (isCurrent && error ? (
             <p className="text-xs text-[var(--cmd-palette-item-meta)]">
               {t('scheduler.detail.runsLoadFailed', { error })}
             </p>
+          ) : isCurrent && runs.length === 0 && s.webhookTrigger ? (
+            <p className="pb-4 text-12 leading-relaxed text-[var(--text-secondary)]">{t('scheduler.webhook.noRunsHint')}</p>
           ) : isCurrent && runs.length === 0 ? (
             <div className="flex h-full items-center justify-center">
               <div className="flex flex-col items-center gap-2 py-12 text-center">

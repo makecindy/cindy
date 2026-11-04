@@ -3,6 +3,7 @@ import { app, BrowserWindow, Notification } from 'electron';
 import type { Scheduler } from '@cindy/maker-scheduler';
 import { ScheduleWebhookHost, type ScheduleWebhookReceiver } from './index.js';
 import type { RemoteWebhookQuota } from './remote.js';
+import { deviceName } from '../../device-link/deviceName.js';
 
 type Logger = ConstructorParameters<typeof ScheduleWebhookHost>[1];
 
@@ -63,6 +64,7 @@ export async function startScheduleWebhooks(scheduler: Scheduler, logger: Logger
       });
     },
     remote: {
+      deviceName,
       isSignedIn,
       baseUrl: () => getClientEndpoint('webhookApiBaseUrl'),
       getAccessToken: async () => {
@@ -79,7 +81,12 @@ export async function startScheduleWebhooks(scheduler: Scheduler, logger: Logger
     },
   });
   host = next;
-  stopWatchingAuth = authManager.onAuthStateChange(() => next.authChanged());
+  let ownerGeneration = authManager.getAuthState().ownerGeneration;
+  stopWatchingAuth = authManager.onAuthStateChange((state) => {
+    const changed = ownerGeneration !== state.ownerGeneration || !state.isAuthenticated;
+    ownerGeneration = state.ownerGeneration;
+    next.authChanged(changed);
+  });
   await next.start();
 }
 
