@@ -44,8 +44,29 @@ export default {
         teammateActivity: { phase: 'running' },
       }] },
     },
+    'running-preview-parity': {
+      about: 'Local, remote and merged Cindy progress match the group breathing icon and orange text',
+      data: {
+        profiles: [{ ...profiles[0], id: 'cindy-default', templateId: 'cindy', avatar: 'cindy://avatar/preset/cindy', sessions: [{ id: 'cindy-chat', kind: 'chat', role: 'canonical' }] }, { ...profiles[1], avatar: 'cindy://avatar/preset/dash' }],
+        activities: [['cindy-chat', { phase: 'running', sessionId: 'cindy-chat' }], ['chat-1', { phase: 'running', sessionId: 'chat-1' }]],
+        remoteBots: [{ id: 'remote-writer', name: 'Remote Writer', deviceId: 'studio', deviceName: 'Studio', avatar: 'cindy://avatar/preset/lizi', avatarColor: 'violet', online: true, activityAt: 1, teammateActivity: { phase: 'running' } }],
+        route: '/bots/cindy-default',
+        groups: [{ id: 'running-group', name: '正在协作的群', replyMode: 'all', speakingMode: 'auto', members: [{ botId: 'dash', name: 'Dash', avatar: 'cindy://avatar/preset/dash', avatarColor: 'violet', status: 'active' }], organizerBotId: 'dash', projectDir: null, speakingBotIds: ['dash'], planningBotId: null, openPlan: null, teammateActivity: { phase: 'running' }, createdAt: 1, updatedAt: 1 }],
+      },
+    },
+    'completed-group-unread': {
+      about: 'Completed unread uses only green points; ordinary unread uses an expanded gray count and collapsed blue point',
+      data: { profiles: [], remoteBots: [], route: '/bots', groups: ['完成未读', '普通未读'].map((name, index) => ({
+        id: `completed-${index}`, name, replyMode: 'all', speakingMode: 'auto',
+        members: ['dash', 'lizi'].map(preset => ({ botId: preset, name: preset, avatar: `cindy://avatar/preset/${preset}`, avatarColor: 'violet', status: 'active' })),
+        organizerBotId: 'dash', projectDir: null, speakingBotIds: [], planningBotId: null, openPlan: null,
+        teammateActivity: { phase: index === 0 ? 'completed' : 'idle' },
+        lastMessage: { authorKind: index === 0 ? 'bot' : 'user', isSelf: false, authorName: index === 0 ? 'Dash' : 'Alex', preview: index === 0 ? '报告已整理好，等你查看' : '今天的讨论有新消息', createdAt: Date.now() - (index + 1) * 60000 },
+        serverUnread: { count: index === 0 ? 3 : 12, mentioned: false }, createdAt: 1, updatedAt: Date.now() - (index + 1) * 60000,
+      })) },
+    },
     'message-kinds': {
-      about: 'Bot result green, ordinary group unread count, group mention blue; execution states retain priority',
+      about: 'Bot result green, ordinary group unread count, group mention blue count; execution states retain priority',
       data: {
         profiles: [{ ...profiles[0], name: 'Cindy', avatar: 'cindy://avatar/preset/cindy', lastMessageAt: Date.now(), lastMessageRole: 'assistant', lastMessagePreview: '报告已整理好，等你查看' }],
         unread: { 'mate-1': 1 }, remoteBots: [], route: '/bots/groups/attention-1',
@@ -107,7 +128,7 @@ export default {
     },
     states: {
       about: 'Shared solid-dot states in expanded rows and collapsed overflow',
-      data: { profiles: profiles.slice(0, 5).map((bot, index) => ({ ...bot,
+      data: { profiles: profiles.slice(0, 5).map((bot, index) => ({ ...bot, needsAttention: index === 1,
         lastMessageAt: Date.now() - index * 60_000,
         avatar: 'cindy://avatar/preset/cindy', lastMessagePreview: ['Working', 'Waiting', 'Finished', 'New message', 'Error'][index] })),
         remoteBots: [], route: '/bots/mate-2', unread: { 'mate-3': 1, 'mate-4': 1 },
@@ -153,8 +174,8 @@ export default {
     }])),
     ...Object.fromEntries([true, false].map(withMentions => [withMentions ? 'collapsed-mention' : 'collapsed-plain', {
       about: withMentions
-        ? 'Collapsed strip: running stays orange, group mentions blue, ordinary group unread quiet'
-        : 'Collapsed strip: ordinary group unread stays quiet and selection uses an outline',
+        ? 'Collapsed strip: running stays orange, group mentions blue, ordinary group unread blue'
+        : 'Collapsed strip: ordinary group unread stays blue and selection uses an outline',
       // Real preset portraits and a selected group, so captures match the shipped strip.
       data: { profiles: profiles.slice(0, 2).map((bot, index) => ({ ...bot, avatar: `cindy://avatar/preset/${['dash', 'lizi'][index]}` })),
         remoteBots: [], route: '/bots/groups/group-0', groups: ['周末出游', '设计评审', '读书会'].map((name, index) => ({
@@ -200,19 +221,76 @@ export default {
       await ui.capture('collapsed-remote-running-snapshot');
       return;
     }
+    if (ui.case === 'running-preview-parity') {
+      const expand = page.getByRole('button', { name: /Show all|显示全部|查看全部/ });
+      if (await expand.count()) await expand.click();
+      const previews = page.locator('[data-teammate-running-preview]');
+      assert.equal(await previews.count(), 3);
+      // The screenshot runner defaults to reduced motion. Verify both modes explicitly.
+      for (const preview of await previews.all()) {
+        assert.equal(await preview.locator('.session-status-breathing').evaluate(node => getComputedStyle(node).animationName), 'none');
+      }
+      await page.emulateMedia({ colorScheme: ui.theme, reducedMotion: 'no-preference' });
+      const groupAnimation = await page.locator('[data-testid="bot-group-running"] .session-status-breathing').evaluate(node => getComputedStyle(node).animationName);
+      assert.notEqual(groupAnimation, 'none');
+      const groupColor = await page.locator('[data-testid="bot-group-running"]').evaluate(node => getComputedStyle(node).color);
+      for (const preview of await previews.all()) {
+        assert.equal(await preview.evaluate(node => getComputedStyle(node).color), groupColor);
+        const icon = preview.locator('.session-status-breathing');
+        assert.equal(await icon.evaluate(node => getComputedStyle(node).animationName), groupAnimation);
+        assert.equal(await icon.locator('svg').getAttribute('width'), '11');
+      }
+      assert.equal(await page.locator('[data-teammate-row-status] [data-teammate-status="running"]').count(), 0);
+      const icon = previews.first().locator('.session-status-breathing');
+      const before = await icon.evaluate(node => getComputedStyle(node).opacity);
+      await page.waitForTimeout(250);
+      assert.notEqual(await icon.evaluate(node => getComputedStyle(node).opacity), before, 'the running icon must actually breathe');
+      await page.emulateMedia({ colorScheme: ui.theme, reducedMotion: 'reduce' });
+      await ui.capture('expanded-running-parity');
+      return;
+    }
+    const statusAlignment = await page.locator('[data-teammate-row-status]').evaluateAll(nodes => nodes.map(node => {
+      let container = node.parentElement;
+      while (container && !container.querySelector('.text-12.leading-4')) container = container.parentElement;
+      const subtitle = container?.querySelector('.text-12.leading-4');
+      if (!subtitle) return null;
+      const mark = node.getBoundingClientRect(); const text = subtitle.getBoundingClientRect();
+      return { offset: mark.y + mark.height / 2 - text.y - text.height / 2, rowHeight: node.parentElement.getBoundingClientRect().height };
+    }).filter(Boolean));
+    assert.ok(statusAlignment.every(item => Math.abs(item.offset) <= 0.5), `Status alignment: ${JSON.stringify(statusAlignment)}`);
+    if (ui.case === 'completed-group-unread') {
+      const done = page.locator('[data-bot-group-id="completed-0"]');
+      assert.equal(await done.locator('[data-teammate-unread-count]').count(), 0);
+      const point = done.locator('[data-teammate-row-status] [data-teammate-status="done"] > span');
+      assert.equal(await point.evaluate(node => node.style.backgroundColor), 'var(--card-status-done)');
+      assert.equal(await done.locator('[data-teammate-status]').count(), 1);
+      const plain = page.locator('[data-bot-group-id="completed-1"]');
+      assert.equal(await plain.locator('[data-teammate-unread-count]').innerText(), '12');
+      assert.equal(await plain.locator('[data-teammate-status]').count(), 0);
+      await ui.capture('expanded-completed-and-ordinary');
+      await page.getByRole('button', { name: await ui.t('bots.title'), exact: true }).click();
+      const avatar = page.getByRole('button', { name: /^完成未读 ·/ });
+      assert.equal(await avatar.locator('[data-teammate-status="done"] > span').evaluate(node => node.style.backgroundColor), 'var(--card-status-done)');
+      assert.equal(await page.getByRole('button', { name: /^普通未读 ·/ }).locator('[data-teammate-status] > span').evaluate(node => node.style.backgroundColor), 'var(--bot-unread-bg)');
+      await ui.capture('collapsed-completed-and-ordinary');
+      return;
+    }
     if (ui.case === 'message-kinds') {
       const expand = page.getByRole('button', { name: /Show all|显示全部|查看全部/ });
       if (await expand.count()) await expand.click();
       const plain = page.locator('[data-bot-group-id="attention-0"]');
       assert.equal(await plain.locator('[data-teammate-unread-count]').innerText(), '12');
-      const mention = page.locator('[data-bot-group-id="attention-1"] [data-teammate-mention] span');
-      assert.equal(await mention.evaluate(node => node.style.backgroundColor), 'var(--bot-unread-bg)');
+      const mention = page.locator('[data-bot-group-id="attention-1"] [data-teammate-unread-count] > span');
+      assert.equal(await mention.innerText(), '2');
+      assert.equal(await mention.evaluate(node => getComputedStyle(node).backgroundColor), await mention.evaluate(node => { const probe = document.createElement('span'); probe.style.backgroundColor = 'var(--bot-unread-bg)'; node.appendChild(probe); const color = getComputedStyle(probe).backgroundColor; probe.remove(); return color; }));
+      assert.equal(await page.locator('[data-bot-group-id="attention-1"] [data-teammate-status]').count(), 0);
       assert.equal(await page.locator('[data-bot-group-id="attention-2"] [data-teammate-status]').count(), 0);
+      assert.equal(await page.locator('[data-bot-group-id="attention-2"] [data-teammate-unread-count]').innerText(), '2');
       assert.equal(await page.locator('[data-bot-group-id="attention-3"] [data-teammate-status="error"]').count(), 1);
       await ui.capture('expanded-message-kinds');
       await page.getByRole('button', { name: await ui.t('bots.title'), exact: true }).click();
       const ordinary = page.getByRole('button', { name: /^普通群消息 ·/ });
-      assert.equal(await ordinary.locator('[data-teammate-status]').count(), 0);
+      assert.equal(await ordinary.locator('[data-teammate-status] > span').evaluate(node => node.style.backgroundColor), 'var(--bot-unread-bg)');
       assert.equal(await page.locator('[data-teammate-mention]:visible').count(), 3);
       await ui.capture('collapsed-message-kinds');
       return;

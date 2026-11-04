@@ -268,6 +268,7 @@ describe('one Cindy entry across devices', () => {
     expect(screen.getByText('ccAgent.agentStatus.processing')).toBeTruthy();
     expect(screen.queryByText('Local preview')).toBeNull();
     expect(row.querySelector('[data-teammate-status="running"]')).toBeNull();
+    expect(row.querySelector('[data-teammate-running-preview] .session-status-breathing')).not.toBeNull();
     fireEvent.click(screen.getByRole('button', { name: 'Cindy · bots.devicePicker.local' }));
     expect(mocks.navigate).toHaveBeenCalledWith('/bots/cindy-default');
 
@@ -275,6 +276,7 @@ describe('one Cindy entry across devices', () => {
     view.rerender(<TeammatesSection />);
     expect(screen.getByText('Local preview')).toBeTruthy();
     expect(screen.queryByText('ccAgent.agentStatus.processing')).toBeNull();
+    expect(row.querySelector('[data-teammate-running-preview]')).toBeNull();
   });
 
   // The selected remote Cindy can retain only its running snapshot after refresh.
@@ -376,6 +378,7 @@ describe('teammate host labels', () => {
     const row = working.closest('button')!;
     expect(screen.queryByText('Previous reply')).toBeNull();
     expect(row.querySelector('[data-teammate-status="running"]')).toBeNull();
+    expect(row.querySelector('[data-teammate-running-preview] .session-status-breathing')).not.toBeNull();
     fireEvent.click(row);
     expect(mocks.navigate).toHaveBeenCalledWith('/bots/remote/studio/remote-bot');
     mocks.remoteBots = mocks.remoteBots.map(bot => ({ ...bot, teammateActivity: { phase: 'idle' } }));
@@ -585,16 +588,37 @@ describe('TeammatesSection header', () => {
     expect(view.container.querySelector('[data-teammate-status]')).toBeNull();
   });
 
-  it('keeps an error ahead of a pending decision, even after read acknowledgement', async () => {
+  it('keeps a pending decision ahead of an error like the shared resolver, even after read acknowledgement', async () => {
     mocks.profiles = [{ ...bot({ id: 'bot-1', name: 'Writer' }), needsAttention: true }];
     mocks.unread = { 'bot-1': 1 };
     mocks.islandActivity = new Map([['bot-1-chat', { sessionId: 'bot-1-chat', phase: 'needs-interaction' }]]);
     const view = await renderSidebar();
-    expect(view.container.querySelector('[data-teammate-status="error"]')).not.toBeNull();
+    expect(view.container.querySelector('[data-teammate-status="awaiting"]')).not.toBeNull();
     mocks.unread = {};
     view.rerender(<TeammatesSection />);
-    expect(view.container.querySelector('[data-teammate-status="error"]')).not.toBeNull();
-    expect(view.container.querySelector('[data-teammate-status="awaiting"]')).toBeNull();
+    expect(view.container.querySelector('[data-teammate-status="awaiting"]')).not.toBeNull();
+    expect(view.container.querySelector('[data-teammate-status="error"]')).toBeNull();
+  });
+
+  it('keeps pending attention ahead of errors in the collapsed overflow', async () => {
+    const original = globalThis.ResizeObserver;
+    globalThis.ResizeObserver = class {
+      constructor(private readonly callback: ResizeObserverCallback) {}
+      observe() { this.callback([{ contentRect: { width: 48 } } as ResizeObserverEntry], this as unknown as ResizeObserver); }
+      disconnect() {}
+      unobserve() {}
+    } as unknown as typeof ResizeObserver;
+    try {
+      mocks.profiles = [bot({ id: 'waiting', name: 'Waiting' }), bot({ id: 'failed', name: 'Failed', needsAttention: true })];
+      mocks.islandActivity = new Map([['waiting-chat', { sessionId: 'waiting-chat', phase: 'needs-interaction' }]]);
+      await renderSidebar();
+      fireEvent.click(screen.getByRole('button', { name: 'bots.title' }));
+      const overflow = screen.getByRole('button', { name: 'bots.list.sectionExpand · +2' });
+      expect(overflow.querySelector('[data-teammate-status="awaiting"]')).not.toBeNull();
+      expect(overflow.querySelector('[data-teammate-status="error"]')).toBeNull();
+    } finally {
+      globalThis.ResizeObserver = original;
+    }
   });
 
   it('leaves session notifications to the task sidebar', async () => {
@@ -653,17 +677,17 @@ describe('TeammatesSection 「正在输入…」', () => {
     expect(view.container.textContent).toContain('Delivery steward');
   });
 
-  it('是斜体三级色的过程说明,即使有未读也不跟着提到一级', async () => {
+  it('uses the same orange breathing indicator as groups while running', async () => {
     mocks.profiles = [bot({ id: 'bot-1', name: 'PR steward' })];
     mocks.unread = { 'bot-1': 4 };
     mocks.islandActivity = new Map([['bot-1-chat', { sessionId: 'bot-1-chat', phase: 'running' }]]);
     await renderSidebar();
 
-    const line = screen.getByText('ccAgent.agentStatus.processing').closest('span.italic') as HTMLElement;
+    const line = screen.getByText('ccAgent.agentStatus.processing').closest('[data-teammate-running-preview]') as HTMLElement;
     expect(line).toBeTruthy();
-    expect(line?.className).toContain('italic');
-    expect(line?.className).toContain('text-[var(--sidebar-list-muted)]');
-    expect(line?.className).not.toContain('font-medium');
+    expect(line.className).toContain('text-[var(--status-bar-accent)]');
+    expect(line.querySelector('.session-status-breathing svg')).not.toBeNull();
+    expect(line.closest('.italic')).toBeNull();
   });
 });
 

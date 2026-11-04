@@ -58,13 +58,13 @@ export default {
       assert.equal(await unread.count(), 1, 'remote computer exposes one unread indicator');
       const colors = await unread.evaluate(node => {
         const probe = document.createElement('span');
-        probe.style.backgroundColor = 'var(--card-status-done)';
+        probe.style.backgroundColor = 'var(--bot-unread-bg)';
         node.append(probe);
         const result = [getComputedStyle(node).backgroundColor, getComputedStyle(probe).backgroundColor];
         probe.remove();
         return result;
       });
-      assert.equal(colors[0], colors[1], 'computer unread uses the shared completion color');
+      assert.equal(colors[0], colors[1], 'computer unread retains the production blue');
     }
     if (ui.case === 'new') {
       assert.equal(await page.getByTestId('bot-glance-todo').count(), 0, 'no todo rows');

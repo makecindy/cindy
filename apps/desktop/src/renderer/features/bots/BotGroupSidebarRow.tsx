@@ -218,7 +218,10 @@ export function BotGroupSidebarRow({
           <span className="min-w-0 truncate text-14 leading-5" title={group.name}>{group.name}</span>
           {group.archived && <span className={cn('shrink-0 text-11 leading-4', mutedClass)}>{t('bots.archived')}</span>}
         </span>
-        <span className="flex min-w-0 items-center gap-2">{renderSubtitle(group, mutedClass)}</span>
+        <span className="flex min-w-0 items-center gap-2">
+          {renderSubtitle(group, mutedClass)}
+          <TeammateRowStatus status={groupTeammateStatus(group, bots, islandActivity, unread > 0)} groupUnread={unread} mentioned={unread > 0 && group.serverUnread?.mentioned === true} />
+        </span>
       </span>
       <span
         data-teammate-timestamp
@@ -230,7 +233,6 @@ export function BotGroupSidebarRow({
         {timestamp}
         <span aria-hidden className="mt-1 flex items-center justify-end gap-1" />
       </span>
-      <TeammateRowStatus status={groupTeammateStatus(group, bots, islandActivity, unread > 0)} groupUnread={unread} mentioned={unread > 0 && group.serverUnread?.mentioned === true} />
     </button>
     {children}
     </div>

@@ -2,6 +2,7 @@ import { useTranslation } from 'react-i18next';
 import { Select } from '@/components/ui/select';
 import { cn } from '@/lib/utils';
 import type { CindyDeviceOption } from './cindyDeviceRoster';
+import { formatBotUnreadBadge } from './botListDisplay';
 import { isBotKnownOffline } from './BotConnectionStatus';
 
 /** Device menu for the single sidebar Cindy entry (the chat header lists computers in 近况). */
@@ -29,7 +30,7 @@ export function CindyDevicePicker({
         otherUnread ? (
           <span
             aria-label={t('bots.devicePicker.otherUnread')}
-            className="size-1.5 shrink-0 rounded-full bg-[var(--card-status-done)]"
+            className="size-1.5 shrink-0 rounded-full bg-[var(--bot-unread-bg)]"
           />
         ) : null
       }
@@ -51,10 +52,19 @@ export function CindyDevicePicker({
                   </span>
                 ) : null}
                 {option.unread ? (
-                  <span
-                    aria-label={t('bots.devicePicker.unread')}
-                    className="size-1.5 shrink-0 rounded-full bg-[var(--card-status-done)]"
-                  />
+                  option.unreadCount ? (
+                    <span
+                      aria-label={t('bots.list.unread', { count: option.unreadCount })}
+                      className="flex h-4 min-w-4 shrink-0 items-center justify-center rounded-full bg-[var(--bot-unread-bg)] px-1 text-10 text-[var(--bot-unread-fg)]"
+                    >
+                      {formatBotUnreadBadge(option.unreadCount)}
+                    </span>
+                  ) : (
+                    <span
+                      aria-label={t('bots.devicePicker.unread')}
+                      className="size-1.5 shrink-0 rounded-full bg-[var(--bot-unread-bg)]"
+                    />
+                  )
                 ) : null}
               </>
             ) : undefined,

@@ -128,7 +128,10 @@ it.each([
         ).toBe(offline);
       }
       if (unreadCount > 0) {
-        const label = en.bots.devicePicker.unread;
+        const label =
+          unreadCount > 1
+            ? i18n.t('bots.list.unread', { count: unreadCount })
+            : en.bots.devicePicker.unread;
         expect(within(option).getByLabelText(label)).toBeTruthy();
       } else {
         expect(within(option).queryByLabelText(en.bots.devicePicker.unread)).toBeNull();
@@ -186,7 +189,7 @@ it.each([true, false])(
       selected ? 'bg-sidebar-item-active' : 'text-[var(--sidebar-nav-text)]',
     );
     const trigger = screen.getByRole('combobox');
-    // Preserve main's 24px device picker click/focus target.
+    // The compact row must retain the picker's 24px click/focus target.
     expect(trigger.className.split(/\s+/)).toContain('h-6');
     expect(trigger.className).toContain('text-inherit');
     expect(trigger.className).toContain('[--button-face-bg:transparent]');

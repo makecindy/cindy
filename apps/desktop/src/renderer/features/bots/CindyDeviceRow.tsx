@@ -4,7 +4,7 @@ import { Pin } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import { cn } from '@/lib/utils';
 import { BotAvatar } from './BotAvatar';
-import { TeammateRowStatus } from './TeammateStatusDot';
+import { TeammateRowStatus, TeammateRunningPreview } from './TeammateStatusDot';
 import type { TeammateStatus } from '@cindy/maker-shared/teammate-status';
 import { CindyDevicePicker } from './CindyDevicePicker';
 import type { CindyDeviceOption } from './cindyDeviceRoster';
@@ -39,6 +39,7 @@ export function CindyDeviceRow({
 }) {
   const { t } = useTranslation();
   const bot = current.bot;
+  const showRunning = typing && status !== 'awaiting';
   const mutedClass = selected ? 'opacity-70' : 'text-[var(--sidebar-list-muted)]';
   return (
     <div
@@ -91,14 +92,13 @@ export function CindyDeviceRow({
         </span>
         <span data-teammate-timestamp className={cn('min-h-4 min-w-10 justify-self-end whitespace-nowrap text-right text-11 tabular-nums', mutedClass)}>{timestamp}</span>
         <span
-          className={cn('truncate text-12 leading-4', mutedClass, typing && 'italic')}
+          className={cn('min-w-0 truncate text-12 leading-4', !showRunning && mutedClass)}
           title={typeof subtitle === 'string' ? subtitle : undefined}
         >
-          {subtitle}
+          {showRunning ? <TeammateRunningPreview>{subtitle}</TeammateRunningPreview> : subtitle}
         </span>
-        <span aria-hidden className="flex min-h-4 items-center justify-end" />
+        <span className="flex min-h-4 items-center justify-end"><TeammateRowStatus status={status} inline /></span>
       </div>
-      <TeammateRowStatus status={status} />
       {children}
     </div>
   );

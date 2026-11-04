@@ -92,7 +92,8 @@ describe('伙伴行的间距基线', () => {
     );
     const metaColumn = source.slice(start, source.indexOf('</button>', start));
     expect(metaColumn).toContain('flex min-h-4 items-center justify-end');
-    expect(metaColumn).toContain('<TeammateRowStatus status={statusForBot(bot)} />');
+    const subtitle = source.slice(source.indexOf('{showRunning ? <TeammateRunningPreview>{subtitleText}'), start);
+    expect(subtitle).toContain('<TeammateRowStatus status={status} />');
     expect(metaColumn).toContain("cn('min-h-4 text-11 tabular-nums', mutedClass)");
   });
 
