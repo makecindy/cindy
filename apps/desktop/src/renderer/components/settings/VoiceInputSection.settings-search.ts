@@ -142,6 +142,7 @@ export const voiceInputSettings = defineSettings({
         value: 'cindy',
         labelKey: 'settings.voiceInput.serviceSource.options.cindy',
         descriptionKey: 'settings.voiceInput.serviceSource.optionDescriptions.cindy',
+        isVisible: ({ mode }) => mode !== 'local',
       },
       {
         value: 'byok',

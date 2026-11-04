@@ -19,7 +19,13 @@ export interface SettingsSearchEntry {
   textValues?: (context?: SettingsSearchContext) => Record<string, string>;
   keywordKeys?: readonly string[];
   /** Options are rendered by the page and indexed even before that page mounts. */
-  options?: readonly { value: string; labelKey: string; descriptionKey?: string }[];
+  options?: readonly {
+    value: string;
+    labelKey: string;
+    descriptionKey?: string;
+    /** Exclude options hidden by the page's account or platform context. */
+    isVisible?: (context: SettingsSearchContext) => boolean;
+  }[];
   aliases?: readonly string[];
   isVisible?: (context: SettingsSearchContext) => boolean;
 }

@@ -71,6 +71,23 @@ describe('settings discoverability regressions', () => {
     expect(searchSettings(documents, query).map(({ entry }) => entry.id)).toContain(id);
   });
 
+  // Unit regression (PR #8481): option descriptions previously ignored local mode.
+  // Existing cloud queries do not cover hidden options; exercise production search
+  // with local mode + "no keys to configure", using real locales and retaining BYOK.
+  it('does not find cloud-only voice options in local mode', () => {
+    const documents = buildSettingsSearchDocuments(searchI18n.t, TAB_IDS, {
+      ...searchContext, mode: 'local',
+    });
+    for (const lng of ['zh-CN', 'en']) {
+      const hiddenQuery = searchI18n.t('settings.voiceInput.serviceSource.optionDescriptions.cindy', { lng });
+      const visibleQuery = searchI18n.t('settings.voiceInput.serviceSource.optionDescriptions.byok', { lng });
+      expect(searchSettings(documents, hiddenQuery).map(({ entry }) => entry.id))
+        .not.toContain('voiceInput.serviceSource');
+      expect(searchSettings(documents, visibleQuery).map(({ entry }) => entry.id))
+        .toContain('voiceInput.serviceSource');
+    }
+  });
+
   it('respects platform capabilities and requires every Chinese search word', () => {
     const documents = buildSettingsSearchDocuments(searchI18n.t, TAB_IDS, {
       ...searchContext, mode: 'local', supportsBetaUpdateChannel: false,

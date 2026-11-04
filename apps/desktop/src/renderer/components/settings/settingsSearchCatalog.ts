@@ -47,8 +47,10 @@ export function buildSettingsSearchDocuments(
     ];
     const keywordKeys = [
       ...(entry.keywordKeys ?? []),
-      ...(entry.options ?? []).flatMap(({ labelKey, descriptionKey }) =>
-        descriptionKey ? [labelKey, descriptionKey] : [labelKey]),
+      ...(entry.options ?? [])
+        .filter((option) => !option.isVisible || (context !== undefined && option.isVisible(context)))
+        .flatMap(({ labelKey, descriptionKey }) =>
+          descriptionKey ? [labelKey, descriptionKey] : [labelKey]),
     ];
     const searchText = normalizeSettingsSearchText(
       [title, section, category, ...english, ...keywordKeys.flatMap((key) => [text(key), text(key, true)]), ...(entry.descriptionKey ? [text(entry.descriptionKey), text(entry.descriptionKey, true)] : []), ...(entry.aliases ?? [])].join(' '),
