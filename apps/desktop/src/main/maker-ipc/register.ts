@@ -13538,6 +13538,9 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
           message: params.message,
         }),
       });
+      // Chat-only dispatch allocates a queue id; keep the server execution identity
+      // so error recovery can restore the group's full background as well.
+      if (params.clientId?.startsWith(BOT_GROUP_CLIENT_ID_PREFIX)) queued.retrySourceClientId = params.clientId;
       const enqueue = () => inputCoordinator.enqueue(params.targetSessionId, queued, {
         resumeRestorePausedQueue: true,
       });
@@ -13739,6 +13742,12 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     || inputCoordinator.getQueueControlSnapshot(sessionId).pendingQueue.length > 0;
   const botGroupChatDeps: BotGroupChatServiceDeps = {
     chatHistoryStore: (endpoint, human, reader, current) => createSqliteChatHistoryStore(getDbClient(), endpoint, human, reader, current),
+    readLaneContext: (id) => {
+      const session = maker.getSession(id);
+      if (!session || session.getStatus() !== 'active' || !session.sdkSessionId) return null;
+      return { key: JSON.stringify([session.instanceId, session.sdkSessionId, session.agentKind, session.model,
+        getSessionProvider(id), session.getTurnGeneration()]), contextTokens: session.getUsageSnapshot().contextTokens };
+    },
     ensureLane: async (input) => {
       try {
         return await ensureBotGroupLaneSession(input);
