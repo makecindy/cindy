@@ -18,13 +18,21 @@ DS-11 按2026-09-15用户复核意见修订，Cindy亮暗逐项对照与未验�
 
 | 文档 | 内容 | 角色 |
 |---|---|---|
-| [`DESIGN.md`](./DESIGN.md) | 权威视觉规范全文：视觉语言（§1）、颜色（§2）、排版（§3）、组件（§4）、布局（§5）、交互约定与 Motion token（§14）、主题系统与 Token 参考（§10）、CINDY 皮肤族（§15）、登录链路（§16） | **权威正本**（原仓库根文件，根目录 `DESIGN.md` 保留为跳转入口） |
+| [`DESIGN.md`](./DESIGN.md) | 权威视觉规范入口：阅读路由、视觉语言（§1）、颜色（§2）、排版（§3）、组件（§4）、布局（§5）、交互约定与 Motion token（§14）、主题系统与 Token 参考（§10）、CINDY 皮肤族（§15）；已拆出的章节保留标题和跳转 | **权威正本**（原仓库根文件，根目录 `DESIGN.md` 保留为跳转入口） |
+| [`login-flow.md`](./login-flow.md) | 登录链路（§16，编号不变），含生成的登录色表 | `DESIGN.md` 专题，规范效力相同 |
+| [`message-link-clickability.md`](./message-link-clickability.md) | 聊天正文的链接操作与可点性信号（§14.5） | `DESIGN.md` 专题，规范效力相同 |
+| [`container-transform.md`](./container-transform.md) | 输入框工具栏的容器形变与工具栏分档（§14.4） | `DESIGN.md` 专题，规范效力相同 |
+| [`wallpaper.md`](./wallpaper.md) | 应用壁纸（§2） | `DESIGN.md` 专题，规范效力相同 |
+| [`macos-menu-bar-quota.md`](./macos-menu-bar-quota.md) | macOS 菜单栏额度面板（§4） | `DESIGN.md` 专题，规范效力相同 |
+| [`attachment-preview.md`](./attachment-preview.md) | 附件预览的结构与交互 | 专题补充 |
+| [`usage-history-charts.md`](./usage-history-charts.md) | 用量历史图表与日期选择 | 专题补充 |
 | [`design-governance.md`](./design-governance.md) | 设计系统治理合同：管道与记账（§1.1）、四种真相边界、Token 层级与现行 §10 三档的映射、兼容红线、工具单选、两级证据合同、PR 风险分类、治理接线纪律、待裁决登记、存量门禁处置表、实施路线图、已知边界（§13） | **治理正本**（管流程；视觉规则仍以 `DESIGN.md` 为准） |
 | [`design-inventory.md`](./design-inventory.md) | Cindy Desktop / Mobile 生产可达 UI 台账：GENERATED 登记事实（稳定 ID / 平台 / 标题 / 入口 / 路由覆盖）+ 人工迁移状态；组件、样式来源与 Token / 裸值统计不入库 | **台账正本**（schema 见 [`design-governance.md`](./design-governance.md) §2.1；生成 `pnpm design:inventory`，校验 `pnpm check:design-inventory`，统计报告 `pnpm design:inventory:report`） |
 | [`ios-native-design.md`](./ios-native-design.md) | iOS 导航、原生面板与分组、玻璃材质、任务详情、紧凑搜索及触控验收；附当前迁移审查 | 平台补充（由 DESIGN Mobile 节授权） |
 | [Token README](../../packages/design-tokens/README.md) | Desktop DTCG 生产生成、维护/回退、实际接管与保留项，Mobile 待新方案共同确认 | **Token 合同入口**（构建期接管 Desktop，运行时只读生成子集） |
-| [`token-decision-table.md`](./token-decision-table.md) | 登录链路色值 / 尺寸 → token 决策记录（新增 / 复用 / 豁免的判定理由 + 各 wave 增补台账） | 决策记录（现行 token 清单与值以 `DESIGN.md §16.1` + `colors.ts` 为准） |
+| [`token-decision-table.md`](./token-decision-table.md) | 登录链路色值 / 尺寸 → token 决策记录（新增 / 复用 / 豁免的判定理由 + 各 wave 增补台账） | 决策记录（现行 token 清单与值以 `login-flow.md §16.1` + `colors.ts` 为准） |
 | [`design-decision-log.md`](./design-decision-log.md) | 全局设计决策史台账：被推翻的方案、勘误过程、backlog（已收录原 `DESIGN.md §13` G1–G4 归档与 §15 决策史全量） | 决策台账（只增不改；与 `DESIGN.md` 冲突时以 `DESIGN.md` 为准） |
+| [`desktop-bot-delegation-status.md`](./desktop-bot-delegation-status.md) | 桌面 Bot 与群委派卡片状态裁决（2026-11-03）：状态色、呼吸动效与范围 | Desktop 裁决记录 |
 | [`README.md`](./README.md) | 本目录使用规则 | 说明 |
 | [`gamepad-silhouette-authoring.md`](./gamepad-silhouette-authoring.md) | 设置页手柄线稿交稿约定：画板网格、长弧画法、外壳/按键分家、热区与按下填充；附 Xbox Series 现稿 | 作者交稿约定 |
 | [`xbox-series-gamepad.silhouette.svg`](./xbox-series-gamepad.silhouette.svg) | 设置页 Xbox Series 线稿现稿（与 `XboxGamepadLayout.tsx` 同坐标） | 样板图 |
@@ -37,7 +45,7 @@ DS-11 按2026-09-15用户复核意见修订，Cindy亮暗逐项对照与未验�
 
 ## 新贡献者从这里开始
 
-1. 先读 [DESIGN.md](./DESIGN.md) 的适用视觉/组件规则，再读 [治理合同](./design-governance.md) §4 兼容、§6 证据、§7/8 风险与门禁；当前顺序及目标验收见 §12。
+1. 先读 [DESIGN.md](./DESIGN.md) 开头的「阅读路由」和适用规则，再读 [治理合同](./design-governance.md) §4 兼容、§6 证据、§7/8 风险与门禁；当前顺序及目标验收见 §12。
 2. 在 [inventory](./design-inventory.md) 找实际入口、保护合同与人工下一动作；没认领的 owner 仍是 unassigned，按实际工作认领，不能把共享组件已被引用当成整页迁移完成。
 3. 复用现有 [Button](../../apps/desktop/src/renderer/components/ui/button.tsx)、[Input / Textarea](../../apps/desktop/src/renderer/components/ui/input.tsx)；设置旧局部覆盖使用 [SettingsTextInput](../../apps/desktop/src/renderer/components/settings/SettingsTextInput.tsx)。表单字段的 label / hint / 错误组合用 [FormField](../../apps/desktop/src/renderer/components/ui/form-field.tsx)，保存期间的防重复反馈用 Button 的 loading 状态（均已随 DS-6 提供，用法见上方「DS-6 表单贡献入口」）。
 4. 聊天复用 [chatChrome](../../apps/desktop/src/renderer/components/chat/chatChrome.ts) 与 [activityRowChrome](../../apps/desktop/src/renderer/components/chat/activityRowChrome.ts)：共用正文/代码排版、图标动作与行反馈，原调用方保留状态、回调及局部主题 alias。完整场景与局限见 [DS-9 证据](../design-evidence/2026-09-11/ds9-desktop-core.md)。
@@ -52,6 +60,8 @@ DS-11 按2026-09-15用户复核意见修订，Cindy亮暗逐项对照与未验�
 以上仓内入口即可开始贡献；无需访问个人桌面记录。此阅读路径检查不代替 G2 的独立贡献者试用。
 
 ## 版本记录
+
+- **2026-11-04（`DESIGN.md` 拆分专题，纯文档）**：§16 登录链路、§14.5 可点性、§14.4 容器形变、§2 壁纸与 §4 macOS 菜单栏面板移到同目录专题文件；iOS 导航并入 `ios-native-design.md` §8，手机气泡色、任务首页伙伴区和新建按钮形变并入手机设计指南 §9。正文逐字搬动，原位置保留标题和跳转，章节编号不变；`DESIGN.md` 开头新增「阅读路由」，改 UI 时按路由读取。登录色表的生成目标改为 `login-flow.md`。不改任何规则和界面数值。
 
 - **2026-11-02（台账只保留登记与人工区）**：`design-inventory.md` 的 GENERATED 区块移除可达组件、样式来源与 Token / 裸颜色 / 裸圆角统计，只留 surface ID、平台、标题、生产入口与路由覆盖；统计改由 `pnpm design:inventory:report` 按需输出到 `tmp/`。原因：统计随任意样式改动变化，每个 surface 只占一行，改到同一 surface 的 PR 合并时必然冲突，且只能重跑生成器解决；这项检查也不拦欠账增加。登记检查与人工区不变，拦新增裸色仍由 `check:design-colors` 负责。落点：治理 §2.1 / §9。
 

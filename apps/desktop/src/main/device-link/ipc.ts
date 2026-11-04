@@ -53,6 +53,7 @@ import {
 } from '../../shared/deviceLinkIpc';
 import {
   getDeviceLinkStatus,
+  hasOfflineDirectPath,
   getDeviceLinkConnectionIssue,
   isDeviceLinkStandby,
   getUnresponsiveDeviceIds,
@@ -144,6 +145,8 @@ type DeviceLinkServerDeviceView = Omit<DeviceLinkDeviceView, 'controlEnabled'> &
 
 /** handler 依赖注入面(测试替身用) */
 export interface DeviceLinkIpcDeps {
+  /** Authenticated, already-established data path retained through signaling loss. */
+  hasOfflineDirectPath?(deviceId: string): boolean;
   getState(): DeviceLinkState;
   setEnabled(enabled: boolean): Promise<void>;
   setKeepAwake(enabled: boolean): Promise<void>;
@@ -193,6 +196,7 @@ export interface DeviceLinkIpcDeps {
 
 export function defaultDeps(): DeviceLinkIpcDeps {
   return {
+    hasOfflineDirectPath,
     getState: () => {
       const s = readDeviceLinkSettings();
       return {
@@ -437,13 +441,17 @@ export function handleListDevices(
         latest = latestDeviceListRequest;
         if (latest && latest.sequence > sequence) return latest.promise;
       }
-      return reconcileDeviceNames(
+      const reconciled = reconcileDeviceNames(
         result,
         deps,
         requestEpoch,
         isLatestDirectorySnapshot,
         !isLatestDirectorySnapshot,
       );
+      return {
+        devices: reconciled.devices.map(device => deps.hasOfflineDirectPath?.(device.deviceId)
+          ? { ...device, online: true } : device),
+      };
     },
     (err: unknown) => {
       const latest = latestDeviceListRequest;

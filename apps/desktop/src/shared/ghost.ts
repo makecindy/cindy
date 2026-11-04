@@ -4,7 +4,7 @@ import { parseGhostSecretCheck, type GhostSecretCheckDecl } from '@cindy/plugin-
 import { parseGhostRoutineEvents, type GhostRoutineEvents } from '@cindy/plugin-protocol';
 import { parseGhostModelsNeeds, type GhostModelsNeeds } from '@cindy/plugin-protocol';
 import { parseMailReader } from '@cindy/maker-shared/mail-message';
-import { parsePluginAuthorizationRequest, type PluginAuthorizationRequest, type PluginAuthorizationResult } from '@cindy/device-link';
+import { isPluginModelSelection, parsePluginAuthorizationRequest, type PluginAuthorizationRequest, type PluginAuthorizationResult, type PluginModelSelection } from '@cindy/device-link';
 import {
   type GhostRecommendation,
   GHOST_LOCALES,
@@ -251,6 +251,11 @@ export interface GhostAgentNeeds {
    * 不依赖 tasks,需独立批准(observeCapabilityApproved)。
    */
   observe?: boolean;
+  /**
+   * companions = 只读查看伙伴(含主人其他电脑上的)名单、实时状态、工作阶段、待处理请求摘要与最新回复,
+   * 并在主窗口打开伙伴的任务。不能替用户批准或回答;不依赖 tasks,需独立批准(companionsCapabilityApproved)。
+   */
+  companions?: boolean;
 }
 
 /** 插件随包本地 Node 工作进程使用的 stdio 协议。 */
@@ -1902,6 +1907,8 @@ export interface InstalledGhost {
   approvedAutoTools?: string[];
   /** Independent Host consent for read-only project task observation. */
   observeCapabilityApproved?: true;
+  /** Independent Host consent for reading companions: roster, live status, pending request summaries and latest reply. */
+  companionsCapabilityApproved?: true;
   manifest: GhostManifest;
   /** 安装目录绝对路径(userData/brain/<id> 或 userData/brain/_ns/<org>/<id>)。 */
   dir: string;
@@ -2284,6 +2291,9 @@ export function ghostPermissionItems(manifest: GhostManifest): GhostPermissionIt
     }
     if (manifest.agent?.observe === true) {
       items.unshift({ key: 'agent:observe', kind: 'agent', labelKey: 'agentObserve', detailKey: 'agentObserveDetail' });
+    }
+    if (manifest.agent?.companions === true) {
+      items.unshift({ key: 'agent:companions', kind: 'agent', labelKey: 'agentCompanions', detailKey: 'agentCompanionsDetail' });
     }
     // 后台隐藏任务:独立 key 单列(理由同 schedule —— 并进 agent:tasks 会让更新里
     // 新增 hiddenTasks 时 added 为空,扩权复核拦不住)。排在 agent:tasks 之后。
@@ -4944,15 +4954,16 @@ function validateGhostManifestInput(value: unknown, preserveHistoricalTasks: boo
     if (!preserveHistoricalTasks && agentRaw.observe !== undefined && typeof agentRaw.observe !== 'boolean') {
       return { ok: false, reason: 'agent.observe must be boolean' };
     }
-    if (agentRaw.background !== true && agentRaw.errand !== true && agentRaw.schedule !== true && agentRaw.tasks !== true && agentRaw.observe !== true && Object.keys(unknownDeclarationFields(agentRaw, preserveHistoricalTasks ? ['background', 'errand', 'schedule'] : ['background', 'errand', 'schedule', 'tasks', 'hiddenTasks', 'targets', 'delegation', 'observe'])).length === 0) {
+    if (!preserveHistoricalTasks && agentRaw.companions !== undefined && typeof agentRaw.companions !== 'boolean') return { ok: false, reason: 'agent.companions must be boolean' };
+    if (agentRaw.background !== true && agentRaw.errand !== true && agentRaw.schedule !== true && agentRaw.tasks !== true && agentRaw.observe !== true && agentRaw.companions !== true && Object.keys(unknownDeclarationFields(agentRaw, preserveHistoricalTasks ? ['background', 'errand', 'schedule'] : ['background', 'errand', 'schedule', 'tasks', 'hiddenTasks', 'targets', 'delegation', 'observe', 'companions'])).length === 0) {
       return {
         ok: false,
         reason:
-          'agent 能力详单只有 background: true / errand: true / schedule: true / tasks: true / observe: true 五项加档；仅需用户点击触发时请省略 agent 字段',
+          'agent 能力详单只有 background: true / errand: true / schedule: true / tasks: true / observe: true / companions: true 六项加档；仅需用户点击触发时请省略 agent 字段',
       };
     }
     agent = {
-      ...unknownDeclarationFields(agentRaw, preserveHistoricalTasks ? ['background', 'errand', 'schedule'] : ['background', 'errand', 'schedule', 'tasks', 'hiddenTasks', 'targets', 'delegation', 'observe']),
+      ...unknownDeclarationFields(agentRaw, preserveHistoricalTasks ? ['background', 'errand', 'schedule'] : ['background', 'errand', 'schedule', 'tasks', 'hiddenTasks', 'targets', 'delegation', 'observe', 'companions']),
       ...(agentRaw.background === true ? { background: true } : {}),
       ...(agentRaw.errand === true ? { errand: true } : {}),
       ...(agentRaw.tasks === true ? { tasks: true } : {}),
@@ -4961,6 +4972,7 @@ function validateGhostManifestInput(value: unknown, preserveHistoricalTasks: boo
       ...(agentRaw.tasks === true && agentRaw.hiddenTasks === true ? { hiddenTasks: true } : {}),
       ...(agentRaw.schedule === true ? { schedule: true } : {}),
       ...(agentRaw.observe === true ? { observe: true } : {}),
+      ...(agentRaw.companions === true ? { companions: true } : {}),
     };
   }
 
@@ -7799,6 +7811,59 @@ export function isGhostCardLinkAllowed(url: string): boolean {
  */
 export const GHOST_CARD_SPAWN_SEP = '::sp';
 
+/**
+ * 卡片排在本轮末尾:插件在卡内 div 上标 `data-ghost-placement="turn-end"`,
+ * 宿主把这张卡排到这一轮的最后(「已更改 N 个文件」卡之后),而不是调用发生的位置。
+ * 适合等用户拍板的卡(如「要发 PR 吗」)。只读净化后的 html:净化器只放行这一个值,
+ * 正文里的引号已转义,不会误中。
+ */
+export function isTurnEndGhostCardHtml(html: string): boolean {
+  return html.includes(' data-ghost-placement="turn-end"');
+}
+
+/**
+ * 卡片铺满消息列:插件在卡内 div 上标 `data-ghost-width="full"`,宿主取消默认的 460px 上限,
+ * 与「已更改 N 个文件」等宿主卡同宽。同样只读净化后的 html。
+ */
+export function isFullWidthGhostCardHtml(html: string): boolean {
+  return html.includes(' data-ghost-width="full"');
+}
+
+/**
+ * 卡内模型下拉框的选择:Cindy 的模型组合,另可带 Agent 运行位置 `agentDeviceId`(同账号另一台
+ * 电脑的 deviceId,或分享来的供应商 `share:<id>`;省略 = 插件运行的这台电脑)。只用于卡片下拉框,
+ * 不改 `cindy.pickModel` / `tasks.create` 的路由形状。
+ */
+export type GhostCardModelSelection = PluginModelSelection & { agentDeviceId?: string };
+
+export function isGhostCardModelSelection(value: unknown): value is GhostCardModelSelection {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
+  const { agentDeviceId, ...route } = value as Record<string, unknown>;
+  if (agentDeviceId !== undefined && (typeof agentDeviceId !== 'string' || !agentDeviceId.trim()
+    || agentDeviceId.length > 128 || agentDeviceId === 'local')) return false;
+  return isPluginModelSelection(route);
+}
+
+/**
+ * 卡内模型下拉框:插件在动作按钮上标 `data-ghost-model-select`(值 = 当前模型的 JSON,可空),
+ * 宿主点击时在按钮下方弹出模型选择器,选中结果随 card-action 的 modelSelection 回传。
+ * 净化器把它紧跟在 data-ghost-action 之后输出,这里据此确认该动作确实声明了下拉框。
+ */
+export function ghostCardDeclaresModelSelect(html: string, actionId: string): boolean {
+  return GHOST_CARD_ACTION_ID_RE.test(actionId) &&
+    html.includes(` data-ghost-action="${actionId}" data-ghost-model-select="`);
+}
+
+/**
+ * 卡内图标位:插件在 span / div 上标 `data-ghost-icon="<名字>"`,宿主换成 App 里同一个
+ * Lucide 图标(跟随主题颜色),与 App 其它地方统一。不认识的宿主保留插件写在里面的兜底图形。
+ */
+export const GHOST_CARD_ICONS = ['settings'] as const;
+export type GhostCardIconName = (typeof GHOST_CARD_ICONS)[number];
+export function isGhostCardIconName(value: string): value is GhostCardIconName {
+  return (GHOST_CARD_ICONS as readonly string[]).includes(value);
+}
+
 /** 取衍生卡的根 callId(非衍生卡原样返回)。 */
 export function ghostCardRootCallId(callId: string): string {
   const i = callId.indexOf(GHOST_CARD_SPAWN_SEP);
@@ -7820,6 +7885,12 @@ export const GHOST_CARD_REOPEN_WINDOW_MS = 600_000;
  * 声明忽略。
  */
 export const GHOST_CARD_ID_KEY = 'xdt_card_id';
+
+/**
+ * 卡片声明了排到本轮末尾(isTurnEndGhostCardHtml)时,主机在同一结果里加 `true`。
+ * 手机端据此在列表里把这张卡排到本轮最后——它取卡是异步的,排序时还看不到卡片 html。
+ */
+export const GHOST_CARD_TURN_END_KEY = 'xdt_card_turn_end';
 
 /**
  * notify 槽的提示语气(→ 主机 Toast 的 variant;缺省 'info')。
@@ -8839,6 +8910,12 @@ export type GhostControlPointResult =
 
 
 /**
+ * 下行:伙伴名单或状态变了(cindy.companions.watch 的订阅)。不带内容,逻辑页用 cindy.companions.list 重读。
+ * 与 host-context-changed 一样不是订阅事件(type 不是 'event'),不并入 GhostPipeEventPush。
+ */
+export interface GhostPipeCompanionsChanged { type: 'companions-changed'; subscriptionId: string; seq: number }
+
+/**
  * 下行:主机 → 意识的事件推送(经管子 onHostMessage 到达)。
  * did- 分支带 topic/seq(每意识单调递增,可自查漏收;dropped = 上一段
  * 熄灯期溢出丢弃数);will- 分支带 hookId,意识须在超时窗内回
@@ -8932,6 +9009,11 @@ export type GhostPipeEventPush =
       mailAttachment?: { path: string; filename: string; bytes: number; sha256: string; contentId?: string };
       /** Passive editor update: no user-action token, no Agent continuation. */
       formChange?: boolean;
+      /**
+       * 用户在卡内模型下拉框(data-ghost-model-select)里选中的模型。宿主已核对该动作
+       * 确实声明了下拉框、且这个模型当前可用;别的按钮永远没有此字段。
+       */
+      modelSelection?: GhostCardModelSelection;
       /**
        * 主机铸造的衍生卡位(`<根callId>::sp<序>`,见 GHOST_CARD_SPAWN_SEP)。
        * 对它 card-update = 原卡下方长出新卡(原卡保留,母卡按钮可反复点);

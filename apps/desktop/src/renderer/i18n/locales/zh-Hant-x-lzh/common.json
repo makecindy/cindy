@@ -1907,6 +1907,8 @@
       "add": {
         "title": "增一臺遠方之機",
         "alias": "別號",
+        "aliasHint": "限 1–128 字元，惟英文字母、數字及 . _ @ : - 可用；中文名請填於「顯示之名」。",
+        "aliasInvalid": "別名含不支援字元，或逾 128 字元，請依上例改之。",
         "displayName": "顯示之名",
         "displayNamePlaceholder": "可不填，僅於 Cindy 中顯",
         "hostname": "主機名",
@@ -7540,6 +7542,9 @@
         "agentObserve": "可觀此機案中差事之目與其狀",
         "agentObserveDetail": "可觀已登記之此機案中差事之題、Agent 之類、歸檔與否及其狀（方行、待理、近動之時），並於主窗啟某差事。不能讀訊、謀劃與文件，亦不能遣訊或改差事。",
         "agentObserveRequest": "確認觀差事之權柄",
+        "agentCompanions": "可觀同僚、其狀與近談",
+        "agentCompanionsDetail": "可觀諸同僚（含行於君他機者）之名、簡介、像與其狀（方行、待君理、閒、離線），各同僚所行何類之事（如思慮、施器），待君理之請之文（問、將行之令、策，與對談所見同），及其主對談之近語（至多五十條，君之言與同僚之復，不含施器之程），並於主窗啟同僚之對談。兼得遣訊之許者，可將君於法器所予之答轉致同僚：答問、卻請、議策；許其行事，仍須君於 Cindy 自有之確框親點。不能讀卷，亦不見施器之程與思慮之文。",
+        "agentCompanionsRequest": "確認觀同僚之權柄",
         "agentHiddenTasks": "可立不見於差事錄之背後差事",
         "agentHiddenTasksDetail": "本法器所立之差事，可不現於差事錄、搜尋與告中。君可隨時於法器詳情之「背後差事」中觀之、啟之，或令顯於差事錄；卸除法器時，此等差事將復顯示。",
         "agentErrand": "可立差事、行事並讀結果",
@@ -10218,6 +10223,7 @@
       "continueEditing": "續修"
     },
     "profileSaveFailed": "同僚之設未能存，變更未生效。",
+    "profileSaveOffline": "同僚所在之電腦未能連通，請復連後再存。",
     "modelLabel": "模型",
     "modelUnavailable": "{{model}}（今不可用）",
     "codexAutomaticCompact": "Codex 同僚自能壓縮上下文，/new 亦存當前差事。唯確須從頭始之，方新開差事。",
@@ -10548,6 +10554,11 @@
           "NETWORK_ERROR": "{{name}}不能回覆：網路連線未成。\n請察網路或 Proxy，再遣之。",
           "RUNTIME_TIMEOUT": "{{name}}此番回覆逾時。\n請再遣訊，或擇他可用模型。",
           "RUNTIME_ERROR": "{{name}}此番未能回覆。\n請再遣訊；若仍未成，請察記錄並回報其事。"
+        },
+        "capability": {
+          "GROUP_AUTHORIZATION_REQUIRED": "{{name}} 的工具呼叫未執行：群內授權已失效或不允許此操作。請由夥伴主人在目前群組重新發起。",
+          "GROUP_AUTHORIZATION_UNAVAILABLE": "暫時無法核驗 {{name}} 的群聊授權，這次工具呼叫未執行。請在連線恢復後重試。",
+          "ATTACHMENTS_UNAVAILABLE": "部分附件未交給 {{name}}（下載失敗或數量限制）。請重新傳送這次需要的附件。"
         }
       },
       "settings": {
@@ -10617,7 +10628,8 @@
         "lifecycleUnavailable": "當前伺服器或電腦尚不支此操作。",
         "groupDissolved": "群議已散，仍可覽有權存取之舊訊。",
         "lastOwner": "請先轉讓群主或解散群議，再退出。",
-        "allBotsMentionDisabled": "群主尚未啟 @諸同僚。"
+        "allBotsMentionDisabled": "群主尚未啟 @諸同僚。",
+        "turnAlreadyStarted": "此同伴已啟，不可略過"
       },
       "organizer": "主事",
       "plan": {
@@ -10648,7 +10660,17 @@
         "stepSpoken": "言畢",
         "allTurns_one": "凡 {{count}} 位",
         "allTurns_other": "凡 {{count}} 位",
-        "foldTurns": "收"
+        "foldTurns": "收",
+        "stepQueued": "待啟",
+        "stepExecuting": "行中",
+        "stepSkipped": "已略",
+        "skippingTurn": "略過中…",
+        "queueWaiting": "待君續行",
+        "skipTurnLabel": "略過 {{name}}",
+        "queueEnded": "此輪已終",
+        "talkTitle": "依次陳議",
+        "talkPending": "未始",
+        "skipTurn": "略過"
       },
       "speaking": {
         "planning": "方籌畫…"
@@ -10990,7 +11012,7 @@
         "items": {
           "tasks": {
             "title": "任務",
-            "body": "度何時開後台任務，掌己所開之任務，攜其果歸於言談；亦可至汝他機行事。"
+            "body": "知可掌之任務與可用之機，依汝之命布置、跟進，攜其果歸；跨機行事前，先查所能。"
           },
           "teammates": {
             "title": "聯同伴",
@@ -11005,8 +11027,8 @@
             "body": "記汝所好與所歷，用前先查，有變則更。"
           },
           "self": {
-            "title": "自知",
-            "body": "知己所能，為汝開關諸能；Cindy 之用法（添 Telegram、設 MCP、裝法器），先閱幫助而後行。"
+            "title": "知與設 Cindy",
+            "body": "知 Cindy 之能與用法，依汝之命查改設定；須汝填寫或確認者，於任務中請汝親為。"
           }
         }
       },
@@ -13682,7 +13704,7 @@
       "REMOTE_PROVIDER_UPDATING": "此模型供方之憑證方更新。請稍後再試。",
       "REMOTE_WORKDIR_UNAVAILABLE": "遠端工作目錄今不可用。請確認彼機上之目錄猶在，然後再試。",
       "REMOTE_OPTIMISTIC_SESSION_STATE_UNAVAILABLE": "機端暫不能確知此訊已遣否。請稍後再試，勿重遣同一訊。",
-      "REMOTE_AGENT_UNAVAILABLE": "暫不能連行 Agent 之機。請確認彼機在線且許遠端控制，然後再試。",
+      "REMOTE_AGENT_UNAVAILABLE": "與行 Agent 之機斷連。請再試；若屢見，再確認彼機在線且許遠端控制。",
       "REMOTE_AGENT_PEER_TOO_OLD": "彼機之 Cindy 版本過舊，暫不支援此舉。請先於彼機更新 Cindy。",
       "REMOTE_AGENT_EXPIRED": "此差事於行 Agent 之機上已終。請再遣。",
       "REMOTE_AGENT_NOT_FOUND": "此差事於行 Agent 之機上已終。請再遣。",
@@ -13791,6 +13813,18 @@
       "cancelTitle": "罷候並除此訊"
     },
     "ghostCall": {
+      "prStatus": {
+        "threadsNone": "無待理之意見",
+        "mergeReady": "可合併",
+        "mergeConflict": "有衝突",
+        "mergeBehind": "須同步目標分支",
+        "mergeApproval": "待批",
+        "mergeChanges": "須修改",
+        "mergeWaiting": "待合併",
+        "merged": "已合併",
+        "closed": "已閉",
+        "draft": "草稿"
+      },
       "verb": "呼法器",
       "cardRunning": "法器繪製",
       "cardDone": "已畢",
@@ -13804,6 +13838,7 @@
       "collapseFields": "收",
       "formSyncFailed": "卡之修改尚未同步，請察連線後續修；訊尚未遣。",
       "linkOpenFailed": "連結未能啟",
+      "modelSelectFailed": "模型未易，請復擇",
       "mailPreview": "郵件先覽",
       "mailEnlarge": "放大覽",
       "mailInsertImage": "插入文中",
@@ -15958,7 +15993,17 @@
   },
   "commandPalette": {
     "viewSkillDetails": "觀技藝之詳",
-    "projectSkillNotLoaded": "今之 Pi 差事尚未載此案之 Skill，新差事將自試載之"
+    "projectSkillNotLoaded": "今之 Pi 差事尚未載此案之 Skill，新差事將自試載之",
+    "pluginSkillSetup": {
+      "install": "未納",
+      "enable": "未啟"
+    },
+    "pluginSkills": {
+      "pr": {
+        "install": "發 PR、修 CI 與評審、隨至合併 · 須先納 GitHub 法器",
+        "enable": "發 PR、修 CI 與評審、隨至合併 · 須先啟 GitHub 法器"
+      }
+    }
   },
   "skillhub": {
     "remote": {
@@ -18662,6 +18707,21 @@
     "autoDetail": "主差事與 Worker 之操作，將交 Cindy 自動審批。需人工確認或遭拒時仍會暫停；此非完全存取。此擇存於法器 AI 規制，不改他差事之全域權柄。",
     "autoTaskDetail": "主差事與 Worker 之操作，將交 Cindy 自動審批。需人工確認或遭拒時仍會暫停；此非完全存取。僅改目前差事之權柄，不改法器預設規制。"
   },
+  "pluginCompanionAnswer": {
+    "title": "確許",
+    "planMessage": "令{{companion}}依此策而行乎？",
+    "permissionMessage": {
+      "command": "許{{companion}}行此令乎？",
+      "file-read": "許{{companion}}讀此諸卷乎？",
+      "file-write": "許{{companion}}改此諸卷乎？",
+      "browser": "許{{companion}}於覽器行此一步乎？",
+      "plugin": "許{{companion}}用「{{tool}}」乎？",
+      "tool": "許{{companion}}用 {{tool}} 乎？"
+    },
+    "source": "君於法器「{{plugin}}」擇許，{{appName}} 於此再詢之；許之則同僚續行。",
+    "allow": "許",
+    "cancel": "罷"
+  },
   "groupTools": {
     "authorizationRequired": "群授權已失效或不許此操作，請由同僚之主於本群重新發起。",
     "localPeersOnly": "群內私訊僅可遣予此機同名籍之同僚。",
@@ -18879,5 +18939,296 @@
     "rendered": "觀文",
     "wrap": "折行",
     "lineNumbers": "行數"
+  },
+  "setupMigration": {
+    "title": "遷移助理",
+    "back": "← 歸",
+    "cancel": "罷",
+    "listSeparator": "、",
+    "steps": {
+      "label": "遷移步序",
+      "source": "來源",
+      "review": "內容",
+      "apply": "遷移"
+    },
+    "source": {
+      "description": "選一台登入了同一帳號的電腦。它的法器、技藝、設定和連線會照原樣裝到這台電腦；金鑰只在你在那台電腦上點「允許」後複製，登入狀態不會離開那台電腦。",
+      "loading": "方尋其餘之機…",
+      "empty": "沒有找到這個帳號的其他電腦。在另一台電腦上登入 Cindy 後再開啟這裡",
+      "loadFailed": "未能讀取機目",
+      "reload": "重讀機目",
+      "ready": "在線，可遷移",
+      "next": "讀取規制",
+      "readAgain": "重讀",
+      "unavailable": {
+        "offline": "離線。開啟那台電腦上的 Cindy 後可以遷移",
+        "remote-control-off": "需要先在那台電腦開啟「允許同帳號裝置控制本機」",
+        "control-disabled": "這台電腦已關閉對它的控制，可在「遠端連線」中重新開啟"
+      }
+    },
+    "reading": "方讀「{{name}}」之規制…",
+    "errors": {
+      "SETUP_SOURCE_OUTDATED": "「{{name}}」上的 Cindy 版本較舊，不支援遷移。更新那台電腦上的 Cindy 後再試",
+      "SETUP_SOURCE_UNAVAILABLE": "未能讀取「{{name}}」上的設定。遷移需要那台電腦上線，並開啟「允許同帳號裝置控制本機」",
+      "SETUP_SNAPSHOT_INVALID": "「{{name}}」回傳的設定無法辨識。兩台電腦的 Cindy 版本不同時會出現這種情況，更新到同一版本後再試",
+      "SETUP_PLAN_EXPIRED": "遷移清單已過期，需要重新讀取「{{name}}」上的設定",
+      "GENERIC": "未能讀取「{{name}}」上的設定"
+    },
+    "review": {
+      "description": "勾選要從「{{name}}」遷移到這台電腦的內容。這台電腦上已經改過的設定會保留，不會被覆蓋。",
+      "partial": "那台電腦上有部分內容這次沒能讀取，下面只列出讀到的內容。",
+      "groupCount": "已選 {{selected}} / {{total}} 項",
+      "present_one": "另 {{count}} 項，此機已有",
+      "present_other": "另 {{count}} 項，此機已有",
+      "start_one": "遷移 {{count}} 項",
+      "start_other": "遷移 {{count}} 項",
+      "continue": "續行",
+      "version": "版本 {{version}}",
+      "pluginDisabled": "原機已停用，此機亦停用",
+      "pluginConsentLater": "來自法器坊「{{market}}」，安裝時單獨確認權限",
+      "skillTeam": "團隊技藝",
+      "settingsChanges_one": "{{count}} 項規制",
+      "settingsChanges_other": "{{count}} 項規制",
+      "settingsKept_one": "保留此機 {{count}} 項規制",
+      "settingsKept_other": "保留此機 {{count}} 項規制",
+      "settingsChangesKept_one": "{{count}} 項規制，保留此機 {{kept}} 項",
+      "settingsChangesKept_other": "{{count}} 項規制，保留此機 {{kept}} 項",
+      "kept": "保留此機規制",
+      "rendererPrefs": "界面偏好",
+      "rendererPrefsHint": "主題、語言、通知與言談顯示",
+      "toolOn": "開啟內建工具「{{name}}」",
+      "toolOff": "關閉內建工具「{{name}}」",
+      "mcp": "MCP · {{url}}",
+      "mcpToken": "MCP · {{url}} · 存取憑證需要在這台電腦上重新填寫",
+      "checklistTitle": "尚須此機辦理",
+      "checklistDescription": "登入狀態、金鑰和系統權限不會離開原來的電腦。遷移完成後，可以依這份清單逐項補上。",
+      "groups": {
+        "plugins": "法器",
+        "skills": "技藝",
+        "settings": "規制",
+        "connections": "供方與 MCP",
+        "access": "這台電腦的存取",
+        "secrets": "金鑰",
+        "ssh": "SSH 伺服器"
+      },
+      "reason": {
+        "not-in-catalog": "這台電腦的法器坊裡沒有它",
+        "source-not-added": "來自這台電腦讀不到的法器坊",
+        "local-only": "只存在於那台電腦，需要手動處理",
+        "needs-sign-in": "需要先登入",
+        "platform": "只適用於另一種系統",
+        "invalid": "這台電腦無法辨識"
+      },
+      "providerAuth": {
+        "apiKey": "API Key 需要在這台電腦上重新填寫",
+        "oauth": "需要在這台電腦上重新登入",
+        "native": "需要在這台電腦上登入訂閱帳號",
+        "none": "無需金鑰",
+        "apiKeyCopy": "API Key 可隨「金鑰」一起複製"
+      },
+      "access": {
+        "remote-control": "允許同帳號裝置控制本機",
+        "remote-controlHint": "與「{{name}}」上的設定相同，可隨時在「遠端連線」中關閉",
+        "keep-awake": "保持電腦喚醒",
+        "keep-awakeHint": "與「{{name}}」上的設定相同，這台電腦不會進入休眠"
+      },
+      "secrets": {
+        "title_one": "複製 {{count}} 項的金鑰",
+        "title_other": "複製 {{count}} 項的金鑰",
+        "description": "需要在「{{name}}」上點「允許」後才會複製，只用這一次請求加密傳給這台電腦。帳號登入不會複製，遷移後可在清單裡依次登入。"
+      },
+      "sshDescription": "這台電腦會產生一把新的 SSH 金鑰，由「{{name}}」加到這些伺服器上（同樣需要在那台電腦上允許），再逐台測試連線。私鑰不會離開各自的電腦。",
+      "sshHost": "{{user}}@{{host}}:{{port}}",
+      "mcpTokenCopy": "MCP · {{url}} · 存取憑證可隨「金鑰」一起複製",
+      "checklistDescriptionWithKeys": "登入狀態和系統權限不會離開原來的電腦；金鑰在「{{name}}」允許後才會複製。遷移完成後，可以依這份清單逐項補上。"
+    },
+    "permissions": {
+      "title": "確認法器權限",
+      "description_one": "下面 {{count}} 個法器安裝後會取得這些權限。確認後會一起安裝。",
+      "description_other": "下面 {{count}} 個法器安裝後會取得這些權限。確認後會一起安裝。",
+      "pluginTitle": "{{name}} · 版本 {{version}}",
+      "confirm_one": "允許並安裝 {{count}} 個法器",
+      "confirm_other": "允許並安裝 {{count}} 個法器"
+    },
+    "running": {
+      "progress": "方遷移，已畢 {{completed}} / {{total}} 項",
+      "label": "方遷移…",
+      "confirm": "請在「{{name}}」上點「允許」。",
+      "confirmCode": "兩台電腦顯示的驗證碼應一致："
+    },
+    "done": {
+      "summary_one": "已自「{{name}}」遷入 {{count}} 項",
+      "summary_other": "已自「{{name}}」遷入 {{count}} 項",
+      "applyFailed": "法器、技藝與規制未能盡遷",
+      "failedTitle_one": "{{count}} 項未能遷移",
+      "failedTitle_other": "{{count}} 項未能遷移",
+      "checklistTitle": "此機尚有待辦",
+      "checklistEmpty": "此機已無待辦",
+      "checklistDescription": "這份清單之後也可以在「設定 → 通用」中查看。",
+      "restartHint": "部分設定在重新開啟 Cindy 後生效。",
+      "finish": "畢",
+      "finishReload": "完成並重載"
+    },
+    "failure": {
+      "generic": "未能遷移（{{code}}）",
+      "SOURCE_NOT_ADDED": "未能新增它所在的法器坊",
+      "MUTATION_CANCELLED": "已取消安裝",
+      "PRECONDITION_FAILED": "遷移時法器或這台電腦的狀態發生了變化",
+      "PERMISSION_DENIED": "目前帳號無權安裝",
+      "NOT_FOUND": "在這台電腦的法器坊裡找不到它",
+      "ALREADY_EXISTS": "這台電腦上已有同名項目",
+      "SETUP_PLAN_EXPIRED": "遷移清單已過期",
+      "SETUP_TRANSFER_DECLINED": "那台電腦上沒有點「允許」，或 2 分鐘內沒有回應",
+      "SETUP_TRANSFER_BUSY": "那台電腦正在處理另一個遷移請求，請稍後再試",
+      "SETUP_TRANSFER_INVALID": "無法辨識那台電腦的回覆",
+      "SETUP_SOURCE_OUTDATED": "那台電腦的 Cindy 版本過舊，更新後才能複製",
+      "SETUP_SOURCE_UNAVAILABLE": "那台電腦現在沒有回應",
+      "SSH_AUTHORIZE_FAILED": "那台電腦沒能把新金鑰加到這台伺服器上",
+      "SSH_KEYGEN_FAILED": "這台電腦沒能產生 SSH 金鑰（需要系統內建的 ssh-keygen）",
+      "SSH_HOST_NOT_FOUND": "那台電腦上已經沒有這台伺服器",
+      "SSH_AUTH_FAILED": "新金鑰已加好，但伺服器拒絕了這台電腦的連線",
+      "SSH_CONNECT_FAILED": "這台電腦連不上這台伺服器，它可能只在那台電腦的網路裡可達",
+      "SSH_KEY_FILE_NOT_FOUND": "找不到這台電腦上的新金鑰檔案"
+    },
+    "checklist": {
+      "done": "已畢",
+      "markDone": "記為已畢",
+      "needs": "尚需：{{items}}",
+      "voiceAsrName": "語音辨識",
+      "plugin-setup": {
+        "title": "連接「{{name}}」的帳號",
+        "action": "前往連接"
+      },
+      "plugin-manual": {
+        "title": "手動安裝法器「{{name}}」",
+        "detail": "它是在那台電腦上直接匯入的法器。在那台電腦的法器詳情中匯出安裝包，再在這台電腦匯入",
+        "action": "開啟法器"
+      },
+      "market-source": {
+        "title": "新增法器坊「{{name}}」",
+        "detail": "這個市場的位址只儲存在那台電腦上，新增後可以安裝其中的法器",
+        "action": "開啟法器"
+      },
+      "skill-manual": {
+        "title": "複製技藝「{{name}}」",
+        "detail": "它不是從 SkillHub 安裝的，只存在於那台電腦",
+        "action": "開啟技藝"
+      },
+      "provider-key": {
+        "title": "為「{{name}}」填寫 API Key",
+        "action": "前往填寫"
+      },
+      "provider-connection": {
+        "title": "為「{{name}}」重新填寫連線位址",
+        "detail": "原位址中的帳號資訊或查詢參數可能含有憑證，沒有一起遷移",
+        "action": "前往填寫"
+      },
+      "provider-sign-in": {
+        "title": "登入「{{name}}」",
+        "action": "前往登入"
+      },
+      "local-model": {
+        "title": "在這台電腦上準備本機模型「{{name}}」",
+        "detail": "本機模型執行在原來的電腦上，這台電腦需要單獨安裝",
+        "action": "開啟供方"
+      },
+      "mcp-token": {
+        "title": "為 MCP「{{name}}」填寫存取憑證",
+        "action": "前往填寫"
+      },
+      "builtin-key": {
+        "title": "填寫「{{name}}」的 API Key",
+        "action": "前往填寫"
+      },
+      "im-channel": {
+        "title": "連接「{{name}}」",
+        "detail": "同一個機器人同時只在一台電腦上接收訊息，連接前先確認由哪台電腦接收",
+        "action": "前往連接"
+      },
+      "computer-use": {
+        "title": "開啟自動操作",
+        "detail": "需要在這台電腦上授予輔助使用與螢幕錄製權限",
+        "action": "前往開啟"
+      },
+      "remote-desktop": {
+        "title": "開啟遠端桌面",
+        "detail": "需要在這台電腦上單獨開啟，並授予螢幕錄製權限",
+        "action": "前往開啟"
+      },
+      "ssh": {
+        "title_one": "複製 {{count}} 台遠端主機的 SSH 金鑰與設定",
+        "title_other": "複製 {{count}} 台遠端主機的 SSH 金鑰與設定",
+        "detail": "~/.ssh 中的金鑰與設定不會自動遷移，需要複製到這台電腦",
+        "action": "開啟遠端連線"
+      },
+      "ssh-host": {
+        "title": "設定 SSH 伺服器「{{name}}」",
+        "detail": "沒能自動設定好。可以在 SSH 設定裡為它選擇金鑰並測試連線",
+        "action": "開啟遠端連線"
+      },
+      "startAll_one": "依次辦理 {{count}} 項",
+      "startAll_other": "依次辦理 {{count}} 項"
+    },
+    "settingsGroups": {
+      "appearance": "外觀",
+      "windowBehavior": "應用行為",
+      "menubar": "選單列餘量",
+      "collaboration": "協同",
+      "agentResource": "Agent 資源佔用",
+      "gitSafety": "Git 安全",
+      "goal": "目標模式",
+      "memory": "記憶",
+      "compaction": "上下文壓縮",
+      "silentEncryptedRetry": "靜默丟棄協議加密內容並重試",
+      "silentStopAutoResume": "意外停止後自動繼續",
+      "sessionRuntimeFallback": "差事模型自動降級",
+      "subagentModels": "Subagent",
+      "auxiliaryModels": "輔助模型",
+      "visionBridge": "視覺橋",
+      "modelVisibility": "模型顯示與隱藏",
+      "providerOrder": "供方順序",
+      "modelCatalogOverrides": "模型參數調整",
+      "modelPriceOverrides": "模型單價",
+      "autoUpdate": "空閒時自動安裝更新",
+      "updateChannel": "Beta 測試管道"
+    },
+    "settings": {
+      "title": "遷移助理",
+      "description": "在一台新電腦上，把其他舊機器上 Cindy 所有接入的功能、法器和設定複製過來，成為成品能用。",
+      "start": "開啟遷移助理",
+      "pending_one": "此機尚有 {{count}} 項待辦",
+      "pending_other": "此機尚有 {{count}} 項待辦",
+      "allDone": "此機待辦已畢",
+      "from": "遷自「{{name}}」",
+      "closeChecklist": "闔清單"
+    },
+    "suggestion": {
+      "title": "用遷移助理從「{{name}}」遷移？",
+      "description": "可以把那台電腦上的法器、技藝、設定和連線搬到這台電腦。需要在這台電腦上重新登入或授權的內容會列成清單。之後也可以在「設定 → 通用 → 遷移助理」中開啟。",
+      "confirm": "開啟遷移助理",
+      "later": "暫緩"
+    },
+    "walkthrough": {
+      "progress": "辦理清單 {{current}} / {{total}}",
+      "open": "開啟",
+      "skip": "略過",
+      "next": "已畢，次之",
+      "stop": "結束",
+      "allDone": "清單已畢"
+    },
+    "transfer": {
+      "prompt": {
+        "title": "遷移助理",
+        "message": "「{{name}}」請求從這台電腦複製以下內容",
+        "secrets": "金鑰（只複製到這一台電腦，這台電腦上的金鑰保持不變）：",
+        "ssh": "把那台電腦的新 SSH 公鑰加到這些伺服器：",
+        "sshKey": "公鑰指紋：{{fingerprint}}",
+        "code": "驗證碼：{{code}}。只有和那台電腦上顯示的一致時才允許。",
+        "notice": "如果不是你自己在設定新電腦，請拒絕。",
+        "more": "以及另外 {{count}} 項",
+        "allow": "允許",
+        "deny": "拒絕"
+      }
+    }
   }
 }
