@@ -10,7 +10,7 @@ import {
   RNHostView,
   VStack,
 } from "@expo/ui/swift-ui";
-import { Folder, Monitor, Pin, type LucideIcon } from "lucide-react-native";
+import { Folder, Monitor, Pin, Smartphone, type LucideIcon } from "lucide-react-native";
 import { Pressable, StyleSheet, View } from "react-native";
 import { Text } from "@/components/AppText";
 import { QuietSyncIndicator } from "@/components/QuietSyncIndicator";
@@ -179,6 +179,7 @@ export function SessionHeaderNativeActions({
   onDesktop,
   onAction,
   detailsOnly = false,
+  screen,
 }: SessionHeaderNativeActionsProps) {
   const { colors, mode } = useTheme();
   const groupStyle = useNativeGlassGroupStyle();
@@ -211,19 +212,34 @@ export function SessionHeaderNativeActions({
         >
           <SessionHeaderIcon icon={Monitor} color={colors.textPrimary} />
         </Button>
-        <Button
-          onPress={() => onAction("files")}
-          testID="session.filesButton"
-          modifiers={[
-            ...iconModifiers,
-            disabled(!available || !files || files.disabled),
-            accessibilityElement("ignore"),
-            accessibilityLabel(filesLabel),
-            accessibilityHint(files?.disabledReason ?? ""),
-          ]}
-        >
-          <SessionHeaderIcon icon={Folder} color={colors.textPrimary} />
-        </Button>
+        {screen ? (
+          <Button
+            onPress={screen.onPress}
+            testID="session.liveScreen"
+            modifiers={[
+              ...iconModifiers,
+              disabled(!available),
+              accessibilityElement("ignore"),
+              accessibilityLabel(screen.label),
+            ]}
+          >
+            <SessionHeaderIcon icon={Smartphone} color={colors.textPrimary} />
+          </Button>
+        ) : (
+          <Button
+            onPress={() => onAction("files")}
+            testID="session.filesButton"
+            modifiers={[
+              ...iconModifiers,
+              disabled(!available || !files || files.disabled),
+              accessibilityElement("ignore"),
+              accessibilityLabel(filesLabel),
+              accessibilityHint(files?.disabledReason ?? ""),
+            ]}
+          >
+            <SessionHeaderIcon icon={Folder} color={colors.textPrimary} />
+          </Button>
+        )}
         </>}
         <Button
           label={moreLabel}

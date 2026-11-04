@@ -1,5 +1,25 @@
 import type { PrepareResult } from './types.js';
 
+/** Startup preparation is optional; an unavailable Pi must not block the other agents. */
+export async function prepareOptionalPiRuntime(options: {
+  prepare: () => Promise<PrepareResult>;
+  register: () => boolean;
+}): Promise<{ status: 'passed' | 'failed'; path?: string; error?: string }> {
+  try {
+    const result = await options.prepare();
+    if (!result.ready || !result.path) {
+      return { status: 'failed', error: result.error ?? 'pi binary not available' };
+    }
+    // IM or plugins may have constructed Maker before Pi became ready. Reuse
+    // the idempotent registration path; if Maker does not exist yet, its normal
+    // construction will pick up the prepared binary instead.
+    options.register();
+    return { status: 'passed', path: result.path };
+  } catch (error) {
+    return { status: 'failed', error: error instanceof Error ? error.message : String(error) };
+  }
+}
+
 /** Timer delays after consecutive optional Pi runtime recovery failures. */
 export const PI_RUNTIME_RECOVERY_RETRY_DELAYS_MS = [30_000, 60_000, 120_000, 300_000] as const;
 

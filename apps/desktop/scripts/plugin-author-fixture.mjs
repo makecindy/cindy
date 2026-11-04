@@ -166,7 +166,7 @@ export async function packAuthorFixture({ manifest, main, html, assets = {} }, t
   for (const query of ['4.23', 'ui', 'mcp app', '交互页面']) {
     const section = extractForgeGuideSection(FORGE_GUIDE, query);
     assert.equal(section.ok, true, JSON.stringify(section));
-    assert.ok(section.text.startsWith('## 4.23 '));
+    assert.ok(section.text.startsWith('## 4.23 交互页面 MCP Apps'));
   }
   const packed = await packGhostDir(dir, { sessionWorkdir: temporary });
   assert.equal(packed.ok, true, JSON.stringify(packed.ok ? {} : packed));

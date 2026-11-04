@@ -27,6 +27,8 @@ const api: DesktopCaptureApi = {
   viewHeartbeat: (lease) => ipcRenderer.invoke(DESKTOP_LOCAL.VIEW_HEARTBEAT, lease),
   nativeFrame: (lease) => ipcRenderer.invoke(DESKTOP_LOCAL.NATIVE_FRAME, lease),
   nativeAudio: (lease) => ipcRenderer.invoke(DESKTOP_LOCAL.NATIVE_AUDIO, lease),
+  liveScreenFrames: (lease, keyframe) =>
+    ipcRenderer.invoke(DESKTOP_LOCAL.LIVE_SCREEN_FRAMES, lease, keyframe),
 };
 if (location.search === '?mode=direct') {
   const direct: DirectLinkHostApi = {
