@@ -88,7 +88,7 @@ interface Room {
 }
 /**
  * `reads`: this reader's read position per Thread (`thread_key` = root ID, `main` for the main timeline); older servers omit it.
- * `othersRead`: per Thread, the highest read position among the other human members; only servers
+ * `othersRead`: per Thread, the highest read position among the other members, teammates included; only servers
  * that report message readers (`capabilities.messageReaders`) send it.
  */
 interface Snapshot { room: Room; members: Member[]; messages: Message[]; cursor: string; mentionReadIds?: string[]; reads?: Array<{ thread_key: string; read_seq: string; following?: boolean; muted?: boolean; notification_scope?: 'all' | 'mentions' | null }>; othersRead?: Array<{ thread_key: string; read_seq: string }> }

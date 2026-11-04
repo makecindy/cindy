@@ -832,13 +832,13 @@ describe('Chat Server result delivery and refresh', () => {
       if (!group.ok) throw new Error(group.errorCode);
       expect(group.group.messages.map(m => m.readByOthers)).toEqual([false, false, undefined]);
     });
-    it('lists human readers by actor ID, caches them per message and drops them on a receipt', async () => {
+    it('lists readers, teammates among them, by actor ID in the server\'s order, caches them per message and drops them on a receipt', async () => {
       serve(snapshot([{ thread_key: 'main', read_seq: '5' }]));
       const bot = botId, former = '30000000-0000-4000-8000-000000000003';
       const target = message('7').id;
       fixture.handle.mockImplementation(((previous) => (route: string, method: string, body: unknown) => {
         if (route === `/conversations/${roomId}/messages/${target}/readers`) return { body: { messageId: target, eligibleCount: 3,
-          readers: [{ actorId: peer, readAt: '2026-10-03T00:00:05Z' }, { actorId: bot, readAt: '2026-10-03T00:00:06Z' }, { actorId: former, readAt: null }],
+          readers: [{ actorId: peer, readAt: '2026-10-03T00:00:05Z' }, { actorId: bot, readAt: null }, { actorId: former, readAt: null }],
           unread: [{ actorId: bot }, { actorId: selfId }] } };
         if (route === `/conversations/${roomId}/members`) return { body: [...members, { id: bot, kind: 'bot', name: 'Cindy', ownerName: 'Me', state: 'joined' },
           { id: former, kind: 'human', name: 'Ada', ownerName: 'Ada', state: 'left' }] };
@@ -847,9 +847,10 @@ describe('Chat Server result delivery and refresh', () => {
       const { socket } = await open();
       const result = await service.chatServer!.readers({ groupId: roomId, messageId: target });
       if (!result.ok) throw new Error(result.errorCode);
-      // Only readers are given on; the server's unread list is ignored, and a bot is never a reader.
-      expect(result.readers).toEqual({ messageId: target, eligibleCount: 3, readCount: 2, listed: true,
+      // Only readers are given; the server's unread list is ignored. A teammate is a reader like anyone (it has no time).
+      expect(result.readers).toEqual({ messageId: target, eligibleCount: 3, readCount: 3, listed: true,
         readers: [{ actorId: peer, name: 'Peer', readAt: Date.parse('2026-10-03T00:00:05Z'), formerMember: false },
+          { actorId: bot, name: 'Cindy (Me)', readAt: null, formerMember: false },
           { actorId: former, name: 'Ada', readAt: null, formerMember: true }] });
       const reads = () => fixture.handle.mock.calls.filter(([route]) => String(route).endsWith('/readers')).length;
       await service.chatServer!.readers({ groupId: roomId, messageId: target });

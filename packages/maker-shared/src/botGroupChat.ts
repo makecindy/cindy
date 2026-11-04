@@ -195,7 +195,7 @@ export interface BotGroupMessageView {
   /** A main-chat message that re-posts an existing thread reply by reference. */
   threadShare?: BotGroupThreadShareView;
   /**
-   * Your own message in a group whose server reports read receipts: another human member has
+   * Your own message in a group whose server reports read receipts: another member (a person, or a teammate whose computer took the execution up) has
    * read it (the double check). Omitted otherwise; never set on other people's messages.
    */
   readByOthers?: boolean;
@@ -886,7 +886,7 @@ export interface BotGroupMessageReader { actorId: string; name: string | null; r
 /** Who has read one message of a group (bot-group-chat.md「消息已读」). Only the readers are listed, never who has not. */
 export interface BotGroupMessageReaders {
   messageId: string;
-  /** Human members other than the author who can see the message. */
+  /** Members other than the author who can see the message: people and teammates. */
   eligibleCount: number;
   /** How many of them have read it; matches `readers` when the list is given. */
   readCount: number;
