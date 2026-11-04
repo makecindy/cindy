@@ -1972,6 +1972,8 @@
       "add": {
         "title": "Ajouter une machine distante",
         "alias": "Alias",
+        "aliasHint": "Utilisez 1 à 128 caractères : lettres anglaises, chiffres ou . _ @ : -. Pour les autres caractères, utilisez « Nom d’affichage ».",
+        "aliasInvalid": "L’alias contient des caractères non pris en charge ou dépasse 128 caractères. Suivez les règles ci-dessus.",
         "displayName": "Nom d'affichage",
         "displayNamePlaceholder": "Nom facultatif affiché dans Cindy",
         "hostname": "Nom d'hôte",
@@ -7664,6 +7666,9 @@
         "agentObserve": "Peut voir la liste et l'état des sessions des projets locaux",
         "agentObserveDetail": "Peut voir le titre, le type d'Agent, l'archivage et l'état (en cours, action requise, dernière activité) des sessions des projets locaux enregistrés, et ouvrir une session dans la fenêtre principale. Ne peut pas lire les messages, les plans ni les fichiers, ni envoyer de messages ou modifier les sessions.",
         "agentObserveRequest": "Vérifier l'autorisation de voir les sessions",
+        "agentCompanions": "Peut voir les coéquipiers, leur état et leur conversation récente",
+        "agentCompanionsDetail": "Peut voir tous les coéquipiers, y compris ceux qui s'exécutent sur vos autres ordinateurs : nom, description, avatar, état (au travail, en attente de votre réponse, inactif, hors ligne), le type d'étape en cours (réflexion, exécution d'un outil, etc.), les demandes qui vous attendent telles que leurs cartes les affichent (questions, commandes à exécuter, plans) et la conversation récente de leur discussion principale (jusqu’à 50 de vos messages et de leurs réponses, sans les étapes d’outils) ; et ouvrir la conversation d'un coéquipier dans la fenêtre principale. Avec aussi l'autorisation de remettre des messages, il peut transmettre les réponses que vous donnez dans le plugin : répondre aux questions, refuser des demandes et commenter des plans. Pour autoriser une étape, vous cliquez toujours dans la confirmation propre à Cindy. Ne peut pas lire les fichiers, les étapes d’outils ni les réflexions.",
+        "agentCompanionsRequest": "Vérifier l'autorisation de voir les coéquipiers",
         "agentHiddenTasks": "Peut créer des tâches en arrière-plan masquées de la liste des tâches",
         "agentHiddenTasksDetail": "Les tâches créées par ce plugin peuvent ne pas apparaître dans la liste des tâches, la recherche et les notifications. Vous pouvez toujours les voir, les ouvrir ou les afficher dans la liste des tâches depuis Tâches en arrière-plan sur la page de ce plugin ; désinstaller le plugin les fait réapparaître.",
         "agentErrand": "Créer des tâches, effectuer du travail et lire les résultats",
@@ -10342,6 +10347,7 @@
       "continueEditing": "Continuer l'édition"
     },
     "profileSaveFailed": "Impossible d'enregistrer les paramètres du coéquipier. Aucune modification n'a été appliquée.",
+    "profileSaveOffline": "Impossible de joindre l’ordinateur du coéquipier. Rétablissez la connexion, puis enregistrez à nouveau.",
     "modelLabel": "Modèle",
     "modelUnavailable": "{{model}} (actuellement indisponible)",
     "codexAutomaticCompact": "Les coéquipiers Codex compactent leur contexte d'eux-mêmes, et /new conserve la tâche en cours. Ne démarrez une nouvelle tâche que si vous avez réellement besoin de repartir de zéro.",
@@ -10677,6 +10683,11 @@
           "NETWORK_ERROR": "{{name}} n'a pas pu répondre : échec de la connexion réseau.\nVérifiez votre réseau ou votre proxy, puis renvoyez votre message.",
           "RUNTIME_TIMEOUT": "{{name}} n'a pas répondu avant l'expiration du délai.\nRenvoyez votre message, ou choisissez un autre modèle disponible.",
           "RUNTIME_ERROR": "{{name}} n'a pas pu répondre cette fois.\nRenvoyez votre message. Si l'échec persiste, consultez les journaux et signalez le problème."
+        },
+        "capability": {
+          "GROUP_AUTHORIZATION_REQUIRED": "{{name}} n’a pas pu exécuter cet outil : l’autorisation du groupe a expiré ou ne permet pas cette action. Le propriétaire du coéquipier peut renouveler la demande dans ce groupe.",
+          "GROUP_AUTHORIZATION_UNAVAILABLE": "L’autorisation de groupe de {{name}} n’a pas pu être vérifiée ; cet outil n’a donc pas été exécuté. Réessayez une fois la connexion rétablie.",
+          "ATTACHMENTS_UNAVAILABLE": "Certaines pièces jointes n’ont pas été transmises à {{name}} en raison d’un échec de téléchargement ou de la limite de pièces jointes. Renvoyez celles nécessaires à cette demande."
         }
       },
       "settings": {
@@ -10746,7 +10757,8 @@
         "lifecycleUnavailable": "Le serveur ou l'ordinateur actuel ne prend pas encore en charge cette action.",
         "groupDissolved": "Ce groupe a été dissous. Vous pouvez toujours lire l'historique disponible.",
         "lastOwner": "Transférez la propriété ou dissolvez ce groupe avant de le quitter.",
-        "allBotsMentionDisabled": "Le propriétaire du groupe n’a pas encore activé @Tous les coéquipiers."
+        "allBotsMentionDisabled": "Le propriétaire du groupe n’a pas encore activé @Tous les coéquipiers.",
+        "turnAlreadyStarted": "Ce coéquipier a déjà commencé et ne peut plus être ignoré"
       },
       "organizer": "Organisateur",
       "plan": {
@@ -10779,7 +10791,17 @@
         "allTurns_other": "Les {{count}} coéquipiers",
         "foldTurns": "Afficher moins",
         "intro_many": "Cela prend {{count}} étapes. Voici qui fait quoi :",
-        "allTurns_many": "Les {{count}} coéquipiers"
+        "allTurns_many": "Les {{count}} coéquipiers",
+        "stepQueued": "En attente de démarrage",
+        "stepExecuting": "En cours",
+        "stepSkipped": "Ignoré",
+        "skippingTurn": "Passage en cours…",
+        "queueWaiting": "En attente de la suite",
+        "skipTurnLabel": "Passer {{name}}",
+        "queueEnded": "Tour terminé",
+        "talkTitle": "Écouter chacun à son tour",
+        "talkPending": "Non commencé",
+        "skipTurn": "Passer"
       },
       "speaking": {
         "planning": "Répartition du travail…"
@@ -11129,7 +11151,7 @@
         "items": {
           "tasks": {
             "title": "Tâches",
-            "body": "Décide quand lancer une tâche en arrière-plan, pilote celles qu’il a lancées et rapporte le résultat dans le chat, y compris sur vos autres ordinateurs."
+            "body": "Connaît les tâches qu’il peut piloter et les ordinateurs disponibles. Organise et suit les tâches à votre demande, rapporte les résultats et vérifie les opérations prises en charge avant de travailler sur un autre ordinateur."
           },
           "teammates": {
             "title": "Autres coéquipiers",
@@ -11144,8 +11166,8 @@
             "body": "Retient vos préférences et votre contexte, vérifie avant d’agir et met à jour quand cela change."
           },
           "self": {
-            "title": "Se connaître",
-            "body": "Sait ce qu’il peut faire et active ou désactive des fonctions pour vous ; pour Telegram, MCP ou les plugins, il consulte d’abord l’aide de Cindy."
+            "title": "Comprendre et configurer Cindy",
+            "body": "Connaît les fonctions et le fonctionnement de Cindy, et consulte ou modifie les réglages à votre demande. Vous sollicite dans la tâche si une saisie ou une confirmation est nécessaire."
           }
         }
       },
@@ -13832,7 +13854,7 @@
       "REMOTE_PROVIDER_UPDATING": "Les identifiants de ce fournisseur de modèles sont en cours de mise à jour. Réessayez dans un instant.",
       "REMOTE_WORKDIR_UNAVAILABLE": "Le répertoire de travail distant est indisponible. Vérifiez que le dossier existe toujours sur cet ordinateur, puis réessayez.",
       "REMOTE_OPTIMISTIC_SESSION_STATE_UNAVAILABLE": "L'ordinateur ne peut pas encore confirmer si ce message a été envoyé. Patientez un instant et réessayez. N'envoyez pas deux fois le même message.",
-      "REMOTE_AGENT_UNAVAILABLE": "Impossible de joindre l'ordinateur qui exécute l'Agent. Assurez-vous qu'il est en ligne et autorise le contrôle à distance, puis réessayez.",
+      "REMOTE_AGENT_UNAVAILABLE": "La connexion avec l'ordinateur qui exécute l'Agent a été interrompue. Réessayez. Si cela se reproduit, assurez-vous qu'il est en ligne et autorise le contrôle à distance.",
       "REMOTE_AGENT_PEER_TOO_OLD": "La version de Cindy sur l'autre ordinateur est trop ancienne pour cette action. Mettez d'abord Cindy à jour sur cet ordinateur.",
       "REMOTE_AGENT_EXPIRED": "Cette session est déjà terminée sur l'ordinateur qui exécute l'Agent. Renvoyez votre message.",
       "REMOTE_AGENT_NOT_FOUND": "Cette session est déjà terminée sur l'ordinateur qui exécute l'Agent. Renvoyez votre message.",
@@ -13959,6 +13981,18 @@
       "cancelTitle": "Arrêter d'attendre et supprimer ce message"
     },
     "ghostCall": {
+      "prStatus": {
+        "threadsNone": "Aucun fil de revue ouvert",
+        "mergeReady": "Prête à fusionner",
+        "mergeConflict": "Conflits à résoudre",
+        "mergeBehind": "En retard sur la branche de base",
+        "mergeApproval": "En attente d’approbation",
+        "mergeChanges": "Modifications demandées",
+        "mergeWaiting": "En attente de fusion",
+        "merged": "Fusionnée",
+        "closed": "Fermée",
+        "draft": "Brouillon"
+      },
       "verb": "Plugin utilisé",
       "cardRunning": "Le plugin dessine",
       "cardDone": "Terminé",
@@ -13972,6 +14006,7 @@
       "collapseFields": "Réduire",
       "formSyncFailed": "Les modifications de la carte n'ont pas été synchronisées. Vérifiez la connexion et continuez la modification ; le message n'a pas été envoyé.",
       "linkOpenFailed": "Impossible d'ouvrir le lien",
+      "modelSelectFailed": "Le modèle n'a pas été changé. Choisissez-le à nouveau.",
       "mailPreview": "Aperçu de l'e-mail",
       "mailEnlarge": "Agrandir l'aperçu",
       "mailInsertImage": "Insérer dans le message",
@@ -16173,7 +16208,17 @@
   },
   "commandPalette": {
     "viewSkillDetails": "Voir les détails du skill",
-    "projectSkillNotLoaded": "Cette tâche Pi n'a pas chargé ce skill de projet. Les nouvelles tâches tenteront de le charger automatiquement."
+    "projectSkillNotLoaded": "Cette tâche Pi n'a pas chargé ce skill de projet. Les nouvelles tâches tenteront de le charger automatiquement.",
+    "pluginSkillSetup": {
+      "install": "Non installé",
+      "enable": "Désactivé"
+    },
+    "pluginSkills": {
+      "pr": {
+        "install": "Ouvre une PR, corrige la CI et les retours de revue, et la suit jusqu’à la fusion · Nécessite d’installer le plugin GitHub",
+        "enable": "Ouvre une PR, corrige la CI et les retours de revue, et la suit jusqu’à la fusion · Nécessite d’activer le plugin GitHub"
+      }
+    }
   },
   "skillhub": {
     "remote": {
@@ -18905,6 +18950,21 @@
     "allow": "Autoriser et continuer",
     "cancel": "Pas maintenant"
   },
+  "pluginCompanionAnswer": {
+    "title": "Confirmer l'autorisation",
+    "planMessage": "Laisser {{companion}} commencer à travailler selon ce plan ?",
+    "permissionMessage": {
+      "command": "Autoriser {{companion}} à exécuter cette commande ?",
+      "file-read": "Autoriser {{companion}} à lire ces fichiers ?",
+      "file-write": "Autoriser {{companion}} à modifier ces fichiers ?",
+      "browser": "Autoriser {{companion}} à effectuer cette étape dans le navigateur ?",
+      "plugin": "Autoriser {{companion}} à utiliser « {{tool}} » ?",
+      "tool": "Autoriser {{companion}} à utiliser {{tool}} ?"
+    },
+    "source": "Vous avez choisi Autoriser dans le plugin « {{plugin}} ». {{appName}} vous le redemande ici ; ensuite, le coéquipier continue.",
+    "allow": "Autoriser",
+    "cancel": "Annuler"
+  },
   "groupTools": {
     "authorizationRequired": "L'autorisation du groupe a expiré ou ne permet pas cette action. Demandez au propriétaire du coéquipier de faire une nouvelle demande dans ce groupe.",
     "localPeersOnly": "Les messages de groupe ne peuvent cibler que des coéquipiers sur cet appareil et ce compte.",
@@ -18990,6 +19050,310 @@
     "openVideoSource": "Ouvrir la vidéo d'origine",
     "calculationUnavailable": "Impossible de calculer cette valeur.",
     "incomplete": "Une partie du contenu n'a pas pu être affichée."
+  },
+  "setupMigration": {
+    "title": "Assistant de migration",
+    "back": "← Retour",
+    "cancel": "Annuler",
+    "listSeparator": ", ",
+    "steps": {
+      "label": "Étapes de configuration",
+      "source": "Ordinateur",
+      "review": "Contenu",
+      "apply": "Transférer"
+    },
+    "source": {
+      "description": "Choisissez un ordinateur connecté à ce compte. Ses plugins, compétences, réglages et connexions sont configurés de la même façon ici ; les connexions et les clés ne quittent cet ordinateur que si vous l'autorisez sur celui-ci.",
+      "loading": "Recherche de vos autres ordinateurs…",
+      "empty": "Aucun autre ordinateur trouvé pour ce compte. Connectez-vous à Cindy sur un autre ordinateur, puis rouvrez cette fenêtre",
+      "loadFailed": "Impossible de charger vos ordinateurs",
+      "reload": "Recharger les ordinateurs",
+      "ready": "En ligne, prêt pour le transfert",
+      "next": "Lire les réglages",
+      "readAgain": "Relire",
+      "unavailable": {
+        "offline": "Hors ligne. Ouvrez Cindy sur cet ordinateur pour transférer depuis celui-ci",
+        "remote-control-off": "Activez d'abord « Autoriser les appareils du même compte à contrôler cet ordinateur » sur cet ordinateur",
+        "control-disabled": "Le contrôle de cet ordinateur est désactivé ici. Réactivez-le dans Connexion à distance"
+      }
+    },
+    "reading": "Lecture des réglages de « {{name}} »…",
+    "errors": {
+      "SETUP_SOURCE_OUTDATED": "La version de Cindy sur « {{name}} » est trop ancienne pour le transfert. Mettez Cindy à jour sur cet ordinateur, puis réessayez",
+      "SETUP_SOURCE_UNAVAILABLE": "Impossible de lire les réglages de « {{name}} ». Cet ordinateur doit être en ligne avec « Autoriser les appareils du même compte à contrôler cet ordinateur » activé",
+      "SETUP_SNAPSHOT_INVALID": "Les réglages de « {{name}} » n'ont pas pu être lus. Cela arrive lorsque les deux ordinateurs utilisent des versions différentes de Cindy ; mettez-les à jour vers la même version, puis réessayez",
+      "SETUP_PLAN_EXPIRED": "Cette liste a expiré. Relisez les réglages de « {{name}} »",
+      "GENERIC": "Impossible de lire les réglages de « {{name}} »"
+    },
+    "review": {
+      "description": "Choisissez ce que vous transférez de « {{name}} » vers cet ordinateur. Les réglages déjà modifiés sur cet ordinateur sont conservés.",
+      "partial": "Une partie du contenu de cet ordinateur n'a pas pu être lue cette fois. Seul ce qui a été lu est listé ci-dessous.",
+      "groupCount": "{{selected}} sur {{total}} sélectionnés",
+      "present_one": "{{count}} autre élément est déjà identique ici",
+      "present_other": "{{count}} autres éléments sont déjà identiques ici",
+      "present_many": "{{count}} autres éléments sont déjà identiques ici",
+      "start_one": "Transférer {{count}} élément",
+      "start_other": "Transférer {{count}} éléments",
+      "start_many": "Transférer {{count}} éléments",
+      "continue": "Continuer",
+      "version": "Version {{version}}",
+      "pluginDisabled": "Désactivé sur cet ordinateur ; reste désactivé ici",
+      "pluginConsentLater": "Issu de la marketplace « {{market}} » ; vous confirmerez ses autorisations à l'installation",
+      "skillTeam": "Compétence d'équipe",
+      "settingsChanges_one": "{{count}} réglage",
+      "settingsChanges_other": "{{count}} réglages",
+      "settingsChanges_many": "{{count}} réglages",
+      "settingsKept_one": "Conserve {{count}} réglage de cet ordinateur",
+      "settingsKept_other": "Conserve {{count}} réglages de cet ordinateur",
+      "settingsKept_many": "Conserve {{count}} réglages de cet ordinateur",
+      "settingsChangesKept_one": "{{count}} réglage ; conserve {{kept}} de cet ordinateur",
+      "settingsChangesKept_other": "{{count}} réglages ; conserve {{kept}} de cet ordinateur",
+      "settingsChangesKept_many": "{{count}} réglages ; conserve {{kept}} de cet ordinateur",
+      "kept": "Conserve le réglage de cet ordinateur",
+      "rendererPrefs": "Préférences d'interface",
+      "rendererPrefsHint": "Thème, langue, notifications et affichage des discussions",
+      "toolOn": "Activer l'outil intégré « {{name}} »",
+      "toolOff": "Désactiver l'outil intégré « {{name}} »",
+      "mcp": "MCP · {{url}}",
+      "mcpToken": "MCP · {{url}} · Saisissez à nouveau ses identifiants d'accès sur cet ordinateur",
+      "checklistTitle": "À terminer sur cet ordinateur",
+      "checklistDescription": "Les connexions, les clés et les autorisations système restent sur l'ordinateur d'origine. Après le transfert, terminez-les une par une depuis cette liste.",
+      "groups": {
+        "plugins": "Plugins",
+        "skills": "Compétences",
+        "settings": "Réglages",
+        "connections": "Fournisseurs et MCP",
+        "access": "Accès à cet ordinateur",
+        "secrets": "Clés",
+        "ssh": "Serveurs SSH"
+      },
+      "reason": {
+        "not-in-catalog": "Absent de la marketplace de plugins de cet ordinateur",
+        "source-not-added": "Issu d’une marketplace que cet ordinateur ne peut pas lire",
+        "local-only": "N'existe que sur cet ordinateur ; à transférer manuellement",
+        "needs-sign-in": "Connectez-vous d'abord",
+        "platform": "Uniquement pour un autre système d'exploitation",
+        "invalid": "Illisible pour cet ordinateur"
+      },
+      "providerAuth": {
+        "apiKey": "Saisissez à nouveau la clé API sur cet ordinateur",
+        "oauth": "Reconnectez-vous sur cet ordinateur",
+        "native": "Connectez-vous à l'abonnement sur cet ordinateur",
+        "none": "Aucune clé nécessaire",
+        "apiKeyCopy": "La clé API peut être copiée avec Clés"
+      },
+      "access": {
+        "remote-control": "Autoriser les appareils du même compte à contrôler cet ordinateur",
+        "remote-controlHint": "Comme sur « {{name}} ». Vous pouvez le désactiver à tout moment dans Connexion à distance",
+        "keep-awake": "Garder l'ordinateur éveillé",
+        "keep-awakeHint": "Comme sur « {{name}} ». Cet ordinateur ne se mettra pas en veille"
+      },
+      "secrets": {
+        "title_one": "Copier les clés de {{count}} élément",
+        "title_other": "Copier les clés de {{count}} éléments",
+        "title_many": "Copier les clés de {{count}} éléments",
+        "description": "Copiées uniquement après avoir choisi Autoriser sur « {{name}} », chiffrées pour cette seule demande. Les connexions aux comptes ne sont pas copiées ; connectez-vous depuis la liste après le transfert."
+      },
+      "sshDescription": "Cet ordinateur crée une nouvelle clé SSH, « {{name}} » l'ajoute à ces serveurs une fois autorisé là-bas, puis chaque serveur est testé. Les clés privées ne quittent jamais leur ordinateur.",
+      "sshHost": "{{user}}@{{host}}:{{port}}",
+      "mcpTokenCopy": "MCP · {{url}} · Les identifiants peuvent être copiés avec Clés",
+      "checklistDescriptionWithKeys": "Les connexions et les autorisations système restent sur l'ordinateur d'origine ; les clés ne sont copiées qu'après autorisation sur « {{name}} ». Après le transfert, terminez le reste depuis cette liste."
+    },
+    "permissions": {
+      "title": "Confirmer les autorisations des plugins",
+      "description_one": "Une fois installé, le plugin ci-dessous reçoit ces autorisations. Confirmer l'installe.",
+      "description_other": "Une fois installés, les {{count}} plugins ci-dessous reçoivent ces autorisations. Confirmer les installe ensemble.",
+      "description_many": "Une fois installés, les {{count}} plugins ci-dessous reçoivent ces autorisations. Confirmer les installe ensemble.",
+      "pluginTitle": "{{name}} · Version {{version}}",
+      "confirm_one": "Autoriser et installer {{count}} plugin",
+      "confirm_other": "Autoriser et installer {{count}} plugins",
+      "confirm_many": "Autoriser et installer {{count}} plugins"
+    },
+    "running": {
+      "progress": "Transfert : {{completed}} sur {{total}} terminés",
+      "label": "Transfert en cours…",
+      "confirm": "Choisissez Autoriser sur « {{name}} ».",
+      "confirmCode": "Les deux ordinateurs doivent afficher le même code :"
+    },
+    "done": {
+      "summary_one": "{{count}} élément transféré depuis « {{name}} »",
+      "summary_other": "{{count}} éléments transférés depuis « {{name}} »",
+      "summary_many": "{{count}} éléments transférés depuis « {{name}} »",
+      "applyFailed": "Le transfert des plugins, compétences et réglages n'a pas abouti",
+      "failedTitle_one": "{{count}} élément n'a pas pu être transféré",
+      "failedTitle_other": "{{count}} éléments n'ont pas pu être transférés",
+      "failedTitle_many": "{{count}} éléments n'ont pas pu être transférés",
+      "checklistTitle": "Reste à faire sur cet ordinateur",
+      "checklistEmpty": "Rien de plus à faire sur cet ordinateur",
+      "checklistDescription": "Vous retrouverez aussi cette liste plus tard dans Réglages → Général.",
+      "restartHint": "Certains réglages prennent effet après la réouverture de Cindy.",
+      "finish": "Terminé",
+      "finishReload": "Terminer et recharger"
+    },
+    "failure": {
+      "generic": "Transfert impossible ({{code}})",
+      "SOURCE_NOT_ADDED": "Impossible d'ajouter sa marketplace de plugins",
+      "MUTATION_CANCELLED": "Installation annulée",
+      "PRECONDITION_FAILED": "Le plugin ou cet ordinateur a changé pendant le transfert",
+      "PERMISSION_DENIED": "Ce compte ne peut pas l'installer",
+      "NOT_FOUND": "Introuvable dans la marketplace de plugins de cet ordinateur",
+      "ALREADY_EXISTS": "Un élément du même nom existe déjà ici",
+      "SETUP_PLAN_EXPIRED": "Cette liste a expiré",
+      "SETUP_TRANSFER_DECLINED": "Non autorisé sur l'autre ordinateur, ou aucune réponse en 2 minutes",
+      "SETUP_TRANSFER_BUSY": "L'autre ordinateur traite une autre demande. Réessayez dans un instant",
+      "SETUP_TRANSFER_INVALID": "La réponse de l'autre ordinateur est illisible",
+      "SETUP_SOURCE_OUTDATED": "Mettez Cindy à jour sur l'autre ordinateur pour copier ceci",
+      "SETUP_SOURCE_UNAVAILABLE": "L'autre ordinateur ne répond pas",
+      "SSH_AUTHORIZE_FAILED": "L'autre ordinateur n'a pas pu ajouter la nouvelle clé à ce serveur",
+      "SSH_KEYGEN_FAILED": "Cet ordinateur n'a pas pu créer de clé SSH (ssh-keygen est requis)",
+      "SSH_HOST_NOT_FOUND": "Ce serveur n'existe plus sur l'autre ordinateur",
+      "SSH_AUTH_FAILED": "La clé a été ajoutée, mais le serveur a refusé cet ordinateur",
+      "SSH_CONNECT_FAILED": "Cet ordinateur ne peut pas joindre le serveur ; il n'est peut-être accessible que depuis le réseau de l'autre ordinateur",
+      "SSH_KEY_FILE_NOT_FOUND": "Le nouveau fichier de clé est introuvable sur cet ordinateur"
+    },
+    "checklist": {
+      "done": "Terminé",
+      "markDone": "Marquer comme terminé",
+      "needs": "Nécessite : {{items}}",
+      "voiceAsrName": "Reconnaissance vocale",
+      "plugin-setup": {
+        "title": "Connecter les comptes de « {{name}} »",
+        "action": "Connecter"
+      },
+      "plugin-manual": {
+        "title": "Installer manuellement le plugin « {{name}} »",
+        "detail": "Il a été importé directement sur cet ordinateur. Exportez-y son paquet depuis les détails du plugin, puis importez-le ici",
+        "action": "Ouvrir les plugins"
+      },
+      "market-source": {
+        "title": "Ajouter la marketplace de plugins « {{name}} »",
+        "detail": "L'adresse de cette marketplace n'est enregistrée que sur cet ordinateur. Ajoutez-la pour installer ses plugins",
+        "action": "Ouvrir les plugins"
+      },
+      "skill-manual": {
+        "title": "Copier la compétence « {{name}} »",
+        "detail": "Elle n'a pas été installée depuis SkillHub et n'existe que sur cet ordinateur",
+        "action": "Ouvrir les compétences"
+      },
+      "provider-key": {
+        "title": "Saisir la clé API de « {{name}} »",
+        "action": "Saisir la clé"
+      },
+      "provider-connection": {
+        "title": "Saisir à nouveau l'adresse de connexion de « {{name}} »",
+        "detail": "Les informations de connexion ou les paramètres de requête de l'adresse d'origine peuvent contenir des identifiants ; ils n'ont donc pas été copiés",
+        "action": "Saisir l'adresse"
+      },
+      "provider-sign-in": {
+        "title": "Se connecter à « {{name}} »",
+        "action": "Se connecter"
+      },
+      "local-model": {
+        "title": "Configurer le modèle local « {{name}} » sur cet ordinateur",
+        "detail": "Les modèles locaux s'exécutent sur l'ordinateur d'origine ; cet ordinateur a besoin de sa propre installation",
+        "action": "Ouvrir les fournisseurs"
+      },
+      "mcp-token": {
+        "title": "Saisir les identifiants d'accès du MCP « {{name}} »",
+        "action": "Saisir les identifiants"
+      },
+      "builtin-key": {
+        "title": "Saisir la clé API de « {{name}} »",
+        "action": "Saisir la clé"
+      },
+      "im-channel": {
+        "title": "Connecter « {{name}} »",
+        "detail": "Un bot ne reçoit les messages que sur un ordinateur à la fois. Choisissez l'ordinateur qui les reçoit avant de vous connecter",
+        "action": "Connecter"
+      },
+      "computer-use": {
+        "title": "Activer l'automatisation",
+        "detail": "Accordez les autorisations Accessibilité et Enregistrement de l'écran sur cet ordinateur",
+        "action": "Activer"
+      },
+      "remote-desktop": {
+        "title": "Activer le bureau à distance",
+        "detail": "Activez-le séparément sur cet ordinateur et accordez l'autorisation Enregistrement de l'écran",
+        "action": "Activer"
+      },
+      "ssh": {
+        "title_one": "Copier les clés et la configuration SSH de {{count}} hôte distant",
+        "title_other": "Copier les clés et la configuration SSH de {{count}} hôtes distants",
+        "title_many": "Copier les clés et la configuration SSH de {{count}} hôtes distants",
+        "detail": "Les clés et la configuration de ~/.ssh ne sont pas transférées automatiquement ; copiez-les sur cet ordinateur",
+        "action": "Ouvrir Connexion à distance"
+      },
+      "ssh-host": {
+        "title": "Configurer le serveur SSH « {{name}} »",
+        "detail": "Il n'a pas pu être configuré automatiquement. Choisissez une clé pour lui dans les réglages SSH et testez la connexion",
+        "action": "Ouvrir Connexion à distance"
+      },
+      "startAll_one": "Parcourir {{count}} élément",
+      "startAll_other": "Parcourir {{count}} éléments",
+      "startAll_many": "Parcourir {{count}} éléments"
+    },
+    "settingsGroups": {
+      "appearance": "Apparence",
+      "windowBehavior": "Comportement de l'app",
+      "menubar": "Barre des menus",
+      "collaboration": "Collaboration",
+      "agentResource": "Ressources de l'Agent",
+      "gitSafety": "Sécurité Git",
+      "goal": "Mode objectif",
+      "memory": "Mémoire",
+      "compaction": "Compactage du contexte",
+      "silentEncryptedRetry": "Ignorer silencieusement le contenu chiffré par protocole et réessayer",
+      "silentStopAutoResume": "Continuer après un arrêt inattendu",
+      "sessionRuntimeFallback": "Repli automatique du modèle des tâches",
+      "subagentModels": "Sous-agents",
+      "auxiliaryModels": "Modèles auxiliaires",
+      "visionBridge": "Vision Bridge",
+      "modelVisibility": "Modèles affichés et masqués",
+      "providerOrder": "Ordre des fournisseurs",
+      "modelCatalogOverrides": "Paramètres de modèle modifiés",
+      "modelPriceOverrides": "Prix des modèles",
+      "autoUpdate": "Installer les mises à jour en cas d'inactivité",
+      "updateChannel": "Canal bêta"
+    },
+    "settings": {
+      "title": "Assistant de migration",
+      "description": "Sur un nouvel ordinateur, copiez toutes les fonctionnalités, plugins et réglages auxquels Cindy est connecté sur vos autres ordinateurs, prêts à l’emploi.",
+      "start": "Ouvrir l'assistant de migration",
+      "pending_one": "Encore {{count}} élément à faire sur cet ordinateur",
+      "pending_other": "Encore {{count}} éléments à faire sur cet ordinateur",
+      "pending_many": "Encore {{count}} éléments à faire sur cet ordinateur",
+      "allDone": "Tout est fait sur cet ordinateur",
+      "from": "Transféré depuis « {{name}} »",
+      "closeChecklist": "Fermer la liste"
+    },
+    "suggestion": {
+      "title": "Utiliser l'assistant de migration pour transférer depuis « {{name}} » ?",
+      "description": "Vous pouvez configurer cet ordinateur avec les plugins, compétences, réglages et connexions de l'autre. Tout ce qui demande une nouvelle connexion ou autorisation ici est listé pour vous. Vous pouvez aussi l'ouvrir plus tard dans Réglages → Général → Assistant de migration.",
+      "confirm": "Ouvrir l'assistant de migration",
+      "later": "Plus tard"
+    },
+    "walkthrough": {
+      "progress": "Liste de configuration {{current}} / {{total}}",
+      "open": "Ouvrir",
+      "skip": "Passer",
+      "next": "Terminé, suivant",
+      "stop": "Terminer",
+      "allDone": "Liste terminée"
+    },
+    "transfer": {
+      "prompt": {
+        "title": "Assistant de migration",
+        "message": "« {{name}} » demande à copier les éléments suivants depuis cet ordinateur",
+        "secrets": "Clés (copiées uniquement sur cet ordinateur ; les clés présentes ici restent inchangées) :",
+        "ssh": "Ajouter la nouvelle clé publique SSH de cet ordinateur à ces serveurs :",
+        "sshKey": "Empreinte de la clé : {{fingerprint}}",
+        "code": "Code : {{code}}. N'autorisez que s'il correspond au code affiché sur l'autre ordinateur.",
+        "notice": "Si vous n'êtes pas vous-même en train de configurer un nouvel ordinateur, refusez.",
+        "more": "et {{count}} de plus",
+        "allow": "Autoriser",
+        "deny": "Refuser"
+      }
+    }
   },
   "forwardedRequest": {
     "sourcePresent": "[Source] L'hôte a conservé les mots d'origine de l'utilisateur, sans modification, comme contexte de la demande. La demande actuelle figure dans le complément de l'Agent.",

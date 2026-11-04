@@ -85,6 +85,8 @@ export interface NonSecretErrorSignals {
 }
 
 const DETERMINISTIC_USAGE_EXHAUSTION_PATTERNS = [
+  // #8705: LiteLLM may retain only the structured error type in the message.
+  /\binsufficient_balance_error\b/i,
   /\binsufficient[-_ ]?quota\b/i,
   /\binsufficient.{0,12}\b(?:balance|credit|funds)\b/i,
   /\bquota\b.{0,24}\b(?:exhausted|exceeded)\b/i,

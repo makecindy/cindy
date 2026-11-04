@@ -31,6 +31,7 @@ vi.mock('../serverApiClient', () => {
 });
 vi.mock('./index', () => ({
   getDeviceLinkStatus: () => 'online',
+  hasOfflineDirectPath: () => false,
   clearDeviceResponsiveness: vi.fn(),
   setRemoteControlEnabled: vi.fn(),
   openRemoteLink: vi.fn(),
@@ -50,6 +51,7 @@ vi.mock('./index', () => ({
 }));
 vi.mock('../device-link/index', () => ({
   getDeviceLinkStatus: () => 'online',
+  hasOfflineDirectPath: () => false,
   setRemoteControlEnabled: vi.fn(),
   openRemoteLink: vi.fn(),
   closeRemoteLink: vi.fn(),
@@ -339,6 +341,22 @@ describe('device-link IPC handlers', () => {
     expect(apiFetch).toHaveBeenCalledTimes(3);
     resolveFirst?.({ devices: [] });
     await Promise.all([before, after]);
+  });
+
+  // Unit: relay presence is not the group data-path state. Projection may keep
+  // an authenticated path online, but must not grant remote/local control.
+  it('listDevices: preserves a retained group path without granting control or reviving other devices', async () => {
+    const deps = makeDeps({
+      apiFetch: vi.fn().mockResolvedValue({ devices: ['executor', 'other'].map(deviceId => ({
+        deviceId, name: deviceId, online: false, remoteControlEnabled: false, isSelf: false,
+      })) }),
+      hasOfflineDirectPath: id => id === 'executor',
+      getState: () => ({ ...makeDeps().getState(), disabledControlDeviceIds: ['executor'] }),
+    });
+    await expect(handleListDevices(deps)).resolves.toMatchObject({ devices: [
+      { deviceId: 'executor', online: true, remoteControlEnabled: false, controlEnabled: false },
+      { deviceId: 'other', online: false, remoteControlEnabled: false, controlEnabled: true },
+    ] });
   });
 
   it('listDevices:503 → DEVICE_LINK_UNAVAILABLE,网络错(status 0)同样', async () => {

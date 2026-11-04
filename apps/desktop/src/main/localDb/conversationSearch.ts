@@ -1,4 +1,4 @@
-import { and, count, desc, eq, getTableColumns, gte, inArray, isNull, ne, or } from 'drizzle-orm';
+import { and, count, desc, eq, gte, inArray, isNull, ne, or } from 'drizzle-orm';
 import { normalizeProjectOrderPath } from '@cindy/maker-shared/project-order-sync';
 
 import type {
@@ -18,7 +18,7 @@ import type { SessionSource } from '../../shared/sessionSource.js';
 import { normalizeWorkingDirForComparison, normalizeWorkingDirForGrouping } from '../../shared/workingDir.js';
 import { getDbClient } from './client/current.js';
 import { botProfiles, botSessionLinks, messages, projectAliases, sessions } from './schema.js';
-import { searchChatHistoryHybrid } from './chatHistorySearch.js';
+import { prepareChatHistorySearch } from './chatHistorySearch.js';
 import { normalizeDbAgentKind } from '../../shared/agentKindConversion.js';
 import { visibleTextMatchesMessagesFtsQuery } from './chatHistorySearch.pure.js';
 import {
@@ -48,7 +48,11 @@ const LAST_ACTIVITY_DAY_COUNTS: Record<
 };
 const DAY_MS = 24 * 60 * 60 * 1000;
 
-type SessionRow = typeof sessions.$inferSelect & {
+type SessionRow = Pick<typeof sessions.$inferSelect,
+  | 'id' | 'title' | 'workingDir' | 'projectDir' | 'workspaceKind' | 'remoteHostId'
+  | 'agentKind' | 'status' | 'source' | 'orcaRole' | 'parentSessionId'
+  | 'userSendAt' | 'updatedAt' | 'createdAt'
+> & {
   companionId: string | null;
   companionName: string | null;
   companionStatus: string | null;
@@ -231,33 +235,32 @@ async function searchContentUntilUniqueSessions({
   sessionSources: readonly SessionSource[] | null;
 }) {
   const targetUniqueSessions = Math.min(limit * 2, allowedSessionIds.length);
-  const queryEmbeddingCache = new Map<string, number[]>();
+  // Keep the ranked pool within this invocation. Pages hydrate only their own
+  // hits, but do not repeat FTS/KNN retrieval or fusion for concentrated matches.
+  const fetchPage = await prepareChatHistorySearch({
+    query,
+    sessionIds: allowedSessionIds,
+    workdir: null,
+    fromMs: null,
+    toMs: null,
+    agentKind: filters.agentKind === 'all' ? null : filters.agentKind,
+    roles: [...SEARCH_ROLES],
+    contextRadius: 0,
+    sessionSources,
+    sessionStatuses: sessionStatusesForFilter(filters.status),
+    excludeCleared: true,
+    sessionActivityFromMs: activityCutoff,
+    skipVector,
+    ftsPoolLimit: CONTENT_POOL_LIMIT + 1,
+    vectorPoolLimit: CONTENT_POOL_LIMIT + 1,
+    fusePoolLimit: CONTENT_POOL_LIMIT,
+  });
 
   return collectContentHitsUntilUniqueSessions({
     maxPages: CONTENT_MAX_PAGES,
     pageLimit: CONTENT_PAGE_LIMIT,
     targetUniqueSessions,
-    fetchPage: ({ limit: pageLimit, offset }) => searchChatHistoryHybrid({
-      query,
-      sessionIds: allowedSessionIds,
-      workdir: null,
-      fromMs: null,
-      toMs: null,
-      agentKind: filters.agentKind === 'all' ? null : filters.agentKind,
-      roles: [...SEARCH_ROLES],
-      contextRadius: 0,
-      limit: pageLimit,
-      offset,
-      sessionSources,
-      sessionStatuses: sessionStatusesForFilter(filters.status),
-      excludeCleared: true,
-      sessionActivityFromMs: activityCutoff,
-      skipVector,
-      ftsPoolLimit: CONTENT_POOL_LIMIT + 1,
-      vectorPoolLimit: CONTENT_POOL_LIMIT + 1,
-      fusePoolLimit: CONTENT_POOL_LIMIT,
-      queryEmbeddingCache,
-    }),
+    fetchPage,
   });
 }
 
@@ -363,7 +366,20 @@ async function listSearchableSessions(
     : or(gte(sessions.updatedAt, activityCutoff), gte(sessions.userSendAt, activityCutoff));
   return db
     .select({
-      ...getTableColumns(sessions),
+      id: sessions.id,
+      title: sessions.title,
+      workingDir: sessions.workingDir,
+      projectDir: sessions.projectDir,
+      workspaceKind: sessions.workspaceKind,
+      remoteHostId: sessions.remoteHostId,
+      agentKind: sessions.agentKind,
+      status: sessions.status,
+      source: sessions.source,
+      orcaRole: sessions.orcaRole,
+      parentSessionId: sessions.parentSessionId,
+      userSendAt: sessions.userSendAt,
+      updatedAt: sessions.updatedAt,
+      createdAt: sessions.createdAt,
       companionId: botProfiles.id,
       companionName: botProfiles.displayName,
       companionStatus: botProfiles.status,

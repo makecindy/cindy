@@ -2418,33 +2418,37 @@ describe('new-connection identification', () => {
     expect(config.runtimes.pi).toMatchObject({ baseUrl: 'https://api.deepseek.com', wireProtocol: 'openai-chat', models: [{ id: 'my-model' }] });
     expect(keys).toEqual({ pi: 'fake-key' });
   });
-  // New one-click connection contract: real form actions must preserve the successful
-  // route through Save; changed inputs must invalidate an in-flight paid probe (unit tier).
-  it('applies an automatically verified protocol and saves the same Pi model route', async () => {
+  // New one-click connection contract: real form actions must save the verified
+  // endpoint and API; changed inputs must invalidate an in-flight paid probe (unit tier).
+  it.each([
+    { baseUrl: 'https://unknown.example/team/v1', wireProtocol: 'openai-chat' as const, api: 'openai-completions' },
+    { baseUrl: 'https://unknown.example/team', wireProtocol: 'anthropic-messages' as const, api: 'anthropic-messages' },
+  ])('saves automatically verified Pi $wireProtocol without a redundant model route', async selected => {
     await openIdentification();
     fireEvent.click(screen.getByRole('button', { name: 'settings.providers.detection.keepCustom' }));
     fireEvent.change(screen.getByPlaceholderText('settings.providers.custom.fields.baseUrlPlaceholder'), { target: { value: 'https://unknown.example/team/v1' } });
     window.electronAPI.maker.testProviderConnection = vi.fn(async () => ({ ok: true, latencyMs: 3, decision: 'success' as const,
-      selected: { baseUrl: 'https://unknown.example/team', wireProtocol: 'anthropic-messages' as const } }));
+      selected: { baseUrl: selected.baseUrl, wireProtocol: selected.wireProtocol } }));
     fireEvent.click(screen.getByRole('button', { name: 'settings.providers.custom.test.button' }));
     await act(async () => {});
     expect(window.electronAPI.maker.testProviderConnection).toHaveBeenCalledWith(expect.objectContaining({
       requestId: expect.any(String), strategy: 'auto', kind: 'adhoc',
       spec: expect.objectContaining({ agent: 'pi', baseUrl: 'https://unknown.example/team/v1', modelId: 'private-model' }),
     }));
-    expect(screen.getByPlaceholderText('settings.providers.custom.fields.baseUrlPlaceholder')).toHaveProperty('value', 'https://unknown.example/team');
+    expect(screen.getByPlaceholderText('settings.providers.custom.fields.baseUrlPlaceholder')).toHaveProperty('value', selected.baseUrl);
     fireEvent.click(screen.getByRole('button', { name: 'settings.providers.custom.test.button' }));
     await act(async () => {});
     expect(window.electronAPI.maker.testProviderConnection).toHaveBeenLastCalledWith(expect.objectContaining({
-      strategy: 'auto', spec: expect.objectContaining({ wireProtocol: 'anthropic-messages', baseUrl: 'https://unknown.example/team' }),
+      strategy: 'auto', spec: expect.objectContaining({ wireProtocol: selected.wireProtocol, baseUrl: selected.baseUrl }),
     }));
     fireEvent.change(screen.getByPlaceholderText('settings.providers.custom.fields.namePlaceholder'), { target: { value: 'Verified custom' } });
     fireEvent.click(screen.getByRole('button', { name: 'settings.providers.connection.saveProvider' }));
     await act(async () => {});
     const [config] = customProviderMocks.createCustomProvider.mock.calls[0];
     expect(Object.keys(config.runtimes)).toEqual(['pi']);
-    expect(config.runtimes.pi).toMatchObject({ baseUrl: 'https://unknown.example/team', wireProtocol: 'anthropic-messages',
-      models: [{ id: 'private-model', api: 'anthropic-messages', route: { baseUrl: 'https://unknown.example/team', wireProtocol: 'anthropic-messages' } }] });
+    expect(config.runtimes.pi).toMatchObject({ baseUrl: selected.baseUrl, wireProtocol: selected.wireProtocol,
+      models: [{ id: 'private-model', api: selected.api }] });
+    expect(config.runtimes.pi.models[0].route).toBeUndefined();
   });
   it.each(['key', 'address', 'stop'] as const)('cancels on %s and ignores a late successful protocol result', async change => {
     await openIdentification();

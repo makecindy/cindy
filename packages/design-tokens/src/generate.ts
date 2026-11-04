@@ -195,21 +195,27 @@ export async function buildProductionFiles(root = findRepoRoot()) {
                 })
                 .join("\n"),
           );
-          docRegion(
-            "login-colors",
-            "| token | light | dark | 核验源 |\n| --- | --- | --- | --- |\n" +
-              bindings.documentation.loginColors
-                .map((row) => {
-                  const values = (mode: "light" | "dark") =>
-                    row.ids
-                      .map(
-                        (id) =>
-                          `\`${formatToken(bindings.defaults[id][mode]!, tokens, source)}\``,
-                      )
-                      .join(" / ");
-                  return `| ${row.label} | ${values("light")} | ${values("dark")} | ${row.use} |`;
-                })
-                .join("\n"),
+          const loginDocPath = "docs/design-rules/login-flow.md";
+          outputFile(
+            loginDocPath,
+            replaceRegion(
+              readFileSync(join(root, loginDocPath), "utf8"),
+              "login-colors",
+              "| token | light | dark | 核验源 |\n| --- | --- | --- | --- |\n" +
+                bindings.documentation.loginColors
+                  .map((row) => {
+                    const values = (mode: "light" | "dark") =>
+                      row.ids
+                        .map(
+                          (id) =>
+                            `\`${formatToken(bindings.defaults[id][mode]!, tokens, source)}\``,
+                        )
+                        .join(" / ");
+                    return `| ${row.label} | ${values("light")} | ${values("dark")} | ${row.use} |`;
+                  })
+                  .join("\n"),
+              "markdown",
+            ),
           );
           const sizes = Object.values(f.numeric).map((id) =>
             Number.parseFloat(formatToken(id, tokens, source)),

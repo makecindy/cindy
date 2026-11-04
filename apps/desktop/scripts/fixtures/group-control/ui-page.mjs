@@ -144,6 +144,12 @@ export default {
       data: { ...base, sidebar: false, readReceipts: true, readReceiptsMask: true,
         members: [['a', 'Aster'], ['g', 'Ada'], ['h', 'Kai'], ['c', 'Leo'], ['d', 'Mira'], ['e', 'Orin'], ['f', 'Quill']].map(([id, name]) => ({ botId: id, actorId: id, name })) },
     },
+    'read-receipts-teammates': {
+      about: 'Bot group 消息已读 in a group of only teammates: a teammate reads a message when its computer takes the execution up, so the check turns double and the list names the teammates (no times)',
+      viewport: { width: 900, height: 520 },
+      data: { ...base, sidebar: false, readReceipts: true, readReceiptsTeammates: true,
+        members: [['a', 'Aster', 'bot'], ['b', 'Nova', 'bot'], ['g', 'Ada', 'human']].map(([id, name, actorKind]) => ({ botId: id, actorId: id, actorKind, name })) },
+    },
     'read-receipts-fill': {
       about: 'Bot group 消息已读: messages of growing length, so one has a last line just full: the check moves onto a row of its own instead of covering text',
       viewport: { width: 700, height: 1200 },
@@ -426,6 +432,28 @@ export default {
       await page.getByRole('dialog').getByText(await ui.t('bots.groupChat.server.readersNone'), { exact: true }).waitFor();
       await ui.capture('no-readers');
       await page.keyboard.press('Escape');
+      return;
+    }
+    if (ui.case === 'read-receipts-teammates') {
+      const marks = page.getByTestId('read-receipt');
+      assert.deepEqual(await marks.evaluateAll(nodes => nodes.map(node => node.getAttribute('data-read'))), ['true', 'false', 'true']);
+      await ui.capture('checks');
+      await marks.first().click();
+      const popover = page.getByRole('dialog');
+      await popover.getByText('Aster', { exact: true }).waitFor();
+      assert.deepEqual(await popover.getByRole('listitem').allInnerTexts().then(items => items.map(item => item.replace(/\s+/g, ' ').trim().replace(/^[A-Z] /, ''))), ['Aster', 'Nova'], 'both teammates are listed, in the server\'s order');
+      assert.equal(await popover.locator('time').count(), 0, 'a teammate\'s read has no time');
+      await ui.capture('read-list');
+      await page.keyboard.press('Escape');
+      await popover.waitFor({ state: 'detached' });
+      // A person and a teammate in one list.
+      await page.mouse.move(0, 0);
+      await marks.nth(2).click();
+      await popover.getByText('Ada', { exact: true }).waitFor();
+      assert.deepEqual(await popover.getByRole('listitem').allInnerTexts().then(items => items.map(item => item.replace(/\s+/g, ' ').trim().replace(/^[A-Z] /, ''))), ['Ada', 'Aster'], 'a person and a teammate are listed together');
+      await ui.capture('read-list-mixed');
+      await page.keyboard.press('Escape');
+      await popover.waitFor({ state: 'detached' });
       return;
     }
     if (ui.case === 'read-receipts-fill') {

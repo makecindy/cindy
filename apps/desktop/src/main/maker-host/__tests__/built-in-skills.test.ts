@@ -98,6 +98,12 @@ afterEach(() => {
 });
 
 describe('built-in Skills', () => {
+  it('stays above every bundle version pre-release builds of the /pr removal wrote', () => {
+    // Builds that still shipped the built-in /pr reached 78. A lower number would make
+    // prepareBuiltInSkills keep their newer bundle (and its pr/ folder) instead of replacing it.
+    expect(BUILT_IN_SKILLS_BUNDLE_VERSION).toBeGreaterThan(78);
+  });
+
   // Unit: the new authoring Skill must survive real bundle materialization with
   // every referenced chapter readable. Synthetic Skill fixtures did not cover
   // shipping missing resources or diverging legacy-tool documentation.
