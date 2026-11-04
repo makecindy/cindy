@@ -65,6 +65,15 @@ flowchart LR
 
 共享边界应让 Desktop 与 Host 使用同一个注入式 Maker 装配，而 `maker-core` 继续提供底层 Agent/Session 核心。宿主适配器需提供 `userDataPath`、已验证二进制、现有 SessionStorage、auth/provider 服务、Plugin Registry、MCP providers、Memory manager、日志和 lifecycle callbacks。现有 Device Link 的 SQLite EXCLUSIVE 锁现已抽成 `maker-core/runtime-owner-lock`，可供 Node 与 Desktop 使用同一锁协议；专属 Runtime 锁路径及两端的获取/释放接线尚未实现。抽取 Maker 前还必须迁出/注入 DB 初始化与唯一写者租约、OAuth 凭据访问、二进制路径/准备、Plugin 执行/审批接口及 readiness 顺序。此时 Host 壳只启动 HTTP；健康响应不会声称 Runtime 已就绪。
 
+## Maker 装配的可移植性实测（2026-11-04）
+
+以 `apps/desktop/src/main/maker-host/index.ts` 为起点做 import 图 BFS（相对路径 + 直接包名，6 跳内判定）：
+
+- 177 个直接依赖中，**118 个在 6 跳内可达 `electron`**；
+- 其中 **36 个直接 `import 'electron'`**（`authManager`、`appSessionState`、`agent-binaries/index`、`cindy-brain/index`、`device-link/*`、`cindy-media/blobStore`、`local-agent/service`、`maker-host/{auth-adapters,pi-host,maker-memory-host,...}` 等）。
+
+结论：不能靠一两个 seam 让 `getMaker()` 在 Node 中加载；共享装配必须把 Maker 组装移到只依赖 `maker-core` + 注入服务的新模块，并由 Desktop 适配 —— 这是一次独立的大重构，不能在阶段 1 顺带完成。`apps/host/src/boundary.test.mjs` 守住反向依赖：Host 源码一旦 import Electron 即失败。
+
 ## Electron 耦合分类
 
 当前 checkout 中 `apps/desktop/src/main` 有 4,890 个追踪的 `.ts` 文件；按 `electron` 导入搜索（排除 `__tests__`）命中 485 个 Main 源码文件（2026-11-04）。后者是直接 import 文件数，不代表 Electron API 的传递依赖总量。用户任务说明中的 5,084/562 是估算，与当前 checkout 的文件计数有差异。
