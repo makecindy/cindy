@@ -93,6 +93,7 @@ flowchart LR
 | Mobile 并发访问 | 迁移期保留 | 当前 Device Link 必须持续可用；Host 直连未完成互通验收前不切断。 |
 | Memory、文件访问、多 Agent | 未验证 | 必须沿用生产入口逐项验证，不能以模块/接口存在作为行为证据。 |
 | Tray、原生菜单、窗口特效、桌面快捷键 | Electron 专属，暂留 | 最终由 `cindy-desktop` 持有；如浏览器不可提供则按迁移清单注明禁用与 TODO。 |
+| systemd user unit | 已提供模板 | `apps/host/cindy-host.service` + [安装说明](systemd.md)；`systemd-analyze verify` 通过。未在本机 enable/start。 |
 
 ## 阶段 1 Host shell
 
