@@ -63,9 +63,21 @@ export const additionalSettings = defineSettings({
     titleKey: 'settings.computerUse.browserBackend.title',
     sectionKey: 'settings.computerUse.browser.title',
     options: [
-      { value: 'rsb-webview', labelKey: 'settings.computerUse.browserBackend.rsbWebview.title' },
-      { value: 'external', labelKey: 'settings.computerUse.browserBackend.external.title' },
-      { value: 'user-browser', labelKey: 'settings.computerUse.browserBackend.userBrowser.title' },
+      {
+        value: 'rsb-webview',
+        labelKey: 'settings.computerUse.browserBackend.rsbWebview.title',
+        descriptionKey: 'settings.computerUse.browserBackend.rsbWebview.description',
+      },
+      {
+        value: 'external',
+        labelKey: 'settings.computerUse.browserBackend.external.title',
+        descriptionKey: 'settings.computerUse.browserBackend.external.description',
+      },
+      {
+        value: 'user-browser',
+        labelKey: 'settings.computerUse.browserBackend.userBrowser.title',
+        descriptionKey: 'settings.computerUse.browserBackend.userBrowser.description',
+      },
     ],
   },
   layout: {

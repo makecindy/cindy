@@ -42,12 +42,6 @@ interface BrowserBackendSubsectionProps {
   userBrowserSetupBusy?: boolean;
 }
 
-const BACKEND_DESCRIPTION_KEYS: Record<BackendKind, string> = {
-  'rsb-webview': 'settings.computerUse.browserBackend.rsbWebview.description',
-  external: 'settings.computerUse.browserBackend.external.description',
-  'user-browser': 'settings.computerUse.browserBackend.userBrowser.description',
-};
-
 const SETUP_KEY = 'settings.computerUse.browserBackend.userBrowserSetup';
 const PLUGIN_STEP_KEYS = {
   'not-installed': {
@@ -100,6 +94,7 @@ export function BrowserBackendSubsection({
 }: BrowserBackendSubsectionProps) {
   const { t } = useTranslation();
   const setting = useSettingDefinition(additionalSettings.browserTarget);
+  const selectedOption = additionalSettings.browserTarget.options.find(({ value }) => value === active);
   const embeddedHealth =
     active === 'rsb-webview' && health?.active === 'rsb-webview' ? health : null;
   // 「我的浏览器」只有连接状态可报,没有可恢复的宿主侧控制连接。
@@ -114,7 +109,7 @@ export function BrowserBackendSubsection({
           </p>
           {/* 选中哪个就介绍哪个,切换时一起变。 */}
           <p className="text-12 leading-[1.5] text-[var(--settings-section-desc)]" aria-live="polite">
-            {t(BACKEND_DESCRIPTION_KEYS[active])}
+            {selectedOption ? t(selectedOption.descriptionKey) : null}
           </p>
         </div>
         <SegmentedControl<BackendKind>

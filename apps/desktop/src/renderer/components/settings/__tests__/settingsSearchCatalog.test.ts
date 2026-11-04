@@ -46,6 +46,18 @@ const searchContext = { platform: 'win32', region: 'cn', mode: 'cloud', membersh
 } as const;
 
 describe('settings discoverability regressions', () => {
+  // Unit regression (#8481): backend title coverage missed the visible selected
+  // description. Query real translated explanations through the production index.
+  it('finds browser settings by each backend description', () => {
+    const documents = buildSettingsSearchDocuments(searchI18n.t, TAB_IDS, searchContext);
+    for (const lng of ['zh-CN', 'en']) {
+      for (const backend of ['rsbWebview', 'external', 'userBrowser']) {
+        const query = searchI18n.t(`settings.computerUse.browserBackend.${backend}.description`, { lng });
+        expect(searchSettings(documents, query).some(({ entry }) => entry.id === 'computerUse.browserTarget'), query).toBe(true);
+      }
+    }
+    expect(searchSettings(documents, 'with your existing sign-ins').some(({ entry }) => entry.id === 'computerUse.browserTarget')).toBe(true);
+  });
   // Unit regressions (#8481): prior coverage checked generic wallpaper/sound
   // titles, not visible picker names. Query real translations via production search.
   it('finds the wallpaper picker by each selectable wallpaper name', () => {
