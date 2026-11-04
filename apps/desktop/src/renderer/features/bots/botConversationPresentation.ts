@@ -51,6 +51,7 @@ export function simplifyBotRenderItems(
   items: readonly RenderItem[],
   isStreaming: boolean,
   _visibleGeneratedFileKeys?: ReadonlySet<string>,
+  tailReplyIds?: ReadonlySet<string>,
 ): RenderItem[] {
   // Preserve history-window boundaries while lifting addressed replies;
   // a later seal must not promote prose across an unloaded history gap.
@@ -63,14 +64,14 @@ export function simplifyBotRenderItems(
     const userBoundary = item.type === 'message' && item.message.role === 'user';
     if (!userBoundary && previousEnd !== null && start !== null
       && start - previousEnd > HISTORY_GAP_SPLIT_MS) {
-      result.push(...projectWindow(window));
+      result.push(...projectWindow(window, tailReplyIds));
       window = [];
     }
     window.push(item);
     if (userBoundary) previousEnd = end ?? previousEnd;
     else if (end !== null) previousEnd = previousEnd === null ? end : Math.max(previousEnd, end);
   }
-  result.push(...projectWindow(window));
+  result.push(...projectWindow(window, tailReplyIds));
   const attached = new Set(result.flatMap(item => item.type === 'message'
     && item.message.role === 'assistant' && item.message.turnCompleted === true && item.message.content.trim()
     ? (item.message.botTaskResults ?? []).map(botTaskResultKey) : []));
@@ -92,8 +93,12 @@ export function simplifyBotRenderItems(
   return [...visible, ...fallbackReceipts];
 }
 
-export function botProcessItems(items: readonly RenderItem[], isStreaming: boolean): RenderItem[] {
-  const projected = simplifyBotRenderItems(items, isStreaming);
+export function botProcessItems(
+  items: readonly RenderItem[],
+  isStreaming: boolean,
+  tailReplyIds?: ReadonlySet<string>,
+): RenderItem[] {
+  const projected = simplifyBotRenderItems(items, isStreaming, undefined, tailReplyIds);
   const addressed = new Set<RenderItem>();
   let sealed = false;
   for (let i = projected.length - 1; i >= 0; i--) {
@@ -212,25 +217,48 @@ function liftRepliesFromWorkGroup(
   return out;
 }
 
-/** 工具 / 思考活动：与主进程「后续工具动作」的判据对齐。
- *  计划卡（agent_plan）与生成文件 / 改动卡会把原工具行替掉，仍是一次工具动作；
- *  只有 fork 分隔条不代表动作。 */
-function isToolActivity(item: RenderItem): boolean {
-  if (item.type === 'message') {
-    const { role } = item.message;
-    return role === 'thinking' || role === 'tool_use' || role === 'tool_result';
+/**
+ * 主进程会算作「未封口收尾回复」的正文（#8629 的另一半判据）。
+ *
+ * 与 `apps/desktop/src/main/localDb/ipc/bots.ts` 的 `canonicalReplyVisibility` 同口径：
+ * 未封口、非 commentary、非子代理 / 私聊回执，且它之后到下一个真实用户轮次之间没有
+ * 任何工具 / 思考动作（`steer` 插话与续跑行不算新轮）。
+ *
+ * 必须在**消息**层算：展示层会整条删掉 `AskUserQuestion` / `ExitPlanMode` 与单步计划
+ * 工具，计划卡还会替掉原工具行，按渲染项判断会把仍有后续工具的过程旁白当成收尾；
+ * 同一轮跨 `HISTORY_GAP_SPLIT_MS` 分窗时，前一个窗口也看不到后一个窗口里的工具。
+ */
+export function tailReplyClientIds(messages: readonly ChatMessage[]): ReadonlySet<string> {
+  const ids = new Set<string>();
+  let activityAfter = false;
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    const message = messages[index]!;
+    if (message.role === 'user') {
+      if (!isSteerUserRow(message) && !isContinuationMessage(message)) activityAfter = false;
+      continue;
+    }
+    if (message.role === 'thinking' || message.role === 'tool_use' || message.role === 'tool_result') {
+      activityAfter = true;
+      continue;
+    }
+    if (message.role !== 'assistant' || activityAfter) continue;
+    if (message.parentToolUseId || message.botPrivateReply || message.systemCardType) continue;
+    if (!message.content.trim() || message.failedSamplingAttempt) continue;
+    if (message.assistantPhase === 'commentary' && !message.explicitDelivery
+      && !hasRichAnswer(message.content)) continue;
+    ids.add(message.clientId);
   }
-  return item.type !== 'fork_origin';
+  return ids;
 }
 
-/** 真正开新轮次的用户行。`steer` 插话与恢复续跑（continuation / autoResume）不是新轮，
- *  与主进程 `canonicalReplyVisibility` 的 next_input 判据、以及分组自己的边界口径一致。 */
+/** 真正开新轮次的用户行：`steer` 插话与恢复续跑不算新轮（与主进程 next_input 同口径）。 */
 function startsNewTurn(message: ChatMessage): boolean {
   return message.role === 'user' && !isSteerUserRow(message) && !isContinuationMessage(message);
 }
 
 function projectWindow(
   items: readonly RenderItem[],
+  tailReplyIds?: ReadonlySet<string>,
 ): RenderItem[] {
   // A sealed answer may span several contiguous prose blocks; only the last carries
   // the seal. groupWorkRuns folds earlier background-wake seals into work groups, so
@@ -248,50 +276,40 @@ function projectWindow(
     sealedRun ||= isCompletedAssistantMessage(item.message);
     if (sealedRun) sealedAnswers.add(item.message);
   }
-  // 主进程把「未封口、但后面再没有工具动作」的收尾正文也算作回复
-  // （`canonicalReplyVisibility` 的第二支）。它必须真的显示出来：折进 work_group 后
-  // 组件默认折叠、`Collapse` 不挂载子项，用户既看不到、也不能据此推进读位（#8629）。
-  // 与主进程同口径提升为可见正文；有后续工具动作的旁白继续留在折叠里。
+  // 收尾回复的归属由消息层 `tailReplyClientIds` 判定（见该函数注释）：展示层会删行、
+  // 会把同轮切成多个窗口，只有消息层与主进程的未读口径完全一致。
   //
-  // 未加载的惰性历史子项（`deferred`）拿不到子行，不能据此断言「后面没有工具」：
-  // 它是活动边界。否则旁白会被误提升，而且是否提升取决于详情是否已加载。
-  const tailReplies = new Set<ChatMessage>();
-  let activityAfter = false;
-  const scanTail = (list: readonly RenderItem[]): void => {
+  // 例外是还没加载的历史：`deferred` 工作组之后什么都没有时无法断言「后面没有工具」，
+  // 此时消息层也可能尚未拿到那些行，不能提升。
+  const unloadedAfter = new Set<string>();
+  let unknownAfter = false;
+  const scanUnknown = (list: readonly RenderItem[]): void => {
     for (let index = list.length - 1; index >= 0; index -= 1) {
-      const item = list[index];
-      if (item.type === 'message' && item.message.role === 'user') {
-        // steer 插话 / 自动续跑的 user 行不开启新轮：后续工具仍然决定旁白是否可见。
-        if (startsNewTurn(item.message)) activityAfter = false;
+      const item = list[index]!;
+      if (item.type === 'message' && startsNewTurn(item.message)) {
+        unknownAfter = false;
         continue;
       }
       if (item.type === 'work_group') {
         if (item.deferred) {
-          activityAfter = true;
+          unknownAfter = true;
           continue;
         }
-        scanTail(item.children);
+        scanUnknown(item.children);
         continue;
       }
-      if (isToolActivity(item)) {
-        activityAfter = true;
-        continue;
+      if (unknownAfter && item.type === 'message' && item.message.role === 'assistant') {
+        unloadedAfter.add(item.message.clientId);
       }
-      if (activityAfter || !isProse(item)) continue;
-      const { message } = item;
-      if (!message.content.trim() || message.failedSamplingAttempt) continue;
-      if (message.assistantPhase === 'commentary' && !message.explicitDelivery
-        && !hasRichAnswer(message.content)) continue;
-      tailReplies.add(message);
     }
   };
-  scanTail(items);
+  scanUnknown(items);
   const isAddressedReply = (message: ChatMessage) => Boolean(message.content.trim())
     && !message.failedSamplingAttempt
     && !(message.assistantPhase === 'commentary' && !message.explicitDelivery && !hasRichAnswer(message.content))
     && (hasRichAnswer(message.content) || message.assistantPhase === 'final_answer' || Boolean(message.sourceGroup)
       || Boolean(message.explicitDelivery) || isCompletedAssistantMessage(message) || sealedAnswers.has(message)
-      || tailReplies.has(message));
+      || (tailReplyIds?.has(message.clientId) === true && !unloadedAfter.has(message.clientId)));
   const result: RenderItem[] = [];
   const lifted = items.flatMap((item) => item.type !== 'work_group' ? [item]
     : hasWorkContent(item) ? liftRepliesFromWorkGroup(item, isAddressedReply) : []);
