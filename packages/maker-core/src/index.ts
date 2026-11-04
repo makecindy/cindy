@@ -90,6 +90,12 @@ export {
   type ConsolidateResult,
 } from './memory/store.js';
 export {
+  createMakerMemoryManagerForHost,
+  attachAgentsToMakerMemory,
+  type MakerMemoryHostContext,
+  type MemoryHostSession,
+} from './memory/host-factory.js';
+export {
   MakerMemoryManager,
   type MakerMemoryManagerDeps,
   type MakerMemoryState,

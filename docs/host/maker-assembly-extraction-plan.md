@@ -30,6 +30,10 @@
 5. **Host 适配**：实现同一端口的 Node 版本；未实现的能力显式返回 `unsupported`，不得静默降级。
 6. **收敛**：删除 `getMaker()` 内已迁走的代码，确保只有一份装配。
 
+## 已完成的第一刀
+
+`packages/maker-core/src/memory/host-factory.ts`：把 Maker Memory 的宿主装配（owner 根解析、boundary fail-closed、ownerScopeKey、换根重读 enabled、Bot Home override）从 Desktop 适配器中移入 maker-core，Desktop 的 `maker-memory-host.ts` 只保留 Electron 端口。Desktop typecheck 通过，邻近 maker-host 测试 21/21 通过。
+
 ## 每步验证
 
 - `pnpm --filter desktop run typecheck`（约 7 分钟，改动后必跑）。
