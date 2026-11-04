@@ -14,6 +14,7 @@ import { CindyAuthClient } from '@cindy/auth-client';
 import { createRequire } from 'node:module';
 import { readAuthEndpoints } from './auth/endpoints.mjs';
 import { logoutHostSession } from './auth/logout.mjs';
+import { listInstalledPlugins } from './plugins.mjs';
 import { createPreparedLinuxCredentialStore } from './credentials/store.mjs';
 import { createHostServer } from './server.mjs';
 
@@ -154,6 +155,9 @@ const server = createHostServer({
     return result;
   },
   listSessions: async () => (sessionStorage ? sessionStorage.list() : []),
+  listPlugins: () => (runtime.owner
+    ? listInstalledPlugins(resolveHostDataDir(), runtime.owner)
+    : { plugins: [], namespace: 'canonical', legacyNamespacePresent: false }),
 });
 
 server.on('error', (error) => {

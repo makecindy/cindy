@@ -8,7 +8,7 @@
 import { app } from 'electron';
 import fs from 'node:fs';
 import path from 'node:path';
-import crypto from 'node:crypto';
+import { dataOwnerStorageKey, ownerScopedPath } from './dataOwnerPath.js';
 
 import { createLogger } from './logger.js';
 import { createOverrideSettingsFile } from './maker-host/override-settings-file.js';
@@ -27,9 +27,7 @@ export interface ActiveAppSession {
 export const LOCAL_DATA_OWNER_ID = LOCAL_PROFILE_DATA_OWNER_ID;
 
 /** Filesystem/storage-safe opaque namespace for a data owner. */
-export function dataOwnerStorageKey(ownerId: string): string {
-  return crypto.createHash('sha256').update(ownerId).digest('hex').slice(0, 20);
-}
+export { dataOwnerStorageKey };
 
 /**
  * Resolve private application state beneath the active owner's namespace.
@@ -44,7 +42,7 @@ export function ownerScopedUserDataPath(...parts: string[]): string {
     // reading or writing a real owner's private state.
     return path.join(app.getPath('temp'), 'cindy-no-session', String(process.pid), ...parts);
   }
-  return path.join(app.getPath('userData'), 'owners', dataOwnerStorageKey(ownerId), ...parts);
+  return ownerScopedPath(app.getPath('userData'), ownerId, ...parts);
 }
 
 interface PersistedAppSessionSettings {

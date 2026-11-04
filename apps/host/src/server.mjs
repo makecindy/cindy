@@ -33,7 +33,7 @@ export function createHostServer(deps) {
         return;
       }
 
-      if ((request.method === 'GET' && (url.pathname === '/sessions' || url.pathname === '/me'))
+      if ((request.method === 'GET' && (url.pathname === '/sessions' || url.pathname === '/me' || url.pathname === '/plugins'))
         || (request.method === 'POST' && url.pathname === '/logout')) {
         if (!isAuthorized(request.headers.authorization, deps.token)) {
           send(response, 401, { error: 'unauthorized' }, { 'www-authenticate': 'Bearer' });
@@ -41,6 +41,10 @@ export function createHostServer(deps) {
         }
         if (url.pathname === '/me') {
           send(response, 200, await deps.me());
+          return;
+        }
+        if (url.pathname === '/plugins') {
+          send(response, 200, deps.listPlugins());
           return;
         }
         if (url.pathname === '/logout') {

@@ -12,6 +12,7 @@ async function withServer(t, deps) {
     me: () => ({ owner: 'owner-1', authenticated: true, realm: 'global' }),
     listSessions: () => [{ id: 's1', title: 'task', agentKind: 'claude-code', model: 'm', workDir: '/w', updatedAt: 1 }],
     logout: () => ({ signedOut: true, serverRevoked: true }),
+    listPlugins: () => ({ plugins: [], namespace: 'canonical', legacyNamespacePresent: false }),
     ...deps,
   });
   await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
