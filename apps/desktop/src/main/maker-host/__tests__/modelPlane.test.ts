@@ -1459,3 +1459,57 @@ it('keeps modalities-only bridge defaults distinct after local image overrides',
   expect(defaults()).toEqual([true, false]);
   expect(models('openai', 'claude-code')[0]!.modalities!.input).toEqual(['text']);
 });
+
+it.each([true, false])('keeps retained local modalities as image default %s after clearing the switch', (supported) => {
+  setActiveCatalog(baseCatalog());
+  setDiscoveredCodexModels([accountModel('private-image', {
+    supportsImageInput: undefined,
+    modalities: { input: supported ? ['text'] : ['text', 'image'], output: ['text'] },
+  })]);
+  const retained = { modalities: { input: supported ? ['text', 'image'] : ['text'], output: ['text'] } };
+  const parsed = sanitizeModelCatalogOverrides({ patches: {
+    'openai:private-image': { base: retained, perAgent: {
+      codex: { supportsImageInput: !supported }, 'claude-code': { supportsImageInput: !supported },
+    } },
+  } });
+  expect(parsed.invalid).toEqual([]);
+  setLocalCatalogOverrides(parsed.overrides);
+  for (const agent of ['codex', 'claude-code'] as const) {
+    expect(models('openai', agent)[0]!.supportsImageInput).toBe(!supported);
+    expect(modelImageInputDefault(models('openai', agent)[0]!)).toBe(supported);
+  }
+  const cleared = sanitizeModelCatalogOverrides({ patches: { 'openai:private-image': { base: retained } } });
+  expect(cleared.invalid).toEqual([]);
+  setLocalCatalogOverrides(cleared.overrides);
+  for (const agent of ['codex', 'claude-code'] as const) {
+    expect(modelImageInputDefault(models('openai', agent)[0]!)).toBe(supported);
+    expect(models('openai', agent)[0]!.modalities!.input.includes('image')).toBe(supported);
+  }
+});
+
+it.each([true, false])('uses retained local addition capability %s as the consumer default', (supported) => {
+  setActiveCatalog(baseCatalog());
+  setDiscoveredCodexModels([accountModel('private-added')]);
+  const additions = { 'openai:private-added': {
+    base: { name: 'Added', contextWindow: 32768, efforts: [], defaultEffort: null, supportsImageInput: !supported },
+    perAgent: { 'claude-code': { supportsImageInput: supported } },
+  } };
+  const read = () => models('openai', 'claude-code').find(model => model.id === 'chatgpt/private-added')!;
+  const parsed = sanitizeModelCatalogOverrides({ additions });
+  expect(parsed.invalid).toEqual([]);
+  setLocalCatalogOverrides(parsed.overrides);
+  expect(read().supportsImageInput).toBe(supported);
+  expect(modelImageInputDefault(read())).toBe(supported);
+  const patched = sanitizeModelCatalogOverrides({ additions, patches: {
+    'openai:private-added': { perAgent: {
+      codex: { supportsImageInput: supported }, 'claude-code': { supportsImageInput: !supported },
+    } },
+  } });
+  expect(patched.invalid).toEqual([]);
+  setLocalCatalogOverrides(patched.overrides);
+  expect(read().supportsImageInput).toBe(!supported);
+  expect(modelImageInputDefault(read())).toBe(supported);
+  setLocalCatalogOverrides(parsed.overrides);
+  expect(read().supportsImageInput).toBe(supported);
+  expect(modelImageInputDefault(read())).toBe(supported);
+});
