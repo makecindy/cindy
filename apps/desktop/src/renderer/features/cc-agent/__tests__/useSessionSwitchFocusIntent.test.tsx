@@ -51,4 +51,14 @@ describe('useSessionSwitchFocusIntent', () => {
     rerender({ sessionId: 'b', enabled: false });
     expect(result.current.armed).toBe(false);
   });
+
+  // 分屏里已挂载的 pane 被选中成为主视图：sessionId 不变，只有 enabled false → true。
+  it('同一任务的视图重新成为主视图时重新武装', () => {
+    const { result, rerender } = setup({ sessionId: 'a', enabled: true });
+    act(() => result.current.consume());
+    rerender({ sessionId: 'a', enabled: false });
+    expect(result.current.armed).toBe(false);
+    rerender({ sessionId: 'a', enabled: true });
+    expect(result.current.armed).toBe(true);
+  });
 });
