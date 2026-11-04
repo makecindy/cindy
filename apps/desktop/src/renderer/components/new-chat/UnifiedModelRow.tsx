@@ -122,7 +122,7 @@ export function UnifiedModelRow({
   const duplicateSupplier = hasDuplicateSupplier(provider, supplier);
   const supplierLabel = duplicateSupplier ? `${supplier} (${source!.providerId})` : supplier;
   const connectionLabel = provider ? providerDisplayName(provider, t) : entry.providerId;
-  const descriptionLabel = supplierLabel ?? connectionLabel;
+  const descriptionLabel = supplierLabel ?? description;
   // Remote rows append device/group/unavailability information to this exact
   // connection label. Replace only that prefix; keep the rest of the source.
   const sourceDisplayLabel = supplierLabel && sourceLabel

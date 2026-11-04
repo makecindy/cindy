@@ -13,18 +13,29 @@ const provider = { ...buildUserProvider({ id: 'magpie-ui', name: 'Magpie', runti
   baseUrl: 'http://127.0.0.1:3425/v1', wireProtocol: 'openai-chat', models,
 } } }), connected: true };
 const entries = unifiedModelEntries({ providers: [provider] });
+const ordinaryProviders = ['openai', 'xd'].map(id => ({
+  ...buildUserProvider({ id, name: id === 'xd' ? 'Cindy AI' : 'OpenAI', runtimes: { pi: {
+    baseUrl: 'http://127.0.0.1:3425/v1', wireProtocol: 'openai-chat',
+    models: [{ id: 'gpt-5.5', name: 'GPT-5.5', efforts: ['low'] }],
+  } } }), connected: true, subscriptionAccount: { identity: 'account@example.test' },
+}));
 function Fixture({ variant }: { variant: string }) {
   const [selected, setSelected] = useState('');
   const [favorites, setFavorites] = useState<Set<string>>(new Set());
+  const ordinary = variant === 'non-magpie' || variant === 'accounts';
+  const providers = ordinary ? ordinaryProviders : [provider];
+  const visibleEntries = ordinary ? unifiedModelEntries({ providers }) : entries;
   return <main className="mx-auto w-full max-w-[520px] p-4">
     <div className="rounded-xl border border-[var(--model-dropdown-border)] bg-[var(--model-dropdown-bg)] p-2" role="listbox" aria-label="Magpie models">
-      {entries.map(entry => {
+      {visibleEntries.map(entry => {
         const config = resolveUnifiedRowConfig({ entry });
-        return <UnifiedModelRow key={entry.modelId} entry={entry} config={config} providers={[provider]}
-          anchor={{ kind: 'model', providerId: provider.id, modelId: entry.modelId }}
+        return <UnifiedModelRow key={`${entry.providerId}/${entry.modelId}`} entry={entry} config={config} providers={providers}
+          anchor={{ kind: 'model', providerId: entry.providerId, modelId: entry.modelId }}
           selected={selected === entry.modelId} active={false} isFavoriteRow={favorites.has(entry.modelId)} justFavorited={false}
           interactionDisabled={false} effortLabelOf={(_, effort) => effort}
-          {...(variant !== 'provider' ? { sourceLabel: 'Magpie' } : {})}
+          {...(variant === 'accounts'
+            ? { sourceLabel: providers.find(item => item.id === entry.providerId)!.name }
+            : variant !== 'provider' && !ordinary ? { sourceLabel: 'Magpie' } : {})}
           onSelect={() => setSelected(entry.modelId)} onReveal={() => {}} onRevealForKeyboard={() => {}}
           onStar={() => setFavorites(previous => { const next = new Set(previous); next.has(entry.modelId) ? next.delete(entry.modelId) : next.add(entry.modelId); return next; })}/>;
       })}

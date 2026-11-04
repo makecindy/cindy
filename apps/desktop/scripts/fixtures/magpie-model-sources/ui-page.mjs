@@ -12,9 +12,25 @@ export default {
     default: { about: 'Existing aggregate source rows show distinct suppliers; same model name on two routes' },
     provider: { about: 'Existing descriptions replaced; unknown model remains single-line' },
     narrow: { about: 'Same production rows at 320px', viewport: { width: 320, height: 520 } },
+    'non-magpie': { about: 'OpenAI and Cindy AI retain their original model descriptions' },
+    accounts: { about: 'Non-Magpie aggregate source rows retain recognized account identities' },
   },
   async check(page, ui) {
     const rows = page.locator('[data-unified-anchor]');
+    if (ui.case === 'non-magpie' || ui.case === 'accounts') {
+      if (await rows.count() !== 2) throw Error('Ordinary provider rows missing');
+      for (let i = 0; i < 2; i++) {
+        const row = rows.nth(i);
+        if (ui.case === 'accounts') {
+          const source = await row.locator('[data-model-source-details]').innerText();
+          if (!source.includes('account@example.test')) throw Error('Account identity missing');
+        } else if (await row.locator('[title]').filter({ hasText: await ui.t('modelDescriptions.coding') }).count() !== 1) {
+          throw Error('Original model description missing');
+        }
+      }
+      await ui.capture('ordinary-provider-rows');
+      return;
+    }
     if (await rows.count() !== 3) throw Error('Gateway routes merged');
     await ui.capture('source-rows');
     const first = await rows.nth(0).innerText();
