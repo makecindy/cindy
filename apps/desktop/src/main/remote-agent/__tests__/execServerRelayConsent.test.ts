@@ -185,6 +185,46 @@ describe('exec-server asynchronous output projection', () => {
 });
 
 describe('exec-server relay with confirmation on this computer', () => {
+  // unit：普通区外写被本机 gate 拒绝后必须进入确认；旧 confirm 只处理凭证，直接 -32001。
+  // 真实 relay → RemoteExecutor → gate，验证等待期间不转发、允许/拒绝和取消后的迟到回答。
+  it.each((['allow', 'deny', 'cancel', 'mode-change'] as const).flatMap(outcome =>
+    (['write', 'exec'] as const).map(kind => ({ outcome, kind })),
+  ))('asks locally for a non-credential $kind: $outcome', async ({ outcome, kind }) => {
+    const workspace = new ExecutorWorkspace({ workingDir: root });
+    const gate = new ExecutorGate(workspace, 'normal');
+    let answer!: (allowed: boolean) => void;
+    const confirmPermission = vi.fn(() => new Promise<boolean>((resolve) => { answer = resolve; }));
+    const executor = new RemoteExecutor({ workspace, gate, rgPath: 'unused', confirmPermission });
+    const replies: unknown[] = [];
+    const relay = new ExecServerRelay({
+      codexPath: 'codex', cwd: root, workspace,
+      authorize: action => executor.check(action), confirm: action => executor.confirm(action),
+      push: async frames => { for (const frame of frames) if (frame.kind === 'message' && typeof frame.data === 'string') replies.push(JSON.parse(frame.data)); },
+    });
+    try {
+      relay.handle({ t: 'ws', connId: 'ordinary', kind: 'open', path: '/ws/exec-server' });
+      const target = path.join(root, '..', 'outside.txt');
+      const request = kind === 'write'
+        ? { method: 'fs/writeFile', params: { path: target, dataBase64: '' } }
+        : { method: 'process/start', params: { argv: ['/bin/bash', '-lc', `rm -rf '${target}'`], cwd: root } };
+      relay.handle({ t: 'ws', connId: 'ordinary', kind: 'message', data: JSON.stringify({
+        id: 51, ...request,
+      }) });
+      await vi.waitFor(() => expect(confirmPermission).toHaveBeenCalledTimes(1));
+      expect(spawned.lines).toEqual([]);
+      expect(replies).toEqual([]);
+      if (outcome === 'cancel') await executor.close();
+      if (outcome === 'mode-change') executor.setGateMode('plan');
+      answer(outcome !== 'deny');
+      if (outcome === 'allow') {
+        await vi.waitFor(() => expect(spawned.lines.map(line => JSON.parse(line).id)).toEqual([51]));
+      } else {
+        await vi.waitFor(() => expect(replies).toEqual([expect.objectContaining({ id: 51, error: expect.objectContaining({ code: -32001 }) })]));
+        expect(spawned.lines).toEqual([]);
+      }
+    } finally { relay.close(); await executor.close(); }
+  });
+
   it('uses an explicit session consent for subsequent Codex credential requests', async () => {
     const workspace = new ExecutorWorkspace({ workingDir: root });
     const gate = new ExecutorGate(workspace, 'full', Date.now, { confirmCredentials: true });

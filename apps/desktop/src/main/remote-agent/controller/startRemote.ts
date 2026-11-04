@@ -263,6 +263,16 @@ export function credentialConfirmation(action: ExecutorAction, description: stri
   }
 }
 
+/** 普通权限上限确认不借用凭证卡的任务级授权，交给同一个本机交互入口。 */
+export function executorPermissionConfirmation(action: ExecutorAction): LocalConfirmation {
+  const { toolName, input } = credentialConfirmation(action, '');
+  return {
+    toolName,
+    input: action.kind === 'exec' ? { command: action.command, cwd: action.cwd } : input,
+    metadata: { hostOwnedConfirmation: 'remote_executor_permission' },
+  };
+}
+
 function shellName(): string {
   if (process.platform === 'win32') return 'bash';
   return (process.env.SHELL ?? '/bin/bash').split('/').pop() || 'bash';
@@ -415,6 +425,8 @@ async function prepareAndStartRemoteAgentSession(
   const executor = new RemoteExecutor({
     workspace,
     gate,
+    confirmPermission: async (action, signal) =>
+      (await controller?.confirm(executorPermissionConfirmation(action), signal)) === true,
     rgPath: deps.rgPath,
     capture: deps.capture?.({ kind, opts }),
     ...(deps.extractPdfText ? { extractPdfText: deps.extractPdfText } : {}),
@@ -523,7 +535,7 @@ async function prepareAndStartRemoteAgentSession(
         cwd: workspace.workingDir,
         workspace,
         authorize: (action) => executor.check(action),
-        ...(credentialConsent ? { confirm: (action: ExecutorAction) => executor.confirm(action) } : {}),
+        confirm: (action: ExecutorAction) => executor.confirm(action),
         push: async (frames) => {
           await active?.push(frames);
         },
