@@ -198,7 +198,7 @@ export class RemoteExecutor {
       : this.credentialConfirmationAbort.signal;
     const permissionGeneration = this.permissionGeneration;
     // 只有要核实的 git 命令才在弹卡前等核实结果；核实通过不弹卡，也不必排在其他确认卡后面。
-    const gitCheck = this.gitReadsCheck(action, signal);
+    const gitCheck = credential ? this.gitReadsCheck(action, signal) : null;
     if (gitCheck && await gitCheck) {
       // 核实期间任务结束、请求被取消或权限已切换：同样不放行。
       if (this.closed || signal?.aborted || permissionGeneration !== this.permissionGeneration) return false;

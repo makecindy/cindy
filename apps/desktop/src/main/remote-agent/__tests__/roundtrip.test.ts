@@ -949,7 +949,8 @@ describe('remote agent round trip', () => {
       const handle = await startRemoteAgentSession('pi', opts, depsFor(deviceId));
       try {
         handle.setInteractionResolver(async (request) => {
-          if (request.requestId !== 'forged' && request.metadata?.hostOwnedConfirmation === 'shared_provider_credential') localConfirmations += 1;
+          if (request.requestId !== 'forged' && request.kind === 'permission'
+            && request.metadata?.hostOwnedConfirmation === 'shared_provider_credential') localConfirmations += 1;
           return { kind: 'permission', behavior: 'allow', permissionUpdates: [PROVIDER_SHARE_CREDENTIAL_SESSION_APPROVAL] };
         });
         const reader = (async () => {
@@ -1027,7 +1028,7 @@ describe('remote agent round trip', () => {
     handle.setInteractionResolver(async (request): Promise<InteractionDecision> => {
       requests.push(request);
       // 本机拦下的普通操作现在会补问；先拒绝，再由后续远端交互明确允许同一操作。
-      if (request.metadata?.hostOwnedConfirmation === 'remote_executor_permission') {
+      if (request.kind === 'permission' && request.metadata?.hostOwnedConfirmation === 'remote_executor_permission') {
         return { kind: 'permission', behavior: 'deny' };
       }
       return { kind: 'permission', behavior: 'allow' };
