@@ -4540,7 +4540,7 @@
         "enabled": "Verbindung geteilt. Du sprichst mit Cindy. Nutze /bot, um ein Teammitglied auszuwählen, oder /share off, um das ursprüngliche dedizierte Teammitglied wiederherzustellen.",
         "disabled": "Freigabe deaktiviert. Das ursprüngliche dedizierte Teammitglied wurde wiederhergestellt.",
         "list": "Wähle unten ein Teammitglied aus. Nutze die vollständige ID, wenn Namen übereinstimmen.",
-        "unknown": "Kein eindeutiges, aktives Teammitglied gefunden. Nutze /bot, um Teammitglieder aufzulisten, und wähle eine vollständige ID.",
+        "unknown": "Kein eindeutiges Teammitglied mit dem Status „Aktiv“ gefunden. Nutze /bot, um Teammitglieder aufzulisten, und wähle eine vollständige ID.",
         "switched": "Aktuelles Teammitglied: ",
         "controlBusy": "Schließe oder beende zuerst die aktuelle Sitzungsauswahl, bevor du das Teammitglied wechselst.",
         "unavailable": "Das ausgewählte Teammitglied ist nicht verfügbar. Setze es in Cindy fort oder nutze /bot, um ein anderes auszuwählen."
