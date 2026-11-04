@@ -1,5 +1,5 @@
 import { chatGroupMemberName } from '@cindy/maker-shared/botGroupPresentation';
-import { readImportedBotGroupRuntimeFailureCode, readBotGroupProcessCard, readBotGroupTaskCard, readBotGroupThreadShareCard, readBotGroupQuoteCard, readBotGroupQuote,
+import { readBotGroupCapabilityNotice, readImportedBotGroupRuntimeFailureCode, readBotGroupProcessCard, readBotGroupTaskCard, readBotGroupThreadShareCard, readBotGroupQuoteCard, readBotGroupQuote,
   botGroupQuoteExcerpt, botGroupQuoteAttachmentName, type BotGroupMessageView } from '../../shared/botGroupChat.js';
 
 /** Read as the companion actor, never as its owner. No local history cache or read receipts. */
@@ -22,12 +22,13 @@ interface Message {
   content: Array<{ type: string; text?: string; fallback?: string; caption?: string; namespace?: string; schemaRevision?: number; data?: Record<string, unknown> }>;
 }
 type HistoryQuote = { messageId: string; deleted: true } | {
-  messageId: string; authorId?: string; authorKind?: string; origin?: string; noticeCode?: BotGroupMessageView['noticeCode']; maskAttribution?: BotGroupMessageView['maskAttribution']; from: string; text: string; attachmentCount: number;
+  messageId: string; authorId?: string; authorKind?: string; origin?: string; noticeCode?: BotGroupMessageView['noticeCode']; capabilityNoticeCode?: BotGroupMessageView['capabilityNoticeCode']; maskAttribution?: BotGroupMessageView['maskAttribution']; from: string; text: string; attachmentCount: number;
   attachmentName: string | null; snapshot?: true;
 };
 // Match messageView: a compatible failure card establishes system identity only
 // when the server marked its message as integration, never by a card's own claim.
-const historySource = (message: Message): { authorKind: string; origin?: string; noticeCode?: BotGroupMessageView['noticeCode'] } => {
+const historySource = (message: Message): { authorKind: string; origin?: string; noticeCode?: BotGroupMessageView['noticeCode']; capabilityNoticeCode?: BotGroupMessageView['capabilityNoticeCode'] } => {
+  const capabilityNoticeCode = readBotGroupCapabilityNotice(message);
   const notice = message.origin === 'integration' && !message.deleted
     ? message.content.find(block => block.namespace === 'cindy.group-notice' && block.schemaRevision === 1) : undefined;
   const code = notice?.data?.noticeCode;
@@ -36,11 +37,12 @@ const historySource = (message: Message): { authorKind: string; origin?: string;
     authorKind: message.origin === 'system' || noticeCode || readImportedBotGroupRuntimeFailureCode(message) ? 'system' : message.author.kind,
     ...(message.origin ? { origin: message.origin } : {}),
     ...(noticeCode ? { noticeCode } : {}),
+    ...(capabilityNoticeCode ? { capabilityNoticeCode } : {}),
   };
 };
 // Match the execution context: recognized references never contribute their fallback
 // to the author's own words. Unknown card revisions remain ordinary readable content.
-const historyText = (message: Message) => readImportedBotGroupRuntimeFailureCode(message) || readBotGroupThreadShareCard(message) ? ''
+const historyText = (message: Message) => readBotGroupCapabilityNotice(message) || readImportedBotGroupRuntimeFailureCode(message) || readBotGroupThreadShareCard(message) ? ''
   : message.content.filter(block => block.type !== 'media' && !readBotGroupProcessCard(block)
     && (block.namespace !== 'cindy.local-history' || block.data?.activity === true)
     && !readBotGroupQuoteCard(block) && !(message.author.kind === 'bot' && readBotGroupTaskCard(block)))
@@ -59,7 +61,7 @@ function historyQuote(message: Message, known: ReadonlyMap<string, Message>, aut
 }
 export interface TeammateGroupHistoryResult {
   groups?: Array<{ id: string; name: string }>;
-  messages?: Array<{ id: string; sequence: string; author: string; authorId?: string; authorKind: string; origin?: string; noticeCode?: BotGroupMessageView['noticeCode']; createdAt: string; threadRootId: string | null; text: string; attachments: string[]; maskAttribution?: BotGroupMessageView['maskAttribution']; sharedReplyId?: string; quote?: HistoryQuote }>;
+  messages?: Array<{ id: string; sequence: string; author: string; authorId?: string; authorKind: string; origin?: string; noticeCode?: BotGroupMessageView['noticeCode']; capabilityNoticeCode?: BotGroupMessageView['capabilityNoticeCode']; createdAt: string; threadRootId: string | null; text: string; attachments: string[]; maskAttribution?: BotGroupMessageView['maskAttribution']; sharedReplyId?: string; quote?: HistoryQuote }>;
   nextCursor: string | null;
   hasMore: boolean;
 }

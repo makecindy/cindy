@@ -1464,6 +1464,49 @@ describe('Chat Server result delivery and refresh', () => {
     }
     expect(page).toMatchObject({ hasMore: true, nextCursor: '41' });
   });
+  // #8433 / bot-group-chat.md §4.4, unit HTTP adapter+reader: runtime
+  // capability advice is not model body/search text, including snapshot-only quotes.
+  it.each(['valid', 'snapshot-only', 'human', 'mixed', 'unknown', 'future'] as const)(
+    'filters capability notice body while preserving its category (%s)', async mode => {
+    fixture.profiles = [{ id: 'local-bot', displayName: 'Bot', avatar: null, status: 'active' }];
+    const members = [{ id: botId, kind: 'bot', state: 'joined' }];
+    const originalId = '70000000-0000-4000-8000-000000000003';
+    const fallback = 'CAPABILITY_FALLBACK_ONLY';
+    const card = { ...buildBotGroupCapabilityNotice('ATTACHMENTS_UNAVAILABLE', fallback),
+      schemaRevision: mode === 'future' ? 2 : 1, data: { code: mode === 'unknown' ? 'UNKNOWN' : 'ATTACHMENTS_UNAVAILABLE' } };
+    const base = { deleted: false, createdAt: '2026-11-04T00:00:00Z', threadRootId: null,
+      authorId: botId, author: { kind: 'bot', name: 'Bot' } };
+    const original = { ...base, id: originalId, seq: '41', origin: 'bot',
+      author: { ...base.author, kind: mode === 'human' ? 'human' : 'bot' },
+      content: mode === 'mixed' ? [card, { type: 'text', text: 'Ordinary words' }] : [card] };
+    fixture.handle.mockImplementation(route => {
+      if (route.endsWith('/snapshot')) return { body: { room: room(roomId), members,
+        ...(mode === 'snapshot-only' ? { messages: [original] } : {}) } };
+      if (route.endsWith('/members')) return { body: members };
+      if (route.includes('/messages?all=true')) return { body: [
+        ...(mode === 'snapshot-only' ? [] : [original]),
+        { ...base, id: 'quoting-message', seq: '42', origin: 'user', content: [buildBotGroupQuoteCard({
+          messageId: originalId, authorName: 'Bot', authorKind: mode === 'human' ? 'user' : 'bot',
+          excerpt: fallback, attachmentCount: 0, attachmentName: null, sequence: 41 })] },
+      ] };
+      return response(route);
+    });
+    const input = { botId: 'local-bot', groupId: roomId, limit: 2 };
+    const page = await service.teammateHistory!(input);
+    const hidden = mode === 'valid' || mode === 'snapshot-only';
+    const text = hidden ? '' : mode === 'mixed' ? `${fallback}\nOrdinary words` : fallback;
+    const quoted = page.messages!.find(message => message.id === 'quoting-message')!;
+    expect(quoted).toMatchObject({ text: '', quote: { text: mode === 'mixed' ? `${fallback} Ordinary words` : text } });
+    const row = page.messages!.find(message => message.id === originalId);
+    if (mode === 'snapshot-only') expect(row).toBeUndefined(); else expect(row).toMatchObject({ text });
+    for (const projected of [row, quoted.quote].filter(Boolean)) {
+      if (hidden) expect(projected).toHaveProperty('capabilityNoticeCode', 'ATTACHMENTS_UNAVAILABLE');
+      else expect(projected).not.toHaveProperty('capabilityNoticeCode');
+    }
+    expect(quoted).not.toHaveProperty('capabilityNoticeCode');
+    expect((await service.teammateHistory!({ ...input, query: fallback })).messages).toHaveLength(hidden ? 0 : 2);
+    expect(page).toMatchObject({ hasMore: mode !== 'snapshot-only', nextCursor: mode === 'snapshot-only' ? null : '41' });
+  });
   // #8433 review / bot-group-chat.md §4.4: migrated failures are notices,
   // not model conversation text. The production reader must share UI recognition.
   it.each(['metadata', 'legacy-prefix', 'human-copy', 'ordinary-import'] as const)(
