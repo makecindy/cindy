@@ -45,11 +45,12 @@ function wav(suffix: string) {
 }
 
 beforeEach(() => {
-  vi.stubEnv('EXPO_PUBLIC_VOICE_FAILURE_DIAGNOSTICS', '1');
+  vi.stubGlobal('__DEV__', true);
+  vi.stubEnv('EXPO_PUBLIC_VOICE_FAILURE_DIAGNOSTICS', undefined);
   disk.files.clear(); disk.onWrite = undefined;
   setMobileAuthOwner('diagnostics-test-account');
 });
-afterEach(() => { vi.unstubAllEnvs(); disk.onWrite = undefined; });
+afterEach(() => { vi.unstubAllGlobals(); vi.unstubAllEnvs(); disk.onWrite = undefined; });
 
 describe('personal mobile failure recordings', () => {
   it('records actual SAUC sends, retry connections, final silence and empty responses', async () => {
@@ -99,10 +100,30 @@ describe('personal mobile failure recordings', () => {
     ]);
   });
 
-  it('is opt-in and requires a signed-in owner', () => {
-    vi.stubEnv('EXPO_PUBLIC_VOICE_FAILURE_DIAGNOSTICS', '');
-    expect(createMobileVoiceFailureRecording()).toBeUndefined();
-    vi.stubEnv('EXPO_PUBLIC_VOICE_FAILURE_DIAGNOSTICS', '1');
+  // User requested Debug defaults; the old opt-in test missed default capture and
+  // allowed Release to persist audio. Unit tier checks the real factory + disk output.
+  it.each([
+    { dev: true, flag: undefined, saves: true },
+    { dev: true, flag: '0', saves: false },
+    { dev: false, flag: undefined, saves: false },
+    { dev: false, flag: '1', saves: false },
+  ])('failure persistence: __DEV__=$dev flag=$flag saves=$saves', async ({ dev, flag, saves }) => {
+    vi.stubGlobal('__DEV__', dev);
+    vi.stubEnv('EXPO_PUBLIC_VOICE_FAILURE_DIAGNOSTICS', flag);
+    const r = createMobileVoiceFailureRecording();
+    r?.begin('build-boundary');
+    r?.captured(pcm, 16000);
+    await r?.finish('empty_transcript');
+    if (saves) {
+      expect(wav('capture.wav').subarray(44)).toEqual(Buffer.from(pcm));
+      expect(manifest().reason).toBe('empty_transcript');
+    } else {
+      expect(r).toBeUndefined();
+      expect(disk.files.size).toBe(0);
+    }
+  });
+
+  it('requires a signed-in owner even in Debug', () => {
     setMobileAuthOwner(null);
     expect(createMobileVoiceFailureRecording()).toBeUndefined();
     expect(disk.files.size).toBe(0);

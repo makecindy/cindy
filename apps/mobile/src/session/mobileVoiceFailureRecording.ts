@@ -1,4 +1,4 @@
-/** Personal experiment only. Never enable this flag in a distributed build/OTA. */
+/** Personal Debug experiment only. Release bundles never retain diagnostic audio. */
 import type { AsrProvider } from '@cindy/voice-input-core';
 import { getMobileAuthOwner, isMobileAuthOwnerCurrent, subscribeMobileAuthOwner } from '@/auth/authOwnerGeneration';
 import { mobileDebugLog } from '@/debug/mobileDebugLog';
@@ -38,7 +38,7 @@ async function prune(keep = 3): Promise<void> {
 }
 
 export function createMobileVoiceFailureRecording(): MobileVoiceFailureRecording | undefined {
-  if (process.env.EXPO_PUBLIC_VOICE_FAILURE_DIAGNOSTICS !== '1') return undefined;
+  if (!__DEV__ || process.env.EXPO_PUBLIC_VOICE_FAILURE_DIAGNOSTICS === '0') return undefined;
   if (!getMobileAuthOwner().accountKey) return undefined;
   if (!subscribed) {
     subscribed = true;

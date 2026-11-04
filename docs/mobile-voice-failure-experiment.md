@@ -5,13 +5,20 @@
 
 ## 开启与关闭
 
-默认关闭。只在自己的测试构建/Metro 中显式设置
-`EXPO_PUBLIC_VOICE_FAILURE_DIAGNOSTICS=1`。这是 Expo 打包时替换的值；关闭须移除变量并
-重新加载/构建 JS，不能只改正在运行的 Metro 父进程环境。仅登录账号后的手机听写生效。
-示例（工作树中的普通开发入口）：
+此个人实验分支的 Debug JS（`__DEV__ === true`）默认开启，无需配置环境变量。
+Release JS（`__DEV__ === false`）始终关闭；即使遗留
+`EXPO_PUBLIC_VOICE_FAILURE_DIAGNOSTICS=1` 也不能开启。应用名带“测试”或 bundle id
+为 `com.xd.cindytest` 不代表正在运行 Debug JS，必须核实实际加载的分支、Metro 和 build label。
+仅登录账号后的手机听写生效。
+
+普通开发入口默认开启；临时停用需设置 `EXPO_PUBLIC_VOICE_FAILURE_DIAGNOSTICS=0`，
+重新启动 Metro 并重新加载/构建 JS（Expo 在打包时替换此变量，不能只改父进程环境）：
 
 ```sh
-EXPO_PUBLIC_VOICE_FAILURE_DIAGNOSTICS=1 pnpm --filter mobile start
+# 默认开启失败录音
+pnpm --filter mobile start
+# 显式关闭
+EXPO_PUBLIC_VOICE_FAILURE_DIAGNOSTICS=0 pnpm --filter mobile start
 ```
 
 使用既有个人真机开发包连接该 Metro。此 PR 不安装/覆盖手机应用，不修改原生模块、依赖、
