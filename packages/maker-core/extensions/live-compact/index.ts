@@ -721,12 +721,12 @@ function tightenShadow(dir: string): void {
 function saveShadow(state: SpineState, dir: string, file: string, body: string): void {
   const id = state.key || DEFAULT_KEY;
   const incoming = Buffer.byteLength(body);
-  // 先写成功再轮换:任何一步失败最多多出一份新备份,绝不丢旧备份。
   const temp = `${file}.tmp`;
+  // 先把内容落到 temp(不在轮换统计里),再腾地方,最后 rename 成正式名:
+  // 任何一步失败都只可能留下已被删掉的 temp,旧备份不会因为「删了但没写成功」而丢失。
   try {
     writeFileSync(temp, body, { mode: 0o600 });
     chmodSync(temp, 0o600);
-    renameSync(temp, file);
   } catch (error) {
     try {
       unlinkSync(temp);
@@ -736,9 +736,9 @@ function saveShadow(state: SpineState, dir: string, file: string, body: string):
   }
   const rotation = rotateShadow({ dir, incomingBytes: incoming, protectPath: file });
   if (!rotation.ok) {
-    // 轮换没腾出空间(或单份就超上限):撤掉刚写的这份,旧备份原样保留。
+    // 腾不出地方(或单份就超上限):撤掉 temp,旧备份原样保留。
     try {
-      unlinkSync(file);
+      unlinkSync(temp);
     } catch {}
     // 同一次会话只警告一次:每轮都刷一遍会把日志刷满。
     if (!shadowWarned.has(id)) {
@@ -746,6 +746,15 @@ function saveShadow(state: SpineState, dir: string, file: string, body: string):
       logLine(state, `spine shadow full: used=${rotation.used} cap=${rotation.cap} oversize=${rotation.oversize}; 这一刀不切`);
     }
     throw new Error(rotation.oversize ? "spine: shadow backup is larger than the cap" : "spine: shadow backup is full; leaving the span");
+  }
+  try {
+    renameSync(temp, file);
+  } catch (error) {
+    try {
+      unlinkSync(temp);
+    } catch {}
+    logLine(state, `spine shadow rename failed: ${(error as Error)?.message ?? error}; 这一刀不切`);
+    throw new Error("spine: shadow backup was not written");
   }
   if (rotation.deleted > 0) {
     logLine(state, `spine shadow rotate: 删除 ${rotation.deleted} 个文件,腾出 ${rotation.freed} 字节,用量 ${rotation.used + incoming}/${rotation.cap}`);
