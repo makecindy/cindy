@@ -148,7 +148,7 @@ export type {
 const D_LIST_TOOLS =
   'Cindy 设置/控制入口：query 搜索壁纸、模型、伙伴、自动化、设备等；key 读单项说明；name 读已发现工具的参数。例：list_tools({query:"伙伴模型"})。' +
   `探索当前任务获准的 ${BRAND_NAME} 能力。要主人选择、亲自输入账号密码验证码、扫码或连接账号时直接用 ask_owner，不经这里；` +
-  'github 类目提供宿主缓存的 PR 状态、PR/CI/评审的游标增量读取（适合定时任务）和任务 PR 关联管理；不替代 gh 等命令行，查询不会建立任务关联。其它先不传 category 查看用途与本机/跨电脑范围，再按类目发现工具，用 call_tool 执行。';
+  'github 类目用于定时追踪 PR/CI/评审变化与管理任务 PR 关联，不替代 gh 等命令行；查询不会建立任务关联。其它先不传 category 查看用途与本机/跨电脑范围，再按类目发现工具，用 call_tool 执行。';
 
 const D_CALL_TOOL =
   '调用 list_tools 或 get_capabilities 为当前任务返回的具体工具；args 为 JSON 对象。查设置可先 list_tools({query:需求})；不执行任意命令。';
