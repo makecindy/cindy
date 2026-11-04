@@ -4,6 +4,7 @@ import { createServer } from 'node:http';
 
 import { createDbClientForHandle } from '../../desktop/src/main/localDb/client/createDbClientForHandle.js';
 import { OwnerSessionStorage } from '../../desktop/src/main/localDb/sessionStorageAdapter.js';
+import { readCachedBinaryStatus } from '../../desktop/src/main/agent-binaries/binaryStatus.js';
 import { openOwnerDatabase, OwnerDatabaseError } from '../../desktop/src/main/localDb/startupCore.js';
 import { resolveHostDataDir, resolveHostRegion } from './profile-path.mjs';
 import { acquireHostRuntimeLease, type HostRuntimeLease } from './runtime-lock.js';
@@ -20,6 +21,29 @@ interface RuntimeState {
 }
 
 const runtime: RuntimeState = { state: 'uninitialized', owner: null, storage: 'unopened' };
+
+/** Dev checkout binaries, in the same order the Desktop dev lookup uses. */
+const HARNESS_KINDS = ['claude-code', 'codex', 'pi'] as const;
+const platformKey = `${process.platform}-${process.arch}`;
+
+function harnessStatus(): Record<string, boolean> {
+  return Object.fromEntries(HARNESS_KINDS.map((kind) => {
+    const layout = kind === 'claude-code'
+      ? { dir: 'claude-code-bin', file: 'claude' }
+      : kind === 'codex'
+        ? { dir: 'codex-package-bin', file: path.join('bin', 'codex') }
+        : { dir: 'pi-bin', file: 'pi' };
+    const status = readCachedBinaryStatus({
+      kind,
+      isPackaged: false,
+      userDataDir: resolveHostDataDir(),
+      devCandidates: [
+        path.join(desktopRoot, '..', layout.dir, platformKey, layout.file),
+      ].map((candidate) => path.resolve(candidate)),
+    });
+    return [kind, status.binaryReady];
+  }));
+}
 let activeOwner: string | null = null;
 let closeStorage: (() => Promise<void>) | null = null;
 let sessionStorage: OwnerSessionStorage | null = null;
@@ -87,6 +111,7 @@ const server = createServer(async (request, response) => {
       region: resolveHostRegion(),
       dataDir: resolveHostDataDir(),
       runtime,
+      harness: harnessStatus(),
       sessions,
     }));
     return;
