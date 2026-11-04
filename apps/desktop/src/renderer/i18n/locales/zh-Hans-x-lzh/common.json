@@ -19230,5 +19230,23 @@
         "deny": "拒绝"
       }
     }
+  },
+  "cliProxyQuota": {
+    "title": "Antigravity 限额",
+    "connectHint": "以本机 CLI Proxy 管理密钥连接，密钥加密藏于本机。",
+    "key": "管理密钥",
+    "connect": "连接限额",
+    "failed": "限额未得，请查Proxy与管理密钥。",
+    "refresh": "刷新限额",
+    "disconnect": "断开限额",
+    "empty": "未见 Antigravity 账号。",
+    "disabled": "账号已停用",
+    "unavailable": "限额暂不可得",
+    "fiveHour": "五时限额",
+    "weekly": "周限额",
+    "notApplicable": "当前不适用",
+    "remaining": "尚余 {{percent}}%",
+    "reset": "重置：{{time}}",
+    "updated": "更新：{{time}}"
   }
 }

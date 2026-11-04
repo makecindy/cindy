@@ -19230,5 +19230,23 @@
     "rendered": "文書を表示",
     "wrap": "行の折り返し",
     "lineNumbers": "行番号"
+  },
+  "cliProxyQuota": {
+    "title": "Antigravity のクォータ",
+    "connectHint": "ローカル CLI proxy の管理キーで接続します。キーはこの端末に暗号化して保存されます。",
+    "key": "管理キー",
+    "connect": "クォータを接続",
+    "failed": "クォータを取得できません。プロキシと管理キーを確認してください。",
+    "refresh": "クォータを更新",
+    "disconnect": "クォータを切断",
+    "empty": "Antigravity アカウントがありません。",
+    "disabled": "アカウントは無効です",
+    "unavailable": "クォータを取得できません",
+    "fiveHour": "5 時間の上限",
+    "weekly": "週間上限",
+    "notApplicable": "現在は適用されません",
+    "remaining": "残り {{percent}}%",
+    "reset": "リセット：{{time}}",
+    "updated": "更新：{{time}}"
   }
 }

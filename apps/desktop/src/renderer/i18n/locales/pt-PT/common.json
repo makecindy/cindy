@@ -19486,5 +19486,23 @@
     "rendered": "Ver documento",
     "wrap": "Moldar linhas",
     "lineNumbers": "Números de linha"
+  },
+  "cliProxyQuota": {
+    "title": "Quota do Antigravity",
+    "connectHint": "Ligue com a chave de gestão do CLI proxy local. Será guardada encriptada neste computador.",
+    "key": "Chave de gestão",
+    "connect": "Ligar quota",
+    "failed": "Não foi possível ler a quota. Verifique o proxy e a chave de gestão.",
+    "refresh": "Atualizar quota",
+    "disconnect": "Desligar quota",
+    "empty": "Não foram encontradas contas do Antigravity.",
+    "disabled": "Conta desativada",
+    "unavailable": "Quota indisponível",
+    "fiveHour": "Limite de 5 horas",
+    "weekly": "Limite semanal",
+    "notApplicable": "Não se aplica de momento",
+    "remaining": "{{percent}}% restante",
+    "reset": "Reposição: {{time}}",
+    "updated": "Atualizado: {{time}}"
   }
 }

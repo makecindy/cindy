@@ -960,6 +960,13 @@ export async function getCustomProvider(id: string): Promise<CustomProviderConfi
   return row ? rowToConfig(row) : null;
 }
 
+/** Stable incarnation for display integrations; a recreated slug must not reuse credentials. */
+export async function getCustomProviderCreationTime(id: string): Promise<number | null> {
+  const row = await getDbClient().drizzle.select({ createdAt: customProviders.createdAt })
+    .from(customProviders).where(eq(customProviders.id, id)).get();
+  return row?.createdAt ?? null;
+}
+
 /** 该 id 是否已存在。 */
 export async function customProviderExists(id: string): Promise<boolean> {
   return (await getCustomProvider(id)) != null;

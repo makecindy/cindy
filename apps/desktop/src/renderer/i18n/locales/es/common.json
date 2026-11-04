@@ -19486,5 +19486,23 @@
     "rendered": "Ver documento",
     "wrap": "Ajustar líneas",
     "lineNumbers": "Números de línea"
+  },
+  "cliProxyQuota": {
+    "title": "Cuota de Antigravity",
+    "connectHint": "Conecta con la clave de administración del CLI proxy local. Se guardará cifrada en este equipo.",
+    "key": "Clave de administración",
+    "connect": "Conectar cuota",
+    "failed": "No se pudo leer la cuota. Comprueba el proxy y la clave de administración.",
+    "refresh": "Actualizar cuota",
+    "disconnect": "Desconectar cuota",
+    "empty": "No se encontraron cuentas de Antigravity.",
+    "disabled": "Cuenta desactivada",
+    "unavailable": "Cuota no disponible",
+    "fiveHour": "Límite de 5 horas",
+    "weekly": "Límite semanal",
+    "notApplicable": "No se aplica actualmente",
+    "remaining": "{{percent}}% restante",
+    "reset": "Se restablece: {{time}}",
+    "updated": "Actualizado: {{time}}"
   }
 }

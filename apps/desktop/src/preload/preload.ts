@@ -8335,6 +8335,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
 
     // ── Agent 今日累计 (取代老 electronAPI.codex.usage.* + electronAPI.onUsageTodaySpendChanged) ─
     usage: {
+      getCliProxyQuota: (providerId: string, managementKey?: string, refresh?: boolean): Promise<import('../shared/cliProxyQuota').CliProxyQuotaSnapshot> =>
+        ipcRenderer.invoke('maker:usage:cli-proxy', providerId, managementKey, refresh),
       getToday: (agentKind: 'claude-code' | 'codex' | 'pi'): Promise<unknown> =>
         ipcRenderer.invoke('maker:usage:today', agentKind),
       getAccount: (
