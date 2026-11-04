@@ -262,9 +262,9 @@ describe('partner conversation presentation', () => {
     for (const element of cases) expect(renderClient(element)).not.toContain('companion.taskResult');
   });
 
-  // Regression: expanding process prose must not duplicate the final reply's portrait.
+  // Regression: the process and final reply each own one portrait; nested details do not.
   // Exercise the production projection and renderer, including nested work groups.
-  it('keeps expanded companion work readable without repeating the reply portrait', () => {
+  it('shows one process portrait and one reply portrait without repeating them in expanded details', () => {
     const items = companionConversationItems(buildMobileMessageRenderItems([
       msg('u', 'user', 'Check it'),
       msg('p', 'assistant', 'Checking the details', { agentMeta: { assistantPhase: 'commentary' } }),
@@ -277,7 +277,8 @@ describe('partner conversation presentation', () => {
       expect(html.match(/message\.agentBubble/g)).toHaveLength(2);
       expect(html).toContain('message.toolRow');
       expect(html.match(/companion\.replyRow/g)).toHaveLength(1);
-      expect(html.match(/partner-portrait/g)).toHaveLength(1);
+      expect(html.match(/companion\.processRow/g)).toHaveLength(1);
+      expect(html.match(/partner-portrait/g)).toHaveLength(2);
     } finally {
       viewportHarness.expanded = false;
     }

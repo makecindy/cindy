@@ -3202,10 +3202,18 @@ const RenderItemView = memo(function RenderItemView({
   }
   const groupTimestamp = actions.companion && (item.type === 'message' || item.type === 'pending_send')
     ? actions.companionTimeGroups?.get(item.key) : undefined;
-  // Cards and work groups share the reply text column, leaving the avatar slot empty.
+  // Each outer process group owns a portrait, just like the final reply.
+  // Nested details clear companionAvatar, so expanding them cannot repeat it.
+  const processAvatar = actions.companion && item.type === 'work_group' ? actions.companionAvatar : undefined;
+  // Cards still share the reply text column without repeating the portrait.
   const alignWithReplies = !!actions.companionAvatar && actions.companion
-    && (item.type === 'work_group' || (item.type === 'message' && !!item.message.companion));
-  const aligned = alignWithReplies ? (
+    && item.type === 'message' && !!item.message.companion;
+  const aligned = processAvatar ? (
+    <View style={styles.companionAvatarRow} testID="companion.processRow">
+      <View style={styles.companionAvatarSlot}>{processAvatar}</View>
+      <View style={styles.companionAvatarContent}>{node}</View>
+    </View>
+  ) : alignWithReplies ? (
     <View style={styles.companionAvatarInset}>{node}</View>
   ) : (
     node
