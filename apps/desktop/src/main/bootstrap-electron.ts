@@ -6813,7 +6813,9 @@ const registerIpcHandlers = () => {
           broadcastFailure: false,
           signal: piInstallSignal,
         }),
-      register: registerPiAgentIfAvailable,
+      // Before the first Maker exists, its constructor will pick up Pi. A false
+      // result from an existing Maker must instead enable background recovery.
+      register: () => getMakerIfReady() === null || registerPiAgentIfAvailable(),
     });
     if (piInfo.status === 'failed') {
       piRuntimeRecovery.markUnavailable(piInfo.error);
