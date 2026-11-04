@@ -1,8 +1,11 @@
 import path from 'node:path';
+import { existsSync } from 'node:fs';
+import { randomBytes } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 
 import { createDbClientForHandle } from '../../desktop/src/main/localDb/client/createDbClientForHandle.js';
 import { OwnerSessionStorage } from '../../desktop/src/main/localDb/sessionStorageAdapter.js';
+import { setCurrentDbClient } from '../../desktop/src/main/localDb/client/current.ts';
 import { readCachedBinaryStatus } from '../../desktop/src/main/agent-binaries/binaryStatus.js';
 import { openOwnerDatabase, OwnerDatabaseError } from '../../desktop/src/main/localDb/startupCore.js';
 import { resolveHostDataDir, resolveHostRegion } from './profile-path.mjs';
@@ -136,6 +139,9 @@ async function ensureRuntime(ownerId: string): Promise<void> {
     dispose: async () => opened.db.close(),
   });
   sessionStorage = new OwnerSessionStorage({ db: () => client });
+  // Shared readers (history, tags) resolve the owner client from this singleton;
+  // installing it here keeps them on the same connection as the host runtime.
+  setCurrentDbClient(client, ownerId);
   activeOwner = ownerId;
   closeStorage = () => client.dispose();
   runtime.state = 'ready';
@@ -161,8 +167,15 @@ async function ensureRuntime(ownerId: string): Promise<void> {
 }
 
 const apiToken = readOrCreateApiToken(resolveHostDataDir());
+// Per-boot cookie for the bundled web client; the bearer remains the CLI path.
+const webSession = randomBytes(24).toString('base64url');
+const webDir = process.env.CINDY_HOST_WEB_DIR?.trim()
+  || path.resolve(desktopRoot, '.vite', 'renderer', 'main_window');
 const server = createHostServer({
   token: apiToken,
+  webSession,
+  shimPath: path.resolve(desktopRoot, '..', 'web', 'shim.js'),
+  webDir: process.env.CINDY_HOST_WEB_DIR?.trim() ? webDir : (existsSync(webDir) ? webDir : null),
   probe: async () => ({
     status: 'ok',
     service: 'cindy-host',
@@ -208,6 +221,14 @@ const server = createHostServer({
     defaultWorkDir: resolveHostDataDir(),
     defaultModel: process.env.CINDY_HOST_MODEL?.trim() || 'claude-sonnet-4-6',
   }),
+  history: async (sessionId: string, limit: number) => {
+    const { getMessagesForHistory } = await import('../../desktop/src/main/localDb/chatHistoryReader.ts');
+    const page = await getMessagesForHistory({
+      sessionIds: [sessionId], workdir: null, fromMs: null, toMs: null,
+      agentKind: null, roles: null, includeRewound: false, limit, cursor: null, order: 'asc',
+    });
+    return page.items;
+  },
   listPlugins: () => (runtime.owner
     ? listInstalledPlugins(resolveHostDataDir(), runtime.owner)
     : { plugins: [], namespace: 'canonical', legacyNamespacePresent: false }),

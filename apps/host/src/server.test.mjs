@@ -13,6 +13,7 @@ async function withServer(t, deps) {
     listSessions: () => [{ id: 's1', title: 'task', agentKind: 'claude-code', model: 'm', workDir: '/w', updatedAt: 1 }],
     logout: () => ({ signedOut: true, serverRevoked: true }),
     listPlugins: () => ({ plugins: [], namespace: 'canonical', legacyNamespacePresent: false }),
+    history: (sessionId, limit) => [{ id: 'm1', sessionId, limit }],
     ...deps,
   });
   await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
@@ -43,6 +44,13 @@ test('logout requires the bearer and reports server revocation', async (t) => {
   assert.equal((await request('/logout', { method: 'POST' })).status, 401);
   const signedOut = await request('/logout', { method: 'POST', headers: { authorization: `Bearer ${TOKEN}` } });
   assert.deepEqual(signedOut.body, { signedOut: true, serverRevoked: true });
+});
+
+test('history requires the bearer and returns the requested page', async (t) => {
+  const request = await withServer(t);
+  assert.equal((await request('/sessions/s1/messages')).status, 401);
+  const page = await request('/sessions/s1/messages?limit=5', { headers: { authorization: `Bearer ${TOKEN}` } });
+  assert.deepEqual(page.body.messages, [{ id: 'm1', sessionId: 's1', limit: 5 }]);
 });
 
 test('me reports the bound owner without leaking credentials', async (t) => {
