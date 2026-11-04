@@ -1,6 +1,10 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import type { BrowserWindow } from 'electron';
 
-const mocks = vi.hoisted(() => ({ loadURL: vi.fn(async () => {}), loadFile: vi.fn(async () => {}) }));
+const mocks = vi.hoisted(() => ({
+  loadURL: vi.fn<BrowserWindow['loadURL']>(async () => {}),
+  loadFile: vi.fn<BrowserWindow['loadFile']>(async () => {}),
+}));
 vi.mock('electron', () => ({
   BrowserWindow: class {
     webContents = { on: vi.fn(), once: vi.fn(), setWindowOpenHandler: vi.fn() };
@@ -65,7 +69,7 @@ describe('session window link targets', () => {
       hash: '/cc-agent/boot',
     });
     openSessionInNewWindow('local-task', null);
-    expect(mocks.loadFile.mock.calls[1]![1].query).toEqual({
+    expect(mocks.loadFile.mock.calls[1]![1]!.query).toEqual({
       secondaryWindow: '1',
       bootSession: 'local-task',
     });
