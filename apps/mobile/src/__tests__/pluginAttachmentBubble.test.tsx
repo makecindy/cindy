@@ -284,6 +284,35 @@ describe('partner conversation presentation', () => {
     }
   });
 
+  // PR #8864: an Agent's nested tool work must not inherit the main partner's
+  // portrait. Existing process expansion coverage did not cross SubagentCard.
+  // Production projection + renderer, unit tier; Agent -> tool -> child answer
+  // is the smallest input that exposes the extra process portrait.
+  it('keeps the main partner portrait out of expanded subagent work', () => {
+    const items = companionConversationItems(buildMobileMessageRenderItems([
+      msg('u', 'user', 'Research it'),
+      msg('agent', 'tool_use', { toolName: 'Agent', toolUseId: 'agent', input: { description: 'Research' } }, { toolUseId: 'agent' }),
+      msg('tool', 'tool_use', { toolName: 'Bash', toolUseId: 'tool', input: { command: 'pwd' } }, { toolUseId: 'tool', agentMeta: { parentUuid: 'agent' } }),
+      msg('tool-result', 'tool_result', '/repo', { toolUseId: 'tool', agentMeta: { parentUuid: 'agent' } }),
+      msg('child-answer', 'assistant', 'Child research complete', { agentMeta: { parentUuid: 'agent', assistantPhase: 'final_answer' } }),
+      msg('agent-result', 'tool_result', 'Research summary', { toolUseId: 'agent' }),
+      msg('answer', 'assistant', 'Main partner answer', { agentMeta: { assistantPhase: 'final_answer' } }),
+    ], { isSessionStreaming: false }));
+    viewportHarness.expanded = true;
+    try {
+      const html = renderClient(<MessageRenderer items={items} companion companionAvatar={<i data-testid="partner-portrait" />} />);
+      const host = document.createElement('div');
+      host.innerHTML = html;
+      expect(host.querySelector('[data-testid="message.subagentToggle"]')).toBeTruthy();
+      expect(host.querySelector('[data-testid="message.toolRow"]')).toBeTruthy();
+      expect(host.textContent).toContain('Research summary');
+      expect(host.querySelectorAll('[data-testid="companion.processRow"]')).toHaveLength(0);
+      expect(host.querySelectorAll('[data-testid="partner-portrait"]')).toHaveLength(1);
+    } finally {
+      viewportHarness.expanded = false;
+    }
+  });
+
   it('hangs replies from the partner portrait and stamps five-minute groups like Desktop', () => {
     const messages = [
       msg('u1', 'user', 'Hi', { createdAt: '2026-01-01T09:00:00Z' }),

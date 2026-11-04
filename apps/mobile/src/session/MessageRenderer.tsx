@@ -5389,6 +5389,8 @@ function SubagentCard({
   const [expanded, toggleExpanded] = useFoldableExpandedState(item.key, false);
   const deferred = item.deferred;
   useEffect(() => deferred?.setVisible?.(expanded, false), [deferred?.owner, deferred?.key, expanded]);
+  // Subagent work is detail content, not another reply from the main partner.
+  const childActions = useMemo(() => ({ ...actions, companionAvatar: undefined }), [actions]);
   const title = item.header.subagentType
     ? t('message.renderer.subagentTyped', { type: item.header.subagentType })
     : t('message.renderer.subagent');
@@ -5425,7 +5427,7 @@ function SubagentCard({
           ) : null}
           {/* 两级展开(与 WorkGroupCard 同规则):内层子卡保持各自折叠头行,按需下钻。 */}
           {item.childItems.map((child) => (
-            <RenderItemView key={child.key} item={child} actions={actions} />
+            <RenderItemView key={child.key} item={child} actions={childActions} />
           ))}
           {item.summary ? (
             <View style={styles.stackSmall}>
