@@ -1907,6 +1907,8 @@
       "add": {
         "title": "增一臺遠方之機",
         "alias": "別號",
+        "aliasHint": "限 1–128 字元，惟英文字母、數字及 . _ @ : - 可用；中文名請填於「顯示之名」。",
+        "aliasInvalid": "別名含不支援字元，或逾 128 字元，請依上例改之。",
         "displayName": "顯示之名",
         "displayNamePlaceholder": "可不填，僅於 Cindy 中顯",
         "hostname": "主機名",
@@ -7540,6 +7542,9 @@
         "agentObserve": "可觀此機案中差事之目與其狀",
         "agentObserveDetail": "可觀已登記之此機案中差事之題、Agent 之類、歸檔與否及其狀（方行、待理、近動之時），並於主窗啟某差事。不能讀訊、謀劃與文件，亦不能遣訊或改差事。",
         "agentObserveRequest": "確認觀差事之權柄",
+        "agentCompanions": "可觀同僚、其狀與近談",
+        "agentCompanionsDetail": "可觀諸同僚（含行於君他機者）之名、簡介、像與其狀（方行、待君理、閒、離線），各同僚所行何類之事（如思慮、施器），待君理之請之文（問、將行之令、策，與對談所見同），及其主對談之近語（至多五十條，君之言與同僚之復，不含施器之程），並於主窗啟同僚之對談。兼得遣訊之許者，可將君於法器所予之答轉致同僚：答問、卻請、議策；許其行事，仍須君於 Cindy 自有之確框親點。不能讀卷，亦不見施器之程與思慮之文。",
+        "agentCompanionsRequest": "確認觀同僚之權柄",
         "agentHiddenTasks": "可立不見於差事錄之背後差事",
         "agentHiddenTasksDetail": "本法器所立之差事，可不現於差事錄、搜尋與告中。君可隨時於法器詳情之「背後差事」中觀之、啟之，或令顯於差事錄；卸除法器時，此等差事將復顯示。",
         "agentErrand": "可立差事、行事並讀結果",
@@ -7615,6 +7620,8 @@
         "workspaceDetail": "其發請求時，或由君親擇卷匣，或於確認卡上觀完整路徑後再決；其處置君所發之呼叫時，當前差事工作目錄內之子卷匣可徑用，不另確認。卷匣已有差事者徑復用之，不重立。所立僅為空差事，不自行運行。",
         "sessionContext": "可知當前差事所用之案卷匣位置",
         "sessionContextDetail": "僅於其為當前差事效力時告以位置(差事編號與案卷匣路徑)，不含檔案內容，亦不因此得檔案存取之權。",
+        "liveScreen": "於手機觀並操器物之畫面",
+        "liveScreenDetail": "藉遠端桌面，手機可觀其所供器物之畫面(如模擬器)，並觸之、按之、書文字於其上。唯自手機開啟時方連，不示此電腦他物。",
         "preview": "可於右側欄瀏覽器中啟下列網站之預覽頁",
         "previewDetail": "僅能啟下方所列網站；每啟一頁，皆示為何法器所啟。",
         "browserExtension": "可令其自帶之瀏覽器擴充功能連 Cindy",
@@ -10216,6 +10223,7 @@
       "continueEditing": "續修"
     },
     "profileSaveFailed": "同僚之設未能存，變更未生效。",
+    "profileSaveOffline": "同僚所在之電腦未能連通，請復連後再存。",
     "modelLabel": "模型",
     "modelUnavailable": "{{model}}（今不可用）",
     "codexAutomaticCompact": "Codex 同僚自能壓縮上下文，/new 亦存當前差事。唯確須從頭始之，方新開差事。",
@@ -10546,6 +10554,11 @@
           "NETWORK_ERROR": "{{name}}不能回覆：網路連線未成。\n請察網路或 Proxy，再遣之。",
           "RUNTIME_TIMEOUT": "{{name}}此番回覆逾時。\n請再遣訊，或擇他可用模型。",
           "RUNTIME_ERROR": "{{name}}此番未能回覆。\n請再遣訊；若仍未成，請察記錄並回報其事。"
+        },
+        "capability": {
+          "GROUP_AUTHORIZATION_REQUIRED": "{{name}} 的工具呼叫未執行：群內授權已失效或不允許此操作。請由夥伴主人在目前群組重新發起。",
+          "GROUP_AUTHORIZATION_UNAVAILABLE": "暫時無法核驗 {{name}} 的群聊授權，這次工具呼叫未執行。請在連線恢復後重試。",
+          "ATTACHMENTS_UNAVAILABLE": "部分附件未交給 {{name}}（下載失敗或數量限制）。請重新傳送這次需要的附件。"
         }
       },
       "settings": {
@@ -10615,7 +10628,8 @@
         "lifecycleUnavailable": "當前伺服器或電腦尚不支此操作。",
         "groupDissolved": "群議已散，仍可覽有權存取之舊訊。",
         "lastOwner": "請先轉讓群主或解散群議，再退出。",
-        "allBotsMentionDisabled": "群主尚未啟 @諸同僚。"
+        "allBotsMentionDisabled": "群主尚未啟 @諸同僚。",
+        "turnAlreadyStarted": "此同伴已啟，不可略過"
       },
       "organizer": "主事",
       "plan": {
@@ -10646,7 +10660,17 @@
         "stepSpoken": "言畢",
         "allTurns_one": "凡 {{count}} 位",
         "allTurns_other": "凡 {{count}} 位",
-        "foldTurns": "收"
+        "foldTurns": "收",
+        "stepQueued": "待啟",
+        "stepExecuting": "行中",
+        "stepSkipped": "已略",
+        "skippingTurn": "略過中…",
+        "queueWaiting": "待君續行",
+        "skipTurnLabel": "略過 {{name}}",
+        "queueEnded": "此輪已終",
+        "talkTitle": "依次陳議",
+        "talkPending": "未始",
+        "skipTurn": "略過"
       },
       "speaking": {
         "planning": "方籌畫…"
@@ -10988,7 +11012,7 @@
         "items": {
           "tasks": {
             "title": "任務",
-            "body": "度何時開後台任務，掌己所開之任務，攜其果歸於言談；亦可至汝他機行事。"
+            "body": "知可掌之任務與可用之機，依汝之命布置、跟進，攜其果歸；跨機行事前，先查所能。"
           },
           "teammates": {
             "title": "聯同伴",
@@ -11003,8 +11027,8 @@
             "body": "記汝所好與所歷，用前先查，有變則更。"
           },
           "self": {
-            "title": "自知",
-            "body": "知己所能，為汝開關諸能；Cindy 之用法（添 Telegram、設 MCP、裝法器），先閱幫助而後行。"
+            "title": "知與設 Cindy",
+            "body": "知 Cindy 之能與用法，依汝之命查改設定；須汝填寫或確認者，於任務中請汝親為。"
           }
         }
       },
@@ -13680,7 +13704,7 @@
       "REMOTE_PROVIDER_UPDATING": "此模型供方之憑證方更新。請稍後再試。",
       "REMOTE_WORKDIR_UNAVAILABLE": "遠端工作目錄今不可用。請確認彼機上之目錄猶在，然後再試。",
       "REMOTE_OPTIMISTIC_SESSION_STATE_UNAVAILABLE": "機端暫不能確知此訊已遣否。請稍後再試，勿重遣同一訊。",
-      "REMOTE_AGENT_UNAVAILABLE": "暫不能連行 Agent 之機。請確認彼機在線且許遠端控制，然後再試。",
+      "REMOTE_AGENT_UNAVAILABLE": "與行 Agent 之機斷連。請再試；若屢見，再確認彼機在線且許遠端控制。",
       "REMOTE_AGENT_PEER_TOO_OLD": "彼機之 Cindy 版本過舊，暫不支援此舉。請先於彼機更新 Cindy。",
       "REMOTE_AGENT_EXPIRED": "此差事於行 Agent 之機上已終。請再遣。",
       "REMOTE_AGENT_NOT_FOUND": "此差事於行 Agent 之機上已終。請再遣。",
@@ -13789,6 +13813,18 @@
       "cancelTitle": "罷候並除此訊"
     },
     "ghostCall": {
+      "prStatus": {
+        "threadsNone": "無待理之意見",
+        "mergeReady": "可合併",
+        "mergeConflict": "有衝突",
+        "mergeBehind": "須同步目標分支",
+        "mergeApproval": "待批",
+        "mergeChanges": "須修改",
+        "mergeWaiting": "待合併",
+        "merged": "已合併",
+        "closed": "已閉",
+        "draft": "草稿"
+      },
       "verb": "呼法器",
       "cardRunning": "法器繪製",
       "cardDone": "已畢",
@@ -13802,6 +13838,7 @@
       "collapseFields": "收",
       "formSyncFailed": "卡之修改尚未同步，請察連線後續修；訊尚未遣。",
       "linkOpenFailed": "連結未能啟",
+      "modelSelectFailed": "模型未易，請復擇",
       "mailPreview": "郵件先覽",
       "mailEnlarge": "放大覽",
       "mailInsertImage": "插入文中",
@@ -15956,7 +15993,17 @@
   },
   "commandPalette": {
     "viewSkillDetails": "觀技藝之詳",
-    "projectSkillNotLoaded": "今之 Pi 差事尚未載此案之 Skill，新差事將自試載之"
+    "projectSkillNotLoaded": "今之 Pi 差事尚未載此案之 Skill，新差事將自試載之",
+    "pluginSkillSetup": {
+      "install": "未納",
+      "enable": "未啟"
+    },
+    "pluginSkills": {
+      "pr": {
+        "install": "發 PR、修 CI 與評審、隨至合併 · 須先納 GitHub 法器",
+        "enable": "發 PR、修 CI 與評審、隨至合併 · 須先啟 GitHub 法器"
+      }
+    }
   },
   "skillhub": {
     "remote": {
@@ -16944,7 +16991,14 @@
     "sectionTitle": "目錄",
     "empty": "尚無引用之目錄",
     "add": "增目錄…",
-    "addReadOnly": "增唯讀目錄…",
+    "back": "歸",
+    "addTitle": "增目錄",
+    "writableHint": "Agent 可讀寫",
+    "writableHintDetail": "Agent 能讀取、建立、修改並刪除此諸目錄中之卷",
+    "searchRecent": "尋目錄",
+    "noRecent": "尚無近用之目錄",
+    "noMatchingRecent": "無相符之目錄",
+    "addFailed": "此目錄未能增，請再試，或擇他卷匣。",
     "atLimit": "已滿 {{max}} 之限",
     "remove": "除 {{name}}",
     "writableParentConfirmTitle": "許讀寫上層目錄乎？",
@@ -18652,6 +18706,21 @@
     "autoMessage": "許「{{name}}」用 Auto 自動審批乎？",
     "autoDetail": "主差事與 Worker 之操作，將交 Cindy 自動審批。需人工確認或遭拒時仍會暫停；此非完全存取。此擇存於法器 AI 規制，不改他差事之全域權柄。",
     "autoTaskDetail": "主差事與 Worker 之操作，將交 Cindy 自動審批。需人工確認或遭拒時仍會暫停；此非完全存取。僅改目前差事之權柄，不改法器預設規制。"
+  },
+  "pluginCompanionAnswer": {
+    "title": "確許",
+    "planMessage": "令{{companion}}依此策而行乎？",
+    "permissionMessage": {
+      "command": "許{{companion}}行此令乎？",
+      "file-read": "許{{companion}}讀此諸卷乎？",
+      "file-write": "許{{companion}}改此諸卷乎？",
+      "browser": "許{{companion}}於覽器行此一步乎？",
+      "plugin": "許{{companion}}用「{{tool}}」乎？",
+      "tool": "許{{companion}}用 {{tool}} 乎？"
+    },
+    "source": "君於法器「{{plugin}}」擇許，{{appName}} 於此再詢之；許之則同僚續行。",
+    "allow": "許",
+    "cancel": "罷"
   },
   "groupTools": {
     "authorizationRequired": "群授權已失效或不許此操作，請由同僚之主於本群重新發起。",

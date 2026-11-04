@@ -83,19 +83,22 @@ async function resolveMobilePluginMedia(instanceId: string, url: string, current
   return file && /^[a-f0-9]{64}\.[a-z0-9]+$/.test(file) ? { path: `/media/${file}`, mediaKind: result.kind } : null;
 }
 import { getModelVisibilityOverride, waitForModelVisibilityMirror } from '../maker-host/model-visibility-mirror.js';
+import { makerStartupGate } from '../maker-host/startup-gate.js';
 import {
   createGhostAgentModelsCache,
   projectGhostAgentModels,
   type GhostAgentLocationsReadResult,
 } from './ghostAgentModels.js';
-import { GhostModelPicker, readPluginModelRouteCatalog, getPluginModelPickerAgents, isPluginModelPickerRouteAvailable, isPluginRouteHarnessInstalled, type RemotePluginRouteAgentStatus } from './ghostModelPicker.js';
+import { GhostModelPicker, chooseModelPickerWindow, readPluginModelRouteCatalog, getPluginModelPickerAgents, isGhostCardModelRouteAvailable, isPluginModelPickerRouteAvailable, isPluginRouteHarnessInstalled, type RemotePluginRouteAgentStatus } from './ghostModelPicker.js';
+import type { PluginModelPickerRoute } from '../../shared/pluginModelPicker.js';
 import { getDesktopProviderService } from '../maker-host/createDesktopProviderService.js';
 import { PluginDownloadSlot } from './downloadSlot.js';
 import { createDownloader } from '../downloader/index.js';
 import { handlePluginTaskRequest, type PluginTaskHandler } from './taskSlot.js';
 import { PluginTargetSlot, type PluginTargetAdapter } from './pluginTargetSlot.js';
 import { handlePluginObserveRequest, type PluginObserveAdapter } from './pluginObserveSlot.js';
-import { ensurePluginTaskApproval, hasPluginTaskApproval, hasPluginTargetApproval, hasPluginDelegationApproval, hasPluginObserveApproval, pluginCapabilityApproval, PluginTaskApprovalGate } from './taskCapability.js';
+import { createCompanionWatchHub, handlePluginCompanionRequest, type CompanionWatchHub, type PluginCompanionAdapter } from './pluginCompanionSlot.js';
+import { ensurePluginTaskApproval, hasPluginCompanionsApproval, hasPluginTaskApproval, hasPluginTargetApproval, hasPluginDelegationApproval, hasPluginObserveApproval, pluginCapabilityApproval, PluginTaskApprovalGate, type PluginTaskCapability } from './taskCapability.js';
 import {
   registerGhostCardRemoteProvider,
   persistGhostCardWithRemoteChange,
@@ -132,7 +135,7 @@ import { isDeepStrictEqual } from 'node:util';
 import type { GhostInstallConsentFacts } from '../../shared/ghostInstallConsent.js';
 
 const taskApprovalGate = new PluginTaskApprovalGate();
-function requestPluginTaskApproval(id: string, isCurrent: () => boolean, confirm: (facts: GhostInstallConsentFacts) => Promise<boolean>, explicit = false, capability: 'tasks' | 'targets' | 'delegation' | 'observe' = 'tasks'): Promise<boolean> {
+function requestPluginTaskApproval(id: string, isCurrent: () => boolean, confirm: (facts: GhostInstallConsentFacts) => Promise<boolean>, explicit = false, capability: PluginTaskCapability = 'tasks'): Promise<boolean> {
   const ghost = findGhostForInstanceId(id);
   if (!isCurrent()) return Promise.resolve(false);
   if (pluginCapabilityApproval(capability)(ghost)) return Promise.resolve(true);
@@ -500,6 +503,7 @@ import { recordGhostPickedDir, relocateGhostPickedDirs } from './pickGrantsStore
 import { GhostPreviewSlot } from './previewSlot.js';
 import { GhostBrowserExtensionSlot } from './browserExtensionSlot.js';
 import { broadcastTaskViewOpen, GhostTaskViewSlot } from './taskViewSlot.js';
+import { LiveScreenHost } from './liveScreenHost.js';
 import { GhostScheduleSlot, isMainShellWindowUrl } from './scheduleSlot.js';
 import { GhostWorkspaceSlot, type WorkspaceSessionService } from './workspaceSlot.js';
 import type { GhostTrustRegistry } from './ghostSignature.js';
@@ -1299,6 +1303,19 @@ export function findAvailableGhostForAuthorization(
 
 export function listAvailableGhostsForAuthorization(): InstalledGhost[] {
   return availableGhosts();
+}
+
+/** Discovery may yield, but never carries an old owner's results into a new account. */
+export async function listInstalledGhostsAsync(): Promise<InstalledGhost[]> {
+  const owner = ghostOwnerScope.capture();
+  if (!ghostOwnerScope.isCurrent(owner) || !ghostOwnerScope.isStable(owner)) return [];
+  const ghosts = await getGhostManager().listAsync();
+  if (!ghostOwnerScope.isCurrent(owner) || !ghostOwnerScope.isStable(owner)) return [];
+  return ghosts;
+}
+
+export async function listAvailableGhostsAsync(): Promise<InstalledGhost[]> {
+  return (await listInstalledGhostsAsync()).filter((ghost) => isGhostAvailableForActiveSession(ghost.manifest.id));
 }
 
 export function findTrustedXdGhostForScript(id: string): InstalledGhost | null {
@@ -2346,6 +2363,21 @@ const pluginTargetSlot = new PluginTargetSlot();
 export function setPluginTargetAdapter(adapter: PluginTargetAdapter): void { pluginTargetSlot.adapter = adapter; }
 let pluginObserveAdapter: PluginObserveAdapter | null = null;
 export function setPluginObserveAdapter(adapter: PluginObserveAdapter | null): void { pluginObserveAdapter = adapter; }
+let pluginCompanionAdapter: PluginCompanionAdapter | null = null;
+let pluginCompanionHub: CompanionWatchHub | null = null;
+/**
+ * Install the data behind `cindy.companions`. Returns the watch hub the caller feeds with changes
+ * (island activity, companion homes, pushes from the computers companions run on).
+ */
+export function setPluginCompanionAdapter(adapter: PluginCompanionAdapter | null): CompanionWatchHub | null {
+  pluginCompanionHub?.dispose();
+  pluginCompanionAdapter = adapter;
+  pluginCompanionHub = adapter ? createCompanionWatchHub({
+    send: sendToGhostLogic,
+    approved: id => hasPluginCompanionsApproval(findGhostForInstanceId(id)),
+  }) : null;
+  return pluginCompanionHub;
+}
 export async function assertPluginTargetQueuedDelivery(taskId: string, clientId: string): Promise<void> {
   await pluginTargetSlot.assertQueuedDelivery(taskId, clientId);
 }
@@ -2381,6 +2413,11 @@ export function pluginTargetAuthorizationRevision(id: string): string | null {
 function pluginObserveAuthorizationRevision(id: string): string | null {
   const ghost = findGhostForInstanceId(id);
   return hasPluginObserveApproval(ghost) ? ghostInstallApprovalToken(ghost?.approval) : null;
+}
+
+function pluginCompanionAuthorizationRevision(id: string): string | null {
+  const ghost = findGhostForInstanceId(id);
+  return hasPluginCompanionsApproval(ghost) ? ghostInstallApprovalToken(ghost?.approval) : null;
 }
 
 export function pluginDelegationAuthorizationRevision(id: string): string | null {
@@ -2571,6 +2608,24 @@ export function getGhostNodeRuntimeBroker(): GhostNodeRuntimeBroker {
   return nodeRuntimeBrokerSingleton;
 }
 
+let liveScreenHostSingleton: LiveScreenHost | null = null;
+
+/** Remote desktop's way to the device screens plugins declare with `liveScreen`. */
+export function getLiveScreenHost(): LiveScreenHost {
+  liveScreenHostSingleton ??= new LiveScreenHost({
+    plugins: availableGhosts,
+    request: (instanceId, method, params, timeoutMs) =>
+      getGhostNodeRuntimeBroker().handleRequest(instanceId, {
+        type: 'node-request',
+        method,
+        params,
+        timeoutMs,
+      }),
+    locale: () => (currentGhostAppContext().context.locale === 'zh-CN' ? 'zh-CN' : 'en'),
+  });
+  return liveScreenHostSingleton;
+}
+
 /** 意识聊天卡片更新推送通道(main → 全窗口 renderer;ghostCardStore 消费)。 */
 export const GHOST_CARD_UPDATED_CHANNEL = 'ghosts:card-updated';
 
@@ -2669,6 +2724,7 @@ export function getGhostCardActionDispatcher(): GhostCardActionDispatcher {
         return prepareMailAttachmentSelection(result.filePaths[0], sessionId, inline);
       },
       prepareMailUpload: prepareMailAttachmentUpload,
+      isModelRouteAvailable: isPluginModelRouteAvailableNow,
       // 呼吸起点:点击成功投递即把该会话标为"意识活动中"(结束由 card-update
       // state / TTL 收口)。
       onActivityStart: (key, sessionId) => getGhostSessionActivityTracker().begin(key, sessionId),
@@ -2705,6 +2761,8 @@ export function getGhostSubscriptionGateway(): GhostSubscriptionGateway {
   if (!subscriptionGatewaySingleton) {
     subscriptionGatewaySingleton = new GhostSubscriptionGateway({
       listGhosts: availableGhosts,
+      listGhostsAsync: listAvailableGhostsAsync,
+      findGhostForDelivery: findGhostForInstanceId,
       isRunning: (id) => {
         const ghost = findGhostForInstanceId(id);
         return getGhostRuntime().stateOf(ghost ? installedGhostStoragePart(ghost) : id) === 'running';
@@ -3349,11 +3407,9 @@ export function notifyGhostSessionEvent(
 ): void {
   void (async () => {
     try {
-      // 快路径:没人订 session topic 就不查 DB(纯内存判断,调用方零负担)。
-      const hasSubscriber = availableGhosts().some(
-        (g) => g.enabled && g.manifest.subscribe?.topics?.includes('session'),
-      );
-      if (!hasSubscriber) return;
+      const owner = ghostOwnerScope.capture();
+      // The gateway discovers subscribers once after eligibility is resolved.
+      // A preflight scan here used to scan every installation a second time.
       // created / archived 与 turn 事件同口径；switched 额外允许归一后的 Orca Lead。
       // retry 视为不投，生命周期事件不值得引入重试机制。
       const info = await isGhostEligibleSession(
@@ -3372,6 +3428,7 @@ export function notifyGhostSessionEvent(
           : data;
       // switched 在异步归一、资格查询完成后再确认一次焦点代次；确认与去重在同一步完成。
       if (!(await shouldPublish())) return;
+      if (!ghostOwnerScope.isCurrent(owner) || !ghostOwnerScope.isStable(owner)) return;
       getGhostSubscriptionGateway().publish(
         'session',
         kind === 'created'
@@ -4064,9 +4121,8 @@ export function getGhostModelPicker(): GhostModelPicker {
     installation: ghostInstallMutationTargetFor,
     target: (ghostId, mobilePageId) => {
       if (mobilePageId) return mobilePluginPages?.modelPickerTarget(mobilePageId, ghostId) ?? null;
-      const focused = BrowserWindow.getFocusedWindow();
-      const win = focused && isTrustedAppRendererWindow(focused) ? focused
-        : BrowserWindow.getAllWindows().find(w => !w.isDestroyed() && isTrustedAppRendererWindow(w));
+      const win = chooseModelPickerWindow(BrowserWindow.getFocusedWindow(), BrowserWindow.getAllWindows(),
+        (w) => !w.isDestroyed() && w.isVisible() && !w.isMinimized() && isTrustedAppRendererWindow(w));
       if (!win || win.isDestroyed()) return null;
       const contents = win.webContents, ownerStamp = getGhostOwnerPushStamp();
       let cleanup = () => {};
@@ -4104,6 +4160,18 @@ export function getGhostModelPicker(): GhostModelPicker {
       return owner === activeOwnerScopeKey() && isPluginModelPickerRouteAvailable(route, views, agents);
     },
   });
+}
+
+/** 卡内模型下拉框回传的模型:远程位置还须是当前可选的位置。 */
+async function isPluginModelRouteAvailableNow(route: PluginModelPickerRoute): Promise<boolean> {
+  const owner = activeOwnerScopeKey();
+  const available = await isGhostCardModelRouteAvailable(route, {
+    localViews: () => getDesktopProviderService({ allowSideEffects: false }).listProviders({ allowSideEffects: false, snapshotOnly: true }),
+    localAgents: getPluginModelPickerAgents,
+    locations: listGhostAgentLocations,
+    remoteViews: readGhostAgentRemoteViews,
+  });
+  return owner === activeOwnerScopeKey() && available;
 }
 
 function createGhostFileTransferProgress(id: string, callId?: string) {
@@ -5776,13 +5844,23 @@ export function getGhostCindySlot(): GhostCindySlot {
       // 模块的单测(hook-script-generator 同款做法)。失败面折叠成 slot 层
       // 的三档 reason;attempts 细节只进日志,不给沙箱探测面。
       oneshotText: async ({ prompt, maxTokens, timeoutMs, route }) => {
+        const ownerScope = activeOwnerScopeKey();
+        const deadline = performance.now() + timeoutMs;
+        if (!await makerStartupGate.wait(timeoutMs)) {
+          return { ok: false, reason: 'timeout', message: '快问快答超时,请稍后再试' };
+        }
         const [{ requestUtilityText }, { getMaker }] = await Promise.all([
           import('../utility-model/oneShotCandidates.js'),
           import('../maker-host/index.js'),
         ]);
+        const remainingMs = Math.floor(deadline - performance.now());
+        if (remainingMs <= 0) return { ok: false, reason: 'timeout', message: '快问快答超时,请稍后再试' };
+        if (isAppSessionBoundaryPending() || ownerScope !== activeOwnerScopeKey()) {
+          return { ok: false, reason: 'failed', message: 'ACCOUNT_CHANGED' };
+        }
         const r = await requestUtilityText(getMaker(), prompt, {
           maxTokens,
-          timeoutMs,
+          timeoutMs: remainingMs,
           // 用户选的模型 / 身份卡声明走显式供应商路径(钉死,不回落);
           // 缺省 route = 系统辅助模型链。
           ...(route
@@ -7526,6 +7604,7 @@ async function installAndDockLocked(
     approvedControlPoints: confirmedControlPoints(opts.consent.decision, installedBefore, opts.consent.manifest),
     approvedAutoTools: confirmedAutoTools(opts.consent.decision, installedBefore, opts.consent.manifest),
     observeCapabilityApproved: confirmedTaskCapability(opts.consent.decision, installedBefore, opts.consent.manifest, 'observe'),
+    companionsCapabilityApproved: confirmedTaskCapability(opts.consent.decision, installedBefore, opts.consent.manifest, 'companions'),
     initiallyEnabled: opts.enable ?? false,
     expectedPackageSha256: opts.expectedPackageSha256,
     ...(opts.trustOverride ? { trustOverride: opts.trustOverride } : {}),
@@ -7718,6 +7797,7 @@ async function updateLocalGhostPackageLocked(
           approvedControlPoints: confirmedControlPoints(consent, previousGhost, inspected.manifest),
           approvedAutoTools: confirmedAutoTools(consent, previousGhost, inspected.manifest),
           observeCapabilityApproved: confirmedTaskCapability(consent, previousGhost, inspected.manifest, 'observe'),
+          companionsCapabilityApproved: confirmedTaskCapability(consent, previousGhost, inspected.manifest, 'companions'),
           expectedPackageSha256,
           expectedInstalledApproval,
           installOrigin: installOrigin ?? 'manual',
@@ -8219,6 +8299,7 @@ async function installOrUpdateMarketGhostPackageLocked(
           approvedControlPoints: confirmedControlPoints(expected.consent, installed, inspected.manifest),
           approvedAutoTools: confirmedAutoTools(expected.consent, installed, inspected.manifest),
           observeCapabilityApproved: confirmedTaskCapability(expected.consent, installed, inspected.manifest, 'observe'),
+          companionsCapabilityApproved: confirmedTaskCapability(expected.consent, installed, inspected.manifest, 'companions'),
           expectedPackageSha256: inspected.packageSha256,
           expectedInstalledApproval: expected.expectedInstalledApproval!,
           ...(previousRelId ? { simulatorPreviousRelId: previousRelId } : {}),
@@ -8660,7 +8741,7 @@ export function registerGhostIpc(): void {
       mobilePluginPages.assertInteraction(pageId, ghostId, controllerId);
       return (await getGhostCardActionDispatcher().dispatch(callId, actionId, prompt, pageId, formValues, formChange, mailUpload)).ok;
     },
-  });
+  }, async (sessionId, key) => (await import('../git-context/ipc.js')).readSessionPrStatus(sessionId, key));
   if (ipcRegistered) return;
   ipcRegistered = true;
   // 插件工具审批按真实已装实例与 receipt 判定，调用参数里的名字只用来定位。
@@ -9490,6 +9571,50 @@ export function registerGhostIpc(): void {
           throw Object.assign(new Error('PERMISSION_DENIED'), { code: 'PERMISSION_DENIED' });
       });
     }
+    if (type === 'companions-request') {
+      if (findGhostForInstanceId(id)?.manifest.agent?.companions !== true) {
+        return { ok: false, error: { code: 'PERMISSION_DENIED', message: 'PERMISSION_DENIED', retryable: false } };
+      }
+      if ((payload as { mobilePageId?: unknown } | null)?.mobilePageId !== undefined) {
+        return { ok: false, error: { code: 'UNSUPPORTED_CAPABILITY', message: 'UNSUPPORTED_CAPABILITY', retryable: false } };
+      }
+      const owner = getActiveDataOwnerPushStamp();
+      const isCurrent = () => {
+        const current = getActiveDataOwnerPushStamp();
+        return owner.dataOwnerId === current.dataOwnerId && owner.ownerGeneration === current.ownerGeneration &&
+          !event.sender.isDestroyed() && ghostIdForLogicWebContents(event.sender.id) === id;
+      };
+      const confirmCapability = (facts: GhostInstallConsentFacts) => {
+        const window = getDeepLinkMainWindow();
+        if (!window || !isTrustedAppRendererWindow(window)) return Promise.resolve(false);
+        return createWindowGhostInstallConsentPrompt(window.webContents)({ purpose: 'task-capability', initiator: 'user', origin: 'local-file', facts });
+      };
+      // Answering a companion's request is delivering the owner's words to it: agent.targets as well.
+      const answering = (payload as { kind?: unknown } | null)?.kind === 'answer';
+      if (answering && findGhostForInstanceId(id)?.manifest.agent?.targets !== true) {
+        return { ok: false, error: { code: 'PERMISSION_DENIED', message: 'PERMISSION_DENIED', retryable: false } };
+      }
+      try {
+        const capabilities: PluginTaskCapability[] = answering ? ['companions', 'tasks', 'targets'] : ['companions'];
+        for (const capability of capabilities) {
+          if (!await requestPluginTaskApproval(id, isCurrent, confirmCapability, false, capability)) {
+            return { ok: false, error: { code: 'PERMISSION_DENIED', message: 'PERMISSION_DENIED', retryable: false } };
+          }
+        }
+      } catch {
+        return { ok: false, error: { code: 'PERMISSION_DENIED', message: 'PERMISSION_DENIED', retryable: false } };
+      }
+      const revision = pluginCompanionAuthorizationRevision(id);
+      const targetRevision = answering ? pluginTargetAuthorizationRevision(id) : null;
+      return handlePluginCompanionRequest(pluginCompanionAdapter, pluginCompanionHub, payload, {
+        ghostId: id,
+        assertAuthorized: () => {
+          if (!isCurrent() || !revision || pluginCompanionAuthorizationRevision(id) !== revision ||
+              (answering && (!targetRevision || pluginTargetAuthorizationRevision(id) !== targetRevision)))
+            throw Object.assign(new Error('PERMISSION_DENIED'), { code: 'PERMISSION_DENIED' });
+        },
+      });
+    }
     if (type === 'tasks-request' || type === 'targets-request') {
       const owner = getActiveDataOwnerPushStamp();
       const pageId = (payload as { mobilePageId?: unknown }).mobilePageId;
@@ -9808,9 +9933,9 @@ export function registerGhostIpc(): void {
   // 派发器内部永不抛;意识随后自绘 card-update 换新卡走既有回放路径。
   ipcMain.handle(
     'ghosts:card:action',
-    async (event, callId: unknown, actionId: unknown, prompt?: unknown, formValues?: unknown, formChange?: unknown) => {
+    async (event, callId: unknown, actionId: unknown, prompt?: unknown, formValues?: unknown, formChange?: unknown, modelSelection?: unknown) => {
       assertTrustedAppRendererEvent(event);
-      const r = await getGhostCardActionDispatcher().dispatch(callId, actionId, prompt, undefined, formValues, formChange === true);
+      const r = await getGhostCardActionDispatcher().dispatch(callId, actionId, prompt, undefined, formValues, formChange === true, undefined, modelSelection);
       return { ok: r.ok };
     },
   );
@@ -10066,6 +10191,11 @@ export function registerGhostIpc(): void {
     event.returnValue = {
       disabled: typeof workdir === 'string' ? listDisabledGhostIdsForWorkdir(workdir) : [],
     };
+  });
+  ipcMain.handle('ghosts:workdir-prefs', (event, workdir: unknown) => {
+    assertTrustedAppRendererEvent(event);
+    if (typeof workdir !== 'string') throwIpcError('INVALID_PARAMS', 'workdir must be a string');
+    return { disabled: listDisabledGhostIdsForWorkdir(workdir) };
   });
   ipcMain.handle(
     'ghosts:workdir-prefs:set',
@@ -10559,13 +10689,16 @@ export function registerGhostIpc(): void {
   ipcMain.handle('ghosts:request-task-approval', async (event, id: unknown, capability: unknown) => {
     assertTrustedAppRendererEvent(event);
     if (typeof id !== 'string' || !id.trim()) throwIpcError('INVALID_PARAMS', 'id must be a non-empty string');
-    if (capability !== undefined && capability !== 'observe') throwIpcError('INVALID_PARAMS', 'capability must be observe when provided');
+    if (capability !== undefined && capability !== 'observe' && capability !== 'companions') {
+      throwIpcError('INVALID_PARAMS', 'capability must be observe or companions when provided');
+    }
     requireGhostAvailableForActiveSession(id);
     const isCurrent = () => {
       try { assertTrustedAppRendererEvent(event); return !event.sender.isDestroyed(); } catch { return false; }
     };
     const granted = await requestPluginTaskApproval(id, isCurrent, facts =>
-      createWindowGhostInstallConsentPrompt(event.sender)({ purpose: 'task-capability', initiator: 'user', origin: 'local-file', facts }), true, capability === 'observe' ? 'observe' : 'tasks');
+      createWindowGhostInstallConsentPrompt(event.sender)({ purpose: 'task-capability', initiator: 'user', origin: 'local-file', facts }), true,
+      capability === undefined ? 'tasks' : capability);
     if (granted) broadcastGhostsChanged(getGhostManager().list());
     return { granted };
   });

@@ -32,7 +32,7 @@ Cindy 面向大众用户，让人以简单高效的方式用 AI 完成工作。�
 | 修改范围 | 模块规则入口 | 开发与架构正本 |
 | --- | --- | --- |
 | Desktop：main、renderer、preload、数据库、个人 IM / 官方 hook | [apps/desktop/AGENTS.md](apps/desktop/AGENTS.md) | [Desktop 开发](docs/dev-rules/desktop-development.md) |
-| Mobile：Expo 页面、远程调用、原生配置与模块 | [apps/mobile/AGENTS.md](apps/mobile/AGENTS.md) | [Mobile 开发与冷更边界](docs/dev-rules/mobile-development.md) |
+| Mobile：Expo 页面、远程调用、原生配置与模块；在手机上查看效果 | [apps/mobile/AGENTS.md](apps/mobile/AGENTS.md) | [Mobile 开发与冷更边界](docs/dev-rules/mobile-development.md) |
 | maker-core：Agent 编排、prompt、工具、translator、用量 | [packages/maker-core/AGENTS.md](packages/maker-core/AGENTS.md) | [Agent 行为](docs/dev-rules/maker-core-and-agent-behavior.md) |
 
 ## 当前规则索引
@@ -99,8 +99,8 @@ Cindy 面向大众用户，让人以简单高效的方式用 AI 完成工作。�
   `docs/product-rules/provider-groups.md`：Agent 始终在被选中的组内电脑上运行，组所在电脑
   只选电脑与转发，并负责按使用方隔离。
 - 新增或修改任何界面、组件、布局、样式、动效或 UI 文案前，必须先读权威设计规范
-  `docs/design-rules/DESIGN.md`；设计文档索引见
-  `docs/design-rules/cindy-design-system.md`。
+  `docs/design-rules/DESIGN.md` 开头的「阅读路由」，再按路由读相关章节与专题，不需要
+  通读全文；设计文档索引见 `docs/design-rules/cindy-design-system.md`。
 - 做 UI 圆角分类或点击目标尺寸审查时，必须同时读 `docs/design-rules/DESIGN.md §5` 与
   `docs/design-rules/design-governance.md §13`；普通 UI 改动同样适用，不限于设计系统迁移 PR。
 - 新增或修改设计 Token、主题系统、标准 UI 组件（primitive / pattern）、视觉类门禁脚本，

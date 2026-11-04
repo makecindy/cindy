@@ -73,9 +73,10 @@ vi.mock('../../device-link/providerShareGuest.js', () => ({
 }));
 vi.mock('../../logger.js', () => ({ createLogger: () => historyLogger }));
 // The production starter collects only this fixture's supplied project, never the user's home.
+const collectPersonalConfig = vi.hoisted(() => vi.fn<(...args: unknown[]) => Promise<unknown>>(async () => []));
 vi.mock('../controller/projectFiles', () => ({
   collectAncestorInstructionFiles: async () => [], collectAncestorMarkers: async () => [],
-  collectInstructionImports: async () => [], collectPersonalConfig: async () => [],
+  collectInstructionImports: async () => [], collectPersonalConfig,
   collectProjectInstructionFiles: async () => [],
 }));
 
@@ -1259,6 +1260,57 @@ describe('remote agent round trip', () => {
         expect(hostedStartOptions(hostInputs.at(-1)!).ghostRosterSnapshot).toBe(roster);
         await handle.close({ reason: 'navigation' });
       }
+    } finally { await host.dispose(); }
+  });
+
+  // 内置与插件带的 Skill 以任务所在电脑为准：本机停用的不带；对方的 Claude Code 把带来的挂成插件(保持 cindy:pr)，
+  // 不在项目 Skill 里再出现一次。
+  it('mounts this computer\'s enabled managed skills as plugins on the agent computer', async () => {
+    const host = createHost();
+    const invoke = makeDeps(host).invoke;
+    const log = { trace() {}, debug() {}, info() {}, warn() {}, error() {}, fatal() {}, child() { return this; } };
+    const skill = (name: string) => {
+      const file = path.join(root, 'bundle', name, 'SKILL.md');
+      fs.mkdirSync(path.dirname(file), { recursive: true });
+      fs.writeFileSync(file, name);
+      return { kind: 'agent-skill' as const, name, path: file, source: 'skill' as const, enabled: true, claudeCommandName: `cindy:${name}` };
+    };
+    const pr = skill('pr');
+    const learn = skill('learn');
+    // 收集器本身见 mirror.test.ts：这里按收到的托管 Skill 原样产出同步内容。
+    collectPersonalConfig.mockImplementationOnce(async (...args: unknown[]) => {
+      const { managedSkills = [] } = args[2] as { managedSkills?: Array<{ command: string; dir: string }> };
+      return {
+        personal: {
+          files: managedSkills.map(({ command }) => ({
+            path: `.claude/skills/${command.replace(':', '-')}/SKILL.md`, data: Buffer.from(command).toString('base64'),
+          })),
+          managedSkills: managedSkills.map(({ command }) => ({ command, dir: `.claude/skills/${command.replace(':', '-')}` })),
+        },
+        roots: [],
+      };
+    });
+    try {
+      const start = createDeviceAgentStarter({
+        remoteInvoke: async (_deviceId, _channel, args) => ({ ok: true, result: await invoke(args) }),
+        rgPath: () => RG, mcpProviders: () => [], prepareMcpBridge: async () => null, makerMemory: () => undefined,
+        managedSkills: async () => [pr, learn], disabledSkillPaths: () => [learn.path],
+        captureKnownFileBefore: async () => {}, noteOpaqueTurnChange: () => {}, logger: log,
+      });
+      const handle = await start({ agentKind: 'claude-code', deviceId: 'agent-computer', options: {
+        sessionId: 'managed-skills', workingDir: project, model: 'm',
+      } });
+      expect(collectPersonalConfig.mock.calls.at(-1)?.[2]).toMatchObject({
+        disabledSkillPaths: [learn.path],
+        managedSkills: [{ command: 'cindy:pr', dir: fs.realpathSync(path.dirname(pr.path)) }],
+      });
+      const input = hostInputs.at(-1)!;
+      const pluginRoot = path.join(input.shadowDir, '.cindy', 'managed-skills', 'cindy');
+      expect(input.controllerManagedSkills).toEqual({ claudePluginRoots: [pluginRoot] });
+      expect(fs.readFileSync(path.join(pluginRoot, 'skills', 'pr', 'SKILL.md'), 'utf8')).toBe('cindy:pr');
+      expect(JSON.parse(fs.readFileSync(path.join(pluginRoot, '.claude-plugin', 'plugin.json'), 'utf8')).name).toBe('cindy');
+      expect(fs.existsSync(path.join(input.shadowDir, '.claude', 'skills', 'cindy-pr'))).toBe(false);
+      await handle.close({ reason: 'navigation' });
     } finally { await host.dispose(); }
   });
 

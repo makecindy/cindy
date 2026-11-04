@@ -1169,6 +1169,20 @@ function officialPiRouteMatches(
   );
 }
 
+/** Anthropic's SDK appends /v1/messages, so remove an inherited final /v1. */
+function anthropicRootForV1Endpoint(baseUrl: string): string | undefined {
+  try {
+    const url = new URL(baseUrl);
+    if ((url.protocol !== 'http:' && url.protocol !== 'https:') ||
+        !/\/v1\/?$/.test(url.pathname) || url.search || url.hash || url.username || url.password) {
+      return undefined;
+    }
+    return url.origin + url.pathname.replace(/\/v1\/?$/, '');
+  } catch {
+    return undefined;
+  }
+}
+
 function configuredPiModel(model: {
   id: string;
   name?: string;
@@ -1450,26 +1464,26 @@ export function buildPiNativeProvidersFromConfigs(
         const explicitRouteApi = explicitRoute
           ? wireProtocolToPiApi(explicitRoute.wireProtocol)
           : undefined;
-        // Bundled/official rows may lend protocol-compatible capabilities, but never routing.
-        // A same-origin URL is not the same endpoint: replacing /proxy/v1 with /v1 can bypass
-        // the user's proxy. Keep explicit model routes, except for protocol-specific SDK roots:
-        // Google uses /v1beta instead of its discovery /v1beta/openai path, while Anthropic
-        // appends /v1/messages and needs an inherited trailing /v1 removed.
+        // The HTTP bridge resolver discards a route whose protocol disagrees
+        // with an explicit api/piApi override. Native SDK APIs return no bridge
+        // route at all; their saved model endpoint remains authoritative.
+        const matchingModelRoute = m.route && (!explicitRoute ||
+          m.route.wireProtocol === explicitRoute.wireProtocol) ? m.route : undefined;
+        // Bundled/official rows may lend capabilities, but never routing. Only an
+        // explicit model route or a proven SDK path relationship may override baseUrl.
+        // Google's public /v1beta/openai endpoint is one such relationship.
         const nativeGoogleBaseUrl =
           modelApi === 'google-generative-ai' && !m.route?.requestPath && !rt.requestPath
             ? providerBaseUrlForApi(rt.baseUrl, modelApi) : undefined;
-        const inheritedAnthropicBaseUrl = explicitRoute?.baseUrl ?? rt.baseUrl;
+        // Anthropic appends /v1/messages. A model without an effective route may
+        // inherit /v1 from either runtime; matching saved routes remain
+        // authoritative even when they equal the provider endpoint.
         const nativeAnthropicBaseUrl =
-          authMethod !== 'oauth' &&
           modelApi === 'anthropic-messages' &&
-          !m.route?.requestPath && !rt.requestPath &&
-          (!m.route || m.route.baseUrl === rt.baseUrl) &&
-          /\/v1\/?$/.test(inheritedAnthropicBaseUrl)
-            ? inheritedAnthropicBaseUrl.replace(/\/v1\/?$/, '')
-            : undefined;
+          authMethod !== 'oauth' && !rt.requestPath && !matchingModelRoute
+            ? anthropicRootForV1Endpoint(rt.baseUrl) : undefined;
         const modelBaseUrl =
-          nativeAnthropicBaseUrl ??
-          (m.api && m.route ? m.route.baseUrl :
+          nativeAnthropicBaseUrl ?? (m.api && matchingModelRoute ? matchingModelRoute.baseUrl :
             m.route && explicitRouteApi === modelApi ? explicitRoute?.baseUrl : nativeGoogleBaseUrl);
         // Model-level defaults follow the final endpoint. Putting them on the
         // provider would leak them to a model routed to a different service.

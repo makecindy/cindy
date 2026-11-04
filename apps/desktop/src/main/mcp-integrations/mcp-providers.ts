@@ -1,3 +1,9 @@
+import { getPiKernelManager } from '../agent-binaries/index.js';
+import { PiKernelError } from '../agent-binaries/pi-kernel-manager.js';
+import { manageAppSettings } from '../app-settings/sections.js';
+import { manageAppModels } from '../app-settings/models.js';
+import { captureBotSettingsAccess } from '../maker-ipc/botCapabilityService.js';
+import { inspectAppDefaultModel, changeAppDefaultModel } from '../maker-ipc/appDefaultModelControl.js';
 import { hostname } from 'node:os';
 import { isSessionSharedTaskActive } from '../device-link/sharedTaskDispatch.js';
 import { listMachines, type MachineDirectoryDeps } from '../machines/directory.js';
@@ -17,6 +23,7 @@ import { getPluginMarketService } from '../plugin-market/service.js';
 import { resolveHelperSurface, resolveHelperSystemSkillsOff } from './helperSurface.js';
 import { createProject } from './createProject.js';
 import { createMoveSession } from './moveSession.js';
+import { createTaskWorktreeHost } from './createTaskWorktree.js';
 import { sessionImportCallbacks } from '../session-import/agentTools.js';
 import { listProjects, renameProject, removeProject, resolveSessionProject, readCurrentSessionProject } from './projectManagement.js';
 import { activeOwnerScopeKey, getActiveAppSession, isAppSessionBoundaryPending, ownerScopedUserDataPath } from '../appSessionState.js';
@@ -146,7 +153,7 @@ import { startGrokDeviceLogin, grokDeviceLoginStatus, cancelGrokDeviceLogin } fr
 export interface DesktopMcpProvidersDeps {
   askUserQuestionAsync?: XdtHelperMcpDeps['askUserQuestionAsync'];
   runtimeCapabilities?: XdtHelperMcpDeps['runtimeCapabilities'];
-  botCapabilities: Pick<ReturnType<typeof createBotCapabilityService>, 'list' | 'select'>;
+  botCapabilities: Pick<ReturnType<typeof createBotCapabilityService>, 'list' | 'select'> & Partial<Pick<ReturnType<typeof createBotCapabilityService>, 'models' | 'setDefaultModel'>>;
   createMediaDownloadContext?: CindyGhostsHostDeps['createMediaDownloadContext'];
   /** 当前 Desktop 版本，供 Forge 为具体插件包生成默认 minCindyVersion。 */
   getAppVersion?: () => string;
@@ -703,6 +710,9 @@ export function createDesktopMcpProviders(deps: DesktopMcpProvidersDeps): LiziMc
       addHost: async (input) => {
         await (await loadRemoteSsh()).addRemoteSshHost(input);
       },
+      listHosts: async () => (await loadRemoteSsh()).listRemoteSshHostsForAgent(),
+      updateHost: async (input) => (await (await loadRemoteSsh()).updateRemoteSshHost(input, { patch: true })).host,
+      removeHost: async (id) => { await (await loadRemoteSsh()).removeRemoteSshHost({ id }); },
       reloadConfig: async () => {
         const result = await (await loadRemoteSsh()).reloadRemoteSshConfig();
         return { diagnostic: result.diagnostic?.kind ?? null, warningCount: result.warningCount };
@@ -865,6 +875,7 @@ export function createDesktopMcpProviders(deps: DesktopMcpProvidersDeps): LiziMc
       },
       createProject,
       moveSession: createMoveSession(isSessionInTurn),
+      createTaskWorktree: createTaskWorktreeHost(),
       projectManagement: { list: listProjects, rename: renameProject, remove: removeProject },
       authorizeSkillLearning: async (request, context) => {
         if (!isCindyLearnSkillEnabled()) {
@@ -1341,6 +1352,80 @@ export function createDesktopMcpProviders(deps: DesktopMcpProvidersDeps): LiziMc
         },
       },
       // 伙伴自己沉淀的真技能。归属同样由 callerSessionId 反查,工具面不收 botId。
+      modelSettings: {
+        call: ({ callerSessionId, ...input }) => withAccountDataAccess(callerSessionId, async (assertCurrent) => {
+          const surface = await resolveHelperSurface(tryGetDbClient()!, callerSessionId);
+          const botGuard = surface === 'bot' || surface === 'bot-main'
+            ? await captureBotSettingsAccess(callerSessionId)
+            : undefined;
+          return manageAppModels(input, async () => {
+            await assertCurrent();
+            if (botGuard) await botGuard();
+            if (input.operation === 'set' || input.operation === 'provider') await assertTaskActionCurrent();
+          });
+        }),
+      },
+      piRuntime: {
+        call: (callerSessionId, input) => withAccountDataAccess(callerSessionId, async assertCurrent => {
+          const surface = await resolveHelperSurface(tryGetDbClient()!, callerSessionId);
+          const botGuard = surface === 'bot' || surface === 'bot-main' ? await captureBotSettingsAccess(callerSessionId) : undefined;
+          await assertCurrent();
+          if (botGuard) await botGuard();
+          const manager = getPiKernelManager();
+          try {
+            if (input.install) {
+              await assertTaskActionCurrent();
+              await manager.install(input.install);
+            }
+            const state = await (input.check ? manager.check() : manager.state());
+            await assertCurrent();
+            return { ...state, scope: 'local-managed-pi', runningProcesses: 'unchanged' };
+          } catch (error) {
+            return { ok: false, errorCode: error instanceof PiKernelError ? error.reason : 'PI_RUNTIME_FAILED',
+              message: 'Pi 操作未确认完成；请重新读取版本和状态。' };
+          }
+        }),
+      },
+      appSettings: {
+        call: ({ callerSessionId, ...input }) => withAccountDataAccess(callerSessionId, async (assertCurrent) => {
+          const surface = await resolveHelperSurface(tryGetDbClient()!, callerSessionId);
+          const botGuard = surface === 'bot' || surface === 'bot-main'
+            ? await captureBotSettingsAccess(callerSessionId)
+            : undefined;
+          return manageAppSettings(input, async () => {
+            await assertCurrent();
+            if (botGuard) await botGuard();
+            if (input.operation === 'update' || input.operation === 'reset') await assertTaskActionCurrent();
+          });
+        }),
+      },
+      appModels: {
+        models: ({ callerSessionId }) => withAccountDataAccess(callerSessionId, async (assertCurrent) => {
+          const surface = await resolveHelperSurface(tryGetDbClient()!, callerSessionId);
+          if (surface === 'bot' || surface === 'bot-main') {
+            if (!deps.botCapabilities.models) throw new Error('HOST_NOT_READY');
+            return deps.botCapabilities.models({ callerSessionId });
+          }
+          await assertCurrent();
+          return { ok: true as const, ...await inspectAppDefaultModel() };
+        }),
+        setDefaultModel: ({ callerSessionId, id, effort, fastMode }) => withAccountDataAccess(callerSessionId, async (assertCurrent) => {
+          const surface = await resolveHelperSurface(tryGetDbClient()!, callerSessionId);
+          if (surface === 'bot' || surface === 'bot-main') {
+            if (!deps.botCapabilities.setDefaultModel) throw new Error('HOST_NOT_READY');
+            return deps.botCapabilities.setDefaultModel({ callerSessionId, id, effort, fastMode });
+          }
+          const owner = activeOwnerScopeKey();
+          await assertCurrent();
+          await assertTaskActionCurrent();
+          const result = await changeAppDefaultModel(id, effort, async () => {
+            await assertCurrent();
+            await assertTaskActionCurrent();
+            if (isAppSessionBoundaryPending() || activeOwnerScopeKey() !== owner) throw new Error('OWNER_SCOPE_CHANGED');
+          }, fastMode);
+          return { ok: true as const, ...result };
+        }),
+      },
       botCapabilities: deps.botCapabilities,
       botSkills: {
         save: async (params) => {

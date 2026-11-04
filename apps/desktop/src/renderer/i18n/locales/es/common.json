@@ -1972,6 +1972,8 @@
       "add": {
         "title": "Agregar una máquina remota",
         "alias": "Alias",
+        "aliasHint": "Usa entre 1 y 128 caracteres: letras inglesas, números o . _ @ : -. Para otros caracteres, usa Nombre para mostrar.",
+        "aliasInvalid": "El alias contiene caracteres no admitidos o supera los 128 caracteres. Sigue las reglas anteriores.",
         "displayName": "Nombre para mostrar",
         "displayNamePlaceholder": "Nombre opcional mostrado en Cindy",
         "hostname": "Nombre de host",
@@ -7664,6 +7666,9 @@
         "agentObserve": "Puede ver la lista y el estado de las sesiones de proyectos locales",
         "agentObserveDetail": "Puede ver el título, el tipo de agente, si está archivada y el estado (en ejecución, requiere atención, última actividad) de las sesiones de los proyectos locales registrados, y abrir una sesión en la ventana principal. No puede leer mensajes, planes ni archivos, ni enviar mensajes o modificar sesiones.",
         "agentObserveRequest": "Revisar el permiso para ver sesiones",
+        "agentCompanions": "Puede ver a los compañeros, su estado y su conversación reciente",
+        "agentCompanionsDetail": "Puede ver a todos los compañeros, incluidos los que se ejecutan en tus otras computadoras: nombre, descripción, avatar, estado (trabajando, esperando tu respuesta, inactivo, sin conexión), el tipo de paso en el que está cada uno (como pensar o ejecutar una herramienta), las solicitudes que esperan tu respuesta tal como las muestran sus tarjetas (preguntas, comandos por ejecutar, planes) y la conversación reciente de su chat principal (hasta 50 de tus mensajes y sus respuestas, sin los pasos de herramientas); y abrir la conversación de un compañero en la ventana principal. Si también tiene el permiso para entregar mensajes, puede transmitir las respuestas que des en el complemento: responder preguntas, rechazar solicitudes y opinar sobre planes. Para permitir un paso, sigues haciendo clic en la confirmación propia de Cindy. No puede leer archivos, pasos de herramientas ni razonamientos.",
+        "agentCompanionsRequest": "Revisar el permiso para ver compañeros",
         "agentHiddenTasks": "Puede crear tareas en segundo plano ocultas de la lista de tareas",
         "agentHiddenTasksDetail": "Las tareas que crea este complemento pueden permanecer fuera de la lista de tareas, la búsqueda y las notificaciones. Siempre puedes verlos, abrirlos o mostrarlos en la lista de tareas desde Tareas en segundo plano en la página de este complemento; desinstalar el complemento los muestra nuevamente.",
         "agentErrand": "Crear tareas, realizar trabajos y leer resultados",
@@ -7745,6 +7750,8 @@
         "workspaceDetail": "Cuando te lo pide, eliges la carpeta tú mismo o ves la ruta completa en una tarjeta de confirmación antes de decidir; Mientras maneja una llamada que usted inició, las subcarpetas dentro del directorio de trabajo de la sesión actual se usan directamente sin un aviso adicional. Las carpetas que ya tienen una sesión se reutilizan y lo que se crea es una sesión vacía: nada comienza a ejecutarse por sí solo.",
         "sessionContext": "Puede saber en qué carpeta de proyecto está trabajando la sesión actual",
         "sessionContextDetail": "Comparte solo datos de ubicación (ID de sesión y ruta de la carpeta del proyecto) mientras funciona para la sesión actual: no se concede contenido de archivos ni acceso a archivos.",
+        "liveScreen": "Ver y controlar pantallas de dispositivos en tu teléfono",
+        "liveScreenDetail": "A través del escritorio remoto, tu teléfono puede mostrar las pantallas de dispositivos que ofrece (como simuladores) y enviarles toques, botones y texto. Solo se conecta cuando lo abres desde tu teléfono y no muestra nada más de este ordenador.",
         "preview": "Puede abrir páginas de vista previa de los siguientes sitios en el navegador de la barra lateral",
         "previewDetail": "Sólo se pueden abrir los sitios que se enumeran a continuación; cada página que abre se atribuye a este complemento.",
         "browserExtension": "Permite que su extensión de navegador incluida se conecte a Cindy",
@@ -10340,6 +10347,7 @@
       "continueEditing": "Seguir editando"
     },
     "profileSaveFailed": "No se pudo guardar la configuración del compañero. No se aplicó ningún cambio.",
+    "profileSaveOffline": "No se puede conectar con el ordenador del compañero. Restablece la conexión y vuelve a guardar.",
     "modelLabel": "Modelo",
     "modelUnavailable": "{{model}} (no disponible actualmente)",
     "codexAutomaticCompact": "Los compañeros de Codex compactan el contexto por su cuenta, y /new conserva la tarea actual. Inicia una nueva tarea solo cuando realmente necesites empezar de cero.",
@@ -10675,6 +10683,11 @@
           "NETWORK_ERROR": "{{name}} no pudo responder: falló la conexión de red.\nRevisa tu red o proxy y vuelve a enviar tu mensaje.",
           "RUNTIME_TIMEOUT": "{{name}} no respondió antes de que se agotara el tiempo de espera.\nVuelve a enviar tu mensaje o elige otro modelo disponible.",
           "RUNTIME_ERROR": "{{name}} no pudo responder esta vez.\nVuelve a enviar tu mensaje. Si sigue fallando, revisa los registros e informa del problema."
+        },
+        "capability": {
+          "GROUP_AUTHORIZATION_REQUIRED": "{{name}} no pudo ejecutar la herramienta: la autorización del grupo ha caducado o no permite esta acción. La persona propietaria del compañero puede volver a solicitarla en este grupo.",
+          "GROUP_AUTHORIZATION_UNAVAILABLE": "No se pudo verificar la autorización de grupo de {{name}}, por lo que la herramienta no se ejecutó. Vuelve a intentarlo cuando se restablezca la conexión.",
+          "ATTACHMENTS_UNAVAILABLE": "Algunos adjuntos no llegaron a {{name}} por un fallo de descarga o por el límite de adjuntos. Vuelve a enviar los archivos necesarios para esta solicitud."
         }
       },
       "settings": {
@@ -10744,7 +10757,8 @@
         "lifecycleUnavailable": "El servidor o computadora actual aún no admite esta acción.",
         "groupDissolved": "Este grupo ha sido disuelto. Aún puedes leer el historial disponible.",
         "lastOwner": "Transfiera la propiedad o disuelva este grupo antes de irse.",
-        "allBotsMentionDisabled": "El propietario del grupo aún no ha habilitado @Todos los compañeros."
+        "allBotsMentionDisabled": "El propietario del grupo aún no ha habilitado @Todos los compañeros.",
+        "turnAlreadyStarted": "Este compañero ya ha empezado y no se puede omitir"
       },
       "organizer": "Organizador",
       "plan": {
@@ -10777,7 +10791,17 @@
         "allTurns_other": "Los {{count}} compañeros",
         "foldTurns": "Mostrar menos",
         "intro_many": "Esto requiere pasos {{count}}. Aquí está quién hace qué:",
-        "allTurns_many": "Los {{count}} compañeros"
+        "allTurns_many": "Los {{count}} compañeros",
+        "stepQueued": "Esperando para empezar",
+        "stepExecuting": "En ejecución",
+        "stepSkipped": "Omitido",
+        "skippingTurn": "Omitiendo…",
+        "queueWaiting": "Esperando que continúes",
+        "skipTurnLabel": "Omitir {{name}}",
+        "queueEnded": "Ronda terminada",
+        "talkTitle": "Escuchar a todos por turnos",
+        "talkPending": "Sin iniciar",
+        "skipTurn": "Omitir"
       },
       "speaking": {
         "planning": "Dividiendo el trabajo…"
@@ -11127,7 +11151,7 @@
         "items": {
           "tasks": {
             "title": "Tareas",
-            "body": "Decide cuándo iniciar una tarea en segundo plano, controla las que inició y trae el resultado al chat, también en tus otras computadoras."
+            "body": "Conoce las tareas que puede controlar y los equipos disponibles. Organiza y sigue las tareas que le pides, trae los resultados y comprueba las operaciones admitidas antes de trabajar en otro equipo."
           },
           "teammates": {
             "title": "Otros compañeros",
@@ -11142,8 +11166,8 @@
             "body": "Recuerda tus preferencias y contexto, comprueba antes de usarlos y los actualiza cuando cambian."
           },
           "self": {
-            "title": "Conocerse",
-            "body": "Sabe lo que puede hacer y activa o desactiva funciones por ti; para Telegram, MCP o plugins consulta primero la ayuda de Cindy."
+            "title": "Conocer y configurar Cindy",
+            "body": "Conoce las funciones y el uso de Cindy, y consulta o cambia ajustes cuando se lo pides. Si necesita que introduzcas datos o confirmes algo, te lo pide dentro de la tarea."
           }
         }
       },
@@ -13830,7 +13854,7 @@
       "REMOTE_PROVIDER_UPDATING": "Las credenciales de este proveedor de modelo se están actualizando. Inténtalo de nuevo en un momento.",
       "REMOTE_WORKDIR_UNAVAILABLE": "El directorio de trabajo remoto no está disponible. Verifique que la carpeta aún exista en esa computadora y vuelva a intentarlo.",
       "REMOTE_OPTIMISTIC_SESSION_STATE_UNAVAILABLE": "La computadora aún no puede confirmar si se envió este mensaje. Espere un momento y vuelva a intentarlo. No envíes el mismo mensaje dos veces.",
-      "REMOTE_AGENT_UNAVAILABLE": "No se puede acceder a la computadora que ejecuta el Agent. Asegúrate de que esté en línea y permita el control remoto, luego inténtalo nuevamente.",
+      "REMOTE_AGENT_UNAVAILABLE": "Se perdió la conexión con la computadora que ejecuta el Agent. Inténtalo de nuevo. Si sigue pasando, asegúrate de que esté en línea y permita el control remoto.",
       "REMOTE_AGENT_PEER_TOO_OLD": "La versión de Cindy en la otra computadora es demasiado antigua para esta acción. Actualiza Cindy allí primero.",
       "REMOTE_AGENT_EXPIRED": "Esta sesión ya finalizó en la computadora que ejecuta Agent. Envía tu mensaje nuevamente.",
       "REMOTE_AGENT_NOT_FOUND": "Esta sesión ya finalizó en la computadora que ejecuta Agent. Envía tu mensaje nuevamente.",
@@ -13957,6 +13981,18 @@
       "cancelTitle": "Dejar de esperar y eliminar este mensaje"
     },
     "ghostCall": {
+      "prStatus": {
+        "threadsNone": "Sin hilos de revisión abiertos",
+        "mergeReady": "Lista para fusionar",
+        "mergeConflict": "Tiene conflictos",
+        "mergeBehind": "Por detrás de la rama base",
+        "mergeApproval": "Esperando aprobación",
+        "mergeChanges": "Cambios solicitados",
+        "mergeWaiting": "Esperando la fusión",
+        "merged": "Fusionada",
+        "closed": "Cerrada",
+        "draft": "Borrador"
+      },
       "verb": "Complemento utilizado",
       "cardRunning": "El complemento está dibujando",
       "cardDone": "Listo",
@@ -13970,6 +14006,7 @@
       "collapseFields": "Contraer",
       "formSyncFailed": "Las ediciones de la tarjeta no se han sincronizado. Verifique la conexión y continúe editando; el mensaje no ha sido enviado.",
       "linkOpenFailed": "No se pudo abrir el enlace",
+      "modelSelectFailed": "No se cambió el modelo. Vuelve a elegirlo.",
       "mailPreview": "Vista previa de correo electrónico",
       "mailEnlarge": "Ampliar vista previa",
       "mailInsertImage": "Insertar en mensaje",
@@ -16171,7 +16208,17 @@
   },
   "commandPalette": {
     "viewSkillDetails": "Ver detalles de la habilidad",
-    "projectSkillNotLoaded": "Esta tarea de Pi no ha cargado esta Skill del proyecto. Las tareas nuevas intentarán cargarla automáticamente."
+    "projectSkillNotLoaded": "Esta tarea de Pi no ha cargado esta Skill del proyecto. Las tareas nuevas intentarán cargarla automáticamente.",
+    "pluginSkillSetup": {
+      "install": "No instalado",
+      "enable": "Desactivado"
+    },
+    "pluginSkills": {
+      "pr": {
+        "install": "Abre un PR, corrige la CI y los comentarios de revisión y lo sigue hasta que se fusione · Requiere instalar el complemento de GitHub",
+        "enable": "Abre un PR, corrige la CI y los comentarios de revisión y lo sigue hasta que se fusione · Requiere activar el complemento de GitHub"
+      }
+    }
   },
   "skillhub": {
     "remote": {
@@ -17173,7 +17220,14 @@
     "sectionTitle": "Directorios",
     "empty": "Aún no hay directorios de referencia",
     "add": "Agregar directorio…",
-    "addReadOnly": "Agregar directorio de solo lectura…",
+    "back": "Atrás",
+    "addTitle": "Agregar directorio",
+    "writableHint": "Agent puede leer y escribir",
+    "writableHintDetail": "Agent puede leer, crear, modificar y eliminar archivos en estos directorios.",
+    "searchRecent": "Buscar directorios",
+    "noRecent": "Aún no hay directorios recientes",
+    "noMatchingRecent": "No hay directorios coincidentes",
+    "addFailed": "No se pudo agregar este directorio. Inténtalo de nuevo o elige otra carpeta.",
     "atLimit": "Límite alcanzado ({{max}})",
     "remove": "Quitar {{name}}",
     "writableParentConfirmTitle": "¿Permitir acceso de lectura y escritura a un directorio superior?",
@@ -18895,6 +18949,21 @@
     "taskDetail": "Esto permite ediciones solo durante la sesión actual. Un directorio de trabajo separado no es un entorno aislado del sistema; los comandos siguen sujetos a las comprobaciones de permisos de Cindy. Puedes cambiarlo en el menú de permisos de la sesión.",
     "allow": "Permitir y continuar",
     "cancel": "Ahora no"
+  },
+  "pluginCompanionAnswer": {
+    "title": "Confirmar permiso",
+    "planMessage": "¿Dejar que {{companion}} empiece a trabajar con este plan?",
+    "permissionMessage": {
+      "command": "¿Permitir que {{companion}} ejecute este comando?",
+      "file-read": "¿Permitir que {{companion}} lea estos archivos?",
+      "file-write": "¿Permitir que {{companion}} modifique estos archivos?",
+      "browser": "¿Permitir que {{companion}} realice este paso en el navegador?",
+      "plugin": "¿Permitir que {{companion}} use «{{tool}}»?",
+      "tool": "¿Permitir que {{companion}} use {{tool}}?"
+    },
+    "source": "Elegiste Permitir en el complemento «{{plugin}}». {{appName}} lo confirma aquí una vez más; después, el compañero continuará.",
+    "allow": "Permitir",
+    "cancel": "Cancelar"
   },
   "groupTools": {
     "authorizationRequired": "La autorización del grupo venció o no permite esta acción. Pídele al propietario del compañero que haga una nueva solicitud en este grupo.",

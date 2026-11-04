@@ -1972,6 +1972,8 @@
       "add": {
         "title": "Adicionar uma máquina remota",
         "alias": "Alias",
+        "aliasHint": "Usa 1 a 128 caracteres: letras inglesas, números ou . _ @ : -. Para outros caracteres, usa Nome apresentado.",
+        "aliasInvalid": "O alias contém caracteres não suportados ou excede 128 caracteres. Segue as regras acima.",
         "displayName": "Nome apresentado",
         "displayNamePlaceholder": "Nome opcional apresentado na Cindy",
         "hostname": "Nome do anfitrião",
@@ -7664,6 +7666,9 @@
         "agentObserve": "Pode ver a lista e o estado das sessões dos projetos locais",
         "agentObserveDetail": "Pode ver o título, o tipo de agente, se está arquivada e o estado (em execução, requer atenção, última atividade) das sessões dos projetos locais registados, e abrir uma sessão na janela principal. Não pode ler mensagens, planos ou ficheiros, nem enviar mensagens ou alterar sessões.",
         "agentObserveRequest": "Rever permissão para ver sessões",
+        "agentCompanions": "Pode ver os colegas, o respetivo estado e a conversa recente",
+        "agentCompanionsDetail": "Pode ver todos os colegas, incluindo os que são executados nos seus outros computadores: nome, descrição, avatar, estado (a trabalhar, a aguardar por si, inativo, offline), o tipo de passo em que cada um está (como a pensar ou a executar uma ferramenta), os pedidos que aguardam por si tal como os cartões os mostram (perguntas, comandos a executar, planos) e a conversa recente do chat principal (até 50 das suas mensagens e das respostas deles, sem os passos de ferramentas); e abrir a conversa de um colega na janela principal. Com a permissão de entregar mensagens também, pode transmitir as respostas que der no plugin: responder a perguntas, recusar pedidos e comentar planos. Para permitir um passo, continua a clicar na confirmação do próprio Cindy. Não pode ler ficheiros, passos de ferramentas nem raciocínios.",
+        "agentCompanionsRequest": "Rever permissão para ver colegas",
         "agentHiddenTasks": "Pode criar tarefas em segundo plano ocultas da lista de tarefas",
         "agentHiddenTasksDetail": "As tarefas criadas por este plugin podem ficar fora da lista de tarefas, da pesquisa e das notificações. Pode sempre vê-las, abri-las ou mostrá-las na lista de tarefas a partir de Tarefas em segundo plano na página deste plugin; desinstalar o plugin volta a mostrá-las.",
         "agentErrand": "Criar tarefas, realizar trabalho e ler resultados",
@@ -7745,6 +7750,8 @@
         "workspaceDetail": "Quando o pede, escolhe a pasta ou vê o caminho completo num cartão de confirmação antes de decidir; enquanto processa uma chamada que iniciou, as subpastas dentro do diretório de trabalho da sessão atual são usadas diretamente, sem um pedido adicional. As pastas que já têm uma sessão são reutilizadas, e o que é criado é uma sessão vazia — nada começa a ser executado por si só.",
         "sessionContext": "Pode saber em que pasta de projeto está a trabalhar a sessão atual",
         "sessionContextDetail": "Partilha apenas informações de localização (ID da sessão e caminho da pasta do projeto) enquanto trabalha para a sessão atual — sem conteúdo de ficheiros e sem conceder acesso a ficheiros.",
+        "liveScreen": "Ver e controlar ecrãs de dispositivos no telemóvel",
+        "liveScreenDetail": "Através do ambiente de trabalho remoto, o telemóvel pode mostrar os ecrãs de dispositivos que fornece (como simuladores) e enviar-lhes toques, botões e texto. Só liga quando o abre a partir do telemóvel e não mostra mais nada deste computador.",
         "preview": "Pode abrir páginas de pré-visualização dos sites abaixo no navegador da barra lateral",
         "previewDetail": "Só podem ser abertos os sites indicados abaixo; cada página aberta é atribuída a este plugin.",
         "browserExtension": "Permite que a extensão de navegador incluída se ligue a Cindy",
@@ -10340,6 +10347,7 @@
       "continueEditing": "Continuar a editar"
     },
     "profileSaveFailed": "Não foi possível guardar as definições do colega. Não foram aplicadas alterações.",
+    "profileSaveOffline": "Não é possível ligar ao computador do colega. Restabeleça a ligação e volte a guardar.",
     "modelLabel": "Modelo",
     "modelUnavailable": "{{model}} (atualmente indisponível)",
     "codexAutomaticCompact": "Os colegas Codex compactam o contexto autonomamente, e /new mantém a tarefa atual. Só deve iniciar uma nova tarefa quando precisar mesmo de começar do zero.",
@@ -10675,6 +10683,11 @@
           "NETWORK_ERROR": "{{name}} não conseguiu responder: a ligação de rede falhou.\nVerifique a rede ou o proxy e volte a enviar a mensagem.",
           "RUNTIME_TIMEOUT": "{{name}} não respondeu dentro do tempo limite.\nVolte a enviar a mensagem ou escolha outro modelo disponível.",
           "RUNTIME_ERROR": "{{name}} não conseguiu responder desta vez.\nVolte a enviar a mensagem. Se continuar a falhar, consulte os registos e comunique o problema."
+        },
+        "capability": {
+          "GROUP_AUTHORIZATION_REQUIRED": "{{name}} não pôde executar a ferramenta: a autorização do grupo expirou ou não permite esta ação. O proprietário do colega pode repetir o pedido neste grupo.",
+          "GROUP_AUTHORIZATION_UNAVAILABLE": "Não foi possível verificar a autorização de grupo de {{name}}, pelo que a ferramenta não foi executada. Tente novamente quando a ligação for restabelecida.",
+          "ATTACHMENTS_UNAVAILABLE": "Alguns anexos não foram entregues a {{name}} devido a uma falha na transferência ou ao limite de anexos. Reenvie os anexos necessários para este pedido."
         }
       },
       "settings": {
@@ -10744,7 +10757,8 @@
         "lifecycleUnavailable": "O servidor ou computador atual ainda não suporta esta ação.",
         "groupDissolved": "Este grupo foi dissolvido. Ainda pode ler o histórico disponível.",
         "lastOwner": "Transfira a propriedade ou dissolva este grupo antes de sair.",
-        "allBotsMentionDisabled": "O proprietário do grupo ainda não ativou @Todos os colegas."
+        "allBotsMentionDisabled": "O proprietário do grupo ainda não ativou @Todos os colegas.",
+        "turnAlreadyStarted": "Este colega já começou e não pode ser ignorado"
       },
       "organizer": "Organizador",
       "plan": {
@@ -10777,7 +10791,17 @@
         "allTurns_other": "Os {{count}} colegas",
         "foldTurns": "Mostrar menos",
         "intro_many": "São necessários {{count}} passos. Eis quem faz o quê:",
-        "allTurns_many": "Os {{count}} colegas"
+        "allTurns_many": "Os {{count}} colegas",
+        "stepQueued": "À espera de início",
+        "stepExecuting": "Em execução",
+        "stepSkipped": "Ignorado",
+        "skippingTurn": "A saltar…",
+        "queueWaiting": "À espera que continues",
+        "skipTurnLabel": "Saltar {{name}}",
+        "queueEnded": "Ronda terminada",
+        "talkTitle": "Ouvir todos à vez",
+        "talkPending": "Não iniciado",
+        "skipTurn": "Saltar"
       },
       "speaking": {
         "planning": "A dividir o trabalho…"
@@ -11127,7 +11151,7 @@
         "items": {
           "tasks": {
             "title": "Tarefas",
-            "body": "Decide quando iniciar uma tarefa em segundo plano, controla as que iniciou e traz o resultado para o chat, incluindo nos teus outros computadores."
+            "body": "Conhece as tarefas que pode controlar e os computadores disponíveis. Organiza e acompanha tarefas a teu pedido, traz os resultados e verifica as operações suportadas antes de trabalhar noutro computador."
           },
           "teammates": {
             "title": "Outros colegas",
@@ -11142,8 +11166,8 @@
             "body": "Lembra-se das tuas preferências e do teu contexto, confirma antes de usar e atualiza quando algo muda."
           },
           "self": {
-            "title": "Conhecer-se",
-            "body": "Sabe o que consegue fazer e ativa ou desativa funcionalidades por ti; para Telegram, MCP ou plugins, consulta primeiro a ajuda do Cindy."
+            "title": "Conhecer e configurar o Cindy",
+            "body": "Conhece as funções e a utilização do Cindy e consulta ou altera definições a teu pedido. Pede-te na tarefa que preenchas ou confirmes o que for necessário."
           }
         }
       },
@@ -13830,7 +13854,7 @@
       "REMOTE_PROVIDER_UPDATING": "As credenciais deste fornecedor de modelos estão a ser atualizadas. Tenta novamente dentro de instantes.",
       "REMOTE_WORKDIR_UNAVAILABLE": "O diretório de trabalho remoto está indisponível. Verifica se a pasta ainda existe nesse computador e tenta novamente.",
       "REMOTE_OPTIMISTIC_SESSION_STATE_UNAVAILABLE": "O computador ainda não consegue confirmar se esta mensagem foi enviada. Aguarda um momento e tenta novamente. Não envies a mesma mensagem duas vezes.",
-      "REMOTE_AGENT_UNAVAILABLE": "Não é possível contactar o computador que executa o Agent. Certifica-te de que está online e permite o controlo remoto e tenta novamente.",
+      "REMOTE_AGENT_UNAVAILABLE": "A ligação ao computador que executa o Agent foi interrompida. Tenta novamente. Se continuar a acontecer, certifica-te de que está online e permite o controlo remoto.",
       "REMOTE_AGENT_PEER_TOO_OLD": "A versão do Cindy no outro computador é demasiado antiga para esta ação. Atualize primeiro o Cindy nesse computador.",
       "REMOTE_AGENT_EXPIRED": "Esta sessão já terminou no computador que executa o Agent. Envia a tua mensagem novamente.",
       "REMOTE_AGENT_NOT_FOUND": "Esta sessão já terminou no computador que executa o Agent. Envia a tua mensagem novamente.",
@@ -13957,6 +13981,18 @@
       "cancelTitle": "Parar de esperar e remover esta mensagem"
     },
     "ghostCall": {
+      "prStatus": {
+        "threadsNone": "Nenhum tópico de revisão aberto",
+        "mergeReady": "Pronta para integrar",
+        "mergeConflict": "Tem conflitos",
+        "mergeBehind": "Atrás do ramo base",
+        "mergeApproval": "A aguardar aprovação",
+        "mergeChanges": "Alterações pedidas",
+        "mergeWaiting": "A aguardar integração",
+        "merged": "Integrada",
+        "closed": "Fechada",
+        "draft": "Rascunho"
+      },
       "verb": "Plugin utilizado",
       "cardRunning": "O plugin está a desenhar",
       "cardDone": "Concluído",
@@ -13970,6 +14006,7 @@
       "collapseFields": "Recolher",
       "formSyncFailed": "As alterações ao cartão não foram sincronizadas. Verifique a ligação e continue a editar; a mensagem não foi enviada.",
       "linkOpenFailed": "Não foi possível abrir a ligação",
+      "modelSelectFailed": "O modelo não foi alterado. Escolha novamente.",
       "mailPreview": "Pré-visualização do email",
       "mailEnlarge": "Ampliar pré-visualização",
       "mailInsertImage": "Inserir na mensagem",
@@ -16171,7 +16208,17 @@
   },
   "commandPalette": {
     "viewSkillDetails": "Ver detalhes da Skill",
-    "projectSkillNotLoaded": "Esta tarefa Pi não carregou esta Skill do projeto. As novas tarefas tentarão carregá-la automaticamente."
+    "projectSkillNotLoaded": "Esta tarefa Pi não carregou esta Skill do projeto. As novas tarefas tentarão carregá-la automaticamente.",
+    "pluginSkillSetup": {
+      "install": "Não instalado",
+      "enable": "Desativado"
+    },
+    "pluginSkills": {
+      "pr": {
+        "install": "Abre um PR, corrige a CI e o feedback de revisão e acompanha até ser integrado · Requer instalar o plugin do GitHub",
+        "enable": "Abre um PR, corrige a CI e o feedback de revisão e acompanha até ser integrado · Requer ativar o plugin do GitHub"
+      }
+    }
   },
   "skillhub": {
     "remote": {
@@ -17173,7 +17220,14 @@
     "sectionTitle": "Diretórios",
     "empty": "Ainda não há diretórios de referência",
     "add": "Adicionar diretório…",
-    "addReadOnly": "Adicionar diretório só de leitura…",
+    "back": "Voltar",
+    "addTitle": "Adicionar diretório",
+    "writableHint": "O Agent pode ler e escrever",
+    "writableHintDetail": "O Agent pode ler, criar, modificar e eliminar ficheiros nestes diretórios.",
+    "searchRecent": "Pesquisar diretórios",
+    "noRecent": "Ainda não há diretórios recentes",
+    "noMatchingRecent": "Nenhum diretório correspondente",
+    "addFailed": "Não foi possível adicionar este diretório. Tente novamente ou escolha outra pasta.",
     "atLimit": "Limite atingido ({{max}})",
     "remove": "Remover {{name}}",
     "writableParentConfirmTitle": "Permitir acesso de leitura e escrita a um diretório ascendente?",
@@ -18895,6 +18949,21 @@
     "taskDetail": "Isto permite edições apenas na sessão atual. Um diretório de trabalho separado não é uma sandbox do sistema; os comandos continuam sujeitos às verificações de permissões do Cindy. Pode alterar isto no menu de permissões da sessão.",
     "allow": "Permitir e continuar",
     "cancel": "Agora não"
+  },
+  "pluginCompanionAnswer": {
+    "title": "Confirmar permissão",
+    "planMessage": "Deixar {{companion}} começar a trabalhar neste plano?",
+    "permissionMessage": {
+      "command": "Permitir que {{companion}} execute este comando?",
+      "file-read": "Permitir que {{companion}} leia estes ficheiros?",
+      "file-write": "Permitir que {{companion}} altere estes ficheiros?",
+      "browser": "Permitir que {{companion}} execute este passo no navegador?",
+      "plugin": "Permitir que {{companion}} utilize «{{tool}}»?",
+      "tool": "Permitir que {{companion}} utilize {{tool}}?"
+    },
+    "source": "Escolheu Permitir no plugin «{{plugin}}». O {{appName}} confirma aqui mais uma vez; depois, o colega continua.",
+    "allow": "Permitir",
+    "cancel": "Cancelar"
   },
   "groupTools": {
     "authorizationRequired": "A autorização do grupo expirou ou não permite esta ação. Peça ao proprietário do colega para fazer um novo pedido neste grupo.",

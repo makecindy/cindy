@@ -9,7 +9,7 @@ import type {
 } from '../../shared/pluginTargets.js';
 import { isPluginTaskPermissionMode, type PluginTaskPermissionMode, type PluginTaskRoute } from '../../shared/pluginTasks.js';
 import { DEFAULT_DRAFT_SESSION_TITLE } from '@cindy/maker-shared/session-title';
-import { pluginMessageText, validPluginMessageContext } from '../../shared/pluginMessage.js';
+import { validPluginMessageContext } from '../../shared/pluginMessage.js';
 import { getActiveDataOwnerPushStamp, activeOwnerScopeKey } from '../appSessionState.js';
 import { withParsedPluginMessageAttachments, type PluginMessageImage } from '../cindy-media/pluginMessageAttachments.js';
 
@@ -304,7 +304,8 @@ export class PluginTargetSlot {
           return fail('SUPERSEDED');
         }
         if (request.autoTitle) {
-          try { adapter.scheduleAutoTitle?.(pluginId, taskId, pluginMessageText(request.text, request.context), request.text); }
+          // Reference material must not consume the title model's limited input budget.
+          try { adapter.scheduleAutoTitle?.(pluginId, taskId, request.text, request.text); }
           catch { /* Naming failure never retries an accepted message. */ }
         }
         return { taskId, accepted: true, delivery: actualDelivery,
