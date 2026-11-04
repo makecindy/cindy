@@ -134,6 +134,38 @@ export interface AgentRelayDeploymentMetadata {
   tls?: string;
 }
 
+/** 最后一次成功上传的暂存收据，不表示文件已安装或该机器正在承载线路。 */
+export interface AgentRelayUploadRecord {
+  sshHostId: string;
+  remoteDir: string;
+  bundlePath: string;
+  initPath: string;
+  bundleSha256: string;
+  initSha256: string;
+  uploadedAt: string;
+}
+
+/** 上传收据与已核验的运行信息独立读取；坏收据不能使仍可用的线路记录失效。 */
+export function parseAgentRelayUploadRecord(value: unknown): AgentRelayUploadRecord | null {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
+  const raw = value as Record<string, unknown>;
+  const text = (key: keyof AgentRelayUploadRecord, limit: number): string | null => {
+    const field = raw[key];
+    return typeof field === 'string' && field.length > 0 && field.length <= limit && !/[\u0000-\u001f]/.test(field) ? field : null;
+  };
+  const sshHostId = text('sshHostId', 200);
+  const remoteDir = text('remoteDir', 4096);
+  const bundlePath = text('bundlePath', 8192);
+  const initPath = text('initPath', 8192);
+  const bundleSha256 = text('bundleSha256', 64);
+  const initSha256 = text('initSha256', 64);
+  const uploadedAt = text('uploadedAt', 64);
+  if (!sshHostId || !remoteDir?.startsWith('/') || !bundlePath?.startsWith('/') || !initPath?.startsWith('/') ||
+      !bundleSha256 || !/^[a-f0-9]{64}$/.test(bundleSha256) || !initSha256 || !/^[a-f0-9]{64}$/.test(initSha256) ||
+      !uploadedAt || !Number.isFinite(Date.parse(uploadedAt))) return null;
+  return { sshHostId, remoteDir, bundlePath, initPath, bundleSha256, initSha256, uploadedAt };
+}
+
 /** 丢弃未知字段，不让原始工具输入或凭证混入持久化的部署记录。 */
 export function parseAgentRelayDeploymentMetadata(value: unknown): AgentRelayDeploymentMetadata | null {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
@@ -222,6 +254,7 @@ export interface SelfHostedRelayDeploymentView {
   managedBy?: 'agent';
   deploymentKey?: string;
   metadata?: AgentRelayDeploymentMetadata;
+  lastUpload?: AgentRelayUploadRecord;
   relayId: string;
   sshHostId: string;
   address: string;

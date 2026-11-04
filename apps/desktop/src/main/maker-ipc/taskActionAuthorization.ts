@@ -26,6 +26,7 @@ export const TASK_ACTION_TOOLS: ReadonlySet<string> = new Set([
   'upload_relay_deployment',
   'complete_relay_deployment',
   'use_relay_deployment',
+  'use_official_relay',
   'forget_relay_deployment',
   'update_session_queued_message',
   'cancel_session_queued_message',

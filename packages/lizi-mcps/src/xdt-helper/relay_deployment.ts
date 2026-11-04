@@ -16,9 +16,10 @@ const metadataSchema = z.strictObject({
 
 export type RelayDeploymentRequest =
   | { operation: 'list' }
+  | { operation: 'use-official' }
   | { operation: 'prepare'; deploymentKey: string; name: string }
   | { operation: 'upload'; relayId: string; sshHostId: string; remoteDir: string }
-  | { operation: 'complete'; relayId: string; baseUrl: string; metadata?: z.infer<typeof metadataSchema> }
+  | { operation: 'complete'; relayId: string; baseUrl: string; tlsPort: number; nodePath?: string; metadata?: z.infer<typeof metadataSchema> }
   | { operation: 'use' | 'forget'; relayId: string };
 
 export interface RelayDeploymentCallbacks {
@@ -32,8 +33,8 @@ const deploymentGuide = {
     'prepare_relay_deployment creates or resumes the owner identity; reuse deployment_key. Create a private staging directory on the SSH server, then upload_relay_deployment transfers the bundle and public init JSON without putting the bundle in model context.',
     'Initialize only a new persistent data directory, using the uploaded JSON and the init arguments below. Never replace existing relay identity or device data on retry/upgrade.',
     'Run serve under a suitable persistent supervisor. A user service or container is fine. Reuse the existing trusted reverse proxy/certificate where appropriate; do not assume root, systemd or free 80/443. Proxy WebSocket upgrades and /api/device-link/ routes, including media.',
-    'Check HTTPS and WebSocket reachability, then complete_relay_deployment performs owner-authenticated registration. Record actual SSH host, data/program directories, service, runtime and TLS ownership; do not store secrets or executable maintenance scripts.',
-    'Only use_relay_deployment if activation was requested. Other devices join using Add device in the route details. For upgrades, preserve identity/data, deploy a new bundle, verify then register the same relay. For removal, re-inspect ownership and preserve shared websites/proxies before removing only owned resources.',
+    'Check HTTPS and WebSocket reachability, then complete_relay_deployment binds the public HTTPS certificate to a TLS listener on 127.0.0.1 of the last uploaded SSH host before sending owner authentication. Supply tls_port and the compatible node_path on that host. TLS termination only on an external CDN or another host is not supported by this registration path; do not substitute a public URL probe. Record actual live data/program directories, service, runtime and TLS ownership, not the lastUpload staging directory; do not store secrets or executable maintenance scripts.',
+    'Only use_relay_deployment if activation was requested. Use use_official_relay to switch this computer back to Cindy’s official relay while preserving saved deployments and owner identities. Other devices join using Add device in the route details. For upgrades, preserve identity/data, deploy a new bundle, verify then register the same relay. For removal, re-inspect ownership and preserve shared websites/proxies before removing only owned resources.',
   ],
   cli: {
     invocation: '<chosen-node> <uploaded-bundle-path> <command> <arguments>',
@@ -94,9 +95,14 @@ export function registerRelayDeploymentTools(
   });
   registry.register({
     name: 'complete_relay_deployment', category: 'relay',
-    description: 'Verify the deployed relay over trusted HTTPS (custom ports allowed), authenticate with the Host-held owner identity, and register it in Cindy’s connection routes. An HTTP 200 or started process alone is not completion. Save actual deployment locations and runtime/TLS ownership in metadata for later repair, upgrade and removal; metadata is descriptive, never an executable script. Does not switch the current route. After registration, use_relay_deployment only when the user requested activation.',
-    inputShape: { relay_id: relayId, base_url: z.string().min(1).max(2048), metadata: metadataSchema.optional() },
-    handler: ({ relay_id, base_url, metadata }) => invoke({ operation: 'complete', relayId: relay_id, baseUrl: base_url, metadata }),
+    description: 'Bind a deployed HTTPS endpoint to the last successfully uploaded SSH host, then authenticate and register the route. Requires upload_relay_deployment first and a TLS listener reachable on that host’s loopback address. The Host probes its certificate over authenticated SSH and checks it on each actual HTTPS request before sending owner credentials; public info alone is not proof. External-only TLS/CDN termination is unsupported. Save actual live deployment locations in metadata; upload staging does not replace them. Does not switch the current route.',
+    inputShape: {
+      relay_id: relayId, base_url: z.string().min(1).max(2048),
+      tls_port: z.number().int().min(1).max(65535).describe('TLS listener port on 127.0.0.1 of the last uploaded SSH host; may differ from the public HTTPS port.'),
+      node_path: z.string().min(1).max(4096).optional().describe('Compatible Node executable on that SSH host, default node; executable path only, no arguments.'),
+      metadata: metadataSchema.optional(),
+    },
+    handler: ({ relay_id, base_url, tls_port, node_path, metadata }) => invoke({ operation: 'complete', relayId: relay_id, baseUrl: base_url, tlsPort: tls_port, nodePath: node_path, metadata }),
   });
   registry.register({
     name: 'use_relay_deployment', category: 'relay',
@@ -105,8 +111,13 @@ export function registerRelayDeploymentTools(
     handler: ({ relay_id }) => invoke({ operation: 'use', relayId: relay_id }),
   });
   registry.register({
+    name: 'use_official_relay', category: 'relay',
+    description: 'Switch this computer back to Cindy’s official relay at the user’s request. Preserves owned server deployment records, owner credentials and signing keys; does not uninstall remote deployments. Matches Settings: a relay hosted on this computer is stopped, and a joined member leaves that relay and removes its member credential. Local computer scope only; read get_relay_deployments to confirm the current route.',
+    inputShape: {}, handler: () => invoke({ operation: 'use-official' }),
+  });
+  registry.register({
     name: 'forget_relay_deployment', category: 'relay',
-    description: 'Permanently forget this relay on this computer: deletes its deployment record AND locally held owner credential/signing key. This computer loses the ability to manage it or add devices; if it is the active route, switches back to the official relay. Does not stop or uninstall the server. Call only when the user explicitly abandons management or after a requested uninstall has been verified. For Agent-managed uninstall, inspect recorded resources, remove only that relay’s owned resources using cindy_ssh, verify the outcome, then forget it. Never remove a shared proxy, unrelated website or data without authorization.',
+    description: 'Permanently forget this relay on this computer: deletes its deployment record AND locally held owner credential/signing key. This computer loses the ability to manage it or add devices; if it is the active route, switches back to the official relay. To switch routes while preserving management, use use_official_relay instead. Does not stop or uninstall the server. Call only when the user explicitly abandons management or after a requested uninstall has been verified. For Agent-managed uninstall, inspect recorded resources, remove only that relay’s owned resources using cindy_ssh, verify the outcome, then forget it. Never remove a shared proxy, unrelated website or data without authorization.',
     inputShape: { relay_id: relayId },
     handler: ({ relay_id }) => invoke({ operation: 'forget', relayId: relay_id }),
   });

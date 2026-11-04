@@ -590,10 +590,20 @@ Electron 进程的 IPC/WebRTC smoke，以及 Desktop、Mobile 和共享包类型
 Agent 自适应部署复用同一个随包中转程序、`relay init`、`CindyRelay` 认证及已有管理接口，
 不新增 relay 帧、协议版本或 Mobile 原生能力。`prepare_relay_deployment` 与
 `complete_relay_deployment` 是本机 MCP 宿主能力，不加入设备互联或共享访客的远控白名单。
-设置页与聊天使用同一份本机主人身份；公开接口通过之后仍须验证主人管理认证，才登记部署。
-任意 HTTPS 端口和外部反代仅改变部署位置，不放宽 TLS 校验或账号边界。
+设置页与聊天使用同一份本机主人身份。登记以 `lastUpload.sshHostId` 为 SSH 信任锚，
+`tls_port` / `node_path` 用于上传主机回环 TLS 探测。先以绑定该证书的无凭证 HTTPS 请求核验
+公开中转身份和协议，再发主人管理鉴权请求；后者须在其自身握手里核验该证书与正常 WebPKI，
+才能发送主人凭证并验证管理访问。公开接口字段可复制，
+不能单独作为发送凭证的依据；从 SSH 主机探测相同公网 URL 也不能替代回环绑定。
+外部反代必须能在上传主机的回环地址提供对应 TLS 监听；没有这条路径的 CDN／异机 TLS 终止
+不在当前登记能力内。每次登记重做绑定，后续已登记 URL 沿用常规 TLS 校验，不永久固定
+证书或破坏自动续证。自定义 HTTPS 端口不放宽 TLS 校验或账号边界。
 
 配置版本仍为 2：Agent 记录增加 `managedBy: 'agent'`、`deploymentKey` 和部署位置说明，
+可选 `lastUpload` 保存上传主机、暂存目录、文件路径、摘要及时间，与实际运行 `metadata`
+独立。上传不能把仍在运行的部署位置覆盖为暂存位置；旧记录缺该收据时仍可读取，但须先成功
+上传才能重新登记。`use_official_relay` 复用已有设置行为，服务器部署的主人身份和记录保留，
+与永久删除身份的 `forget_relay_deployment` 分开。
 顶层 `sshHostId` 留空，使旧版本不会把它当作可由固定安装器升级／卸载的记录；
 旧字段 `deployment` 的兼容镜像只包含固定部署。新版拒绝把 Agent 记录传给旧固定安装器，
 恢复和维护交回普通任务。旧客户端不能管理这些记录，写回配置可能丢掉新记录，但不删除

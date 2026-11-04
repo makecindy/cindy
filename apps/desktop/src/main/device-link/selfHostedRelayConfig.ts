@@ -18,7 +18,7 @@ import { isRelayPublicKey } from '@cindy/device-link';
 import { activeOwnerScopeKey, getActiveAppSession, ownerScopedUserDataPath } from '../appSessionState.js';
 import { createLogger } from '../logger.js';
 import { oauthSecureStorageAvailable } from '../plugin-oauth/identityStore.js';
-import { DEFAULT_RELAY_PORT, parseAgentRelayDeploymentMetadata, type AgentRelayDeploymentMetadata } from '../../shared/selfHostedRelay.js';
+import { DEFAULT_RELAY_PORT, parseAgentRelayDeploymentMetadata, parseAgentRelayUploadRecord, type AgentRelayDeploymentMetadata, type AgentRelayUploadRecord } from '../../shared/selfHostedRelay.js';
 import { setSelfHostedRelaySource, type ActiveSelfHostedRelay } from './selfHostedRelayRouting.js';
 
 const log = createLogger('self-hosted-relay:config');
@@ -56,6 +56,7 @@ export interface RelayDeployment {
   managedBy?: 'agent';
   deploymentKey?: string;
   metadata?: AgentRelayDeploymentMetadata;
+  lastUpload?: AgentRelayUploadRecord;
   /** Agent 准备身份时绑定的本机设备，不能在设备身份变更后重新签成另一个主人。 */
   ownerDeviceId?: string;
   sshHostId: string;
@@ -149,6 +150,7 @@ function parseDeployment(raw: unknown): RelayDeployment | null {
   if (!raw || typeof raw !== 'object') return null;
   const d = raw as Record<string, unknown>;
   const agent = d.managedBy === 'agent';
+  const lastUpload = agent ? parseAgentRelayUploadRecord(d.lastUpload) : null;
   if (
     (agent ? d.sshHostId !== '' || !isString(d.deploymentKey) || !isString(d.ownerDeviceId) : !isString(d.sshHostId)) ||
     (agent ? typeof d.address !== 'string' || typeof d.baseUrl !== 'string' : !isString(d.address) || !isString(d.baseUrl)) ||
@@ -164,6 +166,7 @@ function parseDeployment(raw: unknown): RelayDeployment | null {
   return {
     ...(agent ? { managedBy: 'agent' as const, deploymentKey: d.deploymentKey as string, ownerDeviceId: d.ownerDeviceId as string,
       metadata: parseAgentRelayDeploymentMetadata(d.metadata) ?? {} } : {}),
+    ...(lastUpload ? { lastUpload } : {}),
     sshHostId: d.sshHostId as string,
     address: d.address as string,
     baseUrl: d.baseUrl as string,

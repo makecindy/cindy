@@ -29,15 +29,17 @@ describe('Agent relay deployment MCP', () => {
     const call = async (name: string, args: object = {}) => parse(await client.callTool({ name: 'call_tool', arguments: { name, args } }));
     const list = async (args: Record<string, unknown> = {}) => parse(await client.callTool({ name: 'list_tools', arguments: args }));
     try {
-      expect((await list()).categories).toEqual(expect.arrayContaining([expect.objectContaining({ name: 'relay', tool_count: 6 })]));
+      expect((await list()).categories).toEqual(expect.arrayContaining([expect.objectContaining({ name: 'relay', tool_count: 7 })]));
       const discovery = await list({ category: 'relay' });
       expect(discovery.tools.every((tool: { inputSchema?: unknown }) => tool.inputSchema)).toBe(true);
       const cases = [
         ['get_relay_deployments', {}, { operation: 'list' }],
         ['prepare_relay_deployment', { deployment_key: 'my-server', name: 'My relay' }, { operation: 'prepare', deploymentKey: 'my-server', name: 'My relay' }],
         ['upload_relay_deployment', { relay_id: relayId, ssh_host_id: 'vps', remote_dir: '/home/me/relay' }, { operation: 'upload', relayId, sshHostId: 'vps', remoteDir: '/home/me/relay' }],
-        ['complete_relay_deployment', { relay_id: relayId, base_url: 'https://relay.example:8443', metadata: { service: 'user service' } }, { operation: 'complete', relayId, baseUrl: 'https://relay.example:8443', metadata: { service: 'user service' } }],
+        ['complete_relay_deployment', { relay_id: relayId, base_url: 'https://relay.example:8443', tls_port: 443, node_path: '/opt/node', metadata: { service: 'user service' } }, { operation: 'complete', relayId, baseUrl: 'https://relay.example:8443', tlsPort: 443, nodePath: '/opt/node', metadata: { service: 'user service' } }],
         ['use_relay_deployment', { relay_id: relayId }, { operation: 'use', relayId }],
+        // #8779: switching back must have its own non-destructive operation, without a relay ID.
+        ['use_official_relay', {}, { operation: 'use-official' }],
         ['forget_relay_deployment', { relay_id: relayId }, { operation: 'forget', relayId }],
       ] as const;
       context = { ...context, sessionId: 'current' };
@@ -46,21 +48,28 @@ describe('Agent relay deployment MCP', () => {
         expect(host).toHaveBeenLastCalledWith({ ...expected, callerSessionId: 'current' });
       }
       host.mockClear();
-      expect(await call('complete_relay_deployment', { relay_id: relayId, base_url: 'https://relay.example', metadata: { command: 'arbitrary command' } }))
+      expect(await call('complete_relay_deployment', { relay_id: relayId, base_url: 'https://relay.example', tls_port: 443, metadata: { command: 'arbitrary command' } }))
+        .toMatchObject({ errorCode: 'INVALID_ARGS' });
+      expect(host).not.toHaveBeenCalled();
+      expect(await call('complete_relay_deployment', { relay_id: relayId, base_url: 'https://relay.example' }))
         .toMatchObject({ errorCode: 'INVALID_ARGS' });
       expect(host).not.toHaveBeenCalled();
       denied = true;
       expect(await call('prepare_relay_deployment', { deployment_key: 'new', name: 'New' })).toMatchObject({ ok: false });
+      expect(await call('use_official_relay')).toMatchObject({ ok: false });
       expect(host).not.toHaveBeenCalled();
       denied = false;
       context = { ...context, remoteHostId: 'remote' };
       expect(await call('get_relay_deployments')).toMatchObject({ errorCode: 'CAPABILITY_NOT_AVAILABLE' });
+      expect(await call('use_official_relay')).toMatchObject({ errorCode: 'CAPABILITY_NOT_AVAILABLE' });
       expect((await list()).categories.some((item: { name: string }) => item.name === 'relay')).toBe(false);
       context = { ...context, remoteHostId: undefined, sessionId: undefined };
       expect(await call('get_relay_deployments')).toMatchObject({ errorCode: 'CAPABILITY_NOT_AVAILABLE' });
+      expect(await call('use_official_relay')).toMatchObject({ errorCode: 'CAPABILITY_NOT_AVAILABLE' });
       context = { ...context, sessionId: 'current' };
       surface = 'restricted';
       expect(await call('get_relay_deployments')).toMatchObject({ errorCode: 'CAPABILITY_NOT_AVAILABLE' });
+      expect(await call('use_official_relay')).toMatchObject({ errorCode: 'CAPABILITY_NOT_AVAILABLE' });
       expect(host).not.toHaveBeenCalled();
     } finally {
       await client.close(); await server.close();

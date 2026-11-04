@@ -30,6 +30,7 @@ const h = vi.hoisted(() => ({
   uninstall: vi.fn(),
   startServer: vi.fn(),
   upload: vi.fn(),
+  verifyEndpoint: vi.fn(),
   secrets: new Map<string, RelaySecrets>(),
   bundlePath: 'in-memory-relay.mjs' as string | null,
 }));
@@ -73,6 +74,7 @@ vi.mock('../selfHostedRelayDeploy.js', () => ({
   resolveRelayBundlePath: () => h.bundlePath,
 }));
 vi.mock('../selfHostedRelayUpload.js', () => ({ uploadRelayArtifacts: h.upload }));
+vi.mock('../selfHostedRelayEndpoint.js', () => ({ verifyAgentRelayEndpoint: h.verifyEndpoint }));
 vi.mock('../selfHostedRelayConfig.js', () => ({
   readRelayConfig: () => structuredClone(h.config.get(h.owner)),
   writeRelayConfig: (value: RelayConfig) => {
@@ -124,6 +126,9 @@ beforeEach(async () => {
   h.boundaryPending = false;
   h.secrets.clear();
   h.bundlePath = 'in-memory-relay.mjs';
+  h.verifyEndpoint.mockReset();
+  h.upload.mockReset().mockResolvedValue({ bundlePath: '/srv/staging/relay.mjs', initPath: '/srv/staging/init.json',
+    bundleSha256: 'a'.repeat(64), initSha256: 'b'.repeat(64) });
   h.config = new Map([['account-a', emptyConfig()], ['account-b', emptyConfig()]]);
   registerSelfHostedRelayIpc();
   await vi.runAllTimersAsync();
@@ -133,6 +138,12 @@ afterEach(() => { vi.useRealTimers(); vi.unstubAllGlobals(); });
 
 const deploymentOf = (owner = 'account-a', sshHostId = 'test-server') =>
   h.config.get(owner)!.deployments.find((deployment) => deployment.sshHostId === sshHostId);
+
+async function uploadedDeployment(key: string) {
+  const result = await prepareAgentRelayDeployment({ deploymentKey: key, name: 'Relay' });
+  expect((await uploadAgentRelayDeployment({ relayId: result.prepared!.relayId, sshHostId: 'uploaded-ssh', remoteDir: '/srv/staging' })).error).toBeUndefined();
+  return result.prepared!;
+}
 
 // Agent 自选部署不经过 SSH 安装器；既有 IPC 测试无法证明主人身份、任务撤销与协议核验边界。
 // 最小输入：同一 deploymentKey 重试，再提交任意 HTTPS 高端口。unit，网络与安全存储均为 fake。
@@ -163,16 +174,19 @@ it('projects deployment state without exposing live UI pairing links or requests
 });
 
 it('verifies an agent relay at its real HTTPS URL and protects it from the fixed installer', async () => {
-  const { prepared } = await prepareAgentRelayDeployment({ deploymentKey: 'container', name: 'Container' });
+  const prepared = await uploadedDeployment('container');
   const info = { relayId: prepared!.relayId, ownerPublicKey: prepared!.init.ownerPublicKey, protocolVersion: 1, features: ['pairing-v1', 'device-signatures-v1'], relayVersion: '0.3.1' };
-  const requests = vi.fn(async (_url: string, _init?: RequestInit) => new Response(JSON.stringify(info)));
-  vi.stubGlobal('fetch', requests);
-  const result = await registerAgentRelayDeployment({ relayId: info.relayId, baseUrl: 'https://relay.example:8443/cindy/', metadata: { runtime: 'container', service: 'rootless podman' } });
+  const requests = vi.fn(async () => info);
+  h.verifyEndpoint.mockResolvedValue(requests);
+  const result = await registerAgentRelayDeployment({ relayId: info.relayId, baseUrl: 'https://relay.example:8443/cindy/', tlsPort: 443,
+    metadata: { runtime: 'container', service: 'rootless podman', sshHostId: 'untrusted-description', programDir: '/srv/live' } });
   expect(result.error).toBeUndefined();
-  expect(result.state.deployments[0]).toMatchObject({ baseUrl: 'https://relay.example:8443/cindy', managedBy: 'agent', relayVersion: '0.3.1', active: false, upgradeAvailable: false, metadata: { runtime: 'container' } });
-  expect(requests.mock.calls[0]).toEqual(['https://relay.example:8443/cindy/api/device-link/relay/info', expect.objectContaining({ redirect: 'error' })]);
-  expect(requests.mock.calls[0][1]).not.toHaveProperty('headers');
-  expect(requests.mock.calls[1]).toEqual(['https://relay.example:8443/cindy/api/device-link/relay/admin/status', expect.objectContaining({ redirect: 'error', headers: { authorization: 'CindyRelay fake-credential' } })]);
+  expect(result.state.deployments[0]).toMatchObject({ baseUrl: 'https://relay.example:8443/cindy', managedBy: 'agent', relayVersion: '0.3.1', active: false, upgradeAvailable: false,
+    metadata: { runtime: 'container', sshHostId: 'uploaded-ssh', programDir: '/srv/live' } });
+  expect(h.verifyEndpoint).toHaveBeenLastCalledWith({ sshHostId: 'uploaded-ssh', baseUrl: 'https://relay.example:8443/cindy', tlsPort: 443, nodePath: 'node', assertCurrent: expect.any(Function) });
+  expect(JSON.stringify(h.verifyEndpoint.mock.calls)).not.toContain('fake-credential');
+  expect(requests).toHaveBeenNthCalledWith(1, 'info');
+  expect(requests).toHaveBeenNthCalledWith(2, 'admin/status', 'fake-credential');
   expect(h.restart).not.toHaveBeenCalled();
   for (const type of ['upgrade-deployment', 'uninstall-deployment'] as const) {
     expect((await command({ type, relayId: info.relayId, removeData: true })).error).toBe('AGENT_MANAGED_DEPLOYMENT');
@@ -181,23 +195,28 @@ it('verifies an agent relay at its real HTTPS URL and protects it from the fixed
   expect(h.uninstall).not.toHaveBeenCalled();
   await executeSelfHostedRelayCommand({ type: 'use-deployment', relayId: info.relayId });
   expect(h.config.get(h.owner)!.active).toMatchObject({ baseUrl: 'https://relay.example:8443/cindy', role: 'owner' });
+  // A changed URL never reuses the previous endpoint proof.
+  expect((await registerAgentRelayDeployment({ relayId: info.relayId, baseUrl: 'https://moved.example:9443', tlsPort: 8443, nodePath: '/opt/node' })).error).toBeUndefined();
+  expect(h.verifyEndpoint).toHaveBeenCalledTimes(2);
+  expect(h.verifyEndpoint).toHaveBeenLastCalledWith(expect.objectContaining({ baseUrl: 'https://moved.example:9443', sshHostId: 'uploaded-ssh', tlsPort: 8443, nodePath: '/opt/node' }));
+  expect(h.config.get(h.owner)!.active).toMatchObject({ baseUrl: 'https://moved.example:9443' });
 });
 
 it.each(['identity', 'protocol', 'admin', 'redirect'] as const)('does not register a relay that fails %s verification', async (failure) => {
-  const { prepared } = await prepareAgentRelayDeployment({ deploymentKey: 'candidate', name: 'Candidate' });
+  const prepared = await uploadedDeployment('candidate');
   const original = structuredClone(h.config.get(h.owner));
   let calls = 0;
   const requests = vi.fn(async () => {
     calls += 1;
     if (failure === 'redirect') throw new TypeError('redirect not allowed');
-    return new Response(JSON.stringify({
+    return {
       relayId: failure === 'identity' || (failure === 'admin' && calls === 2) ? 'other-relay' : prepared!.relayId,
       ownerPublicKey: prepared!.init.ownerPublicKey, protocolVersion: failure === 'protocol' ? 99 : 1,
       features: ['pairing-v1', 'device-signatures-v1'], relayVersion: '0.3.1',
-    }));
+    };
   });
-  vi.stubGlobal('fetch', requests);
-  const result = await registerAgentRelayDeployment({ relayId: prepared!.relayId, baseUrl: 'https://relay.example:9443' });
+  h.verifyEndpoint.mockResolvedValue(requests);
+  const result = await registerAgentRelayDeployment({ relayId: prepared!.relayId, baseUrl: 'https://relay.example:9443', tlsPort: 443 });
   expect(result.error).toBe(failure === 'protocol' ? 'INCOMPATIBLE' : failure === 'redirect' ? 'NOT_REACHABLE' : 'RELAY_MISMATCH');
   expect(h.config.get(h.owner)).toEqual(original);
   expect(requests).toHaveBeenCalledTimes(failure === 'admin' ? 2 : 1);
@@ -205,21 +224,50 @@ it.each(['identity', 'protocol', 'admin', 'redirect'] as const)('does not regist
 });
 
 it('rejects cleartext URLs before sending a credential and ignores late verification after account changes', async () => {
-  const { prepared } = await prepareAgentRelayDeployment({ deploymentKey: 'candidate', name: 'Candidate' });
-  const pending = deferred<Response>();
+  const prepared = await uploadedDeployment('candidate');
+  const pending = deferred<Record<string, unknown>>();
   const requests = vi.fn(() => pending.promise);
-  vi.stubGlobal('fetch', requests);
-  expect((await registerAgentRelayDeployment({ relayId: prepared!.relayId, baseUrl: 'http://relay.example:8443' })).error).toBe('INVALID_ADDRESS');
+  h.verifyEndpoint.mockResolvedValue(requests);
+  expect((await registerAgentRelayDeployment({ relayId: prepared!.relayId, baseUrl: 'http://relay.example:8443', tlsPort: 443 })).error).toBe('INVALID_ADDRESS');
   expect(requests).not.toHaveBeenCalled();
-  const registering = registerAgentRelayDeployment({ relayId: prepared!.relayId, baseUrl: 'https://relay.example:8443' });
+  const registering = registerAgentRelayDeployment({ relayId: prepared!.relayId, baseUrl: 'https://relay.example:8443', tlsPort: 443 });
   const rejection = expect(registering).rejects.toThrow();
   await vi.waitFor(() => expect(requests).toHaveBeenCalledOnce());
   await switchOwner('account-b');
-  pending.resolve(new Response('{}'));
+  pending.resolve({});
   await rejection;
   expect(h.config.get('account-b')!.deployments).toEqual([]);
   expect(h.config.get('account-a')!.deployments[0].complete).toBe(false);
   expect(requests).toHaveBeenCalledOnce();
+});
+
+// PR #8779: public relay/info is copyable. Only the successful upload's authenticated SSH host can bind a new URL.
+// Existing identity checks did not cover missing upload anchors, failed endpoint proof, or a concurrently replaced receipt. Unit.
+it('requires an uploaded SSH anchor and leaves the previous record untouched when binding fails', async () => {
+  const { prepared } = await prepareAgentRelayDeployment({ deploymentKey: 'unbound', name: 'Relay' });
+  const input = { relayId: prepared!.relayId, baseUrl: 'https://copy.example', tlsPort: 443, metadata: { sshHostId: 'forged-host' } };
+  expect((await registerAgentRelayDeployment(input)).error).toBe('NO_DEPLOYMENT');
+  expect(h.verifyEndpoint).not.toHaveBeenCalled();
+  await uploadAgentRelayDeployment({ relayId: prepared!.relayId, sshHostId: 'uploaded-ssh', remoteDir: '/srv/staging' });
+  const original = structuredClone(h.config.get(h.owner));
+  h.verifyEndpoint.mockRejectedValue(new Error('certificate mismatch'));
+  expect((await registerAgentRelayDeployment(input)).error).toBe('NOT_REACHABLE');
+  expect(h.verifyEndpoint).toHaveBeenLastCalledWith(expect.objectContaining({ sshHostId: 'uploaded-ssh' }));
+  expect(h.config.get(h.owner)).toEqual(original);
+  expect(h.restart).not.toHaveBeenCalled();
+});
+
+it('does not register a stale endpoint proof after another upload replaces its SSH anchor', async () => {
+  const prepared = await uploadedDeployment('concurrent');
+  const info = { relayId: prepared.relayId, ownerPublicKey: prepared.init.ownerPublicKey, protocolVersion: 1,
+    features: ['pairing-v1', 'device-signatures-v1'], relayVersion: '0.3.1' };
+  h.verifyEndpoint.mockResolvedValue(async (endpoint: string) => {
+    if (endpoint === 'admin/status') await uploadAgentRelayDeployment({ relayId: prepared.relayId, sshHostId: 'another-host', remoteDir: '/srv/other' });
+    return info;
+  });
+  expect((await registerAgentRelayDeployment({ relayId: prepared.relayId, baseUrl: 'https://relay.example', tlsPort: 443 })).error).toBe('BUSY');
+  expect(h.config.get(h.owner)!.deployments[0]).toMatchObject({ complete: false, baseUrl: '', lastUpload: { sshHostId: 'another-host' } });
+  expect(h.restart).not.toHaveBeenCalled();
 });
 
 it('uploads only public initialization materials and preserves a prepared identity when task authority expires', async () => {
@@ -234,6 +282,42 @@ it('uploads only public initialization materials and preserves a prepared identi
   const before = structuredClone(h.config.get(h.owner));
   await expect(prepareAgentRelayDeployment({ deploymentKey: 'revoked', name: 'Revoked' }, { assertCurrent: () => { throw new Error('revoked'); } })).rejects.toThrow('revoked');
   expect(h.config.get(h.owner)).toEqual(before);
+});
+
+// PR #8779 P1：上传临时目录不是正在运行的安装位置。旧用例只检查上传内容，未覆盖已有线路的维护信息。
+// 最小输入：已完成/未完成的 Agent 记录上传到另一个 SSH 主机的 staging 目录，不进行核验登记。tier: unit。
+it.each([true, false])('records staging separately without changing live deployment information (complete=%s)', async (complete) => {
+  const { prepared } = await prepareAgentRelayDeployment({ deploymentKey: 'staging-upgrade', name: 'Relay' });
+  const config = h.config.get(h.owner)!;
+  const original = complete ? { ...config.deployments[0], complete: true, baseUrl: 'https://live.example:8443', address: 'live.example:8443', relayVersion: '0.2.0',
+    metadata: { sshHostId: 'live-ssh', programDir: '/opt/live-relay', dataDir: '/var/lib/live-relay', service: 'live-relay.service' } } : config.deployments[0];
+  h.config.set(h.owner, { ...config, deployments: [original] });
+  if (complete) await executeSelfHostedRelayCommand({ type: 'use-deployment', relayId: prepared!.relayId });
+  const active = structuredClone(h.config.get(h.owner)!.active);
+  h.restart.mockClear();
+  const artifacts = { bundlePath: '/srv/staging/relay.mjs', initPath: '/srv/staging/init.json', bundleSha256: 'a'.repeat(64), initSha256: 'b'.repeat(64) };
+  h.upload.mockResolvedValueOnce(artifacts);
+  const result = await uploadAgentRelayDeployment({ relayId: prepared!.relayId, sshHostId: 'staging-ssh', remoteDir: '/srv/staging' });
+  const receipt = { ...artifacts, sshHostId: 'staging-ssh', remoteDir: '/srv/staging', uploadedAt: new Date().toISOString() };
+  expect(result.error).toBeUndefined();
+  expect(h.config.get(h.owner)!.deployments[0]).toEqual({ ...original, lastUpload: receipt });
+  expect(getAgentRelayState().deployments[0]).toMatchObject({ baseUrl: original.baseUrl, relayVersion: original.relayVersion, lastUpload: receipt });
+  expect(h.config.get(h.owner)!.active).toEqual(active);
+  expect(h.restart).not.toHaveBeenCalled();
+  // 后续尝试失败也不能把原运行位置或上一次成功上传收据清掉。
+  h.upload.mockRejectedValueOnce(new Error('upload failed'));
+  expect((await uploadAgentRelayDeployment({ relayId: prepared!.relayId, sshHostId: 'failed-ssh', remoteDir: '/srv/failed' })).error).toBe('DEPLOY_FAILED');
+  expect(h.config.get(h.owner)!.deployments[0]).toEqual({ ...original, lastUpload: receipt });
+  if (complete) {
+    // 切回官方只换路由，既不能删除远端安装记录，也不能丢弃以后继续维护的主人身份。
+    const secrets = structuredClone(h.secrets);
+    await executeSelfHostedRelayCommand({ type: 'use-official' });
+    expect(h.config.get(h.owner)!.active).toBeNull();
+    expect(h.config.get(h.owner)!.deployments[0]).toEqual({ ...original, lastUpload: receipt });
+    expect(h.secrets).toEqual(secrets);
+    expect(h.deleteSecrets).not.toHaveBeenCalled();
+    expect(h.restart).toHaveBeenCalledOnce();
+  }
 });
 
 // 用户 2026-10-30：部署是部署，切换要让用户自己切。原实现部署完成就改用新中转。

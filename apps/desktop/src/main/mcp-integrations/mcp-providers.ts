@@ -1427,10 +1427,12 @@ export function createDesktopMcpProviders(deps: DesktopMcpProvidersDeps): LiziMc
               ? await uploadAgentRelayDeployment(input, options)
               : input.operation === 'complete'
                 ? await registerAgentRelayDeployment(input, options)
-                : await executeSelfHostedRelayCommand({
-                  type: input.operation === 'use' ? 'use-deployment' : 'forget-deployment',
-                  relayId: input.relayId,
-                }, options);
+                : input.operation === 'use-official'
+                  ? await executeSelfHostedRelayCommand({ type: 'use-official' }, options)
+                  : await executeSelfHostedRelayCommand({
+                    type: input.operation === 'use' ? 'use-deployment' : 'forget-deployment',
+                    relayId: input.relayId,
+                  }, options);
           await guard();
           return result.error
             ? { ok: false, errorCode: result.error, message: 'Relay operation was not confirmed. Read get_relay_deployments before retrying.' }

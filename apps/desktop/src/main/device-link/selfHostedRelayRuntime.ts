@@ -99,6 +99,7 @@ import {
 } from './selfHostedRelayDeploy.js';
 import { refreshRelayCertificatesSoon } from './selfHostedRelayFrameAuth.js';
 import { uploadRelayArtifacts } from './selfHostedRelayUpload.js';
+import { verifyAgentRelayEndpoint } from './selfHostedRelayEndpoint.js';
 import { readDeviceLinkSettings } from './settings-store.js';
 import { activeOwnerScopeKey, getActiveAppSession, isAppSessionBoundaryPending, onAppSessionInvalidated } from '../appSessionState.js';
 
@@ -187,7 +188,7 @@ export function getState(): SelfHostedRelayState {
       suggestedUrls: suggestedUrls(config),
     },
     deployments: config.deployments.map((deployment) => ({
-      ...(deployment.managedBy === 'agent' ? { managedBy: 'agent' as const, deploymentKey: deployment.deploymentKey, metadata: deployment.metadata } : {}),
+      ...(deployment.managedBy === 'agent' ? { managedBy: 'agent' as const, deploymentKey: deployment.deploymentKey, metadata: deployment.metadata, lastUpload: deployment.lastUpload } : {}),
       relayId: deployment.relayId,
       sshHostId: deployment.sshHostId,
       address: deployment.address,
@@ -631,15 +632,16 @@ export async function uploadAgentRelayDeployment(
   const current = findDeployment(config, record.relayId);
   if (!current || current.ownerPublicKey !== record.ownerPublicKey) return { state: getState(), error: 'NO_DEPLOYMENT' };
   writeRelayConfig({ ...config, deployments: withDeployment(config.deployments, {
-    ...current, metadata: { ...current.metadata, sshHostId: input.sshHostId, programDir: input.remoteDir },
+    // 上传目录可能只是另一台机器上的暂存位置。未经登记核验，不能覆盖现有服务的维护信息。
+    ...current, lastUpload: { sshHostId: input.sshHostId, remoteDir: input.remoteDir, ...uploaded, uploadedAt: new Date().toISOString() },
   }) });
   emitChanged();
   return { state: getState(), uploaded: { relayId: record.relayId, sshHostId: input.sshHostId, ...uploaded } };
 }
 
-/** 先核对公开身份与协议，再向选定 HTTPS 端点发送主人凭证；重定向绝不携带身份跨站。 */
+/** 先由上传时的 SSH 主机绑定 TLS 端点，再在同一证书校验握手上核验身份与主人访问。 */
 export async function registerAgentRelayDeployment(
-  input: { relayId: string; baseUrl: string; metadata?: AgentRelayDeploymentMetadata },
+  input: { relayId: string; baseUrl: string; tlsPort: number; nodePath?: string; metadata?: AgentRelayDeploymentMetadata },
   context: AgentRelayOperationContext = {},
 ): Promise<CommandResult> {
   const assertCurrent = agentOperationGuard(context);
@@ -648,26 +650,25 @@ export async function registerAgentRelayDeployment(
   if (notReady) return { state: getState(), error: notReady };
   const baseUrl = typeof input.baseUrl === 'string' ? normalizeRelayBaseUrl(input.baseUrl) : null;
   const metadata = input.metadata === undefined ? {} : parseAgentRelayDeploymentMetadata(input.metadata);
-  if (!baseUrl || !baseUrl.startsWith('https://') || baseUrl.length > 4096 || !metadata) return { state: getState(), error: 'INVALID_ADDRESS' };
+  const nodePath = input.nodePath ?? 'node';
+  if (!baseUrl || !baseUrl.startsWith('https://') || baseUrl.length > 4096 || !metadata ||
+      !Number.isInteger(input.tlsPort) || input.tlsPort < 1 || input.tlsPort > 65535 ||
+      typeof nodePath !== 'string' || !nodePath.trim() || nodePath.length > 4096 || /[\u0000-\u001f]/.test(nodePath)) {
+    return { state: getState(), error: 'INVALID_ADDRESS' };
+  }
   const record = findDeployment(readRelayConfig(), input.relayId);
-  if (!record || record.managedBy !== 'agent') return { state: getState(), error: 'NO_DEPLOYMENT' };
+  if (!record || record.managedBy !== 'agent' || !record.lastUpload) return { state: getState(), error: 'NO_DEPLOYMENT' };
   if (record.ownerDeviceId !== authManager.getDeviceId()) return { state: getState(), error: 'NOT_OWNER' };
   const secrets = readRelaySecrets(record.relayId);
   if (!secrets) return { state: getState(), error: 'SECURE_STORAGE_UNAVAILABLE' };
   if (relayPublicKeyOf(crypto, secrets.seed) !== record.ownerPublicKey) return { state: getState(), error: 'RELAY_MISMATCH' };
-  const request = async (endpoint: string, credential?: string): Promise<Record<string, unknown> | null> => {
-    const response = await fetch(`${baseUrl}/api/device-link/relay/${endpoint}`, {
-      redirect: 'error', signal: AbortSignal.timeout(10_000),
-      ...(credential ? { headers: { authorization: `CindyRelay ${credential}` } } : {}),
-    });
-    await assertCurrent();
-    if (!response.ok) { await response.body?.cancel(); await assertCurrent(); return null; }
-    const body: unknown = await response.json();
-    await assertCurrent();
-    return body && typeof body === 'object' && !Array.isArray(body) ? body as Record<string, unknown> : null;
-  };
   let relayVersion: string;
   try {
+    // 不采信 Agent metadata 中的主机或公开 info 字段作为信任锚。每次登记（含换地址）重新证明。
+    const request = await verifyAgentRelayEndpoint({
+      sshHostId: record.lastUpload.sshHostId, baseUrl, tlsPort: input.tlsPort, nodePath, assertCurrent,
+    });
+    await assertCurrent();
     const info = await request('info');
     await assertCurrent();
     if (!info || info.relayId !== record.relayId || info.ownerPublicKey !== record.ownerPublicKey) return { state: getState(), error: 'RELAY_MISMATCH' };
@@ -686,7 +687,9 @@ export async function registerAgentRelayDeployment(
   const config = readRelayConfig();
   const current = findDeployment(config, record.relayId);
   if (!current || current.ownerPublicKey !== record.ownerPublicKey) return { state: getState(), error: 'NO_DEPLOYMENT' };
-  const registered: RelayDeployment = { ...current, baseUrl, address: new URL(baseUrl).host, relayVersion, complete: true, metadata: { ...current.metadata, ...metadata } };
+  if (JSON.stringify(current.lastUpload) !== JSON.stringify(record.lastUpload)) return { state: getState(), error: 'BUSY' };
+  const registered: RelayDeployment = { ...current, baseUrl, address: new URL(baseUrl).host, relayVersion, complete: true,
+    metadata: { ...current.metadata, ...metadata, sshHostId: record.lastUpload.sshHostId } };
   // 注册不切换；正在使用这条线路时，验证过的新地址继续沿用同一身份。
   const inUse = config.active?.relayId === record.relayId;
   writeRelayConfig({ ...config, deployments: withDeployment(config.deployments, registered), ...(inUse ? { active: deploymentActive(registered) } : {}) });

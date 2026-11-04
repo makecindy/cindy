@@ -453,7 +453,7 @@ describe('helper task workspace and SkillHub publication authorization', () => {
 
   it('routes relay writes through the task permission mode while keeping local state reads available', () => {
     for (const name of ['prepare_relay_deployment', 'upload_relay_deployment', 'complete_relay_deployment',
-      'use_relay_deployment', 'forget_relay_deployment']) {
+      'use_relay_deployment', 'use_official_relay', 'forget_relay_deployment']) {
       expect(policy('call_tool', { name, args: {} })).toBe('prompt-each-time');
       expect(policy(name, {})).toBe('prompt-each-time');
     }

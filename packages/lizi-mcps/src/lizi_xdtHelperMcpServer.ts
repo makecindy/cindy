@@ -175,7 +175,7 @@ const CATEGORY_ENUM = ['cindy', 'auth', 'control', 'history', 'feedback', 'hando
  * 说明才发现。改工具的作用范围时同步改这里(测试按类目全集守护)。
  */
 export const HELPER_CATEGORY_DESCRIPTIONS: Record<(typeof CATEGORY_ENUM)[number], string> = {
-  relay: 'Agent 自适应部署连接线路：本机保存中转身份、上传程序、验证并登记线路及切换。服务器安装、TLS 和进程托管由 Agent 经 cindy_ssh 按环境选择；不要求固定 systemd、root 或 80/443。本机任务可用；手机可继续该任务。',
+  relay: 'Agent 自适应部署连接线路：本机保存中转身份、上传程序、验证并登记线路及切换；可保留部署身份切回官方线路。服务器安装、TLS 和进程托管由 Agent 经 cindy_ssh 按环境选择；不要求固定 systemd、root 或 80/443。本机任务可用；手机可继续该任务。',
   cindy: `${BRAND_NAME} 能力说明、界面操作帮助（get_capabilities scope=help）与当前任务信息/交付回执（report_task_delivery）；get_capabilities({key:"self-management"}) 是管理自己的任务、定时任务、项目、伙伴的工具索引；get_capabilities({key:"computer-use"}) 说明桌面操作没开时怎么引导用户开启。本机。`,
   settings: '管理 Cindy 的全局设置与默认模型，普通任务和伙伴共用。作用于运行任务的本机；先查询当前值和可选项，再修改或恢复默认。SSH 主机编辑使用 cindy_ssh。',
   auth: 'MCP 设置表单（request_mcp_setup）；Grok 设备码授权的状态查询与取消。要主人亲自输入、扫码或连接账号时用 ask_owner。',
