@@ -46,9 +46,12 @@ it('projects a locale change without installation effects, while real roster cha
   expect(r.push).toHaveBeenCalledWith('ghosts:changed', { ghosts: r.ghosts });
   expect(r.contextChanged).toHaveBeenCalledOnce();
   expect(r.remote).toHaveBeenCalledOnce();
-  for (const effect of Object.values(r.installation)) expect(effect).not.toHaveBeenCalled();
+  const { apps, ...installation } = r.installation;
+  expect(apps).toHaveBeenCalledOnce();
+  for (const effect of Object.values(installation)) expect(effect).not.toHaveBeenCalled();
   r.callbacks.broadcastGhostsChanged(r.ghosts);
-  for (const effect of Object.values(r.installation)) expect(effect).toHaveBeenCalledOnce();
+  expect(apps).toHaveBeenCalledTimes(2);
+  for (const effect of Object.values(installation)) expect(effect).toHaveBeenCalledOnce();
 });
 
 it('publishes only the changed directory policy and retains setup and remote invalidation', () => {

@@ -11293,7 +11293,12 @@ export function refreshGhostLocalization(previousLocale: SupportedLocale): void 
     previousLocale,
     currentLocale: getResolvedMainLocale(),
     list: () => manager.list(),
-    broadcastChanged: (ghosts) => broadcastGhostsChanged(ghosts, false, { projectionOnly: true }),
+    broadcastChanged: (ghosts) => {
+      // App configs retain localized titles/tool descriptions used by newly published cards.
+      refreshPluginApps(ghosts, { find: findGhostForInstanceId,
+        evidence: id => manager.approvedInstallEvidence(id), available: () => !isGhostBoundaryPending() });
+      broadcastGhostsChanged(ghosts, false, { projectionOnly: true });
+    },
     sendContextChanged: (ghost, message) => sendToGhostLogic(installedGhostStoragePart(ghost), message),
   });
 }
