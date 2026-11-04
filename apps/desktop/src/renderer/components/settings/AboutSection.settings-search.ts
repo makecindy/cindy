@@ -26,6 +26,8 @@ export const aboutSettings = defineSettings({
     targetId: 'settings-search-settings-about-autoUpdateLabel',
     titleKey: 'settings.about.autoUpdateLabel',
     descriptionKey: 'settings.about.autoUpdateDescription',
+    descriptionKeyForContext: ({ platform }) => platform === 'linux'
+      ? 'settings.about.linuxUpdateDescription' : undefined,
     aliases: ['自动更新', '自动升级', 'auto update'],
     sectionKey: 'settings.tabs.about',
   },

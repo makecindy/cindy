@@ -40,6 +40,7 @@ export function buildSettingsSearchDocuments(
     const title = text(entry.titleKey);
     const section = text(entry.sectionKey);
     const category = text(TAB_LABEL_KEY[entry.tab]);
+    const descriptionKey = (context && entry.descriptionKeyForContext?.(context)) ?? entry.descriptionKey;
     const english = [
       text(entry.titleKey, true),
       text(entry.sectionKey, true),
@@ -53,7 +54,7 @@ export function buildSettingsSearchDocuments(
           descriptionKey ? [labelKey, descriptionKey] : [labelKey]),
     ];
     const searchText = normalizeSettingsSearchText(
-      [title, section, category, ...english, ...keywordKeys.flatMap((key) => [text(key), text(key, true)]), ...(entry.descriptionKey ? [text(entry.descriptionKey), text(entry.descriptionKey, true)] : []), ...(entry.aliases ?? [])].join(' '),
+      [title, section, category, ...english, ...keywordKeys.flatMap((key) => [text(key), text(key, true)]), ...(descriptionKey ? [text(descriptionKey), text(descriptionKey, true)] : []), ...(entry.aliases ?? [])].join(' '),
     );
     return { entry, title, section, category, searchText };
   });

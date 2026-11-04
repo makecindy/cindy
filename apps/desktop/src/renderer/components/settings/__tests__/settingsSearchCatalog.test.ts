@@ -71,6 +71,42 @@ describe('settings discoverability regressions', () => {
     expect(searchSettings(documents, query).map(({ entry }) => entry.id)).toContain(id);
   });
 
+  // Unit regressions (PR #8481): visible Linux descriptions and close options
+  // were missing from search. Existing title queries do not cover these texts.
+  // Use real translations through production search and reject other-platform text.
+  it.each(['linux', 'win32', 'darwin'])('indexes the visible platform descriptions on %s', (platform) => {
+    const documents = buildSettingsSearchDocuments(searchI18n.t, TAB_IDS, { ...searchContext, platform });
+    for (const [id, standardKey, linuxKey] of [
+      ['settings.about.autoUpdateLabel', 'settings.about.autoUpdateDescription', 'settings.about.linuxUpdateDescription'],
+      ['settings.voiceInput.shortcut.label', 'settings.voiceInput.shortcut.hint', 'settings.voiceInput.shortcut.linuxUnsupported'],
+    ]) {
+      for (const lng of ['zh-CN', 'en']) {
+        const visibleKey = platform === 'linux' ? linuxKey : standardKey;
+        const hiddenKey = platform === 'linux' ? standardKey : linuxKey;
+        expect(searchSettings(documents, searchI18n.t(visibleKey, { lng })).map(({ entry }) => entry.id)).toContain(id);
+        expect(searchSettings(documents, searchI18n.t(hiddenKey, { lng })).map(({ entry }) => entry.id)).not.toContain(id);
+      }
+    }
+  });
+
+  it.each(['linux', 'win32', 'darwin'])('finds only visible close-behavior choices on %s', (platform) => {
+    const documents = buildSettingsSearchDocuments(searchI18n.t, TAB_IDS, { ...searchContext, platform });
+    for (const lng of ['zh-CN', 'en']) {
+      for (const [option, visibleOn] of [
+        ['tray', ['win32']],
+        ['minimize', ['linux']],
+        ['quit', ['win32', 'linux']],
+      ] as const) {
+        const query = searchI18n.t(`settings.windowBehavior.closeBehavior.${option}`, { lng });
+        const ids = searchSettings(documents, query).map(({ entry }) => entry.id);
+        if ((visibleOn as readonly string[]).includes(platform)) expect(ids).toContain('settings.windowBehavior.closeBehavior.label');
+        // On Windows, "Minimize window" also legitimately matches the row title
+        // plus "Minimize to tray"; that overlapping query cannot prove invisibility.
+        else if (platform !== 'win32') expect(ids).not.toContain('settings.windowBehavior.closeBehavior.label');
+      }
+    }
+  });
+
   // Unit regression (PR #8481): generic setting queries miss the mascot choices
   // rendered by AgentIslandSection. Real translated names/descriptions must locate
   // the skin selector on macOS, and must not reveal a hidden settings tab.

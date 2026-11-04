@@ -128,6 +128,8 @@ export const voiceInputSettings = defineSettings({
     titleKey: 'settings.voiceInput.shortcut.label',
     sectionKey: 'settings.tabs.voiceInput',
     descriptionKey: 'settings.voiceInput.shortcut.hint',
+    descriptionKeyForContext: ({ platform }) => platform === 'linux'
+      ? 'settings.voiceInput.shortcut.linuxUnsupported' : undefined,
   },
   serviceSource: {
     id: 'voiceInput.serviceSource',

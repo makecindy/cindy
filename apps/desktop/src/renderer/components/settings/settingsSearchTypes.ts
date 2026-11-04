@@ -15,6 +15,8 @@ export interface SettingsSearchEntry {
   titleKey: string;
   sectionKey: string;
   descriptionKey?: string;
+  /** Use the description actually shown for this context; undefined keeps the default. */
+  descriptionKeyForContext?: (context: SettingsSearchContext) => string | undefined;
   /** Platform-dependent values required by translated titles and descriptions. */
   textValues?: (context?: SettingsSearchContext) => Record<string, string>;
   keywordKeys?: readonly string[];

@@ -40,6 +40,11 @@ export const windowBehaviorSettings = defineSettings({
     titleKey: 'settings.windowBehavior.closeBehavior.label',
     sectionKey: 'settings.sections.windowBehavior',
     descriptionKey: 'settings.windowBehavior.closeBehavior.hint',
+    options: [
+      { value: 'tray', labelKey: 'settings.windowBehavior.closeBehavior.tray', isVisible: ({ platform }) => platform === 'win32' },
+      { value: 'minimize', labelKey: 'settings.windowBehavior.closeBehavior.minimize', isVisible: ({ platform }) => platform === 'linux' },
+      { value: 'quit', labelKey: 'settings.windowBehavior.closeBehavior.quit' },
+    ],
     isVisible: ({ platform }) => platform === 'linux' || platform === 'win32',
   },
   swallowActivationClickLabel: {
