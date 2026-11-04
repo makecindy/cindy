@@ -66,6 +66,10 @@ function currentStore() {
       normalize,
       log,
       label: 'compaction',
+      // 与 model-context-limit-store 同一契约:损坏文件保留待查,不静默删除;
+      // 无界 JSON 不直接读入 main。
+      maxBytes: 1_048_576,
+      preserveUnreadableFile: true,
     });
     stores.set(key, store);
   }
@@ -74,15 +78,21 @@ function currentStore() {
 
 /** 同步读取 Claude Code 自动压缩百分比。第一次从磁盘读, 后续走内存 cache。 */
 export function readCompactionPct(): number {
+  // 隐藏配置层级的文件也是正式契约:mtime 守卫让「直接手改文件」在下一次读取生效。
+  currentStore().invalidateIfChanged();
   return currentStore().read().claudeCodeAutoCompactPct;
 }
 
 export function readCompactionState(): OverrideSettingsState<CompactionSettings> {
+  currentStore().invalidateIfChanged();
   return currentStore().readState();
 }
 
 /** 写入 Claude Code 自动压缩百分比, 落盘 + 更新 cache。 */
 export function writeCompactionPct(value: number): void {
+  // 非法输入直接拒绝而不是 clamp 成默认值:静默回落会让一次坏调用等于「重置用户设置」。
+  if (typeof value !== 'number' || !Number.isFinite(value)) throw new Error('invalid compaction pct');
+  currentStore().invalidateIfChanged();
   const next: CompactionSettings = {
     claudeCodeAutoCompactPct: clampPct(value),
   };
@@ -175,13 +185,23 @@ function currentPiStore() {
   const key = ownerRoot ?? '<no-session>';
   let store = piStores.get(key);
   if (!store) {
-    migratePiFromLegacyIfNeeded(ownerRoot);
+    try {
+      migratePiFromLegacyIfNeeded(ownerRoot);
+    } catch (error) {
+      // 迁移是尽力而为的兼容动作:写失败(EACCES/ENOSPC 等)不能让压缩阈值的读写整体不可用;
+      // 迁移标记未落盘,下次启动自然重试。
+      log.warn('pi compaction legacy migration failed; will retry next start', {
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
     store = createOverrideSettingsFile<PiCompactionSettings>({
       filePath: () => piSettingsFilePath(ownerRoot ?? undefined),
       defaults: { piAutoCompactPct: DEFAULT_PCT },
       normalize: normalizePi,
       log,
       label: 'pi-compaction',
+      maxBytes: 1_048_576,
+      preserveUnreadableFile: true,
     });
     piStores.set(key, store);
   }
@@ -190,14 +210,18 @@ function currentPiStore() {
 
 /** 同步读取 Pi 原生自动压缩百分比。下次 startSession / 恢复任务时读取。 */
 export function readPiCompactionPct(): number {
+  currentPiStore().invalidateIfChanged();
   return currentPiStore().read().piAutoCompactPct;
 }
 
 export function readPiCompactionState(): OverrideSettingsState<PiCompactionSettings> {
+  currentPiStore().invalidateIfChanged();
   return currentPiStore().readState();
 }
 
 export function writePiCompactionPct(value: number): void {
+  if (typeof value !== 'number' || !Number.isFinite(value)) throw new Error('invalid pi compaction pct');
+  currentPiStore().invalidateIfChanged();
   const next: PiCompactionSettings = { piAutoCompactPct: clampPct(value) };
   currentPiStore().writePatch(next);
   log.info('pi compaction setting written', { pct: next.piAutoCompactPct });

@@ -1752,9 +1752,20 @@ export function buildPiSettingsJsonContent(
   workingContextWindow?: number,
 ): string {
   const effectiveContextWindow = contextWindow > 0 ? contextWindow : 128_000;
+  // 公共 API 护栏:pct 必须在 (0, 100]。NaN 会经 Math.max 变 NaN 再被 JSON.stringify 写成
+  // null 炸掉 Pi 设置;0/超 100 会产生语义相反的保留量。宿主层已有 clamp,这里拒尽非法值。
+  if (
+    piCompactionPct !== undefined &&
+    (!Number.isFinite(piCompactionPct) || piCompactionPct <= 0 || piCompactionPct > 100)
+  ) {
+    throw new Error(`invalid pi compaction pct: ${piCompactionPct}`);
+  }
   // Pi also uses model.contextWindow to clamp request max_tokens (including a
   // 4096-token safety margin). A small compaction budget must never shrink that
   // request capacity. Express the budget through native reserveTokens instead.
+  // 语义出处:pi 原生触发判据是 contextTokens > contextWindow - reserveTokens(pi 运行时
+  // shouldCompact),即 reserveTokens 是「触发点之前的空闲量」,所以 reserve = capacity -
+  // budget × pct/100 ⇒ 触发点 = budget × pct。若上游改变该语义,这里的换算方向必须重审。
   const budget = workingContextWindow && workingContextWindow > 0
     ? Math.min(workingContextWindow, effectiveContextWindow) : effectiveContextWindow;
   const reserveTokens = piCompactionPct === undefined && budget === effectiveContextWindow
@@ -2534,7 +2545,11 @@ export class PiAgent extends BaseAgent {
       const effectiveWorkingWindow = opts.sessionContextWindowBudget ?? workingWindow;
       const pct = this.deps.resolveModelCompactionPct?.(source, sourceModel) ?? opts.piCompactionPct;
       const settings = JSON.parse(buildPiSettingsJsonContent(window, pct, [], effectiveWorkingWindow));
-      compactionModelOverrides[`${provider}/${id}`] = { reserveTokens: settings.compaction?.reserveTokens ?? 16_384 };
+      // 算不出保留量就不写该模型的 override:捏造 16_384 会覆盖 Pi 的原生默认,且用户不可见、不可关。
+      const reserveTokens = settings.compaction?.reserveTokens;
+      if (reserveTokens !== undefined) {
+        compactionModelOverrides[`${provider}/${id}`] = { reserveTokens };
+      }
     };
     for (const model of models) addBudget(PI_PROVIDER_ID, model.id, model.contextWindow,
       this.deps.resolveModelContextLimit?.(gatewayProviderId ?? 'xd', model.id) ?? undefined,
