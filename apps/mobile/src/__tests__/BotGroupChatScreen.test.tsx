@@ -435,6 +435,11 @@ describe('group timeline', () => {
     await click('botGroup.mention.identity.close');
     expect(byId('botGroup.mention.identity')).toBeNull();
     expect(node.textContent).toContain('@咪咪 看看这段正文');
+    // PR #8818 / component: screen-reader activation has no touchstart. The
+    // real Timeline used to drop this press because it had no measured anchor.
+    await act(async () => mention.click());
+    expect(byId('botGroup.mention.identity')?.textContent).toContain('咪咪 (王悦)');
+    expect(JSON.parse(byId('mentionPopover')!.getAttribute('data-position')!)).toMatchObject({ x: 201, y: 406 });
   });
 
   it('shows a 引用回复 block from the loaded original, and only the author once it is deleted', async () => {

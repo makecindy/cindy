@@ -7,7 +7,7 @@ import { botGroupBodyParts } from '@cindy/maker-shared/botGroupPresentation';
 import type { BotGroupAuthorKind } from '@cindy/maker-shared/botGroupChat';
 import { useCallback, useMemo, useRef, useState, type ReactNode } from 'react';
 import { Platform, ScrollView, StyleSheet, View, useWindowDimensions, type GestureResponderEvent, type LayoutChangeEvent, type StyleProp, type TextStyle } from 'react-native';
-import { splitBotGroupMentionSegments } from '@cindy/maker-shared/botGroupMentions';
+import { splitBotGroupMentionSegments, type BotGroupTextSegment } from '@cindy/maker-shared/botGroupMentions';
 import { Text } from '@/components/AppText';
 import { MarkdownSelectableText, MarkdownSelectableSpan } from './MarkdownSelectableText';
 import { fontWeight, monoFont, useThemedStyles, type ThemeColors } from '@/theme';
@@ -22,7 +22,9 @@ type Styles = ReturnType<typeof makeStyles>;
 /** Observe touches without claiming the responder or changing the native text tree. */
 function useMentionTouchContext(context?: BotGroupMentionContext) {
   const touch = useRef<BotGroupMentionPoint | undefined>(undefined);
+  const body = useRef<View>(null);
   return {
+    ref: body,
     onTouchStart: (event: GestureResponderEvent) => {
       const { pageX, pageY } = event.nativeEvent;
       touch.current = Number.isFinite(pageX) && Number.isFinite(pageY) ? { x: pageX, y: pageY } : undefined;
@@ -31,16 +33,24 @@ function useMentionTouchContext(context?: BotGroupMentionContext) {
       const point = touch.current ?? anchor;
       touch.current = undefined;
       if (point) context.onPress(member, point);
-      else context.onPress(member);
+      else {
+        // Accessibility activation has no finger position. Anchor to the
+        // measured sent-text bounds instead of dropping the link activation.
+        const target = body.current;
+        target?.measureInWindow((x, y, width, height) => {
+          if (body.current === target && width > 0 && height > 0) {
+            context.onPress(member, { x: x + width / 2, y: y + height / 2 });
+          }
+        });
+      }
     } } as BotGroupMentionContext : undefined,
   };
 }
 
-function renderMentionText(text: string, styles: Styles, context?: BotGroupMentionContext, labels = context?.labels, textStyle?: StyleProp<TextStyle>): ReactNode {
-  if (!labels) return text;
+function renderMentionSegments(segments: readonly (BotGroupTextSegment & { label?: string })[], styles: Styles, context?: BotGroupMentionContext, textStyle?: StyleProp<TextStyle>): ReactNode {
   const Span = Platform.OS === 'ios' ? MarkdownSelectableSpan : Text;
-  return splitBotGroupMentionSegments(text, labels).map((segment, index) => {
-    const member = segment.mention && context ? botGroupMentionMember(segment.text, context) : undefined;
+  return segments.map((segment, index) => {
+    const member = segment.mention && context ? botGroupMentionMember(segment.label ?? segment.text, context) : undefined;
     return <Span key={index} style={[textStyle, segment.mention && styles.mention]}
       accessibilityRole={member ? 'link' : undefined}
       onPress={member ? event => { event.stopPropagation(); context?.onPress(member); } : undefined}>{segment.text}</Span>;
@@ -50,16 +60,34 @@ function renderMentionText(text: string, styles: Styles, context?: BotGroupMenti
 function renderInlines(inlines: readonly MobileMarkdownInline[], styles: Styles, context?: BotGroupMentionContext): ReactNode[] {
   const Span = Platform.OS === 'ios' ? MarkdownSelectableSpan : Text;
   const markStyles = { strong: styles.strong, emphasis: styles.emphasis, strikethrough: styles.strike };
-  return inlines.map((inline, index) => {
+  let offset = 0;
+  const runs = inlines.map(inline => {
+    const text = inline.type === 'image' ? inline.alt ? `[${inline.alt}]` : '' : inline.text;
+    const start = offset;
+    offset += text.length;
+    return { inline, text, start, end: offset, excluded: ['code', 'link', 'image'].includes(inline.type) };
+  });
+  offset = 0;
+  // Match the whole visible word before mapping back to styled native runs:
+  // **@Ann**a is @Anna, and mail**@Ann**.test is still an email address.
+  const segments = splitBotGroupMentionSegments(runs.map(run => run.text).join(''), context?.labels ?? []).map(segment => {
+    const start = offset;
+    offset += segment.text.length;
+    return { ...segment, start, end: offset, label: segment.text,
+      mention: segment.mention && !runs.some(run => run.excluded && run.start < offset && run.end > start) };
+  });
+  return runs.map(({ inline, text, start, end, excluded }, index) => {
     const textStyle = [...(inline.marks?.map(mark => markStyles[mark]) ?? []),
       inline.type === 'strong' ? styles.strong : inline.type === 'emphasis' ? styles.emphasis
         : inline.type === 'strikethrough' ? styles.strike : inline.type === 'code' ? styles.inlineCode : undefined];
-    const text = inline.type === 'image' ? inline.alt ? `[${inline.alt}]` : '' : inline.text;
     // UITextView children inherit the root's style, not an enclosing span's.
     // Keep formatting on each actual text run when splitting it around a mention.
     // Code and existing links retain their original hierarchy and are never identity targets.
-    return <Span key={index} style={textStyle}>{inline.type === 'code' || inline.type === 'link' || inline.type === 'image'
-      ? text : renderMentionText(text, styles, context, context?.labels, textStyle)}</Span>;
+    return <Span key={index} style={textStyle}>{excluded || !context ? text : renderMentionSegments(segments.flatMap(segment => {
+      const from = Math.max(start, segment.start);
+      const to = Math.min(end, segment.end);
+      return from < to ? [{ text: segment.text.slice(from - segment.start, to - segment.start), mention: segment.mention, label: segment.label }] : [];
+    }), styles, context, textStyle)}</Span>;
   });
 }
 
@@ -134,15 +162,15 @@ export function BotGroupMarkdownText({ content, authorKind, mentionContext }: { 
   const blocks = useMemo(() => botGroupBodyParts(content, authorKind).flatMap((part, index): MobileMarkdownBlock[] => part.kind === 'markdown'
     ? parseMobileMarkdown(part.content).map(block => ({ ...block, key: `${index}:${block.key}` }))
     : [{ type: 'paragraph', key: String(index), inlines: [{ type: 'text', text: part.content }] }]), [content, authorKind]);
-  return <View style={styles.body} onTouchStart={touch.onTouchStart}>{blocks.map((block) => renderBlock(block, styles, touch.context))}</View>;
+  return <View ref={touch.ref} collapsable={false} style={styles.body} onTouchStart={touch.onTouchStart}>{blocks.map((block) => renderBlock(block, styles, touch.context))}</View>;
 }
 
 /** The user's own words: plain text with `@name` shown as a mention mark. */
 export function BotGroupUserText({ content, mentionLabels, mentionContext }: { content: string; mentionLabels: readonly string[]; mentionContext?: BotGroupMentionContext }) {
   const styles = useThemedStyles(makeStyles);
   const touch = useMentionTouchContext(mentionContext);
-  return <View onTouchStart={touch.onTouchStart}><MarkdownSelectableText selectable style={styles.text}>
-    {renderMentionText(content, styles, touch.context, mentionLabels)}
+  return <View ref={touch.ref} collapsable={false} onTouchStart={touch.onTouchStart}><MarkdownSelectableText selectable style={styles.text}>
+    {renderMentionSegments(splitBotGroupMentionSegments(content, mentionLabels), styles, touch.context)}
   </MarkdownSelectableText></View>;
 }
 

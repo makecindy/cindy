@@ -239,3 +239,25 @@ it.each([['ios', 'light'], ['ios', 'dark'], ['android', 'light'], ['android', 'd
     expect(styleOf('website').textDecorationLine).toBeUndefined();
   } finally { Platform.OS = 'ios'; }
 });
+
+// PR #8818 / component: per-inline matching mistook **@Ann**a for Ann.
+// Existing carrier/identity tests do not cross formatting boundaries. Check the
+// rendered word through the production body, including a valid split mention.
+it.each(['ios', 'android'])('matches complete rendered words across formatting on %s', async platform => {
+  const { Platform } = await import('react-native');
+  Platform.OS = platform as typeof Platform.OS;
+  const ann = { botId: 'ann', name: 'Ann', avatar: '', avatarColor: '', status: 'active' as const };
+  const context = { members: [ann], mentions: { all: false, botIds: [] }, serverBacked: true,
+    allLabel: '所有人', labels: ['Ann'], onPress: vi.fn() };
+  try {
+    await act(async () => root.render(createElement(BotGroupMarkdownText, {
+      content: '**@Ann**a mail**@Ann**.test @**Ann**', mentionContext: context,
+    })));
+    expect(node.textContent).toBe('@Anna mail@Ann.test @Ann');
+    const links = [...node.querySelectorAll('[data-role="link"]')];
+    expect(links.map(span => span.textContent)).toEqual(['@', 'Ann']);
+    const highlighted = [...node.querySelectorAll('[data-style]')].filter(span =>
+      JSON.parse(span.getAttribute('data-style')!).color === palettes.light.groupMentionText);
+    expect(highlighted.map(span => span.textContent)).toEqual(['@', 'Ann']);
+  } finally { Platform.OS = 'ios'; }
+});

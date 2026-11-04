@@ -9,7 +9,7 @@ export function groupMentionVisualFixture(channel: string, raw: unknown): unknow
   const mentions = { all: false, botIds: ['cindy', 'wang'] };
   const messages = [
     { id: 'own', authorKind: 'user', isSelf: true, content: '@小满 @王悦 看看这段正文，可以长按选择其中几个字。mail@小满.example 不是点名。' },
-    { id: 'other', authorKind: 'user', isSelf: false, authorName: '王悦', content: '@小满 **请看看这个点名**，`@小满` 是代码。[普通链接](https://example.test) 保持原样。' },
+    { id: 'other', authorKind: 'user', isSelf: false, authorName: '王悦', content: '@小满 **请看看这个点名**，`@小满` 是代码。[普通链接](https://example.test) 保持原样。mail**@小满**.example 不是点名，@**小满** 可以。' },
     { id: 'ambiguous', authorKind: 'user', isSelf: true, mentions: { all: false, botIds: [] }, content: '@同名 @未知成员 不打开身份信息；@小满 可以。' },
     { id: 'broadcast', authorKind: 'user', isSelf: true, mentions: { all: true, allBots: true, botIds: [] }, content: '@所有人 @所有伙伴 是群体提及，不打开个人身份。' },
   ].map((message, index) => ({ sequence: index + 1, kind: 'message', authorBotId: null, authorName: '我', mentions,
