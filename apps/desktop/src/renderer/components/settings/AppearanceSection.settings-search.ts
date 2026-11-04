@@ -1,4 +1,5 @@
 import { TAB_LABEL_KEY } from '@/lib/tabLabels';
+import { SELECTABLE_WALLPAPER_IDS } from '../../../shared/appearanceSettings';
 import { defineSettings, type SettingsSearchModule } from './settingsSearchTypes';
 
 /** Search entries owned by the Appearance tab (AppearanceSection + StreamFadeSection). */
@@ -116,6 +117,10 @@ export const appearanceSettings = defineSettings({
     aliases: ['背景', '背景图', '背景图片', 'background'],
     sectionKey: 'settings.appearance.wallpaper.title',
     descriptionKey: 'settings.appearance.wallpaper.description',
+    options: SELECTABLE_WALLPAPER_IDS.map((id) => ({
+      value: id,
+      labelKey: `settings.appearance.wallpaper.options.${id}`,
+    })),
   },
   localThemesTitle: {
     id: 'settings.appearance.localThemes.title',

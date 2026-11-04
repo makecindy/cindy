@@ -3,6 +3,8 @@ import { createInstance, type TFunction } from 'i18next';
 import { TAB_IDS, TAB_LABEL_KEY } from '@/lib/tabLabels';
 import zhCN from '../../../i18n/locales/zh-CN/common.json';
 import en from '../../../i18n/locales/en/common.json';
+import { SELECTABLE_WALLPAPER_IDS } from '../../../../shared/appearanceSettings';
+import { AGENT_ISLAND_SOUND_EVENTS, AGENT_ISLAND_SOUND_OPTIONS } from '../../../../shared/agentIsland';
 
 
 import {
@@ -44,6 +46,35 @@ const searchContext = { platform: 'win32', region: 'cn', mode: 'cloud', membersh
 } as const;
 
 describe('settings discoverability regressions', () => {
+  // Unit regressions (#8481): prior coverage checked generic wallpaper/sound
+  // titles, not visible picker names. Query real translations via production search.
+  it('finds the wallpaper picker by each selectable wallpaper name', () => {
+    const documents = buildSettingsSearchDocuments(searchI18n.t, TAB_IDS, searchContext);
+    for (const lng of ['zh-CN', 'en']) {
+      for (const id of SELECTABLE_WALLPAPER_IDS) {
+        const query = searchI18n.t(`settings.appearance.wallpaper.options.${id}`, { lng });
+        expect(searchSettings(documents, query).some(({ entry }) => entry.id === 'settings.appearance.wallpaper.title'), query).toBe(true);
+      }
+    }
+  });
+  it.each([
+    { supported: false, enabled: true, soundEnabled: true },
+    { supported: true, enabled: false, soundEnabled: true },
+    { supported: true, enabled: true, soundEnabled: false },
+    { supported: true, enabled: true, soundEnabled: true },
+  ])('indexes sound row labels only when mounted: %j', (agentIsland) => {
+    const documents = buildSettingsSearchDocuments(searchI18n.t, TAB_IDS, { ...searchContext, platform: 'darwin', agentIsland });
+    const visible = agentIsland.supported && agentIsland.enabled && agentIsland.soundEnabled;
+    for (const lng of ['zh-CN', 'en']) {
+      for (const key of [
+        ...AGENT_ISLAND_SOUND_EVENTS.map((event) => `soundEvents.${event}`),
+        ...AGENT_ISLAND_SOUND_OPTIONS.map((option) => `soundOptions.${option}`),
+      ]) {
+        const query = searchI18n.t(`settings.agentIsland.${key}`, { lng });
+        expect(searchSettings(documents, query).some(({ entry }) => entry.id === 'settings.agentIsland.soundLabel'), query).toBe(visible);
+      }
+    }
+  });
   // Unit regression (#8481): hidden motion selectors must not advertise options.
   it.each([false, true])('filters wallpaper motion labels with selector visible=%s', (wallpaperMotionAvailable) => {
     const documents = buildSettingsSearchDocuments(searchI18n.t, TAB_IDS, { ...searchContext, wallpaperMotionAvailable });

@@ -1,5 +1,5 @@
 import { TAB_LABEL_KEY } from '@/lib/tabLabels';
-import { AGENT_ISLAND_MASCOT_SKINS } from '../../../shared/agentIsland';
+import { AGENT_ISLAND_MASCOT_SKINS, AGENT_ISLAND_SOUND_EVENTS, AGENT_ISLAND_SOUND_OPTIONS } from '../../../shared/agentIsland';
 import { defineSettings, type SettingsSearchContext, type SettingsSearchModule } from './settingsSearchTypes';
 
 const areIslandControlsVisible = ({ agentIsland }: SettingsSearchContext) =>
@@ -58,6 +58,18 @@ export const agentIslandSettings = defineSettings({
     titleKey: 'settings.agentIsland.soundLabel',
     sectionKey: 'settings.tabs.agentIsland',
     descriptionKey: 'settings.agentIsland.soundHint',
+    options: [
+      ...AGENT_ISLAND_SOUND_EVENTS.map((event) => ({
+        value: `event.${event}`, labelKey: `settings.agentIsland.soundEvents.${event}`,
+      })),
+      ...AGENT_ISLAND_SOUND_OPTIONS.map((option) => ({
+        value: option, labelKey: `settings.agentIsland.soundOptions.${option}`,
+      })),
+      { value: '__custom__', labelKey: 'settings.agentIsland.soundOptions.custom' },
+    ].map((option) => ({
+      ...option,
+      isVisible: ({ agentIsland }: SettingsSearchContext) => agentIsland?.soundEnabled === true,
+    })),
   },
 });
 

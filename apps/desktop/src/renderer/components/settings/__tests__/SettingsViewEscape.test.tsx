@@ -10,7 +10,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { DiffPanelShell } from '@/components/diff-panel/DiffPanelShell';
 import { SettingsView } from '../SettingsView';
 import type { useVoiceInputModelSelection } from '@/hooks/useVoiceInputModelSelection';
-import { setAgentIslandEnabled } from '@/hooks/useAgentIslandSettings';
+import { getAgentIslandSoundSettings, setAgentIslandEnabled, setAgentIslandSoundSettings } from '@/hooks/useAgentIslandSettings';
 import { LocaleProvider, useLocale } from '@/hooks/useLocale';
 import { WallpaperSettingsProvider } from '@/hooks/useWallpaperSettings';
 import { DEFAULT_APPEARANCE_SETTINGS, type AppearanceSettings } from '../../../../shared/appearanceSettings';
@@ -21,6 +21,7 @@ vi.mock('react-i18next', async (importOriginal) => ({
     'settings.voiceInput.serviceSource.customAsr.websocketUrl.label': 'WebSocket URL',
     'settings.voiceInput.refinement.instructions.label': 'Refinement instructions',
     'settings.agentIsland.skins.whitesnow.name': 'Apple Girl',
+    'settings.agentIsland.soundOptions.startup-chime': 'Startup chime',
     'settings.language.classical.label': 'Classical script and style',
     'settings.appearance.wallpaper.motionDynamic': 'Dynamic wallpaper',
   }[key] ?? key) }),
@@ -154,7 +155,7 @@ beforeEach(() => {
     disconnect() {}
   });
   vi.stubGlobal('electronAPI', { platform: 'darwin', osRelease: '23.0.0', appVersion: '1.0.0',
-    agentIsland: { setEnabled: vi.fn(async () => ({ ok: true })) }, voiceInput: {
+    agentIsland: { setEnabled: vi.fn(async () => ({ ok: true })), setSoundSettings: vi.fn(async () => ({ ok: true })) }, voiceInput: {
     getModelSelection: vi.fn(async () => ({ selection: { serviceMode: 'cindy', asrProvider: 'openai' } })),
     onDataChanged: () => () => {},
   } });
@@ -168,6 +169,21 @@ afterEach(() => {
 });
 
 describe('SettingsView Escape', () => {
+  // Unit wiring regression (#8481): generic island visibility coverage misses
+  // sound-only toggles. Use the real preference setter to verify live search.
+  it('updates sound search results when the sound rows are enabled and disabled', async () => {
+    await act(async () => { expect(await setAgentIslandEnabled(true)).toBe(true); });
+    await act(async () => { renderSettings('/settings'); });
+    fireEvent.change(screen.getByRole('combobox', { name: 'settings.search.ariaLabel' }), {
+      target: { value: 'Startup chime' },
+    });
+    for (const enabled of [false, true, false]) {
+      await act(async () => {
+        expect(await setAgentIslandSoundSettings({ ...getAgentIslandSoundSettings(), enabled })).toBe(true);
+      });
+      expect(screen.queryAllByRole('option')).toHaveLength(enabled ? 1 : 0);
+    }
+  });
   // Unit wiring regression (#8481): real provider broadcasts must update search
   // before Appearance is mounted, including transitions between custom media types.
   it('updates wallpaper motion search as the selected wallpaper changes', async () => {

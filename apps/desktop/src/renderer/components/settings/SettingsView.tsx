@@ -96,12 +96,13 @@ import { UsageHistorySection } from './usage/UsageHistorySection';
 import { CURRENT_CINDY_REGION } from '../../../shared/brandRegion';
 import { useVoiceInputModelSelection } from '@/hooks/useVoiceInputModelSelection';
 import { getVoiceInputSettings } from '@/hooks/useVoiceInputSettings';
-import { getAgentIslandEnabled, isAgentIslandSupported, subscribeAgentIslandSettings } from '@/hooks/useAgentIslandSettings';
+import { getAgentIslandEnabled, getAgentIslandSoundSettings, isAgentIslandSupported, subscribeAgentIslandSettings } from '@/hooks/useAgentIslandSettings';
 
 const DEFAULT_SETTINGS_MENU_WIDTH = 260;
 
 const subscribeVoiceSettings = (onChange: () => void) => window.electronAPI.voiceInput.onDataChanged(onChange);
 const getVoiceRefinementEnabled = () => getVoiceInputSettings().refinementEnabled;
+const getAgentIslandSoundEnabled = () => getAgentIslandSoundSettings().enabled;
 
 interface SettingsOutletContext {
   sidebarWidth?: number;
@@ -121,6 +122,7 @@ function SettingsViewContent() {
   const voiceModelSelection = useVoiceInputModelSelection();
   const voiceRefinementEnabled = useSyncExternalStore(subscribeVoiceSettings, getVoiceRefinementEnabled);
   const agentIslandEnabled = useSyncExternalStore(subscribeAgentIslandSettings, getAgentIslandEnabled);
+  const agentIslandSoundEnabled = useSyncExternalStore(subscribeAgentIslandSettings, getAgentIslandSoundEnabled);
   const agentIslandSupported = isAgentIslandSupported();
   const navigate = useNavigate();
   const outletContext = useOutletContext<SettingsOutletContext | null>();
@@ -295,12 +297,12 @@ function SettingsViewContent() {
     platform: window.electronAPI?.platform ?? '',
     supportsBetaUpdateChannel: window.electronAPI?.supportsBetaUpdateChannel,
     voiceRefinementEnabled,
-    agentIsland: { enabled: agentIslandEnabled, supported: agentIslandSupported },
+    agentIsland: { enabled: agentIslandEnabled, supported: agentIslandSupported, soundEnabled: agentIslandSoundEnabled },
     voiceInput: voiceModelSelection.ready && voiceModelSelection.selection ? {
       serviceMode: voiceModelSelection.selection.serviceMode,
       asrProvider: voiceModelSelection.selection.asrProvider,
     } : undefined,
-  }), [locale, wallpaperMotionAvailable, mode, user?.membershipKind, voiceModelSelection.ready, voiceModelSelection.selection, voiceRefinementEnabled, agentIslandEnabled, agentIslandSupported]);
+  }), [locale, wallpaperMotionAvailable, mode, user?.membershipKind, voiceModelSelection.ready, voiceModelSelection.selection, voiceRefinementEnabled, agentIslandEnabled, agentIslandSupported, agentIslandSoundEnabled]);
   const requestedEntry = resolveSettingsSearchEntry(activeTab, searchParams.get('section'));
   const searchEntry = piExtensionsPanelOpen || (requestedEntry?.isVisible && !requestedEntry.isVisible(searchContext))
     ? null : requestedEntry;
