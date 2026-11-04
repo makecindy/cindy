@@ -1,11 +1,19 @@
 import assert from 'node:assert/strict';
 
+async function assertPublicAgentPreview(page) {
+  assert.doesNotMatch(
+    await page.locator('body').innerText(),
+    /https?:\/\/|@|(?:\d{1,3}\.){3}\d{1,3}|\/(?:Users|home|private)\/|demo-server|backup-server|sshHostId|relayId|deploymentKey/,
+    'public Agent screenshots must omit addresses, SSH identities and deployment context',
+  );
+}
+
 export default {
   name: 'relay-service',
   entry: './fixture.tsx',
   viewport: { width: 760, height: 720 },
-  real: 'RelayServicePanel and useSelfHostedRelayState: route list with one row per server, icon-only switch/rename/remove actions, server details, deploy, rename, join and host dialogs',
-  notCovered: 'Real SSH, deployment, certificate issuance, joining and switching; covered separately by deployment/runtime unit tests',
+  real: 'RelayServicePanel, useSelfHostedRelayState and relayAgentTask: route list, server details, dialogs, local task creation and deployment draft handoff',
+  notCovered: 'Real SSH, deployment, certificates, joining or switching; public images hide connection details and show a generic task handoff placeholder, not the task editor or an Agent run',
   cases: {
     default: { about: 'Official relay in use; a deployed server relay is available to switch to' },
     server: { about: 'Server relay in use: details with devices, certificate and version', viewport: { width: 360, height: 900 } },
@@ -16,6 +24,11 @@ export default {
     'retry-check-error': { about: 'A failed retry check stays in the deployment dialog with a visible error' },
     'deploy-steady': { about: 'Choosing a server, its check, each deployment step and the finished page keep the dialog and form fields in place' },
     multi: { about: 'Two server relays, one in use; renaming the other and deploying again stay available' },
+    'agent-no-hosts': { about: 'Agent deployment can open a local task without a configured SSH host or fixed-installer precheck' },
+    'agent-selected-host': { about: 'Selected SSH host becomes task context, never the task execution machine' },
+    'agent-upgrade': { about: 'An Agent-managed relay opens an upgrade task instead of invoking the fixed installer' },
+    'agent-remove': { about: 'An Agent-managed relay opens a removal task instead of invoking the fixed uninstaller' },
+    'agent-resume': { about: 'An unfinished Agent deployment resumes using its saved relay identity' },
   },
   async check(page, ui) {
     const route = 'settings.remoteControl.relay.route';
@@ -24,7 +37,43 @@ export default {
     const serverRow = page.getByRole('listitem').filter({ hasText: 'Test' });
     const serverButtons = serverRow.getByRole('button');
     // #7921 review:真实组件回归替换重试、失败用时和弹窗内错误；旧场景只有成功状态。
-    if (ui.case.startsWith('retry-')) {
+    if (ui.case.startsWith('agent-')) {
+      await assertPublicAgentPreview(page);
+      let action = 'deploy';
+      if (ui.case === 'agent-upgrade') {
+        action = 'upgrade';
+        await serverRow.getByRole('button', { name: await ui.t(`${relay}.agent.upgrade`), exact: true }).click();
+      } else if (ui.case === 'agent-remove') {
+        action = 'remove';
+        await serverRow.getByRole('button', { name: removeLabel, exact: true }).click();
+      } else if (ui.case === 'agent-resume') {
+        action = 'resume';
+        await serverRow.getByRole('button', { name: await ui.t(`${route}.resume`), exact: true }).click();
+      } else {
+        await page.getByRole('button', { name: await ui.t(`${relay}.agent.deploy`), exact: true }).click();
+        const dialog = page.getByRole('dialog', { name: await ui.t(`${relay}.agent.deploy`), exact: true });
+        // Capture the choice before selecting a host: no SSH identity enters public evidence.
+        await assertPublicAgentPreview(page);
+        await ui.capture('agent-deploy-dialog');
+        if (ui.case === 'agent-selected-host') {
+          await dialog.getByRole('combobox', { name: await ui.t(`${relay}.agent.serverPlaceholder`) }).click();
+          await page.getByRole('option').filter({ hasText: 'demo-server' }).click();
+        }
+        const proceed = dialog.getByRole('button', { name: await ui.t(`${relay}.agent.continue`), exact: true });
+        assert.ok(await proceed.isEnabled());
+        await proceed.click();
+      }
+      const task = page.getByTestId('relay-agent-task');
+      await task.waitFor();
+      const prompt = await page.evaluate((id) => globalThis.__relayAgentDraft(id), await task.getAttribute('data-session-id'));
+      assert.ok(prompt.includes(await ui.t(`${relay}.agent.prompt.${action}`)));
+      if (ui.case === 'agent-selected-host') assert.deepEqual(JSON.parse(prompt.slice(prompt.indexOf('{'))), {
+        sshHostId: 'demo-server', host: '203.0.113.10', user: 'root',
+      });
+      else if (action === 'deploy') assert.ok(!prompt.includes('demo-server'));
+      else assert.ok(prompt.includes('11111111-1111-4111-8111-111111111111'));
+      await assertPublicAgentPreview(page);
+    } else if (ui.case.startsWith('retry-')) {
       const deploy = `${relay}.deploy`;
       // #7971 review:重新部署在改动服务器前失败时旧记录仍完整,原分支隐藏了查看和重试入口。
       if (ui.case === 'retry-existing') {

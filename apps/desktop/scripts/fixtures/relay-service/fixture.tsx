@@ -7,6 +7,8 @@ import type {
   SelfHostedRelayState,
 } from '../../../src/shared/selfHostedRelay';
 import { forbid, mountPage } from '../../ui-page/harness';
+import { useLocation } from 'react-router-dom';
+import { getDraft } from '../../../src/renderer/lib/composerDraftStore';
 
 const deployment: SelfHostedRelayDeploymentView = {
   relayId: '11111111-1111-4111-8111-111111111111',
@@ -27,18 +29,29 @@ const serverRelay = (record: SelfHostedRelayDeploymentView) => ({ name: record.n
  * multi:两台服务器,正在用第一台;retry-*:一次失败的部署;deploy-steady:从头部署一台。
  */
 function initialState(name: string): SelfHostedRelayState {
-  const server = name === 'server' || name === 'multi';
+  const agentManaged = ['agent-upgrade', 'agent-remove', 'agent-resume'].includes(name);
+  const publicAgentPreview = name.startsWith('agent-');
+  const server = name === 'server' || name === 'multi' || (agentManaged && name !== 'agent-resume');
   const host = name === 'host';
   const recovering = name.startsWith('retry-');
   const redeploy = name === 'retry-existing';
   const fresh = name === 'deploy-steady';
   const finishedAt = Date.now();
-  const first = { ...deployment, active: server, ...(recovering && !redeploy ? { relayVersion: '' } : {}) };
+  const first = {
+    ...deployment, active: server, ...(recovering && !redeploy ? { relayVersion: '' } : {}),
+    // Public evidence shows status and actions, never a server address or SSH identity.
+    // These display placeholders are fixture data; production records are untouched.
+    ...(publicAgentPreview ? {
+      managedBy: 'agent' as const, deploymentKey: 'my-relay', sshHostId: '', address: '',
+      baseUrl: '（连接地址已隐藏）', upgradeAvailable: false,
+    } : {}),
+    ...(name === 'agent-resume' ? { relayVersion: '', baseUrl: '', address: '' } : {}),
+  };
   return {
     available: true,
     mode: server || host ? 'self-hosted' : 'official',
     relay: server
-      ? serverRelay(deployment)
+      ? serverRelay(first)
       : host
         ? { name: 'This computer', baseUrl: 'http://127.0.0.1:47820', role: 'owner', origin: 'host' }
         : null,
@@ -65,10 +78,20 @@ function initialState(name: string): SelfHostedRelayState {
 
 function Page() {
   const controller = useSelfHostedRelayState(true);
+  const location = useLocation();
+  if (location.pathname.startsWith('/cc-agent/')) {
+    const id = location.pathname.split('/').at(-1)!;
+    // The real draft stays available to behavioral assertions without entering public images.
+    return <div data-testid="relay-agent-task" data-session-id={id} className="p-4 text-[var(--text-primary)]">
+      <p className="text-13">任务草稿已准备好，可在任务中检查后发送。</p>
+      <p className="mt-2 text-12 text-[var(--text-secondary)]">场景占位：不展示任务正文或部署参数。</p>
+    </div>;
+  }
   return <div className="mx-auto max-w-3xl p-4"><RelayServicePanel controller={controller} /></div>;
 }
 
 void mountPage({
+  route: '/settings?tab=remote-control',
   host: ctx => {
     let state = initialState(ctx.case);
     const recovering = ctx.case.startsWith('retry-');
@@ -89,6 +112,9 @@ void mountPage({
     };
     // deploy-steady:场景逐步推进部署任务,轮询与推送读到的是同一份状态。
     Object.assign(window, {
+      __relayAgentDraft: (id: string) => getDraft(id)?.text?.content?.flatMap(
+        (paragraph) => paragraph.content?.map((item) => item.text ?? '') ?? [],
+      ).join('\n') ?? '',
       __relayDeployAdvance: (step: RelayDeployStep, message?: RelayDeployProgressMessage) => {
         const job = state.deployJob!;
         const logs = [...(job.logs ?? []), { at: (job.startedAt ?? 0) + (job.logs?.length ?? 0) * 1_000, step, ...(message ? { message } : {}) }];
@@ -97,6 +123,16 @@ void mountPage({
       __relayDeployFinish: finishDeploy,
     });
     return {
+      localDb: {
+        sessions: {
+          create: async (body: Record<string, unknown>) => {
+            if (body.workspaceKind !== 'dialogue' || body.remoteHostId || body.agentDeviceId || body.extraDirs || body.workingDir) {
+              return forbid('relay task inherited a remote or project workspace')();
+            }
+            return { id: 'agent-relay-task', ...body };
+          },
+        },
+      },
       selfHostedRelay: {
         command: async (command: SelfHostedRelayCommand) => {
           if (command.type === 'state') return { state };
@@ -160,7 +196,7 @@ void mountPage({
       },
       remoteSsh: {
         list: async () => ({
-          hosts: [
+          hosts: ctx.case === 'agent-no-hosts' ? [] : [
             { config: { id: 'demo-server', displayName: 'demo-server', hostname: '203.0.113.10', user: 'root' } },
             { config: { id: 'backup-server', displayName: 'backup-server', hostname: '198.51.100.20', user: 'root' } },
           ],

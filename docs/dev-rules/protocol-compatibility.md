@@ -587,6 +587,20 @@ Electron 进程的 IPC/WebRTC smoke，以及 Desktop、Mobile 和共享包类型
 
 ### 自建中转同步维护
 
+Agent 自适应部署复用同一个随包中转程序、`relay init`、`CindyRelay` 认证及已有管理接口，
+不新增 relay 帧、协议版本或 Mobile 原生能力。`prepare_relay_deployment` 与
+`complete_relay_deployment` 是本机 MCP 宿主能力，不加入设备互联或共享访客的远控白名单。
+设置页与聊天使用同一份本机主人身份；公开接口通过之后仍须验证主人管理认证，才登记部署。
+任意 HTTPS 端口和外部反代仅改变部署位置，不放宽 TLS 校验或账号边界。
+
+配置版本仍为 2：Agent 记录增加 `managedBy: 'agent'`、`deploymentKey` 和部署位置说明，
+顶层 `sshHostId` 留空，使旧版本不会把它当作可由固定安装器升级／卸载的记录；
+旧字段 `deployment` 的兼容镜像只包含固定部署。新版拒绝把 Agent 记录传给旧固定安装器，
+恢复和维护交回普通任务。旧客户端不能管理这些记录，写回配置可能丢掉新记录，但不删除
+服务器数据或本机加密身份文件；不承诺降级后再升级可自动恢复完整部署记录。
+已有固定部署的读写和管理行为保持不变。完整流程与验收范围见
+[方案 §15.7](../self-hosted-relay-plan.md#157-agent-自适应部署2026-11-04)。
+
 服务器部署的 Nginx 自动接入使用中转 bundle `0.3.0`（`nginx` 为 SSH 部署内部 CLI）。公网仍使用
 原有 HTTPS/WSS 地址、`CindyRelay` 认证、媒体签名地址及 v1 设备协议；不新增跨端帧、能力位或权限。
 已部署 `0.2.0` 的通信行为继续兼容，需要自动配置 Nginx 时由现有升级入口上传新 bundle。

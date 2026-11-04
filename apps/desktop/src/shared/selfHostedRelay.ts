@@ -118,7 +118,35 @@ export type SelfHostedRelayErrorCode =
   /** 已有部署任务在进行。 */
   | 'BUSY'
   | 'INVALID_ADDRESS'
+  /** 由 Agent 自行管理的安装不能交给固定 systemd 部署器升级或卸载。 */
+  | 'AGENT_MANAGED_DEPLOYMENT'
   | 'NO_DEPLOYMENT';
+
+/** 仅记录部署事实，供之后的 Agent 维护；宿主绝不执行其中的内容。 */
+export interface AgentRelayDeploymentMetadata {
+  sshHostId?: string;
+  sshHostAlias?: string;
+  host?: string;
+  programDir?: string;
+  dataDir?: string;
+  runtime?: string;
+  service?: string;
+  tls?: string;
+}
+
+/** 丢弃未知字段，不让原始工具输入或凭证混入持久化的部署记录。 */
+export function parseAgentRelayDeploymentMetadata(value: unknown): AgentRelayDeploymentMetadata | null {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
+  const raw = value as Record<string, unknown>;
+  const result: AgentRelayDeploymentMetadata = {};
+  for (const key of ['sshHostId', 'sshHostAlias', 'host', 'programDir', 'dataDir', 'runtime', 'service', 'tls'] as const) {
+    if (raw[key] === undefined) continue;
+    const maxLength = key === 'programDir' || key === 'dataDir' ? 4096 : key === 'host' ? 253 : key === 'sshHostId' || key === 'sshHostAlias' ? 200 : 1000;
+    if (typeof raw[key] !== 'string' || raw[key].length > maxLength || /[\u0000-\u001f]/.test(raw[key])) return null;
+    result[key] = raw[key].trim();
+  }
+  return result;
+}
 
 export interface SelfHostedRelayPairRequestView {
   requestId: string;
@@ -190,6 +218,10 @@ export type SelfHostedRelayServerCheck =
   | { sshHostId: string; ok: false; error: SelfHostedRelayErrorCode; detail?: string };
 
 export interface SelfHostedRelayDeploymentView {
+  /** 缺省为旧的固定部署器；agent 由普通任务按实际环境维护。 */
+  managedBy?: 'agent';
+  deploymentKey?: string;
+  metadata?: AgentRelayDeploymentMetadata;
   relayId: string;
   sshHostId: string;
   address: string;

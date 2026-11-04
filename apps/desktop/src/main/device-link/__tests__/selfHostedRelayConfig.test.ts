@@ -74,3 +74,18 @@ it('reads a legacy single deployment and writes the list with a legacy copy olde
   invalidateRelayConfigCache();
   expect(readRelayConfig().deployments).toEqual([deployment(1), second]);
 });
+
+// Agent 线路可能使用容器或非 root 服务；旧客户端不能丢掉 managedBy 后用固定 systemd 卸载器接管。
+// runtime fake 不经过磁盘解析；最小输入：两条 sshHostId 为空的 Agent 记录和一条旧部署。tier: unit。
+it('preserves multiple agent deployments while keeping the legacy installer projection separate', () => {
+  const agent = (index: number): RelayDeployment => ({ ...deployment(index), managedBy: 'agent', deploymentKey: `agent-${index}`,
+    sshHostId: '', ownerDeviceId: 'device', metadata: { sshHostId: 'real-ssh', runtime: 'container', programDir: '/srv/cindy' } });
+  const first = agent(2);
+  const pending = { ...agent(3), address: '', baseUrl: '', complete: false, relayVersion: '' };
+  writeRelayConfig({ version: 2, host, active: { relayId: first.relayId, name: first.name, baseUrl: first.baseUrl, role: 'owner', origin: 'server', deviceId: 'device', ownerPublicKey: KEY }, deployments: [deployment(1), first, pending] });
+  expect(JSON.parse(files.get(CONFIG)!).deployment).toEqual(deployment(1));
+  invalidateRelayConfigCache();
+  expect(readRelayConfig().deployments).toEqual([deployment(1), first, pending]);
+  writeRelayConfig({ ...readRelayConfig(), deployments: [first, pending] });
+  expect(JSON.parse(files.get(CONFIG)!).deployment).toBeNull();
+});
