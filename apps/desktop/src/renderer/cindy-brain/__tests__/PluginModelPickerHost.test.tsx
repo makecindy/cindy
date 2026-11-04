@@ -21,8 +21,8 @@ vi.mock('react-i18next', () => ({
   }),
 }));
 vi.mock('@/hooks/useAvailableAgents', () => ({ useModelPickerAgents: () => ['codex'] }));
-vi.mock('@/components/new-chat/ModelSelector', () => ({
-  ModelSelectorContent: (
+vi.mock('@/components/new-chat/ModelRouteSelector', () => ({
+  ModelRouteSelectorContent: (
     props: ComponentProps<
       typeof import('@/components/new-chat/ModelSelector').ModelSelectorContent
     >,
@@ -30,6 +30,7 @@ vi.mock('@/components/new-chat/ModelSelector', () => ({
     <button
       onClick={() =>
         props.onUnifiedSelect?.({
+          agentDevice: selectedLocation ? { deviceId: selectedLocation, name: 'Shared' } : null,
           providerId: 'chosen-provider',
           modelId: 'chosen-model',
           engine: 'codex',
@@ -43,6 +44,7 @@ vi.mock('@/components/new-chat/ModelSelector', () => ({
     </button>
   ),
 }));
+let selectedLocation: string | undefined;
 let push: (request: PluginModelPickerPresentation) => void;
 let dismiss: (request: { requestId: string }) => void;
 const resolve = vi.fn(),
@@ -54,6 +56,7 @@ const request = {
   expiresAt: Date.now() + 90_000,
 };
 beforeEach(() => {
+  selectedLocation = undefined;
   resolve.mockReset().mockResolvedValue({ handled: true, accepted: true });
   remote.mockReset().mockResolvedValue({ handled: true, accepted: true });
   Object.defineProperty(window, 'electronAPI', {
@@ -147,4 +150,17 @@ it('keeps the active picker when another execution computer asks for a selection
   );
   expect(screen.getByText('为插件「示例插件」选择模型')).toBeTruthy();
   expect(screen.queryByText('Other plugin')).toBeNull();
+});
+
+// Bug: plugin picker dropped the remote source even when the unified picker selected it.
+// Existing local-only case cannot distinguish a local provider with the same ID. Tier: unit.
+it('returns the selected share location with the confirmed model', async () => {
+  selectedLocation = 'share:fixture';
+  render(<PluginModelPickerHost />);
+  act(() => push({ ...request, allowRemote: true }));
+  fireEvent.click(screen.getByText('Choose model'));
+  fireEvent.click(screen.getByRole('button', { name: zh.settings.ghosts.modelPicker.useConfiguration }));
+  await waitFor(() => expect(resolve).toHaveBeenCalledWith('request', expect.objectContaining({
+    agentDeviceId: 'share:fixture', providerId: 'chosen-provider', model: 'chosen-model',
+  })));
 });

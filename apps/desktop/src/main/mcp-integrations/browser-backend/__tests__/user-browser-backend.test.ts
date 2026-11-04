@@ -602,6 +602,11 @@ describe('UserBrowserBackend · 读取与动作', () => {
     });
     await act({ kind: 'clickCoords', x: 10, y: 20, button: 'right' });
     expect(fake.jobs.at(-1)).toEqual(['clickCoords', { ...base, x: 10, y: 20, button: 'right' }]);
+    // 元素定位的坐标点击把 ref / selector 交给扩展,由它点元素中心。
+    await act({ kind: 'clickCoords', ref: 'r2' });
+    expect(fake.jobs.at(-1)).toEqual(['clickCoords', { ...base, ref: 'r2' }]);
+    await act({ kind: 'clickCoords', selector: '#menu' });
+    expect(fake.jobs.at(-1)).toEqual(['clickCoords', { ...base, selector: '#menu' }]);
     await act({ kind: 'click', ref: 'r1', doubleClick: true, modifiers: ['Shift'] });
     expect(fake.jobs.at(-1)).toEqual([
       'clickCoords',

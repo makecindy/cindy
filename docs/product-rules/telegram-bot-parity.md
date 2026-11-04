@@ -77,6 +77,11 @@ ID 分开保存。官方在入队前组装引用，沿用既有任务持久化�
 图片引用，发送工具不用于当前会话发图。所有已落库 assistant 图片仍走共享持久化入口。
 官方普通轮次与续跑轮次的输出上限错误保留部分正文时，也经过同一附件收集入口：
 可读图片随错误结果附带，失败图片去掉本地目标地址并保留说明；其它错误仍不保留正文。
+2026-11-03 起两侧补齐两个漏图口径（群里 Codex 生成的设计稿只发出了文字）：Codex 原生生成图
+落库后在本轮 `done` 之前作为普通工具结果交给两套 bot 的订阅方（`Session.holdEventStream`，
+见 `media-storage-and-protocols.md`），所以和其它工具产出的托管图片一样，正文不引用也会回传；
+目标含裸空格的本机图片（`Application Support` 一类目录）由共用解析器补认后照常导入发送，
+不再把原始路径当文字发出去。
 
 判定口径三档：
 
@@ -111,7 +116,7 @@ App 完成未读与提醒统一由 `renderer/hooks/useSessionRunningStatus.ts` �
 | 子代理输出隔离 | `im/shared/agentEventScope.ts` + `maker-core/agents/claude-code/translator.ts` | 官方 `hook-control/turnObserver` 与个人 `im/shared/turnRunner` 在消费实时事件前过滤带 `agentMeta.parentUuid` 的子代理事件。内部正文、工具/思考、媒体旁路和终态不进入主任务的 IM 回帖，也不影响主任务收口；个人侧自动任务转播同样适用。Claude translator 为子代理工具结果保留归属，主代理流式事件不继承子代理元数据；主任务正文统计和最后消息的实质内容判定只消费主代理，子代理完整消息与流式增量都不阻断主任务 result 截断补发，也不覆盖 silent-stop 判定。整轮失败即使由子代理 API 错误引起，仍按主任务失败收口。主代理主动引用的成果正常发送，桌面完整记录不变。 |
 | 普通工具权限的多处确认 | `maker-ipc/interactionRouter.ts` + `sharedPermission.ts` | IM 与 Cindy 共用一个决定，首次有效回答生效，桌面/手机与渠道同步收口。来源正文由 `im/shared/interactionSource.ts` 构造；个人富卡与官方 Hook 分别负责各自载体更新。供应商分享的本机凭证确认卡共用 `interactionCardModel.ts` 回传当前任务的凭证授权标记；个人卡片点击从 pending 保存的原请求恢复作用域，不转换成通用工具允许规则。未来渠道复用同一注册接口，详见 [共享合同](im-permission-confirmation.md)。 |
 | 代输入指引（2026-10-13） | `im/shared/inputHandoffChannelNotice.ts` | 任务开出代输入卡时，在驱动该任务的聊天里发**一行固定文字**「🔐 需要你帮忙输入：<任务名> · 在 Cindy 中打开」，每个请求一次。个人 bot 由 `turnRunner` 在 `beforeProviderStart` 绑定 `im.sendText`；官方 bot 由 `session-runner` 绑定与运行时回收提示同一条独立发送（`onRuntimeRecovery`，需协商 `msg-op-v1`，未协商时不发）。卡片、界面内容与主人填写的值**两侧都不进 Telegram**——这是有意的产品边界（值只走 Cindy 加密通道），不是缺口。详见 [代输入](input-handoff.md)。 |
-| 分享供应商的新任务路由 | `im/remoteProviderRoute.ts` + `im/shared/openChannelSession.ts` | 两侧均可在 Cindy 的 bot 模型设置选择分享供应商，按授权目录校验并保存 `agentDeviceId`；新建、`/new` 与冷恢复沿用该执行位置，分享不可用时不回落本机。个人渠道默认与官方工作目录默认仍各自保存。详见 [供应商分享 §5.2](provider-sharing.md#52-供应商设置)。 |
+| 远程与分享供应商的新任务路由 | `im/remoteProviderRoute.ts` + `im/shared/openChannelSession.ts` | 两侧均可在 Cindy 的 bot 模型设置选择同账号其他电脑或分享供应商，按授权目录校验并保存 `agentDeviceId`；新建、`/new` 与冷恢复沿用该执行位置，所选位置不可用时不回落本机。个人渠道默认与官方工作目录默认仍各自保存。详见 [供应商分享 §5.2](provider-sharing.md#52-供应商设置)。 |
 | 本机模型列表的开关就绪 | `maker-host/model-visibility-mirror.ts` | 个人 `/model` 与官方 `listAgentModels` 的本机目录均等待当前账号配置同步；超时返回错误，不把未同步当成全部关闭或回退出厂开关。个人分享任务的 `/model` 读取分享方授权目录，不套用本机同名供应商的开关。 |
 | 过程区与正文的**文本合成** | `im/shared/turnPresenter.ts` + `turnActivity.ts` | 过程区怎么排（工具步骤、思考步骤、耗时行）、过程区与正文怎么拼（`composeProgressView`）。耗时行末尾的当前 `N tok/s` 同源：两侧（含个人侧自动任务转播）都只经 `applyStatusTokenRate` 读 `status` 事件的 `tokenSpeed`（与桌面运行状态栏同一份读数）——无读数不显示、占位帧与 0 读数保留上一个值、`generationReliable === false` 隐藏、只随 ticker 带出不单独刷帧；凡把过程区冻结进终稿的收口（个人侧终止错误、转播收口）都经 `clearRunningIndicators` 与重试说明一起清掉。**正文累积不算**——见第三节：`createTurnPresenter` 按 `mode` 实例化两个独立引擎，累积、消息投影、`finalText()` 判据都不同，改一个引擎不影响另一个 |
 | 运行中**过程消息**的生命周期、渲染与出站失败判据（官方需双方协商 `telegram-progress-ops-v1`） | `packages/lizi-im/src/telegram/streamingText.ts`（`startTelegramProgressCarrier` 与个人 `startTelegramStreaming` 是同一个 handle 类）+ `progressFrame.ts` + `outboundPolicy.ts` + `markdown.ts` 的 `markdownToTelegramHtml` | 惰性占位、1.5s 尾沿节流、首帧 send 后续 edit、单帧上限 `TELEGRAM_PROGRESS_FRAME_MAX_CHARS = 3800`（源 markdown 字符数；官方 presenter 的 `PresenterPolicy.intermediateMaxRenderedChars` 默认值也取它）、NO_REPLY 及其前缀不落地、HTML 被拒（400）回落纯文本、`message is not modified` 视为成功、429 按 `retry_after` 全长退避后重试一次——两侧跑同一份代码。**传输不同**：个人走 Bot API（`index.ts` 的 `callSend` / `sendRenderedChunk` / `editHtml`），官方走 msg.op（`hook-control/telegramTurnCarrier.ts` 只实现 `TelegramStreamingDeps` 的 msg.op 版，并经 `telegramMsgOp.ts` 把 `msg.op.result` 的 `channelErrorCode` / `error` / `retryAfterMs` 映射成同形错误）；服务端只执行，不做转换与回落。未协商时官方仍由服务端渲染 `turn.progress`，本行对官方不成立 |

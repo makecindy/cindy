@@ -58,6 +58,7 @@ function fakeGhost(
       ...(overrides.network === null ? {} : { network: overrides.network ?? defaultNetwork }),
     },
     dir: '/fake/brain/web-search',
+    approval: { state: 'approved', revision: '00000000-0000-4000-8000-000000000001' },
     enabled: overrides.enabled ?? true,
     ...(overrides.trust ? { trust: overrides.trust } : {}),
   } as InstalledGhost;
@@ -1608,86 +1609,32 @@ describe('networkSlot · GitHub CLI 优先凭证(source:gh-cli)', () => {
     expect(unavailable.fetchImpl).not.toHaveBeenCalled();
   });
 
-  it('仅自报 cindy-github 但没有 Host 官方 trust 时 fail-closed，不读取 gh token 也不发请求', async () => {
-    const readGhCliToken = vi.fn(async () => 'gho_should_not_be_read');
-    const readSecret = vi.fn(() => 'github_pat_fallback');
+  // Contract: shared gh eligibility comes from approval + declaration, not name/trust.
+  it.each([null, 'local', 'acme'])('approved ordinary instance in %s can use gh without official trust', async namespace => {
+    const readGhCliToken = vi.fn(async () => 'synthetic-gh-token');
     const { slot, fetchImpl } = makeGithubSlot({
-      getGhost: () => fakeGhost({ id: 'cindy-github', network: githubNetwork }),
+      getGhost: () => ({ ...fakeGhost({ id: 'github-helper', network: githubNetwork }), namespace,
+        approval: { state: 'approved', revision: '00000000-0000-4000-8000-000000000001' } }),
       readGhCliToken,
-      readSecret,
     });
-    const result = await slot.handleFetchRequest('web-search', { url: GITHUB_URL });
-    expect(result.ok).toBe(false);
-    expect(readGhCliToken).not.toHaveBeenCalled();
-    expect(readSecret).not.toHaveBeenCalled();
-    expect(fetchImpl).not.toHaveBeenCalled();
+    expect((await slot.handleFetchRequest('web-search', { url: GITHUB_URL })).ok).toBe(true);
+    expect(readGhCliToken).toHaveBeenCalledOnce();
+    expect((fetchImpl.mock.calls[0][1].headers as Record<string, string>).Authorization).toBe('Bearer synthetic-gh-token');
   });
 
-  it('官方 trust receipt 缺少 publisherName 时 fail-closed，不读取 gh token 也不发请求', async () => {
-    const readGhCliToken = vi.fn(async () => 'gho_should_not_be_read');
-    const readSecret = vi.fn(() => 'github_pat_fallback');
+  it('an unapproved instance cannot read shared gh credentials', async () => {
+    const readGhCliToken = vi.fn(async () => 'synthetic-gh-token');
     const { slot, fetchImpl } = makeGithubSlot({
-      getGhost: () => fakeGhost({
-        id: 'cindy-github',
-        network: githubNetwork,
-        trust: {
-          level: 'cindy-official',
-          publisherSigned: true,
-          publisherVerified: true,
-          reviewed: true,
-        },
-      }),
-      readGhCliToken,
-      readSecret,
+      getGhost: () => ({ ...fakeGhost({ id: 'github-helper', network: githubNetwork }),
+        approval: { state: 'legacy-unapproved' } }), readGhCliToken,
     });
-    const result = await slot.handleFetchRequest('web-search', { url: GITHUB_URL });
-    expect(result.ok).toBe(false);
-    expect(readGhCliToken).not.toHaveBeenCalled();
-    expect(readSecret).not.toHaveBeenCalled();
-    expect(fetchImpl).not.toHaveBeenCalled();
-  });
-
-  it.each([
-    ['publisherSigned', { publisherSigned: false }],
-    ['publisherVerified', { publisherVerified: false }],
-    ['reviewed', { reviewed: false }],
-  ])('官方 trust receipt 的 %s 被篡改时 fail-closed', async (_field, override) => {
-    const readGhCliToken = vi.fn(async () => 'gho_should_not_be_read');
-    const { slot, fetchImpl } = makeGithubSlot({
-      getGhost: () => fakeGhost({
-        id: 'cindy-github',
-        network: githubNetwork,
-        trust: {
-          level: 'cindy-official',
-          publisherSigned: true,
-          publisherVerified: true,
-          reviewed: true,
-          publisherName: 'Cindy Plugin Market',
-          ...override,
-        },
-      }),
-      readGhCliToken,
-    });
-    const result = await slot.handleFetchRequest('web-search', { url: GITHUB_URL });
-    expect(result.ok).toBe(false);
+    expect((await slot.handleFetchRequest('web-search', { url: GITHUB_URL })).ok).toBe(false);
     expect(readGhCliToken).not.toHaveBeenCalled();
     expect(fetchImpl).not.toHaveBeenCalled();
   });
 
-  it('保留 ID 检查之外，非 cindy-github 也不能借 gh-cli trust', async () => {
-    const readGhCliToken = vi.fn(async () => 'gho_should_not_be_read');
-    const { slot, fetchImpl } = makeGithubSlot({
-      getGhost: () => fakeGhost({ id: 'third-party', network: githubNetwork }),
-      readGhCliToken,
-    });
-    const result = await slot.handleFetchRequest('web-search', { url: GITHUB_URL });
-    expect(result.ok).toBe(false);
-    expect(readGhCliToken).not.toHaveBeenCalled();
-    expect(fetchImpl).not.toHaveBeenCalled();
-  });
-
-  it('组织同名或尚未确认 root 的 cindy-github 不能借用 gh-cli token', async () => {
-    for (const identity of [{ namespace: 'acme' }, { namespaceState: 'pending' }, { namespaceState: 'unconfirmed' }] as const) {
+  it('身份尚未确认的插件不能借用 gh-cli token', async () => {
+    for (const identity of [{ namespaceState: 'pending' }, { namespaceState: 'unconfirmed' }] as const) {
       const readGhCliToken = vi.fn(async () => 'gho_should_not_be_read');
       const readSecret = vi.fn(() => 'github_pat_fallback');
       const { slot, fetchImpl } = makeGithubSlot({

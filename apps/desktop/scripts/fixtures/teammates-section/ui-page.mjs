@@ -27,7 +27,7 @@ export default {
   },
   cases: {
     'group-types': {
-      about: 'Group and private rows together, including a one-companion group; collapsed type markers with running/unread @ points',
+      about: 'Group and private rows retain their original avatars without type markers; running/unread @ points remain',
       data: {
         profiles: profiles.slice(0, 2).map((bot, index) => ({ ...bot, lastMessageAt: Date.now() - (index + 5) * 60000, lastMessagePreview: ['设计稿已更新', '收到，继续整理'][index], avatar: `cindy://avatar/preset/${['cindy', 'dash'][index]}` })),
         remoteBots: [], route: '/bots/groups/type-1',
@@ -133,16 +133,14 @@ export default {
       assert.equal(await section.getByText('Cindy', { exact: true }).count(), 1);
       assert.equal(await section.getByText('Writer', { exact: true }).count(), 1);
       assert.equal(await section.getByText('单伙伴群', { exact: true }).count(), 1);
+      const expandedTypeMarks = await section.locator('[data-bot-group-id] svg.lucide-users').count();
       await ui.capture('expanded-group-private');
       await page.getByRole('button', { name: await ui.t('bots.title'), exact: true }).click();
       await section.locator('[data-bot-group-id]').first().waitFor({ state: 'hidden' });
-      const selected = section.locator('button[aria-current="page"]:visible');
-      const typeMark = await selected.locator('span:has(> svg.lucide-users)').boundingBox();
-      const point = await selected.locator('[data-teammate-mention]').boundingBox();
-      assert.ok(typeMark && point && (typeMark.x + typeMark.width <= point.x || typeMark.y + typeMark.height <= point.y), 'type mark and running @ point do not overlap');
-      assert.equal(await section.locator('button:has(svg.lucide-users):visible').count(), 2);
       assert.equal(await section.locator('[data-teammate-mention]').count(), 2);
       await ui.capture('collapsed-group-private');
+      assert.equal(expandedTypeMarks, 0, 'expanded groups have no extra type icon');
+      assert.equal(await section.locator('button:has(svg.lucide-users):visible').count(), 0, 'collapsed avatars have no extra type badge');
       return;
     }
     if (ui.case === 'group-avatars') {

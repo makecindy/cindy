@@ -24,9 +24,15 @@ const exec = promisify(execFile);
 export interface HandoffDriver {
   permission(): Promise<'granted' | 'missing' | 'unknown'>;
   requestPermission(): Promise<void>;
-  windows(): Promise<NativeWindowList>;
+  /** Apps with a window on screen; `background` also lists apps whose only windows are minimized (slower). */
+  windows(options?: { background?: boolean }): Promise<NativeWindowList>;
   snapshot(pid: number, window?: NativeWindowRef): Promise<NativeAxSnapshot | { error: string }>;
   act(request: NativeActRequest): Promise<NativeActResult>;
+  /**
+   * Ask a browser to build its page for accessibility, or to stop. True when
+   * this call changed it, so a browser that already had it on is left alone.
+   */
+  exposePage?(pid: number, on: boolean): Promise<boolean>;
   /** Command line of a process, for agent-controlled target detection only. */
   commandLine(pid: number): Promise<string>;
   /** Screenshot steps. Absent where the platform cannot photograph a single window. */
@@ -40,7 +46,7 @@ export interface HandoffDriver {
    */
   qr?(target: { pid: number; window: NativeWindowRef }, frame: number[] | null): Promise<FoundQr | null | { error: WindowCaptureError }>;
   /** Bring the window to the front; its frame and window-server id, for a live view of just that window. */
-  raise?(target: { pid: number; window: NativeWindowRef }): Promise<{ frame: number[]; windowId: number } | { error: WindowCaptureError }>;
+  raise?(target: { pid: number; window: NativeWindowRef }): Promise<{ frame: number[]; windowId: number; activated?: boolean } | { error: WindowCaptureError }>;
 }
 
 /**
@@ -188,11 +194,12 @@ async function windowIdAt(pid: number, frame: number[]): Promise<number | { erro
 }
 
 async function raiseWindow(target: { pid: number; window: NativeWindowRef }): Promise<
-  { frame: number[]; windowId?: number } | { error: WindowCaptureError }
+  { frame: number[]; windowId?: number; activated?: boolean } | { error: WindowCaptureError }
 > {
   const raised = (await runHelper({ op: 'raise', pid: target.pid, window: target.window }, 6000)) as {
     frame?: unknown;
     windowId?: unknown;
+    activated?: unknown;
     error?: string;
   };
   const frame = raised.frame;
@@ -202,6 +209,7 @@ async function raiseWindow(target: { pid: number; window: NativeWindowRef }): Pr
   return {
     frame: frame as number[],
     ...(typeof windowId === 'number' && Number.isSafeInteger(windowId) && windowId > 0 && windowId <= 0xffff_ffff ? { windowId } : {}),
+    ...(typeof raised.activated === 'boolean' ? { activated: raised.activated } : {}),
   };
 }
 
@@ -215,8 +223,8 @@ export function createMacHandoffDriver(): HandoffDriver {
       const binary = await resolveDesktopInputBinary();
       await exec(binary, ['--request-permission'], { timeout: 5000, maxBuffer: 1024 }).catch(() => undefined);
     },
-    async windows() {
-      const result = (await runHelper({ op: 'windows' }, 8000)) as NativeWindowList & { error?: string };
+    async windows(options) {
+      const result = (await runHelper({ op: 'windows', ...(options?.background ? { background: true } : {}) }, 8000)) as NativeWindowList & { error?: string };
       if (result.error || !Array.isArray(result.apps)) throw new Error(result.error ?? 'unavailable');
       return result;
     },
@@ -228,6 +236,10 @@ export function createMacHandoffDriver(): HandoffDriver {
     },
     async act(request) {
       return (await runHelper({ op: 'act', ...request }, 15_000)) as NativeActResult;
+    },
+    async exposePage(pid, on) {
+      const result = (await runHelper({ op: 'exposePage', pid, on }, 3000)) as { changed?: unknown };
+      return result.changed === true;
     },
     async capture(target) {
       const raised = await raiseWindow(target);
@@ -247,7 +259,9 @@ export function createMacHandoffDriver(): HandoffDriver {
     async raise(target) {
       const raised = await raiseWindow(target);
       if ('error' in raised) return raised;
-      return raised.windowId ? { frame: raised.frame, windowId: raised.windowId } : { error: 'unavailable' };
+      return raised.windowId
+        ? { frame: raised.frame, windowId: raised.windowId, ...(raised.activated !== undefined ? { activated: raised.activated } : {}) }
+        : { error: 'unavailable' };
     },
     async focusedField(pid) {
       const result = (await runHelper({ op: 'focused', pid }, 3000)) as { editable?: unknown; secure?: unknown };

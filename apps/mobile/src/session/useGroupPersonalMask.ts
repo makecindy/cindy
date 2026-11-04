@@ -101,6 +101,8 @@ export function useGroupPersonalMask(groupId: string, deviceId: string, enabled:
     run(retryKey, async valid => {
       if (!stateRef.current || !valid()) return;
       value ??= make(stateRef.current);
+      // Queued/retried participation must honor the latest saved trigger.
+      if (value.type === 'participate' && (!stateRef.current.settings.enabled || stateRef.current.settings.trigger === 'always')) return;
       try {
         const response = await call('mask', { action: value, operationId });
         if (valid() && 'state' in response && response.state) {
@@ -128,7 +130,7 @@ export function useGroupPersonalMask(groupId: string, deviceId: string, enabled:
     update: (patch: Partial<ChatMaskSettings>) => action(`save:${Object.keys(patch).sort().join(',')}`, s => ({ type: 'save', expectedRevision: s.revision,
       settings: { ...s.settings, companionId: s.settings.companionId ?? s.defaultCompanionId ?? null, ...patch, timeZone: s.revision ? s.settings.timeZone : Intl.DateTimeFormat().resolvedOptions().timeZone } })),
     perform: (type: 'resume' | 'stop' | 'digest' | 'participate') => action(type, () => ({ type })),
-    participate: () => { if (!stateRef.current?.settings.enabled || Date.now() - lastParticipation.current < 2000) return;
+    participate: () => { if (!stateRef.current?.settings.enabled || stateRef.current.settings.trigger === 'always' || Date.now() - lastParticipation.current < 2000) return;
       lastParticipation.current = Date.now(); action('participate', () => ({ type: 'participate' })); },
     retry: () => { if (failed.current.size) for (const send of failed.current.values()) queue.current = queue.current.then(send, send); else void reload(); },
   };

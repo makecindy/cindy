@@ -34,6 +34,9 @@ import { useLocation, useNavigate, useParams } from 'react-router-dom';
 import { attachGhostMediaToSession, getGhostMediaHandoverFromDataTransfer } from '@/cindy-brain/ghostMediaHandover';
 import { ShareSelectionBar } from '@/components/chat/ShareSelectionBar';
 import { NewMessageIndicator } from '@/components/chat/NewMessageIndicator';
+import { JumpToBottomChip } from '@/components/chat/JumpToBottomChip';
+import { useJumpToBottomVisibility } from '@/components/chat/useJumpToBottomVisibility';
+import { resolveMessageStreamIndicatorBottomOffset } from '@/components/chat/messageStreamIndicatorPosition';
 import { shareSelectionStore, useShareSelectionActive } from '@/components/chat/shareSelectionStore';
 import { WINDOW_NO_DRAG_STYLE } from '@/components/layout/windowDrag';
 import { Button } from '@/components/ui/button';
@@ -273,6 +276,26 @@ function BotGroupChatContent({ groupId, direct }: { groupId: string; direct: boo
   const scrollRef = useRef<HTMLDivElement>(null);
   const contentRef = useRef<HTMLDivElement>(null);
   const stickToBottomRef = useRef(true);
+  const jumpingToBottomRef = useRef(false);
+  const [nearBottom, setNearBottom] = useState(true);
+  const previousScrollTop = useRef(0);
+  const jumpDown = useJumpToBottomVisibility();
+  const indicatorBottomOffset = resolveMessageStreamIndicatorBottomOffset({ bottomCenterClearanceOffset: 0 });
+  const jumpToBottom = () => {
+    const element = scrollRef.current;
+    if (!element) return;
+    jumpingToBottomRef.current = true;
+    stickToBottomRef.current = true;
+    setJumpTarget(null);
+    quoteLocateGeneration.current += 1;
+    prependAnchorRef.current = null;
+    element.scrollTo({ top: element.scrollHeight, behavior: 'smooth' });
+  };
+  const interruptJumpToBottom = () => {
+    jumpingToBottomRef.current = false;
+    const element = scrollRef.current;
+    if (element) stickToBottomRef.current = element.scrollHeight - element.scrollTop - element.clientHeight < STICK_TO_BOTTOM_PX;
+  };
   const [seenThrough, setSeenThrough] = useState<string | null>(null);
   const readOwner = useRef(getDataOwnerGeneration());
   const prependAnchorRef = useRef<{ height: number; top: number } | null>(null);
@@ -288,6 +311,7 @@ function BotGroupChatContent({ groupId, direct }: { groupId: string; direct: boo
   const [unverifiedOriginals, setUnverifiedOriginals] = useState<ReadonlySet<string>>(NO_IDS);
   const loadingOlderRef = useRef(false);
   const locatingRef = useRef(false);
+  const quoteLocateGeneration = useRef(0);
 
   // Every older-page read belongs to the generation visible when it started. A
   // reset discovered here must also cancel in-flight latest-page/auxiliary reads.
@@ -665,6 +689,7 @@ function BotGroupChatContent({ groupId, direct }: { groupId: string; direct: boo
     if (state.kind === 'ready') setSeenThrough(previous => previous ?? latestSequence);
   }, [state.kind, latestSequence]);
   const newMessageCount = botGroupNewMessageCount(realMessages, seenThrough);
+  const messageNavigationVisible = !sharing && !nearBottom && (newMessageCount > 0 || jumpDown.visible);
   const readRequest = useRef<string | null>(null);
   const readMessages = useRef(realMessages); readMessages.current = realMessages;
   const acknowledge = useCallback(() => {
@@ -770,6 +795,7 @@ function BotGroupChatContent({ groupId, direct }: { groupId: string; direct: boo
   const revealMainMessage = useCallback((messageId: string) => {
     const target = findThreadMessageElement(contentRef.current, messageId);
     if (!target) return false;
+    jumpingToBottomRef.current = false;
     stickToBottomRef.current = false;
     flashThreadTarget(target);
     return true;
@@ -857,6 +883,7 @@ function BotGroupChatContent({ groupId, direct }: { groupId: string; direct: boo
     const element = scrollRef.current;
     if (!element || prependAnchorRef.current) return;
     if (stickToBottomRef.current) element.scrollTop = element.scrollHeight;
+    setNearBottom(element.scrollHeight - element.scrollTop - element.clientHeight < STICK_TO_BOTTOM_PX);
   }, [lastRowKey, speakingKey, rows.length, hasControlledBanner, controlledBannerCollapsed]);
 
   // Markdown, code blocks and avatars finish layout after the first paint, and the composer or
@@ -868,6 +895,7 @@ function BotGroupChatContent({ groupId, direct }: { groupId: string; direct: boo
     if (!ready || !scroller || !content || typeof ResizeObserver === 'undefined') return;
     const observer = new ResizeObserver(() => {
       if (stickToBottomRef.current && !prependAnchorRef.current) scroller.scrollTop = scroller.scrollHeight;
+      setNearBottom(scroller.scrollHeight - scroller.scrollTop - scroller.clientHeight < STICK_TO_BOTTOM_PX);
     });
     observer.observe(content);
     observer.observe(scroller);
@@ -946,6 +974,7 @@ function BotGroupChatContent({ groupId, direct }: { groupId: string; direct: boo
    */
   const locateQuoted = async (quote: Pick<BotGroupQuoteView, 'messageId' | 'sequence'>) => {
     if (locatingRef.current) return;
+    const generation = quoteLocateGeneration.current;
     const find = (list: readonly BotGroupMessageView[]) => list.find(message => message.id === quote.messageId && !message.threadRootId);
     const settle = (original: BotGroupMessageView | undefined) => {
       if (original && !original.deleted) setJumpTarget(original.id);
@@ -963,7 +992,7 @@ function BotGroupChatContent({ groupId, direct }: { groupId: string; direct: boo
       try {
         // A failed re-read is not a verified original: stay put rather than jump to a stale copy.
         const read = await loadOlder(paged.sequence + 1);
-        if (!read) return;
+        if (!read || generation !== quoteLocateGeneration.current) return;
         const original = find(read.messages);
         if (original) setUnverifiedOriginals((previous) => {
           if (!previous.has(original.id)) return previous;
@@ -982,7 +1011,7 @@ function BotGroupChatContent({ groupId, direct }: { groupId: string; direct: boo
       let before: number | undefined;
       for (let page = 0; hasMore && page < QUOTE_LOCATE_MAX_PAGES; page += 1) {
         const read = await loadOlder(before);
-        if (!read) return;
+        if (!read || generation !== quoteLocateGeneration.current) return;
         const original = find(read.messages);
         if (original) { settle(original); return; }
         const oldest = read.messages.reduce((min, message) => Math.min(min, message.sequence), Number.POSITIVE_INFINITY);
@@ -1002,6 +1031,7 @@ function BotGroupChatContent({ groupId, direct }: { groupId: string; direct: boo
       .find(element => element.dataset.botGroupMessageId === jumpTarget);
     if (!target) return;
     setJumpTarget(null);
+    jumpingToBottomRef.current = false;
     stickToBottomRef.current = false;
     target.scrollIntoView?.({ block: 'center' });
     target.focus({ preventScroll: true });
@@ -1140,6 +1170,7 @@ function BotGroupChatContent({ groupId, direct }: { groupId: string; direct: boo
   useEffect(() => {
     if (state.kind !== 'ready' || !notificationTarget || handledNotification.current === location.key) return;
     handledNotification.current = location.key;
+    jumpingToBottomRef.current = false;
     stickToBottomRef.current = false;
     if (notificationTarget.threadRootId) onOpenThread(notificationTarget.threadRootId, notificationTarget.messageId);
     else void locateNotification.current({ messageId: notificationTarget.messageId, sequence: null });
@@ -1297,11 +1328,21 @@ function BotGroupChatContent({ groupId, direct }: { groupId: string; direct: boo
       <div
         ref={scrollRef}
         data-testid="bot-group-timeline"
+        onWheel={interruptJumpToBottom}
+        onTouchStart={interruptJumpToBottom}
+        onPointerDown={interruptJumpToBottom}
+        onKeyDown={event => {
+          if (['ArrowUp', 'ArrowDown', 'PageUp', 'PageDown', 'Home', 'End', ' '].includes(event.key)) interruptJumpToBottom();
+        }}
         onScroll={(event) => {
           const element = event.currentTarget;
-          if (stickToBottomRef.current) setSeenThrough(latestSequenceRef.current);
-          stickToBottomRef.current = element.scrollHeight - element.scrollTop - element.clientHeight < STICK_TO_BOTTOM_PX;
-          if (stickToBottomRef.current) acknowledgeSoon();
+          const atBottom = element.scrollHeight - element.scrollTop - element.clientHeight < STICK_TO_BOTTOM_PX;
+          if (atBottom) jumpingToBottomRef.current = false;
+          stickToBottomRef.current = jumpingToBottomRef.current || atBottom;
+          setNearBottom(atBottom);
+          jumpDown.onScroll(element.scrollTop - previousScrollTop.current, atBottom);
+          previousScrollTop.current = element.scrollTop;
+          if (atBottom) acknowledgeSoon();
         }}
         className="min-h-0 flex-1 overflow-y-auto px-5 pb-4 pt-4"
       >
@@ -1360,6 +1401,7 @@ function BotGroupChatContent({ groupId, direct }: { groupId: string; direct: boo
                   shareScope={shareScope}
                   sharing={sharing}
                   reactionGroupId={group.serverBacked && !direct ? group.id : undefined}
+                  readersEnabled={group.serverBacked && !direct && group.supportsMessageReaders === true}
                   reactionRevision={messageReactionRevision(group, message.id)}
                   readOnly={Boolean(group.archived || group.dissolvedAt)}
                   quoteDisplay={quoteDisplays.get(message.id)?.display}
@@ -1425,49 +1467,58 @@ function BotGroupChatContent({ groupId, direct }: { groupId: string; direct: boo
 
         </div>
       </div>
-      <div className="relative h-0 shrink-0" inert={newMessageCount <= 0}>
-        <NewMessageIndicator visible={newMessageCount > 0} count={newMessageCount} bottomOffset={12} onClick={() => {
-          const element = scrollRef.current;
-          if (!element) return;
-          stickToBottomRef.current = true;
-          element.scrollTop = element.scrollHeight;
-          acknowledge();
-        }} />
+      <div className="relative shrink-0">
+        {/* Keep the shared bubbles mounted and their space reserved while navigation takes the slot. */}
+        <div data-group-bottom-bubbles inert={messageNavigationVisible}
+          className={cn('shrink-0', messageNavigationVisible && 'invisible')}>
+          {(group.threads?.length || personalMask) && !sharing && !group.archived ? (
+            // Floats over the bottom of the timeline, at the column's right edge (bot-group-chat.md §10).
+            <div className="relative h-0 shrink-0 px-5">
+              <div className="pointer-events-none relative mx-auto h-0 w-full max-w-[760px] px-2">
+                <BotGroupThreadHint suppressed={messageNavigationVisible} key={group.id} threads={group.threads ?? []} members={group.members} openRootId={threadRootId}
+                  onOpen={rootId => onOpenThread(rootId)} mentions={personalMask?.unreadMentions} onLocateMention={locateMention}
+                  onReadMentions={personalMask ? () => personalMask.markMentionsRead() : undefined} saving={personalMask?.saving} />
+              </div>
+            </div>
+          ) : null}
+          {hasControlledBanner && (
+            // Like teammate chats, keep the collapsed breathing light above the composer.
+            <div className="shrink-0 px-5 pt-2">
+              <div className="mx-auto flex w-full max-w-[760px] justify-center px-2">
+                <ControlledBanner placement="composer" sessionId={controlledBannerKey} />
+              </div>
+            </div>
+          )}
+        </div>
+        {!sharing && <div className="relative h-0">
+          <div inert={nearBottom || newMessageCount <= 0}>
+            <NewMessageIndicator visible={!nearBottom && newMessageCount > 0} count={newMessageCount}
+              bottomOffset={indicatorBottomOffset} onClick={jumpToBottom} />
+          </div>
+          <div inert={nearBottom || newMessageCount > 0 || !jumpDown.visible}>
+            <JumpToBottomChip visible={!nearBottom && newMessageCount === 0 && jumpDown.visible}
+              bottomOffset={indicatorBottomOffset} onClick={jumpToBottom} />
+          </div>
+        </div>}
+        <div data-chat-composer-stack>
+          {sharing ? <ShareSelectionBar sessionId={shareScope} barWidth="100%"
+            getContentWidth={() => contentRef.current?.querySelector('article')?.getBoundingClientRect().width ?? 760} /> : group.archived || group.dissolvedAt ? <p className="border-t border-[var(--border-default)] p-4 text-center text-13 text-[var(--text-tertiary)]">{t(group.dissolvedAt ? 'bots.groupChat.lifecycle.dissolved' : 'bots.groupChat.server.settings.archived')}</p> : <BotGroupComposer allowMentionAllBots={group.supportsMentionAudiences === true && group.allowMentionAllBots === true}
+            groupId={group.id}
+            conversationKind={direct ? 'direct' : undefined}
+            draftKey={attachmentScope}
+            members={group.members}
+            running={running}
+            planState={botGroupComposerPlanState(openPlan, group.replyMode)}
+            divisionSteps={!!group.singleSpeaker}
+            attachments={attachmentState}
+            attachmentScope={attachmentScope}
+            dragOver={dragOver}
+            quote={quoteDraft ? { view: quoteDraft, display: resolveBotGroupQuote(quoteDraft, quoteSources) } : null}
+            onQuoteChange={setQuoteDraft}
+            onSending={onSending}
+          />}
+        </div>
       </div>
-      {hasControlledBanner && (
-        // Like teammate chats, keep the collapsed breathing light above the composer.
-        <div className="shrink-0 px-5 pt-2">
-          <div className="mx-auto flex w-full max-w-[760px] justify-center px-2">
-            <ControlledBanner placement="composer" sessionId={controlledBannerKey} />
-          </div>
-        </div>
-      )}
-      {(group.threads?.length || personalMask) && !sharing && !group.archived ? (
-        // Floats over the bottom of the timeline, at the column's right edge (bot-group-chat.md §10).
-        <div className="relative h-0 shrink-0 px-5">
-          <div className="pointer-events-none relative mx-auto h-0 w-full max-w-[760px] px-2">
-            <BotGroupThreadHint key={group.id} threads={group.threads ?? []} members={group.members} openRootId={threadRootId}
-              onOpen={rootId => onOpenThread(rootId)} mentions={personalMask?.unreadMentions} onLocateMention={locateMention}
-              onReadMentions={personalMask ? () => personalMask.markMentionsRead() : undefined} saving={personalMask?.saving} />
-          </div>
-        </div>
-      ) : null}
-      {sharing ? <ShareSelectionBar sessionId={shareScope} barWidth="100%"
-        getContentWidth={() => contentRef.current?.querySelector('article')?.getBoundingClientRect().width ?? 760} /> : group.archived || group.dissolvedAt ? <p className="border-t border-[var(--border-default)] p-4 text-center text-13 text-[var(--text-tertiary)]">{t(group.dissolvedAt ? 'bots.groupChat.lifecycle.dissolved' : 'bots.groupChat.server.settings.archived')}</p> : <BotGroupComposer allowMentionAllBots={group.supportsMentionAudiences === true && group.allowMentionAllBots === true}
-        groupId={group.id}
-        conversationKind={direct ? 'direct' : undefined}
-        draftKey={attachmentScope}
-        members={group.members}
-        running={running}
-        planState={botGroupComposerPlanState(openPlan, group.replyMode)}
-        divisionSteps={!!group.singleSpeaker}
-        attachments={attachmentState}
-        attachmentScope={attachmentScope}
-        dragOver={dragOver}
-        quote={quoteDraft ? { view: quoteDraft, display: resolveBotGroupQuote(quoteDraft, quoteSources) } : null}
-        onQuoteChange={setQuoteDraft}
-        onSending={onSending}
-      />}
       {group.migrationPending && <p role="status" className="px-4 py-2 text-13 text-[var(--text-secondary)]">{t('bots.groupChat.migrationPending')}</p>}
       {/* Whole-page drop hint, as over a task's chat area; the card repeats it. */}
       {dragOver ? (

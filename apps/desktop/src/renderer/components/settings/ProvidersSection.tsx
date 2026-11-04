@@ -3212,11 +3212,7 @@ export function ProvidersSection() {
       {catalogError && <LocalModelCatalogNotice failure={catalogError} onRetry={refetch} />}
       {!loading && (
         <div
-          className="flex min-h-0 flex-1 overflow-hidden rounded-xl border"
-          style={{
-            backgroundColor: 'var(--settings-theme-card-bg)',
-            borderColor: 'var(--settings-theme-card-border)',
-          }}
+          className="flex min-h-0 flex-1 overflow-hidden rounded-xl border border-[var(--settings-theme-card-border)] bg-[var(--settings-theme-card-bg)]"
         >
           {/* 左栏 */}
           <div

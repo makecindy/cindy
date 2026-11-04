@@ -117,6 +117,7 @@ const dirDepositMock = vi.fn(() => ({ ok: true, receipt: { token: 'dir-ticket' }
 const saveDepositMock = vi.fn(() => ({ ok: true, receipt: { token: 'save-ticket' } }));
 const liveGrantStateMock = vi.fn();
 const alsSessionContextMock = vi.fn();
+const cardRegisterMock = vi.hoisted(() => vi.fn());
 const resolvedAttachmentOrigins: Array<'user' | 'tool' | undefined> = [];
 
 vi.mock('electron', () => ({ app: { getPath: () => tmpUserData } }));
@@ -142,7 +143,8 @@ vi.mock('../../logger.js', () => ({
   createLogger: () => ({ info: logInfoMock, warn: logWarnMock, error: () => {}, debug: () => {} }),
 }));
 // Claude 走建线闭包 ctx；Codex / Pi 用此 mock 模拟 HTTP bridge 的 ALS 恢复。
-vi.mock('@cindy/mcps', () => ({
+vi.mock('@cindy/mcps', async (importOriginal) => ({
+  resolveLiziMcpSessionContext: (await importOriginal<typeof import('@cindy/mcps')>()).resolveLiziMcpSessionContext,
   getLiziMcpSessionContext: () => alsSessionContextMock(),
 }));
 
@@ -187,7 +189,10 @@ const sessionSnapshotMock = vi.fn(async (): Promise<{
   remoteHostId: null,
 }));
 vi.mock('../../cindy-brain/index.js', () => ({
-  getGhostManager: () => ({ list: listMock, readApprovedInstallReceipt: approvedReceiptMock, managedRootDirs: () => [] }),
+  getGhostManager: () => ({ list: listMock,
+    findInstalledInstance: (id: string) => listMock().find(ghost => installedGhostStoragePart(ghost as InstalledGhost) === id),
+    readApprovedInstallReceipt: approvedReceiptMock, managedRootDirs: () => [] }),
+  listInstalledGhostsAsync: async () => listMock(),
   ghostForgeForbiddenRootDirs: () => [],
   listAvailableGhostsForAuthorization: () => listMock(),
   findAvailableGhostForAuthorization: (id: string) =>
@@ -196,7 +201,7 @@ vi.mock('../../cindy-brain/index.js', () => ({
   acquireGhostMutationLeaseForMcp: acquireMutationLeaseMock,
   installOrUpdateLocalGhostPackageFromForge: forgeInstallPackageMock,
   getGhostPipeDispatcher: () => ({ callGhostTool: dispatchMock }),
-  getGhostCardService: () => ({ registerCall: () => {}, finalizeCall: () => null }),
+  getGhostCardService: () => ({ registerCall: cardRegisterMock, finalizeCall: () => null, isTurnEnd: () => false }),
   getGhostSetupAssessment: setupAssessmentMock,
   isGhostAvailableForActiveSession: activeSessionAvailableMock,
   getGhostHandoffStore: () => handoffHolder.store,
@@ -467,6 +472,7 @@ beforeEach(() => {
   liveGrantStateMock.mockReturnValue({ permissionMode: 'auto', remoteHostId: null, isCurrent: () => true });
   callCindyMediaMock.mockReset();
   alsSessionContextMock.mockReset();
+  cardRegisterMock.mockClear();
   logWarnMock.mockClear();
   logInfoMock.mockClear();
   releaseMutationMock.mockClear();
@@ -3861,6 +3867,19 @@ describe('plugin page audience and shared tool execution', () => {
     const business = { content: [{ id: 1 }], _meta: { business: 'legacy' } };
     dispatchMock.mockResolvedValueOnce({ ok: true, result: business } as never);
     expect(await makeDeps().callGhostTool({ ghostId: 'art', tool: 'run', args: {} })).toMatchObject({ ok: true, result: business });
+  });
+  // Unit: a task woken by another task's tool call (send_to_session) started its Claude process
+  // inside the waker's async context; its plugin cards were then recorded under the waker, so the
+  // phone could not open them. A Claude server's own task context wins over that ambient context.
+  it('attributes a Claude task call to its own task, not to an ambient context from the task that woke it', async () => {
+    const ghost = pageGhost(); delete ghost.manifest.mcpApps;
+    listMock.mockReturnValue([ghost]);
+    const deps = makeDeps('claude-code', 's1');
+    alsSessionContextMock.mockReturnValue({ sessionId: 'waking-task', sessionInstanceId: 'waking-instance', workingDir: '/other' });
+    expect(await deps.callGhostTool({ ghostId: 'art', tool: 'run', args: {} })).toMatchObject({ ok: true });
+    expect(dispatchMock).toHaveBeenCalledWith(expect.objectContaining({ sessionId: 's1' }));
+    expect(cardRegisterMock).toHaveBeenCalledTimes(1);
+    expect(cardRegisterMock).toHaveBeenCalledWith(expect.any(String), expect.objectContaining({ sessionId: 's1', sessionInstanceId: 's1-instance' }));
   });
   it('uses the explicit card task context and still enforces its workdir gate', async () => {
     const { withPluginPageTicket, consumePluginPageTicket } = await import('../../mcp-apps/pluginPageCall.js');
