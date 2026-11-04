@@ -989,20 +989,27 @@ describe('unsupported native tool references (#8593)', () => {
         content: [{ type: 'tool_reference', tool_name: 'lookup' }, { type: 'text', text: 'found' }] }] },
     ],
   };
-  it('preserves native tool references when a different recovery rule retries', async () => {
+  it.each(['encrypted', 'empty-thinking'] as const)('preserves native tool references when %s recovery retries', async kind => {
+    const error = kind === 'encrypted' ? ENC_ERROR_BODY
+      : JSON.stringify({ error: { message: 'each thinking block must contain thinking' } });
     const upstream = await startFakeUpstream((index, _raw, res) => {
       res.writeHead(index === 0 ? 400 : 200, { 'content-type': 'application/json' });
-      res.end(index === 0 ? ENC_ERROR_BODY : JSON.stringify({ ok: true }));
+      res.end(index === 0 ? error : JSON.stringify({ ok: true }));
     });
     upstreamClose = upstream.close;
     proxy = await createAnthropicCompatProxy({ upstream: upstream.url, transformRequest: [],
-      recoveryRules: [createEncryptedContentRecoveryRule({ enabled: () => true }), createToolReferenceRecoveryRule()] });
-    const response = await post(proxy.url, { ...request, encrypted_content: 'ciphertext' });
+      recoveryRules: [createEncryptedContentRecoveryRule({ enabled: () => true }), createEmptyThinkingRecoveryRule(),
+        createToolReferenceRecoveryRule()] });
+    const input = kind === 'encrypted' ? { ...request, encrypted_content: 'ciphertext' }
+      : { ...request, messages: [{ role: 'assistant', content: [{ type: 'thinking', thinking: '' },
+        ...request.messages[1]!.content] }, request.messages[2]] };
+    const response = await post(proxy.url, input);
     expect(response.status).toBe(200);
     expect(upstream.bodies).toHaveLength(2);
     const retried = JSON.parse(upstream.bodies[1]!);
     expect(retried.encrypted_content).toBeUndefined();
-    expect(retried.messages).toEqual(request.messages);
+    expect(retried.messages).toEqual(kind === 'encrypted' ? request.messages
+      : [{ role: 'assistant', content: request.messages[1]!.content }, request.messages[2]]);
     expect(retried.tools).toEqual(request.tools);
   });
   it.each(['unsupported', 'supported', 'unrelated-error'] as const)('%s upstream preserves the retry boundary', async mode => {
