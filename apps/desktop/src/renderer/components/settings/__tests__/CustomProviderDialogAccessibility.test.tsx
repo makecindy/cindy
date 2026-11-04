@@ -3,7 +3,7 @@ import { useRef, useState } from 'react';
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
-import { BUNDLED_CATALOG, buildUserProvider, type CustomProviderConfig, type ProviderPreset, type ModelRegistry } from '@cindy/model-providers';
+import { BUNDLED_CATALOG, buildUserProvider, unifiedModelEntries, type CustomProviderConfig, type ProviderPreset, type ModelRegistry } from '@cindy/model-providers';
 import { customProviderModelConfigFromCatalogModel } from '@/lib/customProviders';
 
 import { ProviderConnectionDialog } from '../ProviderConnectionDialog';
@@ -2775,4 +2775,93 @@ it('starts manual models and advanced fields closed without hiding model discove
   fireEvent.click(screen.getByRole('button', { name: 'settings.providers.custom.advanced.label' }));
   expect(screen.getByText('settings.providers.custom.fields.headers')).toBeTruthy();
   await act(async () => {});
+});
+
+describe('Magpie source metadata through the connection form', () => {
+  const source = { kind: 'magpie' as const, providerId: 'channel-a', label: 'Channel A', snapshotId: 'snapshot-new' };
+  const discovered = ['chatgpt/foo', 'foo', 'xai/foo'].map(id => ({
+    id, name: id, discoveredSource: source, discoverySnapshotId: 'snapshot-new', opaqueModelId: true as const,
+  }));
+
+  it.each((['claude-code', 'codex', 'pi'] as const).flatMap(agent => [
+    { agent, editing: true }, { agent, editing: false },
+  ]))('retains exact IDs and source receipts through fetch, selection and save for $agent (editing=$editing)', async ({ agent, editing }) => {
+    customProviderMocks.readCustomProviderKey.mockResolvedValue(null);
+    window.electronAPI.maker.fetchProviderModels = vi.fn().mockResolvedValue({ ok: true, models: discovered });
+    const initial: CustomProviderConfig = { id: 'magpie-form', name: 'Magpie', auth: { method: 'none' }, runtimes: {
+      [agent]: { baseUrl: 'http://127.0.0.1:1234/v1', models: discovered.map(({ id, name }) => ({ id, name })) },
+    } };
+    render(<ProviderConnectionDialog initial={editing ? initial : undefined} focusAgent={agent} onSaved={vi.fn()} onClose={vi.fn()} />);
+    if (editing) await waitFor(() => expect(customProviderMocks.readCustomProviderKey).toHaveBeenCalled());
+    else {
+      await waitForInitialDialogFocus();
+      fireEvent.change(screen.getByPlaceholderText('settings.providers.custom.fields.namePlaceholder'), { target: { value: 'Magpie' } });
+      fireEvent.change(screen.getByPlaceholderText('settings.providers.custom.fields.baseUrlPlaceholder'), { target: { value: 'http://127.0.0.1:1234/v1' } });
+    }
+    fireEvent.click(screen.getByRole('button', { name: 'settings.providers.custom.fetch.button' }));
+    await screen.findByRole('heading', { name: 'settings.providers.custom.fetch.pickerTitle' });
+    if (!editing) for (const checkbox of screen.getAllByRole('checkbox')) fireEvent.click(checkbox);
+    fireEvent.click(screen.getByRole('button', { name: 'settings.providers.custom.fetch.confirm' }));
+    fireEvent.click(screen.getByRole('button', { name: 'settings.providers.custom.save' }));
+    const save = editing ? customProviderMocks.updateCustomProvider : customProviderMocks.createCustomProvider;
+    await waitFor(() => expect(save).toHaveBeenCalledOnce());
+    const saved = save.mock.calls[0][0] as CustomProviderConfig;
+    expect(saved.runtimes[agent]!.models).toEqual(discovered.map(model => expect.objectContaining(model)));
+    const provider = { ...buildUserProvider(saved), connected: true };
+    expect(provider.models[agent]!.map(model => model.id)).toEqual(discovered.map(model => model.id));
+    expect(provider.models[agent]!.every(model => model.discoveredSource?.label === 'Channel A' && model.opaqueModelId)).toBe(true);
+    const entries = unifiedModelEntries({ providers: [provider], agents: [agent] });
+    expect(entries.map(entry => entry.capabilities[agent]!.wireModelId)).toEqual(discovered.map(model => model.id));
+  });
+
+  it('clears a disappeared source on successful refresh while retaining opaque identity and unlisted manual rows', async () => {
+    customProviderMocks.readCustomProviderKey.mockResolvedValue(null);
+    window.electronAPI.maker.fetchProviderModels = vi.fn().mockResolvedValue({ ok: true, models: [
+      { id: 'foo', name: 'foo', discoverySnapshotId: 'snapshot-no-source' },
+    ] });
+    const initial: CustomProviderConfig = { id: 'magpie-form', name: 'Magpie', auth: { method: 'none' }, runtimes: {
+      codex: { baseUrl: 'http://127.0.0.1:1234/v1', models: [discovered[1], { ...discovered[0], name: 'Manual override' }] },
+    } };
+    render(<ProviderConnectionDialog initial={initial} onSaved={vi.fn()} onClose={vi.fn()} />);
+    await waitFor(() => expect(customProviderMocks.readCustomProviderKey).toHaveBeenCalled());
+    fireEvent.click(screen.getByRole('button', { name: 'settings.providers.custom.fetch.button' }));
+    await screen.findByRole('heading', { name: 'settings.providers.custom.fetch.pickerTitle' });
+    fireEvent.click(screen.getByRole('button', { name: 'settings.providers.custom.fetch.confirm' }));
+    fireEvent.click(screen.getByRole('button', { name: 'settings.providers.custom.save' }));
+    await waitFor(() => expect(customProviderMocks.updateCustomProvider).toHaveBeenCalledOnce());
+    const models = customProviderMocks.updateCustomProvider.mock.calls[0][0].runtimes.codex.models;
+    expect(models.find((model: { id: string }) => model.id === 'foo')).toMatchObject({ opaqueModelId: true, discoverySnapshotId: 'snapshot-no-source' });
+    expect(models.find((model: { id: string }) => model.id === 'foo').discoveredSource).toBeUndefined();
+    expect(models.find((model: { id: string }) => model.id === 'chatgpt/foo')).toMatchObject({ ...discovered[0], name: 'Manual override' });
+  });
+});
+
+it.each(['unchanged', 'missing-source', 'changed-context-failure'] as const)('keeps automatic-discovery source receipts scoped to the current form context: %s', async scenario => {
+  vi.useFakeTimers();
+  try {
+    const source = { kind: 'magpie' as const, providerId: 'channel-a', label: 'Channel A', snapshotId: 'auto-first' };
+    const models = [{ id: 'chatgpt/foo', name: 'foo', opaqueModelId: true, discoveredSource: source, discoverySnapshotId: 'auto-first' }];
+    const detectProvider = vi.fn().mockResolvedValue({ candidates: [], reason: 'insufficient_evidence', catalog: { ok: true, models } });
+    window.electronAPI.maker.detectProvider = detectProvider;
+    render(<ProviderConnectionDialog focusAgent="pi" onDetected={vi.fn()} onSaved={vi.fn()} onClose={vi.fn()} />);
+    await act(async () => {});
+    fireEvent.change(screen.getByPlaceholderText('settings.providers.custom.fields.baseUrlPlaceholder'), { target: { value: 'https://gateway.example.test/v1' } });
+    fireEvent.change(screen.getByPlaceholderText('settings.providers.custom.fields.apiKeyPlaceholder'), { target: { value: 'fake-first' } });
+    await act(async () => { await vi.advanceTimersByTimeAsync(400); });
+    if (scenario !== 'unchanged') {
+      detectProvider.mockResolvedValue({ candidates: [], reason: 'insufficient_evidence', catalog: scenario === 'missing-source'
+        ? { ok: true, models: [{ id: 'chatgpt/foo', name: 'foo', discoverySnapshotId: 'auto-second' }] }
+        : { ok: false, code: 'AUTH_INVALID' } });
+      fireEvent.change(screen.getByPlaceholderText('settings.providers.custom.fields.apiKeyPlaceholder'), { target: { value: 'fake-second' } });
+      await act(async () => { await vi.advanceTimersByTimeAsync(400); });
+    }
+    fireEvent.change(screen.getByPlaceholderText('settings.providers.custom.fields.namePlaceholder'), { target: { value: 'Gateway' } });
+    fireEvent.click(screen.getByRole('button', { name: 'settings.providers.connection.saveProvider' }));
+    await act(async () => {});
+    expect(customProviderMocks.createCustomProvider).toHaveBeenCalledOnce();
+    const saved = customProviderMocks.createCustomProvider.mock.calls[0][0].runtimes.pi.models[0];
+    expect(saved).toMatchObject({ id: 'chatgpt/foo', opaqueModelId: true });
+    expect(saved.discoveredSource).toEqual(scenario === 'unchanged' ? source : undefined);
+    expect(saved.discoverySnapshotId).toBe(scenario === 'unchanged' ? 'auto-first' : scenario === 'missing-source' ? 'auto-second' : undefined);
+  } finally { vi.useRealTimers(); }
 });

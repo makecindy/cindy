@@ -415,8 +415,8 @@ describe('browserExtensionSlot · 管子上行', () => {
       }),
     });
     slot.reconcile(ghosts);
-    // Windows CI can finish policy-file IO after 25ms; wait for the observable
-    // installation boundary instead of guessing when bridge startup has run.
+    // CI run 41580150352: policy I/O can outlast settle's 25 ms on Windows.
+    // Wait for the initial installation before testing status-driven retries.
     await vi.waitFor(() => expect(installs).toBe(1));
     // A manually paired bridge remains usable while optional native registration is unavailable.
     expect(slot.getPageControl()).toMatchObject({ bridge: bridges[0], instanceId: '_root__my-browser' });

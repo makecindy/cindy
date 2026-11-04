@@ -122,8 +122,11 @@ import { useTurnChangeSets } from './useTurnChangeSets';
 import {
   canCompensateMessageHeight,
   findRenderItemElement,
+  isRestoredScrollTakeover,
+  measureRestoredScrollGeometry,
   rememberedItemIntrinsicSize,
   viewportAnchorCorrection,
+  type RestoredScrollGeometry,
 } from './messageViewportCompensation';
 import { isEditableKeyboardTarget } from '@/lib/editableKeyboardTarget';
 import { createLogger } from '@/lib/logger';
@@ -165,12 +168,6 @@ import { isValidPluginNamespace } from '@cindy/plugin-protocol';
 // logToMain 照样走 IPC 再被 main 按级别丢弃,每次切换白付两次 IPC。无 PII。
 const perfLog = createLogger('perf/session-switch');
 
-// jump-down chip 静止隐藏时长 — 用户向下滚动停止后多久淡出。2s 是用户要求,
-// 与 prev-msg-jump 的 IDLE_HIDE_MS=3000 区分(向上 chip 显示更长方便回看,
-// 向下 chip 是快捷跳转 affordance,短一些不打扰)。
-const JUMP_DOWN_IDLE_MS = 2000;
-// 方向判断死区 — 1px 内的 scrollTop 变化不算方向。
-const SCROLL_DIRECTION_DEAD_ZONE_PX = 1;
 const TOUCH_HISTORY_INTENT_THRESHOLD_PX = 8;
 const HISTORY_NAVIGATION_KEYS: ReadonlySet<string> = new Set(['PageUp', 'ArrowUp', 'Home']);
 
@@ -384,6 +381,7 @@ import { PrevMessageJumpChip, firstNonEmptyLine } from './PrevMessageJumpChip';
 import { useTopRightChipSlot } from './TopRightChipStack';
 import { usePrevUserMessageInView } from './usePrevUserMessageInView';
 import { JumpToBottomChip } from './JumpToBottomChip';
+import { SCROLL_DIRECTION_DEAD_ZONE_PX, useJumpToBottomVisibility } from './useJumpToBottomVisibility';
 import { MessageNavRail } from './MessageNavRail';
 import {
   NAV_RAIL_BACKFILL_MAX_ROUNDS,
@@ -3135,6 +3133,7 @@ export function MessageStream({
     restoreSnapshotRef.current ? restoreSnapshotRef.current.isNearBottom === false : false,
   );
   const restoreLoadRef = useRef<'idle' | 'pending' | 'loaded' | 'failed' | 'settled'>('idle');
+  const restoredScrollGeometryRef = useRef<RestoredScrollGeometry | null>(null);
   const restoreMountedRef = useRef(false);
   const [restoreRevision, setRestoreRevision] = useState(0);
   const restoreCancelledRef = useRef(false);
@@ -4329,6 +4328,7 @@ export function MessageStream({
     ) {
       restoreLoadRef.current = 'settled';
       refreshViewportAnchor();
+      restoredScrollGeometryRef.current = measureRestoredScrollGeometry(container, target);
       return true;
     }
     const cTop = container.getBoundingClientRect().top;
@@ -4338,11 +4338,13 @@ export function MessageStream({
     if (Math.abs(delta) < 1) {
       restoreLoadRef.current = 'settled';
       refreshViewportAnchor();
+      restoredScrollGeometryRef.current = measureRestoredScrollGeometry(container, target);
       return true;
     }
     const generation = beginProgrammaticScroll();
     container.scrollTop += delta;
     restoreLoadRef.current = 'settled';
+    restoredScrollGeometryRef.current = measureRestoredScrollGeometry(container, target);
     requestAnimationFrame(() => {
       if (finishProgrammaticScroll(generation) === false) refreshViewportAnchor();
     });
@@ -4717,21 +4719,8 @@ export function MessageStream({
 
   // ── jump-to-bottom chip ──
   // 用户向下滚动且未到底时显示扁平的"跳到底部" chip,2s 内无滚动自动隐藏。
-  // 与 NewMessageIndicator 互斥(它有未读时优先)。state 用 setter 直接控制,
-  // timer 走 ref 持有句柄方便 reset / cleanup。
-  const [showJumpDown, setShowJumpDown] = useState(false);
-  const jumpDownIdleTimerRef = useRef<number | null>(null);
-
-  // 卸载时清掉 idle timer 防泄漏
-  useEffect(
-    () => () => {
-      if (jumpDownIdleTimerRef.current !== null) {
-        window.clearTimeout(jumpDownIdleTimerRef.current);
-        jumpDownIdleTimerRef.current = null;
-      }
-    },
-    [],
-  );
+  // 与 NewMessageIndicator 互斥(它有未读时优先)，与群聊共用显隐策略。
+  const { visible: showJumpDown, onScroll: updateJumpDown } = useJumpToBottomVisibility();
 
   // ── chip-jump expand/load 抑制 ──
   // chip click 跳转的 smooth scroll 期间,如果路径穿过 scrollTop<50 会触发
@@ -4773,8 +4762,8 @@ export function MessageStream({
   );
   // wheel/touch/键盘接管：结束当前 smooth，但让期间延期的删除补偿重放。
   const clearChipJumpSuppression = useCallback(() => {
-    // Only input intent ends restoration. Chromium's intrinsic-size correction
-    // also emits scroll events and must not be mistaken for a user scroll.
+    // Direct input (or a settled, layout-stable chained scroll) ends restoration.
+    // Chromium's intrinsic-size corrections must still preserve the anchor.
     restoringRef.current = false;
     suppressHeightCompensationUntilRef.current = 0;
     disclosureAnchorRef.current = null;
@@ -5911,9 +5900,18 @@ export function MessageStream({
 
     const draggingScrollbar = scrollbarDragStartTopRef.current != null;
     if (restoringRef.current && !draggingScrollbar) {
-      applyRestoreRef.current();
-      prevScrollTopRef.current = el.scrollTop;
-      return;
+      if (isRestoredScrollTakeover(
+        el, restoredScrollGeometryRef.current,
+        restoreLoadRef.current === 'settled', programmaticScrollRef.current,
+      )) {
+        // An iframe's chained wheel never reached onWheel. Let the normal
+        // scroll path save this new reading position and update follow intent.
+        clearChipJumpSuppression();
+      } else {
+        applyRestoreRef.current();
+        prevScrollTopRef.current = el.scrollTop;
+        return;
+      }
     }
     const draggingUp =
       draggingScrollbar &&
@@ -5995,31 +5993,7 @@ export function MessageStream({
           }
         }
       }
-      if (effectiveNearBottom) {
-        // 到底了:无论方向都隐藏 chip,清掉 timer
-        if (jumpDownIdleTimerRef.current !== null) {
-          window.clearTimeout(jumpDownIdleTimerRef.current);
-          jumpDownIdleTimerRef.current = null;
-        }
-        setShowJumpDown((cur) => (cur ? false : cur));
-      } else if (delta > SCROLL_DIRECTION_DEAD_ZONE_PX) {
-        // 向下滚 + 未到底:显示 chip,reset idle timer
-        setShowJumpDown((cur) => (cur ? cur : true));
-        if (jumpDownIdleTimerRef.current !== null) {
-          window.clearTimeout(jumpDownIdleTimerRef.current);
-        }
-        jumpDownIdleTimerRef.current = window.setTimeout(() => {
-          jumpDownIdleTimerRef.current = null;
-          setShowJumpDown(false);
-        }, JUMP_DOWN_IDLE_MS);
-      } else if (delta < -SCROLL_DIRECTION_DEAD_ZONE_PX) {
-        // 向上滚:立即隐藏 chip(用户改变方向了,跳底意图消失)
-        if (jumpDownIdleTimerRef.current !== null) {
-          window.clearTimeout(jumpDownIdleTimerRef.current);
-          jumpDownIdleTimerRef.current = null;
-        }
-        setShowJumpDown((cur) => (cur ? false : cur));
-      }
+      updateJumpDown(delta, effectiveNearBottom);
 
       // render-window-bidirectional 要点 5: 向下扩窗。
       // 用户向下滚动接近当前窗口下缘时，扩 anchoredForwardItems 纳入更多 item。
@@ -6089,6 +6063,7 @@ export function MessageStream({
     prevScrollTopAtLoadRef.current = el.scrollTop;
     onLoadMore();
   }, [
+    updateJumpDown,
     onLoadMore,
     isLoadingMore,
     hasMoreMessages,
@@ -6106,6 +6081,7 @@ export function MessageStream({
     setAnchoredForwardItems,
     sessionId,
     unpinAutoFollowForUserUpIntent,
+    clearChipJumpSuppression,
   ]);
 
   // 渲染窗口下移到 render-item 轴后,U2 "末尾窗口全是 orphan tool_result"
@@ -6363,7 +6339,7 @@ export function MessageStream({
     previousLocalFileRefsRef.current = localFileRefs;
   }, [localFileRefs]);
 
-  // 伙伴聊天的工作过程与回复正文同列：只占头像宽度，不重复画脸。memo 住以保持
+  // 伙伴聊天的工作过程、成果与回复正文同列：只占头像宽度，不重复画脸。memo 住以保持
   // WorkGroupRenderItemView 的 memo 比较成立。
   const botReplyColumnSpacer = useMemo(
     () =>
@@ -6373,6 +6349,14 @@ export function MessageStream({
         </span>
       ) : undefined,
     [assistantAvatar, simplifiedBotConversation],
+  );
+  const renderBotArtifacts = useCallback(
+    (content: ReactNode, renderItemKey?: string) => (
+      <div data-render-item-key={renderItemKey}>
+        {withAssistantAvatar(botReplyColumnSpacer, content)}
+      </div>
+    ),
+    [botReplyColumnSpacer],
   );
   const workGroupRenderContext = useMemo<WorkGroupRenderContext>(
     () => ({
@@ -6654,6 +6638,7 @@ export function MessageStream({
                         <GeneratedFilesCard
                           key={item.key}
                           renderItemKey={item.key}
+                          renderBotArtifacts={botReplyColumnSpacer ? renderBotArtifacts : undefined}
                           files={item.files}
                           turnStartMs={item.turnStartMs}
                           turnEndMs={item.turnEndMs}

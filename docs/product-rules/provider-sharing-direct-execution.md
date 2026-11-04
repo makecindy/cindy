@@ -160,8 +160,10 @@ host 候选；显式设置 `default` 仍生成 `.local`，`default_public_interf
 这解决了路由本身可达、但跨子网不能解析 mDNS 时的寻址缺口，不要求填写 IP。
 
 - 实现只使用 Chromium 的候选生成，不自行枚举网卡、补造候选、解析或重写本机／远端 SDP；
-  不改 ICE ufrag/password、DTLS fingerprint、信令身份或短期许可。原有 128 KiB SDP、16 个 peer、
+  不改 ICE ufrag/password、DTLS fingerprint、信令身份或短期许可。原有 128 KiB SDP 与
   15 秒协商预算继续生效。非法／超限描述仍由现有 bridge 和浏览器拒绝。
+  peer 容量与分类预留按[Device Link 局域网优先直连](../dev-rules/protocol-compatibility.md#device-link-局域网优先直连)
+  的统一预算维护，独立于供应商组的执行并发上限。
 - IP 只提供寻址，不授予访问权限。信令仍只发给已有授权链路中的 peer，分享、账号、成员、
   设备和许可检查不变；同账号设备使用同一数据窗口，也受此策略影响。不增加 STUN/TURN、
   全局 Chromium 开关、摄像头／麦克风权限或防火墙规则；文件与桌面音视频窗口保持原策略。

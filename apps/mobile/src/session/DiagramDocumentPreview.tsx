@@ -4,7 +4,7 @@ import { WebView } from "react-native-webview";
 import { useTranslation } from "react-i18next";
 import { Text } from "@/components/AppText";
 import { spacing, textStyles, useTheme } from "@/theme";
-import { PreviewIconButton } from "./PreviewChrome";
+import { PreviewIconButton, PreviewToolbar } from "./PreviewChrome";
 import { Minus, Plus, Scan } from "lucide-react-native";
 import {
   MermaidDiagramWebView,
@@ -47,15 +47,7 @@ export function DiagramDocumentPreview({
           zoomable
           deferSource
         />
-        <View
-          style={{
-            height: 56,
-            flexDirection: "row",
-            justifyContent: "center",
-            alignItems: "center",
-            backgroundColor: colors.surface,
-          }}
-        >
+        <PreviewToolbar>
           <PreviewIconButton
             icon={Minus}
             label={t("message.attachmentPreview.zoomOut")}
@@ -71,7 +63,7 @@ export function DiagramDocumentPreview({
             label={t("message.attachmentPreview.zoomIn")}
             onPress={() => diagram.current?.zoom(1.25)}
           />
-        </View>
+        </PreviewToolbar>
       </View>
     );
   if (failed)

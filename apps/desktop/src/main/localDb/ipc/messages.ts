@@ -2130,7 +2130,9 @@ export async function patchMessageAgentMetaWithResult(
   // 损坏的 JSON 以 {} 为底重建(补丁字段仍写入,旧字段无法挽救)。
   const previous = parseAgentMetaRecord(rows[0].agentMeta) ?? {};
   const next = { ...previous, ...patch };
-  await updateAgentMeta(sessionId, clientId, JSON.stringify(next));
+  // Keep the read and write on the same owner even if login changes across await.
+  await db.update(messages).set({ agentMeta: JSON.stringify(next) })
+    .where(and(eq(messages.sessionId, sessionId), eq(messages.clientId, clientId)));
   return { previous, next };
 }
 

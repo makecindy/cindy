@@ -85,7 +85,8 @@ export interface PrepareSessionEventDeps {
     decision: InteractionDecision | Record<string, unknown>,
   ) => void;
   readonly broadcastToAllWindows: (channel: string, payload: unknown) => void;
-  readonly broadcastCodexImageAsToolResult: (sessionId: string, event: AgentEvent) => Promise<void>;
+  /** Starts live delivery; resolves with the tool events it published (never rejects). */
+  readonly deliverCodexGeneratedImage: (sessionId: string, event: AgentEvent) => Promise<readonly AgentEvent[]>;
   readonly autoResumeBookkeeping: Pick<
     AutoResumeBookkeeping,
     'discardReplacementProvenByProviderEvent' | 'clearFailedTurnCompletionTail' | 'settleOutcome'
@@ -144,6 +145,9 @@ export function prepareSessionEvent(
   session: Session,
   event: AgentEvent,
 ) {
+  // Host projections (Session.holdEventStream follow-ups) were already persisted
+  // and published to renderers by the host that requested the hold.
+  if (event.hostProjection) return;
   // Exact patches are main-owned durable data. They have a dedicated summary push and
   // on-demand detail IPC; forwarding the raw diff through maker:event would duplicate a
   // potentially multi-megabyte payload to every renderer and device-link controller.
@@ -304,7 +308,12 @@ export function prepareSessionEvent(
     return;
   }
   if (event.type === 'image' && event.source === 'codex') {
-    if (!isQuietScheduledOutput(event)) void deps.broadcastCodexImageAsToolResult(session.id, event);
+    if (!isQuietScheduledOutput(event)) {
+      // Hold the stream until the stored result is published so IM / hook
+      // listeners receive it before this turn's done. A refused hold (not the
+      // loop's current event) leaves delivery running in the background as before.
+      session.holdEventStream(deps.deliverCodexGeneratedImage(session.id, event));
+    }
     return;
   }
   // turn 结束的 status event (isRunning=false + status='Done') 携带 endSnapshot。

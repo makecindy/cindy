@@ -14,6 +14,18 @@ export interface ControllerPresenceDirectoryDevice {
   isSelf?: unknown;
 }
 
+/** Data-path projection only; neither a retained path nor presence grants control. */
+export function resolveControllerPresence(
+  snapshot: { online: boolean; remoteControlEnabled: boolean },
+  retainedDirectPath: boolean,
+  previousAvailable: boolean | undefined,
+): { directOnline: boolean; online: boolean; available: boolean } {
+  const directOnline = !snapshot.online && retainedDirectPath;
+  const online = snapshot.online || directOnline;
+  const available = online && (directOnline ? previousAvailable === true : snapshot.remoteControlEnabled);
+  return { directOnline, online, available };
+}
+
 export function createControllerPresenceFreshnessTracker(): ControllerPresenceFreshnessTracker {
   return {
     epoch: 0,

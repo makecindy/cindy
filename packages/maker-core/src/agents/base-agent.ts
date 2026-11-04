@@ -1827,6 +1827,13 @@ export interface DeviceHostedSession {
    */
   guestProvider?: DeviceHostedGuestProvider;
   /**
+   * 任务所在电脑提供了这个任务的 Cindy 托管 Skill(内置与插件带的，已按那台的启用状态与伙伴授权过滤)。
+   * 存在时 Agent 不再加载本机的托管 Skill，受邀者也一样；缺省(旧控制端)时沿用原规则。
+   *  - claudePluginRoots：Claude Code 以本地插件挂载的目录(在影子目录里，保持 `cindy:` 等命名)；
+   *    Codex / Pi 的托管 Skill 已作为项目 Skill 放在影子目录，这里为空。
+   */
+  controllerManagedSkills?: { claudePluginRoots: string[] };
+  /**
    * 任务隧道的往来记录。托管会话里 Codex 每读一个项目文件都要过一次设备互联，慢链路下线程启动会
    * 合法地超过关键 RPC 的固定上限(#5764)：链路上还有往来就顺延等待，超时时把这里的计数写进错误说明。
    * 不提供时按固定上限。
