@@ -1661,6 +1661,125 @@ describe('PI durable subagent run store', () => {
         await expect(stopAllPiSubagentRunsForExit(agentHome, 0, { killUnresponsiveRunners: true }))
           .resolves.toBe(true);
       });
+
+      // #8736: a run whose status.json is corrupt and which never wrote a
+      // result.json (crash between the first status flush and the terminal
+      // write) permanently blocked login and account switching. The runner
+      // writes a write-once identity file at startup; recovery may use it as
+      // the process-identity source in place of the terminal receipt, under
+      // the same OS-inventory proof. Runs launched before the identity file
+      // existed still block, exactly as before.
+      async function identityHome(
+        write: (dir: string) => Promise<void>,
+        mutate?: (
+          draft: { identity: Record<string, unknown>; config: Record<string, unknown> },
+          dir: string,
+        ) => void,
+      ) {
+        fsKnobs.isolateProcfs = true;
+        childProcess.spawnSync.mockImplementation(() => ({ status: 0, stdout: inventory(['node unrelated.js']) }));
+        const agentHome = await homeWithUnreadableRun(write);
+        const root = piSubagentRunRoot(agentHome, 'session-1');
+        const dir = path.join(root, runId);
+        const task = { childId: 'child-1', sessionId: 'native-1', agent: 'scout' };
+        const config: Record<string, unknown> = {
+          version: 1, runId, runDir: dir, taskId: 'tool-1', parentSessionId: 'session-1',
+          cwd: dir, binary: 'pi', tasks: [task],
+        };
+        const identity: Record<string, unknown> = {
+          version: 1, runId, runnerInstanceId: 'runner-1',
+          runnerPid: 4242, runnerScript: path.join(dir, 'runner.cjs'), startedAt: 100,
+        };
+        mutate?.({ identity, config }, dir);
+        await writeFile(path.join(dir, 'config.json'), JSON.stringify(config));
+        await writeFile(path.join(dir, 'runner-identity.json'), JSON.stringify(identity));
+        return { agentHome, root, dir, config, identity };
+      }
+
+      const identityCases = [
+        ...cases,
+        ['contains zero bytes', async (dir: string) => writeFile(path.join(dir, 'status.json'), Buffer.alloc(72_506))],
+      ] satisfies typeof cases;
+      it.each(identityCases.flatMap(([label, write]) =>
+        (['linux', 'win32'] as const).map(platform => [platform, label, write] as const),
+      ))('on %s recovers from a runner identity file when status %s and no result exists, without changing history', async (platform, _label, write) => {
+        usePlatform(platform);
+        if (platform === 'linux' && process.geteuid === undefined) {
+          Object.defineProperty(process, 'geteuid', { configurable: true, value: () => 1000 });
+          restores.push(() => { Reflect.deleteProperty(process, 'geteuid'); });
+        }
+        const { agentHome, root, dir } = await identityHome(write);
+        const files = ['config.json', 'status.json', 'runner-identity.json'];
+        const before = await Promise.all(files.map(file => readFile(path.join(dir, file)).catch(() => null)));
+        await expect(stopAllPiSubagentRunsForExit(agentHome, 0, { hostPid: process.pid, killUnresponsiveRunners: true }))
+          .resolves.toBe(true);
+        await expect(stopPiSubagentRunsForAccountBoundary(root, { timeoutMs: 0 }))
+          .resolves.toBe(true);
+        const after = await Promise.all(files.map(file => readFile(path.join(dir, file)).catch(() => null)));
+        for (let index = 0; index < files.length; index += 1) {
+          const original = before[index]!;
+          const current = after[index]!;
+          expect(current === null ? original === null : original !== null && current.equals(original), files[index])
+            .toBe(true);
+        }
+        expect(existsSync(path.join(dir, 'controls'))).toBe(false);
+      });
+
+      type IdentityDraft = {
+        identity: Record<string, unknown>;
+        config: Record<string, unknown>;
+      };
+      const refusalMutations: Array<[string, (draft: IdentityDraft, dir: string) => void]> = [
+        ['another generation', ({ identity }) => { identity.runId = '123e4567-e89b-42d3-a456-426614174099'; }],
+        ['another version', ({ identity }) => { identity.version = 2; }],
+        ['a non-numeric pid', ({ identity }) => { identity.runnerPid = '4242'; }],
+        ['a script outside the run directory', ({ identity }, dir) => { identity.runnerScript = path.join(path.dirname(dir), 'runner.cjs'); }],
+        ['no child session to verify', ({ config }) => { config.tasks = []; }],
+        ['a config detached from its run directory', ({ config }, dir) => { config.runDir = path.dirname(dir); }],
+      ];
+      it.each(refusalMutations)('refuses a runner identity for %s', async (_label, mutate) => {
+        const { agentHome } = await identityHome(async () => {}, mutate);
+        await expect(stopAllPiSubagentRunsForExit(agentHome, 0, { killUnresponsiveRunners: true }))
+          .resolves.toBe(false);
+      });
+
+      it('does not follow a linked runner identity', async context => {
+        const { agentHome, dir } = await identityHome(async () => {});
+        const identityFile = path.join(dir, 'runner-identity.json');
+        const outside = path.join(agentHome, 'outside-identity.json');
+        await writeFile(outside, await readFile(identityFile));
+        await rm(identityFile);
+        try {
+          await symlink(outside, identityFile, 'file');
+        } catch (error) {
+          if (['EPERM', 'EACCES', 'ENOTSUP', 'ENOSYS'].includes((error as NodeJS.ErrnoException).code ?? '')) {
+            context.skip();
+            return;
+          }
+          throw error;
+        }
+        await expect(stopAllPiSubagentRunsForExit(agentHome, 0)).resolves.toBe(false);
+      });
+
+      it('keeps a runner identity in scope while its runner is alive', async () => {
+        const { agentHome, dir } = await identityHome(async () => {});
+        const command = `node ${path.join(dir, 'runner.cjs')} ${path.join(dir, 'config.json')}`;
+        childProcess.spawnSync.mockImplementation(() => ({ status: 0, stdout: inventory([command]) }));
+        await expect(stopAllPiSubagentRunsForExit(agentHome, 0, { killUnresponsiveRunners: true })).resolves.toBe(false);
+        // Process discovery never grants permission to signal an unverified PID.
+        expect(childProcess.spawnSync.mock.calls.some(call => call[0] === 'taskkill')).toBe(false);
+        childProcess.spawnSync.mockImplementation(() => ({ status: 0, stdout: inventory(['node unrelated.js']) }));
+        await expect(stopAllPiSubagentRunsForExit(agentHome, 0)).resolves.toBe(true);
+      });
+
+      it.each([
+        ['empty output', { status: 0, stdout: '' }],
+        ['failed probe', { status: 1, stdout: '' }],
+      ] as const)('does not treat %s as process exit for a runner identity', async (_label, probe) => {
+        const { agentHome } = await identityHome(async () => {});
+        childProcess.spawnSync.mockImplementation(() => probe);
+        await expect(stopAllPiSubagentRunsForExit(agentHome, 0)).resolves.toBe(false);
+      });
     });
   });
 
