@@ -32,6 +32,7 @@ import {
   GHOST_SUB_QUEUE_MAX,
   GHOST_CONTROL_POINTS,
   ghostControlPointActive,
+  ghostInstallApprovalToken,
   type GhostActivityEventName,
   type GhostControlPointData,
   type GhostControlPointFailureAction,
@@ -64,8 +65,11 @@ function parseModelRoute(value: unknown): GhostModelRoute | undefined {
   const model = text(r.model);
   const providerId = text(r.providerId);
   if (!agentKind || !model || !providerId) return undefined;
+  // A malformed explicit location must never become a local route.
+  const agentDeviceId = text(r.agentDeviceId);
+  if (r.agentDeviceId !== undefined && (!agentDeviceId || agentDeviceId.length > 128)) return undefined;
   const effort = text(r.effort);
-  return { agentKind, model, providerId, ...(effort ? { effort } : {}) };
+  return { agentKind, model, providerId, ...(agentDeviceId ? { agentDeviceId } : {}), ...(effort ? { effort } : {}) };
 }
 
 /** block 理由展示上限(超长截断,防意识用理由塞小作文)。 */
@@ -147,6 +151,10 @@ export type GhostAssistantScreenResult =
 export interface GhostSubscriptionGatewayDeps {
   /** 当前已装且启用的意识清单(现读跟随装卸/启停热更)。 */
   listGhosts(): InstalledGhost[];
+  /** Fresh asynchronous discovery for notifications; never an authorization cache. */
+  listGhostsAsync?(): Promise<InstalledGhost[]>;
+  /** Recheck the exact installation after asynchronous discovery. */
+  findGhostForDelivery?(id: string): InstalledGhost | null;
   /** 意识电子脑是否在跑。 */
   isRunning(ghostId: string): boolean;
   /** 按需拉起电子脑(幂等;失败 reject)。 */
@@ -208,6 +216,7 @@ interface PendingHook {
 export class GhostSubscriptionGateway {
   private readonly entries = new Map<string, SubEntry>();
   private readonly pendingHooks = new Map<string, PendingHook>();
+  private discovery: { owner: unknown; promise: Promise<InstalledGhost[]> } | null = null;
 
   constructor(private readonly deps: GhostSubscriptionGatewayDeps) {}
 
@@ -219,7 +228,37 @@ export class GhostSubscriptionGateway {
     name: GhostDidEventName,
     data: GhostDidEventData,
   ): void {
-    for (const ghost of this.deps.listGhosts()) {
+    if (this.deps.listGhostsAsync) {
+      const owner = this.captureOwnerScope();
+      if (!this.ownerScopeUsable(owner)) return;
+      // Only share work already in flight. The next burst reads fresh receipts.
+      if (this.discovery && !this.ownerScopeUsable(this.discovery.owner)) this.discovery = null;
+      const discovery = this.discovery ??= { owner, promise: this.deps.listGhostsAsync() };
+      void discovery.promise.then((ghosts) => {
+        if (!this.ownerScopeUsable(owner)) return;
+        this.publishTo(ghosts, topic, name, data);
+      }).catch(() => {
+        this.deps.log?.warn('ghost notification discovery failed');
+      }).finally(() => {
+        if (this.discovery === discovery) this.discovery = null;
+      });
+      return;
+    }
+    this.publishTo(this.deps.listGhosts(), topic, name, data);
+  }
+
+  private publishTo(
+    ghosts: InstalledGhost[],
+    topic: GhostSubscribeTopic,
+    name: GhostDidEventName,
+    data: GhostDidEventData,
+  ): void {
+    for (const candidate of ghosts) {
+      if (!candidate.enabled || !candidate.manifest.subscribe?.topics?.includes(topic)) continue;
+      const ghost = this.deps.findGhostForDelivery
+        ? this.deps.findGhostForDelivery(installedGhostStoragePart(candidate))
+        : candidate;
+      if (!ghost || ghostInstallApprovalToken(ghost.approval) !== ghostInstallApprovalToken(candidate.approval)) continue;
       if (!ghost.enabled) continue;
       if (!ghost.manifest.subscribe?.topics?.includes(topic)) continue;
       this.dispatchTo(ghost, topic, name, data);

@@ -154,3 +154,20 @@ it('declares observe as its own permission without requiring tasks', () => {
   expect(installed.manifest.agent).toEqual({ observe: 'yes' });
   expect(ghostPermissionItems(installed.manifest).some(item => item.key === 'agent:observe')).toBe(false);
 });
+
+// unit: companion viewing is standalone and never widens an existing tasks/targets/observe grant.
+it('declares companions as its own permission without requiring tasks', () => {
+  const standalone = validateGhostManifest({ ...base, agent: { companions: true } });
+  if (!standalone.ok) throw new Error(standalone.reason);
+  expect(standalone.manifest.agent).toEqual({ companions: true });
+  expect(ghostPermissionItems(standalone.manifest).find(item => item.key === 'agent:companions'))
+    .toMatchObject({ kind: 'agent', labelKey: 'agentCompanions', detailKey: 'agentCompanionsDetail' });
+  const previous = validateGhostManifest({ ...base, agent: { tasks: true, observe: true } });
+  const next = validateGhostManifest({ ...base, agent: { tasks: true, observe: true, companions: true } });
+  if (!previous.ok || !next.ok) throw new Error('invalid fixture');
+  expect(diffGhostPermissionItems(previous.manifest, next.manifest).added.map(item => item.key)).toEqual(['agent:companions']);
+  expect(validateGhostManifest({ ...base, agent: { companions: 'yes' } }).ok).toBe(false);
+  const installed = validateInstalledGhostManifest({ ...base, agent: { companions: 'yes' } });
+  if (!installed.ok) throw new Error('historical plugin disabled');
+  expect(ghostPermissionItems(installed.manifest).some(item => item.key === 'agent:companions')).toBe(false);
+});

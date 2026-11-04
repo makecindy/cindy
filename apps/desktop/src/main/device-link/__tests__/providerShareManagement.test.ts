@@ -7,6 +7,7 @@ import { REMOTE_AGENT_CHANNEL, type ProviderShareOwned } from '@cindy/device-lin
 
 import type { ProviderShareManagementCommand } from '../../../shared/providerManagement';
 import type { ProviderUsageHistoryView } from '../../../shared/providerShare';
+import type { ModelPriceQuote } from '../../../shared/regionalMoney';
 
 const state = vi.hoisted(() => ({ owner: 'owner-a', boundaryPending: false }));
 vi.mock('electron', () => ({
@@ -22,7 +23,7 @@ const host = vi.hoisted(() => ({
 const listProviders = vi.hoisted(() => vi.fn());
 const identityCard = vi.hoisted(() => vi.fn());
 const remember = vi.hoisted(() => vi.fn());
-const usageStores = vi.hoisted(() => ({ ownHistory: vi.fn(), memberTokenSnapshot: vi.fn(), memberHistory: vi.fn(), pricing: vi.fn(),
+const usageStores = vi.hoisted(() => ({ ownHistory: vi.fn(), memberTokenSnapshot: vi.fn(), memberHistory: vi.fn(), pricing: vi.fn(), referencePricing: vi.fn(), priceOverrides: vi.fn(),
   enqueueDirectCleanup: vi.fn(), listPendingDirectCleanup: vi.fn(), acknowledgeDirectCleanup: vi.fn(),
   actual: null as ReturnType<typeof import('../providerShareUsageStore').createProviderShareUsageStore> | null }));
 const memberNotes = vi.hoisted(() => ({ read: vi.fn(), set: vi.fn() }));
@@ -52,9 +53,15 @@ vi.mock('../../maker-host/createDesktopProviderService.js', () => ({
 vi.mock('../../maker-host/remote-provider-access-store.js', () => ({ isRemoteProviderInvocationAllowed: () => true }));
 vi.mock('../../textClipboard.js', () => ({ rememberIssuedClipboardText: remember }));
 vi.mock('../../security/trustedAppRenderer.js', () => ({ assertTrustedAppRendererEvent: vi.fn() }));
-vi.mock('../../usage/ledgerCurrency.js', () => ({ currentLedgerCurrency: vi.fn() }));
-vi.mock('../../usage/modelPricing.js', () => ({ getGatewayModelPricing: usageStores.pricing, getModelPriceQuote: vi.fn() }));
-vi.mock('../../usage/turnCostCalculator.js', () => ({ computePriceQuoteTurnMoney: vi.fn(), normalizeModelIdForPricing: vi.fn() }));
+vi.mock('../../usage/ledgerCurrency.js', () => ({ currentLedgerCurrency: () => 'USD' }));
+vi.mock('../../usage/modelPricing.js', async () => ({
+  getGatewayModelPricing: usageStores.pricing,
+  getModelPriceQuote: (await import('../../../shared/modelPriceQuote.js')).getModelPriceQuote,
+}));
+vi.mock('../../usage/referenceModelPricing.js', () => ({
+  getReferenceModelPricing: usageStores.referencePricing,
+  readModelPriceOverridesSnapshot: usageStores.priceOverrides,
+}));
 vi.mock('../../usage/providerPartyUsageStore.js', () => ({
   currentProviderPartyUsageStore: () => ({ history: usageStores.ownHistory }),
 }));
@@ -66,7 +73,7 @@ vi.mock('../providerShareUsageStore.js', async (importOriginal) => ({
     acknowledgeDirectCleanup: usageStores.acknowledgeDirectCleanup }),
   providerUsageLocalDay: () => '2026-10-17',
 }));
-vi.mock('../settings-store.js', () => ({ readDeviceLinkSettings: () => ({ remoteControlEnabled: true }), readLastKnownDeviceNames: vi.fn() }));
+vi.mock('../settings-store.js', () => ({ readDeviceLinkSettings: () => ({ remoteControlEnabled: true }), readLastKnownDeviceNames: () => ({}) }));
 vi.mock('../providerShareApi.js', () => ({
   providerShareApi: api,
   fetchIdentityCard: identityCard,
@@ -116,6 +123,7 @@ import { startProviderShareHost } from '../providerShareHost';
 import { startProviderShareGuest } from '../providerShareGuest';
 import { setBroadcastTapListener } from '../broadcast-tap';
 import { CONTROLLED_MODEL_CATALOG_CHANGED } from '../../../shared/controlledModelCatalog';
+import { PROVIDER_SHARE_IPC } from '../../../shared/providerShare';
 import { createProviderShareUsageStore } from '../providerShareUsageStore';
 import { revokeProviderShareControllers } from '../dispatch';
 
@@ -167,6 +175,9 @@ beforeEach(() => {
   usageStores.enqueueDirectCleanup.mockResolvedValue(undefined);
   usageStores.listPendingDirectCleanup.mockReturnValue([]);
   usageStores.acknowledgeDirectCleanup.mockResolvedValue(undefined);
+  usageStores.pricing.mockResolvedValue(null);
+  usageStores.referencePricing.mockReturnValue({});
+  usageStores.priceOverrides.mockReturnValue({});
   startProviderShareRuntime(vi.fn());
 });
 
@@ -181,11 +192,26 @@ it.each(['catalog', 'received', 'stop'] as const)('forwards %s invalidation to r
   setBroadcastTapListener(remote);
   const events = vi.mocked(startProviderShareGuest).mock.lastCall![0];
   if (trigger === 'catalog') events.catalogChanged!('share:b-only');
-  else if (trigger === 'received') events.changed([]);
+  else if (trigger === 'received') events.changed([], true);
   else stopProviderShareRuntime();
   expect(local).toHaveBeenCalledWith(CONTROLLED_MODEL_CATALOG_CHANGED, {});
   expect(remote).toHaveBeenCalledWith(CONTROLLED_MODEL_CATALOG_CHANGED, {},
     { dataOwnerId: 'owner-a', ownerGeneration: 1 });
+});
+
+// 2026-11-04 (PR #8814): the received list is polled every minute. An unchanged poll
+// still refreshes local windows (stale subscription catalogs are re-checked there) but
+// must not push a model catalog change to every controlling computer.
+it('refreshes local windows but does not push a catalog change for an unchanged received poll', () => {
+  const local = vi.fn();
+  const remote = vi.fn();
+  startProviderShareRuntime(local);
+  setBroadcastTapListener(remote);
+  const events = vi.mocked(startProviderShareGuest).mock.lastCall![0];
+  events.changed([], false);
+  expect(local).toHaveBeenCalledWith(PROVIDER_SHARE_IPC.RECEIVED_CHANGED, []);
+  expect(local).not.toHaveBeenCalledWith(CONTROLLED_MODEL_CATALOG_CHANGED, {});
+  expect(remote).not.toHaveBeenCalledWith(CONTROLLED_MODEL_CATALOG_CHANGED, {}, expect.anything());
 });
 
 /* Deleting a member must use the live host callback and retain offline M until it ACKs. tier: unit. */
@@ -296,6 +322,153 @@ const historyWithRows = (rows: ProviderUsageHistoryView['self']['days']): Provid
   members: [],
 });
 
+// Unit regression: usage-history must return estimates for self, relay and shared
+// usage with no SDK cost. Existing wire-budget tests only covered SDK fallback
+// and mocked out quote lookup/calculation, hiding the missing reference-price source.
+describe('provider share usage estimates', () => {
+  const quote: ModelPriceQuote = {
+    providerId: 'openai', modelId: 'gpt-6.1-sol', currency: 'USD',
+    source: 'provider-reference', approximate: true,
+    inputPerMtok: 2, outputPerMtok: 10, cacheReadPerMtok: 0.2,
+  };
+  const row = () => ({
+    ...historyRow(0, 'gpt-6.1-sol [high]'), providerId: 'openai', kind: 'codex',
+    inputTokens: 1_000, outputTokens: 100, cacheReadTokens: 2_000, sdkCostUsd: 0,
+  });
+
+  async function readEstimate(providerId = 'openai', sdkCostUsd = 0) {
+    usageStores.ownHistory.mockReturnValue({
+      self: { lastUsedAt: null, days: [{ ...row(), providerId, sdkCostUsd }] }, relays: [],
+    });
+    const result = await executeProviderShareManagementCommand({ action: 'usage-history', providerId }) as ProviderUsageHistoryView;
+    return result.self.days[0]?.amount;
+  }
+
+  it('prices OpenAI self, relay and member usage from engine-specific reference quotes', async () => {
+    usageStores.pricing.mockResolvedValue({ xd: { 'gpt-6.1-sol': { ...quote, providerId: 'xd', inputPerMtok: 999 } } });
+    usageStores.referencePricing.mockReturnValue({ openai: {
+      'gpt-6.1-sol': { ...quote, inputPerMtok: 999 },
+      'gpt-6.1-sol\u0000codex': quote,
+    } });
+    usageStores.ownHistory.mockReturnValue({
+      self: { lastUsedAt: null, days: [row()] },
+      relays: [{ deviceId: 'relay', lastUsedAt: null, days: [row()] }],
+    });
+    host.snapshot.mockReturnValue([{ providerId: 'openai', shareId: 's', members: [{ memberId: 'm1' }] }]);
+    usageStores.memberHistory.mockReturnValue([{ shareId: 's', memberId: 'm1', lastUsedAt: null, days: [row()] }]);
+    const result = await executeProviderShareManagementCommand({ action: 'usage-history', providerId: 'openai' }) as ProviderUsageHistoryView;
+    for (const usage of [result.self, result.relays[0]!, result.members[0]!]) {
+      expect(usage.days[0]?.amount?.amount).toBeCloseTo(0.0034, 8);
+      expect(usage.days[0]?.amount?.currency).toBe('USD');
+    }
+  });
+
+  it('keeps Cindy AI on Gateway prices and applies its discount once', async () => {
+    usageStores.pricing.mockResolvedValue({ xd: { 'gpt-6.1-sol': {
+      ...quote, providerId: 'xd', source: 'gateway', costDiscount: 0.5,
+    } } });
+    usageStores.referencePricing.mockReturnValue({ xd: { 'gpt-6.1-sol': { ...quote, inputPerMtok: 999 } } });
+    expect(await readEstimate('xd')).toEqual({ amount: 0.0017, currency: 'USD' });
+  });
+
+  it('refreshes the reference snapshot on the next query after a price change', async () => {
+    usageStores.referencePricing.mockReturnValue({ openai: { 'gpt-6.1-sol': quote } });
+    expect((await readEstimate())?.amount).toBeCloseTo(0.0034, 8);
+    usageStores.referencePricing.mockReturnValue({ openai: { 'gpt-6.1-sol': { ...quote, inputPerMtok: 4 } } });
+    expect((await readEstimate())?.amount).toBeCloseTo(0.0054, 8);
+  });
+
+  it.each([
+    { sdkCostUsd: 0, expected: null },
+    { sdkCostUsd: 0.25, expected: { amount: 0.25, currency: 'USD' } },
+  ])('retains SDK fallback or unknown when no quote exists ($sdkCostUsd)', async ({ sdkCostUsd, expected }) => {
+    expect(await readEstimate('openai', sdkCostUsd)).toEqual(expected);
+  });
+
+  it('falls back to SDK cost when reference pricing cannot be read', async () => {
+    usageStores.referencePricing.mockImplementation(() => { throw new Error('pricing unavailable'); });
+    expect(await readEstimate('deepseek', 0.25)).toEqual({ amount: 0.25, currency: 'USD' });
+  });
+
+  // PR #8489 review: aggregate buckets must not pick a long-context band from the
+  // summed input of many short turns. Minimal input: one band boundary at 272,001.
+  it('selects input price bands per average turn instead of the aggregate total', async () => {
+    usageStores.referencePricing.mockReturnValue({ openai: { 'gpt-6.1-sol': {
+      ...quote,
+      inputTokenPriceBands: [
+        { minInputTokens: 0, maxInputTokens: 272_001, inputPerMtok: 2, outputPerMtok: 10, cacheReadPerMtok: 0.2 },
+        { minInputTokens: 272_001, inputPerMtok: 4, outputPerMtok: 15, cacheReadPerMtok: 0.4 },
+      ],
+    } } });
+    const read = async (turns: number) => {
+      usageStores.ownHistory.mockReturnValue({ self: { lastUsedAt: null, days: [{
+        ...row(), turns, inputTokens: 300_000, outputTokens: 1_000, cacheReadTokens: 0,
+      }] }, relays: [] });
+      const result = await executeProviderShareManagementCommand({ action: 'usage-history', providerId: 'openai' }) as ProviderUsageHistoryView;
+      return result.self.days[0]?.amount?.amount;
+    };
+    // 10 turns × 30k input stay on the base band: 300k × $2 + 1k × $10.
+    expect(await read(10)).toBeCloseTo(0.61, 8);
+    // A single 300k turn is genuinely long-context: 300k × $4 + 1k × $15.
+    expect(await read(1)).toBeCloseTo(1.215, 8);
+  });
+
+  // PR #8489 review: history rows are valued with the catalog effective on their own day,
+  // using the same route-tariff rules as the range totals rather than subscription values.
+  it('prices history rows from the reference catalog effective on that day', async () => {
+    const overrides = { snapshot: true };
+    usageStores.priceOverrides.mockReturnValue(overrides);
+    usageStores.referencePricing.mockImplementation((options?: { at?: string }) =>
+      options?.at === '2026-10-17' ? { openai: { 'gpt-6.1-sol': { ...quote, inputPerMtok: 4 } } } : { openai: { 'gpt-6.1-sol': quote } });
+    expect((await readEstimate())?.amount).toBeCloseTo(0.0054, 8);
+    expect(usageStores.referencePricing).toHaveBeenCalledWith({ at: '2026-10-17', overrides });
+  });
+
+  it('resolves a tariff that is no longer effective today', async () => {
+    usageStores.referencePricing.mockImplementation((options?: { at?: string }) =>
+      options?.at === '2026-10-17' ? { openai: { 'gpt-6.1-sol': quote } } : {});
+    expect((await readEstimate())?.amount).toBeCloseTo(0.0034, 8);
+  });
+
+  it('does not borrow today\'s price for a day without an effective tariff', async () => {
+    usageStores.referencePricing.mockImplementation((options?: { at?: string }) =>
+      options?.at === undefined ? { openai: { 'gpt-6.1-sol': quote } } : {});
+    expect(await readEstimate()).toBeNull();
+  });
+
+  it('builds one reference catalog per day and reads overrides once per query', async () => {
+    usageStores.referencePricing.mockReturnValue({ openai: { 'gpt-6.1-sol': quote } });
+    usageStores.ownHistory.mockReturnValue({ self: { lastUsedAt: null, days: [
+      row(), row(), { ...row(), day: '2026-10-16' },
+    ] }, relays: [] });
+    await executeProviderShareManagementCommand({ action: 'usage-history', providerId: 'openai' });
+    expect(usageStores.referencePricing.mock.calls.map(([options]) => options?.at)).toEqual(['2026-10-17', '2026-10-16']);
+    expect(usageStores.priceOverrides).toHaveBeenCalledTimes(1);
+  });
+
+  // PR #8489 review: ordinary provider APIs keep the SDK-reported amount, as local turn
+  // accounting does; only DeepSeek (whose SDK cost ignores cache-hit pricing) is recomputed.
+  it.each([
+    { providerId: 'anthropic', expected: 0.25 },
+    { providerId: 'deepseek', expected: 0.0034 },
+  ])('keeps SDK cost for token-bearing $providerId rows unless the route is recomputed', async ({ providerId, expected }) => {
+    usageStores.referencePricing.mockReturnValue({ [providerId]: { 'gpt-6.1-sol': { ...quote, providerId } } });
+    const amount = await readEstimate(providerId, 0.25);
+    expect(amount?.amount).toBeCloseTo(expected, 8);
+    expect(amount?.currency).toBe('USD');
+  });
+
+  // PR #8489 review: cost-only deltas are valid ledger rows; a found quote must not turn them into $0.
+  it('keeps the recorded SDK cost for rows without token counters', async () => {
+    usageStores.referencePricing.mockReturnValue({ openai: { 'gpt-6.1-sol': quote } });
+    usageStores.ownHistory.mockReturnValue({ self: { lastUsedAt: null, days: [{
+      ...row(), inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheCreateTokens: 0, sdkCostUsd: 0.25,
+    }] }, relays: [] });
+    const result = await executeProviderShareManagementCommand({ action: 'usage-history', providerId: 'openai' }) as ProviderUsageHistoryView;
+    expect(result.self.days[0]?.amount).toEqual({ amount: 0.25, currency: 'USD' });
+  });
+});
+
 // PR #7772: settings classification must not renew the management page's fast-poll window
 // or calculate usage. Existing management tests only read full owned/usage responses.
 // Minimal input: active, paused, pending-only and duplicate-provider shares. Tier: unit.
@@ -356,7 +529,8 @@ describe('provider share usage history wire budget', () => {
     expect(usageStores.memberHistory).toHaveBeenCalledWith(new Set(['s']), {
       maxRows: 5_001, memberKeys: new Set([JSON.stringify(['s', 'm1'])]),
     });
-    expect(usageStores.pricing).toHaveBeenCalledTimes(5_000);
+    // Provider API rows with SDK costs keep them without building any reference catalog.
+    expect(usageStores.referencePricing).not.toHaveBeenCalled();
     expect(result.self.days).toHaveLength(5_000);
     expect(result.self.days[0]?.amount).toEqual({ amount: 0.25, currency: 'USD' });
     expect(result.self.days[0]).not.toHaveProperty('sdkCostUsd');

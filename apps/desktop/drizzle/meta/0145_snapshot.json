@@ -1,7 +1,7 @@
 {
   "version": "6",
   "dialect": "sqlite",
-  "id": "2725c9aa-7184-4222-a95b-67d7463a0206",
+  "id": "9a05fb14-28fe-41b3-87f9-0f40c0ba4b01",
   "prevId": "0a5842f4-01f1-4c5f-8bdc-305aea300d37",
   "tables": {
     "account_usage_snapshots": {
@@ -4553,13 +4553,6 @@
           "notNull": false,
           "autoincrement": false
         },
-        "trigger_source": {
-          "name": "trigger_source",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false,
-          "autoincrement": false
-        },
         "read_at": {
           "name": "read_at",
           "type": "integer",
@@ -4776,13 +4769,6 @@
         },
         "script_config": {
           "name": "script_config",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false,
-          "autoincrement": false
-        },
-        "webhook_trigger": {
-          "name": "webhook_trigger",
           "type": "text",
           "primaryKey": false,
           "notNull": false,
@@ -5386,6 +5372,22 @@
           "notNull": true,
           "autoincrement": false
         },
+        "provider": {
+          "name": "provider",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false,
+          "default": "'github'"
+        },
+        "host": {
+          "name": "host",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false,
+          "default": "'github.com'"
+        },
         "owner": {
           "name": "owner",
           "type": "text",
@@ -5480,6 +5482,8 @@
           "name": "uniq_session_pr_refs",
           "columns": [
             "session_id",
+            "provider",
+            "host",
             "owner",
             "repo",
             "pr_number"

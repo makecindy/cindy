@@ -224,3 +224,17 @@ it('keeps available alternatives when a remote default is offline', async () => 
   host.remote.mockRejectedValue(new Error('offline'));
   expect(await resolveAvailableTaskModels([{ ...route, agentDeviceId: 'share:one' }, route])).toEqual([null, route]);
 });
+
+// Unit: native provider disable differs from picker visibility. Once AI can
+// disable a model, a still-visible old picker row must not admit it as a default.
+it('excludes disabled catalog models and validates explicit Fast requests', async () => {
+  const providers = await host.providers();
+  providers[0].models.codex[0].disabled = true;
+  host.providers.mockResolvedValue(providers);
+  expect((await inspectAppDefaultModel()).available).toEqual([]);
+  await expect(changeAppDefaultModel(id)).rejects.toThrow('不可用');
+  providers[0].models.codex[0].disabled = false;
+  configureAppDefaultModelSelection(selection => mirror(selection.route, selection.requestId));
+  expect((await changeAppDefaultModel(id, 'low', () => {}, true)).current).toMatchObject({ effort: 'low', fastMode: true });
+  await expect(changeAppDefaultModel(id, undefined, () => {}, 'ultrafast')).rejects.toThrow('Fast');
+});

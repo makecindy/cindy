@@ -283,9 +283,9 @@ describe('marketItemForInstalledGhost', () => {
 });
 
 describe('canOfferMarketInstall', () => {
-  it('hides install for signed-out browsing and local account-managed plugins', () => {
+  it('hides signed-out installation without guessing service requirements from the plugin name', () => {
     expect(canOfferMarketInstall('signed-out', 'cindy-test')).toBe(false);
-    expect(canOfferMarketInstall('local', 'cindy-art')).toBe(false);
+    expect(canOfferMarketInstall('local', 'cindy-art')).toBe(true);
     expect(canOfferMarketInstall('local', 'cindy-test')).toBe(true);
     expect(canOfferMarketInstall('cloud', 'cindy-art')).toBe(true);
   });

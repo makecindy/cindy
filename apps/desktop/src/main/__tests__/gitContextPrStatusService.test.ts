@@ -1,3 +1,6 @@
+import { createGlabCliTokenSource } from '../git-context/glabCliTokenSource';
+import { fetchGitlabMr } from '../git-context/gitlabPrSummary';
+import { remotePrStatuses } from '@cindy/maker-shared';
 /**
  * git-context/prStatusService 单测 — 状态映射、TTL 缓存、in-flight 去重、
  * gh 缺失/未登录降级(不缓存,远端归一 no-token)、404/网络错误映射。依赖全注入,零网络零 Electron。
@@ -31,11 +34,45 @@ describe('PR summary', () => {
     expect(summarizeChecks({ totalCount: 1, checkRunCountsByState: [{ state: 'FUTURE_STATE', count: 1 }], statusContextCountsByState: [] })).toBeNull();
   });
 
+  // Bug: #8476's head reported failed=1 because a concurrency-cancelled duplicate of a job that
+  // later passed stayed in GitHub's rollup counts; AI tools and automation read it as a CI failure.
+  // Minimal input: the same workflow job cancelled, then rerun successfully (unit). Workflow display
+  // names are not unique, so a same-named job of another workflow (or one without an id) stays separate;
+  // same-named jobs of one execution (one check suite, e.g. fixed-name matrix shards) all count.
+  it('counts only the newest run of the same workflow job, and keeps counts when nodes are incomplete', () => {
+    const run = (databaseId: number, conclusion: string, workflowId: number | null = 7, suiteId = databaseId) => ({ __typename: 'CheckRun', databaseId, name: 'check:basis',
+      status: 'COMPLETED', conclusion, checkSuite: { databaseId: suiteId, app: { slug: 'github-actions' }, workflowRun: { workflow: { databaseId: workflowId } } } });
+    const rollup = (nodes: ReturnType<typeof run>[], hasNextPage = false) => ({
+      totalCount: nodes.length + 1,
+      checkRunCountsByState: ['SUCCESS', 'CANCELLED', 'FAILURE'].map(state => ({ state, count: nodes.filter(n => n.conclusion === state).length })),
+      statusContextCountsByState: [{ state: 'SUCCESS', count: 1 }],
+      nodes: [...nodes, { __typename: 'StatusContext' }],
+      pageInfo: { hasNextPage },
+    });
+    expect(summarizeChecks(rollup([run(1, 'CANCELLED'), run(2, 'SUCCESS')])))
+      .toEqual({ total: 2, passed: 2, failed: 0, pending: 0, skipped: 0 });
+    expect(summarizeChecks(rollup([run(2, 'FAILURE'), run(1, 'SUCCESS')])))
+      .toEqual({ total: 2, passed: 1, failed: 1, pending: 0, skipped: 0 });
+    expect(summarizeChecks(rollup([run(1, 'CANCELLED'), run(2, 'SUCCESS')], true)))
+      .toMatchObject({ total: 3, failed: 1 });
+    expect(summarizeChecks(rollup([run(1, 'FAILURE', 7), run(2, 'SUCCESS', 8)])))
+      .toMatchObject({ total: 3, failed: 1 });
+    expect(summarizeChecks(rollup([run(1, 'FAILURE', null), run(2, 'SUCCESS', null)])))
+      .toMatchObject({ total: 3, failed: 1 });
+    expect(summarizeChecks(rollup([run(1, 'FAILURE', 7, 5), run(2, 'SUCCESS', 7, 5)])))
+      .toMatchObject({ total: 3, failed: 1 });
+    expect(summarizeChecks(rollup([run(1, 'CANCELLED', 7, 4), run(2, 'FAILURE', 7, 5), run(3, 'SUCCESS', 7, 5)])))
+      .toMatchObject({ total: 3, passed: 2, failed: 1 });
+  });
+
   it('keeps one GraphQL request and reports truncated reviews as unknown', async () => {
-    const pr = { headRefOid: 'head', commits: { nodes: [{ commit: { oid: 'head', statusCheckRollup: null } }] },
+    // The PR card's live strip also needs merge readiness; it rides on the same request.
+    const pr = { headRefOid: 'head', mergeStateStatus: 'BLOCKED', reviewDecision: 'REVIEW_REQUIRED',
+      commits: { nodes: [{ commit: { oid: 'head', statusCheckRollup: null } }] },
       reviewThreads: { nodes: [{ isResolved: false }], pageInfo: { hasNextPage: true } } };
     const graphql = vi.fn().mockResolvedValue({ repository: { pullRequest: pr } });
-    expect(await fetchPrSummary({ graphql } as unknown as GithubClient, Q)).toEqual({ headOid: 'head', reviewDecision: null, unresolved: null, checks: { total: 0, passed: 0, failed: 0, pending: 0, skipped: 0 } });
+    expect(await fetchPrSummary({ graphql } as unknown as GithubClient, Q)).toEqual({ headOid: 'head', unresolved: null,
+      checks: { total: 0, passed: 0, failed: 0, pending: 0, skipped: 0 }, mergeState: 'BLOCKED', reviewDecision: 'REVIEW_REQUIRED' });
     expect(graphql).toHaveBeenCalledTimes(1);
     pr.reviewThreads.pageInfo.hasNextPage = false;
     expect(await fetchPrSummary({ graphql } as unknown as GithubClient, Q)).toMatchObject({ unresolved: 1 });
@@ -44,7 +81,7 @@ describe('PR summary', () => {
 
   it('does not turn missing PR data or a changed head into zero/all passing', async () => {
     const graphql = vi.fn().mockResolvedValue({ repository: { pullRequest: null } });
-    expect(await fetchPrSummary({ graphql } as unknown as GithubClient, Q)).toEqual({ headOid: null, unresolved: null, checks: null });
+    expect(await fetchPrSummary({ graphql } as unknown as GithubClient, Q)).toEqual({ headOid: null, unresolved: null, checks: null, mergeState: null, reviewDecision: null });
     graphql.mockResolvedValue({ repository: { pullRequest: { headRefOid: 'new', commits: { nodes: [{ commit: { oid: 'old', statusCheckRollup: null } }] }, reviewThreads: { nodes: [], pageInfo: { hasNextPage: false } } } } });
     expect(await fetchPrSummary({ graphql } as unknown as GithubClient, Q)).toMatchObject({ unresolved: 0, checks: null });
   });
@@ -318,4 +355,201 @@ describe('PrStatusService', () => {
     expect(results).toHaveLength(10);
     expect(fetchPr).toHaveBeenCalledTimes(10);
   });
+});
+
+// Unit: production MR fetch + shared status service, not a copied mapper.
+// GitHub fixtures cannot detect SHA/paging mismatches or credentials crossing hosts.
+describe('GitLab MR status', () => {
+  const q = {
+    provider: 'gitlab' as const,
+    host: 'git.example.com',
+    owner: 'group/sub',
+    repo: 'project',
+    prNumber: 7,
+  };
+  const mr = () => ({
+    state: 'opened',
+    draft: false,
+    title: 'MR title',
+    sourceBranch: 'feature',
+    diffHeadSha: 'head',
+    resolvableDiscussionsCount: 5,
+    resolvedDiscussionsCount: 3,
+    headPipeline: {
+      status: 'RUNNING',
+      sha: 'head',
+      jobs: {
+        count: 5,
+        nodes: ['SUCCESS', 'FAILED', 'MANUAL', 'SKIPPED', 'CANCELED'].map((status) => ({ status })),
+        pageInfo: { hasNextPage: false },
+      },
+    },
+  });
+  it('queries the MR host once, counts discussions and conservatively summarizes complete current-head jobs', async () => {
+    const value = mr();
+    const fetch = vi
+      .fn()
+      .mockImplementation(
+        async () => new Response(JSON.stringify({ data: { project: { mergeRequest: value } } })),
+      );
+    expect(await fetchGitlabMr('fake-token', q, fetch)).toMatchObject({
+      unresolved_count: 2,
+      checks: { total: 5, passed: 1, failed: 2, pending: 1, skipped: 1 },
+    });
+    expect(fetch).toHaveBeenCalledTimes(1);
+    expect(fetch.mock.calls[0][0]).toBe('https://git.example.com/api/graphql');
+    expect(JSON.parse(fetch.mock.calls[0][1].body).variables).toEqual({
+      path: 'group/sub/project',
+      iid: '7',
+    });
+    value.headPipeline.sha = 'old';
+    expect((await fetchGitlabMr('fake-token', q, fetch)).checks).toBeNull();
+    value.headPipeline.sha = 'head';
+    value.headPipeline.jobs.pageInfo.hasNextPage = true;
+    expect((await fetchGitlabMr('fake-token', q, fetch)).checks).toBeNull();
+    value.headPipeline.jobs.pageInfo.hasNextPage = false;
+    value.headPipeline.jobs.nodes[0].status = 'FUTURE';
+    expect((await fetchGitlabMr('fake-token', q, fetch)).checks).toBeNull();
+  });
+  it.each(['https://other.example.com/api/graphql', 'http://git.example.com/api/graphql'])(
+    'never sends credentials to redirect %s',
+    async (location) => {
+      const fetch = vi
+        .fn()
+        .mockResolvedValue(new Response(null, { status: 302, headers: { location } }));
+      await expect(fetchGitlabMr('fake-token', q, fetch)).rejects.toThrow();
+      expect(fetch).toHaveBeenCalledTimes(1);
+    },
+  );
+  it('makes no unauthenticated request, maps 401 to login and never falls back to GitHub', async () => {
+    const github = vi.fn();
+    const gitlab = vi.fn().mockRejectedValue({ status: 401 });
+    const read = vi.fn().mockResolvedValue({ ok: false, reason: 'glab-missing' });
+    const reject = vi.fn();
+    const service = new PrStatusService({
+      readToken: TOKEN_OK,
+      fetchPr: github,
+      readGitlabToken: read,
+      fetchGitlab: gitlab,
+      rejectGitlabToken: reject,
+    });
+    expect(await service.getStatuses([q])).toEqual([{ ...q, ok: false, reason: 'glab-missing' }]);
+    expect(gitlab).not.toHaveBeenCalled();
+    read.mockResolvedValue({ ok: true, token: 'fake-token' });
+    expect(await service.getStatuses([q])).toEqual([
+      { ...q, ok: false, reason: 'glab-not-logged-in' },
+    ]);
+    expect(read).toHaveBeenCalledWith(q.host);
+    expect(reject).toHaveBeenCalledWith(q.host);
+    expect(github).not.toHaveBeenCalled();
+    expect(filterPrStatusQueriesForRefs([{ ...q, host: 'other.example.com' }, Q], [q])).toEqual([]);
+  });
+  // Unit regression: the focus handler used full invalidation, discarding successful
+  // GitHub/GitLab caches and in-flight reads. Existing auth tests never crossed a
+  // window focus. One cached PR, one pending PR and two MR hosts expose the loss.
+  it('on window focus retries GitLab login failures without refetching successes or discarding in-flight reads', async () => {
+    let signedIn = false;
+    const healthy = { ...q, host: 'healthy.example.com' };
+    const exec = vi.fn(
+      (
+        _file: string,
+        args: string[],
+        _options: unknown,
+        callback: (error: Error | null, stdout: string) => void,
+      ) => callback(null, args.at(-1) === healthy.host || signedIn ? 'fake-token' : ''),
+    );
+    const tokens = createGlabCliTokenSource({
+      exec: exec as unknown as typeof import('node:child_process').execFile,
+      now: () => 0,
+    });
+    let finish!: (value: PrRemoteState) => void;
+    let started!: () => void;
+    const pending = new Promise<PrRemoteState>((resolve) => {
+      finish = resolve;
+    });
+    const fetching = new Promise<void>((resolve) => {
+      started = resolve;
+    });
+    const next = { ...Q, prNumber: 86 };
+    const fetchPr = vi.fn(async (_token: string, query: typeof Q) => {
+      if (query.prNumber === next.prNumber) {
+        started();
+        return pending;
+      }
+      return remote({});
+    });
+    const fetchGitlab = vi.fn(async () => remote({}));
+    const service = new PrStatusService({
+      readToken: TOKEN_OK,
+      fetchPr,
+      readGitlabToken: (host) => tokens.readTokenDetailed(host),
+      invalidateGitlabTokenFailures: () => tokens.invalidateNegativeCache(),
+      fetchGitlab,
+      now: () => 0,
+    });
+    expect(await service.getStatuses([Q, q, healthy])).toMatchObject([
+      { ok: true },
+      { ok: false, reason: 'glab-not-logged-in' },
+      { ok: true },
+    ]);
+    signedIn = true;
+    expect((await service.getStatuses([q]))[0]).toMatchObject({ ok: false });
+    const inFlight = service.getStatuses([next]);
+    await fetching;
+    service.invalidateGitlabAuthFailures();
+    expect(await service.getStatuses([Q, q, healthy])).toMatchObject([
+      { ok: true },
+      { ok: true },
+      { ok: true },
+    ]);
+    expect(fetchPr).toHaveBeenCalledTimes(2);
+    expect(fetchGitlab).toHaveBeenCalledTimes(2);
+    await tokens.readTokenDetailed(healthy.host);
+    expect(exec).toHaveBeenCalledTimes(3);
+    const joined = service.getStatuses([next]);
+    finish(remote({ title: 'in flight' }));
+    expect(await inFlight).toMatchObject([{ ok: true, title: 'in flight' }]);
+    expect(await joined).toEqual(await inFlight);
+    expect(await service.getStatuses([next])).toEqual(await inFlight);
+    expect(fetchPr).toHaveBeenCalledTimes(2);
+  });
+  it('keeps legacy hosts from receiving MR queries on their GitHub channel', async () => {
+    const invoke = vi.fn().mockImplementation(async (channel: string) => {
+      if (channel === 'git-context:mr-status') throw new Error('CHANNEL_NOT_ALLOWED');
+      return [{ ...Q, ok: false, reason: 'not-found' }];
+    });
+    expect(await remotePrStatuses([Q, q], 'session', invoke)).toEqual([
+      { ...Q, ok: false, reason: 'not-found' },
+      { ...q, ok: false, reason: 'unsupported' },
+    ]);
+    expect(invoke.mock.calls[0][1][0].queries).toEqual([Q]);
+    expect(invoke.mock.calls[1][1][0].queries).toEqual([q]);
+  });
+  // Unit regression: transport failures must not claim an old host, or retry MRs as PRs.
+  // The existing legacy-host test only exercised CHANNEL_NOT_ALLOWED.
+  it.each([
+    [
+      Object.assign(new Error('blocked'), { code: 'DEVICE_LINK_CHANNEL_NOT_ALLOWED' }),
+      'unsupported',
+    ],
+    [new Error('[UNSUPPORTED_CAPABILITY] old host'), 'unsupported'],
+    [Object.assign(new Error('timed out'), { code: 'TIMEOUT' }), 'fetch-failed'],
+    [
+      new Error('[NOT_CONNECTED] disconnected; CHANNEL_NOT_ALLOWED is only diagnostic text'),
+      'fetch-failed',
+    ],
+  ] as const)(
+    'classifies remote MR failures without losing diagnostics: %s',
+    async (error, reason) => {
+      const invoke = vi.fn().mockRejectedValue(error);
+      const reportError = vi.fn();
+      expect(await remotePrStatuses([q], 'session', invoke, reportError)).toEqual([
+        { ...q, ok: false, reason },
+      ]);
+      expect(invoke).toHaveBeenCalledExactlyOnceWith('git-context:mr-status', [
+        { sessionId: 'session', queries: [q] },
+      ]);
+      expect(reportError).toHaveBeenCalledExactlyOnceWith(error);
+    },
+  );
 });

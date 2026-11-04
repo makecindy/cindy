@@ -220,11 +220,13 @@ import {
 import { useInstalledGhosts } from '@/cindy-brain/useInstalledGhosts';
 import { installedGhostStoragePart } from '../../../shared/pluginIdentity.js';
 import {
+  getPendingPluginSuggestion,
   startPendingPluginSuggestion,
   takePendingPluginSuggestion,
   type PluginSuggestionRequest,
 } from './pendingPluginSuggestion';
-import { filterGhostsForWorkdir } from '@/cindy-brain/ghostWorkdirFilter';
+import { pluginSetupRoute, usePluginSkillSetup } from './pluginSkillSetup';
+import { filterGhostsForWorkdir, useWorkdirDisabledGhostIds } from '@/cindy-brain/ghostWorkdirFilter';
 import type { Effort, PermissionMode } from '@/lib/userPreferences.types';
 import {
   type AttachedFile,
@@ -3874,6 +3876,7 @@ export function NewMakerDraftRoute() {
             : null;
           if (pluginModelAtSend && !isCurrentDataOwner()) return;
           const routedTo = pluginRoute?.outcome === 'routed' ? pluginRoute.route : null;
+          const routeAgentDeviceId = routedTo ? routedTo.agentDeviceId : effectiveAgentDeviceId;
           const persistedAgentKind = routedTo?.agentKind ?? sendBaseRoute.persistedAgentKind;
           const authVendor = persistedAgentKind;
           const capabilityAgentKind = dbToMakerAgentKind(persistedAgentKind);
@@ -3885,8 +3888,11 @@ export function NewMakerDraftRoute() {
           // device-link:远程草稿就绪态以被控端为准(传 deviceId 走隧道查被控端 maker:agent:status);
           // 本地草稿 effectiveDeviceLinkDeviceId 为 undefined → 仍走控制端本机就绪检查(行为不变)。
           // Agent 在另一台电脑运行时同样查那台的 Agent 登录(订阅 / 供应商都用那台的)。
+          // 目录键也可能包含任务电脑的中继；插件未改选时原样保留，改选后仍经同一目录宿主。
           const { proceed } = await vendorAuthGate.checkAndConfirm(authVendor, {
-            deviceId: catalogDeviceId,
+            deviceId: routedTo
+              ? modelCatalogKey(routeAgentDeviceId ?? effectiveDeviceLinkDeviceId, controlledModelRoute.catalogHostDeviceId)
+              : catalogDeviceId,
           });
           if (isDeviceLinkDraft && !isCurrentDataOwner()) return;
           if (!proceed) return;
@@ -4132,7 +4138,7 @@ export function NewMakerDraftRoute() {
               deviceProviders: agentCatalogProviders,
               capabilityAgentKind,
               // Agent 在另一台电脑运行:被控电脑把它记进任务,模型与来源属于那台的目录。
-              agentDeviceId: effectiveAgentDeviceId,
+              agentDeviceId: routeAgentDeviceId,
             });
             let created: { sessionId?: string; workDir?: string } | null = null;
             const remoteSessionId =
@@ -4434,7 +4440,7 @@ export function NewMakerDraftRoute() {
               extraDirs: effectiveExtraDirs,
               writableDirs: effectiveWritableDirs,
               remoteHostId: effectiveRemoteHostId ?? undefined,
-              ...(effectiveAgentDeviceId ? { agentDeviceId: effectiveAgentDeviceId } : {}),
+              ...(routeAgentDeviceId ? { agentDeviceId: routeAgentDeviceId } : {}),
               providerId,
             });
             if (!newSession) {
@@ -4707,7 +4713,7 @@ export function NewMakerDraftRoute() {
             workspaceKind: workingDir ? 'project' : 'dialogue',
             remoteHostId: workingDir ? (effectiveRemoteHostId ?? undefined) : undefined,
             // Agent 在另一台电脑运行:任务与文件仍在本机,只记下运行 Agent 的电脑。
-            ...(effectiveAgentDeviceId ? { agentDeviceId: effectiveAgentDeviceId } : {}),
+            ...(routeAgentDeviceId ? { agentDeviceId: routeAgentDeviceId } : {}),
             // extraDirs 是 vendor 无关字段；Claude 与 Codex 都按只读引用目录透传。
             extraDirs: effectiveExtraDirs,
             writableDirs: effectiveWritableDirs,
@@ -5137,6 +5143,7 @@ export function NewMakerDraftRoute() {
           : null;
         if (goalPluginModel && !isCurrentDataOwner()) return;
         const routedTo = pluginRoute?.outcome === 'routed' ? pluginRoute.route : null;
+        const routeAgentDeviceId = routedTo ? routedTo.agentDeviceId : effectiveAgentDeviceId;
         const persistedAgentKind = routedTo?.agentKind ?? goalBaseRoute.persistedAgentKind;
         const authVendor = persistedAgentKind;
         const capabilityAgentKind = dbToMakerAgentKind(persistedAgentKind);
@@ -5145,7 +5152,9 @@ export function NewMakerDraftRoute() {
         const chatInitialProviderId = routedTo ? routedTo.providerId : goalBaseRoute.providerId;
         const effectiveFastMode = routedTo ? false : goalBaseRoute.effectiveFastMode;
         const { proceed } = await vendorAuthGate.checkAndConfirm(authVendor, {
-          deviceId: catalogDeviceId,
+          deviceId: routedTo
+            ? modelCatalogKey(routeAgentDeviceId ?? effectiveDeviceLinkDeviceId, controlledModelRoute.catalogHostDeviceId)
+            : catalogDeviceId,
         });
         if (!proceed) return; // 用户取消授权:弹窗关闭即可,不算错误。
         if (isDeviceLinkDraft) {
@@ -5272,7 +5281,7 @@ export function NewMakerDraftRoute() {
             },
             deviceProviders: agentCatalogProviders,
             capabilityAgentKind,
-            agentDeviceId: effectiveAgentDeviceId,
+            agentDeviceId: routeAgentDeviceId,
           });
           let created: { sessionId?: string; workDir?: string } | null = null;
           const remoteSessionId = await (
@@ -5488,7 +5497,7 @@ export function NewMakerDraftRoute() {
           workingDir: goalWorkingDir,
           workspaceKind: goalWorkingDir ? 'project' : 'dialogue',
           remoteHostId: goalWorkingDir ? (effectiveRemoteHostId ?? undefined) : undefined,
-          ...(effectiveAgentDeviceId ? { agentDeviceId: effectiveAgentDeviceId } : {}),
+          ...(routeAgentDeviceId ? { agentDeviceId: routeAgentDeviceId } : {}),
           extraDirs: effectiveExtraDirs,
           writableDirs: effectiveWritableDirs,
           providerId: chatInitialProviderId ?? null,
@@ -5698,17 +5707,18 @@ export function NewMakerDraftRoute() {
   // 一条建议的预览与读屏描述:内容与点击填入的 pluginSuggestionComposerText 一致,
   // 只是同名限定符按输入框胶囊的规则收起。插件可用时带 $指令(或插件调用说明);需要
   // 先安装的插件点击后走安装引导、不会立即填入,只显示建议本身。插件清单变化时随之重算。
-  // 可用插件表按插件清单与工作目录缓存:filterGhostsForWorkdir 会同步查询目录禁用表,
-  // 不能在每次渲染 / 每条建议上重复调用。
   const installedGhosts = useInstalledGhosts(!isDeviceLinkDraft);
+  const suggestionDisabledIds = useWorkdirDisabledGhostIds(effectiveWorkingDir, installedGhosts, !isDeviceLinkDraft);
   const usableSuggestionGhosts = useMemo(
     () =>
       new Map(
-        (isDeviceLinkDraft ? [] : filterGhostsForWorkdir(installedGhosts, effectiveWorkingDir))
+        (isDeviceLinkDraft || !suggestionDisabledIds ? [] : installedGhosts.filter(
+          (ghost) => !suggestionDisabledIds.has(installedGhostStoragePart(ghost)),
+        ))
           .filter((g) => g.enabled)
           .map((g) => [installedGhostStoragePart(g), g]),
       ),
-    [isDeviceLinkDraft, effectiveWorkingDir, installedGhosts],
+    [isDeviceLinkDraft, suggestionDisabledIds, installedGhosts],
   );
   const suggestionSourceLabels = useMemo(
     () => ({ team: t('settings.ghosts.commandPaletteSource.team') }),
@@ -5809,24 +5819,14 @@ export function NewMakerDraftRoute() {
         const usable =
           ghost && usableGhosts.includes(ghost);
         if (!usable) {
-          let route: string;
-          if (ghost) {
-            route = `/plugins?ghost=${encodeURIComponent(installedGhostStoragePart(ghost))}`;
-          } else {
-            const market = await window.electronAPI.pluginMarket.snapshot();
-            if (!stillCurrent() || readPluginRecommendationSnapshot().ownerId !== request.ownerId)
-              return;
-            const matches = market.items.filter(
-              (item) => item.ghostId === suggestion.pluginId && item.installState !== 'conflict',
-            );
-            // Do not silently choose between competing publishers/sources with the same id.
-            if (matches.length !== 1) {
-              toast.info(t('newChat.pluginSuggestions.unavailable'));
-              return;
-            }
-            route = `/plugins?market=${encodeURIComponent(matches[0].pluginId)}`;
+          const route = await pluginSetupRoute(ghost, suggestion.pluginId ?? '');
+          if (!stillCurrent() || readPluginRecommendationSnapshot().ownerId !== request.ownerId)
+            return;
+          // Do not silently choose between competing publishers/sources with the same id.
+          if (!route) {
+            toast.info(t('newChat.pluginSuggestions.unavailable'));
+            return;
           }
-          if (!stillCurrent()) return;
           const nonce = startPendingPluginSuggestion(request);
           navigate(`${route}&recommendation=${encodeURIComponent(nonce)}`);
           return;
@@ -5876,10 +5876,24 @@ export function NewMakerDraftRoute() {
   useEffect(() => {
     const nonce = (location.state as { pluginSuggestionNonce?: unknown } | null)
       ?.pluginSuggestionNonce;
-    if (typeof nonce !== 'string') return;
+    // `/` palette Skill setups resume through usePluginSkillSetup below.
+    if (typeof nonce !== 'string' || getPendingPluginSuggestion()?.skillName) return;
     const request = takePendingPluginSuggestion(nonce, dataOwnerId, pluginSuggestionTargetKey);
     if (request) void runPluginSuggestion(request);
   }, [dataOwnerId, location.state, pluginSuggestionTargetKey, runPluginSuggestion]);
+
+  const canFillComposer = useCallback(
+    () => !sendInFlightRef.current && !composerMutationLockedRef.current,
+    [],
+  );
+  const pluginSkillSetup = usePluginSkillSetup({
+    enabled: !isRemoteProjectDraft && !isDeviceLinkDraft,
+    ownerId: dataOwnerId,
+    workingDir: effectiveWorkingDir,
+    targetKey: pluginSuggestionTargetKey,
+    draftKey: NEW_MAKER_DRAFT_KEY,
+    canFill: canFillComposer,
+  });
 
   // 注意:不要给 ChatInput 加 key 强制 remount。ChatInput 内部 activeModel /
   // activeEffort / activePermissionMode 都是每次 render 直接从 props 派生
@@ -6136,6 +6150,7 @@ export function NewMakerDraftRoute() {
                     initialProviderId={chatInitialProviderId}
                     planModeEnabled={effectivePlanMode}
                     onPlanModeChange={handlePlanModeChange}
+                    pluginSkillSetup={pluginSkillSetup}
                     fastMode={effectiveFastMode}
                     onFastModeChange={handleFastModeChange}
                     onWorkingDirChange={handleWorkingDirChange}

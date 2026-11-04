@@ -7,7 +7,22 @@
 
 ## 日常模拟器入口
 
-普通开发使用根脚本维护 Metro、区域配置和 worktree 归属：
+macOS 上启动手机版只需要一条命令，可重复运行（比如设备闲置关机后）：
+
+```bash
+pnpm mobile:sim:up            # 只看界面加 -- --mock
+```
+
+它依次选设备、开机、准备 Metro、安装匹配的原生包、启动 App 并核对身份。进度写 stderr，stdout
+最后一行是结果 JSON：`ok`、`code`、`step`、`udid`、`port`、`bundleVerified`、`foreground`，以及下一步 `next`。
+`pageVerified` 始终是 `false`，页面仍要截图目检。原生层变化时会完整编译，可能要 20–30 分钟，放后台
+运行并等完成通知，不要重复启动。失败时按 `next` 处理，再看
+[`simulator-debugging.md`](../../apps/mobile/docs/simulator-debugging.md#截图与当前版本测试)。
+
+判断手机版无法启动或编译，须以本轮运行返回的 `code` 为据；之前的对话、其他任务的结论、手动运行
+`pod --version` 都不算证据（Agent 进程的 `PATH` 常常不含已安装的 CocoaPods）。
+
+需要单独控制某一步时使用根脚本，它们维护 Metro、区域配置和 worktree 归属：
 
 ```bash
 pnpm mobile:sim:start
@@ -128,6 +143,7 @@ pnpm --filter mobile test:smoke
 
 - TypeScript 改动至少运行 typecheck 和相关定向测试。
 - 修改跨端协议、Device Link、导航主流程或原生边界时，追加 scope、smoke 或相应 E2E。
+- 用模拟器验证后运行 `pnpm mobile:sim:logcheck` 并汇报结果：`ERROR` 要修复或说明与本次改动无关，新 `WARN` 要写进汇报，无法判定不算通过。详见[模拟器调试手册](../../apps/mobile/docs/simulator-debugging.md#logs)。
 - 视觉改动同时遵守 [Cindy 设计规范](../design-rules/cindy-design-system.md) 与
   [Mobile 设计规范](../../apps/mobile/docs/mobile-design-guide.md)。
 - 记录实际执行和结果；未执行的高相关检查必须说明原因。

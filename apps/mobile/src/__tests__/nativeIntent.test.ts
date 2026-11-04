@@ -14,7 +14,7 @@ import {
 } from '@/device-link/providerShareLinkIntent';
 import { clearRelayJoinIntent, getPendingRelayJoinIntent } from '@/device-link/relayJoinIntent';
 import { redirectSystemPath } from '../../app/+native-intent';
-import { closeChatInvite, getChatInviteIntent, openManualChatInvite } from '@/chat/chatInviteIntent';
+import { closeChatInvite, getChatInviteIntent, openManualChatInvite, setManualChatInviteLink } from '@/chat/chatInviteIntent';
 
 const invitation = 'A'.repeat(43);
 const incoming = 'cindy://shared-session?invitation=' + invitation + '&server=https%3A%2F%2Frelay.example.test';
@@ -44,8 +44,6 @@ describe('mobile native deep-link redirects', () => {
       `cindycn://chat-invite/${invitation}`,
       `cindydev://chat-invite/${invitation}`,
       `/chat-invite/${invitation}`,
-      `https://public.example.invalid/dl/chat-invite/join#${invitation}?app=cindycn`,
-      `/dl/chat-invite/join#${invitation}?app=cindydev`,
     ]) {
       const route = redirectSystemPath({ path, initial });
       expect(route).toBe(initial ? '/' : null);
@@ -53,6 +51,35 @@ describe('mobile native deep-link redirects', () => {
       expect(getPendingSharedTaskInvitationIntent()).toBeNull();
       clearChatInvite();
     }
+  });
+
+  // Unit regression: two ingress hosts for one share ID must keep one intent;
+  // the prior same-URL case did not distinguish invitation identity from its host.
+  it('keeps opaque share references outside router state and deduplicates the same share', () => {
+    const link = `https://share.example.test/chat-invite/${'s'.repeat(32)}`;
+    expect(redirectSystemPath({ path: link, initial: true })).toBe('/');
+    const target = getChatInviteIntent()!;
+    expect(target.link).toBe(link);
+    for (const path of [link, link.replace('share.example.test', 'share-cn.example.test')]) {
+      expect(redirectSystemPath({ path, initial: false })).toBeNull();
+      expect(getChatInviteIntent()).toBe(target);
+    }
+  });
+
+  it('keeps a resolved manual share as the same invitation when its original link opens again', () => {
+    const link = `https://share.example.test/chat-invite/${'s'.repeat(32)}`;
+    openManualChatInvite(); const id = getChatInviteIntent()!.id;
+    setManualChatInviteLink(id, link);
+    setManualChatInviteLink(id, `cindy://chat-invite/${invitation}`);
+    for (const path of [link, link.replace('share.example.test', 'share-cn.example.test')]) {
+      redirectSystemPath({ path, initial: false });
+      expect(getChatInviteIntent()?.hasOtherInvitation).toBe(false);
+    }
+    setManualChatInviteLink(id);
+    const other = `https://share.example.test/chat-invite/${'t'.repeat(32)}`;
+    setManualChatInviteLink(id, other); setManualChatInviteLink(id, `cindy://chat-invite/${shareInvitation}`);
+    redirectSystemPath({ path: link, initial: false });
+    expect(getChatInviteIntent()?.hasOtherInvitation).toBe(true);
   });
 
   it('shows the local format result without retaining malformed input or selecting its server', () => {

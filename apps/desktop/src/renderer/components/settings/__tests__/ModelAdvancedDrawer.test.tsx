@@ -309,6 +309,73 @@ describe('model advanced editor', () => {
     } finally { Object.defineProperty(window, 'electronAPI', { configurable: true, value: previous }); }
   });
 
+  it('saves a new Pi Messages selection without an ambiguous same-endpoint route', async () => {
+    const update = vi.fn(async (...args: unknown[]) => {
+      void args;
+      return { ok: true };
+    });
+    const previous = window.electronAPI;
+    Object.defineProperty(window, 'electronAPI', { configurable: true, value: { maker: { updateCustomProvider: update } } });
+    const source = { ...buildUserProvider({ id: 'mixed-gateway', name: 'Mixed Gateway', runtimes: {
+      pi: { baseUrl: 'https://gateway.example/v1', wireProtocol: 'openai-chat',
+        models: [{ id: 'messages-model', name: 'Messages Model' }] },
+    } }), connected: true } as ProviderView;
+    try {
+      render(<ModelAdvancedDrawer provider={source} row={{ id: 'messages-model', name: 'Messages Model',
+        avail: ['pi'], byAgent: { pi: source.models.pi![0] } }} open onOpenChange={vi.fn()}
+        pricePresentationOf={() => null} onDisable={vi.fn()} disabled={false} paymentRequired={false} />);
+      fireEvent.keyDown(screen.getByRole('button', { name: 'Pi · settings.providers.custom.fields.wireProtocol' }), { key: 'ArrowDown' });
+      fireEvent.click(await screen.findByRole('menuitemradio', { name: 'Messages' }));
+      await waitFor(() => expect(update).toHaveBeenCalledOnce());
+      const config = update.mock.calls[0]![0] as Parameters<typeof buildUserProvider>[0];
+      expect(config.runtimes.pi!.models[0]).toEqual({ id: 'messages-model', name: 'Messages Model',
+        api: 'anthropic-messages', piApi: 'anthropic-messages' });
+    } finally { Object.defineProperty(window, 'electronAPI', { configurable: true, value: previous }); }
+  });
+
+  // #7258: selecting another API first must not leave a generated route that
+  // survives refresh and blocks Pi's Messages /v1 endpoint correction.
+  it.each([
+    ['openai-chat', 'Responses', 'openai-responses'],
+    ['anthropic-messages', 'Responses', 'openai-responses'],
+    ['google-generative-ai', 'Responses', 'openai-responses'],
+    ['google-generative-ai', 'Google Gemini', 'google-generative-ai'],
+  ] as const)('avoids generated Pi routes after %s runtime selects %s', async (wireProtocol, firstLabel, firstApi) => {
+    const update = vi.fn(async (...args: unknown[]) => {
+      void args;
+      return { ok: true };
+    });
+    const previous = window.electronAPI;
+    Object.defineProperty(window, 'electronAPI', { configurable: true, value: { maker: { updateCustomProvider: update } } });
+    const source = { ...buildUserProvider({ id: 'mixed-gateway', name: 'Mixed Gateway', runtimes: {
+      pi: { baseUrl: 'https://gateway.example/v1', wireProtocol,
+        models: [{ id: 'messages-model', name: 'Messages Model' }] },
+    } }), connected: true } as ProviderView;
+    try {
+      render(<ModelAdvancedDrawer provider={source} row={{ id: 'messages-model', name: 'Messages Model',
+        avail: ['pi'], byAgent: { pi: source.models.pi![0] } }} open onOpenChange={vi.fn()}
+        pricePresentationOf={() => null} onDisable={vi.fn()} disabled={false} paymentRequired={false} />);
+      fireEvent.keyDown(screen.getByRole('button', { name: 'Pi · settings.providers.custom.fields.wireProtocol' }), { key: 'ArrowDown' });
+      fireEvent.click(await screen.findByRole('menuitemradio', { name: firstLabel }));
+      await waitFor(() => expect(update).toHaveBeenCalledTimes(1));
+      const firstConfig = update.mock.calls[0]![0] as Parameters<typeof buildUserProvider>[0];
+      expect(firstConfig.runtimes.pi!.models[0]).toEqual({ id: 'messages-model', name: 'Messages Model',
+        api: firstApi, piApi: firstApi });
+
+      cleanup();
+      const refreshed = { ...buildUserProvider(firstConfig), connected: true } as ProviderView;
+      render(<ModelAdvancedDrawer provider={refreshed} row={{ id: 'messages-model', name: 'Messages Model',
+        avail: ['pi'], byAgent: { pi: refreshed.models.pi![0] } }} open onOpenChange={vi.fn()}
+        pricePresentationOf={() => null} onDisable={vi.fn()} disabled={false} paymentRequired={false} />);
+      fireEvent.keyDown(screen.getByRole('button', { name: 'Pi · settings.providers.custom.fields.wireProtocol' }), { key: 'ArrowDown' });
+      fireEvent.click(await screen.findByRole('menuitemradio', { name: 'Messages' }));
+      await waitFor(() => expect(update).toHaveBeenCalledTimes(2));
+      const saved = update.mock.calls[1]![0] as Parameters<typeof buildUserProvider>[0];
+      expect(saved.runtimes.pi!.models[0]).toEqual({ id: 'messages-model', name: 'Messages Model',
+        api: 'anthropic-messages', piApi: 'anthropic-messages' });
+    } finally { Object.defineProperty(window, 'electronAPI', { configurable: true, value: previous }); }
+  });
+
   // V6 selection is a user intent, not a copy of today's resolved route/limits. Presets hide the
   // menu, but a choice saved before keeps its way back to automatic.
   it.each(['auto', 'moonshot-kimi-code-openai-responses'])('lets a saved Kimi interface choice change to %s without locking catalog defaults', async (interfaceId) => {
@@ -378,6 +445,32 @@ describe('model advanced editor', () => {
           baseUrl: 'https://generativelanguage.googleapis.com/v1beta', wireProtocol: 'google-generative-ai',
         } }, { id: 'other', name: 'Other' },
       ]);
+    } finally { Object.defineProperty(window, 'electronAPI', { configurable: true, value: previous }); }
+  });
+
+  it('keeps the official Google endpoint rewrite for a Pi Gemini selection', async () => {
+    const update = vi.fn(async (...args: unknown[]) => {
+      void args;
+      return { ok: true };
+    });
+    const previous = window.electronAPI;
+    Object.defineProperty(window, 'electronAPI', { configurable: true, value: { maker: { updateCustomProvider: update } } });
+    const source = { ...buildUserProvider({ id: 'google-fixture', name: 'Google Fixture', runtimes: {
+      pi: { baseUrl: 'https://generativelanguage.googleapis.com/v1beta/openai', wireProtocol: 'openai-chat',
+        models: [{ id: 'new-gemini', name: 'New Gemini' }] },
+    } }), connected: true } as ProviderView;
+    try {
+      render(<ModelAdvancedDrawer provider={source} row={{ id: 'new-gemini', name: 'New Gemini',
+        avail: ['pi'], byAgent: { pi: source.models.pi![0] } }} open onOpenChange={vi.fn()}
+        pricePresentationOf={() => null} onDisable={vi.fn()} disabled={false} paymentRequired={false} />);
+      fireEvent.keyDown(screen.getByRole('button', { name: 'Pi · settings.providers.custom.fields.wireProtocol' }), { key: 'ArrowDown' });
+      fireEvent.click(await screen.findByRole('menuitemradio', { name: 'Google Gemini' }));
+      await waitFor(() => expect(update).toHaveBeenCalledOnce());
+      const config = update.mock.calls[0]![0] as Parameters<typeof buildUserProvider>[0];
+      expect(config.runtimes.pi!.models[0]).toEqual({ id: 'new-gemini', name: 'New Gemini',
+        api: 'google-generative-ai', piApi: 'google-generative-ai', route: {
+          baseUrl: 'https://generativelanguage.googleapis.com/v1beta', wireProtocol: 'google-generative-ai',
+        } });
     } finally { Object.defineProperty(window, 'electronAPI', { configurable: true, value: previous }); }
   });
 

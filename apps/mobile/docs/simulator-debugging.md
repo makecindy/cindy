@@ -68,6 +68,27 @@ explicitly leaves visible-window acceptance to a screenshot/manual check. Withou
 
 ## 截图与当前版本测试
 
+**默认入口：`pnpm mobile:sim:up`（只看界面加 `-- --mock`）。** 它按下面的流程完成第 1–6 步中除目检外的
+部分，并遵守同样的授权范围：不 `--clean`、不卸载、不新建或删除设备，不停止其他任务的 Metro（`--takeover`
+除外）。
+
+| 选择 | 规则 |
+|---|---|
+| 设备 | `--udid` → `--device <名称>` 或个人设置的 `CINDY_MOBILE_SIM_DEVICE` → 连着本 worktree Metro 的已开机 iPhone → 唯一一台候选（装了 App 且没有 Metro 在服务的已开机 iPhone，或装了 App 的关机 iPhone）。候选有多台时不猜，报 `DEVICE_CHOICE_NEEDED` 并列出候选，由用户指定；一台都没有时报 `NO_REUSABLE_DEVICE`，由 `next` 给出新建方法 |
+| Metro | 复用本 worktree 身份一致的 Metro；身份过期就重启自己的；`8081` 属于其他任务时用 `8082`–`8086` 的空闲端口，并把设备指过去 |
+| 原生包 | `native-matched` 就复用，否则运行 `rebuild`（先查缓存）；探测失败报 `NATIVE_PROBE_FAILED`，不当作需要重装 |
+| App | 启动后等 Metro 日志出现这次的 `iOS Bundled`，没等到就重新启动。`bundleVerified: false` 表示这个 Metro 没有日志（例如在日志功能之前启动），无法确认 |
+| 前台 | 读设备日志里 App 最新的运行状态，不在前台就切回前台（开机后系统偶尔会把它挤到后台）。`foreground: null` 表示日志里没有状态，未确认 |
+
+失败时结果 JSON 的 `code` 说明原因，`next` 说明下一步：`UNSUPPORTED_PLATFORM`、`BAD_ARGS`、
+`SIMULATOR_UNAVAILABLE`、`UNKNOWN_DEVICE`、`DEVICE_CHOICE_NEEDED`、`NO_REUSABLE_DEVICE`、`BOOT_FAILED`、`METRO_PROBE_FAILED`、
+`METRO_PORTS_BUSY`、`METRO_START_FAILED`、`NATIVE_PROBE_FAILED`、`IOS_BUILD_TOOLS_UNAVAILABLE`、
+`REBUILD_FAILED`、`LAUNCH_FAILED`、`BUNDLE_FAILED`、`BUNDLE_NOT_SEEN`、`APP_NOT_FOREGROUND`、`IDENTITY_FAILED`。Metro 日志由
+`mobile:sim:start` 写在系统临时目录（结果的 `metroLog`），验证后照常运行 `next` 里给出的 `mobile:sim:logcheck`；
+编译失败时，编译日志的路径在 `next` 里。
+
+只有 `up` 失败、或需要单独控制某一步时，才手动执行下面的流程。
+
 “给我看这次手机改动的截图”与启动当前版本测试共用此流程。本节是 Agent 做手机模拟器测试的
 唯一流程正本，不另设个人 Skill；开发者个人只保留常用机型、模拟器后端等偏好。
 
@@ -90,7 +111,7 @@ explicitly leaves visible-window acceptance to a screenshot/manual check. Withou
    机型要求，不能因另一型号已经启动就把它当作目标，也不使用已知被其他任务占用的设备。机型
    和个人选择都没有时可复用唯一已启动设备，否则询问。后续命令保持相同 region、UDID、模拟器
    后端和 mock 开关。
-   Cindy 模拟器经已安装的 `baguette-simulator` 插件操作：先查实时详情和 `devices`，按精确 UDID
+   Cindy 模拟器经已安装的 `cindy-simulator` 插件操作：先查实时详情和 `devices`，按精确 UDID
    操作，只用 `environment` 列出的已安装 runtime，同机型有可复用设备时不重复创建。`auto` 只在
    插件未安装或 `RUNTIME_DISABLED` 时回退系统模拟器；固定 `cindy` 时报告不可用，不替用户重新
    启用插件。Cindy 模拟器的设备全部关机或都被其他任务占用，不是回退理由：通过插件复用或新建
@@ -167,6 +188,8 @@ apply". Treat the following as a contract, not optional steps:
      not read the device's `RCT_jsLocation`, so the label is what proves which
      Metro the app actually used.
   3. The Metro terminal printed a fresh `iOS Bundled …` after your edit.
+  4. After exercising the path, `pnpm mobile:sim:logcheck` passes or its findings
+     are reported. See [Logs](#logs).
 
 ### Tools (use these instead of ad-hoc `lsof`/`PlistBuddy`/deep-link dances)
 
@@ -178,6 +201,7 @@ pnpm mobile:sim:start -- --region=cn # 中国大陆版 JS region；先 rebuild �
 pnpm mobile:sim:whoami     # doctor: booted install + which port = which worktree
 pnpm mobile:sim:whoami -- --region=cn # inspect the cn native app + Metro ownership
 pnpm mobile:sim:rebuild    # install a compatible cached dev app, or build it on a cache miss
+pnpm mobile:sim:logcheck   # errors and new warnings since the latest bundle (--port for others)
 ```
 
 `mobile:sim:start` and `mobile:sim:rebuild` default to `global`; the China
@@ -260,7 +284,7 @@ When `8081` serves another task and you are not authorized to take it over, give
 this task its own device and port instead of waiting or taking over:
 
 1. Use a device no other task is using, in the backend this task already selected:
-   for Cindy's simulator create or reuse one through the `baguette-simulator` plugin;
+   for Cindy's simulator create or reuse one through the `cindy-simulator` plugin;
    only for the system simulator use `xcrun simctl create`. Either set can
    `xcrun simctl clone` a shut-down device to keep its login (for Cindy's, add the
    `--set` below). One device follows one Metro; never repoint a device another task
@@ -466,14 +490,42 @@ errors, auth errors, and Expo runtime warnings:
 pnpm --filter mobile start -- --dev-client --host lan
 ```
 
+`mobile:sim:start` also writes Metro's output to a new private directory under the
+system temp directory for each launch (the path is printed at start and recorded
+with that Metro's port ownership), and deletes it when that Metro exits. The raw
+output can contain credentials, so it never goes into the worktree and is not kept
+after the run. Every simulator verification ends with:
+
+```bash
+pnpm mobile:sim:logcheck   # add -- --port 8082 for a parallel device
+```
+
+It reads only the output after the latest entry bundle, so reload the app and
+exercise the path first.
+
+| Exit | Meaning | Required action |
+| ---- | ------- | --------------- |
+| `0` | No errors. New warnings may be listed. | Include every listed warning in your report. |
+| `1` | An `ERROR` or failed bundle. | Fix it, or report why it is unrelated to your change. Never claim a clean verification. |
+| `2` | Cannot tell: Metro belongs to another worktree or stopped, this launch has no usable log, or nothing bundled. | Fix the setup and rerun. This is not a pass. |
+
+`scripts/sim-logcheck-known-warnings.json` lists warnings we are not fixing now,
+each with a reason. Add an entry only with that reason, and remove it once the
+warning is fixed. Errors cannot be listed. One Metro's log mixes every device
+connected to it, so give each task its own device and port (see
+[Parallel devices](#parallel-devices-another-task-owns-8081)).
+
 Use the simulator system log for native crashes or native auth/session issues:
 
 ```bash
 xcrun simctl spawn booted log stream --style compact --predicate 'process == "Cindy"'
 ```
 
-The in-app "Open debugger to view warnings" banner means a JavaScript warning is
-active. Read Metro before changing UI code.
+React Native shows no per-warning banner here: without a debugger attached, the
+first warning only triggers a fixed "Open debugger to view warnings" banner.
+`src/debug/quietDevLogs.ts` hides that banner because it covers the UI, so a clean
+screen does not mean there are no warnings. Warnings still reach Metro and the
+debugger, and error banners still appear. Read Metro before changing UI code.
 
 For device-link network symptoms, collect:
 
@@ -668,4 +720,5 @@ Run this checklist:
 - Run `pnpm --filter mobile typecheck` when TypeScript changed.
 - Run the narrow relevant test when there is one.
 - Manually touch the exact path that regressed in the simulator.
+- Run `pnpm mobile:sim:logcheck` afterward and report its result.
 - Tell the tester which simulator/device, runtime, and build were used.
