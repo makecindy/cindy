@@ -111,6 +111,8 @@ function provider(id = providerId, efforts: PiReasoningEffort[] = []): ProviderV
 async function submit(options: {
   entry?: 'send' | 'goal';
   createFailure?: boolean;
+  checkoutBusy?: boolean;
+  worktreeEnabled?: boolean;
   pluginRoute?: () => Promise<GhostStartTaskRouteResult>;
   /** 选了模型组：发送时解析出的结果。 */
   modelGroupRoute?: ModelGroupResolveResult;
@@ -278,8 +280,9 @@ async function submit(options: {
     wtRef: { current: options.worktree
       ? { confirmedIneligible: false, baseRepo, name: 'creator', branchPreferenceReady: true, supportsRecoveryKeyDiscard: true, ...options.worktree }
       : hasWorktree
-      ? { enabled: true, confirmedIneligible: false, baseRepo, name: 'creator', sourceBranch: 'other-branch', branchPreferenceReady: true, supportsRecoveryKeyDiscard: true }
+      ? { enabled: options.worktreeEnabled ?? true, confirmedIneligible: false, baseRepo, name: 'creator', sourceBranch: 'other-branch', branchPreferenceReady: true, supportsRecoveryKeyDiscard: true }
       : { enabled: false, confirmedIneligible: true } },
+    wtCheckoutBusyRef: { current: options.checkoutBusy ?? false },
     wtPreferenceSavingRef: { current: false }, wtPreferenceAuthorityUnknownRef: { current: false },
     wtBranchPreferenceSavingRef: { current: options.branchSaving ?? false },
     wtBranchPreferenceErrorRef: { current: false },
@@ -444,6 +447,14 @@ describe('homepage submission to Main admission and first-message handoff', () =
     expect(result.createSession).toHaveBeenCalledOnce();
     expect(result.detectCwd).not.toHaveBeenCalled();
   });
+  // Checkout is asynchronous even when worktree is off. The actual send/goal
+  // callbacks must retain the draft rather than start a task on the old branch.
+  it.each(['send', 'goal'] as const)('does not create a task while checkout is running (%s)', async entry => {
+    const result = await submit({ entry, checkoutBusy: true, worktreeEnabled: false, worktreeSkills: [] });
+    expect(result.createSession).not.toHaveBeenCalled();
+    expect(result.sendMessage).not.toHaveBeenCalled();
+  });
+
   // #8010 review / unit: execute the route's actual declarations then its submit
   // callback. Earlier fixtures always gave B a local provider/capability marker.
   it('offers and submits a routed source when the task host has no local providers', async () => {

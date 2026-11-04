@@ -15,7 +15,7 @@ import {
   waitFor,
 } from '@testing-library/react';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
-import { BranchWorktreeChip } from '../WorktreeChipsRow';
+import { BranchWorktreeChip, WorktreeChipsRow } from '../WorktreeChipsRow';
 import { Tooltip } from '@/components/ui/tooltip';
 const render = (element: React.ReactElement) =>
   rtlRender(element, {
@@ -84,8 +84,14 @@ const refreshButton = () => screen.getByRole('button', { name: /newChat.branchSy
 // operation handle rather than repeating the mutation. Unit tier, real hook/UI.
 it('continues waiting for the same remote fetch and shows its final result', async () => {
   const operationId = '8a7768e7-e652-4458-9c15-96af310bc9cb';
-  const replies = [{ pending: true, operationId }, { pending: true, operationId }, { status: baseStatus, updated: 3 }];
-  invoke.mockImplementation(async (_device, channel) => channel === 'worktree:sync-branch' ? replies.shift() : baseStatus);
+  const replies = [
+    { pending: true, operationId },
+    { pending: true, operationId },
+    { status: baseStatus, updated: 3 },
+  ];
+  invoke.mockImplementation(async (_device, channel) =>
+    channel === 'worktree:sync-branch' ? replies.shift() : baseStatus,
+  );
   render(<BranchWorktreeChip {...props} deviceId="remote-a" />);
   // The action exists while the initial status is still loading; wait until a
   // user can click it before checking remote operation continuation.
@@ -178,15 +184,15 @@ it('combines diverged counts into one status segment and keeps dirty files', asy
   expect(screen.queryByText(/newChat.branchSync.ahead/)).toBeNull();
   expect(screen.queryByText(/newChat.branchSync.behind/)).toBeNull();
 });
-it('shows remote sources only when worktree is checked or branchOnly is used', async () => {
-  const view = render(<BranchWorktreeChip {...props} checked={false} />);
-  await waitFor(() => expect(refreshButton().hasAttribute('disabled')).toBe(false));
+it('offers origin sources while unchecked without a separate unchecked sync mutation', async () => {
+  render(<BranchWorktreeChip {...props} checked={false} />);
   await act(async () => {
     fireEvent.click(branchButton());
   });
-  expect(screen.queryByRole('group', { name: 'newChat.branchSync.remoteGroup' })).toBeNull();
-  view.rerender(<BranchWorktreeChip {...props} checked={false} branchOnly />);
   expect(screen.getByRole('group', { name: 'newChat.branchSync.remoteGroup' })).toBeTruthy();
+  expect(screen.queryByRole('button', { name: /newChat.branchSync.action/ })).toBeNull();
+  fireEvent.click(screen.getAllByRole('option', { name: 'origin/main' })[0]);
+  expect(props.onPick).toHaveBeenCalledWith('refs/remotes/origin/main');
 });
 it('hides the action when an old controlled host rejects the status channel', async () => {
   invoke.mockRejectedValue(new Error('[DEVICE_LINK_CHANNEL_NOT_ALLOWED] Old host'));
@@ -310,4 +316,180 @@ it('does not warn for a blocked click result after changing branch or project', 
   await act(async () => resolve({ status: { ...baseStatus, blocked: 'conflict' }, updated: 0 }));
   expect(mocks.warning).not.toHaveBeenCalled();
   expect(mocks.toast).not.toHaveBeenCalled();
+});
+
+// Regression: the unchecked chip used the remembered worktree source while the
+// session would run on main. Exercise the real row and hooks, mocking only IPC.
+const checkoutStatus = {
+  current: 'main',
+  head: 'head',
+  fingerprint: 'fingerprint',
+  files: [],
+  sessions: [],
+  occupied: [],
+  carryAllowed: true,
+  stashes: [],
+};
+function setupCheckout(supportsCheckout = true, overrides = {}) {
+  const checkout = vi.fn().mockResolvedValue({ status: { ...checkoutStatus, ...overrides } });
+  Object.assign(window.electronAPI, {
+    worktreeDetectCwd: vi.fn().mockResolvedValue({
+      isGitRepo: true,
+      gitInstalled: true,
+      isInsideWorktree: false,
+      repoRoot: '/repo',
+      currentBranch: 'main',
+      supportsCheckout,
+    }),
+    worktreeListBranches: vi.fn().mockResolvedValue({
+      current: 'main',
+      branches: ['main', 'feature'],
+      remoteDefaultBranch: 'refs/remotes/origin/main',
+    }),
+    worktreeSuggestName: vi.fn().mockResolvedValue({ name: 'test' }),
+    worktreeCheckout: checkout,
+  });
+  return checkout;
+}
+function CheckoutRow() {
+  const [enabled, setEnabled] = React.useState(false);
+  const [source, setSource] = React.useState('remembered-source');
+  return (
+    <WorktreeChipsRow
+      cwd="/repo"
+      enabled={enabled}
+      onEnabledChange={setEnabled}
+      sourceBranch={source}
+      onSourceBranchChange={setSource}
+      variant="advancedOnly"
+    />
+  );
+}
+it('shows actual checkout when off and the remembered source when on; toggles never mutate Git', async () => {
+  const checkout = setupCheckout();
+  render(<CheckoutRow />);
+  await waitFor(() => expect(branchButton().textContent).toBe('main'));
+  await act(async () => {
+    fireEvent.click(screen.getByTestId('create-agent-worktree-chip'));
+  });
+  await waitFor(() => expect(branchButton().textContent).toBe('remembered-source'));
+  await act(async () => {
+    fireEvent.click(screen.getByTestId('create-agent-worktree-chip'));
+  });
+  expect(branchButton().textContent).toBe('main');
+  expect(checkout.mock.calls.every(([req]) => req.action === 'status')).toBe(true);
+});
+it('disables occupied branches and all checkout choices while a task is running; explicit worktree keeps the menu open', async () => {
+  const checkout = setupCheckout(true, {
+    blocked: 'busy',
+    sessions: [{ id: 'a', name: 'Active', running: true }],
+  });
+  render(<CheckoutRow />);
+  await waitFor(() => expect(branchButton().textContent).toBe('main'));
+  await act(async () => {
+    fireEvent.click(branchButton());
+  });
+  await waitFor(() =>
+    expect(screen.getByRole('option', { name: /feature/ }).getAttribute('aria-disabled')).toBe(
+      'true',
+    ),
+  );
+  await act(async () => {
+    fireEvent.click(screen.getByRole('option', { name: /feature/ }));
+  });
+  expect(checkout.mock.calls.every(([req]) => req.action === 'status')).toBe(true);
+  await act(async () => {
+    fireEvent.click(screen.getByRole('button', { name: 'newChat.checkout.useWorktree' }));
+  });
+  expect(screen.getByRole('listbox')).toBeTruthy();
+  expect(screen.getByTestId('create-agent-worktree-chip').getAttribute('aria-pressed')).toBe(
+    'true',
+  );
+  expect(screen.getByRole('option', { name: 'feature' }).getAttribute('aria-disabled')).toBe(
+    'false',
+  );
+});
+it('lets the user cancel dirty checkout or choose worktree without any Git mutation', async () => {
+  const checkout = setupCheckout(true, { files: ['changed.txt'] });
+  render(<CheckoutRow />);
+  await waitFor(() => expect(branchButton().textContent).toBe('main'));
+  await act(async () => {
+    fireEvent.click(branchButton());
+  });
+  await act(async () => {
+    fireEvent.click(await screen.findByRole('option', { name: 'feature' }));
+  });
+  await screen.findByRole('dialog');
+  await act(async () => {
+    fireEvent.click(screen.getByRole('button', { name: 'commonUi.confirmDialog.cancel' }));
+  });
+  expect(screen.queryByRole('dialog')).toBeNull();
+  await act(async () => {
+    fireEvent.click(branchButton());
+  });
+  await act(async () => {
+    fireEvent.click(await screen.findByRole('option', { name: 'feature' }));
+  });
+  await screen.findByRole('dialog');
+  await act(async () => {
+    fireEvent.click(screen.getByRole('button', { name: 'newChat.checkout.useWorktree' }));
+  });
+  expect(screen.queryByRole('dialog')).toBeNull();
+  expect(branchButton().textContent).toBe('feature');
+  expect(checkout.mock.calls.every(([req]) => req.action === 'status')).toBe(true);
+});
+it('keeps an old execution host read-only and never invokes the new channel', async () => {
+  const checkout = setupCheckout(false);
+  render(<CheckoutRow />);
+  await waitFor(() => expect(branchButton().textContent).toBe('main'));
+  expect(branchButton().getAttribute('aria-disabled')).toBe('true');
+  expect(checkout).not.toHaveBeenCalled();
+});
+
+it('updates the real branch after checkout and restores the previous source preference on undo', async () => {
+  const checkout = setupCheckout();
+  let current = 'main';
+  checkout.mockImplementation(async (req) => {
+    if (req.action === 'switch') {
+      current = 'feature';
+      return {
+        status: { ...checkoutStatus, current },
+        receipt: {
+          id: 'receipt',
+          from: 'main',
+          to: current,
+          strategy: 'carry',
+          hadChanges: false,
+          sessions: [],
+        },
+      };
+    }
+    if (req.action === 'undo') current = 'main';
+    return { status: { ...checkoutStatus, current } };
+  });
+  render(<CheckoutRow />);
+  await waitFor(() => expect(branchButton().textContent).toBe('main'));
+  await act(async () => {
+    fireEvent.click(branchButton());
+  });
+  await act(async () => {
+    fireEvent.click(await screen.findByRole('option', { name: 'feature' }));
+  });
+  await waitFor(() => expect(branchButton().textContent).toBe('feature'));
+  expect(checkout).toHaveBeenCalledWith(
+    expect.objectContaining({
+      action: 'switch',
+      branch: 'feature',
+      expected: 'main',
+      strategy: 'carry',
+    }),
+  );
+  await act(async () => {
+    fireEvent.click(screen.getByRole('button', { name: 'newChat.checkout.undo' }));
+  });
+  await waitFor(() => expect(branchButton().textContent).toBe('main'));
+  await act(async () => {
+    fireEvent.click(screen.getByTestId('create-agent-worktree-chip'));
+  });
+  expect(branchButton().textContent).toBe('remembered-source');
 });

@@ -14609,6 +14609,35 @@
       "later": "Plus tard",
       "ready": "Les pages interactives sont activées pour le prochain appel de l'outil de plugin.",
       "updateHost": "Mettez à jour Cindy sur l'ordinateur d'exécution pour approuver les pages interactives ici."
+    },
+    "checkout": {
+      "useWorktree": "Utiliser worktree",
+      "worktreeDefault": "Les nouvelles sessions utiliseront aussi worktree par défaut. Vous pourrez le désactiver à tout moment.",
+      "switched": "Passage à {{branch}} effectué",
+      "stashed": " · Modifications mises de côté",
+      "carried": " · Modifications transférées",
+      "sessionsContinue": "{{names}} continuera aussi sur {{branch}} la prochaine fois.",
+      "undo": "Annuler",
+      "savedChanges": "Des modifications sont mises de côté pour {{branch}}.",
+      "restore": "Restaurer les modifications",
+      "title": "Passer à {{branch}}",
+      "dirtyDescription": "{{branch}} comporte {{count}} modifications non validées. Choisissez comment les traiter avant de changer de branche. Les deux options conservent vos modifications.",
+      "carry": "Transférer les modifications vers {{branch}}",
+      "stash": "Les garder pour {{branch}}",
+      "worktreeGuide": "Vous préférez garder ce dossier tel quel ? Utilisez worktree pour partir de {{branch}} dans un dossier séparé. Vos modifications restent intactes et ne seront pas copiées.",
+      "worktreeGuideSessions": "Vous préférez garder ce dossier tel quel ? Utilisez worktree pour partir de {{branch}} dans un dossier séparé. Vos modifications et les {{count}} sessions restent intactes. Les modifications ne seront pas copiées.",
+      "idleSessions": "Ce dossier contient {{count}} autres sessions ({{names}}). Elles continueront aussi sur la nouvelle branche.",
+      "errors": {
+        "busy": "Une session est en cours ou active en arrière-plan dans ce dossier. Attendez la fin ou utilisez worktree.",
+        "operation": "Terminez la fusion, le rebase ou toute autre opération Git avant de changer de branche.",
+        "occupied": "Déjà ouverte dans un autre worktree",
+        "changed": "La branche ou les modifications ont changé. Vérifiez le dossier. Vous ne pouvez annuler que si vous êtes encore sur la branche de destination.",
+        "conflict": "Ces modifications sont en conflit avec la branche de destination. Mettez-les de côté ou utilisez worktree.",
+        "dirty": "De nouvelles modifications non validées sont présentes. Traitez-les avant de restaurer.",
+        "diverged": "Les branches locale et distante ont divergé. Résolvez ce problème avant de changer.",
+        "missing": "La branche choisie n’existe plus. Actualisez la liste.",
+        "git": "L’opération n’a pas pu être terminée. Vérifiez la branche actuelle et git stash list avant de réessayer."
+      }
     }
   },
   "onboarding": {

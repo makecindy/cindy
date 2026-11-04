@@ -14609,6 +14609,35 @@
       "later": "Mais tarde",
       "ready": "As páginas interativas estão ativadas para a próxima chamada de ferramenta do plugin.",
       "updateHost": "Atualize o Cindy no computador de execução para aprovar páginas interativas aqui."
+    },
+    "checkout": {
+      "useWorktree": "Usar worktree",
+      "worktreeDefault": "As novas sessões também usarão worktree por predefinição. Pode desativar a qualquer momento.",
+      "switched": "Mudou para {{branch}}",
+      "stashed": " · Alterações guardadas temporariamente",
+      "carried": " · Alterações transferidas",
+      "sessionsContinue": "{{names}} também continuará em {{branch}} da próxima vez.",
+      "undo": "Anular",
+      "savedChanges": "Há alterações guardadas para {{branch}}.",
+      "restore": "Restaurar alterações",
+      "title": "Mudar para {{branch}}",
+      "dirtyDescription": "{{branch}} tem {{count}} alterações por submeter. Escolha como as tratar antes de mudar. Ambas as opções preservam as alterações.",
+      "carry": "Levar as alterações para {{branch}}",
+      "stash": "Guardá-las para {{branch}}",
+      "worktreeGuide": "Prefere manter este diretório? Use worktree para começar a partir de {{branch}} num diretório separado. As alterações atuais não serão afetadas nem copiadas.",
+      "worktreeGuideSessions": "Prefere manter este diretório? Use worktree para começar a partir de {{branch}} num diretório separado. As alterações e as {{count}} sessões atuais não serão afetadas. As alterações não serão copiadas.",
+      "idleSessions": "Este diretório tem outras {{count}} sessões ({{names}}). Também continuarão no novo ramo.",
+      "errors": {
+        "busy": "Há uma sessão em execução ou com atividade em segundo plano neste diretório. Aguarde ou use worktree.",
+        "operation": "Conclua a integração, o rebase ou outra operação Git antes de mudar.",
+        "occupied": "Já está aberto noutro worktree",
+        "changed": "O ramo ou as alterações mudaram. Verifique o diretório. Só pode anular enquanto estiver no ramo de destino.",
+        "conflict": "Estas alterações entram em conflito com o ramo de destino. Guarde-as primeiro ou use worktree.",
+        "dirty": "Há novas alterações por submeter. Trate-as antes de restaurar.",
+        "diverged": "Os ramos local e remoto divergiram. Resolva a situação antes de mudar.",
+        "missing": "O ramo selecionado já não existe. Atualize a lista.",
+        "git": "Não foi possível concluir a operação. Verifique o ramo atual e git stash list antes de tentar novamente."
+      }
     }
   },
   "onboarding": {

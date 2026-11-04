@@ -7,6 +7,8 @@
  */
 
 import path from 'node:path';
+import { createCheckoutHandler } from './checkoutHandler';
+import type { CheckoutActivity } from './checkout';
 import { readOriginDefaultBranch } from './branchSync';
 import { createBranchSyncHandlers } from './branchSyncHandlers';
 import { assertTrustedAppRendererEvent } from '../security/trustedAppRenderer';
@@ -53,7 +55,28 @@ export * from './types';
  * 注册所有 worktree 相关 IPC handler。重复调用会抛(ipcMain 不允许重复 handle)——
  * 调用方保证只调一次。
  */
-export function registerWorktreeIpc(ipcMain: IpcMain = ipcMainType): void {
+export function registerWorktreeIpc(
+  ipcMain: IpcMain = ipcMainType,
+  listActivity: () => Promise<CheckoutActivity[]> = async () => [],
+): void {
+  ipcMain.handle(
+    'worktree:checkout',
+    createCheckoutHandler({
+      assertTrustedAppRendererEvent,
+      isDeviceLinkInvoke,
+      listActivity,
+      getCallerScope: () => {
+        const owner = getCurrentDbClientSnapshot();
+        return owner
+          ? JSON.stringify([
+              owner.userId,
+              owner.clientEpoch,
+              getDeviceLinkInvokeContext()?.controllerDeviceId ?? 'local',
+            ])
+          : null;
+      },
+    }),
+  );
   const branchSync = createBranchSyncHandlers({
     assertTrustedAppRendererEvent,
     isDeviceLinkInvoke,

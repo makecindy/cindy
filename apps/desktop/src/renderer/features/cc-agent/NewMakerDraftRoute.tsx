@@ -917,6 +917,12 @@ export function NewMakerDraftRoute() {
   const pageDragCounterRef = useRef(0);
   const [pageDragOver, setPageDragOver] = useState(false);
   const [wtCreating, setWtCreating] = useState(false);
+  const [wtCheckoutBusy, setWtCheckoutBusy] = useState(false);
+  const wtCheckoutBusyRef = useRef(false);
+  const handleWtCheckoutBusyChange = useCallback((busy: boolean) => {
+    wtCheckoutBusyRef.current = busy;
+    setWtCheckoutBusy(busy);
+  }, []);
   // 首页「+」→「新建目标」弹窗开关 + 打开时输入框已有文字(作默认目标内容)。
   const [newGoalOpen, setNewGoalOpen] = useState(false);
   const [newGoalInitialObjective, setNewGoalInitialObjective] = useState('');
@@ -4401,7 +4407,8 @@ export function NewMakerDraftRoute() {
       // 卡住普通会话创建——确认不合格目录永远不会创建 worktree。
       if (
         selectedWorktree.confirmedIneligible !== true &&
-        (wtPreferenceSavingRef.current ||
+        (wtCheckoutBusyRef.current ||
+          wtPreferenceSavingRef.current ||
           wtPreferenceAuthorityUnknownRef.current ||
           wtBranchPreferenceSavingRef.current)
       ) {
@@ -5685,7 +5692,8 @@ export function NewMakerDraftRoute() {
         // 确认不合格(2026-08-07 裁决)时跳过偏好写入守卫,与 Send 同口径。
         if (
           selectedWorktree.confirmedIneligible !== true &&
-          (wtPreferenceSavingRef.current ||
+          (wtCheckoutBusyRef.current ||
+            wtPreferenceSavingRef.current ||
             wtPreferenceAuthorityUnknownRef.current ||
             wtBranchPreferenceSavingRef.current)
         ) {
@@ -6695,7 +6703,9 @@ export function NewMakerDraftRoute() {
                   onOpenChange={handleDevicePickerOpenChange}
                   // 窄屏 pill 排会进正常流并 flex-wrap;多台时收成图标 + 状态点少占一行。
                   compact={isDraftNarrow && selectableDevices.length > 1}
-                  disabled={wtCreating || sendInFlight || directoryRecoverySelecting}
+                  disabled={
+                    wtCreating || wtCheckoutBusy || sendInFlight || directoryRecoverySelecting
+                  }
                 />
                 <FolderPickerPopover
                   open={folderPickerOpen}
@@ -6720,7 +6730,9 @@ export function NewMakerDraftRoute() {
                   <button
                     type="button"
                     data-testid="create-agent-mode-pill"
-                    disabled={wtCreating || sendInFlight || directoryRecoverySelecting}
+                    disabled={
+                      wtCreating || wtCheckoutBusy || sendInFlight || directoryRecoverySelecting
+                    }
                     className="inline-flex h-[30px] min-w-20 max-w-[220px] items-center justify-center gap-1.5 rounded-full border border-[var(--create-agent-control-border)] bg-[var(--create-agent-control-bg)] px-3 text-12 font-medium leading-[1.167] text-[var(--create-agent-control-text)] transition-colors hover:bg-[var(--create-agent-control-bg-hover)] active:bg-[var(--create-agent-control-bg-pressed)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--create-agent-focus-ring)] disabled:cursor-not-allowed disabled:opacity-60"
                     aria-label={t('newChat.collaboration.modeLabel')}
                   >
@@ -6749,6 +6761,7 @@ export function NewMakerDraftRoute() {
                   onEnabledChange={handleWtEnabledChange}
                   sourceBranch={wtSourceBranch}
                   onSourceBranchChange={handleWtSourceBranchChange}
+                  onCheckoutBusyChange={handleWtCheckoutBusyChange}
                   onBaseRepoChange={handleWtBaseRepoChange}
                   onRecoveryKeyDiscardSupportChange={handleWtRecoveryKeyDiscardSupportChange}
                   onConfirmedIneligibleChange={handleWtConfirmedIneligibleChange}
@@ -6787,7 +6800,7 @@ export function NewMakerDraftRoute() {
                     // 几次隧道往返。锁定态即时告诉用户「已发出、处理中」,也免得这段时间补写的
                     // 内容在交接成功清空草稿时被一并丢掉;失败解锁后原文仍在。
                     disabled={sendInFlight}
-                    sendBlocked={directoryRecoverySelecting}
+                    sendBlocked={directoryRecoverySelecting || wtCheckoutBusy}
                     settingsLocked={directoryRecoverySelecting}
                     onBeforeVoiceInputStart={handleBeforeVoiceInputStart}
                     externalDragOver={pageDragOver}

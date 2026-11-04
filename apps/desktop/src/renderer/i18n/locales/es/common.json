@@ -14609,6 +14609,35 @@
       "later": "Más tarde",
       "ready": "Las páginas interactivas están habilitadas para la próxima llamada a una herramienta del complemento.",
       "updateHost": "Actualiza Cindy en la computadora de ejecución para aprobar páginas interactivas aquí."
+    },
+    "checkout": {
+      "useWorktree": "Usar worktree",
+      "worktreeDefault": "Las nuevas sesiones también usarán worktree de forma predeterminada. Puedes desactivarlo cuando quieras.",
+      "switched": "Se cambió a {{branch}}",
+      "stashed": " · Cambios guardados temporalmente",
+      "carried": " · Cambios trasladados",
+      "sessionsContinue": "{{names}} también continuará en {{branch}} la próxima vez.",
+      "undo": "Deshacer",
+      "savedChanges": "Hay cambios guardados para {{branch}}.",
+      "restore": "Restaurar cambios",
+      "title": "Cambiar a {{branch}}",
+      "dirtyDescription": "{{branch}} tiene {{count}} cambios sin confirmar. Elige cómo tratarlos antes de cambiar. Ambas opciones conservan los cambios.",
+      "carry": "Llevar los cambios a {{branch}}",
+      "stash": "Guardarlos para {{branch}}",
+      "worktreeGuide": "¿Prefieres conservar este directorio? Usa worktree para empezar desde {{branch}} en un directorio independiente. Los cambios actuales no se verán afectados ni se copiarán.",
+      "worktreeGuideSessions": "¿Prefieres conservar este directorio? Usa worktree para empezar desde {{branch}} en un directorio independiente. Los cambios y las {{count}} sesiones actuales no se verán afectados. Los cambios no se copiarán.",
+      "idleSessions": "Este directorio tiene otras {{count}} sesiones ({{names}}). También continuarán en la nueva rama.",
+      "errors": {
+        "busy": "Hay una sesión en ejecución o con actividad en segundo plano en este directorio. Espera o usa worktree.",
+        "operation": "Completa la fusión, el rebase u otra operación de Git antes de cambiar.",
+        "occupied": "Ya está abierta en otro worktree",
+        "changed": "La rama o los cambios han cambiado. Revisa el directorio. Solo puedes deshacer mientras sigas en la rama de destino.",
+        "conflict": "Los cambios entran en conflicto con la rama de destino. Guárdalos primero o usa worktree.",
+        "dirty": "Hay nuevos cambios sin confirmar. Resuélvelos antes de restaurar.",
+        "diverged": "Las ramas local y remota han divergido. Resuélvelo antes de cambiar.",
+        "missing": "La rama seleccionada ya no existe. Actualiza la lista.",
+        "git": "No se pudo completar la operación. Comprueba la rama actual y git stash list antes de reintentar."
+      }
     }
   },
   "onboarding": {

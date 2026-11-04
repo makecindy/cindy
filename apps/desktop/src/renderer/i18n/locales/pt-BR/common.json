@@ -14609,6 +14609,35 @@
       "later": "Mais tarde",
       "ready": "As páginas interativas estão ativadas para a próxima chamada de ferramenta do plugin.",
       "updateHost": "Atualize o Cindy no computador de execução para aprovar páginas interativas aqui."
+    },
+    "checkout": {
+      "useWorktree": "Usar worktree",
+      "worktreeDefault": "As novas sessões também usarão worktree por padrão. Você pode desativar a qualquer momento.",
+      "switched": "Alterado para {{branch}}",
+      "stashed": " · Alterações guardadas temporariamente",
+      "carried": " · Alterações transferidas",
+      "sessionsContinue": "{{names}} também continuará em {{branch}} na próxima vez.",
+      "undo": "Desfazer",
+      "savedChanges": "Há alterações guardadas para {{branch}}.",
+      "restore": "Restaurar alterações",
+      "title": "Mudar para {{branch}}",
+      "dirtyDescription": "{{branch}} tem {{count}} alterações sem commit. Escolha como lidar com elas antes de mudar. As duas opções preservam suas alterações.",
+      "carry": "Levar as alterações para {{branch}}",
+      "stash": "Guardá-las para {{branch}}",
+      "worktreeGuide": "Prefere manter este diretório? Use worktree para começar de {{branch}} em um diretório separado. As alterações atuais não serão afetadas nem copiadas.",
+      "worktreeGuideSessions": "Prefere manter este diretório? Use worktree para começar de {{branch}} em um diretório separado. As alterações e as {{count}} sessões atuais não serão afetadas. As alterações não serão copiadas.",
+      "idleSessions": "Este diretório tem outras {{count}} sessões ({{names}}). Elas também continuarão na nova branch.",
+      "errors": {
+        "busy": "Há uma sessão em execução ou com atividade em segundo plano neste diretório. Aguarde ou use worktree.",
+        "operation": "Conclua o merge, rebase ou outra operação Git antes de mudar.",
+        "occupied": "Já está aberta em outro worktree",
+        "changed": "A branch ou as alterações mudaram. Verifique o diretório. Só é possível desfazer enquanto estiver na branch de destino.",
+        "conflict": "Estas alterações entram em conflito com a branch de destino. Guarde-as primeiro ou use worktree.",
+        "dirty": "Há novas alterações sem commit. Resolva-as antes de restaurar.",
+        "diverged": "As branches local e remota divergiram. Resolva isso antes de mudar.",
+        "missing": "A branch selecionada não existe mais. Atualize a lista.",
+        "git": "Não foi possível concluir a operação. Verifique a branch atual e git stash list antes de tentar novamente."
+      }
     }
   },
   "onboarding": {

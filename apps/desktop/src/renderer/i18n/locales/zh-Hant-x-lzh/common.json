@@ -14427,6 +14427,35 @@
       "later": "容後再議",
       "ready": "互動頁面已啟。下次呼叫法器工具時即可顯示。",
       "updateHost": "請先更新執行之機上之 Cindy，方能於此確認互動頁面。"
+    },
+    "checkout": {
+      "useWorktree": "改用 worktree",
+      "worktreeDefault": "之後新建任務也會預設勾選 worktree，可隨時取消",
+      "switched": "已切換到 {{branch}}",
+      "stashed": " · 變更已暫存",
+      "carried": " · 變更已一併帶過來",
+      "sessionsContinue": "{{names}} 下次繼續時也會在 {{branch}} 上",
+      "undo": "復原",
+      "savedChanges": "{{branch}} 上有之前收起來的變更",
+      "restore": "還原變更",
+      "title": "切換到 {{branch}}",
+      "dirtyDescription": "{{branch}} 上有 {{count}} 個尚未提交的變更，切換前要決定如何處理。兩種方式都不會遺失變更。",
+      "carry": "一起帶到 {{branch}}",
+      "stash": "先收起來，留在 {{branch}}",
+      "worktreeGuide": "不想動目前的目錄？改用 worktree，在獨立目錄裡從 {{branch}} 開始。目前的變更都不受影響（變更不會帶過去）。",
+      "worktreeGuideSessions": "不想動目前的目錄？改用 worktree，在獨立目錄裡從 {{branch}} 開始。目前的變更和這個目錄裡的 {{count}} 個任務都不受影響（變更不會帶過去）。",
+      "idleSessions": "這個目錄還有 {{count}} 個任務（{{names}}），切換後它們也會在新分支上繼續",
+      "errors": {
+        "busy": "這個目錄有任務正在回覆或有背景活動。請等它結束，或改用 worktree。",
+        "operation": "儲存庫正在合併、重定基底或進行其他 Git 操作，請完成後再切換。",
+        "occupied": "已在其他 worktree 開啟",
+        "changed": "分支或變更已經改變，請檢查目錄後再試。只有仍停在切換後的分支時才能復原。",
+        "conflict": "這些變更與目標分支衝突，無法一起帶過去。請先收起來，或改用 worktree。",
+        "dirty": "目錄裡有新的未提交變更，請先處理再還原。",
+        "diverged": "本機與遠端分支已分歧，請先處理再切換。",
+        "missing": "所選分支已不存在，請重新整理列表。",
+        "git": "操作未能完成，請先檢查目前分支和 git stash list，再決定是否重試。"
+      }
     }
   },
   "onboarding": {

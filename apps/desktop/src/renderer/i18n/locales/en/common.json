@@ -14487,6 +14487,35 @@
       "later": "Later",
       "ready": "Interactive pages are enabled for the next plugin tool call.",
       "updateHost": "Update Cindy on the execution computer to approve interactive pages here."
+    },
+    "checkout": {
+      "useWorktree": "Use worktree",
+      "worktreeDefault": "New sessions will also use worktree by default. You can turn it off anytime.",
+      "switched": "Switched to {{branch}}",
+      "stashed": " · Changes saved in stash",
+      "carried": " · Changes brought along",
+      "sessionsContinue": "{{names}} will also continue on {{branch}} next time.",
+      "undo": "Undo",
+      "savedChanges": "Saved changes are available for {{branch}}.",
+      "restore": "Restore changes",
+      "title": "Switch to {{branch}}",
+      "dirtyDescription": "{{branch}} has {{count}} uncommitted changes. Choose how to handle them before switching. Both options keep your changes.",
+      "carry": "Bring changes to {{branch}}",
+      "stash": "Save them for {{branch}}",
+      "worktreeGuide": "Prefer to keep this directory as it is? Use worktree to start from {{branch}} in a separate directory. Your changes stay here and will not be copied over.",
+      "worktreeGuideSessions": "Prefer to keep this directory as it is? Use worktree to start from {{branch}} in a separate directory. Your changes and the {{count}} sessions here stay as they are. Changes will not be copied over.",
+      "idleSessions": "This directory has {{count}} other sessions ({{names}}). They will also continue on the new branch after switching.",
+      "errors": {
+        "busy": "A session in this directory is running or has background activity. Wait for it to finish or use worktree.",
+        "operation": "Finish the merge, rebase or other Git operation before switching.",
+        "occupied": "Already open in another worktree",
+        "changed": "The branch or changes have changed. Check the directory before trying again. Undo is only available while still on the branch you switched to.",
+        "conflict": "These changes overlap with the target branch and cannot be brought along. Save them first or use worktree.",
+        "dirty": "There are new uncommitted changes. Handle them before restoring.",
+        "diverged": "The local and remote branches have diverged. Resolve them before switching.",
+        "missing": "The selected branch no longer exists. Refresh the list.",
+        "git": "Could not finish the operation. Check the current branch and git stash list before trying again."
+      }
     }
   },
   "onboarding": {

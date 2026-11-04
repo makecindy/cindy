@@ -14487,6 +14487,35 @@
       "later": "Später",
       "ready": "Interaktive Seiten sind für den nächsten Plugin-Toolaufruf aktiviert.",
       "updateHost": "Aktualisiere Cindy auf dem ausführenden Computer, um interaktive Seiten hier zu genehmigen."
+    },
+    "checkout": {
+      "useWorktree": "worktree verwenden",
+      "worktreeDefault": "Neue Sitzungen verwenden ebenfalls standardmäßig worktree. Du kannst es jederzeit ausschalten.",
+      "switched": "Zu {{branch}} gewechselt",
+      "stashed": " · Änderungen zwischengespeichert",
+      "carried": " · Änderungen übernommen",
+      "sessionsContinue": "{{names}} wird beim nächsten Mal ebenfalls auf {{branch}} fortgesetzt.",
+      "undo": "Rückgängig",
+      "savedChanges": "Für {{branch}} sind zwischengespeicherte Änderungen verfügbar.",
+      "restore": "Änderungen wiederherstellen",
+      "title": "Zu {{branch}} wechseln",
+      "dirtyDescription": "Auf {{branch}} gibt es {{count}} nicht committete Änderungen. Entscheide vor dem Wechsel, wie du damit umgehen möchtest. Beide Optionen erhalten deine Änderungen.",
+      "carry": "Änderungen nach {{branch}} mitnehmen",
+      "stash": "Für {{branch}} zwischenspeichern",
+      "worktreeGuide": "Soll dieses Verzeichnis unverändert bleiben? Mit worktree startest du von {{branch}} in einem eigenen Verzeichnis. Die bisherigen Änderungen bleiben erhalten und werden nicht übernommen.",
+      "worktreeGuideSessions": "Soll dieses Verzeichnis unverändert bleiben? Mit worktree startest du von {{branch}} in einem eigenen Verzeichnis. Die Änderungen und {{count}} Sitzungen bleiben unberührt. Änderungen werden nicht übernommen.",
+      "idleSessions": "Dieses Verzeichnis enthält {{count}} weitere Sitzungen ({{names}}). Auch sie werden nach dem Wechsel auf dem neuen Branch fortgesetzt.",
+      "errors": {
+        "busy": "In diesem Verzeichnis läuft eine Sitzung oder eine Hintergrundaktivität. Warte auf das Ende oder verwende worktree.",
+        "operation": "Beende zuerst den Merge, Rebase oder anderen Git-Vorgang.",
+        "occupied": "Bereits in einem anderen worktree geöffnet",
+        "changed": "Der Branch oder die Änderungen haben sich geändert. Prüfe das Verzeichnis. Rückgängig ist nur möglich, solange du auf dem Zielbranch bleibst.",
+        "conflict": "Diese Änderungen kollidieren mit dem Zielbranch. Speichere sie zwischen oder verwende worktree.",
+        "dirty": "Es gibt neue, nicht committete Änderungen. Bearbeite sie vor der Wiederherstellung.",
+        "diverged": "Lokaler und entfernter Branch sind auseinandergegangen. Kläre dies vor dem Wechsel.",
+        "missing": "Der ausgewählte Branch existiert nicht mehr. Aktualisiere die Liste.",
+        "git": "Der Vorgang konnte nicht abgeschlossen werden. Prüfe den aktuellen Branch und git stash list vor einem erneuten Versuch."
+      }
     }
   },
   "onboarding": {
