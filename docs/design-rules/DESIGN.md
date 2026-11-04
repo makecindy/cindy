@@ -68,7 +68,7 @@ opt-in setting supersedes the CINDY sidebar-only backdrop treatment while active
 disabling it restores the original theme without modifying theme files or tokens.
 Blend wallpaper with the theme surface, never a fixed black overlay in Light mode. Image opacity
 must not affect text or icons. In-page raised surfaces — composer, message bubbles,
-tool, code and table-header cards, page cards, inputs and selected navigation rows —
+tool, code and table-header cards, page cards, inputs and the selected sidebar row —
 tint the wallpaper with their own token at 72% (Light) / 64% (Dark) instead of covering
 it (user request, 2026-11-03). Higher visibility raises that opacity so the artwork
 contributes at most 16% under the surface, keeping the tertiary text tier at the 3:1

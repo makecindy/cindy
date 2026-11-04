@@ -2387,7 +2387,9 @@ html[data-wallpaper-active='true'] .wallpaper-composer-fade {
    useWallpaperBackground. Fill only: backdrop-filter would become the
    containing block for the composer's fixed palettes. Keeps base-utility
    specificity, so hover and state variants still win. Each token needs a fill
-   line and an entry in the target list. */
+   line and an entry in the target list; tokens that are already translucent
+   (the selected-row ink tints) stay out, since mixing them again would break
+   the opacity floor. */
 html[data-wallpaper-active='true'] {
   --wallpaper-glass-opacity: max(72%, var(--app-wallpaper-glass-floor, 0%));
 }
@@ -2403,7 +2405,6 @@ html.dark[data-wallpaper-active='true'] {
 [class~='bg-[var(--settings-theme-card-bg)]'] { --wallpaper-glass-fill: var(--settings-theme-card-bg); }
 [class~='bg-[var(--settings-input-bg)]'] { --wallpaper-glass-fill: var(--settings-input-bg); }
 [class~='bg-[var(--settings-profile-card-bg)]'] { --wallpaper-glass-fill: var(--settings-profile-card-bg); }
-[class~='bg-[var(--settings-menu-bg-selected)]'] { --wallpaper-glass-fill: var(--settings-menu-bg-selected); }
 .bg-sidebar-item-active { --wallpaper-glass-fill: hsl(var(--sidebar-item-active)); }
 :where(html[data-wallpaper-active='true'] :is(
   .bg-content-area,
@@ -2421,7 +2422,6 @@ html.dark[data-wallpaper-active='true'] {
   [class~='bg-[var(--settings-theme-card-bg)]'],
   [class~='bg-[var(--settings-input-bg)]'],
   [class~='bg-[var(--settings-profile-card-bg)]'],
-  [class~='bg-[var(--settings-menu-bg-selected)]'],
   .bg-sidebar-item-active
 ):where(:not(
   .absolute, .fixed, .sticky,
