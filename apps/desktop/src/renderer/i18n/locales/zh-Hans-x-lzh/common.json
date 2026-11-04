@@ -13690,7 +13690,7 @@
       "REMOTE_PROVIDER_UPDATING": "此模型供方之凭证方更新。请稍后再试。",
       "REMOTE_WORKDIR_UNAVAILABLE": "远程工作目录今不可用。请确认彼机上之目录犹在，然后再试。",
       "REMOTE_OPTIMISTIC_SESSION_STATE_UNAVAILABLE": "机端暂不能确知此讯已遣否。请稍后再试，勿重遣同一讯。",
-      "REMOTE_AGENT_UNAVAILABLE": "暂不能连行 Agent 之机。请确认彼机在线且许远程控制，然后再试。",
+      "REMOTE_AGENT_UNAVAILABLE": "与行 Agent 之机断连。请再试；若屡见，再确认彼机在线且许远程控制。",
       "REMOTE_AGENT_PEER_TOO_OLD": "彼机之 Cindy 版本过旧，暂不支持此举。请先于彼机更新 Cindy。",
       "REMOTE_AGENT_EXPIRED": "此差事于行 Agent 之机上已终。请再遣。",
       "REMOTE_AGENT_NOT_FOUND": "此差事于行 Agent 之机上已终。请再遣。",
