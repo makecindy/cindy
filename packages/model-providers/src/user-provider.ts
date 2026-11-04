@@ -537,6 +537,16 @@ export function buildUserProvider(
       const presetModel = followsPreset
         ? presetRuntime.models.find((model) => model.id === m.id)
         : undefined;
+      // applyPreset saves the complete protocol snapshot; the interface picker
+      // deletes api/piApi/route and saves only interfaceId. Matching the ID alone
+      // would hide a sparse explicit choice of the preset's interface from reset.
+      const presetInterfaceSnapshot = Boolean(presetModel &&
+        (presetModel.api || presetModel.piApi || presetModel.route) &&
+        storedModel.interfaceId === presetModel.interfaceId &&
+        storedModel.api === presetModel.api && storedModel.piApi === presetModel.piApi &&
+        storedModel.route?.baseUrl === presetModel.route?.baseUrl &&
+        storedModel.route?.wireProtocol === presetModel.route?.wireProtocol &&
+        storedModel.route?.requestPath === presetModel.route?.requestPath);
       const sameRoute =
         m.route?.baseUrl === presetModel?.route?.baseUrl &&
         m.route?.wireProtocol === presetModel?.route?.wireProtocol &&
@@ -671,7 +681,7 @@ export function buildUserProvider(
         // A maintained correction owns the effective route even when the saved
         // legacy Chat snapshot differs from the current preset (or it is absent).
         protocolCustomized: Boolean(storedModel.interfaceId && storedModel.interfaceId !== 'auto' &&
-          storedModel.interfaceId !== presetModel?.interfaceId) || (!catalogInterfaceApplied && Boolean(
+          !presetInterfaceSnapshot) || (!catalogInterfaceApplied && Boolean(
           (storedModel.api && storedModel.api !== presetModel?.api) ||
           (storedModel.piApi && storedModel.piApi !== presetModel?.piApi) ||
           (storedModel.route && (

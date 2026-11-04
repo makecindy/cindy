@@ -193,33 +193,62 @@ it.each([
 });
 
 
-// #6015: real drawer must disable reset for an untouched generated interface.
-// Existing V6 cases use hand-written IDs without preset snapshots. Minimal unit
-// input is one OpenRouter preset model; IPC stays in memory (no supplier call).
-it('does not offer a protocol-changing reset for a generated preset interface', async () => {
+// #6015: real drawer distinguishes untouched snapshots from sparse picker writes
+// of the same ID. The former test stopped before changing the selection. Minimal
+// unit input is one OpenRouter model, with in-memory IPC and no supplier call.
+it('keeps preset reset disabled but allows restoring a sparse explicit choice of the same interface', async () => {
   const preset = BUNDLED_CATALOG.presets!.find(item => item.id === 'openrouter')!;
   const runtime = preset.runtimes.pi!;
   const original = runtime.models.find(item => item.id === 'anthropic/claude-opus-4.7')!;
-  const config: CustomProviderConfig = { id: 'generated-interface', name: 'Fixture', runtimes: { pi: {
+  let config: CustomProviderConfig = { id: 'generated-interface', name: 'Fixture', runtimes: { pi: {
     ...structuredClone(runtime), catalogPresetId: preset.id, models: [structuredClone(original)],
   } } };
-  const provider = { ...buildUserProvider(config, { presets: [preset] }), connected: true } as ProviderView;
-  const model = provider.models.pi![0]!;
   const previousAPI = window.electronAPI;
-  const update = vi.fn();
+  const update = vi.fn(async (value: CustomProviderConfig) => { config = structuredClone(value); return { ok: true }; });
   Object.defineProperty(window, 'electronAPI', { configurable: true, value: { maker: { updateCustomProvider: update } } });
-  try {
-    render(<ModelAdvancedDrawer provider={provider}
+  function drawer() {
+    const provider = { ...buildUserProvider(config, { presets: [preset], modelRegistry: BUNDLED_CATALOG.modelRegistry }), connected: true } as ProviderView;
+    const model = provider.models.pi![0]!;
+    return <ModelAdvancedDrawer provider={provider}
       row={{ id: model.id, name: model.name, avail: ['pi'], byAgent: { pi: model } }}
       open onOpenChange={vi.fn()} pricePresentationOf={() => null}
-      onDisable={vi.fn()} disabled={false} paymentRequired={false} />);
+      onDisable={vi.fn()} disabled={false} paymentRequired={false} />;
+  }
+  try {
+    const view = render(drawer());
     fireEvent.keyDown(screen.getByRole('button', { name: 'Pi · settings.providers.custom.fields.wireProtocol' }), { key: 'ArrowDown' });
     const restore = await screen.findByRole('menuitem', { name: 'settings.providers.models.advanced.protocol.restoreRoute' });
     expect(restore.getAttribute('aria-disabled')).toBe('true');
     fireEvent.click(restore);
     expect(update).not.toHaveBeenCalled();
     expect(screen.getByText('settings.providers.models.advanced.protocol.sourceCatalog')).toBeTruthy();
-    expect(modelProtocolComparison(provider, { pi: model }).forAgent('pi')?.outbound).toBe('anthropic-messages');
+    fireEvent.click(screen.getByRole('menuitemradio', { name: 'settings.providers.models.advanced.protocol.automatic' }));
+    await waitFor(() => expect(update).toHaveBeenCalledOnce());
+    view.rerender(drawer());
+    const button = () => screen.getByRole('button', { name: 'Pi · settings.providers.custom.fields.wireProtocol' });
+    expect(button().textContent).toContain('Chat Completions');
+    fireEvent.keyDown(button(), { key: 'ArrowDown' });
+    fireEvent.click(await screen.findByRole('menuitemradio', { name: 'Messages', exact: true }));
+    await waitFor(() => expect(update).toHaveBeenCalledTimes(2));
+    const chosen = structuredClone(config);
+    expect(chosen.runtimes.pi!.models[0]!.interfaceId).toBe(original.interfaceId);
+    for (const field of ['api', 'piApi', 'route'] as const) expect(chosen.runtimes.pi!.models[0]![field]).toBeUndefined();
+    view.rerender(drawer());
+    expect(button().textContent).toContain('Messages');
+    expect(screen.getByText('settings.providers.models.advanced.protocol.sourceModel')).toBeTruthy();
+    fireEvent.keyDown(button(), { key: 'ArrowDown' });
+    const enabledRestore = await screen.findByRole('menuitem', { name: 'settings.providers.models.advanced.protocol.restoreRoute' });
+    expect(enabledRestore.getAttribute('aria-disabled')).not.toBe('true');
+    fireEvent.click(enabledRestore);
+    await waitFor(() => expect(update).toHaveBeenCalledTimes(3));
+    delete chosen.runtimes.pi!.models[0]!.interfaceId;
+    expect(config).toEqual(chosen);
+    view.rerender(drawer());
+    const restored = buildUserProvider(config, { presets: [preset], modelRegistry: BUNDLED_CATALOG.modelRegistry });
+    expect(modelProtocolComparison(restored, { pi: restored.models.pi![0]! }).forAgent('pi'))
+      .toMatchObject({ outbound: 'openai-completions', source: 'catalog', customized: false });
+    expect(screen.queryByRole('button', { name: 'Pi · settings.providers.custom.fields.wireProtocol' })).toBeNull();
+    expect(screen.getByText('settings.providers.models.advanced.protocol.sourceCatalog')).toBeTruthy();
   } finally {
     cleanup();
     Object.defineProperty(window, 'electronAPI', { configurable: true, value: previousAPI });

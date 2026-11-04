@@ -279,7 +279,7 @@ describe('preset protocol provenance (#6015)', () => {
     ...preset.runtimes.pi!, catalogPresetId: preset.id, models: [structuredClone(presetModel)],
   } } });
   function project(value: CustomProviderConfig, presets = [preset]) {
-    const provider = buildUserProvider(value, { presets });
+    const provider = buildUserProvider(value, { presets, modelRegistry: BUNDLED_CATALOG.modelRegistry });
     return { provider, model: provider.models.pi![0]!, protocol: modelProtocolComparison(provider, { pi: provider.models.pi![0]! }).forAgent('pi') };
   }
   it('treats saved preset api, piApi and route snapshots as catalog defaults without rewriting storage', () => {
@@ -319,7 +319,8 @@ describe('preset protocol provenance (#6015)', () => {
   });
   // #6015 review: buildUserProvider must not offer a destructive reset for an
   // untouched V6 preset. Earlier snapshot cases had no interfaceId. Minimal
-  // unit input: one saved preset model; also protect a different explicit ID.
+  // unit input: one saved preset model; also protect sparse picker writes of the
+  // same ID (which the original full-snapshot test did not exercise).
   it.each(['openrouter', 'vercel-ai-gateway'])('preserves generated interface provenance for %s', presetId => {
     const current = BUNDLED_CATALOG.presets!.find(item => item.id === presetId)!;
     const runtime = current.runtimes.pi!;
@@ -334,6 +335,13 @@ describe('preset protocol provenance (#6015)', () => {
     expect(result.protocol).toMatchObject({ source: 'catalog', customized: false, outbound: 'anthropic-messages' });
     expect(result.model.userModelConfig).toEqual(original);
     expect(value).toEqual(before);
+    const sparse = structuredClone(value);
+    const selected = sparse.runtimes.pi!.models[0]!;
+    delete selected.api;
+    delete selected.piApi;
+    delete selected.route;
+    expect(project(sparse, [current]).protocol)
+      .toMatchObject({ source: 'model', customized: true, outbound: 'anthropic-messages' });
     const alternative = result.model.availableInterfaces!.find(item => item.profileId !== original.interfaceId)!;
     expect(alternative).toBeDefined();
     value.runtimes.pi!.models[0]!.interfaceId = alternative.profileId;
