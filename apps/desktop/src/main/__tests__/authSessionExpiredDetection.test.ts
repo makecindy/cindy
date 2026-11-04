@@ -201,7 +201,7 @@ describe('desktop auth session-expiry detection', () => {
 
     // 自救函数:节流(token-rotating 端点不能每次重连都打)+ refresh 成功后立即重连。
     const recoverStart = deviceLinkSource.indexOf(
-      'function recoverFromRelayAuthFailure(crossAccount = false): void {',
+      'function recoverFromRelayAuthFailure(crossAccount = false, freshRejection = true): void {',
     );
     const recoverEnd = deviceLinkSource.indexOf('\n}\n', recoverStart);
     const recoverBody = deviceLinkSource.slice(recoverStart, recoverEnd);
@@ -212,7 +212,9 @@ describe('desktop auth session-expiry detection', () => {
     expect(recoverBody).toContain('relayAuthRecoveryRetryTimer = setTimeout(');
     expect(recoverBody).toContain("connection()?.getConnectionIssue()?.kind !== 'auth-failed'");
     expect(recoverBody).toContain('authManager');
-    expect(recoverBody).toContain('.refresh({ serverRejectedToken: true })');
+    // 只有刚转为 auth-failed 的通知算新 401 证据;延迟自救复用的是旧 401,不能提前快速续期。
+    expect(recoverBody).toContain('recoverFromRelayAuthFailure(crossAccount, false);');
+    expect(recoverBody).toContain('.refresh({ serverRejectedToken: freshRejection })');
     // Token-rotation notification also covers timer-initiated refresh. Identity
     // notifications intentionally remain separate from ordinary token rotation.
     expect(deviceLinkSource).toContain(

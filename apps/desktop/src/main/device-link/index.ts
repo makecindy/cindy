@@ -629,8 +629,10 @@ let relayAuthRecoveryRetryTimer: ReturnType<typeof setTimeout> | null = null;
  * 未清时不会触发 refresh,会一直拿过期 token 重连死循环(日志里刷 401 而用户无感知)。
  * 这里主动 refresh 一次:成功通知会立即用新 token 重连(也覆盖延迟重试);确定性失效则由
  * refresh 路径自己走会话过期出口(清会话 + 弹重登),auth 监听随后会停掉本服务。
+ * 只有 issue 刚转为 auth-failed 的那次调用算新的 401 证据;节流窗后的延迟自救只复查
+ * issue 仍在,断网期间 issue 不会被清除,不能把旧 401 当成新证据去提前快速续期。
  */
-function recoverFromRelayAuthFailure(crossAccount = false): void {
+function recoverFromRelayAuthFailure(crossAccount = false, freshRejection = true): void {
   // 自建中转拒绝的是中转凭证,与 Cindy 账号无关:不刷新、不轮换账号 token。
   // 界面经 connection issue 提示「已被移出中转」,由用户重新加入或切回官方。
   // 跨账号连接始终走官方中转,用的是账号 token。
@@ -646,7 +648,7 @@ function recoverFromRelayAuthFailure(crossAccount = false): void {
         relayAuthRecoveryRetryTimer = null;
         // 延迟期间可能已自愈(issue 清除),避免一次多余的 token 轮换。
         if (connection()?.getConnectionIssue()?.kind !== 'auth-failed') return;
-        recoverFromRelayAuthFailure(crossAccount);
+        recoverFromRelayAuthFailure(crossAccount, false);
       }, RELAY_AUTH_RECOVERY_MIN_INTERVAL_MS - elapsed);
       relayAuthRecoveryRetryTimer.unref?.();
     }
@@ -655,7 +657,7 @@ function recoverFromRelayAuthFailure(crossAccount = false): void {
   lastRelayAuthRecoveryAt = now;
   void authManager
     // A relay 401 proves reachability; an interface-change hint does not.
-    .refresh({ serverRejectedToken: true })
+    .refresh({ serverRejectedToken: freshRejection })
     .catch((err) => {
       log.warn('relay auth recovery refresh threw (non-fatal)', err);
     });
