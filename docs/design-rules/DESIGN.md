@@ -135,7 +135,11 @@ The media store's client wallpaper scope isolates its bytes from chat attachment
 switching accounts (or signing out) keeps the same wallpaper. Font-only utility renderers never receive
 custom media URLs.
 Detached sidebar and plugin-panel host chrome use the same wallpaper provider;
-embedded plugin webviews retain their own surfaces and permission boundary.
+plugin main-view documents share the host canvas while wallpaper is active, including
+when docked or detached. Only their html/body background color becomes transparent;
+theme surface tokens, controls, author background images, regular panels and settings
+webviews retain their own surfaces. Disabling wallpaper restores the page background
+without reloading the plugin. All webviews retain their permission boundary.
 Cancellation and import failures retain the existing media. Switching to a built-in
 or None keeps the imported media available; Remove Wallpaper forgets it. Custom imagery
 shares the continuous cover-fit canvas and readability veil. Custom MP4 exposes the existing
