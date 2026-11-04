@@ -10551,6 +10551,11 @@
           "NETWORK_ERROR": "{{name}}は返信できませんでした。ネットワーク接続に失敗しました。\nネットワークやプロキシを確認し、メッセージを再送してください。",
           "RUNTIME_TIMEOUT": "{{name}}の返信がタイムアウトしました。\nメッセージを再送するか、別の利用可能なモデルを選んでください。",
           "RUNTIME_ERROR": "{{name}}は今回は返信できませんでした。\nメッセージを再送してください。再度失敗する場合は、ログを確認して問題を報告してください。"
+        },
+        "capability": {
+          "GROUP_AUTHORIZATION_REQUIRED": "{{name}} のツールは実行されませんでした。グループの許可が失効しているか、この操作が許可されていません。仲間の所有者がこのグループで改めて依頼してください。",
+          "GROUP_AUTHORIZATION_UNAVAILABLE": "{{name}} のグループでの許可を確認できず、ツールは実行されませんでした。接続が回復してから再試行してください。",
+          "ATTACHMENTS_UNAVAILABLE": "ダウンロードの失敗または添付数の上限により、一部の添付ファイルを {{name}} に渡せませんでした。今回必要なファイルを再送してください。"
         }
       },
       "settings": {
@@ -13803,6 +13808,18 @@
       "cancelTitle": "待機をやめてこのメッセージを削除"
     },
     "ghostCall": {
+      "prStatus": {
+        "threadsNone": "未解決のレビューなし",
+        "mergeReady": "マージ可能",
+        "mergeConflict": "コンフリクトあり",
+        "mergeBehind": "ベースブランチとの同期が必要",
+        "mergeApproval": "承認待ち",
+        "mergeChanges": "修正依頼あり",
+        "mergeWaiting": "マージ待ち",
+        "merged": "マージ済み",
+        "closed": "クローズ済み",
+        "draft": "下書き"
+      },
       "verb": "プラグイン呼び出し",
       "cardRunning": "プラグインが描画中",
       "cardDone": "完了",
@@ -13816,6 +13833,7 @@
       "collapseFields": "折りたたむ",
       "formSyncFailed": "カードの変更を同期できませんでした。接続を確認して編集を続けてください。メッセージは未送信です。",
       "linkOpenFailed": "リンクを開けませんでした",
+      "modelSelectFailed": "モデルを変更できませんでした。もう一度選択してください。",
       "mailPreview": "メールプレビュー",
       "mailEnlarge": "拡大表示",
       "mailInsertImage": "本文に挿入",
@@ -15961,7 +15979,17 @@
   },
   "commandPalette": {
     "viewSkillDetails": "スキルの詳細を見る",
-    "projectSkillNotLoaded": "現在の Pi タスクでは、このプロジェクト Skill はまだ読み込まれていません。新しいタスクでは自動的に読み込みを試みます。"
+    "projectSkillNotLoaded": "現在の Pi タスクでは、このプロジェクト Skill はまだ読み込まれていません。新しいタスクでは自動的に読み込みを試みます。",
+    "pluginSkillSetup": {
+      "install": "未インストール",
+      "enable": "無効"
+    },
+    "pluginSkills": {
+      "pr": {
+        "install": "PR を作成し、CI とレビュー指摘を直してマージまで見届けます · GitHub プラグインのインストールが必要です",
+        "enable": "PR を作成し、CI とレビュー指摘を直してマージまで見届けます · GitHub プラグインの有効化が必要です"
+      }
+    }
   },
   "skillhub": {
     "remote": {

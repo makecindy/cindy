@@ -87,6 +87,23 @@ describe('parseBotGroupChatData', () => {
     expect(parsed.messages[0].runtimeFailureCode).toBe(runtimeFailureCode === 'AUTH_REQUIRED' ? runtimeFailureCode : undefined);
     expect(JSON.stringify(parsed.messages)).not.toContain('private diagnostic');
   });
+  // Unit #8443 review: the real device-link parser must preserve the localized
+  // notice discriminator, while old/unknown input keeps its readable fallback.
+  it.each([
+    ['GROUP_AUTHORIZATION_REQUIRED', 'bot', false, true],
+    ['GROUP_AUTHORIZATION_UNAVAILABLE', 'bot', false, true],
+    ['ATTACHMENTS_UNAVAILABLE', 'bot', false, true],
+    ['private diagnostic', 'bot', false, false],
+    [undefined, 'bot', false, false],
+    ['ATTACHMENTS_UNAVAILABLE', 'user', false, false],
+    ['ATTACHMENTS_UNAVAILABLE', 'bot', true, false],
+  ])('preserves only a live companion capability notice (%s, %s, deleted=%s)', (code, authorKind, deleted, keep) => {
+    const parsed = parseBotGroupChatData(chatData({ messages: [{ id: 'capability', sequence: 1,
+      kind: 'notice', authorKind, authorName: 'Bot', content: 'Readable host-language fallback',
+      createdAt: 1, deleted, capabilityNoticeCode: code }] }))!;
+    expect(parsed.messages[0].capabilityNoticeCode).toBe(keep ? code : undefined);
+    expect(parsed.messages[0].content).toBe('Readable host-language fallback');
+  });
   it('preserves server member identities and removal capability', () => {
     const parsed = parseBotGroupChatData(chatData({ serverBacked: true, supportsMemberRemoval: true,
       members: [{ botId: 'human', actorId: 'actor', actorKind: 'human', isOwned: false, name: 'Person', status: 'active' }] }));

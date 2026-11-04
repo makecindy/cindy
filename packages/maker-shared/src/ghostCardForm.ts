@@ -427,3 +427,17 @@ export function omitGhostCardFormPreview(html: string): string {
   visit(doc);
   return removed ? serialize(doc) : html;
 }
+
+/**
+ * Plugin card links open after a host confirmation that shows the real address. GitHub's own
+ * pages (the owner's choice, 2026-11-03) open directly; every other address still asks.
+ */
+export function ghostCardLinkOpensDirectly(url: string): boolean {
+  try {
+    const parsed = new URL(url);
+    return parsed.protocol === 'https:' && !parsed.username && !parsed.password && !parsed.port
+      && (parsed.hostname === 'github.com' || parsed.hostname === 'www.github.com');
+  } catch {
+    return false;
+  }
+}

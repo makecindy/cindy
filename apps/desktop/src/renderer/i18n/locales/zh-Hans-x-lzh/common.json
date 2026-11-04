@@ -10551,6 +10551,11 @@
           "NETWORK_ERROR": "{{name}}不能回复：网络连接未成。\n请察网络或 Proxy，再遣之。",
           "RUNTIME_TIMEOUT": "{{name}}此番回复逾时。\n请再遣讯，或择他可用模型。",
           "RUNTIME_ERROR": "{{name}}此番未能回复。\n请再遣讯；若仍未成，请察记录并回报其事。"
+        },
+        "capability": {
+          "GROUP_AUTHORIZATION_REQUIRED": "{{name}} 的工具调用未执行：群内授权已失效或不允许此操作。请由伙伴主人在当前群重新发起。",
+          "GROUP_AUTHORIZATION_UNAVAILABLE": "暂时无法核验 {{name}} 的群聊授权，这次工具调用未执行。请在连接恢复后重试。",
+          "ATTACHMENTS_UNAVAILABLE": "部分附件未交给 {{name}}（下载失败或数量限制）。请重新发送本次需要的附件。"
         }
       },
       "settings": {
@@ -13794,6 +13799,18 @@
       "cancelTitle": "罢候并除此讯"
     },
     "ghostCall": {
+      "prStatus": {
+        "threadsNone": "无待理之意见",
+        "mergeReady": "可合并",
+        "mergeConflict": "有冲突",
+        "mergeBehind": "须同步目标分支",
+        "mergeApproval": "待批",
+        "mergeChanges": "须修改",
+        "mergeWaiting": "待合并",
+        "merged": "已合并",
+        "closed": "已闭",
+        "draft": "草稿"
+      },
       "verb": "呼法器",
       "cardRunning": "法器绘制",
       "cardDone": "已毕",
@@ -13807,6 +13824,7 @@
       "collapseFields": "收",
       "formSyncFailed": "卡之修改尚未同步，请察连接后续修；讯尚未遣。",
       "linkOpenFailed": "链接未能启",
+      "modelSelectFailed": "模型未易，请复择",
       "mailPreview": "邮件先览",
       "mailEnlarge": "放大览",
       "mailInsertImage": "插入文中",
@@ -15961,7 +15979,17 @@
   },
   "commandPalette": {
     "viewSkillDetails": "观技艺之详",
-    "projectSkillNotLoaded": "今之 Pi 差事尚未载此案之 Skill，新差事将自试载之"
+    "projectSkillNotLoaded": "今之 Pi 差事尚未载此案之 Skill，新差事将自试载之",
+    "pluginSkillSetup": {
+      "install": "未纳",
+      "enable": "未启"
+    },
+    "pluginSkills": {
+      "pr": {
+        "install": "发 PR、修 CI 与评审、随至合并 · 须先纳 GitHub 法器",
+        "enable": "发 PR、修 CI 与评审、随至合并 · 须先启 GitHub 法器"
+      }
+    }
   },
   "skillhub": {
     "remote": {

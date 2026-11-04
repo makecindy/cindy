@@ -155,7 +155,12 @@
         "details": "Send your message again. If it still fails, check the logs and report the issue."
       }
     },
-    "runtimeFailureSetupHint": "To change the model or settings, use the computer where this teammate runs."
+    "runtimeFailureSetupHint": "To change the model or settings, use the computer where this teammate runs.",
+    "capability": {
+      "GROUP_AUTHORIZATION_REQUIRED": "{{name}} could not run this tool: group authorization has expired or does not allow this action. The teammate’s owner can make the request again in this group.",
+      "GROUP_AUTHORIZATION_UNAVAILABLE": "Group authorization for {{name}} could not be verified, so this tool did not run. Try again after the connection recovers.",
+      "ATTACHMENTS_UNAVAILABLE": "Some attachments were not delivered to {{name}} because of a download failure or attachment limit. Resend the attachments needed for this request."
+    }
   },
   "plan": {
     "intro_one": "This takes {{count}} step. Here’s who does it:",

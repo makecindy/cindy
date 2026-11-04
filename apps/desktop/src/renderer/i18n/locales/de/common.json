@@ -10596,6 +10596,11 @@
           "NETWORK_ERROR": "{{name}} konnte nicht antworten: Die Netzwerkverbindung ist fehlgeschlagen.\nPrüfe dein Netzwerk oder deinen Proxy und sende deine Nachricht erneut.",
           "RUNTIME_TIMEOUT": "{{name}} hat nicht innerhalb des Zeitlimits geantwortet.\nSende deine Nachricht erneut oder wähle ein anderes verfügbares Modell.",
           "RUNTIME_ERROR": "{{name}} konnte diesmal nicht antworten.\nSende deine Nachricht erneut. Falls es weiterhin nicht klappt, prüfe die Protokolle und melde das Problem."
+        },
+        "capability": {
+          "GROUP_AUTHORIZATION_REQUIRED": "{{name}} konnte dieses Werkzeug nicht ausführen: Die Gruppenberechtigung ist abgelaufen oder erlaubt diese Aktion nicht. Der Besitzer des Teammitglieds kann die Anfrage in dieser Gruppe erneut stellen.",
+          "GROUP_AUTHORIZATION_UNAVAILABLE": "Die Gruppenberechtigung für {{name}} konnte nicht überprüft werden. Dieses Werkzeug wurde daher nicht ausgeführt. Versuche es erneut, sobald die Verbindung wiederhergestellt ist.",
+          "ATTACHMENTS_UNAVAILABLE": "Einige Anhänge wurden {{name}} wegen eines Downloadfehlers oder der maximalen Anzahl an Anhängen nicht übermittelt. Sende die für diese Anfrage benötigten Anhänge erneut."
         }
       },
       "settings": {
@@ -13834,6 +13839,18 @@
       "cancelTitle": "Warten beenden und diese Nachricht entfernen"
     },
     "ghostCall": {
+      "prStatus": {
+        "threadsNone": "Keine offenen Review-Threads",
+        "mergeReady": "Bereit zum Mergen",
+        "mergeConflict": "Hat Konflikte",
+        "mergeBehind": "Hinter dem Basis-Branch",
+        "mergeApproval": "Wartet auf Freigabe",
+        "mergeChanges": "Änderungen angefordert",
+        "mergeWaiting": "Wartet auf Merge",
+        "merged": "Gemergt",
+        "closed": "Geschlossen",
+        "draft": "Entwurf"
+      },
       "verb": "Plugin verwendet",
       "cardRunning": "Plugin zeichnet",
       "cardDone": "Fertig",
@@ -13847,6 +13864,7 @@
       "collapseFields": "Einklappen",
       "formSyncFailed": "Kartenänderungen wurden nicht synchronisiert. Prüfe die Verbindung und bearbeite weiter; die Nachricht wurde nicht gesendet.",
       "linkOpenFailed": "Link konnte nicht geöffnet werden",
+      "modelSelectFailed": "Das Modell wurde nicht geändert. Bitte erneut auswählen.",
       "mailPreview": "E-Mail-Vorschau",
       "mailEnlarge": "Vorschau vergrößern",
       "mailInsertImage": "In Nachricht einfügen",
@@ -16028,7 +16046,17 @@
   },
   "commandPalette": {
     "viewSkillDetails": "Skill-Details anzeigen",
-    "projectSkillNotLoaded": "Diese Pi-Aufgabe hat diesen Projekt-Skill noch nicht geladen. Neue Aufgaben versuchen automatisch, ihn zu laden."
+    "projectSkillNotLoaded": "Diese Pi-Aufgabe hat diesen Projekt-Skill noch nicht geladen. Neue Aufgaben versuchen automatisch, ihn zu laden.",
+    "pluginSkillSetup": {
+      "install": "Nicht installiert",
+      "enable": "Deaktiviert"
+    },
+    "pluginSkills": {
+      "pr": {
+        "install": "PR öffnen, CI und Review-Feedback beheben und bis zum Merge begleiten · Erfordert die Installation des GitHub-Plugins",
+        "enable": "PR öffnen, CI und Review-Feedback beheben und bis zum Merge begleiten · Erfordert die Aktivierung des GitHub-Plugins"
+      }
+    }
   },
   "skillhub": {
     "remote": {

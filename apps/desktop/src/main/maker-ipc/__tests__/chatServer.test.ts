@@ -59,7 +59,18 @@ vi.mock('node:http', async () => {
     fixture.requests.push({ url: String(url), token: options.headers.Authorization, actor: (options.headers as Record<string, string>)['X-Chat-Actor'] });
     const req = Object.assign(new EventEmitter(), {
       end: (data?: string) => {
-        void Promise.resolve().then(() => fixture.handle(new URL(url).pathname.slice(3) + new URL(url).search, options.method, data ? JSON.parse(data) : undefined))
+        void Promise.resolve().then(() => {
+          const route = new URL(url).pathname.slice(3) + new URL(url).search;
+          const body = data ? JSON.parse(data) : undefined;
+          // #8443 / unit HTTP boundary: notice POSTs obey the existing message
+          // contract; accepting clientId here used to hide rejected real sends.
+          if (options.method === 'POST' && route.endsWith('/messages')
+            && body?.content?.some((block: { namespace?: string }) => block.namespace === 'cindy.capability-notice')
+            && (typeof body.operationId !== 'string' || !/^[a-zA-Z0-9_.:-]{8,160}$/.test(body.operationId) || 'clientId' in body)) {
+            return { status: 400, body: { error: { code: 'VALIDATION_FAILED' } } };
+          }
+          return fixture.handle(route, options.method, body);
+        })
           .then(result => {
             const response = Object.assign(new EventEmitter(), { statusCode: result?.status ?? 200, headers: result?.headers ?? {} });
             callback(response);
@@ -89,7 +100,7 @@ import { botGroupRuntimeFailureCode, settleClosedBotGroupTurn, settleUndispatche
 import { authorizeGroupTool } from '../botGroupToolAuthorization.js';
 import { createAutoPermissionReviewer, type AutoPermissionReviewerDeps } from '../../maker-host/auto-permission-reviewer.js';
 import { createAutoReviewIntentProjection } from '@cindy/maker-shared/auto-review-intent';
-import { botGroupQuoteFromMessage, buildBotGroupQuoteCard, buildBotGroupTaskCard, buildBotGroupThreadShareCard } from '../../../shared/botGroupChat.js';
+import { buildBotGroupCapabilityNotice, botGroupQuoteFromMessage, buildBotGroupQuoteCard, buildBotGroupTaskCard, buildBotGroupThreadShareCard } from '../../../shared/botGroupChat.js';
 import type { BotGroupChatService, BotGroupChatServiceDeps } from '../botGroupChatService.js';
 import type { ChatHistoryState } from '@cindy/maker-shared/chat-history';
 
@@ -890,6 +901,19 @@ describe('Chat Server result delivery and refresh', () => {
     expect(memberWrites).toHaveLength(1);
     expect(memberWrites[0]?.[2]).toMatchObject({ actorId: botId, action: 'invite' });
   });
+  it.each(['bot', 'human'])('projects a capability card as a notice only for a companion author (%s)', kind => {
+    const notice = { id: '60000000-0000-4000-8000-000000000001', seq: '1', authorId: botId, author: { kind, name: 'Bot' },
+      deleted: false, threadRootId: null, createdAt: '2026-11-02T00:00:00Z',
+      content: [buildBotGroupCapabilityNotice('ATTACHMENTS_UNAVAILABLE', 'Some attachments were not delivered')] };
+    fixture.handle.mockImplementation(route => route.includes('/messages?') ? { body: [notice] } : response(route));
+    return service.getGroup(roomId).then(result => {
+      expect(result.ok).toBe(true);
+      if (!result.ok) throw new Error('Expected group');
+      expect(result.group.messages[0]).toMatchObject({ kind: kind === 'bot' ? 'notice' : 'message', content: 'Some attachments were not delivered' });
+      expect(result.group.messages[0].capabilityNoticeCode).toBe(kind === 'bot' ? 'ATTACHMENTS_UNAVAILABLE' : undefined);
+    });
+  });
+
   it.each(['structured', 'old-marker', 'chat-forgery'])('projects imported runtime notices safely: %s', async shape => {
     const imported = { id: '60000000-0000-4000-8000-000000000001', seq: '1', authorId: selfId,
       author: { kind: 'human', name: 'Owner' }, origin: shape === 'chat-forgery' ? 'chat' : 'import', deleted: false, threadRootId: null,
@@ -1300,6 +1324,88 @@ describe('Chat Server result delivery and refresh', () => {
     await vi.advanceTimersByTimeAsync(2000);
     expect(deps.dispatch).toHaveBeenCalledOnce();
   }
+  it.each([[false, 0], [true, 0], [false, 1], [true, 1], [true, 3]] as const)('posts a validation failure as the companion without settling or replaying its turn (temporary: %s, retry: %s)', async (temporary, retry) => {
+    const posted: unknown[] = [];
+    let invalid = false;
+    fixture.handle.mockImplementation((route, method, body) => {
+      if (route === '/executions/claim') { const next = claimed ? null : { ...execution, requester_id: selfId, access_mode: 'owner' }; claimed = true; return { body: { execution: next } }; }
+      if (route.endsWith('/members')) return invalid && temporary ? { status: 503, body: { code: 'UNAVAILABLE' } } : { body: [
+        { id: botId, kind: 'bot', ownerActorId: selfId, state: 'joined', accessRevision: invalid ? 2 : 1 },
+        { id: selfId, kind: 'human', ownerActorId: selfId, state: 'joined' },
+      ] };
+      if (route === `/conversations/${roomId}/messages` && method === 'POST') {
+        posted.push(body);
+        return posted.length <= retry ? { status: 503, body: { error: { code: 'UNAVAILABLE' } } } : { body: { id: 'notice' } };
+      }
+      return response(route);
+    });
+    await start();
+    invalid = true;
+    const code = temporary ? 'GROUP_AUTHORIZATION_UNAVAILABLE' : 'GROUP_AUTHORIZATION_REQUIRED';
+    await expect(authorizeGroupTool('lane', 'local-bot', 'owner-action')).rejects.toMatchObject({ code });
+    await expect(authorizeGroupTool('lane', 'local-bot', 'owner-action')).rejects.toMatchObject({ code });
+    await vi.advanceTimersByTimeAsync(0);
+    if (retry) await vi.advanceTimersByTimeAsync(3000);
+    const attempts = retry === 3 ? 3 : retry + 1;
+    expect(posted).toHaveLength(attempts);
+    if (retry) expect(posted[1]).toEqual(posted[0]);
+    if (retry === 3) {
+      // #8443: exhausting delivery must not reset the budget on the next denial.
+      await expect(authorizeGroupTool('lane', 'local-bot', 'owner-action')).rejects.toMatchObject({ code });
+      await vi.advanceTimersByTimeAsync(3000);
+      expect(posted).toHaveLength(3);
+    }
+    expect(posted[0]).toMatchObject({ operationId: `capability:${execution.id}:${execution.epoch}:${code}`, content: [{ type: 'card', namespace: 'cindy.capability-notice', data: { code } }], mentions: [] });
+    expect(fixture.requests.filter(request => request.url.endsWith(`/conversations/${roomId}/messages`)).at(-1)?.actor).toBe(botId);
+    expect(deliveries()).toHaveLength(0);
+    expect(deps.dispatch).toHaveBeenCalledOnce();
+  });
+
+  // #8443 review: real POST/429 parsing must keep each retry outside Retry-After,
+  // preserving the payload/operationId and the three-attempt budget (unit fake clock).
+  it.each([false, true])('honors Retry-After for capability notices (exhausted: %s)', async exhausted => {
+    let invalid = false;
+    const posted: Array<{ at: number; body: unknown }> = [];
+    fixture.handle.mockImplementation((route, method, body) => {
+      if (route === '/executions/claim') { const next = claimed ? null : { ...execution, requester_id: selfId, access_mode: 'owner' }; claimed = true; return { body: { execution: next } }; }
+      if (route.endsWith('/members')) return invalid ? { status: 503, body: { code: 'UNAVAILABLE' } } : { body: [
+        { id: botId, kind: 'bot', ownerActorId: selfId, state: 'joined', accessRevision: 1 },
+        { id: selfId, kind: 'human', ownerActorId: selfId, state: 'joined' },
+      ] };
+      if (route === `/conversations/${roomId}/messages` && method === 'POST') {
+        posted.push({ at: Date.now(), body });
+        return exhausted || posted.length === 1
+          ? { status: 429, headers: { 'retry-after': '120' }, body: { error: { code: 'RATE_LIMITED' } } }
+          : { body: { id: 'notice' } };
+      }
+      return response(route);
+    });
+    await start();
+    invalid = true;
+    await expect(authorizeGroupTool('lane', 'local-bot', 'owner-action')).rejects.toMatchObject({ code: 'GROUP_AUTHORIZATION_UNAVAILABLE' });
+    invalid = false;
+    await vi.advanceTimersByTimeAsync(0);
+    expect(posted).toHaveLength(1);
+    await vi.advanceTimersByTimeAsync(119999);
+    expect(posted).toHaveLength(1);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(posted).toHaveLength(2);
+    expect(posted[1].at - posted[0].at).toBeGreaterThanOrEqual(120000);
+    expect(posted[1].body).toEqual(posted[0].body);
+    if (exhausted) {
+      await vi.advanceTimersByTimeAsync(119999);
+      expect(posted).toHaveLength(2);
+      await vi.advanceTimersByTimeAsync(1);
+      expect(posted).toHaveLength(3);
+      expect(posted[2].body).toEqual(posted[0].body);
+      invalid = true;
+      await expect(authorizeGroupTool('lane', 'local-bot', 'owner-action')).rejects.toMatchObject({ code: 'GROUP_AUTHORIZATION_UNAVAILABLE' });
+      await vi.advanceTimersByTimeAsync(240000);
+      expect(posted).toHaveLength(3);
+    }
+    expect(deliveries()).toHaveLength(0);
+    expect(deps.dispatch).toHaveBeenCalledOnce();
+  });
   const terminal = { sessionId: 'lane', activeInputClientId: null, outcome: 'done' as const, resultText: 'Finished reply' };
   const deliveries = () => fixture.handle.mock.calls.filter(([, , body]) => body?.action === 'complete');
   const processRecord = { type: 'card', namespace: 'cindy.work-record', schemaRevision: 1, fallback: '',

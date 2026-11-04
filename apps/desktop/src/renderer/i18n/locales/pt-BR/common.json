@@ -10680,6 +10680,11 @@
           "NETWORK_ERROR": "{{name}} não conseguiu responder: a conexão de rede falhou.\nVerifique sua rede ou proxy e envie sua mensagem novamente.",
           "RUNTIME_TIMEOUT": "{{name}} não respondeu dentro do tempo limite.\nEnvie sua mensagem novamente ou escolha outro modelo disponível.",
           "RUNTIME_ERROR": "{{name}} não conseguiu responder desta vez.\nEnvie sua mensagem novamente. Se a falha persistir, verifique os logs e relate o problema."
+        },
+        "capability": {
+          "GROUP_AUTHORIZATION_REQUIRED": "{{name}} não pôde executar a ferramenta: a autorização do grupo expirou ou não permite esta ação. O proprietário do colega pode repetir o pedido neste grupo.",
+          "GROUP_AUTHORIZATION_UNAVAILABLE": "Não foi possível verificar a autorização de grupo de {{name}}, por isso a ferramenta não foi executada. Tente novamente quando a conexão for restabelecida.",
+          "ATTACHMENTS_UNAVAILABLE": "Alguns anexos não foram entregues a {{name}} devido a uma falha no download ou ao limite de anexos. Reenvie os anexos necessários para este pedido."
         }
       },
       "settings": {
@@ -13962,6 +13967,18 @@
       "cancelTitle": "Parar de esperar e remover esta mensagem"
     },
     "ghostCall": {
+      "prStatus": {
+        "threadsNone": "Nenhum tópico de revisão aberto",
+        "mergeReady": "Pronta para mesclar",
+        "mergeConflict": "Tem conflitos",
+        "mergeBehind": "Atrás do branch base",
+        "mergeApproval": "Aguardando aprovação",
+        "mergeChanges": "Alterações solicitadas",
+        "mergeWaiting": "Aguardando mesclagem",
+        "merged": "Mesclada",
+        "closed": "Fechada",
+        "draft": "Rascunho"
+      },
       "verb": "Plugin usado",
       "cardRunning": "O plugin está desenhando",
       "cardDone": "Concluído",
@@ -13975,6 +13992,7 @@
       "collapseFields": "Recolher",
       "formSyncFailed": "As edições do cartão não foram sincronizadas. Verifique a conexão e continue editando; a mensagem não foi enviada.",
       "linkOpenFailed": "Falha ao abrir o link",
+      "modelSelectFailed": "O modelo não foi alterado. Escolha novamente.",
       "mailPreview": "Prévia do e-mail",
       "mailEnlarge": "Ampliar prévia",
       "mailInsertImage": "Inserir na mensagem",
@@ -16176,7 +16194,17 @@
   },
   "commandPalette": {
     "viewSkillDetails": "Ver detalhes da Skill",
-    "projectSkillNotLoaded": "Esta tarefa do Pi não carregou esta Skill do projeto. Novas tarefas tentarão carregá-la automaticamente."
+    "projectSkillNotLoaded": "Esta tarefa do Pi não carregou esta Skill do projeto. Novas tarefas tentarão carregá-la automaticamente.",
+    "pluginSkillSetup": {
+      "install": "Não instalado",
+      "enable": "Desativado"
+    },
+    "pluginSkills": {
+      "pr": {
+        "install": "Abre um PR, corrige a CI e o feedback de revisão e acompanha até o merge · Requer instalar o plugin do GitHub",
+        "enable": "Abre um PR, corrige a CI e o feedback de revisão e acompanha até o merge · Requer ativar o plugin do GitHub"
+      }
+    }
   },
   "skillhub": {
     "remote": {
