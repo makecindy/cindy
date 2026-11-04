@@ -200,7 +200,7 @@ vi.mock('@/session/BotGroupMentionPopover', () => ({
   }, el('div', { 'data-testid': 'botGroup.mention.identity' }, name, displayName, caption), el('button', { 'data-testid': 'botGroup.mention.identity.close', onClick: onClose }, 'Close')),
 }));
 vi.mock('@/session/BotGroupAvatars', () => ({
-  BOT_GROUP_MESSAGE_AVATAR_SIZE: 28, BOT_GROUP_STEP_AVATAR_SIZE: 24, BOT_GROUP_INLINE_AVATAR_SIZE: 20, BOT_GROUP_ROW_AVATAR_SIZE: 32,
+  BOT_GROUP_MESSAGE_AVATAR_SIZE: 28, BOT_GROUP_STEP_AVATAR_SIZE: 24, BOT_GROUP_INLINE_AVATAR_SIZE: 20, BOT_GROUP_ROW_AVATAR_SIZE: 32, BOT_GROUP_MENTION_AVATAR_SIZE: 48,
   BotGroupAvatar: () => null, BotGroupDuoAvatar: () => null,
   useBotGroupIdentities: () => (botId: string, fallbackName = '', member?: { name: string }) => ({ botId, name: fallbackName || member?.name || botId }),
 }));
@@ -2163,6 +2163,34 @@ describe('mobile group threads', () => {
     expect(byId('botGroup.row.mine')?.textContent).toContain('**literal**');
     expect(byId('botGroup.row.other')?.textContent).toContain('Other member');
     expect(byId('botGroup.row.other')?.querySelector('[data-testid="botGroup.message.userBubble"]')).toBeNull();
+  });
+
+  // PR #8818 / component: the displayed reply must use its own mention IDs,
+  // not the main share's self-addressed delivery metadata. Earlier share tests
+  // had no mentions. Minimal failure: sharer and target both named Ann.
+  it('opens the source mention from an authored share without mistaking the sharer for its namesake', async () => {
+    h.chat.server = true;
+    const share = { messageId: 'source', threadRootId: rootId, status: 'available' as const, authorKind: 'user' as const,
+      authorBotId: 'self', authorName: 'Ann', sharedByAuthor: true, content: '@Ann 看看原回复',
+      mentions: { all: false, botIds: ['abu'] }, attachments: [], createdAt: 1000, edited: false };
+    const posted = message('posted', 2, { authorKind: 'user', isSelf: true, content: '',
+      mentions: { all: false, botIds: ['self'] }, threadShare: share });
+    const members = [{ ...group().members[0]!, botId: 'self', name: 'Ann', actorKind: 'human' as const, role: 'member' as const },
+      { ...group().members[1]!, name: 'Ann', nickname: 'Ann', displayName: 'Target' }];
+    const data = threadGroup({ serverBacked: true, members, messages: [posted] });
+    await render(data, 'ready', undefined, '');
+    const mention = [...node.querySelectorAll('span')].find(span => span.textContent === '@Ann' && span.getAttribute('data-style'))!;
+    await act(async () => {
+      const touch = new Event('touchstart', { bubbles: true });
+      Object.defineProperties(touch, { pageX: { value: 108 }, pageY: { value: 246 } });
+      mention.dispatchEvent(touch); mention.click();
+    });
+    expect(byId('botGroup.mention.identity')?.textContent).toContain('Target');
+    await click('botGroup.mention.identity.close');
+    await render({ ...data, messages: [{ ...posted, threadShare: { ...share, mentions: undefined } }] }, 'ready', undefined, '');
+    const legacyMention = [...node.querySelectorAll('span')].find(span => span.textContent === '@Ann' && span.getAttribute('data-style'))!;
+    await act(async () => legacyMention.click());
+    expect(byId('botGroup.mention.identity')).toBeNull();
   });
 
   it('renders my resolved own post as a user message with the same thread summary as every thread share', async () => {

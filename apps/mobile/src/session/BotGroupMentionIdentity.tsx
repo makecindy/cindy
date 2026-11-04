@@ -4,7 +4,7 @@ import { StyleSheet, View, useWindowDimensions } from 'react-native';
 import { useTranslation } from 'react-i18next';
 import { spacing } from '@/theme/tokens';
 import { useTheme } from '@/theme';
-import { BotGroupAvatar } from './BotGroupAvatars';
+import { BotGroupAvatar, BOT_GROUP_MENTION_AVATAR_SIZE } from './BotGroupAvatars';
 import { botGroupMemberAvatar } from './botGroupRemote';
 import { BotGroupMentionPopover } from './BotGroupMentionPopover';
 import { botGroupMentionDisplayName, type BotGroupMentionPoint } from './botGroupMentions';
@@ -47,6 +47,6 @@ export function BotGroupMentionIdentity({ member, anchor, deviceId, onClose }: {
       displayName={member.nickname && member.displayName && member.nickname !== member.displayName ? member.displayName : undefined}
       caption={[role, status].filter(Boolean).join(' · ')}
       avatar={<BotGroupAvatar deviceId={deviceId} online identity={{ botId: member.botId, name: member.name,
-        avatar: botGroupMemberAvatar(member), avatarUrl: member.avatarUrl }} size={48} />} /> : null}
+        avatar: botGroupMemberAvatar(member), avatarUrl: member.avatarUrl }} size={BOT_GROUP_MENTION_AVATAR_SIZE} />} /> : null}
   </View>;
 }

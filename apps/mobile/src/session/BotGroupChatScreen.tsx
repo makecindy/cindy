@@ -1052,6 +1052,10 @@ function BotGroupTimelineItem({
   // Only resolved sources qualify; never render a share's fallback as a message.
   const authoredShare = message.threadShare?.status === 'available' && message.threadShare.sharedByAuthor
     ? message.threadShare : undefined;
+  // The share's own recipients address delivery, not the displayed reply.
+  // Older source projections use the existing unique-name fallback, never self IDs.
+  const contentMentionContext = authoredShare && mentionContext ? { ...mentionContext,
+    mentions: authoredShare.mentions ?? { all: false, botIds: [] } } : mentionContext;
   const content = authoredShare?.content ?? message.content;
   const attachments = authoredShare?.attachments ?? message.attachments ?? [];
   const renderAttachments = (align: 'left' | 'right') => {
@@ -1079,7 +1083,7 @@ function BotGroupTimelineItem({
             {quoteDisplay ? <View style={styles.userQuote}>
               <BotGroupQuote display={quoteDisplay} onPress={onLocateQuote} />
             </View> : null}
-            {content.trim() ? <BotGroupUserText content={content} mentionLabels={mentionLabels} mentionContext={mentionContext} /> : null}
+            {content.trim() ? <BotGroupUserText content={content} mentionLabels={mentionLabels} mentionContext={contentMentionContext} /> : null}
           </View> : null}
         </View>
         {shareFooter}{footer}
@@ -1124,7 +1128,7 @@ function BotGroupTimelineItem({
           <View style={styles.botMessageContent}>
             {renderAttachments('left')}
             {message.threadShare && !authoredShare ? <BotGroupThreadShare onRetry={onRetrySource} share={message.threadShare} resolveMedia={resolveMedia} resolveServerMedia={resolveServerMedia} />
-              : content.trim() ? <BotGroupMarkdownText content={content} authorKind={message.authorKind} mentionContext={mentionContext} /> : null}
+              : content.trim() ? <BotGroupMarkdownText content={content} authorKind={message.authorKind} mentionContext={contentMentionContext} /> : null}
           </View>
           <BotGroupHandoffFiles files={message.files} />
           {shareFooter}

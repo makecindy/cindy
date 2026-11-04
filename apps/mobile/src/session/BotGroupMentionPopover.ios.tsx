@@ -6,6 +6,7 @@ import { View } from 'react-native';
 import { useTheme } from '@/theme';
 import { spacing } from '@/theme/tokens';
 import type { BotGroupMentionPopoverProps } from './BotGroupMentionPopover';
+import { BOT_GROUP_MENTION_AVATAR_SIZE } from './BotGroupAvatars';
 
 /** A real native popover, including compact-width iPhone presentation. */
 export function BotGroupMentionPopover({ position, width, onClose, avatar, name, displayName, caption }: BotGroupMentionPopoverProps) {
@@ -19,7 +20,7 @@ export function BotGroupMentionPopover({ position, width, onClose, avatar, name,
       <Popover.Trigger><VStack modifiers={[frame({ width: 1, height: 1 })]}>{null}</VStack></Popover.Trigger>
       <Popover.Content>
         <HStack spacing={spacing.lg} modifiers={[padding({ all: spacing.lg }), frame({ width })]} testID="botGroup.mention.identity">
-          <RNHostView matchContents><View style={{ width: 48, height: 48 }}>{avatar}</View></RNHostView>
+          <RNHostView matchContents><View style={{ width: BOT_GROUP_MENTION_AVATAR_SIZE, height: BOT_GROUP_MENTION_AVATAR_SIZE }}>{avatar}</View></RNHostView>
           <VStack alignment="leading" spacing={spacing.xs} modifiers={[frame({ maxWidth: Infinity, alignment: 'leading' })]}>
             <Text modifiers={[font({ textStyle: 'headline' }), foregroundStyle(colors.textPrimary)]}>{name}</Text>
             {displayName ? <Text modifiers={[font({ textStyle: 'footnote' }), foregroundStyle(colors.textSecondary)]}>{displayName}</Text> : null}
