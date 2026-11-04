@@ -86,6 +86,11 @@ Catalog (version)
 覆盖，保留其它自定义资料。已有任务的接口快照保留原传输协议，图片声明继续读取本地覆盖。
 这只修正客户端的能力声明，不改变上游服务实际能接收的内容。
 
+自定义/第三方模型还可在「推理强度」段声明实际支持的档位。声明写入该模型 runtime 配置的
+`reasoning` / `reasoningEfforts` / `reasoningDefaultEffort`，按模型行的全部可用引擎分别过滤
+（Pi 与 Codex / Claude Code 的合法档位不同）；未声明时不导出档位，恢复默认删除这三个字段。
+它只决定客户端可选择和发送的推理强度，不改变上游服务实际支持的能力。
+
 结构例外：条目没有 `models[].defaults`；Registry agents / perAgent 只接受 Claude Code、Codex，
 Pi 走 `providers[].models.pi`（用户补丁 perAgent.pi 另属合法 schema）。媒体 route 使用 `agents: []`。
 `contextWindowMax` 是客户端容量投影，不能填进 Registry；容量与工作预算见 [运行时细则](model-catalog-runtime.md)。
