@@ -96,6 +96,13 @@ interface ResolvedLink {
 let runtime: Runtime | null = null;
 let receivedRevision = 0;
 let receivedFingerprint = '';
+/**
+ * What listeners last heard: the list plus whether it is confirmed. The list is polled
+ * every minute; an unchanged poll must not notify, because each notification is also
+ * pushed to every controlling computer as a model catalog change and makes them
+ * re-read capabilities and agent rosters.
+ */
+let notifiedFingerprint = '';
 /** 用于只读分享投影的在途校验；暂停后恢复也不能复用旧回包。 */
 export function providerShareReceivedRevision(): number { return receivedRevision; }
 
@@ -127,6 +134,9 @@ function emitChanged(rt: Runtime): Promise<void> | void {
   const received = allReceived(rt);
   const fingerprint = JSON.stringify(received);
   if (fingerprint !== receivedFingerprint) { receivedFingerprint = fingerprint; receivedRevision++; }
+  const notified = JSON.stringify([fingerprint, confirmedRegions(rt), isCrossRegionReceivedComplete()]);
+  if (notified === notifiedFingerprint) return;
+  notifiedFingerprint = notified;
   // 分享被分享者删除后，它在这台电脑上的本机偏好一起清掉；还没加载的区域不动。
   const pruning = pruneProviderShareGuestPrefs(new Set(received.map((share) => share.shareId)), confirmedRegions(rt));
   const notify = () => {
@@ -280,7 +290,7 @@ export function startProviderShareGuest(events: ProviderShareGuestEvents, option
 }
 
 export function stopProviderShareGuest(): void {
-  receivedRevision++; receivedFingerprint = '';
+  receivedRevision++; receivedFingerprint = ''; notifiedFingerprint = '';
   stopProviderShareCrossRegion();
   const rt = runtime;
   if (!rt) return;

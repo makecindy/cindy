@@ -223,6 +223,24 @@ describe('cross-region provider share', () => {
     expect(Object.values(__testing.readMarkers())).toEqual([[peer]]);
   });
 
+  // 2026-11-04: the received list is polled every minute and every poll notified,
+  // even when nothing changed. Each notification is pushed to every controlling
+  // computer as a model catalog change, so they re-read capabilities every minute.
+  it('notifies received-share listeners only when the list or its confirmation changes', async () => {
+    const changed = vi.fn();
+    startProviderShareGuest({ changed, settled: vi.fn() });
+    await vi.waitFor(() => expect(changed).toHaveBeenCalledOnce());
+    await refreshReceivedShares('poll');
+    await refreshReceivedShares('poll');
+    expect(state.localReceivedReads).toBeGreaterThanOrEqual(3);
+    expect(changed).toHaveBeenCalledOnce();
+    state.localHasGroupShare = true;
+    await refreshReceivedShares('poll');
+    expect(changed).toHaveBeenCalledTimes(2);
+    expect(changed.mock.lastCall?.[0]).toHaveLength(2);
+    stopProviderShareGuest();
+  });
+
   it('automatically discovers a first share accepted on another computer after an empty startup', async () => {
     vi.useFakeTimers();
     try {
