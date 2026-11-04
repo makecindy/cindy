@@ -51,6 +51,14 @@
 - Host 侧：`pnpm --filter @cindy/host test` + 实际启动 `/health` 观察 `runtime.state`。
 - 阶段 5 前补一次真实会话回归（发送/流式/停止），否则不能宣称 Agent Runtime 已迁移。
 
+## 重要约束：maker-core 只能按子路径导入
+
+在 Host 中 `import ... from '@cindy/maker-core'` 会失败：barrel 会连带加载 `?raw` 形式的 markdown（如 `memory/system-prompt.md`），Node 无法解析该扩展。Host 侧必须使用子路径导出（如 `@cindy/maker-core/claude-cli-login-status`）。新增供 Host 使用的模块时，同时补 `exports` 子路径。
+
+## 已完成：Claude CLI 登录态共享
+
+`packages/maker-core/src/agents/claude-code/cli-login-status.ts` 承载 `auth status --json` 的解析与一次性 spawn 读取；Desktop 的 `claude-native-cli` 改为复用同一解析（27 个 CLI 测试覆盖），Host 已用真实二进制实测读通（本机返回 `loggedIn:false`）。
+
 ## 已知风险
 
 - 装配体量约 2,300 行，闭包捕获大量模块级状态；必须整段迁移后一次 typecheck，不能半途提交。

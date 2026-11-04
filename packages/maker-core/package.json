@@ -16,6 +16,10 @@
       "types": "./src/runtime-owner-lock.d.ts",
       "import": "./src/runtime-owner-lock.js",
       "default": "./src/runtime-owner-lock.js"
+    },
+    "./claude-cli-login-status": {
+      "import": "./src/agents/claude-code/cli-login-status.ts",
+      "default": "./src/agents/claude-code/cli-login-status.ts"
     }
   },
   "scripts": {
