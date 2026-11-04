@@ -270,6 +270,20 @@ function TextDocumentLightbox({ filePath, fileName, initialLine, triggerRef, onC
 
   // F6: Esc key listener
   useEffect(() => {
+    let fullscreen = Boolean(overlayRef.current?.contains(document.fullscreenElement));
+    let exitedFullscreenAt = -Infinity;
+    let handledFullscreenExit = false;
+    const onFullscreenChange = () => {
+      const next = Boolean(overlayRef.current?.contains(document.fullscreenElement));
+      if (fullscreen && !next) {
+        exitedFullscreenAt = handledFullscreenExit ? -Infinity : performance.now();
+      }
+      fullscreen = next;
+      handledFullscreenExit = false;
+    };
+    const onKeyUp = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') exitedFullscreenAt = -Infinity;
+    };
     const handler = (e: KeyboardEvent) => {
       if (e.repeat || e.defaultPrevented || e.isComposing || e.keyCode === 229) return;
       const overlay = overlayRef.current;
@@ -284,9 +298,17 @@ function TextDocumentLightbox({ filePath, fileName, initialLine, triggerRef, onC
         setSearch(true);
         return;
       }
-      if (e.key === 'Escape' && (
-        isPreviewPopupKeyEvent(e, overlay) || overlay.contains(document.fullscreenElement)
-      )) return;
+      if (e.key === 'Escape' && isPreviewPopupKeyEvent(e, overlay)) return;
+      if (e.key === 'Escape') {
+        const ownsNativeFullscreen = overlay.contains(document.fullscreenElement);
+        // Chromium may exit fullscreen before delivering this same keydown,
+        // even with find closed. Preserve the document in either event order.
+        if (fullscreen || ownsNativeFullscreen || performance.now() - exitedFullscreenAt < 250) {
+          exitedFullscreenAt = -Infinity;
+          handledFullscreenExit = fullscreen || ownsNativeFullscreen;
+          return;
+        }
+      }
       if (e.key === 'Escape' && search) {
         e.preventDefault();
         setSearch(false);
@@ -297,7 +319,13 @@ function TextDocumentLightbox({ filePath, fileName, initialLine, triggerRef, onC
       }
     };
     document.addEventListener('keydown', handler, true);
-    return () => document.removeEventListener('keydown', handler, true);
+    document.addEventListener('fullscreenchange', onFullscreenChange);
+    window.addEventListener('keyup', onKeyUp, true);
+    return () => {
+      document.removeEventListener('keydown', handler, true);
+      document.removeEventListener('fullscreenchange', onFullscreenChange);
+      window.removeEventListener('keyup', onKeyUp, true);
+    };
   }, [handleClose, search, renderable.kind, showSource]);
 
   // F6: Scroll lock on the message stream's scroll container.

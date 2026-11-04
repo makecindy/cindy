@@ -11,12 +11,15 @@ import { DiffPanelShell } from '@/components/diff-panel/DiffPanelShell';
 import { SettingsView } from '../SettingsView';
 import type { useVoiceInputModelSelection } from '@/hooks/useVoiceInputModelSelection';
 import { setAgentIslandEnabled } from '@/hooks/useAgentIslandSettings';
+import { LocaleProvider, useLocale } from '@/hooks/useLocale';
 
-vi.mock('react-i18next', () => ({
+vi.mock('react-i18next', async (importOriginal) => ({
+  ...await importOriginal<typeof import('react-i18next')>(),
   useTranslation: () => ({ t: (key: string) => ({
     'settings.voiceInput.serviceSource.customAsr.websocketUrl.label': 'WebSocket URL',
     'settings.voiceInput.refinement.instructions.label': 'Refinement instructions',
     'settings.agentIsland.skins.whitesnow.name': 'Apple Girl',
+    'settings.language.classical.label': 'Classical script and style',
   }[key] ?? key) }),
 }));
 vi.mock('@/contexts/AuthContext', () => ({
@@ -106,13 +109,26 @@ function LocationProbe() {
 
 function renderSettings(entry: string) {
   return render(
-    <MemoryRouter initialEntries={[entry]}>
-      <Routes>
-        <Route path="/settings" element={<SettingsView />} />
-        <Route path="/" element={<p>Home</p>} />
-      </Routes>
-      <LocationProbe />
-    </MemoryRouter>,
+    <LocaleProvider>
+      <MemoryRouter initialEntries={[entry]}>
+        <Routes>
+          <Route path="/settings" element={<SettingsView />} />
+          <Route path="/" element={<p>Home</p>} />
+        </Routes>
+        <LocationProbe />
+        <LocaleControls />
+      </MemoryRouter>
+    </LocaleProvider>,
+  );
+}
+
+function LocaleControls() {
+  const { setLocale } = useLocale();
+  return (
+    <>
+      <button onClick={() => setLocale('zh-Hans-x-lzh')}>Use classical locale</button>
+      <button onClick={() => setLocale('en')}>Use English locale</button>
+    </>
   );
 }
 
@@ -147,6 +163,20 @@ afterEach(() => {
 });
 
 describe('SettingsView Escape', () => {
+  // Unit wiring regression (#8481): use the real locale provider/setter so search
+  // follows the same live preference as LanguageSection without remounting settings.
+  it('updates classical search results after changing the display language', async () => {
+    await act(async () => { renderSettings('/settings'); });
+    fireEvent.change(screen.getByRole('combobox', { name: 'settings.search.ariaLabel' }), {
+      target: { value: 'Classical script and style' },
+    });
+    const result = () => screen.queryByRole('option', { name: /^Classical script and style/ });
+    expect(result()).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: 'Use classical locale' }));
+    expect(result()).not.toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: 'Use English locale' }));
+    expect(result()).toBeNull();
+  });
   // Unit regression (#8481): the real preference setter must update search before
   // opening Agent Island, without a native side effect just from searching.
   it('updates mascot search results when Agent Island is enabled and disabled', async () => {

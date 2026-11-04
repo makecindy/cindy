@@ -30,6 +30,7 @@ export const languageSettings = defineSettings({
   },
   classical: {
     id: 'general.classicalLanguage',
+    isVisible: ({ locale }) => isClassicalLocale(locale),
     tab: 'general',
     targetId: 'settings-classical-language',
     fallbackTargetId: 'settings-language',

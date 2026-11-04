@@ -44,6 +44,20 @@ const searchContext = { platform: 'win32', region: 'cn', mode: 'cloud', membersh
 } as const;
 
 describe('settings discoverability regressions', () => {
+  // Unit regression (#8481): script/style controls mount only for an explicitly
+  // selected classical locale; ordinary and system preferences leave them absent.
+  it.each(['en', 'zh-CN', 'system', 'zh-Hans-x-lzh', 'zh-Hant-x-lzh'])(
+    'finds classical controls only when mounted for %s', (locale) => {
+      const documents = buildSettingsSearchDocuments(searchI18n.t, TAB_IDS, { ...searchContext, locale });
+      expect(searchSettings(documents, '唐诗').some(({ entry }) => entry.id === 'general.classicalLanguage')).toBe(locale.endsWith('-x-lzh'));
+      for (const lng of ['zh-CN', 'en']) {
+        const matches = searchSettings(documents, searchI18n.t('settings.language.classical.label', { lng }));
+        expect(matches.some(({ entry }) => entry.id === 'general.classicalLanguage')).toBe(locale.endsWith('-x-lzh'));
+        const language = searchSettings(documents, searchI18n.t('settings.language.options.classical', { lng }));
+        expect(language.some(({ entry }) => entry.id === 'general.displayLanguage')).toBe(true);
+      }
+    },
+  );
   // Unit regression (#8481): disabled refinement leaves both child controls
   // unmounted. Query real translated labels instead of inspecting declarations.
   it.each([false, true])('filters refinement children with refinementEnabled=%s', (voiceRefinementEnabled) => {
@@ -97,7 +111,6 @@ describe('settings discoverability regressions', () => {
     ['开机启动', 'settings.windowBehavior.loginItem.label'],
     ['语音快捷键', 'settings.voiceInput.shortcut.label'],
     ['Ctrl+Enter', 'settings.composer.sendShortcut.label'],
-    ['唐诗', 'general.classicalLanguage'],
     ['鸿蒙字体', 'settings.appearance.font.uiFamily.label'],
     ['全速', 'settings.agentResource.preset'],
     ['Qwen 实时 ASR', 'voiceInput.customAsrProtocol'],

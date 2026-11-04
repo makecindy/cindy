@@ -142,8 +142,18 @@ export default {
       await page.keyboard.press(findKey);
       assert.equal(await input.count(), 0);
       assert.equal(await video.evaluate(player => document.activeElement === player), true);
-      await page.evaluate(() => document.exitFullscreen());
+      // Regression #8481: with find closed, the native fullscreen exit may
+      // precede delivery of that same Escape. Keep the actual preview mounted.
+      await video.evaluate(async player => {
+        const changed = new Promise(resolve => document.addEventListener('fullscreenchange', resolve, { once: true }));
+        await document.exitFullscreen();
+        await changed;
+        player.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true }));
+        player.dispatchEvent(new KeyboardEvent('keyup', { key: 'Escape', bubbles: true }));
+      });
       await page.waitForFunction(() => !document.fullscreenElement);
+      assert.equal(await card.isVisible(), true);
+      await ui.capture('fullscreen-exit-keeps-document-with-find-closed');
       await page.keyboard.press(findKey);
       await input.fill('苹果');
       await card.getByText('1/2', { exact: true }).waitFor();

@@ -3,6 +3,8 @@ import type { ImBotIdentity } from './imBotVisibility';
 
 export interface SettingsSearchContext extends ImBotIdentity {
   platform: string;
+  /** Stored language choice, including system; matches LanguageSection mounting. */
+  locale?: string;
   supportsBetaUpdateChannel?: boolean;
   /** Loaded service selectors only; never index user endpoints, models, or credentials. */
   voiceInput?: { serviceMode: 'cindy' | 'byok'; asrProvider: string };
