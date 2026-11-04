@@ -1097,7 +1097,7 @@ function BotGroupChatContent({ groupId, direct }: { groupId: string; direct: boo
   const editPlanStep = async (
     planId: string,
     step: BotGroupPlanStepView,
-    action: 'reassign' | 'remove',
+    action: 'reassign' | 'remove' | 'skip',
     botId?: string,
   ) => {
     if (planPendingRef.current) return;
@@ -1109,6 +1109,7 @@ function BotGroupChatContent({ groupId, direct }: { groupId: string; direct: boo
         planId,
         position: step.position,
         action,
+        ...(action === 'skip' ? { executionId: step.executionId } : {}),
         ...(botId ? { botId } : {}),
       });
       if (!result) return;
@@ -1139,7 +1140,7 @@ function BotGroupChatContent({ groupId, direct }: { groupId: string; direct: boo
   const onLocateQuote = useCallback((quote: BotGroupQuoteView) => void actionsRef.current.locateQuoted(quote), []);
   const onContinue = useCallback(() => void actionsRef.current.continueRound(), []);
   const onPlanAction = useCallback((action: 'start' | 'dismiss', planId: string) => void actionsRef.current.runPlanAction(action, planId), []);
-  const onEditStep = useCallback((planId: string, step: BotGroupPlanStepView, action: 'reassign' | 'remove', botId?: string) =>
+  const onEditStep = useCallback((planId: string, step: BotGroupPlanStepView, action: 'reassign' | 'remove' | 'skip', botId?: string) =>
     void actionsRef.current.editPlanStep(planId, step, action, botId), []);
   const onPlanAutoContinue = useCallback((_planId: string, on: boolean) => void actionsRef.current.setAutoContinue(on), []);
   const onChanged = useCallback((messageId: string) => loadRef.current([], [messageId]), []);

@@ -7599,6 +7599,9 @@
         "agentObserve": "Can view task lists and status in local projects",
         "agentObserveDetail": "Can view the titles, agent type, archive state and status (running, needs attention, last activity) of tasks in registered local projects, and open a task in the main window. Cannot read messages, plans or files, send messages, or change tasks.",
         "agentObserveRequest": "Review task viewing permission",
+        "agentCompanions": "Can view your teammates, their status and recent conversation",
+        "agentCompanionsDetail": "Can view all your teammates, including those running on your other computers: name, description, avatar, status (working, waiting for you, idle, offline), what kind of step each is on (such as thinking or running a tool), the requests waiting for you as their cards show them (questions, commands to run, plans), and the recent conversation in each teammate’s main chat (up to 50 of your messages and their replies, without tool steps); and open a teammate’s conversation in the main window. With the message delivery permission as well, it can pass on the answers you give in the plugin: answer questions, decline requests, and give feedback on plans. Allowing a step still takes your click in Cindy’s own confirmation. Cannot read files, tool steps or thinking.",
+        "agentCompanionsRequest": "Review teammate viewing permission",
         "agentHiddenTasks": "Can create background tasks hidden from the task list",
         "agentHiddenTasksDetail": "Tasks this plugin creates can stay out of the task list, search and notifications. You can always view, open or show them in the task list from Background Tasks on this plugin’s page; uninstalling the plugin shows them again.",
         "agentErrand": "Create tasks, perform work, and read results",
@@ -10670,7 +10673,8 @@
         "lifecycleUnavailable": "The current server or computer does not support this action yet.",
         "groupDissolved": "This group has been dissolved. You can still read the available history.",
         "lastOwner": "Transfer ownership or dissolve this group before leaving.",
-        "allBotsMentionDisabled": "The group owner has not enabled @all teammates."
+        "allBotsMentionDisabled": "The group owner has not enabled @all teammates.",
+        "turnAlreadyStarted": "This teammate has already started and cannot be skipped"
       },
       "organizer": "Organizer",
       "plan": {
@@ -10701,7 +10705,17 @@
         "stepSpoken": "Done",
         "allTurns_one": "All {{count}} teammate",
         "allTurns_other": "All {{count}} teammates",
-        "foldTurns": "Show fewer"
+        "foldTurns": "Show fewer",
+        "stepQueued": "Waiting to Start",
+        "stepExecuting": "Running",
+        "stepSkipped": "Skipped",
+        "skippingTurn": "Skipping…",
+        "queueWaiting": "Waiting for you to continue",
+        "skipTurnLabel": "Skip {{name}}",
+        "queueEnded": "Round ended",
+        "talkTitle": "Hear from everyone in turn",
+        "talkPending": "Not started",
+        "skipTurn": "Skip"
       },
       "speaking": {
         "planning": "Splitting the work…"
@@ -18764,6 +18778,21 @@
     "taskDetail": "This allows edits only for the current session. A separate working directory is not a system sandbox; commands still follow Cindy permission checks. You can change this in the session’s permission menu.",
     "allow": "Allow and continue",
     "cancel": "Not now"
+  },
+  "pluginCompanionAnswer": {
+    "title": "Confirm allow",
+    "planMessage": "Let {{companion}} start working on this plan?",
+    "permissionMessage": {
+      "command": "Allow {{companion}} to run this command?",
+      "file-read": "Allow {{companion}} to read these files?",
+      "file-write": "Allow {{companion}} to change these files?",
+      "browser": "Allow {{companion}} to take this browser step?",
+      "plugin": "Allow {{companion}} to use “{{tool}}”?",
+      "tool": "Allow {{companion}} to use {{tool}}?"
+    },
+    "source": "You chose Allow in the plugin “{{plugin}}”. {{appName}} asks once more here; after you allow, the teammate continues.",
+    "allow": "Allow",
+    "cancel": "Cancel"
   },
   "groupTools": {
     "authorizationRequired": "Group authorization has expired or does not allow this action. Ask the teammate owner to make a new request in this group.",

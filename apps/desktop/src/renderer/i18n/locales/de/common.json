@@ -7599,6 +7599,9 @@
         "agentObserve": "Kann Liste und Status der Sitzungen lokaler Projekte sehen",
         "agentObserveDetail": "Kann Titel, Agent-Typ, Archivstatus und Status (läuft, Handlung nötig, letzte Aktivität) der Sitzungen registrierter lokaler Projekte sehen und eine Sitzung im Hauptfenster öffnen. Kann keine Nachrichten, Pläne oder Dateien lesen und weder Nachrichten senden noch Sitzungen ändern.",
         "agentObserveRequest": "Berechtigung zum Anzeigen von Sitzungen prüfen",
+        "agentCompanions": "Kann Teammitglieder, ihren Status und die letzten Nachrichten sehen",
+        "agentCompanionsDetail": "Kann alle Teammitglieder sehen, auch die auf deinen anderen Computern: Name, Beschreibung, Avatar, Status (arbeitet, wartet auf dich, inaktiv, offline), die Art des aktuellen Schritts (etwa Nachdenken oder ein Tool ausführen), die Anfragen, die auf dich warten, so wie ihre Karten sie zeigen (Fragen, auszuführende Befehle, Pläne), und die letzten Nachrichten im Hauptchat (bis zu 50 deiner Nachrichten und ihrer Antworten, ohne Tool-Schritte); außerdem die Unterhaltung eines Teammitglieds im Hauptfenster öffnen. Mit der Berechtigung zum Zustellen von Nachrichten kann es deine im Plugin gegebenen Antworten weitergeben: Fragen beantworten, Anfragen ablehnen und Feedback zu Plänen geben. Zum Erlauben eines Schritts klickst du weiterhin in Cindys eigener Bestätigung. Kann keine Dateien, Tool-Schritte oder Gedankengänge lesen.",
+        "agentCompanionsRequest": "Berechtigung zum Anzeigen von Teammitgliedern prüfen",
         "agentHiddenTasks": "Kann Hintergrundaufgaben erstellen, die in der Aufgabenliste ausgeblendet sind",
         "agentHiddenTasksDetail": "Von diesem Plugin erstellte Aufgaben können in der Aufgabenliste, der Suche und den Benachrichtigungen ausgeblendet bleiben. Unter „Hintergrundaufgaben“ auf der Seite dieses Plugins kannst du sie jederzeit ansehen, öffnen oder in der Aufgabenliste einblenden; bei der Deinstallation des Plugins werden sie wieder eingeblendet.",
         "agentErrand": "Aufgaben erstellen, Arbeiten ausführen und Ergebnisse lesen",
@@ -10670,7 +10673,8 @@
         "lifecycleUnavailable": "Der aktuelle Server oder Computer unterstützt diese Aktion noch nicht.",
         "groupDissolved": "Diese Gruppe wurde aufgelöst. Du kannst den verfügbaren Verlauf weiterhin lesen.",
         "lastOwner": "Übertrage die Inhaberschaft oder löse diese Gruppe auf, bevor du sie verlässt.",
-        "allBotsMentionDisabled": "Der Gruppeninhaber hat @Alle Teammitglieder noch nicht aktiviert."
+        "allBotsMentionDisabled": "Der Gruppeninhaber hat @Alle Teammitglieder noch nicht aktiviert.",
+        "turnAlreadyStarted": "Dieser Teamkollege hat bereits begonnen und kann nicht übersprungen werden"
       },
       "organizer": "Organisator",
       "plan": {
@@ -10701,7 +10705,17 @@
         "stepSpoken": "Fertig",
         "allTurns_one": "Alle {{count}} Teammitglied",
         "allTurns_other": "Alle {{count}} Teammitglieder",
-        "foldTurns": "Weniger anzeigen"
+        "foldTurns": "Weniger anzeigen",
+        "stepQueued": "Wartet auf Start",
+        "stepExecuting": "Wird ausgeführt",
+        "stepSkipped": "Übersprungen",
+        "skippingTurn": "Wird übersprungen…",
+        "queueWaiting": "Wartet auf Fortsetzen",
+        "skipTurnLabel": "Überspringen {{name}}",
+        "queueEnded": "Runde beendet",
+        "talkTitle": "Nacheinander zu Wort kommen",
+        "talkPending": "Nicht gestartet",
+        "skipTurn": "Überspringen"
       },
       "speaking": {
         "planning": "Arbeit wird aufgeteilt…"
@@ -18764,6 +18778,21 @@
     "taskDetail": "Damit werden Bearbeitungen nur für die aktuelle Sitzung erlaubt. Ein separates Arbeitsverzeichnis ist keine System-Sandbox; Befehle unterliegen weiterhin den Berechtigungsprüfungen von Cindy. Du kannst dies im Berechtigungsmenü der Sitzung ändern.",
     "allow": "Erlauben und fortfahren",
     "cancel": "Nicht jetzt"
+  },
+  "pluginCompanionAnswer": {
+    "title": "Erlauben bestätigen",
+    "planMessage": "Soll {{companion}} mit diesem Plan beginnen?",
+    "permissionMessage": {
+      "command": "{{companion}} erlauben, diesen Befehl auszuführen?",
+      "file-read": "{{companion}} erlauben, diese Dateien zu lesen?",
+      "file-write": "{{companion}} erlauben, diese Dateien zu ändern?",
+      "browser": "{{companion}} erlauben, diesen Browserschritt auszuführen?",
+      "plugin": "{{companion}} erlauben, „{{tool}}“ zu verwenden?",
+      "tool": "{{companion}} erlauben, {{tool}} zu verwenden?"
+    },
+    "source": "Du hast im Plugin „{{plugin}}“ „Erlauben“ gewählt. {{appName}} fragt hier noch einmal nach; danach arbeitet das Teammitglied weiter.",
+    "allow": "Erlauben",
+    "cancel": "Abbrechen"
   },
   "groupTools": {
     "authorizationRequired": "Die Gruppenautorisierung ist abgelaufen oder erlaubt diese Aktion nicht. Bitte den Besitzer des Teammitglieds, eine neue Anfrage in dieser Gruppe zu stellen.",

@@ -39,6 +39,7 @@ import {
 } from './orcaRemoteWorker.js';
 import { TASK_MIGRATION_CHANNEL } from './taskMigration.js';
 import {
+  COMPANION_LIVE_CHANNEL,
   COMPANION_CLOUD_CAPS_CHANNEL,
   COMPANION_CLOUD_FLUSH_CHANNEL,
   COMPANION_CLOUD_HAND_OVER_CHANNEL,
@@ -487,6 +488,11 @@ const EXTENDED_INVOKE_CHANNELS: readonly string[] = [
   // 老版本无 handler → CHANNEL_NOT_ALLOWED，控制端显示需要更新。
   MACHINE_STATUS_CHANNEL,
   COMPANION_CLOUD_CAPS_CHANNEL,
+  // 插件「查看伙伴」跨电脑读取(只读)：主力电脑返回本机可见伙伴的插件视图(状态、工作阶段、当前步骤、
+  // 待处理请求标题、最新回复)。同账号且主力电脑开启远程控制时，控制端本就能经 sessions / messages 通道读到这些
+  // 对话内容，此处不扩大可见范围；handler 不依赖 sender、无本机 UI 副作用，不进 sharedTask 访客白名单。
+  // 老版本无 handler → CHANNEL_NOT_ALLOWED，查看端退回伙伴列表里的状态。
+  COMPANION_LIVE_CHANNEL,
   // 云端伙伴：在任一台电脑上更换伙伴的主力电脑。只读读取主力电脑视角的可接手电脑，以及请主力电脑
   // 交出伙伴(写)。准入同本机伙伴设置的「主力电脑」一行：同账号 + 主力电脑开启远程控制时控制端本就
   // 能远程改这个伙伴；交出走被控端同一业务流程(同步、忙碌检查、比较后改主力电脑)，handler 不依赖
