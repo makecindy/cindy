@@ -384,7 +384,7 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
   talkProgress: { color: colors.textTertiary, fontSize: typeScale.caption, lineHeight: lineHeight.bodyRelaxed, fontVariant: ['tabular-nums'] },
   talkRow: { flexDirection: 'row', alignItems: 'flex-start', gap: spacing.sm + 2, paddingVertical: spacing.sm - 1 },
   talkMember: { flex: 1, minWidth: 0, gap: 2 },
-  talkName: { color: colors.textPrimary, fontSize: typeScale.footnote, lineHeight: lineHeight.bodySmall, fontWeight: fontWeight.medium },
+  talkName: { color: colors.textPrimary, fontSize: typeScale.bodySmall, lineHeight: lineHeight.bodySmall, fontWeight: fontWeight.medium },
   talkTail: { flexDirection: 'row', flexWrap: 'wrap', justifyContent: 'space-between', alignItems: 'center', gap: spacing.sm, minHeight: lineHeight.bodySmall },
   // Keep the expanded hitSlop inside the parent's bounds on native platforms.
   talkActionTail: { minHeight: 44 },
