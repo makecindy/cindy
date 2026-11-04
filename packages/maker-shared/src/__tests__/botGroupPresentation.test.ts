@@ -14,7 +14,11 @@ import {
   botGroupNewMessageCount,
   botGroupActivityAt,
   latestBotGroupMessage,
+  chatGroupMemberName,
+  botGroupMemberBaseName,
+  botGroupMentionLabelMembers,
 } from '../botGroupPresentation.js';
+import { resolveBotGroupMentions } from '../botGroupMentions.js';
 import { chatGroupTalkRouteKey, groupLaneOfRouteKey, isChatOnlyGroupLane, BOT_GROUP_RUNTIME_FAILURE_CODES, readBotGroupExecutionFailure, type BotGroupErrorCode, type BotGroupExecutionFailureView, type BotGroupMemberView, type BotGroupMessageView, type BotGroupNoticeCode, type BotGroupOpenPlanSummary, type BotGroupPlanStepStatus, type BotGroupPlanView, type BotGroupSummary } from '../botGroupChat.js';
 
 describe('group list activity', () => {
@@ -323,5 +327,48 @@ describe('group body component display', () => {
       { kind: 'text', content: 'Summary' }, { kind: 'text', content: 'Updated' },
       { kind: 'text', content: 'Diagram' },
     ]);
+  });
+});
+
+describe('chatGroupMemberName owner suffix (#8061)', () => {
+  const human = (id: string, name: string, state = 'joined') => ({ id, kind: 'human', state, name, ownerActorId: id });
+  const bot = (id: string, ownerActorId: string) => ({ id, kind: 'bot', state: 'joined', name: 'Dash', ownerActorId, ownerName: 'Account' });
+
+  it('drops the suffix when the owner is the only human in the room', () => {
+    expect(chatGroupMemberName(bot('b1', 'h1'), [human('h1', 'Xing'), bot('b1', 'h1')])).toBe('Dash');
+  });
+
+  it('keeps the suffix when another human is in the room or the owner is not a joined member', () => {
+    const members = [human('h1', 'Xing'), human('h2', 'Chris'), bot('b1', 'h1')];
+    expect(chatGroupMemberName(bot('b1', 'h1'), members)).toBe('Dash (Xing)');
+    expect(chatGroupMemberName(bot('b1', 'h1'), [human('h1', 'Xing', 'left'), human('h2', 'Chris')])).toBe('Dash (Account)');
+    expect(chatGroupMemberName(bot('b1', 'h1'), [])).toBe('Dash (Account)');
+  });
+});
+
+describe('draft @mentions survive a suffix change (#8061 review)', () => {
+  // Someone joins a self-built group while a draft `@Dash ...` is open: the display name flips from
+  // `Dash` to `Dash (Xing)`. The composer offers the base name too, so the typed short name still resolves.
+  const member = (botId: string, name: string) => ({ botId, name, ownerName: 'Xing' });
+  const resolve = (text: string, members: ReturnType<typeof member>[]) =>
+    resolveBotGroupMentions(text, { members: botGroupMentionLabelMembers(members), allLabels: ['all'] }).botIds;
+  it('strips only a trailing owner suffix', () => {
+    expect(botGroupMemberBaseName({ name: 'Dash (Xing)', ownerName: 'Xing' })).toBe('Dash');
+    expect(botGroupMemberBaseName({ name: 'Dash', ownerName: 'Xing' })).toBe('Dash');
+    expect(botGroupMemberBaseName({ name: ' (Xing)', ownerName: 'Xing' })).toBe('(Xing)');
+  });
+  it('keeps resolving a typed short name after the display name gains the suffix', () => {
+    for (const name of ['Dash', 'Dash (Xing)']) expect(resolve('@Dash please look', [member('b1', name)])).toEqual(['b1']);
+    expect(resolve('@Dash (Xing) please look', [member('b1', 'Dash (Xing)')])).toEqual(['b1']);
+  });
+  it('does not let the short alias wake a different companion that is really named Dash', () => {
+    const members = [member('b1', 'Dash (Xing)'), member('b2', 'Dash')];
+    expect(resolve('@Dash please look', members)).toEqual(['b2']);
+    expect(resolve('@Dash (Xing) please look', members)).toEqual(['b1']);
+  });
+  it('does not alias one base name to two companions', () => {
+    const members = [member('b1', 'Dash (Xing)'), member('b3', 'Dash (Xing)')];
+    // Both share the full name, so the full name addresses both as before; the alias adds nothing new.
+    expect(botGroupMentionLabelMembers(members).filter(entry => entry.name === 'Dash')).toEqual([]);
   });
 });
