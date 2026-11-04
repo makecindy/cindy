@@ -2,8 +2,8 @@ import { describe, expect, it, vi } from 'vitest';
 import { BUNDLED_CATALOG, buildUserProvider } from '@cindy/model-providers';
 import { providerReferencePriceQuote, getModelPriceQuote, modelPricingKey } from '../../../shared/modelPriceQuote.js';
 
-vi.mock('../../maker-host/active-catalog.js', () => ({
-  getActiveCatalog: () => ({ ...BUNDLED_CATALOG, providers: [buildUserProvider({
+vi.mock('../../maker-host/active-catalog.js', () => {
+  const createCatalog = () => ({ ...BUNDLED_CATALOG, providers: [buildUserProvider({
     id: 'openai-account', name: 'Account', auth: { method: 'oauth', native: 'codex' },
     runtimes: { codex: { baseUrl: 'https://chatgpt.com/backend-api/codex', models: [{ id: 'gpt-5.6-luna', name: 'Luna' }] } },
   }), buildUserProvider({ id: 'router-account', name: 'Router', runtimes: {
@@ -32,8 +32,12 @@ vi.mock('../../maker-host/active-catalog.js', () => ({
     // The active catalog fills Claude membership from account discovery.
     if (native === 'claude') provider.models.codex = [{ id: 'claude-sonnet-4-6', name: 'Sonnet', contextWindow: 200000, efforts: [], defaultEffort: null }];
     return provider;
-  })] }),
-}));
+  })] });
+  // Match the real catalog's stable identity. Rebuilding every account for each
+  // price lookup repeatedly projected the bundled catalog and timed out in CI.
+  let catalog: ReturnType<typeof createCatalog> | undefined;
+  return { getActiveCatalog: () => (catalog ??= createCatalog()) };
+});
 vi.mock('../modelPriceOverrideStore.js', () => ({
   applyModelPriceOverrides: (pricing: unknown) => pricing,
   mergeStoredModelPriceOverride: vi.fn(),
