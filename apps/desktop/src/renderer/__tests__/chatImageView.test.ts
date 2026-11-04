@@ -291,6 +291,45 @@ describe('ChatImageView', () => {
     expect(read).not.toHaveBeenCalled();
   });
 
+  // 2026-11-04: a 77-image remote task requested every image on open and held the
+  // device link for ~2.5 min, stalling the next teammate open. Remote images wait
+  // until their placeholder nears the scrolling viewport; local images are unchanged.
+  it('requests a remote image only near the scroll viewport, keeps it for share, and leaves local images eager', () => {
+    const observers: { callback: IntersectionObserverCallback; options?: IntersectionObserverInit; disconnect: ReturnType<typeof vi.fn> }[] = [];
+    vi.stubGlobal('IntersectionObserver', class {
+      readonly disconnect = vi.fn();
+      constructor(callback: IntersectionObserverCallback, options?: IntersectionObserverInit) {
+        observers.push({ callback, options, disconnect: this.disconnect });
+      }
+      observe() {}
+    });
+    const scroller = document.createElement('div');
+    scroller.style.overflowY = 'auto';
+    Object.defineProperties(scroller, { scrollHeight: { value: 9000 }, clientHeight: { value: 900 } });
+    document.body.appendChild(scroller);
+    const remote = 'cindy-remote-media://m/device/far';
+    const { container } = render(
+      React.createElement('div', null,
+        React.createElement(ChatImageView, { src: remote, filename: 'far.png', variant: 'tool-output' }),
+        React.createElement(ChatImageView, { src: 'xdt-image://images/near.png', filename: 'local.png', variant: 'tool-output' })),
+      { container: scroller.appendChild(document.createElement('div')) },
+    );
+    expect(screen.getByAltText('far.png').hasAttribute('src')).toBe(false);
+    expect(screen.getByAltText('local.png').getAttribute('src')).toBe('xdt-image://images/near.png');
+    expect(observers).toHaveLength(1);
+    expect(observers[0].options?.root).toBe(scroller);
+    // Sharing before the user scrolled there still includes the image.
+    expect(prepareShareMessageClone(container)?.querySelector('img[alt="far.png"]')?.getAttribute('src')).toBe(remote);
+
+    act(() => observers[0].callback([{ isIntersecting: false } as IntersectionObserverEntry], {} as IntersectionObserver));
+    expect(screen.getByAltText('far.png').hasAttribute('src')).toBe(false);
+    act(() => observers[0].callback([{ isIntersecting: true } as IntersectionObserverEntry], {} as IntersectionObserver));
+    expect(screen.getByAltText('far.png').getAttribute('src')).toBe(remote);
+    expect(observers[0].disconnect).toHaveBeenCalled();
+    expect(observers).toHaveLength(1);
+    scroller.remove();
+  });
+
   it('displaySrc 变化后清掉上一张图的错误占位', () => {
     const { rerender } = render(
       React.createElement(ChatImageView, {

@@ -1,8 +1,21 @@
-import { useState, type ComponentProps } from 'react';
+import { useEffect, useRef, useState, type ComponentProps } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Spinner } from '@/components/ui/spinner';
-import { SHARE_EXCLUDE_ATTR, SHARE_PENDING_IMAGE_ATTR } from '@/lib/shareConversationImage';
+import {
+  SHARE_DEFERRED_IMAGE_SRC_ATTR,
+  SHARE_EXCLUDE_ATTR,
+  SHARE_PENDING_IMAGE_ATTR,
+} from '@/lib/shareConversationImage';
 import { cn } from '@/lib/utils';
+import { REMOTE_MEDIA_SCHEME } from '@/../shared/remoteMediaUrl';
+
+/**
+ * How far outside the scroll viewport an image from another computer starts
+ * loading: three viewport heights above and below. Generous on purpose, so
+ * switching back to a task or scrolling normally finds images already there;
+ * only images far away wait instead of all competing for the device link.
+ */
+const REMOTE_PRELOAD_MARGIN = '300% 0px';
 
 /** Keep a visible frame until the browser has received and decoded the image. */
 export function ChatLoadingImage(props: ComponentProps<'img'>) {
@@ -10,13 +23,55 @@ export function ChatLoadingImage(props: ComponentProps<'img'>) {
   return <ImageLoad key={props.src} {...props} />;
 }
 
-function ImageLoad({ onLoad, style, className, ...props }: ComponentProps<'img'>) {
+/** The nearest ancestor that actually scrolls vertically; the margin is relative to it. */
+function scrollRootOf(element: HTMLElement): HTMLElement | null {
+  for (let node = element.parentElement; node; node = node.parentElement) {
+    const { overflowY } = getComputedStyle(node);
+    const scrollable = overflowY === 'auto' || overflowY === 'scroll' || overflowY === 'overlay';
+    if (scrollable && node.scrollHeight > node.clientHeight) return node;
+  }
+  return null;
+}
+
+/**
+ * Remote images are fetched from the other computer on request. The hidden
+ * `<img>` cannot use native lazy loading (it never becomes visible), so the
+ * visible placeholder is observed instead. Once near, it stays near.
+ */
+function useNearScrollViewport(defer: boolean) {
+  const placeholderRef = useRef<HTMLSpanElement>(null);
+  const [near, setNear] = useState(!defer);
+  useEffect(() => {
+    if (near) return;
+    const placeholder = placeholderRef.current;
+    if (!placeholder || typeof IntersectionObserver === 'undefined') {
+      setNear(true);
+      return;
+    }
+    const observer = new IntersectionObserver(
+      (entries) => {
+        if (!entries.some((entry) => entry.isIntersecting)) return;
+        observer.disconnect();
+        setNear(true);
+      },
+      { root: scrollRootOf(placeholder), rootMargin: REMOTE_PRELOAD_MARGIN },
+    );
+    observer.observe(placeholder);
+    return () => observer.disconnect();
+  }, [near]);
+  return { placeholderRef, near };
+}
+
+function ImageLoad({ onLoad, style, className, src, ...props }: ComponentProps<'img'>) {
   const { t } = useTranslation();
   const [loaded, setLoaded] = useState(false);
+  const remote = typeof src === 'string' && src.startsWith(`${REMOTE_MEDIA_SCHEME}:`);
+  const { placeholderRef, near } = useNearScrollViewport(remote);
   return (
     <>
       {!loaded && (
         <span
+          ref={placeholderRef}
           {...{ [SHARE_EXCLUDE_ATTR]: '' }}
           role="status"
           aria-label={t('chat.imageMissing.loading')}
@@ -27,8 +82,11 @@ function ImageLoad({ onLoad, style, className, ...props }: ComponentProps<'img'>
       )}
       <img
         {...props}
-        // 分享图自己读图片字节,不必等这里加载完:克隆时去掉占位、显示这张图。
+        src={near ? src : undefined}
+        // 分享图自己读图片字节,不必等这里加载完:克隆时去掉占位、显示这张图;
+        // 还没开始取的远程图把地址交给分享管线。
         {...(loaded ? {} : { [SHARE_PENDING_IMAGE_ATTR]: '' })}
+        {...(near ? {} : { [SHARE_DEFERRED_IMAGE_SRC_ATTR]: src })}
         className={cn(
           className,
           loaded && 'motion-safe:animate-fade-in',
