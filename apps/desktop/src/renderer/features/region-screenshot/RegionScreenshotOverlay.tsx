@@ -10,6 +10,7 @@ import {
   type WheelEvent as ReactWheelEvent,
 } from 'react';
 import { Button } from '@/components/ui/button';
+import { RecordingAudioToggle } from './RecordingAudioToggle';
 import { useTranslation } from 'react-i18next';
 
 import i18n from '@/i18n';
@@ -178,6 +179,7 @@ export function RegionScreenshotOverlay({ bridge, imageEditor = false }: { bridg
   const [liveError, setLiveError] = useState(false);
   const [captureMode, setCaptureMode] = useState<ScreenshotMode>('image');
   const [recordingFormat, setRecordingFormat] = useState<'video' | 'gif'>('video');
+  const [recordingAudio, setRecordingAudio] = useState({ system: false, microphone: false });
   const liveRef = useRef(false);
   const [longResult, setLongResult] = useState<{ image: RegionScreenshotBitmap; selection: RegionRect } | null>(null);
   const longResultRef = useRef(longResult);
@@ -259,6 +261,7 @@ export function RegionScreenshotOverlay({ bridge, imageEditor = false }: { bridg
     setLive(null);
     setCaptureMode('image');
     setRecordingFormat('video');
+    setRecordingAudio({ system: false, microphone: false });
     setModeBarCenter(null);
     setLongResult(null);
     longResultRef.current = null;
@@ -1165,7 +1168,7 @@ export function RegionScreenshotOverlay({ bridge, imageEditor = false }: { bridg
 
   if (live && session) return live.mode === 'scroll'
     ? <ScrollCaptureOverlay begin={live} token={session.token} bridge={bridge} onEdit={finishScroll} />
-    : <LiveCapturePanel begin={live} token={session.token} bridge={bridge} />;
+    : <LiveCapturePanel begin={live} token={session.token} bridge={bridge} audioOptions={recordingAudio} />;
 
   const toolbar = (imageEditor || toolbarStyle) && (imageEditor || activeDisplay) && (
         <div
@@ -1194,6 +1197,10 @@ export function RegionScreenshotOverlay({ bridge, imageEditor = false }: { bridg
               <span className="mr-auto text-[var(--text-secondary)]">{t('regionScreenshot.live.format')}</span>
               {(['video', 'gif'] as const).map((format) => <Button key={format} size="xs" variant="secondary" tone={recordingFormat === format ? 'default' : 'quiet'} aria-pressed={recordingFormat === format} onClick={() => setRecordingFormat(format)}>{format === 'gif' ? 'GIF' : t('regionScreenshot.live.videoFormat')}</Button>)}
             </div>
+            {recordingFormat === 'video' && <div className="flex flex-wrap items-center gap-2">
+              <RecordingAudioToggle source="system" enabled={recordingAudio.system} onChange={system => setRecordingAudio(value => ({ ...value, system }))} />
+              <RecordingAudioToggle source="microphone" enabled={recordingAudio.microphone} onChange={microphone => setRecordingAudio(value => ({ ...value, microphone }))} />
+            </div>}
             <p className="text-[var(--text-secondary)]">{t('regionScreenshot.live.prepareHint')}</p>
             <div className="flex justify-end gap-2">
               <Button size="xs" variant="secondary" tone="quiet" onClick={cancel}>{t('regionScreenshot.cancel')}</Button>
