@@ -49,6 +49,7 @@
 
   function makeNode(path) {
     const node = function shimCall(...args) {
+      window.__cindyCalls?.push(path);
       const handler = routes[path];
       return handler ? handler(args) : unsupported(path);
     };
@@ -72,6 +73,7 @@
 
   window.electronAPI = makeNode('');
   window.__cindyShim = true;
+  window.__cindyCalls = [];
   window.__cindyErrors = [];
   window.addEventListener('error', (event) => {
     window.__cindyErrors.push(String(event.message ?? event.error ?? 'error'));
