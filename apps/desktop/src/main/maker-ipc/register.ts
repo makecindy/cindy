@@ -6397,8 +6397,8 @@ const sessionEventDependencies: SessionEventDependencies = {
   get broadcastToAllWindows() {
     return broadcastToAllWindows;
   },
-  get broadcastCodexImageAsToolResult() {
-    return broadcastCodexImageAsToolResult;
+  get deliverCodexGeneratedImage() {
+    return deliverCodexGeneratedImage;
   },
   get autoResumeBookkeeping() {
     return autoResumeBookkeeping;
@@ -13539,6 +13539,9 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
           message: params.message,
         }),
       });
+      // Chat-only dispatch allocates a queue id; keep the server execution identity
+      // so error recovery can restore the group's full background as well.
+      if (params.clientId?.startsWith(BOT_GROUP_CLIENT_ID_PREFIX)) queued.retrySourceClientId = params.clientId;
       const enqueue = () => inputCoordinator.enqueue(params.targetSessionId, queued, {
         resumeRestorePausedQueue: true,
       });
@@ -13740,6 +13743,12 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     || inputCoordinator.getQueueControlSnapshot(sessionId).pendingQueue.length > 0;
   const botGroupChatDeps: BotGroupChatServiceDeps = {
     chatHistoryStore: (endpoint, human, reader, current) => createSqliteChatHistoryStore(getDbClient(), endpoint, human, reader, current),
+    readLaneContext: (id) => {
+      const session = maker.getSession(id);
+      if (!session || session.getStatus() !== 'active' || !session.sdkSessionId) return null;
+      return { key: JSON.stringify([session.instanceId, session.sdkSessionId, session.agentKind, session.model,
+        getSessionProvider(id), session.getTurnGeneration()]), contextTokens: session.getUsageSnapshot().contextTokens };
+    },
     ensureLane: async (input) => {
       try {
         return await ensureBotGroupLaneSession(input);
@@ -26392,9 +26401,22 @@ const generatedImageDelivery = createGeneratedImageDelivery({
 });
 setGeneratedImageRecovery((sessionId) => generatedImageDelivery.recover(sessionId), () => generatedImageDelivery.reconcile());
 
-async function broadcastCodexImageAsToolResult(sessionId: string, event: AgentEvent): Promise<void> {
-  try { await generatedImageDelivery.deliver(sessionId, event); }
-  catch { log.warn('Codex generated image delivery could not be persisted', { sessionId }); }
+/**
+ * Live delivery of a Codex native generated image. The returned promise resolves
+ * with the tool events published for it (`[]` when none), so the wire listener can
+ * hold the Session stream and hand them to IM / hook listeners before `done`.
+ */
+function deliverCodexGeneratedImage(sessionId: string, event: AgentEvent): Promise<readonly AgentEvent[]> {
+  const warn = () => log.warn('Codex generated image delivery could not be persisted', { sessionId });
+  try {
+    const run = generatedImageDelivery.start(sessionId, event);
+    if (!run) return Promise.resolve([]);
+    run.completion.catch(warn);
+    return run.published;
+  } catch {
+    warn();
+    return Promise.resolve([]);
+  }
 }
 
 function broadcastSyntheticToolEvent(

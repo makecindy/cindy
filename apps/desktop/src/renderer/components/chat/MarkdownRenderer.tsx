@@ -35,6 +35,7 @@ import remarkStrictInlineMath from './remarkStrictInlineMath';
 import { normalizeMathDelimiters } from '@cindy/maker-shared/math-markdown';
 import remarkLocalPathLinks, { BARE_PATH_ATTR } from './remarkLocalPathLinks';
 import remarkHtmlImages from './remarkHtmlImages';
+import remarkBareSpaceLocalImages from './remarkBareSpaceLocalImages';
 import remarkPreserveRawLocalDestinations, {
   RAW_LOCAL_IMAGE_SRC_PROP,
   RAW_LOCAL_LINK_HREF_PROP,
@@ -219,8 +220,9 @@ function isMermaidCodeChild(child: ReactNode): boolean {
 // 逻辑,行为不变),也不影响带空格的 `2 ** 3 ** 4` 这类本应保持字面量的写法。
 // remarkPreserveRawLocalDestinations 必须排在**链尾**:它给 image / link 节点存原始
 // 本地目的地(见该文件头部说明),必须在所有会新建这两类节点的插件之后运行——
-// remarkHtmlImages(<img> HTML → mdast image)与 remarkLocalPathLinks(正文裸路径
-// → link)。remarkSessionLinks 产出的 cindy:// 深链带 scheme,被它的判据跳过,
+// remarkHtmlImages(<img> HTML → mdast image)、remarkBareSpaceLocalImages(带裸空格的
+// 本地图片 → image,须在 remarkLocalPathLinks 之前,否则路径会先被切成链接碎片)与
+// remarkLocalPathLinks(正文裸路径 → link)。remarkSessionLinks 产出的 cindy:// 深链带 scheme,被它的判据跳过,
 // 顺序无关。
 export const REMARK_PLUGINS: PluggableList = [
   [remarkGfm, { singleTilde: false }],
@@ -229,6 +231,7 @@ export const REMARK_PLUGINS: PluggableList = [
   remarkStrictInlineMath,
   remarkTruncateCjkUrls,
   remarkHtmlImages,
+  remarkBareSpaceLocalImages,
   remarkLocalPathLinks,
   remarkPreserveRawLocalDestinations,
 ];
@@ -239,6 +242,7 @@ export const REMARK_PLUGINS_PRIVILEGED: PluggableList = [
   remarkStrictInlineMath,
   remarkTruncateCjkUrls,
   remarkHtmlImages,
+  remarkBareSpaceLocalImages,
   remarkSessionLinks,
   remarkLocalPathLinks,
   remarkPreserveRawLocalDestinations,
