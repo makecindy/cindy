@@ -120,6 +120,22 @@ function evaluate(sessionId: string, st: SessionActivityState): void {
 }
 
 /**
+ * 判定一笔代理 URL 是否为上下文用量探测(count_tokens 计量端点)。
+ *
+ * /context 卡片走 SDK getContextUsage(默认 detail:'full'),CLI 会对每类输入各发
+ * 一笔 POST /v1/messages/count_tokens(带 ?beta=true query)。这类计量请求不生成
+ * token、也不是后台子 agent 的采样流量,却同样带 cc 会话标头穿过 proxy —— 计入
+ * 活动的话,用户查一次 /context 就会点亮「后台子任务运行中」横幅(#8671)。
+ *
+ * 判据与 provider-upstream-error-observer 的 isCountTokensUrl 同源:剥掉 query
+ * 后按后缀匹配。真实的 /v1/messages 采样(含上游不支持 count_tokens 时 CLI 可能
+ * 的极小计量回退)不受影响,仍照常记为活动。
+ */
+export function isClaudeContextUsageProbeUrl(url: string): boolean {
+  return url.split('?', 1)[0].endsWith('/count_tokens');
+}
+
+/**
  * proxy 侧记录一笔该 sdkSessionId 的 API 活动。resolvedSessionId 为 host 用
  * 当前活跃会话表反解的结果(null = 当前解析不到,尝试粘滞缓存兜底)。
  */
@@ -203,11 +219,13 @@ export function resetClaudeBackgroundActivityForTests(): void {
  * 组合进 cc loopback proxy 的响应观察器:请求头带 x-claude-code-session-id 的
  * 响应,按节流刷新该会话的活动时刻 —— 覆盖「一笔长 SSE 跨过 turn 结束点仍在
  * 吐字」的场景(事故现场正是遗留子 agent 的长流)。零 body 解析,只摸时间戳。
+ * count_tokens 用量探测不算活动(#8671,判据同 isClaudeContextUsageProbeUrl)。
  */
 export function createClaudeSessionActivityResponseObserver(
   resolveSessionId: (sdkSessionId: string) => string | null,
 ): ResponseObserver {
-  return ({ requestHeaders }) => {
+  return ({ requestHeaders, url }) => {
+    if (isClaudeContextUsageProbeUrl(url)) return null;
     const sdkSessionId = requestHeaders['x-claude-code-session-id'];
     if (!sdkSessionId) return null;
     let lastTouch = 0;
