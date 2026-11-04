@@ -6,6 +6,7 @@ import { buildBotGroupCapabilityNotice, BOT_GROUP_RUNTIME_FAILURE_CODES, type Bo
 import { chatGroupView, chatRoomRow, createChatServerClient, type ChatMessage, type ChatPage } from '@/chat/chatServerClient';
 import { shareSelectionStore } from '@/session/shareSelectionStore';
 import { i18n } from '@/i18n';
+import { resolveBotGroupMentions } from '@cindy/maker-shared/botGroupMentions';
 
 const h = vi.hoisted(() => ({
   processRead: vi.fn(),
@@ -394,6 +395,40 @@ beforeEach(() => {
 afterEach(async () => { await act(async () => root.unmount()); vi.useRealTimers(); });
 
 describe('group timeline', () => {
+  // PR #8818 / component: Chinese-only broadcast coverage missed localized
+  // labels colliding with a member name. Use the real send parser and Timeline:
+  // a Spanish broadcast must not open Ana's teammate, while its qualified @ can.
+  it('keeps localized teammate broadcasts out of personal identity', async () => {
+    h.translate = (key, options) => i18n.t(key, { ...options, lng: 'es' });
+    const name = i18n.t('groupChat.mention.allBots', { lng: 'es' });
+    const allLabel = i18n.t('groupChat.mention.all', { lng: 'es' });
+    const qualified = `${name} (Ana)`;
+    const content = `@${qualified} @${name}`;
+    const mentions = resolveBotGroupMentions(content, {
+      members: [{ botId: 'mimi', name: qualified }], allLabels: [allLabel], allBotLabels: [name],
+    });
+    expect(mentions).toEqual({ all: false, allBots: true, botIds: ['mimi'] });
+    const data = group({ serverBacked: true, messages: [message('broadcast', 1, {
+      authorKind: 'user', isSelf: true, content, mentions,
+    })] });
+    data.members[0] = { ...data.members[0]!, name, nickname: name, ownerName: 'Ana', isOwned: false, actorKind: 'bot' };
+    await render(data);
+    const spans = [...node.querySelectorAll('span')];
+    const broadcast = spans.find(span => span.textContent === `@${name}`)!;
+    expect(broadcast).toBeDefined();
+    await act(async () => broadcast.click());
+    expect(byId('botGroup.mention.identity')).toBeNull();
+    await act(async () => spans.find(span => span.textContent === `@${qualified}`)!.click());
+    expect(byId('botGroup.mention.identity')?.textContent).toContain(qualified);
+    await click('botGroup.mention.identity.close');
+    // A legacy projection without targets still must not turn a broadcast into
+    // the uniquely named member via the server's name fallback.
+    data.messages[0]!.mentions = { all: false, botIds: [] };
+    await render(data);
+    await act(async () => [...node.querySelectorAll('span')].find(span => span.textContent === `@${name}`)!.click());
+    expect(byId('botGroup.mention.identity')).toBeNull();
+  });
+
   // A01 / unit: real screen -> sent mention -> public identity -> close. Existing
   // composer tests never exercised sent-text taps; minimal failure is @咪咪.
   it.each([[true, false], [false, false], [true, true]])('opens the named member from sent text (own=%s, topic=%s) and returns to the message', async (own, topic) => {

@@ -196,10 +196,11 @@ it.each([['ios', 'light'], ['ios', 'dark'], ['android', 'light'], ['android', 'd
   const reserved = member('all', '所有人');
   const onPress = vi.fn();
   const context = { members: [ann, other, reserved], mentions: { all: false, botIds: ['ann-1'] },
-    serverBacked: false, allLabel: '所有人', labels: ['Ann', '所有人', '所有伙伴'], onPress };
+    serverBacked: false, allLabel: '所有人', allBotsLabel: '所有伙伴', labels: ['Ann', '所有人', '所有伙伴'], onPress };
   const renderBody = async (content: string, changes = {}) => {
+    const nextContext = { ...context, ...changes };
     await act(async () => root.render(createElement(BotGroupUserText, {
-      content, mentionLabels: context.labels, mentionContext: { ...context, ...changes },
+      content, mentionLabels: nextContext.labels, mentionContext: nextContext,
     })));
   };
   const links = () => [...node.querySelectorAll('span')].filter(span => span.getAttribute('data-role') === 'link');
@@ -231,6 +232,13 @@ it.each([['ios', 'light'], ['ios', 'dark'], ['android', 'light'], ['android', 'd
     for (const span of broadcasts) expect(JSON.parse(span.getAttribute('data-style')!)).toMatchObject({ color: palettes[theme.mode].groupMentionText });
     await renderBody('@所有人', { mentions: { all: false, botIds: ['all'] } });
     expect(links()).toHaveLength(1); // Explicitly picked namesake is a person, as on PC.
+    // Localized teammate broadcast with a colliding member name (PR #8818).
+    const spanish = { members: [member('todos', 'Todos los compañeros')], allBotsLabel: 'Todos los compañeros',
+      labels: ['Todos los compañeros'], mentions: { all: false, allBots: true, botIds: ['todos'] } };
+    await renderBody('@Todos los compañeros', spanish);
+    expect(links()).toHaveLength(0);
+    await renderBody('@Todos los compañeros', { ...spanish, mentions: { all: false, botIds: ['todos'] } });
+    expect(links()).toHaveLength(1); // Without broadcast intent the explicit person remains clickable.
     await act(async () => root.render(createElement(BotGroupMarkdownText, {
       content: '**@Ann** `@Ann` [website](https://example.test)\n\n~~~text\n@Ann\n~~~', mentionContext: context,
     })));
@@ -248,7 +256,7 @@ it.each(['ios', 'android'])('matches complete rendered words across formatting o
   Platform.OS = platform as typeof Platform.OS;
   const ann = { botId: 'ann', name: 'Ann', avatar: '', avatarColor: '', status: 'active' as const };
   const context = { members: [ann], mentions: { all: false, botIds: [] }, serverBacked: true,
-    allLabel: '所有人', labels: ['Ann'], onPress: vi.fn() };
+    allLabel: '所有人', allBotsLabel: '所有伙伴', labels: ['Ann'], onPress: vi.fn() };
   try {
     await act(async () => root.render(createElement(BotGroupMarkdownText, {
       content: '**@Ann**a mail**@Ann**.test @**Ann**', mentionContext: context,

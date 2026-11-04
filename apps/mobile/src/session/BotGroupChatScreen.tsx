@@ -956,7 +956,7 @@ export function BotGroupTimeline({
           onLocateQuote={message.quote && onLocateMessage ? () => onLocateMessage(message.quote!.messageId) : undefined}
           members={group.members} deviceId={deviceId} online={online} identityFor={identityFor} mentionLabels={mentionLabels}
           mentionContext={{ members: group.members, mentions: message.mentions, serverBacked: !!group.serverBacked,
-            allLabel, labels: mentionLabels, onPress: (member, anchor) => { if (anchor) setMentioned({ groupId: group.id, botId: member.botId, anchor }); } }}
+            allLabel, allBotsLabel, labels: mentionLabels, onPress: (member, anchor) => { if (anchor) setMentioned({ groupId: group.id, botId: member.botId, anchor }); } }}
           resolveMedia={resolveMedia} resolveServerMedia={resolveServerMedia}
           canContinue={message.id === continueId} continuing={continuing} onContinue={onContinue}
           plan={message.planId ? planById.get(message.planId) : undefined}
