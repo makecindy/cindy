@@ -35,6 +35,8 @@ import {
   parseTransportPayload,
 } from '../transport.js';
 import { PLUGIN_SYNC_CHANNEL } from '../pluginSyncProtocol.js';
+import { BACKLOG_WARN_MESSAGES, summarizeBacklog } from '../transportBacklog.js';
+import { sharedTaskGuestPeer } from '../sharedTaskPeer.js';
 import { DIRECT_LINK_SIGNAL, type DirectRuntime, type DirectRuntimeEvents } from '../directNegotiation.js';
 import { providerShareGuestPeer, providerShareHostPeer } from '../providerSharePeer.js';
 import { createDirectRuntimeBridge, createDirectRuntimeHost } from '../directRuntimeBridge.js';
@@ -7414,6 +7416,88 @@ describe('DeviceLinkClient', () => {
       } finally {
         h.client.stop();
       }
+    });
+
+    // Unit, real client send path. 2026-11-04: replies to two controllers filled their
+    // queues and every peer's requests expired before socket write, but the logs only
+    // named the blocked replies. The warning must name what fills the queue (reply
+    // channels come from the inbound invoke) and the other peers sharing the socket,
+    // once per window, without changing what is sent.
+    it('names the channels filling a reliable queue and the other peers sharing the socket', async () => {
+      const warn = vi.fn();
+      const h = makeHarness({
+        logger: { debug: vi.fn(), info: vi.fn(), warn, error: vi.fn() },
+        timing: { reconnectBaseMs: 5, reconnectMaxMs: 10, pingIntervalMs: 60_000, stalledLinkPendingMaxAgeMs: 60_000 },
+      });
+      h.client.start();
+      try {
+        await tick();
+        h.current().ack();
+        await tick();
+        await establishInboundReliableLink(h, 'stream-ctrl-1', 1, 'ctrl-1');
+        await establishInboundReliableLink(h, 'stream-ctrl-2', 1, 'ctrl-2');
+        // A relay reconnect leaves both reliable links waiting, so replies queue.
+        const socketCount = h.sockets.length;
+        h.current().emit('close', 1006);
+        await vi.waitFor(() => expect(h.sockets).toHaveLength(socketCount + 1));
+        h.current().ack();
+        await tick();
+        const reply = (src: string, id: string, channel: string, result: unknown) => {
+          h.current().push({ v: PROTOCOL_VERSION, kind: 'invoke', src, id, payload: { channel, args: [] } });
+          h.client.sendInvokeResult(src, id, { ok: true, result });
+        };
+        for (let i = 0; i < 3; i++) reply('ctrl-2', `other-${i}`, 'local-db:sessions:list', []);
+        const backlog = () => warn.mock.calls.map(([line]) => String(line)).filter(line => line.includes('send backlog'));
+        for (let i = 0; i < BACKLOG_WARN_MESSAGES - 1; i++) {
+          if (i < 8) reply('ctrl-1', `snapshot-${i}`, 'maker:remote-resources:invoke', 'x'.repeat(8 * 1024));
+          else reply('ctrl-1', `view-${i}`, 'local-db:messages:view', []);
+        }
+        expect(backlog()).toEqual([]);
+        reply('ctrl-1', 'unknown-reply', 'not-a-registered-channel', []);
+        const [high] = backlog();
+        expect(high).toMatch(/send backlog high dst=ctrl-1 pending=48\//);
+        expect(high).toMatch(/top=\[result:maker:remote-resources:invoke=8\/\d+KiB,result:local-db:messages:view=39\/\d+KiB/);
+        expect(high).toContain('result:unknown=1/');
+        expect(high).not.toContain('not-a-registered-channel');
+        expect(high).toMatch(/otherPeers=1\/\d+KiB \[ctrl-2=3\/\d+KiB\]/);
+        // PR #8759 review: peer-supplied text is not retained. Unknown channels and
+        // oversized ids are never remembered, only registered channels with normal ids.
+        reply('ctrl-1', 'x'.repeat(4096), 'local-db:messages:view', []);
+        const remembered = [...h.client['inboundInvokeChannels']].flat().join('');
+        expect(remembered).not.toContain('not-a-registered-channel');
+        expect(remembered).not.toContain('x'.repeat(4096));
+        for (let i = 0; i < MAX_TRANSPORT_PENDING_MESSAGES - BACKLOG_WARN_MESSAGES - 1; i++) {
+          reply('ctrl-1', `fill-${i}`, 'local-db:messages:view', []);
+        }
+        expect(backlog()).toHaveLength(1);
+        // The overflow is still rejected exactly as before, now with one "full" summary.
+        expect(() => h.client.sendPush('ctrl-1', 'non-discardable-event', {})).toThrow(/buffer is full/);
+        expect(() => h.client.sendPush('ctrl-1', 'non-discardable-event', {})).toThrow(/buffer is full/);
+        expect(backlog()).toHaveLength(2);
+        expect(backlog()[1]).toMatch(/send backlog full dst=ctrl-1 pending=64\//);
+      } finally {
+        h.client.stop();
+      }
+    });
+
+    // Unit, production summary. Scoped peers share an internal key prefix, so the line
+    // must name their real device (never the share/task/member ids); frames last written
+    // on a direct path do not occupy the relay socket and are reported separately.
+    it('names scoped peers by device and keeps direct-path frames out of the shared relay totals', () => {
+      const focus = providerShareGuestPeer('share-a', 'member-a', 'deviceaa-1');
+      const peers = new Map([
+        [focus, { pendingBytes: 3072, pending: new Map([
+          [1, { bytes: 2048, diagChannel: 'result:unknown', path: 'direct' }],
+          [2, { bytes: 1024, diagChannel: 'result:unknown' }],
+        ]) }],
+        [providerShareGuestPeer('share-a', 'member-b', 'devicebb-2'), { pendingBytes: 2048, pending: new Map([[1, { bytes: 2048 }]]) }],
+        [sharedTaskGuestPeer('task-x', 'member-c', 'devicecc-3'), { pendingBytes: 1024, pending: new Map([[1, { bytes: 1024, path: 'relay' }]]) }],
+        ['direct-only-peer', { pendingBytes: 4096, pending: new Map([[1, { bytes: 4096, path: 'direct' }]]) }],
+      ]);
+      const line = summarizeBacklog(focus, peers, 'high');
+      expect(line).toMatch(/dst=share:deviceaa pending=2\/3KiB direct=1\/2KiB top=\[result:unknown=2\/3KiB\]/);
+      expect(line).toMatch(/otherPeers=2\/3KiB \[share:devicebb=1\/2KiB,task:devicecc=1\/1KiB\] otherDirect=1\/4KiB$/);
+      expect(line).not.toMatch(/share-a|task-x|member|direct-o/);
     });
 
     it.each([
