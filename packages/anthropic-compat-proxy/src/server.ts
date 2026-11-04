@@ -2390,10 +2390,19 @@ export async function createAnthropicCompatProxy(opts: ProxyOptions): Promise<Pr
       rawBody = recoverOversized
         ? await collectRecoverableBody(req, maxBodyBytes, async body => {
             try {
-              const recovered = await recoverOversized!(
-                body,
-                Math.max(maxBodyBytes - OVERSIZED_RECOVERY_HEADROOM_BYTES, Math.floor(maxBodyBytes / 2)),
-              );
+              // Headroom is a preference, not a requirement: aim below the hard limit so later
+              // transforms cannot push the body back over it, but if that target is unreachable
+              // fall back to the hard limit and let the final size check decide.
+              const preferredTarget = Math.max(maxBodyBytes - OVERSIZED_RECOVERY_HEADROOM_BYTES, Math.floor(maxBodyBytes / 2));
+              // The recoverer signals an unreachable target either by returning null or by
+              // throwing REQUEST_TOO_LARGE; both mean "try the hard limit", other errors propagate.
+              let recovered: Buffer | null = null;
+              try {
+                recovered = await recoverOversized!(body, preferredTarget);
+              } catch (error) {
+                if (preferredTarget >= maxBodyBytes || !(error instanceof Error && error.message === 'REQUEST_TOO_LARGE')) throw error;
+              }
+              if (!recovered && preferredTarget < maxBodyBytes) recovered = await recoverOversized!(body, maxBodyBytes);
               if (recovered) logger.info?.('oversized attachments preserved outside request', {
                 reqId, originalBytes: body.bytes, recoveredBytes: recovered.length,
               });
