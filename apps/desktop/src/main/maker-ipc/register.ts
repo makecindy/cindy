@@ -7773,7 +7773,8 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
 
   const customModelRefresh = registerProviderHandlers(createElectronIpcHandlerRegistry(), {
     customModelRefresh: {
-      ready: () => !isAppSessionBoundaryPending(),
+      ready: () => !isAppSessionBoundaryPending() &&
+        getCurrentDbClientSnapshot()?.userId === getActiveAppSession().dataOwnerId,
       attempts: createCustomProviderRefreshAttempts({
         filePath: () => ownerScopedUserDataPath('model-discovery', 'custom-provider-refresh.json'),
         scopeKey: activeOwnerScopeKey, log,

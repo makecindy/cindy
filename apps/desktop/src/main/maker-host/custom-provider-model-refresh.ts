@@ -201,10 +201,11 @@ export function createCustomProviderModelRefresh(deps: CustomProviderModelRefres
     if (autoPass?.scope === key) return autoPass.promise;
     const pass = { scope: key, promise: Promise.resolve() };
     autoPass = pass;
-    pass.promise = runPass(key).catch(() => undefined).finally(() => {
+    let retrySoon = false;
+    pass.promise = runPass(key).catch(() => { retrySoon = true; }).finally(() => {
       if (autoPass !== pass) return;
       autoPass = undefined;
-      if (running) scheduleNext();
+      if (running) scheduleNext(retrySoon);
     });
     return pass.promise;
   }
@@ -213,10 +214,12 @@ export function createCustomProviderModelRefresh(deps: CustomProviderModelRefres
     timer = setTimeout(() => { timer = undefined; void run(); }, delay);
     timer.unref?.();
   }
-  function scheduleNext(): void {
+  function scheduleNext(retrySoon = false): void {
     // The local readiness check also covers newly added connections and account initialization.
     // No provider HTTP request runs unless its persisted connection timestamp is due.
-    let delay = current(scope()) ? 60 * 60 * 1000 : 60 * 1000;
+    // Storage can become unavailable between readiness and the first read. Retry
+    // preparation shortly without recording a supplier request or a daily cooldown.
+    let delay = !retrySoon && current(scope()) ? 60 * 60 * 1000 : 60 * 1000;
     if (current(scope())) for (const entry of Object.values(state())) {
       const remaining = entry.lastAttemptAt + CUSTOM_PROVIDER_REFRESH_INTERVAL - now();
       if (remaining > 0) delay = Math.min(delay, remaining);

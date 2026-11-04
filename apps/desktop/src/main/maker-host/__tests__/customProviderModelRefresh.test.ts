@@ -39,7 +39,17 @@ function fixture() {
   const create = (attempts = makeStore()) => createCustomProviderModelRefresh({ owner: () => owner, ready: () => ready,
     listIds, read, revision: () => revision, mutating: () => mutating,
     credentials, fetch, apply, attempts, now: () => time });
-  return { create, fetch, apply, configs, listIds, read, credentials, file, makeStore,
+  // Timer-only cases keep file IO outside fake timers; real persistence is tested separately.
+  const createForTimers = () => {
+    const store = makeStore(); let persisted = store.read();
+    return create({ ...store, read: () => persisted, invalidateIfChanged() {},
+      updateAtomic: async updater => {
+        persisted = { ...persisted, ...updater({ value: persisted, defaults: { version: 1, providers: {} }, isCustomized: true, customizedKeys: ['providers'] }) };
+        return persisted;
+      },
+    });
+  };
+  return { create, createForTimers, fetch, apply, configs, listIds, read, credentials, file, makeStore,
     setTime(value: number) { time = value; }, getTime: () => time,
     setOwner(value: typeof owner) { owner = value; }, bump() { revision++; },
     setMutating(value: boolean) { mutating = value; }, setReady(value: boolean) { ready = value; } };
@@ -135,15 +145,7 @@ describe('custom provider daily refresh', () => {
   });
   it('refreshes on its own timer exactly 24 hours after a manual reset', async () => {
     vi.useFakeTimers(); const f = fixture();
-    // Isolate timer behavior from real file IO; persistence and cross-controller locks
-    // are covered above and below using the actual settings file.
-    const store = f.makeStore(); let persisted = store.read();
-    const service = f.create({ ...store, read: () => persisted, invalidateIfChanged() {},
-      updateAtomic: async updater => {
-        persisted = { ...persisted, ...updater({ value: persisted, defaults: { version: 1, providers: {} }, isCustomized: true, customizedKeys: ['providers'] }) };
-        return persisted;
-      },
-    });
+    const service = f.createForTimers();
     service.start(); await vi.advanceTimersByTimeAsync(0);
     expect(f.fetch).toHaveBeenCalledTimes(3);
     f.setTime(f.getTime() + DAY / 2); await service.fetchSaved('example', 'pi');
@@ -152,6 +154,27 @@ describe('custom provider daily refresh', () => {
       await vi.advanceTimersByTimeAsync(DAY / 24);
       expect(f.fetch).toHaveBeenCalledTimes(hour < 24 ? 4 : 7);
     }
+    service.stop();
+  });
+  it('waits for owner storage readiness before the initial background pass', async () => {
+    vi.useFakeTimers(); const f = fixture(); f.setReady(false);
+    const service = f.createForTimers(); service.start();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(f.listIds).not.toHaveBeenCalled(); expect(f.fetch).not.toHaveBeenCalled();
+    f.setReady(true);
+    await vi.advanceTimersByTimeAsync(60_000);
+    await vi.waitFor(() => expect(f.fetch).toHaveBeenCalledTimes(3));
+    service.stop();
+  });
+  it('retries a startup storage failure without postponing overdue discovery for an hour', async () => {
+    vi.useFakeTimers(); const f = fixture();
+    f.listIds.mockRejectedValueOnce(new Error('DbClient not ready'));
+    const service = f.createForTimers(); service.start();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(f.fetch).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(60_000);
+    // Await only the scheduled pass: calling run() here would hide a missing retry.
+    await vi.waitFor(() => expect(f.fetch).toHaveBeenCalledTimes(3));
     service.stop();
   });
   it('claims a due connection once across independent controllers sharing the same file', async () => {
