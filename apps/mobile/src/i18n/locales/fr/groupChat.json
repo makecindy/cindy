@@ -164,7 +164,12 @@
         "details": "Renvoyez votre message. Si l'échec persiste, consultez les journaux et signalez le problème."
       }
     },
-    "runtimeFailureSetupHint": "Pour changer le modèle ou les paramètres, utilisez l'ordinateur sur lequel ce coéquipier s'exécute."
+    "runtimeFailureSetupHint": "Pour changer le modèle ou les paramètres, utilisez l'ordinateur sur lequel ce coéquipier s'exécute.",
+    "capability": {
+      "GROUP_AUTHORIZATION_REQUIRED": "{{name}} n’a pas pu exécuter cet outil : l’autorisation du groupe a expiré ou ne permet pas cette action. Le propriétaire du coéquipier peut renouveler la demande dans ce groupe.",
+      "GROUP_AUTHORIZATION_UNAVAILABLE": "L’autorisation de groupe de {{name}} n’a pas pu être vérifiée ; cet outil n’a donc pas été exécuté. Réessayez une fois la connexion rétablie.",
+      "ATTACHMENTS_UNAVAILABLE": "Certaines pièces jointes n’ont pas été transmises à {{name}} en raison d’un échec de téléchargement ou de la limite de pièces jointes. Renvoyez celles nécessaires à cette demande."
+    }
   },
   "plan": {
     "intro_one": "Cela prend {{count}} étape. Voici qui s'en charge :",

@@ -10680,6 +10680,11 @@
           "NETWORK_ERROR": "{{name}} no pudo responder: falló la conexión de red.\nRevisa tu red o proxy y vuelve a enviar tu mensaje.",
           "RUNTIME_TIMEOUT": "{{name}} no respondió antes de que se agotara el tiempo de espera.\nVuelve a enviar tu mensaje o elige otro modelo disponible.",
           "RUNTIME_ERROR": "{{name}} no pudo responder esta vez.\nVuelve a enviar tu mensaje. Si sigue fallando, revisa los registros e informa del problema."
+        },
+        "capability": {
+          "GROUP_AUTHORIZATION_REQUIRED": "{{name}} no pudo ejecutar la herramienta: la autorización del grupo ha caducado o no permite esta acción. La persona propietaria del compañero puede volver a solicitarla en este grupo.",
+          "GROUP_AUTHORIZATION_UNAVAILABLE": "No se pudo verificar la autorización de grupo de {{name}}, por lo que la herramienta no se ejecutó. Vuelve a intentarlo cuando se restablezca la conexión.",
+          "ATTACHMENTS_UNAVAILABLE": "Algunos adjuntos no llegaron a {{name}} por un fallo de descarga o por el límite de adjuntos. Vuelve a enviar los archivos necesarios para esta solicitud."
         }
       },
       "settings": {

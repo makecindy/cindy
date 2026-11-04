@@ -22,15 +22,22 @@ interface Message {
   content: Array<{ type: string; text?: string; fallback?: string; caption?: string; namespace?: string; schemaRevision?: number; data?: Record<string, unknown> }>;
 }
 type HistoryQuote = { messageId: string; deleted: true } | {
-  messageId: string; authorId?: string; authorKind?: string; origin?: string; maskAttribution?: BotGroupMessageView['maskAttribution']; from: string; text: string; attachmentCount: number;
+  messageId: string; authorId?: string; authorKind?: string; origin?: string; noticeCode?: BotGroupMessageView['noticeCode']; maskAttribution?: BotGroupMessageView['maskAttribution']; from: string; text: string; attachmentCount: number;
   attachmentName: string | null; snapshot?: true;
 };
-// Match promptMessage/messageView: only the HTTP message's server origin can
-// establish a system record; actor kind or a card payload cannot substitute for it.
-const historySource = (message: Message) => ({
-  authorKind: message.origin === 'system' || readImportedBotGroupRuntimeFailureCode(message) ? 'system' : message.author.kind,
-  ...(message.origin ? { origin: message.origin } : {}),
-});
+// Match messageView: a compatible failure card establishes system identity only
+// when the server marked its message as integration, never by a card's own claim.
+const historySource = (message: Message): { authorKind: string; origin?: string; noticeCode?: BotGroupMessageView['noticeCode'] } => {
+  const notice = message.origin === 'integration' && !message.deleted
+    ? message.content.find(block => block.namespace === 'cindy.group-notice' && block.schemaRevision === 1) : undefined;
+  const code = notice?.data?.noticeCode;
+  const noticeCode = code === 'member-failed' || code === 'member-timeout' || code === 'plan-failed' ? code : undefined;
+  return {
+    authorKind: message.origin === 'system' || noticeCode || readImportedBotGroupRuntimeFailureCode(message) ? 'system' : message.author.kind,
+    ...(message.origin ? { origin: message.origin } : {}),
+    ...(noticeCode ? { noticeCode } : {}),
+  };
+};
 // Match the execution context: recognized references never contribute their fallback
 // to the author's own words. Unknown card revisions remain ordinary readable content.
 const historyText = (message: Message) => readImportedBotGroupRuntimeFailureCode(message) || readBotGroupThreadShareCard(message) ? ''
@@ -52,7 +59,7 @@ function historyQuote(message: Message, known: ReadonlyMap<string, Message>, aut
 }
 export interface TeammateGroupHistoryResult {
   groups?: Array<{ id: string; name: string }>;
-  messages?: Array<{ id: string; sequence: string; author: string; authorId?: string; authorKind: string; origin?: string; createdAt: string; threadRootId: string | null; text: string; attachments: string[]; maskAttribution?: BotGroupMessageView['maskAttribution']; sharedReplyId?: string; quote?: HistoryQuote }>;
+  messages?: Array<{ id: string; sequence: string; author: string; authorId?: string; authorKind: string; origin?: string; noticeCode?: BotGroupMessageView['noticeCode']; createdAt: string; threadRootId: string | null; text: string; attachments: string[]; maskAttribution?: BotGroupMessageView['maskAttribution']; sharedReplyId?: string; quote?: HistoryQuote }>;
   nextCursor: string | null;
   hasMore: boolean;
 }
