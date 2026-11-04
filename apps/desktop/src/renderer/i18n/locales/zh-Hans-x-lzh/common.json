@@ -10551,6 +10551,11 @@
           "NETWORK_ERROR": "{{name}}不能回复：网络连接未成。\n请察网络或 Proxy，再遣之。",
           "RUNTIME_TIMEOUT": "{{name}}此番回复逾时。\n请再遣讯，或择他可用模型。",
           "RUNTIME_ERROR": "{{name}}此番未能回复。\n请再遣讯；若仍未成，请察记录并回报其事。"
+        },
+        "capability": {
+          "GROUP_AUTHORIZATION_REQUIRED": "{{name}} 的工具调用未执行：群内授权已失效或不允许此操作。请由伙伴主人在当前群重新发起。",
+          "GROUP_AUTHORIZATION_UNAVAILABLE": "暂时无法核验 {{name}} 的群聊授权，这次工具调用未执行。请在连接恢复后重试。",
+          "ATTACHMENTS_UNAVAILABLE": "部分附件未交给 {{name}}（下载失败或数量限制）。请重新发送本次需要的附件。"
         }
       },
       "settings": {

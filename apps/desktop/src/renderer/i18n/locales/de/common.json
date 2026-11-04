@@ -10596,6 +10596,11 @@
           "NETWORK_ERROR": "{{name}} konnte nicht antworten: Die Netzwerkverbindung ist fehlgeschlagen.\nPrüfe dein Netzwerk oder deinen Proxy und sende deine Nachricht erneut.",
           "RUNTIME_TIMEOUT": "{{name}} hat nicht innerhalb des Zeitlimits geantwortet.\nSende deine Nachricht erneut oder wähle ein anderes verfügbares Modell.",
           "RUNTIME_ERROR": "{{name}} konnte diesmal nicht antworten.\nSende deine Nachricht erneut. Falls es weiterhin nicht klappt, prüfe die Protokolle und melde das Problem."
+        },
+        "capability": {
+          "GROUP_AUTHORIZATION_REQUIRED": "{{name}} konnte dieses Werkzeug nicht ausführen: Die Gruppenberechtigung ist abgelaufen oder erlaubt diese Aktion nicht. Der Besitzer des Teammitglieds kann die Anfrage in dieser Gruppe erneut stellen.",
+          "GROUP_AUTHORIZATION_UNAVAILABLE": "Die Gruppenberechtigung für {{name}} konnte nicht überprüft werden. Dieses Werkzeug wurde daher nicht ausgeführt. Versuche es erneut, sobald die Verbindung wiederhergestellt ist.",
+          "ATTACHMENTS_UNAVAILABLE": "Einige Anhänge wurden {{name}} wegen eines Downloadfehlers oder der maximalen Anzahl an Anhängen nicht übermittelt. Sende die für diese Anfrage benötigten Anhänge erneut."
         }
       },
       "settings": {

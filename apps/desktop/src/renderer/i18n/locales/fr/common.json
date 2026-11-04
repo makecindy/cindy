@@ -10680,6 +10680,11 @@
           "NETWORK_ERROR": "{{name}} n'a pas pu répondre : échec de la connexion réseau.\nVérifiez votre réseau ou votre proxy, puis renvoyez votre message.",
           "RUNTIME_TIMEOUT": "{{name}} n'a pas répondu avant l'expiration du délai.\nRenvoyez votre message, ou choisissez un autre modèle disponible.",
           "RUNTIME_ERROR": "{{name}} n'a pas pu répondre cette fois.\nRenvoyez votre message. Si l'échec persiste, consultez les journaux et signalez le problème."
+        },
+        "capability": {
+          "GROUP_AUTHORIZATION_REQUIRED": "{{name}} n’a pas pu exécuter cet outil : l’autorisation du groupe a expiré ou ne permet pas cette action. Le propriétaire du coéquipier peut renouveler la demande dans ce groupe.",
+          "GROUP_AUTHORIZATION_UNAVAILABLE": "L’autorisation de groupe de {{name}} n’a pas pu être vérifiée ; cet outil n’a donc pas été exécuté. Réessayez une fois la connexion rétablie.",
+          "ATTACHMENTS_UNAVAILABLE": "Certaines pièces jointes n’ont pas été transmises à {{name}} en raison d’un échec de téléchargement ou de la limite de pièces jointes. Renvoyez celles nécessaires à cette demande."
         }
       },
       "settings": {
