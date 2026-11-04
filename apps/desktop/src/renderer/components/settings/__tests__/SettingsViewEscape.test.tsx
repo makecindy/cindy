@@ -12,7 +12,10 @@ import { SettingsView } from '../SettingsView';
 import type { useVoiceInputModelSelection } from '@/hooks/useVoiceInputModelSelection';
 
 vi.mock('react-i18next', () => ({
-  useTranslation: () => ({ t: (key: string) => key === 'settings.voiceInput.serviceSource.customAsr.websocketUrl.label' ? 'WebSocket URL' : key }),
+  useTranslation: () => ({ t: (key: string) => ({
+    'settings.voiceInput.serviceSource.customAsr.websocketUrl.label': 'WebSocket URL',
+    'settings.voiceInput.refinement.instructions.label': 'Refinement instructions',
+  }[key] ?? key) }),
 }));
 vi.mock('@/contexts/AuthContext', () => ({
   useAuth: () => ({ mode: 'local', dataOwnerId: null, user: null }),
@@ -129,6 +132,7 @@ beforeEach(() => {
   });
   vi.stubGlobal('electronAPI', { platform: 'darwin', appVersion: '1.0.0', voiceInput: {
     getModelSelection: vi.fn(async () => ({ selection: { serviceMode: 'cindy', asrProvider: 'openai' } })),
+    onDataChanged: () => () => {},
   } });
   // jsdom 没有元素滚动；设置页切分区时会把内容列滚回顶部。
   Element.prototype.scrollTo = () => {};
@@ -139,6 +143,27 @@ afterEach(() => {
 });
 
 describe('SettingsView Escape', () => {
+  // Unit regression (#8481): search must follow the same main-owned refinement
+  // snapshot/broadcast as the voice controls, even before opening that page.
+  it('updates refinement search results when the saved toggle changes', async () => {
+    let refinementEnabled = false;
+    let notifySettings!: () => void;
+    Object.assign(window.electronAPI.voiceInput, {
+      getDataSnapshot: () => ({ settings: { refinementEnabled } }),
+      onDataChanged: (notify: () => void) => { notifySettings = notify; return () => {}; },
+    });
+    await act(async () => { renderSettings('/settings'); });
+    fireEvent.change(screen.getByRole('combobox', { name: 'settings.search.ariaLabel' }), {
+      target: { value: 'Refinement instructions' },
+    });
+    const result = () => screen.queryByRole('option', { name: /^Refinement instructions/ });
+    expect(result()).toBeNull();
+    act(() => { refinementEnabled = true; notifySettings(); });
+    expect(result()).not.toBeNull();
+    act(() => { refinementEnabled = false; notifySettings(); });
+    expect(result()).toBeNull();
+  });
+
   // Unit wiring regression (#8481): search must load voice selection before the
   // voice page mounts and immediately follow edits from that same page instance.
   // Keep the real selection hook/search/router; only IPC and section controls are fixtures.

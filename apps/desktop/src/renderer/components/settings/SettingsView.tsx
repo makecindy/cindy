@@ -91,8 +91,12 @@ import { canAccessUsageSettings } from './usageVisibility';
 import { UsageHistorySection } from './usage/UsageHistorySection';
 import { CURRENT_CINDY_REGION } from '../../../shared/brandRegion';
 import { useVoiceInputModelSelection } from '@/hooks/useVoiceInputModelSelection';
+import { getVoiceInputSettings } from '@/hooks/useVoiceInputSettings';
 
 const DEFAULT_SETTINGS_MENU_WIDTH = 260;
+
+const subscribeVoiceSettings = (onChange: () => void) => window.electronAPI.voiceInput.onDataChanged(onChange);
+const getVoiceRefinementEnabled = () => getVoiceInputSettings().refinementEnabled;
 
 interface SettingsOutletContext {
   sidebarWidth?: number;
@@ -106,6 +110,7 @@ export function SettingsView() {
 
 function SettingsViewContent() {
   const voiceModelSelection = useVoiceInputModelSelection();
+  const voiceRefinementEnabled = useSyncExternalStore(subscribeVoiceSettings, getVoiceRefinementEnabled);
   const navigate = useNavigate();
   const outletContext = useOutletContext<SettingsOutletContext | null>();
   const [searchParams, setSearchParams] = useSearchParams();
@@ -276,11 +281,12 @@ function SettingsViewContent() {
     membershipKind: user?.membershipKind ?? null,
     platform: window.electronAPI?.platform ?? '',
     supportsBetaUpdateChannel: window.electronAPI?.supportsBetaUpdateChannel,
+    voiceRefinementEnabled,
     voiceInput: voiceModelSelection.ready && voiceModelSelection.selection ? {
       serviceMode: voiceModelSelection.selection.serviceMode,
       asrProvider: voiceModelSelection.selection.asrProvider,
     } : undefined,
-  }), [mode, user?.membershipKind, voiceModelSelection.ready, voiceModelSelection.selection]);
+  }), [mode, user?.membershipKind, voiceModelSelection.ready, voiceModelSelection.selection, voiceRefinementEnabled]);
   const requestedEntry = resolveSettingsSearchEntry(activeTab, searchParams.get('section'));
   const searchEntry = piExtensionsPanelOpen || (requestedEntry?.isVisible && !requestedEntry.isVisible(searchContext))
     ? null : requestedEntry;

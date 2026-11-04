@@ -44,6 +44,20 @@ const searchContext = { platform: 'win32', region: 'cn', mode: 'cloud', membersh
 } as const;
 
 describe('settings discoverability regressions', () => {
+  // Unit regression (#8481): disabled refinement leaves both child controls
+  // unmounted. Query real translated labels instead of inspecting declarations.
+  it.each([false, true])('filters refinement children with refinementEnabled=%s', (voiceRefinementEnabled) => {
+    const documents = buildSettingsSearchDocuments(searchI18n.t, TAB_IDS, { ...searchContext, voiceRefinementEnabled });
+    for (const lng of ['zh-CN', 'en']) {
+      for (const field of ['instructions', 'dictionary']) {
+        const id = `settings.voiceInput.refinement.${field}.label`;
+        const matches = searchSettings(documents, searchI18n.t(id, { lng }));
+        expect(matches.some(({ entry }) => entry.id === id)).toBe(voiceRefinementEnabled);
+      }
+    }
+    expect(documents.some(({ entry }) => entry.id === 'settings.voiceInput.refinement.enabled.label')).toBe(true);
+  });
+
   // Unit regression (#8481): an unloaded, managed, or non-custom ASR selection
   // exposed unmounted fields. Existing title tests only covered visible fields.
   it.each([

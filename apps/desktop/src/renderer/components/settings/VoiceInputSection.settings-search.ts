@@ -54,6 +54,7 @@ export const voiceInputSettings = defineSettings({
     descriptionKey: 'settings.voiceInput.refinement.enabled.hint',
   },
   refinementInstructionsLabel: {
+    isVisible: ({ voiceRefinementEnabled }) => voiceRefinementEnabled === true,
     id: 'settings.voiceInput.refinement.instructions.label',
     fallbackTargetId: 'settings-search-settings-voiceInput-refinement-enabled-label',
     tab: 'voice-input',
@@ -63,6 +64,7 @@ export const voiceInputSettings = defineSettings({
     descriptionKey: 'settings.voiceInput.refinement.instructions.hint',
   },
   refinementDictionaryLabel: {
+    isVisible: ({ voiceRefinementEnabled }) => voiceRefinementEnabled === true,
     id: 'settings.voiceInput.refinement.dictionary.label',
     fallbackTargetId: 'settings-search-settings-voiceInput-refinement-enabled-label',
     tab: 'voice-input',

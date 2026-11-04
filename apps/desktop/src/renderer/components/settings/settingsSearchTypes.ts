@@ -6,6 +6,7 @@ export interface SettingsSearchContext extends ImBotIdentity {
   supportsBetaUpdateChannel?: boolean;
   /** Loaded service selectors only; never index user endpoints, models, or credentials. */
   voiceInput?: { serviceMode: 'cindy' | 'byok'; asrProvider: string };
+  voiceRefinementEnabled?: boolean;
 }
 
 export interface SettingsSearchEntry {
