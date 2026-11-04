@@ -4826,7 +4826,7 @@ function validateGhostManifestInput(value: unknown, preserveHistoricalTasks: boo
         try {
           const serialized = JSON.stringify(t.parameters);
           // 新包按 UTF-8 字节计;已装快照沿用旧的 UTF-16 长度口径,升级后不让已装插件失效。
-          const size = preserveHistoricalDeclarations
+          const size = preserveHistoricalTasks
             ? serialized.length
             : new TextEncoder().encode(serialized).length;
           if (size > 16_384) {
