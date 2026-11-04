@@ -1503,6 +1503,13 @@ it.each(['default', 'bot-main'] as const)('discovers controls from the root and 
       expect(write.call.args.args).toEqual({ section: 'appearance' });
       const schema = (parsePayload(await follow(write.describe)).control as any).operations[0];
       expect(schema).toMatchObject({ schemaComplete: true, inputSchema: { required: ['section', 'patch'] } });
+      // Preferences has per-field writes only; appearance still offers reset.
+      // Follow the actual catalog contract, including explicit operation lookup.
+      expect(detail.operations.map((op: any) => op.name)).toContain('reset_app_settings');
+      const preferences = parsePayload(await client.callTool({ name: root.name, arguments: { key: 'application.preferences' } })).control as any;
+      expect(preferences.operations.map((op: any) => op.name)).toEqual(['get_app_settings', 'update_app_settings']);
+      expect(parsePayload(await client.callTool({ name: 'call_tool', arguments: { name: 'get_capabilities', args: { scope: 'control', key: 'application.preferences', operation: 'reset_app_settings' } } })))
+        .toMatchObject({ ok: false, errorCode: 'UNKNOWN_OPERATION' });
       expect(settings).not.toHaveBeenCalled();
       expect(parsePayload(await follow({ ...write.call, args: { ...write.call.args, args: { ...write.call.args.args, patch: { uiSize: 17 } } } })))
         .toMatchObject({ ok: true, state: { uiSize: 17 } });

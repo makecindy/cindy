@@ -134,3 +134,9 @@ Pi 管理入口读得托管版本 1.4.0，未实际安装升级。临时任务�
 送审前同步主干后补验（2026-11-04）：Desktop 11 个相关文件 438 项、MCP 3 个文件
 150 项通过，包含主干新增的壁纸缓存/读取/通知回归；无冲突。前述未受影响的真实运行证据继续有效。
 本 PR 仅保留功能覆盖与验证记录，helper 类设置的长期规范按用户要求在本 PR 合并后另行提交。
+
+Review 修复验收（2026-11-04）：preferences 目录不再声明整组 reset；真实 helper 读到的操作
+仅 get/update。组合 memory 修改先保存同一请求的 native 最终值，Codex 热推只进入既有
+空闲回调。隔离 Desktop 实际运行 Codex 时提交 maker:false/codex:false：保存值 false、
+回执 codexRestartDeferred=true、忙碌时运行值仍 true；任务完成后运行值 false，与存储一致。
+随后 reset 恢复原四个开关及空覆盖标记，复用的临时任务关闭归档，未创建新任务或伙伴。

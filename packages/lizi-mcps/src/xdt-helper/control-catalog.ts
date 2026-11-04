@@ -25,12 +25,12 @@ const domains = [
   ['runtimes-and-storage', '运行环境与存储', 'Pi 更新、运行资源、清理与回收'],
   ['accounts-and-mobile', '账号与手机', '账号连接和手机自身的本地设置'],
 ] as const;
-const setting = (key: string, domain: string, title: string, summary: string, section: string, aliases: string[]): Control =>
-  ({ key, domain, title, summary, section, aliases, server: 'cindy_helper', tools: ['get_app_settings', 'update_app_settings', 'reset_app_settings'] });
+const setting = (key: string, domain: string, title: string, summary: string, section: string, aliases: string[], reset = true): Control =>
+  ({ key, domain, title, summary, section, aliases, server: 'cindy_helper', tools: ['get_app_settings', 'update_app_settings', ...(reset ? ['reset_app_settings'] : [])] });
 const helper = (key: string, domain: string, title: string, summary: string, tools: string[], aliases: string[], notes?: string): Control =>
   ({ key, domain, title, summary, tools, aliases, notes, server: 'cindy_helper' });
 export const CONTROL_CATALOG: readonly Control[] = [
-  setting('application.preferences', 'application', '语言、主题与通知', '发送快捷键、链接打开方式、动效、消息导航和首页偏好。', 'preferences', ['language', 'theme', 'notification', '语言', '主题', '通知', '快捷键', '动效', '链接']),
+  setting('application.preferences', 'application', '语言、主题与通知', '发送快捷键、链接打开方式、动效、消息导航和首页偏好。', 'preferences', ['language', 'theme', 'notification', '语言', '主题', '通知', '快捷键', '动效', '链接'], false),
   setting('appearance.wallpaper', 'appearance', '字体与内置壁纸', '字体、字号、窗口缩放、内置壁纸及效果；自定义图片导入另查 appearance.assets。', 'appearance', ['wallpaper', 'font', '壁纸', '背景', '字体', '字号', '缩放']),
   setting('projects.git-safety', 'projects', 'Git 安全快照', 'Git 自动快照开关。', 'git-safety', ['git', '快照']),
   setting('tasks.goal-defaults', 'tasks', '目标模式默认限制', '以后启动目标模式的轮数、token 预算与无进展限制。', 'goal-defaults', ['goal', '目标模式', '预算']),

@@ -754,6 +754,7 @@ import {
   type MemorySettings,
   writeMemorySetting,
 } from '../maker-host/memory-settings-store.js';
+import { updateMakerMemorySettings, type NativeMemoryPatch } from '../app-settings/memory.js';
 import { GLOBAL_PLUGIN_IDS } from '../maker-host/plugins/types.js';
 import {
   assertCollabProjectEnabled,
@@ -25945,7 +25946,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     return maker.resetAgentMemory(agentKind);
   });
 
-  const updateMakerMemorySetting = async (enabled: unknown) => {
+  const updateMakerMemorySetting = async (enabled: unknown, nativePatch: NativeMemoryPatch = {}) => {
     if (typeof enabled !== 'boolean') {
       throwIpcError('INVALID_PARAMS', 'enabled required (boolean)');
     }
@@ -25958,43 +25959,10 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     // 立刻按新值注入);native setMemory 的 live-host RPC 热推放 applyRuntime ——
     // Codex busy 的延迟路径把它挪到所有会话空闲后执行,不 mid-turn 热更正在跑的
     // 任务(review P1 2026-07-23)。
-    const wasEnabled = makerMemory.isEnabled();
-    let persistedSettings: MemorySettings | null = null;
-    return applyMemoryChangeWithCodexRestart({
-      persist: async () => {
-        // Persist before changing the manager. A failed maker:false write must reject the toggle
-        // instead of presenting an opt-out that silently disappears after restart.
-        const settingsState = writeMemorySetting('maker', enabled, { preserveDefault: enabled });
-        persistedSettings = settingsState.value;
-        const result = enabled
-          ? await makerMemory.enable({ skipAgentSync: true })
-          : await makerMemory.disable();
-        // Claude 的原生覆盖立即应用(纯内存,不碰 busy 的 Codex host)——
-        // 延迟路径下新建 Claude 会话也要立刻符合最新设置(review P1 2026-07-23)。
-        if (enabled) {
-          await makerMemory.syncNativeAgentsOff(['claude-code']);
-        } else if (!settingsState.value.maker) {
-          await maker.setAgentMemory('claude-code', settingsState.value.claudeCode);
-        }
-        return {
-          ...result,
-          isCustomized: settingsState.isCustomized,
-          customizedKeys: settingsState.customizedKeys,
-          defaults: settingsState.defaults,
-        };
-      },
-      applyRuntime: async () => {
-        if (enabled) {
-          await makerMemory.syncNativeAgentsOff(['codex']);
-        } else if (persistedSettings && !persistedSettings.maker) {
-          await maker.setAgentMemory('codex', persistedSettings.codex);
-        }
-        // 开关翻转 ⇒ 重建 codex bridge, 理由与约束见
-        // shutdownAgentMcpEnvironmentsBestEffort 文档 (review R1 P2)。
-        if (wasEnabled !== enabled) {
-          await shutdownAgentMcpEnvironmentsBestEffort('maker-memory toggle');
-        }
-      },
+    return updateMakerMemorySettings(enabled, nativePatch, {
+      makerMemory, maker, writeMemorySetting,
+      applyChange: applyMemoryChangeWithCodexRestart,
+      invalidateBridge: shutdownAgentMcpEnvironmentsBestEffort,
     });
   };
   ipcMain.handle(MAKER_INVOKE.MAKER_MEMORY_SET_ENABLED, async (_e, enabled: unknown) => { return updateMakerMemorySetting(enabled); });
@@ -26058,7 +26026,13 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       if (next.maker && (patch.claudeCode !== undefined || patch.codex !== undefined))
         throwIpcError('INVALID_PARAMS', 'Disable Cindy memory before changing native memory, as in Settings');
       let result: unknown;
-      if (patch.maker !== undefined) result = await updateMakerMemorySetting(patch.maker);
+      if (patch.maker !== undefined) {
+        const nativePatch: NativeMemoryPatch = {};
+        for (const key of ['claudeCode', 'codex', 'pi'] as const) {
+          if (typeof patch[key] === 'boolean') nativePatch[key] = patch[key];
+        }
+        return updateMakerMemorySetting(patch.maker, nativePatch);
+      }
       for (const key of ['claudeCode', 'codex', 'pi'] as const) {
         if (patch[key] !== undefined) {
           await updateNativeMemorySetting(key === 'claudeCode' ? 'claude-code' : key, patch[key]);

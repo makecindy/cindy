@@ -1,6 +1,9 @@
 import { describe, expect, it, vi } from 'vitest';
 import { z } from 'zod';
 import { createAppSettingsService } from '../service';
+import { updateMakerMemorySettings } from '../memory';
+import { runMemoryChangeWithCodexRestart } from '../../maker-ipc/deferredCodexRestart';
+import { CodexCredentialModeSwitchBusyError } from '../../maker-host/codex-credential-switch';
 
 // Unit: settings tools must retain unspecified overrides, reject unknown fields,
 // and recheck caller authority before committing. The previous UI-only surface
@@ -28,5 +31,52 @@ describe('app settings service', () => {
     expect(update).not.toHaveBeenCalled();
     await expect(service({ operation: 'update', section: 'test', patch: { enabled: true } }, async () => {})).rejects.toThrow('disk unavailable');
     expect(await service({ operation: 'reset', section: 'test' }, async () => {})).toMatchObject({ ok: false, errorCode: 'RESET_NOT_SUPPORTED' });
+  });
+});
+
+// R1 P1: a combined maker:false/codex:false patch must not hot-update a busy
+// host or later restore its previous codex:true snapshot. The generic service
+// tests above cannot exercise the native persistence/idle-boundary callback.
+// Unit: production memory updater + real restart executor, in-memory settings.
+describe('combined memory settings', () => {
+  it.each([false, true])('keeps the final native flags when Codex busy=%s', async busy => {
+    let value = { maker: true, claudeCode: true, codex: true, pi: true };
+    let enabled = true;
+    const live = { claudeCode: true, codex: true, pi: true };
+    let pending: (() => Promise<void>) | undefined;
+    const setAgentMemory = vi.fn(async (kind: 'claude-code' | 'codex' | 'pi', next: boolean) => {
+      live[kind === 'claude-code' ? 'claudeCode' : kind] = next;
+    });
+    const defaults = { ...value };
+    const result = await updateMakerMemorySettings(false, { codex: false, claudeCode: false, pi: false }, {
+      makerMemory: {
+        isEnabled: () => enabled,
+        enable: async () => { enabled = true; return { effective: 'next-session' }; },
+        disable: async () => { enabled = false; return { effective: 'next-session' }; },
+        syncNativeAgentsOff: async () => [],
+      },
+      maker: { setAgentMemory },
+      writeMemorySetting: (key, next) => {
+        value = { ...value, [key]: next };
+        return { value: { ...value }, defaults, isCustomized: true, customizedKeys: Object.keys(value) as Array<keyof typeof value> };
+      },
+      applyChange: parts => runMemoryChangeWithCodexRestart({
+        prepare: async () => { if (busy) throw new CodexCredentialModeSwitchBusyError(['running']); },
+        finalize: async () => {}, cancel: () => {}, clearDeferredRestart: () => {},
+        scheduleDeferredRestart: (_reason, applyRuntime) => { pending = applyRuntime; },
+      }, parts),
+      invalidateBridge: async () => {},
+    });
+    expect(result.codexRestartDeferred).toBe(busy);
+    expect(value).toEqual({ maker: false, claudeCode: false, codex: false, pi: false });
+    expect(live.claudeCode).toBe(false);
+    expect(live.pi).toBe(false);
+    if (busy) {
+      expect(setAgentMemory.mock.calls.some(([kind]) => kind === 'codex')).toBe(false);
+      expect(pending).toBeTypeOf('function');
+      await pending!();
+    }
+    expect(live).toEqual({ claudeCode: false, codex: false, pi: false });
+    expect(setAgentMemory.mock.calls.filter(([kind]) => kind === 'codex')).toEqual([['codex', false]]);
   });
 });
