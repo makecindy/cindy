@@ -435,14 +435,15 @@ describe('continuous teammate process', () => {
   });
 });
 
-describe('companion read position', () => {
-  // #8629: 一轮里既有后台唤醒的封口回复、又有未封口的收尾回复时,收尾正文不是
-  // 「正式回复」,会被 completion 折叠留在 work_group 里;主进程
-  // canonicalReplyVisibility 仍把它算作未读。只扫顶层的读位停在封口那条,
-  // markBotRead 单调推进会一直拒绝前进,未读角标因此永远清不掉。
+describe('companion closing reply and read position', () => {
+  // #8629 + codex P2: 主进程 `canonicalReplyVisibility` 把「未封口、但后面再没有工具
+  // 动作」的正文也算作回复。它曾被折进 work_group,而 `TeammateProcessBlock` 对结束的
+  // 组默认折叠、`Collapse` 不挂载子项 —— 用户看不到,读位也不能提前推进。正确做法是
+  // 让这条回复真的显示出来,读位只数显示在流里的顶层正文。
   const projectBot = (items: RenderItem[], streaming: boolean) =>
     botProcessItems(groupWorkRuns(items, streaming), streaming);
-  it('acknowledges a closing reply that the work fold keeps', () => {
+
+  it('promotes an unsealed closing reply instead of hiding it in the collapsed fold', () => {
     const closedAt = '2026-11-03T09:41:00.000Z';
     const rows: RenderItem[] = [
       message('u', 'user', 'Check the inbox', { createdAt: '2026-11-03T08:55:00.000Z' }),
@@ -452,9 +453,25 @@ describe('companion read position', () => {
       message('closing', 'assistant', 'Two PRs need your review', { createdAt: closedAt }),
     ];
     const projected = projectBot(rows, false);
-    // 只有封口回复被提升为正式回复,收尾正文留在组内 —— 这就是读位的盲区。
-    expect(proseIds(projected)).toEqual(['wake']);
-    expect(allKeys(projected)).toContain('msg-closing');
+    // 收尾正文与封口回复都在流里可见,不再需要展开折叠才能看到。
+    expect(proseIds(projected)).toEqual(['wake', 'closing']);
+    // 只有真正显示的顶层回复能推进读位。
     expect(latestSettledAssistantMs(projected)).toBe(Date.parse(closedAt));
+  });
+
+  // 折叠里的旁白不是回复:后面还有工具动作,主进程不计入未读,读位也不能跟着它走。
+  it('keeps mid-turn narration folded and out of the read position', () => {
+    const sealedAt = '2026-11-03T09:18:00.000Z';
+    const rows: RenderItem[] = [
+      message('u', 'user', 'Check the inbox', { createdAt: '2026-11-03T08:55:00.000Z' }),
+      tool('scan'),
+      message('wake', 'assistant', 'Woke up: inbox empty', { turnCompleted: true, createdAt: sealedAt }),
+      message('narration', 'assistant', 'Opening the second mailbox', { createdAt: '2026-11-03T09:31:00.000Z' }),
+      tool('second-scan'),
+    ];
+    const projected = projectBot(rows, false);
+    expect(proseIds(projected)).toEqual(['wake']);
+    expect(allKeys(projected)).toContain('msg-narration');
+    expect(latestSettledAssistantMs(projected)).toBe(Date.parse(sealedAt));
   });
 });

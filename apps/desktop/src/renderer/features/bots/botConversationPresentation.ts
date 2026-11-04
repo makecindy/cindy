@@ -123,31 +123,25 @@ export function botProcessItems(items: readonly RenderItem[], isStreaming: boole
 }
 
 /**
- * Latest settled companion reply in the projected stream, at any nesting depth.
+ * Latest settled companion reply the user can actually see: top-level prose only.
  *
- * 伙伴读位不能只看顶层:完成态时间线把同一用户轮次的收尾正文折进 `work_group`,
- * 而 `botProcessItems` / `simplifyBotRenderItems` 只提升「正式回复」(已封口 /
- * final_answer / 带交付)。一轮里既有后台唤醒的封口回复、又有未封口的收尾回复时,
- * 收尾那条留在组内;只扫顶层会让 `markBotRead` 停在封口那条,未读角标永不归零
- * (#8629)。主进程的未读口径(`canonicalReplyVisibility`)本来就认这条收尾正文,
- * 读位必须同口径。
+ * 读位不能数折叠里的内容。完成态时间线会把同轮的正文折进 `work_group`，而
+ * `TeammateProcessBlock` 对已结束的组默认折叠，`Collapse` 不挂载关闭状态的子项
+ * （`WorkGroupBlock.tsx`）—— 那些正文从未真正显示。按 #5185 / #4141 与
+ * `docs/product-rules/cindy-bots-runtime.md` 的「读到尾部并完成内容同步后，读位才
+ * 推进到实际显示的回复时间」，只能统计真正渲染在流里的顶层正文；对应地，主进程
+ * 会算作回复的收尾正文由 `simplifyBotRenderItems` 提升为可见正文（#8629），不再
+ * 需要向下挖折叠。
  */
 export function latestSettledAssistantMs(items: readonly RenderItem[]): number {
   let latest = 0;
-  const visit = (list: readonly RenderItem[]): void => {
-    for (const item of list) {
-      if (item.type === 'work_group') {
-        visit(item.children);
-        continue;
-      }
-      if (item.type !== 'message') continue;
-      const { message } = item;
-      if (message.role !== 'assistant' || message.isStreaming) continue;
-      const stamp = Date.parse(message.createdAt ?? '');
-      if (Number.isFinite(stamp) && stamp > latest) latest = stamp;
-    }
-  };
-  visit(items);
+  for (const item of items) {
+    if (item.type !== 'message') continue;
+    const { message } = item;
+    if (message.role !== 'assistant' || message.isStreaming) continue;
+    const stamp = Date.parse(message.createdAt ?? '');
+    if (Number.isFinite(stamp) && stamp > latest) latest = stamp;
+  }
   return latest;
 }
 
@@ -217,6 +211,15 @@ function liftRepliesFromWorkGroup(
   return out;
 }
 
+/** 工具 / 思考活动：与主进程「后续工具动作」的判据对齐。 */
+function isToolActivity(item: RenderItem): boolean {
+  if (item.type === 'tool_segment' || item.type === 'agent_task' || item.type === 'tool_media'
+    || item.type === 'ghost_card') return true;
+  if (item.type !== 'message') return false;
+  const { role } = item.message;
+  return role === 'thinking' || role === 'tool_use' || role === 'tool_result';
+}
+
 function projectWindow(
   items: readonly RenderItem[],
 ): RenderItem[] {
@@ -236,11 +239,35 @@ function projectWindow(
     sealedRun ||= isCompletedAssistantMessage(item.message);
     if (sealedRun) sealedAnswers.add(item.message);
   }
+  // 主进程把「未封口、但后面再没有工具动作」的收尾正文也算作回复
+  // （`canonicalReplyVisibility` 的第二支）。它必须真的显示出来：折进 work_group 后
+  // 组件默认折叠、`Collapse` 不挂载子项，用户既看不到、也不能据此推进读位（#8629）。
+  // 与主进程同口径提升为可见正文；有后续工具动作的旁白继续留在折叠里。
+  const tailReplies = new Set<ChatMessage>();
+  let activityAfter = false;
+  for (let index = expanded.length - 1; index >= 0; index -= 1) {
+    const item = expanded[index];
+    if (item.type === 'message' && item.message.role === 'user') {
+      activityAfter = false;
+      continue;
+    }
+    if (isToolActivity(item)) {
+      activityAfter = true;
+      continue;
+    }
+    if (activityAfter || !isProse(item)) continue;
+    const { message } = item;
+    if (!message.content.trim() || message.failedSamplingAttempt) continue;
+    if (message.assistantPhase === 'commentary' && !message.explicitDelivery
+      && !hasRichAnswer(message.content)) continue;
+    tailReplies.add(message);
+  }
   const isAddressedReply = (message: ChatMessage) => Boolean(message.content.trim())
     && !message.failedSamplingAttempt
     && !(message.assistantPhase === 'commentary' && !message.explicitDelivery && !hasRichAnswer(message.content))
     && (hasRichAnswer(message.content) || message.assistantPhase === 'final_answer' || Boolean(message.sourceGroup)
-      || Boolean(message.explicitDelivery) || isCompletedAssistantMessage(message) || sealedAnswers.has(message));
+      || Boolean(message.explicitDelivery) || isCompletedAssistantMessage(message) || sealedAnswers.has(message)
+      || tailReplies.has(message));
   const result: RenderItem[] = [];
   const lifted = items.flatMap((item) => item.type !== 'work_group' ? [item]
     : hasWorkContent(item) ? liftRepliesFromWorkGroup(item, isAddressedReply) : []);

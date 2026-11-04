@@ -4656,8 +4656,8 @@ export function MessageStream({
   const unreadCount = unreadKeys.size;
   // Only the rendered tail of a canonical Bot chat acknowledges replies. History
   // navigation, background windows and streaming work never move its read position.
-  // Replies can sit inside completed work groups (see latestSettledAssistantMs),
-  // so the position is taken from the whole projected tree, not the top level.
+  // Folded work-group content is not mounted while collapsed, so only visible
+  // top-level prose counts (see latestSettledAssistantMs).
   useEffect(() => {
     if (!onBotReadThrough || !historyLoaded || !isNearBottom || isSessionStreaming) return;
     const acknowledge = () => {
