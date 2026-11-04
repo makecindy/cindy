@@ -1,5 +1,6 @@
 import type { PluginUsageTransaction, PluginUsageHandle } from '../../../../shared/pluginUsage.js';
 import type { TaskTagRequest, TaskTagResult } from '@cindy/maker-shared';
+import type { GroupTaskRequest, GroupTaskResult } from '@cindy/maker-shared/group-task';
 import type { ChatCacheTransaction, ChatCacheResult } from '../../worker/opHandlers/chatCacheTx.js';
 
 export type DbTxName =
@@ -9,6 +10,7 @@ export type DbTxName =
   | 'pluginUsage.execute'
   | 'sessionImport.execute'
   | 'taskTags.execute'
+  | 'groupTasks.execute'
   | 'rewind.commit'
   | 'session.treeRehydrate'
   | 'fork.session'
@@ -1412,6 +1414,7 @@ export type DbTxArgsByName = {
   'sessionImport.execute': SessionImportTransactionArgs;
   'chatCache.execute': ChatCacheTransaction;
   'taskTags.execute': TaskTagRequest & { newId?: string; callerSessionId?: string };
+  'groupTasks.execute': GroupTaskRequest;
   'projectAliases.replaceIdentity': ProjectAliasesReplaceIdentityArgs;
   'toolResults.compactSession': CompactSessionToolResultsArgs;
   'session.agentSwitchFallback': SessionAgentSwitchFallbackArgs;
@@ -1510,6 +1513,7 @@ export type DbTxResultByName = {
   'sessionImport.execute': SessionImportTransactionResult;
   'chatCache.execute': ChatCacheResult;
   'taskTags.execute': TaskTagResult;
+  'groupTasks.execute': GroupTaskResult;
   'projectAliases.replaceIdentity': {
     projectKey: string;
     alias: string;

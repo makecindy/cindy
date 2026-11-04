@@ -3,6 +3,7 @@ import { extractToolResultDiagnostics } from '@cindy/maker-shared/tool-result-co
 import { runPluginUsageTransaction } from './pluginUsageTx.js';
 import { runSessionImportTransaction } from './sessionImportTx.js';
 import { runTaskTagsTransaction } from './taskTagsTx.js';
+import { runGroupTasksTransaction } from './groupTasksTx.js';
 import { recordMediaSpend } from './mediaSpendTx.js';
 import { batchAutoReviewProjection, readAutoReviewProjectionTransaction } from '../../autoReviewProjection.js';
 import { CLOSE_SHARED_TASKS_FOR_SESSION_SQL } from '../../sharedTaskClosureSql.js';
@@ -123,6 +124,8 @@ function dispatchTransaction(db: Database.Database, args: unknown): unknown {
     case 'sessionImport.execute': return runSessionImportTransaction(db, txArgs);
     case 'taskTags.execute':
       return runTaskTagsTransaction(db, txArgs);
+    case 'groupTasks.execute':
+      return runGroupTasksTransaction(db, txArgs);
     case 'projectAliases.replaceIdentity':
       return projectAliasesReplaceIdentity(db, txArgs);
     case 'toolResults.compactSession':

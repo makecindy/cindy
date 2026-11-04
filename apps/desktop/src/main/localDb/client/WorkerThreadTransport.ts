@@ -3,6 +3,19 @@ import { extractToolResultDiagnostics, sanitizeToolResultDiagnostics } from '@ci
 import { runPluginUsageTransaction } from '../worker/opHandlers/pluginUsageTx.js';
 import { runSessionImportTransaction } from '../worker/opHandlers/sessionImportTx.js';
 import { runTaskTagsTransaction } from '../worker/opHandlers/taskTagsTx.js';
+import { runGroupTasksTransaction } from '../worker/opHandlers/groupTasksTx.js';
+import {
+  GROUP_TASK_DEPENDENCY_SATISFIED_STATUSES,
+  GROUP_TASK_DISPATCHABLE_STATUSES,
+  GROUP_TASK_TRANSITIONS,
+  checkGroupTaskDependencyCycle,
+  groupTaskDependencyBlockers,
+  groupTaskTerminalTimestamps,
+  isGroupTaskStatusTerminal,
+  transitionGroupTaskStatus,
+  validateGroupTaskAcceptance,
+  validateGroupTaskDispatch,
+} from '@cindy/maker-shared/group-task';
 import { recordMediaSpend } from '../worker/opHandlers/mediaSpendTx.js';
 import { createAutoReviewIntentProjection } from '@cindy/maker-shared/auto-review-intent';
 import { batchAutoReviewProjection, readAutoReviewProjection } from '../autoReviewProjection.js';
@@ -38,6 +51,17 @@ const runSessionImportTransaction = ${runSessionImportTransaction.toString()};
 const runTaskTagsTransaction = ${runTaskTagsTransaction.toString()};
 const recordMediaSpend = ${recordMediaSpend.toString()};
 const fastModeToStorage = ${fastModeToStorage.toString()};
+const GROUP_TASK_TRANSITIONS = ${JSON.stringify(GROUP_TASK_TRANSITIONS)};
+const GROUP_TASK_DISPATCHABLE_STATUSES = ${JSON.stringify(GROUP_TASK_DISPATCHABLE_STATUSES)};
+const GROUP_TASK_DEPENDENCY_SATISFIED_STATUSES = ${JSON.stringify(GROUP_TASK_DEPENDENCY_SATISFIED_STATUSES)};
+const isGroupTaskStatusTerminal = ${isGroupTaskStatusTerminal.toString()};
+const transitionGroupTaskStatus = ${transitionGroupTaskStatus.toString()};
+const groupTaskTerminalTimestamps = ${groupTaskTerminalTimestamps.toString()};
+const checkGroupTaskDependencyCycle = ${checkGroupTaskDependencyCycle.toString()};
+const groupTaskDependencyBlockers = ${groupTaskDependencyBlockers.toString()};
+const validateGroupTaskAcceptance = ${validateGroupTaskAcceptance.toString()};
+const validateGroupTaskDispatch = ${validateGroupTaskDispatch.toString()};
+const runGroupTasksTransaction = ${runGroupTasksTransaction.toString()};
 // 旧版 inline worker fallback。默认运行时走 .vite/build/dbWorker.js；
 // 这段只作为打包路径回滚口保留，后续验证 macOS / Windows packaged 后删除。
 const { parentPort, workerData } = require('node:worker_threads');
@@ -483,6 +507,7 @@ function dispatchTransaction(readyDb, payload) {
     case 'pluginUsage.execute': return runPluginUsageTransaction(readyDb, request.args);
     case 'sessionImport.execute': return runSessionImportTransaction(readyDb, request.args);
     case 'taskTags.execute': return runTaskTagsTransaction(readyDb, request.args);
+    case 'groupTasks.execute': return runGroupTasksTransaction(readyDb, request.args);
     case 'projectAliases.replaceIdentity':
       return projectAliasesReplaceIdentity(readyDb, request.args);
     case 'toolResults.compactSession':
