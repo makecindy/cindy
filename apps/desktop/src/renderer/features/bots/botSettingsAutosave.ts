@@ -37,6 +37,7 @@ export function botSettingsSaveErrorKey(error: unknown): string | null {
     case 'MODEL_SELECTION_UNAVAILABLE':
       return 'ipcError.MODEL_SELECTION_UNAVAILABLE';
     case 'DEVICE_LINK_DEVICE_OFFLINE':
+    case 'DEVICE_LINK_NOT_CONNECTED':
       return 'bots.profileSaveOffline';
     case 'DEVICE_LINK_TIMEOUT':
     case 'DEVICE_LINK_DEVICE_UNRESPONSIVE':

@@ -597,6 +597,8 @@ describe('Bot settings profile consolidation', () => {
     [createIpcError('INVALID_PARAMS', 'capabilities has an unsupported field'), 'ipcError.INVALID_PARAMS'],
     [createIpcError('INVALID_PARAMS', 'Model route unavailable'), 'ipcError.MODEL_SELECTION_UNAVAILABLE'],
     [createIpcError('DEVICE_LINK_DEVICE_OFFLINE', 'offline'), 'bots.profileSaveOffline'],
+    // Relay/link disconnects use a different IPC code from a known offline device.
+    [createIpcError('DEVICE_LINK_NOT_CONNECTED', 'link not open'), 'bots.profileSaveOffline'],
     [createIpcError('DEVICE_LINK_TIMEOUT', 'timeout'), 'bots.remoteSettings.saveFailed'],
     [new Error('/private/profile.db failed'), 'bots.profileSaveFailed'],
   ])('shows a safe save failure reason and clears it after retry: %s', async (error, key) => {
