@@ -198,14 +198,21 @@ static void testFirstDisplayQueryDoesNotHang(const char *self) {
     fprintf(stderr, "FAIL first display query: probe reap failed (%d)\n", errno);
     exit(1);
   }
-  if (WIFEXITED(status) && WEXITSTATUS(status) == 2) {
+  // A prompt return through the display-validation path is what this test
+  // guards; the concrete exit code varies by OS/TCC state: 2 = unknown
+  // display id rejected (CGDisplayIsOnline is falsy on macOS 13.x), 3 = the
+  // display check passes (truthy on newer macOS) but TCC screen-recording
+  // access is denied, 4 = both pass but the probe's minimal argv lacks
+  // capture configuration so argument validation returns. All prove the
+  // query returned without hanging.
+  if (WIFEXITED(status) && WEXITSTATUS(status) >= 2 && WEXITSTATUS(status) <= 4) {
     puts("PASS first display query: fresh process exits promptly (no SkyLight hang)");
     return;
   }
   if (WIFSIGNALED(status))
     fprintf(stderr, "FAIL first display query: probe died by signal %d\n", WTERMSIG(status));
   else if (WIFEXITED(status))
-    fprintf(stderr, "FAIL first display query: probe exited %d, want 2\n", WEXITSTATUS(status));
+    fprintf(stderr, "FAIL first display query: probe exited %d, want 2-4\n", WEXITSTATUS(status));
   else
     fprintf(stderr, "FAIL first display query: unexpected probe status %d\n", status);
   exit(1);
@@ -213,8 +220,11 @@ static void testFirstDisplayQueryDoesNotHang(const char *self) {
 
 int main(int argc, const char *argv[]) {
   if (argc == 2 && strcmp(argv[1], "--display-probe") == 0) {
-    // Unknown display id: must return 2 through CGDisplayIsOnline without
-    // hanging, exactly as a failed connection attempt in production does.
+    // Unknown display id: must return promptly through the production
+    // display-validation path without hanging, exactly as a failed
+    // connection attempt does. Exit 2 (CGDisplayIsOnline rejects the id),
+    // 3 (TCC screen-capture denied) or 4 (argument validation) all prove
+    // the path returned promptly.
     const char *probe[] = {"macos-capture", "123456789", NULL};
     return captureHelperMain(2, probe);
   }
