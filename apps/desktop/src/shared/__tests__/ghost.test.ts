@@ -45,6 +45,7 @@ import {
   validateGhostManifest,
   validateGhostManifestLocaleResource,
   validateInstalledGhostManifest,
+  validateStoredGhostManifest,
   validateNormalizedGhostManifest,
   withGhostResolvedLocale,
   type GhostManifest,
@@ -1063,6 +1064,15 @@ describe('ghost · 清单校验', () => {
     });
     // 升级前按 UTF-16 长度装入的多字节 schema,读取安装快照时不能因口径收紧失效。
     expect(validateInstalledGhostManifest(withParameters(overLimit)).ok).toBe(true);
+    // #7408: stored releases get only parameter-size compatibility, not relaxed agent declarations.
+    expect(validateStoredGhostManifest(withParameters(overLimit)).ok).toBe(true);
+    expect(validateStoredGhostManifest({
+      ...withParameters(overLimit), agent: { tasks: 'historical' },
+    }).ok).toBe(false);
+    expect(validateStoredGhostManifest(withParameters(schema('a'.repeat(16_384))))).toEqual({
+      ok: false,
+      reason: 'tools[].parameters 过大(上限 16KB)',
+    });
     expect(validateInstalledGhostManifest(withParameters(schema('a'.repeat(16_384))))).toEqual({
       ok: false,
       reason: 'tools[].parameters 过大(上限 16KB)',
