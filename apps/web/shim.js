@@ -79,6 +79,20 @@
       return { accepted: true };
     },
     'maker.listProviders': () => rpc('/providers'),
+    'maker.getCapabilities': (args) => {
+      window.__cindyCapsCalls = window.__cindyCapsCalls ?? [];
+      window.__cindyCapsCalls.push(args?.[0] ?? null);
+      if (String(args?.[0]) !== 'claude-code') {
+        // Only the Claude agent is wired in the host today.
+        return Promise.reject(new Error(`Agent '${String(args?.[0])}' is not registered`));
+      }
+      return rpc('/capabilities');
+    },
+    'maker.syncModelVisibility': (args) => {
+      window.__cindyVisibilityCalls = window.__cindyVisibilityCalls ?? [];
+      window.__cindyVisibilityCalls.push({ owner: args?.[0] ?? null, generation: args?.[1] ?? null, size: Object.keys(args?.[2] ?? {}).length });
+      return null;
+    },
     'ghosts.listPickerModels': () => [],
     'maker.memoryGetSettings': () => ({ maker: true, claudeCode: true, codex: true, pi: true }),
     'maker.memoryPreserveLegacyMakerDisabled': () => ({ maker: true, claudeCode: true, codex: true, pi: true }),

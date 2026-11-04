@@ -104,7 +104,7 @@ let runtimeLease: HostRuntimeLease | null = null;
 /** Claude subscription state read once per boot; never on the health path. */
 let claudeState: Record<string, unknown> | null = null;
 /** Real maker-core agents registered in this process. */
-let agentGraph: { maker: unknown; agents: string[] } | null = null;
+let agentGraph: { maker: unknown; agent?: { capabilities?: { availableModels?: unknown[] } }; agents: string[] } | null = null;
 let gatewayCredentials: { endpoint: string; credential: string } | null = null;
 /** Non-secret projection of the adopted Desktop login; never tokens. */
 let account: { authenticated: boolean; realm: string | null; error?: string } = { authenticated: false, realm: null };
@@ -254,6 +254,15 @@ const server = createHostServer({
     defaultModel: process.env.CINDY_HOST_MODEL?.trim() || 'claude-sonnet-4-6',
   }),
   providers: () => listProviders({ gateway: gatewayCredentials, ownerId: runtime.owner }),
+  // The agent's own capability descriptor; no second catalog is invented here.
+  capabilities: () => {
+    const agent = agentGraph?.agent;
+    return {
+      agentKind: 'claude-code',
+      capabilities: agent?.capabilities ?? { availableModels: [] },
+      availableModels: agent?.capabilities?.availableModels ?? [],
+    };
+  },
   history: async (sessionId: string, limit: number) => {
     const { getMessagesForHistory } = await import('../../desktop/src/main/localDb/chatHistoryReader.ts');
     const page = await getMessagesForHistory({
