@@ -6,7 +6,7 @@ import { inferBotTemplatePresetId } from '@cindy/maker-shared/bot-template-prese
 import { parseChatInvitationToken } from '@cindy/device-link';
 import { createConversationListState } from '@cindy/maker-shared/chatConversationList';
 import type { ChatHistory } from '@cindy/maker-shared/chat-history';
-import { botGroupMessageSummaryText, botGroupQuoteFromMessage, buildBotGroupQuoteCard, readBotGroupExecutionFailure, readBotGroupQuote, readBotGroupQuoteCard, readBotGroupTaskCard, readImportedBotGroupRuntimeFailureCode, type BotGroupAttachment, type BotGroupMemberView, type BotGroupMessageView, type BotGroupRemoteChatData } from '@cindy/maker-shared/botGroupChat';
+import { readBotGroupCapabilityNotice, botGroupMessageSummaryText, botGroupQuoteFromMessage, buildBotGroupQuoteCard, readBotGroupExecutionFailure, readBotGroupQuote, readBotGroupQuoteCard, readBotGroupTaskCard, readImportedBotGroupRuntimeFailureCode, type BotGroupAttachment, type BotGroupMemberView, type BotGroupMessageView, type BotGroupRemoteChatData } from '@cindy/maker-shared/botGroupChat';
 import { chatGroupMemberName as memberName, chatGroupOwnerName, botGroupActivityAt, latestBotGroupMessage, botGroupExecutionFailureBatches, projectBotGroupExecutionFailures } from '@cindy/maker-shared/botGroupPresentation';
 import type { HostedRemoteCollectionItem } from '@/device-link/remoteResources';
 // The app's `@/i18n` sets up this default instance; importing it here would pull React bindings into a plain client.
@@ -334,6 +334,7 @@ export function chatGroupView(page: ChatPage, selfId: string, actors: readonly C
   const sorted = [...new Map(page.messages.map(message => [message.id, message])).values()].filter(message => !message.deleted)
     .sort((a, b) => BigInt(chatCursor(a.seq)) < BigInt(chatCursor(b.seq)) ? -1 : BigInt(a.seq) > BigInt(b.seq) ? 1 : 0);
   const messages: BotGroupMessageView[] = sorted.map((message, index) => {
+    const capabilityNoticeCode = readBotGroupCapabilityNotice(message);
     const runtimeFailureCode = readImportedBotGroupRuntimeFailureCode(message);
     const legacy = runtimeFailureCode ? message.content.find(block => block.type === 'card' && block.namespace === 'cindy.local-history' && block.schemaRevision === 1)?.data : undefined;
     if (runtimeFailureCode) return { id: message.id, sequence: index + 1, serverSequence: chatCursor(message.seq), kind: 'notice', authorKind: 'system',
@@ -346,7 +347,7 @@ export function chatGroupView(page: ChatPage, selfId: string, actors: readonly C
     const quote = message.origin === 'system' || planCard ? null : readBotGroupQuote(message.content);
     const task = message.origin === 'system' || planCard ? null : taskCardOf(message);
     const process = !message.deleted && message.origin !== 'system' && message.author.kind === 'bot' ? message.content.map(readBotGroupProcessCard).find(Boolean) : null;
-    return { id: message.id, sequence: index + 1, serverSequence: chatCursor(message.seq), kind: planCard ? 'plan' : message.origin === 'system' ? 'notice' : 'message',
+    return { id: message.id, sequence: index + 1, serverSequence: chatCursor(message.seq), kind: capabilityNoticeCode ? 'notice' : planCard ? 'plan' : message.origin === 'system' ? 'notice' : 'message', ...(capabilityNoticeCode ? { capabilityNoticeCode } : {}),
       ...(message.maskAttribution ? { maskAttribution: message.maskAttribution } : {}),
       ...(task ? { task } : {}), ...(process ? { process } : {}), threadRootId: message.threadRootId, replyCount: message.replyCount, reactions: message.reactions,
       authorKind: message.origin === 'system' ? 'system' : message.author.kind === 'human' ? 'user' : 'bot',

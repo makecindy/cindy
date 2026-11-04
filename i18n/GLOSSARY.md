@@ -700,7 +700,7 @@ Plugin 声明的应用级完整页面能力；区别于会话内 Panel。V1 由 
 
 ### Manual
 
-插件随包提供、由 ghost_manual 按需读取的渐进披露长文资料。它不是权限项，也不等同于已停止新增的 Agent Skill；先登记为 proposed，待插件作者与用户实际使用后再固化。
+插件随包提供、由 ghost_manual 按需读取的渐进披露长文资料。它不是权限项，也不等同于插件随包的 Agent Skill；先登记为 proposed，待插件作者与用户实际使用后再固化。
 
 ### Audio
 

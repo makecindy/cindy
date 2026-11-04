@@ -3,6 +3,7 @@ import { act, createElement, forwardRef, useImperativeHandle, type ReactNode } f
 import { createRoot } from "react-dom/client";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { PluginCardActions } from "../plugins/PluginCardActions";
+import { pluginCardPlainText } from "../plugins/pluginCardText";
 import { pendingGhostCardFormDelivery } from "@cindy/maker-shared/ghost-card-form";
 import { MobileMailHtmlPreview } from '../plugins/MobileMailHtmlPreview';
 
@@ -15,6 +16,11 @@ vi.mock("@/auth/AuthContext", () => ({ useAuth: () => ({ getAccessToken: async (
 vi.mock("../plugins/mobileMailAttachment", () => ({ pickMobileMailAttachment: (...args: unknown[]) => h.pick(...args) }));
 vi.mock("@/session/useBotGroupRemoteMedia", () => ({ useBotGroupRemoteMedia: () => h.resolve }));
 vi.mock('@/components/FileTypeIcon', () => ({ FileTypeIcon: () => null }));
+vi.mock('lucide-react-native', async () => {
+  const { createElement: el } = await import('react');
+  const icon = (name: string) => () => el('i', { 'data-icon': name });
+  return Object.fromEntries(['ExternalLink', 'GitPullRequest', 'GitMerge', 'GitPullRequestClosed', 'GitPullRequestDraft', 'Check', 'CircleMinus', 'CircleX', 'Clock'].map((name) => [name, icon(name)]));
+});
 
 const h = vi.hoisted(() => ({ invoke: vi.fn(), pick: vi.fn(), resolve: vi.fn(), inject: vi.fn(), web: {} as any, mode: 'light' }));
 vi.mock("react-native", () => {
@@ -46,7 +52,16 @@ vi.mock("react-native", () => {
       addEventListener: () => ({ remove: () => {} }),
     },
     Alert: { alert: vi.fn() },
-    Linking: { openURL: vi.fn() },
+    Linking: { openURL: vi.fn(async () => true) },
+    Switch: ({ value, onValueChange, accessibilityLabel }: { value: boolean; onValueChange(): void; accessibilityLabel?: string }) =>
+      createElement("input", { type: "checkbox", checked: value, onChange: onValueChange, "aria-label": accessibilityLabel }),
+    AccessibilityInfo: { isReduceMotionEnabled: async () => true },
+    Animated: {
+      Value: class { interpolate() { return 0; } },
+      View,
+      loop: () => ({ start() {}, stop() {} }),
+      timing: () => ({}),
+    },
     Keyboard: { addListener: () => ({ remove: () => {} }) },
   };
 });
@@ -97,6 +112,90 @@ afterEach(() => {
   h.mode = 'light';
   vi.clearAllMocks();
 });
+// Unit: the phone used to show the PR card as a raw URL, identical grey buttons and "开启「…」"
+// buttons. A rich host now sends switches, the primary action, a live state and the title bar's
+// PR status; the phone draws them natively and a switch still goes through the card action.
+// Unit: the PR card on the phone read "\\#42 …", "cindy\\-demo/web" and turned "feat\\(mobile\\)" into a
+// formula: the desktop's escaped card text went through the Markdown renderer.
+it('shows desktop card text as plain text without its Markdown escapes', () => {
+  expect(pluginCardPlainText('\\#7290 feat\\(mobile\\): a\\_b \\*c\\* 5\\.5\ncindy\\-demo/web \\\\ \\[x\\]')).toBe('#7290 feat(mobile): a_b *c* 5.5\ncindy-demo/web \\ [x]');
+});
+
+describe("rich plugin card hints", () => {
+  it('draws PR checks, a live state, a primary action, a link by its host and settings as switches', async () => {
+    const dispatch = vi.fn(async (_input: unknown) => ({ effects: [] }));
+    h.invoke.mockImplementation(async (_d: string, _c: string, args: any[]) => {
+      if (args[0].collectionId === 'plugin-results') return dispatch(args[0]);
+      if (args[0].actionId === 'open-interaction') return { result: { pageId: 'page' } };
+      return { result: { confirms: [] } };
+    });
+    const container = document.createElement('div'), root = createRoot(container);
+    unmount = () => act(() => root.unmount());
+    const status = { ok: true, status: 'open', unresolvedCount: 2, checks: { total: 1, passed: 1, failed: 0, pending: 0, skipped: 0 }, mergeState: 'BLOCKED', reviewDecision: 'REVIEW_REQUIRED' };
+    await act(async () => root.render(createElement(PluginCardActions, { deviceId: 'device', sessionId: 's', callId: 'c', data: {
+      pluginId: 'github', revision: '1', form: null, live: '跟进中',
+      prStatus: [{ key: 'o/r#9', fallback: ['CI 运行中'], status }],
+      items: [
+        { id: 'link:0', label: '#9 Fix login', url: 'https://github.com/o/r/pull/9', disabled: false },
+        { id: 'pr:ready', label: '转为正式 PR', disabled: false, primary: true },
+        { id: 'prset:rename', label: '关闭「自动改名」', disabled: false, toggle: { on: true, title: '自动改名', hint: '改成 PR 号' } },
+      ],
+    } })));
+    const text = container.textContent ?? '';
+    for (const part of ['plugins.prStatus.checksPassed', 'plugins.prStatus.threadsOpen', 'plugins.prStatus.mergeApproval', '跟进中', '自动改名', '改成 PR 号', 'plugins.openLinkHost', '转为正式 PR'])
+      expect(text).toContain(part);
+    expect(text).not.toContain('CI 运行中');
+    expect(text).not.toContain('关闭「自动改名」');
+    const toggle = container.querySelector<HTMLInputElement>('input[type=checkbox]')!;
+    expect(toggle.checked).toBe(true);
+    await act(async () => { toggle.click(); });
+    expect(dispatch).toHaveBeenCalledWith(expect.objectContaining({ actionId: 'prset:rename' }));
+  });
+
+  it('draws a PR link with its own status, never another PR\'s', async () => {
+    h.invoke.mockImplementation(async () => ({ result: { confirms: [] } }));
+    const container = document.createElement('div'), root = createRoot(container);
+    unmount = () => act(() => root.unmount());
+    const merged = { ok: true, status: 'merged', unresolvedCount: 0, checks: { total: 0, passed: 0, failed: 0, pending: 0, skipped: 0 } };
+    const render = async (url: string) => {
+      await act(async () => root.render(createElement(PluginCardActions, { deviceId: 'device', sessionId: 's', callId: 'c', text: '#9 Fix login\n\no/r', data: {
+        pluginId: 'github', revision: '1', form: null, prStatus: [{ key: 'o/r#10', fallback: [], status: merged }],
+        items: [{ id: 'link:0', label: '#9 Fix login', url, disabled: false }],
+      } })));
+      return Array.from(container.querySelectorAll('i')).map((node) => node.getAttribute('data-icon'));
+    };
+    expect(await render('https://github.com/o/r/pull/9')).toContain('GitPullRequest');
+    expect(await render('https://github.com/o/r/pull/9')).not.toContain('GitMerge');
+    expect(await render('https://github.com/O/R/pull/10')).toContain('GitMerge');
+  });
+
+  // Unit: on the phone the PR card's title, repo and branch were one loose block above a separate
+  // "open github.com" button. With the card text the title becomes the card's own link.
+  it('draws the card text as a title that opens the card link, without a separate link button', async () => {
+    h.invoke.mockImplementation(async () => ({ result: { confirms: [] } }));
+    const container = document.createElement('div'), root = createRoot(container);
+    unmount = () => act(() => root.unmount());
+    await act(async () => root.render(createElement(PluginCardActions, { deviceId: 'device', sessionId: 's', callId: 'c',
+      text: '#9 Fix login\n\no/r · 草稿', data: {
+        pluginId: 'github', revision: '1', form: null,
+        items: [
+          { id: 'link:0', label: '#9 Fix login', url: 'https://github.com/o/r/pull/9', disabled: false },
+          { id: 'pr:ready', label: '转为正式 PR', disabled: false, primary: true },
+        ],
+      } })));
+    const text = container.textContent ?? '';
+    expect(text.split('#9 Fix login')).toHaveLength(2);
+    expect(text).toContain('o/r · 草稿');
+    expect(text).not.toContain('plugins.openLinkHost');
+    // GitHub pages open directly (owner's choice); other addresses still ask first.
+    const { Alert, Linking } = await import('react-native');
+    const title = [...container.querySelectorAll('button')].find((button) => button.textContent === '#9 Fix login')!;
+    await act(async () => { title.click(); });
+    expect(Linking.openURL).toHaveBeenCalledWith('https://github.com/o/r/pull/9');
+    expect(Alert.alert).not.toHaveBeenCalled();
+  });
+});
+
 describe("native plugin card deliberate actions", () => {
   // Mobile parity regression: typing must use the real form delivery, update
   // both MIME alternatives and retain the authored HTML/CID bytes (unit).
