@@ -65,6 +65,11 @@ export const WORKLOUDER_CODEX_PREVIEW_INPUT_CHANNEL = 'worklouder-codex:preview-
 export const WORKLOUDER_CODEX_AGENT_SLOT_COUNT = 13;
 /** Factory six-AG layout count; used when a layout does not choose task keys. */
 export const WORKLOUDER_CODEX_DEFAULT_AGENT_SLOT_COUNT = 6;
+/** Legacy six-slot custom layout: every slot through the sixth was explicit. */
+export const WORKLOUDER_CODEX_DEFAULT_CONFIGURED_AGENT_SLOTS: readonly number[] = Array.from(
+  { length: WORKLOUDER_CODEX_DEFAULT_AGENT_SLOT_COUNT },
+  (_, index) => index,
+);
 /** Maximum number of tasks accepted by the Work Louder task-list IPC. */
 export const WORKLOUDER_CODEX_TASK_OPTION_LIMIT = 100;
 
@@ -440,14 +445,45 @@ export interface WorkLouderCodexSettings {
   lightingAutoDim: WorkLouderCodexAutoDim;
   agentSource: WorkLouderCodexAgentSource;
   customAgentKeys: Array<WorkLouderCodexAction | null>;
-  /** Leading custom slots the user configured; trailing slots follow task order. */
-  customAgentKeysConfiguredCount: number;
+  /** Custom slots the user explicitly edited; other slots follow task order. */
+  customAgentKeysConfiguredSlots: number[];
   /** When false, a single press switches tasks and a double press brings Cindy forward. */
   singleTapAgentKeys: boolean;
   layout: WorkLouderCodexLayout;
 }
 
 export type WorkLouderCodexSettingsPatch = Partial<WorkLouderCodexSettings>;
+
+/** Strictly read a configured-slot set; duplicates are folded, order is stable. */
+export function normalizeWorkLouderCodexConfiguredSlots(raw: unknown): number[] | null {
+  if (!Array.isArray(raw)) return null;
+  const slots = new Set<number>();
+  for (const value of raw) {
+    if (
+      typeof value !== 'number' ||
+      !Number.isInteger(value) ||
+      value < 0 ||
+      value >= WORKLOUDER_CODEX_AGENT_SLOT_COUNT
+    ) {
+      return null;
+    }
+    slots.add(value);
+  }
+  return [...slots].toSorted((left, right) => left - right);
+}
+
+/** Migrates the previous persisted prefix count to explicit slot indexes. */
+export function workLouderCodexConfiguredSlotsFromCount(raw: unknown): number[] | null {
+  if (
+    typeof raw !== 'number' ||
+    !Number.isInteger(raw) ||
+    raw < 0 ||
+    raw > WORKLOUDER_CODEX_AGENT_SLOT_COUNT
+  ) {
+    return null;
+  }
+  return Array.from({ length: raw }, (_, index) => index);
+}
 
 export type WorkLouderCodexConnectionStatus =
   | 'connecting'
@@ -569,7 +605,7 @@ export const WORKLOUDER_CODEX_DEFAULT_SETTINGS: WorkLouderCodexSettings = {
   lightingAutoDim: '3-minutes',
   agentSource: 'last-sent',
   customAgentKeys: Array.from({ length: WORKLOUDER_CODEX_AGENT_SLOT_COUNT }, () => null),
-  customAgentKeysConfiguredCount: WORKLOUDER_CODEX_DEFAULT_AGENT_SLOT_COUNT,
+  customAgentKeysConfiguredSlots: [...WORKLOUDER_CODEX_DEFAULT_CONFIGURED_AGENT_SLOTS],
   singleTapAgentKeys: true,
   layout: WORKLOUDER_CODEX_DEFAULT_LAYOUT,
 };
@@ -610,7 +646,7 @@ export const WORKLOUDER_CREATOR_MICRO_2_DEFAULT_SETTINGS: WorkLouderCodexSetting
   lightingAutoDim: '3-minutes',
   agentSource: 'last-sent',
   customAgentKeys: Array.from({ length: WORKLOUDER_CODEX_AGENT_SLOT_COUNT }, () => null),
-  customAgentKeysConfiguredCount: WORKLOUDER_CODEX_DEFAULT_AGENT_SLOT_COUNT,
+  customAgentKeysConfiguredSlots: [...WORKLOUDER_CODEX_DEFAULT_CONFIGURED_AGENT_SLOTS],
   singleTapAgentKeys: true,
   layout: WORKLOUDER_CREATOR_MICRO_2_DEFAULT_LAYOUT,
 };
@@ -666,6 +702,7 @@ export function cloneWorkLouderCodexSettings(
   return {
     ...settings,
     customAgentKeys: settings.customAgentKeys.map(cloneWorkLouderCodexAction),
+    customAgentKeysConfiguredSlots: [...settings.customAgentKeysConfiguredSlots],
     layout: cloneWorkLouderCodexLayout(settings.layout),
   };
 }

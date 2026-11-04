@@ -10,10 +10,12 @@ import {
   isWorkLouderCodexAgentSource,
   isWorkLouderCreatorProgrammableKey,
   normalizeWorkLouderCodexAgentSource,
+  normalizeWorkLouderCodexConfiguredSlots,
   normalizeWorkLouderCreatorTaskKeys,
   normalizeWorkLouderMerges,
   workLouderLayoutMerges,
   workLouderMicrophoneKeysSeparate,
+  workLouderCodexConfiguredSlotsFromCount,
   isWorkLouderCodexAutoDim,
   isWorkLouderCodexCommandId,
   isWorkLouderCodexEncoderMode,
@@ -37,6 +39,7 @@ const SETTING_KEYS = [
   'lightingAutoDim',
   'agentSource',
   'customAgentKeys',
+  'customAgentKeysConfiguredSlots',
   'customAgentKeysConfiguredCount',
   'singleTapAgentKeys',
   'layout',
@@ -90,18 +93,22 @@ function parseSettingsPatch(value: unknown): WorkLouderCodexSettingsPatch {
     }
     patch.agentSource = normalizeWorkLouderCodexAgentSource(record.agentSource);
   }
-  let configuredCustomAgentCount: number | undefined;
-  if ('customAgentKeysConfiguredCount' in record) {
-    const count = record.customAgentKeysConfiguredCount;
-    if (
-      typeof count !== 'number' ||
-      !Number.isInteger(count) ||
-      count < 0 ||
-      count > WORKLOUDER_CODEX_AGENT_SLOT_COUNT
-    ) {
+  let configuredCustomAgentSlots: number[] | undefined;
+  if ('customAgentKeysConfiguredSlots' in record) {
+    const slots = normalizeWorkLouderCodexConfiguredSlots(record.customAgentKeysConfiguredSlots);
+    if (!slots) {
+      throwIpcError('INVALID_PARAMS', 'customAgentKeysConfiguredSlots is invalid');
+    }
+    configuredCustomAgentSlots = slots;
+  }
+  if (configuredCustomAgentSlots === undefined && 'customAgentKeysConfiguredCount' in record) {
+    const slots = workLouderCodexConfiguredSlotsFromCount(
+      record.customAgentKeysConfiguredCount,
+    );
+    if (!slots) {
       throwIpcError('INVALID_PARAMS', 'customAgentKeysConfiguredCount is invalid');
     }
-    configuredCustomAgentCount = count;
+    configuredCustomAgentSlots = slots;
   }
   if ('customAgentKeys' in record) {
     const customAgentKeys = record.customAgentKeys;
@@ -115,13 +122,13 @@ function parseSettingsPatch(value: unknown): WorkLouderCodexSettingsPatch {
     patch.customAgentKeys = Array.from({ length: WORKLOUDER_CODEX_AGENT_SLOT_COUNT }, (_, index) =>
       parseAction(customAgentKeys[index] ?? null, true),
     );
-    configuredCustomAgentCount ??=
+    configuredCustomAgentSlots ??=
       customAgentKeys.length === WORKLOUDER_CODEX_DEFAULT_AGENT_SLOT_COUNT
-        ? WORKLOUDER_CODEX_DEFAULT_AGENT_SLOT_COUNT
-        : WORKLOUDER_CODEX_AGENT_SLOT_COUNT;
+        ? Array.from({ length: WORKLOUDER_CODEX_DEFAULT_AGENT_SLOT_COUNT }, (_, index) => index)
+        : Array.from({ length: WORKLOUDER_CODEX_AGENT_SLOT_COUNT }, (_, index) => index);
   }
-  if (configuredCustomAgentCount !== undefined) {
-    patch.customAgentKeysConfiguredCount = configuredCustomAgentCount;
+  if (configuredCustomAgentSlots !== undefined) {
+    patch.customAgentKeysConfiguredSlots = configuredCustomAgentSlots;
   }
   if ('deviceEnabled' in record) {
     if (typeof record.deviceEnabled !== 'boolean') {

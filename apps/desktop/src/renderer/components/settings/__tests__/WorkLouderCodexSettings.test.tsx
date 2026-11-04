@@ -434,7 +434,7 @@ describe('WorkLouderCodexSettings', () => {
         { type: 'command', commandId: 'newTask' },
         ...Array.from({ length: 10 }, () => null),
       ],
-      customAgentKeysConfiguredCount: 6,
+      customAgentKeysConfiguredSlots: [0, 1, 2, 3, 4, 5],
     });
   });
 
@@ -808,7 +808,28 @@ describe('WorkLouderCodexSettings', () => {
         { type: 'command', commandId: 'newTask' },
         ...Array.from({ length: 12 }, () => null),
       ],
-      customAgentKeysConfiguredCount: 6,
+      customAgentKeysConfiguredSlots: [0, 1, 2, 3, 4, 5],
+    });
+  });
+
+  it('only marks the edited thirteenth slot as configured', async () => {
+    mocks.agentSource = 'custom';
+    const layout = createWorkLouderCodexDefaultSettings().layout;
+    layout.separateMicrophoneKeys = true;
+    layout.merges = [];
+    layout.taskKeys = [...WORKLOUDER_CREATOR_PROGRAMMABLE_KEYS];
+    mocks.layout = layout;
+    render(<WorkLouderCodexSettings onBack={vi.fn()} />);
+
+    fireEvent.click(screen.getByRole('button', { name: /ACT12/ }));
+    await chooseSelectOption('settings.shortcuts.workLouderCodex.actions.choose', 'New Task');
+
+    expect(mocks.setSettings).toHaveBeenCalledWith({
+      customAgentKeys: [
+        ...Array.from({ length: 12 }, () => null),
+        { type: 'command', commandId: 'newTask' },
+      ],
+      customAgentKeysConfiguredSlots: [0, 1, 2, 3, 4, 5, 12],
     });
   });
 

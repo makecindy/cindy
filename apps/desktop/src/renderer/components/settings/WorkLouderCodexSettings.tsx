@@ -55,7 +55,7 @@ import {
   WORKLOUDER_CODEX_AUTO_DIM_OPTIONS,
   WORKLOUDER_CODEX_COMMAND_IDS,
   WORKLOUDER_CODEX_COMMAND_SLOTS,
-  WORKLOUDER_CODEX_DEFAULT_AGENT_SLOT_COUNT,
+  WORKLOUDER_CODEX_DEFAULT_CONFIGURED_AGENT_SLOTS,
   WORKLOUDER_CODEX_ENCODER_ACTIONS,
   WORKLOUDER_CODEX_ENCODER_MODES,
   WORKLOUDER_CODEX_KEYCAP_ACTIONS,
@@ -359,12 +359,13 @@ export function WorkLouderCodexSettings({
     editingProgrammableTaskKey && isWorkLouderCreatorProgrammableKey(editingPart)
       ? normalizeWorkLouderCreatorTaskKeys(settings.layout.taskKeys).indexOf(editingPart)
       : -1;
-  const editingCustomConfiguredCount =
-    settings.customAgentKeysConfiguredCount ?? WORKLOUDER_CODEX_DEFAULT_AGENT_SLOT_COUNT;
+  const editingCustomConfiguredSlots = new Set(
+    settings.customAgentKeysConfiguredSlots ?? WORKLOUDER_CODEX_DEFAULT_CONFIGURED_AGENT_SLOTS,
+  );
   const editingCustomAction =
     editingTaskIndex >= 0
       ? (settings.customAgentKeys[editingTaskIndex] ??
-        (editingTaskIndex >= editingCustomConfiguredCount
+        (!editingCustomConfiguredSlots.has(editingTaskIndex)
           ? (state?.agentSlots[editingTaskIndex]?.action ?? null)
           : null))
       : null;
@@ -482,10 +483,12 @@ export function WorkLouderCodexSettings({
       const slot = state?.agentSlots[index];
       const custom = settings.agentSource === 'custom';
       const customAction = index >= 0 ? (settings.customAgentKeys[index] ?? null) : null;
-      const customConfiguredCount =
-        settings.customAgentKeysConfiguredCount ?? WORKLOUDER_CODEX_DEFAULT_AGENT_SLOT_COUNT;
+      const customConfiguredSlots = new Set(
+        settings.customAgentKeysConfiguredSlots ??
+          WORKLOUDER_CODEX_DEFAULT_CONFIGURED_AGENT_SLOTS,
+      );
       const customUsesExplicitSlot =
-        index >= 0 && (customAction !== null || index < customConfiguredCount);
+        index >= 0 && (customAction !== null || customConfiguredSlots.has(index));
       return {
         legend: key,
         name: custom
@@ -862,11 +865,15 @@ export function WorkLouderCodexSettings({
                             item ? { ...item } : null,
                           );
                           customAgentKeys[editingTaskIndex] = action;
+                          const configuredSlots = new Set(
+                            settings.customAgentKeysConfiguredSlots ??
+                              WORKLOUDER_CODEX_DEFAULT_CONFIGURED_AGENT_SLOTS,
+                          );
+                          configuredSlots.add(editingTaskIndex);
                           void setSettings({
                             customAgentKeys,
-                            customAgentKeysConfiguredCount: Math.max(
-                              editingCustomConfiguredCount,
-                              editingTaskIndex + 1,
+                            customAgentKeysConfiguredSlots: [...configuredSlots].toSorted(
+                              (left, right) => left - right,
                             ),
                           });
                         }}

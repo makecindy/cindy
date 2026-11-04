@@ -72,7 +72,7 @@ describe('Work Louder Codex settings store', () => {
     const next = __testing.normalize({ customAgentKeys: legacy });
 
     expect(next.customAgentKeys).toHaveLength(13);
-    expect(next.customAgentKeysConfiguredCount).toBe(6);
+    expect(next.customAgentKeysConfiguredSlots).toEqual([0, 1, 2, 3, 4, 5]);
     expect(next.customAgentKeys[1]).toEqual({ type: 'command', commandId: 'newTask' });
     expect(next.customAgentKeys.slice(6)).toEqual(Array.from({ length: 7 }, () => null));
   });
@@ -80,11 +80,33 @@ describe('Work Louder Codex settings store', () => {
   it('preserves an explicitly configured thirteen-slot custom list', () => {
     const next = __testing.normalize({
       customAgentKeys: Array.from({ length: 13 }, () => null),
-      customAgentKeysConfiguredCount: 13,
+      customAgentKeysConfiguredSlots: Array.from({ length: 13 }, (_, index) => index),
     });
 
     expect(next.customAgentKeys).toHaveLength(13);
-    expect(next.customAgentKeysConfiguredCount).toBe(13);
+    expect(next.customAgentKeysConfiguredSlots).toEqual(
+      Array.from({ length: 13 }, (_, index) => index),
+    );
+  });
+
+  it('migrates the legacy configured count to explicit slot indexes', () => {
+    const next = __testing.normalize({
+      customAgentKeys: Array.from({ length: 13 }, () => null),
+      customAgentKeysConfiguredCount: 13,
+    });
+
+    expect(next.customAgentKeysConfiguredSlots).toEqual(
+      Array.from({ length: 13 }, (_, index) => index),
+    );
+  });
+
+  it('prefers an explicit configured-slot set over the legacy count', () => {
+    const next = __testing.normalize({
+      customAgentKeysConfiguredCount: 13,
+      customAgentKeysConfiguredSlots: [12, 5, 5],
+    });
+
+    expect(next.customAgentKeysConfiguredSlots).toEqual([5, 12]);
   });
 
   it('rounds and clamps persisted brightness while preserving valid options', () => {

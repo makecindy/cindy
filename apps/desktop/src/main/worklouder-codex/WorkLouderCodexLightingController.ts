@@ -1,6 +1,7 @@
 import {
   WORKLOUDER_CODEX_AGENT_SLOT_COUNT,
   WORKLOUDER_CODEX_DEFAULT_AGENT_SLOT_COUNT,
+  WORKLOUDER_CODEX_DEFAULT_CONFIGURED_AGENT_SLOTS,
   WORKLOUDER_CODEX_EMPTY_DEVICE_STATE,
   WORKLOUDER_CODEX_KEYCAP_ACTIONS,
   WORKLOUDER_CREATOR_PROGRAMMABLE_KEYS,
@@ -724,11 +725,13 @@ export class WorkLouderCodexLightingController {
     const slotCount =
       this.settings.layout.taskKeys?.length ?? WORKLOUDER_CODEX_DEFAULT_AGENT_SLOT_COUNT;
     if (this.settings.agentSource === 'custom') {
-      const configuredCount =
-        this.settings.customAgentKeysConfiguredCount ?? WORKLOUDER_CODEX_DEFAULT_AGENT_SLOT_COUNT;
+      const configuredSlots = new Set(
+        this.settings.customAgentKeysConfiguredSlots ??
+          WORKLOUDER_CODEX_DEFAULT_CONFIGURED_AGENT_SLOTS,
+      );
       return Array.from({ length: slotCount }, (_, slot) => {
         const explicit = this.settings.customAgentKeys[slot] ?? null;
-        if (slot < configuredCount || explicit) return cloneAction(explicit);
+        if (configuredSlots.has(slot) || explicit) return cloneAction(explicit);
         const task = this.taskCatalog.options[slot];
         return task ? { type: 'task', sessionId: task.id } : null;
       });
@@ -769,11 +772,9 @@ export class WorkLouderCodexLightingController {
   }
 
   private lightingThreadCount(): number {
-    const taskKeys = normalizeWorkLouderCreatorTaskKeys(this.settings.layout.taskKeys);
-    // Always cover all 13 Codex threads so shrinking or switching layouts also
+    // Both boards keep all 13 threads in the frame so shrinking a layout also
     // clears keys that are no longer part of the active slot set.
-    if (this.device.deviceType === 'codex-micro') return WORKLOUDER_CODEX_AGENT_SLOT_COUNT;
-    return taskKeys.length;
+    return WORKLOUDER_CODEX_AGENT_SLOT_COUNT;
   }
 
   private updateLightingFrame(wakeOnBaseFrameChange = false): WorkLouderCodexLightingFrame {

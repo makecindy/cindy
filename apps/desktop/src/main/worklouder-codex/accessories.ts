@@ -2,6 +2,7 @@
 
 import {
   WORKLOUDER_CODEX_DEFAULT_AGENT_SLOT_COUNT,
+  WORKLOUDER_CODEX_DEFAULT_CONFIGURED_AGENT_SLOTS,
   WORKLOUDER_CODEX_EMPTY_DEVICE_STATE,
   WORKLOUDER_MODELS,
   cloneWorkLouderCodexSettings,
@@ -86,12 +87,15 @@ function idleAgentSlots(
 ): WorkLouderCodexAgentSlotState[] {
   const slotCount = settings.layout.taskKeys?.length ?? WORKLOUDER_CODEX_DEFAULT_AGENT_SLOT_COUNT;
   const titleById = new Map(taskOptions.map((task) => [task.id, task.title] as const));
+  const configuredSlots = new Set(
+    settings.customAgentKeysConfiguredSlots ?? WORKLOUDER_CODEX_DEFAULT_CONFIGURED_AGENT_SLOTS,
+  );
   return Array.from({ length: slotCount }, (_, slot) => {
     let action = cloneAction(settings.customAgentKeys[slot] ?? null);
     if (
       !action &&
       settings.agentSource === 'custom' &&
-      slot >= (settings.customAgentKeysConfiguredCount ?? WORKLOUDER_CODEX_DEFAULT_AGENT_SLOT_COUNT)
+      !configuredSlots.has(slot)
     ) {
       const task = taskOptions[slot];
       action = task ? { type: 'task', sessionId: task.id } : null;

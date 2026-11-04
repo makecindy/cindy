@@ -347,7 +347,7 @@ describe('WorkLouderCodexLightingController', () => {
       },
     ]);
     const frame = sink.update.mock.lastCall?.[0];
-    expect(frame?.threads).toHaveLength(7);
+    expect(frame?.threads).toHaveLength(13);
     expect(frame?.threads[0]?.brightness).toBeGreaterThan(0);
     expect(frame?.threads[1]?.brightness).toBe(0);
     expect(frame?.keys.brightness).toBe(0);
@@ -1590,7 +1590,7 @@ describe('WorkLouderCodexLightingController', () => {
     });
   });
 
-  it('keeps legacy six-slot fallback but treats thirteen configured nulls as new-task', async () => {
+  it('keeps legacy fallback and only marks configured override slots explicit', async () => {
     const hidRef: { current: ((event: { key: string; act: number }) => void) | null } = {
       current: null,
     };
@@ -1612,13 +1612,17 @@ describe('WorkLouderCodexLightingController', () => {
     };
     const activateSession = vi.fn();
     const dispatch = vi.fn();
-    const catalog = Array.from({ length: 7 }, (_, index) => ({
+    const catalog = Array.from({ length: 13 }, (_, index) => ({
       id: `task-${index}`,
       title: `Task ${index}`,
       pinned: false,
     }));
-    const layout = createWorkLouderCodexDefaultSettings().layout;
-    layout.taskKeys = ['AG00', 'AG01', 'AG02', 'AG03', 'AG04', 'AG05', 'ACT06'];
+    const layout = {
+      ...createWorkLouderCodexDefaultSettings().layout,
+      separateMicrophoneKeys: true,
+      merges: [],
+      taskKeys: [...WORKLOUDER_CREATOR_PROGRAMMABLE_KEYS],
+    };
     const controller = new WorkLouderCodexLightingController(
       sink,
       activateSession,
@@ -1653,12 +1657,17 @@ describe('WorkLouderCodexLightingController', () => {
       settingsStoreTesting.normalize({
         agentSource: 'custom',
         customAgentKeys: Array.from({ length: 13 }, () => null),
-        customAgentKeysConfiguredCount: 13,
+        customAgentKeysConfiguredSlots: [0, 1, 2, 3, 4, 5, 12],
         deviceEnabled: true,
         layout,
       }),
     );
     hidRef.current?.({ key: 'AG06', act: 1 });
+    expect(activateSession).toHaveBeenCalledWith('task-6', true);
+
+    activateSession.mockClear();
+    dispatch.mockClear();
+    hidRef.current?.({ key: 'AG12', act: 1 });
     expect(activateSession).not.toHaveBeenCalled();
     expect(dispatch).toHaveBeenCalledWith({ type: 'command', commandId: 'newTask' });
   });
@@ -1727,5 +1736,65 @@ describe('WorkLouderCodexLightingController', () => {
     expect(
       after?.threads.slice(6).every((thread: { brightness: number }) => thread.brightness === 0),
     ).toBe(true);
+  });
+
+  it('clears a dropped Creator task thread when the layout shrinks from six to five keys', async () => {
+    const stateRef: { current: ((device: WorkLouderCodexDeviceState) => void) | null } = {
+      current: null,
+    };
+    const sink = {
+      update: vi.fn(),
+      setAgentKeyPressHandler: vi.fn(),
+      setDeviceActivityHandler: vi.fn(),
+      setConnectionStatusHandler: vi.fn(),
+      setDeviceStateHandler: vi.fn((handler: typeof stateRef.current) => {
+        stateRef.current = handler;
+      }),
+      setHidInputHandler: vi.fn(),
+      rebindCreatorKeymap: vi.fn(),
+      dispose: vi.fn(async () => undefined),
+    };
+    const options = Array.from({ length: 6 }, (_, index) => ({
+      id: `task-${index}`,
+      title: `Task ${index}`,
+      pinned: false,
+    }));
+    const controller = new WorkLouderCodexLightingController(sink, vi.fn(), async () => ({
+      sidebar: options,
+      lastSent: options,
+      options,
+    }));
+    const six = settings({
+      ...createWorkLouderCodexDefaultSettings('creator-micro-2'),
+      agentSource: 'sidebar',
+      deviceEnabled: true,
+    });
+    controller.applySettings(six);
+    controller.start();
+    stateRef.current?.({
+      deviceType: 'creator-micro-2',
+      isUsbConnection: true,
+      firmwareVersion: null,
+      batteryPercentage: null,
+      isCharging: false,
+      inputMonitoringPermission: 'granted',
+    });
+    await controller.resumeTaskSlots();
+    controller.updateSessionActivity([
+      { sessionId: 'task-5', phase: 'running', compactDetail: '', attention: false },
+    ]);
+    const before = sink.update.mock.lastCall?.[0];
+    expect(before?.threads[5]?.brightness).toBeGreaterThan(0);
+
+    controller.applySettings({
+      ...six,
+      layout: {
+        ...six.layout,
+        taskKeys: ['AG00', 'AG01', 'AG02', 'AG03', 'AG04'],
+      },
+    });
+    const after = sink.update.mock.lastCall?.[0];
+    expect(after?.threads).toHaveLength(13);
+    expect(after?.threads[5]?.brightness).toBe(0);
   });
 });
