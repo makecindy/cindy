@@ -451,6 +451,30 @@ describe("sanitizeGeminiToolParameters", () => {
         expect(sanitized.items).toBeUndefined();
         expect(countSchemaNodes(out)).toBe(1_024);
     });
+    test("drops empty-string enum values Gemini rejects (issue #8784)", () => {
+        const out = sanitizeGeminiToolParameters({
+            type: "object",
+            properties: {
+                modelOverride: {
+                    type: "object",
+                    properties: {
+                        effort: {
+                            type: "string",
+                            enum: ["", "minimal", "low", "medium", "high", "xhigh", "max", "ultra"],
+                        },
+                    },
+                },
+                onlyEmpty: { type: "string", enum: [""] },
+                emptyConst: { const: "" },
+            },
+        });
+        const props = out.properties;
+        expect(props.modelOverride.properties.effort.enum).toEqual([
+            "minimal", "low", "medium", "high", "xhigh", "max", "ultra",
+        ]);
+        expect(props.onlyEmpty.enum).toBeUndefined();
+        expect(props.emptyConst.enum).toBeUndefined();
+    });
     test("falls back to an object schema for non-object input", () => {
         expect(sanitizeGeminiToolParameters(undefined)).toEqual({ type: "object", properties: {} });
         expect(sanitizeGeminiToolParameters("nope")).toEqual({ type: "object", properties: {} });

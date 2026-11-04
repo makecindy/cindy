@@ -87,7 +87,11 @@ function normalizeType(value: unknown, out: Schema, preserveNullType: boolean): 
 
 function sanitizeEnum(value: unknown): string[] | undefined {
   if (!Array.isArray(value)) return undefined;
-  const values = [...new Set(value.filter((item): item is string => typeof item === "string"))];
+  // Gemini rejects empty enum values outright (400 INVALID_ARGUMENT: "enum[0]:
+  // cannot be empty"), so a "" sentinel for "unset" must never reach the wire.
+  // Dropping it is safe: the fields that carry it are optional, and omitting
+  // the field expresses the same "unset" the empty string encoded.
+  const values = [...new Set(value.filter((item): item is string => typeof item === "string" && item.length > 0))];
   return values.length > 0 ? values : undefined;
 }
 
