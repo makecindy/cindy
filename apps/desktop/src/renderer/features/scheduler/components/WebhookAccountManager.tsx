@@ -162,7 +162,11 @@ function AccountManager({ onChanged, allowOpenSchedule = true }: Props) {
                     <div className="mt-1 flex items-start gap-2">
                       <code className="min-w-0 flex-1 break-all leading-relaxed">{endpoint.url}</code>
                       <Button size="sm" variant="secondary" tone="quiet" compact aria-label={t('scheduler.webhook.copy')} onClick={() => {
-                        void navigator.clipboard.writeText(endpoint.url).then(() => setNotice(t(`${K}.copied`)), () => setNotice(t(`${K}.copyFailed`)));
+                        const label = t('scheduler.webhook.url');
+                        void navigator.clipboard.writeText(endpoint.url).then(
+                          () => setNotice(t('scheduler.webhook.copied', { label })),
+                          () => setNotice(t('scheduler.webhook.copyFailed', { label })),
+                        );
                       }}>{t('scheduler.webhook.copy')}</Button>
                     </div>
                   </details>}

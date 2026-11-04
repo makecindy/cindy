@@ -56,7 +56,10 @@ function CopyableValue({ value, label }: { value: string; label: string }) {
         size="sm"
         compact
         aria-label={`${t('scheduler.webhook.copy')} ${label}`}
-        onClick={() => void navigator.clipboard.writeText(value)}
+        onClick={() => void navigator.clipboard.writeText(value).then(
+          () => toast.success(t('scheduler.webhook.copied', { label })),
+          () => toast.error(t('scheduler.webhook.copyFailed', { label })),
+        )}
       >
         <Copy size={14} strokeWidth={2} aria-hidden />
         {t('scheduler.webhook.copy')}
@@ -315,6 +318,16 @@ export function WebhookTriggerPanel({ schedule }: { schedule: Schedule }) {
                   <CopyableValue value={status.url} label={t('scheduler.webhook.url')} />
                 )}
                 <p>{t('scheduler.webhook.addressHint', { sender: senderName })}</p>
+                {!local && (
+                  <Button
+                    variant="secondary"
+                    size="sm"
+                    disabled={busy}
+                    onClick={() => void rotateUrl()}
+                  >
+                    {t('scheduler.webhook.rotateUrl')}
+                  </Button>
+                )}
               </div>
               {secretFrom !== null && (
                 <div className="space-y-2">
@@ -401,8 +414,8 @@ export function WebhookTriggerPanel({ schedule }: { schedule: Schedule }) {
                   </span>
                 ) : null}
               </div>
-              <div className="flex flex-wrap gap-2">
-                {canGenerate && hasSecret && (
+              {canGenerate && hasSecret && (
+                <div className="flex flex-wrap gap-2">
                   <Button
                     variant="secondary"
                     size="sm"
@@ -411,18 +424,8 @@ export function WebhookTriggerPanel({ schedule }: { schedule: Schedule }) {
                   >
                     {t('scheduler.webhook.rotateSecret')}
                   </Button>
-                )}
-                {!local && (
-                  <Button
-                    variant="secondary"
-                    size="sm"
-                    disabled={busy}
-                    onClick={() => void rotateUrl()}
-                  >
-                    {t('scheduler.webhook.rotateUrl')}
-                  </Button>
-                )}
-              </div>
+                </div>
+              )}
             </>
           )}
           <div className="border-t border-[var(--border-default)] pt-3">

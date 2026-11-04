@@ -1,18 +1,14 @@
 import assert from 'node:assert/strict';
 
-const models = [{ id: 'fixture-model', displayName: 'Fixture model', efforts: ['medium'] }];
-const providers = [{ id: 'fixture', name: 'Fixture', connected: true, agents: ['codex'],
-  routing: { codex: {} }, models: { codex: models } }];
-
 export default {
   name: 'scheduler-trigger', entry: './trigger-fixture.tsx', viewport: { width: 1100, height: 900 },
   real: 'ScheduleFormDialog, form state, Webhook fields, Collapse, segmented controls, dialog positioning and theme',
   notCovered: 'Fixture catalogs/account; model and project picker buttons are placeholders. No server writes.',
   stubs: {
     'src/renderer/contexts/AuthContext': 'export const useOptionalDataOwnerGeneration = () => 0;',
-    'src/renderer/hooks/useAgentCapabilities': `export const getCachedCapabilities = () => null; const capabilities = { availableModels: ${JSON.stringify(models)} }; export const useAgentCapabilities = () => ({capabilities, loading: false});`,
-    'src/renderer/hooks/useProviders': `const providers = ${JSON.stringify(providers)}; export const useProviders = () => ({providers, loading: false});`,
-    'src/renderer/hooks/useDeviceProviders': `const providers = ${JSON.stringify(providers)}; export const useDeviceProviders = () => ({providers, loading: false});`,
+    'src/renderer/hooks/useAgentCapabilities': './catalog-hooks.ts',
+    'src/renderer/hooks/useProviders': './catalog-hooks.ts',
+    'src/renderer/hooks/useDeviceProviders': './catalog-hooks.ts',
     'src/renderer/hooks/useFeishuBot': 'export const useFeishuBot = () => ({status: "disconnected"});',
     'src/renderer/hooks/useWecomGroupNotificationSettings': 'export const useWecomGroupNotificationSettings = () => ({});',
     'src/renderer/hooks/useProjectPickerOptions': 'export const useProjectPickerOptions = () => [];',

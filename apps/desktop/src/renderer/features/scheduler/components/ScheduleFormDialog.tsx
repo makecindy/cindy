@@ -258,7 +258,7 @@ export function ScheduleFormDialog({
   const setPreRunPluginId = useCallback((pluginId: string) => setField('preRunPluginId', pluginId), [setField]);
   const submitLabel = isEdit
     ? t('scheduler.editor.promptDialog.save')
-    : t(form.webhookEnabled ? 'scheduler.editor.webhook.createAndConnect' : 'scheduler.editor.promptDialog.create');
+    : t('scheduler.editor.promptDialog.create');
   // UI 三选一；manual 仅表示不启用定时，已有组合配置在未切换触发方式时原样保留。
   const triggerMode = form.webhookEnabled ? 'webhook' : form.manual ? 'manually' : 'automatic';
   const webhookSettingsVisible = !isProjectAutomationMode && webhookReceiverReady && form.webhookEnabled;
