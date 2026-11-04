@@ -20834,21 +20834,8 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         // sendToAgent 同步触发的新 attempt（即使 runId 相同）不会被旧派发清掉。
         clearSchedulerAutoResumePending(sessionId, item.origin.runId, attemptToken);
       }
-      // 「继续任务」只能在 vendor dispatch 不可逆后 durable ack：
-      // - enqueue 时 ack：排队可取消，旧中断横幅回不来；
-      // - onAccepted 时 ack：仍可能 cancelled-before-dispatch，且无新 started，
-      //   旧横幅被抹掉、隐藏续跑行也不可操作，任务会静默丢失。
-      // dispatch 返回前 agent 事件可能已经写入新 started；因此 durable ack 使用
-      // 进入 vendor 前冻结的时间戳，既确认旧中断，又不会盖过新 turn 的 started。
-      if (item.originalSyntheticTrigger !== 'continue') return;
-      try {
-        await ackSessionTurnEndedDurable(sessionId, preVendorDispatchAt);
-      } catch (err) {
-        log.warn('continue dispatched ack failed', {
-          sessionId,
-          err: err instanceof Error ? err.message : String(err),
-        });
-      }
+      // 旧中断的 durable ack 统一由 makerSendTransaction 在真正派发后处理，
+      // 普通消息和「继续任务」共用同一路径；这里不再重复确认。
     },
     noteSessionClearBoundary,
     // 复用真人活跃边界：队首 Retry / Continue 和新输入尚未落库时也开始新限额周期。
@@ -22096,7 +22083,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
           sendTrace?.stage('dedupe');
         }
 
-        // 「继续任务」durable ack 延后到 vendor dispatch 成功（onDispatchedUserTurn）：
+        // 「继续任务」durable ack 延后到共享发送事务的 vendor dispatch 成功后：
         // 排队可取消时旧中断提示必须能恢复；accepted 但仍可能 cancelled-before-dispatch
         // 时也不能提前 ack。续跑项本身由 coordinator 插到队首（普通输入仍 FIFO）。
         let duplicate = false;
