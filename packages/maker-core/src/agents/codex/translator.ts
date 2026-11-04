@@ -464,7 +464,28 @@ export function translateItemNotification(
     SAMPLING_ACCEPTED_TOOL_TYPES.has(itemType)) {
     // Tool results prove earlier generation was accepted. Its commentary and
     // side effects must not be invalidated by a later sampling request failing.
-    ctx.rt.samplingSegments.delete(JSON.stringify([notification.threadId, notification.turnId]));
+    const key = JSON.stringify([notification.threadId, notification.turnId]);
+    const accepted = ctx.rt.samplingSegments.get(key);
+    if (accepted?.itemIds.size) {
+      // Extend an existing result, rather than sending an extra status frame:
+      // older clients interpret a status without isRunning as an idle boundary.
+      const target = queue;
+      const agentMessageIds = [...accepted.itemIds];
+      let attached = false;
+      queue = {
+        ...target,
+        get pending() { return target.pending; },
+        push(event) {
+          if (!attached && (event.type === 'tool_result_full' || event.type === 'tool_result')) {
+            attached = true;
+            return target.push({ ...event, data: { ...(event.data as Record<string, unknown>),
+              assistantSamplingAccepted: { agentMessageIds } } });
+          }
+          return target.push(event);
+        },
+      };
+    }
+    ctx.rt.samplingSegments.delete(key);
   }
   noteCodexGenerationBoundary(
     ctx.rt,

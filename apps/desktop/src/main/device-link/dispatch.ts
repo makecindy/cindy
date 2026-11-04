@@ -1137,6 +1137,12 @@ function connectionOf(client: DeviceLinkClient, peer: string): DeviceLinkClient 
   return client.connectionFor?.(peer) ?? client;
 }
 
+/** Data only: an existing authenticated direct path can outlive its signaling socket. */
+function canUsePeerDataPath(client: DeviceLinkClient, peer: string): boolean {
+  return connectionOf(client, peer).getStatus() === 'online'
+    || client.hasOfflineDirectPath?.(peer) === true;
+}
+
 function readConnectionEpoch(client: DeviceLinkClient): number | undefined {
   const candidate = client as DeviceLinkClient & {
     getConnectionEpoch?: () => number;
@@ -1287,7 +1293,7 @@ const SESSION_ACTIVITY_DRAIN_RETRY_MS = 250;
 const SESSION_ACTIVITY_WINDOW_SOFT_CAP = Math.floor(MAX_TRANSPORT_REASSEMBLIES / 2);
 
 function canSendSessionState(dst: string): boolean {
-  return !!activeClient && connectionOf(activeClient, dst).getStatus() === 'online'
+  return !!activeClient && canUsePeerDataPath(activeClient, dst)
     && activeClient.canSendPush?.(dst) !== false
     && activeClient.getReliableSendQueueDepth(dst) < SESSION_ACTIVITY_WINDOW_SOFT_CAP;
 }
@@ -1430,7 +1436,7 @@ function stageSessionSync(dst: string, sessionId: string, historyRequired = true
   }
   stage.timer = setTimeout(() => {
     stage.timer = null;
-    if (!activeClient || connectionOf(activeClient, dst).getStatus() !== 'online'
+    if (!activeClient || !canUsePeerDataPath(activeClient, dst)
       || !makerEventBatchOwnerStampEquals(stage.ownerStamp, broadcastTap.getSafeDataOwnerPushStamp?.())) {
       clearSessionSyncStage(dst);
       return;
@@ -1768,7 +1774,7 @@ function flushMakerEventBatchSession(
       const payload: MakerEventBatchPayload = { sessionId, events: slice };
       const historyRequired = !slice.every(isNonFinalTextPush);
       try {
-        if (!activeClient || connectionOf(activeClient, dst).getStatus() !== 'online') {
+        if (!activeClient || !canUsePeerDataPath(activeClient, dst)) {
           throw new DeviceLinkError('NOT_CONNECTED', 'relay offline');
         }
         if (
@@ -1964,7 +1970,7 @@ async function drainSessionActivityStage(dst: string, stage: SessionActivityStag
     // 收尾包会永久卡在内存里不再投递(远端列表行挂死在旧状态)。定时器成本
     // 有界:每控制端至多一个 250ms 定时器,且控制端真正离线时
     // handleControllerOffline 会清空暂存、终止重试。
-    if (connectionOf(activeClient, dst).getStatus() !== 'online' || activeClient.canSendPush?.(dst) === false) {
+    if (!canUsePeerDataPath(activeClient, dst) || activeClient.canSendPush?.(dst) === false) {
       scheduleSessionActivityRetry(dst, stage);
       return;
     }
@@ -2174,9 +2180,10 @@ function forwardPush(channel: string, payload: unknown, ownerStamp?: PushOwnerSt
   // acquire one (that changes control intent). Send only empty invalidations
   // over their already-accepted same-account link; no payload or new link.
   if ((channel === 'maker:provider:changed' || channel === 'maker:agents:changed')
-    && activeClient.getStatus() === 'online' && readDeviceLinkSettings().remoteControlEnabled) {
+    && readDeviceLinkSettings().remoteControlEnabled) {
     for (const dst of acceptedLinkControllers) {
       if (dsts.includes(dst) || isProviderSharePeer(dst) || isSharedTaskPeer(dst)
+        || !canUsePeerDataPath(activeClient, dst)
         || isControllerRevoked(dst)
         || !subscriptions.controllerSupports(dst, DEVICE_LINK_CAPABILITY_BACKGROUND_LINK_V1)) continue;
       sendPushBestEffort(dst, channel, {}, ownerStamp);
@@ -2186,7 +2193,7 @@ function forwardPush(channel: string, payload: unknown, ownerStamp?: PushOwnerSt
   // currently write to the relay. During host-side reconnects sendPush is a
   // silent no-op, so route queueable pushes through the offline backlog instead.
   const pushClient = activeClient;
-  const liveTargets = dsts.filter((dst) => connectionOf(pushClient, dst).getStatus() === 'online');
+  const liveTargets = dsts.filter((dst) => canUsePeerDataPath(pushClient, dst));
   // 微批只对声明了能力的控制端启用;只在 maker:event 这一条 channel 上查询,
   // 不给其它 channel 增加每帧 capability 查询开销。
   const batchTargets = channel === MAKER_PUSH.EVENT && liveTargets.length > 0
@@ -2617,6 +2624,7 @@ export function deactivateController(
 export function deactivateAllControllers(
   reason: string,
   scope: 'all' | 'same-account' | 'cross-account' = 'all',
+  keep?: (deviceId: string) => boolean,
 ): void {
   if (scope !== 'cross-account') {
     stopFilePeers();
@@ -2632,6 +2640,7 @@ export function deactivateAllControllers(
   ].filter((deviceId) => scope === 'all' || isScopedPeer(deviceId) === (scope === 'cross-account')));
   let changed = false;
   for (const deviceId of controllerIds) {
+    if (keep?.(deviceId)) continue;
     changed = deactivateControllerState(deviceId, undefined, undefined, true) || changed;
   }
   if (changed) {
@@ -3795,7 +3804,7 @@ function flushRemoteInvokeResultOutbox(onlySrc?: string): void {
       continue;
     }
     // 离线轮只做上面的 TTL 出清:trySend 必然 NOT_CONNECTED,不空转、不刷日志。
-    if (connectionOf(client, queued.src).getStatus() !== 'online') continue;
+    if (!canUsePeerDataPath(client, queued.src)) continue;
     if (blockedPeers.has(queued.src)) continue;
     // presence 已明确宣告该控制端离线、且它当下也没有 accepted link:全量轮跳过盲发
     // (每 500ms 一帧必弹 DEVICE_OFFLINE,只喂 relay 聚合背压),条目保留、TTL 照常。

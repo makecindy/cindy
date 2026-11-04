@@ -25,7 +25,8 @@ import { setRemoteAgentHandler } from '../../device-link/dispatch.js';
 import { getSelfDeviceId, remoteBackgroundInvoke } from '../../device-link/index.js';
 import { getProviderShareHostLoadedSnapshot, onProviderShareHostChanged, ownedProviderShareGuestAccess, providerShareGuestAccess, verifyProviderShareMemberGeneration } from '../../device-link/providerShareHost.js';
 import { applyProviderShareDelegation, clearProviderShareDelegations, delegatedProviderShareGuestAccess, delegatedProviderShareLeases, delegatedProviderShareModelAllowed, delegatedProviderShareReceiptAuthority, delegatedProviderShareSessionAllowed, delegatedProviderShareTaskAccess, invalidateProviderShareDelegation, revokeDelegatedProviderShareGuest } from '../../device-link/providerShareDelegatedAccess.js';
-import { checkProviderShareDelegation, grantProviderShareDelegation, providerShareOwnerKey, revokeProviderShareDelegation } from '../../device-link/providerShareApi.js';
+import { checkProviderShareDelegation, clearProviderShareDelegationChecks, grantProviderShareDelegation, providerShareOwnerKey, revokeProviderShareDelegation } from '../../device-link/providerShareApi.js';
+import { startProviderShareDelegationRechecks } from '../../device-link/providerShareDelegationChecks.js';
 import { remoteModelAccess } from '../../device-link/remoteModelAccess.js';
 import { handleProviderShareReshare, providerShareReshareAllows } from '../../device-link/providerShareReshare.js';
 import { createProviderGroupGuestRelay } from '../../provider-group/guestRelay.js';
@@ -131,7 +132,7 @@ let stopDirectModelWatch: (() => void) | undefined;
 let stopDirectGroupWatch: (() => void) | undefined;
 let stopDirectSettingsWatch: (() => void) | undefined;
 let directRouteSweep: ReturnType<typeof setInterval> | undefined;
-let delegationCheckTimer: ReturnType<typeof setInterval> | undefined;
+let stopDelegationChecks: (() => void) | undefined;
 
 /** M's per-task delegated lease takes precedence over any other task's lease. */
 function guestAccessForTask(controller: string, sessionId?: string) {
@@ -287,40 +288,17 @@ export function installRemoteAgentHost(options: {
     now: () => Date.now(),
     log,
   });
-  let checkingDelegations = false;
-  delegationCheckTimer = setInterval(() => {
-    if (checkingDelegations) return;
-    checkingDelegations = true;
-    const byPeer = new Map<string, ReturnType<typeof delegatedProviderShareLeases>>();
-    for (const item of delegatedProviderShareLeases()) {
-      const list = byPeer.get(item.peer) ?? [];
-      list.push(item);
-      byPeer.set(item.peer, list);
-    }
-    const groups = [...byPeer.values()];
-    let next = 0;
-    void Promise.all(Array.from({ length: Math.min(8, groups.length) }, async () => {
-      while (next < groups.length) {
-        const items = groups[next++];
-        const first = items[0];
-        const peer = parseProviderSharePeer(first.peer);
-        const deviceId = getSelfDeviceId();
-        if (peer?.role !== 'guest' || !deviceId) continue;
-        try {
-          const confirmed = await checkProviderShareDelegation({
-            shareId: peer.shareId, memberId: peer.memberId, guestDeviceId: peer.deviceId,
-            executorDeviceId: deviceId,
-          });
-          for (const item of items) if (!confirmed.active || confirmed.ownerDeviceId !== item.lease.ownerDeviceId) {
-            invalidateProviderShareDelegation(item.peer, item.sessionId, item.lease.nonce);
-          }
-        } catch {
-          // An unavailable server cannot extend a lease; its original deadline still applies.
-        }
-      }
-    })).finally(() => { checkingDelegations = false; });
-  }, 60_000);
-  (delegationCheckTimer as { unref?: () => void }).unref?.();
+  stopDelegationChecks = startProviderShareDelegationRechecks({
+    leases: delegatedProviderShareLeases,
+    async check(first) {
+      const peer = parseProviderSharePeer(first.peer);
+      const deviceId = getSelfDeviceId();
+      if (peer?.role !== 'guest' || !deviceId) throw new Error('Provider share executor is unavailable');
+      return checkProviderShareDelegation({ shareId: peer.shareId, memberId: peer.memberId,
+        guestDeviceId: peer.deviceId, executorDeviceId: deviceId }, first.lease.generation);
+    },
+    invalidate: item => invalidateProviderShareDelegation(item.peer, item.sessionId, item.lease.nonce),
+  });
   const directRoutes = new Map<string, {
     shareId: string; memberId: string; guestDeviceId: string; executorDeviceId: string;
     providerId: string; groupProviderId: string; memberKey: string; agentKind: string;
@@ -1491,8 +1469,9 @@ export function resolveRemoteAgentHostClaudeSessionId(sdkSessionId: string): str
 
 /** 退出时结束全部远程 Agent 任务。 */
 export function disposeRemoteAgentHost(): void {
-  if (delegationCheckTimer) clearInterval(delegationCheckTimer);
-  delegationCheckTimer = undefined;
+  stopDelegationChecks?.();
+  stopDelegationChecks = undefined;
+  clearProviderShareDelegationChecks();
   if (directRouteSweep) clearInterval(directRouteSweep);
   directRouteSweep = undefined;
   stopDirectRouteWatch?.();
