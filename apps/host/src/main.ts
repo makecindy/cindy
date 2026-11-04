@@ -261,6 +261,10 @@ const server = createHostServer({
   }),
   providers: () => listProviders({ gateway: gatewayCredentials, ownerId: runtime.owner }),
   // The agent's own capability descriptor; no second catalog is invented here.
+  // Gateway credential state, reported from the same facts the runtime uses.
+  modelAccess: () => (gatewayCredentials
+    ? { state: 'ready', source: 'server', endpoint: gatewayCredentials.endpoint, accountTier: null }
+    : { state: 'idle', source: null, endpoint: null, accountTier: null }),
   capabilities: (agentKind: string) => {
     const capabilities = agentGraph?.capabilitiesByAgent?.[agentKind];
     if (!capabilities) throw new Error(`Agent '${agentKind}' is not registered`);

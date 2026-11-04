@@ -79,6 +79,28 @@
       return { accepted: true };
     },
     'maker.listProviders': () => rpc('/providers'),
+    'modelAccess.getStatus': () => rpc('/model-access'),
+    'modelAccess.retry': () => rpc('/model-access'),
+    // The host has no provider-sharing service: report "not ready" in the real
+    // shapes instead of fabricating shares.
+    'providerShare.command': (args) => {
+      const action = args?.[0]?.action ?? '';
+      switch (action) {
+        case 'owned':
+          return { ready: false, shares: [] };
+        case 'received':
+          return [];
+        case 'shared-provider-ids':
+          return { ready: false, providerIds: [] };
+        case 'get-run-limits':
+          return { limits: null, ready: false };
+        default: {
+          const error = new Error(`provider sharing is not available on cindy-host yet (${action})`);
+          error.code = 'HOST_CHANNEL_UNSUPPORTED';
+          return Promise.reject(error);
+        }
+      }
+    },
     'maker.getCapabilities': (args) => {
       window.__cindyCapsCalls = window.__cindyCapsCalls ?? [];
       window.__cindyCapsCalls.push(args?.[0] ?? null);
@@ -179,6 +201,7 @@
   function unsupported(path) {
     const error = new Error(`host channel not implemented: ${path}`);
     error.code = 'HOST_CHANNEL_UNSUPPORTED';
+    (window.__cindyRpcFailures ??= []).push({ path, error: 'unsupported' });
     return Promise.reject(error);
   }
 
@@ -203,7 +226,14 @@
       window.__cindyCalls?.push(path);
       const handler = routes[path];
       if (!handler) return unsupported(path);
-      const value = handler(args);
+      let value;
+      try {
+        value = handler(args);
+        (window.__cindyRpc ??= []).push({ path, ok: true });
+      } catch (error) {
+        (window.__cindyRpcFailures ??= []).push({ path, error: String(error && error.message ? error.message : error) });
+        throw error;
+      }
       // Mirror the preload: sync channels return values, the rest are promises.
       return SYNC_CHANNEL.test(path) ? value : Promise.resolve(value);
     };

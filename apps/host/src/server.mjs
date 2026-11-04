@@ -110,6 +110,7 @@ export function createHostServer(deps) {
         }
         if (url.pathname === '/api/plugins/list') { send(response, 200, deps.listPlugins()); return; }
         if (url.pathname === '/api/providers') { send(response, 200, await deps.providers()); return; }
+        if (url.pathname === '/api/model-access') { send(response, 200, deps.modelAccess()); return; }
         if (url.pathname === '/api/capabilities') {
           try {
             send(response, 200, deps.capabilities(String(body.agentKind ?? '')));
