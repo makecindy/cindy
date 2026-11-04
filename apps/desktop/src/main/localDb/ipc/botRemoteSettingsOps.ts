@@ -135,12 +135,20 @@ export function projectBotSettingsProfile(raw: unknown): Record<string, unknown>
 }
 
 /** Whitelist of what an autosave may write; raising permissions stays in the confirmed generic form. */
-export function readBotSettingsPatch(value: unknown): Record<string, unknown> {
+export function readBotSettingsPatch(value: unknown, allowEmpty = false): Record<string, unknown> {
   const patch = record(value, 'patch');
   keysWithin(patch, BOT_SETTINGS_PATCH_FIELDS, 'patch');
-  if (patch.capabilities !== undefined) keysWithin(record(patch.capabilities, 'capabilities'), BOT_SETTINGS_CAPABILITY_FIELDS, 'capabilities');
+  if (patch.capabilities !== undefined) {
+    const capabilities = record(patch.capabilities, 'capabilities');
+    keysWithin(capabilities, BOT_SETTINGS_CAPABILITY_FIELDS, 'capabilities');
+    const location = capabilities.agentDeviceId;
+    if (location !== undefined && location !== null
+      && (typeof location !== 'string' || !/^[A-Za-z0-9_.:-]{1,128}$/.test(location))) {
+      fail('Invalid model execution location');
+    }
+  }
   if (patch.capabilityBaseline !== undefined) record(patch.capabilityBaseline, 'capabilityBaseline');
-  if (!Object.keys(patch).length) fail('patch is empty');
+  if (!allowEmpty && !Object.keys(patch).length) fail('patch is empty');
   return patch;
 }
 
@@ -189,6 +197,14 @@ export function createBotRemoteSettingsOps(deps: BotSettingsOpsDeps): Partial<Re
       const botId = botOf(call);
       const patch = readBotSettingsPatch(call.args.patch);
       return { profile: projectBotSettingsProfile(await deps.updateProfile({ id: botId, ...patch })) };
+    },
+    'profile.acceptModelSelection': async call => {
+      const patch = readBotSettingsPatch(call.args.patch, true);
+      const version = call.args.expectedVersion;
+      if (!Number.isSafeInteger(version) || (version as number) < 1) fail('Invalid profile version');
+      return { profile: projectBotSettingsProfile(await deps.updateProfile({
+        id: botOf(call), ...patch, acceptSavedModelSelectionVersion: version,
+      })) };
     },
     'profile.chooseAvatar': async call => ({
       profile: projectBotSettingsProfile(await deps.setAvatar(botOf(call), text(call.args.avatarImageBase64, 'avatarImageBase64', 80_000))),

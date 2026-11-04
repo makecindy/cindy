@@ -12,8 +12,9 @@
  *
  * 判定顺序（从最窄到最宽）：
  *   1. READ_ONLY_MCP_TOOLS —— 精确到工具的只读发现入口，server 未整体可信也放行
- *   2. 第一方插件 ghost_call —— cindy-art 作图/视频、cindy-contacts 只读查询静默；
- *                              cindy-contacts 其它调用逐次审批；其它插件继续走会话审批
+ *   2. 插件 ghost_call    —— 按已装实例的工具声明：`each-call` 逐次审批，用户确认过的
+ *                              `auto` 静默；缺省声明按当前任务审批，不按插件名或来源例外；
+ *                              其余插件调用继续走会话审批
  *   3. 敏感聚合调用（含 browser recipe）—— 每次进入现有会话审批
  *   4. TRUSTED_MCP_SERVERS —— 已 review 的第一方 server，其余调用静默
  *   5. 其余                —— 进入会话审批（第三方 server、cindy_ssh、其它 ghost_call…）
@@ -133,33 +134,51 @@ function readJsonObject(value: unknown): Record<string, unknown> | undefined {
 }
 
 /**
- * 第一方插件可静默执行的内层工具，键为 ghost_id。
- * - cindy-art：作图/改图/视频，风险是额度而非越权，用户点名作图即授权。
- * - cindy-contacts：本机通讯录的只读查询（不写库、不出境），沿用原内置智能通讯录
- *   查人免确认的体验；写入、合并、删除、导入与 groups 的写动作逐次审批（见下方）。
+ * 插件工具的审批事实，由 Main 按真实已装实例解析：调用参数里的 ghost_id / namespace
+ * 只用来定位实例，不作为授权依据。定位不到唯一实例时返回 null，按默认会话审批处理。
  */
-const FIRST_PARTY_GHOST_AUTO_TOOLS: ReadonlyMap<string, ReadonlySet<string>> = new Map([
-  ['cindy-art', new Set(['gen_image', 'edit_image', 'gen_video', 'edit_video'])],
-  ['cindy-contacts', new Set(['find', 'get', 'list', 'stats', 'find_duplicates'])],
-]);
+export interface GhostToolApprovalFacts {
+  /** 该工具的有效声明：`auto` 只在 receipt 批准过时返回；`each-call` 只收紧，无需批准。 */
+  declared: 'auto' | 'each-call' | null;
+}
+
+export type GhostToolApprovalResolver = (target: {
+  ghostId: string;
+  namespace?: string | null;
+  tool: string;
+}) => GhostToolApprovalFacts | null;
+
+let ghostToolApprovalResolver: GhostToolApprovalResolver | null = null;
+
+/** Main 启动时注册（cindy-brain `registerGhostIpc`）；未注册时插件调用一律按会话审批。 */
+export function setGhostToolApprovalResolver(resolver: GhostToolApprovalResolver | null): void {
+  ghostToolApprovalResolver = resolver;
+}
 
 /**
- * ghost_call 是聚合入口：上表的第一方内层工具静默，Auto-review 下再弹卡会把常规作图、
- * 查人变成手动授权。cindy-contacts 的其它调用（写入、合并、删除、导入）逐次审批，
- * 不允许一次「本会话允许」覆盖后续危险操作——与原内置通讯录的审批保证一致。
- * 读不出 ghost_id / tool 时返回 null，按默认策略处理，其它插件不受影响。
+ * ghost_call 是聚合入口，风险取决于内层工具：声明 `each-call` 的工具不允许一次「本会话
+ * 允许」覆盖后续调用；用户确认过的 `auto` 工具直接执行（Auto-review 下再弹卡会把常规
+ * 操作变成手动授权）。读不出 ghost_id / tool 或解析不到实例时返回 null，按默认策略处理。
  */
-function firstPartyGhostCallPolicy(context: McpToolApprovalContext): McpToolApprovalPolicy | null {
+function ghostCallPolicy(context: McpToolApprovalContext): McpToolApprovalPolicy | null {
   if (context.serverName !== 'cindy') return null;
   if (context.toolName !== 'ghost_call' && context.toolName !== undefined) return null;
   const params = readJsonObject(context.toolParams);
   if (!params) return null;
   const ghostId = typeof params.ghost_id === 'string' ? params.ghost_id.trim() : '';
   const tool = typeof params.tool === 'string' ? params.tool.trim() : '';
-  if (FIRST_PARTY_GHOST_AUTO_TOOLS.get(ghostId)?.has(tool)) return 'auto-approve';
-  if (ghostId !== 'cindy-contacts') return null;
-  if (tool === 'groups' && readJsonObject(params.args)?.action === 'list') return 'auto-approve';
-  return 'prompt-each-time';
+  if (!ghostId || !tool) return null;
+  const namespace = params.namespace === null || typeof params.namespace === 'string' ? params.namespace : undefined;
+  let facts: GhostToolApprovalFacts | null = null;
+  try {
+    facts = ghostToolApprovalResolver?.({ ghostId, namespace, tool }) ?? null;
+  } catch {
+    facts = null;
+  }
+  if (!facts) return null;
+  if (facts.declared === 'each-call') return 'prompt-each-time';
+  if (facts.declared === 'auto') return 'auto-approve';
+  return null;
 }
 
 /** cindy_scheduler 里接受 `device` 的写工具（与 packages/lizi-mcps/src/scheduler 的 writeDeviceShape 一致）。 */
@@ -242,7 +261,7 @@ export function getDesktopMcpToolApprovalPolicy(
   // sources/preview/start share one native tool identity. Never persist a grant
   // from discovery that could bypass the policy callback for a later import.
   if (serverName === 'companion_import') return 'prompt-each-time';
-  const ghostPolicy = firstPartyGhostCallPolicy(context);
+  const ghostPolicy = ghostCallPolicy(context);
   if (ghostPolicy) return ghostPolicy;
   // Rebinding a task's workspace delegates its execution root; publishing a Skill
   // uploads local files under the signed-in account. Review each action instead
@@ -268,7 +287,11 @@ export function getDesktopMcpToolApprovalPolicy(
     if (action === 'schedule_set_pre_run_hook' || (action === 'routine_save' && args?.preRunHook != null)) {
       return 'prompt-each-time';
     }
-    if (action === 'move_session' || action === 'publish_skill') return 'prompt-each-time';
+    // Creating a task worktree adds a branch and directory to the repository and binds them
+    // to the task, like `git worktree add`; the task's permission mode decides.
+    if (action === 'move_session' || action === 'publish_skill' || action === 'create_task_worktree') {
+      return 'prompt-each-time';
+    }
     // Moving a teammate hands its running to another computer: the task's permission mode decides.
     if (action === 'manage_session_prs' && args?.action !== 'list') return 'prompt-each-time';
     if (action === 'move_teammate_home') return 'prompt-each-time';

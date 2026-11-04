@@ -1,3 +1,4 @@
+import { useAppSettingsRevision } from '@/hooks/useAppSettingsRevision';
 /** Settings -> Personalization: Claude Code default Subagent model + Codex smart routing. */
 
 import { useCallback, useEffect, useRef, useState } from 'react';
@@ -39,6 +40,7 @@ function defaultsPatchFor(
 }
 
 export function SubagentModelSection() {
+  const settingsRevision = useAppSettingsRevision('subagent-models');
   const { t } = useTranslation();
   const navigate = useNavigate();
   const { providers, loading: providersLoading } = useProviders();
@@ -59,7 +61,7 @@ export function SubagentModelSection() {
     return () => {
       disposed = true;
     };
-  }, []);
+  }, [settingsRevision]);
 
   const persistPatch = useCallback(
     async (
@@ -177,6 +179,7 @@ export function SubagentModelSection() {
           <div className="flex min-w-0 flex-1 items-center gap-2">
             <div className="min-w-0 flex-1">
               <ModelSelector
+                localOnlyReason="subagent-in-parent-task"
                 modelId={settings.claudeCode ?? ''}
                 effort=""
                 onModelChange={(modelId) => {

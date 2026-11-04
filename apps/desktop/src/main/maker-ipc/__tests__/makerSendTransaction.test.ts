@@ -498,7 +498,9 @@ describe('maker SEND transaction', () => {
     'does not resume product work when %s wins after message persistence',
     async (reason) => {
       const dispatch = vi.fn();
+      const ackInterruptedTurnDispatched = vi.fn();
       const { deps, session } = createDeps({
+        ackInterruptedTurnDispatched,
         prepareProductTurn: () => dispatch,
         assertBeforeVendorDispatch: () => {
           throw new Error('stale input');
@@ -521,6 +523,7 @@ describe('maker SEND transaction', () => {
       else await expect(sending).resolves.toMatchObject({ accepted: false });
       expect(deps.createDbMessage).toHaveBeenCalledOnce();
       expect(dispatch).not.toHaveBeenCalled();
+      expect(ackInterruptedTurnDispatched).not.toHaveBeenCalled();
     },
   );
   it('dispatches a bound lazy session after one timed-out probe without probing again at bootstrap', async () => {
@@ -753,45 +756,71 @@ describe('maker SEND transaction', () => {
     );
   });
 
-  it('forwards the exact Learn pin to Claude for provider-boundary expansion', async () => {
-    const grant = {
-      version: 1 as const,
-      sessionInstanceId: 'session-instance-1',
-      resolvedSkillPath: '/system-skills/v10/learn/SKILL.md',
-    };
-    const captureCindyLearnInvocation = vi.fn(async () => grant);
-    const claudeSession = createSession({ agentKind: 'claude-code' });
-    const { deps } = createDeps({
-      getSession: vi.fn(() => claudeSession),
-      captureCindyLearnInvocation,
-    });
+  // #8549 (unit): provider dispatch must retain the direct command and pin.
+  // Review found the missing state: a fresh engine-switch handoff preceding
+  // /cindy:learn. Keep it pending until an accepted ordinary message delivers it.
+  const learnDispatchCases = (['claude-code', 'pi'] as const).flatMap((agentKind) =>
+    ['/learn release flow', '/skill:learn release flow', '/cindy:learn'].flatMap((command) =>
+      [false, true].map((hasHandoff) => ({ agentKind, command, hasHandoff })),
+    ),
+  );
+  it.each(learnDispatchCases)(
+    'forwards the exact Learn pin and command: $agentKind $command handoff=$hasHandoff', async ({ agentKind, command, hasHandoff }) => {
+      const grant = {
+        version: 1 as const,
+        sessionInstanceId: 'session-instance-1',
+        resolvedSkillPath: '/system-skills/v10/learn/SKILL.md',
+      };
+      const captureCindyLearnInvocation = vi.fn<NonNullable<MakerSendTransactionDeps['captureCindyLearnInvocation']>>(async () => grant);
+      const learnSession = createSession({ agentKind });
+      let handoff = hasHandoff ? 'HANDOFF-TEXT' : null;
+      const consumePendingHandoff = vi.fn(() => { handoff = null; });
+      const { deps } = createDeps({
+        getSession: vi.fn(() => learnSession),
+        captureCindyLearnInvocation,
+        peekPendingHandoff: vi.fn(async () => handoff),
+        consumePendingHandoff,
+      });
+      const transaction = createMakerSendTransaction(deps);
 
-    await createMakerSendTransaction(deps).sendToAgentAccepted(
-      'session-1',
-      { type: 'user', content: '/learn release flow' },
-      undefined,
-      {
-        persistUserMessage: {
-          clientId: 'claude-learn-1',
-          content: '/learn release flow',
+      await transaction.sendToAgentAccepted(
+        'session-1',
+        { type: 'user', content: command },
+        undefined,
+        {
+          persistUserMessage: {
+            clientId: 'claude-learn-1',
+            content: command,
+          },
         },
-      },
-    );
+      );
 
-    expect(captureCindyLearnInvocation).toHaveBeenCalledTimes(1);
-    const sendOptions = vi.mocked(claudeSession.send).mock.calls[0]?.[1];
-    expect(sendOptions?.[PINNED_SKILL_INVOCATION]).toEqual({
-      name: 'learn',
-      path: grant.resolvedSkillPath,
-    });
-    expect(deps.createDbMessage).toHaveBeenCalledWith(
-      'session-1',
-      expect.objectContaining({
-        agentMeta: expect.objectContaining({ cindyLearnInvocation: grant }),
-      }),
-      undefined,
-    );
-  });
+      expect(captureCindyLearnInvocation).toHaveBeenCalledTimes(1);
+      expect(vi.mocked(learnSession.send).mock.calls[0]?.[0]).toEqual({
+        type: 'user', content: command,
+      });
+      const sendOptions = vi.mocked(learnSession.send).mock.calls[0]?.[1];
+      expect(sendOptions?.[PINNED_SKILL_INVOCATION]).toEqual({
+        name: 'learn',
+        path: grant.resolvedSkillPath,
+      });
+      expect(deps.createDbMessage).toHaveBeenCalledWith(
+        'session-1',
+        expect.objectContaining({
+          agentMeta: expect.objectContaining({ cindyLearnInvocation: grant }),
+        }),
+        undefined,
+      );
+      expect(consumePendingHandoff).not.toHaveBeenCalled();
+
+      captureCindyLearnInvocation.mockResolvedValue(null);
+      await transaction.sendToAgentAccepted('session-1', { type: 'user', content: 'Continue' });
+      expect(vi.mocked(learnSession.send).mock.calls[1]?.[0]).toEqual(
+        withUiLanguageUserMessage(`${hasHandoff ? 'HANDOFF-TEXT\n\n' : ''}Continue`),
+      );
+      expect(consumePendingHandoff).toHaveBeenCalledTimes(hasHandoff ? 1 : 0);
+    },
+  );
 
   it('restamps a trusted local queue edit for the existing Desktop command route', async () => {
     const { deps, session } = createDeps();
@@ -1656,7 +1685,17 @@ describe('maker SEND transaction', () => {
     expect(onUndispatchedDirectUserTurn).toHaveBeenCalledWith('session-1');
   });
 
-  it('acks an interrupted turn with the executor clock only after direct dispatch is accepted', async () => {
+  // Regression: typing a normal continuation after app restart must retire the
+  // old interruption just like the Continue button. The shared send transaction
+  // covers both coordinator queue dispatch and direct/remote sends (unit tier).
+  it.each([
+    { label: 'ordinary direct input', sendOpts: undefined },
+    {
+      label: 'ordinary queued input',
+      sendOpts: { persistUserMessage: { clientId: 'resume-input', content: 'Please continue.' } },
+    },
+    { label: 'legacy Continue input', sendOpts: { ackInterruptedTurnOnDispatch: true } },
+  ])('acks the old interruption only after $label is dispatched', async ({ sendOpts }) => {
     const ackInterruptedTurnDispatched = vi.fn(async () => {});
     const session = createSession({
       send: vi.fn(async () => {
@@ -1673,15 +1712,13 @@ describe('maker SEND transaction', () => {
 
     try {
       await expect(
-        transaction.sendToAgentAccepted('session-1', 'continue', undefined, {
-          ackInterruptedTurnOnDispatch: true,
-        }),
+        transaction.sendToAgentAccepted('session-1', 'Please continue.', undefined, sendOpts),
       ).resolves.toMatchObject({ accepted: true });
     } finally {
       now.mockRestore();
     }
 
-    expect(ackInterruptedTurnDispatched).toHaveBeenCalledWith('session-1', 49_999);
+    expect(ackInterruptedTurnDispatched).toHaveBeenCalledExactlyOnceWith('session-1', 49_999);
     expect(vi.mocked(session.send).mock.invocationCallOrder[0]).toBeLessThan(
       ackInterruptedTurnDispatched.mock.invocationCallOrder[0]!,
     );
@@ -3507,6 +3544,41 @@ describe('Cindy Make task note', () => {
     expect(vi.mocked(session.send).mock.calls[2][0]).toContain(note);
   });
 
+  it('tells the agent the owner\'s message closed its input handoff card, on that message only and without saving it', async () => {
+    const session = createSession({ agentKind: 'codex' });
+    let note: string | null = '[Card closed]';
+    const { deps } = createDeps({
+      getSession: () => session,
+      readInputHandoffOwnerNote: () => note,
+      inputHandoffOwnerNoteDelivered: () => { note = null; },
+    });
+    const transaction = createMakerSendTransaction(deps);
+    await transaction.sendToAgentAccepted('session-1', 'Signed in', undefined, {
+      persistUserMessage: { clientId: 'owner-1', content: 'Signed in' },
+    });
+    expect(vi.mocked(session.send).mock.calls[0][0]).toContain('[Card closed]');
+    expect(vi.mocked(deps.createDbMessage).mock.calls[0][1].content).toBe('Signed in');
+    expect(note).toBeNull();
+    await transaction.sendToAgentAccepted('session-1', 'Continue');
+    expect(vi.mocked(session.send).mock.calls[1][0]).not.toContain('[Card closed]');
+  });
+
+  it('drops the input handoff note for a native command instead of keeping it for the next message', async () => {
+    const session = createSession({ agentKind: 'pi' });
+    let note: string | null = '[Card closed]';
+    const { deps } = createDeps({
+      getSession: () => session,
+      readInputHandoffOwnerNote: () => note,
+      inputHandoffOwnerNoteDelivered: () => { note = null; },
+    });
+    const transaction = createMakerSendTransaction(deps);
+    await transaction.sendToAgentAccepted('session-1', '/skill:review');
+    expect(vi.mocked(session.send).mock.calls[0][0]).toBe('/skill:review');
+    expect(note).toBeNull();
+    await transaction.sendToAgentAccepted('session-1', 'Continue');
+    expect(vi.mocked(session.send).mock.calls[1][0]).not.toContain('[Card closed]');
+  });
+
   it('does not decorate native commands or ordinary fork messages with side-chat instructions', async () => {
     const session = createSession({ agentKind: 'claude-code' });
     const readTaskSource = vi.fn(async () => 'side-chat');
@@ -4396,6 +4468,7 @@ describe('session-agent-switch handoff injection', () => {
         scheduledModelScope: { restore: vi.fn(async () => undefined) },
         // UI-origin cross-engine preparation can return without clearing the intent.
         applyPendingAgentSwitchIfIdle: vi.fn(async () => undefined),
+        recoverRenamedSessionModelOnSend: vi.fn(async () => undefined),
         agentSwitchDeps: {}, agentSwitchPending: pending,
         getSessionRowSnapshotStrict: vi.fn(async () => ({ orcaRole, orcaRemoteLead })),
         parseOrcaRemoteLead,

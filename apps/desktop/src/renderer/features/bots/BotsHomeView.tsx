@@ -204,10 +204,13 @@ export function BotSettings({
     ),
   );
   const commitProfile = useCallback(
-    async (payload: BotSettingsPayload) => {
+    async (payload: BotSettingsPayload, modelSelection = false) => {
       savingProfileRef.current = true;
       try {
-        await target.profile.update(bot.id, botSettingsChanges(savedSettingsRef.current, payload, true));
+        await target.profile.update(bot.id, {
+          ...botSettingsChanges(savedSettingsRef.current, payload, true, modelSelection),
+          ...(modelSelection ? { acceptModelSelection: true } : {}),
+        });
         savedSettingsRef.current = payload;
       } finally {
         savingProfileRef.current = false;
@@ -305,6 +308,7 @@ export function BotSettings({
               skills: selectedSkills,
             },
             incoming,
+            autosave.hasPendingModelSelection(),
           )
         : incoming;
     botIdentityRef.current = bot.id;
@@ -485,7 +489,7 @@ export function BotSettings({
             </span>
           ) : autosave.status === 'error' ? (
             <p className="flex items-center gap-2 text-11 text-[var(--text-danger)]" role="alert">
-              {t('bots.profileSaveFailed')}
+              {t(autosave.errorKey ?? 'bots.profileSaveFailed')}
               <button
                 type="button"
                 onClick={() => void autosave.retry()}
@@ -626,11 +630,13 @@ export function BotSettings({
                   setCapabilities((current) => ({
                     ...current,
                     ...(primary ?? { model: '', providerId: null, effort: '', fastMode: false }),
+                    ...((current.agentDeviceId != null || primary?.agentDeviceId != null)
+                      ? { agentDeviceId: primary?.agentDeviceId ?? null } : {}),
                     modelOverride: null,
                     modelChain,
                     modelChainOverride: null,
                   }));
-                  autosave.onEdit('instant');
+                  autosave.onEdit('model');
                 }}
                 value={displayedModelChain}
                 onChange={(modelChain) => {
@@ -639,6 +645,8 @@ export function BotSettings({
                   setCapabilities((current) => ({
                     ...current,
                     ...primary,
+                    ...((current.agentDeviceId != null || primary.agentDeviceId != null)
+                      ? { agentDeviceId: primary.agentDeviceId ?? null } : {}),
                     modelChain,
                     modelChainOverride: modelChain,
                     modelOverride: {
@@ -648,7 +656,7 @@ export function BotSettings({
                       fastMode: primary.fastMode,
                     },
                   }));
-                  autosave.onEdit('instant');
+                  autosave.onEdit('model');
                 }}
               />
             </div>

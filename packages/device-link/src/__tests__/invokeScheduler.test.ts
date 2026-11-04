@@ -82,6 +82,26 @@ describe("invoke admission", () => {
     expect(started).toEqual([...sameHost.filter(peer => peer !== cancelledPeer), "fresh"]);
   });
 
+  // Unit: a relay outage cancels unsent relay work, while bounded, healthy
+  // direct peers retain their queue and the existing concurrency limit.
+  it("keeps direct-peer admissions without replaying cancelled relay writes", async () => {
+    const scheduler = new InvokeScheduler();
+    const active = deferred();
+    const running = ['direct', 'relay'].flatMap(peer => Array.from({ length: 12 }, () =>
+      scheduler.run(peer, false, 30_000, () => active.promise)));
+    const directWrite = vi.fn(async () => {}), relayWrite = vi.fn(async () => {});
+    const kept = scheduler.run('direct', false, 30_000, directWrite);
+    const cancelled = scheduler.run('relay', false, 30_000, relayWrite);
+    const rejected = expect(cancelled).rejects.toMatchObject({ code: 'NOT_CONNECTED', inFlight: undefined });
+    scheduler.clear(new DeviceLinkError('NOT_CONNECTED', 'relay lost'), peer => peer === 'direct');
+    await rejected;
+    expect(directWrite).not.toHaveBeenCalled();
+    active.resolve();
+    await Promise.all([...running, kept]);
+    expect(directWrite).toHaveBeenCalledOnce();
+    expect(relayWrite).not.toHaveBeenCalled();
+  });
+
   it("runs a 32-request burst in bounded batches and prioritizes current work", async () => {
     const scheduler = new InvokeScheduler();
     const started: string[] = [];

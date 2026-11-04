@@ -231,6 +231,14 @@ function reconcile(found: Map<string, number>, debt: Map<string, number>, fix: s
 }
 
 describe('text color discipline', () => {
+  // Guard regression: encoded document assets contain long word runs. Restarting
+  // the named-style matcher at every character exhausted CI's normal 5s budget.
+  // Keep scanning the whole input and still report the text token after the asset.
+  it('scans text colors after a long encoded asset within the normal guard deadline', () => {
+    const source = `const asset = "${'A'.repeat(160_000)}";\nconst ink = colors.border;\n<Text style={{ color: ink }} />`;
+    expect(scanTextColors(source)).toEqual([{ where: 'inline', token: 'border' }]);
+  });
+
   it('scans style arrays, conditional branches, bare theme paths and named styles used on <Text>', () => {
     const tokens = (src: string) => scanTextColors(src).map((f) => f.token);
     expect(tokens('<Text style={[styles.label, { color: colors.border }]} />')).toEqual(['border']);
@@ -299,7 +307,8 @@ describe('text color discipline', () => {
     const { violations, stale } = reconcile(found, KNOWN_TEXT_COLOR_DEBT, `use one of ${NEUTRAL_TEXT_COLORS.join(' / ')} or a registered semantic text token`);
     expect(violations).toEqual([]);
     expect(stale, '已修复的存量请从 KNOWN_TEXT_COLOR_DEBT 删除或调低次数').toEqual([]);
-  });
+    // 全量扫描 src/ + app/ 已接近默认 5s 预算，CI 并发时会超时；放宽时限而不是减少扫描范围。
+  }, 30_000);
 
   it('uses textPlaceholder for input placeholders (DESIGN.md §4 Inputs)', () => {
     const found = new Map<string, number>();

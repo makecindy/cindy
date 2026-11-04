@@ -12,6 +12,7 @@ import {
   ghostAppContextLocale,
   ghostAppContextLanguages,
   ghostContentKeys,
+  ghostRequiresCindyAccount,
   ghostExternalLinkUrls,
   ghostLocalePathFor,
   ghostNetworkAuthorizationWithinCap,
@@ -37,9 +38,6 @@ import {
   isValidGhostId,
   isValidNewGhostId,
   isOfficialGhostId,
-  isUserInstallReservedGhostId,
-  isBrokerEligibleGhostId,
-  isFirstPartyHostPrivilegeGhostId,
   isValidGhostNetworkHostPattern,
   parseGhostPartition,
   resolveGhostManifestLocale,
@@ -63,6 +61,25 @@ function goodManifest(): Record<string, unknown> {
     panel: { title: 'Hello', html: 'panel.html', minWidth: 240, defaultFraction: 0.18 },
   };
 }
+
+// The account gate follows declared services, not the author's chosen name (unit).
+describe('plugin account service requirements', () => {
+  it('keeps direct and BYOK plugins usable regardless of the name', () => {
+    for (const id of ['cindy-art', 'xd-feishu', 'ordinary']) {
+      const parsed = validateGhostManifest({ ...goodManifest(), id });
+      if (!parsed.ok) throw new Error(parsed.reason);
+      expect(ghostRequiresCindyAccount(parsed.manifest)).toBe(false);
+    }
+    expect(ghostRequiresCindyAccount({ cindy: { search: ['web'] } })).toBe(false);
+  });
+  it('requires account services for enterprise credentials and hosted media', () => {
+    expect(ghostRequiresCindyAccount({ cindy: { image: ['generate'] } })).toBe(true);
+    expect(ghostRequiresCindyAccount({ network: { hosts: ['api.example.test'], secrets: [{
+      key: 'identity', label: 'Identity', source: 'oidc-token',
+      inject: { header: 'Authorization', format: 'Bearer {value}', hosts: ['api.example.test'] },
+    }] } })).toBe(true);
+  });
+});
 
 /** 一份全绿的芯片型清单基底。 */
 function goodChipManifest(): Record<string, unknown> {
@@ -2930,12 +2947,9 @@ describe('ghost · 官方保留 id 前缀', () => {
     ];
     const predicates = [
       isOfficialGhostId,
-      isBrokerEligibleGhostId,
-      isFirstPartyHostPrivilegeGhostId,
-    ];
+            ];
     // 期望值写死,避免用任一被测谓词或同一前缀表反推 expected 后让错误实现自证正确。
     for (const [id, expected] of cases) {
-      expect(isUserInstallReservedGhostId(id)).toBe(id === 'cindy-art');
       for (const predicate of predicates) {
         expect(predicate(id), `${predicate.name}(${JSON.stringify(id)})`).toBe(expected);
       }
@@ -3155,7 +3169,7 @@ describe('ghost · network 详单校验', () => {
     if (!r.ok) expect(r.reason).toContain('source');
   });
 
-  it('secrets.source:gh-cli 仅允许官方 GitHub 插件的固定 GitHub API 注入形态', () => {
+  it('secrets.source:gh-cli 对所有插件开放，仍固定 GitHub API 注入形态', () => {
     const valid = validateGhostManifest({
       ...goodManifest(),
       id: 'cindy-github',
@@ -3180,6 +3194,7 @@ describe('ghost · network 详单校验', () => {
     });
     expect(valid.ok, valid.ok ? '' : valid.reason).toBe(true);
     if (valid.ok) {
+      expect(validateNormalizedGhostManifest({ ...valid.manifest, id: 'github-helper' }).ok).toBe(true);
       const item = ghostPermissionItems(valid.manifest).find(
         (entry) => entry.key === 'network:secret:github_pat',
       );
@@ -3219,7 +3234,6 @@ describe('ghost · network 详单校验', () => {
     }
 
     for (const fixture of [
-      { id: 'github-helper' },
       { header: 'X-GitHub-Token' },
       { format: 'token {value}' },
       { hosts: undefined },
@@ -5103,8 +5117,32 @@ describe('ghost · browserExtension 槽(2026-10-27 浏览器扩展经宿主桥�
     expect(unreviewedGhostPermissionItems(reviewed.manifest, undefined, expanded.manifest).map((item) => item.key)).toEqual(['browser-extension']);
     const controlAdded = withNeeds({ ...good });
     if (!controlAdded.ok) throw new Error('fixture');
-    expect(unreviewedGhostPermissionItems(channelOnly.manifest, undefined, controlAdded.manifest).map((item) => item.key)).toEqual(['browser-extension']);
+    expect(unreviewedGhostPermissionItems(channelOnly.manifest, undefined, controlAdded.manifest).map((item) => item.key))
+      .toEqual(['browser-extension', 'browser-native-host:com.example.browser']);
     // 既有安装基线已批准页面控制时,市场清单收窄也不算扩权。
     expect(unreviewedGhostPermissionItems(channelOnly.manifest, reviewed.manifest, controlAdded.manifest)).toEqual([]);
+  });
+});
+
+describe('liveScreen declaration', () => {
+  const base = {
+    schemaVersion: 3,
+    minCindyVersion: '0.1.116',
+    id: 'sim',
+    name: 'Simulator',
+    version: '1.0.0',
+    entry: 'main.js',
+  };
+  const node = { entry: 'node/worker.cjs', protocol: 'json-rpc-stdio' };
+  it('is listed in plugin details, and refused without the node worker it needs to run', () => {
+    const withNode = validateGhostManifest({ ...base, node, liveScreen: true });
+    expect(withNode.ok).toBe(true);
+    if (!withNode.ok) return;
+    expect(withNode.manifest.liveScreen).toBe(true);
+    expect(ghostPermissionItems(withNode.manifest)).toContainEqual(
+      expect.objectContaining({ key: 'live-screen', kind: 'live-screen', labelKey: 'liveScreen', detailKey: 'liveScreenDetail' }),
+    );
+    const alone = validateGhostManifest({ ...base, liveScreen: true });
+    expect(alone.ok).toBe(false);
   });
 });
