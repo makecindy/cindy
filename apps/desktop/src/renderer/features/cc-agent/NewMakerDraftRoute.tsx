@@ -196,7 +196,7 @@ import {
   consumeNewMakerFolderPickerRequest,
   consumeNewMakerModelInheritanceRequest,
   isSameNewMakerDevice,
-  isSameNewMakerTaskComputer,
+  nextNewMakerModelInheritanceStep,
   readNewMakerDialogueTargetRequest,
   readNewMakerFolderPickerRequest,
   readNewMakerModelInheritanceRequest,
@@ -748,6 +748,7 @@ export function NewMakerDraftRoute() {
   );
   const handledDialogueTargetRequestRef = useRef<string | null>(null);
   const handledModelInheritanceRequestRef = useRef<string | null>(null);
+  const modelInheritanceAgentSwitchRef = useRef<string | null>(null);
   const modePickerSelectionSeqRef = useRef(0);
   const handledFolderPickerRequestRef = useRef<string | null>(null);
   // Writable picker evidence is Main-owned and bound to the actual local task id.
@@ -3336,25 +3337,38 @@ export function NewMakerDraftRoute() {
     if (!request || handledModelInheritanceRequestRef.current === request.requestId) return;
     // 目标电脑请求先落地：它改草稿的任务电脑并单独替换 history state;下一帧再判同机。
     if (dialogueTargetRequest) return;
-    const switchesAgentDevice =
-      !request.remoteHostId && request.agentDeviceId !== (effectiveAgentDeviceId ?? null);
-    const localCatalogTarget =
-      !request.agentDeviceId &&
-      !request.taskDeviceId &&
-      !(request.remoteHostId && request.vendor === 'codex');
-    const applicable =
-      isSameNewMakerTaskComputer(request, getDraft()) &&
-      !sendInFlightRef.current &&
-      // 等待播种期间用户已手动改过远程运行配置：以用户这次选择为准。
-      !(usesDeviceCatalog && !switchesAgentDevice && dlRuntimeTouchedRef.current) &&
-      (switchesAgentDevice ||
-        !availableAgentsLoaded ||
-        availableVendors.has(request.vendor));
-    if (applicable) {
-      // 被控电脑 / 另一台电脑的目录:等这份草稿先按那边的默认播种(带上那边的权限档),
-      // 再像手动选中一样覆盖模型;没播种就选，播种基线缺失会把这次选择丢掉。
-      if (!switchesAgentDevice && usesDeviceCatalog && !dlSel) return;
-      if (request.providerId === null && localCatalogTarget && localProvidersLoading) return;
+    const step = nextNewMakerModelInheritanceStep(request, {
+      draft: getDraft(),
+      sendInFlight: sendInFlightRef.current,
+      usesDeviceCatalog,
+      deviceCatalogSeeded:
+        !!dlSel && !!dlSeedKeyRef.current?.startsWith(`${catalogDeviceId ?? ''}:`),
+      deviceSelectionTouched: dlRuntimeTouchedRef.current,
+      availableAgentsLoaded,
+      vendorAvailable: availableVendors.has(request.vendor),
+      localProvidersLoading,
+    });
+    if (step.kind === 'wait') return;
+    // 只换一次：换过仍对不上 = 草稿不接受这台电脑(store 规范化掉),按不适用消费掉。
+    if (
+      step.kind === 'switch-agent-device' &&
+      modelInheritanceAgentSwitchRef.current !== request.requestId
+    ) {
+      modelInheritanceAgentSwitchRef.current = request.requestId;
+      patchDraft({
+        agentDeviceId: step.agentDeviceId,
+        agentDeviceName: step.agentDeviceId
+          ? (remoteAgentDevices?.find((device) => device.deviceId === step.agentDeviceId)?.name ??
+            deviceDisplayName(step.agentDeviceId, null))
+          : null,
+      });
+      return;
+    }
+    if (step.kind === 'apply') {
+      const localCatalogTarget =
+        !request.agentDeviceId &&
+        !request.taskDeviceId &&
+        !(request.remoteHostId && request.vendor === 'codex');
       const agent = dbToMakerAgentKind(request.vendor);
       const memoryProviderId =
         request.providerId ??
@@ -3379,28 +3393,18 @@ export function NewMakerDraftRoute() {
         // 来源未知时本机草稿的 Fast 回退读 per-model 旧库(resolveDraftFast)。
         setFastModeForModel(request.model, request.fastMode);
       }
-      const agentDevice = request.remoteHostId
-        ? undefined
-        : request.agentDeviceId
-          ? {
-              deviceId: request.agentDeviceId,
-              name:
-                remoteAgentDevices?.find((device) => device.deviceId === request.agentDeviceId)
-                  ?.name ?? deviceDisplayName(request.agentDeviceId, null),
-            }
-          : null;
-      const selectedProviderId = request.providerId ?? memoryProviderId;
+      // Agent 所在电脑此时已与请求一致(上面先换好),选择不再携带位置。
       handleUnifiedDraftSelect({
         vendor: request.vendor,
-        // 来源未知 = 跟随默认路由；选择链只收 string,随后改回 null。
-        providerId: selectedProviderId ?? '',
+        // 跟随默认路由 = 不钉来源；选择链只收 string,随后改回 null。memoryProviderId 只用于
+        // 写档位记忆，不能当成用户选的来源。
+        providerId: request.providerId ?? '',
         modelId: request.model,
         ...(request.effort ? { effort: request.effort } : {}),
         fast: request.fastMode,
         favoriteUid: null,
-        ...(agentDevice !== undefined ? { agentDevice } : {}),
       });
-      if (selectedProviderId === null) {
+      if (request.providerId === null) {
         if (localCatalogTarget) patchVendorPrefs(request.vendor, { providerId: null });
         else setDlSel((prev) => (prev?.providerId === '' ? { ...prev, providerId: null } : prev));
       }
@@ -3415,9 +3419,11 @@ export function NewMakerDraftRoute() {
     dialogueTargetRequest,
     draft.deviceLinkDeviceId,
     draft.remoteHostId,
-    effectiveAgentDeviceId,
+    draft.agentDeviceId,
     usesDeviceCatalog,
+    catalogDeviceId,
     dlSel,
+    dlSeedKeyRef,
     dlRuntimeTouchedRef,
     deviceLinkDraftMemory,
     availableAgentsLoaded,

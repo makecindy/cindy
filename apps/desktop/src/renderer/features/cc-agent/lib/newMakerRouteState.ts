@@ -135,6 +135,64 @@ export function isSameNewMakerTaskComputer(
   );
 }
 
+export type NewMakerModelInheritanceStep =
+  /** 先只把 Agent 换到请求那台电脑；请求留着，等那台目录播种后再套用。 */
+  | { kind: 'switch-agent-device'; agentDeviceId: string | null }
+  /** 依赖还没就绪(目录未播种、本机来源未加载):请求留着，下次渲染再判。 */
+  | { kind: 'wait' }
+  | { kind: 'apply' }
+  /** 不适用(换了任务电脑、正在发送、Harness 不可用、用户已改选):直接消费掉。 */
+  | { kind: 'skip' };
+
+/**
+ * 创建页套用「沿用当前任务模型」请求的下一步。
+ *
+ * 换 Agent 所在电脑必须先单独提交：同一次提交里目录播种 effect 仍按旧目录运行，会把刚写进的
+ * 选择清空或按那台的默认重播种。目录播种后再按同一台电脑上的手动选择套用。
+ */
+export function nextNewMakerModelInheritanceStep(
+  request: Pick<
+    NewMakerModelInheritanceRequest,
+    'vendor' | 'providerId' | 'agentDeviceId' | 'taskDeviceId' | 'remoteHostId'
+  >,
+  page: {
+    draft: {
+      deviceLinkDeviceId?: string | null;
+      remoteHostId?: string | null;
+      agentDeviceId?: string | null;
+    };
+    sendInFlight: boolean;
+    usesDeviceCatalog: boolean;
+    /** 草稿已按当前目录那台的默认播种。 */
+    deviceCatalogSeeded: boolean;
+    /** 播种后控制端已手动改过远程运行配置。 */
+    deviceSelectionTouched: boolean;
+    availableAgentsLoaded: boolean;
+    vendorAvailable: boolean;
+    localProvidersLoading: boolean;
+  },
+): NewMakerModelInheritanceStep {
+  if (!isSameNewMakerTaskComputer(request, page.draft) || page.sendInFlight) return { kind: 'skip' };
+  // 按草稿字段判断：草稿已记着这台、只是此处不生效(如被控电脑不支持远程 Agent)时不再反复写入。
+  if (!request.remoteHostId && request.agentDeviceId !== (page.draft.agentDeviceId ?? null)) {
+    return { kind: 'switch-agent-device', agentDeviceId: request.agentDeviceId };
+  }
+  if (page.availableAgentsLoaded && !page.vendorAvailable) return { kind: 'skip' };
+  if (page.usesDeviceCatalog) {
+    if (!page.deviceCatalogSeeded) return { kind: 'wait' };
+    if (page.deviceSelectionTouched) return { kind: 'skip' };
+    return { kind: 'apply' };
+  }
+  const localCatalogTarget =
+    !request.agentDeviceId &&
+    !request.taskDeviceId &&
+    !(request.remoteHostId && request.vendor === 'codex');
+  if (request.providerId === null && localCatalogTarget && page.localProvidersLoading) {
+    return { kind: 'wait' };
+  }
+  return { kind: 'apply' };
+}
+
 export function makeFolderPickerNewMakerRouteState(): NewMakerRouteState {
   folderPickerRequestSequence += 1;
   return {
