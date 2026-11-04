@@ -15,7 +15,8 @@
  *
  * 交互模型(对齐 Codex "Comment on the page" 的点选手感,不照搬其界面):
  *  - 评论光标(气泡)而不是截图十字;按住 Shift 才切回十字,表示框选。
- *  - 悬停先亮出元素身份(`<tag>` + 可访问名),点下去之前就知道选中了谁。
+ *  - 悬停先亮出元素身份(`<tag>` + 可访问名),选中环贴着控件自己的圆角。
+ *  - 小控件的编号钉在右上角,不盖住文字;大区块仍钉在点击处。刚放下的钉有一次进场。
  *  - 点击 = 选元素;Shift + 拖拽 = 框选区域;进入模式时页面已有文本选区 = 文本评论。
  *  - Cmd(mac)/ Ctrl(win)+ 点击 / 释放 = 「立即添加」(host 跳过输入气泡)。
  *  - 提交成功后 host 发 commit-pending:pending marker 转常驻、编号推进,可连续
@@ -419,6 +420,16 @@ function buildOverlay(markerNumber: number): OverlayState {
       text-align: center;
       box-shadow: 0 0 0 2px #fff, 0 1px 4px rgba(0,0,0,0.35);
     }
+    .marker.draft {
+      animation: comment-pin-in 180ms ease-out;
+    }
+    @media (prefers-reduced-motion: reduce) {
+      .marker.draft { animation: none; }
+    }
+    @keyframes comment-pin-in {
+      from { transform: scale(0.55); opacity: 0; }
+      to { transform: scale(1); opacity: 1; }
+    }
     .region-box {
       position: absolute;
       pointer-events: none;
@@ -513,11 +524,12 @@ function syncDocLayerScroll(): void {
   state.docLayer.style.transform = `translate(${-window.scrollX}px, ${-window.scrollY}px)`;
 }
 
-/** 在文档坐标层放一个编号 marker(docX/docY 为文档坐标)。 */
-function placeMarker(docX: number, docY: number, num: number): HTMLDivElement {
+/** 在文档坐标层放一个编号 marker(docX/docY 为文档坐标)。
+ *  draft 只给刚放下的那颗:进场缩放一次,提交后摘掉,避免滚动时反复跳。 */
+function placeMarker(docX: number, docY: number, num: number, draft = false): HTMLDivElement {
   if (!state) throw new Error('no overlay');
   const marker = document.createElement('div');
-  marker.className = 'marker';
+  marker.className = draft ? 'marker draft' : 'marker';
   marker.textContent = String(num);
   marker.style.left = `${docX}px`;
   marker.style.top = `${docY}px`;
@@ -611,6 +623,24 @@ function showHoverChip(el: Element, rect: DOMRect): void {
   chip.style.top = `${Math.max(4, top)}px`;
 }
 
+/** 高亮盒和元素同尺寸,直接用 computed 圆角;pill 的大半径会同样收成胶囊。读不到就退回直角小圆角。 */
+function elementCornerRadius(el: Element): string {
+  let cs: CSSStyleDeclaration;
+  try {
+    cs = getComputedStyle(el);
+  } catch {
+    return '2px';
+  }
+  const corners = [
+    cs.borderTopLeftRadius,
+    cs.borderTopRightRadius,
+    cs.borderBottomRightRadius,
+    cs.borderBottomLeftRadius,
+  ];
+  if (corners.some((value) => !value || !/[\d.]/.test(value))) return '2px';
+  return corners.join(' ');
+}
+
 function moveHighlightTo(el: Element | null): void {
   if (!state) return;
   state.hoverTarget = el;
@@ -626,6 +656,8 @@ function moveHighlightTo(el: Element | null): void {
   s.top = `${r.top}px`;
   s.width = `${r.width}px`;
   s.height = `${r.height}px`;
+  // 选中环贴着控件自己的圆角,按钮和卡片不会被套进直角框。
+  s.borderRadius = elementCornerRadius(el);
   if (r.width < 1 && r.height < 1) {
     hideHoverChip();
     return;
@@ -924,13 +956,35 @@ function establishPending(
   ipcRenderer.sendToHost(BROWSER_COMMENT_ELEMENT_SELECTED_CHANNEL, info);
 }
 
+/** 小控件(按钮、输入框)的钉放在右上角,不盖住文字;大区块仍钉在点击处。 */
+const CORNER_PIN_MAX_WIDTH = 280;
+const CORNER_PIN_MAX_HEIGHT = 180;
+
+function elementPinPoint(el: Element, clickX: number, clickY: number): { x: number; y: number } {
+  const r = el.getBoundingClientRect();
+  if (r.width < 1 || r.height < 1) return { x: clickX, y: clickY };
+  if (r.width > CORNER_PIN_MAX_WIDTH || r.height > CORNER_PIN_MAX_HEIGHT) {
+    return { x: clickX, y: clickY };
+  }
+  return {
+    x: Math.min(Math.max(r.right - 4, r.left + 8), window.innerWidth - 8),
+    y: Math.min(Math.max(r.top + 4, 8), window.innerHeight - 8),
+  };
+}
+
 /** 元素点选 → pending。 */
 function selectElement(el: Element, x: number, y: number, immediate: boolean): void {
   if (!state) return;
-  const marker = placeMarker(x + window.scrollX, y + window.scrollY, state.markerNumber);
+  const pin = elementPinPoint(el, x, y);
+  const marker = placeMarker(
+    pin.x + window.scrollX,
+    pin.y + window.scrollY,
+    state.markerNumber,
+    true,
+  );
   establishPending(
     { kind: 'element', marker, extras: [], el: el instanceof HTMLElement ? el : null },
-    collectTargetInfo({ kind: 'element', x, y, el, immediate }),
+    collectTargetInfo({ kind: 'element', x: pin.x, y: pin.y, el, immediate }),
   );
 }
 
@@ -947,6 +1001,7 @@ function selectRegion(
     releaseX + window.scrollX,
     releaseY + window.scrollY,
     state.markerNumber,
+    true,
   );
   establishPending(
     { kind: 'region', marker, extras: [box], el: null },
@@ -976,7 +1031,7 @@ function trySelectExistingTextSelection(): boolean {
     const last = rects[rects.length - 1];
     const x = Math.min(last.right + 4, window.innerWidth - 4);
     const y = last.top + last.height / 2;
-    const marker = placeMarker(x + window.scrollX, y + window.scrollY, state.markerNumber);
+    const marker = placeMarker(x + window.scrollX, y + window.scrollY, state.markerNumber, true);
     // 选区所在元素也采一份定位线索(anchorNode 的最近元素祖先,同样归一化到
     // HTMLElement —— SVG <text> 内选区等场景与点选语义保持一致)。
     const rawAnchorEl =
@@ -1186,6 +1241,7 @@ function commitPending(payload: BrowserCommentCommitPendingPayload): void {
   if (p) {
     for (const el of p.extras) el.remove();
     // 常驻 marker 登记编号,供截图前按草稿白名单对账剪除。
+    p.marker.classList.remove('draft');
     state.committedMarkers.push({ number: p.number, marker: p.marker });
     state.pending = null;
   }

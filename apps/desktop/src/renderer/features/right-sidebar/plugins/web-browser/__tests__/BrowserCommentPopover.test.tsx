@@ -215,6 +215,6 @@ describe('BrowserCommentPopover', () => {
     expect(
       (screen.getByPlaceholderText('rightSidebar.browser.commentPlaceholder') as HTMLTextAreaElement)
         .rows,
-    ).toBe(2);
+    ).toBe(1);
   });
 });

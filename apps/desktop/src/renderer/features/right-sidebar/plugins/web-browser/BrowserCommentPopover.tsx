@@ -11,7 +11,7 @@ import { Button } from '@/components/ui/button';
  * 交互(学 Codex 的标注手感,视觉仍走 Cindy 浮层规范):
  *  - 气泡先标明「这是第几条、点中了谁」,再写要改什么。页面上的 tag /
  *    可访问名 / 选区文本都是不可信内容,只当文本渲染。
- *  - 输入从两行起,随内容长到大约四行,不再一打开就是一块空白表单。
+ *  - 输入从一行起,随内容长到大约四行(Claude 评论框的 1lh),不再一打开就是一块空白表单。
  *  - Enter 提交,Shift+Enter 换行(与聊天输入一致的心智)。
  *  - Esc / 取消按钮 → onCancel(回到点选态,marker 清除)。
  *  - submitting 时按钮禁用,防重复提交。
@@ -367,7 +367,7 @@ export function BrowserCommentPopover({
         value={text}
         onChange={(e) => onEditorDraftChange({ ...editorDraft, text: e.target.value })}
         onKeyDown={handleKeyDown}
-        rows={2}
+        rows={1}
         disabled={submitting}
         placeholder={t('rightSidebar.browser.commentPlaceholder')}
         className={cn(

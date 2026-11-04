@@ -156,6 +156,24 @@ describe('browserCommentPreload command protocol', () => {
         return {};
       },
     } as DOMRect);
+    const computedStyle = window.getComputedStyle.bind(window);
+    vi.spyOn(window, 'getComputedStyle').mockImplementation((elt: Element) => {
+      const resolved = computedStyle(elt);
+      if (elt !== target) return resolved;
+      return new Proxy(resolved, {
+        get(style, prop, receiver) {
+          if (
+            prop === 'borderTopLeftRadius' ||
+            prop === 'borderTopRightRadius' ||
+            prop === 'borderBottomRightRadius' ||
+            prop === 'borderBottomLeftRadius'
+          ) {
+            return '12px';
+          }
+          return Reflect.get(style, prop, receiver);
+        },
+      });
+    });
     blocker?.dispatchEvent(
       new MouseEvent('mousemove', { bubbles: true, clientX: 20, clientY: 30 }),
     );
@@ -163,6 +181,9 @@ describe('browserCommentPreload command protocol', () => {
     expect(hoverChip?.style.display).toBe('flex');
     expect(hoverChip?.textContent).toContain('button');
     expect(hoverChip?.textContent).toContain('Save');
+    expect(
+      latestOverlayShadow?.querySelector<HTMLElement>('.highlight')?.style.borderRadius,
+    ).toContain('12px');
 
     blocker?.dispatchEvent(
       new MouseEvent('click', { bubbles: true, clientX: 20, clientY: 30 }),
@@ -170,9 +191,15 @@ describe('browserCommentPreload command protocol', () => {
     await vi.waitFor(() => {
       expect(ipcMocks.sendToHost).toHaveBeenCalledWith(
         BROWSER_COMMENT_ELEMENT_SELECTED_CHANNEL,
-        expect.objectContaining({ markerNumber: 1 }),
+        expect.objectContaining({
+          markerNumber: 1,
+          point: { x: 76, y: 24 },
+        }),
       );
     });
+    const marker = latestOverlayShadow?.querySelector<HTMLElement>('.marker.draft');
+    expect(marker?.style.left).toBe('76px');
+    expect(marker?.style.top).toBe('24px');
 
     dispatchCommand(BROWSER_COMMENT_PREPARE_SCREENSHOT_CHANNEL, {
       requestId: 'prepare-pending',
