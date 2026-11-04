@@ -2407,9 +2407,9 @@ html[data-wallpaper-active='true'] .wallpaper-composer-fade {
    useWallpaperBackground. Fill only: backdrop-filter would become the
    containing block for the composer's fixed palettes. Keeps base-utility
    specificity, so hover and state variants still win. Each token needs a fill
-   line and an entry in the target list; tokens that are already translucent
-   (the selected-row ink tints) stay out, since mixing them again would break
-   the opacity floor. */
+   line and an entry in the target list. Left out on purpose: tokens that are
+   already translucent (selected-row ink tints) and code blocks, whose fixed
+   syntax palette needs a solid surface. */
 html[data-wallpaper-active='true'] {
   --wallpaper-glass-opacity: max(72%, var(--app-wallpaper-glass-floor, 0%));
 }
@@ -2419,7 +2419,6 @@ html.dark[data-wallpaper-active='true'] {
 [class~='bg-[var(--chat-input-bg)]'] { --wallpaper-glass-fill: var(--chat-input-bg); }
 [class~='bg-[var(--msg-user-bg)]'] { --wallpaper-glass-fill: var(--msg-user-bg); }
 [class~='bg-[var(--msg-tool-card-bg)]'] { --wallpaper-glass-fill: var(--msg-tool-card-bg); }
-[class~='bg-[var(--msg-code-block-bg)]'] { --wallpaper-glass-fill: var(--msg-code-block-bg); }
 [class~='bg-[var(--msg-table-header-bg)]'] { --wallpaper-glass-fill: var(--msg-table-header-bg); }
 [class~='bg-[var(--surface-elevated)]'] { --wallpaper-glass-fill: var(--surface-elevated); }
 [class~='bg-[var(--settings-theme-card-bg)]'] { --wallpaper-glass-fill: var(--settings-theme-card-bg); }
@@ -2436,7 +2435,6 @@ html.dark[data-wallpaper-active='true'] {
   [class~='bg-[var(--chat-input-bg)]'],
   [class~='bg-[var(--msg-user-bg)]'],
   [class~='bg-[var(--msg-tool-card-bg)]'],
-  [class~='bg-[var(--msg-code-block-bg)]'],
   [class~='bg-[var(--msg-table-header-bg)]'],
   [class~='bg-[var(--surface-elevated)]'],
   [class~='bg-[var(--settings-theme-card-bg)]'],
@@ -2449,11 +2447,6 @@ html.dark[data-wallpaper-active='true'] {
   :is([role='dialog'], [role='alertdialog'], [role='menu'], [role='listbox'], [role='tooltip']) *
 )) {
   background-color: color-mix(in srgb, var(--wallpaper-glass-fill) var(--wallpaper-glass-opacity), transparent);
-}
-/* Dark highlight.js paints its own code-block fill (Light is already
-   transparent); on wallpaper the glass frame around it carries that fill. */
-html.dark[data-wallpaper-active='true'] :is(.bg-content-area, .app-wallpaper-surface, [class~='bg-[var(--panel-bg)]']) .hljs {
-  background: transparent;
 }
 
 /* Keep the decoded old canvas above the new one and fade only its opacity.
