@@ -75,6 +75,12 @@ export const appearanceSettings = defineSettings({
     titleKey: 'settings.appearance.wallpaper.options.custom',
     sectionKey: 'settings.appearance.wallpaper.title',
     descriptionKey: 'settings.appearance.wallpaper.customHint',
+    keywordKeys: [
+      'settings.appearance.wallpaper.visibilityLabel',
+      'settings.appearance.wallpaper.visibilityHint',
+      'settings.appearance.wallpaper.blurLabel',
+      'settings.appearance.wallpaper.blurHint',
+    ],
     options: [
       { value: 'static', labelKey: 'settings.appearance.wallpaper.motionStatic', isVisible: ({ wallpaperMotionAvailable }) => wallpaperMotionAvailable === true },
       { value: 'dynamic', labelKey: 'settings.appearance.wallpaper.motionDynamic', isVisible: ({ wallpaperMotionAvailable }) => wallpaperMotionAvailable === true },

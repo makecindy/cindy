@@ -55,6 +55,15 @@ describe('settings discoverability regressions', () => {
       }
     }
     expect(documents.some(({ entry }) => entry.id === 'settings.appearance.wallpaper.customChoose')).toBe(true);
+    // Unit regression (#8481): motion coverage missed the always-visible sliders.
+    // Search their real labels/hints through the production index in both states.
+    for (const lng of ['zh-CN', 'en']) {
+      for (const key of ['visibilityLabel', 'visibilityHint', 'blurLabel', 'blurHint']) {
+        const query = searchI18n.t(`settings.appearance.wallpaper.${key}`, { lng });
+        const results = searchSettings(documents, query);
+        expect(results.some(({ entry }) => entry.id === 'settings.appearance.wallpaper.customChoose'), query).toBe(true);
+      }
+    }
   });
   // Unit regression (#8481): script/style controls mount only for an explicitly
   // selected classical locale; ordinary and system preferences leave them absent.
