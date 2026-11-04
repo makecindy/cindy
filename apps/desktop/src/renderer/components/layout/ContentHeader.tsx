@@ -23,6 +23,7 @@
  */
 
 import { createContext, useContext, type ReactNode } from 'react';
+import { useChromeActionsOverlap } from './useChromeActionsOverlap';
 
 import { useFeatureContentHeader } from '@/features/feature-context';
 import { useMacFullscreen } from '@/hooks/useMacFullscreen';
@@ -123,7 +124,7 @@ export function ContentHeader({
   // 全屏态按钮回到 rail 内，也由 Sidebar 的既有洞覆盖。
   // 展开态同理但只挖溢出那一截：侧栏可拖到 180（useSidebarResize 的下限），比簇右缘
   // 202 窄，超出侧栏右缘的按钮同样压在 header 拖拽区上。
-  const chromeActionsHitHole =
+  const fallbackChromeActionsHitHole =
     isMac && !isFullscreen && (isSidebarRail || sidebarVisible)
       ? chromeActionsHitHoleWidth(
           isSidebarRail
@@ -136,6 +137,23 @@ export function ContentHeader({
   // 设置页：Sidebar 隐藏且无折叠按钮占位 → header 退化为"隐形 chrome"
   // （仅拖拽区 + Windows 窗口控制），不画下边框。
   const isInvisibleChrome = !sidebarVisible && !showCollapsedActions;
+
+  const overlap = useChromeActionsOverlap<HTMLElement>(
+    isMac && !isInvisibleChrome && !hidden,
+    (isFullscreen ? CHROME_ACTIONS_GEOMETRY.defaultLeft : trafficLightInset) +
+      CHROME_ACTIONS_GEOMETRY.clusterWidth,
+  );
+  const chromeActionsHitHole = overlap.width ?? fallbackChromeActionsHitHole;
+  // Once measurable, every header consumes only the overlap at its own left edge.
+  // The sidebar-derived value is a first-layout fallback, not pane ownership.
+  const paddingLeft =
+    overlap.width !== null
+      ? Math.max(8, isFullscreen ? 0 : chromeActionsHitHole - CHROME_ACTIONS_GEOMETRY.clusterWidth)
+      : needsTrafficLightInset ? trafficLightInset : undefined;
+  const measuredSpacerWidth =
+    overlap.width === null ? null : chromeActionsHitHole > 0
+      ? Math.max(0, chromeActionsHitHole - (paddingLeft ?? 8)) + 8
+      : 0;
 
   // 空 header 隐藏（用户决策 2026-06-11）：技能中心 / 自动化 / 文件浏览 /
   // 新建对话等自带顶部内容的页面，不再渲染空白的 46px 顶栏。
@@ -156,6 +174,7 @@ export function ContentHeader({
 
   return (
     <header
+      ref={overlap.ref}
       className={cn(
         // 46px 行高 (与 CONTENT_HEADER_HEIGHT_PX 同步):红绿灯钉 y=16(实测灯心 ≈23 = 46/2,macOS 渲染比理论低约 1pt),标题/图标与
         // 红绿灯同轴(对齐 Codex 的紧凑 titlebar)。与 ChromeActions / Sidebar
@@ -176,7 +195,7 @@ export function ContentHeader({
       style={
         {
           WebkitAppRegion: 'drag',
-          paddingLeft: needsTrafficLightInset ? trafficLightInset : undefined,
+          paddingLeft,
         } as React.CSSProperties
       }
     >
@@ -209,10 +228,10 @@ export function ContentHeader({
         style={
           {
             WebkitAppRegion: 'no-drag',
-            width: Math.max(CHROME_ACTIONS_GEOMETRY.clusterWidth + 8, chromeActionsHitHole),
-            maxWidth: showCollapsedActions
+            width: measuredSpacerWidth ?? Math.max(CHROME_ACTIONS_GEOMETRY.clusterWidth + 8, chromeActionsHitHole),
+            maxWidth: measuredSpacerWidth ?? (showCollapsedActions
               ? CHROME_ACTIONS_GEOMETRY.clusterWidth + 8
-              : chromeActionsHitHole,
+              : chromeActionsHitHole),
           } as React.CSSProperties
         }
       />

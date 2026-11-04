@@ -31,6 +31,7 @@ import {
 } from 'react';
 import { useTranslation } from 'react-i18next';
 
+import { useChromeActionsOverlap } from '@/components/layout/useChromeActionsOverlap';
 import { createLogger } from '@/lib/logger';
 import { CINDY_MAKE_ENABLED } from '@cindy/maker-shared/cindy-make-feature';
 import { toast } from '@/lib/toast';
@@ -244,7 +245,7 @@ export function RightSidebarShell({
       : CHROME_ACTIONS_GEOMETRY.defaultLeft;
   // unifiedTopbar 本身有 px-2(8px) 左内边距。加上 chromeActionsLeft 后，
   // spacer 的布局起点正好落在 ChromeActions 簇之前，并在簇后保留 8px 呼吸间距。
-  const leftChromeActionsSpacerWidth =
+  const fallbackLeftChromeActionsSpacerWidth =
     unifiedTopbar && reserveLeftChromeActions
       ? chromeActionsLeft + CHROME_ACTIONS_GEOMETRY.clusterWidth
       : 0;
@@ -265,10 +266,16 @@ export function RightSidebarShell({
   const paneLeftEdge =
     expandedSidebarEdge ??
     (railChromeActionsHitHole ? CHROME_ACTIONS_GEOMETRY.macTrafficLightLeft : undefined);
-  const overflowChromeActionsSpacerWidth =
+  const fallbackOverflowChromeActionsSpacerWidth =
     unifiedTopbar && !isFullscreen && paneLeftEdge !== undefined
       ? chromeActionsHitHoleWidth(paneLeftEdge, trafficLightInset)
       : 0;
+  const overlap = useChromeActionsOverlap<HTMLDivElement>(
+    isMac && unifiedTopbar && !!host,
+    chromeActionsLeft + CHROME_ACTIONS_GEOMETRY.clusterWidth,
+  );
+  const overflowChromeActionsSpacerWidth = overlap.width ?? fallbackOverflowChromeActionsSpacerWidth;
+  const leftChromeActionsSpacerWidth = overlap.width === null ? fallbackLeftChromeActionsSpacerWidth : 0;
   const { t } = useTranslation();
   const installedGhosts = useInstalledGhosts();
   // 已弹出到独立窗口的页签:数据留在桶里,但本 Shell 不投影、不挂 body。
@@ -898,6 +905,7 @@ export function RightSidebarShell({
     <div className="flex h-full min-h-0 flex-1 flex-col overflow-hidden">
       {unifiedTopbar ? (
         <div
+          ref={overlap.ref}
           data-testid="right-sidebar-unified-topbar"
           // bg 走 --panel-bg 与下方 TabBar / Body 同源(2026-07-21 用户裁决:CINDY 下
           // globals.css 会把 .bg-[var(--panel-bg)] 统一映射到玻璃底,原 bg-content-area

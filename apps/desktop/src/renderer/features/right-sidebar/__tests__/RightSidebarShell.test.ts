@@ -1426,6 +1426,33 @@ describe('RightSidebarShell empty state', () => {
     ).toBe('no-drag');
   });
 
+  // Review 4465271789 also applies when the adjacent pane is another tab group.
+  it('protects the remaining chrome overlap in a non-leftmost tool header', async () => {
+    installElectronApi(tabsIpc);
+    Object.assign(window.electronAPI, {
+      appearanceSettings: { getSync: () => ({ windowZoom: 0.5 }) },
+    });
+    const rect = HTMLElement.prototype.getBoundingClientRect;
+    const spy = vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockImplementation(function (this: HTMLElement) {
+      return this.dataset.testid === 'right-sidebar-unified-topbar'
+        ? { x: 220, left: 220, y: 0, top: 0, width: 220, height: 46, right: 440, bottom: 46, toJSON() {} }
+        : rect.call(this);
+    });
+    try {
+      render(createElement(TabGroupHostProvider, { value: {
+        sessionId: 's1', workdir: '/tmp/repo', remoteHostId: null,
+        isMac: true, sidebarCollapsed: true, hasRailChromeActions: false, sidebarWidth: 220,
+      } }, createElement(PaneAtWindowLeftProvider, { value: false },
+        createElement(RightSidebarShell, {
+          sessionId: 's1', workdir: '/tmp/repo', remoteHostId: null,
+          isMac: true, unifiedTopbar: true,
+        }),
+      )));
+      await waitFor(() => expect(screen.getByTestId('right-sidebar-rail-chrome-actions-hit-hole').style.width).toBe('60px'));
+      expect(screen.getByTestId('right-sidebar-rail-chrome-actions-spacer').style.width).toBe('60px');
+    } finally { spy.mockRestore(); }
+  });
+
   // #8662: a top-left tool pane also owns overflow beside an expanded sidebar.
   it.each([
     [220, true, true, false, 34],

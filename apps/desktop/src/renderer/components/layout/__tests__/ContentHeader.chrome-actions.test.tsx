@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 
-import { render, screen } from '@testing-library/react';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { act, render, screen } from '@testing-library/react';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const chrome = vi.hoisted(() => ({ trafficLightInset: 78 }));
 
@@ -17,6 +17,8 @@ describe('ContentHeader rail ChromeActions hit hole', () => {
   beforeEach(() => {
     chrome.trafficLightInset = 78;
   });
+
+  afterEach(() => { vi.restoreAllMocks(); vi.unstubAllGlobals(); });
 
   // #8656: at 50% zoom the native safe area exceeds the fixed 78 CSS-px rail.
   // The old capped hole left the last buttons over a drag region. This unit
@@ -37,6 +39,40 @@ describe('ContentHeader rail ChromeActions hit hole', () => {
     const hitHole = screen.getByTestId('content-header-rail-chrome-actions-hit-hole');
     expect(hitHole.style.width).toBe('202px');
     expect(hitHole.parentElement?.style.paddingLeft).toBe('156px');
+  });
+
+  // Review 4465271789: a preceding 220px tool pane clips its hole before the
+  // zoomed cluster ends. The adjacent real header must own the remaining 60px.
+  it('protects a neighbouring header and follows its actual position after resize', () => {
+    chrome.trafficLightInset = 156;
+    let left = 220;
+    let resize: (() => void) | undefined;
+    vi.stubGlobal('ResizeObserver', class {
+      constructor(callback: () => void) { resize = callback; }
+      observe() {}
+      disconnect() {}
+    });
+    const rect = HTMLElement.prototype.getBoundingClientRect;
+    vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockImplementation(function (this: HTMLElement) {
+      return this.tagName === 'HEADER'
+        ? { x: left, left, y: 0, top: 0, width: 600, height: 46, right: left + 600, bottom: 46, toJSON() {} }
+        : rect.call(this);
+    });
+    render(
+      <FeatureSidebarSlotProvider isCollapsed>
+        <ContentHeader sidebarVisible={false} showCollapsedActions isSidebarRail={false}
+          rightSidebarAvailable={false} hidden={false} />
+      </FeatureSidebarSlotProvider>,
+    );
+    expect(screen.getByTestId('content-header-rail-chrome-actions-hit-hole').style.width).toBe('60px');
+    expect(screen.getByTestId('content-header-chrome-actions-spacer').style.maxWidth).toBe('60px');
+    left = 300;
+    act(() => resize?.());
+    expect(screen.queryByTestId('content-header-rail-chrome-actions-hit-hole')).toBeNull();
+    expect(screen.getByTestId('content-header-chrome-actions-spacer').style.maxWidth).toBe('0px');
+    left = 120;
+    act(() => resize?.());
+    expect(screen.getByTestId('content-header-rail-chrome-actions-hit-hole').style.width).toBe('160px');
   });
 
   // Review #8662: the hit hole alone does not move a title in normal flow.
