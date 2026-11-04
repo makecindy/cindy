@@ -71,6 +71,24 @@ describe('settings discoverability regressions', () => {
     expect(searchSettings(documents, query).map(({ entry }) => entry.id)).toContain(id);
   });
 
+  // Unit regression (PR #8481): generic setting queries miss the mascot choices
+  // rendered by AgentIslandSection. Real translated names/descriptions must locate
+  // the skin selector on macOS, and must not reveal a hidden settings tab.
+  it('finds visible mascot choices by their names and descriptions', () => {
+    const context = { ...searchContext, platform: 'darwin' };
+    const documents = buildSettingsSearchDocuments(searchI18n.t, TAB_IDS, context);
+    const hiddenDocuments = buildSettingsSearchDocuments(searchI18n.t, TAB_IDS.filter((tab) => tab !== 'agent-island'), context);
+    for (const lng of ['zh-CN', 'en']) {
+      for (const field of ['name', 'description']) {
+        const query = searchI18n.t(`settings.agentIsland.skins.whitesnow.${field}`, { lng });
+        expect(searchSettings(documents, query).find(({ entry }) => entry.id === 'settings.agentIsland.skinLabel')?.entry.targetId)
+          .toBe('settings-search-settings-agentIsland-skinLabel');
+        expect(searchSettings(hiddenDocuments, query).map(({ entry }) => entry.id))
+          .not.toContain('settings.agentIsland.skinLabel');
+      }
+    }
+  });
+
   // Unit regression (PR #8481): option descriptions previously ignored local mode.
   // Existing cloud queries do not cover hidden options; exercise production search
   // with local mode + "no keys to configure", using real locales and retaining BYOK.
