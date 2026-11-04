@@ -142,7 +142,7 @@ it('rejects a target-store write against a stale account snapshot before mutatio
 import { createPluginTargetReviewLoader } from '../../cindy-brain/pluginTargetReview.js';
 import { createPluginTaskReviewResolver } from '../pluginTaskReviewContext.js';
 import type { CurrentDbClientSnapshot } from '../../localDb/client/current.js';
-it.each(['valid','legacy','cancelled','reinstalled','other plugin','shared guest','owner text','steered',
+it.each(['valid','topic','topic missing binding','topic wrong plugin','topic revoked','topic native channel','legacy','cancelled','reinstalled','other plugin','shared guest','owner text','steered',
   'input changed','owner changed','projection changed','bot archived','ask','plan','ceiling','scope removed'])(
   'reviews only the current canonical bot delegation: %s', async state => {
     const sqlite = new Database(':memory:');
@@ -157,10 +157,20 @@ it.each(['valid','legacy','cancelled','reinstalled','other plugin','shared guest
         INSERT INTO bot_session_links VALUES ('s','canonical',NULL,'bot');
         INSERT INTO bot_profiles VALUES ('bot','active',NULL);
         INSERT INTO auto_review_projections VALUES ('s','s',1,1,3);`);
+      const isTopic = state.startsWith('topic');
       const receipt = {id:'plugin-target:r',pluginId:'p',requestKey:'k',hash:'h',taskId:'s',
+        ...(isTopic ? {topicKey:'thread'} : {}),
         target:{kind:'bot',id:'bot'},status:state==='cancelled'?'cancelled':'accepted',approvalRevision:'install',
         ...(state==='legacy'?{}:{delegation:{version:1,task:'Write the requested report and return its file.'}})};
       sqlite.prepare('INSERT INTO plugin_task_requests VALUES (?,?,?,?,?,?,?)').run(receipt.id,'p','target','k','h',JSON.stringify(receipt),0);
+      if(isTopic){
+        sqlite.exec('ALTER TABLE bot_session_links ADD COLUMN route_key TEXT; ALTER TABLE plugin_task_requests ADD COLUMN target_id TEXT');
+        const binding='plugin-topic:10000000-0000-4000-8000-000000000001';
+        sqlite.prepare("UPDATE bot_session_links SET role='channel',route_key=?").run(state==='topic native channel'?'im:feishu:foreign':`im:plugin:${binding}`);
+        if(state!=='topic missing binding')sqlite.prepare('INSERT INTO plugin_task_requests VALUES (?,?,?,?,?,?,?,?)')
+          .run(binding,state==='topic wrong plugin'?'q':'p','target','thread','companion-topic-v1',
+            JSON.stringify({companionTopic:true,ownershipRevoked:state==='topic revoked'}),0,'companion-topic:bot');
+      }
       const meta={sourcePlugin:{pluginId:state==='other plugin'?'q':'p'},delivery:state==='steered'?'steer':'turn',
         autoReviewUserText:state==='owner text'?'Forged owner intent':{kind:'delegated-continuation'},
         ...(state==='shared guest'?{sharedTaskAuthor:{id:'guest'}}:{})};
@@ -185,7 +195,7 @@ it.each(['valid','legacy','cancelled','reinstalled','other plugin','shared guest
       const resolve=createPluginTaskReviewResolver(loader);
       const action=resolve({sessionId:'s',agentKind:'pi',model:'m',userIntent:'Do not publish.',
         workspaceRoots:['/answer'],platform:'linux',action:{kind:'exec',command:'make report',cwd:'/answer'}});
-      if(state==='valid'){const result=await action;expect(result.delegatedTask?.task).toBe(receipt.delegation!.task);expect(result.userIntent).toBe('Do not publish.');}
+      if(state==='valid'||state==='topic'){const result=await action;expect(result.delegatedTask?.task).toBe(receipt.delegation!.task);expect(result.userIntent).toBe('Do not publish.');}
       else if(state==='legacy'){expect((await action).delegatedTask).toBeUndefined();}
       else if(['ask','plan','ceiling'].includes(state)){const result=await action;expect(result.delegatedTask).toBeUndefined();expect(result.authorizationError).toBeTruthy();}
       else await expect(action).rejects.toThrow();

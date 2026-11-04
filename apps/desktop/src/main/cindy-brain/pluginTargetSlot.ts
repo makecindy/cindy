@@ -27,6 +27,7 @@ export interface PluginTargetReceipt {
   hash: string | null;
   taskId?: string;
   target?: PluginTargetRef;
+  topicKey?: string;
   approvalRevision?: string;
   delegation?: { version: 1; task: string };
   status: 'pending' | 'accepted' | 'cancelled';
@@ -60,6 +61,9 @@ export interface PluginTargetAdapter {
     permissionMode?: PluginTaskPermissionMode,
   ): Promise<void>;
   session(kind: 'task' | 'bot', id: string): Promise<string>;
+  /** No creation during queue validation. The Host, not the plugin, owns the lane route. */
+  resolveTopic?(pluginId: string, botId: string, topicKey: string,
+    options: { create: boolean; title?: string; assertCurrent: () => void }): Promise<string>;
   send(
     pluginId: string,
     taskId: string,
@@ -82,6 +86,7 @@ const fail = (code: string): never => {
 };
 const keyString = (value: unknown): value is string =>
   typeof value === 'string' && value.length > 0 && value.length <= 200 && !value.includes('\0');
+const topicString = (value: unknown): value is string => keyString(value) && !!value.trim();
 const validTaskScope = (task: unknown): task is string =>
   typeof task === 'string' && !!task.trim() && task.length <= 8000 && !task.includes('\0');
 const kinds = ['project', 'task', 'bot'];
@@ -116,7 +121,15 @@ export class PluginTargetSlot {
     assertReceipt(receipt);
     const target = receipt!.target!;
     if (!(await adapter.candidates(target.kind)).some(item => item.id === target.id)) fail('TARGET_UNAVAILABLE');
-    if (target.kind !== 'project' && await adapter.session(target.kind, target.id) !== taskId) fail('TARGET_UNAVAILABLE');
+    if (receipt!.topicKey !== undefined) {
+      if (target.kind !== 'bot' || !topicString(receipt!.topicKey) || !adapter.resolveTopic) fail('PERMISSION_DENIED');
+      const topicSession = await adapter.resolveTopic!(receipt!.pluginId, target.id, receipt!.topicKey!, {
+        create: false, assertCurrent: () => {
+          if (adapter.approvalRevision(receipt!.pluginId) !== receipt!.approvalRevision) fail('PERMISSION_DENIED');
+        },
+      });
+      if (topicSession !== taskId) fail('TARGET_UNAVAILABLE');
+    } else if (target.kind !== 'project' && await adapter.session(target.kind, target.id) !== taskId) fail('TARGET_UNAVAILABLE');
     if (target.kind === 'project' && phase === 'dispatch')
       await adapter.assertProjectDispatch(receipt!.pluginId, taskId);
     assertReceipt(await store.getById(clientId));
@@ -128,7 +141,8 @@ export class PluginTargetSlot {
     const request = raw as PluginTargetRequest;
     if (!request || !['capabilities', 'list', 'resolve', 'send', 'get', 'cancel'].includes(request.kind))
       return fail('INVALID_PARAMS');
-    if (request.kind === 'capabilities') return { delegation: { version: 1, execution: this.supportsDelegationExecution(), targetKinds: ['bot'], delivery: ['queue'], receiptQuery: true, settled: true } };
+    if (request.kind === 'capabilities') return { companionTopics: !!adapter.resolveTopic,
+      delegation: { version: 1, execution: this.supportsDelegationExecution(), targetKinds: ['bot'], delivery: ['queue'], receiptQuery: true, settled: true } };
     const resolve = async (target: PluginTargetRef): Promise<PluginTargetView> => {
       const candidates = await adapter.candidates(target.kind);
       authorized();
@@ -160,6 +174,7 @@ export class PluginTargetSlot {
       authorized();
       return { found: true, executionId: receipt.id, requestKey: receipt.requestKey,
         target: receipt.target, taskId: receipt.taskId, status: receipt.status,
+        ...(receipt.topicKey !== undefined ? { topicKey: receipt.topicKey } : {}),
         delivery: receipt.delivery, settled, ...(receipt.terminal ? { result: receipt.terminal } : {}) };
     }
     if (request.kind === 'cancel') {
@@ -182,6 +197,7 @@ export class PluginTargetSlot {
       !isTarget(request.target) ||
       typeof request.text !== 'string' || !request.text.trim() || request.text.length > 64000 ||
       !validPluginMessageContext(request.text, request.context) ||
+      (request.topicKey !== undefined && (request.target.kind !== 'bot' || !topicString(request.topicKey))) ||
       (request.autoTitle !== undefined && typeof request.autoTitle !== 'boolean') ||
       (request.autoTitle === true && (request.target.kind !== 'project' || request.title !== undefined)) ||
       (request.permissionMode !== undefined &&
@@ -191,6 +207,8 @@ export class PluginTargetSlot {
       (request.title !== undefined && (typeof request.title !== 'string' || request.title.length > 200))
     ) return fail('INVALID_PARAMS');
     const target = request.target;
+    const topicKey = request.topicKey;
+    if (topicKey !== undefined && !adapter.resolveTopic) return fail('UNSUPPORTED_CAPABILITY');
     const delivery = request.delivery ?? 'queue';
     const delegation = request.delegation;
     if (delegation !== undefined) {
@@ -219,6 +237,7 @@ export class PluginTargetSlot {
     return withParsedPluginMessageAttachments(request.attachments, async images => {
       const contentIdentity = [target.kind, target.id, request.text, request.title, route, delivery,
         images.map(({ hash, name }) => [hash, name]),
+        ...(topicKey !== undefined ? [{ topicKey }] : []),
         ...(request.context ? [{ context: request.context }] : []),
         ...(delegation ? [{ delegation: { task: delegationTask } }] : []),
         ...(request.autoTitle ? [{ autoTitle: true }] : []),
@@ -259,8 +278,12 @@ export class PluginTargetSlot {
         const receipt: PluginTargetReceipt = {
           id: `plugin-target:${randomUUID()}`, pluginId, requestKey: request.requestKey,
           ...(delegation ? { delegation: { version: 1 as const, task: delegationTask! } } : {}),
+          ...(topicKey !== undefined ? { topicKey } : {}),
           hash, target, approvalRevision, status: 'pending',
-          taskId: target.kind === 'project' ? randomUUID() : await adapter.session(target.kind, target.id),
+          taskId: topicKey !== undefined
+            ? await adapter.resolveTopic!(pluginId, target.id, topicKey, { create: true,
+              title: request.title || candidate.label, assertCurrent: guard })
+            : target.kind === 'project' ? randomUUID() : await adapter.session(target.kind, target.id),
         };
         receipt.invocationId = adapter.prepareInvocation?.(pluginId, receipt.id.slice('plugin-target:'.length),
           request.invocationId, 'targets.send', receipt.taskId);

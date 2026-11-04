@@ -90,7 +90,8 @@ export function createPluginTaskStore(db: DbClient): PluginTaskStore {
       await db.drizzle.update(table).set({
         payload: sql`json_set(CASE WHEN json_valid(${table.payload}) THEN CASE WHEN json_type(${table.payload}) = 'object' THEN ${table.payload} ELSE '{}' END ELSE '{}' END, '$.ownershipRevoked', json('true'))`,
         revision: sql`${table.revision} + 1`,
-      }).where(and(eq(table.pluginId, pluginId), eq(table.operation, 'create')));
+      }).where(and(eq(table.pluginId, pluginId), or(eq(table.operation, 'create'),
+        and(eq(table.operation, 'target'), sql`substr(${table.targetId}, 1, 16) = 'companion-topic:'`))));
     },
     save: async (row) => {
       const result = await db.drizzle

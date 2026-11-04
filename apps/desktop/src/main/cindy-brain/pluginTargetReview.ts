@@ -52,8 +52,8 @@ export function createPluginTargetReviewLoader(deps: TargetReviewDeps) {
       if (deps.owner() !== owner || JSON.stringify(deps.activeInput(sessionId)) !== JSON.stringify(input))
         throw new Error('Delegated task input changed');
     };
-    const initial = await owner.client.queryOne<{ scope: string | null }>(
-      "SELECT json_extract(payload,'$.delegation.task') AS scope FROM plugin_task_requests WHERE id = ? AND operation = 'target'",
+    const initial = await owner.client.queryOne<{ scope: string | null; topicKey?: string | null }>(
+      "SELECT json_extract(payload,'$.delegation.task') AS scope, json_extract(payload,'$.topicKey') AS topicKey FROM plugin_task_requests WHERE id = ? AND operation = 'target'",
       [input.clientId]);
     current();
     if (initial?.scope == null) return null;
@@ -63,8 +63,20 @@ export function createPluginTargetReviewLoader(deps: TargetReviewDeps) {
     current();
     const projection = await owner.client.tx('authorization.readProjection', { sessionId, leadId: sessionId });
     current();
-    // A single final read fences transcript provenance, receipt, canonical bot,
+    // A single final read fences transcript provenance, receipt, companion lane,
     // runtime settings and the exact owner-instruction projection together.
+    const lanePredicate = initial.topicKey != null
+      ? `b.role = 'channel' AND EXISTS (
+          SELECT 1 FROM plugin_task_requests topic
+          WHERE topic.operation = 'target' AND topic.plugin_id = r.plugin_id
+            AND topic.target_id = 'companion-topic:' || json_extract(r.payload, '$.target.id')
+            AND topic.request_key = json_extract(r.payload, '$.topicKey')
+            AND topic.fingerprint = 'companion-topic-v1'
+            AND json_extract(topic.payload, '$.companionTopic') = 1
+            AND coalesce(json_extract(topic.payload, '$.ownershipRevoked'), 0) = 0
+            AND b.route_key = 'im:plugin:' || topic.id
+        )`
+      : "b.role = 'canonical' AND json_extract(r.payload, '$.topicKey') IS NULL";
     const row = await owner.client.queryOne<ReviewRow>(`
       SELECT r.plugin_id AS pluginId, r.request_key AS requestKey, r.fingerprint, r.payload, r.revision,
         m.agent_meta AS agentMeta, s.working_dir AS workingDir, s.permission_mode AS permissionMode,
@@ -74,7 +86,7 @@ export function createPluginTargetReviewLoader(deps: TargetReviewDeps) {
       JOIN plugin_task_requests r ON r.id = ? AND r.operation = 'target'
       JOIN messages m ON m.session_id = s.id AND m.client_id = r.id AND m.role = 'user'
         AND m.rewind_at IS NULL AND (s.cleared_at IS NULL OR m.created_at > s.cleared_at)
-      JOIN bot_session_links b ON b.session_id = s.id AND b.role = 'canonical' AND b.archived_at IS NULL
+      JOIN bot_session_links b ON b.session_id = s.id AND (${lanePredicate}) AND b.archived_at IS NULL
       JOIN bot_profiles bot ON bot.id = b.bot_id AND bot.status = 'active' AND bot.hidden_at IS NULL
       JOIN auto_review_projections p ON p.session_id = s.id AND p.lead_id = s.id
       WHERE s.id = ? AND s.status = 'active' AND s.remote_host_id IS NULL AND s.agent_device_id IS NULL

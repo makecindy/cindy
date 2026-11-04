@@ -60,7 +60,7 @@ describe('plugin target queries and delivery', () => {
     ]);
     const approvalRevision = vi.fn<PluginTargetAdapter['approvalRevision']>(() => 'approved-install');
     const assertCreatePermission = vi.fn();
-    const assertProjectDispatch = vi.fn(async (_pluginId: string, _taskId: string) => {});
+    const assertProjectDispatch = vi.fn<PluginTargetAdapter['assertProjectDispatch']>(async () => {});
     slot.adapter = { store: () => store, approvalRevision, candidates, session: async () => 'chosen', send, create, withdraw, assertCreatePermission, assertProjectDispatch };
     const guard = vi.fn();
     const call = (payload: unknown, plugin = 'plugin') => slot.handle(plugin, payload, guard);
@@ -78,6 +78,96 @@ describe('plugin target queries and delivery', () => {
     return { ...f, revision, available, request: { ...f.request, target: { kind: 'bot', id: 'chosen' },
       delegation: { task: 'Produce a report and return it through this plugin.' } } };
   }
+
+  // Unit regression: an explicit companion topic must never fall back to the
+  // canonical chat. Exercise the production slot (including restored queues),
+  // not a second router; existing tests only cover canonical bot delivery.
+  function topicFixture() {
+    const f = fixture();
+    const lanes = new Map<string, string>();
+    const resolveTopic = vi.fn(async (pluginId: string, botId: string, topicKey: string,
+      options: { create: boolean; assertCurrent: () => void }) => {
+      options.assertCurrent();
+      const key = JSON.stringify([pluginId, botId, topicKey]);
+      if (!lanes.has(key) && options.create) lanes.set(key, `topic-${lanes.size}`);
+      const id = lanes.get(key);
+      if (!id) throw Object.assign(new Error('TARGET_UNAVAILABLE'), { code: 'TARGET_UNAVAILABLE' });
+      return id;
+    });
+    Object.assign(f.slot.adapter!, { resolveTopic });
+    const canonical = vi.fn(async () => 'canonical');
+    f.slot.adapter!.session = canonical;
+    return { ...f, lanes, resolveTopic, canonical,
+      request: { ...f.request, target: { kind: 'bot', id: 'chosen' }, topicKey: 'group-a:thread-a' } };
+  }
+
+  it('requires the companion topic capability instead of silently using the main conversation', async () => {
+    const f = fixture();
+    expect(await f.call({ kind: 'capabilities' })).toMatchObject({ companionTopics: false });
+    await expect(f.call({ ...f.request, target: { kind: 'bot', id: 'chosen' }, topicKey: 'topic' }))
+      .rejects.toMatchObject({ code: 'UNSUPPORTED_CAPABILITY' });
+    expect(f.send).not.toHaveBeenCalled();
+    expect(receipts.size).toBe(0);
+  });
+
+  it('keeps the released request fingerprint and receipt replay unchanged when no topic is requested', async () => {
+    const f = fixture();
+    const original = await f.call(f.request);
+    // Frozen v1 protocol fingerprint, captured from the unmodified production slot.
+    expect([...receipts.values()][0]?.hash).toBe('823e741a4e4e0ffcaf5ea51bf6aa3d603e5597f57f1ca535087a78ffc59e9ae7');
+    expect(await f.call({ ...f.request, topicKey: undefined })).toEqual(original);
+    expect(f.send).toHaveBeenCalledOnce();
+  });
+
+  it('continues only the same plugin and companion topic across slot restart', async () => {
+    const f = topicFixture();
+    expect(await f.call({ kind: 'capabilities' })).toMatchObject({ companionTopics: true });
+    const first = await f.call(f.request);
+    expect(await f.call(f.request)).toEqual(first);
+    const restarted = new PluginTargetSlot();
+    restarted.adapter = f.slot.adapter;
+    expect(await restarted.handle('plugin', { ...f.request, requestKey: 'follow-up', text: 'Continue' }, f.guard))
+      .toEqual(first);
+    await f.call({ ...f.request, requestKey: 'other-topic', topicKey: 'group-a:thread-b' });
+    await f.call(f.request, 'another-plugin');
+    f.candidates.mockResolvedValue([{ id: 'other-bot', label: 'Other', detail: '' }]);
+    await f.call({ ...f.request, requestKey: 'other-bot', target: { kind: 'bot', id: 'other-bot' } });
+    const deliveredIds = f.send.mock.calls.map(args => args[1]);
+    expect(deliveredIds[0]).toBe(deliveredIds[1]);
+    expect(new Set(deliveredIds).size).toBe(4);
+    expect(f.canonical).not.toHaveBeenCalled();
+    expect([...receipts.values()][0]).toMatchObject({ topicKey: f.request.topicKey });
+  });
+
+  it('binds topic identity to request replay and to restored queue acceptance without creating a replacement', async () => {
+    const f = topicFixture();
+    await f.call(f.request);
+    await expect(f.call({ ...f.request, topicKey: 'different-topic' }))
+      .rejects.toMatchObject({ code: 'REQUEST_KEY_CONFLICT' });
+    const [, taskId, clientId] = f.send.mock.calls[0]!;
+    const restarted = new PluginTargetSlot();
+    restarted.adapter = f.slot.adapter;
+    await expect(restarted.assertQueuedDelivery(taskId, clientId)).resolves.toBeUndefined();
+    f.lanes.clear();
+    await expect(restarted.assertQueuedDelivery(taskId, clientId))
+      .rejects.toMatchObject({ code: 'TARGET_UNAVAILABLE' });
+    expect(f.resolveTopic.mock.calls.at(-1)?.[3].create).toBe(false);
+    expect(f.lanes.size).toBe(0);
+    expect(f.canonical).not.toHaveBeenCalled();
+    expect(f.send).toHaveBeenCalledOnce();
+  });
+
+  it.each([
+    { topicKey: '' }, { topicKey: '   ' }, { topicKey: null }, { topicKey: 42 },
+    { topicKey: 'x'.repeat(201) }, { topicKey: 'a\0b' },
+    { target: { kind: 'task', id: 'chosen' } }, { target: { kind: 'project', id: 'chosen' } },
+  ])('rejects invalid companion topic input before mutation: %j', async invalid => {
+    const f = topicFixture();
+    await expect(f.call({ ...f.request, ...invalid })).rejects.toMatchObject({ code: 'INVALID_PARAMS' });
+    expect(f.resolveTopic).not.toHaveBeenCalled();
+    expect(f.send).not.toHaveBeenCalled();
+    expect(receipts.size).toBe(0);
+  });
   // A cancel acknowledgement never implied execution ended. Only the live Host
   // idle/queue check may release a plugin's serialized companion slot.
   it.each([undefined, false, true])('acknowledges settled cancellation only on positive Host evidence: %s', async idle => {
@@ -345,6 +435,7 @@ describe('plugin target queries and delivery', () => {
   it.each([
     ['INVALID_INVOCATION', 'INVALID_INVOCATION'],
     ['TASK_BUSY', 'TASK_BUSY'],
+    ['UNSUPPORTED_CAPABILITY', 'UNSUPPORTED_CAPABILITY'],
     ['private adapter failure', 'HOST_NOT_READY'],
   ])('preserves the public target error boundary for %s', async (cause, expected) => {
     const f = fixture();

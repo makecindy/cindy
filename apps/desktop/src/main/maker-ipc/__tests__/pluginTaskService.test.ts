@@ -495,6 +495,24 @@ it('serializes source archival behind creation and keeps old tasks inaccessible 
   expect(replacement.taskId).not.toBe(task.taskId);
 });
 
+// Unit: topic binding writes must share the existing receipt queue. Otherwise
+// an uninstall/source change can finish first and a late binding revives access.
+it.each(['uninstall', 'source change'] as const)('serializes %s behind an admitted companion topic binding', async operation => {
+  const f = fixture();
+  let entered!: () => void, release!: () => void;
+  const started = new Promise<void>(resolve => { entered = resolve; });
+  const gate = new Promise<void>(resolve => { release = resolve; });
+  const order: string[] = [];
+  const binding = f.service.withTargetBinding(async () => { entered(); await gate; order.push('binding'); });
+  await started;
+  const finishing = operation === 'uninstall'
+    ? f.service.withUninstall('p', async () => { order.push('uninstall'); })
+    : f.service.relocatePlugin('p', 'archive').then(() => { order.push('source change'); });
+  expect(order).toEqual([]);
+  release(); await binding; await finishing;
+  expect(order).toEqual(['binding', operation]);
+});
+
 it.each(['completed','failed','cancelled','interrupted'] as const)('prefers a newly persisted %s terminal over stale inspection for getRun and listRuns', async status => {
   for (const kind of ['getRun','listRuns'] as const) {
     const f=fixture(),run=await f.send();

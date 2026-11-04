@@ -1123,6 +1123,26 @@ describe('Bot canonical Session lifecycle', () => {
     expect(updated.invitation.stage).toBe('avatar');
   });
 
+  // Unit/in-memory runtime: exercise the actual companion lane factory, model
+  // selection and worker transaction for the new plugin route, not a copied profile.
+  it('creates a hidden plugin topic from the same companion model, Home and permission profile', async () => {
+    const created = await invoke('local-db:bots:create-canonical-session', {
+      botId: 'bot-1', expectedCanonicalSessionId: null, expectedProfileVersion: 1,
+    });
+    await invoke('local-db:bots:update', { id: 'bot-1', capabilities: { permissions: 'trusted' } });
+    const routeKey = 'im:plugin:plugin-topic:10000000-0000-4000-8000-000000000001';
+    const topic = await ensureBotChannelLaneSession({ botId: 'bot-1', routeKey, title: 'Plugin question' });
+    if (!topic.ok) throw new Error(topic.message);
+    const fields = 'model, effort, provider_id, agent_kind, working_dir, permission_mode, source';
+    const read = h.sqlite!.prepare(`SELECT ${fields} FROM sessions WHERE id=?`);
+    expect(read.get(topic.sessionId)).toEqual(read.get(created.session.id));
+    expect(h.sqlite!.prepare('SELECT hidden_at FROM sessions WHERE id=?').pluck().get(topic.sessionId)).not.toBeNull();
+    expect(h.sqlite!.prepare('SELECT canonical_session_id FROM bot_profiles WHERE id=?').pluck().get('bot-1')).toBe(created.session.id);
+    expect(await ensureBotChannelLaneSession({ botId: 'bot-1', routeKey, title: 'Follow-up' }))
+      .toMatchObject({ sessionId: topic.sessionId, created: false });
+    expect(h.sqlite!.prepare("SELECT role FROM bot_session_links WHERE session_id=?").pluck().get(topic.sessionId)).toBe('channel');
+  });
+
   it.each([['ask', 'ask'], ['auto', 'auto'], ['trusted', 'bypassPermissions']])('applies saved %s permissions to the existing chat and live runtime', async (permissions, mode) => {
     const created = await invoke('local-db:bots:create-canonical-session', {
       botId: 'bot-1', expectedCanonicalSessionId: null, expectedProfileVersion: 1,

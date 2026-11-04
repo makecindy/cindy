@@ -235,6 +235,35 @@ Host 只接受同账号、同安装/批准及运行代次、尚未过期且已�
 
 上述统计不覆盖插件自绘界面或自带原生程序的纯本地行为，也不要求插件迁移交互或重新授权。
 
+### 伙伴独立话题（增量接口，未发布）
+
+先确认 `await cindy.targets.capabilities()` 返回 `companionTopics: true`。
+仅 `target.kind === 'bot'` 的 `send` 可传 `topicKey`：非空、非纯空白、不含 NUL，最多 200 字符。
+插件将自己的群 ID / 话题 ID 编成稳定业务键；不要传 Cindy sessionId 或原生 IM routeKey。
+
+```js
+const caps = await cindy.targets.capabilities();
+if (caps.companionTopics !== true) throw new Error('当前 Cindy 不支持伙伴独立话题，请更新客户端');
+const receipt = await cindy.targets.send({
+  target: { kind: 'bot', id: selectedCompanionId },
+  topicKey: JSON.stringify([chatId, rootMessageId]),
+  requestKey: upstreamMessageId,
+  text: question,
+});
+```
+
+Host 按真实插件实例、伙伴与话题绑定隐藏的伙伴 channel Session。同话题复用、不同话题独立；
+伙伴的模型、权限、身份、技能与长期记忆沿用现有运行机制，不复制插件任务配置。
+隔离的是消息历史，伙伴长期记忆仍共享。`title` 仅给新话题命名，不重命名已有话题。
+原有 queue / steer、附件及可选 delegation 协议继续使用；不接受 bot 的 route / permissionMode 覆盖。
+
+topicKey 参与同键去重；同一 requestKey 改话题会返回 REQUEST_KEY_CONFLICT。
+send 返回的 taskId 是本次伙伴话题，不授予 tasks API 对该 Session 的管理或历史读取权限。
+targets.get 只查询本插件 requestKey 的回执，并可返回原 topicKey；结果继续走插件已有回传工具。
+重启恢复只查原绑定，不为排队输入另建话题。目标失效不改投主对话或普通任务。
+换源沿既有归档隔离话题绑定，卸载撤销旧绑定。旧调用省略 topicKey 时主对话路径与回执摘要保持不变。
+旧 Host 可能忽略未知请求字段，因此必须先检测能力，不能把发送未报错当作话题隔离已生效。
+
 ### 正文、附带资料与自动标题（可选）
 
 先检查 `tasks.capabilities().messageContext === true`。`tasks.send` 和 `targets.send` 可另外传
