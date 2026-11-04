@@ -14543,6 +14543,7 @@ describe('usage-limit wait (ordinary tasks)', () => {
       markOrcaRoleIfNeeded: async () => {}, broadcastSessionCreated: () => {},
       prepareSendUserMessage: async (_id, message) => message as string,
       createDbMessage: async (id, row) => { await mocks.createMessage(id, row); },
+      statDirectory: async () => ({ isDirectory: () => true }),
       isSessionRunningError: () => false, log: { info: () => {}, warn: () => {} },
     });
     h.sendToAgent.mockImplementation(async (...args) =>
