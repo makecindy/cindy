@@ -6135,8 +6135,10 @@
       "accessRevokedByPeer": "Accès révoqué : l'autre appareil doit le rétablir dans ses paramètres",
       "deviceControlToggleAria": "Activer/désactiver le contrôle de {{name}}",
       "myDevices": {
-        "controlIt": "Je le contrôle",
-        "allowInbound": "L'autoriser à contrôler cet appareil",
+        "iCan": "Je peux",
+        "itCan": "Il peut",
+        "controlIt": "Le contrôler",
+        "controlThisDevice": "Contrôler cet appareil",
         "allowInboundAria": "Autoriser ou non {{name}} à contrôler cet appareil",
         "peerControlOff": "Contrôle à distance non activé sur cet appareil",
         "masterOffHint": "Activez d'abord l'interrupteur principal ci-dessus",

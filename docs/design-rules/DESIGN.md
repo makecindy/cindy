@@ -367,6 +367,10 @@ card/container
 
 Desktop Settings sections put the 16px/500 section title outside the card. A card groups related settings as rows: label (13px/500) and hint (12px) on the left, the control on the right, `px-4 py-4` per row, and an inset divider between visible rows only. Related switches share one card instead of one card each; a row that opens a sub-page uses the same row with a trailing chevron. Use the shared classes in [settingsRowClasses.ts](../../apps/desktop/src/renderer/components/settings/settingsRowClasses.ts). Settings → General follows this throughout (owner request, 2026-10-17); other Settings pages still contain 20px single-row cards and are not declared migrated.
 
+### Device access pills
+
+Settings → Remote Connection → My devices shows what each other device may do as two rows split by direction, not as a stack of switches (owner decision, 2026-11-03, unified authorization direction B): “I can” holds the outbound pill (Control it), “It can” holds what that device may do with this computer (Control this device; later Sync keys and Use models on this computer join the same row). The row label is 12px `--text-secondary` in a `max-content` column; pills are 28px-tall full-radius buttons with 12px text. Pressed = `--surface-chip` fill, no border, 12px check icon, `--text-primary`; not pressed = 1px `--border-default` outline, `--text-tertiary`, hover `--surface-hover`; disabled = 40% opacity. A pill is a `button` with `aria-pressed` and keeps the per-device accessible name of the switch it replaced; a click applies immediately with no confirmation. A reason line (11px `--text-tertiary`) sits under the pills of its row. Devices that cannot be controlled (phones/tablets) or that refused this computer show only the “It can” row. The master “Allow devices on this account to control this computer” switch on the This device card stays a switch. Implementation: [MyDevicesPanel.tsx](../../apps/desktop/src/renderer/components/settings/MyDevicesPanel.tsx).
+
 ### Provider detail header
 
 All provider connections share one header pattern, independent of builtin/custom storage or login source.

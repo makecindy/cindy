@@ -6135,8 +6135,10 @@
       "accessRevokedByPeer": "Acesso revogado — o outro dispositivo precisa restaurá-lo nas configurações",
       "deviceControlToggleAria": "Alternar controle de {{name}}",
       "myDevices": {
-        "controlIt": "Eu o controlo",
-        "allowInbound": "Permitir que ele controle este dispositivo",
+        "iCan": "Eu posso",
+        "itCan": "Ele pode",
+        "controlIt": "Controlá-lo",
+        "controlThisDevice": "Controlar este dispositivo",
         "allowInboundAria": "Alternar permissão para {{name}} controlar este dispositivo",
         "peerControlOff": "Controle remoto não ativado nesse dispositivo",
         "masterOffHint": "Primeiro, ative a opção principal acima",

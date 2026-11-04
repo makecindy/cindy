@@ -6034,8 +6034,10 @@
       "accessRevokedByPeer": "訪問權限已被撤銷，需對方在選項中恢復",
       "deviceControlToggleAria": "切換是否控制 {{name}}",
       "myDevices": {
-        "controlIt": "我控制它",
-        "allowInbound": "允許它控制本機",
+        "iCan": "我可以",
+        "itCan": "它可以",
+        "controlIt": "控制它",
+        "controlThisDevice": "控制本機",
         "allowInboundAria": "切換是否允許 {{name}} 控制本機",
         "peerControlOff": "對方未允許遠端控制",
         "masterOffHint": "需先開啟上方總開關",
