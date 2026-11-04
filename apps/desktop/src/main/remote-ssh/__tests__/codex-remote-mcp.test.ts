@@ -1050,19 +1050,47 @@ describe('daemon restarted outside MCP bootstrap', () => {
     expect((await ensureRemoteCodexMcpBridge(host, deps)).daemonRebootstrapped).toBe(false);
 
     expect(await killRemoteCodexDaemon(host)).toEqual({ ok: true });
-    expect(prefsOf('host-killed-daemon')?.appliedFingerprint).toBeUndefined();
-    expect(hasPendingRemoteMcpDrift('host-killed-daemon', {
-      collabEnabled: true,
-      makerMemoryEnabled: false,
-      token: 'test-persistent-token',
-      bridgeInstanceId: 'bridge-1',
-    })).toBe(true);
+    const driftOpts = { collabEnabled: true, makerMemoryEnabled: false, bridgeInstanceId: 'bridge-1' };
+    expect(hasPendingRemoteMcpDrift('host-killed-daemon', { ...driftOpts, token: 'test-persistent-token' })).toBe(true);
+    // Token lost later (locked keychain): cleanup evidence must survive the kill.
+    expect(hasPendingRemoteMcpDrift('host-killed-daemon', { ...driftOpts, token: null })).toBe(true);
 
     inputs.length = 0;
     const healed = await ensureRemoteCodexMcpBridge(host, deps);
     expect(healed.daemonRebootstrapped).toBe(true);
     expect(inputs.some((input) => input.includes('LIZI_MCP_TOKEN=test-persistent-token'))).toBe(true);
     expect(prefsOf('host-killed-daemon')?.appliedFingerprint).toBeTruthy();
+  });
+
+  it('does not write back the fingerprint when the daemon is killed during bootstrap', async () => {
+    let killedDuringBootstrap = false;
+    const host = {
+      id: 'host-kill-race',
+      exec: async (cmd: string) => {
+        if (cmd.includes('bootstrap') && !killedDuringBootstrap) {
+          killedDuringBootstrap = true;
+          // Auth sync kills the daemon while this ensure awaits its bootstrap.
+          await killRemoteCodexDaemon(host);
+        }
+        return { exitCode: 0, stdout: cmd.includes('config.toml') ? '' : 'ok', stderr: '' };
+      },
+      ensureRemoteForward: async (spec: { localHost: string; localPort: number; preferredRemotePort?: number }) => ({
+        remotePort: spec.preferredRemotePort ?? 47927,
+        close: async () => {},
+      }),
+    } as unknown as RemoteHost;
+    const result = await ensureRemoteCodexMcpBridge(host, {
+      ensureBridgeStarted: async () => ({ port: 38080, serverNames: SERVERS, bridgeInstanceId: 'bridge-1' }),
+      hasLiveTurnOnHost: () => false,
+    });
+    expect(result.ok).toBe(true);
+    expect(killedDuringBootstrap).toBe(true);
+    expect(hasPendingRemoteMcpDrift('host-kill-race', {
+      collabEnabled: true,
+      makerMemoryEnabled: false,
+      token: 'test-persistent-token',
+      bridgeInstanceId: 'bridge-1',
+    })).toBe(true);
   });
 });
 

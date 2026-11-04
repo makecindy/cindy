@@ -49,7 +49,7 @@ import {
   stopTunnelForHost,
   tunnelNeedsRebuild,
 } from './agent-proxy-tunnel.js';
-import { forgetRemoteCodexMcpDaemonEnv } from './codex-remote-mcp.js';
+import { invalidateRemoteCodexMcpDaemonEnv } from './codex-remote-mcp.js';
 import { getSshHostAgentProxy, type SshHostAgentProxyPref } from './ssh-host-prefs-store.js';
 
 const log = createLogger('remote-ssh/agent-proxy');
@@ -345,16 +345,23 @@ done
 echo "daemon still alive after TERM(5s)+KILL(2s)" >&2
 exit 3
 `;
+  // 接手重启的 transport 不带 LIZI_MCP_TOKEN: 杀之前先让 MCP 已生效记录
+  // 失效, 下次 session start / live send 带 token 重 bootstrap (#8781)。
+  // 本地落盘失败不影响杀 daemon 与调用方的结果语义。
+  try {
+    invalidateRemoteCodexMcpDaemonEnv(host.id);
+  } catch (err) {
+    log.warn('failed to invalidate remote codex MCP daemon env before kill', {
+      hostId: host.id,
+      error: err instanceof Error ? err.message : String(err),
+    });
+  }
   try {
     const result = await host.exec(`bash -c ${shellQuote(killScript)}`, {
       // 脚本最坏路径: TERM 轮询 5s + KILL 轮询 2s + ssh/exec 开销 — 给 15s。
       timeoutMs: 15_000,
       label: 'kill-codex-daemon',
     });
-    // The replacement daemon is started by the transport without the MCP
-    // token. Invalidate the applied MCP env even on partial failure so the
-    // next session start / live send re-bootstraps cindy_helper and collab.
-    forgetRemoteCodexMcpDaemonEnv(host.id);
     if (result.exitCode !== 0) {
       const detail = result.stderr.trim().slice(0, 200);
       log.warn('failed to kill remote codex daemon', { hostId: host.id, exitCode: result.exitCode, stderr: detail });
@@ -362,7 +369,6 @@ exit 3
     }
     return { ok: true };
   } catch (err) {
-    forgetRemoteCodexMcpDaemonEnv(host.id);
     const detail = String((err as Error).message ?? err);
     log.warn('failed to kill remote codex daemon (exec error)', { hostId: host.id, error: detail });
     return { ok: false, reason: 'pkill_failed', detail };
