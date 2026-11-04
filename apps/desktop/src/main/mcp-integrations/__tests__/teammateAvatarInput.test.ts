@@ -72,6 +72,26 @@ describe('teammate avatar input', () => {
       { allowWebp: true, maxBytes: 5 * 1024 * 1024 });
   });
 
+  it('retains an outside-file grant until avatar persistence', async () => {
+    let current = true;
+    const authorization = async () => ({ allowed: true as const, isCurrent: () => current });
+    const readPicture: NonNullable<TeammateAvatarInputDeps['readPicture']> = async (_ref, _workingDir, authorize) => {
+      await authorize('C:\\outside\\avatar.png');
+      return { ok: true, bytes: png };
+    };
+    const result = await resolveTeammateAvatarInput({ ...baseInput, avatar: 'C:\\outside\\avatar.png' },
+      deps({ authorizePath: authorization, readPicture }));
+    expect(result).toMatchObject({ ok: true, avatarImageBase64: png.toString('base64') });
+    if (!result.ok) throw new Error('expected authorized avatar');
+    expect(result.isAccessCurrent?.()).toBe(true);
+    current = false;
+    expect(result.isAccessCurrent?.()).toBe(false);
+
+    expect(await resolveTeammateAvatarInput({ ...baseInput, avatar: 'C:\\outside\\avatar.png' }, deps({
+      authorizePath: authorization, readPicture,
+    }))).toMatchObject({ ok: false, errorCode: 'PERMISSION_DENIED' });
+  });
+
   it('never reads a controller-local file for a remote task', async () => {
     const readPicture = vi.fn();
     expect(await resolveTeammateAvatarInput({ ...baseInput, remoteHostId: 'remote-1', avatar: 'avatar.png' }, deps({ readPicture })))

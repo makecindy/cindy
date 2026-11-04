@@ -137,6 +137,7 @@ import { getInputHandoffService } from '../input-handoff/service.js';
 import { isInputHandoffDisabledForSession } from '../input-handoff/botPolicy.js';
 import { readHandoffPicture } from '../input-handoff/pictureRef.js';
 import { isIpcError } from '../../shared/ipc-errors.js';
+import { throwIpcError } from '../utils/ipcValidate.js';
 import type { PluginRegistry } from '../maker-host/plugins/plugin-registry.js';
 import { BUILTIN_LIZI_MCP_IDS, pluginIdForProviderName } from '../maker-host/plugins/builtin-plugins.js';
 import { isFrozenBuiltinPluginAllowed } from './codexBuiltinToolPolicy.js';
@@ -1381,8 +1382,13 @@ export function createDesktopMcpProviders(deps: DesktopMcpProvidersDeps): LiziMc
               : await resolveTeammateAvatar({ avatar, sessionId: callerSessionId, sessionInstanceId: callerSessionInstanceId,
                 workingDir: owned.workingDir, remoteHostId: owned.remoteHostId, toolName: 'cindy_helper.create_teammate' });
             if (!resolvedAvatar.ok) return resolvedAvatar;
+            const assertAvatarAccess = () => {
+              if ('isAccessCurrent' in resolvedAvatar && resolvedAvatar.isAccessCurrent?.() === false)
+                throwIpcError('PERMISSION_DENIED', '头像文件授权已变化，请重新操作');
+            };
             if (isAppSessionBoundaryPending() || activeOwnerScopeKey() !== ownerScope || tryGetDbClient() !== dbClient)
               return { ok: false, errorCode: 'PRECONDITION_FAILED', message: '账号已切换，请在当前账号重新创建伙伴' };
+            assertAvatarAccess();
             const profile = await createBotProfile({
               name,
               description,
@@ -1393,7 +1399,7 @@ export function createDesktopMcpProviders(deps: DesktopMcpProvidersDeps): LiziMc
               ...(gender !== undefined ? { gender } : {}),
               ...(userContextSource !== undefined ? { userContextSource } : {}),
               prepareInvitation: true,
-            });
+            }, undefined, assertAvatarAccess);
             return {
               ok: true,
               bot: { id: profile.id, name: profile.name, description: profile.description },
@@ -1401,7 +1407,7 @@ export function createDesktopMcpProviders(deps: DesktopMcpProvidersDeps): LiziMc
           } catch (err) {
             return {
               ok: false,
-              errorCode: isIpcError(err) && err.code === 'INVALID_PARAMS' ? 'INVALID_ARGS' : 'INTERNAL',
+              errorCode: isIpcError(err) ? err.code === 'INVALID_PARAMS' ? 'INVALID_ARGS' : err.code : 'INTERNAL',
               message: err instanceof Error ? err.message : String(err),
             };
           }
@@ -1432,14 +1438,19 @@ export function createDesktopMcpProviders(deps: DesktopMcpProvidersDeps): LiziMc
             sessionInstanceId: callerSessionInstanceId, workingDir: owned.workingDir,
             remoteHostId: owned.remoteHostId, toolName: 'cindy_helper.set_teammate_avatar' });
           if (!resolvedAvatar.ok) return resolvedAvatar;
+          const assertAvatarAccess = () => {
+            if ('isAccessCurrent' in resolvedAvatar && resolvedAvatar.isAccessCurrent?.() === false)
+              throwIpcError('PERMISSION_DENIED', '头像文件授权已变化，请重新操作');
+          };
           if (isAppSessionBoundaryPending() || activeOwnerScopeKey() !== ownerScope || tryGetDbClient() !== dbClient)
             return { ok: false, errorCode: 'PRECONDITION_FAILED', message: '账号已切换，请在当前账号重新操作' };
           try {
+            assertAvatarAccess();
             if (resolvedAvatar.avatarImageBase64) {
               const buffer = Buffer.from(resolvedAvatar.avatarImageBase64, 'base64');
               await setBotProfileAvatar(owned.botId, {
                 buffer, mimeType: validateBotAvatarBuffer(buffer),
-              }, expectedVersion);
+              }, expectedVersion, undefined, assertAvatarAccess);
             } else if (resolvedAvatar.avatar) {
               await updateBotProfile({ id: owned.botId, avatar: resolvedAvatar.avatar }, expectedVersion);
             } else {

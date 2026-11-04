@@ -72,4 +72,19 @@ describe('代输入 screenshot read', () => {
     expect(authorize).toHaveBeenCalledOnce();
     expect(result).toMatchObject({ ok: false, errorCode: 'PERMISSION_DENIED' });
   });
+
+  it('rejects an outside file when its grant expires before or during the read', async () => {
+    const task = tempDir();
+    const outside = path.join(tempDir(), 'avatar.png');
+    writeFileSync(outside, 'authorized');
+    const isCurrent = vi.fn().mockReturnValueOnce(false);
+    expect(await readHandoffPicture(outside, task, async () => ({ allowed: true, isCurrent })))
+      .toMatchObject({ ok: false, errorCode: 'PERMISSION_DENIED' });
+    expect(isCurrent).toHaveBeenCalledOnce();
+
+    const expiresDuringRead = vi.fn().mockReturnValueOnce(true).mockReturnValueOnce(false);
+    expect(await readHandoffPicture(outside, task, async () => ({ allowed: true, isCurrent: expiresDuringRead })))
+      .toMatchObject({ ok: false, errorCode: 'PERMISSION_DENIED' });
+    expect(expiresDuringRead).toHaveBeenCalledTimes(2);
+  });
 });

@@ -56,9 +56,10 @@ async function readFile(file: string, maxBytes = MAX_BYTES, allowWebp = false): 
   }
 }
 
-async function readAuthorizedFile(file: string, workingDir: string | undefined, maxBytes: number, allowWebp: boolean): Promise<HandoffPictureRead> {
+async function readAuthorizedFile(file: string, workingDir: string | undefined, maxBytes: number,
+  allowWebp: boolean, isGrantCurrent?: () => boolean): Promise<HandoffPictureRead> {
   const root = workingDir ?? path.dirname(file);
-  if (!await authorizedSessionPathStillBound(root, file))
+  if (isGrantCurrent?.() === false || !await authorizedSessionPathStillBound(root, file))
     return { ok: false, errorCode: 'PERMISSION_DENIED', message: '图片路径或任务权限已变化，请重试。' };
   try {
     const handle = await fs.open(file, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0));
@@ -74,7 +75,8 @@ async function readAuthorizedFile(file: string, workingDir: string | undefined, 
       }
       const bound = await fs.stat(file);
       if (length !== stat.size || bound.dev !== stat.dev || bound.ino !== stat.ino
-        || !await authorizedSessionPathStillBound(root, file))
+        || isGrantCurrent?.() === false || !await authorizedSessionPathStillBound(root, file)
+        || isGrantCurrent?.() === false)
         return { ok: false, errorCode: 'PERMISSION_DENIED', message: '读取期间图片路径或内容已变化，请重试。' };
       return { ok: true, bytes: bytes.subarray(0, length) };
     } finally {
@@ -101,9 +103,11 @@ export async function readHandoffPicture(
   const source = classifyLocalAttachmentPath(file, workingDir ?? null, { mimeForExt: (ext) => mime[ext] ?? null });
   if (source.kind === 'not-local') return notFound(options.allowWebp);
   if (source.kind === 'unsupported-type') return notAnImage(options.allowWebp);
+  let isGrantCurrent: (() => boolean) | undefined;
   if (source.kind === 'outside-workdir') {
     const grant = await authorize(source.absPath);
     if (!grant.allowed) return { ok: false, errorCode: 'PERMISSION_DENIED', message: grant.reason };
+    isGrantCurrent = grant.isCurrent;
   }
-  return readAuthorizedFile(source.absPath, workingDir, maxBytes, options.allowWebp ?? false);
+  return readAuthorizedFile(source.absPath, workingDir, maxBytes, options.allowWebp ?? false, isGrantCurrent);
 }
