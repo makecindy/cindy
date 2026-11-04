@@ -1,6 +1,7 @@
 import type { AgentIslandSessionActivity } from '../../shared/agentIsland.js';
 import {
   WORKLOUDER_CODEX_AGENT_SLOT_COUNT,
+  WORKLOUDER_CODEX_DEFAULT_AGENT_SLOT_COUNT,
   WORKLOUDER_CREATOR_LIT_TASK_KEY_COUNT,
   buildCreatorMicro2AgentKeymap,
   type WorkLouderCodexConnectionReason,
@@ -201,7 +202,7 @@ const PHASE_PRIORITY: Readonly<Record<WorkLouderCodexSessionActivity['phase'], n
 export function createWorkLouderCodexLightingFrame(
   activity: readonly WorkLouderCodexSessionActivity[],
   slotSessionIds?: readonly string[],
-  threadCount: number = WORKLOUDER_CODEX_AGENT_SLOT_COUNT,
+  threadCount: number = WORKLOUDER_CODEX_DEFAULT_AGENT_SLOT_COUNT,
 ): WorkLouderCodexLightingFrame {
   const slots = projectWorkLouderCodexSlotActivity(activity, slotSessionIds, threadCount);
   const aggregate = slots.reduce<WorkLouderCodexSessionActivity['phase'] | null>((current, item) => {
@@ -225,18 +226,18 @@ export function muteWorkLouderCodexKeyZone(
   return { ...frame, keys: { ...OFF_SIDE } };
 }
 
-/** The ordered task assignment shared by the six LEDs and their physical keys. */
+/** The ordered task assignment shared by the LEDs and their physical keys. */
 export function selectWorkLouderCodexSlotActivity(
   activity: readonly WorkLouderCodexSessionActivity[],
 ): WorkLouderCodexSessionActivity[] {
   return activity.filter(isLightingVisibleActivity).slice(0, WORKLOUDER_CODEX_AGENT_SLOT_COUNT);
 }
 
-/** Aligns activity LEDs with an explicit six-task key assignment when one is available. */
+/** Aligns activity LEDs with an explicit task-key assignment when one is available. */
 export function projectWorkLouderCodexSlotActivity(
   activity: readonly WorkLouderCodexSessionActivity[],
   slotSessionIds?: readonly string[],
-  threadCount: number = WORKLOUDER_CODEX_AGENT_SLOT_COUNT,
+  threadCount: number = WORKLOUDER_CODEX_DEFAULT_AGENT_SLOT_COUNT,
 ): Array<WorkLouderCodexSessionActivity | undefined> {
   if (slotSessionIds === undefined) {
     return selectWorkLouderCodexSlotActivity(activity).slice(0, threadCount);
@@ -665,7 +666,7 @@ export function applyWorkLouderCodexLightingBrightness(
 }
 
 export function createWorkLouderCodexOffFrame(
-  threadCount: number = WORKLOUDER_CODEX_AGENT_SLOT_COUNT,
+  threadCount: number = WORKLOUDER_CODEX_DEFAULT_AGENT_SLOT_COUNT,
 ): WorkLouderCodexLightingFrame {
   return {
     ambient: { ...OFF_SIDE },
@@ -689,7 +690,7 @@ export function createWorkLouderCodexOffFrame(
  * not: on an idle board it can look like the lights never came on.
  */
 export function createWorkLouderCodexWindowRevealFrame(
-  threadCount: number = WORKLOUDER_CODEX_AGENT_SLOT_COUNT,
+  threadCount: number = WORKLOUDER_CODEX_DEFAULT_AGENT_SLOT_COUNT,
 ): WorkLouderCodexLightingFrame {
   return {
     ambient: side(WorkLouderLightingEffect.Snake, 0.78, 0.55, COLORS.brand),

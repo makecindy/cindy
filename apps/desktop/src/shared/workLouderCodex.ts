@@ -22,7 +22,7 @@ export const WORKLOUDER_CODEX_DEVICE: InputDeviceDescriptor = {
   id: WORKLOUDER_CODEX_DEVICE_ID,
   label: 'Work Louder Codex Micro',
   capabilities: [
-    { kind: 'task-slots', count: 6 },
+    { kind: 'task-slots', count: 13 },
     { kind: 'commands' },
     { kind: 'voice' },
     { kind: 'encoder' },
@@ -61,7 +61,10 @@ export const WORKLOUDER_CODEX_STATE_CHANGED_CHANNEL = 'worklouder-codex:state-ch
 export const WORKLOUDER_CODEX_ACTION_CHANNEL = 'worklouder-codex:action';
 export const WORKLOUDER_CODEX_PREVIEW_INPUT_CHANNEL = 'worklouder-codex:preview-input';
 
-export const WORKLOUDER_CODEX_AGENT_SLOT_COUNT = 6;
+/** Physical task/lighting slots on the 13-key board. */
+export const WORKLOUDER_CODEX_AGENT_SLOT_COUNT = 13;
+/** Factory six-AG layout count; used when a layout does not choose task keys. */
+export const WORKLOUDER_CODEX_DEFAULT_AGENT_SLOT_COUNT = 6;
 /** Maximum number of tasks accepted by the Work Louder task-list IPC. */
 export const WORKLOUDER_CODEX_TASK_OPTION_LIMIT = 100;
 
@@ -803,9 +806,8 @@ export function assignCreatorHidCodes(
   const taskSet = new Set(task);
   const command = WORKLOUDER_CREATOR_PROGRAMMABLE_KEYS.filter((key) => !taskSet.has(key));
   const assigned = new Map<WorkLouderCreatorProgrammableKey, string>();
-  // Firmware only emits AG00–AG05. Extra task keys keep ACT codes; Cindy maps
-  // those HID reports onto the remaining task slots in software.
-  const firmwareAg = WORKLOUDER_HID_AG_CODES.slice(0, WORKLOUDER_CODEX_AGENT_SLOT_COUNT);
+  // Firmware accepts AG00–AG19; one layer can bind all 13 physical keys.
+  const firmwareAg = WORKLOUDER_HID_AG_CODES;
   const litCount = Math.min(task.length, firmwareAg.length);
   for (let index = 0; index < litCount; index += 1) {
     assigned.set(task[index]!, firmwareAg[index]!);
@@ -819,23 +821,22 @@ export function assignCreatorHidCodes(
   return assigned;
 }
 
-const WORKLOUDER_FIRMWARE_AGENT_KEYS = WORKLOUDER_HID_AG_CODES.slice(
-  0,
-  WORKLOUDER_CODEX_AGENT_SLOT_COUNT,
-) as WorkLouderCreatorProgrammableKey[];
+const WORKLOUDER_FIRMWARE_AGENT_KEYS = WORKLOUDER_HID_AG_CODES;
 
 /**
- * The shared `keys` zone paints every keycap. Mute it unless the six firmware
- * AG keys are exactly the task-key set — otherwise a demoted AG key still
- * washes green, and extra ACT task keys inherit the same wash.
+ * The shared `keys` zone paints every keycap. Mute it unless the layout is the
+ * factory six-AG set or all thirteen physical keys are task keys — otherwise
+ * a demoted AG key still washes green, and extra task keys inherit the wash.
  */
 export function workLouderShouldMuteKeyZone(
   taskKeys: readonly WorkLouderCreatorProgrammableKey[] | undefined,
 ): boolean {
   const keys = normalizeWorkLouderCreatorTaskKeys(taskKeys);
-  return (
-    keys.length > WORKLOUDER_CODEX_AGENT_SLOT_COUNT ||
-    WORKLOUDER_FIRMWARE_AGENT_KEYS.some((key) => !keys.includes(key))
+  const defaultSix = WORKLOUDER_CREATOR_DEFAULT_TASK_KEYS.every((key) => keys.includes(key));
+  const allThirteen = keys.length === WORKLOUDER_FIRMWARE_AGENT_KEYS.length;
+  return !(
+    (defaultSix && keys.length === WORKLOUDER_CREATOR_DEFAULT_TASK_KEYS.length) ||
+    allThirteen
   );
 }
 
@@ -874,16 +875,31 @@ export function resolveCreatorHidRole(
   return null;
 }
 
+/**
+ * Maps an AG code emitted by the 13-AG keymap back to the physical key Cindy
+ * knows. AG00–AG05 are their own keys; AG06–AG12 sit on the seven ACT positions.
+ */
+export function workLouderPhysicalKeyForAgentCode(
+  hidKey: string,
+): WorkLouderCreatorProgrammableKey | null {
+  const match = /^AG(0[0-9]|1[0-2])$/.exec(hidKey);
+  if (!match) return null;
+  return WORKLOUDER_CREATOR_PROGRAMMABLE_KEYS[Number(match[1])] ?? null;
+}
+
 /** Codex keeps factory AG/ACT codes. HID key name is the physical key. */
 export function resolveFactoryHidRole(
   hidKey: string,
   taskKeys: readonly WorkLouderCreatorProgrammableKey[],
 ): CreatorHidRole | null {
-  if (!isWorkLouderCreatorProgrammableKey(hidKey)) return null;
+  const physical =
+    workLouderPhysicalKeyForAgentCode(hidKey) ??
+    (isWorkLouderCreatorProgrammableKey(hidKey) ? hidKey : null);
+  if (!physical) return null;
   const normalized = normalizeWorkLouderCreatorTaskKeys(taskKeys);
-  const slot = normalized.indexOf(hidKey);
-  if (slot >= 0) return { role: 'task', slot, physical: hidKey };
-  return { role: 'command', physical: hidKey };
+  const slot = normalized.indexOf(physical);
+  if (slot >= 0) return { role: 'task', slot, physical };
+  return { role: 'command', physical };
 }
 
 export function resolveWorkLouderHidRole(

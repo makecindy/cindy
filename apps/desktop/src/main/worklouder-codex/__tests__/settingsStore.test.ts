@@ -60,6 +60,22 @@ describe('Work Louder Codex settings store', () => {
     ).toEqual(createWorkLouderCodexDefaultSettings());
   });
 
+  it('pads a legacy six-slot custom agent list to thirteen without losing entries', () => {
+    const legacy = [
+      null,
+      { type: 'command' as const, commandId: 'newTask' as const },
+      null,
+      null,
+      null,
+      null,
+    ];
+    const next = __testing.normalize({ customAgentKeys: legacy });
+
+    expect(next.customAgentKeys).toHaveLength(13);
+    expect(next.customAgentKeys[1]).toEqual({ type: 'command', commandId: 'newTask' });
+    expect(next.customAgentKeys.slice(6)).toEqual(Array.from({ length: 7 }, () => null));
+  });
+
   it('rounds and clamps persisted brightness while preserving valid options', () => {
     expect(
       __testing.normalize({

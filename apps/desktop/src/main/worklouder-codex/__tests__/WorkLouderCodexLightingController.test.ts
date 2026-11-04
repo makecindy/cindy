@@ -1,7 +1,9 @@
 import { describe, expect, it, vi } from 'vitest';
 
 import {
+  WORKLOUDER_CREATOR_PROGRAMMABLE_KEYS,
   createWorkLouderCodexDefaultSettings,
+  type WorkLouderCodexDeviceState,
   type WorkLouderCodexSettings,
 } from '../../../shared/workLouderCodex.js';
 import { WorkLouderCodexLightingController } from '../WorkLouderCodexLightingController.js';
@@ -44,15 +46,7 @@ describe('WorkLouderCodexLightingController', () => {
       setConnectionStatusHandler: vi.fn(),
       dispose: vi.fn(async () => undefined),
     };
-    const catalog = [
-      'idle-1',
-      'idle-2',
-      'idle-3',
-      'idle-4',
-      'idle-5',
-      'idle-6',
-      'lead-outside',
-    ];
+    const catalog = ['idle-1', 'idle-2', 'idle-3', 'idle-4', 'idle-5', 'idle-6', 'lead-outside'];
     const controller = new WorkLouderCodexLightingController(sink, vi.fn(), async () => catalog);
     controller.applySettings(settings({ agentSource: 'priority' }));
     await controller.resumeTaskSlots();
@@ -237,7 +231,7 @@ describe('WorkLouderCodexLightingController', () => {
     expect(activateSession).not.toHaveBeenCalled();
   });
 
-  it('switches a seventh Creator task key from ACT HID, not AG06', async () => {
+  it('switches a seventh Creator task key from AG06', async () => {
     const hidRef: { current: ((event: { key: string; act: number }) => void) | null } = {
       current: null,
     };
@@ -271,10 +265,7 @@ describe('WorkLouderCodexLightingController', () => {
     await controller.resumeTaskSlots();
 
     const keymap = sink.rebindCreatorKeymap.mock.calls.at(-1)?.[0] as string[][];
-    expect(keymap[2]?.[0]).toBe('KV_OAI_ACT06');
-    hidRef.current?.({ key: 'ACT06', act: 1 });
-    expect(activateSession).toHaveBeenCalledWith('task-6', true);
-    activateSession.mockClear();
+    expect(keymap[2]?.[0]).toBe('KV_OAI_AG06');
     hidRef.current?.({ key: 'AG06', act: 1 });
     expect(activateSession).toHaveBeenCalledWith('task-6', true);
   });
@@ -298,16 +289,7 @@ describe('WorkLouderCodexLightingController', () => {
     const creator = createWorkLouderCodexDefaultSettings('creator-micro-2');
     creator.agentSource = 'sidebar';
     creator.deviceEnabled = true;
-    creator.layout.taskKeys = [
-      'AG00',
-      'AG01',
-      'AG02',
-      'AG03',
-      'AG04',
-      'AG05',
-      'ACT06',
-      'ACT07',
-    ];
+    creator.layout.taskKeys = ['AG00', 'AG01', 'AG02', 'AG03', 'AG04', 'AG05', 'ACT06', 'ACT07'];
     const options = Array.from({ length: 8 }, (_, index) => ({
       id: `task-${index}`,
       title: `Task ${index}`,
@@ -321,14 +303,14 @@ describe('WorkLouderCodexLightingController', () => {
     controller.applySettings(creator);
     await controller.resumeTaskSlots();
 
-    hidRef.current?.({ key: 'ACT06', act: 1 });
+    hidRef.current?.({ key: 'AG06', act: 1 });
     expect(activateSession).toHaveBeenCalledWith('task-6', true);
     activateSession.mockClear();
-    hidRef.current?.({ key: 'ACT07', act: 1 });
+    hidRef.current?.({ key: 'AG07', act: 1 });
     expect(activateSession).toHaveBeenCalledWith('task-7', true);
   });
 
-  it('keeps Creator status LEDs on the first six task keys and does not wash extra keys green', async () => {
+  it('lights a seventh Creator task key without washing extra keys green', async () => {
     const sink = {
       update: vi.fn(),
       setAgentKeyPressHandler: vi.fn(),
@@ -341,15 +323,7 @@ describe('WorkLouderCodexLightingController', () => {
     const creator = createWorkLouderCodexDefaultSettings('creator-micro-2');
     creator.agentSource = 'sidebar';
     creator.deviceEnabled = true;
-    creator.layout.taskKeys = [
-      'AG00',
-      'AG01',
-      'AG02',
-      'AG03',
-      'AG04',
-      'AG05',
-      'ACT06',
-    ];
+    creator.layout.taskKeys = ['AG00', 'AG01', 'AG02', 'AG03', 'AG04', 'AG05', 'ACT06'];
     const options = Array.from({ length: 7 }, (_, index) => ({
       id: `task-${index}`,
       title: `Task ${index}`,
@@ -372,7 +346,7 @@ describe('WorkLouderCodexLightingController', () => {
       },
     ]);
     const frame = sink.update.mock.lastCall?.[0];
-    expect(frame?.threads).toHaveLength(6);
+    expect(frame?.threads).toHaveLength(7);
     expect(frame?.threads[0]?.brightness).toBeGreaterThan(0);
     expect(frame?.threads[1]?.brightness).toBe(0);
     expect(frame?.keys.brightness).toBe(0);
@@ -426,6 +400,68 @@ describe('WorkLouderCodexLightingController', () => {
     expect(frame?.keys.brightness).toBe(0);
     expect(frame?.threads[0]?.brightness).toBe(0);
     expect(frame?.threads[1]?.brightness).toBeGreaterThan(0);
+  });
+
+  it('lights all thirteen Codex AG slots for mixed local and remote tasks', async () => {
+    const hidRef: { current: ((event: { key: string; act: number }) => void) | null } = {
+      current: null,
+    };
+    const stateRef: { current: ((device: WorkLouderCodexDeviceState) => void) | null } = {
+      current: null,
+    };
+    const sink = {
+      update: vi.fn(),
+      setAgentKeyPressHandler: vi.fn(),
+      setDeviceActivityHandler: vi.fn(),
+      setConnectionStatusHandler: vi.fn(),
+      setDeviceStateHandler: vi.fn((handler: typeof stateRef.current) => {
+        stateRef.current = handler;
+      }),
+      setHidInputHandler: vi.fn((handler: typeof hidRef.current) => {
+        hidRef.current = handler;
+      }),
+      rebindCreatorKeymap: vi.fn(),
+      dispose: vi.fn(async () => undefined),
+    };
+    const activateSession = vi.fn();
+    const options = Array.from({ length: 13 }, (_, index) => ({
+      id: index === 0 ? 'local-task' : index === 12 ? 'remote-task' : `task-${index}`,
+      title: index === 0 ? 'Local task' : index === 12 ? 'Remote task' : `Task ${index}`,
+      pinned: false,
+    }));
+    const settingsForTest = createWorkLouderCodexDefaultSettings('codex-micro');
+    settingsForTest.agentSource = 'sidebar';
+    settingsForTest.deviceEnabled = true;
+    settingsForTest.layout.taskKeys = [...WORKLOUDER_CREATOR_PROGRAMMABLE_KEYS];
+    const controller = new WorkLouderCodexLightingController(sink, activateSession, async () => ({
+      sidebar: options,
+      lastSent: options,
+      options,
+    }));
+    controller.applySettings(settingsForTest);
+    stateRef.current?.({
+      deviceType: 'codex-micro',
+      isUsbConnection: true,
+      firmwareVersion: null,
+      batteryPercentage: null,
+      isCharging: false,
+      inputMonitoringPermission: 'granted',
+    });
+    await controller.resumeTaskSlots();
+    sink.update.mockClear();
+
+    controller.updateSessionActivity([
+      { sessionId: 'local-task', phase: 'running', compactDetail: '', attention: false },
+      { sessionId: 'remote-task', phase: 'completed', compactDetail: '', attention: true },
+    ]);
+    const frame = sink.update.mock.lastCall?.[0];
+    expect(frame?.threads).toHaveLength(13);
+    expect(frame?.threads[0]?.brightness).toBeGreaterThan(0);
+    expect(frame?.threads[12]?.brightness).toBeGreaterThan(0);
+    expect(frame?.threads[1]?.brightness).toBe(0);
+
+    hidRef.current?.({ key: 'AG12', act: 1 });
+    expect(activateSession).toHaveBeenCalledWith('remote-task', true);
   });
 
   it('uses the published assignment for the current press and refreshes only later presses', async () => {
@@ -1078,10 +1114,12 @@ describe('WorkLouderCodexLightingController', () => {
 
   it('keeps the instance disabled while still recording keyboard presence', () => {
     const presenceRef: {
-      current: ((
-        present: boolean,
-        identity?: { deviceType: 'codex-micro' | 'creator-micro-2'; isUsbConnection: boolean },
-      ) => void) | null;
+      current:
+        | ((
+            present: boolean,
+            identity?: { deviceType: 'codex-micro' | 'creator-micro-2'; isUsbConnection: boolean },
+          ) => void)
+        | null;
     } = { current: null };
     const statusRef: { current: ((status: 'connecting' | 'disabled') => void) | null } = {
       current: null,
@@ -1132,9 +1170,10 @@ describe('WorkLouderCodexLightingController', () => {
     const hidRef: { current: ((event: { key: string; act: number }) => void) | null } = {
       current: null,
     };
-    const joystickRef: { current: ((event: { angle: number; distance: number }) => void) | null } = {
-      current: null,
-    };
+    const joystickRef: { current: ((event: { angle: number; distance: number }) => void) | null } =
+      {
+        current: null,
+      };
     const dispatch = vi.fn();
     const sink = {
       update: vi.fn(),
@@ -1285,9 +1324,10 @@ describe('WorkLouderCodexLightingController', () => {
     const hidRef: { current: ((event: { key: string; act: number }) => void) | null } = {
       current: null,
     };
-    const joystickRef: { current: ((event: { angle: number; distance: number }) => void) | null } = {
-      current: null,
-    };
+    const joystickRef: { current: ((event: { angle: number; distance: number }) => void) | null } =
+      {
+        current: null,
+      };
     const dispatch = vi.fn();
     const sink = {
       update: vi.fn(),
@@ -1322,9 +1362,10 @@ describe('WorkLouderCodexLightingController', () => {
     const hidRef: { current: ((event: { key: string; act: number }) => void) | null } = {
       current: null,
     };
-    const joystickRef: { current: ((event: { angle: number; distance: number }) => void) | null } = {
-      current: null,
-    };
+    const joystickRef: { current: ((event: { angle: number; distance: number }) => void) | null } =
+      {
+        current: null,
+      };
     const dispatch = vi.fn();
     const sink = {
       update: vi.fn(),
@@ -1353,9 +1394,10 @@ describe('WorkLouderCodexLightingController', () => {
   });
 
   it('does not fire a held stick action after the account resumes', async () => {
-    const joystickRef: { current: ((event: { angle: number; distance: number }) => void) | null } = {
-      current: null,
-    };
+    const joystickRef: { current: ((event: { angle: number; distance: number }) => void) | null } =
+      {
+        current: null,
+      };
     const dispatch = vi.fn();
     const sink = {
       update: vi.fn(),
@@ -1368,7 +1410,12 @@ describe('WorkLouderCodexLightingController', () => {
       }),
       dispose: vi.fn(async () => undefined),
     };
-    const controller = new WorkLouderCodexLightingController(sink, vi.fn(), async () => [], dispatch);
+    const controller = new WorkLouderCodexLightingController(
+      sink,
+      vi.fn(),
+      async () => [],
+      dispatch,
+    );
     controller.start();
     await controller.resumeTaskSlots();
     joystickRef.current?.({ angle: 0.5, distance: 1 });
@@ -1390,9 +1437,10 @@ describe('WorkLouderCodexLightingController', () => {
   });
 
   it('clears a held stick during suspend so the next push after resume works', async () => {
-    const joystickRef: { current: ((event: { angle: number; distance: number }) => void) | null } = {
-      current: null,
-    };
+    const joystickRef: { current: ((event: { angle: number; distance: number }) => void) | null } =
+      {
+        current: null,
+      };
     const dispatch = vi.fn();
     const sink = {
       update: vi.fn(),
@@ -1405,7 +1453,12 @@ describe('WorkLouderCodexLightingController', () => {
       }),
       dispose: vi.fn(async () => undefined),
     };
-    const controller = new WorkLouderCodexLightingController(sink, vi.fn(), async () => [], dispatch);
+    const controller = new WorkLouderCodexLightingController(
+      sink,
+      vi.fn(),
+      async () => [],
+      dispatch,
+    );
     controller.start();
     await controller.resumeTaskSlots();
     joystickRef.current?.({ angle: 0.5, distance: 1 });
@@ -1420,9 +1473,10 @@ describe('WorkLouderCodexLightingController', () => {
   });
 
   it('keeps the first push after resume when the stick was already centred', async () => {
-    const joystickRef: { current: ((event: { angle: number; distance: number }) => void) | null } = {
-      current: null,
-    };
+    const joystickRef: { current: ((event: { angle: number; distance: number }) => void) | null } =
+      {
+        current: null,
+      };
     const dispatch = vi.fn();
     const sink = {
       update: vi.fn(),
@@ -1435,7 +1489,12 @@ describe('WorkLouderCodexLightingController', () => {
       }),
       dispose: vi.fn(async () => undefined),
     };
-    const controller = new WorkLouderCodexLightingController(sink, vi.fn(), async () => [], dispatch);
+    const controller = new WorkLouderCodexLightingController(
+      sink,
+      vi.fn(),
+      async () => [],
+      dispatch,
+    );
     controller.start();
     await controller.resumeTaskSlots();
     controller.suspendTaskSlots();
@@ -1512,11 +1571,7 @@ describe('WorkLouderCodexLightingController', () => {
     const catalog = Array.from({ length: 8 }, (_, index) => `task-${index}`);
     const layout = createWorkLouderCodexDefaultSettings().layout;
     layout.taskKeys = ['AG00', 'AG01', 'AG02', 'AG03', 'AG04', 'AG05', 'ACT07'];
-    const controller = new WorkLouderCodexLightingController(
-      sink,
-      vi.fn(),
-      async () => catalog,
-    );
+    const controller = new WorkLouderCodexLightingController(sink, vi.fn(), async () => catalog);
     controller.applySettings(
       settings({
         agentSource: 'custom',

@@ -98,31 +98,31 @@ describe('Creator Micro 2 task keys', () => {
     });
   });
 
-  it('puts extra task keys on ACT HID so firmware-unknown AG06+ is never required', () => {
+  it('binds all thirteen task keys to AG00–AG12', () => {
     const taskKeys = [...WORKLOUDER_CREATOR_PROGRAMMABLE_KEYS];
     const hid = assignCreatorHidCodes(taskKeys);
     expect(hid.get('AG00')).toBe('AG00');
     expect(hid.get('AG05')).toBe('AG05');
-    expect(hid.get('ACT06')).toBe('ACT06');
-    expect(hid.get('ACT12')).toBe('ACT12');
-    expect(resolveCreatorHidRole('ACT06', taskKeys)).toEqual({
+    expect(hid.get('ACT06')).toBe('AG06');
+    expect(hid.get('ACT12')).toBe('AG12');
+    expect(resolveCreatorHidRole('AG06', taskKeys)).toEqual({
       role: 'task',
       slot: 6,
       physical: 'ACT06',
     });
-    expect(resolveCreatorHidRole('ACT12', taskKeys)).toEqual({
+    expect(resolveCreatorHidRole('AG12', taskKeys)).toEqual({
       role: 'task',
       slot: 12,
       physical: 'ACT12',
     });
   });
 
-  it('keeps the original six AG codes and rides ACT HID for a seventh task key', () => {
+  it('keeps the original six AG codes and binds a seventh task key to AG06', () => {
     const taskKeys = [...WORKLOUDER_CREATOR_DEFAULT_TASK_KEYS, 'ACT06'] as const;
     const hid = assignCreatorHidCodes(taskKeys);
     expect(hid.get('AG00')).toBe('AG00');
-    expect(hid.get('ACT06')).toBe('ACT06');
-    expect(resolveCreatorHidRole('ACT06', taskKeys)).toEqual({
+    expect(hid.get('ACT06')).toBe('AG06');
+    expect(resolveCreatorHidRole('AG06', taskKeys)).toEqual({
       role: 'task',
       slot: 6,
       physical: 'ACT06',
@@ -166,20 +166,38 @@ describe('Creator Micro 2 task keys', () => {
         { origin: 'ACT06', cover: 'ACT12' },
       ]),
     ).toEqual([{ origin: 'AG02', cover: 'AG03' }]);
-    expect(addWorkLouderMerge([], 'ACT07', 'down')).toEqual([
-      { origin: 'ACT07', cover: 'ACT10' },
-    ]);
+    expect(addWorkLouderMerge([], 'ACT07', 'down')).toEqual([{ origin: 'ACT07', cover: 'ACT10' }]);
     expect(workLouderAvailableMergeDirections([], 'AG00')).toEqual(['right', 'down']);
     expect(workLouderAvailableMergeDirections([], 'ACT12')).toEqual([]);
   });
 
   it('mutes the shared keys zone when a firmware AG key is no longer a task key', () => {
     expect(workLouderShouldMuteKeyZone([...WORKLOUDER_CREATOR_DEFAULT_TASK_KEYS])).toBe(false);
-    expect(
-      workLouderShouldMuteKeyZone(['AG01', 'AG02', 'AG03', 'AG04', 'AG05', 'ACT07']),
-    ).toBe(true);
-    expect(
-      workLouderShouldMuteKeyZone([...WORKLOUDER_CREATOR_DEFAULT_TASK_KEYS, 'ACT06']),
-    ).toBe(true);
+    expect(workLouderShouldMuteKeyZone(['AG01', 'AG02', 'AG03', 'AG04', 'AG05', 'ACT07'])).toBe(
+      true,
+    );
+    expect(workLouderShouldMuteKeyZone([...WORKLOUDER_CREATOR_DEFAULT_TASK_KEYS, 'ACT06'])).toBe(
+      true,
+    );
+    expect(workLouderShouldMuteKeyZone([...WORKLOUDER_CREATOR_PROGRAMMABLE_KEYS])).toBe(false);
+  });
+
+  it('maps AG06–AG12 to the seven ACT positions for the 13-AG Codex keymap', () => {
+    const taskKeys = [...WORKLOUDER_CREATOR_PROGRAMMABLE_KEYS] as const;
+    expect(resolveWorkLouderHidRole('AG06', taskKeys, 'codex-micro')).toEqual({
+      role: 'task',
+      slot: 6,
+      physical: 'ACT06',
+    });
+    expect(resolveWorkLouderHidRole('AG12', taskKeys, 'codex-micro')).toEqual({
+      role: 'task',
+      slot: 12,
+      physical: 'ACT12',
+    });
+    expect(resolveWorkLouderHidRole('AG08', ['AG00', 'ACT08'], 'codex-micro')).toEqual({
+      role: 'task',
+      slot: 1,
+      physical: 'ACT08',
+    });
   });
 });

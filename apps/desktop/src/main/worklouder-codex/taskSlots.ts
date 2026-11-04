@@ -5,7 +5,6 @@ import { getDbClient } from '../localDb/client/current.js';
 import { sessions } from '../localDb/schema.js';
 import { DESKTOP_TASK_LIST_SESSION_SOURCES } from '../../shared/sessionSource.js';
 import {
-  WORKLOUDER_CODEX_AGENT_SLOT_COUNT,
   WORKLOUDER_CODEX_TASK_OPTION_LIMIT,
   WORKLOUDER_CREATOR_PROGRAMMABLE_KEYS,
   type WorkLouderCodexTaskOption,

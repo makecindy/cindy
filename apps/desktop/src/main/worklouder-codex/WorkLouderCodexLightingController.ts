@@ -1,5 +1,6 @@
 import {
   WORKLOUDER_CODEX_AGENT_SLOT_COUNT,
+  WORKLOUDER_CODEX_DEFAULT_AGENT_SLOT_COUNT,
   WORKLOUDER_CODEX_EMPTY_DEVICE_STATE,
   WORKLOUDER_CODEX_KEYCAP_ACTIONS,
   WORKLOUDER_CREATOR_PROGRAMMABLE_KEYS,
@@ -15,6 +16,7 @@ import {
   workLouderCodexAutoDimMs,
   workLouderLayoutMerges,
   workLouderMergeForKey,
+  workLouderPhysicalKeyForAgentCode,
   workLouderShouldMuteKeyZone,
   type WorkLouderCodexAction,
   type WorkLouderCodexAgentSlotState,
@@ -687,7 +689,8 @@ export class WorkLouderCodexLightingController {
     const titleById = new Map(
       this.taskCatalog.options.map((task) => [task.id, task.title] as const),
     );
-    const slotCount = this.settings.layout.taskKeys?.length ?? WORKLOUDER_CODEX_AGENT_SLOT_COUNT;
+    const slotCount =
+      this.settings.layout.taskKeys?.length ?? WORKLOUDER_CODEX_DEFAULT_AGENT_SLOT_COUNT;
     this.agentSlots = Array.from({ length: slotCount }, (_, slot) => {
       const action = actions[slot] ?? null;
       const sessionId = action?.type === 'task' ? action.sessionId : null;
@@ -701,23 +704,25 @@ export class WorkLouderCodexLightingController {
     const sessionIdsByTaskSlot = this.agentSlots.map((slot) => slot.sessionId ?? '');
     const taskKeys = normalizeWorkLouderCreatorTaskKeys(this.settings.layout.taskKeys);
     if (this.device.deviceType === 'codex-micro') {
-      this.slotSessionIds = WORKLOUDER_HID_AG_CODES.slice(0, WORKLOUDER_CODEX_AGENT_SLOT_COUNT).map(
-        (physical) => {
-          if (!isWorkLouderCreatorProgrammableKey(physical)) return '';
-          const slot = taskKeys.indexOf(physical);
-          return slot >= 0 ? (sessionIdsByTaskSlot[slot] ?? '') : '';
-        },
-      );
+      // Thread N paints the key bound to KV_OAI_AG<NN>. The user's 13-AG
+      // keymap maps AG06–AG12 onto the seven ACT positions.
+      this.slotSessionIds = WORKLOUDER_HID_AG_CODES.map((code) => {
+        const physical = workLouderPhysicalKeyForAgentCode(code);
+        if (!physical) return '';
+        const slot = taskKeys.indexOf(physical);
+        return slot >= 0 ? (sessionIdsByTaskSlot[slot] ?? '') : '';
+      });
       return;
     }
     this.slotSessionIds = Array.from(
-      { length: WORKLOUDER_CODEX_AGENT_SLOT_COUNT },
+      { length: taskKeys.length },
       (_, slot) => sessionIdsByTaskSlot[slot] ?? '',
     );
   }
 
   private agentActionsForCurrentSource(): Array<WorkLouderCodexAction | null> {
-    const slotCount = this.settings.layout.taskKeys?.length ?? WORKLOUDER_CODEX_AGENT_SLOT_COUNT;
+    const slotCount =
+      this.settings.layout.taskKeys?.length ?? WORKLOUDER_CODEX_DEFAULT_AGENT_SLOT_COUNT;
     if (this.settings.agentSource === 'custom') {
       return Array.from({ length: slotCount }, (_, slot) => {
         if (slot < this.settings.customAgentKeys.length) {
@@ -763,7 +768,16 @@ export class WorkLouderCodexLightingController {
   }
 
   private lightingThreadCount(): number {
-    return WORKLOUDER_CODEX_AGENT_SLOT_COUNT;
+    const taskKeys = normalizeWorkLouderCreatorTaskKeys(this.settings.layout.taskKeys);
+    if (this.device.deviceType !== 'codex-micro') return taskKeys.length;
+    // Codex keys keep their physical AG numbers, so a sparse selection may need
+    // a later thread id (e.g. only AG12 selected needs thread 12).
+    let count = WORKLOUDER_CODEX_DEFAULT_AGENT_SLOT_COUNT;
+    for (const key of taskKeys) {
+      const index = WORKLOUDER_CREATOR_PROGRAMMABLE_KEYS.indexOf(key);
+      if (index >= 0) count = Math.max(count, index + 1);
+    }
+    return count;
   }
 
   private updateLightingFrame(wakeOnBaseFrameChange = false): WorkLouderCodexLightingFrame {
@@ -978,7 +992,8 @@ export class WorkLouderCodexLightingController {
 }
 
 function previewPartForHidKey(key: string): WorkLouderCodexPreviewPart | null {
-  if (/^AG0[0-5]$/.test(key)) return key as WorkLouderCodexPreviewPart;
+  const agentKey = workLouderPhysicalKeyForAgentCode(key);
+  if (agentKey) return agentKey as WorkLouderCodexPreviewPart;
   if (key.startsWith('ENC')) return 'encoder';
   if (/^ACT(?:0[6-9]|1[0-2])$/.test(key)) return key as WorkLouderCodexPreviewPart;
   return null;

@@ -96,6 +96,22 @@ describe('createWorkLouderCodexLightingFrame', () => {
     expect(frame.threads.every((thread) => thread.brightness > 0)).toBe(true);
   });
 
+  it('supports thirteen independent thread slots for the 13-AG keymap', () => {
+    const running = Array.from({ length: 13 }, (_, index) => activity(`task-${index}`, 'running'));
+    const frame = createWorkLouderCodexLightingFrame(
+      running,
+      running.map((item) => item.sessionId),
+      13,
+    );
+
+    expect(frame.threads).toHaveLength(13);
+    expect(frame.threads[12]).toMatchObject({
+      id: 12,
+      brightness: 0.8,
+      effect: WorkLouderLightingEffect.Breath,
+    });
+  });
+
   it('keeps an activity LED on the same slot as its task key assignment', () => {
     const running = activity('running-task', 'running');
     const projected = projectWorkLouderCodexSlotActivity([running], ['idle-task', 'running-task']);
@@ -116,11 +132,22 @@ describe('Work Louder Agent key protocol', () => {
     expect(parseWorkLouderCodexAgentKeyPress({ key: 'AG03', act: 0 })).toBeNull();
     expect(parseWorkLouderCodexAgentKeyPress({ key: 'ENC_CW', act: 2 })).toBeNull();
     expect(parseWorkLouderCodexAgentKeyPress({ key: 'AG13', act: 1 })).toBeNull();
+    expect(parseWorkLouderCodexHidEvent({ key: 'AG12', act: 1 })).toEqual({
+      key: 'AG12',
+      act: 1,
+    });
+    expect(parseWorkLouderCodexHidEvent({ key: 'AG12', act: 0 })).toEqual({
+      key: 'AG12',
+      act: 0,
+    });
   });
 
   it('treats a missing HID act as a press and accepts numeric strings', () => {
     expect(parseWorkLouderCodexHidEvent({ key: 'ACT06' })).toEqual({ key: 'ACT06', act: 1 });
-    expect(parseWorkLouderCodexHidEvent({ key: 'AG00', act: '1' })).toEqual({ key: 'AG00', act: 1 });
+    expect(parseWorkLouderCodexHidEvent({ key: 'AG00', act: '1' })).toEqual({
+      key: 'AG00',
+      act: 1,
+    });
     expect(parseWorkLouderCodexHidEvent({ k: 'ACT07', act: 0 })).toEqual({ key: 'ACT07', act: 0 });
     expect(parseWorkLouderCodexHidEvent({ key: 'ENC_CW', act: 2 })).toEqual({
       key: 'ENC_CW',
@@ -260,8 +287,7 @@ describe('isWorkLouderSdkTransportDeath', () => {
   });
 
   it('does not treat Creator idle device.status disconnects as a dead cable', () => {
-    const poisonedStatus =
-      'Error calling RPC, id: 137 method: device.status Device disconnected';
+    const poisonedStatus = 'Error calling RPC, id: 137 method: device.status Device disconnected';
     expect(isWorkLouderSdkTransportDeath(poisonedStatus, 'creator-micro-2')).toBe(false);
     expect(isWorkLouderSdkTransportDeath(poisonedStatus, 'codex-micro')).toBe(true);
   });
@@ -308,9 +334,7 @@ describe('rewriteBareWorkLouderNotifyJson', () => {
 
   it('leaves real JSON-RPC lines and incomplete fragments alone', () => {
     expect(
-      rewriteBareWorkLouderNotifyJson(
-        '{"result":{"ok":1},"id":12,"method":"v.oai.rgbcfg"}',
-      ),
+      rewriteBareWorkLouderNotifyJson('{"result":{"ok":1},"id":12,"method":"v.oai.rgbcfg"}'),
     ).toBeNull();
     expect(rewriteBareWorkLouderNotifyJson('{"k":"AG00"')).toBeNull();
     expect(rewriteBareWorkLouderNotifyJson('{"ok":1}')).toBeNull();

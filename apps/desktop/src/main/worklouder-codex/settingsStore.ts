@@ -195,7 +195,7 @@ function normalize(raw: unknown, model: WorkLouderModel = 'codex-micro'): WorkLo
   const rawCustomAgentKeys = Array.isArray(value.customAgentKeys) ? value.customAgentKeys : null;
   const customAgentKeys = rawCustomAgentKeys
     ? Array.from({ length: WORKLOUDER_CODEX_AGENT_SLOT_COUNT }, (_, index) =>
-        rawCustomAgentKeys[index] === null ? null : normalizeAction(rawCustomAgentKeys[index]),
+        rawCustomAgentKeys[index] == null ? null : normalizeAction(rawCustomAgentKeys[index]),
       )
     : defaults.customAgentKeys;
   return {

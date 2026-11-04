@@ -32,7 +32,7 @@ These also work but aren't shown on the page: Mod+1 … Mod+9 jump to the first 
 - **Work Louder Codex Micro** and **Work Louder Creator Micro 2** — open tasks from the keys and show their status with key lighting.
   - Connect with a data-capable USB cable and turn on **Enable**. Cindy uses the official Work Louder software that comes with a supported ChatGPT or Codex app, so keep one installed; close ChatGPT if it's holding the device. On macOS, allow Cindy under **Input Monitoring**.
   - **Lighting**: **Brightness** and **Auto-dim**.
-  - **Agent keys**: **Task order** (**Sidebar order**, **Recent tasks**, **Priority**, or **Custom**), **Focus Cindy with a single tap**, and each key's role — a **Task key** switches tasks and shows status (only the first 6 task keys can light independently), an **Action key** runs a shortcut.
+  - **Agent keys**: **Task order** (**Sidebar order**, **Recent tasks**, **Priority**, or **Custom**), **Focus Cindy with a single tap**, and each key's role — a **Task key** switches tasks and shows status, an **Action key** runs a shortcut.
   - Also **Microphone** (separate mic keys), **Joystick** directions, **Encoder** mode (switch tasks, navigate the composer, reasoning effort, scroll, or custom), the keycap **Layout** editor, and **Reset layout**.
   - **Codex compatibility** (macOS only): **Prevent Codex from occupying the device** while Cindy runs; quit and reopen Codex to apply.
 - **Xbox controller**, **PlayStation controller** (DualSense / DualShock), **Switch controller** (Switch Pro / Joy-Con), and **Generic controller** — scroll, talk, send, and switch tasks with a gamepad over USB or Bluetooth.

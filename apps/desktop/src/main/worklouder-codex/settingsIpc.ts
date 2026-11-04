@@ -2,6 +2,7 @@
 
 import {
   WORKLOUDER_CODEX_AGENT_SLOT_COUNT,
+  WORKLOUDER_CODEX_DEFAULT_AGENT_SLOT_COUNT,
   WORKLOUDER_CODEX_ANALOG_DIRECTIONS,
   WORKLOUDER_CODEX_COMMAND_SLOTS,
   WORKLOUDER_CODEX_ENCODER_ACTIONS,
@@ -89,13 +90,17 @@ function parseSettingsPatch(value: unknown): WorkLouderCodexSettingsPatch {
     patch.agentSource = normalizeWorkLouderCodexAgentSource(record.agentSource);
   }
   if ('customAgentKeys' in record) {
+    const customAgentKeys = record.customAgentKeys;
     if (
-      !Array.isArray(record.customAgentKeys) ||
-      record.customAgentKeys.length !== WORKLOUDER_CODEX_AGENT_SLOT_COUNT
+      !Array.isArray(customAgentKeys) ||
+      (customAgentKeys.length !== WORKLOUDER_CODEX_DEFAULT_AGENT_SLOT_COUNT &&
+        customAgentKeys.length !== WORKLOUDER_CODEX_AGENT_SLOT_COUNT)
     ) {
-      throwIpcError('INVALID_PARAMS', 'customAgentKeys must contain six assignments');
+      throwIpcError('INVALID_PARAMS', 'customAgentKeys must contain 6 or 13 assignments');
     }
-    patch.customAgentKeys = record.customAgentKeys.map((action) => parseAction(action, true));
+    patch.customAgentKeys = Array.from({ length: WORKLOUDER_CODEX_AGENT_SLOT_COUNT }, (_, index) =>
+      parseAction(customAgentKeys[index] ?? null, true),
+    );
   }
   if ('deviceEnabled' in record) {
     if (typeof record.deviceEnabled !== 'boolean') {

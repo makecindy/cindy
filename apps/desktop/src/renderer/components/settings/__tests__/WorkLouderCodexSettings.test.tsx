@@ -10,7 +10,14 @@ import ja from '../../../i18n/locales/ja/common.json';
 import ko from '../../../i18n/locales/ko/common.json';
 
 beforeAll(() => {
-  vi.stubGlobal('ResizeObserver', class { observe() {} unobserve() {} disconnect() {} });
+  vi.stubGlobal(
+    'ResizeObserver',
+    class {
+      observe() {}
+      unobserve() {}
+      disconnect() {}
+    },
+  );
 });
 
 import {
@@ -28,11 +35,7 @@ const mocks = vi.hoisted(() => ({
   recoverGuard: vi.fn(),
   guardRestartRequired: false,
   guardStatus: 'disabled' as
-    | 'disabled'
-    | 'paused'
-    | 'protecting'
-    | 'intercepted'
-    | 'recovery-required',
+    'disabled' | 'paused' | 'protecting' | 'intercepted' | 'recovery-required',
   translate: null as ((key: string) => string) | null,
   setLayoutPreviewActive: vi.fn(),
   previewListeners: [] as Array<
@@ -425,7 +428,12 @@ describe('WorkLouderCodexSettings', () => {
     await chooseSelectOption('settings.shortcuts.workLouderCodex.actions.choose', 'New Task');
 
     expect(mocks.setSettings).toHaveBeenCalledWith({
-      customAgentKeys: [null, null, { type: 'command', commandId: 'newTask' }, null, null, null],
+      customAgentKeys: [
+        null,
+        null,
+        { type: 'command', commandId: 'newTask' },
+        ...Array.from({ length: 10 }, () => null),
+      ],
     });
   });
 
@@ -756,7 +764,7 @@ describe('WorkLouderCodexSettings', () => {
     ).toBeTruthy();
   });
 
-  it('explains the six-light firmware limit when more than six task keys are set', () => {
+  it('does not warn about a six-light limit when thirteen task keys are set', () => {
     mocks.deviceType = 'creator-micro-2';
     const layout = createWorkLouderCodexDefaultSettings('creator-micro-2').layout;
     layout.taskKeys = [...WORKLOUDER_CREATOR_PROGRAMMABLE_KEYS];
@@ -764,8 +772,8 @@ describe('WorkLouderCodexSettings', () => {
     render(<WorkLouderCodexSettings model="creator-micro-2" onBack={vi.fn()} />);
 
     expect(
-      screen.getByText('settings.shortcuts.workLouderCodex.agentKeys.lightingLimit'),
-    ).toBeTruthy();
+      screen.queryByText('settings.shortcuts.workLouderCodex.agentKeys.lightingLimit'),
+    ).toBeNull();
   });
 
   it('offers 2U merge on Creator action keys', () => {
@@ -795,11 +803,14 @@ describe('WorkLouderCodexSettings', () => {
     fireEvent.click(screen.getByRole('button', { name: /AG01/ }));
     await chooseSelectOption('settings.shortcuts.workLouderCodex.actions.choose', 'New Task');
     expect(mocks.setSettings).toHaveBeenCalledWith({
-      customAgentKeys: [{ type: 'command', commandId: 'newTask' }, null, null, null, null, null],
+      customAgentKeys: [
+        { type: 'command', commandId: 'newTask' },
+        ...Array.from({ length: 12 }, () => null),
+      ],
     });
   });
 
-  it('does not offer a custom assignment for unlit extra task keys', () => {
+  it('offers a custom assignment for a seventh task key', () => {
     mocks.agentSource = 'custom';
     const layout = createWorkLouderCodexDefaultSettings().layout;
     layout.taskKeys = ['AG00', 'AG01', 'AG02', 'AG03', 'AG04', 'AG05', 'ACT07'];
@@ -807,11 +818,10 @@ describe('WorkLouderCodexSettings', () => {
     render(<WorkLouderCodexSettings onBack={vi.fn()} />);
 
     fireEvent.click(screen.getByRole('button', { name: /ACT07/ }));
-    expect(screen.getByText('settings.shortcuts.workLouderCodex.agentKeys.unlitKey')).toBeTruthy();
     expect(
-      screen.queryByRole('combobox', {
+      screen.getByRole('combobox', {
         name: 'settings.shortcuts.workLouderCodex.actions.choose',
       }),
-    ).toBeNull();
+    ).toBeTruthy();
   });
 });

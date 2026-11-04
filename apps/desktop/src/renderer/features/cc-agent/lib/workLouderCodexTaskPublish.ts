@@ -32,15 +32,11 @@ export function buildWorkLouderCodexPublishedTasks(
   const remoteCatalogSessions = catalogSessions.filter((session) =>
     Boolean(session.deviceLinkDeviceId),
   );
-  const localCatalogSessions = catalogSessions.filter(
-    (session) => !session.deviceLinkDeviceId,
-  );
-  // The board has six Agent slots. Reserve those slots for remote rows so a
-  // large local catalog cannot consume the whole IPC allowance first.
-  const remoteQuota = Math.min(
-    remoteCatalogSessions.length,
-    WORKLOUDER_CODEX_AGENT_SLOT_COUNT,
-  );
+  const localCatalogSessions = catalogSessions.filter((session) => !session.deviceLinkDeviceId);
+  // The board exposes thirteen Agent slots. Reserve the full slot count for
+  // remote rows so a large local catalog cannot consume the whole IPC
+  // allowance first; the task source still decides which rows reach keys.
+  const remoteQuota = Math.min(remoteCatalogSessions.length, WORKLOUDER_CODEX_AGENT_SLOT_COUNT);
   const localQuota = Math.max(0, remainingCatalogSlots - remoteQuota);
   const publishedCatalog = [
     ...localCatalogSessions.slice(0, localQuota),

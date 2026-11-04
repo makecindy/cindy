@@ -14,7 +14,10 @@ import {
   cloneWorkLouderCodexLayout,
   createWorkLouderCodexDefaultSettings,
 } from '../../../shared/workLouderCodex.js';
-import { createWorkLouderCodexSettingsIpc, __testing as settingsIpcTesting } from '../settingsIpc.js';
+import {
+  createWorkLouderCodexSettingsIpc,
+  __testing as settingsIpcTesting,
+} from '../settingsIpc.js';
 
 const DEFAULT_SETTINGS: WorkLouderCodexSettings = createWorkLouderCodexDefaultSettings();
 
@@ -158,7 +161,7 @@ describe('Work Louder Codex settings IPC business body', () => {
       lightingBrightness: 40,
       lightingAutoDim: 'off',
       agentSource: 'last-sent',
-      customAgentKeys: [null, null, null, null, null, null],
+      customAgentKeys: Array.from({ length: 13 }, () => null),
       singleTapAgentKeys: false,
       layout: DEFAULT_SETTINGS.layout,
     });
@@ -184,6 +187,23 @@ describe('Work Louder Codex settings IPC business body', () => {
         }),
       }),
     );
+  });
+
+  it('pads a legacy six-slot custom agent patch to thirteen', () => {
+    const { ipc, writeSettings } = makeIpc();
+    const legacy = [null, { type: 'command', commandId: 'newTask' }, null, null, null, null];
+
+    ipc.set(EVENT, 'codex-micro', { customAgentKeys: legacy });
+
+    expect(writeSettings).toHaveBeenCalledWith(
+      'codex-micro',
+      expect.objectContaining({
+        customAgentKeys: expect.arrayContaining([null, { type: 'command', commandId: 'newTask' }]),
+      }),
+    );
+    const written = writeSettings.mock.lastCall?.[1] as { customAgentKeys: unknown[] };
+    expect(written.customAgentKeys).toHaveLength(13);
+    expect(written.customAgentKeys.slice(6)).toEqual(Array.from({ length: 7 }, () => null));
   });
 
   it('re-checks the device on probe and refuses untrusted callers', () => {
@@ -224,7 +244,9 @@ describe('Work Louder Codex settings IPC business body', () => {
     expect(() => ipc.publishTasks(EVENT, [{ id: '', title: 'x', pinnedAt: null }])).toThrow();
     expect(() => ipc.publishTasks(EVENT, [{ id: 'a', title: 5, pinnedAt: null }])).toThrow();
     expect(() =>
-      ipc.publishTasks(EVENT, [{ id: 'a', title: 'x'.repeat(513), pinnedAt: null, userSendAt: null }]),
+      ipc.publishTasks(EVENT, [
+        { id: 'a', title: 'x'.repeat(513), pinnedAt: null, userSendAt: null },
+      ]),
     ).toThrow('title is too long');
     expect(() =>
       ipc.publishTasks(
@@ -251,9 +273,9 @@ describe('Work Louder Codex settings IPC business body', () => {
     expect(source).toContain('const win = actionWindowRouter.resolve(action);');
     expect(source).toContain('if (systemFrontmostInput.handle(action)) return;');
     expect(source).toContain('return win === main || isSecondaryAppWindow(win);');
-    expect(source.indexOf('workLouderAccessories.applySettings(model, persisted[model]);')).toBeLessThan(
-      source.indexOf('workLouderCodexLightingController.start();'),
-    );
+    expect(
+      source.indexOf('workLouderAccessories.applySettings(model, persisted[model]);'),
+    ).toBeLessThan(source.indexOf('workLouderCodexLightingController.start();'));
   });
 
   it('still accepts a layout saved before voiceButtonMode was removed', () => {

@@ -372,6 +372,9 @@ describe('WorkLouderAccessories occupancy', () => {
     accessories.applySettings('creator-micro-2', {
       ...defaults('creator-micro-2'),
       agentSource: 'custom',
+      customAgentKeys: Array.from({ length: 13 }, (_, index) =>
+        index === 6 ? { type: 'task' as const, sessionId: 't6' } : null,
+      ),
       layout: {
         ...defaults('creator-micro-2').layout,
         taskKeys: [...WORKLOUDER_CREATOR_DEFAULT_TASK_KEYS, 'ACT06'],

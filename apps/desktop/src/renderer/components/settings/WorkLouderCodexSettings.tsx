@@ -696,15 +696,6 @@ export function WorkLouderCodexSettings({
             />
           }
         />
-        {normalizeWorkLouderCreatorTaskKeys(settings.layout.taskKeys).length >
-          WORKLOUDER_CODEX_AGENT_SLOT_COUNT && (
-          <>
-            <SettingsDivider />
-            <p className="px-1 py-2 text-12 leading-[1.45] text-[var(--text-secondary)]">
-              {t('settings.shortcuts.workLouderCodex.agentKeys.lightingLimit')}
-            </p>
-          </>
-        )}
       </SettingsGroup>
 
       <WorkLouderCodexKeycapPicker
@@ -817,14 +808,7 @@ export function WorkLouderCodexSettings({
           (editingPart.startsWith('AG') || isWorkLouderCreatorProgrammableKey(editingPart)) && (
             <div className="flex flex-col gap-3">
               {editingProgrammableTaskKey && isWorkLouderCreatorProgrammableKey(editingPart) && (
-                <>
-                  {creatorKeyRoleRow(editingPart, true)}
-                  {editingTaskIndex >= WORKLOUDER_CODEX_AGENT_SLOT_COUNT && (
-                    <p className="text-12 leading-[1.45] text-[var(--text-secondary)]">
-                      {t('settings.shortcuts.workLouderCodex.agentKeys.unlitKey')}
-                    </p>
-                  )}
-                </>
+                <>{creatorKeyRoleRow(editingPart, true)}</>
               )}
               {isWorkLouderCreatorProgrammableKey(editingPart) && (
                 <KeyMergeControls
