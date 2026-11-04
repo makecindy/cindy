@@ -489,7 +489,7 @@ export function BotSettings({
             </span>
           ) : autosave.status === 'error' ? (
             <p className="flex items-center gap-2 text-11 text-[var(--text-danger)]" role="alert">
-              {t('bots.profileSaveFailed')}
+              {t(autosave.errorKey ?? 'bots.profileSaveFailed')}
               <button
                 type="button"
                 onClick={() => void autosave.retry()}
@@ -630,6 +630,8 @@ export function BotSettings({
                   setCapabilities((current) => ({
                     ...current,
                     ...(primary ?? { model: '', providerId: null, effort: '', fastMode: false }),
+                    ...((current.agentDeviceId != null || primary?.agentDeviceId != null)
+                      ? { agentDeviceId: primary?.agentDeviceId ?? null } : {}),
                     modelOverride: null,
                     modelChain,
                     modelChainOverride: null,
@@ -643,6 +645,8 @@ export function BotSettings({
                   setCapabilities((current) => ({
                     ...current,
                     ...primary,
+                    ...((current.agentDeviceId != null || primary.agentDeviceId != null)
+                      ? { agentDeviceId: primary.agentDeviceId ?? null } : {}),
                     modelChain,
                     modelChainOverride: modelChain,
                     modelOverride: {

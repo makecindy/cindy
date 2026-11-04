@@ -10263,6 +10263,7 @@
       "continueEditing": "Keep Editing"
     },
     "profileSaveFailed": "Teammate settings could not be saved. No changes were applied.",
+    "profileSaveOffline": "Cannot connect to the teammate’s computer. Reconnect, then save again.",
     "modelLabel": "Model",
     "modelUnavailable": "{{model}} (currently unavailable)",
     "codexAutomaticCompact": "Codex teammates compact context on their own, and /new keeps the current task. Only start a new task when you actually need a clean slate.",

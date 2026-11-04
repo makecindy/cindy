@@ -10218,6 +10218,7 @@
       "continueEditing": "继续编辑"
     },
     "profileSaveFailed": "伙伴设置未能保存，变更没有生效。",
+    "profileSaveOffline": "无法连接伙伴所在的电脑，请恢复连接后重新保存。",
     "modelLabel": "模型",
     "modelUnavailable": "{{model}}（当前不可用）",
     "codexAutomaticCompact": "Codex 伙伴会自己压缩上下文，/new 也会保留当前任务。只有确实需要从头开始时，才去开新任务。",

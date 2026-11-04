@@ -10218,6 +10218,7 @@
       "continueEditing": "繼續編輯"
     },
     "profileSaveFailed": "夥伴設定未能儲存，變更沒有生效。",
+    "profileSaveOffline": "無法連線至夥伴所在的電腦，請恢復連線後重新儲存。",
     "modelLabel": "模型",
     "modelUnavailable": "{{model}}（目前無法使用）",
     "codexAutomaticCompact": "Codex 伙伴會自己壓縮上下文，/new 也會保留目前任務。只有確實需要從頭開始時，才去開新任務。",
