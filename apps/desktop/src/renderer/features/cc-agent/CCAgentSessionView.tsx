@@ -349,6 +349,7 @@ import {
   type BuiltInSkillDraftIntent,
 } from '@/lib/composerDraftStore';
 import { setLastWorkingDir } from '@/state/lastWorkingDir';
+import { useAgentIslandActivity } from '@/state/agentIslandActivity';
 import { consumeComposerMentionDrop } from '@/lib/composerDrop';
 import { hasSplitGroupSessionType } from './splitGroupDnd';
 import { splitGroupStore } from './splitGroupStore';
@@ -1938,9 +1939,16 @@ function CCAgentSessionContent({
   } = useCCAgentChat(sessionId, handleTitleUpdate, { chatRealtime });
   // 从侧栏等入口切到这个任务时，若它正等着授权，把焦点交给确认卡，直接按键就能处理。
   // 只有拥有路由的主视图这样做；分屏非主 pane、文件页 rail、只读回查都不抢焦点。
+  // 「正在等授权」与侧栏蓝点同源（远程任务看被控端镜像，本机看灵动岛活动快照），
+  // 冷启动时确认卡还没重建，靠它判断这次切换要不要交接焦点。
+  const localSessionActivity = useAgentIslandActivity(sessionId ?? '');
+  const switchTargetActivity = remoteSessionActivity ?? localSessionActivity;
   const permissionSwitchFocus = useSessionSwitchFocusIntent(
     sessionId,
     ownsRoute && viewVisible && !disableAutofocus && !readOnly,
+    pendingPermission != null ||
+      (switchTargetActivity?.phase === 'needs-interaction' &&
+        switchTargetActivity.interactionKind === 'permission'),
   );
   useBotIslandVisibleSession(
     viewVisible && session?.id === sessionId && historyLoaded ? sessionId ?? null : null,

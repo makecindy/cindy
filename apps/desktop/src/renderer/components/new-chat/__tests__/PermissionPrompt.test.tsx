@@ -282,6 +282,28 @@ describe('PermissionPrompt 切换任务后聚焦「允许一次」', () => {
     search.remove();
   });
 
+  // 右栏浏览器是 <webview>：用户点进去打字时，宿主文档里只看到焦点在 webview 元素上，
+  // 访客页面的按键本窗口收不到，切换意图也就撤销不了。确认卡这时不能把焦点抢出来。
+  it.each(['webview', 'iframe'])('焦点在内嵌页面（%s）里时不抢焦点，但仍消费意图', (tag) => {
+    const guest = document.createElement(tag);
+    guest.tabIndex = 0;
+    document.body.append(guest);
+    guest.focus();
+    expect(document.activeElement).toBe(guest);
+    const onAutoFocusHandled = vi.fn();
+    render(
+      <PermissionPrompt
+        permission={permission()}
+        onRespond={vi.fn()}
+        autoFocus
+        onAutoFocusHandled={onAutoFocusHandled}
+      />,
+    );
+    expect(document.activeElement).toBe(guest);
+    expect(onAutoFocusHandled).toHaveBeenCalledTimes(1);
+    guest.remove();
+  });
+
   it('提交中按钮不可聚焦时先保留意图，提交结束后再聚焦', () => {
     const onAutoFocusHandled = vi.fn();
     const request = permission();
@@ -312,7 +334,7 @@ describe('PermissionPrompt 切换任务后聚焦「允许一次」', () => {
 // 等 slot 注销、卡片回到行内重新挂载后，意图必须还在，焦点才能落到「允许一次」。
 describe('PermissionPrompt 经交互卡 portal 切换路由', () => {
   function SwitchedView() {
-    const intent = useSessionSwitchFocusIntent('task-b', true);
+    const intent = useSessionSwitchFocusIntent('task-b', true, true);
     return (
       <InteractionPromptHost hasInteraction>
         <PermissionPrompt
@@ -368,7 +390,7 @@ describe('PermissionPrompt 经搜索弹层切换任务', () => {
   function SearchSwitch({ onRespond = vi.fn() }: { onRespond?: (r: unknown) => void }) {
     const [open, setOpen] = useState(false);
     const [taskId, setTaskId] = useState('task-a');
-    const intent = useSessionSwitchFocusIntent(taskId, true);
+    const intent = useSessionSwitchFocusIntent(taskId, true, true);
     return (
       <>
         <Popover open={open} onOpenChange={setOpen}>
@@ -469,7 +491,7 @@ describe('PermissionPrompt 经搜索弹层切换任务', () => {
 describe('PermissionPrompt 键盘切换时不替按住的按键批准', () => {
   function SidebarSwitch({ onRespond }: { onRespond: (r: unknown) => void }) {
     const [switched, setSwitched] = useState(false);
-    const intent = useSessionSwitchFocusIntent(switched ? 'task-b' : 'task-a', switched);
+    const intent = useSessionSwitchFocusIntent(switched ? 'task-b' : 'task-a', switched, true);
     return (
       <>
         <div
@@ -521,7 +543,7 @@ describe('PermissionPrompt 键盘切换时不替按住的按键批准', () => {
   it('确认卡晚到且 Enter、空格同时按着时，松开其一后另一个的重复不批准', () => {
     const onRespond = vi.fn();
     function DelayedPrompt() {
-      const intent = useSessionSwitchFocusIntent('task-b', true);
+      const intent = useSessionSwitchFocusIntent('task-b', true, true);
       const [restored, setRestored] = useState(false);
       return (
         <>

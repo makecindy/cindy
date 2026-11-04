@@ -51,6 +51,16 @@ export function isInsideKeyboardLayer(target: Element): boolean {
 }
 
 /**
+ * 焦点是否在内嵌页面里（右栏浏览器的 <webview>、<iframe>）。宿主文档里 activeElement 只是
+ * 那个宿主元素，访客页面的按键发生在另一个 webContents / 文档里，本窗口收不到，
+ * 但键盘确实归那里。
+ */
+export function isEmbeddedContentHost(target: Element): boolean {
+  const tagName = target.tagName;
+  return tagName === 'WEBVIEW' || tagName === 'IFRAME';
+}
+
+/**
  * 焦点所在的浮层是否正在关闭：Radix 把关闭中的内容标成 data-state="closed"，等退场动画
  * 播完才卸载，卸载后再把焦点还给触发器。这段时间里焦点还在浮层内，但浮层已经
  * 不再持有键盘。Popper 包装层本身没有 data-state，看它的直接子节点（Content）。

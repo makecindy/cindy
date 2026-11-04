@@ -9,9 +9,10 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
-function setup(initial: { sessionId: string | undefined; enabled: boolean }) {
+function setup(initial: { sessionId: string | undefined; enabled: boolean; awaiting?: boolean }) {
   return renderHook(
-    ({ sessionId, enabled }) => useSessionSwitchFocusIntent(sessionId, enabled),
+    ({ sessionId, enabled, awaiting = true }) =>
+      useSessionSwitchFocusIntent(sessionId, enabled, awaiting),
     { initialProps: initial },
   );
 }
@@ -74,6 +75,27 @@ describe('useSessionSwitchFocusIntent', () => {
     act(() => clickListener?.({ isTrusted: false }));
     expect(result.current.armed).toBe(true);
     act(() => clickListener?.({ isTrusted: true }));
+    expect(result.current.armed).toBe(false);
+  });
+
+  // 切到一个还在跑、没在等授权的任务，用户只是看输出；之后才弹出的新请求不是这次切换要
+  // 交接的，不能把焦点从侧栏行抢走（那时回车就成了批准）。
+  it('切换时没在等授权就不武装，之后才到的新请求不抢焦点', () => {
+    const { result, rerender } = setup({ sessionId: 'a', enabled: true, awaiting: false });
+    expect(result.current.armed).toBe(false);
+    rerender({ sessionId: 'a', enabled: true, awaiting: true });
+    expect(result.current.armed).toBe(false);
+    rerender({ sessionId: 'b', enabled: true, awaiting: false });
+    rerender({ sessionId: 'b', enabled: true, awaiting: true });
+    expect(result.current.armed).toBe(false);
+  });
+
+  // 切换时在等授权、确认卡还没重建，这条请求就在别处被处理掉了；之后的新请求同样不抢焦点。
+  it('恢复期间请求已被处理掉，之后的新请求不抢焦点', () => {
+    const { result, rerender } = setup({ sessionId: 'a', enabled: true, awaiting: true });
+    expect(result.current.armed).toBe(true);
+    rerender({ sessionId: 'a', enabled: true, awaiting: false });
+    rerender({ sessionId: 'a', enabled: true, awaiting: true });
     expect(result.current.armed).toBe(false);
   });
 

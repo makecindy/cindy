@@ -11,9 +11,13 @@
  * - sessionId 不变、视图从不可用变为可用：分屏里已挂载的 pane 被选中成为主视图时，
  *   它的 sessionId 不变，只是拿到了路由主权。
  *
+ * 意图只为「切换那一刻就在等授权」的任务而设（awaitingPermission：侧栏蓝点同源的活动
+ * 快照，或已在本地的挂起请求）。切到一个正在运行、还没要授权的任务时不武装，之后才
+ * 弹出的新请求不抢焦点。
+ *
  * 待确认请求可能晚于切换到达（历史与挂起交互是异步重建的），所以意图会一直保留到
- * 被消费、或用户在此期间有任何点击 / 按键为止：用户已经开始做别的事，之后到来的
- * 请求不应该把焦点抢走。
+ * 被消费、任务不再等授权（在别处处理掉了）、或用户在此期间有任何点击 / 按键为止：
+ * 用户已经开始做别的事，之后到来的请求不应该把焦点抢走。
  */
 
 import { useCallback, useEffect, useRef, useState } from 'react';
@@ -28,9 +32,15 @@ export interface SessionSwitchFocusIntent {
 export function useSessionSwitchFocusIntent(
   sessionId: string | undefined,
   enabled: boolean,
+  awaitingPermission: boolean,
 ): SessionSwitchFocusIntent {
   const activeSessionId = enabled && sessionId ? sessionId : null;
-  const [armedFor, setArmedFor] = useState<string | null>(activeSessionId);
+  const [armedFor, setArmedFor] = useState<string | null>(
+    awaitingPermission ? activeSessionId : null,
+  );
+  // 只看切换那一刻是否在等授权；之后的变化由下面的撤销 effect 处理。
+  const awaitingRef = useRef(awaitingPermission);
+  awaitingRef.current = awaitingPermission;
   // 首次挂载的意图已由初值武装；ref 跳过挂载那次 effect，免得确认卡（子组件 effect
   // 先于本 effect 执行）刚消费掉，这里又把它重新武装。
   const lastActiveSessionIdRef = useRef(activeSessionId);
@@ -38,10 +48,15 @@ export function useSessionSwitchFocusIntent(
   useEffect(() => {
     if (lastActiveSessionIdRef.current === activeSessionId) return;
     lastActiveSessionIdRef.current = activeSessionId;
-    setArmedFor(activeSessionId);
+    setArmedFor(awaitingRef.current ? activeSessionId : null);
   }, [activeSessionId]);
 
-  const armed = enabled && !!sessionId && armedFor === sessionId;
+  // 恢复期间请求已在别处处理掉：这次切换要交接的请求不在了，之后的新请求不抢焦点。
+  useEffect(() => {
+    if (!awaitingPermission) setArmedFor(null);
+  }, [awaitingPermission]);
+
+  const armed = enabled && !!sessionId && armedFor === sessionId && awaitingPermission;
 
   // 触发切换的那次点击 / 回车在本监听挂上之前已经分发完，不会把刚武装的意图撤掉。
   // 切换时仍按着的 Enter / 空格会继续产生重复 keydown；武装之后的重复只可能来自这种

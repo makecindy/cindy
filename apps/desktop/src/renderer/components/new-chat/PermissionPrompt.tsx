@@ -26,6 +26,7 @@ import type { BotChatIdentity } from '@/features/bots/BotSessionContentHeader';
 
 import {
   isEditableKeyboardTarget,
+  isEmbeddedContentHost,
   isInsideClosingKeyboardLayer,
   isInsideKeyboardLayer,
   shouldCardShortcutYield,
@@ -272,7 +273,9 @@ export function PermissionPrompt({
     const keyboardOwnedElsewhere =
       active instanceof Element &&
       !cardRef.current?.contains(active) &&
-      (isEditableKeyboardTarget(active) || isInsideKeyboardLayer(active));
+      (isEditableKeyboardTarget(active) ||
+        isInsideKeyboardLayer(active) ||
+        isEmbeddedContentHost(active));
     if (keyboardOwnedElsewhere) {
       if (isInsideClosingKeyboardLayer(active)) {
         // Choosing a search result closes its popover and navigates in one event. The
@@ -285,7 +288,8 @@ export function PermissionPrompt({
         document.addEventListener('focusin', retry, true);
         return () => document.removeEventListener('focusin', retry, true);
       }
-      // The user is typing or in a menu elsewhere: leave focus there for this switch.
+      // The user is typing, in a menu, or inside an embedded page (its keys never reach
+      // this window, so the switch intent cannot see them): leave focus there.
       onAutoFocusHandled?.();
       return;
     }
