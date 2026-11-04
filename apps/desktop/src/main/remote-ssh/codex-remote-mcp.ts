@@ -198,13 +198,26 @@ function daemonEnvGeneration(hostId: string): number {
  * 安装前停 daemon)。接手重启的 transport startDaemon 不带 LIZI_MCP_TOKEN,
  * 已生效指纹不再描述 daemon env:换成失效占位, 下次 session start / live
  * send 识别漂移并带 token 重 bootstrap (#8781)。代次递增让并发中的 ensure
- * 不会在之后写回旧指纹。须在杀 daemon 之前调用。
+ * 不会在之后写回旧指纹。杀 daemon 前后各调用一次:杀进程期间新开始的
+ * ensure 可能已 bootstrap 并落指纹, 随后被同一次 kill 杀掉。不抛错。
  */
 export function invalidateRemoteCodexMcpDaemonEnv(hostId: string): void {
   daemonEnvGenerations.set(hostId, daemonEnvGeneration(hostId) + 1);
-  const current = readPortPrefs()[hostId];
+  const prefs = readPortPrefs();
+  const current = prefs[hostId];
   if (!current?.appliedFingerprint || current.appliedFingerprint === DAEMON_ENV_INVALIDATED) return;
-  writeHostAppliedFingerprint(hostId, DAEMON_ENV_INVALIDATED);
+  const next = { ...prefs, [hostId]: { ...current, appliedFingerprint: DAEMON_ENV_INVALIDATED } };
+  // 先改进程内缓存 (drift 判定 / ensure 都读它):落盘失败时本进程仍按
+  // 已失效处理, 不会信任被杀 daemon 的指纹;下次成功写 prefs 时一并落盘。
+  portPrefsCache = next;
+  try {
+    writePortPrefs(next);
+  } catch (err) {
+    log.warn('failed to persist remote codex MCP daemon env invalidation', {
+      host: hostId,
+      error: err instanceof Error ? err.message : String(err),
+    });
+  }
 }
 
 /** host 被删时清理端口记录 (registerRemoteSshIpc 的 remove 路径调用)。 */

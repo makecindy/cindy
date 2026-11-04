@@ -345,17 +345,11 @@ done
 echo "daemon still alive after TERM(5s)+KILL(2s)" >&2
 exit 3
 `;
-  // 接手重启的 transport 不带 LIZI_MCP_TOKEN: 杀之前先让 MCP 已生效记录
+  // 接手重启的 transport 不带 LIZI_MCP_TOKEN: 杀前后都让 MCP 已生效记录
   // 失效, 下次 session start / live send 带 token 重 bootstrap (#8781)。
-  // 本地落盘失败不影响杀 daemon 与调用方的结果语义。
-  try {
-    invalidateRemoteCodexMcpDaemonEnv(host.id);
-  } catch (err) {
-    log.warn('failed to invalidate remote codex MCP daemon env before kill', {
-      hostId: host.id,
-      error: err instanceof Error ? err.message : String(err),
-    });
-  }
+  // 杀后再失效一次: kill 脚本运行期间开始的 ensure 可能已落新指纹, 而
+  // 它刚 bootstrap 的 daemon 随即被同一次 kill 杀掉。
+  invalidateRemoteCodexMcpDaemonEnv(host.id);
   try {
     const result = await host.exec(`bash -c ${shellQuote(killScript)}`, {
       // 脚本最坏路径: TERM 轮询 5s + KILL 轮询 2s + ssh/exec 开销 — 给 15s。
@@ -372,6 +366,8 @@ exit 3
     const detail = String((err as Error).message ?? err);
     log.warn('failed to kill remote codex daemon (exec error)', { hostId: host.id, error: detail });
     return { ok: false, reason: 'pkill_failed', detail };
+  } finally {
+    invalidateRemoteCodexMcpDaemonEnv(host.id);
   }
 }
 
