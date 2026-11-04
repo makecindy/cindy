@@ -474,4 +474,33 @@ describe('companion closing reply and read position', () => {
     expect(allKeys(projected)).toContain('msg-narration');
     expect(latestSettledAssistantMs(projected)).toBe(Date.parse(sealedAt));
   });
+
+  // 未加载的惰性历史子项没有子行,不能当成「后面没有工具动作」:否则旁白会被误提升,
+  // 而且是否提升取决于详情是否已加载(codex review P2)。
+  it('treats an unloaded history group as activity instead of an empty tail', () => {
+    const sealedAt = '2026-11-03T09:18:00.000Z';
+    const user = message('u', 'user', 'Check the inbox', { createdAt: '2026-11-03T08:55:00.000Z' });
+    const wake = message('wake', 'assistant', 'Woke up: inbox empty', { turnCompleted: true, createdAt: sealedAt });
+    const narration = message('narration', 'assistant', 'Opening the second mailbox', { createdAt: '2026-11-03T09:31:00.000Z' });
+    const deferred = (children: RenderItem[]): RenderItem => ({
+      type: 'work_group',
+      key: 'work-unloaded',
+      children: children as never,
+      isStreaming: false,
+      ...(children.length === 0
+        ? { deferred: { expanded: false, loading: false, failed: false,
+            toggle: () => undefined, retry: () => undefined } }
+        : {}),
+    });
+    const settled = (children: RenderItem[]) => projectBot(
+      [user, wake, { type: 'work_group', key: 'work-history', isStreaming: false,
+        children: [narration, deferred(children)] } as RenderItem], false);
+    // 详情未加载与已加载(同为工具动作)必须给出同一份可见正文与读位。
+    for (const children of [[], [tool('scan')]]) {
+      const projected = settled(children);
+      expect(proseIds(projected)).toEqual(['wake']);
+      expect(allKeys(projected)).toContain('msg-narration');
+      expect(latestSettledAssistantMs(projected)).toBe(Date.parse(sealedAt));
+    }
+  });
 });

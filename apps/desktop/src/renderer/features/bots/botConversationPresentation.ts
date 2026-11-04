@@ -243,25 +243,39 @@ function projectWindow(
   // （`canonicalReplyVisibility` 的第二支）。它必须真的显示出来：折进 work_group 后
   // 组件默认折叠、`Collapse` 不挂载子项，用户既看不到、也不能据此推进读位（#8629）。
   // 与主进程同口径提升为可见正文；有后续工具动作的旁白继续留在折叠里。
+  //
+  // 未加载的惰性历史子项（`deferred`）拿不到子行，不能据此断言「后面没有工具」：
+  // 它是活动边界。否则旁白会被误提升，而且是否提升取决于详情是否已加载。
   const tailReplies = new Set<ChatMessage>();
   let activityAfter = false;
-  for (let index = expanded.length - 1; index >= 0; index -= 1) {
-    const item = expanded[index];
-    if (item.type === 'message' && item.message.role === 'user') {
-      activityAfter = false;
-      continue;
+  const scanTail = (list: readonly RenderItem[]): void => {
+    for (let index = list.length - 1; index >= 0; index -= 1) {
+      const item = list[index];
+      if (item.type === 'message' && item.message.role === 'user') {
+        activityAfter = false;
+        continue;
+      }
+      if (item.type === 'work_group') {
+        if (item.deferred) {
+          activityAfter = true;
+          continue;
+        }
+        scanTail(item.children);
+        continue;
+      }
+      if (isToolActivity(item)) {
+        activityAfter = true;
+        continue;
+      }
+      if (activityAfter || !isProse(item)) continue;
+      const { message } = item;
+      if (!message.content.trim() || message.failedSamplingAttempt) continue;
+      if (message.assistantPhase === 'commentary' && !message.explicitDelivery
+        && !hasRichAnswer(message.content)) continue;
+      tailReplies.add(message);
     }
-    if (isToolActivity(item)) {
-      activityAfter = true;
-      continue;
-    }
-    if (activityAfter || !isProse(item)) continue;
-    const { message } = item;
-    if (!message.content.trim() || message.failedSamplingAttempt) continue;
-    if (message.assistantPhase === 'commentary' && !message.explicitDelivery
-      && !hasRichAnswer(message.content)) continue;
-    tailReplies.add(message);
-  }
+  };
+  scanTail(items);
   const isAddressedReply = (message: ChatMessage) => Boolean(message.content.trim())
     && !message.failedSamplingAttempt
     && !(message.assistantPhase === 'commentary' && !message.explicitDelivery && !hasRichAnswer(message.content))
