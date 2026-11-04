@@ -1,3 +1,7 @@
+import { registerRuntimeSettingsSection } from '../app-settings/runtime.js';
+import { z as settingsSchema } from 'zod';
+import { registerPreferenceControlIpc } from '../app-settings/preferences.js';
+import { configureModelSettingsActions } from '../app-settings/models.js';
 import { createTaskCompletionDeliveryHost, type TaskCompletionDeliveryHost } from './taskCompletionDeliveryHost.js';
 import { setRoutineResultDispatch } from '../routines/deliveryDispatch.js';
 import { McpSetupBridge } from './mcpSetupBridge.js';
@@ -6704,6 +6708,7 @@ export function applyNewMakerDraftRoute(route: BotModelRoute): void {
  * soon as the Renderer selects an owner, before the splash-gated Maker IPC bundle is available.
  */
 export function registerModelVisibilitySyncIpc(): void {
+  registerPreferenceControlIpc();
   registerModelFavoritesSync(broadcastToAllWindows);
   configureAppDefaultModelSelection((appDefaultSelection) => {
     broadcastToAllWindows(MAKER_PUSH.DRAFT_PREF_APPLY, {
@@ -7769,7 +7774,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     return { dataOwnerId: session.dataOwnerId, generation: session.generation };
   });
 
-  registerProviderHandlers(createElectronIpcHandlerRegistry(), {
+  configureModelSettingsActions(registerProviderHandlers(createElectronIpcHandlerRegistry(), {
     listProviders: (opts) => getDesktopProviderService().listProviders(opts),
     isOrganizationManagedProviderId: (providerId) =>
       getActiveCatalog().providers.some(
@@ -8193,7 +8198,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         ? removeCodexAccountCredentialsReversibly(providerId)
         : removeGenericOAuthCredentialsReversibly(storedCustomProviderId(providerId));
     },
-  });
+  }));
 
   // 自定义 MCP 服务器 CRUD —— CRUD 成功后刷新三个 agent 的 mcpProviders 数组
   // （下次新建会话生效）并广播 MCP_CHANGED 让设置页列表 live 刷新。
@@ -25895,7 +25900,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     return maker.getAgentMemoryStatus(agentKind);
   });
 
-  ipcMain.handle(MAKER_INVOKE.MEMORY_SET, async (_e, agentKind: unknown, enabled: unknown) => {
+  const updateNativeMemorySetting = async (agentKind: unknown, enabled: unknown) => {
     if (agentKind !== 'claude-code' && agentKind !== 'codex' && agentKind !== 'pi') {
       throwIpcError(
         'INVALID_PARAMS',
@@ -25926,7 +25931,8 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       customizedKeys: settingsState.customizedKeys,
       defaults: settingsState.defaults,
     };
-  });
+  };
+  ipcMain.handle(MAKER_INVOKE.MEMORY_SET, async (_e, agentKind: unknown, enabled: unknown) => { return updateNativeMemorySetting(agentKind, enabled); });
 
   ipcMain.handle(MAKER_INVOKE.MEMORY_RESET, async (_e, agentKind: unknown) => {
     if (agentKind !== 'claude-code' && agentKind !== 'codex' && agentKind !== 'pi') {
@@ -25939,7 +25945,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     return maker.resetAgentMemory(agentKind);
   });
 
-  ipcMain.handle(MAKER_INVOKE.MAKER_MEMORY_SET_ENABLED, async (_e, enabled: unknown) => {
+  const updateMakerMemorySetting = async (enabled: unknown) => {
     if (typeof enabled !== 'boolean') {
       throwIpcError('INVALID_PARAMS', 'enabled required (boolean)');
     }
@@ -25990,12 +25996,13 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         }
       },
     });
-  });
+  };
+  ipcMain.handle(MAKER_INVOKE.MAKER_MEMORY_SET_ENABLED, async (_e, enabled: unknown) => { return updateMakerMemorySetting(enabled); });
 
   // MEMORY_GET_SETTINGS 故意不在这里注册 —— renderer/index.tsx 在 React mount
   // 之前 (远早于 splash 完成) 就会调一次, 所以挂在 bootstrap-electron 的早期
   // registerIpcHandlers() 里, 见那里的注释。
-  ipcMain.handle(MAKER_INVOKE.MEMORY_RESET_SETTINGS, async () => {
+  const restoreMemorySettings = async () => {
     // 同 MAKER_MEMORY_SET_ENABLED 的 persist / applyRuntime 拆分。
     const wasMakerEnabled = maker.makerMemory?.isEnabled() ?? false;
     let resetSettings_: MemorySettings | null = null;
@@ -26037,6 +26044,29 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         }
       },
     });
+  };
+  ipcMain.handle(MAKER_INVOKE.MEMORY_RESET_SETTINGS, async () => { return restoreMemorySettings(); });
+
+  registerRuntimeSettingsSection({
+    id: 'memory', title: '记忆开关', description: 'Cindy 记忆和各引擎记忆的开关。恢复默认只恢复开关，不删除已有记忆。',
+    effective: 'immediate-or-when-idle',
+    schema: settingsSchema.strictObject({ maker: settingsSchema.boolean().optional(), claudeCode: settingsSchema.boolean().optional(),
+      codex: settingsSchema.boolean().optional(), pi: settingsSchema.boolean().optional() }),
+    read: () => ({ ...memorySettingsWire(), runtime: { maker: maker.makerMemory?.isEnabled() ?? null } }),
+    update: async patch => {
+      const next = { ...readMemorySettingsState().value, ...patch };
+      if (next.maker && (patch.claudeCode !== undefined || patch.codex !== undefined))
+        throwIpcError('INVALID_PARAMS', 'Disable Cindy memory before changing native memory, as in Settings');
+      let result: unknown;
+      if (patch.maker !== undefined) result = await updateMakerMemorySetting(patch.maker);
+      for (const key of ['claudeCode', 'codex', 'pi'] as const) {
+        if (patch[key] !== undefined) {
+          await updateNativeMemorySetting(key === 'claudeCode' ? 'claude-code' : key, patch[key]);
+          if (readMemorySettingsState().value[key] !== patch[key]) throwIpcError('INTERNAL', 'memory setting was not persisted');
+        }
+      }
+      return result;
+    }, reset: restoreMemorySettings,
   });
 
   ipcMain.handle(MAKER_INVOKE.MAKER_MEMORY_RESET, async () => {

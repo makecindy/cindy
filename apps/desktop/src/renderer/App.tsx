@@ -1,3 +1,4 @@
+import { AppPreferenceControl } from './components/AppPreferenceControl';
 import { readLocalWorkerCreationSelection } from './state/workerCreationPrefs';
 import { useModelFavoritesHost } from './state/useModelFavoritesHost';
 import { getDataOwnerGeneration } from './contexts/dataOwnerGeneration';
@@ -442,6 +443,7 @@ export function App() {
       <FontSettingsProvider>
         <WallpaperSettingsProvider>
           <LocaleProvider>
+            <AppPreferenceControl />
             <ConfirmDialogProvider>
               <EnvCheckProvider>
                 <AuthProvider>

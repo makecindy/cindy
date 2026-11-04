@@ -1044,10 +1044,12 @@ export function RemoteSection({ showTitle = true }: { showTitle?: boolean } = {}
         return copy;
       });
     });
+    const offHosts = window.electronAPI.remoteSsh.onHostsChanged?.(applyListResult);
     return () => {
       off();
+      offHosts?.();
     };
-  }, [refresh]);
+  }, [refresh, applyListResult]);
 
   const handleReload = useCallback(async () => {
     try {
