@@ -365,7 +365,7 @@ describe('PermissionPrompt 经搜索弹层切换任务', () => {
     vi.unstubAllGlobals();
   });
 
-  function SearchSwitch() {
+  function SearchSwitch({ onRespond = vi.fn() }: { onRespond?: (r: unknown) => void }) {
     const [open, setOpen] = useState(false);
     const [taskId, setTaskId] = useState('task-a');
     const intent = useSessionSwitchFocusIntent(taskId, true);
@@ -387,8 +387,8 @@ describe('PermissionPrompt 经搜索弹层切换任务', () => {
         </Popover>
         {taskId === 'task-b' ? (
           <PermissionPrompt
-            permission={permission()}
-            onRespond={vi.fn()}
+            permission={permission([bashRule])}
+            onRespond={onRespond}
             autoFocus={intent.armed}
             onAutoFocusHandled={intent.consume}
           />
@@ -422,6 +422,45 @@ describe('PermissionPrompt 经搜索弹层切换任务', () => {
     await act(() => new Promise((resolve) => setTimeout(resolve, 0)));
     expect(document.activeElement).not.toBe(trigger);
     expect(document.activeElement).toBe(screen.getByRole('button', { name: /allowOnce/ }));
+  });
+
+  // 在结果上按住 Enter 选中：弹层卸载后、焦点还回来之前，焦点会短暂落到 body，卡片的
+  // window 快捷键此时已生效；这段空档里仍在重复的 Enter 不能替用户「允许一次」。
+  it('按住 Enter 选中搜索结果，弹层卸载到焦点归还之间的重复不批准', async () => {
+    const onRespond = vi.fn();
+    render(<SearchSwitch onRespond={onRespond} />);
+    const trigger = screen.getByRole('button', { name: 'search' });
+    act(() => trigger.focus());
+    act(() => trigger.click());
+    const result = screen.getByRole('button', { name: 'result' });
+    act(() => result.focus());
+    act(() => result.click());
+    const popover = screen.getByTestId('search-popover');
+    fireEvent.keyDown(result, { key: 'Enter', repeat: true });
+
+    const end = new Event('animationend', { bubbles: true });
+    Object.defineProperty(end, 'animationName', { value: 'float-out' });
+    act(() => {
+      fireEvent(popover, end);
+    });
+    expect(result.isConnected).toBe(false);
+    expect(document.activeElement).toBe(document.body);
+    fireEvent.keyDown(document.body, { key: 'Enter', repeat: true });
+    fireEvent.keyDown(document.body, { key: 'Enter', repeat: true, ctrlKey: true });
+    expect(onRespond).not.toHaveBeenCalled();
+
+    await act(() => new Promise((resolve) => setTimeout(resolve, 0)));
+    const allowOnce = screen.getByRole('button', { name: /allowOnce/ });
+    expect(document.activeElement).toBe(allowOnce);
+    fireEvent.keyDown(allowOnce, { key: 'Enter', repeat: true, ctrlKey: true });
+    fireEvent.keyUp(allowOnce, { key: 'Enter' });
+    expect(onRespond).not.toHaveBeenCalled();
+
+    // 新的一次按键照常生效。
+    fireEvent.keyDown(allowOnce, { key: 'Enter', ctrlKey: true });
+    expect(onRespond).toHaveBeenCalledWith(
+      expect.objectContaining({ decisionClassification: 'user_permanent' }),
+    );
   });
 });
 

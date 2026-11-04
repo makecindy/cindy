@@ -256,6 +256,13 @@ export function PermissionPrompt({
 
   // ── Focus on task switch ──
 
+  // Re-installing is safe: until a fresh Enter / Space press (which also ends the
+  // switch intent), any repeat still comes from a key carried over from the switch.
+  const guardHeldKeys = () => {
+    heldKeyGuardRef.current?.();
+    heldKeyGuardRef.current = swallowHeldActivationKeys();
+  };
+
   useEffect(() => {
     // Disabled buttons cannot take focus; keep the request until submission settles.
     if (!autoFocus || submitting) return;
@@ -270,7 +277,10 @@ export function PermissionPrompt({
       if (isInsideClosingKeyboardLayer(active)) {
         // Choosing a search result closes its popover and navigates in one event. The
         // popover keeps focus through its exit animation, then hands it back to its
-        // trigger. Keep the request and look again once focus settles.
+        // trigger. Keep the request and look again once focus settles. The card's
+        // window shortcut is already live during the wait (focus can fall to body once
+        // the result detaches), so guard a key still held from the choice right away.
+        guardHeldKeys();
         const retry = () => setFocusSettleCount((n) => n + 1);
         document.addEventListener('focusin', retry, true);
         return () => document.removeEventListener('focusin', retry, true);
@@ -285,8 +295,7 @@ export function PermissionPrompt({
     if (!button.isConnected) return;
     button.focus({ preventScroll: true });
     if (document.activeElement !== button) return;
-    heldKeyGuardRef.current?.();
-    heldKeyGuardRef.current = swallowHeldActivationKeys();
+    guardHeldKeys();
     onAutoFocusHandled?.();
   }, [autoFocus, onAutoFocusHandled, submitting, focusSettleCount]);
 
