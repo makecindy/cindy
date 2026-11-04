@@ -62,10 +62,11 @@ const SESSION_MESSAGE_COUNT_SQL = sql<number>`(
  * sidebar-card-mode：最近一条可见 user/assistant 的预览抽出 / role。
  * list_preview 已回填时 CASE 短路，不碰 messages。否则 SQL 侧 json_extract 纯文本，
  * 不把整段 content 跨 worker RPC。autoResume 只检查 user 行的 agent_meta。
+ * 空串等同未回填（见 SESSION_LIST_PROJECTION_BACKFILL_SQL），连带存下的旧 role 也不可信。
  */
 const LATEST_MSG_EXTRACT_SQL = sql<string | null>`(
   CASE
-    WHEN ${sessions.listPreview} IS NOT NULL THEN NULL
+    WHEN NULLIF(${sessions.listPreview}, '') IS NOT NULL THEN NULL
     ELSE (
       SELECT ${sql.raw(LIST_PREVIEW_EXTRACT_SQL)} FROM messages m
       WHERE m.session_id = ${OUTER_SESSION_ID_SQL}
@@ -77,7 +78,7 @@ const LATEST_MSG_EXTRACT_SQL = sql<string | null>`(
 )`.as('latest_message_extract');
 const LATEST_MSG_ROLE_SQL = sql<string | null>`(
   CASE
-    WHEN ${sessions.listPreviewRole} IS NOT NULL THEN ${sessions.listPreviewRole}
+    WHEN ${sessions.listPreviewRole} IS NOT NULL AND ${sessions.listPreview} IS NOT '' THEN ${sessions.listPreviewRole}
     ELSE (
       SELECT m.role FROM messages m
       WHERE m.session_id = ${OUTER_SESSION_ID_SQL}

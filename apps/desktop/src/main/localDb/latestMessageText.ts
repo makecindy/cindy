@@ -18,6 +18,7 @@ import { extractText } from '../sessionTaskSummary.logic.js';
 import { getDbClient } from './client/current.js';
 import { extractMessagePreview } from './mapper.js';
 import { messages, sessions } from './schema.js';
+import { EMPTY_ASSISTANT_CONTENT_SQL } from './sessionListProjection.sql.js';
 import {
   isTitleTurnBoundaryUser,
   isVisibleTitleUser,
@@ -88,6 +89,7 @@ export async function latestVisiblePreviewRow(
         eq(messages.sessionId, sessionId),
         sql`${messages.role} IN ('user', 'assistant')`,
         isNull(messages.rewindAt),
+        sql`(${messages.role} != 'assistant' OR ${messages.content} NOT IN ${sql.raw(EMPTY_ASSISTANT_CONTENT_SQL)})`,
         // SQLite may still evaluate json_extract when OR json_valid is false.
         // CASE keeps malformed historical agent_meta from failing the whole query.
         sql`(${messages.agentMeta} IS NULL OR CASE WHEN json_valid(${messages.agentMeta}) THEN json_extract(${messages.agentMeta}, '$.autoResume') END IS NOT 1)`,
