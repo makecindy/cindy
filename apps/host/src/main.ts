@@ -104,7 +104,12 @@ let runtimeLease: HostRuntimeLease | null = null;
 /** Claude subscription state read once per boot; never on the health path. */
 let claudeState: Record<string, unknown> | null = null;
 /** Real maker-core agents registered in this process. */
-let agentGraph: { maker: unknown; agent?: { capabilities?: { availableModels?: unknown[] } }; agents: string[] } | null = null;
+let agentGraph: {
+  maker: unknown;
+  agent?: unknown;
+  agents: string[];
+  capabilitiesByAgent?: Record<string, { availableModels?: unknown[] }>;
+} | null = null;
 let gatewayCredentials: { endpoint: string; credential: string } | null = null;
 /** Non-secret projection of the adopted Desktop login; never tokens. */
 let account: { authenticated: boolean; realm: string | null; error?: string } = { authenticated: false, realm: null };
@@ -172,6 +177,7 @@ async function ensureRuntime(ownerId: string): Promise<void> {
     }).catch(() => null);
     agentGraph = createHostAgentGraph({
       binaryPath: claudeBinary,
+      codexBinaryPath: harnessBinaryPath('codex') ?? undefined,
       storage: sessionStorage,
       gateway,
     });
@@ -255,13 +261,10 @@ const server = createHostServer({
   }),
   providers: () => listProviders({ gateway: gatewayCredentials, ownerId: runtime.owner }),
   // The agent's own capability descriptor; no second catalog is invented here.
-  capabilities: () => {
-    const agent = agentGraph?.agent;
-    return {
-      agentKind: 'claude-code',
-      capabilities: agent?.capabilities ?? { availableModels: [] },
-      availableModels: agent?.capabilities?.availableModels ?? [],
-    };
+  capabilities: (agentKind: string) => {
+    const capabilities = agentGraph?.capabilitiesByAgent?.[agentKind];
+    if (!capabilities) throw new Error(`Agent '${agentKind}' is not registered`);
+    return { agentKind, capabilities, availableModels: capabilities.availableModels ?? [] };
   },
   history: async (sessionId: string, limit: number) => {
     const { getMessagesForHistory } = await import('../../desktop/src/main/localDb/chatHistoryReader.ts');

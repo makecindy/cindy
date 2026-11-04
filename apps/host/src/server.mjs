@@ -110,7 +110,14 @@ export function createHostServer(deps) {
         }
         if (url.pathname === '/api/plugins/list') { send(response, 200, deps.listPlugins()); return; }
         if (url.pathname === '/api/providers') { send(response, 200, await deps.providers()); return; }
-        if (url.pathname === '/api/capabilities') { send(response, 200, deps.capabilities()); return; }
+        if (url.pathname === '/api/capabilities') {
+          try {
+            send(response, 200, deps.capabilities(String(body.agentKind ?? '')));
+          } catch (error) {
+            send(response, 404, { error: 'agent_not_registered', message: error instanceof Error ? error.message : String(error) });
+          }
+          return;
+        }
         send(response, 404, { error: 'not_found' });
         return;
       }

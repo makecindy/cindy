@@ -28,6 +28,10 @@
     "./maker": {
       "import": "./src/maker.ts",
       "default": "./src/maker.ts"
+    },
+    "./agents/codex": {
+      "import": "./src/agents/codex/index.ts",
+      "default": "./src/agents/codex/index.ts"
     }
   },
   "scripts": {

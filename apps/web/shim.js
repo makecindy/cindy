@@ -86,7 +86,7 @@
         // Only the Claude agent is wired in the host today.
         return Promise.reject(new Error(`Agent '${String(args?.[0])}' is not registered`));
       }
-      return rpc('/capabilities');
+      return rpc('/capabilities', { agentKind: args?.[0] ?? null });
     },
     'maker.syncModelVisibility': (args) => {
       window.__cindyVisibilityCalls = window.__cindyVisibilityCalls ?? [];

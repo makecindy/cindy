@@ -13,6 +13,7 @@
  */
 
 import { ClaudeCodeAgent } from '@cindy/maker-core/agents/claude-code';
+import { CodexAgent } from '@cindy/maker-core/agents/codex';
 import { Maker } from '@cindy/maker-core/maker';
 
 import { hasClaudeNativeLogin } from '../../../desktop/src/main/maker-host/claude-native-auth.ts';
@@ -69,6 +70,29 @@ export function createClaudeGatewayAuth(gateway) {
   };
 }
 
+/**
+ * Local Codex CLI login lane: the host sets no credentials and lets the CLI read
+ * its own `~/.codex` auth, mirroring the Claude subscription rule. Desktop's
+ * adapter additionally covers gateway keys and account switching; converging the
+ * two is tracked as host/auth TODO.
+ */
+export function createCodexLocalCliAuth() {
+  return {
+    async getState() {
+      return { authenticated: true, authSource: 'oauth', identity: 'Codex CLI login' };
+    },
+    async triggerLogin() {
+      throw new Error('sign in with the Codex CLI: codex login');
+    },
+    async logout() {
+      throw new Error('sign out with the Codex CLI; the host does not manage its credentials');
+    },
+    async getAuthEnv() {
+      return {};
+    },
+  };
+}
+
 export function createHostAgentGraph(options) {
   const agent = new ClaudeCodeAgent({
     auth: options.gateway ? createClaudeGatewayAuth(options.gateway) : createClaudeSubscriptionAuth(),
@@ -76,11 +100,23 @@ export function createHostAgentGraph(options) {
     binaryPath: options.binaryPath,
     logger: LOGGER,
   });
+  const codex = options.codexBinaryPath
+    ? new CodexAgent({
+        auth: createCodexLocalCliAuth(),
+        runtimeConfig: {},
+        binaryPath: options.codexBinaryPath,
+        logger: LOGGER,
+      })
+    : null;
+  const agents = { 'claude-code': agent, ...(codex ? { codex } : {}) };
+  const capabilitiesByAgent = Object.fromEntries(
+    Object.entries(agents).map(([kind, instance]) => [kind, instance.capabilities]),
+  );
   const maker = new Maker({
-    agents: { 'claude-code': agent },
+    agents,
     storage: options.storage,
     logger: LOGGER,
     ...(options.makerMemory ? { makerMemory: options.makerMemory } : {}),
   });
-  return { maker, agent, agents: ['claude-code'] };
+  return { maker, agent, codex, capabilitiesByAgent, agents: Object.keys(agents) };
 }
