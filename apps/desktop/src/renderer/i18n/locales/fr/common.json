@@ -11130,7 +11130,7 @@
         "items": {
           "tasks": {
             "title": "Tâches",
-            "body": "Décide quand lancer une tâche en arrière-plan, pilote celles qu’il a lancées et rapporte le résultat dans le chat, y compris sur vos autres ordinateurs."
+            "body": "Connaît les tâches qu’il peut piloter et les ordinateurs disponibles. Organise et suit les tâches à votre demande, rapporte les résultats et vérifie les opérations prises en charge avant de travailler sur un autre ordinateur."
           },
           "teammates": {
             "title": "Autres coéquipiers",
@@ -11145,8 +11145,8 @@
             "body": "Retient vos préférences et votre contexte, vérifie avant d’agir et met à jour quand cela change."
           },
           "self": {
-            "title": "Se connaître",
-            "body": "Sait ce qu’il peut faire et active ou désactive des fonctions pour vous ; pour Telegram, MCP ou les plugins, il consulte d’abord l’aide de Cindy."
+            "title": "Comprendre et configurer Cindy",
+            "body": "Connaît les fonctions et le fonctionnement de Cindy, et consulte ou modifie les réglages à votre demande. Vous sollicite dans la tâche si une saisie ou une confirmation est nécessaire."
           }
         }
       },

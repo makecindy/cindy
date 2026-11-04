@@ -11130,7 +11130,7 @@
         "items": {
           "tasks": {
             "title": "Tareas",
-            "body": "Decide cuándo iniciar una tarea en segundo plano, controla las que inició y trae el resultado al chat, también en tus otras computadoras."
+            "body": "Conoce las tareas que puede controlar y los equipos disponibles. Organiza y sigue las tareas que le pides, trae los resultados y comprueba las operaciones admitidas antes de trabajar en otro equipo."
           },
           "teammates": {
             "title": "Otros compañeros",
@@ -11145,8 +11145,8 @@
             "body": "Recuerda tus preferencias y contexto, comprueba antes de usarlos y los actualiza cuando cambian."
           },
           "self": {
-            "title": "Conocerse",
-            "body": "Sabe lo que puede hacer y activa o desactiva funciones por ti; para Telegram, MCP o plugins consulta primero la ayuda de Cindy."
+            "title": "Conocer y configurar Cindy",
+            "body": "Conoce las funciones y el uso de Cindy, y consulta o cambia ajustes cuando se lo pides. Si necesita que introduzcas datos o confirmes algo, te lo pide dentro de la tarea."
           }
         }
       },

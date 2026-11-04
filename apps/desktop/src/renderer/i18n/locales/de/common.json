@@ -11036,7 +11036,7 @@
         "items": {
           "tasks": {
             "title": "Aufgaben",
-            "body": "Entscheidet, wann eine Hintergrundaufgabe startet, steuert die eigenen Aufgaben und bringt das Ergebnis in den Chat zurück – auch auf deinen anderen Computern."
+            "body": "Kennt die steuerbaren Aufgaben und verfügbaren Computer. Organisiert und begleitet Aufgaben auf Wunsch, bringt Ergebnisse zurück und prüft vor computerübergreifenden Aktionen den unterstützten Umfang."
           },
           "teammates": {
             "title": "Andere Teammates",
@@ -11051,8 +11051,8 @@
             "body": "Merkt sich deine Vorlieben und deinen Hintergrund, prüft vorher und aktualisiert bei Änderungen."
           },
           "self": {
-            "title": "Sich selbst kennen",
-            "body": "Weiß, was er kann, und schaltet Funktionen für dich ein oder aus. Bei Cindy-Fragen wie Telegram, MCP oder Plugins liest er zuerst die Hilfe."
+            "title": "Cindy verstehen und einstellen",
+            "body": "Kennt Cindys Funktionen und Bedienung und prüft oder ändert Einstellungen auf Wunsch. Bittet dich in der Aufgabe um Eingaben oder Bestätigungen, wenn sie nötig sind."
           }
         }
       },

@@ -11036,7 +11036,7 @@
         "items": {
           "tasks": {
             "title": "Tasks",
-            "body": "Decides when to start a background task, controls the tasks it started and brings the result back to chat, including on your other computers."
+            "body": "Knows which tasks it can control and which computers are available. Arranges and follows up on tasks as you request, brings results back, and checks supported operations before working across computers."
           },
           "teammates": {
             "title": "Other teammates",
@@ -11051,8 +11051,8 @@
             "body": "Remembers your preferences and background, checking before use and updating when things change."
           },
           "self": {
-            "title": "Knowing itself",
-            "body": "Knows what it can do and switches features on or off for you; checks Cindy help first for things like adding Telegram, setting up MCP or plugins."
+            "title": "Knowing and configuring Cindy",
+            "body": "Understands Cindy’s features and usage, and checks or changes settings as you request. Asks you in the task when your input or confirmation is needed."
           }
         }
       },
