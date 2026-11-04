@@ -86,6 +86,7 @@ beforeEach(async () => {
 });
 
 afterEach(async () => {
+  manager.disposeNotificationIndex();
   await fs.promises.rm(workDir, { recursive: true, force: true });
 });
 
@@ -102,6 +103,23 @@ function goodManifest(id = 'hello'): Record<string, unknown> {
     tools: [{ name: 'do_thing', description: '做点事' }],
   };
 }
+
+// Unit integration: the index must follow real install/enable/uninstall mutations
+// without another full-list broadcast; gateway-only fixtures cannot cover this.
+it('updates notification candidates through actual installation mutations', async () => {
+  const manifest = { ...goodManifest('listener'), slots: ['tool', 'subscribe'], subscribe: { topics: ['session'] } };
+  const installed = await manager.install(await makeCindy('listener.cindy', manifest), { namespace: null });
+  expect(installed).toMatchObject({ ghost: { manifest: { id: 'listener' } } });
+  const candidates = await manager.listNotificationCandidatesAsync();
+  expect(candidates.map(g => g.manifest.id)).toEqual(['listener']);
+  const id = installedGhostPhysicalRelId(candidates[0]!);
+  await expect(manager.setEnabled(id, false)).resolves.toEqual({ ok: true });
+  await expect(manager.listNotificationCandidatesAsync()).resolves.toEqual([]);
+  await expect(manager.setEnabled(id, true)).resolves.toEqual({ ok: true });
+  expect((await manager.listNotificationCandidatesAsync()).map(g => g.manifest.id)).toEqual(['listener']);
+  await manager.uninstall(id);
+  await expect(manager.listNotificationCandidatesAsync()).resolves.toEqual([]);
+});
 
 describe('official simulator identity migration', () => {
   it.each(['prepared', 'backed-up', 'placed', 'committed'] as const)(

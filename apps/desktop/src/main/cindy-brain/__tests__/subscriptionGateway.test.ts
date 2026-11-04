@@ -327,6 +327,29 @@ const TURN_DATA = { sessionId: 's1', agent: 'claude-code' };
 // synchronous scan, and must not reuse another owner's pending discovery.
 // Existing fan-out tests only exercise synchronous discovery / wake boundaries.
 describe('asynchronous notification discovery', () => {
+  it('preflights the requested topic without waking unrelated or disabled plugins', async () => {
+    const { gw, deps } = makeGateway({ listGhostsAsync: async () => [
+      ghost('idle', { topics: ['session'] }), ghost('off', { topics: ['turn'] }, false),
+      ghost('hooks', { hooks: ['will-user-message'] }),
+    ] });
+    await expect(gw.hasSubscribers('session')).resolves.toBe(true);
+    await expect(gw.hasSubscribers('turn')).resolves.toBe(false);
+    expect(deps.wake).not.toHaveBeenCalled();
+  });
+
+  it('rejects an indexed subscriber after its approval was replaced without refreshing the index', async () => {
+    const candidate = { ...ghost('a', { topics: ['turn'] }), approval: { state: 'approved' as const, revision: 'old' } };
+    const { gw, sent, deps } = makeGateway({
+      listGhostsAsync: async () => [candidate],
+      findGhostForDelivery: () => ({ ...candidate, approval: { state: 'approved', revision: 'new' } }),
+    });
+    gw.publish('turn', 'did-turn-start', TURN_DATA);
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(sent).toEqual([]);
+    expect(deps.wake).not.toHaveBeenCalled();
+  });
+
   it('shares an in-flight scan, delivers in order and refreshes the next burst', async () => {
     let resolve!: (ghosts: InstalledGhost[]) => void;
     const pending = new Promise<InstalledGhost[]>((done) => { resolve = done; });

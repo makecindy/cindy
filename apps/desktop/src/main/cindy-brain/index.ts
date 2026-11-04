@@ -688,6 +688,7 @@ import { GHOST_COMPOSER_LIST_CHANNEL } from '../../shared/ghostComposer.js';
 import {
   isGhostDisabledForWorkdir,
   listDisabledGhostIdsForWorkdir,
+  normalizeWorkdirKey,
   relocateGhostWorkdirPrefs,
   setGhostDisabledForWorkdir,
 } from './ghostWorkdirPrefs.js';
@@ -1313,7 +1314,29 @@ export async function listInstalledGhostsAsync(): Promise<InstalledGhost[]> {
 }
 
 export async function listAvailableGhostsAsync(): Promise<InstalledGhost[]> {
-  return (await listInstalledGhostsAsync()).filter((ghost) => isGhostAvailableForActiveSession(ghost.manifest.id));
+  const ghosts = await listInstalledGhostsAsync();
+  if (isAppSessionBoundaryPending()) return [];
+  // The scan already supplies each exact instance. Looking up its bare id again
+  // can fall back to N full scans (and confuse same-name namespace instances).
+  const accountServices = getAppCapabilities().canUseCindyAccountServices;
+  return ghosts.filter(ghost => accountServices || !ghostRequiresCindyAccount(ghost.manifest));
+}
+
+/** Notification discovery is indexed; exact live approvals remain the delivery boundary. */
+async function listGhostNotificationCandidates(): Promise<InstalledGhost[]> {
+  const owner = ghostOwnerScope.capture();
+  if (!ghostOwnerScope.isCurrent(owner) || !ghostOwnerScope.isStable(owner)) return [];
+  const ghosts = await getGhostManager().listNotificationCandidatesAsync();
+  if (!ghostOwnerScope.isCurrent(owner) || !ghostOwnerScope.isStable(owner)) return [];
+  const accountServices = getAppCapabilities().canUseCindyAccountServices;
+  return ghosts.filter(ghost => accountServices || !ghostRequiresCindyAccount(ghost.manifest));
+}
+
+function findGhostNotificationTarget(instanceKey: string): InstalledGhost | null {
+  if (isAppSessionBoundaryPending()) return null;
+  const ghost = getGhostManager().findInstalledInstance(instanceKey);
+  if (!ghost || (!getAppCapabilities().canUseCindyAccountServices && ghostRequiresCindyAccount(ghost.manifest))) return null;
+  return ghost;
 }
 
 export function findTrustedXdGhostForScript(id: string): InstalledGhost | null {
@@ -1355,6 +1378,7 @@ export function suspendCindyAccountGhosts(): void {
  * setup writes, and post-dispatch cleanup cannot cross into the next owner.
  */
 export async function interruptGhostCallsForAccountBoundary(): Promise<void> {
+  managerSingleton?.disposeNotificationIndex();
   await revokePluginAppServers();
   pluginDownloads.abortAll();
   cancelActiveGhostOauthFlow();
@@ -2738,20 +2762,18 @@ export function getGhostSubscriptionGateway(): GhostSubscriptionGateway {
   if (!subscriptionGatewaySingleton) {
     subscriptionGatewaySingleton = new GhostSubscriptionGateway({
       listGhosts: availableGhosts,
-      listGhostsAsync: listAvailableGhostsAsync,
-      findGhostForDelivery: findGhostForInstanceId,
-      isRunning: (id) => {
-        const ghost = findGhostForInstanceId(id);
-        return getGhostRuntime().stateOf(ghost ? installedGhostStoragePart(ghost) : id) === 'running';
-      },
+      listGhostsAsync: listGhostNotificationCandidates,
+      findGhostForDelivery: findGhostNotificationTarget,
+      isRunning: (id) => getGhostRuntime().stateOf(id) === 'running',
       wake: async (ghost) => {
         const r = await getGhostRuntime().spawn(ghost);
         if (!r.ok) throw new Error(r.reason);
       },
       sendToGhost: (ghostId, payload) => {
-        const ghost = findGhostForInstanceId(ghostId);
+        const ghost = findGhostNotificationTarget(ghostId);
         // 适配:底层返回 false 表示投递失败(网关契约是抛错 → 走缓冲/熔断)。
-        if (!sendToGhostLogic(ghost ? installedGhostStoragePart(ghost) : ghostId, payload)) {
+        if (!ghost?.enabled || ('topic' in payload && !ghost.manifest.subscribe?.topics?.includes(payload.topic))
+          || !sendToGhostLogic(installedGhostStoragePart(ghost), payload)) {
           throw new Error('ghost pipe send failed');
         }
       },
@@ -3385,8 +3407,7 @@ export function notifyGhostSessionEvent(
   void (async () => {
     try {
       const owner = ghostOwnerScope.capture();
-      // The gateway discovers subscribers once after eligibility is resolved.
-      // A preflight scan here used to scan every installation a second time.
+      if (!(await getGhostSubscriptionGateway().hasSubscribers('session'))) return;
       // created / archived 与 turn 事件同口径；switched 额外允许归一后的 Orca Lead。
       // retry 视为不投，生命周期事件不值得引入重试机制。
       const info = await isGhostEligibleSession(
@@ -10104,17 +10125,17 @@ export function registerGhostIpc(): void {
 
   // ── 目录级禁用(ghostWorkdirPrefs;插件页的项目范围视图)──
   // 读走 sendSync:切换范围时禁用清单要与卡片同帧渲染(规则 7 无跳变),
-  // 文件读取极小且带 mtime 缓存。写走 invoke;写后广播 ghosts:changed
-  // (renderer 复用同一订阅热更,多窗口同步)。
+  // 文件读取极小且带 mtime 缓存。写走 invoke；仅广播目录策略，多窗口同步。
   ipcMain.on('ghosts:workdir-prefs', (event, workdir: unknown) => {
     event.returnValue = {
       disabled: typeof workdir === 'string' ? listDisabledGhostIdsForWorkdir(workdir) : [],
+      workdirKey: typeof workdir === 'string' ? normalizeWorkdirKey(workdir) : '',
     };
   });
   ipcMain.handle('ghosts:workdir-prefs', (event, workdir: unknown) => {
     assertTrustedAppRendererEvent(event);
     if (typeof workdir !== 'string') throwIpcError('INVALID_PARAMS', 'workdir must be a string');
-    return { disabled: listDisabledGhostIdsForWorkdir(workdir) };
+    return { disabled: listDisabledGhostIdsForWorkdir(workdir), workdirKey: normalizeWorkdirKey(workdir) };
   });
   ipcMain.handle(
     'ghosts:workdir-prefs:set',
@@ -11091,12 +11112,18 @@ export function resolveGhostWebviewAttach(
   };
 }
 
-/** Local and remote project controls share persistence, setup wake-up and list invalidation. */
+/** Local and remote project controls share persistence and scoped policy invalidation. */
 function setGhostWorkdirDisabledAndNotify(workdir: string, storedId: string, disabled: boolean): string[] {
   const wasDisabled = isGhostDisabledForWorkdir(storedId, workdir);
   const next = setGhostDisabledForWorkdir(workdir, storedId, disabled);
-  if (wasDisabled !== disabled) getGhostSetupChangeBus().emit(storedId, { source: 'workdir_policy' });
-  broadcastGhostsChanged(getGhostManager().list());
+  if (wasDisabled !== disabled) {
+    getGhostSetupChangeBus().emit(storedId, { source: 'workdir_policy' });
+    broadcastGhostWindowPush('ghosts:workdir-prefs-changed', {
+      workdirKey: normalizeWorkdirKey(workdir), disabled: next,
+    });
+    // Remote clients keep their existing resource invalidation contract.
+    notifyMobilePluginsChanged();
+  }
   return next;
 }
 
@@ -11124,6 +11151,7 @@ function broadcastGhostsChanged(
   },
 ): void {
   if (!opts?.projectionOnly) {
+    managerSingleton?.invalidateNotificationCandidates();
     refreshPluginApps(ghosts, { find: findGhostForInstanceId,
       evidence: id => getGhostManager().approvedInstallEvidence(id), available: () => !isGhostBoundaryPending() });
     getGhostSetupManifestTracker().note(ghosts);
@@ -11265,7 +11293,7 @@ export function refreshGhostLocalization(previousLocale: SupportedLocale): void 
     previousLocale,
     currentLocale: getResolvedMainLocale(),
     list: () => manager.list(),
-    broadcastChanged: (ghosts) => broadcastGhostsChanged(ghosts),
+    broadcastChanged: (ghosts) => broadcastGhostsChanged(ghosts, false, { projectionOnly: true }),
     sendContextChanged: (ghost, message) => sendToGhostLogic(installedGhostStoragePart(ghost), message),
   });
 }

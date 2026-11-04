@@ -151,7 +151,7 @@ export type GhostAssistantScreenResult =
 export interface GhostSubscriptionGatewayDeps {
   /** 当前已装且启用的意识清单(现读跟随装卸/启停热更)。 */
   listGhosts(): InstalledGhost[];
-  /** Fresh asynchronous discovery for notifications; never an authorization cache. */
+  /** Asynchronous notification candidates; may be indexed, never an authorization cache. */
   listGhostsAsync?(): Promise<InstalledGhost[]>;
   /** Recheck the exact installation after asynchronous discovery. */
   findGhostForDelivery?(id: string): InstalledGhost | null;
@@ -220,6 +220,17 @@ export class GhostSubscriptionGateway {
 
   constructor(private readonly deps: GhostSubscriptionGatewayDeps) {}
 
+  /** Cheap when the Host's discovery index is ready; unknown is resolved, never assumed empty. */
+  async hasSubscribers(topic: GhostSubscribeTopic): Promise<boolean> {
+    const owner = this.captureOwnerScope();
+    if (!this.ownerScopeUsable(owner)) return false;
+    const ghosts = this.deps.listGhostsAsync
+      ? await this.deps.listGhostsAsync()
+      : this.deps.listGhosts();
+    return this.ownerScopeUsable(owner) && ghosts.some(ghost =>
+      ghost.enabled && ghost.manifest.subscribe?.topics?.includes(topic));
+  }
+
   /* ── did- 旁听 ─────────────────────────────────────────────────────── */
 
   /** 向所有订阅了该 topic 的启用意识扇出一条 did- 事件。 */
@@ -231,7 +242,7 @@ export class GhostSubscriptionGateway {
     if (this.deps.listGhostsAsync) {
       const owner = this.captureOwnerScope();
       if (!this.ownerScopeUsable(owner)) return;
-      // Only share work already in flight. The next burst reads fresh receipts.
+      // Share concurrent discovery; exact live approvals are checked in publishTo.
       if (this.discovery && !this.ownerScopeUsable(this.discovery.owner)) this.discovery = null;
       const discovery = this.discovery ??= { owner, promise: this.deps.listGhostsAsync() };
       void discovery.promise.then((ghosts) => {
