@@ -1736,6 +1736,8 @@ describe('PI durable subagent run store', () => {
         ['a script outside the run directory', ({ identity }, dir) => { identity.runnerScript = path.join(path.dirname(dir), 'runner.cjs'); }],
         ['no child session to verify', ({ config }) => { config.tasks = []; }],
         ['a config detached from its run directory', ({ config }, dir) => { config.runDir = path.dirname(dir); }],
+        ['a missing start time', ({ identity }) => { delete identity.startedAt; }],
+        ['a missing runner pid', ({ identity }) => { delete identity.runnerPid; }],
       ];
       it.each(refusalMutations)('refuses a runner identity for %s', async (_label, mutate) => {
         const { agentHome } = await identityHome(async () => {}, mutate);
@@ -1779,6 +1781,58 @@ describe('PI durable subagent run store', () => {
         const { agentHome } = await identityHome(async () => {});
         childProcess.spawnSync.mockImplementation(() => probe);
         await expect(stopAllPiSubagentRunsForExit(agentHome, 0)).resolves.toBe(false);
+      });
+
+      // The terminal receipt stays primary: a corrupt identity file must not
+      // be consulted at all when a valid result.json exists, so recovery
+      // still succeeds exactly as it did before identities existed.
+      it('prefers a terminal receipt over a corrupt runner identity', async () => {
+        const { agentHome, root, dir } = await identityHome(
+          async (dir) => writeFile(path.join(dir, 'status.json'), Buffer.alloc(72_506)),
+        );
+        const result = {
+          version: 1, runId, taskId: 'tool-1', state: 'completed', completedAt: 100,
+          tasks: [{ childId: 'child-1', sessionId: 'native-1', agent: 'scout', status: 'completed', output: 'original result' }],
+        };
+        await writeFile(path.join(dir, 'result.json'), JSON.stringify(result));
+        await writeFile(path.join(dir, 'runner-identity.json'), '{broken');
+        await expect(stopAllPiSubagentRunsForExit(agentHome, 0, { killUnresponsiveRunners: true }))
+          .resolves.toBe(true);
+        await expect(stopPiSubagentRunsForAccountBoundary(root, { timeoutMs: 0 }))
+          .resolves.toBe(true);
+      });
+
+      it.each([
+        ['not valid JSON', '{broken'],
+        ['oversized', 'x'.repeat(3 * 1024 * 1024)],
+      ] as const)('refuses a runner identity file that is %s', async (_label, content) => {
+        const { agentHome, dir } = await identityHome(async () => {});
+        await writeFile(path.join(dir, 'runner-identity.json'), content);
+        await expect(stopAllPiSubagentRunsForExit(agentHome, 0, { killUnresponsiveRunners: true }))
+          .resolves.toBe(false);
+      });
+
+      // Greptile review on #8802: the alive-runner test above only proves the
+      // runId substring blocks, so it would pass even if child sessionIds
+      // were never checked. An orphan child keeps its sessionId but no run
+      // UUID in its command line; it must block both boundary entries until
+      // it disappears, even though every other identity is gone.
+      it('blocks on an orphan child session even when the runner UUID is gone', async () => {
+        const { agentHome, root } = await identityHome(async () => {}, ({ config }) => {
+          config.tasks = [
+            { childId: 'child-1', sessionId: 'native-1', agent: 'scout' },
+            { childId: 'child-2', sessionId: 'native-2', agent: 'scout' },
+          ];
+        });
+        childProcess.spawnSync.mockImplementation(() => ({ status: 0, stdout: inventory(['pi --mode rpc --session-id native-2']) }));
+        await expect(stopAllPiSubagentRunsForExit(agentHome, 0, { killUnresponsiveRunners: true }))
+          .resolves.toBe(false);
+        await expect(stopPiSubagentRunsForAccountBoundary(root, { timeoutMs: 0 }))
+          .resolves.toBe(false);
+        childProcess.spawnSync.mockImplementation(() => ({ status: 0, stdout: inventory(['node unrelated.js']) }));
+        await expect(stopAllPiSubagentRunsForExit(agentHome, 0)).resolves.toBe(true);
+        await expect(stopPiSubagentRunsForAccountBoundary(root, { timeoutMs: 0 }))
+          .resolves.toBe(true);
       });
     });
   });
