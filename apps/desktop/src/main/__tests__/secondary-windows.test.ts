@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-const mocks = vi.hoisted(() => ({ loadURL: vi.fn(), loadFile: vi.fn() }));
+const mocks = vi.hoisted(() => ({ loadURL: vi.fn(async () => {}), loadFile: vi.fn(async () => {}) }));
 vi.mock('electron', () => ({
   BrowserWindow: class {
     webContents = { on: vi.fn(), once: vi.fn(), setWindowOpenHandler: vi.fn() };
