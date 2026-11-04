@@ -6,7 +6,7 @@ import { useFocusEffect, useIsFocused, useLocalSearchParams, useRouter } from 'e
 import { useAuth } from '@/auth/AuthContext';
 import { useDeviceLink } from '@/device-link/DeviceLinkContext';
 import { getRemoteResource } from '@/device-link/remoteResources';
-import { readRemoteCollectionCache } from '@/device-link/remoteResourceAvailability';
+import { remoteCollectionCacheOwner, readRemoteCollectionCache } from '@/device-link/remoteResourceAvailability';
 import { createRemoteReadRecovery } from '@/device-link/remoteReadRecovery';
 import { createRemoteSyncCoordinator, retryRemoteSyncRead, type RemoteSyncRun } from '@/device-link/remoteSyncTask';
 import { isAutoRecoveringRemoteError, formatRemoteError } from '@/device-link/remoteStatus';
@@ -42,7 +42,7 @@ export function useRemoteResourceSession(deviceId: string, deviceName: string, s
   const [failure, setFailure] = useState<{ binding: string; message: string } | null>(null);
   const [attempt, setAttempt] = useState(0);
   const retry = useCallback(() => setAttempt(value => value + 1), []);
-  const cached = readRemoteCollectionCache(`${user?.id ?? ''}:${accountGeneration}`, collectionId)
+  const cached = readRemoteCollectionCache(remoteCollectionCacheOwner(user?.id ?? '', accountGeneration), collectionId)
     .find(row => row.host.deviceId === deviceId && row.item.ref.id === resourceId && row.item.ref.kind === resourceKind)?.item;
   const savedMatches = savedCompanion?.ref.id === resourceId && savedCompanion.ref.kind === resourceKind && collectionId === 'teammates';
   const resource = display?.identity === identity ? display.resource : cached ?? (savedMatches ? savedCompanion : null);

@@ -9,10 +9,16 @@
     "removedHint": "這臺手機已被移出中繼，或中繼已停用。可以切回官方中繼，或在電腦上重新加入。",
     "credentialMissingHint": "這臺手機上找不到中繼憑證。請在電腦上重新加入，或切回官方中繼。",
     "confirmTitle": "切回官方中繼？",
-    "confirmBody": "這臺手機會退出「{{name}}」，改用 {{appName}} 官方中繼。之後要再用這個中繼，需要在電腦上重新加入。",
-    "confirmAction": "切回",
+    "confirmBody": "這台手機將改用 {{appName}} 官方中轉，並保留「{{name}}」的加入資訊，之後可直接切回來。",
+    "confirmAction": "切回官方中轉",
     "switchFailed": "未能切回官方中繼，請稍後重試。",
-    "pushUnavailable": "使用自建中繼時，電腦上的任務通知不會推送到這臺手機。"
+    "pushUnavailable": "使用自建中繼時，電腦上的任務通知不會推送到這臺手機。",
+    "useSaved": "使用「{{name}}」",
+    "forget": "退出並移除中轉",
+    "forgetTitle": "退出中轉？",
+    "forgetBody": "這台手機將退出「{{name}}」並刪除本機儲存的加入資訊。再次使用需要重新申請加入。",
+    "resumeFailed": "無法切換到已儲存的中轉。",
+    "forgetFailed": "無法退出中轉。"
   },
   "issue": {
     "removedTitle": "已移出中繼",

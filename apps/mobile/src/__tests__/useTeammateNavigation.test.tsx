@@ -244,14 +244,14 @@ it('preserves earlier unrelated routes when removing multiple retired entries', 
   expect(h.dismissTo).not.toHaveBeenCalled();
 });
 it('opens a known conversation directly and seeds its first-frame identity', async () => {
-  const { readRemoteCollectionCache } = await import('@/device-link/remoteResourceAvailability');
+  const { readRemoteCollectionCache, remoteCollectionCacheOwner } = await import('@/device-link/remoteResourceAvailability');
   const linked = { ...teammate, item: { ...teammate.item, links: [{ rel: 'conversation', target: { kind: 'session' as const, sessionId: 'chat' } }] } };
   await render();
   await act(async () => result.openTeammate(linked));
   expect(h.push).toHaveBeenCalledExactlyOnceWith({ pathname: '/sessions/[sessionId]', params: {
     sessionId: 'chat', deviceId: 'mac', deviceName: 'My Mac', resourceCollectionId: 'teammates', resourceId: 'writer', resourceKind: 'bot',
   } });
-  expect(readRemoteCollectionCache(`${h.user.id}:${h.accountGeneration}`, 'teammates')[0]).toBe(linked);
+  expect(readRemoteCollectionCache(remoteCollectionCacheOwner(h.user.id, h.accountGeneration), 'teammates')[0]).toBe(linked);
 });
 
 it('opens a disk-cached canonical chat without a task row, seeds presentation once, and preserves real metadata', async () => {
@@ -266,4 +266,17 @@ it('opens a disk-cached canonical chat without a task row, seeds presentation on
   await act(async () => result.openTeammate(linked));
   expect(h.upsert).toHaveBeenCalledTimes(1);
   expect(h.sessions[0].model).toBe('real-model');
+});
+
+// Opening a companion must preserve the roster cached by the resident home page.
+it('keeps sibling rows in the current-route list cache when opening a companion', async () => {
+  const { readRemoteCollectionCache, writeRemoteCollectionCache } = await import('@/device-link/remoteResourceAvailability');
+  const { getSelfHostedRelayDataKey } = await import('@/device-link/selfHostedRelayRouting');
+  const owner = JSON.stringify([h.user.id, h.accountGeneration, getSelfHostedRelayDataKey()]);
+  const sibling = { ...teammate, key: 'mac:sibling', item: { ...teammate.item, ref: { ...teammate.item.ref, id: 'sibling' } } };
+  readRemoteCollectionCache(owner, 'teammates');
+  writeRemoteCollectionCache(owner, 'teammates', [sibling]);
+  await render();
+  await act(async () => result.openTeammate(teammate));
+  expect(readRemoteCollectionCache(owner, 'teammates').map(row => row.item.ref.id)).toEqual(['writer', 'sibling']);
 });

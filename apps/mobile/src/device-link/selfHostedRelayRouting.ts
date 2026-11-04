@@ -94,6 +94,11 @@ export function getSelfHostedRelayRouteGeneration(): number {
   return generation;
 }
 
+/** Stable display-cache scope; credentials and route epochs never enter persisted keys. */
+export function getSelfHostedRelayDataKey(): string {
+  return active ? JSON.stringify(['relay', active.relayId, active.baseUrl]) : 'official';
+}
+
 export function subscribeSelfHostedRelayRoute(listener: () => void): () => void {
   listeners.add(listener);
   return () => {
@@ -101,10 +106,15 @@ export function subscribeSelfHostedRelayRoute(listener: () => void): () => void 
   };
 }
 
+/** 已保存但未选中的中转也不能收到官方账号 token，包括重启后恢复官方线路时。 */
+export function rememberSelfHostedRelayBase(baseUrl: string): void {
+  knownRelayBases.add(normalizeSelfHostedRelayBase(baseUrl));
+}
+
 /** 切换路由:同步改写 device-link 地址覆盖,随后通知订阅者重建连接。 */
 export function setActiveSelfHostedRelay(next: SelfHostedRelayRoute | null): void {
   const normalized = next ? { ...next, baseUrl: normalizeSelfHostedRelayBase(next.baseUrl) } : null;
-  if (normalized) knownRelayBases.add(normalized.baseUrl);
+  if (normalized) rememberSelfHostedRelayBase(normalized.baseUrl);
   const changed = !sameRoute(active, normalized);
   const baseChanged = (active?.baseUrl ?? null) !== (normalized?.baseUrl ?? null);
   active = normalized;

@@ -601,7 +601,7 @@ describe('mobile home desktop-first surface', () => {
     expect(home).toContain("guardedPush('/devices/manage')");
     expect(home).not.toContain('onRenameDevice=');
     expect(home).not.toContain('onOpenDevice=');
-    expect(management).toContain('key={accountGeneration}');
+    expect(management).toContain('key={generation}');
     expect(management).toContain("pathname: '/devices/manage/[deviceId]'");
     expect(management).toContain('onRename={manager.openRename}');
   });
@@ -828,7 +828,7 @@ describe('mobile home desktop-first surface', () => {
 
     // Home remains mounted across saved-account activation, so clearing the shared DeviceLink
     // stores is insufficient: page-local refs/state must disappear before the next paint too.
-    expect(source).toContain('const { accountGeneration, deviceId: selfDeviceId, user } = auth;');
+    expect(source).toContain('const accountGeneration = useRelayDataGeneration(auth.accountGeneration);');
     expect(source).toContain('return readDeviceList({ fresh: true });');
     expect(source).toContain('const homeAccountGenerationRef = useRef(accountGeneration);');
     expect(source).toContain('useLayoutEffect(() => {');

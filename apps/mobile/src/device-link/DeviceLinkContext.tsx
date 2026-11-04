@@ -545,10 +545,12 @@ export function DeviceLinkProvider({ children }: { children: ReactNode }) {
     const pending = rosterRequestRef.current;
     if (!options.fresh && pending?.client === client && pending.epoch === epoch) return pending.promise;
     const generation = ++rosterRequestGenerationRef.current;
+    const routeAtStart = getSelfHostedRelayRouteGeneration();
     const apply = rosterConsumerRef.current?.();
     const promise = auth.apiFetch<{ devices: DeviceView[] }>('/api/device-link/devices', {
       baseUrl: DEVICE_LINK_API_BASE_URL, timeoutMs: 12_000,
     }).then((result) => {
+      if (routeAtStart !== getSelfHostedRelayRouteGeneration()) throw new Error('Device list route superseded');
       // A fresh read supersedes every older roster consumer, even when the older
       // response arrives first and would otherwise outrank the new snapshot.
       if (rosterRequestGenerationRef.current === generation) apply?.(result.devices);
@@ -559,7 +561,7 @@ export function DeviceLinkProvider({ children }: { children: ReactNode }) {
       if (rosterRequestRef.current?.promise === promise) rosterRequestRef.current = null;
     }).catch(() => undefined);
     return promise;
-  }, [auth.apiFetch, auth.accountGeneration]);
+  }, [auth.apiFetch, auth.accountGeneration, relayRouteGeneration]);
 
   const clearPerAccountDeviceLinkState = useCallback(() => {
     remoteSessionStore.clear();
@@ -576,6 +578,16 @@ export function DeviceLinkProvider({ children }: { children: ReactNode }) {
     setLastPresenceSnapshot(null);
     setPresenceVersion((version) => version + 1);
   }, []);
+
+  const dataRelayGenerationRef = useRef(relayRouteGeneration);
+  useLayoutEffect(() => {
+    if (dataRelayGenerationRef.current === relayRouteGeneration) return;
+    dataRelayGenerationRef.current = relayRouteGeneration;
+    // Retire old-route reads and mirrors before the new route can paint them.
+    rosterRequestGenerationRef.current += 1;
+    rosterRequestRef.current = null;
+    clearPerAccountDeviceLinkState();
+  }, [relayRouteGeneration, clearPerAccountDeviceLinkState]);
 
   /**
    * availability 放在 ref 里供 transport 同步读取；每次真实的三态变化也必须发布给

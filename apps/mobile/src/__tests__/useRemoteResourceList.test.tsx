@@ -1,11 +1,11 @@
 // @vitest-environment jsdom
-import { act, createElement } from 'react';
+import { act, createElement, Fragment } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { HostedRemoteCollectionItem, RemoteResourceHostTarget } from '@/device-link/remoteResources';
-import { REMOTE_RESOURCE_STARTUP_TIMEOUT_MS } from '@/device-link/remoteResourceAvailability';
+import { REMOTE_RESOURCE_STARTUP_TIMEOUT_MS, readRemoteCollectionCache } from '@/device-link/remoteResourceAvailability';
 const h = vi.hoisted(() => ({
-  auth: { user: { id: 'owner' }, accountGeneration: 1 }, focused: true,
+  auth: { user: { id: 'owner' }, accountGeneration: 1 }, focused: true, sharedCache: false,
   link: { connectionEpoch: 1, status: 'online', presenceVersion: 1, getPresenceAvailability: vi.fn((_deviceId: string) => true as boolean | null),
     invoke: vi.fn(), openLink: vi.fn(), onRemoteResourceChanged: vi.fn((_listener: (deviceId: string, payload: { collectionId: string }) => void) => () => {}), subscribe: vi.fn(), unsubscribe: vi.fn() },
   app: { currentState: 'active', listener: null as null | ((state: string) => void) },
@@ -25,9 +25,14 @@ vi.mock('@/device-link/remoteResourceCache', () => ({
   peekRemoteResourceSnapshot: () => undefined,
   subscribeRemoteResourceCache: () => () => {}, remoteResourceCacheRevision: () => 0,
 }));
-vi.mock('@/device-link/remoteResourceAvailability', async (original) => ({
-  ...await original<typeof import('@/device-link/remoteResourceAvailability')>(), readRemoteCollectionCache: () => [], writeRemoteCollectionCache: () => {},
-}));
+vi.mock('@/device-link/remoteResourceAvailability', async (original) => {
+  const actual = await original<typeof import('@/device-link/remoteResourceAvailability')>();
+  return { ...actual,
+    readRemoteCollectionCache: (...args: Parameters<typeof actual.readRemoteCollectionCache>) => h.sharedCache ? actual.readRemoteCollectionCache(...args) : [],
+    hasRemoteCollectionCache: (...args: Parameters<typeof actual.hasRemoteCollectionCache>) => h.sharedCache && actual.hasRemoteCollectionCache(...args),
+    writeRemoteCollectionCache: (...args: Parameters<typeof actual.writeRemoteCollectionCache>) => { if (h.sharedCache) actual.writeRemoteCollectionCache(...args); },
+  };
+});
 vi.mock('@/device-link/remoteResources', async (original) => ({
   ...await original<typeof import('@/device-link/remoteResources')>(), listRemoteCollection: h.list,
 }));
@@ -41,7 +46,7 @@ let result: ReturnType<typeof useRemoteResourceList>;
 function Probe({ enabled = true }: { enabled?: boolean }) { result = useRemoteResourceList('teammates', targets, enabled); return null; }
 async function render(enabled = true) { root ??= createRoot(document.createElement('div')); await act(async () => root!.render(createElement(Probe, { enabled }))); }
 beforeEach(() => {
-  vi.clearAllMocks(); h.app.currentState = 'active'; h.app.listener = null; h.auth.accountGeneration = 1; h.auth.user.id = 'owner'; h.cached = []; h.focused = true;
+  vi.clearAllMocks(); h.sharedCache = false; h.app.currentState = 'active'; h.app.listener = null; h.auth.accountGeneration = 1; h.auth.user.id = 'owner'; h.cached = []; h.focused = true;
   h.link.status = 'online'; h.link.connectionEpoch = 1; h.link.getPresenceAvailability.mockReturnValue(true);
   h.list.mockResolvedValue({ items: [] }); h.link.openLink.mockResolvedValue(undefined);
   h.snapshot.mockImplementation(async () => ({ home: [], items: { teammates: h.cached }, read: {} }));
@@ -292,4 +297,32 @@ it('cancels foreground retries and late replies in the background and resumes on
   h.app.currentState = 'active';
   await act(async () => h.app.listener!('active'));
   expect(result.items.map(row => row.item.ref.id)).toEqual(['foreground-fresh', 'foreground-fresh']);
+});
+
+// PR #8358: a resident home hook has seen a switch; a newly opened page has not.
+it('shares the current-route roster with a new page without clearing the resident page cache', async () => {
+  const { setActiveSelfHostedRelay, __testing } = await import('@/device-link/selfHostedRelayRouting');
+  h.sharedCache = true;
+  readRemoteCollectionCache('test-reset', 'teammates');
+  let resident!: ReturnType<typeof useRemoteResourceList>;
+  let page!: ReturnType<typeof useRemoteResourceList>;
+  function Resident() { resident = useRemoteResourceList('teammates', targets); return null; }
+  function Page() { page = useRemoteResourceList('teammates', targets); return null; }
+  async function show(openPage = false) {
+    root ??= createRoot(document.createElement('div'));
+    await act(async () => root!.render(createElement(Fragment, null,
+      createElement(Resident, { key: 'home' }), openPage ? createElement(Page, { key: 'page' }) : null)));
+  }
+  try {
+    await show();
+    h.list.mockResolvedValue({ items: [item('relay-only')] });
+    await act(async () => setActiveSelfHostedRelay({ relayId: 'test-relay', name: 'Test', baseUrl: 'https://relay.unit.invalid', credential: 'fake-test-credential', signing: null }));
+    expect(resident.items.map(row => row.item.ref.id)).toEqual(['relay-only', 'relay-only']);
+    h.link.getPresenceAvailability.mockReturnValue(false);
+    await show(true);
+    expect(page.items.map(row => row.item.ref.id)).toEqual(['relay-only', 'relay-only']);
+    expect(resident.items.map(row => row.item.ref.id)).toEqual(['relay-only', 'relay-only']);
+    const owner = JSON.stringify(['owner', h.auth.accountGeneration, JSON.stringify(['relay', 'test-relay', 'https://relay.unit.invalid'])]);
+    expect(readRemoteCollectionCache(owner, 'teammates').map(row => row.item.ref.id)).toEqual(['relay-only', 'relay-only']);
+  } finally { act(() => { root?.unmount(); root = undefined; __testing.reset(); }); }
 });

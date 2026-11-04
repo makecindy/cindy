@@ -5,6 +5,7 @@ import { ActivityIndicator, StyleSheet, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useTranslation } from 'react-i18next';
 import { useAuth } from '@/auth/AuthContext';
+import { useRelayDataGeneration } from '@/device-link/useRelayDataGeneration';
 import { Text } from '@/components/AppText';
 import { MainWindowActionButton, MainWindowEmptyState } from '@/components/MobilePrimitives';
 import { toDeviceListItems } from '@/device-link/devices';
@@ -26,7 +27,8 @@ const PULL_REFRESH_TIMEOUT_MS = 10_000;
 
 export default function DeviceManagementScreen() {
   const { accountGeneration } = useAuth();
-  return <DeviceManagementContent key={accountGeneration} />;
+  const generation = useRelayDataGeneration(accountGeneration);
+  return <DeviceManagementContent key={generation} />;
 }
 
 /**

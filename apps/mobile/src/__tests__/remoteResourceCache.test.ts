@@ -1,7 +1,14 @@
 import { beforeEach, expect, it, vi } from 'vitest';
 import { resolveRemoteText } from '@cindy/device-link';
 import { i18n } from '@/i18n';
+import type { HostedRemoteCollectionItem } from '@/device-link/remoteResources';
 const disk = vi.hoisted(() => new Map<string, string>());
+const route = vi.hoisted(() => ({ key: 'official', generation: 0 }));
+vi.mock('@/device-link/selfHostedRelayRouting', () => ({
+  getSelfHostedRelayDataKey: () => route.key, getSelfHostedRelayRouteGeneration: () => route.generation,
+}));
+const peerDiskKey = () => 'cindy.remoteResources.v1.' + JSON.stringify(['alice', route.key]);
+const switchRoute = (key: string) => { route.key = key; route.generation++; };
 vi.mock('@react-native-async-storage/async-storage', () => ({ default: {
   getItem: vi.fn(async (key: string) => disk.get(key) ?? null),
   setItem: vi.fn(async (key: string, value: string) => { disk.set(key, value); }),
@@ -9,17 +16,17 @@ vi.mock('@react-native-async-storage/async-storage', () => ({ default: {
   getAllKeys: vi.fn(async () => [...disk.keys()]),
   multiRemove: vi.fn(async (keys: string[]) => { keys.forEach((key) => disk.delete(key)); }),
 } }));
-import { cacheChatRoster, readCachedChatRoster, cacheRemoteResourceHome, cacheRemoteResourceItems, cachedTaskFollowers, clearRemoteResourceCache, isRemoteResourceUnread, markRemoteResourceRead, readRemoteResourceSnapshot, remoteResourceCacheRevision, subscribeRemoteResourceCache } from '@/device-link/remoteResourceCache';
+import { cachedBotItem, cachedBotIdForSession, peekRemoteResourceSnapshot, cacheCloudHome, readCachedCloudHome, cacheChatRoster, readCachedChatRoster, cacheRemoteResourceHome, cacheRemoteResourceItems, cachedTaskFollowers, clearRemoteResourceCache, isRemoteResourceUnread, markRemoteResourceRead, readRemoteResourceSnapshot, remoteResourceCacheRevision, subscribeRemoteResourceCache } from '@/device-link/remoteResourceCache';
 import { chatReadAt, chatRoomRow, type ChatSnapshot } from '@/chat/chatServerClient';
-const rows = (deviceId: string, lastReplyAt: number) => [{
+const rows = (deviceId: string, lastReplyAt: number): HostedRemoteCollectionItem[] => [{
   key: `${deviceId}:bot:writer`, host: { deviceId, deviceName: deviceId },
   item: { ref: { collectionId: 'teammates', kind: 'bot', id: 'writer' }, display: { title: 'Writer', lastReplyAt }, revision: '1', links: [] },
 }];
-beforeEach(async () => { await clearRemoteResourceCache(); disk.clear(); });
+beforeEach(async () => { switchRoute('official'); await clearRemoteResourceCache(); disk.clear(); });
 it('restores the same collection-qualified row identity used by live lists', async () => {
   const live = rows('home', 100)[0];
   live.key = JSON.stringify(['home', 'teammates', 'bot', 'writer']);
-  disk.set('cindy.remoteResources.v1.alice', JSON.stringify({ items: { teammates: [live] } }));
+  disk.set(peerDiskKey(), JSON.stringify({ items: { teammates: [live] } }));
   expect((await readRemoteResourceSnapshot('alice')).items.teammates[0].key).toBe(live.key);
 });
 it('does not restore routines from an old offline snapshot while retaining companions', async () => {
@@ -27,7 +34,7 @@ it('does not restore routines from an old offline snapshot while retaining compa
     { id: 'routines', title: '例行任务', resourceKind: 'routine', targets: [{ deviceId: 'home', deviceName: 'Home' }] },
     { id: 'teammates', title: 'Companions', resourceKind: 'bot', targets: [{ deviceId: 'home', deviceName: 'Home' }] },
   ];
-  disk.set('cindy.remoteResources.v1.alice', JSON.stringify({
+  disk.set(peerDiskKey(), JSON.stringify({
     home,
     items: { teammates: rows('home', 100), routines: [{
       ...rows('home', 100)[0],
@@ -61,7 +68,7 @@ it('finds the teammates following a task on its own computer, by name, and drops
 });
 // A task row can ask before the disk cache answers on a cold start (#7066 review).
 it('tells rows that read before the saved roster loaded once it arrives', async () => {
-  disk.set('cindy.remoteResources.v1.alice', JSON.stringify({ items: { teammates: [{
+  disk.set(peerDiskKey(), JSON.stringify({ items: { teammates: [{
     key: JSON.stringify(['home', 'teammates', 'bot', 'cindy']), host: { deviceId: 'home', deviceName: 'home' },
     item: { ref: { collectionId: 'teammates', kind: 'bot', id: 'cindy' }, display: { title: 'Cindy' }, revision: '1',
       links: [{ rel: 'following', target: { kind: 'session', sessionId: 'task' } }] },
@@ -137,7 +144,7 @@ it('stays silent when a read mark or roster refresh leaves the cache unchanged',
 });
 it('retries a failed cache write on the next unchanged update without notifying', async () => {
   const { default: storage } = await import('@react-native-async-storage/async-storage');
-  const persistedRead = () => JSON.parse(disk.get('cindy.remoteResources.v1.alice') ?? '{}').read?.['["home","writer"]'];
+  const persistedRead = () => JSON.parse(disk.get(peerDiskKey()) ?? '{}').read?.['["home","writer"]'];
   await cacheRemoteResourceItems('alice', 'teammates', rows('home', 100));
   await cacheRemoteResourceItems('alice', 'teammates', rows('home', 200));
   vi.mocked(storage.setItem).mockRejectedValueOnce(new Error('disk full'));
@@ -218,7 +225,8 @@ it('persists a bounded recent roster when group avatars exceed the disk budget',
   expect((await readCachedChatRoster('alice', 'global'))?.items).toHaveLength(100);
   const saved = disk.get('cindy.remoteResources.v1.alice')!;
   expect(saved.length).toBeLessThanOrEqual(256 * 1024);
-  await clearRemoteResourceCache(); disk.set('cindy.remoteResources.v1.alice', saved);
+  const savedPeer = disk.get(peerDiskKey())!;
+  await clearRemoteResourceCache(); disk.set('cindy.remoteResources.v1.alice', saved); disk.set(peerDiskKey(), savedPeer);
   const restored = await readCachedChatRoster('alice', 'global');
   expect(restored?.items.length).toBeGreaterThan(0);
   expect(restored?.items.at(-1)).toMatchObject({ item: { ref: { id: 'group-99' }, display: { preview: 'Known summary' } }, groupMembers: groups[99].groupMembers.slice(0, 5) });
@@ -226,4 +234,71 @@ it('persists a bounded recent roster when group avatars exceed the disk budget',
   expect((await readRemoteResourceSnapshot('alice')).items.teammates).toHaveLength(1);
   await cacheChatRoster('alice', 'global', [], groups.map(row => row.item.ref.id));
   expect(JSON.parse(disk.get('cindy.remoteResources.v1.alice')!).chatRosters.global.items).toEqual([]);
+});
+
+// PR #8358: a physical computer and resource can have the same ids on both routes.
+it('isolates peer rows, follower marks and unread positions across routes, including cold restore', async () => {
+  const official = rows('home', 100);
+  official[0].item.links = [
+    { rel: 'following', target: { kind: 'session', sessionId: 'task' } },
+    { rel: 'conversation', target: { kind: 'session', sessionId: 'task' } },
+  ];
+  await cacheRemoteResourceItems('alice', 'teammates', official);
+  await markRemoteResourceRead('alice', 'home', 'writer', 100, '10');
+  expect(cachedTaskFollowers('alice', 'home', 'task')).toHaveLength(1);
+  expect(cachedBotItem('alice', 'teammates', 'home', 'writer')).not.toBeNull();
+  expect(cachedBotIdForSession('alice', 'teammates', 'home', 'task')).toBe('writer');
+  switchRoute('relay-a');
+  expect(peekRemoteResourceSnapshot('alice')?.items.teammates ?? []).toEqual([]);
+  expect((await readRemoteResourceSnapshot('alice')).items).toEqual({});
+  expect(cachedBotItem('alice', 'teammates', 'home', 'writer')).toBeNull();
+  expect(cachedBotIdForSession('alice', 'teammates', 'home', 'task')).toBe('');
+  expect(cachedTaskFollowers('alice', 'home', 'task')).toEqual([]);
+  expect(isRemoteResourceUnread('alice', 'home', 'writer', 100, '10')).toBe(true);
+  await cacheRemoteResourceItems('alice', 'teammates', rows('home', 200));
+  await markRemoteResourceRead('alice', 'home', 'writer', 200, '20');
+  switchRoute('official');
+  expect((await readRemoteResourceSnapshot('alice')).items.teammates[0].item.display.lastReplyAt).toBe(100);
+  expect(isRemoteResourceUnread('alice', 'home', 'writer', 200, '20')).toBe(true);
+  const saved = new Map(disk);
+  await clearRemoteResourceCache(); saved.forEach((value, key) => disk.set(key, value));
+  switchRoute('relay-a');
+  expect((await readRemoteResourceSnapshot('alice')).items.teammates[0].item.display.lastReplyAt).toBe(200);
+  expect(isRemoteResourceUnread('alice', 'home', 'writer', 200, '20')).toBe(false);
+});
+it('keeps official cloud membership and read positions available after switching peer routes', async () => {
+  await cacheCloudHome('alice', 'global', { supported: true, actors: [], deviceNames: [] });
+  await cacheChatRoster('alice', 'global', [], ['cloud-room']);
+  await markRemoteResourceRead('alice', '', 'cloud-room', 100, '10');
+  switchRoute('relay-a');
+  expect((await readCachedCloudHome('alice', 'global'))?.supported).toBe(true);
+  expect((await readCachedChatRoster('alice', 'global'))?.ids).toEqual(['cloud-room']);
+  expect(isRemoteResourceUnread('alice', '', 'cloud-room', 100, '10')).toBe(false);
+  await markRemoteResourceRead('alice', '', 'cloud-room', 200, '20');
+  switchRoute('official');
+  expect(isRemoteResourceUnread('alice', '', 'cloud-room', 200, '20')).toBe(false);
+});
+it('does not attribute legacy account-only peer rows to the current route', async () => {
+  disk.set('cindy.remoteResources.v1.alice', JSON.stringify({ items: { teammates: rows('home', 100) }, read: { '["home","writer"]': 100 } }));
+  expect((await readRemoteResourceSnapshot('alice')).items).toEqual({});
+  expect(isRemoteResourceUnread('alice', 'home', 'writer', 100, '1')).toBe(true);
+});
+
+it('discards a late old-route disk result while queued writes remain on their captured route', async () => {
+  const { default: storage } = await import('@react-native-async-storage/async-storage');
+  const key = peerDiskKey();
+  let finish!: (raw: string | null) => void;
+  vi.mocked(storage.getItem).mockImplementationOnce(async () => null)
+    .mockImplementationOnce(() => new Promise(resolve => { finish = resolve; }));
+  const pending = readRemoteResourceSnapshot('alice');
+  switchRoute('relay-a');
+  finish(JSON.stringify({ items: { teammates: rows('home', 100) } }));
+  expect((await pending).items).toEqual({});
+  const queued = cacheRemoteResourceItems('alice', 'teammates', rows('home', 200));
+  switchRoute('official');
+  await queued;
+  expect((await readRemoteResourceSnapshot('alice')).items.teammates[0].item.display.lastReplyAt).toBe(100);
+  expect(JSON.parse(disk.get(key) ?? '{}').items).toBeUndefined();
+  switchRoute('relay-a');
+  expect((await readRemoteResourceSnapshot('alice')).items.teammates[0].item.display.lastReplyAt).toBe(200);
 });

@@ -9,10 +9,16 @@
     "removedHint": "Ce téléphone a été retiré du relais, ou le relais a été arrêté. Revenez au relais officiel, ou rejoignez-le à nouveau depuis votre ordinateur.",
     "credentialMissingHint": "L'identifiant du relais n'est plus sur ce téléphone. Rejoignez-le à nouveau depuis votre ordinateur, ou revenez au relais officiel.",
     "confirmTitle": "Revenir au relais officiel ?",
-    "confirmBody": "Ce téléphone quittera « {{name}} » et utilisera le relais officiel {{appName}}. Pour réutiliser ce relais, rejoignez-le à nouveau depuis votre ordinateur.",
-    "confirmAction": "Revenir",
+    "confirmBody": "Ce téléphone utilisera le relais officiel de {{appName}} et conservera son accès à « {{name}} » pour pouvoir y revenir sans nouvelle demande.",
+    "confirmAction": "Passer au relais officiel",
     "switchFailed": "Impossible de revenir au relais officiel. Réessayez dans un instant.",
-    "pushUnavailable": "Tant que vous utilisez votre propre relais, les notifications de tâches de vos ordinateurs ne sont pas envoyées sur ce téléphone."
+    "pushUnavailable": "Tant que vous utilisez votre propre relais, les notifications de tâches de vos ordinateurs ne sont pas envoyées sur ce téléphone.",
+    "useSaved": "Utiliser « {{name}} »",
+    "forget": "Quitter et oublier le relais",
+    "forgetTitle": "Quitter le relais ?",
+    "forgetBody": "Ce téléphone quittera « {{name}} » et supprimera les informations d’accès enregistrées. Pour le réutiliser, demandez à le rejoindre à nouveau.",
+    "resumeFailed": "Impossible de passer au relais enregistré.",
+    "forgetFailed": "Impossible de quitter le relais."
   },
   "issue": {
     "removedTitle": "Retiré du relais",

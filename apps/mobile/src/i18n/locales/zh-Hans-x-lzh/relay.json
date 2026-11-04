@@ -9,10 +9,16 @@
     "removedHint": "此手机已被移出中继，或中继已停。可归官方中继，或于机上重入。",
     "credentialMissingHint": "此手机上不见中继凭证。请于机上重入，或归官方中继。",
     "confirmTitle": "归官方中继乎？",
-    "confirmBody": "此手机将出「{{name}}」，改用 {{appName}} 官方中继。此后欲再用此中继，须于机上重入。",
-    "confirmAction": "归之",
+    "confirmBody": "此手机将改用 {{appName}} 官方中继，保留「{{name}}」的加入资讯，之后可直接切回。",
+    "confirmAction": "切回官方中继",
     "switchFailed": "未能归官方中继，请稍后再试。",
-    "pushUnavailable": "用自建中继之时，机上差事之告不推至此手机。"
+    "pushUnavailable": "用自建中继之时，机上差事之告不推至此手机。",
+    "useSaved": "使用「{{name}}」",
+    "forget": "退出并移除中继",
+    "forgetTitle": "退出中继？",
+    "forgetBody": "此手机将退出「{{name}}」并删除本机储存的加入资讯。再次使用需要重新申请加入。",
+    "resumeFailed": "未能切至所存中继。",
+    "forgetFailed": "无法退出中继。"
   },
   "issue": {
     "removedTitle": "已出中继",

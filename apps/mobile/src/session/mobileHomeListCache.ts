@@ -3,6 +3,7 @@ import { getSessionListActivityAt } from '@cindy/maker-shared/session-activity';
 import { normalizeTaskTags } from '@cindy/maker-shared';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import type { RemoteSession } from '@/session/types';
+import { getSelfHostedRelayDataKey, getSelfHostedRelayRouteGeneration } from '@/device-link/selfHostedRelayRouting';
 import { normalizeRemoteMoney } from '@/session/remoteMoney';
 
 // 「首页设备 + 会话列表」冷启动持久缓存:冷启动时先用上次 loadHome 成功后的 last-known 快照
@@ -15,6 +16,7 @@ import { normalizeRemoteMoney } from '@/session/remoteMoney';
 // v2 起 key 按 userId 隔离:auth 失效路径不止显式登出——401 掉线时 AuthContext.refresh()
 // 只清 token 不清缓存,换账号登录会短暂闪出上一账号的设备/会话列表。按账号键控后旧账号
 // 的 key 天然读不到,且同账号重登仍享受缓存;显式登出照旧全量清(隐私口径,见 clear)。
+// 同账号的不同中转也隔离;旧版未记录线路的 key 不再读取,避免误归属。
 const STORAGE_KEY_PREFIX = 'xdt.mobileHomeListCache.v2.';
 // v1 全局 key(未按账号隔离)彻底废弃:内容无法归属账号、不可信,读/清路径只做删除。
 const LEGACY_STORAGE_KEY = 'xdt.mobileHomeListCache.v1';
@@ -43,7 +45,8 @@ type StoredHomeListCache = {
 };
 
 function storageKeyForUser(userId: string): string {
-  return `${STORAGE_KEY_PREFIX}${userId}`;
+  // Old unscoped entries may contain either relay's rows; never hydrate them.
+  return `${STORAGE_KEY_PREFIX}${JSON.stringify([userId, getSelfHostedRelayDataKey()])}`;
 }
 
 // 读取快照;无缓存 / JSON 损坏 / 形状不对 / userId 缺失一律静默返回空数组(乐观 hydrate 不应抛错)。
@@ -106,12 +109,14 @@ export function scheduleHomeListSnapshotPersist(
   debounceMs: number = HOME_LIST_PERSIST_DEBOUNCE_MS,
 ): void {
   pendingCollect = collect;
+  const routeAtStart = getSelfHostedRelayRouteGeneration();
   if (persistTimer) clearTimeout(persistTimer);
   persistTimer = setTimeout(() => {
     persistTimer = null;
     const fn = pendingCollect;
     pendingCollect = null;
     if (!fn) return;
+    if (routeAtStart !== getSelfHostedRelayRouteGeneration()) return;
     try {
       void cacheHomeListSnapshot(userId, fn()).catch(() => undefined);
     } catch {

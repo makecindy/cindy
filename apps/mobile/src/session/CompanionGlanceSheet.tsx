@@ -17,7 +17,7 @@ import { FileTypeIcon } from '@/components/FileTypeIcon';
 import { RemoteCompanionAvatar } from '@/components/RemoteCompanionAvatar';
 import { useDeviceLink } from '@/device-link/DeviceLinkContext';
 import type { HostedRemoteCollectionItem } from '@/device-link/remoteResources';
-import { readRemoteCollectionCache, remoteResourceConnectionState } from '@/device-link/remoteResourceAvailability';
+import { remoteCollectionCacheOwner, readRemoteCollectionCache, remoteResourceConnectionState } from '@/device-link/remoteResourceAvailability';
 import { NativePullDownMenu } from '@/platform/chrome/NativePullDownMenu';
 import { fontWeight, iconSize, iconStroke, lineHeight, radius, spacing, typeScale, useTheme, useThemedStyles, type ThemeColors } from '@/theme';
 import { CompanionSheet } from './CompanionSheet';
@@ -156,7 +156,7 @@ function Computers({ botId, deviceId, deviceName, online, cloudHome, onOpenCindy
   // on this phone (no extra discovery); other teammates only show the computer they run on.
   const copies = useMemo(() => {
     if (cloudHome || botId !== CINDY_BOT_ID) return [];
-    return readRemoteCollectionCache(`${user?.id ?? ''}:${accountGeneration}`, 'teammates')
+    return readRemoteCollectionCache(remoteCollectionCacheOwner(user?.id ?? '', accountGeneration), 'teammates')
       .filter(row => row.item.ref.kind === 'bot' && row.item.ref.id === CINDY_BOT_ID && row.host.deviceId !== deviceId)
       .map(row => ({ row, online: remoteResourceConnectionState(status, getPresenceAvailability(row.host.deviceId)) === true }));
   }, [accountGeneration, botId, cloudHome, deviceId, getPresenceAvailability, presenceVersion, status, user?.id]);
@@ -327,7 +327,7 @@ function Activity({ botId, deviceId, deviceName, sessionId, online, onOpenTask }
   const cloudIds = new Set(cloud.actors.filter(actor => actor.kind === 'bot').map(actor => actor.externalId));
   const cindyIds = new Set(cloud.cindyIds);
   const target = taskTeammateKey(botId, deviceId, cloudIds, cindyIds);
-  for (const row of readRemoteCollectionCache(`${user?.id ?? ''}:${accountGeneration}`, 'teammates')) {
+  for (const row of readRemoteCollectionCache(remoteCollectionCacheOwner(user?.id ?? '', accountGeneration), 'teammates')) {
     if (row.item.ref.kind === 'bot' && taskTeammateKey(row.item.ref.id, row.host.deviceId, cloudIds, cindyIds) === target)
       hosts.set(row.host.deviceId, row.host.deviceName);
   }

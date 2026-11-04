@@ -1,4 +1,5 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import { getSelfHostedRelayDataKey, getSelfHostedRelayRouteGeneration } from './selfHostedRelayRouting';
 import type { ChatActor } from '@/chat/chatServerClient';
 import { resolveRemoteText } from '@cindy/device-link';
 import { isMobileRemoteCollectionSupported, normalizeRemoteCollectionItems, parseRemoteResourceTargets, type HostedRemoteCollectionItem, type RemoteHomeCollection } from './remoteResources';
@@ -85,7 +86,7 @@ function normalize(raw: unknown): Snapshot {
   return out;
 }
 
-export async function readRemoteResourceSnapshot(userId: string): Promise<Snapshot> {
+async function readSnapshot(userId: string): Promise<Snapshot> {
   if (!userId) return empty();
   const cached = snapshots.get(userId);
   if (cached) return cached;
@@ -102,12 +103,31 @@ export async function readRemoteResourceSnapshot(userId: string): Promise<Snapsh
   return snapshots.get(userId)!;
 }
 
-/** Reopening a page paints the same saved rows in its first render, without an async blank frame. */
-export const peekRemoteResourceSnapshot = (userId: string): Snapshot | undefined => snapshots.get(userId);
+// Peer mirrors belong to a route. Official cloud chat remains account-owned.
+// Legacy account-only peer rows have no attributable route and are not restored.
+const peerCacheKey = (userId: string) => userId ? JSON.stringify([userId, getSelfHostedRelayDataKey()]) : '';
+function withPeerSnapshot(account: Snapshot | undefined, peer: Snapshot | undefined): Snapshot {
+  const cloudMarkers = <T,>(values: Record<string, T> = {}) => Object.fromEntries(Object.entries(values).filter(([key]) => {
+    try { return JSON.parse(key)[0] === ''; } catch { return false; }
+  }));
+  return { ...account, home: peer?.home ?? [], items: peer?.items ?? {},
+    read: { ...cloudMarkers(account?.read), ...peer?.read },
+    readSequences: { ...cloudMarkers(account?.readSequences), ...peer?.readSequences } };
+}
+export async function readRemoteResourceSnapshot(userId: string): Promise<Snapshot> {
+  const expected = getSelfHostedRelayRouteGeneration();
+  const [account, peer] = await Promise.all([readSnapshot(userId), readSnapshot(peerCacheKey(userId))]);
+  return withPeerSnapshot(account, expected === getSelfHostedRelayRouteGeneration() ? peer : undefined);
+}
+/** Reopening a page paints saved rows only from its current route. */
+export const peekRemoteResourceSnapshot = (userId: string): Snapshot | undefined => {
+  const account = snapshots.get(userId), peer = snapshots.get(peerCacheKey(userId));
+  return account || peer ? withPeerSnapshot(account, peer) : undefined;
+};
 export const peekCachedChatRoster = (userId: string, realm: string): ChatRoster | null => snapshots.get(userId)?.chatRosters?.[realm] ?? null;
 export const peekCachedCloudHome = (userId: string, realm: string): CachedCloudHome | null => snapshots.get(userId)?.cloudHomes?.[realm] ?? null;
 export const readCachedCloudHome = async (userId: string, realm: string): Promise<CachedCloudHome | null> =>
-  (await readRemoteResourceSnapshot(userId)).cloudHomes?.[realm] ?? null;
+  (await readSnapshot(userId)).cloudHomes?.[realm] ?? null;
 export const cacheCloudHome = (userId: string, realm: string, value: CachedCloudHome, current: () => boolean = () => true) => update(userId, s => {
   if (current()) (s.cloudHomes ??= {})[realm] = value;
 });
@@ -164,7 +184,7 @@ async function update(userId: string, change: (snapshot: Snapshot) => void): Pro
   const expected = epoch;
   const previous = writes.get(userId) ?? Promise.resolve();
   const next = previous.then(async () => {
-    const snapshot = await readRemoteResourceSnapshot(userId);
+    const snapshot = await readSnapshot(userId);
     if (expected !== epoch) return;
     const before = JSON.stringify(snapshot);
     change(snapshot);
@@ -182,9 +202,9 @@ async function update(userId: string, change: (snapshot: Snapshot) => void): Pro
   writes.set(userId, next);
   await next.finally(() => { if (writes.get(userId) === next) writes.delete(userId); });
 }
-export const cacheRemoteResourceHome = (userId: string, home: RemoteHomeCollection[]) => update(userId, (s) => { s.home = home; });
+export const cacheRemoteResourceHome = (userId: string, home: RemoteHomeCollection[]) => update(peerCacheKey(userId), (s) => { s.home = home; });
 export const readCachedChatRoster = async (userId: string, realm: string): Promise<ChatRoster | null> =>
-  (await readRemoteResourceSnapshot(userId)).chatRosters?.[realm] ?? null;
+  (await readSnapshot(userId)).chatRosters?.[realm] ?? null;
 export const cacheChatRoster = (userId: string, realm: string, items: HostedRemoteCollectionItem[], ids: Iterable<string>) => update(userId, s => {
   (s.chatRosters ??= {})[realm] = { items, ids: [...ids] };
 });
@@ -193,14 +213,14 @@ export const hideCachedChatRooms = (userId: string, realm: string, ids: string[]
   if (roster) { roster.items = roster.items.filter(row => !ids.includes(row.item.ref.id)); roster.ids = [...new Set([...roster.ids, ...ids])]; }
 });
 export const remoteResourceReadKey = (deviceId: string, resourceId: string) => JSON.stringify([deviceId, resourceId]);
-export const cacheRemoteResourceItems = (userId: string, collectionId: string, items: HostedRemoteCollectionItem[]) => update(userId, (s) => {
+export const cacheRemoteResourceItems = (userId: string, collectionId: string, items: HostedRemoteCollectionItem[]) => update(peerCacheKey(userId), (s) => {
   s.items[collectionId] = items;
   for (const row of items) {
     const key = remoteResourceReadKey(row.host.deviceId, row.item.ref.id);
     if ((row.item.ref.kind === 'bot' || row.item.ref.kind === 'bot-group') && s.read[key] === undefined) s.read[key] = row.item.display.lastReplyAt ?? 0;
   }
 });
-export const markRemoteResourceRead = (userId: string, deviceId: string, resourceId: string, at: number, sequence?: string) => update(userId, (s) => {
+export const markRemoteResourceRead = (userId: string, deviceId: string, resourceId: string, at: number, sequence?: string) => update(deviceId ? peerCacheKey(userId) : userId, (s) => {
   const key = remoteResourceReadKey(deviceId, resourceId);
   if (Number.isFinite(at) && at >= 0) s.read[key] = Math.max(s.read[key] ?? 0, at);
   if (validSequence(sequence)) {
@@ -209,7 +229,7 @@ export const markRemoteResourceRead = (userId: string, deviceId: string, resourc
   }
 });
 export function isRemoteResourceUnread(userId: string, deviceId: string, resourceId: string, at?: number, sequence?: string): boolean {
-  const snapshot = snapshots.get(userId);
+  const snapshot = snapshots.get(deviceId ? peerCacheKey(userId) : userId);
   const key = remoteResourceReadKey(deviceId, resourceId);
   if (validSequence(sequence)) return BigInt(sequence) > BigInt(snapshot?.readSequences?.[key] ?? '0');
   const read = snapshot?.read[key];
@@ -217,7 +237,7 @@ export function isRemoteResourceUnread(userId: string, deviceId: string, resourc
 }
 /** Name the cached Bot whose conversation link is this task. Presentation only; access stays live. */
 export function cachedBotIdForSession(userId: string, collectionId: string, deviceId: string, sessionId: string): string {
-  const row = snapshots.get(userId)?.items[collectionId]?.find(({ host, item }) => host.deviceId === deviceId
+  const row = snapshots.get(peerCacheKey(userId))?.items[collectionId]?.find(({ host, item }) => host.deviceId === deviceId
     && item.ref.kind === 'bot' && item.links.some(({ rel, target }) => rel === 'conversation'
       && target.kind === 'session' && target.sessionId === sessionId));
   return row?.item.ref.id ?? '';
@@ -230,9 +250,10 @@ let followIndex: { userId: string; revision: number; byTask: Map<string, HostedR
  */
 export function cachedTaskFollowers(userId: string, deviceId: string, sessionId: string): readonly HostedRemoteCollectionItem[] {
   if (!userId || !deviceId) return NO_FOLLOWERS;
-  if (followIndex?.userId !== userId || followIndex.revision !== revision) {
+  const scope = peerCacheKey(userId);
+  if (followIndex?.userId !== scope || followIndex.revision !== revision) {
     const byTask = new Map<string, HostedRemoteCollectionItem[]>();
-    for (const row of snapshots.get(userId)?.items.teammates ?? []) {
+    for (const row of snapshots.get(scope)?.items.teammates ?? []) {
       if (row.item.ref.kind !== 'bot') continue;
       for (const { rel, target } of row.item.links) {
         if (rel !== 'following' || target.kind !== 'session') continue;
@@ -242,13 +263,13 @@ export function cachedTaskFollowers(userId: string, deviceId: string, sessionId:
     }
     const name = (row: HostedRemoteCollectionItem) => resolveRemoteText(row.item.display.title);
     for (const rows of byTask.values()) rows.sort((left, right) => name(left).localeCompare(name(right)));
-    followIndex = { userId, revision, byTask };
+    followIndex = { userId: scope, revision, byTask };
   }
   return followIndex.byTask.get(JSON.stringify([deviceId, sessionId])) ?? NO_FOLLOWERS;
 }
 /** A cached roster row for display (name/avatar) only; never an authorization or availability signal. */
 export function cachedBotItem(userId: string, collectionId: string, deviceId: string, botId: string) {
-  return snapshots.get(userId)?.items[collectionId]?.find(({ host, item }) => host.deviceId === deviceId
+  return snapshots.get(peerCacheKey(userId))?.items[collectionId]?.find(({ host, item }) => host.deviceId === deviceId
     && item.ref.kind === 'bot' && item.ref.id === botId)?.item ?? null;
 }
 export async function clearRemoteResourceCache(): Promise<void> {
@@ -259,10 +280,13 @@ export async function clearRemoteResourceCache(): Promise<void> {
 }
 
 /** Drop only this account's display/unread mirror after a confirmed personal removal. */
-export const forgetRemoteResource = (userId: string, resourceId: string) => update(userId, s => {
-  for (const id of Object.keys(s.items)) s.items[id] = s.items[id].filter(row => row.item.ref.id !== resourceId);
-  for (const roster of Object.values(s.chatRosters ?? {})) roster.items = roster.items.filter(row => row.item.ref.id !== resourceId);
-  for (const map of [s.read, s.readSequences ?? {}]) for (const key of Object.keys(map)) {
-    try { if (JSON.parse(key)[1] === resourceId) delete map[key]; } catch { /* legacy cache key */ }
-  }
-});
+export const forgetRemoteResource = async (userId: string, resourceId: string) => {
+  const remove = (s: Snapshot) => {
+    for (const id of Object.keys(s.items)) s.items[id] = s.items[id].filter(row => row.item.ref.id !== resourceId);
+    for (const roster of Object.values(s.chatRosters ?? {})) roster.items = roster.items.filter(row => row.item.ref.id !== resourceId);
+    for (const map of [s.read, s.readSequences ?? {}]) for (const key of Object.keys(map)) {
+      try { if (JSON.parse(key)[1] === resourceId) delete map[key]; } catch { /* legacy cache key */ }
+    }
+  };
+  await Promise.all([update(userId, remove), update(peerCacheKey(userId), remove)]);
+};

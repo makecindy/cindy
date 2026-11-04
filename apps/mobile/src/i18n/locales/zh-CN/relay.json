@@ -9,10 +9,16 @@
     "removedHint": "这台手机已被移出中转，或中转已停用。可以切回官方中转，或在电脑上重新加入。",
     "credentialMissingHint": "这台手机上找不到中转凭证。请在电脑上重新加入，或切回官方中转。",
     "confirmTitle": "切回官方中转？",
-    "confirmBody": "这台手机会退出「{{name}}」，改用 {{appName}} 官方中转。之后要再用这个中转，需要在电脑上重新加入。",
-    "confirmAction": "切回",
+    "confirmBody": "这台手机将改用 {{appName}} 官方中转，并保留「{{name}}」的加入信息，之后可直接切回来。",
+    "confirmAction": "切回官方中转",
     "switchFailed": "没能切回官方中转，请稍后重试。",
-    "pushUnavailable": "使用自建中转时，电脑上的任务通知不会推送到这台手机。"
+    "pushUnavailable": "使用自建中转时，电脑上的任务通知不会推送到这台手机。",
+    "useSaved": "使用「{{name}}」",
+    "forget": "退出并移除中转",
+    "forgetTitle": "退出中转？",
+    "forgetBody": "这台手机将退出「{{name}}」并删除本机保存的加入信息。再次使用需要重新申请加入。",
+    "resumeFailed": "没能切换到已保存的中转。",
+    "forgetFailed": "没能退出中转。"
   },
   "issue": {
     "removedTitle": "已移出中转",

@@ -9,10 +9,16 @@
     "removedHint": "Este teléfono fue eliminado del relé o el relé fue desactivado. Vuelva al relevo oficial o únase nuevamente desde su computadora.",
     "credentialMissingHint": "La credencial de retransmisión ya no está en este teléfono. Únase nuevamente desde su computadora o vuelva al relevo oficial.",
     "confirmTitle": "¿Volver al relevo oficial?",
-    "confirmBody": "Este teléfono dejará “{{name}}” y utilizará el relé oficial {{appName}}. Para volver a utilizar ese relevo, únete nuevamente desde tu computadora.",
-    "confirmAction": "Volver atrás",
+    "confirmBody": "Este teléfono usará el relay oficial de {{appName}} y conservará su acceso a «{{name}}», para que puedas volver sin unirte de nuevo.",
+    "confirmAction": "Cambiar al relay oficial",
     "switchFailed": "No se pudo volver al relevo oficial. Inténtalo de nuevo en un momento.",
-    "pushUnavailable": "Mientras usa su propio relé, las notificaciones de tareas de sus computadoras no se envían a este teléfono."
+    "pushUnavailable": "Mientras usa su propio relé, las notificaciones de tareas de sus computadoras no se envían a este teléfono.",
+    "useSaved": "Usar «{{name}}»",
+    "forget": "Salir y olvidar el relay",
+    "forgetTitle": "¿Salir del relay?",
+    "forgetBody": "Este teléfono saldrá de «{{name}}» y borrará los datos de acceso guardados. Para volver a usarlo, solicita unirte de nuevo.",
+    "resumeFailed": "No se pudo cambiar al relay guardado.",
+    "forgetFailed": "No se pudo salir del relay."
   },
   "issue": {
     "removedTitle": "Eliminado del relevo",
