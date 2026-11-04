@@ -7,12 +7,12 @@ import { CompanionSheet } from '../session/CompanionSheet.ios';
 import { FormSheet } from '../session/FormSheet.ios';
 import { ScrollView as RNScrollView } from 'react-native';
 import { onGeometryChange, presentationDetents } from '@expo/ui/swift-ui/modifiers';
-const state = vi.hoisted(() => ({ width: 402, height: 874, fontScale: 1, sheet: null as any, formScreen: null as any, formStack: null as any }));
+const state = vi.hoisted(() => ({ width: 402, height: 874, sheet: null as any, formScreen: null as any, formStack: null as any }));
 vi.mock('../session/ComposerSheet', async () => import('../session/ComposerSheet.ios'));
 vi.mock('react-native', () => ({
   View: ({ children, style }: any) => <div style={style}>{children}</div>,
   ScrollView: ({ children, maintainVisibleContentPosition }: any) => <section data-rn-scroll data-preserve-position={maintainVisibleContentPosition?.minIndexForVisible}>{children}</section>,
-  useWindowDimensions: () => ({ width: state.width, height: state.height, fontScale: state.fontScale }),
+  useWindowDimensions: () => ({ width: state.width, height: state.height }),
   Modal: () => { throw new Error('A native stack must own form presentation without a second Modal touch root'); },
   ActivityIndicator: () => <span role="progressbar" />,
   StyleSheet: { create: (styles: any) => styles },
@@ -70,39 +70,6 @@ vi.mock('@expo/ui/swift-ui/modifiers', () => ({
 vi.mock('@/theme', () => ({ spacing: { sm: 8, lg: 16 }, iconSize: { lg: 20 }, useTheme: () => ({ mode: 'light', colors: {} }) }));
 vi.mock('react-i18next', () => ({ useTranslation: () => ({ t: (key: string) => key }) }));
 Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
-
-// A01: a one-row identity must not inherit the full-height scrolling viewport.
-// Exercise the production shell's native sizing contract, not a source scan.
-it('fits a short identity to its content without changing ordinary sheets', () => {
-  const container = document.createElement('div');
-  const root = createRoot(container);
-  try {
-    act(() => root.render(<CompanionSheet visible title="" fitToContents onClose={() => {}}><span>Cindy</span></CompanionSheet>));
-    expect(state.sheet.fitToContents).toBe(true);
-    expect(container.querySelector('[data-native-scroll]')).toBeNull();
-    expect(container.textContent).toBe('Cindy');
-    act(() => root.render(<CompanionSheet visible title="" onClose={() => {}}><span>Settings</span></CompanionSheet>));
-    expect(state.sheet.fitToContents).toBe(false);
-    expect(container.querySelector('[data-native-scroll]')).not.toBeNull();
-  } finally { act(() => root.unmount()); }
-});
-
-it.each([
-  { width: 874, height: 402, fontScale: 1, contentSized: true },
-  { width: 402, height: 874, fontScale: 1.7, contentSized: true },
-])('keeps short identity readable when rotated or enlarged: %j', ({ contentSized, ...dimensions }) => {
-  const container = document.createElement('div');
-  const root = createRoot(container);
-  try {
-    Object.assign(state, dimensions);
-    act(() => root.render(<CompanionSheet visible title="" fitToContents onClose={() => {}}><span>Cindy</span></CompanionSheet>));
-    expect(state.sheet.fitToContents).toBe(contentSized);
-    expect(!!container.querySelector('[data-native-scroll]')).toBe(!contentSized);
-  } finally {
-    act(() => root.unmount());
-    Object.assign(state, { width: 402, height: 874, fontScale: 1 });
-  }
-});
 
 // PR #7036: existing cases omit aboveContent and never deliver native geometry.
 // Unit coverage exercises the real ComposerSheet's photo visibility and resizing;

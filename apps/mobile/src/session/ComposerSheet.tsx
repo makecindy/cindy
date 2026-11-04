@@ -1,7 +1,5 @@
 import type { ReactNode } from "react";
 export interface ComposerSheetProps {
-  /** Short read-only content with its own heading uses an intrinsic-height sheet. */
-  fitToContents?: boolean;
   nativeContent?: boolean;
   /** Preserve the RN sheet path for content with its own ScrollView. */
   contentScrolls?: boolean;

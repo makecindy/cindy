@@ -5,8 +5,8 @@
  */
 import { botGroupBodyParts } from '@cindy/maker-shared/botGroupPresentation';
 import type { BotGroupAuthorKind } from '@cindy/maker-shared/botGroupChat';
-import { useCallback, useMemo, useState, type ReactNode } from 'react';
-import { Platform, ScrollView, StyleSheet, View, useWindowDimensions, type LayoutChangeEvent, type StyleProp, type TextStyle } from 'react-native';
+import { useCallback, useMemo, useRef, useState, type ReactNode } from 'react';
+import { Platform, ScrollView, StyleSheet, View, useWindowDimensions, type GestureResponderEvent, type LayoutChangeEvent, type StyleProp, type TextStyle } from 'react-native';
 import { splitBotGroupMentionSegments } from '@cindy/maker-shared/botGroupMentions';
 import { Text } from '@/components/AppText';
 import { MarkdownSelectableText, MarkdownSelectableSpan } from './MarkdownSelectableText';
@@ -15,9 +15,26 @@ import { lineHeight, radius, spacing, typeScale } from '@/theme/tokens';
 import { parseMobileMarkdown, type MobileMarkdownBlock, type MobileMarkdownInline } from './messageMarkdown';
 import { buildMessageContentLayout } from './messageContentLayout';
 import { buildMobileMarkdownTableColumnWidths } from './messageTableLayout';
-import { botGroupMentionMember, type BotGroupMentionContext } from './botGroupMentions';
+import { botGroupMentionMember, type BotGroupMentionContext, type BotGroupMentionPoint } from './botGroupMentions';
 
 type Styles = ReturnType<typeof makeStyles>;
+
+/** Observe touches without claiming the responder or changing the native text tree. */
+function useMentionTouchContext(context?: BotGroupMentionContext) {
+  const touch = useRef<BotGroupMentionPoint | undefined>(undefined);
+  return {
+    onTouchStart: (event: GestureResponderEvent) => {
+      const { pageX, pageY } = event.nativeEvent;
+      touch.current = Number.isFinite(pageX) && Number.isFinite(pageY) ? { x: pageX, y: pageY } : undefined;
+    },
+    context: context ? { ...context, onPress: (member, anchor) => {
+      const point = touch.current ?? anchor;
+      touch.current = undefined;
+      if (point) context.onPress(member, point);
+      else context.onPress(member);
+    } } as BotGroupMentionContext : undefined,
+  };
+}
 
 function renderMentionText(text: string, styles: Styles, context?: BotGroupMentionContext, emphasize = false, labels = context?.labels, textStyle?: StyleProp<TextStyle>): ReactNode {
   if (!labels) return text;
@@ -114,18 +131,20 @@ function renderBlock(block: MobileMarkdownBlock, styles: Styles, context?: BotGr
 
 export function BotGroupMarkdownText({ content, authorKind, mentionContext }: { content: string; authorKind?: BotGroupAuthorKind; mentionContext?: BotGroupMentionContext }) {
   const styles = useThemedStyles(makeStyles);
+  const touch = useMentionTouchContext(mentionContext);
   const blocks = useMemo(() => botGroupBodyParts(content, authorKind).flatMap((part, index): MobileMarkdownBlock[] => part.kind === 'markdown'
     ? parseMobileMarkdown(part.content).map(block => ({ ...block, key: `${index}:${block.key}` }))
     : [{ type: 'paragraph', key: String(index), inlines: [{ type: 'text', text: part.content }] }]), [content, authorKind]);
-  return <View style={styles.body}>{blocks.map((block) => renderBlock(block, styles, mentionContext))}</View>;
+  return <View style={styles.body} onTouchStart={touch.onTouchStart}>{blocks.map((block) => renderBlock(block, styles, touch.context))}</View>;
 }
 
 /** The user's own words: plain text with `@name` shown as a mention mark. */
 export function BotGroupUserText({ content, mentionLabels, mentionContext }: { content: string; mentionLabels: readonly string[]; mentionContext?: BotGroupMentionContext }) {
   const styles = useThemedStyles(makeStyles);
-  return <MarkdownSelectableText selectable style={styles.text}>
-    {renderMentionText(content, styles, mentionContext, true, mentionLabels)}
-  </MarkdownSelectableText>;
+  const touch = useMentionTouchContext(mentionContext);
+  return <View onTouchStart={touch.onTouchStart}><MarkdownSelectableText selectable style={styles.text}>
+    {renderMentionText(content, styles, touch.context, true, mentionLabels)}
+  </MarkdownSelectableText></View>;
 }
 
 const makeStyles = (colors: ThemeColors) => StyleSheet.create({

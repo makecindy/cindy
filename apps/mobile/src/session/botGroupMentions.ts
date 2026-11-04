@@ -8,13 +8,15 @@ export function botGroupMentionDisplayName(member: BotGroupMemberView): string {
   return suffix && member.isOwned === false && member.actorKind !== 'human' && !name.endsWith(suffix) ? `${name}${suffix}` : name;
 }
 
+export interface BotGroupMentionPoint { x: number; y: number }
+
 export interface BotGroupMentionContext {
   members: readonly BotGroupMemberView[];
   mentions: BotGroupMention;
   serverBacked: boolean;
   allLabel: string;
   labels: readonly string[];
-  onPress(member: BotGroupMemberView): void;
+  onPress(member: BotGroupMemberView, anchor?: BotGroupMentionPoint): void;
 }
 
 export function botGroupMentionMember(label: string, context: BotGroupMentionContext): BotGroupMemberView | undefined {

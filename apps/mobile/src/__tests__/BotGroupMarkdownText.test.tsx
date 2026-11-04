@@ -8,10 +8,10 @@ vi.mock('react-native', async () => {
   const React = await import('react');
   const flat = (style: unknown): Record<string, unknown> =>
     Object.assign({}, ...[style].flat(Infinity).filter(Boolean));
-  const host = (tag: string) => ({ children, style, horizontal, onLayout, testID, selectable, onPress }: any) => {
+  const host = (tag: string) => ({ children, style, horizontal, onLayout, testID, selectable, onPress, onTouchStart }: any) => {
     React.useEffect(() => { onLayout?.({ nativeEvent: { layout: { width: 280 } } }); }, [onLayout]);
     return React.createElement(tag, { 'data-style': JSON.stringify(flat(style)),
-      'data-horizontal': horizontal, 'data-testid': testID, 'data-selectable': selectable, onClick: onPress }, children);
+      'data-horizontal': horizontal, 'data-testid': testID, 'data-selectable': selectable, onClick: onPress, onTouchStart }, children);
   };
   return {
     View: host('div'),
@@ -26,9 +26,9 @@ vi.mock('@/components/AppText', async () => ({ Text: (await import('react-native
 vi.mock('react-native-uitextview', async () => {
   const React = await import('react');
   const { StyleSheet } = await import('react-native');
-  return { UITextView: ({ children, uiTextView, selectable, style, onPress }: any) => React.createElement('span', {
+  return { UITextView: ({ children, uiTextView, selectable, style, onPress, onTouchStart }: any) => React.createElement('span', {
     'data-uitextview': uiTextView ? 'root' : 'span', 'data-selectable': selectable,
-    'data-style': JSON.stringify(StyleSheet.flatten(style) ?? {}), onClick: onPress,
+    'data-style': JSON.stringify(StyleSheet.flatten(style) ?? {}), onClick: onPress, onTouchStart,
   }, children) };
 });
 vi.mock('@/session/SelectionMenuText', async () => ({ SelectionMenuText: (await import('react-native')).Text }));
@@ -202,8 +202,10 @@ it.each(['ios', 'android'])('keeps mention identity and text boundaries on %s', 
   try {
     await renderBody('@Ann mail@Ann.test @Anna @Unknown 正文');
     expect(links().map(span => span.textContent)).toEqual(['@Ann']);
-    await act(async () => links()[0]!.click());
-    expect(onPress).toHaveBeenLastCalledWith(ann);
+    const touch = new Event('touchstart', { bubbles: true });
+    Object.defineProperties(touch, { pageX: { value: 108 }, pageY: { value: 246 } });
+    await act(async () => { links()[0]!.dispatchEvent(touch); links()[0]!.click(); });
+    expect(onPress).toHaveBeenLastCalledWith(ann, { x: 108, y: 246 });
     expect(node.textContent).toBe('@Ann mail@Ann.test @Anna @Unknown 正文');
     await renderBody('@Ann', { mentions: { all: false, botIds: ['ann-1', 'ann-2'] } });
     expect(links()).toHaveLength(0);

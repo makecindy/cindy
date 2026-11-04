@@ -18,7 +18,7 @@ const h = vi.hoisted(() => ({
   leaveDecision: (async () => false) as () => Promise<boolean>,
   confirm: vi.fn(),
   leave: vi.fn(),
-  focused: true,
+  focused: true, themeMode: 'light',
   nativeMenus: true,
   appState: 'active',
   appStateListeners: new Set<(state: string) => void>(),
@@ -59,7 +59,7 @@ vi.mock('@/session/ConversationShareWebView', () => ({ cleanupConversationShareP
 vi.mock('expo-sharing', () => ({ shareAsync: h.sharedImage }));
 vi.mock('expo-clipboard', () => ({ setStringAsync: vi.fn(async () => {}) }));
 vi.mock('react-native-uitextview', () => ({
-  UITextView: ({ children, testID, onPress, style }: any) => el('span', { 'data-testid': testID, onClick: onPress,
+  UITextView: ({ children, testID, onPress, onTouchStart, style }: any) => el('span', { 'data-testid': testID, onClick: onPress, onTouchStart,
     'data-style': JSON.stringify(Object.assign({}, ...[style].flat(Infinity).filter(Boolean))) }, children),
 }));
 vi.mock('expo-modules-core', () => ({ requireOptionalNativeModule: () => null }));
@@ -67,9 +67,12 @@ vi.mock('expo-file-system', () => ({ Directory: class {}, File: class {}, Paths:
 vi.mock('expo-web-browser', () => ({ openBrowserAsync: vi.fn(async () => ({})) }));
 vi.mock('@/components/ChatReplyIcon', () => ({ ChatReplyIcon: () => null }));
 vi.mock('react-native', () => {
-  const box = (tag: string) => ({ children, testID, accessibilityLabel, style, onLayout }: any) =>
+  const box = (tag: string) => ({ children, testID, accessibilityLabel, style, onLayout, onTouchStart, ref }: any) =>
     el(tag, { 'data-testid': testID, 'aria-label': accessibilityLabel,
-      ref: (node: any) => { if (node) node.nativeLayout = onLayout; },
+      onTouchStart, ref: (node: any) => {
+        if (node) { node.nativeLayout = onLayout; node.measureInWindow = (callback: any) => callback(0, 62, 402, 812); }
+        if (typeof ref === 'function') ref(node); else if (ref) ref.current = node;
+      },
       style: { opacity: [style].flat().filter(Boolean).findLast((item: any) => item.opacity !== undefined)?.opacity,
         display: [style].flat().filter(Boolean).findLast((item: any) => item.display !== undefined)?.display } }, children);
   return {
@@ -136,7 +139,7 @@ vi.mock('lucide-react-native', () => Object.fromEntries(
     .map((name) => [name, () => null]),
 ));
 vi.mock('@/theme', async () => ({
-  ...await import('@/theme/tokens'), useThemedStyles: (makeStyles: any) => makeStyles({}), useTheme: () => ({ colors: {} }), monoFont: 'mono',
+  ...await import('@/theme/tokens'), useThemedStyles: (makeStyles: any) => makeStyles({}), useTheme: () => ({ mode: h.themeMode, colors: {} }), monoFont: 'mono',
 }));
 vi.mock('@/device-link/DeviceLinkContext', () => ({ useDeviceLink: () => ({ invoke: h.processRead, getPresenceAvailability: () => true }) }));
 vi.mock('@/auth/AuthContext', () => ({ useAuth: () => ({
@@ -189,6 +192,11 @@ vi.mock('@/session/CompanionSheet', () => ({
       trailingAction ? el('button', { 'data-testid': trailingAction.testID, disabled: trailingAction.disabled || trailingAction.busy, onClick: trailingAction.onPress }, trailingAction.label) : null,
       children, footer) : null;
   },
+}));
+vi.mock('@/session/BotGroupMentionPopover', () => ({
+  BotGroupMentionPopover: ({ position, onClose, name, displayName, caption }: any) => el('div', {
+    'data-testid': 'mentionPopover', 'data-position': JSON.stringify(position),
+  }, el('div', { 'data-testid': 'botGroup.mention.identity' }, name, displayName, caption), el('button', { 'data-testid': 'botGroup.mention.identity.close', onClick: onClose }, 'Close')),
 }));
 vi.mock('@/session/BotGroupAvatars', () => ({
   BOT_GROUP_MESSAGE_AVATAR_SIZE: 28, BOT_GROUP_STEP_AVATAR_SIZE: 24, BOT_GROUP_INLINE_AVATAR_SIZE: 20, BOT_GROUP_ROW_AVATAR_SIZE: 32,
@@ -359,7 +367,7 @@ async function render(data: BotGroupRemoteChatData | null = group(), kind: 'read
 }
 
 beforeEach(() => {
-  h.translate = null;
+  h.translate = null; h.themeMode = 'light';
   h.nativeMenus = true;
   shareSelectionStore.exit();
   h.management = null;
@@ -389,7 +397,7 @@ describe('group timeline', () => {
   // composer tests never exercised sent-text taps; minimal failure is @咪咪.
   it.each([[true, false], [false, false], [true, true]])('opens the named member from sent text (own=%s, topic=%s) and returns to the message', async (own, topic) => {
     // Native acceptance found the owner caption leaking its translation key.
-    // Use the production catalog here so the complete sheet text is observable.
+    // Use the production catalog here so the complete identity text is observable.
     h.translate = (key, options) => i18n.t(key, { ...options, lng: 'zh-CN' });
     const data = group({ serverBacked: true, messages: [message('mention', 1, {
       authorKind: 'user', isSelf: own, content: '@咪咪 看看这段正文', mentions: { all: false, botIds: ['mimi'] }, threadRootId: topic ? 'topic-root' : undefined,
@@ -404,13 +412,26 @@ describe('group timeline', () => {
     const mention = [...node.querySelectorAll('span')].find(span => span.textContent === '@咪咪')!;
     expect(mention).toBeDefined();
     expect(JSON.parse(mention.getAttribute('data-style')!).textDecorationLine).toBe('underline');
-    await act(async () => mention.click());
+    const tapMention = async () => act(async () => {
+      const touch = new Event('touchstart', { bubbles: true });
+      Object.defineProperties(touch, { pageX: { value: 108 }, pageY: { value: 246 } });
+      mention.dispatchEvent(touch); mention.click();
+    });
+    await tapMention();
+    expect(JSON.parse(byId('mentionPopover')!.getAttribute('data-position')!)).toMatchObject({ x: 108, y: 184 });
     expect(byId('botGroup.mention.identity')?.textContent).toContain('Cindy');
     expect(byId('botGroup.mention.identity')?.textContent).toContain('王悦 的伙伴');
     expect(byId('botGroup.mention.identity')?.textContent).not.toContain('咪咪 (王悦)');
     expect(byId('botGroup.mention.identity')?.textContent).toContain('已暂停');
     expect(byId('botGroup.mention.identity')?.textContent).not.toContain('groupChat.');
     expect(h.chat.act).not.toHaveBeenCalled();
+    // Native acceptance: a presented UIKit material retains its old appearance.
+    // Dismiss on theme changes rather than rendering new text over stale material.
+    h.themeMode = 'dark';
+    await render(topic ? data : parseBotGroupChatData(data)!, 'ready', topic ? 'topic-root' : undefined, topic ? '' : 'mac');
+    expect(byId('botGroup.mention.identity')).toBeNull();
+    await tapMention();
+    expect(byId('botGroup.mention.identity')?.textContent).toContain('Cindy');
     await click('botGroup.mention.identity.close');
     expect(byId('botGroup.mention.identity')).toBeNull();
     expect(node.textContent).toContain('@咪咪 看看这段正文');

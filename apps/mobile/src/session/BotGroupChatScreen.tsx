@@ -100,7 +100,7 @@ import { MessageListVisibilityContext, useScrollViewMessageVisibility } from './
 import { BotGroupTaskCard } from './BotGroupTaskCard';
 import { BotGroupMarkdownText, BotGroupUserText } from './BotGroupMessageText';
 import { BotGroupMentionIdentity } from './BotGroupMentionIdentity';
-import { botGroupMentionDisplayName, type BotGroupMentionContext } from './botGroupMentions';
+import { botGroupMentionDisplayName, type BotGroupMentionContext, type BotGroupMentionPoint } from './botGroupMentions';
 import { BotGroupQuote } from './BotGroupQuote';
 import {
   BOT_GROUP_COMPACT_HIT_SLOP,
@@ -881,7 +881,7 @@ export function BotGroupTimeline({
   const allBotsLabel = t('groupChat.mention.allBots');
   const mentionLabels = useMemo(() => [allLabel, allBotsLabel, ...group.members.flatMap(member =>
     [member.name, botGroupMentionDisplayName(member), member.nickname || member.displayName || member.name])], [allLabel, allBotsLabel, group.members]);
-  const [mentioned, setMentioned] = useState<{ groupId: string; botId: string } | null>(null);
+  const [mentioned, setMentioned] = useState<{ groupId: string; botId: string; anchor: BotGroupMentionPoint } | null>(null);
   const mentionedMember = mentioned?.groupId === group.id ? group.members.find(member => member.botId === mentioned.botId) ?? null : null;
   useEffect(() => { if (mentioned && !mentionedMember) setMentioned(null); }, [mentioned, mentionedMember]);
   const running = !threadRootId && group.round.status === 'running';
@@ -951,7 +951,7 @@ export function BotGroupTimeline({
           onLocateQuote={message.quote && onLocateMessage ? () => onLocateMessage(message.quote!.messageId) : undefined}
           members={group.members} deviceId={deviceId} online={online} identityFor={identityFor} mentionLabels={mentionLabels}
           mentionContext={{ members: group.members, mentions: message.mentions, serverBacked: !!group.serverBacked,
-            allLabel, labels: mentionLabels, onPress: member => setMentioned({ groupId: group.id, botId: member.botId }) }}
+            allLabel, labels: mentionLabels, onPress: (member, anchor) => { if (anchor) setMentioned({ groupId: group.id, botId: member.botId, anchor }); } }}
           resolveMedia={resolveMedia} resolveServerMedia={resolveServerMedia}
           canContinue={message.id === continueId} continuing={continuing} onContinue={onContinue}
           plan={message.planId ? planById.get(message.planId) : undefined}
@@ -977,7 +977,7 @@ export function BotGroupTimeline({
 
       </View>;
     })}
-    <BotGroupMentionIdentity member={mentionedMember} deviceId={deviceId} onClose={() => setMentioned(null)} />
+    <BotGroupMentionIdentity member={mentionedMember} anchor={mentioned?.anchor ?? null} deviceId={deviceId} onClose={() => setMentioned(null)} />
     {!threadRootId && !group.archived && !group.dissolvedAt && openPlan && openPlan.canManage !== false && followUp ? <View style={styles.indented}>
       <BotGroupPlanFollowUpRow followUp={followUp} identityFor={identityFor} deviceId={deviceId} online={online}
         stepNumber={openPlan.steps.indexOf(followUp.kind === 'continue' ? followUp.next : followUp.failed) + 1} stepTotal={openPlan.steps.length}
