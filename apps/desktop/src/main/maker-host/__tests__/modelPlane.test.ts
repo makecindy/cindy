@@ -1513,3 +1513,41 @@ it.each([true, false])('uses retained local addition capability %s as the consum
   expect(read().supportsImageInput).toBe(supported);
   expect(modelImageInputDefault(read())).toBe(supported);
 });
+
+it.each([
+  { kind: 'flag', supported: false }, { kind: 'flag', supported: true },
+  { kind: 'modalities', supported: false }, { kind: 'modalities', supported: true },
+])('keeps public $kind default $supported through root and bridge image patches', ({ kind, supported }) => {
+  const capability = (value: boolean) => kind === 'flag'
+    ? { supportsImageInput: value }
+    : { modalities: { input: value ? ['text', 'image'] : ['text'], output: ['text'] } };
+  const catalog = baseCatalog();
+  catalog.modelRegistry = {
+    schemaVersion: 4, updatedAt: '2026-11-04T00:00:00.000Z',
+    baseModels: [{ id: 'vendor/private-image', aliases: [], defaults: capability(!supported) }],
+    models: [{ id: 'openai/private-image', modelRef: 'vendor/private-image', name: 'Private',
+      routes: [{ providerId: 'openai', modelId: 'private-image', agents: ['codex', 'claude-code'] }] }],
+  };
+  expect(parseModelRegistry(catalog.modelRegistry).ok).toBe(true);
+  setActiveCatalog(catalog);
+  setDiscoveredCodexModels([accountModel('private-image')]);
+  const baseModels = { 'vendor/private-image': capability(supported) };
+  for (const selected of [false, true]) {
+    const parsed = sanitizeModelCatalogOverrides({ baseModels, patches: {
+      'openai:private-image': { perAgent: {
+        codex: { supportsImageInput: selected }, 'claude-code': { supportsImageInput: selected },
+      } },
+    } });
+    expect(parsed.invalid).toEqual([]);
+    setLocalCatalogOverrides(parsed.overrides);
+    for (const agent of ['codex', 'claude-code'] as const) {
+      expect(modelImageInputDefault(models('openai', agent)[0]!)).toBe(supported);
+    }
+    const cleared = sanitizeModelCatalogOverrides({ baseModels });
+    expect(cleared.invalid).toEqual([]);
+    setLocalCatalogOverrides(cleared.overrides);
+    for (const agent of ['codex', 'claude-code'] as const) {
+      expect(modelImageInputDefault(models('openai', agent)[0]!)).toBe(supported);
+    }
+  }
+});

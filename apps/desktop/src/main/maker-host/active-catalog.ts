@@ -923,11 +923,17 @@ function applyLayeredConsumer(
         )
       : overlaid;
   };
-  const result = applyConsumer(model);
+  return projectImageInputDefault(model, applyConsumer);
+}
+
+/** Keep the removable image flag's source in step with retained metadata layers. */
+function projectImageInputDefault(
+  model: ModelImageInputCatalogModel,
+  project: (source: CatalogModel) => CatalogModel,
+): ModelImageInputCatalogModel {
+  const result = project(model);
   if (model.imageInputDefault === undefined) return result;
-  // Resolve display provenance through the same consumer layers, without the
-  // root's image override. A bridge may declare a different catalog default.
-  const inherited = applyConsumer({
+  const inherited = project({
     ...model,
     supportsImageInput: model.imageInputDefault.supportsImageInput,
     modalities: model.imageInputDefault.modalities,
@@ -1734,19 +1740,19 @@ function computeMerged(): Catalog {
             (!isCustomRoutedProvider(provider) || !!provider.auth.native) &&
             (provider.id === 'xd' || agent === 'pi')
           ) {
-            next = applyModelMetadata(
-              model,
+            next = projectImageInputDefault(model, source => applyModelMetadata(
+              source,
               resolveModelMetadata(
                 b.modelRegistry,
                 metadataProviderId,
                 model.id,
-                agent === 'pi' ? model.discoveredMetadata : model.discoveredMetadata ?? catalogModelMetadata(model),
+                agent === 'pi' ? source.discoveredMetadata : source.discoveredMetadata ?? catalogModelMetadata(source),
                 model.userModelConfig ? runtimeUserModelMetadata(model.userModelConfig) : undefined,
                 agent,
                 undefined,
                 agent === 'pi' ? model.reasoningDefaultEffort : undefined,
               ),
-            );
+            ));
           }
           const identity =
             findModelRegistryRoute(
@@ -1765,9 +1771,9 @@ function computeMerged(): Catalog {
             findBaseModel(b.modelRegistry, model.id)?.id;
           const publicPatch = identity ? localOverrides.baseModels?.[identity] : undefined;
           if (publicPatch) {
-            next = applyModelMetadata(
-              next,
-              resolveModelMetadata(undefined, provider.id, model.id, catalogModelMetadata(next), {
+            next = projectImageInputDefault(next, source => applyModelMetadata(
+              source,
+              resolveModelMetadata(undefined, provider.id, model.id, catalogModelMetadata(source), {
                 ...publicPatch,
                 // Managed Ollama fields are generated import facts, not form edits.
                 ...(provider.source === 'user' &&
@@ -1776,7 +1782,7 @@ function computeMerged(): Catalog {
                   ? runtimeUserModelMetadata(model.userModelConfig)
                   : {}),
               }),
-            );
+            ));
           }
           return applyExistingModelLocalPatch(
             provider.id,
