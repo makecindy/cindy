@@ -348,6 +348,27 @@ describe('one Cindy entry across devices', () => {
 });
 
 describe('teammate host labels', () => {
+  // PR #8714: after a resource refresh fails, the remote activity snapshot remains
+  // running without generation details. The real row must still show work, then
+  // restore its message after completion (unit; prior cases only cover merged Cindy).
+  it('keeps standalone remote work visible when only the running snapshot remains', async () => {
+    mocks.remoteBots = [{ id: 'remote-bot', deviceId: 'studio', deviceName: 'Studio',
+      name: 'Writer', avatar: '🤖', avatarColor: 'violet', description: '', preview: 'Previous reply',
+      activityAt: 1, sessionId: 'remote-session', online: true,
+      teammateActivity: { phase: 'running' } }];
+    const view = await renderSidebar();
+    const working = screen.getByText('ccAgent.agentStatus.processing');
+    const row = working.closest('button')!;
+    expect(screen.queryByText('Previous reply')).toBeNull();
+    expect(row.querySelector('[data-teammate-status="running"]')).toBeNull();
+    fireEvent.click(row);
+    expect(mocks.navigate).toHaveBeenCalledWith('/bots/remote/studio/remote-bot');
+    mocks.remoteBots = mocks.remoteBots.map(bot => ({ ...bot, teammateActivity: { phase: 'idle' } }));
+    view.rerender(<TeammatesSection />);
+    expect(screen.getByText('Previous reply')).toBeTruthy();
+    expect(screen.queryByText('ccAgent.agentStatus.processing')).toBeNull();
+  });
+
   it('shows only the remote device for same-name teammates and preserves remote routing', async () => {
     mocks.profiles = [bot({ id: 'local-bot', name: 'Cindy', lastMessagePreview: 'Local preview' })];
     mocks.devices = [{ deviceId: 'local-device', name: 'MBP-M5', isSelf: true }];

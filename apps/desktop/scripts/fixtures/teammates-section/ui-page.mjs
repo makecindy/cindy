@@ -26,6 +26,15 @@ export default {
     'src/renderer/features/bots/BotDeleteDialog': 'export const BotDeleteDialog=()=>null;',
   },
   cases: {
+    'remote-running-snapshot': {
+      about: 'Standalone remote running snapshot keeps the processing subtitle without an expanded orange dot',
+      data: { profiles: [], route: '/bots/remote/studio/writer', remoteBots: [{
+        id: 'writer', name: 'Writer', deviceId: 'studio', deviceName: 'Studio',
+        avatar: 'cindy://avatar/preset/dash', avatarColor: 'violet', online: true,
+        preview: 'Previous reply', activityAt: 1, sessionId: 'remote-session',
+        teammateActivity: { phase: 'running' },
+      }] },
+    },
     ...Object.fromEntries(['other-computer-running', 'other-computer-running-mirror', 'local-working-remote-selected'].map(name => {
       const localWorking = name === 'local-working-remote-selected';
       return [name, {
@@ -144,6 +153,17 @@ export default {
     },
   },
   async check(page, ui) {
+    if (ui.case === 'remote-running-snapshot') {
+      const row = page.locator('[data-sidebar-section="teammates"] button[aria-current="page"]');
+      assert.equal(await row.getByText(await ui.t('ccAgent.agentStatus.processing'), { exact: true }).count(), 1);
+      assert.equal(await row.getByText('Previous reply', { exact: true }).count(), 0);
+      assert.equal(await row.locator('[data-teammate-status="running"]').count(), 0);
+      await ui.capture('expanded-remote-running-snapshot');
+      await page.getByRole('button', { name: await ui.t('bots.title'), exact: true }).click();
+      assert.equal(await page.locator('[data-teammate-status="running"]:visible').count(), 1);
+      await ui.capture('collapsed-remote-running-snapshot');
+      return;
+    }
     if (['other-computer-running', 'other-computer-running-mirror', 'local-working-remote-selected'].includes(ui.case)) {
       const localWorking = ui.case === 'local-working-remote-selected';
       const row = page.getByTestId('cindy-device-row');
