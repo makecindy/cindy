@@ -11,13 +11,14 @@ async function withServer(t, deps) {
     probe: () => ({ status: 'ok' }),
     me: () => ({ owner: 'owner-1', authenticated: true, realm: 'global' }),
     listSessions: () => [{ id: 's1', title: 'task', agentKind: 'claude-code', model: 'm', workDir: '/w', updatedAt: 1 }],
+    logout: () => ({ signedOut: true, serverRevoked: true }),
     ...deps,
   });
   await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
   t.after(() => server.close());
   const { port } = server.address();
-  return async (path, headers = {}) => {
-    const response = await fetch(`http://127.0.0.1:${port}${path}`, { headers });
+  return async (path, { method = 'GET', headers = {} } = {}) => {
+    const response = await fetch(`http://127.0.0.1:${port}${path}`, { method, headers });
     return { status: response.status, body: await response.json(), headers: response.headers };
   };
 }
@@ -30,15 +31,22 @@ test('health is public while task data requires the profile bearer', async (t) =
   assert.equal(denied.status, 401);
   assert.equal(denied.headers.get('www-authenticate'), 'Bearer');
 
-  const allowed = await request('/sessions', { authorization: `Bearer ${TOKEN}` });
+  const allowed = await request('/sessions', { headers: { authorization: `Bearer ${TOKEN}` } });
   assert.equal(allowed.status, 200);
   assert.deepEqual(allowed.body.sessions.map((s) => s.id), ['s1']);
-  assert.equal((await request('/sessions', { authorization: 'Bearer wrong' })).status, 401);
+  assert.equal((await request('/sessions', { headers: { authorization: 'Bearer wrong' } })).status, 401);
+});
+
+test('logout requires the bearer and reports server revocation', async (t) => {
+  const request = await withServer(t);
+  assert.equal((await request('/logout', { method: 'POST' })).status, 401);
+  const signedOut = await request('/logout', { method: 'POST', headers: { authorization: `Bearer ${TOKEN}` } });
+  assert.deepEqual(signedOut.body, { signedOut: true, serverRevoked: true });
 });
 
 test('me reports the bound owner without leaking credentials', async (t) => {
   const request = await withServer(t);
-  const me = await request('/me', { authorization: `Bearer ${TOKEN}` });
+  const me = await request('/me', { headers: { authorization: `Bearer ${TOKEN}` } });
   assert.deepEqual(me.body, { owner: 'owner-1', authenticated: true, realm: 'global' });
   assert.equal(JSON.stringify(me.body).includes('token'), false);
 });
@@ -48,7 +56,7 @@ test('unknown routes and internal failures stay JSON', async (t) => {
     listSessions: () => { throw new Error('storage offline'); },
   });
   assert.equal((await request('/nope')).status, 404);
-  const failed = await request('/sessions', { authorization: `Bearer ${TOKEN}` });
+  const failed = await request('/sessions', { headers: { authorization: `Bearer ${TOKEN}` } });
   assert.equal(failed.status, 500);
   assert.equal(failed.body.error, 'internal_error');
 });

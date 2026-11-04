@@ -33,13 +33,18 @@ export function createHostServer(deps) {
         return;
       }
 
-      if ((request.method === 'GET' && url.pathname === '/sessions') || (request.method === 'GET' && url.pathname === '/me')) {
+      if ((request.method === 'GET' && (url.pathname === '/sessions' || url.pathname === '/me'))
+        || (request.method === 'POST' && url.pathname === '/logout')) {
         if (!isAuthorized(request.headers.authorization, deps.token)) {
           send(response, 401, { error: 'unauthorized' }, { 'www-authenticate': 'Bearer' });
           return;
         }
         if (url.pathname === '/me') {
           send(response, 200, await deps.me());
+          return;
+        }
+        if (url.pathname === '/logout') {
+          send(response, 200, await deps.logout());
           return;
         }
         const sessions = await deps.listSessions();

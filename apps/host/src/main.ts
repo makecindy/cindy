@@ -10,6 +10,11 @@ import { acquireHostRuntimeLease, type HostRuntimeLease } from './runtime-lock.j
 import { readAdoptedSessionState } from './credentials/session.mjs';
 import { runLoginCommand } from './login-cli.mjs';
 import { readOrCreateApiToken } from './api-token.mjs';
+import { CindyAuthClient } from '@cindy/auth-client';
+import { createRequire } from 'node:module';
+import { readAuthEndpoints } from './auth/endpoints.mjs';
+import { logoutHostSession } from './auth/logout.mjs';
+import { createPreparedLinuxCredentialStore } from './credentials/store.mjs';
 import { createHostServer } from './server.mjs';
 
 const command = process.argv[2];
@@ -125,6 +130,29 @@ const server = createHostServer({
     sessions: sessionStorage ? (await sessionStorage.list()).length : null,
   }),
   me: async () => ({ owner: runtime.owner, authenticated: account.authenticated, realm: account.realm }),
+  logout: async () => {
+    const realm = (account.realm ?? resolveHostRegion()) as 'cn' | 'global';
+    const endpoints = readAuthEndpoints(realm);
+    const store = await createPreparedLinuxCredentialStore({
+      userDataDir: resolveHostDataDir(),
+      keyringApplication: process.env.CINDY_HOST_KEYRING_APPLICATION?.trim() || undefined,
+    });
+    const { machineIdSync } = createRequire(import.meta.url)('node-machine-id');
+    const client = new CindyAuthClient({
+      baseUrl: endpoints.authApiBaseUrl,
+      region: realm,
+      deviceId: machineIdSync(),
+      clientType: 'desktop',
+      fetch: (input, init) => globalThis.fetch(input, init),
+    });
+    const result = await logoutHostSession({
+      store,
+      refresh: (token) => client.refresh(token),
+      logout: (accessToken) => client.logout(accessToken),
+    });
+    account = { authenticated: false, realm: null };
+    return result;
+  },
   listSessions: async () => (sessionStorage ? sessionStorage.list() : []),
 });
 
