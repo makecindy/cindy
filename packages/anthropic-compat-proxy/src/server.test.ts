@@ -989,6 +989,22 @@ describe('unsupported native tool references (#8593)', () => {
         content: [{ type: 'tool_reference', tool_name: 'lookup' }, { type: 'text', text: 'found' }] }] },
     ],
   };
+  it('preserves native tool references when a different recovery rule retries', async () => {
+    const upstream = await startFakeUpstream((index, _raw, res) => {
+      res.writeHead(index === 0 ? 400 : 200, { 'content-type': 'application/json' });
+      res.end(index === 0 ? ENC_ERROR_BODY : JSON.stringify({ ok: true }));
+    });
+    upstreamClose = upstream.close;
+    proxy = await createAnthropicCompatProxy({ upstream: upstream.url, transformRequest: [],
+      recoveryRules: [createEncryptedContentRecoveryRule({ enabled: () => true }), createToolReferenceRecoveryRule()] });
+    const response = await post(proxy.url, { ...request, encrypted_content: 'ciphertext' });
+    expect(response.status).toBe(200);
+    expect(upstream.bodies).toHaveLength(2);
+    const retried = JSON.parse(upstream.bodies[1]!);
+    expect(retried.encrypted_content).toBeUndefined();
+    expect(retried.messages).toEqual(request.messages);
+    expect(retried.tools).toEqual(request.tools);
+  });
   it.each(['unsupported', 'supported', 'unrelated-error'] as const)('%s upstream preserves the retry boundary', async mode => {
     const upstream = await startFakeUpstream((_idx, raw, res) => {
       const body = JSON.parse(raw);

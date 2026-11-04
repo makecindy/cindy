@@ -117,6 +117,7 @@ export function createToolReferenceRecoveryRule(): RecoveryRule {
     enabled: () => true,
     matches: text => /content type tool_reference requires a native Anthropic Messages target/i.test(text),
     strip: lowerToolReferencesFromBody,
+    applyOnUnmatchedRetry: false,
   };
 }
 
