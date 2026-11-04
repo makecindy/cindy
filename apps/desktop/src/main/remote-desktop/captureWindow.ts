@@ -74,12 +74,20 @@ export class DesktopCaptureWindow {
     });
     const origin = `${new URL(this.url).protocol}//${new URL(this.url).host}`;
     ses.setPermissionCheckHandler(
-      (owner, permission, requestingOrigin) =>
-        this.mode === 'desktop' &&
+      (owner, permission, requestingOrigin, details) =>
         owner === this.contents &&
         owner?.mainFrame.url === this.url &&
         (requestingOrigin === origin || requestingOrigin === `${origin}/`) &&
-        permission === 'media',
+        permission === 'media' &&
+        // Chromium also uses this check to decide whether WebRTC may enumerate
+        // physical interfaces. Denying it for data-only windows restricts ICE
+        // to the default route (which can be a VPN), hiding the working LAN.
+        // This is not a capture grant: the request handler below still denies
+        // every media request from files/direct windows.
+        (this.mode === 'desktop' ||
+          (details.isMainFrame === true &&
+            details.requestingUrl === this.url &&
+            (details.mediaType === 'audio' || details.mediaType === 'video'))),
     );
     ses.setPermissionRequestHandler((owner, permission, callback, details) => {
       callback(
