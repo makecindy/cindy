@@ -157,16 +157,24 @@ afterEach(async () => {
 
 describe('Claude extraDirs mid-session rebuild', () => {
   // 测试价值：startSession / send 必须把 hosted 虚拟目录传进 SDK Query，模型才能从原生环境信息看到它们。
-  // Bug：hosted 分支省略 additionalDirectories；已有用例只覆盖本机会话。
-  // 最小失败输入：一个 hosted 附加目录；运行中修改目录后，下一轮 resume+fork 必须使用新范围。
+  // Bug：hosted 曾省略 additionalDirectories；PR #8797 修复后又把旧控制端真实路径交给 SDK。
+  // 最小失败输入：虚拟根内目录混入本机真实存在的根外目录，或缺少 mirrorRoot；启动与 setter 后都须隔离。
+  // 原有用例只覆盖虚拟根内目录，无法发现旧协议下供应商同路径目录的 Skill / 说明加载越界。
   // tier：unit，SDK 用内存 fake，直接检查生产入口生成的 Query 协议与重建行为。
-  it.each(['setExtraDirs', 'setWritableDirs'] as const)('hosted %s rebuild exposes virtual directories without enabling local tools', async (setter) => {
+  it.each((['setExtraDirs', 'setWritableDirs'] as const).flatMap((setter) =>
+    (['virtual', 'mixed', 'missing-root'] as const).map((scope) => ({ setter, scope })),
+  ))('hosted $setter rebuild only exposes virtual directories: $scope', async ({ setter, scope }) => {
     const configDir = await makeTempDir();
     const mirrorRoot = path.join(await makeTempDir(), 'fs');
     const workingDir = path.join(mirrorRoot, 'workspace');
     const initialDir = path.join(mirrorRoot, 'additional', 'dir-0');
     const nextDir = path.join(mirrorRoot, 'additional', 'runtime-0');
-    await Promise.all([workingDir, initialDir, nextDir].map((dir) => fs.mkdir(dir, { recursive: true })));
+    // 同前缀的兄弟目录确实存在：模拟两台电脑用户名相同的旧协议路径，不能靠目录不存在来兜底。
+    const outsideDir = `${mirrorRoot}-other`;
+    await Promise.all([workingDir, initialDir, nextDir, outsideDir].map((dir) => fs.mkdir(dir, { recursive: true })));
+    const foreignDirs = scope === 'virtual' ? [] : [outsideDir];
+    const extraDirs = [initialDir, ...(setter === 'setExtraDirs' ? foreignDirs : [])];
+    const writableDirs = setter === 'setWritableDirs' ? foreignDirs : [];
     process.env.CLAUDE_CONFIG_DIR = configDir;
     process.env.XDT_CC_SSE_IDLE_TIMEOUT_MS = '0';
     const sdkSessionId = 'sdk-hosted-extradirs';
@@ -181,11 +189,12 @@ describe('Claude extraDirs mid-session rebuild', () => {
       model: 'claude-opus-4-6',
       workingDir,
       resumeSessionId: sdkSessionId,
-      extraDirs: [initialDir],
+      extraDirs,
+      writableDirs,
       deviceHosted: {
         workingDir,
-        extraDirs: [initialDir],
-        writableDirs: [],
+        extraDirs,
+        writableDirs,
         platform: process.platform,
         pathPlatform: process.platform,
         shell: 'bash',
@@ -193,22 +202,24 @@ describe('Claude extraDirs mid-session rebuild', () => {
         tunnelUrl: 'http://127.0.0.1:4000/t/fixture/',
         tunnelToken: 'fixture',
         mcpServers: [],
-        mirrorRoot,
+        ...(scope === 'missing-root' ? {} : { mirrorRoot }),
       },
     });
     try {
       const initialOptions = sdkMock.query.mock.calls[0][0].options;
-      expect.soft(initialOptions.additionalDirectories).toEqual([initialDir]);
+      expect.soft(initialOptions.additionalDirectories).toEqual(scope === 'missing-root' ? undefined : [initialDir]);
       expect(initialOptions.disallowedTools).toEqual(expect.arrayContaining(['Bash', 'Read', 'Write', 'Edit', 'Glob', 'Grep']));
 
-      await handle[setter]?.([nextDir]);
+      await handle[setter]?.([nextDir, ...foreignDirs]);
       expect(sdkMock.query).toHaveBeenCalledTimes(1);
       sdkMock.query.mockReturnValue(createFakeQuery());
       await handle.send({ type: 'user', content: 'inspect the attached directory' });
 
       expect(sdkMock.query).toHaveBeenCalledTimes(2);
       const rebuiltOptions = sdkMock.query.mock.calls[1][0].options;
-      expect(rebuiltOptions.additionalDirectories).toEqual(setter === 'setWritableDirs' ? [initialDir, nextDir] : [nextDir]);
+      expect(rebuiltOptions.additionalDirectories).toEqual(scope === 'missing-root'
+        ? undefined
+        : setter === 'setWritableDirs' ? [initialDir, nextDir] : [nextDir]);
       expect(rebuiltOptions.resume).toBe(sdkSessionId);
       expect(rebuiltOptions.forkSession).toBe(true);
       expect(rebuiltOptions.resumeSessionAt).toBeUndefined();
