@@ -64,9 +64,9 @@
     'checkEnvironment': () => {
       const harness = window.__cindyBoot?.harness ?? {};
       const entry = (ready) => (ready ? { status: 'passed' } : { status: 'failed', error: 'not installed' });
-      const allPassed = Boolean(harness.claude && harness.codex);
+      const allPassed = Boolean(harness['claude-code'] && harness.codex);
       return {
-        claudeCode: entry(harness.claude),
+        claudeCode: entry(harness['claude-code']),
         codex: entry(harness.codex),
         pi: harness.pi ? { status: 'passed' } : { status: 'skipped' },
         ripgrep: harness.ripgrep ? { status: 'passed' } : { status: 'skipped' },
@@ -92,6 +92,16 @@
     'getUpdateStatus': () => ({ status: 'idle' }),
     'checkAppUpdate': () => ({ hasUpdate: false }),
     'modelFavoritesHost.ready': () => undefined,
+    'modelFavoritesHost.changed': () => () => {},
+    'gitContext.listAllPrRefs': () => [],
+    'layout.getStateSync': () => null,
+    'ghosts.listSync': () => [],
+    'sidebarSettings.loadSnapshot': () => ({ pinned: [], hidden: [], order: [] }),
+    'maker.getCapabilities': () => ({ agents: ['claude-code'], models: [] }),
+    'maker.listActive': () => ({ sessions: [] }),
+    'remoteDesktop.state': () => ({ status: 'unavailable' }),
+    'sidebarSettings.claimLegacyRendererOwner': () => ({ claimed: false }),
+    'maker.claimLegacyModelVisibilityOwner': () => ({ claimed: false }),
     'setUpdateRelaunchTheme': () => undefined,
     'theme.applyVibrancy': () => undefined,
     'syncWorkerCreationPrefs': () => undefined,

@@ -103,7 +103,9 @@ flowchart LR
 | Claude 订阅判定（Host） | 部分 | Host 通过共享模块读出「CLI 是否订阅登录 + Cindy 是否获准使用」：真实 profile 与临时 profile 均实测返回 `{"cliLoggedIn":false,"allowed":false,"connected":false}`（本机 CLI 非订阅登录）。判定来源与 Desktop 同源，未读取或复制任何 Anthropic 凭证。 |
 | Claude Code / Codex / Pi Harness | 部分 | 二进制就绪查询已抽成 `agent-binaries/binaryStatus.ts`，Desktop 与 Host 共用同一判定；实测 Host `/health` 对三种 Harness 均报告可用。Agent 启动所需的认证适配、代理、目录与 MCP 注入尚未迁出。 |
 | Plugin 执行与状态 | 未实现 | `cindy-brain`/plugin manager 依赖 Main 宿主接口与 Electron IPC；存量 plugin 向下兼容是阻断条件。 |
-| Web / `cindy-web` | 部分（骨架） | Host 直接托管 **现有 renderer 的真实构建产物**（`apps/desktop/.vite/renderer/main_window`），注入 `apps/web/shim.js` 把 `window.electronAPI` 代理到 loopback `/api/*`（HttpOnly cookie 鉴权）。实测：页面加载出全部 renderer chunk、shim 生效、无脚本错误；shim 只收到 `voiceInput.getDataSnapshot` 与 `logToMain` 两次调用后 boot 停滞，`#root` 为空。说明卡点在 React 渲染前的顶层阶段（错误未冒泡到 window/console），需要专门调试；未重写任何界面。 |
+| Web / `cindy-web` | 部分（骨架） | Host 直接托管 **现有 renderer 的真实构建产物**（`apps/desktop/.vite/renderer/main_window`），注入 `apps/web/shim.js` 把 `window.electronAPI` 代理到 loopback `/api/*`（HttpOnly cookie 鉴权）。实测进展：真实 renderer 已完整挂载（`#root` 有内容、`LocalDbGate: startup readiness reached`），走的是应用自己的 splash / 错误边界；`checkEnvironment`、`authInitialize`、`localDb.ensureReady`、内存/Git 安全设置等启动通道已由 Host 提供。剩余阻塞：布局/侧栏/目录快照等上下文仍在等未实现的 channel，视图停在应用自己的 “Something went wrong” 边界。
+
+结论：shim 的本质是在浏览器里重新实现 preload 的通道表，这是一项独立工程量；**界面本身没有重写**，这点必须如实区分。 |
 | Electron / `cindy-desktop` API 客户端化 | 未实现 | 当前 Desktop 仍装载 Runtime、OAuth、Plugin 与数据库；完成共享 API 前不得与 Host Runtime 并行。 |
 | Mobile 并发访问 | 迁移期保留 | 当前 Device Link 必须持续可用；Host 直连未完成互通验收前不切断。 |
 | Memory、文件访问、多 Agent | 未验证 | 必须沿用生产入口逐项验证，不能以模块/接口存在作为行为证据。 |
