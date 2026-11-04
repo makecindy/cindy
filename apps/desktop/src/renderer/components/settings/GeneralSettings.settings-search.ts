@@ -17,6 +17,14 @@ export const generalSettings = defineSettings({
     titleKey: 'settings.sections.user',
     sectionKey: 'settings.sections.user',
   },
+  setupMigration: {
+    id: 'general.setupMigration',
+    tab: 'general',
+    targetId: 'settings-setup-migration',
+    titleKey: 'setupMigration.settings.title',
+    sectionKey: 'setupMigration.settings.title',
+    aliases: ['migrate', 'migration assistant', 'new computer', '迁移', '迁移助理', '新电脑'],
+  },
   language: {
     id: 'general.language',
     tab: 'general',

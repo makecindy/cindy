@@ -52,6 +52,7 @@ import {
   setPluginTaskHandler,
   setPluginTargetAdapter,
   setPluginObserveAdapter,
+  setPluginCompanionAdapter,
   assertPluginTargetQueuedDelivery,
   getPluginTaskSourceSessionId,
   setPluginTaskUninstaller,
@@ -67,6 +68,7 @@ import {
 } from '../cindy-brain/index.js';
 import { listPluginTargetCandidates, resolvePluginTargetSession } from './pluginTargetCandidates.js';
 import { assertPluginObservableTask, listPluginObserveTasks } from './pluginObserveTasks.js';
+import { createPluginCompanionHost } from './pluginCompanionHost.js';
 import { createPluginTargetStore } from './pluginTargetStore.js';
 import { collectPluginAttachmentPayloadTexts, withPluginMessageAttachments } from '../cindy-media/pluginMessageAttachments.js';
 import { isPluginTaskPermissionMode, type PluginTaskRoute, type PluginTaskRequest } from '../../shared/pluginTasks.js';
@@ -89,7 +91,8 @@ import { handleListDevices, defaultDeps as deviceDirectoryDeps } from '../device
 import { configureBotAutonomyHost, getBotAutonomyGlance, noteBotAutonomyInputProjection } from '../bot-autonomy/hub.js';
 import { countMachineRunningTasks } from '../machines/directory.js';
 import { configureLocalMachineActivity, readLocalMachineStatus } from '../machines/localStatus.js';
-import { getHostSourceDevice, getSelfDeviceId, remoteBackgroundInvoke, remoteInvoke as invokeBotPeer } from '../device-link/index.js';
+import { getHostSourceDevice, getSelfDeviceId, onRemotePushChannel, remoteBackgroundInvoke, remoteInvoke as invokeBotPeer } from '../device-link/index.js';
+import { getAppCapabilities } from '../appCapabilities.js';
 import { readDeviceProviderViews, readRemoteProviderRoute } from '../remote-agent/controller/deviceCatalog.js';
 import { checkDeviceRoute } from '../remote-agent/controller/deviceRouteCheck.js';
 import { cancelPendingRemoteStart } from '../remote-agent/controller/startRemote.js';
@@ -1113,6 +1116,8 @@ import {
   ORCA_EXECUTION_DEVICES_CHANNEL,
   ORCA_REMOTE_WORKER_BRIDGE_CHANNEL,
   COMPANION_CLOUD_CAPS_CHANNEL,
+  COMPANION_LIVE_CHANNEL,
+  REMOTE_RESOURCE_CHANGED_CHANNEL,
   MACHINE_STATUS_CHANNEL,
   COMPANION_CLOUD_FLUSH_CHANNEL,
   COMPANION_CLOUD_HAND_OVER_CHANNEL,
@@ -1317,6 +1322,7 @@ import {
   readCustomProviderKeyForMutation,
   removeCustomProviderHeaders,
   removeCustomProviderKey,
+  storeCustomMcpToken,
   storeCustomProviderHeaders,
   storeCustomProviderKey,
 } from '../secrets/providerSecretStore.js';
@@ -1590,7 +1596,7 @@ import {
   findActiveSessionByWorkdir,
 } from '../localDb/ipc/pluginWorkspaceSessions.js';
 import { normalizeWorkingDirForStorage } from '../../shared/workingDir.js';
-import { openMainWindowSession } from '../deepLink.js';
+import { getDeepLinkMainWindow, openMainWindowSession } from '../deepLink.js';
 import { handleSessionEvent, type SessionEventDependencies } from './sessionEventPipeline.js';
 import {
   createDeferredProductTurnFailureGate,
@@ -8236,6 +8242,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     // Persisted MCP changes must eventually replace the frozen spawn config;
     // busy hosts keep their bridge until the existing idle retry can refresh it.
     invalidateCodex: refreshMcpHarnesses,
+    storeMcpToken: storeCustomMcpToken,
   });
   // Claude 原生 Auto 分类器不可用 → 会话仍保持 Auto，只把后续审批切到 Cindy reviewer。
   // coordinator 内部复核 DB 仍为 auto 并按 session 去重；不改偏好、不弹提示。
@@ -15132,6 +15139,92 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       openMainWindowSession(taskId, { focus: 'if-active' });
     },
   });
+  // cindy.companions: changes reach watching plugins as content-free notices (island activity, companion
+  // homes, pushes from the computers companions run on); subscribed on first use, once the island service exists.
+  let invalidatePluginCompanions: () => void = () => {};
+  let companionChangesSubscribed = false;
+  const subscribeCompanionChanges = () => {
+    const island = getAgentIslandService();
+    if (companionChangesSubscribed || !island) return;
+    companionChangesSubscribed = true;
+    island.subscribeSessionActivity(() => invalidatePluginCompanions());
+    companionHomes.onChange(() => invalidatePluginCompanions());
+    // The sidebar's sessions subscription already brings these from every reachable computer.
+    onRemotePushChannel((deviceId, channel) => {
+      if (channel !== REMOTE_RESOURCE_CHANGED_CHANNEL && channel !== 'local-db:sessions:activity') return;
+      if (companionHomes.snapshot().actors.some(actor => actor.homeDeviceId === deviceId)) invalidatePluginCompanions();
+    });
+  };
+  let companionDevices: { at: number; value: Promise<Array<{ deviceId: string; name: string; online: boolean; reachable: boolean }> | null> } | null = null;
+  const companionHost = createPluginCompanionHost({
+    pending: getPendingInteractionsForSession,
+    openSession: (id, deviceId) => openMainWindowSession(id, { focus: 'if-active', ...(deviceId ? { deviceId } : {}) }),
+    flushMessages: drainPersistQueue,
+    resolve: (requestId, decision) => resolvePendingInteraction(requestId, decision as InteractionDecision),
+    // Cindy's own dialog over the main window: a plugin's page cannot draw or click it.
+    // It shows the whole request: the host only asks for what fits (allowHere), and says no to anything else.
+    confirmAllow: async ({ ghostId, companion, detail }) => {
+      if (!detail.allowHere) return false;
+      const window = getDeepLinkMainWindow();
+      const plugin = getInstalledGhostName(ghostId) ?? ghostId;
+      const fill = (key: string, values: Record<string, string>) =>
+        Object.entries(values).reduce((value, [name, replacement]) => value.replaceAll(`{{${name}}}`, replacement), t(key));
+      const body = detail.kind === 'plan' ? detail.plan : detail.preview;
+      const options = {
+        type: 'question' as const,
+        title: t('pluginCompanionAnswer.title'),
+        message: detail.kind === 'plan'
+          ? fill('pluginCompanionAnswer.planMessage', { companion })
+          : fill(`pluginCompanionAnswer.permissionMessage.${detail.action}`, { companion, tool: detail.subject ?? detail.tool }),
+        detail: `${body}\n\n${fill('pluginCompanionAnswer.source', { plugin })}`,
+        buttons: [t('pluginCompanionAnswer.allow'), t('pluginCompanionAnswer.cancel')], defaultId: 1, cancelId: 1,
+      };
+      const result = window && !window.isDestroyed() ? await dialog.showMessageBox(window, options) : await dialog.showMessageBox(options);
+      return result.response === 0;
+    },
+    remote: {
+      // The same computers the sidebar reads teammates from: online, remote control on there, allowed here.
+      devices: () => {
+        if (!getAppCapabilities().canUseDeviceLink) return Promise.resolve(null);
+        if (companionDevices && Date.now() - companionDevices.at < 5_000) return companionDevices.value;
+        const value = handleListDevices(deviceDirectoryDeps()).then(({ devices }) => devices.filter(device => !device.isSelf).map(device => ({
+          deviceId: device.deviceId, name: device.name, online: device.online, reachable: device.remoteControlEnabled && device.controlEnabled,
+        })));
+        companionDevices = { at: Date.now(), value };
+        value.catch(() => { if (companionDevices?.value === value) companionDevices = null; });
+        return value;
+      },
+      // Background reads do not show the home computer as being controlled; older homes fall back like the sidebar.
+      invoke: async (deviceId, channel, args) => {
+        let result;
+        try {
+          result = await remoteBackgroundInvoke(deviceId, channel, args);
+        } catch (error) {
+          if (!String((error as { code?: unknown })?.code ?? (error as Error)?.message).includes('UNSUPPORTED_CAPABILITY')) throw error;
+          result = await invokeBotPeer(deviceId, channel, args);
+        }
+        if (!result.ok) throw Object.assign(new Error(result.error.code), { code: result.error.code });
+        return result.result;
+      },
+      // Answering there goes the way remote control answers: the generic resolve channel, its origin gate included.
+      write: async (deviceId, channel, args) => {
+        const result = await invokeBotPeer(deviceId, channel, args);
+        if (!result.ok) throw Object.assign(new Error(result.error.code), { code: result.error.code });
+        return result.result;
+      },
+    },
+  });
+  // Another computer of this account shows companions running here: same view as a plugin here gets.
+  makerSessionRegistry.handle(COMPANION_LIVE_CHANNEL, (_event, raw: unknown) => companionHost.serveRemote(raw));
+  const companionHub = setPluginCompanionAdapter({
+    ...companionHost,
+    list: guard => {
+      settleCompanionOwner();
+      subscribeCompanionChanges();
+      return companionHost.list(guard);
+    },
+  });
+  invalidatePluginCompanions = () => companionHub?.invalidate();
   let pluginTargetReviewReady = false;
   setPluginTargetAdapter({
     prepareInvocation: preparePluginInvocation,
@@ -20743,21 +20836,8 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         // sendToAgent 同步触发的新 attempt（即使 runId 相同）不会被旧派发清掉。
         clearSchedulerAutoResumePending(sessionId, item.origin.runId, attemptToken);
       }
-      // 「继续任务」只能在 vendor dispatch 不可逆后 durable ack：
-      // - enqueue 时 ack：排队可取消，旧中断横幅回不来；
-      // - onAccepted 时 ack：仍可能 cancelled-before-dispatch，且无新 started，
-      //   旧横幅被抹掉、隐藏续跑行也不可操作，任务会静默丢失。
-      // dispatch 返回前 agent 事件可能已经写入新 started；因此 durable ack 使用
-      // 进入 vendor 前冻结的时间戳，既确认旧中断，又不会盖过新 turn 的 started。
-      if (item.originalSyntheticTrigger !== 'continue') return;
-      try {
-        await ackSessionTurnEndedDurable(sessionId, preVendorDispatchAt);
-      } catch (err) {
-        log.warn('continue dispatched ack failed', {
-          sessionId,
-          err: err instanceof Error ? err.message : String(err),
-        });
-      }
+      // 旧中断的 durable ack 统一由 makerSendTransaction 在真正派发后处理，
+      // 普通消息和「继续任务」共用同一路径；这里不再重复确认。
     },
     noteSessionClearBoundary,
     // 复用真人活跃边界：队首 Retry / Continue 和新输入尚未落库时也开始新限额周期。
@@ -22005,7 +22085,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
           sendTrace?.stage('dedupe');
         }
 
-        // 「继续任务」durable ack 延后到 vendor dispatch 成功（onDispatchedUserTurn）：
+        // 「继续任务」durable ack 延后到共享发送事务的 vendor dispatch 成功后：
         // 排队可取消时旧中断提示必须能恢复；accepted 但仍可能 cancelled-before-dispatch
         // 时也不能提前 ack。续跑项本身由 coordinator 插到队首（普通输入仍 FIFO）。
         let duplicate = false;

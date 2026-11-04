@@ -51,8 +51,11 @@ async function readVisibleBotSource(botId: string): Promise<BotRemoteResourceSou
   }
 }
 
-/** The canonical conversation and live delegations share the local roster priority. */
-async function rosterBotActivities(sources: readonly BotRemoteResourceSource[]) {
+/**
+ * Every live session of each companion — its canonical conversation and live delegations — highest roster
+ * priority first. Plugins' cindy.companions collects pending requests from all of them.
+ */
+export async function rosterBotActivityCandidates(sources: readonly BotRemoteResourceSource[]) {
   const running = getAgentIslandService()?.getSessionActivitySnapshots() ?? [];
   const bySession = new Map(running.map(activity => [activity.sessionId, activity]));
   const delegated = sources.length && running.length ? await getDbClient().drizzle
@@ -68,8 +71,14 @@ async function rosterBotActivities(sources: readonly BotRemoteResourceSource[]) 
       ...delegated.filter(link => link.botId === source.id).map(link => bySession.get(link.sessionId))]
       .filter(activity => !!activity).sort((a, b) =>
         TEAMMATE_STATUS_ORDER.indexOf(resolveTeammateStatus({ activities: [a], unread: true }))
-        - TEAMMATE_STATUS_ORDER.indexOf(resolveTeammateStatus({ activities: [b], unread: true })))[0],
+        - TEAMMATE_STATUS_ORDER.indexOf(resolveTeammateStatus({ activities: [b], unread: true }))),
   ]));
+}
+
+/** The canonical conversation and live delegations share the local roster priority: the one session the roster shows. */
+export async function rosterBotActivities(sources: readonly BotRemoteResourceSource[]) {
+  const candidates = await rosterBotActivityCandidates(sources);
+  return new Map([...candidates].map(([id, activities]) => [id, activities[0]]));
 }
 
 let registered = false;
