@@ -407,7 +407,7 @@ instanceId、generation、outcome（completed/failed/cancelled/interrupted）及
 ## 4.11.9 查看伙伴和状态（未发布）
 
 插件要把伙伴画成角色、头像墙或状态面板时，声明 `"agent": { "companions": true }`，在本机 Desktop 逻辑页使用 `cindy.companions`。
-它是一项独立权限（`agent:companions`），覆盖伙伴名单、实时状态、待处理请求（内容与对话卡片上看到的一致）与最新一条回复；安装/更新时已确认的不重复询问，否则首次调用复用既有宿主确认。
+它是一项独立权限（`agent:companions`），覆盖伙伴名单、实时状态、待处理请求（内容与对话卡片上看到的一致）、最新一条回复与最近对话；安装/更新时已确认的不重复询问，否则首次调用复用既有宿主确认。
 同时声明并获准 `agent.targets`（及其依赖的 `agent.tasks`）时，还可以用 `answer` 把主人在插件页面里给的回答交给伙伴；允许伙伴执行仍由 Cindy 自己的确认框确认。
 它不依赖、也不授予 `agent.tasks` / `targets` / `delegation` / `observe`；旧批准和历史未知字段不授予查看伙伴。拒绝或确认界面不可用时返回 `PERMISSION_DENIED`，不得自动循环重试；用户可在插件详情页点「确认伙伴查看权限」重新允许。
 先检查 `typeof cindy.companions?.list === 'function'`；旧客户端没有此入口时隐藏相关界面，不调用私有 IPC。Mobile 插件页面和没有逻辑页的 mainView 页面拿不到 `cindy.companions`（mainView 经 BroadcastChannel 向本插件逻辑页要数据）。
@@ -422,6 +422,9 @@ instanceId、generation、outcome（completed/failed/cancelled/interrupted）及
   - `lastReplyAt` 是最新一条完成回复的持久化时间。一轮工作结束（`phase` 由 `running` 变为 `completed` 或 `lastReplyAt` 变化）时读一次 `reply`，即可拿到这一轮的最后一条消息。
 - `avatar({companionId})`：返回 `{src, fallback}`。`src` 为 `data:image/jpeg` 头像或 null（伙伴用表情做头像时）；`fallback` 是可直接画的单个字形。
 - `reply({companionId})`：返回 `{reply:null | {text, createdAt, truncated}}`：伙伴主对话里最新一条可见回复的文字（其他电脑上的伙伴从它的主力电脑读取），最多 8000 字，超出时 `truncated=true`；不含更早的消息、附件、私密内容或子 Agent 输出。回复可能含个人或工作信息，插件不得外传或长期保存。
+- `history({companionId, limit?})`：返回 `{history:null | {messages, more}}`：伙伴主对话里最近的 `limit` 条消息（默认 20，最多 50），从旧到新，每条 `{role:'user'|'assistant', text, createdAt, truncated}`，单条最多 2000 字。
+  只含对话里看得到的主人消息与伙伴回复（附件写成 `[附件: 名称]`），与其他电脑上看到的同一份；不含工具过程、进度说明、思考、子 Agent 输出和隐藏的系统输入，清空对话前的消息不返回。`more=true` 表示还有更早的消息，请用 `open` 让主人去 Cindy 里看完整历史。
+  其他电脑上的伙伴从它的主力电脑读取；那台电脑是旧版、读不到对话时 `history:null`。对话可能含个人或工作信息，插件不得外传或长期保存。
 - `open({companionId, interactionRef?})`：在主窗口打开伙伴的对话；带 `interactionRef` 时打开该请求所在的任务；其他电脑上的伙伴打开为远程对话。Cindy 未在前台时不抢焦点。返回 `{opened:true}`。
 - `interaction({companionId, interactionRef})`：返回 `{interaction}`，即这条请求在对话卡片上显示的内容（工具输入与手机上一样已脱敏）：
   - `{kind:'question', questions:[{question, header, options:[{label, description}], multiSelect}]}`；

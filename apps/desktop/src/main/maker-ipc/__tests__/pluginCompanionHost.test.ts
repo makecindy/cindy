@@ -29,7 +29,7 @@ vi.mock('../../localDb/client/current.js', () => ({
   }),
 }));
 
-import { createPluginCompanionHost, PLUGIN_COMPANION_REPLY_MAX, type PluginCompanionAllowPrompt, type PluginCompanionRemoteDeps } from '../pluginCompanionHost.js';
+import { createPluginCompanionHost, PLUGIN_COMPANION_MESSAGE_MAX, PLUGIN_COMPANION_REPLY_MAX, type PluginCompanionAllowPrompt, type PluginCompanionRemoteDeps } from '../pluginCompanionHost.js';
 
 const source = (id: string, over: Record<string, unknown> = {}) => ({
   id, name: id.toUpperCase(), description: `${id} desc`, avatar: '', avatarColor: '', status: 'active',
@@ -312,4 +312,50 @@ it('answers a companion on another computer through that computer\'s own resolve
   remote.write.mockResolvedValueOnce({ accepted: false });
   await expect(host.answer('far', ref, { kind: 'question', answers: [{ choices: ['No'] }] }, answering)).rejects.toMatchObject({ code: 'TARGET_UNAVAILABLE' });
   await expect(host.answer('far', 'r-unknown', { kind: 'question', answers: [{ choices: ['No'] }] }, answering)).rejects.toMatchObject({ code: 'TARGET_UNAVAILABLE' });
+});
+
+// unit: the recent conversation — what the chat shows (the mirror's projection), oldest first, capped.
+it('reads the latest messages of the main conversation, oldest first, without what the chat hides', async () => {
+  const d = deps();
+  const host = createPluginCompanionHost(d);
+  mocks.clearedAt = 10;
+  mocks.rows = [ // newest first, as readLatestMirrorRows returns them
+    { role: 'assistant', createdAt: 60, text: 'Done: 3 bugs fixed.' },
+    { role: 'assistant', createdAt: 55, text: null }, // progress note / tool step: not in the chat
+    { role: 'user', createdAt: 50, text: 'Fix the login bugs' },
+    { role: 'assistant', createdAt: 40, text: '好'.repeat(PLUGIN_COMPANION_MESSAGE_MAX + 3) },
+    { role: 'user', createdAt: 30, text: 'Hi' },
+    { role: 'assistant', createdAt: 5, text: 'before the conversation was cleared' },
+  ];
+  const all = await host.history('ada', 20, () => {});
+  expect(all!.more).toBe(false);
+  expect(all!.messages.map(m => [m.role, m.createdAt, m.truncated])).toEqual([
+    ['user', 30, false], ['assistant', 40, true], ['user', 50, false], ['assistant', 60, false],
+  ]);
+  expect(Array.from(all!.messages[1]!.text)).toHaveLength(PLUGIN_COMPANION_MESSAGE_MAX);
+  expect(JSON.stringify(all)).not.toContain('before the conversation');
+  const last = await host.history('ada', 2, () => {});
+  expect(last).toEqual({ more: true, messages: [
+    { role: 'user', text: 'Fix the login bugs', createdAt: 50, truncated: false },
+    { role: 'assistant', text: 'Done: 3 bugs fixed.', createdAt: 60, truncated: false },
+  ] });
+  expect(d.flushMessages).toHaveBeenCalled();
+  await expect(host.history('gone', 20, () => {})).rejects.toMatchObject({ code: 'TARGET_UNAVAILABLE' });
+  const denied = () => { throw Object.assign(new Error('x'), { code: 'PERMISSION_DENIED' }); };
+  await expect(host.history('ada', 20, denied)).rejects.toMatchObject({ code: 'PERMISSION_DENIED' });
+  // and the same view for another computer of the account
+  expect(await host.serveRemote({ version: 1, kind: 'history', companionId: 'ada', limit: 2 })).toEqual({ version: 1, history: last });
+});
+
+it('reads the conversation of a companion on another computer from there, and nothing from an older home', async () => {
+  const remote = laptop((_channel, request) => request.kind === 'history'
+    ? { version: 1, history: { more: true, messages: [{ role: 'user', text: 'Ship it', createdAt: 1 }, { role: 'tool', text: 'x', createdAt: 2 }, { role: 'assistant', text: 'Shipped.', createdAt: 3 }] } }
+    : { version: 1, companions: [farOnLaptop], sessions: {}, conversations: {} });
+  const host = createPluginCompanionHost(deps(remote));
+  expect(await host.history('far', 20, () => {})).toEqual({ more: true, messages: [
+    { role: 'user', text: 'Ship it', createdAt: 1, truncated: false }, { role: 'assistant', text: 'Shipped.', createdAt: 3, truncated: false },
+  ] });
+  expect(remote.invoke).toHaveBeenLastCalledWith('laptop', 'maker:companion-live:read', [{ version: 1, kind: 'history', companionId: 'far', limit: 20 }]);
+  const older = createPluginCompanionHost(deps(laptop(() => { throw Object.assign(new Error('x'), { code: 'INVALID_PARAMS' }); })));
+  expect(await older.history('far', 20, () => {})).toBeNull();
 });

@@ -22,6 +22,7 @@ const adapter = (): PluginCompanionAdapter => ({
   open: vi.fn(async () => {}),
   interaction: vi.fn(async (_companionId: string, ref: string) => ({ ref, kind: 'plan' as const, plan: 'Plan', truncated: false })),
   answer: vi.fn(async () => ({ answered: true })),
+  history: vi.fn(async () => ({ messages: [{ role: 'user' as const, text: 'hi', createdAt: 1, truncated: false }], more: false })),
 });
 const ctx = (over: Partial<PluginCompanionContext> = {}): PluginCompanionContext =>
   ({ ghostId: 'p', assertAuthorized: () => {}, ...over });
@@ -51,6 +52,10 @@ it.each([
   [{ kind: 'unwatch' }],
   [{ kind: 'send', companionId: 'b1', text: 'hi' }],
   [{ kind: 'interaction', companionId: 'b1' }],
+  [{ kind: 'history', companionId: 'b1', limit: 0 }],
+  [{ kind: 'history', companionId: 'b1', limit: 51 }],
+  [{ kind: 'history', companionId: 'b1', limit: 2.5 }],
+  [{ kind: 'history' }],
   [{ kind: 'answer', companionId: 'b1', interactionRef: 'r' }],
   [{ kind: 'answer', companionId: 'b1', interactionRef: 'r', answer: { kind: 'permission', decision: 'yes' } }],
   [null],
@@ -139,4 +144,13 @@ it.each([
   ['allow'],
 ])('refuses the answer %j', value => {
   expect(parsePluginCompanionAnswer(value)).toBeNull();
+});
+
+it('reads the recent conversation, 20 messages unless asked for up to 50', async () => {
+  const a = adapter();
+  expect(await handlePluginCompanionRequest(a, hub(), { kind: 'history', companionId: 'b1' }, ctx()))
+    .toEqual({ ok: true, data: { history: { messages: [{ role: 'user', text: 'hi', createdAt: 1, truncated: false }], more: false } } });
+  expect(a.history).toHaveBeenLastCalledWith('b1', 20, expect.any(Function));
+  await handlePluginCompanionRequest(a, hub(), { kind: 'history', companionId: 'b1', limit: 50 }, ctx());
+  expect(a.history).toHaveBeenLastCalledWith('b1', 50, expect.any(Function));
 });

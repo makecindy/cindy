@@ -1,13 +1,15 @@
 import { randomUUID } from 'node:crypto';
 import type { GhostPipeCompanionsChanged } from '../../shared/ghost.js';
 import type {
-  PluginCompanion, PluginCompanionAnswer, PluginCompanionAvatar, PluginCompanionInteractionDetail, PluginCompanionReply,
+  PluginCompanion, PluginCompanionAnswer, PluginCompanionAvatar, PluginCompanionHistory, PluginCompanionInteractionDetail, PluginCompanionReply,
 } from '../../shared/pluginCompanions.js';
 
 export interface PluginCompanionAdapter {
   list(guard: () => void): Promise<PluginCompanion[]>;
   avatar(companionId: string, guard: () => void): Promise<PluginCompanionAvatar>;
   reply(companionId: string, guard: () => void): Promise<PluginCompanionReply | null>;
+  /** The latest messages of the main conversation; null when the companion's home cannot be asked for them. */
+  history(companionId: string, limit: number, guard: () => void): Promise<PluginCompanionHistory | null>;
   /** Rejects with TARGET_UNAVAILABLE for a companion or request the plugin could not list. */
   open(companionId: string, interactionRef: string | undefined, guard: () => void): Promise<void>;
   /** One pending request as its card shows it; TARGET_UNAVAILABLE once it is no longer waiting. */
@@ -30,6 +32,7 @@ const COMPANION_ERROR_CODES = new Set(['PERMISSION_DENIED', 'HOST_NOT_READY', 'I
 const MAX_ID_LENGTH = 4096;
 const MAX_ANSWER_TEXT = 8000;
 const MAX_QUESTIONS = 20;
+const HISTORY_LIMIT_MAX = 50, HISTORY_LIMIT_DEFAULT = 20;
 
 const fail = (code: string) => ({ ok: false as const, error: { code, message: code, retryable: false } });
 const idParam = (value: unknown) =>
@@ -59,7 +62,7 @@ export function parsePluginCompanionAnswer(value: unknown): PluginCompanionAnswe
   return { kind: 'question', answers };
 }
 
-/** `cindy.companions` (agent.companions): roster, live status, pending requests, the latest reply, and answering. */
+/** `cindy.companions` (agent.companions): roster, live status, pending requests, the latest reply and recent conversation, and answering. */
 export async function handlePluginCompanionRequest(
   adapter: PluginCompanionAdapter | null,
   hub: CompanionWatchHub | null,
@@ -67,7 +70,7 @@ export async function handlePluginCompanionRequest(
   ctx: PluginCompanionContext,
 ) {
   if (!adapter || !hub) return fail('HOST_NOT_READY');
-  const request = payload as { kind?: unknown; companionId?: unknown; interactionRef?: unknown; subscriptionId?: unknown; answer?: unknown } | null;
+  const request = payload as { kind?: unknown; companionId?: unknown; interactionRef?: unknown; subscriptionId?: unknown; answer?: unknown; limit?: unknown } | null;
   try {
     switch (request?.kind) {
       case 'capabilities':
@@ -90,6 +93,14 @@ export async function handlePluginCompanionRequest(
         const reply = await adapter.reply(companionId, ctx.assertAuthorized);
         ctx.assertAuthorized();
         return { ok: true as const, data: { reply } };
+      }
+      case 'history': {
+        const companionId = idParam(request.companionId);
+        const limit = request.limit === undefined ? HISTORY_LIMIT_DEFAULT : request.limit;
+        if (!companionId || !Number.isInteger(limit) || (limit as number) < 1 || (limit as number) > HISTORY_LIMIT_MAX) return fail('INVALID_PARAMS');
+        const history = await adapter.history(companionId, limit as number, ctx.assertAuthorized);
+        ctx.assertAuthorized();
+        return { ok: true as const, data: { history } };
       }
       case 'open': {
         const companionId = idParam(request.companionId);

@@ -382,6 +382,8 @@ DB 中下一条输入的 armed 值为 false 不代表原生执行已退出 Plan�
   允许经 `confirmAllow`（`dialog.showMessageBox`，挂主窗口）：同一时间只开一个框（`TASK_BUSY`），框前快照请求 JSON，框后重读并比对 requestId 与快照，不同则 `TARGET_UNAVAILABLE`。
   本机经 `resolvePendingInteraction` 落定（shared permission 先到先得、暂停执行时拒收）；远程经 `invokeBotPeer`（`remoteInvoke`）调主力电脑的 `maker:resolve-interaction`，沿用对方的来源闸门（桌面独占确认在那边拒收）。
 - 回复读取先 `drainPersistQueue`，按 `clearedAt` 跳过清空前的行，从 `readLatestMirrorRows` 取最新一条 assistant 行，经 `mirrorMessageText(..., { placeholders: false })` 投影，≤8000 字。
+- `history` 同样先 `drainPersistQueue` 并按 `clearedAt` 截断，从 `readLatestMirrorRows`（≤400 行）取 `mirrorMessageText` 非空的 user/assistant 行（附件保留占位），倒序收集到 `limit`（默认 20，≤50）后翻成从旧到新，单条 ≤2000 字；
+  超出 `limit` 或扫满 400 行时 `more=true`。远程伙伴经 `COMPANION_LIVE_CHANNEL` 的 `kind:'history'` 读取，对方返回 `INVALID_PARAMS` / `CHANNEL_NOT_ALLOWED` 时视为旧版，返回 null。
 - 推送 `companions-changed` 只带 subscriptionId 与 seq，不带内容；来源为灵动岛 `subscribeSessionActivity`、`companionHomes.onChange`、主力电脑经侧边栏 sessions 订阅推来的 `maker:remote-resources:changed` / `local-db:sessions:activity`（main 经 `onRemotePushChannel` 只看来源与 channel）与 5 秒心跳，每插件合并到最快 1 秒一次。
   发送失败或批准失效的订阅被丢弃。
 - 每次请求固定 owner generation、逻辑页与批准 revision，每个 await 后复核；变化返回 `PERMISSION_DENIED` 并丢弃结果。

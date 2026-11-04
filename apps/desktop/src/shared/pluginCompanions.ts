@@ -95,3 +95,17 @@ export interface PluginCompanionReply {
   createdAt: number;
   truncated: boolean;
 }
+
+/** One message of the companion's main conversation as the chat shows it: the owner's words or the companion's reply. */
+export interface PluginCompanionMessage {
+  role: 'user' | 'assistant';
+  text: string;
+  createdAt: number;
+  truncated: boolean;
+}
+
+/** The latest messages, oldest first; `more`: older ones exist (see them in Cindy). */
+export interface PluginCompanionHistory {
+  messages: PluginCompanionMessage[];
+  more: boolean;
+}

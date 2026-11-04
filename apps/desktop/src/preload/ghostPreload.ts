@@ -87,7 +87,7 @@ contextBridge.exposeInMainWorld('cindy', {
       throw Object.assign(new Error(result?.error?.message ?? 'Observe request failed'), { code: result?.error?.code ?? 'HOST_NOT_READY' });
     },
   ])),
-  companions: Object.fromEntries(['capabilities', 'list', 'avatar', 'reply', 'open', 'interaction', 'answer', 'watch', 'unwatch'].map(kind => [kind,
+  companions: Object.fromEntries(['capabilities', 'list', 'avatar', 'reply', 'history', 'open', 'interaction', 'answer', 'watch', 'unwatch'].map(kind => [kind,
     async (req: Record<string, unknown> = {}): Promise<unknown> => {
       const result = await ipcRenderer.invoke('ghost-pipe:send', { ...req, type: 'companions-request', kind });
       if (result?.ok === true) return result.data;

@@ -6,7 +6,8 @@ import type { SessionActivitySnapshot } from '@cindy/maker-shared/session-activi
 import { answerKey, describePermissionAction, encodeMultiSelectAnswer, normalizeAskQuestions } from '@cindy/maker-shared/interaction';
 import type { PluginCompanionAdapter } from '../cindy-brain/pluginCompanionSlot.js';
 import type {
-  PluginCompanion, PluginCompanionAnswer, PluginCompanionInteraction, PluginCompanionInteractionDetail, PluginCompanionInteractionKind, PluginCompanionReply,
+  PluginCompanion, PluginCompanionAnswer, PluginCompanionHistory, PluginCompanionInteraction, PluginCompanionInteractionDetail, PluginCompanionInteractionKind,
+  PluginCompanionMessage, PluginCompanionReply,
 } from '../../shared/pluginCompanions.js';
 import { OWNER_ONLY_HOST_CONFIRMATION_TOOL_NAMES } from '../agent-app-update/constants.js';
 import { isSingleBotAvatarGrapheme } from '../../shared/botAvatarValue.js';
@@ -24,6 +25,10 @@ import { summarizeInteraction } from '../bot-autonomy/phase.js';
 /** Longest reply text handed to a plugin; longer replies are cut and marked truncated. */
 export const PLUGIN_COMPANION_REPLY_MAX = 8000;
 const REPLY_SCAN_ROWS = 20;
+/** Most messages `history` returns, and the longest text of one of them. */
+export const PLUGIN_COMPANION_HISTORY_MAX = 50;
+export const PLUGIN_COMPANION_MESSAGE_MAX = 2000;
+const HISTORY_SCAN_ROWS = 400;
 /** Plugins re-list on every change notice; one read per home computer serves them all for this long. */
 export const REMOTE_COMPANION_CACHE_MS = 800;
 /** A home computer that does not answer in time is shown as unreachable rather than holding the list. */
@@ -318,6 +323,30 @@ export function createPluginCompanionHost(deps: PluginCompanionHostDeps) {
     return null;
   };
 
+  /** The conversation as the chat shows it (the mirror's projection): no tool steps, progress notes or sub-agents. */
+  const localHistory = async (companionId: string, limit: number, guard: () => void): Promise<PluginCompanionHistory> => {
+    const source = await localSource(companionId, guard);
+    const sessionId = source.canonicalSessionId ?? unavailable();
+    await deps.flushMessages();
+    guard();
+    const db = getCurrentDbClientSnapshot()?.client.drizzle ?? notReady();
+    const [session] = await db.select({ clearedAt: sessions.clearedAt }).from(sessions).where(eq(sessions.id, sessionId)).limit(1);
+    const rows = await readLatestMirrorRows(sessionId, HISTORY_SCAN_ROWS);
+    guard();
+    const messages: PluginCompanionMessage[] = [];
+    let more = false;
+    for (const row of rows) { // newest first
+      if (session?.clearedAt != null && row.createdAt <= session.clearedAt) break;
+      const text = mirrorMessageText(row);
+      if (!text || (row.role !== 'user' && row.role !== 'assistant')) continue;
+      if (messages.length === limit) { more = true; break; }
+      const chars = Array.from(text);
+      messages.push({ role: row.role, text: chars.slice(0, PLUGIN_COMPANION_MESSAGE_MAX).join(''), createdAt: row.createdAt, truncated: chars.length > PLUGIN_COMPANION_MESSAGE_MAX });
+    }
+    if (!more && rows.length === HISTORY_SCAN_ROWS) more = true;
+    return { messages: messages.reverse(), more };
+  };
+
   // —— Companions whose home is another computer ——
 
   /** Cloud actors running elsewhere, grouped by home computer. */
@@ -502,6 +531,30 @@ export function createPluginCompanionHost(deps: PluginCompanionHostDeps) {
       deps.openSession(view.conversations[companionId] ?? unavailable(), device.deviceId);
     },
 
+    async history(companionId, limit, guard) {
+      if (await isLocal(companionId, guard)) return localHistory(companionId, limit, guard);
+      const device = await remoteHome(companionId, guard);
+      try {
+        const value = record(await (deps.remote ?? notReady()).invoke(device.deviceId, COMPANION_LIVE_CHANNEL,
+          [{ version: COMPANION_LIVE_VERSION, kind: 'history', companionId, limit }]));
+        guard();
+        const history = record(value.history);
+        if (!Array.isArray(history.messages)) return null;
+        const messages = history.messages.slice(-limit).flatMap((raw): PluginCompanionMessage[] => {
+          const item = record(raw);
+          const createdAt = time(item.createdAt);
+          if ((item.role !== 'user' && item.role !== 'assistant') || typeof item.text !== 'string' || createdAt === null) return [];
+          const chars = Array.from(item.text);
+          return [{ role: item.role, text: chars.slice(0, PLUGIN_COMPANION_MESSAGE_MAX).join(''), createdAt, truncated: item.truncated === true || chars.length > PLUGIN_COMPANION_MESSAGE_MAX }];
+        });
+        return { messages, more: history.more === true || history.messages.length > limit };
+      } catch (error) {
+        // A home that cannot be asked for the conversation yet.
+        if (['CHANNEL_NOT_ALLOWED', 'INVALID_PARAMS'].includes(errorCode(error))) return null;
+        throw errorCode(error) === 'PERMISSION_DENIED' ? error : Object.assign(new Error('TARGET_UNAVAILABLE'), { code: 'TARGET_UNAVAILABLE' });
+      }
+    },
+
     async interaction(companionId, ref, guard) {
       const found = await findRequest(companionId, ref, guard);
       return companionInteractionDetail(found.request, ref);
@@ -561,6 +614,10 @@ export function createPluginCompanionHost(deps: PluginCompanionHostDeps) {
       }
       if (request.kind === 'reply' && typeof request.companionId === 'string' && request.companionId) {
         return { version: COMPANION_LIVE_VERSION, reply: await localReply(request.companionId, noGuard) };
+      }
+      if (request.kind === 'history' && typeof request.companionId === 'string' && request.companionId) {
+        const limit = Number.isInteger(request.limit) && (request.limit as number) >= 1 ? Math.min(request.limit as number, PLUGIN_COMPANION_HISTORY_MAX) : PLUGIN_COMPANION_HISTORY_MAX;
+        return { version: COMPANION_LIVE_VERSION, history: await localHistory(request.companionId, limit, noGuard) };
       }
       return invalid();
     },
