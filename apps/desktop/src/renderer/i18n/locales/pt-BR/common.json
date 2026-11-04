@@ -1972,6 +1972,8 @@
       "add": {
         "title": "Adicionar máquina remota",
         "alias": "Alias",
+        "aliasHint": "Use de 1 a 128 caracteres: letras inglesas, números ou . _ @ : -. Para outros caracteres, use o nome de exibição.",
+        "aliasInvalid": "O alias contém caracteres não compatíveis ou excede 128 caracteres. Siga as regras acima.",
         "displayName": "Nome de exibição",
         "displayNamePlaceholder": "Nome opcional exibido no Cindy",
         "hostname": "Nome do host",
@@ -7593,6 +7595,8 @@
         "cancel": "Cancelar",
         "updateNeedsConsent": "Novas permissões precisam de confirmação",
         "targetIdentity": "Instalar para: {{name}}",
+        "localTarget": "Desenvolvimento local",
+        "localOidcUnavailable": "Esta cópia de desenvolvimento não pode usar a identidade da organização. Para testar, instale-a explicitamente na sua organização atual pelo Forge.",
         "personalTarget": "Pessoal",
         "sourceChanged": "Esta atualização muda para uma fonte local. As contas e os dados existentes são arquivados separadamente. Conecte suas contas novamente após atualizar.",
         "otherCopies": "Há {{count}} outras cópias deste plugin. Elas permanecerão instaladas e manterão o estado de ativação atual. Uma cópia separada precisa de suas próprias conexões de conta."
@@ -7676,6 +7680,8 @@
         "nodeResident": "O programa Node pode continuar em execução em segundo plano",
         "nodeResidentDetail": "É executado enquanto o plugin está ativado e para quando ele é desativado, atualizado, desinstalado ou quando a Cindy é encerrada.",
         "tool": "Ferramenta \"{{name}}\"",
+        "toolAutoApprove": "O Agent pode executar a ferramenta \"{{name}}\" sem confirmação",
+        "toolAutoApproveDetail": "Quando o Agent chama esta ferramenta, ela é executada na hora, sem pedir confirmação nem revisar cada chamada.",
         "command": "Comando de conversa ${{command}}",
         "panelLeft": "Painel \"{{title}}\" · exibido na barra lateral",
         "panelTab": "Painel \"{{title}}\" · abre dentro da página Plugins",
@@ -7741,9 +7747,13 @@
         "workspaceDetail": "Quando solicitado, você escolhe a pasta ou vê o caminho completo em um cartão de confirmação antes de decidir; ao processar uma chamada iniciada por você, subpastas dentro do diretório de trabalho da sessão atual são usadas diretamente, sem solicitação adicional. Pastas que já têm uma sessão são reutilizadas, e a sessão criada fica vazia — nada começa a ser executado por conta própria.",
         "sessionContext": "Pode descobrir em qual pasta de projeto a sessão atual está trabalhando",
         "sessionContextDetail": "Compartilha apenas informações de localização (ID da sessão e caminho da pasta do projeto) enquanto trabalha para a sessão atual — nenhum conteúdo de arquivo, e nenhum acesso a arquivos é concedido.",
+        "liveScreen": "Ver e controlar telas de dispositivos no celular",
+        "liveScreenDetail": "Pela área de trabalho remota, seu celular pode mostrar as telas de dispositivos que ele oferece (como simuladores) e enviar toques, botões e texto para elas. Só conecta quando você abre pelo celular e não mostra mais nada deste computador.",
         "preview": "Pode abrir páginas de prévia dos sites abaixo no navegador da barra lateral",
         "previewDetail": "Somente os sites listados abaixo podem ser abertos; cada página aberta é atribuída a este plugin.",
         "browserExtension": "Permite que a extensão de navegador incluída se conecte ao Cindy",
+        "browserNativeHost": "Pode registrar a conexão “{{name}}”",
+        "browserNativeHostDetail": "O programa registrado é executado fora da sandbox e acessa este computador com sua conta e as permissões do sistema.",
         "browserExtensionDetail": "Somente as extensões listadas abaixo podem se conectar, pelo endereço de loopback local; o Cindy encaminha a este plugin as solicitações feitas pela extensão.",
         "browserExtensionPageControlDetail": "Somente as extensões listadas abaixo podem se conectar. A extensão também implementa controle de páginas: com “Meu navegador” selecionado, o Agent pode ler e operar páginas no navegador que você está usando.",
         "nodeChildSpawn": "Seu programa Node pode pedir ao host para iniciar subprocessos declarados no pacote",
@@ -7838,6 +7848,18 @@
         "settingsTitle": "Configurações de {{name}}",
         "settingsUnavailableUntilRestore": "Restaure o plugin para usar esta configuração novamente.",
         "oauthScopeStale": "Esta autorização não inclui as permissões adicionadas recentemente. Reconecte para concedê-las.",
+        "localDevelopment": "Desenvolvimento local",
+        "publicInstall": "Mercado público",
+        "organizationInstall": "Organização: {{name}}",
+        "browserUse": "Usar esta extensão do navegador",
+        "browserActivated": "Extensão do navegador selecionada",
+        "browserActivationFailed": "Não foi possível selecionar. Ative o plugin e confirme a troca de conexão.",
+        "browserSwitchTitle": "Trocar a conexão da extensão?",
+        "browserSwitchMessage": "Usar “{{name}}” nesta conexão?",
+        "browserSwitchDetail": "Instância: {{instance}}\nRegistro: {{host}}\nIsso substitui o registro atual. A extensão se conectará a este plugin.",
+        "portReclaimTitle": "Encerrar o programa que usa a porta de retorno?",
+        "portReclaimMessage": "“{{name}}” precisa da porta {{port}}. Encerrar o programa abaixo?",
+        "portReclaimDetail": "Isso pode interromper o trabalho ou perder dados não salvos. Você pode cancelar e fechar o programa manualmente.",
         "configurationTitle": "Configuração",
         "sidebarEntryTitle": "Item de navegação",
         "showInSidebar": "Mostrar na navegação à esquerda",
@@ -10322,6 +10344,7 @@
       "continueEditing": "Continuar editando"
     },
     "profileSaveFailed": "Não foi possível salvar as configurações do colega. Nenhuma alteração foi aplicada.",
+    "profileSaveOffline": "Não foi possível conectar ao computador do colega. Restabeleça a conexão e salve novamente.",
     "modelLabel": "Modelo",
     "modelUnavailable": "{{model}} (indisponível no momento)",
     "codexAutomaticCompact": "Colegas Codex compactam o contexto por conta própria, e /new mantém a tarefa atual. Só inicie uma nova tarefa quando realmente precisar começar do zero.",
@@ -10854,6 +10877,18 @@
         "reactorFormer": "{{name}} (não está mais no grupo)",
         "reactorsUnavailable_one": "Nome indisponível para mais {{count}} membro",
         "reactorsUnavailable_other": "Nomes indisponíveis para mais {{count}} membros",
+        "readStatusSent": "Enviada",
+        "readStatusRead": "Lida",
+        "readersCount_one": "Lida por {{count}}",
+        "readersCount_other": "Lida por {{count}}",
+        "readersView": "Ver quem leu",
+        "readersTooLarge": "O grupo é grande demais para listar quem leu",
+        "readersNone": "Ninguém leu",
+        "readersLoading": "Carregando…",
+        "readersFailed": "Não foi possível carregar quem leu",
+        "readersHeading": "Lida",
+        "readersOfTotal": "Lida {{read}}/{{total}}",
+        "readerUnknown": "Membro desconhecido",
         "invite": "Convidar para o grupo",
         "groupCreated": "Conversa em grupo criada",
         "inviteFriends": "Convide amigos para entrar e trabalhar com seu colega.",
@@ -11008,7 +11043,8 @@
           }
         },
         "replyCount_many": "{{count}} respostas",
-        "reactorsUnavailable_many": "Nomes indisponíveis para mais {{count}} membros"
+        "reactorsUnavailable_many": "Nomes indisponíveis para mais {{count}} membros",
+        "readersCount_many": "Lida por {{count}}"
       },
       "lifecycle": {
         "dissolve": "Dissolver grupo",
@@ -11096,7 +11132,7 @@
         "items": {
           "tasks": {
             "title": "Tarefas",
-            "body": "Decide quando iniciar uma tarefa em segundo plano, controla as que iniciou e traz o resultado para o chat, inclusive nos seus outros computadores."
+            "body": "Conhece as tarefas que pode controlar e os computadores disponíveis. Organiza e acompanha tarefas a seu pedido, traz os resultados e verifica as operações compatíveis antes de trabalhar em outro computador."
           },
           "teammates": {
             "title": "Outros colegas",
@@ -11111,8 +11147,8 @@
             "body": "Lembra suas preferências e seu contexto, confere antes de usar e atualiza quando algo muda."
           },
           "self": {
-            "title": "Conhecer a si mesmo",
-            "body": "Sabe o que consegue fazer e ativa ou desativa recursos para você; para Telegram, MCP ou plugins, consulta primeiro a ajuda do Cindy."
+            "title": "Conhecer e configurar o Cindy",
+            "body": "Conhece as funções e o uso do Cindy e consulta ou altera configurações a seu pedido. Solicita na tarefa que você preencha ou confirme o que for necessário."
           }
         }
       },
@@ -17142,7 +17178,14 @@
     "sectionTitle": "Diretórios",
     "empty": "Nenhum diretório de referência ainda",
     "add": "Adicionar diretório…",
-    "addReadOnly": "Adicionar diretório somente leitura…",
+    "back": "Voltar",
+    "addTitle": "Adicionar diretório",
+    "writableHint": "O Agent pode ler e gravar",
+    "writableHintDetail": "O Agent pode ler, criar, modificar e excluir arquivos nestes diretórios.",
+    "searchRecent": "Buscar diretórios",
+    "noRecent": "Ainda não há diretórios recentes",
+    "noMatchingRecent": "Nenhum diretório correspondente",
+    "addFailed": "Não foi possível adicionar este diretório. Tente novamente ou escolha outra pasta.",
     "atLimit": "Limite atingido ({{max}})",
     "remove": "Remover {{name}}",
     "writableParentConfirmTitle": "Permitir acesso de leitura e gravação a um diretório pai?",

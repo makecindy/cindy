@@ -140,6 +140,8 @@ export interface BotGroupChatServiceDeps {
     talkPlanId?: string;
     personalDigest?: boolean;
   }) => Promise<LaneResult>;
+  /** Live native context identity; absent/unknown means background must be restored. */
+  readLaneContext?: (sessionId: string) => { key: string; contextTokens: number } | null;
   /** Same hidden, durable input path as Bot DMs; attachments go with the turn like a task message's. */
   dispatch: (params: {
     targetSessionId: string;

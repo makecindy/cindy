@@ -551,6 +551,15 @@ export function registerBotGroupRemoteResourceProvider(service: () => BotGroupCh
           if (!receipt.ok) refuse(chatGroupFailure(new Error(receipt.errorCode)));
           return { effects: [] };
         }
+        case 'readers': {
+          // Read-only: who has read one message, with the host's names. Hosts without it answer UNSUPPORTED_OPERATION.
+          if (!visibleGroup.serverBacked || !current.chatServer?.readers || typeof input.messageId !== 'string')
+            throw new RemoteResourceRegistryError('INVALID_PARAMS', 'UNSUPPORTED_OPERATION');
+          const receipt = await current.chatServer.readers({ groupId, messageId: input.messageId });
+          if (!receipt.ok) throw new RemoteResourceRegistryError('INVALID_PARAMS', receipt.errorCode);
+          ownerService();
+          return { result: receipt, effects: [] };
+        }
         case 'read': {
           if (!visibleGroup.serverBacked || !current.chatServer || typeof input.messageId !== 'string')
             throw new RemoteResourceRegistryError('INVALID_PARAMS', 'INVALID_PARAMS');

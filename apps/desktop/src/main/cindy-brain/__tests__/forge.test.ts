@@ -15,6 +15,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import { resolveCanonicalSessionPath } from '@cindy/mcps';
+import { handleForgeGuide, type CindyGhostsMcpDeps } from 'cindy-tools';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   GHOST_MANIFEST_SUMMARY_MAX_CHARS,
@@ -1754,6 +1755,23 @@ describe('scaffoldGhostDir', () => {
 });
 
 describe('FORGE_GUIDE', () => {
+  // 协议:ghost_forge_guide 按章号精确取章,章号重复时只能取到靠前的一章。
+  // 历史 bug:随包浏览器扩展与交互页面都编号 4.23,section "4.23" 返回的是浏览器扩展。
+  it('keeps chapter numbers unique so ghost_forge_guide reaches every chapter by number', async () => {
+    const numbers = FORGE_GUIDE.split('\n')
+      .map((line) => line.match(/^## ([0-9]+(?:\.[0-9]+)*)\.?(?:\s|$)/)?.[1])
+      .filter((n): n is string => n !== undefined);
+    expect(numbers.filter((n, i) => numbers.indexOf(n) !== i)).toEqual([]);
+    const deps = {
+      forgeGuide: async () => FORGE_GUIDE,
+      forgePageManual: async () => FORGE_PAGE_MANUAL,
+    } as unknown as CindyGhostsMcpDeps;
+    const read = async (section: string) => (await handleForgeGuide(deps, { section })).content[0].text;
+    expect(await read('4.23')).toMatch(/^## 4\.23 交互页面 MCP Apps/);
+    expect(await read('4.24')).toMatch(/^## 4\.24 随包浏览器扩展/);
+    expect(await read('pages')).toBe(FORGE_PAGE_MANUAL);
+  });
+
   // 协议:ghost_forge_guide section "pages" 返回的手册与 MCP Apps 请求头按 sha256 公布的
   // 是同一份文件;两者分叉时模型读到的手册与 CDN 上的版本对不上。
   it('serves the same page manual bytes that the MCP Apps manual header hashes', () => {

@@ -18,7 +18,14 @@ import { PlaintextEditor } from '@/components/markdown/PlaintextEditor';
 
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { FocusScope } from '@radix-ui/react-focus-scope';
-import { PreviewHeader, PreviewFooter, PreviewButton as ToolbarButton } from './PreviewChrome';
+import {
+  PREVIEW_PANEL_CLASS,
+  PREVIEW_PANEL_STYLE,
+  PreviewHeader,
+  PreviewFooter,
+  PreviewButton as ToolbarButton,
+  PreviewScrim,
+} from './PreviewChrome';
 import { DropdownMenuItem } from '@/components/ui/dropdown-menu';
 import { toast } from '@/lib/toast';
 import { createPortal } from 'react-dom';
@@ -247,6 +254,8 @@ export function MermaidLightbox({ svg, source, onAnnotate, onClose }: MermaidLig
   }
 
   const overlay = (
+    <>
+    <PreviewScrim onClose={handleClose} />
     <FocusScope onUnmountAutoFocus={restorePreviewFocus} trapped loop asChild
       onMountAutoFocus={(event) => { event.preventDefault(); overlayRef.current?.focus(); }}
     >
@@ -254,11 +263,10 @@ export function MermaidLightbox({ svg, source, onAnnotate, onClose }: MermaidLig
       ref={overlayRef}
       data-mermaid-lightbox-overlay
       data-lightbox-layer
+      className={PREVIEW_PANEL_CLASS}
       style={{
-        position: 'fixed',
-        inset: 0,
+        ...PREVIEW_PANEL_STYLE,
         zIndex: 9999,
-        background: 'var(--surface)',
         transition: 'opacity 200ms ease',
         opacity: isVisible ? 1 : 0,
         display: 'flex',
@@ -305,8 +313,8 @@ export function MermaidLightbox({ svg, source, onAnnotate, onClose }: MermaidLig
             // Fixed stage box so scale=1 means "SVG fits the viewport". Without
             // this the SVG renders at its mermaid-emitted intrinsic size and
             // looks tiny on a 2K screen.
-            width: 'min(calc(100vw - 80px), 1800px)',
-            height: 'calc(100vh - 140px)',
+            width: 'calc(var(--preview-width) - 80px)',
+            height: 'calc(var(--preview-height) - 140px)',
             userSelect: 'none',
             pointerEvents: 'none',
             boxShadow: 'var(--shadow-menu)',
@@ -370,12 +378,10 @@ export function MermaidLightbox({ svg, source, onAnnotate, onClose }: MermaidLig
         >
           {copiedImage ? <Check className="h-4 w-4" /> : <Copy className="h-4 w-4" />}
         </ToolbarButton>
-        <ToolbarButton onClick={reset} label={t('attachmentPreview.fit')}>
-          <Maximize size={16} />
-        </ToolbarButton>
       </PreviewFooter>
       </div>
     </FocusScope>
+    </>
   );
 
   return createPortal(overlay, document.body);

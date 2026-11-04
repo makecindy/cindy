@@ -742,7 +742,7 @@ describe('invitation preview and explicit acceptance', () => {
     const request = vi.fn().mockResolvedValueOnce({ ...preview, avatar: 'https://images.example.invalid/group.png', memberCount: 8 })
       .mockResolvedValueOnce(preview).mockResolvedValueOnce({ ...preview, memberCount: -1 });
     const client = createChatServerClient(request);
-    expect(await client.previewInvite(`https://untrusted.example/chat-invite/join#${token}`)).toMatchObject({ memberCount: 8, avatar: 'https://images.example.invalid/group.png' });
+    expect(await client.previewInvite(`cindy://chat-invite/${token}`)).toMatchObject({ memberCount: 8, avatar: 'https://images.example.invalid/group.png' });
     expect(request).toHaveBeenCalledExactlyOnceWith('/invite-links/preview', 'POST', { token }, undefined, undefined);
     expect((await client.previewInvite(token)).memberCount).toBeUndefined();
     expect((await client.previewInvite(token)).memberCount).toBeUndefined();

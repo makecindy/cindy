@@ -1,4 +1,8 @@
 import { registerTeammateGroupHistoryTool, type TeammateGroupHistoryCallback } from './xdt-helper/teammate_group_history.js';
+import { registerPiRuntimeTools, type PiRuntimeCallbacks } from './xdt-helper/pi_runtime.js';
+import { createControlReader } from './xdt-helper/control-catalog.js';
+import { registerAppModelsTools, type AppModelsCallbacks } from './xdt-helper/app_models.js';
+import { registerAppSettingsTools, type AppSettingsCallbacks } from './xdt-helper/app_settings.js';
 import { registerGithubTools, type GithubToolCallbacks } from './xdt-helper/github.js';
 import { registerMcpSetupTool, type McpSetupCallback } from './xdt-helper/mcp_setup.js';
 import { registerTaskDeliveryTool, type TaskDeliveryCallbacks } from './xdt-helper/report_task_delivery.js';
@@ -109,6 +113,7 @@ import { LIST_MACHINES_TOOL_NAME, registerListMachinesTool, type ListMachinesCal
 import { registerTeammateHomeTools, type TeammateHomeCallbacks } from './xdt-helper/teammate_home.js';
 import {
   registerBotCapabilityTools,
+  registerAppDefaultModelTools,
   withCindyGatedBotToolDescriptions,
   type BotCapabilityCallbacks,
 } from './xdt-helper/bot_capabilities.js';
@@ -138,13 +143,17 @@ export type {
 // ── Entry-tool descriptions ─────────────────────────────────────────────────
 
 const D_LIST_TOOLS =
+  'Cindy 设置/控制入口：query 搜索壁纸、模型、伙伴、自动化、设备等；key 读单项说明；name 读已发现工具的参数。例：list_tools({query:"伙伴模型"})。' +
   `探索当前任务获准的 ${BRAND_NAME} 能力。要主人选择、亲自输入账号密码验证码、扫码或连接账号时直接用 ask_owner，不经这里；` +
   '查询 PR、CI 与评审变化用 github 类目；查询不会建立任务关联。其它先不传 category 查看用途与本机/跨电脑范围，再按类目发现工具，用 call_tool 执行。';
 
 const D_CALL_TOOL =
-  '调用 list_tools 为当前任务返回的一个具体工具。不要猜工具名，也不要把它当成通用命令入口。';
+  '调用 list_tools 或 get_capabilities 为当前任务返回的具体工具；args 为 JSON 对象。查设置可先 list_tools({query:需求})；不执行任意命令。';
 
 const LIST_TOOLS_INPUT = {
+  query: z.string().trim().min(1).max(200).optional().describe('自然语言查 Cindy 控制能力，直接返回下一步调用。'),
+  key: z.string().min(1).max(160).optional().describe('搜索返回的能力 key，读取具体说明。'),
+  name: z.string().min(1).max(160).optional().describe('已发现工具名，只读返回完整参数 schema。'),
   category: z.string().optional().describe('要查看的类目；不传则取当前任务的可用类目概览。'),
 };
 const CALL_TOOL_INPUT = {
@@ -154,7 +163,7 @@ const CALL_TOOL_INPUT = {
 
 // list_tools 入口类目: cindy(自省) / control(会话控制面) / history(聊天历史) / feedback(官方反馈提交) / handoff(session 间 handoff)。
 // 协同 team 工具已拆到独立 cindy_orca server(插件开关 gate)。
-const CATEGORY_ENUM = ['cindy', 'auth', 'control', 'history', 'feedback', 'handoff', 'skills', 'app_update', 'bots', 'github'] as const;
+const CATEGORY_ENUM = ['cindy', 'auth', 'control', 'history', 'feedback', 'handoff', 'skills', 'app_update', 'bots', 'github', 'settings'] as const;
 
 /**
  * 类目概览里每个类目的一句话用途 + 作用范围(本机 / 可跨电脑)。只陈述事实:模型在概览
@@ -163,6 +172,7 @@ const CATEGORY_ENUM = ['cindy', 'auth', 'control', 'history', 'feedback', 'hando
  */
 export const HELPER_CATEGORY_DESCRIPTIONS: Record<(typeof CATEGORY_ENUM)[number], string> = {
   cindy: `${BRAND_NAME} 能力说明、界面操作帮助（get_capabilities scope=help）与当前任务信息/交付回执（report_task_delivery）；get_capabilities({key:"self-management"}) 是管理自己的任务、定时任务、项目、伙伴的工具索引；get_capabilities({key:"computer-use"}) 说明桌面操作没开时怎么引导用户开启。本机。`,
+  settings: '管理 Cindy 的全局设置与默认模型，普通任务和伙伴共用。作用于运行任务的本机；先查询当前值和可选项，再修改或恢复默认。SSH 主机编辑使用 cindy_ssh。',
   auth: 'MCP 设置表单（request_mcp_setup）；Grok 设备码授权的状态查询与取消。要主人亲自输入、扫码或连接账号时用 ask_owner。',
   control: '管理任务与项目：归档/取消归档支持本机与跨电脑（deviceId::sessionId）；改名、移动、标签、排队消息、插话、停止、运行设置、项目列表与增删改、从其他 AI 编程工具导入任务（scan_importable_sessions / import_sessions）仅本机。',
   github: '读取 PR、CI、评审变化与详情，明确管理任务关联。本机与同账号跨电脑；查询不会关联任务或启动跟进。',
@@ -283,8 +293,22 @@ function registerListToolsEntry(
     'list_tools',
     D_LIST_TOOLS,
     LIST_TOOLS_INPUT,
-    async ({ category }) => {
+    async ({ category, query, key, name }) => {
       const allowed = await allowedSurface();
+      if ([query, key, name, category].filter(value => value !== undefined).length > 1)
+        return errorPayload('INVALID_ARGS', 'query、key、name、category 只能选一种查询。');
+      if (query || key) {
+        const tool = registry.get('get_capabilities');
+        if (!tool || !toolAllowed(allowed, tool)) return errorPayload('CAPABILITY_NOT_AVAILABLE', '当前任务不可查询控制目录。');
+        return registry.call('get_capabilities', { scope: 'control', ...(category ? { category } : {}), ...(query ? { toolQuery: query } : { key }) });
+      }
+      if (name) {
+        const tool = registry.get(name);
+        if (!tool || tool.hidden || !toolAllowed(allowed, tool)) return errorPayload('CAPABILITY_NOT_AVAILABLE', '工具未注册或不属于当前任务。');
+        return { content: [{ type: 'text' as const, text: JSON.stringify({ ok: true, tool: {
+          name: tool.name, description: tool.description, inputSchema: z.toJSONSchema(z.strictObject(tool.inputShape)),
+        } }) }] };
+      }
       if (category) {
         const tools = withCindyGatedBotToolDescriptions(
           registry
@@ -305,7 +329,7 @@ function registerListToolsEntry(
                 tools: tools.map((t) => ({
                   name: t.name,
                   description: t.description,
-                  ...(t.category === 'bots' || t.category === 'skills' || t.category === 'auth' ? {
+                  ...(t.category === 'settings' || t.category === 'bots' || t.category === 'skills' || t.category === 'auth' ? {
                     inputSchema: z.toJSONSchema(z.strictObject(registry.get(t.name)!.inputShape)),
                   } : {}),
                 })),
@@ -854,6 +878,10 @@ export interface XdtHelperMcpDeps {
    * inside them. Host resolves the Bot from the caller Session and authorizes every target.
    */
   botWorkbench?: BotWorkbenchCallbacks;
+  appSettings?: AppSettingsCallbacks;
+  piRuntime?: PiRuntimeCallbacks;
+  modelSettings?: AppModelsCallbacks;
+  appModels?: Pick<BotCapabilityCallbacks, 'models' | 'setDefaultModel'>;
   botCapabilities?: BotCapabilityCallbacks;
   /** Which computer runs a teammate, and moving it to another (cloud companions). */
   teammateHome?: TeammateHomeCallbacks;
@@ -921,7 +949,10 @@ export function createXdtHelperMcpServer(
     const defaultCategories = new Set(CATEGORY_ENUM.filter((category) => category !== 'bots'));
     // Remote Pi retains the regular helper surface, but a remote task cannot
     // check the local desktop updater; keep that unavailable tool undiscoverable.
-    if (context.remoteHostId) defaultCategories.delete('app_update');
+    if (context.remoteHostId) {
+      defaultCategories.delete('app_update');
+      defaultCategories.delete('settings');
+    }
     const allow = (categories: ReadonlySet<string>): HelperSurfaceAllow => ({
       categories,
     });
@@ -945,7 +976,13 @@ export function createXdtHelperMcpServer(
   // 'cindy' 类: 自省 (无 host 依赖, 始终注册)。
   registerGetCapabilitiesTool(registry, deps.runtimeCapabilities
     ? (query) => deps.runtimeCapabilities!(resolveLiziMcpSessionContext(sessionCtx), query)
-    : undefined, deps.productHelpDocs);
+    : undefined, deps.productHelpDocs, createControlReader({
+      registry,
+      allowedNames: async () => { const allow = await allowedSurface(); return new Set(registry.list().filter(tool => toolAllowed(allow, tool)).map(tool => tool.name)); },
+      local: () => !resolveLiziMcpSessionContext(sessionCtx).remoteHostId,
+      scopeKey: () => { const ctx = resolveLiziMcpSessionContext(sessionCtx); return `${ctx.sessionId ?? ''}:${ctx.getSessionContext?.()?.sessionInstanceId ?? ''}:${ctx.agentKind ?? ''}`; },
+      readRuntime: deps.runtimeCapabilities ? query => deps.runtimeCapabilities!(resolveLiziMcpSessionContext(sessionCtx), query) : undefined,
+    }));
   if (deps.appUpdate) {
     registerAppUpdateTools(registry, {
       getSessionContext: () => resolveLiziMcpSessionContext(sessionCtx),
@@ -1103,10 +1140,17 @@ export function createXdtHelperMcpServer(
       callbacks: deps.teammateHome,
     });
   }
+  if (deps.modelSettings) registerAppModelsTools(registry, deps.modelSettings, () => resolveLiziMcpSessionContext(sessionCtx));
+  if (deps.piRuntime) registerPiRuntimeTools(registry, deps.piRuntime, () => resolveLiziMcpSessionContext(sessionCtx));
+  if (deps.appSettings) registerAppSettingsTools(registry, deps.appSettings, () => resolveLiziMcpSessionContext(sessionCtx));
+  if (deps.appModels && !sessionCtx.remoteHostId) registerAppDefaultModelTools(registry, {
+    getSessionContext: () => resolveLiziMcpSessionContext(sessionCtx),
+    callbacks: deps.appModels, category: 'settings',
+  });
   if (deps.botCapabilities) {
     registerBotCapabilityTools(registry, {
       getSessionContext: () => resolveLiziMcpSessionContext(sessionCtx),
-      callbacks: deps.botCapabilities,
+      callbacks: deps.appModels && !sessionCtx.remoteHostId ? { ...deps.botCapabilities, models: undefined, setDefaultModel: undefined } : deps.botCapabilities,
     });
     registerTeammateSkillReader(registry, {
       getSessionContext: () => resolveLiziMcpSessionContext(sessionCtx),
