@@ -241,11 +241,40 @@ function normalize(raw: unknown, model: WorkLouderModel = 'codex-micro'): WorkLo
   };
 }
 
+function mergeOverrides({
+  patch,
+  next,
+  defaults,
+  overrides,
+}: {
+  patch: WorkLouderCodexSettingsPatch;
+  next: WorkLouderCodexSettings;
+  defaults: WorkLouderCodexSettings;
+  overrides: Record<string, unknown>;
+}): Record<string, unknown> {
+  const nextOverrides = { ...overrides };
+  for (const key of Object.keys(patch) as Array<keyof WorkLouderCodexSettings>) {
+    const normalizedValue = next[key];
+    if (JSON.stringify(normalizedValue) === JSON.stringify(defaults[key])) {
+      delete nextOverrides[String(key)];
+    } else {
+      nextOverrides[String(key)] = normalizedValue;
+    }
+  }
+  if ('customAgentKeys' in patch || 'customAgentKeysConfiguredSlots' in patch) {
+    // Consume the prefix count once a newer six/13-slot write wins. Otherwise
+    // its old value would be hidden by defaults and re-expand a later choice.
+    delete nextOverrides.customAgentKeysConfiguredCount;
+  }
+  return nextOverrides;
+}
+
 function createStore(model: WorkLouderModel) {
   return createOverrideSettingsFile<WorkLouderCodexSettings>({
     filePath: () => ownerScopedUserDataPath(settingsFileName(model)),
     defaults: () => createWorkLouderCodexDefaultSettings(model),
     normalize: (raw) => normalize(raw, model),
+    mergeOverrides,
     log,
     label: model === 'creator-micro-2' ? 'worklouder-creator-micro-2' : 'worklouder-codex',
     scopeKey: activeOwnerScopeKey,

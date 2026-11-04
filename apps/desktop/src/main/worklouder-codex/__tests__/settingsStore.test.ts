@@ -77,6 +77,36 @@ describe('Work Louder Codex settings store', () => {
     expect(next.customAgentKeys.slice(6)).toEqual(Array.from({ length: 7 }, () => null));
   });
 
+  it('consumes a legacy count when a newer six-slot update arrives', () => {
+    electronMock.userDataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'worklouder-settings-'));
+    const file = path.join(
+      electronMock.userDataDir,
+      'owners',
+      'owner-a',
+      'worklouder-codex-settings.json',
+    );
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+    fs.writeFileSync(
+      file,
+      JSON.stringify({
+        agentSource: 'custom',
+        customAgentKeys: Array.from({ length: 13 }, () => null),
+        customAgentKeysConfiguredCount: 13,
+      }),
+    );
+    expect(readWorkLouderCodexSettings().customAgentKeysConfiguredSlots).toHaveLength(13);
+
+    const next = writeWorkLouderCodexSettingsPatch('codex-micro', {
+      customAgentKeys: Array.from({ length: 6 }, () => null),
+      customAgentKeysConfiguredSlots: [0, 1, 2, 3, 4, 5],
+    });
+
+    expect(next.customAgentKeysConfiguredSlots).toEqual([0, 1, 2, 3, 4, 5]);
+    expect(JSON.parse(fs.readFileSync(file, 'utf-8'))).not.toHaveProperty(
+      'customAgentKeysConfiguredCount',
+    );
+  });
+
   it('preserves an explicitly configured thirteen-slot custom list', () => {
     const next = __testing.normalize({
       customAgentKeys: Array.from({ length: 13 }, () => null),
