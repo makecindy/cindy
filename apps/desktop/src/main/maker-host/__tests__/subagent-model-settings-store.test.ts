@@ -18,10 +18,10 @@ vi.mock('../logger-adapter.js', () => ({
   },
 }));
 
-vi.mock('../../appSessionState.js', () => ({
-  getActiveAppSession: () => ({ mode: 'cloud', dataOwnerId: 'test-owner', generation: 1 }),
-  ownerScopedUserDataPath: (...parts: string[]) =>
-    path.join('/tmp/cindy-subagent-model-test', ...parts),
+vi.mock('../../ownerContext.js', () => ({
+  ownerScopedPath: (...parts: string[]) => path.join('/tmp/cindy-subagent-model-test', ...parts),
+  ownerGeneration: () => 1,
+  hasCommittedOwner: () => true,
 }));
 
 import {

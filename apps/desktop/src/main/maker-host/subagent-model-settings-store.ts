@@ -15,7 +15,7 @@ import {
   createOverrideSettingsFile,
   type OverrideSettingsState,
 } from './override-settings-file.js';
-import { ownerScopedUserDataPath } from '../appSessionState.js';
+import { ownerScopedPath as ownerScopedUserDataPath } from '../ownerContext.js';
 
 const log = desktopMakerLogger.child('subagent-model-settings-store');
 
