@@ -12,7 +12,7 @@ import {
   usageExhaustionScope,
 } from '../botCandidateRecovery';
 import { isInterruptedTurnError, isContinuationOnlyAutoResumeReason } from '../interruptedTurnAutoResume';
-import { botModelRouteRuntimeKey, nextBotModelRoute, type BotModelRoute } from '../../../shared/botModelChain';
+import { botModelRouteIndex, botModelRouteRuntimeKey, nextBotModelRoute, type BotModelRoute } from '../../../shared/botModelChain';
 
 const source = readFileSync(new URL('../register.ts', import.meta.url), 'utf8');
 
@@ -324,7 +324,7 @@ describe('Bot candidate recovery', () => {
       expect(usageExhaustionScope({ codexErrorInfo: 'sessionBudgetExceeded' })).toBe('account');
       expect(usageExhaustionScope({ sdkError: 'billing_error' })).toBe('account');
       expect(usageExhaustionScope({ errorStatus: 402 })).toBe('account');
-      expect(usageExhaustionScope({ sdkError: 'rate_limit', usageResetAt: 1000 })).toBe('account');
+      expect(usageExhaustionScope({ sdkError: 'rate_limit', usageResetAt: 1000 })).toBe('bucket');
       expect(usageExhaustionScope({ message: 'budget_exceeded' })).toBe('account');
       expect(usageExhaustionScope({ message: 'exceeded_budget' })).toBe('account');
       expect(usageExhaustionScope({ message: 'insufficient balance' })).toBe('account');
@@ -412,10 +412,10 @@ describe('Bot candidate recovery', () => {
     it('preserves cross-harness bridge candidates on the same account during bucket exhaustion', () => {
       // Under ChatGPT subscriptions, native Codex uses app-server buckets, while Pi / Claude Code
       // bridges consume the WHAM webSnapshot pool (accountUsageLimit:44-63).
-      const codexCurrent = { harness: 'codex' as const, model: 'gpt-5.3-codex', providerId: 'account-openai' };
-      const piBridge = { harness: 'pi' as const, model: 'gpt-4o', providerId: 'account-openai' };
-      const claudeBridge = { harness: 'claude' as const, model: 'claude-3-5-sonnet', providerId: 'account-openai' };
-      const codexSameBucket = { harness: 'codex' as const, model: 'gpt-5.1-codex', providerId: 'account-openai' };
+      const codexCurrent = { harness: 'codex' as const, model: 'gpt-5.3-codex', providerId: 'account-openai', quotaPool: 'codex' as const };
+      const piBridge = { harness: 'pi' as const, model: 'gpt-4o', providerId: 'account-openai', quotaPool: 'wham' as const };
+      const claudeBridge = { harness: 'claude' as const, model: 'claude-3-5-sonnet', providerId: 'account-openai', quotaPool: 'wham' as const };
+      const codexSameBucket = { harness: 'codex' as const, model: 'gpt-5.1-codex', providerId: 'account-openai', quotaPool: 'codex' as const };
 
       // Bucket scope: cross-harness candidates remain eligible, same harness & bucket is excluded
       expect(isRouteExhaustedForCandidate(codexSameBucket, codexCurrent, 'bucket')).toBe(true);
@@ -427,6 +427,70 @@ describe('Bot candidate recovery', () => {
       expect(isRouteExhaustedForCandidate(piBridge, codexCurrent, 'account')).toBe(true);
       expect(isRouteExhaustedForCandidate(claudeBridge, codexCurrent, 'account')).toBe(true);
     });
+  });
+});
+
+describe('quota fallback review regressions (#8811)', () => {
+  it('uses admission reads and actual ChatGPT pools in the production fallback selector', async () => {
+    const query = {
+      from() { return this; }, innerJoin() { return this; }, where() { return this; },
+      async limit() { return [{ capabilitiesJson: '{}', role: 'canonical', remoteHostId: null }]; },
+    };
+    const readLimit = vi.fn(async (_kind: string, _provider: string, _model: string, purpose?: string) =>
+      purpose === 'admission' ? undefined : { limited: true });
+    let chain: BotModelRoute[] = [];
+    const deps = {
+      getDbClient: () => ({ drizzle: { select: () => query } }),
+      botProfileVersions: {}, botSessionLinks: {}, sessions: {},
+      and: () => null, eq: () => null, isNull: () => null, inArray: () => null,
+      readEffectiveBotModelChain: async () => chain,
+      getDesktopProviderService: () => ({ listProviders: async () => [] }), getActiveCatalog: () => ({}),
+      readAccountUsageLimit: readLimit, readCodexAccountUsageSnapshot: async () => null,
+      subscriptionFamilyOf: (_kind: string, provider: string) => provider.startsWith('chatgpt') ? 'codex' : null,
+      getSessionRuntimeControlSnapshot: () => ({ visitedRoutes: [] }),
+      nextBotModelRoute, botModelRouteIndex, botModelRouteRuntimeKey, isCandidateQuotaBlocked,
+    };
+    const selectorSource = source.slice(source.indexOf('  const readBotFallbackCandidate ='), source.indexOf('  const resolvePendingRuntimeAxisPatch ='));
+    const js = transpileModule(selectorSource + '\nreturn readBotFallbackCandidate;', {
+      compilerOptions: { target: ScriptTarget.ES2022 },
+    }).outputText;
+    const select = new Function(...Object.keys(deps), js)(...Object.values(deps));
+    const a = { harness: 'pi' as const, model: 'a', providerId: 'chatgpt-a', effort: '', fastMode: false as const };
+    const b = { ...a, harness: 'codex' as const, model: 'b', providerId: 'chatgpt-b' };
+    chain = [a, b];
+    const current = { agentKind: 'pi', model: 'a', providerId: 'chatgpt-a' };
+    expect((await select('s', current, 's', 'bucket')).candidate).toMatchObject({ providerId: 'chatgpt-b' });
+    expect(readLimit).toHaveBeenCalledWith('codex', 'chatgpt-b', 'b', 'admission');
+    chain = [a, { ...a, harness: 'claude' }, { ...b, providerId: 'chatgpt-a' }];
+    expect((await select('s', current, 's', 'bucket')).candidate).toMatchObject({ agentKind: 'codex', providerId: 'chatgpt-a' });
+  });
+
+  it('keeps a rejected Claude model window bucket-scoped when another model is free', () => {
+    const scope = usageExhaustionScope({ sdkError: 'rate_limit', usageResetAt: 1_800_000_000_000 });
+    expect(scope).toBe('bucket');
+    const current = { harness: 'claude', model: 'claude-opus-5-5', providerId: 'anthropic' };
+    expect(isCandidateQuotaBlocked({ ...current, model: 'claude-sonnet-5-5' }, current, scope, { limited: false })).toBe(false);
+  });
+
+  it('keeps an explicit balance error account-wide across harnesses', () => {
+    const scope = usageExhaustionScope({ message: 'insufficient_balance_error' });
+    expect(scope).toBe('account');
+    expect(usageExhaustionScope({ message: 'insufficient_balance_error', sdkError: 'rate_limit', usageResetAt: 1_800_000_000_000 })).toBe('account');
+    const current = { harness: 'pi', model: 'a', providerId: 'same-account' };
+    expect(isRouteExhaustedForCandidate({ ...current, harness: 'claude' }, current, scope)).toBe(true);
+  });
+
+  it('does not revive an exhausted Spark bucket via an implicit provider alias', () => {
+    const current = { harness: 'codex', model: 'gpt-5.3-codex-spark', providerId: null };
+    const candidate = { ...current, providerId: 'openai' };
+    expect(isCandidateQuotaBlocked(candidate, current, 'bucket', { limited: true }, { codex: { limitId: 'codex' } })).toBe(true);
+  });
+
+  it('keeps Pi and Claude on the same WHAM pool when its snapshot is unavailable', () => {
+    const current = { harness: 'pi', model: 'a', providerId: 'chatgpt-work', quotaPool: 'wham' as const };
+    const candidate = { ...current, harness: 'claude' };
+    expect(isRouteExhaustedForCandidate(candidate, current, 'bucket')).toBe(true);
+    expect(isRouteExhaustedForCandidate({ ...candidate, harness: 'codex', quotaPool: 'codex' }, current, 'bucket')).toBe(false);
   });
 });
 

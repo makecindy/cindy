@@ -20,7 +20,6 @@ export function usageExhaustionScope(signals: InterruptedTurnErrorSignals): Usag
   // - Explicit account/budget-level exhaustion: every candidate on the same account fails the same way.
   if (signals.codexErrorInfo === 'sessionBudgetExceeded' || signals.sdkError === 'billing_error') return 'account';
   if (signals.errorStatus === 402) return 'account';
-  if (signals.sdkError === 'rate_limit' && typeof signals.usageResetAt === 'number') return 'account';
   if (signals.sdkError && ['invalid_request', 'max_output_tokens'].includes(signals.sdkError)) return null;
 
   // Text is only the fallback for untagged envelopes:
@@ -31,12 +30,16 @@ export function usageExhaustionScope(signals: InterruptedTurnErrorSignals): Usag
   const isAccountWideText =
     /\b(?:exceeded[-_]?budget|budget[-_]?exceeded)\b/i.test(message) ||
     /\b(?:account|session)\s+budget\b.{0,16}\b(?:exhausted|exceeded)\b/i.test(message) ||
+    /\binsufficient[_ -]+(?:balance|credits?|funds)(?:[_ -]error)?\b/i.test(message) ||
     /\binsufficient.{0,12}\b(?:balance|credit|funds)\b/i.test(message) ||
     /\bspend(?:ing)?[-_ ]?cap\b/i.test(message) ||
     /余额不足|欠费/i.test(message) ||
     (untagged && /\byou['’]ve hit your session limit\b/i.test(message));
 
   if (isAccountWideText) return 'account';
+
+  // A rejected Claude window may be model-specific (e.g. Opus weekly), not account-wide.
+  if (signals.sdkError === 'rate_limit' && Number.isFinite(signals.usageResetAt)) return 'bucket';
 
   // Ambiguous quota/usage limit text (model-level or pool-level limits, e.g. "quota exceeded"):
   if (matchesDeterministicUsageExhaustionText(message)) {
@@ -60,6 +63,8 @@ export type AccountRoute = {
   model?: string | null;
   providerId?: string | null;
   agentDeviceId?: string | null;
+  /** Host-resolved ChatGPT pool; unknown providers do not imply independent pools. */
+  quotaPool?: 'codex' | 'wham' | null;
 };
 
 /** Resolve implicit aliases (e.g. Pi null / xd / cindy gateway; Codex null / openai under ChatGPT) to their canonical provider identity. */
@@ -143,10 +148,10 @@ export function areCodexModelsInSameQuotaBucket(
 
 /**
  * Determine if a candidate route is exhausted given the failure scope of the current route.
- * - Account-wide exhaustion (billing, session budget, 402, Claude subscription rate limit):
+ * - Account-wide exhaustion (billing, session budget, 402):
  *   every candidate on the same account/device is exhausted.
  * - Bucket-level exhaustion (Codex usageLimitExceeded):
- *   1. Cross-harness routes on the same account (e.g. Codex app-server vs Pi / Claude Code WHAM bridge)
+ *   1. Host-resolved native Codex vs Pi / Claude Code WHAM routes on the same account
  *      use independent quota pools (accountUsageLimit:44-63), so the bridge candidate remains eligible.
  *   2. Same-harness routes on the same Codex account running in an independent quota bucket (e.g. Spark)
  *      are preserved; only candidates sharing the same bucket are excluded.
@@ -162,7 +167,8 @@ export function isRouteExhaustedForCandidate(
   if (!isSameAccountRoute(candidate, current, resolveDefaultProvider)) return false;
   if (scope === 'account') return true;
   if (candidate.harness !== current.harness) {
-    return false;
+    // Native Codex and WHAM are independent; Pi and Claude Code share WHAM.
+    return !(candidate.quotaPool && current.quotaPool && candidate.quotaPool !== current.quotaPool);
   }
   if (candidate.harness === 'codex' && current.harness === 'codex') {
     return areCodexModelsInSameQuotaBucket(current.model, candidate.model, buckets);
@@ -204,7 +210,7 @@ export function isCandidateQuotaBlocked(
       const isSpark = (m: string | null | undefined) => Boolean(m && m.toLowerCase().includes('spark'));
       if (candidate.harness === 'codex' && isSpark(candidate.model)) {
         const isSameAccount = isSameAccountRoute(candidate, current, resolveDefaultProvider);
-        if (isSameAccount) {
+        if (isSameAccount && !isRouteExhaustedForCandidate(candidate, current, scope, buckets, resolveDefaultProvider)) {
           const targetBuckets = candidateBuckets ?? buckets;
           const hasDedicatedSparkBucket = Boolean(
             targetBuckets && Object.values(targetBuckets).some((b) => isSpark(b.limitName) || isSpark(b.limitId)),

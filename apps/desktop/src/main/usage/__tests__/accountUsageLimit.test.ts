@@ -307,6 +307,14 @@ describe('subscriptionFamilyOf / readAccountUsageLimit', () => {
     expect(mocks.codex).toHaveBeenCalledWith('codex-work');
   });
 
+  it('does not use ChatGPT windows to veto an untried credit-backed fallback', async () => {
+    mocks.providers = [{ id: 'codex-work', auth: { native: 'codex' } }];
+    mocks.codex.mockResolvedValue({ primary: { usedPercent: 100, resetsAt: RESET_5H } });
+    await expect(readAccountUsageLimit('codex', 'codex-work', 'gpt-5.5', 'admission')).resolves.toBeUndefined();
+    expect(mocks.codex).not.toHaveBeenCalled();
+    await expect(readAccountUsageLimit('codex', 'codex-work', 'gpt-5.5')).resolves.toMatchObject({ limited: true });
+  });
+
   it('reads independent SuperGrok accounts through the account reader', async () => {
     mocks.providers = [{ id: 'xai-2', auth: { native: 'xai' } }];
     mocks.accountUsage.mockResolvedValue({

@@ -17673,7 +17673,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         const key = botModelRouteRuntimeKey(candidate);
         const providerId = resolveDefaultProvider(candidate);
         liveLimits.set(key, await readAccountUsageLimit(
-          toAgentKind(candidate.harness), providerId, candidate.model,
+          toAgentKind(candidate.harness), providerId, candidate.model, 'admission',
         ).catch(() => undefined));
         if (candidate.harness === 'codex' && providerId) {
           const snap = await readCodexAccountUsageSnapshot(providerId).catch(() => null);
@@ -17681,9 +17681,15 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         }
       }));
     }
+    const withQuotaPool = (route: AccountRoute): AccountRoute => ({
+      ...route,
+      quotaPool: subscriptionFamilyOf(toAgentKind(route.harness), resolveDefaultProvider(route)) === 'codex'
+        ? route.harness === 'codex' ? 'codex' : 'wham'
+        : null,
+    });
     const isBlocked = (candidate: BotModelRoute) => isCandidateQuotaBlocked(
-      candidate,
-      currentRoute,
+      withQuotaPool(candidate),
+      withQuotaPool(currentRoute),
       scope,
       liveLimits.get(botModelRouteRuntimeKey(candidate)),
       codexBuckets,

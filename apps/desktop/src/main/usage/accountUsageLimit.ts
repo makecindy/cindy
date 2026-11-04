@@ -168,14 +168,18 @@ export function sessionUsesOtherMachineAccount(
 }
 
 /**
- * @returns `undefined` = 不是订阅家族（调用方另找来源）；`null` = 是订阅家族但暂无可用快照。
+ * @returns `undefined` = 非订阅来源或窗口不能判定请求准入；`null` = 订阅家族暂无可用快照。
  */
 export async function readAccountUsageLimit(
   agentKind: string,
   providerId: string | null | undefined,
   modelId?: string | null,
+  purpose: 'reset' | 'admission' = 'reset',
 ): Promise<AccountUsageLimit | null | undefined> {
   const family = subscriptionFamilyOf(agentKind, providerId);
+  // ChatGPT windows do not establish credit-backed request admission. Actual
+  // rejections still drive the candidate failure scope and reset-time lookup.
+  if (purpose === 'admission' && family === 'codex') return undefined;
   switch (family) {
     case 'codex':
       return codexAccountUsageLimit(await readCodexAccountUsageSnapshot(providerId ?? undefined), {
