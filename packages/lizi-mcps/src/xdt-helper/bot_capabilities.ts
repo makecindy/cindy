@@ -6,9 +6,9 @@ import { errorPayload, okPayload } from "./_payload.js";
 export interface BotCapabilityCallbacks {
   models?(params: { callerSessionId: string }): Promise<ControlResult<{
     current: AppDefaultModelRoute | null;
-    available: { id: string; route: AppDefaultModelRoute; efforts: string[]; supportsFastMode?: boolean }[];
+    available: { id: string; route: AppDefaultModelRoute; efforts: string[]; supportsFastMode?: boolean; supportsUltrafastMode?: boolean }[];
   }, string>>;
-  setDefaultModel?(params: { callerSessionId: string; id: string; effort?: string }): Promise<ControlResult<{
+  setDefaultModel?(params: { callerSessionId: string; id: string; effort?: string; fastMode?: boolean | 'ultrafast' }): Promise<ControlResult<{
     current: AppDefaultModelRoute;
   }, string>>;
   /** Host resolves the caller; tools never accept another Bot's id or raw config. */
@@ -123,28 +123,7 @@ export function registerBotCapabilityTools(
     cindyAvailable?: boolean;
   },
 ): void {
-  if (deps.callbacks.models) registry.register({
-    name: 'get_app_default_model', category: 'bots',
-    description: '读取当前用户在应用中选择的默认模型，以及已连接、已启用且引擎可用的型号。修改默认模型或为 start_session_task 单独选模前先读此表；查询不会更改设置。将 available 中的 id 用于 model_selection，它同时绑定型号、来源账号与引擎；不要猜型号或启用用户关闭的型号。伙伴显式配置的模型链可能与此默认值不同。',
-    inputShape: {},
-    handler: async () => {
-      const callerSessionId = deps.getSessionContext().sessionId;
-      if (!callerSessionId) return errorPayload('NOT_A_BOT_SESSION', '当前调用未绑定伙伴任务');
-      const result = await deps.callbacks.models!({ callerSessionId });
-      return result.ok ? okPayload({ current: result.current, available: result.available }) : errorPayload(result.errorCode, result.message);
-    },
-  });
-  if (deps.callbacks.setDefaultModel) registry.register({
-    name: 'set_app_default_model', category: 'bots',
-    description: '用户明确要求更换应用默认模型时，使用 get_app_default_model 返回的可用型号 id 保存并读回确认。作用于以后新建任务及跟随应用默认的伙伴；不覆盖已有任务、伙伴单独配置的模型或全局伙伴模型链。仅换当前伙伴时不要改这个全局默认值。失败后重新查询，不得声称已修改。',
-    inputShape: { id: z.string().min(1).max(2048), effort: z.string().max(64).optional() },
-    handler: async (input) => {
-      const callerSessionId = deps.getSessionContext().sessionId;
-      if (!callerSessionId) return errorPayload('NOT_A_BOT_SESSION', '当前调用未绑定伙伴任务');
-      const result = await deps.callbacks.setDefaultModel!({ ...input, callerSessionId });
-      return result.ok ? okPayload({ current: result.current, effective: 'new-tasks-and-following-bots', overridesPreserved: true }) : errorPayload(result.errorCode, result.message);
-    },
-  });
+  registerAppDefaultModelTools(registry, deps);
   if (deps.callbacks.inspect) registry.register({
     name: "get_teammate_state",
     category: "bots",
@@ -219,4 +198,36 @@ export function registerBotCapabilityTools(
     ['find_bot_capabilities', 'find_teammate_capabilities'],
     ['set_bot_capability', 'set_teammate_capability'],
   ]) if (registry.has(name)) registry.registerAlias(legacy, name);
+}
+
+/** The same default-model contract is available to ordinary tasks and teammates. */
+export function registerAppDefaultModelTools(
+  registry: XdtHelperToolRegistry,
+  deps: { getSessionContext: () => LiziMcpSessionContext;
+    callbacks: Pick<BotCapabilityCallbacks, 'models' | 'setDefaultModel'>;
+    category?: 'settings' | 'bots'; },
+): void {
+  if (deps.callbacks.models) registry.register({
+    name: 'get_app_default_model', category: deps.category ?? 'bots',
+    description: '读取当前用户在应用中选择的默认模型，以及已连接、已启用且引擎可用的型号。修改默认模型或为 start_session_task 单独选模前先读此表；查询不会更改设置。将 available 中的 id 用于 model_selection，它同时绑定型号、来源账号与引擎；不要猜型号或启用用户关闭的型号。伙伴显式配置的模型链可能与此默认值不同。',
+    inputShape: {},
+    handler: async () => {
+      const callerSessionId = deps.getSessionContext().sessionId;
+      if (!callerSessionId) return errorPayload('NO_SESSION_CONTEXT', '当前调用未绑定任务');
+      const result = await deps.callbacks.models!({ callerSessionId });
+      return result.ok ? okPayload({ current: result.current, available: result.available }) : errorPayload(result.errorCode, result.message);
+    },
+  });
+  if (deps.callbacks.setDefaultModel) registry.register({
+    name: 'set_app_default_model', category: deps.category ?? 'bots',
+    description: '用户明确要求更换应用默认模型时，使用 get_app_default_model 返回的可用型号 id 保存并读回确认。作用于以后新建任务及跟随应用默认的伙伴；不覆盖已有任务、伙伴单独配置的模型或全局伙伴模型链。仅换当前伙伴时不要改这个全局默认值。失败后重新查询，不得声称已修改。',
+    inputShape: { id: z.string().min(1).max(2048), effort: z.string().max(64).optional(),
+      fastMode: z.union([z.boolean(), z.literal('ultrafast')]).optional().describe('只有所选型号声明支持时可开启；省略保留该型号偏好。') },
+    handler: async (input) => {
+      const callerSessionId = deps.getSessionContext().sessionId;
+      if (!callerSessionId) return errorPayload('NO_SESSION_CONTEXT', '当前调用未绑定任务');
+      const result = await deps.callbacks.setDefaultModel!({ ...input, callerSessionId });
+      return result.ok ? okPayload({ current: result.current, effective: 'new-tasks-and-following-bots', overridesPreserved: true }) : errorPayload(result.errorCode, result.message);
+    },
+  });
 }

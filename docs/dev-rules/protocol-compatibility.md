@@ -1,5 +1,13 @@
 # 跨端协议兼容
 
+## 群内能力提示（非执行终态）
+
+复用现有通用 card 消息合同，新增 `cindy.capability-notice` / `schemaRevision: 1`：data 只带固定 code（`GROUP_AUTHORIZATION_REQUIRED`、`GROUP_AUTHORIZATION_UNAVAILABLE`、`ATTACHMENTS_UNAVAILABLE`），fallback 为执行电脑本地化的完整可读提示。以伙伴 actor 发往原主群或话题；同执行 ID、epoch、类别复用同一稳定幂等 ID，并按既有消息 POST 合同放入 `operationId`（不发送本地 `clientId` 字段）；投递重试不创建执行、不结算模型轮次。
+
+Desktop 和 Mobile 共用 shared parser，仅认可未删除的伙伴作者消息、单个完整 card、已知版本及白名单类别；普通人或未知／混合内容继续普通消息展示。Desktop 发往手机的既有消息视图可选追加 `capabilityNoticeCode`，手机 Remote Resource 解析仅保留未删除的伙伴 notice 上的白名单类别，content 保留 fallback，旧手机忽略新字段仍可读；手机直连自行投影，新手机连旧电脑仍用旧内容。旧桌面／手机直连把未知卡片显示为伙伴消息的 fallback，不丢失提示。
+
+不改服务端接口、权限档、原生配置、schema 或数据库 migration。提示只有原因，没有原始工具参数、路径或错误正文。回滚客户端后沿用 fallback，不修改已有历史。
+
 ## 群聊代答的工作记录兼容（2026-11-03）
 
 已发布 Desktop 在普通和个人代答的完成请求中附带 `cindy.work-record` revision 1，
@@ -2112,6 +2120,23 @@ Cindy 托管 Skill（2026-11-03）：内置 Skill 与插件带的 Skill 以任�
 旧 G 忽略新增字段；旧 O 缺字段时新 G 沿用原 30 分钟合同，M 仍为最终许可闸门。
 字段存在但无效时拒绝把它用作任务授权；此增量不更改 `maker:remote-agent:v1` 或服务端请求格式。
 
+M 的委托核权只调整本地发送调度，继续使用原 `POST /provider-shares/delegations/check` 与鉴权。
+首次／续权安装委托和后台复核共用账号作用域、端点隔离的串行查询门；只合并同一分享、成员、
+G、M 与授权代次的在途查询，完成后不缓存授权结果。物理请求之间随机间隔 750–1250ms；
+后台按 peer 合并任务，首次复核分散在 30–60 秒，后续约每 60 秒到期、串行发送，积压可能推迟。
+队列最多 128 项，从入队起最多等待／核验 15 秒；同一取消信号覆盖 HTTP、登录刷新等待及重试。
+到期取消请求并释放查询占用，不能在刷新完成后补发失效查询；共享登录刷新本身不被取消。
+
+HTTP 429 的 `Retry-After`（秒数或 HTTP-date）仅作为 Main 内存中的重试期限保留；
+旧服务端没有该头时按连续 429 退避 60/120/240/300 秒，成功重置。当前排队核权立即失败，
+冷却期不继续发送其他 peer 的查询，不自动重放首次授权。账号／端点变化或 host 停止时
+取消旧队列与请求，丢弃迟到结果；同账号、同端点重建 host 仍保留查询尾部、间隔及限流退避，
+不能借重建穿透预算。不重启 relay、不重放任务、不改变管理 API 或普通远控的发送。
+核权失败不作为新的授权，也不延长原许可；明确 `active=false` 仍按对应任务 nonce 撤销。
+这不提供多执行机的全局协调，也不拆分旧服务端的查询／管理限流桶，无法保证消除所有 429。
+实现与回归见 `providerShareDelegationChecks.ts`、`providerShareDelegationChecks.test.ts` 和
+`serverApiClient.test.ts`；服务端、自建 relay 与旧客户端无需同步升级。
+
 供应商退出期间的恢复（2026-10-29）沿用 v1 与既有字符串 `closed.reason`，不加必填字段、
 能力位或 relay 接口。新 host 的空闲 run 使用旧控制端已认识的 `ended + idleReclaimed`，旧端静默
 收尾、新端保留本机部分；忙碌 run 用 `provider-restarting`，旧端仍走原有错误恢复，不劣于原来的
@@ -2526,6 +2551,18 @@ Codex 原生图片恢复（#6412）在既有 `maker:remote-agent:v1` 上追加�
 桌面控制另一台电脑上的伙伴时，设置页的读写经现有 `maker:remote-resources:invoke`，不新增 device-link 通道，也不改 allowlist。契约正本是
 `apps/desktop/src/shared/botRemoteSettings.ts`，字段只追加：
 
+2026-11-03 修正主模型远程来源的保存：`profile.update` / `profile.acceptModelSelection`
+接收可选的 `capabilities.agentDeviceId`（合法位置字符串或 null），与模型链首项镜像一致；
+回到本机或恢复本机默认时明确清空，备用项保留各自位置。此字段不授予远程执行权限，
+保存仍经原有模型路由校验；同账号授权、伙伴可见性及 `permissions` 拒绝规则不变。
+旧控制端的请求继续有效；新控制端在提交完整模型链时省去顶层派生位置字段，链内各项的
+位置原样保留，因此旧主机的严格白名单也能接收切换远程来源、切回本机和恢复默认的请求。
+新主机从模型链生成或清空自己的位置镜像；不可丢弃链内位置而把远程选择改成本机来源。
+只有未更新的控制端仍发送顶层字段时，才需更新伙伴所在电脑以接收该字段。
+无新帧、通道或 relay 行为，官方与自建中转无需适配。
+回归见 `remoteBotSettingsTarget.test.ts`（旧主机字段边界）、`botRemoteSettingsHost.test.ts`、
+`botSettings.test.tsx` 与 `botModelChain.test.ts`。
+
 - **声明**：主机在 `teammates` 集合描述里增加集合动作 `{ id: "management:settings" }`（手机只检查 `open-create`，不显示该动作）。
 - **请求**：`collectionId: "teammates"`、`actionId: "management:settings"`、`input: { v: 1, op, args? }`；需要伙伴的操作带
   `resourceRef: { collectionId: "teammates", kind: "bot", id }`，主机级操作（`caps`、`models.default`、`autonomy.*`、`routines.sources`、
@@ -2624,6 +2661,14 @@ B 上的 Worker 是一条普通任务，`sessions.orca_remote_lead`(migration 01
   任务头标注「来自 X 的协同」，结束后显示「协同已结束」。
 
 ## 供应商组：同账号直连(P2a)
+
+中继断线连续性：Desktop 只对已经认证、可靠握手完成且健康的同账号直连数据通道启用
+最长 30 分钟的信令失联保留，组内请求、结果与订阅推送继续使用原可靠 stream / seq。
+不新增 wire 字段、能力位、离线握手或服务端授权；逐请求权限与显式断开、撤权、停止和
+到期清理不变。重复离线通知或流量不续期；两端都需更新，旧端与 Mobile 仍可能关闭通道。
+供应商分享既有短期许可不因此延长。本机 relay 恢复后若直连随后故障，可使用已恢复的 relay；
+对端仍明确离线时不能误判其可达。故障半径和验证入口见
+[`remote-and-mobile-adaptation.md`](remote-and-mobile-adaptation.md)「直连优先、中继兜底」。
 
 跨区组员恢复（2026-10-26）：控制端 Main 仅在同账号 `provider-group:remote` 的有效 `view` / `pick`
 回包或 `manage-group` 组视图引用分享时，恢复本机缺失的区域标记并通过既有 `/provider-shares/x/session` 核验成员关系。
@@ -4634,6 +4679,42 @@ Chat Server 请求复用既有消息 `content` 的 media 块及 `threadRootId`�
 无数据库迁移、权限扩大或服务端改动；回退客户端只收起电脑话题的附件输入，已有媒体消息仍可读取。
 回归入口：`ChatServerControls.test.tsx`、`chatServer.test.ts`。
 
+## PR 状态的合并就绪字段
+
+`PrStatusResult`（`git-context:pr-status`，含 device-link 远程会话）成功结果新增可选 `mergeState`、`reviewDecision`，
+取自同一次 GraphQL 汇总查询的 `mergeStateStatus` / `reviewDecision`，不增加请求。GitHub 插件 PR 卡片的状态位
+（`data-ghost-pr-status`）用它显示「可以合并 / 有冲突 / 等待审批」。旧控制端忽略字段；新控制端连接旧宿主时字段缺失，
+卡片省掉这一项而不是猜测。不改握手、白名单、relay 或服务端，无数据库迁移。
+回归入口：`gitContextPrStatusService.test.ts`、`ghostCardPrStatus.test.ts`。
+
+## 插件卡片的手机原生呈现（`plugin-card-rich`）
+
+手机读取 `plugin-results` 卡片时在 `client.primitives` 里多声明 `plugin-card-rich`。只有声明了的手机，宿主才在
+`plugin-card-actions` 的 `data` 里附带：动作的 `primary` / `toggle`、`live` 状态名，以及 `prStatus`。`prStatus`
+包含状态位、插件快照，并在能查到时附上与标题栏同源的 `PrStatusResult`。这些部分的文字同时移出文本块。
+指向本任务某个 GitHub PR 页面的链接动作，能查到状态时再带可选 `prState`（`open` / `draft` / `merged` / `closed`），
+手机据此在卡片标题前画 App 自己的 PR 状态图标；查不到就不带，手机按中性图标显示，旧手机忽略该字段。
+带名字的按钮里面的文字不进文本块；手机把文本块首行画成卡片标题，链接与标题同名时点标题打开链接。
+旧手机不声明，照旧收纯文字投影；新手机连旧宿主时收不到这些字段，回到纯文字和普通按钮。
+文本块对声明了 `card.externalLinks` 的插件不再插入链接地址，这对新旧手机一致，链接仍作为可点的动作下发。
+ghost_call 结果新增可选布尔 `xdt_card_turn_end`（MCP 层与手机工具投影同步放行）。手机据此把卡片排到本轮回复之后；
+旧手机忽略。不改握手、relay、服务端或数据库。回归入口：`cardRemoteResource.test.ts`、`messageRender.test.ts`、
+`pluginCardActions.test.tsx`。
+
+## 插件卡片的模型下拉框（`data-ghost-model-select`）
+
+卡片净化器在有 `data-ghost-action` 的 `button` 上放行 `data-ghost-model-select`，值只留合格的
+`PluginModelSelection` JSON，可再带 `agentDeviceId`（同账号其他电脑的 deviceId 或分享供应商的 `share:<id>`，不收 `local`）。renderer 的 `ghosts:card:action` 调用新增可选第 6 个参数 `modelSelection`；
+主机核对该动作在已存卡片里确实声明了下拉框、模型当前可用（本机模型与 `cindy.pickModel` 同一判据；远程模型须是当前提供的位置、且在该位置可远程调用的目录里）后，在插件收到的
+`card-action` 事件里多带 `modelSelection`。旧插件忽略该字段；旧客户端会丢掉这个属性、照常派发动作，插件按
+`cindy.pickModel` 兜底。手机与 device-link 路径不带该字段，不改握手、relay、服务端或数据库。
+回归入口：`cardSanitizer.test.ts`、`cardActionDispatch.test.ts`。
+
+## 插件卡片的 App 图标位（`data-ghost-icon`）
+
+卡片净化器在 `span` / `div` 上放行 `data-ghost-icon`，值只认 `GHOST_CARD_ICONS` 登记的名字（目前是 `settings`）。
+renderer 把这个位置的内容换成 App 里同名的 Lucide 图标；旧客户端会丢掉属性，照常显示插件写在里面的兜底图形。
+只影响电脑端的卡片画面，不改手机投影、握手、relay、服务端或数据库。回归入口：`cardSanitizer.test.ts`。
 ## 插件对话文件交接（`handoff:`）
 
 工具参数表把 `cindy_handoff_files` 声明为数组（`{"type":"array"}`）才启用，同名的其它形态参数不受影响；未声明的工具与旧插件行为逐字不变（非媒体仍报改用 dir）。

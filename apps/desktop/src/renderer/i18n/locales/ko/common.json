@@ -1907,6 +1907,8 @@
       "add": {
         "title": "원격 머신 추가",
         "alias": "별칭",
+        "aliasHint": "영문자, 숫자, . _ @ : - 기호로 1~128자를 입력하세요. 한글 등의 이름은 표시 이름에 입력하세요.",
+        "aliasInvalid": "별칭에 지원하지 않는 문자가 있거나 128자를 초과했습니다. 위 규칙에 맞게 수정하세요.",
         "displayName": "표시 이름",
         "displayNamePlaceholder": "선택 사항, Cindy에서만 표시",
         "hostname": "호스트명",
@@ -10218,6 +10220,7 @@
       "continueEditing": "계속 편집"
     },
     "profileSaveFailed": "동료 설정을 저장하지 못했습니다. 변경 사항은 적용되지 않았습니다.",
+    "profileSaveOffline": "동료가 있는 컴퓨터에 연결할 수 없습니다. 다시 연결한 후 저장해 주세요.",
     "modelLabel": "모델",
     "modelUnavailable": "{{model}}(현재 사용할 수 없음)",
     "codexAutomaticCompact": "Codex 파트너는 스스로 맥락을 압축하고 /new 를 써도 지금 작업이 유지됩니다. 정말 새로 시작해야 할 때만 새 작업을 여세요.",
@@ -10548,6 +10551,11 @@
           "NETWORK_ERROR": "{{name}}이(가) 답변하지 못했습니다. 네트워크 연결에 실패했습니다.\n네트워크나 프록시를 확인한 뒤 메시지를 다시 보내세요.",
           "RUNTIME_TIMEOUT": "{{name}}의 답변 시간이 초과되었습니다.\n메시지를 다시 보내거나 다른 사용 가능한 모델을 선택하세요.",
           "RUNTIME_ERROR": "{{name}}이(가) 이번에는 답변하지 못했습니다.\n메시지를 다시 보내세요. 계속 실패하면 로그를 확인하고 문제를 신고하세요."
+        },
+        "capability": {
+          "GROUP_AUTHORIZATION_REQUIRED": "{{name}}의 도구가 실행되지 않았습니다. 그룹 권한이 만료되었거나 이 작업을 허용하지 않습니다. 동료 소유자가 이 그룹에서 다시 요청해 주세요.",
+          "GROUP_AUTHORIZATION_UNAVAILABLE": "{{name}}의 그룹 권한을 확인할 수 없어 도구가 실행되지 않았습니다. 연결이 복구되면 다시 시도해 주세요.",
+          "ATTACHMENTS_UNAVAILABLE": "다운로드 실패 또는 첨부 개수 제한으로 일부 첨부 파일이 {{name}}에게 전달되지 않았습니다. 이번 요청에 필요한 파일을 다시 보내 주세요."
         }
       },
       "settings": {
@@ -10990,7 +10998,7 @@
         "items": {
           "tasks": {
             "title": "작업",
-            "body": "언제 백그라운드 작업을 시작할지 판단하고, 직접 시작한 작업을 제어해 결과를 채팅으로 가져옵니다. 다른 컴퓨터에서도 일할 수 있습니다."
+            "body": "제어할 수 있는 작업과 사용 가능한 컴퓨터를 파악하고, 요청에 따라 작업을 배정하고 진행 상황과 결과를 전달합니다. 다른 컴퓨터에서 작업하기 전에 지원 범위를 확인합니다."
           },
           "teammates": {
             "title": "다른 팀원",
@@ -11005,8 +11013,8 @@
             "body": "취향과 배경을 기억하고, 쓰기 전에 확인하며 바뀌면 업데이트합니다."
           },
           "self": {
-            "title": "자기 이해",
-            "body": "자기 기능을 알고 켜고 끄는 일을 돕습니다. Telegram 추가, MCP 설정, 플러그인 같은 Cindy 사용법은 먼저 도움말을 확인합니다."
+            "title": "Cindy 이해 및 설정",
+            "body": "Cindy의 기능과 사용법을 알고, 요청에 따라 설정을 확인하거나 변경합니다. 직접 입력하거나 확인해야 할 때는 작업 안에서 요청합니다."
           }
         }
       },
@@ -13691,7 +13699,7 @@
       "REMOTE_PROVIDER_UPDATING": "이 모델 제공자의 자격 증명을 업데이트하는 중입니다. 잠시 후 다시 시도하세요.",
       "REMOTE_WORKDIR_UNAVAILABLE": "원격 작업 디렉터리를 지금 사용할 수 없습니다. 그 컴퓨터에 폴더가 아직 있는지 확인한 뒤 다시 시도하세요.",
       "REMOTE_OPTIMISTIC_SESSION_STATE_UNAVAILABLE": "컴퓨터에서 이 메시지가 이미 전송됐는지 아직 확인할 수 없습니다. 잠시 후 다시 시도하고, 같은 메시지를 중복으로 보내지 마세요.",
-      "REMOTE_AGENT_UNAVAILABLE": "Agent를 실행하는 컴퓨터에 연결할 수 없습니다. 그 컴퓨터가 온라인이고 원격 제어를 허용하는지 확인한 뒤 다시 시도하세요.",
+      "REMOTE_AGENT_UNAVAILABLE": "Agent를 실행하는 컴퓨터와의 연결이 끊어졌습니다. 다시 시도하세요. 계속 반복되면 그 컴퓨터가 온라인이고 원격 제어를 허용하는지 확인하세요.",
       "REMOTE_AGENT_PEER_TOO_OLD": "상대 컴퓨터의 Cindy 버전이 오래되어 이 작업을 지원하지 않습니다. 먼저 그 컴퓨터에서 Cindy를 업데이트하세요.",
       "REMOTE_AGENT_EXPIRED": "이 세션은 Agent를 실행하는 컴퓨터에서 이미 종료되었습니다. 다시 보내 주세요.",
       "REMOTE_AGENT_NOT_FOUND": "이 세션은 Agent를 실행하는 컴퓨터에서 이미 종료되었습니다. 다시 보내 주세요.",
@@ -13800,6 +13808,18 @@
       "cancelTitle": "대기를 중단하고 이 메시지를 삭제"
     },
     "ghostCall": {
+      "prStatus": {
+        "threadsNone": "처리할 리뷰 의견 없음",
+        "mergeReady": "병합 가능",
+        "mergeConflict": "충돌 있음",
+        "mergeBehind": "기준 브랜치 동기화 필요",
+        "mergeApproval": "승인 대기 중",
+        "mergeChanges": "수정 요청됨",
+        "mergeWaiting": "병합 대기 중",
+        "merged": "병합됨",
+        "closed": "닫힘",
+        "draft": "초안"
+      },
       "verb": "플러그인 호출",
       "cardRunning": "플러그인이 그리는 중",
       "cardDone": "완료",
@@ -13813,6 +13833,7 @@
       "collapseFields": "접기",
       "formSyncFailed": "카드 변경 사항이 동기화되지 않았습니다. 연결을 확인한 후 편집을 계속하세요. 메시지는 전송되지 않았습니다.",
       "linkOpenFailed": "링크를 열지 못했습니다",
+      "modelSelectFailed": "모델을 바꾸지 못했습니다. 다시 선택하세요.",
       "mailPreview": "메일 미리보기",
       "mailEnlarge": "확대 보기",
       "mailInsertImage": "본문에 삽입",
@@ -15958,7 +15979,17 @@
   },
   "commandPalette": {
     "viewSkillDetails": "스킬 상세 보기",
-    "projectSkillNotLoaded": "현재 Pi 작업에는 이 프로젝트 Skill이 아직 로드되지 않았습니다. 새 작업에서는 자동으로 로드를 시도합니다."
+    "projectSkillNotLoaded": "현재 Pi 작업에는 이 프로젝트 Skill이 아직 로드되지 않았습니다. 새 작업에서는 자동으로 로드를 시도합니다.",
+    "pluginSkillSetup": {
+      "install": "미설치",
+      "enable": "비활성"
+    },
+    "pluginSkills": {
+      "pr": {
+        "install": "PR을 올리고 CI와 리뷰 피드백을 고쳐 병합까지 챙깁니다 · GitHub 플러그인을 설치해야 합니다",
+        "enable": "PR을 올리고 CI와 리뷰 피드백을 고쳐 병합까지 챙깁니다 · GitHub 플러그인을 활성화해야 합니다"
+      }
+    }
   },
   "skillhub": {
     "remote": {

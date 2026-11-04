@@ -67,9 +67,21 @@ settings and other host pages share continuous viewport-aligned artwork. This
 opt-in setting supersedes the CINDY sidebar-only backdrop treatment while active;
 disabling it restores the original theme without modifying theme files or tokens.
 Blend wallpaper with the theme surface, never a fixed black overlay in Light mode. Image opacity
-must not affect text or icons. Elevated controls, menus, dialogs and embedded web
-or editor content keep their readable surfaces. Composer scroll masking must
-align with the same wallpaper instead of introducing an opaque footer rectangle.
+must not affect text or icons. In-page raised surfaces — composer, message bubbles,
+tool and table-header cards, page cards, inputs and the selected sidebar row —
+tint the wallpaper with their own token at 72% (Light) / 64% (Dark) instead of covering
+it (user request, 2026-11-03), in the CINDY themes only: their translucent-ink text keeps its
+contrast on any wallpaper, while other built-in themes use fixed text colors calibrated
+against solid surfaces and keep them opaque. Higher visibility raises that opacity so the artwork
+contributes at most 16% under the surface, keeping the tertiary text tier at the 3:1
+floor over any wallpaper (84% at 100% visibility). Fill only, no `backdrop-filter`, which
+would become the containing block for the composer's fixed palettes. Floating layers
+(menus, popovers, dialogs, tooltips, anything positioned over other content), any surface holding
+syntax-highlighted code, such as code blocks and diffs (the fixed syntax palette needs a solid surface, §15.4), and embedded
+web or editor content keep their readable opaque surfaces. Implementation: the in-page
+glass rule in `globals.css`, scoped to page containers and excluding floating roles and
+absolute / fixed / sticky surfaces; the floor comes from `useWallpaperBackground`.
+Composer scroll masking must align with the same wallpaper instead of introducing an opaque footer rectangle.
 Built-in SVG wallpapers are decorative assets, not new semantic UI colors.
 Verify actual Light/Dark screenshots across host pages and the expanded tool pane.
 
@@ -96,10 +108,13 @@ It follows real transfer progress and disappears once ready;
 cache hits show the original directly. A failed tile shows a retry icon and supports click,
 Enter and Space to retry, preserving the grid's single Tab stop and selected border.
 Expose progress and failure descriptions to assistive technology outside the radio descendants.
-Keep the displayed background while the next official original is loading or decoding;
-reuse already decoded original URLs directly when revisiting a selection. Once ready,
-crossfade the static canvas and its composer copies using opacity and the fast motion
-token, respecting reduced motion. Initial load may use the bundled preview.
+Show the selected official wallpaper's bundled preview immediately while its original
+is loading or decoding (user decision, 2026-11-03, #8591). Download or decode failure
+keeps that selection's preview, not the previous wallpaper. Reuse already decoded
+original URLs directly when revisiting a selection. Crossfade both the preview and
+the ready original on the static canvas and its composer copies using opacity and
+the fast motion token, respecting reduced motion. Custom image replacements still
+retain the previous background until decoding succeeds.
 Reuse the settings download percentage normalization. Browsing the grid or hiding the wallpaper does not
 download originals; only a selected, visible image is requested. Reuse valid cached
 images offline and after upgrades. Do not request CDN assets for IDs absent from the manifest.
@@ -284,7 +299,7 @@ Toast loading is neutral: use the shared 16×16 Spinner in `--text-secondary`, w
 The grayscale rule is near-absolute. The following are the **only** sanctioned non-gray colors in the system — each tightly scoped to a specific surface. New semantic colors must not be introduced without being recorded here first.
 
 - **Focus Blue** (`#417CDD` at 50%; tokens `--focus-ring` / `--focus-ring-soft`): the keyboard-accessibility focus ring, finalized 2026-07-17 (replaces Tailwind's default `#3b82f6`). Keep it out of mouse-only interaction: controls show it on `:focus-visible`, not on click. Text inputs are the approved exception — a focused text field always matches `:focus-visible`, so the generic `Input` shows the soft ring `--focus-ring-soft` whenever focused, while settings and composer inputs use their own focus-border aliases (§4 Inputs).
-- **Thinking / Warning Orange** (`#EA6B17`, finalized 2026-07-17, replaces the frozen `#FF6600`): the shared warning-accent family, identical in both modes. Sanctioned consumers only — the ChatView Running Status Bar (sparkles icon + status text, e.g. `Spelunking...`, no background fill), running-state breathing icons in the sidebar, the collaboration-mode menu row's ON state, the plan-approve icon, the Full Access permission highlight, the settings integration warning, and the workflow agent status strip's running cells (8×8px filled squares in the background-tasks panel detail and the workflow chat card, registered 2026-07-28 — running-state semantics, same family as the sidebar breathing icons; the done/failed/queued cells stay on their own semantic tokens: `--card-status-done` / `--error-fg` / `--surface-chip`), and the sidebar task-info PR unresolved corner dot (registered 2026-08-17 — same `--status-bar-accent` as the session-header unresolved count; static, no breathing), and the filter reminder dot (registered 2026-10-20 — a static 6px/6pt dot at the top-right corner of a filter or view-settings button, meaning "this list is not the default active view": the search filter button while any narrowing filter is applied, and the sidebar organize button / Mobile home `⋯` display-settings button while viewing archived tasks; same `--status-bar-accent` / `statusAccent`, no breathing, no text; Desktop shares one `FilterReminderDot` component and Mobile one `FilterReminderDot` component so size, offset and color live in one place; it is purely visual, so the button's accessible name or state must carry the same information; sort and grouping changes and the "all" status do not light it), and the Bot group chat speaking row (registered 2026-09-27 — sparkles icon + status text for the teammate currently taking its turn, the same running semantics and `--status-bar-accent` as the ChatView Running Status Bar; no background fill), and the running step of a Bot group chat 分工 plan card and the group's sidebar 「正在做 / 正在安排」 preview (registered 2026-09-27 — icon + status word of the one step in progress, same running semantics and `--status-bar-accent`; no background fill; done / pending / failed steps stay neutral) (see the §10 exemption table and §15 for the full token list: `--warning-accent` and its follower tokens). A consumer that introduces no new token — one that reads `--warning-accent` or an existing follower directly, like this strip — is registered by this list alone; a consumer needing a NEW token must be registered in the §10 exemption table first.
+- **Thinking / Warning Orange** (`#EA6B17`, finalized 2026-07-17, replaces the frozen `#FF6600`): the shared warning-accent family, identical in both modes. Sanctioned consumers only — the ChatView Running Status Bar (sparkles icon + status text, e.g. `Spelunking...`, no background fill), running-state breathing icons in the sidebar, the collaboration-mode menu row's ON state, the plan-approve icon, the Full Access permission highlight, the settings integration warning, and the workflow agent status strip's running cells (8×8px filled squares in the background-tasks panel detail and the workflow chat card, registered 2026-07-28 — running-state semantics, same family as the sidebar breathing icons; the done/failed/queued cells stay on their own semantic tokens: `--card-status-done` / `--error-fg` / `--surface-chip`), and the sidebar task-info PR unresolved corner dot (registered 2026-08-17 — same `--status-bar-accent` as the session-header unresolved count; static, no breathing), and the filter reminder dot (registered 2026-10-20 — a static 6px/6pt dot at the top-right corner of a filter or view-settings button, meaning "this list is not the default active view": the search filter button while any narrowing filter is applied, and the sidebar organize button / Mobile home `⋯` display-settings button while viewing archived tasks; same `--status-bar-accent` / `statusAccent`, no breathing, no text; Desktop shares one `FilterReminderDot` component and Mobile one `FilterReminderDot` component so size, offset and color live in one place; it is purely visual, so the button's accessible name or state must carry the same information; sort and grouping changes and the "all" status do not light it), and the Bot group chat speaking row (registered 2026-09-27 — sparkles icon + status text for the teammate currently taking its turn, the same running semantics and `--status-bar-accent` as the ChatView Running Status Bar; no background fill), and the running step of a Bot group chat 分工 plan card and the group's sidebar 「正在做 / 正在安排」 preview (registered 2026-09-27 — icon + status word of the one step in progress, same running semantics and `--status-bar-accent`; no background fill; done / pending / failed steps stay neutral), and the Desktop Bot delegation card status dot (registered 2026-11-04 — starting/running use `--warning-accent` with `session-status-breathing`; waiting/completed/failed use `--card-status-awaiting` / `--card-status-done` / `--card-status-error`, while cancelled/unknown stay neutral; see [Desktop delegation status](./desktop-bot-delegation-status.md)) (see the §10 exemption table and §15 for the full token list: `--warning-accent` and its follower tokens). A consumer that introduces no new token — one that reads `--warning-accent` or an existing follower directly, like this strip — is registered by this list alone; a consumer needing a NEW token must be registered in the §10 exemption table first.
 
 > **Additional narrowly-scoped exceptions** (documented in their respective component specs, do NOT generalize as system semantic colors):
 >

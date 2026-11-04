@@ -1205,6 +1205,7 @@ interface ElectronAPI {
   pageZoomOut: () => Promise<{ ok: true; zoomFactor: number }>;
   pageZoomReset: () => Promise<{ ok: true; zoomFactor: number }>;
   accessibilitySupport: import('../shared/accessibilitySupport').AccessibilitySupportBridge;
+  appPreferenceControl?: import('../shared/appPreferenceControl').AppPreferenceControlBridge;
   appearanceSettings: {
     importWallpaper: () => Promise<import('../shared/appearanceSettings').AppearanceSettings | null>;
     ensureWallpaperVideo?: (id: import('../shared/appearanceSettings').WallpaperId) => Promise<string | null>;
@@ -1510,6 +1511,8 @@ interface ElectronAPI {
       prompt?: string,
       formValues?: Record<string, string>,
       formChange?: boolean,
+      /** 卡内模型下拉框(data-ghost-model-select)选中的模型;agentDeviceId 是另一台电脑或分享来的供应商。 */
+      modelSelection?: import('@cindy/device-link').PluginModelSelection & { agentDeviceId?: string },
     ) => Promise<{ ok: boolean }>;
     /** 订阅槽①:用户消息被意识钩子拦下(renderer 把乐观气泡原地降级为被拦态;
      *  没有既有气泡时用 text 补渲一条——排队消息被拦不无声蒸发)。 */
@@ -4367,6 +4370,7 @@ interface ElectronAPI {
     connect: (id: string) => Promise<{ host: RemoteHostSnapshot | null }>;
     disconnect: (id: string) => Promise<{ host: RemoteHostSnapshot | null }>;
     onStatusChanged: (cb: (snap: RemoteHostSnapshot) => void) => () => void;
+    onHostsChanged?: (cb: (result: RemoteSshListResult) => void) => () => void;
     // Phase B: agent-on-remote
     probeAgent: (id: string, kind: RemoteAgentKind) => Promise<{ probe: RemoteAgentProbe }>;
     installAgent: (

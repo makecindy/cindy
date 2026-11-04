@@ -52,15 +52,17 @@ interface Entry {
   cursor: number;
 }
 
-/** 可恢复的链路错误：重拉即可。 */
+/**
+ * 可恢复的链路错误：重拉即可。
+ * DEVICE_UNRESPONSIVE 是本机熔断器在连续超时后的快速失败，不碰网络；熔断自己探测恢复，
+ * 这里照常退避重拉，由 REMOTE_AGENT_READ_GIVE_UP_MS 兜底，避免一次抖动直接结束远程任务。
+ */
 export function isRetryableLinkError(error: unknown): boolean {
   const code = (error as { code?: unknown })?.code;
   const message = error instanceof Error ? error.message : String(error);
-  // An open device circuit is temporary; keep the existing retry budget while
-  // the transport's single-flight probe determines when the peer is responsive.
   if (typeof code === 'string' && [
-    'PEER_RESET', 'TIMEOUT', 'INVOKE_TIMEOUT', 'BACKPRESSURE', 'DEVICE_OFFLINE', 'DEVICE_UNRESPONSIVE',
-    'LINK_CLOSED', 'LINK_NOT_OPEN', 'NOT_CONNECTED',
+    'PEER_RESET', 'TIMEOUT', 'INVOKE_TIMEOUT', 'BACKPRESSURE', 'DEVICE_OFFLINE', 'LINK_CLOSED', 'LINK_NOT_OPEN', 'NOT_CONNECTED',
+    'DEVICE_UNRESPONSIVE',
   ].includes(code)) {
     return true;
   }

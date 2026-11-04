@@ -1,3 +1,4 @@
+import { APP_PREFERENCE_REQUEST, APP_PREFERENCE_REPLY, APP_SETTINGS_CHANGED, type AppPreferenceControlBridge } from '../shared/appPreferenceControl.js';
 import type { VoiceConversationApi } from '../shared/voiceConversation';
 import { PERFORMANCE_TRACE_CHANNEL, PERFORMANCE_TRACE_EVENTS_CHANNEL, PERFORMANCE_TRACE_STATE_CHANNEL, type PerformanceTraceAPI, type PerformanceTraceState } from '../shared/performanceTrace';
 import { createAccessibilitySupportBridge } from './accessibilitySupport';
@@ -7,6 +8,7 @@ import type { VoiceInputDataSnapshot } from '../shared/voiceInputData';
 import { createWallpaperAssetsBridge } from './wallpaperAssets';
 import type { CompanionImportApi, CompanionImportSelection } from '@cindy/maker-shared/companion-import';
 import { TASK_MIGRATION_LOCAL_CHANNEL } from '@cindy/device-link';
+import type { PluginModelSelection } from '@cindy/device-link';
 import type { WorktreeRecycleAction, WorktreeRecycleStatus } from '../shared/worktreeRecycle';
 import type { GhostControlPointCandidate, GhostControlPointInfo, GhostPickerModel, GhostStartTaskPointData, GhostStartTaskRouteResult } from '../shared/ghost';
 import {
@@ -790,6 +792,7 @@ const fanOutVoiceInputShortcutRecoveryFailed = createIpcFanOut(
 // sync with REMOTE_SSH_PUSH.STATUS_CHANGED in main/remote-ssh/index.ts;
 // preload can't import from main due to vite chunking.
 const fanOutRemoteSshStatus = createIpcFanOut('maker:remote-ssh:status-changed');
+const fanOutRemoteSshHosts = createIpcFanOut('maker:remote-ssh:hosts-changed');
 // Phase B — install progress events (per hostId + agentKind).
 const fanOutRemoteSshInstallProgress = createIpcFanOut('maker:remote-ssh:install-progress');
 // Phase D — silent install status (maker:send 触发的自动 install 给 toast 用)。
@@ -1114,6 +1117,19 @@ const readMicrophonePermissionSnapshot = createMicrophonePermissionSnapshot();
 const voiceInputDataSnapshot = createVoiceInputDataSnapshot();
 
 contextBridge.exposeInMainWorld('electronAPI', {
+  appPreferenceControl: {
+    onSettingsChanged(listener) {
+      const receive = (_event: Electron.IpcRendererEvent, value: Parameters<typeof listener>[0]) => listener(value);
+      ipcRenderer.on(APP_SETTINGS_CHANGED, receive);
+      return () => ipcRenderer.removeListener(APP_SETTINGS_CHANGED, receive);
+    },
+    onRequest(listener) {
+      const receive = (_event: Electron.IpcRendererEvent, request: Parameters<typeof listener>[0]) => listener(request);
+      ipcRenderer.on(APP_PREFERENCE_REQUEST, receive);
+      return () => ipcRenderer.removeListener(APP_PREFERENCE_REQUEST, receive);
+    },
+    reply: (reply) => ipcRenderer.send(APP_PREFERENCE_REPLY, reply),
+  } satisfies AppPreferenceControlBridge,
   localAgent: {
     onConfirmation: (listener: (request: import('../shared/localAgent').LocalAgentConfirmation) => void): (() => void) => {
       const receive = (_event: Electron.IpcRendererEvent, request: import('../shared/localAgent').LocalAgentConfirmation) => listener(request);
@@ -1599,8 +1615,9 @@ contextBridge.exposeInMainWorld('electronAPI', {
       prompt?: string,
       formValues?: Record<string, string>,
       formChange?: boolean,
+      modelSelection?: PluginModelSelection & { agentDeviceId?: string },
     ): Promise<{ ok: boolean }> =>
-      ipcRenderer.invoke('ghosts:card:action', callId, actionId, prompt, formValues, formChange),
+      ipcRenderer.invoke('ghosts:card:action', callId, actionId, prompt, formValues, formChange, modelSelection),
     resolvePanelMedia: (
       uri: string,
       purpose?: 'attach' | 'menu',
@@ -5231,6 +5248,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
     disconnect: (id: string): Promise<{ host: unknown }> =>
       ipcRenderer.invoke('maker:remote-ssh:disconnect', { id }),
     onStatusChanged: fanOutRemoteSshStatus,
+    onHostsChanged: fanOutRemoteSshHosts,
 
     // ── Phase B: agent on remote ──────────────────────────────────────────
     probeAgent: (

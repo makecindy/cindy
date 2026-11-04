@@ -1937,6 +1937,8 @@
       "add": {
         "title": "Remote-Rechner hinzufügen",
         "alias": "Alias",
+        "aliasHint": "Verwende 1–128 Zeichen: englische Buchstaben, Ziffern oder . _ @ : -. Für andere Zeichen nutze den Anzeigenamen.",
+        "aliasInvalid": "Der Alias enthält nicht unterstützte Zeichen oder ist länger als 128 Zeichen. Beachte die Regeln oben.",
         "displayName": "Anzeigename",
         "displayNamePlaceholder": "Optionaler Name, der in Cindy angezeigt wird",
         "hostname": "Hostname",
@@ -10263,6 +10265,7 @@
       "continueEditing": "Weiter bearbeiten"
     },
     "profileSaveFailed": "Die Einstellungen des Teammitglieds konnten nicht gespeichert werden. Es wurden keine Änderungen übernommen.",
+    "profileSaveOffline": "Der Computer des Teammitglieds ist nicht erreichbar. Stellen Sie die Verbindung wieder her und speichern Sie erneut.",
     "modelLabel": "Modell",
     "modelUnavailable": "{{model}} (derzeit nicht verfügbar)",
     "codexAutomaticCompact": "Codex-Teammitglieder komprimieren ihren Kontext selbstständig, und /new behält die aktuelle Aufgabe bei. Starte nur dann eine neue Aufgabe, wenn du wirklich ganz von vorn beginnen musst.",
@@ -10593,6 +10596,11 @@
           "NETWORK_ERROR": "{{name}} konnte nicht antworten: Die Netzwerkverbindung ist fehlgeschlagen.\nPrüfe dein Netzwerk oder deinen Proxy und sende deine Nachricht erneut.",
           "RUNTIME_TIMEOUT": "{{name}} hat nicht innerhalb des Zeitlimits geantwortet.\nSende deine Nachricht erneut oder wähle ein anderes verfügbares Modell.",
           "RUNTIME_ERROR": "{{name}} konnte diesmal nicht antworten.\nSende deine Nachricht erneut. Falls es weiterhin nicht klappt, prüfe die Protokolle und melde das Problem."
+        },
+        "capability": {
+          "GROUP_AUTHORIZATION_REQUIRED": "{{name}} konnte dieses Werkzeug nicht ausführen: Die Gruppenberechtigung ist abgelaufen oder erlaubt diese Aktion nicht. Der Besitzer des Teammitglieds kann die Anfrage in dieser Gruppe erneut stellen.",
+          "GROUP_AUTHORIZATION_UNAVAILABLE": "Die Gruppenberechtigung für {{name}} konnte nicht überprüft werden. Dieses Werkzeug wurde daher nicht ausgeführt. Versuche es erneut, sobald die Verbindung wiederhergestellt ist.",
+          "ATTACHMENTS_UNAVAILABLE": "Einige Anhänge wurden {{name}} wegen eines Downloadfehlers oder der maximalen Anzahl an Anhängen nicht übermittelt. Sende die für diese Anfrage benötigten Anhänge erneut."
         }
       },
       "settings": {
@@ -11035,7 +11043,7 @@
         "items": {
           "tasks": {
             "title": "Aufgaben",
-            "body": "Entscheidet, wann eine Hintergrundaufgabe startet, steuert die eigenen Aufgaben und bringt das Ergebnis in den Chat zurück – auch auf deinen anderen Computern."
+            "body": "Kennt die steuerbaren Aufgaben und verfügbaren Computer. Organisiert und begleitet Aufgaben auf Wunsch, bringt Ergebnisse zurück und prüft vor computerübergreifenden Aktionen den unterstützten Umfang."
           },
           "teammates": {
             "title": "Andere Teammates",
@@ -11050,8 +11058,8 @@
             "body": "Merkt sich deine Vorlieben und deinen Hintergrund, prüft vorher und aktualisiert bei Änderungen."
           },
           "self": {
-            "title": "Sich selbst kennen",
-            "body": "Weiß, was er kann, und schaltet Funktionen für dich ein oder aus. Bei Cindy-Fragen wie Telegram, MCP oder Plugins liest er zuerst die Hilfe."
+            "title": "Cindy verstehen und einstellen",
+            "body": "Kennt Cindys Funktionen und Bedienung und prüft oder ändert Einstellungen auf Wunsch. Bittet dich in der Aufgabe um Eingaben oder Bestätigungen, wenn sie nötig sind."
           }
         }
       },
@@ -13713,7 +13721,7 @@
       "REMOTE_PROVIDER_UPDATING": "Die Zugangsdaten dieses Modellanbieters werden aktualisiert. Versuch es gleich erneut.",
       "REMOTE_WORKDIR_UNAVAILABLE": "Das Remote-Arbeitsverzeichnis ist nicht verfügbar. Prüfe, ob der Ordner auf diesem Computer noch existiert, und versuch es erneut.",
       "REMOTE_OPTIMISTIC_SESSION_STATE_UNAVAILABLE": "Der Computer kann noch nicht bestätigen, ob diese Nachricht gesendet wurde. Warte kurz und versuch es erneut. Sende dieselbe Nachricht nicht zweimal.",
-      "REMOTE_AGENT_UNAVAILABLE": "Der Computer, auf dem der Agent läuft, ist nicht erreichbar. Stelle sicher, dass er online ist und Fernsteuerung erlaubt, und versuch es erneut.",
+      "REMOTE_AGENT_UNAVAILABLE": "Die Verbindung zum Computer, auf dem der Agent läuft, wurde unterbrochen. Versuch es erneut. Wenn das öfter passiert, stelle sicher, dass er online ist und Fernsteuerung erlaubt.",
       "REMOTE_AGENT_PEER_TOO_OLD": "Cindy auf dem anderen Computer ist für diese Aktion zu alt. Aktualisiere Cindy dort zuerst.",
       "REMOTE_AGENT_EXPIRED": "Diese Sitzung wurde auf dem Computer, auf dem der Agent läuft, bereits beendet. Sende deine Nachricht erneut.",
       "REMOTE_AGENT_NOT_FOUND": "Diese Sitzung wurde auf dem Computer, auf dem der Agent läuft, bereits beendet. Sende deine Nachricht erneut.",
@@ -13831,6 +13839,18 @@
       "cancelTitle": "Warten beenden und diese Nachricht entfernen"
     },
     "ghostCall": {
+      "prStatus": {
+        "threadsNone": "Keine offenen Review-Threads",
+        "mergeReady": "Bereit zum Mergen",
+        "mergeConflict": "Hat Konflikte",
+        "mergeBehind": "Hinter dem Basis-Branch",
+        "mergeApproval": "Wartet auf Freigabe",
+        "mergeChanges": "Änderungen angefordert",
+        "mergeWaiting": "Wartet auf Merge",
+        "merged": "Gemergt",
+        "closed": "Geschlossen",
+        "draft": "Entwurf"
+      },
       "verb": "Plugin verwendet",
       "cardRunning": "Plugin zeichnet",
       "cardDone": "Fertig",
@@ -13844,6 +13864,7 @@
       "collapseFields": "Einklappen",
       "formSyncFailed": "Kartenänderungen wurden nicht synchronisiert. Prüfe die Verbindung und bearbeite weiter; die Nachricht wurde nicht gesendet.",
       "linkOpenFailed": "Link konnte nicht geöffnet werden",
+      "modelSelectFailed": "Das Modell wurde nicht geändert. Bitte erneut auswählen.",
       "mailPreview": "E-Mail-Vorschau",
       "mailEnlarge": "Vorschau vergrößern",
       "mailInsertImage": "In Nachricht einfügen",
@@ -16025,7 +16046,17 @@
   },
   "commandPalette": {
     "viewSkillDetails": "Skill-Details anzeigen",
-    "projectSkillNotLoaded": "Diese Pi-Aufgabe hat diesen Projekt-Skill noch nicht geladen. Neue Aufgaben versuchen automatisch, ihn zu laden."
+    "projectSkillNotLoaded": "Diese Pi-Aufgabe hat diesen Projekt-Skill noch nicht geladen. Neue Aufgaben versuchen automatisch, ihn zu laden.",
+    "pluginSkillSetup": {
+      "install": "Nicht installiert",
+      "enable": "Deaktiviert"
+    },
+    "pluginSkills": {
+      "pr": {
+        "install": "PR öffnen, CI und Review-Feedback beheben und bis zum Merge begleiten · Erfordert die Installation des GitHub-Plugins",
+        "enable": "PR öffnen, CI und Review-Feedback beheben und bis zum Merge begleiten · Erfordert die Aktivierung des GitHub-Plugins"
+      }
+    }
   },
   "skillhub": {
     "remote": {

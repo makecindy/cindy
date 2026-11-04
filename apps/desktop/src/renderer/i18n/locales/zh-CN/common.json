@@ -1907,6 +1907,8 @@
       "add": {
         "title": "添加一台远端机器",
         "alias": "别名",
+        "aliasHint": "1–128 个字符，仅限英文字母、数字及 . _ @ : -；中文名称请填写在「显示名」。",
+        "aliasInvalid": "别名包含不支持的字符或超过 128 个字符，请按上述规则修改。",
         "displayName": "显示名",
         "displayNamePlaceholder": "可选，仅在 Cindy 中显示",
         "hostname": "主机名",
@@ -10218,6 +10220,7 @@
       "continueEditing": "继续编辑"
     },
     "profileSaveFailed": "伙伴设置未能保存，变更没有生效。",
+    "profileSaveOffline": "无法连接伙伴所在的电脑，请恢复连接后重新保存。",
     "modelLabel": "模型",
     "modelUnavailable": "{{model}}（当前不可用）",
     "codexAutomaticCompact": "Codex 伙伴会自己压缩上下文，/new 也会保留当前任务。只有确实需要从头开始时，才去开新任务。",
@@ -10548,6 +10551,11 @@
           "NETWORK_ERROR": "{{name}}无法回复：网络连接失败。\n请检查网络或 Proxy 后重新发送。",
           "RUNTIME_TIMEOUT": "{{name}}本次回复超时。\n请重新发送消息，或选择其他可用模型。",
           "RUNTIME_ERROR": "{{name}}这次没能回复。\n请重新发送消息；如果仍失败，请查看日志并反馈问题。"
+        },
+        "capability": {
+          "GROUP_AUTHORIZATION_REQUIRED": "{{name}} 的工具调用未执行：群内授权已失效或不允许此操作。请由伙伴主人在当前群重新发起。",
+          "GROUP_AUTHORIZATION_UNAVAILABLE": "暂时无法核验 {{name}} 的群聊授权，这次工具调用未执行。请在连接恢复后重试。",
+          "ATTACHMENTS_UNAVAILABLE": "部分附件未交给 {{name}}（下载失败或数量限制）。请重新发送本次需要的附件。"
         }
       },
       "settings": {
@@ -10990,7 +10998,7 @@
         "items": {
           "tasks": {
             "title": "任务",
-            "body": "判断什么时候开后台任务，控制自己开的任务，把结果带回对话；也能到你的其他电脑上干活。"
+            "body": "了解当前可控制的任务和可用电脑，按你的要求安排、跟进任务，把结果带回；跨电脑操作前查询实际支持范围。"
           },
           "teammates": {
             "title": "联系伙伴",
@@ -11005,8 +11013,8 @@
             "body": "记住你的偏好和背景，用前先查、有变化就更新。"
           },
           "self": {
-            "title": "了解自己",
-            "body": "知道自己有哪些功能并帮你开关；Cindy 的用法（加 Telegram、配 MCP、装插件）先查帮助再动手。"
+            "title": "了解与设置 Cindy",
+            "body": "了解 Cindy 的功能和用法，按你的要求查询、调整设置；需要你填写或确认时，在任务里交给你完成。"
           }
         }
       },
@@ -13691,7 +13699,7 @@
       "REMOTE_PROVIDER_UPDATING": "这个模型供应商的凭据正在更新。请稍后再试。",
       "REMOTE_WORKDIR_UNAVAILABLE": "远端工作目录现在不可用。请确认那台电脑上的目录还在，然后重试。",
       "REMOTE_OPTIMISTIC_SESSION_STATE_UNAVAILABLE": "电脑端暂时无法确认这条消息是否已经发出。请稍后再试，不要重复发送同一条。",
-      "REMOTE_AGENT_UNAVAILABLE": "运行 Agent 的电脑暂时连不上。确认那台电脑在线并允许远程控制后重试。",
+      "REMOTE_AGENT_UNAVAILABLE": "和运行 Agent 的电脑断开了连接。请重试；如果反复出现，再确认那台电脑在线并允许远程控制。",
       "REMOTE_AGENT_PEER_TOO_OLD": "那台电脑上的 Cindy 版本过旧，暂不支持此操作。请先在那台电脑上更新 Cindy。",
       "REMOTE_AGENT_EXPIRED": "这个任务在运行 Agent 的电脑上已经结束。请重新发送。",
       "REMOTE_AGENT_NOT_FOUND": "这个任务在运行 Agent 的电脑上已经结束。请重新发送。",
@@ -13800,6 +13808,18 @@
       "cancelTitle": "取消等待并移除这条消息"
     },
     "ghostCall": {
+      "prStatus": {
+        "threadsNone": "没有待处理意见",
+        "mergeReady": "可以合并",
+        "mergeConflict": "有冲突",
+        "mergeBehind": "需要同步目标分支",
+        "mergeApproval": "等待审批",
+        "mergeChanges": "需要修改",
+        "mergeWaiting": "等待合并",
+        "merged": "已合并",
+        "closed": "已关闭",
+        "draft": "草稿"
+      },
       "verb": "调用插件",
       "cardRunning": "插件绘制中",
       "cardDone": "已完成",
@@ -13813,6 +13833,7 @@
       "collapseFields": "收起",
       "formSyncFailed": "卡片修改尚未同步，请检查连接后继续编辑；消息尚未发送。",
       "linkOpenFailed": "链接打开失败",
+      "modelSelectFailed": "模型没有换成，请重新选择",
       "mailPreview": "邮件预览",
       "mailEnlarge": "放大查看",
       "mailInsertImage": "插入正文",
@@ -15958,7 +15979,17 @@
   },
   "commandPalette": {
     "viewSkillDetails": "查看技能详情",
-    "projectSkillNotLoaded": "当前 Pi 任务尚未加载此项目 Skill，新任务会自动尝试加载"
+    "projectSkillNotLoaded": "当前 Pi 任务尚未加载此项目 Skill，新任务会自动尝试加载",
+    "pluginSkillSetup": {
+      "install": "未安装",
+      "enable": "未启用"
+    },
+    "pluginSkills": {
+      "pr": {
+        "install": "发 PR、修 CI 和评审、跟进到合并 · 需要安装 GitHub 插件",
+        "enable": "发 PR、修 CI 和评审、跟进到合并 · 需要启用 GitHub 插件"
+      }
+    }
   },
   "skillhub": {
     "remote": {
