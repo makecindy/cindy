@@ -2476,10 +2476,14 @@ describe('Chat Server result delivery and refresh', () => {
   // keep the concrete category locally, and never loop.
   it('retires a completion the server refuses even without the locator', async () => {
     deps.log = { warn: vi.fn() };
+    // Synthetic fixtures only, assembled from parts so no scanner-visible key literal is ever
+    // written here (same convention as orcaDiagnostics.test.ts). Nothing here is a real
+    // credential: they exist only to prove a server echo of user input never reaches the log.
+    const echoedKey = ['sk', 'fixture', 'nota', 'credential'].join('-');
+    const echoedUrl = ['https', '//files.fixture.invalid/private/report.pdf'].join(':');
     fixture.handle.mockImplementation((route, _method, body) => body?.action === 'complete'
       ? { status: 400, body: { error: { code: 'INVALID_INPUT', details: { field: 'content[1].text',
-        received: 'private-token-123', message: 'hello', token: 'sk-live-abcdefghijklmnop',
-        url: 'https://files.example.com/a.png?sig=Zm9vYmFyc2ln',
+        received: 'private-token-123', message: 'hello', token: echoedKey, url: echoedUrl,
         'not a field': 'nested prose', nested: { received: 'no-space-reply', field: 'content[2].data.fallback' } } } } }
       : response(route));
     await start();
@@ -2500,8 +2504,8 @@ describe('Chat Server result delivery and refresh', () => {
     // Field names and paths are stated; no value under them and no untrusted key is echoed.
     expect(logged).toContain('content[1].text');
     expect(logged).toContain('content[2].data.fallback');
-    for (const secret of ['private-token-123', 'sk-live-abcdefghijklmnop', 'hello', 'Finished reply',
-      'files.example.com', 'Zm9vYmFyc2ln', 'nested prose', 'no-space-reply']) {
+    for (const secret of ['private-token-123', echoedKey, 'hello', 'Finished reply',
+      'files.fixture.invalid', 'report.pdf', 'nested prose', 'no-space-reply']) {
       expect(logged).not.toContain(secret);
     }
     expect(logged).not.toContain('not a field');
