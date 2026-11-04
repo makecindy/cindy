@@ -59,7 +59,9 @@ function serveWebApp(response, deps, urlPath) {
   let body = fs.readFileSync(file);
   if (relative === '/index.html') {
     // The shim must run before the app module: it defines window.electronAPI.
-    const html = body.toString('utf8').replace(/<head([^>]*)>/, '<head$1><script src="/shim.js"></script>');
+    const boot = JSON.stringify(typeof deps.bootValues === 'function' ? deps.bootValues() : (deps.bootValues ?? {}));
+    const html = body.toString('utf8')
+      .replace(/<head([^>]*)>/, `<head$1><script>window.__cindyBoot=${boot};</script><script src="/shim.js"></script>`);
     body = Buffer.from(html, 'utf8');
     response.setHeader('set-cookie', `cindy_host_web=${deps.webSession}; HttpOnly; SameSite=Strict; Path=/`);
   }

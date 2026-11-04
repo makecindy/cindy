@@ -1,5 +1,8 @@
 import path from 'node:path';
 import { existsSync } from 'node:fs';
+import { getDefaultVoiceInputSettings } from '../../desktop/src/shared/voiceInputData.ts';
+
+const DEFAULT_VOICE_INPUT_SETTINGS = getDefaultVoiceInputSettings();
 import { randomBytes } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 
@@ -189,6 +192,15 @@ const server = createHostServer({
   token: apiToken,
   webSession,
   shimPath: path.resolve(desktopRoot, '..', 'web', 'shim.js'),
+  // Inline the shared defaults so the synchronous snapshot API can answer.
+  bootValues: () => ({
+    voiceInput: { settings: DEFAULT_VOICE_INPUT_SETTINGS, history: [] },
+    harness: harnessStatus(),
+    auth: account.authenticated
+      ? { user: { id: runtime.owner ?? 'owner', name: runtime.owner ?? 'owner', email: null, avatar: null }, ownerId: runtime.owner }
+      : {},
+    appearance: {},
+  }),
   webDir: process.env.CINDY_HOST_WEB_DIR?.trim() ? webDir : (existsSync(webDir) ? webDir : null),
   probe: async () => ({
     status: 'ok',
