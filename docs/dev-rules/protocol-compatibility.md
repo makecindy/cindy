@@ -2419,6 +2419,13 @@ Codex 原生图片恢复（#6412）在既有 `maker:remote-agent:v1` 上追加�
   不在任务所在电脑时带值，旧端忽略即可。Lead 的 MCP 工具同步：`list_available_models` 可选 `agent_device_id` 并返回
   `locations`，`create_worker` / `create_workers` 可选 `agent_device_id`(`"local"` = 任务所在电脑)。同账号 allowlist 新增上述 models 查询；共享任务清单不变。回归见 `orcaWorkerCreationService.test.ts`、`CreateWorkerPopover.test.tsx`、Mobile
   `orcaTeam.test.ts` / `useOrcaWorkerForm.test.tsx`。
+- **被控电脑上的协同任务换 Agent 位置**(2026-11-04)：A 从 v0.1.112 起接受给它上面的协同 Lead / 本机 Worker
+  发带 `agentDeviceId` 的 `maker:switch-session-agent`(运行设备 Worker 仍回 `UNSUPPORTED_CAPABILITY`)；v0.1.104–v0.1.110
+  的 A 在登记意图前就回 `UNSUPPORTED_CAPABILITY`。A 在 `maker:get-capabilities` 声明 `supportsOrcaAgentRelocation: true`
+  后，桌面控制端才对这类任务列其他电脑与分享、走与普通任务相同的换电脑事务；缺省 false 时维持原样，不出现能点却必失败的
+  选项。协议位是整台 A 的，控制端读到任一已注册 Agent 的快照带这一位即可。通道与参数不变，只新增可选能力位；中转只按通道名
+  放行(`packages/device-link/src/allowlist.ts`)、不解析能力字段，自建中转无需同步修改。Mobile 控制端见 makecindy/cindy#8841。
+  回归见 `sessionAgentSwitchRemoteRouting.test.ts`、`remoteAgentRelocationWiring.test.ts`、`sessionRuntimeControlWiring.test.ts`。
 - **账号余量**(2026-10-09)：这一轮消耗的是 Agent 所在那台(B)的账号，桌面底部用量 chip 与手机任务菜单都改读 B 的
   余量，不读任务所在电脑(本机或被控电脑)的同名账号。直接经 device-link 调 B 已有的 `maker:usage:*` 读取与推送
   (与模型选择器读 B 的余量同一份镜像)，不新增 channel；任务价值与上下文仍读任务所在电脑。远程控制的任务把 Agent
