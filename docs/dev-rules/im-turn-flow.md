@@ -12,6 +12,9 @@ Telegram / Slack / X）是同一件事的两套实现：把渠道里的一条消
 [`../product-rules/telegram-bot-parity.md`](../product-rules/telegram-bot-parity.md)；
 台账里标「有意不同」的项以策略参数表达，合并时不抹平。
 
+官方飞书公共入口尚未在上述客户端链路中实现；平台路线、独立服务端依赖和验收边界见
+[官方飞书公共机器人提案](../plans/official-feishu-bot.md)，不等同于已有个人飞书接入。
+
 连接恢复由渠道 transport 持有，不重放任务或发送内容。Telegram、Discord 的启动网络失败与
 钉钉的连接失败使用可取消的指数退避（约 1 秒起、30 秒封顶，带抖动）；Telegram 429 尊重
 服务端完整等待时间。飞书保留 SDK 重连，仅在 SDK 耗尽重试或启动抛错后补重试；就绪日志须
