@@ -35,7 +35,8 @@ import {
   parseTransportPayload,
 } from '../transport.js';
 import { PLUGIN_SYNC_CHANNEL } from '../pluginSyncProtocol.js';
-import { BACKLOG_WARN_MESSAGES } from '../transportBacklog.js';
+import { BACKLOG_WARN_MESSAGES, summarizeBacklog } from '../transportBacklog.js';
+import { sharedTaskGuestPeer } from '../sharedTaskPeer.js';
 import { DIRECT_LINK_SIGNAL, type DirectRuntime, type DirectRuntimeEvents } from '../directNegotiation.js';
 import { providerShareGuestPeer, providerShareHostPeer } from '../providerSharePeer.js';
 import { createDirectRuntimeBridge, createDirectRuntimeHost } from '../directRuntimeBridge.js';
@@ -7471,6 +7472,26 @@ describe('DeviceLinkClient', () => {
       } finally {
         h.client.stop();
       }
+    });
+
+    // Unit, production summary. Scoped peers share an internal key prefix, so the line
+    // must name their real device (never the share/task/member ids); frames last written
+    // on a direct path do not occupy the relay socket and are reported separately.
+    it('names scoped peers by device and keeps direct-path frames out of the shared relay totals', () => {
+      const focus = providerShareGuestPeer('share-a', 'member-a', 'deviceaa-1');
+      const peers = new Map([
+        [focus, { pendingBytes: 3072, pending: new Map([
+          [1, { bytes: 2048, diagChannel: 'result:unknown', path: 'direct' }],
+          [2, { bytes: 1024, diagChannel: 'result:unknown' }],
+        ]) }],
+        [providerShareGuestPeer('share-a', 'member-b', 'devicebb-2'), { pendingBytes: 2048, pending: new Map([[1, { bytes: 2048 }]]) }],
+        [sharedTaskGuestPeer('task-x', 'member-c', 'devicecc-3'), { pendingBytes: 1024, pending: new Map([[1, { bytes: 1024, path: 'relay' }]]) }],
+        ['direct-only-peer', { pendingBytes: 4096, pending: new Map([[1, { bytes: 4096, path: 'direct' }]]) }],
+      ]);
+      const line = summarizeBacklog(focus, peers, 'high');
+      expect(line).toMatch(/dst=share:deviceaa pending=2\/3KiB direct=1\/2KiB top=\[result:unknown=2\/3KiB\]/);
+      expect(line).toMatch(/otherPeers=2\/3KiB \[share:devicebb=1\/2KiB,task:devicecc=1\/1KiB\] otherDirect=1\/4KiB$/);
+      expect(line).not.toMatch(/share-a|task-x|member|direct-o/);
     });
 
     it.each([

@@ -12,6 +12,8 @@
  */
 import { PUSH_FORWARD_ALLOWLIST, REMOTE_INVOKE_ALLOWLIST } from './allowlist.js';
 import type { Envelope } from './protocol.js';
+import { parseProviderSharePeer } from './providerSharePeer.js';
+import { parseSharedTaskPeer } from './sharedTaskPeer.js';
 
 /** Warn before the queue is full: 3/4 of the message cap, or 4 MiB pending. */
 export const BACKLOG_WARN_MESSAGES = 48;
@@ -24,6 +26,8 @@ const TOP_PEERS = 5;
 export interface BacklogEntry {
   bytes: number;
   diagChannel?: string;
+  /** Last physical path; direct frames do not occupy the shared relay socket. */
+  path?: string;
 }
 
 export interface BacklogPeer {
@@ -52,7 +56,35 @@ export function backlogLabel(env: Envelope, replyChannel?: string): string {
 
 const kib = (bytes: number) => Math.round(bytes / 1024);
 
-/** One line: the congested peer by channel, then the other peers sharing the socket. */
+/**
+ * Provider-share and shared-task peers use long internal keys whose first
+ * characters are identical across devices. Name them by the real device prefix;
+ * share, task and member identifiers stay out of the log.
+ */
+export function backlogPeerTag(id: string): string {
+  const share = parseProviderSharePeer(id);
+  if (share) return `share:${share.deviceId.slice(0, 8)}`;
+  const task = parseSharedTaskPeer(id);
+  if (task) return `task:${task.deviceId.slice(0, 8)}`;
+  return id.slice(0, 8);
+}
+
+/** Split a peer's queue into frames last written directly and those using the relay socket. */
+function splitByPath(peer: BacklogPeer): { relayCount: number; relayBytes: number; directCount: number; directBytes: number } {
+  const split = { relayCount: 0, relayBytes: 0, directCount: 0, directBytes: 0 };
+  for (const entry of peer.pending.values()) {
+    if (entry.path === 'direct') {
+      split.directCount++;
+      split.directBytes += entry.bytes;
+    } else {
+      split.relayCount++;
+      split.relayBytes += entry.bytes;
+    }
+  }
+  return split;
+}
+
+/** One line: the congested peer by channel, then the other peers sharing the relay socket. */
 export function summarizeBacklog(
   dst: string,
   peers: ReadonlyMap<string, BacklogPeer>,
@@ -71,17 +103,24 @@ export function summarizeBacklog(
     .sort((a, b) => b[1].bytes - a[1].bytes)
     .slice(0, TOP_CHANNELS)
     .map(([label, total]) => `${label}=${total.count}/${kib(total.bytes)}KiB`);
+  const focusSplit = focus ? splitByPath(focus) : { directCount: 0, directBytes: 0 };
+  // Only frames not on a direct path compete for the shared relay socket.
   const others = [...peers]
-    .filter(([id, peer]) => id !== dst && peer.pending.size > 0)
-    .sort((a, b) => b[1].pendingBytes - a[1].pendingBytes);
-  const otherBytes = others.reduce((sum, [, peer]) => sum + peer.pendingBytes, 0);
-  const otherTop = others
+    .filter(([id]) => id !== dst)
+    .map(([id, peer]) => ({ tag: backlogPeerTag(id), ...splitByPath(peer) }));
+  const relayOthers = others.filter(peer => peer.relayCount > 0).sort((a, b) => b.relayBytes - a.relayBytes);
+  const relayBytes = relayOthers.reduce((sum, peer) => sum + peer.relayBytes, 0);
+  const directCount = others.reduce((sum, peer) => sum + peer.directCount, 0);
+  const directBytes = others.reduce((sum, peer) => sum + peer.directBytes, 0);
+  const relayTop = relayOthers
     .slice(0, TOP_PEERS)
-    .map(([id, peer]) => `${id.slice(0, 8)}=${peer.pending.size}/${kib(peer.pendingBytes)}KiB`);
-  return `device-link send backlog ${reason} dst=${dst.slice(0, 8)}`
+    .map(peer => `${peer.tag}=${peer.relayCount}/${kib(peer.relayBytes)}KiB`);
+  return `device-link send backlog ${reason} dst=${backlogPeerTag(dst)}`
     + ` pending=${focus?.pending.size ?? 0}/${kib(focus?.pendingBytes ?? 0)}KiB`
+    + ` direct=${focusSplit.directCount}/${kib(focusSplit.directBytes)}KiB`
     + ` top=[${top.join(',')}]`
-    + ` otherPeers=${others.length}/${kib(otherBytes)}KiB [${otherTop.join(',')}]`;
+    + ` otherPeers=${relayOthers.length}/${kib(relayBytes)}KiB [${relayTop.join(',')}]`
+    + ` otherDirect=${directCount}/${kib(directBytes)}KiB`;
 }
 
 /** Rate limit for backlog warnings, keyed by peer (and reason). */
