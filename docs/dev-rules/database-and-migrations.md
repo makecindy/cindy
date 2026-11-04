@@ -83,7 +83,8 @@ companion CommonJS 格式和历史 runtime identity 冻结；不能用单独 typ
 
 CI 在 `windows-runner-checks` 中按相关路径运行完整 `migration` tier 与核心 DB 回归
 （迁移兼容、schema 租约与漂移、连接初始化），复用 Windows 的原生 SQLite、LFS
-sqlite-vec 与依赖准备。普通数据库源码变化再按 Vitest import graph 选择既有 `db`
+sqlite-vec 与依赖准备。普通数据库源码变化（含 `db` tier 测试直接 import 的 localDb 外源码，如
+`git-context/prRefsStore.ts`）再按 Vitest import graph 选择既有 `db`
 tier 中的相关测试；删除源码、fixture 变化或无法确定事件基准时回退完整 DB 层。
 无关改动不执行这两层，严格性能计时仍留在 `db-perf`。路径和事件基准判定见
 `scripts/ci-database-tests.mjs`，涵盖 PR、merge queue 与 main push。执行入口拒绝

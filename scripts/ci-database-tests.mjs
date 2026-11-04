@@ -34,8 +34,26 @@ const INFRASTRUCTURE = new Set([
   'scripts/shared/node-webstorage.mjs',
 ]);
 
-export function needsDatabaseTests(files) {
-  return files.some(file => INFRASTRUCTURE.has(file)
+// Source modules that the DB tier imports directly (including vi.mock targets),
+// e.g. git-context/prRefsStore.ts reached from localDb/__tests__. A transitive
+// closure covers nearly the whole app, so only the direct edge gates the step.
+export function databaseEntrypoints(allFiles, root = ROOT) {
+  const known = new Set(allFiles);
+  const entrypoints = new Set();
+  const specifier = /(?:\bfrom|\bimport|\brequire\(|\bmock\()\s*\(?\s*['"](\.[^'"]*)['"]/g;
+  for (const test of selectFilesForTier(DESKTOP, DESKTOP.tiers.db, allFiles)) {
+    const source = fs.readFileSync(path.join(root, test), 'utf8');
+    for (const match of source.matchAll(specifier)) {
+      const target = path.posix.join(path.posix.dirname(test), match[1].replace(/\.[cm]?js$/, ''));
+      const resolved = [`${target}.ts`, `${target}.tsx`, `${target}/index.ts`, target].find(file => known.has(file));
+      if (resolved) entrypoints.add(resolved);
+    }
+  }
+  return entrypoints;
+}
+
+export function needsDatabaseTests(files, entrypoints = new Set()) {
+  return files.some(file => INFRASTRUCTURE.has(file) || entrypoints.has(file)
     || /^apps\/desktop\/(?:drizzle\/|native\/sqlite-vec\/|src\/main\/localDb\/|src\/test\/vitest\/|vitest\.config\.)/.test(file)
     || /^apps\/desktop\/src\/main\/scheduler-host\//.test(file)
     || /^apps\/desktop\/scripts\/validate-migrations\.mjs$/.test(file)
@@ -57,7 +75,10 @@ export function detectDatabaseChanges({ eventName, event = {}, head, root = ROOT
     cwd: root, encoding: 'utf8', maxBuffer: 20 * 1024 * 1024,
   });
   const files = output.split('\0').filter(Boolean);
-  return { required: needsDatabaseTests(files), reason: `${files.length} changed paths`, files };
+  const desktopFiles = fs.existsSync(path.join(root, DESKTOP.cwd))
+    ? readAllFiles(path.join(root, DESKTOP.cwd)).map(file => `${DESKTOP.cwd}/${file}`) : [];
+  const entrypoints = databaseEntrypoints(desktopFiles, root);
+  return { required: needsDatabaseTests(files, entrypoints), reason: `${files.length} changed paths`, files };
 }
 
 export function requireDatabasePlatform(platform = process.platform) {
@@ -68,14 +89,15 @@ export function requireDatabasePlatform(platform = process.platform) {
 
 export function databaseTestRuns(root, allFiles, reportDir, changedFiles) {
   const dbConfig = DESKTOP.tiers.db;
+  const entrypoints = databaseEntrypoints(allFiles, root);
   const relatedFiles = (changedFiles ?? []).filter(file =>
     file.startsWith(`${DESKTOP.cwd}/src/`) && /\.[cm]?[jt]sx?$/.test(file)
-    && needsDatabaseTests([file]));
+    && needsDatabaseTests([file], entrypoints));
   // Deleted/moved-out source cannot be followed by an import graph. Unknown
   // event ranges likewise keep the complete DB tier instead of guessing.
   const fullDb = !changedFiles || relatedFiles.some(file => !allFiles.includes(file))
     || changedFiles.some(file => file.startsWith(`${DESKTOP.cwd}/src/`)
-      && needsDatabaseTests([file])
+      && needsDatabaseTests([file], entrypoints)
       && (file.includes('/fixtures/') || !/\.[cm]?[jt]sx?$/.test(file)));
   const runs = ['migration', 'db'].map(tier => {
     const config = tier === 'db' && !fullDb

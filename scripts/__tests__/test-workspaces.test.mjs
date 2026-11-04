@@ -63,6 +63,7 @@ import {
 import { findSymlinkPlatformSkips } from "../shared/symlink-test-guard.mjs";
 import {
 	assertMigrationReplayRan,
+	databaseEntrypoints,
 	databaseTestRuns,
 	detectDatabaseChanges,
 	needsDatabaseTests,
@@ -96,6 +97,18 @@ test("database CI distinguishes database/runtime inputs from unrelated PRs", () 
 		"packages/maker-core/src/agents/codex/translator.ts",
 		"apps/desktop/src/main/localDbOther/example.ts",
 	]), false);
+});
+
+test("database CI gates sources outside localDb that DB-tier tests import directly", () => {
+	const files = readAllFiles(path.join(ROOT, "apps/desktop")).map(file => `apps/desktop/${file}`);
+	const entrypoints = databaseEntrypoints(files, ROOT);
+	const changed = "apps/desktop/src/main/git-context/prRefsStore.ts";
+	assert.equal(needsDatabaseTests([changed]), false);
+	assert.equal(needsDatabaseTests([changed], entrypoints), true);
+	assert.equal(needsDatabaseTests(["apps/desktop/src/renderer/main.tsx"], entrypoints), false);
+	const runs = databaseTestRuns(ROOT, files, os.tmpdir(), [changed]);
+	assert.deepEqual(runs.map(run => run.tier), ["migration", "db", "db-related"]);
+	assert.ok(runs[2].pnpmArgs.includes("src/main/git-context/prRefsStore.ts"));
 });
 
 test("database CI compares each event base to the checked-out head and preserves removed paths", () => {
