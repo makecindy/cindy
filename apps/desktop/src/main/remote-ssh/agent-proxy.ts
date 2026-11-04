@@ -49,6 +49,7 @@ import {
   stopTunnelForHost,
   tunnelNeedsRebuild,
 } from './agent-proxy-tunnel.js';
+import { forgetRemoteCodexMcpDaemonEnv } from './codex-remote-mcp.js';
 import { getSshHostAgentProxy, type SshHostAgentProxyPref } from './ssh-host-prefs-store.js';
 
 const log = createLogger('remote-ssh/agent-proxy');
@@ -350,6 +351,10 @@ exit 3
       timeoutMs: 15_000,
       label: 'kill-codex-daemon',
     });
+    // The replacement daemon is started by the transport without the MCP
+    // token. Invalidate the applied MCP env even on partial failure so the
+    // next session start / live send re-bootstraps cindy_helper and collab.
+    forgetRemoteCodexMcpDaemonEnv(host.id);
     if (result.exitCode !== 0) {
       const detail = result.stderr.trim().slice(0, 200);
       log.warn('failed to kill remote codex daemon', { hostId: host.id, exitCode: result.exitCode, stderr: detail });
@@ -357,6 +362,7 @@ exit 3
     }
     return { ok: true };
   } catch (err) {
+    forgetRemoteCodexMcpDaemonEnv(host.id);
     const detail = String((err as Error).message ?? err);
     log.warn('failed to kill remote codex daemon (exec error)', { hostId: host.id, error: detail });
     return { ok: false, reason: 'pkill_failed', detail };
