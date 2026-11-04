@@ -38,6 +38,7 @@ import { remoteProjectsStore } from '@/features/device-link/remoteProjectsStore'
 import { revokedDevicesStore } from '@/features/device-link/revokedDevicesStore';
 import { prefetchDeviceGitSafetySettings } from '@/hooks/useGitSafetySettings';
 import { readCachedSessionList } from '@/features/device-link/mirrorCacheClient';
+import { setDataOwnerGeneration } from '@/contexts/dataOwnerGeneration';
 
 /** Real hook/store/refresh orchestration with independent controllable peer transports. */
 const peers = ['slow', 'healthy'].map((deviceId) => ({
@@ -293,6 +294,96 @@ describe('multi-device recovery lifecycle', () => {
     expect(remoteProjectsStore.hasDevice('slow')).toBe(true);
     expect(remoteProjectsStore.hasDevice('healthy')).toBe(true);
   });
+  // 2026-11-04: another computer's every-minute PR watchers sent fired + skipped pairs,
+  // and each event pulled the whole run index (~100 KB, 872 reads/day). A pair now costs
+  // one read after a quiet period, and a steady stream is still read within the max wait.
+  it('coalesces a remote schedule event burst into one index read after a quiet period', async () => {
+    setDataOwnerGeneration('test-owner', 1);
+    onTestFinished(() => setDataOwnerGeneration(null));
+    renderHook(() => useDeviceLinkRemoteProjects());
+    await settle();
+    const indexReads = () =>
+      invoke.mock.calls.filter(([peer, channel]) => peer === 'healthy' && channel === 'maker:schedule:list-sidebar-index-runs');
+    invoke.mockClear();
+    const event = (type: string, runId: string) =>
+      act(() =>
+        listeners.onRemotePush({
+          deviceId: 'healthy',
+          channel: 'maker:schedule:event',
+          payload: { type, scheduleId: 's1', runId, sessionId: '' },
+        }),
+      );
+    event('fired', 'r1');
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(8_000);
+    });
+    event('skipped', 'r1');
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(9_000);
+    });
+    expect(indexReads()).toHaveLength(0);
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(1_000);
+    });
+    expect(indexReads()).toHaveLength(1);
+
+    invoke.mockClear();
+    for (let i = 0; i < 6; i++) {
+      event(i % 2 ? 'skipped' : 'fired', `r${i}`);
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(6_000);
+      });
+    }
+    expect(indexReads()).toHaveLength(1);
+  });
+
+  // Same incident: the 60 s safety-net reconcile also re-read every peer's whole run
+  // index. Live events keep it current, so the reconcile reads it every 5 minutes, and
+  // at once when events were skipped while the window was idle.
+  it('re-reads the run index on the periodic reconcile only every 5 minutes or after skipped events', async () => {
+    setDataOwnerGeneration('test-owner', 1);
+    onTestFinished(() => setDataOwnerGeneration(null));
+    renderHook(() => useDeviceLinkRemoteProjects());
+    await settle();
+    const reads = (channel: string) =>
+      invoke.mock.calls.filter(([peer, ch]) => peer === 'healthy' && ch === channel).length;
+    const minute = async () => {
+      window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Shift' }));
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(60_000);
+      });
+    };
+    invoke.mockClear();
+    for (let i = 0; i < 4; i++) await minute();
+    expect(reads('local-db:sessions:list')).toBeGreaterThanOrEqual(3);
+    expect(reads('maker:schedule:list-sidebar-index-runs')).toBe(0);
+    await minute();
+    await minute();
+    expect(reads('maker:schedule:list-sidebar-index-runs')).toBe(1);
+
+    // Hidden: events are skipped; showing the window again must catch the index up
+    // even though the last periodic read was under 5 minutes ago.
+    const visibility = (state: 'visible' | 'hidden') => {
+      Object.defineProperty(document, 'visibilityState', { configurable: true, get: () => state });
+      document.dispatchEvent(new Event('visibilitychange'));
+    };
+    onTestFinished(() => visibility('visible'));
+    act(() => visibility('hidden'));
+    act(() =>
+      listeners.onRemotePush({
+        deviceId: 'healthy',
+        channel: 'maker:schedule:event',
+        payload: { type: 'fired', scheduleId: 's1', runId: 'r9' },
+      }),
+    );
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(30_000);
+    });
+    invoke.mockClear();
+    act(() => visibility('visible'));
+    await settle();
+    expect(reads('maker:schedule:list-sidebar-index-runs')).toBe(1);
+  });
 });
 
 // Review (#8381): a cache read that lands after getState() seeds `connecting` shards. They must
@@ -320,4 +411,6 @@ describe('late cold-start cache hydrate', () => {
     await act(async () => { await vi.advanceTimersByTimeAsync(20_000); });
     expect(status()).toBe(afterGrace);
   });
+
 });
+

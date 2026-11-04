@@ -138,6 +138,21 @@ const RESEED_DEBOUNCE_MS = 300;
 // Matches the background device directory's 10s budget; late results still apply.
 const INITIAL_DISCOVERY_WAIT_MS = 10_000;
 /**
+ * Schedule events from another computer arrive in pairs (fired, then completed or
+ * skipped, usually seconds apart). Each refresh pulls the whole run index, and the
+ * index alternates between "running" and "not running", so the content cache never
+ * hits. Wait for a quiet period so a pair costs one read whose content is usually
+ * unchanged; the max wait keeps a steady stream of events from postponing it forever.
+ */
+const SCHEDULE_EVENT_QUIET_MS = 10_000;
+const SCHEDULE_EVENT_MAX_WAIT_MS = 30_000;
+/**
+ * Live schedule events already keep the run index current, so the 60 s safety-net
+ * reconcile only re-reads it every few minutes, or at once after events were skipped
+ * while the window was hidden or idle.
+ */
+const PERIODIC_SCHEDULE_INDEX_MS = 5 * 60_000;
+/**
  * 「检测中」最多撑多久:冷启动缓存种入 / relay 重连期间分片标 connecting,link 过了这么久
  * 还没上线就降为 disconnected,免得 relay 长时间不可用时侧栏一直显示检测中。
  * 取值覆盖 device-link 一次完整握手超时(15s)再留余量;上线即清除。
@@ -435,6 +450,9 @@ export function useDeviceLinkRemoteProjects(
     }
 
     let disposed = false;
+    const scheduleEventRefreshes = new Map<string, { timer: ReturnType<typeof setTimeout>; firstAt: number }>();
+    const scheduleIndexReadAt = new Map<string, number>();
+    const scheduleEventsMissed = new Set<string>();
     const finishInitialDiscovery = remoteProjectsStore.beginInitialDiscovery();
     const initialDiscoveryTimer = setTimeout(finishInitialDiscovery, INITIAL_DISCOVERY_WAIT_MS);
     /**
@@ -628,8 +646,10 @@ export function useDeviceLinkRemoteProjects(
       // bootstrap 期间被撤销(subscribe 成功、list 被拒)→ refreshRemoteDeviceSessions 返 'revoked'
       // (而非静默 give-up)→ 这里 handleRevoked,而不是继续预取能力 / 清撤销标记无视拒绝。
       void refreshAliases(deviceId);
+      const bootstrapReadAt = Date.now();
       const result = await refreshRemoteDeviceSessions(deviceId, name, { scope: 'both' });
       if (!canContinue()) return;
+      if (result === 'ok') scheduleIndexReadAt.set(deviceId, bootstrapReadAt);
       if (result === 'revoked') return void handleRevoked(deviceId);
       if (result === 'gave-up') {
         // 永久错误（如旧被控端 CHANNEL_NOT_ALLOWED）或瞬态重试耗尽：不是权威空列表，
@@ -901,11 +921,18 @@ export function useDeviceLinkRemoteProjects(
         // sessions:list 是 200 条有界窗口；refresh 层会保留窗口外 active 行，并有界补查
         // 缺席缓存 id 的终态，不能直接把响应缺席解释成删除。
         void refreshAliases(deviceId);
+        const readAt = Date.now();
+        const withSchedule = scheduleEventsMissed.has(deviceId)
+          || readAt - (scheduleIndexReadAt.get(deviceId) ?? 0) >= PERIODIC_SCHEDULE_INDEX_MS;
         const result = await refreshRemoteDeviceSessions(deviceId, name, {
-          scope: 'both',
+          scope: withSchedule ? 'both' : 'sessions',
           snapshotMode: 'merge',
           coalescingMode: 'weak',
         });
+        if (withSchedule && result === 'ok') {
+          scheduleIndexReadAt.set(deviceId, readAt);
+          scheduleEventsMissed.delete(deviceId);
+        }
         if (result === 'revoked' && !disposed) handleRevoked(deviceId);
         // 回传结果供 reconciler 的失败退避记账('gave-up' 加深退避,'ok' 复位)。
         return result;
@@ -1011,14 +1038,34 @@ export function useDeviceLinkRemoteProjects(
         // 推送照收；闲着不跟事件去拉整份自动化索引。人回来 / 窗口重新可见时 wake 用 scope both 补上。
         const watching =
           periodicReconcileActiveRef.current && (mainPresenceRef.current?.isActive() ?? true);
-        if (!watching) return;
+        if (!watching) {
+          scheduleEventsMissed.add(push.deviceId);
+          return;
+        }
         // 与手机同一份事件投影：运行诊断、静默提醒这类不改索引的事件不重拉，
         // 否则 run 进行期间高频推送会反复取消在途的列表 / 索引读取。
         const { refresh } = projectScheduleEvent(push.payload);
         if (!refresh.sessionIndex && !refresh.scheduleList && !refresh.unreadSummary) return;
-        void refreshRemoteDeviceSessions(push.deviceId, eligible.get(push.deviceId), { scope: 'schedule' }).then((result) => {
-          if (result === 'revoked' && !disposed) handleRevoked(push.deviceId);
-        });
+        const deviceId = push.deviceId;
+        const pending = scheduleEventRefreshes.get(deviceId);
+        if (pending) clearTimeout(pending.timer);
+        const firstAt = pending?.firstAt ?? Date.now();
+        const delay = Math.min(SCHEDULE_EVENT_QUIET_MS, Math.max(0, firstAt + SCHEDULE_EVENT_MAX_WAIT_MS - Date.now()));
+        const timer = setTimeout(() => {
+          scheduleEventRefreshes.delete(deviceId);
+          if (disposed || !eligible.has(deviceId)) return;
+          // Hidden again: the wake refresh (scope both) catches up instead.
+          if (!(periodicReconcileActiveRef.current && (mainPresenceRef.current?.isActive() ?? true))) {
+            scheduleEventsMissed.add(deviceId);
+            return;
+          }
+          const readAt = Date.now();
+          void refreshRemoteDeviceSessions(deviceId, eligible.get(deviceId), { scope: 'schedule' }).then((result) => {
+            if (result === 'ok') scheduleIndexReadAt.set(deviceId, readAt);
+            if (result === 'revoked' && !disposed) handleRevoked(deviceId);
+          });
+        }, delay);
+        scheduleEventRefreshes.set(deviceId, { timer, firstAt });
         return;
       }
       if (push.channel !== 'maker:provider:changed') return;
@@ -1149,6 +1196,8 @@ export function useDeviceLinkRemoteProjects(
     return () => {
       disposed = true;
       clearTimeout(initialDiscoveryTimer);
+      for (const { timer } of scheduleEventRefreshes.values()) clearTimeout(timer);
+      scheduleEventRefreshes.clear();
       clearConnectingGrace();
       setRemoteReseedImpl(null);
       setRemoteSessionBootstrapRetryImpl(null);
