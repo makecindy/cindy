@@ -1,5 +1,13 @@
 # 跨端协议兼容
 
+## Slack MCP 工具参数别名（#8762）
+
+`slack_call_tool` 使用可选的 `args` 传入所选工具的参数，保留 `arguments` 作为旧调用别名；
+两者都提供时使用已校验的 `args`，显式空对象也优先，非法参数仍由 MCP schema 拒绝。
+两者都省略时保持无参调用。桥接层继续发送 `{ name, arguments }`，不改变服务端协议。
+旧调用可直接使用新客户端；修复 `args` 丢失需要升级执行工具的客户端，无需服务端配套升级。
+工具定义在启动时固定，不在会话中途重排，也不改变 Slack 身份、账号访问检查或审批规则。
+
 ## 群内能力提示（非执行终态）
 
 复用现有通用 card 消息合同，新增 `cindy.capability-notice` / `schemaRevision: 1`：data 只带固定 code（`GROUP_AUTHORIZATION_REQUIRED`、`GROUP_AUTHORIZATION_UNAVAILABLE`、`ATTACHMENTS_UNAVAILABLE`），fallback 为执行电脑本地化的完整可读提示。以伙伴 actor 发往原主群或话题；同执行 ID、epoch、类别复用同一稳定幂等 ID，并按既有消息 POST 合同放入 `operationId`（不发送本地 `clientId` 字段）；投递重试不创建执行、不结算模型轮次。
