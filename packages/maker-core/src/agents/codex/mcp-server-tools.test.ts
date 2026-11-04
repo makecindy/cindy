@@ -22,7 +22,7 @@ describe('Codex thread MCP server tools', () => {
       tools: [{ name: 'search', description: 'Search OMC' }, { name: 'open' }],
     });
     expect(request).toHaveBeenCalledWith('mcpServerStatus/list',
-      { cursor: null, limit: 100, detail: 'toolsAndAuthOnly', threadId: 'thread-1' },
+      { cursor: null, limit: 100, detail: 'toolsAndAuthOnly', threadId: 'thread-1', serverName: 'custom_omc' },
       expect.objectContaining({ timeoutMs: expect.any(Number) }));
   });
 
@@ -45,5 +45,33 @@ describe('Codex thread MCP server tools', () => {
       a: { nextCursor: 'a', data: [] },
     });
     await expect(readCodexThreadMcpServerTools(invoke, 't', 'custom_omc')).rejects.toThrow(/repeated a cursor/);
+  });
+
+  it.each([
+    ['notStarted', 'pending'], ['starting', 'pending'],
+    ['failed', 'failed'], ['cancelled', 'failed'],
+    ['authenticationRequired', 'needs-auth'], ['disabled', 'disabled'],
+  ])('does not expose cached tools while runtime is %s', async (runtimeStatus, state) => {
+    const { invoke } = requestFor({ first: { nextCursor: null, data: [
+      { name: 'custom_omc', runtimeStatus, tools: { search: {} } },
+    ] } });
+    expect(await readCodexThreadMcpServerTools(invoke, 't', 'custom_omc'))
+      .toEqual({ state, tools: [] });
+  });
+
+  it('does not report a cached catalog as connected after discovery fails', async () => {
+    const { invoke } = requestFor({ first: { nextCursor: null, data: [
+      { name: 'custom_omc', runtimeStatus: 'connected', toolsError: 'secret endpoint', tools: { search: {} } },
+    ] } });
+    expect(await readCodexThreadMcpServerTools(invoke, 't', 'custom_omc'))
+      .toEqual({ state: 'failed', tools: [] });
+  });
+
+  it('reports a connected runtime with an empty catalog as no-tools', async () => {
+    const { invoke } = requestFor({ first: { nextCursor: null, data: [
+      { name: 'custom_omc', runtimeStatus: 'connected', toolsError: null, tools: {} },
+    ] } });
+    expect(await readCodexThreadMcpServerTools(invoke, 't', 'custom_omc'))
+      .toEqual({ state: 'no-tools', tools: [] });
   });
 });
