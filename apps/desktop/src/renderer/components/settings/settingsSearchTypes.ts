@@ -10,6 +10,8 @@ export interface SettingsSearchContext extends ImBotIdentity {
   voiceInput?: { serviceMode: 'cindy' | 'byok'; asrProvider: string };
   voiceRefinementEnabled?: boolean;
   agentIsland?: { supported: boolean; enabled: boolean };
+  /** Selector visibility only; never expose the user's custom media URL to search. */
+  wallpaperMotionAvailable?: boolean;
 }
 
 export interface SettingsSearchEntry {

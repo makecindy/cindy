@@ -83,6 +83,9 @@ import { BuiltinToolsSection } from './BuiltinToolsSection';
 import { ComputerUseSection } from './ComputerUseSection';
 import { useAuth } from '@/contexts/AuthContext';
 import { useLocale } from '@/hooks/useLocale';
+import { useWallpaperSettings } from '@/hooks/useWallpaperSettings';
+import { isSceneWallpaper } from '@/lib/wallpaper';
+import { isCustomWallpaperVideo } from '../../../shared/appearanceSettings';
 import { SettingsCatalogPanel } from './SettingsCatalogPanel';
 import { getLastWorkingDir, subscribeToLastWorkingDir } from '@/state/lastWorkingDir';
 import { BillingSettingsSection } from '@/features/billing/BillingPage';
@@ -112,6 +115,9 @@ export function SettingsView() {
 
 function SettingsViewContent() {
   const { locale } = useLocale();
+  const { wallpaperId, customWallpaperUrl } = useWallpaperSettings();
+  const wallpaperMotionAvailable = isSceneWallpaper(wallpaperId) ||
+    (wallpaperId === 'custom' && isCustomWallpaperVideo(customWallpaperUrl));
   const voiceModelSelection = useVoiceInputModelSelection();
   const voiceRefinementEnabled = useSyncExternalStore(subscribeVoiceSettings, getVoiceRefinementEnabled);
   const agentIslandEnabled = useSyncExternalStore(subscribeAgentIslandSettings, getAgentIslandEnabled);
@@ -282,6 +288,7 @@ function SettingsViewContent() {
   );
   const searchContext = useMemo<SettingsSearchContext>(() => ({
     locale,
+    wallpaperMotionAvailable,
     region: CURRENT_CINDY_REGION,
     mode,
     membershipKind: user?.membershipKind ?? null,
@@ -293,7 +300,7 @@ function SettingsViewContent() {
       serviceMode: voiceModelSelection.selection.serviceMode,
       asrProvider: voiceModelSelection.selection.asrProvider,
     } : undefined,
-  }), [locale, mode, user?.membershipKind, voiceModelSelection.ready, voiceModelSelection.selection, voiceRefinementEnabled, agentIslandEnabled, agentIslandSupported]);
+  }), [locale, wallpaperMotionAvailable, mode, user?.membershipKind, voiceModelSelection.ready, voiceModelSelection.selection, voiceRefinementEnabled, agentIslandEnabled, agentIslandSupported]);
   const requestedEntry = resolveSettingsSearchEntry(activeTab, searchParams.get('section'));
   const searchEntry = piExtensionsPanelOpen || (requestedEntry?.isVisible && !requestedEntry.isVisible(searchContext))
     ? null : requestedEntry;

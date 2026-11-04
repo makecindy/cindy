@@ -1,4 +1,4 @@
-import { keyboardShortcutsSettings } from './KeyboardShortcutsSection.settings-search';
+import { appShortcutSettings, keyboardShortcutsSettings } from './KeyboardShortcutsSection.settings-search';
 import { useSettingsSearchNavigation } from './SettingsSearchNavigation';
 import { Button } from '@/components/ui/button';
 /**
@@ -483,6 +483,7 @@ export function KeyboardShortcutsSection() {
         )}
       >
         {visibleDefs.map((def) => {
+          const setting = appShortcutSettings[def.id];
           const isRecording = recordingId === def.id;
           const customized = def.id in overrides;
           const combos = getAppShortcutCombos(def.id);
@@ -494,7 +495,7 @@ export function KeyboardShortcutsSection() {
                 ? t('settings.shortcuts.errors.globalOccupied')
                 : null;
           return (
-            <div id={`settings-shortcut-${def.id}`} key={def.id} className="flex items-center gap-2 py-2">
+            <div id={setting.targetId} key={def.id} className="flex items-center gap-2 py-2">
               {/* 条目标题 + 说明双行: 标题主文字色 + 说明次级色,
                   对齐 LinkOpenSection 卡片条目的用色规范 */}
               <div className="flex min-w-0 flex-1 flex-col gap-[2px]">
@@ -545,7 +546,7 @@ export function KeyboardShortcutsSection() {
                 </Button>
               ) : (
                 <div className="flex shrink-0 items-center gap-1">
-                  <button data-setting-id={keyboardShortcutsSettings.shortcuts.id}
+                  <button data-setting-id={setting.id}
                     type="button"
                     disabled={!def.rebindable}
                     onClick={() => {
@@ -562,7 +563,7 @@ export function KeyboardShortcutsSection() {
                     <Pencil size={13} />
                   </button>
                   {combos.length > 0 && (
-                    <button data-setting-id={keyboardShortcutsSettings.shortcuts.id}
+                    <button data-setting-id={setting.id}
                       type="button"
                       disabled={!def.rebindable}
                       onClick={() => handleDeleteOne(def.id)}
@@ -577,7 +578,7 @@ export function KeyboardShortcutsSection() {
                     </button>
                   )}
                   {customized && (
-                    <button data-setting-id={keyboardShortcutsSettings.shortcuts.id}
+                    <button data-setting-id={setting.id}
                       type="button"
                       onClick={() => handleResetOne(def.id)}
                       className={iconButtonClass}

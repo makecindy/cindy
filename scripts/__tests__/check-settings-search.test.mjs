@@ -116,6 +116,15 @@ describe("settings search coverage gate", () => {
     const extra = direct + "\nconst unbound = <VoiceInputSelect />;";
     assert.equal(inspectSettingsControls(extra, extra, registered).length, 1);
   });
+  // Guard regression (#8481): generated shortcut maps must remain tied to a
+  // registered catalog; computed access is not permission to use an arbitrary ID.
+  it("validates indexed definitions only from registered collections", () => {
+    const source = `${imports}\nconst setting = settings[row.id]; const control = <button data-setting-id={setting.id} />;`;
+    assert.deepEqual(inspectSettingsControls(source, "", registered), []);
+    assert.equal(inspectSettingsControls(source, "", new Set()).length, 1);
+    assert.equal(inspectSettingsControls(source.replace('settings[row.id]', 'unrelated[row.id]'), "", registered).length, 1);
+    assert.equal(inspectSettingsControls(source.replace('setting.id}', 'row.id}'), "", registered).length, 1);
+  });
   it("keeps migrated files strict even when a new control existed at the Git base", () => {
     const source = bound + "\nconst extra = <Input />;";
     assert.equal(inspectSettingsControls(source, source, registered).length, 1);

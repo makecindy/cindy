@@ -76,8 +76,8 @@ export const appearanceSettings = defineSettings({
     sectionKey: 'settings.appearance.wallpaper.title',
     descriptionKey: 'settings.appearance.wallpaper.customHint',
     options: [
-      { value: 'static', labelKey: 'settings.appearance.wallpaper.motionStatic' },
-      { value: 'dynamic', labelKey: 'settings.appearance.wallpaper.motionDynamic' },
+      { value: 'static', labelKey: 'settings.appearance.wallpaper.motionStatic', isVisible: ({ wallpaperMotionAvailable }) => wallpaperMotionAvailable === true },
+      { value: 'dynamic', labelKey: 'settings.appearance.wallpaper.motionDynamic', isVisible: ({ wallpaperMotionAvailable }) => wallpaperMotionAvailable === true },
     ],
   },
   modeLabel: {

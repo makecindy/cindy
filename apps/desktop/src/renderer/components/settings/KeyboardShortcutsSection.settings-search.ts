@@ -25,21 +25,25 @@ export const keyboardShortcutsSettings = defineSettings({
   },
 });
 
+export const appShortcutSettings = defineSettings(Object.fromEntries(
+  APP_SHORTCUT_DEFINITIONS.filter((definition) => !definition.hiddenInSettings).map((definition) => [definition.id, {
+    id: 'shortcuts.' + definition.id,
+    tab: 'shortcuts' as const,
+    targetId: 'settings-shortcut-' + definition.id,
+    fallbackTargetId: 'settings-panel-shortcuts',
+    titleKey: definition.labelKey,
+    descriptionKey: definition.descriptionKey,
+    sectionKey: 'settings.tabs.shortcuts',
+    isVisible: ({ platform }: { platform: string }) =>
+      isAppShortcutAvailableOnPlatform(definition.id, platform),
+  }]),
+));
+
 export default {
   id: 'shortcuts',
   order: 7,
   entries: [
     ...Object.values(keyboardShortcutsSettings),
-    ...APP_SHORTCUT_DEFINITIONS.filter((definition) => !definition.hiddenInSettings).map((definition) => ({
-      id: 'shortcuts.' + definition.id,
-      tab: 'shortcuts' as const,
-      targetId: 'settings-shortcut-' + definition.id,
-      fallbackTargetId: 'settings-panel-shortcuts',
-      titleKey: definition.labelKey,
-      descriptionKey: definition.descriptionKey,
-      sectionKey: 'settings.tabs.shortcuts',
-      isVisible: ({ platform }: { platform: string }) =>
-        isAppShortcutAvailableOnPlatform(definition.id, platform),
-    })),
+    ...Object.values(appShortcutSettings),
   ],
 } satisfies SettingsSearchModule;

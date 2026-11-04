@@ -12,6 +12,8 @@ import { SettingsView } from '../SettingsView';
 import type { useVoiceInputModelSelection } from '@/hooks/useVoiceInputModelSelection';
 import { setAgentIslandEnabled } from '@/hooks/useAgentIslandSettings';
 import { LocaleProvider, useLocale } from '@/hooks/useLocale';
+import { WallpaperSettingsProvider } from '@/hooks/useWallpaperSettings';
+import { DEFAULT_APPEARANCE_SETTINGS, type AppearanceSettings } from '../../../../shared/appearanceSettings';
 
 vi.mock('react-i18next', async (importOriginal) => ({
   ...await importOriginal<typeof import('react-i18next')>(),
@@ -20,6 +22,7 @@ vi.mock('react-i18next', async (importOriginal) => ({
     'settings.voiceInput.refinement.instructions.label': 'Refinement instructions',
     'settings.agentIsland.skins.whitesnow.name': 'Apple Girl',
     'settings.language.classical.label': 'Classical script and style',
+    'settings.appearance.wallpaper.motionDynamic': 'Dynamic wallpaper',
   }[key] ?? key) }),
 }));
 vi.mock('@/contexts/AuthContext', () => ({
@@ -110,14 +113,16 @@ function LocationProbe() {
 function renderSettings(entry: string) {
   return render(
     <LocaleProvider>
-      <MemoryRouter initialEntries={[entry]}>
-        <Routes>
-          <Route path="/settings" element={<SettingsView />} />
-          <Route path="/" element={<p>Home</p>} />
-        </Routes>
-        <LocationProbe />
-        <LocaleControls />
-      </MemoryRouter>
+      <WallpaperSettingsProvider>
+        <MemoryRouter initialEntries={[entry]}>
+          <Routes>
+            <Route path="/settings" element={<SettingsView />} />
+            <Route path="/" element={<p>Home</p>} />
+          </Routes>
+          <LocationProbe />
+          <LocaleControls />
+        </MemoryRouter>
+      </WallpaperSettingsProvider>
     </LocaleProvider>,
   );
 }
@@ -163,6 +168,30 @@ afterEach(() => {
 });
 
 describe('SettingsView Escape', () => {
+  // Unit wiring regression (#8481): real provider broadcasts must update search
+  // before Appearance is mounted, including transitions between custom media types.
+  it('updates wallpaper motion search as the selected wallpaper changes', async () => {
+    let publish!: (settings: AppearanceSettings) => void;
+    Object.assign(window.electronAPI, { appearanceSettings: {
+      getSync: () => ({ ...DEFAULT_APPEARANCE_SETTINGS, wallpaperVisibility: 0 }),
+      onChanged: (notify: typeof publish) => { publish = notify; return () => {}; },
+    } });
+    await act(async () => { renderSettings('/settings'); });
+    fireEvent.change(screen.getByRole('combobox', { name: 'settings.search.ariaLabel' }), {
+      target: { value: 'Dynamic wallpaper' },
+    });
+    expect(screen.queryAllByRole('option')).toHaveLength(0);
+    for (const [wallpaperId, customWallpaperUrl, visible] of [
+      ['cindy-window', '', true],
+      ['night-launch', '', false],
+      ['custom', `cindy-media://client-wallpaper/${'a'.repeat(64)}.mp4`, true],
+      ['custom', `cindy-media://client-wallpaper/${'b'.repeat(64)}.webp`, false],
+      ['none', `cindy-media://client-wallpaper/${'a'.repeat(64)}.mp4`, false],
+    ] as const) {
+      act(() => publish({ ...DEFAULT_APPEARANCE_SETTINGS, wallpaperVisibility: 0, wallpaperId, customWallpaperUrl }));
+      expect(screen.queryAllByRole('option')).toHaveLength(visible ? 1 : 0);
+    }
+  });
   // Unit wiring regression (#8481): use the real locale provider/setter so search
   // follows the same live preference as LanguageSection without remounting settings.
   it('updates classical search results after changing the display language', async () => {

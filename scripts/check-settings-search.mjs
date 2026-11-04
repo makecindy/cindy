@@ -146,7 +146,7 @@ export function inspectSettingsControls(
     if (ts.isConditionalExpression(node))
       return isDefinition(node.whenTrue) && isDefinition(node.whenFalse);
     return (
-      ts.isPropertyAccessExpression(node) &&
+      (ts.isPropertyAccessExpression(node) || ts.isElementAccessExpression(node)) &&
       ts.isIdentifier(node.expression) &&
       definitionImports.has(node.expression.text)
     );

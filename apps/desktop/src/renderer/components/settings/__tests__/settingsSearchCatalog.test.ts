@@ -44,6 +44,18 @@ const searchContext = { platform: 'win32', region: 'cn', mode: 'cloud', membersh
 } as const;
 
 describe('settings discoverability regressions', () => {
+  // Unit regression (#8481): hidden motion selectors must not advertise options.
+  it.each([false, true])('filters wallpaper motion labels with selector visible=%s', (wallpaperMotionAvailable) => {
+    const documents = buildSettingsSearchDocuments(searchI18n.t, TAB_IDS, { ...searchContext, wallpaperMotionAvailable });
+    for (const lng of ['zh-CN', 'en']) {
+      for (const option of ['motionStatic', 'motionDynamic']) {
+        const results = searchSettings(documents, searchI18n.t(`settings.appearance.wallpaper.${option}`, { lng }));
+        // Dynamic also appears in the always-visible custom-wallpaper hint.
+        expect(results.some(({ entry }) => entry.id === 'settings.appearance.wallpaper.customChoose')).toBe(option === 'motionDynamic' || wallpaperMotionAvailable);
+      }
+    }
+    expect(documents.some(({ entry }) => entry.id === 'settings.appearance.wallpaper.customChoose')).toBe(true);
+  });
   // Unit regression (#8481): script/style controls mount only for an explicitly
   // selected classical locale; ordinary and system preferences leave them absent.
   it.each(['en', 'zh-CN', 'system', 'zh-Hans-x-lzh', 'zh-Hant-x-lzh'])(
