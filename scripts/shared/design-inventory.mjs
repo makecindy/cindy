@@ -1198,10 +1198,20 @@ function renderTable(headers, aligns, rows) {
   ];
 }
 
+export const REPORT_REL_PATH = 'tmp/design-inventory-report.md';
+export const REPORT_COMMAND = 'pnpm design:inventory:report';
+
+const STATS_METHOD_NOTE =
+  '裸颜色匹配与 `scripts/hardcoded-color-audit.mjs` 共用 `scripts/shared/hardcoded-color-match.mjs`（HEX / RGB / HSL / OKLCH 等字面通道），两者在共享 matcher 内统一排除纯语义包装、注释及 PR 编号；数值颜色函数还需位于样式属性、CSS 声明/函数或任意值语境，普通文案字符串里的颜色函数文本不计入；字面 fallback 仍计入——语义 token 消费与注释引用不是迁移债务；裸圆角为粗粒度（`rounded*` class、`border-radius:` 与 React style 对象的 `borderRadius:`）。Token 计数为样式源里 `var(--token)` / `hsl(var(--token)` 的去重 ID 数；Mobile 的 ThemeColors / typeScale 等 RN 属性不计入此列，不能将 0 解释为未使用 Token。Mobile 的可达组件与样式来源取自整个静态 import 闭包，会带入 App 公共外壳，各行数值高度重合，只适合看全局趋势，不代表单个界面。';
+
+/**
+ * 台账 GENERATED 区块只放登记事实：surface ID、平台、标题、生产入口与路由覆盖。
+ * 这些只在 catalog 或入口改变时变化。可达组件、样式来源与 Token / 裸值统计随任意
+ * 样式改动漂移，入库会让碰到同一 surface 的 PR 必然在同一行冲突，见 renderStatsReport。
+ */
 export function renderGeneratedBlock(
   surfaces,
   {
-    generateCommand = 'pnpm design:inventory',
     routerCoverage = { mapped: [], missing: [] },
     redirects = [],
     mobileCoverage = { mapped: [], exclusions: [] },
@@ -1222,23 +1232,18 @@ export function renderGeneratedBlock(
     '本区块由 `scripts/design-inventory.mjs` 生成，请勿手改。',
     '重新生成：`pnpm design:inventory`；校验：`pnpm check:design-inventory`。',
     '',
-    `生成命令：\`${generateCommand}\`。裸颜色匹配与 \`scripts/hardcoded-color-audit.mjs\` 共用 \`scripts/shared/hardcoded-color-match.mjs\`（HEX / RGB / HSL / OKLCH 等字面通道），两者在共享 matcher 内统一排除纯语义包装、注释及 PR 编号；数值颜色函数还需位于样式属性、CSS 声明/函数或任意值语境，普通文案字符串里的颜色函数文本不计入；字面 fallback 仍计入——语义 token 消费与注释引用不是迁移债务；裸圆角为粗粒度（\`rounded*\` class、\`border-radius:\` 与 React style 对象的 \`borderRadius:\`）。Token 计数为样式源里 \`var(--token)\` / \`hsl(var(--token)\` 的去重 ID 数；Mobile 的 ThemeColors / typeScale 等 RN 属性不计入此列，不能将 0 解释为未使用 Token。`,
+    `可达组件、样式来源与 Token / 裸颜色 / 裸圆角统计不入库：需要时运行 \`${REPORT_COMMAND}\`，输出到 \`${REPORT_REL_PATH}\`；要看某次提交时的数字，在该提交上重跑。`,
     '',
     `登记 surface 数：${surfaces.length}。平台包含 Desktop 与 Mobile；静态入口发现不表示已迁移或已实机验证。`,
     '',
     ...renderTable(
-      ['ID', '平台', '标题', '生产入口', '可达组件', '样式来源', 'Token 数', '裸颜色', '裸圆角'],
-      ['---', '---', '---', '---', '---', '---', '---:', '---:', '---:'],
+      ['ID', '平台', '标题', '生产入口'],
+      ['---', '---', '---', '---'],
       surfaces.map((surface) => [
         `\`${cell(surface.id)}\``,
         cell(surface.platform),
         cell(surface.title),
         cell(surface.productionEntry),
-        cell(surface.reachableComponents.join(', ')),
-        cell(surface.styleSources.join(', ')) || '—',
-        surface.tokenCount,
-        surface.bareColors,
-        surface.bareRadii,
       ]),
     ),
     '',
@@ -1263,6 +1268,31 @@ export function renderGeneratedBlock(
     ...renderTable(['文件', '原因'], ['---', '---'], mobileCoverage.exclusions.map(r => [cell(r.path), cell(r.reason)])),
     '', 'Mobile 静态图跟随本地 import/reexport 与平台 TSX；根布局仅登记可见反馈，不把布局自身或资源实例另算 surface。服务端动态内容、运行期 import 拼接、原生系统呈现及未显式导入的消费者需人工复核；不宣称完整递归渲染图。', '',
     GENERATED_END,
+  ].join('\n')}\n`;
+}
+
+/** 按需统计报告：只写到 gitignore 的 tmp/，不进台账，不参与 --check。 */
+export function renderStatsReport(surfaces) {
+  return `${[
+    '# Cindy 生产 UI 台账：统计报告',
+    '',
+    `由 \`${REPORT_COMMAND}\` 按当前工作区源码生成，不入库。登记与人工决策见 \`${INVENTORY_REL_PATH}\`。`,
+    '',
+    STATS_METHOD_NOTE,
+    '',
+    ...renderTable(
+      ['ID', '平台', '可达组件', '样式来源', 'Token 数', '裸颜色', '裸圆角'],
+      ['---', '---', '---', '---', '---:', '---:', '---:'],
+      surfaces.map((surface) => [
+        `\`${cell(surface.id)}\``,
+        cell(surface.platform),
+        cell(surface.reachableComponents.join(', ')),
+        cell(surface.styleSources.join(', ')) || '—',
+        surface.tokenCount,
+        surface.bareColors,
+        surface.bareRadii,
+      ]),
+    ),
   ].join('\n')}\n`;
 }
 
@@ -1308,10 +1338,10 @@ export function findOrphanHumanIds(humanMarkdown, generatedIds) {
 const SEED_PREFIX = [
   '# Cindy 生产 UI 台账',
   '',
-  '> 台账真相正本。机器事实在 GENERATED 区块；人工决策（owner / 迁移状态 / protected / 目标道路 / 下一动作）在其后，按 surface ID 对齐。',
+  '> 台账真相正本。登记事实（surface ID / 平台 / 标题 / 生产入口 / 路由覆盖）在 GENERATED 区块；人工决策（owner / 迁移状态 / protected / 目标道路 / 下一动作）在其后，按 surface ID 对齐。',
   '> schema 见 [`design-governance.md`](./design-governance.md) §2.1。生成器只重写 GENERATED 区块。',
   '',
-  '重新生成：`pnpm design:inventory`。校验：`pnpm check:design-inventory`。',
+  '重新生成：`pnpm design:inventory`。校验：`pnpm check:design-inventory`。统计报告（不入库）：`pnpm design:inventory:report`。',
   '',
 ].join('\n');
 

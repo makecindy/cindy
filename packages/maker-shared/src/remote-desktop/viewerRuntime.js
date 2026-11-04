@@ -159,6 +159,11 @@ export function mountRemoteDesktopViewer(root, postMessage, config) {
     hold = null,
     moved = false;
   const pointers = new Map();
+  // Device touch (a plugin live screen): fingers are touches on the device, never
+  // a mouse or a local pan/zoom. A device without touch input takes no contacts.
+  let deviceTouch = false,
+    deviceTouchMax = 0;
+  const deviceContacts = new Map();
   const mouseButtons = find("mouse-buttons"),
     wheel = find("mouse-wheel"),
     wheelGrip = find("mouse-wheel-grip");
@@ -858,6 +863,15 @@ export function mountRemoteDesktopViewer(root, postMessage, config) {
     const tail = pending[pending.length - 1];
     if (event.kind === "move" && tail?.kind === "move")
       pending[pending.length - 1] = event;
+    // A touch snapshot that only moves the same contacts replaces the previous one.
+    else if (
+      event.kind === "touch" &&
+      tail?.kind === "touch" &&
+      onlyMoves(tail) &&
+      onlyMoves(event) &&
+      tail.touches.map((t) => t.id).join() === event.touches.map((t) => t.id).join()
+    )
+      pending[pending.length - 1] = event;
     // Coalesce only adjacent scrolls, preserving button/key ordering. Bound the
     // accumulated distance so a delayed ACK cannot replay a large scroll backlog.
     else if (event.kind === "scroll" && tail?.kind === "scroll") {
@@ -927,6 +941,7 @@ export function mountRemoteDesktopViewer(root, postMessage, config) {
   }, 33);
   cleanups.push(() => clearInterval(inputTimer));
   function release() {
+    deviceContacts.clear();
     nativeTouchpad = null;
     stopEdgePan();
     desktopPan = null;
@@ -1057,6 +1072,61 @@ export function mountRemoteDesktopViewer(root, postMessage, config) {
       x: clamp((p.x - r.x) / r.width),
       y: clamp((p.y - r.y) / r.height),
     };
+  }
+  function onlyMoves(event) {
+    return event.touches.every((t) => t.phase === "moved" || t.phase === "stationary");
+  }
+  /** Device touch: every contact goes to the device; nothing pans or zooms the picture. */
+  function deviceTouchInput(e) {
+    e.preventDefault();
+    if (!control) return;
+    const local = config.desktop ? desktopPoint(e) : { x: e.clientX, y: e.clientY };
+    const contact = deviceContacts.get(e.pointerId);
+    let edge;
+    if (e.type === "pointerdown") {
+      if (contact || deviceContacts.size >= deviceTouchMax || !insideDesktop(local)) return;
+      if (!e.nativeInput) stage.setPointerCapture(e.pointerId);
+      let id = 0;
+      const used = new Set([...deviceContacts.values()].map((c) => c.id));
+      while (used.has(id)) id++;
+      const p = point(local);
+      deviceContacts.set(e.pointerId, { id, x: p.x, y: p.y, phase: "began" });
+      // A swipe that starts at the very edge is a system gesture (Home, back).
+      if (deviceContacts.size === 1) {
+        const r = layout(),
+          band = Math.max(12, Math.min(28, Math.min(r.width, r.height) * 0.04));
+        const near = {
+          bottom: r.y + r.height - local.y,
+          top: local.y - r.y,
+          left: local.x - r.x,
+          right: r.x + r.width - local.x,
+        };
+        edge = Object.keys(near)
+          .filter((key) => near[key] <= band)
+          .sort((a, b) => near[a] - near[b])[0];
+      }
+    } else if (!contact) return;
+    else if (e.type === "pointermove") {
+      const p = point(local);
+      if (Math.abs(p.x - contact.x) < 0.0005 && Math.abs(p.y - contact.y) < 0.0005) return;
+      contact.x = p.x;
+      contact.y = p.y;
+      contact.phase = "moved";
+    } else {
+      if (e.type === "pointerup") {
+        const p = point(local);
+        contact.x = p.x;
+        contact.y = p.y;
+      }
+      contact.phase = e.type === "pointerup" ? "ended" : "cancelled";
+    }
+    const touches = [...deviceContacts.values()].map(({ id, x, y, phase }) => ({ id, x, y, phase }));
+    queue({ kind: "touch", touches, ...(edge ? { edge } : {}) });
+    for (const [pointerId, item] of deviceContacts) {
+      if (item.phase === "ended" || item.phase === "cancelled") deviceContacts.delete(pointerId);
+      else item.phase = "stationary";
+    }
+    flush();
   }
   const desktopPoint = (e) => {
     const bounds = stage.getBoundingClientRect();
@@ -1290,6 +1360,7 @@ export function mountRemoteDesktopViewer(root, postMessage, config) {
     render();
   }
   listen(stage, "pointerdown", (e) => {
+    if (deviceTouch) return deviceTouchInput(e);
     if (config.desktop) {
       e.preventDefault();
       if (
@@ -1355,6 +1426,7 @@ export function mountRemoteDesktopViewer(root, postMessage, config) {
     }
   });
   listen(stage, "pointermove", (e) => {
+    if (deviceTouch) return deviceTouchInput(e);
     if (config.desktop) {
       if (desktopPan?.id === e.pointerId) {
         const dx = e.clientX - desktopPan.x,
@@ -1412,6 +1484,7 @@ export function mountRemoteDesktopViewer(root, postMessage, config) {
     render();
   });
   function up(e) {
+    if (deviceTouch) return deviceTouchInput(e);
     if (config.desktop) {
       if (desktopPan?.id === e.pointerId) {
         const gesture = desktopPan;
@@ -1462,7 +1535,8 @@ export function mountRemoteDesktopViewer(root, postMessage, config) {
     if (!pointers.size && manualViewMoved) settlePan();
   }
   listen(stage, "pointerup", up);
-  listen(stage, "pointercancel", () => {
+  listen(stage, "pointercancel", (e) => {
+    if (deviceTouch) return deviceTouchInput(e);
     release();
     settlePan();
   });
@@ -2501,6 +2575,14 @@ export function mountRemoteDesktopViewer(root, postMessage, config) {
         render();
         break;
       }
+      case "deviceTouch":
+        release();
+        deviceTouch = message.enabled === true;
+        deviceTouchMax =
+          deviceTouch && Number.isInteger(message.maxTouches)
+            ? Math.max(0, Math.min(10, message.maxTouches))
+            : 0;
+        break;
       case "mode":
         release();
         if (message.mode !== "pointer") followRest = null;
@@ -2561,6 +2643,21 @@ export function mountRemoteDesktopViewer(root, postMessage, config) {
         fy = 0.5;
         render();
         break;
+      // Cover the viewport instead of fitting inside it (a device screen whose
+      // shape differs from the phone's); the overflow stays pannable.
+      case "fill": {
+        if (config.desktop) break;
+        stopPanAnimation();
+        const fit = Math.min(viewportWidth() / dw, viewportHeight() / dh);
+        const cover = Math.max(viewportWidth() / dw, viewportHeight() / dh);
+        manualViewMoved = false;
+        zoom = 1;
+        zoom = Math.max(1, Math.min(layout().maxZoom, cover / fit));
+        fx = 0.5;
+        fy = 0.5;
+        render();
+        break;
+      }
       case "rightClick":
         click(2);
         break;

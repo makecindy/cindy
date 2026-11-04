@@ -26,9 +26,7 @@ export function GroupMaskAvatar({ self, companion, compact = false }: {
 
 export function GroupMaskStatusText({ mask }: { mask: GroupMaskPresentation }) {
   const { t } = useTranslation();
-  return <span>{mask.status === 'paused' && mask.settings.trigger === 'always'
-    ? t(key('presence'), { minutes: mask.settings.resumeMinutes })
-    : mask.status === 'waiting' && mask.settings.trigger === 'scheduled'
+  return <span>{mask.status === 'waiting' && mask.settings.trigger === 'scheduled'
       ? t(key('scheduledWait'), { time: mask.settings.start })
       : t(key(`detail.${mask.status}`))}</span>;
 }
@@ -39,21 +37,6 @@ export function useOpenGroupMask() {
     const next = new URLSearchParams(current);
     next.set(BOT_GROUP_SETTINGS_PARAM, '1'); next.set(GROUP_MASK_SETTINGS_PARAM, '1'); return next;
   });
-}
-
-export function GroupMaskSettingsEntry({ groupId }: { groupId: string }) {
-  const mask = useGroupMask(groupId);
-  return mask ? <MaskSettingsEntry mask={mask} /> : null;
-}
-
-function MaskSettingsEntry({ mask }: { mask: GroupMaskPresentation }) {
-  const open = useOpenGroupMask();
-  const { t } = useTranslation();
-  return <button type="button" data-testid="group-mask-settings-entry" onClick={open}
-    className="flex min-h-11 w-full items-center gap-3 rounded-lg text-left text-13 text-[var(--text-primary)] outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]">
-    <span className="flex-1">{t(key('title'))}</span>
-    <span className="text-[var(--text-secondary)]">{t(key(`status.${mask.status}`))}</span><ChevronRight size={14} />
-  </button>;
 }
 
 export function GroupMaskIndicator({ groupId, onTakeOver }: { groupId: string; onTakeOver: () => void }) {
@@ -81,7 +64,13 @@ function MaskIndicator({ mask, onTakeOver }: { mask: GroupMaskPresentation; onTa
       onCloseAutoFocus={event => { if (focusInput) { event.preventDefault(); onTakeOver(); setFocusInput(false); } }}>
       <h3 className="text-14 font-medium">{t(key('title'))}</h3>
       <p className="text-13 leading-normal text-[var(--text-secondary)]"><GroupMaskStatusText mask={mask} /></p>
-      {mask.status === 'enabled' ? <Button size="sm" variant="secondary" className="w-full"
+      {mask.error && <div className="flex flex-wrap items-center gap-2">
+        <p role="alert" className="min-w-0 flex-1 text-13 leading-normal text-[var(--text-danger)]">{t(key('saveError'))}</p>
+        <Button size="sm" variant="secondary" disabled={mask.saving} onClick={mask.retry}>{t(key('retry'))}</Button>
+      </div>}
+      {mask.settings.enabled && mask.settings.trigger === 'always' ? <Button size="sm" variant="secondary" className="w-full" disabled={mask.saving}
+        onClick={() => mask.update({ enabled: false })}>{t(key('stop'))}</Button>
+        : mask.status === 'enabled' ? <Button size="sm" variant="secondary" className="w-full"
         onClick={() => { mask.participate(); setFocusInput(true); setOpen(false); }}>{t(key('takeover'))}</Button>
         : mask.status === 'paused' || mask.status === 'waiting' && mask.settings.trigger === 'manual'
           ? <Button size="sm" variant="secondary" className="w-full" onClick={() => { mask.resume(); setOpen(false); }}>{t(key('resume'))}</Button> : null}

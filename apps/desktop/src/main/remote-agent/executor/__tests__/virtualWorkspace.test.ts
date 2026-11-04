@@ -1110,6 +1110,24 @@ describe('path projection cost with many aliases', () => {
     expect(workspace.agentPathPrefixes()).toContain(virtual);
   });
 
+  // 连回时已有映射默认保持原目标；重新同步过的托管 Skill 目录用 replaceFrom 换成新目标，不再指向被淘汰的旧快照。
+  it('keeps existing aliases on reconnect except the ones asked to be replaced', () => {
+    const project = path.join(root, 'work');
+    const oldSkill = path.join(root, 'skill-v1');
+    const newSkill = path.join(root, 'skill-v2');
+    const personal = path.join(root, 'personal');
+    for (const dir of [project, oldSkill, newSkill, personal]) fs.mkdirSync(dir, { recursive: true });
+    const workspace = new ExecutorWorkspace({ workingDir: project });
+    workspace.setVirtualRoot(VIRTUAL);
+    const skill = VIRTUAL + '/workspace/.claude/skills/cindy-pr';
+    const mine = VIRTUAL + '/workspace/.claude/skills/mine';
+    workspace.setAliases([{ from: skill, to: oldSkill }, { from: mine, to: personal }]);
+    workspace.addAliases([{ from: skill, to: newSkill }, { from: mine, to: newSkill }], new Set([skill]));
+    const localOf = (virtual: string) => path.normalize(workspace.mapTextFromAgent(virtual));
+    expect(localOf(skill + '/run.mjs')).toBe(path.join(newSkill, 'run.mjs'));
+    expect(localOf(mine + '/a.md')).toBe(path.join(personal, 'a.md'));
+  });
+
   it('follows a symlinked alias target that is retargeted between batches', async ({ skip }) => {
     const project = path.join(root, 'work');
     const first = path.join(root, 'first');

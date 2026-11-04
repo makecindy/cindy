@@ -1,4 +1,5 @@
 import { resolveCopilotAccountUrl } from './copilot-account-url.js';
+import { withProviderAppAttribution } from './provider-app-attribution.js';
 /**
  * provider-route —— 把 catalog 的 `RoutingDescriptor` 翻译成 loopback proxy 的 `RoutingDecision`,
  * 并据 per-session 选定的供应商解析本会话的路由。
@@ -43,6 +44,7 @@ import type { RoutingDecision } from '@cindy/anthropic-compat-proxy';
 import { getActiveCatalog, isXdCodexAnthropicBridgeModel } from './active-catalog.js';
 import { getAppCapabilities } from '../appCapabilities.js';
 import { sessionModelInterface, assertModelInterfaceAvailable } from './session-model-interface.js';
+import { routeLookupModelId } from './claude-model-id.js';
 import { getSessionProvider } from './session-provider-store.js';
 
 /**
@@ -341,17 +343,27 @@ function hasHeader(headers: Record<string, string> | undefined, expectedName: st
  */
 export function buildRouteDecision(...args: Parameters<typeof buildRouteDecisionBase>): RoutingDecision | null {
   const decision = buildRouteDecisionBase(...args);
+  if (decision && !decision.localHandler) {
+    const headers = withProviderAppAttribution(decision.upstreamOverride ?? args[0].upstream,
+      decision.headerOverride, {}, decision.headerDelete);
+    if (Object.keys(headers).length > 0) decision.headerOverride = headers;
+  }
   const selected = args[0].modelInterface;
   if (!decision || !selected || decision.localHandler) return decision;
   return { ...decision, compatibilityProfiles: selected.compatibility,
-    transformRequestBody: (body) => {
-      let parsed: unknown;
-      try { parsed = JSON.parse(body.toString('utf8')); } catch { return { body }; }
-      if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return { body };
-      const object = parsed as Record<string, unknown>;
-      if (typeof object.model === 'string') object.model = selected.wireModelId;
-      return { body: Buffer.from(JSON.stringify(parsed)) };
-    },
+    transformRequestBody: rewriteRequestBodyModel(selected.wireModelId),
+  };
+}
+
+/** Rewrites the JSON body's model right before forwarding; non-JSON bodies pass through. */
+export function rewriteRequestBodyModel(model: string): NonNullable<RoutingDecision['transformRequestBody']> {
+  return (body) => {
+    let parsed: unknown;
+    try { parsed = JSON.parse(body.toString('utf8')); } catch { return { body }; }
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return { body };
+    const object = parsed as Record<string, unknown>;
+    if (typeof object.model === 'string') object.model = model;
+    return { body: Buffer.from(JSON.stringify(parsed)) };
   };
 }
 
@@ -770,9 +782,9 @@ export function buildLocalHandlerHeaders(
     route.routing.authStrategy === 'api-key-header' ||
     route.routing.authStrategy === 'oauth-token' ||
     route.routing.authStrategy === 'provider-oauth-header';
-  const headers: Record<string, string> = hostManagedAuth
+  const headers: Record<string, string> = withProviderAppAttribution(route.routing.upstream, hostManagedAuth
     ? withoutClientAuthHeaders(route.routing.headerOverride)
-    : { ...(route.routing.headerOverride ?? {}) };
+    : { ...(route.routing.headerOverride ?? {}) }, {}, route.routing.headerDelete);
   const headerDelete = new Set(route.routing.headerDelete ?? []);
   switch (route.routing.authStrategy) {
     case 'none':
@@ -1066,12 +1078,14 @@ export async function resolveImplicitLocalBridgeRouteResolution(
   }
   const source = await connectedDefaultProviderForModel(catalogModelId, agent);
   if (source.kind !== 'provider') return source;
-  const routing = providerRoutingForModel(source.provider, agent, modelId);
+  // cc sends `foo[1m]` for a 1M window while the Provider lists `foo` (and its own route)
+  const lookupModelId = agent === 'claude-code' ? routeLookupModelId(source.provider, modelId) : modelId;
+  const routing = providerRoutingForModel(source.provider, agent, lookupModelId);
   const wire = implicitBridgeWire(routing, agent);
   if (wire !== 'openai-chat' && wire !== 'anthropic-messages' && wire !== 'google-generative-ai' && !(agent === 'claude-code' && wire === 'openai-responses')) {
     return { kind: 'none' };
   }
-  const route = await resolveProviderRouteById(source.provider.id, agent, modelId);
+  const route = await resolveProviderRouteById(source.provider.id, agent, lookupModelId);
   return route ? { kind: 'route', route } : { kind: 'none' };
 }
 
@@ -1392,7 +1406,7 @@ export function resolveVisionBackendRoute(
   }
   // 路由额外头（headerOverride 去掉客户端凭证头）：anthropic-version / x-api-key /
   // 自定义 provider 头等。视觉桥直连不发 proxy，需自己带上，否则后端可能 400/拒绝。
-  const headers = withoutClientAuthHeaders(routing.headerOverride);
+  const headers = withProviderAppAttribution(upstream, withoutClientAuthHeaders(routing.headerOverride), {}, routing.headerDelete);
   // 对齐 buildRouteDecision 的凭证头形状（claude-code/pi 面 = Anthropic Messages 风格，
   // 后端按 x-api-key 鉴权，只带 Authorization: Bearer 会被拒；codex 面 = OpenAI 式按
   // Bearer 鉴权）。x-api-key 不是「客户端凭证头」，是路由要求的鉴权形状，须补进额外头。

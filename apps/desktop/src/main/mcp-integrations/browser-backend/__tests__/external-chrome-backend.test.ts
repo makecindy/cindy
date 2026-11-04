@@ -775,6 +775,102 @@ describe('ExternalChromeBackend proxy lifecycle', () => {
     });
   });
 
+  it('terminates the port owner when the adopted close cannot stop the browser', async () => {
+    // On Windows the spawned browser is a short-lived launcher: once it exits
+    // the runtime owns no live PID, so neither the vendored stop nor the CDP
+    // close can release the port. The OS-level termination is the last way to
+    // prove the browser is gone.
+    const runtime = {
+      call: vi.fn(async (req: BrowserControlRequest): Promise<BrowserControlResult> => {
+        if (req.action === 'stop') {
+          return { ok: true, action: req.action, status: 200, data: { stopped: false } };
+        }
+        return { ok: true, action: req.action, status: 200, data: { running: true } };
+      }),
+    };
+    const closeAdoptedBrowser = vi.fn(async () => false);
+    const terminateManagedPortOwner = vi.fn(async () => true);
+    const backend = new ExternalChromeBackend(runtime, fakeLogger(), {
+      createRuntime: () => fakeRuntime(),
+      closeAdoptedBrowser,
+      terminateManagedPortOwner,
+      managedUserDataDir: '/managed/browser/Cindy/user-data',
+      isBrowserGone: vi.fn(async () => false),
+      cdpHttpUrl: 'http://127.0.0.1:18800',
+    });
+
+    const stopped = await backend.call({ action: 'stop' });
+
+    expect(stopped.ok).toBe(true);
+    expect(stopped.data).toMatchObject({ stopped: true });
+    expect(closeAdoptedBrowser).toHaveBeenCalledTimes(1);
+    expect(terminateManagedPortOwner).toHaveBeenCalledTimes(1);
+    expect(terminateManagedPortOwner).toHaveBeenCalledWith({
+      cdpHttpUrl: 'http://127.0.0.1:18800',
+      cdpPort: 18800,
+      userDataDir: '/managed/browser/Cindy/user-data',
+    });
+    // A verified stop must release the block, otherwise the next start is
+    // refused with "route is unknown after a failed restart".
+    await expect(backend.call({ action: 'tabs' })).resolves.toMatchObject({ ok: true });
+  });
+
+  it('reclaims a browser left over from a previous run when a start finds the port taken', async () => {
+    const runtime = {
+      call: vi.fn(async (req: BrowserControlRequest): Promise<BrowserControlResult> => ({
+        ok: true,
+        action: req.action,
+        status: 200,
+        data: { running: true },
+      })),
+    };
+    const closeAdoptedBrowser = vi.fn(async () => false);
+    const terminateManagedPortOwner = vi.fn(async () => true);
+    const created: BrowserProxyRoute[] = [];
+    const backend = new ExternalChromeBackend(runtime, fakeLogger(), {
+      createRuntime: (route) => {
+        created.push(route);
+        return fakeRuntime();
+      },
+      closeAdoptedBrowser,
+      terminateManagedPortOwner,
+      managedUserDataDir: '/managed/browser/Cindy/user-data',
+      isBrowserGone: vi.fn(async () => false),
+      cdpHttpUrl: 'http://127.0.0.1:18800',
+    });
+
+    const started = await backend.call({ action: 'start' });
+
+    expect(started.ok).toBe(true);
+    expect(terminateManagedPortOwner).toHaveBeenCalledTimes(1);
+    expect(created).toHaveLength(1);
+    expect(created[0]).toEqual({ mode: 'direct' });
+  });
+
+  it('refuses the start when neither the adopted close nor the port owner can be stopped', async () => {
+    const runtime = {
+      call: vi.fn(async (req: BrowserControlRequest): Promise<BrowserControlResult> => ({
+        ok: true,
+        action: req.action,
+        status: 200,
+        data: { running: true },
+      })),
+    };
+    const backend = new ExternalChromeBackend(runtime, fakeLogger(), {
+      createRuntime: () => fakeRuntime(),
+      closeAdoptedBrowser: vi.fn(async () => false),
+      terminateManagedPortOwner: vi.fn(async () => false),
+      managedUserDataDir: '/managed/browser/Cindy/user-data',
+      isBrowserGone: vi.fn(async () => false),
+      cdpHttpUrl: 'http://127.0.0.1:18800',
+    });
+
+    const started = await backend.call({ action: 'start' });
+
+    expect(started.ok).toBe(false);
+    expect(started.message).toContain('could not be stopped');
+  });
+
   it('installs the lifetime guard for credential-free proxied launches too', async () => {
     const auth = { start: vi.fn(async () => {}), dispose: vi.fn(async () => {}) };
     const routes: BrowserProxyRoute[] = [];
@@ -1046,7 +1142,9 @@ describe('ExternalChromeBackend proxy lifecycle', () => {
   it('keeps the route blocked when that teardown cannot be verified', async () => {
     // If the stop cannot be verified, the pages may still be live — so the
     // route must stay unusable rather than quietly recovering.
-    const { backend, created, isBrowserGone } = createHarness();
+    const { backend, created, isBrowserGone, closeAdoptedBrowser } = createHarness();
+    // Neither readiness nor the CDP close can prove the browser is gone.
+    closeAdoptedBrowser.mockResolvedValue(false);
     await backend.call({
       action: 'start',
       proxyServer: 'http://proxy.test:8080',
@@ -1082,6 +1180,38 @@ describe('ExternalChromeBackend proxy lifecycle', () => {
       ok: false,
       errorCode: 'BROWSER_RUNTIME_UNAVAILABLE',
     });
+  });
+
+  it('releases the block when the teardown after a containment failure is verified', async () => {
+    // A verified teardown means the surviving pages are gone, which is the
+    // whole objective of the containment failure path: there is nothing left
+    // to distrust, so the route must become usable again.
+    const { backend, created, isBrowserGone } = createHarness();
+    await backend.call({
+      action: 'start',
+      proxyServer: 'http://proxy.test:8080',
+      proxyAllowedHostnames: ['allowed.example'],
+    });
+    const runtime = created[0].runtime;
+    isBrowserGone.mockResolvedValue(false);
+    runtime.call.mockResolvedValueOnce({
+      ok: false,
+      action: 'act',
+      errorCode: 'BROWSER_RUNTIME_ACTION_FAILED',
+      message: 'Navigation blocked: popup chain exceeded the validation budget and the browser '
+        + 'could not be torn down; unvalidated pages may still be live',
+    });
+    runtime.call.mockResolvedValueOnce({
+      ok: true, action: 'stop', status: 200, data: { stopped: false },
+    });
+
+    await backend.call({
+      action: 'act',
+      targetId: 't',
+      request: { kind: 'click', ref: 'e1' },
+    } as BrowserControlRequest);
+
+    expect(await backend.call({ action: 'tabs' })).toMatchObject({ ok: true });
   });
 
   it('does not trust a successful vendored stop as proof the process exited', async () => {

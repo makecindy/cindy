@@ -1,3 +1,4 @@
+import type { TaskCompletionDeliveryHost } from './taskCompletionDeliveryHost.js';
 import { botLearningTracker } from './botLearningTracker.js';
 import { countNightlyLearningTurn } from './botNightlyLearningCounter.js';
 import { learningTurnIdentity } from './botLearningFeedback.js';
@@ -72,6 +73,7 @@ export interface FinishSessionTerminalEventDeps {
   ) => Promise<void>;
   /** Hold a recovery-owned terminal until its final failure surface settles. */
   readonly deferUnsuccessfulProductTurn?: (owner: ProductTurnFailureOwner) => void;
+  readonly taskCompletionDeliveryHolder?: Pick<TaskCompletionDeliveryHost, 'settleTerminal'> | null;
   readonly botDelegationServiceHolder: Pick<BotDelegationService, 'settleSession'> | null;
   /** Resolves a Bot group member turn when its hidden group lane finishes. */
   readonly botGroupChatServiceHolder?: Pick<BotGroupChatService, 'settleLaneTurn'> | null;
@@ -713,6 +715,13 @@ export function finishSessionTerminalEvent(
             message?: unknown;
             reason?: unknown;
           } | null;
+          if (typeof event.sessionTurnGeneration === 'number') {
+            await deps.taskCompletionDeliveryHolder?.settleTerminal({ sessionId: session.id,
+              execution: { instanceId: event.sessionInstanceId ?? session.instanceId, generation: event.sessionTurnGeneration },
+              successful: !unsuccessfulBoundary && !recoveryOwnsUnsuccessfulBoundary && !autoResumeSuppressesPersist,
+              text: typeof doneData?.result === 'string' ? doneData.result : '', messageClientId: turnAssistantPersistId,
+            }).catch(() => deps.log.warn('Task completion delivery settlement deferred'));
+          }
           await deps.botDelegationServiceHolder?.settleSession({
             childSessionId: session.id,
             execution:

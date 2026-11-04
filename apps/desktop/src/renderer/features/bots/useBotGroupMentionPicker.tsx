@@ -44,7 +44,7 @@ import {
 import { isActiveBotGroupMember } from './botGroupPresentation';
 
 type MentionOption =
-  | { kind: 'all'; label: string }
+  | { kind: 'all' | 'allBots'; label: string }
   | { kind: 'member'; label: string; member: BotGroupMemberView };
 
 const withoutSelf = (members: readonly BotGroupMemberView[]) => members.filter((member) => member.isSelf !== true);
@@ -55,6 +55,7 @@ export function useBotGroupMentionPicker({
   members,
   textareaRef,
   allLabels,
+  allowMentionAllBots = false,
 }: {
   text: string;
   /** Every text change from typing or picking goes through here. */
@@ -64,6 +65,7 @@ export function useBotGroupMentionPicker({
   textareaRef: RefObject<HTMLTextAreaElement | null>;
   /** Labels that mean 「所有人」 when resolving; the first is the one offered. Defaults to the UI label. */
   allLabels?: readonly string[];
+  allowMentionAllBots?: boolean;
 }) {
   const { t } = useTranslation();
   const listboxId = useId();
@@ -85,6 +87,8 @@ export function useBotGroupMentionPicker({
   });
 
   const allLabel = t('bots.groupChat.mention.all');
+  const allBotsLabel = t('bots.groupChat.mention.allBots');
+  const allBotLabels = useMemo(() => [allBotsLabel, 'bots'], [allBotsLabel]);
   const resolveLabels = useMemo(() => allLabels ?? [allLabel], [allLabels, allLabel]);
   // You never name yourself: the host drops you from the targets (as on mobile).
   const mentionMembers = useMemo(() => withoutSelf(members), [members]);
@@ -99,8 +103,10 @@ export function useBotGroupMentionPicker({
     const people = filterBotGroupMentionCandidates(query.query, activeMembers).map(
       (member): MentionOption => ({ kind: 'member', label: member.name, member }),
     );
-    return [...everyone, ...people];
-  }, [activeMembers, allLabel, query]);
+    const allBots: MentionOption[] = allowMentionAllBots && filterBotGroupMentionCandidates(query.query, [{ name: allBotsLabel }]).length
+      ? [{ kind: 'allBots', label: allBotsLabel }] : [];
+    return [...everyone, ...allBots, ...people];
+  }, [activeMembers, allLabel, allBotsLabel, allowMentionAllBots, query]);
   const open = query !== null && options.length > 0 && dismissedStart !== query.start;
   const activeIndex = Math.min(highlight, Math.max(0, options.length - 1));
 
@@ -145,7 +151,7 @@ export function useBotGroupMentionPicker({
     setTracked((current) => {
       const remaining = retainBotGroupTrackedMentions(text, next.text, {
         members: mentionMembers,
-        allLabels: resolveLabels,
+        allLabels: resolveLabels, allBotLabels,
         tracked: current,
         editStart: query.start,
         editEnd: caret,
@@ -166,7 +172,7 @@ export function useBotGroupMentionPicker({
     setTracked((current) =>
       retainBotGroupTrackedMentions(text, value, {
         members: mentionMembers,
-        allLabels: resolveLabels,
+        allLabels: resolveLabels, allBotLabels,
         tracked: current,
         editStart,
         editEnd,
@@ -239,7 +245,7 @@ export function useBotGroupMentionPicker({
       <MenuHighlightLayer />
       {options.map((option, index) => (
         <div
-          key={option.kind === 'all' ? 'all' : option.member.botId}
+          key={option.kind !== 'member' ? option.kind : option.member.botId}
           id={`${listboxId}-${index}`}
           role="option"
           aria-selected={index === activeIndex}
@@ -250,7 +256,7 @@ export function useBotGroupMentionPicker({
           {...menuRowAttrs()}
           className={cn(COMPOSER_MENU_ROW, 'flex shrink-0 cursor-pointer items-center gap-2.5 px-2.5 py-1.5')}
         >
-          {option.kind === 'all' ? (
+          {option.kind !== 'member' ? (
             <span
               aria-hidden
               className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-[var(--surface-chip)] text-[var(--text-secondary)]"
@@ -261,9 +267,9 @@ export function useBotGroupMentionPicker({
             <BotAvatar bot={option.member} size="xs" className="h-6 w-6 text-12" />
           )}
           {withMenuLabels(<span className="min-w-0 flex-1 truncate">{option.label}</span>)}
-          {option.kind === 'all' ? (
+          {option.kind !== 'member' ? (
             <span className="shrink-0 text-12 font-normal leading-[1.33] text-[var(--cmd-palette-item-meta)]">
-              {t('bots.groupChat.mention.allHint')}
+              {t(option.kind === 'allBots' ? 'bots.groupChat.mention.allBotsHint' : 'bots.groupChat.mention.allHint')}
             </span>
           ) : null}
         </div>
@@ -281,6 +287,6 @@ export function useBotGroupMentionPicker({
     reset,
     /** Resolve who the text addresses, using the picks; `roster` defaults to the current members. */
     resolve: (value: string, roster: readonly BotGroupMemberView[] = members) =>
-      resolveBotGroupMentions(value, { members: withoutSelf(roster), allLabels: resolveLabels, tracked }),
+      resolveBotGroupMentions(value, { members: withoutSelf(roster), allLabels: resolveLabels, allBotLabels, tracked }),
   };
 }

@@ -18,6 +18,7 @@ import {
 import { buildContinuationDirective, buildFirstTurnDirective } from '../directive';
 import { MAX_CONSECUTIVE_OVERLOAD_TURNS } from '../usageLimit';
 import { publishUiSessionIntervention, resetUiContinuationListenersForTest } from '../../maker-ipc/uiContinuationSignal';
+import { isOwnerOwnMessage } from '../../input-handoff/ownerMessage';
 import { MCP_APP_MESSAGE_GUARD } from '../../mcp-apps/message.js';
 import type {
   AccountLimitInfo,
@@ -41,7 +42,12 @@ const compiledSteer = transpileModule(`${steerSource}\nreturn steerToAgentAccept
   compilerOptions: { target: ScriptTarget.ES2022 },
 }).outputText;
 
-function productionSteer(session: FakeSession, deliver: () => Promise<void>, rejectBeforeDelivery = false) {
+function productionSteer(
+  session: FakeSession,
+  deliver: (payload?: unknown) => Promise<void>,
+  rejectBeforeDelivery = false,
+  overrides: Record<string, unknown> = {},
+) {
   const query = { from: () => query, leftJoin: () => query, where: () => query, limit: async () => [] };
   const deps = {
     maker: {
@@ -61,6 +67,9 @@ function productionSteer(session: FakeSession, deliver: () => Promise<void>, rej
     prepareUserMessageForAgent: async (_id: string, message: unknown) => message,
     restoreAutoReviewSteerIntent: async () => undefined,
     shouldPrependMobileClientPromptNote: () => false,
+    inputHandoffSteerNote: () => null,
+    inputHandoffNoteDelivered: () => {},
+    isOwnerOwnMessage,
     readWireSourceDevice: () => null,
     isDeviceLinkInvoke: () => false,
     assertRemoteInputClearNotInFlight: () => {},
@@ -77,12 +86,13 @@ function productionSteer(session: FakeSession, deliver: () => Promise<void>, rej
     summarizeIpcUserMessage: () => ({}),
     log: { info: () => {}, warn: () => {}, debug: () => {} },
     throwIpcError: (code: string, message: string) => { throw new Error(`${code}: ${message}`); },
+    ...overrides,
   };
   // Keep Session identity stable across the production preflight checks.
   const live = deps.maker.getSession();
   deps.maker.getSession = () => live;
   return new Function(...Object.keys(deps), compiledSteer)(...Object.values(deps)) as
-    (sessionId: string, message: string) => Promise<void>;
+    (sessionId: string, message: string, sendOpts?: Record<string, unknown>) => Promise<void>;
 }
 
 // ── decideNextGoalState (pure) ───────────────────────────────────────────────
@@ -2193,6 +2203,49 @@ describe('GoalController', () => {
       expect(h.session.sends).toHaveLength(1);
     }
     await h.controller.dispose();
+  });
+
+  it('never rewrites a steered native command with the input handoff note, and drops the note instead of keeping it', async () => {
+    const delivered = vi.fn();
+    const payloads: unknown[] = [];
+    h.session.running = true;
+    const steer = productionSteer(h.session, async (payload) => { payloads.push(payload); }, false, {
+      inputHandoffSteerNote: () => '[Card closed]',
+      inputHandoffNoteDelivered: delivered,
+      shouldPrependMobileClientPromptNote: () => false,
+    });
+    await steer('s1', '/compact');
+    expect(String(payloads[0])).not.toContain('[Card closed]');
+    expect(delivered).toHaveBeenCalledOnce();
+  });
+
+  it.each([
+    ['a shared-task guest', { sharedTaskAuthor: { accountId: 'guest' } }],
+    ['a plugin', { sourcePlugin: 'some-plugin' }],
+  ] as const)('does not close the owner\'s input handoff card for a steered message from %s', async (_who, sendOpts) => {
+    const noteFor = vi.fn(() => '[Card closed]');
+    const delivered = vi.fn();
+    h.session.running = true;
+    const steer = productionSteer(h.session, async () => {}, false, {
+      inputHandoffSteerNote: noteFor,
+      inputHandoffNoteDelivered: delivered,
+      shouldPrependMobileClientPromptNote: () => false,
+    });
+    await steer('s1', 'hello from someone else', sendOpts);
+    // Neither closes the card nor claims a note was handled for this message.
+    expect(noteFor).not.toHaveBeenCalled();
+    expect(delivered).not.toHaveBeenCalled();
+  });
+
+  it('closes the owner\'s card for the owner\'s own steered message', async () => {
+    const noteFor = vi.fn(() => '[Card closed]');
+    h.session.running = true;
+    const steer = productionSteer(h.session, async () => {}, false, {
+      inputHandoffSteerNote: noteFor,
+      shouldPrependMobileClientPromptNote: () => false,
+    });
+    await steer('s1', 'my own message');
+    expect(noteFor).toHaveBeenCalledOnce();
   });
 
   it.each(['new turn', 'same-turn steer'] as const)(

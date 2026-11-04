@@ -192,7 +192,7 @@ export async function openRemotePluginSettings(
       collectionId: 'plugins',
       actionId: 'settings:open',
       resourceRef: { collectionId: 'plugins', kind: 'plugin', id: input.instanceId },
-      input: { expectedInstalledApproval: input.expectedInstalledApproval },
+      input: { expectedInstalledApproval: input.expectedInstalledApproval, modelPickerRemoteSources: true },
     },
   ]);
   assertCurrent();

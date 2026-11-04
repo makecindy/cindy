@@ -15,6 +15,7 @@ import {
 } from '@cindy/maker-core';
 import { DEFAULT_TOOL_ROW_WORDING, type ToolRowWording } from '@cindy/maker-shared/message-presentation';
 import { isTurnContinuationBoundaryEvent } from '@cindy/maker-shared/turn-continuation';
+import { sessionProjectDirectory } from '@cindy/maker-shared/worktree-paths';
 
 import { dbToMakerAgentKind } from '../../shared/agentKindConversion';
 import { LIVE_TASK_PRIORITY, liveTaskPriorityRank } from '../../shared/liveTaskPriority';
@@ -71,9 +72,12 @@ export const AGENT_ISLAND_TOOL_DETAIL_LINGER_MS = 2_000;
 export const AGENT_ISLAND_MESSAGE_PREVIEW_MIN_DWELL_MS = 1_600;
 export const AGENT_ISLAND_FOCUS_VERIFY_TIMEOUT_MS = 1_500;
 const AGENT_ISLAND_FOCUS_NAVIGATION_TIMEOUT_MS = 60_000;
-// 未读的 completed / error 在**灵动岛浮窗**里驻留的上限;超过后即便用户没 ack,
-// 也不再占用展开列表。岛 state 会按 TTL prune;远程绿/红点改订独立的
-// remoteUnreadTerminals 账本,不跟完整会话(含活动文本)一起留下。
+// 已完成条目在**灵动岛浮窗**里的最长保留期。超过一天后无论是否未读、是否正悬停
+// 展开,都不再展示;会话本身在侧栏 / 远程账本里的状态不受影响。岛 state 会按 TTL
+// prune;远程绿/红点改订独立的 remoteUnreadTerminals 账本,不跟完整会话(含活动文本)
+// 一起留下。
+export const AGENT_ISLAND_COMPLETED_RETENTION_MS = 24 * 60 * 60 * 1_000;
+// 未读 error 条目在灵动岛列表里驻留的上限;超过后即便用户没 ack 也 prune 掉。
 export const AGENT_ISLAND_UNREAD_TRANSIENT_TTL_MS = 4 * 60 * 60 * 1_000;
 const AGENT_ISLAND_COMPACT_CURRENT_MIN_DWELL_MS = 1_200;
 const AGENT_ISLAND_MEASURED_HEIGHT_MAX = 2_000;
@@ -111,6 +115,7 @@ interface AgentIslandSessionMeta {
   sessionId: string;
   agentKind?: string;
   workingDir?: string | null;
+  projectDir?: string | null;
   title?: string | null;
   workspaceKind?: string | null;
   /** undefined = not resolved yet; null = not a companion's Session. */
@@ -160,6 +165,8 @@ interface AgentIslandSessionState {
   errorUntil: number | null;
   /** Whether this terminal error belongs to a flow that deliberately emits a paired done. */
   completionAllowedAfterTerminalError: boolean;
+  /** First time this session was seen completed; drives the one-day island retention. */
+  completedAt: number | null;
   revealUntil: number | null;
   visibleInteractionSuppressedUntil: number | null;
   interactionRevealDismissed: boolean;
@@ -797,10 +804,12 @@ export function applyAgentIslandEvent(
     session.running = false;
     session.currentToolUseId = null;
     session.toolDetailUntil = null;
-    // Codex ask_user / plan_review can outlive a successful turn. Permission
-    // cards belong to the dead turn and must not keep the island waiting.
+    // Codex ask_user / plan_review can outlive a successful turn, and an input
+    // handoff never blocks it (the agent usually ends the turn right after
+    // asking). Permission cards belong to the dead turn and must not keep the
+    // island waiting.
     for (const [requestId, kind] of [...session.pendingInteractionKinds.entries()]) {
-      if (kind === 'ask_user_question' || kind === 'plan_review') continue;
+      if (kind === 'ask_user_question' || kind === 'plan_review' || kind === 'input_handoff') continue;
       dismissPendingInteraction(state, session, requestId, now, {
         requirePending: true,
         pruneIfIdle: false,
@@ -852,6 +861,7 @@ export function applyAgentIslandEvent(
     clearAssistantStream(session);
     session.running = false;
     session.phase = 'error';
+    session.completedAt = null;
     session.interactionKind = undefined;
     session.pendingInteractionIds.clear();
     clearPendingInteractionMetadata(session);
@@ -1244,7 +1254,7 @@ function applyDeviceSessionMeta(
   // A companion's home folder on that computer is not a project; its group is the context.
   const project = companion
     ? companion.groupName ?? null
-    : projectNameFromWorkingDir(input.workingDir, input.workspaceKind);
+    : projectNameForSession(input);
   const projectName = [project, input.deviceName].filter(Boolean).join(' · ') || null;
   const agentKind = dbToMakerAgentKind(input.agentKind);
   const changed = session.title !== input.title
@@ -1739,6 +1749,18 @@ export function buildAllSessionActivitySnapshots(
   return snapshots;
 }
 
+/**
+ * 其它设备任务在岛上的镜像，按与本机任务相同的快照口径读出。只供本进程内的消费方
+ * (如键盘状态灯)使用，绝不能并入 {@link buildAllSessionActivitySnapshots} 的 relay 载荷。
+ */
+export function buildDeviceSessionActivitySnapshots(
+  state: AgentIslandState,
+): AgentIslandSessionSnapshot[] {
+  return Array.from(state.sessions.values())
+    .filter((session) => session.sourceDeviceId !== null && !session.groupChat)
+    .map((session) => toSnapshot(session));
+}
+
 export function getNextAgentIslandTimerAt(state: AgentIslandState, now: number): number | null {
   let next: number | null = null;
   for (const value of [
@@ -1761,6 +1783,7 @@ export function getNextAgentIslandTimerAt(state: AgentIslandState, now: number):
       session.toolDetailUntil,
       session.messagePreview?.until,
       unreadIslandTtlAt(session),
+      completedRetentionDeadlineAt(session),
     ]) {
       if (value && value > now && (next === null || value < next)) {
         next = value;
@@ -1901,6 +1924,7 @@ function markSessionRunning(
   session.completionNotification = undefined;
   session.running = true;
   session.completedUntil = null;
+  session.completedAt = null;
   session.errorUntil = null;
   session.completionAllowedAfterTerminalError = false;
   session.revealUntil = null;
@@ -1931,6 +1955,7 @@ function completeAgentIslandSession(
   // 旧卡被真正的完成替换才换身份;失败 turn 的收尾记账 done / 重复 done 保留同一张
   // 卡,不得驱逐被点击的那张(review P1)。
   if (session.phase !== 'completed') replaceAgentIslandCard(session, now);
+  if (session.phase !== 'completed') session.completedAt = now;
   session.phase = 'completed';
   session.completionNotification = options.suppressAttention ? 'silent' : undefined;
   session.interactionKind = undefined;
@@ -2706,7 +2731,7 @@ function createSession(meta: AgentIslandSessionMeta, now: number): AgentIslandSe
     sessionId: meta.sessionId,
     title: meta.title?.trim() || null,
     companion: null,
-    projectName: projectNameFromWorkingDir(meta.workingDir, meta.workspaceKind),
+    projectName: projectNameForSession(meta),
     detail: '',
     detailSource: null,
     reconnectStatus: null,
@@ -2726,6 +2751,7 @@ function createSession(meta: AgentIslandSessionMeta, now: number): AgentIslandSe
     completedUntil: null,
     errorUntil: null,
     completionAllowedAfterTerminalError: false,
+    completedAt: null,
     revealUntil: null,
     visibleInteractionSuppressedUntil: null,
     interactionRevealDismissed: false,
@@ -2811,8 +2837,8 @@ function applyMeta(session: AgentIslandSessionState, meta: AgentIslandSessionMet
   if (session.companion) {
     // A companion's working directory is its private home, not a project the user chose.
     session.projectName = session.companion.groupName ?? null;
-  } else if (meta.workingDir !== undefined || meta.workspaceKind !== undefined) {
-    session.projectName = projectNameFromWorkingDir(meta.workingDir, meta.workspaceKind);
+  } else if (meta.workingDir !== undefined || meta.projectDir !== undefined || meta.workspaceKind !== undefined) {
+    session.projectName = projectNameForSession(meta);
   }
 }
 
@@ -2926,7 +2952,33 @@ function clearRemoteUnreadTerminal(state: AgentIslandState, sessionId: string): 
 
 function unreadIslandTtlAt(session: AgentIslandSessionState): number | null {
   if (!isUnreadTerminalLedger(session)) return null;
+  return terminalRetentionAt(session);
+}
+
+/** 终态条目在岛面的保留截止时刻。完成按首次完成时间算一天,报错沿用短 TTL。 */
+function terminalRetentionAt(session: AgentIslandSessionState): number {
+  const completedDeadline = completedRetentionDeadlineAt(session);
+  if (completedDeadline !== null) return completedDeadline;
   return session.lastActivityAt + AGENT_ISLAND_UNREAD_TRANSIENT_TTL_MS;
+}
+
+/** 群聊 / 伙伴对话卡片不是任务完成态,不受「完成保留一天」规则约束。 */
+function isRetentionScopedCompletedSession(session: AgentIslandSessionState): boolean {
+  return !session.groupChat && !session.companionChat && session.phase === 'completed';
+}
+
+/**
+ * 完成条目的保留截止时刻。已读卡片也要走这个截止刷新:否则用户停在岛内时
+ * preserveExpiredTransient 会一直留着卡片,却没有事件触发第二天的 prune。
+ */
+function completedRetentionDeadlineAt(session: AgentIslandSessionState): number | null {
+  if (!isRetentionScopedCompletedSession(session)) return null;
+  return (session.completedAt ?? session.lastActivityAt) + AGENT_ISLAND_COMPLETED_RETENTION_MS;
+}
+
+function isCompletedSessionExpired(session: AgentIslandSessionState, now: number): boolean {
+  const deadline = completedRetentionDeadlineAt(session);
+  return deadline !== null && now >= deadline;
 }
 
 function toRemoteUnreadSnapshot(unread: AgentIslandRemoteUnreadTerminal): AgentIslandSessionSnapshot {
@@ -2950,11 +3002,13 @@ function toRemoteUnreadSnapshot(unread: AgentIslandRemoteUnreadTerminal): AgentI
 }
 
 function isUnreadTerminalWithinIslandTtl(session: AgentIslandSessionState, now: number): boolean {
-  return isUnreadTerminalLedger(session)
-    && now - session.lastActivityAt < AGENT_ISLAND_UNREAD_TRANSIENT_TTL_MS;
+  return isUnreadTerminalLedger(session) && now < terminalRetentionAt(session);
 }
 
 function isSessionVisible(session: AgentIslandSessionState, now: number, preserveExpiredTransient = false): boolean {
+  // 完成超过一天的条目不再展示;这一条压过悬停展开与 preserveExpiredTransient,
+  // 避免旧完成卡片被用户一悬停就重新捞回岛面。
+  if (isCompletedSessionExpired(session, now)) return false;
   if (session.groupChat) return true;
   if (session.companionChat?.unread) return true;
   if (session.pendingInteractionIds.size > 0) return true;
@@ -3234,9 +3288,9 @@ function truncateInlineText(text: string, maxLength: number): string {
   return `${chars.slice(0, Math.max(0, maxLength - 3)).join('')}...`;
 }
 
-function projectNameFromWorkingDir(workingDir: string | null | undefined, workspaceKind?: string | null): string | null {
-  if (workspaceKind === 'dialogue') return null;
-  const trimmed = workingDir?.trim();
+function projectNameForSession(meta: Pick<AgentIslandSessionMeta, 'workingDir' | 'projectDir' | 'workspaceKind'>): string | null {
+  if (meta.workspaceKind === 'dialogue') return null;
+  const trimmed = sessionProjectDirectory(meta)?.trim();
   if (!trimmed) return null;
   const normalized = stripTrailingPathSeparators(trimmed);
   const parts = normalized.split(/[\\/]/).filter(Boolean);

@@ -12,7 +12,6 @@ vi.mock('../groupWindow', async (importOriginal) => ({
     commit: vi.fn(),
   })),
 }));
-vi.mock('../contactsAutoRegister', () => ({ autoRegisterTelegramSpeaker: vi.fn() }));
 vi.mock('../behaviorStore', () => ({
   readTelegramPersona: () => ({ botName: 'Private persona', soul: 'Private instructions' }),
 }));

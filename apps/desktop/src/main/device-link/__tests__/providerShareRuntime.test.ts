@@ -156,6 +156,30 @@ afterEach(() => {
 });
 
 describe('delegated executor access', () => {
+  // Unit: query throttling must not turn an unavailable check into a renewal.
+  // Existing expiry coverage did not attempt a rate-limited renewal on the live task.
+  it('keeps the original lease deadline after a renewal is rate limited', async () => {
+    vi.useFakeTimers({ toFake: ['Date', 'performance'] });
+    try {
+      const peer = guest('m1');
+      const generation = '11111111-1111-4111-8111-111111111111';
+      const grant = { op: 'delegate' as const, action: 'grant' as const,
+        shareId: 'share-1', memberId: 'm1', guestDeviceId: 'laptop', providerId: 'anthropic',
+        sessionId: 'limited_task', model: 'model-one', generation };
+      const expiresAt = Date.now() + 30 * 60_000;
+      await applyProviderShareDelegation('owner-pc', grant, async () => ({ active: true,
+        ownerDeviceId: 'owner-pc', generation, expiresAt }));
+      vi.setSystemTime(Date.now() + 20 * 60_000);
+      await expect(applyProviderShareDelegation('owner-pc', grant, async () => {
+        throw Object.assign(new Error('rate limited'), { statusCode: 429, retryAt: Date.now() + 60_000 });
+      })).rejects.toThrow('rate limited');
+      expect(delegatedProviderShareSessionAllowed(peer, grant.sessionId)).toBe(true);
+      expect(delegatedProviderShareLeases()[0].lease.wallUntil).toBe(expiresAt);
+      vi.setSystemTime(expiresAt);
+      expect(delegatedProviderShareSessionAllowed(peer, grant.sessionId)).toBe(false);
+    } finally { vi.useRealTimers(); }
+  });
+
   it('closes every old direct task immediately after owner deletion, then admits a fresh grant', async () => {
     const peer = guest('m1');
     const other = guest('m2');

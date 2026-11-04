@@ -24,6 +24,7 @@ import { preparePackagedNodePty } from './forge-node-pty';
 import { prunePackagedRuntime, prunePackagedMigrationSnapshots } from './forge-prune-runtime';
 import { copyRuntimeDependencyTrees as copyRuntimeTrees } from './forge-runtime-deps';
 import { packagedResourcesPath, stagePackagedThirdPartyNotices } from './forge-third-party-notices';
+import { stageMacPermissionLocales } from './forge-mac-locales';
 import {
   swiftTargetTriple,
   swiftTargetTriplesForForgeArch,
@@ -1214,8 +1215,30 @@ function buildRemoteDesktopInput(platform: ForgePlatform, arch: ForgeArch): void
     if (arch !== 'x64' && arch !== 'arm64')
       throw new Error('Unsupported Windows desktop architecture');
     const target = arch === 'arm64' ? 'aarch64-pc-windows-msvc' : 'x86_64-pc-windows-msvc';
-    for (const helper of ['windows-input', 'windows-host']) {
+    // The host EXE and cdylib otherwise compete for the same PDB filename.
+    // Match source-mode builds by isolating their Cargo output directories.
+    for (const [helper, buildTarget, artifact, destination] of [
+      [
+        'windows-input',
+        '--bin',
+        'cindy-windows-desktop-input.exe',
+        'cindy-windows-desktop-input.exe',
+      ],
+      [
+        'windows-host',
+        '--bin',
+        'cindy-windows-desktop-host.exe',
+        'cindy-windows-desktop-host.exe',
+      ],
+      [
+        'windows-host',
+        '--lib',
+        'cindy_windows_desktop_host.dll',
+        'cindy-windows-desktop-host.node',
+      ],
+    ] as const) {
       const root = path.join(__dirname, 'native', 'remote-desktop', helper);
+      const targetDir = path.join(root, 'target', buildTarget === '--lib' ? 'addon' : 'bin');
       const result = spawnSync(
         'cargo',
         [
@@ -1224,21 +1247,21 @@ function buildRemoteDesktopInput(platform: ForgePlatform, arch: ForgeArch): void
           '--locked',
           '--target',
           target,
+          '--config',
+          path.join(__dirname, 'native', 'remote-desktop', '.cargo', 'config.toml'),
           '--manifest-path',
           path.join(root, 'Cargo.toml'),
+          '--target-dir',
+          targetDir,
+          buildTarget,
+          ...(buildTarget === '--bin' ? [path.parse(artifact).name] : []),
         ],
         { stdio: 'inherit' },
       );
       if (result.error || result.status !== 0)
         throw new Error(`Remote desktop ${helper} build failed`);
-      const output = path.join(root, 'target', target, 'release');
-      const name = `cindy-windows-desktop-${helper === 'windows-input' ? 'input' : 'host'}`;
-      fs.copyFileSync(path.join(output, `${name}.exe`), path.join(destDir, `${name}.exe`));
-      if (helper === 'windows-host')
-        fs.copyFileSync(
-          path.join(output, 'cindy_windows_desktop_host.dll'),
-          path.join(destDir, `${name}.node`),
-        );
+      const output = path.join(targetDir, target, 'release');
+      fs.copyFileSync(path.join(output, artifact), path.join(destDir, destination));
     }
   }
 }
@@ -1895,14 +1918,15 @@ const config: ForgeConfig = {
         "Cindy's AI agent needs access to read and write files in your Documents folder.",
       NSDownloadsFolderUsageDescription:
         "Cindy's AI agent needs access to read and write files in your Downloads folder.",
-      // 智能通讯录导入: 经 osascript 向"通讯录"发 Apple Events(只读拉取)。
-      // 缺这条声明 macOS 会不弹授权窗直接拒绝(-1743), 用户只看到静默失败。
+      // 通讯录插件(cindy-contacts)的 Node 工作进程经 osascript 向"通讯录"发 Apple Events
+      // 导入名片; macOS 按 Cindy 应用授权。缺这条声明会不弹授权窗直接拒绝(-1743)。
       NSAppleEventsUsageDescription:
         'Cindy uses Apple Events to read Contacts you import and to add or update Contacts you explicitly export.',
       NSContactsUsageDescription:
         'Cindy accesses Contacts only when you import them or explicitly export additions or updates.',
+      // Device Link 局域网直连(direct-link-v1)。
       NSLocalNetworkUsageDescription:
-        'Cindy uses your local network to sync end-to-end encrypted Smart Contacts directly between your online desktop devices.',
+        'Cindy uses your local network to connect directly, with encryption, to your other devices signed in to the same account.',
       CFBundleDocumentTypes: [
         {
           CFBundleTypeName: 'Folder',
@@ -1983,6 +2007,9 @@ const config: ForgeConfig = {
       (buildPath, _electronVersion, platform, _arch, callback) => {
         try {
           prunePackagedMigrationSnapshots(packagedResourcesPath(buildPath, platform));
+          if (platform === 'darwin' || platform === 'mas') {
+            stageMacPermissionLocales(packagedResourcesPath(buildPath, platform));
+          }
           callback();
         } catch (err) {
           callback(err as Error);
@@ -2128,14 +2155,18 @@ const config: ForgeConfig = {
           target: 'preload',
         },
         {
-          entry: 'src/main/contacts-sync/contactsSyncCodecWorker.ts',
-          config: 'vite.contacts-sync-codec-worker.config.ts',
-          // 大通讯录 JSON/gzip/crypto 隔离在线程中，避免阻塞 Electron main。
+          entry: 'src/main/bot-import/openclawCronWorker.ts',
+          config: 'vite.node-worker.config.ts',
           target: 'preload',
         },
         {
-          entry: 'src/main/bot-import/openclawCronWorker.ts',
-          config: 'vite.contacts-sync-codec-worker.config.ts',
+          entry: 'src/main/maker-host/claudeCliStatusWorker.ts',
+          config: 'vite.node-worker.config.ts',
+          target: 'preload',
+        },
+        {
+          entry: 'src/main/performance-trace/traceRedactionWorker.ts',
+          config: 'vite.node-worker.config.ts',
           target: 'preload',
         },
         {
@@ -2174,7 +2205,7 @@ const config: ForgeConfig = {
         },
         {
           entry: 'src/main/skillhub/customizationScanProcess.ts',
-          config: 'vite.contacts-sync-codec-worker.config.ts',
+          config: 'vite.node-worker.config.ts',
           // File approvals can stall native scandir indefinitely. Keep discovery
           // in a killable utility process so Main can time out and recover.
           target: 'preload',

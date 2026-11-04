@@ -8,6 +8,7 @@ import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import { Session } from '@cindy/maker-core';
+import { pagePermissionGrants } from '../../mcp-apps/pagePermissions.js';
 
 import { GhostFsSlot, validateFsRelPath, workdirWriteVerdict, type FsSlotDeps, type FsSessionSnapshot } from '../fsSlot.js';
 import { resolveGhostFsSessionSnapshot } from '../../maker-ipc/ghostFsSessionSnapshot.js';
@@ -497,6 +498,24 @@ describe('GhostFsSlot', () => {
     });
     expect(r).toMatchObject({ ok: false });
     expect((r as { message: string }).message).toContain('超限');
+  });
+
+  // Unit: allowing a page tool must not allow its workdir write. Existing cases
+  // had no page grant; minimum input is one remembered page call then a denied write.
+  it('still confirms workdir writes after the page tool was allowed for the task', async () => {
+    const grant = { sessionId: 'sess-1', serverId: 'plugin-test', tool: 'write', revision: 'one', clearedAt: null };
+    const owner = {}; pagePermissionGrants.allow(owner, grant);
+    try {
+      expect(pagePermissionGrants.has(owner, grant)).toBe(true);
+      const { slot, confirmCalls } = makeHarness(dataRoot, {
+        session: { workingDir: workdir, permissionMode: 'default', planModeEnabled: false, remoteHostId: null },
+        confirm: async () => ({ confirmed: false }),
+      });
+      expect(await slot.handleFsRequest(GHOST_ID, { type: 'fs-request', op: 'write', root: 'workdir',
+        path: 'page.txt', content: 'blocked', callId: 'call-1' })).toMatchObject({ ok: false });
+      expect(confirmCalls).toEqual(['sess-1']);
+      expect(fs.existsSync(path.join(workdir, 'page.txt'))).toBe(false);
+    } finally { pagePermissionGrants.clearSession('sess-1'); }
   });
 
   it('workdir:免批模式(acceptEdits)直写,不弹确认', async () => {

@@ -359,10 +359,11 @@ it('routes trusted script follow-ups through durable authorization restoration, 
   const send = new Function(
     'captureDataOwnerBroadcastScope', 'classifySessionMessagePurpose', 'isDataOwnerBroadcastScopeCurrent',
     'sendToSessionInternal', 'AUTO_REVIEW_DELEGATED_CONTINUATION', 'coordinationInput', 'captureSessionAgentRequest',
+    'resolveSessionProject',
     compile(`return ({ ${source.slice(start, end)} }).sendToSession;`),
   )(() => 'owner', async () => ({ coordination: null, delegatedContinuation: false }), () => true,
     sendToSessionInternal, AUTO_REVIEW_DELEGATED_CONTINUATION, () => { throw new Error('not coordination'); },
-    capture);
+    capture, async () => ({ ok: true, projectDir: '/project' }));
   const params = { dispatcherSessionId: 'caller', targetSessionId: 'task', message: 'CI failed; repair and push the PR' };
   expect(await send({ ...params, [AUTO_REVIEW_DELEGATED_CONTINUATION]: true })).toMatchObject({
     message: params.message,
@@ -378,6 +379,6 @@ it('routes trusted script follow-ups through durable authorization restoration, 
   });
   expect(untrusted).not.toHaveProperty('forceQueue');
   expect(untrusted).not.toHaveProperty('resumeWithStoredPermissionMode');
-  expect(await send({ dispatcherSessionId: 'caller', message: 'new task', [AUTO_REVIEW_DELEGATED_CONTINUATION]: true }))
+  expect(await send({ dispatcherSessionId: 'caller', projectDir: '/project', message: 'new task', [AUTO_REVIEW_DELEGATED_CONTINUATION]: true }))
     .toMatchObject({ autoReviewUserText: { kind: 'agent-request' } });
 });

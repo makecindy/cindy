@@ -79,7 +79,7 @@ import {
 } from './browser-real-profile/index.js';
 import { assertTrustedAppRendererEvent } from '../security/trustedAppRenderer.js';
 import { createBrowserBackendIpcHandlers } from './browser-backend/settings-ipc.js';
-import { readCdpBrowserCommandLine } from './browser-backend/proxy-auth.js';
+import { readCdpBrowserCommandLine, terminateManagedChromePortOwner } from './browser-backend/proxy-auth.js';
 import { openExtensionStoreInUserBrowser } from './browser-backend/open-extension-store.js';
 import { ExternalLinkHandoff } from './browser-backend/external-link-handoff.js';
 import { resolveBrowserScreenshot } from './browserScreenshotResolver.js';
@@ -251,6 +251,19 @@ const externalChromeBackend = new ExternalChromeBackend(
     createRuntime: createManagedRuntime,
     cdpHttpUrl: () => currentGuardIdentity().cdpHttpUrl,
     managedUserDataDir: () => currentGuardIdentity().managedUserDataDir,
+    // The vendored stop can only signal a process it launched. On Windows the
+    // spawned browser is a short-lived launcher, so once it exits the runtime
+    // has no PID left while the real browser keeps the CDP port — every later
+    // stop then fails to verify and every later launch is refused. Terminating
+    // the port owner at the OS level (after re-proving profile and port) is the
+    // only way to reclaim it.
+    terminateManagedPortOwner: async ({ cdpHttpUrl, cdpPort, userDataDir }) =>
+      await terminateManagedChromePortOwner({
+        cdpHttpUrl,
+        cdpPort,
+        userDataDir,
+        logger,
+      }),
     ...(process.platform === 'darwin'
       ? {
           createLinkHandoff: (isAgentOpeningTab: () => boolean) => new ExternalLinkHandoff({

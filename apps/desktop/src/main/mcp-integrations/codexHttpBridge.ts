@@ -29,6 +29,7 @@ import {
   isSameCodexMcpSessionContext,
 } from './codexMcpThreadContextStore.js';
 import { isFrozenBuiltinPluginAllowed, isFrozenMcpServerAllowed } from './codexBuiltinToolPolicy.js';
+import { AppToolCancellation, type AppToolCallIdentity } from '../mcp-apps/toolCancellation.js';
 import { appServerIds } from '../mcp-apps/runtime.js';
 import { runTaskActionRequest } from '../maker-ipc/taskActionAuthorization.js';
 
@@ -50,12 +51,12 @@ export const REMOTE_COLLAB_SERVER_NAMES: ReadonlySet<string> = new Set([
  * 本机 store (per hostId+远端路径 分区, 见 maker-core buildMemoryScopeKey)。
  */
 export const REMOTE_MEMORY_SERVER_NAME = 'cindy_memory';
-/** Remote helper is enabled only for Bot Sessions and rechecks their live surface. */
+/** Remote helper requires a bound Session and rechecks its live tool surface. */
 export const REMOTE_BOT_HELPER_SERVER_NAME = 'cindy_helper';
 /**
  * 远端 (SSH remote-forward) 允许暴露的 server 全集 — additionalBearerTokens
  * (persistent token) 认证的请求只能访问这些 server, 鉴权层按它 scope。
- * 放行协同、按 Session 限定的伙伴 helper 与 Maker Memory (cindy_memory,
+ * 放行协同、按 Session 限定能力面的 helper 与 Maker Memory (cindy_memory,
  * 2026-07 放行: 工具面固定、只触达本机 maker-memory 目录, 与协同同威胁模型);
  * 拿到 persistent token 的远端进程仍不得经 bridge 初始化 cindy_ssh 等其余
  * 本机 server。
@@ -149,6 +150,7 @@ export interface CodexHttpBridge {
   url(serverName: string): string;
   /** Startup identity for App initialization and tools/list, never tool execution. */
   withDiscoveryContext<T>(ctx: LiziMcpSessionContext, run: () => Promise<T>): Promise<T>;
+  prepareToolCancellation(identity: AppToolCallIdentity): () => void;
   registerThreadContext(threadId: string, ctx: LiziMcpSessionContext): void;
   unregisterThreadContext(threadId: string, expectedSessionInstanceId?: string): void;
   /**
@@ -226,6 +228,7 @@ export async function startCodexHttpBridge(
     transportsByServer.set(name, new Map());
   }
   const threadContextStore = createCodexMcpThreadContextStore();
+  const toolCancellation = new AppToolCancellation();
   const discoveryContexts = new Map<string, LiziMcpSessionContext>();
   // sessionId → ctx (远端 cc 的身份通道, 经 ?session= query 路由, 见 interface 注释)。
   const sessionCtxById = new Map<string, LiziMcpSessionContext>();
@@ -399,6 +402,7 @@ export async function startCodexHttpBridge(
         serverName,
         log,
         threadContextStore,
+        toolCancellation,
         discoveryContexts,
         remoteAppServer,
         appServer,
@@ -537,6 +541,13 @@ export async function startCodexHttpBridge(
       try { return await run(); }
       finally { if (discoveryContexts.get(instance) === lease) discoveryContexts.delete(instance); }
     },
+    prepareToolCancellation: (identity) => {
+      const current = () => threadContextStore.getContextForThreadId(identity.threadId);
+      const admitted = current();
+      return toolCancellation.prepare(identity, () =>
+        admitted !== undefined && current() === admitted && admitted.agentKind === 'codex' &&
+        admitted.sessionId === identity.sessionId && admitted.sessionInstanceId === identity.sessionInstanceId);
+    },
     registerThreadContext: threadContextStore.registerThreadContext,
     unregisterThreadContext: threadContextStore.unregisterThreadContext,
     registerSessionCtx: (sessionId, ctx) => {
@@ -602,6 +613,7 @@ interface DispatchOpts {
   serverName: string;
   log: Logger;
   threadContextStore: ReturnType<typeof createCodexMcpThreadContextStore>;
+  toolCancellation: AppToolCancellation;
   discoveryContexts: ReadonlyMap<string, LiziMcpSessionContext>;
   remoteBotHelper?: boolean;
   remoteAppServer?: boolean;
@@ -769,9 +781,19 @@ async function dispatchToTransport(opts: DispatchOpts): Promise<void> {
       return;
     }
     if (activeContext) {
-      await runWithLiziMcpSessionContext(activeContext, () =>
-        existing.transport.handleRequest(req, res, parsedBody),
-      );
+      const run = () => runWithLiziMcpSessionContext(activeContext, () =>
+        existing.transport.handleRequest(req, res, parsedBody));
+      const threadId = extractCodexThreadId(parsedBody);
+      if (appServer && !sessionTokenCtx && activeContext.agentKind === 'codex' &&
+        activeContext.sessionId && activeContext.sessionInstanceId && threadId) {
+        await opts.toolCancellation.run({
+          sessionId: activeContext.sessionId,
+          sessionInstanceId: activeContext.sessionInstanceId,
+          threadId,
+        }, run);
+      } else {
+        await run();
+      }
       return;
     }
     await existing.transport.handleRequest(req, res, parsedBody);

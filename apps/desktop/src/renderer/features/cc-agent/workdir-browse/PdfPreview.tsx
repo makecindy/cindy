@@ -29,23 +29,34 @@
  *     不变,因此高 DPI 与超大页面都不会把内存放大到不可控。
  */
 
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
+import { flushSync } from 'react-dom';
 import { useTranslation } from 'react-i18next';
 import * as pdfjs from 'pdfjs-dist';
+import 'pdfjs-dist/web/pdf_viewer.css';
+import {
+  ChevronLeft,
+  ChevronRight,
+  Maximize,
+  MoveHorizontal,
+  Minus,
+  Plus,
+  Search,
+} from 'lucide-react';
+import { PreviewButton, PreviewFooter } from '@/components/chat/PreviewChrome';
 import workerUrl from 'pdfjs-dist/build/pdf.worker.min.mjs?url';
 
 import { createLogger } from '@/lib/logger';
 
 import { UnrenderablePlaceholder } from './UnrenderablePlaceholder';
 import { joinPath } from './lib/fileMeta';
+import { getPdfScale, type PdfDimensions, type PdfZoom } from './pdfZoom';
 
 const log = createLogger('PdfPreview');
 
 // worker 只需要配一次。pdfjs.GlobalWorkerOptions 是模块级单例,多次赋值无害。
 pdfjs.GlobalWorkerOptions.workerSrc = workerUrl;
 
-/** 保持现有阅读尺寸:1.5 在 100% zoom 下接近常见 PDF 阅读器默认缩放。 */
-export const PDF_PREVIEW_SCALE = 1.5;
 /** 高 DPI 屏幕最多保留 2x backing store,避免无界放大位图。 */
 export const PDF_PREVIEW_MAX_DPR = 2;
 /**
@@ -54,8 +65,7 @@ export const PDF_PREVIEW_MAX_DPR = 2;
  */
 export const PDF_PREVIEW_MAX_CANVAS_PIXELS = 4_000_000;
 /** 没有得到页面尺寸前的 A4-ish 占位,让滚动条先有稳定的可用高度。 */
-const PDF_PAGE_PLACEHOLDER_WIDTH = 918;
-const PDF_PAGE_PLACEHOLDER_HEIGHT = 1188;
+const PDF_PAGE_PLACEHOLDER_SIZE = { width: 612, height: 792 };
 /** 离视口 400px 预取,滚动到下一页时不需要等到完全进入才开始绘制。 */
 const PDF_PAGE_ROOT_MARGIN = '400px 0px 400px 0px';
 
@@ -83,7 +93,7 @@ type ActiveRenderTask = {
 /**
  * 计算 canvas backing-store 的像素倍率。
  *
- * CSS viewport 保持原来的 1.5 scale;只有真实像素倍率会因 DPR / budget
+ * CSS viewport 使用当前缩放比例;只有真实像素倍率会因 DPR / budget
  * 降低。允许结果小于 1 是有意的:超大纸张必须硬守像素预算,不能以一次渲染
  * 分配数十或数百 MB 的 RGBA buffer。
  */
@@ -97,7 +107,8 @@ export function getPdfRenderPixelRatio(
   const width = Math.max(1, cssWidth);
   const height = Math.max(1, cssHeight);
   // Divide separately to avoid overflowing the area of very large viewports.
-  const budgetRatio = Math.sqrt(PDF_PREVIEW_MAX_CANVAS_PIXELS) / Math.sqrt(width) / Math.sqrt(height);
+  const budgetRatio =
+    Math.sqrt(PDF_PREVIEW_MAX_CANVAS_PIXELS) / Math.sqrt(width) / Math.sqrt(height);
   // The canvas allocation rounds each side up to at least one pixel. For a
   // very thin page, area alone would then allow its long side to exceed 4M.
   const minSideBudgetRatio = PDF_PREVIEW_MAX_CANVAS_PIXELS / Math.max(width, height);
@@ -128,17 +139,30 @@ interface PdfPageProps {
   pdf: pdfjs.PDFDocumentProxy;
   pageNumber: number;
   isVisible: boolean;
+  zoom: PdfZoom;
+  containerSize: PdfDimensions;
+  naturalSize: PdfDimensions;
+  onSize: (pageNumber: number, size: PdfDimensions) => void;
   onError: (pageNumber: number, error: unknown) => void;
 }
 
-function PdfPage({ pdf, pageNumber, isVisible, onError }: PdfPageProps) {
+function PdfPage({
+  pdf,
+  pageNumber,
+  isVisible,
+  zoom,
+  containerSize,
+  naturalSize,
+  onSize,
+  onError,
+}: PdfPageProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
+  const textRef = useRef<HTMLDivElement>(null);
   const renderTaskRef = useRef<ActiveRenderTask | null>(null);
   const [renderState, setRenderState] = useState<PageRenderState>('idle');
-  const [pageSize, setPageSize] = useState({
-    width: PDF_PAGE_PLACEHOLDER_WIDTH,
-    height: PDF_PAGE_PLACEHOLDER_HEIGHT,
-  });
+  const [page, setPage] = useState<pdfjs.PDFPageProxy | null>(null);
+  const scale = getPdfScale(zoom, containerSize, naturalSize);
+  const pageSize = { width: naturalSize.width * scale, height: naturalSize.height * scale };
 
   useEffect(() => {
     if (isVisible) return;
@@ -149,24 +173,41 @@ function PdfPage({ pdf, pageNumber, isVisible, onError }: PdfPageProps) {
     cancelRenderTask(renderTaskRef.current);
     renderTaskRef.current = null;
     clearCanvas(canvasRef.current);
+    textRef.current?.replaceChildren();
     setRenderState((current) => (current === 'idle' ? current : 'idle'));
   }, [isVisible]);
 
   useEffect(() => {
     if (!isVisible) return;
     let cancelled = false;
+    // Metadata is loaded only for nearby pages, independently of raster scale.
+    void pdf
+      .getPage(pageNumber)
+      .then((loaded) => {
+        if (cancelled) return;
+        const natural = loaded.getViewport({ scale: 1 });
+        // The parent captures the old layout before committing paper dimensions.
+        onSize(pageNumber, { width: natural.width, height: natural.height });
+        setPage(loaded);
+      })
+      .catch((error: unknown) => {
+        if (!cancelled) onError(pageNumber, error);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [isVisible, onError, onSize, pageNumber, pdf]);
+
+  useEffect(() => {
+    if (!isVisible || !page) return;
+    let cancelled = false;
     let activeTask: ActiveRenderTask | null = null;
+    let textTask: pdfjs.TextLayer | null = null;
 
     setRenderState('rendering');
     void (async () => {
       try {
-        // getPage is deliberately inside the visibility gate. A PDF with many
-        // pages only asks pdf.js for page resources as the user approaches them.
-        const page = await pdf.getPage(pageNumber);
-        if (cancelled) return;
-
-        const viewport = page.getViewport({ scale: PDF_PREVIEW_SCALE });
-        setPageSize({ width: viewport.width, height: viewport.height });
+        const viewport = page.getViewport({ scale });
 
         const canvas = canvasRef.current;
         if (!canvas || cancelled) return;
@@ -192,6 +233,16 @@ function PdfPage({ pdf, pageNumber, isVisible, onError }: PdfPageProps) {
         if (cancelled || renderTaskRef.current !== task) return;
         renderTaskRef.current = null;
         setRenderState('rendered');
+        const container = textRef.current;
+        if (container) {
+          container.replaceChildren();
+          container.style.setProperty('--scale-factor', String(viewport.scale));
+          container.style.setProperty('--total-scale-factor', String(viewport.scale));
+          const textContentSource = await page.getTextContent();
+          if (cancelled) return;
+          textTask = new pdfjs.TextLayer({ textContentSource, container, viewport });
+          await textTask.render();
+        }
       } catch (error) {
         // Leaving the viewport intentionally rejects RenderTask.promise with
         // RenderingCancelledException. It is not a failed PDF and must not
@@ -215,10 +266,12 @@ function PdfPage({ pdf, pageNumber, isVisible, onError }: PdfPageProps) {
 
     return () => {
       cancelled = true;
+      textTask?.cancel();
+      textRef.current?.replaceChildren();
       cancelRenderTask(activeTask ?? renderTaskRef.current);
       if (renderTaskRef.current === activeTask) renderTaskRef.current = null;
     };
-  }, [isVisible, onError, pageNumber, pdf]);
+  }, [isVisible, onError, pageNumber, page, scale]);
 
   return (
     <div
@@ -245,6 +298,7 @@ function PdfPage({ pdf, pageNumber, isVisible, onError }: PdfPageProps) {
           }}
         />
       )}
+      <div ref={textRef} className="textLayer" />
       {renderState !== 'rendered' && (
         <div
           className="absolute inset-0 border border-[var(--border-default)] bg-white"
@@ -261,10 +315,155 @@ export function PdfPreview({ workdir, relPath, size, mtimeMs }: PdfPreviewProps)
   const pagesHostRef = useRef<HTMLDivElement>(null);
   const [pdfDoc, setPdfDoc] = useState<pdfjs.PDFDocumentProxy | null>(null);
   const [pageCount, setPageCount] = useState(0);
+  const [currentPage, setCurrentPage] = useState(1);
+  const [zoom, setZoom] = useState<PdfZoom>({ mode: 'width' });
+  const [containerSize, setContainerSize] = useState({ width: 640, height: 800 });
+  const containerSizeRef = useRef(containerSize);
+  containerSizeRef.current = containerSize;
+  const [pageSizes, setPageSizes] = useState<Record<number, PdfDimensions>>({});
+  const pageSizesRef = useRef(pageSizes);
+  pageSizesRef.current = pageSizes;
+  const firstPageSize = pageSizes[1] ?? PDF_PAGE_PLACEHOLDER_SIZE;
+  const scale = getPdfScale(zoom, containerSize, pageSizes[currentPage] ?? firstPageSize);
+  const [pageInput, setPageInput] = useState<string | null>(null);
+  const anchor = useRef<{ page: number; fraction: number; left: number } | null>(null);
+  const captureAnchor = useCallback(() => {
+    // Several metadata results can be batched into the same layout commit.
+    if (anchor.current) return;
+    const root = scrollContainerRef.current;
+    if (!root) return;
+    const page = Array.from(
+      pagesHostRef.current?.querySelectorAll<HTMLElement>('[data-pdf-page]') ?? [],
+    ).find((element) => element.offsetTop + element.offsetHeight > root.scrollTop);
+    if (page)
+      anchor.current = {
+        page: Number(page.dataset.pdfPage),
+        fraction: (root.scrollTop - page.offsetTop) / Math.max(1, page.offsetHeight),
+        left: root.scrollLeft / Math.max(1, root.scrollWidth),
+      };
+  }, []);
+  const changeZoom = useCallback(
+    (next: PdfZoom) => {
+      captureAnchor();
+      flushSync(() => setZoom(next));
+    },
+    [captureAnchor],
+  );
+  const zoomBy = useCallback(
+    (factor: number) => {
+      // Fit modes may lie outside the manual range. Clamp in the requested
+      // direction only, so zooming out can never enlarge a very large sheet.
+      const next =
+        factor < 1
+          ? Math.min(scale, Math.max(0.1, scale * factor))
+          : Math.max(scale, Math.min(8, scale * factor));
+      if (next !== scale) changeZoom({ mode: 'custom', scale: next });
+    },
+    [changeZoom, scale],
+  );
+  const handlePageSize = useCallback(
+    (page: number, size: PdfDimensions) => {
+      const previous = pageSizesRef.current[page];
+      if (previous?.width === size.width && previous?.height === size.height) return;
+      captureAnchor();
+      // Commit dimensions and restore the anchor together. An unrelated render
+      // must not consume a snapshot while a resize update is still pending.
+      flushSync(() => setPageSizes((sizes) => ({ ...sizes, [page]: size })));
+    },
+    [captureAnchor],
+  );
+  const [password, setPassword] = useState('');
+  const [passwordNeeded, setPasswordNeeded] = useState(false);
+  const passwordReply = useRef<((value: string) => void) | null>(null);
+  const [retry, setRetry] = useState(0);
+  const [find, setFind] = useState(false);
+  const [query, setQuery] = useState('');
+  const [matches, setMatches] = useState<number[] | null>(null);
+  const searchGeneration = useRef(0);
+  const go = (page: number) => {
+    if (!Number.isFinite(page)) {
+      setPageInput(null);
+      return;
+    }
+    const next = Math.max(1, Math.min(pageCount, Math.trunc(page)));
+    pagesHostRef.current
+      ?.querySelector<HTMLElement>(`[data-pdf-page="${next}"]`)
+      ?.scrollIntoView({ block: 'start' });
+    setCurrentPage(next);
+    setPageInput(null);
+  };
+  const search = async () => {
+    if (!pdfDoc) return;
+    const generation = ++searchGeneration.current;
+    const found: number[] = [];
+    const needle = query.toLocaleLowerCase();
+    for (let page = 1; needle && page <= pdfDoc.numPages; page++) {
+      const content = await (await pdfDoc.getPage(page)).getTextContent();
+      if (generation !== searchGeneration.current) return;
+      if (
+        content.items
+          .map((item) => ('str' in item ? item.str : ''))
+          .join(' ')
+          .toLocaleLowerCase()
+          .includes(needle)
+      )
+        found.push(page);
+    }
+    setMatches(found);
+    if (found[0]) go(found[0]);
+  };
   const [visiblePages, setVisiblePages] = useState<Set<number>>(() => new Set());
   const documentVersionRef = useRef(0);
   const [documentVersion, setDocumentVersion] = useState(0);
   const [state, setState] = useState<RenderState>({ kind: 'loading' });
+  useLayoutEffect(() => {
+    const root = scrollContainerRef.current;
+    if (!root) return;
+    const measure = () => {
+      if (!root.clientWidth || !root.clientHeight) return;
+      if (
+        root.clientWidth === containerSizeRef.current.width &&
+        root.clientHeight === containerSizeRef.current.height
+      )
+        return;
+      captureAnchor();
+      setContainerSize((previous) =>
+        previous.width === root.clientWidth && previous.height === root.clientHeight
+          ? previous
+          : { width: root.clientWidth, height: root.clientHeight },
+      );
+    };
+    measure();
+    const observer =
+      typeof ResizeObserver === 'undefined' ? null : new ResizeObserver(() => flushSync(measure));
+    observer?.observe(root);
+    return () => observer?.disconnect();
+  }, [captureAnchor, state.kind]);
+
+  useLayoutEffect(() => {
+    const saved = anchor.current;
+    const root = scrollContainerRef.current;
+    const page =
+      saved && pagesHostRef.current?.querySelector<HTMLElement>(`[data-pdf-page="${saved.page}"]`);
+    if (root && page && saved) {
+      root.scrollTop = page.offsetTop + saved.fraction * page.offsetHeight;
+      root.scrollLeft = zoom.mode === 'custom' ? saved.left * root.scrollWidth : 0;
+    }
+    anchor.current = null;
+  }, [zoom, containerSize, pageSizes]);
+
+  useEffect(() => {
+    const root = scrollContainerRef.current;
+    if (!root || !pdfDoc) return;
+    const wheel = (event: WheelEvent) => {
+      if ((!event.ctrlKey && !event.metaKey) || event.deltaY === 0) return;
+      event.preventDefault();
+      event.stopPropagation();
+      zoomBy(event.deltaY < 0 ? 1.1 : 1 / 1.1);
+    };
+    root.addEventListener('wheel', wheel, { passive: false });
+    return () => root.removeEventListener('wheel', wheel);
+  }, [pdfDoc, zoomBy]);
   const handlePageError = useCallback(
     (pageNumber: number, error: unknown) => {
       log.warn('pdf page render failed', {
@@ -288,6 +487,19 @@ export function PdfPreview({ workdir, relPath, size, mtimeMs }: PdfPreviewProps)
     setPageCount(0);
     setVisiblePages(new Set());
     setState({ kind: 'loading' });
+    setPasswordNeeded(false);
+    setPassword('');
+    setCurrentPage(1);
+    setPageInput(null);
+    setPageSizes({});
+    setZoom({ mode: 'width' });
+    anchor.current = null;
+    if (scrollContainerRef.current) {
+      scrollContainerRef.current.scrollTop = 0;
+      scrollContainerRef.current.scrollLeft = 0;
+    }
+    setMatches(null);
+    searchGeneration.current++;
 
     const absPath = joinPath(workdir, relPath);
 
@@ -306,12 +518,22 @@ export function PdfPreview({ workdir, relPath, size, mtimeMs }: PdfPreviewProps)
           cMapPacked: true,
           standardFontDataUrl: '/pdfjs/standard_fonts/',
         });
+        loadingTask.onPassword = (update: (password: string) => void) => {
+          if (!cancelled) {
+            passwordReply.current = update;
+            setPasswordNeeded(true);
+          }
+        };
         const pdf = await loadingTask.promise;
         loadedPdf = pdf;
         if (cancelled) {
           await pdf.destroy();
           return;
         }
+        const first = await pdf.getPage(1);
+        if (cancelled) return;
+        const viewport = first.getViewport({ scale: 1 });
+        setPageSizes({ 1: { width: viewport.width, height: viewport.height } });
         setPdfDoc(pdf);
         setPageCount(pdf.numPages);
         setState({ kind: 'rendered', pageCount: pdf.numPages });
@@ -326,6 +548,8 @@ export function PdfPreview({ workdir, relPath, size, mtimeMs }: PdfPreviewProps)
 
     return () => {
       cancelled = true;
+      searchGeneration.current++;
+      passwordReply.current = null;
       // destroy 两者:loadingTask 中止未完成的加载;pdfDoc 释放已解析文档的
       // worker / 渲染资源(promise resolve 后仅 destroy loadingTask 不够,
       // 中途导航离开会泄漏文档)。destroy 幂等,两者都调是安全的。
@@ -335,7 +559,7 @@ export function PdfPreview({ workdir, relPath, size, mtimeMs }: PdfPreviewProps)
     // size/mtimeMs 进依赖:同一路径的文件被就地改写(agent 重生成 PDF 等)时
     // relPath 不变但 mtimeMs/size 变,需要重新读字节 + 重渲染,否则预览会停在
     // 旧内容直到用户切走再切回。FileBodyView 正是为此把 size/mtimeMs 传进来。
-  }, [workdir, relPath, size, mtimeMs]);
+  }, [workdir, relPath, size, mtimeMs, retry]);
 
   useEffect(() => {
     const host = pagesHostRef.current;
@@ -410,36 +634,194 @@ export function PdfPreview({ workdir, relPath, size, mtimeMs }: PdfPreviewProps)
 
   if (state.kind === 'error') {
     return (
-      <UnrenderablePlaceholder workdir={workdir} relPath={relPath} size={size} mtimeMs={mtimeMs} />
+      <div className="flex h-full flex-col items-center justify-center gap-3">
+        <PreviewFooter collectionOnly />
+        <UnrenderablePlaceholder
+          workdir={workdir}
+          relPath={relPath}
+          size={size}
+          mtimeMs={mtimeMs}
+        />
+        <button type="button" onClick={() => setRetry((value) => value + 1)}>
+          {t('attachmentPreview.retry')}
+        </button>
+      </div>
     );
   }
 
   return (
-    <div
-      ref={scrollContainerRef}
-      className="relative h-full w-full overflow-y-auto bg-[var(--surface)]"
-    >
-      {/* Align pages to a shared left edge: a wide page must not push narrower
+    <div className="relative flex h-full w-full flex-col bg-[var(--surface)]">
+      <div
+        ref={scrollContainerRef}
+        onScroll={() => {
+          const root = scrollContainerRef.current;
+          if (!root) return;
+          // A short final page cannot align with the viewport's top. At the
+          // bottom, keep the last page selected instead of reporting its neighbor.
+          if (root.scrollTop > 0 && root.scrollHeight - root.clientHeight - root.scrollTop <= 1) {
+            setCurrentPage(pageCount);
+            return;
+          }
+          const edge = root.getBoundingClientRect().top;
+          const page = Array.from(
+            pagesHostRef.current?.querySelectorAll<HTMLElement>('[data-pdf-page]') ?? [],
+          ).find((element) => element.getBoundingClientRect().bottom > edge + 24);
+          if (page) setCurrentPage(Number(page.dataset.pdfPage));
+        }}
+        className="relative min-h-0 w-full flex-1 overflow-auto bg-[var(--surface)]"
+        style={{ scrollbarGutter: 'stable', overflowAnchor: 'none' }}
+      >
+        {/* Align pages to a shared left edge: a wide page must not push narrower
           placeholders outside the observer's horizontal viewport. */}
-      <div ref={pagesHostRef} className="mx-auto flex w-fit flex-col items-start gap-2 px-4 py-6">
-        {pdfDoc &&
-          Array.from({ length: pageCount }, (_, index) => (
-            <PdfPage
-              key={`${documentVersion}-${index + 1}`}
-              pdf={pdfDoc}
-              pageNumber={index + 1}
-              isVisible={visiblePages.has(index + 1)}
-              onError={handlePageError}
-            />
-          ))}
-        {state.kind === 'loading' && (
-          <div className="py-3 text-xs text-[var(--cmd-palette-item-meta)]">
-            {t('ccAgent.workdirBrowse.fileBody.pdfLoading', {
-              defaultValue: '正在渲染 PDF…',
-            })}
-          </div>
-        )}
+        <div ref={pagesHostRef} className="mx-auto flex w-fit flex-col items-start gap-2 px-4 py-6">
+          {pdfDoc &&
+            Array.from({ length: pageCount }, (_, index) => (
+              <PdfPage
+                key={`${documentVersion}-${index + 1}`}
+                pdf={pdfDoc}
+                pageNumber={index + 1}
+                isVisible={visiblePages.has(index + 1)}
+                onError={handlePageError}
+                zoom={zoom}
+                containerSize={containerSize}
+                naturalSize={pageSizes[index + 1] ?? firstPageSize}
+                onSize={handlePageSize}
+              />
+            ))}
+          {state.kind === 'loading' && (
+            <div className="py-3 text-xs text-[var(--cmd-palette-item-meta)]">
+              {t('ccAgent.workdirBrowse.fileBody.pdfLoading', {
+                defaultValue: '正在渲染 PDF…',
+              })}
+            </div>
+          )}
+        </div>
       </div>
+      {passwordNeeded ? (
+        <form
+          className="absolute inset-0 flex flex-col items-center justify-center gap-4 bg-[var(--surface)]"
+          onSubmit={(event) => {
+            event.preventDefault();
+            passwordReply.current?.(password);
+            setPassword('');
+            setPasswordNeeded(false);
+          }}
+        >
+          <label htmlFor="preview-pdf-password">{t('attachmentPreview.password')}</label>
+          <input
+            id="preview-pdf-password"
+            type="password"
+            value={password}
+            onChange={(event) => setPassword(event.target.value)}
+            className="rounded-xl border border-[var(--border-default)] bg-[var(--surface)] p-3"
+          />
+          <button type="submit">{t('attachmentPreview.open')}</button>
+        </form>
+      ) : null}
+      {find ? (
+        <form
+          className="absolute inset-x-0 top-0 flex items-center gap-3 border-b border-[var(--border-default)] bg-[var(--surface)] px-4 py-2"
+          onSubmit={(event) => {
+            event.preventDefault();
+            void search();
+          }}
+        >
+          <input
+            aria-label={t('attachmentPreview.find')}
+            placeholder={t('attachmentPreview.find')}
+            value={query}
+            onChange={(event) => setQuery(event.target.value)}
+            className="min-w-0 flex-1 bg-transparent"
+          />
+          <button type="submit">
+            <Search size={16} />
+          </button>
+          {matches ? (
+            <span className="text-xs">
+              {t('attachmentPreview.matches', { count: matches.length })}
+            </span>
+          ) : null}
+        </form>
+      ) : null}
+      {pageCount ? (
+        <PreviewFooter className="relative shrink-0">
+          <div className="flex items-center gap-1">
+            <PreviewButton
+              label={t('attachmentPreview.previousPage')}
+              disabled={currentPage <= 1}
+              onClick={() => go(currentPage - 1)}
+            >
+              <ChevronLeft size={16} />
+            </PreviewButton>
+            <form
+              className="flex items-center gap-1 text-xs tabular-nums"
+              onSubmit={(event) => {
+                event.preventDefault();
+                if (pageInput?.trim()) go(Number(pageInput));
+                else setPageInput(null);
+              }}
+            >
+              <input
+                aria-label={t('attachmentPreview.pageNumber')}
+                inputMode="numeric"
+                value={pageInput ?? String(currentPage)}
+                onChange={(event) => setPageInput(event.target.value)}
+                onFocus={(event) => event.target.select()}
+                onBlur={() => setPageInput(null)}
+                onKeyDown={(event) => {
+                  if (event.key === 'Escape') setPageInput(null);
+                }}
+                className="h-8 w-12 rounded-full border border-[var(--border-default)] bg-transparent text-center focus-visible:outline focus-visible:outline-2 focus-visible:outline-[var(--text-primary)]"
+              />
+              <span>/ {pageCount}</span>
+            </form>
+            <PreviewButton
+              label={t('attachmentPreview.nextPage')}
+              disabled={currentPage >= pageCount}
+              onClick={() => go(currentPage + 1)}
+            >
+              <ChevronRight size={16} />
+            </PreviewButton>
+          </div>
+          <div className="flex items-center gap-1">
+            <PreviewButton
+              label={t('attachmentPreview.zoomOut')}
+              onClick={() => zoomBy(1 / 1.25)}
+              disabled={scale <= 0.1}
+            >
+              <Minus size={16} />
+            </PreviewButton>
+            <span className="w-12 text-center text-xs">{Math.round(scale * 100)}%</span>
+            <PreviewButton
+              label={t('attachmentPreview.zoomIn')}
+              onClick={() => zoomBy(1.25)}
+              disabled={scale >= 8}
+            >
+              <Plus size={16} />
+            </PreviewButton>
+          </div>
+          <div className="flex items-center gap-1">
+            <PreviewButton
+              label={t('attachmentPreview.fitWidth')}
+              onClick={() => changeZoom({ mode: 'width' })}
+            >
+              <MoveHorizontal size={16} />
+            </PreviewButton>
+            <PreviewButton
+              label={t('attachmentPreview.fitPage')}
+              onClick={() => changeZoom({ mode: 'page' })}
+            >
+              <Maximize size={16} />
+            </PreviewButton>
+            <PreviewButton
+              label={t('attachmentPreview.find')}
+              onClick={() => setFind((value) => !value)}
+            >
+              <Search size={16} />
+            </PreviewButton>
+          </div>
+        </PreviewFooter>
+      ) : null}
     </div>
   );
 }

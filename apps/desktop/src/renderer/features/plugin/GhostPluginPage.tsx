@@ -83,7 +83,6 @@ import { useGlobalTabs } from '@/features/right-sidebar/globalTabs';
 import { resolveSystemLocale } from '../../../shared/locale';
 import {
   ghostInstallApprovalToken,
-  isUserInstallReservedGhostId,
   type GhostSetupStatus,
   type InstalledGhost,
 } from '../../../shared/ghost';
@@ -1880,7 +1879,7 @@ function LocalGhostPluginPage({
               updateBusy={(selectedMarketUpdate !== null && marketBusyId !== null) || batchRunning}
               onUninstall={() => void handleUninstall()}
               onExport={
-                selectedGhost && !isUserInstallReservedGhostId(selectedDetail.ghostId)
+                selectedGhost
                   ? () => void handleExport()
                   : undefined
               }
@@ -1994,7 +1993,7 @@ function LocalGhostPluginPage({
             {t('settings.ghosts.contribution.myPlugins')}
             {reviewUnread.length > 0 ? (
               <span role="img" className="inline-flex" aria-label={t('settings.ghosts.contribution.unreadReview')}>
-                <AttentionDot tone={reviewUnread.some(item => item.status === 'rejected') ? 'error' : 'done'} />
+                <AttentionDot tone={reviewUnread.some(item => item.status !== 'approved' && item.status !== 'enabled') ? 'error' : 'done'} />
               </span>
             ) : null}
           </Button>
@@ -2600,6 +2599,8 @@ export function GhostPluginCard({
 }) {
   const { t } = useTranslation();
   const metadataId = useId();
+  const installationLabel = item.installationLabelKey
+    ? t(`settings.ghosts.detail.${item.installationLabelKey}`, { name: item.installationNamespace }) : sourceLabel;
   const enabled = effectiveEnabled ?? item.enabled;
   // 远程列表不投影本机同名插件的未读状态。
   const localUnread = useGhostUnread(item.id);
@@ -2693,10 +2694,10 @@ export function GhostPluginCard({
           id={metadataId}
           className="mt-1 flex min-w-0 flex-wrap items-center gap-x-1.5 gap-y-1 text-11 text-[var(--text-tertiary)]"
         >
-          {sourceLabel ? <span className="shrink-0">{sourceLabel}</span> : null}
+          {installationLabel ? <span className="min-w-0 break-words">{installationLabel}</span> : null}
           {author ? (
             <>
-              {sourceLabel ? <span aria-hidden="true">·</span> : null}
+              {installationLabel ? <span aria-hidden="true">·</span> : null}
               <span className="min-w-0 max-w-[120px] truncate">{author}</span>
             </>
           ) : null}
