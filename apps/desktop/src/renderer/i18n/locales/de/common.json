@@ -4462,6 +4462,20 @@
         "toggleFailed": "LSP konnte nicht umgeschaltet werden"
       }
     },
+    "liveCompact": {
+      "cell": {
+        "title": "Live Compact · Beta",
+        "description": "Faltet am Ende jeder Runde einen abgeschlossenen Gesprächsabschnitt in eine lokale Karte: Das Modell behält die Kernpunkte und einen Pfad zum vollständigen Text, der Kontext wächst langsamer. Experimentell: gilt nur für neue Tasks, und die Kompaktierung unterscheidet sich von der nativen.",
+        "sourceLabel": "Ursprung: MerkyorLynn/dsh-live-compact"
+      },
+      "toast": {
+        "enabled": "Aktiviert – wirkt in neuen Tasks",
+        "disabled": "Deaktiviert – wirkt in neuen Tasks",
+        "toggleFailed": "Live-Compact-Einstellung konnte nicht geändert werden"
+      },
+      "openFailed": "Link konnte nicht geöffnet werden",
+      "toggleAria": "Live Compact"
+    },
     "betaChannel": {
       "title": "Beta-Kanal",
       "badge": "Beta",

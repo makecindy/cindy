@@ -4419,6 +4419,20 @@
         "toggleFailed": "LSP 전환에 실패했습니다"
       }
     },
+    "liveCompact": {
+      "cell": {
+        "title": "Live Compact · Beta",
+        "description": "매 턴이 끝날 때 이미 완료된 대화 구간을 로컬 카드로 접습니다. 모델은 핵심 요점과 전체 원문 경로를 유지하므로 컨텍스트가 더 천천히 늘어납니다. 실험적 기능: 새 작업에만 적용되며 압축 방식은 기본 자동 압축과 다릅니다.",
+        "sourceLabel": "원본: MerkyorLynn/dsh-live-compact"
+      },
+      "toast": {
+        "enabled": "켜짐 — 새 작업에서 적용됩니다",
+        "disabled": "꺼짐 — 새 작업에서 적용됩니다",
+        "toggleFailed": "Live Compact 설정을 전환하지 못했습니다"
+      },
+      "openFailed": "링크를 열지 못했습니다",
+      "toggleAria": "Live Compact"
+    },
     "betaChannel": {
       "title": "베타 채널",
       "badge": "Beta",

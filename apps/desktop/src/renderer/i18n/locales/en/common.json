@@ -4462,6 +4462,20 @@
         "toggleFailed": "Failed to toggle LSP"
       }
     },
+    "liveCompact": {
+      "cell": {
+        "title": "Live Compact · Beta",
+        "description": "At the end of each turn, folds a completed stretch of the conversation into a local card. The model keeps the key points plus a path to the full text, so context grows more slowly. Experimental: applies to new tasks only, and compaction differs from the native strategy.",
+        "sourceLabel": "Upstream: MerkyorLynn/dsh-live-compact"
+      },
+      "toast": {
+        "enabled": "Enabled — takes effect in new tasks",
+        "disabled": "Disabled — takes effect in new tasks",
+        "toggleFailed": "Could not change the Live Compact setting"
+      },
+      "openFailed": "Could not open the link",
+      "toggleAria": "Live Compact"
+    },
     "betaChannel": {
       "title": "Beta channel",
       "badge": "Beta",

@@ -4515,6 +4515,20 @@
         "toggleFailed": "Impossible de basculer LSP"
       }
     },
+    "liveCompact": {
+      "cell": {
+        "title": "Live Compact · Bêta",
+        "description": "À la fin de chaque tour, replie un pan de conversation déjà terminé dans une carte locale : le modèle garde les points clés et un chemin vers le texte intégral, et le contexte croît plus lentement. Expérimental : ne s'applique qu'aux nouvelles tâches, et la compaction diffère de la native.",
+        "sourceLabel": "Source : MerkyorLynn/dsh-live-compact"
+      },
+      "toast": {
+        "enabled": "Activé — s'applique aux nouvelles tâches",
+        "disabled": "Désactivé — s'applique aux nouvelles tâches",
+        "toggleFailed": "Impossible de modifier l'option Live Compact"
+      },
+      "openFailed": "Impossible d'ouvrir le lien",
+      "toggleAria": "Live Compact"
+    },
     "betaChannel": {
       "title": "Canal bêta",
       "badge": "Bêta",

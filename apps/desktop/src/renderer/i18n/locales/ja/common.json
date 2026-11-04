@@ -4419,6 +4419,20 @@
         "toggleFailed": "LSP の切り替えに失敗しました"
       }
     },
+    "liveCompact": {
+      "cell": {
+        "title": "Live Compact · Beta",
+        "description": "各ターンの終わりに、完了した会話の区間をローカルカードへ畳み込みます。モデルは要点と原文へのパスを保持するため、コンテキストの増加が緩やかになります。実験的機能: 新しいタスクにのみ適用され、圧縮方式はネイティブの自動圧縮とは異なります。",
+        "sourceLabel": "上流: MerkyorLynn/dsh-live-compact"
+      },
+      "toast": {
+        "enabled": "有効にしました。新しいタスクで反映されます",
+        "disabled": "無効にしました。新しいタスクで反映されます",
+        "toggleFailed": "Live Compact の設定を切り替えられませんでした"
+      },
+      "openFailed": "リンクを開けませんでした",
+      "toggleAria": "Live Compact"
+    },
     "betaChannel": {
       "title": "Beta チャンネル",
       "badge": "Beta",

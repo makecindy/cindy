@@ -963,6 +963,7 @@ import {
 } from './vision-bridge/vision-bridge-settings-store.js';
 import type { VisionBridgeSettings } from '../shared/visionBridgeSettings.js';
 import { readLspModeSettings, writeLspModeEnabled } from './maker-host/lsp-mode-store.js';
+import { readLiveCompactSettings, writeLiveCompactEnabled } from './maker-host/live-compact-store.js';
 import {
   readChatEmbeddingSettings,
   readChatEmbeddingSettingsState,
@@ -5308,6 +5309,19 @@ const registerIpcHandlers = () => {
       throwIpcError('INVALID_PARAMS', 'lsp mode enabled required (boolean)');
     }
     writeLspModeEnabled(enabled);
+    return { effective: 'next-session' as const };
+  });
+
+  // 边做边压 (Live Compact) 开关 IPC —— 同 LSP 口径:
+  // pi 进程启动时一次性决定是否 --extension,已开 session 不变。
+  ipcMain.handle(MAKER_IPC_INVOKE.LIVE_COMPACT_GET, async () => {
+    return readLiveCompactSettings();
+  });
+  ipcMain.handle(MAKER_IPC_INVOKE.LIVE_COMPACT_SET, async (_e, enabled: unknown) => {
+    if (typeof enabled !== 'boolean') {
+      throwIpcError('INVALID_PARAMS', 'live compact enabled required (boolean)');
+    }
+    writeLiveCompactEnabled(enabled);
     return { effective: 'next-session' as const };
   });
 

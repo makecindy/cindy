@@ -8,6 +8,7 @@ import { readCachedGenericOAuthAccessToken } from './generic-oauth.js';
 import { providerPresetModelRecord, providerModelAdapterId, providerBaseUrlForApi } from '@cindy/model-providers';
 import { mergeByokNativeConfigs } from '../model-access/byokProvider.js';
 import { readDisabledSkillPaths } from '../skillhub/activationPreferences';
+import { readLiveCompactSettings } from './live-compact-store.js';
 import { subscriptionAccountKind, subscriptionAccountState, isXaiSubscriptionProviderId } from './subscription-account-auth.js';
 /**
  * pi agent 的 desktop host 装配 —— auth / runtimeConfig / 二进制解析 / 构造,
@@ -2012,6 +2013,9 @@ export function buildPiAgent(opts: BuildPiAgentOpts): PiAgent | null {
       const source = resolveModelContextProviderId(getActiveCatalog(), 'pi', providerId, modelId);
       return resolveModelCompactionPct(getActiveCatalog(), 'pi', source, modelId);
     },
+    // 实验开关:打开时新会话加载内置 live-compact 扩展(边做边压)。
+    // 每次 startSession 现读 —— 与 LSP Beta 同一口径(toggle 后新会话生效)。
+    resolvePiLiveCompactEnabled: () => readLiveCompactSettings().enabled,
     auth: desktopPiAuthAdapter,
     runtimeConfig: buildDesktopPiRuntimeConfig(),
     get binaryPath() { return resolvePiBinaryPath() ?? binaryPath; },

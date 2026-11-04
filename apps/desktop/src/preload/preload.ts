@@ -8002,6 +8002,13 @@ contextBridge.exposeInMainWorld('electronAPI', {
     lspModeSet: (enabled: boolean): Promise<{ effective: 'next-session' }> =>
       ipcRenderer.invoke('maker:lsp-mode:set', enabled),
 
+    // 边做边压 (Live Compact) 实验开关 —— 开启后新会话加载内置 live-compact 扩展。
+    // 默认 false; 仅对**新 session** 生效(pi 进程启动时一次性决定是否 --extension)。
+    liveCompactGet: (): Promise<{ enabled: boolean }> =>
+      ipcRenderer.invoke('maker:live-compact:get'),
+    liveCompactSet: (enabled: boolean): Promise<{ effective: 'next-session' }> =>
+      ipcRenderer.invoke('maker:live-compact:set', enabled),
+
     // 对话语义索引开关 —— 按 owner 保存；企业组织账号默认开，其余默认关。
     // 关闭状态下 createMessage hook 直接 return，历史搜索回退到 FTS。
     chatEmbeddingGet: (): Promise<{

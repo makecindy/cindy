@@ -1,0 +1,61 @@
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+
+const root = vi.hoisted(() => ({ path: '' }));
+vi.mock('electron', () => ({ app: { getPath: () => root.path } }));
+vi.mock('../logger-adapter.js', () => ({
+  desktopMakerLogger: { child: () => ({ info: vi.fn(), warn: vi.fn() }) },
+}));
+
+const tempDirs: string[] = [];
+
+function makeRoot(): string {
+  root.path = fs.mkdtempSync(path.join(os.tmpdir(), 'cindy-live-compact-'));
+  tempDirs.push(root.path);
+  return path.join(root.path, 'live-compact-settings.json');
+}
+
+afterEach(() => {
+  for (const dir of tempDirs) fs.rmSync(dir, { recursive: true, force: true });
+  tempDirs.length = 0;
+});
+
+describe('live compact settings', () => {
+  it('defaults to off when absent and persists toggles', async () => {
+    const file = makeRoot();
+    const store = await import('../live-compact-store.js');
+
+    expect(store.readLiveCompactSettings().enabled).toBe(false);
+
+    store.writeLiveCompactEnabled(true);
+    expect(store.readLiveCompactSettings().enabled).toBe(true);
+    expect(JSON.parse(fs.readFileSync(file, 'utf8'))).toEqual({ enabled: true });
+
+    store.writeLiveCompactEnabled(false);
+    expect(store.readLiveCompactSettings().enabled).toBe(false);
+  });
+
+  it('falls back to off for a corrupt file without deleting it', async () => {
+    const file = makeRoot();
+    fs.writeFileSync(file, '{ not json');
+    // reset-modules: 模块级 cache 是待测对象 —— 损坏值只在首次读取时归一化,复用上一用例的 cache 会测不到该分支。
+    vi.resetModules();
+    const store = await import('../live-compact-store.js');
+
+    expect(store.readLiveCompactSettings().enabled).toBe(false);
+    // 损坏文件是用户唯一的现场:读失败回落默认,但不静默删除。
+    expect(fs.readFileSync(file, 'utf8')).toBe('{ not json');
+  });
+
+  it('ignores a non-boolean enabled value', async () => {
+    const file = makeRoot();
+    fs.writeFileSync(file, JSON.stringify({ enabled: 'yes' }));
+    // reset-modules: 同上,非布尔值的归一化只在首次读取时发生。
+    vi.resetModules();
+    const store = await import('../live-compact-store.js');
+
+    expect(store.readLiveCompactSettings().enabled).toBe(false);
+  });
+});

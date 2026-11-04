@@ -808,6 +808,14 @@ export interface AgentDeps {
   ) => PiSubagentRunnerProcess;
 
   /**
+   * Pi-only: 边做边压 (Live Compact) 实验开关。打开时 maker-core 把内置的
+   * live-compact 扩展写进本会话 internal-extensions 并显式 --extension 加载
+   * (与 cindy-bridge 同一形态)。缺省 / 返回 false → 不加载,行为与没有该扩展一致。
+   * 远端会话不适用:daemon 加载不到宿主机上的扩展源码。
+   */
+  resolvePiLiveCompactEnabled?: () => boolean;
+
+  /**
    * Pi-only: resolve the immutable Cindy project-approval input for one new
    * runtime. The host owns identity canonicalization, approval audit/revocation,
    * and discovered-resource provenance. Missing/throwing resolvers fail closed.

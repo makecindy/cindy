@@ -4419,6 +4419,20 @@
         "toggleFailed": "LSP 开关切换未成"
       }
     },
+    "liveCompact": {
+      "cell": {
+        "title": "边做边压 · Live Compact",
+        "description": "每轮既毕，取已成之一段对谈，压为一纸本地之卡：模型仍见其要，及全文所在之径，故上下文增之也缓。此乃试用之能，唯新创之务乃效，其压法异于 pi 原生之自压。",
+        "sourceLabel": "原仓：MerkyorLynn/dsh-live-compact"
+      },
+      "toast": {
+        "enabled": "既启矣，新创之务乃效",
+        "disabled": "既闭矣，新创之务乃效",
+        "toggleFailed": "启闭边做边压之开关，未成"
+      },
+      "openFailed": "启其链，未成",
+      "toggleAria": "边做边压 Live Compact"
+    },
     "betaChannel": {
       "title": "Beta 试行之道",
       "badge": "Beta",

@@ -108,6 +108,7 @@ import {
   projectPiRequestDiagnostics,
   CINDY_BRIDGE_EXTENSION_SOURCE } from './cindy-bridge-source.js';
 import { nativeProviderAdapterAliases } from './native-provider-adapter-source.js';
+import { LIVE_COMPACT_EXTENSION_SOURCE } from './live-compact-source.js';
 import { parsePiNativeRuntimeSettings, resolvePiNativeReserve, type PiNativeRuntimeSettings } from './native-runtime-settings.js';
 import {
   CINDY_SUBAGENT_ENV,
@@ -3404,6 +3405,16 @@ export class PiAgent extends BaseAgent {
     // 会导致 bridge/subagent 静默失效)。
     const bridgeExtensionPath = joinRemotePosixPath(extensionsDir, CINDY_BRIDGE_EXTENSION_FILENAME);
     await writeFile(bridgeExtensionPath, CINDY_BRIDGE_EXTENSION_SOURCE);
+    // 边做边压 (Live Compact):实验性开关打开时把扩展写进本会话的 internal-extensions,
+    // 显式 --extension 加载。与 bridge 同一形态 —— 每次 startSession 覆写,保证 pi 里跑的
+    // 代码与本版本一致,不依赖用户机器上残留的旧文件。
+    // 远端会话不适用:daemon 加载不到宿主机上的扩展源码。
+    const liveCompactEnabled = !opts.remoteHostId
+      && (this.deps.resolvePiLiveCompactEnabled?.() ?? false);
+    const liveCompactExtensionPath = joinRemotePosixPath(extensionsDir, 'live-compact.ts');
+    if (liveCompactEnabled) {
+      await writeFile(liveCompactExtensionPath, LIVE_COMPACT_EXTENSION_SOURCE);
+    }
     // cindy-subagent extension:与 bridge 并列的独立扩展(职责分离 —— bridge 管权限门与
     // MCP 桥,这个只管子代理)。子进程继承 PI_CODING_AGENT_DIR,因此同样加载 bridge,
     // 权限门对子代理照样生效;递归由扩展内的 depth env 自己截断。
@@ -4163,12 +4174,14 @@ export class PiAgent extends BaseAgent {
         // 实验原型(dev-only)：宿主外置 pi 扩展经 CINDY_PI_EXTRA_EXTENSIONS 注入
         // (';' 分隔，绝对路径)。仅本地会话 —— 远端 daemon 加载不了本机路径。
         // 只走显式 --extension，不影响自动发现；排在自带扩展之后，注册最晚。
+        ...(liveCompactEnabled ? ['--extension', liveCompactExtensionPath] : []),
         ...(opts.remoteHostId
           ? []
           : (process.env.CINDY_PI_EXTRA_EXTENSIONS ?? '')
             .split(';')
             .map((candidate) => candidate.trim())
-            .filter(Boolean)
+            // 开关已经注入同一路径时不再重复 --extension(重复注册会跑两遍 hook)。
+            .filter((candidate) => candidate && candidate !== liveCompactExtensionPath)
             .flatMap((extensionPath) => ['--extension', extensionPath])),
         ...(loadProjectResourcesInPlace
           ? piProjectResourceCliArgs(projectResourceCli)

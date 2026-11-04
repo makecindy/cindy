@@ -1033,8 +1033,9 @@ function devEnvEntries(env) {
     ['XDT_DESKTOP_DEV_STARTUP_STATUS_FILE', env.XDT_DESKTOP_DEV_STARTUP_STATUS_FILE],
     // 插件存储启动边界的 dev 黑盒验收：仅显式临时结果路径时启用。
     ['XDT_PLUGIN_STORAGE_SMOKE_RESULT_FILE', env.XDT_PLUGIN_STORAGE_SMOKE_RESULT_FILE],
-    // 实验原型 pi-live-compact：宿主外置 pi 扩展与扩展自身的 SPINE_* 旋钮。
-    // 仅显式设置时透传，不改变默认行为（pi 扩展无自动发现，SPINE 默认关闭）。
+    // 外置 pi 扩展调试逃生门：设置页的实验开关会注入内置 live-compact 扩展，
+    // 这里的环境变量只用于本地换用别的扩展文件/调 SPINE_* 旋钮。仅显式设置时透传，
+    // 不改变默认行为（pi 扩展无自动发现，SPINE 默认关闭）。
     // CINDY_PI_EXTRA_EXTENSIONS / SPINE_* 仅本地会话生效:远端 daemon 加载不了本机路径,
     // pi-host 消费端对 remoteHostId 直接跳过;远端模式下这些变量不会进 pi 子进程。
     ['CINDY_PI_EXTRA_EXTENSIONS', env.CINDY_PI_EXTRA_EXTENSIONS],

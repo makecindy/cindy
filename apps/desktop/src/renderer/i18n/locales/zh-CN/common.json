@@ -4419,6 +4419,20 @@
         "toggleFailed": "切换 LSP 开关失败"
       }
     },
+    "liveCompact": {
+      "cell": {
+        "title": "边做边压 · Live Compact",
+        "description": "每轮结束时把已完成的一段对话压成一张本地卡片：模型仍能看到要点和完整原文的本地路径，上下文涨得更慢。实验功能，只对新建任务生效，压缩策略与 pi 原生自动压缩不同。",
+        "sourceLabel": "原仓：MerkyorLynn/dsh-live-compact"
+      },
+      "toast": {
+        "enabled": "已开启，新建任务后生效",
+        "disabled": "已关闭，新建任务后生效",
+        "toggleFailed": "切换边做边压开关失败"
+      },
+      "openFailed": "打开链接失败",
+      "toggleAria": "边做边压 Live Compact"
+    },
     "betaChannel": {
       "title": "Beta 测试渠道",
       "badge": "Beta",
