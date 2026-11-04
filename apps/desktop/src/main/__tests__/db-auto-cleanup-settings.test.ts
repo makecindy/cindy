@@ -34,9 +34,8 @@ describe('db auto cleanup settings', () => {
   it('falls back to defaults when the file is missing or unreadable', () => {
     expect(readDbAutoCleanupSettings(userDataDir, log)).toEqual(__testing.DEFAULTS);
     expect(__testing.DEFAULTS).toMatchObject({
-      // Off by default: the mechanism must not delete history before the
-      // Settings card can switch it off again.
-      enabled: false,
+      // On by default: the Settings card ships with the switch that turns it off.
+      enabled: true,
       retentionDays: DB_AUTO_CLEANUP_DEFAULT_RETENTION_DAYS,
       cooldownDays: DB_AUTO_CLEANUP_DEFAULT_COOLDOWN_DAYS,
       lastAutoRunAt: null,
@@ -116,5 +115,25 @@ describe('db auto cleanup settings', () => {
       'database auto cleanup cooldown could not be recorded',
       expect.objectContaining({ error: expect.any(String) }),
     );
+  });
+
+  it('validates the renderer patch before it reaches the settings file', () => {
+    // Only the two fields the card can edit are accepted; anything else is
+    // dropped so a newer renderer cannot brick an older main process.
+    expect(
+      __testing.parseDbAutoCleanupSettingsPatch({ enabled: false, retentionDays: 90, extra: 1 }),
+    ).toEqual({ patch: { enabled: false, retentionDays: 90 } });
+    expect(__testing.parseDbAutoCleanupSettingsPatch({ enabled: 'yes' })).toEqual({
+      error: 'enabled must be a boolean',
+    });
+    expect(__testing.parseDbAutoCleanupSettingsPatch({ retentionDays: 45 })).toEqual({
+      error: 'retentionDays must be one of 7, 30, 90, 180',
+    });
+    expect(__testing.parseDbAutoCleanupSettingsPatch({})).toEqual({
+      error: 'at least one setting is required',
+    });
+    expect(__testing.parseDbAutoCleanupSettingsPatch(null)).toEqual({
+      error: 'database auto cleanup settings payload required',
+    });
   });
 });
