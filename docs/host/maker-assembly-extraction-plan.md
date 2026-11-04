@@ -34,6 +34,10 @@
 
 `packages/maker-core/src/memory/host-factory.ts`：把 Maker Memory 的宿主装配（owner 根解析、boundary fail-closed、ownerScopeKey、换根重读 enabled、Bot Home override）从 Desktop 适配器中移入 maker-core，Desktop 的 `maker-memory-host.ts` 只保留 Electron 端口。Desktop typecheck 通过，邻近 maker-host 测试 21/21 通过。
 
+## 第二个切片
+
+`apps/desktop/src/main/userDataPath.ts`：profile 根改由启动时注入（Desktop 在 `index.ts` 安装 Electron 值），`agent-resource-settings-store` 不再 import `electron`。测试改为 `configureUserDataDir()`，7/7 通过；Desktop typecheck 通过。
+
 ## 每步验证
 
 - `pnpm --filter desktop run typecheck`（约 7 分钟，改动后必跑）。

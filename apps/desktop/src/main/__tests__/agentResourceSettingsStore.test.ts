@@ -4,15 +4,6 @@ import path from 'node:path';
 
 import { describe, expect, it, vi } from 'vitest';
 
-const electronMock = vi.hoisted(() => ({
-  userDataDir: '',
-}));
-
-vi.mock('electron', () => ({
-  app: {
-    getPath: vi.fn(() => electronMock.userDataDir),
-  },
-}));
 
 vi.mock('../maker-host/logger-adapter.js', () => ({
   desktopMakerLogger: {
@@ -28,6 +19,7 @@ import {
   readAgentResourceSettings,
   writeAgentResourceSetting,
 } from '../maker-host/agent-resource-settings-store';
+import { configureUserDataDir } from '../userDataPath';
 
 describe('agent resource settings store', () => {
   it('defaults to unlimited concurrency (0)', () => {
@@ -72,8 +64,9 @@ describe('agent resource settings store', () => {
   it('does not clobber out-of-process file edits when writing another key', () => {
     // 隐藏配置约定:直接改文件也是正式入口。写路径必须先按 mtime 失效缓存,
     // 否则 writePatch 基于旧 overrides 计算,把手改的其它 key 静默覆盖回去。
-    electronMock.userDataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'agent-resource-store-'));
-    const file = path.join(electronMock.userDataDir, 'agent-resource-settings.json');
+    const userDataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'agent-resource-store-'));
+    configureUserDataDir(userDataDir);
+    const file = path.join(userDataDir, 'agent-resource-settings.json');
     try {
       writeAgentResourceSetting('maxConcurrentCommands', 5); // 建立缓存
       // 进程外手改:补一个 processPriority override,并保证 mtime 前进
@@ -94,8 +87,7 @@ describe('agent resource settings store', () => {
         capToolchainThreads: true,
       });
     } finally {
-      fs.rmSync(electronMock.userDataDir, { recursive: true, force: true });
-      electronMock.userDataDir = '';
+      fs.rmSync(userDataDir, { recursive: true, force: true });
     }
   });
 });

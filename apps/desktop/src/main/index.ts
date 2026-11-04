@@ -12,6 +12,7 @@ import { refreshBrowserRuntimeConfigDir } from '@cindy/browser-control-runtime/c
 import { CURRENT_CINDY_REGION } from '../shared/brandRegion.js';
 import { resolveRegionUserDataDirName } from './regionUserData.js';
 import { createLogger, initLogger } from './logger.js';
+import { configureUserDataDir } from './userDataPath.js';
 import { beginDesktopDevInstance, type DesktopDevMode } from './devStartupStatus.js';
 import { ensureSystemBinPathForMachineId } from './deviceId.js';
 import { configureLinuxPasswordStore } from './linuxPasswordStore.js';
@@ -61,6 +62,10 @@ initLogger({
   userDataDir: app.getPath('userData'),
   version: app.getVersion(),
 });
+// Profile root is a host fact injected once; storage modules that need it must
+// not import electron themselves (the Node host reuses them).
+configureUserDataDir(app.getPath('userData'));
+
 const log = createLogger('fix-path');
 log.debug(`[fix-path] before PATH=${process.env.PATH ?? ''}`);
 fixPath();
