@@ -724,10 +724,11 @@ export class WorkLouderCodexLightingController {
     const slotCount =
       this.settings.layout.taskKeys?.length ?? WORKLOUDER_CODEX_DEFAULT_AGENT_SLOT_COUNT;
     if (this.settings.agentSource === 'custom') {
+      const configuredCount =
+        this.settings.customAgentKeysConfiguredCount ?? WORKLOUDER_CODEX_DEFAULT_AGENT_SLOT_COUNT;
       return Array.from({ length: slotCount }, (_, slot) => {
-        if (slot < this.settings.customAgentKeys.length) {
-          return cloneAction(this.settings.customAgentKeys[slot] ?? null);
-        }
+        const explicit = this.settings.customAgentKeys[slot] ?? null;
+        if (slot < configuredCount || explicit) return cloneAction(explicit);
         const task = this.taskCatalog.options[slot];
         return task ? { type: 'task', sessionId: task.id } : null;
       });
@@ -769,15 +770,10 @@ export class WorkLouderCodexLightingController {
 
   private lightingThreadCount(): number {
     const taskKeys = normalizeWorkLouderCreatorTaskKeys(this.settings.layout.taskKeys);
-    if (this.device.deviceType !== 'codex-micro') return taskKeys.length;
-    // Codex keys keep their physical AG numbers, so a sparse selection may need
-    // a later thread id (e.g. only AG12 selected needs thread 12).
-    let count = WORKLOUDER_CODEX_DEFAULT_AGENT_SLOT_COUNT;
-    for (const key of taskKeys) {
-      const index = WORKLOUDER_CREATOR_PROGRAMMABLE_KEYS.indexOf(key);
-      if (index >= 0) count = Math.max(count, index + 1);
-    }
-    return count;
+    // Always cover all 13 Codex threads so shrinking or switching layouts also
+    // clears keys that are no longer part of the active slot set.
+    if (this.device.deviceType === 'codex-micro') return WORKLOUDER_CODEX_AGENT_SLOT_COUNT;
+    return taskKeys.length;
   }
 
   private updateLightingFrame(wakeOnBaseFrameChange = false): WorkLouderCodexLightingFrame {

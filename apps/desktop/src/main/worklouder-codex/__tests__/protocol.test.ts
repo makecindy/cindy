@@ -218,11 +218,13 @@ describe('Work Louder lighting settings', () => {
     expect(frame.ambient.brightness).toBe(0.7);
   });
 
-  it('creates a complete six-slot off frame', () => {
+  it('creates a complete thirteen-slot off frame', () => {
     const frame = createWorkLouderCodexOffFrame();
 
     expect(isWorkLouderCodexLightingFrameOff(frame)).toBe(true);
-    expect(frame.threads.map((thread) => thread.id)).toEqual([0, 1, 2, 3, 4, 5]);
+    expect(frame.threads.map((thread) => thread.id)).toEqual(
+      Array.from({ length: 13 }, (_, index) => index),
+    );
   });
 
   it('greets a reopened window with a snake-and-breath sweep across every zone', () => {

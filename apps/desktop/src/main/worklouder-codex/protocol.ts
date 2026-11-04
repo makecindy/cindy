@@ -197,7 +197,7 @@ const PHASE_PRIORITY: Readonly<Record<WorkLouderCodexSessionActivity['phase'], n
 
 /**
  * Projects Cindy's process-wide task activity into the two Codex Micro lighting
- * zones plus its six per-thread indicators.
+ * zones plus its per-thread indicators.
  */
 export function createWorkLouderCodexLightingFrame(
   activity: readonly WorkLouderCodexSessionActivity[],
@@ -666,7 +666,7 @@ export function applyWorkLouderCodexLightingBrightness(
 }
 
 export function createWorkLouderCodexOffFrame(
-  threadCount: number = WORKLOUDER_CODEX_DEFAULT_AGENT_SLOT_COUNT,
+  threadCount: number = WORKLOUDER_CODEX_AGENT_SLOT_COUNT,
 ): WorkLouderCodexLightingFrame {
   return {
     ambient: { ...OFF_SIDE },

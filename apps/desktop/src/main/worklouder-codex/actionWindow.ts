@@ -11,7 +11,7 @@ export interface WorkLouderCodexActionWindowLike {
 export type WorkLouderCodexActionWindowTarget = 'task-switch' | 'active-window' | 'system-frontmost';
 
 /**
- * Task switching stays on the primary Cindy window so the six task keys keep
+ * Task switching stays on the primary Cindy window so the task keys keep
  * one stable owner. Voice, send, and scroll follow the focused Cindy window
  * when Cindy is frontmost; otherwise they go to the system frontmost app.
  */

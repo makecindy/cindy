@@ -268,7 +268,7 @@ export function removeWorkLouderMerge(
   return merges.filter((merge) => merge.origin !== key && merge.cover !== key);
 }
 
-/** Firmware thread id N lights KV_OAI_AG0N. Extra task keys have no AG thread. */
+/** Firmware thread id N lights KV_OAI_AG0N; all 13 physical task keys can use AG00–AG12. */
 export const WORKLOUDER_HID_AG_CODES = [
   'AG00',
   'AG01',
@@ -440,6 +440,8 @@ export interface WorkLouderCodexSettings {
   lightingAutoDim: WorkLouderCodexAutoDim;
   agentSource: WorkLouderCodexAgentSource;
   customAgentKeys: Array<WorkLouderCodexAction | null>;
+  /** Leading custom slots the user configured; trailing slots follow task order. */
+  customAgentKeysConfiguredCount: number;
   /** When false, a single press switches tasks and a double press brings Cindy forward. */
   singleTapAgentKeys: boolean;
   layout: WorkLouderCodexLayout;
@@ -567,6 +569,7 @@ export const WORKLOUDER_CODEX_DEFAULT_SETTINGS: WorkLouderCodexSettings = {
   lightingAutoDim: '3-minutes',
   agentSource: 'last-sent',
   customAgentKeys: Array.from({ length: WORKLOUDER_CODEX_AGENT_SLOT_COUNT }, () => null),
+  customAgentKeysConfiguredCount: WORKLOUDER_CODEX_DEFAULT_AGENT_SLOT_COUNT,
   singleTapAgentKeys: true,
   layout: WORKLOUDER_CODEX_DEFAULT_LAYOUT,
 };
@@ -607,6 +610,7 @@ export const WORKLOUDER_CREATOR_MICRO_2_DEFAULT_SETTINGS: WorkLouderCodexSetting
   lightingAutoDim: '3-minutes',
   agentSource: 'last-sent',
   customAgentKeys: Array.from({ length: WORKLOUDER_CODEX_AGENT_SLOT_COUNT }, () => null),
+  customAgentKeysConfiguredCount: WORKLOUDER_CODEX_DEFAULT_AGENT_SLOT_COUNT,
   singleTapAgentKeys: true,
   layout: WORKLOUDER_CREATOR_MICRO_2_DEFAULT_LAYOUT,
 };

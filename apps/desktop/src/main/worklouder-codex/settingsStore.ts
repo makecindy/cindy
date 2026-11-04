@@ -198,6 +198,14 @@ function normalize(raw: unknown, model: WorkLouderModel = 'codex-micro'): WorkLo
         rawCustomAgentKeys[index] == null ? null : normalizeAction(rawCustomAgentKeys[index]),
       )
     : defaults.customAgentKeys;
+  const rawConfiguredCount = value.customAgentKeysConfiguredCount;
+  const customAgentKeysConfiguredCount =
+    typeof rawConfiguredCount === 'number' &&
+    Number.isInteger(rawConfiguredCount) &&
+    rawConfiguredCount >= 0 &&
+    rawConfiguredCount <= WORKLOUDER_CODEX_AGENT_SLOT_COUNT
+      ? rawConfiguredCount
+      : defaults.customAgentKeysConfiguredCount;
   return {
     lightingBrightness:
       typeof brightness === 'number' && Number.isFinite(brightness)
@@ -210,6 +218,7 @@ function normalize(raw: unknown, model: WorkLouderModel = 'codex-micro'): WorkLo
       typeof value.deviceEnabled === 'boolean' ? value.deviceEnabled : defaults.deviceEnabled,
     agentSource: normalizeWorkLouderCodexAgentSource(value.agentSource),
     customAgentKeys,
+    customAgentKeysConfiguredCount,
     singleTapAgentKeys:
       typeof value.singleTapAgentKeys === 'boolean'
         ? value.singleTapAgentKeys

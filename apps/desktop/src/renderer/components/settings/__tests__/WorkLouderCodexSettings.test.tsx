@@ -95,14 +95,14 @@ vi.mock('@/hooks/useWorkLouderCodex', () => ({
         agentSource: mocks.agentSource,
         layout: mocks.layout ?? createWorkLouderCodexDefaultSettings(mocks.deviceType).layout,
       },
-      agentSlots: Array.from({ length: 6 }, (_, slot) => ({
+      agentSlots: Array.from({ length: 13 }, (_, slot) => ({
         slot,
-        sessionId: null,
-        title: null,
-        action: null,
+        sessionId: slot === 6 ? 'fallback-task' : null,
+        title: slot === 6 ? 'Fallback task' : null,
+        action: slot === 6 ? { type: 'task' as const, sessionId: 'fallback-task' } : null,
       })),
-      taskOptions: [],
-      agentSlotCount: 6,
+      taskOptions: [{ id: 'fallback-task', title: 'Fallback task', pinned: false }],
+      agentSlotCount: 13,
     },
     loading: false,
     saving: false,
@@ -434,6 +434,7 @@ describe('WorkLouderCodexSettings', () => {
         { type: 'command', commandId: 'newTask' },
         ...Array.from({ length: 10 }, () => null),
       ],
+      customAgentKeysConfiguredCount: 6,
     });
   });
 
@@ -807,6 +808,7 @@ describe('WorkLouderCodexSettings', () => {
         { type: 'command', commandId: 'newTask' },
         ...Array.from({ length: 12 }, () => null),
       ],
+      customAgentKeysConfiguredCount: 6,
     });
   });
 
@@ -823,5 +825,20 @@ describe('WorkLouderCodexSettings', () => {
         name: 'settings.shortcuts.workLouderCodex.actions.choose',
       }),
     ).toBeTruthy();
+  });
+
+  it('shows the task-catalog fallback for legacy custom slots beyond six', () => {
+    mocks.agentSource = 'custom';
+    const layout = createWorkLouderCodexDefaultSettings().layout;
+    layout.taskKeys = ['AG00', 'AG01', 'AG02', 'AG03', 'AG04', 'AG05', 'ACT07'];
+    mocks.layout = layout;
+    render(<WorkLouderCodexSettings onBack={vi.fn()} />);
+
+    fireEvent.click(screen.getByRole('button', { name: /ACT07 Fallback task/ }));
+    expect(
+      screen.getByRole('combobox', {
+        name: 'settings.shortcuts.workLouderCodex.actions.choose',
+      }).textContent,
+    ).toContain('Fallback task');
   });
 });

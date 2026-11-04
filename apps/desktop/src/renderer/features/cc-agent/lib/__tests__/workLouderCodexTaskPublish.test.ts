@@ -121,6 +121,31 @@ describe('buildWorkLouderCodexPublishedTasks', () => {
     expect(tasks.filter((task) => task.id.startsWith('remote-'))).toHaveLength(36);
   });
 
+  it('keeps the first 13 rendered active tasks even when one sits deep in the local catalog', () => {
+    const locals = Array.from({ length: 80 }, (_, index) => local(index));
+    const remotes = Array.from(
+      { length: WORKLOUDER_CODEX_REMOTE_TASK_CANDIDATE_LIMIT },
+      (_, index) => remote(`remote-${index}`),
+    );
+    const renderedIds = ['local-64', ...Array.from({ length: 12 }, (_, index) => `local-${index}`)];
+    const tasks = buildWorkLouderCodexPublishedTasks(
+      [...locals, ...remotes],
+      [],
+      renderedIds,
+    );
+
+    expect(tasks).toHaveLength(WORKLOUDER_CODEX_TASK_OPTION_LIMIT);
+    expect(tasks.slice(0, 13).map((task) => task.id)).toEqual(renderedIds);
+    expect(tasks.find((task) => task.id === 'local-64')?.sidebarOrder).toBe(0);
+    expect(
+      tasks
+        .filter((task) => task.sidebarOrder !== undefined && task.sidebarOrder < 13)
+        .map((task) => task.id),
+    ).toEqual(renderedIds);
+    expect(tasks.filter((task) => task.id.startsWith('local-'))).toHaveLength(64);
+    expect(tasks.filter((task) => task.id.startsWith('remote-'))).toHaveLength(36);
+  });
+
   it('preserves sidebarOrder and catalogEligible for visible projections', () => {
     const archived = local(99, { id: 'archived', status: 'archived', title: 'Archived' });
     const active = local(0);
@@ -131,7 +156,7 @@ describe('buildWorkLouderCodexPublishedTasks', () => {
       ['archived', 'local-0', 'remote-visible'],
     );
 
-    expect(tasks[0]).toMatchObject({
+    expect(tasks.find((task) => task.id === 'archived')).toMatchObject({
       id: 'archived',
       sidebarOrder: 0,
       catalogEligible: false,

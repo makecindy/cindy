@@ -7,6 +7,7 @@ import {
   type WorkLouderCodexSettings,
 } from '../../../shared/workLouderCodex.js';
 import { WorkLouderCodexLightingController } from '../WorkLouderCodexLightingController.js';
+import { __testing as settingsStoreTesting } from '../settingsStore.js';
 import { isWorkLouderCodexLightingFrameOff, WorkLouderLightingEffect } from '../protocol.js';
 
 function settings(patch: Partial<WorkLouderCodexSettings>): WorkLouderCodexSettings {
@@ -439,6 +440,7 @@ describe('WorkLouderCodexLightingController', () => {
       options,
     }));
     controller.applySettings(settingsForTest);
+    controller.start();
     stateRef.current?.({
       deviceType: 'codex-micro',
       isUsbConnection: true,
@@ -1586,5 +1588,144 @@ describe('WorkLouderCodexLightingController', () => {
       type: 'task',
       sessionId: 'task-6',
     });
+  });
+
+  it('keeps legacy six-slot fallback but treats thirteen configured nulls as new-task', async () => {
+    const hidRef: { current: ((event: { key: string; act: number }) => void) | null } = {
+      current: null,
+    };
+    const stateRef: { current: ((device: WorkLouderCodexDeviceState) => void) | null } = {
+      current: null,
+    };
+    const sink = {
+      update: vi.fn(),
+      setAgentKeyPressHandler: vi.fn(),
+      setDeviceActivityHandler: vi.fn(),
+      setConnectionStatusHandler: vi.fn(),
+      setDeviceStateHandler: vi.fn((handler: typeof stateRef.current) => {
+        stateRef.current = handler;
+      }),
+      setHidInputHandler: vi.fn((handler: typeof hidRef.current) => {
+        hidRef.current = handler;
+      }),
+      dispose: vi.fn(async () => undefined),
+    };
+    const activateSession = vi.fn();
+    const dispatch = vi.fn();
+    const catalog = Array.from({ length: 7 }, (_, index) => ({
+      id: `task-${index}`,
+      title: `Task ${index}`,
+      pinned: false,
+    }));
+    const layout = createWorkLouderCodexDefaultSettings().layout;
+    layout.taskKeys = ['AG00', 'AG01', 'AG02', 'AG03', 'AG04', 'AG05', 'ACT06'];
+    const controller = new WorkLouderCodexLightingController(
+      sink,
+      activateSession,
+      async () => ({ sidebar: catalog, lastSent: catalog, options: catalog }),
+      dispatch,
+    );
+
+    controller.applySettings(
+      settingsStoreTesting.normalize({
+        agentSource: 'custom',
+        customAgentKeys: Array.from({ length: 6 }, () => null),
+        deviceEnabled: true,
+        layout,
+      }),
+    );
+    controller.start();
+    stateRef.current?.({
+      deviceType: 'codex-micro',
+      isUsbConnection: true,
+      firmwareVersion: null,
+      batteryPercentage: null,
+      isCharging: false,
+      inputMonitoringPermission: 'granted',
+    });
+    await controller.resumeTaskSlots();
+    hidRef.current?.({ key: 'AG06', act: 1 });
+    expect(activateSession).toHaveBeenCalledWith('task-6', true);
+
+    activateSession.mockClear();
+    dispatch.mockClear();
+    controller.applySettings(
+      settingsStoreTesting.normalize({
+        agentSource: 'custom',
+        customAgentKeys: Array.from({ length: 13 }, () => null),
+        customAgentKeysConfiguredCount: 13,
+        deviceEnabled: true,
+        layout,
+      }),
+    );
+    hidRef.current?.({ key: 'AG06', act: 1 });
+    expect(activateSession).not.toHaveBeenCalled();
+    expect(dispatch).toHaveBeenCalledWith({ type: 'command', commandId: 'newTask' });
+  });
+
+  it('clears AG06-AG12 when a thirteen-key layout shrinks back to six keys', async () => {
+    const stateRef: { current: ((device: WorkLouderCodexDeviceState) => void) | null } = {
+      current: null,
+    };
+    const sink = {
+      update: vi.fn(),
+      setAgentKeyPressHandler: vi.fn(),
+      setDeviceActivityHandler: vi.fn(),
+      setConnectionStatusHandler: vi.fn(),
+      setDeviceStateHandler: vi.fn((handler: typeof stateRef.current) => {
+        stateRef.current = handler;
+      }),
+      setHidInputHandler: vi.fn(),
+      dispose: vi.fn(async () => undefined),
+    };
+    const options = Array.from({ length: 13 }, (_, index) => ({
+      id: `task-${index}`,
+      title: `Task ${index}`,
+      pinned: false,
+    }));
+    const thirteen = settings({
+      agentSource: 'sidebar',
+      deviceEnabled: true,
+      layout: {
+        ...createWorkLouderCodexDefaultSettings().layout,
+        taskKeys: [...WORKLOUDER_CREATOR_PROGRAMMABLE_KEYS],
+      },
+    });
+    const controller = new WorkLouderCodexLightingController(sink, vi.fn(), async () => ({
+      sidebar: options,
+      lastSent: options,
+      options,
+    }));
+    controller.applySettings(thirteen);
+    controller.start();
+    stateRef.current?.({
+      deviceType: 'codex-micro',
+      isUsbConnection: true,
+      firmwareVersion: null,
+      batteryPercentage: null,
+      isCharging: false,
+      inputMonitoringPermission: 'granted',
+    });
+    await controller.resumeTaskSlots();
+    controller.updateSessionActivity([
+      { sessionId: 'task-6', phase: 'running', compactDetail: '', attention: false },
+      { sessionId: 'task-12', phase: 'running', compactDetail: '', attention: false },
+    ]);
+    const before = sink.update.mock.lastCall?.[0];
+    expect(before?.threads[6]?.brightness).toBeGreaterThan(0);
+    expect(before?.threads[12]?.brightness).toBeGreaterThan(0);
+
+    controller.applySettings(
+      settings({
+        agentSource: 'sidebar',
+        deviceEnabled: true,
+        layout: createWorkLouderCodexDefaultSettings().layout,
+      }),
+    );
+    const after = sink.update.mock.lastCall?.[0];
+    expect(after?.threads).toHaveLength(13);
+    expect(
+      after?.threads.slice(6).every((thread: { brightness: number }) => thread.brightness === 0),
+    ).toBe(true);
   });
 });

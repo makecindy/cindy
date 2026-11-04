@@ -72,8 +72,19 @@ describe('Work Louder Codex settings store', () => {
     const next = __testing.normalize({ customAgentKeys: legacy });
 
     expect(next.customAgentKeys).toHaveLength(13);
+    expect(next.customAgentKeysConfiguredCount).toBe(6);
     expect(next.customAgentKeys[1]).toEqual({ type: 'command', commandId: 'newTask' });
     expect(next.customAgentKeys.slice(6)).toEqual(Array.from({ length: 7 }, () => null));
+  });
+
+  it('preserves an explicitly configured thirteen-slot custom list', () => {
+    const next = __testing.normalize({
+      customAgentKeys: Array.from({ length: 13 }, () => null),
+      customAgentKeysConfiguredCount: 13,
+    });
+
+    expect(next.customAgentKeys).toHaveLength(13);
+    expect(next.customAgentKeysConfiguredCount).toBe(13);
   });
 
   it('rounds and clamps persisted brightness while preserving valid options', () => {

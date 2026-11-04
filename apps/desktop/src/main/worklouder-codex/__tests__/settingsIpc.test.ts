@@ -162,6 +162,7 @@ describe('Work Louder Codex settings IPC business body', () => {
       lightingAutoDim: 'off',
       agentSource: 'last-sent',
       customAgentKeys: Array.from({ length: 13 }, () => null),
+      customAgentKeysConfiguredCount: 6,
       singleTapAgentKeys: false,
       layout: DEFAULT_SETTINGS.layout,
     });
@@ -203,7 +204,35 @@ describe('Work Louder Codex settings IPC business body', () => {
     );
     const written = writeSettings.mock.lastCall?.[1] as { customAgentKeys: unknown[] };
     expect(written.customAgentKeys).toHaveLength(13);
+    expect(written).toMatchObject({ customAgentKeysConfiguredCount: 6 });
     expect(written.customAgentKeys.slice(6)).toEqual(Array.from({ length: 7 }, () => null));
+  });
+
+  it('records thirteen configured slots for a thirteen-item custom patch', () => {
+    const { ipc, writeSettings } = makeIpc();
+
+    ipc.set(EVENT, 'codex-micro', {
+      customAgentKeys: Array.from({ length: 13 }, () => null),
+    });
+
+    expect(writeSettings).toHaveBeenCalledWith(
+      'codex-micro',
+      expect.objectContaining({ customAgentKeysConfiguredCount: 13 }),
+    );
+  });
+
+  it('honors an explicit configured count in a custom patch', () => {
+    const { ipc, writeSettings } = makeIpc();
+
+    ipc.set(EVENT, 'codex-micro', {
+      customAgentKeys: Array.from({ length: 13 }, () => null),
+      customAgentKeysConfiguredCount: 7,
+    });
+
+    expect(writeSettings).toHaveBeenCalledWith(
+      'codex-micro',
+      expect.objectContaining({ customAgentKeysConfiguredCount: 7 }),
+    );
   });
 
   it('re-checks the device on probe and refuses untrusted callers', () => {

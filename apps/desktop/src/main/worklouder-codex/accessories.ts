@@ -88,7 +88,11 @@ function idleAgentSlots(
   const titleById = new Map(taskOptions.map((task) => [task.id, task.title] as const));
   return Array.from({ length: slotCount }, (_, slot) => {
     let action = cloneAction(settings.customAgentKeys[slot] ?? null);
-    if (!action && settings.agentSource === 'custom' && slot >= settings.customAgentKeys.length) {
+    if (
+      !action &&
+      settings.agentSource === 'custom' &&
+      slot >= (settings.customAgentKeysConfiguredCount ?? WORKLOUDER_CODEX_DEFAULT_AGENT_SLOT_COUNT)
+    ) {
       const task = taskOptions[slot];
       action = task ? { type: 'task', sessionId: task.id } : null;
     }

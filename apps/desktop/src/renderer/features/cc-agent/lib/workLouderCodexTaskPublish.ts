@@ -28,22 +28,43 @@ export function buildWorkLouderCodexPublishedTasks(
   const sidebarOrder = new Map(renderedIds.map((id, index) => [id, index] as const));
   const catalogSessions = sessionsWithRemote.filter((session) => session.status === 'active');
   const catalogSessionIds = new Set(catalogSessions.map((session) => session.id));
+  const catalogById = new Map(catalogSessions.map((session) => [session.id, session] as const));
+  const seen = new Set<string>();
+  // The sidebar's first 13 active rows must survive the 100-row budget even
+  // when they sit deep in the local catalog (for example a pinned task).
+  const guaranteedVisible: WorkLouderCodexPublishSession[] = [];
+  for (const id of renderedIds) {
+    if (guaranteedVisible.length >= WORKLOUDER_CODEX_AGENT_SLOT_COUNT) break;
+    const session = catalogById.get(id);
+    if (!session || session.status !== 'active' || seen.has(id)) continue;
+    seen.add(id);
+    guaranteedVisible.push(session);
+  }
   const visibleProjection = visibleSessionsWithRemote
-    .filter((session) => !catalogSessionIds.has(session.id))
+    .filter((session) => !catalogSessionIds.has(session.id) && !seen.has(session.id))
     .slice(0, WORKLOUDER_CODEX_AGENT_SLOT_COUNT);
+  for (const session of visibleProjection) seen.add(session.id);
   const remainingCatalogSlots = Math.max(
     0,
-    WORKLOUDER_CODEX_TASK_OPTION_LIMIT - visibleProjection.length,
+    WORKLOUDER_CODEX_TASK_OPTION_LIMIT -
+      guaranteedVisible.length -
+      visibleProjection.length,
   );
   const remoteCatalogSessions = catalogSessions.filter((session) =>
-    Boolean(session.deviceLinkDeviceId),
+    Boolean(session.deviceLinkDeviceId) && !seen.has(session.id),
   );
-  const localCatalogSessions = catalogSessions.filter((session) => !session.deviceLinkDeviceId);
+  const localCatalogSessions = catalogSessions.filter(
+    (session) => !session.deviceLinkDeviceId && !seen.has(session.id),
+  );
+  const guaranteedRemoteCount = guaranteedVisible.filter((session) =>
+    Boolean(session.deviceLinkDeviceId),
+  ).length;
   // Keep a wider remote candidate pool than the 13 physical key slots; the task
   // source still decides which of these candidates reach keys.
   const remoteQuota = Math.min(
     remoteCatalogSessions.length,
-    WORKLOUDER_CODEX_REMOTE_TASK_CANDIDATE_LIMIT,
+    Math.max(0, WORKLOUDER_CODEX_REMOTE_TASK_CANDIDATE_LIMIT - guaranteedRemoteCount),
+    remainingCatalogSlots,
   );
   const localQuota = Math.max(0, remainingCatalogSlots - remoteQuota);
   const publishedCatalog = [
@@ -51,7 +72,7 @@ export function buildWorkLouderCodexPublishedTasks(
     ...remoteCatalogSessions.slice(0, remoteQuota),
   ];
 
-  return [...visibleProjection, ...publishedCatalog].map((session) => {
+  return [...guaranteedVisible, ...visibleProjection, ...publishedCatalog].map((session) => {
     const pinnedAtMs = session.pinnedAt ? Date.parse(session.pinnedAt) : Number.NaN;
     const userSendAtMs = session.userSendAt ? Date.parse(session.userSendAt) : Number.NaN;
     const order = sidebarOrder.get(session.id);

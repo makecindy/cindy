@@ -37,6 +37,7 @@ const SETTING_KEYS = [
   'lightingAutoDim',
   'agentSource',
   'customAgentKeys',
+  'customAgentKeysConfiguredCount',
   'singleTapAgentKeys',
   'layout',
 ] as const;
@@ -89,6 +90,19 @@ function parseSettingsPatch(value: unknown): WorkLouderCodexSettingsPatch {
     }
     patch.agentSource = normalizeWorkLouderCodexAgentSource(record.agentSource);
   }
+  let configuredCustomAgentCount: number | undefined;
+  if ('customAgentKeysConfiguredCount' in record) {
+    const count = record.customAgentKeysConfiguredCount;
+    if (
+      typeof count !== 'number' ||
+      !Number.isInteger(count) ||
+      count < 0 ||
+      count > WORKLOUDER_CODEX_AGENT_SLOT_COUNT
+    ) {
+      throwIpcError('INVALID_PARAMS', 'customAgentKeysConfiguredCount is invalid');
+    }
+    configuredCustomAgentCount = count;
+  }
   if ('customAgentKeys' in record) {
     const customAgentKeys = record.customAgentKeys;
     if (
@@ -101,6 +115,13 @@ function parseSettingsPatch(value: unknown): WorkLouderCodexSettingsPatch {
     patch.customAgentKeys = Array.from({ length: WORKLOUDER_CODEX_AGENT_SLOT_COUNT }, (_, index) =>
       parseAction(customAgentKeys[index] ?? null, true),
     );
+    configuredCustomAgentCount ??=
+      customAgentKeys.length === WORKLOUDER_CODEX_DEFAULT_AGENT_SLOT_COUNT
+        ? WORKLOUDER_CODEX_DEFAULT_AGENT_SLOT_COUNT
+        : WORKLOUDER_CODEX_AGENT_SLOT_COUNT;
+  }
+  if (configuredCustomAgentCount !== undefined) {
+    patch.customAgentKeysConfiguredCount = configuredCustomAgentCount;
   }
   if ('deviceEnabled' in record) {
     if (typeof record.deviceEnabled !== 'boolean') {

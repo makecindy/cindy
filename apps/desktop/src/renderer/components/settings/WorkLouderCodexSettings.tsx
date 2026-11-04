@@ -55,6 +55,7 @@ import {
   WORKLOUDER_CODEX_AUTO_DIM_OPTIONS,
   WORKLOUDER_CODEX_COMMAND_IDS,
   WORKLOUDER_CODEX_COMMAND_SLOTS,
+  WORKLOUDER_CODEX_DEFAULT_AGENT_SLOT_COUNT,
   WORKLOUDER_CODEX_ENCODER_ACTIONS,
   WORKLOUDER_CODEX_ENCODER_MODES,
   WORKLOUDER_CODEX_KEYCAP_ACTIONS,
@@ -358,6 +359,15 @@ export function WorkLouderCodexSettings({
     editingProgrammableTaskKey && isWorkLouderCreatorProgrammableKey(editingPart)
       ? normalizeWorkLouderCreatorTaskKeys(settings.layout.taskKeys).indexOf(editingPart)
       : -1;
+  const editingCustomConfiguredCount =
+    settings.customAgentKeysConfiguredCount ?? WORKLOUDER_CODEX_DEFAULT_AGENT_SLOT_COUNT;
+  const editingCustomAction =
+    editingTaskIndex >= 0
+      ? (settings.customAgentKeys[editingTaskIndex] ??
+        (editingTaskIndex >= editingCustomConfiguredCount
+          ? (state?.agentSlots[editingTaskIndex]?.action ?? null)
+          : null))
+      : null;
 
   const openPartEditor = (key: WorkLouderCodexEditableKey): void => {
     if (isWorkLouderCreatorProgrammableKey(key)) {
@@ -382,8 +392,8 @@ export function WorkLouderCodexSettings({
       setKeycapQuery('');
       return;
     }
-    // A task key is only its own thing under "custom"; otherwise all six follow
-    // the shared rule and there is nothing per-key to edit.
+    // A task key is only its own thing under "custom"; otherwise all task keys
+    // follow the shared rule and there is nothing per-key to edit.
     if (key.startsWith('AG') && settings.agentSource !== 'custom') return;
     setEditingPart(key);
   };
@@ -471,11 +481,16 @@ export function WorkLouderCodexSettings({
       const index = normalizeWorkLouderCreatorTaskKeys(settings.layout.taskKeys).indexOf(key);
       const slot = state?.agentSlots[index];
       const custom = settings.agentSource === 'custom';
+      const customAction = index >= 0 ? (settings.customAgentKeys[index] ?? null) : null;
+      const customConfiguredCount =
+        settings.customAgentKeysConfiguredCount ?? WORKLOUDER_CODEX_DEFAULT_AGENT_SLOT_COUNT;
+      const customUsesExplicitSlot =
+        index >= 0 && (customAction !== null || index < customConfiguredCount);
       return {
         legend: key,
         name: custom
-          ? index >= 0 && index < settings.customAgentKeys.length
-            ? (actionLabel(settings.customAgentKeys[index] ?? null, t, state) ??
+          ? customUsesExplicitSlot
+            ? (actionLabel(customAction, t, state) ??
               t('settings.shortcuts.workLouderCodex.agentKeys.newTask'))
             : slot?.title || t('settings.shortcuts.workLouderCodex.agentKeys.newTask')
           : slot?.title || t('settings.shortcuts.workLouderCodex.agentKeys.newTask'),
@@ -829,7 +844,7 @@ export function WorkLouderCodexSettings({
                     )}
                     control={
                       <ActionSelect
-                        action={settings.customAgentKeys[editingTaskIndex] ?? null}
+                        action={editingCustomAction}
                         state={state}
                         skills={enabledSkills}
                         disabled={!state || saving}
@@ -847,7 +862,13 @@ export function WorkLouderCodexSettings({
                             item ? { ...item } : null,
                           );
                           customAgentKeys[editingTaskIndex] = action;
-                          void setSettings({ customAgentKeys });
+                          void setSettings({
+                            customAgentKeys,
+                            customAgentKeysConfiguredCount: Math.max(
+                              editingCustomConfiguredCount,
+                              editingTaskIndex + 1,
+                            ),
+                          });
                         }}
                       />
                     }
