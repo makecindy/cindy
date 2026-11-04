@@ -137,6 +137,8 @@ PR #101 之后，Orca 的 main 侧业务由独立 service 承接，`register.ts`
 不唤醒 runtime、不读历史正文；旧宿主缺少该字段时保持缺省，不能解释为空。
 `create_worker` / `create_workers` 的 `DUPLICATE_LABEL` 说明归档仍占名，并指向此字段：
 用户要求重新创建时保持 role、换未使用的 label，无需覆盖旧 Worker 或更换 team。
+首次能力索引的 `collab-mode` 与 `get_workspace_info` 工具描述也必须说明历史占名和
+Lead 所属电脑的当前团队范围，让 Agent 在创建前即可发现查询入口。
 创建中的临时预约不在持久标签列表内；可用性仍由原子 reservation 与唯一索引最终判定。
 实现见 `orcaTeamStore.ts` 的 `listWorkerLabelsByTeam`、`orcaDiagnostics.ts`、
 `orcaWorkerCreationService.ts` 与 `packages/lizi-mcps/src/orca/server.ts`；回归见对应 store、
