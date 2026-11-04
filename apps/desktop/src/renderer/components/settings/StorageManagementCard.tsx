@@ -1202,15 +1202,18 @@ function DatabaseSlimmingSection({
       </div>
 
       <div
-        id="settings-search-settings-about-storage-dbAutoCleanupTitle"
+        id={storageManagementCardSettings.aboutStorageDbAutoCleanupTitle.targetId}
         className="grid grid-cols-[minmax(0,1fr)_auto] items-center gap-x-3 gap-y-2 rounded-lg border border-[var(--settings-theme-card-border)] px-3 py-2.5"
       >
         <div className="col-span-2 flex min-w-0 flex-col gap-0.5">
-          <span className="text-12 font-medium text-[var(--settings-section-sublabel)]">
-            {t('settings.about.storage.dbAutoCleanupTitle')}
+          <span
+            className="text-12 font-medium text-[var(--settings-section-sublabel)]"
+            data-setting-id={storageManagementCardSettings.aboutStorageDbAutoCleanupTitle.id}
+          >
+            {t(storageManagementCardSettings.aboutStorageDbAutoCleanupTitle.titleKey)}
           </span>
           <span className="text-11 leading-[1.4] text-[var(--text-secondary)]">
-            {t('settings.about.storage.dbAutoCleanupDescription')}
+            {t(storageManagementCardSettings.aboutStorageDbAutoCleanupTitle.descriptionKey)}
           </span>
         </div>
 
@@ -1219,26 +1222,29 @@ function DatabaseSlimmingSection({
           className="flex min-w-0 cursor-pointer flex-col gap-0.5"
         >
           <span
-            id="settings-search-settings-about-storage-dbAutoCleanupEnableLabel"
+            id={storageManagementCardSettings.aboutStorageDbAutoCleanupEnableLabel.targetId}
+            data-setting-id={storageManagementCardSettings.aboutStorageDbAutoCleanupEnableLabel.id}
             className="text-12 text-[var(--settings-section-sublabel)]"
           >
-            {t('settings.about.storage.dbAutoCleanupEnableLabel')}
+            {t(storageManagementCardSettings.aboutStorageDbAutoCleanupEnableLabel.titleKey)}
           </span>
         </label>
         <Switch
           id="db-auto-cleanup-enabled"
+          data-setting-id={storageManagementCardSettings.aboutStorageDbAutoCleanupEnableLabel.id}
           checked={autoCleanup?.enabled ?? false}
           disabled={autoCleanup === null || autoCleanupSaving}
           onCheckedChange={(checked) => void persistAutoCleanupSettings({ enabled: checked })}
-          aria-label={t('settings.about.storage.dbAutoCleanupEnableLabel')}
+          aria-label={t(storageManagementCardSettings.aboutStorageDbAutoCleanupEnableLabel.titleKey)}
         />
 
         <label
           htmlFor="db-auto-cleanup-retention"
-          id="settings-search-settings-about-storage-dbAutoCleanupRetentionLabel"
+          id={storageManagementCardSettings.aboutStorageDbAutoCleanupRetentionLabel.targetId}
+          data-setting-id={storageManagementCardSettings.aboutStorageDbAutoCleanupRetentionLabel.id}
           className="text-12 text-[var(--settings-section-sublabel)]"
         >
-          {t('settings.about.storage.dbAutoCleanupRetentionLabel')}
+          {t(storageManagementCardSettings.aboutStorageDbAutoCleanupRetentionLabel.titleKey)}
         </label>
         <div className="flex items-center">
           <Select.Root
@@ -1248,7 +1254,8 @@ function DatabaseSlimmingSection({
           >
             <Select.Trigger
               id="db-auto-cleanup-retention"
-              aria-label={t('settings.about.storage.dbAutoCleanupRetentionLabel')}
+              data-setting-id={storageManagementCardSettings.aboutStorageDbAutoCleanupRetentionLabel.id}
+              aria-label={t(storageManagementCardSettings.aboutStorageDbAutoCleanupRetentionLabel.titleKey)}
               className={cn(
                 'flex h-8 min-w-[104px] items-center justify-between gap-2 rounded-full border px-3 text-12 outline-none transition-colors',
                 'border-[var(--settings-input-border)] bg-[var(--settings-input-bg)] text-[var(--settings-input-text)]',
