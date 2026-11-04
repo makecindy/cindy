@@ -34,7 +34,9 @@ describe('db auto cleanup settings', () => {
   it('falls back to defaults when the file is missing or unreadable', () => {
     expect(readDbAutoCleanupSettings(userDataDir, log)).toEqual(__testing.DEFAULTS);
     expect(__testing.DEFAULTS).toMatchObject({
-      enabled: true,
+      // Off by default: the mechanism must not delete history before the
+      // Settings card can switch it off again.
+      enabled: false,
       retentionDays: DB_AUTO_CLEANUP_DEFAULT_RETENTION_DAYS,
       cooldownDays: DB_AUTO_CLEANUP_DEFAULT_COOLDOWN_DAYS,
       lastAutoRunAt: null,

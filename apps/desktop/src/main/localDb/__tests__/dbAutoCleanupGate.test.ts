@@ -21,6 +21,9 @@ const CUTOFF = NOW - RETENTION_DAYS * DAY_MS;
 
 const SETTINGS = {
   ...settingsTesting.DEFAULTS,
+  // The gate is only reachable once a run is switched on; the shipped default is
+  // off, so every non-disabled case states that explicitly.
+  enabled: true,
   retentionDays: RETENTION_DAYS,
 } as const;
 
