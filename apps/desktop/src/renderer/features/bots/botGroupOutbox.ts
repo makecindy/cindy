@@ -180,9 +180,11 @@ export function startBotGroupOutbox({ restoreSavedEntries = true }: { restoreSav
     if (restoreSavedEntries) {
       // Main filters and claims only rows with no other live renderer owner.
       // Reusing the retry tick recovers crashes, where unload never ran.
-      const managed = new Set([...groups.values()].flatMap(group =>
-        group.entries.map(entry => entryKey(entry.input.groupId, entry.input.clientId))));
-      const saved = await durable()!({ action: 'list', owner });
+      const known = [...groups.values()].flatMap(group => group.entries.map(entry => ({
+        groupId: entry.input.groupId, clientId: entry.input.clientId,
+      })));
+      const managed = new Set(known.map(row => entryKey(row.groupId, row.clientId)));
+      const saved = await durable()!({ action: 'list', owner, exclude: known });
       if (!current()) return;
       for (const value of saved) {
         const entry = value as unknown as BotGroupOutboxEntry;

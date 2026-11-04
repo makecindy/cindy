@@ -7,5 +7,5 @@ export interface BotGroupOutboxStoredEntry {
 }
 export type BotGroupOutboxStorageRequest = {
   owner: { dataOwnerId: string | null; generation: number };
-} & ({ action: 'list' } | { action: 'put'; entry: BotGroupOutboxStoredEntry }
+} & ({ action: 'list'; exclude?: { groupId: string; clientId: string }[] } | { action: 'put'; entry: BotGroupOutboxStoredEntry }
   | { action: 'remove'; groupId: string; clientId: string });

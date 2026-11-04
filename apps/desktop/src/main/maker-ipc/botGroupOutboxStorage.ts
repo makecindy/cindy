@@ -21,9 +21,11 @@ const entrySchema = z.object({ input: z.object({ groupId: identifier, clientId: 
   prepared: z.array(z.object({ url: z.string().optional(), annotationSourceUrl: z.string().optional() }).passthrough()).max(32).optional(),
 }).passthrough();
 const requestSchema = z.intersection(z.object({ owner: z.object({ dataOwnerId: identifier, generation: z.number().int() }) }),
-  z.discriminatedUnion('action', [z.object({ action: z.literal('list') }), z.object({ action: z.literal('put'), entry: entrySchema }),
+  z.discriminatedUnion('action', [z.object({ action: z.literal('list'), exclude: z.array(z.object({ groupId: identifier, clientId: identifier })).optional() }), z.object({ action: z.literal('put'), entry: entrySchema }),
     z.object({ action: z.literal('remove'), groupId: identifier, clientId: identifier })]));
 const hash = (value: string) => createHash('sha256').update(value).digest('hex');
+const recordName = (groupId: string, clientId: string) => `${hash(JSON.stringify([groupId, clientId]))}.json`;
+const recordKey = (ownerId: string, groupId: string, clientId: string) => JSON.stringify([ownerId, recordName(groupId, clientId)]);
 let chain = Promise.resolve<unknown>(undefined);
 interface RendererOwner { live: boolean }
 const rendererOwners = new WeakMap<WebContents, RendererOwner>();
@@ -56,7 +58,7 @@ export function accessBotGroupOutbox(input: unknown, sender?: WebContents): Prom
   const request = requestSchema.parse(input);
   const renderer = sender ? rendererOwner(sender) : undefined;
   const identity = request.action === 'put' ? request.entry.input : request.action === 'remove' ? request : null;
-  const mutationKey = identity ? JSON.stringify([request.owner.dataOwnerId, identity.groupId, identity.clientId]) : null;
+  const mutationKey = identity ? recordKey(request.owner.dataOwnerId, identity.groupId, identity.clientId) : null;
   // A queued edit still owns its intent after its renderer dies. Earlier lists
   // must not claim the row before that already-entered mutation can finish.
   if (mutationKey) pendingMutations.set(mutationKey, (pendingMutations.get(mutationKey) ?? 0) + 1);
@@ -72,8 +74,8 @@ export function accessBotGroupOutbox(input: unknown, sender?: WebContents): Prom
       ownershipAccount = request.owner.dataOwnerId;
     }
     const root = ownerScopedUserDataPath('bot-group-outbox');
-    const file = (groupId: string, clientId: string) => path.join(root, `${hash(JSON.stringify([groupId, clientId]))}.json`);
-    const ownershipKey = (groupId: string, clientId: string) => JSON.stringify([request.owner.dataOwnerId, groupId, clientId]);
+    const file = (groupId: string, clientId: string) => path.join(root, recordName(groupId, clientId));
+    const ownershipKey = (groupId: string, clientId: string) => recordKey(request.owner.dataOwnerId, groupId, clientId);
     const read = (filename: string) => {
       const raw = readAtomicFileSync(filename);
       if (!raw) return null;
@@ -82,17 +84,20 @@ export function accessBotGroupOutbox(input: unknown, sender?: WebContents): Prom
       return parsed === null ? null : entrySchema.parse(parsed);
     };
     if (request.action === 'list') {
+      const excluded = new Set(request.exclude?.map(row => recordName(row.groupId, row.clientId)));
       let names: string[];
       try { names = readdirSync(root); } catch (error) { if ((error as NodeJS.ErrnoException).code === 'ENOENT') return []; throw error; }
       const files = new Set(names.filter(name => /^[a-f0-9]{64}\.json(?:\.bak)?$/.test(name)).map(name => name.replace(/\.bak$/, '')));
       return [...files].flatMap(name => {
-        const value = read(path.join(root, name));
-        if (!value) return [];
-        const key = ownershipKey(value.input.groupId, value.input.clientId);
+        // Ownership is indexed by the existing hashed filename. Recovery ticks
+        // skip live payloads before synchronous file reads/JSON validation.
+        const key = JSON.stringify([request.owner.dataOwnerId, name]);
         if (pendingMutations.has(key)) return [];
         const held = entryOwners.get(key);
-        if (renderer && held?.live && held !== renderer) return [];
-        if (renderer) entryOwners.set(key, renderer);
+        if (renderer && held?.live && (held !== renderer || excluded.has(name))) return [];
+        const value = read(path.join(root, name));
+        if (!value) return [];
+        if (renderer) entryOwners.set(ownershipKey(value.input.groupId, value.input.clientId), renderer);
         return [value];
       }).sort((a, b) => a.createdAt - b.createdAt);
     }

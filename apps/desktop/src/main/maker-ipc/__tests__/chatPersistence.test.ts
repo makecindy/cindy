@@ -18,6 +18,7 @@ vi.mock('../../cindy-media/ledger.js', () => ({ hasRef: async () => false, pinBl
   removeRefById: state.remove, removeRefs: state.remove }));
 import { chatSendJournal } from '../chatSendJournal.js';
 import { accessBotGroupOutbox } from '../botGroupOutboxStorage.js';
+import * as atomicFiles from '../../utils/atomicWriteFile.js';
 import { accessChatDisplayCache } from '../chatDisplayCache.js';
 import { extractIpcError } from '../../../shared/ipcError.js';
 
@@ -166,4 +167,34 @@ it.each(['before', 'after'])('finishes accepted mutations when recovery is queue
   } finally {
     main.emit('destroyed');
   }
+});
+
+// Unit / review4464573096: periodic recovery must not parse payloads already
+// known to this worker or held by other live windows; released rows stay recoverable.
+it('recovers unknown files without rereading live windows payloads', async () => {
+  const secondary = new EventEmitter() as unknown as WebContents;
+  const main = new EventEmitter() as unknown as WebContents;
+  const entry = { input: { groupId: 'room', clientId: 'secondary', text: 'pending', mentions: { all: false, botIds: [] } }, createdAt: 1,
+    draft: 'pending', signature: 'pending', attachmentScope: 'room', after: 0, tracked: [], attachments: [], status: 'failed' as const, files: [] };
+  await accessBotGroupOutbox({ action: 'put', owner: state.owner, entry }, secondary);
+  await accessBotGroupOutbox({ action: 'put', owner: state.owner, entry: { ...entry, input: { ...entry.input, clientId: 'main' } } }, main);
+  const reads = vi.spyOn(atomicFiles, 'readAtomicFileSync');
+  const known = [{ groupId: 'room', clientId: 'main' }];
+  const recover = () => accessBotGroupOutbox({ action: 'list', owner: state.owner, exclude: known }, main);
+  try {
+    expect.soft(await recover()).toEqual([]);
+    expect.soft(await recover()).toEqual([]);
+    expect.soft(reads).not.toHaveBeenCalled();
+    secondary.emit('render-process-gone');
+    expect((await recover()).map(row => row.input.clientId)).toEqual(['secondary']);
+    expect(reads).toHaveBeenCalledTimes(1);
+    // A stopped worker may have claimed the row before its response reached
+    // renderer memory. A replacement worker must still be able to restore it.
+    expect((await recover()).map(row => row.input.clientId)).toEqual(['secondary']);
+    known.push({ groupId: 'room', clientId: 'secondary' });
+    expect(await recover()).toEqual([]);
+    expect(reads).toHaveBeenCalledTimes(2);
+    // Legacy/full callers still receive their complete owned snapshot.
+    expect((await accessBotGroupOutbox({ action: 'list', owner: state.owner }, main)).map(row => row.input.clientId).sort()).toEqual(['main', 'secondary']);
+  } finally { reads.mockRestore(); secondary.emit('destroyed'); main.emit('destroyed'); }
 });
