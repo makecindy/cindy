@@ -66,7 +66,10 @@ export const PREVIEW_PANEL_STYLE = {
 export function previewCompactPanelStyle(extraHeight = 0): CSSProperties {
   return {
     ...PREVIEW_PANEL_STYLE,
-    top: 0,
+    // Keep the shared top margin: at top 0 the panel's own header falls into the 0..40px
+    // band that PreviewScrim declares as the window drag region, and Electron drag rects
+    // are pure geometry, so most of the save / overflow / close hit area stops receiving
+    // clicks and the title lands under the traffic lights (#8777).
     bottom: 0,
     left: 0,
     right: 0,
