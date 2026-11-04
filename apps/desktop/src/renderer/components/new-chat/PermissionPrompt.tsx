@@ -101,6 +101,40 @@ const allowActionClass = cn(
 // Component
 // ---------------------------------------------------------------------------
 
+/**
+ * After focus is moved onto the card, a key that is still held from the switch
+ * (Enter / Space on a sidebar row, with or without Ctrl/⌘) keeps sending repeat
+ * keydowns, now to 「Allow once」 and to the card shortcuts. Swallow those repeats
+ * and the matching keyup until the user presses a key again, so approving always
+ * takes a fresh press. Returns the disposer.
+ */
+function swallowHeldActivationKeys(): () => void {
+  const isActivationKey = (e: KeyboardEvent) => e.key === 'Enter' || e.key === ' ';
+  const onKeyDown = (e: KeyboardEvent) => {
+    if (!e.repeat) {
+      dispose();
+      return;
+    }
+    if (!isActivationKey(e)) return;
+    e.preventDefault();
+    e.stopImmediatePropagation();
+  };
+  const onKeyUp = (e: KeyboardEvent) => {
+    if (!isActivationKey(e)) return;
+    // Without the press that started it, the release must not activate the button.
+    e.preventDefault();
+    e.stopImmediatePropagation();
+    dispose();
+  };
+  function dispose() {
+    window.removeEventListener('keydown', onKeyDown, true);
+    window.removeEventListener('keyup', onKeyUp, true);
+  }
+  window.addEventListener('keydown', onKeyDown, true);
+  window.addEventListener('keyup', onKeyUp, true);
+  return dispose;
+}
+
 export function PermissionPrompt({
   permission,
   onRespond,
@@ -111,6 +145,7 @@ export function PermissionPrompt({
   const { t } = useTranslation();
   const cardRef = useRef<HTMLDivElement>(null);
   const allowOnceRef = useRef<HTMLButtonElement>(null);
+  const heldKeyGuardRef = useRef<(() => void) | null>(null);
   const { toolName, input, title, displayName, description, suggestions, autoReviewUnavailable,
     autoReviewReason, submitting, submissionFailed } = permission;
   const isMediaDownload = toolName === 'cindy.media.download';
@@ -230,8 +265,13 @@ export function PermissionPrompt({
     // inline). Keep the request until focus actually lands on a live button.
     if (!button.isConnected) return;
     button.focus({ preventScroll: true });
-    if (document.activeElement === button) onAutoFocusHandled?.();
+    if (document.activeElement !== button) return;
+    heldKeyGuardRef.current?.();
+    heldKeyGuardRef.current = swallowHeldActivationKeys();
+    onAutoFocusHandled?.();
   }, [autoFocus, onAutoFocusHandled, submitting]);
+
+  useEffect(() => () => heldKeyGuardRef.current?.(), []);
 
   // ── Render ──
 

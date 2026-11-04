@@ -8,6 +8,8 @@
  * 建议 —— 文案怎么写都不该动实际授权内容。
  */
 import { act, cleanup, fireEvent, render, screen } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
+import { useState } from 'react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import type { PendingPermission } from '@/lib/makerChatStore';
@@ -334,5 +336,57 @@ describe('PermissionPrompt 经交互卡 portal 切换路由', () => {
     act(() => setSlotElement(null));
 
     expect(document.activeElement).toBe(screen.getByRole('button', { name: /allowOnce/ }));
+  });
+});
+
+// 键盘切换：在侧栏行上按住 Enter，第一次 keydown 切任务、焦点随即落到「允许一次」；
+// 同一次按住产生的重复 keydown（以及最后的松开）不能激活按钮或卡片快捷键，替用户批准。
+describe('PermissionPrompt 键盘切换时不替按住的按键批准', () => {
+  function SidebarSwitch({ onRespond }: { onRespond: (r: unknown) => void }) {
+    const [switched, setSwitched] = useState(false);
+    const intent = useSessionSwitchFocusIntent(switched ? 'task-b' : 'task-a', switched);
+    return (
+      <>
+        <div
+          role="button"
+          tabIndex={0}
+          aria-label="sidebar-row"
+          onKeyDown={(e) => {
+            if (e.key === 'Enter' || e.key === ' ') {
+              e.preventDefault();
+              setSwitched(true);
+            }
+          }}
+        />
+        {switched ? (
+          <PermissionPrompt
+            permission={permission([bashRule])}
+            onRespond={onRespond}
+            autoFocus={intent.armed}
+            onAutoFocusHandled={intent.consume}
+          />
+        ) : null}
+      </>
+    );
+  }
+
+  it.each([
+    ['Enter', '{Enter>4}'],
+    ['Ctrl+Enter', '{Control>}{Enter>4}'],
+    ['Space', '{ >4}'],
+  ])('按住 %s 切换后，重复与松开都不批准；再按一次才生效', async (_name, hold) => {
+    const user = userEvent.setup();
+    const onRespond = vi.fn();
+    render(<SidebarSwitch onRespond={onRespond} />);
+    screen.getByRole('button', { name: 'sidebar-row' }).focus();
+
+    await user.keyboard(hold);
+    const allowOnce = screen.getByRole('button', { name: /allowOnce/ });
+    expect(document.activeElement).toBe(allowOnce);
+    await user.keyboard('{/Enter}{/ }{/Control}');
+    expect(onRespond).not.toHaveBeenCalled();
+
+    await user.keyboard('{Enter}');
+    expect(onRespond).toHaveBeenCalledWith({ behavior: 'allow' });
   });
 });
