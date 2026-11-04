@@ -255,6 +255,14 @@
    */
   const syncSnapshots = new Map();
 
+  /** Non-function members the preload exposes as plain values. */
+  const VALUE_CHANNELS = Object.freeze({
+    'clientEndpoints.websiteUrl': 'https://cindy.app',
+    'appDisplayVersion': '0.0.0-host',
+    'appDisplayVersionDetail': 'cindy-host',
+    'preferredSystemLocale': 'en',
+  });
+
   function makeNode(path) {
     const node = function shimCall(...args) {
       window.__cindyCalls?.push(path);
@@ -278,6 +286,9 @@
     return new Proxy(node, {
       get(_target, prop) {
         if (path === '' && prop in SYNC_VALUES) return SYNC_VALUES[prop];
+        const full = path ? `${path}.${String(prop)}` : String(prop);
+        if (full in VALUE_CHANNELS && path !== '') return VALUE_CHANNELS[full];
+        if (path === '' && full in VALUE_CHANNELS) return VALUE_CHANNELS[full];
         if (prop === 'then') return undefined;
         if (typeof prop === 'symbol') return undefined;
         // Keep Function.prototype members intact: callers legitimately use
