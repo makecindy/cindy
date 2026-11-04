@@ -1,4 +1,5 @@
-import { groupTeammateProcess } from '@cindy/maker-shared/message-render';
+import { groupTeammateProcess, isSteerUserRow } from '@cindy/maker-shared/message-render';
+import { isContinuationMessage } from '@cindy/maker-shared/synthetic-trigger';
 import { hasRichAnswer } from '@cindy/maker-shared/rich-answer';
 import { botTaskResultKey, readBotCollaborationMeta } from '@cindy/maker-shared/botCollaboration';
 import { HISTORY_GAP_SPLIT_MS } from '@/lib/historyGap';
@@ -211,13 +212,21 @@ function liftRepliesFromWorkGroup(
   return out;
 }
 
-/** 工具 / 思考活动：与主进程「后续工具动作」的判据对齐。 */
+/** 工具 / 思考活动：与主进程「后续工具动作」的判据对齐。
+ *  计划卡（agent_plan）与生成文件 / 改动卡会把原工具行替掉，仍是一次工具动作；
+ *  只有 fork 分隔条不代表动作。 */
 function isToolActivity(item: RenderItem): boolean {
-  if (item.type === 'tool_segment' || item.type === 'agent_task' || item.type === 'tool_media'
-    || item.type === 'ghost_card') return true;
-  if (item.type !== 'message') return false;
-  const { role } = item.message;
-  return role === 'thinking' || role === 'tool_use' || role === 'tool_result';
+  if (item.type === 'message') {
+    const { role } = item.message;
+    return role === 'thinking' || role === 'tool_use' || role === 'tool_result';
+  }
+  return item.type !== 'fork_origin';
+}
+
+/** 真正开新轮次的用户行。`steer` 插话与恢复续跑（continuation / autoResume）不是新轮，
+ *  与主进程 `canonicalReplyVisibility` 的 next_input 判据、以及分组自己的边界口径一致。 */
+function startsNewTurn(message: ChatMessage): boolean {
+  return message.role === 'user' && !isSteerUserRow(message) && !isContinuationMessage(message);
 }
 
 function projectWindow(
@@ -252,7 +261,8 @@ function projectWindow(
     for (let index = list.length - 1; index >= 0; index -= 1) {
       const item = list[index];
       if (item.type === 'message' && item.message.role === 'user') {
-        activityAfter = false;
+        // steer 插话 / 自动续跑的 user 行不开启新轮：后续工具仍然决定旁白是否可见。
+        if (startsNewTurn(item.message)) activityAfter = false;
         continue;
       }
       if (item.type === 'work_group') {

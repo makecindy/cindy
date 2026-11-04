@@ -503,4 +503,41 @@ describe('companion closing reply and read position', () => {
       expect(latestSettledAssistantMs(projected)).toBe(Date.parse(sealedAt));
     }
   });
+
+  // steer 插话与 autoResume 自动续跑不开启新轮,后续工具仍然决定旁白可见性
+  // (主进程 canonicalReplyVisibility 的 next_input 同样排除这两类)。
+  it('does not treat a steer row or an auto-resume row as a new turn', () => {
+    const sealedAt = '2026-11-03T09:18:00.000Z';
+    const user = message('u', 'user', 'Check the inbox', { createdAt: '2026-11-03T08:55:00.000Z' });
+    const wake = message('wake', 'assistant', 'Woke up: inbox empty', { turnCompleted: true, createdAt: sealedAt });
+    const narration = message('narration', 'assistant', 'Opening the second mailbox', { createdAt: '2026-11-03T09:20:00.000Z' });
+    const interjections: ChatMessage[] = [
+      { clientId: 'steer', role: 'user', content: 'Also check spam', delivery: 'steer' },
+      { clientId: 'resume', role: 'user', content: 'Continue', isContinuationTrigger: true } as ChatMessage,
+    ];
+    for (const interjection of interjections) {
+      const projected = simplifyBotRenderItems([user, wake, {
+        type: 'work_group', key: 'work-history', isStreaming: false,
+        children: [narration, { type: 'message', key: `msg-${interjection.clientId}`, message: interjection } as RenderItem,
+          tool('after')],
+      } as RenderItem], false);
+      expect(proseIds(projected)).toEqual(['wake']);
+      expect(latestSettledAssistantMs(projected)).toBe(Date.parse(sealedAt));
+    }
+  });
+
+  // 计划卡会替掉原来的 TodoWrite 工具行,但仍是工具动作:旁白不能被当成收尾。
+  it('counts a plan card as activity', () => {
+    const sealedAt = '2026-11-03T09:18:00.000Z';
+    const user = message('u', 'user', 'Check the inbox', { createdAt: '2026-11-03T08:55:00.000Z' });
+    const wake = message('wake', 'assistant', 'Woke up: inbox empty', { turnCompleted: true, createdAt: sealedAt });
+    const narration = message('narration', 'assistant', 'Opening the second mailbox', { createdAt: '2026-11-03T09:20:00.000Z' });
+    const plan: RenderItem = { type: 'agent_plan', key: 'plan-1', sourceClientIds: ['plan-tool'],
+      todos: [{ content: 'Scan inbox', status: 'pending' }, { content: 'Report', status: 'pending' }] };
+    const projected = simplifyBotRenderItems([user, wake, {
+      type: 'work_group', key: 'work-history', isStreaming: false, children: [narration, plan],
+    } as RenderItem], false);
+    expect(proseIds(projected)).toEqual(['wake']);
+    expect(latestSettledAssistantMs(projected)).toBe(Date.parse(sealedAt));
+  });
 });
