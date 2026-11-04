@@ -7,6 +7,7 @@
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { beforeEach, afterEach, describe, expect, it, vi } from 'vitest';
+import { PROVIDER_METADATA_TRUST_MS } from '@cindy/device-link';
 import * as mod from '@/device-link/deviceProvidersCache';
 
 import type { ProviderView } from '@cindy/model-providers/registry';
@@ -39,12 +40,40 @@ it('keeps the host deadline across ordinary/fresh cache reads and retires the mo
   expect(mod.getCachedDeviceProviders('host')).toBeUndefined();
 });
 
+// Regression: a host that predates the optional providerContinuity field must
+// keep its original view lifecycle. Only the new host advertises the bound.
+it('keeps an unstamped legacy host catalog on its original view lifecycle', async () => {
+  vi.useFakeTimers({ toFake: ['Date', 'performance', 'setTimeout', 'clearTimeout'] });
+  const fetcher = vi.fn(async () => result('host'));
+  await mod.fetchDeviceProviders('host', fetcher);
+  await vi.advanceTimersByTimeAsync(PROVIDER_METADATA_TRUST_MS + 1);
+  expect(mod.getCachedDeviceProviders('host')?.providers ?? []).toHaveLength(1);
+});
+
+// Timing guard: one slow read must spend the short upstream budget once, from
+// the request start. Response-time baselines would extend it; pre-deduction
+// would spend it twice.
+it('deducts a slow upstream read once and never extends a short budget', async () => {
+  vi.useFakeTimers({ toFake: ['Date', 'performance', 'setTimeout', 'clearTimeout'] });
+  const fetcher = vi.fn(async () => {
+    await new Promise((resolve) => setTimeout(resolve, 400));
+    return { ...result('host'), providerContinuity: { stale: false, remainingMs: 1000 } };
+  });
+  const pending = mod.fetchDeviceProviders('host', fetcher);
+  await vi.advanceTimersByTimeAsync(400);
+  await pending;
+  await vi.advanceTimersByTimeAsync(599);
+  expect(mod.getCachedDeviceProviders('host')?.providers ?? []).toHaveLength(1);
+  await vi.advanceTimersByTimeAsync(2);
+  expect(mod.getCachedDeviceProviders('host')).toBeUndefined();
+});
+
 type Providers = { providers: ProviderView[] };
 const result = (deviceId: string): Providers =>
   ({ providers: [{ id: `${deviceId}-xd` } as ProviderView] });
 
 describe('useDeviceProviders deviceId-aware cache', () => {
-  it.each(['CHANNEL_NOT_ALLOWED', 'ACCESS_REVOKED', 'SHARE_PAUSED'])('%s retires only that device cache without publishing an empty success', async code => {
+  it.each(['CHANNEL_NOT_ALLOWED', 'ACCESS_REVOKED', 'SHARE_PAUSED', 'PRECONDITION_FAILED'])('%s retires only that device cache without publishing an empty success', async code => {
     await mod.fetchDeviceProviders('dev-1', async () => result('dev-1'));
     await mod.fetchDeviceProviders('dev-2', async () => result('dev-2'));
     const otherGen = mod.getDeviceProvidersGen('dev-2');
@@ -57,6 +86,19 @@ describe('useDeviceProviders deviceId-aware cache', () => {
     expect(readyListener).not.toHaveBeenCalled();
     expect(mod.getCachedDeviceProviders('dev-2')).toEqual(result('dev-2'));
     expect(mod.getDeviceProvidersGen('dev-2')).toBe(otherGen);
+  });
+
+  // Positive control for the permanent-failure arm above: a typed transient read
+  // failure keeps the bounded snapshot so the mounted picker survives a relay
+  // hiccup, while the next successful read still replaces it.
+  it('keeps the bounded cache for a transient fresh failure and replaces it on the next success', async () => {
+    await mod.fetchDeviceProviders('dev-1', async () => result('dev-1-old'));
+    await expect(mod.fetchDeviceProvidersFresh('dev-1', async () => {
+      throw new Error('[DEVICE_LINK_TIMEOUT] no invoke-result');
+    })).rejects.toThrow('DEVICE_LINK_TIMEOUT');
+    expect(mod.getCachedDeviceProviders('dev-1')).toEqual(result('dev-1-old'));
+    await mod.fetchDeviceProvidersFresh('dev-1', async () => result('dev-1-new'));
+    expect(mod.getCachedDeviceProviders('dev-1')).toEqual(result('dev-1-new'));
   });
 
   it('首次 fetch 调用注入的 fetcher', async () => {

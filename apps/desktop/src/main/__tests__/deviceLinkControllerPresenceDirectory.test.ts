@@ -3,6 +3,7 @@ import { describe, expect, it, vi } from 'vitest';
 import {
   applyControllerPresenceDirectorySnapshot,
   createControllerPresenceFreshnessTracker,
+  isVerifiedControllerDataPath,
   markControllerPresenceFresh,
   resolveControllerPresence,
   resetControllerPresenceFreshness,
@@ -14,6 +15,9 @@ function createHarness() {
   const platformByDevice = new Map<string, string>();
   const nameByDevice = new Map<string, string>();
   const exchanged = vi.fn();
+  const confirmed = vi.fn();
+  const refused = vi.fn();
+  const evidence = vi.fn();
 
   return {
     freshness,
@@ -21,6 +25,9 @@ function createHarness() {
     platformByDevice,
     nameByDevice,
     exchanged,
+    confirmed,
+    refused,
+    evidence,
     markPresence(deviceId: string, online: boolean, platform: string) {
       markControllerPresenceFresh(freshness, deviceId);
       onlineByDevice.set(deviceId, online);
@@ -48,6 +55,9 @@ function createHarness() {
           platform !== null &&
           ['darwin', 'win32', 'linux', 'ios', 'android'].includes(platform),
         onPeerBecameOnline: exchanged,
+        onPeerControlEnabled: confirmed,
+        onPeerControlDisabled: refused,
+        onPeerControlEvidence: evidence,
       });
     },
   };
@@ -55,8 +65,8 @@ function createHarness() {
 
 describe('controller presence directory snapshot', () => {
   // Unit: group RPC availability outlives transient relay loss only on a
-  // bounded, already-authenticated path. Fresh control-off and unknown prior
-  // availability must still stay unavailable; old tests only covered REST order.
+  // bounded, already-authenticated path. Only an online false bit is a fresh
+  // control-off; offline rows mask the flag and must keep verified availability.
   it.each([
     ['keeps a known usable group path', { online: false, remoteControlEnabled: true }, true, true,
       { directOnline: true, online: true, available: true }],
@@ -64,12 +74,66 @@ describe('controller presence directory snapshot', () => {
       { directOnline: false, online: false, available: false }],
     ['honors an explicit online control-off report', { online: true, remoteControlEnabled: false }, true, true,
       { directOnline: false, online: true, available: false }],
-    ['does not invent unknown control availability', { online: false, remoteControlEnabled: true }, true, undefined,
+    ['keeps an offline mask available only from prior verified control', { online: false, remoteControlEnabled: false }, true, true,
+      { directOnline: true, online: true, available: true }],
+    ['keeps a previously refused peer unavailable while offline', { online: false, remoteControlEnabled: false }, true, false,
       { directOnline: true, online: true, available: false }],
+    // An authenticated, reliable direct path was accepted while control was enabled;
+    // unknown in-memory availability is not an explicit refusal.
+    ['treats an authenticated retained path as prior control evidence', { online: false, remoteControlEnabled: true }, true, undefined,
+      { directOnline: true, online: true, available: true }],
     ['allows a freshly controllable peer to recover', { online: true, remoteControlEnabled: true }, false, false,
       { directOnline: false, online: true, available: true }],
   ] as const)('%s', (_name, snapshot, retained, previous, expected) => {
     expect(resolveControllerPresence(snapshot, retained, previous)).toEqual(expected);
+  });
+
+
+  // A stale REST directory may claim online only from the target's current,
+  // authenticated data path; unknown/false presence, explicit denial, local
+  // opt-out and incomplete link readiness stay conservative.
+  it.each([
+    ['healthy relay data path', { linkStatus: 'online' as const, linkReady: true, offlineDirect: false,
+      presenceAvailable: true, revoked: false, locallyDisabled: false }, true],
+    ['unknown presence', { linkStatus: 'online' as const, linkReady: true, offlineDirect: false,
+      presenceAvailable: undefined, revoked: false, locallyDisabled: false }, false],
+    ['explicit control-off', { linkStatus: 'online' as const, linkReady: true, offlineDirect: false,
+      presenceAvailable: false, revoked: false, locallyDisabled: false }, false],
+    ['incomplete link handshake', { linkStatus: 'online' as const, linkReady: false, offlineDirect: false,
+      presenceAvailable: true, revoked: false, locallyDisabled: false }, false],
+    ['connecting without retained direct', { linkStatus: 'connecting' as const, linkReady: true, offlineDirect: false,
+      presenceAvailable: true, revoked: false, locallyDisabled: false }, false],
+    ['retained offline direct path', { linkStatus: 'connecting' as const, linkReady: true, offlineDirect: true,
+      presenceAvailable: true, revoked: false, locallyDisabled: false }, true],
+    ['revoked target', { linkStatus: 'online' as const, linkReady: true, offlineDirect: false,
+      presenceAvailable: true, revoked: true, locallyDisabled: false }, false],
+    ['locally disabled target', { linkStatus: 'online' as const, linkReady: true, offlineDirect: false,
+      presenceAvailable: true, revoked: false, locallyDisabled: true }, false],
+  ] as const)('%s', (_name, proof, expected) => {
+    expect(isVerifiedControllerDataPath(proof)).toBe(expected);
+  });
+
+  it('separates raw online control evidence from the retained display projection', () => {
+    const h = createHarness();
+    h.apply([
+      { deviceId: 'enabled', online: true, remoteControlEnabled: true, platform: 'darwin' },
+      { deviceId: 'disabled', online: true, remoteControlEnabled: false, platform: 'darwin' },
+      { deviceId: 'offline', online: false, remoteControlEnabled: false, platform: 'darwin' },
+    ]);
+    expect(h.confirmed).toHaveBeenCalledWith('enabled');
+    expect(h.refused).toHaveBeenCalledWith('disabled');
+    expect(h.evidence).toHaveBeenCalledWith('enabled', { online: true, enabled: true });
+    expect(h.evidence).toHaveBeenCalledWith('disabled', { online: true, enabled: false });
+    expect(h.evidence).toHaveBeenCalledWith('offline', { online: false });
+  });
+
+  it('reports positive control evidence only for an online, enabled directory row', () => {
+    const h = createHarness();
+    h.apply([{ deviceId: 'peer-desktop', online: true, remoteControlEnabled: true, platform: 'darwin' }]);
+    expect(h.confirmed).toHaveBeenCalledExactlyOnceWith('peer-desktop');
+    h.apply([{ deviceId: 'peer-desktop', online: true, remoteControlEnabled: false, platform: 'darwin' }]);
+    h.apply([{ deviceId: 'peer-desktop', online: false, remoteControlEnabled: true, platform: 'darwin' }]);
+    expect(h.confirmed).toHaveBeenCalledTimes(1);
   });
 
   it('冷启动时从目录初始化已在线桌面并触发一次词典握手', () => {

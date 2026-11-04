@@ -4247,6 +4247,8 @@ interface ElectronAPI {
     ) => () => void;
     /** 同机单持有者仲裁角色变化。 */
     onOwnershipChanged: (cb: (payload: { standby: boolean }) => void) => () => void;
+    /** 云端设备目录被明确拒绝后，已挂载的设备列表立即失效。 */
+    onDeviceDirectoryInvalidated?: (cb: () => void) => () => void;
     /** 控制端:被控端转发回来的 renderer 广播事件 */
     onRemotePush: (
       cb: (

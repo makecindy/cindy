@@ -43,6 +43,12 @@ Main、Desktop 与 Mobile 的视图缓存均以墙钟或单调时钟任一先到
 因此这些回包不进入新的 Main 连续性缓存。授权查询、远程 Agent `caps`、组分配与写操作不缓存。
 明确拒绝、账号/区域/权限代次变化或显式断开作废对应快照；网络、限流和服务暂时不可用才允许回退。
 恢复探测使用实时调用：分享 peer 走其已授权的 Agent 服务，不查询它无权读取的主人任务数据库。
+当前实际对象形式的 maker:agent:status 回包（binaryReady / authReady / identity 等执行机 Agent
+安装与登录来源发现信息）也按同一 providerContinuity 预算处理：各跳继承剩余期、双时钟，
+重复读取、失败或重开界面不会延长同一快照的剩余期；明确拒绝、账号/区域/权限代次变化或
+显式断开作废对应快照。它只说明目录信息的最近可用性，不证明恢复、设备授权、M 的任务 grant、
+额度或执行成功；真正的 M 任务准入与执行仍由 M 实时核验。maker:list-available-agents 仍是
+数组回包，不进入新的 Main 连续性缓存；旧端形状不变。
 
 只新增可忽略的业务结果字段，不新增帧类型、relay 权限或服务端依赖；旧客户端仍按原字段读取。
 回归入口为 `metadataContinuity.test.ts`、Main `providerMetadataContinuity.test.ts`、
@@ -69,6 +75,19 @@ Desktop 本地 `STATUS_CHANGED/getState` 可附 `directDataDeviceIds`；路径�
 沿用 SDK 的最长 30 分钟保留，后台仍释放，旧端生命周期不变。无新增 wire 帧或服务端要求。
 回归入口：`continuityRouting.test.ts`、`continuityRuntime.test.ts`、`remoteHandler.test.ts`、
 `hostLifecycle.test.ts`、`remoteConnectionStatus.test.ts`、`remoteProjectsStartup.test.tsx` 和 Mobile `historyViewProvider.test.tsx`。
+
+## 设备离线投影与显式控制关闭（2026-11-04）
+
+本仓自建中转的 `DeviceLinkRelayHub.presenceOf()` / `disconnectDevice()` 与 REST `deviceView()`
+（`packages/device-link-relay/src/hub.ts`）在目标路由离线时都会把 `remoteControlEnabled` 投影为
+`false`。这是信令/目录的离线投影，不是目标用户关闭远控：只有**当前 online** 快照里的
+`remoteControlEnabled: false` 可作为新的控制关闭证据；`online: false` 附带的 false 不得撤销此前
+明确拒绝、不得解除已保留直连上的权限闸，也不得让界面把离线改画成已重新允许。明确关闭、撤权或
+停止仍按各自合同立即结束对应保留；只有新的有效 **online + enabled** 授权证据才能恢复。
+本仓只能读证自建中转生产者；官方服务端是否已部署同形投影不由本仓实现证明，不能据本仓代码宣称官方端已上线。
+
+回归入口：`packages/device-link/src/__tests__/client.test.ts`、`deviceLinkControllerPresenceDirectory.test.ts`、
+Mobile `historyViewProvider.test.tsx` 的 offline mask / explicit-off 用例。
 
 ## 机器实时状态（2026-11-02）
 
@@ -546,6 +565,10 @@ stream 匹配后才处理；信令不进入业务可靠 FIFO，也不走直连�
 在 5 分钟后回收（正在进行的请求例外），新业务可以再触发尝试。有等待者时每分钟检查长期
 空闲通道：至少 5 分钟无收发、没有在途请求、接收处理或缓冲时才让出名额。无压力时保留已建立
 的通道，分享许可续期不因本机空闲策略而换通道。
+信令失联时，已经认证、完成可靠握手且健康的通道，在原同账号 grace 或分享 lease
+剩余期内不参与这类空闲回收；共享池中其它在线客户端的等待者也不能提前打断该保留。
+信令恢复后恢复原空闲公平规则；任一时钟到期、明确关闭／撤权或通道故障仍结束保留，
+不续期、不扩大容量，也不允许离线建立新授权。等待者可能等到原期限结束或其它名额释放。
 Desktop 还通过 `isPeerBusy` 接入 dispatch 的执行中请求和待发回包，不能把可靠帧已 ACK
 误当作宿主业务已完成；这只阻止空闲回收，不延后 ACK 或阻塞后续 stop／steer／push。
 

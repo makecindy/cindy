@@ -6,13 +6,14 @@
  * 新账号看不到旧账号的电脑与冷却。冷却按账号落盘(coolingStore.ts)，新起的那份先读回来。
  * 调用方拿到的是固定的门面，每次调用按当前账号转发。
  */
-import type { ProviderView } from '@cindy/model-providers';
+
 import { createLocalAgentLoadRegistry } from '../local-agent/load.js';
 import { REMOTE_AGENT_CHANNEL, parseRemoteAgentCaps } from '@cindy/device-link';
 import { app } from 'electron';
 import type { ClaudeSubscriptionUsageSnapshot } from '../../shared/claudeSubscriptionUsage.js';
 
 import { activeOwnerScopeKey } from '../appSessionState.js';
+import { getClientEndpoint } from '../clientEndpointsService.js';
 import {
   readProviderGroupSummary,
   type ProviderGroupRebalanceSuggestion,
@@ -25,12 +26,13 @@ import { captureProviderMetadataContinuityScope, isTemporaryProviderMetadataFail
 import { isMobilePlatform } from '../device-link/controllerPlatform.js';
 import { deviceName } from '../device-link/deviceName.js';
 import { getDesktopProviderService } from '../maker-host/createDesktopProviderService.js';
-import { readDeviceProviderViews } from '../remote-agent/controller/deviceCatalog.js';
+import { readDeviceProviderCatalog, readDeviceProviderViews } from '../remote-agent/controller/deviceCatalog.js';
 import { listProviderGroupBindings } from './bindings.js';
 import { readProviderGroupCooling, writeProviderGroupCooling } from './coolingStore.js';
-import { createProviderGroupDirectory, type ProviderGroupDirectory } from './directory.js';
+import { createProviderGroupDirectory, type ProviderGroupCatalogRead, type ProviderGroupDirectory } from './directory.js';
 import { createProviderGroupExternalLoad, type ProviderGroupExternalLoad } from './externalLoad.js';
 import { createProviderGroupRemoteClient, type ProviderGroupRemoteClient } from './remoteClient.js';
+import { captureProviderManagementScope } from './managementScope.js';
 import { createProviderGroupRouter, type ProviderGroupRouter } from './router.js';
 import type { ProviderGroupRemoteGroups } from './service.js';
 import { readProviderGroup } from './store.js';
@@ -121,6 +123,7 @@ function runtimeForActiveOwner(): OwnerRuntime {
     localAppVersion: () => app.getVersion(),
     listDevices: async () => (await handleListDevices(deviceDirectoryDeps())).devices,
     readDeviceProviders: (agentDeviceId, options) => readDeviceProviderViews(remoteBackgroundInvoke, agentDeviceId, { groupMember: true, live: options?.live }),
+    readDeviceProviderCatalog: (agentDeviceId, options) => readDeviceProviderCatalog(remoteBackgroundInvoke, agentDeviceId, { groupMember: true, live: options?.live }),
     listReceivedShares: () => getReceivedShares(),
     isMobilePlatform: (platform) => isMobilePlatform(platform),
     localRunning: async (providerId) => (await readProviderRunningTurnsByProvider())?.get(providerId) ?? null,
@@ -132,6 +135,7 @@ function runtimeForActiveOwner(): OwnerRuntime {
     peekCodexUsage: (member) => mergeCodexUsage(codexUsage.peek(member), codexLimits.peek(member)),
     invalidateUsage: () => { usage.invalidate(); codexUsage.invalidate(); codexLimits.invalidate(); },
     now: () => Date.now(),
+    mono: () => performance.now(),
   });
   const externalLoad = createProviderGroupExternalLoad({ now: () => Date.now() });
   const applicationLoad = createLocalAgentLoadRegistry();
@@ -171,6 +175,7 @@ const directoryFacade: ProviderGroupDirectory = {
   resolveMembers: (providerId, config, options) => runtimeForActiveOwner().directory.resolveMembers(providerId, config, options),
   listCandidates: (providerId, config) => runtimeForActiveOwner().directory.listCandidates(providerId, config),
   readDeviceCatalog: (agentDeviceId) => runtimeForActiveOwner().directory.readDeviceCatalog(agentDeviceId),
+  readDeviceCatalogState: (agentDeviceId) => runtimeForActiveOwner().directory.readDeviceCatalogState!(agentDeviceId),
   probe: (agentDeviceId, providerId) => runtimeForActiveOwner().directory.probe(agentDeviceId, providerId),
   memberLabel: (member) => runtimeForActiveOwner().directory.memberLabel(member),
   offlineForMs: async (agentDeviceId) => (await runtimeForActiveOwner().directory.offlineForMs?.(agentDeviceId)) ?? null,
@@ -251,6 +256,9 @@ export function getProviderGroupRemoteClient(): ProviderGroupRemoteClient {
  */
 export function getProviderGroupRemoteGroups(): ProviderGroupRemoteGroups {
   const client = getProviderGroupRemoteClient();
+  // Re-read the local generation on every use. Binding it once at factory creation
+  // would make a later account/endpoint generation inherit the old routing scope.
+  const continuityScopeKey = () => `${activeOwnerScopeKey()}|${getClientEndpoint('deviceLinkApiBaseUrl')}`;
   continuityClient ??= createGroupContinuityClient({
     livePick: client.pick,
     invoke: async (deviceId, channel, args, options) => {
@@ -268,22 +276,72 @@ export function getProviderGroupRemoteGroups(): ProviderGroupRemoteGroups {
       return () => ownerScope() && executorScope() && ownerEpoch === getRemoteLinkCloseEpoch(ownerDeviceId)
         && (!executor || executorEpoch === getRemoteLinkCloseEpoch(executor));
     },
+    onlineCapture(ownerDeviceId) {
+      let ownerScope: (() => void) | null = null;
+      try { ownerScope = captureProviderManagementScope(); } catch { return () => false; }
+      const closeEpoch = getRemoteLinkCloseEpoch(ownerDeviceId);
+      return () => {
+        try { ownerScope!(); } catch { return false; }
+        return closeEpoch === getRemoteLinkCloseEpoch(ownerDeviceId);
+      };
+    },
     ownerMayRespond: owner => getDeviceLinkStatus() === 'online' || hasOfflineDirectPath(owner),
     retryable: error => isTemporaryProviderMetadataFailure(error)
-      || (error instanceof Error && /^\[REMOTE_AGENT_UNAVAILABLE\]/.test(error.message) && !/Fast policy/.test(error.message)),
+      // dispatch reports an owner whose group handler has not registered yet as
+      // [UNAVAILABLE]; that is the same temporary "not ready" condition as the
+      // remote-agent channel and must not retire contexts already acknowledged
+      // by this owner and the executor.
+      || (error instanceof Error && /^\[(?:REMOTE_AGENT_UNAVAILABLE|UNAVAILABLE)\]/.test(error.message)
+        && !/Fast policy/.test(error.message)),
     wall: Date.now, mono: () => performance.now(),
+    scopeKey: continuityScopeKey,
   });
   return {
-    async readGroup(ownerDeviceId, providerId) {
-      let views: ProviderView[];
+    async readGroup(ownerDeviceId, providerId, options) {
+      const scope = continuityClient?.scope();
+      const epoch = continuityClient?.scopeEpoch(ownerDeviceId, providerId);
+      const targetScope = captureProviderMetadataContinuityScope(ownerDeviceId);
+      // A full target registry deliberately makes an unregistered target fail the
+      // offline capture, while invokeProviderMetadataContinuity still permits a
+      // fenced live-only read. Do not discard that live result just because the
+      // capture was already false before the read. Once it was true, a later false
+      // still retires the old snapshot.
+      const targetScopeAtStart = targetScope();
+      let catalog: ProviderGroupCatalogRead;
       try {
-        views = await directoryFacade.readDeviceCatalog(ownerDeviceId);
+        catalog = directoryFacade.readDeviceCatalogState
+          ? await directoryFacade.readDeviceCatalogState(ownerDeviceId)
+          : { views: await directoryFacade.readDeviceCatalog(ownerDeviceId), freshRead: true, stale: false };
       } catch {
-        return undefined;
+        // A late directory result from an old local generation must not clear
+        // a newer generation's acknowledged rows for the same remote owner.
+        if ((targetScopeAtStart && !targetScope()) || (continuityClient && (continuityClient.scope() !== scope
+          || continuityClient.scopeEpoch(ownerDeviceId, providerId) !== epoch))) return undefined;
+        // Only a new task's first assignment may use the config carried by an
+        // earlier pick. Existing-task failover must wait for the owner.
+        return options?.allowSnapshot
+          ? continuityClient?.readConfig(ownerDeviceId, providerId) ?? undefined
+          : undefined;
       }
-      const view = views.find((candidate) => candidate.id === providerId);
-      return view ? readProviderGroupSummary((view as { group?: unknown }).group, providerId) : null;
+      if ((targetScopeAtStart && !targetScope()) || (continuityClient && (continuityClient.scope() !== scope
+        || continuityClient.scopeEpoch(ownerDeviceId, providerId) !== epoch))) return undefined;
+      const view = catalog.views.find((candidate) => candidate.id === providerId);
+      if (!view) {
+        // A cached or stale reply is not the owner's confirmation that the group is gone.
+        // Only a read started by this call with a current (non-stale) directory may
+        // retire acknowledged routes; otherwise keep them for the service snapshot path.
+        if (!catalog.freshRead || catalog.stale) return undefined;
+        continuityClient?.forgetGroup(ownerDeviceId, providerId);
+        return null;
+      }
+      const config = readProviderGroupSummary((view as { group?: unknown }).group, providerId);
+      if (config) return config;
+      if (!catalog.freshRead || catalog.stale) return undefined;
+      continuityClient?.forgetGroup(ownerDeviceId, providerId);
+      return null;
     },
+    // Keep the acknowledged-config read local, but preserve the service's async contract.
+    readSnapshotGroup: async (ownerDeviceId, providerId) => continuityClient!.readConfig(ownerDeviceId, providerId),
     pick: (ownerDeviceId, input) => continuityClient!.pick(ownerDeviceId, input),
     cool: (ownerDeviceId, input) => client.cool(ownerDeviceId, input),
     view: (ownerDeviceId, providerId, model, agentKind) => client.view(ownerDeviceId, providerId, agentKind ? { model, agentKind } : model),

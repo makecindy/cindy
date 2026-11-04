@@ -34,7 +34,7 @@ import { evictTaskTagCatalog } from '../task-tags/taskTagEvents';
  */
 
 import { useEffect, useRef } from 'react';
-import { isSharedTaskPeer } from '@cindy/device-link';
+import { isSharedTaskPeer, readProviderMetadataContinuity } from '@cindy/device-link';
 import { projectScheduleEvent } from '@cindy/maker-shared/schedule-events';
 import { historyTurnEnded } from '@cindy/maker-shared/message-window';
 import { PROJECT_ALIASES_CHANGED_CHANNEL } from '@cindy/maker-shared/project-alias-sync';
@@ -43,7 +43,6 @@ import { isDeviceLinkRemotePushCurrent } from '@/lib/remoteDataOwnerPushFence';
 import { createLogger } from '@/lib/logger';
 import { makerChatStore } from '@/lib/makerChatStore';
 import {
-  requestRemoteSessionStatus,
   remoteProjectsStore,
   retryRemoteSessionStatus,
   setRemoteReseedImpl,
@@ -1079,6 +1078,11 @@ export function useDeviceLinkRemoteProjects(
         return;
       }
       if (push.channel !== 'maker:provider:changed') return;
+      if (readProviderMetadataContinuity(push.payload)?.remainingMs === 0) {
+        // A Main-observed denial or expired budget must not reopen the target.
+        void refreshRemoteCatalogSnapshot(push.deviceId, push.payload, { retireOnly: true });
+        return;
+      }
       void refreshRemoteCatalogSnapshot(push.deviceId, push.payload);
     });
 

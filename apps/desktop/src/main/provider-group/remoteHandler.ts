@@ -10,7 +10,7 @@
  *
  * 另有一个只读查询发给任务所在的电脑(不论它有没有组)：手机与远程控制问这台电脑上的某个任务此刻归哪个组(§10)。
  */
-import { PROVIDER_RUNNING_TURNS_FIELD } from '@cindy/device-link';
+import { PROVIDER_METADATA_TRUST_MS, PROVIDER_RUNNING_TURNS_FIELD, readProviderMetadataContinuity } from '@cindy/device-link';
 
 import {
   parseProviderGroupRemoteRequest,
@@ -228,8 +228,13 @@ export async function handleProviderGroupRemote(
           : request.model
         : { includeGuestSupport: request.includeGuestSupport === true };
       const view = await scope.router.view(request.providerId, options);
-      return scope.isCurrent() && deps.isRemoteAllowed(request.providerId)
-        ? view : { providerId: request.providerId, config: null, members: [] };
+      if (!scope.isCurrent() || !deps.isRemoteAllowed(request.providerId)) {
+        return { providerId: request.providerId, config: null, members: [] };
+      }
+      // The view is an allowed object-form read. The host, not the caller,
+      // owns the first-hop budget; an existing shorter stamp wins.
+      return { ...view, providerContinuity: readProviderMetadataContinuity(view)
+        ?? { stale: false, remainingMs: PROVIDER_METADATA_TRUST_MS } };
     }
     case 'usage':
     case 'usage-part': {

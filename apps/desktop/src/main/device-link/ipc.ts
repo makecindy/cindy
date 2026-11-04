@@ -35,9 +35,11 @@ import { getActiveAppSession, isAppSessionBoundaryPending, onAppSessionInvalidat
 import {
   DL_SESSION_REFERENCE_CAPABILITY_CHANNEL,
   DeviceLinkError,
+  readProviderMetadataContinuity,
   type InvokeResultPayload,
   type LinkAcceptPayload,
 } from '@cindy/device-link';
+import { isMobilePlatform } from '@cindy/maker-shared/device-list';
 import { ServerApiError } from '../serverApiClient';
 import { deviceLinkApiFetch } from './deviceLinkApi.js';
 import { requireString, throwIpcError } from '../utils/ipcValidate';
@@ -55,6 +57,11 @@ import {
   getDeviceLinkStatus,
   getDirectDataDeviceIds,
   hasOfflineDirectPath,
+  isDeviceDataPathAvailable,
+  isPeerControlAvailable,
+  getPeerControlState,
+  isPresenceFreshAfterRequest,
+  forgetPeerControlState,
   getDeviceLinkConnectionIssue,
   isDeviceLinkStandby,
   getUnresponsiveDeviceIds,
@@ -96,7 +103,8 @@ import {
   resolveRemoteAgentTargetWhenReady,
 } from './providerShareGuest.js';
 import { crossRegionInvoke, isCrossRegionProviderShareTarget } from './providerShareCrossRegion.js';
-import { readProviderDirectoryContinuity, invalidateProviderMetadataContinuity } from './providerMetadataContinuity.js';
+import { readProviderDirectoryContinuity, invalidateProviderDirectoryContinuity,
+  providerDirectoryGeneration } from './providerMetadataContinuity.js';
 import {
   outboundSessionReferencesRequested,
   rewriteOutboundSessionReferences,
@@ -149,6 +157,14 @@ type DeviceLinkServerDeviceView = Omit<DeviceLinkDeviceView, 'controlEnabled'> &
 export interface DeviceLinkIpcDeps {
   /** Authenticated, already-established data path retained through signaling loss. */
   hasOfflineDirectPath?(deviceId: string): boolean;
+  /** A current authenticated data path for this target, not a stale directory row. */
+  isDeviceDataPathAvailable?(deviceId: string): boolean;
+  /** Last verified control availability for a retained target; unknown stays permissive. */
+  isPeerControlAvailable?(deviceId: string): boolean;
+  /** Current presence authority, separate from the UI display projection. */
+  getPeerControlState?(deviceId: string): { online?: boolean; available?: boolean; disabled: boolean };
+  /** Whether a presence delta is newer than this directory request. */
+  isPresenceFreshAfterRequest?(deviceId: string, requestEpoch: number): boolean;
   getState(): DeviceLinkState;
   setEnabled(enabled: boolean): Promise<void>;
   setKeepAwake(enabled: boolean): Promise<void>;
@@ -177,7 +193,7 @@ export interface DeviceLinkIpcDeps {
   applyControllerPresenceListSnapshot(
     devices: readonly DeviceLinkServerDeviceView[],
     requestEpoch: number,
-  ): void;
+  ): Map<string, { online: boolean; enabled?: boolean }>;
   beginControllerDisplayNameDirectoryRefresh(): number;
   isLatestControllerDisplayNameDirectoryRefresh(sequence: number): boolean;
   waitForNewerControllerDisplayNameDirectoryRefresh(sequence: number): Promise<void>;
@@ -199,6 +215,10 @@ export interface DeviceLinkIpcDeps {
 export function defaultDeps(): DeviceLinkIpcDeps {
   return {
     hasOfflineDirectPath,
+    isDeviceDataPathAvailable,
+    isPeerControlAvailable,
+    getPeerControlState,
+    isPresenceFreshAfterRequest,
     getState: () => {
       const s = readDeviceLinkSettings();
       return {
@@ -403,7 +423,7 @@ let latestDeviceListRequest: {
 
 /** A rename / delete changes the directory: later reads must not join a request sent before it. */
 function invalidateDeviceListCoalescing(): void {
-  invalidateProviderMetadataContinuity();
+  invalidateProviderDirectoryContinuity();
   if (latestDeviceListRequest) latestDeviceListRequest.joinable = false;
 }
 /**
@@ -416,7 +436,7 @@ const DEVICE_LIST_COALESCE_WINDOW_MS = 300;
 /** 仅测试:重置合并窗口状态,避免跨用例共用在途 promise。 */
 export function __resetDeviceListCoalescingForTests(): void {
   latestDeviceListRequest = null;
-  invalidateProviderMetadataContinuity();
+  invalidateProviderDirectoryContinuity();
 }
 
 export function handleListDevices(
@@ -431,19 +451,24 @@ export function handleListDevices(
   const directoryRequestSequence = deps.beginControllerDisplayNameDirectoryRefresh();
   const requestEpoch = deps.captureControllerDisplayNameRequestEpoch();
   const presenceRequestEpoch = deps.captureControllerPresenceRequestEpoch();
+  const directoryEpoch = providerDirectoryGeneration();
   const request = readProviderDirectoryContinuity(() => deps.apiFetch<{ devices: DeviceLinkServerDeviceView[] }>(
     '/api/device-link/devices',
   )).then(
     async ({ value: result, stale }) => {
       if (activeOwnerScopeKey() !== owner) throw new Error('[DEVICE_LINK_NOT_CONNECTED] device directory account changed');
+      // A rename/delete supersedes a request that started before it, even when
+      // no newer list caller has joined yet. Never install that old snapshot.
+      if (directoryEpoch !== providerDirectoryGeneration()) return handleListDevices(deps);
       let latest = latestDeviceListRequest;
       if (latest && latest.sequence > sequence) return latest.promise;
       const isLatestDirectorySnapshot = deps.isLatestControllerDisplayNameDirectoryRefresh(
         directoryRequestSequence,
       );
+      let appliedEvidence = new Map<string, { online: boolean; enabled?: boolean }>();
       if (isLatestDirectorySnapshot && !stale) {
         deps.applyControllerDisplayNameListSnapshot(result.devices, requestEpoch);
-        deps.applyControllerPresenceListSnapshot(result.devices, presenceRequestEpoch);
+        appliedEvidence = deps.applyControllerPresenceListSnapshot(result.devices, presenceRequestEpoch) ?? appliedEvidence;
       } else if (!stale) {
         await deps.waitForNewerControllerDisplayNameDirectoryRefresh(directoryRequestSequence);
         latest = latestDeviceListRequest;
@@ -453,16 +478,54 @@ export function handleListDevices(
         result,
         deps,
         requestEpoch,
-        isLatestDirectorySnapshot,
+        // A stale snapshot may be shown within its bounded budget, but its names
+        // must not become new persistent truth for later cold starts.
+        !stale && isLatestDirectorySnapshot,
         !isLatestDirectorySnapshot,
       );
       return {
-        devices: reconciled.devices.map(device => deps.hasOfflineDirectPath?.(device.deviceId)
-          ? { ...device, online: true } : stale ? { ...device, online: false } : device),
+        devices: reconciled.devices.map(device => {
+          const deviceId = device.deviceId;
+          const nonMobile = !isMobilePlatform(device.platform);
+          const retained = deps.hasOfflineDirectPath?.(deviceId) === true;
+          const current = deps.getPeerControlState?.(deviceId);
+          const controlAvailable = deps.isPeerControlAvailable?.(deviceId) !== false;
+          const presenceFresh = deps.isPresenceFreshAfterRequest?.(deviceId, presenceRequestEpoch) === true;
+          const evidence = appliedEvidence.get(deviceId);
+          if (presenceFresh) {
+            const online = current?.online === true || (current?.online !== false && retained);
+            const available = current?.available === true && current.disabled !== true && nonMobile;
+            return { ...device, online, remoteControlEnabled: available };
+          }
+          if (evidence) {
+            if (!evidence.online) {
+              return { ...device, ...(retained ? { online: true,
+                remoteControlEnabled: nonMobile && controlAvailable && current?.disabled !== true } : { remoteControlEnabled: false }) };
+            }
+            return { ...device, online: true, remoteControlEnabled: nonMobile && evidence.enabled === true };
+          }
+          // A bounded cached REST row is not new presence/control evidence.
+          // Keep only the target whose current authenticated data path is verified.
+          // Fresh REST rows still use raw evidence above and retained direct below.
+          if (stale) {
+            const online = deps.isDeviceDataPathAvailable?.(deviceId) ?? retained;
+            return { ...device, online, remoteControlEnabled: nonMobile && controlAvailable && current?.disabled !== true };
+          }
+          if (current?.disabled === true) {
+            return { ...device, online: device.online === true || retained, remoteControlEnabled: false };
+          }
+          if (device.online === true) {
+            const enabled = device.remoteControlEnabled === true && controlAvailable;
+            return { ...device, ...(nonMobile && enabled ? { remoteControlEnabled: true } : { remoteControlEnabled: false }) };
+          }
+          if (retained) return { ...device, online: true, remoteControlEnabled: nonMobile && controlAvailable };
+          return stale ? { ...device, online: false } : device;
+        }),
       };
     },
     (err: unknown) => {
       if (activeOwnerScopeKey() !== owner) throw new Error('[DEVICE_LINK_NOT_CONNECTED] device directory account changed');
+      if (directoryEpoch !== providerDirectoryGeneration()) return handleListDevices(deps);
       const latest = latestDeviceListRequest;
       if (latest && latest.sequence > sequence) return latest.promise;
       rethrowServerError(err);
@@ -586,7 +649,7 @@ export async function handleDeleteDevice(
       { method: 'DELETE' },
     );
     invalidateDeviceListCoalescing();
-    if (deleted.deleted) handleCloseLink(deps, deviceId);
+    if (deleted.deleted) { forgetPeerControlState(deviceId); handleCloseLink(deps, deviceId); }
     return deleted;
   } catch (err) {
     rethrowServerError(err);
@@ -844,7 +907,9 @@ function projectProviderShareResult(channel: string, value: unknown): unknown {
   if (channel === 'maker:agent:status') {
     // 只认 Agent 是否装好：就绪以分享的模型目录为准，不带对方的登录状态、本机路径与身份。
     const status = value && typeof value === 'object' ? value as { binaryReady?: unknown } : {};
-    return { binaryReady: status.binaryReady === true };
+    const continuity = readProviderMetadataContinuity(value);
+    return { binaryReady: status.binaryReady === true,
+      ...(continuity ? { providerContinuity: continuity } : {}) };
   }
   return value;
 }

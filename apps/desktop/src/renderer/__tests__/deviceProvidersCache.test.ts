@@ -6,7 +6,8 @@
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import * as providerCache from '@/hooks/useDeviceProviders';
-import { modelCatalogKey } from '../../shared/controlledModelCatalog';
+import * as capabilities from '@/hooks/useAgentCapabilities';
+import { CONTROLLED_MODEL_CATALOG_CHANNEL, modelCatalogKey } from '../../shared/controlledModelCatalog';
 import { refreshRemoteCatalogSnapshot } from '@/lib/remoteCatalogSnapshot';
 import { invokeProviderMetadataContinuity, invalidateProviderMetadataContinuity, onProviderMetadataDenied } from '../../main/device-link/providerMetadataContinuity';
 vi.mock('../../main/appSessionState.js', () => ({ activeOwnerScopeKey: () => 'catalog-test-owner', isAppSessionBoundaryPending: () => false }));
@@ -19,7 +20,219 @@ import {
 
 beforeEach(() => {
   providerCache.evictAllDeviceProviders();
+  capabilities.evictAllRemoteCapabilities();
   invalidateProviderMetadataContinuity();
+});
+
+// Unit: a direct host cache expiry must not cascade into a routed alias with its own
+// budget. Uses the public cache entries and the real SDK expiry; only IPC transport and
+// the in-process wall/mono clock are controlled.
+it('expires only the direct host entry and keeps a routed alias until its own budget', async () => {
+  vi.useFakeTimers({ toFake: ['Date', 'performance', 'setTimeout', 'clearTimeout'] });
+  const capsPayload = (label: string, remainingMs: number) => ({
+    availableModels: [{ id: 'm', displayName: label, contextWindow: 1, efforts: [], defaultEffort: null }],
+    hasFastMode: false, effortLevels: [], permissionModes: [],
+    providerContinuity: { stale: false, remainingMs },
+  });
+  const providerPayload = (label: string, remainingMs: number) => ({
+    ...result(label), providerContinuity: { stale: false, remainingMs },
+  });
+  const invoke = vi.fn(async (device: string, channel: string, args: unknown[]) => {
+    const request = args[0] as { op?: string; agentDeviceId?: string; channel?: string } | undefined;
+    if (channel === CONTROLLED_MODEL_CATALOG_CHANNEL && request?.op === 'read') {
+      if (request.channel === 'maker:provider:list') return providerPayload('sourceB', 2000);
+      if (request.channel === 'maker:get-capabilities') return capsPayload('sourceB', 2000);
+    }
+    if (channel === 'maker:provider:list') return providerPayload('host', 1000);
+    if (channel === 'maker:get-capabilities') return capsPayload('host', 1000);
+    throw new Error('unexpected channel ' + channel + ' for ' + device);
+  });
+  vi.stubGlobal('window', { electronAPI: { deviceLink: { invoke } } });
+  const route = modelCatalogKey('sourceB', 'host')!;
+  try {
+    await Promise.all([
+      providerCache.prefetchDeviceProviders('host'),
+      providerCache.prefetchDeviceProviders(route),
+      capabilities.prefetchDeviceCapabilities('host'),
+      capabilities.prefetchDeviceCapabilities(route),
+    ]);
+    expect(providerCache.getCachedDeviceProviders('host')?.providers).toHaveLength(1);
+    expect(providerCache.getCachedDeviceProviders(route)?.providers).toHaveLength(1);
+    expect(capabilities.getCachedCapabilities('claude-code', 'host')).not.toBeNull();
+    expect(capabilities.getCachedCapabilities('claude-code', route)).not.toBeNull();
+    const readsBefore = invoke.mock.calls.length;
+
+    await vi.advanceTimersByTimeAsync(1001);
+    expect(providerCache.getCachedDeviceProviders('host')).toBeNull();
+    expect(providerCache.getCachedDeviceProviders(route)?.providers).toHaveLength(1);
+    expect(capabilities.getCachedCapabilities('claude-code', 'host')).toBeNull();
+    expect(capabilities.getCachedCapabilities('claude-code', route)).not.toBeNull();
+    expect(invoke.mock.calls.length).toBe(readsBefore);
+
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(providerCache.getCachedDeviceProviders(route)).toBeNull();
+    expect(capabilities.getCachedCapabilities('claude-code', route)).toBeNull();
+    expect(invoke.mock.calls.length).toBe(readsBefore);
+  } finally {
+    providerCache.evictAllDeviceProviders();
+    capabilities.evictAllRemoteCapabilities();
+    vi.useRealTimers();
+    vi.unstubAllGlobals();
+  }
+});
+
+// Unit: a direct host expiry must not invalidate a newer in-flight routed alias read.
+it('keeps an in-flight routed alias read current when its direct host cache expires', async () => {
+  vi.useFakeTimers({ toFake: ['Date', 'performance', 'setTimeout', 'clearTimeout'] });
+  const capsPayload = (label: string, remainingMs: number) => ({
+    availableModels: [{ id: 'm', displayName: label, contextWindow: 1, efforts: [], defaultEffort: null }],
+    hasFastMode: false, effortLevels: [], permissionModes: [],
+    providerContinuity: { stale: false, remainingMs },
+  });
+  const providerPayload = (label: string, remainingMs: number) => ({
+    ...result(label), providerContinuity: { stale: false, remainingMs },
+  });
+  let releaseRoute!: () => void;
+  const routeGate = new Promise<void>((resolve) => { releaseRoute = resolve; });
+  const invoke = vi.fn(async (_device: string, channel: string, args: unknown[]) => {
+    const request = args[0] as { op?: string; agentDeviceId?: string; channel?: string } | undefined;
+    if (channel === CONTROLLED_MODEL_CATALOG_CHANNEL && request?.op === 'read') {
+      await routeGate;
+      if (request.channel === 'maker:provider:list') return providerPayload('sourceB', 1500);
+      if (request.channel === 'maker:get-capabilities') return capsPayload('sourceB', 1500);
+    }
+    if (channel === 'maker:provider:list') return providerPayload('host', 1000);
+    if (channel === 'maker:get-capabilities') return capsPayload('host', 1000);
+    throw new Error('unexpected channel ' + channel);
+  });
+  vi.stubGlobal('window', { electronAPI: { deviceLink: { invoke } } });
+  const route = modelCatalogKey('sourceB', 'host')!;
+  try {
+    await providerCache.prefetchDeviceProviders('host');
+    await capabilities.prefetchDeviceCapabilities('host');
+    const routeProvider = providerCache.prefetchDeviceProviders(route);
+    const routeCaps = capabilities.prefetchDeviceCapabilities(route);
+    await Promise.resolve();
+    await Promise.resolve();
+    const readsBefore = invoke.mock.calls.length;
+
+    await vi.advanceTimersByTimeAsync(1001);
+    expect(providerCache.getCachedDeviceProviders('host')).toBeNull();
+    expect(capabilities.getCachedCapabilities('claude-code', 'host')).toBeNull();
+
+    releaseRoute();
+    await Promise.all([routeProvider, routeCaps]);
+    expect(providerCache.getCachedDeviceProviders(route)?.providers).toHaveLength(1);
+    expect(capabilities.getCachedCapabilities('claude-code', route)).not.toBeNull();
+    expect(invoke.mock.calls.length).toBe(readsBefore);
+  } finally {
+    providerCache.evictAllDeviceProviders();
+    capabilities.evictAllRemoteCapabilities();
+    vi.useRealTimers();
+    vi.unstubAllGlobals();
+  }
+});
+
+// Unit: the directOnly expiry fix must not weaken a real device/owner eviction, which
+// still has to retire that host's routed aliases.
+it('still cascades routed aliases on an explicit device eviction', async () => {
+  const capsPayload = (label: string) => ({
+    availableModels: [{ id: 'm', displayName: label, contextWindow: 1, efforts: [], defaultEffort: null }],
+    hasFastMode: false, effortLevels: [], permissionModes: [],
+  });
+  const invoke = vi.fn(async (device: string, channel: string, args: unknown[]) => {
+    const request = args[0] as { op?: string; agentDeviceId?: string; channel?: string } | undefined;
+    if (channel === CONTROLLED_MODEL_CATALOG_CHANNEL && request?.op === 'read') {
+      if (request.channel === 'maker:provider:list') return result(request.agentDeviceId!);
+      return capsPayload(request.agentDeviceId!);
+    }
+    if (channel === 'maker:provider:list') return result(device);
+    if (channel === 'maker:get-capabilities') return capsPayload(device);
+    throw new Error('unexpected channel ' + channel);
+  });
+  vi.stubGlobal('window', { electronAPI: { deviceLink: { invoke } } });
+  const routeA = modelCatalogKey('sourceA', 'host')!;
+  const routeB = modelCatalogKey('sourceB', 'host')!;
+  try {
+    await Promise.all([
+      providerCache.prefetchDeviceProviders('host'),
+      providerCache.prefetchDeviceProviders(routeA),
+      providerCache.prefetchDeviceProviders(routeB),
+      capabilities.prefetchDeviceCapabilities('host'),
+      capabilities.prefetchDeviceCapabilities(routeA),
+      capabilities.prefetchDeviceCapabilities(routeB),
+    ]);
+    expect(providerCache.getCachedDeviceProviders(routeA)).not.toBeNull();
+    expect(providerCache.getCachedDeviceProviders(routeB)).not.toBeNull();
+    providerCache.evictDeviceProviders('host');
+    capabilities.evictDeviceCapabilities('host');
+    expect(providerCache.getCachedDeviceProviders('host')).toBeNull();
+    expect(providerCache.getCachedDeviceProviders(routeA)).toBeNull();
+    expect(providerCache.getCachedDeviceProviders(routeB)).toBeNull();
+    expect(capabilities.getCachedCapabilities('claude-code', 'host')).toBeNull();
+    expect(capabilities.getCachedCapabilities('claude-code', routeA)).toBeNull();
+    expect(capabilities.getCachedCapabilities('claude-code', routeB)).toBeNull();
+  } finally {
+    providerCache.evictAllDeviceProviders();
+    capabilities.evictAllRemoteCapabilities();
+    vi.unstubAllGlobals();
+  }
+});
+
+// Unit: one agent-kind deadline must not retire or error a healthy sibling kind,
+// nor invalidate its in-flight result. Public cache + subscription + SDK expiry only.
+it('expires only the affected agent kind and keeps healthy in-flight kinds', async () => {
+  vi.useFakeTimers({ toFake: ['Date', 'performance', 'setTimeout', 'clearTimeout'] });
+  let release!: () => void;
+  const gate = new Promise<void>((resolve) => { release = resolve; });
+  const capsFor = (label: string, remainingMs: number) => ({
+    availableModels: [{ id: 'm', displayName: label, contextWindow: 1, efforts: [], defaultEffort: null }],
+    hasFastMode: false, effortLevels: [], permissionModes: [],
+    providerContinuity: { stale: false, remainingMs },
+  });
+  const invoke = vi.fn(async (_device: string, channel: string, args: unknown[]) => {
+    if (channel !== 'maker:get-capabilities') throw new Error('unexpected channel ' + channel);
+    const kind = args[0];
+    if (kind === 'claude-code') return capsFor('claude', 1000);
+    await gate;
+    return capsFor(String(kind), 2000);
+  });
+  vi.stubGlobal('window', { electronAPI: { deviceLink: { invoke } } });
+  const events = vi.fn();
+  const off = capabilities.subscribeDeviceCapabilities('host', 'codex', events);
+  try {
+    const all = capabilities.prefetchDeviceCapabilities('host');
+    await Promise.resolve();
+    await Promise.resolve();
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(capabilities.getCachedCapabilities('claude-code', 'host')).not.toBeNull();
+    expect(capabilities.getCachedCapabilities('codex', 'host')).toBeNull();
+
+    await vi.advanceTimersByTimeAsync(1001);
+    expect(capabilities.getCachedCapabilities('claude-code', 'host')).toBeNull();
+    // Codex has its own 2000ms budget and is still in flight; it must not get
+    // the expired kind's terminal error or be discarded.
+    expect(events.mock.calls.filter(([event]) => event.status === 'error')).toEqual([]);
+
+    release();
+    await all;
+    expect(capabilities.getCachedCapabilities('codex', 'host')).not.toBeNull();
+    expect(capabilities.getCachedCapabilities('pi', 'host')).not.toBeNull();
+    expect(invoke).toHaveBeenCalledTimes(3);
+
+    const beforeExpiry = events.mock.calls.length;
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(capabilities.getCachedCapabilities('codex', 'host')).toBeNull();
+    expect(capabilities.getCachedCapabilities('pi', 'host')).toBeNull();
+    expect(events.mock.calls.slice(beforeExpiry).some(([event]) => event.status === 'error')).toBe(true);
+    expect(invoke).toHaveBeenCalledTimes(3);
+  } finally {
+    off();
+    capabilities.evictAllRemoteCapabilities();
+    vi.useRealTimers();
+    vi.unstubAllGlobals();
+  }
 });
 
 // Unit integration: real Main fallback/late denial -> IPC notification adapter ->
@@ -30,7 +243,8 @@ it('clears a displayed fallback immediately on Main late denial, even while its 
   const invoke = async (target: string, channel: string, args: unknown[]) => {
     if (channel !== 'maker:provider:list') return { availableModels: [], hasFastMode: false, effortLevels: [], permissionModes: [] };
     const reply = await invokeProviderMetadataContinuity(target, channel, args, async () => {
-      if (target === 'N' || phase === 'fresh') return { ok: true, result: result(target) };
+      if (target === 'N' || phase === 'fresh') return { ok: true, result: { ...result(target),
+        providerContinuity: { stale: false, remainingMs: 30 * 60_000 } } };
       if (phase === 'hold') return new Promise(resolve => { deny = resolve; });
       throw Object.assign(new Error('offline'), { code: 'NOT_CONNECTED' });
     });
@@ -55,7 +269,7 @@ it('clears a displayed fallback immediately on Main late denial, even while its 
 });
 
 // Unit: a mounted/forwarded catalog must not outlive the Main-owned trust budget.
-it('expires a retained host snapshot without renewing it on cache reads or remounts', async () => {
+it('expires a retained host snapshot without renewing it on cache reads or at expiry', async () => {
   vi.useFakeTimers({ toFake: ['Date', 'performance', 'setTimeout', 'clearTimeout'] });
   const invoke = vi.fn().mockResolvedValueOnce({ ...result('host'), providerContinuity: { stale: true, remainingMs: 1000 } })
     .mockRejectedValue(new Error('[DEVICE_LINK_NOT_CONNECTED] offline'));
@@ -68,11 +282,38 @@ it('expires a retained host snapshot without renewing it on cache reads or remou
     expect(providerCache.getCachedDeviceProviders('host')?.providers[0].id).toBe('host-xd');
     await vi.advanceTimersByTimeAsync(501);
     expect(providerCache.getCachedDeviceProviders('host')).toBeNull();
-    expect(invoke).toHaveBeenCalledTimes(2);
+    // Expiry retires the display; it must not issue a background read that
+    // would establish a new source for the expired target.
+    expect(invoke).toHaveBeenCalledTimes(1);
   } finally { providerCache.evictAllDeviceProviders(); vi.useRealTimers(); vi.unstubAllGlobals(); }
 });
 
-// #8010 unit: the same source can have different access through two task hosts;
+// Regression: a retained refresh deletes the cache but must keep the host deadline.
+// Minimal input: one stamped success, then refreshRemoteCatalogSnapshot() hangs.
+it('keeps the original host deadline while a retained refresh stays in flight', async () => {
+  vi.useFakeTimers({ toFake: ['Date', 'performance', 'setTimeout', 'clearTimeout'] });
+  let hold = false;
+  const invoke = vi.fn(async (device: string, channel: string) => {
+    if (channel !== 'maker:provider:list') {
+      return { availableModels: [], hasFastMode: false, effortLevels: [], permissionModes: [] };
+    }
+    if (hold) return new Promise<Providers>(() => undefined);
+    return { ...result(device), providerContinuity: { stale: true, remainingMs: 1000 } };
+  });
+  vi.stubGlobal('window', { electronAPI: { deviceLink: { invoke } } });
+  try {
+    await providerCache.prefetchDeviceProviders('host');
+    const events = vi.fn();
+    const unsubscribe = providerCache.subscribeDeviceProviders('host', events);
+    hold = true;
+    void refreshRemoteCatalogSnapshot('host');
+    await vi.advanceTimersByTimeAsync(0);
+    events.mockClear();
+    await vi.advanceTimersByTimeAsync(1001);
+    expect(events).toHaveBeenCalledWith({ status: 'loading' });
+    unsubscribe();
+  } finally { providerCache.evictAllDeviceProviders(); vi.useRealTimers(); vi.unstubAllGlobals(); }
+});// #8010 unit: the same source can have different access through two task hosts;
 // existing per-device cache tests did not exercise host-mediated reads.
 it('reads through each task host and invalidates only that host without resurrecting late catalogs', async () => {
   let finish!: (value: Providers) => void;

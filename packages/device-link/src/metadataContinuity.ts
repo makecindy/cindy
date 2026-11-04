@@ -8,6 +8,10 @@ export function isProviderAccessDeniedError(error: unknown): boolean {
   const message = typeof error === 'string' ? error : typeof row.message === 'string' ? row.message : '';
   const code = typeof row.code === 'string' && row.code !== 'IPC_ERROR' ? row.code
     : /\[([A-Z0-9_]+)\]/.exec(message)?.[1];
+  // These two codes are produced only for explicit share/provider refusals,
+  // not for ordinary network loss. Keep them separate from the broad pattern
+  // so CHANNEL_NOT_ALLOWED and temporary transport errors keep their lifecycle.
+  if (code === 'REMOTE_AGENT_SHARE_UNAVAILABLE' || code === 'REMOTE_AGENT_PROVIDER_NOT_ALLOWED') return true;
   return typeof code === 'string' && /REVOKED|DENIED|REMOVED|PAUSED|DISABLED|SUSPENDED|UNAUTHORIZED|FORBIDDEN|SCOPE_CHANGED/.test(code);
 }
 export function readProviderMetadataContinuity(value: unknown): ProviderMetadataContinuity | undefined {
@@ -85,6 +89,8 @@ export class MetadataContinuityReader {
     wallNow?: () => number;
     monotonicNow?: () => number;
     refreshWaitMs?: number;
+    /** Called when an authoritative denial retires a metadata resource. */
+    onDenied?(resource: string, error: unknown): void;
   }) {}
 
   private wall(): number { return this.options.wallNow?.() ?? Date.now(); }
@@ -168,6 +174,9 @@ export class MetadataContinuityReader {
       }).catch(error => {
         const retryable = this.options.retryable(error);
         if (!retryable && this.entries.get(key) === currentEntry) this.entries.delete(key);
+        if (!retryable && scope.current()) {
+          try { this.options.onDenied?.(resource, error); } catch { /* display invalidation is best-effort */ }
+        }
         const fallback = retryable ? cached() : null;
         if (fallback) return fallback;
         throw error;
@@ -187,8 +196,10 @@ export class MetadataContinuityReader {
     let timer: ReturnType<typeof setTimeout> | undefined;
     const fallback = new Promise<MetadataContinuityResult<T>>((resolve, reject) => {
       timer = setTimeout(() => {
-        try { const value = cached(); if (value) resolve(value); else void flight.then(resolve, reject); }
-        catch (error) { reject(error); }
+        try {
+          const value = cached();
+          if (value) resolve(value); else void flight.then(resolve, reject);
+        } catch (error) { reject(error); }
       }, this.options.refreshWaitMs ?? 2_000);
     });
     try { return await Promise.race([flight, fallback]); }

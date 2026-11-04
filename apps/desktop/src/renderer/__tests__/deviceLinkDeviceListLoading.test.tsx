@@ -599,6 +599,40 @@ describe('useDeviceLinkDeviceList initial request', () => {
     );
   });
 
+  it('clears mounted rows when Main reports an authoritative directory denial', async () => {
+    let invalidated: (() => void) | undefined;
+    const listDevices = vi.fn().mockResolvedValue({
+      devices: [{
+        deviceId: 'dev-a', name: 'Mac A', platform: 'darwin', online: true,
+        remoteControlEnabled: true, controlEnabled: true, isSelf: false,
+      } as unknown as DeviceLinkDeviceView],
+    });
+    vi.stubGlobal('electronAPI', {
+      deviceLink: {
+        listDevices,
+        getState: vi.fn().mockResolvedValue({ linkStatus: 'online' }),
+        onPresenceChanged: vi.fn(),
+        onStatusChanged: vi.fn(),
+        onControlTargetChanged: vi.fn(),
+        onDeviceDirectoryInvalidated: (callback: () => void) => {
+          invalidated = callback;
+          return () => undefined;
+        },
+      },
+    });
+    const { useDeviceLinkDeviceList, useDeviceLinkDeviceListSettled } = await import(
+      '@/features/device-link/useDeviceLinkDeviceList'
+    );
+    const { result } = renderHook(() => ({
+      devices: useDeviceLinkDeviceList(),
+      settled: useDeviceLinkDeviceListSettled(),
+    }));
+    await waitFor(() => expect(result.current.devices).toHaveLength(1));
+    act(() => invalidated?.());
+    expect(result.current.devices).toBeNull();
+    expect(result.current.settled).toBe(true);
+  });
+
   // 回归 #797:云端登录 → 登出(relay 'stopped')→ 进入本地模式后不会再有 'online',
   // 设备目录必须停在终态,否则 shouldWaitForRemoteSessionBootstrap 恒为 true,
   // 侧栏「对话」分区会一直显示「加载中…」直到冷重启。

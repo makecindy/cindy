@@ -559,6 +559,7 @@ function HomeScreenContent({ active = true, width, newSessionInSystemBar = false
     presenceVersion,
     recoveringDeviceIds,
     readDeviceList,
+    rosterVersion = 0,
     status,
     subscribe,
     unsubscribe,
@@ -572,6 +573,8 @@ function HomeScreenContent({ active = true, width, newSessionInSystemBar = false
   const homePendingCacheRef = useRef(new Map<string, { pending: readonly unknown[]; count: number }>());
   const homeLiveActivityIndexRef = useRef(new Map<string, RemoteSessionLiveActivity>());
   const devicesRef = useRef<DeviceView[]>([]);
+  const rosterVersionRef = useRef(rosterVersion);
+  rosterVersionRef.current = rosterVersion;
   // HomeScreen stays mounted while switching saved accounts. Keep an owner generation beside every
   // local projection so requests started by the previous account cannot repopulate the new screen.
   const homeAccountGenerationRef = useRef(accountGeneration);
@@ -1198,6 +1201,7 @@ function HomeScreenContent({ active = true, width, newSessionInSystemBar = false
   }, [accountGeneration, invoke]);
 
   const loadHome = useCallback(async (options: { visible?: boolean } = {}) => {
+    const rosterVersionAtStart = rosterVersionRef.current;
     const accountGenerationAtStart = accountGeneration;
     if (homeAccountGenerationRef.current !== accountGenerationAtStart) return;
     if (!deviceIdentityCacheReady) return;
@@ -1243,6 +1247,7 @@ function HomeScreenContent({ active = true, width, newSessionInSystemBar = false
         { maxAttempts: 3 },
       );
       if (homeAccountGenerationRef.current !== accountGenerationAtStart) return;
+      if (rosterVersionRef.current !== rosterVersionAtStart) return;
       if (!screenFocusedRef.current) return;
       const now = Date.now();
       const serverDevices = mergeFreshPresence(reconcileDeviceViews(res.devices).devices);
@@ -1314,7 +1319,8 @@ function HomeScreenContent({ active = true, width, newSessionInSystemBar = false
           invalidateOfflineScheduleIndexFailureFor(deviceId);
         }
       }
-      if (homeAccountGenerationRef.current !== accountGenerationAtStart) return;
+      if (homeAccountGenerationRef.current !== accountGenerationAtStart
+        || rosterVersionRef.current !== rosterVersionAtStart) return;
 
       // 收尾再合并一次:hydrate 阶段(可能持续数秒)里新到的 presence 补丁同样不能被覆盖掉。
       const nextDevices = reconcileDeviceViews(
@@ -1664,6 +1670,18 @@ function HomeScreenContent({ active = true, width, newSessionInSystemBar = false
       startSilentHomeSync();
     }, [refillStaleHomeDevices, refreshHomeScheduleIndexes, startSilentHomeSync]),
   );
+
+  // A late roster denial clears only the account device projection; provider/group
+  // catalogs and healthy direct links are separate authorities. The sync effect
+  // below deliberately does not depend on rosterVersion: a retry from the denial
+  // itself would recreate the 403 -> notification -> read feedback loop. Reconnect,
+  // foreground and manual refresh remain the legitimate triggers.
+  useEffect(() => {
+    if (rosterVersion === 0) return;
+    devicesRef.current = [];
+    setDevices([]);
+    setDeviceConnectionStates({});
+  }, [rosterVersion]);
 
   useEffect(() => {
     startSilentHomeSync();

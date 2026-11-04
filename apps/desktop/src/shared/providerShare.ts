@@ -22,6 +22,25 @@ export interface ProviderShareReceivedSnapshot {
   /** 仅这些区域的名单完整，可据此清理已撤权收藏；其它区域不受影响。 */
   confirmedRegions: readonly ProviderShareReceived['owner']['region'][];
   received: readonly ProviderShareReceived[];
+  /** false = 分享运行时已停止/账号边界；empty + false 是权威清空，不是暂时投影。 */
+  active?: boolean;
+  /** Per-region remaining display budget measured by Main's wall and monotonic clocks. */
+  regionBudget?: Partial<Record<ProviderShareReceived['owner']['region'], ProviderShareRegionBudget>>;
+}
+
+/**
+ * Main -> renderer only. id identifies the authoritative list request that
+ * produced this window, so repeated reads cannot restart it. remainingMs is
+ * calculated from both clocks in Main; generatedAt lets the IPC hop subtract
+ * the time spent crossing processes. This is a display-trust window, never an
+ * authorization or offline grant.
+ */
+export interface ProviderShareRegionBudget {
+  id: string;
+  /** Monotonic confirmation order assigned by Main; never a wall-clock comparison. */
+  order?: number;
+  remainingMs: number;
+  generatedAt: number;
 }
 
 /** 本机收藏作为重启后的查询线索，不作为授权或撤权依据。 */

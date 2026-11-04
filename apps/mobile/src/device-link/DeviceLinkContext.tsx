@@ -17,6 +17,7 @@ import {
   type DeviceLinkClientOptions,
   createDirectRuntimeBridge,
   isSharedTaskPeer,
+  isScopedPeer,
   probeSharedTaskHost,
   sharedTaskTopics,
   SHARED_TASK_CAPABILITY,
@@ -47,6 +48,7 @@ import {
   isProviderAccessDeniedError,
 } from '@cindy/device-link';
 import { createContext, useCallback, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type ReactNode } from 'react';
+import { isMobilePlatform } from '@cindy/maker-shared/device-list';
 import { PROJECT_ALIASES_GET_CHANNEL, PROJECT_ALIASES_CHANGED_CHANNEL } from '@cindy/maker-shared/project-alias-sync';
 import {
   acceptRemoteProjectAliasesChanged,
@@ -223,6 +225,8 @@ export interface DeviceLinkContextValue {
   connectionIssue: DeviceLinkConnectionIssue | null;
   presenceVersion: number;
   connectionEpoch: number;
+  /** Incremented when an authoritative roster denial retires mounted directory views. */
+  rosterVersion: number;
   /** Current remote ACK identity; null until every requested topic is confirmed. */
   getSubscriptionIdentity?(deviceId: string, topics: readonly Topic[]): number | null;
   lastPresenceSnapshot: PresenceSnapshot | null;
@@ -504,6 +508,8 @@ export function DeviceLinkProvider({ children }: { children: ReactNode }) {
   const rosterConsumerRef = useRef<(() => (devices: DeviceView[]) => void) | null>(null);
   const rosterRequestRef = useRef<{ client: DeviceLinkClient | null; epoch: number; promise: Promise<{ devices: DeviceView[] }> } | null>(null);
   const rosterRequestGenerationRef = useRef(0);
+  const rosterGenerationRef = useRef(0);
+  const rosterDeniedRef = useRef(false);
   const presenceAvailabilityEpochsRef = useRef(createPresenceAvailabilityEpochs());
   const presencePendingRecoveryDeviceIdsRef = useRef(new Set<string>());
   const presenceUnavailableVerdictsRef = useRef(
@@ -543,6 +549,7 @@ export function DeviceLinkProvider({ children }: { children: ReactNode }) {
   ), []);
   const [lastPresenceSnapshot, setLastPresenceSnapshot] = useState<PresenceSnapshot | null>(null);
   const accountGenerationRef = useRef<number | null>(null);
+  const [rosterVersion, setRosterVersion] = useState(0);
   const [rosterContinuity] = useState(() => new MetadataContinuityReader({ retryable(error) {
     if (isProviderAccessDeniedError(error)) return false;
     const row = error && typeof error === 'object' ? error as { status?: unknown; statusCode?: unknown; code?: unknown; message?: unknown } : {};
@@ -550,6 +557,18 @@ export function DeviceLinkProvider({ children }: { children: ReactNode }) {
     return status === 0 || status === 429 || (typeof status === 'number' && status >= 500 && status < 600)
       || row.code === 'NOT_CONNECTED' || row.code === 'NETWORK_ERROR'
       || (status === undefined && /^(Network request failed|Failed to fetch)$/.test(String(row.message)));
+  }, onDenied: () => {
+    rosterGenerationRef.current += 1;
+    rosterRequestGenerationRef.current += 1;
+    rosterRequestRef.current = null;
+    // A persistent denial must not turn the published version into a render ->
+    // read -> deny feedback loop. Invalidate in-flight scopes on every denial,
+    // but publish one version bump per denial episode; a fresh authoritative
+    // success re-arms the next notification.
+    if (!rosterDeniedRef.current) {
+      rosterDeniedRef.current = true;
+      setRosterVersion((version) => version + 1);
+    }
   } }));
 
   // Home and direct task entry share the same in-flight roster read. Evidence
@@ -560,19 +579,54 @@ export function DeviceLinkProvider({ children }: { children: ReactNode }) {
     const pending = rosterRequestRef.current;
     if (!options.fresh && pending?.client === client && pending.epoch === epoch) return pending.promise;
     const generation = ++rosterRequestGenerationRef.current;
+    const presenceEpochAtStart = presenceAvailabilityEpochsRef.current.next;
     const apply = rosterConsumerRef.current?.();
     const owner = auth.accountGeneration;
-    const promise = rosterContinuity.read({ key: JSON.stringify([owner, DEVICE_LINK_API_BASE_URL]), joinPending: false,
-      current: () => clientRef.current === client && accountGenerationRef.current === owner,
+    const rosterGeneration = rosterGenerationRef.current;
+    const promise = rosterContinuity.read({ key: JSON.stringify([owner, DEVICE_LINK_API_BASE_URL, rosterGeneration]), joinPending: false,
+      current: () => clientRef.current === client && accountGenerationRef.current === owner
+        && rosterGenerationRef.current === rosterGeneration,
       signalingAvailable: () => true,
     }, 'device-directory', () => auth.apiFetch<{ devices: DeviceView[] }>('/api/device-link/devices', {
       baseUrl: DEVICE_LINK_API_BASE_URL, timeoutMs: 12_000,
     })).then((snapshot) => {
-      const result = snapshot.stale ? { devices: snapshot.value.devices.map(device => ({ ...device,
-        online: client?.connectionFor(device.deviceId).isLinkReady(device.deviceId) === true })) } : snapshot.value;
+      const rawDevices = snapshot.value.devices;
+      const result = { devices: rawDevices.map(device => {
+        const deviceId = device.deviceId;
+        const connection = client?.connectionFor(deviceId);
+        const retained = connection?.hasOfflineDirectPath(deviceId) === true;
+        // A presence delta that landed after this request started is newer than
+        // the REST row and must decide control, in either direction.
+        const freshPresence = (presenceAvailabilityEpochsRef.current.byDevice.get(deviceId) ?? 0) > presenceEpochAtStart;
+        const currentlyAvailable = presenceAvailableByDeviceRef.current.get(deviceId) === true;
+        const stickyDisabled = presenceUnavailableVerdictsRef.current.get(deviceId)?.kind === 'disabled';
+        const nonMobile = !isMobilePlatform(device.platform);
+        if (freshPresence) {
+          return { ...device, online: currentlyAvailable || retained,
+            remoteControlEnabled: currentlyAvailable && nonMobile };
+        }
+        if (device.online === true) {
+          // online:true + false is the target's explicit control-off. A stale
+          // positive row must not clear a known disabled verdict.
+          const enabled = device.remoteControlEnabled === true && !(snapshot.stale && stickyDisabled);
+          return { ...device, online: snapshot.stale ? connection?.isLinkReady(deviceId) === true : true,
+            remoteControlEnabled: nonMobile && enabled };
+        }
+        if (!retained) {
+          return snapshot.stale ? { ...device, online: connection?.isLinkReady(deviceId) === true } : device;
+        }
+        // Offline presence is masked by the relay; only the retained data path
+        // may supply online, never control while a disabled verdict is sticky.
+        return { ...device, online: true, remoteControlEnabled: nonMobile && !stickyDisabled };
+      }) };
       // A fresh read supersedes every older roster consumer, even when the older
       // response arrives first and would otherwise outrank the new snapshot.
-      if (!snapshot.stale && rosterRequestGenerationRef.current === generation) apply?.(result.devices);
+      if (!snapshot.stale) {
+        rosterDeniedRef.current = false;
+        // The consumer uses raw rows as authority; the projected row is display
+        // data only and must not become noteRemoteControlEnabled evidence.
+        if (rosterRequestGenerationRef.current === generation) apply?.(rawDevices);
+      }
       return result;
     });
     rosterRequestRef.current = { client, epoch, promise };
@@ -583,6 +637,9 @@ export function DeviceLinkProvider({ children }: { children: ReactNode }) {
   }, [auth.apiFetch, auth.accountGeneration, rosterContinuity]);
 
   const clearPerAccountDeviceLinkState = useCallback(() => {
+    rosterGenerationRef.current += 1;
+    rosterDeniedRef.current = false;
+    rosterRequestRef.current = null;
     rosterContinuity.clear();
     remoteSessionStore.clear();
     clearSessionScheduleIndexCache();
@@ -597,6 +654,7 @@ export function DeviceLinkProvider({ children }: { children: ReactNode }) {
     resetTaskTagCatalogCache();
     setLastPresenceSnapshot(null);
     setPresenceVersion((version) => version + 1);
+    setRosterVersion((version) => version + 1);
   }, [rosterContinuity]);
 
   /**
@@ -1273,9 +1331,16 @@ export function DeviceLinkProvider({ children }: { children: ReactNode }) {
       // 新代按乐观补齐;若对方仍拒绝,入站永久 link-close 会重新建立抑制)。
       liftRehydrateSuppressionForNewConnection(rehydrateSuppressedDeviceIds,
         (deviceId) => client.connectionFor(deviceId) === client);
-      // 上一连接代的 rehydrate verdict 已被降为 unknown;新连接的 late response
-      // 不能再借旧 verdict 清理当前代状态。权威 presence 会在 delta 到达时重建。
+      // 上一连接代的离线/存在性 verdict 已被降为 unknown;新连接的 late response
+      // 不能再借旧 verdict 清理当前代状态。明确关闭不是连接判定，必须保留到
+      // 该目标再次收到 online + enabled 的权威 presence 才能恢复。
       for (const deviceId of staleUnavailableDeviceIds) {
+        if (!isScopedPeer(deviceId)
+          && presenceUnavailableVerdictsRef.current.get(deviceId)?.kind === 'disabled') {
+          presenceAvailableByDeviceRef.current.set(deviceId, false);
+          presencePendingRecoveryDeviceIdsRef.current.delete(deviceId);
+          continue;
+        }
         presenceUnavailableVerdictsRef.current.delete(deviceId);
       }
       for (const deviceId of staleUnavailableDeviceIds) {
@@ -1314,18 +1379,32 @@ export function DeviceLinkProvider({ children }: { children: ReactNode }) {
       if (shouldRecover) void rehydrate(deviceId);
     });
     const retainedOfflinePeers = new Set<string>();
-    const applyPresence = (snap: PresenceSnapshot) => {
+    type PresenceApplicationSource = 'ws' | 'roster' | 'synthetic';
+    const applyPresence = (snap: PresenceSnapshot, source: PresenceApplicationSource) => {
+      const previousAvailable = presenceAvailableByDeviceRef.current.get(snap.deviceId);
+      const wasDisabledVerdict = presenceUnavailableVerdictsRef.current.get(snap.deviceId)?.kind === 'disabled';
+      const offlineProjection = !snap.online;
+      // Relay presence and REST both mask remoteControlEnabled to false for offline
+      // routes; only an online snapshot can carry an explicit control-off.
+      const explicitControlOff = snap.remoteControlEnabled === false && !offlineProjection;
       const retained = !snap.online && client.connectionFor(snap.deviceId).hasOfflineDirectPath(snap.deviceId);
+      const retainedControlEnabled = isScopedPeer(snap.deviceId) ? true
+        : explicitControlOff ? false
+        : offlineProjection ? previousAvailable !== false && !wasDisabledVerdict
+        : snap.remoteControlEnabled !== false;
+      const effectiveSnap: PresenceSnapshot = retained
+        ? { ...snap, online: true, remoteControlEnabled: retainedControlEnabled }
+        : explicitControlOff ? { ...snap, remoteControlEnabled: false } : snap;
       if (retained) retainedOfflinePeers.add(snap.deviceId); else retainedOfflinePeers.delete(snap.deviceId);
       markPresenceAvailabilityEpoch(presenceAvailabilityEpochsRef.current, snap.deviceId);
       // presence 变化代表目标链路代际变化(offline / remote-disabled / 恢复都一样):
       // 上一代成功 link 不能跨代复用,下一次请求必须重新 link-open 确认。
-      if (!retained) openLinkInFlightRef.current.delete(snap.deviceId);
-      setLastPresenceSnapshot(snap);
+      if (!retained || explicitControlOff) openLinkInFlightRef.current.delete(snap.deviceId);
+      setLastPresenceSnapshot(effectiveSnap);
       setPresenceVersion((n) => n + 1);
       const presence = updatePresenceAvailability(
         presenceAvailableByDeviceRef.current,
-        retained ? { ...snap, online: true, remoteControlEnabled: true } : snap,
+        effectiveSnap,
         presencePendingRecoveryDeviceIdsRef.current,
       );
       if (presence.available) {
@@ -1334,7 +1413,7 @@ export function DeviceLinkProvider({ children }: { children: ReactNode }) {
         // Relay presence 是权威 availability verdict,普通目标应答不能推翻。
         suspendRemoteProjectAliases(snap.deviceId);
         presenceUnavailableVerdictsRef.current.set(snap.deviceId, {
-          kind: snap.online && !snap.remoteControlEnabled ? 'disabled' : 'presence',
+          kind: explicitControlOff || wasDisabledVerdict ? 'disabled' : 'presence',
           responseEvidenceEpoch: capturePresenceAvailabilityEpoch(
             remoteResponseEvidenceEpochs,
             snap.deviceId,
@@ -1348,18 +1427,22 @@ export function DeviceLinkProvider({ children }: { children: ReactNode }) {
         // Relay 的权威 presence 已说明目标离线或关闭远控:此前 INVOKE_TIMEOUT
         // 只能视为这次可用性变化的下游症状,不再代表桌面 IPC/DB 卡死。立即清除
         // 响应性计数并翻代,让在途请求随后到达的 timeout 也无法重建误熔断。
-        // 清理响应性状态会触发 rehydrate,但 presence 仍是 unavailable 时该设备会被
-        // availablePlans 过滤,不再立即重放一批注定 DEVICE_OFFLINE 的请求。
         clearDeviceResponsivenessTrackingFor(snap.deviceId);
         // 订阅跟踪必须立即失效(不进宽限):桌面端断开可能已丢失订阅者状态,
         // 恢复后的 rehydrate 靠 topicsMissingRemoteAck 判断要不要重发 subscribe,
         // 跟踪不清会误判「已订阅」而跳过重订阅,push 流静默断掉。重订阅本身
         // 便宜且服务端幂等;需要宽限的只是下面会引起界面闪烁的缓存清理。
         remoteSubscribedTopicsRef.current.delete(snap.deviceId);
-        if (snap.online && !snap.remoteControlEnabled) {
-          // 用户在桌面端显式关闭了远控:立即清,镜像不该多留一秒
+        if (explicitControlOff) {
+          // 明确关闭远控:目录、在途刷新与镜像一起立即收口。
+          catalogRefresh.cancel(snap.deviceId);
           clearOnePresenceWipeTimer(wipeTimers, snap.deviceId);
           wipeUnavailableDeviceMirror(snap.deviceId);
+          return;
+        }
+        if (wasDisabledVerdict) {
+          // REST 的 offline 投影不是新的控制关闭,也不是重新允许;保留原判定。
+          clearOnePresenceWipeTimer(wipeTimers, snap.deviceId);
           return;
         }
         // 桌面端离线:给一个短宽限。弱网下桌面端会反复闪断,每次都立即清空
@@ -1386,12 +1469,12 @@ export function DeviceLinkProvider({ children }: { children: ReactNode }) {
       // (见 linkClose.ts 的具名 lift 入口)。
       if (presence.recovered) void rehydrate(snap.deviceId);
     };
-    const offPresence = client.onPresenceChanged(applyPresence);
+    const offPresence = client.onPresenceChanged((snap) => applyPresence(snap, 'ws'));
     const offPeerPath = client.onPeerPathChanged(({ deviceId, path }) => {
       setPresenceVersion(version => version + 1);
       if (path !== 'relay' || (!retainedOfflinePeers.has(deviceId) && canUsePeerData(client, deviceId))) return;
       applyPresence({ deviceId, online: false, remoteControlEnabled: true,
-        deviceName: '', platform: '', appVersion: '', busy: false, lastSeenAt: Date.now() });
+        deviceName: '', platform: '', appVersion: '', busy: false, lastSeenAt: Date.now() }, 'synthetic');
       catalogRefresh.cancel(deviceId);
       invalidatePeerLinkState(deviceId, openLinkInFlightRef.current,
         remoteSubscribedTopicsRef.current, noteSessionLiveStreamsInterrupted);
@@ -1403,14 +1486,18 @@ export function DeviceLinkProvider({ children }: { children: ReactNode }) {
       return (devices) => {
         if (clientRef.current !== client || connectionEpochRef.current !== epoch || client.getStatus() !== 'online') return;
         for (const device of devices) {
+          if (device.isSelf
+            || (presenceAvailabilityEpochsRef.current.byDevice.get(device.deviceId) ?? 0) > presenceEpoch) continue;
+          // An authoritative online row is fresh permission evidence; an offline
+          // row is only a directory projection and never clears the local gate.
+          if (device.online && device.remoteControlEnabled) client.noteRemoteControlEnabled(device.deviceId);
           const available = device.online && device.remoteControlEnabled;
           const disabled = device.online && !device.remoteControlEnabled;
           const wasDisabled = presenceUnavailableVerdictsRef.current.get(device.deviceId)?.kind === 'disabled';
-          if (device.isSelf || (presenceAvailableByDeviceRef.current.get(device.deviceId) === available && disabled === wasDisabled)
-            || (presenceAvailabilityEpochsRef.current.byDevice.get(device.deviceId) ?? 0) > presenceEpoch
+          if ((presenceAvailableByDeviceRef.current.get(device.deviceId) === available && disabled === wasDisabled)
             || (!device.online && (remoteResponseEvidenceEpochs.byDevice.get(device.deviceId) ?? 0) > responseEpoch)) continue;
           applyPresence({ ...device, deviceName: device.name, platform: device.platform ?? '',
-            appVersion: device.appVersion ?? '', lastSeenAt: Date.parse(device.lastSeenAt ?? '') || 0 });
+            appVersion: device.appVersion ?? '', lastSeenAt: Date.parse(device.lastSeenAt ?? '') || 0 }, 'roster');
         }
       };
     };
@@ -1888,6 +1975,7 @@ export function DeviceLinkProvider({ children }: { children: ReactNode }) {
     connectionIssue,
     presenceVersion,
     connectionEpoch,
+    rosterVersion,
     lastPresenceSnapshot,
     getSubscriptionIdentity: (deviceId, topics) => remoteSubscribedTopicsRef.current.identity(deviceId, sharedTaskTopics(deviceId, topics)),
     getPresenceAvailability,
@@ -1906,6 +1994,7 @@ export function DeviceLinkProvider({ children }: { children: ReactNode }) {
     recoveringDeviceIds,
     connectionEpoch,
     connectionIssue,
+    rosterVersion,
     getPresenceAvailability,
     readDeviceList,
     invoke,

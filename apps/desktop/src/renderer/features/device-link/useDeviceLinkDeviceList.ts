@@ -427,6 +427,17 @@ function ensureStarted(): void {
     // 若 REST 仍可达可直接拿到目录；不可达则明确落 error，而不是误装成空列表。
     refresh();
   });
+  // A late 401/403 after the two-second fallback is not a temporary directory
+  // outage. The cloud snapshot is gone; drop mounted rows until a later real
+  // presence/status event can rebuild them.
+  window.electronAPI.deviceLink.onDeviceDirectoryInvalidated?.(() => {
+    clearRetryTimer();
+    retryDelayMs = 0;
+    backgroundRetryGeneration = null;
+    backgroundRetryRefreshPending = false;
+    backgroundRetryReplayActive = false;
+    clearDevices();
+  });
   // 关掉「我控制它」(本地 opt-out)只广播 control-target-changed、不发 presence;listDevices 的
   // controlEnabled 已据 disabledControlDeviceIds 计算,故重拉即可让被 opt-out 的设备立刻退出切换栏。
   window.electronAPI.deviceLink.onControlTargetChanged(() => refresh());

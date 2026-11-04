@@ -22,6 +22,7 @@ import {
   PROVIDER_SHARE_RECEIVED_CATALOGS_CHANNEL,
   MAX_FRAME_BYTES,
   REMOTE_AGENT_CHANNEL,
+  isProviderAccessDeniedError,
   parseProviderSharePeer,
   providerShareGuestPeer,
   scrubProviderShareLabel,
@@ -1164,6 +1165,21 @@ export async function executeProviderShareManagementCommand(command: ProviderSha
 const CATALOG_READ_TIMEOUT_MS = 10_000;
 const LINK_TTL_SAFETY_MS = 5_000;
 
+/** A definitive provider/share refusal is an empty catalog with no trust budget. */
+const DENIED_PROVIDER_CATALOG = { providers: [], providerContinuity: { stale: true, remainingMs: 0 } };
+
+function isProviderCatalogDenial(error: unknown): boolean {
+  const row = error && typeof error === 'object'
+    ? error as { code?: unknown; message?: unknown } : {};
+  const code = typeof row.code === 'string' && row.code !== 'IPC_ERROR' ? row.code
+    : typeof row.message === 'string' && row.message.startsWith('[PROVIDER_SHARE_CROSS_REGION_DISABLED]')
+      ? 'PROVIDER_SHARE_CROSS_REGION_DISABLED'
+      : undefined;
+  // A region feature flag is not a per-share permission refusal.
+  if (code === 'PROVIDER_SHARE_CROSS_REGION_DISABLED') return false;
+  return isProviderAccessDeniedError(error);
+}
+
 /**
  * 手机(同账号)经被控电脑读取这台电脑收到的分享与各自的模型目录。目录由分享者电脑过滤为
  * 分享的那个供应商；读不到(离线、已暂停)时 catalog 为 null，不影响其他分享。
@@ -1193,8 +1209,9 @@ async function receivedCatalogs(args: unknown[]): Promise<{ ready: boolean; shar
             new Promise<null>((resolve) => { timer = setTimeout(() => resolve(null), CATALOG_READ_TIMEOUT_MS); }),
           ]);
           if (result?.ok) catalog = scrubSharedProviderCatalog(result.result);
-        } catch {
-          catalog = null;
+          else if (result && isProviderCatalogDenial(result.error)) catalog = DENIED_PROVIDER_CATALOG;
+        } catch (error) {
+          catalog = isProviderCatalogDenial(error) ? DENIED_PROVIDER_CATALOG : null;
         } finally {
           if (timer) clearTimeout(timer);
         }

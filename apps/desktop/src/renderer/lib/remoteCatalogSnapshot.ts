@@ -26,11 +26,23 @@ export function invalidateRemoteCatalogSnapshots(): void {
   refreshes.clear();
 }
 
-export async function refreshRemoteCatalogSnapshot(deviceId: string, notification?: unknown): Promise<void> {
-  // A Main-observed denial clears display copies before any fresh RPC can finish.
-  const retainDisplaySnapshot = readProviderMetadataContinuity(notification)?.remainingMs !== 0;
+export async function refreshRemoteCatalogSnapshot(deviceId: string, notification?: unknown,
+  options?: { retireOnly?: boolean }): Promise<void> {
+  // A Main-observed denial or an expired forwarded budget retires the mounted
+  // copy without reopening the target. Callers pass retireOnly for that case;
+  // a regular refresh still clears stale display copies before its live read.
+  const retainDisplaySnapshot = !options?.retireOnly
+    && readProviderMetadataContinuity(notification)?.remainingMs !== 0;
+  const retireOnly = options?.retireOnly === true;
   const generation = evictDeviceProviders(deviceId, { retainDisplaySnapshot });
   evictDeviceCapabilities(deviceId, { retainDisplaySnapshot });
+  if (retireOnly) {
+    // Invalidate any queued refresh for this exact target. Its callback still
+    // checks the device generation, and deleting the entry prevents it from
+    // being reused by a later read. Do not schedule a replacement read here.
+    refreshes.delete(deviceId);
+    return;
+  }
   const previous = refreshes.get(deviceId);
   const refresh = {
     // An intervening eviction belongs to disconnect/ownership handling. Its new

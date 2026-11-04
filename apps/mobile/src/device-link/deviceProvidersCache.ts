@@ -8,6 +8,7 @@
  * (evict 时自增代际,作废在途 fetch 的回写,防设备切换 / 重连后串旧供应商)。
  */
 import type { ProviderView } from '@cindy/model-providers/registry';
+import { isPreconditionFailedRemoteError } from '@cindy/maker-shared/device-link-contract';
 import { MetadataSnapshotExpiry, isProviderAccessDeniedError, type ProviderMetadataContinuity } from '@cindy/device-link';
 
 /** PROVIDER_LIST 隧道回包:目录 + 被控端「模型显示/隐藏」override 快照(旧被控端无)。 */
@@ -103,7 +104,8 @@ export function subscribeDeviceProvidersError(deviceId: string, listener: (error
 function notifyDeviceProvidersError(deviceId: string, error: unknown): void {
   // A downgraded host cannot serve any of the cached provider routes. Retire only
   // that device's snapshot; an empty success notification would incorrectly mark it ready.
-  if (isDeviceProvidersUnsupportedError(error) || isProviderAccessDeniedError(error)) { cache.delete(deviceId); expiry.forget(deviceId); }
+  if (isDeviceProvidersUnsupportedError(error) || isProviderAccessDeniedError(error)
+    || isPreconditionFailedRemoteError(error)) { cache.delete(deviceId); expiry.forget(deviceId); }
   for (const listener of errorListeners.get(deviceId) ?? []) listener(error);
 }
 

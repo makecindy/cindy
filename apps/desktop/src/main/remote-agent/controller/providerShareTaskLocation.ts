@@ -1,4 +1,4 @@
-import { providerShareHostPeer, parseProviderSharePeer, type RemoteAgentKind } from '@cindy/device-link';
+import { providerShareHostPeer, type RemoteAgentKind } from '@cindy/device-link';
 
 import { getRemoteLinkCloseEpoch, openRemoteLink, remoteBackgroundInvoke } from '../../device-link/index.js';
 import { isCrossRegionProviderShareTarget, renewCrossRegionProviderShareLink } from '../../device-link/providerShareCrossRegion.js';
@@ -8,7 +8,7 @@ import { activeOwnerScopeKey, isAppSessionBoundaryPending } from '../../appSessi
 import { getClientEndpoint } from '../../clientEndpointsService.js';
 import { findReceivedShare, providerShareAccessEpoch } from '../../device-link/providerShareGuest.js';
 
-type SharedTaskAuthorization = { target: string; direct: boolean; generation?: string; leaseDeadline?: number; wallDeadline?: number; authorizedUntil?: number; renewAt?: number };
+type SharedTaskAuthorization = { target: string; direct: boolean; reused?: boolean; generation?: string; leaseDeadline?: number; wallDeadline?: number; authorizedUntil?: number; renewAt?: number };
 const GRANT_ID = /^[0-9a-f-]{36}$/;
 type RetainedTask = SharedTaskAuthorization & { agentKind: RemoteAgentKind; model: string; current(): boolean };
 const retainedTasks = new Map<string, RetainedTask>();
@@ -158,20 +158,15 @@ export async function authorizeSharedTaskHistory(
       if (!retained.current() || !caps.directGuestExecution || !caps.agents.some(agent => agent.kind === agentKind && agent.available)) {
         throw new Error('[REMOTE_AGENT_UNAVAILABLE] original shared executor authorization is unavailable');
       }
-      return { target: retained.target, direct: true, generation: retained.generation,
+      return { target: retained.target, direct: true, reused: true, generation: retained.generation,
         leaseDeadline: retained.leaseDeadline, wallDeadline: retained.wallDeadline,
         authorizedUntil: retained.authorizedUntil, renewAt: retained.renewAt };
     } catch (error) {
       signal?.throwIfAborted();
-      const mayReauthorizeOriginal = retained.current();
-      if (retainedTasks.get(taskKey(agentDeviceId, sessionId)) === retained) forgetSharedTaskAuthorization(agentDeviceId, sessionId);
-      // M can restart and lose its grant while its original history remains.
-      // A fresh O grant may restore only that M; never turn a failed cached M
-      // probe into the legacy/null-locate path that could send native IDs to O.
-      const original = parseProviderSharePeer(retained.target);
-      if (mayReauthorizeOriginal && original?.role === 'host') {
-        return authorizeSharedTaskExecutor(agentDeviceId, sessionId, agentKind, model, original.deviceId, false, signal);
-      }
+      // caps is a generic capability read: it neither proves that M lost this
+      // task's grant nor that O is reachable. Keep the retained deadline and
+      // original-M affinity; a real loss is detected by the task-scoped open
+      // error and reauthorized explicitly there.
       throw error;
     }
   }

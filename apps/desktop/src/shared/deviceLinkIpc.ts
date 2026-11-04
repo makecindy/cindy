@@ -67,6 +67,8 @@ export const DEVICE_LINK_PUSH = {
   PRESENCE_CHANGED: 'device-link:presence-changed',
   /** 本机 relay 连接状态变化,payload: { status: 'stopped'|'connecting'|'online' } */
   STATUS_CHANGED: 'device-link:status-changed',
+  /** 云端设备目录被明确拒绝后,本地目录与已挂载界面立即失效。payload: {} */
+  DEVICE_DIRECTORY_INVALIDATED: 'device-link:device-directory-invalidated',
   /**
    * 本机 relay 连接问题变化(鉴权失效/被顶号/超限/版本不符;null = 已恢复)。
    * payload: { issue: DeviceLinkConnectionIssue | null }

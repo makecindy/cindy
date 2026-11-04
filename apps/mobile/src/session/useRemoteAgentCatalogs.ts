@@ -30,6 +30,7 @@ import {
 import { createMobileMakerTransport } from '@/device-link/mobileMakerTransport';
 import {
   getCachedProviderShareCatalogs,
+  isProviderShareCatalogComplete,
   refreshProviderShareCatalogs,
   subscribeProviderShareCatalogs,
   type ProviderShareCatalogEntry,
@@ -52,7 +53,8 @@ const NO_CATALOGS: RemoteAgentCatalog[] = [];
 
 function cachedShareState(controlledDeviceId: string): ShareState {
   const cached = controlledDeviceId ? getCachedProviderShareCatalogs(controlledDeviceId) : undefined;
-  return { controlledDeviceId, shares: cached ?? [], loaded: !!cached };
+  return { controlledDeviceId, shares: cached ?? [],
+    loaded: !!cached && isProviderShareCatalogComplete(controlledDeviceId) !== false };
 }
 
 export function useRemoteAgentCatalogs(input: RemoteAgentCatalogsInput): RemoteAgentCatalog[] {
@@ -74,7 +76,7 @@ export function useRemoteAgentCatalogsWithStatus(input: RemoteAgentCatalogsInput
   catalogs: RemoteAgentCatalog[];
   settled: boolean;
 } {
-  const { readDeviceList, invoke, openLink, connectionEpoch, status, presenceVersion, getPresenceAvailability } =
+  const { readDeviceList, invoke, openLink, connectionEpoch, status, presenceVersion, getPresenceAvailability, rosterVersion = 0 } =
     useDeviceLink(input.controlledDeviceId);
   const { accountGeneration } = useAuth();
   const { t } = useTranslation();
@@ -101,6 +103,18 @@ export function useRemoteAgentCatalogsWithStatus(input: RemoteAgentCatalogsInput
     setShareState(cachedShareState(input.controlledDeviceId));
   }, [accountGeneration, input.controlledDeviceId]);
 
+  // A late roster denial retires same-account directory rows; share catalogs are a
+  // separate authority and stay untouched. The read effect deliberately does not
+  // depend on rosterVersion: retrying from the denial itself would recreate the
+  // 403 -> notification -> read feedback loop. Reconnect/focus/picker triggers
+  // may read again later.
+  useEffect(() => {
+    if (!input.enabled) return;
+    setDevices([]);
+    setDevicesLoaded(false);
+    setCatalogs(new Map());
+  }, [input.enabled, rosterVersion]);
+
   // 供应商分享:被控电脑代读它收到的分享与各自的目录。有缓存先显示,再在后台刷新;
   // 读不到(离线 / 旧版桌面)保留上一份,绝不影响被控电脑自己与同账号电脑的列表。
   useEffect(() => {
@@ -109,7 +123,8 @@ export function useRemoteAgentCatalogsWithStatus(input: RemoteAgentCatalogsInput
     let cancelled = false;
     setShareState(cachedShareState(controlledDeviceId));
     const unsubscribe = subscribeProviderShareCatalogs(controlledDeviceId, (shares) => {
-      if (!cancelled) setShareState({ controlledDeviceId, shares, loaded: true });
+      if (!cancelled) setShareState({ controlledDeviceId, shares,
+        loaded: isProviderShareCatalogComplete(controlledDeviceId) !== false });
     });
     void refreshProviderShareCatalogs(controlledDeviceId, () => invoke(
       controlledDeviceId,

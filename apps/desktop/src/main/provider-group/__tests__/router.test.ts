@@ -74,6 +74,35 @@ function harness(
   });
 }
 
+describe('group view source continuity', () => {
+  it('keeps source budgets isolated per provider', async () => {
+    const configFor = (providerId: string): ProviderGroupConfig => ({ strategy: 'least', autoSwitch: true,
+      members: [{ key: 'device:m:' + providerId, kind: 'device', agentDeviceId: 'm', providerId,
+        limit: 4, weight: 1, paused: false }] });
+    const directory: ProviderGroupDirectory = {
+      async resolveMembers(providerId, current) {
+        return current.members.map((member): ResolvedProviderGroupMember => ({ member, label: member.key,
+          state: 'ok', view: view(providerId),
+          providerContinuity: providerId === 'openai'
+            ? { stale: true, remainingMs: 60_000 } : { stale: false, remainingMs: 120_000 } }));
+      },
+      async listCandidates() { return []; },
+      async readDeviceCatalog() { return []; },
+      async probe() { return 'ok' as const; },
+      memberLabel: (member) => member.key,
+      invalidate: () => undefined,
+    };
+    const router = createProviderGroupRouter({ directory,
+      readGroup: (providerId) => providerId === 'openai' || providerId === 'anthropic' ? configFor(providerId) : null,
+      listBindings: () => ({}), isTurnRunning: () => false, now: () => 1_000, random: () => 0 });
+    await expect(router.view('openai')).resolves.toMatchObject({
+      providerContinuity: { stale: true, remainingMs: 60_000 },
+    });
+    await expect(router.view('anthropic')).resolves.toMatchObject({
+      providerContinuity: { stale: false, remainingMs: 120_000 },
+    });
+  });
+});
 describe('provider group details capability reader lifetime', () => {
   const devices = Array.from({ length: 5 }, (_, index) => member(`device:${index}:anthropic`, 'device', `device-${index}`, 1));
   const supportedCaps = { virtualWorkspace: true, guestRelay: true } as RemoteAgentCaps;

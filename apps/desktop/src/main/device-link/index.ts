@@ -136,9 +136,11 @@ import {
   applyControllerPresenceDirectorySnapshot,
   createControllerPresenceFreshnessTracker,
   markControllerPresenceFresh,
+  isVerifiedControllerDataPath,
   resolveControllerPresence,
   resetControllerPresenceFreshness,
   type ControllerPresenceDirectoryDevice,
+  type ControllerPresenceEvidence,
 } from './controllerPresenceDirectory';
 import { currentBusy, setBusyProbe, helloBusy, pollBusyChange, resetBusyDedupe } from './busyReporter';
 import {
@@ -158,7 +160,9 @@ import { getKnownControllerIds } from './subscriptions';
 import { startSharedTaskRuntime, stopSharedTaskRuntime } from './sharedTaskRuntime.js';
 import { startProviderShareRuntime, stopProviderShareRuntime } from './providerShareRuntime.js';
 import { tapRemoteModelCatalogChange } from './broadcast-tap.js';
-import { invokeProviderMetadataContinuity, invalidateProviderMetadataContinuity, onProviderMetadataDenied } from './providerMetadataContinuity.js';
+import { handleProviderMetadataSourcePush, invokeProviderMetadataContinuity, invalidateProviderMetadataContinuity, onProviderDirectoryDenied, onProviderMetadataDenied } from './providerMetadataContinuity.js';
+import { retireControlOffRetention } from './controlOffRetention.js';
+import { bumpDeviceAccessGeneration, noteControllerAccessAllowed, syncRemoteControlAccessGeneration } from './remoteControlAccess.js';
 import {
   isProviderShareRefusal,
   getReceivedShares,
@@ -294,8 +298,9 @@ export function applyControllerDisplayNameListSnapshot(
 export function applyControllerPresenceListSnapshot(
   devices: readonly ControllerPresenceDirectoryDevice[],
   requestEpoch: number,
-): void {
-  if (linkTornDown || client?.getStatus() !== 'online') return;
+): Map<string, ControllerPresenceEvidence> {
+  const evidence = new Map<string, ControllerPresenceEvidence>();
+  if (linkTornDown || client?.getStatus() !== 'online') return evidence;
   applyControllerPresenceDirectorySnapshot({
     devices,
     requestEpoch,
@@ -315,12 +320,27 @@ export function applyControllerPresenceListSnapshot(
           platform,
           revoked: false,
         })),
+    onPeerControlEnabled: (deviceId) => {
+      client?.noteRemoteControlEnabled(deviceId);
+      presenceOnlineByDevice.set(deviceId, true);
+      presenceAvailableByDevice.set(deviceId, true);
+      presenceControlDisabledByDevice.delete(deviceId);
+    },
+    onPeerControlDisabled: (deviceId) => {
+      client?.noteRemoteControlDisabled(deviceId);
+      presenceOnlineByDevice.set(deviceId, true);
+      presenceAvailableByDevice.set(deviceId, false);
+      presenceControlDisabledByDevice.add(deviceId);
+      retireControlOffRetention(deviceId);
+    },
+    onPeerControlEvidence: (deviceId, item) => evidence.set(deviceId, item),
     onPeerBecameOnline: (deviceId, platform) => {
       if (isMobilePlatform(platform)) handleMobilePeerOnline(deviceId);
       else handleDesktopPeerOnline(deviceId);
       replayActiveSubscriptions('directory-online', deviceId);
     },
   });
+  return evidence;
 }
 
 function seedControllerDisplayNamesFromLastKnown(): void {
@@ -401,6 +421,9 @@ export function getDirectDataDeviceIds(): string[] {
   return [...directDataPeers].filter(id => !isScopedPeer(id)
     && client?.getPeerPath(id) === 'direct' && client.isLinkReady(id));
 }
+onProviderDirectoryDenied(() => {
+  broadcast(DEVICE_LINK_PUSH.DEVICE_DIRECTORY_INVALIDATED, {});
+});
 onProviderMetadataDenied(target => {
   const share = parseProviderSharePeer(target);
   const deviceId = share?.role === 'host' ? `share:${share.shareId}` : target;
@@ -546,6 +569,8 @@ const openLinkInFlight = new Map<string, Promise<LinkAcceptPayload>>();
 /** 对端已对本机撤权：自动 recover/probe 不得再 openLink；用户显式重试可清掉。 */
 const revokedByRemote = new Set<string>();
 const presenceAvailableByDevice = new Map<string, boolean>();
+/** Sticky explicit control-off evidence until a new online+enabled authority arrives. */
+const presenceControlDisabledByDevice = new Set<string>();
 /**
  * 「目标设备无响应」熔断(弱网 / 对端卡死时收敛请求风暴,见 responsivenessTracker)。
  * 随 initDeviceLinkService 创建;null(极早期)时门禁直通,不影响行为。
@@ -598,6 +623,49 @@ function isPresenceExplicitlyOffline(deviceId: string): boolean {
 /** Existing bounded data-plane availability, never a new offline authorization. */
 export function hasOfflineDirectPath(deviceId: string): boolean {
   return !isAppSessionBoundaryPending() && client?.hasOfflineDirectPath(deviceId) === true;
+}
+
+/** A stale REST row may claim online only when this target's current data path is verified. */
+export function isDeviceDataPathAvailable(deviceId: string): boolean {
+  if (isAppSessionBoundaryPending()) return false;
+  const connection = client?.connectionFor(deviceId);
+  return isVerifiedControllerDataPath({
+    linkStatus: connection?.getStatus() ?? 'stopped',
+    linkReady: connection?.isLinkReady(deviceId) === true,
+    offlineDirect: client?.hasOfflineDirectPath(deviceId) === true,
+    presenceAvailable: presenceAvailableByDevice.get(deviceId),
+    revoked: revokedByRemote.has(deviceId),
+    locallyDisabled: readDeviceLinkSettings().disabledControlDeviceIds.includes(deviceId),
+  });
+}
+
+/** Last verified availability; unknown is not an explicit refusal. */
+export function isPeerControlAvailable(deviceId: string): boolean {
+  return !isAppSessionBoundaryPending() && presenceAvailableByDevice.get(deviceId) !== false
+    && !presenceControlDisabledByDevice.has(deviceId);
+}
+
+/** Current presence authority for one target, separate from UI display projections. */
+export interface PeerControlState {
+  online: boolean | undefined;
+  available: boolean | undefined;
+  disabled: boolean;
+}
+export function forgetPeerControlState(deviceId: string): void {
+  presenceControlDisabledByDevice.delete(deviceId);
+  presenceAvailableByDevice.delete(deviceId);
+  presenceOnlineByDevice.delete(deviceId);
+}
+
+export function getPeerControlState(deviceId: string): PeerControlState {
+  return { online: presenceOnlineByDevice.get(deviceId),
+    available: presenceAvailableByDevice.get(deviceId),
+    disabled: presenceControlDisabledByDevice.has(deviceId) };
+}
+
+/** True when a presence delta landed after a directory request started. */
+export function isPresenceFreshAfterRequest(deviceId: string, requestEpoch: number): boolean {
+  return (controllerPresenceFreshness.epochByDevice.get(deviceId) ?? 0) > requestEpoch;
 }
 
 const presenceNameByDevice = new Map<string, string>();
@@ -1037,6 +1105,12 @@ export function initDeviceLinkService(options: DeviceLinkServiceOptions = {}): v
   });
   client.onPresenceChanged((snap: PresenceSnapshot) => {
     markControllerPresenceFresh(controllerPresenceFreshness, snap.deviceId);
+    if (snap.online === true && snap.remoteControlEnabled === false) {
+      presenceControlDisabledByDevice.add(snap.deviceId);
+      retireControlOffRetention(snap.deviceId);
+    } else if (snap.online === true && snap.remoteControlEnabled === true) {
+      presenceControlDisabledByDevice.delete(snap.deviceId);
+    }
     const wasAvailable = presenceAvailableByDevice.get(snap.deviceId);
     const { directOnline, online, available } = resolveControllerPresence(
       snap, hasOfflineDirectPath(snap.deviceId), wasAvailable,
@@ -1070,7 +1144,7 @@ export function initDeviceLinkService(options: DeviceLinkServiceOptions = {}): v
       },
     });
     presenceNameByDevice.set(snap.deviceId, snap.selfName || snap.deviceName);
-    broadcast(DEVICE_LINK_PUSH.PRESENCE_CHANGED, directOnline ? { ...snap, online: true } : snap);
+    broadcast(DEVICE_LINK_PUSH.PRESENCE_CHANGED, directOnline ? { ...snap, online: true, remoteControlEnabled: available } : snap);
     // 被控端兜底:对等控制端下线 → 清掉它在本机的订阅 registry(防僵尸订阅持续 sendPush)。
     if (!online) handleControllerOffline(snap.deviceId);
     // `!== true` 而非 `=== false`:断线时 availability 视图整体清空,重连后该设备
@@ -1157,6 +1231,7 @@ export function initDeviceLinkService(options: DeviceLinkServiceOptions = {}): v
   // 带上来源 deviceId(src),renderer 据此把事件路由到对应远程设备的 store
   client.onFrame((env: Envelope) => {
     if (!env.src) return;
+    handleProviderMetadataSourcePush(env);
     // 控制端:被控端撤销访问权限会发 link-close('revoked')。据此移除该被控端的项目/对话 +
     // 标记「已撤销」(presence 不变 —— 被控端仍在线且全局允许被控,故必须靠这条信号)。
     if (env.kind === 'link-close') {
@@ -1180,7 +1255,6 @@ export function initDeviceLinkService(options: DeviceLinkServiceOptions = {}): v
     }
     if (env.kind !== 'push') return;
     const p = env.payload as PushPayload;
-    if (p?.channel === 'maker:provider:changed' || p?.channel === 'provider-group:changed') invalidateProviderMetadataContinuity(env.src);
     const sharePeer = parseProviderSharePeer(env.src);
     const activeShareHost = sharePeer?.role === 'host' && getReceivedShares().some(share => share.shareId === sharePeer.shareId
       && share.hostDeviceId === sharePeer.deviceId && share.status === 'active');
@@ -1525,6 +1599,7 @@ function teardownActiveLink(): void {
   responsivenessTracker?.resetAll();
   subscriptionReplayScheduler.teardown();
   presenceAvailableByDevice.clear();
+  presenceControlDisabledByDevice.clear();
   revokedByRemote.clear();
   sharedHostStreams.clear();
   // 词典同步驱动是进程级的,**不随单次链路起停**:多实例仲裁的 demote → acquire
@@ -1631,6 +1706,11 @@ export async function setRemoteControlEnabled(enabled: boolean): Promise<void> {
   // 否则随后的快照刷新会把未 enforce 的外部撤销当成"已生效",吞掉即时踢断。
   pollExternalSettingsChange();
   await writeDeviceLinkSetting('remoteControlEnabled', enabled);
+  // A local control switch transition ends every retained routing context
+  // before links are torn down. This must not depend on the controller
+  // receiving link-close, and it must run before an in-flight inspect/admit
+  // can resume after the permission change.
+  syncRemoteControlAccessGeneration();
   client?.sendPresence({ remoteControlEnabled: enabled });
   if (!enabled && client) {
     // 开关关闭立即踢断所有在控链路(server 侧此后也拒转发,双保险)
@@ -1681,6 +1761,9 @@ export async function revokeController(deviceId: string): Promise<void> {
       latest.includes(deviceId) ? latest : [...latest, deviceId],
     );
     pluginSyncAccess.invalidate(deviceId);
+    // A revocation is a per-device permission boundary: retire only this
+    // controller's retained routing contexts before closing its link.
+    bumpDeviceAccessGeneration(deviceId);
     // 在线连着的:发 link-close('revoked'),控制端据此立即移除本机项目/对话 + 标记「已撤销」。
     try {
       client?.closeLink(deviceId, 'revoked', 'inbound');
@@ -1713,6 +1796,10 @@ export async function restoreController(deviceId: string): Promise<void> {
     latest.includes(deviceId) ? latest.filter((id) => id !== deviceId) : latest,
   );
   const { remoteControlEnabled } = readDeviceLinkSettings();
+  // Restoration is a new permission for this controller, not another closure.
+  // The revoke bump already fenced every context from before it; advancing the
+  // generation here would also retire a fresh grant prepared after the restore.
+  noteControllerAccessAllowed(deviceId);
   client?.sendPresence({ remoteControlEnabled });
   // 末尾再 poll 一次(而非仅刷新基线):写锁释放到这里之间,别的实例可能已插入
   // 新授权变更,仅刷新基线会把它静默记为已生效、永不 enforce;poll 是幂等的,
@@ -1764,6 +1851,10 @@ function pollExternalSettingsChange(): void {
   const prev = appliedSettingsSnapshot;
   const { remoteControlEnabled, revokedControllers } = readDeviceLinkSettings();
   appliedSettingsSnapshot = { remoteControlEnabled, revokedControllers: [...revokedControllers] };
+  // Apply the same permission boundary for an external settings write before
+  // the link teardown below, so a lost close frame cannot leave old M
+  // continuity entries inside the previous permission generation.
+  syncRemoteControlAccessGeneration();
   if (!prev) return;
 
   if (prev.remoteControlEnabled !== remoteControlEnabled) {
@@ -1777,6 +1868,7 @@ function pollExternalSettingsChange(): void {
   const newlyRevoked = revokedControllers.filter((id) => !prev.revokedControllers.includes(id));
   for (const deviceId of newlyRevoked) {
     pluginSyncAccess.invalidate(deviceId);
+    bumpDeviceAccessGeneration(deviceId);
     try {
       client.closeLink(deviceId, 'revoked', 'inbound');
     } catch (err) {
@@ -1792,6 +1884,7 @@ function pollExternalSettingsChange(): void {
 
   const restored = prev.revokedControllers.filter((id) => !revokedControllers.includes(id));
   if (restored.length > 0) {
+    for (const deviceId of restored) noteControllerAccessAllowed(deviceId);
     client.sendPresence({ remoteControlEnabled });
     log.info(`access restored for ${restored.length} controller(s) (external settings change)`);
   }

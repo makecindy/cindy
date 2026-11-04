@@ -240,8 +240,14 @@ async function fetchDeviceProviders(deviceId: string): Promise<DeviceProvidersPa
       const payload = parseDeviceProvidersPayload(res);
       if (isCurrent()) {
         if (!expiry.remember(deviceId, payload, requestedAt, () => {
-          evictDeviceProviders(deviceId);
-          void prefetchDeviceProviders(deviceId);
+          // The budget is over: retire the display and end this read instead of
+          // prefetching the expired target (a prefetch would renew the view).
+          // Only this direct snapshot expired. Routed aliases keep their own
+          // independently measured budgets; do not cascade into a healthy host neighbor.
+          evictDeviceProviders(deviceId, { directOnly: true });
+          notifyDeviceProviders(deviceId, { status: 'error',
+            error: '[MODEL_VISIBILITY_NOT_READY] Provider directory snapshot expired',
+            unsupported: false });
         })) {
           cache.delete(deviceId);
           throw new Error('[MODEL_VISIBILITY_NOT_READY] Provider directory snapshot expired');
@@ -329,13 +335,16 @@ export function useDeviceProviders(deviceId?: string): UseDeviceProvidersResult 
       }
       if (event.status === 'error') {
         retryOwner = getDataOwnerGeneration();
-        retryGeneration = !event.unsupported && (
+        const errorCode = extractIpcError(new Error(event.error))?.code;
+        const recoverable = !event.unsupported && (
           isTransientRemoteError(event.error) || isDeviceUnresponsiveRemoteError(event.error)
-          || extractIpcError(new Error(event.error))?.code === 'MODEL_VISIBILITY_NOT_READY'
-        ) ? (deviceGen.get(deviceId) ?? 0) : undefined;
+          || errorCode === 'MODEL_VISIBILITY_NOT_READY'
+        );
+        retryGeneration = recoverable ? (deviceGen.get(deviceId) ?? 0) : undefined;
         setOwnerDeviceId(deviceId);
-        if (event.unsupported || isProviderAccessDeniedError(event.error)
-          || extractIpcError(new Error(event.error))?.code === 'MODEL_VISIBILITY_NOT_READY') setPayload(EMPTY_PAYLOAD);
+        // 只有可重试的瞬时故障可以继续显示有界快照；明确拒绝、移除或
+        // 无效目录等永久失败必须立刻清掉旧模型，不能让界面停在旧结果。
+        if (!recoverable || errorCode === 'MODEL_VISIBILITY_NOT_READY') setPayload(EMPTY_PAYLOAD);
         setLoading(false);
         setError(event.error);
         setUnsupported(event.unsupported);
@@ -454,16 +463,19 @@ export function isDeviceProvidersGenerationCurrent(deviceId: string, generation:
 
 export function evictDeviceProviders(
   deviceId: string,
-  options?: { retainDisplaySnapshot?: boolean },
+  options?: { retainDisplaySnapshot?: boolean; directOnly?: boolean },
 ): number {
-  for (const key of new Set([...cache.keys(), ...inflight.keys(), ...listeners.keys()])) {
-    const route = parseModelCatalogKey(key);
-    if (route && (route.taskDeviceId === deviceId || route.agentDeviceId === deviceId)) {
-      evictDeviceProviders(key, options);
+  // A provisional direct target must not evict the host's healthy routed aliases.
+  if (!options?.directOnly) {
+    for (const key of new Set([...cache.keys(), ...inflight.keys(), ...listeners.keys()])) {
+      const route = parseModelCatalogKey(key);
+      if (route && (route.taskDeviceId === deviceId || route.agentDeviceId === deviceId)) {
+        evictDeviceProviders(key, options);
+      }
     }
   }
   cache.delete(deviceId);
-  expiry.forget(deviceId);
+  if (!options?.retainDisplaySnapshot) expiry.forget(deviceId);
   if (!options?.retainDisplaySnapshot) subscriptionFetchedAt.delete(deviceId);
   inflight.delete(deviceId);
   deviceGen.set(deviceId, (deviceGen.get(deviceId) ?? 0) + 1);

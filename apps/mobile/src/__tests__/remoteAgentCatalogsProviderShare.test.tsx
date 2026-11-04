@@ -28,6 +28,7 @@ const link = vi.hoisted(() => ({
   openLink: vi.fn(async () => undefined),
   readDeviceList: vi.fn(),
   connectionEpoch: 1,
+  rosterVersion: 0,
   status: 'online' as const,
   presenceVersion: 1,
   getPresenceAvailability: vi.fn((_deviceId: string): boolean | null => null),
@@ -84,6 +85,7 @@ beforeEach(async () => {
   clearAllProviderShareCatalogs();
   latest = [];
   link.presenceVersion = 1;
+  link.rosterVersion = 0;
   link.getPresenceAvailability.mockImplementation(() => null);
   link.readDeviceList.mockResolvedValue({ devices: [device('controlled', 'Home Mac'), device('studio', 'Studio Mac')] });
   link.invoke.mockImplementation(async (deviceId: string, channel: string) => {
@@ -105,6 +107,21 @@ afterEach(async () => {
 });
 
 describe('remote Agent catalogs with provider shares', () => {
+  it('clears same-account device rows on a roster invalidation but keeps share catalogs', async () => {
+    const props = { enabled: true, controlledDeviceId: 'controlled', keepDeviceIds: [] };
+    await render(props);
+    expect(latest.map((catalog) => catalog.deviceId)).toContain('studio');
+    expect(latest.map((catalog) => catalog.deviceId)).toContain('share:share-1');
+
+    link.readDeviceList.mockResolvedValue({ devices: [device('controlled', 'Home Mac')] });
+    link.rosterVersion = 1;
+    await act(async () => { root.render(<Probe {...props} />); });
+    for (let i = 0; i < 5; i++) await act(async () => { await Promise.resolve(); });
+
+    expect(latest.map((catalog) => catalog.deviceId)).not.toContain('studio');
+    expect(latest.map((catalog) => catalog.deviceId)).toContain('share:share-1');
+  });
+
   it('lists the controlled computer’s received shares after same-account computers', async () => {
     await render({ enabled: true, controlledDeviceId: 'controlled', keepDeviceIds: [] });
     expect(link.invoke).toHaveBeenCalledWith(
@@ -171,5 +188,23 @@ describe('remote Agent catalogs with provider shares', () => {
     link.invoke.mockImplementation(() => new Promise(() => undefined));
     await render({ enabled: true, controlledDeviceId: 'controlled', keepDeviceIds: [] });
     expect(latest.map((catalog) => catalog.deviceId)).toContain('share:share-1');
+  });
+
+  it('does not mark a kept missing share unavailable while the controlled list is partial', async () => {
+    link.invoke.mockImplementation(async (_deviceId: string, channel: string) => {
+      if (channel === 'maker:provider:list') return { providers: [] };
+      return { ready: false, shares: [] };
+    });
+    await render({ enabled: true, controlledDeviceId: 'controlled', keepDeviceIds: ['share:missing'] });
+    expect(latest.map((catalog) => catalog.deviceId)).not.toContain('share:missing');
+
+    await act(async () => root.unmount());
+    root = createRoot(host);
+    link.invoke.mockImplementation(async (_deviceId: string, channel: string) => {
+      if (channel === 'maker:provider:list') return { providers: [] };
+      return { ready: true, shares: [] };
+    });
+    await render({ enabled: true, controlledDeviceId: 'controlled', keepDeviceIds: ['share:missing'] });
+    expect(latest.find((catalog) => catalog.deviceId === 'share:missing')?.status).toBe('error');
   });
 });

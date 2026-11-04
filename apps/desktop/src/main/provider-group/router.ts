@@ -335,6 +335,12 @@ export function createProviderGroupRouter(deps: ProviderGroupRouterDeps): Provid
       const viewOptions = typeof options === 'string' ? { model: options } : options;
       const model = viewOptions?.model;
       const readSupport = viewOptions?.includeGuestSupport ? guestSupportReader : null;
+      const providerContinuity = (() => {
+        const stamps = resolved.flatMap((entry) => entry.providerContinuity ? [entry.providerContinuity] : []);
+        if (!stamps.length) return undefined;
+        return { stale: stamps.some((stamp) => stamp.stale),
+          remainingMs: Math.min(...stamps.map((stamp) => stamp.remainingMs)) };
+      })();
       return {
         providerId,
         config,
@@ -379,6 +385,7 @@ export function createProviderGroupRouter(deps: ProviderGroupRouterDeps): Provid
             ...(quota.quota && quota.fiveHourTight ? { fiveHourTight: true as const } : {}),
           };
         })),
+        ...(providerContinuity ? { providerContinuity } : {}),
         ...(model ? { model } : {}),
       };
     },

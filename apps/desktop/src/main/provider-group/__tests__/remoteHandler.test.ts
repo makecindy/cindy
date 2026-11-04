@@ -6,7 +6,10 @@ import { describe, expect, it, vi } from 'vitest';
 import { encodeReliableFrames, MAX_FRAME_BYTES, MAX_TRANSPORT_MESSAGE_BYTES, PROVIDER_GROUP_REMOTE_CHANNEL, type Envelope } from '@cindy/device-link';
 
 import type { ProviderGroupConfig, ProviderGroupMember } from '../../../shared/providerGroup';
+import type { ProviderView } from '@cindy/model-providers';
+import type { DeviceLinkDeviceView } from '../../../shared/deviceLinkIpc';
 import {
+  normalizeProviderGroupConfig,
   parseProviderGroupRemoteRequest,
   parseProviderGroupRemoteSessionGroup,
   providerGroupUsageRowsForWire,
@@ -28,7 +31,9 @@ import {
   sharedProviderGroupSize,
   type ProviderGroupRemoteHandlerDeps,
 } from '../remoteHandler';
-import type { ProviderGroupDirectory } from '../directory';
+import { createProviderGroupDirectory, type ProviderGroupDirectory } from '../directory';
+import { readDeviceProviderCatalog } from '../../remote-agent/controller/deviceCatalog';
+import { invokeProviderMetadataContinuity } from '../../device-link/providerMetadataContinuity';
 import {
   createProviderGroupRouter,
   PROVIDER_GROUP_DEFAULT_COOLDOWN_MS,
@@ -36,6 +41,36 @@ import {
   type ProviderGroupPickInput,
   type ProviderGroupRouter,
 } from '../router';
+
+vi.mock('../../clientEndpointsService.js', () => ({ getClientEndpoint: () => 'https://fixture.invalid' }));
+
+// Load only the five real SDK submodules this file's production chain uses. The SDK
+// root index unconditionally assembles client/routedClient/direct runtime unrelated to
+// these tests; this facade re-exports the real values and keeps wire encoding/reader real.
+vi.mock('@cindy/device-link', async () => {
+  const [protocol, transport, metadata, group, share] = await Promise.all([
+    import('../../../../../../packages/device-link/src/protocol.js'),
+    import('../../../../../../packages/device-link/src/transport.js'),
+    import('../../../../../../packages/device-link/src/metadataContinuity.js'),
+    import('../../../../../../packages/device-link/src/providerGroup.js'),
+    import('../../../../../../packages/device-link/src/providerShareCatalog.js'),
+  ]);
+  return {
+    CONTROLLER_CAPABILITY_PROVIDER_LOGO_KINDS_V2: protocol.CONTROLLER_CAPABILITY_PROVIDER_LOGO_KINDS_V2,
+    MAX_FRAME_BYTES: protocol.MAX_FRAME_BYTES,
+    MAX_TRANSPORT_MESSAGE_BYTES: transport.MAX_TRANSPORT_MESSAGE_BYTES,
+    MetadataContinuityReader: metadata.MetadataContinuityReader,
+    PROVIDER_GROUP_REMOTE_CHANNEL: group.PROVIDER_GROUP_REMOTE_CHANNEL,
+    PROVIDER_METADATA_TRUST_MS: metadata.PROVIDER_METADATA_TRUST_MS,
+    PROVIDER_RUNNING_TURNS_FIELD: group.PROVIDER_RUNNING_TURNS_FIELD,
+    encodeReliableFrames: transport.encodeReliableFrames,
+    isProviderAccessDeniedError: metadata.isProviderAccessDeniedError,
+    readProviderMetadataContinuity: metadata.readProviderMetadataContinuity,
+    readProviderRunningTurns: group.readProviderRunningTurns,
+    readProviderShareGuestRunning: share.readProviderShareGuestRunning,
+    scrubSharedProvider: share.scrubSharedProvider,
+  };
+});
 
 const MINI: ProviderGroupMember = {
   key: 'device:mini:anthropic-1a2b3c4d',
@@ -158,6 +193,56 @@ describe('provider-group:remote', () => {
       ok: true, result: await handleProviderGroupRemote(d, 'laptop', args[0]),
     }));
     expect(await client.pick('mini', { ...PICK, agentKind: 'claude-code' })).toEqual({ kind: 'unavailable', usageLimit: { resetAtMs } });
+  });
+
+  it('stamps a group view with the host first-hop budget', async () => {
+    const view = await handleProviderGroupRemote(deps(), 'laptop', { action: 'view', providerId: 'anthropic' });
+    expect(view).toMatchObject({ providerContinuity: { stale: false, remainingMs: 30 * 60_000 } });
+  });
+
+  it.each([
+    { stale: true, remainingMs: 60_000 },
+    { stale: false, remainingMs: 45_000 },
+  ])('inherits the directory source budget (stale=$stale) instead of renewing it', async (source) => {
+    const target = 'device-mini';
+    const provider = {
+      id: 'openai', name: 'OpenAI', agents: ['codex'], connected: true, remoteInvocationEnabled: true,
+      models: { codex: [] }, routing: { codex: {} },
+    } as unknown as ProviderView;
+    const config = normalizeProviderGroupConfig({ strategy: 'least', autoSwitch: true,
+      members: [{ kind: 'device', agentDeviceId: target, providerId: 'openai' }] }, 'openai')!;
+    const device: DeviceLinkDeviceView = {
+      deviceId: target, name: 'Mini', platform: 'darwin', appVersion: '1.0.0', lastSeenAt: null,
+      online: true, busy: false, remoteControlEnabled: true, controlEnabled: true, isSelf: false,
+    };
+    const invoke = async (deviceId: string, channel: string, args: unknown[]) => {
+      if (deviceId !== target || channel !== 'maker:provider:list') throw new Error('unexpected invoke');
+      return invokeProviderMetadataContinuity(deviceId, channel, args, async () => ({
+        ok: true, result: { providers: [provider], providerContinuity: source },
+      }));
+    };
+    const now = 1_000;
+    const directory = createProviderGroupDirectory({
+      listLocalProviders: async () => [], localDeviceName: () => 'O', listDevices: async () => [device],
+      readDeviceProviders: async () => { throw new Error('array reader should not be used'); },
+      readDeviceProviderCatalog: (id, options) => readDeviceProviderCatalog(
+        invoke as Parameters<typeof readDeviceProviderCatalog>[0], id, { groupMember: true, ...options }),
+      listReceivedShares: () => [], isMobilePlatform: () => false, now: () => now, mono: () => 0,
+    });
+    const router = createProviderGroupRouter({ directory, readGroup: () => config, listBindings: () => ({}),
+      isTurnRunning: () => false, now: () => now, random: () => 0 });
+    const externalLoad = createProviderGroupExternalLoad({ now: () => now });
+    const handler = await handleProviderGroupRemote({
+      scope: () => ({ router, externalLoad, isCurrent: () => true }),
+      readGroup: () => config, isRemoteAllowed: () => true, now: () => now,
+      replaceReportedUsage: vi.fn(), sessionGroup: async () => null,
+    }, 'C', { action: 'view', providerId: 'openai' });
+    const client = createProviderGroupRemoteClient(async () => ({ ok: true, result: handler }));
+    const view = await client.view('owner', 'openai');
+    expect(view.providerContinuity).toMatchObject({ stale: source.stale });
+    expect(view.providerContinuity!.remainingMs).toBeGreaterThan(0);
+    expect(view.providerContinuity!.remainingMs).toBeLessThanOrEqual(source.remainingMs);
+    expect(view.providerContinuity!.remainingMs).toBeLessThan(30 * 60_000);
   });
   it('carries the optional detail request across the same-account client and host without probing on ordinary reads', async () => {
     const d = deps();
