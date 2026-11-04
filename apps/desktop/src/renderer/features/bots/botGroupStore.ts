@@ -161,9 +161,12 @@ export function refreshBotGroups(): void {
       if (!isCurrent()) return;
       if (result.ok) { readFailures = 0; listReadVersion++; }
       else scheduleRetryRefresh();
-      // Initial read marks and pruning share storage; a secondary's stale list
-      // must not delete marks for groups already discovered by the main window.
-      if (result.ok && !isSecondaryWindow()) seedBotGroupReadState(visibleGroups(result.groups));
+      // Every mirror seeds missing reads; only main may prune a shared mark
+      // absent from its list. A secondary may have the first live group list.
+      if (result.ok) {
+        if (isSecondaryWindow()) seedBotGroupReadState(visibleGroups(result.groups), false);
+        else seedBotGroupReadState(visibleGroups(result.groups));
+      }
       // An unchanged list keeps its snapshot: subscribers (sidebar, Dock badge) do not re-render.
       if (result.ok && snapshot.loaded && JSON.stringify(visibleGroups(result.groups)) === JSON.stringify(snapshot.groups)) return;
       // 失败时保留上一份列表：侧栏不因一次读失败把所有群清空。
@@ -205,7 +208,8 @@ export function startBotGroupSync(): () => void {
           personalList.set(payload.groupId, payload.listState);
           listReadVersion++;
           const groups = visibleGroups(snapshot.groups);
-          if (!isSecondaryWindow()) seedBotGroupReadState(groups);
+          if (isSecondaryWindow()) seedBotGroupReadState(groups, false);
+          else seedBotGroupReadState(groups);
           applySnapshot({ ...snapshot, groups });
           persistList();
         }

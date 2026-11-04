@@ -781,10 +781,8 @@ async function hydrateFromDatabase(): Promise<void> {
     // retroactively mark every existing conversation as unread. Pruning keeps
     // the stored map from growing with deleted Bots.
     const visibleIds = profiles.map((bot) => bot.id);
-    if (!isSecondaryWindow()) {
-      seedMissingBotReadState(visibleIds);
-      pruneBotReadState(visibleIds);
-    }
+    seedMissingBotReadState(visibleIds);
+    if (!isSecondaryWindow()) pruneBotReadState(visibleIds);
     emit();
   } catch {
     // DB readiness can race the first renderer render during account/bootstrap.

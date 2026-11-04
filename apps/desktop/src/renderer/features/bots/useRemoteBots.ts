@@ -16,6 +16,7 @@ const CACHE_PREFIX = 'cindy.remoteBots.v1.';
 const READ_PREFIX = 'cindy.remoteBotReads.v1.';
 let owner: string | null = null;
 let snapshot: RemoteBot[] = [];
+let acknowledged = new Map<string, number>();
 let cindyIds = new Set<string>();
 const listeners = new Set<() => void>();
 const readKey = (bot: Pick<RemoteBot, 'deviceId' | 'id'>) => JSON.stringify([bot.deviceId, bot.id]);
@@ -26,7 +27,7 @@ function cachedReadPositions(raw: string | null): Map<string, number> {
     const rows: unknown = JSON.parse(raw);
     if (!Array.isArray(rows)) return positions;
     for (const row of rows) {
-      if (!row || typeof row.deviceId !== 'string' || typeof row.id !== 'string'
+      if (!row || row.readAtIsInitial === true || typeof row.deviceId !== 'string' || typeof row.id !== 'string'
         || typeof row.readAt !== 'number' || !Number.isFinite(row.readAt) || row.readAt < 0) continue;
       const key = readKey(row);
       positions.set(key, Math.max(positions.get(key) ?? 0, row.readAt));
@@ -39,15 +40,15 @@ function cachedReadPositions(raw: string | null): Map<string, number> {
 const readEntryPrefix = (account: string) => READ_PREFIX + 'entry.' + JSON.stringify(account) + '.';
 function readEntries(account: string) {
   const prefix = readEntryPrefix(account);
-  const entries: { key: string; identity: string; readAt: number }[] = [];
+  const entries: { key: string; identity: string; readAt: number; initial: boolean }[] = [];
   for (const key of Object.keys(window.localStorage)) {
     if (!key.startsWith(prefix) || key.length > 256 * 1024) continue;
     try {
       const row: unknown = JSON.parse(key.slice(prefix.length));
-      if (!Array.isArray(row) || row.length !== 3 || typeof row[0] !== 'string'
+      if (!Array.isArray(row) || (row.length !== 3 && !(row.length === 4 && row[3] === 'initial')) || typeof row[0] !== 'string'
         || typeof row[1] !== 'string' || typeof row[2] !== 'number' || !Number.isFinite(row[2])
         || row[2] < 0 || window.localStorage.getItem(key) !== '1') continue;
-      entries.push({ key, identity: readKey({ deviceId: row[0], id: row[1] }), readAt: row[2] });
+      entries.push({ key, identity: readKey({ deviceId: row[0], id: row[1] }), readAt: row[2], initial: row.length === 4 });
     } catch { /* Ignore unrelated/corrupt entries. */ }
   }
   return entries;
@@ -55,22 +56,31 @@ function readEntries(account: string) {
 function savedReadPositions(account: string): Map<string, number> {
   // Read the old bounded array for compatibility; new writes never replace it.
   const positions = cachedReadPositions(window.localStorage.getItem(READ_PREFIX + account));
+  const baselines = new Map<string, number>();
   for (const entry of readEntries(account)) {
-    positions.set(entry.identity, Math.max(positions.get(entry.identity) ?? 0, entry.readAt));
+    if (entry.initial) baselines.set(entry.identity, Math.min(baselines.get(entry.identity) ?? Infinity, entry.readAt));
+    else positions.set(entry.identity, Math.max(positions.get(entry.identity) ?? 0, entry.readAt));
   }
+  for (const [key, at] of positions) acknowledged.set(key, Math.max(acknowledged.get(key) ?? 0, at));
+  for (const [key, at] of acknowledged) positions.set(key, Math.max(positions.get(key) ?? 0, at));
+  for (const [key, at] of baselines) if (!positions.has(key)) positions.set(key, at);
   return positions;
 }
-function persistReadPosition(account: string, deviceId: string, id: string, readAt: number): void {
+function persistReadPosition(account: string, deviceId: string, id: string, readAt: number,
+  observed?: { entries: ReturnType<typeof readEntries>; positions: ReadonlyMap<string, number>; initial?: boolean }): void {
   // Fix eviction candidates before committing this acknowledgement. A sibling
   // writing during this operation must not become a new eviction candidate.
-  const entries = readEntries(account);
+  const entries = observed?.entries ?? readEntries(account);
   // Observe legacy reads before committing, but never perform a whole-map RMW.
-  const positions = savedReadPositions(account);
-  readAt = Math.max(positions.get(readKey({ deviceId, id })) ?? 0, readAt);
-  const key = readEntryPrefix(account) + JSON.stringify([deviceId, id, readAt]);
+  const positions = observed?.positions ?? savedReadPositions(account);
+  const initial = observed?.initial ?? false;
+  if (!initial) readAt = Math.max(positions.get(readKey({ deviceId, id })) ?? 0, readAt);
+  const key = readEntryPrefix(account) + JSON.stringify(initial ? [deviceId, id, readAt, 'initial'] : [deviceId, id, readAt]);
   if (key.length + 1 > 256 * 1024) return;
-  entries.push({ key, identity: readKey({ deviceId, id }), readAt });
-  entries.sort((a, b) => b.readAt - a.readAt);
+  entries.push({ key, identity: readKey({ deviceId, id }), readAt, initial });
+  // A first-discovery baseline is not an acknowledgement. Keep the earliest
+  // baseline per identity, unless an explicit acknowledgement already exists.
+  entries.sort((a, b) => Number(a.initial) - Number(b.initial) || (a.initial ? a.readAt - b.readAt : b.readAt - a.readAt));
   const newest = new Map<string, typeof entries[number]>();
   for (const entry of entries) if (!newest.has(entry.identity)) newest.set(entry.identity, entry);
   const retained = new Set<string>();
@@ -90,7 +100,8 @@ function persistReadPosition(account: string, deviceId: string, id: string, read
   for (const entry of entries) if (!retained.has(entry.key)) window.localStorage.removeItem(entry.key);
   // A sibling may have observed the first write and evicted it while this
   // cleanup was paused. Finish with the acknowledgement still committed.
-  if (window.localStorage.getItem(key) !== '1') window.localStorage.setItem(key, '1');
+  if (retained.has(key) && window.localStorage.getItem(key) !== '1') window.localStorage.setItem(key, '1');
+  if (observed) observed.entries.splice(0, observed.entries.length, ...entries.filter(entry => retained.has(entry.key)));
 }
 function mergeReadPositions(rows: RemoteBot[], positions: ReadonlyMap<string, number>): RemoteBot[] {
   return rows.map(bot => {
@@ -105,14 +116,26 @@ const publish = (next: RemoteBot[], readPositions?: ReadonlyMap<string, number>)
   let reads: ReadonlyMap<string, number> = readPositions ?? new Map<string, number>();
   try { if (owner) stored = window.localStorage.getItem(CACHE_PREFIX + owner); } catch { /* unavailable cache */ }
   try { if (owner && !readPositions) reads = savedReadPositions(owner); } catch { /* unavailable cache */ }
-  next = mergeReadPositions(next, cachedReadPositions(stored));
-  next = mergeReadPositions(next, reads);
+  const legacyReads = cachedReadPositions(stored);
+  for (const [key, at] of legacyReads) acknowledged.set(key, Math.max(acknowledged.get(key) ?? 0, at));
+  next = mergeReadPositions(next, legacyReads);
+  // Canonical facts may lower an automatic baseline when an earlier discovery
+  // arrives late. Explicit acknowledgements are retained separately and win.
+  next = next.map(bot => {
+    const key = readKey(bot);
+    const at = reads.get(key);
+    const explicit = acknowledged.get(key);
+    // A reused refresh snapshot must also retain an earlier baseline already
+    // observed during an awaited delegation read. Actual acknowledgements win.
+    return at !== undefined || explicit !== undefined
+      ? { ...bot, readAt: Math.max(at === undefined ? (bot.readAt ?? 0) : Math.min(at, bot.readAt ?? at), explicit ?? 0) } : bot;
+  });
   next = next.map(bot => cindyIds.has(bot.id) ? { ...bot, templateId: 'cindy' } : bot);
   snapshot = next;
   // Keep roster membership/replies single-writer. A stale secondary mirror may
   // update its own projection, but must not replace the main window's cache.
   if (owner && !isSecondaryWindow()) {
-    try { const value = JSON.stringify(next.map((bot) => ({ ...bot, online: false })));
+    try { const value = JSON.stringify(next.map((bot) => ({ ...bot, online: false, readAtIsInitial: !acknowledged.has(readKey(bot)) && reads.has(readKey(bot)) })));
       if (value.length <= 256 * 1024 && value !== stored) window.localStorage.setItem(CACHE_PREFIX + owner, value);
     } catch { /* display cache may be unavailable */ }
   }
@@ -167,7 +190,7 @@ export function useRemoteBotSync(): void {
       } catch { /* Keep the event's valid positions if storage is unavailable. */ }
       // Only read positions cross windows here; stale roster or connection data
       // must not replace this renderer's live projection. Repair older writes too.
-      if (snapshot.some(bot => { const at = positions.get(readKey(bot)); return at !== undefined && at !== bot.readAt; })) {
+      if (event.key === CACHE_PREFIX + requestOwner || snapshot.some(bot => { const at = positions.get(readKey(bot)); return at !== undefined && at !== bot.readAt; })) {
         publish(mergeReadPositions(snapshot, positions));
       }
     };
@@ -179,6 +202,7 @@ export function useRemoteBotSync(): void {
     if (owner !== nextOwner) {
       owner = nextOwner;
       cindyIds = new Set();
+      acknowledged = new Map();
       let cached: RemoteBot[] = [];
       try {
         if (!nextOwner) {
@@ -244,12 +268,23 @@ export function useRemoteBotSync(): void {
         const previous = new Map(snapshot.filter(bot => bot.deviceId === deviceId).map(bot => [bot.id, bot]));
         let savedReads = new Map<string, number>();
         try { if (nextOwner) savedReads = savedReadPositions(nextOwner); } catch { /* unavailable cache */ }
-        const bots = parseRemoteBots(result, deviceId, host.name).map((bot) => ({
-          ...bot,
-          delegatedSessionIds: previous.get(bot.id)?.delegatedSessionIds,
-          templateId: previous.get(bot.id)?.templateId,
-          readAt: previous.get(bot.id)?.readAt ?? savedReads.get(readKey(bot)) ?? bot.lastReplyAt ?? 0,
-        }));
+        // First discovery also establishes a shared baseline. Otherwise another
+        // window discovering a later reply could silently acknowledge it. Reuse
+        // this refresh's storage snapshot rather than rescan for each new row.
+        let firstReads: ReturnType<typeof readEntries> | undefined;
+        const bots = parseRemoteBots(result, deviceId, host.name).map((bot) => {
+          const key = readKey(bot);
+          const readAt = previous.get(bot.id)?.readAt ?? savedReads.get(key) ?? bot.lastReplyAt ?? 0;
+          if (nextOwner && !savedReads.has(key)) {
+            try {
+              firstReads ??= readEntries(nextOwner);
+              persistReadPosition(nextOwner, bot.deviceId, bot.id, readAt, { entries: firstReads, positions: savedReads, initial: true });
+              savedReads.set(key, readAt);
+            } catch { /* Keep the live baseline if display storage is unavailable. */ }
+          }
+          return { ...bot, readAt, delegatedSessionIds: previous.get(bot.id)?.delegatedSessionIds,
+            templateId: previous.get(bot.id)?.templateId };
+        });
         // Delegation reads below share this refresh's read snapshot. Their
         // updates map the current roster, retaining reads received meanwhile.
         publish([...snapshot.filter((bot) => bot.deviceId !== deviceId), ...bots], savedReads);
@@ -349,7 +384,10 @@ export function useRemoteBotSync(): void {
 
 export function markRemoteBotRead(deviceId: string, botId: string, at: number): void {
   if (!Number.isFinite(at) || at < 0) return;
-  if (!snapshot.some((bot) => bot.deviceId === deviceId && bot.id === botId && (bot.readAt ?? -1) < at)) return;
+  if (!snapshot.some((bot) => bot.deviceId === deviceId && bot.id === botId && (bot.readAt ?? -1) <= at)) return;
+  const key = readKey({ deviceId, id: botId });
+  if ((acknowledged.get(key) ?? -1) >= at) return;
+  acknowledged.set(key, Math.max(acknowledged.get(key) ?? 0, at));
   // Read positions must survive even if the main window has not discovered
   // this companion yet. Store only identities/positions, never another roster.
   if (owner) {

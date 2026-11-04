@@ -51,7 +51,8 @@ const readEntryKey = (account: string, deviceId: string, id: string, at: number)
 const secondaryReadKeys = (account: string) => Object.keys(window.localStorage)
   .filter(key => key.startsWith('cindy.remoteBotReads.v1.entry.' + JSON.stringify(account) + '.'));
 function fillReadPartition(account: string, at: number) {
-  let used = 0;
+  // First-discovery watermarks now occupy this same bounded partition.
+  let used = secondaryReadKeys(account).reduce((size, entry) => size + entry.length + 1, 0);
   for (let index = 0; used < 256 * 1024 - 400; index++) {
     const entry = readEntryKey(account, 'removed-device', String(index).padStart(220, 'x'), at);
     window.localStorage.setItem(entry, '1');
@@ -259,6 +260,65 @@ it('preserves the shared roster through stale secondary refreshes and offline re
   expect(restored.result.current[0].lastReplyAt).toBe(200);
   expect(restored.result.current[0].readAt).toBe(150);
   expect(isRemoteBotUnread(restored.result.current[0])).toBe(true);
+});
+
+// Unit / review4463310782: explicit-mark tests missed first discovery with no
+// conversation opened. A later main discovery must not acknowledge reply200.
+it('persists first-discovery reads before another remote mirror sees a later reply', async () => {
+  window.history.replaceState(null, '', '/?secondaryWindow=1');
+  h.devices = [host('a')];
+  const first = collection();
+  Object.assign(first.items[0].display, { lastReplyAt: 100 });
+  h.invoke.mockResolvedValue(first);
+  const secondary = renderHook(useRoster);
+  await waitFor(() => expect(secondary.result.current[0]?.readAt).toBe(100));
+  const account = h.owner;
+  const reply = collection(); Object.assign(reply.items[0].display, { lastReplyAt: 200 });
+  h.invoke.mockResolvedValue(reply);
+  act(() => h.status({ status: 'online' }));
+  await waitFor(() => expect(secondary.result.current[0]?.lastReplyAt).toBe(200));
+  expect(isRemoteBotUnread(secondary.result.current[0])).toBe(true);
+  secondary.unmount();
+  h.owner = account + '-between'; h.devices = []; renderHook(useRoster).unmount();
+  h.owner = account; h.devices = [host('a')];
+  window.history.replaceState(null, '', '/');
+  const main = renderHook(useRoster);
+  await waitFor(() => expect(main.result.current[0]?.lastReplyAt).toBe(200));
+  expect(main.result.current[0].readAt).toBe(100);
+  expect(isRemoteBotUnread(main.result.current[0])).toBe(true);
+});
+
+// Unit / PR8637: a late first discovery must correct a newer automatic
+// baseline already present in both the live projection and shared roster cache.
+it.each([false, true])('merges concurrent first-discovery baselines with an explicit current read: %s', async (read) => {
+  h.devices = [host('a')];
+  const rows = collection(); Object.assign(rows.items[0].display, { lastReplyAt: 200 });
+  let finishTasks!: (value: unknown) => void;
+  const tasks = new Promise(resolve => { finishTasks = resolve; });
+  h.invoke.mockImplementation((_device, channel) => channel === 'maker:bot-delegations:list' ? tasks : Promise.resolve(rows));
+  const main = renderHook(useRoster);
+  await waitFor(() => expect(main.result.current[0]?.readAt).toBe(200));
+  if (read) act(() => markRemoteBotRead('a', 'same-bot', 200));
+  const key = 'cindy.remoteBotReads.v1.entry.' + JSON.stringify(h.owner) + '.' + JSON.stringify(['a', 'same-bot', 100, 'initial']);
+  window.localStorage.setItem(key, '1');
+  act(() => window.dispatchEvent(new StorageEvent('storage', { key, newValue: '1', storageArea: window.localStorage })));
+  expect(main.result.current[0].readAt).toBe(read ? 200 : 100);
+  expect(isRemoteBotUnread({ ...main.result.current[0], lastReplyAt: 150 })).toBe(!read);
+  // A pending delegation completion still holds the older refresh snapshot.
+  await act(async () => finishTasks({ ok: true, delegations: [] }));
+  expect(main.result.current[0].readAt).toBe(read ? 200 : 100);
+  act(() => markRemoteBotRead('a', 'same-bot', 300));
+  const late = key.replace(',100,', ',50,');
+  window.localStorage.setItem(late, '1');
+  act(() => window.dispatchEvent(new StorageEvent('storage', { key: late, newValue: '1', storageArea: window.localStorage })));
+  expect(main.result.current[0].readAt).toBe(300);
+  expect(isRemoteBotUnread(main.result.current[0])).toBe(false);
+  const account = h.owner;
+  main.unmount(); h.owner = account + '-between'; h.devices = []; renderHook(useRoster).unmount();
+  h.owner = account; h.devices = [host('a')];
+  const restored = renderHook(useRoster);
+  await waitFor(() => expect(restored.result.current[0]?.online).toBe(true));
+  expect(restored.result.current[0].readAt).toBe(300);
 });
 
 it('retains a secondary-only companion read across main roster writes without resurrecting its row', async () => {

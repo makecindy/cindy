@@ -156,13 +156,13 @@ describe('bot profile store', () => {
       const hydration = ensureBotProfilesLoaded(true);
       await vi.waitFor(() => expect(list).toHaveBeenCalledOnce());
       // Main has already discovered the newly created Bot while this old list
-      // was in flight. The secondary must neither prune it nor seed old Bots.
+      // was in flight. The secondary may seed missing Bots but cannot prune it.
       markBotRead('new-bot', 100);
       finish([{ id: 'old-bot', name: 'Old' }]);
       await hydration;
       expect(getBotProfiles().map(bot => bot.id)).toEqual(['old-bot']);
       expect(getBotLastReadAt('new-bot')).toBe(100);
-      expect(getBotLastReadAt('old-bot')).toBeNull();
+      expect(getBotLastReadAt('old-bot')).toBeGreaterThan(0);
       location.search = '';
       list.mockResolvedValue([{ id: 'new-bot', name: 'New', unreadCount: 1 }]);
       markBotRead('deleted-bot', 100);
@@ -177,6 +177,39 @@ describe('bot profile store', () => {
       setDataOwnerGeneration(previousOwner.dataOwnerId, previousOwner.generation);
       getBotProfiles();
       vi.unstubAllGlobals();
+    }
+  });
+
+  // Unit / review4463310776: hydrate alone in secondary, then a later reply.
+  // Existing stale-list coverage had main seed first and missed the null map.
+  it('seeds a first-discovered Bot in the only active secondary mirror', async () => {
+    const previousOwner = getDataOwnerGeneration();
+    const storage = new Map<string, string>();
+    const location = { search: '?secondaryWindow=1' };
+    const list = vi.fn().mockResolvedValue([{ id: 'first-bot', name: 'First' }]);
+    const now = vi.spyOn(Date, 'now').mockReturnValue(1000);
+    vi.stubGlobal('window', {
+      location, addEventListener: vi.fn(), removeEventListener: vi.fn(),
+      localStorage: { getItem: (key: string) => storage.get(key) ?? null, setItem: (key: string, value: string) => { storage.set(key, value); Object.defineProperty(window.localStorage, key, { value, enumerable: true, configurable: true }); } },
+      electronAPI: { localDb: { bots: { list } } },
+    });
+    try {
+      setDataOwnerGeneration('first-discovery'); resetBotReadStateForTests(); setBotReadStateOwner('first-discovery');
+      await ensureBotProfilesLoaded(true);
+      expect(getBotLastReadAt('first-bot')).toBe(1000);
+      now.mockReturnValue(2000);
+      list.mockResolvedValue([{ id: 'first-bot', name: 'First', unreadCount: 1 }]);
+      await ensureBotProfilesLoaded(true);
+      expect(list.mock.lastCall?.[0].lastReadAtByBotId['first-bot']).toBe(1000);
+      expect(getBotUnreadCounts()['first-bot']).toBe(1);
+      resetBotReadStateForTests(); setBotReadStateOwner('first-discovery'); location.search = '';
+      await ensureBotProfilesLoaded(true);
+      expect(list.mock.lastCall?.[0].lastReadAtByBotId['first-bot']).toBe(1000);
+      expect(getBotLastReadAt('first-bot')).toBe(1000);
+      expect(getBotUnreadCounts()['first-bot']).toBe(1);
+    } finally {
+      now.mockRestore(); resetBotReadStateForTests();
+      setDataOwnerGeneration(previousOwner.dataOwnerId, previousOwner.generation); getBotProfiles(); vi.unstubAllGlobals();
     }
   });
 

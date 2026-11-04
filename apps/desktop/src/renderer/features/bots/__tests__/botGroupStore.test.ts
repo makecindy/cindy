@@ -61,6 +61,34 @@ afterEach(() => {
 });
 
 describe('group list mirror', () => {
+  // Unit / review4463310770: existing multi-window coverage seeded from main.
+  // The actual secondary mount alone must establish a local group's baseline
+  // at100, keep reply200 unread, and carry that mark through main's return.
+  it('seeds a first-discovered local group in the only active secondary mirror', async () => {
+    window.localStorage.clear(); resetBotReadStateForTests(); setBotReadStateOwner('owner');
+    window.history.replaceState(null, '', '/?secondaryWindow=1');
+    const first = { ...summary('Local group'), lastReplyAt: 100 };
+    listBotGroups.mockResolvedValue({ ok: true, groups: [first] });
+    const secondary = render(createElement(AppWindowSync));
+    try {
+      await act(() => vi.advanceTimersByTimeAsync(0));
+      expect(getBotLastReadAt(botGroupReadKey('g1'))).toBe(100);
+      expect(isBotGroupUnread(getBotGroupListSnapshot().groups[0])).toBe(false);
+      const reply = { ...first, lastReplyAt: 200 };
+      listBotGroups.mockResolvedValue({ ok: true, groups: [reply] });
+      act(() => push({ groupId: 'g1', change: 'messages' }));
+      await act(() => vi.advanceTimersByTimeAsync(300));
+      expect(isBotGroupUnread(getBotGroupListSnapshot().groups[0])).toBe(true);
+      secondary.unmount(); resetBotGroupStoreForTests();
+      resetBotReadStateForTests(); setBotReadStateOwner('owner');
+      window.history.replaceState(null, '', '/');
+      render(createElement(AppWindowSync));
+      await act(() => vi.advanceTimersByTimeAsync(0));
+      expect(getBotLastReadAt(botGroupReadKey('g1'))).toBe(100);
+      expect(isBotGroupUnread(getBotGroupListSnapshot().groups[0])).toBe(true);
+    } finally { cleanup(); resetBotReadStateForTests(); window.localStorage.clear(); }
+  });
+
   // Regression: task menu -> open in new window previously never started the
   // mirror. Existing store-only tests acquired it manually and missed the mount
   // guard. Unit tier, real hooks/store + in-memory IPC; no Electron/user data.

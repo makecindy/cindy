@@ -21,6 +21,8 @@ type ReadStateMap = Record<string, number>;
 
 let activeOwnerId: string | null = null;
 let cache: ReadStateMap | null = null;
+let sessionReads: ReadStateMap = {};
+let sessionSeeds: ReadStateMap = {};
 const subscribers = new Set<() => void>();
 
 function storageKey(): string {
@@ -31,56 +33,77 @@ function storageKey(): string {
 function markPrefix(): string {
   return `${STORAGE_KEY_PREFIX}.mark.${JSON.stringify(activeOwnerId ?? 'signed-out')}.`;
 }
-function storedMarks(): { key: string; botId: string; at: number }[] {
+function storedMarks(): { key: string; botId: string; at: number; initial: boolean }[] {
   const prefix = markPrefix();
-  const marks: { key: string; botId: string; at: number }[] = [];
+  const marks: { key: string; botId: string; at: number; initial: boolean }[] = [];
   for (const key of Object.keys(window.localStorage)) {
     if (!key.startsWith(prefix)) continue;
     try {
       const row: unknown = JSON.parse(key.slice(prefix.length));
-      if (Array.isArray(row) && row.length === 2 && typeof row[0] === 'string' && row[0]
+      if (Array.isArray(row) && (row.length === 2 || (row.length === 3 && row[2] === 'initial')) && typeof row[0] === 'string' && row[0]
         && typeof row[1] === 'number' && Number.isFinite(row[1]) && row[1] > 0
-        && window.localStorage.getItem(key) === '1') marks.push({ key, botId: row[0], at: row[1] });
+        && window.localStorage.getItem(key) === '1') marks.push({ key, botId: row[0], at: row[1], initial: row.length === 3 });
     } catch { /* Ignore malformed display-cache entries. */ }
   }
   return marks;
 }
 
-// Writers refresh synchronously: another window can commit before its storage
-// event invalidates this renderer cache. Getters can keep their cached snapshot.
+// Legacy values remain acknowledgements. Automatic baselines are separate
+// immutable facts: concurrent discoveries choose the earliest baseline, while
+// explicit acknowledgements always advance to the greatest timestamp.
+function legacyReads(): ReadStateMap {
+  const next: ReadStateMap = {};
+  const raw = window.localStorage.getItem(storageKey());
+  let parsed: unknown;
+  try { parsed = raw ? JSON.parse(raw) : null; } catch { /* Ignore corrupt legacy cache. */ }
+  if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+    for (const [botId, at] of Object.entries(parsed)) {
+      if (typeof at === 'number' && Number.isFinite(at) && at > 0) next[botId] = at;
+    }
+  }
+  return next;
+}
 function readStorage(refresh = false): ReadStateMap {
   if (cache && !refresh) return cache;
-  const next: ReadStateMap = refresh ? { ...cache } : {};
+  const seeds = { ...sessionSeeds };
+  const next = { ...sessionReads };
   try {
-    const raw = window.localStorage.getItem(storageKey());
-    let parsed: unknown;
-    try { parsed = raw ? JSON.parse(raw) : null; } catch { /* Read valid facts even if the legacy map is corrupt. */ }
-    if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
-      for (const [botId, at] of Object.entries(parsed as Record<string, unknown>)) {
-        if (typeof at === 'number' && Number.isFinite(at) && at > 0) next[botId] = Math.max(next[botId] ?? 0, at);
-      }
+    for (const [id, at] of Object.entries(legacyReads())) next[id] = Math.max(next[id] ?? 0, at);
+    for (const mark of storedMarks()) {
+      if (mark.initial) seeds[mark.botId] = Math.min(seeds[mark.botId] ?? Infinity, mark.at);
+      else next[mark.botId] = Math.max(next[mark.botId] ?? 0, mark.at);
     }
-    for (const mark of storedMarks()) next[mark.botId] = Math.max(next[mark.botId] ?? 0, mark.at);
   } catch {
-    // Keep known reads when storage is unavailable; an initial failure degrades
-    // to "nothing read yet", never a crash in the sidebar.
-    return cache ?? next;
+    // Preserve known reads and newly seeded session state if storage is blocked.
+    for (const [id, at] of Object.entries(cache ?? {})) next[id] = Math.max(next[id] ?? 0, at);
   }
+  for (const [id, at] of Object.entries(seeds)) next[id] ??= at;
   cache = next;
   return next;
 }
 
-function writeStorage(next: ReadStateMap, removed: readonly string[] = []): void {
+function notify(): void {
+  for (const subscriber of subscribers) subscriber();
+}
+function seedRead(botId: string, at: number): void {
+  sessionSeeds[botId] = Math.min(sessionSeeds[botId] ?? Infinity, at);
+  try {
+    window.localStorage.setItem(markPrefix() + JSON.stringify([botId, at, 'initial']), '1');
+  } catch { /* Preserve the session baseline when storage is unavailable. */ }
+}
+function writeStorage(next: ReadStateMap, removed: readonly string[]): void {
   cache = next;
+  for (const id of removed) { delete sessionSeeds[id]; delete sessionReads[id]; }
   try {
     const removedIds = new Set(removed);
-    const marks = removed.length ? storedMarks().filter(mark => removedIds.has(mark.botId)) : [];
-    window.localStorage.setItem(storageKey(), JSON.stringify(next));
+    const marks = storedMarks().filter(mark => removedIds.has(mark.botId));
+    const legacy = legacyReads();
+    for (const id of removed) delete legacy[id];
+    // Never promote automatic baselines into the legacy acknowledgement map.
+    window.localStorage.setItem(storageKey(), JSON.stringify(legacy));
     for (const mark of marks) window.localStorage.removeItem(mark.key);
-  } catch {
-    // Keep the in-memory value so the current session still behaves correctly.
-  }
-  for (const subscriber of subscribers) subscriber();
+  } catch { /* Keep the in-memory value for this session. */ }
+  notify();
 }
 
 /** Select the owner namespace used by this renderer's Bot read positions. */
@@ -88,6 +111,8 @@ export function setBotReadStateOwner(ownerId: string | null): void {
   if (activeOwnerId === ownerId) return;
   activeOwnerId = ownerId;
   cache = null;
+  sessionReads = {};
+  sessionSeeds = {};
   for (const subscriber of subscribers) subscriber();
 }
 
@@ -108,20 +133,21 @@ export function markBotRead(botId: string, at: number = Date.now()): boolean {
   if (!botId || !Number.isFinite(at) || at <= 0) return false;
   const current = readStorage(true);
   const previous = current[botId] ?? 0;
-  if (at <= previous) return false;
+  if (at < previous) return false;
   at = Math.floor(at);
+  sessionReads[botId] = Math.max(sessionReads[botId] ?? 0, at);
   try {
     window.localStorage.setItem(markPrefix() + JSON.stringify([botId, at]), '1');
     // Only older facts for this identity can be discarded. A concurrent newer
     // acknowledgement or another conversation is never a cleanup candidate.
     for (const mark of storedMarks()) {
-      if (mark.botId === botId && mark.at < at) window.localStorage.removeItem(mark.key);
+      if (!mark.initial && mark.botId === botId && mark.at < at) window.localStorage.removeItem(mark.key);
     }
   } catch { /* Keep the session watermark when storage is unavailable. */ }
   const updated = readStorage(true);
   cache = { ...updated, [botId]: Math.max(updated[botId] ?? 0, at) };
   for (const subscriber of subscribers) subscriber();
-  return true;
+  return at > previous;
 }
 
 /**
@@ -139,9 +165,10 @@ export function seedMissingBotReadState(botIds: readonly string[], at: number = 
   for (const botId of botIds) {
     if (!botId || next[botId] !== undefined) continue;
     next[botId] = Math.floor(at);
+    seedRead(botId, next[botId]);
     changed = true;
   }
-  if (changed) writeStorage(next);
+  if (changed) { readStorage(true); notify(); }
   return changed;
 }
 
@@ -178,6 +205,8 @@ export function subscribeBotReadState(listener: () => void): () => void {
 export function resetBotReadStateForTests(): void {
   activeOwnerId = null;
   cache = null;
+  sessionReads = {};
+  sessionSeeds = {};
   subscribers.clear();
   window.removeEventListener('storage', onStorage);
 }
@@ -221,17 +250,23 @@ export function botGroupUnreadCount(group: GroupReadSummary): number {
 export function isBotGroupUnread(group: GroupReadSummary): boolean {
   return botGroupUnreadCount(group) > 0;
 }
-export function seedBotGroupReadState(groups: readonly GroupReadSummary[]): void {
+export function seedBotGroupReadState(groups: readonly GroupReadSummary[], prune = true): void {
   const current = readStorage(true);
   const next = { ...current };
   const alive = new Set(groups.map(group => botGroupReadKey(group.id)));
-  for (const key of Object.keys(next)) if (key.startsWith('group:') && !alive.has(key)) delete next[key];
+  if (prune) for (const key of Object.keys(next)) if (key.startsWith('group:') && !alive.has(key)) delete next[key];
   for (const group of groups) {
     const key = botGroupReadKey(group.id);
-    if (next[key] === undefined) next[key] = Math.max(1, latestGroupReplyAt(group));
+    if (next[key] === undefined) {
+      next[key] = Math.max(1, latestGroupReplyAt(group));
+      seedRead(key, next[key]);
+    }
   }
   if (JSON.stringify(next) !== JSON.stringify(current)) {
-    writeStorage(next, Object.keys(current).filter(key => next[key] === undefined));
+    const removed = Object.keys(current).filter(key => next[key] === undefined);
+    if (removed.length) writeStorage(next, removed);
+    readStorage(true);
+    notify();
   }
 }
 

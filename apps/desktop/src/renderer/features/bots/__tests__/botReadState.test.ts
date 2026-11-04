@@ -89,6 +89,53 @@ describe('Bot read positions', () => {
     expect(getBotLastReadAt('bot-1')).toBe(5_000);
   });
 
+  it('keeps first-discovery state in this session when storage is unavailable', () => {
+    setBotReadStateOwner('owner-1');
+    expect(getBotLastReadAtMap()).toEqual({});
+    const get = vi.spyOn(Storage.prototype, 'getItem').mockImplementation(() => { throw new Error('blocked'); });
+    const set = vi.spyOn(Storage.prototype, 'setItem').mockImplementation(() => { throw new Error('blocked'); });
+    try {
+      seedMissingBotReadState(['bot-1'], 100);
+      seedBotGroupReadState([{ id: 'g', lastReplyAt: 100 }], false);
+      expect(getBotLastReadAt('bot-1')).toBe(100);
+      expect(isBotGroupUnread({ id: 'g', lastReplyAt: 200 })).toBe(true);
+      markBotRead('bot-1', 300);
+      expect(getBotLastReadAt('bot-1')).toBe(300);
+    } finally { get.mockRestore(); set.mockRestore(); }
+  });
+
+  // Unit / PR8637: pause a real first-discovery commit, let another renderer
+  // discover a newer reply, then restore only persisted state (no module cache).
+  it.each([['bot', false, 200, 100], ['group', false, 200, 100], ['bot', true, 100, 200], ['group', true, 100, 200]] as const)('keeps concurrent %s initialization distinct from explicit reads: %s', (kind, read, outer, inner) => {
+    const id = kind === 'group' ? botGroupReadKey('g') : 'bot-1';
+    const seed = (at: number) => kind === 'group'
+      ? seedBotGroupReadState([{ id: 'g', lastReplyAt: at }], false)
+      : seedMissingBotReadState([id], at);
+    setBotReadStateOwner('owner-1');
+    const nativeSet = Storage.prototype.setItem;
+    let interleave = true;
+    const spy = vi.spyOn(Storage.prototype, 'setItem').mockImplementation(function (this: Storage, key: string, value: string) {
+      if (interleave) {
+        interleave = false;
+        resetBotReadStateForTests(); setBotReadStateOwner('owner-1');
+        seed(inner);
+        if (read) markBotRead(id, 200);
+      }
+      nativeSet.call(this, key, value);
+    });
+    try { seed(outer); } finally { spy.mockRestore(); }
+    expect(interleave).toBe(false);
+    resetBotReadStateForTests(); setBotReadStateOwner('owner-1');
+    expect(getBotLastReadAt(id)).toBe(read ? 200 : 100);
+    if (kind === 'group') expect(isBotGroupUnread({ id: 'g', lastReplyAt: 150 })).toBe(!read);
+    markBotRead(id, 300);
+    // A late automatic discovery must not undo the user's actual read.
+    const key = 'cindy.bots.readState.v1.mark.' + JSON.stringify('owner-1') + '.' + JSON.stringify([id, 50, 'initial']);
+    window.localStorage.setItem(key, '1');
+    resetBotReadStateForTests(); setBotReadStateOwner('owner-1');
+    expect(getBotLastReadAt(id)).toBe(300);
+  });
+
   it('keeps group watermarks on list refresh/restart, prunes deletion, and observes another window', () => {
     setBotReadStateOwner('owner-1');
     seedBotGroupReadState([{ id: 'g', lastReplyAt: 100 }]);
