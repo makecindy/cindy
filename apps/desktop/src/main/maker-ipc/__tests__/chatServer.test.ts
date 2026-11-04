@@ -3085,7 +3085,6 @@ describe('Chat Server result delivery and refresh', () => {
 
     // #8045: exercise the production stop entry point, including server refusals and races.
     it.each([
-      ['missing requester', undefined, 'STOP_OWNERSHIP_UNKNOWN'],
       ['another requester', otherHuman, 'PERMISSION_DENIED'],
       ['no active work', null, 'NOTHING_TO_STOP'],
     ])('does not report a successful stop with %s', async (_label, requester, errorCode) => {
@@ -3094,6 +3093,32 @@ describe('Chat Server result delivery and refresh', () => {
       const from = fixture.requests.length;
       expect(await service.stopRound(roomId)).toMatchObject({ ok: false, errorCode });
       expect(fixture.requests.slice(from).filter(r => r.url.endsWith('/control'))).toEqual([]);
+    });
+
+    // #8045: production /executions omits requester_id. Source authors are not
+    // authority; stop as the signed-in human and observe the server's decision.
+    // Unit: the existing scope matrix only used complete execution metadata.
+    it.each([
+      ['accepted', 200, 'cancelled', true],
+      ['denied', 403, 'queued', false],
+    ] as const)('lets the server authorize missing-requester work: %s', async (_label, status, nextStatus, ok) => {
+      let controlled = false;
+      singleSpeaker(route => {
+        if (route.endsWith('/control')) {
+          controlled = true;
+          return status === 200 ? { body: {} } : { status, body: { error: { code: 'ROLE_REQUIRED' } } };
+        }
+        if (route === `/conversations/${roomId}/executions`) return { body: [
+          { ...execution, bot_id: foreignBot, requester_id: undefined, status: controlled ? nextStatus : 'queued' },
+        ] };
+      });
+      const from = fixture.requests.length;
+      expect(await service.stopRound(roomId)).toMatchObject(ok ? { ok: true } : { ok: false, errorCode: 'PERMISSION_DENIED' });
+      const stops = fixture.requests.slice(from).filter(request => request.url.endsWith('/control'));
+      expect(stops).toHaveLength(1);
+      expect(stops[0].actor).toBeUndefined();
+      const detail = await service.getGroup(roomId);
+      expect(detail.ok && detail.group.round.status).toBe(ok ? 'idle' : 'running');
     });
 
     it.each([

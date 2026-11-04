@@ -3818,7 +3818,6 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
       const refusedPlans = new Map<string, unknown>();
       const refusedExecutions = new Map<string, unknown>();
       let stopped = hadPlanning;
-      let unknownRequester = false;
       try {
         for (const plan of plans.filter(p => ['proposed','running','waiting'].includes(p.status) && (everything || p.creator_id === selfId))) {
           try { await actPlan({ groupId: room, planId: plan.id }, 'stop'); stoppedPlans.add(plan.id); stopped = true; }
@@ -3828,11 +3827,10 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
         for (const e of executions.filter(e => ['queued', 'running', 'needs_input'].includes(e.status) && !(e.plan_id && stoppedPlans.has(e.plan_id)))) {
           // Your own teammate stops its work for others as itself; a request you made, as you.
           const asBot = !everything && e.requester_id !== selfId && ownBot(e.bot_id);
-          if (!everything && !asBot && e.requester_id !== selfId) {
-            // A source message author is not proof of who requested this execution.
-            if (!e.requester_id) unknownRequester = true;
-            continue;
-          }
+          if (!everything && !asBot && e.requester_id && e.requester_id !== selfId) continue;
+          // Some servers omit requester_id from this list. Ask the server to authorize
+          // the signed-in human; never infer ownership from the source message or
+          // act as someone else's teammate. A refusal stays a failed stop below.
           try { await api(`/conversations/${room}/executions/${e.id}/control`, 'POST', { operationId: randomUUID(), action: 'stop' }, asBot ? e.bot_id : everything && e.requester_id !== selfId ? asManager : undefined); }
           catch (error) { if (refused(error)) { refusedExecutions.set(e.id, error); continue; } throw error; }
           stopped = true;
@@ -3863,7 +3861,6 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
             stopped = true;
           }
         }
-        if (unknownRequester) throw new Error('STOP_OWNERSHIP_UNKNOWN');
         if (!stopped) throw new Error(executions.some(e => ['queued', 'running', 'needs_input'].includes(e.status))
           || plans.some(p => ['proposed', 'running', 'waiting'].includes(p.status)) ? 'ROLE_REQUIRED' : 'NOTHING_TO_STOP');
         return { ok: true as const };
