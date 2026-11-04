@@ -425,35 +425,49 @@ export function FoldDesktopDeck({
           <FoldDesktopSkinSwitch skin={skin} onChange={onChange} />
         </View>
         <View
-          style={[
-            { flex: 1, minHeight: 0, marginHorizontal: "4%", marginBottom: 6 },
-            styles.macbookKeywell,
-          ]}
+          style={{
+            flex: 1,
+            minHeight: 0,
+            paddingLeft: safeInsets.left,
+            paddingRight: safeInsets.right,
+          }}
         >
-          <RemoteKeySurface
-            {...keys}
-            key={skin}
-            testID="remoteDesktop.retroKeys"
-            mode="classic"
-            palette={darkColors}
-            renderKeycap={(rect) => (
-              <FoldDesktopKeycap
-                skin={skin}
-                wide={rect.width > rect.height * 1.3}
-              />
-            )}
-          />
-        </View>
-        <View style={{ height: 110 + safeInsets.bottom + bottomReserve }}>
           <View
-            testID="remoteDesktop.palmrest"
             style={[
-              StyleSheet.absoluteFill,
-              styles.macbookTouchpad,
-              { bottom: safeInsets.bottom + bottomReserve + spacing.sm },
+              {
+                flex: 1,
+                minHeight: 0,
+                marginHorizontal: "4%",
+                marginBottom: 6,
+              },
+              styles.macbookKeywell,
             ]}
           >
-            <FoldTouchpad send={send} enabled={enabled} bare />
+            <RemoteKeySurface
+              {...keys}
+              key={skin}
+              testID="remoteDesktop.retroKeys"
+              mode="classic"
+              palette={darkColors}
+              renderKeycap={(rect) => (
+                <FoldDesktopKeycap
+                  skin={skin}
+                  wide={rect.width > rect.height * 1.3}
+                />
+              )}
+            />
+          </View>
+          <View style={{ height: 110 + safeInsets.bottom + bottomReserve }}>
+            <View
+              testID="remoteDesktop.palmrest"
+              style={[
+                StyleSheet.absoluteFill,
+                styles.macbookTouchpad,
+                { bottom: safeInsets.bottom + bottomReserve + spacing.sm },
+              ]}
+            >
+              <FoldTouchpad send={send} enabled={enabled} bare />
+            </View>
           </View>
         </View>
       </View>
