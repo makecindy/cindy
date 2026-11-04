@@ -105,17 +105,20 @@ const allowActionClass = cn(
  * After focus is moved onto the card, a key that is still held from the switch
  * (Enter / Space on a sidebar row, with or without Ctrl/⌘) keeps sending repeat
  * keydowns, now to 「Allow once」 and to the card shortcuts. Swallow those repeats
- * and the matching keyup until the user presses a key again, so approving always
- * takes a fresh press. Returns the disposer.
+ * and the matching keyup until an activation key is released or pressed afresh,
+ * so approving always takes a fresh press. Other keys, modifiers included, do
+ * not end the guard: pressing Ctrl while Enter is still held must not turn the
+ * held Enter into 「Always allow」. Returns the disposer.
  */
 function swallowHeldActivationKeys(): () => void {
   const isActivationKey = (e: KeyboardEvent) => e.key === 'Enter' || e.key === ' ';
   const onKeyDown = (e: KeyboardEvent) => {
+    if (!isActivationKey(e)) return;
     if (!e.repeat) {
+      // A fresh press is deliberate: let it through.
       dispose();
       return;
     }
-    if (!isActivationKey(e)) return;
     e.preventDefault();
     e.stopImmediatePropagation();
   };

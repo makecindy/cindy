@@ -389,4 +389,30 @@ describe('PermissionPrompt 键盘切换时不替按住的按键批准', () => {
     await user.keyboard('{Enter}');
     expect(onRespond).toHaveBeenCalledWith({ behavior: 'allow' });
   });
+
+  // 按住 Enter 切换后、松开前再按下 Ctrl：修饰键不能解除保护，仍在重复的 Enter（此时带
+  // ctrlKey）不能变成「本对话都允许」。userEvent 无法表达「Enter 一直按着再按 Ctrl」
+  // （再写 {Enter>} 会先松开再按），所以按真实事件顺序逐个派发。
+  it('按住 Enter 切换后补按 Ctrl，继续重复的 Enter 不批准本对话', () => {
+    const onRespond = vi.fn();
+    render(<SidebarSwitch onRespond={onRespond} />);
+    const row = screen.getByRole('button', { name: 'sidebar-row' });
+    row.focus();
+    fireEvent.keyDown(row, { key: 'Enter' });
+    const allowOnce = screen.getByRole('button', { name: /allowOnce/ });
+    expect(document.activeElement).toBe(allowOnce);
+
+    fireEvent.keyDown(allowOnce, { key: 'Enter', repeat: true });
+    fireEvent.keyDown(allowOnce, { key: 'Control', ctrlKey: true });
+    fireEvent.keyDown(allowOnce, { key: 'Enter', repeat: true, ctrlKey: true });
+    fireEvent.keyDown(allowOnce, { key: 'Enter', repeat: true, ctrlKey: true });
+    expect(onRespond).not.toHaveBeenCalled();
+
+    // 松开后重新按下 Ctrl+Enter 是一次主动操作，照常生效。
+    fireEvent.keyUp(allowOnce, { key: 'Enter', ctrlKey: true });
+    fireEvent.keyDown(allowOnce, { key: 'Enter', ctrlKey: true });
+    expect(onRespond).toHaveBeenCalledWith(
+      expect.objectContaining({ decisionClassification: 'user_permanent' }),
+    );
+  });
 });
