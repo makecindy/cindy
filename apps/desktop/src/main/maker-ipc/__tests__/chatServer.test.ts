@@ -2478,7 +2478,9 @@ describe('Chat Server result delivery and refresh', () => {
     deps.log = { warn: vi.fn() };
     fixture.handle.mockImplementation((route, _method, body) => body?.action === 'complete'
       ? { status: 400, body: { error: { code: 'INVALID_INPUT', details: { field: 'content[1].text',
-        received: 'private-token-123', message: 'hello', token: 'sk-live-abcdefghijklmnop' } } } }
+        received: 'private-token-123', message: 'hello', token: 'sk-live-abcdefghijklmnop',
+        url: 'https://files.example.com/a.png?sig=Zm9vYmFyc2ln',
+        'not a field': 'nested prose', nested: { received: 'no-space-reply', field: 'content[2].data.fallback' } } } } }
       : response(route));
     await start();
     expect(await service.settleLaneTurn(terminal)).toBe(true);
@@ -2494,13 +2496,15 @@ describe('Chat Server result delivery and refresh', () => {
     const logged = JSON.stringify(vi.mocked(deps.log!.warn).mock.calls);
     expect(logged).toContain('Group settlement refused again');
     expect(logged).toContain('"action":"complete"');
-    expect(logged).toContain('content[1].text');
     expect(logged).toContain('INVALID_INPUT');
-    // Only field-like values are stated; an echoed reply, a bare word and a token stay out of the log.
-    expect(logged).not.toContain('private-token-123');
-    expect(logged).not.toContain('sk-live-abcdefghijklmnop');
-    expect(logged).not.toContain('hello');
-    expect(logged).not.toContain('Finished reply');
+    // Field names and paths are stated; no value under them and no untrusted key is echoed.
+    expect(logged).toContain('content[1].text');
+    expect(logged).toContain('content[2].data.fallback');
+    for (const secret of ['private-token-123', 'sk-live-abcdefghijklmnop', 'hello', 'Finished reply',
+      'files.example.com', 'Zm9vYmFyc2ln', 'nested prose', 'no-space-reply']) {
+      expect(logged).not.toContain(secret);
+    }
+    expect(logged).not.toContain('not a field');
     expect(deps.dispatch).toHaveBeenCalledOnce();
   });
 
@@ -2537,24 +2541,33 @@ describe('Chat Server result delivery and refresh', () => {
 
   // #8598 review: the failure receipt is a result too — a transient failure of it is retried with
   // the existing backoff, so the group still gets the failure notice instead of「处理中」.
-  it('keeps retrying the failure receipt when the server is temporarily unavailable', async () => {
+  it.each([
+    { kind: 'HTTP 503', reply: { status: 503, body: { error: { code: 'UPSTREAM_FAILED' } } }, waitMs: 16_000 },
+    // A rate limit keeps its existing floor: at least 60s even when Retry-After is shorter.
+    { kind: 'HTTP 429', reply: { status: 429, headers: { 'retry-after': '30' }, body: { error: { code: 'RATE_LIMITED' } } }, waitMs: 61_000 },
+    { kind: 'a dropped connection', reply: new Error('ECONNRESET'), waitMs: 16_000 },
+  ])('keeps retrying the failure receipt after $kind', async ({ reply, waitMs }) => {
     deps.log = { warn: vi.fn() };
     let failAttempts = 0;
     fixture.handle.mockImplementation((route, _method, body) => {
       if (body?.action === 'complete') return { status: 400, body: { error: { code: 'INVALID_INPUT' } } };
-      if (body?.action === 'fail' && ++failAttempts === 1) return { status: 503, body: { error: { code: 'UPSTREAM_FAILED' } } };
+      if (body?.action === 'fail' && ++failAttempts === 1) {
+        if (reply instanceof Error) throw reply;
+        return reply;
+      }
       return response(route);
     });
     await start();
     await service.settleLaneTurn(terminal);
     await vi.advanceTimersByTimeAsync(2000);
-    expect(fixture.handle.mock.calls.filter(([, , body]) => body?.action === 'fail')).toHaveLength(1);
+    const failCalls = () => fixture.handle.mock.calls.filter(([, , body]) => body?.action === 'fail');
+    expect(failCalls()).toHaveLength(1);
     // Still held for retry: the run is not forgotten and no second reply is posted.
-    await vi.advanceTimersByTimeAsync(16_000);
-    expect(fixture.handle.mock.calls.filter(([, , body]) => body?.action === 'fail')).toHaveLength(2);
+    await vi.advanceTimersByTimeAsync(waitMs);
+    expect(failCalls()).toHaveLength(2);
     expect(deliveries()).toHaveLength(2);
     await vi.advanceTimersByTimeAsync(120_000);
-    expect(fixture.handle.mock.calls.filter(([, , body]) => body?.action === 'fail')).toHaveLength(2);
+    expect(failCalls()).toHaveLength(2);
     expect(deps.dispatch).toHaveBeenCalledOnce();
   });
 
