@@ -70,7 +70,9 @@ Blend wallpaper with the theme surface, never a fixed black overlay in Light mod
 must not affect text or icons. In-page raised surfaces — composer, message bubbles,
 tool and table-header cards, page cards, inputs and the selected sidebar row —
 tint the wallpaper with their own token at 72% (Light) / 64% (Dark) instead of covering
-it (user request, 2026-11-03). Higher visibility raises that opacity so the artwork
+it (user request, 2026-11-03), in the CINDY themes only: their translucent-ink text keeps its
+contrast on any wallpaper, while other built-in themes use fixed text colors calibrated
+against solid surfaces and keep them opaque. Higher visibility raises that opacity so the artwork
 contributes at most 16% under the surface, keeping the tertiary text tier at the 3:1
 floor over any wallpaper (84% at 100% visibility). Fill only, no `backdrop-filter`, which
 would become the containing block for the composer's fixed palettes. Floating layers
