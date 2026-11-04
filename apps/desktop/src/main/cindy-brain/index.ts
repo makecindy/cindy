@@ -3407,7 +3407,16 @@ export function notifyGhostSessionEvent(
   void (async () => {
     try {
       const owner = ghostOwnerScope.capture();
-      if (!(await getGhostSubscriptionGateway().hasSubscribers('session'))) return;
+      if (!(await getGhostSubscriptionGateway().hasSubscribers('session'))) {
+        // Even without listeners, advance the focus tracker's deduplication state.
+        // Otherwise disabling at A, visiting B, then enabling and returning to A
+        // suppresses a real switch. The claim retains generation/Lead rechecks;
+        // no eligibility lookup, plugin wake, or notification is needed here.
+        if (ghostOwnerScope.isCurrent(owner) && ghostOwnerScope.isStable(owner)) {
+          await shouldPublish();
+        }
+        return;
+      }
       // created / archived 与 turn 事件同口径；switched 额外允许归一后的 Orca Lead。
       // retry 视为不投，生命周期事件不值得引入重试机制。
       const info = await isGhostEligibleSession(

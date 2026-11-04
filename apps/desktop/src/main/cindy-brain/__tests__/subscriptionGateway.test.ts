@@ -34,6 +34,16 @@ import {
   type InstalledGhost,
 } from '../../../shared/ghost';
 import { installedGhostStoragePart } from '../../../shared/pluginIdentity.js';
+import { createGhostProductionCallbacks } from './ghostProductionCallbacksFixture.js';
+
+const createSessionNotification = createGhostProductionCallbacks<{
+  notifyGhostSessionEvent(
+    kind: 'switched',
+    data: { sessionId: string },
+    claim: () => Promise<boolean>,
+    releaseRaw: () => void,
+  ): void;
+}>({ functions: ['notifyGhostSessionEvent'] });
 
 describe('did-session-switched primary session resolution', () => {
   it('allows ordinary sessions and Orca leads, but never workers or background sessions', () => {
@@ -327,6 +337,46 @@ const TURN_DATA = { sessionId: 's1', agent: 'claude-code' };
 // synchronous scan, and must not reuse another owner's pending discovery.
 // Existing fan-out tests only exercise synchronous discovery / wake boundaries.
 describe('asynchronous notification discovery', () => {
+  // Unit regression (PR #8752): the gateway-only preflight tests did not cover
+  // focus bookkeeping across an empty subscription set. A -> disabled B -> A
+  // must deliver both A events through the production notification entry.
+  it('advances focus without subscribers so re-enabling does not suppress a return', async () => {
+    let enabled = true;
+    const subscriber = ghost('a', { topics: ['session'] });
+    const { gw, sent, running } = makeGateway({
+      listGhostsAsync: async () => enabled ? [subscriber] : [],
+    });
+    running.add('a');
+    const eligible = vi.fn(async () => ({ outcome: 'eligible' }));
+    const { notifyGhostSessionEvent } = createSessionNotification({
+      ghostOwnerScope: { capture: () => 1, isCurrent: () => true, isStable: () => true },
+      getGhostSubscriptionGateway: () => gw,
+      isGhostEligibleSession: eligible,
+    });
+    const tracker = createGhostPrimarySessionFocusTracker(
+      async (id) => id,
+      (sessionId, claim, releaseRaw) => notifyGhostSessionEvent('switched', { sessionId }, claim, releaseRaw),
+    );
+    tracker.note('A');
+    await vi.waitFor(() => expect(sent).toHaveLength(1));
+
+    enabled = false;
+    tracker.note('B');
+    // Drain the async focus/notification chain without sleeping or assuming
+    // how many Promise continuations the implementation uses.
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    expect(eligible).toHaveBeenCalledTimes(1);
+    expect(sent).toHaveLength(1);
+
+    enabled = true;
+    tracker.note('A');
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    expect(sent.map(({ payload }) => 'data' in payload ? payload.data : undefined)).toEqual([
+      { sessionId: 'A' }, { sessionId: 'A' },
+    ]);
+    expect(eligible).toHaveBeenCalledTimes(2);
+  });
+
   it('preflights the requested topic without waking unrelated or disabled plugins', async () => {
     const { gw, deps } = makeGateway({ listGhostsAsync: async () => [
       ghost('idle', { topics: ['session'] }), ghost('off', { topics: ['turn'] }, false),
