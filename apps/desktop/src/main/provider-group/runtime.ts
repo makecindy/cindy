@@ -300,6 +300,14 @@ export function getProviderGroupRemoteGroups(): ProviderGroupRemoteGroups {
     async readGroup(ownerDeviceId, providerId, options) {
       const scope = continuityClient?.scope();
       const epoch = continuityClient?.scopeEpoch(ownerDeviceId, providerId);
+      // A different account/endpoint generation means the reply may belong to the
+      // previous account, so it is never used.
+      const scopeChanged = () => !!continuityClient && continuityClient.scope() !== scope;
+      // Only the destructive paths below (retiring acknowledged rows) need this
+      // fence: a routing generation which a concurrent pick created or moved
+      // during the read means those rows may be newer than this reply.
+      const routesReplaced = () => !!continuityClient
+        && continuityClient.scopeEpoch(ownerDeviceId, providerId) !== epoch;
       const targetScope = captureProviderMetadataContinuityScope(ownerDeviceId);
       // A full target registry deliberately makes an unregistered target fail the
       // offline capture, while invokeProviderMetadataContinuity still permits a
@@ -307,6 +315,8 @@ export function getProviderGroupRemoteGroups(): ProviderGroupRemoteGroups {
       // capture was already false before the read. Once it was true, a later false
       // still retires the old snapshot.
       const targetScopeAtStart = targetScope();
+      // An explicit denial observed during the read retires its reply.
+      const erased = () => targetScopeAtStart && !targetScope();
       let catalog: ProviderGroupCatalogRead;
       try {
         catalog = directoryFacade.readDeviceCatalogState
@@ -315,30 +325,36 @@ export function getProviderGroupRemoteGroups(): ProviderGroupRemoteGroups {
       } catch {
         // A late directory result from an old local generation must not clear
         // a newer generation's acknowledged rows for the same remote owner.
-        if ((targetScopeAtStart && !targetScope()) || (continuityClient && (continuityClient.scope() !== scope
-          || continuityClient.scopeEpoch(ownerDeviceId, providerId) !== epoch))) return undefined;
+        if (erased() || scopeChanged() || routesReplaced()) return undefined;
         // Only a new task's first assignment may use the config carried by an
         // earlier pick. Existing-task failover must wait for the owner.
         return options?.allowSnapshot
           ? continuityClient?.readConfig(ownerDeviceId, providerId) ?? undefined
           : undefined;
       }
-      if ((targetScopeAtStart && !targetScope()) || (continuityClient && (continuityClient.scope() !== scope
-        || continuityClient.scopeEpoch(ownerDeviceId, providerId) !== epoch))) return undefined;
+      if (erased() || scopeChanged()) return undefined;
       const view = catalog.views.find((candidate) => candidate.id === providerId);
       if (!view) {
         // A cached or stale reply is not the owner's confirmation that the group is gone.
         // Only a read started by this call with a current (non-stale) directory may
         // retire acknowledged routes; otherwise keep them for the service snapshot path.
-        if (!catalog.freshRead || catalog.stale) return undefined;
+        if (!catalog.freshRead || catalog.stale || routesReplaced()) return undefined;
         continuityClient?.forgetGroup(ownerDeviceId, providerId);
         return null;
       }
       const config = readProviderGroupSummary((view as { group?: unknown }).group, providerId);
       // A stale reply is a snapshot, not current membership: it may predate a
       // member picked later, so it cannot authorize or release a binding.
-      if (config) return catalog.stale ? undefined : config;
-      if (!catalog.freshRead || catalog.stale) return undefined;
+      if (config) {
+        // Only a new task's first assignment may use this live reply when a
+        // concurrent pick created or replaced the routing generation during the
+        // read: it writes a fresh binding from the owner's current config. An
+        // existing binding's reconciliation stays conservative instead, because
+        // a reply older than those routes must not retire them.
+        if (routesReplaced() && options?.allowSnapshot !== true) return undefined;
+        return catalog.stale ? undefined : config;
+      }
+      if (!catalog.freshRead || catalog.stale || routesReplaced()) return undefined;
       continuityClient?.forgetGroup(ownerDeviceId, providerId);
       return null;
     },

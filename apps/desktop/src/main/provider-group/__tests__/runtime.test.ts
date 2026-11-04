@@ -213,6 +213,65 @@ describe('remote group continuity wiring', () => {
   });
 
   // Test value
+  // - Production entry: getProviderGroupRemoteGroups().readGroup (used by service.assignBeforeStart
+  //   -> assignFromRemoteGroup for a new task) racing a first group pick that creates the local
+  //   routing generation for the same owner/provider.
+  // - Rule: provider-groups.md short-outage section: a live directory reply is the owner's current
+  //   membership; only a replaced generation may keep it from clearing acknowledged routes.
+  // - Gap: the post-read generation guard compared "no generation yet" with the generation the
+  //   concurrent pick created, so a valid live config was discarded and the new task fell back to
+  //   running directly on the group owner instead of a member.
+  // - Minimal failing input: readGroup({allowSnapshot:true}) in flight, one concurrent pick creates
+  //   the generation, then the live directory reply carries the group summary.
+  // - Tier: unit (real runtime/client/directory wiring; transport and directory reply controlled).
+  it('keeps a live group config for a new task when a concurrent pick creates the routing generation', async () => {
+    owner = 'continuity-live-generation-owner';
+    io.invoke.mockReset();
+    io.catalog.mockReset();
+    io.catalogState.mockReset();
+    io.status.mockReturnValue('online');
+    const config = normalizeProviderGroupConfig({ strategy: 'least', autoSwitch: true, allowFast: false,
+      members: [{ kind: 'device', agentDeviceId: 'live-executor', providerId: 'openai' }] }, 'openai')!;
+    const member = config.members[0]!;
+    const releases: Array<(views: ProviderView[]) => void> = [];
+    io.catalogState.mockImplementation(() => new Promise(resolve => {
+      releases.push(views => resolve({ views, stale: false }));
+    }));
+    let finishPick!: () => void;
+    const pickPending = new Promise<void>(resolve => { finishPick = resolve; });
+    io.invoke.mockImplementation(async (_device: string, _channel: string, args: unknown[]) => {
+      const request = args[0] as { action?: string };
+      if (request.action !== 'pick') return { ok: true, result: {} };
+      await pickPending;
+      return { ok: true, result: { kind: 'member', label: 'M',
+        member: { key: member.key, kind: member.kind, agentDeviceId: member.agentDeviceId,
+          providerId: member.providerId },
+        continuity: { id: 'live-generation-grant', remainingMs: 1_800_000, config } } };
+    });
+    const groups = getProviderGroupRemoteGroups();
+    const newTaskRead = groups.readGroup('live-generation-owner', 'openai', { allowSnapshot: true });
+    // An existing task's binding reconciliation stays conservative instead of
+    // acting on a reply which predates the routes a concurrent pick installed.
+    const existingTaskRead = groups.readGroup('live-generation-owner', 'openai');
+    const concurrentPick = groups.pick('live-generation-owner', { sessionId: 'live-generation-task',
+      providerId: 'openai', agentKind: 'codex', model: 'model', exclude: [], allowOffline: true });
+    expect(await groups.readSnapshotGroup!('live-generation-owner', 'openai')).toBeNull();
+    const view: ProviderView & { group: ReturnType<typeof providerGroupSummaryForWire> } = {
+      id: 'openai', name: 'OpenAI', source: 'builtin',
+      agents: ['codex'], models: { codex: [] },
+      routing: { codex: { upstream: 'https://api.openai.com', authStrategy: 'oauth-token' } },
+      auth: { method: 'oauth', native: 'codex' },
+      connected: true, group: providerGroupSummaryForWire(config) };
+    for (const release of releases) release([view]);
+    await expect(newTaskRead).resolves.toEqual(config);
+    await expect(existingTaskRead).resolves.toBeUndefined();
+    finishPick();
+    await expect(concurrentPick).resolves.toMatchObject({
+      kind: 'member', member: { agentDeviceId: 'live-executor' },
+    });
+  });
+
+  // Test value
   // - Production entry: getProviderGroupRemoteGroups().pick (used by provider-group/service.ts).
   // - Rule: provider-groups.md short-outage section: a temporarily unavailable O must not erase a
   //   context already acknowledged by O and M; a new task may still be admitted on M.
