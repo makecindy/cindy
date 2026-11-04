@@ -85,6 +85,7 @@ flowchart LR
 | `cindy-host` Node 进程与 `GET /health` | 部分 | `apps/host/src/main.ts` 绑定 `127.0.0.1:3456`；`CINDY_HOST_OWNER` 存在时先取 profile Runtime 租约再打开真实 owner 库。实测：持锁进程存在时第二个 Host 报告 `blocked` 且不碰数据库。 |
 | 真实 Maker/Agent Runtime | 未实现 | 当前 `getMaker()` 生产装配仍在 Electron Main；不能把空 Maker、评测 Runner 或 API key adapter 冒充生产 Runtime。需先抽出共享 factory 与单 Runtime 所有权门。 |
 | 现有 session/message SQLite 与历史恢复 | 部分 | Host 执行了全部迁移（临时 profile 实测 145 条 migration / 87 张表），并通过 `OwnerSessionStorage` 创建与重读同一条任务；重启 Host 后 `/health` 仍报告 `sessions: 1`。消息写入、Tool 结果、Desktop 同库并发互斥尚未验证。 |
+| Cindy 登录（`cindy-host login`） | 部分 | 复用 Desktop 的 authorize URL、PKCE、托管回调轮询与 session 记录；实测已生成与 Desktop 同形的 authorize URL 并完成对真实 auth 服务的 `getProviders`。**用户交互后的 code 兑换尚未实测**。 | 
 | Cindy OAuth 与凭据持久化 | 部分 | 凭据层已实现：Host 直接读写 Desktop 现有 `safeStorage` 密文（Chromium OSCrypt v11），并已采用现有登录态（实测 `/health` 报告 `account.authenticated=true`、`realm=global`，未新建登录、未触碰数据库）。双向兼容：Desktop 密文可被 Host 解密，Host 写入的密文可被 Electron 解出。OAuth 登录与令牌续期流程仍未迁出。 |
 | Claude Code / Codex / Pi Harness | 部分 | 二进制就绪查询已抽成 `agent-binaries/binaryStatus.ts`，Desktop 与 Host 共用同一判定；实测 Host `/health` 对三种 Harness 均报告可用。Agent 启动所需的认证适配、代理、目录与 MCP 注入尚未迁出。 |
 | Plugin 执行与状态 | 未实现 | `cindy-brain`/plugin manager 依赖 Main 宿主接口与 Electron IPC；存量 plugin 向下兼容是阻断条件。 |
@@ -106,6 +107,13 @@ flowchart LR
 尚未迁移、明确记为 TODO 的 Desktop-only 步骤：数据库瘦身 worker、dev 反射式 drift 修复/nuke、对话框与 renderer 广播、`initializeCodexHistoryPromptState`、对话工作区修复、Orca 悬空 Lead 对账、周期 `PRAGMA optimize`。
 
 `localDb/index.ts` 的 `ensureReady` 与 `startupCore.ts` 目前共享 lease/migration/CJK/vec 原语但保留两处编排；在 Electron 去核心化（阶段 5）前必须收敛为同一实现。
+
+## 登录流程（阶段 2）
+
+- `cindy-host login [--region=cn|global] [--method=<google|apple>]`：读取与 Desktop 相同的 `config/endpoint*.json`，构造 `CindyAuthClient`（`client_type=desktop`、本机 deviceId、全局 fetch），生成 PKCE 与 `client_state`，走托管回调轮询（无 `authDesktopCallbackUrl` 时回退本机 loopback 服务），成功后把 session 记录写回同一 `safeStorage` 文件。
+- 只支持浏览器社交登录；email/phone 验证码流程未实现，遇明确报错，不静默降级。
+- 未验证：真实浏览器完成授权后的 code 兑换与落盘、重启免登录、与 Desktop 交替运行。
+- 实现：`apps/host/src/auth/{endpoints,login}.mjs`、`apps/host/src/login-cli.mjs`；测试 `login.test.mjs`（3 例）。
 
 ## 凭据存储（OSCrypt）实测结论
 

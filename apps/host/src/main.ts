@@ -9,7 +9,20 @@ import { openOwnerDatabase, OwnerDatabaseError } from '../../desktop/src/main/lo
 import { resolveHostDataDir, resolveHostRegion } from './profile-path.mjs';
 import { acquireHostRuntimeLease, type HostRuntimeLease } from './runtime-lock.js';
 import { readAdoptedSessionState } from './credentials/session.mjs';
+import { runLoginCommand } from './login-cli.mjs';
 
+const command = process.argv[2];
+if (command === 'login') {
+  try {
+    await runLoginCommand(process.argv.slice(3));
+  } catch (error) {
+    console.error(`cindy-host login failed: ${error instanceof Error ? error.message : String(error)}`);
+    process.exitCode = 1;
+  }
+} else if (command !== undefined && command !== 'serve') {
+  console.error(`unknown command: ${command}\nusage: cindy-host [serve|login [--region=cn|global] [--method=<id>]]`);
+  process.exitCode = 2;
+} else {
 const PORT = 3456;
 /** Repo layout: apps/host/src → apps/desktop/{drizzle,native}. */
 const desktopRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../desktop');
@@ -177,3 +190,4 @@ const stop = () => {
 };
 process.once('SIGINT', stop);
 process.once('SIGTERM', stop);
+}
