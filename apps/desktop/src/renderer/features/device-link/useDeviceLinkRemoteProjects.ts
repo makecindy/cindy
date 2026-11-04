@@ -57,7 +57,12 @@ import {
 import { revokedDevicesStore } from './revokedDevicesStore';
 import { unresponsiveDevicesStore } from './unresponsiveDevicesStore';
 import { subscribeDeviceLinkDeviceRemoval } from './useDeviceLinkDeviceList';
-import { collectSessionListSnapshot, refreshRemoteDeviceSessions } from './refreshRemoteSessions';
+import {
+  collectSessionListSnapshot,
+  refreshRemoteDeviceSessions,
+  remoteScheduleIndexLastRead,
+  remoteScheduleIndexReadSeq,
+} from './refreshRemoteSessions';
 import {
   cancelSessionListPersist,
   clearCachedDevice,
@@ -451,8 +456,10 @@ export function useDeviceLinkRemoteProjects(
 
     let disposed = false;
     const scheduleEventRefreshes = new Map<string, { timer: ReturnType<typeof setTimeout>; firstAt: number }>();
-    const scheduleIndexReadAt = new Map<string, number>();
-    const scheduleEventsMissed = new Set<string>();
+    /** Count of schedule events skipped while the window was hidden or idle. */
+    const scheduleEventsMissed = new Map<string, number>();
+    const markScheduleEventMissed = (deviceId: string) =>
+      scheduleEventsMissed.set(deviceId, (scheduleEventsMissed.get(deviceId) ?? 0) + 1);
     const finishInitialDiscovery = remoteProjectsStore.beginInitialDiscovery();
     const initialDiscoveryTimer = setTimeout(finishInitialDiscovery, INITIAL_DISCOVERY_WAIT_MS);
     /**
@@ -646,10 +653,8 @@ export function useDeviceLinkRemoteProjects(
       // bootstrap 期间被撤销(subscribe 成功、list 被拒)→ refreshRemoteDeviceSessions 返 'revoked'
       // (而非静默 give-up)→ 这里 handleRevoked,而不是继续预取能力 / 清撤销标记无视拒绝。
       void refreshAliases(deviceId);
-      const bootstrapReadAt = Date.now();
       const result = await refreshRemoteDeviceSessions(deviceId, name, { scope: 'both' });
       if (!canContinue()) return;
-      if (result === 'ok') scheduleIndexReadAt.set(deviceId, bootstrapReadAt);
       if (result === 'revoked') return void handleRevoked(deviceId);
       if (result === 'gave-up') {
         // 永久错误（如旧被控端 CHANNEL_NOT_ALLOWED）或瞬态重试耗尽：不是权威空列表，
@@ -921,16 +926,20 @@ export function useDeviceLinkRemoteProjects(
         // sessions:list 是 200 条有界窗口；refresh 层会保留窗口外 active 行，并有界补查
         // 缺席缓存 id 的终态，不能直接把响应缺席解释成删除。
         void refreshAliases(deviceId);
-        const readAt = Date.now();
-        const withSchedule = scheduleEventsMissed.has(deviceId)
-          || readAt - (scheduleIndexReadAt.get(deviceId) ?? 0) >= PERIODIC_SCHEDULE_INDEX_MS;
+        const seqBefore = remoteScheduleIndexReadSeq();
+        const missed = scheduleEventsMissed.get(deviceId) ?? 0;
+        // A negative age means the clock moved back; read rather than trust it.
+        const indexAge = Date.now() - (remoteScheduleIndexLastRead(deviceId)?.startedAt ?? 0);
+        const withSchedule = missed > 0 || indexAge < 0 || indexAge >= PERIODIC_SCHEDULE_INDEX_MS;
         const result = await refreshRemoteDeviceSessions(deviceId, name, {
           scope: withSchedule ? 'both' : 'sessions',
           snapshotMode: 'merge',
           coalescingMode: 'weak',
         });
-        if (withSchedule && result === 'ok') {
-          scheduleIndexReadAt.set(deviceId, readAt);
+        // Only a read started after these events were skipped covers them; events
+        // skipped during this read stay pending for the next reconcile.
+        if (missed > 0 && (remoteScheduleIndexLastRead(deviceId)?.seq ?? 0) > seqBefore
+          && scheduleEventsMissed.get(deviceId) === missed) {
           scheduleEventsMissed.delete(deviceId);
         }
         if (result === 'revoked' && !disposed) handleRevoked(deviceId);
@@ -1039,7 +1048,7 @@ export function useDeviceLinkRemoteProjects(
         const watching =
           periodicReconcileActiveRef.current && (mainPresenceRef.current?.isActive() ?? true);
         if (!watching) {
-          scheduleEventsMissed.add(push.deviceId);
+          markScheduleEventMissed(push.deviceId);
           return;
         }
         // 与手机同一份事件投影：运行诊断、静默提醒这类不改索引的事件不重拉，
@@ -1056,12 +1065,10 @@ export function useDeviceLinkRemoteProjects(
           if (disposed || !eligible.has(deviceId)) return;
           // Hidden again: the wake refresh (scope both) catches up instead.
           if (!(periodicReconcileActiveRef.current && (mainPresenceRef.current?.isActive() ?? true))) {
-            scheduleEventsMissed.add(deviceId);
+            markScheduleEventMissed(deviceId);
             return;
           }
-          const readAt = Date.now();
           void refreshRemoteDeviceSessions(deviceId, eligible.get(deviceId), { scope: 'schedule' }).then((result) => {
-            if (result === 'ok') scheduleIndexReadAt.set(deviceId, readAt);
             if (result === 'revoked' && !disposed) handleRevoked(deviceId);
           });
         }, delay);
