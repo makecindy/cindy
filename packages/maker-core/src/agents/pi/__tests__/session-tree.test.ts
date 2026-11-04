@@ -107,12 +107,21 @@ describe('pi session tree adapter', () => {
   // (BadRequest.TooLarge), not 413. requestTooLarge decides whether a user retry compacts
   // before resending; missing it resends the same image history and the task stops at
   // "Could not complete the reply". Existing cases cover only the 413 and buffer wordings.
+  // #8724: a provider that caps images per request answers 400 "too many images in request"
+  // once a screenshot loop fills the quota. Tokens stay healthy so nothing else triggers
+  // compaction, and a plain retry resends the same image set. Only the count-specific wording
+  // counts: the bare invalid_media code also covers corrupt or unsupported attachments, where
+  // compacting healthy history and latching a rollover would be wrong (Codex review P1).
   // Each spelling is a separate row so dropping either alternative fails that row alone;
   // the transport-failure row keeps the boundary from widening. The combined production
-  // payload is covered end-to-end by the gateway-400 mode in pi-provider-routing.test.ts.
+  // payloads are covered end-to-end by the gateway-400 and image-quota-400 modes in
+  // pi-provider-routing.test.ts.
   it.each([
     { spelling: 'the BadRequest.TooLarge error type', errorMessage: '400 {"error":{"message":"Bad Request","type":"BadRequest.TooLarge"}}', requestTooLarge: true },
     { spelling: 'the max-bytes request-body wording', errorMessage: '400 {"error":{"message":"Exceeded limit on max bytes to request body : 16777216"}}', requestTooLarge: true },
+    { spelling: 'the image-quota message', errorMessage: '400 {"message":"too many images in request"}', requestTooLarge: true },
+    { spelling: 'the image-quota reason code', errorMessage: '400 {"message":"request rejected","code":"invalid_media","trace_id":"a13e4275cf17ae3925442fac10206177"}', requestTooLarge: false },
+    { spelling: 'a corrupt attachment with the same code', errorMessage: '400 {"message":"image could not be decoded","type":"invalid_media"}', requestTooLarge: false },
     { spelling: 'an unrelated transport failure', errorMessage: 'upstream returned 502 Bad Gateway', requestTooLarge: false },
   ])('scores $spelling as requestTooLarge=$requestTooLarge', ({ errorMessage, requestTooLarge }) => {
     expect(piRetryBranch(retryTree([{
