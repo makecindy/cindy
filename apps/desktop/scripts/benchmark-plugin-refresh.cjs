@@ -20,16 +20,19 @@ async function connectInspector(port) {
   ws.onmessage = ({ data }) => {
     const m = JSON.parse(data);
     if (m.id) {
-      const p = pending.get(m.id); pending.delete(m.id);
-      if (!p) return;
-      clearTimeout(p.timer);
-      if (m.error) p.reject(new Error(JSON.stringify(m.error))); else p.resolve(m.result);
+      const complete = pending.get(m.id); pending.delete(m.id);
+      if (typeof complete !== 'function') return;
+      complete(m);
     } else listeners.get(m.method)?.(m.params);
   };
   const send = (method, params = {}) => new Promise((resolve, reject) => {
     const requestId = ++id;
     const timer = setTimeout(() => { pending.delete(requestId); reject(Error(`Inspector timeout: ${method}`)); }, 20_000);
-    pending.set(requestId, { resolve, reject, timer }); ws.send(JSON.stringify({ id: requestId, method, params }));
+    pending.set(requestId, response => {
+      clearTimeout(timer);
+      if (response.error) reject(new Error(JSON.stringify(response.error))); else resolve(response.result);
+    });
+    ws.send(JSON.stringify({ id: requestId, method, params }));
   });
   const evaluate = async (expression, awaitPromise = false) => {
     const r = await send('Runtime.evaluate', { expression: `globalThis.__benchEvaluation = (${expression})`, awaitPromise, returnByValue: true }).catch(error => { throw new Error(expression + ': ' + error.message); });
