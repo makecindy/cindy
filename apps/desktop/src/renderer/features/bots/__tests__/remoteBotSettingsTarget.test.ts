@@ -99,6 +99,42 @@ it('keeps actual model changes usable on older hosts but refuses unsupported sam
   expect(sent(1).input.args?.patch).not.toHaveProperty('acceptModelSelection');
 });
 
+// Unit regression: hosts can declare model selection without accepting its newer
+// top-level location mirror. Exercise the production transport against that old
+// field boundary, keeping the chain's execution locations in the saved readback.
+it.each([false, true])('saves model locations and restores defaults on old hosts (accept selection: %s)', async (acceptsSelection) => {
+  const { target, profiles } = create(acceptsSelection ? [...ALL_OPS, 'profile.acceptModelSelection'] : ALL_OPS);
+  const local = { harness: 'pi' as const, model: 'm', providerId: null, effort: '', fastMode: false };
+  const remote = { ...local, agentDeviceId: 'share:one' };
+  let saved = profile({ capabilities: { ...local, modelChain: [remote], modelChainOverride: [remote] } });
+  host.invoke.mockImplementation(async (_device, _channel, requests) => {
+    const { op, args } = requests[0].input;
+    if (op === 'profile.get') return ok({ profile: saved });
+    const capabilities = args.patch.capabilities;
+    if ('agentDeviceId' in capabilities) return refused('INVALID_PARAMS', 'capabilities has an unsupported field');
+    saved = profile({ currentVersion: saved.currentVersion + 1, capabilities });
+    return ok({ profile: saved });
+  });
+  await profiles.load();
+  for (const [chain, override, location] of [
+    [[local], null, null],
+    [[remote], [remote], 'share:one'],
+    [[local, remote], [local, remote], null],
+  ] as const) {
+    await target.profile.update('bot-1', { acceptModelSelection: true, capabilities: {
+      ...local, agentDeviceId: location, modelChain: [...chain],
+      modelChainOverride: override === null ? null : [...override], modelOverride: null,
+    } });
+    const request = sent(host.invoke.mock.calls.length - 1).input;
+    expect(request.op).toBe(acceptsSelection ? 'profile.acceptModelSelection' : 'profile.update');
+    expect(request.args?.patch).toMatchObject({ capabilities: { modelChain: chain, modelChainOverride: override } });
+    expect((request.args?.patch as { capabilities: object }).capabilities).not.toHaveProperty('agentDeviceId');
+    await profiles.refresh();
+    expect(profiles.get()?.capabilities.modelChain).toEqual(chain);
+    expect(profiles.get()?.capabilities.modelChainOverride).toEqual(override);
+  }
+});
+
 it('rolls an optimistic write back and rejects with the host error when the host refuses it', async () => {
   const { target, profiles } = create();
   host.invoke.mockResolvedValueOnce(ok({ profile: profile() }));

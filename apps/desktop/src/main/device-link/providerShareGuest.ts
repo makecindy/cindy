@@ -61,7 +61,12 @@ type Region = 'cn' | 'global';
 
 export interface ProviderShareGuestEvents {
   catalogChanged?(agentDeviceId: string): void;
-  changed(received: readonly ProviderShareReceived[]): void;
+  /**
+   * Every poll. `changed` is false when the list and its confirmation are the same as
+   * the previous call: local windows still re-check stale catalogs, but controllers
+   * need no model catalog push.
+   */
+  changed(received: readonly ProviderShareReceived[], changed: boolean): void;
   /** 发出的申请有了结果(同意、拒绝、过期、撤回)。 */
   settled(state: ProviderShareRequestState, preview: ProviderShareLinkPreview | null): void;
 }
@@ -96,6 +101,13 @@ interface ResolvedLink {
 let runtime: Runtime | null = null;
 let receivedRevision = 0;
 let receivedFingerprint = '';
+/**
+ * What the last `changed` event carried: the list plus whether it is confirmed. The
+ * list is polled every minute; the event still fires every poll (local cleanup and
+ * stale-catalog checks rely on it) but says whether anything changed, so the model
+ * catalog push to every controlling computer is only sent on a real change.
+ */
+let notifiedFingerprint = '';
 /** 用于只读分享投影的在途校验；暂停后恢复也不能复用旧回包。 */
 export function providerShareReceivedRevision(): number { return receivedRevision; }
 
@@ -127,11 +139,14 @@ function emitChanged(rt: Runtime): Promise<void> | void {
   const received = allReceived(rt);
   const fingerprint = JSON.stringify(received);
   if (fingerprint !== receivedFingerprint) { receivedFingerprint = fingerprint; receivedRevision++; }
+  const notified = JSON.stringify([fingerprint, confirmedRegions(rt), isCrossRegionReceivedComplete()]);
   // 分享被分享者删除后，它在这台电脑上的本机偏好一起清掉；还没加载的区域不动。
   const pruning = pruneProviderShareGuestPrefs(new Set(received.map((share) => share.shareId)), confirmedRegions(rt));
   const notify = () => {
     if (!current(rt)) return;
-    rt.events.changed(received);
+    const changed = notified !== notifiedFingerprint;
+    notifiedFingerprint = notified;
+    rt.events.changed(received, changed);
     for (const listener of receivedListeners) {
       try {
         listener();
@@ -280,7 +295,7 @@ export function startProviderShareGuest(events: ProviderShareGuestEvents, option
 }
 
 export function stopProviderShareGuest(): void {
-  receivedRevision++; receivedFingerprint = '';
+  receivedRevision++; receivedFingerprint = ''; notifiedFingerprint = '';
   stopProviderShareCrossRegion();
   const rt = runtime;
   if (!rt) return;

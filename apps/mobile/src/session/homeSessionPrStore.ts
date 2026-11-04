@@ -1,3 +1,4 @@
+import { remotePrStatuses, prStatusQuery } from '@cindy/maker-shared';
 import {
   PR_STATUS_REFRESH_INTERVAL_MS,
   MAX_STATUS_QUERIES,
@@ -131,10 +132,9 @@ export async function loadHomeSessionPr(
   };
   let statuses: unknown;
   try {
-    statuses = await invoke<unknown>(deviceId, 'git-context:pr-status', [{
-      sessionId,
-      queries: selected.map(item => ({ owner: item.owner, repo: item.repo, prNumber: item.prNumber })),
-    }]);
+    statuses = await remotePrStatuses(selected.map(prStatusQuery), sessionId, (channel, args) =>
+      invoke(deviceId, channel, args),
+    );
   } catch {
     return build(null);
   }

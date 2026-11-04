@@ -50,7 +50,9 @@ export function printHelp(log = console.log) {
   log('    pnpm mobile:xcode');
   log('    # 中国大陆版：生成 iOS 工程、打开 Xcode 并启动 Metro');
   log('    pnpm mobile:xcode --region=cn');
-  log('    # Cindy 模拟器：先 rebuild 安装，再 start 启动 Metro');
+  log('    # macOS：一条命令在 iOS 模拟器上启动当前 worktree（只看界面加 -- --mock；可重复运行）');
+  log('    pnpm mobile:sim:up');
+  log('    # 分步：先 rebuild 安装，再 start 启动 Metro');
   log('    pnpm mobile:sim:rebuild');
   log('    pnpm mobile:sim:start');
   log('    # 中国大陆版模拟器：先 rebuild 安装，再 start 启动 Metro');

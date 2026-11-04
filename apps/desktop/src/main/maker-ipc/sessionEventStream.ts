@@ -13,6 +13,7 @@ import {
   flushAssistantBlock,
   onAssistantTextEvent,
   onAssistantAttemptFailure,
+  onAssistantSamplingAccepted,
   onAgentTaskUpdateEvent,
   onThinkingEvent,
   onToolResultEvent,
@@ -20,6 +21,7 @@ import {
   persistToolProcessMedia,
   onToolUseEvent,
 } from '../messagePersistBroadcaster.js';
+import { isTerminalTurnErrorEvent } from './sessionTurnActivityTracker.js';
 import { type OrcaTeamService } from './orcaTeamService.js';
 import type { PreparedSessionEvent } from './sessionEventPreparation.js';
 export interface PersistSessionStreamEventDeps {
@@ -38,6 +40,14 @@ export function persistSessionStreamEvent(
   if (event.source === 'codex' && event.turnScope !== 'background' &&
     (event.type === 'error' || event.type === 'done')) {
     onAssistantAttemptFailure(session.id, event.data);
+  }
+  if (event.source === 'codex' && event.turnScope !== 'background') {
+    const accepted = (event.data as { assistantSamplingAccepted?: { agentMessageIds?: unknown } } | null)?.assistantSamplingAccepted?.agentMessageIds;
+    if ((event.type === 'tool_result_full' || event.type === 'tool_result') && Array.isArray(accepted) && accepted.every(id => typeof id === 'string')) {
+      onAssistantSamplingAccepted(session.id, accepted);
+    } else if (event.type === 'done' || (event.type === 'error' && isTerminalTurnErrorEvent(event))) {
+      onAssistantSamplingAccepted(session.id);
+    }
   }
   if (event.type === 'text') {
     const td = event.data as { text?: unknown; isFinal?: unknown; isFullText?: unknown } | null;

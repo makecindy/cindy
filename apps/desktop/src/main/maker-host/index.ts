@@ -2925,6 +2925,9 @@ export function getMaker(): Maker {
         makerMemory: () => makerMemoryManager,
         // 插件工具经隧道回到本机：对方 Agent 的插件花名册也按本机真实工作目录给。
         ghostRosterPrompt: (workingDir) => getGhostRosterPrompt({ workingDir }),
+        // 内置与插件带的 Skill 同样以本机为准：说明与它要用的工具、脚本都在本机。
+        managedSkills: listCindyManagedSkills,
+        disabledSkillPaths: readDisabledSkillPaths,
         captureKnownFileBefore,
         noteOpaqueTurnChange,
         // 与审查读 PDF 交付物同一个一次性抽取进程。
@@ -3187,7 +3190,12 @@ export function getMaker(): Maker {
       },
     });
     // 本机作为「Agent 运行的电脑」：同账号另一台电脑的任务可让 Agent 在这里运行。
-    installRemoteAgentHost({ getMaker: () => getMaker(), userDataDir: app.getPath('userData') });
+    installRemoteAgentHost({
+      getMaker: () => getMaker(),
+      userDataDir: app.getPath('userData'),
+      managedSkills: async () => (await listCindyManagedSkills()).flatMap((skill) =>
+        skill.path ? [{ command: skill.claudeCommandName, dir: path.dirname(skill.path) }] : []),
+    });
     installLocalAgentHost(_maker);
     botRuntimeResourcePreflight = async (opts) => {
       const preflightOpts = { ...opts };

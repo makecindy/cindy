@@ -1,0 +1,6 @@
+/* The queue follows its available message width, including narrow Desktop panes. */
+.bot-group-talk-card { container-type: inline-size; }
+@container (min-width: 490px) {
+  .bot-group-talk-step { display: flex; align-items: center; padding-block: 5px; }
+  .bot-group-talk-tail { flex-shrink: 0; justify-content: flex-end; }
+}

@@ -61,6 +61,12 @@ import { isRemoteProviderInvocationAllowed } from '../maker-host/remote-provider
 import { assertTrustedAppRendererEvent } from '../security/trustedAppRenderer.js';
 import { currentLedgerCurrency } from '../usage/ledgerCurrency.js';
 import { getGatewayModelPricing, getModelPriceQuote } from '../usage/modelPricing.js';
+import {
+  getReferenceModelPricing,
+  readModelPriceOverridesSnapshot,
+  type ModelPriceOverridesSnapshot,
+} from '../usage/referenceModelPricing.js';
+import type { ModelPriceQuote } from '../../shared/regionalMoney.js';
 import { computePriceQuoteTurnMoney, normalizeModelIdForPricing } from '../usage/turnCostCalculator.js';
 import { rememberIssuedClipboardText } from '../textClipboard.js';
 import { activeOwnerScopeKey, ownerScopedUserDataPath } from '../appSessionState.js';
@@ -422,9 +428,11 @@ export function startProviderShareRuntime(broadcast: Broadcast, options: { invok
       emit(DEVICE_LINK_PUSH.REMOTE_PUSH, { deviceId, channel: 'maker:provider:changed', payload: {} });
       notifyControlledModelCatalogChanged();
     },
-    changed(received) {
+    changed(received, changed) {
+      // Local windows re-check stale subscription catalogs on every poll.
       emit(PROVIDER_SHARE_IPC.RECEIVED_CHANGED, received);
-      notifyControlledModelCatalogChanged();
+      // Pushed to every controlling computer; they re-read capabilities and rosters.
+      if (changed) notifyControlledModelCatalogChanged();
     },
     settled(state, preview) {
       emit(PROVIDER_SHARE_IPC.SETTLED, { state, preview });
@@ -573,21 +581,68 @@ export function parseProviderShareCommand(raw: unknown): ProviderShareCommand {
   }
 }
 
-async function estimate(row: Omit<ProviderShareModelUsageView, 'amount'> & { sdkCostUsd: number }): Promise<ProviderShareMoney | null> {
-  try {
-    const pricing = await getGatewayModelPricing();
-    const agent = row.kind === 'claude-code' || row.kind === 'codex' || row.kind === 'pi' ? row.kind : undefined;
-    const price = getModelPriceQuote(pricing, row.providerId, normalizeModelIdForPricing(row.model), agent);
-    const money = computePriceQuoteTurnMoney(row, price, currentLedgerCurrency());
-    if (money) return { amount: money.amount, currency: money.currency };
-  } catch (error) {
-    log.warn('provider share usage estimate failed', { error: String(error) });
-  }
-  return row.sdkCostUsd > 0 ? { amount: row.sdkCostUsd, currency: 'USD' } : null;
+type ProviderShareUsageEstimateRow = Omit<ProviderShareModelUsageView, 'amount'> & { sdkCostUsd: number; day?: string };
+
+/**
+ * 账本按天、按模型只存总量。阶梯价按单轮输入选档，直接拿总量会把许多短请求整体算成长上下文价；
+ * 拿不到逐轮分布时按平均每轮选档，再乘轮数。
+ */
+function perTurnAverageMoney(row: ProviderShareUsageEstimateRow, price: ModelPriceQuote | undefined) {
+  const turns = row.turns > 1 ? row.turns : 1;
+  const money = computePriceQuoteTurnMoney({
+    inputTokens: row.inputTokens / turns,
+    outputTokens: row.outputTokens / turns,
+    cacheReadTokens: row.cacheReadTokens / turns,
+    cacheCreateTokens: row.cacheCreateTokens / turns,
+  }, price, currentLedgerCurrency());
+  return money && { amount: money.amount * turns, currency: money.currency };
+}
+
+/**
+ * 每次查询复用报价与覆盖快照，避免为最多 5,000 行历史逐行重建参考价目录或重读覆盖文件。
+ * 按天的历史行用那一天生效的参考价目录(与今天的目录同一套取价规则)；按时间段的汇总行用今天的目录。
+ */
+function createUsageEstimator() {
+  let gatewayPricing: ReturnType<typeof getGatewayModelPricing> | undefined;
+  let overrides: ModelPriceOverridesSnapshot | undefined;
+  const referencePricing = new Map<string, ReturnType<typeof getReferenceModelPricing>>();
+  const referenceCatalog = (day: string | undefined) => {
+    const key = day ?? '';
+    let pricing = referencePricing.get(key);
+    if (!pricing) {
+      overrides ??= readModelPriceOverridesSnapshot();
+      pricing = getReferenceModelPricing({ at: day, overrides });
+      referencePricing.set(key, pricing);
+    }
+    return pricing;
+  };
+  return async (row: ProviderShareUsageEstimateRow): Promise<ProviderShareMoney | null> => {
+    const sdkMoney: ProviderShareMoney | null = row.sdkCostUsd > 0 ? { amount: row.sdkCostUsd, currency: 'USD' } : null;
+    // 只有 SDK 金额、没有 token 计数的行无从按单价估算，保留记录的金额而不是算成 0。
+    if (row.inputTokens + row.outputTokens + row.cacheReadTokens + row.cacheCreateTokens <= 0) return sdkMoney;
+    // 与本机记账(resolveTurnCost)一致：普通供应商 API 优先用 SDK 记录的金额，只在缺失时按单价估算；
+    // DeepSeek 的 SDK 金额把缓存命中按普通输入计，按参考价重算。XD 只认 Gateway 报价。
+    if (sdkMoney && row.providerId !== 'xd' && row.providerId !== 'deepseek') return sdkMoney;
+    try {
+      const agent = row.kind === 'claude-code' || row.kind === 'codex' || row.kind === 'pi' ? row.kind : undefined;
+      const model = normalizeModelIdForPricing(row.model);
+      // XD 的实际报价与其他供应商的参考价独立，不能跨来源借价。
+      const pricing = row.providerId === 'xd'
+        ? await (gatewayPricing ??= getGatewayModelPricing())
+        : referenceCatalog(row.day);
+      const price = getModelPriceQuote(pricing, row.providerId, model, agent);
+      const money = perTurnAverageMoney(row, price);
+      if (money) return money;
+    } catch (error) {
+      log.warn('provider share usage estimate failed', { error: String(error) });
+    }
+    return sdkMoney;
+  };
 }
 
 async function ownerState(range: ProviderShareUsageRange): Promise<ProviderShareOwnerState> {
   if (!running) return { ready: false, shares: [] };
+  const estimate = createUsageEstimator();
   const shares = getProviderShareHostSnapshot();
   const usage = getProviderShareUsageStore()?.query(new Set(shares.map((share) => share.shareId)), range) ?? [];
   const reshares = listProviderShareReshares();
@@ -646,6 +701,7 @@ async function ownerState(range: ProviderShareUsageRange): Promise<ProviderShare
 
 /** 这个供应商按使用方的用量：本机与同账号的其他电脑(provider-groups.md §7)。只读本机账本，不经分享服务。 */
 async function ownUsage(providerId: string, range: ProviderShareUsageRange): Promise<ProviderOwnUsageView> {
+  const estimate = createUsageEstimator();
   const { local, devices, relays } = currentProviderPartyUsageStore().query(providerId, range);
   const lastKnownNames = readLastKnownDeviceNames();
   const view = async (party: ProviderPartyUsage): Promise<ProviderPartyUsageView> => ({
@@ -760,6 +816,7 @@ export function trimProviderUsageHistory(history: ProviderUsageHistoryView): Pro
  * (只含这个供应商的分享里现在的成员)。时间段、人与组内电脑由界面筛选。
  */
 async function usageHistory(providerId: string): Promise<ProviderUsageHistoryView> {
+  const estimate = createUsageEstimator();
   const own = currentProviderPartyUsageStore().history(providerId);
   const shares = running ? getProviderShareHostSnapshot().filter((share) => share.providerId === providerId) : [];
   const memberKeys = new Set(shares.flatMap((share) => share.members.map((member) => JSON.stringify([share.shareId, member.memberId]))));

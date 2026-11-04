@@ -1,3 +1,4 @@
+import { prNumberLabel } from '@cindy/maker-shared';
 /**
  * GitContextBadge — 会话顶栏的 git 上下文徽标(session-git-pr-context)。
  *
@@ -234,17 +235,24 @@ function PrChip({
   const Icon = kind ? PR_STATUS_ICON[kind] : GitPullRequest;
   const color = kind ? PR_STATUS_COLOR[kind] : 'var(--text-tertiary)';
   const guidance = prGuidanceFor(status, { remoteHostId, deviceLinkDeviceId, readOnly });
-  const failureCopyKey = prFailureCopyKey(status);
+  const failureCopyKey = prFailureCopyKey(status, { remoteHostId, deviceLinkDeviceId, readOnly });
 
   const statusLine = kind
     ? t(`ccAgent.gitContext.pr.status.${kind}`)
     : failureCopyKey
-      ? t(failureCopyKey)
+      ? prRef.provider === 'gitlab'
+        ? t(failureCopyKey, { host: prRef.host })
+        : t(failureCopyKey)
       : t('ccAgent.gitContext.pr.statusNotFetched');
   // Installation and login are host-owned and independent of the task composer.
   const ariaLabel = guidance
     ? t(`ccAgent.gitContext.pr.guidance.${guidance}.aria`, { number: prRef.prNumber })
-    : t('ccAgent.gitContext.pr.openAria', { number: prRef.prNumber });
+    : t(
+        prRef.provider === 'gitlab'
+          ? 'ccAgent.gitContext.pr.gitlab.openAria'
+          : 'ccAgent.gitContext.pr.openAria',
+        { number: prRef.prNumber },
+      );
 
   const handleClick = () => {
     closeSummary();
@@ -371,7 +379,7 @@ function PrChip({
               )}
             >
               <Icon size={12} strokeWidth={1.5} className="shrink-0" style={{ color }} />
-              <span>#{prRef.prNumber}</span>
+              <span>{prNumberLabel(prRef)}</span>
               {unresolved !== null && unresolved > 0 && (
                 <span
                   className="inline-flex items-center gap-0.5 text-10 font-medium leading-none text-[var(--status-bar-accent)]"
@@ -443,7 +451,12 @@ function PrChip({
             align="start"
             collisionPadding={8}
             className={cn('w-[320px] max-w-[calc(100vw-16px)] p-4', className)}
-            aria-label={t('ccAgent.gitContext.pr.summaryAria', { number: prRef.prNumber })}
+            aria-label={t(
+              prRef.provider === 'gitlab'
+                ? 'ccAgent.gitContext.pr.gitlab.summaryAria'
+                : 'ccAgent.gitContext.pr.summaryAria',
+              { number: prRef.prNumber },
+            )}
           >
             <div className="flex items-start gap-2">
               <a
@@ -457,7 +470,7 @@ function PrChip({
                 <span className="flex items-center gap-1 text-12 text-[var(--text-secondary)]">
                   <Icon size={12} strokeWidth={1.5} className="shrink-0" style={{ color }} />
                   <span className="min-w-0 break-words group-hover:underline">
-                    {prRef.owner}/{prRef.repo} #{prRef.prNumber}
+                    {prRef.owner}/{prRef.repo} {prNumberLabel(prRef)}
                     {status?.ok && <> · {statusLine}</>}
                   </span>
                 </span>

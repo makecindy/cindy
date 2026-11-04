@@ -9,6 +9,20 @@
 
 默认行为:启动**一个专属、持久、headed 的自动化浏览器**(profile 名 "Cindy"),登录态长期保留,与用户日常 Chrome 互不影响。
 
+headed 启动不显示空窗口：macOS 用 `--silent-launch` 并显式选择同一个 Chrome 配置目录，
+Windows / Linux 保留 `--no-startup-window`；headless 不加这两种参数。macOS 本身允许无窗口应用继续待命，
+但 `--no-startup-window` 与远程调试同时使用会额外注册 `REMOTE_DEBUGGING` 保活，
+导致系统正常退出请求已接受、进程却不结束。`--silent-launch` 同样抑制启动窗口，
+并保留正常退出；不要把它改回 `--no-startup-window`。只换参数仍不够：有上次打开窗口的记录时，
+Chrome 会延迟激活首次通过 CDP 打开的后台标签。必须同时传 `--profile-directory`，值沿用
+受管目录 `Local State` 的 `profile.last_used`（缺失或损坏时为 `Default`），避免进入多配置
+恢复后的激活路径；宿主只读该选择，不删除登录数据。依据
+[Chromium 156 的启动判据](https://github.com/chromium/chromium/blob/156.0.8078.80/chrome/browser/ui/startup/startup_browser_creator.cc)
+与[调试保活](https://github.com/chromium/chromium/blob/156.0.8078.80/chrome/browser/devtools/chrome_devtools_manager_delegate.cc)，
+配置指定后的行为见 [CreateInitialProfile](https://github.com/chromium/chromium/blob/156.0.8078.80/chrome/browser/chrome_browser_main.cc)。
+修改入口为 `sync.mjs` 的 LOCAL_PATCH，参数合同回归在
+`src/__tests__/chrome-launch-proxy.test.ts`；实际退出与焦点需用独立空白 profile 验证。
+
 登录持久性还依赖两点：host 的 `buildManagedConfig` 在两种 profile、直连及代理路径都传
 `--restore-last-session`，否则 Chrome 正常退出后不会恢复会话 Cookie（仅有固定目录不够）；
 退出必须等待子进程的 `exitCode` / `signalCode`，不能把 `ChildProcess.killed`（已发信号）
@@ -87,7 +101,7 @@ host 在 `browser-managed-config.ts` 用 `buildManagedConfig({proxyServer?})` �
 | 2 | 数据目录落到 `~/.xdt-maker` 而非 Electron `userData` | Vite 把 `@cindy/browser-control-runtime` `require()` 进 main 入口 chunk 顶部,`CONFIG_DIR` 在 `index.ts` 设置 `XDT_BROWSER_RUNTIME_DIR` **之前**就求值成 `~/.xdt-maker`。从包入口 barrel 引入刷新函数还会提前求值 `paths.ts`,`DEFAULT_INBOUND_MEDIA_DIR` 冻在旧根,随后 `saveMediaBuffer` 写到刷新后的目录、上传校验按旧 inbound root 拒绝 | `index.ts` 在最后一次 `app.setPath('userData')` 之后 pin env,并从 **`@cindy/browser-control-runtime/config-dir`** 调用 `refreshBrowserRuntimeConfigDir()`(不要从包入口 barrel 引入,那会把 generated `paths.ts` 拉进入口 chunk)。单测 `browserRuntimeDirStartup.test.ts` 锁顺序与 import 路径。`browser.ts` 顶部 `import './browser-runtime-env.js'` 仍是 vitest/非打包路径的兜底,别重排 |
 | 3 | `profile must define cdpPort or cdpUrl` | vendored 只给"名叫上游默认名"的 profile 自动分配 CDP 端口;自定义名的托管 profile 不会 | 自定义托管 profile 必须显式给 `cdpPort`(现用 18800,vendored 端口段起点) |
 | 4 | 明明给了中性/白色,Chrome 工具栏却是浑浊蓝绿 | Chrome 把 profile `color` 当 **Material-You 种子色**生成色板,不是字面色;中性/近黑种子被它和成灰蓝 | 用**高饱和**色做种子(现 `#00D9C5` TapTap teal);想要纯灰度做不到(灰度开关在不可改的 vendored decorate 里) |
-| 5 | 「打开 Agent 专用浏览器」没有窗口或每次开两个标签页 | headed Chrome 为避免 AI 自动读取抢焦点,以 `--no-startup-window` 启动;冷启动 `GET /tabs` 在 CDP 未就绪时也会返回 empty | `openBrowserForLogin` 先等 `running:true`:已有 tab 就 `focus`,没有 tab 才 `open about:blank` 且设 `background:false`,随后 `focus`。`running:false` 时绝不 `open`,避免冷启动竞态 |
+| 5 | 「打开 Agent 专用浏览器」没有窗口或每次开两个标签页 | headed Chrome 为避免 AI 自动读取抢焦点,以静默无窗口方式启动(平台参数见 §1);冷启动 `GET /tabs` 在 CDP 未就绪时也会返回 empty | `openBrowserForLogin` 先等 `running:true`:已有 tab 就 `focus`,没有 tab 才 `open about:blank` 且设 `background:false`,随后 `focus`。`running:false` 时绝不 `open`,避免冷启动竞态 |
 | 6 | profile 没有自定义头像 | Chrome 只认内置头像 / Google 账号头像,不能塞本地图 | 已知限制,接受;别为它改 vendored decorate |
 | 7 | 改了 `browser-workflow.md` 但 agent 还按旧文案 | 这份 md 经 `?raw` 静态打进**进程内** MCP server;且 agent 只在调 `list_tools` 时读 rules | 改完要 **(a) 重启桌面端**(main/package 改动不热更)+ **(b) 开新 agent 会话**(老会话 context 里是旧 rules) |
 | 8 | 远端 Codex 会话里浏览器不可用 | lizi MCP 桥接只对**本地** Codex 生效(见 §7) | 不是 bug;所有 `lizi_*` 工具对远端 Codex 都一样 |

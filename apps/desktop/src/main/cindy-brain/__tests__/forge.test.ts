@@ -1887,22 +1887,23 @@ describe('FORGE_GUIDE', () => {
     expect(FORGE_GUIDE).not.toContain('只有大手册才拆深层文件');
   });
 
-  it('skill 迁移精确映射召回元数据、正文与容器目录', () => {
+  it('skill 章节写明它是正式能力、与 Manual 的分工和长期使用的脚本路径', () => {
     const skillSection = FORGE_GUIDE.slice(
       FORGE_GUIDE.indexOf('## 4.16 捆绑 Agent Skills(skill 能力)'),
       FORGE_GUIDE.indexOf('## 4.17'),
     );
     for (const marker of [
-      '迁移时按职责映射,不是按篇幅搬运',
-      'Skill frontmatter 的 `name + description` 所承担的身份/召回作用',
-      '对标系统提示词区\n  插件花名册的身份与 `recall`',
-      '`manual.items` 只是插件容器级一级目录,不对标 Skill frontmatter',
-      '`MANUAL.md` 与深层 Markdown 承接 Skill 正文、references',
-      '只经 `ghost_manual` tool-result 按需进入上下文',
-      '当前已停止新增,未来计划全部废弃',
+      '装了插件才有这些技能,不装就完全不出现',
+      '按职责选,不按篇幅选',
+      '需要斜杠命令入口(`/<name>`)',
+      '经 `ghost_manual` 读取,不占技能列表',
+      '斜杠菜单里显示的就是 `name`',
+      '跨插件版本不变的入口(路径含 `/agent-skills/skills/`)',
+      '不受插件沙箱约束',
     ]) {
       expect(skillSection).toContain(marker);
     }
+    expect(skillSection).not.toContain('停止新增');
   });
 
   it('Manual-only 插件可发现，已下线 Host 能力不再宣传', () => {
@@ -1928,7 +1929,7 @@ describe('FORGE_GUIDE', () => {
       'Cindy 先发布',
       '确认首个支持它的**正式版本号**',
       '`minCindyVersion` 设为不低于\n该正式版本',
-      '移除\n`skill.items` 的迁移版本也必须设置上述 `minCindyVersion`',
+      '把存量\n`skill.items` 改成 Manual 的版本也必须设置上述 `minCindyVersion`',
       '服务端还要保留上一份带 Skill 的历史 release',
       '旧客户端能通过历史版本回退',
     ];
