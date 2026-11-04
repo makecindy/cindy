@@ -1117,6 +1117,7 @@ import {
   applyAppearanceToWindow,
   applyAppearanceToWindows,
   getPersistedWindowZoom,
+  installWindowZoomRestoration,
   registerAppearanceSettingsIpc,
   updatePersistedWindowZoom,
 } from './appearance-settings-ipc.js';
@@ -4139,6 +4140,10 @@ const createWindow = () => {
     if (mainWindow.isDestroyed()) return;
     applyPageZoomLevel(mainWindow, getPersistedWindowZoom());
   });
+  // Conversation switching is an in-page hash navigation, so `did-finish-load`
+  // never fires. Chromium would otherwise restore that URL's stale per-URL zoom
+  // instead of the saved preference, making the window look smaller (#7486).
+  installWindowZoomRestoration(mainWindow);
   // Deep link 模块持有同一个 mainWindow 引用 — 解析出的 URL 通过 webContents.send
   // 推给 renderer (channel 'deep-link:navigate')。关窗时同步清空, 避免给已销毁
   // 的 BrowserWindow 发 IPC 触发 'Object has been destroyed'。

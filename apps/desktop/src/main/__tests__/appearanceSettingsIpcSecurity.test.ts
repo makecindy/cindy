@@ -57,7 +57,7 @@ vi.mock('../appearance-settings-store.js', () => ({
   updateAppearanceSettingsAtomic: mocks.updateAppearanceSettingsAtomic,
 }));
 
-import { registerAppearanceSettingsIpc, __testing } from '../appearance-settings-ipc.js';
+import { registerAppearanceSettingsIpc, installWindowZoomRestoration, __testing } from '../appearance-settings-ipc.js';
 import {
   normalizeAppearanceSettings,
   WALLPAPER_DOWNLOAD_PROGRESS_CHANNEL,
@@ -257,6 +257,68 @@ describe('appearance settings IPC authorization', () => {
     win.isDestroyed.mockReturnValue(true);
     focus({}, win);
     expect(setZoomFactor).not.toHaveBeenCalled();
+  });
+
+  // In-page hash navigation (conversation switching) never fires
+  // `did-finish-load`, so Chromium restores the new URL's stale per-URL zoom
+  // level and the window appears to shrink until the next full load.
+  it('re-applies the saved zoom after an in-page navigation restores a stale level', () => {
+    const settings = { ...persisted, windowZoom: 1.5 };
+    mocks.readAppearanceSettings.mockReturnValue(settings);
+    let zoom = 1;
+    const setZoomFactor = vi.fn((value: number) => {
+      zoom = value;
+    });
+    const on = vi.fn();
+    const win = {
+      isDestroyed: () => false,
+      webContents: {
+        isDestroyed: () => false,
+        getZoomFactor: () => zoom,
+        setZoomFactor,
+        on,
+      },
+    };
+    markAppContentWindow(win as never);
+    installWindowZoomRestoration(win as never);
+
+    const navigate = on.mock.calls.find(([name]) => name === 'did-navigate-in-page')?.[1];
+    expect(navigate).toBeTypeOf('function');
+    navigate({}, 'file:///app/index.html#/cc-agent/next', true);
+    expect(zoom).toBe(1.5);
+
+    // A second navigation that already shows the saved level stays untouched.
+    navigate({}, 'file:///app/index.html#/cc-agent/next-2', true);
+    expect(setZoomFactor).toHaveBeenCalledOnce();
+  });
+
+  it('ignores in-page navigations from sub-frames and destroyed windows', () => {
+    const settings = { ...persisted, windowZoom: 1.5 };
+    mocks.readAppearanceSettings.mockReturnValue(settings);
+    const setZoomFactor = vi.fn();
+    const on = vi.fn();
+    const win = {
+      isDestroyed: vi.fn(() => false),
+      webContents: {
+        isDestroyed: vi.fn(() => false),
+        getZoomFactor: () => 1,
+        setZoomFactor,
+        on,
+      },
+    };
+    markAppContentWindow(win as never);
+    installWindowZoomRestoration(win as never);
+    const navigate = on.mock.calls.find(([name]) => name === 'did-navigate-in-page')?.[1];
+
+    navigate({}, 'file:///app/index.html#/iframe', false);
+    expect(setZoomFactor).not.toHaveBeenCalled();
+
+    navigate({}, 'file:///app/index.html#/cc-agent/next', true);
+    expect(setZoomFactor).toHaveBeenCalledOnce();
+
+    win.webContents.isDestroyed.mockReturnValue(true);
+    navigate({}, 'file:///app/index.html#/cc-agent/next-2', true);
+    expect(setZoomFactor).toHaveBeenCalledOnce();
   });
 
   it('同步启动读取只向已授权的外观 reader 返回持久快照', () => {
