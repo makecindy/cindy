@@ -119,6 +119,8 @@ export function createHostServer(deps) {
         if (url.pathname === '/api/usage/model-pricing') { send(response, 200, await deps.modelPricing()); return; }
         if (url.pathname === '/api/usage/reference-model-pricing') { send(response, 200, deps.referenceModelPricing()); return; }
         if (url.pathname === '/api/agents') { send(response, 200, deps.agents()); return; }
+        if (url.pathname === '/api/agent-commands') { send(response, 200, await deps.agentCommands(body)); return; }
+        if (url.pathname === '/api/agent-skills') { send(response, 200, await deps.agentSkills(body)); return; }
         if (url.pathname === '/api/capabilities') {
           try {
             send(response, 200, await deps.capabilities(String(body.agentKind ?? '')));

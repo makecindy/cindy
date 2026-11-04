@@ -128,6 +128,10 @@ let agentGraph: {
   agent?: unknown;
   agents: string[];
   capabilitiesByAgent?: Record<string, { availableModels?: unknown[] }>;
+  instances?: Record<string, {
+    listAgentCommands(): Array<{ kind: 'agent-builtin'; name: string; description: string }>;
+    listAgentSkills(options: { workingDir: string; sessionId?: string }): Promise<{ skills?: unknown[] }>;
+  }>;
 } | null = null;
 let gatewayCredentials: { endpoint: string; credential: string } | null = null;
 const provisionalSessionIds = new Set<string>();
@@ -367,6 +371,20 @@ const server = createHostServer({
   modelPricing: async () => null,
   referenceModelPricing: () => ({}),
   agents: () => agentGraph?.agents ?? [],
+  agentCommands: async (input: { agentKind?: string }) => {
+    const agent = agentGraph?.instances?.[String(input.agentKind ?? '')];
+    if (!agent) return { success: false, error: `Agent '${String(input.agentKind ?? '')}' is not registered` };
+    return { success: true, commands: agent.listAgentCommands() };
+  },
+  agentSkills: async (input: { agentKind?: string; workingDir?: string; sessionId?: string }) => {
+    const agent = agentGraph?.instances?.[String(input.agentKind ?? '')];
+    if (!agent) return { success: false, error: `Agent '${String(input.agentKind ?? '')}' is not registered` };
+    const result = await agent.listAgentSkills({
+      workingDir: typeof input.workingDir === 'string' ? input.workingDir : resolveHostDataDir(),
+      sessionId: typeof input.sessionId === 'string' ? input.sessionId : undefined,
+    });
+    return { success: true, skills: result.skills ?? [] };
+  },
   capabilities: async (agentKind: string) => {
     const capabilities = agentGraph?.capabilitiesByAgent?.[agentKind];
     if (!capabilities) throw new Error(`Agent '${agentKind}' is not registered`);

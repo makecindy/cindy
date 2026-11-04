@@ -118,5 +118,5 @@ export function createHostAgentGraph(options) {
     logger: LOGGER,
     ...(options.makerMemory ? { makerMemory: options.makerMemory } : {}),
   });
-  return { maker, agent, codex, capabilitiesByAgent, agents: Object.keys(agents) };
+  return { maker, agent, codex, capabilitiesByAgent, instances: agents, agents: Object.keys(agents) };
 }
