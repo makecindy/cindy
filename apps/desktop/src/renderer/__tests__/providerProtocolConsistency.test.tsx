@@ -228,7 +228,7 @@ it('keeps preset reset disabled but allows restoring a sparse explicit choice of
     const button = () => screen.getByRole('button', { name: 'Pi · settings.providers.custom.fields.wireProtocol' });
     expect(button().textContent).toContain('Chat Completions');
     fireEvent.keyDown(button(), { key: 'ArrowDown' });
-    fireEvent.click(await screen.findByRole('menuitemradio', { name: 'Messages', exact: true }));
+    fireEvent.click(await screen.findByRole('menuitemradio', { name: 'Messages' }));
     await waitFor(() => expect(update).toHaveBeenCalledTimes(2));
     const chosen = structuredClone(config);
     expect(chosen.runtimes.pi!.models[0]!.interfaceId).toBe(original.interfaceId);
