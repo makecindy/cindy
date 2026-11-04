@@ -45,6 +45,17 @@ describe('useSessionSwitchFocusIntent', () => {
     expect(result.current.armed).toBe(false);
   });
 
+  // 键盘切换：切换用的 Enter 还按着，确认卡要等历史重建后才出现。期间的自动重复不是
+  // 新操作，不能撤销意图；用户真正新按一个键才撤销。
+  it('切换时仍按着的 Enter / 空格产生的重复不撤销意图', () => {
+    const { result } = setup({ sessionId: 'a', enabled: true });
+    act(() => fireEvent.keyDown(window, { key: 'Enter', repeat: true }));
+    act(() => fireEvent.keyDown(window, { key: ' ', repeat: true }));
+    expect(result.current.armed).toBe(true);
+    act(() => fireEvent.keyDown(window, { key: 'Enter' }));
+    expect(result.current.armed).toBe(false);
+  });
+
   it('未启用（分屏非主 pane、只读等）时从不武装', () => {
     const { result, rerender } = setup({ sessionId: 'a', enabled: false });
     expect(result.current.armed).toBe(false);

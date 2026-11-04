@@ -390,6 +390,55 @@ describe('PermissionPrompt 键盘切换时不替按住的按键批准', () => {
     expect(onRespond).toHaveBeenCalledWith({ behavior: 'allow' });
   });
 
+  // 真实顺序：键盘切换后确认卡要等挂起交互异步重建才出现，期间用户可能同时按着 Enter
+  // 和空格。卡片出现前的重复不能撤销意图；卡片拿到焦点后，先松开其中一个键也不能放行
+  // 另一个仍在重复的键。
+  it('确认卡晚到且 Enter、空格同时按着时，松开其一后另一个的重复不批准', () => {
+    const onRespond = vi.fn();
+    function DelayedPrompt() {
+      const intent = useSessionSwitchFocusIntent('task-b', true);
+      const [restored, setRestored] = useState(false);
+      return (
+        <>
+          <button type="button" onClick={() => setRestored(true)}>
+            restore
+          </button>
+          {restored ? (
+            <PermissionPrompt
+              permission={permission([bashRule])}
+              onRespond={onRespond}
+              autoFocus={intent.armed}
+              onAutoFocusHandled={intent.consume}
+            />
+          ) : null}
+        </>
+      );
+    }
+    render(<DelayedPrompt />);
+    // 卡片出现前：两个键都在重复。
+    fireEvent.keyDown(window, { key: 'Enter', repeat: true });
+    fireEvent.keyDown(window, { key: ' ', repeat: true });
+    // 重建完成（用不经 pointer / 键盘的方式触发，免得本身撤销意图）。
+    act(() => {
+      (screen.getByRole('button', { name: 'restore' }) as HTMLButtonElement).click();
+    });
+    const allowOnce = screen.getByRole('button', { name: /allowOnce/ });
+    expect(document.activeElement).toBe(allowOnce);
+
+    fireEvent.keyUp(allowOnce, { key: ' ' });
+    fireEvent.keyDown(allowOnce, { key: 'Enter', repeat: true });
+    fireEvent.keyDown(allowOnce, { key: 'Enter', repeat: true, ctrlKey: true });
+    fireEvent.keyUp(allowOnce, { key: 'Enter' });
+    expect(onRespond).not.toHaveBeenCalled();
+
+    // 卡片自己处理的 Ctrl+Enter 能直接看出保护已解除（普通 Enter 交给按钮原生激活，
+    // jsdom 不模拟）。
+    fireEvent.keyDown(allowOnce, { key: 'Enter', ctrlKey: true });
+    expect(onRespond).toHaveBeenCalledWith(
+      expect.objectContaining({ decisionClassification: 'user_permanent' }),
+    );
+  });
+
   // 按住 Enter 切换后、松开前再按下 Ctrl：修饰键不能解除保护，仍在重复的 Enter（此时带
   // ctrlKey）不能变成「本对话都允许」。userEvent 无法表达「Enter 一直按着再按 Ctrl」
   // （再写 {Enter>} 会先松开再按），所以按真实事件顺序逐个派发。

@@ -44,14 +44,20 @@ export function useSessionSwitchFocusIntent(
   const armed = enabled && !!sessionId && armedFor === sessionId;
 
   // 触发切换的那次点击 / 回车在本监听挂上之前已经分发完，不会把刚武装的意图撤掉。
+  // 切换时仍按着的 Enter / 空格会继续产生重复 keydown；武装之后的重复只可能来自这种
+  // 延续的按键（新按下的键第一下 repeat 为 false，已经撤销了意图），不算用户新的操作，
+  // 否则确认卡晚一点重建出来时就拿不到焦点。
   useEffect(() => {
     if (!armed) return;
     const disarm = () => setArmedFor(null);
+    const disarmOnKey = (e: KeyboardEvent) => {
+      if (!e.repeat) disarm();
+    };
     window.addEventListener('pointerdown', disarm, true);
-    window.addEventListener('keydown', disarm, true);
+    window.addEventListener('keydown', disarmOnKey, true);
     return () => {
       window.removeEventListener('pointerdown', disarm, true);
-      window.removeEventListener('keydown', disarm, true);
+      window.removeEventListener('keydown', disarmOnKey, true);
     };
   }, [armed]);
 
