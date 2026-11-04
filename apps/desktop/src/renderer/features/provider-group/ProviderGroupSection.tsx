@@ -93,7 +93,8 @@ export function ProviderGroupSection({ providerId, providerName, deviceId, devic
   // A failed or stale source may still provide navigation/config, but its running/cooling/
   // quota values are not live status. Hiding the rows' status keeps the old snapshot from
   // masquerading as current, matching RemoteProviderGroupMembers and SharedProviderGroupStatus.
-  const statusStale = group.failed || group.view?.providerContinuity?.stale === true;
+  const statusStale = group.failed || group.expired
+    || group.view?.providerContinuity?.stale === true;
   const statuses = useMemo(
     () => new Map((statusStale ? [] : group.view?.members ?? []).map((status) => [status.key, status])),
     [group.view, statusStale],

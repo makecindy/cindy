@@ -50,6 +50,49 @@ it('keeps an unstamped legacy host catalog on its original view lifecycle', asyn
   expect(mod.getCachedDeviceProviders('host')?.providers ?? []).toHaveLength(1);
 });
 
+// Unit: a suspended JS runtime can wake after the host deadline but before the
+// expiry timer callback runs. The synchronous getter must retire the payload
+// immediately, but notify mounted consumers from a microtask so React does not
+// start a replacement read during render.
+it('defers a getter-discovered expiry notification until after the synchronous read', async () => {
+  vi.useFakeTimers({ toFake: ['Date', 'performance', 'setTimeout', 'clearTimeout'] });
+  const fetcher = vi.fn(async () => ({ ...result('host'),
+    providerContinuity: { stale: true, remainingMs: 1000 } }));
+  await mod.fetchDeviceProviders('host', fetcher);
+  const events = vi.fn();
+  const off = mod.subscribeDeviceProvidersGen('host', events);
+  try {
+    vi.setSystemTime(Date.now() + 1001);
+    expect(mod.getCachedDeviceProviders('host')).toBeUndefined();
+    expect(events).not.toHaveBeenCalled();
+    await Promise.resolve();
+    expect(events).toHaveBeenCalledTimes(1);
+    expect(events).toHaveBeenCalledWith('evict');
+  } finally {
+    off();
+  }
+});
+
+// Unit: a deferred expiry belongs to the owner/scope that observed it. After
+// clearAll starts a new owner, the old microtask must not notify the new hooks.
+it('does not deliver a deferred expiry to a new owner after clearAll', async () => {
+  vi.useFakeTimers({ toFake: ['Date', 'performance', 'setTimeout', 'clearTimeout'] });
+  const fetcher = vi.fn(async () => ({ ...result('host'),
+    providerContinuity: { stale: true, remainingMs: 1000 } }));
+  await mod.fetchDeviceProviders('host', fetcher);
+  vi.setSystemTime(Date.now() + 1001);
+  expect(mod.getCachedDeviceProviders('host')).toBeUndefined();
+  mod.clearAllDeviceProviders();
+  const events = vi.fn();
+  const off = mod.subscribeDeviceProvidersGen('host', events);
+  try {
+    await Promise.resolve();
+    expect(events).not.toHaveBeenCalled();
+  } finally {
+    off();
+  }
+});
+
 // Timing guard: one slow read must spend the short upstream budget once, from
 // the request start. Response-time baselines would extend it; pre-deduction
 // would spend it twice.

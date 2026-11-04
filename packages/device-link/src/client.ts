@@ -1475,18 +1475,38 @@ export class DeviceLinkClient {
   }
 
   /**
+   * Read-only twin of hasOfflineDirectPath for render-time readiness probes.
+   * It never expires, detaches, clears pending work or emits peer path changes;
+   * the actual send/subscribe paths still perform their own fail-closed checks.
+   */
+  peekOfflineDirectPath(deviceId: string): boolean {
+    return this.hasRetainedDirectPathReadOnly(deviceId);
+  }
+
+  /**
+   * Read-only proof that a direct path and its retention lease/grace are still
+   * within both clocks. Unlike usableDirectPath this never expires or detaches.
+   */
+  private hasRetainedDirectPathReadOnly(deviceId: string): boolean {
+    if (this.stopped || !this.directPaths.has(deviceId) || !this.isLinkReady(deviceId)) return false;
+    if (isProviderSharePeer(deviceId)) {
+      const lease = this.providerShareDirectLeases.get(deviceId);
+      return !!lease && Date.now() < lease.wallUntil && this.monotonicNow() < lease.monotonicUntil;
+    }
+    const grace = this.sameAccountDirectGrace.get(deviceId);
+    return !!grace && Date.now() < grace.wallUntil && this.monotonicNow() < grace.monotonicUntil;
+  }
+
+  /**
    * A healthy data path retained while signaling to this peer is unavailable.
    * Read-only: unlike usableDirectPath/hasSameAccountDirectGrace it never
    * expires or detaches during a capacity scan, so isBusy has no re-entrancy.
    */
   private isOfflineRetainedDirectPath(deviceId: string): boolean {
-    if (this.stopped || !this.directPaths.has(deviceId) || !this.isLinkReady(deviceId)) return false;
+    if (!this.hasRetainedDirectPathReadOnly(deviceId)) return false;
+    if (isProviderSharePeer(deviceId)) return this.status !== 'online';
     const grace = this.sameAccountDirectGrace.get(deviceId);
-    if (grace && Date.now() < grace.wallUntil && this.monotonicNow() < grace.monotonicUntil
-      && (this.status !== 'online' || grace.peerOffline)) return true;
-    if (!isProviderSharePeer(deviceId) || this.status === 'online') return false;
-    const lease = this.providerShareDirectLeases.get(deviceId);
-    return !!lease && Date.now() < lease.wallUntil && this.monotonicNow() < lease.monotonicUntil;
+    return !!grace && (this.status !== 'online' || grace.peerOffline);
   }
 
   /** Repeated signaling loss cannot renew the original deadline. */

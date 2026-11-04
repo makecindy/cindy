@@ -227,6 +227,8 @@ export interface DeviceLinkContextValue {
   connectionEpoch: number;
   /** Incremented when an authoritative roster denial retires mounted directory views. */
   rosterVersion: number;
+  /** Per-device invalidation for received provider-share catalogs. */
+  providerShareCatalogVersions?: Readonly<Record<string, number>>;
   /** Current remote ACK identity; null until every requested topic is confirmed. */
   getSubscriptionIdentity?(deviceId: string, topics: readonly Topic[]): number | null;
   lastPresenceSnapshot: PresenceSnapshot | null;
@@ -236,7 +238,8 @@ export interface DeviceLinkContextValue {
    * Read the account device roster. `fresh` starts a new REST snapshot instead of
    * joining a request that may have started before the caller's reconciliation fence.
    */
-  readDeviceList(options?: { fresh?: boolean }): Promise<{ devices: DeviceView[] }>;
+  readDeviceList(options?: { fresh?: boolean }): Promise<{ devices: DeviceView[]; stale?: boolean;
+    displayBudget?: { remainingMs: number } }>;
   openLink(deviceId: string): Promise<LinkAcceptPayload>;
   /** 丢弃已结算的开链缓存并真正重开；并发重开仍按设备单飞。 */
   reopenLink(deviceId: string): Promise<LinkAcceptPayload>;
@@ -550,6 +553,7 @@ export function DeviceLinkProvider({ children }: { children: ReactNode }) {
   const [lastPresenceSnapshot, setLastPresenceSnapshot] = useState<PresenceSnapshot | null>(null);
   const accountGenerationRef = useRef<number | null>(null);
   const [rosterVersion, setRosterVersion] = useState(0);
+  const [providerShareCatalogVersions, setProviderShareCatalogVersions] = useState<Record<string, number>>({});
   const [rosterContinuity] = useState(() => new MetadataContinuityReader({ retryable(error) {
     if (isProviderAccessDeniedError(error)) return false;
     const row = error && typeof error === 'object' ? error as { status?: unknown; statusCode?: unknown; code?: unknown; message?: unknown } : {};
@@ -573,7 +577,8 @@ export function DeviceLinkProvider({ children }: { children: ReactNode }) {
 
   // Home and direct task entry share the same in-flight roster read. Evidence
   // belongs to the connection that started it, not whichever one finishes it.
-  const readDeviceList = useCallback((options: { fresh?: boolean } = {}): Promise<{ devices: DeviceView[] }> => {
+  const readDeviceList = useCallback((options: { fresh?: boolean } = {}): Promise<{ devices: DeviceView[];
+    stale?: boolean; displayBudget?: { remainingMs: number } }> => {
     const client = clientRef.current;
     const epoch = connectionEpochRef.current;
     const pending = rosterRequestRef.current;
@@ -594,7 +599,7 @@ export function DeviceLinkProvider({ children }: { children: ReactNode }) {
       const result = { devices: rawDevices.map(device => {
         const deviceId = device.deviceId;
         const connection = client?.connectionFor(deviceId);
-        const retained = connection?.hasOfflineDirectPath(deviceId) === true;
+        const retained = connection?.peekOfflineDirectPath(deviceId) === true;
         // A presence delta that landed after this request started is newer than
         // the REST row and must decide control, in either direction.
         const freshPresence = (presenceAvailabilityEpochsRef.current.byDevice.get(deviceId) ?? 0) > presenceEpochAtStart;
@@ -627,7 +632,10 @@ export function DeviceLinkProvider({ children }: { children: ReactNode }) {
         // data only and must not become noteRemoteControlEnabled evidence.
         if (rosterRequestGenerationRef.current === generation) apply?.(rawDevices);
       }
-      return result;
+      // A zero remainder is an already-expired source, not a legacy row without
+      // a stamp. Only a missing field keeps the old-endpoint lifecycle.
+      return { ...result, ...(snapshot.stale ? { stale: true as const } : {}),
+        displayBudget: { remainingMs: Math.max(0, snapshot.remainingMs) } };
     });
     rosterRequestRef.current = { client, epoch, promise };
     void promise.finally(() => {
@@ -653,6 +661,7 @@ export function DeviceLinkProvider({ children }: { children: ReactNode }) {
     resetComposerPaletteCache();
     resetTaskTagCatalogCache();
     setLastPresenceSnapshot(null);
+    setProviderShareCatalogVersions({});
     setPresenceVersion((version) => version + 1);
     setRosterVersion((version) => version + 1);
   }, [rosterContinuity]);
@@ -1396,7 +1405,7 @@ export function DeviceLinkProvider({ children }: { children: ReactNode }) {
       // Relay presence and REST both mask remoteControlEnabled to false for offline
       // routes; only an online snapshot can carry an explicit control-off.
       const explicitControlOff = snap.remoteControlEnabled === false && !offlineProjection;
-      const retained = !snap.online && client.connectionFor(snap.deviceId).hasOfflineDirectPath(snap.deviceId);
+      const retained = !snap.online && client.connectionFor(snap.deviceId).peekOfflineDirectPath(snap.deviceId);
       const retainedControlEnabled = isScopedPeer(snap.deviceId) ? true
         : explicitControlOff ? false
         : offlineProjection ? previousAvailable !== false && !wasDisabledVerdict
@@ -1582,6 +1591,14 @@ export function DeviceLinkProvider({ children }: { children: ReactNode }) {
       onProjectAliasesChanged: (deviceId, ownerStamp) => refreshProjectAliasesForClient(client, deviceId, true, ownerStamp),
       onProviderChanged: (deviceId) => {
         catalogRefresh.notify(deviceId);
+      },
+      onProviderShareCatalogChanged: (deviceId) => {
+        // The host reports a received-share list/catalog change. This is a
+        // target-scoped freshness hint, never an authorization result.
+        setProviderShareCatalogVersions((versions) => ({
+          ...versions,
+          [deviceId]: (versions[deviceId] ?? 0) + 1,
+        }));
       },
       onAgentsChanged: (deviceId) => {
         for (const listener of remoteAgentRosterListeners) listener(deviceId);
@@ -1975,7 +1992,7 @@ export function DeviceLinkProvider({ children }: { children: ReactNode }) {
   ), [crossAccountState, status, connectionEpoch, connectionIssue]);
   const getConnectionState = useCallback((deviceId: string): DeviceLinkConnectionState => {
     const state = isSharedTaskPeer(deviceId) ? sharedTaskConnection : { status, connectionEpoch, connectionIssue };
-    const retained = clientRef.current?.connectionFor(deviceId).hasOfflineDirectPath(deviceId) === true
+    const retained = clientRef.current?.connectionFor(deviceId).peekOfflineDirectPath(deviceId) === true
       && !revokedDevicesStore.has(deviceId) && presenceAvailableByDeviceRef.current.get(deviceId) !== false;
     return retained ? { ...state, status: 'online', connectionIssue: null, signalingStatus: state.status, usingRetainedDirect: true } : state;
   }, [sharedTaskConnection, status, connectionEpoch, connectionIssue, presenceVersion]);
@@ -1991,6 +2008,7 @@ export function DeviceLinkProvider({ children }: { children: ReactNode }) {
     presenceVersion,
     connectionEpoch,
     rosterVersion,
+    providerShareCatalogVersions,
     lastPresenceSnapshot,
     getSubscriptionIdentity: (deviceId, topics) => remoteSubscribedTopicsRef.current.identity(deviceId, sharedTaskTopics(deviceId, topics)),
     getPresenceAvailability,
@@ -2010,6 +2028,7 @@ export function DeviceLinkProvider({ children }: { children: ReactNode }) {
     connectionEpoch,
     connectionIssue,
     rosterVersion,
+    providerShareCatalogVersions,
     getPresenceAvailability,
     readDeviceList,
     invoke,
@@ -2030,7 +2049,9 @@ export function DeviceLinkProvider({ children }: { children: ReactNode }) {
 
   const retainedDirectActive = [...new Set([...registryRef.current.deviceIds(),
     ...openLinkInFlightRef.current.keys(), ...remoteSubscribedTopicsRef.current.keys()])]
-    .some(deviceId => clientRef.current?.connectionFor(deviceId).hasOfflineDirectPath(deviceId));
+    .some(deviceId => !revokedDevicesStore.has(deviceId)
+      && presenceAvailableByDeviceRef.current.get(deviceId) !== false
+      && clientRef.current?.connectionFor(deviceId).peekOfflineDirectPath(deviceId));
   return <DeviceLinkContext.Provider value={value}>
     <DirectLinkTransport key={`${auth.accountGeneration}:${relayRouteGeneration}`} bridge={directBridge}
       owner={`${auth.accountGeneration}:${relayRouteGeneration}`} enabled={auth.isAuthenticated && (status === 'online' || retainedDirectActive)} />
@@ -2056,6 +2077,7 @@ type RouteFrameHandlers = {
   onAccessRevoked?: (deviceId: string) => void;
   onLinkClosed?: (deviceId: string, reason?: string) => void;
   onProviderChanged?: (deviceId: string) => void;
+  onProviderShareCatalogChanged?: (deviceId: string) => void;
   onAgentsChanged?: (deviceId: string) => void;
   onProjectAliasesChanged?: (deviceId: string, ownerStamp: unknown) => void;
 };
@@ -2110,6 +2132,10 @@ export function routeFrame(env: Envelope, handlers: RouteFrameHandlers = {}): vo
   }
   if (push.channel === 'maker:provider:changed') {
     handlers.onProviderChanged?.(env.src);
+    return;
+  }
+  if (push.channel === 'maker:model-catalog:changed') {
+    if (!isScopedPeer(env.src)) handlers.onProviderShareCatalogChanged?.(env.src);
     return;
   }
   if (push.channel === 'maker:agents:changed') {

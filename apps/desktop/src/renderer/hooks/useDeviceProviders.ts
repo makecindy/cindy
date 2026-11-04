@@ -244,10 +244,13 @@ async function fetchDeviceProviders(deviceId: string): Promise<DeviceProvidersPa
           // prefetching the expired target (a prefetch would renew the view).
           // Only this direct snapshot expired. Routed aliases keep their own
           // independently measured budgets; do not cascade into a healthy host neighbor.
-          evictDeviceProviders(deviceId, { directOnly: true });
-          notifyDeviceProviders(deviceId, { status: 'error',
-            error: '[MODEL_VISIBILITY_NOT_READY] Provider directory snapshot expired',
-            unsupported: false });
+          evictDeviceProviders(deviceId, { directOnly: true, deferNotify: true });
+          queueMicrotask(() => {
+            if (cache.has(deviceId)) return;
+            notifyDeviceProviders(deviceId, { status: 'error',
+              error: '[MODEL_VISIBILITY_NOT_READY] Provider directory snapshot expired',
+              unsupported: false });
+          });
         })) {
           cache.delete(deviceId);
           throw new Error('[MODEL_VISIBILITY_NOT_READY] Provider directory snapshot expired');
@@ -463,7 +466,7 @@ export function isDeviceProvidersGenerationCurrent(deviceId: string, generation:
 
 export function evictDeviceProviders(
   deviceId: string,
-  options?: { retainDisplaySnapshot?: boolean; directOnly?: boolean },
+  options?: { retainDisplaySnapshot?: boolean; directOnly?: boolean; deferNotify?: boolean },
 ): number {
   // A provisional direct target must not evict the host's healthy routed aliases.
   if (!options?.directOnly) {
@@ -479,10 +482,17 @@ export function evictDeviceProviders(
   if (!options?.retainDisplaySnapshot) subscriptionFetchedAt.delete(deviceId);
   inflight.delete(deviceId);
   deviceGen.set(deviceId, (deviceGen.get(deviceId) ?? 0) + 1);
-  notifyDeviceProviders(deviceId, {
+  const event: DeviceProvidersEvent = {
     status: 'loading',
     ...(options?.retainDisplaySnapshot ? { retainDisplaySnapshot: true } : {}),
-  });
+  };
+  // A synchronous getter may discover expiry during React render. Retire the
+  // cache immediately but defer listener notifications to a microtask.
+  if (options?.deferNotify) {
+    queueMicrotask(() => {
+      if (!cache.has(deviceId)) notifyDeviceProviders(deviceId, event);
+    });
+  } else notifyDeviceProviders(deviceId, event);
   return deviceGen.get(deviceId)!;
 }
 

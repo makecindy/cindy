@@ -376,13 +376,20 @@ const remoteListeners = new Map<CacheKey, Set<(event: DeviceCapabilitiesEvent) =
 const deviceGen = new Map<string, number>();
 
 /** Retire exactly one (device, agentKind) cache key and its mounted consumers. */
-function retireDeviceCapabilityKey(deviceId: string, agentKind: AgentKind): void {
+function retireDeviceCapabilityKey(deviceId: string, agentKind: AgentKind, deferNotify = false): void {
   const key = cacheKey(agentKind, deviceId);
   cache.delete(key);
   expiry.forget(key);
   inflight.delete(key);
-  notifyRemoteCapabilities(deviceId, agentKind, { status: 'error',
-    error: '[MODEL_VISIBILITY_NOT_READY] Agent capabilities snapshot expired' });
+  const event: DeviceCapabilitiesEvent = { status: 'error',
+    error: '[MODEL_VISIBILITY_NOT_READY] Agent capabilities snapshot expired' };
+  // A synchronous getter may discover expiry during render; retire immediately
+  // but deliver the terminal event after the render.
+  if (deferNotify) {
+    queueMicrotask(() => {
+      if (!cache.has(key)) notifyRemoteCapabilities(deviceId, agentKind, event);
+    });
+  } else notifyRemoteCapabilities(deviceId, agentKind, event);
 }
 
 function notifyRemoteCapabilities(
@@ -450,7 +457,7 @@ async function fetchCapabilities(
           // Only this (device, agentKind) cache key expired. Other kinds and
           // routed aliases keep their independently measured budgets and
           // in-flight responses; no prefetch is started here.
-          retireDeviceCapabilityKey(deviceId, agentKind);
+          retireDeviceCapabilityKey(deviceId, agentKind, true);
         })) {
           cache.delete(key);
           throw new Error('[MODEL_VISIBILITY_NOT_READY] Agent capabilities snapshot expired');

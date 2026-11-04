@@ -123,6 +123,7 @@ const transport = vi.hoisted(() => {
     readyPeers = new Set<string>();
     isLinkReady = (deviceId: string) => this.readyPeers.has(deviceId) || this.retainedPeers.has(deviceId);
     hasOfflineDirectPath = (deviceId: string) => this.retainedPeers.has(deviceId);
+    peekOfflineDirectPath = (deviceId: string) => this.retainedPeers.has(deviceId);
     crossAccountConnection() { return this.separate ?? this; }
     connectAllNow(...args: unknown[]) { (this.connectNow as (...input: unknown[]) => void)(...args); }
     restartConnections(...args: unknown[]) { (this.restartConnection as (...input: unknown[]) => void)(...args); }
@@ -148,10 +149,12 @@ let scopedContext: DeviceLinkContextValue;
 function Probe() { context = useDeviceLink(); scopedContext = useDeviceLink(scopedPeer); maker = useMobileMakerTransport('host'); return null; }
 let catalogEnabled = false;
 let catalogRosterVersion = 0;
+let catalogShareVersion = 0;
 let catalogRows: ReturnType<typeof useRemoteAgentCatalogs> = [];
 function CatalogProbe() {
   const link = useDeviceLink();
   catalogRosterVersion = link.rosterVersion;
+  catalogShareVersion = link.providerShareCatalogVersions?.['controlled'] ?? 0;
   catalogRows = useRemoteAgentCatalogs({ enabled: catalogEnabled, controlledDeviceId: 'controlled', keepDeviceIds: ['old'], keepOnly: true });
   return null;
 }
@@ -189,13 +192,47 @@ beforeEach(async () => {
 afterEach(async () => { await act(async () => root.unmount()); });
 
 describe('Provider device roster reads', () => {
+  /** 测试价值：render/read getter 用 peek 证明 direct path，不调用可能 detach/emit 的
+   * hasOfflineDirectPath；I/O 门禁仍由 canUsePeerData/ensureOnlineForRequest 保留。 */
+  it('uses the pure direct-path query for render/read readiness', async () => {
+    const client = transport.clients[0];
+    client.retainedPeers.add('M');
+    const mutating = vi.spyOn(client, 'hasOfflineDirectPath');
+    expect(context.getConnectionState?.('M')?.usingRetainedDirect).toBe(true);
+    expect(mutating).not.toHaveBeenCalled();
+    mutating.mockRestore();
+  });
+
+  /** 测试价值：真实 DeviceLinkProvider.routeFrame 收到 maker:model-catalog:changed 后，
+   * 推进对应 host 的 share-catalog 版本；生产入口为 routeFrame + context，tier unit/jsdom。 */
+  it('forwards a controlled-host model-catalog change to the mounted share catalog consumer', async () => {
+    catalogEnabled = true;
+    try {
+      await act(async () => { render(); });
+      for (let i = 0; i < 3; i += 1) await act(async () => { await Promise.resolve(); });
+      const before = catalogShareVersion;
+      const client = transport.clients[0];
+      await act(async () => {
+        client.frame({ v: 1, kind: 'push', src: 'controlled', dst: 'mobile',
+          payload: { channel: 'maker:model-catalog:changed', payload: {} } } as Parameters<typeof client.frame>[0]);
+      });
+      expect(catalogShareVersion).toBe(before + 1);
+    } finally {
+      catalogEnabled = false;
+      await act(async () => { render(); });
+    }
+  });
+
   it('uses a bounded roster during an HTTP outage, projects only actual retained peers online, and never treats it as new presence', async () => {
     vi.useFakeTimers({ toFake: ['Date', 'performance'] });
     try {
       const device = (deviceId: string): DeviceView => ({ deviceId, name: deviceId, platform: 'darwin', appVersion: 'test',
         online: true, remoteControlEnabled: true, busy: false, lastSeenAt: new Date().toISOString(), isSelf: false });
       auth.apiFetch.mockResolvedValueOnce({ devices: [device('M'), device('other')] });
-      await act(async () => { await context.readDeviceList({ fresh: true }); });
+      let fresh!: { devices: DeviceView[]; stale?: boolean; displayBudget?: { remainingMs: number } };
+      await act(async () => { fresh = await context.readDeviceList({ fresh: true }); });
+      expect(fresh.stale).toBeUndefined();
+      expect(fresh.displayBudget?.remainingMs).toBeGreaterThan(0);
       const client = transport.clients[0]; client.readyPeers.add('M');
       const rosterVersionBefore = context.rosterVersion;
       auth.apiFetch.mockRejectedValue(Object.assign(new Error('service unavailable'), { status: 503 }));
@@ -203,6 +240,7 @@ describe('Provider device roster reads', () => {
       let snapshot!: { devices: DeviceView[] };
       await act(async () => { snapshot = await context.readDeviceList({ fresh: true }); });
       expect(snapshot.devices.map(row => [row.deviceId, row.online])).toEqual([['M', true], ['other', false]]);
+      expect((snapshot as { stale?: boolean }).stale).toBe(true);
       expect(context.getPresenceAvailability('other')).toBe(true); // stale roster did not install a false verdict.
       expect(context.rosterVersion).toBe(rosterVersionBefore);
       client.readyPeers.clear(); client.retainedPeers.add('M'); client.status = 'connecting';
@@ -212,6 +250,23 @@ describe('Provider device roster reads', () => {
       await expect(context.readDeviceList({ fresh: true })).rejects.toThrow('service unavailable');
     } finally { vi.useRealTimers(); }
   });
+  /** 测试价值：真实 readDeviceList 在请求期间用尽 30min（机器唤醒/单钟越界）
+   * 时返回 remainingMs 0；零预算是已过期，不是旧端无字段，不能被省略。 */
+  it('forwards a zero roster display budget instead of dropping it as a legacy stamp', async () => {
+    vi.useFakeTimers({ toFake: ['Date', 'performance'] });
+    try {
+      let resolveFetch!: (value: { devices: DeviceView[] }) => void;
+      auth.apiFetch.mockImplementationOnce(() => new Promise((resolve) => { resolveFetch = resolve; }));
+      let result!: { devices: DeviceView[]; stale?: boolean; displayBudget?: { remainingMs: number } };
+      const pending = context.readDeviceList({ fresh: true }).then((value) => { result = value; });
+      vi.setSystemTime(Date.now() + 30 * 60_000 + 1);
+      await act(async () => { resolveFetch({ devices: [] }); await pending; });
+      expect(result.displayBudget).toEqual({ remainingMs: 0 });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('retires the mounted roster after a late 403 and never returns the old concurrent fallback', async () => {
     vi.useFakeTimers({ toFake: ['Date', 'performance', 'setTimeout', 'clearTimeout'] });
     try {
@@ -327,8 +382,8 @@ describe('Provider device roster reads', () => {
       current.resolve({ devices: [desktop] });
     });
 
-    expect(await joined).toEqual({ devices: [] });
-    expect(await fresh).toEqual({ devices: [desktop] });
+    expect(await joined).toEqual({ devices: [], displayBudget: { remainingMs: expect.any(Number) } });
+    expect(await fresh).toEqual({ devices: [desktop], displayBudget: { remainingMs: expect.any(Number) } });
   });
 
   it('fences stale rosters without disturbing another device or a second controller sharing the host', async () => {
@@ -375,13 +430,13 @@ describe('Provider device roster reads', () => {
       });
       const staleRows = [row('desktop', false), row('other-host', false)];
       await act(async () => stale.resolve({ devices: staleRows }));
-      expect(await oldRead).toEqual({ devices: staleRows });
+      expect(await oldRead).toEqual({ devices: staleRows, displayBudget: { remainingMs: expect.any(Number) } });
       expect(context.getPresenceAvailability('desktop')).toBeNull();
       expect(context.getPresenceAvailability('other-host')).toBe(true);
       expect(secondContext.getPresenceAvailability('desktop')).toBe(true);
       const currentRows = [row('desktop', true), row('other-host', true)];
       await act(async () => current.resolve({ devices: currentRows }));
-      expect(await freshRead).toEqual({ devices: currentRows });
+      expect(await freshRead).toEqual({ devices: currentRows, displayBudget: { remainingMs: expect.any(Number) } });
       expect(context.getPresenceAvailability('desktop')).toBe(true);
       expect(context.getPresenceAvailability('other-host')).toBe(true);
       expect(secondContext.getPresenceAvailability('desktop')).toBe(true);
@@ -433,8 +488,8 @@ describe('Provider device roster reads', () => {
       current.resolve({ devices: [onlineDesktop] });
     });
 
-    expect(await joined).toEqual({ devices: [offlineDesktop] });
-    expect(await fresh).toEqual({ devices: [onlineDesktop] });
+    expect(await joined).toEqual({ devices: [offlineDesktop], displayBudget: { remainingMs: expect.any(Number) } });
+    expect(await fresh).toEqual({ devices: [onlineDesktop], displayBudget: { remainingMs: expect.any(Number) } });
     expect(context.getPresenceAvailability('desktop')).toBe(true);
   });
 });

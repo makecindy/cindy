@@ -797,7 +797,7 @@ export function useDeviceLinkRemoteProjects(
       const generation = directoryGeneration;
       return window.electronAPI.deviceLink
         .listDevices()
-        .then(({ devices }) => {
+        .then(({ devices, stale }) => {
           if (disposed || generation !== directoryGeneration) return;
           for (const d of devices) {
             applyDevice({
@@ -817,22 +817,26 @@ export function useDeviceLinkRemoteProjects(
           // 必须遍历 `getAllDeviceIds()`:缓存种入的分片一律标 disconnected,而
           // `getDeviceIds()` 只返回 connected —— 用它的话这个收敛循环恰好**永远看不到**
           // 要收的那些分片(review: codex 指出上一轮的修复因此无效)。
-          const authoritative = new Set(devices.map((d) => d.deviceId));
-          for (const deviceId of remoteProjectsStore.getAllDeviceIds()) {
-            // SharedTask shards are reconciled against membership, not the own-device directory.
-            if (isSharedTaskPeer(deviceId)) continue;
-            if (authoritative.has(deviceId) || eligible.has(deviceId)) continue;
-            log.debug(`removing cached shard absent from listDevices: ${deviceId.slice(0, 8)}`);
-            cancelDeviceReseeds(deviceId);
-            clearArchivedSessionRetry(deviceId);
-            remoteProjectsStore.removeDevice(deviceId);
-            remoteProjectAliases.remove(deviceId);
-            removeRemoteSessionActivityForDevice(deviceId);
-            // 权威列表里没有它 = 明确离场,和撤销 / 关被控同一档:登记进 hydration 黑名单,
-            // 否则在途的那次 readCachedSessionList 落地后又把它种回来,而紧随的 reseed 在
-            // listDevices 离线时纠正不了(review: codex P1)。
-            cacheHydrationBlocked.add(deviceId);
-            clearCachedDevice(deviceId);
+          // A bounded last-known directory cannot prove absence. Keep cached
+          // shards until a fresh REST answer or an explicit permission event.
+          if (!stale) {
+            const authoritative = new Set(devices.map((d) => d.deviceId));
+            for (const deviceId of remoteProjectsStore.getAllDeviceIds()) {
+              // SharedTask shards are reconciled against membership, not the own-device directory.
+              if (isSharedTaskPeer(deviceId)) continue;
+              if (authoritative.has(deviceId) || eligible.has(deviceId)) continue;
+              log.debug(`removing cached shard absent from listDevices: ${deviceId.slice(0, 8)}`);
+              cancelDeviceReseeds(deviceId);
+              clearArchivedSessionRetry(deviceId);
+              remoteProjectsStore.removeDevice(deviceId);
+              remoteProjectAliases.remove(deviceId);
+              removeRemoteSessionActivityForDevice(deviceId);
+              // 权威列表里没有它 = 明确离场,和撤销 / 关被控同一档:登记进 hydration 黑名单,
+              // 否则在途的那次 readCachedSessionList 落地后又把它种回来,而紧随的 reseed 在
+              // listDevices 离线时纠正不了(review: codex P1)。
+              cacheHydrationBlocked.add(deviceId);
+              clearCachedDevice(deviceId);
+            }
           }
         })
         .catch((err) => log.debug('listDevices reseed failed', err));

@@ -30,6 +30,7 @@ import {
 import { createMobileMakerTransport } from '@/device-link/mobileMakerTransport';
 import {
   getCachedProviderShareCatalogs,
+  evictProviderShareCatalogs,
   isProviderShareCatalogComplete,
   refreshProviderShareCatalogs,
   subscribeProviderShareCatalogs,
@@ -76,7 +77,8 @@ export function useRemoteAgentCatalogsWithStatus(input: RemoteAgentCatalogsInput
   catalogs: RemoteAgentCatalog[];
   settled: boolean;
 } {
-  const { readDeviceList, invoke, openLink, connectionEpoch, status, presenceVersion, getPresenceAvailability, rosterVersion = 0 } =
+  const { readDeviceList, invoke, openLink, connectionEpoch, status, presenceVersion,
+    getPresenceAvailability, rosterVersion = 0, providerShareCatalogVersions = {} } =
     useDeviceLink(input.controlledDeviceId);
   const { accountGeneration } = useAuth();
   const { t } = useTranslation();
@@ -86,6 +88,8 @@ export function useRemoteAgentCatalogsWithStatus(input: RemoteAgentCatalogsInput
   const [devicesLoaded, setDevicesLoaded] = useState(false);
   const [shareState, setShareState] = useState<ShareState>(() => cachedShareState(input.controlledDeviceId));
   const ownerRef = useRef({ accountGeneration, controlledDeviceId: input.controlledDeviceId });
+  const shareCatalogVersion = providerShareCatalogVersions[input.controlledDeviceId] ?? 0;
+  const shareCatalogVersionRef = useRef({ deviceId: input.controlledDeviceId, version: shareCatalogVersion });
   const keepKey = input.keepDeviceIds.join('\n');
   const keepOnly = input.keepOnly === true;
   // 选择器没打开时只为药丸取目录:Agent 不在某个分享上就不必去读分享。
@@ -97,11 +101,12 @@ export function useRemoteAgentCatalogsWithStatus(input: RemoteAgentCatalogsInput
     if (owner.accountGeneration === accountGeneration
       && owner.controlledDeviceId === input.controlledDeviceId) return;
     ownerRef.current = { accountGeneration, controlledDeviceId: input.controlledDeviceId };
+    shareCatalogVersionRef.current = { deviceId: input.controlledDeviceId, version: shareCatalogVersion };
     setDevices([]);
     setDevicesLoaded(false);
     setCatalogs(new Map());
     setShareState(cachedShareState(input.controlledDeviceId));
-  }, [accountGeneration, input.controlledDeviceId]);
+  }, [accountGeneration, input.controlledDeviceId, shareCatalogVersion]);
 
   // A late roster denial retires same-account directory rows; share catalogs are a
   // separate authority and stay untouched. The read effect deliberately does not
@@ -121,6 +126,16 @@ export function useRemoteAgentCatalogsWithStatus(input: RemoteAgentCatalogsInput
     const controlledDeviceId = input.controlledDeviceId;
     if (!input.enabled || !controlledDeviceId || status !== 'online' || !readShares) return;
     let cancelled = false;
+    const previousVersion = shareCatalogVersionRef.current;
+    if (previousVersion.deviceId !== controlledDeviceId) {
+      shareCatalogVersionRef.current = { deviceId: controlledDeviceId, version: shareCatalogVersion };
+    } else if (previousVersion.version !== shareCatalogVersion) {
+      // The controlled host reported a received-share catalog/list change. Retire
+      // only this target's cached share rows; the live re-read below supplies the
+      // new authoritative list. Presence/push is not an authorization result.
+      evictProviderShareCatalogs(controlledDeviceId);
+      shareCatalogVersionRef.current = { deviceId: controlledDeviceId, version: shareCatalogVersion };
+    }
     setShareState(cachedShareState(controlledDeviceId));
     const unsubscribe = subscribeProviderShareCatalogs(controlledDeviceId, (shares) => {
       if (!cancelled) setShareState({ controlledDeviceId, shares,
@@ -138,7 +153,8 @@ export function useRemoteAgentCatalogsWithStatus(input: RemoteAgentCatalogsInput
       unsubscribe();
     };
     // keepOnly 也在依赖里:打开选择器时即使分享列表已在显示,也在后台再读一次。
-  }, [connectionEpoch, input.controlledDeviceId, input.enabled, invoke, keepOnly, readShares, status]);
+  }, [connectionEpoch, input.controlledDeviceId, input.enabled, invoke, keepOnly,
+    readShares, shareCatalogVersion, status]);
 
   useEffect(() => {
     if (!input.enabled || !input.controlledDeviceId || status !== 'online') return;

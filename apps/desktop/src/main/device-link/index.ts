@@ -137,6 +137,7 @@ import {
   createControllerPresenceFreshnessTracker,
   markControllerPresenceFresh,
   isVerifiedControllerDataPath,
+  projectDirectDataDeviceIds,
   resolveControllerPresence,
   resetControllerPresenceFreshness,
   type ControllerPresenceDirectoryDevice,
@@ -422,8 +423,10 @@ const directDataPeers = new Set<string>();
 /** UI readiness follows authenticated usable data, independently of relay status. */
 export function getDirectDataDeviceIds(): string[] {
   if (isAppSessionBoundaryPending()) return [];
-  return [...directDataPeers].filter(id => !isScopedPeer(id)
-    && client?.getPeerPath(id) === 'direct' && client.isLinkReady(id));
+  // A direct peer is usable UI state only when the target's current data path
+  // also passes presence/revocation/local-disable verification. Path readiness
+  // alone must not resurrect a disabled or revoked target for the renderer.
+  return projectDirectDataDeviceIds([...directDataPeers], isDeviceDataPathAvailable);
 }
 onProviderDirectoryDenied(() => {
   broadcast(DEVICE_LINK_PUSH.DEVICE_DIRECTORY_INVALIDATED, {});

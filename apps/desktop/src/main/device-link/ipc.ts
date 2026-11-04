@@ -404,7 +404,17 @@ export async function handleSetDeviceControlEnabled(
   return { deviceId: normalizedDeviceId, enabled, disabledControlDeviceIds };
 }
 
-type DeviceListResult = { devices: DeviceLinkDeviceView[] };
+type DeviceListResult = {
+  devices: DeviceLinkDeviceView[];
+  /** True only when this is the bounded last-known directory, not a fresh REST answer. */
+  stale?: true;
+  /**
+   * Local display budget measured from the request start; never a wire
+   * authorization. A missing field is an old endpoint (legacy lifecycle);
+   * an explicit 0 means the source budget has already ended.
+   */
+  displayBudget?: { remainingMs: number };
+};
 
 /**
  * 所有 renderer 的设备列表入口最终都汇到本 handler。代次刻意跨状态变化与 teardown
@@ -452,10 +462,10 @@ export function handleListDevices(
   const requestEpoch = deps.captureControllerDisplayNameRequestEpoch();
   const presenceRequestEpoch = deps.captureControllerPresenceRequestEpoch();
   const directoryEpoch = providerDirectoryGeneration();
-  const request = readProviderDirectoryContinuity(() => deps.apiFetch<{ devices: DeviceLinkServerDeviceView[] }>(
-    '/api/device-link/devices',
-  )).then(
-    async ({ value: result, stale }) => {
+    const request = readProviderDirectoryContinuity(() => deps.apiFetch<{ devices: DeviceLinkServerDeviceView[] }>(
+      '/api/device-link/devices',
+    )).then(
+    async ({ value: result, stale, remainingMs }) => {
       if (activeOwnerScopeKey() !== owner) throw new Error('[DEVICE_LINK_NOT_CONNECTED] device directory account changed');
       // A rename/delete supersedes a request that started before it, even when
       // no newer list caller has joined yet. Never install that old snapshot.
@@ -521,6 +531,10 @@ export function handleListDevices(
           if (retained) return { ...device, online: true, remoteControlEnabled: nonMobile && controlAvailable };
           return stale ? { ...device, online: false } : device;
         }),
+        ...(stale ? { stale: true as const } : {}),
+        // Never drop an exhausted budget: absent means an old endpoint with no
+        // stamp, while zero means this read is already outside its source window.
+        displayBudget: { remainingMs: Math.max(0, remainingMs) },
       };
     },
     (err: unknown) => {

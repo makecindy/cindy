@@ -1,4 +1,5 @@
 import { isSupportedControllerPlatform } from './controllerPlatform.js';
+import { isScopedPeer } from '@cindy/device-link';
 
 export interface ControllerPresenceFreshnessTracker {
   epoch: number;
@@ -37,6 +38,14 @@ export function isVerifiedControllerDataPath(input: ControllerDataPathProof): bo
     && !input.locallyDisabled
     && input.linkReady
     && (input.linkStatus === 'online' || input.offlineDirect);
+}
+
+/** Scope a readiness list to ordinary peers with a verified data-path proof. */
+export function projectDirectDataDeviceIds(
+  deviceIds: readonly string[],
+  available: (deviceId: string) => boolean,
+): string[] {
+  return deviceIds.filter(deviceId => !isScopedPeer(deviceId) && available(deviceId));
 }
 
 export function resolveControllerPresence(

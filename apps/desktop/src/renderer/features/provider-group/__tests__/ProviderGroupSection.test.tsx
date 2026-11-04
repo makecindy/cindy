@@ -14,7 +14,7 @@ import zhCN from '../../../i18n/locales/zh-CN/common.json';
 import { memberStatusText, ProviderGroupSection } from '../ProviderGroupSection';
 import { ProviderGroupAddDialog } from '../ProviderGroupAddDialog';
 import { __testing as localGroupsTesting, useLocalProviderGroupsState } from '../useLocalProviderGroups';
-import { __testing as groupViewTesting } from '../useProviderGroup';
+import { __testing as groupViewTesting, useProviderGroup } from '../useProviderGroup';
 
 let realLocale: ReturnType<typeof createInstance> | null = null;
 const providerState = vi.hoisted(() => ({ providers: [
@@ -637,5 +637,67 @@ describe('ProviderGroupSection status source', () => {
     await act(async () => { changed.listener?.({ providerId: 'anthropic' }); });
     await waitFor(() => expect(screen.queryByText('providerGroup.member.runningCount:{"count":1}')).toBeNull());
     expect(screen.getAllByTestId('provider-group-member').every((row) => row.getAttribute('data-member-state') === 'loading')).toBe(true);
+  });
+
+  /**
+   * 测试价值
+   * - 生产入口与可观察结果：useProviderGroup 的转发预算 + ProviderGroupSection 成员行；
+   *   到期后 running/state 不得继续作为实时状态显示。
+   * - Bug/规则依据：provider-groups.md「短暂失联时的目录与已有任务」最多 30 分钟，任一墙钟或单调时钟到期即结束。
+   * - 现有覆盖缺口：既有 stale-source / failed-reload 用例只覆盖服务端 stale 标记与失败，不覆盖时间到期和重开缓存。
+   * - 最小失败输入：providerContinuity {stale:false, remainingMs:1000}，且下一轮 15s 刷新尚未发生。
+   * - tier：unit（jsdom + fake timers）。
+   */
+  it('retires the live member status when the forwarded view budget ends', async () => {
+    vi.useFakeTimers({ toFake: ['Date', 'performance', 'setTimeout', 'clearTimeout'] });
+    try {
+      stored = { strategy: 'least', autoSwitch: true, members: [LOCAL, MINI] };
+      const view = viewOf(stored);
+      view.providerContinuity = { stale: false, remainingMs: 1_000 };
+      const currentView = view;
+      let resolveReopen!: (value: ProviderGroupView) => void;
+      command.mockImplementation(async (cmd: { action: string }) => {
+        if (cmd.action === 'list') return { anthropic: stored };
+        if (cmd.action === 'get') return currentView;
+        throw new Error(`unexpected ${cmd.action}`);
+      });
+      const { result, rerender, unmount } = renderHook(() => useProviderGroup('anthropic'));
+      await act(async () => { await Promise.resolve(); await Promise.resolve(); });
+      expect(result.current.view?.providerContinuity).toMatchObject({ stale: false, remainingMs: 1_000 });
+      expect(result.current.expired).toBe(false);
+      const wallBase = Date.now();
+      // Timer is deliberately not advanced: a parent re-render observes the wall
+      // deadline first, and must latch it without setState/notify.
+      vi.setSystemTime(wallBase + 2_000);
+      await act(async () => { rerender(); });
+      expect(result.current.expired).toBe(true);
+      // A later wall rollback cannot revive the observed source.
+      vi.setSystemTime(wallBase - 1_000);
+      await act(async () => { rerender(); });
+      expect(result.current.expired).toBe(true);
+      // The rollback happens after the observation and before the reopen; only
+      // the shared cached entry can keep this source retired. The reopening get
+      // stays pending so no new authoritative result can mask the latch.
+      unmount();
+      command.mockImplementation((cmd: { action: string }) => {
+        if (cmd.action === 'list') return Promise.resolve({ anthropic: stored });
+        if (cmd.action === 'get') return new Promise<ProviderGroupView>((resolve) => { resolveReopen = resolve; });
+        throw new Error(`unexpected ${cmd.action}`);
+      });
+      const reopened = renderHook(() => useProviderGroup('anthropic'));
+      await act(async () => { await Promise.resolve(); });
+      expect(reopened.result.current.view?.providerContinuity?.stale).toBe(true);
+      expect(reopened.result.current.expired).toBe(true);
+      // Only a new authoritative result resets the expiry latch.
+      await act(async () => {
+        resolveReopen({ ...view, providerContinuity: { stale: false, remainingMs: 1_000 } });
+        await Promise.resolve();
+        await Promise.resolve();
+      });
+      expect(reopened.result.current.expired).toBe(false);
+      reopened.unmount();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

@@ -81,6 +81,52 @@ it('expires only the direct host entry and keeps a routed alias until its own bu
   }
 });
 
+/**
+ * 测试价值
+ * - 生产入口与可观察结果：getCachedDeviceProviders / getCachedCapabilities 在 render 期同步发现过期；
+ *   listener 不得在 getter 内同步 setState/fetch，微任务后收到终止事件。
+ * - Bug/规则依据：过期缓存通知必须同步 retire + deferred notify；显式撤权保持同步。
+ * - 现有覆盖缺口：既有 expiry 用例推进 timer（异步），没有覆盖“timer 未跑、render 读取先观察到 wall expiry”。
+ * - 最小失败输入：remainingMs=1000 后只推进 wall 时间，再同步 getter；修复前 listener 同步触发。
+ * - tier：unit（jsdom，fake timers）。
+ */
+it('defers provider and capability listener notifications when a render-time getter observes expiry', async () => {
+  vi.useFakeTimers({ toFake: ['Date', 'performance', 'setTimeout', 'clearTimeout'] });
+  const capsPayload = {
+    availableModels: [{ id: 'm', displayName: 'M', contextWindow: 1, efforts: [], defaultEffort: null }],
+    hasFastMode: false, effortLevels: [], permissionModes: [],
+    providerContinuity: { stale: false, remainingMs: 1000 },
+  };
+  const invoke = vi.fn(async (_device: string, channel: string) => channel === 'maker:provider:list'
+    ? { ...result('host'), providerContinuity: { stale: false, remainingMs: 1000 } }
+    : capsPayload);
+  vi.stubGlobal('window', { electronAPI: { deviceLink: { invoke } } });
+  await providerCache.prefetchDeviceProviders('host');
+  await capabilities.prefetchDeviceCapabilities('host');
+  const providerEvents = vi.fn();
+  const capabilityEvents = vi.fn();
+  const offProvider = providerCache.subscribeDeviceProviders('host', providerEvents);
+  const offCapability = capabilities.subscribeDeviceCapabilities('host', 'claude-code', capabilityEvents);
+  try {
+    vi.setSystemTime(Date.now() + 2000);
+    expect(providerCache.getCachedDeviceProviders('host')).toBeNull();
+    expect(capabilities.getCachedCapabilities('claude-code', 'host')).toBeNull();
+    expect(providerEvents).not.toHaveBeenCalled();
+    expect(capabilityEvents).not.toHaveBeenCalled();
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(providerEvents).toHaveBeenCalled();
+    expect(capabilityEvents).toHaveBeenCalled();
+  } finally {
+    offProvider();
+    offCapability();
+    providerCache.evictAllDeviceProviders();
+    capabilities.evictAllRemoteCapabilities();
+    vi.useRealTimers();
+    vi.unstubAllGlobals();
+  }
+});
+
 // Unit: a direct host expiry must not invalidate a newer in-flight routed alias read.
 it('keeps an in-flight routed alias read current when its direct host cache expires', async () => {
   vi.useFakeTimers({ toFake: ['Date', 'performance', 'setTimeout', 'clearTimeout'] });

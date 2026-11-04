@@ -8,6 +8,7 @@ import {
   createControllerPresenceFreshnessTracker,
   isVerifiedControllerDataPath,
   markControllerPresenceFresh,
+  projectDirectDataDeviceIds,
   resolveControllerPresence,
   resetControllerPresenceFreshness,
 } from '../device-link/controllerPresenceDirectory';
@@ -114,6 +115,19 @@ describe('controller presence directory snapshot', () => {
       presenceAvailable: true, revoked: false, locallyDisabled: true }, false],
   ] as const)('%s', (_name, proof, expected) => {
     expect(isVerifiedControllerDataPath(proof)).toBe(expected);
+  });
+
+  /**
+   * 测试价值
+   * - 生产入口与可观察结果：projectDirectDataDeviceIds；renderer 只收到普通 peer 且通过权限证明的目标。
+   * - Bug/规则依据：getDirectDataDeviceIds 仅 direct+linkReady 会把 explicit disabled/revoked 目标报告为 connected。
+   * - 现有覆盖缺口：既有表只测 isVerifiedControllerDataPath，未测 scoped peer 过滤和列表投影组合。
+   * - 最小失败输入：['verified','denied','share:guest']，available 仅 verified；旧实现会把 share:guest 透出。
+   * - tier：unit（纯函数）。
+   */
+  it('reports direct readiness only for ordinary targets with a verified data path', () => {
+    expect(projectDirectDataDeviceIds(['verified', 'denied', 'share:guest'], id => id === 'verified'))
+      .toEqual(['verified']);
   });
 
   it('separates raw online control evidence from the retained display projection', () => {

@@ -88,6 +88,26 @@ describe('bounded metadata continuity', () => {
     await expect(f.reader.read(f.scope, 'catalog', async () => { throw 'offline'; })).rejects.toBe('offline');
   });
 
+  // Unit: the 256-entry storage bound must not fake a healthy live reply as expired.
+  // Gap: the capacity branch returned remainingMs:0 before applying the normal
+  // request-start/duration/remainingTrustMs budget. Minimal input: 256 all-flight
+  // entries, then one live stamped reply with a 1000ms forwarded remainder.
+  it('uses the normal request-start budget for a live reply at the storage capacity bound', async () => {
+    const f = fixture();
+    const pending: Array<Promise<{ value: unknown; stale: boolean; remainingMs: number }>> = [];
+    for (let index = 0; index < 256; index += 1) {
+      pending.push(f.reader.read(f.scope, 'pending-' + index, () => new Promise<never>(() => {})));
+    }
+    const live = await f.reader.read({ ...f.scope, remainingTrustMs: () => 1000 }, 'live', async () => ({
+      providers: [{ id: 'live' }],
+      providerContinuity: { stale: false, remainingMs: 1000 },
+    }));
+    expect(live.stale).toBe(false);
+    expect(live.remainingMs).toBe(1000);
+    expect(live.value).toMatchObject({ providers: [{ id: 'live' }] });
+    expect(pending).toHaveLength(256);
+  });
+
   it('preserves the remaining trust of a forwarded snapshot instead of starting 30 minutes again', async () => {
     const f = fixture();
     const scope = { ...f.scope, remainingTrustMs: () => 1000 };

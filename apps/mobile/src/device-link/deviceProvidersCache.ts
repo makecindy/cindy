@@ -181,7 +181,7 @@ export async function fetchDeviceProviders(
           : {}),
       };
       if (isCurrent()) {
-        if (!expiry.remember(deviceId, payload, requestedAt, () => evictDeviceProviders(deviceId))) {
+        if (!expiry.remember(deviceId, payload, requestedAt, () => expireDeviceProviders(deviceId))) {
           cache.delete(deviceId);
           throw new Error('[MODEL_VISIBILITY_NOT_READY] Provider directory snapshot expired');
         }
@@ -285,7 +285,7 @@ export async function fetchDeviceProvidersFresh(
           : {}),
       };
       if (isCurrent()) {
-        if (!expiry.remember(deviceId, payload, requestedAt, () => evictDeviceProviders(deviceId))) {
+        if (!expiry.remember(deviceId, payload, requestedAt, () => expireDeviceProviders(deviceId))) {
           cache.delete(deviceId);
           throw new Error('[MODEL_VISIBILITY_NOT_READY] Provider directory snapshot expired');
         }
@@ -314,6 +314,27 @@ export function evictDeviceProviders(deviceId: string): void {
   freshInflight.delete(deviceId);
   deviceGen.set(deviceId, (deviceGen.get(deviceId) ?? 0) + 1);
   notifyDeviceProvidersGen(deviceId, 'evict');
+}
+
+/**
+ * A suspended JS runtime can wake after the wall deadline but before the expiry
+ * timer callback runs. A synchronous cache getter must retire the payload
+ * immediately so a second read in the same tick cannot use it. Notify mounted
+ * consumers from a microtask: a getter can run during React render, and its
+ * generation listener starts a replacement read.
+ */
+function expireDeviceProviders(deviceId: string): void {
+  cache.delete(deviceId);
+  expiry.forget(deviceId);
+  inflight.delete(deviceId);
+  freshInflight.delete(deviceId);
+  deviceGen.set(deviceId, (deviceGen.get(deviceId) ?? 0) + 1);
+  const generation = deviceGen.get(deviceId) ?? 0;
+  queueMicrotask(() => {
+    // clearAll/evict may switch owner or start a newer read before this runs.
+    if ((deviceGen.get(deviceId) ?? 0) !== generation) return;
+    notifyDeviceProvidersGen(deviceId, 'evict');
+  });
 }
 
 /**

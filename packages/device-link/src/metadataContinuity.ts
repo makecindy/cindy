@@ -121,9 +121,19 @@ export class MetadataContinuityReader {
         const disposable = [...this.entries].find(([, value]) => !value.flight);
         if (disposable) this.entries.delete(disposable[0]);
         else {
+          // The capacity bound limits storage, not the live reply. Use the same
+          // request-start wall/mono anchor and forwarded remainder as the normal
+          // flight so a healthy source is not reported as already expired.
+          const wall = this.wall(), mono = this.mono();
+          const requestedDuration = scope.validForMs ?? PROVIDER_METADATA_TRUST_MS;
+          const duration = Number.isFinite(requestedDuration)
+            ? Math.max(0, Math.min(PROVIDER_METADATA_TRUST_MS, requestedDuration)) : 0;
           const value = await request();
           requireCurrent();
-          return { value, stale: false, remainingMs: 0 };
+          const forwarded = scope.remainingTrustMs?.(value) ?? duration;
+          const lifetime = Number.isFinite(forwarded) ? Math.max(0, Math.min(duration, forwarded)) : 0;
+          const remainingMs = Math.max(0, Math.min(wall + lifetime - this.wall(), mono + lifetime - this.mono()));
+          return { value, stale: false, remainingMs };
         }
       }
       entry = {};

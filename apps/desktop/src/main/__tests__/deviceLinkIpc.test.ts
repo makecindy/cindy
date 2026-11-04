@@ -368,10 +368,33 @@ describe('device-link IPC handlers', () => {
     const second = handleListDevices(deps);
     expect(apiFetch).toHaveBeenCalledTimes(1);
     resolveFirst?.({ devices: [] });
-    await expect(first).resolves.toEqual({ devices: [] });
-    await expect(second).resolves.toEqual({ devices: [] });
+    await expect(first).resolves.toEqual({ devices: [],
+      displayBudget: { remainingMs: expect.any(Number) } });
+    await expect(second).resolves.toEqual({ devices: [],
+      displayBudget: { remainingMs: expect.any(Number) } });
     await handleListDevices(deps);
     expect(apiFetch).toHaveBeenCalledTimes(2);
+  });
+
+  // A directory read that consumes its whole display window (sleep / clock jump
+  // / one clock crossing) returns remainingMs 0. That is an expired source, not
+  // an old endpoint without a stamp: the field must survive so the consumer can
+  // retire the rows instead of showing them as an unlimited legacy directory.
+  it('listDevices:零剩余预算按已过期下发，不退化成旧端无字段', async () => {
+    __resetDeviceListCoalescingForTests();
+    vi.useFakeTimers({ toFake: ['Date', 'performance'] });
+    try {
+      let resolveFetch!: (value: { devices: unknown[] }) => void;
+      const response = new Promise<{ devices: unknown[] }>((resolve) => { resolveFetch = resolve; });
+      const apiFetch: DeviceLinkIpcDeps['apiFetch'] = async <T>() => (await response) as T;
+      const deps = makeDeps({ apiFetch });
+      const pending = handleListDevices(deps);
+      vi.setSystemTime(Date.now() + 30 * 60_000 + 1);
+      resolveFetch({ devices: [] });
+      await expect(pending).resolves.toMatchObject({ displayBudget: { remainingMs: 0 } });
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   // Review (#8381): a refresh issued right after a rename / delete must not join a list
@@ -382,8 +405,12 @@ describe('device-link IPC handlers', () => {
       .mockRejectedValueOnce(new ServerApiError('PERMISSION_DENIED', 403, 'denied'))
       .mockRejectedValueOnce(new ServerApiError('UNAVAILABLE', 503, 'temporarily unavailable'));
     const deps = makeDeps({ apiFetch, hasOfflineDirectPath: () => true });
-    await handleListDevices(deps);
-    await expect(handleListDevices(deps)).resolves.toMatchObject({ devices: [{ deviceId: 'dev-1', online: true }] });
+    await expect(handleListDevices(deps)).resolves.not.toHaveProperty('stale');
+    const stale = await handleListDevices(deps);
+    expect(stale).toMatchObject({
+      devices: [{ deviceId: 'dev-1', online: true }], stale: true,
+    });
+    expect(stale.displayBudget?.remainingMs).toBeGreaterThan(0);
     await expect(handleListDevices(deps)).rejects.toThrow('denied');
     await expect(handleListDevices(deps)).rejects.toThrow('temporarily unavailable');
   });
@@ -811,6 +838,7 @@ describe('device-link IPC handlers', () => {
           isSelf: false,
         },
       ],
+      displayBudget: { remainingMs: expect.any(Number) },
     });
     expect(rememberLastKnownDeviceName).toHaveBeenCalledWith('dev-1', 'MacBook Pro');
   });
@@ -850,6 +878,7 @@ describe('device-link IPC handlers', () => {
           isSelf: false,
         },
       ],
+      displayBudget: { remainingMs: expect.any(Number) },
     });
   });
 
@@ -1119,6 +1148,7 @@ describe('device-link IPC handlers', () => {
           isSelf: false,
         },
       ],
+      displayBudget: { remainingMs: expect.any(Number) },
     });
   });
 
