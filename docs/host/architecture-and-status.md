@@ -114,7 +114,8 @@ flowchart LR
 - 无 Secret Service 时抛 `CREDENTIAL_STORE_UNAVAILABLE`，不回退明文、不静默失败。
 - 新写入使用 0600 与同目录临时文件 + rename 原子替换。
 - 实现：`apps/host/src/credentials/{oscrypt,linux-keyring,store}.mjs`；测试 `store.test.mjs`（9 例）。
-- 未覆盖：macOS Keychain 与 Windows DPAPI 分支；真实登录写入、重启续期、与 Desktop 交替运行的端到端验证。
+- 令牌续期：`apps/host/src/auth/refresh.mjs` 复用 `@cindy/auth-client` 的刷新语义，服务端轮换时原子写回同一记录，access token 只留内存。单测覆盖轮换/不轮换/缺失三种分支。
+- 未覆盖：macOS Keychain 与 Windows DPAPI 分支；对真实账号发起刷新（会轮换真实凭据，需 Desktop 关闭后单独验证）；重启续期与 Desktop 交替运行的端到端验证。
 
 ## 明确排除的参考实现
 
