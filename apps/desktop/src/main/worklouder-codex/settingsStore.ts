@@ -9,7 +9,6 @@ import {
   WORKLOUDER_CREATOR_PROGRAMMABLE_KEYS,
   WORKLOUDER_MODELS,
   createWorkLouderCodexDefaultSettings,
-  isWorkLouderCreatorProgrammableKey,
   normalizeWorkLouderCodexAgentSource,
   normalizeWorkLouderCodexConfiguredSlots,
   workLouderCodexConfiguredSlotsFromCount,
@@ -200,10 +199,27 @@ function normalize(raw: unknown, model: WorkLouderModel = 'codex-micro'): WorkLo
         rawCustomAgentKeys[index] == null ? null : normalizeAction(rawCustomAgentKeys[index]),
       )
     : defaults.customAgentKeys;
+  const normalizedConfiguredSlots = normalizeWorkLouderCodexConfiguredSlots(
+    value.customAgentKeysConfiguredSlots,
+  );
+  const migratedConfiguredSlots = workLouderCodexConfiguredSlotsFromCount(
+    value.customAgentKeysConfiguredCount,
+  );
+  // createOverrideSettingsFile merges defaults before normalize. A legacy count
+  // therefore arrives beside the default six-slot array even when the file had
+  // no new field, so migrate the count while the array is still the default.
+  const configuredSlotsAreDefault =
+    normalizedConfiguredSlots?.length === defaults.customAgentKeysConfiguredSlots.length &&
+    normalizedConfiguredSlots.every(
+      (slot, index) => slot === defaults.customAgentKeysConfiguredSlots[index],
+    );
   const customAgentKeysConfiguredSlots =
-    normalizeWorkLouderCodexConfiguredSlots(value.customAgentKeysConfiguredSlots) ??
-    workLouderCodexConfiguredSlotsFromCount(value.customAgentKeysConfiguredCount) ??
-    defaults.customAgentKeysConfiguredSlots;
+    migratedConfiguredSlots &&
+    (normalizedConfiguredSlots === null || configuredSlotsAreDefault)
+      ? migratedConfiguredSlots
+      : (normalizedConfiguredSlots ??
+        migratedConfiguredSlots ??
+        defaults.customAgentKeysConfiguredSlots);
   return {
     lightingBrightness:
       typeof brightness === 'number' && Number.isFinite(brightness)

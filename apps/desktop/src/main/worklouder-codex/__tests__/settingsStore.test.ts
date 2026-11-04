@@ -100,6 +100,31 @@ describe('Work Louder Codex settings store', () => {
     );
   });
 
+  it('migrates a file-backed legacy configured count before defaults hide it', () => {
+    electronMock.userDataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'worklouder-settings-'));
+    const file = path.join(
+      electronMock.userDataDir,
+      'owners',
+      'owner-a',
+      'worklouder-codex-settings.json',
+    );
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+    fs.writeFileSync(
+      file,
+      JSON.stringify({
+        agentSource: 'custom',
+        customAgentKeys: Array.from({ length: 13 }, () => null),
+        customAgentKeysConfiguredCount: 13,
+      }),
+    );
+
+    const next = readWorkLouderCodexSettings();
+
+    expect(next.customAgentKeysConfiguredSlots).toEqual(
+      Array.from({ length: 13 }, (_, index) => index),
+    );
+  });
+
   it('prefers an explicit configured-slot set over the legacy count', () => {
     const next = __testing.normalize({
       customAgentKeysConfiguredCount: 13,

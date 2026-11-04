@@ -5,7 +5,10 @@ import {
   WORKLOUDER_CODEX_REMOTE_TASK_CANDIDATE_LIMIT,
   type WorkLouderCodexPublishSession,
 } from '../workLouderCodexTaskPublish';
-import { WORKLOUDER_CODEX_TASK_OPTION_LIMIT } from '../../../../../shared/workLouderCodex';
+import {
+  WORKLOUDER_CODEX_AGENT_SLOT_COUNT,
+  WORKLOUDER_CODEX_TASK_OPTION_LIMIT,
+} from '../../../../../shared/workLouderCodex';
 
 /*
  * 测试价值
@@ -98,6 +101,25 @@ describe('buildWorkLouderCodexPublishedTasks', () => {
       WORKLOUDER_CODEX_REMOTE_TASK_CANDIDATE_LIMIT,
     );
     expect(tasks.filter((task) => task.id.startsWith('local-'))).toHaveLength(64);
+  });
+
+  it('orders non-active visible rows by rendered sidebar order', () => {
+    const archived = Array.from({ length: 14 }, (_, index) =>
+      local(20_000 + index, {
+        id: 'archived-' + index,
+        status: 'archived',
+        deviceLinkDeviceId: 'device-a',
+      }),
+    );
+    const tasks = buildWorkLouderCodexPublishedTasks(
+      archived,
+      archived.toReversed(),
+      archived.map((session) => session.id),
+    );
+
+    expect(tasks.map((task) => task.id)).toEqual(
+      archived.slice(0, WORKLOUDER_CODEX_AGENT_SLOT_COUNT).map((session) => session.id),
+    );
   });
 
   it('keeps visible projections and the remote quota within the 100-row budget', () => {

@@ -40,8 +40,11 @@ export function buildWorkLouderCodexPublishedTasks(
     seen.add(id);
     guaranteedVisible.push(session);
   }
+  const projectedOrder = (session: WorkLouderCodexPublishSession) =>
+    sidebarOrder.get(session.id) ?? Number.MAX_SAFE_INTEGER;
   const visibleProjection = visibleSessionsWithRemote
     .filter((session) => !catalogSessionIds.has(session.id) && !seen.has(session.id))
+    .toSorted((left, right) => projectedOrder(left) - projectedOrder(right))
     .slice(0, WORKLOUDER_CODEX_AGENT_SLOT_COUNT);
   for (const session of visibleProjection) seen.add(session.id);
   const remainingCatalogSlots = Math.max(
