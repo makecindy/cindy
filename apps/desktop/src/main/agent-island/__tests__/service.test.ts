@@ -36,6 +36,29 @@ import type { AgentIslandCompanionIdentity } from '../companionIdentity.js';
 import { setDeepLinkMainWindow, takePendingDeepLink } from '../../deepLink.js';
 import { runDeviceLinkInvokeContext } from '../../device-link/invoke-context.js';
 
+// Keep the real implementation; record each instance so its scheduled publishing
+// cannot outlive a test and run against reset Electron mocks in the next test.
+// Individual cases that install fake timers still reset in `finally` before
+// restoring real timers; this teardown covers every other instance created here.
+const serviceInstances = vi.hoisted(() => new Set<AgentIslandService>());
+vi.mock('../service.js', async importOriginal => {
+  const actual = await importOriginal<typeof import('../service.js')>();
+  return {
+    ...actual,
+    AgentIslandService: class extends actual.AgentIslandService {
+      constructor(...args: ConstructorParameters<typeof actual.AgentIslandService>) {
+        super(...args);
+        serviceInstances.add(this);
+      }
+    },
+  };
+});
+
+afterEach(() => {
+  for (const service of serviceInstances) service.resetRuntimeState();
+  serviceInstances.clear();
+});
+
 const REMOTE_DAEMON_CLOSED_REASON = 'remote_daemon_closed';
 
 vi.mock('../../appSessionState', () => ({
@@ -7112,7 +7135,7 @@ describe('会话关闭原因决定条目去留', () => {
   it('TTL prune 后再 Stop 会清账本并立刻给远端发收尾包', async () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date('2026-01-01T00:00:00.000Z'));
-    let service: { resetRuntimeState(): void } | undefined;
+    let service: AgentIslandService | undefined;
     try {
       const { AgentIslandService } = await import('../service.js');
       const { AGENT_ISLAND_COMPLETED_RETENTION_MS } = await import('../state.js');
@@ -7147,7 +7170,7 @@ describe('会话关闭原因决定条目去留', () => {
   it('TTL prune 后再 process-close 仍保留远程未读,直到真正 ack', async () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date('2026-01-01T00:00:00.000Z'));
-    let service: { resetRuntimeState(): void } | undefined;
+    let service: AgentIslandService | undefined;
     try {
       const { AgentIslandService } = await import('../service.js');
       const { AGENT_ISLAND_COMPLETED_RETENTION_MS } = await import('../state.js');
@@ -7191,7 +7214,7 @@ describe('会话关闭原因决定条目去留', () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date('2026-01-01T00:00:00.000Z'));
     const { markSessionNeedsAttention, clearAllSessionAttention } = await import('../../appBadgeService.js');
-    let service: { resetRuntimeState(): void } | undefined;
+    let service: AgentIslandService | undefined;
     try {
       const { AgentIslandService } = await import('../service.js');
       const { AGENT_ISLAND_UNREAD_TRANSIENT_TTL_MS } = await import('../state.js');
