@@ -253,7 +253,7 @@ const server = createHostServer({
     defaultWorkDir: resolveHostDataDir(),
     defaultModel: process.env.CINDY_HOST_MODEL?.trim() || 'claude-sonnet-4-6',
   }),
-  providers: () => listProviders({ gateway: gatewayCredentials }),
+  providers: () => listProviders({ gateway: gatewayCredentials, ownerId: runtime.owner }),
   history: async (sessionId: string, limit: number) => {
     const { getMessagesForHistory } = await import('../../desktop/src/main/localDb/chatHistoryReader.ts');
     const page = await getMessagesForHistory({

@@ -28,8 +28,9 @@ async function fetchChatModels(gateway) {
  * @returns {Promise<{dataOwnerId: string|null, ownerGeneration: number, providers: any[], providerOrder: string[], error?: string}>}
  */
 export async function listProviders(options) {
+  const owner = options.ownerId ? { dataOwnerId: options.ownerId, ownerGeneration: 1 } : { dataOwnerId: null, ownerGeneration: 0 };
   if (!options.gateway) {
-    return { dataOwnerId: null, ownerGeneration: 0, providers: [], providerOrder: [] };
+    return { ...owner, providers: [], providerOrder: [] };
   }
   const now = Date.now();
   if (!cached || now - cached.at > CACHE_MS) {
@@ -37,14 +38,13 @@ export async function listProviders(options) {
       cached = { at: now, models: await fetchChatModels(options.gateway) };
     } catch (error) {
       return {
-        dataOwnerId: null, ownerGeneration: 0, providers: [], providerOrder: [],
+        ...owner, providers: [], providerOrder: [],
         error: error instanceof Error ? error.message : String(error),
       };
     }
   }
   return {
-    dataOwnerId: null,
-    ownerGeneration: 0,
+    ...owner,
     providerOrder: [GATEWAY_PROVIDER_ID],
     providers: [{
       id: GATEWAY_PROVIDER_ID,
