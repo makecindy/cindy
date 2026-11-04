@@ -187,12 +187,6 @@ describeMigrationReplay('migration replay', () => {
           125, 126, 127, 128, 129, 130, 131, 132, 133, 134, 135, 136, 137, 138, 139, 140, 141, 142,
           143, 144, 145,
         ]);
-        expect(columnNames(db, 'chat_cache_rooms')).toEqual([
-          'namespace',
-          'room_id',
-          'state',
-          'version',
-        ]);
         expect(columnNames(db, 'chat_cache_rooms')).toEqual(['namespace', 'room_id', 'state', 'version']);
         expect(columnNames(db, 'sessions')).toContain('scheduled_model_baseline');
         expect(columnNames(db, 'sessions')).toContain('notifications_muted');

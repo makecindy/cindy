@@ -705,13 +705,13 @@
       "unread": "Unread"
     },
     "viewMr": "View MR",
-    "viewPrMr": "View PR / MR",
+    "viewPrMr": "View PR",
     "mrCount": "{{count}} MRs",
-    "prMrCount": "{{count}} PR / MRs",
+    "prMrCount": "{{count}} PRs",
     "mrCount_one": "{{count}} MR",
-    "prMrCount_one": "{{count}} PR / MR",
+    "prMrCount_one": "{{count}} PR",
     "mrCount_other": "{{count}} MRs",
-    "prMrCount_other": "{{count}} PR / MRs"
+    "prMrCount_other": "{{count}} PRs"
   },
   "companionProfile": {
     "avatar": "Avatar",

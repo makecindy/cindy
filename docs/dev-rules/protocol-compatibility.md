@@ -4760,6 +4760,7 @@ device-link 操作、字段或白名单。远程打开在执行端判定：新�
 
 Desktop 的本机查询、同账号远端查询、任务摘要及 Mobile 共用带 host 的状态身份。
 GitLab 的 glab 安装/登录原因仅本机可见，远端结果统一为无状态；凭证不进入协议。
+子路径部署的链接会被识别为多级分组，部署前缀进入项目路径，因路径不正确而查不到状态。
 Agent 的 GitHub 工具和脚本入口仍不支持 GitLab，不复用其 GitHub token。
 
 共享客户端 allowlist / invokePolicy 与 Mobile 低优先级读取表同步加入新通道。

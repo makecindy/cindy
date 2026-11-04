@@ -64,7 +64,8 @@ PR 选择器只能是完整 GitHub PR URL，或 `{repo:"owner/repo",number:123}`
 Mobile 只扩展现有状态展示与网页跳转，不增加原生功能。GitLab 使用 `!N` / MR，
 HTTPS 链接 `https://host/group/subgroup/project/-/merge_requests/N` 沿既有消息提取、
 导入、补扫、重算与手动添加入口关联；识别不依赖登录。任意域名可识别，多级 namespace
-完整保存在 owner，repo 保存项目名；不支持 HTTP 或子路径部署。
+完整保存在 owner，repo 保存项目名；不支持 HTTP。子路径部署的链接会被识别为多级
+分组，部署前缀也会计入项目路径，因项目路径不正确而查不到状态。
 
 0145 为旧关联补上 `provider=github`、`host=github.com`，唯一索引及状态身份包含
 provider / host / owner / repo / number。不同 GitLab 实例上的同名项目不会串用缓存。
@@ -73,7 +74,8 @@ provider / host / owner / repo / number。不同 GitLab 实例上的同名项目
 执行电脑按 MR 自身 host 调用 `glab config get token --host <host>`，令牌只用于该
 HTTPS origin，重定向不得跨 origin 或降级 HTTP。没有令牌不请求 API；未安装 glab、
 未登录分别提示，401 视为未登录。令牌及 CLI stdout 不写日志，不返回客户端。
-窗口恢复焦点时清除令牌负缓存和状态缓存，终端登录后无需额外刷新按钮。
+窗口恢复焦点时只清除 glab 令牌负缓存和 GitLab 认证失败结果，保留成功缓存与在途
+请求；终端登录后无需额外刷新按钮。
 远程、SSH 和只读任务不展示本机登录引导；GitLab 不使用 GitHub 安装登录窗口。
 
 每个 MR 一次 GraphQL 汇总读取，复用 60 秒缓存、并发合并和前台 90 秒刷新。
@@ -83,5 +85,5 @@ SUCCESS 为通过，SKIPPED 为跳过；FAILED / CANCELED 为失败；MANUAL 与
 准备、排队、运行、定时状态均为进行中。手动作业保持未完成，不猜它是否允许失败。
 
 GitHub Agent 工具与脚本 `github.read` 仍只支持 GitHub。GitHub 管理工具 list 跳过
-GitLab 关联，显式 GitLab 选择器返回不支持；包含 GitLab 的整组排序也明确拒绝，
+GitLab 关联，显式 GitLab 选择器沿用现有校验拒绝；包含 GitLab 的整组排序也明确拒绝，
 避免 GitHub 工具误改不完整的排序。UI 管理和任务摘要支持两者，不新增后台跟进。

@@ -194,7 +194,7 @@ export function SessionPrLinks({
             <>
               <TextInput
                 accessibilityLabel={label("addLabel")}
-                placeholder="https://github.com/owner/repo/pull/123"
+                placeholder={t('session.githubPrs.urlPlaceholder')}
                 placeholderTextColor={colors.textSecondary}
                 value={url}
                 onChangeText={setUrl}

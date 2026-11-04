@@ -705,13 +705,13 @@
       "unread": "未讀"
     },
     "viewMr": "查看 MR",
-    "viewPrMr": "查看 PR / MR",
+    "viewPrMr": "查看 PR",
     "mrCount": "{{count}} 個 MR",
-    "prMrCount": "{{count}} 個 PR / MR",
+    "prMrCount": "{{count}} 個 PR",
     "mrCount_one": "{{count}} 個 MR",
-    "prMrCount_one": "{{count}} 個 PR / MR",
+    "prMrCount_one": "{{count}} 個 PR",
     "mrCount_other": "{{count}} 個 MR",
-    "prMrCount_other": "{{count}} 個 PR / MR"
+    "prMrCount_other": "{{count}} 個 PR"
   },
   "companionProfile": {
     "avatar": "頭像",

@@ -710,15 +710,15 @@
     "artifactCount_many": "{{count}} fichiers",
     "prCount_many": "{{count}} PR",
     "viewMr": "Voir la MR",
-    "viewPrMr": "Voir la PR / MR",
+    "viewPrMr": "Voir la PR",
     "mrCount": "{{count}} MR",
-    "prMrCount": "{{count}} PR / MR",
+    "prMrCount": "{{count}} PR",
     "mrCount_one": "{{count}} MR",
-    "prMrCount_one": "{{count}} PR / MR",
+    "prMrCount_one": "{{count}} PR",
     "mrCount_other": "{{count}} MR",
-    "prMrCount_other": "{{count}} PR / MR",
+    "prMrCount_other": "{{count}} PR",
     "mrCount_many": "{{count}} MR",
-    "prMrCount_many": "{{count}} PR / MR"
+    "prMrCount_many": "{{count}} PR"
   },
   "companionProfile": {
     "avatar": "Avatar",
