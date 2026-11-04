@@ -37478,7 +37478,7 @@
   {
     "site": "twitter",
     "name": "post",
-    "description": "Post a new tweet/thread",
+    "description": "Post to X with text and up to 4 images, or one MP4/MOV video (100 MiB max in Cindy)",
     "access": "write",
     "domain": "x.com",
     "strategy": "ui",
@@ -37496,6 +37496,12 @@
         "type": "string",
         "required": false,
         "help": "Image paths, comma-separated, max 4 (jpg/png/gif/webp)"
+      },
+      {
+        "name": "video",
+        "type": "string",
+        "required": false,
+        "help": "One local MP4/MOV video path, max 100 MiB in Cindy. Prefer H.264/AAC. X free accounts: 140 seconds; subscription limits vary. Cannot combine with images."
       }
     ],
     "columns": [

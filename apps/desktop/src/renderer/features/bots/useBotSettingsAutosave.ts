@@ -15,6 +15,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
 import {
   createBotSettingsAutosave,
+  botSettingsSaveErrorKey,
   normalizeBotSettingsPayload,
   type BotAutosaveStatus,
   type BotAutosaveTrigger,
@@ -36,13 +37,14 @@ export interface UseBotSettingsAutosaveOptions {
   /** Shared with profile reconciliation and patch generation; only confirmed saves advance it. */
   baseline: { current: BotSettingsPayload };
   /** 真正提交。成功 resolve 并推进基线;失败 reject。 */
-  commit: (payload: BotSettingsPayload) => Promise<void>;
+  commit: (payload: BotSettingsPayload, modelSelection?: boolean) => Promise<void>;
   textDelayMs?: number;
   instantDelayMs?: number;
 }
 
 export interface BotSettingsAutosaveController {
   status: BotAutosaveStatus;
+  errorKey: string | null;
   /** 字段变化:文本走防抖,离散选择走即时合并窗口。 */
   onEdit: (trigger: BotAutosaveTrigger) => void;
   /** blur / 返回聊天等显式边界的冲刷。 */
@@ -51,6 +53,7 @@ export interface BotSettingsAutosaveController {
   retry: () => Promise<void>;
   /** 是否有已改但未落库的内容。 */
   isDirty: () => boolean;
+  hasPendingModelSelection: () => boolean;
   /** 挂到文本框上:输入法组合中的拼音不是已完成的编辑,上屏后再进入防抖。 */
   composition: {
     onCompositionStart: () => void;
@@ -83,16 +86,18 @@ export function useBotSettingsAutosave(
   enabledRef.current = enabled;
 
   const [status, setStatus] = useState<BotAutosaveStatus>('idle');
+  const [errorKey, setErrorKey] = useState<string | null>(null);
   const savedTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const mountedRef = useRef(true);
 
-  const handleStatus = useCallback((next: BotAutosaveStatus) => {
+  const handleStatus = useCallback((next: BotAutosaveStatus, error?: unknown) => {
     if (!mountedRef.current) return;
     if (savedTimerRef.current !== null) {
       clearTimeout(savedTimerRef.current);
       savedTimerRef.current = null;
     }
     setStatus(next);
+    setErrorKey(next === 'error' ? botSettingsSaveErrorKey(error) : null);
     if (next !== 'saved') return;
     savedTimerRef.current = setTimeout(() => {
       savedTimerRef.current = null;
@@ -107,9 +112,9 @@ export function useBotSettingsAutosave(
       instantDelayMs,
       readPayload: () => committablePayloadRef.current,
       readBaseline: () => baselineRef.current,
-      commit: async (next) => {
+      commit: async (next, modelSelection) => {
         if (!enabledRef.current) return;
-        await commitRef.current(next);
+        await commitRef.current(next, modelSelection);
       },
       onStatusChange: handleStatus,
     });
@@ -163,5 +168,5 @@ export function useBotSettingsAutosave(
 
   const isDirty = useCallback(() => enabledRef.current && autosave.isDirty(), [autosave]);
 
-  return { status, onEdit, flush, retry, isDirty, composition };
+  return { status, errorKey, onEdit, flush, retry, isDirty, hasPendingModelSelection: autosave.hasPendingModelSelection, composition };
 }

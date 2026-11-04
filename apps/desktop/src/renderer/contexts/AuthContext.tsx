@@ -755,6 +755,11 @@ export function useOptionalAuthDeviceId(): string | null {
   return useContext(AuthContext)?.deviceId ?? null;
 }
 
+/** Data owner generation; 0 outside AuthProvider. Lets account-scoped views reload on a switch. */
+export function useOptionalDataOwnerGeneration(): number {
+  return useContext(AuthContext)?.dataOwnerGeneration ?? 0;
+}
+
 /** 当前登录的账号(昵称、头像)；不在 AuthProvider 内或未登录时为 null。只读展示用途，不抛错。 */
 export function useOptionalAuthUser(): User | null {
   return useContext(AuthContext)?.user ?? null;

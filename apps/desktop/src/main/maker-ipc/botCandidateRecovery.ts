@@ -5,7 +5,7 @@ import {
   type BucketSnapshotLike,
 } from '@cindy/maker-shared/codex-usage-buckets';
 import { matchesDeterministicUsageExhaustionText } from '@cindy/maker-shared/error-redaction';
-import type { InterruptedTurnErrorSignals } from './interruptedTurnAutoResume.js';
+import { isRemoteAgentRouteLostReason, type InterruptedTurnErrorSignals } from './interruptedTurnAutoResume.js';
 
 export type UsageExhaustionScope = 'account' | 'bucket';
 
@@ -219,7 +219,7 @@ export function isCandidateQuotaBlocked(
     // liveLimit is { limited: false }:
     // For bucket-scope failures on the same provider (e.g. separate model buckets on Anthropic/Gemini/Argon),
     // a model whose own live quota is free is eligible, unless static rules prove it shares the same Codex bucket:
-    if (candidate.harness === 'codex' && current.harness === 'codex' && isSameAccountRoute(candidate, current, resolveDefaultProvider)) {
+    if (scope === 'bucket' && candidate.harness === 'codex' && current.harness === 'codex' && isSameAccountRoute(candidate, current, resolveDefaultProvider)) {
       if (areCodexModelsInSameQuotaBucket(current.model, candidate.model, buckets)) {
         return true;
       }
@@ -232,6 +232,8 @@ export function isCandidateQuotaBlocked(
 
 /** A failed provider may be replaced, even when retrying that provider is forbidden. */
 export function isBotCandidateUnavailable(signals: InterruptedTurnErrorSignals): boolean {
+  // A closed remote route can still recover through another configured candidate.
+  if (isRemoteAgentRouteLostReason(signals.reason)) return true;
   const reason = signals.reason ?? '';
   // Explicit product/control failures must never be reinterpreted from their text.
   if (reason && ![
@@ -261,9 +263,17 @@ export interface RuntimeFallbackResult<T> {
   outcome: 'unchanged' | 'switched' | 'exhausted' | 'failed' | 'superseded';
 }
 
+/**
+ * `unchanged` under a required route change means no other route exists at all
+ * (single-route chain or explicit routine model): an ordinarily retryable failure
+ * then keeps the same-route resume an ordinary task would get. `exhausted` means
+ * other routes were configured and tried, so the failed route is not retried.
+ */
 export function canResumeAfterRuntimeFallback(
   requireRouteChange: boolean,
   result: RuntimeFallbackResult<unknown>,
+  sameRouteRetryable = false,
 ): boolean {
-  return result.outcome !== 'superseded' && (!requireRouteChange || result.outcome === 'switched');
+  return result.outcome !== 'superseded' && (!requireRouteChange || result.outcome === 'switched'
+    || (sameRouteRetryable && result.outcome === 'unchanged'));
 }

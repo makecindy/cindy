@@ -1,4 +1,5 @@
 import {
+  lstat,
   mkdir,
   mkdtemp,
   readFile as fsReadFile,
@@ -57,6 +58,29 @@ describe('file-browser scanner symlink boundaries', () => {
       await expect(writeFile(fixture.workdir, fixture.relPath, 'overwrite')).rejects.toThrow(
         /escapes workdir via symlink/,
       );
+    } finally {
+      await rm(fixture.root, { recursive: true, force: true });
+    }
+  });
+
+  it('does not follow a pre-planted .xdt-tmp symlink when saving an in-workdir file', async () => {
+    const fixture = await makeSymlinkFixture();
+    try {
+      if (fixture.kind === 'skip') return;
+      const outside = path.join(fixture.root, 'outside.txt');
+      const target = path.join(fixture.workdir, 'notes.txt');
+      await fsWriteFile(target, 'original', 'utf8');
+      // 旧实现的临时路径固定为 `<target>.xdt-tmp`,预置成逃逸链接即可越界写入。
+      await symlink(outside, `${target}.xdt-tmp`, 'file');
+
+      await writeFile(fixture.workdir, 'notes.txt', 'edited');
+
+      expect(await fsReadFile(outside, 'utf8')).toBe('secret outside workdir');
+      expect(await fsReadFile(target, 'utf8')).toBe('edited');
+      expect((await lstat(target)).isSymbolicLink()).toBe(false);
+      // 只剩预置的链接,本次写入没有残留自己的临时文件。
+      expect((await fsReaddir(fixture.workdir)).filter((name) => name.endsWith('.xdt-tmp')))
+        .toEqual(['notes.txt.xdt-tmp']);
     } finally {
       await rm(fixture.root, { recursive: true, force: true });
     }

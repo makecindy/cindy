@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import { MobilePluginPages } from '../mobilePageService.js';
+import { GhostModelPicker } from '../ghostModelPicker.js';
 import type { InstalledGhost } from '../../../shared/ghost.js';
 import { toGhostPluginDetail } from '../../../renderer/features/plugin/lib/ghostPluginViewModel.js';
 import { installedGhostStoragePart } from '../../../shared/pluginIdentity.js';
@@ -7,7 +8,7 @@ import { parseRemoteResourceGetRequest, type PluginPageDocument } from '@cindy/d
 function setup(
   projection: Pick<
     ConstructorParameters<typeof MobilePluginPages>[0],
-    'setupAssessment' | 'runtimeState' | 'listOrder'
+    'setupAssessment' | 'runtimeState' | 'listOrder' | 'answerModelPicker'
   > = {},
 ) {
   let owner = 'a',
@@ -114,6 +115,68 @@ function setup(
   };
 }
 describe('mobile plugin pages', () => {
+  // #8460 / unit: old controllers strip agentDeviceId from a remote initial selection.
+  // Existing page tests only forwarded answers; they did not exercise the broker accepting a
+  // local namesake. Real page-open → request → poll → answer must reject before delivery when
+  // source support is absent, while preserving new controllers' explicit return to this computer.
+  it.each([
+    { controller: 'legacy', capable: false, remoteInitial: true, localAnswer: true },
+    { controller: 'source-aware', capable: true, remoteInitial: true, localAnswer: false },
+    { controller: 'source-aware returning home', capable: true, remoteInitial: true, localAnswer: true },
+    { controller: 'legacy local request', capable: false, remoteInitial: false, localAnswer: true },
+  ])('keeps the execution source safe for $controller', async ({ capable, remoteInitial, localAnswer }) => {
+    let picker!: GhostModelPicker;
+    const h = setup({ answerModelPicker: (page, id, route) => picker.resolve(page, id, route) });
+    const { pageId } = (await h.invoke('open:panel', capable ? { modelPickerRemoteSources: true } : {})).result as { pageId: string };
+    // The same provider/model is available at home: availability alone cannot detect a lost source.
+    const available = vi.fn(async () => true);
+    picker = new GhostModelPicker({ getGhost: () => h.ghost, installation: () => 'r1',
+      target: (id, page) => page ? h.service.modelPickerTarget(page, id) : null, available });
+    const local = { agentKind: 'codex' as const, providerId: 'same-provider', model: 'same-model', effort: '', fastMode: false };
+    const remote = { ...local, agentDeviceId: 'share:fixture' };
+    try {
+      const selected = picker.request('practice', { mobilePageId: pageId, allowRemote: true,
+        initial: remoteInitial ? remote : local });
+      const poll = (await h.invoke('poll', { pageId, after: 0 })).result as { modelPickers: Array<{ requestId: string }> };
+      if (poll.modelPickers.length) {
+        await h.invoke('answer-model-picker', { pageId, requestId: poll.modelPickers[0].requestId,
+          route: localAnswer ? local : remote });
+      }
+      if (remoteInitial && !capable) {
+        expect(await selected).toMatchObject({ ok: false, errorCode: 'UNAVAILABLE' });
+        expect(poll.modelPickers).toEqual([]);
+        expect(available).not.toHaveBeenCalled();
+      } else {
+        expect(await selected).toEqual({ ok: true, route: localAnswer ? local : remote });
+      }
+    } finally {
+      picker.cancel();
+      await h.invoke('close', { pageId });
+    }
+  });
+  // New Host picker round trip: page/controller ownership and suspend cancellation are
+  // not covered by the existing directory picker. Minimal input: one native request. Tier: unit.
+  it('delivers model selection only to its source controller and cancels it when the page suspends', async () => {
+    const answer = vi.fn(async () => ({ handled: true, accepted: true }));
+    const h = setup({ answerModelPicker: answer }), { pageId } = await h.open();
+    await h.invoke('poll', { pageId, after: 0 });
+    const target = h.service.modelPickerTarget(pageId, 'practice')!;
+    const cancel = vi.fn();
+    const request = { requestId: 'model-choice', ghostId: 'practice', ghostName: 'Practice', expiresAt: Date.now() + 90_000 };
+    expect(target.send(request, cancel)).toBe(true);
+    const poll = (await h.invoke('poll', { pageId, after: 0 })).result as { modelPickers: unknown[] };
+    expect(poll.modelPickers).toEqual([request]);
+    await expect(h.invoke('answer-model-picker', { pageId, requestId: request.requestId, route: null }, 'phone-b')).rejects.toThrow();
+    expect(answer).not.toHaveBeenCalled();
+    expect((await h.invoke('answer-model-picker', { pageId, requestId: request.requestId, route: null })).result)
+      .toEqual({ handled: true, accepted: true });
+    expect(answer).toHaveBeenCalledWith(pageId, request.requestId, null);
+    await h.invoke('suspend', { pageId });
+    expect(cancel).toHaveBeenCalledOnce();
+    expect(h.service.modelPickerTarget(pageId, 'practice')).toBeNull();
+    target.dismiss(request.requestId);
+    await h.invoke('close', { pageId });
+  });
   it.each([undefined, true, false])('projects task card visibility without removing task settings access: %s', async (showTaskPreferences) => {
     const h = setup();
     h.ghost.manifest.agent = { tasks: true };
@@ -562,4 +625,9 @@ it('projects the same installed Details as PC, with factual unsigned trust and n
   expect(JSON.stringify(signed)).not.toContain('not-a-display-field');
   h.ghost.manifest.panel = {html: 'panel.html', position: 'tab'};
   expect((await read()).find(fact => fact.key === 'panel')?.value).toBe('Panel');
+  h.ghost.publishingSource = { kind: 'public-market', pluginId: 'public-practice' };
+  expect(toGhostPluginDetail(h.ghost).author).toBeNull();
+  expect((await read()).some(fact => fact.key === 'author')).toBe(false);
+  h.ghost.publishingSource = { kind: 'local', source: 'manual' };
+  expect((await read()).find(fact => fact.key === 'author')?.value).toBe('Cindy');
 });

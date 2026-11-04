@@ -154,12 +154,15 @@ function mount(snapshot: InputHandoffSnapshot) {
   const root = createRoot(container);
   roots.push(root);
   const onDecision = vi.fn();
+  const onQuietDecision = vi.fn();
   const render = (next: InputHandoffSnapshot) =>
     act(() => {
-      root.render(createElement(InputHandoffCard, { deviceId: "mac", snapshot: next, decisionBusy: false, onDecision }));
+      root.render(
+        createElement(InputHandoffCard, { deviceId: "mac", snapshot: next, decisionBusy: false, onDecision, onQuietDecision }),
+      );
     });
   render(snapshot);
-  return { container, onDecision, render };
+  return { container, onDecision, onQuietDecision, render };
 }
 const buttons = (container: Element) => [...container.querySelectorAll("button")].map((b) => b.textContent);
 const press = async (container: Element, label: string) => {
@@ -237,6 +240,23 @@ it("opens a live view of just this window on the computer running the task", asy
   expect(buttons(ended.container)).not.toContain("interaction.inputHandoff.action.liveView");
 });
 
+it("sends a sign-in to the live view, and keeps the form when there is none", async () => {
+  const { container, onQuietDecision } = mount(step({ directSignIn: true, liveView: true }));
+  expect(container.textContent).toContain("interaction.inputHandoff.directSignIn.hint");
+  expect(buttons(container)).not.toContain("interaction.inputHandoff.action.fill");
+  await press(container, "interaction.inputHandoff.action.openRemoteDesktop");
+  expect(push).toHaveBeenCalledWith({
+    pathname: "/devices/desktop/[deviceId]",
+    params: { deviceId: "mac", deviceName: "Studio", handoff: "req1" },
+  });
+  // Working on the window takes the card, so other devices show it as being handled.
+  expect(onQuietDecision).toHaveBeenCalledWith(expect.objectContaining({ action: "claim", expectedRevision: 2 }));
+  await press(container, "interaction.inputHandoff.action.useForm");
+  expect(buttons(container)).toContain("interaction.inputHandoff.action.fill");
+  const noLive = mount(step({ directSignIn: true }));
+  expect(buttons(noLive.container)).toContain("interaction.inputHandoff.action.fill");
+});
+
 it("offers a sign-in code to copy and its link to open on this phone", async () => {
   const deviceCode = {
     code: "WDJB-MJHT",
@@ -289,6 +309,23 @@ it("hands a QR code from the computer to this phone: open its link here, or save
   expect(sheet(container)).toBeNull();
   await press(container, "interaction.inputHandoff.action.done");
   expect(onDecision).toHaveBeenLastCalledWith({ kind: "input_handoff", action: "done", expectedRevision: 4 });
+});
+
+// ask_owner kind=scan with the agent's screenshot (2026-10-30): the host cannot see that
+// screen, so the sheet says where the picture came from, has nothing to tap, and the
+// owner hands back after confirming the sign-in on this phone.
+it("labels a code from the agent's screenshot and lets the owner hand back after scanning", async () => {
+  const { container, onDecision } = mount(step({ controls: [], picture: true, qr: "scan", agentPicture: true, agentControlled: true }));
+  await press(container, "interaction.inputHandoff.action.scan");
+  expect(container.textContent).toContain("interaction.inputHandoff.agentPicture");
+  expect(container.textContent).not.toContain("interaction.inputHandoff.agentControlled");
+  expect(container.textContent).not.toContain("interaction.inputHandoff.qr.hintLink");
+  expect(buttons(container)).not.toContain("interaction.inputHandoff.action.picture");
+  const code = container.querySelector('[data-testid="interaction.inputHandoff.qr.code"]') as HTMLButtonElement;
+  await act(async () => code.click());
+  expect(answers).toEqual([]);
+  await press(container, "interaction.inputHandoff.action.done");
+  expect(onDecision).toHaveBeenLastCalledWith({ kind: "input_handoff", action: "done", expectedRevision: 2 });
 });
 
 it("opens an app link here first, the way the phone camera would", async () => {

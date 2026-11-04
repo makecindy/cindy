@@ -1,5 +1,10 @@
 // @vitest-environment jsdom
-vi.mock('@/hooks/useModelRouteDevices', () => ({ useModelRouteDevices: () => ({ devices: [{ deviceId: 'share:one', name: 'Shared account' }] }) }));
+vi.mock('@/hooks/useModelRouteDevices', () => ({
+  useModelRouteDevices: ({ leadAgentDeviceId, sshRemote }: { leadAgentDeviceId?: string | null; sshRemote?: boolean }) => ({
+    devices: sshRemote ? undefined : [{ deviceId: 'share:one', name: 'Shared account' }],
+    leadAgentDeviceId: leadAgentDeviceId ?? null,
+  }),
+}));
 vi.mock('@/hooks/useDeviceProviders', () => ({ useDeviceProviders: () => ({ providers: [] }) }));
 
 
@@ -220,7 +225,7 @@ describe('BotModelChainEditor', () => {
     roster.availableVendors = new Set();
     roster.loaded = false;
     const onChange = vi.fn();
-    render(<BotModelChainEditor value={[]} onChange={onChange} />);
+    const view = render(<BotModelChainEditor value={[]} onChange={onChange} />);
     const props = modelSelectorProps.mock.lastCall?.[0];
     expect(props).toMatchObject({ disabled: false, unifiedAgents: ['pi', 'codex', 'claude-code'],
       remoteAgent: { devices: [{ deviceId: 'share:one', name: 'Shared account' }] } });
@@ -228,6 +233,9 @@ describe('BotModelChainEditor', () => {
       agentDevice: { deviceId: 'share:one', name: 'Shared account' } });
     expect(onChange).toHaveBeenLastCalledWith([{ harness: 'codex', model: 'remote-model', providerId: 'openai',
       effort: 'medium', fastMode: false, agentDeviceId: 'share:one' }]);
+    view.rerender(<BotModelChainEditor value={onChange.mock.lastCall![0]} onChange={onChange} />);
+    expect(modelSelectorProps.mock.lastCall?.[0]).toMatchObject({ deviceId: 'share:one',
+      remoteAgent: { selectedDeviceId: 'share:one', homeDeviceId: undefined } });
     onChange.mockClear();
     fireEvent.click(screen.getByText('bots.modelChain.add'));
     expect(onChange).not.toHaveBeenCalled();
@@ -382,4 +390,18 @@ it('uses the selected device catalog without SSH subscription exclusions or loca
   expect(change).not.toHaveBeenCalled();
   fireEvent.click(within(screen.getByTestId('bot-model-fallbacks')).getByRole('button', { name: 'choose-official-codex-model' }));
   expect(change).toHaveBeenCalledWith([expect.objectContaining({ providerId: 'openai', harness: 'codex' })]);
+});
+
+it.each([undefined, 'controlled-host'])('keeps home %s separate from the selected shared catalog', (deviceId) => {
+  render(<BotModelChainEditor deviceId={deviceId} value={[{ harness: 'codex', model: 'shared-model',
+    providerId: 'openai', effort: 'high', fastMode: false, agentDeviceId: 'share:one' }]} onChange={vi.fn()} />);
+  expect(modelSelectorProps.mock.lastCall?.[0]).toMatchObject({ deviceId: 'share:one',
+    remoteAgent: { selectedDeviceId: 'share:one', homeDeviceId: deviceId } });
+});
+
+it('preserves the SSH catalog when execution locations cannot be browsed', () => {
+  render(<BotModelChainEditor remote value={[{ harness: 'codex', model: 'ssh-model',
+    providerId: 'openai', effort: 'high', fastMode: false, agentDeviceId: 'share:one' }]} onChange={vi.fn()} />);
+  expect(modelSelectorProps.mock.lastCall?.[0]).toMatchObject({ deviceId: undefined,
+    remoteAgent: undefined, excludeSubscriptionDirect: true, excludeChatBridgedCodex: true });
 });

@@ -8,6 +8,7 @@ import {
   createEmptyAssistantMessageRecoveryRule,
   createEmptyTextRecoveryRule,
   createEmptyThinkingRecoveryRule,
+  createAnthropicContextManagementRecoveryRule,
   createEncryptedContentRecoveryRule,
   createResponsesReasoningContentRecoveryRule,
   createImageGenerationIdRecoveryRule,
@@ -2223,5 +2224,34 @@ describe('repair → dedupe 链式顺序(host 主动链同序)', () => {
       ],
     });
     expect(repairToolExchangeStructureFromBody(clean)).toBeNull();
+  });
+});
+
+describe('Anthropic context management recovery (#7041)', () => {
+  it('only removes the top-level rejected field and preserves the original request', () => {
+    const rule = createAnthropicContextManagementRecoveryRule();
+    const request = { messages: [{ role: 'user', content: 'hello' }], context_management: {},
+      metadata: { context_management: 'user data' } };
+    const body = Buffer.from(JSON.stringify(request));
+    const stripped = rule.strip(body);
+    expect(stripped).not.toBeNull();
+    expect(JSON.parse(stripped!.toString())).toEqual({ messages: request.messages, metadata: request.metadata });
+    expect(JSON.parse(body.toString())).toEqual(request);
+    expect(rule.strip(stripped!)).toBeNull();
+    expect(rule.strip(Buffer.from('{invalid'))).toBeNull();
+    expect(rule.strip(Buffer.from(JSON.stringify({ input: [], context_management: {} })))).toBeNull();
+  });
+
+  it('does not trigger on unrelated fields or participate in other recovery rules', () => {
+    const rule = createAnthropicContextManagementRecoveryRule();
+    expect(rule.matches('ValidationException: context_management: Extra inputs are not permitted')).toBe(true);
+    for (const message of ['context_management: authentication required',
+      'other_context_management: Extra inputs are not permitted',
+      'messages.0.context_management: Extra inputs are not permitted',
+      'context_management is supported; other_field: Extra inputs are not permitted']) {
+      expect(rule.matches(message)).toBe(false);
+    }
+    expect(rule.applyOnUnmatchedRetry).toBe(false);
+    expect(rule.allowExtraRules).toBe(false);
   });
 });

@@ -1,4 +1,4 @@
-import { GATEWAY_PROXY_TOKEN_INVALID_REASON } from '@cindy/maker-shared/error-redaction';
+import { GATEWAY_PROXY_TOKEN_INVALID_REASON, isRemoteCompactEncryptedContentError, REMOTE_COMPACT_ENCRYPTED_CONTENT_REASON } from '@cindy/maker-shared/error-redaction';
 import {
   CLAUDE_GATEWAY_OPUS_PLAN_MISMATCH_REASON,
   CLAUDE_SUBSCRIPTION_OPUS_PLAN_MISMATCH_REASON,
@@ -42,6 +42,7 @@ export const ERROR_REASON_I18N_KEYS: Record<string, string> = {
   turn_no_event_timeout: 'logic.errors.turnNoEventTimeout',
   bridge_turn_no_event_timeout: 'logic.errors.turnNoEventTimeout',
   'context-overflow': 'chat.errorBanner.contextOverflow',
+  [REMOTE_COMPACT_ENCRYPTED_CONTENT_REASON]: 'chat.errorBanner.remoteCompactEncryptedContent',
   [UPSTREAM_OVERLOAD_REASON]: 'chat.errorBanner.overloadBusyNoRetry',
   [UPSTREAM_STREAM_INTERRUPTED_REASON]: 'chat.errorBanner.streamInterruptedNoRetry',
   [CLAUDE_GATEWAY_OPUS_PLAN_MISMATCH_REASON]: 'chat.errorBanner.claudeGatewayOpusPlanMismatch',
@@ -49,3 +50,11 @@ export const ERROR_REASON_I18N_KEYS: Record<string, string> = {
     'chat.errorBanner.claudeSubscriptionOpusPlanMismatch',
   [GATEWAY_PROXY_TOKEN_INVALID_REASON]: 'chat.errorBanner.gatewayProxyTokenInvalidNoRetry',
 };
+
+/** Also correct persisted failures from hosts that used the old overflow reason. */
+export function errorReasonI18nKey(reason: string | null | undefined, message: string): string | undefined {
+  if ((!reason || reason === 'context-overflow') && isRemoteCompactEncryptedContentError(message, reason)) {
+    return 'chat.errorBanner.remoteCompactEncryptedContent';
+  }
+  return reason ? ERROR_REASON_I18N_KEYS[reason] : undefined;
+}

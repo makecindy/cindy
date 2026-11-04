@@ -34,7 +34,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { app } from 'electron';
 
-import { readModelContextLimit } from './model-context-limit-store.js';
+import { readModelContextLimit, resolveModelCompactionPct } from './model-context-limit-store.js';
 import { toolchainThreadCapEnv } from './toolchain-thread-cap.js';
 import { inputHandoffTaskShellEnv } from '../input-handoff/askpass/index.js';
 
@@ -100,11 +100,12 @@ import { hostCredentialEndpointAllowed } from './pi-provider-transport.js';
 import { hasGrokOAuthLogin } from './grok-oauth-login.js';
 import { isOpenAiSubscriptionProviderId } from './codex-account-auth.js';
 import hostSystemPrompt from './host-system-prompt.md?raw';
+import { withProviderAppAttribution } from './provider-app-attribution.js';
 import businessOwnershipPrompt from './business-ownership-prompt.md?raw';
 import piSystemPrompt from './pi-system-prompt.md?raw';
 import { createLogger } from '../logger.js';
 import { readMemorySettings } from './memory-settings-store.js';
-import { readPiCompactionPct } from './compaction-settings-store.js';
+import { DEFAULT_MODEL_COMPACTION_PCT } from '../../shared/modelContextLimit.js';
 import { registerPiProxySession } from './pi-proxy-session-auth.js';
 import { derivePiProxySessionToken } from './pi-proxy-session-token.js';
 import {
@@ -184,11 +185,13 @@ const PI_NATIVE_APIS = new Set<PiNativeApi>([
  * authenticated loopback proxy replaces it with the real host-owned token and
  * account id before forwarding upstream.
  */
-function piOpenaiProxyPlaceholderJwt(): string {
+function piOpenaiProxyPlaceholderJwt(providerId = 'openai'): string {
   const encode = (value: unknown): string =>
     Buffer.from(JSON.stringify(value)).toString('base64url');
   return `${encode({ alg: 'none', typ: 'JWT' })}.${encode({
-    'https://api.openai.com/auth': { chatgpt_account_id: 'cindy-pi-proxy' },
+    // Pi caches sockets by native session + account id, without comparing headers.
+    // Separate logical accounts must therefore have separate placeholder identities.
+    'https://api.openai.com/auth': { chatgpt_account_id: providerId === 'openai' ? 'cindy-pi-proxy' : `cindy-pi-proxy:${providerId}` },
   })}.`;
 }
 
@@ -727,8 +730,12 @@ export function buildPiSubscriptionNativeProviders(
       retainedProviderId === account.id ? retainedOpenAiModel : null,
     ).providers.find((provider) => provider.sourceProviderId === brand);
     if (!projected) continue;
+    const openaiKeyEnv = brand === 'openai'
+      ? `CINDY_PI_KEY_OPENAI_PROXY_${Buffer.from(account.id).toString('hex').toUpperCase()}` : undefined;
+    if (openaiKeyEnv) env[openaiKeyEnv] = piOpenaiProxyPlaceholderJwt(account.id);
     providers.push({
       ...projected,
+      ...(openaiKeyEnv ? { apiKeyEnvVar: openaiKeyEnv } : {}),
       id: `${brand === 'openai' ? 'openai-codex' : brand}-${account.id}`,
       sourceProviderId: account.id,
       name: account.name,
@@ -876,7 +883,7 @@ function buildDesktopPiRuntimeConfig(): AgentRuntimeConfig {
     userDataPath: app.getPath('userData'),
   };
   Object.defineProperty(config, 'piAutoCompactThresholdPct', {
-    get: () => readPiCompactionPct(),
+    get: () => DEFAULT_MODEL_COMPACTION_PCT,
     enumerable: true,
     configurable: false,
   });
@@ -1162,6 +1169,20 @@ function officialPiRouteMatches(
   );
 }
 
+/** Anthropic's SDK appends /v1/messages, so remove an inherited final /v1. */
+function anthropicRootForV1Endpoint(baseUrl: string): string | undefined {
+  try {
+    const url = new URL(baseUrl);
+    if ((url.protocol !== 'http:' && url.protocol !== 'https:') ||
+        !/\/v1\/?$/.test(url.pathname) || url.search || url.hash || url.username || url.password) {
+      return undefined;
+    }
+    return url.origin + url.pathname.replace(/\/v1\/?$/, '');
+  } catch {
+    return undefined;
+  }
+}
+
 function configuredPiModel(model: {
   id: string;
   name?: string;
@@ -1413,13 +1434,22 @@ export function buildPiNativeProvidersFromConfigs(
         // Public/default/discovery/user precedence was resolved by the active catalog.
         // Carry those facts to the serializer instead of reintroducing SDK precedence.
         // Endpoint, protocol and credentials remain exclusively connection-owned.
-        const resolved = resolvedCatalog?.providers.find(p => p.id === cfg.id)
-          ?.models.pi?.find(model => model.id === configuredModel.id);
+        const runtimeProvider = resolvedCatalog?.providers.find(p => p.id === runtimeCustomProviderId(cfg.id));
+        const catalogProvider = resolvedCatalog?.providers.find(p => p.id === cfg.id);
+        const runtimeModel = runtimeProvider?.models.pi?.find(model => model.id === configuredModel.id);
+        const catalogModel = catalogProvider?.models.pi?.find(model => model.id === configuredModel.id);
+        const resolved = runtimeModel ?? catalogModel;
+        const resolvedProvider = runtimeModel ? runtimeProvider : catalogProvider;
         const m = resolved ? {
           ...configuredModel,
           name: resolved.name,
           contextWindow: resolved.contextWindow,
-          supportsImageInput: resolved.supportsImageInput ?? configuredModel.supportsImageInput,
+          // A same-id built-in row is only a fallback. A user projection already
+          // includes form edits and the higher-priority local catalog overrides.
+          // Sparse user rows still inherit a declared catalog image capability.
+          supportsImageInput: resolvedProvider?.source === 'user'
+            ? resolved.supportsImageInput ?? configuredModel.supportsImageInput ?? catalogModel?.supportsImageInput
+            : configuredModel.supportsImageInput ?? resolved.supportsImageInput,
           reasoning: resolved.efforts.length > 0,
           reasoningEfforts: resolved.efforts.filter((effort): effort is PiReasoningEffort =>
             (PI_REASONING_EFFORTS as readonly string[]).includes(effort)),
@@ -1434,17 +1464,31 @@ export function buildPiNativeProvidersFromConfigs(
         const explicitRouteApi = explicitRoute
           ? wireProtocolToPiApi(explicitRoute.wireProtocol)
           : undefined;
-        // bundled/official rows may lend protocol-compatible capabilities, but never routing.
-        // A same-origin URL is not the same endpoint: replacing /proxy/v1 with /v1 can bypass
-        // the user's proxy. Only the model's own explicit route may create a model-level baseUrl.
-        // Exception: Google's official preset keeps /v1beta/openai for discovery, but its native
-        // SDK must call /v1beta. providerBaseUrlForApi only rewrites Google's public endpoints.
+        // The HTTP bridge resolver discards a route whose protocol disagrees
+        // with an explicit api/piApi override. Native SDK APIs return no bridge
+        // route at all; their saved model endpoint remains authoritative.
+        const matchingModelRoute = m.route && (!explicitRoute ||
+          m.route.wireProtocol === explicitRoute.wireProtocol) ? m.route : undefined;
+        // Bundled/official rows may lend capabilities, but never routing. Only an
+        // explicit model route or a proven SDK path relationship may override baseUrl.
+        // Google's public /v1beta/openai endpoint is one such relationship.
         const nativeGoogleBaseUrl =
           modelApi === 'google-generative-ai' && !m.route?.requestPath && !rt.requestPath
             ? providerBaseUrlForApi(rt.baseUrl, modelApi) : undefined;
+        // Anthropic appends /v1/messages. A model without an effective route may
+        // inherit /v1 from either runtime; matching saved routes remain
+        // authoritative even when they equal the provider endpoint.
+        const nativeAnthropicBaseUrl =
+          modelApi === 'anthropic-messages' &&
+          authMethod !== 'oauth' && !rt.requestPath && !matchingModelRoute
+            ? anthropicRootForV1Endpoint(rt.baseUrl) : undefined;
         const modelBaseUrl =
-          m.api && m.route ? m.route.baseUrl :
-          m.route && explicitRouteApi === modelApi ? explicitRoute?.baseUrl : nativeGoogleBaseUrl;
+          nativeAnthropicBaseUrl ?? (m.api && matchingModelRoute ? matchingModelRoute.baseUrl :
+            m.route && explicitRouteApi === modelApi ? explicitRoute?.baseUrl : nativeGoogleBaseUrl);
+        // Model-level defaults follow the final endpoint. Putting them on the
+        // provider would leak them to a model routed to a different service.
+        const modelHeaders = authMethod === 'oauth' ? bundledModel?.headers
+          : withProviderAppAttribution(modelBaseUrl ?? rt.baseUrl, headers, bundledModel?.headers);
         const spec = {
           id: m.id,
           ...(m.selectedInterface ? { wireId: m.selectedInterface.wireModelId } : {}),
@@ -1489,7 +1533,7 @@ export function buildPiNativeProvidersFromConfigs(
               : {}),
           ...(resolved?.cost ? { cost: catalogCostForPiNative(resolved.cost) }
             : bundledModel?.cost ? { cost: { ...bundledModel.cost } } : {}),
-          ...(bundledModel?.headers ? { headers: { ...bundledModel.headers } } : {}),
+          ...(modelHeaders && Object.keys(modelHeaders).length > 0 ? { headers: modelHeaders } : {}),
           ...(bundledModel?.compat
             ? { compat: structuredClone(bundledModel.compat) }
             : !bundledModel && modelApi === 'openai-completions'
@@ -1950,8 +1994,10 @@ export function buildPiAgent(opts: BuildPiAgentOpts): PiAgent | null {
   return new PiAgent({
     resolveSessionEnvironment: resolveCompanionRuntimeEnvironment,
     getDisabledSkillPaths: readDisabledSkillPaths,
-    // 上游拒收可选请求字段（如 prompt_cache_retention / prompt_cache_key）后学到的 per-model
-    // compat 修正，写 models.json 时合并；只改 compat，不动路由与凭证。
+    // 执行端动态学习；SSH 独立存储，避免把本机线路结论带到远端。
+    resolvePiNativeCompatStorePath: remoteHostId => remoteHostId
+      ? '$HOME/.xdt-server/v1/pi-agent-home/pi-native-compat-overrides.json'
+      : path.join(app.getPath('userData'), 'pi-native-compat-overrides.json'),
     resolvePiNativeCompatOverride: (providerId, modelId, routeKey) =>
       readPiNativeCompatOverride(providerId, modelId, routeKey),
     getManagedSkills: listCindyManagedSkills,
@@ -1961,6 +2007,10 @@ export function buildPiAgent(opts: BuildPiAgentOpts): PiAgent | null {
       const source = resolveModelContextProviderId(catalog, 'pi', providerId, modelId);
       return source ? readModelContextLimit('pi', source, modelId)
         ?? resolveModelDefaultContextWindow(catalog, 'pi', source, modelId) : null;
+    },
+    resolveModelCompactionPct: (providerId, modelId) => {
+      const source = resolveModelContextProviderId(getActiveCatalog(), 'pi', providerId, modelId);
+      return resolveModelCompactionPct(getActiveCatalog(), 'pi', source, modelId);
     },
     auth: desktopPiAuthAdapter,
     runtimeConfig: buildDesktopPiRuntimeConfig(),

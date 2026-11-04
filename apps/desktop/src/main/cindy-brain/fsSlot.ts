@@ -420,9 +420,10 @@ export class GhostFsSlot {
       let realBase: string;
       try {
         realBase = await fs.promises.realpath(base);
-      } catch {
+      } catch (error) {
         if (op === 'delete') return { ok: true, op: 'delete', path: relPath, existed: false };
-        return fail(`文件不存在:${relPath}`);
+        if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+        return { ok: false, errorCode: 'NOT_FOUND', message: `文件不存在:${relPath}` };
       }
       if (!(await deepestExistingAncestorInside(realBase, target))) return fail('path 越界');
     }
@@ -431,16 +432,22 @@ export class GhostFsSlot {
       let stat: fs.Stats;
       try {
         stat = await fs.promises.lstat(target);
-      } catch {
-        return fail(`文件不存在:${relPath}`);
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+        return { ok: false, errorCode: 'NOT_FOUND', message: `文件不存在:${relPath}` };
       }
       if (!stat.isFile()) return fail(`不是文件:${relPath}`);
       if (stat.size > GHOST_FS_READ_MAX_BYTES) {
         return fail(`文件超读取上限(${stat.size} 字节 > ${GHOST_FS_READ_MAX_BYTES});请分文件存`);
       }
       const encoding = req.encoding === 'base64' ? 'base64' : 'utf8';
-      const buf = await fs.promises.readFile(target);
-      return { ok: true, op: 'read', path: relPath, content: buf.toString(encoding), encoding, bytes: buf.byteLength };
+      try {
+        const buf = await fs.promises.readFile(target);
+        return { ok: true, op: 'read', path: relPath, content: buf.toString(encoding), encoding, bytes: buf.byteLength };
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+        return { ok: false, errorCode: 'NOT_FOUND', message: '文件不存在:' + relPath };
+      }
     }
 
     if (op === 'delete') {

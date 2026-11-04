@@ -31,6 +31,8 @@ export interface OllamaRuntimeDeps {
   now?: () => number;
   sleep?: (ms: number) => Promise<void>;
   signal?: AbortSignal;
+  /** Defaults to OLLAMA_START_TIMEOUT_MS. */
+  startTimeoutMs?: number;
 }
 
 const defaultSleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
@@ -214,7 +216,7 @@ export async function startOfficialOllamaApp(deps: OllamaRuntimeDeps): Promise<L
   }
   const sleep = deps.sleep ?? defaultSleep;
   const now = deps.now ?? Date.now;
-  const deadline = now() + OLLAMA_START_TIMEOUT_MS;
+  const deadline = now() + (deps.startTimeoutMs ?? OLLAMA_START_TIMEOUT_MS);
   while (now() < deadline) {
     if (deps.signal?.aborted) throw new Error('aborted');
     await sleepUntilAborted(sleep, OLLAMA_START_POLL_MS, deps.signal);

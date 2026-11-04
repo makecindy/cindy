@@ -69,6 +69,7 @@ describe('buildSnapshotFilePlan', () => {
   });
 
   afterEach(async () => {
+    vi.restoreAllMocks();
     vi.unstubAllEnvs();
     await fs.rm(testRoot, { recursive: true, force: true });
   });
@@ -81,6 +82,29 @@ describe('buildSnapshotFilePlan', () => {
     expect(plan.includedFiles).toEqual([
       { path: 'src/app.ts', pathsForPathspec: [literal('src/app.ts')] },
     ]);
+  });
+
+  // #6901: the file-count gate must run before per-path IO, and the directory
+  // cache must not hide a nested .git created between two captures. Real fs
+  // fixtures belong in the integration tier; existing tests only scan once.
+  it('rejects an oversized status plan before inspecting its paths', async () => {
+    const lstat = vi.spyOn(fs, 'lstat');
+    await expect(buildSnapshotFilePlanFromEntries(repoPath, [
+      { code: '??', path: 'a.txt' }, { code: '??', path: 'b.txt' },
+    ], { maxFiles: 1 })).rejects.toMatchObject({ reason: 'file-count' });
+    expect(lstat).not.toHaveBeenCalled();
+  });
+
+  it('rechecks nested repository markers on the next scan', async () => {
+    await writeRepoFile(repoPath, 'nested/a.txt', 'aa');
+    await writeRepoFile(repoPath, 'nested/b.txt', 'bb');
+    const entries = ['nested/a.txt', 'nested/b.txt'].map((path) => ({ code: '??', path }));
+    const first = await buildSnapshotFilePlanFromEntries(repoPath, entries);
+    expect(first.includedFiles).toHaveLength(2);
+    await fs.mkdir(path.join(repoPath, 'nested/.git'));
+    const second = await buildSnapshotFilePlanFromEntries(repoPath, entries);
+    expect(second.includedFiles).toEqual([]);
+    expect(second.skippedFiles.map((file) => file.reason)).toEqual(['nested-git-repo', 'nested-git-repo']);
   });
 
   it('does not execute repository-local fsmonitor when reading git status', async () => {

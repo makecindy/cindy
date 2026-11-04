@@ -101,7 +101,7 @@ export interface OrcaMcpDeps {
   createWorker: (params: {
     leadSessionId: string;
     role: string;
-    agent: ControlWorkerAgent;
+    agent?: ControlWorkerAgent;
     model?: string;
     providerId?: string;
     effort?: 'low' | 'medium' | 'high' | 'xhigh' | 'max' | 'ultra';
@@ -116,7 +116,7 @@ export interface OrcaMcpDeps {
     initialTaskImages?: string[];
   }) => Promise<
     ControlResult<
-      { workerId: string; workerSessionId: string; workingDir?: string; worktree?: { path: string; branch: string }; softLimitExceeded?: boolean; dispatched?: boolean; dispatchOutcome?: import('../lizi_xdtHelperMcpServer.js').ControlDispatchOutcome; queuedMessageId?: string },
+      import('../xdt-helper/create_worker.js').CreateWorkerSuccessData,
       'INVALID_PARAMS' | 'NOT_FOUND' | 'WORKER_LIMIT_HARD_EXCEEDED' | 'DUPLICATE_LABEL' | 'WORKER_CREATION_IN_PROGRESS' | 'BUDGET_MODEL_REQUIRES_API_MODE' | 'NO_PROVIDER_FOR_AGENT' | 'PROVIDER_ROUTE_UNAVAILABLE' | 'REMOTE_AGENT_DEVICE_UNREACHABLE' | 'REMOTE_AGENT_SHARE_PAUSED' | 'REMOTE_AGENT_SHARE_REMOVED' | 'REMOTE_AGENT_SHARE_UNAVAILABLE' | 'UNSUPPORTED_CAPABILITY'
     >
   >;
@@ -349,6 +349,17 @@ export interface OrcaWorkerDiagnosticStatus {
 
 export interface OrcaWorkerDiagnosticOutput extends OrcaWorkerDiagnosticStatus {
   result: string;
+  /**
+   * Worker **本轮** turn 的 terminal error 摘要(已脱敏);本轮没有以失败收尾时为 null。
+   * 契约里必须声明它:read_worker 的 handler 若只挑字段复制,诊断就永远到不了 Lead。
+   */
+  turnError: {
+    message: string;
+    reason?: string;
+    sdkError?: string;
+    toolLoop?: string;
+    createdAt: string;
+  } | null;
 }
 
 /**
@@ -490,6 +501,9 @@ function registerOrcaDiagnosticTools(
         idle_ms: result.idle_ms,
         restored_from_storage: result.restored_from_storage,
         result: result.result,
+        // 诊断的意义就在这一项:本轮以 terminal error 收尾时把它交给 Lead,
+        // 上一版只复制到 result,新增的 turnError 在 MCP 出口被丢掉了。
+        turnError: result.turnError ?? null,
       });
     },
   });

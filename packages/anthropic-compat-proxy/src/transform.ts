@@ -28,6 +28,7 @@ export {
   createImageGenerationIdRecoveryRule,
   createToolUseProviderSpecificFieldsRecoveryRule,
   createEmptyThinkingRecoveryRule,
+  createAnthropicContextManagementRecoveryRule,
   createEmptyTextRecoveryRule,
   createEmptyAssistantMessageRecoveryRule,
   createDuplicateToolUseIdRecoveryRule,

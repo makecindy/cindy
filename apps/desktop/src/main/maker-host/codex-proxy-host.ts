@@ -25,7 +25,7 @@ import {
 } from '@cindy/model-providers';
 import { reconcileOutboundReasoningEffort } from './outbound-reasoning-effort.js';
 import { createPiProviderFetch, handlePiProviderRequest, invocationModelRecord, nativeBridgeApiKey, readBoundedResponseText, requiresNativeProviderAuth } from './pi-provider-transport.js';
-import { normalizeProviderRequest, normalizeMiniMaxResponsesReasoning } from '@cindy/model-compat';
+import { normalizeProviderRequest, normalizeMiniMaxResponsesReasoning, normalizeRepeatedResponseToolCallIdsFromBody } from '@cindy/model-compat';
 import { createCodexResponsesCompatibilityAdapter, sanitizeXaiTools, hasCacheOnlySearchProhibition, sanitizeByteDanceSeedTools, normalizeByteDanceSeedInput, sanitizeByteDanceSeedReasoning, normalizeStrictGatewayHistory, sanitizeDeepSeekV4CustomTools } from '@cindy/model-compat';
 import { peekGrokAccessToken } from './grok-oauth-login.js';
 import { bearerAccessTokenFromHeaders } from './chatgpt-bridge-auth-invalidation.js';
@@ -77,6 +77,7 @@ import {
   type RequestTransformCtx,
   type RoutingDecision,
   type RoutingTransform,
+  type RecoveryRule,
 } from '@cindy/anthropic-compat-proxy';
 import { buildVisionBridgeProxyTransform } from '../vision-bridge/vision-bridge-controller.js';
 import {
@@ -130,7 +131,7 @@ import {
 } from './provider-route.js';
 import type { CodexSubagentRouteSnapshot } from './codex-subagent-config.js';
 import { getSessionProvider, hasHostedSessionModelAccess, hostedSessionModelAllowed } from './session-provider-store.js';
-import { guestProviderModelAllowed, guestProviderOffersModel, guestProviderRouteForSession, hostedProviderOffersModel } from './guest-provider-route-store.js';
+import { captureGuestRequestUsage, guestProviderModelDenial, guestProviderModelAllowed, guestProviderOffersModel, guestProviderRouteForSession, hostedProviderOffersModel } from './guest-provider-route-store.js';
 import { isOpenAiSubscriptionProviderId } from './codex-account-auth.js';
 import { composeResponseObservers } from './claude-rate-limit-headers-observer.js';
 import { createProviderUpstreamErrorObserver, reportProviderUpstreamError } from './provider-upstream-error-observer.js';
@@ -142,6 +143,7 @@ import {
   responsesItemIdStripController,
   responsesItemIdLengthStripController,
   responsesReasoningContentStripController,
+  responsesToolCallHistoryStripController,
   xaiModelInputStripController,
 } from './thread-strip-controllers.js';
 import { createMakerLogger } from './logger-adapter.js';
@@ -246,6 +248,19 @@ const responsesItemIdLengthRecoveryRule = createResponsesItemIdLengthRecoveryRul
 const responsesReasoningContentRecoveryRule = createResponsesReasoningContentRecoveryRule({
   onRetry: (threadId, model) => responsesReasoningContentStripController.markActive(threadId, model),
 });
+const duplicateResponsesToolCallRecoveryRule: RecoveryRule = {
+  id: 'duplicate_responses_tool_call',
+  enabled: () => true,
+  matches: (errorText) => /duplicate\s+function_call_output\s+for\s+call_id/i.test(errorText),
+  strip: normalizeRepeatedResponseToolCallIdsFromBody,
+  onRetry: (threadId, model) => responsesToolCallHistoryStripController.markActive(threadId, model),
+  useUpstreamModel: true,
+  applyOnUnmatchedRetry: false,
+  // 只修重复的工具 ID。这条规则的判据绑在「上游明确说 call_id 重复」上,不能顺带
+  // 叠洗别的 strip:encrypted-content 那条会在同一次透明重试里删掉上游从未拒绝过的
+  // 加密/reasoning 内容,并把删除带进后续轮次(与 responses_reasoning_content 同处理)。
+  allowExtraRules: false,
+};
 const xaiModelInputRecoveryRule = createXaiModelInputRecoveryRule({
   onRetry: (threadId, model) => xaiModelInputStripController.markActive(threadId, model),
 });
@@ -256,6 +271,7 @@ const CODEX_BODY_RECOVERY_RULES = [
   responsesItemIdPrefixRecoveryRule,
   responsesItemIdLengthRecoveryRule,
   responsesReasoningContentRecoveryRule,
+  duplicateResponsesToolCallRecoveryRule,
   xaiModelInputRecoveryRule,
   vllmResponsesCompatibilityRule,
 ] as const;
@@ -2518,7 +2534,8 @@ function codexCustomProviderRouteFailure(status: number, code: string): RoutingD
   };
 }
 
-function codexGuestRouteRefusal(): RoutingDecision {
+function codexGuestRouteRefusal(sessionId?: string | null, model = ''): RoutingDecision {
+  const denial = guestProviderModelDenial(sessionId, model);
   return {
     localHandler: async ({ res }) => {
       res.writeHead(403, {
@@ -2528,8 +2545,8 @@ function codexGuestRouteRefusal(): RoutingDecision {
       res.end(JSON.stringify({
         error: {
           type: 'invalid_request_error',
-          code: 'shared_provider_only',
-          message: 'This request is outside the provider shared with you.',
+          code: denial?.code ?? 'shared_provider_only',
+          message: denial?.message ?? 'This request is outside the provider shared with you.',
         },
       }));
     },
@@ -2573,16 +2590,16 @@ export function createCodexGuestRoutingGuard(
     const reviewerModel = requestModel === CODEX_AUTO_REVIEW_MODEL && guardianParentThreadIdFromHeaders(ctx.headers) && sessionId
       ? reviewerModelBySession.get(sessionId)
       : undefined;
-    if (!await guestProviderModelAllowed(providerId, reviewerModel ?? requestModel, sessionId)) return codexGuestRouteRefusal();
+    if (!await guestProviderModelAllowed(providerId, reviewerModel ?? requestModel, sessionId)) return codexGuestRouteRefusal(sessionId, reviewerModel ?? requestModel);
     if (parseCodexCustomProviderPath(ctx.url).kind !== 'not-custom-provider-route') return undefined;
     const authInjection = frozenAuthInjection ?? getCodexProxyAuthInjection();
     if (ctx.url.split('?', 1)[0]?.endsWith('/responses')) {
       const effectiveModel = providerAwareGuardianReviewerModel(body, ctx.headers, authInjection) ?? requestModel;
-      if (effectiveModel !== requestModel && !await guestProviderModelAllowed(providerId, effectiveModel, sessionId)) return codexGuestRouteRefusal();
+      if (effectiveModel !== requestModel && !await guestProviderModelAllowed(providerId, effectiveModel, sessionId)) return codexGuestRouteRefusal(sessionId, effectiveModel);
       const offered = effectiveModel === CODEX_AUTO_REVIEW_MODEL
         ? isOpenAiSubscriptionProviderId(providerId)
         : await guestProviderOffersModel(providerId, 'codex', effectiveModel, sessionId ?? undefined);
-      if (!offered) return codexGuestRouteRefusal();
+      if (!offered) return codexGuestRouteRefusal(sessionId, effectiveModel);
     }
     if (requestSessionId) {
       return guestProviderRouteForSession(requestSessionId)?.providerId === providerId
@@ -3310,6 +3327,11 @@ function createTransformRequestChain(
     // Run after every provider dialect rewrite: xAI can also turn custom calls into functions.
     // This covers native-custom routes and tool-less /responses/compact without changing call_id.
     normalizeResponsesToolItemIds,
+    createActiveStripTransform({
+      controller: responsesToolCallHistoryStripController,
+      enabled: () => true,
+      strip: normalizeRepeatedResponseToolCallIdsFromBody,
+    }),
     stripNonAnthropicFields,
   ];
   if (process.env.XDT_CODEX_PROXY_DUMP_TRANSFORMED_BODY === '1') {
@@ -3445,6 +3467,7 @@ async function createCodexProxyHandle(
         providerId: customProviderId ?? gatewayProviderIdForRewrittenModel(model) ?? context.providerId ?? guestProviderId
           ?? (gatewayProviderIdForRewrittenModel(model) ? null : (frozenAuthInjection ?? getCodexProxyAuthInjection()) === 'oauth-bearer' ? 'openai' : null),
       }, ctx);
+      if (!decision?.localHandler && guestProviderId && isOpenAiSubscriptionProviderId(guestProviderId)) return { ...decision, headerOverride: { ...decision?.headerOverride, 'accept-encoding': 'identity' } };
       if (decision?.localHandler || !isXaiUpstream(decision?.upstreamOverride ?? '')
         || ctx.method !== 'POST' || !ctx.url.split('?', 1)[0]?.endsWith('/responses')) return decision;
       // The observer receives raw wire bytes. Negotiate plaintext so the execution-price
@@ -3535,6 +3558,13 @@ async function createCodexProxyHandle(
     ),
     responseObserver: composeResponseObservers(
       ctx => {
+        if (!guestSessionId || ctx.status < 200 || ctx.status >= 300) return null;
+        let model = '';
+        try { const body = JSON.parse(ctx.requestBody.toString('utf8')); if (typeof body.model === 'string') model = body.model; } catch { return null; }
+        const record = captureGuestRequestUsage(guestSessionId, model);
+        return record ? createUsagePricingObserver(ctx.responseHeaders['content-type'] ?? '', record) : null;
+      },
+      ctx => {
         const record = pricing.get(ctx.reqId);
         return record && ctx.status >= 200 && ctx.status < 300
           ? createUsagePricingObserver(ctx.responseHeaders['content-type'] ?? '', record) : null;
@@ -3582,6 +3612,8 @@ async function createCodexProxyHandle(
      * thread 不预扫描、不降级，继续保留原生 WS 容量体验。
      */
     resolveWebSocketUpstream: ({ headers }) => {
+      // Member budgets and grants are evaluated for every request on the isolated guest proxy.
+      if (guestProviderId) return null;
       if ((frozenAuthInjection ?? getCodexProxyAuthInjection()) !== 'oauth-bearer') return null;
       // Hosted owner tasks need HTTP so every model request (and later revocation) reaches the live grant check.
       if (hasHostedSessionModelAccess(sessionIdFromHeaders(headers))) return null;
@@ -4030,6 +4062,7 @@ function clearSessionThreads(sessionId: string): string[] {
       httpRecoveryReasonByThread.delete(threadId);
       pendingHttpRecoveryStripByThread.delete(threadId);
       responsesReasoningContentStripController.clear(threadId);
+      responsesToolCallHistoryStripController.clear(threadId);
     }
   }
   return threadIds;
@@ -4068,6 +4101,7 @@ export async function disposeCodexProxy(): Promise<void> {
   for (const threadId of threadToSession.keys()) {
     registry.delete(threadId);
     responsesReasoningContentStripController.clear(threadId);
+    responsesToolCallHistoryStripController.clear(threadId);
   }
   sessionToThread.clear();
   sessionToThreads.clear();

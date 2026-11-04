@@ -7,6 +7,11 @@ const { translate } = vi.hoisted(() => ({
   translate: (key: string, args?: { version?: string; time?: string }) =>
     args?.version || args?.time ? `${key}: ${args.version ?? args.time}` : key,
 }));
+vi.mock('react-router-dom', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('react-router-dom')>()),
+  useNavigate: () => vi.fn(),
+}));
+
 vi.mock('react-i18next', () => ({ useTranslation: () => ({ t: translate }) }));
 vi.mock('@/lib/toast', () => ({
   toast: { info: vi.fn(), success: vi.fn(), warning: vi.fn(), error: vi.fn() },
@@ -23,27 +28,43 @@ const newVersion = '0.33.1';
 function deferred<T>() {
   let resolve!: (value: T) => void;
   let reject!: (error: Error) => void;
-  const promise = new Promise<T>((res, rej) => { resolve = res; reject = rej; });
+  const promise = new Promise<T>((res, rej) => {
+    resolve = res;
+    reject = rej;
+  });
   return { promise, resolve, reject };
 }
 
 function driverStatus(version = oldVersion, macos = false): ComputerDriverStatus {
   return {
-    installed: true, version, executablePath: 'cua-driver', daemonRunning: true,
-    installCommand: 'noop', docsUrl: 'https://example.invalid/docs',
+    installed: true,
+    version,
+    executablePath: 'cua-driver',
+    daemonRunning: true,
+    installCommand: 'noop',
+    docsUrl: 'https://example.invalid/docs',
     permissionState: {
-      platform: macos ? 'macos' : 'windows', required: macos, canGrant: macos,
+      platform: macos ? 'macos' : 'windows',
+      required: macos,
+      canGrant: macos,
       status: macos ? 'granted' : 'not_required',
-      accessibility: 'granted', screenRecording: 'granted', screenRecordingCapturable: 'granted',
+      accessibility: 'granted',
+      screenRecording: 'granted',
+      screenRecordingCapturable: 'granted',
     },
   };
 }
 
 const offer: ComputerDriverUpdateCheck = {
-  currentVersion: '0.33.0', latestVersion: '0.33.1', updateAvailable: true, updating: false,
+  currentVersion: '0.33.0',
+  latestVersion: '0.33.1',
+  updateAvailable: true,
+  updating: false,
 };
 const upToDate: ComputerDriverUpdateCheck = {
-  ...offer, currentVersion: '0.33.1', updateAvailable: false,
+  ...offer,
+  currentVersion: '0.33.1',
+  updateAvailable: false,
 };
 function installed(macos = false): ComputerDriverInstallResult {
   return { ok: true, stdout: '', stderr: '', status: driverStatus(newVersion, macos) };
@@ -51,7 +72,8 @@ function installed(macos = false): ComputerDriverInstallResult {
 
 function installApi(macos = false) {
   const computer = {
-    status: vi.fn<(...args: unknown[]) => Promise<ComputerDriverStatus>>()
+    status: vi
+      .fn<(...args: unknown[]) => Promise<ComputerDriverStatus>>()
       .mockResolvedValue(driverStatus(oldVersion, macos)),
     checkUpdate: vi.fn().mockResolvedValueOnce(offer).mockResolvedValue(upToDate),
     updateDriver: vi.fn().mockResolvedValue(installed(macos)),
@@ -61,7 +83,9 @@ function installApi(macos = false) {
     cancelPermissionGrant: vi.fn(async () => {}),
   };
   const setEnabled = vi.fn(async () => ({ codexMcpRefreshed: true }));
-  const getState = vi.fn(async (pluginId: string) => ({ effectiveEnabled: pluginId === 'computer' }));
+  const getState = vi.fn(async (pluginId: string) => ({
+    effectiveEnabled: pluginId === 'computer',
+  }));
   Object.defineProperty(window, 'electronAPI', {
     configurable: true,
     value: {
@@ -91,19 +115,58 @@ afterEach(() => {
 });
 
 describe('ComputerUseSection driver update completion', () => {
-  it.each(['response', 'rejection'])('labels a retained offer after a failed recheck (%s)', async (failure) => {
-    const { computer } = installApi();
-    render(<ComputerUseSection />);
-    await screen.findByText(`${updateKey}.available: ${newVersion}`);
-    if (failure === 'response') computer.checkUpdate.mockResolvedValue({ ...offer, checkStatus: 'error' });
-    else computer.checkUpdate.mockRejectedValue(new Error('offline'));
-    fireEvent.click(screen.getByRole('button', { name: `${updateKey}.check` }));
-    await screen.findByText(`${updateKey}.checkFailed`);
-    expect(screen.getByText(`${updateKey}.previouslyAvailable: ${newVersion}`)).toBeTruthy();
-    expect(screen.queryByText(`${updateKey}.available: ${newVersion}`)).toBeNull();
-    expect((screen.getByRole('button', { name: `${updateKey}.action` }) as HTMLButtonElement).disabled).toBe(false);
-    expect(screen.getByRole('button', { name: `${updateKey}.retry` })).toBeTruthy();
-  });
+  // PR #7584: independent loading makes driver updates available before opt-in
+  // resolves. The switch must only become off after the backend confirms it;
+  // earlier update tests always started with the opt-in already loaded (unit).
+  it.each([false, true])(
+    'preserves persisted opt-in while update disables a still-loading configuration (write fails: %s)',
+    async (fails) => {
+      const { computer, getState, setEnabled } = installApi(true);
+      const optIn = deferred<{ effectiveEnabled: boolean }>();
+      const disabling = deferred<{ codexMcpRefreshed: boolean }>();
+      getState.mockImplementation((id) =>
+        id === 'computer' ? optIn.promise : Promise.resolve({ effectiveEnabled: false }),
+      );
+      setEnabled.mockReturnValue(disabling.promise);
+      render(<ComputerUseSection />);
+      await screen.findByText(`${updateKey}.available: ${newVersion}`);
+      computer.status.mockRejectedValue(new Error('permission probe unavailable'));
+      await clickUpdate();
+      await waitFor(() => expect(setEnabled).toHaveBeenCalledWith('computer', false));
+      const toggle = screen.getByRole('switch', {
+        name: 'settings.computerUse.directControl.toggleAria',
+      }) as HTMLButtonElement;
+      expect(toggle.disabled).toBe(true);
+      await act(async () => {
+        if (fails) disabling.reject(new Error('write failed'));
+        else disabling.resolve({ codexMcpRefreshed: true });
+      });
+      await act(async () => {
+        optIn.resolve({ effectiveEnabled: true });
+      });
+      expect(toggle.getAttribute('aria-checked')).toBe(fails ? 'true' : 'false');
+    },
+  );
+
+  it.each(['response', 'rejection'])(
+    'labels a retained offer after a failed recheck (%s)',
+    async (failure) => {
+      const { computer } = installApi();
+      render(<ComputerUseSection />);
+      await screen.findByText(`${updateKey}.available: ${newVersion}`);
+      if (failure === 'response')
+        computer.checkUpdate.mockResolvedValue({ ...offer, checkStatus: 'error' });
+      else computer.checkUpdate.mockRejectedValue(new Error('offline'));
+      fireEvent.click(screen.getByRole('button', { name: `${updateKey}.check` }));
+      await screen.findByText(`${updateKey}.checkFailed`);
+      expect(screen.getByText(`${updateKey}.previouslyAvailable: ${newVersion}`)).toBeTruthy();
+      expect(screen.queryByText(`${updateKey}.available: ${newVersion}`)).toBeNull();
+      expect(
+        (screen.getByRole('button', { name: `${updateKey}.action` }) as HTMLButtonElement).disabled,
+      ).toBe(false);
+      expect(screen.getByRole('button', { name: `${updateKey}.retry` })).toBeTruthy();
+    },
+  );
 
   it('finishes local permission recovery even when the post-install network check is slow', async () => {
     const { computer, setEnabled } = installApi(true);
@@ -114,12 +177,19 @@ describe('ComputerUseSection driver update completion', () => {
     computer.status.mockRejectedValue(new Error('permission probe unavailable'));
     await clickUpdate();
     await waitFor(() => expect(setEnabled).toHaveBeenCalledWith('computer', false));
-    expect(computer.status).toHaveBeenCalledWith({ forcePermissionProbe: true, freshPermissionProbe: true });
-    expect(toast.warning).toHaveBeenCalledWith('settings.computerUse.directControl.toast.permissionPending');
+    expect(computer.status).toHaveBeenCalledWith({
+      forcePermissionProbe: true,
+      freshPermissionProbe: true,
+    });
+    expect(toast.warning).toHaveBeenCalledWith(
+      'settings.computerUse.directControl.toast.permissionPending',
+    );
     await screen.findByText(`${updateKey}.checking`);
     expect(screen.getByText(`${versionKey}: ${newVersion}`)).toBeTruthy();
     expect(screen.queryByText(`${updateKey}.updating`)).toBeNull();
-    await act(async () => { check.resolve(upToDate); });
+    await act(async () => {
+      check.resolve(upToDate);
+    });
   });
 
   it('distinguishes reading the local version from checking for updates and shows the final result', async () => {
@@ -131,36 +201,52 @@ describe('ComputerUseSection driver update completion', () => {
     render(<ComputerUseSection />);
     await screen.findByText(`${updateKey}.readingVersion`);
     expect(computer.checkUpdate).not.toHaveBeenCalled();
-    await act(async () => { status.resolve(driverStatus()); });
+    await act(async () => {
+      status.resolve(driverStatus());
+    });
     await screen.findByText(`${updateKey}.checking`);
     expect(screen.queryByText(`${updateKey}.upToDate`)).toBeNull();
-    expect((screen.getByRole('button', { name: `${updateKey}.check` }) as HTMLButtonElement).disabled).toBe(true);
-    await act(async () => { check.resolve({ ...upToDate, checkStatus: 'success', checkedAt: Date.now() }); });
+    expect(
+      (screen.getByRole('button', { name: `${updateKey}.check` }) as HTMLButtonElement).disabled,
+    ).toBe(true);
+    await act(async () => {
+      check.resolve({ ...upToDate, checkStatus: 'success', checkedAt: Date.now() });
+    });
     await screen.findByText(`${updateKey}.upToDate`);
     expect(screen.getByText(new RegExp(`${updateKey}.lastChecked:`))).toBeTruthy();
     expect(screen.queryByText(`${updateKey}.checking`)).toBeNull();
   });
 
-  it.each(['response', 'rejection'])('shows a failed check and lets retry bypass the cache (%s)', async (failure) => {
-    const { computer } = installApi();
-    computer.checkUpdate.mockReset();
-    if (failure === 'response') {
-      computer.checkUpdate.mockResolvedValueOnce({ ...offer, latestVersion: null, updateAvailable: false, checkStatus: 'error' });
-    } else {
-      computer.checkUpdate.mockRejectedValueOnce(new Error('offline'));
-    }
-    const retry = deferred<ComputerDriverUpdateCheck>();
-    computer.checkUpdate.mockReturnValue(retry.promise);
-    render(<ComputerUseSection />);
-    await screen.findByText(`${updateKey}.checkFailed`);
-    expect(screen.queryByText(`${updateKey}.upToDate`)).toBeNull();
-    fireEvent.click(screen.getByRole('button', { name: `${updateKey}.retry` }));
-    expect(computer.checkUpdate).toHaveBeenLastCalledWith({ force: true });
-    await screen.findByText(`${updateKey}.checking`);
-    await act(async () => { retry.resolve(offer); });
-    await screen.findByText(`${updateKey}.available: ${newVersion}`);
-    expect(screen.queryByText(`${updateKey}.checkFailed`)).toBeNull();
-  });
+  it.each(['response', 'rejection'])(
+    'shows a failed check and lets retry bypass the cache (%s)',
+    async (failure) => {
+      const { computer } = installApi();
+      computer.checkUpdate.mockReset();
+      if (failure === 'response') {
+        computer.checkUpdate.mockResolvedValueOnce({
+          ...offer,
+          latestVersion: null,
+          updateAvailable: false,
+          checkStatus: 'error',
+        });
+      } else {
+        computer.checkUpdate.mockRejectedValueOnce(new Error('offline'));
+      }
+      const retry = deferred<ComputerDriverUpdateCheck>();
+      computer.checkUpdate.mockReturnValue(retry.promise);
+      render(<ComputerUseSection />);
+      await screen.findByText(`${updateKey}.checkFailed`);
+      expect(screen.queryByText(`${updateKey}.upToDate`)).toBeNull();
+      fireEvent.click(screen.getByRole('button', { name: `${updateKey}.retry` }));
+      expect(computer.checkUpdate).toHaveBeenLastCalledWith({ force: true });
+      await screen.findByText(`${updateKey}.checking`);
+      await act(async () => {
+        retry.resolve(offer);
+      });
+      await screen.findByText(`${updateKey}.available: ${newVersion}`);
+      expect(screen.queryByText(`${updateKey}.checkFailed`)).toBeNull();
+    },
+  );
 
   it('keeps manual checking available when up to date and displays a newly found update', async () => {
     const { computer } = installApi();
@@ -176,14 +262,19 @@ describe('ComputerUseSection driver update completion', () => {
     const { computer, getState } = installApi();
     const optIn = deferred<{ effectiveEnabled: boolean }>();
     const check = deferred<ComputerDriverUpdateCheck>();
-    getState.mockImplementation((pluginId) => pluginId === 'computer'
-      ? optIn.promise : Promise.resolve({ effectiveEnabled: false }));
+    getState.mockImplementation((pluginId) =>
+      pluginId === 'computer' ? optIn.promise : Promise.resolve({ effectiveEnabled: false }),
+    );
     computer.checkUpdate.mockReset().mockReturnValue(check.promise);
     render(<ComputerUseSection />);
     await waitFor(() => expect(computer.checkUpdate).toHaveBeenCalledOnce());
-    await act(async () => { optIn.resolve({ effectiveEnabled: true }); });
+    await act(async () => {
+      optIn.resolve({ effectiveEnabled: true });
+    });
     computer.checkUpdate.mockResolvedValue(upToDate);
-    await act(async () => { check.resolve({ ...offer, updating: true }); });
+    await act(async () => {
+      check.resolve({ ...offer, updating: true });
+    });
     await screen.findByText(`${versionKey}: ${newVersion}`);
     expect(computer.updateDriver).toHaveBeenCalledExactlyOnceWith({ joinOnly: true });
     expect(screen.queryByRole('button', { name: `${updateKey}.action` })).toBeNull();
@@ -199,24 +290,29 @@ describe('ComputerUseSection driver update completion', () => {
     expect(screen.queryByRole('button', { name: `${updateKey}.action` })).toBeNull();
   });
 
-  it.each([true, false])('refreshes actual state after an installer error (binary replaced: %s)', async (replaced) => {
-    const { computer } = installApi();
-    computer.updateDriver.mockRejectedValue(new Error('installer cleanup failed'));
-    render(<ComputerUseSection />);
-    await screen.findByText(`${versionKey}: ${oldVersion}`);
-    computer.status.mockResolvedValue(driverStatus(replaced ? newVersion : oldVersion));
-    computer.checkUpdate.mockResolvedValue(replaced ? upToDate : offer);
-    await clickUpdate();
-    await waitFor(() => expect(computer.status).toHaveBeenCalledWith({ skipPermissionProbe: true }));
-    await waitFor(() => expect(computer.checkUpdate).toHaveBeenCalledTimes(2));
-    await screen.findByText(`${versionKey}: ${replaced ? newVersion : oldVersion}`);
-    await waitFor(() => {
-      const button = screen.queryByRole('button', { name: `${updateKey}.action` });
-      if (replaced) expect(button).toBeNull();
-      else expect((button as HTMLButtonElement).disabled).toBe(false);
-    });
-    expect(toast.success).not.toHaveBeenCalled();
-  });
+  it.each([true, false])(
+    'refreshes actual state after an installer error (binary replaced: %s)',
+    async (replaced) => {
+      const { computer } = installApi();
+      computer.updateDriver.mockRejectedValue(new Error('installer cleanup failed'));
+      render(<ComputerUseSection />);
+      await screen.findByText(`${versionKey}: ${oldVersion}`);
+      computer.status.mockResolvedValue(driverStatus(replaced ? newVersion : oldVersion));
+      computer.checkUpdate.mockResolvedValue(replaced ? upToDate : offer);
+      await clickUpdate();
+      await waitFor(() =>
+        expect(computer.status).toHaveBeenCalledWith({ skipPermissionProbe: true }),
+      );
+      await waitFor(() => expect(computer.checkUpdate).toHaveBeenCalledTimes(2));
+      await screen.findByText(`${versionKey}: ${replaced ? newVersion : oldVersion}`);
+      await waitFor(() => {
+        const button = screen.queryByRole('button', { name: `${updateKey}.action` });
+        if (replaced) expect(button).toBeNull();
+        else expect((button as HTMLButtonElement).disabled).toBe(false);
+      });
+      expect(toast.success).not.toHaveBeenCalled();
+    },
+  );
 
   it('publishes the new version before a slow permission check and reports its failure separately', async () => {
     const { computer, setEnabled } = installApi(true);
@@ -227,10 +323,14 @@ describe('ComputerUseSection driver update completion', () => {
     await clickUpdate();
     await screen.findByText(`${versionKey}: ${newVersion}`);
     expect(screen.queryByRole('button', { name: `${updateKey}.action` })).toBeNull();
-    await act(async () => { permissions.reject(new Error('permission probe failed')); });
-    await waitFor(() => expect(toast.warning).toHaveBeenCalledWith(
-      'settings.computerUse.directControl.toast.permissionPending',
-    ));
+    await act(async () => {
+      permissions.reject(new Error('permission probe failed'));
+    });
+    await waitFor(() =>
+      expect(toast.warning).toHaveBeenCalledWith(
+        'settings.computerUse.directControl.toast.permissionPending',
+      ),
+    );
     expect(toast.error).not.toHaveBeenCalled();
     expect(setEnabled).toHaveBeenCalledWith('computer', false);
     expect(screen.getByText(`${versionKey}: ${newVersion}`)).toBeTruthy();
@@ -242,7 +342,9 @@ describe('ComputerUseSection driver update completion', () => {
     render(<ComputerUseSection />);
     await screen.findByText(`${versionKey}: ${oldVersion}`);
     computer.status.mockResolvedValue({
-      ...driverStatus(newVersion, true), installed: false, version: null,
+      ...driverStatus(newVersion, true),
+      installed: false,
+      version: null,
       permissionState: { platform: 'macos', required: true, canGrant: true, status: 'unknown' },
     });
     await clickUpdate();
@@ -251,26 +353,31 @@ describe('ComputerUseSection driver update completion', () => {
     expect(toast.error).not.toHaveBeenCalled();
   });
 
-  it.each([true, false])('joins the existing update after reopening (installer succeeds: %s)', async (succeeds) => {
-    const { computer } = installApi();
-    const installation = deferred<ComputerDriverInstallResult>();
-    computer.updateDriver.mockReturnValue(installation.promise);
-    const first = render(<ComputerUseSection />);
-    await clickUpdate();
-    first.unmount();
-    computer.checkUpdate.mockResolvedValue({ ...offer, updating: true });
-    render(<ComputerUseSection />);
-    await waitFor(() => expect(computer.updateDriver).toHaveBeenLastCalledWith({ joinOnly: true }));
-    computer.status.mockResolvedValue(driverStatus(newVersion));
-    computer.checkUpdate.mockResolvedValue(upToDate);
-    await act(async () => {
-      if (succeeds) installation.resolve(installed());
-      else installation.reject(new Error('installer cleanup failed'));
-    });
-    await screen.findByText(`${versionKey}: ${newVersion}`);
-    expect(computer.updateDriver.mock.calls).toEqual([[undefined], [{ joinOnly: true }]]);
-    expect(screen.queryByRole('button', { name: `${updateKey}.action` })).toBeNull();
-    expect(toast.success).toHaveBeenCalledTimes(succeeds ? 1 : 0);
-    expect(toast.error).toHaveBeenCalledTimes(succeeds ? 0 : 1);
-  });
+  it.each([true, false])(
+    'joins the existing update after reopening (installer succeeds: %s)',
+    async (succeeds) => {
+      const { computer } = installApi();
+      const installation = deferred<ComputerDriverInstallResult>();
+      computer.updateDriver.mockReturnValue(installation.promise);
+      const first = render(<ComputerUseSection />);
+      await clickUpdate();
+      first.unmount();
+      computer.checkUpdate.mockResolvedValue({ ...offer, updating: true });
+      render(<ComputerUseSection />);
+      await waitFor(() =>
+        expect(computer.updateDriver).toHaveBeenLastCalledWith({ joinOnly: true }),
+      );
+      computer.status.mockResolvedValue(driverStatus(newVersion));
+      computer.checkUpdate.mockResolvedValue(upToDate);
+      await act(async () => {
+        if (succeeds) installation.resolve(installed());
+        else installation.reject(new Error('installer cleanup failed'));
+      });
+      await screen.findByText(`${versionKey}: ${newVersion}`);
+      expect(computer.updateDriver.mock.calls).toEqual([[undefined], [{ joinOnly: true }]]);
+      expect(screen.queryByRole('button', { name: `${updateKey}.action` })).toBeNull();
+      expect(toast.success).toHaveBeenCalledTimes(succeeds ? 1 : 0);
+      expect(toast.error).toHaveBeenCalledTimes(succeeds ? 0 : 1);
+    },
+  );
 });

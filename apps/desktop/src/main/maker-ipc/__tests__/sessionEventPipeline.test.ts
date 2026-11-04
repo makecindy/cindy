@@ -134,6 +134,7 @@ vi.mock('../../messagePersistBroadcaster.js', () => ({
   flushAssistantBlock: effects.fn('flushAssistantBlock'),
   onAssistantTextEvent: effects.fn('onAssistantTextEvent'),
   onAssistantAttemptFailure: effects.fn('onAssistantAttemptFailure'),
+  onAssistantSamplingAccepted: effects.fn('onAssistantSamplingAccepted'),
   onStandaloneTextEvent: effects.fn('onStandaloneTextEvent'),
   onAgentTaskUpdateEvent: effects.fn('onAgentTaskUpdateEvent'),
   onThinkingEvent: effects.fn('onThinkingEvent'),
@@ -276,6 +277,7 @@ function harness() {
       gate: failureGate,
       isCurrentOwner,
       commitActivity: (sessionId) => listActivity.commit(sessionId),
+      settlePluginTasks: () => {},
       interrupt: async () => {},
     })),
     deferUnsuccessfulProductTurn: (owner: Parameters<typeof failureGate.defer>[0]) => failureGate.defer(owner),
@@ -298,7 +300,7 @@ function harness() {
     defaultDecisionForPending: vi.fn(),
     persistInteractionDecision: vi.fn(),
     broadcastToAllWindows: effects.fn('broadcast'),
-    broadcastCodexImageAsToolResult: vi.fn(async () => {}),
+    deliverCodexGeneratedImage: vi.fn<(sessionId: string, event: AgentEvent) => Promise<readonly AgentEvent[]>>(async () => []),
     autoResumeBookkeeping: {
       discardReplacementProvenByProviderEvent: vi.fn(),
       clearFailedTurnCompletionTail: vi.fn(),
@@ -442,6 +444,19 @@ function ordered(...names: string[]) {
 }
 
 describe('production Session event pipeline', () => {
+  it('accepts only provider-confirmed sampling items and releases the remainder at done', async () => {
+    const current = harness();
+    try {
+      current.emit(event('tool_result_full', { toolUseId: 'command', fullText: 'done', assistantSamplingAccepted: { agentMessageIds: ['item-a'] } }));
+      expect(effects.fn('onAssistantSamplingAccepted')).toHaveBeenCalledWith('task', ['item-a']);
+      expect(current.deps.broadcastToAllWindows).toHaveBeenCalledWith('maker:event', expect.objectContaining({ event: expect.objectContaining({ type: 'tool_result_full' }) }));
+      current.emit(event('tool_result', { toolUseIds: ['search'], summary: 'search done' }));
+      expect(effects.fn('onAssistantSamplingAccepted')).toHaveBeenCalledTimes(1);
+      current.emit(event('done', {}));
+      expect(effects.fn('onAssistantSamplingAccepted')).toHaveBeenLastCalledWith('task');
+    } finally { await current.dispose(); }
+  });
+
   it.each(['auth', 'gateway', 'overflow'] as const)(
     'commits held %s activity once at its original end only when recovery finally fails', async recovery => {
       const current = harness();
@@ -679,6 +694,23 @@ describe('production Session event pipeline', () => {
     } finally { close(); await h.dispose(); }
   });
 
+  it('shows the accepted owner reply during a quiet run without changing scheduler attribution', async () => {
+    const h = harness();
+    const close = beginQuietScheduledOutput('check', 'owner-steer-run');
+    const origin = { kind: 'scheduler' as const, scheduleId: 'check', scheduleName: 'Check', runId: 'owner-steer-run' };
+    const ownerAuthored = vi.fn(() => false);
+    Object.assign(h.deps.agentInputCoordinatorHolder, { isActiveInputOwnerAuthored: ownerAuthored });
+    try {
+      h.emit(event('text', { text: 'Background preamble' }, { turnOrigin: origin }));
+      expect(effects.fn('onAssistantTextEvent')).not.toHaveBeenCalled();
+      ownerAuthored.mockReturnValue(true);
+      h.emit(event('text', { text: 'Here is the progress', isFinal: true }, { turnOrigin: origin }));
+      expect(effects.fn('onAssistantTextEvent')).toHaveBeenCalledOnce();
+      expect(JSON.stringify(h.deps.broadcastToAllWindows.mock.calls)).toContain('owner-steer-run');
+      expect(origin.kind).toBe('scheduler');
+    } finally { close(); await h.dispose(); }
+  });
+
   it('keeps redacted terminal fields redacted for quiet scheduler output', async () => {
     const h = harness();
     const close = beginQuietScheduledOutput('check', 'redaction-run');
@@ -737,7 +769,7 @@ describe('production Session event pipeline', () => {
     }
   });
 
-  it('retains accepted private-message visibility for independent Pi notices', async () => {
+  it('keeps independent model notices private after a peer message', async () => {
     const h = harness();
     h.deps.redactEventForRenderer.mockImplementation((value) => value);
     h.deps.agentInputCoordinatorHolder.getActiveInputClientId.mockReturnValue('bot-dm:private-input');
@@ -770,7 +802,7 @@ describe('production Session event pipeline', () => {
       await microtasks();
       expect(h.deps.onPluginTaskTerminal).toHaveBeenCalledWith('task', {
         instanceId: h.session.instanceId, generation: 0,
-      }, status, undefined);
+      }, status, undefined, undefined);
       if (status !== 'completed') {
         expect(h.deps.onPluginTaskTerminal.mock.invocationCallOrder[0]).toBeLessThan(
           h.deps.onUnsuccessfulProductTurn.mock.invocationCallOrder[0],
@@ -806,13 +838,17 @@ describe('production Session event pipeline', () => {
         if (owner) gate.clear(owner);
         await successful();
       };
-      adapters.onUnsuccessfulProductTurn = async (sessionId, owner) => {
-        if (owner) {
-          gate.clear(owner);
-          h.deps.onPluginTaskTerminal(sessionId, owner.originalExecution ?? owner, 'failed');
-        }
-        await unsuccessful(sessionId, owner);
-      };
+      adapters.onUnsuccessfulProductTurn = createProductTurnFailureFinalizer({
+        gate,
+        isCurrentOwner: owner => owner.session === h.session,
+        commitActivity: () => {},
+        settlePluginTasks: (sessionId, execution, inputClientIds) =>
+          h.deps.onPluginTaskTerminal(sessionId, execution, 'failed', undefined, inputClientIds),
+        interrupt: unsuccessful,
+      });
+      h.deps.agentInputCoordinatorHolder.getActiveInputClientIds.mockReturnValue([
+        'plugin-target:original', 'plugin-target:steered', 'human-steer',
+      ]);
       const settleFailure = (sessionId: string) => gate.settle(
         sessionId,
         owner => owner.session === h.session && owner.instanceId === h.session.instanceId
@@ -855,6 +891,10 @@ describe('production Session event pipeline', () => {
           return;
         }
         expect(h.deps.onPluginTaskTerminal.mock.calls.length).toBe(0);
+        // Queue ownership can change during recovery; retain the failed inputs.
+        if (!outcome.endsWith('continued')) {
+          h.deps.agentInputCoordinatorHolder.getActiveInputClientIds.mockReturnValue(['plugin-target:next']);
+        }
         expect(unsuccessful).not.toHaveBeenCalled();
         expect(successful).not.toHaveBeenCalled();
         expect(deferOwner).toHaveBeenCalledOnce();
@@ -889,7 +929,7 @@ describe('production Session event pipeline', () => {
         await microtasks();
         expect(h.deps.onPluginTaskTerminal).toHaveBeenCalledExactlyOnceWith('task', expect.objectContaining({
           instanceId: execution.sessionInstanceId, generation,
-        }), continued ? 'completed' : 'failed', ...(continued ? [undefined] : []));
+        }), continued ? 'completed' : 'failed', undefined, ['plugin-target:original', 'plugin-target:steered']);
         expect(successful).toHaveBeenCalledTimes(continued ? 1 : 0);
         expect(unsuccessful).toHaveBeenCalledTimes(continued ? 0 : 1);
         expect(gate.pending('task')).toBeUndefined();
@@ -1555,7 +1595,11 @@ describe('provider turn observer on real Session.send', () => {
     } finally { unsubscribe(); dispose(); await h.dispose(); }
   });
 
-  it('announces a harness wake-up as a provider-wake channel turn before its first event', async () => {
+  it.each([
+    [undefined, 'provider-wake-local'],
+    [{ kind: 'user' as const, surface: 'im' as const }, 'provider-wake'],
+    [{ kind: 'scheduler' as const, scheduleId: 'hook:slack', surface: 'im' as const }, 'provider-wake'],
+  ])('inherits the dispatched origin %j when announcing a harness wake-up', async (origin, expectedSource) => {
     const pushed: Array<AgentEvent | null> = [];
     let wake: (() => void) | null = null;
     let running = false;
@@ -1592,12 +1636,12 @@ describe('provider turn observer on real Session.send', () => {
     });
     const off = session.onEvent((value) => order.push(value.type));
     try {
-      await session.send('typed on desktop');
+      await session.send('launch background work', { origin });
       await emit(event('text', { text: 'launched agents' }));
       await emit(event('done'));
       await emit(event('text', { text: 'agent result' }));
       await emit(event('done'));
-      expect(order).toEqual(['starting:none', 'text', 'done', 'starting:provider-wake', 'text', 'done']);
+      expect(order).toEqual(['starting:none', 'text', 'done', `starting:${expectedSource}`, 'text', 'done']);
     } finally { off(); unsubscribe(); dispose(); await session.close(); }
   });
 
@@ -2237,7 +2281,7 @@ describe('Bot adapters in the shared event pipeline', () => {
     await h.dispose();
   });
 
-  it('preserves private input provenance in persistence and broadcast before done clears the active input', () => {
+  it('keeps peer replies private in persistence and broadcast before done clears the input', () => {
     const h = harness();
     h.deps.agentInputCoordinatorHolder.getActiveInputClientId.mockReturnValue('bot-dm:thread:delivery');
     h.deps.agentInputCoordinatorHolder.onTurnEvent.mockImplementation(() => {
@@ -2253,6 +2297,53 @@ describe('Bot adapters in the shared event pipeline', () => {
     expect(h.deps.broadcastToAllWindows).toHaveBeenCalledWith('maker:event', expect.objectContaining({
       event: expect.objectContaining({ type: 'done', agentMeta: expect.objectContaining({ botPrivateReply: true }) }),
     }));
+  });
+
+  // B2B noise regression: accepted input owns visibility, including retry and human steering.
+  it.each([
+    ['bot-dm:thread:delivery', null, true],
+    ['retry-input', { clientId: 'retry-input', autoResume: true, retrySourceClientId: 'bot-dm:thread:delivery' }, true],
+    ['human-steer', { clientId: 'human-steer', autoResume: false }, false],
+    ['task-result:normal', null, false],
+  ] as const)('keeps B2B replies quiet without hiding owner or task replies (%s)', async (inputId, provenance, privateReply) => {
+    const h = harness();
+    h.deps.agentInputCoordinatorHolder.getActiveInputClientId.mockReturnValue(inputId);
+    h.deps.agentInputCoordinatorHolder.getAcceptedInputProvenance.mockReturnValue(provenance);
+    h.emit(event('text', { text: 'Result' }));
+    expect(h.deps.broadcastToAllWindows).toHaveBeenCalledWith('maker:event', expect.objectContaining({
+      event: expect.objectContaining({ agentMeta: expect.objectContaining({ botPrivateReply: privateReply }) }),
+    }));
+    await h.dispose();
+  });
+
+  it('keeps a B2B execution error visible', async () => {
+    const h = harness();
+    h.deps.agentInputCoordinatorHolder.getActiveInputClientId.mockReturnValue('bot-dm:thread:delivery');
+    h.emit(event('error', { message: 'Execution failed', isTerminal: true }));
+    expect(h.deps.broadcastToAllWindows).toHaveBeenCalledWith('maker:event', expect.objectContaining({
+      event: expect.objectContaining({ type: 'error', agentMeta: expect.objectContaining({ botPrivateReply: false }) }),
+    }));
+    await h.dispose();
+  });
+
+  // Unit: target receipts must settle the accepted input even after the queue advances.
+  it.each([false, true])('attributes plugin terminal to the original accepted input (retry=%s)', async retry => {
+    const h = harness();
+    h.deps.agentInputCoordinatorHolder.getActiveInputClientId.mockReturnValue(retry ? 'retry-receipt' : 'plugin-target:original');
+    h.deps.agentInputCoordinatorHolder.getActiveInputClientIds.mockReturnValue(['plugin-target:original', 'human-steer']);
+    if (retry) h.deps.agentInputCoordinatorHolder.getAcceptedInputProvenance.mockReturnValue({
+      clientId: 'retry-receipt', autoResume: true, retrySourceClientId: 'plugin-target:original',
+    });
+    h.deps.agentInputCoordinatorHolder.onTurnEvent.mockImplementation(() => {
+      h.deps.agentInputCoordinatorHolder.getActiveInputClientId.mockReturnValue('plugin-target:next');
+      h.deps.agentInputCoordinatorHolder.getActiveInputClientIds.mockReturnValue(['plugin-target:next']);
+    });
+    h.emit(event('done', { status:'completed' }, {sessionInstanceId:h.session.instanceId,sessionTurnGeneration:0}));
+    await microtasks();
+    expect(h.deps.onPluginTaskTerminal).toHaveBeenCalledExactlyOnceWith('task', {
+      instanceId:h.session.instanceId,generation:0,
+    }, 'completed', undefined, ['plugin-target:original']);
+    await h.dispose();
   });
 
   it('attributes group-lane turns as private and hands the terminal to the group chat', async () => {
@@ -2511,4 +2602,94 @@ it.each([true, false])('settles only the claimed broadcast after duplicate termi
   expect(effects.fn('onTurnErrorEvent')).toHaveBeenCalledTimes(recovered ? 0 : 1);
   if (!recovered) expect(effects.fn('broadcast').mock.calls.some(call => call[1]?.event?.sessionInstanceId === 'old')).toBe(true);
   await h.dispose();
+});
+
+describe('Codex generated images through the production event pipeline', () => {
+  // IM / hook replies subscribe to the same Session after the wire listener.
+  // The host stores a Codex native image asynchronously; before the stream
+  // hold, `done` reached them first and the image was never attached.
+  function pushableCodexSession(log: SessionEventDependencies['log']) {
+    const pushed: Array<AgentEvent | null> = [];
+    let wake: (() => void) | null = null;
+    let running = false;
+    const handle = {
+      id: 'provider', agentKind: 'codex', model: 'test-model',
+      send: vi.fn(async () => { running = true; }),
+      close: vi.fn(async () => { pushed.push(null); wake?.(); }),
+      isTurnRunning: () => running,
+      setInteractionResolver: vi.fn(),
+      async *events() {
+        for (;;) {
+          while (pushed.length === 0) await new Promise<void>((resolve) => { wake = resolve; });
+          const next = pushed.shift()!;
+          if (next === null) return;
+          yield next;
+        }
+      },
+    } as unknown as AgentSessionHandle;
+    const session = new Session({ id: 'task', agentKind: 'codex', workDir: '/unused', handle,
+      capabilities: {} as never, logger: log as never, turnStallMs: 0 });
+    const queue = (...values: AgentEvent[]) => {
+      for (const value of values) {
+        if (value.type === 'done') running = false;
+        pushed.push(value);
+      }
+      wake?.();
+    };
+    return { session, queue };
+  }
+
+  const image = event('image', { kind: 'generation', blockId: 'ig-1' });
+  const stored = [
+    event('tool_use', { toolUseId: 'codex-image-1', toolName: 'imagegen', input: {} }),
+    event('tool_result_full', {
+      toolUseId: 'codex-image-1',
+      fullText: JSON.stringify({ ok: true, xdt_image_url: 'cindy-media://blobs/a.png' }),
+      isError: false,
+    }),
+    event('tool_result', { toolUseIds: ['codex-image-1'], summary: 'stored' }),
+  ];
+
+  it('delivers the stored image to later listeners before done without persisting it again', async () => {
+    const h = harness();
+    const { session, queue } = pushableCodexSession(h.deps.log);
+    h.deps.deliverCodexGeneratedImage.mockResolvedValue(stored);
+    const offWire = session.onEvent((value) => handleSessionEvent(h.dependencies, session, value));
+    const im: AgentEvent[] = [];
+    const offIm = session.onEvent((value) => im.push(value));
+    try {
+      await session.send('draw the design');
+      effects.fn('broadcast').mockClear();
+      queue(image, event('done', {}));
+      await vi.waitFor(() => expect(im.map((value) => value.type)).toContain('done'));
+
+      expect(im.map((value) => value.type)).toEqual(['image', 'tool_use', 'tool_result_full', 'tool_result', 'done']);
+      expect(im[2].data).toMatchObject({ fullText: expect.stringContaining('cindy-media://blobs/a.png') });
+      expect(h.deps.deliverCodexGeneratedImage).toHaveBeenCalledExactlyOnceWith('task', expect.objectContaining({ type: 'image' }));
+      expect(effects.fn('onToolUseEvent')).not.toHaveBeenCalled();
+      expect(effects.fn('onToolResultFullEvent')).not.toHaveBeenCalled();
+      expect(effects.fn('onToolResultEvent')).not.toHaveBeenCalled();
+      const broadcastTypes = effects.fn('broadcast').mock.calls
+        .map(([, payload]) => (payload as { event?: AgentEvent } | undefined)?.event?.type);
+      expect(broadcastTypes).not.toContain('tool_use');
+      expect(broadcastTypes).not.toContain('tool_result_full');
+    } finally { offIm(); offWire(); await session.close(); await h.dispose(); }
+  });
+
+  it('neither delivers nor holds a quiet scheduled image', async () => {
+    const h = harness();
+    const { session, queue } = pushableCodexSession(h.deps.log);
+    const close = beginQuietScheduledOutput('check', 'image-run');
+    const origin = { kind: 'scheduler' as const, scheduleId: 'check', scheduleName: 'Check', runId: 'image-run' };
+    const offWire = session.onEvent((value) => handleSessionEvent(h.dependencies, session, value));
+    const seen: string[] = [];
+    const offSeen = session.onEvent((value) => seen.push(value.type));
+    try {
+      await session.send('scheduled check', { origin });
+      queue(image, event('done', {}));
+      await vi.waitFor(() => expect(seen).toContain('done'));
+      expect(seen).toEqual(['image', 'done']);
+      expect(h.deps.deliverCodexGeneratedImage).not.toHaveBeenCalled();
+    } finally { close(); offSeen(); offWire(); await session.close(); await h.dispose(); }
+  });
 });

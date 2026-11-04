@@ -23,13 +23,13 @@ vi.mock('../../authBoundaryQuarantine.js', () => ({
 }));
 vi.mock('../built-in-skills.js', () => ({
   sharedBuiltInSkillsRoot: (root: string) => path.join(root, 'shared-system-skills'),
-  builtInSkillDescriptors: () => [
+  builtInSkillDescriptorsAsync: async () => [
     { name: 'learn', absolutePath: path.join(state.root, 'shared-system-skills', 'skills', 'learn') },
   ],
 }));
 vi.mock('../../cindy-brain/index.js', () => ({
   getGhostManager: () => ({ verifyApprovedSkillSnapshot: async () => state.verified }),
-  listAvailableGhostsForAuthorization: () => [
+  listAvailableGhostsAsync: async () => [
     {
       enabled: state.enabled,
       namespace: null,

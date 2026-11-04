@@ -66,3 +66,27 @@ describe('live group tool authority', () => {
     });
   });
 });
+
+// Unit: #8443 review distinguishes intentional permission tiers from revoked or
+// unavailable authorization. Only failed live validation may notify the group.
+it.each(['chat', 'tools', 'revoked', 'transport', 'stale', 'report-fails'])('keeps the original %s denial and reports only validation failures', async condition => {
+  const onDenied = vi.fn(async (_error: GroupToolAuthorizationError) => { if (condition === 'report-fails') throw new Error('report unavailable'); });
+  releases.push(registerGroupToolAuthority('notice-lane', {
+    botId: 'bot', mode: condition === 'chat' ? 'chat' : condition === 'tools' ? 'tools' : 'owner',
+    isCurrent: () => condition !== 'stale', onDenied,
+    validate: async () => {
+      if (condition === 'transport') throw new Error('private test-only transport detail');
+      throw new GroupToolAuthorizationError();
+    },
+  }));
+  await expect(authorizeGroupTool('notice-lane', 'bot', 'owner-action')).rejects.toMatchObject({
+    code: condition === 'transport' ? 'GROUP_AUTHORIZATION_UNAVAILABLE' : 'GROUP_AUTHORIZATION_REQUIRED',
+  });
+  await Promise.resolve();
+  if (['chat', 'tools', 'stale'].includes(condition)) expect(onDenied).not.toHaveBeenCalled();
+  else {
+    expect(onDenied).toHaveBeenCalledOnce();
+    expect(onDenied.mock.calls[0][0]).toBeInstanceOf(GroupToolAuthorizationError);
+    expect(onDenied.mock.calls[0][0].message).not.toContain('private test-only');
+  }
+});

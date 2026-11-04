@@ -294,6 +294,50 @@ describe('gitExec timeoutMs', () => {
     await enqueueGitRepoWrite('/independent-snapshot', write);
     expect(write).toHaveBeenCalledOnce();
   });
+  // Regression: manual fetch used to die at 30s even while downloading. Existing
+  // tests only cover absolute deadlines. Unit tier: real gitExec, fake child/time.
+  it('keeps advancing Git progress alive beyond the idle budget, but repeated progress still times out', async () => {
+    setPlatform('win32');
+    const state = installExecFileMock();
+    state.psTable = [];
+    mocks.killProcessTree.mockImplementation((_pid, _child, done) => done?.());
+    const result = gitExec(['fetch', '--progress'], undefined, { idleTimeoutMs: 60_000 });
+    const rejected = expect(result).rejects.toMatchObject({ timedOut: true });
+    await vi.advanceTimersByTimeAsync(50_000);
+    state.child.stderr.emit('data', Buffer.from('Receiving objects: 1% (1/100), 10.00 Ki'));
+    state.child.stderr.emit('data', Buffer.from('B | 1.00 KiB/s\r'));
+    await vi.advanceTimersByTimeAsync(50_000);
+    state.child.stderr.emit('data', Buffer.from('Receiving objects: 1% (1/100), 20.00 KiB | 1.00 KiB/s\r'));
+    await vi.advanceTimersByTimeAsync(50_000);
+    expect(mocks.killProcessTree).not.toHaveBeenCalled();
+    state.child.stderr.emit('data', Buffer.from('Receiving objects: 1% (1/100), 20.00 KiB | 2.00 KiB/s\r'));
+    state.child.stderr.emit('data', Buffer.from('remote: keepalive\n'));
+    await vi.advanceTimersByTimeAsync(10_000);
+    expect(mocks.killProcessTree).toHaveBeenCalledTimes(1);
+    state.gitCb!(new Error('terminated'), '', '');
+    await rejected;
+    expect(mocks.killProcessTree).toHaveBeenCalledTimes(1);
+  });
+
+  it('cleans up an idle watchdog on success and still honors an explicit absolute deadline', async () => {
+    setPlatform('win32');
+    const state = installExecFileMock();
+    state.psTable = [];
+    mocks.killProcessTree.mockImplementation((_pid, _child, done) => done?.());
+    const success = gitExec(['fetch', '--progress'], undefined, { idleTimeoutMs: 60_000 });
+    state.gitCb!(null, 'done', '');
+    await expect(success).resolves.toMatchObject({ stdout: 'done' });
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(mocks.killProcessTree).not.toHaveBeenCalled();
+    const bounded = gitExec(['fetch', '--progress'], undefined, { idleTimeoutMs: 60_000, timeoutMs: 30_000 });
+    const rejected = expect(bounded).rejects.toMatchObject({ timedOut: true });
+    await vi.advanceTimersByTimeAsync(20_000);
+    state.child.stderr.emit('data', 'Resolving deltas: 10% (1/10)\r');
+    await vi.advanceTimersByTimeAsync(10_000);
+    state.gitCb!(new Error('terminated'), '', '');
+    await rejected;
+  });
+
   it('keeps a dead checkout root leased while a Windows descendant remains', async () => {
     setPlatform('win32');
     const state = installExecFileMock();

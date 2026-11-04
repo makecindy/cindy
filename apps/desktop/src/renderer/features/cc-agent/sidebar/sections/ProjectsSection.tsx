@@ -270,8 +270,8 @@ export interface ProjectsSectionProps {
   onOpenConversationSearch: (project: ProjectNodeData) => void;
   /** 在系统文件管理器中打开 project 的 workingDir。 */
   onOpenInExplorer: (workingDir: string) => void;
-  onLinkCodexProject: (project: ProjectNodeData) => void;
-  linkingCodexProject: string | null;
+  /** 打开设置 → 任务导入，只看这个项目。 */
+  onImportFromTools: (project: ProjectNodeData) => void;
   /** 进入 workdir 文件浏览模式 (vscode-style file tree + body viewer)。 */
   onBrowseFiles: (project: ProjectNodeData) => void;
   /** 右键菜单 → 归档该 project 下所有非执行中的 session（带二次确认）。 */
@@ -332,8 +332,7 @@ export function ProjectsSection({
   onCreateInProject,
   onOpenConversationSearch,
   onOpenInExplorer,
-  onLinkCodexProject,
-  linkingCodexProject,
+  onImportFromTools,
   onBrowseFiles,
   onArchiveAll,
   onSearchDialogues,
@@ -573,14 +572,20 @@ export function ProjectsSection({
   // 各自下方**实际渲染的行集合**聚合灯语(sessionLampAggregation,rail 同源):
   // running → 图标呼吸橙;未读 → AttentionDot(红 error > 蓝 awaiting > 绿 done)。
   // remoteActivityRevision 已在上方订阅,依赖注释同 priorityContext。
-  const lampAgg = useCallback(
-    (list: readonly Session[]): SessionLampAggregate =>
-      aggregateSessionLamps(list, {
-        runningSessionIds,
-        notifications,
-        attentionKinds,
-        urgentSessionIds: urgentSet,
-      }),
+  const lampAgg = useMemo(() => {
+    // Reuse the presentation object, but always read live lamp sources (also
+    // optimistic starting/owner stores) before deciding whether it is equal.
+    const cache = new WeakMap<readonly Session[], SessionLampAggregate>();
+    return (list: readonly Session[]): SessionLampAggregate => {
+      const previous = cache.get(list);
+      const lamp = aggregateSessionLamps(list, {
+        runningSessionIds, notifications, attentionKinds, urgentSessionIds: urgentSet,
+      });
+      if (previous?.running === lamp.running && previous.dotTone === lamp.dotTone) return previous;
+      cache.set(list, lamp);
+      return lamp;
+    };
+  },
     // eslint-disable-next-line react-hooks/exhaustive-deps -- remoteActivityRevision 代表 remoteLampOf 读到的整表内容
     [runningSessionIds, notifications, attentionKinds, urgentSet, remoteActivityRevision],
   );
@@ -658,9 +663,13 @@ export function ProjectsSection({
   // 活动镜像)——与聚合灯同口径:上层灯为哪条会话点亮(未读或 running),
   // 该条目就不能被折进「显示全部」(Greptile P1:此前只豁免 attention,
   // running-only 会话会让呼吸灯指向不可见的条目)。
+  const previousLampFoldExemptIds = useRef<ReadonlySet<string>>(new Set());
   const lampFoldExemptIds = useMemo(() => {
     const next = new Set(priorityContext.attentionSessionIds);
     for (const id of priorityContext.runningSessionIds) next.add(id);
+    const previous = previousLampFoldExemptIds.current;
+    if (next.size === previous.size && [...next].every((id) => previous.has(id))) return previous;
+    previousLampFoldExemptIds.current = next;
     return next;
   }, [priorityContext]);
   const collapseEntries = useCallback(
@@ -964,8 +973,7 @@ export function ProjectsSection({
       onCreateInProject={onCreateInProject}
       onOpenConversationSearch={onOpenConversationSearch}
       onOpenInExplorer={onOpenInExplorer}
-      onLinkCodexProject={onLinkCodexProject}
-      linkingCodexProject={linkingCodexProject === project.projectKey}
+      onImportFromTools={onImportFromTools}
       onBrowseFiles={onBrowseFiles}
       onArchiveAll={onArchiveAll}
     />

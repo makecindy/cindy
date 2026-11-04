@@ -46,9 +46,10 @@ export function BotSettingsDrawer() {
 
   const requestedPage = searchParams.get('settingsPage');
   const initialPage = requestedPage === 'memory' || requestedPage === 'capabilities' ? requestedPage : 'home';
-  // 「模型」「语音」「消息平台」可直接深链；远程伙伴同样，所在电脑不支持的页会回到设置首页。
+  // 「模型」「语音」「消息平台」「例行任务」可直接深链；远程伙伴同样，所在电脑不支持的页会回到设置首页。
   const localInitialPage =
     requestedPage === 'model' || requestedPage === 'voice' || requestedPage === 'channels'
+      || requestedPage === 'routines'
       ? requestedPage
       : initialPage;
   const allowNavigation = useRef(false);

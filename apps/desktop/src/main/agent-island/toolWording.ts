@@ -18,6 +18,7 @@ import {
 
 export function createLocalizedToolRowWording(): ToolRowWording {
   return {
+    toolCallLabel: () => t('agentIsland.native.callingTool'),
     verb: (key) => t(TOOL_ROW_VERB_I18N_KEY[key]),
     intentVerb: (action) => t(INTENT_ROW_VERB_KEY[action]),
     // main 的迷你 i18n 只支持 {{appName}} 插值,{{count}} 在调用点手动替换。

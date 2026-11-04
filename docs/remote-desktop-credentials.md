@@ -27,8 +27,8 @@ Mac confirmation dialog. Successful native password verification stores the secr
 and exact Mac public key together. Later connections require the stored key before
 any saved-secret read. A changed key fails closed; no silent replacement is allowed.
 
-This follows the existing Cindy contacts-sync trust pattern in
-`apps/desktop/src/main/contacts-sync/driver.ts` and `keyStore.ts`: first keys arrive
+This follows the existing Cindy device-sync trust pattern in
+`apps/desktop/src/main/device-sync-keys/keyStore.ts` (used by plugin device sync): first keys arrive
 only over the authenticated account route, with persistent key continuity afterward.
 It deliberately trusts the account service and relay at first setup. It does not
 claim protection against a malicious relay substituting the very first key, or
@@ -249,6 +249,15 @@ server endpoint or account-wide setting is involved. Lock failure is visible on
 the phone; Desktop closes locally without awaiting the remote result. Background
 lock failures are logged on the host. macOS and supported Linux hosts advertise
 this optional capability.
+
+### Idle protection
+
+The separate default-five-minute idle setting is host-enforced when `idleLock` is
+advertised. It does not change saved credentials, biometric checks or privacy defaults.
+Timeout and loss of the protected lease block automatic resume so saved auto-unlock
+cannot immediately undo locking. Local Desktop lock/suspend requests an immediate
+remote lock; Mobile backgrounding without PiP does the same when idle protection is
+on. See [Remote desktop](remote-desktop.md#idle-protection) for options and counting.
 
 ### Stable mobile controls
 

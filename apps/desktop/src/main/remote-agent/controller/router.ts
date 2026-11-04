@@ -23,6 +23,8 @@ export interface LocalMcpTarget {
 }
 
 export interface ReverseHttpRouterDeps {
+  /** The caller granted its own tools only, not access to native file/shell tools. */
+  hostToolsOnly?: boolean;
   executor: RemoteExecutor;
   /** 本任务可用的本机 MCP 服务，按名字查。 */
   mcpTarget(name: string): LocalMcpTarget | undefined;
@@ -32,7 +34,7 @@ export interface ReverseHttpRouterDeps {
 const FORWARD_REQUEST_HEADERS = new Set(['content-type', 'accept', 'mcp-session-id', 'mcp-protocol-version', 'last-event-id']);
 const FORWARD_RESPONSE_HEADERS = new Set(['content-type', 'mcp-session-id', 'mcp-protocol-version']);
 
-/** 本机工具已有的路径参数；兼容 MCP snake_case 与宿主 camelCase，正文和插件业务参数不做文本替换。 */
+/** 本机工具已有的路径参数；兼容 MCP snake_case 与宿主 camelCase，除 prompt 外正文和插件业务参数不做文本替换。 */
 const PATH_ARGUMENTS = new Set([
   'path', 'paths', 'filepath', 'filepaths', 'directory', 'directories', 'dir', 'dirs',
   'workingdir', 'workdir', 'cwd', 'root', 'libraryroot', 'sourcepath', 'destinationpath',
@@ -81,6 +83,8 @@ export function createReverseHttpRouter(deps: ReverseHttpRouterDeps) {
         } catch { /* 普通字符串参数保持原样。 */ }
       }
       if (/^(?:cmd|command)$/.test(key)) return workspace.mapCommand(value, resolveExecutorShell().dialect);
+      // 定时任务等的 prompt 由本机之后的任务执行，虚拟路径须换成本机路径；读回时 projectResult 再投影(#8728)。
+      if (key === 'prompt') return workspace.mapTextFromAgent(value);
       const fieldContext = pathTextContext(key);
       if (fieldContext === 'ambiguous-path') return workspace.mapTextFromAgent(value, fieldContext);
       if (fieldContext === 'path' || PATH_ARGUMENTS.has(key.replace(/_/g, '').toLowerCase())) return workspace.mapAlias(value);
@@ -163,6 +167,9 @@ export function createReverseHttpRouter(deps: ReverseHttpRouterDeps) {
     signal?: AbortSignal,
   ): Promise<RemoteAgentReply> {
     const url = new URL(request.path, 'http://tunnel.invalid');
+    if (deps.hostToolsOnly && (!/^\/mcp\/[A-Za-z0-9_-]{1,64}$/.test(url.pathname) || url.pathname === `/mcp/${CINDY_EXEC_MCP_SERVER}`)) {
+      return json(403, { error: { code: 'EACCES', message: 'Only application tools are available in this session.' } });
+    }
     const body = request.body ? Buffer.from(request.body, 'base64') : undefined;
     const execMatch = /^\/exec\/([a-z]+\.[a-z]+)$/.exec(url.pathname);
     if (execMatch) {

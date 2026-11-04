@@ -22,6 +22,8 @@ vi.mock('../../localDb/ipc/messages.js', () => ({
 }));
 
 import { createBotDirectMessageService } from '../botDirectMessageService.js';
+import { captureAgentRequest } from '../forwardedRequest.js';
+import { verifiedOwnerRequestText } from '../../../shared/forwardedRequest.js';
 import { botDirectMessages, botDirectMessageThreads } from '../../localDb/schema.js';
 import { createBotMessageTransport } from '../botMessageTransport.js';
 import { GroupToolAuthorizationError, registerGroupToolAuthority } from '../botGroupToolAuthorization.js';
@@ -119,6 +121,26 @@ function createDatabase(): Database.Database {
 describe('botDirectMessageService', () => {
   let sqlite: Database.Database;
   let dispatch: ReturnType<typeof vi.fn>;
+
+  // 2026-10-27: send_to_agent dropped a real owner handoff. Unit/persistence:
+  // exercise the actual capture and send, then relay the accepted receipt again.
+  it('delivers the original owner request through a peer and a second handoff', async () => {
+    const original = 'Sanitize the test fixtures and retain coverage.';
+    const captureRequest = (sessionId: string, message: string) => captureAgentRequest(sessionId, message,
+      { clientId: 'owner-input', authoredText: original }, async () => [], true, true);
+    const service = createBotDirectMessageService({ dispatch, captureRequest });
+    expect(await service.messageAgent({ callerSessionId: 'a-main', targetBotId: 'bot-b', message: 'Please handle the fixtures.' }))
+      .toMatchObject({ ok: true });
+    const delivered = dispatch.mock.calls[0]![0];
+    expect(verifiedOwnerRequestText(delivered.autoReviewUserText)).toBe(original);
+    expect(sqlite.prepare('SELECT content FROM bot_direct_messages').get()).toEqual({
+      content: (await captureRequest('a-main', 'Please handle the fixtures.')).message,
+    });
+    const next = await captureAgentRequest('b-main', 'Keep coverage', {
+      clientId: delivered.clientId, delegatedRequest: delivered.autoReviewUserText.request,
+    }, async () => [], true);
+    expect(next.autoReviewUserText.request).toEqual(delivered.autoReviewUserText.request);
+  });
 
   // unit/persistence: peer messages must not acquire a task-delegation envelope
   // or treat labels typed by a model as verified owner words.

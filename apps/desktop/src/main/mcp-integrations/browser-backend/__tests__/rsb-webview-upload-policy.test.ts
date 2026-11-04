@@ -112,7 +112,8 @@ describe('resolveUploadFiles', () => {
     ]);
   });
 
-  it('rejects files outside the session roots and sensitive names', async () => {
+  // 2026-10-30: names inside the roots are not filtered; each upload goes through the task's approval.
+  it('rejects files outside the session roots; names inside them are not filtered', async () => {
     const outside = path.join(outsideRoot, 'outside.txt');
     const secret = path.join(allowedRoot, '.env.local');
     await fs.writeFile(outside, 'outside');
@@ -121,9 +122,7 @@ describe('resolveUploadFiles', () => {
     await expect(resolveUploadFiles([outside], [allowedRoot])).rejects.toThrow(
       'inside the current session directory',
     );
-    await expect(resolveUploadFiles([secret], [allowedRoot])).rejects.toThrow(
-      'blocked for sensitive file',
-    );
+    await expect(resolveUploadFiles([secret], [allowedRoot])).resolves.toEqual([realpathSync(secret)]);
   });
 
   it('resolves links before checking containment', async () => {

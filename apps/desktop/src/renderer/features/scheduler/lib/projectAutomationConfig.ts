@@ -17,6 +17,7 @@ export interface ProjectScheduleConfig {
   agentKind?: 'claude-code' | 'codex' | 'pi';
   /** 显式模型选择的 Harness；省略时保留旧配置的跟随绑定任务语义。 */
   modelAgentKind?: 'claude-code' | 'codex' | 'pi';
+  modelAgentDeviceId?: string;
   model?: string;
   /** 显式来源(供应商)id;省略 = 使用该 Agent 的原生默认来源。 */
   providerId?: string;
@@ -63,6 +64,7 @@ export function scheduleToProjectConfig(
     intervalMs: schedule.intervalMs,
     agentKind: schedule.agentKind,
     modelAgentKind: schedule.modelAgentKind,
+    modelAgentDeviceId: schedule.modelAgentDeviceId,
     model: schedule.model,
     providerId: schedule.providerId || undefined,
     agentDeviceId: schedule.agentDeviceId,
@@ -94,6 +96,7 @@ export function formToProjectConfig(
     intervalMs: form.intervalMs,
     agentKind: scheduleAgentKindForForm(form),
     modelAgentKind: form.model.trim() ? form.modelAgentKind : undefined,
+    modelAgentDeviceId: form.model.trim() ? form.modelAgentDeviceId : undefined,
     model: form.model.trim() || undefined,
     providerId: form.providerId.trim() || undefined,
     agentDeviceId: form.model.trim() ? form.agentDeviceId?.trim() || undefined : undefined,

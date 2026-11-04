@@ -1,5 +1,12 @@
 import { CatalogDeviceScope, type CatalogDeviceControl } from './useCatalogDevice';
 import { RemotePluginPage } from './RemotePluginPage';
+import { LocalPluginShareView } from './LocalPluginShareView';
+import { PluginVersionFacts } from './PluginVersionFacts';
+import { useSignInToCindy } from '@/hooks/useSignInToCindy';
+import { rememberContributionIntent, consumeContributionIntent, matchesContributionIntent } from './lib/contributionIntent';
+import { MyPluginsPage, contributionErrorKey, type MyPluginsPageCache, type PluginSubmitOptions } from './MyPluginsPage';
+import { localPublishingUnavailableKey } from './lib/ghostPluginDetailModel';
+import { PluginPublishDialog, type PluginPublishDialogRequest } from './PluginPublishDialog';
 import { featureRetirementById, type FeatureRetirement } from '../../../shared/featureRetirements';
 import { RetiredFeatureDetail } from './RetiredFeatureDetail';
 import { Button } from '@/components/ui/button';
@@ -9,6 +16,7 @@ import { Button } from '@/components/ui/button';
  * Inputs: installed Ghost snapshots and user actions. `embedded` mounts the same
  * catalog inside Settings; `onSelectCatalogTab` keeps Plugins / Skills in-panel.
  * Outputs: the Plugin list/detail UI, recommendation-aware return navigation, and Plugin action flows.
+ * Publishing preparation starts in the shared dialog; submission stays in-place until confirmed.
  * [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
  */
 
@@ -23,7 +31,7 @@ import {
   type KeyboardEvent,
   type ReactNode,
 } from 'react';
-import { useNavigate, useSearchParams } from 'react-router-dom';
+import { useLocation, useNavigate, useSearchParams } from 'react-router-dom';
 import {
   AlertTriangle,
   ArrowUp,
@@ -41,10 +49,13 @@ import { useConfirmDialog } from '@/components/ui/confirm-dialog-provider';
 import { toast } from '@/lib/toast';
 import { extractIpcError } from '@/utils/ipcError';
 import { useAuth } from '@/contexts/AuthContext';
+import { usePluginReviewUpdates } from '@/contexts/PluginReviewUpdatesContext';
 import { readInstalledGhostsSnapshot, useInstalledGhosts } from '@/cindy-brain/useInstalledGhosts';
 import {
   cancelPendingPluginSuggestion,
   getPendingPluginSuggestion,
+  pendingPluginSuggestionReturnPath,
+  pendingSuggestionIsForGhost,
   readyPendingPluginSuggestion,
   subscribePendingPluginSuggestion,
 } from '@/features/cc-agent/pendingPluginSuggestion';
@@ -74,7 +85,6 @@ import { useGlobalTabs } from '@/features/right-sidebar/globalTabs';
 import { resolveSystemLocale } from '../../../shared/locale';
 import {
   ghostInstallApprovalToken,
-  isUserInstallReservedGhostId,
   type GhostSetupStatus,
   type InstalledGhost,
 } from '../../../shared/ghost';
@@ -425,7 +435,17 @@ function readIgnoredRound(storageKey: string): string {
  * interaction shape, while every displayed field comes from InstalledGhost.
  */
 export function GhostPluginPage(props: { embedded?: boolean; active?: boolean; onSelectCatalogTab?: (tab: 'plugins' | 'skills') => void } = {}) {
-  return <CatalogDeviceScope>{(device, online, generation, deviceControl) => device
+  const [searchParams, setSearchParams] = useSearchParams();
+  const snapshotId = searchParams.get('share');
+  const closeShare = (ghost?: InstalledGhost) => {
+    const next = new URLSearchParams(searchParams); next.delete('share');
+    if (ghost) next.set('ghost', installedGhostStoragePart(ghost));
+    setSearchParams(next, { replace: true });
+  };
+  return <CatalogDeviceScope>{(device, online, generation, deviceControl) => snapshotId !== null
+    ? <LocalPluginShareView key={`${generation}:${snapshotId}:${device?.deviceId ?? 'local'}`} snapshotId={snapshotId}
+        deviceControl={deviceControl} onBack={() => closeShare()} onInstalled={closeShare} />
+    : device
     ? <RemotePluginPage key={`${generation}:${device.deviceId}`} device={device} online={online} deviceControl={deviceControl} {...props} />
     : <LocalGhostPluginPage deviceControl={deviceControl} {...props} />}</CatalogDeviceScope>;
 }
@@ -442,6 +462,7 @@ function LocalGhostPluginPage({
   const { i18n, t } = useTranslation();
   const marketLocale = resolveSystemLocale(i18n.resolvedLanguage ?? i18n.language);
   const navigate = useNavigate();
+  const location = useLocation();
   const [searchParams, setSearchParams] = useSearchParams();
   const { confirm } = useConfirmDialog();
 
@@ -454,6 +475,22 @@ function LocalGhostPluginPage({
     [t],
   );
   const { user, mode, dataOwnerId, dataOwnerGeneration } = useAuth();
+  const reviewUnread = usePluginReviewUpdates().updates.filter(item => item.unread);
+  const signInForContribution = useSignInToCindy('/plugins?myPlugins=1');
+  const contributionOwner = JSON.stringify([dataOwnerId, dataOwnerGeneration, user?.id, mode]);
+  const contributionOwnerRef = useRef(contributionOwner);
+  contributionOwnerRef.current = contributionOwner;
+  const contributionMounted = useRef(true);
+  useEffect(() => {
+    contributionMounted.current = true;
+    return () => { contributionMounted.current = false; };
+  }, []);
+  const contributionCache = useRef<MyPluginsPageCache>({});
+  const [contributionBusy, setContributionBusy] = useState(false);
+  const [submissionRevision, setSubmissionRevision] = useState(0);
+  const contributing = useRef<string | null>(null);
+  const [publicationDialog, setPublicationDialog] = useState<PluginPublishDialogRequest | null>(null);
+  const publicationDialogSequence = useRef(0);
   const [recommendationNonce] = useState(() => searchParams.get('recommendation'));
   const pendingRecommendation = useSyncExternalStore(
     subscribePendingPluginSuggestion,
@@ -478,7 +515,7 @@ function LocalGhostPluginPage({
     };
   }, [dataOwnerId, recommendationNonce]);
   const continueRecommendation = useCallback(
-    (nonce: string | undefined, ghostId: string) => {
+    async (nonce: string | undefined, ghostId: string) => {
       if (!recommendationPageMounted.current || !nonce) return false;
       const snapshot = readPluginRecommendationSnapshot();
       if (
@@ -486,9 +523,31 @@ function LocalGhostPluginPage({
         !snapshot.sources.some((s) => s.ghostId === ghostId && s.enabled)
       )
         return false;
+      const early = getPendingPluginSuggestion();
+      // Another plugin being installed or enabled while this request is open must not touch its project state.
+      if (!early || early.nonce !== nonce || !pendingSuggestionIsForGhost(early, ghostId)) return false;
+      // A plugin Skill is only usable in the task's project if the plugin is not disabled there: a
+      // project-level "off" outlives an uninstall, so a fresh install would still not offer the Skill.
+      // Do this before the request leaves the setup phase, so a failure here leaves it resumable.
+      if (early.skillName && early.workingDir) {
+        try {
+          const dir = early.workingDir;
+          if (window.electronAPI.ghosts.workdirPrefsSync(dir).disabled.includes(ghostId)) {
+            await window.electronAPI.ghosts.setWorkdirDisabled(dir, ghostId, false);
+          }
+        } catch {
+          return false;
+        }
+        if (!recommendationPageMounted.current || getPendingPluginSuggestion()?.nonce !== nonce) return false;
+      }
       const ready = readyPendingPluginSuggestion(nonce, dataOwnerId, ghostId);
-      if (!ready) return false;
-      navigate('/cc-agent/new', { state: { pluginSuggestionNonce: ready }, flushSync: true });
+      const pending = getPendingPluginSuggestion();
+      if (!ready || !pending) return false;
+      // Back to where the user asked: the new-task draft or the task they were in.
+      navigate(pendingPluginSuggestionReturnPath(pending), {
+        state: { pluginSuggestionNonce: ready },
+        flushSync: true,
+      });
       return true;
     },
     [dataOwnerId, navigate],
@@ -514,6 +573,7 @@ function LocalGhostPluginPage({
     </div>
   ) : null;
   const showEnterprise = user?.membershipKind === 'org';
+  const contributor = mode === 'cloud' && (user?.membershipKind === 'personal' || user?.membershipKind === 'org');
   const ghosts = useInstalledGhosts();
   useMainViewVisibilityRevision();
   const installedGhostMarketKey = useMemo(
@@ -540,8 +600,12 @@ function LocalGhostPluginPage({
   }, [ignoredRoundKey]);
   const [originFilter, setOriginFilter] = useState<PluginPresentationFilter>('all');
   const [marketDetail, setMarketDetail] = useState<PluginMarketDetail | null>(null);
+  const contributionViewKey = JSON.stringify([location.key, selectedId, marketDetail?.pluginId]);
+  const contributionView = useRef({ key: contributionViewKey, token: {} });
+  if (contributionView.current.key !== contributionViewKey)
+    contributionView.current = { key: contributionViewKey, token: {} };
   // 列表与详情是互斥分支;列表节点会卸载,返回时需显式恢复进入前的滚动位置。
-  const pluginCatalogVisible = marketDetail === null && selectedId === null;
+  const pluginCatalogVisible = marketDetail === null && selectedId === null && !searchParams.has('myPlugins') && !searchParams.has('share');
   const {
     listRef: pluginCatalogListRef,
     onListScroll: onPluginCatalogScroll,
@@ -582,9 +646,10 @@ function LocalGhostPluginPage({
   const refreshMarket = useCallback(async (preserveOnError = false) => {
     installedGhostMarketKeyRef.current = installedGhostMarketKeyFor(readInstalledGhostsSnapshot());
     const requestId = ++marketRefreshRequestRef.current;
+    const owner = contributionOwnerRef.current;
     try {
       const snapshot = await window.electronAPI.pluginMarket.snapshot();
-      if (requestId !== marketRefreshRequestRef.current) return;
+      if (requestId !== marketRefreshRequestRef.current || contributionOwnerRef.current !== owner) return;
       // Main intentionally represents market outages as data so the initial page can render a
       // non-blocking empty state. During icon renewal, convert that fulfilled unavailable result
       // back into a failure: the catch path preserves the visible snapshot and the hook retries.
@@ -594,7 +659,7 @@ function LocalGhostPluginPage({
       setMarketSnapshot(snapshot);
       lastMarketRefreshAtRef.current = Date.now();
     } catch (error) {
-      if (requestId !== marketRefreshRequestRef.current) return;
+      if (requestId !== marketRefreshRequestRef.current || contributionOwnerRef.current !== owner) return;
       setMarketSnapshot((current) =>
         preserveOnError && current
           ? current
@@ -618,7 +683,7 @@ function LocalGhostPluginPage({
     setMarketBusyId(null);
     marketDetailRequestRef.current += 1;
     void refreshMarket();
-  }, [clearPluginCatalogScrollRestore, refreshMarket, mode, dataOwnerId]);
+  }, [clearPluginCatalogScrollRestore, refreshMarket, mode, dataOwnerId, dataOwnerGeneration]);
   const refreshMarketOnForeground = useCallback(() => refreshMarket(true), [refreshMarket]);
   usePluginMarketForegroundRefresh(refreshMarketOnForeground, lastMarketRefreshAtRef);
   useEffect(() => {
@@ -763,7 +828,15 @@ function LocalGhostPluginPage({
             ...toGhostPluginListItem(ghost, presentation),
             origin: pluginPresentationOrigin(marketItem),
             marketItem,
-            author: presentation?.author ?? ghost.manifest.author ?? null,
+            // 服务端的空署名代表匿名；公域来源缺少可信投影时也不回退包内作者。
+            author: presentation
+              ? presentation.author
+              : ghost.publishingSource?.kind === 'public-market' ||
+                  (marketItem?.sourceType === 'server' && marketItem.scope === 'public')
+                ? null
+                : ghost.manifest.author ?? null,
+            // 同版本展示刷新由 main 标成 installed;legacy-unresolved 仍保留
+            // update-available,以便用户用市场包替换未验证的本地字节。
             marketUpdate: ghost.retirement ? null : pluginUpdateForInstalledVersion(marketItem),
           };
         }),
@@ -776,6 +849,13 @@ function LocalGhostPluginPage({
         : allInstalledItems.filter((item) => item.origin !== 'organization'),
     [allInstalledItems, showEnterprise],
   );
+  const publishableInstalledItems = useMemo(() => {
+    const eligible = new Set(ghosts.filter((ghost) =>
+      ghost.publishingSource?.kind === 'local' &&
+      !localPublishingUnavailableKey(ghost, marketItemForInstalledGhost(marketItems, ghost)),
+    ).map(installedGhostStoragePart));
+    return allInstalledItems.filter((item) => eligible.has(item.id));
+  }, [ghosts, marketItems, allInstalledItems]);
   const searchedInstalledItems = useMemo(
     () => filterGhostPluginItems(installedItems, query),
     [installedItems, query],
@@ -1019,7 +1099,7 @@ function LocalGhostPluginPage({
         } else {
           await window.electronAPI.ghosts.setEnabled(id, enabled);
         }
-        if (enabled) continueRecommendation(pendingNonce, id);
+        if (enabled) await continueRecommendation(pendingNonce, id);
       } catch (error) {
         toast.error(t(ghostInstallErrorKey(extractIpcError(error)?.code)));
       }
@@ -1519,7 +1599,7 @@ function LocalGhostPluginPage({
           isStillActive: () => isMarketBusyLeaseActive(marketBusyLease),
         });
         if (!ghost || !isMarketBusyLeaseActive(marketBusyLease)) return;
-        if (continueRecommendation(pendingNonce, installedGhostStoragePart(ghost))) return;
+        if (await continueRecommendation(pendingNonce, installedGhostStoragePart(ghost))) return;
         // 市场首装装完即开(2026-07-26 定案),toast 用"已安装";更新路径如实
         // 用"已更新"(生效状态未被改变),并留在当前页方便连续更新多个插件。
         toast.success(
@@ -1644,6 +1724,137 @@ function LocalGhostPluginPage({
     await handleInstallMarketItem(target.marketId);
   };
 
+  const showMyPlugins = searchParams.has('myPlugins');
+  useEffect(() => {
+    if (!searchParams.has('contributionChild') && !searchParams.has('contributionTransfer')) return;
+    const next = new URLSearchParams(searchParams); next.delete('contributionChild'); next.delete('contributionTransfer');
+    setSearchParams(next, { replace: true });
+  }, [searchParams, setSearchParams]);
+  const contributionUnavailableKey = localPublishingUnavailableKey(selectedGhost, selectedMarketInstall);
+  const showLocalPublishing = selectedGhost?.publishingSource?.kind === 'local' && !contributionUnavailableKey;
+  useEffect(() => {
+    if (showMyPlugins) { setSelectedId(null); setMarketDetail(null); }
+  }, [showMyPlugins]);
+  useEffect(() => { setPublicationDialog(null); }, [contributionOwner, selectedDetail?.id, showMyPlugins]);
+  useEffect(() => { contributing.current = null; setContributionBusy(false); }, [contributionOwner]);
+
+  const openMyPlugins = (pluginId?: string) => {
+    if (pluginCatalogVisible) capturePluginCatalogScroll();
+    setSelectedId(null); setMarketDetail(null);
+    const next = new URLSearchParams(searchParams);
+    next.set('myPlugins', '1'); next.delete('contributionChild'); next.delete('contributionTransfer');
+    if (pluginId) next.set('contribution', pluginId); else next.delete('contribution');
+    setSearchParams(next);
+  };
+  const preparePublication = (instanceId: string) => {
+    const ghost = findInstalledGhostByInstanceId(ghosts, instanceId);
+    if (!ghost || ghost.publishingSource?.kind !== 'local' ||
+      localPublishingUnavailableKey(ghost, marketItemForInstalledGhost(marketItems, ghost)))
+      throw new Error('Current local publishing source is unavailable');
+    return window.electronAPI.pluginContributions.prepare(instanceId, {
+      directory: ghost.dir, approvalToken: ghostInstallApprovalToken(ghost.approval),
+    });
+  };
+  const contribute = async (instanceId: string, options?: PluginSubmitOptions): Promise<boolean> => {
+    if (contributing.current) return false;
+    if (!contributor) {
+      const ghost = findInstalledGhostByInstanceId(ghosts, instanceId);
+      if (!ghost || localPublishingUnavailableKey(ghost) || ghost.publishingSource?.kind !== 'local') return false;
+      const nonce = rememberContributionIntent(ghost);
+      const next = new URLSearchParams(searchParams); next.set('myPlugins', '1'); next.set('contributionIntent', nonce);
+      setSearchParams(next);
+      if (mode !== 'cloud') {
+        await signInForContribution();
+        navigate('/login', { replace: true, state: { returnTo: `/plugins?${next}` } });
+      }
+      return false;
+    }
+    const owner = contributionOwner;
+    const submittedFrom = contributionView.current.token;
+    const stillHere = () => contributionMounted.current && contributionOwnerRef.current === owner &&
+      contributionView.current.token === submittedFrom && (options?.isCurrent?.() ?? true);
+    contributing.current = owner;
+    setContributionBusy(true);
+    let preparedId: string | undefined;
+    try {
+      const clicked = findInstalledGhostByInstanceId(ghosts, instanceId);
+      if (!clicked) throw new Error('Original installed plugin is unavailable');
+      if (clicked.publishingSource?.kind !== 'local' || localPublishingUnavailableKey(clicked, marketItemForInstalledGhost(marketItems, clicked)))
+        throw new Error('Current publishing source or permission is unavailable');
+      const prepared = options?.prepared ?? await preparePublication(instanceId);
+      if (prepared.instanceId !== instanceId) throw new Error('Original installed plugin changed');
+      preparedId = prepared.preparedId;
+      if (contributionOwnerRef.current !== owner) return false;
+      let result = await window.electronAPI.pluginContributions.submit(prepared.preparedId);
+      preparedId = undefined;
+      // Keep upload bookkeeping inside this submit action. Only a confirmed
+      // server submission belongs in My Plugins; HTTP 202 is still submitting.
+      while (result.stage !== 'complete') {
+        if (!contributionMounted.current || contributionOwnerRef.current !== owner) return false;
+        await new Promise(resolve => window.setTimeout(resolve, 1000));
+        if (!contributionMounted.current || contributionOwnerRef.current !== owner) return false;
+        result = await window.electronAPI.pluginContributions.status(result.localId);
+      }
+      if (!contributionMounted.current || contributionOwnerRef.current !== owner) return false;
+      if (result.operation?.status !== 'succeeded' || !result.operation.receipt) {
+        toast.error(t(`settings.ghosts.contribution.errors.${result.operation?.failure?.code ?? result.errorCode ?? 'INTERNAL'}`, {
+          defaultValue: t('settings.ghosts.contribution.submitFailed'),
+        }));
+        return false;
+      }
+      contributionCache.current.page = null; contributionCache.current.detail = null;
+      setSubmissionRevision(value => value + 1);
+      if (stillHere() && (!showMyPlugins || searchParams.get('contribution') !== result.operation.receipt.pluginId))
+        openMyPlugins(result.operation.receipt.pluginId);
+      return true;
+    } catch (error) {
+      if (contributionOwnerRef.current === owner) { toast.error(t(contributionErrorKey(error), { defaultValue: t('settings.ghosts.contribution.loadFailed') })); }
+      return false;
+    } finally {
+      if (preparedId && contributionOwnerRef.current === owner) void window.electronAPI.pluginContributions.discard(preparedId).catch(() => undefined);
+      if (contributionOwnerRef.current === owner && contributing.current === owner) { contributing.current = null; setContributionBusy(false); }
+    }
+  };
+
+  useEffect(() => {
+    const nonce = searchParams.get('contributionIntent');
+    if (!nonce || !contributor) return;
+    const target = consumeContributionIntent(nonce);
+    const next = new URLSearchParams(searchParams); next.delete('contributionIntent');
+    setSearchParams(next, { replace: true });
+    if (!target) return;
+    const matches = ghosts.filter((ghost) => matchesContributionIntent(target, ghost));
+    if (matches.length === 1) {
+      // Login returns to the exact local detail so the actual package summary is read first.
+      next.delete('myPlugins'); next.delete('contribution'); next.delete('contributionChild');
+      setSelectedId(installedGhostStoragePart(matches[0]));
+      setMarketDetail(null);
+      setSearchParams(next, { replace: true });
+    }
+    else toast.error(t('settings.ghosts.contribution.installForAccount'));
+  }, [searchParams, contributor, contributionOwner, ghosts]);
+
+  const publishingInstalledRevision = JSON.stringify([installedGhostMarketKey, installedGhostLocationsKey,
+    ghosts.map(ghost => [installedGhostStoragePart(ghost), ghostInstallApprovalToken(ghost.approval), ghost.publishingSource])]);
+  const publicationDialogView = publicationDialog && publicationDialog.owner === contributionOwner && publicationDialog.instanceId === selectedDetail?.id ? (
+    <PluginPublishDialog
+      key={publicationDialog.id}
+      open={publicationDialog.open}
+      ownerKey={contributionOwner}
+      initialInstanceId={publicationDialog.instanceId}
+      reader={window.electronAPI.pluginContributions}
+      localPlugins={publishableInstalledItems}
+      installedPluginCount={allInstalledItems.length}
+      onPrepare={preparePublication}
+      onSubmitUpdate={contribute}
+      submitBusy={contributionBusy}
+      installedRevision={publishingInstalledRevision}
+      submissionRevision={submissionRevision}
+      onOpenChange={open => setPublicationDialog(current => current?.id === publicationDialog.id ? { ...current, open } : current)}
+      onClosed={() => setPublicationDialog(current => current?.id === publicationDialog.id && !current.open ? null : current)}
+    />
+  ) : null;
+
   // 面板收束:aside 只挂在插件页语境里(列表/详情/市场详情共用),
   // 路由离开本页组件整体卸载 → webview 一并回收,绝不残留到别的界面。
   const panelAside = openPanelGhost ? (
@@ -1655,6 +1866,95 @@ function LocalGhostPluginPage({
       onClose={() => setOpenPanelId(null)}
     />
   ) : null;
+
+
+  const renderInstalledDetail = () => selectedDetail ? (
+      <div className="flex h-full min-h-0 w-full">
+        <div className="flex min-w-0 flex-1 flex-col">
+          {recommendationNotice}
+          <div className="min-h-0 flex-1">
+            <GhostPluginDetailView
+              usageOwnerKey={`${panelOwnerKey}:${dataOwnerGeneration}`}
+              confirmClearUsage={() => confirm({ title: t('settings.ghosts.usage.clearTitle'), description: t('settings.ghosts.usage.clearDescription'), confirmText: t('settings.ghosts.usage.clear'), confirmVariant: 'destructive' })}
+              ghost={selectedGhost}
+              sharePluginId={selectedMarketInstall?.sourceType === 'server' && selectedMarketInstall.scope === 'public' ? selectedMarketInstall.pluginId : undefined}
+              detail={selectedDetail}
+              marketItem={selectedMarketInstall}
+              panelStatus={panelStatus}
+              enabledOverride={
+                selectedGhost
+                  ? effectiveEnabled(installedGhostStoragePart(selectedGhost), selectedGhost.enabled)
+                  : undefined
+              }
+              onBack={() => {
+                cancelPendingPluginSuggestion(recommendationNonce ?? undefined);
+                setSelectedId(null);
+              }}
+              onToggle={(enabled) =>
+                void handleToggle(selectedDetail.id, enabled, selectedDetail.name)
+              }
+              onUse={handleUse}
+              mainViewSidebarVisible={selectedMainViewSidebarVisible}
+              onMainViewSidebarVisibleChange={handleMainViewSidebarVisibleChange}
+              onUpdate={() => void handleUpdate()}
+              onUpdateFromFile={() => void handleUpdateFromFile()}
+              onReapprove={() => void handleRecoverInstall(selectedDetail.id)}
+              updateVersion={selectedMarketUpdate?.version}
+              updateBusy={(selectedMarketUpdate !== null && marketBusyId !== null) || batchRunning}
+              onUninstall={() => void handleUninstall()}
+              onExport={
+                selectedGhost
+                  ? () => void handleExport()
+                  : undefined
+              }
+              onContribute={!showLocalPublishing ? undefined : () => {
+                if (!contributor) { void contribute(selectedDetail.id); return; }
+                setPublicationDialog({
+                  id: ++publicationDialogSequence.current, owner: contributionOwner, open: true, instanceId: selectedDetail.id,
+                });
+              }}
+              contributionUnavailableReason={contributionUnavailableKey === 'officialGithubRequired' || (contributionUnavailableKey === 'reservedId' && selectedGhost?.publishingSource?.kind === 'public-market')
+                ? t(`settings.ghosts.contribution.unavailable.${contributionUnavailableKey}`)
+                : selectedGhost?.publishingSource?.kind === 'local' && contributionUnavailableKey
+                  ? t(`settings.ghosts.contribution.unavailable.${contributionUnavailableKey}`) : undefined}
+              contributionBusy={contributionBusy}
+              toggleDisabled={scopeDir !== null && selectedGhost !== null && !selectedGhost.enabled}
+              onIconLoadError={handleMarketIconLoadError}
+            />
+          </div>
+        </div>
+        {panelAside}
+        {publicationDialogView}
+      </div>
+  ) : null;
+
+  if (showMyPlugins) return <MyPluginsPage
+    key={contributionOwner}
+    cache={contributionCache.current}
+    reader={window.electronAPI.pluginContributions}
+    localPlugins={publishableInstalledItems}
+    installedPluginCount={allInstalledItems.length}
+    onPrepare={preparePublication}
+    installedRevision={publishingInstalledRevision}
+    renderVersionFacts={(plugin) => <PluginVersionFacts plugin={plugin} />}
+    onReadPublished={window.electronAPI.pluginMarket.detail}
+    submitBusy={contributionBusy}
+    submissionRevision={submissionRevision}
+    onSubmitUpdate={contribute}
+    onInstallPublished={async (pluginId) => {
+      const owner = contributionOwner;
+      const detail = await window.electronAPI.pluginMarket.detail(pluginId);
+      if (contributionOwnerRef.current !== owner) return;
+      if (detail.scope !== 'public' || detail.sourceType !== 'server') return;
+      await runMarketInstallFlow(detail);
+    }}
+    onViewLocal={() => {
+      const next = new URLSearchParams(searchParams); next.delete('myPlugins'); next.delete('contribution'); next.delete('contributionChild'); next.delete('contributionTransfer');
+      requestPluginCatalogScrollRestore();
+      setSelectedId(null); setMarketDetail(null); setSearchParams(next, { replace: true });
+    }}
+  />;
+
 
   if (marketDetail) {
     return (
@@ -1700,55 +2000,7 @@ function LocalGhostPluginPage({
     );
   }
 
-  if (selectedDetail) {
-    return (
-      <div className="flex h-full min-h-0 w-full">
-        <div className="flex min-w-0 flex-1 flex-col">
-          {recommendationNotice}
-          <div className="min-h-0 flex-1">
-            <GhostPluginDetailView
-              usageOwnerKey={`${panelOwnerKey}:${dataOwnerGeneration}`}
-              confirmClearUsage={() => confirm({ title: t('settings.ghosts.usage.clearTitle'), description: t('settings.ghosts.usage.clearDescription'), confirmText: t('settings.ghosts.usage.clear'), confirmVariant: 'destructive' })}
-              ghost={selectedGhost}
-              sharePluginId={selectedMarketInstall?.sourceType === 'server' && selectedMarketInstall.scope === 'public' ? selectedMarketInstall.pluginId : undefined}
-              detail={selectedDetail}
-              marketItem={selectedMarketInstall}
-              panelStatus={panelStatus}
-              enabledOverride={
-                selectedGhost
-                  ? effectiveEnabled(installedGhostStoragePart(selectedGhost), selectedGhost.enabled)
-                  : undefined
-              }
-              onBack={() => {
-                cancelPendingPluginSuggestion(recommendationNonce ?? undefined);
-                setSelectedId(null);
-              }}
-              onToggle={(enabled) =>
-                void handleToggle(selectedDetail.id, enabled, selectedDetail.name)
-              }
-              onUse={handleUse}
-              mainViewSidebarVisible={selectedMainViewSidebarVisible}
-              onMainViewSidebarVisibleChange={handleMainViewSidebarVisibleChange}
-              onUpdate={() => void handleUpdate()}
-              onUpdateFromFile={() => void handleUpdateFromFile()}
-              onReapprove={() => void handleRecoverInstall(selectedDetail.id)}
-              updateVersion={selectedMarketUpdate?.version}
-              updateBusy={(selectedMarketUpdate !== null && marketBusyId !== null) || batchRunning}
-              onUninstall={() => void handleUninstall()}
-              onExport={
-                selectedGhost && !isUserInstallReservedGhostId(selectedDetail.ghostId)
-                  ? () => void handleExport()
-                  : undefined
-              }
-              toggleDisabled={scopeDir !== null && selectedGhost !== null && !selectedGhost.enabled}
-              onIconLoadError={handleMarketIconLoadError}
-            />
-          </div>
-        </div>
-        {panelAside}
-      </div>
-    );
-  }
+  if (selectedDetail) return renderInstalledDetail();
 
   return (
     <PluginManagementLayout
@@ -1760,11 +2012,21 @@ function LocalGhostPluginPage({
       embedded={embedded}
       onSelectTab={onSelectCatalogTab}
       headerActions={
-        <GhostPluginActions
-          onInstall={() => void handleInstall()}
-          onCreateWithCindy={handleCreateWithCindy}
-          onAddMarketplace={() => setAddMarketplaceOpen(true)}
-        />
+        <>
+          <Button variant="secondary" size="sm" onClick={() => openMyPlugins()}>
+            {t('settings.ghosts.contribution.myPlugins')}
+            {reviewUnread.length > 0 ? (
+              <span role="img" className="inline-flex" aria-label={t('settings.ghosts.contribution.unreadReview')}>
+                <AttentionDot tone={reviewUnread.some(item => item.status !== 'approved' && item.status !== 'enabled') ? 'error' : 'done'} />
+              </span>
+            ) : null}
+          </Button>
+          <GhostPluginActions
+            onInstall={() => void handleInstall()}
+            onCreateWithCindy={handleCreateWithCindy}
+            onAddMarketplace={() => setAddMarketplaceOpen(true)}
+          />
+        </>
       }
     >
       <div className="flex min-h-0 flex-1">
@@ -2361,6 +2623,8 @@ export function GhostPluginCard({
 }) {
   const { t } = useTranslation();
   const metadataId = useId();
+  const installationLabel = item.installationLabelKey
+    ? t(`settings.ghosts.detail.${item.installationLabelKey}`, { name: item.installationNamespace }) : sourceLabel;
   const enabled = effectiveEnabled ?? item.enabled;
   // 远程列表不投影本机同名插件的未读状态。
   const localUnread = useGhostUnread(item.id);
@@ -2454,10 +2718,10 @@ export function GhostPluginCard({
           id={metadataId}
           className="mt-1 flex min-w-0 flex-wrap items-center gap-x-1.5 gap-y-1 text-11 text-[var(--text-tertiary)]"
         >
-          {sourceLabel ? <span className="shrink-0">{sourceLabel}</span> : null}
+          {installationLabel ? <span className="min-w-0 break-words">{installationLabel}</span> : null}
           {author ? (
             <>
-              {sourceLabel ? <span aria-hidden="true">·</span> : null}
+              {installationLabel ? <span aria-hidden="true">·</span> : null}
               <span className="min-w-0 max-w-[120px] truncate">{author}</span>
             </>
           ) : null}

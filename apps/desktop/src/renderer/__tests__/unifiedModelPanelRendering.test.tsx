@@ -14,13 +14,15 @@
  *   7. recordRecentUsage 开启时选择成功才写 recentModels(「最近」区当场出现)。
  */
 
-import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { act, fireEvent, render, renderHook, screen, waitFor, within } from '@testing-library/react';
 import React from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { FastMode } from '@cindy/maker-shared';
 import { MemoryRouter } from 'react-router-dom';
 import { ConfirmDialogProvider } from '@/components/ui/confirm-dialog-provider';
 import { CreateWorkerPopover } from '@/features/cc-agent/CreateWorkerPopover';
+import { useTransientModelPickerPreferences } from '@/components/new-chat/modelPickerPreferences';
+import { PluginModelPickerDialog } from '@/cindy-brain/PluginModelPickerHost';
 import type { AgentCapabilities } from '@/hooks/useAgentCapabilities';
 
 /** 统一面板发起的深度写入带上「面板已串行」标记(见 ModelSelector 的 onEffortChangeLive)。 */
@@ -65,7 +67,10 @@ vi.mock('react-i18next', async (importOriginal) => ({
 
 vi.mock('@/lib/scrollbarAutoHide', () => ({ flashScrollbar: vi.fn() }));
 vi.mock('@/hooks/useModelRouteDevices', () => ({
-  useModelRouteDevices: () => ({ devices: [], leadAgentDeviceId: null }),
+  useModelRouteDevices: ({ leadAgentDeviceId }: { leadAgentDeviceId?: string | null }) => ({
+    devices: leadAgentDeviceId ? [{ deviceId: leadAgentDeviceId, name: 'Shared models' }] : [],
+    leadAgentDeviceId: leadAgentDeviceId ?? null,
+  }),
 }));
 
 const workerCapabilities = vi.hoisted(() => ({ byAgent: {} as Record<string, AgentCapabilities> }));
@@ -80,6 +85,10 @@ vi.mock('@/hooks/useAgentCapabilities', () => ({
   }),
 }));
 vi.mock('@/hooks/useApiKey', () => ({ useApiKey: () => ({ hasSavedKey: true }) }));
+vi.mock('@/hooks/useAvailableAgents', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/hooks/useAvailableAgents')>()),
+  useModelPickerAgents: () => ['claude-code', 'codex'],
+}));
 vi.mock('@/hooks/useConnectedSource', () => ({
   useConnectedSource: () => ({ hasConnectedSource: true, loading: false }),
 }));
@@ -245,8 +254,56 @@ import { setDataOwnerGeneration } from '@/contexts/dataOwnerGeneration';
 import { providerShareFavoriteSource, reconcileProviderShareFavorites } from '@/state/providerShareFavorites';
 import { toast } from '@/lib/toast';
 import { setModelEngineOverride } from '@/state/modelEnginePrefs';
+import { sshModel, sshNativeCodexProvider } from '@/features/cc-agent/__tests__/sshModelFixtures';
 
 const onProviderChange = vi.fn();
+
+// Regression: plugin selection promises a request-local draft. The real dialog,
+// ModelSelector and row actions must never write engine/favorite defaults (unit).
+it('keeps plugin engine and favorite edits local after cancelling the real dialog', async () => {
+  const uid = addModelFavorite({ providerId: 'xd', modelId: 'gpt-5.5', agent: 'codex', effort: 'high' });
+  const baseline = listModelFavorites().map((item) => ({ ...item }));
+  const onAnswer = vi.fn(async () => ({ handled: true, accepted: true }));
+  const { unmount } = render(<PluginModelPickerDialog
+    request={{ requestId: 'plugin-draft', ghostId: 'plugin', ghostName: 'Plugin', expiresAt: Date.now() + 90_000 }}
+    onAnswer={onAnswer}
+  />);
+  const favoriteRow = document.querySelector(`[data-unified-anchor="fav::${uid}"]`) as HTMLElement;
+  const favoriteFlyout = await openFlyoutForRow(favoriteRow);
+  await act(async () => fireEvent.click(favoriteFlyout.querySelector('[data-engine-capsule="cc"]') as HTMLElement));
+  await waitFor(() => expect(favoriteRow.querySelector('[data-unified-triple]')?.getAttribute('title')).toContain('Claude'));
+  expect(listModelFavorites()).toEqual(baseline);
+
+  // Work on the ordinary model row as well, including its engine override.
+  const modelRow = document.querySelector('[data-unified-anchor="model::xd::gpt-5.5"]') as HTMLElement;
+  const flyout = await openFlyoutForRow(modelRow);
+  await act(async () => fireEvent.click(flyout.querySelector('[data-engine-capsule="cc"]') as HTMLElement));
+  await waitFor(() => expect(modelRow.querySelector('[data-unified-triple]')?.getAttribute('title')).toContain('Claude'));
+  expect(getModelEngineOverride('xd', 'gpt-5.5')).toBeUndefined();
+  expect(onAnswer).not.toHaveBeenCalled();
+  fireEvent.click(screen.getByRole('button', { name: 'commonUi.confirmDialog.cancel' }));
+  await waitFor(() => expect(onAnswer).toHaveBeenCalledExactlyOnceWith(null));
+  unmount();
+  expect(getModelEngineOverride('xd', 'gpt-5.5')).toBeUndefined();
+  expect(listModelFavorites()).toEqual(baseline);
+});
+
+// Bug: browsing a share used the persistent remote-model memory. One request must isolate
+// identical model IDs by source and discard edits on unmount. Existing cancel case covers only
+// local engine/favorite edits. Minimal input: two sources, same tuple, different effort. Tier: unit.
+it('isolates request model tuning by location and discards it when the picker closes', () => {
+  const request = renderHook(() => useTransientModelPickerPreferences());
+  act(() => {
+    request.result.current.memoryForLocation!('share:fixture').setEffort('codex', 'xd', 'gpt-5.5', 'high');
+    request.result.current.memoryForLocation!(null).setEffort('codex', 'xd', 'gpt-5.5', 'low');
+  });
+  expect(request.result.current.memoryForLocation!('share:fixture').getEffort('codex', 'xd', 'gpt-5.5')).toBe('high');
+  expect(request.result.current.memory.getEffort('codex', 'xd', 'gpt-5.5')).toBe('low');
+  request.unmount();
+  const next = renderHook(() => useTransientModelPickerPreferences());
+  expect(next.result.current.memoryForLocation!('share:fixture').getEffort('codex', 'xd', 'gpt-5.5')).toBeUndefined();
+  next.unmount();
+});
 
 function renderPanel(
   props: Partial<React.ComponentProps<typeof ModelSelectorContent>> = {},
@@ -676,6 +733,91 @@ describe('远程 OAuth 模型的逐行 Harness 准入', () => {
   });
 });
 
+// #8413: an SSH Codex draft used to replace the whole picker catalog with the host's
+// Codex list, so Claude Code and Pi rows vanished and the draft could not leave Codex.
+describe('SSH 项目 · 远端 Codex 只替换 Codex 行', () => {
+  const piProvider = {
+    id: 'deepseek', name: 'DeepSeek', source: 'builtin', agents: ['pi'], auth: { method: 'api-key' },
+    routing: { pi: {} }, connected: true,
+    models: { pi: [{ id: 'deepseek-v4', name: 'DeepSeek V4', group: 'deepseek', sortOrder: 5,
+      contextWindow: 128000, efforts: ['low', 'high'], defaultEffort: 'high' }] },
+  };
+  const localProviders = providersRef.providers;
+  beforeEach(() => { providersRef.providers = [...localProviders, piProvider]; });
+  afterEach(() => { providersRef.providers = localProviders; });
+  const remote = [sshNativeCodexProvider([sshModel('gpt-remote', { name: 'GPT Remote', supportsFastMode: true })])];
+  const renderSsh = (sshCodex: React.ComponentProps<typeof ModelSelectorContent>['sshCodex']) => {
+    const onUnifiedSelect = vi.fn();
+    renderPanel({
+      vendorKey: 'codex', modelId: 'gpt-remote', currentProviderId: 'openai',
+      unifiedAgents: ['claude-code', 'codex', 'pi'], sshCodex, onUnifiedSelect,
+      excludeSubscriptionDirect: true, excludeChatBridgedCodex: true,
+    });
+    return onUnifiedSelect;
+  };
+
+  it('Codex 草稿里仍能选 Claude Code 与 Pi，Codex 行只来自远端原生连接', async () => {
+    const onUnifiedSelect = renderSsh({ providers: remote, status: 'ready', refresh: vi.fn() });
+    // The controller's own Codex routes (OpenAI GPT-5.6, gateway GPT-5.5) are not offered;
+    // the Claude subscription stays excluded on SSH hosts as before (#7987).
+    const list = within(screen.getByRole('listbox'));
+    expect(list.queryByText('GPT-5.6')).toBeNull();
+    expect(list.queryByText('Opus 5')).toBeNull();
+    for (const [name, selection] of [
+      ['GPT-5.5', { engine: 'cc', providerId: 'xd', modelId: 'gpt-5.5' }],
+      ['DeepSeek V4', { engine: 'pi', providerId: 'deepseek', modelId: 'deepseek-v4' }],
+      ['GPT Remote', { engine: 'codex', providerId: 'openai', modelId: 'gpt-remote' }],
+    ] as const) {
+      await act(async () => { fireEvent.click(rowFor(name)); });
+      expect(onUnifiedSelect).toHaveBeenLastCalledWith(expect.objectContaining(selection));
+    }
+  });
+
+  // PR #8444: a mixed memory accessor exists but intentionally does not store Codex.
+  // Editing a non-selected Codex row must reach the draft, not disappear into a no-op.
+  it.each(['effort', 'fast'] as const)('未选中 Codex 行的 %s 配置应用到草稿', async (setting) => {
+    const onUnifiedSelect = vi.fn();
+    const setEffort = vi.fn();
+    const setFast = vi.fn();
+    renderPanel({
+      vendorKey: 'pi', modelId: 'deepseek-v4', currentProviderId: 'deepseek',
+      unifiedAgents: ['claude-code', 'codex', 'pi'],
+      sshCodex: { providers: remote, status: 'ready', refresh: vi.fn() }, onUnifiedSelect,
+      modelMemory: {
+        supportsAgent: agent => agent !== 'codex',
+        getEffort: () => undefined, getFast: () => undefined, setEffort, setFast,
+      },
+    });
+    const flyout = await openRowFlyout('GPT Remote');
+    await act(async () => {
+      if (setting === 'effort') fireEvent.keyDown(flyout.querySelector('[role="slider"]') as HTMLElement, { key: 'ArrowLeft' });
+      else fireEvent.click(flyout.querySelector('[data-fast-toggle]') as HTMLElement);
+    });
+    expect(onUnifiedSelect).toHaveBeenLastCalledWith(expect.objectContaining({
+      engine: 'codex', providerId: 'openai', modelId: 'gpt-remote',
+      ...(setting === 'effort' ? { effort: 'low' } : { fast: true }),
+    }));
+    expect(setEffort).not.toHaveBeenCalled();
+    expect(setFast).not.toHaveBeenCalled();
+  });
+
+  it.each(['loading', 'error'] as const)('远端 Codex 清单 %s 时其余引擎照常可选，提示只占一行', async (status) => {
+    const refresh = vi.fn();
+    const onUnifiedSelect = renderSsh({ providers: [], status, refresh });
+    expect(within(screen.getByRole('listbox')).queryByText('GPT Remote')).toBeNull();
+    if (status === 'loading') {
+      expect(screen.getByText('newChat.modelSelector.remoteLoading')).toBeTruthy();
+    } else {
+      await act(async () => {
+        fireEvent.click(screen.getByRole('button', { name: /newChat\.modelSelector\.retryRemoteModels/ }));
+      });
+      expect(refresh).toHaveBeenCalledTimes(1);
+    }
+    await act(async () => { fireEvent.click(rowFor('DeepSeek V4')); });
+    expect(onUnifiedSelect).toHaveBeenLastCalledWith(expect.objectContaining({ engine: 'pi' }));
+  });
+});
+
 describe('统一面板 · 会话内形态', () => {
   const onCrossEngineSelect = vi.fn();
   const sessionEngineFilter = {
@@ -759,7 +901,7 @@ describe('统一面板 · 会话内形态', () => {
     expect(within(screen.getByRole('listbox')).getByText('Opus 5')).toBeTruthy();
     expect(screen.queryByRole('button', { name: /^仅 / })).toBeNull();
     fireEvent.click(screen.getByRole('button', { name: 'Cindy AI' }));
-    rerender(React.createElement(ModelSelectorContent, { ...props, sessionEngineFilter }));
+    rerender(React.createElement(ModelSelectorContent, { remoteAgent: undefined, ...props, sessionEngineFilter }));
     expect(screen.getByRole('button', { name: '全部' }).getAttribute('aria-pressed')).toBe('true');
     expect(within(screen.getByRole('listbox')).getByText('Opus 5')).toBeTruthy();
   });
@@ -3138,6 +3280,7 @@ describe('统一面板 · 新会话选中直通', () => {
     const uid = addModelFavorite({ providerId: 'xd', modelId: 'gpt-5.5', agent: 'codex' });
     const { unmount } = render(
       React.createElement(ModelSelectorContent, {
+        remoteAgent: undefined,
         modelId: 'gpt-5.5',
         // 选中的收藏 = 草稿正在跑它的副本(2026-08-19 review P2 的完整配置校验):
         // 引擎对齐副本(vendorKey codex),深度对齐副本解析值(无显式档 → codex 目录默认 high)。
@@ -3159,6 +3302,7 @@ describe('统一面板 · 新会话选中直通', () => {
     // 锚点在当前 owner 的收藏里查无此条(删除 / 切账号)→ 不许两头落空。
     render(
       React.createElement(ModelSelectorContent, {
+        remoteAgent: undefined,
         modelId: 'gpt-5.5',
         effort: 'medium',
         onModelChange: vi.fn(),
@@ -3185,6 +3329,7 @@ describe('统一面板 · 新会话选中直通', () => {
     });
     render(
       React.createElement(ModelSelectorContent, {
+        remoteAgent: undefined,
         modelId: 'gpt-5.5',
         vendorKey: 'cc',
         effort: 'low',
@@ -3470,14 +3615,15 @@ describe('统一面板 · 合并行与 wire id', () => {
     expect(getEffort.mock.calls).not.toContainEqual(['claude-code', 'openai', 'gpt-5.6']);
   });
 
-  it('全部模型优先显示来源，Cindy AI 保留单行本地简介', () => {
+  it('全部模型保留来源，Cindy AI 在原描述行显示供应商', () => {
     renderPanel();
     const row = rowFor('GPT-5.6');
     expect(row.textContent).not.toContain('A very long English');
     expect(row.querySelector('[data-model-source-details]')?.textContent).toBe('OpenAI');
     expect(within(row).queryByText('用于编写代码、排查错误与改进程序。')).toBeNull();
-    const desc = within(rowFor('GPT-5.5')).getByText('用于编写代码、排查错误与改进程序。');
-    expect(desc.getAttribute('title')).toBe('用于编写代码、排查错误与改进程序。');
+    const desc = within(rowFor('GPT-5.5')).getByText('Cindy AI');
+    expect(within(rowFor('GPT-5.5')).queryByText('用于编写代码、排查错误与改进程序。')).toBeNull();
+    expect(desc.getAttribute('title')).toBe('Cindy AI');
     expect(desc).toBeTruthy();
     expect(desc.className).toContain('truncate');
     const name = within(row).getByText('GPT-5.6');
@@ -3512,7 +3658,7 @@ describe('统一面板 · 合并行与 wire id', () => {
     }
   });
 
-  it('收藏保持来源第二行，切到单供应商分栏恢复简介', () => {
+  it('收藏保持来源第二行，单供应商分栏在原描述行显示供应商', () => {
     renderPanel();
     fireEvent.click(within(rowFor('GPT-5.6')).getByRole('button', { name: '存为收藏' }));
     fireEvent.click(document.querySelector('[data-rail-item="favorites"]')!);
@@ -3522,7 +3668,8 @@ describe('统一面板 · 合并行与 wire id', () => {
     for (const name of providerRows) {
       const row = name.closest('[data-unified-anchor]') as HTMLElement;
       expect(row.querySelector('[data-model-source-details]')).toBeNull();
-      expect(within(row).getByText('用于编写代码、排查错误与改进程序。')).toBeTruthy();
+      expect(within(row).getByText('OpenAI')).toBeTruthy();
+      expect(within(row).queryByText('用于编写代码、排查错误与改进程序。')).toBeNull();
     }
   });
 
@@ -4244,6 +4391,67 @@ vi.mock('@/features/bots/botStore', () => ({ getEffectiveBotModelSettings: () =>
 }) }));
 vi.mock('@/features/bots/botPronounContext', () => ({ useBotTranslation: () => ({ t: (key: string) => key }) }));
 import { BotModelChainEditor } from '@/features/bots/BotModelChainEditor';
+import { BotTaskModelEditor } from '@/features/bots/BotTaskModelEditor';
+
+describe('teammate settings selected location catalog', () => {
+  const originalProviders = providersRef.providers;
+  const share = 'share:settings-test';
+  const models = [
+    { id: 'google/gemini-4-argon', name: 'Shared Gemini', contextWindow: 200000, efforts: ['high'], defaultEffort: 'high' },
+    { id: 'gpt-6.1-terra', name: 'Shared Terra', contextWindow: 200000, efforts: ['high'], defaultEffort: 'high' },
+  ];
+  beforeEach(() => {
+    remoteProvidersRef.providers = [{
+      id: 'xd', name: 'Shared gateway', source: 'builtin', connected: true, remoteInvocationEnabled: true,
+      agents: ['codex'], auth: { method: 'api-key' }, routing: { codex: {} },
+      models: { codex: models },
+    }];
+    workerCapabilities.byAgent.codex = {
+      availableModels: models.map(({ name, ...model }) => ({ ...model, displayName: name })),
+      hasFastMode: false, effortLevels: [], permissionModes: [],
+    };
+  });
+  afterEach(() => {
+    providersRef.providers = originalProviders;
+    remoteProvidersRef.providers = [];
+    workerCapabilities.byAgent = {};
+  });
+
+  it.each(['primary', 'backup', 'task'] as const)('shows shared-only Gemini and Terra in the %s picker', async (position) => {
+    for (const model of models) {
+      const route = { harness: 'codex' as const, providerId: 'xd', model: model.id,
+        effort: 'high', fastMode: false, agentDeviceId: share };
+      const local = { ...route, agentDeviceId: null, model: 'gpt-5.5' };
+      const view = render(position === 'task'
+        ? <BotTaskModelEditor value={route} onChange={vi.fn()} />
+        : <BotModelChainEditor value={position === 'backup' ? [local, route] : [route]} onChange={vi.fn()} />);
+      const picker = view.container.querySelectorAll('button[aria-haspopup="listbox"]')[position === 'backup' ? 1 : 0]!;
+      expect(picker.textContent).toContain(model.name);
+      expect(picker.textContent).not.toContain('settings.auxiliaryModels.unavailable');
+      expect(picker.getAttribute('title')).toContain(model.name);
+      expect(picker.textContent).toContain('高');
+      fireEvent.click(picker);
+      const menu = await screen.findByRole('listbox');
+      expect(within(menu).getAllByText(model.name).length).toBeGreaterThan(0);
+      view.unmount();
+    }
+  });
+
+  it('uses the selected shared name rather than a same-ID local model', () => {
+    const model = models[0]!;
+    providersRef.providers = [{
+      id: 'xd', name: 'Local gateway', source: 'builtin', connected: true,
+      agents: ['codex'], auth: { method: 'api-key' }, routing: { codex: {} },
+      models: { codex: [{ ...model, name: 'Local Gemini', efforts: ['low'], defaultEffort: 'low' }] },
+    }];
+    const view = render(<BotModelChainEditor value={[{ harness: 'codex', providerId: 'xd', model: model.id,
+      effort: 'high', fastMode: false, agentDeviceId: share }]} onChange={vi.fn()} />);
+    const picker = view.container.querySelector('button[aria-haspopup="listbox"]')!;
+    expect(picker.textContent).toContain('Shared Gemini');
+    expect(picker.textContent).not.toContain('Local Gemini');
+    expect(picker.textContent).toContain('高');
+  });
+});
 
 describe('Teammate settings with the real model picker', () => {
   it('opens the real config and saves the selected source, harness, effort and Fast as one route', async () => {
@@ -4299,7 +4507,7 @@ describe('harness configuration keeps the model menu open', () => {
     }));
     function Picker() {
       const [pendingTarget, setPendingTarget] = React.useState<'claude-code' | undefined>();
-      return <ModelSelector
+      return <ModelSelector remoteAgent={undefined}
         modelId="gpt-5.5" effort="high" vendorKey="codex"
         currentProviderId="xd" onModelChange={vi.fn()} onEffortChange={vi.fn()}
         sessionEngineFilter={{
@@ -4355,7 +4563,7 @@ describe('外层 ModelSelector · 取消当前选中的收藏先应用默认配�
     const onSessionFavoriteAnchorChange = vi.fn();
     function Picker() {
       return (
-        <ModelSelector
+        <ModelSelector remoteAgent={undefined}
           modelId="gpt-5.5"
           effort="low"
           fastMode={false}

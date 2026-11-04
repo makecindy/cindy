@@ -141,6 +141,7 @@ describe("home chrome menus", () => {
       "filter",
       "view",
       "taskInfo",
+      "teammates",
     ]);
     expect(find(actions, "group")?.subtitle).toBe("devices.list.menu.groupProject");
     expect(find(actions, "sort")?.subtitle).toBe("devices.list.menu.sortBy.recency");
@@ -222,6 +223,27 @@ describe("home chrome menus", () => {
     expect(find(build({ taskInfoFields: [] }), "taskInfo")?.subtitle).toBe("devices.list.menu.summaryNone");
   });
 
+  it("selects multiple teammates and explicitly returns to any source", () => {
+    const options = [{ key: "cindy", title: "Cindy" }, { key: "filo", title: "Filo" }];
+    let state = { ...displayState };
+    for (const key of ["cindy", "filo"]) state = { ...state, ...homeDisplayActionPatch(`filter.teammate:${key}`, state) };
+    const actions = buildHomeDisplayPullDownActions({ state, teammates: options, projects: [], dialogueCount: 0, t });
+    expect(state.teammateFilter).toEqual(["cindy", "filo"]);
+    expect(find(actions, "filter.teammates.all")?.state).toBe("off");
+    expect(find(actions, "filter.teammate:cindy")).toMatchObject({ state: "on", keepPresented: true });
+    expect(find(actions, "filter.teammate:filo")?.state).toBe("on");
+    state = { ...state, ...homeDisplayActionPatch("filter.teammate:cindy", state) };
+    state = { ...state, ...homeDisplayActionPatch("filter.teammate:filo", state) };
+    expect(state.teammateFilter).toBe("all");
+    state = { ...state, ...homeDisplayActionPatch("filter.teammates.none", state) };
+    expect(state.teammateFilter).toBe("none");
+    const hidden = buildHomeDisplayPullDownActions({ state, teammates: options, projects: [], dialogueCount: 0, t });
+    expect(find(hidden, "filter.teammates.none")?.state).toBe("on");
+    expect(find(hidden, "filter.teammate:cindy")?.state).toBe("off");
+    expect(homeDisplayActionPatch("filter.teammate:cindy", state)).toEqual({ teammateFilter: ["cindy"] });
+    expect(homeDisplayActionPatch("filter.teammates.all", { ...state, teammateFilter: ["cindy"] })).toEqual({ teammateFilter: "all" });
+  });
+
   it("maps menu actions to preference patches", () => {
     expect(homeDisplayActionPatch("group.dialogue", displayState)).toEqual({ groupDialogue: true });
     expect(homeDisplayActionPatch("group.project", displayState)).toEqual({ groupByProject: false });
@@ -238,6 +260,7 @@ describe("home chrome menus", () => {
     expect(homeDisplayActionPatch("filter.reset", displayState)).toEqual({
       lastActivityFilter: "all",
       projectFilter: "all",
+      teammateFilter: "all",
       vendorFilter: "all",
     });
     expect(homeDisplayActionPatch("view.text", displayState)).toEqual({ viewMode: "text" });
@@ -246,4 +269,16 @@ describe("home chrome menus", () => {
     expect(homeDisplayActionPatch("sort.bogus", displayState)).toBeNull();
     expect(homeDisplayActionPatch("group", displayState)).toBeNull();
   });
+  // Unit: the appearance submenu is distinct from filtering teammate-created tasks.
+  // Existing menu tests did not cover this independently checked, default-on action and the first click with no stored override.
+  it('keeps avatars checked by default and toggles an absent or explicit override', () => {
+    const menu = build().find(action => action.id === 'appearance')!;
+    const submenu = menu.subactions!.find(action => action.id === 'teammates')!;
+    expect(submenu.subactions).toEqual([{ id: 'teammates.showCollapsedAvatars', title: 'devices.list.menu.showCollapsedTeammateAvatars', state: 'on' }]);
+    expect(homeDisplayActionPatch('teammates.showCollapsedAvatars', displayState)).toEqual({ showCollapsedTeammateAvatars: false });
+    expect(find(build({ showCollapsedTeammateAvatars: false }), 'teammates.showCollapsedAvatars')?.state).toBe('off');
+    expect(homeDisplayActionPatch('teammates.showCollapsedAvatars', { ...displayState, showCollapsedTeammateAvatars: false })).toEqual({ showCollapsedTeammateAvatars: true });
+    expect(homeDisplayActionPatch('teammates.showCollapsedAvatars', { ...displayState, showCollapsedTeammateAvatars: true })).toEqual({ showCollapsedTeammateAvatars: false });
+  });
+
 });

@@ -1,4 +1,3 @@
-import { HARNESS_BRIDGE_REVISION, type HarnessCapabilityCatalog, type HarnessHookHandler } from './types/harness-capabilities.js';
 /**
  * Session — 单次 agent 会话的上层包装。
  *
@@ -55,7 +54,12 @@ import type {
   RewindFilesResult,
   SendOrigin,
 } from './types/events.js';
-import { isTerminalAgentErrorEvent, parseToolLoopErrorDetails, isTurnWatchdogLivenessEvent } from './types/events.js';
+import {
+  isTerminalAgentErrorEvent,
+  isTerminalTurnEvent,
+  parseToolLoopErrorDetails,
+  isTurnWatchdogLivenessEvent,
+} from './types/events.js';
 import type { ContextUsageData } from './types/context-usage.js';
 import type { PiRuntimeCapabilityManifest } from './types/pi-runtime-capabilities.js';
 import type {
@@ -135,6 +139,12 @@ export const STALL_ABORT_RECOVERY_GRACE_MS = 10_000;
  */
 export const MANUAL_ABORT_RECOVERY_GRACE_MS = 15_000;
 /**
+ * 宿主请求的事件流暂停（`holdEventStream`）最长等待。宿主交付生成图要落库、可能经中转
+ * 分块下载，这里给足余量；超时只是放行后续事件，宿主的后台交付照常完成。
+ * abort / close / detach 立即放行，不受这个上限约束（手动 Stop 的复核宽限更短）。
+ */
+export const EVENT_STREAM_HOLD_MS = 20_000;
+/**
  * The same Codex tool call starting again sooner than this cannot be a new model
  * response (one sampling takes seconds): it is a script repeating it in a burst.
  */
@@ -203,6 +213,8 @@ export interface SessionOptions {
    * 主要供测试注入短阈值，宿主正常不传。
    */
   turnStallMs?: number;
+  /** `holdEventStream` 的最长等待(ms)。省略 = EVENT_STREAM_HOLD_MS；主要供测试注入。 */
+  eventStreamHoldMs?: number;
   /**
    * 可选：视觉桥钩子（层 B）。host 注入后，session.send 在组装 UserMessage、交给
    * handle 前调用一次，把用户贴图替换为视觉描述。host 不注入 = 完全跳过，字节级零干扰
@@ -486,10 +498,6 @@ export class Session {
   private readonly runtimeRecoveryListeners = new Set<SessionEventListener>();
   private readonly statusListeners = new Set<SessionStatusListener>();
   private interactionListener: InteractionRequestListener | null = null;
-  private harnessHookHandler: HarnessHookHandler | null = null;
-  private harnessActionInFlight = false;
-  /** Invalidates plugin requests when an undispatched reservation reuses its turn number. */
-  private harnessRevision = 0;
   private turnLifecycleObserver: SessionTurnLifecycleObserver | null = null;
   /** Generation whose turn after the product terminal (no send) is currently open. */
   private unsolicitedTurnGeneration: number | null = null;
@@ -558,8 +566,28 @@ export class Session {
    * after the handle flips running; leftover N tails must not adopt as N+1.
    */
   private unacceptedSendGeneration: number | null = null;
-  /** True while runEventLoop is blocked in iterator.next(). */
+  /**
+   * True while runEventLoop is blocked on the provider stream: iterator.next(),
+   * including a bounded listener-requested hold that precedes it.
+   */
   private eventLoopAwaiting = false;
+  /** The current-turn event runEventLoop is fanning out; only it may request a hold. */
+  private holdableFanOutEvent: AgentEvent | null = null;
+  /** A hold requested while fanning out `source`, drained before the next provider event. */
+  private pendingEventStreamHold: {
+    source: AgentEvent;
+    followUps: Promise<readonly AgentEvent[]>;
+  } | null = null;
+  /** Ends an in-progress hold early (stop / teardown) without fanning out its follow-ups. */
+  private releaseEventStreamHoldWait: (() => void) | null = null;
+  /**
+   * Fences send admission from the moment a hold is accepted until the loop has
+   * read the event that follows it. The provider may already have marked its
+   * handle idle with `done` queued; without the fence a send could start turn
+   * N+1 before N's terminal is consumed and steal its origin / generation.
+   */
+  private eventStreamHoldFence = false;
+  private readonly eventStreamHoldMs: number;
   /** The blocked next() that was pending when the current send entered handle.send. */
   private inFlightSendOwnsBlockedWait = false;
   /** Last resolve() returned the in-flight send generation. */
@@ -631,6 +659,7 @@ export class Session {
     };
     this.turnStallMs =
       opts.turnStallMs ?? parseTurnStallMs(process.env.XDT_SESSION_TURN_STALL_MS);
+    this.eventStreamHoldMs = opts.eventStreamHoldMs ?? EVENT_STREAM_HOLD_MS;
     this.visionBridge = opts.visionBridge;
     this.toolLoopReviewer = opts.toolLoopReviewer;
     this.asyncUserQuestions = new AsyncUserQuestions({
@@ -1114,7 +1143,6 @@ export class Session {
       //     turn 的 done 会丢 origin → IM 转播收不到 done → 转播卡永不 finalize、残留
       //     state 污染下一轮(见 PR #129 review)。
       if (!turnDispatched) {
-        this.harnessRevision += 1;
         if (originInstalled) {
           this.currentTurnOrigin = previousTurnOrigin;
           this.currentTurnAttemptToken = previousTurnAttemptToken;
@@ -1222,7 +1250,7 @@ export class Session {
     if (!this.capabilities.sameTurnSteer.supported) {
       throw new NotSupportedError('sameTurnSteer', this.capabilities.sameTurnSteer);
     }
-    if (this.harnessActionInFlight || !this.handle.isTurnRunning?.()) {
+    if (!this.handle.isTurnRunning?.()) {
       throw new Error(`Session ${this.id} has no active turn to steer`);
     }
     // 记录发起时的 turn generation：异步视觉转换期间原 turn 可能结束、同 Session
@@ -1244,7 +1272,7 @@ export class Session {
     // 异步视觉转换期间 turn 可能已完成/被中止（视觉后端慢、用户已切任务等）：
     // 转换结果此时已无人接收，必须先复查原 turn 生命周期再调用 handle.steer，
     // 否则底层以「No active turn to steer」拒绝或 Pi 把迟到消息交给已结束的 turn。
-    if (this.harnessActionInFlight || this.getTurnGeneration() !== steerTurnGeneration || !this.handle.isTurnRunning?.()) {
+    if (this.getTurnGeneration() !== steerTurnGeneration || !this.handle.isTurnRunning?.()) {
       throw new Error(`Session ${this.id} has no active turn to steer`);
     }
     this.startEventLoopIfNeeded();
@@ -1267,10 +1295,31 @@ export class Session {
     }
   }
 
+  /**
+   * Cancel a send that is still in the pre-dispatch (`accepting`) phase without
+   * turning the whole session into `aborting`. Hosts that withdraw one queued
+   * routine send use this instead of abort(): abort is user-Stop semantics and
+   * arms the manual-abort recovery watchdog.
+   *
+   * Returns true when a pre-dispatch reservation was cancelled. False means there
+   * is no such reservation (the turn already crossed the vendor boundary, was
+   * accepted, or no send is pending), so callers that need to stop a running turn
+   * should use abort().
+   */
+  cancelPendingSend(): boolean {
+    const reservation = this.sendReservation;
+    if (!reservation || reservation.accepted || reservation.phase !== 'accepting') return false;
+    this.cancelSendReservation(reservation);
+    return true;
+  }
+
   async abort(): Promise<void> {
     if (this.status === 'closed') return;
     if (this.status === 'error') return;
     this.asyncUserQuestions.expire('session_aborted');
+    // The provider's terminal must not wait for a host hold: the manual-abort
+    // recovery grace is shorter than EVENT_STREAM_HOLD_MS.
+    this.releaseEventStreamHold();
     const abortGeneration = this.turnGeneration;
     this.cancelSendReservation(this.sendReservation);
     // 中断已在进行:不再计 stall 额度(下一个 turn 的 send 会重新起表)。
@@ -1522,6 +1571,7 @@ export class Session {
 
     this.terminationStarted = true;
     this.asyncUserQuestions.expire('session_closed');
+    this.releaseEventStreamHold();
     // 拆除开始即作废进行中的工具循环复核,迟到结论不得再中断。
     this.turnControlState?.toolLoopMonitor?.dispose();
     // Reserve before synchronous terminal listeners run, but begin transport
@@ -1675,6 +1725,7 @@ export class Session {
     if (this.status === 'closed') return;
     this.terminationStarted = true;
     this.asyncUserQuestions.expire('session_closed');
+    this.releaseEventStreamHold();
     // 拆除开始即作废进行中的工具循环复核,迟到结论不得再中断。
     this.turnControlState?.toolLoopMonitor?.dispose();
     // 与 performClose() 对齐：进入拆离立即 abort 未完成的 pre-dispatch reservation
@@ -1713,85 +1764,6 @@ export class Session {
 
   async getCodexContextWindowInfo() {
     return this.handle.getCodexContextWindowInfo?.() ?? null;
-  }
-
-  /** Host-only fence; provider turn numbers can be reused after a rejected send. */
-  getHarnessRevision(): number {
-    return this.harnessRevision;
-  }
-
-  /** Metadata bridge capabilities, separate from the Pi-native command catalog. */
-  getHarnessCapabilities(): HarnessCapabilityCatalog {
-    const hooks: HarnessCapabilityCatalog['hooks'] = [{ name: 'permission.request', source: 'host-permission',
-      connected: true, actions: ['continue', 'block'], timeoutMs: 1500, onFailure: 'continue-normal-permission-flow' }];
-    for (const name of ['tool.before', 'compaction.before'] as const) {
-      hooks.push({ name, source: 'native', connected: !!this.handle.setHarnessHookHandler && this.handle.harnessHooks?.includes(name) === true,
-        actions: ['continue', 'block'], timeoutMs: 1500, onFailure: 'continue-normal-permission-flow' });
-    }
-    const compactConnected = !!this.handle.requestHarnessCompaction;
-    return { revision: HARNESS_BRIDGE_REVISION, agent: this.agentKind, runtimeVersion: this.handle.runtimeVersion ?? null,
-      read: ['runtime', 'usage', 'status'],
-      events: ['tool', 'usage', 'compaction', 'task', 'status', 'message'], hooks,
-      actions: ['turn.interrupt', ...(compactConnected ? ['context.compact'] : [])],
-      availability: [...hooks.map(hook => ({ group: 'hooks' as const, name: hook.name, connected: hook.connected === true })),
-        { group: 'actions', name: 'turn.interrupt', connected: true },
-        { group: 'actions', name: 'context.compact', connected: compactConnected }],
-      backgroundCompaction: { supported: false, nativeEnabled: 'unknown', nativeRunning: 'unknown' } };
-  }
-
-  /** Synchronous reservation prevents user sends or another action racing dispatch. */
-  async runHarnessAction(name: 'context.compact' | 'turn.interrupt', expectedGeneration: number) {
-    this.ensureActive();
-    if (expectedGeneration !== this.turnGeneration) return { ok: false as const, errorCode: 'STALE_RUNTIME' as const };
-    if (this.harnessActionInFlight || this.permissionModeChangesInFlight > 0)
-      return { ok: false as const, errorCode: 'BUSY' as const };
-    if (name === 'context.compact' && (this.pendingInteractions > 0 || this.isTurnRunning() || this.hasUnsettledTurn()))
-      return { ok: false as const, errorCode: 'BUSY' as const };
-    if (!this.getHarnessCapabilities().actions.includes(name))
-      return { ok: false as const, errorCode: 'UNAVAILABLE' as const };
-    const origin = this.currentTurnOrigin;
-    if (origin?.kind && origin.kind !== 'user' || origin?.surface === 'im')
-      return { ok: false as const, errorCode: 'DENIED' as const };
-    const running = this.isTurnRunning();
-    this.harnessActionInFlight = true;
-    try {
-      if (name === 'context.compact') return { ok: true as const, value: await this.handle.requestHarnessCompaction!() };
-      if (running) await this.abort();
-      // An interrupt acknowledgement does not prove all native work has stopped.
-      return { ok: true as const, value: { state: running ? 'requested' : 'noop' } };
-    } finally {
-      this.harnessActionInFlight = false;
-    }
-  }
-
-  /** Host-only registration; never serialized to a model or remote control payload. */
-  setHarnessHookHandler(handler: HarnessHookHandler): () => void {
-    this.harnessHookHandler = handler;
-    const disposeNative = this.handle.setHarnessHookHandler?.(request => this.runHarnessHook(request));
-    return () => {
-      if (this.harnessHookHandler === handler) {
-        this.harnessHookHandler = null;
-        disposeNative?.();
-      }
-    };
-  }
-
-  private async runHarnessHook(request: Parameters<HarnessHookHandler>[0]) {
-    const handler = this.harnessHookHandler;
-    // Existing subscription scope: ordinary user turns only. No IM/automation expansion.
-    if (!handler || this.currentTurnOrigin?.kind && this.currentTurnOrigin.kind !== 'user'
-      || this.currentTurnOrigin?.surface === 'im') return { action: 'continue' as const };
-    const generation = this.turnGeneration;
-    const revision = this.harnessRevision;
-    const nativeId = this.handle.requestSessionId ?? this.handle.id;
-    let result: Awaited<ReturnType<HarnessHookHandler>>;
-    try { result = await handler(request); } catch { result = { action: 'continue' }; }
-    if (this.status !== 'active' || this.terminationStarted || this.turnGeneration !== generation
-      || this.harnessRevision !== revision
-      || (this.handle.requestSessionId ?? this.handle.id) !== nativeId) {
-      return { action: 'block' as const, reason: 'Harness request is no longer current' };
-    }
-    return result;
   }
 
   getUsageSnapshot(): UsageSnapshot {
@@ -2185,7 +2157,6 @@ export class Session {
   /** 手动压缩会话上下文(capability 见 Capabilities.manualCompact)。 */
   async compactSession(instructions?: string): Promise<ManualCompactResult> {
     this.ensureActive();
-    if (this.harnessActionInFlight) throw new Error('SESSION_RUNNING: Harness control action is in progress');
     if (!this.capabilities.manualCompact?.supported) {
       throw new NotSupportedError(
         'manualCompact',
@@ -2297,7 +2268,7 @@ export class Session {
   isTurnRunning(): boolean {
     return (
       this.sendReservation !== null ||
-      this.harnessActionInFlight ||
+      this.eventStreamHoldFence ||
       this.hostTurnLeases.size > 0 ||
       this.permissionModeChangesInFlight > 0 ||
       this.isHandleTurnRunning()
@@ -2367,6 +2338,25 @@ export class Session {
   }
 
   /**
+   * 宿主监听方在处理当前事件时请求暂停事件流：`followUps` settle 之前不读下一条
+   * provider 事件，之后把 followUps 作为 `hostProjection` 事件发给全部监听方，
+   * 再继续读流。用于宿主把 provider 产物（如 Codex 原生生成图）落库后，让 IM / hook 等
+   * 订阅方在同一 turn 的 `done` 之前看到它。
+   *
+   * 只接受 runEventLoop 正在派发的当前 turn 非终态事件，且同一事件只接受一次；
+   * 其余情况返回 false，调用方的工作照常在后台完成。followUps 沿用来源事件的
+   * turn 标记，不进 turn 控制、工具循环与看门狗记账；暂停至多 eventStreamHoldMs，
+   * abort / close / detach 立即放行并丢弃尚未发出的 followUps。
+   */
+  holdEventStream(followUps: Promise<readonly AgentEvent[]>): boolean {
+    const source = this.holdableFanOutEvent;
+    if (!source || this.pendingEventStreamHold || this.terminationStarted) return false;
+    this.pendingEventStreamHold = { source, followUps };
+    this.eventStreamHoldFence = true;
+    return true;
+  }
+
+  /**
    * Host-only post-terminal recovery. Persistent product listeners (Orca, Learn,
    * Goal, IM turn text) must not observe these as a new turn.
    */
@@ -2397,11 +2387,6 @@ export class Session {
     const runtime = this.observeInteractionStarted(request);
     this.armTurnStallWatchdog();
     try {
-      if (request.kind === 'permission' && this.harnessHookHandler) {
-        const result = await this.runHarnessHook({ name: 'permission.request', toolName: request.toolName,
-          ...(request.toolUseId ? { toolUseId: request.toolUseId } : {}) });
-        if (result.action === 'block') return { kind: 'permission', behavior: 'deny', reason: result.reason ?? 'Blocked by plugin' };
-      }
       return await resolve();
     } finally {
       if (isQuestion) this.pendingUserQuestions -= 1;
@@ -2873,6 +2858,7 @@ export class Session {
     event: AgentEvent,
     observedGeneration = this.turnGeneration,
     queuedGeneration = observedGeneration,
+    fromEventLoop = false,
   ): void {
     if (event.runtimeRecovery) {
       this.dispatchRuntimeRecovery(event);
@@ -3087,8 +3073,18 @@ export class Session {
       }
     }
     if (!isLeftoverProductTerminal) {
-      for (const listener of this.eventListeners) {
-        try { listener(listenerEvent); } catch (e) { this.logger.error('event listener threw', { error: String(e) }); }
+      // Only a provider event of the current turn may hold the stream: watchdog
+      // synthesized, background, leftover, idle-status and terminal events never wait.
+      this.holdableFanOutEvent =
+        fromEventLoop && isCurrentGeneration && !isBackgroundEvent && !isTerminalTurnEvent(event)
+          ? event
+          : null;
+      try {
+        for (const listener of this.eventListeners) {
+          try { listener(listenerEvent); } catch (e) { this.logger.error('event listener threw', { error: String(e) }); }
+        }
+      } finally {
+        this.holdableFanOutEvent = null;
       }
     }
     // A late child update belongs to the completed parent turn. It remains
@@ -3495,6 +3491,72 @@ export class Session {
     }
   }
 
+  /** Stop / teardown never waits on a host hold, whether or not draining has begun. */
+  private releaseEventStreamHold(): void {
+    this.eventStreamHoldFence = false;
+    if (this.releaseEventStreamHoldWait) this.releaseEventStreamHoldWait();
+    else this.pendingEventStreamHold = null;
+  }
+
+  private async drainEventStreamHold(): Promise<void> {
+    const hold = this.pendingEventStreamHold;
+    if (!hold) return;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    let outcome: readonly AgentEvent[] | 'released' | 'timeout' | null;
+    try {
+      outcome = await Promise.race([
+        hold.followUps.catch((error: unknown) => {
+          this.logger.warn('event stream hold follow-ups failed', { error: String(error) });
+          return null;
+        }),
+        new Promise<'released'>((resolve) => {
+          this.releaseEventStreamHoldWait = () => resolve('released');
+        }),
+        new Promise<'timeout'>((resolve) => {
+          timer = setTimeout(() => resolve('timeout'), this.eventStreamHoldMs);
+          (timer as { unref?: () => void }).unref?.();
+        }),
+      ]);
+    } finally {
+      if (timer) clearTimeout(timer);
+      this.pendingEventStreamHold = null;
+      this.releaseEventStreamHoldWait = null;
+    }
+    if (outcome === 'timeout') {
+      this.logger.warn('event stream hold timed out', {
+        sourceType: hold.source.type,
+        timeoutMs: this.eventStreamHoldMs,
+      });
+    }
+    if (!Array.isArray(outcome) || this.terminationStarted) return;
+    for (const followUp of outcome) {
+      // A hold never ends the turn: the provider's own terminal follows it.
+      if (isTerminalTurnEvent(followUp)) continue;
+      this.fanOutHostProjection(followUp, hold.source);
+    }
+  }
+
+  /**
+   * Listener-only delivery: the follow-up keeps the source event's turn
+   * attribution and bypasses turn control, tool-loop and watchdog bookkeeping.
+   */
+  private fanOutHostProjection(followUp: AgentEvent, source: AgentEvent): void {
+    const event: AgentEvent = {
+      ...followUp,
+      source: source.source ?? followUp.source,
+      hostProjection: true,
+      sessionInstanceId: source.sessionInstanceId,
+      sessionTurnGeneration: source.sessionTurnGeneration,
+    };
+    if (source.turnOrigin !== undefined) event.turnOrigin = source.turnOrigin;
+    if (source.turnAttemptToken !== undefined) event.turnAttemptToken = source.turnAttemptToken;
+    if (source.turnScope !== undefined) event.turnScope = source.turnScope;
+    const listenerEvent = redactEventForListeners(event);
+    for (const listener of this.eventListeners) {
+      try { listener(listenerEvent); } catch (e) { this.logger.error('event listener threw', { error: String(e) }); }
+    }
+  }
+
   private async runEventLoop(): Promise<void> {
     try {
       const iterator = this.handle.events()[Symbol.asyncIterator]();
@@ -3506,9 +3568,16 @@ export class Session {
         this.eventLoopAwaiting = true;
         let result: IteratorResult<AgentEvent>;
         try {
+          // A hold is part of waiting for the provider: awaitingGeneration was
+          // captured above, so a send during the hold is handled exactly like a
+          // send while blocked in next().
+          if (this.pendingEventStreamHold) await this.drainEventStreamHold();
           result = await iterator.next();
         } finally {
           this.eventLoopAwaiting = false;
+          // The event after a hold (normally the provider's done) is read: from
+          // here it is fanned out under the ordinary admission rules.
+          this.eventStreamHoldFence = false;
         }
         if (result.done) break;
         const event = result.value;
@@ -3536,7 +3605,7 @@ export class Session {
         if (this.terminationStarted) continue;
         // origin 打标与终态清理都收在 fanOutEvent 里（看门狗合成的事件共用同一语义，
         // 见那里的注释）。关闭门一旦占住，旧 handle 的迟到事件不得再改写业务状态。
-        this.fanOutEvent(event, observedGeneration, awaitingGeneration);
+        this.fanOutEvent(event, observedGeneration, awaitingGeneration, true);
       }
     } catch (e) {
       this.logger.error('event loop crashed', { error: String(e) });

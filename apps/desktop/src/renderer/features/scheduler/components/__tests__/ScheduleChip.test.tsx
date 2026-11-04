@@ -11,6 +11,8 @@ vi.mock('react-i18next', () => ({
   // ScheduleChips 经模型面板的远程位置候选间接加载 i18n 初始化。
   initReactI18next: { type: '3rdParty', init: () => undefined },
 }));
+// These cases mount the timing chip only; device/auth state belongs to the model picker.
+vi.mock('@/hooks/useModelRouteDevices', () => ({ useModelRouteDevices: () => ({ devices: undefined }) }));
 
 import { ScheduleChip } from '../ScheduleChips';
 

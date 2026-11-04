@@ -4,6 +4,8 @@ export interface SummaryQuote {
   maxPrice?: number;
   unit: string;
   quantity: number;
+  /** Optional charge category; unknown identifiers are retained for forward compatibility. */
+  component?: string;
   tier?: string;
   priceType?: "exact" | "estimated";
 }
@@ -105,6 +107,10 @@ function parseSummary(value: unknown): ModelDisplayPricingSummary | undefined {
       }
       result.push({
         ...fields,
+        // A malformed optional category must never discard an otherwise valid quote.
+        ...(typeof quote.component === "string" && /^[a-z][a-z0-9_]{0,31}$/.test(quote.component)
+          ? { component: quote.component }
+          : {}),
         ...(priceType !== undefined ? { priceType } : {}),
         ...(maxPrice !== undefined ? { maxPrice } : {}),
       });

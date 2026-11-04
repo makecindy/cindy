@@ -15,6 +15,8 @@ const links: Record<string, ProviderSetupLink> = {
   openai: key('https://platform.openai.com/api-keys'),
   xai: key('https://console.x.ai/team/default/api-keys'),
   openrouter: key('https://openrouter.ai/settings/keys'),
+  // Official Claude CLI guide directs users here to sign in and create a key.
+  agnes: account('https://platform.agnes-ai.com/'),
   deepseek: key('https://platform.deepseek.com/api_keys'),
   'zhipu-glm-cn': key('https://bigmodel.cn/usercenter/proj-mgmt/apikeys'),
   'zhipu-glm-global': key('https://z.ai/manage-apikey/apikey-list'),

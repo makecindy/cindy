@@ -13,6 +13,7 @@
  * `assertInsideWorkdir` — renderer cannot ask for `../../etc/passwd`.
  */
 
+import { randomBytes } from 'node:crypto';
 import { promises as fs, type Stats, type Dirent } from 'node:fs';
 import path from 'node:path';
 
@@ -57,7 +58,7 @@ function hasPdfExtension(relPath: string): boolean {
 }
 
 /**
- * 原子写中间产物的后缀。writeFile 把内容先落到 `${target}.xdt-tmp`,fsync 后
+ * 原子写中间产物的后缀。writeFile 把内容先落到 `${target}.<随机>.xdt-tmp`,fsync 后
  * rename 成正式名。这个临时文件理论上只活一两毫秒,但在边栏 listDir 路径上仍
  * 可能被瞥见 → 一闪而过的 ghost row,视觉上像"刷一下"。
  *
@@ -471,7 +472,7 @@ export async function readFileChunk(
 
 /**
  * Atomically write text content to a file inside workdir. Pattern: write to
- * `${target}.xdt-tmp`, fsync handle, rename → target. Crash-safe (consumer
+ * `${target}.<random>.xdt-tmp`, fsync handle, rename → target. Crash-safe (consumer
  * either sees old content or new, never partial).
  *
  * Constraints:
@@ -522,17 +523,25 @@ export async function writeFile(
     await probeHandle.close();
   }
 
-  const tmp = `${realAbs}${XDT_TMP_SUFFIX}`;
-  const handle = await fs.open(tmp, 'w');
+  // 临时名带随机段并以 'wx' 独占创建:固定名可被工作目录里预置的符号链接
+  // 占位,'w' 会跟随链接写到工作目录外,rename 还会把链接本身搬成目标文件。
+  // 仍以 XDT_TMP_SUFFIX 结尾,listDir / watcher 的过滤照旧生效。
+  const tmp = `${realAbs}.${randomBytes(6).toString('hex')}${XDT_TMP_SUFFIX}`;
+  const handle = await fs.open(tmp, 'wx');
   try {
-    await handle.writeFile(buf);
-    await handle.sync();
-  } finally {
-    await handle.close();
+    try {
+      await handle.writeFile(buf);
+      await handle.sync();
+    } finally {
+      await handle.close();
+    }
+    // rename is atomic on same filesystem (which .xdt-tmp guarantees since
+    // we wrote it in the same directory).
+    await fs.rename(tmp, realAbs);
+  } catch (err) {
+    await fs.rm(tmp, { force: true }).catch(() => {});
+    throw err;
   }
-  // rename is atomic on same filesystem (which .xdt-tmp guarantees since
-  // we wrote it in the same directory).
-  await fs.rename(tmp, realAbs);
 
   const after = await fs.stat(realAbs);
   return { size: after.size, mtimeMs: after.mtimeMs };

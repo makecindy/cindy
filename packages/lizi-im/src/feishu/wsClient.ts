@@ -218,6 +218,7 @@ export function getCurrentBotAppId(): string | null {
 
 export function setLifecycleAnnouncement(enabled: boolean): void {
   S().lifecycleAnnouncementEnabled = enabled;
+  if (!enabled) S().pendingOfflineNotice = false;
   getLog().info(`[feishu/wsClient] lifecycleAnnouncement set to ${enabled}`);
 }
 
@@ -682,18 +683,28 @@ async function stopCurrentClient(opts: StopOptions): Promise<void> {
 async function announceLifecycle(phase: 'online' | 'offline'): Promise<void> {
   const log = getLog();
 
+  // A shared-profile preview owns only its local socket, not the bot's presence.
+  // Do not create an offline-history warning or persist a user preference here.
+  if (getScope().shouldAnnounceLifecycle?.() === false) {
+    log.info(
+      `[feishu/wsClient] announceLifecycle ${phase}: suppressed for secondary instance`,
+    );
+    return;
+  }
+
   const owner = ownerGuard.firstAllowed();
   if (!owner) {
     log.info(`[feishu/wsClient] announceLifecycle ${phase}: no owner whitelisted, skip`);
     return;
   }
 
-  if (phase === 'offline') S().pendingOfflineNotice = true;
-
   if (!S().lifecycleAnnouncementEnabled) {
     log.info(`[feishu/wsClient] announceLifecycle ${phase}: message suppressed by setting`);
     return;
   }
+
+  // 离线补发提醒属于同一类生命周期通知:关闭后不记待发标记(与 Discord 口径一致)。
+  if (phase === 'offline') S().pendingOfflineNotice = true;
 
   const text =
     phase === 'online' ? transportMessages.lifecycle.online : transportMessages.lifecycle.offline;

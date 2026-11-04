@@ -17,6 +17,7 @@ import type { XdtHelperToolRegistry } from '../lizi_xdtHelperToolRegistry.js';
 import type { XdtHelperHistoryDeps } from './_history_types.js';
 import type { SessionQueueDeps } from './list_session_queue.js';
 import { okPayload, errorPayload } from './_payload.js';
+import { parseIsoMs } from './_history_time.js';
 import { encodeCursor, decodeCursor } from './_history_cursor.js';
 import { resolveHistoryScope } from './_history_scope.js';
 import { historyDeviceShape, HISTORY_DEVICE_DESCRIPTION, queryHistoryDevices } from './_history_devices.js';
@@ -44,6 +45,7 @@ const DESCRIPTION = [
   'orcaRole / parentSessionId / userSendAt 仅在非 null 时出现(默认场景几乎全为 null, 已 omit)。',
   '',
   '【分页】游标分页, 默认 100 条/次, 最大 1000。串联 nextCursor 拿全量。',
+  '源设备可按完整记录的 64 KiB 软预算提前分页；单条超大记录仍完整返回。limit 是条数上限，结束以 hasMore 为准。',
 ].join('\n');
 
 export interface ListSessionsToolDeps {
@@ -181,17 +183,4 @@ export function registerListSessionsTool(
       });
     },
   });
-}
-
-/**
- * 把可选 ISO 8601 字符串解析成 unix ms。
- *  - undefined / 空串 → null (不过滤)
- *  - 合法时间 → number
- *  - 非法 → 'invalid' (调用方返 INVALID_ARGS)
- */
-function parseIsoMs(s: string | undefined): number | null | 'invalid' {
-  if (s === undefined || s === '') return null;
-  const t = new Date(s).getTime();
-  if (!Number.isFinite(t)) return 'invalid';
-  return t;
 }

@@ -22,6 +22,10 @@ export interface PluginMarketItem {
   name: string;
   description: string | null;
   author: string | null;
+  /** Display identity from verified public publishing; never grants runtime trust. */
+  publisherKind?: 'official' | 'personal' | null;
+  /** Main verified a public installation's market origin; attribution spans versions. */
+  installedAuthor?: string | null;
   scope: PluginMarketScope;
   organizationId: string | null;
   defaultInstall: boolean;

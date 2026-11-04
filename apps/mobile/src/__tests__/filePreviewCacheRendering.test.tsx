@@ -12,13 +12,14 @@ const state = vi.hoisted(() => ({
   listDir: vi.fn(),
   scroll: vi.fn(),
   pager: null as any,
+  footer: null as any,
   params: { sessionId: 'task', deviceId: 'device', relPath: 'README.md' },
 }));
 vi.mock('react-native', async () => {
   const { createElement, forwardRef, useImperativeHandle } = await import('react');
   const View = ({ children }: { children?: ReactNode }) => createElement('div', null, children);
   return {
-    View, Text: View, Pressable: View, ActivityIndicator: () => null, Alert: {},
+    View, Text: View, Pressable: View, ActivityIndicator: () => null, Alert: {}, Platform: { OS: 'ios' },
     StyleSheet: { create: (styles: unknown) => styles, hairlineWidth: 1 },
     useWindowDimensions: () => ({ width: 390, height: 844 }),
     FlatList: forwardRef((props: any, ref) => {
@@ -39,6 +40,7 @@ vi.mock('expo-router', () => {
 });
 vi.mock('@/platform/chrome/SystemNavigationBack', () => ({ SystemNavigationBack: () => null, useSystemNavigationBack: () => false }));
 vi.mock('@/platform/AdaptiveWindowContext', () => ({ useAdaptiveWindow: () => ({ width: 390, insets: { left: 0, right: 0 } }) }));
+vi.mock('@/session/usePreviewChromeFrame', () => ({ usePreviewChromeFrame: () => ({ top: 0, bottom: 0, left: 12, right: 12, contentTop: 48, sharedStatusRow: false }) }));
 vi.mock('@/auth/AuthContext', () => { const auth = {}; return { useAuth: () => auth }; });
 vi.mock('@/device-link/DeviceLinkContext', () => { const link = { openLink: async () => {} }; return { useDeviceLink: () => link }; });
 vi.mock('@/device-link/unresponsiveDevicesStore', () => { const devices = new Set(); return { useUnresponsiveDevices: () => devices }; });
@@ -118,8 +120,12 @@ function expectVisiblePage(relPath: string, meta: string) {
   }) as PageProps[];
   const visiblePages = pages.filter(page => page.visible);
   expect(visiblePages).toHaveLength(1);
+  const [position, count] = meta.split(' · ')[0]!.split(' / ').map(Number);
+  expect(state.footer.collection.index).toBe(position! - 1);
+  expect(state.footer.collection.names).toHaveLength(count!);
+  expect(state.footer.collection.names[position! - 1]).toBe(relPath);
   expect(visiblePages[0]).toMatchObject({
-    active: true, item: { name: relPath, relPath }, htmlBrowserActions: { meta },
+    active: true, item: { name: relPath, relPath }, htmlBrowserActions: { meta: meta.split(' · ')[1] ?? '' },
   });
 }
 describe('cached file preview presentation', () => {
@@ -167,3 +173,10 @@ describe('cached file preview presentation', () => {
     expect(state.scroll).toHaveBeenCalledExactlyOnceWith({ animated: false, offset: 2 * 390 });
   });
 });
+
+vi.mock('expo-file-system', () => ({ File: class {} }));
+vi.mock('@/session/TextDocumentPreview', () => ({ TextDocumentPreview: () => null }));
+vi.mock('@/session/PdfDocumentPreview', () => ({ PdfDocumentPreview: () => null }));
+vi.mock('@/session/ModelDocumentPreview', () => ({ ModelDocumentPreview: () => null }));
+vi.mock('@/session/DiagramDocumentPreview', () => ({ DiagramDocumentPreview: () => null }));
+vi.mock('@/session/PreviewChrome', async () => ({ PreviewFooter: (props: any) => { state.footer = props; return null; }, PreviewCollectionContext: (await import('react')).createContext(undefined) }));

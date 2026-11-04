@@ -45,12 +45,15 @@ export async function startAskCardDictation(input: {
   isAppActive?: () => boolean;
   subscribeToAppState?: (listener: AppStateListener) => () => void;
   getText: () => string;
-  setText: (value: string) => void;
+  setText: (value: string, selection?: MobileVoiceSelection) => void;
   getSelection: () => MobileVoiceSelection;
   onListening: () => void;
   onRunCreated?: (run: { stop: () => Promise<void>; cancel: () => Promise<void> }) => void;
   onError: (message: string) => void;
+  /** The voiceprint filter muted someone else's speech. */
+  onSpeakerFiltered?: () => void;
 }): Promise<{ stop: () => Promise<void>; cancel: () => Promise<void> }> {
+  const requestedAt = Date.now();
   if (!isMobileRealtimeAudioAvailable()) {
     throw new Error(mobileVoiceRealtimeAudioUnavailableError());
   }
@@ -89,23 +92,19 @@ export async function startAskCardDictation(input: {
     credential.settings?.language,
     CINDY_MANAGED_REFINER_PROVIDER,
   );
-  let audioGate: Awaited<ReturnType<typeof createMobileSpeakerGate>> | undefined;
-  try {
-    audioGate = await createMobileSpeakerGate();
-  } catch {
-    audioGate = undefined;
-  }
+  const audioGate = createMobileSpeakerGate(input.onSpeakerFiltered).catch(() => undefined);
   const initialDraft = input.getText();
   const session = createMobileVoiceControllerSession({
     credential,
-    ...(audioGate ? { audioGate } : {}),
+    audioGate,
+    requestedAt,
     connectionProvider: (providerId) => voiceContext.createAsrConnection(providerId),
     refinerTargetProvider: (providerId, options) => voiceContext.createRefinerTarget(providerId, options),
     warmRefiner: (request) => voiceContext.warmRefiner(request),
     initialDraft,
     initialSelection: input.getSelection(),
     readCurrentDraft: input.getText,
-    onDraftChanged: (text) => input.setText(text),
+    onDraftChanged: (text, selection) => input.setText(text, selection),
     onStateChanged: (state) => {
       if (state === 'listening') input.onListening();
     },

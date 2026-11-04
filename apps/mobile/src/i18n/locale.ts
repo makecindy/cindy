@@ -4,14 +4,29 @@
  * 本模块保持零依赖(不 import expo / RN):偏好存储及其测试直接消费,
  * 读系统语言的 detectSystemLocale 在 systemLocale.ts。
  * 解析规则与 loginMessages.resolveLoginLocale 保持一致:zh-Hans/CN/SG → zh-CN，
- * zh-Hant/TW/HK/MO → zh-TW，ja / ko 前缀直取,其余兜底 en。
+ * zh-Hant/TW/HK/MO → zh-TW；葡语按地区选择，其它已支持语言按 language 子标签匹配。
  * 刻意用字符串前缀而非 Intl.Locale——Hermes 的 Intl 子集在各版本间能力不齐,
  * 前缀匹配对当前支持的语言足够且行为可预期。
  */
 
 /** UI 支持的具体语言。 */
-export const SUPPORTED_LOCALES = ["zh-CN", "zh-TW", "en", "ja", "ko"] as const;
+export const SUPPORTED_LOCALES = ["zh-CN", "zh-TW", "en", "ja", "ko", "es", "fr", "de", "pt-PT", "pt-BR", "zh-Hant-x-lzh", "zh-Hans-x-lzh"] as const;
 export type SupportedLocale = (typeof SUPPORTED_LOCALES)[number];
+
+/** 文言等古典版本:只能手动选择;日期格式、服务端 locale 与内容语言按其现代底本(与 desktop 一致)。 */
+export const CLASSICAL_LOCALE_BASE = {
+  "zh-Hant-x-lzh": "zh-TW",
+  "zh-Hans-x-lzh": "zh-CN",
+} as const satisfies Partial<Record<SupportedLocale, SupportedLocale>>;
+export type ClassicalLocale = keyof typeof CLASSICAL_LOCALE_BASE;
+
+export function isClassicalLocale(locale: string | null | undefined): locale is ClassicalLocale {
+  return typeof locale === "string" && Object.prototype.hasOwnProperty.call(CLASSICAL_LOCALE_BASE, locale);
+}
+
+export function modernLocaleOf(locale: SupportedLocale): SupportedLocale {
+  return isClassicalLocale(locale) ? CLASSICAL_LOCALE_BASE[locale] : locale;
+}
 
 /** 用户偏好:'system' = 跟随系统语言,由本模块在运行时解析。 */
 export type LocalePreference = SupportedLocale | "system";
@@ -35,13 +50,25 @@ export function resolveSystemLocale(
   languageTag: string | null | undefined,
 ): SupportedLocale {
   const tag = languageTag?.trim().toLowerCase().replace(/_/g, "-") ?? "";
+  // An app locale passed back through here keeps its identity, so the classical
+  // editions (zh-Hant-x-lzh / zh-Hans-x-lzh) do not fold into zh-TW / zh-CN.
+  // OS language tags never carry these private-use subtags.
+  const exact = SUPPORTED_LOCALES.find((locale) => locale.toLowerCase() === tag);
+  if (exact) return exact;
+  const language = tag.split("-")[0];
   if (tag.startsWith("zh")) {
     if (tag.includes("hans")) return "zh-CN";
     if (tag.includes("hant") || /(?:-|^)(?:tw|hk|mo)(?:-|$)/.test(tag))
       return "zh-TW";
     return "zh-CN";
   }
-  if (tag.startsWith("ja")) return "ja";
-  if (tag.startsWith("ko")) return "ko";
+  if (language === "pt") {
+    // The optional script subtag precedes the region; extension values cannot
+    // select a different regional catalog (pt-PT-u-rg-brzzzz stays pt-PT).
+    const parts = tag.split("-");
+    const region = parts[/^[a-z]{4}$/.test(parts[1] ?? "") ? 2 : 1];
+    return region === "br" ? "pt-BR" : "pt-PT";
+  }
+  if (isSupportedLocale(language)) return language;
   return DEFAULT_LOCALE;
 }

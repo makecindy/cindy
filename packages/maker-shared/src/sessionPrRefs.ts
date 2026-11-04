@@ -8,7 +8,33 @@ export interface SessionPrRef {
   url: string;
   firstSeenAt: number;
   lastSeenAt: number;
+  /** Explicit user choices; absent on older hosts. */
+  pinned?: boolean;
+  priority?: number;
+  manuallyAdded?: boolean;
+  removedAt?: number | null;
+  /** Absent on older hosts. Active message references use explicit with origin=message. */
+  associationSource?: string;
+  associationOrigin?: string | null;
 }
+
+/** Counts for the current PR head, across check runs and commit statuses. */
+export interface PrChecksSummary {
+  total: number;
+  failed: number;
+  passed: number;
+  pending: number;
+  /** Neutral/skipped checks are complete, but are not reported as passing. */
+  skipped: number;
+}
+
+export type SessionPrRefAction =
+  | { action: 'add'; url: string }
+  | { action: 'reorder'; ids: string[] }
+  | {
+      action: 'remove' | 'restore' | 'pin' | 'unpin';
+      id: string;
+    };
 
 export type PrStatusKind = 'open' | 'draft' | 'merged' | 'closed';
 
@@ -26,6 +52,17 @@ export type PrStatusResult =
       branch: string;
       /** 未解决 review thread 数;null = 查询失败 / token 不支持 GraphQL。 */
       unresolvedCount: number | null;
+      /** Missing on older hosts; null means unavailable, not zero. */
+      checks?: PrChecksSummary | null;
+      /** GitHub mergeStateStatus (CLEAN / DIRTY / BEHIND / BLOCKED …). Missing on older hosts. */
+      mergeState?: string | null;
+      /** GitHub reviewDecision (APPROVED / CHANGES_REQUESTED / REVIEW_REQUIRED). Missing on older hosts. */
+      reviewDecision?: string | null;
+      headSha?: string;
+      baseBranch?: string;
+      observedAt?: number;
+      revision?: string;
+      metadata?: Record<string, unknown>;
     }
   | {
       ok: false;
@@ -43,6 +80,47 @@ export type PrStatusResult =
  */
 export type PrStatusFailureReason =
   'gh-missing' | 'gh-not-logged-in' | 'no-token' | 'not-found' | 'fetch-failed';
+
+export type PrStatusItemTone = 'good' | 'bad' | 'wait' | 'neutral';
+export type PrStatusItemKey =
+  | 'checksFailed' | 'checksPending' | 'checksPassed' | 'checksSkipped' | 'threadsOpen' | 'threadsNone'
+  | 'merged' | 'closed' | 'draft'
+  | 'mergeConflict' | 'mergeBehind' | 'mergeReady' | 'mergeChanges' | 'mergeApproval' | 'mergeWaiting';
+
+/**
+ * 插件卡片 PR 状态位的条目(检查、未解决意见、能否合并),桌面与手机共用同一套取舍;
+ * 文案由各端按 key 翻译。检查按标题栏 PR 汇总的分类逐项给出数量(失败、进行中、通过、
+ * 跳过或中立,只列非零项),卡片与标题栏读法一致。旧版宿主不带合并字段时省掉合并一项,不猜。
+ */
+export function prStatusItemKeys(
+  status: Extract<PrStatusResult, { ok: true }>,
+): Array<{ tone: PrStatusItemTone; key: PrStatusItemKey; count?: number }> {
+  const items: Array<{ tone: PrStatusItemTone; key: PrStatusItemKey; count?: number }> = [];
+  const checks = status.checks;
+  if (checks && checks.total > 0) {
+    if (checks.failed > 0) items.push({ tone: 'bad', key: 'checksFailed', count: checks.failed });
+    if (checks.pending > 0) items.push({ tone: 'wait', key: 'checksPending', count: checks.pending });
+    if (checks.passed > 0) items.push({ tone: 'good', key: 'checksPassed', count: checks.passed });
+    if (checks.skipped > 0) items.push({ tone: 'neutral', key: 'checksSkipped', count: checks.skipped });
+  }
+  if (status.unresolvedCount !== null) {
+    items.push(status.unresolvedCount > 0
+      ? { tone: 'wait', key: 'threadsOpen', count: status.unresolvedCount }
+      : { tone: 'good', key: 'threadsNone' });
+  }
+  if (status.status === 'merged') items.push({ tone: 'good', key: 'merged' });
+  else if (status.status === 'closed') items.push({ tone: 'wait', key: 'closed' });
+  else if (status.status === 'draft') items.push({ tone: 'wait', key: 'draft' });
+  else if (status.mergeState !== undefined || status.reviewDecision !== undefined) {
+    if (status.mergeState === 'DIRTY') items.push({ tone: 'bad', key: 'mergeConflict' });
+    else if (status.mergeState === 'BEHIND') items.push({ tone: 'wait', key: 'mergeBehind' });
+    else if (status.mergeState === 'CLEAN') items.push({ tone: 'good', key: 'mergeReady' });
+    else if (status.reviewDecision === 'CHANGES_REQUESTED') items.push({ tone: 'wait', key: 'mergeChanges' });
+    else if (status.reviewDecision === 'REVIEW_REQUIRED') items.push({ tone: 'wait', key: 'mergeApproval' });
+    else items.push({ tone: 'wait', key: 'mergeWaiting' });
+  }
+  return items;
+}
 
 /** 只对最近的几条 PR 引用查状态(徽标也只展示这几条)。 */
 export const MAX_STATUS_QUERIES = 3;

@@ -7,6 +7,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { getStartingSessionIds, markSessionStarting, resetSessionStartingStoreForTests, useStartingSessionIds } from '@/lib/sessionStartingStore';
 import { remoteProjectsStore } from '@/features/device-link/remoteProjectsStore';
 import type { Session } from '@/lib/ccAgent.types';
+import { groupSessions } from '@/features/cc-agent/lib/projectGrouping';
 import {
   applyRemoteSessionActivity,
   clearRemoteSessionActivity,
@@ -40,8 +41,12 @@ vi.mock('../features/cc-agent/sidebar/sections/UnclassifiedSection', () => ({ Un
 vi.mock('@/features/bots/BotAvatar', () => ({ BotAvatar: () => <span>Bot avatar</span> }));
 // Keep ProjectsSection, its private SessionGroupNode, SessionEntryList, collapse model,
 // lamp aggregation and remote store real. Only unrelated services/leaf rows are stubbed.
+const leafRowRenders = vi.hoisted(() => new Map<string, number>());
 vi.mock('../features/cc-agent/sidebar/SessionItem', () => ({
-  SessionItem: ({ session, onClick }: { session: Session; onClick: (id: string) => void }) => <button data-testid={`row-${session.id}`} onClick={() => onClick(session.id)}>{session.title}</button>,
+  SessionItem: ({ session, onClick }: { session: Session; onClick: (id: string) => void }) => {
+    leafRowRenders.set(session.id, (leafRowRenders.get(session.id) ?? 0) + 1);
+    return <button data-testid={`row-${session.id}`} onClick={() => onClick(session.id)}>{session.title}</button>;
+  },
 }));
 vi.mock('../features/cc-agent/sidebar/SessionCard', () => ({ SessionCard: () => null }));
 vi.mock('../features/cc-agent/sidebar/AutomationSessionGroupItem', () => ({ AutomationSessionGroupItem: () => null }));
@@ -55,6 +60,7 @@ function props(groupDevice: boolean): ProjectsSectionProps {
     unclassified: [], projects: [], dialogues: [], allKnownProjects: [], allProjectKeysForOrder: ['local:known-project'],
     bots: [{ botId: 'demo', displayName: 'Demo Bot', avatar: '', avatarColor: '', sessions, latestActivityAt: sessions[0].updatedAt }],
     filter: {
+      creators: 'all', creatorOptions: [], toggleCreator: vi.fn(), setCreatorsAll: vi.fn(), setCreatorsNone: vi.fn(),
       groupBy: 'project', groupDialogue: true, groupDevice, sortBy: 'recency',
       projectOrder: 'activity', manualProjectOrder: [], projects: 'all', status: 'active', isFilterActive: false,
       projectsAsSet: null, isSessionContentFiltered: false, vendor: 'all', lastActivity: 'all', manualPinnedOrder: [],
@@ -69,7 +75,7 @@ function props(groupDevice: boolean): ProjectsSectionProps {
     onSessionClick: vi.fn(), onAction: vi.fn(), onRename: vi.fn(), onTogglePin: vi.fn(), onScheduleAction: vi.fn(),
     onToggleProject: vi.fn(), onToggleProjectPin: vi.fn(), onRenameProject: vi.fn(), onRemoveFromSidebar: vi.fn(),
     onCollapseAll: vi.fn(), onExpandAll: vi.fn(), onCreateInProject: vi.fn(), onOpenConversationSearch: vi.fn(),
-    onOpenInExplorer: vi.fn(), onLinkCodexProject: vi.fn(), linkingCodexProject: null, onBrowseFiles: vi.fn(),
+    onOpenInExplorer: vi.fn(), onImportFromTools: vi.fn(), onBrowseFiles: vi.fn(),
     onArchiveAll: vi.fn(), onCreateDialogue: vi.fn(),
     onSearchDialogues: vi.fn(), onArchiveAllDialogues: vi.fn(),
   };
@@ -88,6 +94,36 @@ beforeEach(() => {
 afterEach(() => { remoteProjectsStore.__resetPinnedOriginsForTest(); cleanup(); resetSessionStartingStoreForTests(); vi.useRealTimers(); clearRemoteSessionActivity(); localStorage.clear(); });
 
 const phases = ['running', 'needs-interaction', 'error', 'completed'] as const;
+
+// #7469, unit: actual ProjectsSection -> ProjectNode memo -> SessionEntryList.
+// Existing lamp tests did not update a different project; two one-row projects
+// expose needless subtree rendering while retaining live remote lamp updates.
+it('skips an untouched project subtree on a title patch and still updates its remote lamp', () => {
+  const p = props(false);
+  const rows = p.bots![0].sessions.slice(0, 2).map((s, i) => ({
+    ...s, workingDir: `/project-${i}`, workspaceKind: 'project' as const,
+    userSendAt: s.updatedAt, _count: { messages: 1 },
+  }));
+  p.bots = [];
+  p.projects = groupSessions(rows).projects;
+  p.allKnownProjects = p.projects;
+  const view = render(<ProjectsSection {...p} />);
+  leafRowRenders.clear();
+  const changed = { ...p.projects[0], sessions: [{ ...p.projects[0].sessions[0], title: 'Fresh title' }] };
+  view.rerender(<ProjectsSection {...p} projects={[changed, p.projects[1]]} />);
+  expect(screen.getByText('Fresh title')).toBeTruthy();
+  expect(leafRowRenders.get(rows[1].id) ?? 0).toBe(0);
+  const project = p.projects[1];
+  view.rerender(<ProjectsSection {...p} projects={[changed, project]} collapsed={new Set([project.projectKey])} />);
+  const header = () => screen.getByText(project.displayName).closest('[data-project-header]')!;
+  act(() => applyRemoteSessionActivity('remote', {
+    sessionId: rows[1].id, phase: 'needs-interaction', attention: true, compactDetail: '',
+  }));
+  expectLamp(header(), 'needs-interaction');
+  act(() => clearRemoteSessionActivity());
+  expectLamp(header(), null);
+});
+
 function activity(phase: typeof phases[number]) {
   applyRemoteSessionActivity('remote', { sessionId: 'lit', phase, attention: true, compactDetail: '' });
 }

@@ -59,6 +59,7 @@ vi.mock('../../../../main/maker-ipc/register.js', () => ({}));
 vi.mock('../../../../main/device-link/index.js', () => ({ remoteBackgroundInvoke: vi.fn() }));
 vi.mock('../../../../main/device-link/providerShareApi.js', () => ({
   providerShareApi: {},
+  providerShareOwnerKey: () => 'isolated-owner',
   fetchIdentityCard: vi.fn(),
   sha256Hex: (v: string) => v,
 }));
@@ -86,6 +87,8 @@ vi.mock('../../../../main/device-link/providerShareHost.js', () => ({
   startProviderShareHost: vi.fn(),
   stopProviderShareHost: vi.fn(),
   providerShareAccessRevision: () => 1,
+  ownedProviderShareGuestAccess: () =>
+    state.active ? { shareId: 'flow', memberId: 'guest', providerId: 'anthropic' } : null,
   providerShareGuestAccess: () =>
     state.active ? { shareId: 'flow', memberId: 'guest', providerId: 'anthropic' } : null,
   ensureProviderSharePeerKnown: async () => {},

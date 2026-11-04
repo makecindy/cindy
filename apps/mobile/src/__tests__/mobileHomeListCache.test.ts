@@ -61,6 +61,15 @@ describe('mobileHomeListCache', () => {
     vi.useRealTimers();
   });
 
+  it('retains lane ownership and creator avatars across cold starts', async () => {
+    const { getCachedHomeListSnapshot, cacheHomeListSnapshot } = await import('@/session/mobileHomeListCache');
+    const companion = { id: 'cindy-default', role: 'routine' };
+    const taskTeammate = { id: 'cindy-default', name: 'Cindy', avatar: { kind: 'asset', value: 'cindy://avatar/preset/cindy', fallbackText: 'C' } };
+    await cacheHomeListSnapshot(USER_ID, [makeSession('routine', 'mac', { source: 'bot', companion, taskTeammate })]);
+    const [cached] = await getCachedHomeListSnapshot(USER_ID);
+    expect(cached.sessions[0]).toMatchObject({ companion, taskTeammate });
+  });
+
   it('round-trips a grouped device snapshot from a flat stamped session list', async () => {
     const { cacheHomeListSnapshot, getCachedHomeListSnapshot } = await import('@/session/mobileHomeListCache');
 
@@ -80,6 +89,21 @@ describe('mobileHomeListCache', () => {
     expect(snapshot[0].sessions[0].workingDir).toBe('/repo/demo');
     expect(snapshot[1].sessions.map((s) => s.id)).toEqual(['s-b1']);
   });
+
+  // #7972: list-cache round trip must preserve project identity independently of cwd.
+  // Existing snapshots only exercised matching directories; unit, remote POSIX paths.
+  it.each([{ projectDir: `/projects/${'long-project/'.repeat(24)}` }, { projectDir: null }, {}])(
+    'preserves optional project membership through cold-start serialization: %j',
+    async (membership) => {
+      const { cacheHomeListSnapshot, getCachedHomeListSnapshot } = await import('@/session/mobileHomeListCache');
+      await cacheHomeListSnapshot(USER_ID, [makeSession('s-project', 'dev-a', {
+        workingDir: '/tmp/checkout', ...membership,
+      })]);
+      const [cached] = await getCachedHomeListSnapshot(USER_ID);
+      expect(cached.sessions[0]).toMatchObject({ workingDir: '/tmp/checkout', ...membership });
+      if (!('projectDir' in membership)) expect(cached.sessions[0]).not.toHaveProperty('projectDir');
+    },
+  );
 
   it('returns [] for missing cache, corrupt JSON, or wrong shapes', async () => {
     const { __testing, getCachedHomeListSnapshot } = await import('@/session/mobileHomeListCache');

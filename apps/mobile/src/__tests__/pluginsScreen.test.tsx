@@ -2,6 +2,8 @@
 import { act, createElement } from "react";
 import { createRoot } from "react-dom/client";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { PluginUiEnablePrompt } from "@/plugins/PluginUiEnablePrompt";
+import { sharedTaskHostPeer, providerShareHostPeer } from "@cindy/device-link";
 import PluginsScreen from "@/plugins/PluginsScreen";
 import { usePluginManagement } from "@/plugins/usePluginManagement";
 
@@ -10,6 +12,9 @@ const fixture = vi.hoisted(() => ({
   realManagement: false,
   accountGeneration: 0,
   wire: vi.fn(),
+  subscribe: vi.fn(async () => {}),
+  unsubscribe: vi.fn(async () => {}),
+  resourceListeners: new Set<(device: string, payload: any) => void>(),
   management: { state: null, controller: null } as any,
   marketRead: vi.fn(),
   enabled: true,
@@ -120,8 +125,14 @@ vi.mock("@/auth/authOwnerGeneration", () => ({
   getMobileAuthOwner: () => ({ accountKey: "demo" }),
   isMobileAuthOwnerCurrent: () => fixture.owner,
 }));
+function resourceListener(listener: (device: string, payload: any) => void) {
+  fixture.resourceListeners.add(listener);
+  return () => { fixture.resourceListeners.delete(listener); };
+}
 vi.mock("@/device-link/DeviceLinkContext", () => ({
-  useDeviceLink: () => ({ invoke: fixture.wire }),
+  useDeviceLink: () => ({ invoke: fixture.wire, subscribe: fixture.subscribe, unsubscribe: fixture.unsubscribe,
+    onRemoteResourceChanged: resourceListener,
+  }),
 }));
 vi.mock("@/device-link/useDeviceManagement", () => ({
   useDeviceManagement: () => ({
@@ -1075,4 +1086,68 @@ it("checks an unknown operation from the phone detail and restores actions", asy
   expect(requests.filter((request) => request?.actionId === "management:operation").map((request) => request.input.operationId)).toEqual(["screen-operation"]);
   expect(fixture.props.get("detail").managementNotice).toBeUndefined();
   expect(fixture.props.get("detail").busy).toBe(false);
+});
+
+/* 依据：同账号的任务提示与详情必须共用 Host 批准事实，稍后只隐藏主动提示。
+ * 最小输入：带 ui 声明但缺批准的已装插件；tier: unit，渲染生产入口，不检查 JSX 源码。 */
+it('offers UI consent in plugin details even when the Host has suppressed its task prompt', async () => {
+  const { plugin, snapshot, controller } = managedScreen();
+  Object.assign(plugin.manifest, { tools: [{ name: 'open' }], mcpApps: { ui: { resources: [{ uri: 'ui://form', file: 'ui/form.html' }], tools: { open: { resourceUri: 'ui://form' } } } } });
+  Object.assign(plugin, { uiPromptSuppressed: true });
+  Object.assign(snapshot, { uiCapabilityApproval: true });
+  const approveUi = vi.fn();
+  Object.assign(controller, { approveUi });
+  await openDetail();
+  const notice = fixture.props.get('detail').uiApprovalNotice;
+  expect(notice.title).toBe('plugins.uiApproval.title');
+  await act(async () => notice.actions[0].onPress());
+  expect(approveUi).toHaveBeenCalledWith(plugin);
+  Object.assign(plugin, { uiCapabilityApproved: true });
+  await act(async () => root.render(createElement(PluginsScreen)));
+  expect(fixture.props.get('detail').uiApprovalNotice).toBeUndefined();
+});
+it('uses read-only guidance for an old Host rather than sending an unsupported page approval', async () => {
+  const { plugin } = managedScreen();
+  Object.assign(plugin.manifest, { tools: [{ name: 'open' }], mcpApps: { ui: { resources: [{ uri: 'ui://form', file: 'ui/form.html' }], tools: { open: { resourceUri: 'ui://form' } } } } });
+  await openDetail();
+  expect(fixture.props.get('detail').uiApprovalNotice).toMatchObject({ detail: 'plugins.uiApproval.updateHost', actions: undefined });
+});
+
+it('uses Host deferral for the task prompt and skips shared-task and provider-share visitors', async () => {
+  const { plugin, snapshot, controller } = managedScreen();
+  Object.assign(plugin.manifest, { tools: [{ name: 'open' }], mcpApps: { ui: { resources: [{ uri: 'ui://form', file: 'ui/form.html' }], tools: { open: { resourceUri: 'ui://form' } } } } });
+  Object.assign(snapshot, { uiCapabilityApproval: true });
+  const deferUi = vi.fn();
+  Object.assign(controller, { deferUi });
+  const props = { deviceId: 'mac', deviceName: 'Mac', active: true, online: true };
+  await act(async () => root.render(createElement(PluginUiEnablePrompt, props)));
+  const notice = fixture.props.get('plugins.uiApproval');
+  expect(notice.actions).toHaveLength(2);
+  await act(async () => notice.actions[1].onPress());
+  expect(deferUi).toHaveBeenCalledWith(plugin);
+  Object.assign(plugin, { uiPromptSuppressed: true });
+  fixture.props.delete('plugins.uiApproval');
+  await act(async () => root.render(createElement(PluginUiEnablePrompt, props)));
+  expect(fixture.props.has('plugins.uiApproval')).toBe(false);
+  for (const deviceId of [sharedTaskHostPeer('task', 'mac'), providerShareHostPeer('share', 'mac')]) {
+    fixture.props.delete('managementScope');
+    await act(async () => root.render(createElement(PluginUiEnablePrompt, { ...props, deviceId })));
+    expect(fixture.props.has('managementScope')).toBe(false);
+  }
+});
+
+/* 依据：另一个查看端选择稍后后，本端也隐藏提示；最小输入：plugins 失效推送；tier: unit。 */
+it('refreshes task prompt suppression from the executing Host without storing a controller-local decision', async () => {
+  const { plugin, snapshot } = realManagementHost();
+  Object.assign(plugin.manifest, { tools: [{ name: 'open' }], mcpApps: { ui: { resources: [{ uri: 'ui://form', file: 'ui/form.html' }], tools: { open: { resourceUri: 'ui://form' } } } } });
+  Object.assign(snapshot, { uiCapabilityApproval: true });
+  await act(async () => root.render(createElement(PluginUiEnablePrompt, {
+    deviceId: 'mac', deviceName: 'Mac', online: true, active: true,
+  })));
+  expect(fixture.props.has('plugins.uiApproval')).toBe(true);
+  expect(fixture.subscribe).toHaveBeenCalledWith(expect.any(String), 'mac', ['sessions']);
+  Object.assign(plugin, { uiPromptSuppressed: true });
+  fixture.props.delete('plugins.uiApproval');
+  await act(async () => { fixture.resourceListeners.forEach((listener) => listener('mac', { collectionId: 'plugins' })); });
+  expect(fixture.props.has('plugins.uiApproval')).toBe(false);
 });
