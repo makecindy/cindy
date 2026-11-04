@@ -25,7 +25,7 @@
  * 2026-10-13 伙伴从整栏切换改为任务侧栏里的「伙伴」段(TeammatesSection):行几何不变,
  * 段头改与置顶 / 全部任务段头同款。
  * 2026-10-29 头像几何按 DESIGN.md「Mobile task home teammate section」统一为
- * 列表 44px / 收起 48px；本文件保留跨文件间距合同，不再锁定旧 40px 头像。
+ * 列表 44px；2026-11-04 收起沿用 36px 头像、40px 点击区与 4px 间距。
  */
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
@@ -80,7 +80,7 @@ describe('伙伴行的间距基线', () => {
   it('五要素的字号与固定尺寸不漂', () => {
     // 名字 14px / 时间 11px / 预览 12px。
     expect(source).toContain("'min-w-0 flex-1 truncate text-14 leading-5',");
-    expect(source).toContain("cn('min-h-4 text-11 tabular-nums', mutedClass, statusForBot(bot) !== 'idle' && 'invisible')");
+    expect(source).toContain("cn('min-h-4 text-11 tabular-nums', mutedClass)");
     expect(source).toContain("'min-w-0 flex-1 truncate text-12 leading-4',");
     // 未读由行尾状态点表达，时间列占位仍与 main 一致。
     expect(source).toContain('<BotAvatar bot={bot} size="row" />');
@@ -93,7 +93,7 @@ describe('伙伴行的间距基线', () => {
     const metaColumn = source.slice(start, source.indexOf('</button>', start));
     expect(metaColumn).toContain('flex min-h-4 items-center justify-end');
     expect(metaColumn).toContain('<TeammateRowStatus status={statusForBot(bot)} />');
-    expect(metaColumn).toContain("cn('min-h-4 text-11 tabular-nums', mutedClass, statusForBot(bot) !== 'idle' && 'invisible')");
+    expect(metaColumn).toContain("cn('min-h-4 text-11 tabular-nums', mutedClass)");
   });
 
   it('管理菜单不再占据消息行宽度', () => {

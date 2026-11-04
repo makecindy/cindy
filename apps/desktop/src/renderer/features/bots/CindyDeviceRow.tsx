@@ -89,7 +89,7 @@ export function CindyDeviceRow({
             )}
           />
         </span>
-        <span className={cn('min-h-4 min-w-10 justify-self-end whitespace-nowrap text-right text-11 tabular-nums', mutedClass, status !== 'idle' && 'invisible')}>{timestamp}</span>
+        <span data-teammate-timestamp className={cn('min-h-4 min-w-10 justify-self-end whitespace-nowrap text-right text-11 tabular-nums', mutedClass)}>{timestamp}</span>
         <span
           className={cn('truncate text-12 leading-4', mutedClass, typing && 'italic')}
           title={typeof subtitle === 'string' ? subtitle : undefined}

@@ -35,6 +35,31 @@ export default {
         teammateActivity: { phase: 'running' },
       }] },
     },
+    'selected-remote-running-snapshot': {
+      about: 'Selected remote Cindy retains its processing subtitle when only the running snapshot remains',
+      data: { profiles: [], route: '/bots/remote/studio/cindy-default', remoteBots: [{
+        id: 'cindy-default', name: 'Cindy', deviceId: 'studio', deviceName: 'Studio',
+        avatar: 'cindy://avatar/preset/cindy', avatarColor: 'violet', online: true,
+        preview: 'Previous reply', activityAt: 1, sessionId: 'remote-session',
+        teammateActivity: { phase: 'running' },
+      }] },
+    },
+    'message-kinds': {
+      about: 'Bot result green, ordinary group unread count, group mention blue; execution states retain priority',
+      data: {
+        profiles: [{ ...profiles[0], name: 'Cindy', avatar: 'cindy://avatar/preset/cindy', lastMessageAt: Date.now(), lastMessageRole: 'assistant', lastMessagePreview: '报告已整理好，等你查看' }],
+        unread: { 'mate-1': 1 }, remoteBots: [], route: '/bots/groups/attention-1',
+        groups: ['普通群消息', '有人提到我', '群里正在处理', '群里执行失败'].map((name, index) => ({
+          id: `attention-${index}`, name, replyMode: 'all', speakingMode: 'auto',
+          members: ['dash', 'lizi'].map(preset => ({ botId: preset, name: preset, avatar: `cindy://avatar/preset/${preset}`, avatarColor: 'violet', status: 'active' })),
+          speakingBotIds: index === 2 ? ['dash'] : [], organizerBotId: 'dash', projectDir: null,
+          lastMessage: { authorKind: 'user', isSelf: false, authorName: 'Alex', preview: ['今天的讨论有新消息', '请你看一下这份方案', '正在整理讨论内容', '这一步需要重新检查'][index], createdAt: Date.now() - (index + 1) * 60000 },
+          planningBotId: null, openPlan: null, createdAt: 1, updatedAt: Date.now() - (index + 1) * 60000,
+          ...(index === 3 ? { teammateActivity: { phase: 'error' } } : {}),
+          serverUnread: { count: index === 0 ? 12 : 2, mentioned: index !== 0 },
+        })),
+      },
+    },
     ...Object.fromEntries(['other-computer-running', 'other-computer-running-mirror', 'local-working-remote-selected'].map(name => {
       const localWorking = name === 'local-working-remote-selected';
       return [name, {
@@ -128,8 +153,8 @@ export default {
     }])),
     ...Object.fromEntries([true, false].map(withMentions => [withMentions ? 'collapsed-mention' : 'collapsed-plain', {
       about: withMentions
-        ? 'Collapsed strip: orange @ on a running group, blue @ on an idle one, plain dot on an unread group without @'
-        : 'Collapsed strip: the same chats and selection plate without any @',
+        ? 'Collapsed strip: running stays orange, group mentions blue, ordinary group unread quiet'
+        : 'Collapsed strip: ordinary group unread stays quiet and selection uses an outline',
       // Real preset portraits and a selected group, so captures match the shipped strip.
       data: { profiles: profiles.slice(0, 2).map((bot, index) => ({ ...bot, avatar: `cindy://avatar/preset/${['dash', 'lizi'][index]}` })),
         remoteBots: [], route: '/bots/groups/group-0', groups: ['周末出游', '设计评审', '读书会'].map((name, index) => ({
@@ -153,7 +178,18 @@ export default {
     },
   },
   async check(page, ui) {
-    if (ui.case === 'remote-running-snapshot') {
+    // Time and status coexist in the existing trailing column, without overlap.
+    for (const time of await page.locator('[data-teammate-timestamp]:visible').all()) {
+      assert.equal(await time.evaluate(node => getComputedStyle(node).visibility), 'visible');
+      const row = time.locator('xpath=ancestor::*[@data-testid="cindy-device-row" or self::button][1]');
+      const status = row.locator('[data-teammate-row-status]');
+      if (await status.count()) {
+        const t = await time.boundingBox();
+        const s = await status.boundingBox();
+        assert.ok(t && s && t.y + t.height <= s.y, 'timestamp stays above the status mark');
+      }
+    }
+    if (['remote-running-snapshot', 'selected-remote-running-snapshot'].includes(ui.case)) {
       const row = page.locator('[data-sidebar-section="teammates"] button[aria-current="page"]');
       assert.equal(await row.getByText(await ui.t('ccAgent.agentStatus.processing'), { exact: true }).count(), 1);
       assert.equal(await row.getByText('Previous reply', { exact: true }).count(), 0);
@@ -162,6 +198,23 @@ export default {
       await page.getByRole('button', { name: await ui.t('bots.title'), exact: true }).click();
       assert.equal(await page.locator('[data-teammate-status="running"]:visible').count(), 1);
       await ui.capture('collapsed-remote-running-snapshot');
+      return;
+    }
+    if (ui.case === 'message-kinds') {
+      const expand = page.getByRole('button', { name: /Show all|显示全部|查看全部/ });
+      if (await expand.count()) await expand.click();
+      const plain = page.locator('[data-bot-group-id="attention-0"]');
+      assert.equal(await plain.locator('[data-teammate-unread-count]').innerText(), '12');
+      const mention = page.locator('[data-bot-group-id="attention-1"] [data-teammate-mention] span');
+      assert.equal(await mention.evaluate(node => node.style.backgroundColor), 'var(--bot-unread-bg)');
+      assert.equal(await page.locator('[data-bot-group-id="attention-2"] [data-teammate-status]').count(), 0);
+      assert.equal(await page.locator('[data-bot-group-id="attention-3"] [data-teammate-status="error"]').count(), 1);
+      await ui.capture('expanded-message-kinds');
+      await page.getByRole('button', { name: await ui.t('bots.title'), exact: true }).click();
+      const ordinary = page.getByRole('button', { name: /^普通群消息 ·/ });
+      assert.equal(await ordinary.locator('[data-teammate-status]').count(), 0);
+      assert.equal(await page.locator('[data-teammate-mention]:visible').count(), 3);
+      await ui.capture('collapsed-message-kinds');
       return;
     }
     if (['other-computer-running', 'other-computer-running-mirror', 'local-working-remote-selected'].includes(ui.case)) {
@@ -190,7 +243,7 @@ export default {
       await ui.capture('expanded-group-private');
       await page.getByRole('button', { name: await ui.t('bots.title'), exact: true }).click();
       await section.locator('[data-bot-group-id]').first().waitFor({ state: 'hidden' });
-      assert.equal(await section.locator('[data-teammate-mention]').count(), 2);
+      assert.equal(await section.locator('[data-teammate-mention]:visible').count(), 2);
       await ui.capture('collapsed-group-private');
       assert.equal(expandedTypeMarks, 0, 'expanded groups keep main without extra type icons');
       assert.equal(await section.locator('button:has(svg.lucide-users):visible').count(), 0, 'collapsed avatars have no extra type badge');
@@ -267,20 +320,20 @@ export default {
       await plate.waitFor();
       const box = await plate.boundingBox();
       assert.ok(box && box.width === 36 && box.height === 36, 'selection ring follows the 36px portrait');
-      assert.equal(await page.locator('[data-teammate-mention]').count(), 0);
+      assert.equal(await page.locator('[data-teammate-mention]:visible').count(), 0);
       await ui.capture('collapsed-plain');
       return;
     }
     if (ui.case === 'collapsed-mention') {
       await page.getByRole('button', { name: await ui.t('bots.title'), exact: true }).click();
-      const badge = page.locator('[data-teammate-mention]');
+      const badge = page.locator('[data-teammate-mention]:visible');
       await badge.first().waitFor();
       assert.equal(await badge.count(), 2, 'only the groups that mention the user are marked');
       const box = await badge.first().boundingBox();
       assert.ok(box && box.width === 14 && box.height === 14, 'mentions use the same compact status point');
       const colors = await badge.evaluateAll(nodes => nodes.map(node => node.firstElementChild.style.backgroundColor));
-      assert.deepEqual(colors, ['var(--warning-accent)', 'var(--card-status-done)'], 'running stays orange, otherwise unread green');
-      assert.equal(await page.locator('button:has([data-teammate-mention]) [data-teammate-status]').count(), 2, 'one indicator per marked avatar');
+      assert.deepEqual(colors, ['var(--warning-accent)', 'var(--bot-unread-bg)'], 'running stays orange, group attention is blue');
+      assert.equal(await page.locator('button:visible:has([data-teammate-mention]) [data-teammate-status]:visible').count(), 2, 'one indicator per marked avatar');
       await ui.capture('collapsed-mention');
       return;
     }

@@ -277,6 +277,21 @@ describe('one Cindy entry across devices', () => {
     expect(screen.queryByText('ccAgent.agentStatus.processing')).toBeNull();
   });
 
+  // The selected remote Cindy can retain only its running snapshot after refresh.
+  // Other-computer coverage does not exercise this current-row fallback (unit).
+  it('keeps selected remote work visible with only a running snapshot', async () => {
+    mocks.profiles = [bot({ id: 'cindy-default', name: 'Cindy' })];
+    mocks.remoteBots = [remote('cloud', 'Cloud', { teammateActivity: { phase: 'running' } })];
+    mocks.params = { botId: 'cindy-default', deviceId: 'cloud' };
+    const view = await renderSidebar();
+    expect(screen.getByText('ccAgent.agentStatus.processing')).toBeTruthy();
+    expect(screen.queryByText('Cloud preview')).toBeNull();
+    expect(screen.getByTestId('cindy-device-row').querySelector('[data-teammate-status="running"]')).toBeNull();
+    mocks.remoteBots = [remote('cloud', 'Cloud')];
+    view.rerender(<TeammatesSection />);
+    expect(screen.getByText('Cloud preview')).toBeTruthy();
+  });
+
   it('shows local work while the selected remote computer is idle', async () => {
     mocks.profiles = [bot({ id: 'cindy-default', name: 'Cindy' })];
     mocks.remoteBots = [remote('cloud', 'Cloud')];

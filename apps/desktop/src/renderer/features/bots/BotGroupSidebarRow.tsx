@@ -221,16 +221,16 @@ export function BotGroupSidebarRow({
         <span className="flex min-w-0 items-center gap-2">{renderSubtitle(group, mutedClass)}</span>
       </span>
       <span
+        data-teammate-timestamp
         className={cn(
           'min-w-10 shrink-0 self-start whitespace-nowrap pt-0.5 text-right text-11 tabular-nums',
           mutedClass,
-          groupTeammateStatus(group, bots, islandActivity, unread > 0) !== 'idle' && 'invisible',
         )}
       >
         {timestamp}
         <span aria-hidden className="mt-1 flex items-center justify-end gap-1" />
       </span>
-      <TeammateRowStatus status={groupTeammateStatus(group, bots, islandActivity, unread > 0)} />
+      <TeammateRowStatus status={groupTeammateStatus(group, bots, islandActivity, unread > 0)} groupUnread={unread} mentioned={unread > 0 && group.serverUnread?.mentioned === true} />
     </button>
     {children}
     </div>

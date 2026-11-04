@@ -505,7 +505,7 @@ it('localizes the join preview without presenting its subject as a chat author',
   expect(screen.queryByText(/Fallback text/)).toBeNull();
 });
 
-it('shows one unread point for both current and older hosts', async () => {
+it('shows unread counts for current hosts and the one-message fallback for older hosts', async () => {
   window.localStorage.clear();
   resetBotReadStateForTests();
   markBotRead(botGroupReadKey('g1'), 15);
@@ -517,8 +517,7 @@ it('shows one unread point for both current and older hosts', async () => {
   ];
   try {
     await renderSidebar();
-    expect(document.querySelectorAll('[data-teammate-status="done"]')).toHaveLength(2);
-    expect(screen.queryByText('2')).toBeNull();
+    expect(Array.from(document.querySelectorAll('[data-teammate-unread-count]'), node => node.textContent)).toEqual(['2', '1']);
   } finally {
     resetBotReadStateForTests();
     window.localStorage.clear();
@@ -580,20 +579,32 @@ describe('collapsed avatar strip mentions', () => {
     const point = marked.querySelector<HTMLElement>('[data-teammate-mention]');
     expect(point?.getAttribute('data-teammate-status')).toBe('running');
     expect((point?.firstElementChild as HTMLElement)?.style.backgroundColor).toBe('var(--warning-accent)');
-    // An unread group without an @ keeps only its status dot.
+    // Ordinary group unread stays quiet while collapsed.
     const plain = screen.getByRole('button', { name: /^读书会 · / });
     expect(plain.getAttribute('aria-label')).not.toContain(mentionLabel);
-    expect(plain.querySelector('[data-teammate-mention]')).toBeNull();
+    expect(plain.querySelector('[data-teammate-status]')).toBeNull();
     expect(view.container.querySelectorAll('[data-teammate-mention]')).toHaveLength(1);
   });
 
-  it('uses a green point for unread mentions and completed replies', async () => {
+  it('uses a blue point for unread group mentions', async () => {
     mocks.groups = [group({ serverUnread: { count: 1, mentioned: true } })];
     await renderSidebar();
     collapse();
     const point = screen.getByRole('button', { name: `周末出游 · bots.avatarStatus.done · ${mentionLabel}` })
       .querySelector<HTMLElement>('[data-teammate-mention]');
-    expect((point?.firstElementChild as HTMLElement)?.style.backgroundColor).toBe('var(--card-status-done)');
+    expect((point?.firstElementChild as HTMLElement)?.style.backgroundColor).toBe('var(--bot-unread-bg)');
+  });
+
+  // UI proposal: a non-mentioned group result is a count expanded, quiet collapsed;
+  // existing coverage only exercised the former all-green design (unit, real roster).
+  it('shows an ordinary group unread count only while expanded', async () => {
+    mocks.groups = [group({ serverUnread: { count: 12, mentioned: false } })];
+    const view = await renderSidebar();
+    expect(view.container.querySelector('[data-teammate-unread-count]')?.textContent).toBe('12');
+    collapse();
+    const avatar = screen.getByRole('button', { name: /^周末出游 · / });
+    expect(avatar.querySelector('[data-teammate-status]')).toBeNull();
+    expect(avatar.textContent).not.toContain('12');
   });
 
   it('drops the mark once the mention is no longer unread', async () => {

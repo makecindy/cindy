@@ -516,7 +516,7 @@ export function TeammatesSection() {
       </div>
 
       {collapsed ? (
-        // 收起:单行头像,未读带点;顺序与展开时一致,放不下的收进末尾「+N」(点开即展开整段)。
+        // 收起：单行头像，只显示需要注意的状态；放不下的收进末尾「+N」（点开即展开整段）。
         <div ref={avatarRowRef} className="flex flex-nowrap items-center gap-1 overflow-hidden py-1 pr-0 pl-[22px]">
           {(() => {
             const entries = visibleChats.map((entry) => {
@@ -538,7 +538,7 @@ export function TeammatesSection() {
               const mentioned = entry.kind === 'group' && unread && entry.group.serverUnread?.mentioned === true;
               const label = [name, ...(status === 'idle' ? [] : [t(`bots.avatarStatus.${status}`)]),
                 ...(mentioned ? [t('bots.groupChat.server.thread.hintMentioned')] : [])].join(' · ');
-              return { entry, key, name, selected, unread, status, mentioned, label };
+              return { entry, key, name, selected, status, mentioned, label };
             });
             const overflow = entries.length > avatarCapacity;
             let shown = overflow ? entries.slice(0, Math.max(0, avatarCapacity - 1)) : entries;
@@ -549,6 +549,12 @@ export function TeammatesSection() {
             }
             const hidden = entries.filter((item) => !shown.includes(item));
             const hiddenMentioned = hidden.some(item => item.mentioned);
+            // Quiet group messages do not light up the collapsed overflow either.
+            const hiddenStatus = aggregateRosterStatus(hidden.map(item =>
+              item.entry.kind === 'group' && !item.mentioned && (item.status === 'done' || item.status === 'unread') ? 'idle' : item.status));
+            const hiddenGroupAttention = hidden.some(item => item.entry.kind === 'group' && item.mentioned
+              && (item.status === 'done' || item.status === 'unread'));
+
             // +N 的悬停提示与读屏名称共用一份文本,收进去的 @ 对鼠标用户同样可读。
             const moreLabel = [`${t('bots.list.sectionExpand')} · +${hidden.length}`,
               ...(hiddenMentioned ? [t('bots.groupChat.server.thread.hintMentioned')] : [])].join(' · ');
@@ -569,7 +575,7 @@ export function TeammatesSection() {
                         ) : (entry.kind === 'cindy' ? currentCindy?.bot : entry.bot) ? (
                           <BotAvatar bot={(entry.kind === 'cindy' ? currentCindy?.bot : entry.bot)!} size="strip" />
                         ) : null}
-                        <TeammateStatusDot status={status} mentioned={mentioned} />
+                        <TeammateStatusDot status={status} mentioned={mentioned} group={entry.kind === 'group'} />
                       </span>
                     </button>
                   </Tip>
@@ -584,7 +590,7 @@ export function TeammatesSection() {
                     >
                       <span className="relative flex h-9 w-9 items-center justify-center rounded-full bg-[var(--surface-chip)] px-1.5 group-hover/overflow:bg-sidebar-item-hover">
                         +{hidden.length}
-                        <TeammateStatusDot status={aggregateRosterStatus(hidden.map(item => item.status))} mentioned={hiddenMentioned} />
+                        <TeammateStatusDot status={hiddenStatus} mentioned={hiddenMentioned} group={hiddenGroupAttention} />
                       </span>
                     </button>
                   </Tip>
@@ -616,17 +622,19 @@ export function TeammatesSection() {
                 const selected = Boolean(routeCindy);
                 const activity = local ? botRunningActivity(local) : undefined;
                 const subtitle = local ? botListSubtitle(local) : null;
+                const remoteRunning = 'deviceId' in bot && bot.online
+                  && (bot.generation || bot.teammateActivity?.phase === 'running');
                 // The merged row may be running on a different computer. Keep that work
                 // visible in the subtitle without bringing back a duplicate trailing dot.
                 const otherRunning = cindyStatus === 'running' && !activity
-                  && !('deviceId' in bot && bot.online && bot.generation)
+                  && !remoteRunning
                   ? cindyOptions.find(option => option.key !== currentCindy.key && statusForBot(option.bot) === 'running')
                   : undefined;
                 const otherBot = otherRunning?.bot;
                 const otherActivity = otherBot && !('deviceId' in otherBot) ? botRunningActivity(otherBot) : undefined;
                 const otherGeneration = otherBot && 'deviceId' in otherBot ? otherBot.generation : undefined;
                 const subtitleText = cindyStatus === 'awaiting' ? t('bots.avatarStatus.awaiting') : activity ? <BotGenerationLabel sessionId={activity.sessionId} phase={activity.workingPhase} startedAt={activity.startedAtMs} />
-                  : 'deviceId' in bot && bot.online && bot.generation ? <BotGenerationLabel sessionId={bot.sessionId ?? undefined} {...bot.generation} remote={{ deviceId: bot.deviceId, botId: bot.id }} />
+                  : 'deviceId' in bot && remoteRunning ? <BotGenerationLabel sessionId={bot.sessionId ?? undefined} {...(bot.generation ?? { phase: 'processing', startedAt: null })} remote={{ deviceId: bot.deviceId, botId: bot.id }} />
                   : otherRunning && otherBot ? <>{otherRunning.label}{' · '}<BotGenerationLabel
                       sessionId={otherActivity?.sessionId ?? ('deviceId' in otherBot ? otherBot.sessionId ?? undefined : undefined)}
                       phase={otherActivity?.workingPhase ?? otherGeneration?.phase}
@@ -636,7 +644,7 @@ export function TeammatesSection() {
                   : subtitle ? subtitle.kind === 'placeholder' ? t('bots.list.startChat') : subtitle.text
                     : 'preview' in bot ? bot.preview || bot.description || t('bots.list.startChat') : '';
                 return <CindyDeviceRow key="cindy-devices" current={currentCindy} options={cindyOptions}
-                  status={cindyStatus === 'done' || cindyStatus === 'unread' ? statusForBot(bot) : cindyStatus} selected={selected} typing={Boolean(activity || ('deviceId' in bot && bot.online && bot.generation) || otherRunning)} subtitle={subtitleText}
+                  status={cindyStatus === 'done' || cindyStatus === 'unread' ? statusForBot(bot) : cindyStatus} selected={selected} typing={Boolean(activity || remoteRunning || otherRunning)} subtitle={subtitleText}
                   timestamp={formatBotListTimestamp(local
                     ? botListTimestampAt({ lastMessageAt: local.lastMessageAt, working: Boolean(activity) }, now)
                     : 'activityAt' in bot ? bot.activityAt : 0, now, t)}
@@ -671,7 +679,7 @@ export function TeammatesSection() {
                       </span>
                       <span className={cn('truncate text-12 leading-4', selected ? 'opacity-70' : 'text-[var(--sidebar-list-muted)]')}>{statusForBot(bot) === 'awaiting' ? t('bots.avatarStatus.awaiting') : bot.online && (bot.generation || bot.teammateActivity?.phase === 'running') ? <BotGenerationLabel sessionId={bot.sessionId ?? undefined} {...(bot.generation ?? { phase: 'processing', startedAt: null })} remote={{ deviceId: bot.deviceId, botId: bot.id }} /> : bot.preview || bot.description || t('bots.list.startChat')}</span>
                     </span>
-                    <span className={cn('min-w-10 shrink-0 self-start whitespace-nowrap pt-0.5 text-right text-11 tabular-nums', selected ? 'opacity-70' : 'text-[var(--sidebar-list-muted)]', statusForBot(bot) !== 'idle' && 'invisible')}>{formatBotListTimestamp(bot.activityAt, now, t)}</span>
+                    <span data-teammate-timestamp className={cn('min-w-10 shrink-0 self-start whitespace-nowrap pt-0.5 text-right text-11 tabular-nums', selected ? 'opacity-70' : 'text-[var(--sidebar-list-muted)]')}>{formatBotListTimestamp(bot.activityAt, now, t)}</span>
                     <TeammateRowStatus status={statusForBot(bot)} />
                   </button>
                 );
@@ -782,7 +790,7 @@ export function TeammatesSection() {
                       保留原时间列宽度；状态点覆盖在行尾，避免切换状态时布局移动。
                     */}
                     <span className="flex min-w-10 shrink-0 self-stretch flex-col items-end justify-between whitespace-nowrap py-0.5">
-                      <span className={cn('min-h-4 text-11 tabular-nums', mutedClass, statusForBot(bot) !== 'idle' && 'invisible')}>{timestamp}</span>
+                      <span data-teammate-timestamp className={cn('min-h-4 text-11 tabular-nums', mutedClass)}>{timestamp}</span>
                       <span aria-hidden className="flex min-h-4 items-center justify-end" />
                     </span>
                     <TeammateRowStatus status={statusForBot(bot)} />
