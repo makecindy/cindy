@@ -42,6 +42,34 @@ describe('documented supplier interfaces', () => {
       expect(saved.models.pi?.[0]).toMatchObject({ api, selectedInterface: { api }, userModelConfig: selection });
     }
   });
+  // LLMTR is chat-only. A namespaced id such as openai/ or llmtr/ must not
+  // inherit another family's Responses route, and the published output cap
+  // has to survive import or the free model rejects the request.
+  it('keeps LLMTR on chat completions and the published output caps', () => {
+    const preset = BUNDLED_CATALOG.presets!.find(p => p.id === 'llmtr')!;
+    const provider = buildUserProvider({ id: 'llmtr-account', name: 'LLMTR', runtimes:
+      Object.fromEntries(Object.entries(preset.runtimes).map(([agent, runtime]) => [agent, {
+        ...runtime, catalogPresetId: preset.id,
+        models: [...runtime.models, { id: 'openai/gpt-6-luna', name: 'GPT-6 Luna' }],
+      }])) }, { presets: BUNDLED_CATALOG.presets });
+    for (const agent of provider.agents) {
+      expect(provider.routing[agent]).toMatchObject({
+        upstream: 'https://llmtr.com/v1', wireProtocol: 'openai-chat',
+      });
+      for (const id of ['qwen/qwen3.8-27b-free', 'llmtr/qwen3-8-27b', 'openai/gpt-6-luna']) {
+        const model = provider.models[agent]?.find(item => item.id === id);
+        expect(model?.id).toBe(id);
+        expect(model?.route?.wireProtocol ?? provider.routing[agent]?.wireProtocol).toBe('openai-chat');
+        expect(model?.api ?? model?.piApi ?? 'openai-completions').toBe('openai-completions');
+      }
+      expect(provider.models[agent]?.find(item => item.id === 'qwen/qwen3.8-27b-free')).toMatchObject({
+        maxOutput: 16384, contextWindow: 131042,
+      });
+      expect(provider.models[agent]?.find(item => item.id === 'llmtr/qwen3-8-27b')).toMatchObject({
+        maxOutput: 262144, contextWindow: 262144,
+      });
+    }
+  });
   // r4365890304 (unit): import saved Model Studio connections through the
   // production resolver. Previous coverage checked protocol shape, not whether
   // these products actually exposed a selected catalog interface.

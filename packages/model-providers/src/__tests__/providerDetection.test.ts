@@ -65,6 +65,7 @@ describe('catalog mapping independent of desktop platform', () => {
     ['https://api.mistral.ai/v1', 'mistral'],
     ['https://api.together.xyz/v1', 'together'],
     ['https://api.fireworks.ai/inference/v1', 'fireworks'],
+    ['https://llmtr.com/v1', 'llmtr'],
   ])('recognizes and binds official API input %s', (url, id) => {
     const matches = matchOfficialProviders(url, presets);
     expect(matches.map(p => p.id)).toEqual([id]);
