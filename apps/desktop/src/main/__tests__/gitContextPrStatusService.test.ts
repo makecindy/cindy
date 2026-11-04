@@ -525,4 +525,31 @@ describe('GitLab MR status', () => {
     expect(invoke.mock.calls[0][1][0].queries).toEqual([Q]);
     expect(invoke.mock.calls[1][1][0].queries).toEqual([q]);
   });
+  // Unit regression: transport failures must not claim an old host, or retry MRs as PRs.
+  // The existing legacy-host test only exercised CHANNEL_NOT_ALLOWED.
+  it.each([
+    [
+      Object.assign(new Error('blocked'), { code: 'DEVICE_LINK_CHANNEL_NOT_ALLOWED' }),
+      'unsupported',
+    ],
+    [new Error('[UNSUPPORTED_CAPABILITY] old host'), 'unsupported'],
+    [Object.assign(new Error('timed out'), { code: 'TIMEOUT' }), 'fetch-failed'],
+    [
+      new Error('[NOT_CONNECTED] disconnected; CHANNEL_NOT_ALLOWED is only diagnostic text'),
+      'fetch-failed',
+    ],
+  ] as const)(
+    'classifies remote MR failures without losing diagnostics: %s',
+    async (error, reason) => {
+      const invoke = vi.fn().mockRejectedValue(error);
+      const reportError = vi.fn();
+      expect(await remotePrStatuses([q], 'session', invoke, reportError)).toEqual([
+        { ...q, ok: false, reason },
+      ]);
+      expect(invoke).toHaveBeenCalledExactlyOnceWith('git-context:mr-status', [
+        { sessionId: 'session', queries: [q] },
+      ]);
+      expect(reportError).toHaveBeenCalledExactlyOnceWith(error);
+    },
+  );
 });

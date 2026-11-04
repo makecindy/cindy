@@ -1,4 +1,4 @@
-import { remotePrStatuses, prStatusQuery } from '@cindy/maker-shared';
+import { remotePrStatuses, prStatusQuery, redactSensitiveText } from '@cindy/maker-shared';
 /**
  * PrRefsContext — sidebar 会话列表的 PR 引用 / 状态共享缓存(session-git-pr-context)。
  *
@@ -418,8 +418,12 @@ export function PrRefsProvider({ children }: { children: ReactNode }) {
         if (deviceId && isRemoteDeviceMarkedDisconnected(deviceId)) return;
         if (deviceId && unresponsiveDevicesStore.has(deviceId)) return;
         const results = deviceId
-          ? await remotePrStatuses(queries, sessionId, (channel, args) =>
-              window.electronAPI.deviceLink.invoke(deviceId, channel, args),
+          ? await remotePrStatuses(
+              queries,
+              sessionId,
+              (channel, args) => window.electronAPI.deviceLink.invoke(deviceId, channel, args),
+              (error) =>
+                log.warn('remote MR statuses fetch failed', redactSensitiveText(String(error))),
             )
           : await window.electronAPI.gitContext.getPrStatuses(queries);
         if (gen !== ownerGenRef.current) return; // owner 已切换:旧账号结果整体丢弃

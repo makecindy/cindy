@@ -1088,3 +1088,33 @@ it('shows and opens a GitLab MR using the provider-aware status channel', async 
     'https://git.example.com/group/sub/project/-/merge_requests/7',
   );
 });
+
+// Unit regression: the single-MR fixture did not cover an all-GitLab multi-link button.
+it.each([
+  ['gitlab', 'devices.companions.viewMr'],
+  ['github', 'devices.companions.viewPrMr'],
+])('labels a GitLab link plus a %s link by the whole list', async (secondProvider, label) => {
+  const refs = ['gitlab', secondProvider].map((provider, index) => ({
+    id: `ref-${index}`,
+    sessionId: 'child',
+    provider,
+    host: provider === 'gitlab' ? 'git.example.com' : 'github.com',
+    owner: 'group',
+    repo: 'project',
+    prNumber: index + 7,
+    firstSeenAt: 1,
+    lastSeenAt: 1,
+  }));
+  h.invoke.mockImplementation(async (_device, channel) => {
+    if (channel === 'git-context:pr-refs:list') return refs;
+    if (channel === 'git-context:mr-status' || channel === 'git-context:pr-status') return [];
+    return {
+      ok: true,
+      delegations: [{ id: 'job', status: 'completed', title: 'Report', childSessionId: 'child' }],
+    };
+  });
+  await render();
+  expect([...node.querySelectorAll('button')].some((button) => button.textContent === label)).toBe(
+    true,
+  );
+});

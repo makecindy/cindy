@@ -31,6 +31,7 @@ export async function remotePrStatuses(
   queries: PrIdentity[],
   sessionId: string,
   invoke: (channel: string, args: unknown[]) => Promise<unknown>,
+  reportError?: (error: unknown) => void,
 ): Promise<PrStatusResult[]> {
   const results: PrStatusResult[] = [];
   for (const provider of ['github', 'gitlab'] as const) {
@@ -44,10 +45,24 @@ export async function remotePrStatuses(
       if (Array.isArray(value)) results.push(...(value as PrStatusResult[]));
     } catch (error) {
       if (provider === 'github') throw error;
-      // Never retry an MR through the legacy GitHub channel.
-      results.push(
-        ...selected.map((q) => ({ ...q, ok: false as const, reason: 'unsupported' as const })),
-      );
+      // Keep diagnostics separate from UI results; never retry an MR as a GitHub PR.
+      reportError?.(error);
+      const structuredCode =
+        error && typeof error === 'object' && 'code' in error ? error.code : undefined;
+      const message =
+        error instanceof Error ? error.message : typeof error === 'string' ? error : '';
+      const code =
+        typeof structuredCode === 'string'
+          ? structuredCode
+          : (/(?:^|: Error: )\[([A-Z0-9_]+)\]/.exec(message)?.[1] ??
+            /^([A-Z0-9_]+)(?=:|$)/.exec(message)?.[1]);
+      const reason =
+        code === 'DEVICE_LINK_CHANNEL_NOT_ALLOWED' ||
+        code === 'CHANNEL_NOT_ALLOWED' ||
+        code === 'UNSUPPORTED_CAPABILITY'
+          ? ('unsupported' as const)
+          : ('fetch-failed' as const);
+      results.push(...selected.map((q) => ({ ...q, ok: false as const, reason })));
     }
   }
   return results;

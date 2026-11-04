@@ -377,7 +377,7 @@ export function CompanionTaskCard({
               <Text style={styles.actionLabel}>
                 {t(
                   prs.some((pr) => pr.provider === 'gitlab')
-                    ? prs.length === 1
+                    ? prs.every((pr) => pr.provider === 'gitlab')
                       ? 'devices.companions.viewMr'
                       : 'devices.companions.viewPrMr'
                     : 'devices.companions.viewPr',
