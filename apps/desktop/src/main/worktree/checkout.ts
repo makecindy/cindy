@@ -104,12 +104,10 @@ export function createCheckoutService(listActivity: () => Promise<CheckoutActivi
     ).stdout;
     const fields = porcelain.split('\0');
     const files: string[] = [];
-    const paths: string[] = [];
     for (let i = 0; i < fields.length; i++) {
       if (!fields[i]) continue;
       files.push(fields[i].slice(3));
-      paths.push(fields[i].slice(3));
-      if (/[RC]/.test(fields[i].slice(0, 2))) paths.push(fields[++i]);
+      if (/[RC]/.test(fields[i].slice(0, 2))) i++;
     }
     const hash = createHash('sha256').update(head).update(porcelain);
     hash.update(
@@ -152,15 +150,38 @@ export function createCheckoutService(listActivity: () => Promise<CheckoutActivi
       const targetRef = target.startsWith('refs/remotes/origin/') ? target : `refs/heads/${target}`;
       const commit = await optional(repo, 'rev-parse', '--verify', `${targetRef}^{commit}`);
       if (!commit) blocked ??= 'missing';
-      else if (paths.length) {
-        const changes = (
-          await gitExec(['diff', '--name-only', '-z', 'HEAD', commit, '--'], repo, readOpts)
-        ).stdout
-          .split('\0')
-          .filter(Boolean);
-        carryAllowed = !paths.some((a) =>
-          changes.some((b) => a === b || a.startsWith(`${b}/`) || b.startsWith(`${a}/`)),
-        );
+      else if (files.length) {
+        try {
+          // Git's two-tree merge accounts for index contents, working files and
+          // untracked collisions. In particular, staged content already matching
+          // the target is safe even though the same path changed between branches.
+          await gitExec(['read-tree', '-m', '-u', '-n', 'HEAD', commit], repo, readOpts);
+          // read-tree permits ignored files to be overwritten, unlike our switch
+          // --no-overwrite-ignore. Keep that additional protection in the preview.
+          const ignored = (
+            await gitExec(
+              ['ls-files', '--others', '--ignored', '--exclude-standard', '--directory', '-z'],
+              repo,
+              readOpts,
+            )
+          ).stdout
+            .split('\0')
+            .filter(Boolean)
+            .map((file) => file.replace(/\/$/, ''));
+          if (ignored.length) {
+            const changes = (
+              await gitExec(['diff', '--name-only', '-z', 'HEAD', commit, '--'], repo, readOpts)
+            ).stdout
+              .split('\0')
+              .filter(Boolean);
+            carryAllowed = !ignored.some((a) =>
+              changes.some((b) => a === b || a.startsWith(`${b}/`) || b.startsWith(`${a}/`)),
+            );
+          }
+        } catch {
+          // A failed or indeterminate dry-run must not enable the carry action.
+          carryAllowed = false;
+        }
       }
     }
     const sessions: CheckoutSession[] = [];

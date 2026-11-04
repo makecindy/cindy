@@ -10591,7 +10591,11 @@ app.on('ready', async () => {
         workDir: session.workDir,
         remoteHostId: session.remoteHostId,
         name: (await maker!.getSessionMeta(session.id))?.title || session.id,
-        running: session.isTurnRunning() || getClaudeSessionBackgroundActivity(session.id),
+        running:
+          session.isTurnRunning() ||
+          session.listBackgroundTasks().length > 0 ||
+          isSessionInTurn(session.id) ||
+          getClaudeSessionBackgroundActivity(session.id),
       })),
     );
   });

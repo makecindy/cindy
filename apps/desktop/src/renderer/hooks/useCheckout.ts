@@ -80,13 +80,35 @@ export function useCheckout(
       ++serial.current;
       update({ busy: true, error: undefined });
       try {
-        let reply = await invoke(req);
-        while ('pending' in reply && currentKey.current === key)
-          reply = await invoke({
-            action: 'result',
-            baseRepo: repo!,
-            operationId: reply.operationId,
-          });
+        let reply: CheckoutReply | undefined;
+        try {
+          reply = await invoke(req);
+          while ('pending' in reply && currentKey.current === key)
+            reply = await invoke({
+              action: 'result',
+              baseRepo: repo!,
+              operationId: reply.operationId,
+            });
+        } catch (error) {
+          // The write may already be committed. Recover its receipt, never replay it.
+          for (let attempt = 0; attempt < 2 && currentKey.current === key; attempt++) {
+            if (!('operationId' in req)) break;
+            try {
+              const recovered = await invoke({
+                action: 'result',
+                baseRepo: req.baseRepo,
+                operationId: req.operationId,
+              });
+              if (!('pending' in recovered)) {
+                reply = recovered;
+                break;
+              }
+            } catch {
+              // A second read can recover a transiently lost result response.
+            }
+          }
+          if (!reply || 'pending' in reply) throw error;
+        }
         if ('pending' in reply || currentKey.current !== key) return;
         update({ status: reply.status, error: reply.blocked });
         return reply;

@@ -351,12 +351,13 @@ function setupCheckout(supportsCheckout = true, overrides = {}) {
   });
   return checkout;
 }
-function CheckoutRow() {
+function CheckoutRow({ deviceId }: { deviceId?: string } = {}) {
   const [enabled, setEnabled] = React.useState(false);
   const [source, setSource] = React.useState('remembered-source');
   return (
     <WorktreeChipsRow
       cwd="/repo"
+      deviceLinkDeviceId={deviceId}
       enabled={enabled}
       onEnabledChange={setEnabled}
       sourceBranch={source}
@@ -446,50 +447,93 @@ it('keeps an old execution host read-only and never invokes the new channel', as
   expect(checkout).not.toHaveBeenCalled();
 });
 
-it('updates the real branch after checkout and restores the previous source preference on undo', async () => {
-  const checkout = setupCheckout();
-  let current = 'main';
-  checkout.mockImplementation(async (req) => {
-    if (req.action === 'switch') {
-      current = 'feature';
-      return {
-        status: { ...checkoutStatus, current },
-        receipt: {
-          id: 'receipt',
-          from: 'main',
-          to: current,
-          strategy: 'carry',
-          hadChanges: false,
-          sessions: [],
-        },
-      };
+// Regression: a lost mutation/result response must recover the same operation's
+// receipt and preference, with bounded read retries and no second Git write.
+it.each(['direct', 'lost-write', 'lost-result', 'unreachable'])(
+  'recovers checkout and undo through the execution computer: %s',
+  async (mode) => {
+    const checkout = setupCheckout();
+    let current = 'main';
+    let operationId: string;
+    let resultReads = 0;
+    const switched = () => ({
+      status: { ...checkoutStatus, current },
+      receipt: {
+        id: 'receipt',
+        from: 'main',
+        to: current,
+        strategy: 'carry',
+        hadChanges: false,
+        sessions: [],
+      },
+    });
+    checkout.mockImplementation(async (req) => {
+      if (req.action === 'switch') {
+        current = 'feature';
+        operationId = req.operationId;
+        if (mode === 'lost-write' || mode === 'unreachable') throw new Error('Lost reply');
+        if (mode === 'lost-result') return { pending: true, operationId };
+        return switched();
+      }
+      if (req.action === 'result') {
+        expect(req.operationId).toBe(operationId);
+        resultReads++;
+        if (mode === 'unreachable' || resultReads === 1) throw new Error('Result not received');
+        return switched();
+      }
+      if (req.action === 'undo') current = 'main';
+      return { status: { ...checkoutStatus, current } };
+    });
+    invoke.mockImplementation(async (_deviceId, channel, args) => {
+      if (channel === 'worktree:checkout') return checkout(args[0]);
+      if (channel === 'worktree:detect-cwd') return window.electronAPI.worktreeDetectCwd(args[0]);
+      if (channel === 'worktree:list-branches')
+        return window.electronAPI.worktreeListBranches(args[0]);
+      if (channel === 'worktree:suggest-name')
+        return window.electronAPI.worktreeSuggestName(args[0]);
+      return baseStatus;
+    });
+    render(<CheckoutRow deviceId="execution-pc" />);
+    await waitFor(() => expect(branchButton().textContent).toBe('main'));
+    await act(async () => {
+      fireEvent.click(branchButton());
+    });
+    await act(async () => {
+      fireEvent.click(await screen.findByRole('option', { name: 'feature' }));
+    });
+    await waitFor(() => expect(branchButton().textContent).toBe('feature'));
+    expect(checkout.mock.calls.filter(([req]) => req.action === 'switch')).toHaveLength(1);
+    expect(checkout).toHaveBeenCalledWith(
+      expect.objectContaining({
+        action: 'switch',
+        branch: 'feature',
+        expected: 'main',
+        strategy: 'carry',
+      }),
+    );
+    expect(resultReads).toBe(mode === 'direct' ? 0 : 2);
+    expect(invoke.mock.calls.every(([deviceId]) => deviceId === 'execution-pc')).toBe(true);
+    await act(async () => {
+      fireEvent.click(screen.getByTestId('create-agent-worktree-chip'));
+    });
+    if (mode === 'unreachable') {
+      expect(branchButton().textContent).toBe('remembered-source');
+      expect(screen.queryByRole('button', { name: 'newChat.checkout.undo' })).toBeNull();
+      expect(screen.getByText('newChat.checkout.errors.git')).toBeTruthy();
+      expect(checkout.mock.calls.at(-1)?.[0].action).toBe('status');
+      return;
     }
-    if (req.action === 'undo') current = 'main';
-    return { status: { ...checkoutStatus, current } };
-  });
-  render(<CheckoutRow />);
-  await waitFor(() => expect(branchButton().textContent).toBe('main'));
-  await act(async () => {
-    fireEvent.click(branchButton());
-  });
-  await act(async () => {
-    fireEvent.click(await screen.findByRole('option', { name: 'feature' }));
-  });
-  await waitFor(() => expect(branchButton().textContent).toBe('feature'));
-  expect(checkout).toHaveBeenCalledWith(
-    expect.objectContaining({
-      action: 'switch',
-      branch: 'feature',
-      expected: 'main',
-      strategy: 'carry',
-    }),
-  );
-  await act(async () => {
-    fireEvent.click(screen.getByRole('button', { name: 'newChat.checkout.undo' }));
-  });
-  await waitFor(() => expect(branchButton().textContent).toBe('main'));
-  await act(async () => {
-    fireEvent.click(screen.getByTestId('create-agent-worktree-chip'));
-  });
-  expect(branchButton().textContent).toBe('remembered-source');
-});
+    expect(branchButton().textContent).toBe('feature');
+    await act(async () => {
+      fireEvent.click(screen.getByTestId('create-agent-worktree-chip'));
+    });
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: 'newChat.checkout.undo' }));
+    });
+    await waitFor(() => expect(branchButton().textContent).toBe('main'));
+    await act(async () => {
+      fireEvent.click(screen.getByTestId('create-agent-worktree-chip'));
+    });
+    expect(branchButton().textContent).toBe('remembered-source');
+  },
+);

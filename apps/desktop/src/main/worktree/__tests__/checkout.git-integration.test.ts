@@ -2,7 +2,7 @@
  * Existing branchSync tests only update refs, never switch the directory or restore a named stash.
  * Minimal inputs: two branches, dirty/staged/untracked files, an occupied checkout and a running task.
  * Tier: git-integration, real Git with disposable repositories only.
- * Measured standalone: 5.79s wall / 5.38s test execution; subprocess I/O stays outside unit.
+ * Measured standalone: 7.18s wall / 6.80s test execution; subprocess I/O stays outside unit.
  */
 import fs from 'node:fs';
 import os from 'node:os';
@@ -108,6 +108,52 @@ it('blocks overlapping changes and repository operations before checkout', async
   fs.writeFileSync(path.join(f.repo, '.git', 'CHERRY_PICK_HEAD'), git(f.repo, 'rev-parse', 'HEAD'));
   expect((await f.service.status(f.repo)).blocked).toBe('operation');
 });
+// Regression: path overlap is insufficient when the index already matches the target.
+// Exercise the production preflight and switch; snapshots also prove the preview is read-only.
+it.each(['matching-index', 'untracked-collision', 'ignored-collision'])(
+  'predicts carry using Git without changing the index or files: %s',
+  async (scenario) => {
+    const f = fixture();
+    git(f.repo, 'switch', 'feature');
+    fs.writeFileSync(path.join(f.repo, 'base'), 'target\n');
+    fs.writeFileSync(path.join(f.repo, 'new-file'), 'target\n');
+    git(f.repo, 'add', '.');
+    git(f.repo, '-c', 'commit.gpgsign=false', 'commit', '-m', 'target');
+    git(f.repo, 'switch', 'main');
+    if (scenario === 'matching-index') {
+      fs.writeFileSync(path.join(f.repo, 'base'), 'target\n');
+      git(f.repo, 'add', 'base');
+    } else {
+      fs.writeFileSync(path.join(f.repo, 'new-file'), 'user\n');
+      fs.writeFileSync(path.join(f.repo, 'unrelated'), 'keep\n');
+      if (scenario === 'ignored-collision')
+        fs.appendFileSync(path.join(f.repo, '.git', 'info', 'exclude'), '\nnew-file\n');
+    }
+    const index = fs.readFileSync(path.join(f.repo, '.git', 'index'));
+    const bytes = fs.readFileSync(path.join(f.repo, 'base'));
+    const before = await f.service.status(f.repo, 'feature');
+    expect(fs.readFileSync(path.join(f.repo, '.git', 'index'))).toEqual(index);
+    expect(fs.readFileSync(path.join(f.repo, 'base'))).toEqual(bytes);
+    expect(before.carryAllowed).toBe(scenario === 'matching-index');
+    const result = await f.service.switch(
+      f.repo,
+      'feature',
+      before.current,
+      before.fingerprint,
+      'carry',
+    );
+    if (scenario === 'matching-index') {
+      expect(result.blocked).toBeUndefined();
+      expect(result.status.current).toBe('feature');
+      expect(git(f.repo, 'show', ':base')).toBe('target');
+      expect(fs.readFileSync(path.join(f.repo, 'base'), 'utf8')).toBe('target\n');
+    } else {
+      expect(result.blocked).toBe('conflict');
+      expect(result.status.current).toBe('main');
+      expect(fs.readFileSync(path.join(f.repo, 'new-file'), 'utf8')).toBe('user\n');
+    }
+  },
+);
 it('attributes subdirectories and symlinks to the deepest checkout, excludes SSH, and blocks occupied branches', async () => {
   const f = fixture();
   fs.mkdirSync(path.join(f.repo, 'sub'));
