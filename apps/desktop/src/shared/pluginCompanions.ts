@@ -45,8 +45,21 @@ export type PluginCompanionInteractionDetail =
       subject: string | null;
       /** The command, paths or arguments being confirmed. */
       preview: string;
+      /**
+       * Whether the plugin may allow it: Cindy's own dialog can show all of it (the whole command or short
+       * arguments). False for file writes and anything longer — allow those in Cindy (`open`); `answer` with
+       * allow returns ALLOW_IN_CINDY. Declining works either way.
+       */
+      allowHere: boolean;
     }
-  | { ref: string; kind: 'plan'; plan: string; truncated: boolean }
+  | {
+      ref: string;
+      kind: 'plan';
+      plan: string;
+      truncated: boolean;
+      /** Whether the plugin may allow it: the whole plan fits Cindy's own dialog; otherwise allow it in Cindy. */
+      allowHere: boolean;
+    }
   | { ref: string; kind: 'other'; title: string | null };
 
 /**

@@ -4,9 +4,10 @@ import { beforeEach, expect, it, vi } from 'vitest';
 const mocks = vi.hoisted(() => ({
   sources: [] as Array<Record<string, unknown>>,
   activities: new Map<string, Record<string, unknown>>(),
+  delegated: new Map<string, Array<Record<string, unknown>>>(),
   away: new Set<string>(),
   view: { enabled: true, selfDeviceId: 'here', actors: [] as Array<Record<string, unknown>> },
-  rows: [] as Array<{ role: string; createdAt: number; text: string | null }>,
+  rows: [] as Array<{ id?: string; role: string; createdAt: number; text: string | null }>,
   clearedAt: null as number | null,
 }));
 vi.mock('../../localDb/ipc/bots.js', () => ({ listBotRemoteResourceSources: async () => mocks.sources }));
@@ -14,13 +15,21 @@ vi.mock('../../localDb/ipc/botRemoteResourceProjection.js', () => ({
   visibleBotRemoteResourceSources: (sources: Array<{ hiddenAt: number | null }>) => sources.filter(source => source.hiddenAt === null),
 }));
 vi.mock('../../localDb/ipc/botRemoteResourceProvider.js', () => ({
-  rosterBotActivities: async (sources: Array<{ id: string }>) =>
-    new Map(sources.flatMap(source => mocks.activities.has(source.id) ? [[source.id, mocks.activities.get(source.id)]] : [])),
+  // The roster's own session first, then delegated tasks that are also live.
+  rosterBotActivityCandidates: async (sources: Array<{ id: string }>) => new Map(sources.map(source =>
+    [source.id, [mocks.activities.get(source.id), ...(mocks.delegated.get(source.id) ?? [])].filter(Boolean)])),
 }));
 vi.mock('../../companion-cloud/homes.js', () => ({
   companionHomes: { isHomeHere: (id: string) => !mocks.away.has(id), snapshot: () => mocks.view },
 }));
-vi.mock('../../companion-cloud/host.js', () => ({ readLatestMirrorRows: async () => mocks.rows }));
+// Rows newest first, read a page at a time like the database does.
+vi.mock('../../companion-cloud/host.js', () => ({
+  readLatestMirrorRows: async (_sessionId: string, limit: number) => mocks.rows.slice(0, limit),
+  readMirrorRowsBefore: async (_sessionId: string, cursor: { createdAt: number; id?: string }, limit: number) => {
+    const at = mocks.rows.findIndex(row => row.createdAt === cursor.createdAt && row.id === cursor.id);
+    return mocks.rows.slice(at + 1, at + 1 + limit);
+  },
+}));
 vi.mock('../../companion-cloud/mirror.js', () => ({ mirrorMessageText: (row: { text: string | null }) => row.text }));
 vi.mock('../../agent-island/companionIdentity.js', () => ({ companionAvatarThumbnail: async () => 'SlBFRw==' }));
 vi.mock('../../localDb/client/current.js', () => ({
@@ -29,7 +38,9 @@ vi.mock('../../localDb/client/current.js', () => ({
   }),
 }));
 
-import { createPluginCompanionHost, PLUGIN_COMPANION_MESSAGE_MAX, PLUGIN_COMPANION_REPLY_MAX, type PluginCompanionAllowPrompt, type PluginCompanionRemoteDeps } from '../pluginCompanionHost.js';
+import {
+  createPluginCompanionHost, PLUGIN_COMPANION_CONFIRM_MAX, PLUGIN_COMPANION_MESSAGE_MAX, PLUGIN_COMPANION_REPLY_MAX, type PluginCompanionAllowPrompt, type PluginCompanionRemoteDeps,
+} from '../pluginCompanionHost.js';
 
 const source = (id: string, over: Record<string, unknown> = {}) => ({
   id, name: id.toUpperCase(), description: `${id} desc`, avatar: '', avatarColor: '', status: 'active',
@@ -51,6 +62,7 @@ const answering = { ghostId: 'office', guard: () => {} };
 beforeEach(() => {
   mocks.sources = [source('ada'), source('bo', { needsAttention: true }), source('gone', { hiddenAt: 1 }), source('far')];
   mocks.activities.clear();
+  mocks.delegated.clear();
   mocks.activities.set('ada', {
     sessionId: 'ada-task', phase: 'needs-interaction', workingPhase: 'running-command',
     currentActionSummary: 'Running tests', startedAtMs: 1, lastActivityAtMs: 2,
@@ -212,8 +224,8 @@ it('shows a pending request the way its card does, and Cindy\'s own confirmation
   expect(ada!.interactions.map(i => i.kind)).toEqual(['permission', 'question', 'other', 'other', 'plan', 'question']);
   const [permission, , handoff, install, plan, multi] = ada!.interactions;
   expect(await host.interaction('ada', permission!.ref, () => {}))
-    .toEqual({ ref: permission!.ref, kind: 'permission', action: 'command', tool: 'Run tests', subject: null, preview: 'rm -rf ~/work' });
-  expect(await host.interaction('ada', plan!.ref, () => {})).toEqual({ ref: plan!.ref, kind: 'plan', plan: '1. Write tests\n2. Ship', truncated: false });
+    .toEqual({ ref: permission!.ref, kind: 'permission', action: 'command', tool: 'Run tests', subject: null, preview: 'rm -rf ~/work', allowHere: true });
+  expect(await host.interaction('ada', plan!.ref, () => {})).toEqual({ ref: plan!.ref, kind: 'plan', plan: '1. Write tests\n2. Ship', truncated: false, allowHere: true });
   expect(await host.interaction('ada', multi!.ref, () => {})).toEqual({ ref: multi!.ref, kind: 'question', questions: [{
     question: 'Which?', header: 'Pick', multiSelect: true, options: [{ label: 'A', description: 'first' }, { label: 'B', description: null }],
   }] });
@@ -291,6 +303,69 @@ it('allows only after Cindy\'s own confirmation, and only the exact request that
   release(true);
   await expect(first).rejects.toMatchObject({ code: 'PERMISSION_DENIED' });
   expect(d.resolve).not.toHaveBeenCalled();
+});
+
+// unit: review on #8767 — the owner allows what Cindy's own dialog shows, so a plugin may only allow what it shows
+// whole. A command or plan longer than the dialog, a file write (where, not what) or arguments the summary cuts are
+// allowed in Cindy; declining needs no dialog.
+it('lets a plugin allow only what Cindy\'s own dialog can show whole', async () => {
+  pending.set('ada-task', [
+    { request: { kind: 'permission', requestId: 'r-long', toolName: 'Bash', input: { command: `echo ok ${'x'.repeat(PLUGIN_COMPANION_CONFIRM_MAX)} && rm -rf ~/work` } } },
+    { request: { kind: 'permission', requestId: 'r-write', toolName: 'Write', input: { file_path: '/tmp/notes.md', content: 'anything' } } },
+    { request: { kind: 'permission', requestId: 'r-args', toolName: 'mcp__srv__run', input: { script: 'y'.repeat(600) } } },
+    { request: { kind: 'permission', requestId: 'r-short', toolName: 'mcp__srv__run', input: { script: 'ls' } } },
+    { request: { kind: 'plan_review', requestId: 'r-plan', plan: 'p'.repeat(PLUGIN_COMPANION_CONFIRM_MAX + 1) } },
+  ]);
+  const d = deps();
+  const host = createPluginCompanionHost(d);
+  const refs = (await host.list(() => {}))[0]!.interactions.map(i => i.ref);
+  const shown = await Promise.all(refs.map(async ref => (await host.interaction('ada', ref, () => {}) as { allowHere?: boolean }).allowHere));
+  expect(shown).toEqual([false, false, false, true, false]);
+  for (const [ref, answer] of [[refs[0], { kind: 'permission', decision: 'allow' }], [refs[1], { kind: 'permission', decision: 'allow' }],
+    [refs[2], { kind: 'permission', decision: 'allow' }], [refs[4], { kind: 'plan', decision: 'allow' }]] as const) {
+    await expect(host.answer('ada', ref!, answer, answering)).rejects.toMatchObject({ code: 'ALLOW_IN_CINDY' });
+  }
+  expect(d.confirmAllow).not.toHaveBeenCalled();
+  expect(d.resolve).not.toHaveBeenCalled();
+  expect(await host.answer('ada', refs[0]!, { kind: 'permission', decision: 'deny' }, answering)).toEqual({ answered: true });
+  expect(d.resolve).toHaveBeenLastCalledWith('r-long', { kind: 'permission', behavior: 'deny' });
+  expect(await host.answer('ada', refs[3]!, { kind: 'permission', decision: 'allow' }, answering)).toEqual({ answered: true });
+  expect(d.confirmAllow).toHaveBeenCalledOnce();
+  expect(d.resolve).toHaveBeenLastCalledWith('r-short', { kind: 'permission', behavior: 'allow' });
+});
+
+// unit: review on #8767 — a companion's main conversation and a delegated task can both wait on the owner; the
+// status follows the session the roster shows, the requests come from both and each stays answerable and openable.
+it('lists the requests of every task waiting on the owner, not only the one the roster shows', async () => {
+  mocks.delegated.set('ada', [{ sessionId: 'ada-side', phase: 'needs-interaction', workingPhase: null, currentActionSummary: null, startedAtMs: 3, lastActivityAtMs: 4 }]);
+  pending.set('ada-side', [{ request: { kind: 'ask_user_question', requestId: 'req-9', questions: [{ question: 'Deploy now?' }] } }]);
+  const d = deps();
+  const host = createPluginCompanionHost(d);
+  const [ada] = await host.list(() => {});
+  expect(ada!.activity.summary).toBe('Running tests');
+  expect(ada!.interactions).toHaveLength(4);
+  const side = ada!.interactions[3]!;
+  expect(side).toMatchObject({ kind: 'question', title: 'Deploy now?' });
+  expect(await host.interaction('ada', side.ref, () => {})).toMatchObject({ kind: 'question', questions: [{ question: 'Deploy now?' }] });
+  expect(await host.answer('ada', side.ref, { kind: 'question', answers: [{ choices: [], text: 'yes' }] }, answering)).toEqual({ answered: true });
+  expect(d.resolve).toHaveBeenLastCalledWith('req-9', { kind: 'ask_user_question', answers: { 'Deploy now?': 'yes' } });
+  await host.open('ada', side.ref, () => {});
+  expect(d.openSession).toHaveBeenLastCalledWith('ada-side');
+});
+
+// unit: review on #8767 — a long turn leaves many rows the chat hides (tool steps, progress notes, sub-agents) after
+// the last reply; reply and history read back past them a page at a time instead of stopping at a fixed window.
+it('finds the latest reply and the recent conversation past a long run of hidden rows', async () => {
+  const hidden = Array.from({ length: 250 }, (_, i) => ({ id: `h${i}`, role: 'assistant', createdAt: 1000 - i, text: null }));
+  mocks.rows = [...hidden, { id: 'a1', role: 'assistant', createdAt: 700, text: 'Done: 3 files' },
+    { id: 'u1', role: 'user', createdAt: 690, text: 'Fix it' }, { id: 'u0', role: 'user', createdAt: 600, text: 'Earlier' }];
+  const host = createPluginCompanionHost(deps());
+  expect(await host.reply('ada', () => {})).toEqual({ text: 'Done: 3 files', createdAt: 700, truncated: false });
+  expect(await host.history('ada', 2, () => {})).toEqual({ messages: [
+    { role: 'user', text: 'Fix it', createdAt: 690, truncated: false },
+    { role: 'assistant', text: 'Done: 3 files', createdAt: 700, truncated: false },
+  ], more: true });
+  expect(await host.history('ada', 3, () => {})).toMatchObject({ more: false });
 });
 
 it('answers a companion on another computer through that computer\'s own resolve channel', async () => {

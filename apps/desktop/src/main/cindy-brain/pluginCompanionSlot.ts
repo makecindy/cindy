@@ -28,7 +28,8 @@ export interface PluginCompanionContext {
   assertAuthorized(): void;
 }
 
-const COMPANION_ERROR_CODES = new Set(['PERMISSION_DENIED', 'HOST_NOT_READY', 'INVALID_PARAMS', 'TARGET_UNAVAILABLE', 'TASK_BUSY']);
+// ALLOW_IN_CINDY: an allow Cindy's own dialog cannot show whole; the plugin opens the request in Cindy instead.
+const COMPANION_ERROR_CODES = new Set(['PERMISSION_DENIED', 'HOST_NOT_READY', 'INVALID_PARAMS', 'TARGET_UNAVAILABLE', 'TASK_BUSY', 'ALLOW_IN_CINDY']);
 const MAX_ID_LENGTH = 4096;
 const MAX_ANSWER_TEXT = 8000;
 const MAX_QUESTIONS = 20;

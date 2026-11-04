@@ -15,20 +15,20 @@ import { getCurrentDbClientSnapshot } from '../localDb/client/current.js';
 import { sessions } from '../localDb/schema.js';
 import { listBotRemoteResourceSources, type BotRemoteResourceSource } from '../localDb/ipc/bots.js';
 import { visibleBotRemoteResourceSources } from '../localDb/ipc/botRemoteResourceProjection.js';
-import { rosterBotActivities } from '../localDb/ipc/botRemoteResourceProvider.js';
+import { rosterBotActivityCandidates } from '../localDb/ipc/botRemoteResourceProvider.js';
 import { companionHomes } from '../companion-cloud/homes.js';
-import { readLatestMirrorRows } from '../companion-cloud/host.js';
-import { mirrorMessageText } from '../companion-cloud/mirror.js';
+import { readLatestMirrorRows, readMirrorRowsBefore } from '../companion-cloud/host.js';
+import { mirrorMessageText, type CompanionMirrorRow } from '../companion-cloud/mirror.js';
 import { companionAvatarThumbnail } from '../agent-island/companionIdentity.js';
 import { summarizeInteraction } from '../bot-autonomy/phase.js';
 
 /** Longest reply text handed to a plugin; longer replies are cut and marked truncated. */
 export const PLUGIN_COMPANION_REPLY_MAX = 8000;
-const REPLY_SCAN_ROWS = 20;
 /** Most messages `history` returns, and the longest text of one of them. */
 export const PLUGIN_COMPANION_HISTORY_MAX = 50;
 export const PLUGIN_COMPANION_MESSAGE_MAX = 2000;
-const HISTORY_SCAN_ROWS = 400;
+/** Conversation rows read per page while walking back past what the chat hides (tool steps, progress notes, sub-agents). */
+const MIRROR_PAGE_ROWS = 100;
 /** Plugins re-list on every change notice; one read per home computer serves them all for this long. */
 export const REMOTE_COMPANION_CACHE_MS = 800;
 /** A home computer that does not answer in time is shown as unreachable rather than holding the list. */
@@ -38,6 +38,10 @@ const MAX_TEXT = 200;
 /** Longest plan body handed to a plugin; the rest stays in the conversation. */
 export const PLUGIN_COMPANION_PLAN_MAX = 20000;
 const PREVIEW_MAX = 4000;
+/** The most text Cindy's own allow dialog shows whole; a longer plan or command is allowed in Cindy itself. */
+export const PLUGIN_COMPANION_CONFIRM_MAX = 1200;
+/** Tool arguments are summarized whole up to this length (maker-shared describePermissionAction cuts longer ones). */
+const WHOLE_ARGUMENTS_MAX = 500;
 const RESOLVE_INTERACTION_CHANNEL = 'maker:resolve-interaction';
 const PENDING_INTERACTIONS_CHANNEL = 'maker:get-pending-interactions';
 /** Requests only the owner settles in Cindy itself, even though they ride the generic permission card. */
@@ -47,6 +51,7 @@ const unavailable = (): never => { throw Object.assign(new Error('TARGET_UNAVAIL
 const notReady = (): never => { throw Object.assign(new Error('HOST_NOT_READY'), { code: 'HOST_NOT_READY' }); };
 const invalid = (): never => { throw Object.assign(new Error('INVALID_PARAMS'), { code: 'INVALID_PARAMS' }); };
 const busy = (): never => { throw Object.assign(new Error('TASK_BUSY'), { code: 'TASK_BUSY' }); };
+const allowInCindy = (): never => { throw Object.assign(new Error('ALLOW_IN_CINDY'), { code: 'ALLOW_IN_CINDY' }); };
 const hash = (...parts: string[]) => createHash('sha256').update(parts.join('\n')).digest('hex').slice(0, 32);
 /** Opaque and stable for one pending request of one task; never the host's own request id. */
 const interactionRef = (sessionId: string, requestId: string) => hash(sessionId, requestId);
@@ -73,6 +78,20 @@ export function companionInteractionKind(raw: unknown): PluginCompanionInteracti
   return !tool || OWNER_ONLY_TOOLS.has(tool) || OWNER_ONLY_TOOLS.has(tool.split('__').pop() ?? '') ? 'other' : 'permission';
 }
 
+/**
+ * Whether the summary of a permission shows all of what allowing it lets the companion do, so that Cindy's own
+ * dialog can show the owner everything before a plugin's answer allows it: the whole command with its working
+ * directory, or the paths and query read. A file write shows where, not what is written; a browser step, plugin or
+ * tool call is shown whole only when its arguments are short enough not to be cut (the longest summary of them is
+ * the indented JSON of the whole input). Anything else is allowed in Cindy itself.
+ */
+function permissionShownWhole(action: string, input: unknown): boolean {
+  if (action === 'command' || action === 'file-read') return true;
+  if (action !== 'browser' && action !== 'plugin' && action !== 'tool') return false;
+  if (input !== undefined && (typeof input !== 'object' || input === null || Array.isArray(input))) return false;
+  return (JSON.stringify(input ?? {}, null, 2) ?? '').length <= WHOLE_ARGUMENTS_MAX;
+}
+
 /** One pending request the way its conversation card shows it. */
 export function companionInteractionDetail(raw: unknown, ref: string): PluginCompanionInteractionDetail {
   const request = record(raw);
@@ -94,11 +113,15 @@ export function companionInteractionDetail(raw: unknown, ref: string): PluginCom
     return {
       ref, kind, action: action.kind, tool: text(request.displayName, 400) || text(request.title, 400) || toolName,
       subject: action.subject ? text(action.subject, 400) : null, preview: text(action.preview, PREVIEW_MAX),
+      allowHere: permissionShownWhole(action.kind, request.input) && Array.from(action.preview).length <= PLUGIN_COMPANION_CONFIRM_MAX,
     };
   }
   if (kind === 'plan') {
     const chars = Array.from(String(request.plan));
-    return { ref, kind, plan: chars.slice(0, PLUGIN_COMPANION_PLAN_MAX).join(''), truncated: chars.length > PLUGIN_COMPANION_PLAN_MAX };
+    return {
+      ref, kind, plan: chars.slice(0, PLUGIN_COMPANION_PLAN_MAX).join(''), truncated: chars.length > PLUGIN_COMPANION_PLAN_MAX,
+      allowHere: chars.length <= PLUGIN_COMPANION_CONFIRM_MAX,
+    };
   }
   return { ref, kind, title: summarizeInteraction(raw)?.summary ?? null };
 }
@@ -275,12 +298,15 @@ export function createPluginCompanionHost(deps: PluginCompanionHostDeps) {
 
   const localView = async (guard: () => void): Promise<CompanionView> => {
     const sources = await localSources(guard);
-    const activities = await rosterBotActivities(sources);
+    const candidates = await rosterBotActivityCandidates(sources);
     guard();
     const view: CompanionView = { companions: [], sessions: {}, conversations: {} };
     for (const source of sources) {
-      const activity = activities.get(source.id);
-      const interactions = interactionsOf(activity);
+      // Status follows the session the roster shows; requests come from every session waiting on the owner
+      // (the main conversation and delegated tasks can wait at the same time).
+      const live = candidates.get(source.id) ?? [];
+      const activity = live[0];
+      const interactions = live.flatMap(interactionsOf);
       for (const interaction of interactions) view.sessions[interaction.ref] = interaction.sessionId;
       if (source.canonicalSessionId) view.conversations[source.id] = source.canonicalSessionId;
       view.companions.push({
@@ -303,6 +329,21 @@ export function createPluginCompanionHost(deps: PluginCompanionHostDeps) {
     return view;
   };
 
+  /** The conversation's rows newest first, a page at a time, down to where it was last cleared or its first row. */
+  async function* conversationRows(sessionId: string, clearedAt: number | null, guard: () => void): AsyncGenerator<CompanionMirrorRow> {
+    let page = await readLatestMirrorRows(sessionId, MIRROR_PAGE_ROWS);
+    for (;;) {
+      guard();
+      for (const row of page) {
+        if (clearedAt != null && row.createdAt <= clearedAt) return;
+        yield row;
+      }
+      if (page.length < MIRROR_PAGE_ROWS) return;
+      const last = page[page.length - 1]!;
+      page = await readMirrorRowsBefore(sessionId, { createdAt: last.createdAt, id: last.id }, MIRROR_PAGE_ROWS);
+    }
+  }
+
   const localReply = async (companionId: string, guard: () => void): Promise<PluginCompanionReply | null> => {
     const source = await localSource(companionId, guard);
     const sessionId = source.canonicalSessionId ?? unavailable();
@@ -310,11 +351,10 @@ export function createPluginCompanionHost(deps: PluginCompanionHostDeps) {
     guard();
     const db = getCurrentDbClientSnapshot()?.client.drizzle ?? notReady();
     const [session] = await db.select({ clearedAt: sessions.clearedAt }).from(sessions).where(eq(sessions.id, sessionId)).limit(1);
-    const rows = await readLatestMirrorRows(sessionId, REPLY_SCAN_ROWS);
-    guard();
-    // The newest assistant row the companion conversation shows: not private, commentary or sub-agent output.
-    for (const row of rows) {
-      if (row.role !== 'assistant' || (session?.clearedAt != null && row.createdAt <= session.clearedAt)) continue;
+    // The newest assistant row the companion conversation shows: not private, commentary or sub-agent output,
+    // however many of those a long turn left after it.
+    for await (const row of conversationRows(sessionId, session?.clearedAt ?? null, guard)) {
+      if (row.role !== 'assistant') continue;
       const replyText = mirrorMessageText(row, { placeholders: false });
       if (!replyText) continue;
       const chars = Array.from(replyText);
@@ -331,19 +371,15 @@ export function createPluginCompanionHost(deps: PluginCompanionHostDeps) {
     guard();
     const db = getCurrentDbClientSnapshot()?.client.drizzle ?? notReady();
     const [session] = await db.select({ clearedAt: sessions.clearedAt }).from(sessions).where(eq(sessions.id, sessionId)).limit(1);
-    const rows = await readLatestMirrorRows(sessionId, HISTORY_SCAN_ROWS);
-    guard();
     const messages: PluginCompanionMessage[] = [];
     let more = false;
-    for (const row of rows) { // newest first
-      if (session?.clearedAt != null && row.createdAt <= session.clearedAt) break;
+    for await (const row of conversationRows(sessionId, session?.clearedAt ?? null, guard)) { // newest first
       const text = mirrorMessageText(row);
       if (!text || (row.role !== 'user' && row.role !== 'assistant')) continue;
       if (messages.length === limit) { more = true; break; }
       const chars = Array.from(text);
       messages.push({ role: row.role, text: chars.slice(0, PLUGIN_COMPANION_MESSAGE_MAX).join(''), createdAt: row.createdAt, truncated: chars.length > PLUGIN_COMPANION_MESSAGE_MAX });
     }
-    if (!more && rows.length === HISTORY_SCAN_ROWS) more = true;
     return { messages: messages.reverse(), more };
   };
 
@@ -565,12 +601,14 @@ export function createPluginCompanionHost(deps: PluginCompanionHostDeps) {
       const decision = companionInteractionDecision(found.request, answer);
       if (needsOwnerConfirmation(answer)) {
         const confirmAllow = deps.confirmAllow ?? notReady();
+        // The owner allows what the dialog shows: what it cannot show whole is allowed in Cindy (open).
+        const detail = companionInteractionDetail(found.request, ref) as PluginCompanionAllowPrompt['detail'];
+        if (!detail.allowHere) return allowInCindy();
         if (confirming) return busy();
         confirming = true;
         const shown = JSON.stringify(found.request);
         let allowed: boolean;
         try {
-          const detail = companionInteractionDetail(found.request, ref) as PluginCompanionAllowPrompt['detail'];
           allowed = await confirmAllow({ ghostId: ctx.ghostId, companion: found.companion, detail });
         } finally {
           confirming = false;

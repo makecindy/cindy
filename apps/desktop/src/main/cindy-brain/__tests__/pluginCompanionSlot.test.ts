@@ -20,7 +20,7 @@ const adapter = (): PluginCompanionAdapter => ({
   avatar: vi.fn(async () => ({ src: null, fallback: 'A' })),
   reply: vi.fn(async () => ({ text: 'done', createdAt: 3, truncated: false })),
   open: vi.fn(async () => {}),
-  interaction: vi.fn(async (_companionId: string, ref: string) => ({ ref, kind: 'plan' as const, plan: 'Plan', truncated: false })),
+  interaction: vi.fn(async (_companionId: string, ref: string) => ({ ref, kind: 'plan' as const, plan: 'Plan', truncated: false, allowHere: true })),
   answer: vi.fn(async () => ({ answered: true })),
   history: vi.fn(async () => ({ messages: [{ role: 'user' as const, text: 'hi', createdAt: 1, truncated: false }], more: false })),
 });
@@ -121,14 +121,17 @@ it('lets only the current subscription stop watching', () => {
 it('reads one request and hands a well-formed answer to the adapter with the plugin id', async () => {
   const a = adapter();
   expect(await handlePluginCompanionRequest(a, hub(), { kind: 'interaction', companionId: 'b1', interactionRef: 'r' }, ctx()))
-    .toEqual({ ok: true, data: { interaction: { ref: 'r', kind: 'plan', plan: 'Plan', truncated: false } } });
+    .toEqual({ ok: true, data: { interaction: { ref: 'r', kind: 'plan', plan: 'Plan', truncated: false, allowHere: true } } });
   const answer = { kind: 'question', answers: [{ choices: ['A'], text: 'more' }] };
   expect(await handlePluginCompanionRequest(a, hub(), { kind: 'answer', companionId: 'b1', interactionRef: 'r', answer }, ctx()))
     .toEqual({ ok: true, data: { answered: true } });
   expect(a.answer).toHaveBeenCalledWith('b1', 'r', answer, { ghostId: 'p', guard: expect.any(Function) });
-  (a.answer as ReturnType<typeof vi.fn>).mockRejectedValueOnce(Object.assign(new Error('x'), { code: 'TASK_BUSY' }));
-  expect(await handlePluginCompanionRequest(a, hub(), { kind: 'answer', companionId: 'b1', interactionRef: 'r', answer: { kind: 'plan', decision: 'allow' } }, ctx()))
-    .toMatchObject({ ok: false, error: { code: 'TASK_BUSY' } });
+  // Both reach the plugin as they are: wait for the open dialog, or allow it in Cindy (open) instead.
+  for (const code of ['TASK_BUSY', 'ALLOW_IN_CINDY']) {
+    (a.answer as ReturnType<typeof vi.fn>).mockRejectedValueOnce(Object.assign(new Error('x'), { code }));
+    expect(await handlePluginCompanionRequest(a, hub(), { kind: 'answer', companionId: 'b1', interactionRef: 'r', answer: { kind: 'plan', decision: 'allow' } }, ctx()))
+      .toMatchObject({ ok: false, error: { code } });
+  }
 });
 
 it.each([

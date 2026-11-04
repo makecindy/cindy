@@ -15160,14 +15160,14 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     flushMessages: drainPersistQueue,
     resolve: (requestId, decision) => resolvePendingInteraction(requestId, decision as InteractionDecision),
     // Cindy's own dialog over the main window: a plugin's page cannot draw or click it.
+    // It shows the whole request: the host only asks for what fits (allowHere), and says no to anything else.
     confirmAllow: async ({ ghostId, companion, detail }) => {
+      if (!detail.allowHere) return false;
       const window = getDeepLinkMainWindow();
       const plugin = getInstalledGhostName(ghostId) ?? ghostId;
       const fill = (key: string, values: Record<string, string>) =>
         Object.entries(values).reduce((value, [name, replacement]) => value.replaceAll(`{{${name}}}`, replacement), t(key));
-      const body = detail.kind === 'plan'
-        ? `${Array.from(detail.plan).slice(0, 1200).join('')}${Array.from(detail.plan).length > 1200 ? '…' : ''}`
-        : detail.preview;
+      const body = detail.kind === 'plan' ? detail.plan : detail.preview;
       const options = {
         type: 'question' as const,
         title: t('pluginCompanionAnswer.title'),
