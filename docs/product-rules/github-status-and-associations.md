@@ -14,6 +14,8 @@
 
 三个 Harness 共用 `cindy_helper` 的 `github` 类目。Codex / Claude Code 沿原 MCP 装配，Pi 沿原 MCP 网关；不修改引擎内核。类目总览提供用途和范围，详细参数按需发现。
 
+交互式查询时 Agent 可以直接用 gh / glab 等命令行；github 类目主要服务定时任务和脚本的增量读取，以及任务关联的管理，不替代命令行。
+
 | 工具 | 作用 |
 | --- | --- |
 | `get_pr_status` | 状态、当前 head 的 CI 汇总、评审汇总、采集时间、版本、来源电脑和完整性 |
