@@ -15,6 +15,7 @@ import type {
   SetupTransferSshResult,
 } from '@cindy/device-link';
 
+import type { SetupMcpCreateReceipt } from '../maker-ipc/mcpHandlers.js';
 import type { CustomMcpConfig } from '../../shared/customMcp.js';
 import {
   SETUP_MIGRATION_SECRETS_KEY,
@@ -31,7 +32,7 @@ export interface SetupTransferApplyDeps {
     onCode(code: string): void;
   }): Promise<SetupTransferOutcome>;
   createProvider(config: Record<string, unknown>, keys: Record<string, string>): Promise<'done' | 'skipped'>;
-  createMcpServer(config: CustomMcpConfig, token: string | null): Promise<void>;
+  createMcpServer(config: CustomMcpConfig, token: string | null): Promise<SetupMcpCreateReceipt>;
   hasBuiltinKey(id: string): boolean;
   storeBuiltinKey(id: string, value: string): boolean;
   /** Installed plugin instance here for the other computer's plugin, or null. */
@@ -46,6 +47,7 @@ type Run = (key: string, task: () => Promise<'done' | 'skipped'>) => Promise<{ o
 
 export interface SetupTransferStepResult {
   handledKeys: string[];
+  copiedMcpCredentials: string[];
   checklist: SetupMigrationChecklistItem[];
 }
 
@@ -88,7 +90,8 @@ export async function applySetupTransferStep(
   const hosts = plan.sshHosts.filter((item) => item.state === 'ready' && keys.has(item.key));
   const handledKeys: string[] = [];
   const checklist: SetupMigrationChecklistItem[] = [];
-  if (!wantSecrets && hosts.length === 0) return { handledKeys, checklist };
+  const copiedMcpCredentials: string[] = [];
+  if (!wantSecrets && hosts.length === 0) return { handledKeys, checklist, copiedMcpCredentials };
 
   const providers = plan.providers.filter(
     (item) => item.state === 'ready' && keys.has(item.key) && item.provider.auth !== 'oauth' && item.provider.auth !== 'native',
@@ -137,14 +140,22 @@ export async function applySetupTransferStep(
   }
 
   if (wantSecrets) {
+    const mcpFailures = new Map<string, string>();
+    const tokenWrites = { failed: false };
     await run(SETUP_MIGRATION_SECRETS_KEY, async () => {
       if (transferError) throw new StepError(transferError);
       const bundle = outcome?.secrets;
       if (!bundle) return 'skipped';
-      return (await writeSecrets(bundle, { providers, mcpServers }, deps, handledKeys)) ? 'done' : 'skipped';
+      const wrote = await writeSecrets(bundle, { providers, mcpServers }, deps, handledKeys, mcpFailures, tokenWrites, copiedMcpCredentials);
+      if (tokenWrites.failed) throw new StepError('CREDENTIAL_STORAGE_FAILED');
+      return wrote ? 'done' : 'skipped';
     });
-    // Connections created here with their keys report like the window's own items.
-    for (const key of handledKeys) await run(key, async () => 'done');
+    // Saved configuration is handled even when its credential or refresh failed.
+    for (const key of handledKeys) await run(key, async () => {
+      const failure = mcpFailures.get(key);
+      if (failure) throw new StepError(failure);
+      return 'done';
+    });
   }
 
   for (const item of hosts) {
@@ -161,7 +172,25 @@ export async function applySetupTransferStep(
     });
     if (result.outcome === 'failed') checklist.push(sshChecklist(item));
   }
-  return { handledKeys, checklist };
+  return { handledKeys, checklist, copiedMcpCredentials };
+}
+
+function mcpCredentialsCopied(
+  source: SetupSnapshot['mcpServers'][number],
+  copied: SetupSecretBundle['mcpServers'][number],
+  receipt: SetupMcpCreateReceipt,
+): boolean {
+  const kinds = source.credentialKinds;
+  if (!kinds || kinds.url || (!kinds.bearer && !kinds.headers) || receipt.token === 'failed') return false;
+  if (kinds.bearer && receipt.token !== 'saved') return false;
+  if (kinds.headers && Object.keys(copied.headers).length === 0) return false;
+  // The source may have changed since the preview; URL credentials still need manual review.
+  try {
+    const url = new URL(copied.url);
+    return !(url.username || url.password || url.search || url.hash);
+  } catch {
+    return false;
+  }
 }
 
 async function writeSecrets(
@@ -172,6 +201,9 @@ async function writeSecrets(
   },
   deps: SetupTransferApplyDeps,
   handledKeys: string[],
+  mcpFailures: Map<string, string>,
+  tokenWrites: { failed: boolean },
+  copiedMcpCredentials: string[],
 ): Promise<boolean> {
   let wrote = false;
   for (const item of selected.providers) {
@@ -191,14 +223,19 @@ async function writeSecrets(
     const copied = bundle.mcpServers.find((entry) => entry.id === item.server.id);
     if (!copied) continue;
     try {
-      await deps.createMcpServer(
+      const receipt = await deps.createMcpServer(
         { id: item.server.id, name: item.server.name, transport: item.server.transport, url: copied.url, headers: copied.headers },
         copied.token,
       );
       handledKeys.push(item.key);
-      wrote = true;
+      if (mcpCredentialsCopied(item.server, copied, receipt)) copiedMcpCredentials.push(item.server.id);
+      if (receipt.token === 'failed') tokenWrites.failed = true;
+      const failure = receipt.refreshError ?? (receipt.token === 'failed' ? 'CREDENTIAL_STORAGE_FAILED' : null);
+      if (failure) mcpFailures.set(item.key, failure);
+      // The secrets result must not infer new token success from an old readable file.
+      if (receipt.token !== 'failed') wrote = true;
     } catch {
-      // The window creates it without credentials instead.
+      // Creation did not return a saved receipt; keep the existing ordinary-step behavior.
     }
   }
   for (const entry of bundle.builtinKeys) {

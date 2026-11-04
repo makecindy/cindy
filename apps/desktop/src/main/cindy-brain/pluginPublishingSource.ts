@@ -1,3 +1,4 @@
+import { isOrganizationPluginNamespace } from '../../shared/pluginIdentity.js';
 import type { InstalledGhost } from '../../shared/ghost.js';
 import type { PluginMarketAuthorizationLookup } from '../plugin-market/ledger.js';
 import type { PluginInstanceRecord, PluginInstanceReceiptFact } from './pluginInstanceRegistry.js';
@@ -9,8 +10,8 @@ export function projectPluginPublishingSource(
   lookup: PluginMarketAuthorizationLookup,
 ): NonNullable<InstalledGhost['publishingSource']> {
   const unavailable = { kind: 'unavailable' } as const;
-  if (!record.active || record.namespaceState !== 'confirmed' || record.namespace !== null ||
-    !receipt || !receipt.hasNamespace || receipt.namespace !== null || receipt.ghostId !== record.ghostId ||
+  if (!record.active || record.namespaceState !== 'confirmed' || isOrganizationPluginNamespace(record.namespace) ||
+    !receipt || !receipt.hasNamespace || receipt.namespace !== record.namespace || receipt.ghostId !== record.ghostId ||
     receipt.revision !== record.receiptRevision || receipt.packageSha256 !== record.packageSha256 ||
     lookup.kind === 'invalid') return unavailable;
   const market = lookup.kind === 'found' ? lookup.record : null;

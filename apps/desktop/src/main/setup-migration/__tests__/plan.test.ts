@@ -252,3 +252,18 @@ describe('isLocalProvider', () => {
     ).toBe(false);
   });
 });
+
+
+describe('MCP kind facts do not authorize overwrites', () => {
+  it('keeps known and old unknown facts, but never offers credentials for an existing MCP', () => {
+    const known = { id: 'known', name: 'Known', transport: 'http' as const, url: 'https://example.test', headers: {}, hasToken: true, credentialKinds: { bearer: false, headers: true, url: false } };
+    const legacy = { id: 'legacy', name: 'Legacy', transport: 'http' as const, url: 'https://example.test', headers: {}, hasToken: true };
+    const existing = { ...known, id: 'existing' };
+    const plan = buildSetupPlan(planInputs({ snapshot: snapshot({ transfer: 1, mcpServers: [known, legacy, existing] }), mcpIds: new Set(['existing']) }));
+    expect(plan.mcpServers.find((item) => item.server.id === 'known')?.server.credentialKinds).toEqual(known.credentialKinds);
+    expect(plan.mcpServers.find((item) => item.server.id === 'legacy')?.server.credentialKinds).toBeUndefined();
+    expect(plan.mcpServers.find((item) => item.server.id === 'existing')?.state).toBe('present');
+    expect(plan.checklist.filter((item) => item.kind === 'mcp-token').map((item) => item.ref)).toEqual(['known', 'legacy']);
+    expect(plan.secrets?.items.filter((item) => item.kind === 'mcp').map((item) => item.ref)).toEqual(['known', 'legacy']);
+  });
+});

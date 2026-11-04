@@ -67,3 +67,32 @@ describe('setup transfer protocol', () => {
     });
   });
 });
+
+
+describe('MCP bundle completeness', () => {
+  it.each([
+    { headers: Object.fromEntries(Array.from({ length: 65 }, (_, i) => [`X-${i}`, 'fake'])) },
+    { headers: { ['X'.repeat(257)]: 'fake' } },
+    { headers: { 'X-Key': 'f'.repeat(4097) } },
+    { headers: { 'X-Key': '' } },
+    { headers: { ' X-Key ': 'fake' } },
+    { headers: [] },
+    { token: '' },
+    { token: 't'.repeat(16385) },
+  ])('rejects a whole MCP entry instead of accepting filtered credentials: %j', (overrides) => {
+    const good = { id: 'good', url: 'https://example.test/mcp', headers: { 'X-Key': 'fake' }, token: null };
+    const parsed = parseSetupSecretBundle({
+      providers: [], plugins: [], builtinKeys: [{ id: 'brave', value: 'fake-brave' }],
+      mcpServers: [{ ...good, id: 'bad', ...overrides }, good],
+    });
+    expect(parsed.mcpServers).toEqual([good]);
+    expect(parsed.builtinKeys).toEqual([{ id: 'brave', value: 'fake-brave' }]);
+  });
+
+  it('accepts the exact valid bounds and legacy null-token shape', () => {
+    const headers = Object.fromEntries(Array.from({ length: 64 }, (_, i) => [i === 0 ? 'X'.repeat(256) : `X-${i}`, 'v'.repeat(4096)]));
+    const server = { id: 'docs', url: 'https://example.test/mcp', headers, token: 't'.repeat(16384) };
+    expect(parseSetupSecretBundle({ mcpServers: [server] }).mcpServers).toEqual([server]);
+    expect(parseSetupSecretBundle({ mcpServers: [{ ...server, token: null }] }).mcpServers).toEqual([{ ...server, token: null }]);
+  });
+});

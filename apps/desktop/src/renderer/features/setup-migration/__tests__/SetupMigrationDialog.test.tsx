@@ -242,3 +242,30 @@ describe('SetupMigrationDialog', () => {
     await screen.findByText('Gmail');
   });
 });
+
+// #6473 B2: a saved-but-failed MCP must remain failed and never be created twice.
+// Component tier, fake IPC with the real dialog/helper; old coverage only handled a provider.
+// Minimal input: one MCP handled by Main with a credential failure. Not run in edit window.
+it('shows a handled MCP failure without retrying renderer creation', async () => {
+  const { setupMigration } = installApi();
+  setupMigration.preview.mockResolvedValueOnce({
+    ...plan, plugins: [], providers: [], settings: [], access: [], checklist: [],
+    mcpServers: [{ key: 'mcp:docs', state: 'ready', server: { id: 'docs', name: 'Docs', transport: 'http', url: 'https://example.test/mcp', headers: {}, hasToken: true } }],
+    secrets: { key: 'secrets', state: 'ready', items: [{ kind: 'mcp', ref: 'docs', name: 'Docs' }] },
+  });
+  setupMigration.apply.mockResolvedValueOnce({
+    results: [
+      { key: 'secrets', outcome: 'failed', code: 'CREDENTIAL_STORAGE_FAILED' },
+      { key: 'mcp:docs', outcome: 'failed', code: 'PERMISSION_DENIED' },
+    ],
+    checklist: [], handledKeys: ['mcp:docs'],
+  });
+  render(<SetupMigrationDialog />);
+  act(() => openSetupMigration('d1'));
+  fireEvent.click(await screen.findByRole('button', { name: 'setupMigration.review.start' }));
+  await screen.findByText('setupMigration.done.finish');
+  expect(setupMigration.apply).toHaveBeenCalledTimes(1);
+  expect(window.electronAPI.maker.createCustomMcpServer).not.toHaveBeenCalled();
+  expect(screen.getByText('setupMigration.failure.CREDENTIAL_STORAGE_FAILED')).toBeTruthy();
+  expect(screen.getByText('setupMigration.failure.PERMISSION_DENIED')).toBeTruthy();
+});

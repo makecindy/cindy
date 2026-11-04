@@ -227,11 +227,15 @@ export async function applySetupPlan(
         deps.transfer,
         (key, task) => run(key, task),
       )
-    : { handledKeys: [], checklist: [] };
+    : { handledKeys: [], checklist: [], copiedMcpCredentials: [] as string[] };
 
   return {
     results,
-    checklist: [...buildApplyChecklist(input, deps), ...transfer.checklist],
+    checklist: [...buildApplyChecklist(input, deps), ...transfer.checklist].map((item) =>
+      item.kind === 'mcp-token' && item.ref && transfer.copiedMcpCredentials.includes(item.ref)
+        ? { ...item, mcpCredentialsCopied: true as const }
+        : item,
+    ),
     handledKeys: transfer.handledKeys,
   };
 }

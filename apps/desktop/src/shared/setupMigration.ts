@@ -227,6 +227,8 @@ export interface SetupMigrationChecklistItem {
   /** Extra labels, e.g. which plugin accounts are missing. */
   details?: string[];
   done?: boolean;
+  /** This run copied the known non-URL MCP credentials; not inferred from an old token. */
+  mcpCredentialsCopied?: true;
 }
 
 export interface SetupMigrationPlan {

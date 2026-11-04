@@ -52,7 +52,7 @@ function setup(transfer: Partial<SetupTransferApplyDeps> = {}) {
       writes.push(`provider:${String(config.id)}:${Object.keys(keys).join(',')}`);
       return 'done' as const;
     }),
-    createMcpServer: vi.fn(),
+    createMcpServer: vi.fn<SetupTransferApplyDeps['createMcpServer']>(async () => ({ configurationSaved: true, token: 'not-requested', refreshError: null })),
     hasBuiltinKey: (id) => id === 'tavily',
     storeBuiltinKey: vi.fn((id: string) => {
       writes.push(`builtin:${id}`);
@@ -157,5 +157,78 @@ describe('setup keys and SSH step', () => {
     expect(result.checklist.map((item) => item.id)).toEqual(
       expect.arrayContaining(['provider-key:or', 'builtin-key:brave', 'ssh-host:web']),
     );
+  });
+});
+
+// #6473 B2: configuration saved is handled even if token/refresh failed; no false done.
+// Unit tier, applySetupPlan with the real planner and fake stores. Existing fixture had no MCP.
+// Minimal input: one selected MCP receipt; all execution/timing pending.
+describe('MCP saved and failed migration results', () => {
+  it.each([
+    ['failed', null, 'CREDENTIAL_STORAGE_FAILED'],
+    ['saved', 'PERMISSION_DENIED', 'PERMISSION_DENIED'],
+    ['failed', 'INTERNAL', 'INTERNAL'],
+    ['not-requested', null, null],
+  ] as const)('keeps handled separate from outcome for token %s / refresh %s', async (token, refreshError, expectedCode) => {
+    const mcpSource = snapshot({
+      transfer: 1,
+      mcpServers: [{ id: 'docs', name: 'Docs', transport: 'http', url: 'https://example.test/mcp', headers: {}, hasToken: true }],
+    });
+    const plan = buildSetupPlan(planInputs({ snapshot: mcpSource }));
+    const createMcpServer = vi.fn<SetupTransferApplyDeps['createMcpServer']>(async () => ({ configurationSaved: true, token, refreshError }));
+    const { applyDeps } = setup({
+      createMcpServer,
+      transfer: vi.fn<SetupTransferApplyDeps['transfer']>(async () => ({
+        secrets: { providers: [], mcpServers: [{ id: 'docs', url: 'https://example.test/mcp', headers: {}, token: token === 'not-requested' ? null : 'fake-token' }], builtinKeys: [], plugins: [] },
+        ssh: [],
+      })),
+    });
+    const result = await applySetupPlan({ plan, snapshot: mcpSource, keys: new Set(['secrets', 'mcp:docs']), approvedPluginKeys: new Set(), emit: () => {} }, applyDeps);
+    expect(createMcpServer).toHaveBeenCalledTimes(1);
+    expect(result.handledKeys).toEqual(['mcp:docs']);
+    expect(result.results).toEqual([
+      token === 'failed' ? { key: 'secrets', outcome: 'failed', code: 'CREDENTIAL_STORAGE_FAILED' } : { key: 'secrets', outcome: 'done' },
+      expectedCode ? { key: 'mcp:docs', outcome: 'failed', code: expectedCode } : { key: 'mcp:docs', outcome: 'done' },
+    ]);
+  });
+});
+
+
+describe('MCP checklist evidence from this transfer', () => {
+  it.each([
+    { name: 'headers', kinds: { bearer: false, headers: true, url: false }, token: 'not-requested', headers: true, url: 'https://example.test/mcp', copied: true },
+    { name: 'bearer', kinds: { bearer: true, headers: false, url: false }, token: 'saved', headers: false, url: 'https://example.test/mcp', copied: true },
+    { name: 'combination', kinds: { bearer: true, headers: true, url: false }, token: 'saved', headers: true, url: 'https://example.test/mcp', copied: true },
+    { name: 'failed writer', kinds: { bearer: true, headers: true, url: false }, token: 'failed', headers: true, url: 'https://example.test/mcp', copied: false },
+    { name: 'missing bearer', kinds: { bearer: true, headers: false, url: false }, token: 'not-requested', headers: false, url: 'https://example.test/mcp', copied: false },
+    { name: 'missing headers', kinds: { bearer: false, headers: true, url: false }, token: 'not-requested', headers: false, url: 'https://example.test/mcp', copied: false },
+    { name: 'URL fact', kinds: { bearer: false, headers: false, url: true }, token: 'not-requested', headers: false, url: 'https://example.test/mcp?key=fake', copied: false },
+    { name: 'URL changed since preview', kinds: { bearer: true, headers: false, url: false }, token: 'saved', headers: false, url: 'https://example.test/mcp?key=fake', copied: false },
+    { name: 'old unknown source', kinds: undefined, token: 'saved', headers: true, url: 'https://example.test/mcp', copied: false },
+  ] as const)('$name only marks complete with current complete non-URL evidence', async ({ kinds, token, headers, url, copied }) => {
+    const current = snapshot({ transfer: 1, mcpServers: [{ id: 'docs', name: 'Docs', transport: 'http', url: 'https://example.test/mcp', headers: {}, hasToken: true, ...(kinds ? { credentialKinds: kinds } : {}) }] });
+    const plan = buildSetupPlan(planInputs({ snapshot: current }));
+    const createMcpServer = vi.fn<SetupTransferApplyDeps['createMcpServer']>(async () => ({ configurationSaved: true, token, refreshError: 'INTERNAL' }));
+    const transferHeaders: Record<string, string> = headers ? { 'X-Key': 'fake' } : {};
+    const { applyDeps } = setup({
+      createMcpServer,
+      transfer: async () => ({ secrets: { providers: [], builtinKeys: [], plugins: [], mcpServers: [{ id: 'docs', url, headers: transferHeaders, token: token === 'not-requested' ? null : 'fake-token' }] }, ssh: null }),
+    });
+    const result = await applySetupPlan({ plan, snapshot: current, keys: new Set(['mcp:docs', 'secrets']), approvedPluginKeys: new Set(), emit: () => {} }, applyDeps);
+    expect(createMcpServer).toHaveBeenCalledTimes(1);
+    expect(result.handledKeys).toEqual(['mcp:docs']);
+    expect(result.checklist.find((item) => item.id === 'mcp-token:docs')?.mcpCredentialsCopied === true).toBe(copied);
+    expect(result.results).toContainEqual({ key: 'mcp:docs', outcome: 'failed', code: 'INTERNAL' });
+    if (token === 'failed') expect(result.results).toContainEqual({ key: 'secrets', outcome: 'failed', code: 'CREDENTIAL_STORAGE_FAILED' });
+  });
+
+  it.each([{ keys: ['mcp:docs'] }, { keys: ['secrets'] }, { keys: [] }])('does not invent copy evidence for selection %j', async ({ keys }) => {
+    const current = snapshot({ transfer: 1, mcpServers: [{ id: 'docs', name: 'Docs', transport: 'http', url: 'https://example.test', headers: {}, hasToken: true, credentialKinds: { bearer: true, headers: false, url: false } }] });
+    const plan = buildSetupPlan(planInputs({ snapshot: current }));
+    const { deps, applyDeps } = setup({ transfer: async () => ({ secrets: { providers: [], builtinKeys: [], plugins: [], mcpServers: [] }, ssh: null }) });
+    const result = await applySetupPlan({ plan, snapshot: current, keys: new Set(keys), approvedPluginKeys: new Set(), emit: () => {} }, applyDeps);
+    expect(deps.createMcpServer).not.toHaveBeenCalled();
+    expect(result.checklist.some((item) => item.mcpCredentialsCopied)).toBe(false);
+    expect(result.checklist.some((item) => item.kind === 'mcp-token')).toBe(keys.includes('mcp:docs'));
   });
 });

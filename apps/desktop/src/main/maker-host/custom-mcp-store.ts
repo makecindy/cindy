@@ -13,7 +13,7 @@
  * （测试用 `setCurrentDbClient` 注入内存 db，见 __tests__）。
  */
 
-import { and, asc, eq, sql } from 'drizzle-orm';
+import { and, asc, eq, inArray, sql } from 'drizzle-orm';
 import { safeStorage } from 'electron';
 import { oauthSecureStorageAvailable } from '../plugin-oauth/identityStore.js';
 
@@ -239,6 +239,16 @@ export async function listCustomMcpServers(): Promise<CustomMcpConfig[]> {
     .from(customMcpServers)
     .orderBy(asc(customMcpServers.sortOrder), asc(customMcpServers.createdAt));
   return Promise.all(rows.map((row) => rowToConfig(row, db)));
+}
+
+/** Names for the source consent prompt: never load headers or upgrade legacy rows. */
+export async function listCustomMcpNamesForSetup(ids: readonly string[]): Promise<Array<{ id: string; name: string }>> {
+  if (ids.length === 0) return [];
+  return await getDbClient().drizzle
+    .select({ id: customMcpServers.id, name: customMcpServers.name })
+    .from(customMcpServers)
+    .where(inArray(customMcpServers.id, [...new Set(ids)]))
+    .orderBy(asc(customMcpServers.sortOrder), asc(customMcpServers.createdAt));
 }
 
 /** Secret-free generation markers for freezing a Bot task's MCP capability set. */

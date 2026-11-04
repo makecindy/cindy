@@ -207,3 +207,16 @@ describe('portable renderer preferences', () => {
     }
   });
 });
+
+// #6473 B2: handled MCP failures must not be retried by the renderer executor.
+// Unit tier, real applyRendererItems; old tests only exercised selected/unavailable items.
+// Minimal input: one ready MCP removed by Main's handled set. Not run in edit window.
+it('does not create a ready MCP excluded by the handled set', async () => {
+  const target = plan({ mcpServers: [{ key: 'mcp:docs', state: 'ready', server: { id: 'docs', name: 'Docs', transport: 'http', url: 'https://example.test/mcp', headers: {}, hasToken: true } }] });
+  const calls = api();
+  const handled = new Set(['mcp:docs']);
+  const keys = new Set(['mcp:docs'].filter((key) => !handled.has(key)));
+  const result = await applyRendererItems(target, keys, calls, () => {}, { completed: 2, total: 2 });
+  expect(result.results).toEqual([]);
+  expect(calls.createMcpServer).not.toHaveBeenCalled();
+});

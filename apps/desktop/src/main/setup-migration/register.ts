@@ -53,10 +53,10 @@ import { readDeviceLinkSettings } from '../device-link/settings-store.js';
 import { ownerScopedImSecrets } from '../im/ownerScopedStorage.js';
 import { createLogger } from '../logger.js';
 import { getActiveCatalog } from '../maker-host/active-catalog.js';
-import { listCustomMcpServers } from '../maker-host/custom-mcp-store.js';
+import { listCustomMcpNamesForSetup, listCustomMcpServers } from '../maker-host/custom-mcp-store.js';
 import { hydrateCustomProviderHeaders } from '../maker-host/custom-provider-header-secrets.js';
 import { listCustomProviders } from '../maker-host/custom-provider-store.js';
-import { createCustomMcpServerFromMain } from '../maker-ipc/mcpHandlers.js';
+import { createCustomMcpServerForSetup } from '../maker-ipc/mcpHandlers.js';
 import { createCustomProviderFromMain } from '../maker-ipc/providerHandlers.js';
 import { getPluginRegistry } from '../maker-host/index.js';
 import { desktopMakerLogger } from '../maker-host/logger-adapter.js';
@@ -73,6 +73,7 @@ import {
 } from '../remote-ssh/setupMigrationSsh.js';
 import {
   getProviderSecretStore,
+  providerSecretSavedForSetup,
   readCustomMcpToken,
   readCustomProviderKey,
 } from '../secrets/providerSecretStore.js';
@@ -137,6 +138,8 @@ function normalizeState(raw: unknown): PersistedSetupMigrationState {
                 ? { details: entry.details.filter((d): d is string => typeof d === 'string').slice(0, 8) }
                 : {}),
               ...(entry.done === true ? { done: true } : {}),
+              ...(entry.kind === 'mcp-token' && entry.mcpCredentialsCopied === true
+                ? { mcpCredentialsCopied: true as const } : {}),
             },
           ];
         }).slice(0, 200)
@@ -312,18 +315,16 @@ async function describeSetupSecrets(request: SetupTransferSecretsRequest): Promi
     }
   }
   if (request.mcpServers.length > 0) {
-    const wanted = new Set(request.mcpServers);
-    for (const server of await listCustomMcpServers()) if (wanted.has(server.id)) names.push(server.name);
+    for (const server of await listCustomMcpNamesForSetup(request.mcpServers)) names.push(server.name);
   }
-  const secretStore = getProviderSecretStore();
   for (const id of request.builtinKeys) {
-    if (SETUP_TRANSFER_BUILTIN_KEY_IDS.includes(id) && secretStore.has(id as ProviderSecretId)) {
+    if (SETUP_TRANSFER_BUILTIN_KEY_IDS.includes(id) && providerSecretSavedForSetup(id as ProviderSecretId)) {
       names.push(BUILTIN_SECRET_NAMES[id] ?? id);
     }
   }
   for (const ref of request.plugins) {
     const ghost = findGhost(ref.ghostId, ref.namespace);
-    if (ghost && Object.keys(readGhostUserSecretsForSetup(installedGhostStoragePart(ghost))).length > 0) {
+    if (ghost && hasGhostUserSecretsForSetup(installedGhostStoragePart(ghost))) {
       names.push(ghost.manifest.name);
     }
   }
@@ -447,7 +448,7 @@ export function registerSetupMigration(options: RegisterSetupMigrationOptions): 
           { deviceId, ...input },
         ),
       createProvider: async (config, keys) => ((await createCustomProviderFromMain(config, keys)).ok ? 'done' : 'skipped'),
-      createMcpServer: (config, token) => createCustomMcpServerFromMain(config, token),
+      createMcpServer: (config, token) => createCustomMcpServerForSetup(config, token),
       hasBuiltinKey: (id) => getProviderSecretStore().has(id as ProviderSecretId),
       storeBuiltinKey: (id, value) => getProviderSecretStore().set(id as ProviderSecretId, value),
       pluginInstanceKey: (ghostId, namespace) => {
@@ -535,7 +536,8 @@ export function registerSetupMigration(options: RegisterSetupMigrationOptions): 
             ? CUSTOM_PROVIDER_AGENTS.some((agent) => readCustomProviderKey(item.ref!, agent) !== null)
             : null;
         case 'mcp-token':
-          return item.ref ? readCustomMcpToken(item.ref) !== null : null;
+          // Unknown/failed copies remain actionable; manual and existing done are kept by service.
+          return item.mcpCredentialsCopied === true;
         case 'builtin-key':
           return item.ref && (PROVIDER_SECRET_IDS as readonly string[]).includes(item.ref)
             ? getProviderSecretStore().has(item.ref as ProviderSecretId)

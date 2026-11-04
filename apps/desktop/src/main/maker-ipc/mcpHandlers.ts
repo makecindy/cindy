@@ -12,6 +12,8 @@
  */
 
 import { z } from 'zod';
+import { extractIpcError } from '../../shared/ipcError.js';
+import type { IpcErrorCode } from '../../shared/ipc-errors.js';
 import { throwIpcError } from '../utils/ipcValidate.js';
 import type { CustomMcpListContext } from '../../shared/customMcp.js';
 import { BOT_MODEL_CHAIN_MAX, type BotModelRoute } from '../../shared/botModelChain.js';
@@ -71,6 +73,19 @@ const listContextSchema = z.object({
   })).min(1).max(BOT_MODEL_CHAIN_MAX).optional(),
 }).refine((value) => value.modelChain === undefined || value.botSessionId !== undefined);
 
+/** Internal receipt only; never returned by the public MCP create IPC. */
+export interface SetupMcpCreateReceipt {
+  configurationSaved: true;
+  token: 'not-requested' | 'saved' | 'failed';
+  refreshError: IpcErrorCode | null;
+}
+let mainProcessMcpSetupCreate: ((input: unknown, token: string | null) => Promise<SetupMcpCreateReceipt>) | null = null;
+
+export function createCustomMcpServerForSetup(input: unknown, token: string | null): Promise<SetupMcpCreateReceipt> {
+  if (!mainProcessMcpSetupCreate) throw new Error('MCP handlers are not registered');
+  return mainProcessMcpSetupCreate(input, token);
+}
+
 let mainProcessMcpCreate: ((input: unknown, token: string | null) => Promise<void>) | null = null;
 
 /**
@@ -115,7 +130,7 @@ export function registerMcpHandlers(registry: IpcHandlerRegistry, deps: McpHandl
     }
   }
 
-  async function createServer(input: unknown, token: string | null): Promise<void> {
+  async function createConfiguration(input: unknown): Promise<CustomMcpConfig> {
     const v = validateCustomMcpConfig(input, deps.getReservedMcpIds?.() ?? []);
     if (!v.ok) throwIpcError(v.code, v.message);
     const config = input as CustomMcpConfig;
@@ -123,6 +138,11 @@ export function registerMcpHandlers(registry: IpcHandlerRegistry, deps: McpHandl
       throwIpcError('ALREADY_EXISTS', `custom mcp '${config.id}' already exists`);
     }
     await createCustomMcpServer(config);
+    return config;
+  }
+
+  async function createServer(input: unknown, token: string | null): Promise<void> {
+    const config = await createConfiguration(input);
     // Like the settings page: a token that cannot be stored leaves the server to be completed there
     // (the one-time checklist keeps it until a token is saved).
     if (token) deps.storeMcpToken?.(config.id, token);
@@ -134,6 +154,25 @@ export function registerMcpHandlers(registry: IpcHandlerRegistry, deps: McpHandl
     return { ok: true };
   });
   mainProcessMcpCreate = createServer;
+  mainProcessMcpSetupCreate = async (input, token) => {
+    const config = await createConfiguration(input);
+    let tokenResult: SetupMcpCreateReceipt['token'] = 'not-requested';
+    if (token) {
+      try {
+        tokenResult = deps.storeMcpToken?.(config.id, token) === true ? 'saved' : 'failed';
+      } catch {
+        tokenResult = 'failed';
+      }
+    }
+    let refreshError: IpcErrorCode | null = null;
+    try {
+      await afterChange();
+    } catch (error) {
+      // Return only a registered code, never an exception message or credential value.
+      refreshError = extractIpcError(error)?.code ?? 'INTERNAL';
+    }
+    return { configurationSaved: true, token: tokenResult, refreshError };
+  };
 
   registry.handle(MAKER_INVOKE.MCP_CUSTOM_UPDATE, async (_event, input: unknown) => {
     const v = validateCustomMcpConfig(input, deps.getReservedMcpIds?.() ?? []);

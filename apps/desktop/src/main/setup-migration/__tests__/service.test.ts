@@ -9,6 +9,7 @@ import {
   type SetupMigrationServiceDeps,
 } from '../service.js';
 import { snapshot } from './fixtures.js';
+import type { SetupTransferApplyDeps } from '../transferApply.js';
 
 const device = (overrides: Partial<SetupDeviceFact> = {}): SetupDeviceFact => ({
   deviceId: 'dev-old',
@@ -54,7 +55,9 @@ function harness(overrides: Partial<SetupMigrationServiceDeps> = {}) {
     transfer: () => ({
       transfer: vi.fn(),
       createProvider: vi.fn(),
-      createMcpServer: vi.fn(),
+      createMcpServer: vi.fn<SetupTransferApplyDeps['createMcpServer']>(async () => ({
+        configurationSaved: true, token: 'not-requested', refreshError: null,
+      })),
       hasBuiltinKey: () => false,
       storeBuiltinKey: vi.fn(),
       pluginInstanceKey: () => null,
@@ -208,5 +211,57 @@ describe('setup migration service', () => {
     ]);
     const dismissed = await seeded.service.dismiss({ kind: 'checklist-item', id: 'ssh' });
     expect(dismissed.lastRun?.checklist.find((item) => item.id === 'ssh')?.done).toBe(true);
+  });
+});
+
+
+describe('MCP copy evidence through the service state boundary', () => {
+  // This is the real service/apply pipeline with JSON-only fake storage. It does not
+  // substitute for register.ts's private normalizeState or production live predicate.
+  it.each(['saved', 'failed'] as const)('persists receipt evidence for %s without treating a fixture as register verification', async (token) => {
+    let stored: PersistedSetupMigrationState = { lastRun: null, suggestionDismissed: false };
+    const live = vi.fn<SetupMigrationServiceDeps['checklistItemDone']>(() => false);
+    const source = snapshot({ transfer: 1, mcpServers: [{ id: 'docs', name: 'Docs', transport: 'http', url: 'https://example.test/mcp', headers: {}, hasToken: true, credentialKinds: { bearer: true, headers: true, url: false } }] });
+    const createMcpServer = vi.fn<SetupTransferApplyDeps['createMcpServer']>(async () => ({ configurationSaved: true, token, refreshError: null }));
+    const overrides: Partial<SetupMigrationServiceDeps> = {
+      invokeRemote: async (_device, request) => request.action === 'caps' ? { setupSnapshot: 1 } : source,
+      readState: () => JSON.parse(JSON.stringify(stored)) as PersistedSetupMigrationState,
+      writeState: async (next) => { stored = JSON.parse(JSON.stringify(next)) as PersistedSetupMigrationState; },
+      checklistItemDone: live,
+      transfer: () => ({
+        transfer: async () => ({ secrets: { providers: [], builtinKeys: [], plugins: [], mcpServers: [{ id: 'docs', url: 'https://example.test/mcp', headers: { 'X-Key': 'fake' }, token: 'fake-token' }] }, ssh: null }),
+        createProvider: vi.fn(), createMcpServer, hasBuiltinKey: () => false,
+        storeBuiltinKey: vi.fn(), pluginInstanceKey: () => null, storePluginSecrets: vi.fn(),
+        generateSshKey: vi.fn(), addSshHost: vi.fn(),
+      }),
+    };
+    const first = harness(overrides).service;
+    const plan = await first.preview('dev-old', 7);
+    const result = await first.apply({ planId: plan.planId, keys: ['mcp:docs', 'secrets'], approvedPluginKeys: [] }, 7, async () => true, () => {});
+    expect(result.handledKeys).toEqual(['mcp:docs']);
+    expect(createMcpServer).toHaveBeenCalledTimes(1);
+    expect(stored.lastRun?.checklist.find((item) => item.id === 'mcp-token:docs')?.mcpCredentialsCopied === true).toBe(token === 'saved');
+    const reloaded = harness(overrides).service;
+    expect((await reloaded.state()).lastRun?.checklist.find((item) => item.id === 'mcp-token:docs')?.mcpCredentialsCopied === true).toBe(token === 'saved');
+    if (token === 'failed') {
+      expect(result.results).toContainEqual({ key: 'secrets', outcome: 'failed', code: 'CREDENTIAL_STORAGE_FAILED' });
+      expect((await reloaded.state()).lastRun?.checklist.find((item) => item.id === 'mcp-token:docs')?.done).not.toBe(true);
+    }
+    await reloaded.dismiss({ kind: 'checklist-item', id: 'mcp-token:docs' });
+    live.mockClear();
+    expect((await reloaded.state()).lastRun?.checklist.find((item) => item.id === 'mcp-token:docs')?.done).toBe(true);
+    expect(live).not.toHaveBeenCalled();
+  });
+
+  it('keeps pre-existing done while unknown MCP items remain available for manual completion', async () => {
+    const state: PersistedSetupMigrationState = { suggestionDismissed: false, lastRun: { sourceName: 'Old', finishedAt: 1, checklist: [
+      { id: 'mcp-token:old', kind: 'mcp-token', label: 'Old', ref: 'old', done: true },
+      { id: 'mcp-token:unknown', kind: 'mcp-token', label: 'Unknown', ref: 'unknown' },
+    ] } };
+    const live = vi.fn<SetupMigrationServiceDeps['checklistItemDone']>(() => false);
+    const { service } = harness({ readState: () => state, checklistItemDone: live });
+    expect((await service.state()).lastRun?.checklist.map((item) => !!item.done)).toEqual([true, false]);
+    expect(live).toHaveBeenCalledTimes(1);
+    expect(live.mock.calls[0][0]).toMatchObject({ ref: 'unknown' });
   });
 });

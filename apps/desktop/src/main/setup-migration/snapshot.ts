@@ -281,6 +281,11 @@ function projectMcpServer(server: SourceMcpFact): SetupSnapshotMcpServer | null 
     url: url.value,
     headers: {},
     hasToken: server.hasToken || url.removed || Object.keys(server.headers).length > 0,
+    credentialKinds: {
+      bearer: server.hasToken,
+      headers: Object.keys(server.headers).length > 0,
+      url: url.removed,
+    },
   };
 }
 

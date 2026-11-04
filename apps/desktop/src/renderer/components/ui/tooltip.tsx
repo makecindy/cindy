@@ -42,7 +42,38 @@ const TooltipProvider = ({
   />
 );
 
-const TooltipRoot = TooltipPrimitive.Root;
+// 受控 open（行级 hover 浮层、按住展示等）的关闭全靠调用方复位,而 Radix 只在
+// trigger 收到 pointerleave / 失焦 / 点击时请求关闭。切到别的窗口后指针事件断在
+// 那边,trigger 收不到 leave,浮层就僵在屏幕上;窗口失活时替它请求一次关闭。
+// 未受控的浮层仍完全交给 Radix,行为不变。
+//
+// 这条关闭不经过 Radix 自己的 setOpen,所以 Provider 的 skipDelay 计时不会被重置:
+// 同一 Provider 下的下一次悬停会立即弹出、不再等 delayDuration。受控浮层本来就靠
+// 调用方改 open 关闭(点击 / Esc / 外部状态),这里不额外模拟 pointerleave 去驱动
+// Radix 的状态机。
+function TooltipRoot({
+  open,
+  onOpenChange,
+  ...props
+}: React.ComponentPropsWithoutRef<typeof TooltipPrimitive.Root>) {
+  const controlled = open !== undefined;
+  const onOpenChangeRef = React.useRef(onOpenChange);
+  onOpenChangeRef.current = onOpenChange;
+  React.useEffect(() => {
+    if (!controlled) return undefined;
+    const close = () => onOpenChangeRef.current?.(false);
+    const onVisibilityChange = () => {
+      if (document.visibilityState === 'hidden') close();
+    };
+    window.addEventListener('blur', close);
+    document.addEventListener('visibilitychange', onVisibilityChange);
+    return () => {
+      window.removeEventListener('blur', close);
+      document.removeEventListener('visibilitychange', onVisibilityChange);
+    };
+  }, [controlled]);
+  return <TooltipPrimitive.Root {...props} open={open} onOpenChange={onOpenChange} />;
+}
 const TooltipTrigger = TooltipPrimitive.Trigger;
 
 const TooltipContent = React.forwardRef<
@@ -124,6 +155,8 @@ export interface TipProps {
   forceOpen?: boolean;
   /** 受控开关。提供时优先于 forceOpen,用于需要明确关闭 tooltip 的拖拽态。 */
   controlledOpen?: boolean;
+  /** 受控开关的关闭请求(点别处 / Esc / 窗口失活);受控调用方必须据此复位,否则浮层关不掉。 */
+  onOpenChange?: (open: boolean) => void;
   /** Discard hover requests while temporarily controlled (e.g. recording). */
   resetHoverOnControlChange?: boolean;
   /** 自定义 Content 样式(覆盖默认宽度等) */
@@ -143,6 +176,7 @@ export const Tip = React.forwardRef<unknown, TipProps>(function Tip(props, forwa
     disabled,
     forceOpen,
     controlledOpen,
+    onOpenChange,
     resetHoverOnControlChange = false,
     contentClassName,
     ...rest
@@ -185,6 +219,9 @@ export const Tip = React.forwardRef<unknown, TipProps>(function Tip(props, forwa
         // A hover callback during forced display must not reopen a different
         // label when control returns to the pointer after recording stops.
         setHoverOpen(resetHoverOnControlChange && requestedOpen !== undefined ? false : next);
+        // 只回灌关闭请求。开关状态该由调用方自己的谓词决定,Radix 的打开请求写回去
+        // 会绕过它们(例如行内动作按钮上禁止弹行级浮层)。
+        if (!next) onOpenChange?.(false);
       }}>
         <TooltipTrigger
           asChild

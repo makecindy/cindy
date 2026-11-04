@@ -104,6 +104,8 @@ export interface SetupSnapshotMcpServer {
   headers: Record<string, string>;
   /** Credentials (token, request headers, URL user or query) must be entered again on the target. */
   hasToken: boolean;
+  /** Optional v1 facts; absent on older sources means unknown, not bearer-only. */
+  credentialKinds?: { bearer: boolean; headers: boolean; url: boolean };
 }
 
 export type SetupSnapshotProviderAuth = 'apiKey' | 'oauth' | 'native' | 'none';
@@ -361,6 +363,14 @@ function parseMcpServer(value: unknown): SetupSnapshotMcpServer | null {
       }
     }
   }
+  const rawKinds = value.credentialKinds;
+  const credentialKinds = isRecord(rawKinds)
+    && typeof rawKinds.bearer === 'boolean'
+    && typeof rawKinds.headers === 'boolean'
+    && typeof rawKinds.url === 'boolean'
+    && (rawKinds.bearer || rawKinds.headers || rawKinds.url) === (value.hasToken === true)
+    ? { bearer: rawKinds.bearer, headers: rawKinds.headers, url: rawKinds.url }
+    : undefined;
   return {
     id: value.id,
     name: boundedString(value.name, 200) ?? value.id,
@@ -368,6 +378,7 @@ function parseMcpServer(value: unknown): SetupSnapshotMcpServer | null {
     url,
     headers,
     hasToken: value.hasToken === true,
+    ...(credentialKinds ? { credentialKinds } : {}),
   };
 }
 

@@ -224,3 +224,24 @@ describe('fitSetupSnapshotBudget', () => {
     expect(() => fitSetupSnapshotBudget(big, new Set(), 10)).toThrow('SETUP_SNAPSHOT_TOO_LARGE');
   });
 });
+
+
+describe('MCP credential kind projection', () => {
+  it('keeps the legacy bit while projecting only non-secret kind facts', async () => {
+    const facts: SourceMcpFact[] = [
+      { id: 'bearer', name: 'Bearer', transport: 'http', url: 'https://example.test/mcp', headers: {}, hasToken: true },
+      { id: 'headers', name: 'Headers', transport: 'http', url: 'https://example.test/mcp', headers: { Authorization: 'fake-secret' }, hasToken: false },
+      { id: 'url', name: 'URL', transport: 'http', url: 'https://example.test/mcp?key=fake-secret', headers: {}, hasToken: false },
+      { id: 'both', name: 'Both', transport: 'http', url: 'https://example.test/mcp', headers: { 'X-Key': 'fake-secret' }, hasToken: true },
+    ];
+    const result = await collectSetupSnapshot(deps({ readMcpServers: async () => facts }));
+    expect(result.mcpServers.map((server) => [server.id, server.hasToken, server.credentialKinds])).toEqual([
+      ['bearer', true, { bearer: true, headers: false, url: false }],
+      ['headers', true, { bearer: false, headers: true, url: false }],
+      ['url', true, { bearer: false, headers: false, url: true }],
+      ['both', true, { bearer: true, headers: true, url: false }],
+    ]);
+    expect(JSON.stringify(result.mcpServers)).not.toContain('fake-secret');
+    expect(parseSetupSnapshot(JSON.parse(JSON.stringify(result))).mcpServers).toEqual(result.mcpServers);
+  });
+});

@@ -202,7 +202,14 @@ export function parseSetupSecretBundle(value: unknown): SetupSecretBundle {
       if (!isRecord(item) || !isId(item.id) || typeof item.url !== 'string' || item.url.length > 4096) return null;
       if (!/^https?:\/\//i.test(item.url)) return null;
       const token = typeof item.token === 'string' && item.token.length > 0 && item.token.length <= 16_384 ? item.token : null;
-      return { id: item.id, url: item.url, headers: stringMap(item.headers, 64, 256, 4096), token };
+      // Do not turn a partially filtered MCP credential into a successful copy.
+      if (item.token != null && token === null) return null;
+      if (item.headers != null && (!isRecord(item.headers) || Array.isArray(item.headers))) return null;
+      const rawHeaders = isRecord(item.headers) ? item.headers : {};
+      const headers = stringMap(rawHeaders, 64, 256, 4096);
+      if (Object.keys(headers).length !== Object.keys(rawHeaders).length
+        || Object.keys(rawHeaders).some((key) => key !== key.trim())) return null;
+      return { id: item.id, url: item.url, headers, token };
     }),
     builtinKeys: list(value.builtinKeys, SETUP_TRANSFER_LIMITS.builtinKeys, (item) => {
       if (!isRecord(item) || typeof item.id !== 'string' || !SETUP_TRANSFER_BUILTIN_KEY_IDS.includes(item.id)) return null;

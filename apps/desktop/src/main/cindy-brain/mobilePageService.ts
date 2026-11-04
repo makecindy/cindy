@@ -33,6 +33,7 @@ import {
 
 interface Page {
   desktopSettings?: true;
+  modelPickerRemoteSources?: boolean;
   documentEpoch?: number;
   documentId?: string;
   documentSources?: Set<string>;
@@ -614,6 +615,7 @@ export class MobilePluginPages {
     this.check(page);
     return {
       id: page.id,
+      supportsRemoteRoutes: page.modelPickerRemoteSources === true,
       isCurrent: () => {
         try {
           this.check(page);
@@ -926,6 +928,7 @@ export class MobilePluginPages {
             id: randomUUID(),
             plugin: id,
             controller: context.controllerDeviceId,
+            modelPickerRemoteSources: input.modelPickerRemoteSources === true,
             revision: this.deps.revision(ghost),
             currentOwner: this.deps.captureOwner(),
             currentController: this.deps.captureController(context.controllerDeviceId),
@@ -976,6 +979,7 @@ export class MobilePluginPages {
             id: randomUUID(),
             plugin: id,
             controller: context.controllerDeviceId,
+            modelPickerRemoteSources: input.modelPickerRemoteSources === true,
             revision: this.deps.revision(ghost),
             currentOwner: this.deps.captureOwner(),
             currentController: this.deps.captureController(context.controllerDeviceId),

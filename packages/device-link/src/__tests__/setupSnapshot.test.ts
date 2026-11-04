@@ -154,3 +154,39 @@ describe('setup snapshot protocol', () => {
     ).toEqual([{ name: 'acme', url: 'https://github.com/acme/market.git', ref: 'main', sparsePaths: ['plugins'] }]);
   });
 });
+
+
+describe('optional v1 MCP credential kinds', () => {
+  it.each([
+    undefined,
+    null,
+    {},
+    { bearer: true, headers: false },
+    { bearer: 'true', headers: false, url: false },
+    { bearer: false, headers: false, url: false },
+  ])('keeps missing, malformed or contradictory kinds unknown: %j', (credentialKinds) => {
+    const server = { id: 'docs', name: 'Docs', transport: 'http', url: 'https://example.test', headers: {}, hasToken: true };
+    const parsed = parseSetupSnapshot({ ...base, mcpServers: [{ ...server, credentialKinds }] });
+    expect(parsed.version).toBe(1);
+    expect(parsed.mcpServers).toEqual([server]);
+    expect(Object.hasOwn(parsed.mcpServers[0], 'credentialKinds')).toBe(false);
+  });
+
+  it.each([
+    { bearer: true, headers: false, url: false },
+    { bearer: false, headers: true, url: false },
+    { bearer: false, headers: false, url: true },
+    { bearer: true, headers: true, url: false },
+    { bearer: false, headers: false, url: false },
+  ])('preserves complete consistent facts without a version change: %j', (credentialKinds) => {
+    const hasToken = credentialKinds.bearer || credentialKinds.headers || credentialKinds.url;
+    const server = { id: 'docs', name: 'Docs', transport: 'http', url: 'https://example.test', headers: {}, hasToken, credentialKinds };
+    expect(parseSetupSnapshot({ ...base, mcpServers: [server] }).mcpServers).toEqual([server]);
+  });
+
+  it('does not invent kinds for an old snapshot that also lacks hasToken', () => {
+    const parsed = parseSetupSnapshot({ ...base, mcpServers: [{ id: 'docs', transport: 'http', url: 'https://example.test' }] });
+    expect(parsed.mcpServers[0]).toMatchObject({ hasToken: false });
+    expect(parsed.mcpServers[0].credentialKinds).toBeUndefined();
+  });
+});

@@ -194,6 +194,11 @@ export interface BotGroupMessageView {
   threadUnread?: BotGroupThreadUnread;
   /** A main-chat message that re-posts an existing thread reply by reference. */
   threadShare?: BotGroupThreadShareView;
+  /**
+   * Your own message in a group whose server reports read receipts: another human member has
+   * read it (the double check). Omitted otherwise; never set on other people's messages.
+   */
+  readByOthers?: boolean;
 }
 
 /** Unread replies of one Thread; `mentioned` when one of them names this reader. */
@@ -549,6 +554,12 @@ export interface BotGroupDetail extends BotGroupSummary {
   reactionRevisions?: Record<string, number>;
   /** Oldest first. */
   messages: BotGroupMessageView[];
+  /**
+   * The server reports who has read a message (bot-group-chat.md「消息已读」): own messages show
+   * a single or double check, and the read list can be opened. Not `supportsReadReceipts`, which is
+   * about a phone reporting its own reading through this computer.
+   */
+  supportsMessageReaders?: boolean;
   /** Authorized current failures, independent of message pagination. Local/older hosts omit this. */
   executionFailures?: BotGroupExecutionFailureView[];
   /** Current state of shares the reader listed in `shownShares`, keyed by the share's message ID. */
@@ -733,6 +744,7 @@ export type BotGroupRemoteActionId =
   | 'notifications'
   | 'mask'
   | 'mask-mentions'
+  | 'readers'
   | 'send'
   | 'continue'
   | 'stop'
@@ -869,6 +881,20 @@ export interface ChatMaskMention {
 }
 /** One reacting actor. `name` is null when the group has no member record for it. */
 export interface ChatReactor { actorId: string; name: string | null; isSelf: boolean; formerMember: boolean }
+/** One member on a message's read list; `readAt` is null when the server knows the read but not its time. */
+export interface BotGroupMessageReader { actorId: string; name: string | null; readAt: number | null; formerMember: boolean }
+/** Who has read one message of a group (bot-group-chat.md「消息已读」). Only the readers are listed, never who has not. */
+export interface BotGroupMessageReaders {
+  messageId: string;
+  /** Human members other than the author who can see the message. */
+  eligibleCount: number;
+  /** How many of them have read it; matches `readers` when the list is given. */
+  readCount: number;
+  /** False in a very large group: only the two counts are given and `readers` is empty. */
+  listed: boolean;
+  /** In the order the server gives (who read first); a read without a time comes last. */
+  readers: BotGroupMessageReader[];
+}
 export interface ChatInvitePreview {
   groupId: string; name: string; inviterName: string; expiresAt: string | null; joined: boolean;
   /** Omitted by old servers, whose links remain dated and single-use. */
@@ -922,6 +948,11 @@ export interface ChatServerApi {
    */
   shareToMain(input: { groupId: string; messageId: string }): Promise<ChatServerResult<{ messageId: string | null; alreadyShared: boolean }>>;
   react(input: { groupId: string; messageId: string; emoji: string; present: boolean }): Promise<ChatServerResult<Record<never, never>>>;
+  /**
+   * Read-only: who has read a message. Answers `GROUP_TOO_LARGE` when the group has too many
+   * members to list. Only servers that report `messageReaders` answer.
+   */
+  readers(input: { groupId: string; messageId: string }): Promise<ChatServerResult<{ readers: BotGroupMessageReaders }>>;
   /** Read-only: who added one emoji to a message. Names use the group member projection. */
   reactors(input: { groupId: string; messageId: string; emoji: string }): Promise<ChatServerResult<{ reactors: ChatReactor[] }>>;
   createInvite(input: { groupId: string; clientId: string }): Promise<ChatServerResult<{ link: string; expiresAt: string | null; reusable?: boolean }>>;

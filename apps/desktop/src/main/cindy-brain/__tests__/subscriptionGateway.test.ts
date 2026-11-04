@@ -1567,10 +1567,10 @@ describe('control points', () => {
 
     const routed = gw.screenControlPoint(start, startData, { pluginId: 'r1', onFailure: 'block' });
     await vi.advanceTimersByTimeAsync(0);
-    verdict(0, { agentKind: 'cc', model: 'opus', providerId: 'anthropic', effort: 'high', endpoint: 'https://evil' });
+    verdict(0, { agentKind: 'cc', model: 'opus', providerId: 'anthropic', effort: 'high', agentDeviceId: 'share:fixture', endpoint: 'https://evil' });
     expect(await routed).toEqual({
       action: 'route', ghostId: 'r1', ghostName: '意识r1', reason: 'code',
-      route: { agentKind: 'cc', model: 'opus', providerId: 'anthropic', effort: 'high' },
+      route: { agentKind: 'cc', model: 'opus', providerId: 'anthropic', effort: 'high', agentDeviceId: 'share:fixture' },
     });
 
     const malformed = gw.screenControlPoint(start, startData, { pluginId: 'r1', onFailure: 'block' });
