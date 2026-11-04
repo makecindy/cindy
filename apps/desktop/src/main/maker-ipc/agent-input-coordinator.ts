@@ -877,6 +877,8 @@ interface SessionInputState {
   generation: number;
   /** Latest authoritative `/clear` token for device-link optimistic input preconditions. */
   clearBoundaryMs: number | null;
+  /** Retained after completion so a later completed input cannot reuse old authority. */
+  acceptedInputRevision: number;
 }
 
 interface PendingAutoResumeRecovery {
@@ -898,6 +900,7 @@ function createInitialInputState(
   fencedStaleTerminal: { instanceId: string; generation: number } | null = null,
 ): SessionInputState {
   return {
+    acceptedInputRevision: 0,
     lastUserActionAt: null,
     pendingQueue: [],
     pendingCompacts: [],
@@ -1366,6 +1369,17 @@ export class AgentInputCoordinator {
       originKind: item.origin?.kind,
       orcaSenderSessionId: item.origin?.kind === 'orca' ? item.origin.senderSessionId : undefined,
       retrySourceClientId: item.retrySourceClientId ?? item.supersedesUserClientId };
+  }
+
+  /** Host-only proof that the captured input finished without replacement or Stop. */
+  captureInputCompletionGuard(sessionId: string): (() => boolean) | undefined {
+    const state = this.states.get(sessionId);
+    if (!state?.activeTurn?.item) return undefined;
+    const revision = state.acceptedInputRevision;
+    const signal = this.getInputAbortSignal(sessionId, state.generation);
+    return () => this.states.get(sessionId) === state && !signal.aborted &&
+      state.acceptedInputRevision === revision && state.activeTurn === null &&
+      state.error === null && state.recovery === null;
   }
 
   /** Account-scoped tools use the task's account; shared guests keep their own identity. */
@@ -1932,6 +1946,7 @@ export class AgentInputCoordinator {
     }
     item = stampHostAcceptedAt(item, state.clearBoundaryMs);
     this.rememberEnqueuedClientId(state, item.clientId);
+    state.acceptedInputRevision++;
     // 真的有一条**新**消息进队了 = 这个会话被别的内容推进(见 deps.onUserEnqueue)。
     // 必须放在幂等去重**之后**: 被去重丢弃的重传(弱网 / 移动端补发)压根没推进任何
     // 东西, 若在它上面作废记账, 一条延迟到达的旧重传就会把之后才装上的、更新的那笔
@@ -2118,6 +2133,7 @@ export class AgentInputCoordinator {
 
     item = stampHostAcceptedAt(item, state.clearBoundaryMs);
     this.rememberEnqueuedClientId(state, item.clientId);
+    state.acceptedInputRevision++;
     this.cancelPreparedAutoResume(sessionId, state);
     this.deps.onAutomaticEnqueue?.(sessionId, item);
     state.autoResumePending = null;
@@ -2176,6 +2192,7 @@ export class AgentInputCoordinator {
       userName: opts?.userName,
       waitForClientIds: state.pendingQueue.map((item) => item.clientId),
     };
+    state.acceptedInputRevision++;
 
     if (
       this.isDispatchBoundaryBusy(sessionId, state) ||
@@ -2223,6 +2240,7 @@ export class AgentInputCoordinator {
       vendorTurnGeneration: null,
     };
     state.activeTurn = active;
+    state.acceptedInputRevision++;
     this.emit(sessionId);
 
     try {
@@ -2945,6 +2963,7 @@ export class AgentInputCoordinator {
     const sameVendorTurn =
       steerVendorTurnGeneration !== null &&
       this.deps.getTurnGeneration?.(sessionId) === steerVendorTurnGeneration;
+    accepted.acceptedInputRevision++;
     accepted.activeTurn = {
       // Only accepted steering participates. Pending/rejected delivery cannot claim an unrelated final.
       replyInputClientIds: sameVendorTurn
@@ -5085,6 +5104,7 @@ export class AgentInputCoordinator {
       vendorTurnGeneration: null,
     };
     state.activeTurn = active;
+    state.acceptedInputRevision++;
     this.emit(sessionId);
 
     let appMessageGuardRejected = false;

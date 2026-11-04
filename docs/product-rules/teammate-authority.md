@@ -24,7 +24,7 @@
 | 授予常驻指令 | `routine_save` 新建启用的自定义规则或改写启用规则的指令；禁用草稿和不改指令的编辑沿原权限 |
 | 删除自动化 | `routine_delete`、`schedule_delete` |
 | 代用户回答权限请求 | `message_session_task` 携带 `decision` |
-| 恢复暂停执行 | `message_session_task(mode=resume)`、`schedule_resume`，以及 `routine_save` 将已有停用规则保存为启用（含内置规则），以及 `routine_run_now` 手动执行停用规则；`set_teammate_capability(kind=feature, joined=true)` 重新打开主人关掉的记忆或系统技能 |
+| 恢复暂停执行 | `message_session_task(mode=resume)`、`schedule_resume`、`update_goal` 改写暂停、受阻或用量受限目标并恢复执行，以及 `routine_save` 将已有停用规则保存为启用（含内置规则），以及 `routine_run_now` 手动执行停用规则；`set_teammate_capability(kind=feature, joined=true)` 重新打开主人关掉的记忆或系统技能 |
 
 其余操作不命中风险表就继续现有权限流程。新增普通工具不需要另开“自主解锁”例外。
 主人输入、已核实的主人转达和受托指令沿正常权限审核，不再加第二张行动确认卡。
@@ -36,6 +36,8 @@
 自主创建启用的自定义指令或改写启用规则指令，必须经一次性本人确认才可作为后续 entrusted 执行的常驻授权，不能靠保存制造主人授权。
 停用草稿可普通保存；启用或手动执行前须确认完整指令。手动执行许可仅限这一次，不改变规则的停用状态。
 指令授权、恢复和手动执行许可绑定规则版本；确认期间修改规则会使旧许可失效，执行沿服务已有原子版本检查。
+自主 `update_goal` 的恢复确认绑定当前目标正文与状态；确认期间或控制器等待期间目标变化时，旧许可失效。活跃目标编辑、不改正文，以及主人或受托输入仍沿正常任务权限流程。
+已准入的目标恢复可以等待发起输入正常结束；协调器保留输入代次，后续输入即使也已结束，仍使旧恢复许可失效。停止、清空、账号或权限变化也继续使许可失效。
 
 ## 等待、决定与恢复
 

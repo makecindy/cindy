@@ -99,6 +99,8 @@ function captureScheduledRuntime(
 export function createDesktopTaskActionAuthorizer(deps: {
   input(sessionId: string): {
     key: string;
+    /** Coordinator proof of normal completion, invalidated by replacement input or Stop. */
+    isInputCompleted?: () => boolean;
     ownerInput: boolean;
     /** Automatic resume/retry of the owner's own input (teammate principal only). */
     ownerContinuation?: boolean;
@@ -120,6 +122,7 @@ export function createDesktopTaskActionAuthorizer(deps: {
   captureRoutine(botId: string, id: string, forExecution?: boolean): Promise<TaskActionRoutineSnapshot | undefined>;
   getSessionWorkDir(sessionId: string): Promise<string | undefined>;
   getScheduleDefinition(id: string, hookInstallation?: { workingDir?: string }, device?: string): Promise<TaskActionScheduleDefinition | null>;
+  getGoal(sessionId: string): Promise<Exclude<TaskActionScope['goal'], undefined>>;
 }): ToolCallAuthorizer {
   return isolateTaskActionAuthorizer(async (call) => {
     // Per invocation: a concurrent automatic call must never inherit owner evidence.
@@ -248,6 +251,10 @@ export function createDesktopTaskActionAuthorizer(deps: {
           ? scheduleIdArg : undefined;
         const schedule = scheduleId ? await deps.getScheduleDefinition(scheduleId, hookInstallation, scheduleDevice) : undefined;
         const scheduleSignature = JSON.stringify(schedule);
+        const goal = principal === 'autonomous' && runtimePermissionApplies &&
+          call.server === 'cindy_helper' && call.tool === 'update_goal'
+          ? await deps.getGoal(sessionId) : undefined;
+        const goalSignature = JSON.stringify(goal);
         const readDelegation = async (rechecking = false) => {
           if (
             !taskId ||
@@ -362,7 +369,7 @@ export function createDesktopTaskActionAuthorizer(deps: {
           group?.assertCurrent();
           assertSameOwner('OWNER_SCOPE_CHANGED');
         };
-        const assertCurrentSync = () => {
+        const assertCurrentSync = (allowInputCompletion = false) => {
           runtime?.assertInputCurrent();
           group?.assertCurrent();
           assertPermissionCurrent();
@@ -371,7 +378,8 @@ export function createDesktopTaskActionAuthorizer(deps: {
           const current = deps.input(sessionId);
           if (
             isAppSessionBoundaryPending() || db !== tryGetDbClient() ||
-            current.boundary !== input.boundary || current.key !== input.key
+            current.boundary !== input.boundary ||
+            (current.key !== input.key && !(allowInputCompletion && input.isInputCompleted?.()))
           ) throw new Error('TASK_ACTION_AUTHORIZATION_EXPIRED');
         };
         const scope: TaskActionScope = {
@@ -381,9 +389,11 @@ export function createDesktopTaskActionAuthorizer(deps: {
           ...(routine && routineBotId && routineId
             ? { routine: { botId: routineBotId, id: routineId, revision: routine.revision } } : {}),
           ...(schedule?.mutationGuard ? { scheduleGuard: schedule.mutationGuard } : {}),
+          ...(goal !== undefined ? { goal } : {}),
           delegated: !!delegation || !!orcaTeam,
           assertDeliveryCurrent,
           assertCurrentSync,
+          assertContinuationCurrentSync: () => assertCurrentSync(true),
           assertCurrent: async () => {
             if (fingerprint !== taskActionFingerprint(call))
               throw new Error('TASK_ACTION_AUTHORIZATION_EXPIRED');
@@ -391,6 +401,8 @@ export function createDesktopTaskActionAuthorizer(deps: {
             if ((helperInstallation || helperCreation) && await deps.getSessionWorkDir(sessionId) !== helperWorkDir)
               throw new Error('TASK_ACTION_AUTHORIZATION_EXPIRED');
             if (scheduleId && JSON.stringify(await deps.getScheduleDefinition(scheduleId, hookInstallation, scheduleDevice)) !== scheduleSignature)
+              throw new Error('TASK_ACTION_AUTHORIZATION_EXPIRED');
+            if (goal !== undefined && JSON.stringify(await deps.getGoal(sessionId)) !== goalSignature)
               throw new Error('TASK_ACTION_AUTHORIZATION_EXPIRED');
             if (routineExecution && routineBotId && routineId &&
               JSON.stringify((await deps.captureRoutine(routineBotId, routineId, true))?.details) !== routineSignature)
@@ -403,7 +415,7 @@ export function createDesktopTaskActionAuthorizer(deps: {
         // keeps the caller principal and admits only this invocation. Reviewed active
         // routine instructions can become the standing grant for later routine runs.
         const risk = principal === 'autonomous' ? taskActionRisk(call, { routineEnabled: routine?.enabled, routinePrompt: routine?.prompt,
-          routineBuiltin: routine?.builtin, routinePreRunCommand: routine?.preRunCommand, schedule }) : undefined;
+          routineBuiltin: routine?.builtin, routinePreRunCommand: routine?.preRunCommand, schedule, goal }) : undefined;
         const scheduleForConfirmation = schedule
           ? (({ mutationGuard: _mutationGuard, ...display }) => display)(schedule)
           : undefined;
@@ -411,6 +423,7 @@ export function createDesktopTaskActionAuthorizer(deps: {
           await scope.assertCurrent();
           const confirmed = await deps.confirm(sessionId, call.tool, structuredClone(call.args),
             { server: call.server, risk, ...(permissionTarget ? { details: permissionTarget.details }
+              : goal ? { details: { goal } }
               : helperInstallation ? { details: { installation: { workingDir: helperWorkDir ?? null } } }
               : helperCreation ? { details: { execution: { mode: 'agent', newTaskPermissionMode: 'bypassPermissions', workingDir: helperWorkDir ?? null } } }
               : risk === 'command' && taskActionStartsIndependentAgent(call, schedule)
