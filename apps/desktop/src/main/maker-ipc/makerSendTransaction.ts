@@ -277,10 +277,9 @@ type MakerSendOptions = {
   /** Host-owned per-turn lifecycle correlation; maker-core stamps it on AgentEvent. */
   turnAttemptToken?: number;
   /**
-   * Direct Continue fallback only: acknowledge the interrupted marker on the
-   * executor after vendor dispatch is irreversible. The executor must own the
-   * timestamp so device-link controller/controlled clock skew cannot corrupt
-   * active_turn_started_at > last_turn_ended_at ordering.
+   * Legacy Continue hint retained for older controllers. Every accepted send now
+   * acknowledges the old interrupted marker on the executor, including ordinary
+   * input; controllers must never supply the acknowledgement timestamp.
    */
   ackInterruptedTurnOnDispatch?: boolean;
   signal?: AbortSignal;
@@ -543,6 +542,7 @@ export interface MakerSendTransactionDeps {
    * session-agent-switch:pending 交接读取(agentHandoff 注册表)。命中时把交接
    * 文本前置进 wire payload(不影响 persistUserMessage 落库显示内容),并在
    * dispatch 跨过不可逆边界(accepted)后 consume;未 accepted / 抛错保留 pending。
+   * 原生命令不附带交接，也不消费；留到下一条可注入上下文的消息。
    */
   peekPendingHandoff?(sessionId: string): Promise<string | null>;
   consumePendingHandoff?(sessionId: string): void;
@@ -1446,7 +1446,7 @@ export function createMakerSendTransaction(deps: MakerSendTransactionDeps): Make
         await cleanupRejectedMaterialization();
         throw err;
       }
-      // session-agent-switch:切换后的首条消息把交接前缀拼进 wire payload。
+      // session-agent-switch:切换后首条可附带上下文的消息注入交接。
       // 落库/显示内容(persistUserMessage.content)不含交接段——display 与 sent 分离。
       const workdirRecoveryNote = shouldPrependMobileClientPromptNote(normalized, sess.agentKind)
         ? deps.peekWorkingDirectoryRecoveryNote?.(sessionId, sess.workDir) ?? null
@@ -1454,7 +1454,11 @@ export function createMakerSendTransaction(deps: MakerSendTransactionDeps): Make
       const withRecoveryNote = workdirRecoveryNote
         ? prependNoteToWireUserMessage(normalized as HandoffWireMessage, workdirRecoveryNote)
         : normalized;
-      const pendingHandoff = (await deps.peekPendingHandoff?.(sessionId)) ?? null;
+      // Native commands must lead the provider input. Defer the handoff rather
+      // than discarding it or consuming it when only the command is accepted.
+      const pendingHandoff = shouldPrependMobileClientPromptNote(normalized, sess.agentKind)
+        ? (await deps.peekPendingHandoff?.(sessionId)) ?? null
+        : null;
       // 原生压缩后的账本刷新:交接首条已含账本时不重复(但同样在 accepted 后消费当时那一代)。
       const workingMemoryRefresh = shouldPrependMobileClientPromptNote(normalized, sess.agentKind)
         ? ((await deps.peekWorkingMemoryRefresh?.(sessionId).catch(() => null)) ?? null)
@@ -1844,9 +1848,7 @@ export function createMakerSendTransaction(deps: MakerSendTransactionDeps): Make
         // Capture on the executor immediately before vendor code. sess.send may
         // synchronously publish the continuation's new started marker before it
         // resolves, so the old-turn ack must use this strictly earlier value.
-        const interruptedAckAt = so.ackInterruptedTurnOnDispatch
-          ? Math.max(0, Date.now() - 1)
-          : null;
+        const interruptedAckAt = Math.max(0, Date.now() - 1);
         const retryTranscriptUserEntryId = sess.agentKind === 'pi' && so.retryUserClientId
           ? await deps.readPiUserEntry?.(sessionId, so.retryUserClientId)
           : undefined;
@@ -2066,7 +2068,10 @@ export function createMakerSendTransaction(deps: MakerSendTransactionDeps): Make
           await rewindPersistedUserMessageAfterClearIfStale();
           await cleanupRejectedMaterialization();
         }
-        if (sendResult.accepted && interruptedAckAt !== null) {
+        // Ordinary input (queued, direct, or remote) also replaces the previous
+        // interruption. onAccepted alone is insufficient: dispatch can still be
+        // cancelled before the vendor actually starts.
+        if (sendResult.accepted) {
           try {
             await deps.ackInterruptedTurnDispatched?.(sessionId, interruptedAckAt);
           } catch (err) {

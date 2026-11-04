@@ -76,6 +76,12 @@ export function createRemoteProfileStore(deviceId: string, botId: string, accept
         ...(capabilityBaseline ? { capabilityBaseline } : {}),
         ...(profilePatch.avatar !== undefined ? { expectedAvatar: before.avatar } : {}),
       };
+      if (Array.isArray(profilePatch.capabilities?.modelChain)) {
+        // The chain carries every execution location. Its scalar mirror is
+        // host-derived; older settings hosts reject that newer top-level field.
+        const { agentDeviceId: _locationMirror, ...capabilities } = profilePatch.capabilities;
+        body.capabilities = capabilities;
+      }
       let saved = 0;
       try {
         let raw: unknown;

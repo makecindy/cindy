@@ -1,4 +1,5 @@
 import { resolveCopilotAccountUrl } from './copilot-account-url.js';
+import { issueModelSourceSnapshot, modelSourceRequestSignature } from './model-source-snapshots.js';
 import { collectModelDiscoveryPages } from './model-discovery-pages.js';
 import { providerOAuthContract } from '@cindy/model-providers';
 import { isOpenRouterModelsUrl, type DiscoveredModel } from '@cindy/model-providers';
@@ -887,7 +888,9 @@ export async function discoverGenericOAuthModels(
     if (!page.ok) { await page.body?.cancel(); throw new Error('catalog page failed'); }
     return page.json();
   });
-  return isCurrent() ? models : null;
+  return isCurrent() && models
+    ? issueModelSourceSnapshot(models, agent ?? 'claude-code', modelSourceRequestSignature(url, { headers }))
+    : null;
 }
 
 

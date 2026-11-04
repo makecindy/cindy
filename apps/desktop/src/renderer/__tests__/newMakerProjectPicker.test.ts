@@ -1492,10 +1492,18 @@ describe('Shared create project picker', () => {
       chatInputSource.indexOf("id: 'add-extra-dir'"),
       chatInputSource.indexOf('if (remoteComposerGhosts.failed)'),
     );
-    expect(directoryAction).toContain('extraDirs: currentWritableDirs');
-    expect(directoryAction).toContain('otherDirs: currentExtraDirs');
-    expect(directoryAction).toContain('writableGrantScope,');
-    expect(directoryAction).toContain('onChange: onWritableDirsChange');
+    // The gated action only opens the add-directory page; both of its add paths (recent list
+    // and system picker) write the writable group with the task-bound grant scope.
+    expect(directoryAction).toContain('run: () => openAddDirectoryViewRef.current()');
+    const directoryHandlers = chatInputSource.slice(
+      chatInputSource.indexOf('const handleAddRecentDir = useCallback('),
+      chatInputSource.indexOf('// ── Send / Stop wiring'),
+    );
+    expect(directoryHandlers).toContain('writableDirs: writableDirs ?? []');
+    expect(directoryHandlers).toContain('extraDirs: writableDirs ?? []');
+    expect(directoryHandlers.match(/otherDirs: extraDirs \?\? \[\]/g)).toHaveLength(2);
+    expect(directoryHandlers.match(/writableGrantScope,/g)?.length).toBeGreaterThanOrEqual(2);
+    expect(directoryHandlers.match(/onChange: onWritableDirsChange/g)).toHaveLength(2);
     expect(chatInputSource).not.toContain("id: 'add-writable-dir'");
     expect(chatInputSource).toMatch(
       /hasReferenceDirs=\{\s*!settingsLocked\s*&&\s*\(onExtraDirsChange !== undefined \|\| onWritableDirsChange !== undefined\)\s*\}/,

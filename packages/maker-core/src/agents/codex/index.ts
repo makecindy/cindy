@@ -3412,6 +3412,8 @@ assertRouteCurrent();
         model: opts?.model ?? 'gpt-5.4-mini',
         approvalPolicy: 'never',
         sandbox: 'read-only', // kebab-case (v2.rs SandboxMode)
+        // Auxiliary title/summary calls must not start a native Goal loop either.
+        config: { 'features.goals': false },
         ...(developerInstructions ? { developerInstructions } : {}),
       } as ThreadStartParams);
       const threadId = startResp.thread.id;
@@ -5570,6 +5572,11 @@ assertRouteCurrent();
     // 受邀者(另一个账号)不读本机用户的技能停用偏好(本机技能在上面已整体关闭)。
     const disabledSkillPaths = opts.remoteHostId || opts.botRuntimeProfile || reviewMode || hostedGuest
       ? [] : [...(this.deps.getDisabledSkillPaths?.() ?? [])];
+    // 任务所在电脑提供了托管技能(已作为项目技能放在影子目录)：共用 CODEX_HOME 里本机的那份对这个线程停用。
+    if (hosted?.controllerManagedSkills && !hostedGuest && !reviewMode) {
+      for (const skill of await this.deps.getManagedSkills?.() ?? []) if (skill.path) disabledSkillPaths.push(skill.path);
+      assertCurrentHost('Local Skill configuration');
+    }
     const disabledSkillLaunch = snapshotDisabledSkillLaunch(disabledSkillPaths);
     const disabledSkillSnapshot = disabledSkillLaunch.identities;
     if (disabledSkillPaths.length > 0) {

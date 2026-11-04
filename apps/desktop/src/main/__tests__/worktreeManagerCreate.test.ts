@@ -160,6 +160,28 @@ describe('createWorktree naming authority', () => {
     await vi.waitFor(() => expect(checkoutLease.release).toHaveBeenCalledExactlyOnceWith({}));
   });
 
+  // A caller that hands the directory to a running agent must not get it before the tree is complete.
+  it('awaitFullCheckout returns only after the full checkout, and fails with a rollback if it fails', async () => {
+    const previousGit = gitExecMock.getMockImplementation()!;
+    let finishCheckout!: (fail: boolean) => void;
+    const checkout = new Promise<{ stdout: string; stderr: string }>((resolve, reject) => {
+      finishCheckout = (fail) => (fail ? reject(new Error('checkout failed')) : resolve({ stdout: '', stderr: '' }));
+    });
+    gitExecMock.mockImplementation((args: string[], ...rest: unknown[]) => {
+      if (args[0] === 'checkout' && args.includes(':(exclude).sivi')) return checkout;
+      return previousGit(args, ...rest);
+    });
+    let settled = false;
+    const creating = manager.createWorktree({ sessionId: 'full-checkout', baseRepo, name: 'full', sourceBranch: 'main' }, { awaitFullCheckout: true })
+      .finally(() => { settled = true; });
+    await vi.waitFor(() => expect(gitExecMock.mock.calls.some(([args]) => args[0] === 'checkout' && args.includes(':(exclude).sivi'))).toBe(true));
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(settled).toBe(false);
+    finishCheckout(true);
+    await expect(creating).resolves.toMatchObject({ ok: false });
+    expect(gitExecMock.mock.calls.some(([args]) => args[0] === 'worktree' && args[1] === 'remove')).toBe(true);
+  });
+
   // Worker failure compensation must wait for checkout; successful creation must not.
   // Existing lease tests do not exercise the new opt-in wait handle (unit tier, fake I/O).
   it.each([false, true])('tracks checkout without delaying success; setup failure=%s waits before rollback', async (failSetup) => {

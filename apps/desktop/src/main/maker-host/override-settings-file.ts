@@ -356,6 +356,92 @@ export function createOverrideSettingsFile<T>(options: {
   }
 }
 
+/**
+ * Narrow handle for new-computer setup (docs/product-rules/new-device-setup-migration.md):
+ * read only the values the user changed here, and apply another computer's changed values
+ * through this store's own normalize/merge rules and atomic write. Excluded keys (absolute
+ * paths, device-bound values) are neither exported nor accepted.
+ */
+export interface PortableOverrideSettings {
+  /** Values the user changed on this computer (normalized), minus excluded keys. */
+  readCustomized(): Record<string, unknown>;
+  /**
+   * Writes another computer's changed values; the store still normalizes every key.
+   * `select` runs inside this store's cross-process write lock and receives the values
+   * customized here at that moment, so a key changed after the preview (in any process) is
+   * never overwritten. Resolves whether anything was written.
+   */
+  applyPatch(select: (customizedHere: Record<string, unknown>) => Record<string, unknown>): Promise<boolean>;
+}
+
+/** Thrown inside the write lock to leave the file untouched when nothing remains to write. */
+class NothingToWrite extends Error {}
+
+const PORTABLE_SETTINGS_KEY_RE = /^[A-Za-z][A-Za-z0-9_]{0,127}$/;
+
+export function portableOverrideSettings<T>(
+  file: OverrideSettingsFile<T> | (() => OverrideSettingsFile<T>),
+  options: {
+    omitKeys?: readonly string[];
+    /**
+     * Keys this store accepts that its defaults leave out (optional fields). Without them a
+     * fresh computer would not recognize, and would drop, these values.
+     */
+    optionalKeys?: readonly string[];
+    /** Drops values that only make sense on the source computer. */
+    filter?: (values: Record<string, unknown>) => Record<string, unknown>;
+  } = {},
+): PortableOverrideSettings {
+  const resolve = typeof file === 'function' ? file : () => file;
+  const omitted = new Set(options.omitKeys ?? []);
+  const keep = (values: Record<string, unknown>): Record<string, unknown> => {
+    const out: Record<string, unknown> = {};
+    for (const [key, value] of Object.entries(values)) {
+      if (!omitted.has(key) && PORTABLE_SETTINGS_KEY_RE.test(key) && value !== undefined) {
+        out[key] = clone(value);
+      }
+    }
+    return options.filter ? options.filter(out) : out;
+  };
+  const customizedOf = (state: OverrideSettingsState<T>): Record<string, unknown> => {
+    const value = state.value as Record<string, unknown>;
+    const changed: Record<string, unknown> = {};
+    for (const key of state.customizedKeys) {
+      if (Object.prototype.hasOwnProperty.call(value, key)) changed[key] = value[key];
+    }
+    return keep(changed);
+  };
+  return {
+    readCustomized() {
+      return customizedOf(resolve().readState());
+    },
+    async applyPatch(select) {
+      try {
+        // An explicit choice on the other computer stays explicit here, even when it equals
+        // this version's default.
+        await resolve().updateAtomic((state) => {
+          // Keys this version does not know would normalize to nothing yet still mark the
+          // store as customized; only accept keys this store can represent.
+          const known = new Set([
+            ...Object.keys(state.defaults as Record<string, unknown>),
+            ...Object.keys(state.value as Record<string, unknown>),
+            ...(options.optionalKeys ?? []),
+          ]);
+          const values = keep(
+            Object.fromEntries(Object.entries(select(customizedOf(state))).filter(([key]) => known.has(key))),
+          );
+          if (Object.keys(values).length === 0) throw new NothingToWrite();
+          return values as Partial<T>;
+        }, { preserveDefaults: true });
+        return true;
+      } catch (error) {
+        if (error instanceof NothingToWrite) return false;
+        throw error;
+      }
+    },
+  };
+}
+
 function pathDirname(filePath: string): string {
   const slash = Math.max(filePath.lastIndexOf('/'), filePath.lastIndexOf('\\'));
   return slash < 0 ? '.' : filePath.slice(0, slash);

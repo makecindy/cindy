@@ -1,7 +1,7 @@
 import { describe, it, expect, vi } from 'vitest';
 vi.mock('../cardStoreDb.js', () => ({ getGhostCard: vi.fn(), upsertGhostCard: vi.fn() }));
 vi.mock('../../device-link/broadcast-tap.js', () => ({ captureDataOwnerBroadcastScope: vi.fn(), isDataOwnerBroadcastScopeCurrent: vi.fn(), tapWindowBroadcast: vi.fn(), getSafeDataOwnerPushStamp: vi.fn() }));
-import { createPluginIdentityRemoteProvider, createGhostCardRemoteProvider, projectGhostCardBlocks, projectGhostCardActions, persistGhostCardWithRemoteChange, findGhostForRemotePluginIdentity } from '../cardRemoteResource.js';
+import { createPluginIdentityRemoteProvider, createGhostCardRemoteProvider, projectGhostCardBlocks, projectRichCardParts, projectGhostCardActions, persistGhostCardWithRemoteChange, findGhostForRemotePluginIdentity } from '../cardRemoteResource.js';
 import { upsertGhostCard } from '../cardStoreDb.js';
 import { isDataOwnerBroadcastScopeCurrent, tapWindowBroadcast } from '../../device-link/broadcast-tap.js';
 import { buildAttachmentOssRef } from '@cindy/device-link';
@@ -141,6 +141,10 @@ describe('read-only plugin card projection', () => {
     expect(blocks.filter((b) => b.data).map((b) => b.data)).toEqual([{ url: image }, { url: audio }]);
     expect(JSON.stringify(blocks)).not.toMatch(/<|secret|color:red|data-ghost-action/);
   });
+  it('does not let tags assembled from leftover pieces survive the text projection', () => {
+    const blocks = projectGhostCardBlocks('<p>a<scr<b></b>ipt>x</scr<b></b>ipt>b</p><sc<script></script>ript>y</sc<script></script>ript>');
+    expect(blocks[0].fallbackMarkdown).not.toMatch(/<|script/i);
+  });
   it('preserves image descriptions and declared destinations as inert text', () => {
     const blocks = projectGhostCardBlocks(`<img src="${image}" alt="A chart"/><a data-ghost-link="https://example.com/?a=1&amp;b=2">Report</a>`);
     expect(blocks[0].fallbackMarkdown).toContain('A chart');
@@ -241,5 +245,70 @@ describe('plugin identity for mobile annotations', () => {
     const denied = createPluginIdentityRemoteProvider({ readIdentity, authorize: async () => { throw new Error('denied'); }, captureScope: () => () => true });
     await expect(denied.get!(context, request)).rejects.toThrow('denied');
     expect(readIdentity).not.toHaveBeenCalled();
+  });
+});
+
+// Unit: on the phone the PR card read as a raw URL glued to its title, a row of identical grey
+// buttons and "开启「…」" buttons for its settings. Newer phones ask for `plugin-card-rich` and get
+// the parts they draw natively; older phones keep the plain projection (minus the raw link URL).
+describe('plugin-card-rich projection', () => {
+  const html = '<div><div><a data-ghost-link="https://github.com/o/r/pull/9">#9 Fix login</a></div>'
+    + '<div data-ghost-pr-status="O/R#9"><div>CI 运行中</div><div>等待合并</div></div>'
+    + '<div data-ghost-live-label="跟进中"><span data-ghost-live=""></span>跟进中</div>'
+    + '<button data-ghost-action="pr:ready" aria-label="转为正式 PR" data-ghost-primary=""></button>'
+    + '<button data-ghost-action="prset:rename" data-ghost-toggle="on" aria-label="关闭「自动改名」"><div>自动改名</div><div>改成 PR 号</div></button>'
+    + '<button data-ghost-action="prset:model" aria-label="指定模型（当前）">指定模型</button>'
+    + '<button data-ghost-action="prset:modelPick" aria-label="更换模型（当前：Opus）"><span>Opus</span><span>高</span></button></div>';
+  const provider = (prStatus = vi.fn(async () => undefined as never)) => createGhostCardRemoteProvider({
+    readCard: async () => ({ sessionId: 's', callId: 'c', ghostId: 'github', html, v: 2, height: 100 }),
+    authorize: async () => {}, captureScope: () => () => true, prStatus,
+    interactions: { externalLinks: () => true, dispatch: vi.fn(async () => true) },
+  });
+  const read = async (primitives: string[], prStatus?: Parameters<typeof provider>[0]) => {
+    const resource = await provider(prStatus).get!(context, { ...request, client: { protocolVersion: 1, primitives } });
+    const text = resource.blocks?.find(block => block.id === 'text')?.fallbackMarkdown.replace(/\\(.)/g, '$1');
+    return { text, data: resource.blocks?.find(block => block.id === 'actions')?.data as Record<string, unknown> };
+  };
+
+  it('cuts nested and doubly marked parts once, keeping the text after them', () => {
+    const parts = projectRichCardParts('<p>before</p><div data-ghost-pr-status="o/r#1"><span data-ghost-live-label="live">inner</span> tail</div><p>after</p>'
+      + '<span data-ghost-live-label="x" data-ghost-pr-status="o/r#2">both</span><p>end</p>');
+    expect(parts.textHtml).toBe('<p>before</p><div data-ghost-pr-status="o/r#1"></div><p>after</p><span data-ghost-live-label="x" data-ghost-pr-status="o/r#2"></span><p>end</p>');
+  });
+  it('keeps older phones on the plain projection without the raw link address', async () => {
+    const { text, data } = await read(['plugin-card-actions', 'plugin-card-forms']);
+    expect(text).toBe('#9 Fix login\nCI 运行中\n等待合并\n\n跟进中\n自动改名\n改成 PR 号\n指定模型Opus高');
+    expect(data.items).toEqual([
+      { id: 'link:0', label: '#9 Fix login', url: 'https://github.com/o/r/pull/9', disabled: false },
+      { id: 'pr:ready', label: '转为正式 PR', disabled: false },
+      { id: 'prset:rename', label: '关闭「自动改名」', disabled: false },
+      { id: 'prset:model', label: '指定模型（当前）', disabled: false },
+      { id: 'prset:modelPick', label: '更换模型（当前：Opus）', disabled: false },
+    ]);
+    expect(data).not.toHaveProperty('live');
+  });
+
+  it('keeps the link address in the text for a client without the actions primitive', async () => {
+    const { text } = await read([]);
+    expect(text).toContain('https://github.com/o/r/pull/9');
+  });
+
+  // Unit: with PR settings open the phone showed 「跟随当前任务指定模型」「Sonnet 5.5 · Anthropic高」 as card
+  // text — the inside of buttons it already draws from their labels.
+  it('gives newer phones switches, the primary action, the live label and the title bar PR status', async () => {
+    const status = { ok: true as const, owner: 'o', repo: 'r', prNumber: 9, status: 'open' as const, title: '', htmlUrl: '', branch: '', unresolvedCount: 0 };
+    const lookup = vi.fn(async () => status as never);
+    const { text, data } = await read(['plugin-card-actions', 'plugin-card-forms', 'plugin-card-rich'], lookup);
+    expect(text).toBe('#9 Fix login');
+    expect(lookup).toHaveBeenCalledWith('s', 'o/r#9');
+    // The PR link carries the PR's state so the phone can mark the title with the app's PR icon.
+    expect((data.items as Array<Record<string, unknown>>)[0]).toMatchObject({ id: 'link:0', prState: 'open' });
+    expect(data).toMatchObject({ live: '跟进中', prStatus: [{ key: 'o/r#9', fallback: ['CI 运行中', '等待合并'], status }] });
+    expect((data.items as Array<Record<string, unknown>>).slice(1)).toEqual([
+      { id: 'pr:ready', label: '转为正式 PR', disabled: false, primary: true },
+      { id: 'prset:rename', label: '关闭「自动改名」', disabled: false, toggle: { on: true, title: '自动改名', hint: '改成 PR 号' } },
+      { id: 'prset:model', label: '指定模型（当前）', disabled: false },
+      { id: 'prset:modelPick', label: '更换模型（当前：Opus）', disabled: false },
+    ]);
   });
 });

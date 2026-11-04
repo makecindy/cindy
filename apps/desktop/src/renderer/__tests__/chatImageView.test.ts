@@ -291,6 +291,84 @@ describe('ChatImageView', () => {
     expect(read).not.toHaveBeenCalled();
   });
 
+  // 2026-11-04: a 77-image remote task requested every image on open and held the
+  // device link for ~2.5 min, stalling the next teammate open. Remote images wait
+  // until their placeholder nears the scrolling viewport; local images are unchanged.
+  it('requests a remote image only near the scroll viewport, keeps it for share, and leaves local images eager', () => {
+    const observers: { callback: IntersectionObserverCallback; options?: IntersectionObserverInit; disconnect: ReturnType<typeof vi.fn> }[] = [];
+    vi.stubGlobal('IntersectionObserver', class {
+      readonly disconnect = vi.fn();
+      constructor(callback: IntersectionObserverCallback, options?: IntersectionObserverInit) {
+        observers.push({ callback, options, disconnect: this.disconnect });
+      }
+      observe() {}
+    });
+    const scroller = document.createElement('div');
+    scroller.style.overflowY = 'auto';
+    Object.defineProperties(scroller, { scrollHeight: { value: 9000 }, clientHeight: { value: 900 } });
+    document.body.appendChild(scroller);
+    const remote = 'cindy-remote-media://m/device/far';
+    const { container } = render(
+      React.createElement('div', null,
+        React.createElement(ChatImageView, { src: remote, filename: 'far.png', variant: 'tool-output' }),
+        React.createElement(ChatImageView, { src: 'xdt-image://images/near.png', filename: 'local.png', variant: 'tool-output' })),
+      { container: scroller.appendChild(document.createElement('div')) },
+    );
+    expect(screen.getByAltText('far.png').hasAttribute('src')).toBe(false);
+    expect(screen.getByAltText('local.png').getAttribute('src')).toBe('xdt-image://images/near.png');
+    expect(observers).toHaveLength(1);
+    expect(observers[0].options?.root).toBe(scroller);
+    // Three viewport heights of the scroller, in pixels (rootMargin % would follow its width).
+    expect(observers[0].options?.rootMargin).toBe('2700px 0px');
+    // Sharing before the user scrolled there still includes the image.
+    expect(prepareShareMessageClone(container)?.querySelector('img[alt="far.png"]')?.getAttribute('src')).toBe(remote);
+
+    act(() => observers[0].callback([{ isIntersecting: false } as IntersectionObserverEntry], {} as IntersectionObserver));
+    expect(screen.getByAltText('far.png').hasAttribute('src')).toBe(false);
+    act(() => observers[0].callback([{ isIntersecting: true } as IntersectionObserverEntry], {} as IntersectionObserver));
+    expect(screen.getByAltText('far.png').getAttribute('src')).toBe(remote);
+    expect(observers[0].disconnect).toHaveBeenCalled();
+    expect(observers).toHaveLength(1);
+    scroller.remove();
+  });
+
+  // PR #8776 review: an inactive sidebar tab mounts its message stream hidden, where
+  // no ancestor has a size. Observing then would fall back to the window and lose the
+  // preload; wait until the placeholder is laid out, then use the real scroller.
+  it('finds the remote preload scroller once a hidden panel becomes visible', () => {
+    const observers: IntersectionObserverInit[] = [];
+    vi.stubGlobal('IntersectionObserver', class {
+      constructor(_callback: IntersectionObserverCallback, options?: IntersectionObserverInit) { observers.push(options ?? {}); }
+      observe() {}
+      disconnect() {}
+    });
+    let relayout: (() => void) | undefined;
+    vi.stubGlobal('ResizeObserver', class {
+      constructor(callback: () => void) { relayout = callback; }
+      observe() {}
+      disconnect() {}
+    });
+    let laidOut = false;
+    vi.spyOn(HTMLElement.prototype, 'getClientRects').mockImplementation(
+      () => (laidOut ? [{}] : []) as unknown as DOMRectList,
+    );
+    const scroller = document.createElement('div');
+    scroller.style.overflowY = 'auto';
+    Object.defineProperties(scroller, { scrollHeight: { value: 9000 }, clientHeight: { value: 600 } });
+    document.body.appendChild(scroller);
+    render(React.createElement(ChatImageView, { src: 'cindy-remote-media://m/device/tab', filename: 'tab.png', variant: 'tool-output' }),
+      { container: scroller.appendChild(document.createElement('div')) });
+    expect(observers).toHaveLength(0);
+    act(() => relayout?.());
+    expect(observers).toHaveLength(0);
+    laidOut = true;
+    act(() => relayout?.());
+    expect(observers).toEqual([{ root: scroller, rootMargin: '1800px 0px' }]);
+    expect(screen.getByAltText('tab.png').hasAttribute('src')).toBe(false);
+    vi.restoreAllMocks();
+    scroller.remove();
+  });
+
   it('displaySrc 变化后清掉上一张图的错误占位', () => {
     const { rerender } = render(
       React.createElement(ChatImageView, {

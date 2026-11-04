@@ -3,7 +3,7 @@ import { BUNDLED_CATALOG } from '@cindy/model-providers';
 
 import { providerReferencePriceQuote } from '../../../shared/modelPriceQuote';
 import type { ModelPriceQuote } from '../../../shared/regionalMoney';
-import { __testing } from '../modelPriceOverrideStore';
+import { __testing, applyModelPriceOverrides, type ModelPriceOverridesSnapshot } from '../modelPriceOverrideStore';
 import { computeGatewayTurnCost } from '../turnCostCalculator';
 
 describe('standard overrides preserve independent Fast reference prices', () => {
@@ -517,4 +517,32 @@ describe('model price override sparse persistence', () => {
       },
     });
   });
+});
+
+// PR #8489 review: historical usage valuation re-merges sparse overrides against the tariff
+// effective on that day; the baked current-date catalog cannot be reused for old rows.
+it('merges sparse overrides against the reference tariff effective on the requested day', () => {
+  const registry = BUNDLED_CATALOG.modelRegistry!;
+  const route = registry.models.find((model) => model.id === 'openai/gpt-5.6-luna')!.routes[0];
+  const original = route.referencePrices;
+  const source = { kind: 'provider-official' as const, url: 'https://example.com', verifiedAt: '2026-01-01' };
+  const target = { providerId: 'openai', agent: 'codex' as const, modelId: 'gpt-5.6-luna' };
+  const entries = {
+    [__testing.overrideKey(target)]: { ...target, values: { outputPerMtok: 50 }, baseReference: null, updatedAt: '2026-01-01' },
+  } as unknown as ModelPriceOverridesSnapshot;
+  try {
+    route.referencePrices = [
+      { currency: 'USD', variant: 'standard', inputPerMtok: 111, outputPerMtok: 1,
+        effectiveFrom: '2026-01-01', effectiveUntil: '2026-06-01', source },
+      { currency: 'USD', variant: 'standard', inputPerMtok: 222, outputPerMtok: 1,
+        effectiveFrom: '2026-06-01', effectiveUntil: '2026-08-01', source },
+    ];
+    const quote = (at: string) =>
+      applyModelPriceOverrides({}, registry, 'USD', { at, entries }).openai?.['gpt-5.6-luna\u0000codex'];
+    expect(quote('2026-03-01')).toMatchObject({ inputPerMtok: 111, outputPerMtok: 50 });
+    expect(quote('2026-07-01')).toMatchObject({ inputPerMtok: 222, outputPerMtok: 50 });
+  } finally {
+    if (original === undefined) delete route.referencePrices;
+    else route.referencePrices = original;
+  }
 });
